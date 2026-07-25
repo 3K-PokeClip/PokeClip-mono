@@ -1,0 +1,15 @@
+# PokeClip monorepo — 경로별 소유(PR 자동 리뷰 배정)
+# 1번 @xodbs1021    인프라/미디어 (팀장)
+# 2번 @jaehwan-space 프론트 + 실시간/AI
+# 3번 @kth4778      데이터 계층 + 코어 API
+#
+# CODEOWNERS는 last-match-wins. 경로는 아직 없어도 생기면 자동 적용.
+
+/infra/         @xodbs1021
+/media/         @xodbs1021
+/workers/       @xodbs1021
+/workers/ai/    @jaehwan-space
+/web/           @jaehwan-space
+/chat/          @jaehwan-space
+/services/      @kth4778
+/docs/          @xodbs1021
