@@ -1,0 +1,30 @@
+# MediaMTX 설정 — PokeClip 로컬 개발용 (docker-compose의 media 서비스가 /mediamtx.yml로 마운트)
+# 값 근거: ADR-020(세그먼트 4s·part 0.5s·DVR 1h=900개) + 2026-07-25 스파이크 검증(hlsDirectory 디스크 오프로드)
+# 송출 규약: MPEG-TS · H.264 · AAC · 인코더 GOP 2초 고정(30fps -g 60 / 60fps -g 120) — 플러그인이 강제(ADR-020)
+
+# 인제스트
+srt: yes
+srtAddress: :8890
+rtmp: yes # 로컬 ffmpeg 테스트용 (homebrew ffmpeg은 SRT 미포함 — OBS는 SRT 사용)
+rtmpAddress: :1935
+
+# 미사용 프로토콜 비활성화
+rtsp: no
+webrtc: no
+
+# LL-HLS 재생 + DVR
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsSegmentDuration: 4s
+hlsPartDuration: 500ms
+hlsSegmentCount: 900 # DVR 1h = 4s x 900
+hlsDirectory: /dvr # 세그먼트 디스크 오프로드 (메모리 상주 방지, 07-25 검증 방식)
+hlsAllowOrigin: "*" # 로컬 개발 전용 — 프로덕션은 CloudFront/Signed Cookie 경로라 이 값 안 씀
+
+# 녹화 (M1 2단계 사이드카(인덱서·S3 업로더)가 감시할 대상 자리)
+pathDefaults:
+  record: yes
+  recordFormat: fmp4
+  recordSegmentDuration: 4s
+  recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f

@@ -1,0 +1,8 @@
+# 로컬 시크릿
+.env
+
+# 스텁 생성물 (스크립트로 재생성 — infra/compose/stub/gen-segments.sh)
+infra/compose/stub/data/
+
+# OS
+.DS_Store
