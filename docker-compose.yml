@@ -1,0 +1,57 @@
+# PokeClip 로컬 개발 환경 (M1 1단계 / 이슈 #1 "로컬 docker-compose")
+# 사용법: cp .env.example .env && docker compose up -d   (상세: docs/dev-environment.md)
+# 버전 정책: 최신 메이저 -1 고정 (PG 18→17, Redis 8→7.4). MediaMTX는 07-25 스파이크 검증 버전 고정.
+name: pokeclip
+
+services:
+  postgres:
+    image: postgres:17
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?cp .env.example .env 먼저 실행하세요}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?cp .env.example .env 먼저 실행하세요}
+      POSTGRES_DB: ${POSTGRES_DB:?cp .env.example .env 먼저 실행하세요}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7.4
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Media Origin 자리 — 수신(SRT)·LL-HLS 먹싱·DVR. 사이드카·합성 레이어는 M1 2단계에서 추가.
+  media:
+    image: bluenviron/mediamtx:1.19.3
+    ports:
+      - "8890:8890/udp" # SRT 인제스트 (OBS)
+      - "1935:1935" # RTMP 인제스트 (로컬 ffmpeg 테스트용 — homebrew ffmpeg은 SRT 미포함)
+      - "8888:8888" # LL-HLS 재생
+    volumes:
+      - ./infra/compose/mediamtx.yml:/mediamtx.yml:ro
+      - dvr:/dvr
+      - recordings:/recordings
+
+  # 정적 세그먼트 스텁 (M1 1-2) — 2번 플레이어 개발용. 먼저 infra/compose/stub/gen-segments.sh 1회 실행.
+  media-stub:
+    image: nginx:1-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./infra/compose/stub/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/compose/stub/data:/data:ro
+
+volumes:
+  pgdata:
+  dvr:
+  recordings:
