@@ -1,8 +1,21 @@
-# 로컬 시크릿
+# 로컬 시크릿 — 이 저장소는 public이다. 키가 한 번 올라가면 지워도 히스토리에 남는다
 .env
+*.pem
+*.p12
+**/application-local.yml
 
 # 스텁 생성물 (스크립트로 재생성 — infra/compose/stub/gen-segments.sh)
 infra/compose/stub/data/
+
+# 빌드 산출물
+services/**/build/
+services/.gradle/
+web/node_modules/
+web/dist/
+
+# IDE
+.idea/
+.vscode/
 
 # OS
 .DS_Store

@@ -7,9 +7,13 @@
 
 /infra/         @xodbs1021
 /media/         @xodbs1021
+/obs-plugin/    @xodbs1021
 /workers/       @xodbs1021
 /workers/ai/    @jaehwan-space
 /web/           @jaehwan-space
-/chat/          @jaehwan-space
+/chat/          @kth4778
 /services/      @kth4778
 /docs/          @xodbs1021
+
+# 계약은 사람 경계를 넘는다 — 고치면 3명 전원이 리뷰어가 된다
+/contracts/     @xodbs1021 @jaehwan-space @kth4778
