@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/3K-PokeClip/pokeclip-mono/contracts/sqs/job-command.schema.json",
+  "title": "잡 command 공통 envelope (계약1)",
+  "description": "Clip Service가 SQS에 발행하는 잡 지시서. 렌더·업로드·AI 자막이 같은 봉투를 쓴다. 상태 보고는 반대 방향으로 contracts/api/internal.yaml의 POST /internal/jobs/{jobId}/events 를 쓴다. 설계·승인=1번, 생산·상태 소유=3번, 소비=1·2번.",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "jobId",
+    "jobType",
+    "clipId",
+    "correlationId",
+    "idempotencyKey",
+    "requestedAt"
+  ],
+
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1,
+      "description": "이 봉투의 판. 필드 추가는 판을 올리지 않는다. 삭제·의미 변경만 올린다."
+    },
+    "jobId": {
+      "$ref": "#/$defs/uuid",
+      "description": "잡 하나의 식별자. 상태 콜백 경로에 그대로 쓰인다."
+    },
+    "jobType": {
+      "type": "string",
+      "enum": ["RENDER", "UPLOAD", "STT"],
+      "description": "RENDER·UPLOAD는 1번 워커가, STT는 2번 워커가 소비한다."
+    },
+    "clipId": {
+      "type": "integer",
+      "format": "int64",
+      "minimum": 1,
+      "description": "대상 클립. 결과를 어디에 붙일지의 기준."
+    },
+    "correlationId": {
+      "$ref": "#/$defs/uuid",
+      "description": "한 승인에서 파생된 잡들을 하나로 묶는 값. 렌더 → 업로드로 이어져도 유지한다. 로그 추적용."
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "SQS는 at-least-once다. 소비자는 이 값으로 '이미 한 일'을 판정하고 조용히 넘어가야 한다. 같은 잡의 재시도는 같은 키를 갖는다."
+    },
+    "requestedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "발행 시각. UTC ISO-8601. 로컬 타임존 금지."
+    },
+    "recipeVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "적용할 레시피(crop·트랙·자막)의 판. 레시피 본문은 이 봉투에 담지 않는다 — 워커가 clipId로 조회한다."
+    },
+    "sourceKeys": {
+      "type": "array",
+      "description": "입력 S3 키 목록. 워커가 S3 LIST를 하지 않게 하려고 발행 측이 미리 계산해 넣는다.",
+      "items": { "type": "string", "minLength": 1 }
+    },
+
+    "render": {
+      "type": "object",
+      "description": "jobType=RENDER 일 때만 채운다.",
+      "additionalProperties": false,
+      "required": ["streamId", "startPtsMs", "endPtsMs"],
+      "properties": {
+        "streamId": { "type": "string", "minLength": 1 },
+        "startPtsMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "자를 시작 위치. stream_segments.start_pts_ms 와 같은 자를 쓴다."
+        },
+        "endPtsMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "upload": {
+      "type": "object",
+      "description": "jobType=UPLOAD 일 때만 채운다.",
+      "additionalProperties": false,
+      "required": ["tokenSecretRef"],
+      "properties": {
+        "tokenSecretRef": {
+          "type": "string",
+          "minLength": 1,
+          "description": "유튜브 토큰의 Secrets Manager 참조(계약5). 토큰 값 자체는 절대 담지 않는다 — 메시지는 로그와 DLQ에 남는다."
+        },
+        "privacyStatus": {
+          "type": "string",
+          "enum": ["private", "unlisted", "public"],
+          "default": "private",
+          "description": "기본 비공개(ADR-010)."
+        }
+      }
+    },
+
+    "stt": {
+      "type": "object",
+      "description": "jobType=STT 일 때만 채운다.",
+      "additionalProperties": false,
+      "required": ["audioKeys"],
+      "properties": {
+        "audioKeys": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" },
+          "description": "트랙별 오디오 S3 키. 트랙 분리가 이 서비스의 차별점이라 트랙 단위로 넘긴다."
+        },
+        "language": { "type": "string", "default": "ko" }
+      }
+    }
+  },
+
+  "allOf": [
+    {
+      "if": { "properties": { "jobType": { "const": "RENDER" } } },
+      "then": { "required": ["render"] }
+    },
+    {
+      "if": { "properties": { "jobType": { "const": "UPLOAD" } } },
+      "then": { "required": ["upload"] }
+    },
+    {
+      "if": { "properties": { "jobType": { "const": "STT" } } },
+      "then": { "required": ["stt"] }
+    }
+  ],
+
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    }
+  },
+
+  "examples": [
+    {
+      "schemaVersion": 1,
+      "jobId": "3f1c9a2e-5b47-4d8a-9e10-7c2b6d4a8f31",
+      "jobType": "RENDER",
+      "clipId": 42,
+      "correlationId": "8a0d5e11-2c93-4f6b-b7a2-1e5f9c3d0b48",
+      "idempotencyKey": "clip-42-render-v1",
+      "requestedAt": "2026-07-31T14:23:05Z",
+      "recipeVersion": 1,
+      "sourceKeys": [
+        "streams/demo-stream/2026-07-31/14/seg_000123.m4s",
+        "streams/demo-stream/2026-07-31/14/seg_000124.m4s"
+      ],
+      "render": {
+        "streamId": "demo-stream",
+        "startPtsMs": 492000,
+        "endPtsMs": 522000
+      }
+    }
+  ]
+}

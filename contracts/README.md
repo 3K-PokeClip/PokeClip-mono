@@ -12,17 +12,44 @@
 
 ## 무엇을 담나
 
-| 경로 | 내용 | 방향 |
+| 파일 | 내용 | 방향 | 상태 |
+|---|---|---|---|
+| [`sqs/job-command.schema.json`](sqs/job-command.schema.json) | 잡 지시서 공통 봉투 (계약1) | 3번 → 1·2번 | 초안 |
+| [`api/internal.yaml`](api/internal.yaml) | 서비스끼리만 부르는 API | 3번 ↔ 1·2번 | 초안 |
+| [`db/stream_segments.md`](db/stream_segments.md) | 세그먼트 인덱스 DDL | 소유 3번 · 쓰기 1번 | 초안 |
+| `api/openapi.yaml` | 대시보드가 부르는 공개 API | 3번 → 2번 | 미작성 |
+
+### 계약 지도 — 누가 누구에게
+
+```
+플러그인 ──스트림키──▶ Media ──세그먼트 인덱스──▶ Clip
+                         │                         │
+                    LL-HLS 재생 규약           SSE·REST
+                         │                         │
+                         ▼                         ▼
+                        Web  ◀───────────────────  │
+                                                   │
+  Chat ──하이라이트 후보──▶ Clip ──SQS 잡 봉투──▶ 워커
+                                     ◀─상태 콜백─┘
+```
+
+| 계약 | 이 폴더 | 정본 |
 |---|---|---|
-| `db/` | 테이블 구조 설명서. 마이그레이션에서 자동 생성 | 3번 → 1·2번 |
-| `sqs/` | 잡 메시지 스키마 (렌더·업로드·자막) | 3번 → 1·2번 |
-| `api/openapi.yaml` | 공개 REST 명세 | 3번 → 2번 |
-| `api/internal.yaml` | 서비스 간 내부 API | 3번 → 1·2번 |
+| 잡 봉투 · 상태 콜백 | `sqs/` · `api/internal.yaml` | 여기 |
+| 스트림 키 검증 (계약4C) | `api/internal.yaml` | 여기 |
+| 하이라이트 후보 (계약2A) | `api/internal.yaml` | 여기 |
+| 세그먼트 인덱스 | `db/stream_segments.md` (DDL) | LLM-WIKI (본문) |
+| LL-HLS 재생 규약 (계약3) | — | **LLM-WIKI** |
+| SRT 입력 규약 | — | **LLM-WIKI** |
 
 ## 무엇을 담지 않나
 
 - 구현 코드 — 각 서비스 폴더에 둔다
-- 설계 근거·대안 검토 — 그건 ADR이고, 정본은 `PokeClip-LLM-WIKI`에 있다
+- 설계 근거·대안 검토 — 그건 ADR이고, 정본은
+  [`PokeClip-LLM-WIKI`](https://github.com/3K-PokeClip/PokeClip-LLM-WIKI)에 있다
+
+**여기엔 기계가 읽는 형식(JSON Schema·OpenAPI·DDL)을 둔다.** 산문 설명과 근거는 LLM-WIKI다.
+같은 내용을 두 곳에 적으면 반드시 어긋난다.
 
 ## 고칠 때 지킬 것
 
@@ -31,5 +58,7 @@
 
 ## 상태
 
-**아직 비어 있다.** 계약 초안이 이 저장소에서 가장 먼저 채워져야 할 것이다 —
-세그먼트 이름 규칙이 정해지지 않으면 클립을 만들 수 없고, 잡 스키마가 없으면 워커를 짤 수 없다.
+**전부 초안이다.** 확정 전까지 필드명과 경로가 바뀔 수 있다.
+각 파일 안에 상대에게 물어볼 것을 적어 뒀으니, 확인해 주면 확정으로 올린다.
+
+`api/openapi.yaml`(공개 API)은 Clip Service의 엔드포인트가 정해진 뒤에 쓴다.
