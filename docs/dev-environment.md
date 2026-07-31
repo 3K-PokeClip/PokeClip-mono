@@ -35,6 +35,16 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=frequency
 curl -s http://localhost:8888/test/index.m3u8   # EXT-X-PART · CAN-BLOCK-RELOAD 보이면 LL-HLS 정상
 ```
 
+## 2번(플레이어) 로컬 URL 매핑
+
+| 용도 | URL |
+|---|---|
+| 정적 스텁 (뼈대·시킹 UI) | `http://localhost:8080/live/stub/index.m3u8` |
+| 진짜 LL-HLS (송출 필요) | `http://localhost:8888/{streamId}/index.m3u8` |
+
+- MediaMTX는 `index.m3u8` 요청에 **302 리다이렉트**(세션 파라미터 부여)를 줄 수 있음 — hls.js 기본 동작이 따라가므로 커스텀 fetch를 끼울 때만 주의.
+- 로컬은 인증·서명 쿠키 없음. 프로덕션 규약은 **PokeClip-architecture `contracts/계약3-LLHLS-DVR재생규약.md`**(정본)을 따를 것 — 특히 §4 catch-up 끄기.
+
 ## 설계 근거 포인터
 
 - 파라미터(4s/0.5s/900개): ADR-020 · 재생 규약: 계약3 (플레이어는 **catch-up 끄기** 필수)
