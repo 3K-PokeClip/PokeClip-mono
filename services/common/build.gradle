@@ -1,0 +1,7 @@
+// 서버가 아니라 라이브러리다. bootJar를 만들지 않으므로 spring-boot 플러그인을 붙이지 않는다.
+plugins {
+    id 'java-library'
+}
+
+dependencies {
+}

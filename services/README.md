@@ -4,13 +4,44 @@
 
 ## 무엇이 들어가나
 
+**서버 3개**가 여기서 실행된다. `common/`은 서버가 아니다.
+
 | 모듈 | 포트 | 역할 |
 |---|---|---|
 | `common/` | — | 여러 서버가 **같이 쓰는 코드**. 서버가 아니다 |
-| `auth/` | 8081 | 구글 로그인 · 스트림 키 · 채널 연동 · 유튜브 토큰 |
-| `clip/` | 8082 | 방송 세션 · 세그먼트 인덱스 · 클립 · 승인 · SQS 잡 발행 |
+| `core/` | 8081 | 로그인 · 스트림 키 · 채널 연동 · 유튜브 토큰<br/>방송 세션 · 세그먼트 인덱스 · 클립 · 승인 · SQS 잡 발행 |
+| `chat-collector/` | 8083 | 치지직·SOOP 채팅 실시간 수집 · 시차 보정 · S3 아카이브 |
+| `chat-detector/` | 8084 | 채팅량 분석으로 하이라이트 후보(점프카드) 판별 |
 
 Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
+
+**IntelliJ 프로젝트는 하나다.** 이 폴더를 열면 서버 3개가 모듈로 잡힌다.
+
+## core 안은 두 덩어리로 나눠 둔다
+
+```
+core/src/main/java/com/pokeclip/core/
+├─ auth/    로그인 · 스트림키 · 채널 · 유튜브 토큰
+└─ clip/    방송세션 · 세그먼트 · 클립 · 승인
+```
+
+**폴더는 나누되 프로세스는 합친다.** 서로의 내부(`..internal..`)를 직접 부르지 못하게
+ArchUnit으로 막는다. 그러면 나중에 `auth`를 떼어낼 때 패키지를 통째로 옮기고
+main 클래스 하나 추가하는 것으로 끝난다.
+
+## 왜 auth와 clip을 한 서버로 두나
+
+| 기준 | 둘의 관계 |
+|---|---|
+| **부하 축** | 둘 다 무상태 요청-응답. 사용자 수에 비례해 같이 늘고 같이 준다 |
+| **데이터** | 같은 DB를 쓴다. 나누면 트랜잭션이 두 서버에 걸린다 |
+| **재배포 주기** | 둘 다 아무 때나 롤링 배포할 수 있다 |
+
+세 축이 전부 같으면 나눌 이유가 없다. 나누면 **분산 모놀리스**가 된다 —
+따로 배포되는데 DB로 묶여 있어 장애도 배포도 같이 터지는, 가장 나쁜 조합이다.
+
+**떼어낼 조건은 미리 정해 둔다:** 결제가 붙어 돈을 다루는 코드가 생길 때,
+또는 auth만 별도로 스케일해야 할 만큼 로그인 트래픽이 튈 때.
 
 ## Gradle 루트는 저장소 루트가 아니라 여기다
 
@@ -26,12 +57,83 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 여기를 고치면 모든 모듈이 다시 빌드된다. 로직이 쌓이기 시작하면 서버들이 한 덩어리처럼
 굴러가고, 나눈 의미가 사라진다. **계약만 둔다**는 경계를 지킨다.
 
+## 반대로 채팅 둘은 왜 나눴나
+
+| | 성격 | 재배포하면 |
+|---|---|---|
+| `chat-collector/` | 방송 내내 연결을 **붙들고 있다** | 그 순간 채팅이 끊긴다 |
+| `chat-detector/` | 주기적으로 **계산한다** | 아무 때나 올려도 된다 |
+
+`core`와 정반대다. 부하 축도(방송 수 vs 사용자 수), 재배포 주기도 다르다.
+
+한 서버에 두면 계산이 무거워질 때 채팅 연결이 끊긴다. 끊기면 그 구간 채팅이
+통째로 날아가고 하이라이트도 못 잡는다.
+
+**채팅을 "시청자의 실시간 반응 투표"로 쓰는 것이 이 서비스의 핵심 차별점이다.**
+팀 실측(실경기 채팅 18,112건)에서 확인한 것 — 메시지 수보다 **고유 채터 수의 급증**이
+더 깨끗한 신호다. 1인 도배는 메시지 수만 올리고, 진짜 하이라이트는 눈팅층이
+동시에 입을 여는 순간이다.
+
+판별 알고리즘의 정본은 `PokeClip-LLM-WIKI`의 ADR-011과 하이라이트 연구노트다.
+
+## 돌리는 법
+
+인프라(PostgreSQL·Redis)는 **저장소 루트의 `docker-compose.yml`**이 띄운다.
+
+```bash
+# 저장소 루트에서 — 한 번만
+cp .env.example .env
+docker compose up -d postgres redis
+
+# 여기(services/)에서
+./gradlew build              # 전체 빌드 + 테스트
+./gradlew :core:bootRun      # 서버 하나 띄우기
+```
+
+| 서버 | 실행 | 헬스체크 |
+|---|---|---|
+| `core` | `./gradlew :core:bootRun` | http://localhost:8081/actuator/health |
+| `chat-collector` | `./gradlew :chat-collector:bootRun` | http://localhost:8083/actuator/health |
+| `chat-detector` | `./gradlew :chat-detector:bootRun` | http://localhost:8084/actuator/health |
+
+**DB 접속 변수 이름을 compose의 `.env`와 맞춰 뒀다** (`POSTGRES_USER`·`POSTGRES_PASSWORD`·
+`POSTGRES_DB`). 팀원이 `.env` 값을 바꿔도 앱이 따라간다. compose 네트워크 안에서
+띄울 때만 `DB_HOST=postgres`를 준다.
+
+### 도커 이미지
+
+**빌드 컨텍스트는 저장소 루트가 아니라 `services/`다.** Gradle 루트가 여기라
+루트에서 빌드하면 `settings.gradle`을 못 찾는다.
+
+```bash
+docker build -f services/core/Dockerfile -t pokeclip-core services/
+```
+
+베이스 이미지는 세 서버 모두 `eclipse-temurin:21-jdk`(빌드) →
+`eclipse-temurin:21-jre`(실행)로 통일했다.
+
+**테스트도 팀과 같은 이미지를 쓴다** — Testcontainers가 `postgres:17`을 띄운다.
+compose와 메이저 버전이 갈리면 로컬·CI만 통과하고 실제 DB에서 깨지는 차이를 못 잡는다.
+
 ## DB 마이그레이션
 
-Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(`auth/src/main/resources/db/migration/`)에 둔다.**
+Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(`core/src/main/resources/db/migration/`)에 둔다.**
 1·2번이 읽을 스키마 설명서는 여기서 자동 생성해 [`contracts/db/`](../contracts/db/)로 내보낸다.
+
+**Flyway는 `core`만 돌린다.** 세 서버가 DB 하나를 공유하므로, 두 서버가 각자
+기본 이름의 이력 테이블을 만들면 나중에 뜬 쪽이 부팅에 실패한다. 이력 테이블
+이름도 `flyway_schema_history_core`로 박아 뒀다.
 
 ## 상태
 
-**아직 비어 있다.** 구글 로그인·토큰 재발급은 별도 저장소에서 만들어 검증까지 마쳤고,
-이 폴더로 옮겨 오는 것이 첫 작업이다.
+**스켈레톤만 있다.** 서버 3개가 뜨고 헬스체크에 응답하는 것까지 확인했다.
+비즈니스 코드는 아직 없다.
+
+다음 작업 순서:
+
+1. 구글 로그인·토큰 재발급을 `core/auth/`로 옮긴다 (별도 저장소에서 검증까지 마친 코드)
+2. `core/auth/` ↔ `core/clip/` 경계를 ArchUnit으로 막는다 — 지킬 코드가 생긴 뒤에
+3. SQS 대역(ElasticMQ)을 루트 compose에 추가한다 — `clip`이 렌더 잡을 발행하려면 필요하다
+
+> **채팅 수집을 Spring으로 간다** (2026-07-31 확정). 기존 수집기(Node) 재사용 전제는 폐기한다.
+> `PokeClip-LLM-WIKI`의 ADR-007이 아직 Node 기준이라 후속 ADR로 갱신이 필요하다.
