@@ -1,6 +1,8 @@
 package recording
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -47,10 +49,11 @@ func TestParseSegmentPath(t *testing.T) {
 			wantWall:     time.Date(2026, 7, 25, 10, 3, 12, 123456789, time.UTC),
 		},
 		{
-			name:         "케이스4_중첩_path",
-			path:         "/recordings/live/kr/demo-stream/2026-07-25_10-03-12-000001.mp4",
-			wantStreamID: "live/kr/demo-stream",
-			wantWall:     time.Date(2026, 7, 25, 10, 3, 12, 1000, time.UTC),
+			// 계획 1단계의 "중첩 %path" 케이스. 검수(보안 H1) 결정으로 판정이 뒤집혔다 —
+			// 슬래시를 포함한 stream_id 는 거부한다. 케이스 번호는 추적을 위해 유지한다.
+			name:    "케이스4_중첩_path는_거부한다",
+			path:    "/recordings/live/kr/demo-stream/2026-07-25_10-03-12-000001.mp4",
+			wantErr: true,
 		},
 		{
 			name:    "케이스5_비세그먼트_파일",
@@ -107,6 +110,63 @@ func TestParseSegmentPathStartWallIsUTC(t *testing.T) {
 	}
 	if loc := seg.StartWall.Location(); loc != time.UTC {
 		t.Fatalf("StartWall.Location() = %v, want UTC", loc)
+	}
+}
+
+// stream_id 화이트리스트 (보안 H1).
+// 파일 시스템에서 온 이름이 그대로 DB 값과 S3 키가 되므로, 받아들이는 모양을 좁게 못 박는다.
+func TestParseSegmentPathRejectsUnsafeStreamID(t *testing.T) {
+	const name = "2026-07-25_10-03-12-123456.mp4"
+
+	bad := []struct {
+		label    string
+		streamID string
+	}{
+		{"슬래시_중첩", "live/kr/demo"},
+		{"점_상대경로", "..hidden"},
+		{"공백", "demo stream"},
+		{"셸_메타문자", "demo;rm"},
+		{"경로_구분자_유사문자", "demo\\stream"},
+		{"한글", "데모"},
+		{"64자_초과", strings.Repeat("a", 65)},
+	}
+	for _, tc := range bad {
+		t.Run("거부_"+tc.label, func(t *testing.T) {
+			p := "/recordings/" + tc.streamID + "/" + name
+			seg, err := ParseSegmentPath("/recordings", p)
+			if err == nil {
+				t.Fatalf("에러를 기대했으나 nil (streamID=%q)", seg.StreamID)
+			}
+		})
+	}
+
+	good := []string{"demo-stream", "test-f5b788d1", "A_b-9", strings.Repeat("a", 64)}
+	for _, streamID := range good {
+		t.Run("허용_"+streamID[:min(len(streamID), 12)], func(t *testing.T) {
+			p := "/recordings/" + streamID + "/" + name
+			seg, err := ParseSegmentPath("/recordings", p)
+			if err != nil {
+				t.Fatalf("예상 밖 에러: %v", err)
+			}
+			if seg.StreamID != streamID {
+				t.Fatalf("StreamID = %q, want %q", seg.StreamID, streamID)
+			}
+		})
+	}
+}
+
+// 화이트리스트 위반은 다른 실패와 구분돼야 한다.
+// 호출자가 "세그먼트 파일이 아님"(조용히 무시)과 "거부된 스트림"(WARN 1회)을 갈라 처리한다.
+func TestInvalidStreamIDIsDistinguishable(t *testing.T) {
+	_, err := ParseSegmentPath("/recordings", "/recordings/live/kr/demo/2026-07-25_10-03-12-123456.mp4")
+	if !errors.Is(err, ErrInvalidStreamID) {
+		t.Fatalf("err = %v, want ErrInvalidStreamID", err)
+	}
+
+	// 세그먼트 파일명이 아닌 것은 이 사유가 아니다.
+	_, err = ParseSegmentPath("/recordings", "/recordings/demo/README.txt")
+	if errors.Is(err, ErrInvalidStreamID) {
+		t.Fatal("파일명 형식 불일치가 ErrInvalidStreamID 로 분류됐다")
 	}
 }
 

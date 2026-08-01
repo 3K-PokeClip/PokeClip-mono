@@ -4,6 +4,7 @@
 package recording
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -35,7 +36,7 @@ const (
 // Segment 는 완성된 세그먼트 파일 하나를 표현한다.
 type Segment struct {
 	// StreamID 는 recordings 루트 기준 상대 디렉토리다(= MediaMTX 의 %path).
-	// %path 는 슬래시를 포함할 수 있어 중첩 디렉토리가 될 수 있다.
+	// 아래 streamIDRe 화이트리스트를 통과한 값만 들어온다 — 슬래시는 포함될 수 없다.
 	StreamID string
 	// Path 는 절대 경로이며 그대로 DB 의 local_path 가 된다.
 	Path string
@@ -45,6 +46,23 @@ type Segment struct {
 	// Reason 은 상황을 아는 호출자가 채운다. ParseSegmentPath 는 채우지 않는다.
 	Reason CompletionReason
 }
+
+// ErrInvalidStreamID 는 스트림 이름이 화이트리스트를 통과하지 못했음을 뜻한다.
+// 호출자는 이것을 "세그먼트 파일이 아님"(조용히 무시)과 구분해 WARN 을 남긴다.
+var ErrInvalidStreamID = errors.New("허용되지 않는 stream_id 형태다")
+
+// streamIDRe 는 stream_id 화이트리스트다.
+//
+// 왜 화이트리스트인가: stream_id 는 파일 시스템에서 온 이름인데, 그대로 DB 값이 되고
+// S3Key 의 경로 조각이 된다. 즉 외부 입력이 경계를 넘어 저장소 키까지 흘러간다.
+// 무엇을 막을지 나열하는 대신(빠뜨리기 쉽다) 무엇을 허용할지 좁게 못 박는다.
+//
+// 슬래시를 허용하지 않으므로 중첩 %path(예: live/kr/demo)는 거부된다.
+// 근거: 현재 실사용이 로컬 단일 경로뿐이고, 중첩을 허용하면 stream_id 가 경로 구조를
+// 품게 되어 키 생성과 디렉토리 구조가 얽힌다. 중첩이 실제로 필요해지는 시점은
+// U9(프로덕션 stream_id 의 의미가 계약4 스트림키와 어떻게 연결되는가)가 확정될 때이며,
+// 그때 이 정규식과 아래 함수 본문만 고치면 된다.
+var streamIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // segmentNameRe 는 recordPath 의 %Y-%m-%d_%H-%M-%S-%f 를 그대로 옮긴 것이다(mediamtx.yml 31행).
 // 마지막 그룹(%f)의 자리수는 고정하지 않는다 — 자리수가 바뀌어도 흡수하기 위해서다(U6).
@@ -70,6 +88,9 @@ func ParseSegmentPath(root, path string) (Segment, error) {
 	// 스트림 디렉토리 없이 루트 바로 아래 놓인 파일은 어느 방송인지 알 수 없다.
 	if streamID == "" {
 		return Segment{}, fmt.Errorf("스트림 디렉토리가 없다: %q", path)
+	}
+	if !streamIDRe.MatchString(streamID) {
+		return Segment{}, fmt.Errorf("%w: %q (경로 %q)", ErrInvalidStreamID, streamID, path)
 	}
 
 	startWall, err := parseStartWall(base)

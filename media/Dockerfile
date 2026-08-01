@@ -24,4 +24,9 @@ RUN apk add --no-cache tzdata ca-certificates
 
 COPY --from=build /out/segment-indexer /usr/local/bin/segment-indexer
 
+# 비특권 사용자로 돌린다. recordings 는 :ro 로 붙지만, 권한을 낮춰 두면
+# 컨테이너가 뚫렸을 때 할 수 있는 일이 한 단계 더 줄어든다.
+RUN adduser -D -H -u 10001 sidecar
+USER 10001:10001
+
 ENTRYPOINT ["/usr/local/bin/segment-indexer"]

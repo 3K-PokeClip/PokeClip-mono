@@ -17,6 +17,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fmp4meta"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
@@ -52,7 +54,8 @@ type Options struct {
 	LearnSampleCount int
 	// InsertRetryMax 는 INSERT 재시도 상한이다(지수 백오프).
 	InsertRetryMax int
-	// InsertRetryBase 는 지수 백오프의 첫 간격이다. 기본 1s -> 총 약 30s.
+	// InsertRetryBase 는 지수 백오프의 첫 간격이다.
+	// 기본 2s + InsertRetryMax 5회 = 시도 사이 간격 2+4+8+16 = 정확히 30s(설계 2.4절 "총 ~30s").
 	InsertRetryBase time.Duration
 	// IdleTimeout 은 워처와 같은 값을 쓴다. H4(유휴 커밋 전 mtime 재검)와
 	// Scan(d)(최신 파일 분기)의 판정 기준이다.
@@ -72,7 +75,7 @@ func DefaultOptions() Options {
 		ReprobeFailStreak:  3,
 		LearnSampleCount:   5,
 		InsertRetryMax:     5,
-		InsertRetryBase:    time.Second,
+		InsertRetryBase:    2 * time.Second,
 		IdleTimeout:        10 * time.Second,
 		Settle:             recording.DefaultSettleOptions(),
 	}
@@ -99,6 +102,9 @@ type Indexer struct {
 	learnedMS       map[string]int64
 	failStreak      map[string]int
 	reprobeDisabled map[string]bool
+	// warnedRejected 는 화이트리스트를 통과하지 못한 디렉토리에 대해 WARN 을
+	// 한 번만 내기 위한 표시다. 재스캔은 5분마다 도는데 매번 경고하면 소음이 된다.
+	warnedRejected map[string]bool
 }
 
 // New 는 인덱서를 만든다. w 에는 *recording.Watcher 를 그대로 넘긴다.
@@ -115,6 +121,7 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter, opt Options
 		learnedMS:       map[string]int64{},
 		failStreak:      map[string]int{},
 		reprobeDisabled: map[string]bool{},
+		warnedRejected:  map[string]bool{},
 	}
 }
 
@@ -177,6 +184,10 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 	// H4. 유휴 커밋 전 mtime 재검(D13-예방) — 방금 전까지 쓰이고 있었다면 아직 녹화 중이다.
 	if seg.Reason == recording.ReasonIdle {
 		if fi, statErr := os.Stat(seg.Path); statErr == nil && time.Since(fi.ModTime()) < ix.opt.IdleTimeout {
+			// 무음으로 두면 "왜 이 파일이 안 들어오지"를 로그에서 추적할 수 없다.
+			ix.log.Debug("idle_readopted",
+				"stream_id", seg.StreamID, "path", seg.Path,
+				"mtime_age", time.Since(fi.ModTime()), "idle_timeout", ix.opt.IdleTimeout)
 			ix.adopt.Adopt(seg)
 			return nil
 		}
@@ -275,6 +286,11 @@ func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (duration
 func (ix *Indexer) promote(ctx context.Context, seg recording.Segment, d, size int64) (int64, int64) {
 	suspect := ix.suspectBelowMS(seg.StreamID)
 	if seg.Reason != recording.ReasonNextFile || ix.reprobeDisabled[seg.StreamID] || d >= suspect {
+		// 재프로브가 필요 없을 만큼 정상인 세그먼트도 연속 실패 기록을 지운다.
+		// 그러지 않으면 과거의 짧은 조각 몇 개 때문에 승격이 영구 비활성화된 채 남는다.
+		if seg.Reason == recording.ReasonNextFile && d >= suspect {
+			ix.failStreak[seg.StreamID] = 0
+		}
 		return d, size
 	}
 
@@ -292,11 +308,14 @@ func (ix *Indexer) promote(ctx context.Context, seg recording.Segment, d, size i
 		}
 	}
 
+	// 재프로브 동안 파일이 더 써졌을 수 있으므로 성공·실패 어느 쪽이든 크기를 다시 읽는다.
+	// 낡은 크기를 기록하면 다음 Scan(a)가 그것을 재성장으로 오인해 쓸데없이 UpdateTail 한다.
+	if fi, err := os.Stat(seg.Path); err == nil {
+		size = fi.Size()
+	}
+
 	if d >= suspect {
 		ix.failStreak[seg.StreamID] = 0
-		if fi, err := os.Stat(seg.Path); err == nil {
-			size = fi.Size()
-		}
 		return d, size
 	}
 
@@ -319,9 +338,12 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 	cur := ix.cursors[seg.StreamID]
 	rec := ix.buildRecord(cur, seg, d, size)
 
-	outcome, err := ix.insertWithRetry(ctx, rec)
+	outcome, poisoned, err := ix.insertWithRetry(ctx, rec)
 	if err != nil {
 		return err
+	}
+	if poisoned {
+		return nil // 커서를 전진시키지 않는다. 이 세그먼트만 인덱스에 없는 채로 남는다.
 	}
 
 	if outcome == index.InsertSeqConflict {
@@ -336,9 +358,12 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		cur = &reloaded
 		rec = ix.buildRecord(cur, seg, d, size)
 
-		outcome, err = ix.insertWithRetry(ctx, rec)
+		outcome, poisoned, err = ix.insertWithRetry(ctx, rec)
 		if err != nil {
 			return err
+		}
+		if poisoned {
+			return nil
 		}
 		if outcome == index.InsertSeqConflict {
 			ix.log.Error("seq_conflict_unrecoverable",
@@ -369,6 +394,15 @@ func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size
 		drift := seg.StartWall.Sub(cur.ExpectedNextWall()).Milliseconds()
 		if abs64(drift) <= ix.opt.DriftToleranceMS {
 			startPTS = cur.NextPTSMS()
+			if drift < 0 {
+				// 톨러런스 이내의 음수 drift 는 무음으로 두지 않되 ERROR 로 올리지도 않는다.
+				// duration 은 미디어 타임라인에서, wall 은 파일명에서 오므로 작은 음수는
+				// 상시 발생하는 측정 입도 차이다(60초 방송 실측: 전이 14건 중 13건이 -1~-22ms).
+				// ERROR 로 올리면 그 신호가 소음에 묻혀 진짜 사고를 못 보게 된다.
+				ix.log.Debug("negative_drift_within_tolerance",
+					"stream_id", seg.StreamID, "path", seg.Path, "drift_ms", drift,
+					"seg_wall", seg.StartWall, "expected_next_wall", cur.ExpectedNextWall())
+			}
 		} else {
 			// max(0, drift) 가 G8(단조 비감소)을 식 수준에서 보장하는 유일한 지점이다.
 			// drift 가 음수일 때 그대로 더하면 PTS 가 뒤로 후퇴해 구간이 겹친다.
@@ -397,30 +431,92 @@ func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size
 	}
 }
 
+// insertFate 는 INSERT 에러를 어떻게 다룰지 셋으로 가른다.
+type insertFate int
+
+const (
+	// fateRetry — 시간이 지나면 나아질 수 있는 실패(연결 끊김, 자원 부족, 운영자 개입).
+	fateRetry insertFate = iota
+	// fatePoison — 몇 번을 다시 넣어도 같은 결과인 실패. 그 세그먼트만 격리하고 계속 간다.
+	fatePoison
+	// fateFatal — 설정이나 스키마가 잘못됐다는 뜻. 사람이 고쳐야 하므로 프로세스를 끝낸다.
+	fateFatal
+)
+
+// classifyInsertError 는 SQLSTATE 앞 두 자리(클래스)로 대응을 정한다.
+//
+// 재시도해서 될 일과 안 될 일을 가르지 않으면, 잘못된 값 하나가 30초씩 파이프라인을
+// 붙잡고 끝내 프로세스를 죽인다. 그 사이 멀쩡한 세그먼트들도 함께 밀린다.
+func classifyInsertError(err error) insertFate {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		// 네트워크 오류, 타임아웃 등 드라이버 계층 실패는 재시도 가치가 있다.
+		return fateRetry
+	}
+
+	switch class := sqlStateClass(pgErr.Code); class {
+	case "08", "53", "57":
+		// 08 연결 예외 / 53 자원 부족 / 57 운영자 개입(셧다운 등)
+		return fateRetry
+	case "22", "54":
+		// 22 데이터 예외(범위 초과, 잘못된 형식) / 54 한도 초과(값이 너무 김)
+		return fatePoison
+	case "23":
+		// 23 무결성 위반. 23505(unique)는 Store 가 이미 InsertOutcome 으로 걸러 내므로
+		// 여기 오는 것은 NOT NULL, CHECK, FK 위반이며 전부 값 자체의 문제다.
+		return fatePoison
+	default:
+		// 42 문법·권한, 28 인증 등. 재시도해도 같고, 조용히 넘기면 전 세그먼트가 사라진다.
+		return fateFatal
+	}
+}
+
+func sqlStateClass(code string) string {
+	if len(code) < 2 {
+		return ""
+	}
+	return code[:2]
+}
+
 // insertWithRetry 는 H9 의 지수 백오프 재시도다.
-// 상한을 소진하면 에러를 올린다 -> main 이 exit 1 -> compose 재기동 -> Scan 복구(D8).
-func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record) (index.InsertOutcome, error) {
+// 재시도 상한을 소진하면 에러를 올린다 -> main 이 exit 1 -> compose 재기동 -> Scan 복구(D8).
+//
+// poisoned 가 true 면 이 세그먼트 하나만 버리고 프로세스는 계속 간다.
+func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record) (outcome index.InsertOutcome, poisoned bool, err error) {
 	var lastErr error
 	backoff := ix.opt.InsertRetryBase
 
 	for attempt := range ix.opt.InsertRetryMax {
-		outcome, err := ix.store.Insert(ctx, rec)
-		if err == nil {
-			return outcome, nil
+		result, insertErr := ix.store.Insert(ctx, rec)
+		if insertErr == nil {
+			return result, false, nil
 		}
-		lastErr = err
+		lastErr = insertErr
+
+		switch classifyInsertError(insertErr) {
+		case fatePoison:
+			ix.log.Error("insert_poisoned",
+				"stream_id", rec.StreamID, "seq", rec.Seq, "path", rec.LocalPath,
+				"err", insertErr,
+				"note", "재시도해도 같은 결과다. 이 세그먼트만 건너뛴다")
+			return index.InsertInserted, true, nil
+		case fateFatal:
+			return index.InsertInserted, false, fmt.Errorf(
+				"복구 불가한 INSERT 오류 stream_id=%q seq=%d: %w", rec.StreamID, rec.Seq, insertErr)
+		}
+
 		ix.log.Warn("insert_retry", "stream_id", rec.StreamID, "seq", rec.Seq,
-			"attempt", attempt+1, "err", err)
+			"attempt", attempt+1, "err", insertErr)
 
 		if attempt == ix.opt.InsertRetryMax-1 {
 			break
 		}
 		if !sleepCtx(ctx, backoff) {
-			return index.InsertInserted, ctx.Err()
+			return index.InsertInserted, false, ctx.Err()
 		}
 		backoff *= 2
 	}
-	return index.InsertInserted, fmt.Errorf("INSERT 재시도 상한 소진 stream_id=%q seq=%d: %w",
+	return index.InsertInserted, false, fmt.Errorf("INSERT 재시도 상한 소진 stream_id=%q seq=%d: %w",
 		rec.StreamID, rec.Seq, lastErr)
 }
 

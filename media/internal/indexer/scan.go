@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -51,6 +52,12 @@ func (ix *Indexer) collect(root string) (map[string][]recording.Segment, error) 
 		}
 		seg, parseErr := recording.ParseSegmentPath(root, path)
 		if parseErr != nil {
+			if errors.Is(parseErr, recording.ErrInvalidStreamID) {
+				// 세그먼트 파일 모양이지만 스트림 이름이 화이트리스트를 통과하지 못했다.
+				// 조용히 버리면 원인을 알 수 없고, 매 스캔마다 경고하면 로그가 쏟아진다.
+				ix.warnRejectedStream(filepath.Dir(path), parseErr)
+				return nil
+			}
 			// 세그먼트 파일이 아니다. 녹화 폴더에는 다른 파일이 섞일 수 있다.
 			ix.log.Debug("non_segment_file_skipped", "path", path, "err", parseErr)
 			return nil
@@ -162,4 +169,13 @@ func sortByStartWall(segs []recording.Segment) {
 	slices.SortStableFunc(segs, func(a, b recording.Segment) int {
 		return a.StartWall.Compare(b.StartWall)
 	})
+}
+
+// warnRejectedStream 은 거부된 스트림 디렉토리마다 WARN 을 한 번만 남긴다.
+func (ix *Indexer) warnRejectedStream(dir string, cause error) {
+	if ix.warnedRejected[dir] {
+		return
+	}
+	ix.warnedRejected[dir] = true
+	ix.log.Warn("stream_id_rejected", "dir", dir, "err", cause)
 }

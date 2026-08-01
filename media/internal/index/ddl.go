@@ -20,6 +20,16 @@ import (
 //	DROP TABLE IF EXISTS stream_segments;
 //
 // 이 DROP 을 하지 않으면 우리 임시 형상이 정본인 척 조용히 살아남는다.
+//
+// TODO(POK-35 인수인계 2순위): UNIQUE 인덱스 이름 stream_segments_local_path_uq 도 정본에 그대로 써야 한다.
+// store.go 의 Insert 는 23505(unique_violation)를 받았을 때 제약 이름으로 "같은 파일 재삽입"(정상 멱등)과
+// "seq 충돌"(단일 쓰기자 전제 붕괴)을 가른다. 이름이 달라지면 정상 멱등이 seq 충돌로 오분류되어
+// 재적재 후 프로세스 종료 경로를 타게 된다.
+//
+// 이번 범위 밖으로 이월한 항목(PR "알려진 제약"에 함께 기재):
+//   - 보안 M-1: ExistingPaths 가 스트림의 경로 전부를 메모리에 올린다. 창(window) 제한 없음.
+//   - 보안 M-2: 사이드카가 POSTGRES_USER 를 그대로 쓴다. 이 표만 쓰는 전용 롤이 바람직하다.
+//   - 미확인 3: 파일명 파서에 대한 fuzz 테스트 없음.
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS stream_segments (
     stream_id        text        NOT NULL,

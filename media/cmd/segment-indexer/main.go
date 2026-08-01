@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -24,7 +25,13 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	err := run()
+	// SIGTERM 으로 끝난 것은 정상 종료다. 이것을 실패로 보고하면 오케스트레이터가
+	// 멀쩡한 종료를 장애로 오인하고 재기동 루프에 넣는다.
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+	if err != nil {
 		// 설정 오류는 로거를 만들기 전에도 날 수 있으므로 표준 에러로 직접 적는다.
 		fmt.Fprintf(os.Stderr, "segment-indexer 종료: %v\n", err)
 		os.Exit(1)

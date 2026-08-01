@@ -49,6 +49,9 @@ func Load(env func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// prefer = TLS 를 시도하되 서버가 못 하면 평문으로 내려간다. 로컬 compose 기본에 맞춘 값이며,
+	// 네트워크를 건너는 배포에서는 require 이상으로 올린다.
+	sslMode := withDefault(env, "POSTGRES_SSLMODE", "prefer")
 
 	logLevel, err := level(env, "LOG_LEVEL", slog.LevelInfo)
 	if err != nil {
@@ -95,6 +98,17 @@ func Load(env func(string) string) (Config, error) {
 	if watch.FIFOMaxLen, err = positiveInt(env, "SEGMENT_FIFO_MAX_LEN", watch.FIFOMaxLen); err != nil {
 		return Config{}, err
 	}
+	if watch.MaxWatchDirs, err = positiveInt(env, "SEGMENT_MAX_WATCH_DIRS", watch.MaxWatchDirs); err != nil {
+		return Config{}, err
+	}
+
+	// 의심 하한이 기대 길이보다 크면 H6 승격이 모든 세그먼트에서 헛돌고 WARN 만 쌓인다.
+	// 설정 단계에서 잡지 않으면 운영 중에야 로그로 알게 된다.
+	if idx.SuspectBelowMS > idx.ExpectedDurationMS {
+		return Config{}, fmt.Errorf(
+			"SEGMENT_SUSPECT_BELOW_MS(%d)는 SEGMENT_EXPECTED_DURATION_MS(%d) 이하여야 한다",
+			idx.SuspectBelowMS, idx.ExpectedDurationMS)
+	}
 
 	// 워처와 인덱서는 같은 유휴 판정 기준을 써야 한다.
 	// 달라지면 H4(유휴 커밋 전 mtime 재검)가 워처의 판정과 어긋나 되돌리기가 무한 반복된다.
@@ -102,7 +116,7 @@ func Load(env func(string) string) (Config, error) {
 	idx.Settle = watch.Settle
 
 	return Config{
-		PGDSN:        dsn(user, password, host, port, dbName),
+		PGDSN:        dsn(user, password, host, port, dbName, sslMode),
 		SegmentRoot:  watch.Root,
 		EnsureSchema: ensureSchema,
 		LogLevel:     logLevel,
@@ -112,12 +126,13 @@ func Load(env func(string) string) (Config, error) {
 }
 
 // dsn 은 사용자명과 비밀번호를 URL 인코딩해 넣는다. 특수문자가 든 비밀번호도 깨지지 않는다.
-func dsn(user, password, host string, port int, dbName string) string {
+func dsn(user, password, host string, port int, dbName, sslMode string) string {
 	u := url.URL{
-		Scheme: "postgres",
-		User:   url.UserPassword(user, password),
-		Host:   fmt.Sprintf("%s:%d", host, port),
-		Path:   "/" + dbName,
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, password),
+		Host:     fmt.Sprintf("%s:%d", host, port),
+		Path:     "/" + dbName,
+		RawQuery: url.Values{"sslmode": {sslMode}}.Encode(),
 	}
 	return u.String()
 }

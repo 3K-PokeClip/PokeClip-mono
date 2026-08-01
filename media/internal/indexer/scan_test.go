@@ -218,3 +218,28 @@ func TestScanHandlesMultipleStreams(t *testing.T) {
 		t.Fatalf("s2 seq = %d, want 0", got)
 	}
 }
+
+// 지적3 — Scan 이 화이트리스트를 통과하지 못한 스트림 디렉토리를 만나면
+// 그 스트림당 WARN 을 한 번만 남기고 인덱싱하지 않는다.
+// 조용히 버리면 "왜 안 들어오지"를 아무도 모르고, 매번 경고하면 5분마다 로그가 쏟아진다.
+func TestFixRejectedStreamWarnsOncePerStream(t *testing.T) {
+	f := newFixture(t)
+	f.probe.vals = []int64{4000}
+	f.makeFile("정상아님 스트림", segName(baseWall, 0), 1000)
+	f.makeFile("정상아님 스트림", segName(baseWall, 4*time.Second), 1000)
+	f.makeFile("s1", segName(baseWall, 0), 1000)
+
+	f.scan()
+	f.scan() // 재스캔해도 경고가 늘면 안 된다
+
+	if n := f.logs.count(slog.LevelWarn, "stream_id_rejected"); n != 1 {
+		t.Fatalf("stream_id_rejected = %d건, want 1 (스트림당 1회)", n)
+	}
+	if n := len(f.store.records("정상아님 스트림")); n != 0 {
+		t.Fatalf("거부된 스트림의 행 수 = %d, want 0", n)
+	}
+	// 정상 스트림은 영향을 받지 않아야 한다.
+	if n := len(f.store.records("s1")); n != 1 {
+		t.Fatalf("정상 스트림 행 수 = %d, want 1", n)
+	}
+}

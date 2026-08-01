@@ -24,9 +24,10 @@ func testWatcherOptions(root string) WatcherOptions {
 			SettleWait:   30 * time.Millisecond,
 			MaxSettle:    300 * time.Millisecond,
 		},
-		FIFOWarnLen: 8,
-		FIFOMaxLen:  64,
-		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		FIFOWarnLen:  8,
+		FIFOMaxLen:   64,
+		MaxWatchDirs: 64,
+		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
@@ -409,5 +410,220 @@ func TestWatcherNeverEmitsUnknownReason(t *testing.T) {
 		if seg.Reason == ReasonUnknown {
 			t.Fatalf("사유가 비어 있다: %q", seg.Path)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 검수 지적 회귀 테스트
+// ---------------------------------------------------------------------------
+
+// 지적1 — 신규 디렉토리 CREATE 시 그 하위까지 재귀적으로 watch 등록한다.
+// 최상위만 등록하면 live/kr/demo 처럼 깊은 트리가 한꺼번에 생길 때 안쪽이 감시 밖에 남는다.
+func TestFixNewDirectoryIsWatchedRecursively(t *testing.T) {
+	root := t.TempDir()
+	w, _, _ := startWatcher(t, testWatcherOptions(root))
+
+	deep := filepath.Join(root, "a", "b", "c")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatalf("디렉토리 생성 실패: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if w.isWatched(deep) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("최심부 디렉토리가 감시 등록되지 않았다: %q (등록된 수 %d)", deep, w.watchedCount())
+}
+
+// 지적1 보강 — Start 이후 새로 생긴 스트림 디렉토리의 파일도 결국 emit 된다.
+// 실사용 경로(1단계 깊이)에서 watch 등록 -> 파일 감지가 이어지는지 확인한다.
+func TestFixFileInNewStreamDirectoryIsEmitted(t *testing.T) {
+	root := t.TempDir()
+	w, _, _ := startWatcher(t, testWatcherOptions(root))
+
+	mkStream(t, root, "s9")
+	// 새 디렉토리의 watch 등록이 끝날 때까지 기다린다.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !w.isWatched(filepath.Join(root, "s9")) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	first := segFile(t, root, "s9", 0, 100)
+	time.Sleep(20 * time.Millisecond)
+	segFile(t, root, "s9", 4*time.Second, 100)
+
+	seg, ok := recv(t, w.Completed(), 3*time.Second)
+	if !ok || seg.Path != first {
+		t.Fatalf("새 디렉토리의 파일이 emit 되지 않았다 (ok=%v path=%q)", ok, seg.Path)
+	}
+}
+
+// 지적2 — Adopt 는 StartWall 이 기존 pending 보다 늦을 때만 교체한다.
+// 무조건 덮어쓰면 더 오래된 파일이 최신 pending 을 밀어내 최신 파일이 영구 유실된다.
+func TestFixAdoptDoesNotDisplaceNewerPending(t *testing.T) {
+	root := t.TempDir()
+	opt := testWatcherOptions(root)
+	opt.IdleTimeout = time.Hour // 유휴 확정이 끼어들지 않게 한다
+	mkStream(t, root, "s1")
+
+	// 오래된 파일은 Start 전에 만들어 둔다. 그래야 CREATE 이벤트 없이 존재만 하게 되어
+	// "되돌려받은 오래된 파일" 상황을 순수하게 재현할 수 있다.
+	olderPath := segFile(t, root, "s1", 0, 100)
+
+	w, _, _ := startWatcher(t, opt)
+
+	// Start 이후 만든 최신 파일이 pending 이 된다.
+	newer := segFile(t, root, "s1", 8*time.Second, 100)
+	time.Sleep(80 * time.Millisecond)
+
+	older, err := ParseSegmentPath(root, olderPath)
+	if err != nil {
+		t.Fatalf("ParseSegmentPath 실패: %v", err)
+	}
+	w.Adopt(older)
+
+	// 밀려나는 쪽(더 오래된 것)이 확정 후보로 나와야 한다.
+	seg, ok := recv(t, w.Completed(), 2*time.Second)
+	if !ok {
+		t.Fatal("밀려난 오래된 파일이 확정 후보로 나오지 않았다")
+	}
+	if seg.Path != olderPath {
+		t.Fatalf("emit = %q, want %q (오래된 쪽이 나와야 한다)", seg.Path, olderPath)
+	}
+
+	// 최신 파일은 여전히 pending 이라 emit 되지 않아야 한다.
+	if extra, ok := recv(t, w.Completed(), 300*time.Millisecond); ok {
+		t.Fatalf("최신 pending(%q)이 밀려나 emit 됐다: %q", newer, extra.Path)
+	}
+}
+
+// 지적2 — Adopt 가 더 늦은 파일이면 교체하고, 밀려난 기존 pending 을 확정 후보로 push 한다.
+func TestFixAdoptNewerReplacesAndFlushesOlder(t *testing.T) {
+	root := t.TempDir()
+	opt := testWatcherOptions(root)
+	opt.IdleTimeout = time.Hour
+	mkStream(t, root, "s1")
+
+	newerPath := segFile(t, root, "s1", 8*time.Second, 100)
+	w, _, _ := startWatcher(t, opt)
+
+	// Start 이후 만든 오래된 파일이 pending 이 된다.
+	olderPath := segFile(t, root, "s1", 0, 100)
+	time.Sleep(80 * time.Millisecond)
+
+	newer, err := ParseSegmentPath(root, newerPath)
+	if err != nil {
+		t.Fatalf("ParseSegmentPath 실패: %v", err)
+	}
+	w.Adopt(newer)
+
+	// 더 늦은 쪽이 pending 을 차지하고, 밀려난 오래된 쪽이 확정 후보로 나온다.
+	seg, ok := recv(t, w.Completed(), 2*time.Second)
+	if !ok {
+		t.Fatal("밀려난 오래된 파일이 확정 후보로 나오지 않았다")
+	}
+	if seg.Path != olderPath {
+		t.Fatalf("emit = %q, want %q", seg.Path, olderPath)
+	}
+	if extra, ok := recv(t, w.Completed(), 300*time.Millisecond); ok {
+		t.Fatalf("새로 pending 이 된 파일이 emit 됐다: %q", extra.Path)
+	}
+}
+
+// 지적4 — 개별 디렉토리 감시 등록 실패는 전체 기동을 막지 않는다.
+// 하드 에러로 두면 디렉토리 하나 때문에 프로세스가 crash loop 에 빠진다.
+func TestFixWatchAddFailureDoesNotBlockStartup(t *testing.T) {
+	root := t.TempDir()
+	// 읽을 수 없는 디렉토리를 하나 만든다. WalkDir 이 그 안을 못 읽는다.
+	blocked := filepath.Join(root, "blocked")
+	if err := os.MkdirAll(filepath.Join(blocked, "inner"), 0o755); err != nil {
+		t.Fatalf("디렉토리 생성 실패: %v", err)
+	}
+	if err := os.Chmod(blocked, 0o000); err != nil {
+		t.Fatalf("권한 변경 실패: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
+
+	mkStream(t, root, "s1")
+	w, _, _ := startWatcher(t, testWatcherOptions(root))
+
+	// 나머지 스트림은 정상 동작해야 한다.
+	first := segFile(t, root, "s1", 0, 100)
+	time.Sleep(20 * time.Millisecond)
+	segFile(t, root, "s1", 4*time.Second, 100)
+
+	seg, ok := recv(t, w.Completed(), 3*time.Second)
+	if !ok || seg.Path != first {
+		t.Fatalf("한 디렉토리 실패가 전체를 막았다 (ok=%v)", ok)
+	}
+}
+
+// 지적4 — 감시 디렉토리 수 상한을 넘으면 신규 등록을 무시한다(자원 고갈 방지).
+func TestFixWatchDirLimitIsEnforced(t *testing.T) {
+	root := t.TempDir()
+	opt := testWatcherOptions(root)
+	opt.MaxWatchDirs = 2 // 루트 + 1개
+	mkStream(t, root, "s1")
+
+	w, err := NewWatcher(opt)
+	if err != nil {
+		t.Fatalf("NewWatcher 실패: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); <-w.Done() }()
+	if err := w.Start(ctx); err != nil {
+		t.Fatalf("Start 실패: %v", err)
+	}
+
+	for _, name := range []string{"s2", "s3", "s4"} {
+		mkStream(t, root, name)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	if got := w.watchedCount(); got > opt.MaxWatchDirs {
+		t.Fatalf("감시 디렉토리 수 = %d, want <= %d", got, opt.MaxWatchDirs)
+	}
+}
+
+// 지적3 — 화이트리스트를 통과하지 못한 스트림 디렉토리의 파일은 emit 되지 않는다.
+func TestFixRejectedStreamIDIsNotEmitted(t *testing.T) {
+	root := t.TempDir()
+	mkStream(t, root, "s1")
+	mkStream(t, root, "나쁜 이름")
+	w, _, _ := startWatcher(t, testWatcherOptions(root))
+
+	segFile(t, root, "나쁜 이름", 0, 100)
+	time.Sleep(20 * time.Millisecond)
+	segFile(t, root, "나쁜 이름", 4*time.Second, 100)
+
+	if seg, ok := recv(t, w.Completed(), 500*time.Millisecond); ok {
+		t.Fatalf("거부돼야 할 스트림의 파일이 emit 됐다: %q", seg.Path)
+	}
+}
+
+// 지적9 — 주기 재스캔 타이머의 소유자는 main 루프 하나다.
+// 워처가 자체 주기 타이머를 또 돌리면 같은 일이 두 번 예약된다.
+func TestFixWatcherHasNoPeriodicRescanTimer(t *testing.T) {
+	root := t.TempDir()
+	opt := testWatcherOptions(root)
+	opt.RescanEvery = 30 * time.Millisecond // 워처가 타이머를 갖고 있다면 금방 울린다
+	w, _, _ := startWatcher(t, opt)
+
+	select {
+	case <-w.Rescans():
+		t.Fatal("워처가 자체 주기 타이머로 재스캔 신호를 냈다 — 소유자는 main 루프 하나여야 한다")
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// MaxWatchDirs 가 0이면 감시가 통째로 죽으므로 생성 단계에서 거부한다.
+func TestFixWatcherRejectsZeroWatchDirLimit(t *testing.T) {
+	opt := testWatcherOptions(t.TempDir())
+	opt.MaxWatchDirs = 0
+	if _, err := NewWatcher(opt); err == nil {
+		t.Fatal("MaxWatchDirs=0 인데 에러가 없다")
 	}
 }

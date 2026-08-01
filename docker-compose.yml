@@ -54,6 +54,8 @@ services:
       media:
         condition: service_started # media는 healthcheck가 없으므로 조건을 명시해 해석 차이를 막는다
     restart: unless-stopped # DB 사망 시 죽고 재기동해 Scan으로 복구한다 (진실원은 파일)
+    security_opt:
+      - no-new-privileges:true # 컨테이너 안에서 권한을 되찾는 경로를 막는다
     volumes:
       # :ro — 사이드카가 파일을 지우거나 고치는 것을 운영체제 수준에서 막는다. 삭제는 janitor 책임.
       - recordings:/recordings:ro

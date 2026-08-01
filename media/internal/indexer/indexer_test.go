@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
@@ -548,3 +550,187 @@ func TestHappyPathProducesNoErrorLogs(t *testing.T) {
 }
 
 var _ = context.Background
+
+// ---------------------------------------------------------------------------
+// 검수 지적 회귀 테스트
+// ---------------------------------------------------------------------------
+
+// 지적5 — poison pill INSERT.
+// 데이터·무결성·한도 오류는 몇 번을 다시 넣어도 같은 결과다. 재시도하면 그 세그먼트 하나가
+// 파이프라인 전체를 30초씩 붙잡고, 재시도 상한을 소진하면 프로세스까지 죽인다.
+// 한 번만 시도하고 그 세그먼트만 격리한 뒤 다음 것으로 넘어가야 한다.
+func TestFixPoisonInsertIsIsolatedWithoutRetry(t *testing.T) {
+	poison := []struct {
+		name string
+		code string
+	}{
+		{"클래스22_데이터오류", "22021"},
+		{"클래스23_무결성위반_23505_제외", "23514"},
+		{"클래스54_한도초과", "54000"},
+	}
+
+	for _, tc := range poison {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, 4000)
+			f.store.insertErrs = []error{&pgconn.PgError{Code: tc.code, Message: "테스트용"}}
+
+			seg := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile)
+			if err := f.handle(seg); err != nil {
+				t.Fatalf("프로세스를 죽이면 안 된다: %v", err)
+			}
+
+			if f.store.insertCalls != 1 {
+				t.Fatalf("Insert 호출 = %d, want 1 (재시도 금지)", f.store.insertCalls)
+			}
+			if n := f.logs.count(slog.LevelError, "insert_poisoned"); n != 1 {
+				t.Fatalf("insert_poisoned = %d건, want 1", n)
+			}
+			if cur := f.ix.cursors["s1"]; cur.Tail != nil || cur.NextSeq != 0 {
+				t.Fatalf("커서가 전진했다: NextSeq=%d Tail=%v", cur.NextSeq, cur.Tail)
+			}
+		})
+	}
+}
+
+// 지적5 — 연결·자원 계열과 비-PgError 는 종전대로 재시도한다.
+func TestFixTransientInsertErrorsStillRetry(t *testing.T) {
+	transient := []struct {
+		name string
+		err  error
+	}{
+		{"클래스08_연결", &pgconn.PgError{Code: "08006"}},
+		{"클래스53_자원부족", &pgconn.PgError{Code: "53300"}},
+		{"클래스57_운영자개입", &pgconn.PgError{Code: "57P01"}},
+		{"비PgError", errStoreDown},
+	}
+
+	for _, tc := range transient {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, 4000)
+			// 두 번 실패한 뒤 성공한다.
+			f.store.insertErrs = []error{tc.err, tc.err}
+
+			seg := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile)
+			if err := f.handle(seg); err != nil {
+				t.Fatalf("재시도로 회복했어야 한다: %v", err)
+			}
+			if f.store.insertCalls != 3 {
+				t.Fatalf("Insert 호출 = %d, want 3", f.store.insertCalls)
+			}
+			if n := len(f.store.records("s1")); n != 1 {
+				t.Fatalf("행 수 = %d, want 1", n)
+			}
+		})
+	}
+}
+
+// 지적5 — 그 밖의 PgError(문법·권한 등)는 설정이 잘못됐다는 뜻이므로 재시도하지 않고 올린다.
+func TestFixUnexpectedPgErrorIsFatalWithoutRetry(t *testing.T) {
+	f := newFixture(t, 4000)
+	f.store.insertErrs = []error{&pgconn.PgError{Code: "42601", Message: "syntax error"}}
+
+	err := f.handle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile))
+	if err == nil {
+		t.Fatal("에러를 기대했으나 nil")
+	}
+	if f.store.insertCalls != 1 {
+		t.Fatalf("Insert 호출 = %d, want 1 (재시도 금지)", f.store.insertCalls)
+	}
+}
+
+// 지적8 — 음수 drift 는 톨러런스 이내여도 흔적을 남긴다.
+//
+// 다만 ERROR 가 아니라 DEBUG 다. 실측 근거: 60초 방송 1회에서 세그먼트 간 drift 14건이
+// 전부 음수였고 그중 13건이 -1 ~ -22ms 였다. duration 은 미디어 타임라인에서, wall 은
+// 파일명에서 오므로 작은 음수는 상시 발생하는 측정 입도 차이다. 이것을 ERROR 로 올리면
+// 60초마다 14건이 쏟아져 "ERROR = 사람이 봐야 함"이라는 신호가 무너진다.
+// 톨러런스를 넘는 음수 drift 는 종전대로 ERROR 다.
+func TestFixNegativeDriftWithinToleranceIsLogged(t *testing.T) {
+	f := newFixture(t, 4000, 4000)
+	f.mustHandle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile))
+
+	// 기대 시각은 base+4s, 실제는 base+3.98s -> drift = -20ms (톨러런스 이내)
+	f.mustHandle(f.segment("s1", segName(baseWall, 3980*time.Millisecond), 1000, recording.ReasonNextFile))
+
+	if n := f.logs.count(slog.LevelDebug, "negative_drift_within_tolerance"); n != 1 {
+		t.Fatalf("negative_drift_within_tolerance = %d건, want 1", n)
+	}
+	if n := f.logs.errorCount(); n != 0 {
+		t.Fatalf("ERROR = %d건, want 0 — 상시 발생하는 작은 음수 drift 가 ERROR 로 올라갔다", n)
+	}
+	rows := f.store.records("s1")
+	if rows[1].IsDiscontinuity {
+		t.Error("톨러런스 이내인데 불연속 판정을 받았다")
+	}
+	if rows[1].StartPTSMS != 4000 {
+		t.Errorf("start_pts_ms = %d, want 4000", rows[1].StartPTSMS)
+	}
+}
+
+// 지적2 — H4 되돌리기 경로가 무음이면 "왜 안 들어오지"를 아무도 모른다.
+func TestFixIdleReadoptIsLogged(t *testing.T) {
+	f := newFixture(t, 4000)
+	seg := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonIdle)
+	f.touch(seg.Path, time.Now())
+
+	f.mustHandle(seg)
+
+	if n := f.logs.count(slog.LevelDebug, "idle_readopted"); n != 1 {
+		t.Fatalf("idle_readopted = %d건, want 1", n)
+	}
+}
+
+// 지적12 — 상향 학습이 실제로 반영되는지 값으로 단정한다.
+// 이전 테스트는 "내려가지 않는다"만 봐서 학습이 상수 반환이어도 통과했다.
+func TestFixLearningRaisesThresholdAndIsPerStream(t *testing.T) {
+	f := newFixture(t)
+	f.probe.vals = []int64{6000}
+
+	// s1 에만 6000ms 표본을 LearnSampleCount 만큼 넣는다.
+	for i := range f.opt.LearnSampleCount {
+		f.mustHandle(f.segment("s1", segName(baseWall, time.Duration(i)*6*time.Second), 1000, recording.ReasonNextFile))
+	}
+
+	if got := f.ix.expectedMS("s1"); got != 6000 {
+		t.Fatalf("s1 학습된 기대 길이 = %d, want 6000 — 상향 학습이 반영되지 않았다", got)
+	}
+	margin := f.opt.ExpectedDurationMS - f.opt.SuspectBelowMS
+	if got, want := f.ix.suspectBelowMS("s1"), int64(6000)-margin; got != want {
+		t.Fatalf("s1 의심 하한 = %d, want %d", got, want)
+	}
+
+	// s2 는 아무 표본도 없으므로 초기값 그대로여야 한다.
+	if got := f.ix.expectedMS("s2"); got != f.opt.ExpectedDurationMS {
+		t.Fatalf("s2 기대 길이 = %d, want %d — 학습이 스트림 경계를 넘었다", got, f.opt.ExpectedDurationMS)
+	}
+	if got := f.ix.suspectBelowMS("s2"); got != f.opt.SuspectBelowMS {
+		t.Fatalf("s2 의심 하한 = %d, want %d", got, f.opt.SuspectBelowMS)
+	}
+}
+
+// LOW — 재프로브가 필요 없을 만큼 정상인 세그먼트도 failStreak 를 리셋한다.
+// 그러지 않으면 과거의 짧은 조각 몇 개 때문에 승격이 영구 비활성화된 채 남는다.
+func TestFixHealthySegmentResetsFailStreak(t *testing.T) {
+	f := newFixture(t, 4000)
+	f.ix.failStreak["s1"] = 2
+
+	f.mustHandle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile))
+
+	if got := f.ix.failStreak["s1"]; got != 0 {
+		t.Fatalf("failStreak = %d, want 0", got)
+	}
+}
+
+// LOW — 기본 백오프 간격의 총합이 계약의 약 30초와 맞는지 확인한다.
+func TestFixDefaultBackoffTotalsAboutThirtySeconds(t *testing.T) {
+	opt := DefaultOptions()
+	total := time.Duration(0)
+	backoff := opt.InsertRetryBase
+	for range opt.InsertRetryMax - 1 { // 시도 사이의 간격 수 = 시도 수 - 1
+		total += backoff
+		backoff *= 2
+	}
+	if total != 30*time.Second {
+		t.Fatalf("백오프 총합 = %v, want 30s", total)
+	}
+}

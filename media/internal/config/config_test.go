@@ -161,3 +161,56 @@ func TestLoadRejectsMalformedValues(t *testing.T) {
 		})
 	}
 }
+
+// LOW — 의심 하한이 기대 길이보다 크면 H6 승격이 매번 헛돌게 된다. 기동 시 잡는다.
+func TestFixRejectsSuspectAboveExpected(t *testing.T) {
+	env := minimalEnv()
+	env["SEGMENT_EXPECTED_DURATION_MS"] = "4000"
+	env["SEGMENT_SUSPECT_BELOW_MS"] = "4500"
+
+	if _, err := Load(envOf(env)); err == nil {
+		t.Fatal("SUSPECT_BELOW > EXPECTED_DURATION 인데 에러가 없다")
+	}
+}
+
+// 지적4 — 감시 디렉토리 상한을 환경변수로 조정할 수 있고 기본값이 살아 있다.
+func TestFixMaxWatchDirs(t *testing.T) {
+	cfg, err := Load(envOf(minimalEnv()))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.Watcher.MaxWatchDirs != 1024 {
+		t.Fatalf("MaxWatchDirs = %d, want 1024", cfg.Watcher.MaxWatchDirs)
+	}
+
+	env := minimalEnv()
+	env["SEGMENT_MAX_WATCH_DIRS"] = "16"
+	cfg, err = Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.Watcher.MaxWatchDirs != 16 {
+		t.Fatalf("MaxWatchDirs = %d, want 16", cfg.Watcher.MaxWatchDirs)
+	}
+}
+
+// LOW — sslmode 를 DSN 에 실어 보낸다. 기본은 prefer(가능하면 TLS).
+func TestFixSSLMode(t *testing.T) {
+	cfg, err := Load(envOf(minimalEnv()))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if !strings.Contains(cfg.PGDSN, "sslmode=prefer") {
+		t.Fatalf("DSN 에 기본 sslmode 가 없다: %q", cfg.PGDSN)
+	}
+
+	env := minimalEnv()
+	env["POSTGRES_SSLMODE"] = "require"
+	cfg, err = Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if !strings.Contains(cfg.PGDSN, "sslmode=require") {
+		t.Fatalf("DSN = %q", cfg.PGDSN)
+	}
+}
