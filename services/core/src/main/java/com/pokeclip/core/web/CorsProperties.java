@@ -1,4 +1,4 @@
-package com.pokeclip.core.auth.config;
+package com.pokeclip.core.web;
 
 import jakarta.validation.constraints.NotEmpty;
 import org.springframework.boot.context.properties.ConfigurationProperties;

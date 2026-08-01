@@ -1,4 +1,4 @@
-package com.pokeclip.core.auth.config;
+package com.pokeclip.core.web;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

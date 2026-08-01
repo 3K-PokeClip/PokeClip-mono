@@ -1,4 +1,4 @@
-package com.pokeclip.core.auth.config;
+package com.pokeclip.core.web;
 
 import com.pokeclip.core.support.IntegrationTestSupport;
 import org.junit.jupiter.api.Test;
