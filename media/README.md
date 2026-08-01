@@ -32,6 +32,21 @@
 
 로컬 개발 환경에는 이미 MediaMTX가 떠 있다 — [`infra/compose/mediamtx.yml`](../infra/compose/mediamtx.yml)
 
+그 옆에 **`segment-indexer` 사이드카**(POK-29)가 붙어 있다. MediaMTX가 `/recordings`에 4초마다
+떨어뜨리는 fMP4 세그먼트를 감지해, 완성된 것만 `stream_segments` 표에 정확히 한 줄씩 기록한다.
+클립을 자르려면 "몇 번째 조각이 어디에 있고 몇 초짜리인가"를 알아야 하는데, 그 목록을 만드는 일이다.
+
+| 항목 | 내용 |
+|---|---|
+| 진입점 | [`cmd/segment-indexer/main.go`](cmd/segment-indexer/main.go) |
+| 완성 판정 | 후속 파일 생성(주) + 유휴 타임아웃(보조) + 크기 안정 대기 |
+| 길이 | fMP4 박스 실측(`internal/fmp4meta`). 벽시계로 어림잡지 않는다 |
+| 파일 접근 | **읽기 전용**(`recordings:/recordings:ro`). 쓰지도 지우지도 않는다 |
+| S3 | **미접촉**. `s3_key`는 문자열로 예약만 하고 `upload_state`는 항상 `pending` (업로드는 POK-30) |
+| 스키마 | `internal/index/ddl.go`는 **로컬 개발 전용 임시 DDL**. POK-35 정본 마이그레이션이 들어오면 이 파일을 통째로 지운다 |
+
+동작 확인 절차는 [`docs/dev-environment.md`](../docs/dev-environment.md)의 "세그먼트 인덱싱 확인"에 있다.
+
 ## segment-indexer 사이드카가 인식하는 환경변수
 
 `cmd/segment-indexer`가 읽는 값 전부다. 코드를 읽지 않고도 무엇을 켤 수 있는지 알 수 있게

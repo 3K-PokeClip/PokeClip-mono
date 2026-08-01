@@ -15,6 +15,7 @@ docker compose up -d
 | redis:7.4 | 6379 | 3번: 키·TTL·pub/sub 설계 자리 |
 | media (MediaMTX 1.19.3) | UDP 8890 (SRT) · 1935 (RTMP) · 8888 (LL-HLS) | 1번: Media Origin 자리 |
 | media-stub (nginx) | 8080 | 2번: 플레이어 개발용 정적 세그먼트 (`infra/compose/stub/README.md`) |
+| segment-indexer | (포트 없음) | 1번: 녹화 세그먼트를 감지해 `stream_segments`에 기록하는 사이드카 (`media/README.md`) |
 
 ## 송출 테스트 (media)
 
@@ -34,6 +35,67 @@ ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=frequency
 ```bash
 curl -s http://localhost:8888/test/index.m3u8   # EXT-X-PART · CAN-BLOCK-RELOAD 보이면 LL-HLS 정상
 ```
+
+## 세그먼트 인덱싱 확인 (segment-indexer)
+
+MediaMTX가 4초마다 떨어뜨리는 녹화 파일을 사이드카가 `stream_segments` 표에 한 줄씩 기록한다.
+아래 절차를 그대로 돌리면 "제대로 기록됐는가"를 숫자로 확인할 수 있다.
+
+**1) 이번 실행 전용 방송 이름을 만든다.** 이전 테스트가 남긴 행과 섞이지 않게 하기 위해서다.
+
+```bash
+set -a; . ./.env; set +a
+export STREAM="test-$(uuidgen | tr 'A-Z' 'a-z' | cut -c1-8)"
+echo "$STREAM"
+```
+
+**2) 60초 송출한다.** 위 "송출 테스트" 명령에 `-t 60`과 이 이름을 붙인 것이다.
+
+```bash
+ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=frequency=440 \
+  -c:v libx264 -preset veryfast -g 60 -keyint_min 60 -sc_threshold 0 -pix_fmt yuv420p \
+  -c:a aac -t 60 -f flv "rtmp://localhost:1935/$STREAM"
+sleep 20   # 마지막 조각은 유휴 타임아웃(10s) + 안정 대기(2s)로 확정된다
+```
+
+**3) 파일 수와 행 수가 같은지 본다.** 하나라도 다르면 누락이나 중복이 있다는 뜻이다.
+
+```bash
+docker run --rm -e S="$STREAM" -v pokeclip_recordings:/r alpine sh -c 'ls /r/$S | wc -l'
+docker compose exec -T -e Q="SELECT count(*) FROM stream_segments WHERE stream_id = '$STREAM';" \
+  postgres sh -c 'psql -tA -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$Q"'
+```
+
+**4) 재생 타임라인이 빈틈없이 이어지는지 본다.** 각 행의 `start_pts_ms + duration_ms`가
+다음 행의 `start_pts_ms`와 같아야 한다. 아래 쿼리는 어긋난 행만 출력하므로 **0 rows가 정상**이다.
+
+```bash
+docker compose exec -T -e Q="SELECT seq, start_pts_ms, prev_end FROM (SELECT seq, start_pts_ms, lag(start_pts_ms + duration_ms) OVER (ORDER BY seq) AS prev_end FROM stream_segments WHERE stream_id = '$STREAM') t WHERE prev_end IS NOT NULL AND prev_end <> start_pts_ms;" \
+  postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$Q"'
+```
+
+**5) 조용히 버려진 것이 없는지 로그로 본다.** 아래 세 가지는 **0건이어야 한다.**
+
+```bash
+docker compose logs segment-indexer | grep -c -E 'late_segment_skipped|tail_update_rejected|unsettled_giving_up'
+```
+
+- `late_segment_skipped` — 순서가 어긋나 도착한 파일을 버렸다. **1건이라도 뜨면 원인을 조사한다**
+  (감시가 뭔가를 놓쳤다는 1차 경보이며, 자동 복구는 없다).
+- `tail_update_rejected` — 마지막 행의 길이 정정이 DB에서 거부됐다.
+- `unsettled_giving_up` — 파일이 끝내 안정되지 않아 기록을 보류했다.
+
+### 알아 둘 것 — 첫 세그먼트는 4초보다 길다
+
+`ffmpeg -re`는 송출 시작 직후 앞부분을 몰아서 보낸다. MediaMTX는 벽시계 기준 4초마다 자르므로,
+첫 세그먼트에는 4초 wall 동안 약 6초 분량의 영상이 담긴다. 그 결과:
+
+- `seq = 0`의 `duration_ms`가 5900 ms 안팎으로 나온다.
+- 그 다음 조각(`seq = 1`)에서 기대 시각과 실제 시각이 약 -1.9초 어긋나 `is_discontinuity = true`가
+  붙고 `negative_drift` 로그가 1건 남는다.
+
+**둘 다 송출 쪽 특성이며 인덱싱 오류가 아니다.** 타임라인 연속성(4번 쿼리)은 그대로 성립한다.
+OBS처럼 처음부터 실시간으로 보내는 인코더에서는 나타나지 않는다.
 
 ## 2번(플레이어) 로컬 URL 매핑
 
