@@ -66,7 +66,31 @@ docker compose exec -T -e Q="SELECT count(*) FROM stream_segments WHERE stream_i
   postgres sh -c 'psql -tA -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$Q"'
 ```
 
-**4) 재생 타임라인이 빈틈없이 이어지는지 본다.** 각 행의 `start_pts_ms + duration_ms`가
+**4) 조각 길이가 4초 언저리인지 본다.** `duration_ms`가 파일에서 실측한 값이라는 증거다.
+`seq = 0`은 아래 "알아 둘 것" 때문에 제외하고, 마지막 조각은 방송이 4초 경계에서 끝나지 않으면
+정당하게 짧으므로 함께 제외한다. **min·max 모두 3900–4100 안에 들어와야 한다.**
+
+```bash
+docker compose exec -T -e Q="SELECT min(duration_ms), max(duration_ms), count(*) FROM stream_segments WHERE stream_id = '$STREAM' AND seq > 0 AND seq < (SELECT max(seq) FROM stream_segments WHERE stream_id = '$STREAM');" \
+  postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$Q"'
+```
+
+**5) 번호가 빠짐없이 이어지는지 본다.** 어긋난 행만 출력하므로 **0 rows가 정상**이다.
+
+```bash
+docker compose exec -T -e Q="SELECT seq FROM (SELECT seq, lag(seq) OVER (ORDER BY seq) AS prev FROM stream_segments WHERE stream_id = '$STREAM') t WHERE prev IS NOT NULL AND seq <> prev + 1;" \
+  postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$Q"'
+```
+
+**6) 끊김 표시가 붙은 조각이 있는지 본다.** `seq = 1` 한 건 외에 `is_discontinuity = true`가
+있으면 원인을 조사한다(아래 "알아 둘 것" 참고).
+
+```bash
+docker compose exec -T -e Q="SELECT seq, start_pts_ms, duration_ms, is_discontinuity FROM stream_segments WHERE stream_id = '$STREAM' AND is_discontinuity ORDER BY seq;" \
+  postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$Q"'
+```
+
+**7) 재생 타임라인이 빈틈없이 이어지는지 본다.** 각 행의 `start_pts_ms + duration_ms`가
 다음 행의 `start_pts_ms`와 같아야 한다. 아래 쿼리는 어긋난 행만 출력하므로 **0 rows가 정상**이다.
 
 ```bash
@@ -74,7 +98,7 @@ docker compose exec -T -e Q="SELECT seq, start_pts_ms, prev_end FROM (SELECT seq
   postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$Q"'
 ```
 
-**5) 조용히 버려진 것이 없는지 로그로 본다.** 아래 세 가지는 **0건이어야 한다.**
+**8) 조용히 버려진 것이 없는지 로그로 본다.** 아래 세 가지는 **0건이어야 한다.**
 
 ```bash
 docker compose logs segment-indexer | grep -c -E 'late_segment_skipped|tail_update_rejected|unsettled_giving_up'
@@ -90,12 +114,19 @@ docker compose logs segment-indexer | grep -c -E 'late_segment_skipped|tail_upda
 `ffmpeg -re`는 송출 시작 직후 앞부분을 몰아서 보낸다. MediaMTX는 벽시계 기준 4초마다 자르므로,
 첫 세그먼트에는 4초 wall 동안 약 6초 분량의 영상이 담긴다. 그 결과:
 
-- `seq = 0`의 `duration_ms`가 5900 ms 안팎으로 나온다.
-- 그 다음 조각(`seq = 1`)에서 기대 시각과 실제 시각이 약 -1.9초 어긋나 `is_discontinuity = true`가
-  붙고 `negative_drift` 로그가 1건 남는다.
+- `seq = 0`의 `duration_ms`가 **5933 ms**로 나온다(60초 실측값. ffprobe로 따로 재도
+  비디오 5.933s / 오디오 5.921s로 같은 값이 나온다 — 파일에 정말 그만큼 들어 있다).
+  첫 조각의 비디오 프레임 수는 180장(= 6.0초 분량)이고 두 번째부터는 120장(= 4.0초)이다.
+- 그 다음 조각(`seq = 1`)에서 기대 시각과 실제 시각이 **-1945 ms** 어긋나 허용치(1500 ms)를
+  넘으므로 `is_discontinuity = true`가 붙고 `negative_drift` ERROR 로그가 1건 남는다.
 
-**둘 다 송출 쪽 특성이며 인덱싱 오류가 아니다.** 타임라인 연속성(4번 쿼리)은 그대로 성립한다.
+**둘 다 송출 쪽 특성이며 인덱싱 오류가 아니다.** 타임라인 연속성(7번 쿼리)은 그대로 성립한다.
 OBS처럼 처음부터 실시간으로 보내는 인코더에서는 나타나지 않는다.
+그래서 4번(길이 확인) 쿼리에서 `seq = 0`을 제외한다.
+
+참고로 조각 사이의 어긋남은 정상 상태에서도 늘 조금씩 음수다(실측: 60초 방송의 전이 14건 중
+13건이 -1 ~ -22 ms). `duration_ms`는 영상 파일 안의 시간에서, 시작 시각은 파일 이름에서 오기
+때문이며, 허용치 안의 이 값들은 DEBUG 로그로만 남는다.
 
 ## 2번(플레이어) 로컬 URL 매핑
 
