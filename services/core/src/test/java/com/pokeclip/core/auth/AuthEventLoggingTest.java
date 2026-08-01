@@ -10,15 +10,21 @@ import com.pokeclip.core.auth.token.TokenService;
 import com.pokeclip.core.auth.user.UserRepository;
 import com.pokeclip.core.support.IntegrationTestSupport;
 import com.pokeclip.core.support.LogCaptor;
+import com.pokeclip.core.web.RequestIdFilter;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
 
 class AuthEventLoggingTest extends IntegrationTestSupport {
 
@@ -30,6 +36,9 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
 
     @MockitoBean GoogleTokenClient googleTokenClient;
     @MockitoBean GoogleIdTokenVerifier googleIdTokenVerifier;
+
+    // 스파이라 스텁하지 않은 테스트에서는 진짜 인코더가 그대로 돈다.
+    @MockitoSpyBean JwtEncoder jwtEncoder;
 
     AuthEventLoggingTest(AuthService authService, TokenService tokenService,
                          UserRepository userRepository,
@@ -73,14 +82,27 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
         }
     }
 
+    /**
+     * rotated는 커밋 뒤에 찍힌다. 그 자리에서도 MDC가 살아 있어야 상관 ID를 잃지
+     * 않는다 — afterCommit이 같은 스레드에서 동기로 돌기 때문인데, 이게 이 방식을
+     * 고른 이유이므로 단언으로 묶어 둔다. 여기서는 필터 대신 직접 MDC를 채운다.
+     */
     @Test
-    void 회전에_성공하면_INFO로_남는다() {
+    void 회전에_성공하면_상관_ID를_단_INFO로_남는다() {
         TokenPair issued = authService.loginWithGoogle("code-1");
 
         try (LogCaptor captor = new LogCaptor()) {
-            tokenService.rotate(issued.refreshToken());
+            MDC.put(RequestIdFilter.MDC_KEY, "trace-rotate");
+            try {
+                tokenService.rotate(issued.refreshToken());
+            } finally {
+                MDC.remove(RequestIdFilter.MDC_KEY);
+            }
 
             assertThat(captor.levelOf("auth.token.rotated")).isEqualTo(Level.INFO);
+            assertThat(captor.mdcOf("auth.token.rotated", RequestIdFilter.MDC_KEY))
+                    .as("커밋 뒤에 찍으면서 상관 ID를 잃었다")
+                    .isEqualTo("trace-rotate");
         }
     }
 
@@ -92,6 +114,44 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
             tokenService.logout(issued.refreshToken());
 
             assertThat(captor.levelOf("auth.logout")).isEqualTo(Level.INFO);
+        }
+    }
+
+    /**
+     * 이미 죽은 토큰으로 로그아웃하면 끊긴 세션이 0개다. 그때도 로그가 남으면
+     * 재시도·버튼 두 번 클릭이 로그아웃 사건 두 건으로 부풀려진다.
+     */
+    @Test
+    void 이미_취소된_토큰으로_로그아웃하면_남지_않는다() {
+        TokenPair issued = authService.loginWithGoogle("code-1");
+        tokenService.logout(issued.refreshToken());
+
+        try (LogCaptor captor = new LogCaptor()) {
+            tokenService.logout(issued.refreshToken());
+
+            assertThat(captor.levelOf("auth.logout")).isNull();
+        }
+    }
+
+    /**
+     * 회전이 롤백되면 실제로는 아무것도 회전되지 않았다. 그때 남은 rotated 한 줄은
+     * 재시도가 성공한 뒤 같은 회전에 대해 두 줄이 되고, 나중에 reuse_detected가
+     * 뜨면 그 중복이 리플레이처럼 보여 보안 사건 증거를 부풀린다.
+     *
+     * <p>롤백을 만드는 지점으로 JwtEncoder를 고른 이유: issue()가 INSERT를 낸
+     * 다음, 아직 커밋 전에 부르는 자리다. 실제 위험(INSERT의 DataAccessException)과
+     * 같은 구간이면서 리포지토리를 통째로 감쌀 필요가 없다.
+     */
+    @Test
+    void 회전이_롤백되면_rotated가_남지_않는다() {
+        TokenPair issued = authService.loginWithGoogle("code-1");
+        willThrow(new IllegalStateException("커밋 전 실패")).given(jwtEncoder).encode(any());
+
+        try (LogCaptor captor = new LogCaptor()) {
+            assertThatThrownBy(() -> tokenService.rotate(issued.refreshToken()))
+                    .isInstanceOf(IllegalStateException.class);
+
+            assertThat(captor.levelOf("auth.token.rotated")).isNull();
         }
     }
 

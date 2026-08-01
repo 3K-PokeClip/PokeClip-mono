@@ -14,6 +14,8 @@ import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -109,10 +111,13 @@ public class TokenService {
             }
 
             // 오래전에 쓴 토큰이 다시 왔다. 탈취를 의심하고 이 사용자의 세션을 전부 끊는다.
-            int revoked = refreshTokenRepository.revokeAllOfUser(stored.getUserId(), Instant.now());
+            Long reusedBy = stored.getUserId();
+            int revoked = refreshTokenRepository.revokeAllOfUser(reusedBy, Instant.now());
             // 끊긴 개수를 같이 남긴다. "전부 끊겼다"의 규모가 로그에 남아야 한다.
-            log.warn("auth.token.reuse_detected userId={} revokedSessions={}",
-                    stored.getUserId(), revoked);
+            // 커밋 뒤에 찍는 이유: 이 WARN의 존재 이유가 "봉쇄했다"인데, 롤백되면
+            // 봉쇄가 없었는데도 revokedSessions=3이 남아 운영자가 조사를 멈춘다.
+            logAfterCommit(() -> log.warn("auth.token.reuse_detected userId={} revokedSessions={}",
+                    reusedBy, revoked));
             throw new AuthException(AuthFailure.REFRESH_TOKEN_REUSED, "이미 사용된 refresh 토큰이다");
         }
 
@@ -127,7 +132,12 @@ public class TokenService {
             throw new AuthException(AuthFailure.REFRESH_TOKEN_ALREADY_USED, "이미 사용된 refresh 토큰이다");
         }
 
-        log.info("auth.token.rotated userId={}", user.getId());
+        // 커밋 뒤에 찍는다. 아래 issue()의 INSERT가 즉시 나가고 거기서 나는
+        // DataAccessException은 noRollbackFor가 안 덮어 통째로 롤백된다. 그때
+        // 이 줄이 남아 있으면 재시도가 성공한 뒤 한 번의 회전에 rotated가 두 줄이
+        // 되고, 나중에 reuse_detected가 뜨면 그 중복이 리플레이처럼 보인다.
+        Long rotatedFor = user.getId();
+        logAfterCommit(() -> log.info("auth.token.rotated userId={}", rotatedFor));
         // issue를 프록시 없이 직접 부르는 것은 의도다. 같은 트랜잭션에 묶어야
         // 무효화와 재발급이 한 원자 단위가 된다. 프록시를 거치게 '고치면'
         // 옛 토큰은 죽었는데 새 토큰은 없는 창이 생긴다.
@@ -138,9 +148,32 @@ public class TokenService {
     public void logout(String refreshToken) {
         refreshTokenRepository.findByTokenHash(hash(refreshToken))
                 .ifPresent(token -> {
-                    refreshTokenRepository.revokeIfAlive(token.getId(), Instant.now());
-                    log.info("auth.logout userId={}", token.getUserId());
+                    // 이미 죽은 토큰이면 0행이다. 아무것도 안 끊고 "끊었다"를 남기면
+                    // 재시도·두 번 클릭이 로그아웃 사건 두 건으로 부풀려진다.
+                    if (refreshTokenRepository.revokeIfAlive(token.getId(), Instant.now()) == 1) {
+                        log.info("auth.logout userId={}", token.getUserId());
+                    }
                 });
+    }
+
+    /**
+     * 커밋된 뒤에 찍는다. 트랜잭션이 롤백되면 이 로그는 아예 남지 않는다.
+     *
+     * <p>트랜잭션 경계를 하나도 건드리지 않으려고 이 방식을 골랐다 —
+     * {@code @Transactional}·propagation·noRollbackFor·프록시 홉이 그대로다.
+     * rotate가 트랜잭션 최상단이어야 한다는 제약이 유지된다.
+     *
+     * <p>afterCommit은 커밋 직후 <b>같은 스레드에서 동기로</b> 돈다. 그래서
+     * RequestIdFilter가 넣은 MDC requestId가 아직 살아 있고 상관 ID를 잃지 않는다.
+     * noRollbackFor로 커밋되는 재사용 감지 경로에서도 그대로 뜬다.
+     */
+    private void logAfterCommit(Runnable logging) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                logging.run();
+            }
+        });
     }
 
     private String accessToken(Long userId, Instant now) {
