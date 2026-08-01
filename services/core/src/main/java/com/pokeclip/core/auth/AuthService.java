@@ -1,6 +1,5 @@
-package com.pokeclip.core.auth.api;
+package com.pokeclip.core.auth;
 
-import com.pokeclip.core.auth.AuthException;
 import com.pokeclip.core.auth.google.GoogleIdTokenVerifier;
 import com.pokeclip.core.auth.google.GoogleTokenClient;
 import com.pokeclip.core.auth.google.GoogleUser;

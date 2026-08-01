@@ -1,6 +1,7 @@
 package com.pokeclip.core.auth.api;
 
 import com.pokeclip.core.auth.AuthException;
+import com.pokeclip.core.auth.AuthService;
 import com.pokeclip.core.auth.api.dto.GoogleLoginRequest;
 import com.pokeclip.core.auth.api.dto.MeResponse;
 import com.pokeclip.core.auth.api.dto.RefreshRequest;

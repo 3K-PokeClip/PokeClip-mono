@@ -1,6 +1,7 @@
 package com.pokeclip.core.auth.config;
 
 import com.pokeclip.core.auth.google.GoogleAuthProperties;
+import com.pokeclip.core.auth.token.JwtConfig;
 import com.pokeclip.core.auth.token.JwtProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
