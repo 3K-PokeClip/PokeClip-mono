@@ -1,12 +1,16 @@
 package com.pokeclip.core.auth.user;
 
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 @Service
 @RequiredArgsConstructor
 public class UserService {
+
+    private static final Logger log = LoggerFactory.getLogger(UserService.class);
 
     private final UserRepository userRepository;
     private final UserCreator userCreator;
@@ -30,7 +34,11 @@ public class UserService {
 
     private User createOrRead(String googleSub, String email, String name, String profileImageUrl) {
         try {
-            return userCreator.create(googleSub, email, name, profileImageUrl);
+            // 경합에 져서 남의 행을 다시 읽은 경우는 우리가 만든 것이 아니다.
+            // 그래서 성공한 경로에서만 찍는다.
+            User created = userCreator.create(googleSub, email, name, profileImageUrl);
+            log.info("auth.user.created userId={}", created.getId());
+            return created;
         } catch (DataIntegrityViolationException e) {
             // 동시 요청이 먼저 만들었다. 위 트랜잭션은 롤백됐으니 여기서 새로 읽는다.
             return userRepository.findByGoogleSub(googleSub)

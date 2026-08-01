@@ -6,6 +6,8 @@ import com.pokeclip.core.auth.DataInconsistencyException;
 import com.pokeclip.core.auth.user.User;
 import com.pokeclip.core.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
@@ -25,6 +27,8 @@ import java.util.HexFormat;
 @Service
 @RequiredArgsConstructor
 public class TokenService {
+
+    private static final Logger log = LoggerFactory.getLogger(TokenService.class);
 
     private static final String ISSUER = "pokeclip-auth";
 
@@ -105,7 +109,10 @@ public class TokenService {
             }
 
             // 오래전에 쓴 토큰이 다시 왔다. 탈취를 의심하고 이 사용자의 세션을 전부 끊는다.
-            refreshTokenRepository.revokeAllOfUser(stored.getUserId(), Instant.now());
+            int revoked = refreshTokenRepository.revokeAllOfUser(stored.getUserId(), Instant.now());
+            // 끊긴 개수를 같이 남긴다. "전부 끊겼다"의 규모가 로그에 남아야 한다.
+            log.warn("auth.token.reuse_detected userId={} revokedSessions={}",
+                    stored.getUserId(), revoked);
             throw new AuthException(AuthFailure.REFRESH_TOKEN_REUSED, "이미 사용된 refresh 토큰이다");
         }
 
@@ -120,6 +127,7 @@ public class TokenService {
             throw new AuthException(AuthFailure.REFRESH_TOKEN_ALREADY_USED, "이미 사용된 refresh 토큰이다");
         }
 
+        log.info("auth.token.rotated userId={}", user.getId());
         // issue를 프록시 없이 직접 부르는 것은 의도다. 같은 트랜잭션에 묶어야
         // 무효화와 재발급이 한 원자 단위가 된다. 프록시를 거치게 '고치면'
         // 옛 토큰은 죽었는데 새 토큰은 없는 창이 생긴다.
@@ -129,7 +137,10 @@ public class TokenService {
     @Transactional
     public void logout(String refreshToken) {
         refreshTokenRepository.findByTokenHash(hash(refreshToken))
-                .ifPresent(token -> refreshTokenRepository.revokeIfAlive(token.getId(), Instant.now()));
+                .ifPresent(token -> {
+                    refreshTokenRepository.revokeIfAlive(token.getId(), Instant.now());
+                    log.info("auth.logout userId={}", token.getUserId());
+                });
     }
 
     private String accessToken(Long userId, Instant now) {

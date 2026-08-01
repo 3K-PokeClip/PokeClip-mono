@@ -9,6 +9,8 @@ import com.pokeclip.core.auth.user.User;
 import com.pokeclip.core.auth.user.UserRepository;
 import com.pokeclip.core.auth.user.UserService;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
@@ -20,6 +22,8 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 public class AuthService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
 
     private final GoogleTokenClient googleTokenClient;
     private final GoogleIdTokenVerifier googleIdTokenVerifier;
@@ -35,7 +39,9 @@ public class AuthService {
                 googleUser.sub(), googleUser.email(),
                 googleUser.name(), googleUser.profileImageUrl());
 
-        return tokenService.issue(user);
+        TokenPair tokens = tokenService.issue(user);
+        log.info("auth.login.success userId={}", user.getId());
+        return tokens;
     }
 
     /**
