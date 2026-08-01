@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: pokeclip-core
+
+  datasource:
+    # 변수 이름을 팀 docker-compose(.env.example)와 맞췄다. `.env`를 그대로 쓰면
+    # 로컬에서든 compose 안에서든 추가 설정 없이 붙는다.
+    # compose 네트워크 안에서 띄울 때만 DB_HOST=postgres 를 준다.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB:pokeclip}
+    username: ${POSTGRES_USER:pokeclip}
+    password: ${POSTGRES_PASSWORD:change-me-local-only}
+
+  jpa:
+    hibernate:
+      # Flyway가 스키마의 주인이다. Hibernate는 엔티티와 실제 스키마가
+      # 어긋나지 않았는지만 검사한다.
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    # 세 서버가 DB 하나를 공유한다. 마이그레이션은 core만 돌린다 —
+    # 두 서버가 각자 기본 이름의 이력 테이블을 만들면 나중에 뜬 쪽이 부팅에 실패한다.
+    table: flyway_schema_history_core
+
+server:
+  port: 8081
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
