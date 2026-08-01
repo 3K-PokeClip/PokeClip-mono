@@ -76,15 +76,64 @@ main 클래스 하나 추가하는 것으로 끝난다.
 
 판별 알고리즘의 정본은 `PokeClip-LLM-WIKI`의 ADR-011과 하이라이트 연구노트다.
 
+## 돌리는 법
+
+인프라(PostgreSQL·Redis)는 **저장소 루트의 `docker-compose.yml`**이 띄운다.
+
+```bash
+# 저장소 루트에서 — 한 번만
+cp .env.example .env
+docker compose up -d postgres redis
+
+# 여기(services/)에서
+./gradlew build              # 전체 빌드 + 테스트
+./gradlew :core:bootRun      # 서버 하나 띄우기
+```
+
+| 서버 | 실행 | 헬스체크 |
+|---|---|---|
+| `core` | `./gradlew :core:bootRun` | http://localhost:8081/actuator/health |
+| `chat-collector` | `./gradlew :chat-collector:bootRun` | http://localhost:8083/actuator/health |
+| `chat-detector` | `./gradlew :chat-detector:bootRun` | http://localhost:8084/actuator/health |
+
+**DB 접속 변수 이름을 compose의 `.env`와 맞춰 뒀다** (`POSTGRES_USER`·`POSTGRES_PASSWORD`·
+`POSTGRES_DB`). 팀원이 `.env` 값을 바꿔도 앱이 따라간다. compose 네트워크 안에서
+띄울 때만 `DB_HOST=postgres`를 준다.
+
+### 도커 이미지
+
+**빌드 컨텍스트는 저장소 루트가 아니라 `services/`다.** Gradle 루트가 여기라
+루트에서 빌드하면 `settings.gradle`을 못 찾는다.
+
+```bash
+docker build -f services/core/Dockerfile -t pokeclip-core services/
+```
+
+베이스 이미지는 세 서버 모두 `eclipse-temurin:21-jdk`(빌드) →
+`eclipse-temurin:21-jre`(실행)로 통일했다.
+
+**테스트도 팀과 같은 이미지를 쓴다** — Testcontainers가 `postgres:17`을 띄운다.
+compose와 메이저 버전이 갈리면 로컬·CI만 통과하고 실제 DB에서 깨지는 차이를 못 잡는다.
+
 ## DB 마이그레이션
 
 Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(`core/src/main/resources/db/migration/`)에 둔다.**
 1·2번이 읽을 스키마 설명서는 여기서 자동 생성해 [`contracts/db/`](../contracts/db/)로 내보낸다.
 
+**Flyway는 `core`만 돌린다.** 세 서버가 DB 하나를 공유하므로, 두 서버가 각자
+기본 이름의 이력 테이블을 만들면 나중에 뜬 쪽이 부팅에 실패한다. 이력 테이블
+이름도 `flyway_schema_history_core`로 박아 뒀다.
+
 ## 상태
 
-**아직 비어 있다.** 구글 로그인·토큰 재발급은 별도 저장소에서 만들어 검증까지 마쳤고,
-이 폴더로 옮겨 오는 것이 첫 작업이다.
+**스켈레톤만 있다.** 서버 3개가 뜨고 헬스체크에 응답하는 것까지 확인했다.
+비즈니스 코드는 아직 없다.
+
+다음 작업 순서:
+
+1. 구글 로그인·토큰 재발급을 `core/auth/`로 옮긴다 (별도 저장소에서 검증까지 마친 코드)
+2. `core/auth/` ↔ `core/clip/` 경계를 ArchUnit으로 막는다 — 지킬 코드가 생긴 뒤에
+3. SQS 대역(ElasticMQ)을 루트 compose에 추가한다 — `clip`이 렌더 잡을 발행하려면 필요하다
 
 > **채팅 수집을 Spring으로 간다** (2026-07-31 확정). 기존 수집기(Node) 재사용 전제는 폐기한다.
 > `PokeClip-LLM-WIKI`의 ADR-007이 아직 Node 기준이라 후속 ADR로 갱신이 필요하다.
