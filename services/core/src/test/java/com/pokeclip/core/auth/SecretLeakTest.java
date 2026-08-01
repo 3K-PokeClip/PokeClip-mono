@@ -339,6 +339,17 @@ class SecretLeakTest extends IntegrationTestSupport {
                 .as("아래가 재현하는 유출이 이 레벨에서 실제로 열린다: " + springWebLevel)
                 .isGreaterThanOrEqualTo(Level.INFO.toInt());
 
+        // 위 둘은 문자열이 Environment에 있다는 것까지만 증명한다. 부팅 때
+        // LogbackLoggingSystem이 이 로거에 명시 레벨을 박았는지는 logback에서 직접 봐야
+        // 한다 — 프로퍼티가 여기까지 안 닿으면 방어가 없는 것과 같다.
+        // 이 값이 아래 복원값이기도 하다. null로 되돌리면 그 명시 레벨이 지워져
+        // root 상속으로 떨어지고, 방금 단언한 방어선이 이 테스트가 도는 순간부터
+        // 그 JVM에서 사라진다 — 유출을 증명하는 테스트가 유출 방어를 끄는 꼴이다.
+        Level levelBefore = levelOf(SPRING_WEB_LOGGER);
+        assertThat(levelBefore)
+                .as("프로퍼티가 Environment에만 있고 logback까지 안 닿았다")
+                .isNotNull();
+
         try (LogCaptor captor = new LogCaptor()) {
             setLevel(SPRING_WEB_LOGGER, Level.DEBUG);
             try {
@@ -347,8 +358,7 @@ class SecretLeakTest extends IntegrationTestSupport {
                                 .content("{\"code\":\"" + GOOGLE_CODE + "\"}"))
                         .andExpect(status().isUnauthorized());
             } finally {
-                // null이면 상위 레벨을 다시 물려받는다.
-                setLevel(SPRING_WEB_LOGGER, null);
+                setLevel(SPRING_WEB_LOGGER, levelBefore);
             }
 
             // 바늘마다 따로 단언한다. 묶어서 "하나라도 새면 통과"로 두면 스프링이
@@ -451,6 +461,11 @@ class SecretLeakTest extends IntegrationTestSupport {
 
     private static void setLevel(String loggerName, Level level) {
         ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).setLevel(level);
+    }
+
+    /** 명시 레벨만 돌려준다. 안 박혀 있으면 null이다(부모에서 물려받는 상태). */
+    private static Level levelOf(String loggerName) {
+        return ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).getLevel();
     }
 
     private static void assertNoSecretsIn(LogCaptor captor, List<String> secrets) {
