@@ -23,6 +23,10 @@ type WatcherOptions struct {
 	// RescanEvery 는 안전망 재스캔 주기다. 타이머의 소유자는 main 루프 하나이며(D10),
 	// 워처는 이 값을 읽지 않는다. 같은 일이 두 곳에서 예약되면 재스캔이 이중으로 돈다.
 	RescanEvery time.Duration
+	// DeferMaxCycles 는 되돌려받은 세그먼트를 몇 사이클까지 붙잡아 둘지의 상한이다.
+	// 한 사이클은 IdleTimeout 이다. 이 상한을 넘으면 방출 장벽을 풀고 그대로 내보낸다 -
+	// 끝내 안정되지 않는 병적 파일 하나가 그 스트림 전체를 영구 정지시키지 않게 하는 안전장치다.
+	DeferMaxCycles int
 	// MaxWatchDirs 는 감시 디렉토리 수 상한이다. 초과하면 ERROR 를 한 번 남기고 신규 등록을 무시한다.
 	// inotify watch 는 커널 자원이라 무한정 늘릴 수 없다.
 	MaxWatchDirs int
@@ -37,14 +41,15 @@ type WatcherOptions struct {
 // DefaultWatcherOptions 는 설계 2.1절의 기본값이다.
 func DefaultWatcherOptions(root string, log *slog.Logger) WatcherOptions {
 	return WatcherOptions{
-		Root:         root,
-		IdleTimeout:  10 * time.Second,
-		RescanEvery:  5 * time.Minute,
-		Settle:       DefaultSettleOptions(),
-		FIFOWarnLen:  256,
-		FIFOMaxLen:   4096,
-		MaxWatchDirs: 1024,
-		Log:          log,
+		Root:           root,
+		IdleTimeout:    10 * time.Second,
+		RescanEvery:    5 * time.Minute,
+		Settle:         DefaultSettleOptions(),
+		FIFOWarnLen:    256,
+		FIFOMaxLen:     4096,
+		DeferMaxCycles: 3,
+		MaxWatchDirs:   1024,
+		Log:            log,
 	}
 }
 
@@ -87,6 +92,16 @@ type Watcher struct {
 	// TODO(C3): indexed 맵과 같은 이유로 정리 정책이 없다. 트리거도 같다(단일 프로세스 장기 실행).
 	emitSizeMu sync.Mutex
 	emitSize   map[string]int64
+
+	// barriers 는 스트림별 방출 장벽이다. 값은 그 스트림에서 보류 중인 가장 이른 StartWall 이며,
+	// emitLoop 은 그보다 늦은 같은 스트림 항목을 방출하지 않는다.
+	//
+	// 왜 필요한가: 보류(deferred) 항목은 FIFO 밖에 있으므로 FIFO 의 정렬로는 순서를 지킬 수 없다.
+	// 보류 중인 O 를 기다리는 사이 더 늦은 P 가 큐를 떠나 인덱싱되면 커서가 P 의 시각으로
+	// 전진하고, 뒤늦게 풀려난 O 는 늦은 세그먼트로 영구 폐기된다.
+	// 장벽은 스트림 단위라 다른 스트림의 방출은 막지 않는다.
+	barrierMu sync.Mutex
+	barriers  map[string]time.Time
 }
 
 // NewWatcher 는 감시자를 만든다. 이 시점에는 아직 어떤 폴더도 감시하지 않는다.
@@ -97,6 +112,10 @@ func NewWatcher(opt WatcherOptions) (*Watcher, error) {
 	// 0을 그대로 두면 상한 검사가 항상 걸려 감시가 통째로 죽는다. 조용히 기본값으로 때우지 않는다.
 	if opt.MaxWatchDirs <= 0 {
 		return nil, fmt.Errorf("WatcherOptions.MaxWatchDirs 는 1 이상이어야 한다: %d", opt.MaxWatchDirs)
+	}
+	// 0이면 되돌리자마자 포기하게 되어 스로틀이 무력해진다.
+	if opt.DeferMaxCycles <= 0 {
+		return nil, fmt.Errorf("WatcherOptions.DeferMaxCycles 는 1 이상이어야 한다: %d", opt.DeferMaxCycles)
 	}
 	fsw, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -115,6 +134,7 @@ func NewWatcher(opt WatcherOptions) (*Watcher, error) {
 		watched:        map[string]struct{}{},
 		regrowInFlight: map[string]struct{}{},
 		emitSize:       map[string]int64{},
+		barriers:       map[string]time.Time{},
 	}, nil
 }
 
@@ -288,6 +308,10 @@ type streamState struct {
 	// pending 보다 오래된 파일을 그 자리에서 다시 확정하면, 아직 자라는 파일이
 	// 곧바로 emitLoop 의 크기 안정 대기를 붙잡고 되돌아오기를 반복한다.
 	deferred []deferredSegment
+	// deferCycles 는 경로별로 몇 번이나 보류됐는지다. DeferMaxCycles 를 넘으면 포기한다.
+	//
+	// TODO(C3): indexed·emitSize 맵과 같은 이유로 정리 정책이 없다. 트리거도 같다.
+	deferCycles map[string]int
 }
 
 // deferredSegment 는 notBefore 이후에야 확정 후보로 내보낼 세그먼트다.
@@ -496,50 +520,123 @@ func (w *Watcher) onAdopt(states map[string]*streamState, seg Segment) error {
 	// 되돌아온 쪽이 더 오래됐다. pending 은 그대로 두되, 이쪽을 그 자리에서 다시 확정하지는 않는다.
 	// 아직 자라는 파일이면 확정 -> 안정 대기 -> 되돌림이 쉼 없이 돌며 처리 구간을 점유한다.
 	// 설계 H5 의 "재시도 간격은 IdleTimeout 이상"을 유휴 타이머 경로로 되살린다.
-	w.deferSegment(st, adopted)
-	w.log.Debug("adopt_deferred",
-		"stream_id", seg.StreamID, "kept_pending", st.pending.Path,
-		"deferred", seg.Path, "retry_after", w.opt.IdleTimeout)
+	deferred, err := w.deferSegment(st, adopted)
+	if err != nil {
+		return err
+	}
+	if deferred {
+		w.log.Debug("adopt_deferred",
+			"stream_id", seg.StreamID, "kept_pending", st.pending.Path,
+			"deferred", seg.Path, "retry_after", w.opt.IdleTimeout)
+	}
 	return nil
 }
 
 // deferSegment 는 같은 경로가 이미 보류 중이면 시각만 미루고, 아니면 새로 담는다.
-func (w *Watcher) deferSegment(st *streamState, seg Segment) {
+// 상한을 넘긴 경로는 보류하지 않고 그대로 내보낸다(유한 포기). 반환값이 true 면 보류했다는 뜻이다.
+func (w *Watcher) deferSegment(st *streamState, seg Segment) (bool, error) {
+	if st.deferCycles == nil {
+		st.deferCycles = map[string]int{}
+	}
+	st.deferCycles[seg.Path]++
+
+	if st.deferCycles[seg.Path] > w.opt.DeferMaxCycles {
+		// 끝내 안정되지 않는 파일이다. 더 붙잡으면 이 스트림이 영구 정지한다.
+		// 장벽을 풀고 그대로 내보낸다 - 뒤이어 인덱서의 H3 가 늦은 세그먼트로 판정해
+		// late_segment_skipped ERROR 를 남기며, 그것이 설계 9절 L5 의 알람 경로다
+		// (자동 복구는 없고 파일은 :ro 로 보존되므로 로그를 보고 사람이 복구한다).
+		w.log.Warn("deferred_give_up",
+			"stream_id", seg.StreamID, "path", seg.Path,
+			"cycles", st.deferCycles[seg.Path], "limit", w.opt.DeferMaxCycles,
+			"note", "장벽을 풀고 그대로 방출한다. 늦은 세그먼트로 폐기될 수 있다(L5 수동 복구)")
+		delete(st.deferCycles, seg.Path)
+		w.refreshBarrier(st, seg.StreamID)
+		return false, w.confirm(st, seg, ReasonNextFile)
+	}
+
 	notBefore := time.Now().Add(w.opt.IdleTimeout)
+	found := false
 	for i := range st.deferred {
 		if st.deferred[i].seg.Path == seg.Path {
 			st.deferred[i].seg = seg
 			st.deferred[i].notBefore = notBefore
-			return
+			found = true
+			break
 		}
 	}
-	st.deferred = append(st.deferred, deferredSegment{seg: seg, notBefore: notBefore})
+	if !found {
+		st.deferred = append(st.deferred, deferredSegment{seg: seg, notBefore: notBefore})
+	}
+	w.refreshBarrier(st, seg.StreamID)
+	return true, nil
+}
+
+// refreshBarrier 는 스트림의 장벽을 보류 항목 중 가장 이른 StartWall 로 맞춘다.
+// 보류가 하나도 없으면 장벽을 없애고 emitLoop 을 깨워 막혀 있던 항목을 흘려보낸다.
+func (w *Watcher) refreshBarrier(st *streamState, streamID string) {
+	var earliest time.Time
+	for _, d := range st.deferred {
+		if earliest.IsZero() || d.seg.StartWall.Before(earliest) {
+			earliest = d.seg.StartWall
+		}
+	}
+
+	w.barrierMu.Lock()
+	if earliest.IsZero() {
+		delete(w.barriers, streamID)
+	} else {
+		w.barriers[streamID] = earliest
+	}
+	w.barrierMu.Unlock()
+
+	// 장벽이 느슨해졌을 수 있으니 emitLoop 이 다시 판정하도록 깨운다.
+	w.fifo.wake()
+}
+
+// blockedByBarrier 는 이 세그먼트가 같은 스트림의 보류 항목보다 늦어서 아직 나갈 수 없는지 본다.
+// 장벽과 같은 시각이거나 그보다 이른 항목은 막지 않는다 - 보류 항목 자신이 여기 해당한다.
+func (w *Watcher) blockedByBarrier(seg Segment) bool {
+	w.barrierMu.Lock()
+	defer w.barrierMu.Unlock()
+	wall, ok := w.barriers[seg.StreamID]
+	return ok && seg.StartWall.After(wall)
 }
 
 // releaseDeferred 는 대기 시간이 지난 보류 세그먼트를 확정 후보로 내보낸다.
 // FIFO 가 스트림별 StartWall 순서를 지키므로, 늦게 풀려나도 순서는 어긋나지 않는다.
-func (w *Watcher) releaseDeferred(st *streamState) error {
+func (w *Watcher) releaseDeferred(st *streamState, streamID string) error {
+	if len(st.deferred) == 0 {
+		return nil
+	}
+
 	now := time.Now()
 	kept := st.deferred[:0]
+	var released []Segment
 	for _, d := range st.deferred {
 		if now.Before(d.notBefore) {
 			kept = append(kept, d)
 			continue
 		}
-		if err := w.confirm(st, d.seg, ReasonNextFile); err != nil {
-			st.deferred = kept
+		released = append(released, d.seg)
+	}
+	st.deferred = kept
+
+	// 장벽은 확정보다 먼저 갱신한다. 그래야 방금 풀려난 항목이 자기 장벽에 막히지 않는다.
+	w.refreshBarrier(st, streamID)
+
+	for _, seg := range released {
+		if err := w.confirm(st, seg, ReasonNextFile); err != nil {
 			return err
 		}
 	}
-	st.deferred = kept
 	return nil
 }
 
 // onIdleTick 은 한참 조용한 스트림의 pending 파일을 확정한다.
 // 마지막 조각은 후속 파일이 영영 안 생기므로 이 장치가 없으면 영영 기록되지 않는다.
 func (w *Watcher) onIdleTick(states map[string]*streamState) error {
-	for _, st := range states {
-		if err := w.releaseDeferred(st); err != nil {
+	for streamID, st := range states {
+		if err := w.releaseDeferred(st, streamID); err != nil {
 			return err
 		}
 		if st.pending == nil {
@@ -598,7 +695,7 @@ func (w *Watcher) emitLoop(ctx context.Context) {
 	defer w.cancel()
 
 	for {
-		seg, ok := w.fifo.pop(ctx)
+		seg, ok := w.fifo.pop(ctx, w.blockedByBarrier)
 		if !ok {
 			return
 		}
@@ -665,7 +762,7 @@ func (w *Watcher) fail(err error) {
 func stateOf(states map[string]*streamState, streamID string) *streamState {
 	st, ok := states[streamID]
 	if !ok {
-		st = &streamState{lastEvent: time.Now()}
+		st = &streamState{lastEvent: time.Now(), deferCycles: map[string]int{}}
 		states[streamID] = st
 	}
 	return st
@@ -705,10 +802,7 @@ func (f *segmentFIFO) push(seg Segment) int {
 	n := len(f.items)
 	f.mu.Unlock()
 
-	select {
-	case f.signal <- struct{}{}:
-	default:
-	}
+	f.wake()
 	return n
 }
 
@@ -728,13 +822,18 @@ func insertByStreamWall(items []Segment, seg Segment) []Segment {
 	return items
 }
 
-// pop 은 항목이 생길 때까지 기다린다. ctx 취소 시 ok=false 를 돌려준다.
-func (f *segmentFIFO) pop(ctx context.Context) (Segment, bool) {
+// pop 은 방출해도 되는 첫 항목을 꺼낸다. ctx 취소 시 ok=false 를 돌려준다.
+//
+// blocked 가 nil 이 아니면 그 술어가 true 인 항목은 건너뛴다. 전부 막혀 있으면 신호를
+// 기다린다 - 장벽이 풀릴 때 refreshBarrier 가 wake 로 깨워 준다.
+func (f *segmentFIFO) pop(ctx context.Context, blocked func(Segment) bool) (Segment, bool) {
 	for {
 		f.mu.Lock()
-		if len(f.items) > 0 {
-			seg := f.items[0]
-			f.items = f.items[1:]
+		for i, seg := range f.items {
+			if blocked != nil && blocked(seg) {
+				continue
+			}
+			f.items = append(f.items[:i], f.items[i+1:]...)
 			f.mu.Unlock()
 			return seg, true
 		}
@@ -745,5 +844,13 @@ func (f *segmentFIFO) pop(ctx context.Context) (Segment, bool) {
 			return Segment{}, false
 		case <-f.signal:
 		}
+	}
+}
+
+// wake 는 대기 중인 pop 을 한 번 깨운다. 논블로킹이다.
+func (f *segmentFIFO) wake() {
+	select {
+	case f.signal <- struct{}{}:
+	default:
 	}
 }

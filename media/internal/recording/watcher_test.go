@@ -24,10 +24,11 @@ func testWatcherOptions(root string) WatcherOptions {
 			SettleWait:   30 * time.Millisecond,
 			MaxSettle:    300 * time.Millisecond,
 		},
-		FIFOWarnLen:  8,
-		FIFOMaxLen:   64,
-		MaxWatchDirs: 64,
-		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		FIFOWarnLen:    8,
+		FIFOMaxLen:     64,
+		MaxWatchDirs:   64,
+		DeferMaxCycles: 3,
+		Log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
@@ -647,7 +648,7 @@ func TestFix2FIFOKeepsPerStreamWallOrder(t *testing.T) {
 	ctx := context.Background()
 	var s1Order []time.Duration
 	for range 4 {
-		got, ok := f.pop(ctx)
+		got, ok := f.pop(ctx, nil)
 		if !ok {
 			t.Fatal("pop 실패")
 		}
@@ -825,4 +826,110 @@ func TestFix2NonSegmentFileDoesNotTriggerRescan(t *testing.T) {
 		t.Fatal("일반 파일 생성이 전수 재스캔을 유발했다")
 	case <-time.After(300 * time.Millisecond):
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 3차 재검수 회귀 테스트 — deferred 창
+// ---------------------------------------------------------------------------
+
+// 지적(a) — 보류된 O 가 기다리는 동안, 그보다 늦은 P 가 큐를 먼저 떠나면 안 된다.
+//
+// P 가 먼저 인덱싱되면 커서가 P 의 시각으로 전진하고, 뒤늦게 풀려난 O 는 늦은 세그먼트로
+// 영구 폐기된다. FIFO 정렬은 큐 안에 있는 항목끼리만 순서를 잡아 주므로 이 창을 못 막는다.
+// 그래서 스트림별 방출 장벽이 필요하다.
+func TestFix3DeferredSegmentBlocksLaterSameStreamEmission(t *testing.T) {
+	root := t.TempDir()
+	opt := testWatcherOptions(root)
+	opt.IdleTimeout = 400 * time.Millisecond
+	mkStream(t, root, "s1")
+
+	// O 는 Start 전에 만들어 둔다(CREATE 이벤트 없이 존재만 하게).
+	older := segFile(t, root, "s1", 0, 100)
+
+	w, _, _ := startWatcher(t, opt)
+
+	// P 가 pending 이 된다.
+	later := segFile(t, root, "s1", 20*time.Second, 100)
+	time.Sleep(50 * time.Millisecond)
+
+	olderSeg, err := ParseSegmentPath(root, older)
+	if err != nil {
+		t.Fatalf("ParseSegmentPath 실패: %v", err)
+	}
+	w.Adopt(olderSeg) // O 보류 시작
+	time.Sleep(50 * time.Millisecond)
+
+	// Q 생성으로 P 를 확정시킨다. 이 시점에 P 는 FIFO 에 들어가고,
+	// 장벽이 없으면 O 가 풀리기 전에 방출돼 버린다(cx 가 지적한 창).
+	segFile(t, root, "s1", 30*time.Second, 100)
+
+	first, ok := recv(t, w.Completed(), 3*time.Second)
+	if !ok {
+		t.Fatal("아무것도 방출되지 않았다")
+	}
+	if first.Path != older {
+		t.Fatalf("첫 방출 = %q, want %q — 보류 중인 O 를 제치고 P 가 먼저 나갔다", first.Path, older)
+	}
+
+	second, ok := recv(t, w.Completed(), 3*time.Second)
+	if !ok {
+		t.Fatal("두번째가 방출되지 않았다 — 유실")
+	}
+	if second.Path != later {
+		t.Fatalf("두번째 방출 = %q, want %q", second.Path, later)
+	}
+}
+
+// 지적(b) — 끝내 안정되지 않는 병적 파일이 스트림 전체를 영구 정지시키면 안 된다.
+// DeferMaxCycles 사이클을 넘으면 장벽을 풀고 O 를 그대로 방출한다.
+// 그 뒤는 인덱서의 H3 가 늦은 세그먼트로 판정해 late_segment_skipped ERROR 를 남기며,
+// 이는 설계 9절 L5(자동 복구 없음, 로그 보고 수동 복구)의 알람 경로다.
+func TestFix3PathologicalDeferralGivesUpAndResumesStream(t *testing.T) {
+	root := t.TempDir()
+	opt := testWatcherOptions(root)
+	opt.IdleTimeout = 120 * time.Millisecond
+	opt.DeferMaxCycles = 2
+	mkStream(t, root, "s1")
+
+	older := segFile(t, root, "s1", 0, 100)
+	w, _, _ := startWatcher(t, opt)
+
+	later := segFile(t, root, "s1", 20*time.Second, 100)
+	time.Sleep(40 * time.Millisecond)
+
+	olderSeg, err := ParseSegmentPath(root, older)
+	if err != nil {
+		t.Fatalf("ParseSegmentPath 실패: %v", err)
+	}
+	w.Adopt(olderSeg)
+	time.Sleep(40 * time.Millisecond)
+
+	// P 를 확정시켜 FIFO 에 넣는다. 장벽 때문에 지금은 나가지 못한다.
+	segFile(t, root, "s1", 30*time.Second, 100)
+
+	// O 가 나올 때마다 "아직 안 정됐다"며 다시 되돌린다 = 병적 상황.
+	olderEmits := 0
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		seg, ok := recv(t, w.Completed(), 2*time.Second)
+		if !ok {
+			t.Fatalf("스트림이 정지했다 — O 방출 %d회 후 아무것도 나오지 않는다", olderEmits)
+		}
+		if seg.Path == later {
+			// 장벽이 풀려 스트림이 재개됐다.
+			if olderEmits == 0 {
+				t.Fatal("O 가 한 번도 나오지 않았는데 P 가 먼저 나갔다 — 장벽이 동작하지 않았다")
+			}
+			if olderEmits > opt.DeferMaxCycles+1 {
+				t.Fatalf("O 방출 %d회 — DeferMaxCycles(%d) 를 넘겨 붙잡고 있었다",
+					olderEmits, opt.DeferMaxCycles)
+			}
+			return
+		}
+		if seg.Path == older {
+			olderEmits++
+			w.Adopt(olderSeg) // 계속 안 정됨
+		}
+	}
+	t.Fatalf("DeferMaxCycles 를 넘겼는데도 스트림이 재개되지 않았다 (O 방출 %d회)", olderEmits)
 }
