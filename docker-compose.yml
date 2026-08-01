@@ -33,6 +33,8 @@ services:
   # Media Origin 자리 — 수신(SRT)·LL-HLS 먹싱·DVR. 사이드카·합성 레이어는 M1 2단계에서 추가.
   media:
     image: bluenviron/mediamtx:1.19.3
+    environment:
+      TZ: UTC # 녹화 파일명에 박히는 시각을 UTC로 고정한다 (사이드카가 파일명에서 start_wall_utc를 읽는다)
     ports:
       - "8890:8890/udp" # SRT 인제스트 (OBS)
       - "1935:1935" # RTMP 인제스트 (로컬 ffmpeg 테스트용 — homebrew ffmpeg은 SRT 미포함)
@@ -41,6 +43,28 @@ services:
       - ./infra/compose/mediamtx.yml:/mediamtx.yml:ro
       - dvr:/dvr
       - recordings:/recordings
+
+  # 세그먼트 인덱서 사이드카 (M1 2단계 / POK-29) — recordings를 감시해 stream_segments에 한 줄씩 기록.
+  # 인식하는 환경변수 전수 목록은 media/README.md에 있다. 여기서는 기본값과 다른 것만 적는다.
+  segment-indexer:
+    build: ./media
+    depends_on:
+      postgres:
+        condition: service_healthy # 표가 준비된 뒤에 붙는다
+      media:
+        condition: service_started # media는 healthcheck가 없으므로 조건을 명시해 해석 차이를 막는다
+    restart: unless-stopped # DB 사망 시 죽고 재기동해 Scan으로 복구한다 (진실원은 파일)
+    volumes:
+      # :ro — 사이드카가 파일을 지우거나 고치는 것을 운영체제 수준에서 막는다. 삭제는 janitor 책임.
+      - recordings:/recordings:ro
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?cp .env.example .env 먼저 실행하세요}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?cp .env.example .env 먼저 실행하세요}
+      POSTGRES_DB: ${POSTGRES_DB:?cp .env.example .env 먼저 실행하세요}
+      POSTGRES_HOST: postgres
+      SEGMENT_ROOT: /recordings
+      TZ: UTC # 로그 시각과 mtime 해석을 UTC로 고정 (저장 값은 코드가 UTC로 강제한다)
+      ENSURE_SCHEMA: "true" # 로컬 개발 전용 임시 DDL. POK-35 정본 마이그레이션이 들어오면 끈다
 
   # 정적 세그먼트 스텁 (M1 1-2) — 2번 플레이어 개발용. 먼저 infra/compose/stub/gen-segments.sh 1회 실행.
   media-stub:
