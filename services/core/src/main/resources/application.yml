@@ -23,6 +23,13 @@ spring:
     # 두 서버가 각자 기본 이름의 이력 테이블을 만들면 나중에 뜬 쪽이 부팅에 실패한다.
     table: flyway_schema_history_core
 
+logging:
+  pattern:
+    # 기본 콘솔 형식의 레벨 자리에 상관 ID를 끼워 넣는다. 값이 없으면 빈칸이다.
+    # logback-spring.xml을 만들지 않는 이유는 배포가 없어 환경별 형식이
+    # 아직 필요 없어서다.
+    level: "%5p [%X{requestId:-}]"
+
 server:
   port: 8081
 
