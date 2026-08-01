@@ -23,6 +23,16 @@ spring:
     # 두 서버가 각자 기본 이름의 이력 테이블을 만들면 나중에 뜬 쪽이 부팅에 실패한다.
     table: flyway_schema_history_core
 
+  http:
+    clients:
+      # 단수형 spring.http.client.*는 4.0.0부터 deprecated고, 실제로 아무것도
+      # 바인딩하지 않는다 — 오타를 내면 에러 없이 조용히 무시되고 타임아웃이
+      # 사라진다. GoogleTimeoutTest가 바인딩 결과를 직접 확인하는 이유다.
+      # 전역 설정이다 — core의 모든 HTTP 클라이언트에 걸린다. 타임아웃은 인프라
+      # 설정이지 구글 인증 설정이 아니므로 여기가 맞는 자리다.
+      connect-timeout: 2s
+      read-timeout: 5s
+
 logging:
   level:
     # 이 로거를 DEBUG로 켜면 나가는 폼 본문이 통째로 찍힌다 —
