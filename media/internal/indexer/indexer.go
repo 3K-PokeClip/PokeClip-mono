@@ -54,6 +54,10 @@ type Options struct {
 	LearnSampleCount int
 	// InsertRetryMax 는 INSERT 재시도 상한이다(지수 백오프).
 	InsertRetryMax int
+	// PoisonStreakMax 는 같은 스트림에서 연달아 허용하는 poison INSERT 수다.
+	// 한두 건은 그 행의 값 문제지만, 연달아 나면 전역 이상(스키마·인코딩 어긋남)이므로
+	// 계속 건너뛰며 인덱스를 조용히 비워 가는 대신 프로세스를 끝낸다.
+	PoisonStreakMax int
 	// InsertRetryBase 는 지수 백오프의 첫 간격이다.
 	// 기본 2s + InsertRetryMax 5회 = 시도 사이 간격 2+4+8+16 = 정확히 30s(설계 2.4절 "총 ~30s").
 	InsertRetryBase time.Duration
@@ -75,6 +79,7 @@ func DefaultOptions() Options {
 		ReprobeFailStreak:  3,
 		LearnSampleCount:   5,
 		InsertRetryMax:     5,
+		PoisonStreakMax:    5,
 		InsertRetryBase:    2 * time.Second,
 		IdleTimeout:        10 * time.Second,
 		Settle:             recording.DefaultSettleOptions(),
@@ -102,6 +107,7 @@ type Indexer struct {
 	learnedMS       map[string]int64
 	failStreak      map[string]int
 	reprobeDisabled map[string]bool
+	poisonStreak    map[string]int
 	// warnedRejected 는 화이트리스트를 통과하지 못한 디렉토리에 대해 WARN 을
 	// 한 번만 내기 위한 표시다. 재스캔은 5분마다 도는데 매번 경고하면 소음이 된다.
 	warnedRejected map[string]bool
@@ -121,6 +127,7 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter, opt Options
 		learnedMS:       map[string]int64{},
 		failStreak:      map[string]int{},
 		reprobeDisabled: map[string]bool{},
+		poisonStreak:    map[string]int{},
 		warnedRejected:  map[string]bool{},
 	}
 }
@@ -455,18 +462,21 @@ func classifyInsertError(err error) insertFate {
 	}
 
 	switch class := sqlStateClass(pgErr.Code); class {
-	case "08", "53", "57":
-		// 08 연결 예외 / 53 자원 부족 / 57 운영자 개입(셧다운 등)
+	case "08", "40", "53", "55", "57", "58":
+		// 08 연결 예외 / 40 직렬화 실패·데드락 / 53 자원 부족 / 55 락 획득 실패 /
+		// 57 운영자 개입(셧다운 등) / 58 외부 IO 오류. 전부 시간이 지나면 나아질 수 있다.
 		return fateRetry
-	case "22", "54":
-		// 22 데이터 예외(범위 초과, 잘못된 형식) / 54 한도 초과(값이 너무 김)
-		return fatePoison
-	case "23":
-		// 23 무결성 위반. 23505(unique)는 Store 가 이미 InsertOutcome 으로 걸러 내므로
-		// 여기 오는 것은 NOT NULL, CHECK, FK 위반이며 전부 값 자체의 문제다.
+	case "22":
+		// 22 데이터 예외(범위 초과, 잘못된 바이트열, 길이 초과). 그 행의 값이 원인인 것이 확실하다.
+		// 다음 세그먼트는 멀쩡할 수 있으므로 이 행만 건너뛴다.
 		return fatePoison
 	default:
-		// 42 문법·권한, 28 인증 등. 재시도해도 같고, 조용히 넘기면 전 세그먼트가 사라진다.
+		// 23 무결성 위반(23505 는 Store 가 InsertOutcome 으로 이미 걸러 낸다),
+		// 54 전역 한도, 42 문법·권한, 28 인증 등.
+		//
+		// 이것들은 "이 행이 이상하다"가 아니라 "스키마나 설정이 어긋났다"는 신호다.
+		// 예를 들어 23502(NOT NULL 위반)는 정본 마이그레이션이 우리 코드와 안 맞는다는 뜻인데,
+		// 행 단위로 건너뛰며 계속 가면 인덱스가 조용히 비어 간다. 사람이 봐야 한다.
 		return fateFatal
 	}
 }
@@ -489,16 +499,30 @@ func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record) (outco
 	for attempt := range ix.opt.InsertRetryMax {
 		result, insertErr := ix.store.Insert(ctx, rec)
 		if insertErr == nil {
+			// 한 번이라도 통과했다면 전역 이상은 아니다. 산발적 poison 이 누적돼
+			// 언젠가 프로세스를 죽이는 일이 없도록 여기서 기록을 지운다.
+			ix.poisonStreak[rec.StreamID] = 0
 			return result, false, nil
 		}
 		lastErr = insertErr
 
 		switch classifyInsertError(insertErr) {
 		case fatePoison:
+			ix.poisonStreak[rec.StreamID]++
+			streak := ix.poisonStreak[rec.StreamID]
 			ix.log.Error("insert_poisoned",
 				"stream_id", rec.StreamID, "seq", rec.Seq, "path", rec.LocalPath,
-				"err", insertErr,
+				"err", insertErr, "streak", streak,
 				"note", "재시도해도 같은 결과다. 이 세그먼트만 건너뛴다")
+
+			if streak >= ix.opt.PoisonStreakMax {
+				// 연달아 난다는 것은 개별 행이 아니라 전역이 이상하다는 뜻이다.
+				// 시간축으로 두 문제를 갈라내는 지점이 여기다.
+				ix.log.Error("poison_streak_exceeded",
+					"stream_id", rec.StreamID, "streak", streak, "limit", ix.opt.PoisonStreakMax)
+				return index.InsertInserted, false, fmt.Errorf(
+					"연속 poison INSERT %d회 stream_id=%q: %w", streak, rec.StreamID, insertErr)
+			}
 			return index.InsertInserted, true, nil
 		case fateFatal:
 			return index.InsertInserted, false, fmt.Errorf(

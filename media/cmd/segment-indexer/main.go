@@ -102,7 +102,12 @@ func run() error {
 		"settle_wait", cfg.Watcher.Settle.SettleWait, "local_time", time.Now().Format(time.RFC3339))
 
 	// --- 4. 메인 루프 ---
-	return loop(ctx, w, ix, cfg.SegmentRoot, cfg.Watcher.RescanEvery)
+	if err := loop(ctx, w, ix, cfg.SegmentRoot, cfg.Watcher.RescanEvery); err != nil {
+		return err
+	}
+	// 정상 종료도 흔적을 남긴다. 로그가 그냥 끊기면 죽은 것인지 끝난 것인지 구분할 수 없다.
+	log.Info("shutdown", "reason", "종료 신호를 받아 정상 종료한다")
+	return nil
 }
 
 // loop 은 종료·워처사망·완성세그먼트·재스캔요청 네 신호를 한 곳에서 받아 차례로 처리한다.

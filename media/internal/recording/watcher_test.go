@@ -466,7 +466,9 @@ func TestFixFileInNewStreamDirectoryIsEmitted(t *testing.T) {
 func TestFixAdoptDoesNotDisplaceNewerPending(t *testing.T) {
 	root := t.TempDir()
 	opt := testWatcherOptions(root)
-	opt.IdleTimeout = time.Hour // 유휴 확정이 끼어들지 않게 한다
+	// 되돌려받은 오래된 파일은 IdleTimeout 만큼 보류됐다가 풀린다(재검수 지적1-ii).
+	// 그 창을 짧게 잡아 테스트가 끝까지 진행되게 한다.
+	opt.IdleTimeout = 200 * time.Millisecond
 	mkStream(t, root, "s1")
 
 	// 오래된 파일은 Start 전에 만들어 둔다. 그래야 CREATE 이벤트 없이 존재만 하게 되어
@@ -477,7 +479,7 @@ func TestFixAdoptDoesNotDisplaceNewerPending(t *testing.T) {
 
 	// Start 이후 만든 최신 파일이 pending 이 된다.
 	newer := segFile(t, root, "s1", 8*time.Second, 100)
-	time.Sleep(80 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	older, err := ParseSegmentPath(root, olderPath)
 	if err != nil {
@@ -485,18 +487,13 @@ func TestFixAdoptDoesNotDisplaceNewerPending(t *testing.T) {
 	}
 	w.Adopt(older)
 
-	// 밀려나는 쪽(더 오래된 것)이 확정 후보로 나와야 한다.
-	seg, ok := recv(t, w.Completed(), 2*time.Second)
+	// 최신 파일이 pending 에서 밀려나지 않았다면, 먼저 나오는 것은 오래된 쪽이다.
+	seg, ok := recv(t, w.Completed(), 3*time.Second)
 	if !ok {
-		t.Fatal("밀려난 오래된 파일이 확정 후보로 나오지 않았다")
+		t.Fatal("보류가 풀린 오래된 파일이 나오지 않았다")
 	}
 	if seg.Path != olderPath {
-		t.Fatalf("emit = %q, want %q (오래된 쪽이 나와야 한다)", seg.Path, olderPath)
-	}
-
-	// 최신 파일은 여전히 pending 이라 emit 되지 않아야 한다.
-	if extra, ok := recv(t, w.Completed(), 300*time.Millisecond); ok {
-		t.Fatalf("최신 pending(%q)이 밀려나 emit 됐다: %q", newer, extra.Path)
+		t.Fatalf("emit = %q, want %q — 최신 pending 이 밀려났다 (newer=%q)", seg.Path, olderPath, newer)
 	}
 }
 
@@ -625,5 +622,207 @@ func TestFixWatcherRejectsZeroWatchDirLimit(t *testing.T) {
 	opt.MaxWatchDirs = 0
 	if _, err := NewWatcher(opt); err == nil {
 		t.Fatal("MaxWatchDirs=0 인데 에러가 없다")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 재검수 지적 회귀 테스트
+// ---------------------------------------------------------------------------
+
+// 지적1-(i) 단위 — FIFO 는 같은 스트림 안에서 StartWall 오름차순을 유지한다.
+// 늦게 밀려 들어온 오래된 항목이 뒤에 붙으면, 앞선 항목이 먼저 처리돼 커서가 전진하고
+// 그 뒤에 나오는 오래된 항목은 전부 늦은 세그먼트로 폐기된다.
+func TestFix2FIFOKeepsPerStreamWallOrder(t *testing.T) {
+	base := time.Date(2026, 7, 25, 10, 0, 0, 0, time.UTC)
+	seg := func(stream string, offset time.Duration) Segment {
+		return Segment{StreamID: stream, Path: stream + offset.String(), StartWall: base.Add(offset)}
+	}
+
+	f := newSegmentFIFO()
+	f.push(seg("s1", 9*time.Second))
+	f.push(seg("s2", time.Second)) // 다른 스트림은 서로 순서를 강제하지 않는다
+	f.push(seg("s1", 20*time.Second))
+	f.push(seg("s1", time.Second)) // 뒤늦게 들어온 가장 오래된 항목
+
+	ctx := context.Background()
+	var s1Order []time.Duration
+	for range 4 {
+		got, ok := f.pop(ctx)
+		if !ok {
+			t.Fatal("pop 실패")
+		}
+		if got.StreamID == "s1" {
+			s1Order = append(s1Order, got.StartWall.Sub(base))
+		}
+	}
+
+	want := []time.Duration{time.Second, 9 * time.Second, 20 * time.Second}
+	if len(s1Order) != len(want) {
+		t.Fatalf("s1 항목 수 = %d, want %d", len(s1Order), len(want))
+	}
+	for i := range want {
+		if s1Order[i] != want[i] {
+			t.Fatalf("s1 순서 = %v, want %v", s1Order, want)
+		}
+	}
+}
+
+// 지적1-(i) 통합 — 밀려난 오래된 확정 후보가 FIFO 에 이미 있는 더 늦은 항목보다 먼저 나온다.
+func TestFix2DisplacedOlderSegmentIsEmittedBeforeQueuedLaterOne(t *testing.T) {
+	root := t.TempDir()
+	opt := testWatcherOptions(root)
+	opt.IdleTimeout = 150 * time.Millisecond
+	mkStream(t, root, "s1")
+
+	// 되돌려 넣을 파일들은 Start 전에 만들어 CREATE 이벤트가 끼어들지 않게 한다.
+	oldest := segFile(t, root, "s1", 0, 100)
+	newest := segFile(t, root, "s1", 30*time.Second, 100)
+
+	w, _, _ := startWatcher(t, opt)
+
+	// D(9s), E(20s) 를 만들어 FIFO 에 쌓는다. 소비는 아직 하지 않는다.
+	segFile(t, root, "s1", 9*time.Second, 100)
+	time.Sleep(30 * time.Millisecond)
+	laterPath := segFile(t, root, "s1", 20*time.Second, 100)
+	time.Sleep(30 * time.Millisecond)
+
+	// 유휴로 pending(E)까지 확정시켜 pending 을 비운다.
+	time.Sleep(250 * time.Millisecond)
+
+	oldestSeg, err := ParseSegmentPath(root, oldest)
+	if err != nil {
+		t.Fatalf("ParseSegmentPath 실패: %v", err)
+	}
+	newestSeg, err := ParseSegmentPath(root, newest)
+	if err != nil {
+		t.Fatalf("ParseSegmentPath 실패: %v", err)
+	}
+
+	// 빈 pending 에 가장 오래된 파일을 올린 뒤, 더 늦은 파일로 밀어낸다.
+	w.Adopt(oldestSeg)
+	time.Sleep(30 * time.Millisecond)
+	w.Adopt(newestSeg)
+	// Adopt 는 채널로 넘길 뿐이라 eventLoop 이 처리하기 전에 소비를 시작하면
+	// emitLoop 이 먼저 다음 항목을 꺼내 간다. 밀어내기가 FIFO 에 반영될 때까지 기다린다.
+	time.Sleep(100 * time.Millisecond)
+
+	// 이제 순서대로 받아 보면, 밀려난 oldest 가 laterPath 보다 먼저 나와야 한다.
+	seenOldest, seenLater := -1, -1
+	for i := range 4 {
+		seg, ok := recv(t, w.Completed(), 3*time.Second)
+		if !ok {
+			break
+		}
+		switch seg.Path {
+		case oldest:
+			seenOldest = i
+		case laterPath:
+			seenLater = i
+		}
+	}
+	if seenOldest < 0 {
+		t.Fatal("밀려난 오래된 파일이 나오지 않았다")
+	}
+	if seenLater >= 0 && seenOldest > seenLater {
+		t.Fatalf("순서 역전: oldest=%d later=%d — 오래된 쪽이 먼저 나와야 한다", seenOldest, seenLater)
+	}
+}
+
+// 지적1-(ii) — 되돌려받은 파일이 현재 pending 보다 오래되면 즉시 재확정하지 않는다.
+// 즉시 확정하면 아직 자라는 파일이 곧바로 emitLoop 의 Settle 을 붙잡고,
+// 되돌아오고 다시 확정되기를 반복하며 직렬 처리 구간을 점유한다.
+// 설계 H5 의 "재시도 간격은 IdleTimeout 이상"을 유휴 타이머 경로로 복원한다.
+func TestFix2ReadoptedGrowingFileIsThrottled(t *testing.T) {
+	root := t.TempDir()
+	opt := testWatcherOptions(root)
+	opt.IdleTimeout = 400 * time.Millisecond
+	mkStream(t, root, "s1")
+	growing := segFile(t, root, "s1", 0, 100)
+
+	w, _, _ := startWatcher(t, opt)
+
+	// Start 이후 만든 더 늦은 파일이 pending 을 차지한다.
+	segFile(t, root, "s1", 20*time.Second, 100)
+	time.Sleep(50 * time.Millisecond)
+
+	seg, err := ParseSegmentPath(root, growing)
+	if err != nil {
+		t.Fatalf("ParseSegmentPath 실패: %v", err)
+	}
+	w.Adopt(seg)
+
+	// IdleTimeout 이 지나기 전에는 다시 확정되면 안 된다.
+	if got, ok := recv(t, w.Completed(), 200*time.Millisecond); ok && got.Path == growing {
+		t.Fatal("되돌려받은 파일이 즉시 재확정됐다 — 스로틀이 없다")
+	}
+
+	// 그리고 결국은 나와야 한다. 버려지면 그 구간이 영구 부재가 된다.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		got, ok := recv(t, w.Completed(), time.Second)
+		if !ok {
+			break
+		}
+		if got.Path == growing {
+			return
+		}
+	}
+	t.Fatal("되돌려받은 파일이 끝내 나오지 않았다")
+}
+
+// 지적3 — 디렉토리가 지워지면 감시 맵에서도 빠지고, 같은 이름으로 다시 생기면 재감시된다.
+// 맵에 남아 있으면 addWatch 가 "이미 등록됨"으로 건너뛰어 재생성된 디렉토리가 감시 밖에 남는다.
+func TestFix2RemovedDirectoryIsUnwatchedAndRewatchable(t *testing.T) {
+	root := t.TempDir()
+	opt := testWatcherOptions(root)
+	mkStream(t, root, "s1")
+	w, _, _ := startWatcher(t, opt)
+
+	dir := filepath.Join(root, "s1")
+	if !w.isWatched(dir) {
+		t.Fatal("초기 감시 등록이 안 됐다")
+	}
+	before := w.watchedCount()
+
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("디렉토리 삭제 실패: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && w.isWatched(dir) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if w.isWatched(dir) {
+		t.Fatal("삭제된 디렉토리가 감시 맵에 남아 있다")
+	}
+	if got := w.watchedCount(); got >= before {
+		t.Fatalf("감시 수 = %d, want < %d (카운터가 줄지 않았다)", got, before)
+	}
+
+	// 같은 이름으로 다시 만들면 다시 감시돼야 한다.
+	mkStream(t, root, "s1")
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !w.isWatched(dir) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !w.isWatched(dir) {
+		t.Fatal("재생성된 디렉토리가 다시 감시되지 않는다")
+	}
+}
+
+// 지적4 — 세그먼트로 파싱되지 않는 "파일" CREATE 는 전수 재스캔도 트리 walk 도 유발하지 않는다.
+// 녹화 폴더에 임시 파일이 섞일 때마다 5분 주기 점검이 앞당겨지면 헛일이 쌓인다.
+func TestFix2NonSegmentFileDoesNotTriggerRescan(t *testing.T) {
+	root := t.TempDir()
+	mkStream(t, root, "s1")
+	w, _, _ := startWatcher(t, testWatcherOptions(root))
+
+	if err := os.WriteFile(filepath.Join(root, "s1", "메모.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("파일 생성 실패: %v", err)
+	}
+
+	select {
+	case <-w.Rescans():
+		t.Fatal("일반 파일 생성이 전수 재스캔을 유발했다")
+	case <-time.After(300 * time.Millisecond):
 	}
 }

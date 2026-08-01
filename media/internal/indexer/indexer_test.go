@@ -560,25 +560,19 @@ var _ = context.Background
 // 파이프라인 전체를 30초씩 붙잡고, 재시도 상한을 소진하면 프로세스까지 죽인다.
 // 한 번만 시도하고 그 세그먼트만 격리한 뒤 다음 것으로 넘어가야 한다.
 func TestFixPoisonInsertIsIsolatedWithoutRetry(t *testing.T) {
-	poison := []struct {
-		name string
-		code string
-	}{
-		{"클래스22_데이터오류", "22021"},
-		{"클래스23_무결성위반_23505_제외", "23514"},
-		{"클래스54_한도초과", "54000"},
-	}
+	// poison = 그 행의 값 자체가 원인인 것만. 재검수에서 클래스 22 하나로 좁혔다.
+	// 23(무결성)은 스키마 불일치일 수 있고 54(한도)는 전역 문제라 전부 fatal 로 옮겼다.
+	poison := []string{"22021", "22001", "22003"}
 
-	for _, tc := range poison {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, code := range poison {
+		t.Run("클래스22_"+code, func(t *testing.T) {
 			f := newFixture(t, 4000)
-			f.store.insertErrs = []error{&pgconn.PgError{Code: tc.code, Message: "테스트용"}}
+			f.store.insertErrs = []error{&pgconn.PgError{Code: code, Message: "테스트용"}}
 
 			seg := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile)
 			if err := f.handle(seg); err != nil {
 				t.Fatalf("프로세스를 죽이면 안 된다: %v", err)
 			}
-
 			if f.store.insertCalls != 1 {
 				t.Fatalf("Insert 호출 = %d, want 1 (재시도 금지)", f.store.insertCalls)
 			}
@@ -592,22 +586,65 @@ func TestFixPoisonInsertIsIsolatedWithoutRetry(t *testing.T) {
 	}
 }
 
-// 지적5 — 연결·자원 계열과 비-PgError 는 종전대로 재시도한다.
+// 재검수 지적2 — 연속 poison 은 개별 행 문제가 아니라 전역 이상 신호다.
+// 같은 스트림에서 연달아 나면 전부 건너뛰며 조용히 비어 가는 대신 프로세스를 끝낸다.
+func TestFix2ConsecutivePoisonTripsBreaker(t *testing.T) {
+	f := newFixture(t)
+	f.probe.vals = []int64{4000}
+	f.opt.PoisonStreakMax = 3
+	f.reload()
+
+	var lastErr error
+	for i := range f.opt.PoisonStreakMax {
+		f.store.insertErrs = []error{&pgconn.PgError{Code: "22021"}}
+		seg := f.segment("s1", segName(baseWall, time.Duration(i)*4*time.Second), 1000, recording.ReasonNextFile)
+		lastErr = f.handle(seg)
+	}
+
+	if lastErr == nil {
+		t.Fatal("연속 poison 상한을 넘었는데 프로세스가 계속 간다")
+	}
+	if n := f.logs.count(slog.LevelError, "poison_streak_exceeded"); n != 1 {
+		t.Fatalf("poison_streak_exceeded = %d건, want 1", n)
+	}
+}
+
+// 재검수 지적2 — 성공한 INSERT 는 연속 poison 기록을 지운다.
+// 그러지 않으면 산발적으로 나는 poison 이 언젠가 프로세스를 죽인다.
+func TestFix2SuccessfulInsertResetsPoisonStreak(t *testing.T) {
+	f := newFixture(t)
+	f.probe.vals = []int64{4000}
+	f.opt.PoisonStreakMax = 2
+	f.reload()
+
+	f.store.insertErrs = []error{&pgconn.PgError{Code: "22021"}}
+	f.mustHandle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile))
+	f.mustHandle(f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonNextFile))
+
+	if got := f.ix.poisonStreak["s1"]; got != 0 {
+		t.Fatalf("poisonStreak = %d, want 0", got)
+	}
+}
+
+// 재검수 지적2 — 재시도 대상이 40(직렬화·데드락)·55(락)·58(IO)까지 넓어졌다.
 func TestFixTransientInsertErrorsStillRetry(t *testing.T) {
 	transient := []struct {
 		name string
 		err  error
 	}{
 		{"클래스08_연결", &pgconn.PgError{Code: "08006"}},
+		{"클래스40_직렬화실패", &pgconn.PgError{Code: "40001"}},
+		{"클래스40_데드락", &pgconn.PgError{Code: "40P01"}},
 		{"클래스53_자원부족", &pgconn.PgError{Code: "53300"}},
+		{"클래스55_락_획득실패", &pgconn.PgError{Code: "55P03"}},
 		{"클래스57_운영자개입", &pgconn.PgError{Code: "57P01"}},
+		{"클래스58_IO오류", &pgconn.PgError{Code: "58030"}},
 		{"비PgError", errStoreDown},
 	}
 
 	for _, tc := range transient {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t, 4000)
-			// 두 번 실패한 뒤 성공한다.
 			f.store.insertErrs = []error{tc.err, tc.err}
 
 			seg := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile)
@@ -624,17 +661,23 @@ func TestFixTransientInsertErrorsStillRetry(t *testing.T) {
 	}
 }
 
-// 지적5 — 그 밖의 PgError(문법·권한 등)는 설정이 잘못됐다는 뜻이므로 재시도하지 않고 올린다.
-func TestFixUnexpectedPgErrorIsFatalWithoutRetry(t *testing.T) {
-	f := newFixture(t, 4000)
-	f.store.insertErrs = []error{&pgconn.PgError{Code: "42601", Message: "syntax error"}}
+// 재검수 지적2 — 무결성·한도·문법·권한은 전부 즉시 종료다.
+// 23502(NOT NULL)나 54000(한도)은 그 행 하나가 아니라 스키마나 설정이 어긋났다는 뜻이므로,
+// 건너뛰며 계속 가면 인덱스가 조용히 비어 간다.
+func TestFix2SchemaAndLimitErrorsAreFatal(t *testing.T) {
+	for _, code := range []string{"23502", "23514", "23503", "54000", "42601", "28000"} {
+		t.Run("fatal_"+code, func(t *testing.T) {
+			f := newFixture(t, 4000)
+			f.store.insertErrs = []error{&pgconn.PgError{Code: code}}
 
-	err := f.handle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile))
-	if err == nil {
-		t.Fatal("에러를 기대했으나 nil")
-	}
-	if f.store.insertCalls != 1 {
-		t.Fatalf("Insert 호출 = %d, want 1 (재시도 금지)", f.store.insertCalls)
+			err := f.handle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile))
+			if err == nil {
+				t.Fatal("에러를 기대했으나 nil")
+			}
+			if f.store.insertCalls != 1 {
+				t.Fatalf("Insert 호출 = %d, want 1 (재시도 금지)", f.store.insertCalls)
+			}
+		})
 	}
 }
 

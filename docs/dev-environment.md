@@ -128,6 +128,31 @@ OBS처럼 처음부터 실시간으로 보내는 인코더에서는 나타나지
 13건이 -1 ~ -22 ms). `duration_ms`는 영상 파일 안의 시간에서, 시작 시각은 파일 이름에서 오기
 때문이며, 허용치 안의 이 값들은 DEBUG 로그로만 남는다.
 
+### 사이드카 테스트를 돌릴 때
+
+```bash
+cd media && go test ./...
+```
+
+`internal/index`의 통합 테스트는 **실제 PostgreSQL이 필요**하다. `PG_DSN`이 없으면 그 케이스들은
+조용히 `skip`되므로, DB 계층까지 확인하려면 아래처럼 붙여서 돌린다.
+
+```bash
+set -a; . ./.env; set +a
+export PG_DSN="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POSTGRES_DB"
+cd media && go test ./internal/index/ -v
+```
+
+### 스트림 이름 제약
+
+MediaMTX는 아무 경로로나 송출을 받아 주지만, 사이드카는 **`[A-Za-z0-9_-]` 1–64자**인 이름만
+인덱싱한다. 규칙에 어긋난 이름(공백, 슬래시, 한글 등)으로 송출하면 **녹화 파일은 정상으로 생기는데
+`stream_segments`에는 한 줄도 안 들어가고** 사이드카 로그에 `stream_id_rejected` WARN만 남는다.
+
+```bash
+docker compose logs segment-indexer | grep stream_id_rejected
+```
+
 ## 2번(플레이어) 로컬 URL 매핑
 
 | 용도 | URL |

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,6 +81,12 @@ type Watcher struct {
 	// eventLoop 이 세우고 emitLoop 이 내보낸 뒤 지운다.
 	regrowMu       sync.Mutex
 	regrowInFlight map[string]struct{}
+
+	// emitSize 는 경로별로 마지막에 내보낼 때의 크기다. 재성장 후보를 거를 때 쓴다.
+	//
+	// TODO(C3): indexed 맵과 같은 이유로 정리 정책이 없다. 트리거도 같다(단일 프로세스 장기 실행).
+	emitSizeMu sync.Mutex
+	emitSize   map[string]int64
 }
 
 // NewWatcher 는 감시자를 만든다. 이 시점에는 아직 어떤 폴더도 감시하지 않는다.
@@ -106,6 +114,7 @@ func NewWatcher(opt WatcherOptions) (*Watcher, error) {
 
 		watched:        map[string]struct{}{},
 		regrowInFlight: map[string]struct{}{},
+		emitSize:       map[string]int64{},
 	}, nil
 }
 
@@ -223,6 +232,37 @@ func (w *Watcher) addWatch(dir string) error {
 	return nil
 }
 
+// removeWatchTree 는 사라진 경로와 그 하위를 감시 맵에서 지운다.
+// fsnotify 는 삭제된 디렉토리의 watch 를 스스로 정리하지만 우리 맵과 카운터는 따로 관리하므로
+// 여기서 맞춰 준다. 맵이 새면 MaxWatchDirs 상한이 실제보다 빨리 차 버린다.
+func (w *Watcher) removeWatchTree(path string) {
+	prefix := path + string(filepath.Separator)
+
+	w.watchedMu.Lock()
+	removed := make([]string, 0, 1)
+	for dir := range w.watched {
+		if dir == path || strings.HasPrefix(dir, prefix) {
+			delete(w.watched, dir)
+			removed = append(removed, dir)
+		}
+	}
+	w.watchedMu.Unlock()
+
+	for _, dir := range removed {
+		// fsnotify 가 이미 정리했을 수 있으므로 실패는 무시한다.
+		_ = w.fsw.Remove(dir)
+	}
+	if len(removed) > 0 {
+		w.log.Debug("watch_removed", "path", path, "count", len(removed))
+	}
+}
+
+// isDir 은 경로가 디렉토리인지 즉시 확인한다. 사라졌으면 false 다.
+func isDir(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.IsDir()
+}
+
 // isWatched / watchedCount 는 테스트가 감시 등록 상태를 직접 확인하는 데 쓴다.
 func (w *Watcher) isWatched(dir string) bool {
 	w.watchedMu.Lock()
@@ -244,6 +284,16 @@ type streamState struct {
 	// confirmed 는 직전에 확정한 파일이다. 여기에 WRITE 가 오면 재성장 후보다.
 	confirmed *Segment
 	lastEvent time.Time
+	// deferred 는 되돌려받았으나 아직 확정하면 안 되는 세그먼트들이다.
+	// pending 보다 오래된 파일을 그 자리에서 다시 확정하면, 아직 자라는 파일이
+	// 곧바로 emitLoop 의 크기 안정 대기를 붙잡고 되돌아오기를 반복한다.
+	deferred []deferredSegment
+}
+
+// deferredSegment 는 notBefore 이후에야 확정 후보로 내보낼 세그먼트다.
+type deferredSegment struct {
+	seg       Segment
+	notBefore time.Time
 }
 
 // eventLoop 은 fsnotify 이벤트를 상태 머신에 넣고 확정 후보를 FIFO 에 push 만 한다.
@@ -306,6 +356,12 @@ func (w *Watcher) eventLoop(ctx context.Context) {
 }
 
 func (w *Watcher) onEvent(states map[string]*streamState, ev fsnotify.Event) error {
+	// 디렉토리가 사라지면 감시 맵에서도 지운다. 남겨 두면 같은 이름으로 다시 만들어졌을 때
+	// addWatch 가 "이미 등록됨"으로 건너뛰어 그 디렉토리가 영영 감시 밖에 남는다.
+	if ev.Has(fsnotify.Remove) || ev.Has(fsnotify.Rename) {
+		w.removeWatchTree(ev.Name)
+	}
+
 	seg, err := ParseSegmentPath(w.opt.Root, ev.Name)
 
 	switch {
@@ -317,10 +373,12 @@ func (w *Watcher) onEvent(states map[string]*streamState, ev fsnotify.Event) err
 		w.warnRejectedStream(states, ev.Name, err)
 		return nil
 	default:
-		// 세그먼트 파일이 아니다. 디렉토리일 수 있으니 감시 등록을 시도한다.
-		// os.Stat 으로 디렉토리인지 확인하지 않는 이유: eventLoop 은 파일 I/O 를 하지 않는다.
-		// 파일에 대해 호출하면 WalkDir 이 디렉토리를 찾지 못해 아무 일도 일어나지 않는다.
-		if ev.Has(fsnotify.Create) {
+		// 세그먼트 파일이 아니다. 디렉토리라면 감시 대상에 넣고 전수 점검을 요청한다.
+		//
+		// 여기서 stat 한 번을 쓴다. eventLoop 이 금지하는 것은 "대기"이지 즉시 반환하는
+		// 시스템 호출이 아니다. stat 없이 무조건 트리를 훑으면, 녹화 폴더에 섞인 임시 파일
+		// 하나가 생길 때마다 전수 walk 와 재스캔 신호가 따라붙는다(헛일이 쌓인다).
+		if ev.Has(fsnotify.Create) && isDir(ev.Name) {
 			w.addWatchTree(ev.Name)
 			w.signalRescan()
 		}
@@ -435,16 +493,55 @@ func (w *Watcher) onAdopt(states map[string]*streamState, seg Segment) error {
 		return w.confirm(st, displaced, ReasonNextFile)
 	}
 
-	// 되돌아온 쪽이 더 오래됐다. pending 은 그대로 두고 이쪽을 확정 후보로 보낸다.
-	w.log.Debug("adopt_older_flushed",
-		"stream_id", seg.StreamID, "kept_pending", st.pending.Path, "flushed", seg.Path)
-	return w.confirm(st, adopted, ReasonNextFile)
+	// 되돌아온 쪽이 더 오래됐다. pending 은 그대로 두되, 이쪽을 그 자리에서 다시 확정하지는 않는다.
+	// 아직 자라는 파일이면 확정 -> 안정 대기 -> 되돌림이 쉼 없이 돌며 처리 구간을 점유한다.
+	// 설계 H5 의 "재시도 간격은 IdleTimeout 이상"을 유휴 타이머 경로로 되살린다.
+	w.deferSegment(st, adopted)
+	w.log.Debug("adopt_deferred",
+		"stream_id", seg.StreamID, "kept_pending", st.pending.Path,
+		"deferred", seg.Path, "retry_after", w.opt.IdleTimeout)
+	return nil
+}
+
+// deferSegment 는 같은 경로가 이미 보류 중이면 시각만 미루고, 아니면 새로 담는다.
+func (w *Watcher) deferSegment(st *streamState, seg Segment) {
+	notBefore := time.Now().Add(w.opt.IdleTimeout)
+	for i := range st.deferred {
+		if st.deferred[i].seg.Path == seg.Path {
+			st.deferred[i].seg = seg
+			st.deferred[i].notBefore = notBefore
+			return
+		}
+	}
+	st.deferred = append(st.deferred, deferredSegment{seg: seg, notBefore: notBefore})
+}
+
+// releaseDeferred 는 대기 시간이 지난 보류 세그먼트를 확정 후보로 내보낸다.
+// FIFO 가 스트림별 StartWall 순서를 지키므로, 늦게 풀려나도 순서는 어긋나지 않는다.
+func (w *Watcher) releaseDeferred(st *streamState) error {
+	now := time.Now()
+	kept := st.deferred[:0]
+	for _, d := range st.deferred {
+		if now.Before(d.notBefore) {
+			kept = append(kept, d)
+			continue
+		}
+		if err := w.confirm(st, d.seg, ReasonNextFile); err != nil {
+			st.deferred = kept
+			return err
+		}
+	}
+	st.deferred = kept
+	return nil
 }
 
 // onIdleTick 은 한참 조용한 스트림의 pending 파일을 확정한다.
 // 마지막 조각은 후속 파일이 영영 안 생기므로 이 장치가 없으면 영영 기록되지 않는다.
 func (w *Watcher) onIdleTick(states map[string]*streamState) error {
 	for _, st := range states {
+		if err := w.releaseDeferred(st); err != nil {
+			return err
+		}
 		if st.pending == nil {
 			continue
 		}
@@ -506,12 +603,24 @@ func (w *Watcher) emitLoop(ctx context.Context) {
 			return
 		}
 
-		if _, err := Settle(ctx, seg.Path, w.opt.Settle); err != nil {
+		// 재성장 후보는 크기가 실제로 늘었을 때만 통과시킨다.
+		// eventLoop 은 크기를 보지 않고 WRITE 이벤트만으로 후보를 올리므로,
+		// 크기가 그대로인 WRITE(메타 갱신 등)까지 안정 대기 비용을 물면 직렬 처리가 낭비된다.
+		if seg.Reason == ReasonRegrown && !w.grewSinceLastEmit(seg.Path) {
+			w.clearRegrowInFlight(seg.Path)
+			continue
+		}
+
+		fi, err := Settle(ctx, seg.Path, w.opt.Settle)
+		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			// 안정되지 않았어도 내보낸다. 인덱서의 H5 가 다시 재고 판정한다.
 			w.log.Warn("settle_failed", "stream_id", seg.StreamID, "path", seg.Path, "err", err)
+		}
+		if fi != nil {
+			w.recordEmitSize(seg.Path, fi.Size())
 		}
 
 		select {
@@ -523,6 +632,26 @@ func (w *Watcher) emitLoop(ctx context.Context) {
 			w.clearRegrowInFlight(seg.Path)
 		}
 	}
+}
+
+// grewSinceLastEmit 은 마지막으로 내보낼 때보다 파일이 커졌는지 본다.
+// 여기(emitLoop)는 대기가 허용되는 자리라 stat 을 해도 inotify 를 막지 않는다.
+func (w *Watcher) grewSinceLastEmit(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil {
+		// 파일이 사라졌으면 뒤에서 판정하게 그대로 통과시킨다.
+		return true
+	}
+	w.emitSizeMu.Lock()
+	defer w.emitSizeMu.Unlock()
+	last, seen := w.emitSize[path]
+	return !seen || fi.Size() > last
+}
+
+func (w *Watcher) recordEmitSize(path string, size int64) {
+	w.emitSizeMu.Lock()
+	w.emitSize[path] = size
+	w.emitSizeMu.Unlock()
 }
 
 // fail 은 사유 있는 종료를 기록한다. 최초 1회만 기록해 원인을 덮어쓰지 않는다.
@@ -565,9 +694,14 @@ func newSegmentFIFO() *segmentFIFO {
 }
 
 // push 는 넣은 뒤의 길이를 돌려준다. 절대 블로킹하지 않는다.
+//
+// 같은 스트림 안에서는 StartWall 오름차순을 유지하도록 끼워 넣는다.
+// 밀려난 오래된 확정 후보가 뒤에 붙으면, 앞선 항목이 먼저 처리돼 인덱서의 커서가
+// 전진하고 그 뒤에 나오는 오래된 항목은 전부 늦은 세그먼트로 폐기된다.
+// 다른 스트림끼리는 서로 순서를 강제하지 않는다 - 스트림별로 독립한 타임라인이기 때문이다.
 func (f *segmentFIFO) push(seg Segment) int {
 	f.mu.Lock()
-	f.items = append(f.items, seg)
+	f.items = insertByStreamWall(f.items, seg)
 	n := len(f.items)
 	f.mu.Unlock()
 
@@ -576,6 +710,22 @@ func (f *segmentFIFO) push(seg Segment) int {
 	default:
 	}
 	return n
+}
+
+// insertByStreamWall 은 같은 스트림에서 자신보다 늦은 첫 항목 앞에 끼워 넣는다.
+// 같은 스트림의 늦은 항목이 없으면 맨 뒤에 붙는다.
+func insertByStreamWall(items []Segment, seg Segment) []Segment {
+	at := len(items)
+	for i, it := range items {
+		if it.StreamID == seg.StreamID && it.StartWall.After(seg.StartWall) {
+			at = i
+			break
+		}
+	}
+	items = append(items, Segment{})
+	copy(items[at+1:], items[at:])
+	items[at] = seg
+	return items
 }
 
 // pop 은 항목이 생길 때까지 기다린다. ctx 취소 시 ok=false 를 돌려준다.
