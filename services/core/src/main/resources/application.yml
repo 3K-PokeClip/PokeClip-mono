@@ -46,3 +46,8 @@ pokeclip:
     redirect-uri: ${GOOGLE_REDIRECT_URI:http://localhost:3000/auth/callback}
     token-uri: https://oauth2.googleapis.com/token
     jwk-set-uri: https://www.googleapis.com/oauth2/v3/certs
+  cors:
+    # 비면 부팅이 실패한다(CorsProperties). 기본값으로 localhost를 주지 않는 이유는
+    # 그러면 운영 배포에 localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데
+    # 로그는 조용하기 때문이다.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
