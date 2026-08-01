@@ -56,7 +56,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS stream_segments_local_path_uq
 // 인터페이스와 테스트용 가짜 구현은 하나도 안 바뀐다.
 func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := pool.Exec(ctx, schemaDDL); err != nil {
-		return fmt.Errorf("임시 스키마 생성 실패: %w", err)
+		return fmt.Errorf("stream_segments 스키마 생성 실패: %w", err)
 	}
 	return nil
 }
