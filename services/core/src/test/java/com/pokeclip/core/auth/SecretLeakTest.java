@@ -82,6 +82,12 @@ class SecretLeakTest extends IntegrationTestSupport {
     private static final List<String> SECRETS = List.of(GOOGLE_CODE, CLIENT_SECRET, JWT_SECRET);
 
     /**
+     * DEBUG에서 실제로 새는 것. 요청·응답 본문에 실려 다니는 둘뿐이다.
+     * JWT 서명키는 본문에 실리지 않아 DEBUG에서도 안 샌다 — 그래서 여기 없다.
+     */
+    private static final List<String> LEAKS_AT_DEBUG = List.of(GOOGLE_CODE, CLIENT_SECRET);
+
+    /**
      * 400 본문에 code와 client_secret을 일부러 싣는다. RestClientResponseException의
      * 메시지에는 응답 본문이 들어가므로, 핸들러가 원인 메시지나 스택트레이스를 찍도록
      * 바뀌면 이 바늘이 로그에 나타난다. 본문이 깨끗하면 그런 변경도 이 테스트를
@@ -305,11 +311,13 @@ class SecretLeakTest extends IntegrationTestSupport {
     /**
      * 왜 검사 기준선이 INFO인지를 증거로 남긴다.
      *
-     * <p>org.springframework.web을 DEBUG로 켜면 스프링이 역직렬화한 요청 DTO와
-     * 바깥으로 나가는 폼 본문을 그대로 찍는다 — {@code GoogleLoginRequest[code=...]}와
-     * {@code client_secret=[...]}이 한 줄씩 남는다(LogFormatUtils가 100자에서
-     * 자를 뿐이다). 하이버네이트를 DEBUG로 켜면 User 엔티티 toString이 email·name·
-     * google_sub를 통째로 찍는다. 우리 코드가 아무리 조심해도 막을 수 없다.
+     * <p>org.springframework.web을 DEBUG로 켜면 스프링이 두 곳에서 찍는다.
+     * 들어오는 요청은 역직렬화한 DTO를({@code GoogleLoginRequest[code=...]}),
+     * 나가는 요청은 폼 본문을({@code client_secret=[...]}) 그대로 남긴다.
+     * <b>둘의 위험도가 다르다</b> — 들어오는 쪽은 LogFormatUtils가 100자에서 자르지만
+     * 나가는 폼 본문은 자르지 않아 client_secret이 통째로 남는다. 하이버네이트를
+     * DEBUG로 켜면 User 엔티티 toString이 email·name·google_sub를 통째로 찍는다.
+     * 우리 코드가 아무리 조심해도 막을 수 없다.
      *
      * <p>그래서 이것은 코드가 아니라 <b>배포 규칙</b>이다: 운영에서 로그 레벨을
      * DEBUG로 내리지 않는다. 규칙이 지켜지는지를 설정으로 못박고, 규칙의 근거를
@@ -319,8 +327,17 @@ class SecretLeakTest extends IntegrationTestSupport {
     @Test
     void 스프링_web을_DEBUG로_켜면_새므로_설정에서_켜지_않는다() throws Exception {
         assertThat(environment.getProperty("logging.level.root", "info")).isEqualToIgnoringCase("info");
-        assertThat(environment.getProperty("logging.level." + SPRING_WEB_LOGGER, "info"))
-                .isEqualToIgnoringCase("info");
+
+        // root만 보면 방어가 사람 손에 달린다 — LOGGING_LEVEL_ROOT=debug 한 줄이면 뚫린다.
+        // 구체 로거 레벨이 root보다 우선하므로 이 프로퍼티가 실제 방어선이고,
+        // 그래서 기본값을 주지 않는다. 주면 application.yml에서 줄이 사라져도 초록이다.
+        String springWebLevel = environment.getProperty("logging.level." + SPRING_WEB_LOGGER);
+        assertThat(springWebLevel)
+                .as("application.yml에 이 로거 레벨이 박혀 있어야 root를 내려도 버틴다")
+                .isNotNull();
+        assertThat(Level.toLevel(springWebLevel, Level.DEBUG).toInt())
+                .as("아래가 재현하는 유출이 이 레벨에서 실제로 열린다: " + springWebLevel)
+                .isGreaterThanOrEqualTo(Level.INFO.toInt());
 
         try (LogCaptor captor = new LogCaptor()) {
             setLevel(SPRING_WEB_LOGGER, Level.DEBUG);
@@ -334,9 +351,18 @@ class SecretLeakTest extends IntegrationTestSupport {
                 setLevel(SPRING_WEB_LOGGER, null);
             }
 
-            assertThatThrownBy(() -> assertNoSecretsIn(captor, SECRETS))
-                    .as("스프링이 더는 요청 본문을 찍지 않는다면 배포 규칙을 다시 볼 때다")
-                    .isInstanceOf(AssertionError.class);
+            // 바늘마다 따로 단언한다. 묶어서 "하나라도 새면 통과"로 두면 스프링이
+            // 나가는 폼 본문 로깅만 없애도 — 즉 더 위험한 쪽이 사라져도 — 들어오는
+            // DTO 쪽이 남아 이 테스트는 초록으로 유지되고, 근거가 조용히 썩는다.
+            String debugLog = renderAll(captor);
+            for (String secret : LEAKS_AT_DEBUG) {
+                assertThat(debugLog)
+                        .as(secret + "가 DEBUG에서 더는 안 샌다면 배포 규칙을 다시 볼 때다")
+                        .contains(secret);
+            }
+            // 서명키는 요청·응답 본문에 실리지 않아 DEBUG에서도 안 샌다.
+            // LEAKS_AT_DEBUG에서 빠진 것이 실수가 아님을 여기서 못박는다.
+            assertNoSecretsIn(captor, List.of(JWT_SECRET));
         }
     }
 
@@ -428,9 +454,14 @@ class SecretLeakTest extends IntegrationTestSupport {
     }
 
     private static void assertNoSecretsIn(LogCaptor captor, List<String> secrets) {
-        assertNoSecretsIn(captor.events().stream()
+        assertNoSecretsIn(renderAll(captor), secrets);
+    }
+
+    /** 모인 로그 전부를 한 덩어리 문자열로. 딸려 붙은 예외까지 포함한다. */
+    private static String renderAll(LogCaptor captor) {
+        return captor.events().stream()
                 .map(SecretLeakTest::renderFully)
-                .collect(Collectors.joining("\n")), secrets);
+                .collect(Collectors.joining("\n"));
     }
 
     private static void assertNoSecretsIn(String haystack, List<String> secrets) {

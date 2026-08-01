@@ -24,6 +24,15 @@ spring:
     table: flyway_schema_history_core
 
 logging:
+  level:
+    # 이 로거를 DEBUG로 켜면 나가는 폼 본문이 통째로 찍힌다 —
+    # DefaultRestClient.logBody가 "Writing [" 뒤에 본문을 그대로 붙이고,
+    # LogFormatUtils를 안 거치므로 길이 상한이 없다. 구글 토큰 교환의
+    # client_secret이 잘리지도 않고 남는다(들어오는 DTO 쪽은 100자에서 잘리지만
+    # 43자 refresh 토큰은 그 안에 다 들어간다).
+    # 구체 로거 레벨이 root보다 우선한다. 그래서 LOGGING_LEVEL_ROOT=debug로 내려도
+    # 여기는 info다 — 방어를 "운영에서 DEBUG를 켜지 마라"는 사람의 규칙에 맡기지 않는다.
+    org.springframework.web: info
   pattern:
     # 기본 콘솔 형식의 레벨 자리에 상관 ID를 끼워 넣는다. 값이 없으면 빈칸이다.
     # logback-spring.xml을 만들지 않는 이유는 배포가 없어 환경별 형식이
