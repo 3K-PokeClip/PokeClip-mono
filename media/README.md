@@ -43,7 +43,7 @@
 | 길이 | fMP4 박스 실측(`internal/fmp4meta`). 벽시계로 어림잡지 않는다 |
 | 파일 접근 | **읽기 전용**(`recordings:/recordings:ro`). 쓰지도 지우지도 않는다 |
 | S3 | **미접촉**. `s3_key`는 문자열로 예약만 하고 `upload_state`는 항상 `pending` (업로드는 POK-30) |
-| 스키마 | `internal/index/ddl.go`는 **로컬 개발 전용 임시 DDL**. POK-35 정본 마이그레이션이 들어오면 이 파일을 통째로 지운다 |
+| 스키마 | `internal/index/ddl.go`가 **정본 DDL — 1번 소유** (2026-08-01 3번 위임, ADR-0001). **컬럼 추가·변경은 3번 승인 필수**(3번이 이 표를 읽음). RDS 적용 절차는 AWS 배포 시점에 결정 |
 
 동작 확인 절차는 [`docs/dev-environment.md`](../docs/dev-environment.md)의 "세그먼트 인덱싱 확인"에 있다.
 
@@ -51,8 +51,8 @@
 
 | 항목 | 내용 | 승계처 |
 |---|---|---|
-| `(stream_id, local_path)` UNIQUE | 정본 스키마에도 반드시 필요하다. 없으면 재기동 후 같은 파일이 두 번 들어가는 것을 막을 최후 방어선이 사라진다 | POK-35 (1순위) |
-| UNIQUE 인덱스 이름 | `stream_segments_local_path_uq` 고정 필요. 이름으로 "정상 멱등"과 "번호 충돌"을 가르기 때문이다 | POK-35 (2순위) |
+| `(stream_id, local_path)` UNIQUE | 재기동 후 같은 파일이 두 번 들어가는 것을 막는 최후 방어선 | **해소** — DDL 소유가 1번으로 위임되며 정본에 포함 확정 (U12 종결) |
+| UNIQUE 인덱스 이름 | `stream_segments_local_path_uq` — 이름으로 "정상 멱등"과 "번호 충돌"을 가르므로 이름 자체가 계약 | **정본 사양** — 변경 시 store.go 분류 로직 동시 수정 필요 |
 | 경로 이력 메모리 | 스트림의 기록된 경로 전부를 메모리에 올린다. 창 제한이 없어 장기 실행 시 계속 자란다 | 이월 |
 | DB 권한 | 사이드카가 `POSTGRES_USER`를 그대로 쓴다. 이 표만 다루는 전용 롤이 바람직하다 | 이월 |
 | 파일명 파서 fuzz | 화이트리스트와 정규식에 대한 fuzz 테스트가 없다 | 이월 |

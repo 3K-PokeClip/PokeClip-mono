@@ -64,11 +64,11 @@ func run() error {
 	}
 	if cfg.EnsureSchema {
 		// EnsureSchema 는 Store 인터페이스 밖의 자유 함수다(D7).
-		// POK-35 정본 마이그레이션이 들어오면 이 3줄과 ddl.go 만 지우면 끝난다(G7).
+		// 정본 DDL(1번 소유 — ddl.go)을 부팅 시 보장한다. 마이그레이션 도구 도입 시 이 3줄과 ddl.go 만 바꾸면 된다(G7).
 		if err := index.EnsureSchema(ctx, pool); err != nil {
 			return err
 		}
-		log.Info("schema_ensured", "note", "로컬 개발 전용 임시 DDL. POK-35 정본으로 교체 대상")
+		log.Info("schema_ensured", "note", "정본 DDL(1번 소유). 컬럼 변경은 3번 승인 — 계약-세그먼트인덱스 4절")
 	}
 
 	store := index.NewPGStore(pool)

@@ -66,7 +66,7 @@ services:
       POSTGRES_HOST: postgres
       SEGMENT_ROOT: /recordings
       TZ: UTC # 로그 시각과 mtime 해석을 UTC로 고정 (저장 값은 코드가 UTC로 강제한다)
-      ENSURE_SCHEMA: "true" # 로컬 개발 전용 임시 DDL. POK-35 정본 마이그레이션이 들어오면 끈다
+      ENSURE_SCHEMA: "true" # 부팅 시 정본 DDL 보장(1번 소유, ADR-0001). RDS/마이그레이션 도구 도입 시 끈다
 
   # 정적 세그먼트 스텁 (M1 1-2) — 2번 플레이어 개발용. 먼저 infra/compose/stub/gen-segments.sh 1회 실행.
   media-stub:

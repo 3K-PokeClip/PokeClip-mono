@@ -117,7 +117,7 @@ func (o InsertOutcome) String() string {
 // 로컬 파일이 .mp4 여도 키는 .m4s 로 정규화한다 — 로컬 파일명과 콜드 키는 서로 다른 계약이며,
 // 키 형상은 계약 정본이 정한다. POK-30 업로더가 이 예약 키를 그대로 PUT 대상으로 쓴다.
 // seq 는 %06d 다. seq 가 100만 이상이면 자릿수가 늘어 사전식 정렬은 깨지나 유일성은 유지된다
-// (4s x 100만 = 46일 연속 방송). 자릿수 정책은 POK-35 문의 항목.
+// (4s x 100만 = 46일 연속 방송). 자릿수 정책 변경은 컬럼 정책 리뷰(3번 승인) 사안.
 func S3Key(streamID string, seq int64, startWallUTC time.Time) string {
 	utc := startWallUTC.UTC()
 	return fmt.Sprintf("streams/%s/%s/%02d/seg_%06d.m4s",
