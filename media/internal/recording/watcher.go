@@ -550,8 +550,14 @@ func (w *Watcher) deferSegment(st *streamState, seg Segment) (bool, error) {
 			"cycles", st.deferCycles[seg.Path], "limit", w.opt.DeferMaxCycles,
 			"note", "장벽을 풀고 그대로 방출한다. 늦은 세그먼트로 폐기될 수 있다(L5 수동 복구)")
 		delete(st.deferCycles, seg.Path)
-		w.refreshBarrier(st, seg.StreamID)
-		return false, w.confirm(st, seg, ReasonNextFile)
+		// 큐 삽입과 장벽 해제를 한 임계구역으로 묶는다. 순서가 갈리면 그 사이에
+		// emitLoop 이 깨어나 더 늦은 항목을 집어 가고, 흘려보내기로 한 이 세그먼트는
+		// 순서까지 잃어 손쓸 방법이 없어진다.
+		n := w.fifo.pushThen(
+			[]Segment{w.markConfirmed(st, seg, ReasonNextFile)},
+			func() { w.applyBarrier(st, seg.StreamID) },
+		)
+		return false, w.checkFIFOLen(n)
 	}
 
 	notBefore := time.Now().Add(w.opt.IdleTimeout)
@@ -574,6 +580,14 @@ func (w *Watcher) deferSegment(st *streamState, seg Segment) (bool, error) {
 // refreshBarrier 는 스트림의 장벽을 보류 항목 중 가장 이른 StartWall 로 맞춘다.
 // 보류가 하나도 없으면 장벽을 없애고 emitLoop 을 깨워 막혀 있던 항목을 흘려보낸다.
 func (w *Watcher) refreshBarrier(st *streamState, streamID string) {
+	w.applyBarrier(st, streamID)
+	// 장벽이 느슨해졌을 수 있으니 emitLoop 이 다시 판정하도록 깨운다.
+	w.fifo.wake()
+}
+
+// applyBarrier 는 장벽 맵만 갱신한다. 깨우지 않으므로 FIFO 락 안에서 호출해도 안전하다.
+// 잠금 순서는 항상 FIFO -> 장벽이며, pop 도 같은 순서를 쓴다.
+func (w *Watcher) applyBarrier(st *streamState, streamID string) {
 	var earliest time.Time
 	for _, d := range st.deferred {
 		if earliest.IsZero() || d.seg.StartWall.Before(earliest) {
@@ -588,9 +602,6 @@ func (w *Watcher) refreshBarrier(st *streamState, streamID string) {
 		w.barriers[streamID] = earliest
 	}
 	w.barrierMu.Unlock()
-
-	// 장벽이 느슨해졌을 수 있으니 emitLoop 이 다시 판정하도록 깨운다.
-	w.fifo.wake()
 }
 
 // blockedByBarrier 는 이 세그먼트가 같은 스트림의 보류 항목보다 늦어서 아직 나갈 수 없는지 본다.
@@ -620,16 +631,20 @@ func (w *Watcher) releaseDeferred(st *streamState, streamID string) error {
 		released = append(released, d.seg)
 	}
 	st.deferred = kept
-
-	// 장벽은 확정보다 먼저 갱신한다. 그래야 방금 풀려난 항목이 자기 장벽에 막히지 않는다.
-	w.refreshBarrier(st, streamID)
-
-	for _, seg := range released {
-		if err := w.confirm(st, seg, ReasonNextFile); err != nil {
-			return err
-		}
+	if len(released) == 0 {
+		return nil
 	}
-	return nil
+
+	// 큐 삽입과 장벽 갱신을 한 임계구역으로 묶는다.
+	//
+	// 둘을 나누면 그 사이에 창이 열린다. 장벽을 먼저 풀면 emitLoop 이 깨어나 더 늦은 항목을
+	// 집어 가고, 뒤늦게 들어온 이 세그먼트는 늦은 세그먼트로 영구 폐기된다.
+	// pop 도 같은 FIFO 락 아래에서 대상을 고르므로, 이 구간의 중간 상태는 pop 에게 보이지 않는다.
+	prepared := make([]Segment, 0, len(released))
+	for _, seg := range released {
+		prepared = append(prepared, w.markConfirmed(st, seg, ReasonNextFile))
+	}
+	return w.checkFIFOLen(w.fifo.pushThen(prepared, func() { w.applyBarrier(st, streamID) }))
 }
 
 // onIdleTick 은 한참 조용한 스트림의 pending 파일을 확정한다.
@@ -655,16 +670,27 @@ func (w *Watcher) onIdleTick(states map[string]*streamState) error {
 
 // confirm 은 확정 후보를 FIFO 에 넣고 재성장 감시 대상으로 등록한다.
 func (w *Watcher) confirm(st *streamState, seg Segment, reason CompletionReason) error {
-	done := seg
-	done.Reason = reason
+	return w.checkFIFOLen(w.fifo.push(w.markConfirmed(st, seg, reason)))
+}
 
+// markConfirmed 는 재성장 감시 대상을 갱신하고 확정 사유를 붙인 세그먼트를 돌려준다.
+// 큐에 넣지는 않는다 - 삽입 시점을 호출자가 정해야 하는 경로가 있기 때문이다(releaseDeferred).
+// 이 상태는 eventLoop 만 만지므로 락이 필요 없다.
+func (w *Watcher) markConfirmed(st *streamState, seg Segment, reason CompletionReason) Segment {
 	confirmed := seg
 	st.confirmed = &confirmed
-	return w.push(done)
+
+	done := seg
+	done.Reason = reason
+	return done
 }
 
 func (w *Watcher) push(seg Segment) error {
-	n := w.fifo.push(seg)
+	return w.checkFIFOLen(w.fifo.push(seg))
+}
+
+// checkFIFOLen 은 넣은 뒤의 길이로 경고와 종료를 판정한다.
+func (w *Watcher) checkFIFOLen(n int) error {
 	if n > w.opt.FIFOMaxLen {
 		// 처리 속도가 입력 속도를 못 따라간다. 무한정 쌓느니 죽고 재기동해
 		// Scan 으로 따라잡는 편이 낫다(9절 L2, D8 과 같은 전략).
@@ -845,6 +871,26 @@ func (f *segmentFIFO) pop(ctx context.Context, blocked func(Segment) bool) (Segm
 		case <-f.signal:
 		}
 	}
+}
+
+// pushThen 은 항목들을 넣고, 같은 임계구역 안에서 after 를 실행한 뒤 넣은 결과 길이를 돌려준다.
+//
+// pop 이 대상을 고르는 동안에도 같은 락을 잡으므로, "넣기"와 after(장벽 갱신)의 중간 상태가
+// pop 에게 보이지 않는다. 이것이 순서 역전 창을 없애는 지점이다.
+// after 안에서는 FIFO 를 다시 만지면 안 된다(재진입 교착).
+func (f *segmentFIFO) pushThen(segs []Segment, after func()) int {
+	f.mu.Lock()
+	for _, seg := range segs {
+		f.items = insertByStreamWall(f.items, seg)
+	}
+	n := len(f.items)
+	if after != nil {
+		after()
+	}
+	f.mu.Unlock()
+
+	f.wake()
+	return n
 }
 
 // wake 는 대기 중인 pop 을 한 번 깨운다. 논블로킹이다.

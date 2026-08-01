@@ -933,3 +933,163 @@ func TestFix3PathologicalDeferralGivesUpAndResumesStream(t *testing.T) {
 	}
 	t.Fatalf("DeferMaxCycles 를 넘겼는데도 스트림이 재개되지 않았다 (O 방출 %d회)", olderEmits)
 }
+
+// ---------------------------------------------------------------------------
+// 4차 재검수 회귀 테스트 — 보류 해제와 pop 선택 사이의 창
+// ---------------------------------------------------------------------------
+
+// barrierHarness 는 emitLoop 을 띄우지 않고 FIFO·장벽만 직접 다루는 테스트 장치다.
+// 실제 워처를 Start 하면 소비 시점을 통제할 수 없어 이 창을 겨냥할 수 없다.
+type barrierHarness struct {
+	w   *Watcher
+	st  *streamState
+	got chan Segment
+}
+
+func newBarrierHarness(t *testing.T) *barrierHarness {
+	t.Helper()
+	w, err := NewWatcher(testWatcherOptions(t.TempDir()))
+	if err != nil {
+		t.Fatalf("NewWatcher 실패: %v", err)
+	}
+	t.Cleanup(func() { _ = w.fsw.Close() })
+	return &barrierHarness{
+		w:   w,
+		st:  &streamState{deferCycles: map[string]int{}},
+		got: make(chan Segment, 8),
+	}
+}
+
+// 보류 해제는 "O 를 큐에 넣는 것"과 "장벽을 푸는 것"이 pop 선택에서 하나로 보여야 한다.
+//
+// 순서가 갈리면 그 사이에 emitLoop 이 깨어나 P 를 집어 간다. 그러면 커서가 P 의 시각으로
+// 전진하고 뒤이어 나온 O 는 늦은 세그먼트로 영구 폐기된다.
+// 소비자를 장벽 앞에 확실히 세워 둔 상태에서 해제를 실행해 그 창을 겨냥한다.
+func TestFix4DeferredReleaseIsAtomicWithPopSelection(t *testing.T) {
+	base := time.Date(2026, 7, 25, 10, 0, 0, 0, time.UTC)
+
+	// 창은 좁아서 한 번으로는 놓칠 수 있다. 같은 시나리오를 여러 번 돌려 확실히 찌른다.
+	for round := range 100 {
+		h := newBarrierHarness(t)
+		older := Segment{StreamID: "s1", Path: "O", StartWall: base}
+		later := Segment{StreamID: "s1", Path: "P", StartWall: base.Add(20 * time.Second)}
+
+		// O 를 보류시켜 장벽을 세운다.
+		deferred, err := h.w.deferSegment(h.st, older)
+		if err != nil {
+			t.Fatalf("deferSegment 실패: %v", err)
+		}
+		if !deferred {
+			t.Fatal("첫 보류인데 곧바로 포기했다")
+		}
+		// P 를 확정해 큐에 넣는다. 장벽 때문에 나가지 못해야 한다.
+		if err := h.w.confirm(h.st, later, ReasonNextFile); err != nil {
+			t.Fatalf("confirm 실패: %v", err)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			for {
+				seg, ok := h.w.fifo.pop(ctx, h.w.blockedByBarrier)
+				if !ok {
+					return
+				}
+				h.got <- seg
+			}
+		}()
+
+		// 소비자가 장벽 앞에 멈춰 있는지 확인한다. 여기서 P 가 나오면 장벽 자체가 깨진 것이다.
+		select {
+		case seg := <-h.got:
+			cancel()
+			t.Fatalf("라운드 %d: 장벽을 뚫고 %q 가 방출됐다", round, seg.Path)
+		case <-time.After(20 * time.Millisecond):
+		}
+
+		// 보류를 만료시키고 해제한다. 이 순간이 문제의 창이다.
+		h.st.deferred[0].notBefore = time.Now().Add(-time.Second)
+		if err := h.w.releaseDeferred(h.st, "s1"); err != nil {
+			cancel()
+			t.Fatalf("releaseDeferred 실패: %v", err)
+		}
+
+		first := recvHarness(t, h.got, round, "첫 방출")
+		second := recvHarness(t, h.got, round, "두번째 방출")
+		cancel()
+
+		if first.Path != "O" {
+			t.Fatalf("라운드 %d: 첫 방출 = %q, want O — 해제와 pop 선택 사이에 P 가 빠져나갔다",
+				round, first.Path)
+		}
+		if second.Path != "P" {
+			t.Fatalf("라운드 %d: 두번째 방출 = %q, want P", round, second.Path)
+		}
+	}
+}
+
+// 유한 포기 경로도 같은 창을 갖는다. O 를 흘려보내기로 했더라도
+// P 보다 먼저 나갈 기회는 줘야 한다.
+func TestFix4GiveUpReleaseIsAtomicWithPopSelection(t *testing.T) {
+	base := time.Date(2026, 7, 25, 10, 0, 0, 0, time.UTC)
+
+	for round := range 100 {
+		h := newBarrierHarness(t)
+		h.w.opt.DeferMaxCycles = 1
+		older := Segment{StreamID: "s1", Path: "O", StartWall: base}
+		later := Segment{StreamID: "s1", Path: "P", StartWall: base.Add(20 * time.Second)}
+
+		// 1회차 보류로 장벽을 세운다.
+		if _, err := h.w.deferSegment(h.st, older); err != nil {
+			t.Fatalf("deferSegment 실패: %v", err)
+		}
+		if err := h.w.confirm(h.st, later, ReasonNextFile); err != nil {
+			t.Fatalf("confirm 실패: %v", err)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			for {
+				seg, ok := h.w.fifo.pop(ctx, h.w.blockedByBarrier)
+				if !ok {
+					return
+				}
+				h.got <- seg
+			}
+		}()
+		select {
+		case seg := <-h.got:
+			cancel()
+			t.Fatalf("라운드 %d: 장벽을 뚫고 %q 가 방출됐다", round, seg.Path)
+		case <-time.After(20 * time.Millisecond):
+		}
+
+		// 2회차 보류 시도 = 상한 초과 = 포기 경로.
+		h.st.deferred = h.st.deferred[:0]
+		deferred, err := h.w.deferSegment(h.st, older)
+		if err != nil {
+			cancel()
+			t.Fatalf("deferSegment 실패: %v", err)
+		}
+		if deferred {
+			cancel()
+			t.Fatal("상한을 넘겼는데도 보류했다")
+		}
+
+		first := recvHarness(t, h.got, round, "첫 방출")
+		cancel()
+		if first.Path != "O" {
+			t.Fatalf("라운드 %d: 첫 방출 = %q, want O — 포기 경로에도 같은 창이 있다", round, first.Path)
+		}
+	}
+}
+
+func recvHarness(t *testing.T, ch chan Segment, round int, what string) Segment {
+	t.Helper()
+	select {
+	case seg := <-ch:
+		return seg
+	case <-time.After(2 * time.Second):
+		t.Fatalf("라운드 %d: %s 을 받지 못했다", round, what)
+		return Segment{}
+	}
+}
