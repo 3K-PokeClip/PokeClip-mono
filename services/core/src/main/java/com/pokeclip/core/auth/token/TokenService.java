@@ -1,6 +1,8 @@
 package com.pokeclip.core.auth.token;
 
 import com.pokeclip.core.auth.AuthException;
+import com.pokeclip.core.auth.AuthFailure;
+import com.pokeclip.core.auth.DataInconsistencyException;
 import com.pokeclip.core.auth.user.User;
 import com.pokeclip.core.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -73,17 +75,18 @@ public class TokenService {
         String tokenHash = hash(refreshToken);
 
         Long userId = refreshTokenRepository.findUserIdByTokenHash(tokenHash)
-                .orElseThrow(() -> new AuthException("모르는 refresh 토큰이다"));
+                .orElseThrow(() -> new AuthException(AuthFailure.REFRESH_TOKEN_UNKNOWN, "모르는 refresh 토큰이다"));
 
         // 같은 사용자의 회전을 직렬화한다. 이 락이 없으면 재사용 감지가 도는 사이
         // 다른 요청이 발급한 토큰을 놓친다 — PostgreSQL READ COMMITTED에서 UPDATE는
         // 문장 시작 이후 커밋된 행을 대상 집합에 넣지 않기 때문이다. 잠글 토큰 행이
         // 아직 없으므로 사용자 행을 잠근다.
         User user = userRepository.findByIdForUpdate(userId)
-                .orElseThrow(() -> new AuthException("토큰의 주인이 없다"));
+                .orElseThrow(() -> new DataInconsistencyException(
+                        AuthFailure.USER_NOT_FOUND, "토큰의 주인이 없다", userId));
 
         RefreshToken stored = refreshTokenRepository.findByTokenHash(tokenHash)
-                .orElseThrow(() -> new AuthException("모르는 refresh 토큰이다"));
+                .orElseThrow(() -> new AuthException(AuthFailure.REFRESH_TOKEN_UNKNOWN, "모르는 refresh 토큰이다"));
 
         if (stored.getRevokedAt() != null) {
             // 방금 회전된 토큰이면 같은 클라이언트의 중복 요청으로 본다. SPA의 두 탭이
@@ -98,23 +101,23 @@ public class TokenService {
             // 피한다(토큰을 얻지는 못한다). 10초는 탭 간 경합에는 넉넉하고 공격자가
             // 노리기에는 짧다. 그 대가로 정상 사용자가 로그아웃되는 것을 막는다.
             if (stored.getRevokedAt().isAfter(Instant.now().minus(REUSE_GRACE))) {
-                throw new AuthException("이미 회전된 refresh 토큰이다");
+                throw new AuthException(AuthFailure.REFRESH_TOKEN_ALREADY_ROTATED, "이미 회전된 refresh 토큰이다");
             }
 
             // 오래전에 쓴 토큰이 다시 왔다. 탈취를 의심하고 이 사용자의 세션을 전부 끊는다.
             refreshTokenRepository.revokeAllOfUser(stored.getUserId(), Instant.now());
-            throw new AuthException("이미 사용된 refresh 토큰이다");
+            throw new AuthException(AuthFailure.REFRESH_TOKEN_REUSED, "이미 사용된 refresh 토큰이다");
         }
 
         if (stored.getExpiresAt().isBefore(Instant.now())) {
-            throw new AuthException("만료된 refresh 토큰이다");
+            throw new AuthException(AuthFailure.REFRESH_TOKEN_EXPIRED, "만료된 refresh 토큰이다");
         }
 
         if (refreshTokenRepository.revokeIfAlive(stored.getId(), Instant.now()) == 0) {
             // 사용자 행 락이 회전을 직렬화하므로 여기까지 오려면 락 밖에서 도는 것이
             // 끼어들어야 한다 — 지금은 logout뿐이다. 회전끼리 경합한 경우는 위의
             // revokedAt 검사에서 걸러진다.
-            throw new AuthException("이미 사용된 refresh 토큰이다");
+            throw new AuthException(AuthFailure.REFRESH_TOKEN_ALREADY_USED, "이미 사용된 refresh 토큰이다");
         }
 
         // issue를 프록시 없이 직접 부르는 것은 의도다. 같은 트랜잭션에 묶어야

@@ -44,6 +44,7 @@ public class AuthService {
      */
     public User me(Long userId) {
         return userRepository.findById(userId)
-                .orElseThrow(() -> new AuthException("토큰의 주인이 없다"));
+                .orElseThrow(() -> new DataInconsistencyException(
+                        AuthFailure.USER_NOT_FOUND, "토큰의 주인이 없다", userId));
     }
 }

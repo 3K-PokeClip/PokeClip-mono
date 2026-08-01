@@ -1,6 +1,7 @@
 package com.pokeclip.core.auth.api;
 
 import com.pokeclip.core.auth.AuthException;
+import com.pokeclip.core.auth.AuthFailure;
 import com.pokeclip.core.auth.AuthService;
 import com.pokeclip.core.auth.api.dto.GoogleLoginRequest;
 import com.pokeclip.core.auth.api.dto.MeResponse;
@@ -46,7 +47,7 @@ public class AuthController {
         try {
             return Long.valueOf(jwt.getSubject());
         } catch (NumberFormatException e) {
-            throw new AuthException("토큰의 주체를 읽을 수 없다", e);
+            throw new AuthException(AuthFailure.ACCESS_TOKEN_SUBJECT_INVALID, "토큰의 주체를 읽을 수 없다", e);
         }
     }
 
