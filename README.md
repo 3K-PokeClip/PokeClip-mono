@@ -90,8 +90,7 @@ flowchart LR
 | 폴더 | 무엇 | 담당 |
 |---|---|---|
 | [`contracts/`](contracts/) | **서로 주고받는 약속.** 여기를 고치면 3명 전원이 리뷰한다 | 공동 |
-| [`services/`](services/) | 코어 API (Spring). Auth · Clip | 3번 |
-| [`chat/`](chat/) | 채팅 수집 · 하이라이트 판별 | 3번 |
+| [`services/`](services/) | 서버 3개 (Spring). 코어(로그인·클립) · 채팅 수집 · 하이라이트 판별 | 3번 |
 | [`media/`](media/) | Media Origin — SRT 수신 · LL-HLS 송출 | 1번 |
 | [`obs-plugin/`](obs-plugin/) | OBS 이원 송출 플러그인 (C++) | 1번 |
 | [`workers/`](workers/) | 렌더 · 업로드 · AI 자막 | 1번 · 2번 |
