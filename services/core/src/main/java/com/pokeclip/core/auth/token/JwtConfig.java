@@ -1,7 +1,6 @@
-package com.pokeclip.core.auth.config;
+package com.pokeclip.core.auth.token;
 
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
-import com.pokeclip.core.auth.token.JwtProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
