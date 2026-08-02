@@ -21,15 +21,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      # 리뷰를 PR에 남기려면 write여야 한다. read면 잡은 성공으로 끝나는데
+      # 코멘트가 하나도 안 올라온다 — 실패로 보이지 않아 원인 찾기가 어렵다.
+      pull-requests: write
+      issues: write
       id-token: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          # 리뷰는 base와 head를 비교해야 한다. depth 1이면 히스토리가 없어
+          # 비교 대상을 못 만들고, 볼 게 없으니 몇 초 만에 조용히 끝난다.
+          fetch-depth: 0
 
       - name: Run Claude Code Review
         id: claude-review
