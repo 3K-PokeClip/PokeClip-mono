@@ -118,7 +118,8 @@ public class TokenService {
             // 봉쇄가 없었는데도 revokedSessions=3이 남아 운영자가 조사를 멈춘다.
             logAfterCommit(() -> log.warn("auth.token.reuse_detected userId={} revokedSessions={}",
                     reusedBy, revoked));
-            throw new AuthException(AuthFailure.REFRESH_TOKEN_REUSED, "이미 사용된 refresh 토큰이다");
+            throw new AuthException(AuthFailure.REFRESH_TOKEN_REUSED,
+                    "유예 창을 넘겨 재사용된 refresh 토큰이다 — 이 사용자의 세션을 전부 끊었다");
         }
 
         if (stored.getExpiresAt().isBefore(Instant.now())) {
@@ -129,7 +130,11 @@ public class TokenService {
             // 사용자 행 락이 회전을 직렬화하므로 여기까지 오려면 락 밖에서 도는 것이
             // 끼어들어야 한다 — 지금은 logout뿐이다. 회전끼리 경합한 경우는 위의
             // revokedAt 검사에서 걸러진다.
-            throw new AuthException(AuthFailure.REFRESH_TOKEN_ALREADY_USED, "이미 사용된 refresh 토큰이다");
+            //
+            // 위의 REUSED와 메시지가 갈려야 한다. 둘 다 "이미 사용된 토큰"인데
+            // 조치가 정반대다 — 저쪽은 세션을 전부 끊었고 이쪽은 하나도 안 끊었다.
+            throw new AuthException(AuthFailure.REFRESH_TOKEN_ALREADY_USED,
+                    "로그아웃과 경합해 이미 취소된 refresh 토큰이다 — 끊은 세션은 없다");
         }
 
         // 커밋 뒤에 찍는다. 아래 issue()의 INSERT가 즉시 나가고 거기서 나는

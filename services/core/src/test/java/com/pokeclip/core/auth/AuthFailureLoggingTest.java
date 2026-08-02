@@ -60,7 +60,8 @@ class AuthFailureLoggingTest {
     /** 사유는 로그에만 있고 본문에는 없다. 이유를 알려주면 공격자에게 단서가 된다. */
     @Test
     void 응답_본문은_사유를_알려주지_않는다() {
-        assertThat(handler.handle(new AuthException(AuthFailure.REFRESH_TOKEN_REUSED, "이미 사용된 refresh 토큰이다"))
+        assertThat(handler.handle(new AuthException(AuthFailure.REFRESH_TOKEN_REUSED,
+                "유예 창을 넘겨 재사용된 refresh 토큰이다 — 이 사용자의 세션을 전부 끊었다"))
                 .getBody())
                 .containsExactly(java.util.Map.entry("message", "인증에 실패했습니다"));
     }

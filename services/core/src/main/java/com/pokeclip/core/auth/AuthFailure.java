@@ -18,6 +18,11 @@ public enum AuthFailure {
     /** 유예 창을 넘긴 재사용. 탈취를 의심해 세션을 전부 끊은 뒤 던진다. */
     REFRESH_TOKEN_REUSED,
     REFRESH_TOKEN_EXPIRED,
+    /**
+     * 사용자 행 락 밖에서 도는 logout이 끼어들어 이미 취소된 토큰.
+     * <b>세션을 하나도 끊지 않았다</b> — 여기가 REFRESH_TOKEN_REUSED와 갈리는 지점이다.
+     * 둘을 같은 것으로 읽으면 봉쇄가 있었는지를 반대로 판단한다.
+     */
     REFRESH_TOKEN_ALREADY_USED,
 
     ACCESS_TOKEN_SUBJECT_INVALID,
