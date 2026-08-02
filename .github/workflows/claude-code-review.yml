@@ -48,6 +48,12 @@ jobs:
           # 읽기 도구도 같이 적는다. --allowed-tools는 허용 목록이라 gh만 적으면
           # 코드를 읽지 못해 리뷰 자체가 얕아진다.
           claude_args: '--allowed-tools "Read,Grep,Glob,Bash(git:*),Bash(gh:*)"'
+          # ⚠️ 임시 진단용. 확인 끝나면 이 줄을 지운다.
+          # 거부 1건이 남아 있는데 로그가 개수만 주고 도구 이름을 안 준다.
+          # 세 번째 추측 대신 실물을 보려고 켠다. public 저장소라 리뷰 전문이
+          # Actions 로그에 공개로 남는다 — 대상 코드가 이미 공개이고 시크릿은
+          # Actions가 마스킹하지만, 오래 켜 둘 것은 아니다.
+          show_full_output: true
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
