@@ -4,6 +4,8 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -20,6 +22,8 @@ import java.util.regex.Pattern;
  * services/CLAUDE.md가 common에 웹 계층을 금지한다.
  */
 public class RequestIdFilter extends OncePerRequestFilter {
+
+    private static final Logger log = LoggerFactory.getLogger(RequestIdFilter.class);
 
     public static final String MDC_KEY = "requestId";
 
@@ -42,6 +46,21 @@ public class RequestIdFilter extends OncePerRequestFilter {
         MDC.put(MDC_KEY, requestId(request.getHeader(HEADER)));
         try {
             chain.doFilter(request, response);
+        } catch (Exception e) {
+            // 여기가 상관 ID를 붙일 수 있는 마지막 자리다. 예외가 이 필터 밖으로
+            // 나가면 톰캣이 스택트레이스를 찍는데, 그때는 아래 finally가 MDC를
+            // 이미 비운 뒤다. 이어서 도는 ERROR 디스패치도 OncePerRequestFilter의
+            // shouldNotFilterErrorDispatch()가 기본 true라 이 필터를 건너뛴다.
+            // 두 경로 다 상관 ID가 없어, 500이야말로 추적이 끊기는 자리가 된다.
+            //
+            // 예외 메시지도 스택트레이스도 찍지 않는다 — AuthExceptionHandler가
+            // causeType만 남기는 것과 같은 이유다. RestClientResponseException의
+            // getMessage()에는 구글 응답 본문이 붙어 온다.
+            //
+            // 다시 던진다. 삼키면 500이 200이 되고, 이 로그는 그것대로 거짓이 된다.
+            log.error("request.failed method={} uri={} causeType={}",
+                    request.getMethod(), request.getRequestURI(), e.getClass().getSimpleName());
+            throw e;
         } finally {
             // 톰캣이 스레드를 재사용한다. 안 지우면 다음 요청이 남의 id를 달고 찍힌다.
             MDC.remove(MDC_KEY);
