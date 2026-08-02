@@ -3,6 +3,7 @@ package com.pokeclip.core.auth.config;
 import com.pokeclip.core.auth.google.GoogleAuthProperties;
 import com.pokeclip.core.auth.token.JwtConfig;
 import com.pokeclip.core.auth.token.JwtProperties;
+import com.pokeclip.core.web.CorsProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -36,6 +37,7 @@ class RequiredPropertiesTest {
     void JWT_시크릿이_비어_있으면_부팅이_실패한다() {
         runner.withPropertyValues(jwt(""))
                 .withPropertyValues(google("id", "secret"))
+                .withPropertyValues(cors("http://localhost:3000"))
                 .run(context -> assertThat(context).hasFailed());
     }
 
@@ -51,6 +53,7 @@ class RequiredPropertiesTest {
 
         runner.withPropertyValues(jwt(almostLongEnough))
                 .withPropertyValues(google("id", "secret"))
+                .withPropertyValues(cors("http://localhost:3000"))
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(stackTraceOf(context.getStartupFailure()))
@@ -69,6 +72,7 @@ class RequiredPropertiesTest {
     void 구글_클라이언트_id가_비어_있으면_부팅이_실패한다() {
         runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
                 .withPropertyValues(google("", "secret"))
+                .withPropertyValues(cors("http://localhost:3000"))
                 .run(context -> assertThat(context).hasFailed());
     }
 
@@ -76,6 +80,7 @@ class RequiredPropertiesTest {
     void 구글_클라이언트_시크릿이_비어_있으면_부팅이_실패한다() {
         runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
                 .withPropertyValues(google("id", ""))
+                .withPropertyValues(cors("http://localhost:3000"))
                 .run(context -> assertThat(context).hasFailed());
     }
 
@@ -83,7 +88,49 @@ class RequiredPropertiesTest {
     void 전부_채워져_있으면_부팅한다() {
         runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
                 .withPropertyValues(google("id", "secret"))
+                .withPropertyValues(cors("http://localhost:3000"))
                 .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    /**
+     * hasFailed()만 보면 안 된다. 나중에 BoundProperties에 클래스를 더 넣다가
+     * 필수 값을 안 채우면 이 테스트가 <b>CORS와 무관한 이유로</b> 실패하면서
+     * 그대로 초록이 되고, 그 순간 이 파일의 보증이 조용히 사라진다.
+     * 그래서 실패가 CORS 때문인지까지 본다.
+     */
+    @Test
+    void CORS_허용_출처가_비어_있으면_부팅이_실패한다() {
+        runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                .withPropertyValues(google("id", "secret"))
+                .withPropertyValues(cors(""))
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(stackTraceOf(context.getStartupFailure()))
+                            .as("CORS가 아닌 다른 이유로 부팅이 실패했다")
+                            .contains("allowedOrigins");
+                });
+    }
+
+    /**
+     * allowCredentials=false라 CORS 명세상으로는 "*"가 허용된다. 아무도 안 막아준다는 뜻이다.
+     * 우리 API는 쿠키가 아니라 Authorization 헤더로 토큰을 받으므로, "*"가 들어가면
+     * 아무 사이트나 우리 API를 부를 수 있게 된다. 부팅에서 막는다.
+     *
+     * <p>막고 싶은 것이 컴팩트 생성자의 그 예외 하나이므로, 아무거나 터지면
+     * 통과하는 hasFailed()로는 부족하다. 메시지까지 못박는다.
+     * 거부된 출처가 스택트레이스에 평문으로 나오는 것은 괜찮다 — 허용 출처는 비밀이 아니다.
+     */
+    @Test
+    void CORS_허용_출처에_와일드카드가_있으면_부팅이_실패한다() {
+        runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                .withPropertyValues(google("id", "secret"))
+                .withPropertyValues(cors("*"))
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(stackTraceOf(context.getStartupFailure()))
+                            .as("와일드카드 차단이 아닌 다른 이유로 부팅이 실패했다")
+                            .contains("CORS 허용 출처에 와일드카드를 둘 수 없다");
+                });
     }
 
     private String[] jwt(String secret) {
@@ -102,7 +149,11 @@ class RequiredPropertiesTest {
                 "pokeclip.google.jwk-set-uri=https://www.googleapis.com/oauth2/v3/certs"};
     }
 
-    @EnableConfigurationProperties({JwtProperties.class, GoogleAuthProperties.class})
+    private String[] cors(String origins) {
+        return new String[]{"pokeclip.cors.allowed-origins=" + origins};
+    }
+
+    @EnableConfigurationProperties({JwtProperties.class, GoogleAuthProperties.class, CorsProperties.class})
     static class BoundProperties {
     }
 }

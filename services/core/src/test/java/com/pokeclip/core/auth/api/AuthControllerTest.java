@@ -1,6 +1,7 @@
 package com.pokeclip.core.auth.api;
 
 import com.pokeclip.core.auth.AuthException;
+import com.pokeclip.core.auth.AuthFailure;
 import com.pokeclip.core.auth.google.GoogleIdTokenVerifier;
 import com.pokeclip.core.auth.google.GoogleTokenClient;
 import com.pokeclip.core.auth.google.GoogleUser;
@@ -71,7 +72,7 @@ class AuthControllerTest extends IntegrationTestSupport {
 
     @Test
     void 잘못된_구글_코드는_401이고_계정이_생기지_않는다() throws Exception {
-        willThrow(new AuthException("구글 토큰 교환 실패"))
+        willThrow(new AuthException(AuthFailure.GOOGLE_TOKEN_EXCHANGE_FAILED, "구글 토큰 교환 실패"))
                 .given(googleTokenClient).exchangeCodeForIdToken(any());
 
         mockMvc.perform(post("/api/auth/google")
@@ -160,7 +161,7 @@ class AuthControllerTest extends IntegrationTestSupport {
 
     @Test
     void 인증_실패_본문은_이유를_알려주지_않는다() throws Exception {
-        willThrow(new AuthException("만료된 refresh 토큰이다"))
+        willThrow(new AuthException(AuthFailure.REFRESH_TOKEN_EXPIRED, "만료된 refresh 토큰이다"))
                 .given(googleTokenClient).exchangeCodeForIdToken(any());
 
         mockMvc.perform(post("/api/auth/google")

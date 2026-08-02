@@ -1,6 +1,7 @@
 package com.pokeclip.core.auth.google;
 
 import com.pokeclip.core.auth.AuthException;
+import com.pokeclip.core.auth.AuthFailure;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
@@ -43,11 +44,11 @@ public class GoogleTokenClient {
         } catch (RestClientException e) {
             // RestClient는 4xx·5xx에서 RestClientResponseException을 던진다.
             // 그것이 RestClientException의 하위 타입이라 여기서 잡힌다.
-            throw new AuthException("구글 토큰 교환 실패", e);
+            throw new AuthException(AuthFailure.GOOGLE_TOKEN_EXCHANGE_FAILED, "구글 토큰 교환 실패", e);
         }
 
         if (response == null || !(response.get("id_token") instanceof String idToken)) {
-            throw new AuthException("구글 응답에 id_token이 없다");
+            throw new AuthException(AuthFailure.GOOGLE_RESPONSE_MISSING_ID_TOKEN, "구글 응답에 id_token이 없다");
         }
         return idToken;
     }

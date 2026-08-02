@@ -23,6 +23,32 @@ spring:
     # 두 서버가 각자 기본 이름의 이력 테이블을 만들면 나중에 뜬 쪽이 부팅에 실패한다.
     table: flyway_schema_history_core
 
+  http:
+    clients:
+      # 단수형 spring.http.client.*는 4.0.0부터 deprecated고, 실제로 아무것도
+      # 바인딩하지 않는다 — 오타를 내면 에러 없이 조용히 무시되고 타임아웃이
+      # 사라진다. GoogleTimeoutTest가 바인딩 결과를 직접 확인하는 이유다.
+      # 전역 설정이다 — core의 모든 HTTP 클라이언트에 걸린다. 타임아웃은 인프라
+      # 설정이지 구글 인증 설정이 아니므로 여기가 맞는 자리다.
+      connect-timeout: 2s
+      read-timeout: 5s
+
+logging:
+  level:
+    # 이 로거를 DEBUG로 켜면 나가는 폼 본문이 통째로 찍힌다 —
+    # DefaultRestClient.logBody가 "Writing [" 뒤에 본문을 그대로 붙이고,
+    # LogFormatUtils를 안 거치므로 길이 상한이 없다. 구글 토큰 교환의
+    # client_secret이 잘리지도 않고 남는다(들어오는 DTO 쪽은 100자에서 잘리지만
+    # 43자 refresh 토큰은 그 안에 다 들어간다).
+    # 구체 로거 레벨이 root보다 우선한다. 그래서 LOGGING_LEVEL_ROOT=debug로 내려도
+    # 여기는 info다 — 방어를 "운영에서 DEBUG를 켜지 마라"는 사람의 규칙에 맡기지 않는다.
+    org.springframework.web: info
+  pattern:
+    # 기본 콘솔 형식의 레벨 자리에 상관 ID를 끼워 넣는다. 값이 없으면 빈칸이다.
+    # logback-spring.xml을 만들지 않는 이유는 배포가 없어 환경별 형식이
+    # 아직 필요 없어서다.
+    level: "%5p [%X{requestId:-}]"
+
 server:
   port: 8081
 
@@ -46,3 +72,8 @@ pokeclip:
     redirect-uri: ${GOOGLE_REDIRECT_URI:http://localhost:3000/auth/callback}
     token-uri: https://oauth2.googleapis.com/token
     jwk-set-uri: https://www.googleapis.com/oauth2/v3/certs
+  cors:
+    # 비면 부팅이 실패한다(CorsProperties). 기본값으로 localhost를 주지 않는 이유는
+    # 그러면 운영 배포에 localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데
+    # 로그는 조용하기 때문이다.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}

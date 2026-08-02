@@ -16,3 +16,5 @@ pokeclip:
     redirect-uri: http://localhost:3000/auth/callback
     token-uri: http://localhost/unused
     jwk-set-uri: http://localhost/unused
+  cors:
+    allowed-origins: http://localhost:3000

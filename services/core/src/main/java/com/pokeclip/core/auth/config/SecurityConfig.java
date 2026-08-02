@@ -3,6 +3,7 @@ package com.pokeclip.core.auth.config;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
@@ -17,6 +18,8 @@ public class SecurityConfig {
         return http
                 // 토큰 인증이라 쿠키를 쓰지 않는다. CSRF 방어의 전제가 없다.
                 .csrf(csrf -> csrf.disable())
+                // 이 줄이 없으면 CorsConfigurationSource 빈이 있어도 적용되지 않는다.
+                .cors(Customizer.withDefaults())
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth

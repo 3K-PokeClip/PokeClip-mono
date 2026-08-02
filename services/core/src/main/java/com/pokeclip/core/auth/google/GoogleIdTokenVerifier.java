@@ -1,6 +1,7 @@
 package com.pokeclip.core.auth.google;
 
 import com.pokeclip.core.auth.AuthException;
+import com.pokeclip.core.auth.AuthFailure;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtClaimValidator;
@@ -43,7 +44,7 @@ public class GoogleIdTokenVerifier {
         try {
             jwt = decoder.decode(idToken);
         } catch (JwtException e) {
-            throw new AuthException("구글 id_token 검증 실패", e);
+            throw new AuthException(AuthFailure.GOOGLE_ID_TOKEN_INVALID, "구글 id_token 검증 실패", e);
         }
 
         // email_verified를 보지 않는다. 계정 식별은 sub로만 하고 이메일은 표시용이라
