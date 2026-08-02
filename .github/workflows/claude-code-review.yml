@@ -42,7 +42,20 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          # 스킬은 지적이 없으면 아무것도 안 올린다("No buffered inline comments").
+          # 그러면 "리뷰가 돌았는데 깨끗했다"와 "리뷰가 아예 안 돌았다"가 화면에서
+          # 구분되지 않는다 — 실제로 그 둘을 헷갈려 워크플로를 다섯 번 고쳤다.
+          # 그래서 결과와 무관하게 요약 코멘트를 반드시 남기게 한다.
+          prompt: |
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+
+            리뷰가 끝나면 `gh pr comment ${{ github.event.pull_request.number }}` 로
+            요약 코멘트를 **반드시 하나** 남겨라. 지적 유무와 상관없이 남긴다.
+
+            - 지적이 있으면: 심각도별 건수와 한 줄 요약. 상세는 인라인 코멘트에 있으니 반복하지 않는다
+            - 지적이 없으면: "지적 없음"을 명시하고, 무엇을 봤는지 한두 줄로 적는다.
+              무엇을 안 봤는지도 적으면 더 좋다
+            - 한국어로 쓴다. 인사말·사과·칭찬은 쓰지 않는다
           # claude_args를 주지 않는다. --allowed-tools는 허용 목록이라, 손으로 적는
           # 순간 안 적은 도구가 전부 막힌다. 실제로 그 목록에 Skill을 빠뜨려
           # 리뷰 스킬 자체가 차단됐고(거부 16→1, 그 1이 Skill이었다), Skill을
