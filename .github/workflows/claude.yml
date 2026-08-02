@@ -20,8 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      # @claude를 부르면 답을 코멘트로 남긴다. read면 그 답을 못 남긴다.
+      pull-requests: write
+      issues: write
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
     steps:
