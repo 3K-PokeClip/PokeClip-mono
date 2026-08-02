@@ -155,8 +155,13 @@ public class TokenService {
                 .ifPresent(token -> {
                     // 이미 죽은 토큰이면 0행이다. 아무것도 안 끊고 "끊었다"를 남기면
                     // 재시도·두 번 클릭이 로그아웃 사건 두 건으로 부풀려진다.
+                    //
+                    // 커밋 뒤에 찍는 이유는 rotated·reuse_detected와 같다. 커밋이
+                    // 실패하면 토큰은 살아 있는데 auth.logout만 남아, "로그아웃했는데
+                    // 왜 옛 토큰이 먹히냐" 조사에서 거짓 알리바이가 된다.
                     if (refreshTokenRepository.revokeIfAlive(token.getId(), Instant.now()) == 1) {
-                        log.info("auth.logout userId={}", token.getUserId());
+                        Long loggedOut = token.getUserId();
+                        logAfterCommit(() -> log.info("auth.logout userId={}", loggedOut));
                     }
                 });
     }

@@ -19,6 +19,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -33,6 +35,7 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final JdbcTemplate jdbcTemplate;
+    private final PlatformTransactionManager transactionManager;
 
     @MockitoBean GoogleTokenClient googleTokenClient;
     @MockitoBean GoogleIdTokenVerifier googleIdTokenVerifier;
@@ -43,12 +46,14 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
     AuthEventLoggingTest(AuthService authService, TokenService tokenService,
                          UserRepository userRepository,
                          RefreshTokenRepository refreshTokenRepository,
-                         JdbcTemplate jdbcTemplate) {
+                         JdbcTemplate jdbcTemplate,
+                         PlatformTransactionManager transactionManager) {
         this.authService = authService;
         this.tokenService = tokenService;
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
         this.jdbcTemplate = jdbcTemplate;
+        this.transactionManager = transactionManager;
     }
 
     @BeforeEach
@@ -128,6 +133,28 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
 
         try (LogCaptor captor = new LogCaptor()) {
             tokenService.logout(issued.refreshToken());
+
+            assertThat(captor.levelOf("auth.logout")).isNull();
+        }
+    }
+
+    /**
+     * 커밋되지 않았으면 실제로 끊긴 세션이 없다. 그때 남은 auth.logout 한 줄은
+     * "로그아웃했는데 왜 옛 토큰이 먹히냐" 조사에서 거짓 알리바이가 된다.
+     *
+     * <p>롤백을 만드는 지점으로 바깥 트랜잭션을 고른 이유: logout은 revoke 뒤에
+     * 부르는 코드가 없어, 회전 쪽처럼 커밋 전 구간에 예외를 끼워 넣을 자리가 없다.
+     * 검사하려는 것이 커밋 여부 하나뿐이라 이것으로 충분하다.
+     */
+    @Test
+    void 로그아웃이_롤백되면_남지_않는다() {
+        TokenPair issued = authService.loginWithGoogle("code-1");
+
+        try (LogCaptor captor = new LogCaptor()) {
+            new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                tokenService.logout(issued.refreshToken());
+                status.setRollbackOnly();
+            });
 
             assertThat(captor.levelOf("auth.logout")).isNull();
         }
