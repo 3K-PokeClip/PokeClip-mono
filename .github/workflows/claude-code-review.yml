@@ -43,11 +43,15 @@ jobs:
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          # 리뷰 결과를 PR에 남기려면 gh를 쓸 수 있어야 한다. 안 열면 리뷰는 다
-          # 하고도(6분 19초·9턴·$1.62) 결과를 못 올린다 — permission_denials_count=16.
-          # 읽기 도구도 같이 적는다. --allowed-tools는 허용 목록이라 gh만 적으면
-          # 코드를 읽지 못해 리뷰 자체가 얕아진다.
-          claude_args: '--allowed-tools "Read,Grep,Glob,Bash(git:*),Bash(gh:*)"'
+          # --allowed-tools는 허용 목록이다. 여기 없는 도구는 전부 막힌다.
+          #
+          # Skill이 맨 앞인 이유: prompt의 /code-review:code-review가 Skill 호출이다.
+          # 이걸 빠뜨리면 리뷰 스킬 자체가 차단되고, Claude가 Read·Grep으로 흉내만
+          # 내다 끝난다 — 결과를 PR에 올리는 것도 스킬이 하는 일이라 코멘트가 0이 된다.
+          # 잡은 성공으로 끝나서 실패로 보이지도 않는다.
+          #
+          # gh는 그 결과를 PR에 남기는 데 쓴다. 읽기 도구가 없으면 리뷰가 얕아진다.
+          claude_args: '--allowed-tools "Skill,Read,Grep,Glob,Bash(git:*),Bash(gh:*)"'
           # ⚠️ 임시 진단용. 확인 끝나면 이 줄을 지운다.
           # 거부 1건이 남아 있는데 로그가 개수만 주고 도구 이름을 안 준다.
           # 세 번째 추측 대신 실물을 보려고 켠다. public 저장소라 리뷰 전문이
