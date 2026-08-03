@@ -66,6 +66,10 @@ type Options struct {
 	IdleTimeout time.Duration
 	// Settle 은 H5 와 correctTail 이 크기 안정을 기다릴 때 쓰는 설정이다.
 	Settle recording.SettleOptions
+	// SegmentRoot 는 훅이 준 세그먼트 경로를 정본화할 때 쓰는 기준 루트다(= SEGMENT_ROOT).
+	// 워처와 같은 값이어야 두 채널이 같은 local_path 문자열을 만든다(GH7).
+	// 기본값을 두지 않는다 — 워처 루트와 한 곳에서 맞추는 것이 config.Load 의 책임이다.
+	SegmentRoot string
 }
 
 // DefaultOptions 는 설계 2.4절의 기본값이다.
@@ -111,6 +115,26 @@ type Indexer struct {
 	// warnedRejected 는 화이트리스트를 통과하지 못한 디렉토리에 대해 WARN 을
 	// 한 번만 내기 위한 표시다. 재스캔은 5분마다 도는데 매번 경고하면 소음이 된다.
 	warnedRejected map[string]bool
+
+	// --- 훅 세션 경계 상태(ADR-027). 전부 프로세스 메모리에만 있다. ---
+	//
+	// 세 맵의 키 계약: **세션 훅의 MTX_PATH 원문 문자열**이며, 소비 측 peekBreak 의 조회 키는
+	// seg.StreamID(= recording.ParseSegmentPath 가 파일 경로의 디렉토리 부분에서 뽑은 값)다.
+	// 두 문자열이 바이트 동일해야 GH1 이 동작한다 — 하나라도 어긋나면 무장은 되지만 영원히
+	// 소비되지 않는다(조용한 미탐 + 큐 누수). 그래서 HandleHook 은 ev.StreamID 를
+	// **정규화·변형하지 않는다**(Clean·Trim·소문자화 금지).
+	//
+	// 등식의 성립 근거는 단일 레벨 %path 전제다. recordPath 가 /recordings/%path/... 이므로
+	// %path 가 곧 스트림 디렉토리 1레벨이고, name.go 의 화이트리스트가 슬래시를 허용하지 않아
+	// 중첩 %path 는 애초에 인덱싱되지 않는다(= 새 실패 모드가 아니라 범위 밖).
+
+	// pendingOffline 은 아직 짝지어지지 않은 offline 훅이다(스트림별 1건, 더 늦은 것만 유지).
+	pendingOffline map[string]sessionMark
+	// lastOnlineAt 은 스트림별 online watermark 다 — 이보다 이른 offline 은 stale 로 버린다.
+	lastOnlineAt map[string]time.Time
+	// breaks 는 무장된 세션 경계 **큐**다(OnlineAt 오름차순).
+	// 단일 포인터면 연쇄 재접속에서 앞 경계가 덮여 영구 미탐이 되므로 큐로 둔다.
+	breaks map[string][]sessionBreak
 }
 
 // New 는 인덱서를 만든다. w 에는 *recording.Watcher 를 그대로 넘긴다.
@@ -129,6 +153,9 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter, opt Options
 		reprobeDisabled: map[string]bool{},
 		poisonStreak:    map[string]int{},
 		warnedRejected:  map[string]bool{},
+		pendingOffline:  map[string]sessionMark{},
+		lastOnlineAt:    map[string]time.Time{},
+		breaks:          map[string][]sessionBreak{},
 	}
 }
 
