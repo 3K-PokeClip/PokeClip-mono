@@ -3,7 +3,9 @@ package upload
 import (
 	"context"
 	"io"
+	"io/fs"
 	"log/slog"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -136,6 +138,15 @@ type Uploader struct {
 
 	// lastAttemptErr 는 브레이커에 실을 마지막 오류다. 워커 고루틴 하나만 만진다.
 	lastAttemptErr error
+
+	// statFile 은 열린 파일의 크기를 재는 손잡이다. 프로덕션에서는 언제나 (*os.File).Stat 이다.
+	//
+	// 필드로 둔 이유는 오직 테스트다. 유효한 fd 의 fstat 은 EBADF 말고 실패할 길이 거의
+	// 없는데, [2](b)의 PUT 전 측정은 Open 과 Stat 사이에 테스트가 낄 틈이 없고 [3] 꼬리
+	// 재측정의 fd 는 밖으로 노출되지 않는다. 오류 분기 셋을 죽은 코드로 두는 것보다
+	// 이 한 줄을 두는 편이 낫다 — 열기 손잡이(Options.Root)와 달리 어떤 시그니처도
+	// 인터페이스로 번지지 않는다.
+	statFile func(*os.File) (fs.FileInfo, error)
 }
 
 // New 는 업로더를 만든다. 고루틴은 아직 뜨지 않는다.
@@ -148,15 +159,16 @@ func New(st index.UploadStore, put Putter, opt Options, log *slog.Logger) *Uploa
 // 느리고 흔들린다. 공개 시그니처는 그대로 둔 채 이음매를 여기 하나만 낸다.
 func newWithClock(st index.UploadStore, put Putter, opt Options, log *slog.Logger, now func() time.Time) *Uploader {
 	return &Uploader{
-		st:      st,
-		put:     put,
-		opt:     opt,
-		log:     log,
-		now:     now,
-		gate:    newGates(opt, now),
-		brk:     newBreaker(opt, log, now),
-		queue:   make(chan job, opt.QueueLen),
-		results: make(chan Result, opt.ResultBufLen),
+		st:       st,
+		put:      put,
+		opt:      opt,
+		log:      log,
+		now:      now,
+		gate:     newGates(opt, now),
+		brk:      newBreaker(opt, log, now),
+		queue:    make(chan job, opt.QueueLen),
+		results:  make(chan Result, opt.ResultBufLen),
+		statFile: (*os.File).Stat,
 	}
 }
 

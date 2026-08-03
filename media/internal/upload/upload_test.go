@@ -275,3 +275,24 @@ func TestLiveOriginCarriesZeroSweepRound(t *testing.T) {
 		t.Errorf("live 로그의 origin/sweep_round 가 계약과 다르다:\n%s", buf.String())
 	}
 }
+
+// tq-9 — 종료 후에는 접수가 반드시 거부된다.
+// true 를 돌려주면 인덱서가 requested 를 기록하는데 그 작업은 영원히 처리되지 않는다.
+func TestRequestUploadIsRejectedAfterShutdown(t *testing.T) {
+	u, _, dir := newTestUploader(t, &fakeUploadStore{}, &fakePutter{}, nil)
+	path := writeSegment(t, dir, "demo", "seg.mp4", 16)
+	target := newTarget("demo", 1, path, 16, false)
+
+	u.Start(context.Background())
+	if !u.RequestUpload(target) {
+		t.Fatal("기동 중 접수가 거부됐다")
+	}
+	u.Shutdown()
+
+	if u.RequestUpload(newTarget("demo", 2, path, 16, false)) {
+		t.Error("종료 후 접수가 허용됐다")
+	}
+	if got := u.enqueue(target, OriginSweep); got != EnqueueRejected {
+		t.Errorf("종료 후 enqueue = %v, want Rejected", got)
+	}
+}

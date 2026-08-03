@@ -237,7 +237,7 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	defer f.Close()
 
 	// (b) 크기 — 오류를 버리지 않는다. fi 를 무조건 역참조하면 nil panic 이다.
-	fi, err := f.Stat()
+	fi, err := u.statFile(f)
 	if err != nil {
 		lg.Warn("upload_stat_failed", "stage", "pre", "err", err.Error())
 		return attemptResult{outcome: outcomeNeutral}
@@ -278,7 +278,7 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	// (e) 같은 fd 로 다시 잰다. 경로가 아니라 열린 inode 를 재므로 경로 경합이 없다.
 	//     이 두 분기는 백오프에 등록하지 않는다 — "파일이 방금 바뀌었다"는 양의 증거를
 	//     본 경우이고, M-1 표에 없는 분기다(C10).
-	fi2, err := f.Stat()
+	fi2, err := u.statFile(f)
 	if err != nil {
 		lg.Warn("upload_stat_failed", "stage", "post", "err", err.Error())
 		return attemptResult{outcome: outcomeNeutral}
@@ -398,7 +398,7 @@ func (u *Uploader) recheckTail(j job, rel string, lg *slog.Logger) (bool, outcom
 	}
 	defer f.Close()
 
-	fi, err := f.Stat()
+	fi, err := u.statFile(f)
 	if err != nil {
 		lg.Warn("upload_stat_failed", "stage", "tail_recheck", "err", err.Error())
 		u.gate.registerFailure(k)

@@ -61,6 +61,32 @@ func TestTailSizeMismatchUploadsNothing(t *testing.T) {
 	if got, want := rec.attrs["file_bytes"], int64(200); got != want {
 		t.Errorf("file_bytes = %v, want %v", got, want)
 	}
+	// 레벨이 계약이다 — 스위프 경로의 보류는 "오래 안 풀린다"는 신호라 WARN 이다.
+	if rec.level != slog.LevelWarn {
+		t.Errorf("레벨 = %v, want WARN (origin=sweep)", rec.level)
+	}
+}
+
+// ①-b — 같은 판정이라도 실시간 경로에서는 흔한 정상 상황이라 DEBUG 다.
+// 여기서 WARN 을 내면 조각마다 경고가 떠 "업로더 기인 WARN 0건" 판정이 무너진다.
+func TestTailSizeMismatchIsDebugOnLivePath(t *testing.T) {
+	st := &fakeUploadStore{}
+	put := &fakePutter{}
+	u, cap, dir := newWorkerUploader(t, st, put, nil)
+	path := writeSegment(t, dir, "demo", "seg.mp4", 200)
+
+	got := u.processTarget(job{target: newTarget("demo", 7, path, 128, true), origin: OriginLive})
+
+	if got != outcomeNeutral {
+		t.Errorf("outcome = %v, want neutral", got)
+	}
+	rec := cap.one(t, "tail_still_growing")
+	if rec.level != slog.LevelDebug {
+		t.Errorf("레벨 = %v, want DEBUG (origin=live)", rec.level)
+	}
+	if n := len(put.putCalls()); n != 0 {
+		t.Errorf("PUT %d회, want 0회", n)
+	}
 }
 
 // ② — PUT 이 끝난 뒤 파일이 자랐다면 마킹하지 않는다(예방 성공 신호).
@@ -583,4 +609,121 @@ func TestDeferredStreakAppearsInLog(t *testing.T) {
 			t.Errorf("%s 가 %d건 나왔다 — 임계 초과는 필드로만 드러낸다", name, n)
 		}
 	}
+}
+
+// tq-4 / ⑯·⑱ — f.Stat 오류 3분기. 어디서 나든 nil 역참조 없이 neutral 로 끝나고,
+// 마킹이 없어 행은 pending 으로 남는다.
+//
+// 이음매를 쓰는 이유: 유효한 fd 의 fstat 은 EBADF 말고는 사실상 실패하지 않는데,
+// [2](b)의 pre 는 Open 과 Stat 사이에 테스트가 낄 틈이 없고 [3]의 fd 는 테스트에
+// 노출되지 않는다. 셋 다 죽은 코드로 두는 것보다 이 필드 하나가 낫다.
+func TestStatFailureNeverMarksAndNeverPanics(t *testing.T) {
+	cases := []struct {
+		name string
+		// failOn 은 몇 번째 Stat 호출을 실패시킬지다.
+		//   1 = [2](b) PUT 전 / 2 = [2](e) PUT 후 재측정 / 5 = [3] 꼬리 재측정
+		failOn   int
+		putFails bool
+		isTail   bool
+		wantStat string
+	}{
+		{"PUT_전", 1, false, false, "pre"},
+		{"PUT_후_재측정", 2, false, false, "post"},
+		{"꼬리_재측정", 5, true, true, "tail_recheck"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st := &fakeUploadStore{}
+			put := &fakePutter{}
+			if c.putFails {
+				put.fn = func(context.Context, string, io.Reader, int64) error {
+					return errors.New("항상 실패")
+				}
+			}
+			u, cap, dir := newWorkerUploader(t, st, put, nil)
+			path := writeSegment(t, dir, "demo", "seg.mp4", 128)
+
+			var calls int
+			real := u.statFile
+			u.statFile = func(f *os.File) (fs.FileInfo, error) {
+				calls++
+				if calls == c.failOn {
+					return nil, syscall.EBADF
+				}
+				return real(f)
+			}
+
+			got := runTarget(t, u, newTarget("demo", 7, path, 128, c.isTail))
+
+			if got != outcomeNeutral {
+				t.Errorf("outcome = %v, want neutral", got)
+			}
+			rec := cap.one(t, "upload_stat_failed")
+			if rec.attrs["stage"] != c.wantStat {
+				t.Errorf("stage = %v, want %q", rec.attrs["stage"], c.wantStat)
+			}
+			up, fl := st.markCalls()
+			if len(up)+len(fl) != 0 {
+				t.Errorf("마킹 %d건, want 0건 — 판정 재료가 없으면 pending 으로 둔다", len(up)+len(fl))
+			}
+			select {
+			case res := <-u.results:
+				t.Errorf("Result 가 왔다: %+v", res)
+			default:
+			}
+		})
+	}
+}
+
+// tq-7 — [0] 대상 검증은 브레이커 판정보다 앞이다.
+// 순서가 뒤집히면 검증도 못 통과할 행이 HalfOpen 의 단 한 번뿐인 probe 를 태워
+// 실제 복구 판정을 계속 미룬다.
+func TestInvalidTargetDoesNotConsumeHalfOpenProbe(t *testing.T) {
+	u, _, dir := newWorkerUploader(t, &fakeUploadStore{}, &fakePutter{}, func(o *Options) {
+		o.CircuitMax = 1
+		o.CircuitCooldown = time.Millisecond
+	})
+	ok := writeSegment(t, dir, "demo", "seg.mp4", 64)
+
+	u.brk.record(outcomeHard, errors.New("boom"))
+	time.Sleep(5 * time.Millisecond)
+	if got := u.brk.current(); got != circuitHalfOpen {
+		t.Fatalf("준비 실패: state = %v, want HalfOpen", got)
+	}
+
+	// bytes 가 0 이라 [0] 에서 거부된다.
+	bad := newTarget("demo", 7, ok, 0, false)
+	if got := runTarget(t, u, bad); got != outcomeNeutral {
+		t.Fatalf("outcome = %v, want neutral", got)
+	}
+
+	if u.brk.probeUsed {
+		t.Error("검증 실패 행이 probe 를 소비했다")
+	}
+	if !u.brk.allowWork(targetKey{"demo", 8}) {
+		t.Error("정상 행이 probe 를 쓰지 못한다 — 반열림 복구 판정이 미뤄진다")
+	}
+}
+
+// tq-8 — 통지 채널이 가득 차면 판정을 버린다. 여기서 막히면 워커가 서고,
+// 종료가 무기한 대기가 되어 G18″ 이 무너진다. 커서 동기화는 최선 노력이다(L7).
+func TestSendResultDropsWhenChannelFull(t *testing.T) {
+	u, cap, dir := newWorkerUploader(t, &fakeUploadStore{}, &fakePutter{}, func(o *Options) {
+		o.ResultBufLen = 1
+	})
+	path := writeSegment(t, dir, "demo", "seg.mp4", 128)
+	u.results <- Result{StreamID: "other", Seq: 1, State: index.UploadStateUploaded} // 자리를 미리 채운다
+
+	done := make(chan outcome, 1)
+	go func() { done <- runTarget(t, u, newTarget("demo", 7, path, 128, false)) }()
+
+	select {
+	case got := <-done:
+		if got != outcomeSuccess {
+			t.Errorf("outcome = %v, want success — 통지 실패가 업로드 결과를 바꾸면 안 된다", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("통지에서 막혔다 — 워커가 서고 종료가 무기한 대기가 된다")
+	}
+	cap.one(t, "upload_mark_skipped")
 }

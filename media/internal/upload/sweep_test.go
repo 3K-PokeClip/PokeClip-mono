@@ -2,9 +2,12 @@ package upload
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -273,7 +276,12 @@ func TestSweepDoesNotRewindCursorWhenStage2AbortsAtFirstRow(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		u.gate.quarantine(targetKey{st.rows[i].target.StreamID, st.rows[i].target.Seq})
 	}
-	next, _ := u.sweepOnce(context.Background(), resume, stalled)
+	next, stalled2 := u.sweepOnce(context.Background(), resume, stalled)
+	// tq-6 — 정상 회차는 카운터를 0 으로 되돌린다. 리셋이 없으면 한 번 막힌 뒤로
+	// sweep_cursor_stalled 가 영구 발화해 경보가 의미를 잃는다.
+	if stalled2 != 0 {
+		t.Errorf("정상 회차 뒤 stalled = %d, want 0", stalled2)
+	}
 	if !cursorLess(start, next) {
 		t.Errorf("다음 회차 커서 = %+v, want %+v 보다 뒤", next, start)
 	}
@@ -554,4 +562,141 @@ func assertNoUploaderErrorOrWarn(t *testing.T, cap *logCapture) {
 			t.Errorf("종료 경로인데 %v %s 가 나왔다 (%v)", r.level, r.msg, r.attrs)
 		}
 	}
+}
+
+// tq-3 — 표 끝에 닿으면 커서가 순환한다.
+//
+// 순환이 없으면 커서가 마지막 위치에 고정돼 그 뒤로 들어오는 구간이 영구 기아가 된다.
+// 회차는 계속 "정상"으로 끝나므로 cursor_stalled_rounds 에도 걸리지 않는다 — 무관측 사고다.
+func TestSweepWrapsCursorAtEndOfTable(t *testing.T) {
+	st := newPageStore(3, "s") // SweepLimit(4)보다 작다 = 한 페이지에서 끝이 보인다
+	u, cap := newSweepUploader(t, st, nil)
+	for _, r := range st.rows {
+		u.gate.quarantine(targetKey{r.target.StreamID, r.target.Seq})
+	}
+
+	resume, stalled := u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+
+	if !resume.IsZero() {
+		t.Errorf("커서 = %+v, want zero — 끝에 닿으면 처음으로 돌아가야 한다", resume)
+	}
+	if stalled != 0 {
+		t.Errorf("stalled = %d, want 0", stalled)
+	}
+	var wrapped bool
+	for _, r := range cap.find("upload_sweep") {
+		if r.attrs["stage"] == int64(2) && r.attrs["cursor_wrapped"] == true {
+			wrapped = true
+		}
+	}
+	if !wrapped {
+		t.Errorf("cursor_wrapped=true 요약이 없다 (%s)", cap.dump())
+	}
+}
+
+// tq-2 / ⑪-b — 스위퍼를 **실제 고루틴으로 띄워** 회차 ID 가 접수 시점 값으로 굳는지 본다.
+//
+// 회차 ID 를 워커가 공유 필드(u.sweepRound)에서 읽으면 데이터 레이스일 뿐 아니라, 값이
+// **출력 시점 회차**로 오염돼 AC4 의 r1−r0 가 조용히 틀린다(D-3 · R-b). 동기 호출만으로는
+// 스위퍼와 워커가 같은 고루틴이라 이 오염이 드러나지 않는다.
+//
+// 방법: 1회차에서 N행을 전부 접수시키고 그 뒤 회차는 빈 페이지만 돌린다. 워커는 느린
+// 마킹 때문에 여러 회차에 걸쳐 그 N건을 처리한다. 계약대로면 N건의 로그가 **전부
+// sweep_round=1** 이고, 공유 필드를 읽으면 뒤로 갈수록 값이 커진다.
+func TestWorkerLogsAdmissionRoundNotEmissionRound(t *testing.T) {
+	const rows = 8
+	root, dir := newRoot(t)
+
+	// 루트 안을 가리키되 실물이 없는 대상들이다 — [0] 검증은 통과하고 열기에서 ENOENT 가 난다.
+	targets := make([]index.UploadTarget, 0, rows)
+	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < rows; i++ {
+		sid := fmt.Sprintf("ghost-%d", i)
+		targets = append(targets, index.UploadTarget{
+			StreamID: sid, Seq: int64(i),
+			S3Key:     index.S3Key(sid, int64(i), base),
+			LocalPath: filepath.Join(dir, sid, "seg.mp4"),
+			Bytes:     100,
+		})
+	}
+
+	var served bool
+	st := &fakeUploadStore{}
+	st.onPending = func(_ context.Context, _ float64, _ int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		if served || !after.IsZero() {
+			return nil, after, nil // 2회차부터는 빈 페이지 — 회차만 계속 오른다
+		}
+		served = true
+		return targets, index.SweepCursor{StartWall: base, StreamID: "ghost-7", Seq: 7}, nil
+	}
+	// 마킹을 느리게 만들어 워커가 여러 회차에 걸쳐 처리하게 한다.
+	st.onMarkFailed = func(context.Context, string, int64, int64) (bool, error) {
+		time.Sleep(20 * time.Millisecond)
+		return true, nil
+	}
+
+	var buf syncBuffer
+	opt := DefaultOptions(root, dir)
+	opt.SweepEvery = 2 * time.Millisecond // 회차가 빠르게 오른다
+	opt.SweepLimit = 16
+	u := New(st, &fakePutter{}, opt, jsonLogger(&buf))
+
+	u.Start(context.Background())
+	waitFor(t, func() bool { return countJSONLogs(t, buf.String(), "upload_file_missing") == rows },
+		"워커가 8건을 모두 처리할 때까지")
+	u.Shutdown()
+
+	missing := findJSONLogs(t, buf.String(), "upload_file_missing")
+	if len(missing) != rows {
+		t.Fatalf("upload_file_missing = %d건, want %d건", len(missing), rows)
+	}
+	for i, r := range missing {
+		v, ok := r["sweep_round"]
+		if !ok {
+			t.Fatalf("%d번째 로그에 sweep_round 필드가 없다: %v", i+1, r)
+		}
+		if got := v.(float64); got != 1 {
+			t.Errorf("%d번째 upload_file_missing 의 sweep_round = %v, want 1 — "+
+				"접수 시점이 아니라 출력 시점 회차를 실었다", i+1, got)
+		}
+		if r["origin"] != "sweep" {
+			t.Errorf("%d번째 origin = %v, want sweep", i+1, r["origin"])
+		}
+	}
+
+	// 이 판정이 의미를 가지려면 그동안 회차가 실제로 여러 번 올라야 한다.
+	var maxRound float64
+	for _, r := range findJSONLogs(t, buf.String(), "upload_sweep") {
+		if v, ok := r["sweep_round"].(float64); ok && v > maxRound {
+			maxRound = v
+		}
+	}
+	if maxRound < 3 {
+		t.Fatalf("스위퍼 최대 회차 = %v, want >= 3 — 회차가 안 올랐으면 오염을 가릴 수 없다", maxRound)
+	}
+}
+
+func findJSONLogs(t *testing.T, out, msg string) []map[string]any {
+	t.Helper()
+	var got []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("로그 줄이 JSON 이 아니다: %q (%v)", line, err)
+		}
+		if m["msg"] == msg {
+			got = append(got, m)
+		}
+	}
+	return got
+}
+
+func countJSONLogs(t *testing.T, out, msg string) int {
+	t.Helper()
+	return len(findJSONLogs(t, out, msg))
 }

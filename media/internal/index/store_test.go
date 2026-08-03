@@ -17,6 +17,22 @@ import (
 //
 //	set -a; . ./.env; set +a
 //	export PG_DSN="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POSTGRES_DB"
+//
+// TestMain 은 릴리스 게이트용 스위치다.
+//
+// 이 패키지의 SQL 통합 케이스는 PG_DSN 이 없으면 전부 skip 되는데, skip 은 go test 에서
+// 성공으로 집계된다 — DB 를 안 띄운 실행이 "녹색"으로 보이고 SQL 은 한 줄도 검증되지 않는다.
+// REQUIRE_PG=1 이면 그 상황을 실패로 바꾼다. 기본값(미설정)은 종전대로 skip 이라
+// DB 없는 개발 머신에서도 나머지 테스트가 그대로 돈다.
+func TestMain(m *testing.M) {
+	if os.Getenv("REQUIRE_PG") == "1" && os.Getenv("PG_DSN") == "" {
+		fmt.Fprintln(os.Stderr,
+			"REQUIRE_PG=1 인데 PG_DSN 이 비어 있다 — SQL 통합 케이스가 전량 skip 된다. 게이트 실패.")
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
+
 func newTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 
