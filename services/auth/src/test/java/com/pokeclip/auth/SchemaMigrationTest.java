@@ -29,7 +29,7 @@ class SchemaMigrationTest extends IntegrationTestSupport {
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
                 String.class);
 
-        assertThat(tables).contains("flyway_schema_history_core");
+        assertThat(tables).contains("flyway_schema_history_auth");
         assertThat(tables).doesNotContain("flyway_schema_history");
     }
 
