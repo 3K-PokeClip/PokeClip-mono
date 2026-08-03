@@ -9,8 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
 // Kind 는 훅 종류다.
@@ -111,6 +115,47 @@ func ParseLine(line []byte) (Event, error) {
 		SegmentPath:       raw.SegmentPath,
 		SegmentDurationMS: durationMS(raw.SegmentDuration),
 	}, nil
+}
+
+// ToSegment 는 KindSegmentComplete 를 완성 세그먼트로 바꾼다.
+//
+// 경로 정본화가 이 함수의 존재 이유다. MTX_SEGMENT_PATH 원문을 그대로 담지 않고
+// ① Clean → ② Rel(root) 로 루트 내부인지 검증(".." 이면 거부) → ③ Join(root, rel) 로
+// **워처와 동일한 방식으로 재조립**한 문자열을 Segment.Path 로 쓴다.
+//
+// 왜 이렇게까지 하는가: GH7(훅·파일 이중 인입 멱등)의 최후 방어선인
+// UNIQUE (stream_id, local_path) 는 문자열 비교다. 이중 슬래시나 "./" 같은 표기 차이
+// 하나만으로 같은 물리 파일에 행이 둘 생기고, 그러면 재생 타임라인에 4초가 중복되는데
+// seq 재사용·재정렬 금지 때문에 **사후 정정이 불가능**하다.
+// 워처 쪽 문자열은 filepath.WalkDir·fsnotify 가 주는 Join 형태이므로 그 형태에 맞춘다.
+//
+// 실패는 삼키지 않는다. 호출자가 hook_segment_path_rejected WARN 을 남기고 그 이벤트만 버린다.
+func ToSegment(root string, ev Event) (recording.Segment, error) {
+	if ev.Kind != KindSegmentComplete {
+		return recording.Segment{}, fmt.Errorf("세그먼트 훅이 아니다: kind=%d", ev.Kind)
+	}
+	if ev.SegmentPath == "" {
+		return recording.Segment{}, fmt.Errorf("MTX_SEGMENT_PATH 가 비었다 path=%q", ev.StreamID)
+	}
+
+	cleanRoot := filepath.Clean(root)
+	rel, err := filepath.Rel(cleanRoot, filepath.Clean(ev.SegmentPath))
+	if err != nil {
+		return recording.Segment{}, fmt.Errorf(
+			"루트 기준 상대 경로 계산 실패 root=%q path=%q: %w", root, ev.SegmentPath, err)
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return recording.Segment{}, fmt.Errorf("루트 %q 밖의 경로다: %q", cleanRoot, ev.SegmentPath)
+	}
+
+	// stream_id·start_wall 은 파일명이 정본이다 — MTX_PATH 를 믿지 않는다.
+	// 그래야 워처 경로와 완전히 같은 규칙(화이트리스트·파일명 형식)을 통과한다.
+	seg, err := recording.ParseSegmentPath(cleanRoot, filepath.Join(cleanRoot, rel))
+	if err != nil {
+		return recording.Segment{}, err
+	}
+	seg.Reason = recording.ReasonHook
+	return seg, nil
 }
 
 // durationMS 는 MTX_SEGMENT_DURATION 을 밀리초로 바꾼다. 해석 불가면 0(미상)이다.
