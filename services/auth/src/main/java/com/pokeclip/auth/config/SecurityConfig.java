@@ -27,6 +27,10 @@ public class SecurityConfig {
                         // 경로이고, 재발급·로그아웃은 access가 만료된 뒤에도 되어야 한다.
                         .requestMatchers("/api/auth/google", "/api/auth/refresh", "/api/auth/logout")
                         .permitAll()
+                        // 플러그인은 로그인하지 않는다. 코드 자체가 자격증명이다(ADR-019).
+                        // /api/auth/refresh에 이은 두 번째 permitAll이라 같은 함정을
+                        // 공유한다 — 이 경로의 실패 로그에 건수로 알람을 걸면 안 된다.
+                        .requestMatchers("/api/stream-keys/pairing-codes/exchange").permitAll()
                         // 컨테이너가 400·404·405를 만들 때 요청을 /error로 ERROR 디스패치하는데,
                         // 시큐리티 체인은 그 디스패치에도 걸린다(AuthorizationFilter의
                         // filterErrorDispatch 기본값이 true다). 여기를 열지 않으면 미인증
