@@ -18,7 +18,14 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -157,6 +164,62 @@ class StreamKeyRotateTest extends IntegrationTestSupport {
 
         assertThat(streamKeyRepository.findByUserIdAndRevokedAtIsNull(user.getId())).isPresent();
         assertThat(streamKeyRepository.findAll()).hasSize(4);
+    }
+
+    /**
+     * 동시 재발급이 secret을 고아로 남기지 않는다.
+     *
+     * <p>읽기(previous) · 폐기(revokeAlive) · 삭제(staleRef)가 세 문장으로 갈려 있어
+     * 직렬화가 없으면 셋이 서로 다른 키를 가리킬 수 있다. R2가 previous=K0를 읽은 뒤
+     * R1이 커밋하면, READ COMMITTED에서 R2의 revokeAlive는 <b>R1이 방금 만든 K1</b>을
+     * 지우는데 삭제는 K0의 ref로 나간다 — <b>K1의 secret이 영영 안 지워진다.</b>
+     *
+     * <p>그래서 살아있는 키 개수만으로는 못 잡는다. 어느 쪽으로 갈리든 살아있는 키는
+     * 늘 하나이기 때문이다. <b>secrets 표의 행 수</b>가 이 결함을 드러내는 자리다.
+     */
+    @Test
+    void 동시에_재발급해도_secret이_고아로_남지_않는다() throws Exception {
+        User user = newUser();
+        streamKeyService.ensureKey(user.getId());
+        String bearer = bearer(user);
+        int threads = 8;
+        CountDownLatch start = new CountDownLatch(1);
+
+        try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
+            List<Callable<Integer>> jobs = IntStream.range(0, threads)
+                    .<Callable<Integer>>mapToObj(i -> () -> {
+                        start.await();
+                        return mockMvc.perform(post("/api/stream-keys/rotate")
+                                        .header("Authorization", bearer))
+                                .andReturn().getResponse().getStatus();
+                    })
+                    .toList();
+
+            // submit → countDown → get. invokeAll은 전부 끝날 때까지 블록하는데
+            // 작업들이 start.await()에 걸려 있어 countDown이 뒤면 데드락이다.
+            List<Future<Integer>> futures = jobs.stream().map(pool::submit).toList();
+            start.countDown();
+            List<Integer> statuses = futures.stream().map(f -> {
+                try {
+                    return f.get();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }).toList();
+
+            // 직렬화되면 각 요청이 자기 차례에 살아있는 키를 새로 읽으므로 전부 성공한다.
+            // 락이 없으면 서로의 키를 지우거나 못 찾아 404·500이 섞인다.
+            assertThat(statuses)
+                    .as("동시 재발급이 서로를 밟았다")
+                    .containsOnly(200);
+            assertThat(streamKeyRepository.findByUserIdAndRevokedAtIsNull(user.getId()))
+                    .as("살아있는 키가 하나가 아니다")
+                    .isPresent();
+            Integer secrets = jdbc.queryForObject("SELECT count(*) FROM secrets", Integer.class);
+            assertThat(secrets)
+                    .as("고아 secret이 남았다. 폐기한 키와 삭제한 ref가 서로 다른 키다")
+                    .isEqualTo(1);
+        }
     }
 
     @Test

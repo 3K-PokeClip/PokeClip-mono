@@ -1,5 +1,6 @@
 package com.pokeclip.auth.streamkey;
 
+import com.pokeclip.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +31,7 @@ public class StreamKeyService {
     private final StreamKeyRepository streamKeyRepository;
     private final StreamKeyCreator streamKeyCreator;
     private final SecretStore secretStore;
+    private final UserRepository userRepository;
     private final SecureRandom random = new SecureRandom();
 
     /**
@@ -121,6 +123,17 @@ public class StreamKeyService {
      */
     @Transactional
     public Instant rotate(Long userId) {
+        // 같은 사용자의 재발급을 직렬화한다. 이 락이 없으면 읽기(previous)·폐기
+        // (revokeAlive)·삭제(staleRef)가 서로 다른 키를 가리킬 수 있다 — PostgreSQL
+        // READ COMMITTED에서 UPDATE는 문장 시작 시점의 스냅샷을 쓰므로, 경합 상대가
+        // 그 사이에 커밋한 새 키를 대상으로 잡는다. 그러면 남의 키를 폐기해 놓고
+        // 삭제는 아까 읽은 previous의 ref로 나가 secret이 고아로 남는다.
+        // 잠글 스트림키 행이 바뀌는 중이므로 사용자 행을 잠근다 —
+        // TokenService.rotate가 같은 이유로 같은 락을 쓴다.
+        userRepository.findByIdForUpdate(userId)
+                .orElseThrow(() -> new StreamKeyException(
+                        StreamKeyFailure.STREAM_KEY_NOT_FOUND, "사용자가 없다"));
+
         StreamKey previous = findAlive(userId)
                 .orElseThrow(() -> new StreamKeyException(
                         StreamKeyFailure.STREAM_KEY_NOT_FOUND, "폐기할 스트림키가 없다"));
