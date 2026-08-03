@@ -1,7 +1,9 @@
 rootProject.name = 'pokeclip-services'
 
-// 모듈 4개, 실행되는 서버는 3개다. common은 서버가 아니라 라이브러리다.
+// 모듈 6개, 실행되는 서버는 4개다. common·web-support는 서버가 아니라 라이브러리다.
 include 'common'
-include 'core'
+include 'web-support'
+include 'auth'
+include 'clip'
 include 'chat-collector'
 include 'chat-detector'

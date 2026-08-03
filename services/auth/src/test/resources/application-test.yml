@@ -1,0 +1,20 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    table: flyway_schema_history_auth
+
+pokeclip:
+  jwt:
+    secret: test-only-secret-key-at-least-32-bytes-long!!
+    access-token-ttl: PT30M
+    refresh-token-ttl: P14D
+  google:
+    client-id: test-client-id
+    client-secret: test-client-secret
+    redirect-uri: http://localhost:3000/auth/callback
+    token-uri: http://localhost/unused
+    jwk-set-uri: http://localhost/unused
+  cors:
+    allowed-origins: http://localhost:3000

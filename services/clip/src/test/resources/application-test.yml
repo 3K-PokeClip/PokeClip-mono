@@ -1,0 +1,10 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    table: flyway_schema_history_clip
+
+pokeclip:
+  cors:
+    allowed-origins: http://localhost:3000
