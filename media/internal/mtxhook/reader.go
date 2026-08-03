@@ -24,7 +24,9 @@ const eventBufSize = 256
 
 // 기본값들. 스풀 경로에는 기본값을 두지 않는다 — 빈 값이 "훅 어댑터 끔"이기 때문이다.
 const (
-	defaultPollInterval = 200 * time.Millisecond
+	// DefaultPollInterval 은 스풀 tail 주기의 기본값이다.
+	// **이 값이 유일한 집이다** — config 가 리터럴로 200ms 를 또 적으면 두 곳이 언젠가 어긋난다.
+	DefaultPollInterval = 200 * time.Millisecond
 	// defaultMaxLineBytes 는 **손상된 줄을 어디까지 참고 버릴지**의 안전 상한이다.
 	// 정상 줄의 상한은 writer 쪽 계약(1줄 < 4096B)이며 층이 다르다.
 	// 8192 = writer 상한의 2배 — 인터리브 흔적을 한 줄 분량은 참아 준다.
@@ -77,7 +79,7 @@ func NewReader(opt ReaderOptions) (*Reader, error) {
 		return nil, errors.New("훅 스풀 경로가 비었다 — 빈 값이면 Reader 를 아예 만들지 않아야 한다")
 	}
 	if opt.PollInterval <= 0 {
-		opt.PollInterval = defaultPollInterval
+		opt.PollInterval = DefaultPollInterval
 	}
 	if opt.MaxLineBytes <= 0 {
 		opt.MaxLineBytes = defaultMaxLineBytes

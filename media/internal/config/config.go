@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
@@ -93,12 +95,16 @@ func Load(env func(string) string) (Config, error) {
 
 	// HOOK_SPOOL_PATH 는 **withDefault 를 쓰지 않는다**(위 필드 주석 참조).
 	hookSpoolPath := strings.TrimSpace(env("HOOK_SPOOL_PATH"))
-	hookPollInterval, err := duration(env, "HOOK_POLL_INTERVAL", 200*time.Millisecond)
+	hookPollInterval, err := duration(env, "HOOK_POLL_INTERVAL", mtxhook.DefaultPollInterval)
 	if err != nil {
 		return Config{}, err
 	}
 
-	watch := recording.DefaultWatcherOptions(withDefault(env, "SEGMENT_ROOT", "/recordings"), nil)
+	// 루트는 **반드시 정본화해서** 담는다. 후행 슬래시가 붙으면 fsnotify 가 이중 슬래시
+	// 경로를 만들고 훅 채널은 Clean 된 경로를 만들어, 같은 물리 파일에 서로 다른
+	// local_path 로 행이 둘 생긴다. seq 재사용·재정렬 금지라 사후 정정이 불가능하다.
+	watch := recording.DefaultWatcherOptions(
+		filepath.Clean(withDefault(env, "SEGMENT_ROOT", "/recordings")), nil)
 	if watch.IdleTimeout, err = duration(env, "SEGMENT_IDLE_TIMEOUT", watch.IdleTimeout); err != nil {
 		return Config{}, err
 	}

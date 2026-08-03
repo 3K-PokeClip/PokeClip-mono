@@ -297,3 +297,32 @@ func TestHookDurationsRejectZeroAndNegative(t *testing.T) {
 		}
 	}
 }
+
+// SEGMENT_ROOT 는 정본화해서 담는다.
+//
+// 후행 슬래시가 붙으면 리눅스 fsnotify 가 "/recordings//demo/x.mp4" 같은 이중 슬래시
+// 경로를 만들고, 훅 채널은 Clean 을 거쳐 "/recordings/demo/x.mp4" 를 만든다. 두 문자열이
+// 갈리는 순간 UNIQUE(stream_id, local_path) 가 같은 물리 파일을 다른 파일로 보아
+// 행이 둘 생기며, seq 재사용·재정렬 금지 때문에 사후 정정이 불가능하다(치명).
+func TestSegmentRootIsCanonicalized(t *testing.T) {
+	for _, raw := range []string{"/recordings/", "/recordings//", "/recordings/./"} {
+		t.Run(raw, func(t *testing.T) {
+			env := minimalEnv()
+			env["SEGMENT_ROOT"] = raw
+
+			cfg, err := Load(envOf(env))
+			if err != nil {
+				t.Fatalf("예상 밖 에러: %v", err)
+			}
+			if cfg.Watcher.Root != "/recordings" {
+				t.Errorf("Watcher.Root = %q, want /recordings", cfg.Watcher.Root)
+			}
+			if cfg.Indexer.SegmentRoot != "/recordings" {
+				t.Errorf("Indexer.SegmentRoot = %q, want /recordings", cfg.Indexer.SegmentRoot)
+			}
+			if cfg.SegmentRoot != "/recordings" {
+				t.Errorf("SegmentRoot = %q, want /recordings", cfg.SegmentRoot)
+			}
+		})
+	}
+}
