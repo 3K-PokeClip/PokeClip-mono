@@ -97,11 +97,20 @@ func ParseLine(line []byte) (Event, error) {
 	if !ok {
 		return Event{}, fmt.Errorf("알 수 없는 훅 종류다: %q", raw.Kind)
 	}
-	if raw.AtUnixNano <= 0 {
-		return Event{}, fmt.Errorf("at_unix_nano 가 없거나 양수가 아니다: %d", raw.AtUnixNano)
-	}
 	if raw.Path == "" {
 		return Event{}, fmt.Errorf("MTX_PATH 가 비었다")
+	}
+	if err := checkAt(kind, raw.AtUnixNano); err != nil {
+		return Event{}, err
+	}
+	// 세션 훅의 MTX_PATH 는 breaks·pendingOffline·lastOnlineAt 맵의 **키**가 된다.
+	// 즉 외부 문자열이 그대로 맵 키가 되는 경로이므로 여기가 검증 지점이다.
+	// 소비 측 stream_id 와 같은 규칙을 통과하지 못하면 무장해 봐야 영원히 소비되지 않는다.
+	//
+	// segcomplete 는 제외한다 — 그쪽 stream_id 는 MTX_PATH 가 아니라 파일 경로에서 뽑으며
+	// ToSegment 안의 ParseSegmentPath 가 같은 화이트리스트로 이미 거른다.
+	if kind != KindSegmentComplete && !recording.ValidStreamID(raw.Path) {
+		return Event{}, fmt.Errorf("세션 훅의 MTX_PATH 가 허용된 stream_id 형태가 아니다: %q", raw.Path)
 	}
 	if kind == KindSegmentComplete && raw.SegmentPath == "" {
 		return Event{}, fmt.Errorf("segcomplete 인데 MTX_SEGMENT_PATH 가 비었다 path=%q", raw.Path)
@@ -158,6 +167,25 @@ func ToSegment(root string, ev Event) (recording.Segment, error) {
 	return seg, nil
 }
 
+// maxClockSkew 는 훅 시각이 현재보다 앞서 있어도 받아 줄 여유다.
+//
+// 상한이 필요한 이유: 먼 미래 시각(예: 2262년)이 online 으로 들어오면 watermark 가 그
+// 값으로 올라가 **이후 모든 정상 offline 이 stale 로 버려진다**. 프로세스가 사는 동안
+// 회복되지 않는 영구 오염이라 입력 경계에서 막는다.
+// 5분은 컨테이너 간 시계 오차로 설명되는 범위의 넉넉한 상한이다.
+const maxClockSkew = 5 * time.Minute
+
+// checkAt 은 훅 시각이 쓸 수 있는 범위인지 본다.
+func checkAt(kind Kind, nanos int64) error {
+	if nanos <= 0 {
+		return fmt.Errorf("at_unix_nano 가 없거나 양수가 아니다: %d", nanos)
+	}
+	if at := time.Unix(0, nanos); at.After(time.Now().Add(maxClockSkew)) {
+		return fmt.Errorf("at_unix_nano 가 먼 미래다(시계 오차 허용 %v 초과): %s", maxClockSkew, at.UTC())
+	}
+	return nil
+}
+
 // durationMS 는 MTX_SEGMENT_DURATION 을 밀리초로 바꾼다. 해석 불가면 0(미상)이다.
 //
 // 값 형식이 미확인(문서 미기재)이라 두 표기를 모두 받는다. 실패를 에러로 올리지 않는 이유는
@@ -169,7 +197,9 @@ func durationMS(raw string) int64 {
 	}
 	if secs, err := strconv.ParseFloat(raw, 64); err == nil {
 		ms := secs * 1000
-		if math.Abs(ms) > math.MaxInt64 {
+		// NaN·Inf 는 int64 변환 결과가 플랫폼마다 다르다(Go 명세상 미정의).
+		// arm64 는 0 을 주지만 amd64 는 최소 int64 를 주므로 반드시 명시적으로 막는다.
+		if math.IsNaN(ms) || math.IsInf(ms, 0) || math.Abs(ms) > math.MaxInt64 {
 			return 0
 		}
 		return int64(math.Round(ms))

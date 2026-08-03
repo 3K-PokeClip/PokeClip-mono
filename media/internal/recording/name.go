@@ -76,6 +76,15 @@ var ErrInvalidStreamID = errors.New("허용되지 않는 stream_id 형태다")
 // 깨지고, 훅 경계가 무장은 되지만 영원히 소비되지 않는 조용한 미탐이 된다.
 var streamIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
+// ValidStreamID 는 문자열이 stream_id 화이트리스트를 통과하는지 알려 준다.
+//
+// 훅 어댑터가 세션 훅의 MTX_PATH 를 검증할 때 쓴다. 정규식을 복제하지 않고 이 함수를
+// 거치게 하는 이유는, 규칙이 두 곳에 있으면 한쪽만 고쳐져 "무장은 되는데 영원히 소비되지
+// 않는" 조용한 미탐이 생기기 때문이다.
+func ValidStreamID(s string) bool {
+	return streamIDRe.MatchString(s)
+}
+
 // segmentNameRe 는 recordPath 의 %Y-%m-%d_%H-%M-%S-%f 를 그대로 옮긴 것이다(mediamtx.yml 31행).
 // 마지막 그룹(%f)의 자리수는 고정하지 않는다 — 자리수가 바뀌어도 흡수하기 위해서다(U6).
 var segmentNameRe = regexp.MustCompile(`^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})-(\d+)$`)

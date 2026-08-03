@@ -1,6 +1,7 @@
 package mtxhook
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -131,5 +132,67 @@ func TestParseLineKeepsStreamIDVerbatim(t *testing.T) {
 	}
 	if ev.StreamID != "Demo_Stream-01" {
 		t.Errorf("StreamID = %q, want %q (원문 그대로)", ev.StreamID, "Demo_Stream-01")
+	}
+}
+
+// 세션 훅의 MTX_PATH 는 breaks 맵의 **키**가 되므로 소비 측 stream_id 와 같은 규칙을
+// 통과해야 한다. 통과 못 할 문자열로 무장하면 영원히 소비되지 않는 큐 항목이 되고,
+// 외부 문자열이 그대로 맵 키가 되는 경로이기도 하다.
+//
+// 이 거부는 결정 ①의 "변형 금지"와 무관하다 — 변형이 아니라 검증이다.
+func TestParseLineValidatesSessionStreamID(t *testing.T) {
+	bad := []string{
+		"경로에 한글",
+		"live/kr/demo",  // 슬래시 = 중첩 %path
+		"../etc/passwd", // 경로 탈출 모양
+		"has space",
+		"sixty-five-chars-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	for _, id := range bad {
+		t.Run(id, func(t *testing.T) {
+			line := `{"kind":"online","at_unix_nano":1784000000000000000,"MTX_PATH":"` + id + `"}`
+			if ev, err := ParseLine([]byte(line)); err == nil {
+				t.Fatalf("허용되지 않는 MTX_PATH 를 통과시켰다: %+v", ev)
+			}
+		})
+	}
+
+	// 허용되는 형태는 그대로 통과해야 한다(과잉 거부 방지).
+	for _, id := range []string{"demo", "Demo_Stream-01", "a", "ABC_123-xyz"} {
+		line := `{"kind":"online","at_unix_nano":1784000000000000000,"MTX_PATH":"` + id + `"}`
+		ev, err := ParseLine([]byte(line))
+		if err != nil {
+			t.Errorf("정상 MTX_PATH %q 를 거부했다: %v", id, err)
+			continue
+		}
+		if ev.StreamID != id {
+			t.Errorf("StreamID = %q, want %q (원문 그대로)", ev.StreamID, id)
+		}
+	}
+}
+
+// 먼 미래 시각은 거부한다. 2262년 같은 값이 online 으로 들어오면 watermark 가 그 값으로
+// 올라가 **이후 모든 정상 offline 이 stale 로 버려진다**(영구 오염).
+func TestParseLineRejectsFarFutureTimestamp(t *testing.T) {
+	far := time.Now().Add(10 * time.Minute).UnixNano()
+	line := `{"kind":"online","at_unix_nano":` + strconv.FormatInt(far, 10) + `,"MTX_PATH":"demo"}`
+	if ev, err := ParseLine([]byte(line)); err == nil {
+		t.Fatalf("먼 미래 시각을 통과시켰다: %+v", ev)
+	}
+
+	// 시계 오차 수준(가까운 미래)은 받아들인다 — 컨테이너 간 미세 차이는 정상이다.
+	near := time.Now().Add(30 * time.Second).UnixNano()
+	line = `{"kind":"online","at_unix_nano":` + strconv.FormatInt(near, 10) + `,"MTX_PATH":"demo"}`
+	if _, err := ParseLine([]byte(line)); err != nil {
+		t.Errorf("가까운 미래 시각을 거부했다: %v", err)
+	}
+}
+
+// NaN·Inf 는 int64 변환이 정의되지 않아 쓰레기 값이 된다.
+func TestDurationMSGuardsAgainstNaNAndInf(t *testing.T) {
+	for _, raw := range []string{"NaN", "Inf", "-Inf", "+Inf"} {
+		if got := durationMS(raw); got != 0 {
+			t.Errorf("durationMS(%q) = %d, want 0", raw, got)
+		}
 	}
 }
