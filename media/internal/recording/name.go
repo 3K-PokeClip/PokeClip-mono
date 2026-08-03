@@ -69,6 +69,11 @@ var ErrInvalidStreamID = errors.New("허용되지 않는 stream_id 형태다")
 // 품게 되어 키 생성과 디렉토리 구조가 얽힌다. 중첩이 실제로 필요해지는 시점은
 // U9(프로덕션 stream_id 의 의미가 계약4 스트림키와 어떻게 연결되는가)가 확정될 때이며,
 // 그때 이 정규식과 아래 함수 본문만 고치면 된다.
+//
+// **함께 고쳐야 할 곳**: indexer/hook.go 의 breaks 키 계약. 훅 경계 큐의 키는 MediaMTX 가
+// 준 MTX_PATH 원문이고 소비 측 조회 키는 여기서 뽑는 stream_id 인데, 이 둘이 바이트
+// 동일하다는 등식이 "단일 레벨 %path" 전제 위에 서 있다. 중첩을 허용하는 순간 그 등식이
+// 깨지고, 훅 경계가 무장은 되지만 영원히 소비되지 않는 조용한 미탐이 된다.
 var streamIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // segmentNameRe 는 recordPath 의 %Y-%m-%d_%H-%M-%S-%f 를 그대로 옮긴 것이다(mediamtx.yml 31행).

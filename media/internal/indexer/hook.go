@@ -1,3 +1,19 @@
+// 이 파일은 MediaMTX 세션 훅으로 확인된 "재접속 경계"를 다룬다.
+//
+// 왜 필요한가: 0.9초 재접속은 기존 벽시계 드리프트 판정(tolerance 1.5s)을 그냥 통과한다.
+// 즉 실제로는 끊겼다 이어진 지점인데 is_discontinuity=false 로 기록된다. 훅은 그 지점을
+// 알려 주는 **1차 신호**이고, 드리프트·파일 감시·주기 재스캔은 안전망으로 그대로 남는다.
+// 그래서 훅이 통째로 죽어도 현행 동작으로 되돌아갈 뿐 새 실패 모드가 생기지 않는다.
+//
+// 로그 판독 규칙: hook_break_discarded 와 hook_break_dropped 가 같은 시각에 함께 나오면
+// **한 번의 정리**다. discarded 는 "판정 대상이던 경계 1건이 왜 버려졌는가"
+// (already_passed·no_tail·duplicate_path)이고, dropped 는 "그와 함께 정리된, 세그먼트가
+// 한 건도 없던 더 오래된 경계들"이다. 미탐 건수는 discarded 만 센다 — dropped 는 애초에
+// 붙일 세그먼트가 없던 경계이므로 미탐이 아니다.
+//
+// (빈 줄로 package 절과 떼어 둔다 — 붙이면 godoc 이 패키지 주석으로 오인해
+// indexer.go 의 정본 패키지 설명을 밀어낸다.)
+
 package indexer
 
 import (
