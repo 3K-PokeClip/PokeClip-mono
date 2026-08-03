@@ -484,6 +484,10 @@ func TestCorrectTailRejectsNonTail(t *testing.T) {
 }
 
 // correctTail 이 이미 업로드된 행에는 손대지 않는다.
+//
+// POK-30 에서 레벨이 WARN -> ERROR 로 올라갔다. 확정된 조각이 자랐다는 것은 잘린 실물이
+// S3 에 굳었다는 뜻이고 자동 복구 경로가 없다(L11‴) — 사람이 봐야 하는 사고다.
+// failed 커서의 쌍둥이 케이스는 upload_test.go 의 TestRegrowAfterTerminalState 가 함께 본다.
 func TestCorrectTailIgnoresUploadedTail(t *testing.T) {
 	f := newFixture(t, 4000)
 	path := f.makeFile("s1", segName(baseWall, 0), 2500)
@@ -499,8 +503,8 @@ func TestCorrectTailIgnoresUploadedTail(t *testing.T) {
 	seg.Reason = recording.ReasonRegrown
 	f.mustHandle(seg)
 
-	if n := f.logs.count(slog.LevelWarn, "regrow_after_upload_ignored"); n != 1 {
-		t.Fatalf("regrow_after_upload_ignored = %d건, want 1", n)
+	if n := f.logs.count(slog.LevelError, "regrow_after_upload_ignored"); n != 1 {
+		t.Fatalf("regrow_after_upload_ignored(ERROR) = %d건, want 1", n)
 	}
 	if len(f.store.updateTail) != 0 {
 		t.Fatalf("UpdateTail 호출 = %d, want 0", len(f.store.updateTail))

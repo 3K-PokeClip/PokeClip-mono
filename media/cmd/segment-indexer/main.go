@@ -78,7 +78,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	ix := indexer.New(store, fmp4meta.ProbeDurationMS, w, cfg.Indexer, log)
+	ix := indexer.New(store, fmp4meta.ProbeDurationMS, w, nil, cfg.Indexer, log)
 
 	// --- 2. watch 등록 (동기) ---
 	//
