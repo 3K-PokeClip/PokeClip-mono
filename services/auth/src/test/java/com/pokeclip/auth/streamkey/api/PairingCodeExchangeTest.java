@@ -279,12 +279,16 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
                 }
             }).toList();
 
+            // 정확히 5/5여야 한다. 어드바이저리 락이 같은 IP를 직렬화하므로
+            // 앞의 5건은 count가 1~5라 통과하고(404), 6번째부터 count > 5라 429다.
+            // "5건 이하"로 두면 10건이 전부 429여도 초록이라 아무것도 못 본다 —
+            // 이 세션에서 그런 테스트에 두 번 데였다.
             assertThat(statuses).filteredOn(s -> s == 404)
                     .as("동시 요청이 rate limit을 통과했다. 한도가 5인데 그 이상이 코드 조회까지 갔다")
-                    .hasSizeLessThanOrEqualTo(5);
+                    .hasSize(5);
             assertThat(statuses).filteredOn(s -> s == 429)
-                    .as("아무도 429를 못 받았다")
-                    .isNotEmpty();
+                    .as("한도를 넘은 나머지가 429를 못 받았다")
+                    .hasSize(5);
         }
     }
 
