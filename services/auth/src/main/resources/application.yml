@@ -84,3 +84,8 @@ pokeclip:
     # JWT_SECRET과 같다 — 안 주면 리터럴 "${SECRET_STORE_KEY}"가 바인딩돼
     # 서버는 뜨고 스트림키만 전부 실패한다.
     key: ${SECRET_STORE_KEY:}
+  internal-api:
+    # Media(1번)가 X-Internal-Token 헤더로 보낸다. 기본값을 빈 문자열로 두는
+    # 이유는 JWT_SECRET과 같다 — 안 주면 리터럴이 바인딩돼 서버는 뜨고
+    # 검증 API만 전부 401이 된다.
+    token: ${INTERNAL_API_TOKEN:}

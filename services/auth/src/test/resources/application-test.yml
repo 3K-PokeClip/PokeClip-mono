@@ -24,3 +24,5 @@ pokeclip:
     # IllegalStateException으로 컨텍스트가 죽고, IntegrationTestSupport를 상속한
     # 테스트가 전부 같이 죽는다. 값을 바꿀 일이 있으면 `base64 -d | wc -c`로 먼저 센다.
     key: dGVzdC1vbmx5LWFlcy0yNTYta2V5LTMyYnl0ZXMhISE=
+  internal-api:
+    token: test-only-internal-token-32bytes-long!!

@@ -57,6 +57,38 @@ public class StreamKeyService {
         }
     }
 
+    /**
+     * Media가 SRT 연결을 받기 전에 한 번 부른다(계약4). 세그먼트마다 부르지 않으므로
+     * 방송 도중 Auth가 죽어도 이미 나가는 방송은 안 끊긴다.
+     *
+     * <p>도메인 판단은 전부 valid 플래그로 돌려준다. 예외를 던지지 않는 이유는
+     * Media가 "키가 틀림"과 "Auth 장애"를 구분해야 하기 때문이다.
+     */
+    public ResolveResult resolve(String rawStreamId) {
+        return StreamId.parse(rawStreamId)
+                .map(streamId -> streamKeyRepository.findByStreamidHash(Sha256.hex(streamId.token()))
+                        .map(key -> key.isRevoked()
+                                ? ResolveResult.rejected("REVOKED")
+                                : ResolveResult.of(key.getUserId(), materialOf(key).passphrase()))
+                        .orElseGet(() -> ResolveResult.rejected("NOT_FOUND")))
+                .orElseGet(() -> ResolveResult.rejected("MALFORMED"));
+    }
+
+    /**
+     * <b>이 record를 {}에 통째로 넣지 않는다.</b> passphrase를 담고 있다.
+     * SecretLeakTest가 "ResolveResult[" 문자열을 금지해 못박는다.
+     */
+    public record ResolveResult(boolean valid, Long userId, String passphrase, String reason) {
+
+        static ResolveResult of(Long userId, String passphrase) {
+            return new ResolveResult(true, userId, passphrase, null);
+        }
+
+        static ResolveResult rejected(String reason) {
+            return new ResolveResult(false, null, null, reason);
+        }
+    }
+
     public Optional<StreamKeyMaterial> findMaterial(Long userId) {
         return findAlive(userId).map(this::materialOf);
     }

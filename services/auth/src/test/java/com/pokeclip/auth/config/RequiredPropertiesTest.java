@@ -33,6 +33,8 @@ class RequiredPropertiesTest {
     private static final String VALID_SECRET_STORE_KEY =
             "dGVzdC1vbmx5LWFlcy0yNTYta2V5LTMyYnl0ZXMhISE=";
 
+    private static final String VALID_INTERNAL_TOKEN = "test-only-internal-token-32bytes-long!!";
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withConfiguration(org.springframework.boot.autoconfigure.AutoConfigurations.of(
                     ConfigurationPropertiesAutoConfiguration.class))
@@ -44,7 +46,8 @@ class RequiredPropertiesTest {
             // 방식은 하나만 빠뜨려도 그 테스트가 "엉뚱한 이유로 실패하면서
             // hasFailed()로 초록"이 된다 — 아래 CORS 테스트 주석이 경고하는
             // 그 상황이다. 비움을 검증하는 테스트는 아래에서 덮어쓴다.
-            .withPropertyValues(secretStore(VALID_SECRET_STORE_KEY));
+            .withPropertyValues(secretStore(VALID_SECRET_STORE_KEY))
+            .withPropertyValues(internalApi(VALID_INTERNAL_TOKEN));
 
     @Test
     void JWT_시크릿이_비어_있으면_부팅이_실패한다() {
@@ -176,6 +179,20 @@ class RequiredPropertiesTest {
         return new String[]{"pokeclip.secret-store.key=" + key};
     }
 
+    @Test
+    void 내부_API_토큰이_비어_있으면_부팅이_실패한다() {
+        runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                .withPropertyValues(google("id", "secret"))
+                .withPropertyValues(cors("http://localhost:3000"))
+                .withPropertyValues(secretStore(VALID_SECRET_STORE_KEY))
+                .withPropertyValues(internalApi(""))
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    private String[] internalApi(String token) {
+        return new String[]{"pokeclip.internal-api.token=" + token};
+    }
+
     private String[] jwt(String secret) {
         return new String[]{
                 "pokeclip.jwt.secret=" + secret,
@@ -197,7 +214,7 @@ class RequiredPropertiesTest {
     }
 
     @EnableConfigurationProperties({JwtProperties.class, GoogleAuthProperties.class, CorsProperties.class,
-            SecretStoreProperties.class})
+            SecretStoreProperties.class, InternalApiProperties.class})
     static class BoundProperties {
     }
 }
