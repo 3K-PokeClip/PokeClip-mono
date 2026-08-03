@@ -39,4 +39,19 @@ class StreamKeyCreator {
         return streamKeyRepository.saveAndFlush(StreamKey.of(
                 userId, Sha256.hex(material.streamToken()), passphraseRef, Instant.now()));
     }
+
+    /**
+     * rotate 전용. <b>바깥 트랜잭션에 참여한다</b> — 폐기와 삽입이 한 원자 단위여야
+     * 하기 때문이다.
+     *
+     * <p>여기서 REQUIRES_NEW인 create를 부르면 새 트랜잭션이 바깥의 revokeAlive를
+     * 아직 못 본 상태로 삽입한다. 그러면 살아있는 키가 잠시 둘이 되고
+     * uq_stream_keys_alive_user에 걸려 재발급이 항상 실패한다.
+     */
+    @Transactional(propagation = Propagation.REQUIRED)
+    StreamKey createInCurrentTransaction(Long userId, String ref, StreamKeyMaterial material) {
+        secretStore.put(ref, material.serialize());
+        return streamKeyRepository.saveAndFlush(StreamKey.of(
+                userId, Sha256.hex(material.streamToken()), ref, Instant.now()));
+    }
 }

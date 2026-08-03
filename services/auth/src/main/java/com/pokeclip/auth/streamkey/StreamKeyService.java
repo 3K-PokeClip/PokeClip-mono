@@ -5,8 +5,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.security.SecureRandom;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.Optional;
 import java.util.UUID;
@@ -106,6 +110,58 @@ public class StreamKeyService {
         return StreamKeyMaterial.deserialize(secretStore.get(key.getPassphraseRef())
                 .orElseThrow(() -> new IllegalStateException(
                         "스트림키 행은 있는데 secret이 없다 streamKeyId=" + key.getId())));
+    }
+
+    /**
+     * 재발급. 유출 대응이 목적이라 유예를 두지 않는다 — 옛 키는 이 트랜잭션이
+     * 커밋되는 순간 죽는다.
+     *
+     * <p>키가 없으면 404다. 조용히 새로 발급하면 "무효화가 일어났다"는 로그가
+     * 거짓이 되고, 사고 조사에서 거짓 알리바이가 된다.
+     */
+    @Transactional
+    public Instant rotate(Long userId) {
+        StreamKey previous = findAlive(userId)
+                .orElseThrow(() -> new StreamKeyException(
+                        StreamKeyFailure.STREAM_KEY_NOT_FOUND, "폐기할 스트림키가 없다"));
+
+        Instant now = Instant.now();
+        if (streamKeyRepository.revokeAlive(userId, now) == 0) {
+            // 동시 재발급에 졌다. "내가 폐기한 키는 없다"가 참이므로 위와 같게 다룬다.
+            throw new StreamKeyException(
+                    StreamKeyFailure.STREAM_KEY_NOT_FOUND, "폐기할 스트림키가 없다");
+        }
+
+        StreamKeyMaterial material = new StreamKeyMaterial(
+                CrockfordBase32.random(random, TOKEN_LENGTH), randomPassphrase());
+        // create가 아니다. REQUIRES_NEW로 부르면 새 트랜잭션이 위의 revokeAlive를
+        // 못 봐 부분 유니크 인덱스에 걸린다.
+        streamKeyCreator.createInCurrentTransaction(
+                userId, "streamkey:" + UUID.randomUUID(), material);
+
+        // 옛 secret 삭제를 커밋 뒤로 미룬다. 커밋 전에 지우면 롤백 시 "옛 키는
+        // 살아 있는데 passphrase가 없는" 복구 불능 상태가 된다 — 그 스트리머는
+        // 송출도 재발급도 못 한다. 커밋 후면 최악이 아무도 참조하지 않는 고아
+        // secret 하나다. 후자를 택했다.
+        //
+        // 로그도 같은 자리에서 찍는다. 롤백됐는데 "재발급했다"가 남으면
+        // 조사에서 거짓 알리바이가 된다(TokenService.logAfterCommit과 같은 이유).
+        String staleRef = previous.getPassphraseRef();
+        afterCommit(() -> {
+            secretStore.delete(staleRef);
+            log.info("auth.streamkey.rotated userId={}", userId);
+        });
+
+        return now;
+    }
+
+    private void afterCommit(Runnable action) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 
     private String randomPassphrase() {

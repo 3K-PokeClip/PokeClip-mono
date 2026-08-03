@@ -1,11 +1,13 @@
 package com.pokeclip.auth.streamkey.api;
 
 import com.pokeclip.auth.streamkey.StreamKeyService;
+import com.pokeclip.auth.streamkey.api.dto.RotateResponse;
 import com.pokeclip.auth.streamkey.api.dto.StreamKeyStatusResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -25,5 +27,14 @@ public class StreamKeyController {
         return streamKeyService.findAlive(Long.valueOf(jwt.getSubject()))
                 .map(StreamKeyStatusResponse::of)
                 .orElseGet(StreamKeyStatusResponse::none);
+    }
+
+    /**
+     * 유출 대응 수단이다. 계정당 키가 하나라 기기별 해제 같은 선택지가 없고,
+     * 이것이 스트리머가 스스로 막을 수 있는 유일한 방법이다.
+     */
+    @PostMapping("/rotate")
+    public RotateResponse rotate(@AuthenticationPrincipal Jwt jwt) {
+        return new RotateResponse(streamKeyService.rotate(Long.valueOf(jwt.getSubject())));
     }
 }
