@@ -1,6 +1,8 @@
 package com.pokeclip.auth.config;
 
 import com.pokeclip.auth.google.GoogleAuthProperties;
+import com.pokeclip.auth.streamkey.SecretStoreConfig;
+import com.pokeclip.auth.streamkey.SecretStoreProperties;
 import com.pokeclip.auth.token.JwtConfig;
 import com.pokeclip.auth.token.JwtProperties;
 import com.pokeclip.web.CorsProperties;
@@ -11,6 +13,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.util.Base64;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -26,12 +29,22 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class RequiredPropertiesTest {
 
+    /** 디코딩하면 정확히 32바이트다. application-test.yml과 같은 값. */
+    private static final String VALID_SECRET_STORE_KEY =
+            "dGVzdC1vbmx5LWFlcy0yNTYta2V5LTMyYnl0ZXMhISE=";
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withConfiguration(org.springframework.boot.autoconfigure.AutoConfigurations.of(
                     ConfigurationPropertiesAutoConfiguration.class))
             // JwtConfig까지 넣는 이유: 시크릿 길이 검증이 바인딩이 아니라 빈 등록
             // 시점에 돈다. 프로퍼티 클래스만 등록하면 그 검증이 실행되지 않는다.
-            .withUserConfiguration(BoundProperties.class, JwtConfig.class);
+            // SecretStoreConfig도 같은 이유다.
+            .withUserConfiguration(BoundProperties.class, JwtConfig.class, SecretStoreConfig.class)
+            // 새 필수 프로퍼티는 여기서 한 번만 채운다. 개별 테스트에 하나씩 더하는
+            // 방식은 하나만 빠뜨려도 그 테스트가 "엉뚱한 이유로 실패하면서
+            // hasFailed()로 초록"이 된다 — 아래 CORS 테스트 주석이 경고하는
+            // 그 상황이다. 비움을 검증하는 테스트는 아래에서 덮어쓴다.
+            .withPropertyValues(secretStore(VALID_SECRET_STORE_KEY));
 
     @Test
     void JWT_시크릿이_비어_있으면_부팅이_실패한다() {
@@ -133,6 +146,36 @@ class RequiredPropertiesTest {
                 });
     }
 
+    @Test
+    void 시크릿_저장소_키가_비어_있으면_부팅이_실패한다() {
+        runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                .withPropertyValues(google("id", "secret"))
+                .withPropertyValues(cors("http://localhost:3000"))
+                .withPropertyValues(secretStore(""))
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    /** JWT 시크릿과 같은 이유다 — 실패 메시지에 키가 평문으로 남으면 안 된다. */
+    @Test
+    void 짧은_시크릿_저장소_키는_부팅을_실패시키되_값을_남기지_않는다() {
+        String twentyFourBytes = Base64.getEncoder().encodeToString(new byte[24]);
+
+        runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                .withPropertyValues(google("id", "secret"))
+                .withPropertyValues(cors("http://localhost:3000"))
+                .withPropertyValues(secretStore(twentyFourBytes))
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(stackTraceOf(context.getStartupFailure()))
+                            .as("실패 메시지에 키가 평문으로 남았다")
+                            .doesNotContain(twentyFourBytes);
+                });
+    }
+
+    private String[] secretStore(String key) {
+        return new String[]{"pokeclip.secret-store.key=" + key};
+    }
+
     private String[] jwt(String secret) {
         return new String[]{
                 "pokeclip.jwt.secret=" + secret,
@@ -153,7 +196,8 @@ class RequiredPropertiesTest {
         return new String[]{"pokeclip.cors.allowed-origins=" + origins};
     }
 
-    @EnableConfigurationProperties({JwtProperties.class, GoogleAuthProperties.class, CorsProperties.class})
+    @EnableConfigurationProperties({JwtProperties.class, GoogleAuthProperties.class, CorsProperties.class,
+            SecretStoreProperties.class})
     static class BoundProperties {
     }
 }
