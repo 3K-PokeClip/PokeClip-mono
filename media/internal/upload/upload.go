@@ -146,6 +146,7 @@ type Uploader struct {
 	// 재측정의 fd 는 밖으로 노출되지 않는다. 오류 분기 셋을 죽은 코드로 두는 것보다
 	// 이 한 줄을 두는 편이 낫다 — 열기 손잡이(Options.Root)와 달리 어떤 시그니처도
 	// 인터페이스로 번지지 않는다.
+	// ★ 교체는 Start 전에만 한다. 기동 뒤에 바꾸면 워커 고루틴과 레이스다.
 	statFile func(*os.File) (fs.FileInfo, error)
 }
 

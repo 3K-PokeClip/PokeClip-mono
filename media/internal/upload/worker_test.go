@@ -3,6 +3,7 @@ package upload
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -626,10 +627,15 @@ func TestStatFailureNeverMarksAndNeverPanics(t *testing.T) {
 		putFails bool
 		isTail   bool
 		wantStat string
+		// wantBackoff 는 M-1 표의 처우다. [3] 재측정 실패만 등록한다 —
+		// 그 행은 방금 PUT 을 RetryMax 회 소진했으므로, 미등록이면 그 연발이 매 회차
+		// 되풀이되는 핫루프가 되고 마킹이 없어 자연 종료 조건도 없다.
+		// [2](b)·[2](e)는 미등록 고정이다(C10).
+		wantBackoff bool
 	}{
-		{"PUT_전", 1, false, false, "pre"},
-		{"PUT_후_재측정", 2, false, false, "post"},
-		{"꼬리_재측정", 5, true, true, "tail_recheck"},
+		{"PUT_전", 1, false, false, "pre", false},
+		{"PUT_후_재측정", 2, false, false, "post", false},
+		{"꼬리_재측정", 5, true, true, "tail_recheck", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -670,6 +676,9 @@ func TestStatFailureNeverMarksAndNeverPanics(t *testing.T) {
 			case res := <-u.results:
 				t.Errorf("Result 가 왔다: %+v", res)
 			default:
+			}
+			if _, blocked := u.gate.backoffBlocked(targetKey{"demo", 7}); blocked != c.wantBackoff {
+				t.Errorf("백오프 등록 = %v, want %v", blocked, c.wantBackoff)
 			}
 		})
 	}
@@ -726,4 +735,143 @@ func TestSendResultDropsWhenChannelFull(t *testing.T) {
 		t.Fatal("통지에서 막혔다 — 워커가 서고 종료가 무기한 대기가 된다")
 	}
 	cap.one(t, "upload_mark_skipped")
+}
+
+// P1 — 재시도 소진 → hard 분류 → 브레이커 open 까지의 종단간 경로.
+// hard 를 soft 로 뭉개면 설정이 통째로 틀린 상황에서도 전역 차단이 걸리지 않아
+// 조각마다 RetryMax 회 PUT 을 계속 태운다.
+func TestHardFailureOpensCircuitEndToEnd(t *testing.T) {
+	st := &fakeUploadStore{}
+	put := &fakePutter{fn: func(context.Context, string, io.Reader, int64) error {
+		return fmt.Errorf("put: %w", statusErr{403}) // 자격증명·권한 문제 = hard
+	}}
+	u, cap, dir := newWorkerUploader(t, st, put, func(o *Options) { o.CircuitMax = 1 })
+	path := writeSegment(t, dir, "demo", "seg.mp4", 128)
+
+	// 워커가 실제로 하는 일 그대로 — 처리 후 결과를 브레이커에 반영한다.
+	u.runJob(job{target: newTarget("demo", 7, path, 128, false), origin: OriginSweep, sweepRound: 1})
+
+	rec := cap.one(t, "upload_failed")
+	if rec.attrs["err_class"] != "hard" {
+		t.Errorf("err_class = %v, want hard", rec.attrs["err_class"])
+	}
+	if got := u.brk.current(); got != circuitOpen {
+		t.Fatalf("브레이커 = %v, want Open — hard 종결이 streak 에 안 잡혔다", got)
+	}
+	cap.one(t, "circuit_open")
+
+	// 반대 방향도 고정한다: 미상 오류는 soft 라 브레이커를 열지 않는다.
+	softPut := &fakePutter{fn: func(context.Context, string, io.Reader, int64) error {
+		return errors.New("connection reset by peer")
+	}}
+	u2, cap2, dir2 := newWorkerUploader(t, &fakeUploadStore{}, softPut, func(o *Options) { o.CircuitMax = 1 })
+	p2 := writeSegment(t, dir2, "demo", "seg.mp4", 128)
+	u2.runJob(job{target: newTarget("demo", 7, p2, 128, false), origin: OriginSweep, sweepRound: 1})
+	if got := u2.brk.current(); got != circuitClosed {
+		t.Errorf("브레이커 = %v, want Closed — 미상 오류를 hard 로 오분류하면 정상 트래픽까지 막는다", got)
+	}
+	if n := cap2.count("circuit_open"); n != 0 {
+		t.Errorf("circuit_open = %d건, want 0", n)
+	}
+}
+
+// OpenCircuit 은 기동 시 자격증명을 얻지 못했을 때 밖에서 거는 전역 차단이다.
+// 열린 뒤에는 접수 자체가 거부되어야 PUT 이 한 건도 나가지 않는다.
+func TestOpenCircuitRejectsEnqueue(t *testing.T) {
+	u, cap, dir := newWorkerUploader(t, &fakeUploadStore{}, &fakePutter{}, nil)
+	path := writeSegment(t, dir, "demo", "seg.mp4", 128)
+
+	u.OpenCircuit("credentials_unavailable")
+
+	if got := u.brk.current(); got != circuitOpen {
+		t.Fatalf("브레이커 = %v, want Open", got)
+	}
+	if got := u.enqueue(newTarget("demo", 7, path, 128, false), OriginSweep); got != EnqueueRejected {
+		t.Errorf("enqueue = %v, want Rejected", got)
+	}
+	cap.one(t, "circuit_open")
+
+	// 비활성 업로더에서는 아무 일도 일어나지 않는다.
+	Disabled(newLogCapture().logger()).OpenCircuit("credentials_unavailable")
+}
+
+// tq-11 — 재시도 백오프 대기는 workerStop **단독**으로도 깨져야 한다.
+// putCtx 만 보면 종료 4단계(close(workerStop))가 백오프를 못 깨고,
+// 5단계 putCancel 까지 유예가 통째로 소모된다.
+func TestRetryBackoffWakesOnWorkerStopAlone(t *testing.T) {
+	put := &fakePutter{fn: func(context.Context, string, io.Reader, int64) error {
+		return errors.New("항상 실패")
+	}}
+	u, _, dir := newWorkerUploader(t, &fakeUploadStore{}, put, func(o *Options) {
+		o.RetryBase = 30 * time.Second // 못 깨우면 이만큼 붙잡힌다
+	})
+	path := writeSegment(t, dir, "demo", "seg.mp4", 128)
+
+	done := make(chan outcome, 1)
+	go func() {
+		done <- u.processTarget(job{target: newTarget("demo", 7, path, 128, false), origin: OriginSweep})
+	}()
+	waitFor(t, func() bool { return len(put.putCalls()) == 1 }, "첫 PUT 시도")
+
+	close(u.workerStop) // putCtx 는 살아 있다
+
+	select {
+	case got := <-done:
+		if got != outcomeShutdown {
+			t.Errorf("outcome = %v, want shutdown", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("workerStop 만으로는 백오프 대기가 깨지지 않는다")
+	}
+}
+
+// tq-12 — 마킹까지 성공한 행은 백오프에서 풀린다.
+// 풀지 않으면 정상 복구된 행이 지수 간격을 계속 짊어진다.
+func TestSuccessfulUploadClearsBackoff(t *testing.T) {
+	u, _, dir := newWorkerUploader(t, &fakeUploadStore{}, &fakePutter{}, nil)
+	path := writeSegment(t, dir, "demo", "seg.mp4", 128)
+	k := targetKey{"demo", 7}
+
+	u.gate.registerFailure(k)
+	if _, blocked := u.gate.backoffBlocked(k); !blocked {
+		t.Fatal("준비 실패: 백오프가 걸리지 않았다")
+	}
+
+	if got := runTarget(t, u, newTarget("demo", 7, path, 128, false)); got != outcomeSuccess {
+		t.Fatalf("outcome = %v, want success", got)
+	}
+
+	if _, blocked := u.gate.backoffBlocked(k); blocked {
+		t.Error("성공 후에도 백오프가 남아 있다")
+	}
+}
+
+// tq-13 — 게이트 순서 계약: in-flight 는 **마지막**에 잡는다.
+// 앞선 게이트(격리·백오프)가 거부하면서 in-flight 를 잡아 두면 그 행은 아무 작업도
+// 없는데 in-flight 로 남아 이후 모든 접수가 조용히 거부된다.
+func TestRejectingGatesDoNotHoldInflight(t *testing.T) {
+	u, _, dir := newWorkerUploader(t, &fakeUploadStore{}, &fakePutter{}, nil)
+	path := writeSegment(t, dir, "demo", "seg.mp4", 128)
+
+	t.Run("백오프_거부", func(t *testing.T) {
+		k := targetKey{"demo", 1}
+		u.gate.registerFailure(k)
+		if got := u.enqueue(newTarget("demo", 1, path, 128, false), OriginSweep); got != EnqueueRejected {
+			t.Fatalf("enqueue = %v, want Rejected", got)
+		}
+		if !u.gate.acquireInflight(k) {
+			t.Error("거부하면서 in-flight 를 잡아 뒀다")
+		}
+	})
+
+	t.Run("격리_거부", func(t *testing.T) {
+		k := targetKey{"demo", 2}
+		u.gate.quarantine(k)
+		if got := u.enqueue(newTarget("demo", 2, path, 128, false), OriginSweep); got != EnqueueRejected {
+			t.Fatalf("enqueue = %v, want Rejected", got)
+		}
+		if !u.gate.acquireInflight(k) {
+			t.Error("거부하면서 in-flight 를 잡아 뒀다")
+		}
+	})
 }
