@@ -326,3 +326,130 @@ func TestSegmentRootIsCanonicalized(t *testing.T) {
 		})
 	}
 }
+
+// POK-30 env 8개의 기본값. 업로더는 선택 부품이므로 S3_BUCKET 이 비어 있는 것이 정상이며,
+// 그때는 나머지 S3 설정을 검증하지 않는다(결정 11‴).
+func TestLoadUploadDefaults(t *testing.T) {
+	cfg, err := Load(envOf(minimalEnv()))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.S3.Bucket != "" {
+		t.Errorf("S3.Bucket = %q, want 빈 문자열(업로더 비활성)", cfg.S3.Bucket)
+	}
+	if cfg.S3.Region != "ap-northeast-2" {
+		t.Errorf("S3.Region = %q, want ap-northeast-2", cfg.S3.Region)
+	}
+	if cfg.Upload.RetryMax != 4 || cfg.Upload.SweepEvery != 30*time.Second || cfg.Upload.CircuitMax != 3 {
+		t.Errorf("업로드 기본값 = retry %d sweep %v circuit %d, want 4 / 30s / 3",
+			cfg.Upload.RetryMax, cfg.Upload.SweepEvery, cfg.Upload.CircuitMax)
+	}
+	if cfg.Indexer.TailHold != 5*time.Second {
+		t.Errorf("TailHold = %v, want 5s", cfg.Indexer.TailHold)
+	}
+	// 두 계층이 같은 유예를 봐야 인덱서의 포기 시점과 스위퍼의 자격 시점이 맞물린다.
+	if cfg.Indexer.TailGrace != cfg.Upload.TailGrace {
+		t.Errorf("TailGrace 가 갈렸다: indexer %v vs upload %v",
+			cfg.Indexer.TailGrace, cfg.Upload.TailGrace)
+	}
+	// SegmentRoot 는 한 곳에서 나와야 한다 — 경로 검증(문자열)과 열기(os.Root)가
+	// 다른 값을 보면 검증을 통과한 경로가 다른 루트에서 열린다.
+	if cfg.Upload.SegmentRoot != cfg.SegmentRoot {
+		t.Errorf("SegmentRoot 가 갈렸다: %q vs %q", cfg.Upload.SegmentRoot, cfg.SegmentRoot)
+	}
+}
+
+func TestLoadParsesUploadOverrides(t *testing.T) {
+	env := minimalEnv()
+	env["S3_BUCKET"] = "pokeclip-media-demo-2557"
+	env["AWS_REGION"] = "us-east-1"
+	env["S3_ENDPOINT"] = "http://minio:9000"
+	env["S3_FORCE_PATH_STYLE"] = "true"
+	env["SEGMENT_UPLOAD_RETRY_MAX"] = "2"
+	env["SEGMENT_UPLOAD_SWEEP_EVERY"] = "5s"
+	env["SEGMENT_UPLOAD_TAIL_HOLD"] = "3s"
+	env["SEGMENT_UPLOAD_CIRCUIT_MAX"] = "0"
+
+	cfg, err := Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.S3.Bucket != "pokeclip-media-demo-2557" || cfg.S3.Region != "us-east-1" ||
+		cfg.S3.Endpoint != "http://minio:9000" || !cfg.S3.ForcePathStyle {
+		t.Errorf("S3 설정 = %+v", cfg.S3)
+	}
+	if cfg.Upload.RetryMax != 2 || cfg.Upload.SweepEvery != 5*time.Second {
+		t.Errorf("업로드 설정 = retry %d sweep %v", cfg.Upload.RetryMax, cfg.Upload.SweepEvery)
+	}
+	// 0 은 "브레이커 전체 무효화"라는 뜻이 있는 값이다. 양수 검증에 걸려 거부되면 안 된다.
+	if cfg.Upload.CircuitMax != 0 {
+		t.Errorf("CircuitMax = %d, want 0 (브레이커 무효화)", cfg.Upload.CircuitMax)
+	}
+	if cfg.Indexer.TailHold != 3*time.Second {
+		t.Errorf("TailHold = %v, want 3s", cfg.Indexer.TailHold)
+	}
+}
+
+// 교차 검증 3개. 설정 단계에서 잡지 않으면 운영 중에야 로그로 알게 된다.
+func TestLoadRejectsInconsistentUploadSettings(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			// 보류 상한이 스위퍼 자격 시점을 넘으면 두 계층이 같은 꼬리를 동시에 노린다.
+			name: "TailHold >= TailGrace",
+			env:  map[string]string{"SEGMENT_UPLOAD_TAIL_HOLD": "10m"},
+			want: "SEGMENT_UPLOAD_TAIL_HOLD",
+		},
+		{
+			// 안정 판정이 끝나기도 전에 올리면 잘린 실물이 굳는다.
+			name: "TailHold < SettleWait",
+			env:  map[string]string{"SEGMENT_UPLOAD_TAIL_HOLD": "1s", "SEGMENT_SETTLE_WAIT": "5s"},
+			want: "SEGMENT_SETTLE_WAIT",
+		},
+		{
+			// 버킷을 쓰겠다고 했으면 이름 문법을 그 자리에서 본다.
+			// 오타를 기동 때 잡지 않으면 PUT 이 전부 404 로 실패한 뒤에야 알게 된다.
+			name: "S3_BUCKET 이름 문법 위반",
+			env:  map[string]string{"S3_BUCKET": "Bad_Bucket!"},
+			want: "S3_BUCKET",
+		},
+		{
+			// 엔드포인트를 줬으면 URL 이어야 한다. SDK 는 이상한 값을 조용히 삼킨다.
+			name: "S3_ENDPOINT 가 URL 이 아님",
+			env:  map[string]string{"S3_BUCKET": "pokeclip-media-demo-2557", "S3_ENDPOINT": "minio:9000"},
+			want: "S3_ENDPOINT",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			env := minimalEnv()
+			for k, v := range c.env {
+				env[k] = v
+			}
+			_, err := Load(envOf(env))
+			if err == nil {
+				t.Fatal("에러가 없다 — 기동을 거부해야 한다")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("에러 = %v, want %q 를 포함", err, c.want)
+			}
+		})
+	}
+}
+
+// S3_BUCKET 이 공백뿐이면 "비었다"로 본다 — 업로더가 꺼진다.
+// 공백을 버킷 이름으로 받아들이면 PUT 이 전부 404 로 실패한다.
+func TestLoadTreatsBlankBucketAsDisabled(t *testing.T) {
+	env := minimalEnv()
+	env["S3_BUCKET"] = "   "
+	cfg, err := Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.S3.Bucket != "" {
+		t.Errorf("S3.Bucket = %q, want 빈 문자열", cfg.S3.Bucket)
+	}
+}

@@ -23,6 +23,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
 func main() {
@@ -74,11 +75,28 @@ func run() error {
 
 	store := index.NewPGStore(pool)
 
+	// 업로더가 파일을 여는 유일한 손잡이다. 루트를 못 열면 기동 실패다 —
+	// 그 상태로 진행하면 모든 PUT 이 열기 단계에서 실패한다.
+	root, err := os.OpenRoot(cfg.SegmentRoot)
+	if err != nil {
+		return fmt.Errorf("세그먼트 루트 열기 실패 root=%q: %w", cfg.SegmentRoot, err)
+	}
+	defer root.Close()
+
+	up, err := newUploader(ctx, cfg, root, index.NewUploadStore(pool), log)
+	if err != nil {
+		return err
+	}
+	// ★ 등록 순서가 계약이다. defer 는 LIFO 이므로 pool.Close(위)보다 **뒤에** 등록된
+	//   이 defer 가 **먼저** 실행된다. Shutdown 은 반환 후 UploadStore 를 쓰지 않으므로
+	//   풀이 닫히기 전에 반환되어야 한다. 코드 배치가 그 순서를 보장한다(결정 17″).
+	defer up.Shutdown()
+
 	w, err := recording.NewWatcher(cfg.Watcher)
 	if err != nil {
 		return err
 	}
-	ix := indexer.New(store, fmp4meta.ProbeDurationMS, w, nil, cfg.Indexer, log)
+	ix := indexer.New(store, fmp4meta.ProbeDurationMS, w, up, cfg.Indexer, log)
 
 	// --- 2. watch 등록 (동기) ---
 	//
@@ -131,22 +149,64 @@ func run() error {
 		return err
 	}
 
+	// 워커·스위퍼는 초기 Scan 뒤에 띄운다. Scan 이 커서를 채우기 전에 스위퍼가 돌면
+	// 인덱서가 곧 요청할 행을 먼저 집어 in-flight 로 막는다.
+	up.Start(ctx)
+
 	log.Info("watching", "root", cfg.SegmentRoot,
 		"idle_timeout", cfg.Watcher.IdleTimeout, "rescan_every", cfg.Watcher.RescanEvery,
 		"settle_wait", cfg.Watcher.Settle.SettleWait, "local_time", time.Now().Format(time.RFC3339))
 
+	// 보류 틱은 초 단위여야 한다. 30s 급이면 마지막 조각의 총 지연이 48초까지 늘어
+	// AC1 의 재현성이 깨진다. 티커를 루프 밖에서 만드는 이유는 워처·훅과 같다 —
+	// 루프는 신호를 **채널로만** 받고, 그 신호원을 누가 소유하는지는 모른다.
+	holdTicker := time.NewTicker(cfg.Indexer.HoldTick)
+	defer holdTicker.Stop()
+
 	// --- 4. 메인 루프 ---
-	if err := loop(ctx, loopDeps{
+	//
+	// 결과를 즉시 return 하지 않는다. 정상·오류가 같은 출구로 나가야 defer 로 등록한
+	// 종료 절차가 어느 경로에서도 같은 순서로 돈다.
+	loopErr := loop(ctx, loopDeps{
 		ix: ix, root: cfg.SegmentRoot, rescanEvery: cfg.Watcher.RescanEvery, log: log,
 		watcherDone: w.Done(), watcherErr: w.Wait,
 		completed: w.Completed(), rescans: w.Rescans(),
 		hookEvents: hookEvents, hookDone: hookDone, hookErr: hookErr,
-	}); err != nil {
-		return err
+		uploadResults: up.Results(), holdTicks: holdTicker.C,
+	})
+	if loopErr != nil {
+		return loopErr
 	}
 	// 정상 종료도 흔적을 남긴다. 로그가 그냥 끊기면 죽은 것인지 끝난 것인지 구분할 수 없다.
 	log.Info("shutdown", "reason", "종료 신호를 받아 정상 종료한다")
 	return nil
+}
+
+// newUploader 는 설정에 따라 업로더를 고른다. 분기는 셋이고 기동을 거부하는 것은 하나뿐이다.
+//
+//	S3_BUCKET 이 빔      -> Disabled. 팀 공용 환경(2·3번)의 기본 상태이며 인덱싱만 한다(G15).
+//	자격증명을 못 얻음    -> 기동은 진행하고 브레이커를 연 채로 시작한다. 자격증명은 나중에
+//	                        갱신될 수 있고, 그동안의 차단은 브레이커가 맡는다(결정 12⁴).
+//	설정 자체가 틀림      -> 기동 실패.
+func newUploader(ctx context.Context, cfg config.Config, root *os.Root,
+	st index.UploadStore, log *slog.Logger) (*upload.Uploader, error) {
+	if cfg.S3.Bucket == "" {
+		return upload.Disabled(log), nil
+	}
+
+	put, credsOK, err := upload.NewS3Putter(ctx, cfg.S3, log)
+	if err != nil {
+		return nil, err
+	}
+	opt := cfg.Upload
+	opt.Root = root
+	opt.SegmentRoot = cfg.SegmentRoot
+
+	up := upload.New(st, put, opt, log)
+	if !credsOK {
+		up.OpenCircuit("credentials_unavailable")
+	}
+	return up, nil
 }
 
 // loopDeps 는 메인 루프가 지켜보는 신호원과 그 처리에 필요한 것 전부다.
@@ -174,14 +234,21 @@ type loopDeps struct {
 	// hookErr 는 훅 사망 사유를 읽는다(워처의 watcherErr 와 대칭).
 	// nil 을 돌려주면 ctx 취소에 의한 정상 종료라는 뜻이다.
 	hookErr func() error
+
+	// uploadResults 는 업로더의 판정(uploaded·failed)이 오는 채널이다.
+	// 업로더가 꺼져 있으면 Results() 가 nil 을 주므로 그 case 는 영구 비활성이다 —
+	// 훅 채널과 정확히 같은 규약이다.
+	uploadResults <-chan upload.Result
+	// holdTicks 는 보류 중인 꼬리를 살펴보는 주기다. 티커의 소유자는 run 이다.
+	holdTicks <-chan time.Time
 }
 
-// loop 은 종료·워처사망·완성세그먼트·재스캔요청·훅이벤트·훅사망 신호를
+// loop 은 종료·워처사망·완성세그먼트·재스캔요청·훅이벤트·훅사망·업로드결과·보류틱을
 // 한 곳에서 받아 차례로 처리한다.
 //
-// 주석 ⓑ: Scan·Handle·HandleHook 의 호출자는 이 루프 하나뿐이다. 그래서 Indexer 에
-// 락이 없다(D10). select 는 한 번에 하나의 case 만 실행하므로 세 함수가 동시에 불릴 수 없다.
-// 이 규약을 깨고 다른 고루틴에서 부르면 즉시 seq 중복이 난다.
+// 주석 ⓑ: Scan·Handle·HandleHook·ApplyUploadResult·ReleaseHeldTails 의 호출자는 이 루프
+// 하나뿐이다. 그래서 Indexer 에 락이 없다(D10). select 는 한 번에 하나의 case 만 실행하므로
+// 이들이 동시에 불릴 수 없다. 이 규약을 깨고 다른 고루틴에서 부르면 즉시 seq 중복이 난다.
 func loop(ctx context.Context, d loopDeps) error {
 	ticker := time.NewTicker(d.rescanEvery)
 	defer ticker.Stop()
@@ -239,6 +306,15 @@ func loop(ctx context.Context, d loopDeps) error {
 			if err := d.ix.Scan(ctx, d.root); err != nil {
 				return err
 			}
+
+		// 업로드 판정을 커서에 반영한다. 비활성 업로더의 Results() 는 nil 이라
+		// 이 케이스는 절대 선택되지 않는다.
+		case res := <-d.uploadResults:
+			d.ix.ApplyUploadResult(res.StreamID, res.Seq, res.State)
+
+		// 보류 중인 꼬리를 살펴본다. 예산 안에서만 stat 한다.
+		case <-d.holdTicks:
+			d.ix.ReleaseHeldTails()
 		}
 	}
 }

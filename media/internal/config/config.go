@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
 // Config 는 사이드카가 기동하는 데 필요한 전부다.
@@ -27,6 +29,12 @@ type Config struct {
 	LogLevel     slog.Level
 	Indexer      indexer.Options
 	Watcher      recording.WatcherOptions
+
+	// S3 는 PUT 대상 설정이다. Bucket 이 비면 업로더가 통째로 꺼진다(결정 11‴).
+	S3 upload.S3Options
+	// Upload 는 업로더의 정책값이다. Root 는 main 이 os.OpenRoot 로 채운다 —
+	// 설정은 파일을 열지 않는다.
+	Upload upload.Options
 
 	// HookSpoolPath 는 MediaMTX 훅이 한 줄씩 덧붙이는 공유 파일이다.
 	//
@@ -138,6 +146,61 @@ func Load(env func(string) string) (Config, error) {
 			idx.SuspectBelowMS, idx.ExpectedDurationMS)
 	}
 
+	// --- POK-30 업로더 (env 8개) ---
+	//
+	// Root 는 여기서 열지 않는다. 설정은 값만 읽고, 파일 시스템 손잡이는 main 이 만든다.
+	up := upload.DefaultOptions(nil, watch.Root)
+	s3 := upload.S3Options{
+		Bucket: strings.TrimSpace(env("S3_BUCKET")),
+		Region: withDefault(env, "AWS_REGION", "ap-northeast-2"),
+	}
+	s3.Endpoint = strings.TrimSpace(env("S3_ENDPOINT"))
+	if s3.ForcePathStyle, err = boolean(env, "S3_FORCE_PATH_STYLE", false); err != nil {
+		return Config{}, err
+	}
+	if up.RetryMax, err = positiveInt(env, "SEGMENT_UPLOAD_RETRY_MAX", up.RetryMax); err != nil {
+		return Config{}, err
+	}
+	if up.SweepEvery, err = duration(env, "SEGMENT_UPLOAD_SWEEP_EVERY", up.SweepEvery); err != nil {
+		return Config{}, err
+	}
+	// CircuitMax 만 양수 검증을 쓰지 않는다 — 0 이 "브레이커 전체 무효화"라는 뜻을 가진 값이라
+	// positiveInt 로 받으면 그 뜻을 표현할 수 없다(설계 8절 env 표).
+	if up.CircuitMax, err = nonNegativeInt(env, "SEGMENT_UPLOAD_CIRCUIT_MAX", up.CircuitMax); err != nil {
+		return Config{}, err
+	}
+	if idx.TailHold, err = duration(env, "SEGMENT_UPLOAD_TAIL_HOLD", idx.TailHold); err != nil {
+		return Config{}, err
+	}
+	// 두 계층이 같은 유예를 봐야 인덱서의 포기 시점과 스위퍼의 자격 시점이 맞물린다(결정 4⁵).
+	idx.TailGrace = up.TailGrace
+
+	// 교차 검증 1 — 보류 상한이 스위퍼 자격 시점을 넘으면 두 계층이 같은 꼬리를 동시에 노린다.
+	if idx.TailHold >= up.TailGrace {
+		return Config{}, fmt.Errorf(
+			"SEGMENT_UPLOAD_TAIL_HOLD(%v)는 꼬리 유예(%v)보다 짧아야 한다", idx.TailHold, up.TailGrace)
+	}
+	// 교차 검증 2 — 안정 판정이 끝나기도 전에 올리면 잘린 실물이 그대로 굳는다.
+	if idx.TailHold < watch.Settle.SettleWait {
+		return Config{}, fmt.Errorf(
+			"SEGMENT_UPLOAD_TAIL_HOLD(%v)는 SEGMENT_SETTLE_WAIT(%v) 이상이어야 한다",
+			idx.TailHold, watch.Settle.SettleWait)
+	}
+	// 교차 검증 3 — 버킷을 쓰겠다고 했으면 나머지도 엄격히 본다.
+	// 비어 있을 때 검증하지 않는 것이 결정 11‴의 전부다: 업로더는 선택 부품이다.
+	if s3.Bucket != "" {
+		if !bucketNameRe.MatchString(s3.Bucket) {
+			return Config{}, fmt.Errorf(
+				"S3_BUCKET(%q)이 버킷 이름 규칙(소문자·숫자·점·하이픈 3-63자)에 맞지 않는다", s3.Bucket)
+		}
+		if s3.Endpoint != "" {
+			u, perr := url.Parse(s3.Endpoint)
+			if perr != nil || u.Scheme == "" || u.Host == "" {
+				return Config{}, fmt.Errorf("S3_ENDPOINT(%q)는 scheme 을 포함한 URL 이어야 한다", s3.Endpoint)
+			}
+		}
+	}
+
 	// 워처와 인덱서는 같은 유휴 판정 기준을 써야 한다.
 	// 달라지면 H4(유휴 커밋 전 mtime 재검)가 워처의 판정과 어긋나 되돌리기가 무한 반복된다.
 	idx.IdleTimeout = watch.IdleTimeout
@@ -149,6 +212,8 @@ func Load(env func(string) string) (Config, error) {
 	return Config{
 		PGDSN:            dsn(user, password, host, port, dbName, sslMode),
 		SegmentRoot:      watch.Root,
+		S3:               s3,
+		Upload:           up,
 		EnsureSchema:     ensureSchema,
 		LogLevel:         logLevel,
 		Indexer:          idx,
@@ -243,4 +308,23 @@ func level(env func(string) string, key string, fallback slog.Level) (slog.Level
 		return 0, fmt.Errorf("%s 는 debug/info/warn/error 중 하나여야 한다: %q", key, raw)
 	}
 	return l, nil
+}
+
+// bucketNameRe 는 S3 버킷 이름 규칙이다. 오타를 기동 때 잡지 않으면
+// PUT 이 전부 404 로 실패한 뒤에야 알게 된다.
+var bucketNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+
+// nonNegativeInt 는 0 을 허용하는 정수 파서다.
+// positiveInt 와 나눈 이유: SEGMENT_UPLOAD_CIRCUIT_MAX 의 0 은 실수가 아니라
+// "브레이커 전체 무효화"라는 뜻을 가진 값이다.
+func nonNegativeInt(env func(string) string, key string, fallback int) (int, error) {
+	raw := strings.TrimSpace(env(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%s 는 0 이상의 정수여야 한다: %q", key, raw)
+	}
+	return n, nil
 }
