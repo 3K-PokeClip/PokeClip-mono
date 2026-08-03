@@ -246,6 +246,48 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
                 .isEqualTo(before + 1);
     }
 
+    /**
+     * <b>동시 요청도 한도에 걸려야 한다.</b> 시도 기록이 REQUIRES_NEW라 각 트랜잭션이
+     * 자기 INSERT만 보고 세는데, 직렬화가 없으면 서로의 미커밋 행이 안 보여
+     * 10건이 전부 {@code count=1}을 읽고 통과한다.
+     *
+     * <p>이것이 깨지면 ADR-019의 전제가 통째로 무너진다 — 8자(40bit)를 쓸 수 있는
+     * 근거가 "10분 만료 + 교환 rate limit"이고, 공격자는 순차가 아니라 <b>동시성을
+     * 직접 고른다.</b> 발급 쪽의 "±1은 무의미하다"는 정상 사용자 기준이었다.
+     */
+    @Test
+    void 동시_교환도_IP당_한도를_넘지_못한다() throws Exception {
+        int threads = 10;
+        CountDownLatch start = new CountDownLatch(1);
+
+        try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
+            List<Callable<Integer>> jobs = IntStream.range(0, threads)
+                    .<Callable<Integer>>mapToObj(i -> () -> {
+                        start.await();
+                        return exchange("ZZZZ-ZZZZ", "10.0.5.5").andReturn().getResponse().getStatus();
+                    })
+                    .toList();
+
+            List<Future<Integer>> futures = jobs.stream().map(pool::submit).toList();
+            start.countDown();
+
+            List<Integer> statuses = futures.stream().map(f -> {
+                try {
+                    return f.get();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }).toList();
+
+            assertThat(statuses).filteredOn(s -> s == 404)
+                    .as("동시 요청이 rate limit을 통과했다. 한도가 5인데 그 이상이 코드 조회까지 갔다")
+                    .hasSizeLessThanOrEqualTo(5);
+            assertThat(statuses).filteredOn(s -> s == 429)
+                    .as("아무도 429를 못 받았다")
+                    .isNotEmpty();
+        }
+    }
+
     @Test
     void 로그인하지_않아도_교환할_수_있다() throws Exception {
         String code = issueCode(newUser());
