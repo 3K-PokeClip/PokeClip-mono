@@ -7,6 +7,8 @@ import ch.qos.logback.classic.spi.StackTraceElementProxy;
 import com.jayway.jsonpath.JsonPath;
 import com.pokeclip.auth.api.dto.GoogleLoginRequest;
 import com.pokeclip.auth.api.dto.RefreshRequest;
+import com.pokeclip.auth.streamkey.api.dto.ExchangeRequest;
+import com.pokeclip.auth.streamkey.api.dto.ResolveRequest;
 import com.pokeclip.auth.token.RefreshTokenRepository;
 import com.pokeclip.auth.token.TokenPair;
 import com.pokeclip.auth.token.TokenService;
@@ -79,6 +81,14 @@ class SecretLeakTest extends IntegrationTestSupport {
     /** 60자를 넘어 HS256의 32바이트 하한(JwtConfig.MIN_SECRET_BYTES)을 만족한다. */
     private static final String JWT_SECRET = needle("jwt-signing-secret");
 
+    /**
+     * application-test.yml의 값과 같아야 한다. 위의 셋과 달리
+     * &#64;DynamicPropertySource로 주입하지 않는다 — 이 값은 시크릿이 아니라 테스트
+     * 고정값이고, 주입하면 InternalSecurityConfig가 다른 프로퍼티로 뜨면서
+     * 컨텍스트 캐시가 하나 더 생겨 전체 실행이 느려진다.
+     */
+    private static final String INTERNAL_TOKEN = "test-only-internal-token-32bytes-long!!";
+
     private static final List<String> SECRETS = List.of(GOOGLE_CODE, CLIENT_SECRET, JWT_SECRET);
 
     /**
@@ -141,14 +151,24 @@ class SecretLeakTest extends IntegrationTestSupport {
 
     @BeforeEach
     void setUp() {
+        clearStreamKeyChildren();
         refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
     }
 
-    /** core/CLAUDE.md의 FK 함정. 자식 행을 남기면 다른 테스트의 부모 정리를 막는다. */
+    /** auth/CLAUDE.md의 FK 함정. 자식 행을 남기면 다른 테스트의 부모 정리를 막는다. */
     @AfterEach
     void tearDown() {
+        clearStreamKeyChildren();
         refreshTokenRepository.deleteAll();
+    }
+
+    /** FK 함정. 자식 행을 남기면 다른 테스트의 부모 정리를 막는다. */
+    private void clearStreamKeyChildren() {
+        jdbcTemplate.update("DELETE FROM pairing_exchange_attempts");
+        jdbcTemplate.update("DELETE FROM pairing_codes");
+        jdbcTemplate.update("DELETE FROM stream_keys");
+        jdbcTemplate.update("DELETE FROM secrets");
     }
 
     /**
@@ -246,6 +266,68 @@ class SecretLeakTest extends IntegrationTestSupport {
     }
 
     /**
+     * 스트림키 경로 전체를 HTTP로 태운다. 서비스를 직접 부르면 예외 핸들러가
+     * 안 돌아, 핸들러가 거부된 코드를 찍도록 바뀌어도 이 테스트가 통과한다.
+     *
+     * <p>바늘 넷이 다 다른 층에서 나온다 — passphrase는 SecretStore에서,
+     * streamid 토큰은 그 안에 같이 들어 있고, 페어링 코드는 응답에만 있고,
+     * 내부 API 토큰은 설정에서 온다.
+     */
+    @Test
+    void 스트림키_경로를_돌려도_비밀이_로그에_남지_않는다() throws Exception {
+        // 이 테스트만의 사용자. 다른 테스트의 users 정리와 겹치지 않게 한다.
+        var user = userService.findOrCreate(needle("streamkey-sub"), "a@example.com", "김태현", null);
+        String bearer = "Bearer " + tokenService.issue(user).accessToken();
+
+        try (LogCaptor captor = new LogCaptor()) {
+            String issued = mockMvc.perform(post("/api/stream-keys/pairing-codes")
+                            .header("Authorization", bearer))
+                    .andExpect(status().isCreated())
+                    .andReturn().getResponse().getContentAsString();
+            String code = JsonPath.read(issued, "$.code");
+
+            String exchanged = mockMvc.perform(post("/api/stream-keys/pairing-codes/exchange")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + code + "\"}"))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+            String streamid = JsonPath.read(exchanged, "$.streamid");
+            String passphrase = JsonPath.read(exchanged, "$.passphrase");
+
+            mockMvc.perform(post("/internal/stream-keys/resolve")
+                            .header("X-Internal-Token", INTERNAL_TOKEN)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"streamid\":\"" + streamid + "\"}"))
+                    .andExpect(status().isOk());
+
+            // 실패 경로도 태운다. 값을 찍는 사고는 여기서 훨씬 흔하다.
+            mockMvc.perform(post("/api/stream-keys/pairing-codes/exchange")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + code + "\"}"))
+                    .andExpect(status().isConflict());
+            mockMvc.perform(post("/api/stream-keys/rotate").header("Authorization", bearer))
+                    .andExpect(status().isOk());
+
+            assertThat(captor.messages())
+                    .as("경로가 아예 안 돌았다. 그러면 아무것도 검사하지 않은 것이다")
+                    .anyMatch(m -> m.startsWith("auth.pairing.code_exchanged"));
+
+            assertNoSecretsIn(captor,
+                    List.of(code, code.replace("-", ""), streamid, passphrase, INTERNAL_TOKEN));
+
+            // 통째로 찍는 코드가 들어온 것 자체를 잡는다. 이번에 흐른 값이
+            // 우연히 안 걸리더라도 여기서 걸린다.
+            assertThat(String.join("\n", captor.messages()))
+                    .doesNotContain("StreamKeyMaterial[")
+                    .doesNotContain("ResolveResult[")
+                    .doesNotContain("ResolveResponse[")
+                    .doesNotContain("ExchangeResponse[")
+                    .doesNotContain("PairingCodeResponse[")
+                    .doesNotContain("IssuedCode[");
+        }
+    }
+
+    /**
      * 본문이 컨트롤러에 닿기 전에 깨지는 경로. 여기서 예외 메시지를 찍기 시작하면
      * Jackson의 파싱 오류가 물고 온 입력 조각이 그대로 로그로 나간다.
      *
@@ -283,7 +365,7 @@ class SecretLeakTest extends IntegrationTestSupport {
     }
 
     /**
-     * core/CLAUDE.md의 함정: 시크릿 필드에 @Size·@Pattern을 걸면 바인딩 실패
+     * auth/CLAUDE.md의 함정: 시크릿 필드에 @Size·@Pattern을 걸면 바인딩 실패
      * 리포트가 "rejected value [원문]"으로 값을 평문으로 찍는다. @NotBlank는
      * 거부되는 값이 빈 문자열·null뿐이라 안전하다. 지금 상태를 못박아, 나중에
      * 제약을 더하는 변경이 여기서 걸리게 한다.
@@ -292,6 +374,8 @@ class SecretLeakTest extends IntegrationTestSupport {
     void 시크릿을_받는_DTO에는_NotBlank_말고는_걸지_않는다() throws Exception {
         assertThat(constraintsOn(GoogleLoginRequest.class, "code")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(RefreshRequest.class, "refreshToken")).containsExactly(NotBlank.class);
+        assertThat(constraintsOn(ExchangeRequest.class, "code")).containsExactly(NotBlank.class);
+        assertThat(constraintsOn(ResolveRequest.class, "streamid")).containsExactly(NotBlank.class);
     }
 
     /**
@@ -431,10 +515,25 @@ class SecretLeakTest extends IntegrationTestSupport {
                 userService.findOrCreate(googleSub, "a@example.com", "김태현", null));
     }
 
-    /** 마지막 한 글자만 바꿔 서명을 깨뜨린다. */
+    /**
+     * 서명의 <b>첫</b> 글자를 바꿔 깨뜨린다.
+     *
+     * <p><b>마지막 글자를 쓰면 안 된다.</b> HMAC-SHA256 서명 32바이트를 base64url로
+     * 인코딩하면 43글자인데(43×6 = 258 &gt; 256), 마지막 글자는 유효 비트가 4개뿐이다.
+     * 그래서 인코더가 마지막 자리에 만드는 값은 16개(0 4 8 A E I M Q U Y c g k o s w)로
+     * 제한되고 {@code B}는 아예 나오지 않는다. 마지막이 {@code A}(0000)일 때
+     * {@code B}(000001)로 바꾸면 상위 4비트가 같아 <b>같은 32바이트로 디코딩</b>되고,
+     * 서명이 유효한 채 남아 이 테스트가 약 16분의 1로 헛통과한다(실측).
+     *
+     * <p>첫 글자는 유효 비트 6개를 다 쓰므로 다른 문자로 바꾸면 반드시 바이트가 달라진다.
+     */
     private static String tamperSignature(String jwt) {
-        char last = jwt.charAt(jwt.length() - 1);
-        return jwt.substring(0, jwt.length() - 1) + (last == 'A' ? 'B' : 'A');
+        int signatureStart = jwt.lastIndexOf('.') + 1;
+        char first = jwt.charAt(signatureStart);
+
+        return jwt.substring(0, signatureStart)
+                + (first == 'A' ? 'B' : 'A')
+                + jwt.substring(signatureStart + 1);
     }
 
     private String refresh(String refreshToken, ResultMatcher expected) throws Exception {

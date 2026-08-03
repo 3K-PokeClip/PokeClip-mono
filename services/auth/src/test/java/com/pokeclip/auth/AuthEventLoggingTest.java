@@ -68,7 +68,7 @@ class AuthEventLoggingTest extends IntegrationTestSupport {
 
     /**
      * 자식 테이블 행을 남기면 다른 테스트의 부모 정리를 FK가 막는다.
-     * TokenServiceTest가 같은 이유로 같은 정리를 한다. core/CLAUDE.md의 함정이다.
+     * TokenServiceTest가 같은 이유로 같은 정리를 한다. auth/CLAUDE.md의 함정이다.
      * 지금 이게 없어도 초록불인 것은 클래스 실행 순서상 TokenServiceTest의
      * @AfterEach가 앞에 오는 우연 덕이고, 클래스를 새로 넣으면 그 우연이 깨진다.
      */

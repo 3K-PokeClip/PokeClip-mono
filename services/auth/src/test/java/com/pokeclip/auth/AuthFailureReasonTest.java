@@ -56,7 +56,7 @@ class AuthFailureReasonTest extends IntegrationTestSupport {
 
     /**
      * 자식 테이블 행을 남기면 다른 테스트의 부모 정리를 FK가 막는다.
-     * TokenServiceTest가 같은 이유로 같은 정리를 한다. core/CLAUDE.md의 함정이다.
+     * TokenServiceTest가 같은 이유로 같은 정리를 한다. auth/CLAUDE.md의 함정이다.
      */
     @AfterEach
     void tearDown() {
