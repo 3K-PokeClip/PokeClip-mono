@@ -540,10 +540,12 @@ func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.R
 		ix.learn(seg.StreamID, int64(rec.DurationMS))
 	}
 
+	// reason 은 채널별 기여도(훅 vs 파일)를 재는 유일한 창이다.
+	// 이 값의 분포가 무너지는 것이 "훅 채널이 무징후로 죽었다"의 유일한 신호다.
 	ix.log.Info("segment_indexed",
 		"stream_id", seg.StreamID, "seq", rec.Seq, "duration_ms", rec.DurationMS,
 		"start_pts_ms", rec.StartPTSMS, "is_discontinuity", rec.IsDiscontinuity,
-		"bytes", rec.Bytes, "path", rec.LocalPath)
+		"bytes", rec.Bytes, "path", rec.LocalPath, "reason", seg.Reason)
 }
 
 // correctTail 은 이미 넣은 마지막 행의 길이와 크기를 사후에 고친다(D13-교정).

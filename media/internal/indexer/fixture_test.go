@@ -234,6 +234,28 @@ func (c *logCapture) count(level slog.Level, msg string) int {
 	return n
 }
 
+// attrs 는 그 메시지의 **마지막** 기록에서 속성을 키-값 맵으로 뽑는다.
+// "로그가 났다"가 아니라 "무슨 값이 실렸다"까지 봐야 defer 인자 평가 시점 같은 함정이 잡힌다.
+func (c *logCapture) attrs(msg string) map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var found *slog.Record
+	for i := range c.records {
+		if c.records[i].Message == msg {
+			found = &c.records[i]
+		}
+	}
+	if found == nil {
+		return nil
+	}
+	out := map[string]any{}
+	found.Attrs(func(a slog.Attr) bool {
+		out[a.Key] = a.Value.Any()
+		return true
+	})
+	return out
+}
+
 func (c *logCapture) errorCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

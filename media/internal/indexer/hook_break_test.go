@@ -285,3 +285,23 @@ func TestWithoutBreakDriftRuleIsUnchanged(t *testing.T) {
 		t.Error("무장이 없는데 불연속이 붙었다 — 드리프트 판정이 바뀌었다")
 	}
 }
+
+// segment_indexed 의 reason 필드는 채널별 기여도(훅 vs 파일)를 재는 유일한 창이다.
+// 이 필드가 없으면 훅 채널이 무징후로 죽어도 알 수 없다.
+func TestSegmentIndexedLogCarriesReason(t *testing.T) {
+	f := newHookFixture(t)
+	path := f.makeFile("demo", segName(baseWall, 0), 1000)
+
+	f.handleHook(mtxhook.Event{
+		Kind: mtxhook.KindSegmentComplete, StreamID: "demo",
+		At: baseWall, SegmentPath: path,
+	})
+
+	got := f.logs.attrs("segment_indexed")
+	if got == nil {
+		t.Fatal("segment_indexed 로그가 없다")
+	}
+	if got["reason"] != recording.ReasonHook {
+		t.Errorf("segment_indexed.reason = %v(%T), want %d", got["reason"], got["reason"], recording.ReasonHook)
+	}
+}
