@@ -205,7 +205,12 @@ func (r *Reader) consume(ctx context.Context, chunk []byte) {
 	for len(chunk) > 0 {
 		i := bytes.IndexByte(chunk, '\n')
 		if i < 0 {
-			r.appendCarry(chunk)
+			// 개행이 없다 = 이 chunk 전체가 아직 끝나지 않은 줄의 일부다.
+			// 버리는 중이면 **쌓지 않고 버린다**. 쌓으면 그 잔여가 carry 에 남아,
+			// 뒤이어 오는 첫 정상 줄과 붙어 그 줄이 통째로 유실된다.
+			if !r.skipToNewline {
+				r.appendCarry(chunk)
+			}
 			return
 		}
 
@@ -213,20 +218,28 @@ func (r *Reader) consume(ctx context.Context, chunk []byte) {
 		chunk = chunk[i+1:]
 
 		if r.skipToNewline {
-			// 상한 초과로 버린 줄의 잔여다. 개행을 만났으니 여기서 정상 재개한다.
-			r.skipToNewline = false
+			// 상한 초과로 버린 줄의 잔여이며 여기서 그 줄이 끝났다. 정상 재개한다.
+			// carry 도 반드시 비운다 — 버리는 동안 흘러든 바이트가 남아 있을 수 있다.
+			r.resumeAfterOverflow()
 			continue
 		}
 		r.appendCarry(segment)
 		if r.skipToNewline {
 			// 이 줄 자체가 상한을 넘었다. 개행까지 이미 소비했으므로 바로 재개한다.
-			r.skipToNewline = false
+			r.resumeAfterOverflow()
 			continue
 		}
 
 		r.emit(ctx, r.carry)
 		r.carry = r.carry[:0]
 	}
+}
+
+// resumeAfterOverflow 는 버리던 줄이 개행으로 끝났을 때 정상 읽기로 돌아온다.
+// carry 를 함께 비우는 것이 핵심이다 — 둘 중 하나만 되돌리면 다음 줄이 오염된다.
+func (r *Reader) resumeAfterOverflow() {
+	r.skipToNewline = false
+	r.carry = r.carry[:0]
 }
 
 // appendCarry 는 부분 줄을 이어 붙인다. 상한을 넘으면 그 줄을 버린다.

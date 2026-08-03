@@ -258,6 +258,39 @@ func TestOverlongLineIsDroppedAndReadingResumes(t *testing.T) {
 	}
 }
 
+// 상한 초과 줄의 잔여가 **폴 경계를 넘어** 도착하면, 그 잔여를 carry 에 쌓으면 안 된다.
+// 쌓으면 뒤이어 오는 첫 정상 줄이 쓰레기와 붙어 통째로 유실된다.
+//
+// 앞선 테스트(한 chunk 안에서 초과와 개행이 함께 오는 경우)는 이 누수를 잡지 못한다 —
+// 반드시 write 를 폴 경계로 쪼개야 재현된다.
+func TestOverflowRemnantAcrossPollsDoesNotEatNextLine(t *testing.T) {
+	f := newReaderFixture(t, 128)
+	f.start()
+
+	// ① 상한을 넘는 쓰레기를 개행 없이 쓴다 → 초과 판정, 다음 개행까지 건너뛰기 시작.
+	garbage := make([]byte, 300)
+	for i := range garbage {
+		garbage[i] = 'x'
+	}
+	f.write(string(garbage))
+	waitFor(t, "hook_line_overflow", func() bool { return f.logs.count("hook_line_overflow") >= 1 })
+
+	// ② 같은 줄의 잔여가 다음 폴에서 도착한다(상한보다 작아 초과 판정에 걸리지 않는다).
+	f.write("남은쓰레기")
+	time.Sleep(30 * time.Millisecond)
+
+	// ③ 개행으로 그 줄이 끝나고, 곧바로 정상 줄이 온다.
+	f.write("\n" + line("online", "demo", 1784000000000000000))
+
+	ev := f.next()
+	if ev.StreamID != "demo" {
+		t.Errorf("StreamID = %q, want demo — 정상 줄이 잔여 쓰레기와 붙었다", ev.StreamID)
+	}
+	if n := f.logs.count("hook_line_invalid"); n != 0 {
+		t.Errorf("hook_line_invalid = %d회, want 0회 — 정상 줄이 오염됐다", n)
+	}
+}
+
 // 파싱 실패 줄은 그 줄만 버린다. 하나 때문에 뒤의 정상 줄까지 멈추면 안 된다.
 func TestInvalidLineIsSkipped(t *testing.T) {
 	f := newReaderFixture(t, 0)
