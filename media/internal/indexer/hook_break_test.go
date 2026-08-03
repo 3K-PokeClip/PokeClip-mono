@@ -305,3 +305,218 @@ func TestSegmentIndexedLogCarriesReason(t *testing.T) {
 		t.Errorf("segment_indexed.reason = %v(%T), want %d", got["reason"], got["reason"], recording.ReasonHook)
 	}
 }
+
+// 항목 7 — **Handle 진입부** reconcileBreaks 가 정확성의 담당자임을 고정한다.
+//
+// 커서를 미리 적재해 두면 무장 직후 reconcile(조기 최적화)이 다 처리해 버려서,
+// 진입부 배선을 지워도 전건 그린이 된다. 커서 미적재 상태에서 시작해야 진입부만이
+// 유일한 방어선이 되고 그 배선이 실제로 검증된다.
+func TestEntryPointReconcileDiscardsPassedBreakWithoutPreloadedCursor(t *testing.T) {
+	f := newHookFixture(t)
+
+	// DB 에만 행을 심는다 — 메모리 커서는 아직 이 스트림을 모른다.
+	passedPath := f.makeFile("demo", segName(baseWall, seg4s+900*time.Millisecond), 1000)
+	f.store.seed(index.Record{
+		StreamID: "demo", Seq: 0, StartPTSMS: 0,
+		StartWallUTC: baseWall.Add(seg4s + 900*time.Millisecond),
+		DurationMS:   4000, LocalPath: passedPath, UploadState: index.UploadStatePending,
+	})
+
+	// 무장한다. 커서가 없으므로 결정 ②에 따라 무장 직후 reconcile 은 건너뛴다.
+	f.arm("demo", seg4s, seg4s+900*time.Millisecond)
+	if n := len(f.ix.breaks["demo"]); n != 1 {
+		t.Fatalf("무장 직후 breaks = %d건, want 1건(커서 미적재라 정리를 건너뛴다)", n)
+	}
+
+	// 이미 장부에 오른 그 조각이 도착한다 → 진입부 reconcile 이 돌고, H2 로 조기 반환한다.
+	seg, err := recording.ParseSegmentPath(f.root, passedPath)
+	if err != nil {
+		t.Fatalf("ParseSegmentPath 실패: %v", err)
+	}
+	seg.Reason = recording.ReasonNextFile
+	f.mustHandle(seg)
+
+	if n := len(f.ix.breaks["demo"]); n != 0 {
+		t.Fatalf("breaks = %d건, want 0건 — 진입부 reconcile 이 돌지 않았다", n)
+	}
+	if n := f.logs.count(slog.LevelInfo, "hook_break_discarded"); n != 1 {
+		t.Errorf("hook_break_discarded = %d회, want 1회", n)
+	}
+
+	// 지나간 경계가 다음 조각에 붙으면 영속 오표시다.
+	// 꼬리(wall 4.9s, dur 4s)의 기대 시각과 가깝게 잡아 드리프트 판정이 끼어들지 않게 한다.
+	next := f.segment("demo", segName(baseWall, 8900*time.Millisecond), 1000, recording.ReasonNextFile)
+	f.mustHandle(next)
+	if f.discont("demo", next.Path) {
+		t.Error("지나간 경계가 다음 조각에 붙었다(영속 오표시)")
+	}
+}
+
+// 항목 9 — Guard 부등호의 경계를 정확히 못 박는다.
+// 소비 조건은 StartWall >= OnlineAt - Guard 이며 **경계값 포함**이다.
+func TestGuardBoundaryIsInclusiveAtExactlyGuard(t *testing.T) {
+	const segAt = 4010 * time.Millisecond // 드리프트 10ms — tolerance 안이라 훅만이 판정 근거다
+
+	tests := []struct {
+		name     string
+		onlineAt time.Duration
+		want     bool
+	}{
+		{"19ms 이른 조각(Guard 안)", segAt + 19*time.Millisecond, true},
+		{"정확히 20ms 이른 조각(경계 포함)", segAt + 20*time.Millisecond, true},
+		{"21ms 이른 조각(Guard 밖)", segAt + 21*time.Millisecond, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newHookFixture(t)
+			f.indexOne("demo", 0)
+			f.arm("demo", seg4s, tc.onlineAt)
+
+			seg := f.segment("demo", segName(baseWall, segAt), 1000, recording.ReasonNextFile)
+			f.mustHandle(seg)
+
+			if got := f.discont("demo", seg.Path); got != tc.want {
+				t.Errorf("is_discontinuity = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// StartWall == OfflineAt 인 조각은 **이전 세션의 것**이다(엄격 부등호).
+// 등호를 허용하면 정상 종료 직전의 마지막 partial 조각이 새 세션의 표시를 가로챈다.
+func TestSegmentExactlyAtOfflineTimeIsNotConsumed(t *testing.T) {
+	const segAt = 4010 * time.Millisecond
+
+	f := newHookFixture(t)
+	f.indexOne("demo", 0)
+	f.arm("demo", segAt, segAt+5*time.Millisecond) // OfflineAt == 조각의 StartWall
+
+	seg := f.segment("demo", segName(baseWall, segAt), 1000, recording.ReasonNextFile)
+	f.mustHandle(seg)
+
+	if f.discont("demo", seg.Path) {
+		t.Error("StartWall == OfflineAt 인 조각이 소비됐다 — 이전 세션 조각을 가로챈다")
+	}
+	if n := len(f.ix.breaks["demo"]); n != 1 {
+		t.Errorf("breaks = %d건, want 1건(소비되지 않아야 한다)", n)
+	}
+}
+
+// 항목 11 — DuplicatePath 로 돌아온 경우의 해제 분기.
+// 그 조각의 행이 무장 전에 이미 존재했다는 뜻이므로, 다음 조각에 넘기면 영속 오표시다.
+func TestDuplicatePathReleasesBreakAsDiscarded(t *testing.T) {
+	f := newHookFixture(t)
+	f.indexOne("demo", 0) // 커서·이력 맵 적재
+
+	// 메모리 이력이 모르는 행을 DB 에만 심는다 → H2 를 통과해 commit 까지 간다.
+	dupPath := f.makeFile("demo", segName(baseWall, seg4s+900*time.Millisecond), 1000)
+	f.store.seed(index.Record{
+		StreamID: "demo", Seq: 9, StartPTSMS: 9000,
+		StartWallUTC: baseWall.Add(seg4s + 900*time.Millisecond),
+		DurationMS:   4000, LocalPath: dupPath, UploadState: index.UploadStatePending,
+	})
+
+	f.arm("demo", seg4s, seg4s+900*time.Millisecond)
+
+	seg, err := recording.ParseSegmentPath(f.root, dupPath)
+	if err != nil {
+		t.Fatalf("ParseSegmentPath 실패: %v", err)
+	}
+	seg.Reason = recording.ReasonNextFile
+	f.mustHandle(seg)
+
+	if n := len(f.ix.breaks["demo"]); n != 0 {
+		t.Fatalf("breaks = %d건, want 0건 — DuplicatePath 에서 해제하지 않았다", n)
+	}
+	got := f.logs.attrs("hook_break_discarded")
+	if got == nil {
+		t.Fatal("hook_break_discarded 가 없다")
+	}
+	if got["reason"] != "duplicate_path" {
+		t.Errorf("hook_break_discarded.reason = %v, want duplicate_path", got["reason"])
+	}
+
+	// 다음 조각에 이월되지 않아야 한다.
+	//
+	// DuplicatePath 는 커서를 전진시키지 않으므로 꼬리는 여전히 첫 조각(wall 0, dur 4s)이다.
+	// 다음 조각을 기대 시각(+4s) 근처로 잡아야 드리프트 판정이 끼어들어 참을 만드는
+	// 거짓 실패를 피한다 — 이 테스트가 보려는 것은 오직 무장 이월 여부다.
+	next := f.segment("demo", segName(baseWall, 5*time.Second), 1000, recording.ReasonNextFile)
+	f.mustHandle(next)
+	if f.discont("demo", next.Path) {
+		t.Error("놓친 경계가 다음 조각에 붙었다(영속 오표시)")
+	}
+}
+
+// 항목 14 — consumed 로그의 seq 는 실제로 표시된 행의 seq 와 같아야 한다.
+// 이 등식이 깨지면 운영 검증에서 "어느 조각이 표시됐는지"를 로그로 짚을 수 없다.
+func TestConsumedLogCarriesFlaggedRowSeq(t *testing.T) {
+	f := newHookFixture(t)
+	f.indexOne("demo", 0)
+	f.arm("demo", seg4s, seg4s+900*time.Millisecond)
+
+	seg := f.segment("demo", segName(baseWall, seg4s+900*time.Millisecond), 1000, recording.ReasonNextFile)
+	f.mustHandle(seg)
+
+	var flaggedSeq int64 = -1
+	for _, r := range f.store.records("demo") {
+		if r.IsDiscontinuity {
+			flaggedSeq = r.Seq
+		}
+	}
+	if flaggedSeq < 0 {
+		t.Fatal("표시된 행이 없다")
+	}
+	got := f.logs.attrs("hook_break_consumed")
+	if got == nil {
+		t.Fatal("hook_break_consumed 가 없다")
+	}
+	if got["seq"] != flaggedSeq {
+		t.Errorf("hook_break_consumed.seq = %v, want %d(표시된 행)", got["seq"], flaggedSeq)
+	}
+	if got["path"] != seg.Path {
+		t.Errorf("hook_break_consumed.path = %v, want %q", got["path"], seg.Path)
+	}
+}
+
+// 항목 12 — ReasonHook 은 승격(H6) 대상이 아니다.
+// 훅 시점 파일은 이미 최종 크기라 승격이 방어할 위험이 없고, 방송 마지막 partial 조각도
+// 같은 사유로 오므로 포함시키면 매 방송 재프로브가 헛돌아 reprobe_disabled 가 켜진다.
+func TestReasonHookIsExcludedFromPromotion(t *testing.T) {
+	f := newHookFixture(t, 3000) // suspect(3850) 미만 — ReasonNextFile 이면 재프로브가 돈다
+	path := f.makeFile("demo", segName(baseWall, 0), 1000)
+
+	f.handleHook(mtxhook.Event{
+		Kind: mtxhook.KindSegmentComplete, StreamID: "demo",
+		At: baseWall, SegmentPath: path,
+	})
+
+	if n := f.logs.count(slog.LevelWarn, "short_segment_after_reprobe"); n != 0 {
+		t.Errorf("short_segment_after_reprobe = %d회, want 0회 — 훅 세그먼트가 승격 대상이 됐다", n)
+	}
+	if f.ix.failStreak["demo"] != 0 {
+		t.Errorf("failStreak = %d, want 0", f.ix.failStreak["demo"])
+	}
+}
+
+// ReasonHook 은 학습(기대 길이 상향) 표본에서도 빠진다.
+func TestReasonHookIsExcludedFromLearning(t *testing.T) {
+	f := newHookFixture(t, 5000) // 기대치(4000)보다 길다 — ReasonNextFile 이면 학습된다
+	for i := range DefaultOptions().LearnSampleCount {
+		path := f.makeFile("demo", segName(baseWall, time.Duration(i)*seg4s), 1000)
+		f.handleHook(mtxhook.Event{
+			Kind: mtxhook.KindSegmentComplete, StreamID: "demo",
+			At: baseWall.Add(time.Duration(i) * seg4s), SegmentPath: path,
+		})
+	}
+
+	if len(f.store.records("demo")) != DefaultOptions().LearnSampleCount {
+		t.Fatalf("행 수 = %d — 의도한 경로가 아니다", len(f.store.records("demo")))
+	}
+	if got, ok := f.ix.learnedMS["demo"]; ok {
+		t.Errorf("learnedMS = %d(설정됨), want 미설정 — 훅 세그먼트가 학습 표본에 들어갔다", got)
+	}
+	if len(f.ix.samples["demo"]) != 0 {
+		t.Errorf("samples = %d건, want 0건", len(f.ix.samples["demo"]))
+	}
+}

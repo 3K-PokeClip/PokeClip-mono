@@ -285,6 +285,10 @@ func (ix *Indexer) handleHookSegment(ctx context.Context, ev mtxhook.Event) erro
 	// 스트림을 등재한다. 확인 없이 넘기면 스풀에 존재하지 않는 경로를 흘리는 것만으로
 	// DB 왕복 2회와 맵 증식을 유발할 수 있다 — 스풀은 다른 컨테이너가 쓰는 외부 입력이므로
 	// 값싼 로컬 stat 로 먼저 거른다.
+	//
+	// 이관(별도 설계 결정 필요): 심링크 해석(filepath.EvalSymlinks)은 넣지 않았다.
+	// recordings 볼륨은 MediaMTX 전용 쓰기이고 사이드카는 :ro 라 현 구성에서 실익이 없으나,
+	// 업로더(POK-30)가 같은 경로를 S3 로 올리기 시작하면 재평가한다. PR2 제약표에 기록한다.
 	if _, statErr := os.Stat(seg.Path); statErr != nil {
 		ix.log.Warn("hook_segment_missing",
 			"stream_id", seg.StreamID, "path", seg.Path, "err", statErr,

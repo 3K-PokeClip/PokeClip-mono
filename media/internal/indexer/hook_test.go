@@ -279,30 +279,36 @@ func TestRejectedSegmentPathWarnsAndInsertsNothing(t *testing.T) {
 // 확인 대상은 "훅 무장 → **워처 경로 세그먼트**가 소비"다. 훅 세그먼트로는 이 등식이
 // 검증되지 않는다 — 같은 ToSegment 경로를 지나므로 키가 어긋나도 함께 어긋난다.
 func TestHookBreakKeyMatchesWatcherStreamID(t *testing.T) {
+	// 대문자·언더바·하이픈이 **전부** 들어간 값을 쓴다.
+	// "demo" 는 ToLower·TrimSpace·Clean 어느 것에도 불변이라, 결정 ①이 금지한 변형을
+	// 하나라도 넣는 변경을 통과시켜 버린다(테스트가 아무것도 지키지 못한다).
+	const streamID = "Demo_Stream-01"
+
 	f := newHookFixture(t)
 
 	// 꼬리를 만든다(seq 0 에 불연속은 무의미하므로).
-	first := f.segment("demo", segName(baseWall, 0), 1000, recording.ReasonNextFile)
+	first := f.segment(streamID, segName(baseWall, 0), 1000, recording.ReasonNextFile)
 	f.mustHandle(first)
 
-	// MTX_PATH="demo" 로 무장한다.
-	f.arm("demo", 4*time.Second, 4900*time.Millisecond)
+	// 세션 훅의 MTX_PATH 로 무장한다.
+	f.arm(streamID, 4*time.Second, 4900*time.Millisecond)
 
 	// 워처 경로로 만든 세그먼트가 그 무장을 소비해야 한다.
-	watched := f.segment("demo", segName(baseWall, 4900*time.Millisecond), 1000, recording.ReasonNextFile)
+	watched := f.segment(streamID, segName(baseWall, 4900*time.Millisecond), 1000, recording.ReasonNextFile)
 	f.mustHandle(watched)
 
 	var got bool
-	for _, r := range f.store.records("demo") {
+	for _, r := range f.store.records(streamID) {
 		if r.LocalPath == watched.Path {
 			got = r.IsDiscontinuity
 		}
 	}
 	if !got {
-		t.Error("워처 경로 세그먼트가 훅 무장을 소비하지 못했다 — breaks 키가 어긋났다")
+		t.Errorf("워처 경로 세그먼트가 훅 무장을 소비하지 못했다 — breaks 키가 어긋났다"+
+			" (무장 키 %q vs 조회 키 %q)", streamID, watched.StreamID)
 	}
-	if n := len(f.ix.breaks["demo"]); n != 0 {
-		t.Errorf("breaks[\"demo\"] 길이 = %d, want 0", n)
+	if n := len(f.ix.breaks[streamID]); n != 0 {
+		t.Errorf("breaks[%q] 길이 = %d, want 0", streamID, n)
 	}
 }
 

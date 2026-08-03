@@ -150,15 +150,6 @@ func line(kind, path string, nano int64) string {
 // 테스트
 // ---------------------------------------------------------------------------
 
-// 결정 ⑤ — 버퍼는 256 고정이다. 드롭 대신 블록하는 것이 계약이므로 버퍼 크기가
-// 정확성의 일부는 아니지만, 초기 Scan 이 main 루프를 점유하는 동안의 유입 흡수량이다.
-func TestEventsChannelIsBuffered(t *testing.T) {
-	f := newReaderFixture(t, 0)
-	if got := cap(f.r.Events()); got != eventBufSize {
-		t.Errorf("Events 버퍼 = %d, want %d", got, eventBufSize)
-	}
-}
-
 // Start 는 동기이며 반환 시점에 시작 오프셋이 확정돼 있어야 한다.
 // 과거 이벤트를 재생하면 이미 지나간 세션 경계로 엉뚱한 조각에 불연속이 붙는다.
 func TestStartFixesOffsetAtEOFAndSkipsPastEvents(t *testing.T) {
@@ -390,5 +381,93 @@ func TestUnreadableSpoolDegradesWithoutKillingProcess(t *testing.T) {
 func TestNewReaderRejectsEmptySpoolPath(t *testing.T) {
 	if _, err := NewReader(ReaderOptions{Log: slog.Default()}); err == nil {
 		t.Fatal("빈 SpoolPath 를 받아들였다")
+	}
+}
+
+// 결정 ⑤ "드롭 금지"를 **행동으로** 고정한다.
+//
+// cap 단언만으로는 non-blocking send(select+default)로 바꾸는 변경을 잡지 못한다.
+// 버퍼를 1로 좁히고 소비를 멈춘 채 3줄을 흘린 뒤, 소비를 재개했을 때 3건이 **전부**
+// 도착해야 한다. 드롭 구현이면 2건이 사라진다.
+func TestSlowConsumerBlocksInsteadOfDropping(t *testing.T) {
+	spool := filepath.Join(t.TempDir(), "events.jsonl")
+	logs := &logCapture{}
+	r, err := NewReader(ReaderOptions{
+		SpoolPath:    spool,
+		PollInterval: 5 * time.Millisecond,
+		EventBufSize: 1, // 소비가 멈추면 곧바로 가득 찬다
+		Log:          slog.New(logs),
+	})
+	if err != nil {
+		t.Fatalf("NewReader 실패: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := r.Start(ctx); err != nil {
+		cancel()
+		t.Fatalf("Start 실패: %v", err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		<-r.Done()
+	})
+
+	// 소비자가 멈춰 있는 동안(아직 아무도 Events 를 읽지 않았다) 3줄을 쓴다.
+	fh, err := os.OpenFile(spool, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatalf("스풀 열기 실패: %v", err)
+	}
+	want := []string{"aaa", "bbb", "ccc"}
+	for i, id := range want {
+		if _, err := fh.WriteString(line("online", id, int64(1784000000000000000+i))); err != nil {
+			t.Fatalf("스풀 쓰기 실패: %v", err)
+		}
+	}
+	fh.Close()
+	time.Sleep(50 * time.Millisecond) // Reader 가 버퍼를 채우고 블록하게 둔다
+
+	// 이제 소비를 재개한다. 3건이 순서대로 전부 와야 한다.
+	for _, wantID := range want {
+		select {
+		case ev, ok := <-r.Events():
+			if !ok {
+				t.Fatal("Events 채널이 닫혔다")
+			}
+			if ev.StreamID != wantID {
+				t.Fatalf("StreamID = %q, want %q — 이벤트가 드롭됐다", ev.StreamID, wantID)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%q 가 오지 않았다 — 드롭됐다", wantID)
+		}
+	}
+}
+
+// 기본 버퍼는 256 이다(결정 ⑤의 확정값).
+func TestDefaultEventBufSize(t *testing.T) {
+	f := newReaderFixture(t, 0)
+	if got := cap(f.r.Events()); got != DefaultEventBufSize {
+		t.Errorf("기본 Events 버퍼 = %d, want %d", got, DefaultEventBufSize)
+	}
+	if DefaultEventBufSize != 256 {
+		t.Errorf("DefaultEventBufSize = %d, want 256", DefaultEventBufSize)
+	}
+}
+
+// 상한과 **정확히 같은** 길이의 줄은 정상이다(경계 포함).
+// `>` 를 `>=` 로 바꾸는 변경은 멀쩡한 줄을 버리기 시작하는데, 초과/미만만 보는
+// 테스트로는 잡히지 않는다.
+func TestLineExactlyAtMaxLineBytesIsAccepted(t *testing.T) {
+	const streamID = "demo"
+	body := line("online", streamID, 1784000000000000000)
+	exact := len(body) - 1 // 개행은 줄 길이에 포함되지 않는다
+
+	f := newReaderFixture(t, exact)
+	f.start()
+	f.write(body)
+
+	if ev := f.next(); ev.StreamID != streamID {
+		t.Errorf("StreamID = %q, want %q", ev.StreamID, streamID)
+	}
+	if n := f.logs.count("hook_line_overflow"); n != 0 {
+		t.Errorf("hook_line_overflow = %d회, want 0회 — 상한과 같은 길이의 줄을 버렸다", n)
 	}
 }

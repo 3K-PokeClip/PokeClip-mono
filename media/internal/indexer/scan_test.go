@@ -313,7 +313,7 @@ func TestScanSummaryOnEveryExitPathWithFinalValues(t *testing.T) {
 		if n := f.logs.count(slog.LevelWarn, "latest_stat_failed"); n != 1 {
 			t.Fatalf("latest_stat_failed = %d건, want 1건 — 의도한 경로가 아니다", n)
 		}
-		assertSummary(t, f, map[string]int64{"files": 2, "indexed": 0, "pending": 2})
+		assertSummary(t, f, map[string]int64{"files": 2, "indexed": 0, "pending": 2, "holes": 0})
 	})
 
 	t.Run("최신 파일 확정 처리", func(t *testing.T) {
@@ -327,7 +327,7 @@ func TestScanSummaryOnEveryExitPathWithFinalValues(t *testing.T) {
 		if len(f.store.records("demo")) != 1 {
 			t.Fatal("최신 파일이 확정되지 않았다 — 의도한 경로가 아니다")
 		}
-		assertSummary(t, f, map[string]int64{"files": 1, "pending": 1})
+		assertSummary(t, f, map[string]int64{"files": 1, "indexed": 0, "pending": 1, "holes": 0})
 	})
 
 	t.Run("최신 파일 워처 반납", func(t *testing.T) {
@@ -342,7 +342,7 @@ func TestScanSummaryOnEveryExitPathWithFinalValues(t *testing.T) {
 		if f.adopter.count() != 1 {
 			t.Fatal("워처에 반납되지 않았다 — 의도한 경로가 아니다")
 		}
-		assertSummary(t, f, map[string]int64{"pending": 1})
+		assertSummary(t, f, map[string]int64{"files": 1, "indexed": 0, "pending": 1, "holes": 0})
 	})
 }
 
@@ -354,7 +354,11 @@ func assertSummary(t *testing.T, f *fixture, want map[string]int64) {
 	if got == nil {
 		t.Fatal("scan_summary 가 없다")
 	}
-	for k, w := range want {
+	for _, k := range []string{"files", "indexed", "pending", "holes"} {
+		w, ok := want[k]
+		if !ok {
+			t.Fatalf("assertSummary 는 4개 필드를 모두 요구한다 — %q 가 빠졌다", k)
+		}
 		if got[k] != w {
 			t.Errorf("scan_summary.%s = %v, want %d (전체: %+v)", k, got[k], w, got)
 		}

@@ -11,16 +11,16 @@ import (
 	"time"
 )
 
-// eventBufSize 는 Events 채널의 버퍼다.
+// DefaultEventBufSize 는 Events 채널 버퍼의 기본값이다.
 //
 // 근거: 스풀은 파일이므로 소비가 느려 Reader 가 블록해도 **이벤트 유실이 없다**
 // (다음 폴에서 이어 읽는다). 판정도 도착 순서가 아니라 시각 비교이므로 지연이 정확성에
 // 무해하다. 256 은 초기 Scan·5분 주기 재스캔이 main 루프를 점유하는 동안의 유입을 흡수하는
-// 여유이며 그 이상은 의미가 없다. 환경변수로 노출하지 않는다(YAGNI).
+// 여유이며 그 이상은 의미가 없다. 환경변수로는 노출하지 않는다(YAGNI).
 //
 // **금지**: 버퍼가 찼을 때 드롭하는 non-blocking send 를 쓰지 않는다.
 // 드롭은 무징후 미탐이고 블록은 무해하다 — 두 실패의 무게가 다르다.
-const eventBufSize = 256
+const DefaultEventBufSize = 256
 
 // 기본값들. 스풀 경로에는 기본값을 두지 않는다 — 빈 값이 "훅 어댑터 끔"이기 때문이다.
 const (
@@ -44,6 +44,9 @@ type ReaderOptions struct {
 	PollInterval time.Duration
 	// MaxLineBytes 는 손상 줄 폐기 상한이다. 0 이면 8192.
 	MaxLineBytes int
+	// EventBufSize 는 Events 채널 버퍼다. 0 이면 DefaultEventBufSize.
+	// 테스트가 "버퍼가 차도 드롭하지 않는다"를 좁은 버퍼로 실증할 수 있게 열어 둔다.
+	EventBufSize int
 	Log          *slog.Logger
 }
 
@@ -84,12 +87,15 @@ func NewReader(opt ReaderOptions) (*Reader, error) {
 	if opt.MaxLineBytes <= 0 {
 		opt.MaxLineBytes = defaultMaxLineBytes
 	}
+	if opt.EventBufSize <= 0 {
+		opt.EventBufSize = DefaultEventBufSize
+	}
 	if opt.Log == nil {
 		opt.Log = slog.Default()
 	}
 	return &Reader{
 		opt:    opt,
-		events: make(chan Event, eventBufSize),
+		events: make(chan Event, opt.EventBufSize),
 		done:   make(chan struct{}),
 	}, nil
 }
