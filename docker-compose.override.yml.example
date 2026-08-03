@@ -1,0 +1,33 @@
+# docker-compose.override.yml.example — 1번(Media) 전용. cp 해서 쓴다. 커밋 금지.
+#
+# 값을 리터럴로 박지 않고 전부 보간형으로 둔다. compose 의 environment 리터럴은
+# 셸 환경변수보다 우선하므로, 리터럴로 두면 AC 의 임시 덮어쓰기가 조용히 무시된다.
+services:
+  segment-indexer:
+    stop_grace_period: 20s     # 최악 종료 6초에 여유를 둔다. 본체 compose 는 무변경
+    # 폴백을 쓸 때만 아래 두 줄의 주석을 푼다.
+    # volumes:
+    #   - ${HOME}/.aws:/home/sidecar/.aws:ro
+    #
+    # ★ environment 키는 하나뿐이어야 한다. YAML 매핑에 같은 키를 두 번 쓰면
+    #   파서에 따라 오류이거나 앞의 블록이 통째로 유실된다.
+    environment:
+      # --- 1차: 셸에서 내보낸 임시 자격증명 3종. 셋 다 있어야 한다 ---
+      #   eval "$(aws configure export-credentials --format env)"
+      AWS_ACCESS_KEY_ID:     ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN:     ${AWS_SESSION_TOKEN:-}      # 빠뜨리면 InvalidToken
+      # --- 폴백을 쓸 때만 의미가 있는 두 줄 — 마운트와 함께 주석을 푼다 ---
+      # ★ 마운트 없이 AWS_PROFILE 을 넣으면 SDK 가 존재하지 않는 shared config
+      #   profile 을 요구해 기동이 죽는다("failed to get shared config profile,
+      #   default" — 2026-08-04 AC 7단계 실측). 1차(env 3종) 경로에선 꺼 둔다.
+      # HOME:                  ${SIDECAR_HOME:-/home/sidecar}
+      # AWS_PROFILE:           ${AWS_PROFILE:-default}
+      # --- 공통 ---
+      AWS_REGION:                 ${AWS_REGION:-ap-northeast-2}
+      S3_BUCKET:                  ${S3_BUCKET:-pokeclip-media-demo-2557}
+      LOG_LEVEL:                  ${LOG_LEVEL:-info}          # ★ 없으면 DEBUG 계측이 영구 0
+      SEGMENT_UPLOAD_SWEEP_EVERY: ${SEGMENT_UPLOAD_SWEEP_EVERY:-30s}
+      SEGMENT_UPLOAD_CIRCUIT_MAX: ${SEGMENT_UPLOAD_CIRCUIT_MAX:-3}
+      SEGMENT_UPLOAD_RETRY_MAX:   ${SEGMENT_UPLOAD_RETRY_MAX:-4}
+      SEGMENT_UPLOAD_TAIL_HOLD:   ${SEGMENT_UPLOAD_TAIL_HOLD:-5s}

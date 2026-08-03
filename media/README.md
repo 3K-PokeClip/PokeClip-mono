@@ -42,7 +42,7 @@
 | 완성 판정 | 후속 파일 생성(주) + 유휴 타임아웃(보조) + 크기 안정 대기 |
 | 길이 | fMP4 박스 실측(`internal/fmp4meta`). 벽시계로 어림잡지 않는다 |
 | 파일 접근 | **읽기 전용**(`recordings:/recordings:ro`). 쓰지도 지우지도 않는다 |
-| S3 | **미접촉**. `s3_key`는 문자열로 예약만 하고 `upload_state`는 항상 `pending` (업로드는 POK-30) |
+| S3 | **완성 즉시 개별 업로드(POK-30, ADR-014).** 완성 조각을 예약된 `s3_key` 그대로 PUT하고 성공 시 `pending → uploaded`(CAS), 실패 시 재시도 소진 후 `failed`. 스위퍼(기본 30s)가 `pending`·`failed` 잔여를 주기 회수한다(`failed`는 종국 아님). **`S3_BUCKET`이 비면 업로더 전체가 꺼지고 인덱싱만 동작**(`uploader_disabled` INFO 1줄) — 2·3번의 기본 상태다. 1번 전용 활성화는 `docker-compose.override.yml.example`을 `cp` 해서 쓴다 |
 | 스키마 | `internal/index/ddl.go`가 **정본 DDL — 1번 소유** (2026-08-01 3번 위임, ADR-0001). **컬럼 추가·변경은 3번 승인 필수**(3번이 이 표를 읽음). RDS 적용 절차는 AWS 배포 시점에 결정 |
 
 동작 확인 절차는 [`docs/dev-environment.md`](../docs/dev-environment.md)의 "세그먼트 인덱싱 확인"에 있다.
@@ -98,7 +98,26 @@
 | `SEGMENT_FIFO_MAX_LEN` | `4096` | 이 길이를 넘으면 회복 불가로 보고 종료한다. 재기동 후 전수 스캔이 따라잡는다 |
 | `SEGMENT_MAX_WATCH_DIRS` | `1024` | 감시할 디렉토리 수 상한. inotify watch는 커널 자원이라 무한정 늘릴 수 없다. 초과하면 ERROR 1회 후 신규 등록을 무시하며, 파일은 주기 재스캔이 계속 따라잡는다 |
 
-위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 21개). 잘못된 값(숫자 자리에 문자,
+**S3 업로더(POK-30) — `S3_BUCKET`이 비어 있으면 아래 값 전부 무시되고 업로더가 꺼진다.**
+
+| 이름 | 기본값 | 의미 |
+|---|---|---|
+| `S3_BUCKET` | (빈값 = 비활성) | 업로드 대상 버킷. **버킷 판정이 다른 S3 값 검증보다 앞이라, 비워 두면 나머지 S3 설정이 틀려도 인덱싱은 산다** |
+| `AWS_REGION` | `ap-northeast-2` | 버킷 리전 |
+| `S3_ENDPOINT` | (미설정 = AWS 기본) | 호환 스토리지(MinIO 등)용 엔드포인트 URL. scheme+호스트 필수 |
+| `S3_FORCE_PATH_STYLE` | `false` | 호환 스토리지용 path-style 주소 지정 |
+| `SEGMENT_UPLOAD_RETRY_MAX` | `4` | 조각 1개당 PUT 시도 상한(지수 백오프). 소진하면 `failed` 기록 후 스위퍼가 회수 |
+| `SEGMENT_UPLOAD_SWEEP_EVERY` | `30s` | 스위퍼 회차 간격 — `pending`·`failed` 잔여를 주기 회수 |
+| `SEGMENT_UPLOAD_CIRCUIT_MAX` | `3` | 연속 실패가 이 값에 닿으면 브레이커가 열려 PUT을 멈추고 다음 회차 탐침으로 복구를 살핀다. `0`이면 브레이커 없음 |
+| `SEGMENT_UPLOAD_TAIL_HOLD` | `5s` | 꼬리(마지막) 조각을 이만큼 보류해 교정 창과의 충돌을 피한다. 꼬리 유예(2m)보다 짧고 `SEGMENT_SETTLE_WAIT` 이상이어야 기동한다 |
+
+자격증명은 SDK 기본 체인(env 3종 → 공유 프로필)을 쓴다. 로컬에서는
+`eval "$(aws configure export-credentials --format env)"` 후
+`docker-compose.override.yml.example`을 복사해 기동한다(파일 안 주석 참조).
+`AWS_PROFILE`은 `~/.aws` 마운트 폴백을 켤 때만 함께 넣는다 — 마운트 없이 넣으면
+SDK가 존재하지 않는 프로필을 요구해 기동이 죽는다(2026-08-04 실측).
+
+위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 29개). 잘못된 값(숫자 자리에 문자,
 음수, 파싱 불가한 기간)은 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
 `SEGMENT_SUSPECT_BELOW_MS`가 `SEGMENT_EXPECTED_DURATION_MS`보다 크면 기동 단계에서 거부한다.
 
