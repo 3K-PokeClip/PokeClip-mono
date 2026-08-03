@@ -23,8 +23,18 @@ public abstract class IntegrationTestSupport {
     // Testcontainers 2.x에서 이 클래스는 비제네릭이다. 1.x의 self-type
     // 파라미터(PostgreSQLContainer<SELF>)는 새 org.testcontainers.postgresql
     // 패키지에서 사라졌다 — <?>를 붙이면 컴파일되지 않는다.
+    /**
+     * max_connections를 기본값 100에서 올린다. 스프링 컨텍스트가 여러 개고 각자
+     * 자기 Hikari 풀을 갖는데, 동시성 테스트가 실제로 겹쳐 돌려면 풀이 커야 한다
+     * (application-test.yml에서 30으로 올려 뒀다). 기본 100이면
+     * <b>{@code FATAL: sorry, too many clients already}</b>로 컨텍스트 로딩이
+     * 무너진다 — 30 × 컨텍스트 수가 100을 넘기 때문이다.
+     *
+     * <p>300인 이유: 컨텍스트가 8개 안팎이고 8 × 30 = 240이라 여유를 뒀다.
+     */
     protected static final PostgreSQLContainer POSTGRES =
-            new PostgreSQLContainer("postgres:17");
+            new PostgreSQLContainer("postgres:17")
+                    .withCommand("postgres", "-c", "max_connections=300");
 
     static {
         POSTGRES.start();

@@ -1,4 +1,19 @@
 spring:
+  datasource:
+    hikari:
+      # 기본값 10으로는 동시성 테스트가 실제로 동시가 아니다.
+      #
+      # 교환 경로는 요청 하나가 커넥션을 **둘** 쥔다 — exchange가 @Transactional로
+      # 하나, 그 안의 recordAndCount가 REQUIRES_NEW로 또 하나(바깥 것은 반납되지
+      # 않고 매달려 있다). 그래서 풀 10이면 recordAndCount에 동시에 들어갈 수 있는
+      # 요청이 최대 5개인데, 그 5가 교환 rate limit의 한도 5와 **우연히 같다.**
+      # 결함이 있어도 첫 배치 5건만 통과하고 나머지는 커밋된 행을 보고 429가 되어
+      # 단언이 통과한다 — 실제로 codex가 잡은 P1 결함이 이 우연에 가려져 있었다.
+      #
+      # 발급·재발급의 8스레드 테스트도 같은 이유로 절반만 겹쳐 돌고 있었다.
+      # 이 값을 되돌리면 그 테스트들이 초록인 채로 아무것도 검증하지 않게 된다.
+      # IntegrationTestSupport가 컨테이너 max_connections를 300으로 올려 받쳐 준다.
+      maximum-pool-size: 30
   jpa:
     hibernate:
       ddl-auto: validate
