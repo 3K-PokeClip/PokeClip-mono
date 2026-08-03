@@ -331,6 +331,60 @@ func TestCancelStopsReaderCleanly(t *testing.T) {
 	}
 }
 
+// Start 의 stat 실패(ENOENT 외 — EACCES·ENOTDIR 등)는 **에러가 아니라 강등**이다.
+// 에러로 올리면 run() 이 그대로 종료해 인덱싱 전체가 멈춘다 = GH4(훅이 죽어도 현행 동작
+// 유지) 정면 위반. poll 쪽 강등 규약과 같게 맞춘다.
+func TestStartDegradesWhenSpoolStatFails(t *testing.T) {
+	// 경로 중간에 파일을 끼워 ENOTDIR 을 만든다(권한과 달리 root 에서도 재현된다).
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "notadir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("파일 생성 실패: %v", err)
+	}
+	logs := &logCapture{}
+	r, err := NewReader(ReaderOptions{
+		SpoolPath:    filepath.Join(blocker, "events.jsonl"),
+		PollInterval: 5 * time.Millisecond,
+		Log:          slog.New(logs),
+	})
+	if err != nil {
+		t.Fatalf("NewReader 실패: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start() = %v, want nil — stat 실패로 프로세스를 끝내려 했다", err)
+	}
+	waitFor(t, "hook_spool_stat_failed WARN", func() bool { return logs.count("hook_spool_stat_failed") >= 1 })
+}
+
+// 스풀에 읽기 권한이 없어도 프로세스는 살아 있어야 한다(WARN 후 자연 강등).
+func TestUnreadableSpoolDegradesWithoutKillingProcess(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 는 권한 검사를 우회한다")
+	}
+	f := newReaderFixture(t, 0)
+	f.write(line("online", "demo", 1784000000000000000))
+	if err := os.Chmod(f.spool, 0o000); err != nil {
+		t.Fatalf("chmod 실패: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(f.spool, 0o600) })
+
+	f.start()
+	waitFor(t, "hook_spool_open_failed WARN", func() bool { return f.logs.count("hook_spool_open_failed") >= 1 })
+
+	// 강등이지 사망이 아니다 — Reader 고루틴은 계속 돈다.
+	select {
+	case <-f.r.Done():
+		t.Fatal("권한 오류로 Reader 가 죽었다 — 자연 강등이어야 한다")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := f.r.Wait(); err != nil {
+		t.Errorf("Wait() = %v, want nil", err)
+	}
+}
+
 // 스풀 경로가 비면 Reader 를 만들 수 없다 — 호출자가 아예 만들지 않아야 한다는 계약을
 // 코드로 못 박는다. 조용히 도는 무의미한 고루틴을 만들지 않기 위해서다.
 func TestNewReaderRejectsEmptySpoolPath(t *testing.T) {

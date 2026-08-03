@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -80,6 +83,40 @@ func (c *logCapture) count(msg string) int {
 	return n
 }
 
+// countLevel 은 레벨까지 맞는 기록만 센다. "로그가 났다"와 "ERROR 로 났다"는 다른 주장이다.
+func (c *logCapture) countLevel(level slog.Level, msg string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, r := range c.records {
+		if r.Level == level && r.Message == msg {
+			n++
+		}
+	}
+	return n
+}
+
+// attrs 는 그 메시지의 마지막 기록에서 속성을 뽑는다.
+func (c *logCapture) attrs(msg string) map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var found *slog.Record
+	for i := range c.records {
+		if c.records[i].Message == msg {
+			found = &c.records[i]
+		}
+	}
+	if found == nil {
+		return nil
+	}
+	out := map[string]any{}
+	found.Attrs(func(a slog.Attr) bool {
+		out[a.Key] = a.Value.Any()
+		return true
+	})
+	return out
+}
+
 type noopAdopter struct{}
 
 func (noopAdopter) Adopt(recording.Segment) {}
@@ -96,6 +133,8 @@ type loopFixture struct {
 	hookEv    chan mtxhook.Event
 	hookDone  chan struct{}
 	err       chan error
+	// hookWaitErr 는 Reader.Wait() 이 돌려줄 사유다. nil 이면 정상 종료를 뜻한다.
+	hookWaitErr error
 }
 
 func newLoopFixture(t *testing.T, withHook bool) *loopFixture {
@@ -131,6 +170,7 @@ func newLoopFixture(t *testing.T, withHook bool) *loopFixture {
 	if withHook {
 		f.deps.hookEvents = f.hookEv
 		f.deps.hookDone = f.hookDone
+		f.deps.hookErr = func() error { return f.hookWaitErr }
 	}
 	// withHook 이 false 면 두 필드는 nil 채널로 남는다 — 그 case 는 영구 비활성이다.
 	return f
@@ -223,6 +263,7 @@ func TestLoopRunsWithNilHookChannels(t *testing.T) {
 // 그 case 를 비활성화하지 않으면 select 가 무한히 돌며 CPU 를 태운다.
 func TestLoopSurvivesReaderDeathAndLogsOnce(t *testing.T) {
 	f := newLoopFixture(t, true)
+	f.hookWaitErr = errReaderDied
 	cancel := f.run()
 
 	close(f.hookDone)
@@ -234,8 +275,13 @@ func TestLoopSurvivesReaderDeathAndLogsOnce(t *testing.T) {
 	if err := f.stop(cancel); err != nil {
 		t.Fatalf("loop() = %v, want nil — Reader 사망으로 프로세스를 끝냈다", err)
 	}
-	if n := f.logs.count("hook_reader_stopped"); n != 1 {
-		t.Errorf("hook_reader_stopped = %d회, want 1회 — 닫힌 채널 case 가 살아 있어 루프가 돌았다", n)
+	if n := f.logs.countLevel(slog.LevelError, "hook_reader_stopped"); n != 1 {
+		t.Errorf("hook_reader_stopped ERROR = %d회, want 1회 — 닫힌 채널 case 가 살아 있어 루프가 돌았다", n)
+	}
+	// 사유가 없으면 운영자는 왜 훅이 멈췄는지 알 길이 없다.
+	if got := f.logs.attrs("hook_reader_stopped")["err"]; got == nil ||
+		!strings.Contains(fmt.Sprint(got), errReaderDied.Error()) {
+		t.Errorf("hook_reader_stopped.err = %v, want %q 포함", got, errReaderDied)
 	}
 	if n := f.store.insertCount(); n != 1 {
 		t.Errorf("INSERT = %d회, want 1회 — 훅 사망 후 인덱싱이 멈췄다", n)
@@ -304,5 +350,26 @@ func TestLoopStopsWhenWatcherDies(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("워처 사망에도 루프가 끝나지 않았다")
+	}
+}
+
+var errReaderDied = errors.New("스풀 읽기 실패")
+
+// Wait() 이 nil 이면 ctx 취소에 의한 정상 종료다. 이때 ERROR 를 찍으면 종료 때마다
+// 가짜 장애 신호가 남는다 — select 가 ctx.Done 과 hookDone 중 어느 것을 뽑을지 모르기 때문에
+// 정상 종료에서도 이 case 가 실행될 수 있다.
+func TestLoopDoesNotErrorWhenReaderStopsCleanly(t *testing.T) {
+	f := newLoopFixture(t, true)
+	f.hookWaitErr = nil
+	cancel := f.run()
+
+	close(f.hookDone)
+	waitFor(t, "hook_reader_stopped 기록", func() bool { return f.logs.count("hook_reader_stopped") >= 1 })
+
+	if err := f.stop(cancel); err != nil {
+		t.Fatalf("loop() = %v, want nil", err)
+	}
+	if n := f.logs.countLevel(slog.LevelError, "hook_reader_stopped"); n != 0 {
+		t.Errorf("정상 종료인데 ERROR = %d회, want 0회", n)
 	}
 }

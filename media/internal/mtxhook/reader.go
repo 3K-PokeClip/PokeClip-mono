@@ -98,14 +98,24 @@ func NewReader(opt ReaderOptions) (*Reader, error) {
 // 과거 이벤트를 재생하지 않는 이유: 이미 INSERT 된 행의 is_discontinuity 를 고치는 경로가
 // 없으므로 지나간 세션 경계는 소급 적용 대상이 아니다. 대가는 "사이드카 재기동 창에 걸친
 // 재접속은 훅으로 검출되지 않는다"이며, 그 구간은 기존 벽시계 드리프트 판정이 맡는다.
+// 스풀을 못 보는 것은 **강등이지 사망이 아니다** — 여기서 에러를 올리면 run() 이 그대로
+// 종료해 인덱싱 전체가 멈추고, 훅 고장이 곧 서비스 중단이 되어 GH4 를 정면으로 어긴다.
+// poll 쪽 강등 규약과 같은 판단이다.
 func (r *Reader) Start(ctx context.Context) error {
-	if fi, err := os.Stat(r.opt.SpoolPath); err == nil {
+	switch fi, err := os.Stat(r.opt.SpoolPath); {
+	case err == nil:
 		r.offset = fi.Size()
-	} else if os.IsNotExist(err) {
+	case os.IsNotExist(err):
+		// 새 볼륨에서 첫 송출 전까지는 스풀이 없다. 생기면 처음부터 읽는다.
 		r.offset = 0
 		r.warnSpoolMissing()
-	} else {
-		return fmt.Errorf("훅 스풀 확인 실패 %q: %w", r.opt.SpoolPath, err)
+	default:
+		// EACCES·ENOTDIR 등. 오프셋 0 에서 시작해 두고 폴링이 계속 재시도하게 둔다 —
+		// 권한이나 마운트가 나중에 고쳐지면 스스로 회복된다.
+		r.offset = 0
+		r.opt.Log.Warn("hook_spool_stat_failed",
+			"path", r.opt.SpoolPath, "err", err,
+			"note", "훅 채널만 강등된다. 인덱싱은 계속되며 폴링이 회복을 재시도한다")
 	}
 
 	go r.run(ctx)

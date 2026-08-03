@@ -95,25 +95,32 @@ func run() error {
 	// HOOK_SPOOL_PATH 가 비어 있으면 Reader 를 **아예 만들지 않는다**. 그러면 아래 두 채널이
 	// nil 로 남고 select 의 해당 case 는 영구 비활성이 된다 — 이것이 즉시 롤백 스위치다.
 	// 워처(w.Start) 다음에 두는 이유는 훅 조립이 실패해도 파일 감시는 이미 켜져 있게 하기 위해서다.
+	// 조립 실패도 **강등이지 사망이 아니다**. 훅은 1차 신호일 뿐이고 벽시계·파일 감시·주기
+	// 재스캔이 안전망으로 남으므로, 여기서 return err 하면 훅 설정 오타 하나가 인덱싱 전체를
+	// 멈춘다(GH4 위반). 채널을 nil 로 둔 채 계속 간다.
 	var hookEvents <-chan mtxhook.Event
 	var hookDone <-chan struct{}
-	if cfg.HookSpoolPath != "" {
-		reader, err := mtxhook.NewReader(mtxhook.ReaderOptions{
+	var hookErr func() error
+	switch {
+	case cfg.HookSpoolPath == "":
+		log.Info("hook_reader_disabled", "note", "HOOK_SPOOL_PATH 가 비어 있다. 현행 판정만 쓴다")
+	default:
+		reader, hookSetupErr := mtxhook.NewReader(mtxhook.ReaderOptions{
 			SpoolPath:    cfg.HookSpoolPath,
 			PollInterval: cfg.HookPollInterval,
 			Log:          log,
 		})
-		if err != nil {
-			return err
+		if hookSetupErr == nil {
+			// Start 는 동기다. 반환 시점에 시작 오프셋이 확정돼 있다.
+			hookSetupErr = reader.Start(ctx)
 		}
-		// Start 는 동기다. 반환 시점에 시작 오프셋이 확정돼 있다.
-		if err := reader.Start(ctx); err != nil {
-			return err
+		if hookSetupErr != nil {
+			log.Error("hook_reader_setup_failed", "spool", cfg.HookSpoolPath, "err", hookSetupErr,
+				"note", "훅 채널만 강등된다. 인덱싱은 계속된다")
+			break
 		}
-		hookEvents, hookDone = reader.Events(), reader.Done()
+		hookEvents, hookDone, hookErr = reader.Events(), reader.Done(), reader.Wait
 		log.Info("hook_reader_started", "spool", cfg.HookSpoolPath, "poll", cfg.HookPollInterval)
-	} else {
-		log.Info("hook_reader_disabled", "note", "HOOK_SPOOL_PATH 가 비어 있다. 현행 판정만 쓴다")
 	}
 
 	// --- 3. 초기 스캔: 꺼져 있는 동안 쌓인 파일을 따라잡는다 ---
@@ -133,7 +140,7 @@ func run() error {
 		ix: ix, root: cfg.SegmentRoot, rescanEvery: cfg.Watcher.RescanEvery, log: log,
 		watcherDone: w.Done(), watcherErr: w.Wait,
 		completed: w.Completed(), rescans: w.Rescans(),
-		hookEvents: hookEvents, hookDone: hookDone,
+		hookEvents: hookEvents, hookDone: hookDone, hookErr: hookErr,
 	}); err != nil {
 		return err
 	}
@@ -164,6 +171,9 @@ type loopDeps struct {
 	// 이 성질이 HOOK_SPOOL_PATH="" 롤백 스위치를 안전하게 만든다.
 	hookEvents <-chan mtxhook.Event
 	hookDone   <-chan struct{}
+	// hookErr 는 훅 사망 사유를 읽는다(워처의 watcherErr 와 대칭).
+	// nil 을 돌려주면 ctx 취소에 의한 정상 종료라는 뜻이다.
+	hookErr func() error
 }
 
 // loop 은 종료·워처사망·완성세그먼트·재스캔요청·훅이벤트·훅사망 신호를
@@ -220,8 +230,7 @@ func loop(ctx context.Context, d loopDeps) error {
 			//
 			// 두 채널을 nil 로 만드는 것이 핵심이다. 닫힌 채널은 언제나 수신 가능하므로
 			// 그대로 두면 이 case 가 쉬지 않고 뽑혀 CPU 를 태운다.
-			d.log.Error("hook_reader_stopped",
-				"note", "훅 채널이 멈췄다. 인덱싱은 계속되며 재접속 검출만 현행 수준으로 강등된다")
+			d.logReaderStopped()
 			d.hookEvents = nil
 			d.hookDone = nil
 
@@ -232,4 +241,22 @@ func loop(ctx context.Context, d loopDeps) error {
 			}
 		}
 	}
+}
+
+// logReaderStopped 는 훅 채널이 멈춘 사실을 남긴다.
+//
+// 사유가 있을 때만 ERROR 다. ctx 취소로 끝난 경우(Wait()==nil)까지 ERROR 로 올리면
+// select 가 ctx.Done 대신 hookDone 을 뽑는 것만으로 **정상 종료마다 가짜 장애 신호**가
+// 남는다 — 둘은 종료 시점에 동시에 준비되므로 어느 쪽이 뽑힐지는 정해져 있지 않다.
+func (d loopDeps) logReaderStopped() {
+	var err error
+	if d.hookErr != nil {
+		err = d.hookErr()
+	}
+	const note = "훅 채널이 멈췄다. 인덱싱은 계속되며 재접속 검출만 현행 수준으로 강등된다"
+	if err != nil {
+		d.log.Error("hook_reader_stopped", "err", err, "note", note)
+		return
+	}
+	d.log.Info("hook_reader_stopped", "note", note, "cause", "정상 종료(ctx 취소)")
 }
