@@ -515,10 +515,25 @@ class SecretLeakTest extends IntegrationTestSupport {
                 userService.findOrCreate(googleSub, "a@example.com", "김태현", null));
     }
 
-    /** 마지막 한 글자만 바꿔 서명을 깨뜨린다. */
+    /**
+     * 서명의 <b>첫</b> 글자를 바꿔 깨뜨린다.
+     *
+     * <p><b>마지막 글자를 쓰면 안 된다.</b> HMAC-SHA256 서명 32바이트를 base64url로
+     * 인코딩하면 43글자인데(43×6 = 258 &gt; 256), 마지막 글자는 유효 비트가 4개뿐이다.
+     * 그래서 인코더가 마지막 자리에 만드는 값은 16개(0 4 8 A E I M Q U Y c g k o s w)로
+     * 제한되고 {@code B}는 아예 나오지 않는다. 마지막이 {@code A}(0000)일 때
+     * {@code B}(000001)로 바꾸면 상위 4비트가 같아 <b>같은 32바이트로 디코딩</b>되고,
+     * 서명이 유효한 채 남아 이 테스트가 약 16분의 1로 헛통과한다(실측).
+     *
+     * <p>첫 글자는 유효 비트 6개를 다 쓰므로 다른 문자로 바꾸면 반드시 바이트가 달라진다.
+     */
     private static String tamperSignature(String jwt) {
-        char last = jwt.charAt(jwt.length() - 1);
-        return jwt.substring(0, jwt.length() - 1) + (last == 'A' ? 'B' : 'A');
+        int signatureStart = jwt.lastIndexOf('.') + 1;
+        char first = jwt.charAt(signatureStart);
+
+        return jwt.substring(0, signatureStart)
+                + (first == 'A' ? 'B' : 'A')
+                + jwt.substring(signatureStart + 1);
     }
 
     private String refresh(String refreshToken, ResultMatcher expected) throws Exception {
