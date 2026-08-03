@@ -18,6 +18,7 @@ package indexer
 
 import (
 	"context"
+	"os"
 	"sort"
 	"time"
 
@@ -161,7 +162,14 @@ func (ix *Indexer) releaseBreak(streamID string, dec breakDecision) {
 			"stream_id", streamID, "offline_at", b.OfflineAt, "online_at", b.OnlineAt,
 			"reason", "no_segment_in_session")
 	}
-	ix.breaks[streamID] = q[dec.Index+1:]
+	rest := q[dec.Index+1:]
+	if len(rest) == 0 {
+		// 빈 슬라이스를 남기지 않는다. 방송이 끝난 스트림마다 항목이 쌓이면
+		// 장기 실행 프로세스에서 맵이 단조 증가한다(경계는 만료가 없으므로 여기서 정리한다).
+		delete(ix.breaks, streamID)
+		return
+	}
+	ix.breaks[streamID] = rest
 }
 
 // HandleHook 은 훅 이벤트 1개를 처리한다.
@@ -268,6 +276,19 @@ func (ix *Indexer) handleHookSegment(ctx context.Context, ev mtxhook.Event) erro
 		ix.log.Warn("hook_segment_path_rejected",
 			"stream_id", ev.StreamID, "segment_path", ev.SegmentPath,
 			"root", ix.opt.SegmentRoot, "err", err)
+		return nil
+	}
+
+	// Handle 에 넣기 **전에** 실재를 확인한다.
+	//
+	// Handle 은 진입부에서 state() 로 LoadCursor·ExistingPaths 를 부르고 커서 맵에 그
+	// 스트림을 등재한다. 확인 없이 넘기면 스풀에 존재하지 않는 경로를 흘리는 것만으로
+	// DB 왕복 2회와 맵 증식을 유발할 수 있다 — 스풀은 다른 컨테이너가 쓰는 외부 입력이므로
+	// 값싼 로컬 stat 로 먼저 거른다.
+	if _, statErr := os.Stat(seg.Path); statErr != nil {
+		ix.log.Warn("hook_segment_missing",
+			"stream_id", seg.StreamID, "path", seg.Path, "err", statErr,
+			"note", "훅이 알린 파일이 없다. 파일 감시·재스캔이 안전망으로 남는다")
 		return nil
 	}
 	return ix.Handle(ctx, seg)

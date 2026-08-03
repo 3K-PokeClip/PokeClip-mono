@@ -336,3 +336,43 @@ func TestUnknownKindIsLoggedAndDropped(t *testing.T) {
 		t.Error("hook_unknown_kind 가 없다")
 	}
 }
+
+// 미존재 경로를 그대로 Handle 에 넣으면 state() 가 LoadCursor·ExistingPaths 로 DB 를
+// 두 번 왕복하고 커서 맵에 그 스트림을 등재한다. 스풀에 쓰레기 경로를 흘리는 것만으로
+// DB 부하와 맵 증식을 유발할 수 있으므로, 훅 경로는 Handle 전에 실재를 확인한다.
+func TestMissingSegmentFileIsDroppedBeforeTouchingDB(t *testing.T) {
+	f := newHookFixture(t)
+
+	f.handleHook(mtxhook.Event{
+		Kind: mtxhook.KindSegmentComplete, StreamID: "demo", At: baseWall,
+		SegmentPath: filepath.Join(f.root, "demo", segName(baseWall, 0)), // 파일을 만들지 않았다
+	})
+
+	if f.store.loadCursorCalls != 0 {
+		t.Errorf("LoadCursor 호출 = %d회, want 0회 — 미존재 경로가 DB 를 건드렸다", f.store.loadCursorCalls)
+	}
+	if f.store.insertCalls != 0 {
+		t.Errorf("Insert 호출 = %d회, want 0회", f.store.insertCalls)
+	}
+	if _, ok := f.ix.cursors["demo"]; ok {
+		t.Error("미존재 경로가 커서 맵에 스트림을 등재했다")
+	}
+	if n := f.logs.count(slog.LevelWarn, "hook_segment_missing"); n != 1 {
+		t.Errorf("hook_segment_missing = %d회, want 1회", n)
+	}
+}
+
+// 큐가 비면 맵에서 키 자체를 지운다. 빈 슬라이스를 남기면 방송이 끝난 스트림마다
+// 항목이 쌓여 장기 실행에서 맵이 단조 증가한다.
+func TestEmptyBreakQueueIsRemovedFromMap(t *testing.T) {
+	f := newHookFixture(t)
+	f.indexOne("demo", 0)
+	f.arm("demo", seg4s, seg4s+900*time.Millisecond)
+
+	seg := f.segment("demo", segName(baseWall, seg4s+900*time.Millisecond), 1000, recording.ReasonNextFile)
+	f.mustHandle(seg)
+
+	if _, ok := f.ix.breaks["demo"]; ok {
+		t.Error("소비 후에도 breaks 에 빈 항목이 남았다")
+	}
+}
