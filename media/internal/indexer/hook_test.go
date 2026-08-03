@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
 // ---------------------------------------------------------------------------
@@ -265,6 +266,60 @@ func TestRejectedSegmentPathWarnsAndInsertsNothing(t *testing.T) {
 	}
 	if f.logs.count(slog.LevelWarn, "hook_segment_path_rejected") != 1 {
 		t.Error("hook_segment_path_rejected 가 없다")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 키 계약 · 무장 직후 reconcile
+// ---------------------------------------------------------------------------
+
+// T23 — breaks 의 키(MTX_PATH 원문)와 소비 측 조회 키(seg.StreamID)가 바이트 동일해야 한다.
+// 어긋나면 무장은 되지만 영원히 소비되지 않는다 = 조용한 미탐 + 큐 누수.
+//
+// 확인 대상은 "훅 무장 → **워처 경로 세그먼트**가 소비"다. 훅 세그먼트로는 이 등식이
+// 검증되지 않는다 — 같은 ToSegment 경로를 지나므로 키가 어긋나도 함께 어긋난다.
+func TestHookBreakKeyMatchesWatcherStreamID(t *testing.T) {
+	f := newHookFixture(t)
+
+	// 꼬리를 만든다(seq 0 에 불연속은 무의미하므로).
+	first := f.segment("demo", segName(baseWall, 0), 1000, recording.ReasonNextFile)
+	f.mustHandle(first)
+
+	// MTX_PATH="demo" 로 무장한다.
+	f.arm("demo", 4*time.Second, 4900*time.Millisecond)
+
+	// 워처 경로로 만든 세그먼트가 그 무장을 소비해야 한다.
+	watched := f.segment("demo", segName(baseWall, 4900*time.Millisecond), 1000, recording.ReasonNextFile)
+	f.mustHandle(watched)
+
+	var got bool
+	for _, r := range f.store.records("demo") {
+		if r.LocalPath == watched.Path {
+			got = r.IsDiscontinuity
+		}
+	}
+	if !got {
+		t.Error("워처 경로 세그먼트가 훅 무장을 소비하지 못했다 — breaks 키가 어긋났다")
+	}
+	if n := len(f.ix.breaks["demo"]); n != 0 {
+		t.Errorf("breaks[\"demo\"] 길이 = %d, want 0", n)
+	}
+}
+
+// 결정 ② — 커서가 아직 적재되지 않은 스트림에서는 무장 직후 reconcile 을 건너뛴다.
+// 훅 이벤트가 DB I/O 를 유발하면 안 되고(에러 계약), 커서가 없다는 것은 "그 스트림의
+// 세그먼트를 아직 한 건도 처리하지 않았다" = 폐기할 근거가 없다는 뜻이다.
+// 정확성은 Handle 진입부의 reconcile 이 담당한다.
+func TestArmWithoutCursorDoesNotReconcile(t *testing.T) {
+	f := newHookFixture(t)
+	f.arm("demo", 0, time.Second)
+
+	if n := len(f.ix.breaks["demo"]); n != 1 {
+		t.Errorf("breaks 길이 = %d, want 1 — 무장이 유지되지 않았다", n)
+	}
+	if f.store.loadCursorCalls != 0 {
+		t.Errorf("LoadCursor 호출 = %d회, want 0회 — 훅 이벤트가 DB I/O 를 일으켰다",
+			f.store.loadCursorCalls)
 	}
 }
 

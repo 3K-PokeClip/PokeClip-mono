@@ -5,7 +5,9 @@ import (
 	"sort"
 	"time"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
 // breakQueueMax 는 스트림당 무장 경계의 상한이다.
@@ -27,6 +29,123 @@ type sessionBreak struct {
 	// 실측이 "세션 내 동일·경계에서 변경"을 보였지만 그 성질에 판정을 걸면 미확인 의존이 커진다.
 	OffSource string
 	OnSource  string
+}
+
+// breakDecision 은 이 세그먼트가 어떤 경계를 소비할지의 판정 결과다.
+// Index >= 0 이면 breaks[stream] 의 그 위치까지(포함) 정리 대상이다.
+type breakDecision struct {
+	// Apply 가 true 면 is_discontinuity 를 강제 참으로 만든다.
+	Apply bool
+	// Index 는 -1 이면 소비 없음이다.
+	Index int
+	Brk   sessionBreak
+}
+
+// noBreak 는 "소비할 경계가 없다"는 판정이다.
+var noBreak = breakDecision{Index: -1}
+
+// reconcileBreaks 는 커서 꼬리 시각으로 "이미 지나간" 경계를 정리한다.
+//
+// 꼬리가 어떤 무장 경계의 시각 조건을 이미 만족한다면, 그 경계의 조각은 무장 전에 이미
+// 장부에 올랐다는 뜻이다. 그대로 두면 **다음** 조각에 붙어 영속 오표시가 된다(GH1 모순).
+// 그래서 폐기하고 미탐으로 강등한다 — 벽시계 안전망이 남아 있다.
+//
+// 호출 지점은 두 곳이다.
+//   - Handle 진입부(H1/H2 조기 반환보다 **앞**): 중복·늦은 세그먼트로 commit 이 실행되지
+//     않아도 정리가 이루어지게 한다. **정확성의 담당자는 이쪽이다.**
+//   - 무장 직후(markOnline): 무장 순간 이미 꼬리가 경계를 지났으면 즉시 폐기한다. 조기 최적화다.
+//
+// 결정성의 근거: advance 가 커서를 즉시 갱신하고 H3 가 시간 역행 INSERT 를 금지하므로
+// 꼬리 시각은 "장부에 오른 마지막 조각"의 단조 축이다. 중복 이벤트의 도착 여부와 무관하게
+// 같은 입력이면 같은 결과가 나온다.
+func (ix *Indexer) reconcileBreaks(streamID string, cur *index.Cursor) {
+	if cur == nil || cur.Tail == nil {
+		return
+	}
+	q := ix.breaks[streamID]
+	if len(q) == 0 {
+		return
+	}
+
+	cand := -1
+	for i, b := range q {
+		if ix.tailPassed(cur.Tail.StartWallUTC, b) {
+			cand = i // 꼬리가 이미 지나간 경계 중 가장 최신을 고른다
+		}
+	}
+	if cand < 0 {
+		return
+	}
+
+	discarded := q[cand]
+	// releaseBreak 이 cand 보다 오래된 미소비 경계도 함께 정리하며 hook_break_dropped 를 낸다.
+	// 즉 이 정리 한 번에서 discarded 와 dropped 가 함께 나올 수 있다 — 미탐 건수는
+	// discarded 만 센다(dropped 는 애초에 붙일 세그먼트가 없던 경계다).
+	ix.releaseBreak(streamID, breakDecision{Index: cand})
+	ix.log.Info("hook_break_discarded",
+		"stream_id", streamID, "reason", "already_passed",
+		"offline_at", discarded.OfflineAt, "online_at", discarded.OnlineAt,
+		"tail_start_wall", cur.Tail.StartWallUTC, "tail_seq", cur.Tail.Seq)
+}
+
+// tailPassed 는 "이 벽시계 시각이 경계 b 의 소비 조건을 이미 만족하는가"다.
+// peekBreak 의 조건과 **같은 식**이어야 한다 — 어긋나면 폐기와 소비의 기준이 갈린다.
+func (ix *Indexer) tailPassed(wall time.Time, b sessionBreak) bool {
+	return wall.After(b.OfflineAt) && !wall.Before(b.OnlineAt.Add(-ix.opt.BreakGuard))
+}
+
+// peekBreak 은 소비할 경계를 고르되 **해제하지 않는다**(순수 조회).
+//
+// 해제를 INSERT 결과가 나온 뒤로 미루는 이유: buildRecord 는 SeqConflict 재시도에서 두 번
+// 불리는데, 그때 판정을 다시 계산하면 재적재로 바뀐 커서 때문에 값이 흔들린다.
+// 조회와 해제를 나누면 재시도에서도 같은 판정을 그대로 재사용할 수 있다.
+//
+// 소비 조건은 둘 다 필요하다.
+//   - seg.StartWall > OfflineAt — 이전 세션의 마지막 partial 조각을 **구조적으로** 배제한다.
+//     정상 종료 시 그 조각도 offline 직후 complete 가 발화하므로, 없으면 표시를 가로챈다.
+//   - seg.StartWall >= OnlineAt - Guard — 새 세션의 첫 조각인지의 하한.
+//     훅 채널 세그먼트는 스풀 순서가 1차 방어지만, **워처 채널 세그먼트는 파일명 시각밖에
+//     없으므로 Guard 가 유일한 방어다.**
+func (ix *Indexer) peekBreak(cur *index.Cursor, seg recording.Segment) breakDecision {
+	q := ix.breaks[seg.StreamID] // 조회 키는 seg.StreamID. 무장 키(MTX_PATH)와 바이트 동일해야 한다.
+	cand := -1
+	for i, b := range q {
+		if seg.StartWall.Before(b.OnlineAt.Add(-ix.opt.BreakGuard)) {
+			// 큐가 OnlineAt 오름차순이므로 이 뒤는 전부 더 늦다. 볼 필요가 없다.
+			break
+		}
+		if !seg.StartWall.After(b.OfflineAt) {
+			continue // 이전 세션의 조각이다
+		}
+		cand = i // 조건을 만족하는 것 중 **가장 최신**을 고른다(연쇄 재접속 대비)
+	}
+
+	if cand < 0 {
+		return noBreak
+	}
+	if cur.Tail == nil {
+		// 꼬리가 없으면 이 조각은 seq 0 이라 불연속 표시가 무의미하다.
+		// 플래그 없이 해제만 한다 — 이월시키면 다음 정상 조각에 오탐이 붙는다.
+		return breakDecision{Apply: false, Index: cand}
+	}
+	return breakDecision{Apply: true, Index: cand, Brk: q[cand]}
+}
+
+// releaseBreak 은 경계를 큐에서 뺀다. 소비 대상보다 오래된 미소비 경계도 함께 정리한다.
+//
+// 그 오래된 것들은 "세그먼트가 한 건도 오지 않은 세션"이다. 남겨 두면 큐가 새고
+// 나중 조각에 엉뚱한 경계가 붙는다.
+func (ix *Indexer) releaseBreak(streamID string, dec breakDecision) {
+	q := ix.breaks[streamID]
+	if dec.Index < 0 || dec.Index >= len(q) {
+		return
+	}
+	for _, b := range q[:dec.Index] {
+		ix.log.Info("hook_break_dropped",
+			"stream_id", streamID, "offline_at", b.OfflineAt, "online_at", b.OnlineAt,
+			"reason", "no_segment_in_session")
+	}
+	ix.breaks[streamID] = q[dec.Index+1:]
 }
 
 // HandleHook 은 훅 이벤트 1개를 처리한다.
@@ -108,6 +227,17 @@ func (ix *Indexer) markOnline(ev mtxhook.Event) {
 	if off.Source != "" && off.Source == ev.SourceID {
 		// 세션이 갈렸는데 출처가 같다 = 실측과 다른 상황이다. 관측만 하고 무장은 유지한다.
 		ix.log.Warn("hook_break_same_source", "stream_id", s, "source_id", ev.SourceID)
+	}
+
+	// 무장 순간 이미 꼬리가 그 경계를 지났으면 즉시 폐기한다.
+	//
+	// **커서가 적재된 스트림에서만** 한다(결정 ②). ix.state()를 부르지 않는 이유는 두 가지다.
+	// ① 훅 이벤트가 DB I/O 를 유발하면 안 된다(에러 계약과 충돌). ② 커서가 없다는 것은
+	// 그 스트림의 세그먼트를 아직 한 건도 처리하지 않았다는 뜻이고, 꼬리가 없으면 폐기할
+	// 근거도 없다. 건너뛰어도 정확성은 보존된다 — 첫 세그먼트가 오면 Handle 진입부의
+	// reconcile 이 커서 적재 후 실행된다. 여기 호출은 조기 최적화일 뿐이다.
+	if cur, ok := ix.cursors[s]; ok {
+		ix.reconcileBreaks(s, cur)
 	}
 }
 
