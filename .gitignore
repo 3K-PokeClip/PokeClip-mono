@@ -8,6 +8,8 @@
 infra/compose/stub/data/
 
 # 빌드 산출물
+# go build ./cmd/... 은 패키지 이름으로 실행 파일을 현재 디렉토리에 떨군다.
+media/segment-indexer
 services/**/build/
 services/.gradle/
 web/node_modules/

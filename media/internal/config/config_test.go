@@ -515,7 +515,16 @@ func TestLoadRejectsMalformedBucketAndEndpoint(t *testing.T) {
 		{"IP 형식", "192.168.0.1", "", "S3_BUCKET"},
 		{"연속된 점", "poke..clip", "", "S3_BUCKET"},
 		{"점으로 끝남", "pokeclip.", "", "S3_BUCKET"},
+		{"예약 접두 xn--", "xn--pokeclip", "", "S3_BUCKET"},
+		{"예약 접두 sthree-", "sthree-pokeclip", "", "S3_BUCKET"},
+		{"예약 접두 amzn-s3-demo-", "amzn-s3-demo-pokeclip", "", "S3_BUCKET"},
+		{"예약 접미 -s3alias", "pokeclip-s3alias", "", "S3_BUCKET"},
+		{"예약 접미 --ol-s3", "pokeclip--ol-s3", "", "S3_BUCKET"},
+		{"예약 접미 .mrap", "pokeclip.mrap", "", "S3_BUCKET"},
+		{"예약 접미 --x-s3", "pokeclip--x-s3", "", "S3_BUCKET"},
+		{"예약 접미 --table-s3", "pokeclip--table-s3", "", "S3_BUCKET"},
 		{"scheme 이 http/https 가 아님", "pokeclip-media-demo-2557", "ftp://minio:9000", "S3_ENDPOINT"},
+		{"호스트가 없음", "pokeclip-media-demo-2557", "http://:9000", "S3_ENDPOINT"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

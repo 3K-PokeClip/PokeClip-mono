@@ -299,8 +299,6 @@ func testOptions() Options {
 	// 여기서 줄이지 않으면 (c) 계열이 held 맵 직접 주입에 의존하게 되고,
 	// 그러면 ReleaseHeldTails 의 판정 자체가 검증되지 않는다.
 	opt.TailHold = 20 * time.Millisecond
-	// config 가 upload.Options 에서 넣어 주는 값이다(기본값이 없다).
-	opt.TailGrace = 2 * time.Minute
 	return opt
 }
 

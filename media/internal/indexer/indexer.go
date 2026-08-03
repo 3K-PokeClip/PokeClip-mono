@@ -73,8 +73,10 @@ type Options struct {
 	// TailGrace 는 인덱서가 꼬리를 붙들 수 있는 상한이다. 이 시각을 넘긴 꼬리는
 	// 스위퍼의 꼬리 예외가 집는다.
 	//
-	// ★ 기본값을 두지 않는다. 이 값의 소유자는 upload.Options 하나이고 config 가 그 값을
-	//   넣어 준다 — 여기에 같은 기본값을 두면 두 계층이 갈려도 아무도 모르게 된다.
+	// 값의 소유자는 upload.Options 이고 config 가 그 값을 여기에 넣어 준다. 그럼에도
+	// 여기에 같은 기본값을 두는 이유: 0 이면 eligibleAt == StartWallUTC 가 되어
+	// Idle·Scan 꼬리가 TailHold 를 채우기도 전에 첫 틱에서 폐기된다. config 를 거치지
+	// 않는 호출자에게 그 조합은 "업로드 요청을 조용히 잃는" 자체 모순이다(결정 4⁵·5⁵).
 	TailGrace time.Duration
 	// HoldTick 은 ReleaseHeldTails 를 부르는 주기다.
 	// 초 단위여야 한다 — 30s 급이면 마지막 조각의 총 지연이 48초까지 늘어 AC1 재현성이 깨진다.
@@ -118,6 +120,7 @@ func DefaultOptions() Options {
 		PoisonStreakMax:    5,
 		InsertRetryBase:    2 * time.Second,
 		TailHold:           5 * time.Second,
+		TailGrace:          2 * time.Minute,
 		HoldTick:           time.Second,
 		HoldStatBudget:     8,
 		IdleTimeout:        10 * time.Second,

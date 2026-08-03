@@ -318,12 +318,25 @@ func validateS3(s3 upload.S3Options) error {
 	if strings.Contains(s3.Bucket, "..") || ipLikeRe.MatchString(s3.Bucket) {
 		return fmt.Errorf("S3_BUCKET(%q)은 연속된 점이나 IP 형식을 쓸 수 없다", s3.Bucket)
 	}
+	// AWS 가 예약한 접두·접미다. 통과시키면 CreateBucket 이 아니라 PUT 단계에서야 실패한다.
+	for _, p := range bucketBannedPrefixes {
+		if strings.HasPrefix(s3.Bucket, p) {
+			return fmt.Errorf("S3_BUCKET(%q)은 예약 접두 %q 를 쓸 수 없다", s3.Bucket, p)
+		}
+	}
+	for _, sfx := range bucketBannedSuffixes {
+		if strings.HasSuffix(s3.Bucket, sfx) {
+			return fmt.Errorf("S3_BUCKET(%q)은 예약 접미 %q 를 쓸 수 없다", s3.Bucket, sfx)
+		}
+	}
 	if s3.Endpoint == "" {
 		return nil
 	}
 	u, err := url.Parse(s3.Endpoint)
-	if err != nil || u.Host == "" {
-		return fmt.Errorf("S3_ENDPOINT(%q)는 scheme 을 포함한 URL 이어야 한다", s3.Endpoint)
+	// Hostname() 까지 본다 — "http://:9000" 은 Host 가 ":9000" 이라 비어 있지 않지만
+	// 호스트가 없다. SDK 는 그대로 들고 가 연결 단계에서야 실패한다.
+	if err != nil || u.Host == "" || u.Hostname() == "" {
+		return fmt.Errorf("S3_ENDPOINT(%q)는 scheme 과 호스트를 포함한 URL 이어야 한다", s3.Endpoint)
 	}
 	// SDK 는 이상한 scheme 을 조용히 삼킨다. 우리가 쓰는 것은 둘뿐이다.
 	if u.Scheme != "http" && u.Scheme != "https" {
@@ -331,6 +344,12 @@ func validateS3(s3 upload.S3Options) error {
 	}
 	return nil
 }
+
+// bucketBannedPrefixes·bucketBannedSuffixes 는 AWS 가 예약한 이름 조각이다.
+var (
+	bucketBannedPrefixes = []string{"xn--", "sthree-", "amzn-s3-demo-"}
+	bucketBannedSuffixes = []string{"-s3alias", "--ol-s3", ".mrap", "--x-s3", "--table-s3"}
+)
 
 // ipLikeRe 는 IPv4 형태의 버킷 이름을 잡는다.
 var ipLikeRe = regexp.MustCompile(`^\d{1,3}(\.\d{1,3}){3}$`)

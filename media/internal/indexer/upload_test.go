@@ -649,8 +649,9 @@ func TestHoldDefaults(t *testing.T) {
 	if opt.TailHold != 5*time.Second {
 		t.Errorf("TailHold = %v, want 5s", opt.TailHold)
 	}
-	// TailGrace 는 기본값이 없다 — config 가 upload 쪽 값을 넣어 준다.
-	if opt.TailGrace != 0 {
-		t.Errorf("TailGrace = %v, want 0 (소유자는 upload.Options 하나)", opt.TailGrace)
+	// TailGrace 가 0 이면 eligibleAt == StartWallUTC 라 Idle 꼬리가 TailHold 를 채우기도
+	// 전에 첫 틱에서 폐기된다 — config 를 거치지 않는 호출자에게는 요청이 조용히 사라진다.
+	if opt.TailGrace != 2*time.Minute {
+		t.Errorf("TailGrace = %v, want 2m", opt.TailGrace)
 	}
 }
