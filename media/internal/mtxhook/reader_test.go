@@ -471,3 +471,141 @@ func TestLineExactlyAtMaxLineBytesIsAccepted(t *testing.T) {
 		t.Errorf("hook_line_overflow = %d회, want 0회 — 상한과 같은 길이의 줄을 버렸다", n)
 	}
 }
+
+// codex MEDIUM-1 — SpoolPath 가 마운트 오구성으로 일반 파일이 아니면(디렉토리 등)
+// stat 은 성공하고 poll 이 계속 돌지만 아무 이벤트도 안 나오고 실패 로그도 없다.
+// 이 무징후 정지는 ADR-027(훅은 죽어도 티가 나야 한다) 정신에 걸린다.
+// 비정규 파일이면 WARN 을 남기고 강등하되 프로세스는 살아 있어야 한다.
+func TestDirectorySpoolPathDegradesWithWarn(t *testing.T) {
+	dir := t.TempDir()
+	spool := filepath.Join(dir, "events.jsonl")
+	if err := os.Mkdir(spool, 0o755); err != nil { // 파일이어야 할 자리가 디렉토리 = 마운트 오구성
+		t.Fatalf("디렉토리 생성 실패: %v", err)
+	}
+	logs := &logCapture{}
+	r, err := NewReader(ReaderOptions{SpoolPath: spool, PollInterval: 5 * time.Millisecond, Log: slog.New(logs)})
+	if err != nil {
+		t.Fatalf("NewReader 실패: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start() = %v, want nil — 비정규 파일로 프로세스를 끝내려 했다", err)
+	}
+
+	waitFor(t, "hook_spool_not_regular WARN", func() bool { return logs.count("hook_spool_not_regular") >= 1 })
+
+	// 강등이지 사망이 아니다 — 이벤트는 없지만 죽지도 않는다.
+	select {
+	case ev, ok := <-r.Events():
+		t.Fatalf("이벤트가 나왔다(있어선 안 됨): ev=%+v ok=%v", ev, ok)
+	case <-r.Done():
+		t.Fatal("Reader 가 죽었다 — 강등이어야 한다")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if err := r.Wait(); err != nil {
+		t.Errorf("Wait() = %v, want nil", err)
+	}
+}
+
+// codex MEDIUM-2 — Start 의 stat 이 ENOENT 외로 실패하면(EACCES·ENOTDIR) 예전에는
+// offset 0 으로 시작해, 마운트가 복구된 뒤 그 전에 쌓여 있던 과거를 전량 재생했다.
+// 이는 EOF 시작 계약("기존 파일은 EOF 부터, 과거 재생 없음") 위반이며 지나간 세션
+// 경계를 다시 무장한다. 오프셋을 미확정으로 두고, 최초로 스풀을 정상 연 폴에서
+// 그 시점 크기로 EOF 를 확정해야 한다.
+func TestDegradedStartPinsEOFOnRecoveryWithoutReplayingPast(t *testing.T) {
+	base := t.TempDir()
+	blocker := filepath.Join(base, "blocker") // 파일로 경로 중간을 막아 ENOTDIR 유발
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("blocker 생성 실패: %v", err)
+	}
+	spool := filepath.Join(blocker, "events.jsonl") // blocker 가 파일이라 stat → ENOTDIR
+
+	logs := &logCapture{}
+	r, err := NewReader(ReaderOptions{SpoolPath: spool, PollInterval: 5 * time.Millisecond, Log: slog.New(logs)})
+	if err != nil {
+		t.Fatalf("NewReader 실패: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		<-r.Done()
+	})
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start() = %v, want nil", err)
+	}
+	// 강등 폴링이 실제로 돌고 있음을 확인한다.
+	waitFor(t, "degraded 폴링", func() bool {
+		return logs.count("hook_spool_stat_failed")+logs.count("hook_spool_open_failed") >= 1
+	})
+
+	// 마운트가 고쳐진다: blocker 를 디렉토리로 바꾸고 그 안에 **과거 내용이 있는** 스풀을 만든다.
+	if err := os.Remove(blocker); err != nil {
+		t.Fatalf("blocker 제거 실패: %v", err)
+	}
+	if err := os.Mkdir(blocker, 0o755); err != nil {
+		t.Fatalf("디렉토리 생성 실패: %v", err)
+	}
+	past := line("online", "past-a", 1784000000000000000) + line("online", "past-b", 1784000000000000001)
+	if err := os.WriteFile(spool, []byte(past), 0o644); err != nil {
+		t.Fatalf("스풀 생성 실패: %v", err)
+	}
+
+	// 폴이 EOF 를 확정할 시간을 준다(과거 내용을 건너뛴다).
+	time.Sleep(60 * time.Millisecond)
+
+	// 이제 새 줄을 덧붙인다 — 이것만 와야 한다.
+	fh, err := os.OpenFile(spool, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatalf("append 열기 실패: %v", err)
+	}
+	if _, err := fh.WriteString(line("online", "fresh", 1784000000000000002)); err != nil {
+		t.Fatalf("append 실패: %v", err)
+	}
+	fh.Close()
+
+	select {
+	case ev := <-r.Events():
+		if ev.StreamID != "fresh" {
+			t.Errorf("StreamID = %q, want fresh — 복구 후 과거를 재생했다", ev.StreamID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fresh 이벤트가 오지 않았다")
+	}
+}
+
+// poll 의 IsRegular 검증이 **유일한 방어선**이 되는 경로를 독립적으로 고정한다.
+// Start 시점엔 스풀이 없어(ENOENT) Start 의 비정규 분기를 타지 않고, 런타임에 그 자리가
+// 디렉토리로 생기는 경우다 — poll 이 못 잡으면 무징후 정지가 된다.
+func TestSpoolBecomingDirectoryAtRuntimeDegrades(t *testing.T) {
+	dir := t.TempDir()
+	spool := filepath.Join(dir, "events.jsonl") // 아직 없다 = Start 는 ENOENT 강등
+	logs := &logCapture{}
+	r, err := NewReader(ReaderOptions{SpoolPath: spool, PollInterval: 5 * time.Millisecond, Log: slog.New(logs)})
+	if err != nil {
+		t.Fatalf("NewReader 실패: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		<-r.Done()
+	})
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start() = %v, want nil", err)
+	}
+	waitFor(t, "hook_spool_missing", func() bool { return logs.count("hook_spool_missing") >= 1 })
+
+	// 런타임에 그 자리에 디렉토리가 생긴다(마운트 오구성).
+	if err := os.Mkdir(spool, 0o755); err != nil {
+		t.Fatalf("디렉토리 생성 실패: %v", err)
+	}
+
+	waitFor(t, "hook_spool_not_regular WARN", func() bool { return logs.count("hook_spool_not_regular") >= 1 })
+
+	// 강등이지 사망이 아니다.
+	select {
+	case <-r.Done():
+		t.Fatal("Reader 가 죽었다 — 강등이어야 한다")
+	case <-time.After(30 * time.Millisecond):
+	}
+}

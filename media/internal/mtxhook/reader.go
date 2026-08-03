@@ -69,11 +69,16 @@ type Reader struct {
 
 	// 아래는 내부 고루틴 전용이다. Wait 은 done 이 닫힌 뒤에만 err 를 읽는다.
 	offset int64
-	carry  []byte
+	// offsetPinned 은 시작 오프셋이 확정됐는지다. 스풀을 처음부터 정상 열지 못한 채(강등)
+	// 기동하면 미확정으로 남고, 최초로 정상 연 폴에서 그 시점 크기(EOF)로 확정한다 —
+	// 0 으로 시작하면 접근 복구 시 그 전에 쌓인 과거를 전량 재생해 지나간 경계를 다시 무장한다.
+	offsetPinned bool
+	carry        []byte
 	// skipToNewline 은 상한 초과로 버린 줄의 잔여를 다음 개행까지 흘려보내는 표시다.
-	skipToNewline bool
-	missingWarned bool
-	err           error
+	skipToNewline    bool
+	missingWarned    bool
+	notRegularWarned bool
+	err              error
 }
 
 // NewReader 는 Reader 를 만든다. 설정이 잘못됐으면 기동 시점에 실패시킨다.
@@ -100,8 +105,8 @@ func NewReader(opt ReaderOptions) (*Reader, error) {
 	}, nil
 }
 
-// Start 는 동기다. 반환 시점에 시작 오프셋이 확정돼 있다 —
-// 파일이 있으면 EOF, 없으면 "생기면 처음부터"(오프셋 0)다.
+// Start 는 동기다. 시작 오프셋을 가능하면 여기서 확정하되, 스풀을 정상 열지 못하면
+// **미확정으로 두고** 최초로 정상 연 폴에서 EOF 로 확정한다.
 //
 // 과거 이벤트를 재생하지 않는 이유: 이미 INSERT 된 행의 is_discontinuity 를 고치는 경로가
 // 없으므로 지나간 세션 경계는 소급 적용 대상이 아니다. 대가는 "사이드카 재기동 창에 걸친
@@ -111,19 +116,27 @@ func NewReader(opt ReaderOptions) (*Reader, error) {
 // poll 쪽 강등 규약과 같은 판단이다.
 func (r *Reader) Start(ctx context.Context) error {
 	switch fi, err := os.Stat(r.opt.SpoolPath); {
-	case err == nil:
+	case err == nil && fi.Mode().IsRegular():
+		// 이미 있는 정규 파일 → EOF 부터. 과거는 재생하지 않는다.
 		r.offset = fi.Size()
+		r.offsetPinned = true
+	case err == nil:
+		// 존재하지만 일반 파일이 아니다(디렉토리·소켓 등) = 마운트 오구성.
+		// 오프셋을 확정하지 않는다 — 나중에 정규 파일로 고쳐지면 그때 EOF 로 확정한다.
+		r.warnNotRegular()
 	case os.IsNotExist(err):
-		// 새 볼륨에서 첫 송출 전까지는 스풀이 없다. 생기면 처음부터 읽는다.
+		// 새 볼륨에서 첫 송출 전까지는 스풀이 없다. 생기면 처음부터 읽는다
+		// (과거가 없으므로 오프셋 0 = EOF 확정과 동치다).
 		r.offset = 0
+		r.offsetPinned = true
 		r.warnSpoolMissing()
 	default:
-		// EACCES·ENOTDIR 등. 오프셋 0 에서 시작해 두고 폴링이 계속 재시도하게 둔다 —
-		// 권한이나 마운트가 나중에 고쳐지면 스스로 회복된다.
-		r.offset = 0
+		// EACCES·ENOTDIR 등. 오프셋을 **확정하지 않는다** — 여기서 0 으로 두면 접근이
+		// 복구됐을 때 그 전에 쌓여 있던 과거를 전량 재생해 지나간 세션 경계를 다시 무장한다.
+		// 최초로 스풀을 정상 연 폴에서 그 시점 크기로 EOF 를 확정한다.
 		r.opt.Log.Warn("hook_spool_stat_failed",
 			"path", r.opt.SpoolPath, "err", err,
-			"note", "훅 채널만 강등된다. 인덱싱은 계속되며 폴링이 회복을 재시도한다")
+			"note", "훅 채널만 강등된다. 인덱싱은 계속되며 폴링이 회복 시 EOF 부터 읽는다")
 	}
 
 	go r.run(ctx)
@@ -181,6 +194,21 @@ func (r *Reader) poll(ctx context.Context) error {
 	fi, err := f.Stat()
 	if err != nil {
 		r.opt.Log.Warn("hook_spool_stat_failed", "path", r.opt.SpoolPath, "err", err)
+		return nil
+	}
+	if !fi.Mode().IsRegular() {
+		// 마운트 오구성으로 스풀 자리가 일반 파일이 아니다. 읽어도 아무 이벤트가 안 나오는데
+		// 로그도 없으면 무징후 정지다 — WARN 후 강등한다. 정규 파일로 고쳐지면 스스로 회복한다.
+		r.warnNotRegular()
+		return nil
+	}
+	r.notRegularWarned = false // 정규 파일로 회복됐다 — 다음 오구성은 다시 경고한다
+
+	if !r.offsetPinned {
+		// 강등 상태로 기동해 오프셋이 미확정이다. 지금 크기(EOF)로 확정해 그전 과거를 건너뛴다.
+		// 이번 폴에서는 읽지 않는다 — 다음 폴부터 append 된 것만 읽는다.
+		r.offset = fi.Size()
+		r.offsetPinned = true
 		return nil
 	}
 	if fi.Size() < r.offset {
@@ -303,4 +331,16 @@ func (r *Reader) warnSpoolMissing() {
 	r.opt.Log.Warn("hook_spool_missing",
 		"path", r.opt.SpoolPath,
 		"note", "아직 훅이 한 번도 발화하지 않았다면 정상이다. 생기면 처음부터 읽는다")
+}
+
+// warnNotRegular 는 스풀 자리가 일반 파일이 아님을 한 번만 경고한다.
+// 폴 주기마다 경고하면 오구성이 지속되는 동안 로그가 초당 여러 줄 쏟아진다.
+func (r *Reader) warnNotRegular() {
+	if r.notRegularWarned {
+		return
+	}
+	r.notRegularWarned = true
+	r.opt.Log.Warn("hook_spool_not_regular",
+		"path", r.opt.SpoolPath,
+		"note", "스풀 경로가 일반 파일이 아니다(디렉토리 등). 마운트 오구성일 수 있다. 훅 채널만 강등된다")
 }
