@@ -150,25 +150,37 @@ func Load(env func(string) string) (Config, error) {
 	//
 	// Root 는 여기서 열지 않는다. 설정은 값만 읽고, 파일 시스템 손잡이는 main 이 만든다.
 	up := upload.DefaultOptions(nil, watch.Root)
-	s3 := upload.S3Options{
-		Bucket: strings.TrimSpace(env("S3_BUCKET")),
-		Region: withDefault(env, "AWS_REGION", "ap-northeast-2"),
+	s3 := upload.S3Options{Region: withDefault(env, "AWS_REGION", "ap-northeast-2")}
+
+	// ★ 버킷 판정이 **제일 앞**이다. 비면 나머지 S3·업로드 설정은 읽지도 검증하지도 않는다.
+	//   그 값들은 전부 꺼진 부품의 것이라 쓰이지 않는데, 여기서 파싱에 실패하면 오타 하나가
+	//   인덱싱까지 통째로 죽인다 — "업로더만 꺼지고 나머지는 그대로"라는 결정 11‴·G15 위반이다.
+	//   이 파일은 2·3번이 매일 띄우는 것이다.
+	if bucket := strings.TrimSpace(env("S3_BUCKET")); bucket != "" {
+		s3.Bucket = bucket
+		s3.Endpoint = strings.TrimSpace(env("S3_ENDPOINT"))
+		if s3.ForcePathStyle, err = boolean(env, "S3_FORCE_PATH_STYLE", false); err != nil {
+			return Config{}, err
+		}
+		if up.RetryMax, err = positiveInt(env, "SEGMENT_UPLOAD_RETRY_MAX", up.RetryMax); err != nil {
+			return Config{}, err
+		}
+		if up.SweepEvery, err = duration(env, "SEGMENT_UPLOAD_SWEEP_EVERY", up.SweepEvery); err != nil {
+			return Config{}, err
+		}
+		// CircuitMax 만 양수 검증을 쓰지 않는다 — 0 이 "브레이커 전체 무효화"라는 뜻을 가진
+		// 값이라 positiveInt 로 받으면 그 뜻을 표현할 수 없다(설계 8절 env 표).
+		if up.CircuitMax, err = nonNegativeInt(env, "SEGMENT_UPLOAD_CIRCUIT_MAX", up.CircuitMax); err != nil {
+			return Config{}, err
+		}
+		// 버킷을 쓰겠다고 했으면 이름 문법과 엔드포인트를 그 자리에서 본다.
+		// 오타를 기동 때 잡지 않으면 PUT 이 전부 404 로 실패한 뒤에야 알게 된다.
+		if err := validateS3(s3); err != nil {
+			return Config{}, err
+		}
 	}
-	s3.Endpoint = strings.TrimSpace(env("S3_ENDPOINT"))
-	if s3.ForcePathStyle, err = boolean(env, "S3_FORCE_PATH_STYLE", false); err != nil {
-		return Config{}, err
-	}
-	if up.RetryMax, err = positiveInt(env, "SEGMENT_UPLOAD_RETRY_MAX", up.RetryMax); err != nil {
-		return Config{}, err
-	}
-	if up.SweepEvery, err = duration(env, "SEGMENT_UPLOAD_SWEEP_EVERY", up.SweepEvery); err != nil {
-		return Config{}, err
-	}
-	// CircuitMax 만 양수 검증을 쓰지 않는다 — 0 이 "브레이커 전체 무효화"라는 뜻을 가진 값이라
-	// positiveInt 로 받으면 그 뜻을 표현할 수 없다(설계 8절 env 표).
-	if up.CircuitMax, err = nonNegativeInt(env, "SEGMENT_UPLOAD_CIRCUIT_MAX", up.CircuitMax); err != nil {
-		return Config{}, err
-	}
+
+	// TailHold 는 업로더가 꺼져 있어도 인덱서가 쓴다(꼬리 보류 수명). 항상 읽는다.
 	if idx.TailHold, err = duration(env, "SEGMENT_UPLOAD_TAIL_HOLD", idx.TailHold); err != nil {
 		return Config{}, err
 	}
@@ -185,20 +197,6 @@ func Load(env func(string) string) (Config, error) {
 		return Config{}, fmt.Errorf(
 			"SEGMENT_UPLOAD_TAIL_HOLD(%v)는 SEGMENT_SETTLE_WAIT(%v) 이상이어야 한다",
 			idx.TailHold, watch.Settle.SettleWait)
-	}
-	// 교차 검증 3 — 버킷을 쓰겠다고 했으면 나머지도 엄격히 본다.
-	// 비어 있을 때 검증하지 않는 것이 결정 11‴의 전부다: 업로더는 선택 부품이다.
-	if s3.Bucket != "" {
-		if !bucketNameRe.MatchString(s3.Bucket) {
-			return Config{}, fmt.Errorf(
-				"S3_BUCKET(%q)이 버킷 이름 규칙(소문자·숫자·점·하이픈 3-63자)에 맞지 않는다", s3.Bucket)
-		}
-		if s3.Endpoint != "" {
-			u, perr := url.Parse(s3.Endpoint)
-			if perr != nil || u.Scheme == "" || u.Host == "" {
-				return Config{}, fmt.Errorf("S3_ENDPOINT(%q)는 scheme 을 포함한 URL 이어야 한다", s3.Endpoint)
-			}
-		}
 	}
 
 	// 워처와 인덱서는 같은 유휴 판정 기준을 써야 한다.
@@ -309,6 +307,33 @@ func level(env func(string) string, key string, fallback slog.Level) (slog.Level
 	}
 	return l, nil
 }
+
+// validateS3 는 교차 검증 3 이다. 버킷이 설정됐을 때만 부른다.
+func validateS3(s3 upload.S3Options) error {
+	if !bucketNameRe.MatchString(s3.Bucket) {
+		return fmt.Errorf(
+			"S3_BUCKET(%q)이 버킷 이름 규칙(소문자·숫자·점·하이픈 3-63자)에 맞지 않는다", s3.Bucket)
+	}
+	// 점 두 개 연속과 IP 형식은 S3 가 거부하는 이름이다.
+	if strings.Contains(s3.Bucket, "..") || ipLikeRe.MatchString(s3.Bucket) {
+		return fmt.Errorf("S3_BUCKET(%q)은 연속된 점이나 IP 형식을 쓸 수 없다", s3.Bucket)
+	}
+	if s3.Endpoint == "" {
+		return nil
+	}
+	u, err := url.Parse(s3.Endpoint)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("S3_ENDPOINT(%q)는 scheme 을 포함한 URL 이어야 한다", s3.Endpoint)
+	}
+	// SDK 는 이상한 scheme 을 조용히 삼킨다. 우리가 쓰는 것은 둘뿐이다.
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("S3_ENDPOINT(%q)의 scheme 은 http 또는 https 여야 한다", s3.Endpoint)
+	}
+	return nil
+}
+
+// ipLikeRe 는 IPv4 형태의 버킷 이름을 잡는다.
+var ipLikeRe = regexp.MustCompile(`^\d{1,3}(\.\d{1,3}){3}$`)
 
 // bucketNameRe 는 S3 버킷 이름 규칙이다. 오타를 기동 때 잡지 않으면
 // PUT 이 전부 404 로 실패한 뒤에야 알게 된다.

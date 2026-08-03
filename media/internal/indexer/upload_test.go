@@ -324,9 +324,13 @@ func TestReconcileUploadStateOnCursorReload(t *testing.T) {
 	}
 }
 
-// tq-17 — QueueFull 도 accepted=false 이며, 인덱서는 그때 아무것도 기록하지 않는다.
-// 거부와 포화를 구분하는 것은 스위퍼의 커서 계산뿐이고 인덱서에는 쓸모가 없다.
-func TestQueueFullIsIndistinguishableFromRejection(t *testing.T) {
+// tq-17 — accepted=false 면 인덱서는 아무것도 기록하지 않는다.
+//
+// Disabled·격리·백오프·브레이커·큐 포화가 전부 이 값 하나로 오며, 인덱서에는 그 구분이
+// 쓸모가 없다. **QueueFull 이 실제로 false 를 돌려주는지는 이 테스트가 아니라
+// upload 패키지의 TestRequestUploadReturnsFalseWhenQueueIsFull 이 고정한다** —
+// 여기서 쓰는 것은 가짜라 반환값을 테스트가 정하기 때문이다.
+func TestRejectedRequestRecordsNothing(t *testing.T) {
 	f := newFixture(t, 4000)
 	f.upload.accept = false // Disabled·격리·백오프·브레이커·QueueFull 이 전부 이 값이다
 	f.makeFile("s1", segName(baseWall, 0), 1000)
@@ -337,5 +341,316 @@ func TestQueueFullIsIndistinguishableFromRejection(t *testing.T) {
 	}
 	if f.ix.cursors["s1"].Tail.UploadState != index.UploadStatePending {
 		t.Error("false 인데 커서 상태를 바꿨다")
+	}
+}
+
+// holdNow 는 "방금 보류된 꼬리"를 프로덕션 경로와 같은 모양으로 만든다.
+// start_wall 을 현재 시각으로 두어 eligibleAt(= start_wall + TailGrace)이 미래가 되게 한다 —
+// 픽스처의 baseWall 은 과거라 그대로 쓰면 매 틱 포기 분기로 빠진다.
+func (f *fixture) holdNow(t *testing.T, streamID string, size int) string {
+	t.Helper()
+	path := f.makeFile(streamID, segName(baseWall, 0), size)
+	wall := time.Now().UTC()
+	f.ix.cursors[streamID] = &index.Cursor{NextSeq: 1, Tail: &index.TailRow{
+		Seq: 0, StartWallUTC: wall, Bytes: int64(size), LocalPath: path,
+		S3Key: index.S3Key(streamID, 0, wall), UploadState: index.UploadStatePending,
+	}}
+	f.ix.holdTail(streamID, f.ix.cursors[streamID].Tail, time.Now())
+	return path
+}
+
+// tq-B5 — releaseHeldTail 의 판정 4개를 실경로(ReleaseHeldTails)로 고정한다.
+func TestReleaseHeldTailJudgements(t *testing.T) {
+	// ① TailHold 만큼은 무조건 기다린다. 그 시간이 "더 안 자란다"의 유일한 근거이며,
+	//    빼면 유휴 판정 직후의 꼬리를 그대로 올려 잘린 실물이 S3 에 굳는다.
+	t.Run("TailHold_전에는_올리지_않는다", func(t *testing.T) {
+		f := newFixture(t)
+		f.holdNow(t, "s1", 1000)
+
+		f.ix.ReleaseHeldTails()
+		if n := len(f.upload.targets()); n != 0 {
+			t.Fatalf("보류 시간 전에 %d건 요청됐다", n)
+		}
+
+		time.Sleep(f.opt.TailHold + 10*time.Millisecond)
+		f.ix.ReleaseHeldTails()
+		if n := len(f.upload.targets()); n != 1 {
+			t.Fatalf("보류 시간이 지났는데 %d건 요청됐다, want 1건", n)
+		}
+	})
+
+	// ② 크기가 장부와 다르면 아직 자라는 중이다. 이 판정을 빼면 ①과 같은 사고가 난다.
+	t.Run("크기가_다르면_올리지_않고_미룬다", func(t *testing.T) {
+		f := newFixture(t)
+		path := f.holdNow(t, "s1", 1000)
+		if err := os.WriteFile(path, make([]byte, 1500), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		before := f.ix.held["s1"].nextTry
+		time.Sleep(f.opt.TailHold + 10*time.Millisecond)
+
+		f.ix.ReleaseHeldTails()
+
+		if n := len(f.upload.targets()); n != 0 {
+			t.Fatalf("자라는 중인데 %d건 요청됐다", n)
+		}
+		if n := f.logs.count(slog.LevelDebug, "tail_upload_hold_extended"); n != 1 {
+			t.Errorf("tail_upload_hold_extended = %d건, want 1", n)
+		}
+		if !f.ix.held["s1"].nextTry.After(before) {
+			t.Error("nextTry 가 갱신되지 않았다 — 매 틱 stat 을 다시 태운다")
+		}
+	})
+
+	// ③ stat 자체가 실패해도 nextTry 를 미룬다. 미루지 않으면 매 틱 stat 을 재소모하고
+	//    예산 8개를 독점해 다른 스트림의 꼬리가 굶는다(A9 tq-16 과 같은 클래스).
+	t.Run("stat_실패는_nextTry_를_미룬다", func(t *testing.T) {
+		f := newFixture(t)
+		path := f.holdNow(t, "s1", 1000)
+		// 경로의 부모를 파일로 만들어 ENOTDIR 을 낸다 — 부재(ENOENT)와 다른 오류다.
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		f.ix.cursors["s1"].Tail.LocalPath = filepath.Join(path, "child.mp4")
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		before := f.ix.held["s1"].nextTry
+		time.Sleep(f.opt.TailHold + 10*time.Millisecond)
+
+		f.ix.ReleaseHeldTails()
+
+		if n := len(f.upload.targets()); n != 0 {
+			t.Fatalf("stat 이 실패했는데 %d건 요청됐다", n)
+		}
+		h, ok := f.ix.held["s1"]
+		if !ok {
+			t.Fatal("보류가 사라졌다 — 다음 기회를 잃는다")
+		}
+		if !h.nextTry.After(before) {
+			t.Error("nextTry 가 갱신되지 않았다 — 매 틱 stat 을 재소모하고 예산을 독점한다")
+		}
+	})
+
+	// ④ 커서가 앞서갔으면 그 보류는 의미가 없다. 지우지 않으면 예산만 계속 먹는다.
+	t.Run("커서가_앞서가면_보류를_버린다", func(t *testing.T) {
+		f := newFixture(t)
+		f.holdNow(t, "s1", 1000)
+		f.ix.cursors["s1"].Tail.Seq = 1 // 다음 조각이 들어온 상황
+
+		f.ix.ReleaseHeldTails()
+
+		if _, ok := f.ix.held["s1"]; ok {
+			t.Error("낡은 보류가 남아 있다")
+		}
+		if n := f.logs.count(slog.LevelDebug, "held_tail_stale"); n != 1 {
+			t.Errorf("held_tail_stale = %d건, want 1", n)
+		}
+	})
+
+	// bytes 가 없는 행은 CAS 기대값을 만들 수 없어 요청 자체를 하지 않는다(결정 14).
+	t.Run("bytes_가_0_이면_요청하지_않는다", func(t *testing.T) {
+		f := newFixture(t)
+		// 실물도 장부도 0 바이트라 크기 판정은 통과한다 — 그 다음 관문이 이 검사다.
+		f.holdNow(t, "s1", 0)
+		time.Sleep(f.opt.TailHold + 10*time.Millisecond)
+
+		f.ix.ReleaseHeldTails()
+
+		if n := len(f.upload.targets()); n != 0 {
+			t.Fatalf("bytes=0 인데 %d건 요청됐다", n)
+		}
+		if n := f.logs.count(slog.LevelError, "upload_target_rejected"); n != 1 {
+			t.Errorf("upload_target_rejected = %d건, want 1", n)
+		}
+	})
+}
+
+// tq-B7 — 교정이 보류 시계를 리셋한다.
+// 리셋하지 않으면 방금 자란 것을 확인하고도 다음 틱에 바로 올려 버린다.
+func TestTailCorrectionResetsHoldClock(t *testing.T) {
+	f := newFixture(t, 4000, 6000)
+	path := f.makeFile("s1", segName(baseWall, 0), 1000)
+	f.mustHandle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonIdle))
+
+	before := f.ix.held["s1"]
+	if before.seq != 0 {
+		t.Fatalf("준비 실패: held = %+v", before)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if err := os.WriteFile(path, make([]byte, 3000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f.mustHandle(f.segment("s1", segName(baseWall, 0), 3000, recording.ReasonRegrown))
+
+	after := f.ix.held["s1"]
+	if !after.since.After(before.since) {
+		t.Errorf("since 가 리셋되지 않았다: %v -> %v", before.since, after.since)
+	}
+	if !after.nextTry.Equal(after.since) {
+		t.Errorf("nextTry = %v, want since(%v) 와 같음", after.nextTry, after.since)
+	}
+	// eligibleAt 은 start_wall 기반이라 불변이어야 스위퍼 자격 시점과 계속 맞물린다(R9).
+	if !after.eligibleAt.Equal(before.eligibleAt) {
+		t.Errorf("eligibleAt 이 변했다: %v -> %v", before.eligibleAt, after.eligibleAt)
+	}
+}
+
+// tq-B3 — reconcileUploadState 의 가드 셋을 각각 구분해 고정한다.
+func TestReconcileUploadStateGuards(t *testing.T) {
+	newIx := func(t *testing.T, state index.UploadState, tailSeq int64) *fixture {
+		f := newFixture(t)
+		f.ix.cursors["s1"] = &index.Cursor{NextSeq: tailSeq + 1, Tail: &index.TailRow{
+			Seq: tailSeq, StartWallUTC: baseWall, Bytes: 1000, UploadState: state,
+		}}
+		return f
+	}
+
+	t.Run("held_만_어긋나면_held_만_지운다", func(t *testing.T) {
+		f := newIx(t, index.UploadStatePending, 5)
+		f.ix.held["s1"] = heldTail{seq: 4}
+		f.ix.requested["s1"] = 5
+
+		f.ix.reconcileUploadState("s1")
+
+		if _, ok := f.ix.held["s1"]; ok {
+			t.Error("어긋난 held 가 남아 있다")
+		}
+		if _, ok := f.ix.requested["s1"]; !ok {
+			t.Error("맞는 requested 까지 지웠다")
+		}
+	})
+
+	t.Run("requested_만_어긋나면_requested_만_지운다", func(t *testing.T) {
+		f := newIx(t, index.UploadStatePending, 5)
+		f.ix.held["s1"] = heldTail{seq: 5}
+		f.ix.requested["s1"] = 4
+
+		f.ix.reconcileUploadState("s1")
+
+		if _, ok := f.ix.requested["s1"]; ok {
+			t.Error("어긋난 requested 가 남아 있다")
+		}
+		if _, ok := f.ix.held["s1"]; !ok {
+			t.Error("맞는 held 까지 지웠다")
+		}
+	})
+
+	t.Run("이미_확정된_꼬리면_둘_다_지운다", func(t *testing.T) {
+		f := newIx(t, index.UploadStateUploaded, 5)
+		f.ix.held["s1"] = heldTail{seq: 5}
+		f.ix.requested["s1"] = 5
+
+		f.ix.reconcileUploadState("s1")
+
+		if _, ok := f.ix.held["s1"]; ok {
+			t.Error("확정된 꼬리의 held 가 남아 있다")
+		}
+		if _, ok := f.ix.requested["s1"]; ok {
+			t.Error("확정된 꼬리의 requested 가 남아 있다")
+		}
+	})
+}
+
+// tq-B3 — seq 충돌 재적재 경로에서도 맞춰야 한다.
+// 그 경로는 커서를 통째로 갈아 끼우므로 옛 seq 의 requested 가 그대로 남으면
+// 확인 2.5 가 엉뚱한 행을 근거로 돌아간다.
+func TestReconcileRunsOnSeqConflictReload(t *testing.T) {
+	f := newFixture(t, 4000)
+	f.upload.accept = false // 접수되면 advance 가 requested 를 덮어써 관측이 흐려진다
+
+	// DB 에는 seq 0 이 이미 있는데 메모리 커서는 비어 있는 상태 = 단일 쓰기자 전제 붕괴.
+	path := f.makeFile("s1", segName(baseWall, 0), 1000)
+	f.store.seed(index.Record{
+		StreamID: "s1", Seq: 0, StartWallUTC: baseWall, DurationMS: 4000,
+		LocalPath: path, UploadState: index.UploadStatePending, Bytes: 1000,
+	})
+	f.ix.cursors["s1"] = &index.Cursor{NextSeq: 0}
+	f.ix.requested["s1"] = 99 // 옛 커서가 남긴 값
+
+	next := f.makeFile("s1", segName(baseWall, 4*time.Second), 1000)
+	_ = next
+	f.mustHandle(f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonNextFile))
+
+	if seq, ok := f.ix.requested["s1"]; ok && seq == 99 {
+		t.Error("재적재 후에도 옛 requested(99)가 남아 있다")
+	}
+}
+
+// tq-B2 — tail_stat_failed 도 pending 한정이다(계획 6.3 (i)).
+// 확정된 행의 stat 실패는 조사 대상이 아니라 정상 상황이라 5분마다 WARN 이 폭주한다.
+func TestRecoverTailStatFailureIsWarnOnlyWhenPending(t *testing.T) {
+	cases := []struct {
+		state index.UploadState
+		level slog.Level
+	}{
+		{index.UploadStatePending, slog.LevelWarn},
+		{index.UploadStateUploaded, slog.LevelDebug},
+	}
+	for _, c := range cases {
+		t.Run(string(c.state), func(t *testing.T) {
+			f := newFixture(t, 4000)
+			// 경로의 부모가 파일이면 stat 이 ENOTDIR 로 실패한다(부재와 다른 오류다).
+			blocker := f.makeFile("s1", segName(baseWall, 4*time.Second), 1000)
+			f.store.seed(index.Record{
+				StreamID: "s1", Seq: 0, StartWallUTC: baseWall, DurationMS: 4000,
+				LocalPath: filepath.Join(blocker, "child.mp4"), UploadState: c.state, Bytes: 1000,
+			})
+
+			if err := f.ix.Scan(t.Context(), f.root); err != nil {
+				t.Fatalf("Scan 실패: %v", err)
+			}
+
+			if n := f.logs.count(c.level, "tail_stat_failed"); n != 1 {
+				t.Fatalf("tail_stat_failed(%v) = %d건, want 1", c.level, n)
+			}
+		})
+	}
+}
+
+// tq-B2 — 확정된 꼬리의 파일이 사라진 경우 correctTail 도 조용히 넘어간다.
+func TestCorrectTailOnTerminalRowWithMissingFile(t *testing.T) {
+	f := newFixture(t, 4000)
+	missing := filepath.Join(f.root, "s1", "사라진파일.mp4")
+	f.ix.cursors["s1"] = &index.Cursor{NextSeq: 1, Tail: &index.TailRow{
+		Seq: 0, StartWallUTC: baseWall, Bytes: 1000, LocalPath: missing,
+		UploadState: index.UploadStateUploaded,
+	}}
+
+	seg := recording.Segment{StreamID: "s1", Path: missing, StartWall: baseWall,
+		Reason: recording.ReasonRegrown}
+	if err := f.ix.correctTail(t.Context(), seg); err != nil {
+		t.Fatalf("correctTail 실패: %v", err)
+	}
+
+	if n := f.logs.count(slog.LevelDebug, "tail_file_gone"); n != 1 {
+		t.Errorf("tail_file_gone = %d건, want 1", n)
+	}
+	if n := f.logs.count(slog.LevelError, "regrow_after_upload_ignored"); n != 0 {
+		t.Errorf("파일이 없는데 굳음으로 판정했다 (%d건)", n)
+	}
+	if len(f.store.updateTail) != 0 {
+		t.Errorf("UpdateTail %d건, want 0건", len(f.store.updateTail))
+	}
+}
+
+// tq-B10 — 보류 기본값은 계약이다.
+// HoldTick 이 30s 급이면 마지막 조각의 총 지연이 48초까지 늘어 AC1 재현성이 깨지고,
+// HoldStatBudget 이 바뀌면 틱당 stat 비용과 지연 상한(틱 x ceil(n/예산))이 함께 흔들린다.
+func TestHoldDefaults(t *testing.T) {
+	opt := DefaultOptions()
+	if opt.HoldTick != time.Second {
+		t.Errorf("HoldTick = %v, want 1s", opt.HoldTick)
+	}
+	if opt.HoldStatBudget != 8 {
+		t.Errorf("HoldStatBudget = %d, want 8", opt.HoldStatBudget)
+	}
+	if opt.TailHold != 5*time.Second {
+		t.Errorf("TailHold = %v, want 5s", opt.TailHold)
+	}
+	// TailGrace 는 기본값이 없다 — config 가 upload 쪽 값을 넣어 준다.
+	if opt.TailGrace != 0 {
+		t.Errorf("TailGrace = %v, want 0 (소유자는 upload.Options 하나)", opt.TailGrace)
 	}
 }

@@ -347,15 +347,26 @@ func TestLoadUploadDefaults(t *testing.T) {
 	if cfg.Indexer.TailHold != 5*time.Second {
 		t.Errorf("TailHold = %v, want 5s", cfg.Indexer.TailHold)
 	}
-	// 두 계층이 같은 유예를 봐야 인덱서의 포기 시점과 스위퍼의 자격 시점이 맞물린다.
-	if cfg.Indexer.TailGrace != cfg.Upload.TailGrace {
+}
+
+// 두 값이 한 곳에서 나오는지는 **기본값이 아닌 환경**에서 봐야 한다.
+// 기본값끼리는 우연히 같아서, 대입을 지워도 통과하는 과적합이 된다.
+func TestUploadSharesGraceAndRootWithIndexer(t *testing.T) {
+	env := minimalEnv()
+	env["SEGMENT_ROOT"] = "/다른/녹화루트"
+	cfg, err := Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	// 두 계층이 같은 유예를 봐야 인덱서의 포기 시점과 스위퍼의 자격 시점이 맞물린다(결정 4⁵).
+	if cfg.Indexer.TailGrace != cfg.Upload.TailGrace || cfg.Indexer.TailGrace == 0 {
 		t.Errorf("TailGrace 가 갈렸다: indexer %v vs upload %v",
 			cfg.Indexer.TailGrace, cfg.Upload.TailGrace)
 	}
-	// SegmentRoot 는 한 곳에서 나와야 한다 — 경로 검증(문자열)과 열기(os.Root)가
-	// 다른 값을 보면 검증을 통과한 경로가 다른 루트에서 열린다.
-	if cfg.Upload.SegmentRoot != cfg.SegmentRoot {
-		t.Errorf("SegmentRoot 가 갈렸다: %q vs %q", cfg.Upload.SegmentRoot, cfg.SegmentRoot)
+	// 경로 검증(문자열)과 열기(os.Root)가 다른 값을 보면 검증을 통과한 경로가
+	// 다른 루트에서 열린다.
+	if cfg.Upload.SegmentRoot != "/다른/녹화루트" || cfg.SegmentRoot != "/다른/녹화루트" {
+		t.Errorf("SegmentRoot 가 갈렸다: upload %q vs cfg %q", cfg.Upload.SegmentRoot, cfg.SegmentRoot)
 	}
 }
 
@@ -451,5 +462,75 @@ func TestLoadTreatsBlankBucketAsDisabled(t *testing.T) {
 	}
 	if cfg.S3.Bucket != "" {
 		t.Errorf("S3.Bucket = %q, want 빈 문자열", cfg.S3.Bucket)
+	}
+}
+
+// cx HIGH — 업로더가 꺼진 환경에서는 다른 S3 값이 잘못돼도 기동이 성공해야 한다.
+//
+// 그 파일은 2·3번이 매일 띄우는 것이다(G15). 버킷 분기보다 파싱이 앞서면 오타 하나가
+// 인덱싱까지 통째로 죽인다 — 업로더만 꺼지고 나머지는 살아야 한다는 결정 11‴ 위반이다.
+func TestDisabledUploaderIgnoresOtherS3Settings(t *testing.T) {
+	bad := map[string]map[string]string{
+		"S3_FORCE_PATH_STYLE 가 불리언이 아님":       {"S3_FORCE_PATH_STYLE": "아마도"},
+		"S3_ENDPOINT 가 URL 이 아님":              {"S3_ENDPOINT": "minio:9000"},
+		"SEGMENT_UPLOAD_CIRCUIT_MAX 가 음수":     {"SEGMENT_UPLOAD_CIRCUIT_MAX": "-1"},
+		"SEGMENT_UPLOAD_RETRY_MAX 가 0":        {"SEGMENT_UPLOAD_RETRY_MAX": "0"},
+		"SEGMENT_UPLOAD_SWEEP_EVERY 가 기간이 아님": {"SEGMENT_UPLOAD_SWEEP_EVERY": "곧"},
+	}
+	for name, extra := range bad {
+		t.Run(name, func(t *testing.T) {
+			env := minimalEnv()
+			env["S3_BUCKET"] = "" // 업로더 꺼짐
+			for k, v := range extra {
+				env[k] = v
+			}
+			cfg, err := Load(envOf(env))
+			if err != nil {
+				t.Fatalf("기동이 거부됐다 — 업로더만 꺼지고 인덱싱은 살아야 한다: %v", err)
+			}
+			if cfg.S3.Bucket != "" {
+				t.Errorf("S3.Bucket = %q, want 빈 문자열", cfg.S3.Bucket)
+			}
+		})
+	}
+
+	// 반대로 버킷을 설정했으면 같은 값들이 기동을 막는다.
+	for name, extra := range bad {
+		t.Run("버킷_있음/"+name, func(t *testing.T) {
+			env := minimalEnv()
+			env["S3_BUCKET"] = "pokeclip-media-demo-2557"
+			for k, v := range extra {
+				env[k] = v
+			}
+			if _, err := Load(envOf(env)); err == nil {
+				t.Error("에러가 없다 — 버킷을 쓰겠다고 했으면 엄격히 봐야 한다")
+			}
+		})
+	}
+}
+
+// cx MEDIUM — 버킷 이름의 흔한 오형식과 엔드포인트 scheme 제한.
+func TestLoadRejectsMalformedBucketAndEndpoint(t *testing.T) {
+	cases := []struct{ name, bucket, endpoint, want string }{
+		{"IP 형식", "192.168.0.1", "", "S3_BUCKET"},
+		{"연속된 점", "poke..clip", "", "S3_BUCKET"},
+		{"점으로 끝남", "pokeclip.", "", "S3_BUCKET"},
+		{"scheme 이 http/https 가 아님", "pokeclip-media-demo-2557", "ftp://minio:9000", "S3_ENDPOINT"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			env := minimalEnv()
+			env["S3_BUCKET"] = c.bucket
+			if c.endpoint != "" {
+				env["S3_ENDPOINT"] = c.endpoint
+			}
+			_, err := Load(envOf(env))
+			if err == nil {
+				t.Fatal("에러가 없다")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("에러 = %v, want %q 포함", err, c.want)
+			}
+		})
 	}
 }
