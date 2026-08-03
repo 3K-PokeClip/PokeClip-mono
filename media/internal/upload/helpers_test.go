@@ -322,3 +322,16 @@ func (b *syncBuffer) contains(s string) bool { return strings.Contains(b.String(
 func jsonLogger(w io.Writer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
+
+// armForSweepTest 는 고루틴을 띄우지 않고 수명 상태만 Started 로 만든다.
+//
+// 스위퍼 회차를 테스트가 직접 한 번씩 돌리기 위한 이음매다. 워커가 없어야 큐 포화
+// 시나리오가 결정적이 된다 — 소비자가 있으면 "몇 건째에 막히는가"가 스케줄러에 달린다.
+// 프로덕션 코드에 이 함수를 두지 않으려고 테스트 파일에 메서드로 둔다.
+func (u *Uploader) armForSweepTest() {
+	u.putCtx, u.putCancel = context.WithCancel(context.Background())
+	u.markRoot, u.markCancel = context.WithCancel(context.Background())
+	u.workerStop = make(chan struct{})
+	u.accepting.Store(true)
+	u.state.Store(int32(lifecycleStarted))
+}

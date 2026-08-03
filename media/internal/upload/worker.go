@@ -6,9 +6,14 @@ import (
 	"io/fs"
 	"log/slog"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
 // outcome 은 행 하나의 종결 분류다. 브레이커가 이 값만 보고 판단한다(설계 3.4절).
@@ -87,12 +92,6 @@ func (u *Uploader) runJob(j job) {
 	u.brk.record(o, u.lastAttemptErr)
 }
 
-// sweeper 는 재개 경로다. 회차 본체는 sweep.go 가 소유한다.
-func (u *Uploader) sweeper(ctx context.Context) {
-	defer close(u.sweepDone)
-	<-ctx.Done()
-}
-
 // processTarget 은 작업 1건 처리다(설계 3.3절).
 func (u *Uploader) processTarget(j job) outcome {
 	t := j.target
@@ -140,17 +139,71 @@ func (u *Uploader) processTarget(j job) outcome {
 	}
 
 	// [3] 재시도 소진.
-	return u.finalizeFailure(j, lg, lastErr)
+	return u.finalizeFailure(j, rel, lg, lastErr)
 }
 
-// validateTarget 은 [0] 이다. rel 은 Root.Open 에 넘길 루트 기준 상대 경로다.
+// s3KeyRe 는 예약 키의 전체 문법이다. index.S3Key 로 재계산해 비교하지는 않는다 —
+// "예약 키 그대로 PUT"이 계약이라 재계산 비교는 키 포맷을 바꾸는 순간 옛 행을 전부 거부한다.
+var s3KeyRe = regexp.MustCompile(`^streams/([A-Za-z0-9_-]{1,64})/\d{4}-\d{2}-\d{2}/\d{2}/seg_(\d{6,})\.m4s$`)
+
+// validateTarget 은 [0] 대상 검증이다(G17′ · 결정 15″). rel 은 Root.Open 에 넘길
+// 루트 기준 상대 경로다.
+//
+// ★ 판정 순서가 계약이다. 루트 이탈 판정이 디렉토리 일치 판정보다 **앞**이다 —
+// 두 조건을 동시에 위반하는 입력(예: /home/sidecar/.aws/credentials)에서 dir_mismatch 가
+// 먼저 나오면 AC5 의 3중 필터가 위음성 FAIL 이 된다(r5 · cc M-1).
 func (u *Uploader) validateTarget(t index.UploadTarget, lg *slog.Logger) (string, bool) {
-	rel, err := filepath.Rel(filepath.Clean(u.opt.SegmentRoot), filepath.Clean(t.LocalPath))
-	if err != nil {
-		lg.Error("upload_target_rejected", "reason", "root_escape", "path", t.LocalPath, "s3_key", t.S3Key)
+	reject := func(reason string) (string, bool) {
+		lg.Error("upload_target_rejected", "reason", reason,
+			"path", t.LocalPath, "s3_key", t.S3Key)
 		return "", false
 	}
+
+	// 화이트리스트의 소유자는 recording.ValidStreamID 하나다. 정규식을 복사하지 않는다.
+	if !recording.ValidStreamID(t.StreamID) {
+		return reject("bad_stream_id")
+	}
+	m := s3KeyRe.FindStringSubmatch(t.S3Key)
+	if m == nil || m[1] != t.StreamID {
+		return reject("bad_key")
+	}
+	seq, err := strconv.ParseInt(m[2], 10, 64)
+	if err != nil || seq != t.Seq {
+		return reject("seq_mismatch")
+	}
+
+	rel, err := filepath.Rel(filepath.Clean(u.opt.SegmentRoot), filepath.Clean(t.LocalPath))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return reject("root_escape")
+	}
+	if filepath.Dir(rel) != t.StreamID {
+		return reject("dir_mismatch")
+	}
+	if t.Bytes <= 0 {
+		// bytes 가 없는 행은 처리 불가 데이터 오류다. coalesce 로 펴면 꼬리 대조와 CAS 가
+		// 영원히 실패해 조회 창만 낭비한다(결정 14).
+		return reject("bad_bytes")
+	}
 	return rel, true
+}
+
+// classifyOpenError 는 Root.Open 실패를 세 갈래로 가른다.
+//
+// EMFILE·ENFILE 은 **일시적 자원 고갈**이라 격리하면 안 된다 — 격리는 되돌릴 수 없는데
+// 원인은 곧 사라진다. 나머지(EACCES·ELOOP·ErrInvalid·루트 이탈)는 재시도해도 결과가
+// 같으므로 즉시 격리한다(CX-2 ①).
+func (u *Uploader) classifyOpenError(err error, t index.UploadTarget, k targetKey, lg *slog.Logger) attemptResult {
+	if errors.Is(err, fs.ErrNotExist) {
+		return attemptResult{kind: attemptFileMissing}
+	}
+	if errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) {
+		lg.Warn("upload_open_transient", "errno", err.Error())
+		return attemptResult{outcome: outcomeNeutral}
+	}
+	lg.Error("upload_target_rejected", "reason", "open_failed",
+		"path", t.LocalPath, "s3_key", t.S3Key, "err", err.Error())
+	u.gate.quarantine(k)
+	return attemptResult{outcome: outcomeNeutral}
 }
 
 // waitRetry 는 백오프 대기다. 시간만 재는 sleep 이면 최악 종료가 백오프만큼 늘어난다.
@@ -176,13 +229,7 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	// (a) 열기
 	f, err := u.opt.Root.Open(rel)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return attemptResult{kind: attemptFileMissing}
-		}
-		lg.Error("upload_target_rejected", "reason", "open_failed",
-			"path", t.LocalPath, "s3_key", t.S3Key, "err", err.Error())
-		u.gate.quarantine(k)
-		return attemptResult{outcome: outcomeNeutral}
+		return u.classifyOpenError(err, t, k, lg)
 	}
 	defer f.Close()
 
@@ -192,7 +239,25 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 		lg.Warn("upload_stat_failed", "stage", "pre", "err", err.Error())
 		return attemptResult{outcome: outcomeNeutral}
 	}
+	if !fi.Mode().IsRegular() {
+		lg.Error("upload_target_rejected", "reason", "not_regular",
+			"path", t.LocalPath, "s3_key", t.S3Key)
+		u.gate.quarantine(k)
+		return attemptResult{outcome: outcomeNeutral}
+	}
 	size := fi.Size()
+
+	// (c) 크기 재확인은 경로가 아니라 **대상의 속성**이다(결정 4⁵).
+	if size != t.Bytes {
+		if t.IsTail {
+			// 꼬리는 아직 자라는 중일 수 있다. 여기서 올리면 잘린 실물이 굳는다(G12‴).
+			u.logTailGrowing(j, lg, t.Bytes, size)
+			return attemptResult{outcome: outcomeNeutral}
+		}
+		// 비꼬리는 correctTail 이 애초에 못 고치므로 막아서 얻을 것이 없고,
+		// 막으면 그 조각이 영원히 안 올라간다. 올리되 장부 어긋남을 남긴다(L14).
+		lg.Warn("upload_size_mismatch", "db_bytes", t.Bytes, "put_bytes", size)
+	}
 
 	// (d) PUT — ContentLength 의 출처는 위 실측값이다.
 	putCtx, cancel := context.WithTimeout(u.putCtx, u.opt.PutTimeout)
@@ -206,6 +271,19 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 		return attemptResult{kind: attemptPutFailed, err: err}
 	}
 	elapsed := u.now().Sub(start)
+
+	// (e) 같은 fd 로 다시 잰다. 경로가 아니라 열린 inode 를 재므로 경로 경합이 없다.
+	//     이 두 분기는 백오프에 등록하지 않는다 — "파일이 방금 바뀌었다"는 양의 증거를
+	//     본 경우이고, M-1 표에 없는 분기다(C10).
+	fi2, err := f.Stat()
+	if err != nil {
+		lg.Warn("upload_stat_failed", "stage", "post", "err", err.Error())
+		return attemptResult{outcome: outcomeNeutral}
+	}
+	if fi2.Size() != size {
+		lg.Warn("file_changed_during_put", "put_size", size, "after_size", fi2.Size())
+		return attemptResult{outcome: outcomeNeutral}
+	}
 
 	// (f) 마킹 — err 를 먼저 본다. (false, err) 를 CAS 거부로 오분류하면 안 된다(CX-2 ⑥).
 	markCtx, markCancel := context.WithTimeout(u.markRoot, u.opt.MarkTimeout)
@@ -256,10 +334,18 @@ func (u *Uploader) handleFileMissing(j job, lg *slog.Logger) outcome {
 	return outcomeSoft
 }
 
-// finalizeFailure 는 [3] 재시도 소진이다.
-func (u *Uploader) finalizeFailure(j job, lg *slog.Logger, lastErr error) outcome {
+// finalizeFailure 는 [3] 재시도 소진이다(결정 13″ — 꼬리 한정 보류).
+func (u *Uploader) finalizeFailure(j job, rel string, lg *slog.Logger, lastErr error) outcome {
 	t := j.target
 	k := j.key()
+
+	// 비꼬리는 재측정 자체를 하지 않는다 — 보류 판정이 없으므로 잴 이유가 없고,
+	// 여는 만큼 EMFILE 압력만 늘린다.
+	if t.IsTail {
+		if done, o := u.recheckTail(j, rel, lg); done {
+			return o
+		}
+	}
 
 	markCtx, cancel := context.WithTimeout(u.markRoot, u.opt.MarkTimeout)
 	defer cancel()
@@ -287,6 +373,55 @@ func (u *Uploader) finalizeFailure(j job, lg *slog.Logger, lastErr error) outcom
 		return outcomeHard
 	}
 	return outcomeSoft
+}
+
+// recheckTail 은 꼬리의 크기를 다시 재 failed 확정을 보류할지 정한다.
+//
+// 여기서 여는 fd 는 [2](e) 의 "같은 fd" 가 아니라 **경로 재열기**다 — attemptOnce 가
+// 반환한 시점에 그 fd 는 defer 로 닫혔다. 그래서 이 구간에는 경로 경합 보장이 없다(L15·L18).
+// 판정 재료가 없으면 판정하지 않는다: 오류를 무시하고 역참조하면 nil panic 이고,
+// "재측정 불가"를 크기 불일치로 뭉뚱그리면 성장 중인 꼬리를 failed 로 확정한다(CX6-2).
+func (u *Uploader) recheckTail(j job, rel string, lg *slog.Logger) (bool, outcome) {
+	t := j.target
+	k := j.key()
+
+	f, err := u.opt.Root.Open(rel)
+	if err != nil {
+		// ENOENT 도 여기서 확정하지 않는다. 확정의 소유자는 [2] 의 fileMissing 분기 하나이며,
+		// 백오프 만료 뒤 첫 회차가 같은 ENOENT 를 정식 경로로 확정한다.
+		lg.Warn("upload_stat_failed", "stage", "tail_recheck", "err", err.Error())
+		u.gate.registerFailure(k)
+		return true, outcomeNeutral
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		lg.Warn("upload_stat_failed", "stage", "tail_recheck", "err", err.Error())
+		u.gate.registerFailure(k)
+		return true, outcomeNeutral
+	}
+	if fi.Size() == t.Bytes {
+		return false, 0 // 판정 재료가 맞다 — 아래 MarkFailed 로 진행한다
+	}
+
+	// 크기가 변했다는 양의 증거를 방금 봤다. UpdateTail 의 bytes 교정이 다음 회차 판정을
+	// 실제로 바꾸므로 지수로 밀지 않는다 — 밀면 30m 뒤 재판정이라 이 결정이 무의미해진다(M-1).
+	streak := u.gate.registerDeferred(k)
+	lg.Warn("mark_failed_deferred", "db_bytes", t.Bytes, "file_bytes", fi.Size(),
+		"deferred_streak", streak)
+	return true, outcomeNeutral
+}
+
+// logTailGrowing 은 origin 에 따라 레벨이 갈린다 — 실시간 경로에서는 흔한 정상 상황이고
+// 스위프 경로에서는 "보류가 오래 풀리지 않는다"는 신호이기 때문이다.
+func (u *Uploader) logTailGrowing(j job, lg *slog.Logger, dbBytes, fileBytes int64) {
+	args := []any{"db_bytes", dbBytes, "file_bytes", fileBytes, "delta", fileBytes - dbBytes}
+	if j.origin == OriginSweep {
+		lg.Warn("tail_still_growing", args...)
+		return
+	}
+	lg.Debug("tail_still_growing", args...)
 }
 
 func errString(err error) string {
