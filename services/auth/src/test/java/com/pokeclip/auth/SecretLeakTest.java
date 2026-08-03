@@ -156,7 +156,7 @@ class SecretLeakTest extends IntegrationTestSupport {
         userRepository.deleteAll();
     }
 
-    /** core/CLAUDE.md의 FK 함정. 자식 행을 남기면 다른 테스트의 부모 정리를 막는다. */
+    /** auth/CLAUDE.md의 FK 함정. 자식 행을 남기면 다른 테스트의 부모 정리를 막는다. */
     @AfterEach
     void tearDown() {
         clearStreamKeyChildren();
@@ -365,7 +365,7 @@ class SecretLeakTest extends IntegrationTestSupport {
     }
 
     /**
-     * core/CLAUDE.md의 함정: 시크릿 필드에 @Size·@Pattern을 걸면 바인딩 실패
+     * auth/CLAUDE.md의 함정: 시크릿 필드에 @Size·@Pattern을 걸면 바인딩 실패
      * 리포트가 "rejected value [원문]"으로 값을 평문으로 찍는다. @NotBlank는
      * 거부되는 값이 빈 문자열·null뿐이라 안전하다. 지금 상태를 못박아, 나중에
      * 제약을 더하는 변경이 여기서 걸리게 한다.
