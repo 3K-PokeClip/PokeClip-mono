@@ -194,7 +194,10 @@ func (u *Uploader) validateTarget(t index.UploadTarget, lg *slog.Logger) (string
 // 같으므로 즉시 격리한다(CX-2 ①).
 func (u *Uploader) classifyOpenError(err error, t index.UploadTarget, k targetKey, lg *slog.Logger) attemptResult {
 	if errors.Is(err, fs.ErrNotExist) {
-		return attemptResult{kind: attemptFileMissing}
+		// outcome 을 명시한다. 호출자가 kind 를 먼저 보므로 지금은 쓰이지 않지만,
+		// 제로값(success)을 남겨 두면 분기 순서가 바뀌는 날 ENOENT 가 성공으로
+		// 브레이커에 집계된다.
+		return attemptResult{kind: attemptFileMissing, outcome: outcomeNeutral}
 	}
 	if errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) {
 		lg.Warn("upload_open_transient", "errno", err.Error())

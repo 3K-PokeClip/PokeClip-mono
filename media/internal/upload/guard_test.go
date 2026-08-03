@@ -3,7 +3,6 @@ package upload
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -385,14 +384,20 @@ func TestEnqueueRollsBackInflightOnQueueFull(t *testing.T) {
 	u.Start(context.Background())
 	defer func() { close(block); u.Shutdown() }()
 
-	// 워커가 1건을 잡고, 큐(용량 1)가 1건으로 찬다.
-	for seq := int64(0); seq < 2; seq++ {
-		p := writeSegment(t, dir, "demo", fmt.Sprintf("busy%d.mp4", seq), 16)
-		if got := u.enqueue(newTarget("demo", seq, p, 16, false), OriginSweep); got != EnqueueAdmitted {
-			t.Fatalf("사전 접수 %d = %v, want Admitted", seq, got)
-		}
+	// 포화 상태를 결정적으로 만든다: 워커가 1건을 **실제로 꺼낸 것을 확인한 뒤** 큐를 채운다.
+	// 두 건을 잇달아 넣고 나중에 확인하면, 워커가 아직 안 깨어난 스케줄(GOMAXPROCS=1 등)에서
+	// 두 번째가 QueueFull 이 되어 준비 단계부터 실패한다.
+	first := writeSegment(t, dir, "demo", "busy0.mp4", 16)
+	if got := u.enqueue(newTarget("demo", 0, first, 16, false), OriginSweep); got != EnqueueAdmitted {
+		t.Fatalf("사전 접수 0 = %v, want Admitted", got)
 	}
-	waitFor(t, func() bool { return len(put.putCalls()) == 1 }, "워커가 첫 건을 집을 때까지")
+	waitFor(t, func() bool { return len(put.putCalls()) == 1 }, "워커가 첫 건을 큐에서 꺼낼 때까지")
+
+	// 이제 큐(용량 1)가 비었다 — 여기에 1건을 넣으면 정확히 꽉 찬다.
+	second := writeSegment(t, dir, "demo", "busy1.mp4", 16)
+	if got := u.enqueue(newTarget("demo", 1, second, 16, false), OriginSweep); got != EnqueueAdmitted {
+		t.Fatalf("사전 접수 1 = %v, want Admitted", got)
+	}
 
 	path := writeSegment(t, dir, "demo", "full.mp4", 16)
 	target := newTarget("demo", 9, path, 16, false)

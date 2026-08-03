@@ -2,7 +2,9 @@ package upload
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -336,5 +338,220 @@ func TestSweepReachesLastRowWithinBoundedRounds(t *testing.T) {
 	}
 	if n := cap.count("sweep_aborted_queue_full"); n != 0 {
 		t.Errorf("구간 전체 sweep_aborted_queue_full = %d건, want 0", n)
+	}
+}
+
+// newErrSweepUploader 는 오류 주입용 가짜 저장소를 단 업로더다.
+func newErrSweepUploader(t *testing.T, st index.UploadStore) (*Uploader, *logCapture) {
+	t.Helper()
+	root, dir := newRoot(t)
+	opt := DefaultOptions(root, dir)
+	opt.SweepEvery = time.Hour
+	opt.SweepLimit = 4
+	cap := newLogCapture()
+	u := New(st, &fakePutter{}, opt, cap.logger())
+	u.armForSweepTest()
+	return u, cap
+}
+
+// onePage 는 정상 1페이지를 돌려주는 훅이다. 페이지가 limit 보다 짧으므로 순환으로 끝난다.
+func onePage(rows []pageRow) func(context.Context, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+	return func(_ context.Context, _ float64, _ int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+		out := make([]index.UploadTarget, 0, len(rows))
+		next := after
+		for _, r := range rows {
+			out = append(out, r.target)
+			next = r.cursor
+		}
+		return out, next, nil
+	}
+}
+
+// 조회 실패는 커서를 건드리지 않고, 다음 회차가 정상적으로 이어진다.
+//
+// 1단계 실패 회차가 2단계를 도는 것도 막는다 — 아무것도 훑지 않았는데
+// upload_sweep(stage=2, picked=0, cursor_wrapped=true)가 나오면 "한 바퀴 돌았다"로
+// 오관측된다(L-4).
+func TestSweepQueryFailureKeepsCursorAndReportsOnce(t *testing.T) {
+	rows := newPageStore(2, "s").rows
+	start := index.SweepCursor{StartWall: time.Date(2026, 8, 1, 0, 0, 5, 0, time.UTC), StreamID: "anchor", Seq: 5}
+
+	t.Run("1단계_조회_실패", func(t *testing.T) {
+		st := &fakeUploadStore{onPending: func(context.Context, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+			return nil, index.SweepCursor{}, errors.New("연결 끊김")
+		}}
+		u, cap := newErrSweepUploader(t, st)
+
+		resume, stalled := u.sweepOnce(context.Background(), start, 3)
+
+		if resume != start {
+			t.Errorf("커서 = %+v, want %+v (불변)", resume, start)
+		}
+		if stalled != 3 {
+			t.Errorf("stalled = %d, want 3 — 조회 실패는 커서 정체가 아니다", stalled)
+		}
+		rec := cap.one(t, "upload_sweep_failed")
+		if rec.level != slog.LevelError {
+			t.Errorf("레벨 = %v, want ERROR", rec.level)
+		}
+		if rec.attrs["stage"] != int64(1) {
+			t.Errorf("stage = %v, want 1", rec.attrs["stage"])
+		}
+		for _, r := range cap.find("upload_sweep") {
+			if r.attrs["stage"] == int64(2) {
+				t.Errorf("1단계가 실패했는데 2단계 요약이 나왔다: %v", r.attrs)
+			}
+		}
+
+		// 다음 회차는 정상 진행한다.
+		st.mu.Lock()
+		st.onPending = onePage(rows)
+		st.mu.Unlock()
+		cap.reset()
+		next, _ := u.sweepOnce(context.Background(), resume, stalled)
+		if next != rows[len(rows)-1].cursor && !next.IsZero() {
+			t.Errorf("다음 회차 커서 = %+v — 회차가 정상 진행하지 않았다", next)
+		}
+		if n := cap.count("upload_sweep_failed"); n != 0 {
+			t.Errorf("정상 회차에 upload_sweep_failed 가 %d건", n)
+		}
+	})
+
+	t.Run("1단계_실패_회차는_순환으로_관측되지_않는다", func(t *testing.T) {
+		// resume 가 IsZero 인 회차가 L-4 의 무대다. 1단계 결과를 승계하는 분기라
+		// 빈 결과가 그대로 "끝 도달 = 순환"으로 흘러갔다.
+		st := &fakeUploadStore{onPending: func(context.Context, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+			return nil, index.SweepCursor{}, errors.New("연결 끊김")
+		}}
+		u, cap := newErrSweepUploader(t, st)
+
+		resume, _ := u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+
+		if !resume.IsZero() {
+			t.Errorf("커서 = %+v, want zero (불변)", resume)
+		}
+		for _, r := range cap.find("upload_sweep") {
+			if r.attrs["cursor_wrapped"] == true {
+				t.Errorf("아무것도 훑지 않았는데 cursor_wrapped=true 로 관측됐다: %v", r.attrs)
+			}
+		}
+	})
+
+	t.Run("2단계_조회_실패", func(t *testing.T) {
+		var calls int
+		st := &fakeUploadStore{}
+		st.onPending = func(ctx context.Context, g float64, l int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+			st.mu.Lock()
+			calls++
+			n := calls
+			st.mu.Unlock()
+			if n == 1 { // 1단계(zero 커서)는 성공
+				return onePage(rows)(ctx, g, l, after)
+			}
+			return nil, index.SweepCursor{}, errors.New("연결 끊김")
+		}
+		u, cap := newErrSweepUploader(t, st)
+
+		resume, stalled := u.sweepOnce(context.Background(), start, 2)
+
+		if resume != start {
+			t.Errorf("커서 = %+v, want %+v (불변)", resume, start)
+		}
+		if stalled != 2 {
+			t.Errorf("stalled = %d, want 2", stalled)
+		}
+		rec := cap.one(t, "upload_sweep_failed")
+		if rec.attrs["stage"] != int64(2) {
+			t.Errorf("stage = %v, want 2", rec.attrs["stage"])
+		}
+		for _, r := range cap.find("upload_sweep") {
+			if r.attrs["stage"] == int64(2) && r.attrs["cursor_wrapped"] == true {
+				t.Errorf("조회에 실패했는데 순환으로 관측됐다: %v", r.attrs)
+			}
+		}
+	})
+
+	t.Run("CountBacklog_실패", func(t *testing.T) {
+		st := &fakeUploadStore{
+			onPending: onePage(rows),
+			onBacklog: func(context.Context) (int64, int64, int64, error) {
+				return 0, 0, 0, errors.New("연결 끊김")
+			},
+		}
+		u, cap := newErrSweepUploader(t, st)
+
+		_, stalled := u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+
+		rec := cap.one(t, "upload_sweep_failed")
+		if rec.attrs["stage"] != int64(0) {
+			t.Errorf("stage = %v, want 0 (집계 블록)", rec.attrs["stage"])
+		}
+		if n := cap.count("upload_backlog"); n != 0 {
+			t.Errorf("집계에 실패했는데 upload_backlog 가 %d건 나왔다", n)
+		}
+		if stalled != 0 {
+			t.Errorf("stalled = %d, want 0 — 단계는 정상이었다", stalled)
+		}
+		// 다음 회차는 정상 진행한다.
+		st.mu.Lock()
+		st.onBacklog = nil
+		st.mu.Unlock()
+		cap.reset()
+		u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+		if n := cap.count("upload_sweep_failed"); n != 0 {
+			t.Errorf("정상 회차에 upload_sweep_failed 가 %d건", n)
+		}
+	})
+}
+
+// ctx 취소는 실패가 아니라 종료 신호다.
+//
+// ERROR 로 내면 계획 5.2·6.4절의 "업로더 기인 ERROR 0건" 판정이 SIGTERM 한 번으로
+// 위양성 FAIL 이 된다 — 종료는 정상 경로이므로 계측을 깨서는 안 된다.
+func TestSweepCancellationIsNotAnError(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+	}{
+		{"Canceled", context.Canceled},
+		{"DeadlineExceeded", context.DeadlineExceeded},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Run("조회", func(t *testing.T) {
+				st := &fakeUploadStore{onPending: func(context.Context, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+					return nil, index.SweepCursor{}, fmt.Errorf("업로드 대상 조회 실패: %w", c.err)
+				}}
+				u, cap := newErrSweepUploader(t, st)
+
+				u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+
+				assertNoUploaderErrorOrWarn(t, cap)
+			})
+			t.Run("집계", func(t *testing.T) {
+				st := &fakeUploadStore{
+					onBacklog: func(context.Context) (int64, int64, int64, error) {
+						return 0, 0, 0, fmt.Errorf("업로드 잔량 집계 실패: %w", c.err)
+					},
+				}
+				u, cap := newErrSweepUploader(t, st)
+
+				u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+
+				assertNoUploaderErrorOrWarn(t, cap)
+			})
+		})
+	}
+}
+
+// assertNoUploaderErrorOrWarn 은 AC 스크립트의 판정식과 같은 눈으로 본다 —
+// 레벨이 ERROR·WARN 인 업로더 로그가 한 건도 없어야 한다.
+func assertNoUploaderErrorOrWarn(t *testing.T, cap *logCapture) {
+	t.Helper()
+	cap.mu.Lock()
+	defer cap.mu.Unlock()
+	for _, r := range cap.records {
+		if r.level >= slog.LevelWarn {
+			t.Errorf("종료 경로인데 %v %s 가 나왔다 (%v)", r.level, r.msg, r.attrs)
+		}
 	}
 }

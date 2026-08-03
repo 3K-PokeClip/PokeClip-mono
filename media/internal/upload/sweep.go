@@ -2,6 +2,7 @@ package upload
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -40,6 +41,9 @@ type sweepStage struct {
 	pages    int
 	aborted  bool
 	wrapped  bool
+	// failed 는 이 단계가 DB 조회에 실패했는가다. QueueFull 중단(aborted)과 구분한다 —
+	// 전자는 커서 정체가 아니므로 stalled 카운터를 건드리면 안 된다.
+	failed bool
 
 	// cursor 는 이 단계가 검사를 마친 위치이고, advanced 가 false 면 전진분이 없다.
 	cursor   index.SweepCursor
@@ -59,7 +63,10 @@ func (u *Uploader) sweepOnce(ctx context.Context, resume index.SweepCursor, stal
 
 	s1 := u.sweepStage1(ctx, lg)
 	s2 := sweepStage{stage: 2}
-	if !s1.aborted {
+	// 1단계가 조회에 실패했으면 2단계도 돌리지 않는다. 승계할 페이지가 없는데 진행하면
+	// 빈 결과가 "끝 도달 = 순환"으로 흘러가 아무것도 훑지 않은 회차가
+	// upload_sweep(stage=2, picked=0, cursor_wrapped=true)로 오관측된다(L-4).
+	if !s1.aborted && !s1.failed {
 		// 2단계는 1단계의 접수 성공 여부와 무관하게 반드시 진행한다 — 신규 세그먼트가
 		// 계속 유입되면 1단계가 매 회차 성공하는데, 거기서 끝내면 resumeCursor 가
 		// 영원히 전진하지 않는다(결정 5⁵).
@@ -69,9 +76,12 @@ func (u *Uploader) sweepOnce(ctx context.Context, resume index.SweepCursor, stal
 	// 회차 말미 집계는 **중단 회차에서도 반드시 실행된다**(M-2).
 	// 중단은 조기 return 이 아니라 페이지 루프 탈출이다 — 만성 포화일수록 이 관측이 필요한데
 	// 즉시 반환으로 구현하면 경고가 전멸해 CX6-3 처방이 무효가 된다.
-	if s1.aborted || s2.aborted {
+	switch {
+	case s1.aborted || s2.aborted:
 		stalled++
-	} else {
+	case s1.failed || s2.failed:
+		// 조회 실패는 큐 포화가 아니다. 직전 값을 보존해 진짜 정체 이력을 지우지 않는다.
+	default:
 		stalled = 0
 	}
 	u.sweepSummary(ctx, lg, []sweepStage{s1, s2}, stalled)
@@ -92,8 +102,8 @@ func (u *Uploader) sweepStage1(ctx context.Context, lg *slog.Logger) sweepStage 
 
 	rows, next, err := u.st.PendingUploads(ctx, u.opt.TailGrace.Seconds(), u.opt.SweepLimit, index.SweepCursor{})
 	if err != nil {
-		lg.Error("upload_sweep_failed", "stage", 1, "err", err.Error())
-		s.ran = false
+		logSweepQueryFailure(lg, 1, err)
+		s.ran, s.failed = false, true
 		return s
 	}
 	s.picked = len(rows)
@@ -158,7 +168,8 @@ func (u *Uploader) sweepStage2(ctx context.Context, lg *slog.Logger, resume inde
 			var err error
 			rows, next, err = u.st.PendingUploads(ctx, u.opt.TailGrace.Seconds(), u.opt.SweepLimit, cur)
 			if err != nil {
-				lg.Error("upload_sweep_failed", "stage", 2, "err", err.Error())
+				logSweepQueryFailure(lg, 2, err)
+				s.failed = true
 				return s
 			}
 			s.pages++
@@ -224,7 +235,7 @@ func (u *Uploader) sweepSummary(ctx context.Context, lg *slog.Logger, stages []s
 
 	pending, failed, bytesNull, err := u.st.CountBacklog(ctx)
 	if err != nil {
-		lg.Error("upload_sweep_failed", "stage", 0, "err", err.Error())
+		logSweepQueryFailure(lg, 0, err)
 		return
 	}
 	queueLen := len(u.queue)
@@ -240,4 +251,17 @@ func (u *Uploader) sweepSummary(ctx context.Context, lg *slog.Logger, stages []s
 		lg.Warn("sweep_cursor_stalled",
 			"stalled_rounds", stalled, "limit", u.opt.CursorStallWarn, "queue_len", queueLen)
 	}
+}
+
+// logSweepQueryFailure 는 DB 조회 실패를 남긴다. stage 0 은 회차 말미 집계 블록이다.
+//
+// ctx 취소·마감은 **실패가 아니라 종료 신호다.** ERROR 로 내면 계획 5.2·6.4절의
+// "업로더 기인 ERROR·WARN 0건" 판정이 SIGTERM 한 번으로 위양성 FAIL 이 된다 —
+// 종료는 정상 경로이므로 계측을 깨서는 안 된다. 이름은 그대로 두고 레벨만 내린다.
+func logSweepQueryFailure(lg *slog.Logger, stage int, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		lg.Debug("upload_sweep_failed", "stage", stage, "reason", "canceled", "err", err.Error())
+		return
+	}
+	lg.Error("upload_sweep_failed", "stage", stage, "err", err.Error())
 }
