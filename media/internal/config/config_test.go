@@ -214,3 +214,86 @@ func TestFixSSLMode(t *testing.T) {
 		t.Fatalf("DSN = %q", cfg.PGDSN)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 훅 어댑터 설정 (ADR-027)
+// ---------------------------------------------------------------------------
+
+func TestLoadAppliesHookDefaults(t *testing.T) {
+	cfg, err := Load(envOf(minimalEnv()))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+
+	// 스풀 경로에는 기본값이 없다. 미설정 = 훅 어댑터 끔이 기본 상태다.
+	if cfg.HookSpoolPath != "" {
+		t.Errorf("HookSpoolPath = %q, want \"\"(미설정 = 끔)", cfg.HookSpoolPath)
+	}
+	if cfg.HookPollInterval != 200*time.Millisecond {
+		t.Errorf("HookPollInterval = %v, want 200ms", cfg.HookPollInterval)
+	}
+	if cfg.Indexer.BreakGuard != 20*time.Millisecond {
+		t.Errorf("BreakGuard = %v, want 20ms", cfg.Indexer.BreakGuard)
+	}
+	// 훅 세그먼트 경로 정본화 기준은 워처 루트와 반드시 같아야 한다.
+	// 다르면 두 채널이 서로 다른 local_path 를 만들어 같은 파일에 행이 둘 생긴다.
+	if cfg.Indexer.SegmentRoot != cfg.Watcher.Root {
+		t.Errorf("SegmentRoot 가 인덱서(%q)와 워처(%q)에서 다르다",
+			cfg.Indexer.SegmentRoot, cfg.Watcher.Root)
+	}
+}
+
+// HOOK_SPOOL_PATH="" 는 즉시 롤백 스위치다. withDefault 를 쓰면 빈 값을 미설정으로 보고
+// fallback 을 돌려주므로 그 스위치가 고장난다.
+func TestEmptyHookSpoolPathStaysEmpty(t *testing.T) {
+	env := minimalEnv()
+	env["HOOK_SPOOL_PATH"] = ""
+
+	cfg, err := Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.HookSpoolPath != "" {
+		t.Errorf("HookSpoolPath = %q, want \"\" — 롤백 스위치가 fallback 에 덮였다", cfg.HookSpoolPath)
+	}
+}
+
+func TestLoadReadsHookOverrides(t *testing.T) {
+	env := minimalEnv()
+	env["HOOK_SPOOL_PATH"] = "/hooks/events.jsonl"
+	env["HOOK_POLL_INTERVAL"] = "50ms"
+	env["HOOK_BREAK_GUARD"] = "35ms"
+
+	cfg, err := Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.HookSpoolPath != "/hooks/events.jsonl" {
+		t.Errorf("HookSpoolPath = %q", cfg.HookSpoolPath)
+	}
+	if cfg.HookPollInterval != 50*time.Millisecond {
+		t.Errorf("HookPollInterval = %v, want 50ms", cfg.HookPollInterval)
+	}
+	if cfg.Indexer.BreakGuard != 35*time.Millisecond {
+		t.Errorf("BreakGuard = %v, want 35ms", cfg.Indexer.BreakGuard)
+	}
+}
+
+// 0·음수 기간은 기동 거부다. Guard 가 0 이면 파일명 시각 해상도 차이만으로 새 세션의
+// 첫 조각을 놓치고, 폴 간격이 0 이면 tail 이 busy loop 가 된다.
+func TestHookDurationsRejectZeroAndNegative(t *testing.T) {
+	for _, key := range []string{"HOOK_POLL_INTERVAL", "HOOK_BREAK_GUARD"} {
+		for _, bad := range []string{"0s", "-1ms", "빠르게"} {
+			t.Run(key+"="+bad, func(t *testing.T) {
+				env := minimalEnv()
+				env[key] = bad
+
+				if _, err := Load(envOf(env)); err == nil {
+					t.Fatalf("%s=%q 를 받아들였다", key, bad)
+				} else if !strings.Contains(err.Error(), key) {
+					t.Errorf("에러에 키 이름이 없다: %v", err)
+				}
+			})
+		}
+	}
+}
