@@ -31,6 +31,13 @@ const (
 	ReasonScan CompletionReason = 3
 	// ReasonRegrown 은 확정 후 파일이 더 자란 경우다. 새 행 INSERT 가 아니라 UpdateTail 경로로 간다(H1).
 	ReasonRegrown CompletionReason = 4
+	// ReasonHook 은 MediaMTX 의 runOnRecordSegmentComplete 훅으로 완성 판정된 경우다.
+	//
+	// 승격(H6)·학습 대상에서 제외된다 — 두 장치의 조건이 ReasonNextFile 한정이라 코드 변경 없이
+	// 성립한다. 제외가 안전한 근거: 승격이 방어하려던 "덜 써진 파일을 읽었다"는 위험이 훅 경로에는
+	// 실측상 없고(훅 시점 파일이 이미 최종 크기 29/29), 방송 마지막 partial 조각도 같은 사유로
+	// 도착하므로 승격 대상에 넣으면 매 방송 재프로브가 헛돌아 reprobe_disabled 가 켜진다.
+	ReasonHook CompletionReason = 5
 )
 
 // Segment 는 완성된 세그먼트 파일 하나를 표현한다.

@@ -177,3 +177,29 @@ func TestReasonUnknownIsZeroValue(t *testing.T) {
 		t.Fatalf("CompletionReason zero value = %d, want ReasonUnknown(0)", r)
 	}
 }
+
+// CompletionReason 값은 로그(`segment_indexed`의 reason 필드)로 밖에 나가므로 숫자 자체가 계약이다.
+// 값을 재배치하면 이미 쌓인 로그의 의미가 소급해서 바뀐다. 그래서 전 상수를 한 곳에 고정한다.
+func TestCompletionReasonValuesAreStable(t *testing.T) {
+	want := map[string]CompletionReason{
+		"ReasonUnknown":  0,
+		"ReasonNextFile": 1,
+		"ReasonIdle":     2,
+		"ReasonScan":     3,
+		"ReasonRegrown":  4,
+		"ReasonHook":     5,
+	}
+	got := map[string]CompletionReason{
+		"ReasonUnknown":  ReasonUnknown,
+		"ReasonNextFile": ReasonNextFile,
+		"ReasonIdle":     ReasonIdle,
+		"ReasonScan":     ReasonScan,
+		"ReasonRegrown":  ReasonRegrown,
+		"ReasonHook":     ReasonHook,
+	}
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("%s = %d, want %d", name, got[name], w)
+		}
+	}
+}
