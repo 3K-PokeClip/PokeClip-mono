@@ -179,8 +179,13 @@ func TestUpdateTailRejectedWhenUploaded(t *testing.T) {
 	}
 }
 
-// 케이스5 — LoadCursor 가 bytes·local_path·upload_state 를 실어온다.
-// 이 셋이 없으면 Scan(a) 의 꼬리 재성장 복구가 판정을 내릴 수 없다.
+// 케이스5 — LoadCursor 가 bytes·local_path·upload_state·s3_key 를 실어온다.
+// 앞 셋이 없으면 Scan(a) 의 꼬리 재성장 복구가 판정을 내릴 수 없고,
+// s3_key 가 없으면 POK-30 의 꼬리 업로드 요청이 빈 키로 나간다.
+//
+// s3_key 와 local_path 를 한 테스트에서 둘 다 단언하는 것이 핵심이다 —
+// 둘 다 text 컬럼이라 Scan 인자 순서를 바꿔도 컴파일과 실행이 통과한다.
+// 값 대조만이 그 사고를 잡는다.
 func TestLoadCursorCarriesTailFields(t *testing.T) {
 	ctx := context.Background()
 	store := NewPGStore(newTestPool(t))
@@ -206,6 +211,9 @@ func TestLoadCursorCarriesTailFields(t *testing.T) {
 	}
 	if cur.Tail.LocalPath != want.LocalPath {
 		t.Errorf("LocalPath = %q, want %q", cur.Tail.LocalPath, want.LocalPath)
+	}
+	if cur.Tail.S3Key != want.S3Key {
+		t.Errorf("S3Key = %q, want %q", cur.Tail.S3Key, want.S3Key)
 	}
 	if cur.Tail.UploadState != UploadStatePending {
 		t.Errorf("UploadState = %q, want pending", cur.Tail.UploadState)

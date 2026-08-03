@@ -40,8 +40,11 @@ func NewPGStore(pool *pgxpool.Pool) Store {
 	return &pgStore{pool: pool}
 }
 
+// s3_key 는 ddl.go 에서 NOT NULL 이므로 포인터로 받지 않고 곧바로 스캔한다.
+// SELECT 목록 순서와 아래 Scan 인자 순서는 반드시 같아야 한다 — s3_key 와 local_path 는
+// 둘 다 text 라 순서를 바꿔도 컴파일·실행이 통과한다. store_test.go 의 값 대조가 그 방어선이다.
 const loadCursorSQL = `
-SELECT seq, start_pts_ms, start_wall_utc, duration_ms, bytes, local_path, upload_state
+SELECT seq, start_pts_ms, start_wall_utc, duration_ms, bytes, local_path, upload_state, s3_key
   FROM stream_segments WHERE stream_id = $1 ORDER BY seq DESC LIMIT 1`
 
 func (s *pgStore) LoadCursor(ctx context.Context, streamID string) (Cursor, error) {
@@ -52,7 +55,7 @@ func (s *pgStore) LoadCursor(ctx context.Context, streamID string) (Cursor, erro
 	)
 	err := s.pool.QueryRow(ctx, loadCursorSQL, streamID).Scan(
 		&tail.Seq, &tail.StartPTSMS, &tail.StartWallUTC, &tail.DurationMS,
-		&bytes, &localPath, &tail.UploadState,
+		&bytes, &localPath, &tail.UploadState, &tail.S3Key,
 	)
 	// 행이 없다 = 이 스트림의 첫 세그먼트다. 에러가 아니라 정상 상태다.
 	if errors.Is(err, pgx.ErrNoRows) {
