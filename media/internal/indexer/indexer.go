@@ -611,8 +611,8 @@ func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.R
 		}
 	}
 
-	// 새 꼬리의 처우. NextFile 은 후속 파일이 이미 생겼다는 뜻이라 즉시 올린다.
-	if seg.Reason == recording.ReasonNextFile {
+	// 새 꼬리의 처우. 더 자라지 않는다고 확증된 사유는 즉시 올린다.
+	if growthConfirmed(seg.Reason) {
 		if !ix.requestUpload(seg.StreamID, cur.Tail, true) {
 			ix.holdAfterRejection(seg.StreamID, cur.Tail, now)
 		}

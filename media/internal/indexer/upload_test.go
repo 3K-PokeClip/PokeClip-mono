@@ -655,3 +655,60 @@ func TestHoldDefaults(t *testing.T) {
 		t.Errorf("TailGrace = %v, want 2m", opt.TailGrace)
 	}
 }
+
+// 훅으로 완성된 조각은 ReasonNextFile 과 **동급**으로 즉시 요청 경로를 탄다(kty 확정).
+//
+// 근거 셋:
+//  1. 훅은 MediaMTX 가 "이 파일 다 썼다"고 직접 통보한 것이다. 훅 시점의 파일이 이미 최종
+//     크기라는 것은 실측으로 확인됐다(29/29 — recording/name.go 의 ReasonHook 주석).
+//  2. ADR-014 는 완성 즉시 업로드를 요구한다. holdTail 로 빠지면 TailHold(기본 5s)와
+//     틱 주기가 더해져 훅이 준 시간 이득이 통째로 사라진다.
+//  3. 오탐(훅이 왔는데 실제로 더 자람)이어도 안전망은 ReasonNextFile 과 동일하다 —
+//     워커가 PUT 전에 같은 fd 로 크기를 다시 재고, 마킹은 bytes CAS 로 걸러진다.
+//
+// 이 테스트가 지키는 것은 "훅 조각이 held 에 들어가지 않는다"이다. 분기를 지우면
+// 그 조각은 다음 INSERT 나 TailHold 경과까지 붙들려 5초+ 늦게 올라간다.
+func TestHookSegmentRequestsUploadImmediately(t *testing.T) {
+	f := newFixture(t, 4000)
+	f.mustHandle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonHook))
+
+	got := f.upload.targets()
+	if len(got) != 1 {
+		t.Fatalf("요청 %d건, want 1건 — 훅 조각이 보류 경로로 빠졌다", len(got))
+	}
+	if !got[0].IsTail {
+		t.Error("IsTail = false, want true — 방금 넣은 행이 곧 꼬리다")
+	}
+	if got[0].StreamID != "s1" || got[0].Seq != 0 || got[0].Bytes != 1000 {
+		t.Errorf("대상 = %+v", got[0])
+	}
+	if seq, ok := f.ix.requested["s1"]; !ok || seq != 0 {
+		t.Errorf("requested = %v/%v, want 0 기록", seq, ok)
+	}
+	if _, held := f.ix.held["s1"]; held {
+		t.Error("훅 조각이 held 에 들어갔다 — TailHold 만큼 통째로 늦어진다")
+	}
+}
+
+// 훅 조각이 직전 보류 꼬리를 승격시키는 것도 ReasonNextFile 과 같다.
+// 승격이 없으면 그 조각은 자기 TailHold 를 다 채울 때까지 붙들린다.
+func TestHookSegmentPromotesHeldPredecessor(t *testing.T) {
+	f := newFixture(t, 4000, 4000)
+	f.mustHandle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonIdle))
+	if n := len(f.upload.targets()); n != 0 {
+		t.Fatalf("준비 실패: Idle 꼬리가 %d건 요청됐다", n)
+	}
+
+	f.mustHandle(f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonHook))
+
+	got := f.upload.targets()
+	if len(got) != 2 {
+		t.Fatalf("요청 %d건, want 2건(승격 + 새 꼬리)", len(got))
+	}
+	if got[0].Seq != 0 || got[0].IsTail {
+		t.Errorf("승격 대상 = %+v, want seq 0 IsTail=false", got[0])
+	}
+	if got[1].Seq != 1 || !got[1].IsTail {
+		t.Errorf("새 꼬리 = %+v, want seq 1 IsTail=true", got[1])
+	}
+}

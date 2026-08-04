@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
 // 이 파일의 함수는 전부 메인 select 에서만 호출된다(D10). 락이 없는 이유가 그것이다.
@@ -21,6 +22,27 @@ type heldTail struct {
 	// pendingUploadsSQL 의 꼬리 예외와 같은 식이다 — 다만 시계가 다르다(결정 4⁵).
 	// 이 시각을 넘기면 인덱서는 손을 떼고 스위퍼에 넘긴다.
 	eligibleAt time.Time
+}
+
+// growthConfirmed 는 "이 사유로 확정된 조각은 더 이상 자라지 않는가"를 묻는다.
+// 참이면 즉시 업로드를 요청하고, 거짓이면 붙들었다가(holdTail) 나중에 다시 본다.
+//
+// 두 사유가 참인 근거는 서로 다르지만 결론이 같다.
+//   - ReasonNextFile: 후속 파일이 이미 생겼다. MediaMTX 는 한 스트림에 한 파일만 쓰므로
+//     앞 파일은 닫혔다.
+//   - ReasonHook: MediaMTX 의 runOnRecordSegmentComplete 가 완성을 **직접 통보**한 것이다.
+//     훅 시점의 파일이 이미 최종 크기라는 것은 실측으로 확인됐다(29/29 —
+//     recording/name.go 의 ReasonHook 주석). 여기서 보류 경로로 보내면 TailHold(기본 5s)와
+//     틱 주기가 더해져, 훅을 붙여 얻은 시간 이득이 통째로 사라진다(ADR-014 완성 즉시 업로드).
+//
+// 훅이 오탐이어도(통보 후 파일이 더 자라도) 안전망은 ReasonNextFile 과 **완전히 동일**하다 —
+// 워커가 PUT 직전 같은 fd 로 크기를 다시 재고, 마킹은 bytes CAS 가 거른다. 즉 이 분기는
+// 새 실패 모드를 만들지 않고 이미 있는 경로에 사유 하나를 얹을 뿐이다.
+//
+// Idle·Scan 이 여기 없는 이유: 둘 다 "아무도 완성을 통보하지 않았다"는 추정 판정이라
+// 파일이 계속 자라는 중일 수 있다.
+func growthConfirmed(r recording.CompletionReason) bool {
+	return r == recording.ReasonNextFile || r == recording.ReasonHook
 }
 
 // noUploader 는 배선이 없을 때 끼우는 기본값이다. 언제나 false 를 돌려주므로
