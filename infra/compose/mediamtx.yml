@@ -30,6 +30,16 @@ pathDefaults:
   recordSegmentDuration: 4s
   recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
 
+  # 훅 (ADR-027) — 사이드카 수신 어댑터 internal/mtxhook 의 1차 신호원.
+  # 벽시계 드리프트·파일 감시·주기 재스캔은 안전망으로 그대로 남는다(제거 금지).
+  # pathDefaults 는 all_others 에도 상속된다(v1.19.3 conf 로딩이 defaults 를 먼저 복사).
+  # 명칭 주의: 구명칭 runOnReady 는 runOnAvailable 로 매핑되며 Online 이 아니다 — 쓰지 않는다.
+  # Restart 계열은 기본값(no)을 그대로 쓴다(실측: Restart:false 기준 재실행 0).
+  # /hooks-bin/mtxhookwrite 는 media/Dockerfile.mtxhook 이 이미지에 얹은 정적 바이너리다.
+  runOnOnline: /hooks-bin/mtxhookwrite -kind online
+  runOnOffline: /hooks-bin/mtxhookwrite -kind offline
+  runOnRecordSegmentComplete: /hooks-bin/mtxhookwrite -kind segcomplete
+
 # 경로 허용 — 이 절이 없으면 모든 스트림이 "path not configured"로 거부된다 (전체 설정 대체 시 필수)
 paths:
   all_others:
