@@ -150,7 +150,7 @@ func appendLine(path string, line []byte) error {
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 
-	return writeAll(f, line)
+	return writeLine(f, path, line)
 }
 
 // openSpool 은 스풀을 append 모드로 연다. 새로 만들었을 때만 계약 모드를 명시적으로 맞춘다.
@@ -195,12 +195,45 @@ func lockExclusive(f *os.File, limit time.Duration) error {
 	}
 }
 
+// appendTarget 은 writeLine 이 쓰는 파일 동작만 추린 이음매다. *os.File 이 그대로 만족한다.
+// 인터페이스로 둔 이유는 하나뿐이다 — 실제 파일로는 "디스크 가득 참"을 결정적으로
+// 재현할 수 없어서 테스트가 실패를 주입할 자리가 필요하다.
+type appendTarget interface {
+	io.Writer
+	Seek(offset int64, whence int) (int64, error)
+	Truncate(size int64) error
+}
+
+// writeLine 은 한 줄을 끝까지 쓰고, 중간에 실패하면 **쓰기 전 크기로 되돌린다**.
+//
+// 롤백이 필요한 이유: 디스크가 차거나(ENOSPC) I/O 가 죽으면(EIO) 반쪽 줄이 스풀에 남는다.
+// 그러면 그 뒤에 붙는 멀쩡한 다음 줄이 반쪽과 한 줄로 이어져 Reader 가 둘 다 버린다 —
+// 실패한 이벤트 1건이 아니라 2건이 사라진다. 호출자가 flock 을 쥐고 있는 동안 되돌리므로
+// 다른 writer 가 그 사이에 끼어들 수 없다.
+func writeLine(f appendTarget, name string, line []byte) error {
+	preSize, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
+		return fmt.Errorf("스풀 크기 확인 실패 path=%s: %w", name, err)
+	}
+
+	writeErr := writeAll(f, name, line)
+	if writeErr == nil {
+		return nil
+	}
+	if truncErr := f.Truncate(preSize); truncErr != nil {
+		// 되돌리기까지 실패하면 반쪽 줄이 남는다. 삼키지 않고 둘 다 올려 stderr 에 남긴다.
+		return errors.Join(writeErr,
+			fmt.Errorf("반쪽 줄 되돌리기 실패 path=%s size=%d: %w", name, preSize, truncErr))
+	}
+	return writeErr
+}
+
 // writeAll 은 short write 를 스스로 이어 쓴다.
 // os.File.Write 는 부분 기록을 io.ErrShortWrite 로 알려 줄 뿐 이어 쓰지 않는다 —
 // 여기서 멈추면 스풀에 반쪽 줄이 남는다.
-func writeAll(f *os.File, line []byte) error {
+func writeAll(w io.Writer, name string, line []byte) error {
 	for written := 0; written < len(line); {
-		n, err := f.Write(line[written:])
+		n, err := w.Write(line[written:])
 		written += n
 		if err == nil {
 			continue
@@ -208,7 +241,7 @@ func writeAll(f *os.File, line []byte) error {
 		if errors.Is(err, io.ErrShortWrite) && n > 0 {
 			continue // 진전이 있었으니 남은 만큼 이어 쓴다
 		}
-		return fmt.Errorf("스풀 기록 실패 path=%s written=%d/%d: %w", f.Name(), written, len(line), err)
+		return fmt.Errorf("스풀 기록 실패 path=%s written=%d/%d: %w", name, written, len(line), err)
 	}
 	return nil
 }

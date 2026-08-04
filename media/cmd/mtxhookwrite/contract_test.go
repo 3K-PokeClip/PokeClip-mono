@@ -6,6 +6,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,5 +159,79 @@ func TestSpoolPathPrefersFlagThenEnvThenDefault(t *testing.T) {
 func TestLockWaitLimitIsTwoHundredMillis(t *testing.T) {
 	if lockWaitLimit != 200*time.Millisecond {
 		t.Errorf("lockWaitLimit = %v, 기대 200ms", lockWaitLimit)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 부분 기록 롤백
+// ---------------------------------------------------------------------------
+
+// failingTarget 은 failAfter 바이트까지만 받고 실패하는 스풀이다. ENOSPC·EIO 를 흉내 낸다.
+// 실제 파일로 "디스크 가득 참"을 결정적으로 재현할 수 없어 이음매를 하나 둔다.
+type failingTarget struct {
+	written   []byte
+	failAfter int
+	size      int64
+	truncated []int64
+}
+
+var errDiskFull = errors.New("디스크가 가득 찼다(모의)")
+
+func (f *failingTarget) Write(p []byte) (int, error) {
+	room := f.failAfter - len(f.written)
+	if room <= 0 {
+		return 0, errDiskFull
+	}
+	if room >= len(p) {
+		f.written = append(f.written, p...)
+		f.size += int64(len(p))
+		return len(p), nil // 상한 안이면 정상 기록
+	}
+	f.written = append(f.written, p[:room]...)
+	f.size += int64(room)
+	return room, errDiskFull
+}
+
+func (f *failingTarget) Seek(int64, int) (int64, error) { return f.size, nil }
+
+func (f *failingTarget) Truncate(size int64) error {
+	f.truncated = append(f.truncated, size)
+	f.written = f.written[:size]
+	f.size = size
+	return nil
+}
+
+// 중간에 실패하면 **쓰기 전 크기로 되돌려야** 한다.
+//
+// 되돌리지 않으면 반쪽 줄이 스풀에 남고, 그 뒤에 붙는 멀쩡한 다음 줄이 그 반쪽과
+// 한 줄로 이어져 함께 버려진다 — 실패한 이벤트 1건이 아니라 2건이 사라진다.
+// 롤백은 flock 을 쥐고 있는 동안 해야 다른 writer 가 그 사이에 끼지 않는다.
+func TestPartialWriteIsRolledBackToPreviousSize(t *testing.T) {
+	target := &failingTarget{written: []byte("prev-ok"), size: 7, failAfter: 10}
+
+	err := writeLine(target, "/spool", []byte(strings.Repeat("x", 50)+"\n"))
+	if err == nil {
+		t.Fatal("기록이 실패했는데 nil 을 돌려줬다")
+	}
+	if len(target.truncated) != 1 || target.truncated[0] != 7 {
+		t.Fatalf("Truncate 호출 = %v, 기대 [7] — 쓰기 전 크기로 되돌려야 한다", target.truncated)
+	}
+	if string(target.written) != "prev-ok" {
+		t.Errorf("스풀 내용 = %q, 기대 %q — 반쪽 줄이 남았다", target.written, "prev-ok")
+	}
+}
+
+// 정상 경로에서는 되돌리지 않는다 — 성공했는데 Truncate 를 부르면 그게 곧 데이터 유실이다.
+func TestSuccessfulWriteDoesNotTruncate(t *testing.T) {
+	target := &failingTarget{failAfter: 1 << 20}
+
+	if err := writeLine(target, "/spool", []byte("hello\n")); err != nil {
+		t.Fatalf("정상 기록이 실패했다: %v", err)
+	}
+	if len(target.truncated) != 0 {
+		t.Errorf("성공했는데 Truncate 를 불렀다: %v", target.truncated)
+	}
+	if string(target.written) != "hello\n" {
+		t.Errorf("기록 내용 = %q, 기대 %q", target.written, "hello\n")
 	}
 }
