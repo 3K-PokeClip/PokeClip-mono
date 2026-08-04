@@ -199,7 +199,11 @@ func durationMS(raw string) int64 {
 		ms := secs * 1000
 		// NaN·Inf 는 int64 변환 결과가 플랫폼마다 다르다(Go 명세상 미정의).
 		// arm64 는 0 을 주지만 amd64 는 최소 int64 를 주므로 반드시 명시적으로 막는다.
-		if math.IsNaN(ms) || math.IsInf(ms, 0) || math.Abs(ms) > math.MaxInt64 {
+		//
+		// 상한 비교가 `>` 가 아니라 `>=` 인 이유: float64 로 올린 math.MaxInt64 는 2^63 인데
+		// int64 의 최대는 2^63−1 이라 **그 경계값 자체가 이미 범위 밖**이다. `>` 면 정확히
+		// 2^63 인 값만 검사를 빠져나가 위와 똑같은 플랫폼 의존 쓰레기가 된다.
+		if math.IsNaN(ms) || math.IsInf(ms, 0) || math.Abs(ms) >= math.MaxInt64 {
 			return 0
 		}
 		return int64(math.Round(ms))

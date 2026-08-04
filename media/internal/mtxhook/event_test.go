@@ -1,6 +1,7 @@
 package mtxhook
 
 import (
+	"math"
 	"strconv"
 	"testing"
 	"time"
@@ -194,5 +195,17 @@ func TestDurationMSGuardsAgainstNaNAndInf(t *testing.T) {
 		if got := durationMS(raw); got != 0 {
 			t.Errorf("durationMS(%q) = %d, want 0", raw, got)
 		}
+	}
+}
+
+// 2^63 경계. float64 로 올린 math.MaxInt64 는 2^63 이고, 정작 int64 의 최대는 2^63−1 이라
+// **그 값 자체가 int64 범위 밖**이다. 그래서 상한 검사는 `>` 가 아니라 `>=` 여야 한다 —
+// `>` 로 두면 정확히 2^63 인 값만 검사를 빠져나가 NaN·Inf 와 똑같은 플랫폼 의존 쓰레기가
+// 나온다(arm64 는 최대값으로 포화, amd64 는 최소 int64). 미상은 0 으로 돌려준다.
+func TestDurationMSGuardsAgainstInt64Boundary(t *testing.T) {
+	// 초 단위 입력이 이 값이면 밀리초 환산(×1000) 결과가 정확히 2^63 이 된다.
+	raw := strconv.FormatFloat(math.MaxInt64/1000.0, 'f', -1, 64)
+	if got := durationMS(raw); got != 0 {
+		t.Errorf("durationMS(%q) = %d, want 0(미상) — 2^63 은 int64 로 표현할 수 없다", raw, got)
 	}
 }

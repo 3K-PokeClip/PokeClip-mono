@@ -202,7 +202,10 @@ func (r *Reader) poll(ctx context.Context) error {
 		r.warnNotRegular()
 		return nil
 	}
-	r.notRegularWarned = false // 정규 파일로 회복됐다 — 다음 오구성은 다시 경고한다
+	// 스풀이 다시 정상이다 — 두 경고의 1회 억제를 함께 푼다. 억제가 영구히 남으면
+	// 운영 중 스풀이 사라지거나 오구성으로 되돌아간 사고가 로그 없이 지나간다.
+	r.missingWarned = false
+	r.notRegularWarned = false
 
 	if !r.offsetPinned {
 		// 강등 상태로 기동해 오프셋이 미확정이다. 지금 크기(EOF)로 확정해 그전 과거를 건너뛴다.
