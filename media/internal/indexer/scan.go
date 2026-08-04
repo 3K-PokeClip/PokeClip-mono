@@ -85,6 +85,8 @@ func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs [
 	}
 	ix.cursors[streamID] = &cur
 	ix.indexed[streamID] = indexed
+	// 커서가 통째로 바뀌었다 — 옛 seq 를 가리키는 보류·요청 상태를 새 커서에 맞춘다.
+	ix.reconcileUploadState(streamID)
 
 	// 스캔 요약은 **모든 종료 경로**에서 1회 나와야 한다. 조기 반환이 3곳이라 말미에 두면
 	// 평시 경로에서 아예 찍히지 않는다(그것이 r1 안이 부적합했던 이유다).
@@ -178,20 +180,37 @@ func (ix *Indexer) reportHoles(streamID string, tail *index.TailRow, pending []r
 // recoverTail 은 Scan(a) 다. 프로그램이 죽어 있는 동안 꼬리 파일이 더 자랐을 수 있다.
 func (ix *Indexer) recoverTail(ctx context.Context, root, streamID string) error {
 	cur := ix.cursors[streamID]
-	if cur.Tail == nil || cur.Tail.UploadState != index.UploadStatePending {
+	// nil 가드는 stat 보다 앞에 그대로 둔다 — 없으면 곧바로 nil 역참조다.
+	if cur.Tail == nil {
 		return nil
 	}
 
+	// 상태 검사와 stat 의 순서를 바꿨다. 이제 uploaded·failed 꼬리의 성장도 correctTail 의
+	// 3분기로 판정된다(G12‴ 탐지 사슬). 대가는 비pending 꼬리에 stat 1회가 더 드는 것인데,
+	// 스트림당 5분에 한 번 도는 경로라 무시할 수 있다. 다만 "비용 0"은 아니다.
 	fi, err := os.Stat(cur.Tail.LocalPath)
+	pending := cur.Tail.UploadState == index.UploadStatePending
 	if os.IsNotExist(err) {
-		// MediaMTX 보존기간(recordDeleteAfter 기본 1d)이 지나 지워졌다(9절 L3).
-		// pending 인 채 원본이 사라지면 POK-30 업로더가 그 행을 올릴 수 없다.
+		if !pending {
+			// recordDeleteAfter·janitor 가 지운 정상 상황이다. WARN 으로 두면 5분마다 폭주한다.
+			ix.log.Debug("tail_file_gone", "stream_id", streamID, "seq", cur.Tail.Seq,
+				"path", cur.Tail.LocalPath, "upload_state", string(cur.Tail.UploadState))
+			return nil
+		}
+		// pending 인 채 원본이 사라지면 업로더가 그 행을 올릴 수 없다(9절 L3).
 		ix.log.Warn("tail_file_missing",
 			"stream_id", streamID, "seq", cur.Tail.Seq, "path", cur.Tail.LocalPath)
 		return nil
 	}
 	if err != nil {
-		ix.log.Warn("tail_stat_failed", "stream_id", streamID, "path", cur.Tail.LocalPath, "err", err)
+		// 같은 규칙이다 — 확정된 행의 stat 실패는 조사 대상이 아니다.
+		if !pending {
+			ix.log.Debug("tail_stat_failed", "stream_id", streamID, "seq", cur.Tail.Seq,
+				"path", cur.Tail.LocalPath, "upload_state", string(cur.Tail.UploadState), "err", err)
+			return nil
+		}
+		ix.log.Warn("tail_stat_failed", "stream_id", streamID, "seq", cur.Tail.Seq,
+			"path", cur.Tail.LocalPath, "err", err)
 		return nil
 	}
 	if fi.Size() <= cur.Tail.Bytes {

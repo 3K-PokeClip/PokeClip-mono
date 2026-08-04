@@ -75,7 +75,7 @@ func (s *fakeStore) LoadCursor(_ context.Context, streamID string) (index.Cursor
 		Tail: &index.TailRow{
 			Seq: r.Seq, StartPTSMS: r.StartPTSMS, StartWallUTC: r.StartWallUTC,
 			DurationMS: r.DurationMS, Bytes: r.Bytes, LocalPath: r.LocalPath,
-			UploadState: r.UploadState,
+			UploadState: r.UploadState, S3Key: r.S3Key,
 		},
 	}, nil
 }
@@ -278,6 +278,7 @@ type fixture struct {
 	store   *fakeStore
 	probe   *probeStub
 	adopter *fakeAdopter
+	upload  *fakeUploadRequester
 	logs    *logCapture
 	ix      *Indexer
 	opt     Options
@@ -294,6 +295,10 @@ func testOptions() Options {
 		SettleWait:   10 * time.Millisecond,
 		MaxSettle:    60 * time.Millisecond,
 	}
+	// 보류 수명주기 테스트가 실제 시간을 기다려야 하므로 ms 급으로 줄인다.
+	// 여기서 줄이지 않으면 (c) 계열이 held 맵 직접 주입에 의존하게 되고,
+	// 그러면 ReleaseHeldTails 의 판정 자체가 검증되지 않는다.
+	opt.TailHold = 20 * time.Millisecond
 	return opt
 }
 
@@ -305,16 +310,17 @@ func newFixture(t *testing.T, probeVals ...int64) *fixture {
 		store:   newFakeStore(),
 		probe:   newProbe(probeVals...),
 		adopter: &fakeAdopter{},
+		upload:  &fakeUploadRequester{accept: true},
 		logs:    &logCapture{},
 		opt:     testOptions(),
 	}
-	f.ix = New(f.store, f.probe.fn, f.adopter, f.opt, slog.New(f.logs))
+	f.ix = New(f.store, f.probe.fn, f.adopter, f.upload, f.opt, slog.New(f.logs))
 	return f
 }
 
 // reload 는 Options 를 바꾼 뒤 인덱서를 다시 만든다.
 func (f *fixture) reload() {
-	f.ix = New(f.store, f.probe.fn, f.adopter, f.opt, slog.New(f.logs))
+	f.ix = New(f.store, f.probe.fn, f.adopter, f.upload, f.opt, slog.New(f.logs))
 }
 
 // makeFile 은 실제 파일을 만들고 mtime 을 충분히 과거로 돌린다.
@@ -373,3 +379,28 @@ func segName(base time.Time, offset time.Duration) string {
 var errStoreDown = errors.New("DB 사망")
 
 var baseWall = time.Date(2026, 7, 25, 10, 0, 0, 0, time.UTC)
+
+// ---------------------------------------------------------------------------
+// fake UploadRequester — accepted 를 테스트가 직접 정한다.
+// Disabled·격리·백오프·브레이커·큐 포화가 전부 false 하나로 오므로, 인덱서 쪽 계약을
+// 확인하는 데는 이 bool 하나면 충분하다.
+// ---------------------------------------------------------------------------
+
+type fakeUploadRequester struct {
+	mu     sync.Mutex
+	accept bool
+	got    []index.UploadTarget
+}
+
+func (f *fakeUploadRequester) RequestUpload(t index.UploadTarget) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.got = append(f.got, t)
+	return f.accept
+}
+
+func (f *fakeUploadRequester) targets() []index.UploadTarget {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]index.UploadTarget(nil), f.got...)
+}
