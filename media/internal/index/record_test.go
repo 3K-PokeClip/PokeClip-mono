@@ -102,3 +102,22 @@ func TestS3Key(t *testing.T) {
 		})
 	}
 }
+
+// POK-30 — 계약-세그먼트인덱스 2절이 고정한 상태값 3개가 전부 선언돼 있는지 본다.
+// 문자열 값 자체가 DB 에 그대로 들어가므로 오타가 나면 스위퍼 조회 조건
+// (upload_state IN ('pending','failed'))과 조용히 어긋난다.
+func TestUploadStateValues(t *testing.T) {
+	cases := []struct {
+		got  UploadState
+		want string
+	}{
+		{UploadStatePending, "pending"},
+		{UploadStateUploaded, "uploaded"},
+		{UploadStateFailed, "failed"},
+	}
+	for _, c := range cases {
+		if string(c.got) != c.want {
+			t.Errorf("UploadState = %q, want %q", string(c.got), c.want)
+		}
+	}
+}

@@ -326,3 +326,223 @@ func TestSegmentRootIsCanonicalized(t *testing.T) {
 		})
 	}
 }
+
+// POK-30 env 8개의 기본값. 업로더는 선택 부품이므로 S3_BUCKET 이 비어 있는 것이 정상이며,
+// 그때는 나머지 S3 설정을 검증하지 않는다(결정 11‴).
+func TestLoadUploadDefaults(t *testing.T) {
+	cfg, err := Load(envOf(minimalEnv()))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.S3.Bucket != "" {
+		t.Errorf("S3.Bucket = %q, want 빈 문자열(업로더 비활성)", cfg.S3.Bucket)
+	}
+	if cfg.S3.Region != "ap-northeast-2" {
+		t.Errorf("S3.Region = %q, want ap-northeast-2", cfg.S3.Region)
+	}
+	if cfg.Upload.RetryMax != 4 || cfg.Upload.SweepEvery != 30*time.Second || cfg.Upload.CircuitMax != 3 {
+		t.Errorf("업로드 기본값 = retry %d sweep %v circuit %d, want 4 / 30s / 3",
+			cfg.Upload.RetryMax, cfg.Upload.SweepEvery, cfg.Upload.CircuitMax)
+	}
+	if cfg.Indexer.TailHold != 5*time.Second {
+		t.Errorf("TailHold = %v, want 5s", cfg.Indexer.TailHold)
+	}
+}
+
+// 두 값이 한 곳에서 나오는지는 **기본값이 아닌 환경**에서 봐야 한다.
+// 기본값끼리는 우연히 같아서, 대입을 지워도 통과하는 과적합이 된다.
+func TestUploadSharesGraceAndRootWithIndexer(t *testing.T) {
+	env := minimalEnv()
+	env["SEGMENT_ROOT"] = "/다른/녹화루트"
+	cfg, err := Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	// 두 계층이 같은 유예를 봐야 인덱서의 포기 시점과 스위퍼의 자격 시점이 맞물린다(결정 4⁵).
+	if cfg.Indexer.TailGrace != cfg.Upload.TailGrace || cfg.Indexer.TailGrace == 0 {
+		t.Errorf("TailGrace 가 갈렸다: indexer %v vs upload %v",
+			cfg.Indexer.TailGrace, cfg.Upload.TailGrace)
+	}
+	// 경로 검증(문자열)과 열기(os.Root)가 다른 값을 보면 검증을 통과한 경로가
+	// 다른 루트에서 열린다.
+	if cfg.Upload.SegmentRoot != "/다른/녹화루트" || cfg.SegmentRoot != "/다른/녹화루트" {
+		t.Errorf("SegmentRoot 가 갈렸다: upload %q vs cfg %q", cfg.Upload.SegmentRoot, cfg.SegmentRoot)
+	}
+}
+
+func TestLoadParsesUploadOverrides(t *testing.T) {
+	env := minimalEnv()
+	env["S3_BUCKET"] = "pokeclip-media-demo-2557"
+	env["AWS_REGION"] = "us-east-1"
+	env["S3_ENDPOINT"] = "http://minio:9000"
+	env["S3_FORCE_PATH_STYLE"] = "true"
+	env["SEGMENT_UPLOAD_RETRY_MAX"] = "2"
+	env["SEGMENT_UPLOAD_SWEEP_EVERY"] = "5s"
+	env["SEGMENT_UPLOAD_TAIL_HOLD"] = "3s"
+	env["SEGMENT_UPLOAD_CIRCUIT_MAX"] = "0"
+
+	cfg, err := Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.S3.Bucket != "pokeclip-media-demo-2557" || cfg.S3.Region != "us-east-1" ||
+		cfg.S3.Endpoint != "http://minio:9000" || !cfg.S3.ForcePathStyle {
+		t.Errorf("S3 설정 = %+v", cfg.S3)
+	}
+	if cfg.Upload.RetryMax != 2 || cfg.Upload.SweepEvery != 5*time.Second {
+		t.Errorf("업로드 설정 = retry %d sweep %v", cfg.Upload.RetryMax, cfg.Upload.SweepEvery)
+	}
+	// 0 은 "브레이커 전체 무효화"라는 뜻이 있는 값이다. 양수 검증에 걸려 거부되면 안 된다.
+	if cfg.Upload.CircuitMax != 0 {
+		t.Errorf("CircuitMax = %d, want 0 (브레이커 무효화)", cfg.Upload.CircuitMax)
+	}
+	if cfg.Indexer.TailHold != 3*time.Second {
+		t.Errorf("TailHold = %v, want 3s", cfg.Indexer.TailHold)
+	}
+}
+
+// 교차 검증 3개. 설정 단계에서 잡지 않으면 운영 중에야 로그로 알게 된다.
+func TestLoadRejectsInconsistentUploadSettings(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			// 보류 상한이 스위퍼 자격 시점을 넘으면 두 계층이 같은 꼬리를 동시에 노린다.
+			name: "TailHold >= TailGrace",
+			env:  map[string]string{"SEGMENT_UPLOAD_TAIL_HOLD": "10m"},
+			want: "SEGMENT_UPLOAD_TAIL_HOLD",
+		},
+		{
+			// 안정 판정이 끝나기도 전에 올리면 잘린 실물이 굳는다.
+			name: "TailHold < SettleWait",
+			env:  map[string]string{"SEGMENT_UPLOAD_TAIL_HOLD": "1s", "SEGMENT_SETTLE_WAIT": "5s"},
+			want: "SEGMENT_SETTLE_WAIT",
+		},
+		{
+			// 버킷을 쓰겠다고 했으면 이름 문법을 그 자리에서 본다.
+			// 오타를 기동 때 잡지 않으면 PUT 이 전부 404 로 실패한 뒤에야 알게 된다.
+			name: "S3_BUCKET 이름 문법 위반",
+			env:  map[string]string{"S3_BUCKET": "Bad_Bucket!"},
+			want: "S3_BUCKET",
+		},
+		{
+			// 엔드포인트를 줬으면 URL 이어야 한다. SDK 는 이상한 값을 조용히 삼킨다.
+			name: "S3_ENDPOINT 가 URL 이 아님",
+			env:  map[string]string{"S3_BUCKET": "pokeclip-media-demo-2557", "S3_ENDPOINT": "minio:9000"},
+			want: "S3_ENDPOINT",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			env := minimalEnv()
+			for k, v := range c.env {
+				env[k] = v
+			}
+			_, err := Load(envOf(env))
+			if err == nil {
+				t.Fatal("에러가 없다 — 기동을 거부해야 한다")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("에러 = %v, want %q 를 포함", err, c.want)
+			}
+		})
+	}
+}
+
+// S3_BUCKET 이 공백뿐이면 "비었다"로 본다 — 업로더가 꺼진다.
+// 공백을 버킷 이름으로 받아들이면 PUT 이 전부 404 로 실패한다.
+func TestLoadTreatsBlankBucketAsDisabled(t *testing.T) {
+	env := minimalEnv()
+	env["S3_BUCKET"] = "   "
+	cfg, err := Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.S3.Bucket != "" {
+		t.Errorf("S3.Bucket = %q, want 빈 문자열", cfg.S3.Bucket)
+	}
+}
+
+// cx HIGH — 업로더가 꺼진 환경에서는 다른 S3 값이 잘못돼도 기동이 성공해야 한다.
+//
+// 그 파일은 2·3번이 매일 띄우는 것이다(G15). 버킷 분기보다 파싱이 앞서면 오타 하나가
+// 인덱싱까지 통째로 죽인다 — 업로더만 꺼지고 나머지는 살아야 한다는 결정 11‴ 위반이다.
+func TestDisabledUploaderIgnoresOtherS3Settings(t *testing.T) {
+	bad := map[string]map[string]string{
+		"S3_FORCE_PATH_STYLE 가 불리언이 아님":       {"S3_FORCE_PATH_STYLE": "아마도"},
+		"S3_ENDPOINT 가 URL 이 아님":              {"S3_ENDPOINT": "minio:9000"},
+		"SEGMENT_UPLOAD_CIRCUIT_MAX 가 음수":     {"SEGMENT_UPLOAD_CIRCUIT_MAX": "-1"},
+		"SEGMENT_UPLOAD_RETRY_MAX 가 0":        {"SEGMENT_UPLOAD_RETRY_MAX": "0"},
+		"SEGMENT_UPLOAD_SWEEP_EVERY 가 기간이 아님": {"SEGMENT_UPLOAD_SWEEP_EVERY": "곧"},
+	}
+	for name, extra := range bad {
+		t.Run(name, func(t *testing.T) {
+			env := minimalEnv()
+			env["S3_BUCKET"] = "" // 업로더 꺼짐
+			for k, v := range extra {
+				env[k] = v
+			}
+			cfg, err := Load(envOf(env))
+			if err != nil {
+				t.Fatalf("기동이 거부됐다 — 업로더만 꺼지고 인덱싱은 살아야 한다: %v", err)
+			}
+			if cfg.S3.Bucket != "" {
+				t.Errorf("S3.Bucket = %q, want 빈 문자열", cfg.S3.Bucket)
+			}
+		})
+	}
+
+	// 반대로 버킷을 설정했으면 같은 값들이 기동을 막는다.
+	for name, extra := range bad {
+		t.Run("버킷_있음/"+name, func(t *testing.T) {
+			env := minimalEnv()
+			env["S3_BUCKET"] = "pokeclip-media-demo-2557"
+			for k, v := range extra {
+				env[k] = v
+			}
+			if _, err := Load(envOf(env)); err == nil {
+				t.Error("에러가 없다 — 버킷을 쓰겠다고 했으면 엄격히 봐야 한다")
+			}
+		})
+	}
+}
+
+// cx MEDIUM — 버킷 이름의 흔한 오형식과 엔드포인트 scheme 제한.
+func TestLoadRejectsMalformedBucketAndEndpoint(t *testing.T) {
+	cases := []struct{ name, bucket, endpoint, want string }{
+		{"IP 형식", "192.168.0.1", "", "S3_BUCKET"},
+		{"연속된 점", "poke..clip", "", "S3_BUCKET"},
+		{"점으로 끝남", "pokeclip.", "", "S3_BUCKET"},
+		{"예약 접두 xn--", "xn--pokeclip", "", "S3_BUCKET"},
+		{"예약 접두 sthree-", "sthree-pokeclip", "", "S3_BUCKET"},
+		{"예약 접두 amzn-s3-demo-", "amzn-s3-demo-pokeclip", "", "S3_BUCKET"},
+		{"예약 접미 -s3alias", "pokeclip-s3alias", "", "S3_BUCKET"},
+		{"예약 접미 --ol-s3", "pokeclip--ol-s3", "", "S3_BUCKET"},
+		{"예약 접미 .mrap", "pokeclip.mrap", "", "S3_BUCKET"},
+		{"예약 접미 --x-s3", "pokeclip--x-s3", "", "S3_BUCKET"},
+		{"예약 접미 --table-s3", "pokeclip--table-s3", "", "S3_BUCKET"},
+		{"scheme 이 http/https 가 아님", "pokeclip-media-demo-2557", "ftp://minio:9000", "S3_ENDPOINT"},
+		{"호스트가 없음", "pokeclip-media-demo-2557", "http://:9000", "S3_ENDPOINT"},
+		// userinfo 거부 — endpoint 원문이 uploader_started 로그·오류 문자열에 그대로 실리므로
+		// URL 에 자격증명을 넣는 순간 로그가 유출 경로가 된다. 자격증명 자리는 env 3종뿐이다.
+		{"자격증명(userinfo) 포함", "pokeclip-media-demo-2557", "https://user:secret@minio:9000", "S3_ENDPOINT"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			env := minimalEnv()
+			env["S3_BUCKET"] = c.bucket
+			if c.endpoint != "" {
+				env["S3_ENDPOINT"] = c.endpoint
+			}
+			_, err := Load(envOf(env))
+			if err == nil {
+				t.Fatal("에러가 없다")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("에러 = %v, want %q 포함", err, c.want)
+			}
+		})
+	}
+}

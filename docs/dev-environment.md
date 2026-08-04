@@ -228,6 +228,39 @@ docker compose up -d --no-deps segment-indexer   # 사이드카만 재기동. Me
 
 그러면 훅 어댑터가 아예 뜨지 않고 판정이 현행(벽시계)으로 돌아간다. DB 변경은 없다.
 
+## S3 즉시 업로드 확인 (segment-indexer, 1번 전용)
+
+**기본 상태는 업로더 꺼짐이다.** `S3_BUCKET`이 비어 있으면 사이드카는 인덱싱만 하고
+(`uploader_disabled` INFO 1줄), S3·AWS 자격증명이 전혀 필요 없다 — 2·3번은 이 절을 건너뛰면 된다.
+
+1번이 실버킷 업로드까지 확인하려면:
+
+```bash
+# 1) 개인 override 를 만든다 (커밋 금지 — .gitignore 등재됨)
+cp docker-compose.override.yml.example docker-compose.override.yml
+
+# 2) 같은 셸에 임시 자격증명을 내보내고 재기동한다
+eval "$(aws configure export-credentials --format env)"
+docker compose up -d --force-recreate segment-indexer
+docker compose logs segment-indexer | grep -E 'uploader_started|credentials_ok'
+
+# 3) 위 "세그먼트 인덱싱 확인" 절차로 송출한 뒤, 장부가 uploaded 로 차는지 본다
+docker compose exec -T -e Q="SELECT upload_state, count(*) FROM stream_segments WHERE stream_id='$STREAM' GROUP BY 1;" \
+  postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$Q"'
+```
+
+끌 때는 override를 **제외**하고 재기동한다 — `unset S3_BUCKET`은 무효다
+(override의 `${S3_BUCKET:-…}`가 미설정·빈값을 둘 다 실버킷으로 치환한다):
+
+```bash
+docker compose -f docker-compose.yml up -d --force-recreate segment-indexer
+docker compose -f docker-compose.yml logs segment-indexer | grep -c uploader_disabled   # 1
+```
+
+주의: `AWS_PROFILE`을 override에 넣는 것은 `~/.aws` 마운트 폴백을 켤 때만 —
+마운트 없이 넣으면 SDK가 존재하지 않는 프로필을 찾다 기동이 죽는다(.example 주석 참조).
+환경변수 전체 목록과 의미는 [`media/README.md`](../media/README.md)의 환경변수 절에 있다.
+
 ## 2번(플레이어) 로컬 URL 매핑
 
 | 용도 | URL |

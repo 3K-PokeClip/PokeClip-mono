@@ -31,6 +31,17 @@ type Adopter interface {
 	Adopt(seg recording.Segment)
 }
 
+// UploadRequester 는 인덱서가 업로더에게 일을 넘기는 유일한 통로다.
+//
+// 인터페이스를 쓰는 쪽인 여기에 둔 이유는 Adopter 와 같다. *upload.Uploader 가 그대로
+// 만족하며, 그래서 indexer 는 upload 패키지를 임포트하지 않는다 — "이 조각이 지금 올릴
+// 대상인가"의 판정(여기)과 "어떻게 올리는가"의 정책(거기)은 변경 이유가 다르다.
+//
+// 반드시 논블로킹이어야 한다. 여기서 막히면 D10 메인 루프가 통째로 선다.
+type UploadRequester interface {
+	RequestUpload(t index.UploadTarget) (accepted bool)
+}
+
 // Options 는 두뇌의 판단 기준이 되는 숫자들이다.
 type Options struct {
 	// ExpectedDurationMS 는 세그먼트 1개의 기대 길이다.
@@ -56,6 +67,24 @@ type Options struct {
 	// 한두 건은 그 행의 값 문제지만, 연달아 나면 전역 이상(스키마·인코딩 어긋남)이므로
 	// 계속 건너뛰며 인덱스를 조용히 비워 가는 대신 프로세스를 끝낸다.
 	PoisonStreakMax int
+	// TailHold 는 유휴로 확정된 꼬리를 올리기 전에 기다리는 시간이다.
+	// SettleWait 이상이어야 한다 — 더 짧으면 안정 판정이 끝나기도 전에 올린다.
+	TailHold time.Duration
+	// TailGrace 는 인덱서가 꼬리를 붙들 수 있는 상한이다. 이 시각을 넘긴 꼬리는
+	// 스위퍼의 꼬리 예외가 집는다.
+	//
+	// 값의 소유자는 upload.Options 이고 config 가 그 값을 여기에 넣어 준다. 그럼에도
+	// 여기에 같은 기본값을 두는 이유: 0 이면 eligibleAt == StartWallUTC 가 되어
+	// Idle·Scan 꼬리가 TailHold 를 채우기도 전에 첫 틱에서 폐기된다. config 를 거치지
+	// 않는 호출자에게 그 조합은 "업로드 요청을 조용히 잃는" 자체 모순이다(결정 4⁵·5⁵).
+	TailGrace time.Duration
+	// HoldTick 은 ReleaseHeldTails 를 부르는 주기다.
+	// 초 단위여야 한다 — 30s 급이면 마지막 조각의 총 지연이 48초까지 늘어 AC1 재현성이 깨진다.
+	HoldTick time.Duration
+	// HoldStatBudget 은 한 틱에서 쓰는 os.Stat 예산이다.
+	// upload 가 아니라 여기가 소유한다 — ReleaseHeldTails 가 인덱서의 메서드이고,
+	// 저쪽에 두면 인덱서가 upload 를 임포트해야 해 위 계약이 깨진다.
+	HoldStatBudget int
 	// InsertRetryBase 는 지수 백오프의 첫 간격이다.
 	// 기본 2s + InsertRetryMax 5회 = 시도 사이 간격 2+4+8+16 = 정확히 30s(설계 2.4절 "총 ~30s").
 	InsertRetryBase time.Duration
@@ -90,6 +119,10 @@ func DefaultOptions() Options {
 		InsertRetryMax:     5,
 		PoisonStreakMax:    5,
 		InsertRetryBase:    2 * time.Second,
+		TailHold:           5 * time.Second,
+		TailGrace:          2 * time.Minute,
+		HoldTick:           time.Second,
+		HoldStatBudget:     8,
 		IdleTimeout:        10 * time.Second,
 		BreakGuard:         20 * time.Millisecond,
 		Settle:             recording.DefaultSettleOptions(),
@@ -98,11 +131,12 @@ func DefaultOptions() Options {
 
 // Indexer 는 고루틴 안전하지 않다. D10 단일 호출자 규약이 락을 대신한다.
 type Indexer struct {
-	store index.Store
-	probe fmp4meta.DurationProbe
-	adopt Adopter
-	opt   Options
-	log   *slog.Logger
+	store  index.Store
+	probe  fmp4meta.DurationProbe
+	adopt  Adopter
+	upload UploadRequester
+	opt    Options
+	log    *slog.Logger
 
 	// 아래 상태는 전부 스트림별이다. 하나라도 전역으로 뭉개면 다중 스트림에서 조용히 틀린다.
 	cursors map[string]*index.Cursor
@@ -121,6 +155,11 @@ type Indexer struct {
 	// warnedRejected 는 화이트리스트를 통과하지 못한 디렉토리에 대해 WARN 을
 	// 한 번만 내기 위한 표시다. 재스캔은 5분마다 도는데 매번 경고하면 소음이 된다.
 	warnedRejected map[string]bool
+
+	// held 는 아직 올리지 않고 붙들고 있는 꼬리다(스트림당 최대 1개 — 꼬리는 하나뿐이다).
+	held map[string]heldTail
+	// requested 는 업로더에게 넘긴 꼬리의 seq 다. 확인 2.5 가 이 값을 본다.
+	requested map[string]int64
 
 	// --- 훅 세션 경계 상태(ADR-027). 전부 프로세스 메모리에만 있다. ---
 	//
@@ -143,12 +182,18 @@ type Indexer struct {
 	breaks map[string][]sessionBreak
 }
 
-// New 는 인덱서를 만든다. w 에는 *recording.Watcher 를 그대로 넘긴다.
-func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter, opt Options, log *slog.Logger) *Indexer {
+// New 는 인덱서를 만든다. w 에는 *recording.Watcher 를, up 에는 *upload.Uploader 를 넘긴다.
+// up 이 nil 이면 아무것도 요청하지 않는 기본값이 끼워진다 — 배선 전에도 인덱서는 그대로 돈다.
+func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
+	up UploadRequester, opt Options, log *slog.Logger) *Indexer {
+	if up == nil {
+		up = noUploader{}
+	}
 	return &Indexer{
 		store:           store,
 		probe:           probe,
 		adopt:           w,
+		upload:          up,
 		opt:             opt,
 		log:             log,
 		cursors:         map[string]*index.Cursor{},
@@ -159,6 +204,8 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter, opt Options
 		reprobeDisabled: map[string]bool{},
 		poisonStreak:    map[string]int{},
 		warnedRejected:  map[string]bool{},
+		held:            map[string]heldTail{},
+		requested:       map[string]int64{},
 		pendingOffline:  map[string]sessionMark{},
 		lastOnlineAt:    map[string]time.Time{},
 		breaks:          map[string][]sessionBreak{},
@@ -417,6 +464,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 			return reloadErr
 		}
 		ix.cursors[seg.StreamID] = &reloaded
+		ix.reconcileUploadState(seg.StreamID)
 		cur = &reloaded
 		// dec 는 다시 계산하지 않는다. 재적재로 Tail 이 바뀌어도 "어느 경계를 소비할지"는
 		// 이미 정해졌다 — 여기서 재계산하면 같은 세그먼트의 판정이 재시도 여부에 따라 달라진다.
@@ -524,10 +572,17 @@ func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size
 // advance 는 커서를 한 칸 전진시킨다.
 // 꼬리 행 하나만 갈아 끼우면 파생 3값이 동시에 맞는다 — 빠뜨릴 곳 자체가 없어진다.
 func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.Record) {
+	// 직전 꼬리를 붙잡아 둔다 — 이 INSERT 로 그 행은 더 이상 꼬리가 아니게 되므로,
+	// 보류 중이었다면 지금이 올릴 때다(파일이 더 자랄 수 없다).
+	prev := cur.Tail
+
 	cur.Tail = &index.TailRow{
 		Seq: rec.Seq, StartPTSMS: rec.StartPTSMS, StartWallUTC: rec.StartWallUTC,
 		DurationMS: rec.DurationMS, Bytes: rec.Bytes, LocalPath: rec.LocalPath,
 		UploadState: index.UploadStatePending,
+		// ★ S3Key 를 빠뜨려도 컴파일이 통과하고 빈 문자열이 된다. 그 상태로 held 가 승격되면
+		//   키가 빈 채 요청되어 대상 검증에 걸리고 그 조각은 영구 미업로드된다(R-a).
+		S3Key: rec.S3Key,
 	}
 	cur.NextSeq = rec.Seq + 1
 
@@ -546,6 +601,26 @@ func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.R
 		"stream_id", seg.StreamID, "seq", rec.Seq, "duration_ms", rec.DurationMS,
 		"start_pts_ms", rec.StartPTSMS, "is_discontinuity", rec.IsDiscontinuity,
 		"bytes", rec.Bytes, "path", rec.LocalPath, "reason", seg.Reason)
+
+	now := time.Now()
+	// 보류 중이던 직전 꼬리를 승격한다. 더 이상 꼬리가 아니므로 IsTail=false 다 —
+	// 워커의 크기 재확인이 이 값으로 갈린다(결정 4⁵).
+	if h, ok := ix.held[seg.StreamID]; ok && prev != nil && h.seq == prev.Seq {
+		if !ix.requestUpload(seg.StreamID, prev, false) {
+			ix.holdAfterRejection(seg.StreamID, prev, now)
+		}
+	}
+
+	// 새 꼬리의 처우. 더 자라지 않는다고 확증된 사유는 즉시 올린다.
+	if growthConfirmed(seg.Reason) {
+		if !ix.requestUpload(seg.StreamID, cur.Tail, true) {
+			ix.holdAfterRejection(seg.StreamID, cur.Tail, now)
+		}
+		return
+	}
+	// Idle·Scan 으로 확정된 꼬리는 아직 자랄 수 있다. 붙들었다가 다음 INSERT 나
+	// TailHold 경과 + 크기 일치에서 올린다.
+	ix.holdTail(seg.StreamID, cur.Tail, now)
 }
 
 // correctTail 은 이미 넣은 마지막 행의 길이와 크기를 사후에 고친다(D13-교정).
@@ -558,11 +633,53 @@ func (ix *Indexer) correctTail(ctx context.Context, seg recording.Segment) error
 		ix.log.Error("regrow_not_tail", "stream_id", seg.StreamID, "path", seg.Path)
 		return nil
 	}
-	// 확인 2: 아직 안 올렸는가. 이미 업로드된 파일의 메타를 고치면 실물과 기록이 불일치한다.
+	// 확인 2·2.5: 커서 상태별 3분기. 공통 게이트는 "실제로 자랐는가" 하나다.
+	//
+	// 삽입 지점이 Settle 보다 **앞**인 것이 계약이다 — Settle 은 최대 30초 블로킹이고
+	// 이 함수는 메인 루프에서 돌기 때문에, 뒤로 옮기면 자라지도 않은 파일 때문에
+	// 루프가 30초씩 선다.
 	if cur.Tail.UploadState != index.UploadStatePending {
-		ix.log.Warn("regrow_after_upload_ignored",
-			"stream_id", seg.StreamID, "seq", cur.Tail.Seq, "path", seg.Path)
+		fileBytes, grew, statErr := ix.tailGrew(cur.Tail)
+		switch {
+		case statErr != nil:
+			// 확정된 행의 파일이 사라진 것은 recordDeleteAfter·janitor 의 정상 동작이다.
+			ix.log.Debug("tail_file_gone", "stream_id", seg.StreamID, "seq", cur.Tail.Seq,
+				"path", seg.Path, "upload_state", string(cur.Tail.UploadState))
+		case !grew:
+			ix.log.Debug("regrow_after_upload_noop", "stream_id", seg.StreamID,
+				"seq", cur.Tail.Seq, "path", seg.Path,
+				"db_bytes", cur.Tail.Bytes, "file_bytes", fileBytes)
+		case cur.Tail.UploadState == index.UploadStateUploaded:
+			// 확정된 조각이 자랐다 = 잘린 실물이 S3 에 굳었다. 자동 복구가 없는 사고다(L11‴).
+			ix.log.Error("regrow_after_upload_ignored",
+				"stream_id", seg.StreamID, "seq", cur.Tail.Seq, "path", seg.Path,
+				"db_bytes", cur.Tail.Bytes, "file_bytes", fileBytes, "delta", fileBytes-cur.Tail.Bytes)
+		default:
+			// failed 는 실물이 올라가지 않았으므로 굳은 것이 아니다.
+			// 다만 그 행이 계속 꼬리면 자동 회복이 보장되지 않는다(L20).
+			ix.log.Warn("regrow_after_failed_ignored",
+				"stream_id", seg.StreamID, "seq", cur.Tail.Seq, "path", seg.Path,
+				"db_bytes", cur.Tail.Bytes, "file_bytes", fileBytes, "delta", fileBytes-cur.Tail.Bytes)
+		}
 		return nil
+	}
+
+	// 확인 2.5: pending 인데 이미 업로더에게 넘긴 행이다. 자라지 않았으면 건드릴 이유가 없고,
+	// 자랐으면 통상 경로로 계속 간다 — UpdateTail 이 성공하면 장부가 실물을 따라잡아
+	// 다음 PUT 의 CAS 기대값이 맞춰지며 스스로 치유된다.
+	if requested, ok := ix.requested[seg.StreamID]; ok && requested == cur.Tail.Seq {
+		fileBytes, grew, statErr := ix.tailGrew(cur.Tail)
+		if statErr == nil && !grew {
+			ix.log.Debug("regrow_after_upload_noop", "stream_id", seg.StreamID,
+				"seq", cur.Tail.Seq, "path", seg.Path,
+				"db_bytes", cur.Tail.Bytes, "file_bytes", fileBytes)
+			return nil
+		}
+		if statErr == nil {
+			ix.log.Warn("regrow_after_upload_requested",
+				"stream_id", seg.StreamID, "seq", cur.Tail.Seq, "path", seg.Path,
+				"db_bytes", cur.Tail.Bytes, "file_bytes", fileBytes, "delta", fileBytes-cur.Tail.Bytes)
+		}
 	}
 
 	fi, err := recording.Settle(ctx, seg.Path, ix.opt.Settle)
@@ -606,6 +723,14 @@ func (ix *Indexer) correctTail(ctx context.Context, seg recording.Segment) error
 	cur.Tail.DurationMS = int32(d)
 	cur.Tail.Bytes = fi.Size()
 	// 이것으로 파생 NextPTSMS / ExpectedNextWall 이 자동 교정된다.
+
+	// 교정이 보류 시계를 리셋한다 — 방금 자란 것을 확인했으므로 TailHold 를 다시 센다.
+	// eligibleAt 은 start_wall_utc 기반이라 불변이며, 그래야 스위퍼 자격 시점과 계속 맞물린다(R9).
+	if h, ok := ix.held[seg.StreamID]; ok && h.seq == cur.Tail.Seq {
+		h.since = time.Now()
+		h.nextTry = h.since
+		ix.held[seg.StreamID] = h
+	}
 
 	ix.log.Info("tail_corrected",
 		"stream_id", seg.StreamID, "seq", cur.Tail.Seq,

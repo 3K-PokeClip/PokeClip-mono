@@ -78,9 +78,10 @@ var streamIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // ValidStreamID 는 문자열이 stream_id 화이트리스트를 통과하는지 알려 준다.
 //
-// 훅 어댑터가 세션 훅의 MTX_PATH 를 검증할 때 쓴다. 정규식을 복제하지 않고 이 함수를
-// 거치게 하는 이유는, 규칙이 두 곳에 있으면 한쪽만 고쳐져 "무장은 되는데 영원히 소비되지
-// 않는" 조용한 미탐이 생기기 때문이다.
+// 소비자는 둘이다 — 훅 어댑터(세션 훅의 MTX_PATH 검증)와 POK-30 업로더. 정규식을
+// 복제하지 않고 이 함수를 거치게 하는 이유는, 규칙이 두 곳에 있으면 한쪽만 고쳐져
+// "무장은 되는데 영원히 소비되지 않는" 조용한 미탐이 생기기 때문이다.
+// 화이트리스트의 소유자는 이 파일 하나이며, 문법이 바뀌면 여기만 고친다.
 func ValidStreamID(s string) bool {
 	return streamIDRe.MatchString(s)
 }
@@ -110,7 +111,7 @@ func ParseSegmentPath(root, path string) (Segment, error) {
 	if streamID == "" {
 		return Segment{}, fmt.Errorf("스트림 디렉토리가 없다: %q", path)
 	}
-	if !streamIDRe.MatchString(streamID) {
+	if !ValidStreamID(streamID) {
 		return Segment{}, fmt.Errorf("%w: %q (경로 %q)", ErrInvalidStreamID, streamID, path)
 	}
 

@@ -10,11 +10,23 @@ import (
 	"time"
 )
 
-// UploadState 는 업로드 진행 상태다. 이번 범위에서는 pending 하나만 쓴다(G6, S3 미접촉).
+// UploadState 는 업로드 진행 상태다.
+//
+// 계약-세그먼트인덱스 2절이 고정한 3값이 전부다. 네 번째 값도, uploaded → pending
+// 역전이도 없다(그 전이는 3번 소비자 계약의 확장이라 승인 사안이다).
+// POK-30 업로더가 pending 행을 PUT 하고 uploaded 또는 failed 로 확정한다.
 type UploadState string
 
-// UploadStatePending 은 아직 올리지 않은 상태다. 이번 범위에서 쓰는 유일한 값.
-const UploadStatePending UploadState = "pending"
+const (
+	// UploadStatePending 은 아직 올리지 않은 상태다. INSERT 시점의 값이다.
+	UploadStatePending UploadState = "pending"
+	// UploadStateUploaded 는 PUT 200 을 받고 장부에 확정한 상태다.
+	// 이 값이 되기 전에는 콜드 URL 을 광고하면 안 된다(인덱스 불변식 1).
+	UploadStateUploaded UploadState = "uploaded"
+	// UploadStateFailed 는 재시도를 소진하고 실패로 확정한 상태다.
+	// 종국 상태가 아니다 — 재기동·주기 스위퍼가 다시 집는다(G11′).
+	UploadStateFailed UploadState = "failed"
+)
 
 // Record 는 stream_segments 표의 한 줄이며 필드가 컬럼과 1:1 대응한다.
 type Record struct {
@@ -24,7 +36,7 @@ type Record struct {
 	StartWallUTC time.Time
 	// DurationMS 는 DB 컬럼이 int 라 32비트로 좁혀 담는다. 축소는 H7 과 correctTail 두 지점에서만 한다.
 	DurationMS int32
-	// S3Key 는 나중에 올릴 자리 예약 문자열이다. 이번 범위에서는 만들기만 하고 쓰지 않는다.
+	// S3Key 는 올릴 자리 예약 문자열이다. POK-30 업로더가 이 값을 그대로 PUT 대상 키로 쓴다.
 	S3Key           string
 	LocalPath       string
 	UploadState     UploadState
@@ -42,6 +54,9 @@ type TailRow struct {
 	Bytes        int64
 	LocalPath    string
 	UploadState  UploadState
+	// S3Key 는 INSERT 때 예약된 키 그대로다. 업로더는 이 값을 재계산하지 않고 그대로 PUT 한다
+	// — 키 형상이 계약이므로 재계산은 포맷을 바꾸는 순간 옛 행을 전부 어긋나게 한다.
+	S3Key string
 }
 
 // Cursor 는 "이 방송을 어디까지 기록했나"를 기억하는 책갈피다.
@@ -107,7 +122,8 @@ func (o InsertOutcome) String() string {
 	}
 }
 
-// S3Key 는 나중에 S3 에 올릴 때 쓸 경로 문자열을 만든다. 이번 범위에서는 적어 두기만 한다(G6).
+// S3Key 는 S3 에 올릴 때 쓸 경로 문자열을 만든다. INSERT 시점에 한 번 계산해 장부에 적고,
+// 업로더는 그 값을 그대로 읽어 쓴다(G6 폐기 → G6′).
 //
 // 포맷 출처: 계약-세그먼트인덱스.md 의 s3_key 예시
 //
