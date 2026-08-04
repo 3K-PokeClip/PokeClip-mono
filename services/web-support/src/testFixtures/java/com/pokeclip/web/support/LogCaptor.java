@@ -1,4 +1,4 @@
-package com.pokeclip.auth.support;
+package com.pokeclip.web.support;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.LoggerContext;

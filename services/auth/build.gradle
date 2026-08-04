@@ -22,6 +22,9 @@ dependencies {
 
     runtimeOnly 'org.postgresql:postgresql'
 
+    // LogCaptor는 web-support의 테스트 픽스처에 하나만 둔다.
+    testImplementation testFixtures(project(':web-support'))
+
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.boot:spring-boot-starter-security-test'
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'

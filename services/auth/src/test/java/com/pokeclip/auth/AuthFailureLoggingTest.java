@@ -2,7 +2,7 @@ package com.pokeclip.auth;
 
 import ch.qos.logback.classic.Level;
 import com.pokeclip.auth.api.AuthExceptionHandler;
-import com.pokeclip.auth.support.LogCaptor;
+import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;

@@ -9,7 +9,7 @@ import com.pokeclip.auth.token.TokenPair;
 import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.UserRepository;
 import com.pokeclip.auth.support.IntegrationTestSupport;
-import com.pokeclip.auth.support.LogCaptor;
+import com.pokeclip.web.support.LogCaptor;
 import com.pokeclip.web.RequestIdFilter;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
