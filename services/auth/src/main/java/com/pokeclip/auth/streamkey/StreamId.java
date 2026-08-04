@@ -1,5 +1,7 @@
 package com.pokeclip.auth.streamkey;
 
+import com.pokeclip.auth.support.CrockfordBase32;
+
 import java.util.Optional;
 
 /**

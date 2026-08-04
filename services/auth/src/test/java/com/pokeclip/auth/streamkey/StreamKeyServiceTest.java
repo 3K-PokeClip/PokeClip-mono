@@ -1,6 +1,7 @@
 package com.pokeclip.auth.streamkey;
 
 import com.pokeclip.auth.support.IntegrationTestSupport;
+import com.pokeclip.auth.support.Sha256;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
 import com.pokeclip.auth.user.UserService;

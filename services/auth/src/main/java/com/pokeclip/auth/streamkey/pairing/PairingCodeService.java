@@ -1,5 +1,11 @@
-package com.pokeclip.auth.streamkey;
+package com.pokeclip.auth.streamkey.pairing;
 
+import com.pokeclip.auth.streamkey.StreamKeyException;
+import com.pokeclip.auth.streamkey.StreamKeyFailure;
+import com.pokeclip.auth.streamkey.StreamKeyMaterial;
+import com.pokeclip.auth.streamkey.StreamKeyService;
+import com.pokeclip.auth.support.CrockfordBase32;
+import com.pokeclip.auth.support.Sha256;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;

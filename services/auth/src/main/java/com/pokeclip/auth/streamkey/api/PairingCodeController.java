@@ -1,6 +1,6 @@
 package com.pokeclip.auth.streamkey.api;
 
-import com.pokeclip.auth.streamkey.PairingCodeService;
+import com.pokeclip.auth.streamkey.pairing.PairingCodeService;
 import com.pokeclip.auth.streamkey.api.dto.ExchangeRequest;
 import com.pokeclip.auth.streamkey.api.dto.ExchangeResponse;
 import com.pokeclip.auth.streamkey.api.dto.PairingCodeResponse;

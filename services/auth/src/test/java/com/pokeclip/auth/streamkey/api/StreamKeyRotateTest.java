@@ -1,6 +1,6 @@
 package com.pokeclip.auth.streamkey.api;
 
-import com.pokeclip.auth.streamkey.SecretStore;
+import com.pokeclip.auth.streamkey.secret.SecretStore;
 import com.pokeclip.auth.streamkey.StreamKey;
 import com.pokeclip.auth.streamkey.StreamKeyMaterial;
 import com.pokeclip.auth.streamkey.StreamKeyRepository;

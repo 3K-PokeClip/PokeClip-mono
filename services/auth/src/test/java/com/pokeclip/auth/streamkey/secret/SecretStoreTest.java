@@ -1,4 +1,4 @@
-package com.pokeclip.auth.streamkey;
+package com.pokeclip.auth.streamkey.secret;
 
 import com.pokeclip.auth.support.IntegrationTestSupport;
 import org.junit.jupiter.api.BeforeEach;
