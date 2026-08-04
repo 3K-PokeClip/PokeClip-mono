@@ -2,6 +2,7 @@ package main_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,10 +25,16 @@ import (
 var binPath string
 
 func TestMain(m *testing.M) {
+	// os.Exit 은 defer 를 실행하지 않는다. 그래서 정리·종료를 한 곳에 모으고
+	// 여기서는 코드만 받아 나간다 — 빌드가 실패하는 경로에서 임시 디렉토리가 새지 않게 한다.
+	os.Exit(buildAndRun(m))
+}
+
+func buildAndRun(m *testing.M) int {
 	dir, err := os.MkdirTemp("", "mtxhookwrite-bin")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "임시 디렉토리 생성 실패:", err)
-		os.Exit(1)
+		return 1
 	}
 	defer os.RemoveAll(dir)
 
@@ -35,19 +42,37 @@ func TestMain(m *testing.M) {
 	build := exec.Command("go", "build", "-o", binPath, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "mtxhookwrite 빌드 실패: %v\n%s", err, out)
-		os.Exit(1)
+		return 1
 	}
+	return m.Run()
+}
 
-	code := m.Run()
-	os.RemoveAll(dir)
-	os.Exit(code)
+// exitCode 는 자식 프로세스의 종료 코드를 꺼낸다. 훅은 성공 0 / 기록 포기 1 이다 —
+// 다른 코드가 나오면 MediaMTX 로그에서 원인을 가릴 수 없다.
+func exitCode(t *testing.T, err error) int {
+	t.Helper()
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("종료 코드를 알 수 없는 실패다: %v", err)
+	}
+	return exitErr.ExitCode()
 }
 
 // runWriter 는 훅 프로세스 하나를 흉내 낸다. MediaMTX 는 훅에 MTX_* 를 환경변수로 넘긴다.
 func runWriter(t *testing.T, spool, kind string, env map[string]string) (stderr string, err error) {
 	t.Helper()
-	cmd := exec.Command(binPath, "-kind", kind, "-spool", spool)
-	cmd.Env = append(os.Environ(), "HOOK_SPOOL_PATH=")
+	return runWriterArgs(t, []string{"-kind", kind, "-spool", spool}, "", env)
+}
+
+// runWriterArgs 는 인자와 HOOK_SPOOL_PATH 를 직접 정하고 훅 프로세스를 돌린다.
+// 프로덕션은 -spool 없이 도므로 그 형태를 그대로 재현할 수 있어야 한다.
+func runWriterArgs(t *testing.T, args []string, spoolEnv string, env map[string]string) (stderr string, err error) {
+	t.Helper()
+	cmd := exec.Command(binPath, args...)
+	cmd.Env = append(os.Environ(), "HOOK_SPOOL_PATH="+spoolEnv)
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
@@ -165,6 +190,9 @@ func TestOversizedLineIsNotWritten(t *testing.T) {
 	if err == nil {
 		t.Fatal("상한 초과인데 성공했다")
 	}
+	if code := exitCode(t, err); code != 1 {
+		t.Errorf("종료 코드 = %d, 기대 1", code)
+	}
 	if strings.Count(strings.TrimSuffix(stderr, "\n"), "\n") != 0 {
 		t.Errorf("stderr 가 1줄이 아니다: %q", stderr)
 	}
@@ -183,6 +211,9 @@ func TestUnknownKindIsRejected(t *testing.T) {
 	stderr, err := runWriter(t, spool, "ready", map[string]string{"MTX_PATH": "demo"})
 	if err == nil {
 		t.Fatal("알 수 없는 kind 인데 성공했다")
+	}
+	if code := exitCode(t, err); code != 1 {
+		t.Errorf("종료 코드 = %d, 기대 1", code)
 	}
 	if !strings.Contains(stderr, "ready") {
 		t.Errorf("stderr 에 거부 사유가 없다: %q", stderr)
@@ -219,8 +250,53 @@ func TestLockContentionAbortsAfterWaitLimit(t *testing.T) {
 	if elapsed < 200*time.Millisecond {
 		t.Errorf("경과 %v — 200ms 를 기다리지 않고 포기했다", elapsed)
 	}
-	if elapsed > 3*time.Second {
-		t.Errorf("경과 %v — 대기 상한이 걸리지 않는다", elapsed)
+	// 상한은 200ms + 프로세스 기동 여유다. 헐겁게 잡으면 상한을 몇 배로 늘리는 회귀가
+	// 이 테스트를 그대로 통과한다(실측 경과는 250ms 안쪽).
+	if elapsed > 900*time.Millisecond {
+		t.Errorf("경과 %v — 대기 상한(200ms)이 제대로 걸리지 않는다", elapsed)
+	}
+	if code := exitCode(t, runErr); code != 1 {
+		t.Errorf("종료 코드 = %d, 기대 1", code)
+	}
+	if lines := readLines(t, spool); len(lines) != 0 {
+		t.Errorf("포기했는데 줄이 쓰였다: %q", lines)
+	}
+}
+
+// 잠금은 **배타**(LOCK_EX)여야 한다.
+//
+// 왜 별도 테스트인가: 위 경합 테스트는 LOCK_SH 뮤턴트를 죽이지 못한다. 그 테스트는
+// 배타 잠금을 쥐고 있으므로 writer 가 공유 잠금을 요청해도 어차피 EWOULDBLOCK 이라
+// 똑같이 실패하기 때문이다. 그래서 여기서는 반대로 **공유 잠금**을 쥐고 시험한다 —
+// 배타를 요구하는 writer 는 실패해야 하고, LOCK_SH 로 바뀐 writer 는 성공해 버린다.
+// 그 순간 다중 스트림 동시 발화의 인터리브 방어가 통째로 사라진다.
+func TestWriterDemandsExclusiveLockNotShared(t *testing.T) {
+	spool := filepath.Join(t.TempDir(), "events.jsonl")
+	holder, err := os.OpenFile(spool, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("스풀 선점 실패: %v", err)
+	}
+	defer holder.Close()
+	if err := syscall.Flock(int(holder.Fd()), syscall.LOCK_SH); err != nil {
+		t.Fatalf("공유 잠금 선점 실패: %v", err)
+	}
+	defer syscall.Flock(int(holder.Fd()), syscall.LOCK_UN)
+
+	// 픽스처가 헛돌지 않는지 먼저 확인한다 — 파일시스템이 flock 을 무시하면 아래 단언이
+	// 무의미해진다. flock 은 열린 파일 서술자 단위라 같은 프로세스의 다른 fd 도 충돌한다.
+	probe, err := os.OpenFile(spool, os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("probe 열기 실패: %v", err)
+	}
+	defer probe.Close()
+	if err := syscall.Flock(int(probe.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); !errors.Is(err, syscall.EWOULDBLOCK) {
+		syscall.Flock(int(probe.Fd()), syscall.LOCK_UN)
+		t.Fatalf("공유 잠금 중인데 배타 잠금이 잡혔다(err=%v) — 이 파일시스템에서는 flock 이 안 듣는다", err)
+	}
+
+	_, runErr := runWriter(t, spool, "online", map[string]string{"MTX_PATH": "demo"})
+	if runErr == nil {
+		t.Fatal("공유 잠금이 걸려 있는데 기록에 성공했다 — 잠금이 배타가 아니다")
 	}
 	if lines := readLines(t, spool); len(lines) != 0 {
 		t.Errorf("포기했는데 줄이 쓰였다: %q", lines)
@@ -277,6 +353,9 @@ func TestConcurrentWritersDoNotInterleave(t *testing.T) {
 
 // 스풀은 사이드카(다른 UID)가 읽어야 한다. umask 가 생성 모드를 깎으면
 // root 소유 0600 이 되어 :ro 로 붙여도 Reader 가 못 읽는다 — 무징후 강등이다.
+//
+// **t.Parallel 을 쓰지 않는다**: umask 는 프로세스 전역이라 이 테스트가 도는 동안
+// 같은 테스트 바이너리의 다른 테스트가 파일을 만들면 그쪽 권한까지 함께 깎인다.
 func TestSpoolIsCreatedWorldReadableUnderRestrictiveUmask(t *testing.T) {
 	spool := filepath.Join(t.TempDir(), "events.jsonl")
 
@@ -293,6 +372,57 @@ func TestSpoolIsCreatedWorldReadableUnderRestrictiveUmask(t *testing.T) {
 	}
 	if perm := fi.Mode().Perm(); perm != 0o644 {
 		t.Errorf("스풀 모드 = %04o, 기대 0644", perm)
+	}
+}
+
+// **이미 있는 파일의 권한은 건드리지 않는다.** 그 값은 운영자의 것이다 —
+// 훅이 매번 chmod 로 덮으면 운영자가 좁혀 둔 권한이 조용히 원복된다.
+// (뒤집어 말하면, 스풀이 이미 0600 으로 있으면 사이드카가 못 읽는다. 그 상태는
+//
+//	운영자가 만든 것이므로 도구가 말없이 고치지 않고 그대로 둔다.)
+func TestExistingSpoolPermissionsAreLeftAlone(t *testing.T) {
+	spool := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(spool, nil, 0o600); err != nil {
+		t.Fatalf("스풀 선생성 실패: %v", err)
+	}
+
+	if _, err := runWriter(t, spool, "online", map[string]string{"MTX_PATH": "demo"}); err != nil {
+		t.Fatalf("정상 기록이 실패했다: %v", err)
+	}
+
+	fi, err := os.Stat(spool)
+	if err != nil {
+		t.Fatalf("스풀 stat 실패: %v", err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("스풀 모드 = %04o, 기대 0600(선생성 권한 유지)", perm)
+	}
+	if lines := readLines(t, spool); len(lines) != 1 {
+		t.Errorf("줄 수 = %d, 기대 1 — 권한을 안 건드려도 기록은 돼야 한다", len(lines))
+	}
+}
+
+// 프로덕션 훅 명령에는 -spool 이 없다(infra/compose/mediamtx.yml). 그 형태에서
+// HOOK_SPOOL_PATH 가 실제로 기록 위치를 정하는지 바이너리로 확인한다 —
+// 이 분기가 깨져도 기본값 /hooks/events.jsonl 로 새어 나가 조용히 엉뚱한 곳에 쌓인다.
+func TestSpoolEnvDecidesLocationWhenFlagIsAbsent(t *testing.T) {
+	spool := filepath.Join(t.TempDir(), "events.jsonl")
+
+	if _, err := runWriterArgs(t, []string{"-kind", "online"}, spool,
+		map[string]string{"MTX_PATH": "demo"}); err != nil {
+		t.Fatalf("정상 기록이 실패했다: %v", err)
+	}
+
+	lines := readLines(t, spool)
+	if len(lines) != 1 {
+		t.Fatalf("줄 수 = %d, 기대 1 — HOOK_SPOOL_PATH 가 무시됐다", len(lines))
+	}
+	ev, err := mtxhook.ParseLine([]byte(lines[0]))
+	if err != nil {
+		t.Fatalf("Reader 가 못 읽는 줄을 썼다: %v", err)
+	}
+	if ev.StreamID != "demo" {
+		t.Errorf("StreamID = %q, 기대 demo", ev.StreamID)
 	}
 }
 
