@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -241,5 +242,125 @@ func TestFixRejectedStreamWarnsOncePerStream(t *testing.T) {
 	// 정상 스트림은 영향을 받지 않아야 한다.
 	if n := len(f.store.records("s1")); n != 1 {
 		t.Fatalf("정상 스트림 행 수 = %d, want 1", n)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 인덱스 구멍 관측 (H8)
+//
+// scan_summary 는 scanStream 의 **모든** 종료 경로에서 1회 나와야 한다.
+// 그래서 이 절의 테스트는 그 함수를 직접 구동한다 — 검증 대상이 "이 함수의 종료 경로"이며,
+// 조기 반환 3곳은 Scan 을 통해서는 결정적으로 재현되지 않는 것(stat 실패)을 포함한다.
+// ---------------------------------------------------------------------------
+
+// T18 — 구멍은 "커서 꼬리보다 이른 StartWall 인데 미기록"인 파일이다.
+// 꼬리보다 늦은 미기록은 아직 처리 전인 정상 상태이므로 구멍이 아니다.
+func TestHoleDetectedOnlyForFilesEarlierThanTail(t *testing.T) {
+	f := newFixture(t)
+	for _, off := range []time.Duration{0, 4 * time.Second, 8 * time.Second} {
+		f.mustHandle(f.segment("demo", segName(baseWall, off), 1000, recording.ReasonNextFile))
+	}
+
+	// 꼬리(+8s)보다 이른 미기록 = 구멍. 늦은 미기록 = 아직 처리 전.
+	hole := f.makeFile("demo", segName(baseWall, 2*time.Second), 1000)
+	f.makeFile("demo", segName(baseWall, 12*time.Second), 1000)
+
+	f.scan()
+
+	if n := f.logs.count(slog.LevelWarn, "hole_detected"); n != 1 {
+		t.Fatalf("hole_detected = %d건, want 1건", n)
+	}
+	got := f.logs.attrs("hole_detected")
+	if got["path"] != hole {
+		t.Errorf("hole_detected.path = %v, want %v", got["path"], hole)
+	}
+	if got["last_seq"] != int64(2) {
+		t.Errorf("hole_detected.last_seq = %v, want 2", got["last_seq"])
+	}
+	if got["start_wall"] != baseWall.Add(2*time.Second) {
+		t.Errorf("hole_detected.start_wall = %v", got["start_wall"])
+	}
+
+	assertSummary(t, f, map[string]int64{"files": 5, "indexed": 3, "pending": 2, "holes": 1})
+}
+
+// T19 — scan_summary 는 **인자 등록 시점 평가** 함정을 피해야 한다.
+// `defer ix.log.Info(..., pending)` 로 쓰면 그 시점의 0 이 박제된다.
+// 그래서 로그 유무가 아니라 **최종 필드값**까지 단언한다.
+func TestScanSummaryOnEveryExitPathWithFinalValues(t *testing.T) {
+	t.Run("pending 없음", func(t *testing.T) {
+		f := newFixture(t)
+		seg := f.segment("demo", segName(baseWall, 0), 1000, recording.ReasonNextFile)
+		f.mustHandle(seg)
+
+		if err := f.ix.scanStream(context.Background(), f.root, "demo", []recording.Segment{seg}); err != nil {
+			t.Fatalf("scanStream 실패: %v", err)
+		}
+		assertSummary(t, f, map[string]int64{"files": 1, "indexed": 1, "pending": 0, "holes": 0})
+	})
+
+	t.Run("최신 파일 stat 실패", func(t *testing.T) {
+		f := newFixture(t)
+		early := f.segment("demo", segName(baseWall, 0), 1000, recording.ReasonScan)
+		missing := early
+		missing.Path = filepath.Join(f.root, "demo", segName(baseWall, 4*time.Second))
+		missing.StartWall = baseWall.Add(4 * time.Second)
+
+		if err := f.ix.scanStream(context.Background(), f.root, "demo",
+			[]recording.Segment{early, missing}); err != nil {
+			t.Fatalf("scanStream 실패: %v", err)
+		}
+		if n := f.logs.count(slog.LevelWarn, "latest_stat_failed"); n != 1 {
+			t.Fatalf("latest_stat_failed = %d건, want 1건 — 의도한 경로가 아니다", n)
+		}
+		assertSummary(t, f, map[string]int64{"files": 2, "indexed": 0, "pending": 2, "holes": 0})
+	})
+
+	t.Run("최신 파일 확정 처리", func(t *testing.T) {
+		f := newFixture(t)
+		seg := f.segment("demo", segName(baseWall, 0), 1000, recording.ReasonScan)
+
+		if err := f.ix.scanStream(context.Background(), f.root, "demo",
+			[]recording.Segment{seg}); err != nil {
+			t.Fatalf("scanStream 실패: %v", err)
+		}
+		if len(f.store.records("demo")) != 1 {
+			t.Fatal("최신 파일이 확정되지 않았다 — 의도한 경로가 아니다")
+		}
+		assertSummary(t, f, map[string]int64{"files": 1, "indexed": 0, "pending": 1, "holes": 0})
+	})
+
+	t.Run("최신 파일 워처 반납", func(t *testing.T) {
+		f := newFixture(t)
+		seg := f.segment("demo", segName(baseWall, 0), 1000, recording.ReasonScan)
+		f.touch(seg.Path, time.Now()) // 방금 쓰였다 = 아직 녹화 중일 수 있다
+
+		if err := f.ix.scanStream(context.Background(), f.root, "demo",
+			[]recording.Segment{seg}); err != nil {
+			t.Fatalf("scanStream 실패: %v", err)
+		}
+		if f.adopter.count() != 1 {
+			t.Fatal("워처에 반납되지 않았다 — 의도한 경로가 아니다")
+		}
+		assertSummary(t, f, map[string]int64{"files": 1, "indexed": 0, "pending": 1, "holes": 0})
+	})
+}
+
+// assertSummary 는 scan_summary 의 필드값을 확인한다.
+// slog 는 정수를 int64 로 담으므로 비교도 int64 로 한다.
+func assertSummary(t *testing.T, f *fixture, want map[string]int64) {
+	t.Helper()
+	got := f.logs.attrs("scan_summary")
+	if got == nil {
+		t.Fatal("scan_summary 가 없다")
+	}
+	for _, k := range []string{"files", "indexed", "pending", "holes"} {
+		w, ok := want[k]
+		if !ok {
+			t.Fatalf("assertSummary 는 4개 필드를 모두 요구한다 — %q 가 빠졌다", k)
+		}
+		if got[k] != w {
+			t.Errorf("scan_summary.%s = %v, want %d (전체: %+v)", k, got[k], w, got)
+		}
 	}
 }

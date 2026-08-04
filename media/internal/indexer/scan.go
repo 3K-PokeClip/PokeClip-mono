@@ -86,6 +86,25 @@ func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs [
 	ix.cursors[streamID] = &cur
 	ix.indexed[streamID] = indexed
 
+	// 스캔 요약은 **모든 종료 경로**에서 1회 나와야 한다. 조기 반환이 3곳이라 말미에 두면
+	// 평시 경로에서 아예 찍히지 않는다(그것이 r1 안이 부적합했던 이유다).
+	//
+	// 반드시 **클로저** defer 여야 한다. `defer ix.log.Info(..., pendingCount, ...)` 로 쓰면
+	// 인자가 등록 시점에 평가돼 언제나 0 이 박제된다.
+	//
+	// 위치가 커서 적재 뒤인 이유: 적재가 실패하면 Scan 전체가 에러로 중단되므로 "훑었다"는
+	// 요약을 남기는 것이 오히려 거짓 신호다.
+	// indexed 는 advance 가 INSERT 때마다 키를 더하는 살아 있는 맵이다. 그대로 len 을 재면
+	// 스캔 중 늘어난 만큼이 섞여 files = indexed + pending 이라는 읽는 이의 산수가 깨진다.
+	// 그래서 "스캔 시작 시점에 이미 DB 에 있던 행 수"로 못 박아 둔다.
+	indexedAtStart := len(indexed)
+	var pendingCount, holes int
+	defer func() {
+		ix.log.Info("scan_summary",
+			"stream_id", streamID, "files", len(segs), "indexed", indexedAtStart,
+			"pending", pendingCount, "holes", holes)
+	}()
+
 	// (a) 꼬리 재성장 복구 — 재기동으로 잃은 교정 창을 되살린다.
 	if err := ix.recoverTail(ctx, root, streamID); err != nil {
 		return err
@@ -98,6 +117,8 @@ func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs [
 			pending = append(pending, seg)
 		}
 	}
+	pendingCount = len(pending)
+	holes = ix.reportHoles(streamID, cur.Tail, pending)
 	if len(pending) == 0 {
 		return nil
 	}
@@ -129,6 +150,29 @@ func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs [
 	// 아직 최근에 쓰인 흔적이 있으면 녹화 중일 수 있으니 감시자에게 넘겨 계속 지켜보게 한다.
 	ix.adopt.Adopt(latest)
 	return nil
+}
+
+// reportHoles 는 인덱스 구멍의 **위치와 시각**을 남긴다. 개수만으로는 무엇을 잃었는지
+// 되짚을 수 없어 사람이 손쓸 수가 없다.
+//
+// 구멍의 정의: 파일 집합 − DB 경로 집합(= pending) 중 **커서 꼬리보다 이른 StartWall** 인 것.
+// 꼬리보다 늦은 미기록은 아직 처리 전인 정상 상태이므로 구멍이 아니다.
+// 재스캔이 5분마다 도므로 남아 있는 한 주기마다 재확인된다.
+func (ix *Indexer) reportHoles(streamID string, tail *index.TailRow, pending []recording.Segment) int {
+	if tail == nil {
+		return 0 // 아직 한 건도 기록하지 않았다 = 비교 기준이 없다
+	}
+	n := 0
+	for _, seg := range pending {
+		if !seg.StartWall.Before(tail.StartWallUTC) {
+			continue
+		}
+		n++
+		ix.log.Warn("hole_detected",
+			"stream_id", streamID, "path", seg.Path, "start_wall", seg.StartWall,
+			"last_seq", tail.Seq, "last_indexed_wall", tail.StartWallUTC)
+	}
+	return n
 }
 
 // recoverTail 은 Scan(a) 다. 프로그램이 죽어 있는 동안 꼬리 파일이 더 자랐을 수 있다.

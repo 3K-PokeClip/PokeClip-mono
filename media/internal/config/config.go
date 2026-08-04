@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
@@ -25,6 +27,16 @@ type Config struct {
 	LogLevel     slog.Level
 	Indexer      indexer.Options
 	Watcher      recording.WatcherOptions
+
+	// HookSpoolPath 는 MediaMTX 훅이 한 줄씩 덧붙이는 공유 파일이다.
+	//
+	// **빈 문자열이 기본값이고, 빈 값이면 훅 어댑터를 아예 기동하지 않는다.**
+	// 이것이 즉시 롤백 스위치이므로 withDefault 를 쓰면 안 된다 — 그 헬퍼는 빈 값을
+	// "미설정"으로 보고 fallback 을 돌려주므로 HOOK_SPOOL_PATH="" 로 끄는 길이 막힌다.
+	HookSpoolPath string
+	// HookPollInterval 은 스풀 tail 주기다.
+	HookPollInterval time.Duration
+	// 세션 경계 판정의 Guard 는 Indexer.BreakGuard 하나에만 둔다(값의 집이 둘이면 어긋난다).
 }
 
 // Load 는 환경변수를 읽어 설정을 만든다. env 는 os.Getenv 를 그대로 넘기면 된다.
@@ -75,8 +87,24 @@ func Load(env func(string) string) (Config, error) {
 	if idx.InsertRetryMax, err = positiveInt(env, "SEGMENT_INSERT_RETRY_MAX", idx.InsertRetryMax); err != nil {
 		return Config{}, err
 	}
+	// duration 헬퍼가 이미 0·음수·형식 오류를 거부한다. Guard 가 0 이면 파일명 시각 해상도
+	// 차이만으로 새 세션의 첫 조각을 놓친다.
+	if idx.BreakGuard, err = duration(env, "HOOK_BREAK_GUARD", idx.BreakGuard); err != nil {
+		return Config{}, err
+	}
 
-	watch := recording.DefaultWatcherOptions(withDefault(env, "SEGMENT_ROOT", "/recordings"), nil)
+	// HOOK_SPOOL_PATH 는 **withDefault 를 쓰지 않는다**(위 필드 주석 참조).
+	hookSpoolPath := strings.TrimSpace(env("HOOK_SPOOL_PATH"))
+	hookPollInterval, err := duration(env, "HOOK_POLL_INTERVAL", mtxhook.DefaultPollInterval)
+	if err != nil {
+		return Config{}, err
+	}
+
+	// 루트는 **반드시 정본화해서** 담는다. 후행 슬래시가 붙으면 fsnotify 가 이중 슬래시
+	// 경로를 만들고 훅 채널은 Clean 된 경로를 만들어, 같은 물리 파일에 서로 다른
+	// local_path 로 행이 둘 생긴다. seq 재사용·재정렬 금지라 사후 정정이 불가능하다.
+	watch := recording.DefaultWatcherOptions(
+		filepath.Clean(withDefault(env, "SEGMENT_ROOT", "/recordings")), nil)
 	if watch.IdleTimeout, err = duration(env, "SEGMENT_IDLE_TIMEOUT", watch.IdleTimeout); err != nil {
 		return Config{}, err
 	}
@@ -114,14 +142,19 @@ func Load(env func(string) string) (Config, error) {
 	// 달라지면 H4(유휴 커밋 전 mtime 재검)가 워처의 판정과 어긋나 되돌리기가 무한 반복된다.
 	idx.IdleTimeout = watch.IdleTimeout
 	idx.Settle = watch.Settle
+	// 훅 세그먼트 경로 정본화 기준은 워처 루트와 반드시 같아야 한다.
+	// 다르면 두 채널이 같은 물리 파일에 서로 다른 local_path 를 만들어 행이 둘 생긴다.
+	idx.SegmentRoot = watch.Root
 
 	return Config{
-		PGDSN:        dsn(user, password, host, port, dbName, sslMode),
-		SegmentRoot:  watch.Root,
-		EnsureSchema: ensureSchema,
-		LogLevel:     logLevel,
-		Indexer:      idx,
-		Watcher:      watch,
+		PGDSN:            dsn(user, password, host, port, dbName, sslMode),
+		SegmentRoot:      watch.Root,
+		EnsureSchema:     ensureSchema,
+		LogLevel:         logLevel,
+		Indexer:          idx,
+		Watcher:          watch,
+		HookSpoolPath:    hookSpoolPath,
+		HookPollInterval: hookPollInterval,
 	}, nil
 }
 

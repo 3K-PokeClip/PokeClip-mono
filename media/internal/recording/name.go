@@ -31,6 +31,13 @@ const (
 	ReasonScan CompletionReason = 3
 	// ReasonRegrown 은 확정 후 파일이 더 자란 경우다. 새 행 INSERT 가 아니라 UpdateTail 경로로 간다(H1).
 	ReasonRegrown CompletionReason = 4
+	// ReasonHook 은 MediaMTX 의 runOnRecordSegmentComplete 훅으로 완성 판정된 경우다.
+	//
+	// 승격(H6)·학습 대상에서 제외된다 — 두 장치의 조건이 ReasonNextFile 한정이라 코드 변경 없이
+	// 성립한다. 제외가 안전한 근거: 승격이 방어하려던 "덜 써진 파일을 읽었다"는 위험이 훅 경로에는
+	// 실측상 없고(훅 시점 파일이 이미 최종 크기 29/29), 방송 마지막 partial 조각도 같은 사유로
+	// 도착하므로 승격 대상에 넣으면 매 방송 재프로브가 헛돌아 reprobe_disabled 가 켜진다.
+	ReasonHook CompletionReason = 5
 )
 
 // Segment 는 완성된 세그먼트 파일 하나를 표현한다.
@@ -62,7 +69,21 @@ var ErrInvalidStreamID = errors.New("허용되지 않는 stream_id 형태다")
 // 품게 되어 키 생성과 디렉토리 구조가 얽힌다. 중첩이 실제로 필요해지는 시점은
 // U9(프로덕션 stream_id 의 의미가 계약4 스트림키와 어떻게 연결되는가)가 확정될 때이며,
 // 그때 이 정규식과 아래 함수 본문만 고치면 된다.
+//
+// **함께 고쳐야 할 곳**: indexer/hook.go 의 breaks 키 계약. 훅 경계 큐의 키는 MediaMTX 가
+// 준 MTX_PATH 원문이고 소비 측 조회 키는 여기서 뽑는 stream_id 인데, 이 둘이 바이트
+// 동일하다는 등식이 "단일 레벨 %path" 전제 위에 서 있다. 중첩을 허용하는 순간 그 등식이
+// 깨지고, 훅 경계가 무장은 되지만 영원히 소비되지 않는 조용한 미탐이 된다.
 var streamIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// ValidStreamID 는 문자열이 stream_id 화이트리스트를 통과하는지 알려 준다.
+//
+// 훅 어댑터가 세션 훅의 MTX_PATH 를 검증할 때 쓴다. 정규식을 복제하지 않고 이 함수를
+// 거치게 하는 이유는, 규칙이 두 곳에 있으면 한쪽만 고쳐져 "무장은 되는데 영원히 소비되지
+// 않는" 조용한 미탐이 생기기 때문이다.
+func ValidStreamID(s string) bool {
+	return streamIDRe.MatchString(s)
+}
 
 // segmentNameRe 는 recordPath 의 %Y-%m-%d_%H-%M-%S-%f 를 그대로 옮긴 것이다(mediamtx.yml 31행).
 // 마지막 그룹(%f)의 자리수는 고정하지 않는다 — 자리수가 바뀌어도 흡수하기 위해서다(U6).

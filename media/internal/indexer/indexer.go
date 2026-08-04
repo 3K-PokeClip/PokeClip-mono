@@ -17,8 +17,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
-
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fmp4meta"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
@@ -66,6 +64,17 @@ type Options struct {
 	IdleTimeout time.Duration
 	// Settle 은 H5 와 correctTail 이 크기 안정을 기다릴 때 쓰는 설정이다.
 	Settle recording.SettleOptions
+	// BreakGuard 는 "새 세션의 첫 조각인가"를 판정할 때의 하한 여유다.
+	// seg.StartWall >= OnlineAt - BreakGuard 를 만족해야 그 경계를 소비한다.
+	//
+	// 20ms 는 실측 짝짓기 오차 ±2ms 의 10배다. 파일명 시각 해상도와 훅 기록 시각의 미세
+	// 차이만 흡수하며 그 이상의 의미는 없다 — 크게 잡으면 이전 세션의 조각이 새 세션의
+	// 표시를 가로챈다.
+	BreakGuard time.Duration
+	// SegmentRoot 는 훅이 준 세그먼트 경로를 정본화할 때 쓰는 기준 루트다(= SEGMENT_ROOT).
+	// 워처와 같은 값이어야 두 채널이 같은 local_path 문자열을 만든다(GH7).
+	// 기본값을 두지 않는다 — 워처 루트와 한 곳에서 맞추는 것이 config.Load 의 책임이다.
+	SegmentRoot string
 }
 
 // DefaultOptions 는 설계 2.4절의 기본값이다.
@@ -82,6 +91,7 @@ func DefaultOptions() Options {
 		PoisonStreakMax:    5,
 		InsertRetryBase:    2 * time.Second,
 		IdleTimeout:        10 * time.Second,
+		BreakGuard:         20 * time.Millisecond,
 		Settle:             recording.DefaultSettleOptions(),
 	}
 }
@@ -111,6 +121,26 @@ type Indexer struct {
 	// warnedRejected 는 화이트리스트를 통과하지 못한 디렉토리에 대해 WARN 을
 	// 한 번만 내기 위한 표시다. 재스캔은 5분마다 도는데 매번 경고하면 소음이 된다.
 	warnedRejected map[string]bool
+
+	// --- 훅 세션 경계 상태(ADR-027). 전부 프로세스 메모리에만 있다. ---
+	//
+	// 세 맵의 키 계약: **세션 훅의 MTX_PATH 원문 문자열**이며, 소비 측 peekBreak 의 조회 키는
+	// seg.StreamID(= recording.ParseSegmentPath 가 파일 경로의 디렉토리 부분에서 뽑은 값)다.
+	// 두 문자열이 바이트 동일해야 GH1 이 동작한다 — 하나라도 어긋나면 무장은 되지만 영원히
+	// 소비되지 않는다(조용한 미탐 + 큐 누수). 그래서 HandleHook 은 ev.StreamID 를
+	// **정규화·변형하지 않는다**(Clean·Trim·소문자화 금지).
+	//
+	// 등식의 성립 근거는 단일 레벨 %path 전제다. recordPath 가 /recordings/%path/... 이므로
+	// %path 가 곧 스트림 디렉토리 1레벨이고, name.go 의 화이트리스트가 슬래시를 허용하지 않아
+	// 중첩 %path 는 애초에 인덱싱되지 않는다(= 새 실패 모드가 아니라 범위 밖).
+
+	// pendingOffline 은 아직 짝지어지지 않은 offline 훅이다(스트림별 1건, 더 늦은 것만 유지).
+	pendingOffline map[string]sessionMark
+	// lastOnlineAt 은 스트림별 online watermark 다 — 이보다 이른 offline 은 stale 로 버린다.
+	lastOnlineAt map[string]time.Time
+	// breaks 는 무장된 세션 경계 **큐**다(OnlineAt 오름차순).
+	// 단일 포인터면 연쇄 재접속에서 앞 경계가 덮여 영구 미탐이 되므로 큐로 둔다.
+	breaks map[string][]sessionBreak
 }
 
 // New 는 인덱서를 만든다. w 에는 *recording.Watcher 를 그대로 넘긴다.
@@ -129,6 +159,9 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter, opt Options
 		reprobeDisabled: map[string]bool{},
 		poisonStreak:    map[string]int{},
 		warnedRejected:  map[string]bool{},
+		pendingOffline:  map[string]sessionMark{},
+		lastOnlineAt:    map[string]time.Time{},
+		breaks:          map[string][]sessionBreak{},
 	}
 }
 
@@ -148,6 +181,11 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 	if err != nil {
 		return err
 	}
+
+	// 훅 세션 경계 정리 — H1/H2 조기 반환보다 **앞**이어야 한다.
+	// 중복(H2)이나 늦은 조각(H3)으로 commit 에 닿지 못해도 "이미 지나간 경계"는 정리돼야
+	// 한다. 뒤로 미루면 그 경계가 다음 조각에 붙어 영속 오표시가 된다.
+	ix.reconcileBreaks(seg.StreamID, cur)
 
 	// H1. 교정 분기 — 재성장은 새 행이 아니라 기존 행을 고치는 완전히 다른 처리다.
 	if seg.Reason == recording.ReasonRegrown {
@@ -343,14 +381,31 @@ func (ix *Indexer) promote(ctx context.Context, seg recording.Segment, d, size i
 // commit 은 H8(PTS·discontinuity)와 H9(INSERT)를 수행한다.
 func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size int64) error {
 	cur := ix.cursors[seg.StreamID]
-	rec := ix.buildRecord(cur, seg, d, size)
+
+	// 무장 조회는 여기서 딱 한 번이다. 해제는 INSERT 결과가 나온 뒤에 한다.
+	dec := ix.peekBreak(cur, seg)
+	if dec.Index >= 0 && !dec.Apply {
+		// 꼬리가 없어 표시가 무의미한 경우다. INSERT 결과와 무관하므로 즉시 해제한다.
+		ix.releaseBreak(seg.StreamID, dec)
+		ix.log.Info("hook_break_discarded",
+			"stream_id", seg.StreamID, "path", seg.Path, "reason", "no_tail")
+		dec = noBreak
+	}
+
+	rec := ix.buildRecord(cur, seg, d, size, dec.Apply)
 
 	outcome, poisoned, err := ix.insertWithRetry(ctx, rec)
 	if err != nil {
 		return err
 	}
 	if poisoned {
-		return nil // 커서를 전진시키지 않는다. 이 세그먼트만 인덱스에 없는 채로 남는다.
+		// 커서를 전진시키지 않는다. 이 세그먼트만 인덱스에 없는 채로 남는다.
+		//
+		// 무장도 해제하지 않는다 — 이것이 무장이 메모리에 잔존하는 **유일한** 경로다
+		// (재시도 소진은 err 반환 → 프로세스 종료 → 메모리 무장도 함께 소멸).
+		// 다음 INSERT 조각은 "무장 이후 처음 장부에 오르는 조각"이므로 표시가 정당하며,
+		// 아예 미표시보다 늦은 표시가 낫다(오탐 방향이 안전하다).
+		return nil
 	}
 
 	if outcome == index.InsertSeqConflict {
@@ -363,7 +418,9 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		}
 		ix.cursors[seg.StreamID] = &reloaded
 		cur = &reloaded
-		rec = ix.buildRecord(cur, seg, d, size)
+		// dec 는 다시 계산하지 않는다. 재적재로 Tail 이 바뀌어도 "어느 경계를 소비할지"는
+		// 이미 정해졌다 — 여기서 재계산하면 같은 세그먼트의 판정이 재시도 여부에 따라 달라진다.
+		rec = ix.buildRecord(cur, seg, d, size, dec.Apply)
 
 		outcome, poisoned, err = ix.insertWithRetry(ctx, rec)
 		if err != nil {
@@ -382,10 +439,26 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 	switch outcome {
 	case index.InsertDuplicatePath:
 		// 정상 멱등. 커서를 전진시키면 번호가 하나 건너뛰므로 절대 금지.
+		if dec.Index >= 0 {
+			// 그 조각의 행이 무장 전에 이미 존재했다 = 경계가 그 조각을 놓쳤다.
+			// 다음 조각에 넘기면 영속 오표시가 되므로 폐기하고 미탐으로 강등한다.
+			// 1차 방어는 Handle 진입부의 reconcile 이며 이 경로는 잔여 방어다(메모리 맵이 낡은 경우).
+			ix.releaseBreak(seg.StreamID, dec)
+			ix.log.Info("hook_break_discarded",
+				"stream_id", seg.StreamID, "path", seg.Path, "reason", "duplicate_path",
+				"offline_at", dec.Brk.OfflineAt, "online_at", dec.Brk.OnlineAt)
+		}
 		ix.log.Debug("duplicate_path_skipped", "stream_id", seg.StreamID, "path", seg.Path)
 		return nil
 	case index.InsertInserted:
 		ix.advance(cur, seg, rec)
+		if dec.Index >= 0 {
+			ix.releaseBreak(seg.StreamID, dec)
+			ix.log.Info("hook_break_consumed",
+				"stream_id", seg.StreamID, "path", seg.Path, "seq", rec.Seq,
+				"offline_at", dec.Brk.OfflineAt, "online_at", dec.Brk.OnlineAt,
+				"on_source", dec.Brk.OnSource)
+		}
 		return nil
 	default:
 		return fmt.Errorf("알 수 없는 INSERT 결과 %v", outcome)
@@ -393,7 +466,11 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 }
 
 // buildRecord 는 H8 을 수행해 DB 한 줄을 만든다.
-func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size int64) index.Record {
+//
+// breakHit 은 "훅으로 확인된 세션 경계를 이 조각이 소비한다"는 판정이다(peekBreak 산출).
+// 여기가 IsDiscontinuity 의 **유일한 대입 지점**이다 — 대입 지점을 늘리면 어느 경로로
+// 참이 됐는지 추적할 수 없어진다.
+func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size int64, breakHit bool) index.Record {
 	startPTS := int64(0)
 	isDiscont := false
 
@@ -424,6 +501,12 @@ func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size
 		}
 	}
 
+	// 훅 판정을 합성한다. PTS 식은 손대지 않는다 — 0.9s 재접속의 drift 는 tolerance 이내라
+	// 타임라인은 그대로 이어 붙고 플래그만 선다. POK-36 케이스에서 원하던 결과다.
+	//
+	// cur.Tail == nil 이면 breakHit 은 구조적으로 false 다(peekBreak 이 Apply 를 주지 않는다).
+	isDiscont = isDiscont || breakHit
+
 	return index.Record{
 		StreamID:        seg.StreamID,
 		Seq:             cur.NextSeq,
@@ -436,112 +519,6 @@ func (ix *Indexer) buildRecord(cur *index.Cursor, seg recording.Segment, d, size
 		Bytes:           size,
 		IsDiscontinuity: isDiscont,
 	}
-}
-
-// insertFate 는 INSERT 에러를 어떻게 다룰지 셋으로 가른다.
-type insertFate int
-
-const (
-	// fateRetry — 시간이 지나면 나아질 수 있는 실패(연결 끊김, 자원 부족, 운영자 개입).
-	fateRetry insertFate = iota
-	// fatePoison — 몇 번을 다시 넣어도 같은 결과인 실패. 그 세그먼트만 격리하고 계속 간다.
-	fatePoison
-	// fateFatal — 설정이나 스키마가 잘못됐다는 뜻. 사람이 고쳐야 하므로 프로세스를 끝낸다.
-	fateFatal
-)
-
-// classifyInsertError 는 SQLSTATE 앞 두 자리(클래스)로 대응을 정한다.
-//
-// 재시도해서 될 일과 안 될 일을 가르지 않으면, 잘못된 값 하나가 30초씩 파이프라인을
-// 붙잡고 끝내 프로세스를 죽인다. 그 사이 멀쩡한 세그먼트들도 함께 밀린다.
-func classifyInsertError(err error) insertFate {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
-		// 네트워크 오류, 타임아웃 등 드라이버 계층 실패는 재시도 가치가 있다.
-		return fateRetry
-	}
-
-	switch class := sqlStateClass(pgErr.Code); class {
-	case "08", "40", "53", "55", "57", "58":
-		// 08 연결 예외 / 40 직렬화 실패·데드락 / 53 자원 부족 / 55 락 획득 실패 /
-		// 57 운영자 개입(셧다운 등) / 58 외부 IO 오류. 전부 시간이 지나면 나아질 수 있다.
-		return fateRetry
-	case "22":
-		// 22 데이터 예외(범위 초과, 잘못된 바이트열, 길이 초과). 그 행의 값이 원인인 것이 확실하다.
-		// 다음 세그먼트는 멀쩡할 수 있으므로 이 행만 건너뛴다.
-		return fatePoison
-	default:
-		// 23 무결성 위반(23505 는 Store 가 InsertOutcome 으로 이미 걸러 낸다),
-		// 54 전역 한도, 42 문법·권한, 28 인증 등.
-		//
-		// 이것들은 "이 행이 이상하다"가 아니라 "스키마나 설정이 어긋났다"는 신호다.
-		// 예를 들어 23502(NOT NULL 위반)는 정본 마이그레이션이 우리 코드와 안 맞는다는 뜻인데,
-		// 행 단위로 건너뛰며 계속 가면 인덱스가 조용히 비어 간다. 사람이 봐야 한다.
-		return fateFatal
-	}
-}
-
-func sqlStateClass(code string) string {
-	if len(code) < 2 {
-		return ""
-	}
-	return code[:2]
-}
-
-// insertWithRetry 는 H9 의 지수 백오프 재시도다.
-// 재시도 상한을 소진하면 에러를 올린다 -> main 이 exit 1 -> compose 재기동 -> Scan 복구(D8).
-//
-// poisoned 가 true 면 이 세그먼트 하나만 버리고 프로세스는 계속 간다.
-func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record) (outcome index.InsertOutcome, poisoned bool, err error) {
-	var lastErr error
-	backoff := ix.opt.InsertRetryBase
-
-	for attempt := range ix.opt.InsertRetryMax {
-		result, insertErr := ix.store.Insert(ctx, rec)
-		if insertErr == nil {
-			// 한 번이라도 통과했다면 전역 이상은 아니다. 산발적 poison 이 누적돼
-			// 언젠가 프로세스를 죽이는 일이 없도록 여기서 기록을 지운다.
-			ix.poisonStreak[rec.StreamID] = 0
-			return result, false, nil
-		}
-		lastErr = insertErr
-
-		switch classifyInsertError(insertErr) {
-		case fatePoison:
-			ix.poisonStreak[rec.StreamID]++
-			streak := ix.poisonStreak[rec.StreamID]
-			ix.log.Error("insert_poisoned",
-				"stream_id", rec.StreamID, "seq", rec.Seq, "path", rec.LocalPath,
-				"err", insertErr, "streak", streak,
-				"note", "재시도해도 같은 결과다. 이 세그먼트만 건너뛴다")
-
-			if streak >= ix.opt.PoisonStreakMax {
-				// 연달아 난다는 것은 개별 행이 아니라 전역이 이상하다는 뜻이다.
-				// 시간축으로 두 문제를 갈라내는 지점이 여기다.
-				ix.log.Error("poison_streak_exceeded",
-					"stream_id", rec.StreamID, "streak", streak, "limit", ix.opt.PoisonStreakMax)
-				return index.InsertInserted, false, fmt.Errorf(
-					"연속 poison INSERT %d회 stream_id=%q: %w", streak, rec.StreamID, insertErr)
-			}
-			return index.InsertInserted, true, nil
-		case fateFatal:
-			return index.InsertInserted, false, fmt.Errorf(
-				"복구 불가한 INSERT 오류 stream_id=%q seq=%d: %w", rec.StreamID, rec.Seq, insertErr)
-		}
-
-		ix.log.Warn("insert_retry", "stream_id", rec.StreamID, "seq", rec.Seq,
-			"attempt", attempt+1, "err", insertErr)
-
-		if attempt == ix.opt.InsertRetryMax-1 {
-			break
-		}
-		if !sleepCtx(ctx, backoff) {
-			return index.InsertInserted, false, ctx.Err()
-		}
-		backoff *= 2
-	}
-	return index.InsertInserted, false, fmt.Errorf("INSERT 재시도 상한 소진 stream_id=%q seq=%d: %w",
-		rec.StreamID, rec.Seq, lastErr)
 }
 
 // advance 는 커서를 한 칸 전진시킨다.
@@ -563,10 +540,12 @@ func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.R
 		ix.learn(seg.StreamID, int64(rec.DurationMS))
 	}
 
+	// reason 은 채널별 기여도(훅 vs 파일)를 재는 유일한 창이다.
+	// 이 값의 분포가 무너지는 것이 "훅 채널이 무징후로 죽었다"의 유일한 신호다.
 	ix.log.Info("segment_indexed",
 		"stream_id", seg.StreamID, "seq", rec.Seq, "duration_ms", rec.DurationMS,
 		"start_pts_ms", rec.StartPTSMS, "is_discontinuity", rec.IsDiscontinuity,
-		"bytes", rec.Bytes, "path", rec.LocalPath)
+		"bytes", rec.Bytes, "path", rec.LocalPath, "reason", seg.Reason)
 }
 
 // correctTail 은 이미 넣은 마지막 행의 길이와 크기를 사후에 고친다(D13-교정).
