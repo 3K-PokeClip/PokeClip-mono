@@ -1,0 +1,30 @@
+# MediaMTX 이미지 + 훅 기록 바이너리 한 층 (ADR-027 / POK-74)
+#
+# 왜 공식 이미지를 그대로 쓰지 않는가: 훅은 MediaMTX 컨테이너 **안에서** 실행되는 명령인데
+# 표준 이미지는 scratch 라 셸도 curl 도 없다(실측). 훅이 부를 수 있는 것은 컨테이너 안에
+# 놓인 정적 바이너리뿐이라, 공식 이미지 위에 mtxhookwrite 를 COPY 한 층만 얹는다.
+# 서버 자체는 손대지 않으며 ENTRYPOINT 도 베이스 것을 그대로 물려받는다.
+#
+# **버전 고정의 유일한 집이 아래 FROM 이다.** compose 의 image: 가 build: 로 바뀌면서
+# pin 위치가 여기로 옮겨왔다 — 버전을 올릴 때는 이 줄만 고치고, media/README.md 의
+# "MediaMTX 버전업 체크리스트"를 따른다.
+
+# 빌드 스테이지의 Go 버전은 media/go.mod 의 go 지시자와 같은 1.26 으로 유지한다.
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+
+# 의존만 먼저 받아 두면 소스만 바뀐 재빌드가 빨라진다.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+# CGO_ENABLED=0 = 순수 정적 바이너리. 최종 베이스가 scratch 파생이라 동적 링커가 없으므로
+# 정적이 아니면 훅이 실행조차 되지 않는다(그리고 그 실패는 무징후다).
+RUN CGO_ENABLED=0 go build -trimpath -o /out/mtxhookwrite ./cmd/mtxhookwrite
+
+# 태그 pin. digest pin 은 arm64 외 아키텍처 digest 가 미확인이라 쓰지 않는다.
+FROM bluenviron/mediamtx:1.19.3
+
+# /hooks-bin 은 바이너리 자리, /hooks 는 스풀 볼륨 자리다. 둘을 섞지 않는다 —
+# 같은 디렉토리에 두면 볼륨 마운트가 바이너리를 가린다.
+COPY --from=build /out/mtxhookwrite /hooks-bin/mtxhookwrite
