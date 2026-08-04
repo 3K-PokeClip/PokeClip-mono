@@ -525,6 +525,9 @@ func TestLoadRejectsMalformedBucketAndEndpoint(t *testing.T) {
 		{"예약 접미 --table-s3", "pokeclip--table-s3", "", "S3_BUCKET"},
 		{"scheme 이 http/https 가 아님", "pokeclip-media-demo-2557", "ftp://minio:9000", "S3_ENDPOINT"},
 		{"호스트가 없음", "pokeclip-media-demo-2557", "http://:9000", "S3_ENDPOINT"},
+		// userinfo 거부 — endpoint 원문이 uploader_started 로그·오류 문자열에 그대로 실리므로
+		// URL 에 자격증명을 넣는 순간 로그가 유출 경로가 된다. 자격증명 자리는 env 3종뿐이다.
+		{"자격증명(userinfo) 포함", "pokeclip-media-demo-2557", "https://user:secret@minio:9000", "S3_ENDPOINT"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -98,7 +98,7 @@
 | `SEGMENT_FIFO_MAX_LEN` | `4096` | 이 길이를 넘으면 회복 불가로 보고 종료한다. 재기동 후 전수 스캔이 따라잡는다 |
 | `SEGMENT_MAX_WATCH_DIRS` | `1024` | 감시할 디렉토리 수 상한. inotify watch는 커널 자원이라 무한정 늘릴 수 없다. 초과하면 ERROR 1회 후 신규 등록을 무시하며, 파일은 주기 재스캔이 계속 따라잡는다 |
 
-**S3 업로더(POK-30) — `S3_BUCKET`이 비어 있으면 아래 값 전부 무시되고 업로더가 꺼진다.**
+**S3 업로더(POK-30) — `S3_BUCKET`이 비어 있으면 업로더가 꺼지고 아래 값은 무시된다(단 `SEGMENT_UPLOAD_TAIL_HOLD`만 예외 — 표 안 설명 참조).**
 
 | 이름 | 기본값 | 의미 |
 |---|---|---|
@@ -109,7 +109,7 @@
 | `SEGMENT_UPLOAD_RETRY_MAX` | `4` | 조각 1개당 PUT 시도 상한(지수 백오프). 소진하면 `failed` 기록 후 스위퍼가 회수 |
 | `SEGMENT_UPLOAD_SWEEP_EVERY` | `30s` | 스위퍼 회차 간격 — `pending`·`failed` 잔여를 주기 회수 |
 | `SEGMENT_UPLOAD_CIRCUIT_MAX` | `3` | 연속 실패가 이 값에 닿으면 브레이커가 열려 PUT을 멈추고 다음 회차 탐침으로 복구를 살핀다. `0`이면 브레이커 없음 |
-| `SEGMENT_UPLOAD_TAIL_HOLD` | `5s` | 꼬리(마지막) 조각을 이만큼 보류해 교정 창과의 충돌을 피한다. 꼬리 유예(2m)보다 짧고 `SEGMENT_SETTLE_WAIT` 이상이어야 기동한다 |
+| `SEGMENT_UPLOAD_TAIL_HOLD` | `5s` | 꼬리(마지막) 조각을 이만큼 보류해 교정 창과의 충돌을 피한다. 꼬리 유예(2m)보다 짧고 `SEGMENT_SETTLE_WAIT` 이상이어야 기동한다. **예외: 이 값만은 버킷이 비어 있어도 항상 읽고 검증한다** — 보류 시계는 업로더가 아니라 인덱서 소유라 비활성에서도 돈다. 잘못된 값이면 버킷과 무관하게 기동이 거부된다 |
 
 자격증명은 SDK 기본 체인(env 3종 → 공유 프로필)을 쓴다. 로컬에서는
 `eval "$(aws configure export-credentials --format env)"` 후

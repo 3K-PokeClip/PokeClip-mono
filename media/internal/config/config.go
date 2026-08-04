@@ -342,6 +342,12 @@ func validateS3(s3 upload.S3Options) error {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("S3_ENDPOINT(%q)의 scheme 은 http 또는 https 여야 한다", s3.Endpoint)
 	}
+	// userinfo 거부 — endpoint 원문은 uploader_started 로그와 오류 문자열에 그대로 실린다.
+	// URL 에 자격증명을 넣으면 그 로그가 유출 경로가 된다. 자격증명 자리는 env 3종뿐이다.
+	// (이 오류 문구만은 원문을 되돌려주지 않는다 — 거부 사유 자체가 "비밀이 들어 있다"이므로.)
+	if u.User != nil {
+		return fmt.Errorf("S3_ENDPOINT 에 자격증명(user:pass@)을 넣을 수 없다 — AWS_ACCESS_KEY_ID 등 env 로 전달하라")
+	}
 	return nil
 }
 
