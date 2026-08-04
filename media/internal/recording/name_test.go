@@ -203,3 +203,38 @@ func TestCompletionReasonValuesAreStable(t *testing.T) {
 		}
 	}
 }
+
+// ValidStreamID 는 name.go 의 화이트리스트를 그대로 노출한다.
+// 업로더(POK-30)가 대상 검증에서 같은 질문을 하는데, 정규식을 복사해 가면
+// 두 곳이 어긋난다 — 화이트리스트의 소유자는 이 패키지 하나여야 한다.
+func TestValidStreamID(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"demo-stream", true},
+		{"ac1-1234567890-4242", true},
+		{"A_b-9", true},
+		{strings.Repeat("a", 64), true},
+		{"", false},
+		{strings.Repeat("a", 65), false},
+		{"live/kr", false}, // 슬래시 = 중첩 %path 거부
+		{"demo.stream", false},
+		{"..", false},
+		{"demo stream", false},
+	}
+	for _, c := range cases {
+		if got := ValidStreamID(c.in); got != c.want {
+			t.Errorf("ValidStreamID(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+// ParseSegmentPath 는 같은 화이트리스트를 쓴다. 정규식이 두 벌 남아 있지 않은지
+// 행동으로 확인한다 — ValidStreamID 가 거부하는 이름은 파싱도 거부해야 한다.
+func TestParseSegmentPathUsesValidStreamID(t *testing.T) {
+	_, err := ParseSegmentPath("/rec", "/rec/demo.stream/2026-07-25_10-00-00-000000.mp4")
+	if !errors.Is(err, ErrInvalidStreamID) {
+		t.Fatalf("err = %v, want ErrInvalidStreamID", err)
+	}
+}
