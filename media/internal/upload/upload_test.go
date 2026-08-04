@@ -296,3 +296,44 @@ func TestRequestUploadIsRejectedAfterShutdown(t *testing.T) {
 		t.Errorf("종료 후 enqueue = %v, want Rejected", got)
 	}
 }
+
+// tq-B4 — QueueFull 에서도 RequestUpload 는 반드시 false 다.
+//
+// true 를 돌려주면 인덱서가 requested 를 기록하고 held 를 지운다. 큐에 없는 조각을
+// "요청 완료"로 믿게 되므로 그 조각은 스위퍼가 집을 때까지 영구 지연되고, 그동안
+// D13 교정도 막힌다. Rejected 와 QueueFull 의 구분은 스위퍼 커서에만 쓸모가 있다.
+func TestRequestUploadReturnsFalseWhenQueueIsFull(t *testing.T) {
+	block := make(chan struct{})
+	put := &fakePutter{fn: func(ctx context.Context, _ string, _ io.Reader, _ int64) error {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	}}
+	u, _, dir := newTestUploader(t, &fakeUploadStore{}, put, func(o *Options) { o.QueueLen = 1 })
+	u.Start(context.Background())
+	defer func() { close(block); u.Shutdown() }()
+
+	// 워커가 1건을 실제로 꺼낸 뒤 큐를 정확히 가득 채운다.
+	first := writeSegment(t, dir, "demo", "busy0.mp4", 16)
+	if !u.RequestUpload(newTarget("demo", 0, first, 16, false)) {
+		t.Fatal("첫 접수가 거부됐다")
+	}
+	waitFor(t, func() bool { return len(put.putCalls()) == 1 }, "워커가 첫 건을 꺼낼 때까지")
+	second := writeSegment(t, dir, "demo", "busy1.mp4", 16)
+	if !u.RequestUpload(newTarget("demo", 1, second, 16, false)) {
+		t.Fatal("두 번째 접수가 거부됐다")
+	}
+
+	// 이제 큐가 꽉 찼다.
+	path := writeSegment(t, dir, "demo", "full.mp4", 16)
+	target := newTarget("demo", 9, path, 16, false)
+	if got := u.enqueue(target, OriginLive); got != EnqueueQueueFull {
+		t.Fatalf("준비 실패: enqueue = %v, want QueueFull", got)
+	}
+	if u.RequestUpload(target) {
+		t.Error("QueueFull 인데 RequestUpload = true — 큐에 없는 조각을 요청 완료로 믿게 된다")
+	}
+}
