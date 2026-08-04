@@ -32,10 +32,10 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 
 | | 소유 |
 |---|---|
-| `auth` | `users` · `refresh_tokens` · `stream_keys` |
-| `clip` | `broadcasts` · `jump_cards` · `stream_segments` |
+| `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
+| `clip` | `broadcasts` · `jump_cards` · `stream_segments` (**아직 없다** — 마이그레이션이 비어 있다) |
 
-**서로의 표를 직접 읽지 않는다.** 필요하면 계약4의 `POST /internal/stream-keys/verify`로
+**서로의 표를 직접 읽지 않는다.** 필요하면 계약4의 `POST /internal/stream-keys/resolve`로
 묻는다. 이 선이 무너지면 따로 배포되는데 DB로 묶인 **분산 모놀리스**가 된다 —
 장애도 배포도 같이 터지는, 가장 나쁜 조합이다. 리뷰에서 볼 항목이다.
 
@@ -43,8 +43,8 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 
 | 모듈 | 무엇 |
 |---|---|
-| `common/` | 계약 — 공유 엔티티 · SQS 메시지 DTO |
-| `web-support/` | 웹 인프라 — CORS · 상관 ID 필터 |
+| `common/` | 계약 — 공유 엔티티 · SQS 메시지 DTO. **아직 소스가 0개다** |
+| `web-support/` | 웹 인프라 — CORS · 상관 ID 필터. 테스트 도우미(`LogCaptor`)는 `testFixtures`에 |
 
 `common`에 웹 계층을 두지 않는 규칙이 있어 둘로 나눴다. `web-support`는 이 앱들의
 패키지 밖이라 컴포넌트 스캔에 안 걸린다 — 각 `Application`이 `@Import`로 끌어온다.
@@ -103,6 +103,12 @@ docker compose up -d postgres redis
 | `chat-collector` | `./gradlew :chat-collector:bootRun` | http://localhost:8083/actuator/health |
 | `chat-detector` | `./gradlew :chat-detector:bootRun` | http://localhost:8084/actuator/health |
 
+**`auth`는 환경변수 없이는 일부러 부팅에 실패한다.** `JWT_SECRET` · `GOOGLE_CLIENT_ID` ·
+`GOOGLE_CLIENT_SECRET` · `CORS_ALLOWED_ORIGINS` · `SECRET_STORE_KEY`(base64 32바이트) ·
+`INTERNAL_API_TOKEN` 여섯이다. `.env.example`에는 없다 — **public 저장소라 예시 값도 두지 않는다.**
+빈 기본값을 주고 검증으로 잡는 이유는, 안 주면 리터럴 `"${VAR}"`이 바인딩돼
+**서버는 뜨고 헬스체크도 통과하는데 그 기능만 전부 실패하기** 때문이다.
+
 **DB 접속 변수 이름을 compose의 `.env`와 맞춰 뒀다** (`POSTGRES_USER`·`POSTGRES_PASSWORD`·
 `POSTGRES_DB`). 팀원이 `.env` 값을 바꿔도 앱이 따라간다. compose 네트워크 안에서
 띄울 때만 `DB_HOST=postgres`를 준다.
@@ -129,21 +135,50 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 서버마다 자기 Flyway를 돌리고 **이력 테이블을 나눈다**(`flyway_schema_history_auth` ·
 `..._clip`). 기본 이름을 쓰면 나중에 뜬 쪽이 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
 마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat.
-1·2번이 읽을 스키마 설명서는 여기서 자동 생성해 [`contracts/db/`](../contracts/db/)로 내보낸다.
+지금까지 나간 것은 auth의 `V101`~`V106`뿐이다.
+1·2번이 읽을 스키마 설명서는 여기서 자동 생성해 [`contracts/db/`](../contracts/db/)로
+내보낼 계획인데 **아직 안 만들었다** — 그 폴더는 비어 있다.
 
-## 상태
+## 상태 (2026-08-04)
 
-`auth`만 내용이 있다 — 구글 로그인·토큰 발급/회전·`/api/auth/me`, 그리고 운영 로깅·
-상관 ID·CORS·구글 호출 타임아웃. 표는 `users`·`refresh_tokens` 둘이다.
+`auth`만 내용이 있다.
+
+| | |
+|---|---|
+| 인증 | 구글 로그인·자동가입 · 토큰 발급/회전/로그아웃 · `/api/auth/me` |
+| 스트림키 | 발급 · 검증(계약4) · 페어링 코드 발급/교환 · 재발급 (POK-56) |
+| 운영 | 이벤트 로깅 · 요청 상관 ID · CORS · 구글 호출 타임아웃 |
+
+표는 여섯이다 — `users`·`refresh_tokens`(V101·V102) ·
+`secrets`·`stream_keys`·`pairing_codes`·`pairing_exchange_attempts`(V103~V106).
+
+스트림키 엔드포인트 다섯. **`resolve`가 계약4다** — 1번 Media가 SRT 연결을 받기 전에
+한 번 부른다. `contracts/api/`에 정본이 아직 없어 여기 적어 둔다.
+
+| | 부르는 쪽 | 인증 |
+|---|---|---|
+| `GET /api/stream-keys` | 웹 | 사용자 JWT |
+| `POST /api/stream-keys/rotate` | 웹 | 사용자 JWT |
+| `POST /api/stream-keys/pairing-codes` | 웹 | 사용자 JWT |
+| `POST /api/stream-keys/pairing-codes/exchange` | OBS 플러그인 | **없음** (코드 자체가 자격증명) |
+| `POST /internal/stream-keys/resolve` | **Media(1번)** | `X-Internal-Token` 헤더 |
+
+`resolve`는 **키가 틀려도 HTTP 200에 `valid:false`**로 답한다. Media에게
+"키가 틀림"(연결 거절)과 "Auth 장애"(판단 불가)는 조치가 정반대라 둘 다 4xx면
+Go 쪽에서 구분이 안 된다.
 
 `clip`은 `ClipApplication` 하나뿐이고 마이그레이션도 비어 있다.
-`chat-collector`·`chat-detector`는 빈 껍데기다.
+`chat-collector`·`chat-detector`는 빈 껍데기다. `common`은 소스가 0개다 —
+두 서버가 똑같이 쓰는 계약이 실제로 생기면 그때 채운다.
 
 다음 작업 순서:
 
 1. `clip`에 방송 생명주기 이벤트 FIFO 소비 스텁을 넣는다 (POK-26)
-2. `broadcasts`·`stream_keys` 마이그레이션을 각 소유 서버에 넣는다
-3. SQS 대역(ElasticMQ)을 루트 compose에 추가한다 — `clip`이 렌더 잡을 발행하려면 필요하다
+2. **`pairing_exchange_attempts` 청소 작업을 넣는다.** 교환이 `permitAll`이라
+   미인증 트래픽이 행을 쌓는다 — 이게 없으면 운영에 올릴 수 없다
+3. `POST /api/stream-keys/pairing-codes/exchange`의 `X-Forwarded-For` 처리.
+   ALB 뒤로 가면 전 요청이 같은 IP로 보여 rate limit이 전역 한도가 된다
+4. SQS 대역(ElasticMQ)을 루트 compose에 추가한다 — `clip`이 렌더 잡을 발행하려면 필요하다
 
 > **ArchUnit 도입 계획은 없어졌다.** auth와 clip 경계를 코드 규칙으로 막으려던 것인데,
 > 프로세스가 갈리면서(ADR-022) 물리적으로 분리됐다. 대신 지킬 것은 **DB 표 소유 경계**다.

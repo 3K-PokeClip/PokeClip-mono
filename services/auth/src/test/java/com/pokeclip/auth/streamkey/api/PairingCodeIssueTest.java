@@ -1,6 +1,6 @@
 package com.pokeclip.auth.streamkey.api;
 
-import com.pokeclip.auth.streamkey.PairingCodeRepository;
+import com.pokeclip.auth.streamkey.pairing.PairingCodeRepository;
 import com.pokeclip.auth.streamkey.StreamKeyRepository;
 import com.pokeclip.auth.support.IntegrationTestSupport;
 import com.pokeclip.auth.token.TokenService;

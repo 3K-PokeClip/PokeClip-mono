@@ -1,4 +1,4 @@
-package com.pokeclip.auth.streamkey;
+package com.pokeclip.auth.streamkey.pairing;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;

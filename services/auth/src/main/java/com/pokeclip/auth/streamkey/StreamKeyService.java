@@ -1,5 +1,8 @@
 package com.pokeclip.auth.streamkey;
 
+import com.pokeclip.auth.streamkey.secret.SecretStore;
+import com.pokeclip.auth.support.CrockfordBase32;
+import com.pokeclip.auth.support.Sha256;
 import com.pokeclip.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;

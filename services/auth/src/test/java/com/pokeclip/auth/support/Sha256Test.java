@@ -1,4 +1,4 @@
-package com.pokeclip.auth.streamkey;
+package com.pokeclip.auth.support;
 
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;

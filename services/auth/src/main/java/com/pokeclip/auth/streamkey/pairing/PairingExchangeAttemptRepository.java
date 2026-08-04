@@ -1,4 +1,4 @@
-package com.pokeclip.auth.streamkey;
+package com.pokeclip.auth.streamkey.pairing;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 

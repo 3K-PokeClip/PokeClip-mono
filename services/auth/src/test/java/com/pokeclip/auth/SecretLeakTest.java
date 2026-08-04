@@ -16,7 +16,7 @@ import com.pokeclip.auth.user.UserRepository;
 import com.pokeclip.auth.user.UserService;
 import com.pokeclip.auth.support.FakeHttpServer;
 import com.pokeclip.auth.support.IntegrationTestSupport;
-import com.pokeclip.auth.support.LogCaptor;
+import com.pokeclip.web.support.LogCaptor;
 import jakarta.validation.constraints.NotBlank;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;

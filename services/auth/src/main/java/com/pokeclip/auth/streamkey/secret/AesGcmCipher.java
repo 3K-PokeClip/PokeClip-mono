@@ -1,4 +1,4 @@
-package com.pokeclip.auth.streamkey;
+package com.pokeclip.auth.streamkey.secret;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;

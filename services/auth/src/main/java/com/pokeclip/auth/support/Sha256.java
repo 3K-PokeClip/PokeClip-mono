@@ -1,4 +1,4 @@
-package com.pokeclip.auth.streamkey;
+package com.pokeclip.auth.support;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;

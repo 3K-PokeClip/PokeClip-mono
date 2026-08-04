@@ -1,8 +1,8 @@
 package com.pokeclip.auth.config;
 
 import com.pokeclip.auth.google.GoogleAuthProperties;
-import com.pokeclip.auth.streamkey.SecretStoreConfig;
-import com.pokeclip.auth.streamkey.SecretStoreProperties;
+import com.pokeclip.auth.streamkey.secret.SecretStoreConfig;
+import com.pokeclip.auth.streamkey.secret.SecretStoreProperties;
 import com.pokeclip.auth.token.JwtConfig;
 import com.pokeclip.auth.token.JwtProperties;
 import com.pokeclip.web.CorsProperties;

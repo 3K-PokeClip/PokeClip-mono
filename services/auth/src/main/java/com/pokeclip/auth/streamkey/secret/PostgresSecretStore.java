@@ -1,4 +1,4 @@
-package com.pokeclip.auth.streamkey;
+package com.pokeclip.auth.streamkey.secret;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;

@@ -1,6 +1,6 @@
 package com.pokeclip.auth.streamkey.api.dto;
 
-import com.pokeclip.auth.streamkey.PairingCodeService.IssuedCode;
+import com.pokeclip.auth.streamkey.pairing.PairingCodeService.IssuedCode;
 
 import java.time.Instant;
 

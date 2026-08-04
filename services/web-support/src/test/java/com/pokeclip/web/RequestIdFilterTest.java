@@ -1,8 +1,6 @@
-package com.pokeclip.auth.web;
+package com.pokeclip.web;
 
-import com.pokeclip.web.RequestIdFilter;
-import com.pokeclip.web.WebConfig;
-import com.pokeclip.auth.support.LogCaptor;
+import com.pokeclip.web.support.LogCaptor;
 import jakarta.servlet.FilterChain;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
