@@ -186,6 +186,16 @@ docker compose logs segment-indexer \
 `hook_spool_missing`은 예외로 **기동 후 0~1회까지 정상**이다 — 새 볼륨에는 첫 송출 전까지
 스풀 파일이 아예 없다. 스풀이 생긴 뒤에 또 나오면 그건 이상이다.
 
+한 가지 예외가 더 있다. 스트림 이름이 사이드카의 화이트리스트(`[A-Za-z0-9_-]{1,64}`, 위
+"인제스트와 인덱싱의 허용 범위가 다르다" 참고) 밖이면 `hook_line_invalid`·
+`hook_segment_path_rejected`가 나오는데, 이건 **경계 검증이 제대로 작동한 결과**이지 고장이
+아니다. 그러니 위 명령이 0이 아니면 먼저 `stream_id_rejected`부터 확인한다 —
+그게 함께 나온다면 원인은 훅이 아니라 스트림 이름이다.
+
+```bash
+docker compose logs segment-indexer | grep stream_id_rejected
+```
+
 **3) 훅 채널이 실제로 일을 하는지 본다.** `reason` 값 `5`가 "훅이 먼저 알려 준 조각"이다.
 
 ```bash

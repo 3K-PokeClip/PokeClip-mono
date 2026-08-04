@@ -22,7 +22,11 @@ COPY . .
 # 정적이 아니면 훅이 실행조차 되지 않는다(그리고 그 실패는 무징후다).
 RUN CGO_ENABLED=0 go build -trimpath -o /out/mtxhookwrite ./cmd/mtxhookwrite
 
-# 태그 pin. digest pin 은 arm64 외 아키텍처 digest 가 미확인이라 쓰지 않는다.
+# 태그 pin을 쓴다. digest pin(멀티아키 index digest는 아키텍처와 무관한 단일 값이라
+# 어느 플랫폼에서든 그대로 쓸 수 있다)은 같은 태그를 다시 밀어 올리는 업스트림 재푸시까지
+# 막아 주지만, 아직 로컬 dev 단계라 태그 추적의 편의를 택했다.
+# 필요하면 `docker buildx imagetools inspect bluenviron/mediamtx:1.19.3` 로 index digest를
+# 확인해 `FROM bluenviron/mediamtx:1.19.3@sha256:...` 형태로 바꾼다.
 FROM bluenviron/mediamtx:1.19.3
 
 # /hooks-bin 은 바이너리 자리, /hooks 는 스풀 볼륨 자리다. 둘을 섞지 않는다 —
