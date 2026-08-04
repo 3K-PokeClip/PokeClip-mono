@@ -99,24 +99,37 @@ func TestDefaultSpoolPathMatchesComposeHookSpoolPath(t *testing.T) {
 }
 
 // hookSpoolPathFromCompose 는 compose 파일에서 HOOK_SPOOL_PATH 값을 뽑는다.
-// YAML 파서를 끌어오지 않는 이유: 이 값은 주석 없는 한 줄 스칼라이고, 의존을 하나 더
-// 늘리는 대가가 이득보다 크다. 형태가 바뀌면 여기서 실패하고 사람이 본다.
+//
+// YAML 파서를 끌어오지 않는 이유: 이 값은 한 줄 스칼라이고, 의존을 하나 더 늘리는 대가가
+// 이득보다 크다. 대신 형태가 바뀌면 조용히 넘어가지 않고 여기서 실패하게 만든다 —
+// 매치가 정확히 1건이 아니면 Fatal 이다. 나중에 media 서비스에도 같은 키가 붙으면
+// 첫 매치만 읽어 엉뚱한 값과 대조하게 되는데, 그때 이 테스트가 먼저 멈춘다.
 func hookSpoolPathFromCompose(t *testing.T, compose string) string {
 	t.Helper()
 	const key = "HOOK_SPOOL_PATH:"
+
+	var found []string
 	for line := range strings.SplitSeq(compose, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if !strings.HasPrefix(trimmed, key) {
 			continue
 		}
 		value := strings.TrimSpace(strings.TrimPrefix(trimmed, key))
-		if value == "" {
-			t.Fatalf("docker-compose.yml 의 HOOK_SPOOL_PATH 가 비어 있다(줄=%q)", trimmed)
-		}
-		return strings.Trim(value, `"'`)
+		// 줄 끝 주석을 떼어 낸다. YAML 은 " #" 부터를 주석으로 본다.
+		value, _, _ = strings.Cut(value, " #")
+		found = append(found, strings.Trim(strings.TrimSpace(value), `"'`))
 	}
-	t.Fatal("docker-compose.yml 에 HOOK_SPOOL_PATH 가 없다 — 훅 어댑터가 기동하지 않는 설정이다")
-	return ""
+
+	switch {
+	case len(found) == 0:
+		t.Fatal("docker-compose.yml 에 HOOK_SPOOL_PATH 가 없다 — 훅 어댑터가 기동하지 않는 설정이다")
+	case len(found) > 1:
+		t.Fatalf("docker-compose.yml 에 HOOK_SPOOL_PATH 가 %d 곳 있다(%q) — "+
+			"어느 서비스의 값과 대조해야 하는지 모호하다", len(found), found)
+	case found[0] == "":
+		t.Fatal("docker-compose.yml 의 HOOK_SPOOL_PATH 가 비어 있다(= 훅 어댑터 미기동 설정)")
+	}
+	return found[0]
 }
 
 // spoolPath 의 우선순위는 플래그 > 환경변수 > 기본값이다.
@@ -173,6 +186,7 @@ type failingTarget struct {
 	failAfter int
 	size      int64
 	truncated []int64
+	truncErr  error // 되돌리기까지 실패하는 상황을 주입한다
 }
 
 var errDiskFull = errors.New("디스크가 가득 찼다(모의)")
@@ -196,6 +210,9 @@ func (f *failingTarget) Seek(int64, int) (int64, error) { return f.size, nil }
 
 func (f *failingTarget) Truncate(size int64) error {
 	f.truncated = append(f.truncated, size)
+	if f.truncErr != nil {
+		return f.truncErr
+	}
 	f.written = f.written[:size]
 	f.size = size
 	return nil
@@ -218,6 +235,30 @@ func TestPartialWriteIsRolledBackToPreviousSize(t *testing.T) {
 	}
 	if string(target.written) != "prev-ok" {
 		t.Errorf("스풀 내용 = %q, 기대 %q — 반쪽 줄이 남았다", target.written, "prev-ok")
+	}
+}
+
+// 되돌리기까지 실패하면 두 실패를 **한 줄로** 올려야 한다.
+//
+// stderr 한 줄은 이 도구의 계약이다(패키지 doc·설계 D1). 세션 훅의 stderr 는 MediaMTX
+// 서버 로그에 섞여 들어가는데, 두 줄이 되면 뒷줄이 원인 없는 고아 줄로 남는다.
+// errors.Join 의 기본 문자열은 개행으로 잇기 때문에 그대로 쓰면 계약이 깨진다.
+func TestRollbackFailureIsReportedOnOneLine(t *testing.T) {
+	truncErr := errors.New("되돌리기 장치도 죽었다(모의)")
+	target := &failingTarget{written: []byte("prev-ok"), size: 7, failAfter: 10, truncErr: truncErr}
+
+	err := writeLine(target, "/spool", []byte(strings.Repeat("x", 50)+"\n"))
+	if err == nil {
+		t.Fatal("되돌리기까지 실패했는데 nil 을 돌려줬다")
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("에러가 여러 줄이다(stderr 한 줄 계약 위반):\n%s", err.Error())
+	}
+	if !errors.Is(err, errDiskFull) {
+		t.Errorf("원래 기록 실패가 사슬에서 사라졌다: %v", err)
+	}
+	if !errors.Is(err, truncErr) {
+		t.Errorf("되돌리기 실패가 사슬에서 사라졌다: %v", err)
 	}
 }
 

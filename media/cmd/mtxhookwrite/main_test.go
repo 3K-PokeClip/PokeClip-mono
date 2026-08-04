@@ -250,10 +250,12 @@ func TestLockContentionAbortsAfterWaitLimit(t *testing.T) {
 	if elapsed < 200*time.Millisecond {
 		t.Errorf("경과 %v — 200ms 를 기다리지 않고 포기했다", elapsed)
 	}
-	// 상한은 200ms + 프로세스 기동 여유다. 헐겁게 잡으면 상한을 몇 배로 늘리는 회귀가
-	// 이 테스트를 그대로 통과한다(실측 경과는 250ms 안쪽).
-	if elapsed > 900*time.Millisecond {
-		t.Errorf("경과 %v — 대기 상한(200ms)이 제대로 걸리지 않는다", elapsed)
+	// 상한을 3s로 넉넉히 잡는다. 벽시계 단언을 조이면 병렬 부하에서 프로세스 기동만으로
+	// 1.5s를 넘겨 무작위로 깨진다(8병렬 실측). 상한값이 늘어나는 회귀를 막는 일은
+	// TestLockWaitLimitIsTwoHundredMillis 의 상수 핀이 결정적으로 담당하므로,
+	// 여기서는 "무한정 기다리지는 않는다"만 본다.
+	if elapsed > 3*time.Second {
+		t.Errorf("경과 %v — 대기 상한이 아예 걸리지 않는다", elapsed)
 	}
 	if code := exitCode(t, runErr); code != 1 {
 		t.Errorf("종료 코드 = %d, 기대 1", code)

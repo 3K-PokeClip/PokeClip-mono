@@ -221,9 +221,13 @@ func writeLine(f appendTarget, name string, line []byte) error {
 		return nil
 	}
 	if truncErr := f.Truncate(preSize); truncErr != nil {
-		// 되돌리기까지 실패하면 반쪽 줄이 남는다. 삼키지 않고 둘 다 올려 stderr 에 남긴다.
-		return errors.Join(writeErr,
-			fmt.Errorf("반쪽 줄 되돌리기 실패 path=%s size=%d: %w", name, preSize, truncErr))
+		// 되돌리기까지 실패하면 반쪽 줄이 남는다. 삼키지 않고 둘 다 올린다.
+		//
+		// errors.Join 을 쓰지 않는 이유: 그 기본 문자열은 개행으로 잇는데, 이 도구의
+		// stderr 는 한 줄이어야 한다(패키지 doc·설계 D1). 세션 훅의 stderr 는 MediaMTX
+		// 서버 로그에 섞여 들어가므로 두 줄이 되면 뒷줄이 원인 없는 고아 줄로 남는다.
+		// %w 두 개로 사슬은 둘 다 유지한 채 한 줄로 만든다.
+		return fmt.Errorf("%w | 반쪽 줄 되돌리기 실패 size=%d: %w", writeErr, preSize, truncErr)
 	}
 	return writeErr
 }
