@@ -26,6 +26,8 @@ import (
 const (
 	// maxLineBytes 는 개행을 포함한 1줄의 상한이다. Reader 쪽 손상 줄 폐기 상한(8192)의
 	// 절반이며, 층이 다르다 — 여기가 "정상 줄이 이보다 길 수 없다"는 생산 측 계약이다.
+	//
+	// 계약은 **미만**이다(설계 D1: "1줄 < 4096B, 개행 포함"). 경계값 자체는 거부한다.
 	maxLineBytes = 4096
 	// lockWaitLimit 은 flock 대기 상한이다. 초과하면 기록을 포기한다.
 	//
@@ -122,10 +124,10 @@ func buildLine(kind string, at time.Time, getenv func(string) string) ([]byte, e
 		return nil, fmt.Errorf("훅 이벤트 직렬화 실패 kind=%s: %w", kind, err)
 	}
 	line := append(body, '\n')
-	if len(line) > maxLineBytes {
+	if len(line) >= maxLineBytes {
 		// 잘라서 쓰지 않는다 — 잘린 줄은 Reader 가 버리는 손상 줄이 되고, 그 사이에 낀
 		// 정상 줄까지 함께 오염시킨다. 통째로 포기하고 흔적만 남긴다.
-		return nil, fmt.Errorf("훅 이벤트 1줄이 상한을 넘었다: %dB > %dB kind=%s path=%q",
+		return nil, fmt.Errorf("훅 이벤트 1줄이 상한을 넘었다: %dB >= %dB kind=%s path=%q",
 			len(line), maxLineBytes, kind, truncate(getenv("MTX_PATH")))
 	}
 	return line, nil
