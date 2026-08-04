@@ -286,9 +286,11 @@ func (ix *Indexer) handleHookSegment(ctx context.Context, ev mtxhook.Event) erro
 	// DB 왕복 2회와 맵 증식을 유발할 수 있다 — 스풀은 다른 컨테이너가 쓰는 외부 입력이므로
 	// 값싼 로컬 stat 로 먼저 거른다.
 	//
-	// 이관(별도 설계 결정 필요): 심링크 해석(filepath.EvalSymlinks)은 넣지 않았다.
-	// recordings 볼륨은 MediaMTX 전용 쓰기이고 사이드카는 :ro 라 현 구성에서 실익이 없으나,
-	// 업로더(POK-30)가 같은 경로를 S3 로 올리기 시작하면 재평가한다. PR2 제약표에 기록한다.
+	// 심링크 해석(filepath.EvalSymlinks)은 넣지 않았다. recordings 볼륨은 MediaMTX 전용
+	// 쓰기이고 사이드카는 :ro 다. 이 경로로 하는 일은 로컬 stat·길이 프로브·인덱스 기록뿐이라
+	// 파일이 밖으로 나가지 않는다. 파일을 실제로 내보내는 업로더(POK-30, 병합됨)는 os.Root
+	// 핸들로만 여므로(upload/worker.go 의 Root.Open) 루트 밖으로 풀리는 심링크는 그쪽 열기
+	// 단계에서 거부된다 — 여기서 한 번 더 풀 실익이 없다.
 	if _, statErr := os.Stat(seg.Path); statErr != nil {
 		ix.log.Warn("hook_segment_missing",
 			"stream_id", seg.StreamID, "path", seg.Path, "err", statErr,

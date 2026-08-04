@@ -32,7 +32,11 @@ services:
 
   # Media Origin 자리 — 수신(SRT)·LL-HLS 먹싱·DVR. 사이드카·합성 레이어는 M1 2단계에서 추가.
   media:
-    image: bluenviron/mediamtx:1.19.3
+    # 표준 이미지는 scratch라 셸·curl이 없다(실측). 훅이 부를 정적 바이너리를 한 층 얹기
+    # 위해서만 build로 바꾼다 — 버전 pin은 media/Dockerfile.mtxhook의 FROM이 담당한다.
+    build:
+      context: ./media
+      dockerfile: Dockerfile.mtxhook
     environment:
       TZ: UTC # 녹화 파일명에 박히는 시각을 UTC로 고정한다 (사이드카가 파일명에서 start_wall_utc를 읽는다)
     ports:
@@ -43,6 +47,7 @@ services:
       - ./infra/compose/mediamtx.yml:/mediamtx.yml:ro
       - dvr:/dvr
       - recordings:/recordings
+      - hooks:/hooks # 훅 이벤트 스풀(append-only). 쓰는 것은 이 컨테이너뿐이다
 
   # 세그먼트 인덱서 사이드카 (M1 2단계 / POK-29) — recordings를 감시해 stream_segments에 한 줄씩 기록.
   # 인식하는 환경변수 전수 목록은 media/README.md에 있다. 여기서는 기본값과 다른 것만 적는다.
@@ -59,6 +64,8 @@ services:
     volumes:
       # :ro — 사이드카가 파일을 지우거나 고치는 것을 운영체제 수준에서 막는다. 삭제는 janitor 책임.
       - recordings:/recordings:ro
+      # :ro — 사이드카는 스풀을 읽기만 한다. 읽은 위치를 파일로 남기지 않으므로 rw가 필요 없다.
+      - hooks:/hooks:ro
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?cp .env.example .env 먼저 실행하세요}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?cp .env.example .env 먼저 실행하세요}
@@ -67,6 +74,9 @@ services:
       SEGMENT_ROOT: /recordings
       TZ: UTC # 로그 시각과 mtime 해석을 UTC로 고정 (저장 값은 코드가 UTC로 강제한다)
       ENSURE_SCHEMA: "true" # 부팅 시 정본 DDL 보장(1번 소유, ADR-0001). RDS/마이그레이션 도구 도입 시 끈다
+      # 훅 스풀 경로. **빈 값이면 훅 어댑터를 아예 기동하지 않는다** = 즉시 롤백 스위치
+      # (사이드카만 재기동하면 되고 MediaMTX는 건드리지 않는다. 자세히는 media/README.md)
+      HOOK_SPOOL_PATH: /hooks/events.jsonl
 
   # 정적 세그먼트 스텁 (M1 1-2) — 2번 플레이어 개발용. 먼저 infra/compose/stub/gen-segments.sh 1회 실행.
   media-stub:
@@ -81,3 +91,4 @@ volumes:
   pgdata:
   dvr:
   recordings:
+  hooks:

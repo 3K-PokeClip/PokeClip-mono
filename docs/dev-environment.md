@@ -6,14 +6,18 @@
 
 ```bash
 cp .env.example .env        # 최초 1회
-docker compose up -d
+docker compose up -d --build
 ```
+
+⚠️ `media`는 이제 공식 이미지를 그대로 쓰지 않고 **훅 바이너리를 한 층 얹어 빌드한다**
+(`media/Dockerfile.mtxhook`). `git pull` 후 첫 기동에는 `--build`를 붙여야 하며,
+그때 한 번만 Go 빌드 때문에 수십 초 더 걸린다.
 
 | 서비스 | 포트 | 용도 |
 |---|---|---|
 | postgres:17 | 5432 | 3번: 스키마 v0 마이그레이션은 여기에 (M1 2단계) |
 | redis:7.4 | 6379 | 3번: 키·TTL·pub/sub 설계 자리 |
-| media (MediaMTX 1.19.3) | UDP 8890 (SRT) · 1935 (RTMP) · 8888 (LL-HLS) | 1번: Media Origin 자리 |
+| media (MediaMTX 1.19.3 + 훅 바이너리) | UDP 8890 (SRT) · 1935 (RTMP) · 8888 (LL-HLS) | 1번: Media Origin 자리. 버전 고정은 `media/Dockerfile.mtxhook`의 `FROM` |
 | media-stub (nginx) | 8080 | 2번: 플레이어 개발용 정적 세그먼트 (`infra/compose/stub/README.md`) |
 | segment-indexer | (포트 없음) | 1번: 녹화 세그먼트를 감지해 `stream_segments`에 기록하는 사이드카 (`media/README.md`) |
 
@@ -152,6 +156,77 @@ MediaMTX는 아무 경로로나 송출을 받아 주지만, 사이드카는 **`[
 ```bash
 docker compose logs segment-indexer | grep stream_id_rejected
 ```
+
+## 훅 채널 확인 (MediaMTX → 사이드카)
+
+MediaMTX가 방송이 붙고 끊길 때, 그리고 녹화 조각이 닫힐 때마다 컨테이너 안의 작은 명령을
+실행한다. 그 명령이 공유 볼륨의 스풀 파일 `/hooks/events.jsonl`에 JSON 한 줄씩 덧붙이고,
+사이드카가 그 파일을 따라 읽는다. **이 채널이 있어야 0.9초짜리 재접속이 끊김으로 잡힌다**
+(벽시계만으로는 그 정도 공백이 안 잡힌다 — POK-36 실측).
+
+**1) 스풀에 3종이 다 찍히는지 본다.** 위 "송출 테스트"를 15초쯤 돌린 뒤:
+
+```bash
+docker run --rm -v pokeclip_hooks:/hooks:ro alpine grep "$STREAM" /hooks/events.jsonl
+```
+
+`media` 컨테이너 안에서 `cat`을 쓰지 않는 이유는 그 이미지가 **scratch 기반이라 셸이 없기**
+때문이다. 그래서 진단용으로 alpine 컨테이너를 하나 띄워 같은 볼륨을 읽기 전용으로 붙인다.
+
+합격 기준: `$STREAM`으로 걸러진 줄에 `"kind":"online"` 1건, `"kind":"segcomplete"` 여러 건,
+`"kind":"offline"` 1건이 있고, 각 줄이 개행으로 끝나며 `at_unix_nano`가 정수다.
+
+**2) 사이드카가 그 줄들을 정상으로 읽었는지 본다.** 아래는 **0건이 정상**이다.
+
+```bash
+docker compose logs segment-indexer \
+  | grep -cE 'hook_line_invalid|hook_line_overflow|hook_spool_truncated|hook_segment_path_rejected'
+```
+
+`hook_spool_missing`은 예외로 **기동 후 0~1회까지 정상**이다 — 새 볼륨에는 첫 송출 전까지
+스풀 파일이 아예 없다. 스풀이 생긴 뒤에 또 나오면 그건 이상이다.
+
+한 가지 예외가 더 있다. 스트림 이름이 사이드카의 화이트리스트(`[A-Za-z0-9_-]{1,64}`, 위
+"인제스트와 인덱싱의 허용 범위가 다르다" 참고) 밖이면 `hook_line_invalid`·
+`hook_segment_path_rejected`가 나오는데, 이건 **경계 검증이 제대로 작동한 결과**이지 고장이
+아니다. 그러니 위 명령이 0이 아니면 먼저 `stream_id_rejected`부터 확인한다 —
+그게 함께 나온다면 원인은 훅이 아니라 스트림 이름이다.
+
+```bash
+docker compose logs segment-indexer | grep stream_id_rejected
+```
+
+**3) 훅 채널이 실제로 일을 하는지 본다.** `reason` 값 `5`가 "훅이 먼저 알려 준 조각"이다.
+
+```bash
+docker compose logs segment-indexer | grep segment_indexed | grep "$STREAM" \
+  | grep -o '"reason":[0-9]*' | sort | uniq -c
+```
+
+`5`가 한 건도 없으면 훅 채널이 조용히 죽은 것이다(인덱싱 자체는 파일 감시가 계속하므로
+겉으로는 멀쩡해 보인다). `docker compose logs media | grep -i hook`으로 훅 실행 실패를 본다.
+
+**4) 재접속 판정 로그를 읽는 규칙.**
+
+```bash
+docker compose logs segment-indexer | grep "$STREAM" | grep hook_break_
+```
+
+- `hook_break_armed` → `hook_break_consumed` 한 쌍이 정상이다. `consumed` 줄의 `seq`가
+  `is_discontinuity = true`인 행의 `seq`와 같아야 한다.
+- **`hook_break_discarded`와 `hook_break_dropped`가 같은 시각에 함께 나오면 한 건의 정리다.**
+  `discarded`는 "판정 대상이던 경계 1건이 왜 버려졌는가"이고, `dropped`는 "그와 함께 정리된,
+  조각이 한 건도 없던 더 오래된 경계들"이다. **놓친 건수는 `discarded`만 센다.**
+- `armed`만 있고 아무 반응이 없으면 스트림 이름 대조부터 한다(훅의 `MTX_PATH`와 DB의
+  `stream_id`가 **바이트 단위로 같아야** 무장이 소비된다).
+
+**끄는 법(즉시 롤백).** `docker-compose.yml`의 `HOOK_SPOOL_PATH`를 빈 값으로 두고
+
+```bash
+docker compose up -d --no-deps segment-indexer   # 사이드카만 재기동. MediaMTX는 건드리지 않는다
+```
+
+그러면 훅 어댑터가 아예 뜨지 않고 판정이 현행(벽시계)으로 돌아간다. DB 변경은 없다.
 
 ## S3 즉시 업로드 확인 (segment-indexer, 1번 전용)
 

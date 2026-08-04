@@ -183,6 +183,30 @@ func TestMissingSpoolWarnsOnceThenReadsFromStart(t *testing.T) {
 	}
 }
 
+// 부재 경고의 1회 억제는 **회복하면 풀려야** 한다(hook_spool_not_regular 와 대칭).
+// 억제가 영구히 남으면 운영 중 스풀이 사라진 사고(볼륨 해제·오삭제)가 로그 한 줄 없이
+// 지나가고, 훅 채널이 조용히 죽는다 — 무징후 강등은 이 설계가 제일 피하려는 실패 모드다.
+func TestMissingSpoolWarnsAgainAfterSpoolRecovers(t *testing.T) {
+	f := newReaderFixture(t, 0)
+	f.start()
+
+	waitFor(t, "첫 hook_spool_missing WARN", func() bool { return f.logs.count("hook_spool_missing") >= 1 })
+
+	// 스풀이 생겨 정상으로 회복된다.
+	f.write(line("online", "demo", 1784000000000000000))
+	if ev := f.next(); ev.StreamID != "demo" {
+		t.Fatalf("StreamID = %q, want demo", ev.StreamID)
+	}
+
+	// 다시 사라진다 — 이번 부재도 경고돼야 한다.
+	if err := os.Remove(f.spool); err != nil {
+		t.Fatalf("스풀 삭제 실패: %v", err)
+	}
+	waitFor(t, "회복 후 두 번째 hook_spool_missing WARN", func() bool {
+		return f.logs.count("hook_spool_missing") >= 2
+	})
+}
+
 // T13 — 훅 write 와 폴링이 겹치는 순간의 부분 줄을 버리면 그 이벤트가 사라진다.
 // 개행이 없는 꼬리는 carry 에 남겨 다음 폴에서 이어 붙인다.
 func TestPartialLineIsCarriedToNextPoll(t *testing.T) {

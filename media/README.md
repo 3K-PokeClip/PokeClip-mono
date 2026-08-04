@@ -59,7 +59,42 @@
 | 끝내 안정되지 않는 파일 | 되돌리기가 `DeferMaxCycles`(기본 3) 사이클을 넘으면 그 파일을 붙잡지 않고 흘려보낸다. 스트림 전체가 그 파일 하나 때문에 멈추는 것을 막기 위해서다. 그 결과 해당 4초는 `late_segment_skipped` ERROR와 함께 인덱스에서 빠지며, **자동 복구는 없다** — 파일은 `:ro`로 남아 있으니 로그의 경로를 보고 수동 복구한다 | 이월(L5) |
 | 중첩 `%path` | `live/kr/demo` 같은 슬래시 포함 스트림 이름은 거부한다. 필요해지면 `internal/recording/name.go`의 화이트리스트만 고치면 된다 | U9 확정 시 |
 | **인제스트와 인덱싱의 허용 범위가 다르다** | MediaMTX는 `paths: all_others`로 **모든 경로를 받지만**, 사이드카는 `[A-Za-z0-9_-]{1,64}`에 맞는 이름만 인덱싱한다. 어긋난 이름으로 송출하면 **녹화 파일은 생기지만 인덱스에는 안 잡히고** `stream_id_rejected` WARN만 남는다 | U9 / 계약4 |
-| 초고속 재접속·PTS 리셋 미검출(L1) · PTS 누적 오차 상한 미보장(L4) | **POK-36 실측 종결(2026-08-03):** 녹화 fMP4의 tfdt는 파일마다 원점 리셋(파일 기준)이라 **tfdt로는 해소 불가 확정** — tfdt 전환 기각·벽시계 잔류(0.9초 재접속이 현행 로직을 `is_discontinuity=false`로 통과함도 실측 재현, 근거 값은 POK-36 코멘트) | L1·L5 잔여 경로 = MediaMTX 훅 전환 검토(공용 mediamtx.yml — 팀 합의 필요, 후속 티켓). L4는 잔존 |
+| 초고속 재접속·PTS 리셋 미검출(L1) · PTS 누적 오차 상한 미보장(L4) | **POK-36 실측 종결(2026-08-03):** 녹화 fMP4의 tfdt는 파일마다 원점 리셋(파일 기준)이라 **tfdt로는 해소 불가 확정** — tfdt 전환 기각. 남은 경로였던 **MediaMTX 훅이 POK-74로 들어왔다**: `runOnOnline`/`runOnOffline` 한 쌍이 재접속을 알려 주고, 그 사이에 낀 첫 조각에 `is_discontinuity=true`가 붙는다. 벽시계 드리프트 판정은 **제거하지 않고** 안전망으로 남는다 | L1 = **훅이 1차 신호로 해소**(단, 아래 "훅 검출의 사각" 3행 참조). L4는 잔존 |
+| 훅 스풀 무회전 | 훅 이벤트는 `/hooks/events.jsonl` 한 파일에 계속 덧붙기만 하고 회전(rotate)하지 않는다. 스트림 1개 기준 하루 약 4MB로 느리게 자란다. 회전을 넣으면 inode 전환 처리가 읽는 쪽으로 들어와 "어디까지 읽었나"의 계약이 깨지므로 일부러 넣지 않았다 | 이월 — 볼륨 사용량이 문제가 되면 별도 티켓 |
+| 훅 유실은 무징후다 | 훅은 fire-and-forget이다. MediaMTX는 훅 명령의 실패를 재시도하지도, 세그먼트 훅에 대해서는 로그를 남기지도 않는다(세션 훅만 서버 로그에 1줄). 그래서 **파일 감시와 5분 주기 재스캔이 안전망으로 반드시 함께 돌아야 한다** — 훅 채널이 조용히 죽어도 인덱싱 자체는 멈추지 않는다. 채널이 살아 있는지는 `segment_indexed` 로그의 `reason` 분포로 본다(`5` = 훅) | 구조적 — 안전망 제거 금지 |
+| 훅 검출은 사이드카 무중단 구간 한정 | 세션 경계 상태는 사이드카 프로세스 메모리에만 있고, 스풀은 기동 시점 끝(EOF)부터 읽는다. 따라서 **사이드카가 재기동된 창에 걸친 재접속은 훅으로 검출되지 않고** 기존 벽시계 드리프트 판정으로 강등된다. 이미 기록된 행의 `is_discontinuity`를 나중에 고치는 경로는 없다(소급 보정 없음) | 이월 — 체크포인트 파일은 정합 비용이 이득보다 커서 만들지 않았다 |
+| 훅이 이긴 조각은 승격·학습에서 빠진다 | 같은 파일을 훅과 파일 감시가 모두 올리려 하고 먼저 온 쪽이 이긴다. 훅이 이긴 파일은 `ReasonHook`이라 크기 재확인(승격)과 길이 학습 대상에서 제외된다 — 훅 시점의 파일이 이미 최종 크기라는 실측(29/29)에 기댄 결정이다. **업로더(POK-30) 병합 이후 방어선이 옮겨갔다.** `ReasonHook`은 `growthConfirmed`가 참이라 `TailHold` 없이 곧바로 업로드가 요청된다. 그래서 `correctTail`의 유효 창은 "꼬리인 4초"가 아니라 **그 행이 꼬리이면서 아직 `pending`인 구간**(= 워커가 `uploaded`/`failed`로 확정하기 전)이며, 확정된 뒤의 재성장은 교정 없이 `regrow_after_upload_ignored` ERROR로 **관측만** 된다. 실질 방어선은 **업로드 워커의 PUT 직전 크기 재확인**이다 — 꼬리(`IsTail`)의 실물 크기가 장부와 다르면 PUT 자체를 하지 않아 잘린 실물이 S3에 굳지 않고, 마킹은 bytes CAS가 한 번 더 막는다. 다만 쓰기가 PUT 내내 멈춰 있다 재개되는 극단 순서까지는 막지 못한다 | 관측만(YAGNI) — `segment_indexed`의 `duration_ms`·`reason`, 굳음 사고는 `regrow_after_upload_ignored` ERROR로 본다 |
+| 훅 이벤트에 레이트리밋·상태 맵 TTL이 없다 | 스트림별 세션 상태(`pendingOffline`·`lastOnlineAt`·`breaks`)는 경계 큐 상한(64)만 있고 시간 기반 만료가 없다. 스트림 수가 매우 많고 각각 짧게 붙었다 떨어지면 맵 항목이 남는다. 스풀을 폭주시키는 송출자에 대한 방어도 없다 | 이월 — 로컬·소규모에서는 발생하지 않는다. 멀티테넌트 규모에서 재평가 |
+| 스풀·녹화 경로의 심링크 검증 없음 | 인덱서는 훅이 준 경로를 문자열로만 검사한다 — 루트 밖(`..`)이면 거부하지만 심링크를 따라간 결과까지 풀어 보지는 않는다(`EvalSymlinks` 없음). 그 경로로 하는 일은 로컬 `stat`·길이 프로브·인덱스 기록뿐이라 파일이 밖으로 나가지 않는다 | **해소됨** — 파일을 밖으로 내보내는 유일한 지점인 업로더가 `os.Root` 핸들 기반으로만 연다(`cmd/segment-indexer/main.go`의 `os.OpenRoot(SegmentRoot)` → `upload/worker.go`의 `Root.Open(rel)`). 루트 밖으로 풀리는 심링크는 열기 단계에서 거부되고(`path escapes from parent`), 그 실패와 `ELOOP`은 `classifyOpenError`의 기본 갈래에서 거부+격리된다. 정규 파일이 아니면 `IsRegular()`가 따로 막는다 |
+
+### 훅 채널 (POK-74) — 무엇이 켜져 있고 로그를 어떻게 읽나
+
+MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`media/Dockerfile.mtxhook`이 얹은
+`/hooks-bin/mtxhookwrite`), 그 명령이 공유 볼륨의 스풀 파일에 JSON 한 줄을 덧붙인다.
+사이드카는 그 파일을 따라 읽는다. 켜 둔 훅은 3종이다 —
+`runOnOnline`·`runOnOffline`(세션 붙음/끊김) + `runOnRecordSegmentComplete`(조각 닫힘).
+
+- 구명칭 `runOnReady`는 **쓰지 않는다.** v1.19.3에서 그것은 `runOnAvailable`로 매핑되며
+  "읽기 가능" 축이지 세션 축이 아니다.
+- 설정 자리: [`infra/compose/mediamtx.yml`](../infra/compose/mediamtx.yml)의 `pathDefaults`
+  (이 블록은 `all_others`에도 상속된다).
+
+**로그 판독 규칙 — `hook_break_discarded`와 `hook_break_dropped`가 같은 시각에 함께 나오면 한 건의 정리다.**
+`discarded`는 "판정 대상이던 경계 1건이 왜 버려졌는가"(`already_passed`·`no_tail`·`duplicate_path`)이고,
+`dropped`는 "그와 함께 정리된, 세그먼트가 한 건도 없던 더 오래된 경계들"이다.
+**미탐 건수는 `discarded`만 센다** — `dropped`는 애초에 붙일 세그먼트가 없던 경계이므로 미탐이 아니다.
+
+| 로그 키 | 뜻 |
+|---|---|
+| `hook_break_armed` | 재접속 한 쌍(offline→online)이 확인돼 "다음 조각에 표시" 무장 |
+| `hook_break_consumed` | 무장이 실제 조각에 붙었다. 이 줄의 `seq`가 `is_discontinuity=true` 행의 seq다 |
+| `hook_break_discarded` | 무장이 붙지 못하고 버려졌다 = **미탐**. 벽시계 안전망으로 강등된다 |
+| `hook_break_dropped` | 조각이 한 건도 없던 오래된 경계의 정리. 미탐이 아니다 |
+| `hook_spool_missing` | 스풀이 아직 없다. 첫 송출 전이면 정상이며 기동당 1회만 나온다 |
+| `hook_line_invalid` / `hook_line_overflow` / `hook_spool_truncated` | 스풀이 깨졌다는 신호. 평시 0건이어야 한다 |
+| `segment_indexed`의 `reason` | 채널 승자. `5`가 훅이며 이 값이 0건이면 훅 채널이 조용히 죽은 것이다 |
+
+확인 절차는 [`docs/dev-environment.md`](../docs/dev-environment.md)의 "훅 채널 확인"에 있다.
 
 ## segment-indexer 사이드카가 인식하는 환경변수
 
@@ -97,6 +132,9 @@
 | `SEGMENT_FIFO_WARN_LEN` | `256` | 내부 대기줄이 이 길이를 넘으면 경고 |
 | `SEGMENT_FIFO_MAX_LEN` | `4096` | 이 길이를 넘으면 회복 불가로 보고 종료한다. 재기동 후 전수 스캔이 따라잡는다 |
 | `SEGMENT_MAX_WATCH_DIRS` | `1024` | 감시할 디렉토리 수 상한. inotify watch는 커널 자원이라 무한정 늘릴 수 없다. 초과하면 ERROR 1회 후 신규 등록을 무시하며, 파일은 주기 재스캔이 계속 따라잡는다 |
+| `HOOK_SPOOL_PATH` | (빈 값) | MediaMTX 훅이 한 줄씩 덧붙이는 스풀 파일. **빈 값이면 훅 어댑터를 아예 기동하지 않는다** — 판정이 벽시계 드리프트만 쓰는 현행으로 돌아가는 즉시 롤백 스위치다(사이드카만 재기동하면 되고 MediaMTX는 건드리지 않는다). compose 기본값은 `/hooks/events.jsonl` |
+| `HOOK_POLL_INTERVAL` | `200ms` | 스풀을 다시 읽는 주기. 훅이 발화하고 판정에 닿기까지 더해지는 지연의 상한이다 |
+| `HOOK_BREAK_GUARD` | `20ms` | 새 세션 첫 조각 판정의 하한 여유. 파일명 시각 해상도와 훅 기록 시각의 미세 차이만 흡수하며 그 이상의 의미는 없다(실측 짝짓기 오차 ±2ms의 10배). 크게 잡으면 이전 세션의 마지막 조각이 새 세션의 표시를 가로챈다. 0·음수는 기동 거부 |
 
 **S3 업로더(POK-30) — `S3_BUCKET`이 비어 있으면 업로더가 꺼지고 아래 값은 무시된다(단 `SEGMENT_UPLOAD_TAIL_HOLD`만 예외 — 표 안 설명 참조).**
 
@@ -117,7 +155,7 @@
 `AWS_PROFILE`은 `~/.aws` 마운트 폴백을 켤 때만 함께 넣는다 — 마운트 없이 넣으면
 SDK가 존재하지 않는 프로필을 요구해 기동이 죽는다(2026-08-04 실측).
 
-위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 29개). 잘못된 값(숫자 자리에 문자,
+위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 32개). 잘못된 값(숫자 자리에 문자,
 음수, 파싱 불가한 기간)은 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
 `SEGMENT_SUSPECT_BELOW_MS`가 `SEGMENT_EXPECTED_DURATION_MS`보다 크면 기동 단계에서 거부한다.
 
@@ -137,3 +175,51 @@ go test ./internal/index/ -v
 ```
 
 `internal/fmp4meta` 테스트는 `testdata/`의 커밋된 파일만 쓰므로 Docker가 꺼져 있어도 돈다.
+
+`cmd/mtxhookwrite` 테스트는 **바이너리를 직접 빌드해 프로세스 8개를 동시에 띄운다**(줄 섞임 검증).
+`go test`만 있으면 되고 Docker는 필요 없지만, 다른 테스트보다 몇 초 더 걸린다.
+
+## MediaMTX 버전업 체크리스트
+
+**버전을 올리면 `TestPinnedMediaMTXVersionMatchesDockerfile`이 빨간불이 된다. 그 테스트가 이 절로 안내한다.**
+([`internal/mtxhook/version_contract_test.go`](internal/mtxhook/version_contract_test.go) —
+Dockerfile의 `FROM` 태그와 테스트 안 상수 `pinnedMediaMTXVersion`을 대조한다. 상수를 고치는
+행위가 곧 "아래 전제 7개를 새 버전에서 재확인했다"는 서명이다. 실패 메시지에 7개 목록이 그대로 들어 있다.)
+
+버전 고정의 유일한 자리는 [`media/Dockerfile.mtxhook`](Dockerfile.mtxhook)의 `FROM`이다
+(compose의 `image:`가 `build:`로 바뀌면서 옮겨왔다). 훅 파라미터 이름은 버전 사이에 조용히
+바뀌거나 사라질 수 있고, **훅이 실행되지 않아도 아무 오류가 나지 않는다**. 그래서 절차를 고정한다.
+
+### 버전에 묶인 전제 7곳 — 절차보다 먼저 확인한다
+
+버전을 고정하는 자리는 한 곳이지만, **"1.19.3이라서 참인 사실"에 기대는 자리는 아래 7곳**이다.
+전제가 깨져도 예외도 로그도 나지 않는다 — 훅이 조용히 안 돌거나 길이가 조용히 틀릴 뿐이다.
+"닻"은 그 자리를 `git grep`으로 바로 찾기 위한 문구다(줄 번호는 금방 낡아서 적지 않는다).
+
+| # | 자리 (닻) | 무엇이 참이라고 전제하는가 | 어떻게 재확인하는가 |
+|---|---|---|---|
+| 1 | `infra/compose/mediamtx.yml` — `pathDefaults` 블록<br>(닻: `all_others 에도 상속된다`) | 설정 로딩이 `pathDefaults`(모든 경로의 기본값 묶음)를 먼저 복사하므로, 훅 3종을 여기에만 적어도 `all_others`(설정에 이름을 안 적은 모든 경로)에 그대로 붙는다 | 새 이미지를 띄우고 아무 이름(예: `demo`)으로 15초 송출한 뒤 스풀 `/hooks/events.jsonl`에 줄이 쌓이는지 본다. **안 쌓이면 상속이 사라진 것** — 훅 3종을 `paths: all_others:` 아래로 내려 적는다 |
+| 2 | `infra/compose/mediamtx.yml` — 훅 명령 3줄<br>(닻: `이 세 줄에`) | 명령 문자열을 shell 규칙으로 **먼저 쪼갠 뒤** 조각별로 변수를 치환한다. 그래서 `$MTX_PATH`를 넣어도 인자 개수는 안 늘고, 대신 그 인자 하나의 내용이 송출자 제어가 된다 | 업스트림 `internal/externalcmd/cmd_os.go`에서 분해와 치환의 **순서**를 확인한다. 치환이 먼저로 뒤집혔다면 송출자가 경로 이름만으로 인자를 늘릴 수 있다 |
+| 3 | `media/README.md` — 훅 채널 절<br>(닻: `구명칭 runOnReady`) | 구명칭 `runOnReady`는 `runOnAvailable`("읽기 가능" 축)로 매핑되며 세션(Online) 축이 아니다. 그래서 쓰지 않는다 | 3·4는 같은 사실이다. `docker compose logs media \| head -50`에서 deprecated/unknown 파라미터 WARN을 본다. 훅 3종 이름(`runOnOnline`·`runOnOffline`·`runOnRecordSegmentComplete`)이 WARN 없이 살아 있는지가 핵심 |
+| 4 | `media/internal/mtxhook/event.go` — `Kind` 주석<br>(닻: `runOnAvailable 로 매핑`) | 위와 같은 사실을 코드 쪽에 적어 둔 것 | 위 3번과 함께 한 번에 확인한다 |
+| 5 | `media/internal/fmp4meta/probe.go`<br>(닻: `트랙 중 최대 길이`) | `moov/mvhd`(파일 전체 길이가 적힌 상자)의 duration이 "트랙 중 최대 길이"와 일치한다. 이게 어긋나면 인덱스의 `duration_ms`가 조용히 틀린다 | 새 버전이 떨어뜨린 세그먼트를 `ffprobe`(이 코드와 무관한 독립 구현)로 재고, `ProbeDurationMS` 결과와 100ms 안에서 맞는지 대조한다 |
+| 6 | `media/internal/fmp4meta/probe_test.go` + `testdata/`<br>(닻: `채취: MediaMTX`) | 픽스처 3종이 **1.19.3이 `recordPath`로 직접 떨어뜨린 원본**이다. 검증 대상이 MediaMTX의 박스 배치라서 재인코딩본으로는 대체할 수 없다 | 5번 대조가 어긋났을 때만 손댄다 — 새 버전 산출물로 픽스처를 다시 채취하고 오라클(ffprobe 실측값)도 함께 갱신한다. 어긋나지 않으면 그대로 둔다 |
+| 7 | `media/internal/recording/settle.go`<br>(닻: `업스트림 기본값 recordPartDuration`) | 업스트림 기본값 `recordPartDuration` = 1s. 쓰기와 쓰기 사이 공백을 "다 썼다"로 오해하지 않으려면 공백의 2배는 기다려야 하므로, 그 2배가 `SEGMENT_SETTLE_WAIT` 2s의 근거다 | 새 태그의 업스트림 기본 설정 파일(`mediamtx.yml`)에서 `recordPartDuration` 값을 확인한다. **1s보다 커졌으면 `SEGMENT_SETTLE_WAIT`를 그 2배로 올린다** — 안 올리면 절반짜리 파일을 완성으로 판정한다 |
+
+전제는 아니지만 **버전 문자열을 그대로 적어 둔 곳이 2군데** 더 있다. 함께 고친다 —
+[`docs/dev-environment.md`](../docs/dev-environment.md)의 서비스 표와
+[`Dockerfile.mtxhook`](Dockerfile.mtxhook)의 digest pin 안내 주석.
+
+### 절차
+
+1. **`FROM` 변경은 별도 PR로 낸다.** 다른 변경과 섞으면 회귀 원인을 가를 수 없다.
+2. 위 표 7개를 확인한 뒤 **같은 PR에서 `pinnedMediaMTXVersion`을 새 태그로 고친다.**
+   확인 없이 상수만 맞추면 이 장치는 무력해진다 — 상수 수정은 확인했다는 서명이지 형식 절차가 아니다.
+3. 기동 로그에서 **deprecated/unknown 파라미터 WARN**을 확인한다 — `docker compose logs media | head -50`.
+   훅 3종의 이름이 그대로 살아 있는지가 핵심이다.
+4. **스모크**: 15초 송출 후 스풀에 `online`·`segcomplete`·`offline` 3종이 찍히는지 본다
+   (`docs/dev-environment.md`의 "훅 채널 확인").
+5. **재접속 합성**을 다시 돌려 `is_discontinuity=true`가 재접속 지점에 붙는지 확인한다.
+6. `segment_indexed`의 `reason` 분포에 `5`(훅)가 남아 있는지 본다 — 사라졌으면 훅이 안 도는 것이다.
+7. 이상이 있으면 `HOOK_SPOOL_PATH`를 빈 값으로 두고 사이드카만 재기동해 즉시 롤백한다.
+   그 상태로도 인덱싱은 정상이고, 재접속 검출만 현행 수준으로 돌아간다.
