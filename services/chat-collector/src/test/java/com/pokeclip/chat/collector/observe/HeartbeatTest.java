@@ -241,6 +241,62 @@ class HeartbeatTest {
         assertThat(heartbeat.senderThreadNames()).containsExactly("chzzk-ping");
     }
 
+    /**
+     * ping 송신이 실패해도 스케줄러는 계속 돌아야 한다. 예외가 밖으로 나가면
+     * scheduleAtFixedRate가 <b>조용히</b> 멈춰 ping이 영영 안 나가고, 그것이
+     * 정확히 8/1이다 — 오류 로그도 카운터도 없이 서버가 끊는다.
+     */
+    @Test
+    void ping_송신이_실패해도_스케줄러가_멈추지_않는다() throws Exception {
+        behavior.pingIntervalMillis = PING_INTERVAL_MS;
+        behavior.pingTimeoutMillis = PING_TIMEOUT_MS;
+
+        Handshake handshake = openWithSlowHandler(Duration.ZERO);
+        socket.close();                        // 이후 모든 송신이 실패한다
+
+        AtomicLong callbacks = new AtomicLong();
+        heartbeat = Heartbeat.start(socket, handshake, callbacks::incrementAndGet);
+        Thread.sleep(1_500);                   // 송신 주기 400ms — 서너 번 돈다
+
+        assertThat(heartbeat.sendFailureCount())
+                .as("첫 실패에 스케줄러가 죽으면 1에서 멈춘다")
+                .isGreaterThan(1);
+        assertThat(callbacks.get()).isEqualTo(heartbeat.sendFailureCount());
+        assertThat(heartbeat.callbackFailureCount())
+                .as("콜백이 멀쩡한데 실패로 세면 그 카운터는 아무것도 못 가른다")
+                .isZero();
+    }
+
+    /**
+     * 실패 콜백은 catch 블록 안에서 불린다. <b>그것이 던지면 예외가 밖으로 나가
+     * 스케줄러가 멈춘다.</b> 지금은 전부 빈 람다라 안 터지지만, 태스크 9가 붙일
+     * 진짜 콜백(health를 DOWN으로 돌리고 로그를 남기는)이 던지는 순간 실체가 된다.
+     */
+    @Test
+    void 실패_콜백이_던져도_스케줄러가_멈추지_않는다() throws Exception {
+        behavior.pingIntervalMillis = PING_INTERVAL_MS;
+        behavior.pingTimeoutMillis = PING_TIMEOUT_MS;
+
+        Handshake handshake = openWithSlowHandler(Duration.ZERO);
+        socket.close();
+
+        heartbeat = Heartbeat.start(socket, handshake, () -> {
+            throw new IllegalStateException("콜백이 터졌다");
+        });
+        Thread.sleep(1_500);
+
+        assertThat(heartbeat.sendFailureCount())
+                .as("콜백이 던진 예외가 밖으로 나가면 스케줄러가 죽어 1에서 멈춘다")
+                .isGreaterThan(1);
+
+        // 삼킨 자리에 카운터가 없으면 콜백이 매번 터져도 아무 데도 안 남는다.
+        // health를 DOWN으로 돌리는 일이 콜백 안에 있으면, 수집이 죽었는데
+        // health는 UP이고 요약에도 표시가 없는 상태가 된다.
+        assertThat(heartbeat.callbackFailureCount())
+                .as("삼켰으면 세야 한다 — 안 세면 조용한 실패를 우리가 만드는 것이다")
+                .isGreaterThan(1);
+    }
+
     private Handshake openWithSlowHandler(Duration delay) throws Exception {
         return openWith(frame -> {
             if (frame.type() == EngineIoFrame.Type.EVENT && !delay.isZero()) {

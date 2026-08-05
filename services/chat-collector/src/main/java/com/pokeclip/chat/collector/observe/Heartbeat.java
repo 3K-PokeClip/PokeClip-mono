@@ -38,6 +38,8 @@ public final class Heartbeat implements AutoCloseable {
     private final AtomicLong maxPingGapNanos = new AtomicLong();
     private final AtomicLong maxPongGapNanos = new AtomicLong();
     private final AtomicLong sendFailures = new AtomicLong();
+    /** 실패 콜백이 던진 횟수. 삼킨 예외가 남기는 유일한 흔적이라 요약이 이 값을 싣는다. */
+    private final AtomicLong callbackFailures = new AtomicLong();
     private final Set<String> senderThreadNames = new ConcurrentSkipListSet<>();
 
     private Heartbeat() { }
@@ -58,7 +60,17 @@ public final class Heartbeat implements AutoCloseable {
                 // 스케줄러는 계속 돈다. 여기서 예외가 밖으로 나가면
                 // scheduleAtFixedRate가 조용히 멈춰 ping이 영영 안 나간다.
                 heartbeat.sendFailures.incrementAndGet();
-                onSendFailed.run();
+                try {
+                    onSendFailed.run();
+                } catch (RuntimeException callbackFailure) {
+                    // 콜백까지 감싸는 이유는, 이 catch가 없으면 콜백이 던진 예외가
+                    // 위 catch를 지나 밖으로 나가 스케줄러를 죽이기 때문이다.
+                    //
+                    // 삼켰으면 센다. 콜백 안에 health를 DOWN으로 돌리는 일이 있으면,
+                    // 세지 않을 경우 수집이 죽었는데 health는 UP이고 요약에도 표시가
+                    // 없는 상태가 된다 — PRD가 유일한 치명적 실패로 규정한 모양이다.
+                    heartbeat.callbackFailures.incrementAndGet();
+                }
             }
         }, 0, periodMillis, TimeUnit.MILLISECONDS);
 
@@ -88,6 +100,7 @@ public final class Heartbeat implements AutoCloseable {
     public Instant lastPingAt() { return toInstant(lastPingNanos.get()); }
     public Instant lastPongAt() { return toInstant(lastPongNanos.get()); }
     public long sendFailureCount() { return sendFailures.get(); }
+    public long callbackFailureCount() { return callbackFailures.get(); }
     public Set<String> senderThreadNames() { return Set.copyOf(senderThreadNames); }
 
     private static Instant toInstant(long nanos) {
