@@ -88,6 +88,12 @@ class FakeChzzkServerTest {
         assertThat(closed.await(5, TimeUnit.SECONDS))
                 .as("ping을 한 번도 안 보냈는데 서버가 안 끊었다. 사고를 재현할 수 없다")
                 .isTrue();
+        // 양성 대조가 먼저다. 프레임을 한 건도 못 받았다면 noneMatch는 훑을 것이
+        // 없어 그냥 참이 되고, "CLOSE 없이 조용히 끊었다"가 아니라 "아무것도 못
+        // 봤다"를 통과로 읽게 된다.
+        assertThat(frames)
+                .as("핸드셰이크조차 안 왔다면 아래 단언은 아무것도 검사하지 않는다")
+                .isNotEmpty();
         assertThat(frames).noneMatch(f -> f.startsWith("1"));   // CLOSE 프레임도 없이 조용히
     }
 
