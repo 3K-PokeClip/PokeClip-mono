@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 
 /**
  * 30초마다 요약 한 줄. <b>자기 전용 스케줄러를 갖는다.</b>
@@ -36,13 +37,18 @@ public final class SummaryLogger implements AutoCloseable {
 
     private SummaryLogger() { }
 
-    public static SummaryLogger start(CollectionMetrics metrics, Heartbeat heartbeat, Duration period) {
+    /**
+     * @param sinkFailures 삼킨 싱크 예외의 수를 읽어 오는 곳. ChatSession이 들고
+     *                     있는 값이라 공급자로 받는다 — 세션은 재수립마다 바뀐다
+     */
+    public static SummaryLogger start(CollectionMetrics metrics, Heartbeat heartbeat,
+                                      Duration period, LongSupplier sinkFailures) {
         SummaryLogger logger = new SummaryLogger();
         long periodMillis = period.toMillis();
         logger.scheduler.scheduleAtFixedRate(() -> {
             logger.emitterThreadNames.add(Thread.currentThread().getName());
             try {
-                log.info("{}", render(metrics.snapshot(), heartbeat));
+                log.info("{}", render(metrics.snapshot(), heartbeat, sinkFailures.getAsLong()));
             } catch (RuntimeException e) {
                 // 요약이 터져도 스케줄러는 계속 돈다. 여기서 예외가 밖으로 나가면
                 // scheduleAtFixedRate가 조용히 멈춰 요약이 영영 안 나가고,
@@ -54,7 +60,7 @@ public final class SummaryLogger implements AutoCloseable {
     }
 
     /** 순수 함수라 스케줄러 없이도 검사할 수 있다. */
-    public static String render(CollectionMetrics.Snapshot s, Heartbeat heartbeat) {
+    public static String render(CollectionMetrics.Snapshot s, Heartbeat heartbeat, long sinkFailures) {
         return "chat.summary"
                 + " received=" + s.received()
                 + " maxReceiveGap=" + duration(s.maxReceiveGap())
@@ -70,7 +76,8 @@ public final class SummaryLogger implements AutoCloseable {
                 + " system=" + s.systemEvents()
                 + " decodeFailures=" + s.decodeFailures()
                 + " sendFailures=" + heartbeat.sendFailureCount()
-                + " callbackFailures=" + heartbeat.callbackFailureCount();
+                + " callbackFailures=" + heartbeat.callbackFailureCount()
+                + " sinkFailures=" + sinkFailures;
     }
 
     public Set<String> emitterThreadNames() { return Set.copyOf(emitterThreadNames); }

@@ -19,7 +19,10 @@ class SummaryLoggerTest {
             // 하트비트가 조용히 죽는 두 경로. 세기만 하고 안 실으면 아무도 못 본다 —
             // 콜백 안에 health를 DOWN으로 돌리는 일이 있으면 수집이 죽었는데
             // health는 UP이고 요약에도 표시가 없는 상태가 된다.
-            "sendFailures=", "callbackFailures="
+            "sendFailures=", "callbackFailures=",
+            // 싱크가 던져 삼킨 횟수. 수신은 사는데 처리가 통째로 죽은 상태가
+            // 여기 안 실리면 아무 데도 안 남는다.
+            "sinkFailures="
     };
 
     @Test
@@ -27,7 +30,7 @@ class SummaryLoggerTest {
         CollectionMetrics metrics = new CollectionMetrics();
         metrics.recordMessage(new ChatMessage("S1", "ㅋㅋ", 1_000L), 1_100L);
 
-        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest());
+        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(), 0L);
 
         assertThat(line).startsWith("chat.summary ");
         for (String key : REQUIRED) {
@@ -48,11 +51,13 @@ class SummaryLoggerTest {
         metrics.recordDecodeFailure();
         metrics.recordSystemEvent("connected");
 
-        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest());
+        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(), 7L);
 
         assertThat(line).contains("received=2")
                 .contains("decodeFailures=1")
-                .contains("connected=1");
+                .contains("connected=1")
+                // 0을 박아 두면 다른 테스트가 전부 0을 넘기므로 안 걸린다.
+                .contains("sinkFailures=7");
     }
 
     /** 개별 메시지 로그가 0줄이어도 요약이 본문을 흘리면 완료 조건 2번이 깨진다. */
@@ -61,7 +66,7 @@ class SummaryLoggerTest {
         CollectionMetrics metrics = new CollectionMetrics();
         metrics.recordMessage(new ChatMessage("SENDER-NEEDLE", "CONTENT-NEEDLE", 1_000L), 1_100L);
 
-        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest());
+        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(), 0L);
 
         // 양성 대조가 먼저다. 수신 0건이면 바늘이 요약을 지나간 적이 없어
         // doesNotContain 둘이 자동으로 참이 된다 — 아무것도 검사하지 않은 초록불이다.
@@ -78,7 +83,7 @@ class SummaryLoggerTest {
 
         try (LogCaptor captor = new LogCaptor();
              SummaryLogger logger = SummaryLogger.start(metrics, Heartbeat.idleForTest(),
-                     Duration.ofMillis(100))) {
+                     Duration.ofMillis(100), () -> 0L)) {
             Thread.sleep(400);
 
             assertThat(logger.emitterThreadNames())

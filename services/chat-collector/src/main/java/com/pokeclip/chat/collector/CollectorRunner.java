@@ -72,7 +72,12 @@ public class CollectorRunner implements ApplicationRunner {
             ChatSession.Established established = opening.open(properties.establishTimeout());
             heartbeat = Heartbeat.start(established.socket(), established.handshake(),
                     () -> log.warn("chat.session.ping_send_failed"));
-            summaryLogger = SummaryLogger.start(metrics, heartbeat, SUMMARY_PERIOD);
+            // 세션은 재수립마다 바뀌므로 값이 아니라 읽는 길을 넘긴다.
+            summaryLogger = SummaryLogger.start(metrics, heartbeat, SUMMARY_PERIOD,
+                    () -> {
+                        ChatSession current = session;
+                        return current == null ? 0L : current.sinkFailureCount();
+                    });
             status.collecting();
             log.info("chat.session.collecting pingIntervalMs={} sendPeriodMs={}",
                     established.handshake().pingInterval().toMillis(),
