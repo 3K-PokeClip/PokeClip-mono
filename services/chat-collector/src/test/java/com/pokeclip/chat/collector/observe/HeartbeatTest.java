@@ -208,6 +208,21 @@ class HeartbeatTest {
         }
         Thread.sleep(3_000);
 
+        // 사고 구조가 실제로 재현됐다는 양성 대조가 먼저다.
+        //
+        // T1과 부등호가 반대라 같은 성질이 정반대로 작동한다. maxPingGapObserved가
+        // "흘러가는 중인 공백"까지 세므로 ping이 0회면 값이 3초까지 자라는데,
+        // T1은 <= 임계라 빨간불이 되어 보호되고 T12는 > 임계라 초록불이 된다.
+        // 실제로 재 보면 틀린 형태(0회, 3016ms)가 옳은 재현(1회, 1607ms)보다
+        // 두 배 여유 있게 통과한다 — 여유값으로는 사람이 눈치챌 수 없다.
+        //
+        // T12는 T1·T2의 값어치를 보증하는 유일한 근거인데, 이 줄이 없으면
+        // 그 보증서가 자기 위조를 못 잡는다.
+        assertThat(behavior.receivedFrames())
+                .as("사고 구조가 재현되지 않았다 — ping이 한 번도 안 나갔다면 이건 "
+                        + "'ping 0회'를 잰 것이고 회귀는 못 잡는다")
+                .contains("2");
+
         assertThat(behavior.maxPingGapObserved())
                 .as("수신 스레드에 얹었는데도 통과한다면 T1은 8/1 회귀를 못 잡는다")
                 .isGreaterThan(handshake.pingThreshold());
