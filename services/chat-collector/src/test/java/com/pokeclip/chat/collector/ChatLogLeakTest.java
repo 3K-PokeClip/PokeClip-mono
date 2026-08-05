@@ -1,10 +1,13 @@
 package com.pokeclip.chat.collector;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.classic.spi.StackTraceElementProxy;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.observe.Heartbeat;
+import com.pokeclip.chat.collector.observe.SummaryLogger;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -36,6 +39,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ChatLogLeakTest {
 
     private static final Logger log = LoggerFactory.getLogger(ChatLogLeakTest.class);
+
+    private static final String SPRING_WEB_LOGGER = "org.springframework.web";
 
     private static final String CONTENT = needle("chat-content");
     private static final String SENDER = needle("sender-channel-id");
@@ -134,6 +139,83 @@ class ChatLogLeakTest {
         }
     }
 
+    /**
+     * <b>로그로 실제로 나가는 요약 줄</b>을 훑는다. SummaryLoggerTest는 render()를
+     * 직접 부르므로 그 결과가 어떻게 찍히는지는 거기서 안 본다. 완료 조건은
+     * "render가 본문을 안 담는다"가 아니라 "나가는 줄에 본문이 없다"다.
+     *
+     * <p>러너의 요약 주기는 30초라 테스트 안에서 안 찍힌다. 그래서 <b>러너가
+     * 실제로 채운 지표</b>를 그대로 물려 SummaryLogger를 짧은 주기로 돌린다 —
+     * 데이터도 발신 경로(log.info)도 운영과 같고, 다른 것은 주기와 스케줄러
+     * 인스턴스뿐이다. 그 둘은 바늘을 나르지 않는다.
+     */
+    @Test
+    void 로그로_나가는_요약_줄에_본문이_없다() throws Exception {
+        try (LogCaptor captor = new LogCaptor()) {
+            CollectionStatus status = start();
+            assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
+
+            for (int i = 0; i < 5; i++) {
+                behavior.emitChat(chatWithNeedles());
+            }
+            awaitReceived(5);
+
+            try (SummaryLogger logger = SummaryLogger.start(runner.metrics(),
+                    Heartbeat.idleForTest(), Duration.ofMillis(150), () -> 0L)) {
+                awaitSummaryLine(captor);
+                assertThat(logger.emitterThreadNames()).containsExactly("chzzk-summary");
+            }
+
+            String summary = captor.messages().stream()
+                    .filter(m -> m.startsWith("chat.summary "))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("요약 줄이 한 번도 안 찍혔다"));
+
+            // 양성 대조. 수신 0건인 줄을 훑으면 바늘이 지나간 적이 없어 자동으로 참이 된다.
+            assertThat(summary)
+                    .as("이 줄이 바늘을 나른 적이 없다면 아래 검사는 아무것도 안 본다")
+                    .contains("received=5");
+
+            assertNoSecretsIn(summary, SECRETS);
+        }
+    }
+
+    /**
+     * 검사 기준선을 넓힌다. LogCaptor가 root를 INFO로 고정하므로 나머지 검사는
+     * 전부 INFO에서만 돈다.
+     *
+     * <p><b>이 서버에서 DEBUG 유출을 재현하지는 못했다.</b> 실측하니
+     * {@code org.springframework.web.client}는 응답 본문을 안 찍고
+     * ({@code Reading to [java.lang.String]} 한 줄뿐), 나가는 본문이 아예 없으며
+     * (GET 발급 · POST는 쿼리 파라미터), Authorization 헤더는 스프링이 기본으로
+     * 마스킹한다({@code enableLoggingRequestDetails='false'}). auth가 재현한
+     * 유출은 나가는 폼 본문이라 조건이 다르다.
+     *
+     * <p>그래서 "DEBUG면 샌다"를 단언하지 않는다. 대신 <b>DEBUG에서도 바늘이
+     * 안 나온다</b>를 못박는다 — 나중에 구독 요청에 JSON 본문이 생기면
+     * 그때 여기가 빨간불이 된다.
+     */
+    @Test
+    void 스프링_web을_DEBUG로_켜도_바늘이_안_나온다() throws Exception {
+        setLevel(SPRING_WEB_LOGGER, Level.DEBUG);
+        try (LogCaptor captor = new LogCaptor()) {
+            setLevel(SPRING_WEB_LOGGER, Level.DEBUG);   // LogCaptor가 root를 만진 뒤 다시
+
+            CollectionStatus status = start();
+            assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
+            behavior.emitChat(chatWithNeedles());
+            awaitReceived(1);
+
+            assertThat(captor.messages())
+                    .as("DEBUG가 안 켜졌으면 이 검사는 INFO 검사를 한 번 더 한 것뿐이다")
+                    .anyMatch(m -> m.startsWith("GET \"/open/v1/sessions/auth\""));
+
+            assertNoSecretsIn(captor, SECRETS);
+        } finally {
+            setLevel(SPRING_WEB_LOGGER, null);
+        }
+    }
+
     // ── 탐지기 자기검사 셋. 이게 없으면 위 검사 전체가 초록불 장식이다 ────────
 
     @Test
@@ -199,6 +281,18 @@ class ChatLogLeakTest {
                 status);
         runner.start();
         return status;
+    }
+
+    private void awaitSummaryLine(LogCaptor captor) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (captor.messages().stream().noneMatch(m -> m.startsWith("chat.summary "))
+                && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+    }
+
+    private static void setLevel(String name, Level level) {
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(name)).setLevel(level);
     }
 
     private static String chatWithNeedles() {

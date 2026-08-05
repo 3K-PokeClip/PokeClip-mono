@@ -59,6 +59,30 @@ class SessionLifecycleTest {
     }
 
     /**
+     * SYSTEM은 connected·subscribed·unsubscribed·revoked 넷뿐이다.
+     * unsubscribed도 "연결은 살아 있는데 채팅만 안 오는" 상태를 만드는데,
+     * 안 세면 revoked와 구분이 안 돼 원인을 되짚을 수 없다.
+     */
+    @Test
+    void unsubscribed도_요약에_남는다() throws Exception {
+        CollectionStatus status = new CollectionStatus();
+        runner = new CollectorRunner(new ChzzkProperties(
+                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status);
+        runner.start();
+        assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
+
+        behavior.emitSystem("{\"type\":\"unsubscribed\",\"data\":{\"eventType\":\"CHAT\"}}");
+
+        // systemEvents는 누적이라 snapshot()을 반복해도 값이 사라지지 않는다.
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (!runner.metrics().snapshot().systemEvents().containsKey("unsubscribed")
+                && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+        assertThat(runner.metrics().snapshot().systemEvents()).containsKey("unsubscribed");
+    }
+
+    /**
      * 수립 과정의 SYSTEM 둘도 요약에 남아야 한다. revoked만 세고 있으면
      * "구독이 된 적은 있나"를 되짚을 수 없다.
      */
