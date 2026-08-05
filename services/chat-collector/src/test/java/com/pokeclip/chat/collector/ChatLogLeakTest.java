@@ -177,6 +177,36 @@ class ChatLogLeakTest {
         }
     }
 
+    /**
+     * 최종 판정 라인도 유출 검사를 지나야 한다. <b>새 로그 줄이 이 검사를 안 거치면
+     * 여기서 닫은 구멍이 그대로 다시 열린다.</b>
+     */
+    @Test
+    void 최종_판정_라인에_본문이_없다() throws Exception {
+        try (LogCaptor captor = new LogCaptor()) {
+            CollectionStatus status = start();
+            assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
+
+            for (int i = 0; i < 3; i++) {
+                behavior.emitChat(chatWithNeedles());
+            }
+            awaitReceived(3);
+            runner.stop();
+
+            String verdict = captor.messages().stream()
+                    .filter(m -> m.startsWith("chat.session.verdict"))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("판정 라인이 안 나갔다"));
+
+            // 양성 대조. 수신 0건인 줄을 훑으면 바늘이 지나간 적이 없어 자동으로 참이 된다.
+            assertThat(verdict)
+                    .as("이 줄이 바늘을 나른 적이 없다면 아래 검사는 아무것도 안 본다")
+                    .contains("received=3");
+
+            assertNoSecretsIn(verdict, SECRETS);
+        }
+    }
+
     // ── 탐지기 자기검사 셋. 이게 없으면 위 검사 전체가 초록불 장식이다 ────────
 
     @Test

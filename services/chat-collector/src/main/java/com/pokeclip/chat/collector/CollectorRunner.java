@@ -19,6 +19,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 부팅 시 수집을 시작하고 종료 시 역순으로 닫는다.
@@ -41,6 +43,10 @@ public class CollectorRunner implements ApplicationRunner {
     private volatile ChatSession session;
     private volatile Heartbeat heartbeat;
     private volatile SummaryLogger summaryLogger;
+    private volatile Instant collectingSince;
+
+    /** 판정 라인은 종료 경로가 둘이라도 한 번만 나간다. */
+    private final AtomicBoolean verdictLogged = new AtomicBoolean();
 
     public CollectorRunner(ChzzkProperties properties, CollectionStatus status) {
         this.properties = properties;
@@ -87,6 +93,7 @@ public class CollectorRunner implements ApplicationRunner {
                         ChatSession current = session;
                         return current == null ? 0L : current.sinkFailureCount();
                     });
+            collectingSince = Instant.now();
             status.collecting();
             log.info("chat.session.collecting pingIntervalMs={} sendPeriodMs={}",
                     established.handshake().pingInterval().toMillis(),
@@ -107,8 +114,28 @@ public class CollectorRunner implements ApplicationRunner {
         if (status.state() == CollectionStatus.State.STOPPED) {
             return;                       // 이미 사유가 있다. 덮어쓰지 않는다.
         }
-        log.warn("chat.session.stopped reason={}", StopReason.TRANSPORT_CLOSED);
+        log.warn("chat.session.closed reason={}", StopReason.TRANSPORT_CLOSED);
         status.stopped(StopReason.TRANSPORT_CLOSED);
+        logVerdictOnce(StopReason.TRANSPORT_CLOSED);
+    }
+
+    /**
+     * 수집이 끝났을 때 딱 한 번. 종료 경로가 둘이라(전송 절단 · 프로세스 종료)
+     * 가드가 없으면 두 줄이 나가고, 그러면 어느 것이 진짜 끝인지 흐려진다.
+     */
+    private void logVerdictOnce(StopReason reason) {
+        if (!verdictLogged.compareAndSet(false, true)) {
+            return;
+        }
+        ChatSession current = session;
+        Heartbeat beat = heartbeat;
+        Instant since = collectingSince;
+        SummaryLogger.logFinalVerdict(
+                metrics.verdict(),
+                beat == null ? Heartbeat.idleForTest() : beat,
+                current == null ? 0L : current.sinkFailureCount(),
+                since == null ? Duration.ZERO : Duration.between(since, Instant.now()),
+                reason);
     }
 
     /**
@@ -155,6 +182,12 @@ public class CollectorRunner implements ApplicationRunner {
 
         Heartbeat beat = heartbeat;
         if (beat != null) beat.close();
+
+        // 판정 라인이 먼저다. 소켓을 닫으면 heartbeat 지표를 못 읽는 것은 아니지만,
+        // 닫는 도중 예외가 나도 판정은 남아야 한다.
+        if (status.state() != CollectionStatus.State.DISABLED) {
+            logVerdictOnce(status.reason());
+        }
         heartbeat = null;
 
         ChatSession current = session;

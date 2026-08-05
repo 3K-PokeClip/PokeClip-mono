@@ -80,6 +80,44 @@ public final class SummaryLogger implements AutoCloseable {
                 + " sinkFailures=" + sinkFailures;
     }
 
+    /**
+     * 수집이 끝났을 때 한 줄. <b>30초 요약은 창 값이라 이 줄이 없으면 판정하려고
+     * 20줄을 뒤져야 한다.</b> 여기 값은 전부 세션 전체 누적이다.
+     *
+     * <p>수립조차 못 했을 때도 나와야 하므로 static이다 — 그때는 SummaryLogger
+     * 인스턴스가 아예 없다.
+     *
+     * <p>요약과 같은 규칙이다. 본문·작성자 식별자·닉네임·토큰은 어느 필드에도 없다.
+     */
+    public static void logFinalVerdict(CollectionMetrics.Verdict verdict, Heartbeat heartbeat,
+                                       long sinkFailures, Duration collectedFor, Object stopReason) {
+        log.info("{}", renderVerdict(verdict, heartbeat, sinkFailures, collectedFor, stopReason));
+    }
+
+    /** 순수 함수라 로그 없이도 검사할 수 있다. */
+    public static String renderVerdict(CollectionMetrics.Verdict v, Heartbeat heartbeat,
+                                       long sinkFailures, Duration collectedFor, Object stopReason) {
+        return "chat.session.verdict"
+                + " received=" + v.totalReceived()
+                + " collectedFor=" + duration(collectedFor)
+                + " lastReceivedAt=" + instant(v.lastReceivedAt())
+                + " maxReceiveGap=" + duration(v.maxReceiveGap())
+                + " maxPingGap=" + duration(heartbeat.maxPingGap())
+                + " maxPongGap=" + duration(heartbeat.maxPongGap())
+                + " orderViolations=" + v.orderViolations()
+                + " delayMin=" + duration(v.delayMin())
+                + " delayMedian=" + duration(v.delayMedian())
+                + " delayMax=" + duration(v.delayMax())
+                + " delaySamples=" + v.delaySamples()
+                + " system=" + v.systemEvents()
+                + " decodeFailures=" + v.decodeFailures()
+                + " sendFailures=" + heartbeat.sendFailureCount()
+                + " callbackFailures=" + heartbeat.callbackFailureCount()
+                + " sinkFailures=" + sinkFailures
+                // 왜 끝났는지가 없으면 "정상 종료"와 "조용히 끊겼다"가 같은 줄이 된다.
+                + " reason=" + (stopReason == null ? "SHUTDOWN" : stopReason);
+    }
+
     public Set<String> emitterThreadNames() { return Set.copyOf(emitterThreadNames); }
 
     private static String duration(Duration d) {

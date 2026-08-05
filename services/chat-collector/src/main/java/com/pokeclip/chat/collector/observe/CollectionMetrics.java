@@ -37,6 +37,32 @@ public final class CollectionMetrics {
             long decodeFailures
     ) { }
 
+    /**
+     * 세션 전체 누적. 30초 요약이 창 값이라 <b>끝났을 때 20줄을 뒤지지 않으려면</b>
+     * 이 한 줄이 있어야 한다. 창을 비워도 여기 값은 안 지운다.
+     *
+     * @param delaySamples 중앙값을 낸 표본 수. {@code totalReceived}보다 작으면
+     *                     상한에 걸려 잘린 것이고, 그때 중앙값은 앞부분의 값이다
+     */
+    public record Verdict(
+            long totalReceived,
+            Instant lastReceivedAt,
+            Duration maxReceiveGap,
+            long orderViolations,
+            Duration delayMin,
+            Duration delayMedian,
+            Duration delayMax,
+            long delaySamples,
+            Map<String, Long> systemEvents,
+            long decodeFailures
+    ) { }
+
+    /**
+     * 누적 지연 표본의 상한. 없으면 오래 도는 프로세스에서 무한정 쌓인다.
+     * 10분 실측이 186건이었으므로 이 값이면 며칠을 돌려도 안 닿는다.
+     */
+    private static final int DELAY_SAMPLE_LIMIT = 100_000;
+
     private final Object lock = new Object();
 
     // 창 단위 — snapshot()에서 비운다
@@ -53,14 +79,21 @@ public final class CollectionMetrics {
     private long previousReceivedAtMillis;
     private long previousMessageTimeMillis;
 
+    // 누적 — 최종 판정 라인이 쓴다. 창 값과 같은 이름이지만 안 비운다.
+    private final List<Long> totalDelaysMillis = new ArrayList<>();
+    private long totalMaxReceiveGapMillis;
+    private long totalOrderViolations;
+    private long totalDecodeFailures;
+
     public void recordMessage(ChatMessage message, long receivedAtMillis) {
         synchronized (lock) {
             received++;
             totalReceived++;
 
             if (previousReceivedAtMillis > 0) {
-                maxReceiveGapMillis = Math.max(maxReceiveGapMillis,
-                        receivedAtMillis - previousReceivedAtMillis);
+                long gap = receivedAtMillis - previousReceivedAtMillis;
+                maxReceiveGapMillis = Math.max(maxReceiveGapMillis, gap);
+                totalMaxReceiveGapMillis = Math.max(totalMaxReceiveGapMillis, gap);
             }
             previousReceivedAtMillis = receivedAtMillis;
             lastReceivedAtMillis = receivedAtMillis;
@@ -69,16 +102,42 @@ public final class CollectionMetrics {
             if (previousMessageTimeMillis > 0
                     && message.messageTimeMillis() < previousMessageTimeMillis) {
                 orderViolations++;
+                totalOrderViolations++;
             }
             previousMessageTimeMillis = message.messageTimeMillis();
 
-            delaysMillis.add(receivedAtMillis - message.messageTimeMillis());
+            long delay = receivedAtMillis - message.messageTimeMillis();
+            delaysMillis.add(delay);
+            if (totalDelaysMillis.size() < DELAY_SAMPLE_LIMIT) {
+                totalDelaysMillis.add(delay);
+            }
         }
     }
 
     public void recordDecodeFailure() {
         synchronized (lock) {
             decodeFailures++;
+            totalDecodeFailures++;
+        }
+    }
+
+    /** 세션 전체 누적. 창을 몇 번 비웠든 값이 남는다. */
+    public Verdict verdict() {
+        synchronized (lock) {
+            List<Long> sorted = new ArrayList<>(totalDelaysMillis);
+            sorted.sort(null);
+
+            return new Verdict(
+                    totalReceived,
+                    lastReceivedAtMillis == 0 ? null : Instant.ofEpochMilli(lastReceivedAtMillis),
+                    Duration.ofMillis(totalMaxReceiveGapMillis),
+                    totalOrderViolations,
+                    at(sorted, 0),
+                    at(sorted, sorted.size() / 2),
+                    at(sorted, sorted.size() - 1),
+                    sorted.size(),
+                    Map.copyOf(systemEvents),
+                    totalDecodeFailures);
         }
     }
 
