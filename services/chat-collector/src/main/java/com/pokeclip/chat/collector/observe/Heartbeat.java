@@ -1,0 +1,101 @@
+package com.pokeclip.chat.collector.observe;
+
+import com.pokeclip.chat.collector.engineio.EngineIoSocket;
+import com.pokeclip.chat.collector.engineio.Handshake;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Set;
+import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+
+/**
+ * ping을 보내는 전용 스케줄러.
+ *
+ * <p><b>이 스케줄러에는 ping 외의 어떤 작업도 얹지 않는다.</b> 2026-08-01 사고의
+ * 원인이 정확히 그것이다 — ping 전송이 수신 처리와 같은 스레드에 얹혀 있었고,
+ * 채팅이 몰리자 74초간 한 번도 못 나갔다. 서버는 조용히 끊었고 오류 로그는
+ * 0줄이었다. 요약 로그·통계 집계를 여기 얹고 싶어지면 그때가 사고를
+ * 재현하는 순간이다. SummaryLogger가 자기 스케줄러를 따로 갖는 이유다.
+ *
+ * <p>주기와 임계는 전부 핸드셰이크에서 파생한다. 25000을 박으면 치지직이
+ * 값을 바꾸는 날 조용히 죽는다.
+ */
+public final class Heartbeat implements AutoCloseable {
+
+    private final ScheduledExecutorService scheduler =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "chzzk-ping");
+                t.setDaemon(true);
+                return t;
+            });
+
+    private final AtomicLong lastPingNanos = new AtomicLong();
+    private final AtomicLong lastPongNanos = new AtomicLong();
+    private final AtomicLong maxPingGapNanos = new AtomicLong();
+    private final AtomicLong maxPongGapNanos = new AtomicLong();
+    private final AtomicLong sendFailures = new AtomicLong();
+    private final Set<String> senderThreadNames = new ConcurrentSkipListSet<>();
+
+    private Heartbeat() { }
+
+    public static Heartbeat start(EngineIoSocket socket, Handshake handshake, Runnable onSendFailed) {
+        Heartbeat heartbeat = new Heartbeat();
+        long now = System.nanoTime();
+        heartbeat.lastPingNanos.set(now);
+        heartbeat.lastPongNanos.set(now);
+
+        long periodMillis = handshake.sendPeriod().toMillis();
+        heartbeat.scheduler.scheduleAtFixedRate(() -> {
+            heartbeat.senderThreadNames.add(Thread.currentThread().getName());
+            try {
+                socket.sendPing();
+                heartbeat.mark(heartbeat.lastPingNanos, heartbeat.maxPingGapNanos);
+            } catch (RuntimeException e) {
+                // 스케줄러는 계속 돈다. 여기서 예외가 밖으로 나가면
+                // scheduleAtFixedRate가 조용히 멈춰 ping이 영영 안 나간다.
+                heartbeat.sendFailures.incrementAndGet();
+                onSendFailed.run();
+            }
+        }, 0, periodMillis, TimeUnit.MILLISECONDS);
+
+        return heartbeat;
+    }
+
+    /** 수신 스레드가 부른다. */
+    public void recordPong() {
+        mark(lastPongNanos, maxPongGapNanos);
+    }
+
+    private void mark(AtomicLong lastNanos, AtomicLong maxGapNanos) {
+        long now = System.nanoTime();
+        long gap = now - lastNanos.getAndSet(now);
+        maxGapNanos.accumulateAndGet(gap, Math::max);
+    }
+
+    public Duration maxPingGap() { return gap(maxPingGapNanos, lastPingNanos); }
+    public Duration maxPongGap() { return gap(maxPongGapNanos, lastPongNanos); }
+
+    /** 마지막 이후 흘러가는 중인 공백도 센다. 안 그러면 완전히 멈춘 상태가 0으로 보인다. */
+    private Duration gap(AtomicLong maxGapNanos, AtomicLong lastNanos) {
+        long running = System.nanoTime() - lastNanos.get();
+        return Duration.ofNanos(Math.max(maxGapNanos.get(), running));
+    }
+
+    public Instant lastPingAt() { return toInstant(lastPingNanos.get()); }
+    public Instant lastPongAt() { return toInstant(lastPongNanos.get()); }
+    public long sendFailureCount() { return sendFailures.get(); }
+    public Set<String> senderThreadNames() { return Set.copyOf(senderThreadNames); }
+
+    private static Instant toInstant(long nanos) {
+        return Instant.now().minusNanos(System.nanoTime() - nanos);
+    }
+
+    @Override
+    public void close() {
+        scheduler.shutdownNow();
+    }
+}
