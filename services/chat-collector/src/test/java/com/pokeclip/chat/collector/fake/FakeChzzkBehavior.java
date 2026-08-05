@@ -99,6 +99,22 @@ public class FakeChzzkBehavior {
         }
     }
 
+    /**
+     * 서버가 조용히 끊는다. ping이 제때 오는 정상 상태에서도 끊어야 하는
+     * 테스트가 있어 리퍼와 별도로 둔다 — POK-86(강제 절단 후 재연결)이 그대로 쓴다.
+     */
+    public void closeSession() {
+        WebSocketSession s = session.get();
+        if (s == null || !s.isOpen()) {
+            throw new IllegalStateException("가짜 서버에 열린 세션이 없다. 끊을 것이 없다");
+        }
+        try {
+            s.close(org.springframework.web.socket.CloseStatus.NORMAL);
+        } catch (Exception e) {
+            throw new IllegalStateException("가짜 서버 절단 실패", e);
+        }
+    }
+
     void markPingReceived() {
         long now = System.nanoTime();
         long gap = now - lastPingNanos.getAndSet(now);

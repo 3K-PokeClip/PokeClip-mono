@@ -1,0 +1,168 @@
+package com.pokeclip.chat.collector;
+
+import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
+import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.health.contributor.Status;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.core.env.Environment;
+import org.springframework.test.context.ActiveProfiles;
+
+import java.time.Duration;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+@SpringBootTest
+@ActiveProfiles("test")
+class CollectorConfigTest {
+
+    @Autowired CollectorHealth health;
+    @Autowired CollectionStatus status;
+    @Autowired Environment environment;
+
+    /**
+     * T8. 기본이 켜짐이면 CI·남의 로컬이 뜰 때마다 붙으려 하고
+     * Access Token당 연결 상한 3개를 말없이 먹는다.
+     */
+    @Test
+    void 기본값은_꺼짐이고_아무_데도_붙지_않는다() {
+        assertThat(environment.getProperty("pokeclip.chzzk.enabled", Boolean.class, false)).isFalse();
+        assertThat(status.state()).isEqualTo(CollectionStatus.State.DISABLED);
+        assertThat(health.health().getStatus()).isEqualTo(Status.UP);
+        assertThat(health.health().getDetails()).containsEntry("status", "disabled");
+    }
+
+    /**
+     * T14. 단수형 spring.http.client.*는 4.0.0부터 아무것도 바인딩하지 않는다 —
+     * 오타를 내면 에러 없이 타임아웃이 사라지고, 세션 발급이 영영 매달린다.
+     * auth의 GoogleTimeoutTest와 같은 이유로 바인딩 결과를 직접 본다.
+     */
+    @Test
+    void HTTP_타임아웃이_실제로_바인딩됐다() {
+        assertThat(environment.getProperty("spring.http.clients.connect-timeout"))
+                .as("복수형 clients가 맞다. 단수형은 조용히 무시된다")
+                .isNotNull();
+        assertThat(environment.getProperty("spring.http.clients.read-timeout")).isNotNull();
+        assertThat(environment.getProperty("spring.http.client.connect-timeout"))
+                .as("단수형이 적혀 있으면 그쪽이 무시되는 줄이다")
+                .isNull();
+    }
+
+    /**
+     * `enabled` 기본값이 false라 `CollectorRunner`는 아무도 안 도는 코드로 남기
+     * 쉽다. 실제로 켰을 때 도는지, 실패했을 때 사유가 남고 health가 DOWN이
+     * 되는지를 여기서 못박는다 — <b>그 상태가 이 카드가 막으려는 실패 양식이다.</b>
+     *
+     * <p>부팅 순서 때문에 `@SpringBootTest`로는 가짜 서버 포트를 프로퍼티에 못
+     * 넣는다. 그래서 러너를 직접 조립해 부른다.
+     */
+    @Nested
+    @FakeChzzkTest
+    class 러너 {
+
+        @LocalServerPort int port;
+        @Autowired FakeChzzkBehavior behavior;
+
+        private CollectorRunner runner;
+
+        /** 앞 테스트가 먹은 auth 호출이 남으면 authCallCount 단언이 뒤집힌다. */
+        @AfterEach
+        void 각_테스트마다_정리한다() {
+            if (runner != null) runner.stop();
+            behavior.reset();
+        }
+
+        @Test
+        void 켜면_수집이_시작되고_health가_UP이다() {
+            CollectionStatus status = new CollectionStatus();
+            runner = runnerFor(status, true);
+
+            runner.start();
+
+            assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
+            assertThat(new CollectorHealth(status).health().getStatus()).isEqualTo(Status.UP);
+
+            // 양성 대조. 상태만 COLLECTING으로 바꾸고 아무 데도 안 붙는 러너도
+            // 위 두 줄을 통과한다. 수립 절차를 실제로 탔다는 증거가 필요하다.
+            assertThat(behavior.authCallCount())
+                    .as("세션 발급을 안 불렀다면 붙은 적이 없고 COLLECTING은 거짓말이다")
+                    .isEqualTo(1);
+            assertThat(behavior.handshakeQuery()).contains("EIO=3");
+        }
+
+        @Test
+        void 세션_발급이_401이면_STOPPED에_사유가_남고_health가_DOWN이다() {
+            behavior.authStatus = 401;
+            CollectionStatus status = new CollectionStatus();
+
+            runner = runnerFor(status, true);
+            runner.start();
+
+            assertThat(status.state()).isEqualTo(CollectionStatus.State.STOPPED);
+            assertThat(status.reason()).isEqualTo(StopReason.SESSION_AUTH_FAILED);
+
+            var health = new CollectorHealth(status).health();
+            assertThat(health.getStatus()).isEqualTo(Status.DOWN);
+            assertThat(health.getDetails()).containsEntry("reason", "SESSION_AUTH_FAILED");
+
+            // 조용한 재시도 루프를 만들지 않는다. 재연결은 POK-86이다.
+            assertThat(behavior.authCallCount()).isEqualTo(1);
+        }
+
+        /**
+         * 서버가 조용히 끊었을 때가 2026-08-01의 마지막 장면이다. 그때 상태가
+         * COLLECTING으로 남아 health가 UP이면, 수집이 죽었는데 배포도 헬스체크도
+         * 통과하는 상태가 된다 — 이 카드가 막으려는 바로 그 실패다.
+         */
+        @Test
+        void 전송이_끊기면_STOPPED에_사유가_남고_health가_DOWN이_된다() throws Exception {
+            CollectionStatus status = new CollectionStatus();
+            runner = runnerFor(status, true);
+            runner.start();
+            assertThat(status.state())
+                    .as("붙지도 않았다면 아래에서 끊는 것은 아무 의미가 없다")
+                    .isEqualTo(CollectionStatus.State.COLLECTING);
+
+            behavior.closeSession();
+
+            long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (status.state() != CollectionStatus.State.STOPPED && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+
+            assertThat(status.state()).isEqualTo(CollectionStatus.State.STOPPED);
+            assertThat(status.reason()).isEqualTo(StopReason.TRANSPORT_CLOSED);
+            assertThat(new CollectorHealth(status).health().getStatus()).isEqualTo(Status.DOWN);
+        }
+
+        /** 꺼져 있으면 붙지 않는다. 상태 문자열만 맞추는 것으로는 부족하다. */
+        @Test
+        void 꺼져_있으면_세션_발급조차_부르지_않는다() {
+            CollectionStatus status = new CollectionStatus();
+            runner = runnerFor(status, false);
+
+            runner.start();
+
+            assertThat(status.state()).isEqualTo(CollectionStatus.State.DISABLED);
+            assertThat(behavior.authCallCount()).isZero();
+        }
+
+        private CollectorRunner runnerFor(CollectionStatus status, boolean enabled) {
+            var props = new ChzzkProperties(enabled, "test-token",
+                    "http://localhost:" + port, Duration.ofSeconds(5));
+            return new CollectorRunner(props, status);
+        }
+    }
+
+    /** DEBUG는 안전지대가 아니다. auth와 같은 방어선을 여기도 박는다. */
+    @Test
+    void 스프링_web_로거_레벨이_설정에_박혀_있다() {
+        String level = environment.getProperty("logging.level.org.springframework.web");
+        assertThat(level).as("root를 내려도 버티려면 구체 로거에 박혀 있어야 한다").isNotNull();
+        assertThat(level).isEqualToIgnoringCase("info");
+    }
+}
