@@ -195,8 +195,8 @@ public class CollectorRunner implements ApplicationRunner {
             // 구독을 반납하고 끊는다고 알린다. 안 하면 세션 반납이 우리가 아니라
             // 서버가 죽은 전송을 알아채는 때에 달리고, 실측에서 10초와 4분 42초로
             // 갈렸다. 연결 상한이 3개라 짧은 간격의 재시작 세 번이면 막힌다.
-            boolean released = current.releaseAndClose();
-            log.info("chat.session.released subscription={}", released ? "returned" : "skipped");
+            ChatSession.Release released = current.releaseAndClose();
+            log.info("chat.session.released subscription={}", released);
         }
         session = null;
     }

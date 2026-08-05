@@ -34,6 +34,13 @@ public class FakeChzzkBehavior {
     public volatile boolean disconnectWhenPingMissing = true;
     /** 세션 발급 REST가 돌려줄 상태. 401이면 T9(만료 토큰). */
     public volatile int authStatus = 200;
+    /**
+     * 구독 반납 REST가 돌려줄 상태. 200이 아니면 반납이 실패한다.
+     * <b>이 스위치가 없으면 반납 실패 갈래를 밟는 테스트가 0개다</b> —
+     * 예외가 종료 훅 밖으로 나가면 소켓 닫기가 통째로 건너뛰어진다는
+     * try/catch의 존재 이유가 무검사로 남는다.
+     */
+    public volatile int unsubscribeStatus = 200;
 
     private final List<String> received = new CopyOnWriteArrayList<>();
     private final AtomicReference<String> handshakeQuery = new AtomicReference<>("");
@@ -194,6 +201,7 @@ public class FakeChzzkBehavior {
         answerPong = true;
         disconnectWhenPingMissing = true;
         authStatus = 200;
+        unsubscribeStatus = 200;
     }
 
     private void awaitSessionClosed() {

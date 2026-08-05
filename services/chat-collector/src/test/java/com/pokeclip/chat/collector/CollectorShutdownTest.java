@@ -104,6 +104,38 @@ class CollectorShutdownTest {
                 .isTrue();
     }
 
+    /**
+     * 반납 실패 갈래. <b>여기가 없으면 이 갈래를 밟는 테스트가 0개고</b>,
+     * unsubscribeChatQuietly의 try/catch를 지워도 빨간불이 안 난다 —
+     * 예외가 종료 훅 밖으로 나가면 소켓 닫기가 통째로 건너뛰어진다는
+     * 그 catch의 존재 이유가 무검사로 남는다.
+     */
+    @Test
+    void 반납이_실패해도_소켓을_닫고_사유를_따로_남긴다() throws Exception {
+        behavior.unsubscribeStatus = 500;
+        ConfigurableApplicationContext context = bootCollector();
+        assertThat(context.getBean(CollectionStatus.class).state())
+                .isEqualTo(CollectionStatus.State.COLLECTING);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            context.close();
+
+            // skipped 하나로 뭉뚱그리면 "반납할 세션 키가 없었다"(수립 실패)와
+            // "반납을 보냈는데 실패했다"를 아무도 못 가른다.
+            assertThat(captor.messages())
+                    .as("반납이 매번 터져도 수립 실패와 같은 줄이 나가면 원인을 못 찾는다")
+                    .contains("chat.session.released subscription=failed");
+        }
+
+        // 양성 대조. 반납을 아예 안 보냈다면 실패 갈래를 밟은 것이 아니다.
+        assertThat(behavior.unsubscribeCallCount()).isEqualTo(1);
+
+        awaitClosedByServer();
+        assertThat(behavior.closedSessionCount())
+                .as("반납이 터졌다고 소켓 닫기를 건너뛰면 서버는 우리가 살아 있다고 본다")
+                .isEqualTo(1);
+    }
+
     private ConfigurableApplicationContext bootCollector() {
         // 명령행 인자로 넘긴다. .properties()는 기본값 소스라 우선순위가 가장 낮아
         // application-test.yml의 enabled: false에 진다 — 실제로 그렇게 됐다.

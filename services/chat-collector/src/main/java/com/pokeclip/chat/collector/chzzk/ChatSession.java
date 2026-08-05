@@ -48,16 +48,39 @@ public class ChatSession implements AutoCloseable {
     public String sessionKey() { return currentSessionKey.get(); }
 
     /**
+     * 구독 반납의 결말. <b>{@code SKIPPED}와 {@code FAILED}를 한 값으로 묶으면
+     * "반납할 세션 키가 없었다"(수립 실패)와 "반납을 보냈는데 실패했다"가 같은
+     * 로그 한 줄이 되어 아무도 못 가른다.</b>
+     */
+    public enum Release {
+        RETURNED("returned"),
+        FAILED("failed"),
+        SKIPPED("skipped");
+
+        private final String label;
+
+        Release(String label) { this.label = label; }
+
+        @Override
+        public String toString() { return label; }
+    }
+
+    /**
      * 구독을 반납하고 소켓을 닫는다. 반납이 먼저다 — 소켓을 먼저 닫으면
      * 서버가 세션을 정리하는 중이라 반납이 무의미해질 수 있다.
      *
-     * @return 반납 요청이 200으로 끝났으면 true. 실패해도 소켓은 닫는다
+     * @return 반납의 결말. <b>어느 결말이든 소켓은 닫는다</b>
      */
-    public boolean releaseAndClose() {
+    public Release releaseAndClose() {
         String key = currentSessionKey.getAndSet(null);
-        boolean released = key != null && !key.isBlank() && client.unsubscribeChatQuietly(key);
+        Release result;
+        if (key == null || key.isBlank()) {
+            result = Release.SKIPPED;
+        } else {
+            result = client.unsubscribeChatQuietly(key) ? Release.RETURNED : Release.FAILED;
+        }
         close();
-        return released;
+        return result;
     }
 
     public void onFrame(Consumer<EngineIoFrame> sink) { this.frameSink = sink; }

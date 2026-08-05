@@ -108,7 +108,13 @@ public class FakeChzzkServer implements WebSocketConfigurer {
 
         @PostMapping("/open/v1/sessions/events/unsubscribe/chat")
         public ResponseEntity<String> unsubscribe(@RequestParam String sessionKey) {
+            // 실패해도 도착한 사실은 센다. 안 세면 "왔는데 터졌다"와 "아예 안 왔다"가
+            // 같아 보인다.
             behavior.countUnsubscribeCall();
+            if (behavior.unsubscribeStatus != 200) {
+                return ResponseEntity.status(behavior.unsubscribeStatus)
+                        .body("{\"code\":500,\"message\":\"Internal Error\",\"content\":null}");
+            }
             return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
         }
     }
