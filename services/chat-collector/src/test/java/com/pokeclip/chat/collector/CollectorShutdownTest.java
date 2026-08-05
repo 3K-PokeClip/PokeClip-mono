@@ -59,6 +59,14 @@ class CollectorShutdownTest {
             assertThat(captor.messages())
                     .as("판정 라인이 종료 경로에서 안 나오면 무엇을 수집했는지 알 길이 없다")
                     .anyMatch(m -> m.startsWith("chat.session.verdict"));
+
+            // 정상 종료의 사유값을 아무 테스트도 안 봤다. 값을 보는 것은
+            // TRANSPORT_CLOSED·SESSION_AUTH_FAILED 둘뿐이라, null → "SHUTDOWN"
+            // 분기를 "UNKNOWN"으로 바꿔도 전부 초록이었다.
+            assertThat(captor.messages())
+                    .as("정상 종료의 사유가 없으면 조용히 끊긴 것과 같은 줄이 된다")
+                    .anyMatch(m -> m.startsWith("chat.session.verdict")
+                            && m.contains("reason=SHUTDOWN"));
         }
 
         assertThat(behavior.unsubscribeCallCount())
