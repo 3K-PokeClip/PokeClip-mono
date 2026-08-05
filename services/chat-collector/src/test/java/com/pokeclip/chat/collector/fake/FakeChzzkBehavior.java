@@ -151,7 +151,20 @@ public class FakeChzzkBehavior {
 
     void countUnsubscribeCall() { unsubscribeCalls.incrementAndGet(); }
 
+    /**
+     * <b>앞 접속이 끝난 것을 서버가 관측할 때까지 기다린 뒤 지운다.</b>
+     * 클라이언트의 close()가 보내는 종료 프레임 "1"은 서버에 비동기로 도착하는데,
+     * 안 기다리고 지우면 늦게 도착한 "1"이 다음 테스트의 receivedFrames()에 남는다.
+     * 같은 창이 ping "2"에도 열려 있어 건수 단언이 부풀 수도 있다.
+     *
+     * <p>프레임은 종료보다 먼저 같은 스트림으로 오므로, 서버가 종료를 관측했다면
+     * 그 앞의 프레임은 이미 record()를 지났다.
+     *
+     * <p>안 닫고 끝내는 테스트는 여기서 시한을 통째로 쓴다. 그래서
+     * FakeChzzkServerTest가 자기 소켓을 tearDown에서 끊는다.
+     */
     public void reset() {
+        awaitSessionClosed();
         received.clear();
         authCalls.set(0);
         unsubscribeCalls.set(0);
@@ -167,6 +180,18 @@ public class FakeChzzkBehavior {
         answerPong = true;
         disconnectWhenPingMissing = true;
         authStatus = 200;
+    }
+
+    private void awaitSessionClosed() {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (session.get() != null && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
     }
 
     private static String escape(String json) {

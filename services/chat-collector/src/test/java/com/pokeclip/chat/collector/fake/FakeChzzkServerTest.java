@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.fake;
 
+import com.pokeclip.chat.collector.engineio.EngineIoSocket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,8 +33,16 @@ class FakeChzzkServerTest {
      * 두면, 값을 직접 세팅하지 않는 테스트가 하나 생기는 날 핸드셰이크가 그 값을
      * 광고해 파생 임계가 통째로 쪼그라들고 원인이 어디에도 안 보인다.
      */
+    private final List<WebSocket> clients = new CopyOnWriteArrayList<>();
+
+    /**
+     * 여기서 연 날소켓을 먼저 끊는다. reset()이 "서버가 종료를 관측했나"를
+     * 기다리도록 바뀌었으므로, 안 끊고 두면 매 테스트가 그 시한을 통째로 쓴다.
+     */
     @AfterEach
     void tearDown() {
+        clients.forEach(WebSocket::abort);
+        clients.clear();
         behavior.reset();
     }
 
@@ -70,7 +79,7 @@ class FakeChzzkServerTest {
         List<String> frames = new CopyOnWriteArrayList<>();
         CountDownLatch closed = new CountDownLatch(1);
 
-        HttpClient.newHttpClient().newWebSocketBuilder()
+        clients.add(HttpClient.newHttpClient().newWebSocketBuilder()
                 .buildAsync(uri(), new WebSocket.Listener() {
                     @Override public void onOpen(WebSocket ws) { ws.request(1); }
                     @Override public CompletionStage<?> onText(WebSocket ws, CharSequence d, boolean last) {
@@ -83,7 +92,7 @@ class FakeChzzkServerTest {
                         return null;
                     }
                 })
-                .join();
+                .join());
 
         assertThat(closed.await(5, TimeUnit.SECONDS))
                 .as("ping을 한 번도 안 보냈는데 서버가 안 끊었다. 사고를 재현할 수 없다")
@@ -95,6 +104,32 @@ class FakeChzzkServerTest {
                 .as("핸드셰이크조차 안 왔다면 아래 단언은 아무것도 검사하지 않는다")
                 .isNotEmpty();
         assertThat(frames).noneMatch(f -> f.startsWith("1"));   // CLOSE 프레임도 없이 조용히
+    }
+
+    /**
+     * 종료 프레임 "1"은 클라이언트가 close()에서 보내고 <b>서버가 그것을
+     * record()하는 것은 비동기다.</b> reset()이 그것을 안 기다리면 늦게 도착한
+     * "1"이 다음 테스트의 receivedFrames()에 남는다.
+     *
+     * <p>같은 창이 ping "2"에도 열려 있다 — "1"은 마지막 "2" 뒤에 같은 TCP
+     * 스트림으로 나가므로 "1"이 넘어오는 창은 "2"가 넘어오는 창을 포함한다.
+     * 그래서 이건 단순 플레이키가 아니라 HeartbeatTest의 건수 단언이 부풀려진
+     * 값으로 헛통과할 수 있는 구멍이다.
+     *
+     * <p>한 번에 25%로 나던 것이라 시행을 20번 돌린다.
+     */
+    @Test
+    void 앞_세션의_종료_프레임이_reset을_넘어오지_않는다() {
+        for (int i = 0; i < 20; i++) {
+            EngineIoSocket socket = EngineIoSocket.open(uri(), frame -> { }, () -> { });
+
+            assertThat(behavior.receivedFrames())
+                    .as("앞 시행이 닫은 소켓의 프레임이 reset을 넘어왔다 (시행 %d)", i)
+                    .isEmpty();
+
+            socket.close();
+            behavior.reset();
+        }
     }
 
     @Test
@@ -111,7 +146,7 @@ class FakeChzzkServerTest {
     }
 
     private void connect(List<String> frames, CountDownLatch got) {
-        HttpClient.newHttpClient().newWebSocketBuilder()
+        clients.add(HttpClient.newHttpClient().newWebSocketBuilder()
                 .buildAsync(uri(), new WebSocket.Listener() {
                     @Override public void onOpen(WebSocket ws) { ws.request(1); }
                     @Override public CompletionStage<?> onText(WebSocket ws, CharSequence d, boolean last) {
@@ -121,6 +156,6 @@ class FakeChzzkServerTest {
                         return null;
                     }
                 })
-                .join();
+                .join());
     }
 }
