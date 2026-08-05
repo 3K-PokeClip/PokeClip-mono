@@ -21,10 +21,19 @@ public final class ChatEventDecoder {
         if (inner == null) {
             return null;
         }
+        // 시각이 없으면 통째로 버린다. 0을 채워 돌려주면 수신 1건으로 세면서
+        // 전달 지연 분포의 최소값을 약 -56년으로 만들고 순서 위반 건수도 튀게 하는데,
+        // 디코더가 실패라고 말하지 않으니 decodeFailures도 안 오른다.
+        // 안쪽이 객체가 아닌 경우(null·숫자·배열·문자열)도 path가 MissingNode를 줘
+        // 여기서 같이 걸린다.
+        long messageTime = inner.path("messageTime").asLong(0L);
+        if (messageTime <= 0) {
+            return null;
+        }
         return new ChatMessage(
                 inner.path("senderChannelId").asString(""),
                 inner.path("content").asString(""),
-                inner.path("messageTime").asLong(0L));
+                messageTime);
     }
 
     public static SystemEvent decodeSystem(String eventPayload) {
@@ -32,9 +41,13 @@ public final class ChatEventDecoder {
         if (inner == null) {
             return null;
         }
-        return new SystemEvent(
-                inner.path("type").asString(""),
-                inner.path("data").path("sessionKey").asString(""));
+        // 종류가 비면 connected인지 revoked인지 못 가른다 — 세션 수립도
+        // 철회 감지도 이 값 하나로 갈리므로 빈 종류를 통과시키지 않는다.
+        String type = inner.path("type").asString("");
+        if (type.isEmpty()) {
+            return null;
+        }
+        return new SystemEvent(type, inner.path("data").path("sessionKey").asString(""));
     }
 
     private static JsonNode inner(String eventPayload, String expectedName) {

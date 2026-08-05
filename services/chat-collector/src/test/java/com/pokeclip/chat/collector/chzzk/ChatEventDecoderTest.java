@@ -55,6 +55,31 @@ class ChatEventDecoderTest {
         assertThat(ChatEventDecoder.decodeSystem("[\"SYSTEM\"]")).isNull();
     }
 
+    /**
+     * 파싱은 됐는데 쓸 내용이 없는 본문이다. 기본값을 채워 돌려주면 수신 1건으로
+     * 세면서 판정 항목 둘을 조용히 오염시킨다 — messageTime=0은 전달 지연 분포의
+     * 최소값을 약 -56년으로 만들고 순서 위반 건수도 튀게 한다.
+     *
+     * <p>게다가 그때 디코더는 실패라고 말하지 않으므로 decodeFailures도 안 오른다.
+     * 로그 0줄·카운터 0인 채로 지표만 틀리는 것이 이 카드가 막으려는 실패 양식이다.
+     */
+    @Test
+    void 시각이_없는_본문은_null이다() {
+        assertThat(ChatEventDecoder.decodeChat("[\"CHAT\",\"{\\\"content\\\":\\\"x\\\"}\"]")).isNull();
+        // 안쪽이 객체가 아닌 경우도 같은 자리에서 걸린다.
+        assertThat(ChatEventDecoder.decodeChat("[\"CHAT\",\"null\"]")).isNull();
+        assertThat(ChatEventDecoder.decodeChat("[\"CHAT\",\"123\"]")).isNull();
+        assertThat(ChatEventDecoder.decodeChat("[\"CHAT\",\"[]\"]")).isNull();
+        assertThat(ChatEventDecoder.decodeChat("[\"CHAT\",\"\\\"hello\\\"\"]")).isNull();
+    }
+
+    /** 종류가 비면 connected인지 revoked인지 못 가른다. 수립도 T10도 이 값으로 갈린다. */
+    @Test
+    void 종류가_없는_시스템_이벤트는_null이다() {
+        assertThat(ChatEventDecoder.decodeSystem("[\"SYSTEM\",\"{}\"]")).isNull();
+        assertThat(ChatEventDecoder.decodeSystem("[\"SYSTEM\",\"null\"]")).isNull();
+    }
+
     /** SYSTEM 자리에 CHAT이 오면 다른 종류다. 섞으면 sessionKey를 못 받는다. */
     @Test
     void 이벤트_이름이_다르면_null이다() {
