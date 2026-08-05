@@ -52,10 +52,18 @@ public class FakeChzzkBehavior {
      * 재연결은 POK-86이고 이번 카드는 실패하면 사유만 남기고 멈춘다.
      */
     private final AtomicInteger authCalls = new AtomicInteger();
+    private final AtomicInteger unsubscribeCalls = new AtomicInteger();
+    private final AtomicInteger closedSessions = new AtomicInteger();
 
     public List<String> receivedFrames() { return List.copyOf(received); }
     public String handshakeQuery() { return handshakeQuery.get(); }
     public int authCallCount() { return authCalls.get(); }
+
+    /** 종료 시 구독 반납이 실제로 왔는지. 안 오면 세션을 우리 손으로 안 닫은 것이다. */
+    public int unsubscribeCallCount() { return unsubscribeCalls.get(); }
+
+    /** 서버가 관측한 WS 종료 횟수. 클라이언트가 끊는다고 알렸는지를 여기서 본다. */
+    public int closedSessionCount() { return closedSessions.get(); }
 
     /** 마지막 ping 이후 흘러가는 중인 공백도 센다. 안 그러면 완전히 멈춘 상태가 0으로 보인다. */
     public Duration maxPingGapObserved() {
@@ -136,11 +144,18 @@ public class FakeChzzkBehavior {
      * 앞 접속이 늦게 끊기면서 이미 들어온 새 접속을 지우면, 뒤 테스트가
      * "열린 세션이 없다"로 간헐 실패한다. 실제로 그렇게 났다.
      */
-    void forget(WebSocketSession s) { session.compareAndSet(s, null); }
+    void forget(WebSocketSession s) {
+        closedSessions.incrementAndGet();
+        session.compareAndSet(s, null);
+    }
+
+    void countUnsubscribeCall() { unsubscribeCalls.incrementAndGet(); }
 
     public void reset() {
         received.clear();
         authCalls.set(0);
+        unsubscribeCalls.set(0);
+        closedSessions.set(0);
         handshakeQuery.set("");
         // 테스트 클래스들이 스프링 컨텍스트 하나를 공유하므로 이 객체도 하나뿐이다.
         // 앞 클래스가 쓰던 세션을 남겨 두면 뒤 클래스가 그것으로 보내려다 실패한다.

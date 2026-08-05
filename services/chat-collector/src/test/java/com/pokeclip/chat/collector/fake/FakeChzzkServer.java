@@ -98,6 +98,21 @@ public class FakeChzzkServer implements WebSocketConfigurer {
         }
     }
 
+    /** 구독 반납. 안 오면 세션이 우리 손으로 안 닫히고 연결 상한을 먹는다. */
+    @RestController
+    public static class FakeUnsubscribeRest {
+
+        private final FakeChzzkBehavior behavior;
+
+        FakeUnsubscribeRest(FakeChzzkBehavior behavior) { this.behavior = behavior; }
+
+        @PostMapping("/open/v1/sessions/events/unsubscribe/chat")
+        public ResponseEntity<String> unsubscribe(@RequestParam String sessionKey) {
+            behavior.countUnsubscribeCall();
+            return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
+        }
+    }
+
     public static class FakeSocketHandler extends TextWebSocketHandler {
 
         private final FakeChzzkBehavior behavior;

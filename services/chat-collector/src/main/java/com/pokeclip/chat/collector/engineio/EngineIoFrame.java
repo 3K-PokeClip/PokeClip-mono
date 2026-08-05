@@ -10,8 +10,14 @@ public record EngineIoFrame(Type type, String payload) {
 
     public enum Type { OPEN, CLOSE, PING, PONG, CONNECT, EVENT, UNKNOWN }
 
-    /** 우리가 WS로 내보내는 유일한 프레임이다. */
+    /** 수집 중 우리가 내보내는 유일한 프레임이다. */
     public static final String PING_TEXT = "2";
+
+    /**
+     * 종료할 때 한 번 보낸다. 이걸 보내야 서버가 우리 의사로 끊긴 것을 알고
+     * 세션을 곧바로 반납한다 — 안 보내면 죽은 전송을 알아챌 때까지 붙들고 있다.
+     */
+    public static final String CLOSE_TEXT = "1";
 
     public static EngineIoFrame parse(String raw) {
         if (raw == null || raw.isEmpty()) {

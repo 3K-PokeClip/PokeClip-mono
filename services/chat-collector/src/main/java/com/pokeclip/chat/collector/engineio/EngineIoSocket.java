@@ -80,8 +80,24 @@ public final class EngineIoSocket implements AutoCloseable {
         }
     }
 
+    /**
+     * <b>끊는다고 알리고</b> 닫는다. Engine.IO close 프레임 → WS close 핸드셰이크
+     * 순서다. 그냥 abort하면 서버는 죽은 전송을 스스로 알아챌 때까지 세션을
+     * 붙들고 있고, 실측에서 그 시간이 10초와 4분 42초로 갈렸다.
+     *
+     * <p>어느 단계가 실패해도 abort로 확실히 끝낸다 — 종료가 예외로 멈추면
+     * 뒤따르는 정리가 통째로 건너뛰어진다.
+     */
     @Override
     public void close() {
-        webSocket.abort();
+        synchronized (sendLock) {
+            try {
+                webSocket.sendText(EngineIoFrame.CLOSE_TEXT, true).get(1, TimeUnit.SECONDS);
+                webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "").get(1, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                // 이미 죽은 소켓이다. 알릴 상대가 없으니 그냥 끝낸다.
+            }
+            webSocket.abort();
+        }
     }
 }

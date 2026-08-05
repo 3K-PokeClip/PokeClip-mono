@@ -43,6 +43,31 @@ public class ChzzkSessionClient {
         }
     }
 
+    /**
+     * 종료할 때 구독을 반납한다. <b>실패해도 던지지 않는다</b> — 종료 경로에서
+     * 예외가 나가면 뒤따르는 소켓 정리와 판정 라인이 통째로 건너뛰어진다.
+     *
+     * <p>이걸 안 보내면 세션 반납이 우리가 아니라 <b>서버가 죽은 전송을 알아채는
+     * 때</b>에 달린다. 실측에서 같은 종료인데 10초와 4분 42초로 갈렸다.
+     * 연결 상한이 Access Token당 3개라 짧은 간격으로 세 번 재시작하면 막히는데,
+     * 막혔을 때 증상은 {@code connected}가 안 오는 것이라 핸드셰이크 실패와
+     * 구분되지 않는다 — 태스크 1에서 이미 겪었다.
+     *
+     * @return 반납 요청이 200으로 끝났으면 true
+     */
+    public boolean unsubscribeChatQuietly(String sessionKey) {
+        try {
+            restClient.post()
+                    .uri(baseUrl + "/open/v1/sessions/events/unsubscribe/chat?sessionKey=" + sessionKey)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .toBodilessEntity();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** sessionKey는 POST여도 쿼리 파라미터다. Body JSON은 미지원. */
     public void subscribeChat(String sessionKey) {
         try {

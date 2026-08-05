@@ -38,8 +38,27 @@ public class ChatSession implements AutoCloseable {
         this.client = client;
     }
 
+    /** 종료할 때 구독 반납에 쓴다. 수립이 끝나야 채워진다. */
+    private final AtomicReference<String> currentSessionKey = new AtomicReference<>();
+
     /** 삼킨 싱크 예외의 수. 삼키기만 하고 안 세면 조용한 실패를 우리가 만드는 것이다. */
     public long sinkFailureCount() { return sinkFailures.get(); }
+
+    /** 종료할 때 구독을 반납하려면 이 값이 필요하다. 수립 전이면 null이다. */
+    public String sessionKey() { return currentSessionKey.get(); }
+
+    /**
+     * 구독을 반납하고 소켓을 닫는다. 반납이 먼저다 — 소켓을 먼저 닫으면
+     * 서버가 세션을 정리하는 중이라 반납이 무의미해질 수 있다.
+     *
+     * @return 반납 요청이 200으로 끝났으면 true. 실패해도 소켓은 닫는다
+     */
+    public boolean releaseAndClose() {
+        String key = currentSessionKey.getAndSet(null);
+        boolean released = key != null && !key.isBlank() && client.unsubscribeChatQuietly(key);
+        close();
+        return released;
+    }
 
     public void onFrame(Consumer<EngineIoFrame> sink) { this.frameSink = sink; }
     public void onClosed(Runnable sink) { this.closedSink = sink; }
@@ -75,6 +94,7 @@ public class ChatSession implements AutoCloseable {
                     StopReason.CONNECT_FAILED, "핸드셰이크를 읽지 못했다");
         }
 
+        currentSessionKey.set(sessionKey.get());
         client.subscribeChat(sessionKey.get());                     // ④ SUBSCRIBE
         await(subscribed, endAt, EstablishStage.WAITING_SUBSCRIBED);// ⑤
 
