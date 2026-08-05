@@ -59,24 +59,40 @@ class HeartbeatTest {
      */
     private static final Duration SLOW_HANDLER = Duration.ofMillis(PING_INTERVAL_MS * 32 / 10);
 
+    /** 홍수를 밀어 넣고 간격·건수를 재는 창. 아래 {@code MIN_PINGS}가 여기서 나온다. */
+    private static final Duration OBSERVE_WINDOW = Duration.ofSeconds(3);
+
+    /**
+     * 창 안에 나가야 할 ping의 하한. <b>여기도 상수를 박지 않고 파생한다</b> —
+     * 송신 주기가 바뀌면 같이 움직여야 한다.
+     *
+     * <p>창 3초 ÷ 주기 400ms = 7건이 기대값이고, 그 절반인 <b>3건</b>이 하한이다.
+     * 실측(25회씩)은 정상 <b>8건</b>(편차 0) · 사고 <b>1건</b>(편차 0)이라
+     * 양쪽으로 여유가 +5 / −2다.
+     */
+    private static final long MIN_PINGS =
+            OBSERVE_WINDOW.toMillis() / (PING_INTERVAL_MS * 8 / 10) / 2;
+
     private EngineIoSocket socket;
     private Heartbeat heartbeat;
 
     // ─────────────────────────────────────────────────────────────────────
-    // T1이 CI에서 한 번이라도 흔들리면: 배수를 만지지 말고 T1을 지운다.
+    // T1이 흔들리면: 배수를 만지지 말고 간격 단언(isLessThanOrEqualTo)만 지운다.
     //
-    // T1의 여유는 구조상 항상 송신 주기와 같다(관측 ≈ 주기, 임계 = 주기 × 2).
-    // 주기를 키우는 것 말고 늘릴 방법이 없고, CI의 GC·컨테이너 스케줄링은
-    // 어떤 값이든 넘을 수 있다. 간헐 실패하는 테스트는 사람이 곧 무시하게
-    // 되고, 그러면 "고쳐도 빨간불"과 결과가 같아진다.
+    // 원래 처방은 "T1을 통째로 지운다"였다. 2026-08-05에 실측하고 바꿨다.
     //
-    // T1을 지워도 잃는 것이 없다:
-    //   · 회귀 검출 → T12가 한다. 임계의 2.02배, 편차 8ms로 안정적이다
-    //   · "정상 상태에서도 임계를 지킨다" → 태스크 11의 실서버 10분 실측이
-    //     훨씬 강하게 한다. 압축 비율이 아니라 진짜 25초/60초다
+    // 재측정(깨끗한 트리, 25회): 실패 0. 관측 403~413ms / 임계 800ms —
+    // 여유 387ms에 지터가 ±5ms다. 전체 테스트와 함께 돌려도 4~5ms만 밀린다.
+    // 흔들림 1회 관측은 오염된 표본에서 나왔고 재현되지 않았다.
+    // 논리 CPU 18개를 전부 굶겨도 10/10 통과했다(최대 758ms).
     //
-    // 배수를 다시 만지는 것은 금지다. 그 순간 T12의 2배 여유도 같이 흔들리고,
-    // 무엇이 무엇을 지키는지가 흐려진다.
+    // 그래서 지우지 않는다. 다만 그 포화에서 여유가 42ms까지 줄었으므로
+    // 간격 단언은 언젠가 CI에서 흔들릴 수 있다. 그때 이 테스트를 통째로
+    // 버리지 않아도 되게 건수 단언을 함께 뒀다 — 같은 포화에서 간격이
+    // 1.5배 벌어지는 동안 건수는 10회 전부 8건으로 꿈쩍도 안 했다.
+    //
+    // 배수·주기를 만지는 것은 여전히 금지다. 그 순간 T12의 2배 여유도 같이
+    // 흔들리고, 무엇이 무엇을 지키는지가 흐려진다.
     // ─────────────────────────────────────────────────────────────────────
 
     /**
@@ -115,7 +131,7 @@ class HeartbeatTest {
         for (int i = 0; i < 20; i++) {
             behavior.emitChat("{\"content\":\"x\",\"messageTime\":1}");
         }
-        Thread.sleep(3_000);
+        Thread.sleep(OBSERVE_WINDOW.toMillis());
 
         // 자를 가짜 서버 쪽에 둔다. Heartbeat.maxPingGap()은 클라이언트의
         // 자기 신고라, 그것으로 재면 "지표가 틀린 경우"를 못 잡는다.
@@ -123,6 +139,20 @@ class HeartbeatTest {
         assertThat(behavior.maxPingGapObserved())
                 .as("수신이 밀리면 ping이 막힌다 — 이게 8/1 사고다")
                 .isLessThanOrEqualTo(handshake.pingThreshold());
+
+        // 간격과 건수는 서로 다른 회귀를 잡는다. 둘 다 있어야 한다.
+        //
+        // 간격은 "한 주기를 통째로 걸렀다"를 잡지만 부하에 민감하다 — 실측에서
+        // 정상 부하 여유가 387ms인데 CPU 18코어를 전부 굶기면 42ms까지 줄었다.
+        // 건수는 반대다. 같은 포화에서 간격이 1.5배 벌어지는 동안에도 10회 전부
+        // 8건이었다. scheduleAtFixedRate가 밀린 주기를 따라잡아 창 안의 총량이
+        // 보존되기 때문이다.
+        //
+        // 그리고 8/1 사고는 "한 번 걸렀다"가 아니라 74초간 0회였다 — 지속적
+        // 막힘이고, 건수가 그 모양을 직접 잰다.
+        assertThat(pingsReceived())
+                .as("창 안에 ping이 %d건 이하면 지속적으로 막힌 것이다 — 8/1이 그 모양이었다", MIN_PINGS)
+                .isGreaterThan(MIN_PINGS);
     }
 
     /** T2 — 보조. 건수로도 밀어 본다. */
@@ -137,7 +167,7 @@ class HeartbeatTest {
         for (int i = 0; i < 3_000; i++) {
             behavior.emitChat("{\"content\":\"x\",\"messageTime\":1}");
         }
-        Thread.sleep(3_000);
+        Thread.sleep(OBSERVE_WINDOW.toMillis());
 
         assertThat(behavior.maxPingGapObserved()).isLessThanOrEqualTo(handshake.pingThreshold());
     }
@@ -206,7 +236,7 @@ class HeartbeatTest {
         for (int i = 0; i < 20; i++) {
             behavior.emitChat("{\"content\":\"x\",\"messageTime\":1}");
         }
-        Thread.sleep(3_000);
+        Thread.sleep(OBSERVE_WINDOW.toMillis());
 
         // 사고 구조가 실제로 재현됐다는 양성 대조가 먼저다.
         //
@@ -226,6 +256,16 @@ class HeartbeatTest {
         assertThat(behavior.maxPingGapObserved())
                 .as("수신 스레드에 얹었는데도 통과한다면 T1은 8/1 회귀를 못 잡는다")
                 .isGreaterThan(handshake.pingThreshold());
+
+        // T1의 건수 단언도 자기검사가 있어야 한다. 없으면 그 줄은 "정상에서
+        // 초록"만 보인 것이고, 사고에서 빨간불이 되는지는 아무도 확인 안 한 셈이다.
+        //
+        // 부등호가 T1과 정반대라 임계가 양쪽에서 조인다 — 임계가 0이면 여기가
+        // 깨지고(사고 관측 1건), 8 이상이면 T1이 깨진다(정상 관측 8건).
+        // 임계를 아무 값으로나 바꿔 두 단언을 동시에 통과시킬 수 없다.
+        assertThat(pingsReceived())
+                .as("사고 구조에서도 건수가 %d건을 넘으면 T1의 건수 단언은 회귀를 못 잡는다", MIN_PINGS)
+                .isLessThanOrEqualTo(MIN_PINGS);
     }
 
     /** 요약·집계를 ping 스레드에 얹으면 8/1이 재현된다. 지금 상태를 못박는다. */
@@ -328,6 +368,18 @@ class HeartbeatTest {
 
         assertThat(open.await(5, TimeUnit.SECONDS)).isTrue();
         return ref.get();
+    }
+
+    /**
+     * 가짜 서버가 실제로 받은 ping 건수. <b>T1과 T12가 같은 자를 쓴다.</b>
+     *
+     * <p>{@code Heartbeat}의 자기 신고가 아니라 서버가 받은 프레임을 센다 —
+     * 지표 자체가 틀린 경우를 잡으려면 자가 저쪽에 있어야 한다. 이 테스트의
+     * 클라이언트가 WS로 내보내는 것은 ping뿐이라(루트 CONNECT는 함정 4로 금지)
+     * 다른 프레임이 섞여 헛통과할 입구가 없다.
+     */
+    private long pingsReceived() {
+        return behavior.receivedFrames().stream().filter("2"::equals).count();
     }
 
     private static void sleepQuietly(Duration d) {
