@@ -158,7 +158,24 @@ class CollectorConfigTest {
         }
     }
 
-    /** DEBUG는 안전지대가 아니다. auth와 같은 방어선을 여기도 박는다. */
+    /**
+     * auth에서 물려받은 예방책이다. <b>이 서버에서 DEBUG 유출을 재현하지는 못했다</b>
+     * (2026-08-05 실측).
+     *
+     * <p>root·{@code org.springframework.web}·{@code .client}·{@code org.springframework.http}·
+     * {@code jdk.internal.httpclient}를 전부 DEBUG로 올리고 수집 경로 전체를 태워
+     * DEBUG 이벤트 168건을 모았는데 토큰도 본문도 안 나왔다. auth가 재현한 유출은
+     * <b>나가는 폼 본문</b>인데 우리는 나가는 본문이 아예 없고(GET 발급 · 쿼리 POST),
+     * Authorization 헤더는 스프링이 기본으로 마스킹한다
+     * ({@code enableLoggingRequestDetails='false'}). 운영 코드에 log.debug/log.trace도 0건이다.
+     *
+     * <p>그래서 auth의 "DEBUG로 켜면 샌다" 단언을 그대로 옮기지 않았다 —
+     * 여기서는 그게 거짓이라 빨간불이 난다. 이 줄은 <b>지금 새는 것을 막는 것이
+     * 아니라 앞으로 새지 않게 두는 것</b>이고, 그 사실을 모르면 다음 사람이
+     * "안 새는데 왜 있지" 하고 지운다.
+     *
+     * <p>Boot를 올리는 날 다시 잰다.
+     */
     @Test
     void 스프링_web_로거_레벨이_설정에_박혀_있다() {
         String level = environment.getProperty("logging.level.org.springframework.web");

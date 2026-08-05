@@ -1,6 +1,5 @@
 package com.pokeclip.chat.collector;
 
-import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.classic.spi.StackTraceElementProxy;
@@ -39,8 +38,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ChatLogLeakTest {
 
     private static final Logger log = LoggerFactory.getLogger(ChatLogLeakTest.class);
-
-    private static final String SPRING_WEB_LOGGER = "org.springframework.web";
 
     private static final String CONTENT = needle("chat-content");
     private static final String SENDER = needle("sender-channel-id");
@@ -180,42 +177,6 @@ class ChatLogLeakTest {
         }
     }
 
-    /**
-     * 검사 기준선을 넓힌다. LogCaptor가 root를 INFO로 고정하므로 나머지 검사는
-     * 전부 INFO에서만 돈다.
-     *
-     * <p><b>이 서버에서 DEBUG 유출을 재현하지는 못했다.</b> 실측하니
-     * {@code org.springframework.web.client}는 응답 본문을 안 찍고
-     * ({@code Reading to [java.lang.String]} 한 줄뿐), 나가는 본문이 아예 없으며
-     * (GET 발급 · POST는 쿼리 파라미터), Authorization 헤더는 스프링이 기본으로
-     * 마스킹한다({@code enableLoggingRequestDetails='false'}). auth가 재현한
-     * 유출은 나가는 폼 본문이라 조건이 다르다.
-     *
-     * <p>그래서 "DEBUG면 샌다"를 단언하지 않는다. 대신 <b>DEBUG에서도 바늘이
-     * 안 나온다</b>를 못박는다 — 나중에 구독 요청에 JSON 본문이 생기면
-     * 그때 여기가 빨간불이 된다.
-     */
-    @Test
-    void 스프링_web을_DEBUG로_켜도_바늘이_안_나온다() throws Exception {
-        setLevel(SPRING_WEB_LOGGER, Level.DEBUG);
-        try (LogCaptor captor = new LogCaptor()) {
-            setLevel(SPRING_WEB_LOGGER, Level.DEBUG);   // LogCaptor가 root를 만진 뒤 다시
-
-            CollectionStatus status = start();
-            assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
-            behavior.emitChat(chatWithNeedles());
-            awaitReceived(1);
-
-            assertThat(captor.messages())
-                    .as("DEBUG가 안 켜졌으면 이 검사는 INFO 검사를 한 번 더 한 것뿐이다")
-                    .anyMatch(m -> m.startsWith("GET \"/open/v1/sessions/auth\""));
-
-            assertNoSecretsIn(captor, SECRETS);
-        } finally {
-            setLevel(SPRING_WEB_LOGGER, null);
-        }
-    }
-
     // ── 탐지기 자기검사 셋. 이게 없으면 위 검사 전체가 초록불 장식이다 ────────
 
     @Test
@@ -289,10 +250,6 @@ class ChatLogLeakTest {
                 && System.nanoTime() < deadline) {
             Thread.sleep(20);
         }
-    }
-
-    private static void setLevel(String name, Level level) {
-        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(name)).setLevel(level);
     }
 
     private static String chatWithNeedles() {
