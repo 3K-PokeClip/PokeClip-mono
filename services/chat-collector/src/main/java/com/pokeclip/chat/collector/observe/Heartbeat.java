@@ -77,6 +77,18 @@ public final class Heartbeat implements AutoCloseable {
         return heartbeat;
     }
 
+    /**
+     * 소켓 없이 지표만 0으로 든 인스턴스. 요약 렌더링을 소켓 없이 검사하려고 둔다.
+     * 스케줄러 스레드는 첫 작업이 들어올 때 만들어지므로 여기서는 안 생긴다.
+     */
+    public static Heartbeat idleForTest() {
+        Heartbeat heartbeat = new Heartbeat();
+        long now = System.nanoTime();
+        heartbeat.lastPingNanos.set(now);
+        heartbeat.lastPongNanos.set(now);
+        return heartbeat;
+    }
+
     /** 수신 스레드가 부른다. */
     public void recordPong() {
         mark(lastPongNanos, maxPongGapNanos);

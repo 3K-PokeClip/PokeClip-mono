@@ -17,6 +17,10 @@ dependencies {
 
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 
+    // LogCaptor. 요약 한 줄이 실제로 찍히는지, 그리고 어느 레벨에서도 본문이
+    // 안 새는지를 로그에서 직접 확인한다(auth의 SecretLeakTest와 같은 방식).
+    testImplementation testFixtures(project(':web-support'))
+
     // 가짜 치지직 서버 전용. 운영 아티팩트에는 안 들어간다.
     // 임베디드 톰캣의 WsServerContainer 초기화는 spring-boot-tomcat이 이미 하므로
     // 여기서 새로 들어오는 것은 spring-websocket(스프링 핸들러 API)뿐이다.
