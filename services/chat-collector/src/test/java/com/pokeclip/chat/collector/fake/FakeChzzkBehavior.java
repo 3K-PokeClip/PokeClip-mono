@@ -6,6 +6,7 @@ import org.springframework.web.socket.WebSocketSession;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -54,6 +55,7 @@ public class FakeChzzkBehavior {
     private final AtomicInteger authCalls = new AtomicInteger();
     private final AtomicInteger unsubscribeCalls = new AtomicInteger();
     private final AtomicInteger closedSessions = new AtomicInteger();
+    private final AtomicBoolean unsubscribeSawOpenSession = new AtomicBoolean();
 
     public List<String> receivedFrames() { return List.copyOf(received); }
     public String handshakeQuery() { return handshakeQuery.get(); }
@@ -61,6 +63,13 @@ public class FakeChzzkBehavior {
 
     /** 종료 시 구독 반납이 실제로 왔는지. 안 오면 세션을 우리 손으로 안 닫은 것이다. */
     public int unsubscribeCallCount() { return unsubscribeCalls.get(); }
+
+    /**
+     * 반납 REST가 도착했을 때 WS 세션이 열려 있었는가.
+     * <b>순서를 실제로 보는 유일한 자다</b> — 건수만 세면 소켓을 먼저 닫도록
+     * 뒤집어도 그대로 초록이다(실측으로 확인됨).
+     */
+    public boolean unsubscribeSawOpenSession() { return unsubscribeSawOpenSession.get(); }
 
     /** 서버가 관측한 WS 종료 횟수. 클라이언트가 끊는다고 알렸는지를 여기서 본다. */
     public int closedSessionCount() { return closedSessions.get(); }
@@ -149,7 +158,11 @@ public class FakeChzzkBehavior {
         session.compareAndSet(s, null);
     }
 
-    void countUnsubscribeCall() { unsubscribeCalls.incrementAndGet(); }
+    void countUnsubscribeCall() {
+        WebSocketSession s = session.get();
+        unsubscribeSawOpenSession.set(s != null && s.isOpen());
+        unsubscribeCalls.incrementAndGet();
+    }
 
     /**
      * <b>앞 접속이 끝난 것을 서버가 관측할 때까지 기다린 뒤 지운다.</b>
@@ -169,6 +182,7 @@ public class FakeChzzkBehavior {
         authCalls.set(0);
         unsubscribeCalls.set(0);
         closedSessions.set(0);
+        unsubscribeSawOpenSession.set(false);
         handshakeQuery.set("");
         // 테스트 클래스들이 스프링 컨텍스트 하나를 공유하므로 이 객체도 하나뿐이다.
         // 앞 클래스가 쓰던 세션을 남겨 두면 뒤 클래스가 그것으로 보내려다 실패한다.

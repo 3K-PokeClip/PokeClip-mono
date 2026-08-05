@@ -92,9 +92,16 @@ class CollectorShutdownTest {
 
         context.close();
 
-        // 가짜 서버는 반납 REST를 세션이 열려 있는 동안에만 받을 수 있다.
-        // 순서가 뒤집혔다면 위 단언이 아니라 여기가 깨진다.
+        // 양성 대조. 반납이 아예 안 왔으면 아래 단언은 "안 열려 있었다"가 아니라
+        // "물어본 적이 없다"를 읽는다.
         assertThat(behavior.unsubscribeCallCount()).isEqualTo(1);
+
+        // 건수만 세면 순서를 전혀 안 본다 — releaseAndClose()에서 close()를 먼저
+        // 부르도록 뒤집어도 전부 초록이었다. 가짜 서버가 "반납이 왔을 때 WS가
+        // 열려 있었는가"를 기록하게 하고 그 값을 본다.
+        assertThat(behavior.unsubscribeSawOpenSession())
+                .as("소켓이 먼저 닫혔다면 반납은 이미 정리되는 중인 세션에 간 것이다")
+                .isTrue();
     }
 
     private ConfigurableApplicationContext bootCollector() {
