@@ -47,10 +47,32 @@ class SessionEstablishTest {
         behavior.sendConnected = false;
         session = newSession();
 
-        assertThatThrownBy(() -> session.open(Duration.ofMillis(500)))
+        Duration deadline = Duration.ofSeconds(3);
+        long startedAt = System.nanoTime();
+
+        assertThatThrownBy(() -> session.open(deadline))
                 .isInstanceOf(SessionEstablishException.class)
                 .extracting("stage", "reason")
                 .containsExactly(EstablishStage.WAITING_CONNECTED, StopReason.ESTABLISH_TIMEOUT);
+
+        Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
+
+        // 양성 대조 — <b>실제로 기다렸는가</b>를 잰다.
+        //
+        // WAITING_CONNECTED는 첫 대기 단계라 "connected를 기다리다 시한이 났다"와
+        // "①②가 시한을 다 써서 대기를 시작조차 못 했다"가 같은 값으로 나온다.
+        // await()가 remaining <= 0이면 래치를 아예 안 보고 던지기 때문이다.
+        // 그러면 sendConnected = false가 무의미해지는데 기대한 stage는 그대로 나오니
+        // 영원히 초록이다. 형제(WAITING_SUBSCRIBED)는 그 값 자체가 ①~④ 통과의
+        // 증거라 자기 전제를 스스로 검증하지만, 이쪽은 못 한다.
+        //
+        // "WS가 붙었나"로는 못 잡는다 — EngineIoSocket.open()이 join()으로 블로킹해
+        // 시한과 무관하게 ②를 끝내므로, 시한을 1ns로 줘도 접속 흔적은 남는다.
+        // 실제로 그렇게 확인했다(0.06초 만에 끝나면서 통과했다).
+        assertThat(elapsed)
+                .as("대기에 시간을 안 썼다면 connected를 기다린 적이 없다. "
+                        + "①②가 시한을 삼킨 것이고 sendConnected=false는 검사되지 않았다")
+                .isGreaterThan(deadline.dividedBy(2));
     }
 
     /**
@@ -99,6 +121,11 @@ class SessionEstablishTest {
         ChatSession.Established second = session.open(Duration.ofSeconds(5));
 
         assertThat(first.socket()).isNotSameAs(second.socket());
+        // 소켓만 갈아 끼운 것과 절차를 처음부터 다시 탄 것은 다르다. 세션 URL은
+        // 재사용이 안 되므로 ①부터 다시 타야 하고, 그 증거는 REST 호출 횟수다.
+        assertThat(behavior.authCallCount())
+                .as("①부터 다시 타지 않았다면 재진입이 아니라 소켓만 바꾼 것이다")
+                .isEqualTo(2);
     }
 
     private ChatSession newSession() {
