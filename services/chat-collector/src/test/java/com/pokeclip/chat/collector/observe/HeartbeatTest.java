@@ -14,8 +14,10 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -220,8 +222,7 @@ class HeartbeatTest {
         // 2026-08-01의 아키텍처를 그대로 재현한다 — 전용 스케줄러 없이,
         // 수신 콜백이 프레임을 처리한 "뒤에" 시간을 보고 ping을 보낸다.
         AtomicLong lastPingNanos = new AtomicLong(System.nanoTime());
-        AtomicReference<Handshake> shaken = new AtomicReference<>();
-        Handshake handshake = openWith(frame -> {
+        Handshake handshake = openWith((frame, shaken) -> {
             // T1의 openWithSlowHandler와 똑같이 EVENT에서만 잔다.
             // 자기검사는 변수 하나(ping을 어디서 보내나)만 달라야 성립한다 —
             // 프레임 종류까지 다르면 "다른 부하를 준 것 아니냐"가 남는다.
@@ -229,13 +230,12 @@ class HeartbeatTest {
                 return;
             }
             sleepQuietly(SLOW_HANDLER);                // T1과 똑같은 지연
-            Duration period = shaken.get().sendPeriod();
+            Duration period = shaken.sendPeriod();
             if (System.nanoTime() - lastPingNanos.get() >= period.toNanos()) {
                 socket.sendPing();
                 lastPingNanos.set(System.nanoTime());
             }
         });
-        shaken.set(handshake);
         지연이_임계보다_큰지_먼저_확인한다(handshake);
 
         for (int i = 0; i < 20; i++) {
@@ -349,7 +349,7 @@ class HeartbeatTest {
     }
 
     private Handshake openWithSlowHandler(Duration delay) throws Exception {
-        return openWith(frame -> {
+        return openWith((frame, handshake) -> {
             if (frame.type() == EngineIoFrame.Type.EVENT && !delay.isZero()) {
                 sleepQuietly(delay);            // 느린 핸들러
             }
@@ -359,10 +359,25 @@ class HeartbeatTest {
     /**
      * EVENT 프레임을 받았을 때 할 일을 테스트가 직접 정한다.
      * T12는 여기에 "ping 전송"을 얹어 2026-08-01 아키텍처를 재현한다.
+     *
+     * <p><b>준비되기 전의 프레임은 콜백에 넘기지 않는다.</b> JDK는 open()이
+     * join()에서 아직 안 돌아온 사이에 이미 프레임을 배달한다
+     * (WebSocketImpl.newInstance → signalOpen → processText). 그때 콜백이
+     * {@code socket} 필드를 역참조하면 그 필드는 아직 null이고, NPE가 onText
+     * 밖으로 나가면 <b>JDK가 소켓을 abort한다</b>(1006). 그 다음 emitChat이
+     * 죽은 세션에 쓰면서 가짜 서버가 터진다. 평소엔 콜백의 1600ms 수면이 가려
+     * 주지만, CPU가 포화되면 테스트 스레드가 그 사이에 대입을 못 끝내 드러난다.
+     *
+     * <p>핸드셰이크도 같은 결함이라 필드가 아니라 <b>인자로 준다</b> —
+     * T12가 쓰던 참조는 openWith가 돌아온 뒤에야 채워졌다.
+     *
+     * <p>여기서 기다리면 안 된다. 그 배달이 {@code join()}이 돌아오기 전에
+     * 같은 스레드에서 일어나므로, 콜백이 준비를 기다리면 교착이다.
      */
-    private Handshake openWith(java.util.function.Consumer<EngineIoFrame> onEvent) throws Exception {
+    private Handshake openWith(BiConsumer<EngineIoFrame, Handshake> onEvent) throws Exception {
         CountDownLatch open = new CountDownLatch(1);
         AtomicReference<Handshake> ref = new AtomicReference<>();
+        AtomicBoolean ready = new AtomicBoolean();
 
         socket = EngineIoSocket.open(uri(), frame -> {
             if (frame.type() == EngineIoFrame.Type.OPEN) {
@@ -370,12 +385,16 @@ class HeartbeatTest {
                 open.countDown();
                 return;
             }
+            if (!ready.get()) {
+                return;
+            }
             if (frame.type() == EngineIoFrame.Type.PONG && heartbeat != null) {
                 heartbeat.recordPong();
                 return;
             }
-            onEvent.accept(frame);
+            onEvent.accept(frame, ref.get());
         }, () -> { });
+        ready.set(true);
 
         assertThat(open.await(5, TimeUnit.SECONDS)).isTrue();
         return ref.get();
