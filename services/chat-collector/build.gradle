@@ -9,5 +9,16 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
+    // RestClient 클래스 자체는 webmvc가 끌어오는 spring-web에 있지만,
+    // RestClient.Builder 자동설정과 spring.http.clients.* 타임아웃 바인딩은
+    // 이 스타터에서 온다. 세션 URL이 30초에 만료되므로 타임아웃은 선택이 아니다.
+    implementation 'org.springframework.boot:spring-boot-starter-restclient'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+
+    // 가짜 치지직 서버 전용. 운영 아티팩트에는 안 들어간다.
+    // 임베디드 톰캣의 WsServerContainer 초기화는 spring-boot-tomcat이 이미 하므로
+    // 여기서 새로 들어오는 것은 spring-websocket(스프링 핸들러 API)뿐이다.
+    testImplementation 'org.springframework.boot:spring-boot-starter-websocket'
 }
