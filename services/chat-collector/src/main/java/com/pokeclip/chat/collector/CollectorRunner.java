@@ -52,6 +52,15 @@ public class CollectorRunner implements ApplicationRunner {
         start();
     }
 
+    /**
+     * 지금까지의 관측값. 유출 검사가 "바늘이 실제로 코드 안을 지나갔나"를
+     * 확인하는 데 쓴다 — 그 대조가 없으면 아무것도 안 흘렀을 때
+     * "안 샜다"가 자동으로 참이 된다.
+     */
+    public CollectionMetrics metrics() {
+        return metrics;
+    }
+
     public void start() {
         if (!properties.enabled()) {
             // 붙지 않는다. 로그 한 줄은 남긴다 — "왜 채팅이 안 들어오지"의
