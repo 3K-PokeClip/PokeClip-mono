@@ -38,8 +38,12 @@ class EngineIoSocketTest {
         socket.sendPing();
         Thread.sleep(200);
 
+        // isNotEmpty가 먼저다. 프레임이 한 건도 안 갔으면 doesNotContain은
+        // 찾을 것이 없어 자동으로 참이 되고, 함정 4를 지키는 유일한 파수꾼이
+        // 아무것도 안 보면서 초록불이 된다.
         assertThat(behavior.receivedFrames())
                 .as("40을 보내면 전송은 안 끊기고 disconnect 이벤트만 뜨는 상태가 된다")
+                .isNotEmpty()
                 .doesNotContain("40");
     }
 

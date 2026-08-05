@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.fake;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -24,6 +25,17 @@ class FakeChzzkServerTest {
 
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
+
+    /**
+     * behavior는 스프링 싱글턴이고 @FakeChzzkTest가 전부 같은 컨텍스트를 쓰므로
+     * <b>테스트 클래스 사이에서도 공유된다.</b> 여기서 200/480으로 줄여 놓은 채
+     * 두면, 값을 직접 세팅하지 않는 테스트가 하나 생기는 날 핸드셰이크가 그 값을
+     * 광고해 파생 임계가 통째로 쪼그라들고 원인이 어디에도 안 보인다.
+     */
+    @AfterEach
+    void tearDown() {
+        behavior.reset();
+    }
 
     @Test
     void 붙으면_핸드셰이크와_서버_CONNECT와_connected가_순서대로_온다() throws Exception {
