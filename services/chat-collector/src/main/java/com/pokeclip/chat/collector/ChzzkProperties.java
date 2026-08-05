@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector;
 
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
@@ -19,7 +20,28 @@ import java.time.Duration;
 @Validated
 public record ChzzkProperties(
         boolean enabled,
-        @NotBlank String accessToken,
+        String accessToken,
         @NotBlank String baseUrl,
         Duration establishTimeout
-) { }
+) {
+
+    /**
+     * 토큰 검증을 <b>켜져 있을 때만</b> 건다.
+     *
+     * <p>{@code @NotBlank}를 그냥 붙이면 {@code enabled=false}에서도 걸려
+     * <b>기본 설정으로는 서버가 아예 못 뜬다.</b> 기본값을 false로 둔 이유가
+     * "CI·남의 로컬이 뜰 때마다 치지직에 붙는 것"을 막으려는 것인데, 그러면
+     * 그들이 부팅조차 못 한다 — 실제로 그렇게 됐다.
+     *
+     * <p><b>{@code services/CLAUDE.md}의 "{@code ${VAR:}} + 검증" 규칙은 그대로 지켜진다.</b>
+     * 그 규칙의 목적은 "서버는 뜨고 그 기능만 조용히 실패하는 것"을 막는 것이고,
+     * <b>켜놓고 토큰이 비면 여기서 여전히 부팅이 죽는다.</b> 꺼져 있을 때는
+     * 실패할 기능 자체가 없으므로 규칙이 겨누는 상황이 아니다.
+     *
+     * <p>메시지에 값을 넣지 않는다 — 검증 실패 메시지는 부팅 로그에 그대로 찍힌다.
+     */
+    @AssertTrue(message = "pokeclip.chzzk.enabled=true인데 access-token이 비어 있다")
+    public boolean isAccessTokenPresentWhenEnabled() {
+        return !enabled || (accessToken != null && !accessToken.isBlank());
+    }
+}
