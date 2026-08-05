@@ -90,8 +90,10 @@ public class FakeChzzkServer implements WebSocketConfigurer {
          */
         @PostMapping("/open/v1/sessions/events/subscribe/chat")
         public ResponseEntity<String> subscribe(@RequestParam String sessionKey) {
-            behavior.emitSystem("{\"type\":\"subscribed\",\"data\":"
-                    + "{\"eventType\":\"CHAT\",\"channelId\":\"FAKE-CHANNEL\"}}");
+            if (behavior.sendSubscribed) {
+                behavior.emitSystem("{\"type\":\"subscribed\",\"data\":"
+                        + "{\"eventType\":\"CHAT\",\"channelId\":\"FAKE-CHANNEL\"}}");
+            }
             return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
         }
     }

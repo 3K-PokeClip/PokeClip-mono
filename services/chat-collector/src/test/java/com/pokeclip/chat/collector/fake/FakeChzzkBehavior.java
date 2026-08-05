@@ -22,6 +22,11 @@ public class FakeChzzkBehavior {
 
     /** false면 connected를 안 보낸다 — T13(수립 시한)이 쓴다. */
     public volatile boolean sendConnected = true;
+    /**
+     * false면 구독 REST가 200을 주고도 subscribed를 안 쏜다 — ⑤의 시한을 본다.
+     * sendConnected와 대칭이다. 실제로 있는 상태다(연결은 살아 있는데 채팅만 안 온다).
+     */
+    public volatile boolean sendSubscribed = true;
     /** false면 ping에 답하지 않는다 — T11(pong 공백)이 쓴다. */
     public volatile boolean answerPong = true;
     /** false면 ping이 없어도 안 끊는다 — 간격만 재고 싶을 때. */
@@ -117,6 +122,7 @@ public class FakeChzzkBehavior {
         pingIntervalMillis = 1000;
         pingTimeoutMillis = 2400;
         sendConnected = true;
+        sendSubscribed = true;
         answerPong = true;
         disconnectWhenPingMissing = true;
         authStatus = 200;

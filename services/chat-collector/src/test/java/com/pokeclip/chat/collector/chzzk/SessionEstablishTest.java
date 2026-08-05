@@ -53,6 +53,25 @@ class SessionEstablishTest {
                 .containsExactly(EstablishStage.WAITING_CONNECTED, StopReason.ESTABLISH_TIMEOUT);
     }
 
+    /**
+     * ⑤도 시한에 걸려야 한다. 구독 REST는 200인데 subscribed 프레임이 안 오는
+     * 상태가 실제로 있고(연결은 살아 있는데 채팅만 안 온다), 그때 어느 단계에서
+     * 멈췄는지를 남기는 것이 EstablishStage의 존재 이유다.
+     */
+    @Test
+    void subscribed가_안_오면_시한에서_끊고_어느_단계인지_남긴다() {
+        behavior.sendSubscribed = false;
+        session = newSession();
+
+        // 시한은 넉넉해야 한다. 이 테스트가 겨누는 것은 "시한이 났다"가 아니라
+        // "⑤에서 났다"인데, 시한이 빡빡하면 ①②③이 밀릴 때 WAITING_CONNECTED에서
+        // 먼저 걸려 엉뚱한 단계를 검사하게 된다. 1초로 뒀다가 실제로 그렇게 됐다.
+        assertThatThrownBy(() -> session.open(Duration.ofSeconds(3)))
+                .isInstanceOf(SessionEstablishException.class)
+                .extracting("stage", "reason")
+                .containsExactly(EstablishStage.WAITING_SUBSCRIBED, StopReason.ESTABLISH_TIMEOUT);
+    }
+
     /** T9. 만료 토큰은 @NotBlank를 통과한다. 부팅은 성공하고 여기서만 걸린다. */
     @Test
     void 세션_발급이_401이면_이유를_남기고_재시도하지_않는다() {
