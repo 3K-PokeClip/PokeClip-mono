@@ -10,6 +10,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -126,6 +127,41 @@ class SessionEstablishTest {
         assertThat(behavior.authCallCount())
                 .as("①부터 다시 타지 않았다면 재진입이 아니라 소켓만 바꾼 것이다")
                 .isEqualTo(2);
+    }
+
+    /**
+     * 싱크는 WS 수신 콜백 안에서 불린다. 예외가 밖으로 나가면 onError로 가
+     * <b>그 한 건 때문에 방송 전체 수신이 멈춘다.</b> 디코더는 null을 주도록
+     * 방어했지만 싱크에는 방어가 없었다 — 태스크 9가 붙일 진짜 싱크가 던지는
+     * 순간 실체가 된다.
+     */
+    @Test
+    void 싱크가_던져도_수신이_멈추지_않는다() throws Exception {
+        session = newSession();
+        AtomicInteger seen = new AtomicInteger();
+        session.onFrame(frame -> {
+            seen.incrementAndGet();
+            throw new IllegalStateException("싱크가 터졌다");
+        });
+
+        // connected가 EVENT라 이미 싱크를 한 번 지난다. 거기서 예외가 새면
+        // 소켓이 죽어 ④·⑤가 통째로 실패하므로 open() 자체가 못 돌아온다.
+        session.open(Duration.ofSeconds(5));
+
+        behavior.emitChat("{\"content\":\"x\",\"messageTime\":1}");
+        behavior.emitChat("{\"content\":\"y\",\"messageTime\":2}");
+
+        // 첫 예외가 수신을 멈췄다면 뒤이은 채팅이 한 건도 안 온다.
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (seen.get() < 4 && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+        assertThat(seen.get())
+                .as("connected·subscribed·채팅 둘 — 넷이 다 싱크를 지나야 수신이 산 것이다")
+                .isGreaterThanOrEqualTo(4);
+        assertThat(session.sinkFailureCount())
+                .as("삼켰으면 세야 한다. 안 세면 수신은 사는데 처리가 죽은 것을 못 본다")
+                .isEqualTo(seen.get());
     }
 
     private ChatSession newSession() {

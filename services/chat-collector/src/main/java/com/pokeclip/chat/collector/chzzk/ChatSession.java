@@ -8,6 +8,7 @@ import com.pokeclip.chat.collector.engineio.Handshake;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
@@ -30,9 +31,15 @@ public class ChatSession implements AutoCloseable {
     private volatile Consumer<EngineIoFrame> frameSink = frame -> { };
     private volatile Runnable closedSink = () -> { };
 
+    /** 삼킨 싱크 예외의 수. 안 세면 수신은 사는데 처리가 통째로 죽은 것을 못 본다. */
+    private final AtomicLong sinkFailures = new AtomicLong();
+
     public ChatSession(ChzzkSessionClient client) {
         this.client = client;
     }
+
+    /** 삼킨 싱크 예외의 수. 삼키기만 하고 안 세면 조용한 실패를 우리가 만드는 것이다. */
+    public long sinkFailureCount() { return sinkFailures.get(); }
 
     public void onFrame(Consumer<EngineIoFrame> sink) { this.frameSink = sink; }
     public void onClosed(Runnable sink) { this.closedSink = sink; }
@@ -92,9 +99,24 @@ public class ChatSession implements AutoCloseable {
                         default -> { }
                     }
                 }
-                frameSink.accept(frame);
+                emit(frame);
             }
-            default -> frameSink.accept(frame);
+            default -> emit(frame);
+        }
+    }
+
+    /**
+     * 싱크는 WS 수신 콜백 안에서 불린다. 예외가 밖으로 나가면 onError로 가
+     * <b>그 한 건 때문에 방송 전체 수신이 멈춘다.</b> 디코더가 null을 돌려주도록
+     * 방어한 것과 같은 이유로 여기도 막는다.
+     *
+     * <p>예외 자체는 안 남긴다 — 메시지에 본문이 딸려 올 수 있다. 종류만 센다.
+     */
+    private void emit(EngineIoFrame frame) {
+        try {
+            frameSink.accept(frame);
+        } catch (RuntimeException e) {
+            sinkFailures.incrementAndGet();
         }
     }
 
