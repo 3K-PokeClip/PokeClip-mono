@@ -17,6 +17,16 @@ management:
     web:
       exposure:
         include: health
+  endpoint:
+    health:
+      # 이게 없으면 Boot 기본값 never가 걸려 detail이 HTTP 응답에서 잘린다.
+      # CollectorHealth가 withDetail("status", …)·withDetail("reason", …)를 아무리
+      # 잘 만들어도 밖에서는 {"status":"UP"}만 보이고, 그러면 "서버는 떴는데
+      # 수집은 죽은" 상태를 구분할 수 없다 — 이 카드가 막으려는 실패 그 자체다.
+      #
+      # 지금 detail에 담기는 것은 상태 이름과 StopReason 열거값뿐이라 비밀이 없다.
+      # 비밀이 담기는 detail을 추가하는 날 이 줄을 다시 봐야 한다.
+      show-details: always
 
 logging:
   level:
