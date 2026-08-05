@@ -131,10 +131,20 @@ public class FakeChzzkBehavior {
     void rememberQuery(String query) { handshakeQuery.set(query == null ? "" : query); }
     void remember(WebSocketSession s) { session.set(s); }
 
+    /**
+     * 끊긴 세션을 현재 세션 자리에서 치운다. <b>같은 세션일 때만</b> 치운다 —
+     * 앞 접속이 늦게 끊기면서 이미 들어온 새 접속을 지우면, 뒤 테스트가
+     * "열린 세션이 없다"로 간헐 실패한다. 실제로 그렇게 났다.
+     */
+    void forget(WebSocketSession s) { session.compareAndSet(s, null); }
+
     public void reset() {
         received.clear();
         authCalls.set(0);
         handshakeQuery.set("");
+        // 테스트 클래스들이 스프링 컨텍스트 하나를 공유하므로 이 객체도 하나뿐이다.
+        // 앞 클래스가 쓰던 세션을 남겨 두면 뒤 클래스가 그것으로 보내려다 실패한다.
+        session.set(null);
         pingIntervalMillis = 1000;
         pingTimeoutMillis = 2400;
         sendConnected = true;

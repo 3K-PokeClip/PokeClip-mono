@@ -111,6 +111,15 @@ public class FakeChzzkServer implements WebSocketConfigurer {
 
         FakeSocketHandler(FakeChzzkBehavior behavior) { this.behavior = behavior; }
 
+        /**
+         * 접속마다 리퍼를 새로 걸고 <b>끊길 때 취소한다.</b> 안 그러면 앞선 접속의
+         * 리퍼가 계속 돌면서 뒤 테스트의 스위치(`disconnectWhenPingMissing`)를 읽고
+         * 판단한다 — 테스트 클래스들이 스프링 컨텍스트 하나를 공유하므로 이 서버도
+         * 하나뿐이고, 그래서 앞뒤 테스트가 서로의 상태를 밟았다.
+         */
+        private final java.util.Map<String, java.util.concurrent.ScheduledFuture<?>> reapers =
+                new java.util.concurrent.ConcurrentHashMap<>();
+
         @Override
         public void afterConnectionEstablished(WebSocketSession session) throws Exception {
             behavior.rememberQuery(session.getUri() == null ? "" : session.getUri().getQuery());
@@ -149,10 +158,19 @@ public class FakeChzzkServer implements WebSocketConfigurer {
             }
         }
 
+        @Override
+        public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+            java.util.concurrent.ScheduledFuture<?> task = reapers.remove(session.getId());
+            if (task != null) {
+                task.cancel(false);
+            }
+            behavior.forget(session);
+        }
+
         /** 오류 프레임 없이 조용히 끊는다. 실측에서 오류 로그가 0줄이었던 이유다. */
         private void scheduleReaper(WebSocketSession session) {
             long deadlineMillis = behavior.pingIntervalMillis + behavior.pingTimeoutMillis;
-            reaper.scheduleAtFixedRate(() -> {
+            reapers.put(session.getId(), reaper.scheduleAtFixedRate(() -> {
                 if (!behavior.disconnectWhenPingMissing || !session.isOpen()) {
                     return;
                 }
@@ -169,7 +187,7 @@ public class FakeChzzkServer implements WebSocketConfigurer {
                         // 이미 닫힌 세션. 조용히 넘어가는 것이 실측 동작이다.
                     }
                 }
-            }, deadlineMillis / 4, deadlineMillis / 4, TimeUnit.MILLISECONDS);
+            }, deadlineMillis / 4, deadlineMillis / 4, TimeUnit.MILLISECONDS));
         }
     }
 }
