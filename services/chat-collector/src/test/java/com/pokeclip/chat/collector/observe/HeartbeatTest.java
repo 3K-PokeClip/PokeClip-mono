@@ -59,19 +59,23 @@ class HeartbeatTest {
      */
     private static final Duration SLOW_HANDLER = Duration.ofMillis(PING_INTERVAL_MS * 32 / 10);
 
-    /** 홍수를 밀어 넣고 간격·건수를 재는 창. 아래 {@code MIN_PINGS}가 여기서 나온다. */
+    /** 홍수를 밀어 넣고 간격·건수를 재는 창. 아래 {@code minPings}가 여기서 나온다. */
     private static final Duration OBSERVE_WINDOW = Duration.ofSeconds(3);
 
     /**
-     * 창 안에 나가야 할 ping의 하한. <b>여기도 상수를 박지 않고 파생한다</b> —
-     * 송신 주기가 바뀌면 같이 움직여야 한다.
+     * 창 안에 나가야 할 ping의 하한. <b>운영이 준 송신 주기에서 파생한다</b> —
+     * 여기서 주기를 다시 계산하면({@code pingInterval × 0.8}) 운영
+     * {@code Handshake.sendPeriod()}의 배수를 복제한 것이 되어, 운영 배수가
+     * 바뀌는 날 이 임계만 조용히 어긋난다. 정수 나눗셈이라 복제본은
+     * {@code PING_INTERVAL_MS ≥ 1875}에서 <b>하한이 0</b>이 되기도 했다.
      *
      * <p>창 3초 ÷ 주기 400ms = 7건이 기대값이고, 그 절반인 <b>3건</b>이 하한이다.
      * 실측(25회씩)은 정상 <b>8건</b>(편차 0) · 사고 <b>1건</b>(편차 0)이라
      * 양쪽으로 여유가 +5 / −2다.
      */
-    private static final long MIN_PINGS =
-            OBSERVE_WINDOW.toMillis() / (PING_INTERVAL_MS * 8 / 10) / 2;
+    private static long minPings(Handshake handshake) {
+        return OBSERVE_WINDOW.toMillis() / handshake.sendPeriod().toMillis() / 2;
+    }
 
     private EngineIoSocket socket;
     private Heartbeat heartbeat;
@@ -150,9 +154,10 @@ class HeartbeatTest {
         //
         // 그리고 8/1 사고는 "한 번 걸렀다"가 아니라 74초간 0회였다 — 지속적
         // 막힘이고, 건수가 그 모양을 직접 잰다.
+        long minPings = minPings(handshake);
         assertThat(pingsReceived())
-                .as("창 안에 ping이 %d건 이하면 지속적으로 막힌 것이다 — 8/1이 그 모양이었다", MIN_PINGS)
-                .isGreaterThan(MIN_PINGS);
+                .as("창 안에 ping이 %d건 이하면 지속적으로 막힌 것이다 — 8/1이 그 모양이었다", minPings)
+                .isGreaterThan(minPings);
     }
 
     /** T2 — 보조. 건수로도 밀어 본다. */
@@ -268,9 +273,10 @@ class HeartbeatTest {
         // 즉 정상 8건 / 사고 1건이 임계를 [1,7]로 조이고, 그 안에서는 어느 값이든
         // 둘 다 통과한다. 여기 원래 "임계를 아무 값으로나 바꿔 두 단언을 동시에
         // 통과시킬 수 없다"고 적혀 있었는데 그것은 사실이 아니다.
+        long minPings = minPings(handshake);
         assertThat(pingsReceived())
-                .as("사고 구조에서도 건수가 %d건을 넘으면 T1의 건수 단언은 회귀를 못 잡는다", MIN_PINGS)
-                .isLessThanOrEqualTo(MIN_PINGS);
+                .as("사고 구조에서도 건수가 %d건을 넘으면 T1의 건수 단언은 회귀를 못 잡는다", minPings)
+                .isLessThanOrEqualTo(minPings);
     }
 
     /** 요약·집계를 ping 스레드에 얹으면 8/1이 재현된다. 지금 상태를 못박는다. */
