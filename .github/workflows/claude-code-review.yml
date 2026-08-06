@@ -51,20 +51,32 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          # 스킬은 지적이 없으면 아무것도 안 올린다("No buffered inline comments").
-          # 그러면 "리뷰가 돌았는데 깨끗했다"와 "리뷰가 아예 안 돌았다"가 화면에서
-          # 구분되지 않는다 — 실제로 그 둘을 헷갈려 워크플로를 다섯 번 고쳤다.
+          # ★ --comment 를 빼면 리뷰를 다 하고도 아무것도 안 올린다.
+          # 스킬 소스(anthropics/claude-code, plugins/code-review/commands/code-review.md)에
+          # 그대로 적혀 있다.
+          #
+          #   "If --comment argument was NOT provided, stop here.
+          #    Do not post any GitHub comments."
+          #   "If no issues are found and --comment argument is provided,
+          #    post a comment with the following format"
+          #
+          # 즉 "지적이 없어도 한 줄 남긴다"는 스킬이 이미 하는 일이다. 여기 원래
+          # 그걸 손으로 시키는 지시가 붙어 있었는데, 스킬이 이미 하는 것을 다시
+          # 만든 것이었다. 지웠다.
+          #
+          # 2026-08-06에 이걸 모르고 다섯 번을 헤맸다. 헷갈린 이유가 있다 —
+          # 예전(PR #23·#24·#26)에 claude[bot] 요약이 달렸던 것은 Skill 이 막혀
+          # 모델이 우회로 손수 리뷰하며 그 지시를 따랐기 때문이다. 아래에서 Skill
+          # 권한을 열자 스킬이 제대로 돌기 시작했고, --comment 가 없으니 규칙대로
+          # 조용히 끝났다. "고쳤더니 더 안 된다"로 보인 것이 이 순서였다.
+          #
+          # 스킬은 지적이 없으면 인라인은 안 올린다("No buffered inline comments").
+          # 그 줄만 보고 "리뷰가 안 돌았다"로 읽지 마라 — 그건 정상이다.
           # 그래서 결과와 무관하게 요약 코멘트를 반드시 남기게 한다.
           prompt: |
-            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment
 
-            리뷰가 끝나면 `gh pr comment ${{ github.event.pull_request.number }}` 로
-            요약 코멘트를 **반드시 하나** 남겨라. 지적 유무와 상관없이 남긴다.
-
-            - 지적이 있으면: 심각도별 건수와 한 줄 요약. 상세는 인라인 코멘트에 있으니 반복하지 않는다
-            - 지적이 없으면: "지적 없음"을 명시하고, 무엇을 봤는지 한두 줄로 적는다.
-              무엇을 안 봤는지도 적으면 더 좋다
-            - 한국어로 쓴다. 인사말·사과·칭찬은 쓰지 않는다
+            한국어로 쓴다. 인사말·사과·칭찬은 쓰지 않는다.
           # gh 한 개만 더 연다. claude_args가 아니라 settings로 여는 것이 핵심이다.
           #
           # 예전에 claude_args --allowed-tools 로 시도했다가 리뷰 스킬 자체가
