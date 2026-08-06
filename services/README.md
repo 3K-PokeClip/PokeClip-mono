@@ -129,6 +129,13 @@ curl -s localhost:8083/actuator/health
 # {"collectorHealth":{"details":{"status":"collecting"},"status":"UP"}}
 ```
 
+**치지직 실서버에 붙어 보는 테스트는 기본으로 안 돈다.** 돌리려면
+`CHZZK_LIVE_PROBE=true`를 **명시적으로** 준다.
+
+토큰이 있다는 것과 "지금 실서버를 때려도 된다"는 것은 다르다. 토큰 환경변수의
+존재로 열어 두면, **토큰 수명이 24시간이라 만료되는 순간 토큰을 가진 사람의
+빌드가 매일 빨간불이 된다.**
+
 **DB 접속 변수 이름을 compose의 `.env`와 맞춰 뒀다** (`POSTGRES_USER`·`POSTGRES_PASSWORD`·
 `POSTGRES_DB`). 팀원이 `.env` 값을 바꿔도 앱이 따라간다. compose 네트워크 안에서
 띄울 때만 `DB_HOST=postgres`를 준다.
