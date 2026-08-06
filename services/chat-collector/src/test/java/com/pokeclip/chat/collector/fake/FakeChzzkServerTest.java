@@ -116,11 +116,20 @@ class FakeChzzkServerTest {
      * 그래서 이건 단순 플레이키가 아니라 HeartbeatTest의 건수 단언이 부풀려진
      * 값으로 헛통과할 수 있는 구멍이다.
      *
-     * <p>한 번에 25%로 나던 것이라 시행을 20번 돌린다.
+     * <p><b>반복을 100번 돌리는 이유가 있다.</b> 25%는 창이 200ms 넘게 열려 있던
+     * {@code EngineIoSocketTest}의 값이고 이 테스트의 값이 아니다 — 여기는
+     * {@code reset()} 직후 {@code open()} 몇 ms가 창의 전부다. 20회로 돌렸을 때
+     * {@code reset()}의 {@code awaitSessionClosed()}를 지운 상태에서 <b>19회 중
+     * 7회(37%)</b>만 빨간불이었다. 회귀가 들어와도 5번 중 3번은 CI가 초록이라는 뜻이다.
+     *
+     * <p>시행당 누출 확률이 2%대라 반복만 늘리면 검출률이 곧바로 올라간다.
+     * 100회로 올려 같은 회귀를 다시 재니 <b>10회 중 9회(90%)</b>였다. 대가는 몇 초다
+     * (이 클래스 전체가 33초). 100%는 아니므로 <b>한 번 초록이 났다고 회귀가 없다는
+     * 뜻은 아니다.</b> 터진 시행 번호는 1·1·1·2·5·11·18·18·32로 앞쪽에 몰린다.
      */
     @Test
     void 앞_세션의_종료_프레임이_reset을_넘어오지_않는다() {
-        for (int i = 0; i < 20; i++) {
+        for (int i = 0; i < 100; i++) {
             EngineIoSocket socket = EngineIoSocket.open(uri(), frame -> { }, () -> { });
 
             assertThat(behavior.receivedFrames())
