@@ -204,8 +204,24 @@ public class FakeChzzkBehavior {
         unsubscribeStatus = 200;
     }
 
+    /** 앞 세션이 닫히기를 기다리는 시한. 실측 최대 23ms에 200배 여유다. */
+    private static final Duration AWAIT_CLOSED_TIMEOUT = Duration.ofSeconds(5);
+
+    /**
+     * <b>시한을 다 쓰면 터진다.</b> 조용히 돌아가면 그대로 {@code received.clear()}로
+     * 넘어가고, 그 순간 CP6 결함 #1의 오염이 <b>신호 없이</b> 되살아난다 —
+     * 늦게 도착한 종료 프레임 "1"이 다음 테스트의 {@code receivedFrames()}에 남고,
+     * 같은 창이 ping "2"에도 열려 있어 건수 단언이 부풀 수 있다.
+     *
+     * <p>그 결함은 25% 간헐 실패로 나타나 원인을 찾는 데 오래 걸렸다.
+     * <b>삼키기만 하고 안 세면 조용한 실패를 우리가 만드는 것이다.</b>
+     *
+     * <p>실측(2026-08-06, 전체 1회): 호출 66회 · 시한 초과 0회 · 최대 23ms · 합계 579ms.
+     * 지금은 안 걸린다. 걸리는 날은 안 닫고 끝낸 테스트가 생겼거나
+     * {@code forget()}의 {@code compareAndSet}이 실패한 날이고, 둘 다 알아야 한다.
+     */
     private void awaitSessionClosed() {
-        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        long deadline = System.nanoTime() + AWAIT_CLOSED_TIMEOUT.toNanos();
         while (session.get() != null && System.nanoTime() < deadline) {
             try {
                 Thread.sleep(10);
@@ -213,6 +229,10 @@ public class FakeChzzkBehavior {
                 Thread.currentThread().interrupt();
                 return;
             }
+        }
+        if (session.get() != null) {
+            throw new IllegalStateException("앞 세션이 " + AWAIT_CLOSED_TIMEOUT.toSeconds()
+                    + "초 안에 안 닫혔다. 닫지 않고 끝낸 테스트가 있으면 그 프레임이 다음 테스트로 넘어간다");
         }
     }
 
