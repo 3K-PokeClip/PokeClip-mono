@@ -38,6 +38,16 @@ public class CollectorRunner implements ApplicationRunner {
 
     private final ChzzkProperties properties;
     private final CollectionStatus status;
+
+    /**
+     * <b>{@code RestClient.create()}로 만들지 않는다.</b> 그러면 자동 설정을 우회해
+     * {@code spring.http.clients.*}의 타임아웃이 어디에도 안 걸린다. 그때
+     * {@code createSession()}은 {@code establishTimeout}으로 못 끊는 동기 호출이라
+     * <b>부팅이 안 끝나고</b>, 같은 클라이언트가 종료 시 구독 반납에도 쓰여
+     * <b>종료도 안 끝난다.</b> 치지직이 연결만 받고 답을 안 주면 그대로 멈춘다.
+     */
+    private final RestClient restClient;
+
     private final CollectionMetrics metrics = new CollectionMetrics();
 
     private volatile ChatSession session;
@@ -48,9 +58,12 @@ public class CollectorRunner implements ApplicationRunner {
     /** 판정 라인은 종료 경로가 둘이라도 한 번만 나간다. */
     private final AtomicBoolean verdictLogged = new AtomicBoolean();
 
-    public CollectorRunner(ChzzkProperties properties, CollectionStatus status) {
+    public CollectorRunner(ChzzkProperties properties, CollectionStatus status,
+                           RestClient.Builder restClientBuilder) {
         this.properties = properties;
         this.status = status;
+        // 빌더는 프로토타입 빈이다. 한 번만 build()해서 들고 있는다.
+        this.restClient = restClientBuilder.build();
     }
 
     @Override
@@ -78,7 +91,7 @@ public class CollectorRunner implements ApplicationRunner {
 
         status.establishing();
         ChatSession opening = new ChatSession(new ChzzkSessionClient(
-                RestClient.create(), properties.baseUrl(), properties.accessToken()));
+                restClient, properties.baseUrl(), properties.accessToken()));
         opening.onFrame(this::handleFrame);
         opening.onClosed(this::handleClosed);
         session = opening;

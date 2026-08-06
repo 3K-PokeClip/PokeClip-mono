@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
 import java.util.List;
@@ -48,6 +49,7 @@ class ChatLogLeakTest {
 
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
+    @Autowired RestClient.Builder restClientBuilder;
 
     private CollectorRunner runner;
 
@@ -269,7 +271,7 @@ class ChatLogLeakTest {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(
                 new ChzzkProperties(true, TOKEN, "http://localhost:" + port, Duration.ofSeconds(5)),
-                status);
+                status, restClientBuilder);
         runner.start();
         return status;
     }

@@ -11,6 +11,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.core.env.Environment;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
 
@@ -66,6 +67,8 @@ class CollectorConfigTest {
 
         @LocalServerPort int port;
         @Autowired FakeChzzkBehavior behavior;
+        /** 자동 설정된 빌더다. 손으로 만들면 타임아웃 설정을 우회하게 된다. */
+        @Autowired RestClient.Builder restClientBuilder;
 
         private CollectorRunner runner;
 
@@ -154,7 +157,7 @@ class CollectorConfigTest {
         private CollectorRunner runnerFor(CollectionStatus status, boolean enabled) {
             var props = new ChzzkProperties(enabled, "test-token",
                     "http://localhost:" + port, Duration.ofSeconds(5));
-            return new CollectorRunner(props, status);
+            return new CollectorRunner(props, status, restClientBuilder);
         }
     }
 

@@ -69,8 +69,11 @@ public class FakeChzzkServer implements WebSocketConfigurer {
          * 길을 탄다. 요청에서 호스트·포트를 읽으므로 자리표시자가 필요 없다.
          */
         @GetMapping("/open/v1/sessions/auth")
-        public ResponseEntity<String> auth(HttpServletRequest request) {
+        public ResponseEntity<String> auth(HttpServletRequest request) throws InterruptedException {
             behavior.countAuthCall();
+            if (!behavior.authDelay.isZero()) {
+                Thread.sleep(behavior.authDelay.toMillis());
+            }
             if (behavior.authStatus != 200) {
                 return ResponseEntity.status(behavior.authStatus)
                         .body("{\"code\":401,\"message\":\"Unauthorized\",\"content\":null}");

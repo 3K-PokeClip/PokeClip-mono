@@ -7,6 +7,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
 import java.util.List;
@@ -35,6 +36,7 @@ class FinalVerdictTest {
 
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
+    @Autowired RestClient.Builder restClientBuilder;
 
     private CollectorRunner runner;
 
@@ -141,7 +143,7 @@ class FinalVerdictTest {
         try (LogCaptor captor = new LogCaptor()) {
             CollectionStatus status = new CollectionStatus();
             runner = new CollectorRunner(new ChzzkProperties(
-                    false, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status);
+                    false, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status, restClientBuilder);
             runner.start();
             runner.stop();
 
@@ -153,7 +155,7 @@ class FinalVerdictTest {
     private CollectionStatus start() {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
-                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status);
+                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status, restClientBuilder);
         runner.start();
         return status;
     }

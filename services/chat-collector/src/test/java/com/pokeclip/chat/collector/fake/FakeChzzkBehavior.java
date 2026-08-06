@@ -35,6 +35,14 @@ public class FakeChzzkBehavior {
     /** 세션 발급 REST가 돌려줄 상태. 401이면 T9(만료 토큰). */
     public volatile int authStatus = 200;
     /**
+     * 세션 발급 REST가 응답 전에 붙들고 있는 시간.
+     *
+     * <p><b>연결은 받아 놓고 답을 안 주는 상태</b>를 만든다. 거부(401)와 다르다 —
+     * 거부는 즉시 사유가 나오지만 이쪽은 read-timeout이 없으면 영영 매달린다.
+     * 그러면 부팅이 안 끝나고, 같은 클라이언트를 쓰는 종료 시 구독 반납도 안 끝난다.
+     */
+    public volatile Duration authDelay = Duration.ZERO;
+    /**
      * 구독 반납 REST가 돌려줄 상태. 200이 아니면 반납이 실패한다.
      * <b>이 스위치가 없으면 반납 실패 갈래를 밟는 테스트가 0개다</b> —
      * 예외가 종료 훅 밖으로 나가면 소켓 닫기가 통째로 건너뛰어진다는
@@ -60,6 +68,7 @@ public class FakeChzzkBehavior {
      * 재연결은 POK-86이고 이번 카드는 실패하면 사유만 남기고 멈춘다.
      */
     private final AtomicInteger authCalls = new AtomicInteger();
+    private final AtomicLong authRequestNanos = new AtomicLong();
     private final AtomicInteger unsubscribeCalls = new AtomicInteger();
     private final AtomicInteger closedSessions = new AtomicInteger();
     private final AtomicBoolean unsubscribeSawOpenSession = new AtomicBoolean();
@@ -67,6 +76,17 @@ public class FakeChzzkBehavior {
     public List<String> receivedFrames() { return List.copyOf(received); }
     public String handshakeQuery() { return handshakeQuery.get(); }
     public int authCallCount() { return authCalls.get(); }
+
+    /**
+     * 세션 발급 요청이 <b>서버에 도착한 뒤</b> 흐른 시간.
+     *
+     * <p>시한 검사는 이 자를 쓴다. 테스트가 직접 잰 시간에는 스프링 부팅이 통째로
+     * 섞여 들어와, 시한이 걸렸는지를 가르려면 여유를 몇 초씩 둬야 하고 그러면
+     * 자가 무뎌진다. 요청 도착 시각부터 재면 부팅 시간이 빠진다.
+     */
+    public Duration sinceAuthRequest() {
+        return Duration.ofNanos(System.nanoTime() - authRequestNanos.get());
+    }
 
     /** 종료 시 구독 반납이 실제로 왔는지. 안 오면 세션을 우리 손으로 안 닫은 것이다. */
     public int unsubscribeCallCount() { return unsubscribeCalls.get(); }
@@ -151,7 +171,10 @@ public class FakeChzzkBehavior {
     }
 
     void record(String frame) { received.add(frame); }
-    void countAuthCall() { authCalls.incrementAndGet(); }
+    void countAuthCall() {
+        authRequestNanos.set(System.nanoTime());
+        authCalls.incrementAndGet();
+    }
     void rememberQuery(String query) { handshakeQuery.set(query == null ? "" : query); }
     void remember(WebSocketSession s) { session.set(s); }
 
@@ -201,6 +224,7 @@ public class FakeChzzkBehavior {
         answerPong = true;
         disconnectWhenPingMissing = true;
         authStatus = 200;
+        authDelay = Duration.ZERO;
         unsubscribeStatus = 200;
     }
 

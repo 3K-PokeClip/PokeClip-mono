@@ -7,6 +7,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
 
@@ -23,6 +24,7 @@ class SessionLifecycleTest {
 
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
+    @Autowired RestClient.Builder restClientBuilder;
 
     private CollectorRunner runner;
 
@@ -37,7 +39,7 @@ class SessionLifecycleTest {
         try (LogCaptor captor = new LogCaptor()) {
             CollectionStatus status = new CollectionStatus();
             runner = new CollectorRunner(new ChzzkProperties(
-                    true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status);
+                    true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status, restClientBuilder);
             runner.start();
             assertThat(status.state())
                     .as("붙지도 않았다면 revoked를 받을 길이 없다")
@@ -67,7 +69,7 @@ class SessionLifecycleTest {
     void unsubscribed도_요약에_남는다() throws Exception {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
-                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status);
+                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status, restClientBuilder);
         runner.start();
         assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
 
@@ -90,7 +92,7 @@ class SessionLifecycleTest {
     void 수립_과정의_connected와_subscribed가_요약에_남는다() {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
-                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status);
+                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status, restClientBuilder);
         runner.start();
 
         assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
