@@ -65,6 +65,37 @@ class HeartbeatTest {
     private static final Duration OBSERVE_WINDOW = Duration.ofSeconds(3);
 
     /**
+     * <b>부하 도달 양성 대조의 하한.</b> 홍수가 수신 스레드에 실제로 닿았는가를 본다.
+     *
+     * <p>이게 없으면 T1·T2에 남는 단언이 ping 건수 하나뿐인데, 그 줄은 전용
+     * 스케줄러만으로도 창 안에 8건을 채워 <b>부하와 무관하게 참</b>이 된다 —
+     * 홍수 루프를 통째로 지워도 둘 다 초록이었다(2026-08-06 실측). 그러면 T1·T2는
+     * "경합에서 ping이 나갔다"가 아니라 "한가할 때 ping이 나갔다"를 잰 것이 되고,
+     * 겨냥한 회귀를 하나도 못 잡는다. T12는 {@code contains("2")}가 같은 일을 한다.
+     *
+     * <p><b>T1의 실측은 1건이다.</b> 이론값 {@code 창 / SLOW_HANDLER = 3000/1600 ≈ 1.9}
+     * 중 한 자리를 핸드셰이크 직후의 connected SYSTEM 이벤트가 먼저 먹는다 —
+     * 그것도 EVENT 프레임이라 같은 지연을 태우기 때문이다. 그래서 첫 CHAT은 창의
+     * 1600ms 지점에 들어온다(5회, 편차 0).
+     *
+     * <p>실측이 1이면 하한도 1뿐이라 <b>숫자 여유가 없다.</b> 대신 시간으로 여유를
+     * 준다 — 아래 {@code awaitAtLeast}가 창이 끝난 뒤 2초를 더 기다린다. 첫 CHAT의
+     * 마감이 3000ms에서 5000ms로 늘어 필요치 1600ms의 <b>3.1배</b>가 된다.
+     * 홍수가 아예 안 오면 시한을 다 쓰고 0이라 판별은 그대로 선다.
+     */
+    private static final long MIN_CHATS_T1 = 1;
+
+    /**
+     * T2의 부하 도달 하한. 지연이 0이라 3,000건이 그대로 도착한다 —
+     * 실측 <b>3,000건</b>(5회, 편차 0. 홍수와 정확히 같다).
+     *
+     * <p>하한은 <b>1,000</b>이다. 실측의 1/3이라 여유가 3배다. 창 3초 안에 3,000건을
+     * 다 못 훑을 만큼 부하가 걸려도 1/3은 남는다는 뜻으로 잡은 값이지 기대값이 아니다.
+     * 홍수가 안 오면 0이라 판별에는 여유가 넘친다.
+     */
+    private static final long MIN_CHATS_T2 = 1_000;
+
+    /**
      * 창 안에 나가야 할 ping의 하한. <b>운영이 준 송신 주기에서 파생한다</b> —
      * 여기서 주기를 다시 계산하면({@code pingInterval × 0.8}) 운영
      * {@code Handshake.sendPeriod()}의 배수를 복제한 것이 되어, 운영 배수가
@@ -142,7 +173,8 @@ class HeartbeatTest {
         behavior.pingIntervalMillis = PING_INTERVAL_MS;
         behavior.pingTimeoutMillis = PING_TIMEOUT_MS;
 
-        Handshake handshake = openWithSlowHandler(SLOW_HANDLER);
+        AtomicLong chatsHandled = new AtomicLong();
+        Handshake handshake = openWithSlowHandler(SLOW_HANDLER, chatsHandled);
         지연이_임계보다_큰지_먼저_확인한다(handshake);
         heartbeat = Heartbeat.start(socket, handshake, () -> { });
 
@@ -157,8 +189,19 @@ class HeartbeatTest {
         // 자를 가짜 서버 쪽에 둔다. Heartbeat.maxPingGap()은 클라이언트의
         // 자기 신고라, 그것으로 재면 "지표가 틀린 경우"를 못 잡는다.
         // 서버가 2를 실제로 받은 시각이 지상 진실이고, T12가 같은 자를 쓴다.
+        //
+        // 창이 끝난 시각의 건수를 여기서 고정한다. 아래 대기가 이 값을 늘리면
+        // 늘어난 시간만큼 ping이 더 나가 건수 단언이 헐거워진다.
+        long pings = pingsReceived();
+
+        // 부하 도달 양성 대조가 먼저다. 홍수가 수신 스레드에 안 닿았으면 아래 건수
+        // 단언은 "한가한 상태에서 ping이 나갔다"를 재고 그냥 통과한다.
+        assertThat(awaitAtLeast(chatsHandled, MIN_CHATS_T1))
+                .as("홍수가 수신 스레드에 도달하지 않았다 — 아래 건수 단언은 경합을 잰 것이 아니다")
+                .isGreaterThanOrEqualTo(MIN_CHATS_T1);
+
         long minPings = minPings(handshake);
-        assertThat(pingsReceived())
+        assertThat(pings)
                 .as("창 안에 ping이 %d건 이하면 지속적으로 막힌 것이다 — 8/1이 그 모양이었다", minPings)
                 .isGreaterThan(minPings);
     }
@@ -169,7 +212,8 @@ class HeartbeatTest {
         behavior.pingIntervalMillis = PING_INTERVAL_MS;
         behavior.pingTimeoutMillis = PING_TIMEOUT_MS;
 
-        Handshake handshake = openWithSlowHandler(Duration.ZERO);
+        AtomicLong chatsHandled = new AtomicLong();
+        Handshake handshake = openWithSlowHandler(Duration.ZERO, chatsHandled);
         heartbeat = Heartbeat.start(socket, handshake, () -> { });
 
         for (int i = 0; i < 3_000; i++) {
@@ -177,8 +221,16 @@ class HeartbeatTest {
         }
         Thread.sleep(OBSERVE_WINDOW.toMillis());
 
+        long pings = pingsReceived();
+
+        // T1과 같은 이유의 양성 대조. 3,000건을 밀어 넣었다고 적혀 있어도 그것이
+        // 수신 스레드까지 왔다는 근거는 여기밖에 없다.
+        assertThat(awaitAtLeast(chatsHandled, MIN_CHATS_T2))
+                .as("홍수가 수신 스레드에 도달하지 않았다 — 아래 건수 단언은 홍수를 잰 것이 아니다")
+                .isGreaterThanOrEqualTo(MIN_CHATS_T2);
+
         long minPings = minPings(handshake);
-        assertThat(pingsReceived())
+        assertThat(pings)
                 .as("3,000건이 쏟아지는 동안 ping이 %d건 이하면 홍수가 ping을 막은 것이다", minPings)
                 .isGreaterThan(minPings);
     }
@@ -358,8 +410,22 @@ class HeartbeatTest {
     }
 
     private Handshake openWithSlowHandler(Duration delay) throws Exception {
+        return openWithSlowHandler(delay, new AtomicLong());
+    }
+
+    private Handshake openWithSlowHandler(Duration delay, AtomicLong chatsHandled) throws Exception {
         return openWith((frame, handshake) -> {
-            if (frame.type() == EngineIoFrame.Type.EVENT && !delay.isZero()) {
+            if (frame.type() != EngineIoFrame.Type.EVENT) {
+                return;
+            }
+            // CHAT만 센다. 핸드셰이크 직후의 connected SYSTEM 이벤트도 EVENT
+            // 프레임이라, 그것까지 세면 홍수를 통째로 지워도 카운터가 1이 되어
+            // 양성 대조가 자동으로 참이 된다 — 실측으로 그렇게 됐다(2026-08-06).
+            // 자는 것은 EVENT 전부다. T12와 같은 부하여야 비교가 성립한다.
+            if (frame.payload().startsWith("[\"CHAT\"")) {
+                chatsHandled.incrementAndGet();
+            }
+            if (!delay.isZero()) {
                 sleepQuietly(delay);            // 느린 핸들러
             }
         });
@@ -419,6 +485,24 @@ class HeartbeatTest {
      */
     private long pingsReceived() {
         return behavior.receivedFrames().stream().filter("2"::equals).count();
+    }
+
+    /**
+     * 카운터가 하한에 닿을 때까지 시한을 두고 기다린 뒤 <b>실제 값</b>을 돌려준다.
+     *
+     * <p><b>단언을 무르게 하는 것이 아니라 스케줄링 지연만 흡수한다.</b> 홍수가
+     * 아예 안 오면 시한을 다 쓰고 0을 돌려주므로 판정은 그대로 선다 — 값을 만들어
+     * 주지 않고 기다리기만 한다. 시한을 2초로 잡은 근거는 {@code MIN_CHATS_T1}에 있다.
+     *
+     * <p>부르는 쪽이 ping 건수를 <b>이 대기 전에</b> 고정해야 한다. 안 그러면
+     * 늘어난 시간만큼 ping이 더 나가 건수 단언이 헐거워진다.
+     */
+    private static long awaitAtLeast(AtomicLong counter, long floor) throws InterruptedException {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (counter.get() < floor && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+        return counter.get();
     }
 
     private static void sleepQuietly(Duration d) {
