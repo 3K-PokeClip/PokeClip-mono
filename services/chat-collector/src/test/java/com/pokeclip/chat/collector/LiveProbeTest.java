@@ -28,13 +28,22 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 그래서 세션 발급 → 연결 → sessionKey → 구독 → subscribed 까지 전부 돈다.
  * 안 오는 것은 42["CHAT"] 하나뿐이고 그건 10분 실측이 본다.
  *
- * <p>토큰이 없으면 SKIP이다. CI에서는 항상 SKIP된다.
- * <b>토큰은 24시간짜리라 개발 중 매일 재발급한다.</b>
+ * <p><b>기본은 SKIP이다.</b> 돌리려면 {@code CHZZK_LIVE_PROBE=true}를 명시적으로 준다.
+ *
+ * <p><b>토큰이 있다는 것과 "지금 실서버를 때려도 된다"는 것은 다르다.</b>
+ * 원래 이 게이트가 {@code CHZZK_ACCESS_TOKEN}의 존재였는데, 토큰은 24시간짜리라
+ * 만료되는 순간 <b>토큰을 가진 사람의 빌드가 매일 빨간불이 된다</b>(실제로 그렇게 됐다 —
+ * {@code 401 INVALID_TOKEN}으로 6/6 실패). 그 사람은 {@code bootRun} 때문에 환경변수를
+ * 계속 켜 두는데, 그게 "이 테스트를 돌려 달라"는 뜻은 아니었다.
+ *
+ * <p>고쳐도 빨간불인 테스트는 몇 번 겪으면 사람이 그 줄을 무시하기 시작한다.
+ * 그러면 진짜 회귀도 같이 묻힌다. 그래서 <b>의도를 묻는 변수</b>로 바꿨다.
  *
  * <p><b>연결 상한은 Access Token당 3개다.</b> 실패했을 때 "상한에 막힌 것"과
  * "핸드셰이크가 안 되는 것"을 구분해야 하므로, 붙기 전에 이미 열려 있는 세션
  * 목록을 먼저 찍고 시도 횟수를 파일에 남긴다. 끝나면 반드시 닫는다.
  */
+@EnabledIfEnvironmentVariable(named = "CHZZK_LIVE_PROBE", matches = "true")
 @EnabledIfEnvironmentVariable(named = "CHZZK_ACCESS_TOKEN", matches = ".+")
 class LiveProbeTest {
 
