@@ -67,6 +67,14 @@ class CollectorShutdownTest {
                     .as("정상 종료의 사유가 없으면 조용히 끊긴 것과 같은 줄이 된다")
                     .anyMatch(m -> m.startsWith("chat.session.verdict")
                             && m.contains("reason=SHUTDOWN"));
+
+            // 반납 결말 셋 중 실제로 검사되던 것은 failed 하나뿐이었다. 두 라벨을
+            // 서로 뒤바꿔도(RETURNED("skipped")·SKIPPED("returned")) 전체 89건이
+            // 초록이었다 — 운영에서 subscription=returned를 보고 "반납됐다"고 읽는데
+            // 실제로는 수립 실패였던 상태가 만들어질 수 있다.
+            assertThat(captor.messages())
+                    .as("반납에 성공한 결말이 returned로 안 나가면 세 갈래를 가른 의미가 없다")
+                    .contains("chat.session.released subscription=returned");
         }
 
         assertThat(behavior.unsubscribeCallCount())

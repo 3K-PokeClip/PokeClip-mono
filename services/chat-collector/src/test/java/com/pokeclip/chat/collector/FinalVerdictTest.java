@@ -123,6 +123,15 @@ class FinalVerdictTest {
             assertThat(verdictLine(captor))
                     .contains("received=0")
                     .contains("reason=SESSION_AUTH_FAILED");
+
+            // 수립에 실패했으니 반납할 세션 키가 없다. 이 갈래를 밟는 테스트는
+            // 여기뿐인데 결말을 아무도 안 봤다 — RETURNED·SKIPPED 라벨을 서로
+            // 뒤바꿔도 전체 89건이 초록이었다. failed와 갈라 놓은 이유가
+            // "보냈는데 터졌다"와 "보낼 것이 없었다"를 구분하는 것이므로,
+            // 그 값을 실제로 보는 줄이 있어야 한다.
+            assertThat(captor.messages())
+                    .as("반납할 키가 없었던 결말이 skipped로 안 나가면 반납 실패와 구분이 안 된다")
+                    .contains("chat.session.released subscription=skipped");
         }
     }
 
