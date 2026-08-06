@@ -99,15 +99,22 @@ class HeartbeatTest {
      * 창 안에 나가야 할 ping의 하한. <b>운영이 준 송신 주기에서 파생한다</b> —
      * 여기서 주기를 다시 계산하면({@code pingInterval × 0.8}) 운영
      * {@code Handshake.sendPeriod()}의 배수를 복제한 것이 되어, 운영 배수가
-     * 바뀌는 날 이 임계만 조용히 어긋난다. 정수 나눗셈이라 복제본은
-     * {@code PING_INTERVAL_MS ≥ 1875}에서 <b>하한이 0</b>이 되기도 했다.
+     * 바뀌는 날 이 임계만 조용히 어긋난다.
      *
      * <p>창 3초 ÷ 주기 400ms = 7건이 기대값이고, 그 절반인 <b>3건</b>이 하한이다.
      * 실측(25회씩)은 정상 <b>8건</b>(편차 0) · 사고 <b>1건</b>(편차 0)이라
      * 양쪽으로 여유가 +5 / −2다.
+     *
+     * <p><b>{@code Math.max(1, …)}이 하한을 깐다. 정수 나눗셈이 0을 만들기 때문이다</b> —
+     * 배수 복제를 없애고 파생으로 바꾼 뒤에도 그대로다. {@code pingInterval = 1877}부터
+     * 0이고 <b>실제 치지직 값 25000ms에서도 0</b>이다(주기 20000ms → 3000/20000/2 = 0).
+     *
+     * <p>하한이 0이면 T1의 {@code > 0}이 ping 1건에도 통과해 거의 자동 참이 된다.
+     * 짝인 T12의 {@code <= 0}이 빨간불이 되므로 짝 전체가 뚫리지는 않지만,
+     * T1 한 줄만 놓고 보면 아무것도 안 재는 줄이 된다.
      */
     private static long minPings(Handshake handshake) {
-        return OBSERVE_WINDOW.toMillis() / handshake.sendPeriod().toMillis() / 2;
+        return Math.max(1, OBSERVE_WINDOW.toMillis() / handshake.sendPeriod().toMillis() / 2);
     }
 
     private EngineIoSocket socket;
