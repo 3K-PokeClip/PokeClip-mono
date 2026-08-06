@@ -83,31 +83,46 @@ class HeartbeatTest {
     private Heartbeat heartbeat;
 
     // ─────────────────────────────────────────────────────────────────────
-    // T1이 흔들리면: 배수를 만지지 말고 간격 단언(isLessThanOrEqualTo)만 지운다.
+    // 왜 T1·T2가 "최대 간격"이 아니라 "ping 건수"를 재는가 (2026-08-06 실측)
     //
-    // 원래 처방은 "T1을 통째로 지운다"였다. 2026-08-05에 실측하고 바꿨다.
+    // 간격 단언(maxPingGapObserved <= 임계)이 있었는데 지웠다. 부하에서
+    // 거짓 빨간불을 낸다.
     //
-    // 재측정(깨끗한 트리, 25회): 실패 0. 관측 403~413ms / 임계 800ms —
-    // 여유 387ms에 지터가 ±5ms다. 전체 테스트와 함께 돌려도 4~5ms만 밀린다.
-    // 흔들림 1회 관측은 오염된 표본에서 나왔고 재현되지 않았다.
-    // 논리 CPU 18개를 전부 굶겨도 10/10 통과했다(최대 758ms).
+    //   압력 없음        29초 시행    실패 0
+    //   스피너 18개      36~51초      22회 중 실패 0
+    //   스피너 40개      60~86초      T1 4회 · T2 3회 실패 (최악 2.27초 / 임계 0.8초)
     //
-    // 그래서 지우지 않는다. 다만 그 포화에서 여유가 42ms까지 줄었으므로
-    // 간격 단언은 언젠가 CI에서 흔들릴 수 있다. 그때 이 테스트를 통째로
-    // 버리지 않아도 되게 건수 단언을 함께 뒀다 — 같은 포화에서 간격이
-    // 1.5배 벌어지는 동안 건수는 10회 전부 8건으로 꿈쩍도 안 했다.
+    // 같은 압력에서 건수는 한 번도 안 깨졌다. scheduleAtFixedRate가 밀린
+    // 주기를 따라잡아 창 안의 총량이 보존되기 때문이다. 간격은 최악값이라
+    // 스케줄링 지연 한 번에 깨지고, 건수는 지속적으로 막혀야 깨진다.
     //
-    // 배수·주기를 만지는 것은 여전히 금지다. 그 순간 T12의 2배 여유도 같이
-    // 흔들리고, 무엇이 무엇을 지키는지가 흐려진다.
+    // 그리고 8/1 사고가 지속적 막힘이었다 — 74초간 ping 0회. 건수가 그
+    // 모양을 직접 잰다.
+    //
+    // 잃은 것: "몇 초 밀렸나"를 못 잰다. 그건 실서버 10분 실측이 훨씬 강하게
+    // 잰다 — 압축 비율이 아니라 진짜 25초/60초에서 요약 23줄 내내 20.0초,
+    // 지터 0이었다.
+    //
+    // 배수·주기·SLOW_HANDLER를 만지지 마라. 아래 전제가 같이 흔들린다.
     // ─────────────────────────────────────────────────────────────────────
 
     /**
      * T1·T12가 성립하기 위한 전제. 이게 깨지면 두 테스트 다 무의미하므로
      * 각 테스트 안에서 부른다 — 별도 테스트로 두면 순서에 따라 안 돌 수 있다.
+     *
+     * <p><b>이 전제가 건수 단언의 판별력을 떠받친다.</b> 사고 구조에서는 이벤트마다
+     * ping이 한 번 나가고 이벤트 처리가 직렬이므로, 창 안의 건수가
+     * {@code 창 / SLOW_HANDLER}로 묶인다(emit을 아무리 빨리 해도 마찬가지다).
+     * 그 값이 임계({@code 창 / 송신주기 / 2}) 이하가 되려면
+     * <b>{@code SLOW_HANDLER ≥ 송신주기 × 2 = ping 임계}</b>여야 한다 —
+     * 정확히 아래가 단언하는 것이다.
+     *
+     * <p>실측으로 확인했다. 이 전제를 깨면(지연을 임계의 0.8배로) 사고 구조에서도
+     * 건수가 임계를 넘어 <b>T12의 건수 단언이 빨간불이 된다.</b>
      */
     private static void 지연이_임계보다_큰지_먼저_확인한다(Handshake handshake) {
         assertThat(SLOW_HANDLER)
-                .as("지연이 임계 이하면 사고 상태에서도 간격이 임계를 안 넘어 T12가 못 잡는다")
+                .as("지연이 임계 이하면 사고 상태에서도 건수가 안 줄어 T12가 못 잡는다")
                 .isGreaterThan(handshake.pingThreshold());
     }
 
@@ -123,7 +138,7 @@ class HeartbeatTest {
      * 수신 핸들러를 느리게 만들어 ping 스레드가 막히는지 본다.
      */
     @Test
-    void 수신_핸들러가_느려도_ping_간격이_임계를_넘지_않는다() throws Exception {
+    void 수신_핸들러가_느려도_ping이_계속_나간다() throws Exception {
         behavior.pingIntervalMillis = PING_INTERVAL_MS;
         behavior.pingTimeoutMillis = PING_TIMEOUT_MS;
 
@@ -142,29 +157,15 @@ class HeartbeatTest {
         // 자를 가짜 서버 쪽에 둔다. Heartbeat.maxPingGap()은 클라이언트의
         // 자기 신고라, 그것으로 재면 "지표가 틀린 경우"를 못 잡는다.
         // 서버가 2를 실제로 받은 시각이 지상 진실이고, T12가 같은 자를 쓴다.
-        assertThat(behavior.maxPingGapObserved())
-                .as("수신이 밀리면 ping이 막힌다 — 이게 8/1 사고다")
-                .isLessThanOrEqualTo(handshake.pingThreshold());
-
-        // 간격과 건수는 서로 다른 회귀를 잡는다. 둘 다 있어야 한다.
-        //
-        // 간격은 "한 주기를 통째로 걸렀다"를 잡지만 부하에 민감하다 — 실측에서
-        // 정상 부하 여유가 387ms인데 CPU 18코어를 전부 굶기면 42ms까지 줄었다.
-        // 건수는 반대다. 같은 포화에서 간격이 1.5배 벌어지는 동안에도 10회 전부
-        // 8건이었다. scheduleAtFixedRate가 밀린 주기를 따라잡아 창 안의 총량이
-        // 보존되기 때문이다.
-        //
-        // 그리고 8/1 사고는 "한 번 걸렀다"가 아니라 74초간 0회였다 — 지속적
-        // 막힘이고, 건수가 그 모양을 직접 잰다.
         long minPings = minPings(handshake);
         assertThat(pingsReceived())
                 .as("창 안에 ping이 %d건 이하면 지속적으로 막힌 것이다 — 8/1이 그 모양이었다", minPings)
                 .isGreaterThan(minPings);
     }
 
-    /** T2 — 보조. 건수로도 밀어 본다. */
+    /** T2 — 보조. 느린 핸들러가 아니라 건수로 밀어 본다. */
     @Test
-    void 채팅이_쏟아져도_ping_간격이_임계를_넘지_않는다() throws Exception {
+    void 채팅이_쏟아져도_ping이_계속_나간다() throws Exception {
         behavior.pingIntervalMillis = PING_INTERVAL_MS;
         behavior.pingTimeoutMillis = PING_TIMEOUT_MS;
 
@@ -176,7 +177,10 @@ class HeartbeatTest {
         }
         Thread.sleep(OBSERVE_WINDOW.toMillis());
 
-        assertThat(behavior.maxPingGapObserved()).isLessThanOrEqualTo(handshake.pingThreshold());
+        long minPings = minPings(handshake);
+        assertThat(pingsReceived())
+                .as("3,000건이 쏟아지는 동안 ping이 %d건 이하면 홍수가 ping을 막은 것이다", minPings)
+                .isGreaterThan(minPings);
     }
 
     /** T11 — 지표 자체 검증. pong이 끊기면 공백이 실제로 커지는가. */
@@ -245,11 +249,10 @@ class HeartbeatTest {
 
         // 사고 구조가 실제로 재현됐다는 양성 대조가 먼저다.
         //
-        // T1과 부등호가 반대라 같은 성질이 정반대로 작동한다. maxPingGapObserved가
-        // "흘러가는 중인 공백"까지 세므로 ping이 0회면 값이 3초까지 자라는데,
-        // T1은 <= 임계라 빨간불이 되어 보호되고 T12는 > 임계라 초록불이 된다.
-        // 실제로 재 보면 틀린 형태(0회, 3016ms)가 옳은 재현(1회, 1607ms)보다
-        // 두 배 여유 있게 통과한다 — 여유값으로는 사람이 눈치챌 수 없다.
+        // ping이 한 번도 안 나갔으면 이건 "ping 0회"를 잰 것이고, 그 상태는
+        // 건수 단언을 여유 있게 통과시켜 버린다(0 <= 3). 그러면 T12는
+        // "수신 스레드에 얹으면 깨진다"가 아니라 "안 보내면 깨진다"를 잰 것이 되고,
+        // 그건 회귀를 못 잡는다.
         //
         // T12는 T1·T2의 값어치를 보증하는 유일한 근거인데, 이 줄이 없으면
         // 그 보증서가 자기 위조를 못 잡는다.
@@ -258,8 +261,14 @@ class HeartbeatTest {
                         + "'ping 0회'를 잰 것이고 회귀는 못 잡는다")
                 .contains("2");
 
+        // 사고 구조에서 간격이 실제로 벌어진다는 관측. T1·T2가 더 이상 간격을
+        // 안 재므로 이 줄은 짝이 아니라 양성 대조다 — 2026-08-01에 무슨 일이
+        // 있었는지를 숫자로 남긴다.
+        //
+        // 부등호가 반대라 부하에 안전하다. 부하는 공백을 키우므로 통과 쪽으로
+        // 민다. T1·T2의 간격 단언을 지운 이유가 여기엔 해당하지 않는다.
         assertThat(behavior.maxPingGapObserved())
-                .as("수신 스레드에 얹었는데도 통과한다면 T1은 8/1 회귀를 못 잡는다")
+                .as("사고 구조인데 간격이 안 벌어졌다면 재현이 안 된 것이다")
                 .isGreaterThan(handshake.pingThreshold());
 
         // T1의 건수 단언도 자기검사가 있어야 한다. 없으면 그 줄은 "정상에서
