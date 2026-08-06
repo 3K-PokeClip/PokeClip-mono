@@ -35,6 +35,15 @@ jobs:
           # 비교 대상을 못 만들고, 볼 게 없으니 몇 초 만에 조용히 끝난다.
           fetch-depth: 0
 
+      # ⚠ 이 파일을 고치는 PR에서는 리뷰가 안 돈다. 고장이 아니다.
+      #
+      #   Skipping action due to workflow validation: ... The workflow file must
+      #   exist and have identical content to the version on the repository's
+      #   default branch. ... your workflow will begin working once you merge your PR.
+      #
+      # 액션이 main의 워크플로와 내용이 다르면 실행을 거부한다(보안 장치).
+      # 그래서 워크플로 수정은 자기 PR에서 검증이 안 된다 — 머지한 뒤 다른 PR에
+      # push해서 확인해야 한다. 2026-08-06에 이걸 모르고 "또 안 달렸다"로 읽었다.
       - name: Run Claude Code Review
         id: claude-review
         uses: anthropics/claude-code-action@v1
