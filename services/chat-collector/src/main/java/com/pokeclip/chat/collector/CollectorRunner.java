@@ -58,6 +58,13 @@ public class CollectorRunner implements ApplicationRunner {
     /** 판정 라인은 종료 경로가 둘이라도 한 번만 나간다. */
     private final AtomicBoolean verdictLogged = new AtomicBoolean();
 
+    /**
+     * 뒷정리도 마찬가지다. <b>종료 경로 둘이 같은 절차를 공유하므로</b> 가드가
+     * 없으면 구독 반납이 두 번 나간다. 소켓을 우리 손으로 닫는 것이 다시
+     * {@code onClose}를 부를 수도 있어, 같은 스레드로 재진입하는 길도 있다.
+     */
+    private final AtomicBoolean cleanedUp = new AtomicBoolean();
+
     public CollectorRunner(ChzzkProperties properties, CollectionStatus status,
                            RestClient.Builder restClientBuilder) {
         this.properties = properties;
@@ -122,6 +129,10 @@ public class CollectorRunner implements ApplicationRunner {
     /**
      * 서버가 조용히 끊었을 때. 상태를 COLLECTING으로 두면 수집이 죽었는데
      * health가 UP인 상태가 되는데, 그게 2026-08-01의 마지막 장면이다.
+     *
+     * <p><b>뒷정리를 종료 훅까지 미루지 않는다.</b> 프로세스는 계속 살아 있으므로,
+     * 미루면 죽은 세션에 ping을 계속 쏘고({@code ping_send_failed}가 쌓인다)
+     * 30초 요약도 계속 찍고 실행기·세션 자원이 프로세스가 죽을 때까지 남는다.
      */
     private void handleClosed() {
         if (status.state() == CollectionStatus.State.STOPPED) {
@@ -129,7 +140,7 @@ public class CollectorRunner implements ApplicationRunner {
         }
         log.warn("chat.session.closed reason={}", StopReason.TRANSPORT_CLOSED);
         status.stopped(StopReason.TRANSPORT_CLOSED);
-        logVerdictOnce(StopReason.TRANSPORT_CLOSED);
+        cleanUpOnce(StopReason.TRANSPORT_CLOSED);
     }
 
     /**
@@ -188,6 +199,23 @@ public class CollectorRunner implements ApplicationRunner {
 
     @PreDestroy
     public void stop() {
+        cleanUpOnce(status.reason());
+    }
+
+    /**
+     * 두 종료 경로(전송 절단 · 프로세스 종료)가 공유하는 정리 절차.
+     *
+     * <p><b>한 번만 돈다.</b> 절단이 먼저 정리하고 나면 뒤이은 {@code stop()}은
+     * 아무것도 안 한다 — 안 그러면 구독 반납이 두 번 나간다. POK-86이 재연결을
+     * 붙이면 이 가드를 세션마다 초기화해야 한다.
+     *
+     * @param reason 판정 라인에 남길 사유. null이면 정상 종료(SHUTDOWN)다
+     */
+    private void cleanUpOnce(StopReason reason) {
+        if (!cleanedUp.compareAndSet(false, true)) {
+            return;
+        }
+
         // 만든 역순으로 닫는다. 요약이 먼저 멈춰야 닫히는 중인 지표를 안 읽는다.
         SummaryLogger logger = summaryLogger;
         if (logger != null) logger.close();
@@ -199,7 +227,7 @@ public class CollectorRunner implements ApplicationRunner {
         // 판정 라인이 먼저다. 소켓을 닫으면 heartbeat 지표를 못 읽는 것은 아니지만,
         // 닫는 도중 예외가 나도 판정은 남아야 한다.
         if (status.state() != CollectionStatus.State.DISABLED) {
-            logVerdictOnce(status.reason());
+            logVerdictOnce(reason);
         }
         heartbeat = null;
 
