@@ -17,15 +17,36 @@ import java.util.function.Consumer;
  */
 public final class EngineIoSocket implements AutoCloseable {
 
+    /**
+     * <b>참조를 들고 있어야 닫을 수 있다.</b> 셀렉터 스레드와 워커 풀을 소유하는데,
+     * 소켓마다 새로 만들면서 안 닫으면 그 스레드가 통째로 남는다. 지금은 프로세스당
+     * 한 번이라 영향이 작지만 {@code ChatSession.open()}은 재진입 가능하도록
+     * 설계돼 있고, POK-86이 강제 절단 뒤에 그것을 다시 부른다.
+     */
+    private final HttpClient httpClient;
+
     private final WebSocket webSocket;
     private final Object sendLock = new Object();
 
-    private EngineIoSocket(WebSocket webSocket) {
+    private EngineIoSocket(HttpClient httpClient, WebSocket webSocket) {
+        this.httpClient = httpClient;
         this.webSocket = webSocket;
     }
 
     public static EngineIoSocket open(URI uri, Consumer<EngineIoFrame> onFrame, Runnable onClosed) {
-        WebSocket ws = HttpClient.newHttpClient().newWebSocketBuilder()
+        HttpClient httpClient = HttpClient.newHttpClient();
+        try {
+            return new EngineIoSocket(httpClient, connect(httpClient, uri, onFrame, onClosed));
+        } catch (RuntimeException e) {
+            // 붙는 데 실패해도 스레드는 이미 떴다. 여기서 안 닫으면 실패할 때마다 쌓인다.
+            httpClient.shutdownNow();
+            throw e;
+        }
+    }
+
+    private static WebSocket connect(HttpClient httpClient, URI uri,
+                                     Consumer<EngineIoFrame> onFrame, Runnable onClosed) {
+        return httpClient.newWebSocketBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
                 .buildAsync(uri, new WebSocket.Listener() {
 
@@ -63,8 +84,6 @@ public final class EngineIoSocket implements AutoCloseable {
                     }
                 })
                 .join();
-
-        return new EngineIoSocket(ws);
     }
 
     /** 우리가 WS로 내보내는 유일한 프레임. */
@@ -98,6 +117,10 @@ public final class EngineIoSocket implements AutoCloseable {
                 // 이미 죽은 소켓이다. 알릴 상대가 없으니 그냥 끝낸다.
             }
             webSocket.abort();
+            // close()가 아니라 shutdownNow()다. close()는 남은 작업이 끝날 때까지
+            // 무기한 막는데, 여기는 종료 경로라 한 번 멈추면 뒤따르는 정리가
+            // 통째로 건너뛰어진다.
+            httpClient.shutdownNow();
         }
     }
 }
