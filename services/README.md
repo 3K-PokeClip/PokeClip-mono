@@ -109,6 +109,33 @@ docker compose up -d postgres redis
 빈 기본값을 주고 검증으로 잡는 이유는, 안 주면 리터럴 `"${VAR}"`이 바인딩돼
 **서버는 뜨고 헬스체크도 통과하는데 그 기능만 전부 실패하기** 때문이다.
 
+**`chat-collector`는 환경변수 없이도 뜨지만 수집을 시작하지 않는다.** `CHZZK_ENABLED`
+기본값이 `false`다 — 켜진 채로 두면 부팅만으로 치지직 세션을 하나 먹는데, 동시 연결
+상한이 **Access Token당 3개**라 아무도 모르는 사이에 한도가 소진된다. 실제로 받으려면
+둘을 준다.
+
+```bash
+CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-collector:bootRun
+```
+
+`CHZZK_ACCESS_TOKEN`은 **유저 Access Token**이다. 채팅 구독은 Client 인증으로 못 받는다.
+만료된 토큰(수명 24시간)은 빈 값이 아니라 검증에 안 걸리므로, 그때는 조용히 재시도하지
+않고 `chat.session.stopped stage=AUTH reason=SESSION_AUTH_FAILED`를 남기고 멈춘다.
+
+받고 있는지는 헬스체크에 나온다.
+
+```bash
+curl -s localhost:8083/actuator/health
+# {"collectorHealth":{"details":{"status":"collecting"},"status":"UP"}}
+```
+
+**치지직 실서버에 붙어 보는 테스트는 기본으로 안 돈다.** 돌리려면
+`CHZZK_LIVE_PROBE=true`를 **명시적으로** 준다.
+
+토큰이 있다는 것과 "지금 실서버를 때려도 된다"는 것은 다르다. 토큰 환경변수의
+존재로 열어 두면, **토큰 수명이 24시간이라 만료되는 순간 토큰을 가진 사람의
+빌드가 매일 빨간불이 된다.**
+
 **DB 접속 변수 이름을 compose의 `.env`와 맞춰 뒀다** (`POSTGRES_USER`·`POSTGRES_PASSWORD`·
 `POSTGRES_DB`). 팀원이 `.env` 값을 바꿔도 앱이 따라간다. compose 네트워크 안에서
 띄울 때만 `DB_HOST=postgres`를 준다.
@@ -139,9 +166,9 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 1·2번이 읽을 스키마 설명서는 여기서 자동 생성해 [`contracts/db/`](../contracts/db/)로
 내보낼 계획인데 **아직 안 만들었다** — 그 폴더는 비어 있다.
 
-## 상태 (2026-08-04)
+## 상태 (2026-08-05)
 
-`auth`만 내용이 있다.
+`auth`와 `chat-collector`에 내용이 있다.
 
 | | |
 |---|---|
@@ -167,13 +194,38 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 "키가 틀림"(연결 거절)과 "Auth 장애"(판단 불가)는 조치가 정반대라 둘 다 4xx면
 Go 쪽에서 구분이 안 된다.
 
+### chat-collector — 치지직 채팅 수신 (POK-85)
+
+**받아서 세는 데까지** 한다. 적재(POK-84) · 영상 시각 매핑(POK-92) · 스트리머
+채널 연동(POK-93)은 다음 카드다.
+
+| | |
+|---|---|
+| 수신 | 세션 발급 → WebSocket → 구독 → `CHAT`. Engine.IO 3을 직접 다룬다 |
+| 하트비트 | **전용 스케줄러에서만** `2`를 보낸다. 주기는 핸드셰이크의 `pingInterval`에서 파생 |
+| 관측 | 30초마다 `chat.summary` 한 줄 — 건수 · ping/pong 최대 공백 · 순서 위반 · 전달 지연 |
+| 종료 | 최종 판정 한 줄 → 구독 반납 → 소켓 닫기. 반납까지 약 1초 |
+
+**DB를 안 쓴다.** 받은 채팅은 세기만 하고 아무 데도 안 남는다.
+
+**개별 메시지를 로그로 남기지 않는다.** 본문·`senderChannelId`·닉네임·토큰이 어떤
+레벨에서도 안 나가고 검사가 그것을 강제한다. 디버깅하려고 한 줄 찍으면 그 검사가
+빨간불이 된다 — **레벨을 낮춰도 통과하지 않고, 그게 의도다.**
+
+실측(실제 라이브 11분 30초): 186건 · ping 최대 간격 **20.0초**(임계 40초) ·
+전달 지연 중앙 **약 175ms**. 뒤 값이 POK-92의 고정 오프셋 초기값 근거다.
+
+### 나머지
+
 `clip`은 `ClipApplication` 하나뿐이고 마이그레이션도 비어 있다.
-`chat-collector`·`chat-detector`는 빈 껍데기다. `common`은 소스가 0개다 —
+`chat-detector`는 빈 껍데기다. `common`은 소스가 0개다 —
 두 서버가 똑같이 쓰는 계약이 실제로 생기면 그때 채운다.
 
 다음 작업 순서:
 
-1. `clip`에 방송 생명주기 이벤트 FIFO 소비 스텁을 넣는다 (POK-26)
+1. **`chat-collector`에 재연결을 넣는다 (POK-86).** 지금은 끊기면 그걸로 끝이고,
+   그 구간 채팅은 되돌릴 수 없다. 세션 URL은 재사용이 안 되므로 세션 발급부터 다시다
+2. `clip`에 방송 생명주기 이벤트 FIFO 소비 스텁을 넣는다 (POK-26)
 2. **`pairing_exchange_attempts` 청소 작업을 넣는다.** 교환이 `permitAll`이라
    미인증 트래픽이 행을 쌓는다 — 이게 없으면 운영에 올릴 수 없다
 3. `POST /api/stream-keys/pairing-codes/exchange`의 `X-Forwarded-For` 처리.
