@@ -105,16 +105,38 @@ public class CollectorRunner implements ApplicationRunner {
 
         try {
             ChatSession.Established established = opening.open(properties.establishTimeout());
-            heartbeat = Heartbeat.start(established.socket(), established.handshake(),
+
+            // 수립을 마치는 사이에 WS 스레드가 절단을 처리했으면 정리가 이미
+            // 끝났다. 그 위에 스케줄러를 올리면 닫힌 소켓에 대고 ping을 쏘고,
+            // 상태까지 COLLECTING으로 되돌리면 health는 UP인 채로 수집만 죽는다.
+            // 정리 가드는 이미 소모돼 stop()도 아무것도 못 한다.
+            if (cleanedUp.get()) {
+                return;
+            }
+
+            Heartbeat beat = Heartbeat.start(established.socket(), established.handshake(),
                     () -> log.warn("chat.session.ping_send_failed"));
             // 세션은 재수립마다 바뀌므로 값이 아니라 읽는 길을 넘긴다.
-            summaryLogger = SummaryLogger.start(metrics, heartbeat, SUMMARY_PERIOD,
+            SummaryLogger logger = SummaryLogger.start(metrics, beat, SUMMARY_PERIOD,
                     () -> {
                         ChatSession current = session;
                         return current == null ? 0L : current.sinkFailureCount();
                     });
+            // 상태 전이보다 먼저 보인다. 이 뒤에 절단이 오면 cleanUpOnce가 여기서
+            // 읽어 둘 다 닫는다 — 반대 순서면 정리가 실행기를 못 보고 지나친다.
+            heartbeat = beat;
+            summaryLogger = logger;
             collectingSince = Instant.now();
-            status.collecting();
+
+            if (!status.collectingIfEstablishing()) {
+                // 검사와 전이 사이에 절단이 들어왔다. 우리가 올린 것은 우리가 내린다 —
+                // cleanUpOnce가 이미 지나갔다면 아무도 안 내려 준다.
+                beat.close();
+                logger.close();
+                heartbeat = null;
+                summaryLogger = null;
+                return;
+            }
             log.info("chat.session.collecting pingIntervalMs={} sendPeriodMs={}",
                     established.handshake().pingInterval().toMillis(),
                     established.handshake().sendPeriod().toMillis());

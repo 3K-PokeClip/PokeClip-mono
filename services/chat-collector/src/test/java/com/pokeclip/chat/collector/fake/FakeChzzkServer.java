@@ -97,6 +97,12 @@ public class FakeChzzkServer implements WebSocketConfigurer {
                 behavior.emitSystem("{\"type\":\"subscribed\",\"data\":"
                         + "{\"eventType\":\"CHAT\",\"channelId\":\"FAKE-CHANNEL\"}}");
             }
+            // 응답을 붙들고 있는 동안 클라이언트의 부팅 스레드는 여기서 막혀 있다.
+            // 그 사이에 절단을 끝까지 태워야 "수립 직후 절단"이 매번 같은 순서로 난다.
+            if (behavior.closeAfterSubscribed) {
+                behavior.closeSession();
+                behavior.awaitUnsubscribeCall();
+            }
             return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
         }
     }

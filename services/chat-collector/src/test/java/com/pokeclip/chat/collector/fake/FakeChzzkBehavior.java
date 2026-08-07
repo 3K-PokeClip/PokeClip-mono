@@ -43,6 +43,19 @@ public class FakeChzzkBehavior {
      */
     public volatile Duration authDelay = Duration.ZERO;
     /**
+     * true면 구독 REST가 <b>200을 돌려주기 전에</b> 소켓을 끊고, 클라이언트가 그
+     * 절단을 처리했다는 증거(구독 반납 도착)를 기다린 뒤 응답한다.
+     *
+     * <p><b>"수립 직후 절단"을 우연이 아니라 결정적으로 재현하는 장치다.</b>
+     * 프레임은 순서대로 오므로 subscribed는 절단보다 먼저 도착했고, 반납이 왔다는
+     * 것은 클라이언트의 절단 처리가 이미 끝났다는 뜻이다. 그 뒤에야 부팅 스레드가
+     * 구독 HTTP 응답을 받고 수립 마무리(스케줄러 기동·상태 전이)로 들어간다.
+     * 그냥 끊기만 하면 두 스레드의 경합이라 순서가 실행마다 달라진다.
+     *
+     * <p>실제로 있는 상태다 — 토큰 revoke나 연결 상한 초과가 이 창에 떨어진다.
+     */
+    public volatile boolean closeAfterSubscribed = false;
+    /**
      * 구독 반납 REST가 돌려줄 상태. 200이 아니면 반납이 실패한다.
      * <b>이 스위치가 없으면 반납 실패 갈래를 밟는 테스트가 0개다</b> —
      * 예외가 종료 훅 밖으로 나가면 소켓 닫기가 통째로 건너뛰어진다는
@@ -159,6 +172,32 @@ public class FakeChzzkBehavior {
         }
     }
 
+    /** 클라이언트의 절단 처리가 반납까지 도달하기를 기다리는 시한. */
+    private static final Duration AWAIT_UNSUBSCRIBE_TIMEOUT = Duration.ofSeconds(5);
+
+    /**
+     * 클라이언트가 절단을 처리해 <b>구독 반납까지 보냈음</b>을 확인한다.
+     * {@link #closeAfterSubscribed}가 기대는 장벽이다.
+     *
+     * <p><b>시한을 다 쓰면 터진다.</b> 조용히 돌아가면 재현 순서가 다시 우연에
+     * 맡겨지고, 그 테스트는 초록이어도 아무것도 안 지킨다.
+     */
+    void awaitUnsubscribeCall() {
+        long deadline = System.nanoTime() + AWAIT_UNSUBSCRIBE_TIMEOUT.toNanos();
+        while (unsubscribeCalls.get() == 0 && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(5);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        if (unsubscribeCalls.get() == 0) {
+            throw new IllegalStateException("끊었는데 클라이언트의 구독 반납이 "
+                    + AWAIT_UNSUBSCRIBE_TIMEOUT.toSeconds() + "초 안에 안 왔다. 재현 순서를 보장할 수 없다");
+        }
+    }
+
     void markPingReceived() {
         long now = System.nanoTime();
         long gap = now - lastPingNanos.getAndSet(now);
@@ -225,6 +264,7 @@ public class FakeChzzkBehavior {
         disconnectWhenPingMissing = true;
         authStatus = 200;
         authDelay = Duration.ZERO;
+        closeAfterSubscribed = false;
         unsubscribeStatus = 200;
     }
 
