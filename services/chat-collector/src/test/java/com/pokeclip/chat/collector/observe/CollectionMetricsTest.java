@@ -49,7 +49,14 @@ class CollectionMetricsTest {
         assertThat(metrics.snapshot().orderViolations()).isZero();
     }
 
-    /** 팀 사양서 TBD 첫 줄을 메우는 값. POK-92 고정 오프셋의 근거가 된다. */
+    /**
+     * 팀 사양서 TBD 첫 줄「이벤트 전달 지연 실측」을 메우는 값이다.
+     *
+     * <p><b>POK-92의 시차 보정 오프셋으로 쓰지 마라.</b> 이 값은
+     * {@code messageTime}에서 우리 수신까지이고, 그 오프셋은 치지직 방송 지연과
+     * 시청자 반응 지연(둘 다 초 단위·미측정)에서 <b>우리 인제스트 지연</b>
+     * (인코딩+SRT 버퍼)을 뺀 것이다. 이 항 하나로 잡으면 자릿수가 어긋난다.
+     */
     @Test
     void 전달_지연의_최소_중앙_최대를_낸다() {
         CollectionMetrics metrics = new CollectionMetrics();
