@@ -113,22 +113,32 @@ jobs:
           # 리뷰를 다 해놓고 못 올린 것이다. 액션은 is_error=false 로 끝나서
           # 화면상 초록불이다.
           #
-          # Skill 을 열면 ②~⑥이 통째로 사라진다. 스킬이 액션의 버퍼드 인라인
-          # 코멘트 경로를 쓰므로 gh api 도 필요 없다.
+          # Skill 을 열면 ①②가 사라진다. 그런데 ④⑤⑥은 안 사라졌다.
           #
-          # gh api 를 여는 쪽은 택하지 않았다. 그 한 줄이면 토큰 권한 안에서
-          # 무엇이든 부를 수 있어 리뷰 봇에 주기엔 넓다.
+          # 처음엔 "스킬이 액션의 버퍼드 인라인 경로를 쓰니 gh api 는 필요 없다"고
+          # 적었는데 틀렸다. 2차 진단(45턴 · $8.93)에서 확인한 실제 순서는 이렇다.
+          #
+          #   스킬은 인라인을 mcp__github_inline_comment__create_inline_comment 로 단다
+          #   → 그 MCP 도구가 이 환경에 없다
+          #   → gh api .../pulls/N/comments POST 로 우회한다
+          #   → gh api 가 막혀 승인 대기 → 종료
+          #
+          # 즉 gh api 가 이 환경에서 인라인을 남기는 유일한 경로다. 넓다는 이유로
+          # 안 열었더니 리뷰가 통째로 사라졌다. 연다.
+          #
+          # 넓이에 대한 판단: 이 잡의 토큰은 pull-requests·issues write 뿐이고
+          # contents 는 read 다. gh api 로 할 수 있는 최대가 이미 gh pr comment 로
+          # 할 수 있는 것과 같은 범위 안에 있다.
+          #
+          # ⚠ 그때 모델이 도구를 확인하려고 PR #34 에 테스트 코멘트를 실제로
+          # 올렸다가 gh api DELETE 가 막혀 못 지웠다. 사람이 지웠다. 권한을 좁게
+          # 주면 이런 어중간한 상태가 남는다는 것도 같이 배웠다.
           settings: |
             {
               "permissions": {
-                "allow": ["Skill", "Bash(gh pr comment:*)"]
+                "allow": ["Skill", "Bash(gh pr comment:*)", "Bash(gh api:*)"]
               }
             }
-
-          # ⚠ 2026-08-06 2차 진단. 확인 직후 되돌린다.
-          # --comment 를 넣었는데도 코멘트가 0이다. 거부는 0이고 턴은 15까지
-          # 늘어 리뷰 에이전트까지는 간다. 어디서 멈추는지 이것 없이는 못 본다.
-          show_full_output: true
 
           # 리뷰가 왜 조용한지 파야 하면 show_full_output: true 를 임시로 켠다.
           # 거부된 도구 이름·에러 원문이 그때만 보인다. 다만 public 저장소라
