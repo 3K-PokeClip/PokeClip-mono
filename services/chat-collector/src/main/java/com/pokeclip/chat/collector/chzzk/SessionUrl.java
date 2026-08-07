@@ -26,9 +26,14 @@ public final class SessionUrl {
             case "http", "ws" -> "ws";
             default -> throw new IllegalArgumentException("알 수 없는 스킴: " + given.getScheme());
         };
-        String query = given.getQuery() == null || given.getQuery().isBlank()
+        // getQuery()가 아니라 getRawQuery()다. 전자는 퍼센트 이스케이프를 디코딩해서
+        // 주는데, 그걸 다시 인코딩하지 않고 붙이면 서버가 받는 토큰이 달라진다.
+        // 지금 치지직 토큰은 순수 영숫자라 실서버에서 안 드러나지만, 문자셋이
+        // 넓어지는 날의 증상은 인증만 조용히 실패하는 것이다.
+        String rawQuery = given.getRawQuery();
+        String query = rawQuery == null || rawQuery.isBlank()
                 ? ENGINE_IO_QUERY
-                : given.getQuery() + "&" + ENGINE_IO_QUERY;
+                : rawQuery + "&" + ENGINE_IO_QUERY;
         String path = given.getPath() == null || given.getPath().isBlank() ? PATH : given.getPath();
 
         return URI.create(scheme + "://" + given.getAuthority() + path + "?" + query);
