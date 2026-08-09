@@ -87,18 +87,31 @@ public class CollectorRunner implements ApplicationRunner {
      *                      사람은 그 구멍을 "판정 줄을 잃어버렸다"로 읽는다
      * @param cleanedUp     뒷정리 가드. 종료 경로가 둘(전송 절단·프로세스 종료)이라
      *                      같은 세션에서 두 번 도는 길이 있다
+     * @param cutReason     <b>이 세션에 실제로 온 절단 사유.</b> 안 들고 있으면 세션
+     *                      종료 줄이 사유를 {@code status}에서 읽어야 하는데, 재시도
+     *                      중에는 그 값이 <b>앞 시도의 것</b>이라 실패한 재시도가
+     *                      매번 앞 시도의 단계로 기록된다. 첫 절단이 이긴다 —
+     *                      뒤엣것은 대개 그 결과다
      */
     private record SessionScope(
             ChatSession chat,
             AtomicLong no,
             AtomicBoolean cleanedUp,
+            AtomicReference<StopReason> cutReason,
             AtomicReference<Heartbeat> heartbeat,
             AtomicReference<SummaryLogger> summaryLogger,
             AtomicReference<Instant> collectingSince) {
 
         static SessionScope opening(ChatSession chat) {
             return new SessionScope(chat, new AtomicLong(), new AtomicBoolean(),
-                    new AtomicReference<>(), new AtomicReference<>(), new AtomicReference<>());
+                    new AtomicReference<>(), new AtomicReference<>(),
+                    new AtomicReference<>(), new AtomicReference<>());
+        }
+
+        /** 절단 사유가 있으면 그것이 이 세션의 끝이고, 없으면 부르는 쪽이 아는 것이 끝이다. */
+        StopReason endReason(StopReason fallback) {
+            StopReason cut = cutReason.get();
+            return cut != null ? cut : fallback;
         }
     }
 
@@ -421,7 +434,9 @@ public class CollectorRunner implements ApplicationRunner {
                 //   더는 그 위를 안 덮으므로 수립은 끝까지 가는데 아무도 COLLECTING으로
                 //   못 올린다. 안 치우면 <b>소켓도 자리도 통째로 샌다</b> — 구독은 서버에
                 //   남아 상한 3개를 먹고, 자리가 안 비어 다음 세션이 영영 못 선다.
-                cleanUpOnce(scope, status.reason());
+                //
+                // ①②는 이 세션에 온 절단이 사유이고 ③은 러너가 멈춘 사유다.
+                cleanUpOnce(scope, scope.endReason(status.reason()));
                 return false;
             }
             // 다시 붙었다. 끊겨 있던 구간을 여기서 닫는다 — 지우기만 하면 그 시간이
@@ -449,9 +464,12 @@ public class CollectorRunner implements ApplicationRunner {
             // 상태라, 재시도해도 되는 실패(5xx·시한 초과)에 찍어 두면 재연결이
             // 붙어도 영영 못 올라온다. 재시도 여부는 사유를 받은 쪽이 정한다.
             //
-            // 사유는 status에서 읽는다. 절단이 먼저였다면 그것이 원인이고
-            // 여기서 잡은 시한 만료는 그 결과다 — 결과가 원인을 덮으면 추적이 끊긴다.
-            cleanUpOnce(scope, status.reason() == null ? e.reason() : status.reason());
+            // <b>사유는 이 세션에 온 절단이 있을 때만 그쪽이다.</b> 절단이 먼저였다면
+            // 그것이 원인이고 여기서 잡은 시한 만료는 그 결과다 — 결과가 원인을 덮으면
+            // 추적이 끊긴다. 반대로 <b>{@code status}에서 읽으면 안 된다</b>: 재시도
+            // 중에는 그 값이 늘 앞 시도의 사유라, 발급 5xx로 죽은 재시도가
+            // {@code reason=TRANSPORT_CLOSED}로 기록돼 막힌 단계가 뒤바뀐다.
+            cleanUpOnce(scope, scope.endReason(e.reason()));
             // ③④⑤에서 실패하면 소켓이 이미 열려 있다(구독 5xx · 핸드셰이크 파싱 실패 ·
             // connected 미도착 = 연결 상한 초과의 증상). 위에서 안 치우면 시도마다
             // 소켓·HttpClient·치지직 세션이 새고, 상한이 3개라 세 번째에 스스로 막힌다.
@@ -720,6 +738,9 @@ public class CollectorRunner implements ApplicationRunner {
      */
     private void handleClosed(SessionScope scope) {
         log.warn("chat.session.closed reason={}", StopReason.TRANSPORT_CLOSED);
+        // <b>이 세션의 끝은 절단이다.</b> 아래 요청이 낡은 신호로 걸러지거나 종료
+        // 중이라 버려져도, 이 세션을 치우는 쪽은 여전히 이 사유로 줄을 남겨야 한다.
+        scope.cutReason().compareAndSet(null, StopReason.TRANSPORT_CLOSED);
         // 사유가 이미 찍혀 있어도(먼저 온 신호가 STOPPED를 남겼어도) 요청은 넘긴다.
         // <b>사유를 안 덮는 것과 뒷정리를 안 하는 것은 다른 일이다</b> — 여기서
         // 통째로 돌아가면 이 세션이 자리를 문 채 남아 구독 반납도 못 하고
@@ -800,6 +821,7 @@ public class CollectorRunner implements ApplicationRunner {
                 // 갈리는 순간 어느 쪽도 안 도는 조용한 실패가 된다.
                 //
                 // 여기는 WS 수신 콜백이라 무거운 일을 하지 않는다 — 요청만 넣는다.
+                scope.cutReason().compareAndSet(null, StopReason.REVOKED);
                 requestReconnect(scope.no().get(), StopReason.REVOKED);
             }
             return;
