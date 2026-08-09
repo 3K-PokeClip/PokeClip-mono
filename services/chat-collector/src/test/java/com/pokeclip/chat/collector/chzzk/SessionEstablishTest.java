@@ -49,14 +49,11 @@ class SessionEstablishTest {
         session = newSession();
 
         Duration deadline = Duration.ofSeconds(3);
-        long startedAt = System.nanoTime();
 
         assertThatThrownBy(() -> session.open(deadline))
                 .isInstanceOf(SessionEstablishException.class)
                 .extracting("stage", "reason")
                 .containsExactly(EstablishStage.WAITING_CONNECTED, StopReason.ESTABLISH_TIMEOUT);
-
-        Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
 
         // 양성 대조 — <b>실제로 기다렸는가</b>를 잰다.
         //
@@ -67,11 +64,16 @@ class SessionEstablishTest {
         // 영원히 초록이다. 형제(WAITING_SUBSCRIBED)는 그 값 자체가 ①~④ 통과의
         // 증거라 자기 전제를 스스로 검증하지만, 이쪽은 못 한다.
         //
+        // 자는 <b>②가 끝난 시점</b>에 둔다. 테스트가 자기 시계로 재면 ①②가 느린
+        // 경우와 ③에서 기다린 경우가 같은 값으로 나와, 막으려던 구멍이 그대로 남는다.
+        //
         // "WS가 붙었나"로는 못 잡는다 — EngineIoSocket.open()이 join()으로 블로킹해
         // 시한과 무관하게 ②를 끝내므로, 시한을 1ns로 줘도 접속 흔적은 남는다.
         // 실제로 그렇게 확인했다(0.06초 만에 끝나면서 통과했다).
-        assertThat(elapsed)
-                .as("대기에 시간을 안 썼다면 connected를 기다린 적이 없다. "
+        Duration waitedAfterConnect = behavior.sinceConnectionEstablished();
+
+        assertThat(waitedAfterConnect)
+                .as("②가 끝난 뒤로 시한의 절반도 안 흘렀다면 connected를 기다린 적이 없다. "
                         + "①②가 시한을 삼킨 것이고 sendConnected=false는 검사되지 않았다")
                 .isGreaterThan(deadline.dividedBy(2));
     }

@@ -156,6 +156,7 @@ public class FakeChzzkServer implements WebSocketConfigurer {
             behavior.remember(session);
             lastPingAt.set(System.nanoTime());
             behavior.startPingClock();
+            behavior.markConnectionEstablished();
 
             // 전송은 전부 behavior.send()를 지난다. 스프링 세션은 동시 전송에
             // 안전하지 않아서, 락을 나눠 쥐면 채팅 홍수 + 하트비트가 겹치는

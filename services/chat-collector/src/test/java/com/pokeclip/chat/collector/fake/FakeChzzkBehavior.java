@@ -81,6 +81,13 @@ public class FakeChzzkBehavior {
      * 재연결은 POK-86이고 이번 카드는 실패하면 사유만 남기고 멈춘다.
      */
     private final AtomicInteger authCalls = new AtomicInteger();
+
+    /**
+     * WS 접속이 성립한 시각. <b>T13이 "실제로 기다렸는가"를 재는 자다.</b>
+     * 테스트가 자기 시계로 재면 ①②가 느린 경우와 ③에서 기다린 경우를 못 가른다.
+     */
+    private final AtomicLong connectionEstablishedNanos = new AtomicLong();
+
     private final AtomicLong authRequestNanos = new AtomicLong();
     private final AtomicInteger unsubscribeCalls = new AtomicInteger();
     private final AtomicInteger closedSessions = new AtomicInteger();
@@ -99,6 +106,16 @@ public class FakeChzzkBehavior {
      */
     public Duration sinceAuthRequest() {
         return Duration.ofNanos(System.nanoTime() - authRequestNanos.get());
+    }
+
+    /** ②가 끝난 뒤 흐른 시간. 접속 전이면 0이다. */
+    public Duration sinceConnectionEstablished() {
+        long at = connectionEstablishedNanos.get();
+        return at == 0 ? Duration.ZERO : Duration.ofNanos(System.nanoTime() - at);
+    }
+
+    void markConnectionEstablished() {
+        connectionEstablishedNanos.set(System.nanoTime());
     }
 
     /** 종료 시 구독 반납이 실제로 왔는지. 안 오면 세션을 우리 손으로 안 닫은 것이다. */
@@ -252,6 +269,8 @@ public class FakeChzzkBehavior {
         unsubscribeCalls.set(0);
         closedSessions.set(0);
         unsubscribeSawOpenSession.set(false);
+        // 안 지우면 앞 테스트의 접속 시각이 남아 다음 테스트가 큰 값을 본다.
+        connectionEstablishedNanos.set(0);
         handshakeQuery.set("");
         // 테스트 클래스들이 스프링 컨텍스트 하나를 공유하므로 이 객체도 하나뿐이다.
         // 앞 클래스가 쓰던 세션을 남겨 두면 뒤 클래스가 그것으로 보내려다 실패한다.
