@@ -47,6 +47,16 @@ public class CollectorRunner implements ApplicationRunner {
     /** 실측 30초. 요약 주기는 하트비트와 무관하다 — 얹으면 8/1이 재현된다. */
     private static final Duration SUMMARY_PERIOD = Duration.ofSeconds(30);
 
+    /** 종료가 재연결 스레드를 기다리는 기본 시한. 구독 반납 왕복이 실서버 약 1초다. */
+    private static final Duration SHUTDOWN_WAIT = Duration.ofSeconds(2);
+
+    /**
+     * 반납이 나가 있을 때만 더 기다리는 시한. <b>반납 REST의 상한</b>이다 —
+     * 접속 2초 + 읽기 5초({@code spring.http.clients}). 그 뒤에는 REST가 스스로
+     * 끝나므로 더 기다릴 이유가 없다.
+     */
+    private static final Duration RELEASE_WAIT = Duration.ofSeconds(7);
+
     private final ChzzkProperties properties;
     private final CollectionStatus status;
 
@@ -233,6 +243,20 @@ public class CollectorRunner implements ApplicationRunner {
      * 걸리고(실측) 상한이 3개라, 이 카드가 없애려던 것을 우리가 만드는 셈이 된다.
      */
     private final CountDownLatch stopSignal = new CountDownLatch(1);
+
+    /**
+     * <b>지금 구독 반납 왕복 중인가.</b> {@code stop()}이 인터럽트하기 전에 본다.
+     *
+     * <p>재연결 스레드를 인터럽트해도 대부분은 손해가 없다 — 수립에 매달린
+     * 스레드는 버려도 되고(뒤늦게 성립하는 소켓은 가드에 막힌 정리가 닫는다)
+     * 백오프 대기는 중단 신호로 스스로 깨어난다. <b>비싼 자리는 하나뿐이다:</b>
+     * 반납 REST가 나간 뒤. 거기서 인터럽트하면 세션 키는 이미 소모돼
+     * <b>아무도 다시 못 보내고</b>, 서버 쪽 자리가 10초~4분 42초 남는다(실측).
+     *
+     * <p>그래서 시한을 통째로 늘리지 않고 이 자리만 더 기다린다. 늘리면
+     * 치지직이 아파서 수립이 매달릴 때마다 종료가 이유 없이 몇 초씩 길어진다.
+     */
+    private final AtomicBoolean releaseInFlight = new AtomicBoolean();
 
     /**
      * 자리를 잡은 세션에만 번호를 준다. <b>프로세스 안에서 유일하다</b> —
@@ -853,7 +877,20 @@ public class CollectorRunner implements ApplicationRunner {
             //
             // 2초는 <b>뒷정리 중인 스레드</b>를 위한 값이다 — 구독 반납 왕복이 실서버
             // 약 1초다. 그쪽을 인터럽트하는 것이 여기서 유일하게 비싼 실수다.
-            reconnector.awaitTermination(2, TimeUnit.SECONDS);
+            //
+            // <b>그런데 2초는 반납의 최악값이 아니다.</b> 반납 REST도 접속 2초 +
+            // 읽기 5초까지 가고, <b>수립과 달리 중단 신호를 안 본다</b> — 이미 나간
+            // 요청이라 볼 자리가 없다. 치지직이 느리게 답하는 배포 순간에 정확히
+            // 여기 걸려, 인터럽트되면 세션 키가 이미 소모된 뒤라 아무도 다시 못
+            // 보내고 자리가 서버에 10초~4분 42초 남는다(실측).
+            //
+            // <b>시한을 통째로 늘리지 않고 그 자리만 더 기다린다.</b> 늘리면 수립에
+            // 매달린 스레드까지 같이 기다리게 되는데, 그쪽은 버려도 새는 것이 없다
+            // (위 문단). 아파서 못 붙는 중일수록 종료가 길어지는 것은 손해다.
+            if (!reconnector.awaitTermination(SHUTDOWN_WAIT.toMillis(), TimeUnit.MILLISECONDS)
+                    && releaseInFlight.get()) {
+                reconnector.awaitTermination(RELEASE_WAIT.toMillis(), TimeUnit.MILLISECONDS);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -985,7 +1022,15 @@ public class CollectorRunner implements ApplicationRunner {
         // 구독을 반납하고 끊는다고 알린다. 안 하면 세션 반납이 우리가 아니라
         // 서버가 죽은 전송을 알아채는 때에 달리고, 실측에서 10초와 4분 42초로
         // 갈렸다. 연결 상한이 3개라 짧은 간격의 재시작 세 번이면 막힌다.
-        ChatSession.Release released = scope.chat().releaseAndClose();
+        // 반납이 나가 있는 동안은 종료가 이 스레드를 인터럽트하지 않는다.
+        // 여기서 끊기면 세션 키가 이미 소모된 뒤라 아무도 다시 못 보낸다.
+        releaseInFlight.set(true);
+        ChatSession.Release released;
+        try {
+            released = scope.chat().releaseAndClose();
+        } finally {
+            releaseInFlight.set(false);
+        }
         log.info("chat.session.released session={} subscription={}", scope.no().get(), released);
     }
 }

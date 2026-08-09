@@ -156,6 +156,58 @@ class CollectorShutdownTest {
                 .isEqualTo(1);
     }
 
+    /**
+     * <b>종료가 구독 반납 왕복을 인터럽트하면 안 된다.</b>
+     *
+     * <p>반납은 실서버에서 약 1초 걸리는 왕복이고 읽기 시한은 5초다. 그런데
+     * {@code stop()}은 재연결 스레드를 2초만 기다리고 {@code shutdownNow()}로
+     * 인터럽트했다 — 치지직이 느리게 답하는 배포 순간에 정확히 걸린다.
+     *
+     * <p>인터럽트되면 반납 REST가 즉시 실패하고, <b>세션 키는 이미 소모된 뒤라
+     * 아무도 다시 못 보낸다</b>({@code releaseAndClose}가 먼저 걷어 가고 자리도
+     * 이미 비었다). 그러면 서버가 죽은 전송을 알아챌 때까지 10초~4분 42초 동안
+     * 자리가 남고(실측), 상한이 3개라 짧은 간격의 재시작 세 번이면 막힌다 —
+     * 이 카드가 없애려던 좀비를 종료 경로가 만드는 셈이다.
+     *
+     * <p>지연 3초의 근거: {@code stop()}의 기본 대기(2초)보다 길고 읽기 시한(5초)보다
+     * 짧다. 짧으면 인터럽트 전에 끝나 검사가 헛돌고, 길면 반납이 스스로 실패해
+     * 무엇 때문에 실패했는지 갈리지 않는다.
+     */
+    @Test
+    void 반납_왕복_중에_종료해도_인터럽트하지_않고_기다린다() throws Exception {
+        behavior.unsubscribeDelay = Duration.ofSeconds(3);
+
+        ConfigurableApplicationContext context = bootCollector();
+        assertThat(context.getBean(CollectionStatus.class).state())
+                .as("붙지도 않았다면 반납할 구독이 없어 이 검사는 아무것도 안 본다")
+                .isEqualTo(CollectionStatus.State.COLLECTING);
+        long session = context.getBean(CollectorRunner.class).lastSessionNo();
+
+        try (LogCaptor captor = new LogCaptor()) {
+            // 절단이 재연결 스레드를 뒷정리로 보낸다. 반납이 서버에 도착한 시점
+            // (지연은 센 뒤에 건다)이 곧 그 스레드가 왕복에 갇힌 시점이다.
+            behavior.closeSession();
+            awaitUnsubscribeCall();
+            assertThat(behavior.unsubscribeCallCount())
+                    .as("반납이 아직 안 나갔다면 종료가 인터럽트할 왕복이 없다")
+                    .isEqualTo(1);
+
+            context.close();
+
+            assertThat(captor.messages())
+                    .as("반납 왕복을 인터럽트하면 자리가 서버에 남아 상한 3개를 먹는다")
+                    .contains("chat.session.released session=" + session
+                            + " subscription=returned");
+        }
+    }
+
+    private void awaitUnsubscribeCall() throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (behavior.unsubscribeCallCount() == 0 && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+    }
+
     private ConfigurableApplicationContext bootCollector() {
         // 명령행 인자로 넘긴다. .properties()는 기본값 소스라 우선순위가 가장 낮아
         // application-test.yml의 enabled: false에 진다 — 실제로 그렇게 됐다.
