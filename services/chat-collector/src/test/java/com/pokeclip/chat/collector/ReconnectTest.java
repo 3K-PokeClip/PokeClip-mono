@@ -121,6 +121,40 @@ class ReconnectTest {
     }
 
     /**
+     * <b>동의 철회는 재시도로 안 풀린다.</b> 다시 붙어도 구독이 또 취소되므로,
+     * 재연결을 돌면 연결 상한 3개를 태우면서 영원히 "연결은 살아 있는데 채팅만
+     * 안 오는" 상태를 반복한다 — 3층 CLAUDE.md가 {@code revoked}를 무시하면 된다고
+     * 경고한 바로 그 모양이다.
+     *
+     * <p><b>{@code ReconnectPolicy}의 {@code REVOKED -> false} 분기가 도달 가능함을
+     * 보이는 유일한 검사다.</b> 신호를 정지 정책으로 안 보내면 그 분기는 죽은 코드이고,
+     * 러너는 {@code COLLECTING}(health UP)으로 남는다. 거부 목록에서 {@code REVOKED}를
+     * 빼도 아래 발급 횟수가 늘어 빨간불이 된다.
+     */
+    @Test
+    void 동의가_철회되면_재시도하지_않고_멈춘다() throws Exception {
+        start();
+        assertThat(status.state())
+                .as("붙지도 않았다면 철회 통지를 받을 길이 없다")
+                .isEqualTo(CollectionStatus.State.COLLECTING);
+
+        behavior.emitSystem("{\"type\":\"revoked\",\"data\":{\"eventType\":\"CHAT\"}}");
+
+        awaitUntil(() -> status.state() == CollectionStatus.State.STOPPED);
+        assertThat(status.state())
+                .as("철회 뒤에도 health가 UP이면 채팅이 끊긴 것을 아무도 모른다")
+                .isEqualTo(CollectionStatus.State.STOPPED);
+        assertThat(status.reason())
+                .as("사유가 REVOKED가 아니면 왜 영영 멈췄는지가 어디에도 안 남는다")
+                .isEqualTo(StopReason.REVOKED);
+
+        Thread.sleep(500);      // 백오프 첫 간격(50ms)의 열 배
+        assertThat(behavior.authCallCount())
+                .as("다시 붙어도 구독이 또 취소된다. 재시도하면 상한 3개만 태운다")
+                .isEqualTo(1);
+    }
+
+    /**
      * <b>판정은 절단마다가 아니라 수집이 영영 끝날 때 나간다.</b>
      *
      * <p>재연결이 생기는 순간 절단에서 판정을 내는 것은 틀린 것이 된다 — 판정은

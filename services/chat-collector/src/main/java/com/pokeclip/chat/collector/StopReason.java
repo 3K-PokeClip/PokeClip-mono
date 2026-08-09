@@ -35,7 +35,10 @@ public enum StopReason {
     /** ping은 나가는데 pong이 임계를 넘도록 안 온다 — 좀비 연결 */
     PONG_TIMEOUT,
 
-    /** 동의 철회·Scope 변경. 대응은 POK-93이고 여기서는 사실만 남긴다. */
+    /**
+     * 동의 철회·Scope 변경. <b>재시도해도 영원히 안 풀린다</b> —
+     * 다시 붙어도 서버가 구독을 또 취소한다.
+     */
     REVOKED,
     TRANSPORT_CLOSED
 }

@@ -662,8 +662,19 @@ public class CollectorRunner implements ApplicationRunner {
         if (event != null) {
             metrics.recordSystemEvent(event.type());
             if ("revoked".equals(event.type())) {
-                // 대응은 POK-93이다. 여기서는 온 사실만 남긴다.
                 log.warn("chat.session.revoked");
+                // <b>여기서 멈추지 않으면 COLLECTING(health UP)인 채로 채팅만 안 온다.</b>
+                // 구독이 서버 쪽에서 취소된 것이라 소켓은 멀쩡하고 onClose도 안 온다 —
+                // 감지원 셋(전송 절단 · pong 임계 · ping 송신 실패) 중 무엇도 안 걸린다.
+                //
+                // <b>재연결 요청으로 보내는 것이 맞다.</b> 이름과 달리 이 호출은
+                // "절단 신호"이고, 루프는 백오프에 들어가기 전에 사유를 먼저 보므로
+                // REVOKED에서는 재시도가 0회다. 즉시 멈추는 별도 경로를 만들면 뒷정리·
+                // 판정·중복 가드·낡은 신호 거르기를 통째로 복제해야 하고, 그 사본이
+                // 갈리는 순간 어느 쪽도 안 도는 조용한 실패가 된다.
+                //
+                // 여기는 WS 수신 콜백이라 무거운 일을 하지 않는다 — 요청만 넣는다.
+                requestReconnect(scope.no().get(), StopReason.REVOKED);
             }
             return;
         }
