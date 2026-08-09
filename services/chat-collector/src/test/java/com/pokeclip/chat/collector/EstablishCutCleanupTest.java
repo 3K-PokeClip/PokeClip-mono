@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector;
 
+import com.pokeclip.chat.collector.chzzk.ChatSession;
+import com.pokeclip.chat.collector.chzzk.ChzzkSessionClient;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.observe.HeartbeatListener;
@@ -311,6 +313,103 @@ class EstablishCutCleanupTest {
                 opened.set(awaitQuietly(() -> behavior.unsubscribeCallCount() == 1));
             }
             return real;
+        }
+    }
+
+    /**
+     * <b>정리가 세션 키보다 먼저 지나가면, 그 뒤에 생긴 구독은 아무도 반납하지 않는다.</b>
+     *
+     * <p>수립은 소켓(②)과 구독(④)을 서로 다른 시점에 만든다. 절단 정리가 그 사이를
+     * 지나가면 <b>반납할 키가 아직 없어</b> {@code subscription=skipped}로 지나가고
+     * 가드를 소모한다. 그 뒤에 ④가 만든 구독은 서버에 남아 연결 상한 3개 중 하나를
+     * 먹는다 — 우리 쪽에는 그것을 반납할 경로가 하나도 안 남는다.
+     *
+     * <p><b>순서를 우연에 맡기지 않는다.</b> 그 창에는 붙잡을 I/O가 없어 밖에서
+     * 끊기만 하면 두 스레드의 경합이 된다. {@link ChatSession#beforeSessionKey()}가
+     * 그 창 안에서 도는 유일한 자리라 거기서 끊고, <b>정리가 반납 없이 지나간 증거</b>
+     * ({@code released … skipped})를 보고서야 돌아간다. 반납 건수로는 못 기다린다 —
+     * 이 갈래는 REST를 한 건도 안 보낸다.
+     *
+     * <p>{@code sendSubscribed = false}로 ⑤를 시한 만료시켜 {@code start()}가 던지게
+     * 한다. 그 catch가 {@code cleanUpOnce}로 들어가 가드에 막히는 것이
+     * {@code releaseLate}의 유일한 입구다.
+     */
+    @Test
+    void 정리가_지나간_뒤에_생긴_구독도_반납한다() {
+        behavior.sendSubscribed = false;        // ⑤가 영영 안 온다 — start()가 던진다
+
+        try (LogCaptor captor = new LogCaptor()) {
+            CutBeforeKeyRunner created = new CutBeforeKeyRunner(new ChzzkProperties(
+                    true, "test-token", "http://localhost:" + port, Duration.ofSeconds(2),
+                    Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                    new CollectionStatus(), restClientBuilder, behavior, captor);
+            runner = created;
+
+            // start()가 아니라 run()이다. 수립 실패를 밖으로 던지므로 직접 부르면
+            // 그 예외가 이 스레드를 뚫고 나간다.
+            created.run(null);
+
+            // <b>양성 대조.</b> 정리가 창 안에서 반납 없이 지나간 것을 못 봤다면
+            // 아래 단언은 겨냥한 순서를 한 번도 안 만든 채 다른 이유로 참이 된다.
+            assertThat(created.windowOpened())
+                    .as("정리가 키보다 먼저 지나간 것을 못 봤다면 이 검사는 아무것도 안 본 것이다")
+                    .isTrue();
+
+            long session = created.lastSessionNo();
+            assertThat(behavior.unsubscribeCallCount())
+                    .as("정리가 못 본 구독을 아무도 반납 안 하면 상한 3개 중 하나가 그대로 남는다")
+                    .isEqualTo(1);
+            assertThat(captor.messages())
+                    .as("늦은 반납을 평상시 반납과 같은 줄로 내보내면 세션당 한 줄이라는 모양이 흐려진다")
+                    .contains("chat.session.released session=" + session
+                            + " subscription=returned late=true");
+        }
+    }
+
+    /**
+     * <b>「가드는 이미 소모됐는데 세션 키는 아직 안 선」 자리에 정리를 통째로 끼워
+     * 넣는 러너.</b>
+     *
+     * <p>{@link CutInsideWindowRunner}와 창이 다르다. 저쪽은 수립이 <b>끝난 뒤</b>
+     * 마무리 구간이고, 이쪽은 수립 <b>한가운데</b>라 구독이 아직 없다.
+     *
+     * <p><b>훅에서 던지지 않는다.</b> 여기는 수립 스레드 위라, 던지면 그 예외가
+     * 수립 실패로 둔갑해 "재현이 안 됐다"가 아니라 엉뚱한 자리에서 깨진다.
+     */
+    private static final class CutBeforeKeyRunner extends CollectorRunner {
+
+        private final FakeChzzkBehavior behavior;
+        private final LogCaptor captor;
+        private final AtomicBoolean once = new AtomicBoolean();
+        private final AtomicBoolean opened = new AtomicBoolean();
+
+        CutBeforeKeyRunner(ChzzkProperties properties, CollectionStatus status,
+                           RestClient.Builder restClientBuilder,
+                           FakeChzzkBehavior behavior, LogCaptor captor) {
+            super(properties, status, restClientBuilder);
+            this.behavior = behavior;
+            this.captor = captor;
+        }
+
+        /** 정리가 이 창 안에서 반납 없이 끝까지 지나갔는가. */
+        boolean windowOpened() { return opened.get(); }
+
+        @Override
+        ChatSession newSession(ChzzkSessionClient client) {
+            return new ChatSession(client) {
+                @Override
+                protected void beforeSessionKey() {
+                    if (!once.compareAndSet(false, true)) {
+                        return;
+                    }
+                    behavior.closeSession();
+                    // 번호를 상수로 박지 않는다 — LogCaptor는 JVM 전역이라
+                    // 남의 러너가 늦게 찍은 줄을 내 것으로 읽는다.
+                    String skipped = "chat.session.released session="
+                            + CutBeforeKeyRunner.this.lastSessionNo() + " subscription=skipped";
+                    opened.set(awaitQuietly(() -> captor.messages().contains(skipped)));
+                }
+            };
         }
     }
 

@@ -158,12 +158,29 @@ public class ChatSession implements AutoCloseable {
         // 키를 세우기 전에 본다. 세운 뒤에 끊으면 구독한 적도 없는 키로 반납 REST가
         // 한 번 나간다 — 종료 경로에 없어도 되는 왕복이다.
         abortIfStopping(abort, EstablishStage.SUBSCRIBE);
+        beforeSessionKey();
         currentSessionKey.set(sessionKey.get());
         client.subscribeChat(sessionKey.get());                     // ④ SUBSCRIBE
         await(subscribed, endAt, abort, EstablishStage.WAITING_SUBSCRIBED); // ⑤
 
         return new Established(handshake.get(), socket);
     }
+
+    /**
+     * <b>세션 키가 서기 직전. 검사가 여기에 다른 스레드를 통째로 끼워 넣는다.</b>
+     * 평소에는 비어 있다.
+     *
+     * <p>이름을 준 이유는 {@code CollectorRunner.heartbeatListener(no)}와 같다 —
+     * 이 자리에서 열리는 창에는 <b>붙잡을 I/O가 없어</b> 밖에서 끊기만 하면 두
+     * 스레드의 경합이 되고 순서가 실행마다 갈린다.
+     *
+     * <p>고정하려는 순서는 이것이다: 절단 정리가 <b>키가 서기 전에</b> 통째로
+     * 지나가면 그 정리는 반납할 키를 못 보고({@code subscription=skipped}) 가드만
+     * 소모한다. 그 뒤에 ④가 만드는 구독은 <b>아무도 반납하지 않는다</b> —
+     * 서버에 남아 연결 상한 3개 중 하나를 먹는다.
+     * {@code CollectorRunner.releaseLate}가 막는 것이 정확히 그 상태다.
+     */
+    protected void beforeSessionKey() { }
 
     /**
      * <b>①②④ 앞에서 한 번씩 본다.</b> 셋은 REST와 WS 접속이라 <b>일단 시작하면

@@ -346,7 +346,7 @@ public class CollectorRunner implements ApplicationRunner {
             return false;
         }
 
-        ChatSession opening = new ChatSession(new ChzzkSessionClient(
+        ChatSession opening = newSession(new ChzzkSessionClient(
                 restClient, properties.baseUrl(), properties.accessToken()));
         SessionScope scope = SessionScope.opening(opening);
         // <b>자리 잡기와 번호 매기기가 신호 처리와 겹치면 안 된다.</b> 절단 신호는
@@ -506,6 +506,15 @@ public class CollectorRunner implements ApplicationRunner {
             // 소켓·HttpClient·치지직 세션이 새고, 상한이 3개라 세 번째에 스스로 막힌다.
             throw e;
         }
+    }
+
+    /**
+     * 세션 객체를 만든다. <b>검사가 수립 안쪽의 한 지점을 고정하려고 갈아 끼우는
+     * 자리다</b> — {@link ChatSession#beforeSessionKey()}는 수립 스레드 위에 있어
+     * 가짜 서버 쪽 손잡이로는 못 짚는다. {@link #heartbeatListener(long)}와 같은 이유다.
+     */
+    ChatSession newSession(ChzzkSessionClient client) {
+        return new ChatSession(client);
     }
 
     /**
@@ -930,13 +939,13 @@ public class CollectorRunner implements ApplicationRunner {
      * "정리가 못 본 구독이 실제로 있었다"이고, 평상시에는 한 줄도 안 늘어
      * 세션당 반납 줄이 하나라는 기존 모양이 그대로다.
      *
-     * <p><b>🔴 이것을 {@code close()}로 되돌려도 전체가 초록이다</b>(173건 확인).
-     * <b>이 갈래를 결정적으로 여는 장치가 없다.</b> "원리적으로 불가능"이 아니다 —
+     * <p><b>{@code close()}로 되돌리면 빨간불이다</b> —
+     * {@code 정리가_지나간_뒤에_생긴_구독도_반납한다}가 반납 1건을 기대하고 0건을 본다.
      * 창은 {@code ChatSession.open()}이 {@code connected}를 받고 깨어나 세션 키를
-     * 세우기까지의 몇 줄이고, 그 사이에 절단 정리가 통째로 끼어들면 열린다.
-     * 그런데 그 몇 줄에는 붙잡을 I/O가 없고, 깨우는 쪽(래치 countDown)이 절단
-     * 콜백보다 <b>먼저</b> 도는 순서라 수립 스레드가 항상 앞선다. 가짜 서버는
-     * 클라이언트 스레드를 그 자리에 세울 손잡이가 없다.
+     * 세우기까지의 몇 줄이고, 그 사이에 절단 정리가 통째로 지나가면 열린다.
+     * 그 몇 줄에 붙잡을 I/O가 없어 밖에서 끊는 것만으로는 순서가 실행마다 갈리므로,
+     * 검사가 {@link ChatSession#beforeSessionKey()}를 장벽으로 써서 정리가 끝난 것을
+     * 보고서야 키를 세우게 한다.
      */
     private void releaseLate(SessionScope scope) {
         ChatSession.Release released = scope.chat().releaseAndClose();
