@@ -26,6 +26,20 @@ public enum StopReason {
     CONNECT_FAILED,
 
     ESTABLISH_TIMEOUT,
+
+    /**
+     * 구독 401·403. <b>재시도해도 영원히 안 풀린다.</b>
+     *
+     * <p>발급 쪽과 값을 나눈 이유는 <b>단계가 다른 것을 말해 주기</b> 때문이다 —
+     * 발급이 200인데 구독만 거부됐다면 토큰 자체는 살아 있고 <b>채팅 Scope나
+     * 동의</b>가 빠진 것이다. 뭉치면 로그가 "토큰이 죽었다"고만 말해 사람이
+     * 토큰부터 다시 발급받는다.
+     *
+     * <p><b>거부 사유를 더 쪼개지는 않는다</b> — 만료·철회·Scope 부족이 두
+     * 엔드포인트에서 똑같이 {@code {"code":401,"message":"INVALID_TOKEN"}}이다.
+     */
+    SUBSCRIBE_REJECTED,
+    /** 5xx·네트워크 등 그 밖의 구독 실패. 다시 걸면 풀릴 수 있다. */
     SUBSCRIBE_FAILED,
 
     /** ping이 안 나간다. 소켓이 죽었다 */

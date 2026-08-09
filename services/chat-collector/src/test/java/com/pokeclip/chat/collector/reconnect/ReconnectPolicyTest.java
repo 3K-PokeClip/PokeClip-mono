@@ -16,6 +16,9 @@ class ReconnectPolicyTest {
     void 영원히_안_풀리는_사유는_재시도하지_않는다() {
         assertThat(ReconnectPolicy.retriable(StopReason.SESSION_AUTH_REJECTED)).isFalse();
         assertThat(ReconnectPolicy.retriable(StopReason.REVOKED)).isFalse();
+        assertThat(ReconnectPolicy.retriable(StopReason.SUBSCRIBE_REJECTED))
+                .as("발급이 200이어도 구독이 거부되면 다시 붙어도 같다. Scope나 동의가 빠진 것이다")
+                .isFalse();
         assertThat(ReconnectPolicy.retriable(StopReason.SEND_MISUSE))
                 .as("우리 버그로 재연결이 돌면 버그는 영영 안 보이고 자리만 태운다")
                 .isFalse();
@@ -29,6 +32,9 @@ class ReconnectPolicyTest {
         assertThat(ReconnectPolicy.retriable(StopReason.SESSION_AUTH_FAILED))
                 .as("5xx는 서버가 잠깐 아픈 것이다. 거부와 묶으면 영구 정지한다")
                 .isTrue();
+        assertThat(ReconnectPolicy.retriable(StopReason.SUBSCRIBE_FAILED))
+                .as("구독 5xx도 마찬가지다. 거부와 묶으면 그 방송의 남은 채팅이 통째로 사라진다")
+                .isTrue();
     }
 
     /**
@@ -41,6 +47,7 @@ class ReconnectPolicyTest {
     void 거부_목록에_없는_사유는_전부_재시도한다() {
         for (StopReason reason : StopReason.values()) {
             boolean denied = reason == StopReason.SESSION_AUTH_REJECTED
+                    || reason == StopReason.SUBSCRIBE_REJECTED
                     || reason == StopReason.REVOKED
                     || reason == StopReason.SEND_MISUSE;
             assertThat(ReconnectPolicy.retriable(reason))

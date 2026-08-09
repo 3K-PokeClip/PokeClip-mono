@@ -121,6 +121,36 @@ class ReconnectTest {
     }
 
     /**
+     * <b>구독이 거부되면 재시도가 세션 발급부터 영원히 돈다.</b>
+     *
+     * <p>발급은 200이라 ①이 매번 성공하고 ④에서만 거부되므로, 사유를 재시도
+     * 가능으로 두면 백오프 상한(여기서는 1초)마다 발급 API를 두들긴다 —
+     * 못 쓰는 토큰·빠진 Scope로 자리만 태우고 아무도 원인을 모른다.
+     *
+     * <p><b>발급 횟수가 이 검사의 본체다.</b> 상태만 보면 "루프가 상한 간격에서
+     * 아직 자고 있다"와 "멈췄다"가 같아 보인다.
+     */
+    @Test
+    void 구독이_거부되면_재시도하지_않고_멈춘다() throws Exception {
+        behavior.subscribeStatus = 401;
+        start();
+
+        awaitUntil(() -> status.state() == CollectionStatus.State.STOPPED);
+        assertThat(status.state())
+                .as("거부된 구독을 붙들고 재시도하는 동안 health는 DOWN을 오르내릴 뿐 안 멈춘다")
+                .isEqualTo(CollectionStatus.State.STOPPED);
+        // 사유는 STOPPED와 한 스냅숏으로 바뀐다 — 따로 기다릴 값이 아니다.
+        assertThat(status.reason())
+                .as("구독 거부를 일시 실패로 분류하면 영구 정지에 아예 못 닿는다")
+                .isEqualTo(StopReason.SUBSCRIBE_REJECTED);
+
+        Thread.sleep(500);      // 백오프 첫 간격(50ms)의 열 배
+        assertThat(behavior.authCallCount())
+                .as("Scope가 빠진 토큰으로 영원히 재시도하면 자리만 태우고 원인은 안 보인다")
+                .isEqualTo(1);
+    }
+
+    /**
      * <b>동의 철회는 재시도로 안 풀린다.</b> 다시 붙어도 구독이 또 취소되므로,
      * 재연결을 돌면 연결 상한 3개를 태우면서 영원히 "연결은 살아 있는데 채팅만
      * 안 오는" 상태를 반복한다 — 3층 CLAUDE.md가 {@code revoked}를 무시하면 된다고

@@ -219,6 +219,59 @@ class SessionEstablishTest {
     }
 
     /**
+     * <b>구독 401은 발급 401과 같은 규칙을 받는다 — 재시도해도 영원히 안 풀린다.</b>
+     *
+     * <p>발급이 200인데 구독만 거부되는 상태가 실제로 있다: 토큰은 살아 있고
+     * 채팅 Scope나 동의만 빠진 경우다. 그걸 {@code SUBSCRIBE_FAILED}로 뭉치면
+     * 재시도 가능으로 분류되어 <b>못 쓰는 토큰으로 세션 발급부터 영원히 돈다.</b>
+     */
+    @Test
+    void 구독이_401이면_거부로_분류한다() {
+        behavior.subscribeStatus = 401;
+        session = newSession();
+
+        assertThatThrownBy(() -> session.open(Duration.ofSeconds(5), NO_ABORT))
+                .isInstanceOf(SessionEstablishException.class)
+                // 상태 코드를 잃지 않는다. 재시도 판단은 사유가 지지만, 401인지 403인지는
+                // 사람이 "토큰이 죽었나 Scope가 빠졌나"를 좁히는 첫 단서다.
+                .hasMessageContaining("status=401")
+                .extracting("stage", "reason")
+                .containsExactly(EstablishStage.SUBSCRIBE, StopReason.SUBSCRIBE_REJECTED);
+    }
+
+    /**
+     * 403도 거부다. 이 줄이 없으면 조건에서 403을 지워도 전체가 초록이고,
+     * 그러면 Scope 부족이 일시 실패로 분류되어 러너가 영원히 재시도한다.
+     */
+    @Test
+    void 구독이_403이면_거부로_분류한다() {
+        behavior.subscribeStatus = 403;
+        session = newSession();
+
+        assertThatThrownBy(() -> session.open(Duration.ofSeconds(5), NO_ABORT))
+                .isInstanceOf(SessionEstablishException.class)
+                .hasMessageContaining("status=403")
+                .extracting("stage", "reason")
+                .containsExactly(EstablishStage.SUBSCRIBE, StopReason.SUBSCRIBE_REJECTED);
+    }
+
+    /**
+     * 5xx는 서버가 잠깐 아픈 것이다. <b>양성 대조다</b> — 이 줄이 없으면
+     * 구독 실패를 통째로 거부로 바꿔 놔도 위 둘이 초록이고, 그때는 5xx 한 번에
+     * 영구 정지해 그 방송의 남은 채팅이 전부 사라진다.
+     */
+    @Test
+    void 구독이_500이면_거부와_다른_사유로_분류한다() {
+        behavior.subscribeStatus = 500;
+        session = newSession();
+
+        assertThatThrownBy(() -> session.open(Duration.ofSeconds(5), NO_ABORT))
+                .isInstanceOf(SessionEstablishException.class)
+                .extracting("stage", "reason")
+                .containsExactly(EstablishStage.SUBSCRIBE, StopReason.SUBSCRIBE_FAILED);
+    }
+
+    /**
      * ② 접속 자체가 성립하지 않는 경우.
      *
      * <p>CONNECT 세분화는 진단 전용이라 재시도 판단에는 안 쓴다. <b>그래도 검사가

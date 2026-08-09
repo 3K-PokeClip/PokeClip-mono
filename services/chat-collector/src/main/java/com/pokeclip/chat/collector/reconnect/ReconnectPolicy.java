@@ -30,8 +30,11 @@ public final class ReconnectPolicy {
      */
     public static boolean retriable(StopReason reason) {
         return switch (reason) {
-            // 토큰이 거부됐거나 권한이 회수됐다. 다시 걸어도 영원히 같다
-            case SESSION_AUTH_REJECTED, REVOKED -> false;
+            // 토큰이 거부됐거나 권한이 회수됐다. 다시 걸어도 영원히 같다.
+            // 구독 거부가 따로 있는 이유는 <b>발급은 200인데 구독만 401인</b> 토큰이
+            // 실제로 있기 때문이다 — 그때 ①이 매번 성공해서, 재시도 가능으로 두면
+            // 백오프 상한마다 세션 발급 API를 영원히 두들긴다
+            case SESSION_AUTH_REJECTED, SUBSCRIBE_REJECTED, REVOKED -> false;
             // 우리가 잘못 쓴 것이다. 재연결하면 버그가 자동 복구에 덮인다
             case SEND_MISUSE -> false;
             default -> true;

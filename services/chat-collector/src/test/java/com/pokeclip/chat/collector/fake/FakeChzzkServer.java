@@ -111,6 +111,13 @@ public class FakeChzzkServer implements WebSocketConfigurer {
          */
         @PostMapping("/open/v1/sessions/events/subscribe/chat")
         public ResponseEntity<String> subscribe(@RequestParam String sessionKey) {
+            // 거부하면 subscribed를 안 쏜다. 거부해 놓고 쏘면 "구독이 됐다"와
+            // "안 됐다"가 소켓에서 같아 보여, 클라이언트가 ④의 실패를 무시해도
+            // ⑤가 통과시켜 준다.
+            if (behavior.subscribeStatus != 200) {
+                return ResponseEntity.status(behavior.subscribeStatus)
+                        .body(errorBody(behavior.subscribeStatus));
+            }
             if (behavior.sendSubscribed) {
                 behavior.emitSystem("{\"type\":\"subscribed\",\"data\":"
                         + "{\"eventType\":\"CHAT\",\"channelId\":\"FAKE-CHANNEL\"}}");

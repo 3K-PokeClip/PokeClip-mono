@@ -35,6 +35,14 @@ public class FakeChzzkBehavior {
     /** 세션 발급 REST가 돌려줄 상태. 401이면 T9(만료 토큰). */
     public volatile int authStatus = 200;
     /**
+     * 구독 REST가 돌려줄 상태.
+     *
+     * <p><b>발급은 200인데 구독만 거부되는 상태를 만드는 유일한 손잡이다.</b>
+     * 토큰은 살아 있고 채팅 Scope나 동의만 빠진 경우가 실제로 여기다 —
+     * {@code authStatus}로는 그 자리를 한 번도 안 밟는다.
+     */
+    public volatile int subscribeStatus = 200;
+    /**
      * 0이 아니면 세션 url의 포트를 이 값으로 바꾼다.
      *
      * <p><b>②(WS 접속)를 결정적으로 실패시키는 유일한 손잡이다.</b> 발급은 200으로
@@ -327,6 +335,7 @@ public class FakeChzzkBehavior {
         answerPong = true;
         disconnectWhenPingMissing = true;
         authStatus = 200;
+        subscribeStatus = 200;
         sessionUrlPort = 0;
         authDelay = Duration.ZERO;
         closeAfterSubscribed = false;

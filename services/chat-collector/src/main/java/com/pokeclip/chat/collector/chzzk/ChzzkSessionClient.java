@@ -82,8 +82,15 @@ public class ChzzkSessionClient {
                     .retrieve()
                     .toBodilessEntity();
         } catch (RestClientResponseException e) {
-            throw new SessionEstablishException(EstablishStage.SUBSCRIBE,
-                    StopReason.SUBSCRIBE_FAILED, "status=" + e.getStatusCode().value());
+            int status = e.getStatusCode().value();
+            // 발급 단계와 같은 규칙이다. 여기만 안 가르면 <b>발급은 200인데 구독만
+            // 거부되는 토큰</b>(채팅 Scope나 동의가 빠진 경우)이 재시도 가능으로
+            // 분류되어, ①이 매번 성공하므로 세션 발급부터 영원히 돈다.
+            StopReason reason = (status == 401 || status == 403)
+                    ? StopReason.SUBSCRIBE_REJECTED
+                    : StopReason.SUBSCRIBE_FAILED;
+            throw new SessionEstablishException(EstablishStage.SUBSCRIBE, reason,
+                    "status=" + status);
         } catch (Exception e) {
             throw new SessionEstablishException(EstablishStage.SUBSCRIBE,
                     StopReason.SUBSCRIBE_FAILED, "cause=" + e.getClass().getSimpleName());
