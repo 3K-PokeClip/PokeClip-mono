@@ -7,8 +7,10 @@ import com.pokeclip.chat.collector.chzzk.ChzzkSessionClient;
 import com.pokeclip.chat.collector.chzzk.SessionEstablishException;
 import com.pokeclip.chat.collector.chzzk.SystemEvent;
 import com.pokeclip.chat.collector.engineio.EngineIoFrame;
+import com.pokeclip.chat.collector.engineio.PingFailure;
 import com.pokeclip.chat.collector.observe.CollectionMetrics;
 import com.pokeclip.chat.collector.observe.Heartbeat;
+import com.pokeclip.chat.collector.observe.HeartbeatListener;
 import com.pokeclip.chat.collector.observe.SummaryLogger;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -154,7 +156,7 @@ public class CollectorRunner implements ApplicationRunner {
             }
 
             Heartbeat beat = Heartbeat.start(established.socket(), established.handshake(),
-                    cause -> log.warn("chat.session.ping_send_failed cause={}", cause));
+                    heartbeatListener());
             // 값이 아니라 읽는 길을 넘긴다 — 삼킨 예외 수는 계속 늘어난다.
             // 세션은 이 덩어리의 것이라 바뀌지 않으므로 그쪽을 직접 읽는다.
             SummaryLogger logger = SummaryLogger.start(metrics, beat, SUMMARY_PERIOD,
@@ -178,13 +180,48 @@ public class CollectorRunner implements ApplicationRunner {
                     established.handshake().pingInterval().toMillis(),
                     established.handshake().sendPeriod().toMillis());
         } catch (SessionEstablishException e) {
-            // URL·응답 본문·토큰을 안 찍는다. 단계와 사유면 어디서 막혔는지 충분하다.
-            log.warn("chat.session.stopped stage={} reason={}", e.stage(), e.reason());
+            // URL·응답 본문·토큰을 안 찍는다. detail에 들어가는 것은 상태 코드·예외
+            // 단순 이름·단계 이름뿐이라(던지는 자리 7곳 전수 확인) 토큰이 실릴 길이 없다.
+            //
+            // <b>detail이 없으면 열거값 아래 한 단계가 통째로 사라진다.</b>
+            // SESSION_AUTH_FAILED는 500인지 타임아웃인지를, CONNECT_REFUSED는
+            // DNS인지 TLS인지 연결 거부인지를 말하지 못한다. 재연결이 반복 실패할 때
+            // 사람은 같은 줄만 보고 엉뚱한 곳을 판다.
+            log.warn("chat.session.stopped stage={} reason={} detail={}",
+                    e.stage(), e.reason(), e.getMessage());
             status.stopped(e.reason());
             // 사유는 status에서 읽는다. 절단이 먼저였다면 그것이 원인이고
             // 여기서 잡은 시한 만료는 그 결과다 — 결과가 원인을 덮으면 추적이 끊긴다.
             cleanUpOnce(scope, status.reason());
         }
+    }
+
+    /**
+     * 하트비트가 알리는 두 사건을 운영 로그로 옮긴다. <b>태스크 5·6이 운영에
+     * 붙는 유일한 지점이다.</b>
+     *
+     * <p><b>익명 클래스로 {@code start()} 안에 묻어 두지 않는다.</b> 거기 있는 동안은
+     * 두 메서드를 빈 몸통으로 바꿔도 전 테스트가 초록이었다(CP2 실측) — 좀비 판정도
+     * 송신 실패 분류도 통째로 사라질 수 있고 아무도 몰랐다.
+     *
+     * <p>좀비 쪽은 가짜 서버가 pong을 끊으면 러너를 통째로 지나 재현되지만,
+     * <b>송신 실패 쪽은 루프백으로 못 만든다</b> — 전송이 끊기면 우리 뒷정리가
+     * 하트비트를 먼저 닫으므로 "쓰기는 실패하는데 읽기 통지는 아직 안 왔다"는
+     * 실제 망 사고의 순서가 같은 기계 안에서는 만들어지지 않는다. 이름을 준 것은
+     * 그 한 갈래를 검사가 지나갈 수 있게 하기 위해서다.
+     */
+    HeartbeatListener heartbeatListener() {
+        return new HeartbeatListener() {
+            @Override
+            public void onSendFailed(PingFailure.Cause cause) {
+                log.warn("chat.session.ping_send_failed cause={}", cause);
+            }
+
+            @Override
+            public void onPongTimeout(Duration gap) {
+                log.warn("chat.session.pong_timeout gapMs={}", gap.toMillis());
+            }
+        };
     }
 
     /**
