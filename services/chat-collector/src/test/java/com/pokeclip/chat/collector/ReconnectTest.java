@@ -11,6 +11,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -282,6 +283,78 @@ class ReconnectTest {
         assertThat(behavior.authCallCount())
                 .as("루프가 둘이면 시도도 둘이라 연결 상한 3개를 두 배 속도로 태운다")
                 .isEqualTo(1);
+    }
+
+    /**
+     * <b>얼마나 놓쳤는지가 한 줄에 없으면 어디에도 없다.</b> 판정 줄은 프로세스
+     * 누계라 "끊겼다 붙었다"의 흔적이 재연결 횟수와 놓친 시간으로만 남는다.
+     *
+     * <p>시각 둘을 같이 본다 — 누적 시간만으로는 "언제 놓쳤나"를 못 찾아
+     * 나중에 영상과 대조할 수 없다(PRD 완료 조건).
+     */
+    @Test
+    void 판정_줄이_재연결_횟수와_누적_절단_시간을_싣는다() throws Exception {
+        try (LogCaptor captor = new LogCaptor()) {
+            start();
+            long first = runner.lastSessionNo();
+
+            behavior.closeSession();
+            // <b>단언하는 값 자체를 기다린다.</b> 상태(COLLECTING)는 절단 기록보다
+            // 앞서 찍히므로, 상태로 기다리면 아직 안 걷힌 값을 stop()이 앞지른다.
+            awaitUntil(() -> runner.metrics().verdict().reconnects() == 1);
+            long second = runner.lastSessionNo();
+            assertThat(behavior.authCallCount())
+                    .as("세션 발급을 다시 안 탔다면 재연결이 아니라 그냥 안 끊긴 것이다")
+                    .isEqualTo(2);
+            assertThat(second)
+                    .as("새 세션이 안 섰다면 이 줄이 셀 절단이 없다")
+                    .isGreaterThan(first);
+
+            runner.stop();
+
+            String verdict = captor.messages().stream()
+                    .filter(m -> m.startsWith("chat.session.verdict session=" + second + " "))
+                    .reduce((a, b) -> b).orElseThrow();
+            java.util.Map<String, String> fields = fields(verdict);
+            assertThat(fields)
+                    .as("재연결 횟수가 없으면 얼마나 끊겼다 붙었는지가 어디에도 안 남는다")
+                    .containsEntry("reconnects", "1");
+            // 키가 통째로 사라지면 get이 null이라 뒤의 비교가 저절로 참이 된다.
+            // 그 갈래는 FinalVerdictTest의 항목 목록이 잡지만, 여기서도 안 새게 막는다.
+            assertThat(fields.get("outage"))
+                    .as("놓친 시간이 0이면 절단 구간을 아무도 안 잰 것이다")
+                    .isNotNull()
+                    .isNotEqualTo("0ms");
+            // none이면 키만 있고 값이 없는 것과 같다 — 파싱에서 터진다.
+            Instant outageFrom = Instant.parse(fields.get("lastOutageFrom"));
+            Instant outageTo = Instant.parse(fields.get("lastOutageTo"));
+            assertThat(outageFrom)
+                    .as("끊긴 시각이 복구 시각보다 뒤면 둘 중 하나는 그 절단의 것이 아니다")
+                    .isBefore(outageTo);
+
+            // 세션별 진단은 판정 줄이 아니라 여기 실린다. 검사가 0개면 PRD 결정이
+            // 구현에 안 들어가도 아무도 모른다. <b>번호로 고른다</b> — LogCaptor는
+            // JVM 루트 로거라 남의 러너가 늦게 찍은 줄까지 담는다.
+            assertThat(captor.messages().stream()
+                    .filter(m -> m.startsWith("chat.session.ended session=" + first + " ")
+                            || m.startsWith("chat.session.ended session=" + second + " "))
+                    .toList())
+                    .as("세션이 둘이면 종료 줄도 둘. 각 줄이 그 세션의 하트비트 값을 든다")
+                    .hasSize(2)
+                    .allMatch(m -> m.contains("maxPingGap=") && m.contains("maxPongGap="));
+        }
+    }
+
+    /** {@code key=value} 한 줄을 쪼갠다. {@code system={...}}만 공백을 품지 않는다. */
+    private static java.util.Map<String, String> fields(String line) {
+        java.util.Map<String, String> map = new java.util.LinkedHashMap<>();
+        for (String token : line.split(" ")) {
+            int eq = token.indexOf('=');
+            if (eq > 0) {
+                map.put(token.substring(0, eq), token.substring(eq + 1));
+            }
+        }
+        return map;
     }
 
     private long verdicts(LogCaptor captor, long session) {

@@ -332,8 +332,14 @@ public class CollectorRunner implements ApplicationRunner {
                 cleanUpOnce(scope, status.reason());
                 return false;
             }
-            // 다시 붙었다. 절단 시각을 지워야 다음 절단이 자기 시각을 갖는다.
-            disconnectedAt = null;
+            // 다시 붙었다. 끊겨 있던 구간을 여기서 닫는다 — 지우기만 하면 그 시간이
+            // 어느 지표에도 안 남고, 수신 공백에 섞인 채로 "한산했을 뿐"과 같아 보인다.
+            // 절단 시각도 같이 비운다. 안 비우면 다음 절단이 남의 시각을 물려받는다.
+            Instant since = disconnectedAt;
+            if (since != null) {
+                metrics.recordOutage(since, Instant.now());
+                disconnectedAt = null;
+            }
             log.info("chat.session.collecting pingIntervalMs={} sendPeriodMs={}",
                     established.handshake().pingInterval().toMillis(),
                     established.handshake().sendPeriod().toMillis());

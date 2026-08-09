@@ -4,6 +4,7 @@ import com.pokeclip.chat.collector.chzzk.ChatMessage;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -188,6 +189,66 @@ class CollectionMetricsTest {
         assertThat(v.sendFailures()).isZero();
         assertThat(v.callbackFailures()).isZero();
         assertThat(v.sinkFailures()).isZero();
+        assertThat(v.reconnects()).isZero();
+        assertThat(v.totalOutage()).isEqualTo(Duration.ZERO);
+        // 0을 찍으면 1970년으로 읽힌다. 한 번도 안 끊겼다는 것은 시각이 없다는 뜻이다.
+        assertThat(v.lastOutageFrom()).isNull();
+        assertThat(v.lastOutageTo()).isNull();
+    }
+
+    /**
+     * <b>끊겨 있던 시간은 수신 공백이 아니다.</b> 손대지 않으면 절단 구간이 통째로
+     * 하나의 {@code maxReceiveGap}으로 남아, "한산했을 뿐"과 "끊겨 있었다"가
+     * 판정 줄에서 같은 숫자로 보인다.
+     */
+    @Test
+    void 절단_구간은_수신_공백에_안_섞인다() {
+        CollectionMetrics metrics = new CollectionMetrics();
+        metrics.recordMessage(chat(1_000L), 1_000L);
+
+        // 30초 끊겨 있었다. 시각 둘을 넘긴다 — 누적 시간만으로는 "언제 놓쳤나"를 못 찾는다.
+        Instant from = Instant.ofEpochMilli(1_100L);
+        metrics.recordOutage(from, from.plusSeconds(30));
+        metrics.recordMessage(chat(31_100L), 31_100L);
+
+        CollectionMetrics.Verdict v = metrics.verdict();
+        assertThat(v.maxReceiveGap())
+                .as("절단을 수신 공백에 섞으면 '한산했다'와 '끊겨 있었다'가 같아 보인다")
+                .isLessThan(Duration.ofSeconds(1));
+        assertThat(v.reconnects()).isEqualTo(1);
+        assertThat(v.totalOutage()).isEqualTo(Duration.ofSeconds(30));
+
+        // <b>양성 대조.</b> 위 단언은 부정형이라 "무엇을 막았나"를 스스로 말하지
+        // 못한다. 손대지 않았을 때의 값을 같은 입력으로 같이 못박는다 — 30.1초가
+        // 그대로 공백으로 남고, 그것이 위에서 사라진 바로 그 숫자다.
+        CollectionMetrics untouched = new CollectionMetrics();
+        untouched.recordMessage(chat(1_000L), 1_000L);
+        untouched.recordMessage(chat(31_100L), 31_100L);
+        assertThat(untouched.verdict().maxReceiveGap())
+                .as("대조가 0이면 위 단언은 애초에 공백이 없던 입력을 본 것이다")
+                .isEqualTo(Duration.ofMillis(30_100));
+    }
+
+    /**
+     * 절단은 한 번으로 안 끝난다. 시간은 쌓고 시각은 마지막 것을 남긴다 —
+     * 누적 시간만 있으면 "얼마나"는 알아도 <b>"언제"를 못 찾아</b> 영상과 대조할 수 없다.
+     */
+    @Test
+    void 절단이_여러_번이면_시간은_쌓이고_시각은_마지막_것이_남는다() {
+        CollectionMetrics metrics = new CollectionMetrics();
+
+        Instant first = Instant.ofEpochMilli(1_000L);
+        metrics.recordOutage(first, first.plusSeconds(5));
+        Instant second = Instant.ofEpochMilli(60_000L);
+        metrics.recordOutage(second, second.plusSeconds(12));
+
+        CollectionMetrics.Verdict v = metrics.verdict();
+        assertThat(v.reconnects()).isEqualTo(2);
+        assertThat(v.totalOutage())
+                .as("마지막 절단만 남기면 앞에서 놓친 시간이 판정에서 사라진다")
+                .isEqualTo(Duration.ofSeconds(17));
+        assertThat(v.lastOutageFrom()).isEqualTo(second);
+        assertThat(v.lastOutageTo()).isEqualTo(second.plusSeconds(12));
     }
 
     private static ChatMessage chat(long messageTime) {

@@ -34,6 +34,9 @@ class FinalVerdictTest {
             "delayMin=", "delayMedian=", "delayMax=", "delaySamples=",
             "system=", "decodeFailures=",
             "sendFailures=", "callbackFailures=", "sinkFailures=",
+            // 끊겼다 붙은 흔적. 없으면 얼마나 놓쳤는지가 어디에도 안 남고,
+            // 시각 둘이 없으면 "언제 놓쳤나"에 못 답해 영상과 대조할 수 없다.
+            "reconnects=", "outage=", "lastOutageFrom=", "lastOutageTo=",
             // 없으면 "정상 종료"와 "조용히 끊겼다"가 같은 줄이 된다.
             "reason=");
 

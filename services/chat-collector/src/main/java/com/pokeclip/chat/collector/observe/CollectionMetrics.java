@@ -46,6 +46,11 @@ public final class CollectionMetrics {
      * @param totalCollectedFor 모든 세션의 수집 시간 합. <b>이것만 마지막 세션 값으로
      *                     두면 {@code totalReceived}와 경계가 어긋나</b>
      *                     "received=1000 collectedFor=5s"가 초당 200건처럼 읽힌다
+     * @param maxReceiveGap <b>절단 구간이 안 들어간다.</b> {@link #recordOutage}가 수신
+     *                     시계를 다시 잡아 빼낸다 — 안 빼면 "한산했을 뿐"과 "끊겨
+     *                     있었다"가 같은 숫자가 된다. 끊긴 시간은 {@code totalOutage}가 든다
+     * @param lastOutageFrom 누계가 아니라 <b>마지막 절단 하나</b>의 시각이다.
+     *                     한 번도 안 끊겼으면 null — 0을 찍으면 1970년으로 읽힌다
      */
     public record Verdict(
             long totalReceived,
@@ -64,7 +69,12 @@ public final class CollectionMetrics {
             Duration maxPongGap,
             long sendFailures,
             long callbackFailures,
-            long sinkFailures
+            long sinkFailures,
+            // --- 아래 넷은 세션 사이(끊겨 있던 동안)의 값이다. 위 어느 항에도 안 들어간다 ---
+            long reconnects,
+            Duration totalOutage,
+            Instant lastOutageFrom,
+            Instant lastOutageTo
     ) { }
 
     /**
@@ -104,6 +114,14 @@ public final class CollectionMetrics {
     private long totalCallbackFailures;
     private long totalSinkFailures;
 
+    // 끊겼다 붙은 흔적. 수신 공백에서 빼낸 시간이 여기로 온다.
+    private long reconnects;
+    private long totalOutageMillis;
+    // 마지막 절단의 시각 둘. 누적 시간만으로는 "언제 놓쳤나"를 못 찾는다 —
+    // 나중에 영상과 대조하려면 시각이 필요하다(PRD 완료 조건).
+    private long lastOutageFromMillis;
+    private long lastOutageToMillis;
+
     /**
      * 세션 하나가 끝났다. <b>그 세션과 함께 사라지는 값 전부</b>를 누계에 합친다 —
      * 하트비트 지표·수집 시간·삼킨 프레임 수.
@@ -125,6 +143,24 @@ public final class CollectionMetrics {
             totalSendFailures += sendFailures;
             totalCallbackFailures += callbackFailures;
             totalSinkFailures += sinkFailures;
+        }
+    }
+
+    /**
+     * 끊겼다가 다시 붙었다. <b>수신 시계를 다시 잡는다</b> — 안 그러면 절단 구간이
+     * 통째로 하나의 수신 공백이 되어 "한산했을 뿐"과 구분되지 않는다.
+     * 한산한 것은 정상이고(방송을 꺼도 세션은 살아 있다) 끊긴 것은 유실이다.
+     *
+     * @param from 못 받기 시작한 시각. 재연결이 여러 번 실패해도 <b>첫 절단</b>이다
+     * @param to   다시 받기 시작한 시각
+     */
+    public void recordOutage(Instant from, Instant to) {
+        synchronized (lock) {
+            reconnects++;
+            totalOutageMillis += Duration.between(from, to).toMillis();
+            lastOutageFromMillis = from.toEpochMilli();
+            lastOutageToMillis = to.toEpochMilli();
+            previousReceivedAtMillis = 0;
         }
     }
 
@@ -186,7 +222,11 @@ public final class CollectionMetrics {
                     Duration.ofMillis(totalMaxPongGapMillis),
                     totalSendFailures,
                     totalCallbackFailures,
-                    totalSinkFailures);
+                    totalSinkFailures,
+                    reconnects,
+                    Duration.ofMillis(totalOutageMillis),
+                    lastOutageFromMillis == 0 ? null : Instant.ofEpochMilli(lastOutageFromMillis),
+                    lastOutageToMillis == 0 ? null : Instant.ofEpochMilli(lastOutageToMillis));
         }
     }
 

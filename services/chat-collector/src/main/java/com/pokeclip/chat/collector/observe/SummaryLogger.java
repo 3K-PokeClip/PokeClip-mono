@@ -93,10 +93,19 @@ public final class SummaryLogger implements AutoCloseable {
      *       {@code delayMin}·{@code delayMedian}·{@code delayMax}·{@code delaySamples}·
      *       {@code system}·{@code decodeFailures}·{@code collectedFor}·
      *       {@code maxPingGap}·{@code maxPongGap}·{@code sendFailures}·
-     *       {@code callbackFailures}·{@code sinkFailures}
+     *       {@code callbackFailures}·{@code sinkFailures}·
+     *       {@code reconnects}·{@code outage}
+     *   <li>{@code lastOutageFrom}·{@code lastOutageTo}는 누계가 아니라
+     *       <b>마지막 절단 하나</b>의 시각이다. 누계로 읽으면 "이 시각부터 내내
+     *       끊겨 있었다"가 된다. 한 번도 안 끊겼으면 {@code none}이다
      *   <li>{@code session}은 경계가 아니라 몇 번째 세션의 판정인가다
      *   <li>{@code reason}은 경계가 아니라 그 판정의 사유다
      * </ul>
+     *
+     * <p><b>{@code maxReceiveGap}은 누계지만 절단 구간을 빼고 잰다.</b> 안 빼면
+     * 끊겨 있던 시간이 통째로 하나의 수신 공백이 되어 "한산했을 뿐"과 "끊겨
+     * 있었다"가 같은 숫자로 보인다 — 한산한 것은 정상이고(방송을 꺼도 세션은
+     * 안 끊긴다) 끊긴 것은 유실이다. 빼낸 시간은 {@code outage}가 든다.
      *
      * <p><b>{@code sinkFailures}도 {@code CollectionMetrics}가 걷어 올린다.</b>
      * 세는 주체가 {@code ChatSession}이라 세션과 함께 사라지는데, 여기서 그 세션
@@ -142,6 +151,14 @@ public final class SummaryLogger implements AutoCloseable {
                 + " sendFailures=" + v.sendFailures()
                 + " callbackFailures=" + v.callbackFailures()
                 + " sinkFailures=" + v.sinkFailures()
+                // 끊겼다 붙은 횟수와 그동안 놓친 시간. 위 maxReceiveGap이 절단을
+                // 빼고 재므로, 이 둘이 없으면 유실 구간이 어느 항에도 안 남는다.
+                + " reconnects=" + v.reconnects()
+                + " outage=" + duration(v.totalOutage())
+                // PRD 완료 조건: "끊긴 시각·복구 시각 두 값". 누적 시간만으로는
+                // "언제 놓쳤나"를 못 찾는다 — 영상과 대조하려면 시각이 필요하다.
+                + " lastOutageFrom=" + instant(v.lastOutageFrom())
+                + " lastOutageTo=" + instant(v.lastOutageTo())
                 // 왜 끝났는지가 없으면 "정상 종료"와 "조용히 끊겼다"가 같은 줄이 된다.
                 + " reason=" + (stopReason == null ? "SHUTDOWN" : stopReason);
     }
