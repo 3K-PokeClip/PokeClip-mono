@@ -116,10 +116,16 @@ public class FakeChzzkServer implements WebSocketConfigurer {
         FakeUnsubscribeRest(FakeChzzkBehavior behavior) { this.behavior = behavior; }
 
         @PostMapping("/open/v1/sessions/events/unsubscribe/chat")
-        public ResponseEntity<String> unsubscribe(@RequestParam String sessionKey) {
+        public ResponseEntity<String> unsubscribe(@RequestParam String sessionKey)
+                throws InterruptedException {
             // 실패해도 도착한 사실은 센다. 안 세면 "왔는데 터졌다"와 "아예 안 왔다"가
             // 같아 보인다.
             behavior.countUnsubscribeCall();
+            // 세는 것이 먼저다. 붙들고 있는 동안 뒷정리 스레드가 여기 갇혀 있으므로,
+            // 테스트는 이 카운터로 "갇힌 시점"을 정확히 집어낼 수 있다.
+            if (!behavior.unsubscribeDelay.isZero()) {
+                Thread.sleep(behavior.unsubscribeDelay.toMillis());
+            }
             if (behavior.unsubscribeStatus != 200) {
                 return ResponseEntity.status(behavior.unsubscribeStatus)
                         .body("{\"code\":500,\"message\":\"Internal Error\",\"content\":null}");

@@ -156,7 +156,8 @@ class CollectorConfigTest {
 
         private CollectorRunner runnerFor(CollectionStatus status, boolean enabled) {
             var props = new ChzzkProperties(enabled, "test-token",
-                    "http://localhost:" + port, Duration.ofSeconds(5));
+                    "http://localhost:" + port, Duration.ofSeconds(5),
+                    Duration.ofMillis(50), Duration.ofSeconds(1));
             return new CollectorRunner(props, status, restClientBuilder);
         }
     }

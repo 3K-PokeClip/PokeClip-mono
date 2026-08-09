@@ -62,6 +62,18 @@ public class FakeChzzkBehavior {
      * try/catch의 존재 이유가 무검사로 남는다.
      */
     public volatile int unsubscribeStatus = 200;
+    /**
+     * 구독 반납 REST가 <b>도착을 센 뒤</b> 응답 전에 붙들고 있는 시간.
+     *
+     * <p><b>뒷정리 스레드를 원하는 지점에 세워 두는 장치다.</b> 반납은 실서버에서
+     * 약 1초 걸리는 왕복이라(CLAUDE.md 실측), 그 사이에 다음 세션이 시작되는 창이
+     * 실제로 열린다. 지연이 없으면 그 창이 로컬에서 1ms라 경합이 영영 안 재현되고,
+     * 그러면 "앞 세션 정리가 새 세션을 지운다"는 결함이 초록 아래 그대로 남는다.
+     *
+     * <p>도착을 먼저 세므로 {@code unsubscribeCallCount()}가 1이 된 시점이
+     * 곧 <b>뒷정리 스레드가 왕복에 갇힌 시점</b>이다 — 테스트가 그 시점을 노린다.
+     */
+    public volatile Duration unsubscribeDelay = Duration.ZERO;
 
     private final List<String> received = new CopyOnWriteArrayList<>();
     private final AtomicReference<String> handshakeQuery = new AtomicReference<>("");
@@ -285,6 +297,7 @@ public class FakeChzzkBehavior {
         authDelay = Duration.ZERO;
         closeAfterSubscribed = false;
         unsubscribeStatus = 200;
+        unsubscribeDelay = Duration.ZERO;
     }
 
     /** 앞 세션이 닫히기를 기다리는 시한. 실측 최대 23ms에 200배 여유다. */

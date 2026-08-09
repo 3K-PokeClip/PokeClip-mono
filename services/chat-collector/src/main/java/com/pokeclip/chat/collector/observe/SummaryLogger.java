@@ -82,7 +82,23 @@ public final class SummaryLogger implements AutoCloseable {
 
     /**
      * 수집이 끝났을 때 한 줄. <b>30초 요약은 창 값이라 이 줄이 없으면 판정하려고
-     * 20줄을 뒤져야 한다.</b> 여기 값은 전부 세션 전체 누적이다.
+     * 20줄을 뒤져야 한다.</b>
+     *
+     * <p><b>지금 이 한 줄 안에 경계가 둘 섞여 있다. 아래가 전 항목이다</b> —
+     * 빠진 항이 하나라도 있으면 "이 줄은 어느 경계인가"가 다시 열린다.
+     *
+     * <ul>
+     *   <li><b>프로세스 누계</b>(지표를 세션마다 갈아 끼우지 않는다) — {@code received}·
+     *       {@code lastReceivedAt}·{@code maxReceiveGap}·{@code orderViolations}·
+     *       {@code delayMin}·{@code delayMedian}·{@code delayMax}·{@code delaySamples}·
+     *       {@code system}·{@code decodeFailures}
+     *   <li><b>그 세션</b> — {@code collectedFor}·{@code maxPingGap}·{@code maxPongGap}·
+     *       {@code sendFailures}·{@code callbackFailures}·{@code sinkFailures}
+     *   <li>{@code reason}은 경계가 아니라 그 판정의 사유다
+     * </ul>
+     *
+     * 세션이 둘이면 {@code received=1000 collectedFor=5s}가 초당 200건처럼 읽힌다.
+     * 경계를 하나로 맞추는 것은 태스크 8이다.
      *
      * <p>수립조차 못 했을 때도 나와야 하므로 static이다 — 그때는 SummaryLogger
      * 인스턴스가 아예 없다.

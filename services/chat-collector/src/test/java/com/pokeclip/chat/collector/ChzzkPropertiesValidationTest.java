@@ -25,7 +25,9 @@ class ChzzkPropertiesValidationTest {
             .withConfiguration(AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class))
             .withUserConfiguration(BoundProperties.class)
             .withPropertyValues("pokeclip.chzzk.base-url=https://openapi.chzzk.naver.com")
-            .withPropertyValues("pokeclip.chzzk.establish-timeout=15s");
+            .withPropertyValues("pokeclip.chzzk.establish-timeout=15s")
+            .withPropertyValues("pokeclip.chzzk.reconnect-first-delay=35s")
+            .withPropertyValues("pokeclip.chzzk.reconnect-max-delay=120s");
 
     /** PRD 상태표 첫 행이 성립하려면 이 상태로 떠 있어야 한다. */
     @Test
@@ -60,6 +62,26 @@ class ChzzkPropertiesValidationTest {
         runner.withPropertyValues("pokeclip.chzzk.enabled=false")
                 .withPropertyValues("pokeclip.chzzk.access-token=")
                 .withPropertyValues("pokeclip.chzzk.base-url=")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    /**
+     * 재연결 간격이 비면 <b>부팅에서</b> 잡는다.
+     *
+     * <p>안 잡으면 null로 바인딩되고, 아무도 안 읽는 동안은 아무 일도 없다.
+     * 재연결 루프가 읽는 날 NPE로 죽는데 그때 원인은 "설정에 값이 없다"가 아니라
+     * "왜 여기서 NPE가 나지"로 보인다. 이 줄이 없으면 {@code @NotNull}을 떼도
+     * 전부 초록이라, 그 검증이 있는지 없는지를 아무도 모른다.
+     */
+    @Test
+    void 재연결_간격이_비면_부팅이_실패한다() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class))
+                .withUserConfiguration(BoundProperties.class)
+                .withPropertyValues("pokeclip.chzzk.base-url=https://openapi.chzzk.naver.com")
+                .withPropertyValues("pokeclip.chzzk.establish-timeout=15s")
+                .withPropertyValues("pokeclip.chzzk.enabled=false")
+                .withPropertyValues("pokeclip.chzzk.access-token=")
                 .run(context -> assertThat(context).hasFailed());
     }
 

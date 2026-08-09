@@ -106,7 +106,8 @@ class EstablishCutCleanupTest {
 
     private CollectorRunner start(CollectionStatus status, Duration establishTimeout) {
         CollectorRunner created = new CollectorRunner(new ChzzkProperties(
-                true, "test-token", "http://localhost:" + port, establishTimeout),
+                true, "test-token", "http://localhost:" + port, establishTimeout,
+                Duration.ofMillis(50), Duration.ofSeconds(1)),
                 status, restClientBuilder);
         created.start();
         return created;

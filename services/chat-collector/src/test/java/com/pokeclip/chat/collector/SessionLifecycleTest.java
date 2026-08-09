@@ -39,7 +39,8 @@ class SessionLifecycleTest {
         try (LogCaptor captor = new LogCaptor()) {
             CollectionStatus status = new CollectionStatus();
             runner = new CollectorRunner(new ChzzkProperties(
-                    true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status, restClientBuilder);
+                    true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
+                    Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
             runner.start();
             assertThat(status.state())
                     .as("붙지도 않았다면 revoked를 받을 길이 없다")
@@ -69,7 +70,8 @@ class SessionLifecycleTest {
     void unsubscribed도_요약에_남는다() throws Exception {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
-                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status, restClientBuilder);
+                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
+                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
         runner.start();
         assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
 
@@ -92,7 +94,8 @@ class SessionLifecycleTest {
     void 수립_과정의_connected와_subscribed가_요약에_남는다() {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
-                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status, restClientBuilder);
+                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
+                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
         runner.start();
 
         assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);

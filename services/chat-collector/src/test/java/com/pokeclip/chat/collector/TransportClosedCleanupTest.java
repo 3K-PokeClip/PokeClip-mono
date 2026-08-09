@@ -54,7 +54,8 @@ class TransportClosedCleanupTest {
 
             CollectionStatus status = new CollectionStatus();
             runner = new CollectorRunner(new ChzzkProperties(
-                    true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)),
+                    true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
+                    Duration.ofMillis(50), Duration.ofSeconds(1)),
                     status, restClientBuilder);
             runner.start();
             assertThat(status.state())

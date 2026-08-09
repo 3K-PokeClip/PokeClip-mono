@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector;
 
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -22,7 +23,12 @@ public record ChzzkProperties(
         boolean enabled,
         String accessToken,
         @NotBlank String baseUrl,
-        Duration establishTimeout
+        Duration establishTimeout,
+        // 안 주면 null로 바인딩되고 아무도 안 읽는 동안은 조용하다. 재연결 루프가
+        // 읽는 날 NPE로 죽는데, 그때 원인은 "설정에 값이 없다"가 아니라
+        // "왜 여기서 NPE가 나지"로 보인다. 부팅에서 잡는다.
+        @NotNull Duration reconnectFirstDelay,
+        @NotNull Duration reconnectMaxDelay
 ) {
 
     /**

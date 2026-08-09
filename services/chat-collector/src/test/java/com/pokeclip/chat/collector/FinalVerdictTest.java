@@ -143,7 +143,8 @@ class FinalVerdictTest {
         try (LogCaptor captor = new LogCaptor()) {
             CollectionStatus status = new CollectionStatus();
             runner = new CollectorRunner(new ChzzkProperties(
-                    false, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status, restClientBuilder);
+                    false, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
+                    Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
             runner.start();
             runner.stop();
 
@@ -155,7 +156,8 @@ class FinalVerdictTest {
     private CollectionStatus start() {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
-                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status, restClientBuilder);
+                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
+                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
         runner.start();
         return status;
     }

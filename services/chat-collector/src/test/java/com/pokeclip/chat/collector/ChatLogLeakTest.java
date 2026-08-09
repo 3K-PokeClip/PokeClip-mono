@@ -270,7 +270,8 @@ class ChatLogLeakTest {
     private CollectionStatus start() {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(
-                new ChzzkProperties(true, TOKEN, "http://localhost:" + port, Duration.ofSeconds(5)),
+                new ChzzkProperties(true, TOKEN, "http://localhost:" + port, Duration.ofSeconds(5),
+                        Duration.ofMillis(50), Duration.ofSeconds(1)),
                 status, restClientBuilder);
         runner.start();
         return status;
