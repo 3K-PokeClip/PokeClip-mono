@@ -520,6 +520,15 @@ public class CollectorRunner implements ApplicationRunner {
         int attempt = 0;
         try {
             while (stopSignal.getCount() > 0) {
+                // <b>밀린 영구 신호를 다음 시도 앞에서 반영한다.</b> 수립 중인 세션이
+                // revoked를 내면 루프가 이미 돌고 있으므로 그 신호는 대기 사유로 앉는데,
+                // 같은 수립이 5xx나 시한 만료로 던지면 아래에서 사유가 그 일시 오류로
+                // 덮인다. 대기 사유는 {@code finally}에서만 읽히고 <b>시도가 계속
+                // 실패하면 거기 영영 안 닿는다</b> — 동의가 철회됐는데도 재시도가
+                // 이어지고, 나중에 번호가 큰 세션이 그 자리를 덮어써 철회 사실이
+                // 통째로 사라진다. 다시 붙어도 서버가 구독을 또 취소하므로 그 재시도는
+                // 연결 상한 3개만 태운다.
+                reason = adoptPendingPermanent(reason);
                 if (status.state() == CollectionStatus.State.STOPPED) {
                     // 이미 영구 정지다. 판정은 그때 나갔다.
                     return;
@@ -602,6 +611,27 @@ public class CollectorRunner implements ApplicationRunner {
                 requestReconnect(missed.sessionNo(), missed.reason());
             }
         }
+    }
+
+    /**
+     * 밀린 신호가 <b>재시도로 안 풀리는 사유</b>면 그것을 이번 판단의 사유로 삼는다.
+     * 일시 사유면 아무것도 안 한다 — 그쪽은 {@code finally}의 재생이 맡는다.
+     *
+     * <p><b>세션 번호로 안 거른다.</b> 여기서 집는 것들(REVOKED · 401/403 · 우리 버그)은
+     * 세션이 아니라 <b>토큰과 코드에 붙은 사실</b>이라 다음 시도에도 그대로 있다.
+     * 낡은 신호를 거르는 규칙은 <b>살아 있는 세션을 헐지 않기</b> 위한 것인데, 이
+     * 자리는 시도가 실패한 뒤라 헐 세션이 없다 — 붙은 경우는 위에서 이미 돌아갔다.
+     *
+     * <p>집어 간 신호는 지운다. 사유로 이미 반영했으므로 남겨 두면 {@code finally}가
+     * 같은 절단을 한 번 더 재생하는 셈이 된다.
+     */
+    private StopReason adoptPendingPermanent(StopReason reason) {
+        ReconnectSignal pending = pendingSignal.get();
+        if (pending == null || ReconnectPolicy.retriable(pending.reason())) {
+            return reason;
+        }
+        pendingSignal.compareAndSet(pending, null);
+        return pending.reason();
     }
 
     /**

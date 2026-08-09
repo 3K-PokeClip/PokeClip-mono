@@ -185,6 +185,65 @@ class ReconnectTest {
     }
 
     /**
+     * <b>수립 중에 온 철회가 같은 수립의 일시 오류에 덮이면 안 된다.</b>
+     *
+     * <p>루프가 이미 돌고 있는 동안 세션이 {@code revoked}를 내면 그 신호는 곧장
+     * 처리되지 못하고 <b>대기 사유로 앉는다</b>. 그런데 같은 수립이 시한 만료나 5xx로
+     * 던지면 루프의 사유는 그 일시 오류로 덮이고, 대기 사유는 {@code finally}에서만
+     * 읽힌다 — <b>시도가 계속 실패하면 그 {@code finally}에 영영 안 닿는다.</b>
+     * 결과는 동의가 철회됐는데도 재시도가 이어지는 것이고, 나중에 번호가 큰 세션이
+     * 그 자리를 덮어써 철회 사실 자체가 사라진다. 다시 붙어도 서버가 구독을 또
+     * 취소하므로 그 재시도는 연결 상한 3개만 태운다.
+     *
+     * <p><b>둘째 시도에서만 철회를 낸다.</b> 첫 시도(부팅)에서 내면 그 신호가 스스로
+     * 루프를 띄워 곧바로 멈추고, 그러면 이 검사가 겨냥한 자리 — <b>이미 도는 루프</b> —
+     * 를 한 번도 안 지난다. 발급 횟수로 시도를 가른다.
+     *
+     * <p>{@code sendSubscribed=false}라 시도마다 ⑤에서 시한이 만료된다. 이 사유는
+     * 재시도 가능이라, 대기 사유를 안 보면 루프가 영원히 돈다.
+     */
+    @Test
+    void 수립_중에_온_철회가_같은_시도의_일시_오류에_덮이지_않는다() throws Exception {
+        behavior.sendSubscribed = false;        // 시도마다 ⑤에서 시한이 만료된다
+
+        status = new CollectionStatus();
+        runner = new CollectorRunner(new ChzzkProperties(
+                true, "test-token", "http://localhost:" + port,
+                Duration.ofMillis(500), Duration.ofMillis(50), Duration.ofSeconds(1)),
+                status, restClientBuilder);
+
+        java.util.concurrent.atomic.AtomicBoolean revokedSeen =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        behavior.onSubscribeBeforeResponse = () -> {
+            if (behavior.authCallCount() < 2) {
+                return;                          // 첫 시도는 그냥 실패시킨다
+            }
+            behavior.emitSystem("{\"type\":\"revoked\",\"data\":{\"eventType\":\"CHAT\"}}");
+            // <b>러너가 그 프레임을 처리한 것까지 보고 돌아간다.</b> 안 보고 응답하면
+            // 철회가 수립 실패보다 늦게 도착하는 실행이 섞여 무엇을 봤는지 흐려진다.
+            revokedSeen.set(awaitQuietly(() -> status.reason() == StopReason.REVOKED));
+        };
+
+        runner.run(null);
+
+        awaitUntil(() -> status.state() == CollectionStatus.State.STOPPED);
+        // 양성 대조. 철회가 수립 중에 실제로 들어가지 않았다면 아래 단언들은
+        // 겨냥한 자리를 한 번도 안 지난 채 참이 될 수 있다.
+        assertThat(revokedSeen)
+                .as("철회가 수립 중인 세션에 안 닿았다면 이 검사는 덮일 신호를 만든 적이 없다")
+                .isTrue();
+        assertThat(status.state())
+                .as("일시 오류가 철회를 덮으면 재시도가 이어지고 상태는 영영 안 멈춘다")
+                .isEqualTo(CollectionStatus.State.STOPPED);
+        assertThat(status.reason())
+                .as("사유가 일시 오류로 남으면 왜 영영 멈췄는지가 어디에도 안 남는다")
+                .isEqualTo(StopReason.REVOKED);
+        assertThat(behavior.authCallCount())
+                .as("철회 뒤에도 시도가 늘면 다시 붙어도 또 취소될 연결로 상한 3개를 태운다")
+                .isEqualTo(2);
+    }
+
+    /**
      * <b>판정은 절단마다가 아니라 수집이 영영 끝날 때 나간다.</b>
      *
      * <p>재연결이 생기는 순간 절단에서 판정을 내는 것은 틀린 것이 된다 — 판정은
