@@ -30,6 +30,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -252,7 +253,7 @@ public class CollectorRunner implements ApplicationRunner {
     private final CountDownLatch stopSignal = new CountDownLatch(1);
 
     /**
-     * <b>지금 구독 반납 왕복 중인가.</b> {@code stop()}이 인터럽트하기 전에 본다.
+     * <b>지금 나가 있는 구독 반납 왕복의 수.</b> {@code stop()}이 인터럽트하기 전에 본다.
      *
      * <p>재연결 스레드를 인터럽트해도 대부분은 손해가 없다 — 수립에 매달린
      * 스레드는 버려도 되고(뒤늦게 성립하는 소켓은 가드에 막힌 정리가 닫는다)
@@ -262,8 +263,13 @@ public class CollectorRunner implements ApplicationRunner {
      *
      * <p>그래서 시한을 통째로 늘리지 않고 이 자리만 더 기다린다. 늘리면
      * 치지직이 아파서 수립이 매달릴 때마다 종료가 이유 없이 몇 초씩 길어진다.
+     *
+     * <p><b>불리언이 아니라 수다.</b> 한 세션에 두 스레드가 동시에 들어오는 길이
+     * 있다(가드를 얻은 쪽과 {@code releaseLate}로 빠지는 쪽). 그때 먼저 끝난
+     * 쪽이 플래그를 내리면 <b>아직 나가 있는 왕복이 무방비가 된다</b> —
+     * 이 필드가 막으려던 그 인터럽트가 그대로 들어온다.
      */
-    private final AtomicBoolean releaseInFlight = new AtomicBoolean();
+    private final AtomicInteger releasesInFlight = new AtomicInteger();
 
     /**
      * 자리를 잡은 세션에만 번호를 준다. <b>프로세스 안에서 유일하다</b> —
@@ -904,7 +910,7 @@ public class CollectorRunner implements ApplicationRunner {
             // 매달린 스레드까지 같이 기다리게 되는데, 그쪽은 버려도 새는 것이 없다
             // (위 문단). 아파서 못 붙는 중일수록 종료가 길어지는 것은 손해다.
             if (!reconnector.awaitTermination(SHUTDOWN_WAIT.toMillis(), TimeUnit.MILLISECONDS)
-                    && releaseInFlight.get()) {
+                    && releasesInFlight.get() > 0) {
                 reconnector.awaitTermination(RELEASE_WAIT.toMillis(), TimeUnit.MILLISECONDS);
             }
         } catch (InterruptedException e) {
@@ -948,7 +954,7 @@ public class CollectorRunner implements ApplicationRunner {
      * 보고서야 키를 세우게 한다.
      */
     private void releaseLate(SessionScope scope) {
-        ChatSession.Release released = scope.chat().releaseAndClose();
+        ChatSession.Release released = releaseAndClose(scope);
         if (released != ChatSession.Release.SKIPPED) {
             log.info("chat.session.released session={} subscription={} late=true",
                     scope.no().get(), released);
@@ -1039,15 +1045,29 @@ public class CollectorRunner implements ApplicationRunner {
         // 구독을 반납하고 끊는다고 알린다. 안 하면 세션 반납이 우리가 아니라
         // 서버가 죽은 전송을 알아채는 때에 달리고, 실측에서 10초와 4분 42초로
         // 갈렸다. 연결 상한이 3개라 짧은 간격의 재시작 세 번이면 막힌다.
-        // 반납이 나가 있는 동안은 종료가 이 스레드를 인터럽트하지 않는다.
-        // 여기서 끊기면 세션 키가 이미 소모된 뒤라 아무도 다시 못 보낸다.
-        releaseInFlight.set(true);
-        ChatSession.Release released;
-        try {
-            released = scope.chat().releaseAndClose();
-        } finally {
-            releaseInFlight.set(false);
-        }
+        ChatSession.Release released = releaseAndClose(scope);
         log.info("chat.session.released session={} subscription={}", scope.no().get(), released);
+    }
+
+    /**
+     * <b>구독 반납 왕복이 나가는 유일한 자리.</b> 나가 있는 동안은 {@code stop()}이
+     * 이 스레드를 인터럽트하지 않는다.
+     *
+     * <p>인터럽트되면 반납 REST가 즉시 실패하는데, 세션 키는
+     * {@code ChatSession.releaseAndClose()}가 이미 걷어 간 뒤라 <b>아무도 다시 못 보낸다</b> —
+     * 서버 쪽 자리가 10초~4분 42초 남고(실측) 상한은 3개다.
+     *
+     * <p><b>부르는 자리가 둘이라 여기로 모았다.</b> 정리 본체와 {@code releaseLate}가
+     * 같은 왕복을 서로 다른 보호 수준으로 보내면, 종료가 정리를 맡은 사이에
+     * 늦은 반납이 무방비로 나가 정확히 위 상태가 된다. 자리를 다시 늘리지 마라 —
+     * 늘리는 순간 그쪽만 보호 밖이 되고, 그 실패는 조용하다.
+     */
+    private ChatSession.Release releaseAndClose(SessionScope scope) {
+        releasesInFlight.incrementAndGet();
+        try {
+            return scope.chat().releaseAndClose();
+        } finally {
+            releasesInFlight.decrementAndGet();
+        }
     }
 }
