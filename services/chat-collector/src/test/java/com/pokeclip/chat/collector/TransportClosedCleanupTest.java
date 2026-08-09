@@ -58,6 +58,7 @@ class TransportClosedCleanupTest {
                     Duration.ofMillis(50), Duration.ofSeconds(1)),
                     status, restClientBuilder);
             runner.start();
+            long session = runner.lastSessionNo();
             assertThat(status.state())
                     .as("붙지도 않았다면 끊는 것에 아무 의미가 없다")
                     .isEqualTo(CollectionStatus.State.COLLECTING);
@@ -93,8 +94,12 @@ class TransportClosedCleanupTest {
             // ③ 두 번째 경로. 종료 훅이 stop()을 또 부른다.
             runner.stop();
 
+            // 이 러너가 받은 번호로 좁혀 센다. 개수만 세면 LogCaptor가 JVM 전역 루트
+            // 로거에 붙어 있어(web-support/LogCaptor.java:21-26) 앞 클래스의 낙오
+            // 스레드가 늦게 찍은 줄이 이 수에 섞인다. 상수 1을 박아도 같다 —
+            // 번호를 러너에서 받아 와야 남의 세션과 갈린다.
             assertThat(captor.messages().stream()
-                    .filter(m -> m.startsWith("chat.session.verdict")).count())
+                    .filter(m -> m.startsWith("chat.session.verdict session=" + session + " ")).count())
                     .as("판정이 두 줄이면 어느 것이 진짜 끝인지 흐려진다")
                     .isEqualTo(1);
             assertThat(behavior.unsubscribeCallCount())

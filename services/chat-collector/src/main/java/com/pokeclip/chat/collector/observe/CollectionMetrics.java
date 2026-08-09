@@ -43,6 +43,9 @@ public final class CollectionMetrics {
      *
      * @param delaySamples 중앙값을 낸 표본 수. {@code totalReceived}보다 작으면
      *                     상한에 걸려 잘린 것이고, 그때 중앙값은 앞부분의 값이다
+     * @param totalCollectedFor 모든 세션의 수집 시간 합. <b>이것만 마지막 세션 값으로
+     *                     두면 {@code totalReceived}와 경계가 어긋나</b>
+     *                     "received=1000 collectedFor=5s"가 초당 200건처럼 읽힌다
      */
     public record Verdict(
             long totalReceived,
@@ -54,7 +57,14 @@ public final class CollectionMetrics {
             Duration delayMax,
             long delaySamples,
             Map<String, Long> systemEvents,
-            long decodeFailures
+            long decodeFailures,
+            // --- 아래 여섯은 세션이 끝날 때 걷어 올린 값이다. 위와 경계가 같다 ---
+            Duration totalCollectedFor,
+            Duration maxPingGap,
+            Duration maxPongGap,
+            long sendFailures,
+            long callbackFailures,
+            long sinkFailures
     ) { }
 
     /**
@@ -84,6 +94,39 @@ public final class CollectionMetrics {
     private long totalMaxReceiveGapMillis;
     private long totalOrderViolations;
     private long totalDecodeFailures;
+
+    // 세션이 끝날 때 걷어 올린다. Heartbeat는 소켓마다 새로 만들어져 저절로
+    // 리셋되므로, 안 걷으면 판정 줄에 마지막 세션 값만 남는다.
+    private long totalCollectedMillis;
+    private long totalMaxPingGapMillis;
+    private long totalMaxPongGapMillis;
+    private long totalSendFailures;
+    private long totalCallbackFailures;
+    private long totalSinkFailures;
+
+    /**
+     * 세션 하나가 끝났다. <b>그 세션과 함께 사라지는 값 전부</b>를 누계에 합친다 —
+     * 하트비트 지표·수집 시간·삼킨 프레임 수.
+     *
+     * <p><b>한 항이라도 빠지면 판정 줄이 두 경계를 섞어 싣는다.</b>
+     * {@code received}(누계) 옆에 {@code collectedFor}(마지막 세션)이 서면
+     * 초당 수신량이 몇 배로 읽히고, {@code sinkFailures}가 마지막 세션 값이면
+     * 앞 세션이 삼킨 프레임이 "이 프로세스에서 0건"으로 읽힌다.
+     *
+     * <p>공백 둘은 합이 아니라 <b>최대</b>다. 이어 붙이면 세션 사이의 끊긴 시간까지
+     * 한 번의 공백처럼 보이고, 그러면 "ping이 한 사이클 막혔다"를 못 가른다.
+     */
+    public void recordSessionEnd(Duration collectedFor, Duration maxPingGap, Duration maxPongGap,
+                                 long sendFailures, long callbackFailures, long sinkFailures) {
+        synchronized (lock) {
+            totalCollectedMillis += collectedFor.toMillis();
+            totalMaxPingGapMillis = Math.max(totalMaxPingGapMillis, maxPingGap.toMillis());
+            totalMaxPongGapMillis = Math.max(totalMaxPongGapMillis, maxPongGap.toMillis());
+            totalSendFailures += sendFailures;
+            totalCallbackFailures += callbackFailures;
+            totalSinkFailures += sinkFailures;
+        }
+    }
 
     public void recordMessage(ChatMessage message, long receivedAtMillis) {
         synchronized (lock) {
@@ -137,7 +180,13 @@ public final class CollectionMetrics {
                     at(sorted, sorted.size() - 1),
                     sorted.size(),
                     Map.copyOf(systemEvents),
-                    totalDecodeFailures);
+                    totalDecodeFailures,
+                    Duration.ofMillis(totalCollectedMillis),
+                    Duration.ofMillis(totalMaxPingGapMillis),
+                    Duration.ofMillis(totalMaxPongGapMillis),
+                    totalSendFailures,
+                    totalCallbackFailures,
+                    totalSinkFailures);
         }
     }
 

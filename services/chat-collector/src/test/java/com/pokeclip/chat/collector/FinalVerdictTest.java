@@ -26,6 +26,9 @@ class FinalVerdictTest {
 
     /** PRD 「판정 항목」이 최종 라인에 요구하는 것 전부. */
     private static final List<String> REQUIRED = List.of(
+            // 재연결이 붙으면 판정 줄이 여러 번 나간다. 몇 번째 세션의 판정인지가
+            // 없으면 운영자가 N번째와 N+1번째를 못 가른다.
+            "session=",
             "received=", "collectedFor=", "lastReceivedAt=", "maxReceiveGap=",
             "maxPingGap=", "maxPongGap=", "orderViolations=",
             "delayMin=", "delayMedian=", "delayMax=", "delaySamples=",
@@ -99,11 +102,13 @@ class FinalVerdictTest {
             CollectionStatus status = start();
             assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
 
+            long session = runner.lastSessionNo();
             behavior.closeSession();
-            awaitVerdict(captor);
+            awaitVerdict(captor, session);
             runner.stop();                       // 두 번째 종료 경로
 
-            assertThat(captor.messages().stream().filter(m -> m.startsWith("chat.session.verdict")))
+            assertThat(captor.messages().stream()
+                    .filter(m -> m.startsWith("chat.session.verdict session=" + session + " ")))
                     .hasSize(1);
             assertThat(verdictLine(captor))
                     .as("왜 끝났는지가 없으면 정상 종료와 구분이 안 된다")
@@ -133,7 +138,8 @@ class FinalVerdictTest {
             // 그 값을 실제로 보는 줄이 있어야 한다.
             assertThat(captor.messages())
                     .as("반납할 키가 없었던 결말이 skipped로 안 나가면 반납 실패와 구분이 안 된다")
-                    .contains("chat.session.released subscription=skipped");
+                    .contains("chat.session.released session=" + runner.lastSessionNo()
+                            + " subscription=skipped");
         }
     }
 
@@ -162,11 +168,17 @@ class FinalVerdictTest {
         return status;
     }
 
-    private static String verdictLine(LogCaptor captor) {
+    /**
+     * <b>이 러너가 받은 번호로 좁힌다.</b> {@code LogCaptor}는 JVM 전역 루트 로거에
+     * 붙어 있어 남의 러너가 늦게 찍은 판정 줄까지 담는다. 접두사만 보면 그 낙오가
+     * 내 줄인 척 집히고, 내 판정이 통째로 없어도 초록이 된다.
+     */
+    private String verdictLine(LogCaptor captor) {
+        long session = runner.lastSessionNo();
         return captor.messages().stream()
-                .filter(m -> m.startsWith("chat.session.verdict"))
+                .filter(m -> m.startsWith("chat.session.verdict session=" + session + " "))
                 .findFirst()
-                .orElseThrow(() -> new AssertionError("최종 판정 라인이 한 줄도 안 나갔다"));
+                .orElseThrow(() -> new AssertionError("session=" + session + " 판정 라인이 안 나갔다"));
     }
 
     private void awaitReceived(long count) throws Exception {
@@ -185,9 +197,10 @@ class FinalVerdictTest {
      * {@code Expected size: 1 but was: 0}으로 간헐 실패한다. 창을 넓히는 것으로는
      * 없앨 수 없고(느린 기계에서는 상시 빨강이다) 기다리는 대상을 옮겨야 없어진다.
      */
-    private static void awaitVerdict(LogCaptor captor) throws Exception {
+    private static void awaitVerdict(LogCaptor captor, long session) throws Exception {
+        String prefix = "chat.session.verdict session=" + session + " ";
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-        while (captor.messages().stream().noneMatch(m -> m.startsWith("chat.session.verdict"))
+        while (captor.messages().stream().noneMatch(m -> m.startsWith(prefix))
                 && System.nanoTime() < deadline) {
             Thread.sleep(20);
         }

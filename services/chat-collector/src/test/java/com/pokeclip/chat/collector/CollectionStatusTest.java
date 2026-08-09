@@ -41,13 +41,25 @@ class CollectionStatusTest {
     @Test
     void 재연결_뒤_수집으로_돌아오면_UP이다() {
         status.reconnecting(StopReason.TRANSPORT_CLOSED, Instant.now(), 1);
+        // 양성 대조. 여기 안 서면 "돌아왔다"가 아니라 "떠난 적이 없다"를 읽는다 —
+        // establishing()이 무조건 덮어쓰는 setter라 reconnecting()이 아무것도
+        // 안 해도 아래가 통과한다.
+        assertThat(status.state())
+                .as("재연결 중으로 가지도 않았다면 돌아오는 것을 검사할 수 없다")
+                .isEqualTo(CollectionStatus.State.RECONNECTING);
+
         status.establishing();
         assertThat(status.collectingIfEstablishing()).isTrue();
 
         assertThat(new CollectorHealth(status).health().getStatus()).isEqualTo(Status.UP);
     }
 
-    /** STOPPED는 첫 사유가 이긴다. RECONNECTING이 덮으면 진짜 원인이 사라진다. */
+    /**
+     * STOPPED는 첫 사유가 이긴다. RECONNECTING이 덮으면 진짜 원인이 사라진다.
+     *
+     * <p><b>이 테스트만으로는 {@code reconnecting()}이 일한다는 증거가 안 된다</b> —
+     * 아무것도 안 하는 구현도 "안 덮었다"를 만족한다. 양성 대조는 위 두 테스트다.
+     */
     @Test
     void 이미_STOPPED면_재연결_중으로_되돌리지_않는다() {
         status.stopped(StopReason.SESSION_AUTH_REJECTED);

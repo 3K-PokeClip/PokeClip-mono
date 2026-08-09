@@ -23,6 +23,7 @@ import org.springframework.web.client.RestClient;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -72,6 +73,11 @@ public class CollectorRunner implements ApplicationRunner {
      * 든 채 영영 안 비워져 다음 세션이 영영 못 선다. 홀더는 이 세션의 것이므로
      * 누가 언제 읽어도 남의 세션에 닿지 않는다.
      *
+     * @param no            이 프로세스에서 몇 번째 세션인가. 재연결이 붙으면 판정·반납
+     *                      줄이 여러 번 나가는데, 번호가 없으면 운영자가 N번째와
+     *                      N+1번째를 못 가른다. <b>자리를 잡은 뒤에 채운다</b> —
+     *                      거절된 {@code start()}가 번호를 먹으면 로그에 구멍이 생기고,
+     *                      사람은 그 구멍을 "판정 줄을 잃어버렸다"로 읽는다
      * @param cleanedUp     뒷정리 가드. 종료 경로가 둘(전송 절단·프로세스 종료)이라
      *                      같은 세션에서 두 번 도는 길이 있다
      * @param verdictLogged 판정 가드. <b>지금은 발화하지 않는다</b> — {@code logVerdictOnce}를
@@ -81,6 +87,7 @@ public class CollectorRunner implements ApplicationRunner {
      */
     private record SessionScope(
             ChatSession chat,
+            AtomicLong no,
             AtomicBoolean cleanedUp,
             AtomicBoolean verdictLogged,
             AtomicReference<Heartbeat> heartbeat,
@@ -88,13 +95,39 @@ public class CollectorRunner implements ApplicationRunner {
             AtomicReference<Instant> collectingSince) {
 
         static SessionScope opening(ChatSession chat) {
-            return new SessionScope(chat, new AtomicBoolean(), new AtomicBoolean(),
+            return new SessionScope(chat, new AtomicLong(), new AtomicBoolean(), new AtomicBoolean(),
                     new AtomicReference<>(), new AtomicReference<>(), new AtomicReference<>());
         }
     }
 
     /** 지금 자리를 잡고 있는 세션. 비어 있을 때만 새 세션이 들어올 수 있다. */
     private final AtomicReference<SessionScope> activeSession = new AtomicReference<>();
+
+    /**
+     * 자리를 잡은 세션에만 번호를 준다. <b>프로세스 안에서 유일하다</b> —
+     * 그래서 static이다.
+     *
+     * <p>러너마다 1부터 세면 번호가 "이 러너의 몇 번째"가 되고, 러너가 둘 이상인
+     * 순간(스트리머별 수집 · 검사) <b>서로 다른 세션이 같은 번호로 로그에 나간다.</b>
+     * 그러면 {@code session=N}으로 줄을 고르는 사람도 도구도 남의 세션을 자기 것으로
+     * 집는다 — 실제로 검사에서 앞 테스트의 낙오 반납 줄이 뒤 테스트의 줄 수 단언에
+     * 섞여 들어갔다(실측: 기대 1, 실제 2).
+     */
+    private static final AtomicLong SESSION_SEQ = new AtomicLong();
+
+    /**
+     * 이 러너가 마지막으로 자리를 준 세션의 번호. 자리가 비워진 뒤에도 남는다.
+     *
+     * <p><b>검사가 자기 러너의 줄만 고르는 열쇠다.</b> {@code LogCaptor}는 JVM 전역
+     * 루트 로거에 붙어 있어 남의 러너가 늦게 찍은 줄까지 담는다. 번호를 모르면
+     * 줄 수 단언이 그 낙오까지 세고, 판정이 0줄이 되는 진짜 결함을 낙오 한 건이
+     * 메워 준다.
+     */
+    private final AtomicLong lastSessionNo = new AtomicLong();
+
+    long lastSessionNo() {
+        return lastSessionNo.get();
+    }
 
     public CollectorRunner(ChzzkProperties properties, CollectionStatus status,
                            RestClient.Builder restClientBuilder) {
@@ -138,6 +171,11 @@ public class CollectorRunner implements ApplicationRunner {
             log.warn("chat.session.start_skipped reason=ALREADY_ACTIVE");
             return;
         }
+        // 자리를 잡은 뒤라 번호를 두 세션이 나눠 갖는 길이 없고, 콜백을 아직
+        // 걸지 않아 이 값을 우리보다 먼저 읽는 스레드도 없다.
+        long no = SESSION_SEQ.incrementAndGet();
+        scope.no().set(no);
+        lastSessionNo.set(no);
         opening.onFrame(frame -> handleFrame(scope, frame));
         // 필드가 아니라 이 덩어리를 캡처해서 넘긴다. 콜백이 나중에 필드를 다시
         // 읽으면, 그때 자리에 있는 것은 이미 다음 세션일 수 있다.
@@ -264,14 +302,9 @@ public class CollectorRunner implements ApplicationRunner {
         if (!scope.verdictLogged().compareAndSet(false, true)) {
             return;
         }
-        Heartbeat beat = scope.heartbeat().get();
-        Instant since = scope.collectingSince().get();
-        SummaryLogger.logFinalVerdict(
-                metrics.verdict(),
-                beat == null ? Heartbeat.idleForTest() : beat,
-                scope.chat().sinkFailureCount(),
-                since == null ? Duration.ZERO : Duration.between(since, Instant.now()),
-                reason);
+        // 세션의 값을 여기서 하나도 안 읽는다. 세션이 끝날 때 metrics가 전부
+        // 걷어 두므로, 여기서 이 세션 것을 다시 읽으면 그 항만 앞 세션 값이 지워진다.
+        SummaryLogger.logFinalVerdict(scope.no().get(), metrics.verdict(), reason);
     }
 
     /**
@@ -349,20 +382,36 @@ public class CollectorRunner implements ApplicationRunner {
         SummaryLogger logger = scope.summaryLogger().getAndSet(null);
         if (logger != null) logger.close();
 
-        Heartbeat beat = scope.heartbeat().get();
-        if (beat != null) beat.close();
+        // 닫기 전에 걷는다. "닫힌 것에서 읽는다"를 코드로 남기지 않는다.
+        // 하트비트도 삼킨 프레임 수도 세션과 함께 사라지므로, 여기서 안 걷으면
+        // 판정 줄에 마지막 세션 값만 남고 앞 세션에서 ping이 막혔던 사실도
+        // 프레임을 삼킨 사실도 사라진다 — 그 값이 POK-85가 정한 실패 조건이라
+        // 합격선이 조용히 무력해진다.
+        //
+        // 하트비트가 없는 갈래(수립 실패)에서도 걷는다. 삼킨 프레임은 수립 도중에도
+        // 늘 수 있어, 하트비트가 설 때까지 기다리면 그 세션 값이 통째로 사라진다.
+        Heartbeat beat = scope.heartbeat().getAndSet(null);
+        Instant since = beat == null ? null : scope.collectingSince().get();
+        metrics.recordSessionEnd(
+                since == null ? Duration.ZERO : Duration.between(since, Instant.now()),
+                beat == null ? Duration.ZERO : beat.maxPingGap(),
+                beat == null ? Duration.ZERO : beat.maxPongGap(),
+                beat == null ? 0L : beat.sendFailureCount(),
+                beat == null ? 0L : beat.callbackFailureCount(),
+                scope.chat().sinkFailureCount());
+        if (beat != null) {
+            beat.close();
+        }
 
-        // 판정 라인이 먼저다. 소켓을 닫으면 heartbeat 지표를 못 읽는 것은 아니지만,
-        // 닫는 도중 예외가 나도 판정은 남아야 한다.
+        // 판정 라인이 먼저다. 소켓을 닫는 도중 예외가 나도 판정은 남아야 한다.
         if (status.state() != CollectionStatus.State.DISABLED) {
             logVerdictOnce(scope, reason);
         }
-        scope.heartbeat().set(null);
 
         // 구독을 반납하고 끊는다고 알린다. 안 하면 세션 반납이 우리가 아니라
         // 서버가 죽은 전송을 알아채는 때에 달리고, 실측에서 10초와 4분 42초로
         // 갈렸다. 연결 상한이 3개라 짧은 간격의 재시작 세 번이면 막힌다.
         ChatSession.Release released = scope.chat().releaseAndClose();
-        log.info("chat.session.released subscription={}", released);
+        log.info("chat.session.released session={} subscription={}", scope.no().get(), released);
     }
 }

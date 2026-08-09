@@ -48,6 +48,9 @@ class CollectorShutdownTest {
         assertThat(behavior.unsubscribeCallCount())
                 .as("닫기도 전에 반납이 왔다면 아래 단언이 무의미하다")
                 .isZero();
+        // 번호는 프로세스 안에서 유일하다. 상수 1을 박으면 남의 세션 줄과 갈리지 않고,
+        // 컨텍스트를 닫은 뒤에는 빈을 못 꺼내므로 지금 읽어 둔다.
+        long session = context.getBean(CollectorRunner.class).lastSessionNo();
 
         // LogCaptor를 부팅 "뒤에" 단다. 스프링 부트는 시작하면서 로그백을
         // 재초기화하는데, 그때 루트 로거에 붙여 둔 appender가 통째로 떨어진다.
@@ -74,7 +77,7 @@ class CollectorShutdownTest {
             // 실제로는 수립 실패였던 상태가 만들어질 수 있다.
             assertThat(captor.messages())
                     .as("반납에 성공한 결말이 returned로 안 나가면 세 갈래를 가른 의미가 없다")
-                    .contains("chat.session.released subscription=returned");
+                    .contains("chat.session.released session=" + session + " subscription=returned");
         }
 
         assertThat(behavior.unsubscribeCallCount())
@@ -132,6 +135,7 @@ class CollectorShutdownTest {
         ConfigurableApplicationContext context = bootCollector();
         assertThat(context.getBean(CollectionStatus.class).state())
                 .isEqualTo(CollectionStatus.State.COLLECTING);
+        long session = context.getBean(CollectorRunner.class).lastSessionNo();
 
         try (LogCaptor captor = new LogCaptor()) {
             context.close();
@@ -140,7 +144,7 @@ class CollectorShutdownTest {
             // "반납을 보냈는데 실패했다"를 아무도 못 가른다.
             assertThat(captor.messages())
                     .as("반납이 매번 터져도 수립 실패와 같은 줄이 나가면 원인을 못 찾는다")
-                    .contains("chat.session.released subscription=failed");
+                    .contains("chat.session.released session=" + session + " subscription=failed");
         }
 
         // 양성 대조. 반납을 아예 안 보냈다면 실패 갈래를 밟은 것이 아니다.
