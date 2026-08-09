@@ -111,7 +111,12 @@ class HttpTimeoutTest {
                         // 재시도가 이 측정을 오염시키지 않게 한 번만 재게 한다.
                         // 서버는 6초를 붙들고 있으므로 첫 간격이 짧으면 측정 창 안에
                         // 두 번째 요청이 들어와 "얼마나 기다렸나"가 흐려진다.
+                        //
+                        // <b>상한도 같이 올린다.</b> application-test.yml의 상한이
+                        // 1초라, 첫 간격만 올리면 delayFor가 그것을 상한으로 잘라
+                        // 실제로는 1초마다 재시도한다 — 위 의도가 그대로 무너진다.
                         "--pokeclip.chzzk.reconnect-first-delay=30s",
+                        "--pokeclip.chzzk.reconnect-max-delay=30s",
                         "--spring.http.clients.read-timeout=" + READ_TIMEOUT);
     }
 }

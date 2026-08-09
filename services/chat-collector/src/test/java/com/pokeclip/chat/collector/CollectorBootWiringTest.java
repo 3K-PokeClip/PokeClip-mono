@@ -29,11 +29,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p><b>재시도 간격을 크게 준다.</b> 죽은 포트라 재연결은 영원히 실패하는데,
  * 스프링은 이 컨텍스트를 JVM이 끝날 때까지 캐시한다 — 짧은 간격이면 뒤따르는
  * 모든 테스트 클래스가 도는 내내 이 러너가 계속 두드린다.
+ *
+ * <p><b>상한도 같이 올린다.</b> {@code application-test.yml}의 상한이 1초라,
+ * 첫 간격만 30초로 올리면 {@code delayFor}가 그것을 상한으로 잘라 <b>실제로는
+ * 1초마다 두드린다</b> — 위 문단이 막으려던 것이 그대로 일어난다.
  */
 @SpringBootTest(properties = {
         "pokeclip.chzzk.enabled=true",
         "pokeclip.chzzk.base-url=http://localhost:1",
-        "pokeclip.chzzk.reconnect-first-delay=30s"
+        "pokeclip.chzzk.reconnect-first-delay=30s",
+        "pokeclip.chzzk.reconnect-max-delay=30s"
 })
 @ActiveProfiles("test")
 class CollectorBootWiringTest {

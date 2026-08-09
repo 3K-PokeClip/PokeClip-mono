@@ -85,6 +85,56 @@ class ChzzkPropertiesValidationTest {
                 .run(context -> assertThat(context).hasFailed());
     }
 
+    /**
+     * <b>0은 백오프를 통째로 없앤다.</b> {@code delayFor}는 곱셈이라 0은 몇 번을
+     * 두 배 해도 0이고, {@code stopSignal.await(0, MILLISECONDS)}는 즉시 돌아온다.
+     * 그러면 재시도가 간격 없이 세션 발급 API를 두들긴다 — 이 카드가 없애려던
+     * 실패가 정확히 그것이다(재시도가 스스로 자리를 태워 영영 못 붙는다).
+     *
+     * <p>부팅에서 안 잡으면 <b>서버는 뜨고 헬스체크도 통과하는데 재연결만 폭주한다.</b>
+     * {@code services/CLAUDE.md}의 규칙이 막으려는 모양이 이것이다.
+     */
+    @Test
+    void 재연결_첫_간격이_0이면_부팅이_실패한다() {
+        runner.withPropertyValues("pokeclip.chzzk.enabled=false")
+                .withPropertyValues("pokeclip.chzzk.access-token=")
+                .withPropertyValues("pokeclip.chzzk.reconnect-first-delay=0s")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    /**
+     * 상한이 음수면 {@code delayFor}가 <b>항상</b> 음수를 준다 — 첫 간격이 아무리
+     * 커도 마지막 줄에서 상한으로 잘린다. 음수 대기는 0과 같아 위와 같은 폭주다.
+     *
+     * <p><b>이 갈래를 잡는 것은 상한의 양수 검증이 아니라 아래의 순서 검증이다.</b>
+     * 첫 간격이 1ms 이상이어야 하므로 음수 상한은 반드시 {@code first > max}가 된다.
+     * 그래서 상한에 별도 양수 검증을 두지 않았다 — 그것 혼자 발화하는 설정이 없다.
+     * 여기 남겨 두는 것은 <b>운영자가 보는 사실</b>("음수 상한으로는 안 뜬다")이
+     * 어느 검증으로 지켜지든 회귀하지 않게 하기 위해서다.
+     */
+    @Test
+    void 재연결_상한이_음수면_부팅이_실패한다() {
+        runner.withPropertyValues("pokeclip.chzzk.enabled=false")
+                .withPropertyValues("pokeclip.chzzk.access-token=")
+                .withPropertyValues("pokeclip.chzzk.reconnect-max-delay=-1s")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    /**
+     * <b>첫 간격이 상한보다 크면 첫 간격이 조용히 버려진다.</b> {@code delayFor}는
+     * 마지막 줄에서 상한으로 자르므로, 그 설정은 시도마다 <b>상한 하나만</b> 돌려준다.
+     * 설정 파일은 "첫 10초"라고 적혀 있는데 동작은 "언제나 1초"다 — 상한이 작으면
+     * 그대로 폭주로 이어진다.
+     */
+    @Test
+    void 재연결_첫_간격이_상한보다_크면_부팅이_실패한다() {
+        runner.withPropertyValues("pokeclip.chzzk.enabled=false")
+                .withPropertyValues("pokeclip.chzzk.access-token=")
+                .withPropertyValues("pokeclip.chzzk.reconnect-first-delay=10s")
+                .withPropertyValues("pokeclip.chzzk.reconnect-max-delay=1s")
+                .run(context -> assertThat(context).hasFailed());
+    }
+
     @EnableConfigurationProperties(ChzzkProperties.class)
     static class BoundProperties { }
 }

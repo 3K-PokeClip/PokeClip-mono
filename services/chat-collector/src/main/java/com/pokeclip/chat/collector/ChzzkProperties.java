@@ -50,4 +50,46 @@ public record ChzzkProperties(
     public boolean isAccessTokenPresentWhenEnabled() {
         return !enabled || (accessToken != null && !accessToken.isBlank());
     }
+
+    /**
+     * 재연결 간격은 <b>1밀리초 이상이어야 한다.</b>
+     *
+     * <p>{@code ReconnectPolicy.delayFor}는 곱셈이라 <b>0은 몇 번을 두 배 해도 0</b>이고,
+     * 대기는 {@code CountDownLatch.await(0, MILLISECONDS)}라 즉시 돌아온다. 음수는
+     * 그보다 더 빠르다. 그러면 재시도가 간격 없이 세션 발급 API를 두들기고,
+     * <b>재시도가 스스로 자리를 태워 영영 못 붙는다</b> — 이 서버가 없애려던 실패다.
+     *
+     * <p>부팅에서 안 잡으면 <b>서버는 뜨고 헬스체크도 통과하는데 재연결만 폭주한다.</b>
+     * {@code services/CLAUDE.md}가 "{@code ${VAR:}} + 검증"을 정한 이유와 같은 모양이다.
+     *
+     * <p>밀리초로 재는 이유는 대기가 밀리초 단위이기 때문이다 — 500마이크로초는
+     * 값이 있어도 대기가 0이라 위와 똑같이 폭주한다.
+     *
+     * <p>{@code null}은 여기서 참으로 넘긴다. 그쪽은 {@code @NotNull}이 잡고,
+     * 여기서 같이 잡으면 값이 없는 것과 값이 잘못된 것이 한 줄로 뭉친다.
+     *
+     * <p><b>상한에는 같은 검사를 두지 않는다 — 아래 순서 검사가 이미 덮는다.</b>
+     * 첫 간격이 1ms 이상이고 첫 간격이 상한 이하면 상한도 1ms 이상이다. 상한만
+     * 0이나 음수인 설정은 <b>반드시</b> 첫 간격보다 작아 순서 검사에서 죽는다.
+     * 따로 달아 봤지만 어떤 설정으로도 그것 <b>혼자</b> 발화시킬 수 없어 —
+     * 즉 지울 때 빨간불이 되는 검사가 없어 — 뺐다.
+     */
+    @AssertTrue(message = "pokeclip.chzzk.reconnect-first-delay는 1ms 이상이어야 한다")
+    public boolean isReconnectFirstDelayPositive() {
+        return reconnectFirstDelay == null || reconnectFirstDelay.toMillis() >= 1;
+    }
+
+    /**
+     * 첫 간격이 상한보다 크면 <b>첫 간격이 조용히 버려진다.</b>
+     *
+     * <p>{@code delayFor}가 마지막에 상한으로 자르므로 그 설정은 시도마다
+     * <b>상한 하나만</b> 돌려준다 — 설정 파일은 "첫 10초"라고 적혀 있는데 동작은
+     * "언제나 1초"다. 상한이 작으면 그대로 폭주로 이어지고, 크더라도 적어 둔 것과
+     * 도는 것이 다르면 <b>재연결이 왜 이 간격으로 도는지를 설정에서 읽을 수 없다.</b>
+     */
+    @AssertTrue(message = "pokeclip.chzzk.reconnect-first-delay가 reconnect-max-delay보다 크다")
+    public boolean isReconnectDelayRangeOrdered() {
+        return reconnectFirstDelay == null || reconnectMaxDelay == null
+                || reconnectFirstDelay.compareTo(reconnectMaxDelay) <= 0;
+    }
 }
