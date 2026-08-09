@@ -106,13 +106,16 @@ class CollectorConfigTest {
             runner.start();
 
             assertThat(status.state()).isEqualTo(CollectionStatus.State.STOPPED);
-            assertThat(status.reason()).isEqualTo(StopReason.SESSION_AUTH_FAILED);
+            assertThat(status.reason()).isEqualTo(StopReason.SESSION_AUTH_REJECTED);
 
             var health = new CollectorHealth(status).health();
             assertThat(health.getStatus()).isEqualTo(Status.DOWN);
-            assertThat(health.getDetails()).containsEntry("reason", "SESSION_AUTH_FAILED");
+            assertThat(health.getDetails())
+                    .as("밖에서 보이는 이름이 바로 이 값이다. 거부와 일시 실패가 같은 문자열이면 "
+                            + "운영자가 기다리면 풀릴 일인지 토큰을 갈아야 할 일인지 모른다")
+                    .containsEntry("reason", "SESSION_AUTH_REJECTED");
 
-            // 조용한 재시도 루프를 만들지 않는다. 재연결은 POK-86이다.
+            // 401은 거부다. 재연결이 붙어도 다시 걸지 않는다.
             assertThat(behavior.authCallCount()).isEqualTo(1);
         }
 

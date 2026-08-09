@@ -103,8 +103,27 @@ public class ChatSession implements AutoCloseable {
                     frame -> handle(frame, handshake, sessionKey, connected, subscribed),
                     () -> closedSink.run());
         } catch (Exception e) {
-            throw new SessionEstablishException(EstablishStage.CONNECT,
-                    StopReason.CONNECT_FAILED, "cause=" + e.getClass().getSimpleName());
+            // 진단용 구분이다. 재시도 여부는 이걸로 갈리지 않는다 —
+            // 재시도 불가 사유는 AUTH의 401/403과 REVOKED뿐이고 둘 다 여기가 아니다.
+            // 그래도 가르는 이유는, 재연결이 반복 실패할 때 로그가 한 줄이면
+            // 시한 초과인지 DNS인지 TLS인지를 사람이 못 가르기 때문이다.
+            //
+            // 알고 남긴 구멍: CONNECT_REFUSED만 테스트가 지킨다(죽은 포트로 결정적으로
+            // 만들 수 있다). CONNECT_TIMEOUT은 라우팅되지 않는 주소가 있어야 재현되는데
+            // 느리고 환경을 타서 안 붙였다 — 그 분기를 지워도 아무 테스트도 안 깨진다.
+            // 다시 조사하지 않도록 여기 적어 둔다.
+            Throwable root = e.getCause() == null ? e : e.getCause();
+            StopReason reason;
+            if (root instanceof java.net.http.HttpTimeoutException
+                    || root instanceof java.util.concurrent.TimeoutException) {
+                reason = StopReason.CONNECT_TIMEOUT;
+            } else if (root instanceof java.io.IOException) {
+                reason = StopReason.CONNECT_REFUSED;
+            } else {
+                reason = StopReason.CONNECT_FAILED;
+            }
+            throw new SessionEstablishException(EstablishStage.CONNECT, reason,
+                    "cause=" + root.getClass().getSimpleName());
         }
         current.set(socket);
 

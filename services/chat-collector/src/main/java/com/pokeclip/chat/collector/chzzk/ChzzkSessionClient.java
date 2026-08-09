@@ -35,8 +35,13 @@ public class ChzzkSessionClient {
             return MAPPER.readTree(body).path("content").path("url").asString();
         } catch (RestClientResponseException e) {
             // 응답 본문을 메시지에 담지 않는다 — 토큰이 되비쳐 나올 수 있다.
-            throw new SessionEstablishException(EstablishStage.AUTH,
-                    StopReason.SESSION_AUTH_FAILED, "status=" + e.getStatusCode().value());
+            int status = e.getStatusCode().value();
+            // 401·403만 영구 실패다. 5xx를 여기 묶으면 서버가 잠깐 아픈 것에 영구 정지하고,
+            // 반대로 전부 일시로 보면 만료 토큰으로 영원히 재시도한다.
+            StopReason reason = (status == 401 || status == 403)
+                    ? StopReason.SESSION_AUTH_REJECTED
+                    : StopReason.SESSION_AUTH_FAILED;
+            throw new SessionEstablishException(EstablishStage.AUTH, reason, "status=" + status);
         } catch (Exception e) {
             throw new SessionEstablishException(EstablishStage.AUTH,
                     StopReason.SESSION_AUTH_FAILED, "cause=" + e.getClass().getSimpleName());

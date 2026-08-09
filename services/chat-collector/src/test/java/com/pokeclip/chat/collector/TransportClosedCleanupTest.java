@@ -79,6 +79,9 @@ class TransportClosedCleanupTest {
             assertThat(behavior.unsubscribeCallCount())
                     .as("전송이 끊겼는데 반납을 종료까지 미루면 세션이 상한 3개를 계속 먹는다")
                     .isEqualTo(1);
+            // 반납 도착과 반납 결말 줄은 같은 시점이 아니다 — 줄은 왕복이 끝나야
+            // 나간다. 도착만 보고 줄을 단언하면 그 왕복만큼의 창에서 간헐 실패한다.
+            awaitUntil(() -> hasLine(captor, "chat.session.released"));
             assertThat(captor.messages()).anyMatch(m -> m.startsWith("chat.session.released"));
 
             // ② 실행기 둘. 살아 있으면 죽은 세션에 ping을 계속 쏘고 요약도 계속 찍는다.
@@ -105,6 +108,10 @@ class TransportClosedCleanupTest {
                 .filter(t -> WORKER_NAMES.contains(t.getName()))
                 .filter(Thread::isAlive)
                 .toList();
+    }
+
+    private static boolean hasLine(LogCaptor captor, String prefix) {
+        return captor.messages().stream().anyMatch(m -> m.startsWith(prefix));
     }
 
     /** 조건이 설 때까지 기다린다. 안 서면 그대로 다음 단언이 사실을 말한다. */

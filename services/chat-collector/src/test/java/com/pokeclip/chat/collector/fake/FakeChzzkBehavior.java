@@ -35,6 +35,14 @@ public class FakeChzzkBehavior {
     /** 세션 발급 REST가 돌려줄 상태. 401이면 T9(만료 토큰). */
     public volatile int authStatus = 200;
     /**
+     * 0이 아니면 세션 url의 포트를 이 값으로 바꾼다.
+     *
+     * <p><b>②(WS 접속)를 결정적으로 실패시키는 유일한 손잡이다.</b> 발급은 200으로
+     * 성공하는데 그 url로는 못 붙는 상태를 만든다 — 죽은 포트를 주면 루프백이
+     * 즉시 거부하므로 접속 거부 분류가 매번 같은 값으로 나온다.
+     */
+    public volatile int sessionUrlPort = 0;
+    /**
      * 세션 발급 REST가 응답 전에 붙들고 있는 시간.
      *
      * <p><b>연결은 받아 놓고 답을 안 주는 상태</b>를 만든다. 거부(401)와 다르다 —
@@ -294,6 +302,7 @@ public class FakeChzzkBehavior {
         answerPong = true;
         disconnectWhenPingMissing = true;
         authStatus = 200;
+        sessionUrlPort = 0;
         authDelay = Duration.ZERO;
         closeAfterSubscribed = false;
         unsubscribeStatus = 200;

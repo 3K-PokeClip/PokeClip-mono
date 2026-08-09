@@ -100,7 +100,7 @@ class FinalVerdictTest {
             assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
 
             behavior.closeSession();
-            awaitStopped(status);
+            awaitVerdict(captor);
             runner.stop();                       // 두 번째 종료 경로
 
             assertThat(captor.messages().stream().filter(m -> m.startsWith("chat.session.verdict")))
@@ -124,7 +124,7 @@ class FinalVerdictTest {
             assertThat(captor.messages()).anyMatch(m -> m.startsWith("chat.session.stopped"));
             assertThat(verdictLine(captor))
                     .contains("received=0")
-                    .contains("reason=SESSION_AUTH_FAILED");
+                    .contains("reason=SESSION_AUTH_REJECTED");
 
             // 수립에 실패했으니 반납할 세션 키가 없다. 이 갈래를 밟는 테스트는
             // 여기뿐인데 결말을 아무도 안 봤다 — RETURNED·SKIPPED 라벨을 서로
@@ -176,9 +176,19 @@ class FinalVerdictTest {
         }
     }
 
-    private void awaitStopped(CollectionStatus status) throws Exception {
+    /**
+     * <b>상태가 아니라 우리가 단언할 그 줄을 기다린다.</b>
+     *
+     * <p>{@code STOPPED}는 뒷정리보다 <b>먼저</b> 찍힌다. 상태만 보고 앞지르면
+     * WS 스레드가 판정 줄에 닿기 전에 단언이 서고, 그때 {@code stop()}은 이미
+     * 소모된 뒷정리 가드에 걸려 즉시 돌아와 아무 줄도 안 남긴다 —
+     * {@code Expected size: 1 but was: 0}으로 간헐 실패한다. 창을 넓히는 것으로는
+     * 없앨 수 없고(느린 기계에서는 상시 빨강이다) 기다리는 대상을 옮겨야 없어진다.
+     */
+    private static void awaitVerdict(LogCaptor captor) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-        while (status.state() != CollectionStatus.State.STOPPED && System.nanoTime() < deadline) {
+        while (captor.messages().stream().noneMatch(m -> m.startsWith("chat.session.verdict"))
+                && System.nanoTime() < deadline) {
             Thread.sleep(20);
         }
     }

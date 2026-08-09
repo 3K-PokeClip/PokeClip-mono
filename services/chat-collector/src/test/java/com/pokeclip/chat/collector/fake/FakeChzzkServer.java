@@ -4,6 +4,7 @@ import com.pokeclip.chat.collector.engineio.EngineIoFrame;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -56,6 +57,20 @@ public class FakeChzzkServer implements WebSocketConfigurer {
                 .setAllowedOrigins("*");
     }
 
+    /**
+     * 오류 봉투. <b>code·message가 상태 코드를 따라간다.</b>
+     *
+     * <p>여기 원래 상태와 무관하게 {@code {"code":401,...}}이 박혀 있었다. 지금
+     * 영향이 없는 것은 우리가 오류 본문을 안 읽기 때문(토큰 되비침 방지)이지
+     * 그 본문이 맞아서가 아니다 — <b>가짜 서버가 거짓말을 하면 언젠가 그 위에
+     * 단언이 선다.</b>
+     */
+    static String errorBody(int status) {
+        HttpStatus resolved = HttpStatus.resolve(status);
+        String message = resolved == null ? "Error" : resolved.getReasonPhrase();
+        return "{\"code\":" + status + ",\"message\":\"" + message + "\",\"content\":null}";
+    }
+
     @RestController
     public static class FakeSessionRest {
 
@@ -75,11 +90,14 @@ public class FakeChzzkServer implements WebSocketConfigurer {
                 Thread.sleep(behavior.authDelay.toMillis());
             }
             if (behavior.authStatus != 200) {
-                return ResponseEntity.status(behavior.authStatus)
-                        .body("{\"code\":401,\"message\":\"Unauthorized\",\"content\":null}");
+                return ResponseEntity.status(behavior.authStatus).body(errorBody(behavior.authStatus));
             }
+            // 죽은 포트를 주면 발급은 200인데 그 url로는 못 붙는다. ②의 실패를
+            // 만드는 유일한 길이라 여기서 갈아 끼운다.
+            int socketPort = behavior.sessionUrlPort != 0
+                    ? behavior.sessionUrlPort : request.getServerPort();
             String url = request.getScheme() + "://" + request.getServerName()
-                    + ":" + request.getServerPort() + "?auth=FAKE-AUTH";
+                    + ":" + socketPort + "?auth=FAKE-AUTH";
             // 봉투는 실측 그대로다(01_probe.md) — code·message가 한 겹 더 있다.
             return ResponseEntity.ok(
                     "{\"code\":200,\"message\":null,\"content\":{\"url\":\"" + url + "\"}}");
@@ -128,7 +146,7 @@ public class FakeChzzkServer implements WebSocketConfigurer {
             }
             if (behavior.unsubscribeStatus != 200) {
                 return ResponseEntity.status(behavior.unsubscribeStatus)
-                        .body("{\"code\":500,\"message\":\"Internal Error\",\"content\":null}");
+                        .body(errorBody(behavior.unsubscribeStatus));
             }
             return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
         }

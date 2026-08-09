@@ -18,6 +18,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @FakeChzzkTest
 class SessionEstablishTest {
 
+    /**
+     * 아무도 안 듣는 포트. 루프백이라 즉시 거부가 돌아와 <b>결정적으로</b> 실패한다.
+     * 시한 초과 쪽은 라우팅되지 않는 주소가 있어야 만들어져 느리고 환경을 탄다.
+     */
+    private static final int DEAD_PORT = 1;
+
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
 
@@ -97,21 +103,72 @@ class SessionEstablishTest {
                 .containsExactly(EstablishStage.WAITING_SUBSCRIBED, StopReason.ESTABLISH_TIMEOUT);
     }
 
-    /** T9. 만료 토큰은 @NotBlank를 통과한다. 부팅은 성공하고 여기서만 걸린다. */
+    /**
+     * T9. 만료 토큰은 @NotBlank를 통과한다. 부팅은 성공하고 여기서만 걸린다.
+     *
+     * <p>401은 재시도해도 영원히 안 풀린다. 5xx와 같은 사유로 묶으면 둘 중 하나가 틀린다.
+     */
     @Test
-    void 세션_발급이_401이면_이유를_남기고_재시도하지_않는다() {
+    void 세션_발급이_401이면_거부로_분류한다() {
         behavior.authStatus = 401;
         session = newSession();
 
         assertThatThrownBy(() -> session.open(Duration.ofSeconds(5)))
                 .isInstanceOf(SessionEstablishException.class)
                 .extracting("stage", "reason")
-                .containsExactly(EstablishStage.AUTH, StopReason.SESSION_AUTH_FAILED);
+                .containsExactly(EstablishStage.AUTH, StopReason.SESSION_AUTH_REJECTED);
 
         // 재시도가 있으면 가짜 서버가 여러 번 받는다.
         assertThat(behavior.authCallCount())
-                .as("조용한 재시도 루프를 만들지 않는다. 재연결은 POK-86이다")
+                .as("ChatSession 안에는 재시도 루프가 없다. 루프는 러너가 갖는다")
                 .isEqualTo(1);
+    }
+
+    /**
+     * 403도 거부다. 이 줄이 없으면 조건에서 403을 지워도 전 테스트가 초록이다
+     * (변이로 확인했다). 그러면 Scope 부족·동의 철회가 일시 실패로 분류되어
+     * 러너가 영원히 재시도한다 — 이 태스크가 막으려는 바로 그 모양이다.
+     */
+    @Test
+    void 세션_발급이_403이면_거부로_분류한다() {
+        behavior.authStatus = 403;
+        session = newSession();
+
+        assertThatThrownBy(() -> session.open(Duration.ofSeconds(5)))
+                .isInstanceOf(SessionEstablishException.class)
+                .extracting("stage", "reason")
+                .containsExactly(EstablishStage.AUTH, StopReason.SESSION_AUTH_REJECTED);
+    }
+
+    /** 5xx는 서버가 잠깐 아픈 것이다. 거부와 같은 사유로 묶으면 영구 정지한다. */
+    @Test
+    void 세션_발급이_500이면_거부와_다른_사유로_분류한다() {
+        behavior.authStatus = 500;
+        session = newSession();
+
+        assertThatThrownBy(() -> session.open(Duration.ofSeconds(5)))
+                .isInstanceOf(SessionEstablishException.class)
+                .extracting("stage", "reason")
+                .containsExactly(EstablishStage.AUTH, StopReason.SESSION_AUTH_FAILED);
+    }
+
+    /**
+     * ② 접속 자체가 성립하지 않는 경우.
+     *
+     * <p>CONNECT 세분화는 진단 전용이라 재시도 판단에는 안 쓴다. <b>그래도 검사가
+     * 있어야 한다</b> — 분류가 틀리면 재연결이 반복 실패할 때 로그가 거짓말을 하고,
+     * 사람은 그 줄을 믿고 엉뚱한 곳을 판다. 이 줄이 없으면 {@code CONNECT_REFUSED}
+     * 분기를 통째로 지워도 전 테스트가 초록이다(변이로 확인했다).
+     */
+    @Test
+    void 세션_url이_죽은_포트면_접속_거부로_분류한다() {
+        behavior.sessionUrlPort = DEAD_PORT;
+        session = newSession();
+
+        assertThatThrownBy(() -> session.open(Duration.ofSeconds(5)))
+                .isInstanceOf(SessionEstablishException.class)
+                .extracting("stage", "reason")
+                .containsExactly(EstablishStage.CONNECT, StopReason.CONNECT_REFUSED);
     }
 
     /** POK-86이 이 덩어리를 통째로 다시 부른다. 한 번만 도는 코드면 안 된다. */

@@ -116,7 +116,7 @@ class ChatLogLeakTest {
             assertThat(status.state())
                     .as("실패 경로를 안 태웠다면 검사할 로그가 애초에 없다")
                     .isEqualTo(CollectionStatus.State.STOPPED);
-            assertThat(status.reason()).isEqualTo(StopReason.SESSION_AUTH_FAILED);
+            assertThat(status.reason()).isEqualTo(StopReason.SESSION_AUTH_REJECTED);
             assertThat(renderAll(captor)).as("실패가 로그에 남기는 남아야 한다").contains("chat.session.stopped");
 
             assertNoSecretsIn(captor, SECRETS);
@@ -131,9 +131,14 @@ class ChatLogLeakTest {
             assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
 
             behavior.closeSession();
-            awaitStopped(status);
+            awaitReleased(captor);
 
             assertThat(status.reason()).isEqualTo(StopReason.TRANSPORT_CLOSED);
+            // 양성 대조. 절단 뒤에 나가는 줄은 판정과 반납 결말인데, STOPPED만 보고
+            // 앞지르면 둘 다 창 밖이라 <b>끊긴 뒤의 로그를 한 줄도 안 본 채</b> 초록이 된다.
+            assertThat(renderAll(captor))
+                    .as("뒷정리 줄이 창 밖이면 이 검사는 절단 경로의 로그를 아무것도 안 본 것이다")
+                    .contains("chat.session.released");
             assertNoSecretsIn(captor, SECRETS);
         }
     }
@@ -301,9 +306,18 @@ class ChatLogLeakTest {
         }
     }
 
-    private void awaitStopped(CollectionStatus status) throws Exception {
+    /**
+     * <b>상태가 아니라 창에 들어와야 할 그 줄을 기다린다.</b>
+     *
+     * <p>{@code STOPPED}는 뒷정리보다 <b>먼저</b> 찍히므로, 상태만 보고 앞지르면
+     * 판정·반납 줄이 통째로 창 밖에 남는다. 이쪽은 부정 단언이라 빨간불이 아니라
+     * <b>조용한 초록</b>으로 나타난다 — 검사한 적 없는 줄을 검사했다고 믿게 된다.
+     * {@code chat.session.released}가 절단 경로의 마지막 줄이다.
+     */
+    private void awaitReleased(LogCaptor captor) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-        while (status.state() != CollectionStatus.State.STOPPED && System.nanoTime() < deadline) {
+        while (captor.messages().stream().noneMatch(m -> m.startsWith("chat.session.released"))
+                && System.nanoTime() < deadline) {
             Thread.sleep(20);
         }
     }
