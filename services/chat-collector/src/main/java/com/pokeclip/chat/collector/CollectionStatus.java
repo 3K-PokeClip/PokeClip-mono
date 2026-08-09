@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector;
 
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -13,20 +14,31 @@ import java.util.concurrent.atomic.AtomicReference;
 @Component
 public class CollectionStatus {
 
-    public enum State { DISABLED, ESTABLISHING, COLLECTING, STOPPED }
+    public enum State { DISABLED, ESTABLISHING, COLLECTING, RECONNECTING, STOPPED }
 
-    private record Snapshot(State state, StopReason reason) { }
+    /**
+     * @param disconnectedAt RECONNECTING일 때만 채워진다. 언제부터 못 받고 있는지가
+     *                       없으면 "방금 끊겼다"와 "10분째 못 붙는다"가 같아 보인다
+     * @param attempt        몇 번째 재시도인지. 0이면 재연결 중이 아니다
+     */
+    private record Snapshot(State state, StopReason reason, Instant disconnectedAt, int attempt) { }
 
     private final AtomicReference<Snapshot> current =
-            new AtomicReference<>(new Snapshot(State.DISABLED, null));
+            new AtomicReference<>(new Snapshot(State.DISABLED, null, null, 0));
 
     public State state() { return current.get().state(); }
 
-    /** STOPPED가 아니면 null이다. */
+    /** STOPPED·RECONNECTING이 아니면 null이다. */
     public StopReason reason() { return current.get().reason(); }
 
-    public void establishing() { current.set(new Snapshot(State.ESTABLISHING, null)); }
-    public void disabled() { current.set(new Snapshot(State.DISABLED, null)); }
+    /** RECONNECTING이 아니면 null이다. */
+    public Instant disconnectedAt() { return current.get().disconnectedAt(); }
+
+    /** RECONNECTING이 아니면 0이다. */
+    public int attempt() { return current.get().attempt(); }
+
+    public void establishing() { current.set(new Snapshot(State.ESTABLISHING, null, null, 0)); }
+    public void disabled() { current.set(new Snapshot(State.DISABLED, null, null, 0)); }
 
     /**
      * <b>ESTABLISHING일 때만</b> COLLECTING으로 간다.
@@ -41,7 +53,22 @@ public class CollectionStatus {
     public boolean collectingIfEstablishing() {
         Snapshot now = current.get();
         return now.state() == State.ESTABLISHING
-                && current.compareAndSet(now, new Snapshot(State.COLLECTING, null));
+                && current.compareAndSet(now, new Snapshot(State.COLLECTING, null, null, 0));
+    }
+
+    /**
+     * 끊겼고 다시 붙는 중. <b>STOPPED는 안 덮는다</b> — 재시도 불가 사유로 이미
+     * 멈춘 뒤라면 그 사유가 진짜 원인이고, 덮으면 어디에도 안 남는다.
+     */
+    public void reconnecting(StopReason lastReason, Instant disconnectedAt, int attempt) {
+        Snapshot now = current.get();
+        while (now.state() != State.STOPPED) {
+            Snapshot next = new Snapshot(State.RECONNECTING, lastReason, disconnectedAt, attempt);
+            if (current.compareAndSet(now, next)) {
+                return;
+            }
+            now = current.get();
+        }
     }
 
     /**
@@ -52,7 +79,7 @@ public class CollectionStatus {
     public void stopped(StopReason reason) {
         Snapshot now = current.get();
         while (now.state() != State.STOPPED) {
-            if (current.compareAndSet(now, new Snapshot(State.STOPPED, reason))) {
+            if (current.compareAndSet(now, new Snapshot(State.STOPPED, reason, null, 0))) {
                 return;
             }
             now = current.get();

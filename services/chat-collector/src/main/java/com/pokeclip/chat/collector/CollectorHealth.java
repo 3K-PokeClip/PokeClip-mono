@@ -29,6 +29,15 @@ public class CollectorHealth implements HealthIndicator {
             case DISABLED -> Health.up().withDetail("status", "disabled").build();
             case ESTABLISHING -> Health.up().withDetail("status", "establishing").build();
             case COLLECTING -> Health.up().withDetail("status", "collecting").build();
+            // 재연결 중에는 채팅이 실제로 안 들어온다. UP으로 두면 "수집이 죽었는데
+            // health는 UP"과 같은 모양이 되고, 그게 이 서비스가 유일한 치명 실패로 규정한 것이다.
+            case RECONNECTING -> Health.down()
+                    .withDetail("status", "reconnecting")
+                    .withDetail("reason", status.reason() == null ? "UNKNOWN" : status.reason().name())
+                    .withDetail("disconnectedAt", status.disconnectedAt() == null
+                            ? "unknown" : status.disconnectedAt().toString())
+                    .withDetail("attempt", status.attempt())
+                    .build();
             case STOPPED -> Health.down()
                     .withDetail("status", "stopped")
                     .withDetail("reason", status.reason() == null ? "UNKNOWN" : status.reason().name())
