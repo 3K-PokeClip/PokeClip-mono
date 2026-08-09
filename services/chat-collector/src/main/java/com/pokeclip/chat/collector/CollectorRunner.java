@@ -960,6 +960,14 @@ public class CollectorRunner implements ApplicationRunner {
      * 그 몇 줄에 붙잡을 I/O가 없어 밖에서 끊는 것만으로는 순서가 실행마다 갈리므로,
      * 검사가 {@link ChatSession#beforeSessionKey()}를 장벽으로 써서 정리가 끝난 것을
      * 보고서야 키를 세우게 한다.
+     *
+     * <p><b>🔴 {@code late=true} 줄이 항상 실재하는 누수를 뜻하지는 않는다.</b> 종료와
+     * 겹쳐 이 갈래에 들어오면 스레드에 인터럽트 플래그가 서 있어 <b>구독 요청부터 실패하고,
+     * 뒤이은 반납 REST는 서버에 도착조차 안 한다</b>(5라운드 6/6 실측 — 서버 쪽 반납 수신이
+     * 늘지 않았다). 그런데도 결말이 {@code FAILED}라 이 줄이 나간다. 운영자가 이것을
+     * "상한 3개 중 하나가 남았다"로 읽으면 <b>없는 자리를 쫓는다</b> — 바로 앞줄
+     * {@code chat.session.stopped stage=SUBSCRIBE}가 그 정황을 준다. 갈라 싣는 것이
+     * 맞지만, 그러려면 {@code ChatSession}이 왕복이 실제로 나갔는지를 알려 줘야 한다.
      */
     private void releaseLate(SessionScope scope) {
         ChatSession.Release released = releaseAndClose(scope);
@@ -1058,17 +1066,30 @@ public class CollectorRunner implements ApplicationRunner {
     }
 
     /**
-     * <b>구독 반납 왕복이 나가는 유일한 자리.</b> 나가 있는 동안은 {@code stop()}이
-     * 이 스레드를 인터럽트하지 않는다.
+     * <b>구독 반납 왕복이 나가는 유일한 자리.</b> 부르는 자리가 둘이라 여기로 모았다 —
+     * 정리 본체와 {@code releaseLate}가 같은 왕복을 서로 다른 보호 수준으로 보내면
+     * 한쪽만 보호 밖이 되고, 그 실패는 조용하다. 자리를 다시 늘리지 마라.
      *
      * <p>인터럽트되면 반납 REST가 즉시 실패하는데, 세션 키는
      * {@code ChatSession.releaseAndClose()}가 이미 걷어 간 뒤라 <b>아무도 다시 못 보낸다</b> —
      * 서버 쪽 자리가 10초~4분 42초 남고(실측) 상한은 3개다.
      *
-     * <p><b>부르는 자리가 둘이라 여기로 모았다.</b> 정리 본체와 {@code releaseLate}가
-     * 같은 왕복을 서로 다른 보호 수준으로 보내면, 종료가 정리를 맡은 사이에
-     * 늦은 반납이 무방비로 나가 정확히 위 상태가 된다. 자리를 다시 늘리지 마라 —
-     * 늘리는 순간 그쪽만 보호 밖이 되고, 그 실패는 조용하다.
+     * <p><b>🔴 이 카운터가 지키는 범위는 좁다. 넓게 읽지 마라.</b> {@code stop()}은 이 값을
+     * {@code awaitTermination(SHUTDOWN_WAIT)}가 만료한 <b>그 시점에 한 번만</b> 읽는다.
+     * 그러니 지켜지는 것은 <b>그때 이미 나가 있던 왕복</b>뿐이다. {@code releaseLate}의
+     * 왕복은 <b>정의상 그 뒤에 시작한다</b> — 가드를 남이 먹은 순서에서만 거기 닿고,
+     * 재연결 스레드 기준 그 "남"은 {@code stop()}뿐이며 {@code stop()}은
+     * {@code shutdownNow()} <b>뒤에</b> 가드를 먹는다. <b>그 갈래는 이 보장 밖이다.</b>
+     *
+     * <p><b>🔴 이 카운터를 떼도 전수 초록이다</b> — {@code releaseLate}를 무보호로 되돌려도,
+     * {@code decrementAndGet()}을 {@code set(0)}(불리언 시절 의미)으로 바꿔도 175건 전부
+     * 초록이다(5라운드 실측, 각각 단독 변이). <b>검사받는 방어로 읽지 마라.</b> 남겨 두는
+     * 것은 두 자리가 대칭이라 싸고, 나노초 창에서는 실제로 도움이 되기 때문이다.
+     *
+     * <p>보장 밖인 그 갈래에서 무엇이 일어나는지는 5라운드에 결정적으로 쟀다(6/6) —
+     * <b>인터럽트된 스레드는 어떤 REST도 못 내보내므로 「정리 뒤에 생긴 구독」이 서버에
+     * 아예 안 생긴다.</b> 구독 요청이 먼저 실패하기 때문이다. <b>즉 여기서 막을 누수가
+     * 실재하지 않는다</b> — 이 자리를 넓히려 들기 전에 그 사실부터 다시 재라.
      */
     private ChatSession.Release releaseAndClose(SessionScope scope) {
         releasesInFlight.incrementAndGet();
