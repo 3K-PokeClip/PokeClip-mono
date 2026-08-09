@@ -147,6 +147,39 @@ public class CollectorRunner implements ApplicationRunner {
     private final AtomicReference<ReconnectSignal> pendingSignal = new AtomicReference<>();
 
     /**
+     * 신호 하나가 「루프를 잡거나 대기열에 남기는」 것과, 루프가 「자리를 풀고 밀린
+     * 신호를 집는」 것을 <b>서로 겹치지 않게</b> 한다.
+     *
+     * <p>둘을 원자 변수 둘로만 이으면 신호가 소리 없이 사라진다:
+     *
+     * <pre>
+     * 생산자(콜백·ping 스레드)            소비자(재연결 스레드)
+     * CAS(false→true) 실패 — 루프가 돈다
+     *                                     reconnectInFlight.set(false)
+     *                                     pendingSignal.getAndSet(null) → null
+     * pendingSignal에 쓴다                ← 이제 아무도 안 읽는다
+     * </pre>
+     *
+     * <p>그 결과가 제일 나쁘다. 생산자는 CAS <b>앞에서</b> 이미
+     * {@code status.reconnecting(...)}을 찍었으므로 상태는 RECONNECTING(health DOWN)에
+     * 멈추고, 루프는 다시는 안 돈다. 게다가 <b>재알림이 없다</b> — ping 송신 실패와
+     * pong 임계는 {@code Heartbeat}가 구간당 한 번만 알린다. 즉 수집이 영구히 멈춘다.
+     *
+     * <p><b>{@code finally}에서 한 번 더 확인하는 것으로는 안 닫힌다.</b> 재확인 뒤에
+     * 쓰는 순서가 그대로 남기 때문이다 — 창이 좁아질 뿐 사라지지 않는다. 락으로
+     * 묶으면 둘 중 하나만 성립한다: 생산자가 먼저면 소비자가 그 신호를 집고,
+     * 소비자가 먼저면 생산자의 CAS가 이겨 스스로 루프를 띄운다.
+     *
+     * <p><b>자리 잡기({@code start()})도 같은 락 안이다.</b> 낡은 신호를 거르는
+     * {@code isCurrent} 검사와 상태 전이가 갈라져 있으면, 검사를 통과한 신호가
+     * 그 사이에 붙은 새 세션을 RECONNECTING으로 되돌린다.
+     *
+     * <p><b>이 락 안에서 I/O를 하지 마라.</b> 여기 들어오는 스레드에 WS 수신 콜백이
+     * 있어, 붙들리는 만큼 그 방송의 채팅이 통째로 늦어진다.
+     */
+    private final Object signalLock = new Object();
+
+    /**
      * 언제부터 못 받고 있나. 다시 붙으면 지운다.
      *
      * <p>재연결이 여러 번 실패해도 <b>첫 절단 시각을 유지한다</b> — 시도마다 갱신하면
@@ -272,27 +305,44 @@ public class CollectorRunner implements ApplicationRunner {
         ChatSession opening = new ChatSession(new ChzzkSessionClient(
                 restClient, properties.baseUrl(), properties.accessToken()));
         SessionScope scope = SessionScope.opening(opening);
-        if (!activeSession.compareAndSet(null, scope)) {
-            // 앞 세션이 아직 자리를 들고 있다. 덮어쓰면 그 세션의 소켓도 스케줄러도
-            // 아무도 안 닫아 ping이 죽은 소켓에 계속 나가고, 구독은 서버에 남아
-            // 상한 3개를 먹는다. 조용히 돌아가지 않는다 — 재연결 루프가 왜
-            // 안 붙었는지 알 길이 없으면 그것이 곧 조용한 실패다.
-            log.warn("chat.session.start_skipped reason=ALREADY_ACTIVE");
+        // <b>자리 잡기와 번호 매기기가 신호 처리와 겹치면 안 된다.</b> 절단 신호는
+        // 입구에서 {@code isCurrent}로 자기 세션이 아직 자리에 있는지 보고 나서
+        // 상태를 내리는데, 그 둘 사이에 새 세션이 자리를 잡으면 <b>검사를 통과한
+        // 낡은 신호가 방금 붙은 세션을 RECONNECTING으로 되돌린다.</b> 그때 루프는
+        // 살아 있는 세션 때문에 {@code start_skipped ALREADY_ACTIVE}만 반복하고,
+        // 수집은 멀쩡한데 health가 영영 DOWN인 상태가 남는다.
+        //
+        // 같은 락 안이면 둘 중 하나만 성립한다 — 신호가 먼저면 그 세션이 아직
+        // 자리에 있어 판단이 옳고, 자리 잡기가 먼저면 신호가 낡은 것으로 걸러진다.
+        // <b>번호까지 이 안에서 매긴다.</b> 밖에서 매기면 번호가 0인 채로 자리에
+        // 앉은 순간이 생기고, 그 값이 곧 "아직 세션 없음"({@code NO_SESSION})이라
+        // 첫 수립 실패의 신호가 남의 세션 것으로 통과한다.
+        String skipReason = null;
+        long no = NO_SESSION;
+        synchronized (signalLock) {
+            if (!activeSession.compareAndSet(null, scope)) {
+                // 앞 세션이 아직 자리를 들고 있다. 덮어쓰면 그 세션의 소켓도 스케줄러도
+                // 아무도 안 닫아 ping이 죽은 소켓에 계속 나가고, 구독은 서버에 남아
+                // 상한 3개를 먹는다.
+                skipReason = "ALREADY_ACTIVE";
+            } else if (stopSignal.getCount() == 0) {
+                // 잡은 자리를 되돌린다. stop()은 자리가 빈 것을 보고 이미 지나갔을 수
+                // 있고, 그러면 여기서 연 세션은 아무도 안 닫는다 — 소켓도 구독도
+                // 프로세스가 죽을 때까지 남는다.
+                activeSession.compareAndSet(scope, null);
+                skipReason = "STOPPING";
+            } else {
+                no = SESSION_SEQ.incrementAndGet();
+                scope.no().set(no);
+                lastSessionNo.set(no);
+            }
+        }
+        if (skipReason != null) {
+            // 조용히 돌아가지 않는다 — 재연결 루프가 왜 안 붙었는지 알 길이 없으면
+            // 그것이 곧 조용한 실패다.
+            log.warn("chat.session.start_skipped reason={}", skipReason);
             return false;
         }
-        if (stopSignal.getCount() == 0) {
-            // 잡은 자리를 되돌린다. stop()은 자리가 빈 것을 보고 이미 지나갔을 수
-            // 있고, 그러면 여기서 연 세션은 아무도 안 닫는다 — 소켓도 구독도
-            // 프로세스가 죽을 때까지 남는다.
-            activeSession.compareAndSet(scope, null);
-            log.warn("chat.session.start_skipped reason=STOPPING");
-            return false;
-        }
-        // 자리를 잡은 뒤라 번호를 두 세션이 나눠 갖는 길이 없고, 콜백을 아직
-        // 걸지 않아 이 값을 우리보다 먼저 읽는 스레드도 없다.
-        long no = SESSION_SEQ.incrementAndGet();
-        scope.no().set(no);
-        lastSessionNo.set(no);
         // <b>싱크를 걸기 직전이다.</b> 수신 시계를 여기서 다시 잡지 않고 아래
         // 절단 구간을 닫는 자리(수립 마무리 뒤)에서 잡으면, 그 사이에 온 첫 채팅이
         // 앞 세션의 마지막 수신과 짝지어져 끊겨 있던 시간이 수신 공백에도 실린다.
@@ -464,29 +514,44 @@ public class CollectorRunner implements ApplicationRunner {
         if (stopSignal.getCount() == 0) {
             return;                       // 우리가 멈추는 중이다. 뒷정리는 stop()이 한다
         }
-        if (!isCurrent(sessionNo)) {
+        // <b>검사부터 상태 전이·루프 잡기까지가 한 덩어리여야 한다.</b> 갈라 놓으면
+        // 검사를 통과한 신호가 그 사이에 붙은 새 세션을 헐고(자리 검사와 전이 사이),
+        // 대기열에 넣은 신호가 방금 끝난 루프에 안 잡힌다(CAS와 쓰기 사이).
+        // 락 안에서 하는 일은 원자 변수 읽고 쓰기뿐이다 — 로그도 실행기도 밖이다.
+        boolean stale;
+        boolean mine = false;
+        synchronized (signalLock) {
+            stale = !isCurrent(sessionNo);
+            if (!stale) {
+                // 비어 있을 때만 세운다. 이미 서 있으면 그것이 첫 절단이다.
+                disconnectedAt.compareAndSet(null, Instant.now());
+                // 상태를 먼저 내린다. 실행기에 넘기기만 하면 그 사이 COLLECTING(health UP)
+                // 인데 소켓은 죽은 창이 생긴다 — "UP인데 수집 없음"이 이 서비스의 유일한
+                // 치명 실패라 창을 안 만든다. STOPPED는 안 덮인다.
+                status.reconnecting(reason, disconnectedAt.get(), status.attempt());
+                mine = reconnectInFlight.compareAndSet(false, true);
+                if (!mine) {
+                    // 이미 한 루프가 돈다. <b>신호를 버리지 않고 남긴다</b> — 루프가
+                    // 재접속에 성공하고 finally에 닿기까지의 창에 들어온 절단이 통째로
+                    // 사라지면, 상태는 COLLECTING(health UP)인데 소켓은 죽어 있게 된다.
+                    //
+                    // 같은 세션이면 첫 사유가 이긴다(뒤엣것은 대개 그 결과다).
+                    // 다른 세션이면 나중 세션이 이긴다 — 낡은 신호를 붙들고 새 신호를
+                    // 버리면 방금 죽은 세션을 아무도 못 본다.
+                    pendingSignal.accumulateAndGet(new ReconnectSignal(sessionNo, reason),
+                            (current, incoming) -> current == null
+                                    || current.sessionNo() < incoming.sessionNo()
+                                    ? incoming : current);
+                }
+            }
+        }
+        if (stale) {
             // 낡은 신호다. 그 세션은 이미 치워졌고, 받아들이면 지금 붙어 있는
             // 세션을 헐어 구독을 반납하고 health를 DOWN으로 되돌린다.
             log.debug("chat.session.signal_stale session={} reason={}", sessionNo, reason);
             return;
         }
-        // 비어 있을 때만 세운다. 이미 서 있으면 그것이 첫 절단이다.
-        disconnectedAt.compareAndSet(null, Instant.now());
-        // 상태를 먼저 내린다. 실행기에 넘기기만 하면 그 사이 COLLECTING(health UP)인데
-        // 소켓은 죽은 창이 생긴다 — "UP인데 수집 없음"이 이 서비스의 유일한 치명
-        // 실패라 창을 안 만든다. STOPPED는 안 덮인다.
-        status.reconnecting(reason, disconnectedAt.get(), status.attempt());
-        if (!reconnectInFlight.compareAndSet(false, true)) {
-            // 이미 한 루프가 돈다. <b>신호를 버리지 않고 남긴다</b> — 루프가 재접속에
-            // 성공하고 finally에 닿기까지의 창에 들어온 절단이 통째로 사라지면,
-            // 상태는 COLLECTING(health UP)인데 소켓은 죽어 있게 된다.
-            //
-            // 같은 세션이면 첫 사유가 이긴다(뒤엣것은 대개 그 결과다).
-            // 다른 세션이면 나중 세션이 이긴다 — 낡은 신호를 붙들고 새 신호를
-            // 버리면 방금 죽은 세션을 아무도 못 본다.
-            pendingSignal.accumulateAndGet(new ReconnectSignal(sessionNo, reason),
-                    (current, incoming) -> current == null
-                            || current.sessionNo() < incoming.sessionNo() ? incoming : current);
+        if (!mine) {
             return;
         }
         try {
@@ -567,11 +632,18 @@ public class CollectorRunner implements ApplicationRunner {
             }
         } finally {
             // 성공이든 종료든 여기서 푼다. 안 풀면 다음 절단에 루프가 영영 안 돈다.
-            reconnectInFlight.set(false);
-            // 내가 도는 동안 들어온 신호를 집어 간다. 안 그러면 그 절단이 버려진다.
-            // 여기서 놓치는 것은 set(false) 뒤에 온 신호뿐이고, 그건 자기가 CAS를
-            // 이겨 스스로 루프를 띄운다.
+            // 그리고 내가 도는 동안 들어온 신호를 집어 간다.
             //
+            // <b>둘이 같은 락 안이어야 한다.</b> 갈라 놓으면 「CAS 실패 → 쓰기」의
+            // 사이에 이 둘이 통째로 지나가는 순서가 생기고, 그때 쓰인 신호는 누구도
+            // 안 읽는다 — 상태는 RECONNECTING(health DOWN)에 멈추고 ping·pong 쪽
+            // 재알림은 구간당 1회 래치에 막혀 오지 않아 수집이 영구히 멈춘다.
+            // 락 밖에서 재확인만 더하는 형태로는 안 닫힌다(signalLock 주석 참고).
+            ReconnectSignal missed;
+            synchronized (signalLock) {
+                reconnectInFlight.set(false);
+                missed = pendingSignal.getAndSet(null);
+            }
             // <b>그 세션이 아직 자리에 있을 때만 재생한다.</b> 이미 치워진 세션의
             // 신호를 재생하면 방금 붙은 세션을 헐어낸다. STOPPED에서도 재생하지
             // 않는다 — retriable한 사유가 남아 있으면 만료 토큰으로 영원히 두드린다.
@@ -585,15 +657,14 @@ public class CollectorRunner implements ApplicationRunner {
             //
             // 재생 자체를 지워도(pendingSignal을 통째로 버려도) 초록이다.
             //
-            // <b>창이 좁아서가 아니다.</b> 여기 원래 "창이 마이크로초라 결정적으로 열
-            // 장치가 없다"고 적혀 있었는데 틀렸다 — 창은 <b>루프의 start() 호출 전체</b>다.
+            // <b>창이 좁아서가 아니다.</b> 창은 <b>루프의 start() 호출 전체</b>다 —
             // onClosed가 자리를 잡은 직후부터 살아 있어 수립 중 절단이 곧장 여기 앉는다.
             // 가짜 서버가 subscribed를 쏜 뒤 끊고 구독 응답을 붙들면 그 창이 결정적으로
             // 200ms 열린다(CP4가 그렇게 만들어 확인했다).
             //
             // <b>초록인 진짜 이유는 하트비트가 같은 죽음을 다시 알려 주기 때문이다.</b>
             // 첫 ping이 initialDelay=0이라 죽은 소켓에 즉시 나가 실패하고, 그 실패 통지가
-            // 아래 set(false)보다 늦게 도착하면 스스로 CAS를 이겨 새 루프를 띄운다.
+            // 위 set(false)보다 늦게 도착하면 스스로 CAS를 이겨 새 루프를 띄운다.
             //
             // <b>그런데 그 재알림에는 래치가 있다.</b> Heartbeat.sendFailureReported가
             // 구간당 1회라, 재알림이 set(false)보다 <b>먼저</b> 도착하는 순서에서는
@@ -604,7 +675,6 @@ public class CollectorRunner implements ApplicationRunner {
             // 검사를 못 붙인 이유는 장치가 없어서가 아니라 <b>고정할 지점이 없어서</b>다.
             // 그 순서를 만들려면 첫 ping 실패 보고를 이 finally보다 앞에 세워야 하는데,
             // Heartbeat.start()와 여기 사이에 붙잡을 I/O가 하나도 없다.
-            ReconnectSignal missed = pendingSignal.getAndSet(null);
             if (missed != null && stopSignal.getCount() > 0
                     && status.state() != CollectionStatus.State.STOPPED
                     && isCurrent(missed.sessionNo())) {
