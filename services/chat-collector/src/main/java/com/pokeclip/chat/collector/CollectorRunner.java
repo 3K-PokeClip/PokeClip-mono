@@ -689,7 +689,10 @@ public class CollectorRunner implements ApplicationRunner {
                         return;           // 붙었다. 다음 절단은 새 루프가 받는다
                     }
                     // 자리를 못 잡았거나 수립 직후에 끊겼다. 사유는 상태가 든다.
-                    reason = status.reason() == null ? StopReason.TRANSPORT_CLOSED : status.reason();
+                    // <b>한 번만 읽는다.</b> 두 번 읽으면 그 사이에 다시 붙어 사유가
+                    // 비워질 수 있고, 그러면 널이 아닌 것을 확인하고 널을 집는다.
+                    StopReason lastReason = status.reason();
+                    reason = lastReason == null ? StopReason.TRANSPORT_CLOSED : lastReason;
                 } catch (SessionEstablishException e) {
                     reason = e.reason();  // start()가 던지기 전에 자기 세션을 이미 치웠다
                 }
