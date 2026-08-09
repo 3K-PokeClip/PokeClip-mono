@@ -115,6 +115,9 @@ public class FakeChzzkServer implements WebSocketConfigurer {
                 behavior.emitSystem("{\"type\":\"subscribed\",\"data\":"
                         + "{\"eventType\":\"CHAT\",\"channelId\":\"FAKE-CHANNEL\"}}");
             }
+            // 수립 스레드가 이 응답에 막혀 있는 동안 도는 훅. 소켓은 이미 열려
+            // 있으므로 여기서 쏜 프레임은 "수립이 아직 안 끝난 세션"으로 들어간다.
+            behavior.onSubscribeBeforeResponse.run();
             // 응답을 붙들고 있는 동안 클라이언트의 부팅 스레드는 여기서 막혀 있다.
             // 그 사이에 절단을 끝까지 태워야 "수립 직후 절단"이 매번 같은 순서로 난다.
             if (behavior.closeAfterSubscribed) {

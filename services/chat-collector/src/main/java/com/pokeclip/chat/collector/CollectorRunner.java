@@ -151,8 +151,14 @@ public class CollectorRunner implements ApplicationRunner {
      *
      * <p>재연결이 여러 번 실패해도 <b>첫 절단 시각을 유지한다</b> — 시도마다 갱신하면
      * "10분째 못 붙는다"가 매번 "방금 끊겼다"로 보인다.
+     *
+     * <p><b>평범한 필드로 두면 그 "첫 시각이 이긴다"가 감지원이 겹칠 때 깨진다.</b>
+     * 만지는 스레드가 셋이고(WS 콜백 · ping 스케줄러 · 재연결 스레드) 한 번의 죽음을
+     * 둘 이상이 서로 다른 경로로 본다 — 둘이 같이 빈 것을 보면 나중 시각이 덮어써
+     * 끊긴 시간이 그만큼 짧게 보고된다. 세우기는 {@code compareAndSet(null, …)},
+     * 걷기는 {@code getAndSet(null)}이라 둘 다 한 번씩만 이긴다.
      */
-    private volatile Instant disconnectedAt;
+    private final AtomicReference<Instant> disconnectedAt = new AtomicReference<>();
 
     private final ReconnectPolicy policy;
 
@@ -281,6 +287,10 @@ public class CollectorRunner implements ApplicationRunner {
         long no = SESSION_SEQ.incrementAndGet();
         scope.no().set(no);
         lastSessionNo.set(no);
+        // <b>싱크를 걸기 직전이다.</b> 수신 시계를 여기서 다시 잡지 않고 아래
+        // 절단 구간을 닫는 자리(수립 마무리 뒤)에서 잡으면, 그 사이에 온 첫 채팅이
+        // 앞 세션의 마지막 수신과 짝지어져 끊겨 있던 시간이 수신 공백에도 실린다.
+        metrics.beginSession();
         opening.onFrame(frame -> handleFrame(scope, frame));
         // 필드가 아니라 이 덩어리를 캡처해서 넘긴다. 콜백이 나중에 필드를 다시
         // 읽으면, 그때 자리에 있는 것은 이미 다음 세션일 수 있다.
@@ -335,10 +345,9 @@ public class CollectorRunner implements ApplicationRunner {
             // 다시 붙었다. 끊겨 있던 구간을 여기서 닫는다 — 지우기만 하면 그 시간이
             // 어느 지표에도 안 남고, 수신 공백에 섞인 채로 "한산했을 뿐"과 같아 보인다.
             // 절단 시각도 같이 비운다. 안 비우면 다음 절단이 남의 시각을 물려받는다.
-            Instant since = disconnectedAt;
+            Instant since = disconnectedAt.getAndSet(null);
             if (since != null) {
                 metrics.recordOutage(since, Instant.now());
-                disconnectedAt = null;
             }
             log.info("chat.session.collecting pingIntervalMs={} sendPeriodMs={}",
                     established.handshake().pingInterval().toMillis(),
@@ -429,13 +438,12 @@ public class CollectorRunner implements ApplicationRunner {
             log.debug("chat.session.signal_stale session={} reason={}", sessionNo, reason);
             return;
         }
-        if (disconnectedAt == null) {
-            disconnectedAt = Instant.now();
-        }
+        // 비어 있을 때만 세운다. 이미 서 있으면 그것이 첫 절단이다.
+        disconnectedAt.compareAndSet(null, Instant.now());
         // 상태를 먼저 내린다. 실행기에 넘기기만 하면 그 사이 COLLECTING(health UP)인데
         // 소켓은 죽은 창이 생긴다 — "UP인데 수집 없음"이 이 서비스의 유일한 치명
         // 실패라 창을 안 만든다. STOPPED는 안 덮인다.
-        status.reconnecting(reason, disconnectedAt, status.attempt());
+        status.reconnecting(reason, disconnectedAt.get(), status.attempt());
         if (!reconnectInFlight.compareAndSet(false, true)) {
             // 이미 한 루프가 돈다. <b>신호를 버리지 않고 남긴다</b> — 루프가 재접속에
             // 성공하고 finally에 닿기까지의 창에 들어온 절단이 통째로 사라지면,
@@ -494,7 +502,7 @@ public class CollectorRunner implements ApplicationRunner {
                     return;
                 }
                 attempt++;
-                status.reconnecting(reason, disconnectedAt, attempt);
+                status.reconnecting(reason, disconnectedAt.get(), attempt);
                 Duration delay = policy.delayFor(attempt);
                 try {
                     if (stopSignal.await(delay.toMillis(), TimeUnit.MILLISECONDS)) {

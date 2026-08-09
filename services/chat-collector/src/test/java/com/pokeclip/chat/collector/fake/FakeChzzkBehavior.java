@@ -64,6 +64,19 @@ public class FakeChzzkBehavior {
      */
     public volatile boolean closeAfterSubscribed = false;
     /**
+     * subscribed를 쏜 <b>직후, 구독 REST가 200을 돌려주기 전에</b> 도는 훅.
+     *
+     * <p><b>"수립이 아직 안 끝난 세션에 프레임을 밀어 넣는" 지점을 결정적으로
+     * 고정한다.</b> 이 훅이 도는 동안 클라이언트의 수립 스레드는 ④의 HTTP 응답을
+     * 기다리며 막혀 있고, 그동안 소켓은 이미 열려 있어 우리가 쏜 프레임은 곧장
+     * 수신 콜백으로 간다. 훅이 그 프레임이 도착한 것까지 확인하고 돌아가면,
+     * 수립 마무리(하트비트 기동·상태 전이·절단 구간 닫기)는 <b>반드시 그 뒤</b>다.
+     *
+     * <p>그냥 쏘기만 하면 두 스레드의 경합이라 순서가 실행마다 갈린다
+     * (CP5가 같은 상황을 10회 중 3회만 재현했다).
+     */
+    public volatile Runnable onSubscribeBeforeResponse = () -> { };
+    /**
      * 구독 반납 REST가 돌려줄 상태. 200이 아니면 반납이 실패한다.
      * <b>이 스위치가 없으면 반납 실패 갈래를 밟는 테스트가 0개다</b> —
      * 예외가 종료 훅 밖으로 나가면 소켓 닫기가 통째로 건너뛰어진다는
@@ -317,6 +330,7 @@ public class FakeChzzkBehavior {
         sessionUrlPort = 0;
         authDelay = Duration.ZERO;
         closeAfterSubscribed = false;
+        onSubscribeBeforeResponse = () -> { };
         unsubscribeStatus = 200;
         unsubscribeDelay = Duration.ZERO;
     }

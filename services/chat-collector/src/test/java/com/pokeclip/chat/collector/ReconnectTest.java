@@ -3,6 +3,7 @@ package com.pokeclip.chat.collector;
 import com.pokeclip.chat.collector.engineio.PingFailure;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.observe.CollectionMetrics;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -345,6 +346,65 @@ class ReconnectTest {
         }
     }
 
+    /**
+     * <b>재연결 직후의 첫 채팅이 절단 구간을 닫는 코드보다 먼저 도착하는 순서.</b>
+     *
+     * <p>이 순서가 실제로 이긴다. 프레임 싱크는 세션이 서자마자 살아 있는데, 재연결
+     * 스레드는 하트비트·요약 스레드를 만들고 상태를 옮긴 다음에야 절단 구간을 닫는다.
+     * 그 사이에 온 첫 채팅이 <b>앞 세션의 마지막 수신과 짝지어지면 끊겨 있던 시간이
+     * 통째로 수신 공백으로 찍힌다</b> — 그러면 "한산했을 뿐"과 "끊겨 있었다"를 가르는
+     * 항이 무너지고, 최댓값 누계라 한 번 새면 그 프로세스에서 영영 안 내려온다.
+     *
+     * <p><b>순서를 우연에 맡기지 않는다.</b> 구독 REST가 200을 붙들고 있는 동안
+     * 채팅을 쏘고, 그것이 지표에 닿은 것까지 확인하고 응답한다. 수립 스레드는 그
+     * 응답을 기다리며 막혀 있으므로 수립 마무리는 반드시 그 뒤다.
+     */
+    @Test
+    void 재연결_직후_채팅이_먼저_와도_절단이_수신_공백에_안_섞인다() throws Exception {
+        // 백오프를 크게 준다. 끊긴 시간이 짧으면 그것이 공백으로 새도 다른 공백과
+        // 자릿수로 안 갈려 무엇을 봤는지 흐려진다.
+        start(Duration.ofSeconds(1), Duration.ofSeconds(2));
+
+        // 앞 세션에서 한 건 받아 둔다. 짝지을 상대가 없으면 새어도 아무 일이 없어
+        // 이 검사가 헛돈다.
+        behavior.emitChat("{\"content\":\"x\",\"messageTime\":1}");
+        awaitUntil(() -> runner.metrics().totalReceived() == 1);
+        assertThat(runner.metrics().totalReceived())
+                .as("앞 세션이 한 건도 못 받았다면 새 세션의 첫 채팅이 짝지을 상대가 없다")
+                .isEqualTo(1);
+
+        java.util.concurrent.atomic.AtomicBoolean chatArrivedFirst =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        behavior.onSubscribeBeforeResponse = () -> {
+            behavior.emitChat("{\"content\":\"y\",\"messageTime\":2}");
+            chatArrivedFirst.set(awaitQuietly(() -> runner.metrics().totalReceived() == 2));
+        };
+
+        behavior.closeSession();
+        // <b>단언하는 값 자체를 기다린다.</b> 상태(COLLECTING)는 절단 기록보다 앞서
+        // 찍히므로, 상태로 기다리면 아직 안 닫힌 구간을 보고 단언한다.
+        awaitUntil(() -> runner.metrics().verdict().reconnects() == 1);
+
+        assertThat(chatArrivedFirst)
+                .as("새 세션의 채팅이 수립 마무리보다 먼저 지표에 안 닿았다면 "
+                        + "이 검사는 겨냥한 순서를 한 번도 안 만든 것이다")
+                .isTrue();
+        CollectionMetrics.Verdict v = runner.metrics().verdict();
+        assertThat(v.totalReceived())
+                .as("두 건이 다 안 세어졌다면 아래 공백 0은 '샜다'가 아니라 '잰 것이 없다'다")
+                .isEqualTo(2);
+        // 양성 대조. 아래 단언은 부정형이라 "무엇을 막았나"를 스스로 말하지 못한다.
+        // 샜다면 공백에 실렸을 값이 이만큼이라는 것을 같은 실행에서 못박는다.
+        assertThat(v.totalOutage())
+                .as("끊긴 시간이 이 정도가 아니면 그것이 공백에 실려도 표가 안 나 "
+                        + "아래 단언이 아무것도 못 가른다")
+                .isGreaterThan(Duration.ofSeconds(1));
+        assertThat(v.maxReceiveGap())
+                .as("세션마다 한 건씩이라 짝지을 공백이 애초에 없다. 0이 아니면 "
+                        + "앞 세션의 마지막 수신과 짝지어진 것이고 그 값은 위 절단 시간이다")
+                .isEqualTo(Duration.ZERO);
+    }
+
     /** {@code key=value} 한 줄을 쪼갠다. {@code system={...}}만 공백을 품지 않는다. */
     private static java.util.Map<String, String> fields(String line) {
         java.util.Map<String, String> map = new java.util.LinkedHashMap<>();
@@ -389,5 +449,23 @@ class ReconnectTest {
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
             Thread.sleep(20);
         }
+    }
+
+    /**
+     * 가짜 서버 스레드에서 기다린다. <b>결과를 값으로 돌려준다</b> — 거기서 던지면
+     * 예외가 REST 응답으로 둔갑해 수립 실패가 되고, 그러면 테스트는 "재현이 안 됐다"가
+     * 아니라 엉뚱한 자리에서 깨져 원인이 흐려진다.
+     */
+    private static boolean awaitQuietly(java.util.function.BooleanSupplier condition) {
+        long deadline = System.nanoTime() + AWAIT.toNanos();
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(5);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return condition.getAsBoolean();
     }
 }

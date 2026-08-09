@@ -46,7 +46,7 @@ public final class CollectionMetrics {
      * @param totalCollectedFor 모든 세션의 수집 시간 합. <b>이것만 마지막 세션 값으로
      *                     두면 {@code totalReceived}와 경계가 어긋나</b>
      *                     "received=1000 collectedFor=5s"가 초당 200건처럼 읽힌다
-     * @param maxReceiveGap <b>절단 구간이 안 들어간다.</b> {@link #recordOutage}가 수신
+     * @param maxReceiveGap <b>절단 구간이 안 들어간다.</b> {@link #beginSession()}이 수신
      *                     시계를 다시 잡아 빼낸다 — 안 빼면 "한산했을 뿐"과 "끊겨
      *                     있었다"가 같은 숫자가 된다. 끊긴 시간은 {@code totalOutage}가 든다
      * @param lastOutageFrom 누계가 아니라 <b>마지막 절단 하나</b>의 시각이다.
@@ -147,9 +147,27 @@ public final class CollectionMetrics {
     }
 
     /**
-     * 끊겼다가 다시 붙었다. <b>수신 시계를 다시 잡는다</b> — 안 그러면 절단 구간이
-     * 통째로 하나의 수신 공백이 되어 "한산했을 뿐"과 구분되지 않는다.
-     * 한산한 것은 정상이고(방송을 꺼도 세션은 살아 있다) 끊긴 것은 유실이다.
+     * 새 세션이 선다. <b>수신 시계를 다시 잡는다</b> — 안 그러면 끊겨 있던 구간이
+     * 통째로 하나의 수신 공백이 되어 "한산했을 뿐"과 구분되지 않는다. 한산한 것은
+     * 정상이고(방송을 꺼도 세션은 살아 있다) 끊긴 것은 유실이다.
+     *
+     * <p><b>{@link #recordOutage}가 아니라 여기서 잡는다.</b> 절단 구간을 닫는 것은
+     * 수립이 다 끝난 뒤인데, 프레임 싱크는 그보다 훨씬 앞서 살아 있다 — 그 사이에
+     * 온 첫 채팅이 앞 세션의 마지막 수신과 짝지어지면 절단이 두 항에 동시에 실린다
+     * (실측 3/10). 세션이 서는 시점에 잡으면 첫 채팅이 언제 오든 짝지을 상대가 없다.
+     *
+     * <p><b>부르는 자리는 프레임 싱크를 걸기 직전이어야 한다.</b> 뒤로 미루면 그만큼
+     * 창이 다시 열린다.
+     */
+    public void beginSession() {
+        synchronized (lock) {
+            previousReceivedAtMillis = 0;
+        }
+    }
+
+    /**
+     * 끊겼다가 다시 붙었다. <b>얼마나 · 언제 놓쳤는지만 적는다</b> —
+     * 수신 시계는 {@link #beginSession()}이 이미 다시 잡았다.
      *
      * @param from 못 받기 시작한 시각. 재연결이 여러 번 실패해도 <b>첫 절단</b>이다
      * @param to   다시 받기 시작한 시각
@@ -160,7 +178,6 @@ public final class CollectionMetrics {
             totalOutageMillis += Duration.between(from, to).toMillis();
             lastOutageFromMillis = from.toEpochMilli();
             lastOutageToMillis = to.toEpochMilli();
-            previousReceivedAtMillis = 0;
         }
     }
 

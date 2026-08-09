@@ -200,6 +200,10 @@ class CollectionMetricsTest {
      * <b>끊겨 있던 시간은 수신 공백이 아니다.</b> 손대지 않으면 절단 구간이 통째로
      * 하나의 {@code maxReceiveGap}으로 남아, "한산했을 뿐"과 "끊겨 있었다"가
      * 판정 줄에서 같은 숫자로 보인다.
+     *
+     * <p>여기 담긴 순서는 <b>절단 기록이 새 세션의 첫 채팅보다 먼저</b>인 쪽이다.
+     * 반대 순서는 아래 테스트가 본다. 둘 다 같은 값이 나와야 한다 —
+     * 순서에 따라 갈리면 그것이 곧 경합이다.
      */
     @Test
     void 절단_구간은_수신_공백에_안_섞인다() {
@@ -208,6 +212,7 @@ class CollectionMetricsTest {
 
         // 30초 끊겨 있었다. 시각 둘을 넘긴다 — 누적 시간만으로는 "언제 놓쳤나"를 못 찾는다.
         Instant from = Instant.ofEpochMilli(1_100L);
+        metrics.beginSession();
         metrics.recordOutage(from, from.plusSeconds(30));
         metrics.recordMessage(chat(31_100L), 31_100L);
 
@@ -224,6 +229,49 @@ class CollectionMetricsTest {
         CollectionMetrics untouched = new CollectionMetrics();
         untouched.recordMessage(chat(1_000L), 1_000L);
         untouched.recordMessage(chat(31_100L), 31_100L);
+        assertThat(untouched.verdict().maxReceiveGap())
+                .as("대조가 0이면 위 단언은 애초에 공백이 없던 입력을 본 것이다")
+                .isEqualTo(Duration.ofMillis(30_100));
+    }
+
+    /**
+     * <b>새 세션의 첫 채팅이 {@code recordOutage}보다 먼저 오는 순서.</b> 위 테스트만
+     * 있으면 운 좋은 순서 하나만 보는 것이다.
+     *
+     * <p>실제로 이 순서가 이긴다. 프레임 싱크는 세션이 서자마자 살아 있고, 그
+     * 뒤로 재연결 스레드는 하트비트·요약 스레드를 만들고 상태를 옮긴 다음에야
+     * {@code recordOutage}에 닿는다. 그 사이에 도착한 첫 채팅이 <b>앞 세션의 마지막
+     * 수신과 짝지어지면 절단 구간 전체가 수신 공백으로 찍힌다</b> —
+     * {@code maxReceiveGap}은 최댓값 누계라 한 번 찍히면 프로세스 생애 내내 안 내려온다.
+     *
+     * <p>그래서 수신 시계를 다시 잡는 자리가 {@code recordOutage}가 아니라
+     * <b>세션이 서는 시점</b>({@link CollectionMetrics#beginSession()})이어야 한다.
+     * 거기서 잡으면 첫 채팅이 언제 오든 앞 세션과 짝지어질 수 없다.
+     */
+    @Test
+    void 새_세션의_채팅이_절단_기록보다_먼저_와도_공백에_안_섞인다() {
+        CollectionMetrics metrics = new CollectionMetrics();
+        metrics.recordMessage(chat(1_000L), 1_000L);        // 앞 세션의 마지막 수신
+
+        metrics.beginSession();                              // 새 세션이 섰다
+        metrics.recordMessage(chat(31_100L), 31_100L);       // 재연결 직후 첫 채팅 — 먼저 도착
+        Instant from = Instant.ofEpochMilli(1_100L);
+        metrics.recordOutage(from, from.plusSeconds(30));    // 재연결 스레드가 뒤늦게 닫는다
+
+        CollectionMetrics.Verdict v = metrics.verdict();
+        assertThat(v.maxReceiveGap())
+                .as("채팅이 먼저 오는 순서에서 새면 '한산했을 뿐'과 '끊겨 있었다'가 같아 보인다")
+                .isEqualTo(Duration.ZERO);
+        assertThat(v.reconnects()).isEqualTo(1);
+        assertThat(v.totalOutage()).isEqualTo(Duration.ofSeconds(30));
+
+        // <b>양성 대조.</b> 위는 부정형이라 "무엇을 막았나"를 스스로 말하지 못한다.
+        // 세션 시작을 안 알린 같은 입력이 얼마를 찍는지 못박는다 — 30.1초가 그대로
+        // 공백에 남고, 그것이 위에서 사라진 바로 그 숫자다.
+        CollectionMetrics untouched = new CollectionMetrics();
+        untouched.recordMessage(chat(1_000L), 1_000L);
+        untouched.recordMessage(chat(31_100L), 31_100L);
+        untouched.recordOutage(from, from.plusSeconds(30));
         assertThat(untouched.verdict().maxReceiveGap())
                 .as("대조가 0이면 위 단언은 애초에 공백이 없던 입력을 본 것이다")
                 .isEqualTo(Duration.ofMillis(30_100));
