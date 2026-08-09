@@ -5,6 +5,7 @@ import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.time.Duration;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
@@ -15,7 +16,7 @@ import java.util.function.Consumer;
  * 들어오면 여기서 걸린다 — 이전 send가 끝나기 전에 다음 send를 부르면
  * IllegalStateException이다.
  */
-public final class EngineIoSocket implements AutoCloseable {
+public final class EngineIoSocket implements PingSender, AutoCloseable {
 
     /**
      * <b>참조를 들고 있어야 닫을 수 있다.</b> 셀렉터 스레드와 워커 풀을 소유하는데,
@@ -86,7 +87,14 @@ public final class EngineIoSocket implements AutoCloseable {
                 .join();
     }
 
-    /** 우리가 WS로 내보내는 유일한 프레임. */
+    /**
+     * 우리가 WS로 내보내는 유일한 프레임.
+     *
+     * <p><b>실패 원인을 가른다.</b> {@code sendText}는 이전 송신이 끝나기 전에 부르면
+     * {@code IllegalStateException}을 내는데, 그건 연결이 죽은 것이 아니라
+     * <b>우리가 잘못 쓴 것</b>이다. 묶어서 넘기면 재연결이 그 버그를 덮는다.
+     */
+    @Override
     public void sendPing() {
         synchronized (sendLock) {
             try {
@@ -94,9 +102,31 @@ public final class EngineIoSocket implements AutoCloseable {
                         .get(5, TimeUnit.SECONDS);
             } catch (Exception e) {
                 // URI를 메시지에 담지 않는다 — 쿼리에 auth 토큰이 들어 있다.
-                throw new IllegalStateException("ping 송신 실패", e);
+                throw new PingFailure(classify(e), e);
             }
         }
+    }
+
+    /**
+     * <b>JDK는 동시 송신 위반을 던지지 않고 실패한 future로 준다</b> —
+     * {@code WebSocketImpl.sendText}가 {@code MinimalFuture.failedFuture(new
+     * IllegalStateException("Send pending"))}를 돌려준다. 그래서 {@code get()}은
+     * {@code ExecutionException}을 던지고, <b>cause를 안 풀면 그 갈래가 영영 안 잡힌다.</b>
+     * 그러면 {@code MISUSE}도 {@code SEND_MISUSE}도 죽은 코드가 되고, 우리 버그가
+     * 자동 복구에 덮이는 상태가 그대로 남는다.
+     *
+     * <p>동기 throw 경로도 함께 본다 — JDK 구현이 바뀌면 그리로 온다.
+     *
+     * <p>패키지 전용으로 열어 두는 이유는 <b>분류 자체를 지나는 테스트</b>를 두기
+     * 위해서다. 실제 동시 송신은 {@code sendLock}이 막아 테스트에서 만들 수 없다.
+     */
+    static PingFailure.Cause classify(Exception e) {
+        Throwable actual = (e instanceof ExecutionException && e.getCause() != null)
+                ? e.getCause() : e;
+        // 모르는 예외는 연결 죽음으로 본다. 채팅 유실이 유일한 치명 실패라,
+        // 못 가른 것을 붙잡고 멈추는 쪽이 더 나쁘다. 대신 예외 타입을 메시지에 남긴다.
+        return actual instanceof IllegalStateException
+                ? PingFailure.Cause.MISUSE : PingFailure.Cause.CONNECTION_DEAD;
     }
 
     /**

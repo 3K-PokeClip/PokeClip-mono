@@ -27,6 +27,12 @@ public enum StopReason {
 
     ESTABLISH_TIMEOUT,
     SUBSCRIBE_FAILED,
+
+    /** ping이 안 나간다. 소켓이 죽었다 */
+    PING_SEND_FAILED,
+    /** ping 송신을 우리가 잘못 썼다. <b>재연결하지 않는다</b> */
+    SEND_MISUSE,
+
     /** 동의 철회·Scope 변경. 대응은 POK-93이고 여기서는 사실만 남긴다. */
     REVOKED,
     TRANSPORT_CLOSED

@@ -154,7 +154,7 @@ public class CollectorRunner implements ApplicationRunner {
             }
 
             Heartbeat beat = Heartbeat.start(established.socket(), established.handshake(),
-                    () -> log.warn("chat.session.ping_send_failed"));
+                    cause -> log.warn("chat.session.ping_send_failed cause={}", cause));
             // 값이 아니라 읽는 길을 넘긴다 — 삼킨 예외 수는 계속 늘어난다.
             // 세션은 이 덩어리의 것이라 바뀌지 않으므로 그쪽을 직접 읽는다.
             SummaryLogger logger = SummaryLogger.start(metrics, beat, SUMMARY_PERIOD,

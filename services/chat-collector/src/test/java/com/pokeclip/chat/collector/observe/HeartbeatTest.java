@@ -3,6 +3,8 @@ package com.pokeclip.chat.collector.observe;
 import com.pokeclip.chat.collector.engineio.EngineIoFrame;
 import com.pokeclip.chat.collector.engineio.EngineIoSocket;
 import com.pokeclip.chat.collector.engineio.Handshake;
+import com.pokeclip.chat.collector.engineio.PingFailure;
+import com.pokeclip.chat.collector.engineio.PingSender;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import org.junit.jupiter.api.AfterEach;
@@ -18,6 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -196,7 +199,7 @@ class HeartbeatTest {
         AtomicLong chatsHandled = new AtomicLong();
         Handshake handshake = openWithSlowHandler(SLOW_HANDLER, chatsHandled);
         지연이_임계보다_큰지_먼저_확인한다(handshake);
-        heartbeat = Heartbeat.start(socket, handshake, () -> { });
+        heartbeat = Heartbeat.start(socket, handshake, cause -> { });
 
         // 채팅을 계속 밀어 넣어 수신 스레드를 붙잡아 둔다.
         // 홍수가 관측 창(3초)보다 오래 가도록 건수를 잡는다 — 창 안에서 재는
@@ -234,7 +237,7 @@ class HeartbeatTest {
 
         AtomicLong chatsHandled = new AtomicLong();
         Handshake handshake = openWithSlowHandler(Duration.ZERO, chatsHandled);
-        heartbeat = Heartbeat.start(socket, handshake, () -> { });
+        heartbeat = Heartbeat.start(socket, handshake, cause -> { });
 
         for (int i = 0; i < 3_000; i++) {
             behavior.emitChat("{\"content\":\"x\",\"messageTime\":1}");
@@ -263,7 +266,7 @@ class HeartbeatTest {
         behavior.disconnectWhenPingMissing = false;
 
         Handshake handshake = openWithSlowHandler(Duration.ZERO);
-        heartbeat = Heartbeat.start(socket, handshake, () -> { });
+        heartbeat = Heartbeat.start(socket, handshake, cause -> { });
         Thread.sleep(1_000);
         assertThat(heartbeat.maxPongGap()).isLessThanOrEqualTo(handshake.pongThreshold());
 
@@ -367,7 +370,7 @@ class HeartbeatTest {
         behavior.pingTimeoutMillis = PING_TIMEOUT_MS;
 
         Handshake handshake = openWithSlowHandler(Duration.ZERO);
-        heartbeat = Heartbeat.start(socket, handshake, () -> { });
+        heartbeat = Heartbeat.start(socket, handshake, cause -> { });
         Thread.sleep(1_000);
 
         assertThat(heartbeat.senderThreadNames()).containsExactly("chzzk-ping");
@@ -387,7 +390,7 @@ class HeartbeatTest {
         socket.close();                        // 이후 모든 송신이 실패한다
 
         AtomicLong callbacks = new AtomicLong();
-        heartbeat = Heartbeat.start(socket, handshake, callbacks::incrementAndGet);
+        heartbeat = Heartbeat.start(socket, handshake, cause -> callbacks.incrementAndGet());
         Thread.sleep(1_500);                   // 송신 주기 400ms — 서너 번 돈다
 
         assertThat(heartbeat.sendFailureCount())
@@ -412,7 +415,7 @@ class HeartbeatTest {
         Handshake handshake = openWithSlowHandler(Duration.ZERO);
         socket.close();
 
-        heartbeat = Heartbeat.start(socket, handshake, () -> {
+        heartbeat = Heartbeat.start(socket, handshake, cause -> {
             throw new IllegalStateException("콜백이 터졌다");
         });
         Thread.sleep(1_500);
@@ -427,6 +430,59 @@ class HeartbeatTest {
         assertThat(heartbeat.callbackFailureCount())
                 .as("삼켰으면 세야 한다 — 안 세면 조용한 실패를 우리가 만드는 것이다")
                 .isGreaterThan(1);
+    }
+
+    /** 우리 잘못은 그대로 전해져야 한다. 연결 죽음으로 묶으면 재연결이 버그를 덮는다. */
+    @Test
+    void 송신이_우리_잘못으로_실패하면_원인을_그대로_전한다() throws Exception {
+        AtomicReference<PingFailure.Cause> reported = new AtomicReference<>();
+        Handshake handshake = new Handshake("s", Duration.ofMillis(100), Duration.ofMillis(240));
+        PingSender broken = () -> {
+            throw new PingFailure(PingFailure.Cause.MISUSE, new IllegalStateException("겹쳐 보냈다"));
+        };
+
+        try (Heartbeat beat = Heartbeat.start(broken, handshake, reported::set)) {
+            awaitUntil(() -> reported.get() != null, Duration.ofSeconds(2));
+        }
+
+        assertThat(reported.get())
+                .as("우리 버그를 연결 죽음으로 묶으면 재연결이 성공하는 한 버그가 안 보인다")
+                .isEqualTo(PingFailure.Cause.MISUSE);
+    }
+
+    /**
+     * {@code PingSender}가 {@code PingFailure} 밖의 것을 던져도 스케줄러는 계속
+     * 돌아야 한다. 예외가 밖으로 나가면 {@code scheduleAtFixedRate}가 <b>조용히</b>
+     * 멈춰 ping이 영영 안 나가고, 그것이 2026-08-01의 결말이다.
+     *
+     * <p><b>이 테스트가 없으면 그 갈래를 통째로 지워도 전 테스트가 초록이다</b>
+     * (2026-08-08 실측, 107개 실패 0). 다른 테스트의 송신자는 전부
+     * {@code PingFailure}만 던져서 그 갈래에 아무도 안 들어간다.
+     */
+    @Test
+    void 송신이_PingFailure_밖의_것을_던져도_스케줄러가_멈추지_않는다() throws Exception {
+        AtomicLong reports = new AtomicLong();
+        AtomicReference<PingFailure.Cause> lastCause = new AtomicReference<>();
+        Handshake handshake = new Handshake("s", Duration.ofMillis(100), Duration.ofMillis(240));
+        PingSender wild = () -> {
+            throw new IllegalArgumentException("PingFailure가 아닌 것");
+        };
+
+        try (Heartbeat beat = Heartbeat.start(wild, handshake, cause -> {
+            lastCause.set(cause);
+            reports.incrementAndGet();
+        })) {
+            awaitUntil(() -> reports.get() > 1, Duration.ofSeconds(2));
+
+            assertThat(beat.sendFailureCount())
+                    .as("첫 실패에 스케줄러가 죽으면 1에서 멈추고 그 뒤 ping이 영영 안 나간다")
+                    .isGreaterThan(1);
+        }
+
+        assertThat(lastCause.get())
+                .as("못 가른 실패는 연결 죽음으로 본다 — 채팅 유실이 유일한 치명 실패라 "
+                        + "붙잡고 멈추는 쪽이 더 나쁘다")
+                .isEqualTo(PingFailure.Cause.CONNECTION_DEAD);
     }
 
     private Handshake openWithSlowHandler(Duration delay) throws Exception {
@@ -523,6 +579,18 @@ class HeartbeatTest {
             Thread.sleep(20);
         }
         return counter.get();
+    }
+
+    /**
+     * 단언할 그것이 나타날 때까지만 기다린다. <b>고정 수면 대신 쓴다</b> —
+     * 수면은 창을 좁힐 뿐 없애지 못하고, 안 나타나면 시한을 다 쓰고 그대로
+     * 빨간불이 되므로 판별은 무뎌지지 않는다.
+     */
+    private static void awaitUntil(BooleanSupplier condition, Duration timeout) throws InterruptedException {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
     }
 
     private static void sleepQuietly(Duration d) {

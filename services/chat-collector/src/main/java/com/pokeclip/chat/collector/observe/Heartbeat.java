@@ -1,7 +1,8 @@
 package com.pokeclip.chat.collector.observe;
 
-import com.pokeclip.chat.collector.engineio.EngineIoSocket;
 import com.pokeclip.chat.collector.engineio.Handshake;
+import com.pokeclip.chat.collector.engineio.PingFailure;
+import com.pokeclip.chat.collector.engineio.PingSender;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -11,6 +12,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * ping을 보내는 전용 스케줄러.
@@ -44,7 +46,8 @@ public final class Heartbeat implements AutoCloseable {
 
     private Heartbeat() { }
 
-    public static Heartbeat start(EngineIoSocket socket, Handshake handshake, Runnable onSendFailed) {
+    public static Heartbeat start(PingSender sender, Handshake handshake,
+                                  Consumer<PingFailure.Cause> onSendFailed) {
         Heartbeat heartbeat = new Heartbeat();
         long now = System.nanoTime();
         heartbeat.lastPingNanos.set(now);
@@ -54,27 +57,39 @@ public final class Heartbeat implements AutoCloseable {
         heartbeat.scheduler.scheduleAtFixedRate(() -> {
             heartbeat.senderThreadNames.add(Thread.currentThread().getName());
             try {
-                socket.sendPing();
+                sender.sendPing();
                 heartbeat.mark(heartbeat.lastPingNanos, heartbeat.maxPingGapNanos);
-            } catch (RuntimeException e) {
-                // 스케줄러는 계속 돈다. 여기서 예외가 밖으로 나가면
-                // scheduleAtFixedRate가 조용히 멈춰 ping이 영영 안 나간다.
+            } catch (PingFailure e) {
+                // 원인을 그대로 넘긴다. 여기서 뭉치면 우리 버그로 재연결이 돌고,
+                // 재연결이 성공하는 한 그 버그는 영영 안 보이면서 상한만 태운다.
                 heartbeat.sendFailures.incrementAndGet();
-                try {
-                    onSendFailed.run();
-                } catch (RuntimeException callbackFailure) {
-                    // 콜백까지 감싸는 이유는, 이 catch가 없으면 콜백이 던진 예외가
-                    // 위 catch를 지나 밖으로 나가 스케줄러를 죽이기 때문이다.
-                    //
-                    // 삼켰으면 센다. 콜백 안에 health를 DOWN으로 돌리는 일이 있으면,
-                    // 세지 않을 경우 수집이 죽었는데 health는 UP이고 요약에도 표시가
-                    // 없는 상태가 된다 — PRD가 유일한 치명적 실패로 규정한 모양이다.
-                    heartbeat.callbackFailures.incrementAndGet();
-                }
+                heartbeat.notifyQuietly(() -> onSendFailed.accept(e.cause()));
+            } catch (RuntimeException e) {
+                // PingSender 구현이 PingFailure 밖의 것을 던진 경우. 스케줄러는 계속 돈다 —
+                // 여기서 예외가 밖으로 나가면 scheduleAtFixedRate가 조용히 멈춰
+                // ping이 영영 안 나간다. 그것이 2026-08-01의 결말이다.
+                heartbeat.sendFailures.incrementAndGet();
+                heartbeat.notifyQuietly(() -> onSendFailed.accept(PingFailure.Cause.CONNECTION_DEAD));
             }
         }, 0, periodMillis, TimeUnit.MILLISECONDS);
 
         return heartbeat;
+    }
+
+    /**
+     * 콜백을 감싸는 이유는, 이것이 없으면 콜백이 던진 예외가 위 catch를 지나
+     * 밖으로 나가 스케줄러를 죽이기 때문이다.
+     *
+     * <p>삼켰으면 센다. 콜백 안에 health를 DOWN으로 돌리는 일이 있으면,
+     * 세지 않을 경우 수집이 죽었는데 health는 UP이고 요약에도 표시가 없는
+     * 상태가 된다 — PRD가 유일한 치명적 실패로 규정한 모양이다.
+     */
+    private void notifyQuietly(Runnable callback) {
+        try {
+            callback.run();
+        } catch (RuntimeException callbackFailure) {
+            callbackFailures.incrementAndGet();
+        }
     }
 
     /**
