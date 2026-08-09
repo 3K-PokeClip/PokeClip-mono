@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector;
 
+import com.pokeclip.chat.collector.engineio.EngineIoFrame;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.slf4j.Logger;
@@ -16,6 +17,8 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -51,6 +54,26 @@ class LiveProbeTest {
 
     private static final String BASE = "https://openapi.chzzk.naver.com";
     private static final Path ATTEMPTS = Path.of("_workspace", "01_probe_attempts.txt");
+
+    /**
+     * 서버가 끊기 전에 Engine.IO 종료 프레임("1")을 보내는가.
+     *
+     * <p><b>안 오는 것으로는 아무것도 결론 낼 수 없다.</b> 표본은 붙어 있던 시간이
+     * 아니라 <b>서버가 끊은 횟수</b>다. 그래서 둘을 같이 센다 — 뒤가 0이면 앞이 0인
+     * 것은 관측이 아니라 기회가 없었던 것이다.
+     *
+     * <p>한 번이라도 오면 그것으로 "보낸다"가 확정된다. 그때까지는 감지 설계가
+     * 이 프레임에 기대지 않는다.
+     */
+    private final AtomicInteger closeFramesSeen = new AtomicInteger();
+    private final AtomicInteger serverClosesSeen = new AtomicInteger();
+
+    /**
+     * 우리가 닫을 때도 서버가 close 핸드셰이크를 되받아 {@code onClose}가 불린다.
+     * 그것까지 세면 "서버가 끊은 횟수"가 항상 1로 부풀어, 관측이 없는데도 판정표의
+     * 두 번째 행에 걸린 것처럼 보인다.
+     */
+    private final AtomicBoolean closingByUs = new AtomicBoolean();
 
     @Test
     void 자바_내장_WebSocket으로_붙어_구독까지_통과한다() throws Exception {
@@ -102,6 +125,9 @@ class LiveProbeTest {
                             String raw = buffer.toString();
                             buffer.setLength(0);
                             frames.add(raw);
+                            if (EngineIoFrame.parse(raw).type() == EngineIoFrame.Type.CLOSE) {
+                                closeFramesSeen.incrementAndGet();
+                            }
                             if (raw.contains("connected")) {
                                 sessionKey.set(crudeSessionKey(raw));
                                 connected.countDown();
@@ -116,7 +142,11 @@ class LiveProbeTest {
 
                     @Override
                     public CompletionStage<?> onClose(WebSocket ws, int code, String reason) {
-                        log.info("서버가 닫았다. code={} reason={}", code, reason);
+                        if (!closingByUs.get()) {
+                            serverClosesSeen.incrementAndGet();
+                        }
+                        log.info("서버가 닫았다. code={} reason={} 우리가_먼저_닫음={}",
+                                code, reason, closingByUs.get());
                         return null;
                     }
 
@@ -151,6 +181,7 @@ class LiveProbeTest {
         } finally {
             // 반드시 닫는다. 안 닫으면 상한 3개를 먹은 채로 남아
             // 다음 시도가 "핸드셰이크 실패"처럼 보인다.
+            closingByUs.set(true);
             socket.sendClose(WebSocket.NORMAL_CLOSURE, "probe done")
                     .orTimeout(5, TimeUnit.SECONDS)
                     .exceptionally(e -> null)
@@ -158,6 +189,9 @@ class LiveProbeTest {
             socket.abort();
             Thread.sleep(1_000);
             log.info("닫은 뒤 세션 목록 = {}", redact(sessions(rest, token)));
+            // serverCloses=0 이면 closeFrames=0 은 "안 보낸다"가 아니라 "볼 기회가 없었다"다.
+            log.info("chzzk.probe.close_frame serverCloses={} closeFrames={}",
+                    serverClosesSeen.get(), closeFramesSeen.get());
         }
     }
 
