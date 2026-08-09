@@ -54,9 +54,11 @@ class TransportClosedCleanupTest {
 
             CollectionStatus status = new CollectionStatus();
             runner = new CollectorRunner(new ChzzkProperties(
-                    true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)),
+                    true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
+                    Duration.ofMillis(50), Duration.ofSeconds(1)),
                     status, restClientBuilder);
             runner.start();
+            long session = runner.lastSessionNo();
             assertThat(status.state())
                     .as("붙지도 않았다면 끊는 것에 아무 의미가 없다")
                     .isEqualTo(CollectionStatus.State.COLLECTING);
@@ -69,7 +71,10 @@ class TransportClosedCleanupTest {
                     .containsExactlyInAnyOrder("chzzk-ping", "chzzk-summary");
 
             behavior.closeSession();
-            awaitUntil(() -> status.state() == CollectionStatus.State.STOPPED);
+            awaitUntil(() -> status.state() == CollectionStatus.State.RECONNECTING);
+            assertThat(status.state())
+                    .as("STOPPED는 안 덮이는 상태라, 절단에 그걸 찍으면 재연결이 붙어도 못 올라온다")
+                    .isEqualTo(CollectionStatus.State.RECONNECTING);
             assertThat(status.reason()).isEqualTo(StopReason.TRANSPORT_CLOSED);
 
             // ① 구독 반납. stop()을 아무도 안 불렀는데도 와야 한다 —
@@ -78,6 +83,9 @@ class TransportClosedCleanupTest {
             assertThat(behavior.unsubscribeCallCount())
                     .as("전송이 끊겼는데 반납을 종료까지 미루면 세션이 상한 3개를 계속 먹는다")
                     .isEqualTo(1);
+            // 반납 도착과 반납 결말 줄은 같은 시점이 아니다 — 줄은 왕복이 끝나야
+            // 나간다. 도착만 보고 줄을 단언하면 그 왕복만큼의 창에서 간헐 실패한다.
+            awaitUntil(() -> hasLine(captor, "chat.session.released"));
             assertThat(captor.messages()).anyMatch(m -> m.startsWith("chat.session.released"));
 
             // ② 실행기 둘. 살아 있으면 죽은 세션에 ping을 계속 쏘고 요약도 계속 찍는다.
@@ -89,8 +97,12 @@ class TransportClosedCleanupTest {
             // ③ 두 번째 경로. 종료 훅이 stop()을 또 부른다.
             runner.stop();
 
+            // 이 러너가 받은 번호로 좁혀 센다. 개수만 세면 LogCaptor가 JVM 전역 루트
+            // 로거에 붙어 있어(web-support/LogCaptor.java:21-26) 앞 클래스의 낙오
+            // 스레드가 늦게 찍은 줄이 이 수에 섞인다. 상수 1을 박아도 같다 —
+            // 번호를 러너에서 받아 와야 남의 세션과 갈린다.
             assertThat(captor.messages().stream()
-                    .filter(m -> m.startsWith("chat.session.verdict")).count())
+                    .filter(m -> m.startsWith("chat.session.verdict session=" + session + " ")).count())
                     .as("판정이 두 줄이면 어느 것이 진짜 끝인지 흐려진다")
                     .isEqualTo(1);
             assertThat(behavior.unsubscribeCallCount())
@@ -104,6 +116,10 @@ class TransportClosedCleanupTest {
                 .filter(t -> WORKER_NAMES.contains(t.getName()))
                 .filter(Thread::isAlive)
                 .toList();
+    }
+
+    private static boolean hasLine(LogCaptor captor, String prefix) {
+        return captor.messages().stream().anyMatch(m -> m.startsWith(prefix));
     }
 
     /** 조건이 설 때까지 기다린다. 안 서면 그대로 다음 단언이 사실을 말한다. */

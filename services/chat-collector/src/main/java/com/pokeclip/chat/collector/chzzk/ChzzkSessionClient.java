@@ -35,8 +35,13 @@ public class ChzzkSessionClient {
             return MAPPER.readTree(body).path("content").path("url").asString();
         } catch (RestClientResponseException e) {
             // 응답 본문을 메시지에 담지 않는다 — 토큰이 되비쳐 나올 수 있다.
-            throw new SessionEstablishException(EstablishStage.AUTH,
-                    StopReason.SESSION_AUTH_FAILED, "status=" + e.getStatusCode().value());
+            int status = e.getStatusCode().value();
+            // 401·403만 영구 실패다. 5xx를 여기 묶으면 서버가 잠깐 아픈 것에 영구 정지하고,
+            // 반대로 전부 일시로 보면 만료 토큰으로 영원히 재시도한다.
+            StopReason reason = (status == 401 || status == 403)
+                    ? StopReason.SESSION_AUTH_REJECTED
+                    : StopReason.SESSION_AUTH_FAILED;
+            throw new SessionEstablishException(EstablishStage.AUTH, reason, "status=" + status);
         } catch (Exception e) {
             throw new SessionEstablishException(EstablishStage.AUTH,
                     StopReason.SESSION_AUTH_FAILED, "cause=" + e.getClass().getSimpleName());
@@ -77,8 +82,15 @@ public class ChzzkSessionClient {
                     .retrieve()
                     .toBodilessEntity();
         } catch (RestClientResponseException e) {
-            throw new SessionEstablishException(EstablishStage.SUBSCRIBE,
-                    StopReason.SUBSCRIBE_FAILED, "status=" + e.getStatusCode().value());
+            int status = e.getStatusCode().value();
+            // 발급 단계와 같은 규칙이다. 여기만 안 가르면 <b>발급은 200인데 구독만
+            // 거부되는 토큰</b>(채팅 Scope나 동의가 빠진 경우)이 재시도 가능으로
+            // 분류되어, ①이 매번 성공하므로 세션 발급부터 영원히 돈다.
+            StopReason reason = (status == 401 || status == 403)
+                    ? StopReason.SUBSCRIBE_REJECTED
+                    : StopReason.SUBSCRIBE_FAILED;
+            throw new SessionEstablishException(EstablishStage.SUBSCRIBE, reason,
+                    "status=" + status);
         } catch (Exception e) {
             throw new SessionEstablishException(EstablishStage.SUBSCRIBE,
                     StopReason.SUBSCRIBE_FAILED, "cause=" + e.getClass().getSimpleName());

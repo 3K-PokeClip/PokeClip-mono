@@ -7,18 +7,27 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 
+import java.io.IOException;
 import java.net.URI;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @FakeChzzkTest
 class EngineIoSocketTest {
+
+    /** 수립 예산. 이 파일은 접속 자체를 보므로 넉넉히 준다. */
+    private static final java.time.Duration BUDGET = java.time.Duration.ofSeconds(5);
+
+    /** 중단 신호가 없는 호출. 중단은 EstablishCutCleanupTest가 본다. */
+    private static final java.util.function.BooleanSupplier NO_ABORT = () -> false;
 
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
@@ -70,13 +79,49 @@ class EngineIoSocketTest {
         assertThat(behavior.receivedFrames()).isNotEmpty().containsOnly("2");
     }
 
+    /** 죽은 소켓에 ping을 쏘면 <b>연결이 죽었다</b>고 말해야 한다. 이 갈래가 재연결을 부른다. */
+    @Test
+    void 닫힌_소켓에_ping을_쏘면_연결_죽음으로_분류한다() {
+        EngineIoSocket closed = EngineIoSocket.open(uri(), frame -> { }, () -> { }, BUDGET, NO_ABORT);
+        closed.close();
+
+        assertThatThrownBy(closed::sendPing)
+                .isInstanceOf(PingFailure.class)
+                // 이름("cause")으로 뽑으면 Throwable.getCause()가 먼저 걸려 감싼 예외가
+                // 나온다. 열거값을 보려면 접근자를 직접 불러야 한다.
+                .extracting(e -> ((PingFailure) e).cause())
+                .isEqualTo(PingFailure.Cause.CONNECTION_DEAD);
+    }
+
+    /**
+     * <b>분류기를 실제로 지나는 검사다.</b> JDK가 동시 송신 위반을 실패한 future로
+     * 주므로, cause를 안 풀면 MISUSE 갈래가 영영 안 잡힌다. 실제 동시 송신은
+     * {@code sendLock}이 막아 만들 수 없어 예외 모양으로 직접 먹인다.
+     */
+    @Test
+    void 실패한_future로_온_동시_송신_위반을_우리_잘못으로_분류한다() {
+        Exception fromGet = new ExecutionException(new IllegalStateException("Send pending"));
+
+        assertThat(EngineIoSocket.classify(fromGet))
+                .as("cause를 안 풀면 CONNECTION_DEAD로 새고, 그러면 우리 버그가 재연결에 덮인다")
+                .isEqualTo(PingFailure.Cause.MISUSE);
+    }
+
+    /** 양성 대조. 진짜 연결 죽음이 MISUSE로 분류되면 재연결이 아예 안 돈다. */
+    @Test
+    void IO_오류는_연결_죽음으로_분류한다() {
+        Exception fromGet = new ExecutionException(new IOException("closed"));
+
+        assertThat(EngineIoSocket.classify(fromGet)).isEqualTo(PingFailure.Cause.CONNECTION_DEAD);
+    }
+
     @Test
     void 서버가_끊으면_onClosed가_불린다() throws Exception {
         behavior.pingIntervalMillis = 200;
         behavior.pingTimeoutMillis = 480;
 
         CountDownLatch closed = new CountDownLatch(1);
-        socket = EngineIoSocket.open(uri(), frame -> { }, closed::countDown);
+        socket = EngineIoSocket.open(uri(), frame -> { }, closed::countDown, BUDGET, NO_ABORT);
 
         assertThat(closed.await(5, TimeUnit.SECONDS))
                 .as("서버가 조용히 끊었는데 우리가 모르면 그게 8/1 사고다")
@@ -98,7 +143,7 @@ class EngineIoSocketTest {
         Set<Thread> created = new LinkedHashSet<>();
 
         for (int i = 0; i < 3; i++) {
-            EngineIoSocket opened = EngineIoSocket.open(uri(), frame -> { }, () -> { });
+            EngineIoSocket opened = EngineIoSocket.open(uri(), frame -> { }, () -> { }, BUDGET, NO_ABORT);
             // 닫기 전에 표본을 뜬다. 닫은 뒤에 뜨면 고친 코드에서는 이미 사라져
             // 있어 "만들어지긴 했나"를 확인할 수 없다.
             liveHttpClientThreads().stream().filter(t -> !before.contains(t)).forEach(created::add);
@@ -137,7 +182,7 @@ class EngineIoSocketTest {
         socket = EngineIoSocket.open(uri(), frame -> {
             seen.add(frame);
             if (frame.type() == EngineIoFrame.Type.EVENT) connected.countDown();
-        }, () -> { });
+        }, () -> { }, BUDGET, NO_ABORT);
         return connected;
     }
 

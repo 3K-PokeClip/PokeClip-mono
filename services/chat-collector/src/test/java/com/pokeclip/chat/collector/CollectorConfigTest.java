@@ -97,22 +97,31 @@ class CollectorConfigTest {
             assertThat(behavior.handshakeQuery()).contains("EIO=3");
         }
 
+        /**
+         * <b>{@code run()}으로 띄운다.</b> {@code start()}는 수립 실패를 밖으로 던지고,
+         * 재시도할지는 그 사유를 받은 쪽이 정한다 — 운영 경로가 {@code run()}이다.
+         */
         @Test
-        void 세션_발급이_401이면_STOPPED에_사유가_남고_health가_DOWN이다() {
+        void 세션_발급이_401이면_STOPPED에_사유가_남고_health가_DOWN이다() throws Exception {
             behavior.authStatus = 401;
             CollectionStatus status = new CollectionStatus();
 
             runner = runnerFor(status, true);
-            runner.start();
+            runner.run(null);
 
+            // 영구 정지는 재연결 스레드가 찍는다. 안 기다리면 아직 RECONNECTING이다.
+            awaitState(status, CollectionStatus.State.STOPPED);
             assertThat(status.state()).isEqualTo(CollectionStatus.State.STOPPED);
-            assertThat(status.reason()).isEqualTo(StopReason.SESSION_AUTH_FAILED);
+            assertThat(status.reason()).isEqualTo(StopReason.SESSION_AUTH_REJECTED);
 
             var health = new CollectorHealth(status).health();
             assertThat(health.getStatus()).isEqualTo(Status.DOWN);
-            assertThat(health.getDetails()).containsEntry("reason", "SESSION_AUTH_FAILED");
+            assertThat(health.getDetails())
+                    .as("밖에서 보이는 이름이 바로 이 값이다. 거부와 일시 실패가 같은 문자열이면 "
+                            + "운영자가 기다리면 풀릴 일인지 토큰을 갈아야 할 일인지 모른다")
+                    .containsEntry("reason", "SESSION_AUTH_REJECTED");
 
-            // 조용한 재시도 루프를 만들지 않는다. 재연결은 POK-86이다.
+            // 401은 거부다. 재연결이 붙어도 다시 걸지 않는다.
             assertThat(behavior.authCallCount()).isEqualTo(1);
         }
 
@@ -122,7 +131,7 @@ class CollectorConfigTest {
          * 통과하는 상태가 된다 — 이 카드가 막으려는 바로 그 실패다.
          */
         @Test
-        void 전송이_끊기면_STOPPED에_사유가_남고_health가_DOWN이_된다() throws Exception {
+        void 전송이_끊기면_RECONNECTING에_사유가_남고_health가_DOWN이_된다() throws Exception {
             CollectionStatus status = new CollectionStatus();
             runner = runnerFor(status, true);
             runner.start();
@@ -133,11 +142,14 @@ class CollectorConfigTest {
             behavior.closeSession();
 
             long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-            while (status.state() != CollectionStatus.State.STOPPED && System.nanoTime() < deadline) {
+            while (status.state() != CollectionStatus.State.RECONNECTING
+                    && System.nanoTime() < deadline) {
                 Thread.sleep(20);
             }
 
-            assertThat(status.state()).isEqualTo(CollectionStatus.State.STOPPED);
+            // STOPPED가 아니라 RECONNECTING이다. 상태 이름은 갈렸지만 <b>밖에서 보이는
+            // 것은 그대로 DOWN이어야 한다</b> — 재연결 중에도 채팅은 안 들어온다.
+            assertThat(status.state()).isEqualTo(CollectionStatus.State.RECONNECTING);
             assertThat(status.reason()).isEqualTo(StopReason.TRANSPORT_CLOSED);
             assertThat(new CollectorHealth(status).health().getStatus()).isEqualTo(Status.DOWN);
         }
@@ -154,10 +166,24 @@ class CollectorConfigTest {
             assertThat(behavior.authCallCount()).isZero();
         }
 
+        /**
+         * 재시도 간격을 크게 준다. 이 클래스가 보는 것은 <b>어느 실패가 어느 상태와
+         * 사유로 나타나는가</b>이고, 짧은 간격이면 그 상태가 재시도로 계속 갈려
+         * 무엇을 읽었는지 흐려진다. 다시 붙는 것은 {@code ReconnectTest}가 본다.
+         */
         private CollectorRunner runnerFor(CollectionStatus status, boolean enabled) {
             var props = new ChzzkProperties(enabled, "test-token",
-                    "http://localhost:" + port, Duration.ofSeconds(5));
+                    "http://localhost:" + port, Duration.ofSeconds(5),
+                    Duration.ofSeconds(30), Duration.ofSeconds(60));
             return new CollectorRunner(props, status, restClientBuilder);
+        }
+
+        private static void awaitState(CollectionStatus status, CollectionStatus.State state)
+                throws Exception {
+            long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (status.state() != state && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
         }
     }
 

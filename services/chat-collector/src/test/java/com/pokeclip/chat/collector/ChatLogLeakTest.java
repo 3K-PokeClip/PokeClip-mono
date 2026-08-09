@@ -107,16 +107,19 @@ class ChatLogLeakTest {
 
     /** 수립 실패 로그·예외 메시지에 응답 본문이나 URL이 붙으면 토큰이 되비친다. */
     @Test
-    void 세션_발급이_401이어도_토큰이_로그에_안_남는다() {
+    void 세션_발급이_401이어도_토큰이_로그에_안_남는다() throws Exception {
         behavior.authStatus = 401;
 
         try (LogCaptor captor = new LogCaptor()) {
             CollectionStatus status = start();
 
+            // 영구 정지는 재연결 스레드가 찍는다. 상태를 안 기다리면 그 스레드가
+            // 남길 줄이 아직 창 밖이라, 부정 단언이 아무것도 안 본 채 초록이 된다.
+            awaitState(status, CollectionStatus.State.STOPPED);
             assertThat(status.state())
                     .as("실패 경로를 안 태웠다면 검사할 로그가 애초에 없다")
                     .isEqualTo(CollectionStatus.State.STOPPED);
-            assertThat(status.reason()).isEqualTo(StopReason.SESSION_AUTH_FAILED);
+            assertThat(status.reason()).isEqualTo(StopReason.SESSION_AUTH_REJECTED);
             assertThat(renderAll(captor)).as("실패가 로그에 남기는 남아야 한다").contains("chat.session.stopped");
 
             assertNoSecretsIn(captor, SECRETS);
@@ -131,9 +134,14 @@ class ChatLogLeakTest {
             assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
 
             behavior.closeSession();
-            awaitStopped(status);
+            awaitReleased(captor);
 
             assertThat(status.reason()).isEqualTo(StopReason.TRANSPORT_CLOSED);
+            // 양성 대조. 절단 뒤에 나가는 줄은 판정과 반납 결말인데, STOPPED만 보고
+            // 앞지르면 둘 다 창 밖이라 <b>끊긴 뒤의 로그를 한 줄도 안 본 채</b> 초록이 된다.
+            assertThat(renderAll(captor))
+                    .as("뒷정리 줄이 창 밖이면 이 검사는 절단 경로의 로그를 아무것도 안 본 것이다")
+                    .contains("chat.session.released");
             assertNoSecretsIn(captor, SECRETS);
         }
     }
@@ -267,13 +275,30 @@ class ChatLogLeakTest {
 
     // ── 도우미 ────────────────────────────────────────────────────────────
 
+    /**
+     * <b>{@code run()}으로 띄운다.</b> {@code start()}는 수립 실패를 밖으로 던지므로
+     * 401 검사에서 예외가 테스트 메서드를 뚫고 나가 단언에 못 닿는다.
+     *
+     * <p>재시도 간격을 크게 준다. 유출 검사는 <b>한 번의 실패·절단이 남기는 줄</b>을
+     * 훑는 것이라, 짧은 간격이면 같은 줄이 계속 쌓여 무엇을 본 것인지 흐려진다.
+     * 새는 자리가 늘지는 않는다 — 재시도가 찍는 줄은 이미 훑는 그 줄들이다.
+     */
     private CollectionStatus start() {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(
-                new ChzzkProperties(true, TOKEN, "http://localhost:" + port, Duration.ofSeconds(5)),
+                new ChzzkProperties(true, TOKEN, "http://localhost:" + port, Duration.ofSeconds(5),
+                        Duration.ofSeconds(30), Duration.ofSeconds(60)),
                 status, restClientBuilder);
-        runner.start();
+        runner.run(null);
         return status;
+    }
+
+    private static void awaitState(CollectionStatus status, CollectionStatus.State state)
+            throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (status.state() != state && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
     }
 
     private void awaitSummaryLine(LogCaptor captor) throws Exception {
@@ -300,9 +325,18 @@ class ChatLogLeakTest {
         }
     }
 
-    private void awaitStopped(CollectionStatus status) throws Exception {
+    /**
+     * <b>상태가 아니라 창에 들어와야 할 그 줄을 기다린다.</b>
+     *
+     * <p>{@code STOPPED}는 뒷정리보다 <b>먼저</b> 찍히므로, 상태만 보고 앞지르면
+     * 판정·반납 줄이 통째로 창 밖에 남는다. 이쪽은 부정 단언이라 빨간불이 아니라
+     * <b>조용한 초록</b>으로 나타난다 — 검사한 적 없는 줄을 검사했다고 믿게 된다.
+     * {@code chat.session.released}가 절단 경로의 마지막 줄이다.
+     */
+    private void awaitReleased(LogCaptor captor) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-        while (status.state() != CollectionStatus.State.STOPPED && System.nanoTime() < deadline) {
+        while (captor.messages().stream().noneMatch(m -> m.startsWith("chat.session.released"))
+                && System.nanoTime() < deadline) {
             Thread.sleep(20);
         }
     }

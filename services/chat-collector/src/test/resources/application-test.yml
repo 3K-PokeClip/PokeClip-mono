@@ -6,3 +6,9 @@ pokeclip:
     access-token: test-only-token
     base-url: http://localhost:0
     establish-timeout: 5s
+    # 스프링이 바인딩하는 빈에도 값이 있어야 한다. 여기가 비면 @NotNull이
+    # 부팅을 막고, 안 막았다면 재연결 루프가 이 값을 읽는 날 배선 테스트가
+    # 통째로 NPE로 죽는다. 러너를 직접 만드는 테스트가 넘기는 값과 같게 둔다 —
+    # 실서버 기본값(35s·120s)을 그대로 쓰면 테스트가 그만큼 잔다.
+    reconnect-first-delay: 50ms
+    reconnect-max-delay: 1s

@@ -25,13 +25,27 @@ public class CollectorHealth implements HealthIndicator {
 
     @Override
     public Health health() {
-        return switch (status.state()) {
+        // <b>한 번만 읽는다.</b> 낱개 getter를 이어 부르면 갈래를 고른 뒤에 상태가
+        // 바뀌어, 상세만 다음 순간의 값이 실린다 — "재연결 중인데 사유는 없음"이
+        // 그 모양이고, 널 검사와 렌더가 각각 읽으면 아예 500으로 터진다.
+        // 하필 재연결이 성공하는 그 순간에만 일어나 원인을 찾기가 가장 어렵다.
+        CollectionStatus.Snapshot now = status.snapshot();
+        return switch (now.state()) {
             case DISABLED -> Health.up().withDetail("status", "disabled").build();
             case ESTABLISHING -> Health.up().withDetail("status", "establishing").build();
             case COLLECTING -> Health.up().withDetail("status", "collecting").build();
+            // 재연결 중에는 채팅이 실제로 안 들어온다. UP으로 두면 "수집이 죽었는데
+            // health는 UP"과 같은 모양이 되고, 그게 이 서비스가 유일한 치명 실패로 규정한 것이다.
+            case RECONNECTING -> Health.down()
+                    .withDetail("status", "reconnecting")
+                    .withDetail("reason", now.reason() == null ? "UNKNOWN" : now.reason().name())
+                    .withDetail("disconnectedAt", now.disconnectedAt() == null
+                            ? "unknown" : now.disconnectedAt().toString())
+                    .withDetail("attempt", now.attempt())
+                    .build();
             case STOPPED -> Health.down()
                     .withDetail("status", "stopped")
-                    .withDetail("reason", status.reason() == null ? "UNKNOWN" : status.reason().name())
+                    .withDetail("reason", now.reason() == null ? "UNKNOWN" : now.reason().name())
                     .build();
         };
     }

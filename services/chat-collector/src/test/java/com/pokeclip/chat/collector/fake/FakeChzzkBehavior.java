@@ -35,6 +35,22 @@ public class FakeChzzkBehavior {
     /** 세션 발급 REST가 돌려줄 상태. 401이면 T9(만료 토큰). */
     public volatile int authStatus = 200;
     /**
+     * 구독 REST가 돌려줄 상태.
+     *
+     * <p><b>발급은 200인데 구독만 거부되는 상태를 만드는 유일한 손잡이다.</b>
+     * 토큰은 살아 있고 채팅 Scope나 동의만 빠진 경우가 실제로 여기다 —
+     * {@code authStatus}로는 그 자리를 한 번도 안 밟는다.
+     */
+    public volatile int subscribeStatus = 200;
+    /**
+     * 0이 아니면 세션 url의 포트를 이 값으로 바꾼다.
+     *
+     * <p><b>②(WS 접속)를 결정적으로 실패시키는 유일한 손잡이다.</b> 발급은 200으로
+     * 성공하는데 그 url로는 못 붙는 상태를 만든다 — 죽은 포트를 주면 루프백이
+     * 즉시 거부하므로 접속 거부 분류가 매번 같은 값으로 나온다.
+     */
+    public volatile int sessionUrlPort = 0;
+    /**
      * 세션 발급 REST가 응답 전에 붙들고 있는 시간.
      *
      * <p><b>연결은 받아 놓고 답을 안 주는 상태</b>를 만든다. 거부(401)와 다르다 —
@@ -56,12 +72,37 @@ public class FakeChzzkBehavior {
      */
     public volatile boolean closeAfterSubscribed = false;
     /**
+     * subscribed를 쏜 <b>직후, 구독 REST가 200을 돌려주기 전에</b> 도는 훅.
+     *
+     * <p><b>"수립이 아직 안 끝난 세션에 프레임을 밀어 넣는" 지점을 결정적으로
+     * 고정한다.</b> 이 훅이 도는 동안 클라이언트의 수립 스레드는 ④의 HTTP 응답을
+     * 기다리며 막혀 있고, 그동안 소켓은 이미 열려 있어 우리가 쏜 프레임은 곧장
+     * 수신 콜백으로 간다. 훅이 그 프레임이 도착한 것까지 확인하고 돌아가면,
+     * 수립 마무리(하트비트 기동·상태 전이·절단 구간 닫기)는 <b>반드시 그 뒤</b>다.
+     *
+     * <p>그냥 쏘기만 하면 두 스레드의 경합이라 순서가 실행마다 갈린다
+     * (CP5가 같은 상황을 10회 중 3회만 재현했다).
+     */
+    public volatile Runnable onSubscribeBeforeResponse = () -> { };
+    /**
      * 구독 반납 REST가 돌려줄 상태. 200이 아니면 반납이 실패한다.
      * <b>이 스위치가 없으면 반납 실패 갈래를 밟는 테스트가 0개다</b> —
      * 예외가 종료 훅 밖으로 나가면 소켓 닫기가 통째로 건너뛰어진다는
      * try/catch의 존재 이유가 무검사로 남는다.
      */
     public volatile int unsubscribeStatus = 200;
+    /**
+     * 구독 반납 REST가 <b>도착을 센 뒤</b> 응답 전에 붙들고 있는 시간.
+     *
+     * <p><b>뒷정리 스레드를 원하는 지점에 세워 두는 장치다.</b> 반납은 실서버에서
+     * 약 1초 걸리는 왕복이라(CLAUDE.md 실측), 그 사이에 다음 세션이 시작되는 창이
+     * 실제로 열린다. 지연이 없으면 그 창이 로컬에서 1ms라 경합이 영영 안 재현되고,
+     * 그러면 "앞 세션 정리가 새 세션을 지운다"는 결함이 초록 아래 그대로 남는다.
+     *
+     * <p>도착을 먼저 세므로 {@code unsubscribeCallCount()}가 1이 된 시점이
+     * 곧 <b>뒷정리 스레드가 왕복에 갇힌 시점</b>이다 — 테스트가 그 시점을 노린다.
+     */
+    public volatile Duration unsubscribeDelay = Duration.ZERO;
 
     private final List<String> received = new CopyOnWriteArrayList<>();
     private final AtomicReference<String> handshakeQuery = new AtomicReference<>("");
@@ -81,6 +122,14 @@ public class FakeChzzkBehavior {
      * 재연결은 POK-86이고 이번 카드는 실패하면 사유만 남기고 멈춘다.
      */
     private final AtomicInteger authCalls = new AtomicInteger();
+
+    /**
+     * WS 접속이 성립한 시각. <b>T13이 "실제로 기다렸는가"를 재는 자다.</b>
+     * 테스트가 자기 시계로 재면 ①②가 느린 경우와 ③에서 기다린 경우를 못 가른다.
+     */
+    private final AtomicLong connectionEstablishedNanos = new AtomicLong();
+    private final AtomicInteger connections = new AtomicInteger();
+
     private final AtomicLong authRequestNanos = new AtomicLong();
     private final AtomicInteger unsubscribeCalls = new AtomicInteger();
     private final AtomicInteger closedSessions = new AtomicInteger();
@@ -99,6 +148,26 @@ public class FakeChzzkBehavior {
      */
     public Duration sinceAuthRequest() {
         return Duration.ofNanos(System.nanoTime() - authRequestNanos.get());
+    }
+
+    /** ②가 끝난 뒤 흐른 시간. 접속 전이면 0이다. */
+    public Duration sinceConnectionEstablished() {
+        long at = connectionEstablishedNanos.get();
+        return at == 0 ? Duration.ZERO : Duration.ofNanos(System.nanoTime() - at);
+    }
+
+    /**
+     * WS 접속이 성립한 횟수. <b>"멈추라고 한 뒤에 새로 붙었나"를 재는 유일한 자다.</b>
+     *
+     * <p>{@link #closedSessionCount()}로는 못 잰다 — 열고 곧바로 닫아도 둘 다 늘어
+     * "안 열었다"와 "열었다가 닫았다"가 같은 값이 된다. 세션 참조도 못 쓴다 —
+     * 끊기면 비워진다.
+     */
+    public int connectionCount() { return connections.get(); }
+
+    void markConnectionEstablished() {
+        connectionEstablishedNanos.set(System.nanoTime());
+        connections.incrementAndGet();
     }
 
     /** 종료 시 구독 반납이 실제로 왔는지. 안 오면 세션을 우리 손으로 안 닫은 것이다. */
@@ -252,6 +321,9 @@ public class FakeChzzkBehavior {
         unsubscribeCalls.set(0);
         closedSessions.set(0);
         unsubscribeSawOpenSession.set(false);
+        // 안 지우면 앞 테스트의 접속 시각이 남아 다음 테스트가 큰 값을 본다.
+        connectionEstablishedNanos.set(0);
+        connections.set(0);
         handshakeQuery.set("");
         // 테스트 클래스들이 스프링 컨텍스트 하나를 공유하므로 이 객체도 하나뿐이다.
         // 앞 클래스가 쓰던 세션을 남겨 두면 뒤 클래스가 그것으로 보내려다 실패한다.
@@ -263,9 +335,13 @@ public class FakeChzzkBehavior {
         answerPong = true;
         disconnectWhenPingMissing = true;
         authStatus = 200;
+        subscribeStatus = 200;
+        sessionUrlPort = 0;
         authDelay = Duration.ZERO;
         closeAfterSubscribed = false;
+        onSubscribeBeforeResponse = () -> { };
         unsubscribeStatus = 200;
+        unsubscribeDelay = Duration.ZERO;
     }
 
     /** 앞 세션이 닫히기를 기다리는 시한. 실측 최대 23ms에 200배 여유다. */

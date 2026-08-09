@@ -82,28 +82,68 @@ public final class SummaryLogger implements AutoCloseable {
 
     /**
      * 수집이 끝났을 때 한 줄. <b>30초 요약은 창 값이라 이 줄이 없으면 판정하려고
-     * 20줄을 뒤져야 한다.</b> 여기 값은 전부 세션 전체 누적이다.
+     * 20줄을 뒤져야 한다.</b>
+     *
+     * <p><b>값 항목이 전부 프로세스 생애 누계다. 아래가 전 항목이다</b> —
+     * 빠진 항이 하나라도 있으면 "이 줄은 어느 경계인가"가 다시 열린다.
+     *
+     * <ul>
+     *   <li><b>프로세스 누계</b>(지표를 세션마다 갈아 끼우지 않는다) — {@code received}·
+     *       {@code lastReceivedAt}·{@code maxReceiveGap}·{@code orderViolations}·
+     *       {@code delayMin}·{@code delayMedian}·{@code delayMax}·{@code delaySamples}·
+     *       {@code system}·{@code decodeFailures}·{@code collectedFor}·
+     *       {@code maxPingGap}·{@code maxPongGap}·{@code sendFailures}·
+     *       {@code callbackFailures}·{@code sinkFailures}·
+     *       {@code reconnects}·{@code outage}
+     *   <li>{@code lastOutageFrom}·{@code lastOutageTo}는 누계가 아니라
+     *       <b>마지막 절단 하나</b>의 시각이다. 누계로 읽으면 "이 시각부터 내내
+     *       끊겨 있었다"가 된다. 한 번도 안 끊겼으면 둘 다 {@code none}이고,
+     *       <b>{@code lastOutageFrom}만 있고 {@code lastOutageTo}가 {@code none}이면
+     *       끊긴 채로 끝난 것이다</b> — 그때 {@code outage}는 판정 시각까지의
+     *       하한이지 유실의 전부가 아니다
+     *   <li>{@code session}은 경계가 아니라 몇 번째 세션의 판정인가다
+     *   <li>{@code reason}은 경계가 아니라 그 판정의 사유다
+     * </ul>
+     *
+     * <p><b>{@code maxReceiveGap}은 누계지만 절단 구간을 빼고 잰다.</b> 안 빼면
+     * 끊겨 있던 시간이 통째로 하나의 수신 공백이 되어 "한산했을 뿐"과 "끊겨
+     * 있었다"가 같은 숫자로 보인다 — 한산한 것은 정상이고(방송을 꺼도 세션은
+     * 안 끊긴다) 끊긴 것은 유실이다. 빼낸 시간은 {@code outage}가 든다.
+     *
+     * <p><b>{@code sinkFailures}도 {@code CollectionMetrics}가 걷어 올린다.</b>
+     * 세는 주체가 {@code ChatSession}이라 세션과 함께 사라지는데, 여기서 그 세션
+     * 값을 직접 읽으면 이 한 항만 경계가 다르다. 그러면 판정이 프로세스 종료
+     * 1회로 옮겨지는 순간 앞 세션이 삼킨 프레임 수가 어디에도 안 남는다 —
+     * {@code maxPingGap}과 같은 결함이다.
+     *
+     * <p>하트비트 값을 {@code Heartbeat}에서 직접 읽지 않는다 — 그 객체는 소켓마다
+     * 새로 만들어져 <b>마지막 세션 값만</b> 든다. 세션이 끝날 때 걷은 것을 여기서 쓴다.
+     *
+     * <p><b>"방송 전체"가 아니다.</b> 세션은 방송이 아니라 계정에 붙어 방송을 꺼도
+     * 안 끊기고(361초 실측), 방송 경계를 알려면 POK-82가 필요하다.
      *
      * <p>수립조차 못 했을 때도 나와야 하므로 static이다 — 그때는 SummaryLogger
      * 인스턴스가 아예 없다.
      *
      * <p>요약과 같은 규칙이다. 본문·작성자 식별자·닉네임·토큰은 어느 필드에도 없다.
      */
-    public static void logFinalVerdict(CollectionMetrics.Verdict verdict, Heartbeat heartbeat,
-                                       long sinkFailures, Duration collectedFor, Object stopReason) {
-        log.info("{}", renderVerdict(verdict, heartbeat, sinkFailures, collectedFor, stopReason));
+    public static void logFinalVerdict(long session, CollectionMetrics.Verdict verdict,
+                                       Object stopReason) {
+        log.info("{}", renderVerdict(session, verdict, stopReason));
     }
 
     /** 순수 함수라 로그 없이도 검사할 수 있다. */
-    public static String renderVerdict(CollectionMetrics.Verdict v, Heartbeat heartbeat,
-                                       long sinkFailures, Duration collectedFor, Object stopReason) {
+    public static String renderVerdict(long session, CollectionMetrics.Verdict v,
+                                       Object stopReason) {
         return "chat.session.verdict"
+                // 첫 항이다. 줄을 세션 단위로 고르는 사람도 도구도 여기서 갈린다.
+                + " session=" + session
                 + " received=" + v.totalReceived()
-                + " collectedFor=" + duration(collectedFor)
+                + " collectedFor=" + duration(v.totalCollectedFor())
                 + " lastReceivedAt=" + instant(v.lastReceivedAt())
                 + " maxReceiveGap=" + duration(v.maxReceiveGap())
-                + " maxPingGap=" + duration(heartbeat.maxPingGap())
-                + " maxPongGap=" + duration(heartbeat.maxPongGap())
+                + " maxPingGap=" + duration(v.maxPingGap())
+                + " maxPongGap=" + duration(v.maxPongGap())
                 + " orderViolations=" + v.orderViolations()
                 + " delayMin=" + duration(v.delayMin())
                 + " delayMedian=" + duration(v.delayMedian())
@@ -111,9 +151,17 @@ public final class SummaryLogger implements AutoCloseable {
                 + " delaySamples=" + v.delaySamples()
                 + " system=" + v.systemEvents()
                 + " decodeFailures=" + v.decodeFailures()
-                + " sendFailures=" + heartbeat.sendFailureCount()
-                + " callbackFailures=" + heartbeat.callbackFailureCount()
-                + " sinkFailures=" + sinkFailures
+                + " sendFailures=" + v.sendFailures()
+                + " callbackFailures=" + v.callbackFailures()
+                + " sinkFailures=" + v.sinkFailures()
+                // 끊겼다 붙은 횟수와 그동안 놓친 시간. 위 maxReceiveGap이 절단을
+                // 빼고 재므로, 이 둘이 없으면 유실 구간이 어느 항에도 안 남는다.
+                + " reconnects=" + v.reconnects()
+                + " outage=" + duration(v.totalOutage())
+                // PRD 완료 조건: "끊긴 시각·복구 시각 두 값". 누적 시간만으로는
+                // "언제 놓쳤나"를 못 찾는다 — 영상과 대조하려면 시각이 필요하다.
+                + " lastOutageFrom=" + instant(v.lastOutageFrom())
+                + " lastOutageTo=" + instant(v.lastOutageTo())
                 // 왜 끝났는지가 없으면 "정상 종료"와 "조용히 끊겼다"가 같은 줄이 된다.
                 + " reason=" + (stopReason == null ? "SHUTDOWN" : stopReason);
     }

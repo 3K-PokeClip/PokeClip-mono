@@ -45,3 +45,18 @@ pokeclip:
     base-url: https://openapi.chzzk.naver.com
     # 세션 URL 30초 만료의 절반. 만료 탓인지 우리가 느린 건지가 구분된다.
     establish-timeout: 15s
+    # 재시도 간격. 둘 다 2026-08-08 실서버 실측으로 정했다.
+    #
+    # 첫 간격이 1초인 근거: 발급만 하고 안 붙은 세션은 연결 자리를 안 먹는다.
+    # 발급 3회를 쌓아 둔 채 4회째로 실제 접속했더니 connected가 285ms에 왔다.
+    # 즉 재시도가 스스로 자리를 태우지 않으므로 짧게 잡아도 된다.
+    #
+    # 상한이 60초인 근거: 서버가 자리를 놓아주는 시한(T)이 우아한 종료 20초,
+    # 급사 5초, 네트워크 단절은 미측정이나 이론상 85초(pingInterval+pingTimeout)다.
+    # 최악값으로 잡아도 T/상한 = 85/60 = 1.4로, 상시 점유가 1개 남짓이라
+    # 상한 3개에 닿지 않는다.
+    #
+    # 세션 목록은 "발급"이 아니라 "연결"을 색인한다. 발급만 한 세션은 목록에
+    # 아예 안 나오므로, 목록으로는 이 값을 정할 수 없다 — 붙어 봐야 안다.
+    reconnect-first-delay: ${CHZZK_RECONNECT_FIRST_DELAY:1s}
+    reconnect-max-delay: ${CHZZK_RECONNECT_MAX_DELAY:60s}

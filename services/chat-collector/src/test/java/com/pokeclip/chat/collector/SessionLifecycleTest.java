@@ -16,8 +16,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * T10. 세션이 살아 있는 동안 오는 SYSTEM 이벤트가 남는지.
  *
- * <p>동의 철회(revoked)는 <b>대응이 POK-93</b>이다. 여기서는 온 사실이 남는지만 본다 —
- * 안 남으면 채팅이 끊긴 뒤 원인을 되짚을 근거가 아무 데도 없다.
+ * <p>동의 철회(revoked)로 <b>수집을 멈추는지</b>는 여기서 안 본다 —
+ * {@code ReconnectTest.동의가_철회되면_재시도하지_않고_멈춘다}가 본다.
+ * 이 클래스가 지키는 것은 <b>흔적</b>이다: 멈춘 뒤에 원인을 되짚으려면
+ * 로그 한 줄과 요약의 건수가 남아 있어야 한다.
  */
 @FakeChzzkTest
 class SessionLifecycleTest {
@@ -39,7 +41,8 @@ class SessionLifecycleTest {
         try (LogCaptor captor = new LogCaptor()) {
             CollectionStatus status = new CollectionStatus();
             runner = new CollectorRunner(new ChzzkProperties(
-                    true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status, restClientBuilder);
+                    true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
+                    Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
             runner.start();
             assertThat(status.state())
                     .as("붙지도 않았다면 revoked를 받을 길이 없다")
@@ -69,7 +72,8 @@ class SessionLifecycleTest {
     void unsubscribed도_요약에_남는다() throws Exception {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
-                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status, restClientBuilder);
+                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
+                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
         runner.start();
         assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
 
@@ -92,7 +96,8 @@ class SessionLifecycleTest {
     void 수립_과정의_connected와_subscribed가_요약에_남는다() {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
-                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5)), status, restClientBuilder);
+                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
+                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
         runner.start();
 
         assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);

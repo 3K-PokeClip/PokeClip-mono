@@ -4,6 +4,7 @@ import com.pokeclip.chat.collector.engineio.EngineIoFrame;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -56,6 +57,20 @@ public class FakeChzzkServer implements WebSocketConfigurer {
                 .setAllowedOrigins("*");
     }
 
+    /**
+     * 오류 봉투. <b>code·message가 상태 코드를 따라간다.</b>
+     *
+     * <p>여기 원래 상태와 무관하게 {@code {"code":401,...}}이 박혀 있었다. 지금
+     * 영향이 없는 것은 우리가 오류 본문을 안 읽기 때문(토큰 되비침 방지)이지
+     * 그 본문이 맞아서가 아니다 — <b>가짜 서버가 거짓말을 하면 언젠가 그 위에
+     * 단언이 선다.</b>
+     */
+    static String errorBody(int status) {
+        HttpStatus resolved = HttpStatus.resolve(status);
+        String message = resolved == null ? "Error" : resolved.getReasonPhrase();
+        return "{\"code\":" + status + ",\"message\":\"" + message + "\",\"content\":null}";
+    }
+
     @RestController
     public static class FakeSessionRest {
 
@@ -75,11 +90,14 @@ public class FakeChzzkServer implements WebSocketConfigurer {
                 Thread.sleep(behavior.authDelay.toMillis());
             }
             if (behavior.authStatus != 200) {
-                return ResponseEntity.status(behavior.authStatus)
-                        .body("{\"code\":401,\"message\":\"Unauthorized\",\"content\":null}");
+                return ResponseEntity.status(behavior.authStatus).body(errorBody(behavior.authStatus));
             }
+            // 죽은 포트를 주면 발급은 200인데 그 url로는 못 붙는다. ②의 실패를
+            // 만드는 유일한 길이라 여기서 갈아 끼운다.
+            int socketPort = behavior.sessionUrlPort != 0
+                    ? behavior.sessionUrlPort : request.getServerPort();
             String url = request.getScheme() + "://" + request.getServerName()
-                    + ":" + request.getServerPort() + "?auth=FAKE-AUTH";
+                    + ":" + socketPort + "?auth=FAKE-AUTH";
             // 봉투는 실측 그대로다(01_probe.md) — code·message가 한 겹 더 있다.
             return ResponseEntity.ok(
                     "{\"code\":200,\"message\":null,\"content\":{\"url\":\"" + url + "\"}}");
@@ -93,10 +111,20 @@ public class FakeChzzkServer implements WebSocketConfigurer {
          */
         @PostMapping("/open/v1/sessions/events/subscribe/chat")
         public ResponseEntity<String> subscribe(@RequestParam String sessionKey) {
+            // 거부하면 subscribed를 안 쏜다. 거부해 놓고 쏘면 "구독이 됐다"와
+            // "안 됐다"가 소켓에서 같아 보여, 클라이언트가 ④의 실패를 무시해도
+            // ⑤가 통과시켜 준다.
+            if (behavior.subscribeStatus != 200) {
+                return ResponseEntity.status(behavior.subscribeStatus)
+                        .body(errorBody(behavior.subscribeStatus));
+            }
             if (behavior.sendSubscribed) {
                 behavior.emitSystem("{\"type\":\"subscribed\",\"data\":"
                         + "{\"eventType\":\"CHAT\",\"channelId\":\"FAKE-CHANNEL\"}}");
             }
+            // 수립 스레드가 이 응답에 막혀 있는 동안 도는 훅. 소켓은 이미 열려
+            // 있으므로 여기서 쏜 프레임은 "수립이 아직 안 끝난 세션"으로 들어간다.
+            behavior.onSubscribeBeforeResponse.run();
             // 응답을 붙들고 있는 동안 클라이언트의 부팅 스레드는 여기서 막혀 있다.
             // 그 사이에 절단을 끝까지 태워야 "수립 직후 절단"이 매번 같은 순서로 난다.
             if (behavior.closeAfterSubscribed) {
@@ -116,13 +144,19 @@ public class FakeChzzkServer implements WebSocketConfigurer {
         FakeUnsubscribeRest(FakeChzzkBehavior behavior) { this.behavior = behavior; }
 
         @PostMapping("/open/v1/sessions/events/unsubscribe/chat")
-        public ResponseEntity<String> unsubscribe(@RequestParam String sessionKey) {
+        public ResponseEntity<String> unsubscribe(@RequestParam String sessionKey)
+                throws InterruptedException {
             // 실패해도 도착한 사실은 센다. 안 세면 "왔는데 터졌다"와 "아예 안 왔다"가
             // 같아 보인다.
             behavior.countUnsubscribeCall();
+            // 세는 것이 먼저다. 붙들고 있는 동안 뒷정리 스레드가 여기 갇혀 있으므로,
+            // 테스트는 이 카운터로 "갇힌 시점"을 정확히 집어낼 수 있다.
+            if (!behavior.unsubscribeDelay.isZero()) {
+                Thread.sleep(behavior.unsubscribeDelay.toMillis());
+            }
             if (behavior.unsubscribeStatus != 200) {
                 return ResponseEntity.status(behavior.unsubscribeStatus)
-                        .body("{\"code\":500,\"message\":\"Internal Error\",\"content\":null}");
+                        .body(errorBody(behavior.unsubscribeStatus));
             }
             return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
         }
@@ -156,6 +190,7 @@ public class FakeChzzkServer implements WebSocketConfigurer {
             behavior.remember(session);
             lastPingAt.set(System.nanoTime());
             behavior.startPingClock();
+            behavior.markConnectionEstablished();
 
             // 전송은 전부 behavior.send()를 지난다. 스프링 세션은 동시 전송에
             // 안전하지 않아서, 락을 나눠 쥐면 채팅 홍수 + 하트비트가 겹치는
