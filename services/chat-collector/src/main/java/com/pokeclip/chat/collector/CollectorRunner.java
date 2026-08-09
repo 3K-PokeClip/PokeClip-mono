@@ -157,6 +157,12 @@ public class CollectorRunner implements ApplicationRunner {
      * 둘 이상이 서로 다른 경로로 본다 — 둘이 같이 빈 것을 보면 나중 시각이 덮어써
      * 끊긴 시간이 그만큼 짧게 보고된다. 세우기는 {@code compareAndSet(null, …)},
      * 걷기는 {@code getAndSet(null)}이라 둘 다 한 번씩만 이긴다.
+     *
+     * <p><b>🔴 이 원자성을 지키는 검사가 없다.</b> 평범한 필드로 되돌려도 전체가 초록이다
+     * (실측). 겹치는 창이 널 검사와 대입 사이 몇 인스트럭션이라 붙잡을 I/O가 없어서
+     * <b>결정적으로 재현할 장치를 못 만들었다</b> — "원리적으로 불가능"이 아니라
+     * "지금 코드에 관측 가능한 차이를 만들 손잡이가 없다"이다.
+     * <b>되돌려도 빌드가 안 막으니, 고치려거든 여기를 먼저 읽어라.</b>
      */
     private final AtomicReference<Instant> disconnectedAt = new AtomicReference<>();
 

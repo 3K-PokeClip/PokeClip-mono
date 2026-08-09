@@ -119,8 +119,17 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 ```
 
 `CHZZK_ACCESS_TOKEN`은 **유저 Access Token**이다. 채팅 구독은 Client 인증으로 못 받는다.
-만료된 토큰(수명 24시간)은 빈 값이 아니라 검증에 안 걸리므로, 그때는 조용히 재시도하지
-않고 `chat.session.stopped stage=AUTH reason=SESSION_AUTH_FAILED`를 남기고 멈춘다.
+만료된 토큰(수명 24시간)은 빈 값이 아니라 검증에 안 걸린다. 그때는 **재시도해도 영원히
+안 풀리므로 다시 붙지 않고** `chat.session.stopped stage=AUTH reason=SESSION_AUTH_REJECTED`를
+남기고 멈춘다 — 401·403이 여기다. 반대로 5xx·타임아웃은 `SESSION_AUTH_FAILED`로 갈라
+**재연결이 계속 시도한다.** 하나로 뭉치면 5xx 한 번에 영구 정지하거나 만료 토큰으로
+영원히 재시도한다.
+
+**재연결 간격은 실측으로 정했다** — 첫 **1초**, 상한 **60초**(두 배씩 증가).
+`CHZZK_RECONNECT_FIRST_DELAY`·`CHZZK_RECONNECT_MAX_DELAY`로 바꿀 수 있지만
+**평소에는 건드리지 않는다.** 발급만 하고 안 붙은 세션은 연결 자리를 안 먹고(그래서
+1초여도 재시도가 스스로 한도를 태우지 않는다), 서버가 자리를 놓아주는 시한이 최악
+85초라 상한 60초면 상시 점유가 1개 남짓이다.
 
 받고 있는지는 헬스체크에 나온다.
 
@@ -128,6 +137,11 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 curl -s localhost:8083/actuator/health
 # {"collectorHealth":{"details":{"status":"collecting"},"status":"UP"}}
 ```
+
+**재연결 중에는 DOWN이다.** 끊긴 동안 채팅이 실제로 안 들어오므로 UP이면 거짓말이 된다.
+
+> ⚠ **이 헬스체크를 liveness 프로브에 직접 걸면 재시작 루프가 된다.**
+> 일시적 DOWN이 이제 **정상 운영 경로**다. readiness에 걸거나 DOWN 지속 시간으로 판단한다.
 
 **치지직 실서버에 붙어 보는 테스트는 기본으로 안 돈다.** 돌리려면
 `CHZZK_LIVE_PROBE=true`를 **명시적으로** 준다.
@@ -194,17 +208,33 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 "키가 틀림"(연결 거절)과 "Auth 장애"(판단 불가)는 조치가 정반대라 둘 다 4xx면
 Go 쪽에서 구분이 안 된다.
 
-### chat-collector — 치지직 채팅 수신 (POK-85)
+### chat-collector — 치지직 채팅 수신 (POK-85) · 자동 재연결 (POK-86)
 
-**받아서 세는 데까지** 한다. 적재(POK-84) · 영상 시각 매핑(POK-92) · 스트리머
-채널 연동(POK-93)은 다음 카드다.
+**받아서 세고, 끊기면 다시 붙는 데까지** 한다. 적재(POK-84) · 영상 시각 매핑(POK-92) ·
+스트리머 채널 연동(POK-93)은 다음 카드다.
 
 | | |
 |---|---|
 | 수신 | 세션 발급 → WebSocket → 구독 → `CHAT`. Engine.IO 3을 직접 다룬다 |
 | 하트비트 | **전용 스케줄러에서만** `2`를 보낸다. 주기는 핸드셰이크의 `pingInterval`에서 파생 |
+| **절단 감지** | 신호 **셋** — WS 종료 콜백 · ping 송신 실패 · **pong이 임계를 넘도록 안 옴**(좀비) |
+| **재연결** | 세션 URL은 재사용이 안 되므로 **세션 발급부터 다시** 탄다. 두 배씩 늘려 상한에서 멈춘다 |
 | 관측 | 30초마다 `chat.summary` 한 줄 — 건수 · ping/pong 최대 공백 · 순서 위반 · 전달 지연 |
-| 종료 | 최종 판정 한 줄 → 구독 반납 → 소켓 닫기. 반납까지 약 1초 |
+| 종료 | 세션 줄 → 구독 반납 → 소켓 닫기 → **프로세스 생애 판정 한 줄** |
+
+**"채팅이 안 온다"는 절단 신호로 안 쓴다.** 방송을 꺼도 세션은 살아 있고 채팅만
+안 온다(361초 확인). 한산한 방송과 끊긴 연결을 그것으로는 못 가른다.
+
+**재시도해도 안 풀리는 것만 포기한다** — 401·403과 `revoked` 셋뿐이다.
+그 밖에는 **영원히 다시 붙는다.** 연결 상한 초과는 특별 취급하지 않는다 —
+핸드셰이크 실패와 응답으로 구분되지 않는다.
+
+**판정 줄은 프로세스 생애에 한 줄이다**(세션마다가 아니다). 재연결이 N번 돌아도
+한 줄이고, 거기에 `reconnects=` · `outage=`(누적 절단 시간) · `lastOutageFrom/To`가 실린다.
+**세션 하나의 값은 `chat.session.ended`가 따로 낸다.**
+
+**절단 구간은 `maxReceiveGap`에 안 섞인다.** 섞으면 "한산했을 뿐"과 "끊겨 있었다"가
+같은 숫자로 보인다.
 
 **DB를 안 쓴다.** 받은 채팅은 세기만 하고 아무 데도 안 남는다.
 
@@ -234,9 +264,7 @@ Go 쪽에서 구분이 안 된다.
 
 다음 작업 순서:
 
-1. **`chat-collector`에 재연결을 넣는다 (POK-86).** 지금은 끊기면 그걸로 끝이고,
-   그 구간 채팅은 되돌릴 수 없다. 세션 URL은 재사용이 안 되므로 세션 발급부터 다시다
-2. `clip`에 방송 생명주기 이벤트 FIFO 소비 스텁을 넣는다 (POK-26)
+1. `clip`에 방송 생명주기 이벤트 FIFO 소비 스텁을 넣는다 (POK-26)
 2. **`pairing_exchange_attempts` 청소 작업을 넣는다.** 교환이 `permitAll`이라
    미인증 트래픽이 행을 쌓는다 — 이게 없으면 운영에 올릴 수 없다
 3. `POST /api/stream-keys/pairing-codes/exchange`의 `X-Forwarded-For` 처리.
