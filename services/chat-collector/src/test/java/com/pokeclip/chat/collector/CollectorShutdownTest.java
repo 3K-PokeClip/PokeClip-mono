@@ -169,15 +169,23 @@ class CollectorShutdownTest {
      * 자리가 남고(실측), 상한이 3개라 짧은 간격의 재시작 세 번이면 막힌다 —
      * 이 카드가 없애려던 좀비를 종료 경로가 만드는 셈이다.
      *
-     * <p>지연 3초의 근거: {@code stop()}의 기본 대기(2초)보다 길고 읽기 시한(5초)보다
-     * 짧다. 짧으면 인터럽트 전에 끝나 검사가 헛돌고, 길면 반납이 스스로 실패해
-     * 무엇 때문에 실패했는지 갈리지 않는다.
+     * <p><b>지연이 5초인 이유는 창 때문이다.</b> 헛통과하는 것은 {@code stop()}이
+     * 판단하기 <b>전에</b> 반납이 스스로 끝난 실행이고, 그 여백은
+     * 지연 − 기본 대기(2초)다. 3초면 창이 1초뿐이라 컨텍스트 닫기가 1초만 넘어도
+     * <b>단언이 저절로 참</b>이 된다 — 인터럽트를 되살려도 초록인 실행이 생긴다.
+     * 5초면 3초다.
+     *
+     * <p><b>읽기 시한을 같이 올린다.</b> 기본 5초 그대로면 반납이 스스로
+     * read-timeout으로 죽어 "인터럽트당한 것"과 같은 결말이 되고, 무엇 때문에
+     * 실패했는지 갈리지 않는다. 여기서 보는 것은 시한이 아니라 <b>종료가
+     * 기다리는가</b>다 — 시한 자체는 {@code HttpTimeoutTest}가 본다.
      */
     @Test
     void 반납_왕복_중에_종료해도_인터럽트하지_않고_기다린다() throws Exception {
-        behavior.unsubscribeDelay = Duration.ofSeconds(3);
+        behavior.unsubscribeDelay = Duration.ofSeconds(5);
 
-        ConfigurableApplicationContext context = bootCollector();
+        ConfigurableApplicationContext context =
+                bootCollector("--spring.http.clients.read-timeout=15s");
         assertThat(context.getBean(CollectionStatus.class).state())
                 .as("붙지도 않았다면 반납할 구독이 없어 이 검사는 아무것도 안 본다")
                 .isEqualTo(CollectionStatus.State.COLLECTING);
@@ -192,12 +200,22 @@ class CollectorShutdownTest {
                     .as("반납이 아직 안 나갔다면 종료가 인터럽트할 왕복이 없다")
                     .isEqualTo(1);
 
+            long began = System.nanoTime();
             context.close();
+            Duration closing = Duration.ofNanos(System.nanoTime() - began);
 
             assertThat(captor.messages())
                     .as("반납 왕복을 인터럽트하면 자리가 서버에 남아 상한 3개를 먹는다")
                     .contains("chat.session.released session=" + session
                             + " subscription=returned");
+
+            // <b>전제를 같이 잰다.</b> 지연이 어쩌다 사라지면 반납이 종료보다 먼저
+            // 끝나고, 그러면 위 단언은 인터럽트를 되살려도 통과한다 — 검사가 아무것도
+            // 안 지키는 상태가 조용히 생긴다. 닫기가 기본 대기(2초)보다 오래 걸렸다는
+            // 것이 곧 "반납이 그 시점에 아직 나가 있었다"는 뜻이다.
+            assertThat(closing)
+                    .as("닫기가 기본 대기 안에 끝났다면 인터럽트할 왕복이 없었던 것이다")
+                    .isGreaterThan(Duration.ofSeconds(2));
         }
     }
 
@@ -208,14 +226,18 @@ class CollectorShutdownTest {
         }
     }
 
-    private ConfigurableApplicationContext bootCollector() {
+    private ConfigurableApplicationContext bootCollector(String... extraArgs) {
         // 명령행 인자로 넘긴다. .properties()는 기본값 소스라 우선순위가 가장 낮아
         // application-test.yml의 enabled: false에 진다 — 실제로 그렇게 됐다.
+        String[] args = java.util.stream.Stream.concat(
+                java.util.stream.Stream.of(
+                        "--pokeclip.chzzk.enabled=true",
+                        "--pokeclip.chzzk.base-url=http://localhost:" + port,
+                        "--pokeclip.chzzk.establish-timeout=" + Duration.ofSeconds(5)),
+                java.util.Arrays.stream(extraArgs)).toArray(String[]::new);
         return new SpringApplicationBuilder(CollectorApplication.class)
                 .web(WebApplicationType.NONE)
                 .profiles("test")
-                .run("--pokeclip.chzzk.enabled=true",
-                        "--pokeclip.chzzk.base-url=http://localhost:" + port,
-                        "--pokeclip.chzzk.establish-timeout=" + Duration.ofSeconds(5));
+                .run(args);
     }
 }
