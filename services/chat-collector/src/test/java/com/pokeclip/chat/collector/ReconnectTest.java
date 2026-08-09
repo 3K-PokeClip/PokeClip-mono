@@ -357,6 +357,88 @@ class ReconnectTest {
     }
 
     /**
+     * <b>종료가 「끊겨서 죽은 세션」을 정상 종료로 기록하면 안 된다.</b>
+     *
+     * <p>우리가 멈추는 중이면 절단 신호는 입구에서 버려진다 — 뒷정리는 {@code stop()}이
+     * 하기 때문이다. 그래서 그 절단은 {@code status}에 한 글자도 안 남고, 종료가 사유를
+     * {@code status}에서만 읽으면 <b>끊겨 죽은 세션이 세션 종료 줄에 {@code SHUTDOWN}으로
+     * 기록된다.</b> 로그만 보는 사람은 그 방송이 우아하게 끝났다고 읽는다.
+     *
+     * <p><b>창을 반납 왕복으로 벌린다.</b> 종료는 뒷정리 스레드가 반납에 갇혀 있으면
+     * 그것이 끝날 때까지 기다린다(거기서 인터럽트하면 세션 키가 이미 소모돼 아무도
+     * 다시 못 보낸다). 그 몇 초가 <b>신호는 내려갔고 뒷정리는 아직 안 한</b> 구간이라,
+     * 절단을 거기에 떨어뜨린다. 앞 세션을 그 왕복에 가두고 <b>다음 세션을 직접 세워</b>
+     * 종료가 치울 것을 만든다.
+     *
+     * <p><b>순서가 어긋나면 조용히 통과하지 않는다.</b> 절단이 신호보다 먼저 도착했다면
+     * 그 신호가 살아서 {@code status}를 RECONNECTING(TRANSPORT_CLOSED)으로 내리므로,
+     * 아래 {@code reason()} 단언이 그 자리에서 터진다.
+     */
+    @Test
+    void 종료가_끊겨_죽은_세션을_정상_종료로_기록하지_않는다() throws Exception {
+        // 뒷정리 스레드를 반납 왕복에 가둔다. 도착을 센 뒤에 붙들므로 건수가 1이 된
+        // 시점이 곧 갇힌 시점이다. 3초는 종료의 기본 대기(2초)보다 길다.
+        behavior.unsubscribeDelay = Duration.ofSeconds(3);
+        try (LogCaptor captor = new LogCaptor()) {
+            // 재시도 간격을 크게 준다. 갇힌 스레드가 풀린 뒤 다음 시도가 끼어들면
+            // 무엇을 읽었는지 흐려진다.
+            start(Duration.ofSeconds(30), Duration.ofSeconds(60));
+            assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
+
+            behavior.closeSession();
+            awaitUntil(() -> behavior.unsubscribeCallCount() == 1);
+            assertThat(behavior.unsubscribeCallCount())
+                    .as("반납이 아직 안 나갔다면 뒷정리 스레드가 안 갇혔고 창이 안 열린다")
+                    .isEqualTo(1);
+
+            assertThat(runner.start())
+                    .as("다음 세션이 안 섰다면 종료가 치울 세션이 없어 이 검사는 아무것도 안 본다")
+                    .isTrue();
+            long session = runner.lastSessionNo();
+
+            Thread stopper = new Thread(runner::stop, "test-stop");
+            stopper.start();
+            // 신호를 내리는 것이 stop()의 첫 문장이다. 자는 동안 그것이 지나간다 —
+            // 안 지나갔으면 아래 reason() 단언이 터진다.
+            Thread.sleep(300);
+
+            behavior.closeSession();
+            awaitUntil(() -> closedLines(captor) == 2);
+            assertThat(closedLines(captor))
+                    .as("절단이 도착 안 했으면 종료가 사유를 고를 일이 없다")
+                    .isEqualTo(2);
+            // 종료 자신의 반납까지 3초를 더 자면 검사만 느려진다. 갇힌 왕복은
+            // 이미 시간을 읽어 갔으므로 여기서 지워도 안 짧아진다.
+            behavior.unsubscribeDelay = Duration.ZERO;
+
+            stopper.join(Duration.ofSeconds(20).toMillis());
+            assertThat(stopper.isAlive())
+                    .as("종료가 안 끝났으면 아래 줄은 아직 안 나온 것이다")
+                    .isFalse();
+
+            assertThat(status.reason())
+                    .as("절단이 신호보다 먼저 도착했다면 겨냥한 순서를 한 번도 안 만든 것이다")
+                    .isNull();
+            assertThat(endedLine(captor, session))
+                    .as("끊겨 죽은 세션이 정상 종료로 남으면 로그만 보는 사람은 잘 끝났다고 읽는다")
+                    .contains("reason=" + StopReason.TRANSPORT_CLOSED);
+        }
+    }
+
+    private static long closedLines(LogCaptor captor) {
+        return captor.messages().stream()
+                .filter(m -> m.startsWith("chat.session.closed"))
+                .count();
+    }
+
+    private static String endedLine(LogCaptor captor, long session) {
+        return captor.messages().stream()
+                .filter(m -> m.startsWith("chat.session.ended session=" + session + " "))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("session=" + session + " 종료 줄이 안 나갔다"));
+    }
+
+    /**
      * <b>한 번의 죽음에 신호가 둘 와도 루프는 하나만 돈다.</b>
      *
      * <p>감지원이 셋이라(전송 절단 · pong 임계 · ping 송신 실패) 같은 죽음이 서로

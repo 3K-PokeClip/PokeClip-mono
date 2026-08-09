@@ -919,7 +919,12 @@ public class CollectorRunner implements ApplicationRunner {
         reconnector.shutdownNow();
         SessionScope scope = activeSession.get();
         if (scope != null) {
-            cleanUpOnce(scope, status.reason());
+            // <b>이 세션에 온 절단이 있으면 그것이 이 세션의 끝이다.</b> 멈추는 중에
+            // 도착한 절단은 신호가 입구에서 버려지므로(뒷정리는 여기서 한다)
+            // {@code status}에 한 글자도 안 남는다 — 거기서만 읽으면 끊겨서 죽은
+            // 세션이 {@code reason=SHUTDOWN}으로 기록되고, 로그만 보는 사람은
+            // 그 방송이 우아하게 끝났다고 읽는다.
+            cleanUpOnce(scope, scope.endReason(status.reason()));
         }
         // 판정이 나가야 할 두 시점 중 둘째. 영구 정지에서 이미 나갔으면 가드가 막는다.
         // <b>꺼져 있으면 안 낸다</b> — 원래 cleanUpOnce의 판정 호출이 그 검사를 달고
