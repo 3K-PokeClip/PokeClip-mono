@@ -21,10 +21,19 @@ public class CollectionStatus {
      *                       없으면 "방금 끊겼다"와 "10분째 못 붙는다"가 같아 보인다
      * @param attempt        몇 번째 재시도인지. 0이면 재연결 중이 아니다
      */
-    private record Snapshot(State state, StopReason reason, Instant disconnectedAt, int attempt) { }
+    public record Snapshot(State state, StopReason reason, Instant disconnectedAt, int attempt) { }
 
     private final AtomicReference<Snapshot> current =
             new AtomicReference<>(new Snapshot(State.DISABLED, null, null, 0));
+
+    /**
+     * 지금 이 순간의 상태 전부. <b>여러 항을 함께 보는 쪽은 이것을 쓴다.</b>
+     *
+     * <p>아래 낱개 getter를 이어 부르면 <b>서로 다른 순간의 값이 섞인다</b> —
+     * 상태만 보고 갈래를 고른 뒤 사유를 읽는 사이에 재접속이 성공하면, 그 사유는
+     * 이미 비어 있다. 갈래는 "재연결 중"인데 상세는 "사유 없음"인 응답이 나간다.
+     */
+    public Snapshot snapshot() { return current.get(); }
 
     public State state() { return current.get().state(); }
 
