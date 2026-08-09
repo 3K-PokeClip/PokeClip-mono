@@ -24,6 +24,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 @FakeChzzkTest
 class FakeChzzkServerTest {
 
+    /** 수립 예산. 이 파일은 접속 자체를 보므로 넉넉히 준다. */
+    private static final java.time.Duration BUDGET = java.time.Duration.ofSeconds(5);
+
+    /** 중단 신호가 없는 호출. 중단은 EstablishCutCleanupTest가 본다. */
+    private static final java.util.function.BooleanSupplier NO_ABORT = () -> false;
+
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
 
@@ -130,7 +136,7 @@ class FakeChzzkServerTest {
     @Test
     void 앞_세션의_종료_프레임이_reset을_넘어오지_않는다() {
         for (int i = 0; i < 100; i++) {
-            EngineIoSocket socket = EngineIoSocket.open(uri(), frame -> { }, () -> { });
+            EngineIoSocket socket = EngineIoSocket.open(uri(), frame -> { }, () -> { }, BUDGET, NO_ABORT);
 
             assertThat(behavior.receivedFrames())
                     .as("앞 시행이 닫은 소켓의 프레임이 reset을 넘어왔다 (시행 %d)", i)

@@ -38,6 +38,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 @FakeChzzkTest
 class HeartbeatTest {
 
+    /** 수립 예산. 이 파일은 접속 자체를 보므로 넉넉히 준다. */
+    private static final java.time.Duration BUDGET = java.time.Duration.ofSeconds(5);
+
+    /** 중단 신호가 없는 호출. 중단은 EstablishCutCleanupTest가 본다. */
+    private static final java.util.function.BooleanSupplier NO_ABORT = () -> false;
+
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
 
@@ -934,7 +940,7 @@ class HeartbeatTest {
                 return;
             }
             onEvent.accept(frame, ref.get());
-        }, () -> { });
+        }, () -> { }, BUDGET, NO_ABORT);
         ready.set(true);
 
         assertThat(open.await(5, TimeUnit.SECONDS)).isTrue();

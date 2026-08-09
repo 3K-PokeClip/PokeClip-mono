@@ -26,6 +26,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 실패"라고 못박은 상태 그 자체다. 게다가 정리 가드가 이미 소모돼
  * {@code @PreDestroy}의 {@code stop()}도 아무것도 못 한다.
  *
+ * <p><b>같은 구간에 우리가 멈추는 경우도 여기서 본다.</b> 수립 구간은 부팅 스레드가
+ * 아직 아무것도 못 올린 채 매달려 있는 자리라, 밖에서 들어오는 사건(절단 · 종료)이
+ * 전부 여기서 갈린다.
+ *
  * <p><b>순서를 우연에 맡기지 않는다.</b> 가짜 서버가 구독 REST 응답을 붙들고 있는
  * 동안 끊고, 클라이언트의 구독 반납이 도착한 것을 보고서야 응답한다. 그 시점에
  * 부팅 스레드는 아직 구독 HTTP 호출 안이라, 수립 마무리는 반드시 절단 처리
@@ -62,9 +66,12 @@ class EstablishCutCleanupTest {
             CollectionStatus status = new CollectionStatus();
             runner = start(status, Duration.ofSeconds(5));
 
+            // 절단 뒤 상태가 RECONNECTING인지 STOPPED인지는 여기서 안 고정한다 —
+            // 재연결이 붙으면 그 값이 갈리고, 이 파일이 지키는 것은 그 이름이 아니라
+            // "COLLECTING으로 덮이지 않는다"와 "health가 UP이 아니다"다.
             assertThat(status.state())
                     .as("정리가 이미 끝났는데 COLLECTING이면 health는 UP인 채로 수집만 죽는다")
-                    .isEqualTo(CollectionStatus.State.STOPPED);
+                    .isNotEqualTo(CollectionStatus.State.COLLECTING);
             assertThat(status.reason()).isEqualTo(StopReason.TRANSPORT_CLOSED);
             assertThat(new CollectorHealth(status).health().getStatus().getCode())
                     .as("수집이 죽었는데 health가 UP이면 밖에서는 아무 신호도 없다")
@@ -76,40 +83,246 @@ class EstablishCutCleanupTest {
                     .as("이미 닫힌 소켓 위에 올린 실행기는 ping_send_failed와 요약만 계속 뱉는다")
                     .isEmpty();
 
-            List<String> verdicts = captor.messages().stream()
-                    .filter(m -> m.startsWith("chat.session.verdict")).toList();
-            assertThat(verdicts)
+            // 뒷정리가 실제로 돌았는가. 판정 줄이 이 자리에서 빠졌으므로
+            // <b>가드 재소모 여부는 반납 횟수로 본다</b> — 정리가 두 번 돌면
+            // 반납도 두 번 나가고, 아예 안 돌면 0이다.
+            awaitUntil(() -> behavior.unsubscribeCallCount() == 1);
+            assertThat(behavior.unsubscribeCallCount())
+                    .as("수립 직후 절단에서 정리가 안 돌면 구독이 서버에 남아 상한 3개를 먹는다")
+                    .isEqualTo(1);
+
+            long session = runner.lastSessionNo();
+            assertThat(verdicts(captor, session))
+                    .as("절단은 끝이 아니다. 거기서 판정을 내면 최종이 아닌 최종 판정이 쌓인다")
+                    .isZero();
+
+            runner.stop();
+
+            // 양성 대조. 아예 안 나가면 위 0줄 단언은 아무것도 안 본 것이다.
+            assertThat(verdicts(captor, session))
                     .as("판정이 두 줄이면 어느 것이 진짜 끝인지 흐려진다")
-                    .hasSize(1);
-            assertThat(verdicts.get(0)).contains("reason=" + StopReason.TRANSPORT_CLOSED);
+                    .isEqualTo(1);
+            assertThat(captor.messages())
+                    .anyMatch(m -> m.startsWith("chat.session.verdict session=" + session + " ")
+                            && m.contains("reason=" + StopReason.TRANSPORT_CLOSED));
         }
+    }
+
+    private static long verdicts(LogCaptor captor, long session) {
+        return captor.messages().stream()
+                .filter(m -> m.startsWith("chat.session.verdict session=" + session + " "))
+                .count();
     }
 
     /**
      * 같은 뿌리의 변종. 절단이 {@code open()} 진행 중에 오면 부팅 스레드는 시한
-     * 만료로 떨어지는데, 그 사유로 이미 찍힌 {@code TRANSPORT_CLOSED}를 덮으면
-     * <b>결과가 원인을 지운다</b> — 왜 끊겼는지가 어디에도 안 남는다.
+     * 만료로 떨어진다. <b>그때도 COLLECTING으로 올라가지 않고 health가 UP이 아니다</b> —
+     * 이 파일이 막는 것은 그 상태이고, 어느 사유가 남느냐는 그 다음 이야기다.
+     *
+     * <p><b>사유는 나중에 온 것이 남는다.</b> 절단이 {@code TRANSPORT_CLOSED}를 찍은
+     * 뒤 시한 만료가 그 위에 {@code ESTABLISH_TIMEOUT}을 얹는다. 둘 다 재시도해도
+     * 되는 사유라 어느 쪽이 남든 재연결 판단은 안 갈리고, 사유 필드의 뜻은
+     * <b>"지금 왜 못 붙고 있나"</b>다. 앞의 것은 로그에 남는다 —
+     * {@code chat.session.closed reason=TRANSPORT_CLOSED}.
      */
     @Test
-    void 절단이_먼저면_수립_시한_만료가_그_사유를_덮지_않는다() {
+    void 절단이_먼저여도_수립_시한_만료는_COLLECTING으로_올라가지_않는다() {
         behavior.sendSubscribed = false;        // ⑤가 영영 안 온다
         behavior.closeAfterSubscribed = true;   // 그 전에 이미 끊겼다
 
         CollectionStatus status = new CollectionStatus();
         runner = start(status, Duration.ofSeconds(1));
 
-        assertThat(status.state()).isEqualTo(CollectionStatus.State.STOPPED);
+        assertThat(status.state())
+                .as("수립 시한 만료가 COLLECTING을 찍으면 정리는 끝났는데 health는 UP이 된다")
+                .isNotEqualTo(CollectionStatus.State.COLLECTING);
+        assertThat(new CollectorHealth(status).health().getStatus().getCode())
+                .as("수집이 죽었는데 health가 UP이면 밖에서는 아무 신호도 없다")
+                .isEqualTo("DOWN");
         assertThat(status.reason())
-                .as("절단이 원인이고 시한 만료는 그 결과다. 결과가 원인을 덮으면 추적이 끊긴다")
-                .isEqualTo(StopReason.TRANSPORT_CLOSED);
+                .as("사유가 없으면 재시도할 일인지 토큰을 갈 일인지 갈리지 않는다")
+                .isEqualTo(StopReason.ESTABLISH_TIMEOUT);
     }
 
-    private CollectorRunner start(CollectionStatus status, Duration establishTimeout) {
-        CollectorRunner created = new CollectorRunner(new ChzzkProperties(
+    /**
+     * 같은 구간에 <b>우리가 멈추는</b> 경우. 수립이 중단 신호를 못 보면
+     * {@code stop()}이 수립 시한(운영 15초)만큼 매달려 컨테이너 종료 유예를 넘기고,
+     * 그러면 SIGKILL이 와서 구독 반납이 통째로 안 나간다 — 서버가 죽은 전송을
+     * 알아챌 때까지 10초~4분 42초가 걸리고 상한이 3개라 금방 못 붙게 된다.
+     */
+    @Test
+    void 멈추는_중이면_수립이_시한을_다_안_쓰고_끊긴다() throws Exception {
+        behavior.sendSubscribed = false;        // ⑤가 영영 안 온다 — 시한까지 매달린다
+        Duration establishTimeout = Duration.ofSeconds(5);
+
+        CollectionStatus status = new CollectionStatus();
+        runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, establishTimeout,
                 Duration.ofMillis(50), Duration.ofSeconds(1)),
                 status, restClientBuilder);
-        created.start();
+
+        // start()가 아니라 run()이다. 중단 신호로 끊긴 수립은 예외를 밖으로 던지고,
+        // 직접 부르면 그것이 이 스레드를 뚫고 나가 스택 트레이스만 남는다.
+        Thread booting = new Thread(() -> runner.run(null), "test-boot");
+        booting.start();
+        // 수립이 실제로 시작된 것을 보고서야 멈춘다. 안 보고 멈추면 "①도 안 탄 채
+        // 끝났다"를 "빨리 끊었다"로 읽는다.
+        awaitUntil(() -> behavior.authCallCount() == 1);
+
+        long began = System.nanoTime();
+        runner.stop();
+        booting.join(establishTimeout.toMillis());
+        Duration waited = Duration.ofNanos(System.nanoTime() - began);
+
+        assertThat(booting.isAlive())
+                .as("수립이 중단 신호를 안 보면 stop()이 시한을 다 쓸 때까지 안 끝난다")
+                .isFalse();
+        assertThat(waited)
+                .as("종료가 수립 시한만큼 매달리면 유예를 넘겨 SIGKILL이 오고, "
+                        + "그러면 구독 반납이 통째로 안 나간다")
+                .isLessThan(establishTimeout.dividedBy(2));
+    }
+
+    /**
+     * <b>같은 구간에서 {@code start()}는 "붙었다"고 보고하면 안 된다.</b>
+     *
+     * <p>정리가 이미 끝난 위에 아무것도 안 올리는 것과, 그 사실을 <b>값으로 알리는
+     * 것</b>은 다른 일이다. 재연결 루프는 성공 여부를 이 반환값으로 읽는다 —
+     * {@code status.state()}로 읽으면 거절된 호출에서 그 상태는 앞 세션이 남긴 값이라
+     * 「붙었다」로 오독되고, 루프가 빠져나가 <b>아무도 재시도하지 않는다.</b>
+     *
+     * <p>이 줄이 없으면 그 조기 반환을 {@code true}로 바꿔도 전 검사가 초록이다
+     * (변이로 확인했다).
+     */
+    @Test
+    void 수립을_마치는_사이에_끊기면_start가_붙었다고_보고하지_않는다() {
+        behavior.closeAfterSubscribed = true;
+
+        runner = new CollectorRunner(new ChzzkProperties(
+                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
+                Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                new CollectionStatus(), restClientBuilder);
+
+        assertThat(runner.start())
+                .as("정리가 끝난 세션을 붙었다고 보고하면 루프가 그것을 믿고 빠져나간다")
+                .isFalse();
+    }
+
+    /**
+     * <b>①(세션 발급 REST)에 매달려 있는 동안 멈추라고 하면, 응답이 온 뒤에
+     * ②로 넘어가면 안 된다.</b>
+     *
+     * <p>중단 신호는 원래 {@code await()}(③⑤) 안에서만 읽혔다. ①은 이미 나간 REST라
+     * 못 끊고(접속 2초 + 읽기 5초), {@code stop()}은 2초만 기다리고 지나간다 —
+     * 그 뒤에 여는 소켓은 <b>정리 가드가 이미 소모돼 아무도 안 닫는다.</b> 서버 쪽
+     * 자리는 죽은 전송을 알아챌 때까지 10초~4분 42초 남고(실측) 상한은 3개다.
+     *
+     * <p><b>재연결 스레드가 아니라 별도 스레드에서 띄운다.</b> 재연결 스레드로 재현하면
+     * {@code stop()}의 {@code shutdownNow()}가 ①을 인터럽트로 깨 소켓이 아예 안 생기는
+     * 실행이 섞인다 — 고쳐도 안 고쳐도 같은 값이 나와 검사가 헛돈다(CP4 실측).
+     * 여기서 보는 것은 인터럽트가 운 좋게 깨 주는가가 아니라 <b>수립이 신호를 보는가</b>다.
+     */
+    @Test
+    void 멈추는_중이면_세션_발급이_끝나도_소켓을_열지_않는다() throws Exception {
+        behavior.authDelay = Duration.ofMillis(800);   // ①에 세워 둔다
+
+        CollectionStatus status = new CollectionStatus();
+        runner = new CollectorRunner(new ChzzkProperties(
+                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
+                Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                status, restClientBuilder);
+
+        Thread booting = new Thread(() -> runner.run(null), "test-boot");
+        booting.start();
+        // 발급 요청이 서버에 <b>도착한</b> 시점이다(응답 전에 센다). 이 시점에
+        // 부팅 스레드는 ① 안에 서 있다.
+        awaitUntil(() -> behavior.authCallCount() == 1);
+        assertThat(behavior.connectionCount())
+                .as("이미 붙었다면 ①에 세워 두지 못한 것이고, 이 검사는 ①을 안 지난다")
+                .isZero();
+
+        runner.stop();
+        booting.join(Duration.ofSeconds(5).toMillis());
+
+        assertThat(booting.isAlive())
+                .as("①이 끝난 뒤까지 안 봤다면 '아직 안 열었다'를 '안 연다'로 읽는다")
+                .isFalse();
+        assertThat(behavior.connectionCount())
+                .as("멈추라고 한 뒤에 연 소켓은 stop()이 이미 지나가 아무도 안 닫는다")
+                .isZero();
+    }
+
+    /**
+     * <b>②(WS 접속)에 매달려 있는 동안 멈추라고 하면 거기서 끊어야 한다.</b>
+     *
+     * <p>②는 {@code buildAsync(...).join()}이라 <b>인터럽트에도 중단 신호에도 반응하지
+     * 않는다.</b> 상대가 TCP만 받고 핸드셰이크에 답하지 않으면 접속 시한(5초)을 통째로
+     * 쓰고, 그동안 {@code stop()}은 {@code awaitTermination}(2초)을 만료시킨 뒤
+     * {@code shutdownNow()}로 넘어간다 — 그 뒤에 늦게 성립한 소켓은 아무도 안 닫는다.
+     *
+     * <p><b>가짜 서버로는 이 상태를 못 만든다.</b> 스프링 WS 핸들러는 핸드셰이크를
+     * 언제나 즉시 끝낸다. 그래서 <b>받기만 하고 말이 없는 소켓</b>을 직접 띄우고
+     * 세션 url의 포트를 그리로 돌린다.
+     */
+    @Test
+    void 멈추는_중이면_WS_접속에_매달려_있어도_바로_끊긴다() throws Exception {
+        try (java.net.ServerSocket silent = new java.net.ServerSocket(0)) {
+            List<java.net.Socket> accepted = new java.util.concurrent.CopyOnWriteArrayList<>();
+            Thread acceptor = new Thread(() -> {
+                try {
+                    accepted.add(silent.accept());     // 받아만 두고 아무 말도 안 한다
+                } catch (Exception ignored) {
+                    // 테스트가 끝나며 닫은 것이다.
+                }
+            }, "silent-accept");
+            acceptor.setDaemon(true);
+            acceptor.start();
+
+            behavior.sessionUrlPort = silent.getLocalPort();
+            Duration establishTimeout = Duration.ofSeconds(5);
+
+            CollectionStatus status = new CollectionStatus();
+            runner = new CollectorRunner(new ChzzkProperties(
+                    true, "test-token", "http://localhost:" + port, establishTimeout,
+                    Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                    status, restClientBuilder);
+
+            Thread booting = new Thread(() -> runner.run(null), "test-boot");
+            booting.start();
+            // 실제로 ②에 매달린 것을 보고서야 멈춘다. 안 보고 멈추면 "②를 시작도
+            // 안 한 채 끝났다"를 "빨리 끊었다"로 읽는다.
+            awaitUntil(() -> !accepted.isEmpty());
+            assertThat(accepted)
+                    .as("접속이 안 들어왔다면 ②에 매달린 적이 없다")
+                    .isNotEmpty();
+
+            long began = System.nanoTime();
+            runner.stop();
+            booting.join(establishTimeout.multipliedBy(2).toMillis());
+            Duration waited = Duration.ofNanos(System.nanoTime() - began);
+
+            assertThat(booting.isAlive())
+                    .as("②가 중단 신호를 안 보면 접속 시한을 통째로 쓴다")
+                    .isFalse();
+            assertThat(waited)
+                    .as("종료가 접속 시한만큼 매달리면 유예를 넘겨 SIGKILL이 오고, "
+                            + "그러면 구독 반납이 통째로 안 나간다")
+                    .isLessThan(Duration.ofSeconds(1));
+        }
+    }
+
+    /**
+     * <b>{@code run()}으로 띄운다.</b> {@code start()}는 수립 실패를 밖으로 던진다.
+     *
+     * <p>재시도 간격을 크게 준다. 이 파일이 보는 것은 <b>수립을 마치는 그 한 구간</b>이라,
+     * 짧은 간격이면 같은 구간이 계속 다시 만들어져 무엇을 읽었는지 흐려진다.
+     */
+    private CollectorRunner start(CollectionStatus status, Duration establishTimeout) {
+        CollectorRunner created = new CollectorRunner(new ChzzkProperties(
+                true, "test-token", "http://localhost:" + port, establishTimeout,
+                Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                status, restClientBuilder);
+        created.run(null);
         return created;
     }
 

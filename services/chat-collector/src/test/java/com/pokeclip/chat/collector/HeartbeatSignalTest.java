@@ -38,6 +38,13 @@ class HeartbeatSignalTest {
 
     private static final Duration AWAIT = Duration.ofSeconds(5);
 
+    /**
+     * 세션이 안 선 러너에 신호를 넣는다. 리스너는 자기 세션 번호를 들고 다니는데
+     * (낡은 신호가 새 세션을 헐지 못하게 하는 세대 표식이다) 여기서는 붙은 세션이
+     * 없으므로 "아무 세션도 아님"을 넣는다 — 이 검사가 보는 것은 로그 한 줄이다.
+     */
+    private static final long NO_SESSION = 0L;
+
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
     @Autowired RestClient.Builder restClientBuilder;
@@ -95,8 +102,8 @@ class HeartbeatSignalTest {
         try (LogCaptor captor = new LogCaptor()) {
             runner = runnerFor(new CollectionStatus());
 
-            runner.heartbeatListener().onSendFailed(PingFailure.Cause.MISUSE);
-            runner.heartbeatListener().onSendFailed(PingFailure.Cause.CONNECTION_DEAD);
+            runner.heartbeatListener(NO_SESSION).onSendFailed(PingFailure.Cause.MISUSE);
+            runner.heartbeatListener(NO_SESSION).onSendFailed(PingFailure.Cause.CONNECTION_DEAD);
 
             assertThat(captor.messages())
                     .as("이 줄이 안 나가면 ping이 안 나가고 있다는 사실이 어디에도 안 남는다")
@@ -105,10 +112,15 @@ class HeartbeatSignalTest {
         }
     }
 
+    /**
+     * 재시도 간격을 크게 준다. 여기서 보는 것은 <b>하트비트가 알리는 줄</b>이고,
+     * 그 신호를 받아 다시 붙는 것은 {@code ReconnectTest}가 본다 — 짧은 간격이면
+     * 좀비 세션이 계속 갈려서 어느 세션의 줄을 읽는지 흐려진다.
+     */
     private CollectorRunner runnerFor(CollectionStatus status) {
         return new CollectorRunner(new ChzzkProperties(true, "test-token",
                 "http://localhost:" + port, Duration.ofSeconds(5),
-                Duration.ofMillis(50), Duration.ofSeconds(1)),
+                Duration.ofSeconds(30), Duration.ofSeconds(60)),
                 status, restClientBuilder);
     }
 

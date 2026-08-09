@@ -23,6 +23,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @FakeChzzkTest
 class EngineIoSocketTest {
 
+    /** 수립 예산. 이 파일은 접속 자체를 보므로 넉넉히 준다. */
+    private static final java.time.Duration BUDGET = java.time.Duration.ofSeconds(5);
+
+    /** 중단 신호가 없는 호출. 중단은 EstablishCutCleanupTest가 본다. */
+    private static final java.util.function.BooleanSupplier NO_ABORT = () -> false;
+
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
 
@@ -76,7 +82,7 @@ class EngineIoSocketTest {
     /** 죽은 소켓에 ping을 쏘면 <b>연결이 죽었다</b>고 말해야 한다. 이 갈래가 재연결을 부른다. */
     @Test
     void 닫힌_소켓에_ping을_쏘면_연결_죽음으로_분류한다() {
-        EngineIoSocket closed = EngineIoSocket.open(uri(), frame -> { }, () -> { });
+        EngineIoSocket closed = EngineIoSocket.open(uri(), frame -> { }, () -> { }, BUDGET, NO_ABORT);
         closed.close();
 
         assertThatThrownBy(closed::sendPing)
@@ -115,7 +121,7 @@ class EngineIoSocketTest {
         behavior.pingTimeoutMillis = 480;
 
         CountDownLatch closed = new CountDownLatch(1);
-        socket = EngineIoSocket.open(uri(), frame -> { }, closed::countDown);
+        socket = EngineIoSocket.open(uri(), frame -> { }, closed::countDown, BUDGET, NO_ABORT);
 
         assertThat(closed.await(5, TimeUnit.SECONDS))
                 .as("서버가 조용히 끊었는데 우리가 모르면 그게 8/1 사고다")
@@ -137,7 +143,7 @@ class EngineIoSocketTest {
         Set<Thread> created = new LinkedHashSet<>();
 
         for (int i = 0; i < 3; i++) {
-            EngineIoSocket opened = EngineIoSocket.open(uri(), frame -> { }, () -> { });
+            EngineIoSocket opened = EngineIoSocket.open(uri(), frame -> { }, () -> { }, BUDGET, NO_ABORT);
             // 닫기 전에 표본을 뜬다. 닫은 뒤에 뜨면 고친 코드에서는 이미 사라져
             // 있어 "만들어지긴 했나"를 확인할 수 없다.
             liveHttpClientThreads().stream().filter(t -> !before.contains(t)).forEach(created::add);
@@ -176,7 +182,7 @@ class EngineIoSocketTest {
         socket = EngineIoSocket.open(uri(), frame -> {
             seen.add(frame);
             if (frame.type() == EngineIoFrame.Type.EVENT) connected.countDown();
-        }, () -> { });
+        }, () -> { }, BUDGET, NO_ABORT);
         return connected;
     }
 

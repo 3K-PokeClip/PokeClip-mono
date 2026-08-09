@@ -65,10 +65,13 @@ class HttpTimeoutTest {
                 assertTimeoutPreemptively(UPPER_BOUND, this::bootCollector);
         // 부팅 시간이 안 섞이도록 요청이 서버에 도착한 시점부터 잰다.
         Duration heldFor = behavior.sinceAuthRequest();
+        // <b>같은 순간에 걷는다.</b> 부팅이 끝난 뒤에도 재연결이 계속 두드리므로,
+        // 나중에 읽으면 이 수가 재시도로 부풀어 양성 대조가 아니라 잡음이 된다.
+        int callsAtBoot = behavior.authCallCount();
 
         try {
-            // 양성 대조. 발급을 아예 안 시도했다면 아래 시간 단언은 아무것도 안 본 것이다.
-            assertThat(behavior.authCallCount())
+            // 양성 대조. 발급을 아예 안 시도했다면 위 시간은 아무것도 안 잰 것이다.
+            assertThat(callsAtBoot)
                     .as("세션 발급을 시도한 적이 없으면 시한을 잰 것이 아니다")
                     .isEqualTo(1);
 
@@ -82,7 +85,8 @@ class HttpTimeoutTest {
                     .isLessThan(READ_TIMEOUT.multipliedBy(3));
 
             CollectionStatus status = context.getBean(CollectionStatus.class);
-            assertThat(status.state()).isEqualTo(CollectionStatus.State.STOPPED);
+            // 시한 초과는 다시 걸면 풀릴 수 있는 사유라 영구 정지가 아니다.
+            assertThat(status.state()).isEqualTo(CollectionStatus.State.RECONNECTING);
             assertThat(status.reason())
                     .as("시한에 걸린 것을 사유 없이 멈추면 조용한 실패가 된다")
                     .isEqualTo(StopReason.SESSION_AUTH_FAILED);
@@ -104,6 +108,10 @@ class HttpTimeoutTest {
                         // 수립 시한을 지연보다 길게 준다. 이래야 끊은 주체가
                         // establishTimeout이 아니라 read-timeout임이 확정된다.
                         "--pokeclip.chzzk.establish-timeout=" + Duration.ofSeconds(30),
+                        // 재시도가 이 측정을 오염시키지 않게 한 번만 재게 한다.
+                        // 서버는 6초를 붙들고 있으므로 첫 간격이 짧으면 측정 창 안에
+                        // 두 번째 요청이 들어와 "얼마나 기다렸나"가 흐려진다.
+                        "--pokeclip.chzzk.reconnect-first-delay=30s",
                         "--spring.http.clients.read-timeout=" + READ_TIMEOUT);
     }
 }

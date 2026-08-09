@@ -10,6 +10,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 /**
@@ -22,6 +23,9 @@ import java.util.function.Consumer;
  * health도 DOWN이 아니고 로그도 안 나온다.
  */
 public class ChatSession implements AutoCloseable {
+
+    /** 수립 대기를 이만큼씩 끊어 중단 신호를 본다. 종료가 최대 이만큼 늦어진다. */
+    private static final Duration ABORT_CHECK_SLICE = Duration.ofMillis(100);
 
     public record Established(Handshake handshake, EngineIoSocket socket) { }
 
@@ -86,9 +90,15 @@ public class ChatSession implements AutoCloseable {
     public void onFrame(Consumer<EngineIoFrame> sink) { this.frameSink = sink; }
     public void onClosed(Runnable sink) { this.closedSink = sink; }
 
-    public Established open(Duration deadline) {
+    /**
+     * @param abort 우리가 멈추는 중인가. 시한과 별개로 <b>대기를 즉시 끝내는</b>
+     *              신호다 — 없으면 종료가 시한만큼 매달리거나, 짧게 기다리고
+     *              뒷정리 중인 스레드를 인터럽트하는 급사 경로를 만들어야 한다
+     */
+    public Established open(Duration deadline, BooleanSupplier abort) {
         long endAt = System.nanoTime() + deadline.toNanos();
 
+        abortIfStopping(abort, EstablishStage.AUTH);
         String url = client.createSession();                        // ① AUTH
 
         AtomicReference<Handshake> handshake = new AtomicReference<>();
@@ -96,13 +106,22 @@ public class ChatSession implements AutoCloseable {
         CountDownLatch connected = new CountDownLatch(1);
         CountDownLatch subscribed = new CountDownLatch(1);
 
+        abortIfStopping(abort, EstablishStage.CONNECT);
+        // 예산 계산을 try 밖에 둔다. 안에 두면 예산 만료가 아래 분류를 지나
+        // CONNECT_FAILED로 둔갑한다.
+        Duration connectBudget = remaining(endAt, EstablishStage.CONNECT);
         EngineIoSocket socket;
         try {                                                       // ② CONNECT
             socket = EngineIoSocket.open(
                     SessionUrl.toWebSocketUri(url),
                     frame -> handle(frame, handshake, sessionKey, connected, subscribed),
-                    () -> closedSink.run());
+                    () -> closedSink.run(),
+                    connectBudget, abort);
         } catch (Exception e) {
+            // <b>중단이 먼저다.</b> 중단으로 빠져나온 접속은 아래 분류가 보면
+            // 취소 예외라 CONNECT_FAILED로 떨어지고, 그러면 로그에서 "우리가 멈춘 것"과
+            // "붙는 데 실패한 것"이 같은 줄이 된다 — 재연결이 반복 실패할 때 첫 단서다.
+            abortIfStopping(abort, EstablishStage.CONNECT);
             // 진단용 구분이다. 재시도 여부는 이걸로 갈리지 않는다 —
             // 재시도 불가 사유는 AUTH의 401/403과 REVOKED뿐이고 둘 다 여기가 아니다.
             // 그래도 가르는 이유는, 재연결이 반복 실패할 때 로그가 한 줄이면
@@ -127,7 +146,7 @@ public class ChatSession implements AutoCloseable {
         }
         current.set(socket);
 
-        await(connected, endAt, EstablishStage.WAITING_CONNECTED);  // ③
+        await(connected, endAt, abort, EstablishStage.WAITING_CONNECTED);   // ③
 
         // Handshake.parse는 깨진 본문에 null을 준다(예외를 던지면 수신이 멈춘다).
         // 타이밍을 못 읽으면 하트비트를 돌릴 수 없으므로 여기서 끊는다.
@@ -136,11 +155,62 @@ public class ChatSession implements AutoCloseable {
                     StopReason.CONNECT_FAILED, "핸드셰이크를 읽지 못했다");
         }
 
+        // 키를 세우기 전에 본다. 세운 뒤에 끊으면 구독한 적도 없는 키로 반납 REST가
+        // 한 번 나간다 — 종료 경로에 없어도 되는 왕복이다.
+        abortIfStopping(abort, EstablishStage.SUBSCRIBE);
         currentSessionKey.set(sessionKey.get());
         client.subscribeChat(sessionKey.get());                     // ④ SUBSCRIBE
-        await(subscribed, endAt, EstablishStage.WAITING_SUBSCRIBED);// ⑤
+        await(subscribed, endAt, abort, EstablishStage.WAITING_SUBSCRIBED); // ⑤
 
         return new Established(handshake.get(), socket);
+    }
+
+    /**
+     * <b>①②④ 앞에서 한 번씩 본다.</b> 셋은 REST와 WS 접속이라 <b>일단 시작하면
+     * 조각으로 끊을 수 없다</b> — ①④는 접속 2초 + 읽기 5초, ②는 접속 시한 5초를
+     * 통째로 쓴다. 그래서 여기서 할 수 있는 것은 <b>멈추라는 신호를 받은 뒤에 그런
+     * 호출을 새로 시작하지 않는 것</b>뿐이고, 그것으로 충분하다: 이미 나간 호출은
+     * 시한이 있어 반드시 돌아오고, 돌아오면 다음 단계 앞에서 여기에 걸린다.
+     *
+     * <p>이 검사가 없으면 {@code stop()}이 지나간 뒤에 ②가 소켓을 연다. 그 소켓은
+     * 정리 가드가 이미 소모돼 아무도 안 닫고, 서버 쪽 자리는 죽은 전송을 알아챌
+     * 때까지(실측 10초~4분 42초) 남는다.
+     *
+     * <p>사유는 {@code await()}의 중단과 같은 값이다 — 재시도 판단이 이걸로 안 갈린다.
+     * 사람이 읽는 구분은 {@code detail}이 진다.
+     *
+     * <p><b>세 자리 중 검사가 지키는 것은 ①뿐이다.</b> 지우고 전체를 돌려 확인했다:
+     * ①을 지우면 {@code 중단_신호가_이미_서_있으면_세션_발급조차_안_한다}가 단독으로
+     * 깨지고, ②는 5회·④는 1회 전부 초록이다. <b>"원리적으로 필요 없다"가 아니라
+     * "이 하네스에서 관측되지 않는다"다</b> — 둘은 다음 이유로 갈린다.
+     *
+     * <ul>
+     *   <li>②를 지워도 {@code EngineIoSocket}의 조각 검사가 곧바로 걸려 접속을 버리는데,
+     *       상대가 같은 JVM 루프백이라 <b>그 버리기가 TCP 핸드셰이크보다 빠르다.</b>
+     *       실서버는 왕복이 있어 SYN이 이미 나간 뒤이고, 그때 서버가 접속을 성립시키면
+     *       그것이 연결 상한 3개 중 하나를 먹는다. 검사를 여기 두면 SYN 자체가 안 나간다
+     *   <li>④를 지워도 ⑤의 중단이 곧바로 걸리는데, <b>그 앞에 구독 REST 왕복이 통째로
+     *       들어간다.</b> 로컬은 수 ms라 안 보이고 실서버는 접속 2초 + 읽기 5초까지 간다
+     * </ul>
+     */
+    private static void abortIfStopping(BooleanSupplier abort, EstablishStage stage) {
+        if (abort.getAsBoolean()) {
+            throw new SessionEstablishException(stage, StopReason.ESTABLISH_TIMEOUT,
+                    "stage=" + stage + " aborted");
+        }
+    }
+
+    /**
+     * 남은 수립 예산. <b>다 썼으면 그 자리에서 끊는다</b> — 0 이하를 접속 시한으로
+     * 넘기면 {@code WebSocket.Builder}가 거부한다.
+     */
+    private static Duration remaining(long endAt, EstablishStage stage) {
+        long left = endAt - System.nanoTime();
+        if (left <= 0) {
+            throw new SessionEstablishException(stage, StopReason.ESTABLISH_TIMEOUT,
+                    "stage=" + stage);
+        }
+        return Duration.ofNanos(left);
     }
 
     private void handle(EngineIoFrame frame,
@@ -182,12 +252,36 @@ public class ChatSession implements AutoCloseable {
         }
     }
 
-    private void await(CountDownLatch latch, long endAt, EstablishStage stage) {
-        long remaining = endAt - System.nanoTime();
+    /**
+     * 래치를 기다리되 <b>조각으로 나눠 기다리며 매번 중단 신호를 본다.</b>
+     *
+     * <p>한 번에 시한 전체를 기다리면 멈추려는 쪽이 그만큼 매달린다 —
+     * 운영 시한이 15초라 컨테이너 종료 유예를 넘기고, SIGKILL이 오면 구독 반납이
+     * 통째로 안 나간다. 조각을 더 잘게 쪼개도 얻는 것이 없고(종료가 100ms 빨라질
+     * 뿐이다) 깨어나는 횟수만 는다.
+     *
+     * <p><b>중단을 래치보다 먼저 본다.</b> 반대로 하면 "멈추는 중인데 마침 프레임이
+     * 도착해서" 다음 단계로 넘어가는 길이 생기고, 그 세션은 아무도 안 닫는다.
+     */
+    private void await(CountDownLatch latch, long endAt, BooleanSupplier abort, EstablishStage stage) {
         try {
-            if (remaining <= 0 || !latch.await(remaining, TimeUnit.NANOSECONDS)) {
-                throw new SessionEstablishException(stage, StopReason.ESTABLISH_TIMEOUT,
-                        "stage=" + stage);
+            while (true) {
+                if (abort.getAsBoolean()) {
+                    // 사유는 시한 초과와 같은 값이다. 재시도 판단이 이걸로 안 갈리고,
+                    // 새 값을 만들면 재시도 분류표에 실제로는 안 오는 값이 한 줄 는다.
+                    // 사람이 읽는 구분은 detail이 진다.
+                    throw new SessionEstablishException(stage, StopReason.ESTABLISH_TIMEOUT,
+                            "stage=" + stage + " aborted");
+                }
+                long remaining = endAt - System.nanoTime();
+                if (remaining <= 0) {
+                    throw new SessionEstablishException(stage, StopReason.ESTABLISH_TIMEOUT,
+                            "stage=" + stage);
+                }
+                if (latch.await(Math.min(remaining, ABORT_CHECK_SLICE.toNanos()),
+                        TimeUnit.NANOSECONDS)) {
+                    return;
+                }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

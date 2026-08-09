@@ -71,7 +71,10 @@ class TransportClosedCleanupTest {
                     .containsExactlyInAnyOrder("chzzk-ping", "chzzk-summary");
 
             behavior.closeSession();
-            awaitUntil(() -> status.state() == CollectionStatus.State.STOPPED);
+            awaitUntil(() -> status.state() == CollectionStatus.State.RECONNECTING);
+            assertThat(status.state())
+                    .as("STOPPED는 안 덮이는 상태라, 절단에 그걸 찍으면 재연결이 붙어도 못 올라온다")
+                    .isEqualTo(CollectionStatus.State.RECONNECTING);
             assertThat(status.reason()).isEqualTo(StopReason.TRANSPORT_CLOSED);
 
             // ① 구독 반납. stop()을 아무도 안 불렀는데도 와야 한다 —

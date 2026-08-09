@@ -95,16 +95,31 @@ class FinalVerdictTest {
         }
     }
 
-    /** 종료 경로가 둘이다. 둘 다 지나가면 두 줄이 나가고 어느 것이 끝인지 흐려진다. */
+    /**
+     * 종료 경로가 둘이다. 둘 다 지나가면 두 줄이 나가고 어느 것이 끝인지 흐려진다.
+     *
+     * <p><b>절단 자체는 더 이상 판정을 내지 않는다.</b> 그래서 여기서 보는 두 경로는
+     * "절단 + 종료"가 아니라 <b>"종료 + 또 한 번의 종료"</b>다 — 절단으로 끝나던 시절의
+     * 두 경로 중 하나가 사라진 것이 아니라, 절단이 판정을 내지 않게 된 것이다.
+     * 재시도 간격을 크게 줘서 다시 붙지 않은 채로 종료를 밟는다.
+     */
     @Test
     void 전송이_끊긴_뒤_종료해도_판정_라인은_한_줄뿐이다() throws Exception {
         try (LogCaptor captor = new LogCaptor()) {
-            CollectionStatus status = start();
+            CollectionStatus status = start(NO_RETRY_WITHIN_TEST);
             assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
 
             long session = runner.lastSessionNo();
             behavior.closeSession();
-            awaitVerdict(captor, session);
+            // 이 세션의 뒷정리가 끝난 것을 보고 나간다. 상태는 자리를 비우기 전에
+            // 찍히므로, 상태만 보고 앞지르면 종료가 뒷정리와 겹친다.
+            awaitEnded(captor, session);
+            assertThat(captor.messages().stream()
+                    .filter(m -> m.startsWith("chat.session.verdict")).toList())
+                    .as("절단은 끝이 아니다. 거기서 판정을 내면 최종이 아닌 최종 판정이 쌓인다")
+                    .isEmpty();
+
+            runner.stop();                       // 판정이 나가는 자리
             runner.stop();                       // 두 번째 종료 경로
 
             assertThat(captor.messages().stream()
@@ -119,11 +134,13 @@ class FinalVerdictTest {
 
     /** PRD 「상태」 표: 실패로 중지 → 실패 한 줄 <b>+ 최종 판정 라인</b>. */
     @Test
-    void 수립에_실패해도_판정_라인이_나간다() {
+    void 수립에_실패해도_판정_라인이_나간다() throws Exception {
         behavior.authStatus = 401;
 
         try (LogCaptor captor = new LogCaptor()) {
             CollectionStatus status = start();
+            // 영구 정지와 그 판정은 재연결 스레드가 낸다. 안 기다리면 아직 창 밖이다.
+            awaitState(status, CollectionStatus.State.STOPPED);
             assertThat(status.state()).isEqualTo(CollectionStatus.State.STOPPED);
 
             assertThat(captor.messages()).anyMatch(m -> m.startsWith("chat.session.stopped"));
@@ -159,13 +176,32 @@ class FinalVerdictTest {
         }
     }
 
+    /**
+     * 재연결이 이 검사 안에서는 안 돌게 하는 간격. <b>임의로 줄이지 않는다</b> —
+     * 줄이면 절단 뒤에 새 세션이 서서 "무엇을 수집했는지"의 경계가 흐려진다.
+     */
+    private static final Duration NO_RETRY_WITHIN_TEST = Duration.ofSeconds(30);
+
     private CollectionStatus start() {
+        return start(Duration.ofMillis(50));
+    }
+
+    /** <b>{@code run()}으로 띄운다.</b> {@code start()}는 수립 실패를 밖으로 던진다. */
+    private CollectionStatus start(Duration reconnectFirstDelay) {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
-        runner.start();
+                reconnectFirstDelay, Duration.ofSeconds(60)), status, restClientBuilder);
+        runner.run(null);
         return status;
+    }
+
+    private static void awaitState(CollectionStatus status, CollectionStatus.State state)
+            throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (status.state() != state && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
     }
 
     /**
@@ -191,14 +227,17 @@ class FinalVerdictTest {
     /**
      * <b>상태가 아니라 우리가 단언할 그 줄을 기다린다.</b>
      *
-     * <p>{@code STOPPED}는 뒷정리보다 <b>먼저</b> 찍힌다. 상태만 보고 앞지르면
-     * WS 스레드가 판정 줄에 닿기 전에 단언이 서고, 그때 {@code stop()}은 이미
-     * 소모된 뒷정리 가드에 걸려 즉시 돌아와 아무 줄도 안 남긴다 —
-     * {@code Expected size: 1 but was: 0}으로 간헐 실패한다. 창을 넓히는 것으로는
-     * 없앨 수 없고(느린 기계에서는 상시 빨강이다) 기다리는 대상을 옮겨야 없어진다.
+     * <p>상태는 뒷정리보다 <b>먼저</b> 찍힌다. 상태만 보고 앞지르면 재연결 스레드가
+     * 세션 종료 줄에 닿기 전에 단언이 서고, 그때 {@code stop()}은 이미 소모된
+     * 뒷정리 가드에 걸려 즉시 돌아와 아무 줄도 안 남긴다 — 간헐 실패한다.
+     * 창을 넓히는 것으로는 없앨 수 없고(느린 기계에서는 상시 빨강이다)
+     * 기다리는 대상을 옮겨야 없어진다.
+     *
+     * <p>기다리는 대상이 판정 줄이 아니라 <b>세션 종료 줄</b>이다 — 절단은 이제
+     * 판정을 안 내므로 판정 줄은 이 시점에 존재하지 않는다.
      */
-    private static void awaitVerdict(LogCaptor captor, long session) throws Exception {
-        String prefix = "chat.session.verdict session=" + session + " ";
+    private static void awaitEnded(LogCaptor captor, long session) throws Exception {
+        String prefix = "chat.session.ended session=" + session + " ";
         long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
         while (captor.messages().stream().noneMatch(m -> m.startsWith(prefix))
                 && System.nanoTime() < deadline) {

@@ -37,22 +37,44 @@ public class CollectionStatus {
     /** RECONNECTING이 아니면 0이다. */
     public int attempt() { return current.get().attempt(); }
 
-    public void establishing() { current.set(new Snapshot(State.ESTABLISHING, null, null, 0)); }
+    /**
+     * 수립 중. <b>RECONNECTING과 STOPPED는 안 덮는다.</b>
+     *
+     * <p>재연결 루프는 시도마다 {@code start()}를 부르고 그 안에서 이 메서드가 불린다.
+     * 조건 없이 set하면 <b>재시도할 때마다 health가 UP으로 돌아간다</b> — 수립이
+     * establishTimeout(운영 15초)을 다 쓰는 동안 "채팅은 안 오는데 health는 UP"이 되고,
+     * 그게 이 서비스가 유일한 치명 실패로 규정한 모양이다. STOPPED 쪽은 영구 정지라
+     * 되돌리면 왜 멈췄는지가 어디에도 안 남는다.
+     *
+     * <p>그래서 첫 부팅(DISABLED에서 온다)만 실제로 ESTABLISHING을 찍고, 재연결은
+     * RECONNECTING인 채로 수립한다. <b>둘 다 "아직 안 붙었다"이므로 health는 같다</b> —
+     * 다른 것은 재연결 쪽이 언제부터 못 받고 있는지와 몇 번째인지를 들고 있다는 점뿐이다.
+     */
+    public void establishing() {
+        Snapshot now = current.get();
+        while (now.state() != State.STOPPED && now.state() != State.RECONNECTING) {
+            if (current.compareAndSet(now, new Snapshot(State.ESTABLISHING, null, null, 0))) {
+                return;
+            }
+            now = current.get();
+        }
+    }
+
     public void disabled() { current.set(new Snapshot(State.DISABLED, null, null, 0)); }
 
     /**
-     * <b>ESTABLISHING일 때만</b> COLLECTING으로 간다.
+     * <b>수립을 기다리는 중일 때만</b> COLLECTING으로 간다. 첫 수립은 ESTABLISHING에서,
+     * 재연결은 RECONNECTING에서 들어온다.
      *
-     * <p>수립을 마치는 사이에 전송이 끊기면 WS 스레드가 먼저 STOPPED를 찍는다.
-     * 조건 없이 set하면 부팅 스레드가 그 STOPPED를 덮어, 정리는 이미 끝났는데
-     * health는 UP인 상태가 된다 — 수집이 죽었는데 아무 신호가 없는,
-     * 이 서비스의 유일한 치명적 실패다.
+     * <p>조건 없이 set하면 수립을 마치는 사이에 끊겨 이미 찍힌 STOPPED를 부팅 스레드가
+     * 덮어, 정리는 이미 끝났는데 health는 UP인 상태가 된다 — 수집이 죽었는데 아무
+     * 신호가 없는, 이 서비스의 유일한 치명적 실패다.
      *
      * @return COLLECTING으로 갔으면 true. false면 그 사이에 끝난 것이다
      */
-    public boolean collectingIfEstablishing() {
+    public boolean collectingIfPending() {
         Snapshot now = current.get();
-        return now.state() == State.ESTABLISHING
+        return (now.state() == State.ESTABLISHING || now.state() == State.RECONNECTING)
                 && current.compareAndSet(now, new Snapshot(State.COLLECTING, null, null, 0));
     }
 
@@ -72,9 +94,15 @@ public class CollectionStatus {
     }
 
     /**
-     * <b>첫 사유가 이긴다.</b> 절단으로 STOPPED가 된 뒤 부팅 스레드가 시한 만료로
-     * 다시 부르는 길이 있는데, 덮어쓰면 진짜 원인(TRANSPORT_CLOSED)이 사라지고
-     * 그 결과(ESTABLISH_TIMEOUT)만 남아 왜 끊겼는지가 어디에도 없다.
+     * 영구 정지. <b>이미 STOPPED면 첫 사유가 이긴다</b> — 한 번의 정지에 신호가 둘
+     * 들어오는 길이 있고, 덮어쓰면 진짜 원인이 그 결과로 바뀐다.
+     *
+     * <p><b>RECONNECTING은 덮는다.</b> 영구 정지가 "재시도 중"을 이기는 것이 맞다.
+     * 반대로 하면 401로 멈췄는데 사유가 {@code TRANSPORT_CLOSED}로 남아
+     * <b>재시도 불가 판정의 근거를 잃는다.</b>
+     *
+     * <p>그래서 이 필드의 뜻은 <b>"왜 영영 멈췄나"</b>이고, "이번에 왜 끊겼나"는
+     * 로그가 든다({@code chat.session.closed reason=}).
      */
     public void stopped(StopReason reason) {
         Snapshot now = current.get();

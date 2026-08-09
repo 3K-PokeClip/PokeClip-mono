@@ -107,6 +107,7 @@ public class FakeChzzkBehavior {
      * 테스트가 자기 시계로 재면 ①②가 느린 경우와 ③에서 기다린 경우를 못 가른다.
      */
     private final AtomicLong connectionEstablishedNanos = new AtomicLong();
+    private final AtomicInteger connections = new AtomicInteger();
 
     private final AtomicLong authRequestNanos = new AtomicLong();
     private final AtomicInteger unsubscribeCalls = new AtomicInteger();
@@ -134,8 +135,18 @@ public class FakeChzzkBehavior {
         return at == 0 ? Duration.ZERO : Duration.ofNanos(System.nanoTime() - at);
     }
 
+    /**
+     * WS 접속이 성립한 횟수. <b>"멈추라고 한 뒤에 새로 붙었나"를 재는 유일한 자다.</b>
+     *
+     * <p>{@link #closedSessionCount()}로는 못 잰다 — 열고 곧바로 닫아도 둘 다 늘어
+     * "안 열었다"와 "열었다가 닫았다"가 같은 값이 된다. 세션 참조도 못 쓴다 —
+     * 끊기면 비워진다.
+     */
+    public int connectionCount() { return connections.get(); }
+
     void markConnectionEstablished() {
         connectionEstablishedNanos.set(System.nanoTime());
+        connections.incrementAndGet();
     }
 
     /** 종료 시 구독 반납이 실제로 왔는지. 안 오면 세션을 우리 손으로 안 닫은 것이다. */
@@ -291,6 +302,7 @@ public class FakeChzzkBehavior {
         unsubscribeSawOpenSession.set(false);
         // 안 지우면 앞 테스트의 접속 시각이 남아 다음 테스트가 큰 값을 본다.
         connectionEstablishedNanos.set(0);
+        connections.set(0);
         handshakeQuery.set("");
         // 테스트 클래스들이 스프링 컨텍스트 하나를 공유하므로 이 객체도 하나뿐이다.
         // 앞 클래스가 쓰던 세션을 남겨 두면 뒤 클래스가 그것으로 보내려다 실패한다.

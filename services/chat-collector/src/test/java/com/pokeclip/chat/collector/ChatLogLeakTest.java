@@ -107,12 +107,15 @@ class ChatLogLeakTest {
 
     /** 수립 실패 로그·예외 메시지에 응답 본문이나 URL이 붙으면 토큰이 되비친다. */
     @Test
-    void 세션_발급이_401이어도_토큰이_로그에_안_남는다() {
+    void 세션_발급이_401이어도_토큰이_로그에_안_남는다() throws Exception {
         behavior.authStatus = 401;
 
         try (LogCaptor captor = new LogCaptor()) {
             CollectionStatus status = start();
 
+            // 영구 정지는 재연결 스레드가 찍는다. 상태를 안 기다리면 그 스레드가
+            // 남길 줄이 아직 창 밖이라, 부정 단언이 아무것도 안 본 채 초록이 된다.
+            awaitState(status, CollectionStatus.State.STOPPED);
             assertThat(status.state())
                     .as("실패 경로를 안 태웠다면 검사할 로그가 애초에 없다")
                     .isEqualTo(CollectionStatus.State.STOPPED);
@@ -272,14 +275,30 @@ class ChatLogLeakTest {
 
     // ── 도우미 ────────────────────────────────────────────────────────────
 
+    /**
+     * <b>{@code run()}으로 띄운다.</b> {@code start()}는 수립 실패를 밖으로 던지므로
+     * 401 검사에서 예외가 테스트 메서드를 뚫고 나가 단언에 못 닿는다.
+     *
+     * <p>재시도 간격을 크게 준다. 유출 검사는 <b>한 번의 실패·절단이 남기는 줄</b>을
+     * 훑는 것이라, 짧은 간격이면 같은 줄이 계속 쌓여 무엇을 본 것인지 흐려진다.
+     * 새는 자리가 늘지는 않는다 — 재시도가 찍는 줄은 이미 훑는 그 줄들이다.
+     */
     private CollectionStatus start() {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(
                 new ChzzkProperties(true, TOKEN, "http://localhost:" + port, Duration.ofSeconds(5),
-                        Duration.ofMillis(50), Duration.ofSeconds(1)),
+                        Duration.ofSeconds(30), Duration.ofSeconds(60)),
                 status, restClientBuilder);
-        runner.start();
+        runner.run(null);
         return status;
+    }
+
+    private static void awaitState(CollectionStatus status, CollectionStatus.State state)
+            throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+        while (status.state() != state && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
     }
 
     private void awaitSummaryLine(LogCaptor captor) throws Exception {

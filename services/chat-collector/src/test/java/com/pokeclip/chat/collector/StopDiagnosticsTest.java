@@ -88,12 +88,19 @@ class StopDiagnosticsTest {
         }
     }
 
+    /**
+     * <b>{@code run()}으로 띄운다.</b> {@code start()}는 수립 실패를 밖으로 던지므로
+     * 직접 부르면 예외가 테스트 메서드를 뚫고 나가 단언에 못 닿는다.
+     *
+     * <p>재시도 간격을 크게 준다. 이 검사는 <b>한 번의 실패가 남기는 줄</b>을 보는
+     * 것이라, 짧은 간격이면 같은 줄이 계속 쌓여 무엇을 읽는지 흐려진다.
+     */
     private void start() {
         runner = new CollectorRunner(new ChzzkProperties(true, "test-token",
                 "http://localhost:" + port, Duration.ofSeconds(5),
-                Duration.ofMillis(50), Duration.ofSeconds(1)),
+                Duration.ofSeconds(30), Duration.ofSeconds(60)),
                 new CollectionStatus(), restClientBuilder);
-        runner.start();
+        runner.run(null);
     }
 
     private static String stoppedLine(LogCaptor captor) {

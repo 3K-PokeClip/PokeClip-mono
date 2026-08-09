@@ -42,16 +42,68 @@ class CollectionStatusTest {
     void 재연결_뒤_수집으로_돌아오면_UP이다() {
         status.reconnecting(StopReason.TRANSPORT_CLOSED, Instant.now(), 1);
         // 양성 대조. 여기 안 서면 "돌아왔다"가 아니라 "떠난 적이 없다"를 읽는다 —
-        // establishing()이 무조건 덮어쓰는 setter라 reconnecting()이 아무것도
-        // 안 해도 아래가 통과한다.
+        // reconnecting()이 아무것도 안 하면 상태가 DISABLED에 머무는데,
+        // 거기서 establishing() → collectingIfPending()도 그대로 UP이 된다.
         assertThat(status.state())
                 .as("재연결 중으로 가지도 않았다면 돌아오는 것을 검사할 수 없다")
                 .isEqualTo(CollectionStatus.State.RECONNECTING);
 
         status.establishing();
-        assertThat(status.collectingIfEstablishing()).isTrue();
+        assertThat(status.collectingIfPending()).isTrue();
 
         assertThat(new CollectorHealth(status).health().getStatus()).isEqualTo(Status.UP);
+    }
+
+    /**
+     * 재연결 루프는 시도마다 {@code start()}를 부르고 그 안에서 {@code establishing()}이
+     * 불린다. 조건 없이 덮으면 <b>시도할 때마다 health가 UP으로 돌아간다</b> —
+     * 수립이 시한(운영 15초)을 다 쓰는 동안 "채팅은 안 오는데 UP"이 된다.
+     */
+    @Test
+    void 재연결_중에는_수립_중으로_되돌리지_않는다() {
+        status.reconnecting(StopReason.TRANSPORT_CLOSED, Instant.now(), 2);
+        status.establishing();
+
+        assertThat(status.state())
+                .as("재시도마다 ESTABLISHING으로 덮이면 health가 UP으로 돌아가고, "
+                        + "수립이 시한을 다 쓰는 동안 '채팅은 안 오는데 UP'이 된다")
+                .isEqualTo(CollectionStatus.State.RECONNECTING);
+        assertThat(new CollectorHealth(status).health().getStatus())
+                .as("상태만 지키고 health가 UP이면 밖에서는 아무 신호도 없다")
+                .isEqualTo(Status.DOWN);
+    }
+
+    /** STOPPED는 영구 정지다. 수립 중으로 되돌리면 그 사유가 어디에도 안 남는다. */
+    @Test
+    void 이미_STOPPED면_수립_중으로_되돌리지_않는다() {
+        status.stopped(StopReason.SESSION_AUTH_REJECTED);
+        status.establishing();
+
+        assertThat(status.state()).isEqualTo(CollectionStatus.State.STOPPED);
+        assertThat(status.reason()).isEqualTo(StopReason.SESSION_AUTH_REJECTED);
+    }
+
+    /** 첫 부팅 경로가 여전히 도는지. 이게 막히면 서버가 아예 수집을 못 한다. */
+    @Test
+    void 첫_부팅은_DISABLED에서_ESTABLISHING을_지나_COLLECTING으로_간다() {
+        status.establishing();
+        assertThat(status.state()).isEqualTo(CollectionStatus.State.ESTABLISHING);
+
+        assertThat(status.collectingIfPending()).isTrue();
+        assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
+    }
+
+    /**
+     * 수립을 마치는 사이에 영구 정지가 찍혔으면 올라가지 않는다.
+     * 올라가면 <b>정리는 끝났는데 health는 UP</b>인, 이 서비스의 유일한 치명 실패다.
+     */
+    @Test
+    void 이미_STOPPED면_수집으로_올라가지_않는다() {
+        status.establishing();
+        status.stopped(StopReason.TRANSPORT_CLOSED);
+
+        assertThat(status.collectingIfPending()).isFalse();
+        assertThat(status.state()).isEqualTo(CollectionStatus.State.STOPPED);
     }
 
     /**
