@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.observe.HeartbeatListener;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -12,6 +13,7 @@ import org.springframework.web.client.RestClient;
 import java.time.Duration;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -209,6 +211,110 @@ class EstablishCutCleanupTest {
     }
 
     /**
+     * <b>같은 뿌리, 한 걸음 뒤의 창.</b> 위 검사는 정리가 {@code open()}이 끝나기
+     * <i>전</i>에 지나간 경우를 본다. 그런데 수립 마무리는 가드를 한 번 보고 나서도
+     * <b>스케줄러 둘을 세우는 동안</b> 계속 열려 있다 — 그 사이에 정리가 지나가면
+     * 이렇게 된다:
+     *
+     * <pre>
+     * 수립 스레드                    WS 콜백 / 재연결 스레드
+     * 가드 검사 — 아직 false, 통과
+     *                                절단 도착 → 정리가 가드를 소모
+     *                                (홀더가 아직 비어 있어 스케줄러를 못 본다)
+     * 하트비트·요약 기동
+     * 홀더에 넣는다                  ← 아무도 이걸 다시 안 읽는다
+     * COLLECTING으로 올린다          ← RECONNECTING을 받아들여 health가 UP이 된다
+     * </pre>
+     *
+     * <p>결과는 <b>정리 완료 + health UP + 죽은 소켓에 ping</b>이다. 위 검사가 막는
+     * 것과 <b>같은 치명 상태</b>인데, 가드를 보는 시점과 상태를 올리는 시점이
+     * 갈라져 있어 그 사이로 빠져나간다.
+     *
+     * <p><b>창을 결정적으로 벌린다.</b> {@code heartbeatListener(no)}는 그 창 안에서
+     * 불리는 유일한 우리 코드다 — {@code Heartbeat.start(...)}의 인자라 스케줄러가
+     * 서기도 전에 평가된다. 거기서 서버가 끊고, <b>구독 반납이 도착한 것</b>(= 정리가
+     * 가드를 소모하고 자리까지 비운 뒤다)을 보고서야 돌아간다. 그러면 수립 마무리는
+     * 반드시 정리 다음이고, 순서가 실행마다 갈리지 않는다.
+     */
+    @Test
+    void 가드를_본_뒤_전이하기_전에_정리가_지나가도_COLLECTING으로_올라가지_않는다() throws Exception {
+        List<Thread> before = liveWorkers();
+
+        CollectionStatus status = new CollectionStatus();
+        // 재시도 간격을 크게 준다. 창을 벌리는 사이에 다음 세션이 서면 무엇을
+        // 읽었는지 흐려진다.
+        CutInsideWindowRunner created = new CutInsideWindowRunner(new ChzzkProperties(
+                true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
+                Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                status, restClientBuilder, behavior);
+        runner = created;
+
+        boolean started = created.start();
+
+        // <b>양성 대조.</b> 이 값이 참이라는 것은 수립이 ①~⑤를 다 지나 마무리
+        // 직전까지 갔고, 그 자리에서 정리가 통째로 지나갔다는 뜻이다. 거짓이면
+        // 아래 부정 단언들은 겨냥한 순서를 한 번도 안 만든 채 저절로 참이 된다.
+        assertThat(created.windowOpened())
+                .as("정리가 창 안에서 안 지나갔다면 이 검사는 아무것도 안 본 것이다")
+                .isTrue();
+
+        assertThat(started)
+                .as("정리가 끝난 세션을 붙었다고 보고하면 루프가 그것을 믿고 빠져나간다")
+                .isFalse();
+        assertThat(status.state())
+                .as("정리가 이미 끝났는데 COLLECTING이면 health는 UP인 채로 수집만 죽는다")
+                .isNotEqualTo(CollectionStatus.State.COLLECTING);
+        assertThat(new CollectorHealth(status).health().getStatus().getCode())
+                .as("수집이 죽었는데 health가 UP이면 밖에서는 아무 신호도 없다")
+                .isEqualTo("DOWN");
+
+        // 앞 테스트가 남긴 동명 스레드를 내 것으로 세지 않도록 차집합을 쓴다.
+        List<Thread> mine = liveWorkers().stream().filter(t -> !before.contains(t)).toList();
+        awaitUntil(() -> mine.stream().noneMatch(Thread::isAlive));
+        assertThat(mine.stream().filter(Thread::isAlive).map(Thread::getName).toList())
+                .as("정리가 못 본 실행기는 아무도 안 닫는다 — 죽은 소켓에 ping을 계속 쏜다")
+                .isEmpty();
+    }
+
+    /**
+     * <b>「가드를 본 뒤 · 상태를 올리기 전」에 정리를 통째로 끼워 넣는 러너.</b>
+     *
+     * <p>가짜 서버 쪽 손잡이로는 이 자리를 못 짚는다 — 그 창 안에는 붙잡을 I/O가
+     * 없어서, 밖에서 끊기만 하면 두 스레드의 경합이라 순서가 실행마다 갈린다.
+     * {@code heartbeatListener(no)}가 그 창 안에서 불리는 유일한 우리 코드라
+     * 여기를 장벽으로 쓴다.
+     *
+     * <p><b>훅에서 던지지 않는다.</b> 여기는 수립 스레드 위라, 던지면 그 예외가
+     * 수립 실패로 둔갑해 "재현이 안 됐다"가 아니라 엉뚱한 자리에서 깨진다.
+     */
+    private static final class CutInsideWindowRunner extends CollectorRunner {
+
+        private final FakeChzzkBehavior behavior;
+        private final AtomicBoolean once = new AtomicBoolean();
+        private final AtomicBoolean opened = new AtomicBoolean();
+
+        CutInsideWindowRunner(ChzzkProperties properties, CollectionStatus status,
+                              RestClient.Builder restClientBuilder, FakeChzzkBehavior behavior) {
+            super(properties, status, restClientBuilder);
+            this.behavior = behavior;
+        }
+
+        /** 정리가 이 창 안에서 실제로 끝까지 지나갔는가. */
+        boolean windowOpened() { return opened.get(); }
+
+        @Override
+        HeartbeatListener heartbeatListener(long sessionNo) {
+            HeartbeatListener real = super.heartbeatListener(sessionNo);
+            if (once.compareAndSet(false, true)) {
+                behavior.closeSession();
+                // 구독 반납이 왔다는 것은 정리가 가드를 소모하고 자리를 비운 뒤라는 뜻이다.
+                opened.set(awaitQuietly(() -> behavior.unsubscribeCallCount() == 1));
+            }
+            return real;
+        }
+    }
+
+    /**
      * <b>①(세션 발급 REST)에 매달려 있는 동안 멈추라고 하면, 응답이 온 뒤에
      * ②로 넘어가면 안 된다.</b>
      *
@@ -339,5 +445,22 @@ class EstablishCutCleanupTest {
         while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
             Thread.sleep(20);
         }
+    }
+
+    /**
+     * 수립 스레드 위에서 기다린다. <b>결과를 값으로 돌려준다</b> — 거기서 던지면
+     * 예외가 수립 실패로 둔갑해, 재현이 안 된 것을 엉뚱한 실패로 읽게 된다.
+     */
+    private static boolean awaitQuietly(java.util.function.BooleanSupplier condition) {
+        long deadline = System.nanoTime() + AWAIT.toNanos();
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(5);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return condition.getAsBoolean();
     }
 }

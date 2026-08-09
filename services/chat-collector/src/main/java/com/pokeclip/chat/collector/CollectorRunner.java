@@ -325,23 +325,49 @@ public class CollectorRunner implements ApplicationRunner {
             // 세션은 이 덩어리의 것이라 바뀌지 않으므로 그쪽을 직접 읽는다.
             SummaryLogger logger = SummaryLogger.start(metrics, beat, SUMMARY_PERIOD,
                     opening::sinkFailureCount);
-            // 상태 전이보다 먼저 보인다. 이 뒤에 절단이 오면 cleanUpOnce가 여기서
-            // 읽어 둘 다 닫는다 — 반대 순서면 정리가 실행기를 못 보고 지나친다.
-            scope.heartbeat().set(beat);
-            scope.summaryLogger().set(logger);
-            scope.collectingSince().set(Instant.now());
 
-            if (!status.collectingIfPending()) {
+            // <b>가드를 보는 것과 상태를 올리는 것이 한 덩어리여야 한다.</b> 위 이른
+            // 검사만으로는 <b>스케줄러 둘을 세우는 동안이 통째로 창</b>이다 — 거기서
+            // 정리가 지나가면 그 정리는 아직 빈 홀더를 읽고 가고, 우리는 그 위에
+            // COLLECTING을 찍는다. 결과가 <b>정리 완료 + health UP + 죽은 소켓에 ping</b>
+            // 이고, 가드는 이미 소모돼 stop()도 아무것도 못 한다 — 이 서비스의 유일한
+            // 치명 실패다. 정리도 같은 락 안에서 가드를 소모하므로 둘 중 하나만 이긴다.
+            //
+            // <b>홀더도 이 안에서 채운다.</b> 락 밖에서 채우면 "정리가 널을 읽고 지나간
+            // 뒤에 우리가 채우는" 순서가 그대로 남아 스케줄러 둘이 아무에게도 안 닫힌다.
+            // 상태 전이보다 먼저 채우는 것도 같은 이유다 — 반대 순서면 이 뒤에 오는
+            // 절단의 정리가 실행기를 못 보고 지나친다.
+            //
+            // <b>검사가 지키는 것은 가드를 다시 보는 쪽뿐이다.</b> 락이 막는 것은
+            // 「가드 읽기와 전이 사이」의 몇 인스트럭션이라 붙잡을 I/O가 없어
+            // 결정적으로 열 장치를 못 만들었다. "원리적으로 불가능"이 아니라
+            // "관측 가능한 차이를 만들 손잡이가 없다"이다. 락을 떼도 빌드는 초록이니
+            // 떼려거든 여기를 먼저 읽어라.
+            boolean started;
+            synchronized (scope) {
+                if (scope.cleanedUp().get()) {
+                    started = false;
+                } else {
+                    scope.heartbeat().set(beat);
+                    scope.summaryLogger().set(logger);
+                    scope.collectingSince().set(Instant.now());
+                    started = status.collectingIfPending();
+                }
+            }
+
+            if (!started) {
                 // 우리가 올린 것은 우리가 내린다 — cleanUpOnce가 이미 지나갔다면
                 // 아무도 안 내려 준다.
                 beat.close();
                 logger.close();
                 scope.heartbeat().set(null);
                 scope.summaryLogger().set(null);
-                // <b>세션도 치운다.</b> 여기 오는 길이 둘이고 둘째가 새 길이다 —
-                // ① 검사와 전이 사이에 절단이 들어왔다(뒷정리가 이미 지났고 이 호출은
-                //   가드에 막혀 no-op이다)
-                // ② 이미 영구 정지(STOPPED)인 러너에 start()가 들어왔다. establishing()이
+                // <b>세션도 치운다.</b> 여기 오는 길이 셋이다 —
+                // ① 락 안에서 본 가드가 이미 소모돼 있었다. 위 이른 검사가 대부분을
+                //   거르지만 그 검사와 여기 사이의 창은 이쪽만 막는다. 이 호출은
+                //   가드에 막혀 소켓만 닫는다
+                // ② 검사와 전이 사이에 절단이 STOPPED를 찍었다(같은 모양이다)
+                // ③ 이미 영구 정지(STOPPED)인 러너에 start()가 들어왔다. establishing()이
                 //   더는 그 위를 안 덮으므로 수립은 끝까지 가는데 아무도 COLLECTING으로
                 //   못 올린다. 안 치우면 <b>소켓도 자리도 통째로 샌다</b> — 구독은 서버에
                 //   남아 상한 3개를 먹고, 자리가 안 비어 다음 세션이 영영 못 선다.
@@ -739,7 +765,15 @@ public class CollectorRunner implements ApplicationRunner {
      * @param reason 판정 라인에 남길 사유. null이면 정상 종료(SHUTDOWN)다
      */
     private void cleanUpOnce(SessionScope scope, StopReason reason) {
-        if (!scope.cleanedUp().compareAndSet(false, true)) {
+        // <b>수립 마무리가 같은 락 안에서 이 가드를 읽고 상태를 올린다.</b> 락이
+        // 없으면 "가드는 아직 비었는데 홀더도 아직 비어 있는" 순간에 둘이 엇갈려,
+        // 우리가 못 본 스케줄러 둘이 그대로 남고 health는 UP으로 올라간다.
+        // 락 안에서 하는 일은 이 CAS 하나뿐이다 — 여기에 I/O를 들이지 마라.
+        boolean mine;
+        synchronized (scope) {
+            mine = scope.cleanedUp().compareAndSet(false, true);
+        }
+        if (!mine) {
             // <b>가드에 막혀도 소켓은 닫는다.</b> 앞선 정리가 지나간 <i>뒤에</i> ②가
             // 성립시킨 소켓은 그 정리가 못 봤고, 여기서 안 닫으면 아무도 안 닫는다 —
             // 서버 쪽 자리가 죽은 전송을 알아챌 때까지(10초~4분 42초) 남고 상한은 3개다.
