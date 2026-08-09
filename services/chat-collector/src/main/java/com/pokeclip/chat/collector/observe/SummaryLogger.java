@@ -97,7 +97,10 @@ public final class SummaryLogger implements AutoCloseable {
      *       {@code reconnects}·{@code outage}
      *   <li>{@code lastOutageFrom}·{@code lastOutageTo}는 누계가 아니라
      *       <b>마지막 절단 하나</b>의 시각이다. 누계로 읽으면 "이 시각부터 내내
-     *       끊겨 있었다"가 된다. 한 번도 안 끊겼으면 {@code none}이다
+     *       끊겨 있었다"가 된다. 한 번도 안 끊겼으면 둘 다 {@code none}이고,
+     *       <b>{@code lastOutageFrom}만 있고 {@code lastOutageTo}가 {@code none}이면
+     *       끊긴 채로 끝난 것이다</b> — 그때 {@code outage}는 판정 시각까지의
+     *       하한이지 유실의 전부가 아니다
      *   <li>{@code session}은 경계가 아니라 몇 번째 세션의 판정인가다
      *   <li>{@code reason}은 경계가 아니라 그 판정의 사유다
      * </ul>

@@ -347,6 +347,117 @@ class ReconnectTest {
     }
 
     /**
+     * <b>다시 못 붙은 채로 끝나면 그 절단이 판정 줄에 실려야 한다.</b>
+     *
+     * <p>절단 구간은 재접속에 <b>성공</b>했을 때만 닫혔다. 그래서 재시도가 401을
+     * 만나 영구 정지하면 판정 줄이 {@code outage=0ms lastOutageFrom=none}이라고
+     * 말한다 — 원래 절단 이후로 계속 못 받고 있는데도. 「얼마나 놓쳤는지 한 줄로
+     * 보이게 한다」가 정확히 그 자리에서 무력해진다.
+     *
+     * <p><b>{@code reconnects}는 안 올라야 한다.</b> 구간을 닫는 것과 "다시 붙었다"는
+     * 다른 사실이다. 같이 올리면 붙은 적이 없는 프로세스가 재연결 1회로 보고되고,
+     * 그러면 재연결이 실제로 도는지를 이 숫자로 못 읽는다.
+     */
+    @Test
+    void 영구_정지로_끝나도_열린_절단_구간이_판정에_실린다() throws Exception {
+        try (LogCaptor captor = new LogCaptor()) {
+            start(Duration.ofMillis(300), Duration.ofSeconds(1));
+            assertThat(status.state())
+                    .as("붙지도 않았다면 닫을 절단 구간이 애초에 없다")
+                    .isEqualTo(CollectionStatus.State.COLLECTING);
+
+            behavior.authStatus = 401;      // 재시도가 영구 사유를 만난다
+            behavior.closeSession();
+
+            // <b>단언하는 값 자체를 기다린다.</b> 상태(STOPPED)는 판정 줄보다 앞서
+            // 찍히므로, 상태로 기다리면 아직 안 나간 줄을 읽는다.
+            awaitUntil(() -> verdicts(captor, runner.lastSessionNo()) == 1);
+            assertThat(status.reason())
+                    .as("영구 정지를 안 밟았다면 이 검사는 겨냥한 자리를 한 번도 안 지났다")
+                    .isEqualTo(StopReason.SESSION_AUTH_REJECTED);
+            assertThat(behavior.authCallCount())
+                    .as("재시도가 안 돌았다면 절단이 열린 채로 끝나는 상황이 아니다")
+                    .isEqualTo(2);
+
+            CollectionMetrics.Verdict v = runner.metrics().verdict();
+            assertThat(v.totalOutage())
+                    .as("끊긴 뒤로 계속 못 받고 있는데 0이면 얼마나 놓쳤는지가 어디에도 안 남는다")
+                    .isGreaterThanOrEqualTo(Duration.ofMillis(300));
+            assertThat(v.lastOutageFrom())
+                    .as("언제부터 못 받았는지가 없으면 영상과 대조할 수 없다")
+                    .isNotNull();
+            assertThat(v.lastOutageTo())
+                    .as("다시 받기 시작한 적이 없다. 시각이 서면 '이때 돌아왔다'로 읽힌다")
+                    .isNull();
+            assertThat(v.reconnects())
+                    .as("다시 붙은 적이 없는데 세면 재연결이 도는지를 이 숫자로 못 읽는다")
+                    .isZero();
+
+            java.util.Map<String, String> fields = fields(verdictLine(captor));
+            assertThat(fields.get("outage"))
+                    .as("지표에는 있는데 줄에 안 실리면 운영자에게는 여전히 없는 값이다")
+                    .isNotNull()
+                    .isNotEqualTo("0ms");
+            assertThat(fields.get("lastOutageFrom"))
+                    .isNotNull()
+                    .isNotEqualTo("none");
+            assertThat(fields)
+                    .containsEntry("lastOutageTo", "none")
+                    .containsEntry("reconnects", "0");
+        }
+    }
+
+    /**
+     * <b>끊긴 채로 프로세스를 종료해도 같은 모양이다.</b> 판정이 나가는 자리가
+     * 둘(영구 정지 · 프로세스 종료)이라, 한쪽만 닫으면 다른 쪽 판정은 여전히
+     * {@code outage=0ms}라고 말한다.
+     *
+     * <p>재시도 간격을 크게 준다 — 이 검사 안에서 다시 붙으면 절단 구간이 그때
+     * 닫혀 종료 경로가 아무것도 안 검사한다.
+     */
+    @Test
+    void 끊긴_채로_종료해도_열린_절단_구간이_판정에_실린다() throws Exception {
+        try (LogCaptor captor = new LogCaptor()) {
+            start(Duration.ofSeconds(30), Duration.ofSeconds(60));
+            assertThat(status.state())
+                    .as("붙지도 않았다면 닫을 절단 구간이 애초에 없다")
+                    .isEqualTo(CollectionStatus.State.COLLECTING);
+            long session = runner.lastSessionNo();
+
+            behavior.closeSession();
+            awaitUntil(() -> status.state() == CollectionStatus.State.RECONNECTING);
+            assertThat(status.state())
+                    .as("절단을 아무도 못 봤다면 열린 구간 자체가 없다")
+                    .isEqualTo(CollectionStatus.State.RECONNECTING);
+            Thread.sleep(300);      // 끊겨 있는 시간을 아래 임계 위로 확보한다
+
+            runner.stop();
+
+            CollectionMetrics.Verdict v = runner.metrics().verdict();
+            assertThat(v.totalOutage())
+                    .as("끊긴 채로 끝났는데 0이면 얼마나 놓쳤는지가 어디에도 안 남는다")
+                    .isGreaterThanOrEqualTo(Duration.ofMillis(300));
+            assertThat(v.reconnects())
+                    .as("다시 붙은 적이 없는데 세면 재연결이 도는지를 이 숫자로 못 읽는다")
+                    .isZero();
+
+            java.util.Map<String, String> fields = fields(captor.messages().stream()
+                    .filter(m -> m.startsWith("chat.session.verdict session=" + session + " "))
+                    .findFirst().orElseThrow());
+            assertThat(fields.get("outage"))
+                    .as("지표에는 있는데 줄에 안 실리면 운영자에게는 여전히 없는 값이다")
+                    .isNotNull()
+                    .isNotEqualTo("0ms");
+            assertThat(fields.get("lastOutageFrom"))
+                    .isNotNull()
+                    .isNotEqualTo("none");
+            assertThat(fields)
+                    .containsEntry("lastOutageTo", "none")
+                    .containsEntry("reconnects", "0");
+        }
+    }
+
+    /**
      * <b>재연결 직후의 첫 채팅이 절단 구간을 닫는 코드보다 먼저 도착하는 순서.</b>
      *
      * <p>이 순서가 실제로 이긴다. 프레임 싱크는 세션이 서자마자 살아 있는데, 재연결
@@ -415,6 +526,18 @@ class ReconnectTest {
             }
         }
         return map;
+    }
+
+    /**
+     * <b>이 러너가 받은 번호로 좁힌다.</b> {@code LogCaptor}는 JVM 전역 루트 로거라
+     * 남의 러너가 늦게 찍은 판정 줄까지 담는다.
+     */
+    private String verdictLine(LogCaptor captor) {
+        long session = runner.lastSessionNo();
+        return captor.messages().stream()
+                .filter(m -> m.startsWith("chat.session.verdict session=" + session + " "))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("session=" + session + " 판정 라인이 안 나갔다"));
     }
 
     private long verdicts(LogCaptor captor, long session) {

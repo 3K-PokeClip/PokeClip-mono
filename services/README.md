@@ -233,6 +233,11 @@ Go 쪽에서 구분이 안 된다.
 한 줄이고, 거기에 `reconnects=` · `outage=`(누적 절단 시간) · `lastOutageFrom/To`가 실린다.
 **세션 하나의 값은 `chat.session.ended`가 따로 낸다.**
 
+**끊긴 채로 끝나도 그 구간이 판정에 실린다** — 영구 정지(401·`revoked`)든 프로세스
+종료든 마찬가지다. 그때는 `lastOutageTo=none`이고 `reconnects`는 안 오른다(다시 붙은
+적이 없다). 즉 `lastOutageFrom`만 있고 `lastOutageTo=none`이면 **"이때 끊겨서 끝까지
+못 돌아왔다"**는 뜻이고, `outage=`는 판정 시각까지의 **하한**이다.
+
 **절단 구간은 `maxReceiveGap`에 안 섞인다.** 섞으면 "한산했을 뿐"과 "끊겨 있었다"가
 같은 숫자로 보인다.
 

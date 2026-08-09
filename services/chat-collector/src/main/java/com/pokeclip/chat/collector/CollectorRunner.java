@@ -614,6 +614,18 @@ public class CollectorRunner implements ApplicationRunner {
         if (!verdictLogged.compareAndSet(false, true)) {
             return;
         }
+        // <b>열려 있는 절단 구간을 여기서 닫는다.</b> 닫는 자리가 원래 재접속
+        // 성공 하나뿐이라, 다시 못 붙고 끝나면 판정 줄이 "outage=0ms
+        // lastOutageFrom=none"이라고 말했다 — 그 절단 이후로 계속 못 받고 있는데도.
+        // 판정을 내는 두 자리(영구 정지 · 프로세스 종료)가 둘 다 이 가드를 지나므로
+        // 여기 두면 양쪽이 한 번에 덮인다.
+        //
+        // <b>recordOutage가 아니다.</b> 그쪽은 reconnects를 같이 올리는데, 다시 붙은
+        // 적이 없으므로 그러면 한 번도 못 붙은 프로세스가 재연결 1회로 보고된다.
+        Instant openSince = disconnectedAt.getAndSet(null);
+        if (openSince != null) {
+            metrics.recordUnrecoveredOutage(openSince, Instant.now());
+        }
         // 세션의 값을 여기서 하나도 안 읽는다. 세션이 끝날 때 metrics가 전부
         // 걷어 두므로, 여기서 마지막 세션 것을 다시 읽으면 그 항만 앞 세션 값이 지워진다.
         //

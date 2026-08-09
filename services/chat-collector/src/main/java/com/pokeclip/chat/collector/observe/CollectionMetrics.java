@@ -51,6 +51,9 @@ public final class CollectionMetrics {
      *                     있었다"가 같은 숫자가 된다. 끊긴 시간은 {@code totalOutage}가 든다
      * @param lastOutageFrom 누계가 아니라 <b>마지막 절단 하나</b>의 시각이다.
      *                     한 번도 안 끊겼으면 null — 0을 찍으면 1970년으로 읽힌다
+     * @param lastOutageTo <b>{@code lastOutageFrom}이 있는데 여기가 null이면
+     *                     "끊긴 채로 끝났다"</b>는 뜻이다. 둘 다 null이면 한 번도
+     *                     안 끊긴 것이라, 둘을 같이 읽어야 두 상태가 갈린다
      */
     public record Verdict(
             long totalReceived,
@@ -178,6 +181,30 @@ public final class CollectionMetrics {
             totalOutageMillis += Duration.between(from, to).toMillis();
             lastOutageFromMillis = from.toEpochMilli();
             lastOutageToMillis = to.toEpochMilli();
+        }
+    }
+
+    /**
+     * 끊긴 채로 수집이 끝났다. <b>{@link #recordOutage}와 달리 {@code reconnects}를
+     * 안 올린다</b> — 다시 붙은 적이 없다. 같이 올리면 한 번도 못 붙은 프로세스가
+     * 재연결 1회로 보고돼, 재연결이 실제로 도는지를 그 숫자로 못 읽는다.
+     *
+     * <p>이 갈래가 없으면 판정 줄이 {@code outage=0ms lastOutageFrom=none}이라고
+     * 말한다 — 원래 절단 이후로 계속 못 받고 있는데도. 「얼마나 놓쳤는지 한 줄로
+     * 보이게 한다」가 <b>영구 정지·끊긴 채 종료</b>에서만 조용히 무력해진다.
+     *
+     * @param from  못 받기 시작한 시각
+     * @param until 판정을 내는 시각. <b>복구 시각이 아니다</b> — 여기까지가 우리가
+     *              아는 마지막 지점이고, 실제 유실은 이보다 길 수 있다
+     */
+    public void recordUnrecoveredOutage(Instant from, Instant until) {
+        synchronized (lock) {
+            totalOutageMillis += Duration.between(from, until).toMillis();
+            lastOutageFromMillis = from.toEpochMilli();
+            // <b>복구 시각을 비운다.</b> 앞 절단의 복구 시각이 남아 있으면 시각 둘이
+            // 서로 다른 절단의 것이 되어 "이때 끊겨 이때 돌아왔다"로 읽힌다.
+            // 비어 있으면 none이라, from만 있고 to가 none인 모양이 곧 "안 돌아왔다"다.
+            lastOutageToMillis = 0;
         }
     }
 
