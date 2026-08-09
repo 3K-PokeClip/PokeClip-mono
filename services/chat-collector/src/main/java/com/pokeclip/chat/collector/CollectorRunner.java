@@ -362,10 +362,10 @@ public class CollectorRunner implements ApplicationRunner {
             // 상태까지 COLLECTING으로 되돌리면 health는 UP인 채로 수집만 죽는다.
             // 정리 가드는 이미 소모돼 stop()도 아무것도 못 한다.
             if (scope.cleanedUp().get()) {
-                // <b>우리가 연 소켓은 우리가 닫는다.</b> 정리가 ②보다 먼저 지나갔으면
-                // 그 정리는 아직 없던 소켓을 못 닫았고, 가드가 소모돼 아무도 다시
-                // 안 온다. close()는 멱등이라 이미 닫힌 경우엔 아무 일도 안 한다.
-                opening.close();
+                // <b>우리가 연 것은 우리가 치운다.</b> 정리가 ②보다 먼저 지나갔으면
+                // 그 정리는 아직 없던 소켓을 못 닫았고, ④보다 먼저 지나갔으면 아직
+                // 없던 구독도 못 반납했다. 가드가 소모돼 아무도 다시 안 온다.
+                releaseLate(scope);
                 return false;
             }
 
@@ -849,6 +849,37 @@ public class CollectorRunner implements ApplicationRunner {
     }
 
     /**
+     * <b>정리가 이미 지나간 뒤에 성립한 것을 치운다.</b> 소켓만이 아니라 구독까지다.
+     *
+     * <p>수립은 ②(소켓)와 ④(구독)를 서로 다른 시점에 만든다. 정리가 그 사이를
+     * 지나가면 <b>정리는 아직 없던 구독을 못 반납하고, 가드를 소모했으므로 아무도
+     * 다시 오지 않는다</b> — 그 구독은 서버에 남아 상한 3개 중 하나를 먹는다.
+     * {@code close()}만 부르면 정확히 그 상태가 된다.
+     *
+     * <p>{@code releaseAndClose()}는 세션 키를 {@code getAndSet(null)}로 집으므로
+     * 앞선 정리가 이미 반납했으면 {@code SKIPPED}로 지나가고 소켓만 닫는다.
+     * 즉 이 호출이 늘어도 반납 REST가 두 번 나가지 않는다.
+     *
+     * <p><b>결말이 {@code SKIPPED}가 아닐 때만 줄을 남긴다.</b> 그 경우가 곧
+     * "정리가 못 본 구독이 실제로 있었다"이고, 평상시에는 한 줄도 안 늘어
+     * 세션당 반납 줄이 하나라는 기존 모양이 그대로다.
+     *
+     * <p><b>이 갈래를 결정적으로 여는 장치가 없다.</b> "원리적으로 불가능"이 아니다 —
+     * 창은 {@code ChatSession.open()}이 {@code connected}를 받고 깨어나 세션 키를
+     * 세우기까지의 몇 줄이고, 그 사이에 절단 정리가 통째로 끼어들면 열린다.
+     * 그런데 그 몇 줄에는 붙잡을 I/O가 없고, 깨우는 쪽(래치 countDown)이 절단
+     * 콜백보다 <b>먼저</b> 도는 순서라 수립 스레드가 항상 앞선다. 가짜 서버는
+     * 클라이언트 스레드를 그 자리에 세울 손잡이가 없다.
+     */
+    private void releaseLate(SessionScope scope) {
+        ChatSession.Release released = scope.chat().releaseAndClose();
+        if (released != ChatSession.Release.SKIPPED) {
+            log.info("chat.session.released session={} subscription={} late=true",
+                    scope.no().get(), released);
+        }
+    }
+
+    /**
      * 두 종료 경로(전송 절단 · 프로세스 종료)가 공유하는 정리 절차.
      *
      * <p><b>세션마다 한 번만 돈다.</b> 절단이 먼저 정리하고 나면 뒤이은 {@code stop()}은
@@ -874,11 +905,12 @@ public class CollectorRunner implements ApplicationRunner {
             mine = scope.cleanedUp().compareAndSet(false, true);
         }
         if (!mine) {
-            // <b>가드에 막혀도 소켓은 닫는다.</b> 앞선 정리가 지나간 <i>뒤에</i> ②가
-            // 성립시킨 소켓은 그 정리가 못 봤고, 여기서 안 닫으면 아무도 안 닫는다 —
-            // 서버 쪽 자리가 죽은 전송을 알아챌 때까지(10초~4분 42초) 남고 상한은 3개다.
-            // 판정 두 줄만 가드가 막으면 된다. close()는 멱등이다.
-            scope.chat().close();
+            // <b>가드에 막혀도 뒤늦게 생긴 것은 치운다.</b> 앞선 정리가 지나간
+            // <i>뒤에</i> ②가 성립시킨 소켓과 ④가 만든 구독은 그 정리가 못 봤고,
+            // 여기서 안 치우면 아무도 안 치운다 — 서버 쪽 자리가 죽은 전송을
+            // 알아챌 때까지(10초~4분 42초) 남고 상한은 3개다.
+            // 판정 두 줄만 가드가 막으면 된다.
+            releaseLate(scope);
             return;
         }
         // 자리부터 비운다. 반납은 실서버에서 약 1초 걸리는 왕복인데, 그것을 끝낸
