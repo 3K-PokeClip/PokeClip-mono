@@ -1,0 +1,81 @@
+/* PokeClip v3 — motion tokens + choreography
+   Personality: fluid / playful / confident (see motion_spec.md)
+   One shared 1600ms clock; phase offsets are intra-keyframe percentages.
+   NOTE: timing functions inside @keyframes are LITERAL on purpose —
+   var() there is silently dropped in Chromium (degrades to linear). */
+
+:root {
+  --p2m-duration: 1600ms;
+  --p2m-ease-draw: cubic-bezier(0.48, 0.04, 0.16, 1);   /* slow-in, long slow-out */
+  --p2m-ease-pop: cubic-bezier(0.34, 1.36, 0.5, 1);     /* back-out overshoot */
+  --p2m-ease-settle: cubic-bezier(0.22, 0.61, 0.36, 1); /* ease-out */
+  --p2m-overshoot: 1.06;
+}
+
+/* ---- ribbon draw-on: split masks. Magenta (#spine-accent) and indigo
+   (#spine-main) each reveal through their OWN open mask spine whose butt
+   ends overshoot past the clip lines into clipped-away zones — so every
+   visible color boundary is a CLIP line (joint C, slit cuts A/B), never a
+   moving dash edge. E1/E2 are the exact de Casteljau halves of the design
+   curve --p2m-ease-draw split at the 20.15% handoff (build_logo.py emits
+   them; see outputs/fit_work/draw_timing.json), so combined pen pace equals
+   the single-stroke design. */
+#spine-accent {
+  animation: p2m-draw-accent var(--p2m-duration) linear both;
+}
+@keyframes p2m-draw-accent {
+  0% { stroke-dashoffset: 1; stroke-dasharray: 1 1; }
+  8% { stroke-dashoffset: 1; stroke-dasharray: 1 1;
+       animation-timing-function: cubic-bezier(0.4451, 0.0731, 0.7597, 0.4418); /* E1 */ }
+  20.15% { stroke-dashoffset: 0; stroke-dasharray: 1 1; }
+  100% { stroke-dashoffset: 0; stroke-dasharray: 1 1; }
+}
+#spine-main {
+  animation: p2m-draw-main var(--p2m-duration) linear both;
+}
+@keyframes p2m-draw-main {
+  0% { stroke-dashoffset: 1; stroke-dasharray: 1 1; }
+  20.15% { stroke-dashoffset: 1; stroke-dasharray: 1 1;
+       animation-timing-function: cubic-bezier(0.2635, 0.2787, 0.1457, 1); /* E2 */ }
+  72% { stroke-dashoffset: 0; stroke-dasharray: 1 1; }
+  100% { stroke-dashoffset: 0; stroke-dasharray: 1 1; }
+}
+
+/* ---- play mark: scale-pop with overshoot, overlapping the draw finish */
+#playmark {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation:
+    p2m-play-pop var(--p2m-duration) linear both,
+    p2m-play-fade var(--p2m-duration) linear both;
+}
+@keyframes p2m-play-pop {
+  0% { transform: scale(0.3); }
+  66% { transform: scale(0.3);
+        animation-timing-function: cubic-bezier(0.34, 1.36, 0.5, 1); /* --p2m-ease-pop */ }
+  82% { transform: scale(1.06); /* --p2m-overshoot */
+        animation-timing-function: cubic-bezier(0.33, 0, 0.3, 1); }
+  91% { transform: scale(0.988);
+        animation-timing-function: cubic-bezier(0.33, 0, 0.3, 1); }
+  100% { transform: scale(1); }
+}
+@keyframes p2m-play-fade {
+  0% { opacity: 0; }
+  66% { opacity: 0;
+        animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1); /* --p2m-ease-settle */ }
+  76% { opacity: 1; }
+  100% { opacity: 1; }
+}
+
+/* ---- whole-mark micro settle (follow-through; ends exactly at identity) */
+#logo {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: p2m-logo-settle var(--p2m-duration) linear both;
+}
+@keyframes p2m-logo-settle {
+  0% { transform: scale(0.992); }
+  70% { transform: scale(0.992);
+        animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1); /* --p2m-ease-settle */ }
+  100% { transform: scale(1); }
+}
