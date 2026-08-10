@@ -1,0 +1,37 @@
+/* Typography primitives — font families, size ramp, line-heights, weights. */
+:root {
+  --pc-font-sans:
+    'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo',
+    'Malgun Gothic', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --pc-font-mono:
+    'JetBrains Mono', ui-monospace, SFMono-Regular, 'Roboto Mono', Menlo, Consolas, monospace;
+
+  /* size ramp (rem, base 16 — 15px base UI) */
+  --pc-font-size-2xs: 0.6875rem; /* 11 */
+  --pc-font-size-xs: 0.75rem; /* 12 */
+  --pc-font-size-sm: 0.8125rem; /* 13 */
+  --pc-font-size-md: 0.9375rem; /* 15 — base UI */
+  --pc-font-size-lg: 1.125rem; /* 18 */
+  --pc-font-size-xl: 1.375rem; /* 22 */
+  --pc-font-size-2xl: 1.75rem; /* 28 */
+  --pc-font-size-3xl: 2.25rem; /* 36 */
+  --pc-font-size-4xl: 3rem; /* 48 */
+
+  /* line heights (Hangul reads poorly below 1.5) */
+  --pc-line-tight: 1.2;
+  --pc-line-snug: 1.35;
+  --pc-line-normal: 1.5;
+  --pc-line-relaxed: 1.7;
+
+  /* weights (Pretendard variable: 45–920) */
+  --pc-weight-regular: 400;
+  --pc-weight-medium: 500;
+  --pc-weight-semibold: 600;
+  --pc-weight-bold: 700;
+
+  /* letter spacing */
+  --pc-letter-tight: -0.02em;
+  --pc-letter-snug: -0.01em;
+  --pc-letter-normal: 0;
+  --pc-letter-wide: 0.02em;
+}

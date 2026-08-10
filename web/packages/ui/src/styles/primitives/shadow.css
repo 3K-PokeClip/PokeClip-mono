@@ -1,0 +1,10 @@
+/* Elevation shadows — tuned for dark UI (deep, soft) + brand glow.
+   References color primitives; import color.css before this file. */
+:root {
+  --pc-shadow-sm: 0 1px 2px rgb(var(--pc-gray-1000-rgb) / 0.4);
+  --pc-shadow-md: 0 4px 12px rgb(var(--pc-gray-1000-rgb) / 0.45);
+  --pc-shadow-lg: 0 12px 32px rgb(var(--pc-gray-1000-rgb) / 0.55);
+  --pc-shadow-xl: 0 24px 64px rgb(var(--pc-gray-1000-rgb) / 0.6);
+  --pc-shadow-glow-accent:
+    0 0 0 1px rgb(var(--pc-primary-500-rgb) / 0.4), 0 0 24px rgb(var(--pc-primary-500-rgb) / 0.35);
+}

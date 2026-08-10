@@ -1,0 +1,56 @@
+/* Semantic tokens — DARK theme (default). Role-based; only this tier flips per theme.
+   Components consume ONLY these tokens, never the primitives. */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* backgrounds — elevation via progressively lighter grays */
+  --pc-color-bg-canvas: var(--pc-gray-1000);
+  --pc-color-bg-surface: var(--pc-gray-900);
+  --pc-color-bg-surface-hover: var(--pc-gray-800);
+  --pc-color-bg-surface-raised: var(--pc-gray-800);
+  --pc-color-bg-inset: var(--pc-gray-950);
+  --pc-color-bg-overlay: rgb(var(--pc-gray-1000-rgb) / 0.72);
+
+  /* text */
+  --pc-color-text-primary: var(--pc-gray-50);
+  --pc-color-text-secondary: var(--pc-gray-300);
+  --pc-color-text-muted: var(--pc-gray-400);
+  --pc-color-text-disabled: var(--pc-gray-600);
+  --pc-color-text-on-accent: var(--pc-gray-50);
+  --pc-color-text-on-danger: var(--pc-white);
+
+  /* borders */
+  --pc-color-border-subtle: var(--pc-gray-800);
+  --pc-color-border-default: var(--pc-gray-700);
+  --pc-color-border-strong: var(--pc-gray-600);
+
+  /* brand / accent (primary — indigo) */
+  --pc-color-accent: var(--pc-primary-500);
+  --pc-color-accent-hover: var(--pc-primary-400);
+  --pc-color-accent-active: var(--pc-primary-600);
+  --pc-color-accent-subtle: rgb(var(--pc-primary-500-rgb) / 0.16);
+  --pc-color-accent-subtle-hover: rgb(var(--pc-primary-500-rgb) / 0.24);
+  --pc-color-accent-text: var(--pc-primary-300);
+
+  /* point (magenta highlight) */
+  --pc-color-point: var(--pc-point-500);
+  --pc-color-point-hover: var(--pc-point-400);
+  --pc-color-point-active: var(--pc-point-600);
+  --pc-color-point-subtle: rgb(var(--pc-point-500-rgb) / 0.16);
+  --pc-color-point-text: var(--pc-point-300);
+
+  /* focus */
+  --pc-color-focus-ring: var(--pc-primary-400);
+
+  /* status */
+  --pc-color-danger: var(--pc-red-400);
+  --pc-color-danger-hover: var(--pc-red-500);
+  --pc-color-danger-subtle: rgb(var(--pc-red-400-rgb) / 0.16);
+  --pc-color-success: var(--pc-green-600);
+  --pc-color-success-subtle: rgb(var(--pc-green-600-rgb) / 0.16);
+  --pc-color-warning: var(--pc-yellow-500);
+  --pc-color-warning-subtle: rgb(var(--pc-yellow-500-rgb) / 0.16);
+  --pc-color-info: var(--pc-cyan-500);
+  --pc-color-info-subtle: rgb(var(--pc-cyan-500-rgb) / 0.16);
+}

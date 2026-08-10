@@ -1,0 +1,14 @@
+/* Z-index scale — named layers spaced to allow insertion. */
+:root {
+  --pc-z-hide: -1;
+  --pc-z-base: 0;
+  --pc-z-docked: 10;
+  --pc-z-dropdown: 1000;
+  --pc-z-sticky: 1100;
+  --pc-z-banner: 1200;
+  --pc-z-overlay: 1300;
+  --pc-z-modal: 1400;
+  --pc-z-popover: 1500;
+  --pc-z-toast: 1600;
+  --pc-z-tooltip: 1700;
+}

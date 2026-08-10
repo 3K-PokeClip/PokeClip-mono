@@ -1,0 +1,37 @@
+.track {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  background: var(--pc-color-bg-inset);
+  border-radius: var(--pc-radius-pill);
+  overflow: hidden;
+}
+.track[data-size='sm'] {
+  height: 6px;
+}
+.fill {
+  height: 100%;
+  background: var(--pc-color-accent);
+  border-radius: inherit;
+  transition: width var(--pc-duration-normal) var(--pc-ease-standard);
+}
+.track[data-indeterminate] .fill {
+  width: 40%;
+  animation: pc-progress-indet 1.2s ease-in-out infinite;
+}
+@keyframes pc-progress-indet {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fill {
+    transition: none;
+  }
+  .track[data-indeterminate] .fill {
+    animation-duration: 2.4s;
+  }
+}

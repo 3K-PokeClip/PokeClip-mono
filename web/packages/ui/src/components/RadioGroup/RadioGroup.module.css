@@ -1,0 +1,66 @@
+.group {
+  display: flex;
+  gap: var(--pc-space-3);
+}
+.group[data-orientation='vertical'] {
+  flex-direction: column;
+}
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pc-space-2);
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--pc-font-sans);
+  font-size: var(--pc-font-size-md);
+  color: var(--pc-color-text-primary);
+}
+.root[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+}
+.dot {
+  position: relative;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--pc-color-border-strong);
+  border-radius: var(--pc-radius-circle);
+  background: var(--pc-color-bg-inset);
+  transition: border-color var(--pc-duration-fast) var(--pc-ease-standard);
+}
+.dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--pc-radius-circle);
+  background: var(--pc-color-accent);
+  transform: scale(0);
+  transition: transform var(--pc-duration-fast) var(--pc-ease-standard);
+}
+.input:checked + .dot {
+  border-color: var(--pc-color-accent);
+}
+.input:checked + .dot::after {
+  transform: scale(1);
+}
+.input:focus-visible + .dot {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dot::after {
+    transition: none;
+  }
+}

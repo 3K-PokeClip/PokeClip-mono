@@ -1,0 +1,76 @@
+/* Primitive color palette — theme-independent raw values. Do not consume these
+   directly in components; use the semantic tokens (theme-*.css) instead. */
+:root {
+  /* ===== Brand: Primary (indigo — main color) ===== */
+  --pc-primary-50: #f0f3fc;
+  --pc-primary-100: #e8edfa;
+  --pc-primary-200: #cdd7f2;
+  --pc-primary-300: #a8b9e8;
+  --pc-primary-400: #7d93d9;
+  --pc-primary-500: #586fc4; /* BRAND */
+  --pc-primary-600: #4055a8;
+  --pc-primary-700: #304184;
+  --pc-primary-800: #233266;
+  --pc-primary-900: #172554;
+  --pc-primary-400-rgb: 125 147 217;
+  --pc-primary-500-rgb: 88 111 196;
+
+  /* ===== Point: Magenta (accent / highlight — pairs with the indigo brand) ===== */
+  --pc-point-50: #fdf1f9;
+  --pc-point-100: #fbe3f4;
+  --pc-point-200: #f6c4e6;
+  --pc-point-300: #ef9bd3;
+  --pc-point-400: #e568ba;
+  --pc-point-500: #d63f9f; /* POINT */
+  --pc-point-600: #bd2d86;
+  --pc-point-700: #99226b;
+  --pc-point-800: #761b53;
+  --pc-point-900: #4d1638;
+  --pc-point-400-rgb: 229 104 186;
+  --pc-point-500-rgb: 214 63 159;
+
+  /* ===== Neutral: cool gray ===== */
+  --pc-gray-50: #eef0f3;
+  --pc-gray-100: #e4e6e9;
+  --pc-gray-200: #cdd1d4;
+  --pc-gray-300: #aab0b6;
+  --pc-gray-400: #7f8891;
+  --pc-gray-500: #616871;
+  --pc-gray-600: #494d55;
+  --pc-gray-700: #3b4049;
+  --pc-gray-800: #2d3036;
+  --pc-gray-900: #25272c;
+  --pc-gray-950: #1d1e22;
+  --pc-gray-1000: #141517; /* base near-black */
+  --pc-gray-50-rgb: 238 240 243;
+  --pc-gray-1000-rgb: 20 21 23;
+
+  --pc-white: #ffffff;
+  --pc-black: #000000;
+
+  /* ===== Accent / status hues ===== */
+  --pc-cyan-200: #9efaff;
+  --pc-cyan-500: #00dfff;
+  --pc-cyan-500-rgb: 0 223 255;
+  --pc-teal-500: #0bb0c7;
+
+  --pc-pink-200: #ffc6f2;
+  --pc-pink-400: #ff5dd0;
+  --pc-pink-500: #fa00ca;
+
+  --pc-purple-500: #c02cff;
+
+  --pc-yellow-500: #ffd607;
+  --pc-yellow-500-rgb: 255 214 7;
+
+  --pc-green-200: #daffca;
+  --pc-green-400: #8cfa5a;
+  --pc-green-600: #30ac04;
+  --pc-green-600-rgb: 48 172 4;
+
+  --pc-red-400: #ff4d6a;
+  --pc-red-500: #ff002f;
+  --pc-red-400-rgb: 255 77 106;
+
+  --pc-brown-500: #ca4400;
+}

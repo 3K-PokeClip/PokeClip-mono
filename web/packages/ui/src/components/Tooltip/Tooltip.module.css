@@ -1,0 +1,30 @@
+.tooltip {
+  background: var(--pc-color-bg-surface-raised);
+  color: var(--pc-color-text-primary);
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: var(--pc-radius-md);
+  padding: var(--pc-space-1) var(--pc-space-2);
+  font-family: var(--pc-font-sans);
+  font-size: var(--pc-font-size-sm);
+  line-height: var(--pc-line-snug);
+  box-shadow: var(--pc-shadow-md);
+  z-index: var(--pc-z-tooltip);
+  max-width: 260px;
+  pointer-events: none;
+  animation: pc-tooltip-in var(--pc-duration-fast) var(--pc-ease-standard);
+}
+@keyframes pc-tooltip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tooltip {
+    animation: none;
+  }
+}

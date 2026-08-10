@@ -1,0 +1,26 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pc-space-2);
+}
+.label {
+  font-size: var(--pc-font-size-sm);
+  font-weight: var(--pc-weight-medium);
+  color: var(--pc-color-text-primary);
+}
+.required {
+  color: var(--pc-color-danger);
+}
+.description {
+  font-size: var(--pc-font-size-sm);
+  color: var(--pc-color-text-muted);
+  margin: 0;
+}
+.error {
+  font-size: var(--pc-font-size-sm);
+  color: var(--pc-color-danger);
+  margin: 0;
+}
+.field[data-disabled] .label {
+  color: var(--pc-color-text-disabled);
+}
