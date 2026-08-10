@@ -30,10 +30,12 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.7.0",
+    "fontkit": "^2.0.4",
     "jsdom": "^29.1.1",
     "png-to-ico": "^3.0.2",
     "sharp": "^0.35.3",
     "typescript": "^5.9.3",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "wawoff2": "^2.0.1"
   }
 }

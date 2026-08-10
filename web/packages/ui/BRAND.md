@@ -32,11 +32,11 @@ PokeClip은 흘러가 버릴 그 순간을 발견하고, 바로 꺼내볼 수 �
 | 유형 | 파일 | 용도 |
 |---|---|---|
 | 심볼 | `pokeclip-symbol.svg` | 파비콘·앱 아이콘·좁은 공간. 다크 배경 전용(재생 마크 화이트) |
-| 가로형 (다크 배경용) | `pokeclip-logo-horizontal.svg` | 전역 헤더·다크 UI. Poke=그레이50 / Clip=마젠타 |
-| 가로형 (라이트 배경용) | `pokeclip-logo-horizontal-light.svg` | 라이트 UI·문서. Poke=인디고500 / Clip=마젠타, 재생 마크 다크 |
+| 가로형 (다크 배경용) | `pokeclip-logo-horizontal.svg` | 전역 헤더·다크 UI. 워드마크 화이트 단색 |
+| 가로형 (라이트 배경용) | `pokeclip-logo-horizontal-light.svg` | 라이트 UI·문서. 워드마크 `#141517` 단색, 재생 마크 다크 |
 
-- 워드마크 서체: **Baloo 2 SemiBold** (아웃라인 처리 — 폰트 설치 불필요, 1회성 작업이며 수정 시 Figma에서 재내보내기)
-- `Poke`와 `Clip`의 색상을 구분해 서비스명을 빠르게 인식시킨다. 특히 **Clip에 마젠타**를 적용해 핵심 결과물인 하이라이트 클립을 강조한다.
+- 워드마크 서체: **Pretendard SemiBold(600)** 아웃라인 — UI 서체와 동일 계열. 재생성: `node scripts/build-wordmark.mjs` (PretendardVariable.woff2에서 패스 생성, Figma 불필요)
+- 워드마크는 **단색**만 사용한다 — 다크 배경 화이트 / 라이트 배경 `#141517`(gray-1000). 색은 심볼이 담당한다.
 
 ## 3. 컬러 규정
 
@@ -68,7 +68,7 @@ PokeClip은 흘러가 버릴 그 순간을 발견하고, 바로 꺼내볼 수 �
 
 ## 6. 타이포그래피
 
-UI 서체는 **Pretendard Variable** (self-host, `--pc-font-sans`), 기본 크기 **15px**. 로고 워드마크(Baloo 2)와는 역할이 다르다 — 워드마크는 로고 전용, UI 텍스트에 Baloo 2를 쓰지 않는다.
+UI 서체는 **Pretendard Variable** (self-host, `--pc-font-sans`), 기본 크기 **15px**. 로고 워드마크도 같은 Pretendard(SemiBold 600 아웃라인)를 사용해 브랜드와 UI의 톤을 통일한다.
 
 | 토큰 | px | rem | 용도 |
 |---|---|---|---|
