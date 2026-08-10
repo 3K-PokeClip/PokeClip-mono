@@ -1,0 +1,6 @@
+.main {
+  max-width: 1200px;
+  margin: 0 auto;
+  /* 하단 여백 — fixed Dock에 콘텐츠가 가리지 않게 */
+  padding: var(--pc-space-6) var(--pc-space-5) 120px;
+}
