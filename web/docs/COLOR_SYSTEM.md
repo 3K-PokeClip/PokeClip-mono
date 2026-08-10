@@ -1,6 +1,6 @@
 # PokeClip 컬러 시스템
 
-`@pokeclip/ui` 디자인 시스템의 컬러 토큰 정의. **다크 우선(dark-first)**, 메인 컬러는 **인디고(indigo)**, 포인트 컬러는 **마젠타(magenta)**.
+PokeClip 디자인 시스템(`src/ui/`)의 컬러 토큰 정의. **다크 우선(dark-first)**, 메인 컬러는 **인디고(indigo)**, 포인트 컬러는 **마젠타(magenta)**.
 
 ## 아키텍처 — 3계층 토큰
 

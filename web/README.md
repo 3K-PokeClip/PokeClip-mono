@@ -22,31 +22,33 @@ Node.js **24.18.0** (`.node-version`) · pnpm **11.12.0** 기준. pnpm이 없으
 ```bash
 cd web
 pnpm install
-cp apps/web/.env.example apps/web/.env.local   # 최초 1회 — 값은 로컬 기본값 그대로면 된다
-pnpm dev                                       # http://localhost:3000 → /home 으로 리다이렉트
+cp .env.example .env.local   # 최초 1회 — 값은 로컬 기본값 그대로면 된다
+pnpm dev                     # http://localhost:3000 → /home 으로 리다이렉트
 ```
-
-`pnpm dev`는 디자인 시스템(DS)을 1회 빌드한 뒤 DS watch 빌드와 `next dev`를 병렬 실행한다.
 
 | 명령 | 설명 |
 | --- | --- |
-| `pnpm dev` | DS 빌드 후 DS watch + `next dev` 병렬 실행 |
-| `pnpm build` | 전체 빌드 (ui → web 토폴로지 순서) — CI와 동일 |
-| `pnpm lint` / `pnpm typecheck` / `pnpm test` | ESLint(루트 flat config) / 타입 체크 / Vitest |
+| `pnpm dev` | `next dev` |
+| `pnpm build` | `next build` (타입 체크 포함) — CI와 동일 |
+| `pnpm lint` / `pnpm typecheck` / `pnpm test` | ESLint(flat config) / 타입 체크 / Vitest |
 | `pnpm storybook` | DS Storybook (port 6006) |
+| `pnpm build-storybook` | Storybook 정적 빌드 |
 | `pnpm format` / `pnpm format:check` | Prettier 적용 / 검사 |
 
-## 워크스페이스 구조
+## 구조
 
 ```
-web/                     # pnpm 워크스페이스 루트 (모노레포 안의 프론트 전용 워크스페이스)
-├── packages/
-│   └── ui/              # @pokeclip/ui — 디자인 시스템 (React + TS + CSS Modules, Storybook)
-└── apps/
-    └── web/             # @pokeclip/web — Next.js 앱 (App Router + TanStack Query + Zustand)
+web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zustand)
+├── src/
+│   ├── app/             # 라우트
+│   ├── components/      # 앱 공용 UI (앱 셸 등)
+│   └── ui/              # 디자인 시스템 (React + TS + CSS Modules, Storybook)
+├── .storybook/          # Storybook 설정 (src/ui 대상)
+├── docs/                # DS·브랜드 문서
+└── public/              # 정적 자산 (brand 등)
 ```
 
-### 앱 폴더 컨벤션 (`apps/web/src/`)
+### 앱 폴더 컨벤션 (`src/`)
 
 | 폴더 | 역할 |
 | --- | --- |
@@ -63,7 +65,7 @@ web/                     # pnpm 워크스페이스 루트 (모노레포 안의 �
 - **새 화면** → `app/<경로>/page.tsx`(얇게) + 본문은 `features/<도메인>/`
 - **2개 이상 도메인에서 쓰는 컴포넌트** → `components/` (한 도메인 전용이면 그 `features/` 안에)
 - **범용 함수·상수** → `lib/` · **백엔드 호출 코드** → `api/`
-- 시각적 기본 요소(버튼·입력 등)는 만들지 말 것 — 먼저 `@pokeclip/ui`에서 찾는다
+- 시각적 기본 요소(버튼·입력 등)는 만들지 말 것 — 먼저 `src/ui/`(`@/ui`)에서 찾는다
 
 ### 라우트 맵
 
@@ -75,7 +77,7 @@ web/                     # pnpm 워크스페이스 루트 (모노레포 안의 �
 | `/dev` | 개발용 데모 (테마 전환 · Zustand 카운터 · TanStack Query 예시) |
 | `/api/ping` | 서버 핸들러 앵커 |
 
-### 환경변수 (`apps/web/.env.example` → `.env.local`)
+### 환경변수 (`.env.example` → `.env.local`)
 
 | 변수 | 값(로컬) | 용도 |
 | --- | --- | --- |
@@ -90,13 +92,14 @@ rewrites는 env가 있을 때만 걸리므로 앱 기동에는 지장이 없다.
 
 ## 규칙
 
-- **DS 소비 방식**: `apps/web`은 `@pokeclip/ui`의 빌드 산출물(`dist/`)을 소비한다. DS 수정은
-  `pnpm dev`의 watch 빌드로 반영된다 (HMR 아님 — 갱신이 안 보이면 `next dev` 재시작).
-- **CSS 임포트 순서**: 토큰 정의가 `global.css`에 있으므로 반드시
-  `@pokeclip/ui/global.css` → `@pokeclip/ui/styles.css` 순서로 임포트한다.
-- **클라이언트 경계**: DS dist에는 `'use client'`가 없다. 인터랙티브 DS 컴포넌트
+- **DS 소비 방식**: 디자인 시스템은 `src/ui/` 소스를 `@/ui`로 직접 import한다.
+  별도 빌드 없음 — DS 수정은 `next dev` HMR로 즉시 반영된다.
+- **전역 CSS**: 토큰·폰트·리셋은 `@/ui/styles/global.css` 하나만 루트 레이아웃에서
+  임포트한다. 컴포넌트 스타일(CSS Modules)은 각 컴포넌트가 스스로 import한다.
+- **클라이언트 경계**: DS 소스에는 `'use client'`가 없다. 인터랙티브 DS 컴포넌트
   (ThemeProvider, 훅/핸들러 사용 컴포넌트)는 `'use client'` 파일에서 렌더링한다.
-- **design-sync**: 도구는 `packages/ui/` 디렉토리에서 실행한다 (config 경로가 패키지 상대).
+- **design-sync**: 기존 도구는 `packages/ui/dist/design-system.css`를 소비했다 —
+  플랫화로 dist가 사라졌으므로 다음 사용 시 config 재설정이 필요하다.
 
 ## 재생에서 조심할 것
 
@@ -115,6 +118,6 @@ LL-HLS 플레이어는 **catch-up을 꺼야 한다.** 켜져 있으면 되감기
 
 ## 문서
 
-- [packages/ui/README.md](packages/ui/README.md) — 디자인 시스템 사용법
-- [packages/ui/COLOR_SYSTEM.md](packages/ui/COLOR_SYSTEM.md) — 컬러 토큰 시스템
-- [packages/ui/BRAND.md](packages/ui/BRAND.md) — 브랜드 가이드 (로고·파비콘·팔레트·타이포)
+- [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md) — 디자인 시스템 사용법
+- [docs/COLOR_SYSTEM.md](docs/COLOR_SYSTEM.md) — 컬러 토큰 시스템
+- [docs/BRAND.md](docs/BRAND.md) — 브랜드 가이드 (로고·파비콘·팔레트·타이포)

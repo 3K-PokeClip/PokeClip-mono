@@ -1,9 +1,8 @@
-import '@pokeclip/ui/global.css';
-import '@pokeclip/ui/styles.css';
+import '@/ui/styles/global.css';
 
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { getThemeInitScript } from '@pokeclip/ui/theme-init';
+import { getThemeInitScript } from '@/ui/theme/getThemeInitScript';
 import { Providers } from './providers';
 
 export const metadata: Metadata = {

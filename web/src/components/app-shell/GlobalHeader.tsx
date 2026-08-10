@@ -1,6 +1,6 @@
 'use client';
 
-import { Avatar, IconButton } from '@pokeclip/ui';
+import { Avatar, IconButton } from '@/ui';
 import { Bell } from 'lucide-react';
 import styles from './GlobalHeader.module.css';
 

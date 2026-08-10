@@ -13,7 +13,7 @@ import { decompress } from 'wawoff2';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const brandDir = path.join(root, '..', 'public', 'brand');
-const fontPath = path.join(root, '..', '..', '..', 'packages', 'ui', 'src', 'assets', 'fonts', 'PretendardVariable.woff2');
+const fontPath = path.join(root, '..', 'src', 'ui', 'assets', 'fonts', 'PretendardVariable.woff2');
 
 const TEXT = 'PokeClip';
 const FONT_SIZE = 120;

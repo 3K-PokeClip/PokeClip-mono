@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Badge, Button, Card, Container, Stack, useTheme, type Theme } from '@pokeclip/ui';
+import { Badge, Button, Card, Container, Stack, useTheme, type Theme } from '@/ui';
 import { useCounterStore } from '@/stores/counter';
 
 interface PingResponse {
@@ -34,7 +34,7 @@ export default function DevPage() {
       <Stack gap={6}>
         <Stack gap={2}>
           <h1>PokeClip</h1>
-          <p>@pokeclip/ui + Next.js + TanStack Query + Zustand 통합 확인 페이지</p>
+          <p>디자인 시스템 + Next.js + TanStack Query + Zustand 통합 확인 페이지</p>
         </Stack>
 
         <Card padding={5}>
