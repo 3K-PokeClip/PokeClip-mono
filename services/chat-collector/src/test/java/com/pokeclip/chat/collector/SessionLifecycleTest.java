@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -22,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 로그 한 줄과 요약의 건수가 남아 있어야 한다.
  */
 @FakeChzzkTest
-class SessionLifecycleTest {
+class SessionLifecycleTest extends IntegrationTestSupport {
 
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;

@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector.engineio;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @FakeChzzkTest
-class EngineIoSocketTest {
+class EngineIoSocketTest extends IntegrationTestSupport {
 
     /** 수립 예산. 이 파일은 접속 자체를 보므로 넉넉히 준다. */
     private static final java.time.Duration BUDGET = java.time.Duration.ofSeconds(5);
