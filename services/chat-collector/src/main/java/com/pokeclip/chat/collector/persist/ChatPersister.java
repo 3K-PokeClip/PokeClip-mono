@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.persist;
 
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -9,9 +11,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.IntStream;
 
@@ -38,6 +44,15 @@ public class ChatPersister {   // @Component는 태스크 6에서 붙인다 — 
 
     private static final Logger log = LoggerFactory.getLogger(ChatPersister.class);
 
+    private static final Duration FLUSH_PERIOD = Duration.ofSeconds(1);
+
+    private final ScheduledExecutorService scheduler =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "chzzk-persist");   // ping·요약과 다른 스레드
+                t.setDaemon(true);
+                return t;
+            });
+
     private final JdbcTemplate jdbc;
     private final ChatBuffer buffer;
     private final AtomicLong persisted = new AtomicLong();
@@ -46,6 +61,52 @@ public class ChatPersister {   // @Component는 태스크 6에서 붙인다 — 
     public ChatPersister(JdbcTemplate jdbc, ChatBuffer buffer) {
         this.jdbc = jdbc;
         this.buffer = buffer;
+    }
+
+    @PostConstruct
+    public void start() {
+        long periodMillis = FLUSH_PERIOD.toMillis();
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                flushOnce();
+            } catch (RuntimeException e) {
+                // flushOnce가 DataAccessException은 삼키지만, 그 밖의 예외가 여기로
+                // 새면 scheduleAtFixedRate가 조용히 멈춰 적재가 영영 끊긴다.
+                log.warn("chat.persist.flush_failed causeType={}", e.getClass().getSimpleName());
+            }
+        }, periodMillis, periodMillis, TimeUnit.MILLISECONDS);
+    }
+
+    @PreDestroy
+    public void close() {
+        scheduler.shutdown();      // 새 주기는 안 잡는다.
+        try {
+            // 진행 중인 주기 flush를 기다린다. 안 기다리면 그 flush가 배치를 든 동안
+            // 아래 루프가 빈 큐를 보고 끝나고, 컨텍스트가 내려가 DataSource가 닫히면
+            // 그 배치가 실패 → 재-offer → 무관측 유실이 된다 (reviewer round 2 사소 2).
+            // 이중 저장은 없다 — drain이 소모적이고 UNIQUE가 최후 방어다.
+            if (!scheduler.awaitTermination(2, TimeUnit.SECONDS)) {
+                log.warn("chat.persist.close_await_timeout");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        // 종료 직전 마지막 저장 — 급사가 아닌 한 유실 창을 닫는다. 바닥날 때까지 도는데,
+        // 탈출 조건은 저장 수가 아니라 <b>버퍼가 실제로 줄었는가</b>다: 전부 지문 충돌인
+        // 배치는 처리되고도 저장 수 0을 반환하므로, 저장 수로 돌면 그 뒤 잔량이
+        // 무관측 유실된다 (reviewer round 2 중대 1 — 테스트가 재현했다).
+        // DB 장애면 재-offer로 버퍼가 안 줄어 기존처럼 즉시 탈출한다.
+        int before;
+        while ((before = buffer.size()) > 0) {
+            flushOnce();
+            if (buffer.size() >= before) {
+                break;
+            }
+        }
+        if (buffer.size() > 0) {
+            // 유실은 수용하되 관측은 남긴다 — 건수만, 본문은 싣지 않는다.
+            log.warn("chat.persist.shutdown_left size={}", buffer.size());
+        }
     }
 
     public int flushOnce() {
