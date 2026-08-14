@@ -3,6 +3,7 @@ package com.pokeclip.chat.collector;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
+import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -43,7 +44,8 @@ class SessionLifecycleTest extends IntegrationTestSupport {
             CollectionStatus status = new CollectionStatus();
             runner = new CollectorRunner(new ChzzkProperties(
                     true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                    Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
+                    Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder,
+                            TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
             runner.start();
             assertThat(status.state())
                     .as("붙지도 않았다면 revoked를 받을 길이 없다")
@@ -74,7 +76,8 @@ class SessionLifecycleTest extends IntegrationTestSupport {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
+                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         runner.start();
         assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
 
@@ -98,7 +101,8 @@ class SessionLifecycleTest extends IntegrationTestSupport {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
+                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         runner.start();
 
         assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);

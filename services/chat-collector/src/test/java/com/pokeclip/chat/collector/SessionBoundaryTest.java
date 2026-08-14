@@ -3,6 +3,7 @@ package com.pokeclip.chat.collector;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
+import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -61,7 +62,8 @@ class SessionBoundaryTest extends IntegrationTestSupport {
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port,
                 Duration.ofSeconds(5), Duration.ofSeconds(30), Duration.ofSeconds(60)),
-                status, restClientBuilder);
+                status, restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         runner.start();
         return runner.lastSessionNo();
     }
