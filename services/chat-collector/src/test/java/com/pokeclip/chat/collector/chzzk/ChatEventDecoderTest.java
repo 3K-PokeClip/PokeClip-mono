@@ -33,6 +33,25 @@ class ChatEventDecoderTest {
     }
 
     @Test
+    void 봉투의_channelId를_담는다() {
+        ChatMessage message = ChatEventDecoder.decodeChat(
+                "[\"CHAT\",\"{\\\"channelId\\\":\\\"ch-1\\\",\\\"senderChannelId\\\":\\\"s-1\\\","
+                        + "\\\"content\\\":\\\"hi\\\",\\\"messageTime\\\":1723600000000}\"]");
+        assertThat(message.channelId()).isEqualTo("ch-1");
+    }
+
+    @Test
+    void channelId가_없어도_버리지_않는다() {
+        // 실측 0회인 필드다(PRD 가정). 없다는 이유로 채팅을 버리면 가정이 틀렸을 때
+        // 적재가 통째로 0건이 된다 — 빈 값으로 남기고 행은 살린다.
+        ChatMessage message = ChatEventDecoder.decodeChat(
+                "[\"CHAT\",\"{\\\"senderChannelId\\\":\\\"s-1\\\","
+                        + "\\\"content\\\":\\\"hi\\\",\\\"messageTime\\\":1723600000000}\"]");
+        assertThat(message).isNotNull();
+        assertThat(message.channelId()).isEmpty();
+    }
+
+    @Test
     void 시스템_이벤트에서_종류와_세션키를_읽는다() {
         String payload = "[\"SYSTEM\",\"{\\\"type\\\":\\\"connected\\\","
                 + "\\\"data\\\":{\\\"sessionKey\\\":\\\"K1\\\"}}\"]";
