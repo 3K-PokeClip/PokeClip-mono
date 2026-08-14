@@ -63,6 +63,17 @@ logging:
     # auth와 같은 방어선. DEBUG로 켜면 나가는 요청 본문이 통째로 찍힌다.
     # 구체 로거 레벨이 root보다 우선하므로 LOGGING_LEVEL_ROOT=debug로도 안 뚫린다.
     org.springframework.web: info
+    # 채팅 본문·sender_channel_id가 나가는 두 번째 길. TRACE로 켜면
+    # org.springframework.jdbc.core.StatementCreatorUtils가 배치의 바인딩 값을
+    # "Setting SQL statement parameter value: ... parameter value [본문]"으로 찍고,
+    # pgjdbc(org.postgresql.core.v3.QueryExecutorImpl, JUL→SLF4J 브릿지로 온다)가
+    # "FE=> Bind(... $3=<('본문')> ...)"로 여섯 파라미터를 통째로 찍는다
+    # (2026-08-15 실측, Spring 7·pgjdbc 42.7.11). 위와 같은 이유로 여기 박는다 —
+    # 구체 로거 레벨이 root보다 우선하므로 LOGGING_LEVEL_ROOT=trace로 내려도
+    # 이 둘은 info다. ChatLogLeakTest가 root를 TRACE로 올려 놓고 적재를 돌려
+    # 이 두 줄이 실제로 막는지를 행동으로 잰다 — 지우면 그 검사가 빨간불이다.
+    org.springframework.jdbc: info
+    org.postgresql: info
 
 pokeclip:
   chzzk:

@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector;
 
+import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
 import org.flywaydb.core.Flyway;
 import org.slf4j.Logger;
@@ -13,6 +15,7 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.web.client.RestClient;
 
 import java.sql.SQLException;
 import java.time.Duration;
@@ -50,6 +53,20 @@ public class CollectorApplication {
     @Bean
     FlywayMigrationStrategy retryingMigrationStrategy() {
         return new RetryingMigrationStrategy();
+    }
+
+    /**
+     * 러너는 {@code @Component}가 아니라 여기서 만든다 — <b>exit을 명시적으로 주기
+     * 위해서다.</b> 재시도로 안 풀리는 사유(REVOKED·401·403)로 수집이 영영 끝나면
+     * 판정 뒤 프로세스를 exit 1로 내린다(위 마이그레이션 영구 실패와 같은 방식). 검사가
+     * 러너를 직접 만들 때는 exit 없는 패키지 생성자를 쓰므로 테스트 JVM은 안전하다.
+     */
+    @Bean
+    CollectorRunner collectorRunner(ChzzkProperties properties, CollectionStatus status,
+                                    RestClient.Builder restClientBuilder,
+                                    ChatBuffer buffer, ChatPersister persister) {
+        return new CollectorRunner(properties, status, restClientBuilder, buffer, persister,
+                () -> System.exit(1));
     }
 
     static final class RetryingMigrationStrategy
