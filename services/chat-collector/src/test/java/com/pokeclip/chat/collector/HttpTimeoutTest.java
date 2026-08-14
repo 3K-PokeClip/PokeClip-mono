@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
  * 자기 것을 새로 만들어도 초록이다 — 그게 정확히 여기서 잡으려는 결함이다.
  */
 @FakeChzzkTest
-class HttpTimeoutTest {
+class HttpTimeoutTest extends IntegrationTestSupport {
 
     /** 가짜 서버가 붙들고 있는 시간. read-timeout보다 훨씬 길다. */
     private static final Duration AUTH_DELAY = Duration.ofSeconds(6);
@@ -117,6 +118,12 @@ class HttpTimeoutTest {
                         // 실제로는 1초마다 재시도한다 — 위 의도가 그대로 무너진다.
                         "--pokeclip.chzzk.reconnect-first-delay=30s",
                         "--pokeclip.chzzk.reconnect-max-delay=30s",
-                        "--spring.http.clients.read-timeout=" + READ_TIMEOUT);
+                        "--spring.http.clients.read-timeout=" + READ_TIMEOUT,
+                        // 따로 띄우는 컨텍스트라 @DynamicPropertySource가 안 걸린다.
+                        // 안 넘기면 localhost:5432로 가서 — 로컬 PG가 꺼져 있으면 부팅
+                        // 실패, 켜져 있으면 팀 공용 DB에 V301을 조용히 적용한다.
+                        "--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
+                        "--spring.datasource.username=" + POSTGRES.getUsername(),
+                        "--spring.datasource.password=" + POSTGRES.getPassword());
     }
 }

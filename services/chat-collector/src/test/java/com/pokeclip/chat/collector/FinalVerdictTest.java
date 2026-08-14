@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -22,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 종료해 보지 않았다.</b>
  */
 @FakeChzzkTest
-class FinalVerdictTest {
+class FinalVerdictTest extends IntegrationTestSupport {
 
     /** PRD 「판정 항목」이 최종 라인에 요구하는 것 전부. */
     private static final List<String> REQUIRED = List.of(

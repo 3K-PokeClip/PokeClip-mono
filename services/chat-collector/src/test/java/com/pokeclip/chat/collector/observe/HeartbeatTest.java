@@ -7,6 +7,7 @@ import com.pokeclip.chat.collector.engineio.PingFailure;
 import com.pokeclip.chat.collector.engineio.PingSender;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>가짜 서버가 pingInterval을 줄여 주므로 실측 비율을 유지한 채 몇 초에 끝난다.
  */
 @FakeChzzkTest
-class HeartbeatTest {
+class HeartbeatTest extends IntegrationTestSupport {
 
     /** 수립 예산. 이 파일은 접속 자체를 보므로 넉넉히 준다. */
     private static final java.time.Duration BUDGET = java.time.Duration.ofSeconds(5);

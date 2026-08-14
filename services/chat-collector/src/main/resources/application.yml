@@ -1,6 +1,22 @@
 spring:
   application:
     name: pokeclip-chat-collector
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB:pokeclip}
+    username: ${POSTGRES_USER:pokeclip}
+    password: ${POSTGRES_PASSWORD:change-me-local-only}
+  flyway:
+    enabled: true
+    # 네 서버가 DB 하나를 공유한다. 기본 이력 테이블 이름을 쓰면 나중에 뜬 쪽이
+    # 남의 이력을 자기 것으로 읽고 부팅에 실패한다. 번호 대역은 V3xx (chat).
+    table: flyway_schema_history_chat
+    # auth가 먼저 마이그레이션한 DB에서는 public이 비어 있지 않은데 우리 이력
+    # 테이블은 없다 — 이 설정이 없으면 첫 부팅이 "Found non-empty schema(s)
+    # ... but no schema history table"로 죽는다 (verifier 실물 부팅 실측).
+    baseline-on-migrate: true
+    # 기본 1이면 V1 이하가 스킵된다. 우리 대역은 V3xx라 실질 영향은 없지만,
+    # "아무것도 스킵하지 않는다"를 정확히 말하려면 0이다.
+    baseline-version: 0
   http:
     clients:
       # 복수형이다. 단수형 spring.http.client.*는 4.0.0부터 아무것도 바인딩하지
