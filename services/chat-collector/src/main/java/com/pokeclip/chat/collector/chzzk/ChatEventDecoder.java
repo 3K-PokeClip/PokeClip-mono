@@ -31,6 +31,7 @@ public final class ChatEventDecoder {
             return null;
         }
         return new ChatMessage(
+                inner.path("channelId").asString(""),
                 inner.path("senderChannelId").asString(""),
                 inner.path("content").asString(""),
                 messageTime);
