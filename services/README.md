@@ -34,6 +34,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 |---|---|
 | `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
 | `clip` | `broadcasts` · `jump_cards` · `stream_segments` (**아직 없다** — 마이그레이션이 비어 있다) |
+| `chat-collector` | `chat_messages` (V301) |
 
 **서로의 표를 직접 읽지 않는다.** 필요하면 계약4의 `POST /internal/stream-keys/resolve`로
 묻는다. 이 선이 무너지면 따로 배포되는데 DB로 묶인 **분산 모놀리스**가 된다 —
@@ -203,9 +204,17 @@ compose와 메이저 버전이 갈리면 로컬·CI만 통과하고 실제 DB에
 Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(`auth/src/main/resources/db/migration/`)에 둔다.**
 
 서버마다 자기 Flyway를 돌리고 **이력 테이블을 나눈다**(`flyway_schema_history_auth` ·
-`..._clip`). 기본 이름을 쓰면 나중에 뜬 쪽이 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
+`..._clip` · `..._chat`). 기본 이름을 쓰면 나중에 뜬 쪽이 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
 마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat.
-지금까지 나간 것은 auth의 `V101`~`V106`뿐이다.
+지금까지 나간 것은 auth의 `V101`~`V106`과 chat의 `V301`(`chat_messages`)이다.
+
+**두 번째 서버부터는 `baseline-on-migrate: true` + `baseline-version: 0`이 필수다.**
+공유 DB에 앞 서버가 이미 표를 만들어 놨으므로, 자기 이력 테이블이 없는 서버는
+baseline 없이 `Found non-empty schema(s) "public" but no schema history table`로
+부팅이 죽는다. Testcontainers·CI는 매번 빈 DB라 테스트로는 안 잡힌다 —
+chat-collector가 실물에서 밟았고(2026-08-15), **clip·chat-detector가 Flyway를 붙일 때
+같은 두 줄이 필요하다.** `baseline-version: 0`인 이유는 기본 1이면 V1 이하가 적용
+대상에서 빠지기 때문이다.
 1·2번이 읽을 스키마 설명서는 여기서 자동 생성해 [`contracts/db/`](../contracts/db/)로
 내보낼 계획인데 **아직 안 만들었다** — 그 폴더는 비어 있다.
 
@@ -237,10 +246,10 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 "키가 틀림"(연결 거절)과 "Auth 장애"(판단 불가)는 조치가 정반대라 둘 다 4xx면
 Go 쪽에서 구분이 안 된다.
 
-### chat-collector — 치지직 채팅 수신 (POK-85) · 자동 재연결 (POK-86)
+### chat-collector — 치지직 채팅 수신 (POK-85) · 자동 재연결 (POK-86) · 적재 (POK-84)
 
-**받아서 세고, 끊기면 다시 붙는 데까지** 한다. 적재(POK-84) · 영상 시각 매핑(POK-92) ·
-스트리머 채널 연동(POK-93)은 다음 카드다.
+**받아서 세고, 끊기면 다시 붙고, 받은 채팅을 PG에 남기는 데까지** 한다.
+영상 시각 매핑(POK-92) · 스트리머 채널 연동(POK-93) · S3 원본 아카이브(POK-116)는 다음 카드다.
 
 | | |
 |---|---|
