@@ -2,6 +2,8 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
@@ -9,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
@@ -61,7 +64,8 @@ class SessionBoundaryTest extends IntegrationTestSupport {
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port,
                 Duration.ofSeconds(5), Duration.ofSeconds(30), Duration.ofSeconds(60)),
-                status, restClientBuilder);
+                status, restClientBuilder,
+                        new ChatBuffer(1_000), new ChatPersister(new JdbcTemplate(), new ChatBuffer(1_000)));
         runner.start();
         return runner.lastSessionNo();
     }

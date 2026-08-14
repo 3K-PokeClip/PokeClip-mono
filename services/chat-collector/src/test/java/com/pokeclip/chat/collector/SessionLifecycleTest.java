@@ -2,12 +2,15 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
@@ -43,7 +46,8 @@ class SessionLifecycleTest extends IntegrationTestSupport {
             CollectionStatus status = new CollectionStatus();
             runner = new CollectorRunner(new ChzzkProperties(
                     true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                    Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
+                    Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder,
+                            new ChatBuffer(1_000), new ChatPersister(new JdbcTemplate(), new ChatBuffer(1_000)));
             runner.start();
             assertThat(status.state())
                     .as("붙지도 않았다면 revoked를 받을 길이 없다")
@@ -74,7 +78,8 @@ class SessionLifecycleTest extends IntegrationTestSupport {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
+                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder,
+                        new ChatBuffer(1_000), new ChatPersister(new JdbcTemplate(), new ChatBuffer(1_000)));
         runner.start();
         assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
 
@@ -98,7 +103,8 @@ class SessionLifecycleTest extends IntegrationTestSupport {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
+                Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder,
+                        new ChatBuffer(1_000), new ChatPersister(new JdbcTemplate(), new ChatBuffer(1_000)));
         runner.start();
 
         assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);

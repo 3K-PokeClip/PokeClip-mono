@@ -2,12 +2,15 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
@@ -57,7 +60,8 @@ class TransportClosedCleanupTest extends IntegrationTestSupport {
             runner = new CollectorRunner(new ChzzkProperties(
                     true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
                     Duration.ofMillis(50), Duration.ofSeconds(1)),
-                    status, restClientBuilder);
+                    status, restClientBuilder,
+                            new ChatBuffer(1_000), new ChatPersister(new JdbcTemplate(), new ChatBuffer(1_000)));
             runner.start();
             long session = runner.lastSessionNo();
             assertThat(status.state())

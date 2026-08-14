@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -29,9 +30,8 @@ import java.util.stream.IntStream;
  * 두 번 오면 ON CONFLICT DO NOTHING이 둘째를 조용히 버린다 — 치지직이 메시지
  * 고유 ID를 안 줘서(공식 문서 확인) 지문은 누가+언제+본문해시다.
  */
-public class ChatPersister {   // @Component는 태스크 6에서 붙인다 — 여기서 붙이면
-                               // ChatBuffer가 아직 빈이 아니라 기존 부팅 테스트 6개가
-                               // NoSuchBeanDefinitionException으로 깨진다
+@Component
+public class ChatPersister {
 
     private static final int DRAIN_MAX = 2_000;   // 한 배치 상한. 폭주 시 여러 번 나눠 저장
 

@@ -7,6 +7,9 @@ import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.observe.Heartbeat;
 import com.pokeclip.chat.collector.observe.SummaryLogger;
+import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.ChatPersister;
+import com.pokeclip.chat.collector.persist.PersistableChat;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
@@ -15,6 +18,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
@@ -51,6 +56,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
     @Autowired RestClient.Builder restClientBuilder;
+    @Autowired JdbcTemplate jdbc;
 
     private CollectorRunner runner;
 
@@ -169,7 +175,8 @@ class ChatLogLeakTest extends IntegrationTestSupport {
             awaitReceived(5);
 
             try (SummaryLogger logger = SummaryLogger.start(runner.metrics(),
-                    Heartbeat.idleForTest(), Duration.ofMillis(150), () -> 0L)) {
+                    Heartbeat.idleForTest(), Duration.ofMillis(150),
+                    () -> 0L, () -> 0L, () -> 0L, () -> 0L)) {
                 awaitSummaryLine(captor);
                 assertThat(logger.emitterThreadNames()).containsExactly("chzzk-summary");
             }
@@ -215,6 +222,41 @@ class ChatLogLeakTest extends IntegrationTestSupport {
                     .contains("received=3");
 
             assertNoSecretsIn(verdict, SECRETS);
+        }
+    }
+
+    /**
+     * 적재 경로(POK-84)가 새로 연 로그 자리 둘 — 성공 flush와 실패 flush —
+     * 을 바늘이 지나가게 하고 무유출을 단언한다. <b>새 로그 줄이 이 검사를
+     * 안 거치면 위에서 닫은 구멍이 적재 쪽에서 다시 열린다.</b>
+     */
+    @Test
+    void 적재_경로가_돌아도_본문이_로그에_안_남는다() {
+        try (LogCaptor captor = new LogCaptor()) {
+            ChatBuffer buffer = new ChatBuffer(100);
+            buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+                    1_754_300_000_000L, 1_754_300_000_175L));
+            int saved = new ChatPersister(jdbc, buffer).flushOnce();
+            // 양성 대조. 표까지 안 갔다면 적재 경로가 바늘을 나른 적이 없다.
+            assertThat(saved).as("저장이 안 됐다면 성공 경로의 로그를 아무것도 안 본 것이다")
+                    .isEqualTo(1);
+
+            // 실패 경로 — DB가 죽어 chat.persist.failed가 나가는 자리가
+            // 본문을 싣기 가장 쉬운 자리다 (태스크 5의 실패 주입 방식 재사용).
+            JdbcTemplate broken = new JdbcTemplate(jdbc.getDataSource()) {
+                @Override
+                public int[] batchUpdate(String sql, List<Object[]> args) {
+                    throw new DataAccessResourceFailureException("db down");
+                }
+            };
+            buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+                    1_754_300_000_001L, 1_754_300_000_176L));
+            assertThat(new ChatPersister(broken, buffer).flushOnce()).isZero();
+            assertThat(renderAll(captor))
+                    .as("실패 줄이 안 나갔다면 실패 경로의 로그를 아무것도 안 본 것이다")
+                    .contains("chat.persist.failed");
+
+            assertNoSecretsIn(captor, SECRETS);
         }
     }
 
@@ -289,7 +331,8 @@ class ChatLogLeakTest extends IntegrationTestSupport {
         runner = new CollectorRunner(
                 new ChzzkProperties(true, TOKEN, "http://localhost:" + port, Duration.ofSeconds(5),
                         Duration.ofSeconds(30), Duration.ofSeconds(60)),
-                status, restClientBuilder);
+                status, restClientBuilder,
+                        new ChatBuffer(1_000), new ChatPersister(new JdbcTemplate(), new ChatBuffer(1_000)));
         runner.run(null);
         return status;
     }

@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.persist;
 
+import org.springframework.stereotype.Component;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -14,12 +16,24 @@ import java.util.concurrent.atomic.AtomicLong;
  * 어차피 무언가는 잃는다 — 최근 것이 판별(실시간 급증)에 더 가치 있으므로
  * 오래된 쪽을 버리고, 버린 수를 세서 요약 로그로 드러낸다.
  */
+@Component
 public final class ChatBuffer {
+
+    /**
+     * 운영 기본 상한. 폭주 시 손실 없이 담을 수 있는 양을 실측한 적은 없다 —
+     * 계획(POK-84)이 정한 값이고, dropped 카운터가 0이 아니게 되는 날 다시 잰다.
+     */
+    private static final int DEFAULT_CAPACITY = 10_000;
 
     private final ConcurrentLinkedQueue<PersistableChat> queue = new ConcurrentLinkedQueue<>();
     private final AtomicInteger size = new AtomicInteger();
     private final AtomicLong dropped = new AtomicLong();
     private final int capacity;
+
+    /** 스프링이 쓰는 생성자 — 생성자가 여럿이라 기본 생성자로 폴백한다. */
+    public ChatBuffer() {
+        this(DEFAULT_CAPACITY);
+    }
 
     public ChatBuffer(int capacity) {
         this.capacity = capacity;

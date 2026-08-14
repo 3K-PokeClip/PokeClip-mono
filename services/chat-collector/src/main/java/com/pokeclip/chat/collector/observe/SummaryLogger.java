@@ -40,15 +40,22 @@ public final class SummaryLogger implements AutoCloseable {
     /**
      * @param sinkFailures 삼킨 싱크 예외의 수를 읽어 오는 곳. ChatSession이 들고
      *                     있는 값이라 공급자로 받는다 — 세션은 재수립마다 바뀐다
+     * @param persisted    표에 저장된 행 수. ChatPersister가 세므로 공급자로 받는다
+     * @param conflicted   지문 충돌로 접힌 건수 — 재연결 중복이면 정상, 도배 병합이면
+     *                     유실이라 숫자가 밖에 보여야 사람이 판단한다
+     * @param dropped      버퍼 상한 초과로 버린 수. ChatBuffer가 센다
      */
     public static SummaryLogger start(CollectionMetrics metrics, Heartbeat heartbeat,
-                                      Duration period, LongSupplier sinkFailures) {
+                                      Duration period, LongSupplier sinkFailures,
+                                      LongSupplier persisted, LongSupplier conflicted,
+                                      LongSupplier dropped) {
         SummaryLogger logger = new SummaryLogger();
         long periodMillis = period.toMillis();
         logger.scheduler.scheduleAtFixedRate(() -> {
             logger.emitterThreadNames.add(Thread.currentThread().getName());
             try {
-                log.info("{}", render(metrics.snapshot(), heartbeat, sinkFailures.getAsLong()));
+                log.info("{}", render(metrics.snapshot(), heartbeat, sinkFailures.getAsLong(),
+                        persisted.getAsLong(), conflicted.getAsLong(), dropped.getAsLong()));
             } catch (RuntimeException e) {
                 // 요약이 터져도 스케줄러는 계속 돈다. 여기서 예외가 밖으로 나가면
                 // scheduleAtFixedRate가 조용히 멈춰 요약이 영영 안 나가고,
@@ -60,7 +67,8 @@ public final class SummaryLogger implements AutoCloseable {
     }
 
     /** 순수 함수라 스케줄러 없이도 검사할 수 있다. */
-    public static String render(CollectionMetrics.Snapshot s, Heartbeat heartbeat, long sinkFailures) {
+    public static String render(CollectionMetrics.Snapshot s, Heartbeat heartbeat, long sinkFailures,
+                                long persisted, long conflicted, long dropped) {
         return "chat.summary"
                 + " received=" + s.received()
                 + " maxReceiveGap=" + duration(s.maxReceiveGap())
@@ -77,7 +85,12 @@ public final class SummaryLogger implements AutoCloseable {
                 + " decodeFailures=" + s.decodeFailures()
                 + " sendFailures=" + heartbeat.sendFailureCount()
                 + " callbackFailures=" + heartbeat.callbackFailureCount()
-                + " sinkFailures=" + sinkFailures;
+                + " sinkFailures=" + sinkFailures
+                // 적재 관측 셋. received = persisted + conflicts (+ dropped)가
+                // 어긋나면 이 줄이 첫 단서다 — 숫자만 싣는다. 본문·식별자는 없다.
+                + " persisted=" + persisted
+                + " conflicts=" + conflicted
+                + " dropped=" + dropped;
     }
 
     /**
@@ -94,6 +107,7 @@ public final class SummaryLogger implements AutoCloseable {
      *       {@code system}·{@code decodeFailures}·{@code collectedFor}·
      *       {@code maxPingGap}·{@code maxPongGap}·{@code sendFailures}·
      *       {@code callbackFailures}·{@code sinkFailures}·
+     *       {@code persisted}·{@code conflicts}·{@code dropped}·
      *       {@code reconnects}·{@code outage}
      *   <li>{@code lastOutageFrom}·{@code lastOutageTo}는 누계가 아니라
      *       <b>마지막 절단 하나</b>의 시각이다. 누계로 읽으면 "이 시각부터 내내
@@ -128,13 +142,15 @@ public final class SummaryLogger implements AutoCloseable {
      * <p>요약과 같은 규칙이다. 본문·작성자 식별자·닉네임·토큰은 어느 필드에도 없다.
      */
     public static void logFinalVerdict(long session, CollectionMetrics.Verdict verdict,
-                                       Object stopReason) {
-        log.info("{}", renderVerdict(session, verdict, stopReason));
+                                       Object stopReason,
+                                       long persisted, long conflicted, long dropped) {
+        log.info("{}", renderVerdict(session, verdict, stopReason, persisted, conflicted, dropped));
     }
 
     /** 순수 함수라 로그 없이도 검사할 수 있다. */
     public static String renderVerdict(long session, CollectionMetrics.Verdict v,
-                                       Object stopReason) {
+                                       Object stopReason,
+                                       long persisted, long conflicted, long dropped) {
         return "chat.session.verdict"
                 // 첫 항이다. 줄을 세션 단위로 고르는 사람도 도구도 여기서 갈린다.
                 + " session=" + session
@@ -154,6 +170,12 @@ public final class SummaryLogger implements AutoCloseable {
                 + " sendFailures=" + v.sendFailures()
                 + " callbackFailures=" + v.callbackFailures()
                 + " sinkFailures=" + v.sinkFailures()
+                // 적재 관측 셋(프로세스 누계). 마지막 30초 요약 뒤에도 close()의
+                // 마지막 flush가 저장을 일으키므로, 수동 검증 등식
+                // received = persisted + conflicts + dropped는 이 줄로만 정확히 닫힌다.
+                + " persisted=" + persisted
+                + " conflicts=" + conflicted
+                + " dropped=" + dropped
                 // 끊겼다 붙은 횟수와 그동안 놓친 시간. 위 maxReceiveGap이 절단을
                 // 빼고 재므로, 이 둘이 없으면 유실 구간이 어느 항에도 안 남는다.
                 + " reconnects=" + v.reconnects()
