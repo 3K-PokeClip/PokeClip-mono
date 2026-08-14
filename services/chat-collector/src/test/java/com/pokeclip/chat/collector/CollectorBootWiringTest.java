@@ -92,6 +92,8 @@ class CollectorBootWiringTest extends IntegrationTestSupport {
             assertThat(context.getBean(CollectionStatus.class).state())
                     .as("DB가 죽었다고 수집까지 안 시작하면 채팅이 통째로 사라진다")
                     .isEqualTo(CollectionStatus.State.RECONNECTING);
+            // 적재 배선도 올라왔다 — 스케줄러는 틱마다 실패하며 DB 복구를 기다린다.
+            assertThat(context.getBean(com.pokeclip.chat.collector.persist.ChatPersister.class)).isNotNull();
             // 마이그레이션이 포기가 아니라 백오프 재시도로 넘어갔다.
             assertThat(Thread.getAllStackTraces().keySet())
                     .as("재시도 스레드가 없으면 DB가 복구돼도 표가 영영 안 생긴다")
