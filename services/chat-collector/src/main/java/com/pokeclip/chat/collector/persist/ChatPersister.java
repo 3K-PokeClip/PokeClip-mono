@@ -1,0 +1,102 @@
+package com.pokeclip.chat.collector.persist;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.IntStream;
+
+/**
+ * 버퍼를 비워 chat_messages에 배치 INSERT 한다. <b>자기 스레드에서만 돈다</b>(태스크 5) —
+ * 수신 스레드는 여기 안 들어온다.
+ *
+ * <p>멱등의 마지막 방어선은 코드가 아니라 표의 UNIQUE 제약이다. 같은 지문이
+ * 두 번 오면 ON CONFLICT DO NOTHING이 둘째를 조용히 버린다 — 치지직이 메시지
+ * 고유 ID를 안 줘서(공식 문서 확인) 지문은 누가+언제+본문해시다.
+ */
+public class ChatPersister {   // @Component는 태스크 6에서 붙인다 — 여기서 붙이면
+                               // ChatBuffer가 아직 빈이 아니라 기존 부팅 테스트 6개가
+                               // NoSuchBeanDefinitionException으로 깨진다
+
+    private static final int DRAIN_MAX = 2_000;   // 한 배치 상한. 폭주 시 여러 번 나눠 저장
+
+    private static final String INSERT = """
+            INSERT INTO chat_messages
+              (channel_id, sender_channel_id, content, message_time, received_at, content_sha256)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT ON CONSTRAINT uq_chat_messages_fingerprint DO NOTHING
+            """;
+
+    private static final Logger log = LoggerFactory.getLogger(ChatPersister.class);
+
+    private final JdbcTemplate jdbc;
+    private final ChatBuffer buffer;
+    private final AtomicLong persisted = new AtomicLong();
+    private final AtomicLong conflicted = new AtomicLong();
+
+    public ChatPersister(JdbcTemplate jdbc, ChatBuffer buffer) {
+        this.jdbc = jdbc;
+        this.buffer = buffer;
+    }
+
+    public int flushOnce() {
+        List<PersistableChat> batch = buffer.drain(DRAIN_MAX);
+        if (batch.isEmpty()) {
+            return 0;
+        }
+        try {
+            List<Object[]> rows = batch.stream().map(ChatPersister::toRow).toList();
+            int[] results = jdbc.batchUpdate(INSERT, rows);
+            int saved = IntStream.of(results).sum();   // DO NOTHING으로 스킵된 행은 0
+            persisted.addAndGet(saved);
+            // 접힌 것 = 재연결 중복(정상) 또는 도배 병합(유실). 코드가 못 가르므로
+            // 세서 요약에 드러낸다 — received = persisted + conflicts가 어긋나면
+            // 그때 사람이 이 카운터부터 본다.
+            conflicted.addAndGet(batch.size() - saved);
+            return saved;
+        } catch (DataAccessException e) {
+            // DB가 죽어 있다. 꺼낸 것을 되돌리고 다음 주기에 다시 시도한다 —
+            // 수집은 계속돼야 하므로 여기서 예외를 밖으로 내보내지 않는다.
+            // 본문을 로그에 싣지 않는다. 타입 이름만.
+            batch.forEach(buffer::offer);
+            log.warn("chat.persist.failed size={} causeType={}",
+                    batch.size(), e.getClass().getSimpleName());
+            return 0;
+        }
+    }
+
+    public long persistedCount() {
+        return persisted.get();
+    }
+
+    public long conflictedCount() {
+        return conflicted.get();
+    }
+
+    private static Object[] toRow(PersistableChat chat) {
+        return new Object[] {
+                chat.channelId(), chat.senderChannelId(), chat.content(),
+                Timestamp.from(Instant.ofEpochMilli(chat.messageTimeMillis())),
+                Timestamp.from(Instant.ofEpochMilli(chat.receivedAtMillis())),
+                sha256Hex(chat.content())
+        };
+    }
+
+    static String sha256Hex(String content) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(content.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256은 모든 JVM에 있다", e);
+        }
+    }
+}
