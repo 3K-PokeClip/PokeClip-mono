@@ -3,6 +3,7 @@ package com.pokeclip.chat.collector;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
+import com.pokeclip.chat.collector.support.TestPersistence;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -176,7 +177,8 @@ class CollectorConfigTest extends IntegrationTestSupport {
             var props = new ChzzkProperties(enabled, "test-token",
                     "http://localhost:" + port, Duration.ofSeconds(5),
                     Duration.ofSeconds(30), Duration.ofSeconds(60));
-            return new CollectorRunner(props, status, restClientBuilder);
+            return new CollectorRunner(props, status, restClientBuilder,
+                    TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         }
 
         private static void awaitState(CollectionStatus status, CollectionStatus.State state)
