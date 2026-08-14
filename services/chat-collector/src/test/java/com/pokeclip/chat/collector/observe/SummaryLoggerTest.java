@@ -28,7 +28,7 @@ class SummaryLoggerTest {
     @Test
     void 요약_한_줄에_판정에_필요한_항목이_전부_있다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("S1", "ㅋㅋ", 1_000L), 1_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L), 1_100L);
 
         String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(), 0L);
 
@@ -46,8 +46,8 @@ class SummaryLoggerTest {
     @Test
     void 요약이_박아둔_문자열이_아니라_실제_값을_싣는다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("S1", "ㅋㅋ", 1_000L), 1_100L);
-        metrics.recordMessage(new ChatMessage("S2", "ㅎㅎ", 3_000L), 3_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L), 1_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S2", "ㅎㅎ", 3_000L), 3_100L);
         metrics.recordDecodeFailure();
         metrics.recordSystemEvent("connected");
 
@@ -64,7 +64,7 @@ class SummaryLoggerTest {
     @Test
     void 요약에_본문과_작성자_식별자가_없다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("SENDER-NEEDLE", "CONTENT-NEEDLE", 1_000L), 1_100L);
+        metrics.recordMessage(new ChatMessage("CHANNEL-NEEDLE", "SENDER-NEEDLE", "CONTENT-NEEDLE", 1_000L), 1_100L);
 
         String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(), 0L);
 
