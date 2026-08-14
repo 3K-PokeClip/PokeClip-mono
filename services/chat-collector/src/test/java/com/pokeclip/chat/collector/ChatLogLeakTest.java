@@ -7,6 +7,7 @@ import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.observe.Heartbeat;
 import com.pokeclip.chat.collector.observe.SummaryLogger;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -36,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * 안에 있다.
  */
 @FakeChzzkTest
-class ChatLogLeakTest {
+class ChatLogLeakTest extends IntegrationTestSupport {
 
     private static final Logger log = LoggerFactory.getLogger(ChatLogLeakTest.class);
 

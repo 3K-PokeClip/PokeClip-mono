@@ -1,6 +1,7 @@
 package com.pokeclip.chat.collector.fake;
 
 import com.pokeclip.chat.collector.engineio.EngineIoSocket;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 서버가 우리 기대대로 답했다"만 확인하는 셈이 된다.
  */
 @FakeChzzkTest
-class FakeChzzkServerTest {
+class FakeChzzkServerTest extends IntegrationTestSupport {
 
     /** 수립 예산. 이 파일은 접속 자체를 보므로 넉넉히 준다. */
     private static final java.time.Duration BUDGET = java.time.Duration.ofSeconds(5);

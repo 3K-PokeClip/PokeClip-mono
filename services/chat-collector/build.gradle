@@ -15,7 +15,20 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-restclient'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
 
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+
+    // starter는 flyway-core만 가져온다. PostgreSQL 방언 모듈을 직접 넣지 않으면
+    // 부팅 시 "Unsupported Database: PostgreSQL"로 죽는다.
+    implementation 'org.springframework.boot:spring-boot-starter-flyway'
+    implementation 'org.flywaydb:flyway-database-postgresql'
+
+    runtimeOnly 'org.postgresql:postgresql'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-postgresql'
 
     // LogCaptor. 요약 한 줄이 실제로 찍히는지, 그리고 어느 레벨에서도 본문이
     // 안 새는지를 로그에서 직접 확인한다(auth의 SecretLeakTest와 같은 방식).
@@ -25,4 +38,13 @@ dependencies {
     // 임베디드 톰캣의 WsServerContainer 초기화는 spring-boot-tomcat이 이미 하므로
     // 여기서 새로 들어오는 것은 spring-websocket(스프링 핸들러 API)뿐이다.
     testImplementation 'org.springframework.boot:spring-boot-starter-websocket'
+}
+
+tasks.named('test') {
+    // pgjdbc는 socketTimeout으로 끊긴 배치의 뒷정리에서 `assert false`를 밟는다
+    // (BatchResultHandler.isAutoCommit — 닫힌 커넥션의 getAutoCommit, 42.7.11 실측).
+    // Gradle 테스트 JVM은 -ea가 기본이라 운영에서 PSQLException(08006)으로 오는
+    // 것이 테스트에서만 AssertionError로 바뀌어 ChatPersister의 복원 경로를 안 탄다.
+    // 드라이버 패키지의 단언만 꺼서 운영과 같은 예외 타입을 잰다.
+    jvmArgs '-da:org.postgresql...'
 }

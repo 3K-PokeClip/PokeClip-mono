@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -27,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 그래야 수집기 쪽만 닫아도 가짜 서버가 살아 있어 "무엇을 받았는지" 물어볼 수 있다.
  */
 @FakeChzzkTest
-class CollectorShutdownTest {
+class CollectorShutdownTest extends IntegrationTestSupport {
 
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
@@ -233,7 +234,13 @@ class CollectorShutdownTest {
                 java.util.stream.Stream.of(
                         "--pokeclip.chzzk.enabled=true",
                         "--pokeclip.chzzk.base-url=http://localhost:" + port,
-                        "--pokeclip.chzzk.establish-timeout=" + Duration.ofSeconds(5)),
+                        "--pokeclip.chzzk.establish-timeout=" + Duration.ofSeconds(5),
+                        // 따로 띄우는 컨텍스트라 @DynamicPropertySource가 안 걸린다.
+                        // 안 넘기면 localhost:5432로 가서 — 로컬 PG가 꺼져 있으면 부팅
+                        // 실패, 켜져 있으면 팀 공용 DB에 V301을 조용히 적용한다.
+                        "--spring.datasource.url=" + POSTGRES.getJdbcUrl(),
+                        "--spring.datasource.username=" + POSTGRES.getUsername(),
+                        "--spring.datasource.password=" + POSTGRES.getPassword()),
                 java.util.Arrays.stream(extraArgs)).toArray(String[]::new);
         return new SpringApplicationBuilder(CollectorApplication.class)
                 .web(WebApplicationType.NONE)
