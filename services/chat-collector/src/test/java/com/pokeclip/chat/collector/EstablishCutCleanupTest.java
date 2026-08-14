@@ -6,6 +6,7 @@ import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.observe.HeartbeatListener;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
+import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -164,7 +165,8 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, establishTimeout,
                 Duration.ofMillis(50), Duration.ofSeconds(1)),
-                status, restClientBuilder);
+                status, restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
 
         // start()가 아니라 run()이다. 중단 신호로 끊긴 수립은 예외를 밖으로 던지고,
         // 직접 부르면 그것이 이 스레드를 뚫고 나가 스택 트레이스만 남는다.
@@ -206,7 +208,8 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
                 Duration.ofSeconds(30), Duration.ofSeconds(60)),
-                new CollectionStatus(), restClientBuilder);
+                new CollectionStatus(), restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
 
         assertThat(runner.start())
                 .as("정리가 끝난 세션을 붙었다고 보고하면 루프가 그것을 믿고 빠져나간다")
@@ -298,7 +301,8 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
 
         CutInsideWindowRunner(ChzzkProperties properties, CollectionStatus status,
                               RestClient.Builder restClientBuilder, FakeChzzkBehavior behavior) {
-            super(properties, status, restClientBuilder);
+            super(properties, status, restClientBuilder,
+                    TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
             this.behavior = behavior;
         }
 
@@ -387,7 +391,8 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
         CutBeforeKeyRunner(ChzzkProperties properties, CollectionStatus status,
                            RestClient.Builder restClientBuilder,
                            FakeChzzkBehavior behavior, LogCaptor captor) {
-            super(properties, status, restClientBuilder);
+            super(properties, status, restClientBuilder,
+                    TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
             this.behavior = behavior;
             this.captor = captor;
         }
@@ -436,7 +441,8 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
                 Duration.ofSeconds(30), Duration.ofSeconds(60)),
-                status, restClientBuilder);
+                status, restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
 
         Thread booting = new Thread(() -> runner.run(null), "test-boot");
         booting.start();
@@ -491,7 +497,8 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
             runner = new CollectorRunner(new ChzzkProperties(
                     true, "test-token", "http://localhost:" + port, establishTimeout,
                     Duration.ofSeconds(30), Duration.ofSeconds(60)),
-                    status, restClientBuilder);
+                    status, restClientBuilder,
+                            TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
 
             Thread booting = new Thread(() -> runner.run(null), "test-boot");
             booting.start();
@@ -527,7 +534,8 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
         CollectorRunner created = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, establishTimeout,
                 Duration.ofSeconds(30), Duration.ofSeconds(60)),
-                status, restClientBuilder);
+                status, restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         created.run(null);
         return created;
     }

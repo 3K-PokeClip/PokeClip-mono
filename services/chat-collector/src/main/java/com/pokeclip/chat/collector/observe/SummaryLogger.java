@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.observe;
 
+import com.pokeclip.chat.collector.persist.PersistCounters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,15 +41,21 @@ public final class SummaryLogger implements AutoCloseable {
     /**
      * @param sinkFailures 삼킨 싱크 예외의 수를 읽어 오는 곳. ChatSession이 들고
      *                     있는 값이라 공급자로 받는다 — 세션은 재수립마다 바뀐다
+     * @param counters     적재 카운터 묶음(persisted·conflicts·poisoned) —
+     *                     공급자 나열이면 자리바꿈 실수를 타입이 못 잡는다
+     * @param dropped      버퍼 상한 초과로 버린 수. 소유가 ChatBuffer라 따로 받는다
      */
     public static SummaryLogger start(CollectionMetrics metrics, Heartbeat heartbeat,
-                                      Duration period, LongSupplier sinkFailures) {
+                                      Duration period, LongSupplier sinkFailures,
+                                      PersistCounters counters, LongSupplier dropped) {
         SummaryLogger logger = new SummaryLogger();
         long periodMillis = period.toMillis();
         logger.scheduler.scheduleAtFixedRate(() -> {
             logger.emitterThreadNames.add(Thread.currentThread().getName());
             try {
-                log.info("{}", render(metrics.snapshot(), heartbeat, sinkFailures.getAsLong()));
+                log.info("{}", render(metrics.snapshot(), heartbeat, sinkFailures.getAsLong(),
+                        counters.persistedCount(), counters.conflictedCount(),
+                        counters.poisonedCount(), dropped.getAsLong()));
             } catch (RuntimeException e) {
                 // 요약이 터져도 스케줄러는 계속 돈다. 여기서 예외가 밖으로 나가면
                 // scheduleAtFixedRate가 조용히 멈춰 요약이 영영 안 나가고,
@@ -60,7 +67,8 @@ public final class SummaryLogger implements AutoCloseable {
     }
 
     /** 순수 함수라 스케줄러 없이도 검사할 수 있다. */
-    public static String render(CollectionMetrics.Snapshot s, Heartbeat heartbeat, long sinkFailures) {
+    public static String render(CollectionMetrics.Snapshot s, Heartbeat heartbeat, long sinkFailures,
+                                long persisted, long conflicted, long poisoned, long dropped) {
         return "chat.summary"
                 + " received=" + s.received()
                 + " maxReceiveGap=" + duration(s.maxReceiveGap())
@@ -77,7 +85,13 @@ public final class SummaryLogger implements AutoCloseable {
                 + " decodeFailures=" + s.decodeFailures()
                 + " sendFailures=" + heartbeat.sendFailureCount()
                 + " callbackFailures=" + heartbeat.callbackFailureCount()
-                + " sinkFailures=" + sinkFailures;
+                + " sinkFailures=" + sinkFailures
+                // 적재 관측 넷. received = persisted + conflicts + poisoned + dropped가
+                // 어긋나면 이 줄이 첫 단서다 — 숫자만 싣는다. 본문·식별자는 없다.
+                + " persisted=" + persisted
+                + " conflicts=" + conflicted
+                + " poisoned=" + poisoned
+                + " dropped=" + dropped;
     }
 
     /**
@@ -94,6 +108,7 @@ public final class SummaryLogger implements AutoCloseable {
      *       {@code system}·{@code decodeFailures}·{@code collectedFor}·
      *       {@code maxPingGap}·{@code maxPongGap}·{@code sendFailures}·
      *       {@code callbackFailures}·{@code sinkFailures}·
+     *       {@code persisted}·{@code conflicts}·{@code poisoned}·{@code dropped}·
      *       {@code reconnects}·{@code outage}
      *   <li>{@code lastOutageFrom}·{@code lastOutageTo}는 누계가 아니라
      *       <b>마지막 절단 하나</b>의 시각이다. 누계로 읽으면 "이 시각부터 내내
@@ -128,13 +143,16 @@ public final class SummaryLogger implements AutoCloseable {
      * <p>요약과 같은 규칙이다. 본문·작성자 식별자·닉네임·토큰은 어느 필드에도 없다.
      */
     public static void logFinalVerdict(long session, CollectionMetrics.Verdict verdict,
-                                       Object stopReason) {
-        log.info("{}", renderVerdict(session, verdict, stopReason));
+                                       Object stopReason,
+                                       PersistCounters counters, long dropped) {
+        log.info("{}", renderVerdict(session, verdict, stopReason, counters.persistedCount(),
+                counters.conflictedCount(), counters.poisonedCount(), dropped));
     }
 
     /** 순수 함수라 로그 없이도 검사할 수 있다. */
     public static String renderVerdict(long session, CollectionMetrics.Verdict v,
-                                       Object stopReason) {
+                                       Object stopReason,
+                                       long persisted, long conflicted, long poisoned, long dropped) {
         return "chat.session.verdict"
                 // 첫 항이다. 줄을 세션 단위로 고르는 사람도 도구도 여기서 갈린다.
                 + " session=" + session
@@ -154,6 +172,16 @@ public final class SummaryLogger implements AutoCloseable {
                 + " sendFailures=" + v.sendFailures()
                 + " callbackFailures=" + v.callbackFailures()
                 + " sinkFailures=" + v.sinkFailures()
+                // 적재 관측 넷(프로세스 누계). 러너가 판정 직전에 퍼시스터를 닫아
+                // (stop()·영구 정지 둘 다) 마지막 flush분까지 여기 실린다 — 수동 검증
+                // 등식 received = persisted + conflicts + poisoned + dropped는 이 줄로
+                // 검산한다. 잔여 한계: DB 장애 중 종료면 shutdown_left 잔량은 어느
+                // 항에도 안 실려 등식이 그만큼 안 닫힌다 — 그 건수는
+                // chat.persist.shutdown_left 로그가 든다. "항상 닫힌다"고 읽지 마라.
+                + " persisted=" + persisted
+                + " conflicts=" + conflicted
+                + " poisoned=" + poisoned
+                + " dropped=" + dropped
                 // 끊겼다 붙은 횟수와 그동안 놓친 시간. 위 maxReceiveGap이 절단을
                 // 빼고 재므로, 이 둘이 없으면 유실 구간이 어느 항에도 안 남는다.
                 + " reconnects=" + v.reconnects()
