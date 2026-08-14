@@ -3,6 +3,7 @@ package com.pokeclip.chat.collector;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
+import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -112,7 +113,8 @@ class StopDiagnosticsTest extends IntegrationTestSupport {
             runner = new CollectorRunner(new ChzzkProperties(true, "test-token",
                     "http://localhost:" + port, Duration.ofSeconds(5),
                     Duration.ofSeconds(1), Duration.ofSeconds(60)),
-                    status, restClientBuilder);
+                    status, restClientBuilder,
+                            TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
             runner.run(null);
             assertThat(status.state())
                     .as("붙지도 않았다면 절단도 재시도도 없어 검사할 줄이 없다")
@@ -167,7 +169,8 @@ class StopDiagnosticsTest extends IntegrationTestSupport {
         runner = new CollectorRunner(new ChzzkProperties(true, "test-token",
                 "http://localhost:" + port, Duration.ofSeconds(5),
                 Duration.ofSeconds(30), Duration.ofSeconds(60)),
-                new CollectionStatus(), restClientBuilder);
+                new CollectionStatus(), restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         runner.run(null);
     }
 
