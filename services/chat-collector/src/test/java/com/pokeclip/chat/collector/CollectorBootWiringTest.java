@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector;
 
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -41,7 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         "pokeclip.chzzk.reconnect-max-delay=30s"
 })
 @ActiveProfiles("test")
-class CollectorBootWiringTest {
+class CollectorBootWiringTest extends IntegrationTestSupport {
 
     @Autowired CollectionStatus status;   // 러너가 쓰는 그 싱글턴이어야 한다
     @Autowired CollectorHealth health;

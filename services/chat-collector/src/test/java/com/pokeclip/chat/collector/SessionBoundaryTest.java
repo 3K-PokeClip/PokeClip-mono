@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -22,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 연결 상한이 3개라 몇 번 만에 못 붙게 된다.
  */
 @FakeChzzkTest
-class SessionBoundaryTest {
+class SessionBoundaryTest extends IntegrationTestSupport {
 
     private static final Duration AWAIT = Duration.ofSeconds(5);
 

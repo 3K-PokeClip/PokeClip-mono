@@ -5,6 +5,7 @@ import com.pokeclip.chat.collector.chzzk.ChzzkSessionClient;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.observe.HeartbeatListener;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -40,7 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 다음이다.
  */
 @FakeChzzkTest
-class EstablishCutCleanupTest {
+class EstablishCutCleanupTest extends IntegrationTestSupport {
 
     /** 이 이름으로 도는 스레드가 곧 "아직 일하고 있다"의 증거다. */
     private static final Set<String> WORKER_NAMES = Set.of("chzzk-ping", "chzzk-summary");
