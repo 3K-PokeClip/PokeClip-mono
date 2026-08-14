@@ -3,6 +3,7 @@ package com.pokeclip.chat.collector.chzzk;
 import com.pokeclip.chat.collector.StopReason;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @FakeChzzkTest
-class SessionEstablishTest {
+class SessionEstablishTest extends IntegrationTestSupport {
 
     /**
      * 아무도 안 듣는 포트. 루프백이라 즉시 거부가 돌아와 <b>결정적으로</b> 실패한다.

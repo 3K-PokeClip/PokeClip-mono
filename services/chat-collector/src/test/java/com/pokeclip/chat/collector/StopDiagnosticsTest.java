@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -29,7 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 같은 401 경로를 지나며 강제한다.
  */
 @FakeChzzkTest
-class StopDiagnosticsTest {
+class StopDiagnosticsTest extends IntegrationTestSupport {
 
     /** 아무도 안 듣는 포트. 루프백이라 즉시 거부가 돌아와 결정적으로 실패한다. */
     private static final int DEAD_PORT = 1;

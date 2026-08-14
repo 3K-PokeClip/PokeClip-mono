@@ -4,6 +4,7 @@ import com.pokeclip.chat.collector.engineio.PingFailure;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.observe.CollectionMetrics;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -18,7 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** 끊기면 스스로 다시 붙는가. 끊긴 동안 채팅은 되돌릴 수 없으므로 이것이 유일한 방어다. */
 @FakeChzzkTest
-class ReconnectTest {
+class ReconnectTest extends IntegrationTestSupport {
 
     private static final Duration AWAIT = Duration.ofSeconds(10);
 

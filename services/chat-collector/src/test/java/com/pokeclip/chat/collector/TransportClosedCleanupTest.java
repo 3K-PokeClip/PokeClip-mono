@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -27,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 그래서 여기서 두 경로를 다 밟고, 판정 라인과 구독 반납이 각각 한 번인지 본다.
  */
 @FakeChzzkTest
-class TransportClosedCleanupTest {
+class TransportClosedCleanupTest extends IntegrationTestSupport {
 
     /** 이 이름으로 도는 스레드가 곧 "아직 일하고 있다"의 증거다. */
     private static final Set<String> WORKER_NAMES = Set.of("chzzk-ping", "chzzk-summary");
