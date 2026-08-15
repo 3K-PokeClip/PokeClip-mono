@@ -2,6 +2,8 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
+import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -22,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 종료해 보지 않았다.</b>
  */
 @FakeChzzkTest
-class FinalVerdictTest {
+class FinalVerdictTest extends IntegrationTestSupport {
 
     /** PRD 「판정 항목」이 최종 라인에 요구하는 것 전부. */
     private static final List<String> REQUIRED = List.of(
@@ -34,6 +36,10 @@ class FinalVerdictTest {
             "delayMin=", "delayMedian=", "delayMax=", "delaySamples=",
             "system=", "decodeFailures=",
             "sendFailures=", "callbackFailures=", "sinkFailures=",
+            // 적재 관측 넷. 마지막 30초 요약 뒤에도 close()의 마지막 flush가 저장을
+            // 일으키므로, 요약 줄만으로는 수동 검증 등식
+            // received = persisted + conflicts + poisoned + dropped가 정확히 안 닫힌다.
+            "persisted=", "conflicts=", "poisoned=", "dropped=",
             // 끊겼다 붙은 흔적. 없으면 얼마나 놓쳤는지가 어디에도 안 남고,
             // 시각 둘이 없으면 "언제 놓쳤나"에 못 답해 영상과 대조할 수 없다.
             "reconnects=", "outage=", "lastOutageFrom=", "lastOutageTo=",
@@ -170,7 +176,8 @@ class FinalVerdictTest {
             CollectionStatus status = new CollectionStatus();
             runner = new CollectorRunner(new ChzzkProperties(
                     false, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                    Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder);
+                    Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder,
+                            TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
             runner.start();
             runner.stop();
 
@@ -194,7 +201,8 @@ class FinalVerdictTest {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                reconnectFirstDelay, Duration.ofSeconds(60)), status, restClientBuilder);
+                reconnectFirstDelay, Duration.ofSeconds(60)), status, restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         runner.run(null);
         return status;
     }

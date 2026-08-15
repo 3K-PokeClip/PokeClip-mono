@@ -1,6 +1,36 @@
 spring:
   application:
     name: pokeclip-chat-collector
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB:pokeclip}
+    username: ${POSTGRES_USER:pokeclip}
+    password: ${POSTGRES_PASSWORD:change-me-local-only}
+    hikari:
+      data-source-properties:
+        # 반개방 스톨(연결은 살았는데 응답이 안 옴)을 끊는 유일한 시한이다(초).
+        # 없으면 동기 batchUpdate가 영영 매달려 단일 저장 스레드가 죽고, 버퍼는
+        # 상한에 닿아 드롭만 세며 DB가 회복돼도 못 빠져나온다(PR #55 P1).
+        # 셋 중 이것만 끊는다 — 2026-08-15 실측: JdbcTemplate queryTimeout은
+        # 취소를 서버에 보내는 방식이라 답 없는 상대에게 무력하고, HikariCP
+        # connection-timeout은 풀에서 빌리는 대기 시한이라 이미 빌린 커넥션의
+        # read를 못 끊는다(둘 다 20초 넘게 매달림). DatasourceTimeoutTest가 이
+        # 값이 실제로 걸리는지를 행동으로 잰다 — 값 단언이 아니라.
+        # 이 DataSource의 모든 문장에 걸린다 — 10초를 넘기는 마이그레이션(큰 표
+        # 인덱스)을 쓰는 날 이 값을 다시 본다. 저장 배치 하나가 최대 이만큼 걸릴
+        # 수 있어 종료 시 마지막 flush 대기 5초 안에는 못 돌아온다(적재 예산 주석).
+        socketTimeout: 10
+  flyway:
+    enabled: true
+    # 네 서버가 DB 하나를 공유한다. 기본 이력 테이블 이름을 쓰면 나중에 뜬 쪽이
+    # 남의 이력을 자기 것으로 읽고 부팅에 실패한다. 번호 대역은 V3xx (chat).
+    table: flyway_schema_history_chat
+    # auth가 먼저 마이그레이션한 DB에서는 public이 비어 있지 않은데 우리 이력
+    # 테이블은 없다 — 이 설정이 없으면 첫 부팅이 "Found non-empty schema(s)
+    # ... but no schema history table"로 죽는다 (verifier 실물 부팅 실측).
+    baseline-on-migrate: true
+    # 기본 1이면 V1 이하가 스킵된다. 우리 대역은 V3xx라 실질 영향은 없지만,
+    # "아무것도 스킵하지 않는다"를 정확히 말하려면 0이다.
+    baseline-version: 0
   http:
     clients:
       # 복수형이다. 단수형 spring.http.client.*는 4.0.0부터 아무것도 바인딩하지
@@ -33,6 +63,17 @@ logging:
     # auth와 같은 방어선. DEBUG로 켜면 나가는 요청 본문이 통째로 찍힌다.
     # 구체 로거 레벨이 root보다 우선하므로 LOGGING_LEVEL_ROOT=debug로도 안 뚫린다.
     org.springframework.web: info
+    # 채팅 본문·sender_channel_id가 나가는 두 번째 길. TRACE로 켜면
+    # org.springframework.jdbc.core.StatementCreatorUtils가 배치의 바인딩 값을
+    # "Setting SQL statement parameter value: ... parameter value [본문]"으로 찍고,
+    # pgjdbc(org.postgresql.core.v3.QueryExecutorImpl, JUL→SLF4J 브릿지로 온다)가
+    # "FE=> Bind(... $3=<('본문')> ...)"로 여섯 파라미터를 통째로 찍는다
+    # (2026-08-15 실측, Spring 7·pgjdbc 42.7.11). 위와 같은 이유로 여기 박는다 —
+    # 구체 로거 레벨이 root보다 우선하므로 LOGGING_LEVEL_ROOT=trace로 내려도
+    # 이 둘은 info다. ChatLogLeakTest가 root를 TRACE로 올려 놓고 적재를 돌려
+    # 이 두 줄이 실제로 막는지를 행동으로 잰다 — 지우면 그 검사가 빨간불이다.
+    org.springframework.jdbc: info
+    org.postgresql: info
 
 pokeclip:
   chzzk:

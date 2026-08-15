@@ -12,12 +12,14 @@ import com.pokeclip.chat.collector.observe.CollectionMetrics;
 import com.pokeclip.chat.collector.observe.Heartbeat;
 import com.pokeclip.chat.collector.observe.HeartbeatListener;
 import com.pokeclip.chat.collector.observe.SummaryLogger;
+import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.ChatPersister;
+import com.pokeclip.chat.collector.persist.PersistableChat;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
-import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
@@ -39,8 +41,9 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p><b>재시도가 안 통하는 사유는 401·403과 {@code REVOKED}뿐이다.</b> 그 밖은
  * 포기하지 않는다 — 끊겨 있는 동안의 채팅은 되돌릴 수 없고, 백필이 되는지도 모른다.
+ * <b>포기하면 판정을 내고 프로세스를 내린다(exit 1)</b> — 수집이 영영 안 되는
+ * STOPPED로 살아 있을 이유가 없다.
  */
-@Component
 public class CollectorRunner implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(CollectorRunner.class);
@@ -58,6 +61,14 @@ public class CollectorRunner implements ApplicationRunner {
      */
     private static final Duration RELEASE_WAIT = Duration.ofSeconds(7);
 
+    /**
+     * 영구 정지 뒤 프로세스를 내리기 전에 잔량 저장(DB 회복)을 기다리는 시한.
+     * 종료 유예와 무관하다 — 우리가 스스로 내리는 길이라 SIGTERM이 온 것이 아니고,
+     * 그 사이 SIGTERM이 오면 stop()이 이 대기를 깨운다. 30초는 재연결 백오프 상한과
+     * 같은 크기의 "잠깐의 장애" 기준이다 — 그보다 긴 장애면 잔량은 로그로만 남긴다.
+     */
+    private static final Duration EXIT_DRAIN_WAIT = Duration.ofSeconds(30);
+
     private final ChzzkProperties properties;
     private final CollectionStatus status;
 
@@ -71,6 +82,11 @@ public class CollectorRunner implements ApplicationRunner {
     private final RestClient restClient;
 
     private final CollectionMetrics metrics = new CollectionMetrics();
+
+    /** 수신 스레드가 넣기만 하는 바구니. 저장은 {@code ChatPersister}의 스레드가 한다. */
+    private final ChatBuffer buffer;
+    /** 요약에 persisted·conflicts를 싣기 위해서만 든다 — 저장 지시는 하지 않는다. */
+    private final ChatPersister persister;
 
     /**
      * 한 세션이 소유한 것 전부. <b>필드로 흩어 놓지 않는다.</b>
@@ -253,6 +269,33 @@ public class CollectorRunner implements ApplicationRunner {
     private final CountDownLatch stopSignal = new CountDownLatch(1);
 
     /**
+     * <b>수신 게이트. 내려가면 CHAT 프레임을 세지도 담지도 않는다.</b> {@code stop()}이
+     * 퍼시스터를 닫기 <i>직전에</i> 내린다.
+     *
+     * <p>없으면 마무리 flush 도중에도 소켓이 살아 새 채팅이 계속 바구니에 들어온다 —
+     * flush는 "진전이 있는 동안 계속"이라 바쁜 방송 + 느린 DB에서는 끝을 못 보고
+     * 5초 예산을 넘겨 잔량을 버리고, 판정 줄은 아직 오는 채팅 때문에 등식
+     * received = persisted + conflicts + poisoned + dropped가 안 닫힌다(PR #53 P1,
+     * 실측 received=818 · persisted=782). <b>수신을 먼저 끊고 나서 close</b>여야 한다.
+     *
+     * <p><b>소켓을 먼저 닫는 것으로 끊지 않는다.</b> 그러면 ① 구독 반납이 닫힌 소켓
+     * 뒤에 나가 반납-후-닫기 순서(서버가 세션을 정리하는 중이면 반납이 무의미해질 수
+     * 있다 — {@code 소켓을_닫기_전에_반납을_보낸다}가 지킨다)가 뒤집히고, ② 닫힘 콜백이
+     * 이 세션의 절단 사유를 {@code TRANSPORT_CLOSED}로 세워 우아한 종료가 절단으로
+     * 기록된다. 그래서 전송은 그대로 두고 <b>수신 콜백에서 받아들이기만 멈춘다</b> —
+     * 소켓·반납은 기존 자리({@code cleanUpOnce})에서 그대로 닫는다.
+     *
+     * <p>{@code stopSignal}과 따로 두는 이유: 그쪽은 {@code stop()} 첫 줄에 내려가고 뒤에
+     * 재연결 스레드 대기(최대 9초)가 있다. 그 대기 동안 온 채팅은 아직 실을 수 있으므로
+     * 게이트는 close 직전에 내려 유실 창을 그만큼 좁힌다.
+     *
+     * <p>남는 창은 「게이트 읽기 → offer」의 몇 인스트럭션이다. 그 사이에 마지막 flush의
+     * <i>빈 큐 확인</i>까지 통째로 지나가야 한 건이 어긋나는데, flush는 스레드 제출·기상을
+     * 거치므로 실질적으로 안 겹친다 — 재현 못 함. "원리적으로 불가능"이 아니다.
+     */
+    private final AtomicBoolean intakeClosed = new AtomicBoolean();
+
+    /**
      * <b>지금 나가 있는 구독 반납 왕복의 수.</b> {@code stop()}이 인터럽트하기 전에 본다.
      *
      * <p>재연결 스레드를 인터럽트해도 대부분은 손해가 없다 — 수립에 매달린
@@ -297,14 +340,38 @@ public class CollectorRunner implements ApplicationRunner {
         return lastSessionNo.get();
     }
 
+    /**
+     * 영구 정지 판정 뒤 프로세스를 내리는 손잡이. 운영은 {@code System.exit(1)}
+     * ({@code CollectorApplication}의 빈 정의), 검사는 가짜다 — 실제 exit은 테스트
+     * JVM을 죽인다.
+     */
+    private final Runnable exitAction;
+
+    /**
+     * <b>검사용 — exit이 없다.</b> 러너를 직접 만드는 검사가 스무 곳이 넘고, 그중
+     * 여럿이 REVOKED·401을 일부러 만든다. 기본이 {@code System.exit}이면 그 검사가
+     * 테스트 JVM을 통째로 내린다. 패키지 밖에서는 안 보인다 — 운영 배선은 아래
+     * 공개 생성자로 exit을 <b>명시적으로</b> 준다.
+     */
+    CollectorRunner(ChzzkProperties properties, CollectionStatus status,
+                    RestClient.Builder restClientBuilder,
+                    ChatBuffer buffer, ChatPersister persister) {
+        this(properties, status, restClientBuilder, buffer, persister, () -> { });
+    }
+
     public CollectorRunner(ChzzkProperties properties, CollectionStatus status,
-                           RestClient.Builder restClientBuilder) {
+                           RestClient.Builder restClientBuilder,
+                           ChatBuffer buffer, ChatPersister persister,
+                           Runnable exitAction) {
         this.properties = properties;
         this.status = status;
         // 빌더는 프로토타입 빈이다. 한 번만 build()해서 들고 있는다.
         this.restClient = restClientBuilder.build();
         this.policy = new ReconnectPolicy(
                 properties.reconnectFirstDelay(), properties.reconnectMaxDelay());
+        this.buffer = buffer;
+        this.persister = persister;
+        this.exitAction = exitAction;
     }
 
     /**
@@ -424,7 +491,7 @@ public class CollectorRunner implements ApplicationRunner {
             // 값이 아니라 읽는 길을 넘긴다 — 삼킨 예외 수는 계속 늘어난다.
             // 세션은 이 덩어리의 것이라 바뀌지 않으므로 그쪽을 직접 읽는다.
             SummaryLogger logger = SummaryLogger.start(metrics, beat, SUMMARY_PERIOD,
-                    opening::sinkFailureCount);
+                    opening::sinkFailureCount, persister, buffer::droppedCount);
 
             // <b>가드를 보는 것과 상태를 올리는 것이 한 덩어리여야 한다.</b> 위 이른
             // 검사만으로는 <b>스케줄러 둘을 세우는 동안이 통째로 창</b>이다 — 거기서
@@ -668,7 +735,16 @@ public class CollectorRunner implements ApplicationRunner {
                     log.warn("chat.session.stopped reason={} retriable=false attempt={}",
                             reason, attempt);
                     status.stopped(reason);
+                    // <b>내리기 전 마지막 회수 — 닫기 전에 기다린다.</b> 여기서 곧장
+                    // 판정(=close)으로 가면 DB 장애 중일 때 마지막 flush가 실패로 잔량을
+                    // 복원한 채 스케줄러를 끄고, 그 뒤로는 아무도 다시 저장하지 않는다
+                    // (PR #55 P1 ②). 퍼시스터의 주기 flush가 아직 살아 있으므로 그것이
+                    // 회복을 물게 두고, 비거나 시한이 차면 넘어간다. 세션은 이미
+                    // 치워졌고 STOPPED라 새 채팅은 안 들어온다 — 버퍼는 줄기만 한다.
+                    awaitBufferDrained(EXIT_DRAIN_WAIT);
+                    // 퍼시스터 닫기는 logVerdictOnce 안이다 — 판정 경로마다 두면 빼먹는다.
                     logVerdictOnce(reason);
+                    exitAfterVerdict(reason);
                     return;
                 }
                 attempt++;
@@ -751,6 +827,47 @@ public class CollectorRunner implements ApplicationRunner {
     }
 
     /**
+     * 버퍼가 비거나 시한이 찰 때까지 기다린다. 저장은 하지 않는다 — 퍼시스터의
+     * 스케줄러가 1초마다 재시도하는 것을 <b>지켜볼 뿐</b>이다. stop()이 시작되면
+     * (shutdownNow의 인터럽트) 즉시 돌아온다 — 그쪽이 close·판정을 맡는다.
+     */
+    private void awaitBufferDrained(Duration budget) {
+        long deadline = System.nanoTime() + budget.toNanos();
+        while (buffer.size() > 0 && stopSignal.getCount() > 0 && System.nanoTime() < deadline) {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        if (buffer.size() > 0) {
+            // 유실은 수용하되 관측은 남긴다 — 건수만. 잔량은 뒤이은 close가 한 번 더 시도한다.
+            log.warn("chat.collector.exit_drain_left size={}", buffer.size());
+        }
+    }
+
+    /**
+     * <b>수집이 영영 끝났으면 프로세스도 끝낸다.</b> STOPPED로 살아 있으면 health는
+     * DOWN인데 아무 일도 안 하는 프로세스가 남고, 버퍼에 남은 채팅은 다음 재시작이
+     * 아니라 프로세스가 죽는 순간 사라진다. exit 1로 내려 restart 정책이 새 프로세스를
+     * 띄우게 한다 — 토큰이 잘못된 채 배포하면 재시작 루프가 되는데, 그것이 "조용히
+     * STOPPED로 살아 있는" 것보다 낫다: 판정 줄의 reason이 매 재시작마다 남는다.
+     *
+     * <p><b>stop()이 이미 시작됐으면 안 부른다.</b> 종료 시퀀스가 도는 중의 두 번째
+     * {@code System.exit}은 JDK가 훅을 기다리지 않고 <b>즉시 halt</b>한다 — 구독 반납이
+     * 나가기 전에 프로세스가 사라진다. 검사와 호출 사이의 창(SIGTERM이 그 몇
+     * 인스트럭션 사이에 도착)은 못 닫았다 — 그때는 급사 경로다.
+     */
+    private void exitAfterVerdict(StopReason reason) {
+        if (stopSignal.getCount() == 0) {
+            return;                       // 종료 중이다. 내리는 것은 그쪽이 한다
+        }
+        log.warn("chat.collector.exit reason={} code=1", reason);
+        exitAction.run();
+    }
+
+    /**
      * 밀린 신호가 <b>재시도로 안 풀리는 사유</b>면 그것을 이번 판단의 사유로 삼는다.
      * 일시 사유면 아무것도 안 한다 — 그쪽은 {@code finally}의 재생이 맡는다.
      *
@@ -800,8 +917,9 @@ public class CollectorRunner implements ApplicationRunner {
 
     /**
      * <b>수집이 영영 끝났을 때 딱 한 번.</b> 부르는 곳이 둘이다 — 재연결 루프의
-     * 비재시도 분기(영구 정지)와 {@code stop()}(프로세스 종료). 영구 정지 뒤에
-     * 컨테이너가 내려가면 두 경로를 다 지나므로 이 가드가 유일한 방어다.
+     * 비재시도 분기(영구 정지)와 {@code stop()}(프로세스 종료). 영구 정지는 곧이어
+     * 스스로 exit하며 종료 훅이 stop()을 부르므로 <b>언제나</b> 두 경로를 다 지난다 —
+     * 이 가드가 유일한 방어다.
      *
      * <p>절단에서는 안 부른다. 재연결이 붙은 뒤로 절단은 끝이 아니고, 거기서
      * 판정을 내면 <b>최종이 아닌 최종 판정</b>이 세션 수만큼 쌓인다.
@@ -810,6 +928,20 @@ public class CollectorRunner implements ApplicationRunner {
         if (!verdictLogged.compareAndSet(false, true)) {
             return;
         }
+        // <b>판정보다 먼저 퍼시스터를 닫는다.</b> 파괴 순서상 퍼시스터의 @PreDestroy는
+        // 러너보다 뒤라, 안 닫고 판정을 찍으면 마지막 flush분이 persisted에서 빠져
+        // 등식 received = persisted + conflicts + poisoned + dropped가 안 닫힌다.
+        // 호출부(영구 정지·stop())마다 두지 않고 <b>가드 통과 직후 여기 한 줄</b>에
+        // 둔다 — 세 번째 판정 경로가 생겨도 빼먹을 수 없다. close는 완료-대기
+        // 멱등이라 스프링 파괴가 또 불러도, 둘이 겹쳐도 안전하다.
+        //
+        // 남는 창 하나는 정직하게 적는다: stop()의 shutdownNow가 영구 정지 close
+        // 진행 중인 재연결 스레드를 인터럽트하면 그 close는 flush 미완으로 끝날 수
+        // 있다(chat.persist.close_interrupted가 단서다). stop() 쪽 판정을
+        // shutdownNow 앞으로 옮기는 것은 안 된다 — 판정은 cleanUpOnce(세션 값
+        // 걷기) 뒤여야 하고, cleanUpOnce는 낙오 세션 정리를 위해 shutdownNow
+        // 뒤가 안전하다.
+        persister.close();
         // <b>열려 있는 절단 구간을 여기서 닫는다.</b> 닫는 자리가 원래 재접속
         // 성공 하나뿐이라, 다시 못 붙고 끝나면 판정 줄이 "outage=0ms
         // lastOutageFrom=none"이라고 말했다 — 그 절단 이후로 계속 못 받고 있는데도.
@@ -827,7 +959,8 @@ public class CollectorRunner implements ApplicationRunner {
         //
         // 번호는 이 프로세스가 마지막으로 연 세션의 것이다. 판정은 프로세스 전체의
         // 누계라 "몇 번째까지 갔나"를 그 번호가 말한다.
-        SummaryLogger.logFinalVerdict(lastSessionNo.get(), metrics.verdict(), reason);
+        SummaryLogger.logFinalVerdict(lastSessionNo.get(), metrics.verdict(), reason,
+                persister, buffer.droppedCount());
     }
 
     /**
@@ -850,7 +983,18 @@ public class CollectorRunner implements ApplicationRunner {
 
         ChatMessage message = ChatEventDecoder.decodeChat(frame.payload());
         if (message != null) {
-            metrics.recordMessage(message, System.currentTimeMillis());
+            if (intakeClosed.get()) {
+                // 종료의 마무리 flush가 시작됐다. 세지도 담지도 않는다 — 세기만 하면
+                // 등식이 그만큼 벌어지고, 담으면 flush가 끝을 못 본다. 이 채팅은
+                // 어차피 프로세스가 내려가며 잃는 것이다(소켓을 먼저 닫아도 같다).
+                return;
+            }
+            long receivedAt = System.currentTimeMillis();
+            metrics.recordMessage(message, receivedAt);
+            // 넣기만 한다. 여기서 I/O를 하면 이 스레드(WS 수신)가 붙들려
+            // 채팅 폭주 때 수신이 밀린다 — 저장은 chzzk-persist 스레드가 한다.
+            buffer.offer(new PersistableChat(message.channelId(), message.senderChannelId(),
+                    message.content(), message.messageTimeMillis(), receivedAt));
             return;
         }
 
@@ -919,6 +1063,19 @@ public class CollectorRunner implements ApplicationRunner {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        // <b>수신을 먼저 끊고 나서 close.</b> 게이트가 열린 채 close하면 마무리 flush
+        // 도중에도 채팅이 계속 들어와 flush가 끝을 못 보고(바쁜 방송 + 느린 DB) 예산을
+        // 넘긴다 — 그 뒤 판정 등식이 안 닫힌다. 소켓이 아니라 게이트로 끊는 이유는
+        // intakeClosed 주석에 있다. 종료 순서: 게이트 내림 → persister.close() →
+        // shutdownNow → cleanUpOnce(반납·소켓 닫기) → 판정.
+        intakeClosed.set(true);
+        // <b>인터럽트 전에 퍼시스터 닫기를 선점한다.</b> 재연결 스레드가 영구 정지
+        // 판정 안에서 close를 들고 있을 수 있는데, 아래 shutdownNow가 그 스레드를
+        // flush 도중 인터럽트하면 마지막 배치가 끊긴다. close는 완료-대기 멱등이라
+        // — 진행 중이면 이 호출이 그 완료를 기다리고, 아직이면 여기서 직접 비운다 —
+        // 어느 쪽이든 이 줄이 돌아온 시점에는 인터럽트할 flush가 없다.
+        // 판정 자체는 아래 logVerdictOnce 자리 그대로다(cleanUpOnce 뒤여야 한다).
+        persister.close();
         reconnector.shutdownNow();
         SessionScope scope = activeSession.get();
         if (scope != null) {
@@ -933,6 +1090,9 @@ public class CollectorRunner implements ApplicationRunner {
         // <b>꺼져 있으면 안 낸다</b> — 원래 cleanUpOnce의 판정 호출이 그 검사를 달고
         // 있었고, 여기로 옮기면서 빠뜨리면 꺼진 서버가 종료마다 received=0 판정을 뱉는다.
         if (status.state() != CollectionStatus.State.DISABLED) {
+            // 퍼시스터 닫기는 logVerdictOnce 안이다 — 수신은 위에서 이미 끊겼으므로
+            // 그 시점의 버퍼가 이 프로세스의 전부고, 판정 직전의 close가 그것을 싣는다.
+            // DISABLED로 여길 안 지나는 경우의 닫기는 스프링 @PreDestroy가 덮는다.
             logVerdictOnce(status.reason());
         }
     }

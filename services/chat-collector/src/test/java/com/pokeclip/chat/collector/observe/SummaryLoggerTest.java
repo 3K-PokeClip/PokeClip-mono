@@ -1,6 +1,7 @@
 package com.pokeclip.chat.collector.observe;
 
 import com.pokeclip.chat.collector.chzzk.ChatMessage;
+import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 
@@ -28,9 +29,10 @@ class SummaryLoggerTest {
     @Test
     void 요약_한_줄에_판정에_필요한_항목이_전부_있다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("S1", "ㅋㅋ", 1_000L), 1_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L), 1_100L);
 
-        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(), 0L);
+        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(),
+                0L, 0L, 0L, 0L, 0L);
 
         assertThat(line).startsWith("chat.summary ");
         for (String key : REQUIRED) {
@@ -46,12 +48,13 @@ class SummaryLoggerTest {
     @Test
     void 요약이_박아둔_문자열이_아니라_실제_값을_싣는다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("S1", "ㅋㅋ", 1_000L), 1_100L);
-        metrics.recordMessage(new ChatMessage("S2", "ㅎㅎ", 3_000L), 3_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L), 1_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S2", "ㅎㅎ", 3_000L), 3_100L);
         metrics.recordDecodeFailure();
         metrics.recordSystemEvent("connected");
 
-        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(), 7L);
+        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(),
+                7L, 0L, 0L, 0L, 0L);
 
         assertThat(line).contains("received=2")
                 .contains("decodeFailures=1")
@@ -64,16 +67,36 @@ class SummaryLoggerTest {
     @Test
     void 요약에_본문과_작성자_식별자가_없다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("SENDER-NEEDLE", "CONTENT-NEEDLE", 1_000L), 1_100L);
+        metrics.recordMessage(new ChatMessage("CHANNEL-NEEDLE", "SENDER-NEEDLE", "CONTENT-NEEDLE", 1_000L), 1_100L);
 
-        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(), 0L);
+        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(),
+                0L, 0L, 0L, 0L, 0L);
 
         // 양성 대조가 먼저다. 수신 0건이면 바늘이 요약을 지나간 적이 없어
         // doesNotContain 둘이 자동으로 참이 된다 — 아무것도 검사하지 않은 초록불이다.
         assertThat(line).as("바늘이 요약을 지나가지 않았다면 아래 두 줄은 검사가 아니다")
                 .contains("received=1");
 
-        assertThat(line).doesNotContain("CONTENT-NEEDLE").doesNotContain("SENDER-NEEDLE");
+        // channelId는 개별 메시지 필드는 아니지만 요약에 실을 이유도 없다 —
+        // persisted/conflicts/dropped 숫자만 싣는다는 정책을 여기서 못박는다.
+        assertThat(line).doesNotContain("CONTENT-NEEDLE").doesNotContain("SENDER-NEEDLE")
+                .doesNotContain("CHANNEL-NEEDLE");
+    }
+
+    /** 적재가 생겼는데 요약에 안 실리면 "저장이 도는지"를 아무도 못 본다. */
+    @Test
+    void 요약에_persisted_conflicts_poisoned_dropped가_실린다() {
+        CollectionMetrics metrics = new CollectionMetrics();
+        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L), 1_100L);
+
+        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(),
+                0L, 5L, 2L, 3L, 1L);
+
+        // 키만 박아 둔 상수 문자열이 통과하지 못하게 값까지 본다.
+        assertThat(line).contains("persisted=5")
+                .contains("conflicts=2")
+                .contains("poisoned=3")
+                .contains("dropped=1");
     }
 
     /** 요약은 ping 스케줄러가 아니라 자기 스레드에서 나가야 한다. */
@@ -83,7 +106,7 @@ class SummaryLoggerTest {
 
         try (LogCaptor captor = new LogCaptor();
              SummaryLogger logger = SummaryLogger.start(metrics, Heartbeat.idleForTest(),
-                     Duration.ofMillis(100), () -> 0L)) {
+                     Duration.ofMillis(100), () -> 0L, TestPersistence.disabledPersister(), () -> 0L)) {
             Thread.sleep(400);
 
             assertThat(logger.emitterThreadNames())

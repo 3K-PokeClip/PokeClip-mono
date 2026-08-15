@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector;
 
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -29,7 +31,7 @@ class CollectorHealthEndpointTest {
     /** 꺼짐. PRD 상태표 첫 행이다. */
     @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
     @ActiveProfiles("test")
-    static class 꺼져_있을_때 {
+    static class 꺼져_있을_때 extends IntegrationTestSupport {
 
         @LocalServerPort int port;
 
@@ -55,7 +57,7 @@ class CollectorHealthEndpointTest {
                     "pokeclip.chzzk.base-url=http://localhost:1"
             })
     @ActiveProfiles("test")
-    static class 수집이_멈췄을_때 {
+    static class 수집이_멈췄을_때 extends IntegrationTestSupport {
 
         @LocalServerPort int port;
 

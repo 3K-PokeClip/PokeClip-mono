@@ -2,6 +2,8 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
+import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -29,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 같은 401 경로를 지나며 강제한다.
  */
 @FakeChzzkTest
-class StopDiagnosticsTest {
+class StopDiagnosticsTest extends IntegrationTestSupport {
 
     /** 아무도 안 듣는 포트. 루프백이라 즉시 거부가 돌아와 결정적으로 실패한다. */
     private static final int DEAD_PORT = 1;
@@ -111,7 +113,8 @@ class StopDiagnosticsTest {
             runner = new CollectorRunner(new ChzzkProperties(true, "test-token",
                     "http://localhost:" + port, Duration.ofSeconds(5),
                     Duration.ofSeconds(1), Duration.ofSeconds(60)),
-                    status, restClientBuilder);
+                    status, restClientBuilder,
+                            TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
             runner.run(null);
             assertThat(status.state())
                     .as("붙지도 않았다면 절단도 재시도도 없어 검사할 줄이 없다")
@@ -166,7 +169,8 @@ class StopDiagnosticsTest {
         runner = new CollectorRunner(new ChzzkProperties(true, "test-token",
                 "http://localhost:" + port, Duration.ofSeconds(5),
                 Duration.ofSeconds(30), Duration.ofSeconds(60)),
-                new CollectionStatus(), restClientBuilder);
+                new CollectionStatus(), restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         runner.run(null);
     }
 

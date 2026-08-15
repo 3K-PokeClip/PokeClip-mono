@@ -7,4 +7,5 @@ package com.pokeclip.chat.collector.chzzk;
  * <p>toString을 따로 두지 않는다. record 기본 toString이 content를 통째로 찍는데,
  * 로그에 실수로 객체를 넘기면 그대로 평문이 나간다. ChatLogLeakTest가 못박는다.
  */
-public record ChatMessage(String senderChannelId, String content, long messageTimeMillis) { }
+public record ChatMessage(String channelId, String senderChannelId,
+                          String content, long messageTimeMillis) { }

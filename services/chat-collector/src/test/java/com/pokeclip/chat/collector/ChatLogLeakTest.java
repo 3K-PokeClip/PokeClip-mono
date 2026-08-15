@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.classic.spi.StackTraceElementProxy;
@@ -7,6 +8,11 @@ import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.observe.Heartbeat;
 import com.pokeclip.chat.collector.observe.SummaryLogger;
+import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.ChatPersister;
+import com.pokeclip.chat.collector.persist.PersistableChat;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
+import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -14,6 +20,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.core.env.Environment;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
@@ -36,7 +45,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * 안에 있다.
  */
 @FakeChzzkTest
-class ChatLogLeakTest {
+class ChatLogLeakTest extends IntegrationTestSupport {
 
     private static final Logger log = LoggerFactory.getLogger(ChatLogLeakTest.class);
 
@@ -47,9 +56,15 @@ class ChatLogLeakTest {
 
     private static final List<String> SECRETS = List.of(CONTENT, SENDER, NICKNAME, TOKEN);
 
+    /** application.yml이 info로 박아 둔 바인딩 값 로거 둘. 스프링과 드라이버. */
+    private static final List<String> PINNED_JDBC_LOGGERS =
+            List.of("org.springframework.jdbc", "org.postgresql");
+
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
     @Autowired RestClient.Builder restClientBuilder;
+    @Autowired JdbcTemplate jdbc;
+    @Autowired Environment environment;
 
     private CollectorRunner runner;
 
@@ -168,7 +183,8 @@ class ChatLogLeakTest {
             awaitReceived(5);
 
             try (SummaryLogger logger = SummaryLogger.start(runner.metrics(),
-                    Heartbeat.idleForTest(), Duration.ofMillis(150), () -> 0L)) {
+                    Heartbeat.idleForTest(), Duration.ofMillis(150),
+                    () -> 0L, TestPersistence.disabledPersister(), () -> 0L)) {
                 awaitSummaryLine(captor);
                 assertThat(logger.emitterThreadNames()).containsExactly("chzzk-summary");
             }
@@ -214,6 +230,128 @@ class ChatLogLeakTest {
                     .contains("received=3");
 
             assertNoSecretsIn(verdict, SECRETS);
+        }
+    }
+
+    /**
+     * 적재 경로(POK-84)가 새로 연 로그 자리 둘 — 성공 flush와 실패 flush —
+     * 을 바늘이 지나가게 하고 무유출을 단언한다. <b>새 로그 줄이 이 검사를
+     * 안 거치면 위에서 닫은 구멍이 적재 쪽에서 다시 열린다.</b>
+     */
+    @Test
+    void 적재_경로가_돌아도_본문이_로그에_안_남는다() {
+        try (LogCaptor captor = new LogCaptor()) {
+            ChatBuffer buffer = new ChatBuffer(100);
+            buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+                    1_754_300_000_000L, 1_754_300_000_175L));
+            int saved = new ChatPersister(jdbc, buffer).flushOnce();
+            // 양성 대조. 표까지 안 갔다면 적재 경로가 바늘을 나른 적이 없다.
+            assertThat(saved).as("저장이 안 됐다면 성공 경로의 로그를 아무것도 안 본 것이다")
+                    .isEqualTo(1);
+
+            // 실패 경로 — DB가 죽어 chat.persist.failed가 나가는 자리가
+            // 본문을 싣기 가장 쉬운 자리다 (태스크 5의 실패 주입 방식 재사용).
+            JdbcTemplate broken = new JdbcTemplate(jdbc.getDataSource()) {
+                @Override
+                public int[] batchUpdate(String sql, List<Object[]> args) {
+                    throw new DataAccessResourceFailureException("db down");
+                }
+            };
+            buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+                    1_754_300_000_001L, 1_754_300_000_176L));
+            assertThat(new ChatPersister(broken, buffer).flushOnce()).isZero();
+            assertThat(renderAll(captor))
+                    .as("실패 줄이 안 나갔다면 실패 경로의 로그를 아무것도 안 본 것이다")
+                    .contains("chat.persist.failed");
+
+            // 격리 경로 — chat.persist.poisoned가 나가는 자리가 실패 경로 다음으로
+            // 본문을 싣기 쉬운 자리다. NUL은 생성 지점에서 제거돼 실데이터로는 격리를
+            // 못 태우므로, 바늘 본문만 SQLSTATE 22021로 거부하는 스텁으로 강제한다.
+            // 실패 경로가 되돌린 잔여를 먼저 비운다 — 안 비우면 격리 배치에 섞여
+            // poisoned가 2가 되고, 단언이 무엇을 셌는지 흐려진다.
+            new ChatPersister(jdbc, buffer).flushOnce();
+            ChatPersister isolating = new ChatPersister(
+                    TestPersistence.rejecting22(jdbc.getDataSource(), CONTENT), buffer);
+            buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+                    1_754_300_000_002L, 1_754_300_000_177L));
+            isolating.flushOnce();
+            assertThat(isolating.poisonedCount())
+                    .as("격리를 안 탔다면 poisoned 줄의 로그를 아무것도 안 본 것이다")
+                    .isEqualTo(1);
+            assertThat(renderAll(captor)).contains("chat.persist.poisoned");
+
+            assertNoSecretsIn(captor, SECRETS);
+        }
+    }
+
+    /**
+     * 우리 코드가 아니라 프레임워크가 여는 자리. 위 검사들은 INFO 기준선이라
+     * (LogCaptor 기본값) TRACE에서 늘어나는 줄을 못 본다 — 그런데 거기서 늘어나는
+     * 것이 바로 <b>바인딩 값</b>이고, 이 표에서 바인딩되는 값이 본문과 작성자다.
+     * auth의 SecretLeakTest는 "TRACE는 볼 것이 없다"로 닫았지만(바늘이 SQL에
+     * 안 닿는다) 여기서는 반대다.
+     *
+     * <p>실측(2026-08-15): root를 TRACE로 내리면 두 로거가 찍는다.
+     * {@code org.springframework.jdbc.core.StatementCreatorUtils}가 배치 파라미터를
+     * 한 값씩, {@code org.postgresql.core.v3.QueryExecutorImpl}(JUL→SLF4J 브릿지)이
+     * Bind 메시지에 여섯 파라미터를 통째로. 그래서 application.yml이 두 로거를
+     * info로 박았고, 이 검사는 <b>root를 TRACE로 올려 놓고</b> 적재를 돌려 그 두 줄이
+     * 실제로 이기는지를 행동으로 잰다 — 운영자가 LOGGING_LEVEL_ROOT=trace로 내린
+     * 상황 그대로다. yml 줄을 지우면 빨간불이다(주입 확인함).
+     *
+     * <p>뒤의 양성 대조가 이 검사의 자기검사다. 두 로거를 <b>직접</b> TRACE로 밀면
+     * 실제로 새야 한다 — 안 새면 프레임워크가 바뀐 것이고, 그때는 앞의 단언이
+     * 아무것도 안 본 채 초록인 상태이니 yml 주석과 이 검사를 다시 볼 때다.
+     */
+    @Test
+    void JDBC_파라미터_로거는_root를_TRACE로_내려도_본문을_안_찍는다() {
+        // 프로퍼티가 Environment에 있고 부팅이 logback까지 박았는지 — auth와 같은
+        // 두 겹. 기본값을 주지 않는다: 주면 yml에서 줄이 사라져도 초록이다.
+        for (String pinned : PINNED_JDBC_LOGGERS) {
+            String level = environment.getProperty("logging.level." + pinned);
+            assertThat(level).as("application.yml에 " + pinned + " 레벨이 박혀 있어야 root를 내려도 버틴다")
+                    .isNotNull();
+            assertThat(Level.toLevel(level, Level.TRACE).toInt())
+                    .as(pinned + "가 이 레벨이면 아래 양성 대조가 재현하는 유출이 열린다: " + level)
+                    .isGreaterThanOrEqualTo(Level.INFO.toInt());
+            assertThat(levelOf(pinned)).as(pinned + " 프로퍼티가 Environment에만 있고 logback까지 안 닿았다")
+                    .isNotNull();
+        }
+
+        try (LogCaptor captor = new LogCaptor()) {
+            ChatBuffer buffer = new ChatBuffer(100);
+            ChatPersister persister = new ChatPersister(jdbc, buffer);
+
+            // ① root TRACE — 구체 로거의 info가 이겨야 한다.
+            Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
+            setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
+            try {
+                buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+                        1_754_300_000_010L, 1_754_300_000_185L));
+                assertThat(persister.flushOnce())
+                        .as("표까지 안 갔다면 바인딩 로거가 바늘을 나른 적이 없다").isEqualTo(1);
+            } finally {
+                setLevel(Logger.ROOT_LOGGER_NAME, rootBefore);
+            }
+            assertNoSecretsIn(captor, List.of(CONTENT, SENDER));
+
+            // ② 양성 대조 — 로거마다 따로 TRACE로 밀고 따로 단언한다. 묶으면 한쪽이
+            // 조용해져도(더 위험한 드라이버 쪽이 사라져도) 다른 쪽이 초록을 유지한다.
+            for (String pinned : PINNED_JDBC_LOGGERS) {
+                Level before = levelOf(pinned);
+                setLevel(pinned, Level.TRACE);
+                try {
+                    buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+                            1_754_300_000_011L, 1_754_300_000_186L));
+                    assertThat(persister.flushOnce()).isEqualTo(1);
+                } finally {
+                    setLevel(pinned, before);
+                }
+                assertThat(captor.events())
+                        .as(pinned + "를 TRACE로 밀어도 본문이 안 새면 yml에 박은 근거를 다시 볼 때다")
+                        .anyMatch(e -> e.getLoggerName().startsWith(pinned)
+                                && renderFully(e).contains(CONTENT));
+            }
         }
     }
 
@@ -288,7 +426,8 @@ class ChatLogLeakTest {
         runner = new CollectorRunner(
                 new ChzzkProperties(true, TOKEN, "http://localhost:" + port, Duration.ofSeconds(5),
                         Duration.ofSeconds(30), Duration.ofSeconds(60)),
-                status, restClientBuilder);
+                status, restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         runner.run(null);
         return status;
     }
@@ -347,6 +486,15 @@ class ChatLogLeakTest {
      */
     private static String needle(String label) {
         return "LEAK-" + label + "-" + UUID.randomUUID();
+    }
+
+    private static void setLevel(String loggerName, Level level) {
+        ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).setLevel(level);
+    }
+
+    /** 명시 레벨만 돌려준다. 안 박혀 있으면 null이다(부모에서 물려받는 상태). */
+    private static Level levelOf(String loggerName) {
+        return ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).getLevel();
     }
 
     private static void assertNoSecretsIn(LogCaptor captor, List<String> secrets) {

@@ -4,6 +4,8 @@ import com.pokeclip.chat.collector.engineio.PingFailure;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.observe.CollectionMetrics;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
+import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -18,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** 끊기면 스스로 다시 붙는가. 끊긴 동안 채팅은 되돌릴 수 없으므로 이것이 유일한 방어다. */
 @FakeChzzkTest
-class ReconnectTest {
+class ReconnectTest extends IntegrationTestSupport {
 
     private static final Duration AWAIT = Duration.ofSeconds(10);
 
@@ -210,7 +212,8 @@ class ReconnectTest {
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port,
                 Duration.ofMillis(500), Duration.ofMillis(50), Duration.ofSeconds(1)),
-                status, restClientBuilder);
+                status, restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
 
         java.util.concurrent.atomic.AtomicBoolean revokedSeen =
                 new java.util.concurrent.atomic.AtomicBoolean();
@@ -461,7 +464,8 @@ class ReconnectTest {
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port,
                 Duration.ofSeconds(5), Duration.ofMillis(300), Duration.ofSeconds(1)),
-                status, restClientBuilder);
+                status, restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
 
         runner.heartbeatListener(NO_SESSION).onPongTimeout(Duration.ofSeconds(9));   // 신호 ①
         awaitUntil(() -> status.attempt() == 1);
@@ -768,7 +772,8 @@ class ReconnectTest {
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port,
                 Duration.ofSeconds(5), firstDelay, maxDelay),
-                status, restClientBuilder);
+                status, restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         runner.run(null);
     }
 

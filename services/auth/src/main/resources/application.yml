@@ -24,6 +24,16 @@ spring:
     # 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
     # 마이그레이션 번호는 모듈별 대역을 쓴다 — V1xx auth · V2xx clip · V3xx chat.
     table: flyway_schema_history_auth
+    # 공유 DB에서 뜨는 순서와 무관하게 부팅하려면 모든 Flyway 서버에 필요하다 —
+    # auth가 "첫 서버"라는 보장이 없다. chat-collector가 먼저 마이그레이션한 빈 DB에
+    # auth가 나중에 뜨면 public은 비어 있지 않은데 우리 이력 테이블은 없어서
+    # "Found non-empty schema(s) ... but no schema history table"로 죽는다
+    # (chat-collector 쪽 실측 2026-08-15, auth도 같은 메시지로 재현 — IntegrationTestSupport가
+    # 그 상황을 심어 두어 이 두 줄을 지우면 auth 테스트 전체가 빨강이다).
+    baseline-on-migrate: true
+    # 기본 1이면 V1 이하가 스킵된다. 우리 대역은 V1xx라 실질 영향은 없지만,
+    # "아무것도 스킵하지 않는다"를 정확히 말하려면 0이다.
+    baseline-version: 0
 
   http:
     clients:

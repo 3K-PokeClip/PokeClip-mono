@@ -4,6 +4,8 @@ import com.pokeclip.chat.collector.engineio.Handshake;
 import com.pokeclip.chat.collector.engineio.PingFailure;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
+import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -30,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 그래서 그쪽은 리스너를 직접 부른다.
  */
 @FakeChzzkTest
-class HeartbeatSignalTest {
+class HeartbeatSignalTest extends IntegrationTestSupport {
 
     /** 실측 비율을 유지한 압축값. 파생: 송신 80ms · pong 임계 200ms. */
     private static final Handshake COMPRESSED =
@@ -121,7 +123,8 @@ class HeartbeatSignalTest {
         return new CollectorRunner(new ChzzkProperties(true, "test-token",
                 "http://localhost:" + port, Duration.ofSeconds(5),
                 Duration.ofSeconds(30), Duration.ofSeconds(60)),
-                status, restClientBuilder);
+                status, restClientBuilder,
+                        TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
     }
 
     private static String line(LogCaptor captor) {
