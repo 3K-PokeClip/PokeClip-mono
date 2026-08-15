@@ -300,6 +300,6 @@ class CollectionMetricsTest {
     }
 
     private static ChatMessage chat(long messageTime) {
-        return new ChatMessage("CH1", "S1", "내용", messageTime);
+        return new ChatMessage("CH1", "S1", "내용", messageTime, "{}");
     }
 }

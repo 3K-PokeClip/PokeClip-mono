@@ -17,7 +17,12 @@ public final class ChatEventDecoder {
     private ChatEventDecoder() { }
 
     public static ChatMessage decodeChat(String eventPayload) {
-        JsonNode inner = inner(eventPayload, "CHAT");
+        // 안쪽 문자열을 파싱하기 전에 따로 붙든다 — 아카이브가 원문 그대로 쌓는 것이 이것이다.
+        String innerText = innerText(eventPayload, "CHAT");
+        if (innerText == null) {
+            return null;
+        }
+        JsonNode inner = parseInner(innerText);
         if (inner == null) {
             return null;
         }
@@ -34,11 +39,16 @@ public final class ChatEventDecoder {
                 inner.path("channelId").asString(""),
                 inner.path("senderChannelId").asString(""),
                 inner.path("content").asString(""),
-                messageTime);
+                messageTime,
+                innerText);
     }
 
     public static SystemEvent decodeSystem(String eventPayload) {
-        JsonNode inner = inner(eventPayload, "SYSTEM");
+        String innerText = innerText(eventPayload, "SYSTEM");
+        if (innerText == null) {
+            return null;
+        }
+        JsonNode inner = parseInner(innerText);
         if (inner == null) {
             return null;
         }
@@ -51,15 +61,24 @@ public final class ChatEventDecoder {
         return new SystemEvent(type, inner.path("data").path("sessionKey").asString(""));
     }
 
-    private static JsonNode inner(String eventPayload, String expectedName) {
+    /** 바깥 배열을 풀어 이름이 맞으면 안쪽 문자열을 <b>파싱하지 않고</b> 돌려준다. */
+    private static String innerText(String eventPayload, String expectedName) {
         try {
             JsonNode outer = MAPPER.readTree(eventPayload);
             if (!outer.isArray() || outer.size() < 2 || !expectedName.equals(outer.get(0).asString())) {
                 return null;
             }
-            return MAPPER.readTree(outer.get(1).asString());
+            return outer.get(1).asString();
         } catch (RuntimeException e) {
             // 본문을 로그에 남기지 않는다 — 깨진 JSON이 곧 채팅 본문이다.
+            return null;
+        }
+    }
+
+    private static JsonNode parseInner(String innerText) {
+        try {
+            return MAPPER.readTree(innerText);
+        } catch (RuntimeException e) {
             return null;
         }
     }
