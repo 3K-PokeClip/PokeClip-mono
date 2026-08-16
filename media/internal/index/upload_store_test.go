@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"regexp"
 	"testing"
 	"time"
 
@@ -13,74 +11,6 @@ import (
 )
 
 // 계획 4절 1단계의 PG 통합 8케이스다. PG_DSN 이 없으면 전부 skip 된다.
-//
-// ★ 왜 전용 DB 를 따로 만드는가
-// PendingUploads 와 CountBacklog 는 스트림 필터가 없는 **표 전역 조회**다 — 스위퍼가
-// 표 전체를 훑는 것이 계약이기 때문이다(설계 2.1절). 그래서 이 파일의 판정은 표에
-// 다른 행이 하나도 없어야 결정적이다. 개발용 DB 의 stream_segments 를 비우면 남의
-// 데이터를 지우게 되므로, 같은 서버에 전용 DB 를 만들고 그 안에서만 TRUNCATE 한다.
-//
-// DB 이름은 PG_TEST_DB 로 바꿀 수 있다(기본 pokeclip_uploadtest).
-const defaultUploadTestDB = "pokeclip_uploadtest"
-
-// safeDBName 은 식별자를 그대로 SQL 에 이어 붙이기 전의 화이트리스트다.
-// CREATE DATABASE 는 파라미터 바인딩을 지원하지 않아 문자열 결합이 불가피하므로,
-// 무엇을 막을지 나열하는 대신 무엇을 허용할지 좁게 못 박는다.
-var safeDBName = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
-
-// pgDuplicateDatabase 는 "이미 있다"는 SQLSTATE 다. 재실행에서 정상이다.
-const pgDuplicateDatabase = "42P04"
-
-func newUploadTestPool(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-
-	dsn := os.Getenv("PG_DSN")
-	if dsn == "" {
-		t.Skip("PG_DSN 미설정 — DB 통합 테스트를 건너뛴다")
-	}
-	name := os.Getenv("PG_TEST_DB")
-	if name == "" {
-		name = defaultUploadTestDB
-	}
-	if !safeDBName.MatchString(name) {
-		t.Fatalf("PG_TEST_DB=%q 는 허용되지 않는 이름이다 (소문자·숫자·밑줄만)", name)
-	}
-
-	ctx := context.Background()
-	admin, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("관리용 풀 생성 실패: %v", err)
-	}
-	defer admin.Close()
-
-	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil && !isSQLState(err, pgDuplicateDatabase) {
-		t.Fatalf("전용 테스트 DB %q 생성 실패 (PG_DSN 롤에 CREATEDB 권한이 필요하다): %v", name, err)
-	}
-
-	cfg, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		t.Fatalf("DSN 파싱 실패: %v", err)
-	}
-	cfg.ConnConfig.Database = name
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		t.Fatalf("테스트 DB 풀 생성 실패: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
-	if err := EnsureSchema(ctx, pool); err != nil {
-		t.Fatalf("EnsureSchema 실패: %v", err)
-	}
-	if _, err := pool.Exec(ctx, "TRUNCATE stream_segments"); err != nil {
-		t.Fatalf("TRUNCATE 실패: %v", err)
-	}
-	return pool
-}
-
-func isSQLState(err error, code string) bool {
-	var pgErr interface{ SQLState() string }
-	return errors.As(err, &pgErr) && pgErr.SQLState() == code
-}
 
 // seedRow 는 한 행을 그대로 넣는다. bytes·local_path 의 NULL 을 표현해야 해서
 // Store.Insert 대신 직접 쓴다(Insert 는 두 컬럼을 항상 채운다).
@@ -140,7 +70,7 @@ func stateOf(t *testing.T, pool *pgxpool.Pool, streamID string, seq int64) (Uplo
 
 // 케이스1 — MarkUploaded 는 bytes 가 일치하는 비-uploaded 행만 확정한다(CAS).
 func TestMarkUploadedIsCompareAndSwap(t *testing.T) {
-	pool := newUploadTestPool(t)
+	pool := newTestPool(t)
 	st := NewUploadStore(pool)
 	ctx := context.Background()
 	sid := "cas-uploaded"
@@ -187,7 +117,7 @@ func TestMarkUploadedIsCompareAndSwap(t *testing.T) {
 
 // 케이스2 — MarkFailed 도 같은 CAS 를 쓰되 uploaded 행은 절대 뒤집지 않는다.
 func TestMarkFailedIsCompareAndSwapAndNeverOverridesUploaded(t *testing.T) {
-	pool := newUploadTestPool(t)
+	pool := newTestPool(t)
 	st := NewUploadStore(pool)
 	ctx := context.Background()
 	sid := "cas-failed"
@@ -225,7 +155,7 @@ func TestMarkFailedIsCompareAndSwapAndNeverOverridesUploaded(t *testing.T) {
 // 케이스3 — DB 오류는 CAS 거부로 뭉개지 않고 err 로 나온다.
 // (false, err) 를 거부로 오분류하면 DB 오류가 조용히 삼켜진다(CX-2 ⑥).
 func TestMarkReturnsErrorInsteadOfSilentRejection(t *testing.T) {
-	pool := newUploadTestPool(t)
+	pool := newTestPool(t)
 	st := NewUploadStore(pool)
 	ctx := context.Background()
 
@@ -252,7 +182,7 @@ func TestMarkReturnsErrorInsteadOfSilentRejection(t *testing.T) {
 // 케이스4 — 마킹은 ctx 취소 시 즉시 반환한다.
 // 이 계약이 깨지면 Shutdown 6단계의 무조건 join 이 무기한 대기가 된다(결정 17″).
 func TestMarkRespectsContextCancellation(t *testing.T) {
-	pool := newUploadTestPool(t)
+	pool := newTestPool(t)
 	st := NewUploadStore(pool)
 	seed(t, pool, seedRow{"ctx-cancel", 0, old(10), UploadStatePending, bytesOf(1000), false})
 
@@ -280,7 +210,7 @@ func TestMarkRespectsContextCancellation(t *testing.T) {
 // 케이스5 — pending 이 failed 보다 항상 먼저 나온다(클래스 간 기아 방지).
 // 시각은 failed 쪽이 훨씬 오래됐는데도 그렇다.
 func TestPendingUploadsOrdersPendingBeforeFailed(t *testing.T) {
-	pool := newUploadTestPool(t)
+	pool := newTestPool(t)
 	st := NewUploadStore(pool)
 
 	seed(t, pool,
@@ -306,7 +236,7 @@ func TestPendingUploadsOrdersPendingBeforeFailed(t *testing.T) {
 // 케이스6 — 꼬리 판정과 꼬리 예외.
 // EXISTS(더 큰 seq) 가 IsTail 을 정하고, 꼬리는 tailGrace 를 넘겨야 조회된다.
 func TestPendingUploadsTailDetectionAndGrace(t *testing.T) {
-	pool := newUploadTestPool(t)
+	pool := newTestPool(t)
 	st := NewUploadStore(pool)
 	ctx := context.Background()
 
@@ -343,7 +273,7 @@ func TestPendingUploadsTailDetectionAndGrace(t *testing.T) {
 // 케이스7 — 키셋 페이징이 누락도 중복도 내지 않는다.
 // 커서는 "여기까지 검사를 마쳤다"이므로 다음 페이지는 그 다음 행부터다.
 func TestPendingUploadsKeysetPagingHasNoGapOrDuplicate(t *testing.T) {
-	pool := newUploadTestPool(t)
+	pool := newTestPool(t)
 	st := NewUploadStore(pool)
 	ctx := context.Background()
 
@@ -394,7 +324,7 @@ func TestPendingUploadsKeysetPagingHasNoGapOrDuplicate(t *testing.T) {
 // 케이스8 — bytes 가 NULL 인 행은 조회 창에서 빠진다(결정 14).
 // coalesce 로 펴면 꼬리 대조와 CAS 가 영원히 실패해 창만 낭비한다.
 func TestPendingUploadsExcludesNullBytesAndNullPath(t *testing.T) {
-	pool := newUploadTestPool(t)
+	pool := newTestPool(t)
 	st := NewUploadStore(pool)
 
 	seed(t, pool,
@@ -415,7 +345,7 @@ func TestPendingUploadsExcludesNullBytesAndNullPath(t *testing.T) {
 // 케이스9 — CountBacklog 세 값의 의미.
 // pending 과 failed 는 배타이고, bytesNull 은 그 둘의 부분집합이다(중복 계수).
 func TestCountBacklogThreeValues(t *testing.T) {
-	pool := newUploadTestPool(t)
+	pool := newTestPool(t)
 	st := NewUploadStore(pool)
 
 	seed(t, pool,
