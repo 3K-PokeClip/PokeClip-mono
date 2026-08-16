@@ -100,6 +100,13 @@ public final class SummaryLogger implements AutoCloseable {
                 // received = archived + archiveBufferDropped (채팅 단위) ·
                 // uploaded + pending + droppedObjects = 닫힌 창 수 (파일 단위).
                 // 숫자만이다 — S3 키·raw는 어느 레벨에도 안 싣는다.
+                //
+                // 단서 둘을 같이 읽어야 한다. ① 아카이브가 꺼져 있으면(S3_BUCKET 빈 값 = 기본) 여섯 항이
+                // 계속 0이라 첫째 등식이 안 맞는다 — 유실이 아니라 꺼짐이고, 시작 로그 chat.archive.disabled와
+                // 판정 줄 archiveRunId=none이 그것을 말한다. ② 여기서 여섯 항을 따로 읽으므로 그 사이에
+                // 업로드가 끝나면 uploaded는 옛 값·pending은 새 값이라 둘째 등식이 순간 1 모자라 보인다
+                // (다음 줄에서 회복). 게터마다 락을 잡아도 연속 호출은 원자적이 아니다 — 정본은 판정 줄이고,
+                // 그쪽은 아카이버가 닫힌 뒤라 움직이는 값이 없다.
                 + " archived=" + archive.archivedCount()
                 + " archiveBufferDropped=" + archive.archiveBufferDroppedCount()
                 + " uploaded=" + archive.uploadedCount()
