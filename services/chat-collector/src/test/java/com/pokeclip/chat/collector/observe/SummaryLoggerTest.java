@@ -1,11 +1,13 @@
 package com.pokeclip.chat.collector.observe;
 
+import com.pokeclip.chat.collector.archive.ArchiveCounters;
 import com.pokeclip.chat.collector.chzzk.ChatMessage;
 import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -32,7 +34,7 @@ class SummaryLoggerTest {
         metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}"), 1_100L);
 
         String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(),
-                0L, 0L, 0L, 0L, 0L);
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE);
 
         assertThat(line).startsWith("chat.summary ");
         for (String key : REQUIRED) {
@@ -54,7 +56,7 @@ class SummaryLoggerTest {
         metrics.recordSystemEvent("connected");
 
         String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(),
-                7L, 0L, 0L, 0L, 0L);
+                7L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE);
 
         assertThat(line).contains("received=2")
                 .contains("decodeFailures=1")
@@ -70,7 +72,7 @@ class SummaryLoggerTest {
         metrics.recordMessage(new ChatMessage("CHANNEL-NEEDLE", "SENDER-NEEDLE", "CONTENT-NEEDLE", 1_000L, "{\"content\":\"CONTENT-NEEDLE\"}"), 1_100L);
 
         String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(),
-                0L, 0L, 0L, 0L, 0L);
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE);
 
         // 양성 대조가 먼저다. 수신 0건이면 바늘이 요약을 지나간 적이 없어
         // doesNotContain 둘이 자동으로 참이 된다 — 아무것도 검사하지 않은 초록불이다.
@@ -90,13 +92,48 @@ class SummaryLoggerTest {
         metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}"), 1_100L);
 
         String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(),
-                0L, 5L, 2L, 3L, 1L);
+                0L, 5L, 2L, 3L, 1L, ArchiveCounters.NONE);
 
         // 키만 박아 둔 상수 문자열이 통과하지 못하게 값까지 본다.
         assertThat(line).contains("persisted=5")
                 .contains("conflicts=2")
                 .contains("poisoned=3")
                 .contains("dropped=1");
+    }
+
+    /** 아카이브 관측 여섯. 요약·판정 줄 둘 다에 실린다(태스크 9). */
+    private static final List<String> REQUIRED_ARCHIVE = List.of(
+            "archived=", "archiveBufferDropped=", "uploaded=", "pending=", "droppedObjects=", "droppedMessages=");
+
+    @Test
+    void 요약_줄에_아카이브_카운터_여섯이_값과_함께_실린다() {
+        CollectionMetrics metrics = new CollectionMetrics();
+        ArchiveCounters archive = counters(7, 1, 3, 2, 1, 4, "r1");
+        String line = SummaryLogger.render(metrics.snapshot(), Heartbeat.idleForTest(), 0L, 0L, 0L, 0L, 0L, archive);
+        assertThat(line).contains("archived=7").contains("archiveBufferDropped=1").contains("uploaded=3")
+                .contains("pending=2").contains("droppedObjects=1").contains("droppedMessages=4");
+    }
+
+    @Test
+    void 판정_줄에는_archiveRunId까지_실린다() {
+        // stopReason null = 정상 종료(SHUTDOWN) — StopReason에는 SHUTDOWN 상수가 없다.
+        String line = SummaryLogger.renderVerdict(1L, new CollectionMetrics().verdict(), null,
+                0L, 0L, 0L, 0L, counters(0, 0, 0, 0, 0, 0, "k7x2m9pq"));
+        for (String key : REQUIRED_ARCHIVE) assertThat(line).contains(key);
+        assertThat(line).contains("archiveRunId=k7x2m9pq");
+    }
+
+    /** 값만 돌려주는 카운터 묶음. */
+    static ArchiveCounters counters(long archived, long bufDropped, long uploaded, long pending, long dObj, long dMsg, String runId) {
+        return new ArchiveCounters() {
+            public long archivedCount() { return archived; }
+            public long archiveBufferDroppedCount() { return bufDropped; }
+            public long uploadedCount() { return uploaded; }
+            public long pendingCount() { return pending; }
+            public long droppedObjectsCount() { return dObj; }
+            public long droppedMessagesCount() { return dMsg; }
+            public String runId() { return runId; }
+        };
     }
 
     /** 요약은 ping 스케줄러가 아니라 자기 스레드에서 나가야 한다. */
@@ -106,7 +143,7 @@ class SummaryLoggerTest {
 
         try (LogCaptor captor = new LogCaptor();
              SummaryLogger logger = SummaryLogger.start(metrics, Heartbeat.idleForTest(),
-                     Duration.ofMillis(100), () -> 0L, TestPersistence.disabledPersister(), () -> 0L)) {
+                     Duration.ofMillis(100), () -> 0L, TestPersistence.disabledPersister(), () -> 0L, ArchiveCounters.NONE)) {
             Thread.sleep(400);
 
             assertThat(logger.emitterThreadNames())

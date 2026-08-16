@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.classic.spi.StackTraceElementProxy;
+import com.pokeclip.chat.collector.archive.ArchiveCounters;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.observe.Heartbeat;
@@ -184,7 +185,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
 
             try (SummaryLogger logger = SummaryLogger.start(runner.metrics(),
                     Heartbeat.idleForTest(), Duration.ofMillis(150),
-                    () -> 0L, TestPersistence.disabledPersister(), () -> 0L)) {
+                    () -> 0L, TestPersistence.disabledPersister(), () -> 0L, ArchiveCounters.NONE)) {
                 awaitSummaryLine(captor);
                 assertThat(logger.emitterThreadNames()).containsExactly("chzzk-summary");
             }

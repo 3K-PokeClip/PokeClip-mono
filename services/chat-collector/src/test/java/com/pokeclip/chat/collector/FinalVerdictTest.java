@@ -40,6 +40,8 @@ class FinalVerdictTest extends IntegrationTestSupport {
             // 일으키므로, 요약 줄만으로는 수동 검증 등식
             // received = persisted + conflicts + poisoned + dropped가 정확히 안 닫힌다.
             "persisted=", "conflicts=", "poisoned=", "dropped=",
+            // 아카이브 관측 — 판정 줄의 runId로 S3에서 이 프로세스의 파일을 찾는다.
+            "archived=", "archiveRunId=",
             // 끊겼다 붙은 흔적. 없으면 얼마나 놓쳤는지가 어디에도 안 남고,
             // 시각 둘이 없으면 "언제 놓쳤나"에 못 답해 영상과 대조할 수 없다.
             "reconnects=", "outage=", "lastOutageFrom=", "lastOutageTo=",

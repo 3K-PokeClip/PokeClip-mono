@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector;
 
+import com.pokeclip.chat.collector.archive.ArchiveCounters;
 import com.pokeclip.chat.collector.chzzk.ChatEventDecoder;
 import com.pokeclip.chat.collector.chzzk.ChatMessage;
 import com.pokeclip.chat.collector.chzzk.ChatSession;
@@ -491,7 +492,7 @@ public class CollectorRunner implements ApplicationRunner {
             // 값이 아니라 읽는 길을 넘긴다 — 삼킨 예외 수는 계속 늘어난다.
             // 세션은 이 덩어리의 것이라 바뀌지 않으므로 그쪽을 직접 읽는다.
             SummaryLogger logger = SummaryLogger.start(metrics, beat, SUMMARY_PERIOD,
-                    opening::sinkFailureCount, persister, buffer::droppedCount);
+                    opening::sinkFailureCount, persister, buffer::droppedCount, ArchiveCounters.NONE);
 
             // <b>가드를 보는 것과 상태를 올리는 것이 한 덩어리여야 한다.</b> 위 이른
             // 검사만으로는 <b>스케줄러 둘을 세우는 동안이 통째로 창</b>이다 — 거기서
@@ -960,7 +961,7 @@ public class CollectorRunner implements ApplicationRunner {
         // 번호는 이 프로세스가 마지막으로 연 세션의 것이다. 판정은 프로세스 전체의
         // 누계라 "몇 번째까지 갔나"를 그 번호가 말한다.
         SummaryLogger.logFinalVerdict(lastSessionNo.get(), metrics.verdict(), reason,
-                persister, buffer.droppedCount());
+                persister, buffer.droppedCount(), ArchiveCounters.NONE);
     }
 
     /**
