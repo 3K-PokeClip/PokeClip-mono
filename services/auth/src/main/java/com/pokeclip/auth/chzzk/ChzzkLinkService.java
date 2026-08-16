@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.time.Instant;
+import java.util.Optional;
 
 /**
  * 치지직 연동의 조합부. 트랜잭션이 없다 — 외부 HTTP를 트랜잭션 밖에서 하려고.
@@ -89,6 +90,15 @@ public class ChzzkLinkService {
         if (tokens != null) {
             discarder.discard(userId, tokens.accessToken(), tokens.refreshToken());
         }
+    }
+
+    public Optional<ChzzkChannelLink> latest(Long userId) {
+        return links.findFirstByUserIdOrderByCreatedAtDesc(userId);
+    }
+
+    /** 트랜잭션은 writer에 있다(자기 호출 함정). 살아있는 행이 없으면 아무것도 안 하고 조용히 끝. */
+    public void unlink(Long userId) {
+        writer.revoke(userId, Instant.now());
     }
 
     /**

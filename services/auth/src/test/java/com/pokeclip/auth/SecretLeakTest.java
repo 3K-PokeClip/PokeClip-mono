@@ -7,6 +7,13 @@ import ch.qos.logback.classic.spi.StackTraceElementProxy;
 import com.jayway.jsonpath.JsonPath;
 import com.pokeclip.auth.api.dto.GoogleLoginRequest;
 import com.pokeclip.auth.api.dto.RefreshRequest;
+import com.pokeclip.auth.chzzk.ChzzkCleanupExecutor;
+import com.pokeclip.auth.chzzk.ChzzkLinkStateCodec;
+import com.pokeclip.auth.chzzk.ChzzkLinkWriter;
+import com.pokeclip.auth.chzzk.ChzzkMe;
+import com.pokeclip.auth.chzzk.ChzzkTokens;
+import com.pokeclip.auth.chzzk.api.dto.ChzzkResolveRequest;
+import com.pokeclip.auth.chzzk.api.dto.LinkRequest;
 import com.pokeclip.auth.streamkey.api.dto.ExchangeRequest;
 import com.pokeclip.auth.streamkey.api.dto.ResolveRequest;
 import com.pokeclip.auth.token.RefreshTokenRepository;
@@ -16,8 +23,10 @@ import com.pokeclip.auth.user.UserRepository;
 import com.pokeclip.auth.user.UserService;
 import com.pokeclip.auth.support.FakeHttpServer;
 import com.pokeclip.auth.support.IntegrationTestSupport;
+import com.pokeclip.web.RequestIdFilter;
 import com.pokeclip.web.support.LogCaptor;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +44,7 @@ import org.springframework.test.web.servlet.ResultMatcher;
 
 import java.lang.annotation.Annotation;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
@@ -42,6 +52,7 @@ import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -91,6 +102,13 @@ class SecretLeakTest extends IntegrationTestSupport {
 
     private static final List<String> SECRETS = List.of(GOOGLE_CODE, CLIENT_SECRET, JWT_SECRET);
 
+    /** 치지직 바늘. 토큰 둘·채널은 가짜 서버가 돌려주고, code는 요청에, 시크릿은 설정(@DynamicPropertySource)에서 온다. */
+    private static final String CHZZK_ACCESS = needle("chzzk-access");
+    private static final String CHZZK_REFRESH = needle("chzzk-refresh");
+    private static final String CHZZK_CODE = needle("chzzk-code");
+    private static final String CHZZK_CLIENT_SECRET = needle("chzzk-client-secret");
+    private static final String CHZZK_CHANNEL_ID = needle("chzzk-channel");
+
     /**
      * DEBUG에서 실제로 새는 것. 요청·응답 본문에 실려 다니는 둘뿐이다.
      * JWT 서명키는 본문에 실리지 않아 DEBUG에서도 안 샌다 — 그래서 여기 없다.
@@ -118,11 +136,15 @@ class SecretLeakTest extends IntegrationTestSupport {
     private final RefreshTokenRepository refreshTokenRepository;
     private final JdbcTemplate jdbcTemplate;
     private final Environment environment;
+    private final ChzzkLinkStateCodec stateCodec;
+    private final ChzzkLinkWriter linkWriter;
+    private final ChzzkCleanupExecutor cleanup;
 
     SecretLeakTest(MockMvc mockMvc, TokenService tokenService, UserService userService,
                    UserRepository userRepository,
                    RefreshTokenRepository refreshTokenRepository,
-                   JdbcTemplate jdbcTemplate, Environment environment) {
+                   JdbcTemplate jdbcTemplate, Environment environment,
+                   ChzzkLinkStateCodec stateCodec, ChzzkLinkWriter linkWriter, ChzzkCleanupExecutor cleanup) {
         this.mockMvc = mockMvc;
         this.tokenService = tokenService;
         this.userService = userService;
@@ -130,6 +152,9 @@ class SecretLeakTest extends IntegrationTestSupport {
         this.refreshTokenRepository = refreshTokenRepository;
         this.jdbcTemplate = jdbcTemplate;
         this.environment = environment;
+        this.stateCodec = stateCodec;
+        this.linkWriter = linkWriter;
+        this.cleanup = cleanup;
     }
 
     /**
@@ -142,6 +167,7 @@ class SecretLeakTest extends IntegrationTestSupport {
         registry.add("pokeclip.google.token-uri", () -> GOOGLE.url("/token"));
         registry.add("pokeclip.google.client-secret", () -> CLIENT_SECRET);
         registry.add("pokeclip.jwt.secret", () -> JWT_SECRET);
+        registry.add("pokeclip.chzzk.app.client-secret", () -> CHZZK_CLIENT_SECRET);
     }
 
     @AfterAll
@@ -151,6 +177,7 @@ class SecretLeakTest extends IntegrationTestSupport {
 
     @BeforeEach
     void setUp() {
+        CHZZK.reset();   // 같은 static 가짜 서버를 다른 클래스와 나눠 쓴다. 여기서 심은 needle이 다음으로 새지 않게.
         clearStreamKeyChildren();
         refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
@@ -159,12 +186,14 @@ class SecretLeakTest extends IntegrationTestSupport {
     /** auth/CLAUDE.md의 FK 함정. 자식 행을 남기면 다른 테스트의 부모 정리를 막는다. */
     @AfterEach
     void tearDown() {
+        cleanup.awaitIdle(Duration.ofSeconds(5));   // 전용 스레드의 정리가 다음 클래스의 CHZZK.reset() 뒤에 도착하지 않게
         clearStreamKeyChildren();
         refreshTokenRepository.deleteAll();
     }
 
     /** FK 함정. 자식 행을 남기면 다른 테스트의 부모 정리를 막는다. */
     private void clearStreamKeyChildren() {
+        jdbcTemplate.update("DELETE FROM chzzk_channel_links");
         jdbcTemplate.update("DELETE FROM pairing_exchange_attempts");
         jdbcTemplate.update("DELETE FROM pairing_codes");
         jdbcTemplate.update("DELETE FROM stream_keys");
@@ -328,6 +357,169 @@ class SecretLeakTest extends IntegrationTestSupport {
     }
 
     /**
+     * 치지직 연동 경로 전체를 HTTP로 태운다 — 정상 연동·교환 거부·해제·resolve·즉석 갱신 거부.
+     * 가짜 치지직이 바늘 토큰·바늘 채널을 돌려주고, 거부 본문에도 바늘을 싣는다
+     * (RestClientResponseException 메시지에 본문이 붙으므로 그것을 옮기는 변경이 여기서 걸린다).
+     *
+     * <p>state는 서명이라 바늘을 페이로드에 못 심는다 — 실제 발급된 state 문자열 자체를 바늘로 쓴다.
+     * client_secret은 매 요청 본문에 실려 나가고, resolve 응답에는 accessToken이 <b>있어야 한다</b>
+     * (그게 목적) — 로그에만 없으면 된다.
+     */
+    @Test
+    void 치지직_연동_경로를_돌려도_토큰_code_채널이_로그에_남지_않는다() throws Exception {
+        var user = userService.findOrCreate(needle("chzzk-sub"), "a@example.com", "김태현", null);
+        String bearer = "Bearer " + tokenService.issue(user).accessToken();
+        String state = stateCodec.issue(user.getId(), Instant.now());
+        CHZZK.tokenResponds(200, "{\"code\":200,\"content\":{\"accessToken\":\"" + CHZZK_ACCESS
+                + "\",\"refreshToken\":\"" + CHZZK_REFRESH + "\",\"tokenType\":\"Bearer\",\"expiresIn\":\"86400\",\"scope\":\"chat\"}}");
+        CHZZK.meResponds(200, "{\"code\":200,\"content\":{\"channelId\":\"" + CHZZK_CHANNEL_ID + "\",\"channelName\":\"채널\"}}");
+        List<String> needles = List.of(CHZZK_ACCESS, CHZZK_REFRESH, CHZZK_CODE, CHZZK_CLIENT_SECRET, CHZZK_CHANNEL_ID, state, JWT_SECRET);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            String startBody = mockMvc.perform(post("/api/chzzk-link/start").header("Authorization", bearer))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(startBody).as("동의 URL에는 시크릿이 없다").doesNotContain(CHZZK_CLIENT_SECRET);
+
+            // ① 정상 연동. 응답에는 channelId만 있고 토큰은 없다.
+            String linked = mockMvc.perform(post("/api/chzzk-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + CHZZK_CODE + "\",\"state\":\"" + state + "\"}"))
+                    .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+            assertThat(linked).contains(CHZZK_CHANNEL_ID).doesNotContain(CHZZK_ACCESS).doesNotContain(CHZZK_REFRESH);
+            assertThat(CHZZK.tokenRequests()).as("바늘이 실제로 치지직으로 나갔다").anySatisfy(r ->
+                    assertThat(r).containsEntry("code", CHZZK_CODE).containsEntry("clientSecret", CHZZK_CLIENT_SECRET));
+
+            // ④ resolve — 수집기에는 토큰을 줘야 한다. 로그에만 없으면 된다.
+            String resolved = mockMvc.perform(post("/internal/chzzk-link/resolve")
+                            .header("X-Internal-Token", INTERNAL_TOKEN)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"userId\":" + user.getId() + "}"))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(resolved).contains(CHZZK_ACCESS).contains(CHZZK_CHANNEL_ID);
+
+            // REFRESHED 경로 — 임박 행을 만들고 resolve로 즉석 갱신. 새 토큰(바늘)이 응답에 실리고, refresh 원문이 요청에 실린다.
+            // 갱신 로그는 같은 스레드 동기 afterCommit이라 요청의 상관 ID가 살아 있어야 한다(내부 API라 헤더로 값을 직접 준다).
+            String refreshedAccess = needle("chzzk-access-refreshed");
+            String refreshedRefresh = needle("chzzk-refresh-refreshed");
+            String requestId = UUID.randomUUID().toString().replace("-", "");   // RequestIdFilter.SAFE: [A-Za-z0-9-]{1,32}
+            mockMvc.perform(delete("/api/chzzk-link").header("Authorization", bearer)).andExpect(status().isNoContent());
+            assertThat(cleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
+            linkWriter.create(user.getId(), new ChzzkMe(CHZZK_CHANNEL_ID, "채널"),
+                    new ChzzkTokens(CHZZK_ACCESS, CHZZK_REFRESH, Duration.ofHours(1), null), Instant.now());
+            CHZZK.tokenResponds(200, "{\"code\":200,\"content\":{\"accessToken\":\"" + refreshedAccess
+                    + "\",\"refreshToken\":\"" + refreshedRefresh + "\",\"tokenType\":\"Bearer\",\"expiresIn\":86400,\"scope\":\"chat\"}}");
+            String refreshed = mockMvc.perform(post("/internal/chzzk-link/resolve")
+                            .header("X-Internal-Token", INTERNAL_TOKEN)
+                            .header("X-Request-Id", requestId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"userId\":" + user.getId() + "}"))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(refreshed).contains(refreshedAccess).doesNotContain(refreshedRefresh);
+            assertThat(CHZZK.tokenRequests()).anySatisfy(r -> assertThat(r).containsEntry("refreshToken", CHZZK_REFRESH));
+            assertThat(captor.mdcOf("auth.chzzk.link.refreshed", RequestIdFilter.MDC_KEY))
+                    .as("갱신 로그가 요청 스레드 동기 afterCommit이라 상관 ID가 붙는다").isEqualTo(requestId);
+            assertThat(captor.events()).filteredOn(ev -> ev.getFormattedMessage().startsWith("auth.chzzk.link.refreshed"))
+                    .as("'일어났다' 로그는 정리 큐(거부될 수 있다)가 아니라 요청 스레드에서 찍는다")
+                    .allSatisfy(ev -> assertThat(ev.getThreadName()).doesNotStartWith("chzzk-cleanup-"));
+
+            // 해제 — 옛 토큰 revoke 본문에 원문이 실린다. 로그에는 없어야 한다.
+            mockMvc.perform(delete("/api/chzzk-link").header("Authorization", bearer)).andExpect(status().isNoContent());
+            assertThat(cleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();   // secrets 삭제·revoke는 커밋 뒤 전용 스레드
+            assertThat(CHZZK.revokedTokens()).contains(refreshedAccess, refreshedRefresh);
+
+            // ② 교환 400 — 본문에 바늘. 에러 응답에도 로그에도 없어야 한다.
+            String state2 = stateCodec.issue(user.getId(), Instant.now());
+            CHZZK.tokenResponds(400, "{\"code\":400,\"message\":\"bad code " + CHZZK_CODE + " secret " + CHZZK_CLIENT_SECRET + "\"}");
+            String rejected = mockMvc.perform(post("/api/chzzk-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + CHZZK_CODE + "\",\"state\":\"" + state2 + "\"}"))
+                    .andExpect(status().isBadRequest()).andReturn().getResponse().getContentAsString();
+            assertNoSecretsIn(rejected, needles);
+
+            // ③ 즉석 갱신 4xx — refresh 원문이 요청 본문에 실리고, 거부 본문에 바늘.
+            linkWriter.create(user.getId(), new ChzzkMe(CHZZK_CHANNEL_ID, "채널"),
+                    new ChzzkTokens(CHZZK_ACCESS, CHZZK_REFRESH, Duration.ofHours(1), null), Instant.now());
+            CHZZK.tokenResponds(401, "{\"code\":401,\"message\":\"INVALID_TOKEN " + CHZZK_REFRESH + "\"}");
+            String broken = mockMvc.perform(post("/internal/chzzk-link/resolve")
+                            .header("X-Internal-Token", INTERNAL_TOKEN)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"userId\":" + user.getId() + "}"))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(broken).contains("BROKEN");
+            assertThat(CHZZK.tokenRequests()).anySatisfy(r -> assertThat(r).containsEntry("refreshToken", CHZZK_REFRESH));
+            assertThat(cleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();   // refresh_rejected 로그·삭제가 전용 스레드에서 끝난 뒤 검사
+
+            assertThat(captor.messages())
+                    .as("경로가 아예 안 돌았다. 그러면 아무것도 검사하지 않은 것이다")
+                    .anyMatch(m -> m.startsWith("auth.chzzk.link.created"))
+                    .anyMatch(m -> m.startsWith("auth.chzzk.link.rejected"))
+                    .anyMatch(m -> m.startsWith("auth.chzzk.link.unlinked"))
+                    .anyMatch(m -> m.startsWith("auth.chzzk.link.refresh_rejected"));
+            assertNoSecretsIn(captor, needles);
+            assertNoSecretsIn(captor, List.of(refreshedAccess, refreshedRefresh));
+            assertNoSecretsIn(broken, List.of(CHZZK_ACCESS, CHZZK_REFRESH));
+
+            // ⑥ 통째로 찍는 코드가 들어온 것 자체를 잡는다.
+            assertThat(String.join("\n", captor.messages()))
+                    .doesNotContain("ChzzkTokens[")
+                    .doesNotContain("ChzzkMe[")
+                    .doesNotContain("ChzzkResolveResult[")
+                    .doesNotContain("ChzzkResolveResponse[")
+                    .doesNotContain("LinkResponse[")
+                    .doesNotContain("LinkResult[")
+                    .doesNotContain("LinkSnapshot[")
+                    .doesNotContain("RefreshResult[")
+                    .doesNotContain("LinkStatusResponse[");
+        }
+    }
+
+    /**
+     * 치지직 쪽 DEBUG 유출 재현(감사 1회차 실측). {@code DefaultRestClient.logBody}는 폼뿐 아니라
+     * JSON(Map) 본문도 {@code Writing [{clientId=…, clientSecret=…, code=…, state=…}]}로 통째로 찍는다 —
+     * client_secret·code·state·refresh 토큰 원문 넷이 샌다. {@code application.yml}의
+     * {@code org.springframework.web: info} 한 줄이 유일한 방어선이다. 양성(DEBUG에서 샌다)을 재현해
+     * 그 줄의 근거를 남기고, INFO 음성은 위 테스트가 잰다.
+     */
+    @Test
+    void 스프링_web을_DEBUG로_켜면_치지직_본문도_새므로_설정에서_켜지_않는다() throws Exception {
+        var user = userService.findOrCreate(needle("chzzk-debug-sub"), "a@example.com", "김태현", null);
+        String bearer = "Bearer " + tokenService.issue(user).accessToken();
+        String state = stateCodec.issue(user.getId(), Instant.now());
+        linkWriter.create(user.getId(), new ChzzkMe(CHZZK_CHANNEL_ID, "채널"),
+                new ChzzkTokens(CHZZK_ACCESS, CHZZK_REFRESH, Duration.ofHours(1), null), Instant.now());
+        CHZZK.tokenResponds(503, "{}");
+        Level levelBefore = levelOf(SPRING_WEB_LOGGER);
+        assertThat(levelBefore).isNotNull();
+
+        try (LogCaptor captor = new LogCaptor()) {
+            setLevel(SPRING_WEB_LOGGER, Level.DEBUG);
+            try {
+                mockMvc.perform(post("/api/chzzk-link").header("Authorization", bearer)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"code\":\"" + CHZZK_CODE + "\",\"state\":\"" + state + "\"}"))
+                        .andExpect(status().isBadGateway());
+                mockMvc.perform(post("/internal/chzzk-link/resolve")
+                                .header("X-Internal-Token", INTERNAL_TOKEN)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"userId\":" + user.getId() + "}"))
+                        .andExpect(status().isOk());
+            } finally {
+                setLevel(SPRING_WEB_LOGGER, levelBefore);
+            }
+            assertThat(CHZZK.tokenCalls()).as("바늘이 실제로 나갔다").isEqualTo(2);
+
+            String debugLog = renderAll(captor);
+            for (String secret : List.of(CHZZK_CODE, CHZZK_CLIENT_SECRET, state, CHZZK_REFRESH)) {
+                assertThat(debugLog)
+                        .as(secret + "가 DEBUG에서 더는 안 샌다면 배포 규칙을 다시 볼 때다")
+                        .contains(secret);
+            }
+            // 응답 본문·access 토큰은 DEBUG에서도 안 샌다(실측). 빠진 것이 실수가 아님을 못박는다.
+            assertNoSecretsIn(captor, List.of(CHZZK_ACCESS, JWT_SECRET));
+        }
+    }
+
+    /**
      * 본문이 컨트롤러에 닿기 전에 깨지는 경로. 여기서 예외 메시지를 찍기 시작하면
      * Jackson의 파싱 오류가 물고 온 입력 조각이 그대로 로그로 나간다.
      *
@@ -376,6 +568,9 @@ class SecretLeakTest extends IntegrationTestSupport {
         assertThat(constraintsOn(RefreshRequest.class, "refreshToken")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(ExchangeRequest.class, "code")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(ResolveRequest.class, "streamid")).containsExactly(NotBlank.class);
+        assertThat(constraintsOn(LinkRequest.class, "code")).containsExactly(NotBlank.class);
+        assertThat(constraintsOn(LinkRequest.class, "state")).containsExactly(NotBlank.class);
+        assertThat(constraintsOn(ChzzkResolveRequest.class, "userId")).containsExactly(NotNull.class);
     }
 
     /**
