@@ -106,9 +106,21 @@ docker compose up -d postgres redis
 
 **`auth`는 환경변수 없이는 일부러 부팅에 실패한다.** `JWT_SECRET` · `GOOGLE_CLIENT_ID` ·
 `GOOGLE_CLIENT_SECRET` · `CORS_ALLOWED_ORIGINS` · `SECRET_STORE_KEY`(base64 32바이트) ·
-`INTERNAL_API_TOKEN` 여섯이다. `.env.example`에는 없다 — **public 저장소라 예시 값도 두지 않는다.**
+`INTERNAL_API_TOKEN` · `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` · `CHZZK_REDIRECT_URI` 아홉이다.
+`.env.example`에는 없다 — **public 저장소라 예시 값도 두지 않는다.**
 빈 기본값을 주고 검증으로 잡는 이유는, 안 주면 리터럴 `"${VAR}"`이 바인딩돼
 **서버는 뜨고 헬스체크도 통과하는데 그 기능만 전부 실패하기** 때문이다.
+
+**치지직 셋은 한 덩어리로 검증한다.** 개발자 센터에 등록한 앱 하나의 값이라 하나만 빠져도
+연동이 통째로 안 되므로, 셋 중 무엇이 비든 같은 메시지 한 줄
+(`치지직 앱 설정(CHZZK_CLIENT_ID·CHZZK_CLIENT_SECRET·CHZZK_REDIRECT_URI)이 비었다`)로 죽는다 —
+원인을 세 갈래로 흩지 않는다. 값은 메시지에 넣지 않는다.
+
+| | 뜻 |
+|---|---|
+| `CHZZK_CLIENT_ID` | 치지직 개발자 센터 앱의 Client ID. 동의 URL에 그대로 실린다 |
+| `CHZZK_CLIENT_SECRET` | 그 앱의 Client Secret. 토큰 교환·갱신·철회 요청 본문에만 쓰고 URL·로그 어디에도 안 나간다 |
+| `CHZZK_REDIRECT_URI` | 동의가 끝난 뒤 치지직이 code·state를 돌려줄 주소. **개발자 센터에 앱당 하나만 등록된다** — 그래서 환경마다 앱을 따로 파고, 로컬은 `http://localhost:8081/oauth/chzzk/callback`으로 등록된 앱을 쓴다 |
 
 **`chat-collector`는 환경변수 없이도 뜨지만 수집을 시작하지 않는다.** `CHZZK_ENABLED`
 기본값이 `false`다 — 켜진 채로 두면 부팅만으로 치지직 세션을 하나 먹는데, 동시 연결
@@ -215,7 +227,7 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 서버마다 자기 Flyway를 돌리고 **이력 테이블을 나눈다**(`flyway_schema_history_auth` ·
 `..._clip` · `..._chat`). 기본 이름을 쓰면 나중에 뜬 쪽이 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
 마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat.
-지금까지 나간 것은 auth의 `V101`~`V106`과 chat의 `V301`(`chat_messages`)이다.
+지금까지 나간 것은 auth의 `V101`~`V107`과 chat의 `V301`(`chat_messages`)이다.
 
 **모든 Flyway 서버(auth 포함)에 `baseline-on-migrate: true` + `baseline-version: 0`이 필수다.**
 공유 DB에서는 어느 서버가 먼저 뜰지 정해져 있지 않다 — 다른 서버가 이미 표를
@@ -239,13 +251,15 @@ auth·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 심어 
 |---|---|
 | 인증 | 구글 로그인·자동가입 · 토큰 발급/회전/로그아웃 · `/api/auth/me` |
 | 스트림키 | 발급 · 검증(계약4) · 페어링 코드 발급/교환 · 재발급 (POK-56) |
+| 채널 연동 | 치지직 동의 왕복 · 토큰 보관(참조만) · 10분 주기 자동 갱신 · 수집기용 resolve · 해제·상태 조회 (POK-93) |
 | 운영 | 이벤트 로깅 · 요청 상관 ID · CORS · 구글 호출 타임아웃 |
 
-표는 여섯이다 — `users`·`refresh_tokens`(V101·V102) ·
-`secrets`·`stream_keys`·`pairing_codes`·`pairing_exchange_attempts`(V103~V106).
+표는 일곱이다 — `users`·`refresh_tokens`(V101·V102) ·
+`secrets`·`stream_keys`·`pairing_codes`·`pairing_exchange_attempts`(V103~V106) ·
+`chzzk_channel_links`(V107).
 
-스트림키 엔드포인트 다섯. **`resolve`가 계약4다** — 1번 Media가 SRT 연결을 받기 전에
-한 번 부른다. `contracts/api/`에 정본이 아직 없어 여기 적어 둔다.
+엔드포인트 열: 스트림키 다섯(**계약4 = `POST /internal/stream-keys/resolve`** — 1번 Media가 SRT 연결을
+받기 전에 한 번 부른다) · 치지직 연동 다섯(아래 절). `contracts/api/`에 정본이 아직 없어 여기 적어 둔다.
 
 | | 부르는 쪽 | 인증 |
 |---|---|---|
@@ -254,15 +268,76 @@ auth·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 심어 
 | `POST /api/stream-keys/pairing-codes` | 웹 | 사용자 JWT |
 | `POST /api/stream-keys/pairing-codes/exchange` | OBS 플러그인 | **없음** (코드 자체가 자격증명) |
 | `POST /internal/stream-keys/resolve` | **Media(1번)** | `X-Internal-Token` 헤더 |
+| `POST /api/chzzk-link/start` | 웹 | 사용자 JWT |
+| `POST /api/chzzk-link` | 웹 | 사용자 JWT |
+| `GET /api/chzzk-link` | 웹 | 사용자 JWT |
+| `DELETE /api/chzzk-link` | 웹 | 사용자 JWT |
+| `POST /internal/chzzk-link/resolve` | **chat-collector** | `X-Internal-Token` 헤더 |
 
 `resolve`는 **키가 틀려도 HTTP 200에 `valid:false`**로 답한다. Media에게
 "키가 틀림"(연결 거절)과 "Auth 장애"(판단 불가)는 조치가 정반대라 둘 다 4xx면
 Go 쪽에서 구분이 안 된다.
 
+### 치지직 채널 연동 (POK-93)
+
+**구글 로그인과 별개다.** 로그인한 스트리머가 자기 치지직 채널을 한 번 묶어 두면, 수집기가
+그 스트리머의 유저 Access Token을 auth에서 받아 채팅 세션을 연다. 왕복은 구글과 같은 모양 —
+`POST /api/chzzk-link/start`가 준 `authorizeUrl`로 프론트가 사용자를 보내고, 치지직이
+`CHZZK_REDIRECT_URI`로 돌려준 `code`·`state`를 프론트가 `POST /api/chzzk-link {code, state}`로
+넘긴다. 채널은 본문이 아니라 치지직 `users/me`로 확정한다.
+
+| | 응답 |
+|---|---|
+| `POST /api/chzzk-link/start` | 200 `{authorizeUrl}` — `state`는 URL 안에 있다(표 없이 서명, 10분) |
+| `POST /api/chzzk-link` `{code, state}` | 201 `{channelId, channelName, linkedAt}` · 400 `INVALID_STATE` · 400 `INVALID_CODE`(치지직이 교환·me를 4xx로 거부 — code 소모·만료·scope 부족, **동의부터 다시**) · 409 `CHANNEL_ALREADY_LINKED` · 502 `CHZZK_UNAVAILABLE`(5xx·타임아웃·429·408·`INVALID_CLIENT` — 잠시 후 재시도) |
+| `GET /api/chzzk-link` | 200 `{linked:false}` 또는 `{linked, channelId, channelName, status, linkedAt, lastRefreshedAt, accessExpiresAt}`. `status` ∈ `ACTIVE`·`EXPIRED`·`BROKEN`·`UNLINKED`(컬럼이 아니라 파생). `linked`는 `ACTIVE`·`EXPIRED`일 때만 true — `BROKEN`·`UNLINKED`도 채널 이름은 준다(화면이 "끊겼다"를 보여줄 수 있게) |
+| `DELETE /api/chzzk-link` | 204 (없어도 204). 행은 남고(`revoked_at`+`USER_UNLINKED`) 커밋 뒤에 secrets 삭제·치지직 revoke |
+| `POST /internal/chzzk-link/resolve` `{userId}` | **항상 200** — 아래 |
+
+오류 본문은 `{"reason": "<위 코드>"}` 한 필드다. 토큰·code·state·채널 ID는 응답 오류·로그
+어디에도 안 남는다(`SecretLeakTest`) — 예외 하나: 두 계정이 같은 채널을 동시에 묶어 사전 조회를 지나
+DB 유니크 위반까지 간 경우 Hibernate 오류 로그에 `channel_id`가 한 줄 남을 수 있다(우리 로거가 아니다, 평시 0건).
+
+**`resolve`(수집기용) 계약.** `POST /internal/chzzk-link/resolve {userId}` — `X-Internal-Token`
+헤더, `/internal/**` 체인(스트림키 `resolve`와 같은 문). **우리 회원 번호(`users.id`)만 받는다** —
+남의 식별자 체계를 auth가 떠안지 않는다. 스트림키 `resolve`와 같은 이유로 **항상 HTTP 200**이다:
+`{valid:true, channelId, accessToken, expiresAt}` 또는 `{valid:false, reason}`. `reason`은 넷 —
+`NOT_LINKED`(연동한 적 없음) · `UNLINKED`(사용자가 해제) · `BROKEN`(치지직이 갱신을 4xx로
+거부 — 철회·만료, 스트리머가 재동의해야 풀린다) · `REFRESH_UNAVAILABLE`(즉석 갱신이 5xx·타임아웃으로
+일시 실패 — 임박한 토큰은 주지 않는다, 잠시 뒤 다시 부르면 된다). 거절 응답에는 `accessToken`
+필드가 아예 없다. **남은 수명이 12시간(`resolve-min-remaining`)보다 짧으면 넘기기 전에 즉석
+갱신한다** — 수집기는 한 번 받은 토큰으로 방송 끝까지 붙어 있으므로, 방송 길이보다 긴 수명을 보장한다.
+
+**자동 갱신 스케줄러.** 유저 Access Token 수명은 24시간이다. `@Scheduled`가 **10분마다**
+(`pokeclip.chzzk.refresh.interval=PT10M`) 살아있는 연동 중 만료가 **6시간**(`refresh-ahead=PT6H`)
+안으로 남은 것만 골라 회원마다 하나씩 갱신한다. 회원 행 `FOR UPDATE` 락 뒤 다시 읽어 이미
+갱신됐으면 치지직을 안 부른다(인스턴스 둘이 같은 목록을 읽어도 두 번째는 건너뛴다). 4xx면 영구
+(`revoke_reason=REFRESH_REJECTED` → `BROKEN`, 재시도 없음 — 429·408·`INVALID_CLIENT`(앱 자격증명 오류, 우리 설정 문제)는
+일시로 보고 재시도) · 5xx·타임아웃이면
+행을 두고 다음 틱에 재시도한다. `pokeclip.chzzk.refresh.enabled`는 **기본 켜짐**이고 프로퍼티를 빠뜨려도 켜진다
+(`matchIfMissing`) — 테스트 프로파일만 명시적으로 끈다. 꺼지면 갱신이 영영 안 돌고 증상은 24시간
+뒤에야 나온다.
+
+**종료 유예 15초 이상**(`stop_grace_period` / `terminationGracePeriodSeconds`) — 커밋 뒤 정리(옛 토큰 삭제·치지직
+revoke)가 전용 스레드 2개(`ChzzkCleanupExecutor`)에서 돌고 종료 시 최대 10초 기다린다. 도커 기본 10초에 잘리면
+대기 중 삭제가 유실돼 고아 secret이 남는다(무해하지만 쌓인다). chat-collector의 종료 유예 20초와 같은 부류이며
+`infra/`(1번)가 반영한다.
+
+로그는 `auth.chzzk.link.<event> userId=` 영어 한 줄이다(`created`·`relinked`·`unlinked`·`refreshed`·
+`refresh_rejected`·`refresh_failed`·`refresh_tick_failed`·`rejected`·`unavailable`·`orphan_token`(WARN — 5xx·타임아웃,
+치지직에 살아있을 수 있음)·`token_already_dead`(INFO — 4xx, 이미 무효. 429·408·`INVALID_CLIENT`는 제외 — 그 셋은
+Unavailable → WARN `orphan_token causeType=Http429/408/InvalidClient`)·`resolve_rejected`·`failed`).
+로그의 자리: `refreshed`만 요청 스레드 동기 afterCommit이고, `relinked`·`unlinked`·`refresh_rejected`는 정리 잡 안에서
+secrets 삭제 뒤에 찍힌다(정리까지 끝났다는 순서 로그) — 큐가 거부되면 그 로그도 함께 사라지고 그때 `cleanup.rejected`
+WARN이 신호다. requestId는 잡이 값으로 옮긴다. 정리 스레드 자체의 것은 `auth.chzzk.cleanup.<event>` —
+`rejected`(큐 상한 초과, WARN)·`failed`·`shutdown_timeout`.
+값은 userId·status·hint·causeType·reason·pending만 — 토큰·code·state·channelId는 찍지 않는다.
+
 ### chat-collector — 치지직 채팅 수신 (POK-85) · 자동 재연결 (POK-86) · 적재 (POK-84) · S3 원본 아카이브 (POK-116)
 
 **받아서 세고, 끊기면 다시 붙고, 받은 채팅을 PG에 남기고, 원본을 S3에 쌓는 데까지** 한다.
-영상 시각 매핑(POK-92) · 스트리머 채널 연동(POK-93)은 다음 카드다.
+영상 시각 매핑(POK-92)은 다음 카드다. 스트리머 채널 연동(POK-93)은 auth 쪽에서 됐다(위 절) —
+수집기가 `POST /internal/chzzk-link/resolve`로 토큰을 받아 쓰는 배선은 아직 없다.
 
 | | |
 |---|---|
