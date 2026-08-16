@@ -24,6 +24,8 @@ public class ChzzkLinkService {
     private final ChzzkOAuthClient oauthClient;
     private final ChzzkLinkWriter writer;
     private final ChzzkTokenDiscarder discarder;
+    private final ChzzkTokenRefresher refresher;
+    private final ChzzkChannelLinkRepository links;
 
     /** {@code {}}에 넣지 않는다 — channelId. */
     public record LinkResult(String channelId, String channelName, Instant linkedAt) {
@@ -87,5 +89,28 @@ public class ChzzkLinkService {
         if (tokens != null) {
             discarder.discard(userId, tokens.accessToken(), tokens.refreshToken());
         }
+    }
+
+    /**
+     * 수집기용. 남은 수명이 resolveMinRemaining보다 짧으면 즉석 갱신하고 새 토큰을 준다 —
+     * 수집기는 한 번 받은 토큰으로 방송 끝까지 붙어 있는다.
+     *
+     * <p>트랜잭션이 없다 — refresher가 최상단이어야 한다. 갱신 뒤 행도 secrets도 두 번째로 읽지 않고
+     * refresher가 락 안에서 만든 스냅샷(access 원문 포함)만 쓴다(두 읽기 사이에 해제가 끼는 분기 소멸).
+     */
+    public ChzzkResolveResult resolve(Long userId) {
+        RefreshResult r = refresher.refreshIfExpiringWithin(userId, properties.resolveMinRemaining());
+        return switch (r.outcome()) {
+            case REFRESHED, SKIPPED_FRESH -> {
+                // 스냅샷만 쓴다 — 락 밖에서 secrets를 두 번째로 읽지 않는다(그 사이 해제가 끼면 500이 됐다).
+                RefreshResult.LinkSnapshot s = r.snapshot();
+                yield new ChzzkResolveResult(true, s.channelId(), s.accessToken(), s.accessExpiresAt(), null);
+            }
+            case REJECTED -> ChzzkResolveResult.rejected("BROKEN");
+            case UNAVAILABLE -> ChzzkResolveResult.rejected("REFRESH_UNAVAILABLE");
+            case NOT_LINKED -> ChzzkResolveResult.rejected(links.findFirstByUserIdOrderByCreatedAtDesc(userId)
+                    .map(last -> last.status(Instant.now()) == LinkStatus.BROKEN ? "BROKEN" : "UNLINKED")
+                    .orElse("NOT_LINKED"));
+        };
     }
 }

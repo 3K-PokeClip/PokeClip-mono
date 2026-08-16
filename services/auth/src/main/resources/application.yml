@@ -9,6 +9,11 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB:pokeclip}
     username: ${POSTGRES_USER:pokeclip}
     password: ${POSTGRES_PASSWORD:change-me-local-only}
+    hikari:
+      # Hikari 기본값과 같은 10이다. 값을 바꾸는 게 아니라 "운영 풀은 10"을 글로 못박는다 —
+      # 치지직 resolve는 커넥션을 쥔 채 외부 HTTP(read-timeout 5s)를 기다리므로 풀 크기가 곧
+      # 동시 처리 상한이다. ChzzkResolvePoolExhaustionTest가 같은 10에서 동시 25로 잰다.
+      maximum-pool-size: 10
 
   jpa:
     hibernate:
