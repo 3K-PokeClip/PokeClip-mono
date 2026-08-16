@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector;
 
+import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
@@ -64,8 +65,9 @@ public class CollectorApplication {
     @Bean
     CollectorRunner collectorRunner(ChzzkProperties properties, CollectionStatus status,
                                     RestClient.Builder restClientBuilder,
-                                    ChatBuffer buffer, ChatPersister persister) {
-        return new CollectorRunner(properties, status, restClientBuilder, buffer, persister,
+                                    ChatBuffer buffer, ChatPersister persister,
+                                    ChatArchive archive) {
+        return new CollectorRunner(properties, status, restClientBuilder, buffer, persister, archive,
                 () -> System.exit(1));
     }
 

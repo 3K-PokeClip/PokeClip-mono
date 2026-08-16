@@ -12,3 +12,14 @@ pokeclip:
     # 실서버 기본값(35s·120s)을 그대로 쓰면 테스트가 그만큼 잔다.
     reconnect-first-delay: 50ms
     reconnect-max-delay: 1s
+    # 아카이브는 기본 꺼짐(bucket 빈 값). region이 비면 @NotBlank가 모든 스프링 컨텍스트를
+    # 막으므로 여기서도 값을 준다 — 배선 검사(ArchiveWiringTest)가 @SpringBootTest(properties=…)로 켠다.
+    # LocalStack 검사는 archive 설정을 스프링에 안 맡기고 LocalStackFixture.propertiesFor로 직접 만든다
+    # (그 검사들도 스프링 컨텍스트는 띄운다 — 거기서는 이 기본값대로 아카이브가 꺼져 있다).
+    archive:
+      bucket: ""
+      region: ap-northeast-2
+      endpoint: ""
+      force-path-style: false
+      pending-max: 60
+      buffer-capacity: 10000

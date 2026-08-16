@@ -26,6 +26,8 @@ class CollectorConfigTest extends IntegrationTestSupport {
     @Autowired CollectorHealth health;
     @Autowired CollectionStatus status;
     @Autowired Environment environment;
+    /** 자동 설정된 빌더다 — 러너가 쓰는 것과 같은 것이어야 아래 구현체 단언이 러너를 대변한다. */
+    @Autowired RestClient.Builder restClientBuilder;
 
     /**
      * T8. 기본이 켜짐이면 CI·남의 로컬이 뜰 때마다 붙으려 하고
@@ -53,6 +55,20 @@ class CollectorConfigTest extends IntegrationTestSupport {
         assertThat(environment.getProperty("spring.http.client.connect-timeout"))
                 .as("단수형이 적혀 있으면 그쪽이 무시되는 줄이다")
                 .isNull();
+    }
+
+    /**
+     * AWS SDK가 끌어오는 httpclient5가 클래스패스에 있으면 Boot가 RestClient를 Apache HC5로 바꾼다
+     * (2026-08-16 실측). 치지직 REST(세션 발급·구독·반납)는 지금까지 재고 정한 JDK 스택이어야 한다 —
+     * application.yml의 spring.http.clients.imperative.factory=jdk가 그것을 고정한다. 이 단언이 빨강이면
+     * 그 줄이 지워졌거나 프로퍼티 이름이 바뀐 것이다.
+     */
+    @Test
+    void RestClient는_JDK_스택을_쓴다_httpclient5가_있어도() throws Exception {
+        RestClient client = restClientBuilder.build();
+        java.lang.reflect.Field f = client.getClass().getDeclaredField("clientRequestFactory");
+        f.setAccessible(true);
+        assertThat(f.get(client)).isInstanceOf(org.springframework.http.client.JdkClientHttpRequestFactory.class);
     }
 
     /**

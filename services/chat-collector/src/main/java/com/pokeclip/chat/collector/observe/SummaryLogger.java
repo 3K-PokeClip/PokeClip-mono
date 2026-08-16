@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.observe;
 
+import com.pokeclip.chat.collector.archive.ArchiveCounters;
 import com.pokeclip.chat.collector.persist.PersistCounters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,10 +45,12 @@ public final class SummaryLogger implements AutoCloseable {
      * @param counters     적재 카운터 묶음(persisted·conflicts·poisoned) —
      *                     공급자 나열이면 자리바꿈 실수를 타입이 못 잡는다
      * @param dropped      버퍼 상한 초과로 버린 수. 소유가 ChatBuffer라 따로 받는다
+     * @param archive      아카이브 카운터 여섯 + runId 묶음. 아카이브가 꺼져 있으면 {@link ArchiveCounters#NONE}
      */
     public static SummaryLogger start(CollectionMetrics metrics, Heartbeat heartbeat,
                                       Duration period, LongSupplier sinkFailures,
-                                      PersistCounters counters, LongSupplier dropped) {
+                                      PersistCounters counters, LongSupplier dropped,
+                                      ArchiveCounters archive) {
         SummaryLogger logger = new SummaryLogger();
         long periodMillis = period.toMillis();
         logger.scheduler.scheduleAtFixedRate(() -> {
@@ -55,7 +58,7 @@ public final class SummaryLogger implements AutoCloseable {
             try {
                 log.info("{}", render(metrics.snapshot(), heartbeat, sinkFailures.getAsLong(),
                         counters.persistedCount(), counters.conflictedCount(),
-                        counters.poisonedCount(), dropped.getAsLong()));
+                        counters.poisonedCount(), dropped.getAsLong(), archive));
             } catch (RuntimeException e) {
                 // 요약이 터져도 스케줄러는 계속 돈다. 여기서 예외가 밖으로 나가면
                 // scheduleAtFixedRate가 조용히 멈춰 요약이 영영 안 나가고,
@@ -68,7 +71,8 @@ public final class SummaryLogger implements AutoCloseable {
 
     /** 순수 함수라 스케줄러 없이도 검사할 수 있다. */
     public static String render(CollectionMetrics.Snapshot s, Heartbeat heartbeat, long sinkFailures,
-                                long persisted, long conflicted, long poisoned, long dropped) {
+                                long persisted, long conflicted, long poisoned, long dropped,
+                                ArchiveCounters archive) {
         return "chat.summary"
                 + " received=" + s.received()
                 + " maxReceiveGap=" + duration(s.maxReceiveGap())
@@ -91,7 +95,24 @@ public final class SummaryLogger implements AutoCloseable {
                 + " persisted=" + persisted
                 + " conflicts=" + conflicted
                 + " poisoned=" + poisoned
-                + " dropped=" + dropped;
+                + " dropped=" + dropped
+                // 아카이브 관측 여섯. 등식 둘로 검산한다 —
+                // received = archived + archiveBufferDropped (채팅 단위) ·
+                // uploaded + pending + droppedObjects = 닫힌 창 수 (파일 단위).
+                // 숫자만이다 — S3 키·raw는 어느 레벨에도 안 싣는다.
+                //
+                // 단서 둘을 같이 읽어야 한다. ① 아카이브가 꺼져 있으면(S3_BUCKET 빈 값 = 기본) 여섯 항이
+                // 계속 0이라 첫째 등식이 안 맞는다 — 유실이 아니라 꺼짐이고, 시작 로그 chat.archive.disabled와
+                // 판정 줄 archiveRunId=none이 그것을 말한다. ② 여기서 여섯 항을 따로 읽으므로 그 사이에
+                // 업로드가 끝나면 uploaded는 옛 값·pending은 새 값이라 둘째 등식이 순간 1 모자라 보인다
+                // (다음 줄에서 회복). 게터마다 락을 잡아도 연속 호출은 원자적이 아니다 — 정본은 판정 줄이고,
+                // 그쪽은 아카이버가 닫힌 뒤라 움직이는 값이 없다.
+                + " archived=" + archive.archivedCount()
+                + " archiveBufferDropped=" + archive.archiveBufferDroppedCount()
+                + " uploaded=" + archive.uploadedCount()
+                + " pending=" + archive.pendingCount()
+                + " droppedObjects=" + archive.droppedObjectsCount()
+                + " droppedMessages=" + archive.droppedMessagesCount();
     }
 
     /**
@@ -109,7 +130,11 @@ public final class SummaryLogger implements AutoCloseable {
      *       {@code maxPingGap}·{@code maxPongGap}·{@code sendFailures}·
      *       {@code callbackFailures}·{@code sinkFailures}·
      *       {@code persisted}·{@code conflicts}·{@code poisoned}·{@code dropped}·
+     *       {@code archived}·{@code archiveBufferDropped}·{@code uploaded}·{@code pending}·
+     *       {@code droppedObjects}·{@code droppedMessages}·
      *       {@code reconnects}·{@code outage}
+     *   <li>{@code archiveRunId}는 누계가 아니라 이 프로세스의 표식이다 — S3 키의
+     *       {@code -{runId}.jsonl}과 같은 값이라 이걸로 이 프로세스가 올린 파일을 찾는다
      *   <li>{@code lastOutageFrom}·{@code lastOutageTo}는 누계가 아니라
      *       <b>마지막 절단 하나</b>의 시각이다. 누계로 읽으면 "이 시각부터 내내
      *       끊겨 있었다"가 된다. 한 번도 안 끊겼으면 둘 다 {@code none}이고,
@@ -144,15 +169,17 @@ public final class SummaryLogger implements AutoCloseable {
      */
     public static void logFinalVerdict(long session, CollectionMetrics.Verdict verdict,
                                        Object stopReason,
-                                       PersistCounters counters, long dropped) {
+                                       PersistCounters counters, long dropped,
+                                       ArchiveCounters archive) {
         log.info("{}", renderVerdict(session, verdict, stopReason, counters.persistedCount(),
-                counters.conflictedCount(), counters.poisonedCount(), dropped));
+                counters.conflictedCount(), counters.poisonedCount(), dropped, archive));
     }
 
     /** 순수 함수라 로그 없이도 검사할 수 있다. */
     public static String renderVerdict(long session, CollectionMetrics.Verdict v,
                                        Object stopReason,
-                                       long persisted, long conflicted, long poisoned, long dropped) {
+                                       long persisted, long conflicted, long poisoned, long dropped,
+                                       ArchiveCounters archive) {
         return "chat.session.verdict"
                 // 첫 항이다. 줄을 세션 단위로 고르는 사람도 도구도 여기서 갈린다.
                 + " session=" + session
@@ -182,6 +209,22 @@ public final class SummaryLogger implements AutoCloseable {
                 + " conflicts=" + conflicted
                 + " poisoned=" + poisoned
                 + " dropped=" + dropped
+                // 아카이브 관측 여섯(프로세스 누계). 러너가 판정 직전에 아카이버 닫기를 시작해
+                // (beginClose) 시한 5초를 기다리므로 <b>대개</b> 마지막 창의 업로드까지 여기 실린다.
+                // 등식 둘 — received = archived + archiveBufferDropped ·
+                // uploaded + pending + droppedObjects = 닫힌 창 수 — 로 검산한다.
+                // 잔여 한계: 마지막 flush가 5초 안에 못 끝나면(chat.archive.close_timeout이 단서)
+                // 이 줄은 flush 도중 값이다 — 그 뒤 올라간 파일은 uploaded에 안 실리고 pending에
+                // 남아 있다. "항상 닫힌 뒤"라고 읽지 마라(persisted 쪽과 같은 단서).
+                + " archived=" + archive.archivedCount()
+                + " archiveBufferDropped=" + archive.archiveBufferDroppedCount()
+                + " uploaded=" + archive.uploadedCount()
+                + " pending=" + archive.pendingCount()
+                + " droppedObjects=" + archive.droppedObjectsCount()
+                + " droppedMessages=" + archive.droppedMessagesCount()
+                // 이 runId로 S3에서 이 프로세스의 파일을 찾는다 — 키의 "-{runId}.jsonl" 부분이다.
+                // 재시작이 잦으면 같은 분에 파일이 여럿인데, 어느 것이 이 프로세스 것인지는 이 값뿐이다.
+                + " archiveRunId=" + archive.runId()
                 // 끊겼다 붙은 횟수와 그동안 놓친 시간. 위 maxReceiveGap이 절단을
                 // 빼고 재므로, 이 둘이 없으면 유실 구간이 어느 항에도 안 남는다.
                 + " reconnects=" + v.reconnects()

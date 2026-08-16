@@ -2,6 +2,8 @@ package com.pokeclip.chat.collector.chzzk;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ChatEventDecoderTest {
@@ -105,5 +107,27 @@ class ChatEventDecoderTest {
         String chat = "[\"CHAT\",\"{\\\"content\\\":\\\"x\\\",\\\"messageTime\\\":1}\"]";
 
         assertThat(ChatEventDecoder.decodeSystem(chat)).isNull();
+    }
+
+    /** S3 아카이브(POK-116)가 이 문자열을 손대지 않고 쌓는다 — 요약이 아니라 원문이다. */
+    @Test
+    void raw는_안쪽_JSON_문자열을_글자_그대로_담는다() {
+        // 안쪽에 따옴표·줄바꿈·이모지·공백을 일부러 넣는다 — "글자 그대로"는 이런 것까지다.
+        String inner = "{\"channelId\":\"CH1\",\"senderChannelId\":\"S1\","
+                + "\"content\":\"a\\\"b\\nc 😀\",\"messageTime\":1754300000000,"
+                + "\"profile\":{\"nickname\":\"닉\"}, \"extra\":  [1,2]}";
+        String payload = "[\"CHAT\"," + quoteAsJson(inner) + "]";
+
+        ChatMessage message = ChatEventDecoder.decodeChat(payload);
+
+        assertThat(message).isNotNull();
+        assertThat(message.raw()).isEqualTo(inner);
+        assertThat(message.raw().getBytes(StandardCharsets.UTF_8))
+                .isEqualTo(inner.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** 문자열을 JSON 문자열 리터럴로 — 가짜 서버(FakeChzzkBehavior.escape)와 같은 일을 한다. */
+    private static String quoteAsJson(String s) {
+        return new tools.jackson.databind.ObjectMapper().writeValueAsString(s);
     }
 }

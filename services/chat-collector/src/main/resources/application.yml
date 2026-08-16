@@ -38,6 +38,15 @@ spring:
       # 세션 URL이 30초에 만료되므로 여기가 비면 수립이 영영 매달린다.
       connect-timeout: 2s
       read-timeout: 5s
+      # AWS SDK가 끌어오는 httpclient5가 클래스패스에 있으면 Boot가 RestClient를 Apache HC5로 바꾼다
+      # (2026-08-16 실측: JdkClientHttpRequestFactory → HttpComponentsClientHttpRequestFactory).
+      # 치지직 REST(세션 발급·구독·반납)는 지금까지 재고 정한 JDK 스택 그대로 둔다 — 이 줄이 없으면
+      # 오류 없이 바뀌고, 재연결·종료 예산 산수의 근거(접속 2초·읽기 5초가 어느 층에서 끊는가)가
+      # 통째로 다시 재야 하는 것이 된다. RestClient.create() 함정과 같은 부류다. 단수형
+      # spring.http.client.factory는 deprecated 별칭, spring.http.clients.factory는 없다(실측).
+      # CollectorConfigTest가 구현체를 단언한다.
+      imperative:
+        factory: jdk
 
 server:
   port: 8083
@@ -74,6 +83,16 @@ logging:
     # 이 두 줄이 실제로 막는지를 행동으로 잰다 — 지우면 그 검사가 빨간불이다.
     org.springframework.jdbc: info
     org.postgresql: info
+    # 채팅 본문이 나가는 세 번째 길 — S3 PUT 본문. AWS SDK 2.46.7의 HTTP 클라이언트는 Apache 5이고
+    # org.apache.hc.client5.http.wire(본문 전체)·.headers(Authorization 값)가 DEBUG에 찍는다
+    # (plan-critic 실측 2026-08-16: wire TRACE 35이벤트에 본문·Authorization 둘 다 유출, headers는 Authorization만).
+    # netty는 async 클라이언트용이지만 딸려 오므로 같이 막는다. software.amazon.awssdk.request의
+    # DEBUG는 헤더 키만 찍어 안전하지만 상위 계층 DEBUG가 서명 canonical request를 대량으로 찍어
+    # 통째로 info다. JDBC 로거 둘과 같은 이유로 여기 박는다 — root TRACE로도 안 뚫린다.
+    # ArchiveLogLeakTest가 root를 TRACE로 올린 채 아카이브를 돌려 이 세 줄이 실제로 막는지 잰다.
+    software.amazon.awssdk: info
+    org.apache.hc.client5.http: info
+    io.netty: info
 
 pokeclip:
   chzzk:
@@ -101,3 +120,14 @@ pokeclip:
     # 아예 안 나오므로, 목록으로는 이 값을 정할 수 없다 — 붙어 봐야 안다.
     reconnect-first-delay: ${CHZZK_RECONNECT_FIRST_DELAY:1s}
     reconnect-max-delay: ${CHZZK_RECONNECT_MAX_DELAY:60s}
+    archive:
+      # 창고 이름이 비면 아카이브가 통째로 꺼진다(1번 media의 S3_BUCKET 관례). CI·팀원 로컬 기본.
+      bucket: ${S3_BUCKET:}
+      region: ${AWS_REGION:ap-northeast-2}
+      # 비면 진짜 AWS. LocalStack·MinIO 등 호환 스토리지 주소(scheme+host+port).
+      endpoint: ${S3_ENDPOINT:}
+      force-path-style: ${S3_FORCE_PATH_STYLE:false}
+      # 못 올린 1분 파일 대기 줄 상한. 넘치면 오래된 것부터 버리고 센다(droppedObjects/droppedMessages).
+      pending-max: ${CHAT_ARCHIVE_PENDING_MAX:60}
+      # 수신→아카이브 바구니 상한(채팅 수). DB 바구니와 같은 1만. 넘치면 오래된 것부터(archiveBufferDropped).
+      buffer-capacity: ${CHAT_ARCHIVE_BUFFER_MAX:10000}

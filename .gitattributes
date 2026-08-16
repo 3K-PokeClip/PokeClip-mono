@@ -1,0 +1,33 @@
+# 줄바꿈은 저장소 안에서 LF 하나로 통일한다.
+#
+# 이 저장소는 Docker(리눅스 컨테이너)로 배포된다. gradlew·*.sh 가 CRLF 로
+# 들어오면 리눅스가 첫 줄을 "#!/bin/sh\r" 로 읽어 빌드가 죽는다:
+#   /bin/sh: ./gradlew: bad interpreter: /bin/sh^M: no such file or directory
+# 로컬 윈도우에서는 멀쩡히 돌기 때문에 원인을 찾는 데 오래 걸린다.
+#
+# git config 는 사람마다 따로 걸어야 하지만 이 파일은 저장소를 따라다닌다.
+# 누가 어떤 OS 로 받든 같은 규칙이 적용된다.
+#
+# 2026-08-10 확인: 저장소에 담긴 파일은 전부 LF 다. 이 파일을 추가해도
+# 재정규화 diff 는 생기지 않는다. 고장을 고치는 게 아니라 예방이다.
+
+* text=auto eol=lf
+
+# 리눅스가 실행하는 것 — 깨지면 Docker 빌드가 멈춘다
+/services/gradlew text eol=lf
+*.sh text eol=lf
+
+# 윈도우 cmd.exe 가 읽는 것 — 이것만 CRLF 여야 한다
+*.bat text eol=crlf
+
+# 바이너리 — git 이 텍스트로 다루면 파일이 깨진다
+*.mp4 binary
+*.jar binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
