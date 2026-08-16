@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector;
 
+import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
@@ -326,7 +327,7 @@ class PersistenceWiringTest extends IntegrationTestSupport {
         runner = new CollectorRunner(
                 new ChzzkProperties(true, "test-token", "http://localhost:" + port,
                         Duration.ofSeconds(5), Duration.ofMillis(50), Duration.ofSeconds(1)),
-                status, restClientBuilder, buffer, persister, exitAction);
+                status, restClientBuilder, buffer, persister, ChatArchive.NONE, exitAction);
         runner.run(null);
         assertThat(status.state())
                 .as("수집이 시작되지 않았다면 적재 경로는 아무것도 안 지나간다")

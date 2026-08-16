@@ -1,6 +1,7 @@
 package com.pokeclip.chat.collector;
 
-import com.pokeclip.chat.collector.archive.ArchiveCounters;
+import com.pokeclip.chat.collector.archive.ArchivableChat;
+import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.chzzk.ChatEventDecoder;
 import com.pokeclip.chat.collector.chzzk.ChatMessage;
 import com.pokeclip.chat.collector.chzzk.ChatSession;
@@ -70,6 +71,15 @@ public class CollectorRunner implements ApplicationRunner {
      */
     private static final Duration EXIT_DRAIN_WAIT = Duration.ofSeconds(30);
 
+    /**
+     * 종료 시 아카이브의 마지막 flush를 기다리는 시한. persister.close()의 5초와 같다 —
+     * <b>나란히</b> 닫으므로 종료 예산이 늘지 않는다(closeSinks 주석).
+     */
+    static final Duration ARCHIVE_CLOSE_WAIT = Duration.ofSeconds(5);
+
+    /** 아카이브 닫기 예산의 시한(nanoTime). 첫 closeSinks가 CAS로 정하고 둘째는 남은 만큼만 기다린다 — 0은 "아직 안 정함". 이유는 closeSinks 주석. */
+    private final AtomicLong sinksCloseDeadlineNanos = new AtomicLong();
+
     private final ChzzkProperties properties;
     private final CollectionStatus status;
 
@@ -88,6 +98,8 @@ public class CollectorRunner implements ApplicationRunner {
     private final ChatBuffer buffer;
     /** 요약에 persisted·conflicts를 싣기 위해서만 든다 — 저장 지시는 하지 않는다. */
     private final ChatPersister persister;
+    /** 수신 스레드가 offer만 하는 원본 아카이브. 꺼져 있으면 {@link ChatArchive#NONE} — 러너는 모른다. */
+    private final ChatArchive archive;
 
     /**
      * 한 세션이 소유한 것 전부. <b>필드로 흩어 놓지 않는다.</b>
@@ -357,13 +369,13 @@ public class CollectorRunner implements ApplicationRunner {
     CollectorRunner(ChzzkProperties properties, CollectionStatus status,
                     RestClient.Builder restClientBuilder,
                     ChatBuffer buffer, ChatPersister persister) {
-        this(properties, status, restClientBuilder, buffer, persister, () -> { });
+        this(properties, status, restClientBuilder, buffer, persister, ChatArchive.NONE, () -> { });
     }
 
     public CollectorRunner(ChzzkProperties properties, CollectionStatus status,
                            RestClient.Builder restClientBuilder,
                            ChatBuffer buffer, ChatPersister persister,
-                           Runnable exitAction) {
+                           ChatArchive archive, Runnable exitAction) {
         this.properties = properties;
         this.status = status;
         // 빌더는 프로토타입 빈이다. 한 번만 build()해서 들고 있는다.
@@ -372,6 +384,7 @@ public class CollectorRunner implements ApplicationRunner {
                 properties.reconnectFirstDelay(), properties.reconnectMaxDelay());
         this.buffer = buffer;
         this.persister = persister;
+        this.archive = archive;
         this.exitAction = exitAction;
     }
 
@@ -492,7 +505,7 @@ public class CollectorRunner implements ApplicationRunner {
             // 값이 아니라 읽는 길을 넘긴다 — 삼킨 예외 수는 계속 늘어난다.
             // 세션은 이 덩어리의 것이라 바뀌지 않으므로 그쪽을 직접 읽는다.
             SummaryLogger logger = SummaryLogger.start(metrics, beat, SUMMARY_PERIOD,
-                    opening::sinkFailureCount, persister, buffer::droppedCount, ArchiveCounters.NONE);
+                    opening::sinkFailureCount, persister, buffer::droppedCount, archive.counters());
 
             // <b>가드를 보는 것과 상태를 올리는 것이 한 덩어리여야 한다.</b> 위 이른
             // 검사만으로는 <b>스케줄러 둘을 세우는 동안이 통째로 창</b>이다 — 거기서
@@ -942,7 +955,7 @@ public class CollectorRunner implements ApplicationRunner {
         // shutdownNow 앞으로 옮기는 것은 안 된다 — 판정은 cleanUpOnce(세션 값
         // 걷기) 뒤여야 하고, cleanUpOnce는 낙오 세션 정리를 위해 shutdownNow
         // 뒤가 안전하다.
-        persister.close();
+        closeSinks();
         // <b>열려 있는 절단 구간을 여기서 닫는다.</b> 닫는 자리가 원래 재접속
         // 성공 하나뿐이라, 다시 못 붙고 끝나면 판정 줄이 "outage=0ms
         // lastOutageFrom=none"이라고 말했다 — 그 절단 이후로 계속 못 받고 있는데도.
@@ -961,7 +974,35 @@ public class CollectorRunner implements ApplicationRunner {
         // 번호는 이 프로세스가 마지막으로 연 세션의 것이다. 판정은 프로세스 전체의
         // 누계라 "몇 번째까지 갔나"를 그 번호가 말한다.
         SummaryLogger.logFinalVerdict(lastSessionNo.get(), metrics.verdict(), reason,
-                persister, buffer.droppedCount(), ArchiveCounters.NONE);
+                persister, buffer.droppedCount(), archive.counters());
+    }
+
+    /**
+     * DB 저장기와 아카이브를 <b>나란히</b> 닫는다 — 아카이브는 마지막 flush를 자기 스레드에 제출만
+     * 하고(beginClose) 돌아오므로, persister.close()가 5초를 기다리는 동안 저쪽도 돈다. 그 뒤
+     * awaitClosed는 대개 즉시 풀린다. 직렬로 두면 종료 예산이 5초 늘어 유예 20초를 넘긴다
+     * (stop 9 + close 5 + 반납 7 = 21). 두 close 모두 완료-대기 멱등이라 두 자리에서 불려도 안전하다.
+     *
+     * <p><b>예산의 시한은 첫 호출이 정하고({@code sinksCloseDeadlineNanos}) 둘째는 남은 만큼만 기다린다</b> —
+     * stop()은 closeSinks를 두 번 지나는데(stop 본문 · 판정 직전), 호출마다 5초를 새로 주면 첫 대기가 시한까지
+     * 매달린 뒤 둘째가 또 5초를 기다려 종료가 10초가 된다(가짜로 10.03초 실측). 영구 정지의 재연결 스레드와
+     * stop() 호출자가 겹치면 둘 다 여기 올 수 있어 CAS로 첫 승자가 정한다 — 져도 같은 시한을 읽을 뿐이다.
+     */
+    private void closeSinks() {
+        sinksCloseDeadlineNanos.compareAndSet(0, System.nanoTime() + ARCHIVE_CLOSE_WAIT.toNanos());
+        archive.beginClose();
+        // persister.close()는 모든 갈래를 잡게 짜여 있지만 그 계약이 강제되진 않는다 — 여기서 새면
+        // 아래 대기를 통째로 건너뛰어 마지막 flush를 아무도 안 기다리고, 잃은 파일의 단서(close_timeout)도
+        // 안 남는다. finally로 묶어 그 갈림을 없앤다.
+        try {
+            persister.close();
+        } finally {
+            // 시한까지 남은 만큼만 기다린다 — persister가 5초를 다 썼으면 아카이브 대기는 0에 가깝다(둘 다 시한을
+            // 채우는 DB 반개방 + S3 사망 겹침에서 직렬 10초가 되던 것을 막는다, plan-critic 사소-3). 둘째 호출도
+            // 같은 시한을 본다(위 주석).
+            Duration remaining = Duration.ofNanos(sinksCloseDeadlineNanos.get() - System.nanoTime());
+            archive.awaitClosed(remaining.isNegative() ? Duration.ZERO : remaining);
+        }
     }
 
     /**
@@ -996,6 +1037,8 @@ public class CollectorRunner implements ApplicationRunner {
             // 채팅 폭주 때 수신이 밀린다 — 저장은 chzzk-persist 스레드가 한다.
             buffer.offer(new PersistableChat(message.channelId(), message.senderChannelId(),
                     message.content(), message.messageTimeMillis(), receivedAt));
+            // 원본도 넣기만 한다 — 인코드·창·업로드는 전부 아카이브 스레드 몫이다.
+            archive.offer(new ArchivableChat(message.channelId(), receivedAt, message.raw()));
             return;
         }
 
@@ -1067,7 +1110,8 @@ public class CollectorRunner implements ApplicationRunner {
         // <b>수신을 먼저 끊고 나서 close.</b> 게이트가 열린 채 close하면 마무리 flush
         // 도중에도 채팅이 계속 들어와 flush가 끝을 못 보고(바쁜 방송 + 느린 DB) 예산을
         // 넘긴다 — 그 뒤 판정 등식이 안 닫힌다. 소켓이 아니라 게이트로 끊는 이유는
-        // intakeClosed 주석에 있다. 종료 순서: 게이트 내림 → persister.close() →
+        // intakeClosed 주석에 있다. 종료 순서: 게이트 내림 →
+        // [archive.beginClose ‖ persister.close ‖ archive.awaitClosed] →
         // shutdownNow → cleanUpOnce(반납·소켓 닫기) → 판정.
         intakeClosed.set(true);
         // <b>인터럽트 전에 퍼시스터 닫기를 선점한다.</b> 재연결 스레드가 영구 정지
@@ -1076,7 +1120,8 @@ public class CollectorRunner implements ApplicationRunner {
         // — 진행 중이면 이 호출이 그 완료를 기다리고, 아직이면 여기서 직접 비운다 —
         // 어느 쪽이든 이 줄이 돌아온 시점에는 인터럽트할 flush가 없다.
         // 판정 자체는 아래 logVerdictOnce 자리 그대로다(cleanUpOnce 뒤여야 한다).
-        persister.close();
+        // 아카이브도 여기서 같이 닫는다 — 같은 이유로, 인터럽트 전에 마지막 flush를 제출한다.
+        closeSinks();
         reconnector.shutdownNow();
         SessionScope scope = activeSession.get();
         if (scope != null) {

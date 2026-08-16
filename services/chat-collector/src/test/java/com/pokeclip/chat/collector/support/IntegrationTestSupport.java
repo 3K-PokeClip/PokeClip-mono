@@ -1,9 +1,14 @@
 package com.pokeclip.chat.collector.support;
 
+import org.junit.jupiter.api.BeforeEach;
+import org.slf4j.bridge.SLF4JBridgeHandler;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestConstructor;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+
+import java.time.Duration;
+import java.util.function.BooleanSupplier;
 
 /**
  * 컨테이너를 static 블록에서 한 번만 띄우고 JVM 종료까지 재사용한다.
@@ -58,10 +63,41 @@ public abstract class IntegrationTestSupport {
         }
     }
 
+    /**
+     * 운영 전제(JUL→SLF4J 브릿지가 붙어 있다)를 매 검사 앞에 되살린다. Spring 7의 테스트 컨텍스트 캐시는 다른
+     * 컨텍스트로 갈아탈 때 이전 컨텍스트를 pause하고(DefaultContextCache.pauseOnContextSwitchIfNecessary), 그러면
+     * Boot의 LoggingApplicationListener$Lifecycle.stop()이 LoggingSystem.cleanUp()을 불러 SLF4JBridgeHandler를
+     * JUL root에서 떼는데 resume(start)는 되돌리지 않는다(Boot 4.1.0·Spring 7.0.8, 2026-08-16 스택 실측). JUL로 찍는
+     * 라이브러리(pgjdbc)의 로그를 재는 검사는 그 뒤 빈손이 된다 — 순서 의존. 운영은 컨텍스트 하나라 이 현상이 없다.
+     * {@code spring.test.context.cache.pause=NEVER}는 캐시된 컨텍스트의 SmartLifecycle이 계속 돌아 모듈 전체에 영향이라
+     * 안 쓴다. isInstalled()면 아무것도 안 한다.
+     *
+     * <p>{@code final}이다 — 하위 클래스가 같은 시그니처를 정의하면 JUnit 5는 <b>상위 라이프사이클 메서드를 안 부른다</b>
+     * (오버라이드로 본다). 그러면 그 클래스에서만 재설치가 빠지고 원인은 다른 파일에 있다.
+     */
+    @BeforeEach
+    protected final void reinstallJulBridge() {
+        if (!SLF4JBridgeHandler.isInstalled()) {
+            SLF4JBridgeHandler.install();
+        }
+    }
+
     @DynamicPropertySource
     static void datasourceProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
+    }
+
+    /**
+     * 조건이 참이 되거나 시한이 찰 때까지 20ms 간격으로 기다린다. <b>시한이 차면 조용히 돌아온다</b> — 부른 뒤에
+     * 반드시 같은 값을 단언하라. 안 그러면 시한을 지운 자기검사가 초록으로 지나간다(ArchiveOutageTest 헤더).
+     * 아카이브 카드에서 네 벌로 복사되던 것을 여기 하나로 모았다 — 그 전 클래스들의 사본은 안 건드렸다.
+     */
+    protected static void awaitUntil(Duration timeout, BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
     }
 }

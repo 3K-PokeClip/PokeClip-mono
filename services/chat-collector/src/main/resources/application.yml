@@ -83,6 +83,16 @@ logging:
     # 이 두 줄이 실제로 막는지를 행동으로 잰다 — 지우면 그 검사가 빨간불이다.
     org.springframework.jdbc: info
     org.postgresql: info
+    # 채팅 본문이 나가는 세 번째 길 — S3 PUT 본문. AWS SDK 2.46.7의 HTTP 클라이언트는 Apache 5이고
+    # org.apache.hc.client5.http.wire(본문 전체)·.headers(Authorization 값)가 DEBUG에 찍는다
+    # (plan-critic 실측 2026-08-16: wire TRACE 35이벤트에 본문·Authorization 둘 다 유출, headers는 Authorization만).
+    # netty는 async 클라이언트용이지만 딸려 오므로 같이 막는다. software.amazon.awssdk.request의
+    # DEBUG는 헤더 키만 찍어 안전하지만 상위 계층 DEBUG가 서명 canonical request를 대량으로 찍어
+    # 통째로 info다. JDBC 로거 둘과 같은 이유로 여기 박는다 — root TRACE로도 안 뚫린다.
+    # ArchiveLogLeakTest가 root를 TRACE로 올린 채 아카이브를 돌려 이 세 줄이 실제로 막는지 잰다.
+    software.amazon.awssdk: info
+    org.apache.hc.client5.http: info
+    io.netty: info
 
 pokeclip:
   chzzk:

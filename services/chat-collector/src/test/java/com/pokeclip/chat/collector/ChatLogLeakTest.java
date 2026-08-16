@@ -43,7 +43,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *
  * <p>탐지기는 {@code auth}의 SecretLeakTest를 그대로 베꼈다. 포맷된 한 줄만
  * 보면 {@code log.error("...", e)}로 새는 값을 못 잡는다 — 그건 ThrowableProxy
- * 안에 있다.
+ * 안에 있다. 탐지기 도우미는 패키지에 열어 뒀다 — 아카이브 경로(S3 PUT)의 유출 검사
+ * {@link ArchiveLogLeakTest}가 <b>같은 탐지기</b>를 쓴다(자기검사 셋은 여기 하나면 된다).
+ * 그쪽을 여기서 떼어 낸 이유는 이 검사가 LocalStack에 매이지 않게 하려는 것이다.
  */
 @FakeChzzkTest
 class ChatLogLeakTest extends IntegrationTestSupport {
@@ -319,6 +321,8 @@ class ChatLogLeakTest extends IntegrationTestSupport {
                     .isNotNull();
         }
 
+        // pgjdbc는 JUL로 찍는다 — JUL→SLF4J 브릿지가 없으면 아래 양성 대조 ②가 빈손으로 빨강이다. Spring 7 테스트
+        // 컨텍스트 캐시가 그 브릿지를 떼는 함정과 되살리는 자리는 IntegrationTestSupport.reinstallJulBridge()에 있다.
         try (LogCaptor captor = new LogCaptor()) {
             ChatBuffer buffer = new ChatBuffer(100);
             ChatPersister persister = new ChatPersister(jdbc, buffer);
@@ -485,24 +489,24 @@ class ChatLogLeakTest extends IntegrationTestSupport {
      * 바늘은 매 실행 무작위다. 짧은 상수는 다른 로그와 우연히 겹쳐
      * "안 샜다"가 아니라 "겹친 것을 못 봤다"로 통과할 수 있다.
      */
-    private static String needle(String label) {
+    static String needle(String label) {
         return "LEAK-" + label + "-" + UUID.randomUUID();
     }
 
-    private static void setLevel(String loggerName, Level level) {
+    static void setLevel(String loggerName, Level level) {
         ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).setLevel(level);
     }
 
     /** 명시 레벨만 돌려준다. 안 박혀 있으면 null이다(부모에서 물려받는 상태). */
-    private static Level levelOf(String loggerName) {
+    static Level levelOf(String loggerName) {
         return ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).getLevel();
     }
 
-    private static void assertNoSecretsIn(LogCaptor captor, List<String> secrets) {
+    static void assertNoSecretsIn(LogCaptor captor, List<String> secrets) {
         assertNoSecretsIn(renderAll(captor), secrets);
     }
 
-    private static void assertNoSecretsIn(String haystack, List<String> secrets) {
+    static void assertNoSecretsIn(String haystack, List<String> secrets) {
         for (String secret : secrets) {
             assertThat(secret).as("빈 바늘은 어디서나 발견돼 검사를 무력화한다").isNotEmpty();
             assertThat(haystack).as("비밀이 남았다: " + secret).doesNotContain(secret);
@@ -510,13 +514,13 @@ class ChatLogLeakTest extends IntegrationTestSupport {
     }
 
     /** 모인 로그 전부를 한 덩어리로. 딸려 붙은 예외까지 포함한다. */
-    private static String renderAll(LogCaptor captor) {
+    static String renderAll(LogCaptor captor) {
         return captor.events().stream()
                 .map(ChatLogLeakTest::renderFully)
                 .collect(Collectors.joining("\n"));
     }
 
-    private static String renderFully(ILoggingEvent event) {
+    static String renderFully(ILoggingEvent event) {
         StringBuilder text = new StringBuilder(event.getFormattedMessage());
         appendThrowable(text, event.getThrowableProxy());
         return text.toString();
