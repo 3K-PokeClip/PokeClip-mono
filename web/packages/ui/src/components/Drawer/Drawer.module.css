@@ -1,0 +1,101 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--pc-color-bg-overlay);
+  z-index: var(--pc-z-modal);
+  animation: pc-overlay-in var(--pc-duration-fast) var(--pc-ease-standard);
+}
+.content {
+  position: fixed;
+  background: var(--pc-color-bg-surface);
+  color: var(--pc-color-text-primary);
+  box-shadow: var(--pc-shadow-xl);
+  overflow: auto;
+  padding: var(--pc-space-6);
+  z-index: var(--pc-z-modal);
+}
+.content[data-side='right'] {
+  inset-block: 0;
+  inset-inline-end: 0;
+  width: min(400px, 90vw);
+  border-inline-start: 1px solid var(--pc-color-border-subtle);
+  animation: pc-drawer-right var(--pc-duration-normal) var(--pc-ease-decelerate);
+}
+.content[data-side='left'] {
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: min(400px, 90vw);
+  border-inline-end: 1px solid var(--pc-color-border-subtle);
+  animation: pc-drawer-left var(--pc-duration-normal) var(--pc-ease-decelerate);
+}
+.content[data-side='top'] {
+  inset-inline: 0;
+  inset-block-start: 0;
+  max-height: 85vh;
+  border-block-end: 1px solid var(--pc-color-border-subtle);
+  animation: pc-drawer-top var(--pc-duration-normal) var(--pc-ease-decelerate);
+}
+.content[data-side='bottom'] {
+  inset-inline: 0;
+  inset-block-end: 0;
+  max-height: 85vh;
+  border-block-start: 1px solid var(--pc-color-border-subtle);
+  border-start-start-radius: var(--pc-radius-xl);
+  border-start-end-radius: var(--pc-radius-xl);
+  animation: pc-drawer-bottom var(--pc-duration-normal) var(--pc-ease-decelerate);
+}
+.title {
+  font-size: var(--pc-font-size-xl);
+  font-weight: var(--pc-weight-semibold);
+  margin: 0 0 var(--pc-space-2);
+}
+.description {
+  color: var(--pc-color-text-secondary);
+  margin: 0 0 var(--pc-space-4);
+}
+@keyframes pc-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes pc-drawer-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes pc-drawer-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes pc-drawer-top {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+@keyframes pc-drawer-bottom {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .overlay,
+  .content {
+    animation: none;
+  }
+}

@@ -1,0 +1,4 @@
+.stack {
+  display: flex;
+  min-width: 0;
+}

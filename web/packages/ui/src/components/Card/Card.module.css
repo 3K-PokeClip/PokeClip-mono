@@ -1,0 +1,31 @@
+.card {
+  border-radius: var(--pc-radius-lg);
+  background: var(--pc-color-bg-surface);
+  border: 1px solid transparent;
+}
+.card[data-variant='surface'] {
+  background: var(--pc-color-bg-surface);
+  border-color: var(--pc-color-border-subtle);
+}
+.card[data-variant='outline'] {
+  background: transparent;
+  border-color: var(--pc-color-border-default);
+}
+.card[data-variant='ghost'] {
+  background: transparent;
+  border-color: transparent;
+}
+.card[data-interactive] {
+  cursor: pointer;
+  transition:
+    background-color var(--pc-duration-fast) var(--pc-ease-standard),
+    border-color var(--pc-duration-fast) var(--pc-ease-standard),
+    transform var(--pc-duration-fast) var(--pc-ease-standard);
+}
+.card[data-interactive]:hover {
+  background: var(--pc-color-bg-surface-hover);
+  border-color: var(--pc-color-border-strong);
+}
+.card[data-interactive]:active {
+  transform: translateY(1px);
+}

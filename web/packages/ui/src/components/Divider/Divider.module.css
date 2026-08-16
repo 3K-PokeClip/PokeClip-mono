@@ -1,0 +1,14 @@
+.divider {
+  background: var(--pc-color-border-default);
+  border: 0;
+  flex-shrink: 0;
+}
+.divider[data-orientation='horizontal'] {
+  height: 1px;
+  width: 100%;
+}
+.divider[data-orientation='vertical'] {
+  width: 1px;
+  align-self: stretch;
+  min-height: 1em;
+}

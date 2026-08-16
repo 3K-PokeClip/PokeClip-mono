@@ -1,0 +1,12 @@
+/* Corner radius scale — rounded, modern aesthetic. */
+:root {
+  --pc-radius-none: 0;
+  --pc-radius-xs: 0.25rem; /* 4 */
+  --pc-radius-sm: 0.375rem; /* 6 */
+  --pc-radius-md: 0.5rem; /* 8 */
+  --pc-radius-lg: 0.75rem; /* 12 */
+  --pc-radius-xl: 1rem; /* 16 */
+  --pc-radius-2xl: 1.5rem; /* 24 */
+  --pc-radius-pill: 9999px;
+  --pc-radius-circle: 50%;
+}

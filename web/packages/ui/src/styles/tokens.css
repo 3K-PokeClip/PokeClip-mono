@@ -1,0 +1,11 @@
+/* PokeClip design tokens — primitives + semantic. Import this first.
+   Pure CSS custom properties: no font-face, no reset (see global.css for those). */
+@import './primitives/color.css';
+@import './primitives/space.css';
+@import './primitives/typography.css';
+@import './primitives/radius.css';
+@import './primitives/shadow.css';
+@import './primitives/zindex.css';
+@import './primitives/motion.css';
+@import './semantic/theme-dark.css';
+@import './semantic/theme-light.css';

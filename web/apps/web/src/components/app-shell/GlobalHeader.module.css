@@ -1,0 +1,25 @@
+.header {
+  position: sticky;
+  top: 0;
+  z-index: var(--pc-z-sticky);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  padding: 0 var(--pc-space-5);
+  background: var(--pc-color-bg-canvas);
+  border-bottom: 1px solid var(--pc-color-border-subtle);
+}
+
+.logo {
+  font-size: var(--pc-font-size-lg);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--pc-color-text-primary);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--pc-space-2);
+}

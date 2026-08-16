@@ -1,0 +1,85 @@
+.viewport {
+  position: fixed;
+  inset-block-end: var(--pc-space-4);
+  inset-inline-end: var(--pc-space-4);
+  z-index: var(--pc-z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: var(--pc-space-2);
+  width: calc(100vw - var(--pc-space-8));
+  max-width: 380px;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  gap: var(--pc-space-3);
+  align-items: flex-start;
+  background: var(--pc-color-bg-surface-raised);
+  color: var(--pc-color-text-primary);
+  border: 1px solid var(--pc-color-border-default);
+  border-inline-start: 3px solid var(--pc-color-accent);
+  border-radius: var(--pc-radius-lg);
+  box-shadow: var(--pc-shadow-lg);
+  padding: var(--pc-space-3) var(--pc-space-4);
+  animation: pc-toast-in var(--pc-duration-normal) var(--pc-ease-decelerate);
+}
+.toast[data-variant='success'] {
+  border-inline-start-color: var(--pc-color-success);
+}
+.toast[data-variant='danger'] {
+  border-inline-start-color: var(--pc-color-danger);
+}
+.toast[data-variant='info'] {
+  border-inline-start-color: var(--pc-color-info);
+}
+.body {
+  flex: 1;
+  min-width: 0;
+}
+.title {
+  font-weight: var(--pc-weight-semibold);
+  font-size: var(--pc-font-size-md);
+}
+.description {
+  color: var(--pc-color-text-secondary);
+  font-size: var(--pc-font-size-sm);
+  margin-top: 2px;
+}
+.close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -2px -4px -2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--pc-color-text-muted);
+  cursor: pointer;
+  border-radius: var(--pc-radius-sm);
+}
+.close:hover {
+  color: var(--pc-color-text-primary);
+  background: var(--pc-color-bg-surface-hover);
+}
+.close:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 1px;
+}
+@keyframes pc-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}

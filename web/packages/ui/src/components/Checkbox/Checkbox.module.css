@@ -1,0 +1,65 @@
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pc-space-2);
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--pc-font-sans);
+  font-size: var(--pc-font-size-md);
+  color: var(--pc-color-text-primary);
+}
+.root[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+}
+.box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--pc-color-border-strong);
+  border-radius: var(--pc-radius-sm);
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-on-accent);
+  transition:
+    background-color var(--pc-duration-fast) var(--pc-ease-standard),
+    border-color var(--pc-duration-fast) var(--pc-ease-standard);
+}
+.box svg {
+  width: 14px;
+  height: 14px;
+  opacity: 0;
+}
+.root[data-size='sm'] .box {
+  width: 16px;
+  height: 16px;
+}
+.root[data-size='sm'] .box svg {
+  width: 11px;
+  height: 11px;
+}
+.input:checked + .box,
+.input:indeterminate + .box {
+  background: var(--pc-color-accent);
+  border-color: var(--pc-color-accent);
+}
+.input:checked + .box svg,
+.input:indeterminate + .box svg {
+  opacity: 1;
+}
+.input:focus-visible + .box {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+.label {
+  line-height: var(--pc-line-snug);
+}

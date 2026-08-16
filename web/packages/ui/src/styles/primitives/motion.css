@@ -1,0 +1,23 @@
+/* Motion primitives — durations + easings. Reduced-motion zeroes durations. */
+:root {
+  --pc-duration-instant: 75ms;
+  --pc-duration-fast: 120ms;
+  --pc-duration-normal: 200ms;
+  --pc-duration-slow: 320ms;
+  --pc-duration-slower: 500ms;
+
+  --pc-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --pc-ease-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --pc-ease-accelerate: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --pc-ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --pc-duration-instant: 0ms;
+    --pc-duration-fast: 0ms;
+    --pc-duration-normal: 0ms;
+    --pc-duration-slow: 0ms;
+    --pc-duration-slower: 0ms;
+  }
+}

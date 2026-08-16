@@ -1,0 +1,9 @@
+.text {
+  margin: 0;
+  font-family: var(--pc-font-sans);
+}
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

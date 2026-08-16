@@ -1,0 +1,68 @@
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pc-space-2);
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--pc-font-sans);
+  font-size: var(--pc-font-size-md);
+  color: var(--pc-color-text-primary);
+}
+.root[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+}
+.track {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-border-strong);
+  transition: background-color var(--pc-duration-fast) var(--pc-ease-standard);
+}
+.thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--pc-radius-circle);
+  background: var(--pc-white);
+  box-shadow: var(--pc-shadow-sm);
+  transition: transform var(--pc-duration-fast) var(--pc-ease-standard);
+}
+.input:checked + .track {
+  background: var(--pc-color-accent);
+}
+.input:checked + .track .thumb {
+  transform: translateX(16px);
+}
+.input:focus-visible + .track {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+.root[data-size='sm'] .track {
+  width: 32px;
+  height: 18px;
+}
+.root[data-size='sm'] .thumb {
+  width: 14px;
+  height: 14px;
+}
+.root[data-size='sm'] .input:checked + .track .thumb {
+  transform: translateX(14px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .thumb,
+  .track {
+    transition: none;
+  }
+}

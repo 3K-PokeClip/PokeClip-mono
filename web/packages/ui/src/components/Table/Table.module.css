@@ -1,0 +1,56 @@
+.scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--pc-font-sans);
+  font-size: var(--pc-font-size-md);
+  color: var(--pc-color-text-primary);
+}
+.th {
+  text-align: start;
+  font-weight: var(--pc-weight-semibold);
+  color: var(--pc-color-text-secondary);
+  font-size: var(--pc-font-size-sm);
+  padding: var(--pc-space-3);
+  border-bottom: 1px solid var(--pc-color-border-default);
+  white-space: nowrap;
+}
+.td {
+  padding: var(--pc-space-3);
+  border-bottom: 1px solid var(--pc-color-border-subtle);
+}
+.row:hover .td {
+  background: var(--pc-color-bg-surface-hover);
+}
+.sortButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pc-space-1);
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+.sortButton:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--pc-radius-xs);
+}
+.sortIcon {
+  opacity: 0.35;
+  transition: opacity var(--pc-duration-fast) var(--pc-ease-standard);
+}
+.th[aria-sort='ascending'] .sortIcon,
+.th[aria-sort='descending'] .sortIcon {
+  opacity: 1;
+  color: var(--pc-color-accent);
+}
+.th[aria-sort='descending'] .sortIcon {
+  transform: rotate(180deg);
+}
