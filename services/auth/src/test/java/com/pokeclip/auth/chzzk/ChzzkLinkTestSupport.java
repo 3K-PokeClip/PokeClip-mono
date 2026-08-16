@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
@@ -42,11 +43,12 @@ public abstract class ChzzkLinkTestSupport extends IntegrationTestSupport {
     protected final SecretStore secretStore;
     protected final ChzzkLinkWriter writer;
     protected final JdbcTemplate jdbc;
+    protected final ChzzkCleanupExecutor cleanup;
 
     protected ChzzkLinkTestSupport(MockMvc mockMvc, UserService userService, UserRepository userRepository,
                                    TokenService tokenService, ChzzkLinkStateCodec codec,
                                    ChzzkChannelLinkRepository linkRepository, SecretStore secretStore,
-                                   ChzzkLinkWriter writer, JdbcTemplate jdbc) {
+                                   ChzzkLinkWriter writer, JdbcTemplate jdbc, ChzzkCleanupExecutor cleanup) {
         this.mockMvc = mockMvc;
         this.userService = userService;
         this.userRepository = userRepository;
@@ -56,6 +58,7 @@ public abstract class ChzzkLinkTestSupport extends IntegrationTestSupport {
         this.secretStore = secretStore;
         this.writer = writer;
         this.jdbc = jdbc;
+        this.cleanup = cleanup;
     }
 
     @BeforeEach
@@ -64,9 +67,22 @@ public abstract class ChzzkLinkTestSupport extends IntegrationTestSupport {
         clear();
     }
 
+    /** 커밋 뒤 정리(secrets 삭제·revoke)는 전용 스레드에서 돈다 — 끝나기 전에 다음 테스트가 reset()하면 기록이 섞인다. */
     @AfterEach
     void clearAll() {
-        clear();
+        try {
+            awaitCleanup();
+        } finally {
+            clear();   // 대기 단언이 실패해도 FK 자식 행은 지운다 — 안 그러면 다른 클래스의 정리가 연쇄로 터진다
+        }
+    }
+
+    /**
+     * "결국 지워진다·버려진다"를 재는 폴링. 제출 카운터(submitted)는 응답 전(커밋 동기화)에 오르므로
+     * 응답을 받은 뒤 finished == submitted면 이 요청이 만든 정리는 끝난 것이다.
+     */
+    protected void awaitCleanup() {
+        assertThat(cleanup.awaitIdle(Duration.ofSeconds(5))).as("커밋 뒤 정리가 5초 안에 끝나지 않았다").isTrue();
     }
 
     /** FK: chzzk_channel_links·refresh_tokens는 users의 자식이다. 이 정리를 빼면 다른 테스트의 deleteAll이 터진다. */

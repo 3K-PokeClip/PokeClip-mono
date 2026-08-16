@@ -3,6 +3,8 @@ package com.pokeclip.auth.chzzk;
 import com.pokeclip.auth.streamkey.secret.SecretStore;
 import com.pokeclip.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,12 +20,17 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ChzzkLinkWriter {
 
+    private static final Logger log = LoggerFactory.getLogger(ChzzkLinkWriter.class);
+
     private final ChzzkChannelLinkRepository links;
     private final SecretStore secretStore;
     private final UserRepository users;
+    private final ChzzkTokenDiscarder discarder;
+    private final ChzzkCleanupExecutor cleanup;
 
     /**
-     * 회원 행 락 → 채널 중복 확인 → secrets put 2 → INSERT. 한 커밋.
+     * 회원 행 락 → 채널 중복 확인 → (살아있는 내 연동 폐기) → secrets put 2 → INSERT. 한 커밋.
+     * 커밋 뒤: 옛 secrets 삭제 → 로그 → 옛 토큰 revoke(best-effort, 마지막).
      *
      * <p>채널 중복은 DB 부분 유니크(uq_chzzk_links_alive_channel)가 최종 방어다 — 앱 락은
      * 인스턴스가 여럿이면 성립하지 않는다. 그런데도 앞서 조회로 한 번 거르는 이유는 로그
@@ -43,6 +50,25 @@ public class ChzzkLinkWriter {
                 .ifPresent(other -> {
                     throw new ChzzkLinkException(ChzzkLinkFailure.CHANNEL_ALREADY_LINKED, "다른 계정에 묶인 채널이다");
                 });
+        // 재연동: 옛 행은 락 뒤에 읽는다(락 전 엔티티 읽기 금지). 옛 토큰 원문은 커밋 전에 읽어 둔다 —
+        // 정리 시점에는 secrets를 지운 뒤라 못 읽는다.
+        // 정리는 afterCommit에서 제출만 하고 전용 스레드(ChzzkCleanupExecutor)가 돈다 —
+        // afterCommit 안에서 REQUIRES_NEW delete를 직접 부르면 원 커넥션을 쥔 채 두 번째를 요구해 풀 데드락이 된다.
+        links.findByUserIdAndRevokedAtIsNull(userId).ifPresent(old -> {
+            String oldAccess = secretStore.get(old.getAccessTokenRef()).orElse(null);
+            String oldRefresh = secretStore.get(old.getRefreshTokenRef()).orElse(null);
+            links.revokeAlive(userId, now, RevokeReason.USER_UNLINKED);
+            cleanup.afterCommit(userId, () -> {
+                // DB 효과 먼저(delete는 REQUIRES_NEW라 커밋 뒤에도 실제로 지워진다), 외부 best-effort는 마지막 —
+                // revoke가 타임아웃까지 매달려도 delete는 이미 끝났다.
+                secretStore.delete(old.getAccessTokenRef());
+                secretStore.delete(old.getRefreshTokenRef());
+                log.info("auth.chzzk.link.relinked userId={}", userId);
+                if (oldAccess != null && oldRefresh != null) {
+                    discarder.discard(userId, oldAccess, oldRefresh);
+                }
+            });
+        });
         String accessRef = "chzzk-access:" + UUID.randomUUID();
         String refreshRef = "chzzk-refresh:" + UUID.randomUUID();
         secretStore.put(accessRef, tokens.accessToken());

@@ -5,6 +5,7 @@ import com.pokeclip.auth.chzzk.ChzzkChannelLink;
 import com.pokeclip.auth.chzzk.ChzzkChannelLinkRepository;
 import com.pokeclip.auth.chzzk.ChzzkLinkStateCodec;
 import com.pokeclip.auth.chzzk.ChzzkLinkTestSupport;
+import com.pokeclip.auth.chzzk.ChzzkCleanupExecutor;
 import com.pokeclip.auth.chzzk.ChzzkLinkWriter;
 import com.pokeclip.auth.streamkey.secret.SecretStore;
 import com.pokeclip.auth.token.TokenService;
@@ -29,8 +30,8 @@ class ChzzkLinkStartAndLinkTest extends ChzzkLinkTestSupport {
     ChzzkLinkStartAndLinkTest(MockMvc mockMvc, UserService userService, UserRepository userRepository,
                               TokenService tokenService, ChzzkLinkStateCodec codec,
                               ChzzkChannelLinkRepository linkRepository, SecretStore secretStore,
-                              ChzzkLinkWriter writer, JdbcTemplate jdbc) {
-        super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc);
+                              ChzzkLinkWriter writer, JdbcTemplate jdbc, ChzzkCleanupExecutor cleanup) {
+        super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc, cleanup);
     }
 
     @Test
