@@ -22,6 +22,21 @@ COPY . .
 # 정적이 아니면 훅이 실행조차 되지 않는다(그리고 그 실패는 무징후다).
 RUN CGO_ENABLED=0 go build -trimpath -o /out/mtxhookwrite ./cmd/mtxhookwrite
 
+# 볼륨 소유권을 이미지에 심는 자리 (POK-79). moby 는 named volume 이 **비어 있을 때만**
+# 이미지의 같은 경로에서 소유권·모드를 복사한다. 이미지에 그 경로가 없으면 populateVolume 이
+# 조용히 건너뛰고 볼륨은 0755 root:root 로 남는다 = 비root 쓰기 불가.
+# 그래서 빈 디렉토리를 만들어 최종 이미지에 넣는다. 내용은 없고 소유권만 나른다.
+#
+# 베이스가 alpine:3 인 이유: 필요한 것은 mkdir 하나뿐이고, golang 을 쓰면 Go 버전 pin 이
+# 이 파일 안에서 2곳이 되어 드리프트 축이 하나 는다. alpine:3 은 media/Dockerfile 이
+# 이미 쓰는 이미지라 추가 pull 이 없다.
+#
+# 이 장치는 **한시적**이다 — K8s 로 가면 파드 레벨 fsGroup 이 같은 일을 하므로 이 스테이지와
+# 아래 COPY 3줄을 지운다. 폐기 절차와 판정 체크리스트는 docs/decisions 의
+# "media 비특권 전환" ADR 의 K8s 절에 있다. USER 는 그때도 남긴다.
+FROM alpine:3 AS prep
+RUN mkdir -p /prep/recordings /prep/dvr /prep/hooks
+
 # 태그 pin을 쓴다. digest pin(멀티아키 index digest는 아키텍처와 무관한 단일 값이라
 # 어느 플랫폼에서든 그대로 쓸 수 있다)은 같은 태그를 다시 밀어 올리는 업스트림 재푸시까지
 # 막아 주지만, 아직 로컬 dev 단계라 태그 추적의 편의를 택했다.
@@ -32,3 +47,9 @@ FROM bluenviron/mediamtx:1.19.3
 # /hooks-bin 은 바이너리 자리, /hooks 는 스풀 볼륨 자리다. 둘을 섞지 않는다 —
 # 같은 디렉토리에 두면 볼륨 마운트가 바이너리를 가린다.
 COPY --from=build /out/mtxhookwrite /hooks-bin/mtxhookwrite
+
+# --chown 은 **숫자만** 쓴다. 이 이미지에는 /etc/passwd 가 없어 이름을 해석할 수단이 없다.
+COPY --chown=10002:10002 --from=prep /prep/recordings /recordings
+COPY --chown=10002:10002 --from=prep /prep/dvr /dvr
+COPY --chown=10002:10002 --from=prep /prep/hooks /hooks
+USER 10002:10002

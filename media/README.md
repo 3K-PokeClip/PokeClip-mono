@@ -51,6 +51,7 @@
 
 | 항목 | 내용 | 승계처 |
 |---|---|---|
+| media 실행 계정 비대칭 (`no-new-privileges` 미적용) | media는 root로 실행되면서 세 볼륨(`recordings`·`dvr`·`hooks`)에 쓰기 권한을 갖고 있었다. 사이드카에만 `no-new-privileges:true`가 붙어 있어 비대칭이었는데, **플래그만 넣으면 막는 것이 0이라**(root는 이미 최상위이고 이미지에 setuid 파일이 0개) ADR-031이 일부러 보류했다 | **해소** — POK-79. 아래 "실행 계정과 파일 소유" 절이 상시 사양 |
 | `(stream_id, local_path)` UNIQUE | 재기동 후 같은 파일이 두 번 들어가는 것을 막는 최후 방어선 | **해소** — DDL 소유가 1번으로 위임되며 정본에 포함 확정 (U12 종결) |
 | UNIQUE 인덱스 이름 | `stream_segments_local_path_uq` — 이름으로 "정상 멱등"과 "번호 충돌"을 가르므로 이름 자체가 계약 | **정본 사양** — 변경 시 store.go 분류 로직 동시 수정 필요 |
 | 경로 이력 메모리 | 스트림의 기록된 경로 전부를 메모리에 올린다. 창 제한이 없어 장기 실행 시 계속 자란다 | 이월 |
@@ -66,6 +67,47 @@
 | 훅이 이긴 조각은 승격·학습에서 빠진다 | 같은 파일을 훅과 파일 감시가 모두 올리려 하고 먼저 온 쪽이 이긴다. 훅이 이긴 파일은 `ReasonHook`이라 크기 재확인(승격)과 길이 학습 대상에서 제외된다 — 훅 시점의 파일이 이미 최종 크기라는 실측(29/29)에 기댄 결정이다. **업로더(POK-30) 병합 이후 방어선이 옮겨갔다.** `ReasonHook`은 `growthConfirmed`가 참이라 `TailHold` 없이 곧바로 업로드가 요청된다. 그래서 `correctTail`의 유효 창은 "꼬리인 4초"가 아니라 **그 행이 꼬리이면서 아직 `pending`인 구간**(= 워커가 `uploaded`/`failed`로 확정하기 전)이며, 확정된 뒤의 재성장은 교정 없이 `regrow_after_upload_ignored` ERROR로 **관측만** 된다. 실질 방어선은 **업로드 워커의 PUT 직전 크기 재확인**이다 — 꼬리(`IsTail`)의 실물 크기가 장부와 다르면 PUT 자체를 하지 않아 잘린 실물이 S3에 굳지 않고, 마킹은 bytes CAS가 한 번 더 막는다. 다만 쓰기가 PUT 내내 멈춰 있다 재개되는 극단 순서까지는 막지 못한다 | 관측만(YAGNI) — `segment_indexed`의 `duration_ms`·`reason`, 굳음 사고는 `regrow_after_upload_ignored` ERROR로 본다 |
 | 훅 이벤트에 레이트리밋·상태 맵 TTL이 없다 | 스트림별 세션 상태(`pendingOffline`·`lastOnlineAt`·`breaks`)는 경계 큐 상한(64)만 있고 시간 기반 만료가 없다. 스트림 수가 매우 많고 각각 짧게 붙었다 떨어지면 맵 항목이 남는다. 스풀을 폭주시키는 송출자에 대한 방어도 없다 | 이월 — 로컬·소규모에서는 발생하지 않는다. 멀티테넌트 규모에서 재평가 |
 | 스풀·녹화 경로의 심링크 검증 없음 | 인덱서는 훅이 준 경로를 문자열로만 검사한다 — 루트 밖(`..`)이면 거부하지만 심링크를 따라간 결과까지 풀어 보지는 않는다(`EvalSymlinks` 없음). 그 경로로 하는 일은 로컬 `stat`·길이 프로브·인덱스 기록뿐이라 파일이 밖으로 나가지 않는다 | **해소됨** — 파일을 밖으로 내보내는 유일한 지점인 업로더가 `os.Root` 핸들 기반으로만 연다(`cmd/segment-indexer/main.go`의 `os.OpenRoot(SegmentRoot)` → `upload/worker.go`의 `Root.Open(rel)`). 루트 밖으로 풀리는 심링크는 열기 단계에서 거부되고(`path escapes from parent`), 그 실패와 `ELOOP`은 `classifyOpenError`의 기본 갈래에서 거부+격리된다. 정규 파일이 아니면 `IsRegular()`가 따로 막는다 |
+
+### 실행 계정과 파일 소유 (POK-79) — 상시 사양
+
+두 컨테이너는 **서로 다른 비특권 계정**으로 돈다. 정본은 각각의 Dockerfile `USER` 한 줄이다.
+
+| 컨테이너 | UID:GID | 정본 | 세 볼륨에 대해 |
+|---|---|---|---|
+| media (MediaMTX + 훅) | `10002:10002` | [`Dockerfile.mtxhook`](Dockerfile.mtxhook)의 `USER` | 씀 (`recordings`·`dvr`·`hooks`) |
+| segment-indexer (사이드카) | `10001:10001` | [`Dockerfile`](Dockerfile)의 `USER` | 읽음 (`:ro`) |
+
+**왜 일부러 다른 UID인가.** 파일 교환은 소유권이 아니라 **모드**로 성립한다 — 디렉토리 0755,
+녹화·스풀 파일 0644. 두 계정을 같게 두면 그 모드 계약이 **런타임에서 관측 불가**가 된다:
+스풀이 0600으로 퇴화해도 UID가 같아 사이드카가 계속 읽고 스모크가 통과해 버린다.
+다르게 두면 스모크 자체가 모드 계약의 실물 검사가 되고, "누가 쓴 파일인가"가 소유자로 드러난다
+(10001 소유 파일이 보이면 사이드카가 썼다는 이상 신호다).
+
+**볼륨 소유권은 이미지 층에 심는다.** 런타임에 `chown`을 하는 주체는 **없다**. Docker Engine이
+named volume이 **비어 있을 때만** 이미지의 같은 경로에서 소유권을 복사하는 동작에 기대어,
+`Dockerfile.mtxhook`의 `prep` 스테이지가 빈 디렉토리 3종을 최종 이미지에 넣는다. 회귀 방지 장치는
+[`internal/mtxhook/runtime_identity_contract_test.go`](internal/mtxhook/runtime_identity_contract_test.go)다.
+
+- ⚠️ **복사 금지 옵션(`volume.nocopy: true`)을 붙이지 마라.** 붙는 순간 그 복사가 끊겨 비root
+  쓰기가 **조용히** 실패한다. 계약 테스트가 `docker-compose.yml`은 잡지만
+  `docker-compose.override.yml`은 gitignore라 잡지 못한다 — 개인 override에도 넣지 마라.
+- ⚠️ **기존 볼륨은 자동으로 고쳐지지 않는다.** 이미 파일이 든 볼륨에는 복사가 일어나지 않으므로
+  **1회 초기화**가 필요하다(절차: [`docs/dev-environment.md`](../docs/dev-environment.md) "시작").
+- ⚠️ **리눅스 전제**: bind mount된 `/mediamtx.yml`의 호스트 모드가 그대로 보인다. 체크아웃 umask가
+  0077이면 비root가 설정을 못 읽고 **기동 실패**한다(Mac은 Docker Desktop이 소유권을 재매핑해서
+  재현되지 않는다). 처방은 `chmod a+r infra/compose/mediamtx.yml`.
+  **이 처방은 그 파일에 자격증명이 하나도 없기 때문에 성립한다**(전수 확인함). 계약4의 내부 토큰
+  (`X-Internal-Token`)이나 SRT passphrase가 이 파일에 들어오면 `o+r`은 ADR-018(평문 금지)과
+  충돌하므로, 그때는 **`o+r` 대신 소유권·그룹으로** 읽기 권한을 준다.
+
+**이번 전환의 가장 큰 실질 이득**은 `/hooks-bin/mtxhookwrite`가 **`root:root 0755`로 남는다**는
+것이다. 10002는 그 바이너리를 **실행만 할 수 있고 덮어쓸 수 없다**(실측: 10002로 그 경로에 쓰기를
+시도하면 `permission denied`). POK-74로 MediaMTX가 **외부 명령을 실행하기 시작한 것**이 이 티켓의
+발단인데, 서버가 root였을 때는 그 명령 자체를 서버가 바꿔 칠 수 있었다. 이제는 아니다 —
+`no-new-privileges:true`가 그 위에서 권한 되찾기 경로를 막는다.
+
+이 해법이 **한시적**인 이유(K8s의 파드 레벨 `fsGroup`이 대체한다)와 폐기 절차는
+[`docs/decisions/2026-08-17-media-비특권-전환.md`](../docs/decisions/2026-08-17-media-비특권-전환.md)에 있다.
 
 ### 훅 채널 (POK-74) — 무엇이 켜져 있고 로그를 어떻게 읽나
 
@@ -201,15 +243,15 @@ go test ./internal/index/ -v
 **버전을 올리면 `TestPinnedMediaMTXVersionMatchesDockerfile`이 빨간불이 된다. 그 테스트가 이 절로 안내한다.**
 ([`internal/mtxhook/version_contract_test.go`](internal/mtxhook/version_contract_test.go) —
 Dockerfile의 `FROM` 태그와 테스트 안 상수 `pinnedMediaMTXVersion`을 대조한다. 상수를 고치는
-행위가 곧 "아래 전제 7개를 새 버전에서 재확인했다"는 서명이다. 실패 메시지에 7개 목록이 그대로 들어 있다.)
+행위가 곧 "아래 전제 8개를 새 버전에서 재확인했다"는 서명이다. 실패 메시지에 8개 목록이 그대로 들어 있다.)
 
 버전 고정의 유일한 자리는 [`media/Dockerfile.mtxhook`](Dockerfile.mtxhook)의 `FROM`이다
 (compose의 `image:`가 `build:`로 바뀌면서 옮겨왔다). 훅 파라미터 이름은 버전 사이에 조용히
 바뀌거나 사라질 수 있고, **훅이 실행되지 않아도 아무 오류가 나지 않는다**. 그래서 절차를 고정한다.
 
-### 버전에 묶인 전제 7곳 — 절차보다 먼저 확인한다
+### 버전에 묶인 전제 8곳 — 절차보다 먼저 확인한다
 
-버전을 고정하는 자리는 한 곳이지만, **"1.19.3이라서 참인 사실"에 기대는 자리는 아래 7곳**이다.
+버전을 고정하는 자리는 한 곳이지만, **"1.19.3이라서 참인 사실"에 기대는 자리는 아래 8곳**이다.
 전제가 깨져도 예외도 로그도 나지 않는다 — 훅이 조용히 안 돌거나 길이가 조용히 틀릴 뿐이다.
 "닻"은 그 자리를 `git grep`으로 바로 찾기 위한 문구다(줄 번호는 금방 낡아서 적지 않는다).
 
@@ -222,6 +264,7 @@ Dockerfile의 `FROM` 태그와 테스트 안 상수 `pinnedMediaMTXVersion`을 �
 | 5 | `media/internal/fmp4meta/probe.go`<br>(닻: `트랙 중 최대 길이`) | `moov/mvhd`(파일 전체 길이가 적힌 상자)의 duration이 "트랙 중 최대 길이"와 일치한다. 이게 어긋나면 인덱스의 `duration_ms`가 조용히 틀린다 | 새 버전이 떨어뜨린 세그먼트를 `ffprobe`(이 코드와 무관한 독립 구현)로 재고, `ProbeDurationMS` 결과와 100ms 안에서 맞는지 대조한다 |
 | 6 | `media/internal/fmp4meta/probe_test.go` + `testdata/`<br>(닻: `채취: MediaMTX`) | 픽스처 3종이 **1.19.3이 `recordPath`로 직접 떨어뜨린 원본**이다. 검증 대상이 MediaMTX의 박스 배치라서 재인코딩본으로는 대체할 수 없다 | 5번 대조가 어긋났을 때만 손댄다 — 새 버전 산출물로 픽스처를 다시 채취하고 오라클(ffprobe 실측값)도 함께 갱신한다. 어긋나지 않으면 그대로 둔다 |
 | 7 | `media/internal/recording/settle.go`<br>(닻: `업스트림 기본값 recordPartDuration`) | 업스트림 기본값 `recordPartDuration` = 1s. 쓰기와 쓰기 사이 공백을 "다 썼다"로 오해하지 않으려면 공백의 2배는 기다려야 하므로, 그 2배가 `SEGMENT_SETTLE_WAIT` 2s의 근거다 | 새 태그의 업스트림 기본 설정 파일(`mediamtx.yml`)에서 `recordPartDuration` 값을 확인한다. **1s보다 커졌으면 `SEGMENT_SETTLE_WAIT`를 그 2배로 올린다** — 안 올리면 절반짜리 파일을 완성으로 판정한다 |
+| 8 | `media/Dockerfile.mtxhook`<br>(닻: `USER 10002:10002`) | **MediaMTX가 루트FS·CWD에 쓰지 않는다.** 비root(UID 10002)로 도니까 쓰려는 순간 실패한다. 우리 설정은 `moq: no`라 참이지만, `moq`/`webrtc`/`rtsps`를 켜며 `auto.key`류 자동 생성 경로를 쓰면 비root에서 기동 자체가 실패한다(POK-79 실험 E7) | 새 버전 **기본 설정**에서 CWD에 파일을 쓰는 지점이 늘었는지 본다. 실물 확인은 기동 로그에 `failed to save`·`permission denied`가 뜨는지 — `docker compose logs media \| grep -iE 'permission denied\|failed to save'`가 0건이어야 한다 |
 
 전제는 아니지만 **버전 문자열을 그대로 적어 둔 곳이 2군데** 더 있다. 함께 고친다 —
 [`docs/dev-environment.md`](../docs/dev-environment.md)의 서비스 표와
@@ -230,7 +273,7 @@ Dockerfile의 `FROM` 태그와 테스트 안 상수 `pinnedMediaMTXVersion`을 �
 ### 절차
 
 1. **`FROM` 변경은 별도 PR로 낸다.** 다른 변경과 섞으면 회귀 원인을 가를 수 없다.
-2. 위 표 7개를 확인한 뒤 **같은 PR에서 `pinnedMediaMTXVersion`을 새 태그로 고친다.**
+2. 위 표 8개를 확인한 뒤 **같은 PR에서 `pinnedMediaMTXVersion`을 새 태그로 고친다.**
    확인 없이 상수만 맞추면 이 장치는 무력해진다 — 상수 수정은 확인했다는 서명이지 형식 절차가 아니다.
 3. 기동 로그에서 **deprecated/unknown 파라미터 WARN**을 확인한다 — `docker compose logs media | head -50`.
    훅 3종의 이름이 그대로 살아 있는지가 핵심이다.
