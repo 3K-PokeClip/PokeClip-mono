@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <style>
+    /* embedded from motion.css - plays once on load, ends on the exact static logo */
+    @media (prefers-reduced-motion: no-preference) {
+/* PokeClip v3 — motion tokens + choreography
+   Personality: fluid / playful / confident (see motion_spec.md)
+   One shared 1600ms clock; phase offsets are intra-keyframe percentages.
+   NOTE: timing functions inside @keyframes are LITERAL on purpose —
+   var() there is silently dropped in Chromium (degrades to linear). */
+
+:root {
+  --p2m-duration: 1600ms;
+  --p2m-ease-draw: cubic-bezier(0.48, 0.04, 0.16, 1);   /* slow-in, long slow-out */
+  --p2m-ease-pop: cubic-bezier(0.34, 1.36, 0.5, 1);     /* back-out overshoot */
+  --p2m-ease-settle: cubic-bezier(0.22, 0.61, 0.36, 1); /* ease-out */
+  --p2m-overshoot: 1.06;
+}
+
+/* ---- ribbon draw-on: split masks. Magenta (#spine-accent) and indigo
+   (#spine-main) each reveal through their OWN open mask spine whose butt
+   ends overshoot past the clip lines into clipped-away zones — so every
+   visible color boundary is a CLIP line (joint C, slit cuts A/B), never a
+   moving dash edge. E1/E2 are the exact de Casteljau halves of the design
+   curve --p2m-ease-draw split at the 20.15% handoff (build_logo.py emits
+   them; see outputs/fit_work/draw_timing.json), so combined pen pace equals
+   the single-stroke design. */
+#spine-accent {
+  animation: p2m-draw-accent var(--p2m-duration) linear both;
+}
+@keyframes p2m-draw-accent {
+  0% { stroke-dashoffset: 1; stroke-dasharray: 1 1; }
+  8% { stroke-dashoffset: 1; stroke-dasharray: 1 1;
+       animation-timing-function: cubic-bezier(0.4451, 0.0731, 0.7597, 0.4418); /* E1 */ }
+  20.15% { stroke-dashoffset: 0; stroke-dasharray: 1 1; }
+  100% { stroke-dashoffset: 0; stroke-dasharray: 1 1; }
+}
+#spine-main {
+  animation: p2m-draw-main var(--p2m-duration) linear both;
+}
+@keyframes p2m-draw-main {
+  0% { stroke-dashoffset: 1; stroke-dasharray: 1 1; }
+  20.15% { stroke-dashoffset: 1; stroke-dasharray: 1 1;
+       animation-timing-function: cubic-bezier(0.2635, 0.2787, 0.1457, 1); /* E2 */ }
+  72% { stroke-dashoffset: 0; stroke-dasharray: 1 1; }
+  100% { stroke-dashoffset: 0; stroke-dasharray: 1 1; }
+}
+
+/* ---- play mark: scale-pop with overshoot, overlapping the draw finish */
+#playmark {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation:
+    p2m-play-pop var(--p2m-duration) linear both,
+    p2m-play-fade var(--p2m-duration) linear both;
+}
+@keyframes p2m-play-pop {
+  0% { transform: scale(0.3); }
+  66% { transform: scale(0.3);
+        animation-timing-function: cubic-bezier(0.34, 1.36, 0.5, 1); /* --p2m-ease-pop */ }
+  82% { transform: scale(1.06); /* --p2m-overshoot */
+        animation-timing-function: cubic-bezier(0.33, 0, 0.3, 1); }
+  91% { transform: scale(0.988);
+        animation-timing-function: cubic-bezier(0.33, 0, 0.3, 1); }
+  100% { transform: scale(1); }
+}
+@keyframes p2m-play-fade {
+  0% { opacity: 0; }
+  66% { opacity: 0;
+        animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1); /* --p2m-ease-settle */ }
+  76% { opacity: 1; }
+  100% { opacity: 1; }
+}
+
+/* ---- whole-mark micro settle (follow-through; ends exactly at identity) */
+#logo {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: p2m-logo-settle var(--p2m-duration) linear both;
+}
+@keyframes p2m-logo-settle {
+  0% { transform: scale(0.992); }
+  70% { transform: scale(0.992);
+        animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1); /* --p2m-ease-settle */ }
+  100% { transform: scale(1); }
+}
+
+    }
+  </style>
+
+  <defs>
+    <path id="ring-shape" d="M 908.70,407.79 C 903.27,383.75 896.50,359.81 888.61,336.47 C 880.27,311.94 871.69,287.76 859.59,264.78 C 846.18,239.60 830.98,215.63 812.13,194.13 C 792.95,172.69 770.82,154.31 746.20,139.46 C 721.38,124.75 694.02,114.16 665.86,107.87 C 639.76,102.33 613.35,101.23 586.77,100.52 C 563.57,99.84 540.37,100.58 517.17,100.45 C 494.84,100.30 472.51,100.22 450.18,100.49 C 426.57,100.78 402.96,100.14 379.35,100.50 C 353.70,100.84 327.72,101.49 302.10,100.72 C 260.49,94.50 229.65,99.88 195.95,128.44 C 163.99,158.14 153.62,190.69 151.22,232.55 C 147.94,258.68 148.68,284.70 146.75,310.89 C 144.73,332.66 142.21,354.31 138.79,375.91 C 135.45,395.99 130.94,415.96 126.25,435.77 C 121.08,457.57 115.21,479.19 110.23,501.04 C 104.78,524.79 99.29,548.50 95.79,572.62 C 92.14,598.33 89.26,624.02 89.52,650.03 C 89.99,678.13 93.41,706.31 101.60,733.24 C 110.43,761.20 122.52,787.50 139.13,811.72 C 156.12,836.08 175.98,858.29 200.09,875.81 C 226.20,894.32 254.71,908.63 286.04,915.82 C 317.06,922.26 348.72,920.63 379.56,913.92 C 406.45,907.57 426.41,890.88 450.77,879.43 C 465.20,872.93 482.23,861.60 498.62,861.09 C 512.70,860.56 526.86,862.16 540.79,863.97 C 558.79,865.07 578.17,883.34 593.89,890.92 C 620.91,904.35 645.02,916.78 675.70,919.66 C 708.60,922.20 741.59,917.13 771.47,902.93 C 799.57,888.93 823.43,868.64 844.26,845.35 C 862.57,824.61 877.24,800.89 889.85,776.32 C 901.86,752.13 909.87,726.62 917.15,700.71 C 924.60,674.25 929.72,646.68 931.04,619.19 C 931.85,594.32 927.47,570.12 925.52,545.44 C 923.80,523.07 922.52,500.66 919.95,478.36 C 917.18,454.72 913.82,431.05 908.70,407.79 L 763.12,440.77 C 767.50,459.77 770.63,478.93 773.71,498.19 C 776.97,518.81 778.92,539.61 781.40,560.33 C 783.68,578.78 788.43,597.23 788.92,615.85 C 789.08,633.10 786.68,649.85 783.22,666.72 C 779.61,683.03 773.03,698.64 765.49,713.48 C 758.65,727.05 750.86,739.62 740.39,750.69 C 731.46,759.96 721.84,771.01 710.16,776.87 C 699.96,781.65 689.74,785.25 678.82,787.95 C 665.63,792.34 647.10,786.19 634.24,783.41 C 612.46,780.27 592.63,761.90 571.84,754.62 C 542.94,744.81 513.83,740.47 483.42,744.65 C 456.44,748.97 434.89,763.89 409.29,771.50 C 392.69,776.88 374.71,785.99 356.81,784.40 C 345.05,784.55 333.53,783.32 322.73,778.31 C 311.31,772.67 300.27,765.40 290.61,757.09 C 280.65,748.07 272.21,737.73 264.81,726.53 C 256.74,713.96 249.57,700.41 244.37,686.40 C 238.92,671.38 235.52,656.08 232.98,640.33 C 230.18,623.27 231.02,605.93 232.45,588.77 C 234.13,568.96 238.53,549.49 242.55,530.05 C 246.98,509.03 253.13,488.39 258.23,467.53 C 263.54,445.76 269.71,424.26 274.55,402.37 C 279.33,380.39 281.64,357.94 287.79,336.25 C 292.80,317.89 296.93,299.53 309.69,284.91 C 317.34,273.56 327.05,263.60 339.15,257.21 C 355.27,247.29 372.69,241.31 391.26,237.81 C 411.24,234.05 431.58,234.74 451.80,234.51 C 473.32,234.23 494.84,234.30 516.36,234.45 C 536.40,234.56 556.51,233.52 576.43,236.29 C 593.44,238.61 610.99,240.51 626.93,247.28 C 640.96,253.08 654.50,259.30 667.28,267.57 C 678.95,275.39 689.08,284.91 698.50,295.28 C 709.51,307.62 718.75,321.77 726.81,336.18 C 735.26,351.71 741.35,368.48 747.19,385.12 C 753.58,403.44 758.73,421.88 763.12,440.77 Z"/>
+    <clipPath id="clip-indigo"><polygon points="-64.0,-64.0 1100.0,-64.0 1100.0,374.7 700.0,626.2 700.0,644.7 1100.0,845.2 1100.0,1088.0 -64.0,1088.0"/></clipPath>
+    <clipPath id="clip-accent"><polygon points="700.0,645.2 1100.0,412.0 1100.0,845.2 700.0,644.7"/></clipPath>
+    <mask id="draw-mask-main" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <path id="spine-main" d="M 858.42,590.46 C 856.93,577.92 854.74,565.45 853.46,552.89 C 851.27,531.35 849.75,509.71 846.83,488.28 C 843.90,466.84 840.73,445.53 835.91,424.28 C 831.09,403.03 825.02,381.43 817.90,360.79 C 810.78,340.16 803.63,319.83 793.20,300.48 C 782.77,281.13 769.72,260.86 755.32,244.70 C 740.91,228.54 724.90,214.70 706.74,203.51 C 688.59,192.32 667.25,183.43 646.40,177.58 C 625.54,171.73 603.20,170.09 581.60,168.40 C 559.99,166.71 538.53,167.60 516.77,167.45 C 495.00,167.30 472.90,167.22 450.99,167.50 C 429.08,167.78 407.03,167.24 385.31,169.15 C 363.58,171.07 341.69,173.88 320.62,178.97 C 299.56,184.06 273.93,186.39 258.90,199.68 C 243.87,212.98 237.39,238.08 230.45,258.73 C 223.52,279.38 221.23,301.83 217.27,323.57 C 213.31,345.30 210.84,367.79 206.67,389.14 C 202.50,410.48 197.29,430.58 192.24,451.65 C 187.20,472.72 181.08,494.04 176.39,515.55 C 171.70,537.06 166.64,559.09 164.12,580.69 C 161.60,602.30 159.77,623.66 161.25,645.18 C 162.73,666.70 166.20,689.16 172.98,709.82 C 179.77,730.48 189.91,751.35 201.97,769.12 C 214.03,786.89 228.28,803.46 245.35,816.45 C 262.42,829.44 283.91,841.61 304.39,847.07 C 324.86,852.52 347.25,852.76 368.19,849.16 C 389.13,845.56 409.55,833.18 430.03,825.47 C 450.50,817.75 469.97,805.57 491.02,802.87 C 512.07,800.18 535.81,803.58 556.32,809.30 C 576.82,815.01 593.91,829.74 614.06,837.16 C 634.22,844.58 656.14,853.35 677.26,853.80 C 698.39,854.26 721.64,849.20 740.82,839.90 C 759.99,830.60 777.85,813.86 792.32,798.02 C 806.80,782.19 818.03,763.95 827.67,744.90 C 835.15,730.13 841.33,714.24 846.24,697.95" pathLength="1" fill="none" stroke="#FFFFFF"
+            stroke-width="210" stroke-linecap="butt"/>
+    </mask>
+    <mask id="draw-mask-accent" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <path id="spine-accent" d="M 833.84,731.81 C 840.57,716.45 846.01,700.19 850.18,683.72 C 855.57,662.49 859.44,639.32 859.98,617.52 C 860.53,595.71 855.65,574.43 853.46,552.89 C 851.52,533.86 850.11,514.74 847.80,495.77" pathLength="1" fill="none" stroke="#FFFFFF"
+            stroke-width="210" stroke-linecap="butt"/>
+    </mask>
+  </defs>
+  <g id="logo">
+    <g id="ribbon">
+      <use id="ribbon-main" href="#ring-shape" fill="#586FC4" clip-path="url(#clip-indigo)" mask="url(#draw-mask-main)"/>
+      <use id="ribbon-accent" href="#ring-shape" fill="#D63F9F" clip-path="url(#clip-accent)" mask="url(#draw-mask-accent)"/>
+    </g>
+    <path id="playmark" fill="#FFFFFF" d="M 445.8 355.7 L 636.7 473.3 A 31.0 31.0 0 0 1 637.3 525.7 L 446.4 649.3 A 32.0 32.0 0 0 1 397.0 622.4 L 397.0 383.0 A 32.0 32.0 0 0 1 445.8 355.7 Z"/>
+  </g>
+</svg>

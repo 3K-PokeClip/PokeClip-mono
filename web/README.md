@@ -117,3 +117,4 @@ LL-HLS 플레이어는 **catch-up을 꺼야 한다.** 켜져 있으면 되감기
 
 - [packages/ui/README.md](packages/ui/README.md) — 디자인 시스템 사용법
 - [packages/ui/COLOR_SYSTEM.md](packages/ui/COLOR_SYSTEM.md) — 컬러 토큰 시스템
+- [packages/ui/BRAND.md](packages/ui/BRAND.md) — 브랜드 가이드 (로고·파비콘·팔레트·타이포)
