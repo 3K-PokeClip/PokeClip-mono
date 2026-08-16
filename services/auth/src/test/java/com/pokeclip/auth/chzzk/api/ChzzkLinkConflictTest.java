@@ -3,6 +3,7 @@ package com.pokeclip.auth.chzzk.api;
 import com.pokeclip.auth.chzzk.ChzzkChannelLinkRepository;
 import com.pokeclip.auth.chzzk.ChzzkLinkStateCodec;
 import com.pokeclip.auth.chzzk.ChzzkLinkTestSupport;
+import com.pokeclip.auth.chzzk.ChzzkCleanupExecutor;
 import com.pokeclip.auth.chzzk.ChzzkLinkWriter;
 import com.pokeclip.auth.streamkey.secret.SecretStore;
 import com.pokeclip.auth.token.TokenService;
@@ -23,8 +24,8 @@ class ChzzkLinkConflictTest extends ChzzkLinkTestSupport {
     ChzzkLinkConflictTest(MockMvc mockMvc, UserService userService, UserRepository userRepository,
                           TokenService tokenService, ChzzkLinkStateCodec codec,
                           ChzzkChannelLinkRepository linkRepository, SecretStore secretStore,
-                          ChzzkLinkWriter writer, JdbcTemplate jdbc) {
-        super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc);
+                          ChzzkLinkWriter writer, JdbcTemplate jdbc, ChzzkCleanupExecutor cleanup) {
+        super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer, jdbc, cleanup);
     }
 
     /** 다른 계정 중복은 DB 부분 유니크가 막는다. 롤백된 뒤 받은 토큰은 치지직에 살아 있으므로 버린다. */
