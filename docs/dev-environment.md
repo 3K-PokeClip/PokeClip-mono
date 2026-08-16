@@ -147,6 +147,29 @@ export PG_DSN="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POST
 cd media && go test ./internal/index/ -v
 ```
 
+이렇게 붙여도 **개발 DB(`PG_DSN`이 가리키는 곳)에는 쓰지 않는다.** `PG_DSN`은 관리 접속으로만 쓰이고,
+같은 서버에 전용 테스트 DB(`PG_TEST_DB`, 기본 `pokeclip_uploadtest`)를 만들어 그 안에서만 돌며
+테스트 함수마다 비운다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다. 대신 여섯 가지를 기억한다.
+
+- **`PG_DSN`에는 위 로컬 compose의 개발 DB만 준다.** 공유 개발 서버·원격·프로덕션 DSN을 넣지 않는다 —
+  이 테스트는 같은 서버에 DB를 만들고 그 안을 비운다(지우는 것은 아래처럼 사람이 한다).
+- `PG_DSN` 롤에 `CREATEDB` 권한이 있어야 한다(없으면 skip이 아니라 실패). 로컬 compose의
+  `POSTGRES_USER`는 이미 갖고 있으므로 **권한을 새로 올려 줄 일은 없다.**
+- `PG_TEST_DB`에 개발 DB 이름을 그대로 주면 테스트가 기동 즉시 실패한다 — 그 조합은 개발 DB를
+  비우기 때문이다. `PG_DSN`에 DB 이름을 아예 안 적었을 때도 마찬가지인데, 여기엔 단서가 붙는다:
+  `PGDATABASE` 환경변수가 설정돼 있으면 그 값이 DB 이름으로 채워지므로 "이름이 비었다" 가드는
+  걸리지 않고, 그 이름이 개발 DB와 같은지를 위의 동일 이름 가드가 대신 판정한다.
+- **이미 있는 DB를 `PG_TEST_DB`로 주면, 그 DB에 이 테스트가 심어 둔 소유 표식
+  (빈 표 `pokeclip_testdb_marker`)이 없는 한 채택하지 않고 실패한다** — 남의 DB를 비우지 않기
+  위해서다. 표식은 테스트가 DB를 새로 만들 때만 심는다. 그래서 **표식이 생기기 전에 만들어 둔
+  기존 전용 DB(`pokeclip_uploadtest` 등)는 한 번 `DROP DATABASE` 후 다시 돌려야 한다**
+  (표식 도입 전에 만든 전용 DB라면 한 번만 겪는다. 단 실패 메시지의 원인은 이것 말고도 있을 수 있으니 — 남의 DB, 중단된 부트스트랩 잔재 — 지우기 전에 그 DB가 전용 테스트 DB가 맞는지 직접 확인한다).
+- **같은 `PG_TEST_DB`로 두 실행을 동시에 돌리면 서로의 데이터를 지운다.** CI나 병렬 실행에서는
+  실행마다 고유한 `PG_TEST_DB`를 주고, **끝나면 `DROP DATABASE`로 그 DB를 정리한다** — 정리 없이
+  고유 이름만 늘리면 DB가 무한히 쌓인다.
+- `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지한다(`CREATE TABLE IF NOT EXISTS`).
+  `DROP DATABASE pokeclip_uploadtest` 후 다시 돌린다.
+
 ### 스트림 이름 제약
 
 MediaMTX는 아무 경로로나 송출을 받아 주지만, 사이드카는 **`[A-Za-z0-9_-]` 1–64자**인 이름만

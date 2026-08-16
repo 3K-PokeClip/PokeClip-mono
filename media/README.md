@@ -174,6 +174,23 @@ export PG_DSN="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POST
 go test ./internal/index/ -v
 ```
 
+`internal/index` 통합 테스트는 `PG_DSN`이 가리키는 DB에 **쓰지 않는다.** `PG_DSN`은 관리 접속으로만
+쓰이고, 같은 서버에 전용 테스트 DB(`PG_TEST_DB`, 기본 `pokeclip_uploadtest`)를 만들어 그 안에서만
+돌며 테스트 함수마다 비운다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
+롤에 `CREATEDB` 권한이 필요하고 — **로컬 compose 한정이다**, `PG_TEST_DB`를 개발 DB 이름과 같게
+주면 테스트가 기동 즉시 실패한다. `PG_DSN`에 DB 이름 자체를 안 적었을 때도 같은데, 단
+`PGDATABASE`가 설정된 환경에서는 그 값이 DB 이름으로 채워져 "이름이 비었다" 가드 대신 동일 이름
+가드가 판정한다).
+**이미 있는 DB는 이 테스트가 심어 둔 소유 표식(빈 표 `pokeclip_testdb_marker`)이 있을 때만
+채택한다 — 없으면 남의 DB일 수 있으므로 아무것도 건드리지 않고 실패한다.** 표식은 테스트가 DB를
+새로 만들 때만 심으므로, **표식 도입 전에 만들어 둔 기존 전용 DB는 한 번 `DROP DATABASE` 후 다시
+돌려야 한다**(한 번만 겪는 마이그레이션이고 실패 메시지가 그대로 안내한다).
+**`PG_DSN`에는 로컬 compose의 개발 DB만 준다 — 공유·원격·프로덕션 DSN을 주지 않는다.**
+**같은 `PG_TEST_DB`로 두 실행을 동시에 돌리면 서로의 데이터를 지운다 — CI나 병렬 실행에서는
+실행마다 고유한 `PG_TEST_DB`를 주고, 실행이 끝나면 그 DB를 `DROP DATABASE`로 정리한다**(정리 없이
+고유 이름만 늘리면 DB가 무한히 쌓인다). `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지하므로
+(`CREATE TABLE IF NOT EXISTS`) `DROP DATABASE pokeclip_uploadtest` 후 다시 돌린다.
+
 `internal/fmp4meta` 테스트는 `testdata/`의 커밋된 파일만 쓰므로 Docker가 꺼져 있어도 돈다.
 
 `cmd/mtxhookwrite` 테스트는 **바이너리를 직접 빌드해 프로세스 8개를 동시에 띄운다**(줄 섞임 검증).
