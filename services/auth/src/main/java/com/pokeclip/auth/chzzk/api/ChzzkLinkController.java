@@ -3,17 +3,22 @@ package com.pokeclip.auth.chzzk.api;
 import com.pokeclip.auth.chzzk.ChzzkLinkService;
 import com.pokeclip.auth.chzzk.api.dto.LinkRequest;
 import com.pokeclip.auth.chzzk.api.dto.LinkResponse;
+import com.pokeclip.auth.chzzk.api.dto.LinkStatusResponse;
 import com.pokeclip.auth.chzzk.api.dto.StartResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.time.Instant;
 
 @RestController
 @RequestMapping("/api/chzzk-link")
@@ -34,6 +39,21 @@ public class ChzzkLinkController {
     public LinkResponse link(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody LinkRequest request) {
         ChzzkLinkService.LinkResult r = service.link(userId(jwt), request.code(), request.state());
         return new LinkResponse(r.channelId(), r.channelName(), r.linkedAt());
+    }
+
+    /** 마지막 행 기준. 끊긴 것(BROKEN·UNLINKED)도 status·channelName은 준다. */
+    @GetMapping
+    public LinkStatusResponse status(@AuthenticationPrincipal Jwt jwt) {
+        return service.latest(userId(jwt))
+                .map(link -> LinkStatusResponse.of(link, Instant.now()))
+                .orElseGet(LinkStatusResponse::none);
+    }
+
+    /** 살아있는 연동이 없어도 204 — 멱등. 행은 남고 토큰은 버린다. */
+    @DeleteMapping
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void unlink(@AuthenticationPrincipal Jwt jwt) {
+        service.unlink(userId(jwt));
     }
 
     private static Long userId(Jwt jwt) {

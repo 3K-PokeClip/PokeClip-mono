@@ -45,7 +45,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 | 모듈 | 무엇 |
 |---|---|
 | `common/` | 계약 — 공유 엔티티 · SQS 메시지 DTO. **아직 소스가 0개다** |
-| `web-support/` | 웹 인프라 — CORS · 상관 ID 필터. 테스트 도우미(`LogCaptor`)는 `testFixtures`에 |
+| `web-support/` | 웹 인프라 — CORS(허용 메서드 GET·POST·DELETE) · 상관 ID 필터. 테스트 도우미(`LogCaptor`)는 `testFixtures`에 |
 
 `common`에 웹 계층을 두지 않는 규칙이 있어 둘로 나눴다. `web-support`는 이 앱들의
 패키지 밖이라 컴포넌트 스캔에 안 걸린다 — 각 `Application`이 `@Import`로 끌어온다.

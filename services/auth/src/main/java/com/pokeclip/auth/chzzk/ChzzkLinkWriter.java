@@ -53,25 +53,44 @@ public class ChzzkLinkWriter {
                 .ifPresent(other -> {
                     throw new ChzzkLinkException(ChzzkLinkFailure.CHANNEL_ALREADY_LINKED, "다른 계정에 묶인 채널이다");
                 });
-        // 재연동: 옛 행은 락 뒤에 읽는다(락 전 엔티티 읽기 금지). 옛 토큰 원문은 커밋 전에 읽어 둔다 —
-        // 정리 시점에는 secrets를 지운 뒤라 못 읽는다.
-        // 정리는 afterCommit에서 제출만 하고 전용 스레드(ChzzkCleanupExecutor)가 돈다 —
-        // afterCommit 안에서 REQUIRES_NEW delete를 직접 부르면 원 커넥션을 쥔 채 두 번째를 요구해 풀 데드락이 된다.
-        links.findByUserIdAndRevokedAtIsNull(userId).ifPresent(old -> {
-            String oldAccess = secretStore.get(old.getAccessTokenRef()).orElse(null);
-            String oldRefresh = secretStore.get(old.getRefreshTokenRef()).orElse(null);
-            links.revokeAlive(userId, now, RevokeReason.USER_UNLINKED);
-            String accessRef = old.getAccessTokenRef();
-            String refreshRef = old.getRefreshTokenRef();
-            cleanup.afterCommit(userId, () -> cleanupOld(userId, accessRef, refreshRef, oldAccess, oldRefresh,
-                    "auth.chzzk.link.relinked"));
-        });
+        closeAlive(userId, now, "auth.chzzk.link.relinked");   // 재연동이면 옛 행을 닫는다
         String accessRef = "chzzk-access:" + UUID.randomUUID();
         String refreshRef = "chzzk-refresh:" + UUID.randomUUID();
         secretStore.put(accessRef, tokens.accessToken());
         secretStore.put(refreshRef, tokens.refreshToken());
         return links.saveAndFlush(ChzzkChannelLink.of(userId, me.channelId(), me.channelName(), tokens.scope(),
                 accessRef, refreshRef, now.plus(tokens.expiresIn()), now));
+    }
+
+    /**
+     * 사용자 해제. 회원 행 락 → 살아있는 행 revoke(USER_UNLINKED) → 커밋 뒤 정리.
+     * 살아있는 행이 없으면 아무것도 안 한다(204 멱등). 재연동의 "옛 행 폐기"와 같은 코드다.
+     */
+    @Transactional
+    public void revoke(Long userId, Instant now) {
+        users.findByIdForUpdate(userId)
+                .orElseThrow(() -> new IllegalStateException("사용자가 없다 userId=" + userId));
+        closeAlive(userId, now, "auth.chzzk.link.unlinked");
+    }
+
+    /**
+     * 살아있는 내 연동을 닫고, 커밋 뒤에 secrets 삭제 → 로그 → 옛 토큰 revoke. 락 뒤에 부른다.
+     *
+     * <p>옛 행은 락 뒤에 읽는다(락 전 엔티티 읽기 금지). 옛 토큰 원문은 커밋 전에 읽어 둔다 —
+     * 정리 시점에는 secrets를 지운 뒤라 못 읽는다.
+     *
+     * <p>정리는 afterCommit에서 <b>제출만</b> 하고 전용 스레드({@link ChzzkCleanupExecutor})가 돈다 —
+     * afterCommit 안에서 REQUIRES_NEW delete를 직접 부르면 원 커넥션을 쥔 채 두 번째를 요구해 풀 데드락이 된다.
+     */
+    private void closeAlive(Long userId, Instant now, String event) {
+        links.findByUserIdAndRevokedAtIsNull(userId).ifPresent(old -> {
+            String oldAccess = secretStore.get(old.getAccessTokenRef()).orElse(null);
+            String oldRefresh = secretStore.get(old.getRefreshTokenRef()).orElse(null);
+            links.revokeAlive(userId, now, RevokeReason.USER_UNLINKED);
+            String accessRef = old.getAccessTokenRef();
+            String refreshRef = old.getRefreshTokenRef();
+            cleanup.afterCommit(userId, () -> cleanupOld(userId, accessRef, refreshRef, oldAccess, oldRefresh, event));
+        });
     }
 
     /**
