@@ -6,6 +6,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.context.annotation.Import;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 로그인·토큰·스트림키를 담당하는 서버. ADR-022로 clip과 프로세스가 갈렸다.
@@ -19,6 +20,8 @@ import org.springframework.context.annotation.Import;
 @SpringBootApplication
 @ConfigurationPropertiesScan({"com.pokeclip.auth", "com.pokeclip.web"})
 @Import({CorsConfig.class, WebConfig.class})
+// 치지직 토큰 갱신 스케줄러(ChzzkTokenRefreshScheduler). 테스트 프로파일은 그 빈 자체를 끈다.
+@EnableScheduling
 public class AuthApplication {
 
     public static void main(String[] args) {
