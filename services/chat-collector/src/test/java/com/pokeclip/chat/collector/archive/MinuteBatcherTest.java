@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.archive;
 
+import ch.qos.logback.classic.Level;
+import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -82,6 +84,40 @@ class MinuteBatcherTest {
         List<ArchiveObject> third = batcher.accept(List.of(chat("CH", T0 + 59_950)), T0 + 63_000);
         assertThat(third).extracting(ArchiveObject::key).containsExactly("chat/CH/2026-08-15/10/1023-r1-3.jsonl");
         assertThat(batcher.closeAll()).isEmpty();
+    }
+
+    /**
+     * 재열림은 카운터 여섯에 없다(PRD) — 운영이 알 길은 이 로그뿐이다. 첫 번째만 찍는다(시계 요동 때 채팅마다 재열림이
+     * 날 수 있어 encode_failed와 같은 도배 방지). seq는 안 싣는다 — 첫 재열림의 seq는 언제나 2라 정보가 0이다(F16).
+     */
+    @Test
+    void 첫_재열림은_INFO_한_줄을_남기고_두_번째부터는_안_남긴다() {
+        try (LogCaptor captor = new LogCaptor()) {
+            batcher.accept(List.of(chat("CH", T0 + 100)), T0 + 500);
+            batcher.accept(List.of(), T0 + 62_000);                                  // 유예로 닫힘
+            batcher.accept(List.of(chat("CH", T0 + 59_900)), T0 + 62_500);          // 재열림 1 (seq 2)
+            batcher.accept(List.of(chat("CH", T0 + 59_950)), T0 + 63_000);          // 재열림 2 (seq 3)
+            List<String> lines = captor.messages().stream().filter(m -> m.startsWith("chat.archive.window_reopened")).toList();
+            assertThat(lines).containsExactly("chat.archive.window_reopened");
+            assertThat(captor.levelOf("chat.archive.window_reopened")).isEqualTo(Level.INFO);
+            assertThat(batcher.reopenedCount()).isEqualTo(2);
+        }
+    }
+
+    /**
+     * 순번 기억은 2시간이 지나면 잊는다 — 안 잊으면 맵이 방송 내내 자라고, 잊는 자리가 창 닫기에 있으니 닫기가 그 일을
+     * 하는지 본다: 2시간 뒤 창을 하나 닫으면 옛 열쇠가 사라져, 그 분이 다시 열려도 접미가 없다.
+     */
+    @Test
+    void 두_시간이_지난_열쇠는_창을_닫을_때_잊혀_그_분이_다시_열려도_접미가_없다() {
+        batcher.accept(List.of(chat("CH", T0 + 100)), T0 + 500);
+        batcher.accept(List.of(), T0 + 62_000);                                      // 10:23 닫힘 → 열쇠 기억
+        long later = T0 + MinuteBatcher.CLOSED_MEMORY_MS + 120_000;                  // 2시간 2분 뒤의 창
+        batcher.accept(List.of(chat("CH", later + 100)), later + 500);
+        batcher.accept(List.of(), later + 62_000);                                   // 그 창을 닫으며 옛 열쇠를 잊는다
+        List<ArchiveObject> reopened = batcher.accept(List.of(chat("CH", T0 + 59_900)), later + 62_500);
+        assertThat(reopened).extracting(ArchiveObject::key).containsExactly("chat/CH/2026-08-15/10/1023-r1.jsonl");
+        assertThat(batcher.reopenedCount()).isZero();
     }
 
     @Test
