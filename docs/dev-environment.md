@@ -188,7 +188,7 @@ cd media && go test ./internal/index/ -v
 - **`PG_DSN`에는 위 로컬 compose의 개발 DB만 준다.** 공유 개발 서버·원격·프로덕션 DSN을 넣지 않는다 —
   이 테스트는 같은 서버에 DB를 만들고 그 안을 비운다(지우는 것은 아래처럼 사람이 한다).
 - `PG_DSN` 롤에 `CREATEDB` 권한이 있어야 한다(없으면 skip이 아니라 실패). 로컬 compose의
-  `POSTGRES_USER`는 이미 갖고 있으므로 **권한을 새로 올려 줄 일은 없다.**
+  `POSTGRES_USER`도, `media-ci`의 postgres 서비스 컨테이너(superuser)도 이미 갖고 있으므로 **권한을 새로 올려 줄 일은 없다.**
 - `PG_TEST_DB`에 개발 DB 이름을 그대로 주면 테스트가 기동 즉시 실패한다 — 그 조합은 개발 DB를
   비우기 때문이다. `PG_DSN`에 DB 이름을 아예 안 적었을 때도 마찬가지인데, 여기엔 단서가 붙는다:
   `PGDATABASE` 환경변수가 설정돼 있으면 그 값이 DB 이름으로 채워지므로 "이름이 비었다" 가드는
@@ -200,7 +200,9 @@ cd media && go test ./internal/index/ -v
   (표식 도입 전에 만든 전용 DB라면 한 번만 겪는다. 단 실패 메시지의 원인은 이것 말고도 있을 수 있으니 — 남의 DB, 중단된 부트스트랩 잔재 — 지우기 전에 그 DB가 전용 테스트 DB가 맞는지 직접 확인한다).
 - **같은 `PG_TEST_DB`로 두 실행을 동시에 돌리면 서로의 데이터를 지운다.** CI나 병렬 실행에서는
   실행마다 고유한 `PG_TEST_DB`를 주고, **끝나면 `DROP DATABASE`로 그 DB를 정리한다** — 정리 없이
-  고유 이름만 늘리면 DB가 무한히 쌓인다.
+  고유 이름만 늘리면 DB가 무한히 쌓인다. 이 규약은 **PG를 공유하는 실행이 있을 때** 적용된다 —
+  `media-ci`의 postgres 서비스 컨테이너는 잡마다 뜨고 잡과 함께 사라져 공유가 없으므로 고정 이름을 쓴다.
+  **규약을 완화한 것이 아니라 적용 조건(PG를 공유하는 실행의 존재)을 드러낸 것이다.**
 - `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지한다(`CREATE TABLE IF NOT EXISTS`).
   `DROP DATABASE pokeclip_uploadtest` 후 다시 돌린다.
 

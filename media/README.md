@@ -219,7 +219,7 @@ go test ./internal/index/ -v
 `internal/index` 통합 테스트는 `PG_DSN`이 가리키는 DB에 **쓰지 않는다.** `PG_DSN`은 관리 접속으로만
 쓰이고, 같은 서버에 전용 테스트 DB(`PG_TEST_DB`, 기본 `pokeclip_uploadtest`)를 만들어 그 안에서만
 돌며 테스트 함수마다 비운다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
-롤에 `CREATEDB` 권한이 필요하고 — **로컬 compose 한정이다**, `PG_TEST_DB`를 개발 DB 이름과 같게
+롤에 `CREATEDB` 권한이 필요하고 — **로컬 compose와 CI(`media-ci`)의 postgres 서비스 컨테이너 둘 다 superuser라 이미 갖고 있다**, `PG_TEST_DB`를 개발 DB 이름과 같게
 주면 테스트가 기동 즉시 실패한다. `PG_DSN`에 DB 이름 자체를 안 적었을 때도 같은데, 단
 `PGDATABASE`가 설정된 환경에서는 그 값이 DB 이름으로 채워져 "이름이 비었다" 가드 대신 동일 이름
 가드가 판정한다).
@@ -230,7 +230,9 @@ go test ./internal/index/ -v
 **`PG_DSN`에는 로컬 compose의 개발 DB만 준다 — 공유·원격·프로덕션 DSN을 주지 않는다.**
 **같은 `PG_TEST_DB`로 두 실행을 동시에 돌리면 서로의 데이터를 지운다 — CI나 병렬 실행에서는
 실행마다 고유한 `PG_TEST_DB`를 주고, 실행이 끝나면 그 DB를 `DROP DATABASE`로 정리한다**(정리 없이
-고유 이름만 늘리면 DB가 무한히 쌓인다). `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지하므로
+고유 이름만 늘리면 DB가 무한히 쌓인다). 이 규약은 **PG를 공유하는 실행이 있을 때** 적용된다 —
+`media-ci`의 postgres는 잡마다 뜨고 함께 사라져 공유가 없다 — 규약을 완화한 것이 아니라 적용
+조건을 드러낸 것이다. `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지하므로
 (`CREATE TABLE IF NOT EXISTS`) `DROP DATABASE pokeclip_uploadtest` 후 다시 돌린다.
 
 `internal/fmp4meta` 테스트는 `testdata/`의 커밋된 파일만 쓰므로 Docker가 꺼져 있어도 돈다.
