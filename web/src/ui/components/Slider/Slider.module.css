@@ -3,7 +3,7 @@
   display: flex;
   align-items: center;
   width: 100%;
-  height: 20px;
+  height: calc(20 * var(--pc-u));
   touch-action: none;
   user-select: none;
 }
@@ -14,7 +14,7 @@
 .track {
   position: relative;
   width: 100%;
-  height: 6px;
+  height: calc(6 * var(--pc-u));
   border-radius: var(--pc-radius-pill);
   background: var(--pc-color-bg-inset);
 }
@@ -27,8 +27,8 @@
 .thumb {
   position: absolute;
   top: 50%;
-  width: 18px;
-  height: 18px;
+  width: calc(18 * var(--pc-u));
+  height: calc(18 * var(--pc-u));
   border-radius: var(--pc-radius-circle);
   background: var(--pc-white);
   border: 2px solid var(--pc-color-accent);

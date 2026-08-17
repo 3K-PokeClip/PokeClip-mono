@@ -12,11 +12,11 @@
 }
 .badge[data-size='sm'] {
   font-size: var(--pc-font-size-2xs);
-  padding: 2px 8px;
+  padding: calc(2 * var(--pc-u)) calc(8 * var(--pc-u));
 }
 .badge[data-size='md'] {
   font-size: var(--pc-font-size-xs);
-  padding: 3px 10px;
+  padding: calc(3 * var(--pc-u)) calc(10 * var(--pc-u));
 }
 .badge[data-tone='neutral'] {
   --_c: var(--pc-color-text-secondary);

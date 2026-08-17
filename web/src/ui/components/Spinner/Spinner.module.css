@@ -10,16 +10,16 @@
   animation: pc-spin 0.6s linear infinite;
 }
 .spinner[data-size='sm'] .circle {
-  width: 14px;
-  height: 14px;
+  width: calc(14 * var(--pc-u));
+  height: calc(14 * var(--pc-u));
 }
 .spinner[data-size='md'] .circle {
-  width: 20px;
-  height: 20px;
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
 }
 .spinner[data-size='lg'] .circle {
-  width: 28px;
-  height: 28px;
+  width: calc(28 * var(--pc-u));
+  height: calc(28 * var(--pc-u));
   border-width: 3px;
 }
 @keyframes pc-spin {

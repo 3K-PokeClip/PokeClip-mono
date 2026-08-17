@@ -13,12 +13,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 64px 48px;
+  padding: calc(64 * var(--pc-u)) calc(48 * var(--pc-u));
 }
 
 .column {
   width: 100%;
-  max-width: 400px;
+  max-width: calc(400 * var(--pc-u));
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -28,23 +28,23 @@
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  gap: 8px;
-  margin-bottom: 64px;
+  gap: calc(8 * var(--pc-u));
+  margin-bottom: calc(64 * var(--pc-u));
 }
 
 .wordmark {
-  font-size: 26px;
+  font-size: calc(26 * var(--pc-u));
   font-weight: 800;
   letter-spacing: -0.02em;
-  line-height: 36px;
+  line-height: calc(36 * var(--pc-u));
 }
 
 .beta {
-  padding: 2px 7px;
-  border-radius: 5px;
+  padding: calc(2 * var(--pc-u)) calc(7 * var(--pc-u));
+  border-radius: calc(5 * var(--pc-u));
   background: var(--pc-color-bg-surface);
   border: 1px solid var(--pc-color-border-subtle);
-  font-size: 10px;
+  font-size: calc(10 * var(--pc-u));
   font-weight: 750;
   letter-spacing: 0.08em;
   color: var(--pc-color-text-muted);
@@ -54,19 +54,19 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 40px;
+  gap: calc(10 * var(--pc-u));
+  margin-bottom: calc(40 * var(--pc-u));
   text-align: center;
 }
 
 .headline {
-  font-size: 20px;
+  font-size: calc(20 * var(--pc-u));
   font-weight: 750;
   letter-spacing: -0.01em;
 }
 
 .subtitle {
-  font-size: 13.5px;
+  font-size: calc(13.5 * var(--pc-u));
   color: var(--pc-color-text-secondary);
 }
 
@@ -75,15 +75,15 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: calc(10 * var(--pc-u));
   width: 100%;
-  height: 52px;
+  height: calc(52 * var(--pc-u));
   border: none;
-  border-radius: 10px;
+  border-radius: calc(10 * var(--pc-u));
   background: #fff;
   color: #1f1f1f;
   font-family: var(--pc-font-sans);
-  font-size: 15px;
+  font-size: calc(15 * var(--pc-u));
   font-weight: 700;
   text-decoration: none;
   cursor: pointer;
@@ -100,8 +100,8 @@
 }
 
 .terms {
-  margin-top: 24px;
-  font-size: 12.5px;
+  margin-top: calc(24 * var(--pc-u));
+  font-size: calc(12.5 * var(--pc-u));
   text-align: center;
   color: var(--pc-color-text-muted);
 }
@@ -126,6 +126,19 @@
 .heroImage {
   object-fit: cover;
   object-position: center;
+}
+
+/* ---------- 아이콘·로고 스케일 ----------
+   next/image·svg의 width 속성은 px 고정이라 CSS로 유닛에 태운다 */
+
+.brand img {
+  width: calc(36 * var(--pc-u));
+  height: calc(36 * var(--pc-u));
+}
+
+.googleButton svg {
+  width: calc(19 * var(--pc-u));
+  height: calc(19 * var(--pc-u));
 }
 
 /* 마플과 같은 1440px 경계 — 이하에서 히어로가 접힌다 */

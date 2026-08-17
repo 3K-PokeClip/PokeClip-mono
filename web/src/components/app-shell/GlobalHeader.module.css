@@ -2,9 +2,9 @@
    본문(ScreenContainer)과 같은 1200px 폭으로 정렬한다. */
 
 .inner {
-  max-width: 1200px;
+  max-width: calc(1200 * var(--pc-u));
   margin: 0 auto;
-  padding: 20px var(--pc-space-5) 0;
+  padding: calc(20 * var(--pc-u)) var(--pc-space-5) 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -14,12 +14,23 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: calc(12 * var(--pc-u));
   color: var(--pc-color-text-primary);
 }
 
+/* next/image·lucide의 width 속성은 px 고정 — 유닛에 태운다 */
+.brand img {
+  width: calc(34 * var(--pc-u));
+  height: calc(34 * var(--pc-u));
+}
+
+.actions svg {
+  width: calc(19 * var(--pc-u));
+  height: calc(19 * var(--pc-u));
+}
+
 .wordmark {
-  font-size: 17px;
+  font-size: calc(17 * var(--pc-u));
   font-weight: 800;
   letter-spacing: -0.02em;
 }
@@ -38,11 +49,11 @@
 /* 읽지 않은 알림 점 — 디자인 1a: 8px point색, canvas 2px 테두리 */
 .unreadDot {
   position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 8px;
-  height: 8px;
-  border-radius: 99px;
+  top: calc(7 * var(--pc-u));
+  right: calc(7 * var(--pc-u));
+  width: calc(8 * var(--pc-u));
+  height: calc(8 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
   background: var(--pc-color-point);
   border: 2px solid var(--pc-color-bg-canvas);
 }

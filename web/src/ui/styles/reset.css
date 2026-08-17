@@ -12,6 +12,10 @@
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  /* 뷰포트 비례 스케일 — 1440px 시안에서 1rem = 16px(1:1), 큰 창에서 최대 1.35배.
+     셸의 --pc-shell-u(0.0694vw/px, 상한 1.35)와 같은 곡선: 1.1104vw = 16 × 0.0694.
+     경계를 px가 아닌 rem으로 둬서 브라우저 글꼴 크기 설정(접근성)을 존중한다. */
+  font-size: clamp(1rem, 1.1104vw, 1.35rem);
 }
 
 body {

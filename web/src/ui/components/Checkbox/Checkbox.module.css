@@ -23,8 +23,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
   flex-shrink: 0;
   border: 1.5px solid var(--pc-color-border-strong);
   border-radius: var(--pc-radius-sm);
@@ -35,17 +35,17 @@
     border-color var(--pc-duration-fast) var(--pc-ease-standard);
 }
 .box svg {
-  width: 14px;
-  height: 14px;
+  width: calc(14 * var(--pc-u));
+  height: calc(14 * var(--pc-u));
   opacity: 0;
 }
 .root[data-size='sm'] .box {
-  width: 16px;
-  height: 16px;
+  width: calc(16 * var(--pc-u));
+  height: calc(16 * var(--pc-u));
 }
 .root[data-size='sm'] .box svg {
-  width: 11px;
-  height: 11px;
+  width: calc(11 * var(--pc-u));
+  height: calc(11 * var(--pc-u));
 }
 .input:checked + .box,
 .input:indeterminate + .box {

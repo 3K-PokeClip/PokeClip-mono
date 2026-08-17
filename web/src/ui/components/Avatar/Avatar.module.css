@@ -17,29 +17,29 @@
   object-fit: cover;
 }
 .avatar[data-size='xs'] {
-  width: 24px;
-  height: 24px;
-  font-size: 10px;
+  width: calc(24 * var(--pc-u));
+  height: calc(24 * var(--pc-u));
+  font-size: calc(10 * var(--pc-u));
 }
 .avatar[data-size='sm'] {
-  width: 32px;
-  height: 32px;
-  font-size: 12px;
+  width: calc(32 * var(--pc-u));
+  height: calc(32 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
 }
 .avatar[data-size='md'] {
-  width: 40px;
-  height: 40px;
-  font-size: 14px;
+  width: calc(40 * var(--pc-u));
+  height: calc(40 * var(--pc-u));
+  font-size: calc(14 * var(--pc-u));
 }
 .avatar[data-size='lg'] {
-  width: 56px;
-  height: 56px;
-  font-size: 18px;
+  width: calc(56 * var(--pc-u));
+  height: calc(56 * var(--pc-u));
+  font-size: calc(18 * var(--pc-u));
 }
 .avatar[data-size='xl'] {
-  width: 80px;
-  height: 80px;
-  font-size: 26px;
+  width: calc(80 * var(--pc-u));
+  height: calc(80 * var(--pc-u));
+  font-size: calc(26 * var(--pc-u));
 }
 
 .group {
@@ -47,7 +47,7 @@
   align-items: center;
 }
 .group > * {
-  margin-inline-start: -8px;
+  margin-inline-start: calc(-8 * var(--pc-u));
   box-shadow: 0 0 0 2px var(--pc-color-bg-canvas);
 }
 .group > *:first-child {

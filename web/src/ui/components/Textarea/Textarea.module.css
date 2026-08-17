@@ -1,6 +1,6 @@
 .textarea {
   width: 100%;
-  min-height: 88px;
+  min-height: calc(88 * var(--pc-u));
   padding: var(--pc-space-2) var(--pc-space-3);
   background: var(--pc-color-bg-inset);
   color: var(--pc-color-text-primary);

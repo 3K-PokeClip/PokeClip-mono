@@ -2,6 +2,9 @@
 :root {
   --pc-space-0: 0;
   --pc-space-px: 1px;
+  /* 콘텐츠 스케일 유닛 — 시안 1px. 루트 font-size clamp(reset.css)를 타고 창 폭에 비례한다.
+     실치수는 calc(N * var(--pc-u))로 쓰고, 1px 보더 같은 헤어라인은 px 유지(굵어지면 띠로 보인다). */
+  --pc-u: 0.0625rem;
   --pc-space-0-5: 0.125rem; /* 2 */
   --pc-space-1: 0.25rem; /* 4 */
   --pc-space-2: 0.5rem; /* 8 */

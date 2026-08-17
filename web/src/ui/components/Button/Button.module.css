@@ -3,7 +3,7 @@
   align-items: center;
   justify-content: center;
   gap: var(--pc-space-2);
-  height: 40px;
+  height: calc(40 * var(--pc-u));
   padding-inline: var(--pc-space-4);
   border: 1px solid transparent;
   border-radius: var(--pc-radius-md);
@@ -35,12 +35,12 @@
 
 /* sizes */
 .button[data-size='sm'] {
-  height: 32px;
+  height: calc(32 * var(--pc-u));
   padding-inline: var(--pc-space-3);
   font-size: var(--pc-font-size-sm);
 }
 .button[data-size='lg'] {
-  height: 48px;
+  height: calc(48 * var(--pc-u));
   padding-inline: var(--pc-space-5);
   font-size: var(--pc-font-size-lg);
 }
@@ -51,13 +51,13 @@
   aspect-ratio: 1;
 }
 .button[data-icon-only][data-size='sm'] {
-  width: 32px;
+  width: calc(32 * var(--pc-u));
 }
 .button[data-icon-only][data-size='md'] {
-  width: 40px;
+  width: calc(40 * var(--pc-u));
 }
 .button[data-icon-only][data-size='lg'] {
-  width: 48px;
+  width: calc(48 * var(--pc-u));
 }
 
 /* variants */
