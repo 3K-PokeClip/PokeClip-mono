@@ -14,10 +14,20 @@ package mtxhook
 // 상수 mediaRuntimeUser 하나가 진실원이다. 파일을 못 읽으면 skip 이 아니라 Fatal 이고
 // 매치가 1건이 아니어도 Fatal 이다 — 조용히 통과하면 이 장치가 없는 것과 같다
 // (version_contract_test.go 와 같은 관례. readDockerfile 도 그 파일 것을 그대로 쓴다).
+//
+// 판정은 **구조를 보고** 한다. 문자열만 훑으면 Dockerfile 의 스테이지 경계도 YAML 의 부모 키도
+// 모르는데, 바로 그 두 가지가 이 장치를 실제로 뚫었다(둘 다 실측) — 최종 스테이지를 하나
+// 덧붙이면 단언이 전부 초록불인데 이미지는 root 로 돌고, `command:` 밑에 같은 문자열을 적어
+// 두면 플래그도 마운트도 없이 통과한다. 그래서 Dockerfile 은 **최종 스테이지만** 보고,
+// compose 는 **부모 키 소속**을 확인한 뒤 판정한다. 그러면서도 YAML 파서는 끌어오지 않는다 —
+// 한 줄 대조에 의존을 늘리지 않는다는 이 패키지의 관례를 지킨다.
 
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -33,6 +43,11 @@ const mediaRuntimeUser = "10002:10002"
 // 스테이지 이름을 바꾸면 여기도 같이 고친다 — 이름이 어긋나면 COPY 가 빌드 컨텍스트에서
 // 복사하려 들어 의도와 다른 것이 들어간다.
 const volumeOwnerStage = "prep"
+
+// volumeOwnerSrcRoot 는 그 스테이지가 빈 디렉토리를 만들어 두는 뿌리다(`mkdir -p /prep/...`).
+// COPY 의 소스가 여기 밑이 아니면 볼륨 자리에 엉뚱한 것이 들어간다 — 예컨대 파일 하나를
+// 복사하면 `/recordings` 가 디렉토리가 아니라 **파일**이 되어 마운트·기동이 깨진다.
+const volumeOwnerSrcRoot = "/" + volumeOwnerStage
 
 // composeRel 은 저장소 루트 기준 상대 경로다. cmd/mtxhookwrite/contract_test.go 와 같은 관례.
 const composeRel = "../../../docker-compose.yml"
@@ -64,28 +79,26 @@ K8s 로 이행하면 파드 레벨 fsGroup 이 같은 일을 하므로 소유권
 `
 
 // 1. 이미지가 볼륨 소유권을 나른다 — 빈 디렉토리 3종이 10002 소유로 최종 이미지에 들어간다.
+// 판정은 최종 스테이지 한정이다. 앞 스테이지의 COPY 는 최종 이미지에 남지 않는다.
 func TestMediaImageCarriesVolumeOwnershipForEachVolumeDir(t *testing.T) {
-	lines := activeDockerfileLines(readDockerfile(t))
+	lines := finalStageLines(readDockerfile(t))
 
 	for dir := range ownedVolumeDirs {
 		if got := countVolumeOwnerCopies(lines, dir); got != 1 {
-			t.Errorf("%s 에 `COPY --chown=%s --from=%s ... %s` 가 %d 곳이다(기대 1곳).\n%s",
-				dockerfileRel, mediaRuntimeUser, volumeOwnerStage, dir, got, runtimeIdentityGuide)
+			t.Errorf("%s 의 최종 스테이지에 `COPY --chown=%s --from=%s %s %s` 가 %d 곳이다(기대 1곳).\n%s",
+				dockerfileRel, mediaRuntimeUser, volumeOwnerStage, volumeOwnerSrcRoot+dir, dir, got,
+				runtimeIdentityGuide)
 		}
 	}
 }
 
-// 2. 이미지가 비특권 계정으로 돈다 — 실행 계정의 정본은 이 USER 한 줄이다.
+// 2. 이미지가 비특권 계정으로 돈다 — 실행 계정의 정본은 최종 스테이지의 USER 한 줄이다.
 func TestMediaImageRunsAsNonRootUser(t *testing.T) {
-	var users []string
-	for _, fields := range activeDockerfileLines(readDockerfile(t)) {
-		if strings.EqualFold(fields[0], "USER") && len(fields) >= 2 {
-			users = append(users, fields[1])
-		}
-	}
+	users := usersIn(finalStageLines(readDockerfile(t)))
 
 	if len(users) != 1 {
-		t.Fatalf("%s 의 USER 가 %d 곳이다(%q) — 실행 계정의 정본이 하나여야 한다.\n%s",
+		t.Fatalf("%s 의 최종 스테이지에 USER 가 %d 곳이다(%q) — 실행 계정의 정본이 하나여야 한다. "+
+			"앞 스테이지의 USER 는 최종 이미지가 물려받지 않으므로 여기서 0곳이면 root 로 돈다.\n%s",
 			dockerfileRel, len(users), users, runtimeIdentityGuide)
 	}
 	if users[0] != mediaRuntimeUser {
@@ -99,26 +112,26 @@ func TestMediaImageRunsAsNonRootUser(t *testing.T) {
 func TestComposeMediaServiceHasNoNewPrivileges(t *testing.T) {
 	block := activeYAMLLines(mediaServiceBlock(t, readCompose(t)))
 
-	if !containsTrimmed(block, "security_opt:") {
-		t.Fatalf("docker-compose.yml 의 media 서비스에 security_opt 가 없다 — "+
+	opts, found := serviceSequenceItems(block, "security_opt")
+	if !found {
+		t.Fatalf("docker-compose.yml 의 media 서비스에 security_opt 가 없다(서비스의 직속 키여야 한다) — "+
 			"비특권 전환과 한 덩어리일 때만 의미가 있는 플래그다.\n%s", runtimeIdentityGuide)
 	}
-	if !containsTrimmed(block, "- no-new-privileges:true") {
+	if !slices.Contains(opts, "no-new-privileges:true") {
 		t.Errorf("docker-compose.yml 의 media 서비스 security_opt 에 no-new-privileges:true 가 없다 "+
-			"(사이드카에는 있다 — 비대칭이 되돌아왔다).\n%s", runtimeIdentityGuide)
+			"(security_opt 항목 = %q. 사이드카에는 있다 — 비대칭이 되돌아왔다).\n%s",
+			opts, runtimeIdentityGuide)
 	}
 }
 
 // 4. 복사 금지 옵션 봉인 — 붙는 순간 소유권 복사가 끊겨 이 해법이 **조용히** 무력화된다.
 func TestComposeHasNoVolumeNocopyOption(t *testing.T) {
-	for _, line := range activeYAMLLines(readCompose(t)) {
-		if strings.Contains(line, nocopyOption) {
-			t.Errorf("docker-compose.yml 의 활성 YAML 에 %q 가 있다: %q — "+
-				"붙는 순간 이미지에 심은 소유권 복사가 끊겨 비root 쓰기가 조용히 실패한다. "+
-				"검사 대상은 이 파일 하나뿐이며, docker-compose.override.yml 은 gitignore 라 "+
-				"검사할 수 없다(그쪽에도 넣지 마라).\n%s",
-				nocopyOption, strings.TrimSpace(line), runtimeIdentityGuide)
-		}
+	for _, line := range nocopyLines(activeYAMLLines(readCompose(t))) {
+		t.Errorf("docker-compose.yml 의 활성 YAML 에 %q 가 있다: %q — "+
+			"붙는 순간 이미지에 심은 소유권 복사가 끊겨 비root 쓰기가 조용히 실패한다. "+
+			"검사 대상은 이 파일 하나뿐이며, docker-compose.override.yml 은 gitignore 라 "+
+			"검사할 수 없다(그쪽에도 넣지 마라).\n%s",
+			nocopyOption, strings.TrimSpace(line), runtimeIdentityGuide)
 	}
 }
 
@@ -126,15 +139,86 @@ func TestComposeHasNoVolumeNocopyOption(t *testing.T) {
 // (read_only: true 대신 오설정 자체를 직접 잡는 단언이다 — ADR-0003 결정 7번)
 func TestComposeMediaServiceMountsOwnedVolumes(t *testing.T) {
 	block := activeYAMLLines(mediaServiceBlock(t, readCompose(t)))
+	mounts, _ := serviceSequenceItems(block, "volumes")
 
 	for dir, name := range ownedVolumeDirs {
-		mount := "- " + name + ":" + dir
-		if !containsTrimmed(block, mount) {
-			t.Errorf("docker-compose.yml 의 media 서비스에 %q 마운트가 없다 — "+
+		mount := name + ":" + dir
+		if !slices.Contains(mounts, mount) {
+			t.Errorf("docker-compose.yml 의 media 서비스 volumes 에 %q 가 없다 — "+
 				"소유권을 심어 둔 경로가 볼륨으로 붙지 않으면 컨테이너 레이어에 쓰고 사라진다.\n%s",
-				mount, runtimeIdentityGuide)
+				"- "+mount, runtimeIdentityGuide)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 뚫렸던 입력 회귀
+// ---------------------------------------------------------------------------
+
+// 아래 4종은 이 장치가 실제로 **통과시켰던** 입력이다(POK-79 코드 검수 A~D 재현).
+// 위 5단언은 실물 파일을 읽으므로 재현 입력을 담을 수 없다 — 그래서 헬퍼에 직접 먹여
+// 판정만 대조한다. 정밀도가 다시 물러지면 실물이 깨지기 전에 여기서 먼저 빨간불이 된다.
+func TestDockerfileContractRejectsKnownBypasses(t *testing.T) {
+	t.Run("최종 스테이지를 덧붙이면 앞 스테이지의 USER·소유권은 최종 이미지에 없다", func(t *testing.T) {
+		const dockerfile = `FROM bluenviron/mediamtx:1.19.3
+COPY --chown=10002:10002 --from=prep /prep/recordings /recordings
+USER 10002:10002
+
+FROM pokeclip-media-base
+COPY --from=build /out/mtxhookwrite /hooks-bin/mtxhookwrite
+`
+		stage := finalStageLines(dockerfile)
+
+		if got := countVolumeOwnerCopies(stage, "/recordings"); got != 0 {
+			t.Errorf("최종 스테이지의 소유권 COPY = %d 곳(기대 0곳) — 스테이지 경계를 보지 않는다.", got)
+		}
+		if got := usersIn(stage); len(got) != 0 {
+			t.Errorf("최종 스테이지의 USER = %q(기대 없음) — 스테이지 경계를 보지 않는다.", got)
+		}
+	})
+
+	t.Run("소스가 디렉토리가 아닌 파일이면 소유권 COPY 로 세지 않는다", func(t *testing.T) {
+		const dockerfile = `FROM bluenviron/mediamtx:1.19.3
+COPY --chown=10002:10002 --from=prep /etc/alpine-release /recordings
+`
+		if got := countVolumeOwnerCopies(finalStageLines(dockerfile), "/recordings"); got != 0 {
+			t.Errorf("소유권 COPY = %d 곳(기대 0곳) — 소스를 보지 않으면 /recordings 가 파일이 된다.", got)
+		}
+	})
+}
+
+// compose 쪽 재현 입력. 위 함수와 같은 취지이고 보는 파일만 다르다.
+func TestComposeContractRejectsKnownBypasses(t *testing.T) {
+	t.Run("엉뚱한 부모 키 밑의 항목은 그 키의 것이 아니다", func(t *testing.T) {
+		const serviceBlock = `    security_opt:
+      - seccomp=unconfined
+    command:
+      - no-new-privileges:true
+      - recordings:/recordings
+`
+		block := activeYAMLLines(serviceBlock)
+
+		opts, found := serviceSequenceItems(block, "security_opt")
+		if !found {
+			t.Fatal("security_opt 를 찾지 못했다 — 재현 입력이 아니라 헬퍼가 깨졌다.")
+		}
+		if slices.Contains(opts, "no-new-privileges:true") {
+			t.Errorf("command: 밑의 항목을 security_opt 의 것으로 셌다(%q).", opts)
+		}
+		mounts, _ := serviceSequenceItems(block, "volumes")
+		if slices.Contains(mounts, "recordings:/recordings") {
+			t.Errorf("command: 밑의 항목을 volumes 의 것으로 셌다(%q).", mounts)
+		}
+	})
+
+	t.Run("큰따옴표 이스케이프로 적은 복사 금지 옵션도 잡는다", func(t *testing.T) {
+		const composeFragment = `        volume:
+          "no\u0063opy": true
+`
+		if got := nocopyLines(activeYAMLLines(composeFragment)); len(got) != 1 {
+			t.Errorf("적발 = %d 줄(기대 1줄) — compose 는 이 표기를 nocopy 로 읽는다.", len(got))
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -170,23 +254,77 @@ func activeDockerfileLines(dockerfile string) [][]string {
 	return lines
 }
 
+// finalStageLines 는 **최종 스테이지**의 명령 줄만 돌려준다 — FROM 을 만날 때마다 앞의 것을 버린다.
+//
+// 평평한 줄 목록으로 보면 스테이지 경계를 모른다. 현행 USER 뒤에 스테이지를 하나 덧붙이면
+// 단언이 전부 초록불인데 최종 이미지는 root 로 돈다(실측) — 최종 이미지는 마지막 FROM 의 것이고
+// USER·소유권 디렉토리는 거기로 상속되지 않기 때문이다. 스모크로도 안 잡힌다: root 는 10002
+// 소유 볼륨에 그대로 쓰므로 녹화·훅·인덱싱이 전부 정상이고 보안 자세만 조용히 사라진다.
+//
+// 앞 스테이지를 FROM 하는 refactor(그때는 실제로 상속된다)에서는 이 판정이 오탐이 된다.
+// 그래도 그렇게 둔다 — 조용한 통과보다 시끄러운 오탐이 낫다는 이 파일의 관례다.
+func finalStageLines(dockerfile string) [][]string {
+	var stage [][]string
+	for _, fields := range activeDockerfileLines(dockerfile) {
+		if strings.EqualFold(fields[0], "FROM") {
+			stage = nil
+			continue
+		}
+		stage = append(stage, fields)
+	}
+	return stage
+}
+
+// usersIn 은 주어진 스테이지에 적힌 USER 의 인자들이다.
+func usersIn(lines [][]string) []string {
+	var users []string
+	for _, fields := range lines {
+		if strings.EqualFold(fields[0], "USER") && len(fields) >= 2 {
+			users = append(users, fields[1])
+		}
+	}
+	return users
+}
+
 // countVolumeOwnerCopies 는 dir 로 소유권을 나르는 COPY 가 몇 줄인지 센다.
+//
 // --chown 과 --from 을 둘 다 요구한다 — --from 이 빠지면 빌드 컨텍스트에서 복사하게 되고,
 // --chown 이 빠지면 root 소유로 들어가 볼륨이 root:root 가 된다.
+// 소스 경로도 대조한다: 목적지만 보면 `--from=prep /etc/alpine-release /recordings` 도
+// 통과하는데, 그러면 /recordings 가 디렉토리가 아닌 **파일**이 되어 마운트·기동이 깨진다.
 func countVolumeOwnerCopies(lines [][]string, dir string) int {
 	chown := "--chown=" + mediaRuntimeUser
 	from := "--from=" + volumeOwnerStage
+	src := volumeOwnerSrcRoot + dir
 
 	count := 0
 	for _, fields := range lines {
-		if !strings.EqualFold(fields[0], "COPY") || fields[len(fields)-1] != dir {
+		if !strings.EqualFold(fields[0], "COPY") {
 			continue
 		}
-		if hasField(fields, chown) && hasField(fields, from) {
+		if !hasField(fields, chown) || !hasField(fields, from) {
+			continue
+		}
+		// 소스 1개 + 목적지 1개만 인정한다. 소스가 여럿이면 목적지가 디렉토리여야 하는 등
+		// 규칙이 달라져, 한 줄이 무엇을 심는지 이 대조로는 더 이상 단정할 수 없다.
+		if operands := copyOperands(fields); len(operands) == 2 &&
+			operands[0] == src && operands[1] == dir {
 			count++
 		}
 	}
 	return count
+}
+
+// copyOperands 는 COPY 줄에서 명령어와 --플래그를 뺀 소스·목적지만 남긴다.
+func copyOperands(fields []string) []string {
+	var operands []string
+	for _, f := range fields[1:] {
+		if strings.HasPrefix(f, "--") {
+			continue
+		}
+		operands = append(operands, f)
+	}
+	return operands
 }
 
 // activeYAMLLines 는 판정 대상이 되는 "활성 YAML" 줄만 남긴다.
@@ -253,14 +391,79 @@ func indentOf(line string) int {
 	return len(line) - len(strings.TrimLeft(line, " "))
 }
 
-// containsTrimmed 는 앞뒤 공백을 뗀 줄이 want 와 정확히 같은 것이 있는지 본다.
-func containsTrimmed(lines []string, want string) bool {
-	for _, line := range lines {
-		if strings.TrimSpace(line) == want {
-			return true
+// serviceSequenceItems 는 서비스 블록의 **직속 키** 밑에 매달린 시퀀스 항목만 돌려준다
+// (`- ` 를 뗀 값). 두 번째 반환값은 그 키가 있었는지다 — 키가 없는 것과 비어 있는 것은
+// 다른 사건이라 호출부가 구분해서 안내할 수 있게 나눠 돌려준다.
+//
+// 평탄 검색이면 부모가 누구든 문자열만 맞으면 통과한다: `command:` 밑에
+// `- no-new-privileges:true` 와 `- recordings:/recordings` 를 적어 두면, 실제로는 플래그도
+// 마운트도 없는데 단언 3·5 가 초록불이 된다(실측). 그래서 들여쓰기로 부모를 판정한다.
+// **직속 키로 좁히는 이유도 같다** — 더 깊은 블록 안의 같은 이름 키가 진짜 자리를 가로채는
+// 것을 막는다. YAML 파서는 여기서도 끌어오지 않는다(mediaServiceBlock 과 같은 이유).
+func serviceSequenceItems(block []string, key string) ([]string, bool) {
+	keyIndent := directChildIndent(block)
+
+	var items []string
+	found := false
+	for _, line := range block {
+		if !found {
+			if indentOf(line) == keyIndent && strings.TrimSpace(line) == key+":" {
+				found = true
+			}
+			continue
+		}
+		if indentOf(line) <= keyIndent {
+			break // 같은 깊이의 다음 키를 만나면 이 키의 블록은 끝났다.
+		}
+		if item, ok := strings.CutPrefix(strings.TrimSpace(line), "- "); ok {
+			items = append(items, strings.TrimSpace(item))
 		}
 	}
-	return false
+	return items, found
+}
+
+// directChildIndent 는 블록에서 가장 얕은 들여쓰기 = 서비스의 직속 자식 키가 놓이는 자리다.
+// activeYAMLLines 를 거친 블록에는 빈 줄이 없으므로 이 최솟값이 곧 그 자리다.
+func directChildIndent(lines []string) int {
+	indent := -1
+	for _, line := range lines {
+		if n := indentOf(line); indent < 0 || n < indent {
+			indent = n
+		}
+	}
+	return indent
+}
+
+// nocopyLines 는 복사 금지 옵션이 보이는 줄을 원문 그대로 돌려준다(사람이 자기가 쓴 줄을
+// 그대로 봐야 고칠 수 있으므로 정규화한 문자열이 아니라 원문을 남긴다).
+func nocopyLines(lines []string) []string {
+	var hits []string
+	for _, line := range lines {
+		if strings.Contains(normalizedYAMLText(line), nocopyOption) {
+			hits = append(hits, line)
+		}
+	}
+	return hits
+}
+
+// yamlCharEscape 는 큰따옴표 스칼라 안에서 한 글자를 코드로 적는 표기다(`\u0063` = c).
+var yamlCharEscape = regexp.MustCompile(`\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}`)
+
+// normalizedYAMLText 는 대조 전에 줄을 눕힌다 — 대소문자를 내리고 큰따옴표 스칼라의 문자
+// 이스케이프를 되돌린다. 원문 그대로 찾으면 `"no\u0063opy": true` 가 그물을 빠져나가는데,
+// compose 는 그것을 nocopy 로 읽는다.
+//
+// 완전한 YAML 파싱이 목표가 아니다 — 앵커·병합 키 같은 우회까지는 못 잡는다.
+// 목표는 **실수로 적어 넣은 표기**를 잡는 것이고, 그 이상은 의존을 늘리지 않는다는 관례에 어긋난다.
+func normalizedYAMLText(line string) string {
+	decoded := yamlCharEscape.ReplaceAllStringFunc(line, func(esc string) string {
+		code, err := strconv.ParseUint(esc[2:], 16, 32)
+		if err != nil {
+			return esc
+		}
+		return string(rune(code))
+	})
+	return strings.ToLower(decoded)
 }
 
 // hasField 는 명령 줄의 필드 중 want 와 정확히 같은 것이 있는지 본다.
