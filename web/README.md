@@ -6,13 +6,13 @@
 
 편집자가 매일 여는 화면. React · TypeScript.
 
-| 화면 | 내용 |
-|---|---|
-| 라이브 뷰 | 방송을 실시간으로 보면서 되감는다 (hls.js LL-HLS + DVR 시크바) |
-| 점프카드 | 하이라이트 후보가 실시간으로 뜬다 |
-| 에디터 | 구간 지정 · 화면 비율 · 오디오 트랙 선택 · 자막 |
-| 보관함 | 만든 클립 목록 · 승인 · VOD |
-| 온보딩/설정 | 스트림 키 발급 · 채널 연동 |
+| 화면        | 내용                                                           |
+| ----------- | -------------------------------------------------------------- |
+| 라이브 뷰   | 방송을 실시간으로 보면서 되감는다 (hls.js LL-HLS + DVR 시크바) |
+| 점프카드    | 하이라이트 후보가 실시간으로 뜬다                              |
+| 에디터      | 구간 지정 · 화면 비율 · 오디오 트랙 선택 · 자막                |
+| 보관함      | 만든 클립 목록 · 승인 · VOD                                    |
+| 온보딩/설정 | 스트림 키 발급 · 채널 연동                                     |
 
 ## 시작하기
 
@@ -26,14 +26,14 @@ cp .env.example .env.local   # 최초 1회 — 값은 로컬 기본값 그대로
 pnpm dev                     # http://localhost:3000 → /home 으로 리다이렉트
 ```
 
-| 명령 | 설명 |
-| --- | --- |
-| `pnpm dev` | `next dev` |
-| `pnpm build` | `next build` (타입 체크 포함) — CI와 동일 |
-| `pnpm lint` / `pnpm typecheck` / `pnpm test` | ESLint(flat config) / 타입 체크 / Vitest |
-| `pnpm storybook` | DS Storybook (port 6006) |
-| `pnpm build-storybook` | Storybook 정적 빌드 |
-| `pnpm format` / `pnpm format:check` | Prettier 적용 / 검사 |
+| 명령                                         | 설명                                      |
+| -------------------------------------------- | ----------------------------------------- |
+| `pnpm dev`                                   | `next dev`                                |
+| `pnpm build`                                 | `next build` (타입 체크 포함) — CI와 동일 |
+| `pnpm lint` / `pnpm typecheck` / `pnpm test` | ESLint(flat config) / 타입 체크 / Vitest  |
+| `pnpm storybook`                             | DS Storybook (port 6006)                  |
+| `pnpm build-storybook`                       | Storybook 정적 빌드                       |
+| `pnpm format` / `pnpm format:check`          | Prettier 적용 / 검사                      |
 
 ## 구조
 
@@ -50,15 +50,15 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 
 ### 앱 폴더 컨벤션 (`src/`)
 
-| 폴더 | 역할 |
-| --- | --- |
-| `app/` | 라우트. **페이지는 얇게** — 화면 본문은 `features/`에 두고 페이지는 조립만 한다 |
-| `app/api/**/route.ts` | Next 서버 핸들러 (패턴 앵커: `app/api/ping/route.ts`) |
-| `features/<도메인>/` | 도메인별 화면·훅·스토어 (예: `features/live/`, `features/clips/`) |
-| `components/` | 도메인을 넘어 재사용하는 공용 UI (예: `components/app-shell/`) |
-| `lib/` | 공용 유틸·설정 (도메인 무관) |
-| `api/` | 백엔드 API 클라이언트 계층 (fetcher·쿼리 정의) |
-| `stores/` | 전역 클라이언트 상태 (Zustand — 서버 데이터는 TanStack Query가 담당) |
+| 폴더                  | 역할                                                                            |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `app/`                | 라우트. **페이지는 얇게** — 화면 본문은 `features/`에 두고 페이지는 조립만 한다 |
+| `app/api/**/route.ts` | Next 서버 핸들러 (패턴 앵커: `app/api/ping/route.ts`)                           |
+| `features/<도메인>/`  | 도메인별 화면·훅·스토어 (예: `features/live/`, `features/clips/`)               |
+| `components/`         | 도메인을 넘어 재사용하는 공용 UI (예: `components/app-shell/`)                  |
+| `lib/`                | 공용 유틸·설정 (도메인 무관)                                                    |
+| `api/`                | 백엔드 API 클라이언트 계층 (fetcher·쿼리 정의)                                  |
+| `stores/`             | 전역 클라이언트 상태 (Zustand — 서버 데이터는 TanStack Query가 담당)            |
 
 **새 코드는 어디에 만드는가:**
 
@@ -69,22 +69,24 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 
 ### 라우트 맵
 
-| 경로 | 내용 |
-| --- | --- |
-| `/` | `/home` 리다이렉트 (인증 도입 시 진입 로직 교체 예정) |
-| `/login` | 로그인 진입 (셸 없음 — 인증 가드는 별도 티켓) |
-| `/home` `/live` `/clips` `/settings` | 독 4개 — `(dock)` 그룹 공유 셸(전역 헤더 + 하단 Dock) |
-| `/dev` | 개발용 데모 (테마 전환 · Zustand 카운터 · TanStack Query 예시) |
-| `/api/ping` | 서버 핸들러 앵커 |
+| 경로                                 | 내용                                                           |
+| ------------------------------------ | -------------------------------------------------------------- |
+| `/`                                  | `/home` 리다이렉트 — 세션 분기는 `(dock)`의 AuthGuard가 한다   |
+| `/login`                             | 로그인 진입 (셸 없음) — 세션이 있으면 `/home`으로 역가드       |
+| `/auth/callback`                     | 구글 OAuth 복귀 — code를 토큰으로 교환 (백엔드 redirect_uri)   |
+| `/home` `/live` `/clips` `/settings` | 독 4개 — `(dock)` 그룹 공유 셸(AuthGuard + 하단 Dock)          |
+| `/dev`                               | 개발용 데모 (테마 전환 · Zustand 카운터 · TanStack Query 예시) |
+| `/api/ping`                          | 서버 핸들러 앵커                                               |
 
 ### 환경변수 (`.env.example` → `.env.local`)
 
-| 변수 | 값(로컬) | 용도 |
-| --- | --- | --- |
-| `AUTH_API_URL` | `http://localhost:8082` | auth 서버 — `/api/auth/*` rewrites 프록시 대상 |
-| `CLIP_API_URL` | `http://localhost:8081` | clip 서버 — `/api/clip/*` rewrites 프록시 대상 |
-| `NEXT_PUBLIC_MEDIA_STUB_URL` | 스텁 m3u8 주소 | 플레이어 개발용 정적 세그먼트 ([`infra/compose/stub/`](../infra/compose/stub/)) |
-| `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL` | LL-HLS 베이스 | 진짜 미디어 서버 (`{base}/{streamId}/index.m3u8`) |
+| 변수                              | 값(로컬)                 | 용도                                                                            |
+| --------------------------------- | ------------------------ | ------------------------------------------------------------------------------- |
+| `AUTH_API_URL`                    | `http://localhost:8082`  | auth 서버 — `/api/auth/*` rewrites 프록시 대상                                  |
+| `CLIP_API_URL`                    | `http://localhost:8081`  | clip 서버 — `/api/clip/*` rewrites 프록시 대상                                  |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`    | 구글 OAuth 클라이언트 ID | 로그인 동의 URL 조립 — 백엔드 `GOOGLE_CLIENT_ID`와 같은 값                      |
+| `NEXT_PUBLIC_MEDIA_STUB_URL`      | 스텁 m3u8 주소           | 플레이어 개발용 정적 세그먼트 ([`infra/compose/stub/`](../infra/compose/stub/)) |
+| `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL` | LL-HLS 베이스            | 진짜 미디어 서버 (`{base}/{streamId}/index.m3u8`)                               |
 
 서버 주소는 **코드에 하드코딩하지 않는다** — env 참조만. 백엔드 서버가 안 떠 있어도
 rewrites는 env가 있을 때만 걸리므로 앱 기동에는 지장이 없다. 백엔드 로컬 기동은
