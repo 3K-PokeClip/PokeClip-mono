@@ -25,12 +25,12 @@ interface Item {
   href?: string; // 없으면 비활성 — 각 하위 티켓에서 라우트가 생기면 href를 추가한다
 }
 
-// IA v5.7 설정 메뉴. 플러그인만 라우팅됨 (POK-100 범위) — 나머지는 별도 티켓.
+// IA v5.7 설정 메뉴. 채널 연동(POK-112)·플러그인(POK-100)만 라우팅됨 — 나머지는 별도 티켓.
 const GROUPS: { title: string; items: Item[] }[] = [
   {
     title: '채널 · 협업자',
     items: [
-      { key: 'link', label: '채널 연동', Icon: Link2 },
+      { key: 'link', label: '채널 연동', Icon: Link2, href: '/settings/channels' },
       { key: 'editors', label: '편집자 관리', Icon: Users },
     ],
   },

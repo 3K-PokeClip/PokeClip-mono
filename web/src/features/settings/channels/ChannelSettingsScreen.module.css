@@ -1,0 +1,81 @@
+.screen {
+  max-width: calc(860 * var(--pc-u));
+}
+
+/* 디자인 1k 섹션 제목 */
+.sectionTitle {
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+  margin: 0 0 calc(10 * var(--pc-u));
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: calc(10 * var(--pc-u));
+}
+
+/* 디자인 1k 채널 행 카드 규격 */
+.row {
+  display: flex;
+  align-items: center;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(15 * var(--pc-u)) calc(16 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+}
+
+.channelIcon {
+  width: calc(40 * var(--pc-u));
+  height: calc(40 * var(--pc-u));
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: calc(11 * var(--pc-u));
+}
+
+.chzzkIcon {
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-muted);
+}
+
+/* lucide size prop은 px 고정 — 유닛에 태운다 */
+.chzzkIcon svg {
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
+}
+
+/* SOOP 로고는 흰 타일 위 브랜드 블루 (디자인 1k 그대로) */
+.soopIcon {
+  background: #fff;
+}
+
+.soopIcon svg {
+  width: calc(30 * var(--pc-u));
+  height: calc(17 * var(--pc-u));
+}
+
+.rowBody {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.rowTitleRow {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+.rowName {
+  font-size: calc(13.5 * var(--pc-u));
+  font-weight: 700;
+}
+
+.rowMeta {
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  margin-top: calc(2 * var(--pc-u));
+}
