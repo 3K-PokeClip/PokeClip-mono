@@ -1,4 +1,5 @@
 import '@/ui/styles/global.css';
+import './shell.css';
 
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';

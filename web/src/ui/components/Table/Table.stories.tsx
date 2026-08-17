@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { useState } from 'react';
 import { Table, type SortDirection } from './Table';
-import { Badge } from './Badge';
+import { Badge } from '../Badge';
 
 const meta: Meta = { title: 'Components/Table', parameters: { layout: 'padded' } };
 export default meta;

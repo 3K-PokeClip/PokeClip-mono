@@ -1,0 +1,96 @@
+/* 앱 셸(사이드바·독) 크기 배율 — 화면이 넓어지면 셸도 같이 커진다.
+ *
+ * 디자인 원본이 1440px 프레임이라 그 폭에서 1단위 = 1px이 되게 잡았다 (0.0694vw = 1440px의 1px).
+ * 셸 치수는 `calc(<디자인 px 값> * var(--pc-shell-u))`로 쓴다.
+ *
+ * 순수 %/vw 대신 clamp로 아래위를 묶은 이유:
+ *   - 하한이 없으면 1280px 노트북에서 사이드바가 217px로 줄어 "도움말 · 문의" 라벨이 깨진다.
+ *   - 상한이 없으면 2560px에서 사이드바가 435px까지 벌어져 항목 7개짜리 메뉴가 우스워진다.
+ * 배율을 조정하려면 최댓값(1.35 = 최대 1.35배)만 바꾸면 셸 전체가 함께 움직인다. */
+:root {
+  --pc-shell-u: clamp(1px, 0.0694vw, 1.35px);
+}
+
+/* ---------- 독 탭 전환 ----------
+ *
+ * 뷰 트랜지션 의사요소는 문서 루트에 달리므로 CSS 모듈이 아니라 여기에 둔다.
+ * 짝이 되는 코드: 방향 = components/app-shell/dockTransition.ts,
+ *                 화면 래퍼 = ScreenTransition.tsx, 알약 = Dock.tsx.
+ *
+ * 시간은 전부 --pc-duration-* 토큰이다 (ui/styles/primitives/motion.css).
+ * 그 토큰이 prefers-reduced-motion에서 0ms로 떨어지므로 감소 모션 대응이 함께 따라온다. */
+
+/* 전환 중 오버레이가 클릭을 삼키지 않게 한다 — 독을 연타해도 반응해야 한다 */
+::view-transition {
+  pointer-events: none;
+}
+
+/* 독과 배경은 root 스냅샷에 실린다. root는 이동하지 않으므로 (슬라이드는 이름이 따로 붙은
+   화면 콘텐츠에만 걸린다) 페이드만 지우면 독이 제자리에 고정된 것처럼 보인다.
+   옛 스냅샷을 지우는 건 새 독과 겹쳐 잔상이 생기는 걸 막기 위해서다.
+
+   독에 view-transition-name을 주지 않는 이유: 이름이 붙은 요소는 전환 동안 히트 테스팅에서
+   빠진다. 그러면 마우스를 올려둔 채 탭을 눌렀을 때 :hover가 풀려 라벨이 접혔다 되돌아온다. */
+::view-transition-group(root) {
+  animation: none;
+}
+::view-transition-old(root) {
+  display: none;
+}
+::view-transition-new(root) {
+  animation: none;
+}
+
+/* 활성 알약 — 옛 탭 자리에서 새 탭 자리까지 미끄러진다. 독보다 위에 그린다. */
+::view-transition-group(pc-dock-pill) {
+  animation-duration: var(--pc-duration-slow);
+  animation-timing-function: var(--pc-ease-emphasized);
+  z-index: 101;
+}
+
+/* 화면 슬라이드 — 나가는 쪽은 빠르게 비우고, 들어오는 쪽은 그 뒤에 부드럽게 채운다.
+   이동(slide)은 페이드보다 길게 끌어 두 화면이 같은 궤도를 타는 것처럼 보이게 한다. */
+::view-transition-old(.dock-forward),
+::view-transition-old(.dock-back) {
+  animation:
+    var(--pc-duration-fast) var(--pc-ease-accelerate) both pc-screen-fade reverse,
+    var(--pc-duration-slow) var(--pc-ease-emphasized) both pc-screen-slide reverse;
+}
+::view-transition-new(.dock-forward),
+::view-transition-new(.dock-back) {
+  animation:
+    var(--pc-duration-normal) var(--pc-ease-decelerate) var(--pc-duration-fast) both pc-screen-fade,
+    var(--pc-duration-slow) var(--pc-ease-emphasized) both pc-screen-slide;
+}
+
+/* 방향은 부호로만 갈린다 — 오른쪽 탭이면 새 화면이 오른쪽에서 들어온다 */
+::view-transition-old(.dock-forward) {
+  --pc-screen-slide: -48px;
+}
+::view-transition-new(.dock-forward) {
+  --pc-screen-slide: 48px;
+}
+::view-transition-old(.dock-back) {
+  --pc-screen-slide: 48px;
+}
+::view-transition-new(.dock-back) {
+  --pc-screen-slide: -48px;
+}
+
+@keyframes pc-screen-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pc-screen-slide {
+  from {
+    translate: var(--pc-screen-slide, 0);
+  }
+  to {
+    translate: 0;
+  }
+}

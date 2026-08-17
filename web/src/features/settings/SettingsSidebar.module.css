@@ -1,0 +1,305 @@
+/* 치수는 디자인(1440px 프레임) px 값 × 셸 배율. 배율 정의는 app/shell.css 참고.
+   1px 테두리 같은 헤어라인은 배율에서 뺀다 — 커지면 선이 아니라 띠로 보인다. */
+.sidebar {
+  --u: var(--pc-shell-u);
+
+  /* 최상단부터 화면 전체 높이 — 본문만 스크롤되고 사이드바는 붙어 있는다 */
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  width: calc(244 * var(--u));
+  box-sizing: border-box;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  padding: calc(18 * var(--u)) calc(12 * var(--u));
+  border-right: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+  overflow: hidden;
+  transition: width 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar[data-collapsed='true'] {
+  width: calc(68 * var(--u));
+}
+
+/* 브랜드 행 — 접힘 상태에선 로고 자리에서 호버 시 펼치기 버튼으로 바뀐다 (디자인 Side) */
+.brand {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: calc(2 * var(--u)) calc(4 * var(--u)) calc(18 * var(--u));
+  min-height: calc(50 * var(--u));
+  box-sizing: border-box;
+}
+
+.brandMark {
+  position: relative;
+  width: calc(30 * var(--u));
+  height: calc(30 * var(--u));
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.brandLogo {
+  width: calc(28 * var(--u));
+  height: calc(28 * var(--u));
+  transition: opacity 0.22s ease;
+}
+
+.brandName {
+  margin-left: calc(9 * var(--u));
+  max-width: calc(170 * var(--u));
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: calc(15.5 * var(--u));
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  opacity: 1;
+  transition:
+    max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.22s ease,
+    margin 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.brandToggle {
+  margin-left: auto;
+  transition: opacity 0.22s ease;
+}
+
+.sidebar[data-collapsed='true'] .brand {
+  justify-content: center;
+}
+
+.sidebar[data-collapsed='true'] .brandName {
+  max-width: 0;
+  margin-left: 0;
+  opacity: 0;
+}
+
+/* 접히면 토글이 로고 자리에 정확히 겹쳐 앉는다 — .brand의 콘텐츠 영역
+   (위 2u, 아래 18u 패딩 사이)에 맞춰야 가운데 정렬된 로고와 포개진다. */
+.sidebar[data-collapsed='true'] .brandToggle {
+  position: absolute;
+  top: calc(2 * var(--u));
+  right: 0;
+  bottom: calc(18 * var(--u));
+  left: 0;
+  margin-left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+}
+
+/* 호버하지 않으면 로고, 호버하면 햄버거.
+   :focus-within이 아니라 :focus-visible인 이유 — 마우스로 접기를 누르면 버튼에 포커스가
+   남는데, focus-within으로 잡으면 그 상태로 햄버거가 계속 떠서 로고가 돌아오지 않는다.
+   키보드 Tab 이동은 focus-visible이 걸리므로 접근성은 그대로 유지된다. */
+.sidebar[data-collapsed='true'] .brand:hover .brandToggle,
+.sidebar[data-collapsed='true'] .brand:has(:focus-visible) .brandToggle {
+  opacity: 1;
+}
+
+.sidebar[data-collapsed='true'] .brand:hover .brandLogo,
+.sidebar[data-collapsed='true'] .brand:has(:focus-visible) .brandLogo {
+  opacity: 0;
+}
+
+.groupTitle {
+  max-height: calc(28 * var(--u));
+  overflow: hidden;
+  font-size: calc(10.5 * var(--u));
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--pc-color-text-muted);
+  padding: 0 calc(10 * var(--u)) calc(8 * var(--u));
+  white-space: nowrap;
+  opacity: 1;
+  transition:
+    max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.22s ease;
+}
+
+.sidebar[data-collapsed='true'] .groupTitle {
+  max-height: 0;
+  opacity: 0;
+  padding-bottom: 0;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2 * var(--u));
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: calc(11 * var(--u));
+  padding: calc(9 * var(--u)) calc(11 * var(--u));
+  border-radius: calc(10 * var(--u));
+  font-size: calc(13 * var(--u));
+  font-weight: 500;
+  color: var(--pc-color-text-secondary);
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background var(--pc-duration-fast) var(--pc-ease-standard),
+    color var(--pc-duration-fast) var(--pc-ease-standard),
+    gap 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar[data-collapsed='true'] .item {
+  justify-content: center;
+  gap: 0;
+}
+
+.item:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.item[aria-current='page'] {
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+  font-weight: 650;
+}
+
+.item[aria-disabled='true'] {
+  color: var(--pc-color-text-disabled);
+  cursor: default;
+}
+
+.item[aria-disabled='true']:hover {
+  background: transparent;
+}
+
+/* lucide는 size prop을 width/height 속성으로 내보내므로 CSS로 덮어써 배율을 태운다 */
+.itemIcon {
+  flex: none;
+  width: calc(18 * var(--u));
+  height: calc(18 * var(--u));
+}
+
+.label {
+  flex: 1;
+  min-width: 0;
+  max-width: calc(170 * var(--u));
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 1;
+  transition:
+    max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.22s ease;
+}
+
+.sidebar[data-collapsed='true'] .label {
+  flex: 0 0 auto;
+  max-width: 0;
+  opacity: 0;
+}
+
+.divider {
+  height: 1px;
+  background: var(--pc-color-border-subtle);
+  margin: calc(14 * var(--u)) calc(6 * var(--u));
+}
+
+.userBlock {
+  margin-top: auto;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: calc(10 * var(--u));
+  padding: calc(12 * var(--u)) calc(4 * var(--u)) calc(2 * var(--u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+}
+
+/* 접히면 알림 위에 프로필이 놓인다. gap이 7u인 이유 — 사이에 낀 .userText가 높이 0이어도
+   flex 항목으로는 남아 gap이 두 번 들어간다. 여기에 알림 버튼이 글리프 아래로 이미 갖고 있는
+   여백(7u)을 더하면 위쪽 메뉴 아이콘 사이 여백과 같아진다. */
+.sidebar[data-collapsed='true'] .userBlock {
+  flex-direction: column-reverse;
+  gap: calc(7 * var(--u));
+}
+
+.userText {
+  min-width: 0;
+  line-height: 1.25;
+  max-width: calc(170 * var(--u));
+  max-height: calc(40 * var(--u));
+  overflow: hidden;
+  opacity: 1;
+  /* max-height는 일부러 전환하지 않는다 — 접힘은 세로 배치(column-reverse)로 즉시 바뀌는데
+     높이만 0.3초에 걸쳐 줄면 그 위의 알림 아이콘이 그동안 33px 아래로 미끄러져 내려간다.
+     높이는 즉시 접고, 눈에 보이는 전환은 폭·투명도에만 맡긴다. */
+  transition:
+    max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.22s ease;
+}
+
+/* 높이까지 접어야 한다 — 폭만 0으로 두면 투명한 채로 33px를 차지해
+   알림과 프로필 사이가 벌어진다. display:none은 펼칠 때 글자가 튀어 쓰지 않는다. */
+.sidebar[data-collapsed='true'] .userText {
+  max-width: 0;
+  max-height: 0;
+  opacity: 0;
+}
+
+.userName {
+  font-size: calc(13 * var(--u));
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.userRole {
+  font-size: calc(10.5 * var(--u));
+  color: var(--pc-color-text-muted);
+  white-space: nowrap;
+}
+
+/* DS의 IconButton(32px)·Avatar(32px)와 lucide size prop은 전부 고정 px이라 셸 배율을 타지 않는다.
+   접힌 레일에서 하단 알림·프로필만 위쪽 메뉴 아이콘보다 작아 보이던 원인이라 여기서 덮어쓴다.
+   글리프는 메뉴 아이콘과 같은 18u, 버튼·아바타 상자는 디자인값 32u를 배율에 태운다. */
+.brandToggle svg,
+.bellWrap svg {
+  width: calc(18 * var(--u));
+  height: calc(18 * var(--u));
+}
+
+.brandToggle button,
+.bellWrap button {
+  width: calc(32 * var(--u));
+  height: calc(32 * var(--u));
+}
+
+/* DS의 .avatar[data-size='sm']가 클래스+속성이라 단일 클래스로는 못 이긴다.
+   [data-size]를 붙여 명시도를 한 단계 올려야 로드 순서와 무관하게 확실히 덮인다. */
+.userBlock .userAvatar[data-size] {
+  width: calc(32 * var(--u));
+  height: calc(32 * var(--u));
+  font-size: calc(12 * var(--u));
+}
+
+.bellWrap {
+  margin-left: auto;
+  position: relative;
+}
+
+.sidebar[data-collapsed='true'] .bellWrap {
+  margin-left: 0;
+}
+
+.bellDot {
+  position: absolute;
+  top: calc(5 * var(--u));
+  right: calc(5 * var(--u));
+  width: calc(8 * var(--u));
+  height: calc(8 * var(--u));
+  border-radius: var(--pc-radius-circle);
+  background: var(--pc-color-point);
+  border: 2px solid var(--pc-color-bg-surface);
+}
