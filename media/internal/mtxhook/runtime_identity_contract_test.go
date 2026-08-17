@@ -166,6 +166,10 @@ func TestComposeMediaServiceMountsOwnedVolumes(t *testing.T) {
 // 선의의 변경 하나로 이 바이너리가 10002 소유가 된다. --chown 을 명시로 요구해 그 경로를 끊는다.
 // 소스 스테이지의 USER 를 뒤지는 대신 --chown 을 보는 이유: --chown 이 있으면 소스 스테이지가
 // 무엇을 하든 결과가 고정되므로 이쪽이 더 직접적이다.
+//
+// 소유자만 보면 부족하다([cx] r3 MEDIUM): `COPY --chmod=0777 --chown=0:0 ...` 는 root 소유인
+// 동시에 **누구나 쓸 수 있는** 바이너리를 만든다 — 지키려던 성질이 깨진 채 이 단언은 통과한다.
+// 그래서 copyOperands 로 플래그 화이트리스트(--chown·--from)를 함께 태운다.
 func TestMediaImageKeepsHookBinaryRootOwned(t *testing.T) {
 	copies := copiesTo(finalStageLines(readDockerfile(t)), hookBinaryPath)
 
@@ -173,6 +177,14 @@ func TestMediaImageKeepsHookBinaryRootOwned(t *testing.T) {
 		t.Fatalf("%s 의 최종 스테이지에서 %s 를 심는 COPY 가 %d 곳이다(기대 1곳) — "+
 			"경로 표기가 바뀌었다면 hookBinaryPath 를 함께 고쳐라.\n%s",
 			dockerfileRel, hookBinaryPath, len(copies), runtimeIdentityGuide)
+	}
+	// 뜻을 모르는 플래그가 있으면 여기서 Fatal 이다(--chmod 는 모드를, --parents 는 배치를
+	// 바꾼다). 그런 줄을 통과시키면 아래 --chown 검사가 혼자서는 아무것도 보장하지 못한다.
+	if operands := copyOperands(t, copies[0]); len(operands) != 2 {
+		t.Fatalf("%s 의 %s COPY 가 소스 1개 + 목적지 1개가 아니다(피연산자 %d개): %q — "+
+			"소스가 여럿이면 목적지가 디렉토리가 되어 훅 바이너리 자리가 사라진다.\n%s",
+			dockerfileRel, hookBinaryPath, len(operands), strings.Join(copies[0], " "),
+			runtimeIdentityGuide)
 	}
 	if !hasField(copies[0], "--chown="+rootOwner) {
 		t.Errorf("%s 의 %s COPY 에 `--chown=%s` 가 없다: %q — "+
