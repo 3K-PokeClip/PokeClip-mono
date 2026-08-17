@@ -40,8 +40,10 @@
   transition: opacity 0.3s ease;
 }
 
-.player[data-controls='hidden'] .topOverlay,
-.player[data-controls='hidden'] .controls {
+/* opacity·pointer-events는 키보드 포커스를 막지 못한다 — 숨긴 채로 탭 순회가 되거나
+   포커스 중인 버튼이 사라지지 않도록, 포커스가 안에 있는 동안은 숨김을 유보한다. */
+.player[data-controls='hidden']:not(:focus-within) .topOverlay,
+.player[data-controls='hidden']:not(:focus-within) .controls {
   opacity: 0;
   pointer-events: none;
 }

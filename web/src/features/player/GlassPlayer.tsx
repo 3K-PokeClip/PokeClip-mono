@@ -50,12 +50,12 @@ export function GlassPlayer({
   const handleFullscreen = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    try {
-      if (document.fullscreenElement) void document.exitFullscreen();
-      else void el.requestFullscreen?.();
-    } catch {
-      // jsdom 등 전체 화면 미지원 환경 — 무시
-    }
+    // 거부는 promise reject로 온다(권한·iframe 정책) — 동기 try/catch로는 못 잡는다.
+    // jsdom엔 requestFullscreen 자체가 없어 ?.로 건너뛴다.
+    const transition = document.fullscreenElement
+      ? document.exitFullscreen()
+      : el.requestFullscreen?.();
+    transition?.catch(() => {});
   }, []);
 
   return (
@@ -65,6 +65,8 @@ export function GlassPlayer({
       data-controls={controlsShown ? 'visible' : 'hidden'}
       onMouseMove={sim.wake}
       onMouseLeave={sim.sleep}
+      // 키보드 사용자도 컨트롤을 깨울 수 있어야 한다 — CSS의 :focus-within 유지와 짝
+      onFocus={sim.wake}
     >
       {/* POK-23: 이 자리에 <video>가 들어간다 */}
       <div className={styles.videoSlot} aria-hidden>

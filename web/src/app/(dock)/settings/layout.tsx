@@ -13,7 +13,8 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
     <ScreenTransition>
       <div className={styles.shell}>
         <SettingsSidebar />
-        <div className={styles.content}>{children}</div>
+        {/* 본문 랜드마크 — 사이드바 없는 화면은 ScreenContainer가 같은 역할을 한다 */}
+        <main className={styles.content}>{children}</main>
       </div>
     </ScreenTransition>
   );

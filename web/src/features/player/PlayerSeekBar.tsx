@@ -33,8 +33,9 @@ export function PlayerSeekBar({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'ArrowLeft') onSeekBy(KEYBOARD_STEP_SECONDS);
-    else if (event.key === 'ArrowRight') onSeekBy(-KEYBOARD_STEP_SECONDS);
+    // WAI-ARIA slider 패턴: Up/Down도 값 조정 키다 — Up = 값 증가 = 라이브 엣지 쪽
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') onSeekBy(KEYBOARD_STEP_SECONDS);
+    else if (event.key === 'ArrowRight' || event.key === 'ArrowUp') onSeekBy(-KEYBOARD_STEP_SECONDS);
     else if (event.key === 'End') onReturnToLive();
     else if (event.key === 'Home') onSeekBy(LIVE_WINDOW_SECONDS);
     else return;

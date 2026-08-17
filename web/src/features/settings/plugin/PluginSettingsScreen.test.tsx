@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PluginSettingsScreen } from '@/features/settings/plugin/PluginSettingsScreen';
 import { PairingCodeCard } from '@/features/settings/plugin/PairingCodeCard';
 
@@ -20,16 +20,33 @@ describe('PluginSettingsScreen', () => {
   });
 
   it('재발급하면 발행일이 오늘로 갱신된다', () => {
+    // 실제 시계로 자정을 넘기면 기대값이 어긋난다 — 시계를 고정해 결정적으로 만든다
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-17T12:00:00'));
+      render(<PluginSettingsScreen />);
+
+      expect(screen.getByText(/발행일 2026\. 8\. 2\./)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: '재발급' }));
+
+      expect(screen.getByText(/발행일 2026\. 8\. 17\./)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('발급 직후에만 코드 원문을 1회 보여준다 (ADR-019)', () => {
     render(<PluginSettingsScreen />);
 
-    expect(screen.getByText(/발행일 2026\. 8\. 2\./)).toBeInTheDocument();
+    // 이전 세션 발급분 — 원문은 이미 사라졌다
+    const CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{8}$/; // Crockford Base32 8자리
+    expect(screen.queryByText(CODE_PATTERN)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '재발급' }));
 
-    const today = new Date().toLocaleDateString('ko-KR');
-    expect(
-      screen.getByText(new RegExp(`발행일 ${today.replace(/\./g, '\\.')}`)),
-    ).toBeInTheDocument();
+    expect(screen.getByText(CODE_PATTERN)).toBeInTheDocument();
+    expect(screen.getByText(/이 코드는 지금만 보여요/)).toBeInTheDocument();
   });
 });
 

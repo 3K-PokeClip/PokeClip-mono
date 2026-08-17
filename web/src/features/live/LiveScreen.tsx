@@ -14,9 +14,10 @@ export function LiveScreen() {
   const { stream, highlights, hiddenCount, chatVolume, chatWarning } = useLiveMockState();
 
   return (
-    <div className={styles.screen}>
+    <div>
       <LiveHeader stream={stream} />
-      <div className={styles.container}>
+      {/* 본문 랜드마크 — 헤더는 밖에 두고 본문만 감싼다 (ScreenContainer 선례) */}
+      <main className={styles.container}>
         <div className={styles.grid}>
           <div className={styles.main}>
             <div className={styles.playerFrame}>
@@ -35,7 +36,7 @@ export function LiveScreen() {
             <HighlightCardList highlights={highlights} hiddenCount={hiddenCount} />
           </aside>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

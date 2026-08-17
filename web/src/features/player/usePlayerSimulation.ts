@@ -85,6 +85,13 @@ export function usePlayerSimulation(options: PlayerSimulationOptions = {}): Play
     hideTimer.current = window.setTimeout(() => setControlsVisible(false), AUTO_HIDE_MS);
   }, []);
 
+  // 마우스를 움직이지 않아도 재생이 시작되면 자동 숨김이 걸려야 한다 (마운트 직후 포함).
+  // 일시정지 중엔 어차피 컨트롤을 강제 표시하므로 타이머만 풀어 둔다.
+  useEffect(() => {
+    if (playing) armHide();
+    else window.clearTimeout(hideTimer.current);
+  }, [playing, armHide]);
+
   const wake = useCallback(() => {
     setControlsVisible(true);
     armHide();

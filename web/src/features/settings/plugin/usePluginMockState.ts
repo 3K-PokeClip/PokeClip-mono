@@ -25,14 +25,25 @@ const MOCK_CONNECTION: PluginConnection = {
   latency: '0.8초',
 };
 
-/** 코드 원문은 발급 직후에만 존재한다 — 화면은 발급 여부와 발행일까지만 안다. */
+/** 코드 원문은 발급 직후 1회만 존재한다 (ADR-019) — 새로고침하면 다시 볼 수 없다. */
 export interface PairingCodeStatus {
   issued: boolean;
   issuedAt?: string;
+  /** 이번 세션에서 방금 발급한 코드 원문 — 서버가 발급 응답에 딱 한 번 실어주는 값의 목업 */
+  justIssuedCode?: string;
 }
 
 // 이미 포맷된 문자열로 둔다 — 서버와 브라우저의 타임존이 달라도 하이드레이션이 어긋나지 않는다.
 const MOCK_ISSUED_AT = '2026. 8. 2.'; // 디자인 표기값
+
+// 실발급은 서버 몫(auth PairingCodeService, POK-72) — 규격(Crockford Base32 8자리)만 맞춘 목업.
+const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+function mockPairingCode(): string {
+  return Array.from({ length: 8 }, () =>
+    CODE_ALPHABET.charAt(Math.floor(Math.random() * CODE_ALPHABET.length)),
+  ).join('');
+}
 
 export interface PluginMockState {
   connection: PluginConnection;
@@ -48,7 +59,11 @@ export function usePluginMockState(): PluginMockState {
   });
 
   const issueCode = useCallback(() => {
-    setCode({ issued: true, issuedAt: new Date().toLocaleDateString('ko-KR') });
+    setCode({
+      issued: true,
+      issuedAt: new Date().toLocaleDateString('ko-KR'),
+      justIssuedCode: mockPairingCode(),
+    });
   }, []);
 
   return { connection: MOCK_CONNECTION, code, issueCode };

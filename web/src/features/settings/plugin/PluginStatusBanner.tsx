@@ -41,7 +41,8 @@ export function PluginStatusBanner({ connection }: { connection: PluginConnectio
             : '연결 코드를 발급해 OBS 플러그인에 입력하면 여기에 상태가 표시돼요'}
         </div>
       </div>
-      <Button variant="ghost" size="sm">
+      {/* 진단 플로우는 플러그인 상태 API 연동에서 — 자리만 (DownloadBanner 선례) */}
+      <Button variant="ghost" size="sm" disabled>
         연결 진단
       </Button>
     </section>

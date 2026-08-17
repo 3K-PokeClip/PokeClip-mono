@@ -1,3 +1,4 @@
+import { act } from 'react';
 import { render, screen } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { describe, expect, it } from 'vitest';
@@ -17,6 +18,9 @@ describe('LoginScreen', () => {
 
   it('접근성 위반이 없다', async () => {
     const { container } = render(<LoginScreen />);
-    expect(await axe(container)).toHaveNoViolations();
+    // axe 실행 중 Next Link의 비동기 상태 갱신이 발화한다 — act로 감싸 경고 없이 흡수
+    await act(async () => {
+      expect(await axe(container)).toHaveNoViolations();
+    });
   });
 });

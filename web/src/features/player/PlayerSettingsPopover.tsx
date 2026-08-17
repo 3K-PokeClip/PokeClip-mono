@@ -26,7 +26,8 @@ export function PlayerSettingsPopover({
           <Settings size={19} aria-hidden />
         </button>
       </Popover.Trigger>
-      <Popover.Content className={styles.settingsPanel}>
+      {/* role="dialog"로 뜨므로 이름이 있어야 한다 */}
+      <Popover.Content className={styles.settingsPanel} aria-label="플레이어 설정">
         <div className={styles.settingsGroupLabel}>화질</div>
         <div className={styles.qualityList}>
           {PLAYER_QUALITIES.map((option) => (

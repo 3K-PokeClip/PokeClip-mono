@@ -4,7 +4,7 @@ import type { PairingCodeStatus } from './usePluginMockState';
 import styles from './PluginSettingsScreen.module.css';
 
 // 디자인 1m 연동 코드 카드. 발급됨/미발급 두 상태를 갖는다.
-// 코드 원문은 발급 순간에만 존재하고 화면에 다시 뜨지 않는다 (ADR-019).
+// 코드 원문은 발급 직후 1회만 노출되고 그 뒤로는 다시 뜨지 않는다 (ADR-019).
 export function PairingCodeCard({
   code,
   onIssue,
@@ -26,12 +26,26 @@ export function PairingCodeCard({
           <div className={styles.codeBox}>
             <Check size={16} strokeWidth={2} className={styles.codeCheck} aria-hidden />
             <div className={styles.codeBody}>
-              <div className={styles.codeTitle}>
-                코드가 발급되어 있어요 · 발행일 {code.issuedAt}
-              </div>
-              <div className={styles.codeHint}>
-                보안을 위해 코드는 다시 표시되지 않아요 — 잃어버렸다면 재발급하세요
-              </div>
+              {code.justIssuedCode ? (
+                <>
+                  <div className={styles.codeTitle}>
+                    <span className={styles.codeValue}>{code.justIssuedCode}</span> · 발행일{' '}
+                    {code.issuedAt}
+                  </div>
+                  <div className={styles.codeHint}>
+                    이 코드는 지금만 보여요 — OBS 플러그인에 붙여넣은 뒤에는 다시 표시되지 않아요
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className={styles.codeTitle}>
+                    코드가 발급되어 있어요 · 발행일 {code.issuedAt}
+                  </div>
+                  <div className={styles.codeHint}>
+                    보안을 위해 코드는 다시 표시되지 않아요 — 잃어버렸다면 재발급하세요
+                  </div>
+                </>
+              )}
             </div>
             <Button variant="soft" size="sm" onClick={onIssue}>
               재발급

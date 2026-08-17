@@ -119,6 +119,14 @@
   font-weight: 650;
 }
 
+/* 발급 직후 1회만 보이는 코드 원문 (ADR-019) — 서버 규격과 같은 8자리 */
+.codeValue {
+  font-family: var(--pc-font-mono, monospace);
+  font-size: 13.5px;
+  font-weight: 750;
+  letter-spacing: 0.12em;
+}
+
 .codeHint {
   font-size: 11px;
   color: var(--pc-color-text-muted);

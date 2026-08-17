@@ -1,3 +1,4 @@
+import { act } from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
@@ -25,6 +26,8 @@ describe('LiveScreen', () => {
     expect(screen.getAllByText('LIVE').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('시청자 1,842')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '홈으로' })).toHaveAttribute('href', '/home');
+    // 자체 헤더를 갖는 화면도 본문 랜드마크는 있어야 한다
+    expect(screen.getByRole('main')).toBeInTheDocument();
   });
 
   it('하이라이트 6행을 상태 배지와 함께 렌더한다', () => {
@@ -56,6 +59,9 @@ describe('LiveScreen', () => {
 
   it('접근성 위반이 없다', async () => {
     const { container } = renderLive();
-    expect(await axe(container)).toHaveNoViolations();
+    // usePlayerSimulation의 1초 tick이 axe 실행(1초 이상) 중에 발화한다 — act로 감싸 흡수
+    await act(async () => {
+      expect(await axe(container)).toHaveNoViolations();
+    });
   });
 });
