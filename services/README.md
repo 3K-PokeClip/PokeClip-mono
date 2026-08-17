@@ -94,8 +94,15 @@ docker compose up -d postgres redis
 
 # 여기(services/)에서
 ./gradlew build              # 전체 빌드 + 테스트
-./gradlew :auth:bootRun      # 서버 하나 띄우기
+
+# 서버 하나 띄우기 — .env를 셸에 먼저 싣는다
+set -a && . ../.env && set +a
+./gradlew :auth:bootRun
 ```
+
+**`.env`를 싣는 줄을 빼먹으면 DB 접속이 실패한다.** `docker compose`는 `.env`를 자동으로
+읽지만 **Gradle은 읽지 않는다.** DB 접속값 셋은 기본값이 없어(아래) 셸에 없으면 리터럴
+`${POSTGRES_USER}`가 그대로 사용자 이름이 되고 `FATAL: password authentication failed`로 죽는다.
 
 | 서버 | 실행 | 헬스체크 |
 |---|---|---|
@@ -104,12 +111,21 @@ docker compose up -d postgres redis
 | `chat-collector` | `./gradlew :chat-collector:bootRun` | http://localhost:8083/actuator/health |
 | `chat-detector` | `./gradlew :chat-detector:bootRun` | http://localhost:8084/actuator/health |
 
-**`auth`는 환경변수 없이는 일부러 부팅에 실패한다.** `JWT_SECRET` · `GOOGLE_CLIENT_ID` ·
-`GOOGLE_CLIENT_SECRET` · `CORS_ALLOWED_ORIGINS` · `SECRET_STORE_KEY`(base64 32바이트) ·
-`INTERNAL_API_TOKEN` · `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` · `CHZZK_REDIRECT_URI` 아홉이다.
-`.env.example`에는 없다 — **public 저장소라 예시 값도 두지 않는다.**
-빈 기본값을 주고 검증으로 잡는 이유는, 안 주면 리터럴 `"${VAR}"`이 바인딩돼
-**서버는 뜨고 헬스체크도 통과하는데 그 기능만 전부 실패하기** 때문이다.
+**`auth`는 환경변수 없이는 일부러 부팅에 실패한다. 열둘이고, 두 갈래로 나뉜다.**
+
+| 갈래 | 변수 | 어디서 얻나 |
+|---|---|---|
+| **앱 시크릿 아홉** | `JWT_SECRET` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `CORS_ALLOWED_ORIGINS` · `SECRET_STORE_KEY`(base64 32바이트) · `INTERNAL_API_TOKEN` · `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` · `CHZZK_REDIRECT_URI` | **`.env.example`에 없다** — public 저장소라 예시 값도 두지 않는다. 각자 받아서 넣는다 |
+| **DB 접속값 셋** | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | `.env`에 있다. 위 실행 절차의 `set -a && . ../.env` 줄이 싣는다 |
+
+**막는 방식이 갈래마다 다르다.** 앱 시크릿 아홉은 빈 기본값(`${VAR:}`)을 주고 부팅 검증으로
+잡는다 — 기본값을 아예 안 주면 리터럴 `"${VAR}"`이 바인딩돼 **서버는 뜨고 헬스체크도
+통과하는데 그 기능만 전부 실패하기** 때문이다. DB 접속값 셋은 반대로 기본값 자체를 없앴다(POK-161).
+그쪽은 서버가 실제로 접속을 시도하는 값이라 리터럴이 들어가도 접속 실패로 죽어 신호가 남는다.
+
+**IDE로 띄운다면** 실행 구성의 환경변수에 위 열둘을 넣거나, `.env`를 읽어 주는 플러그인을 쓴다.
+`application-local.yml`(gitignore) 프로파일만으로는 부족하다 — 그 파일은 앱 시크릿만 채우고
+DB 접속값은 채우지 않는다.
 
 **치지직 셋은 한 덩어리로 검증한다.** 개발자 센터에 등록한 앱 하나의 값이라 하나만 빠져도
 연동이 통째로 안 되므로, 셋 중 무엇이 비든 같은 메시지 한 줄
@@ -203,7 +219,17 @@ terminationGracePeriodSeconds: 20 # k8s
 
 **DB 접속 변수 이름을 compose의 `.env`와 맞춰 뒀다** (`POSTGRES_USER`·`POSTGRES_PASSWORD`·
 `POSTGRES_DB`). 팀원이 `.env` 값을 바꿔도 앱이 따라간다. compose 네트워크 안에서
-띄울 때만 `DB_HOST=postgres`를 준다.
+띄울 때만 `DB_HOST=postgres`를 준다(이쪽만 기본값이 있다).
+
+**셋에는 기본값이 없다**(POK-161). 커밋되는 파일에 비밀번호 기본값을 두면 **public
+저장소에 공개된 값으로 DB에 붙는 창**이 열리기 때문이다. 실행에 필요한 것은 위
+「환경변수 열둘」 표를 본다.
+
+**이 방식을 다른 시크릿에 확대하지 않는다.** 여기가 통하는 것은 서버가 실제로 접속을
+시도하는 값이라서다 — 값이 없으면 리터럴 `${POSTGRES_PASSWORD}`가 그대로 비밀번호가
+되고 DB가 거절해 죽는다(2026-08-17 실측: `FATAL: password authentication failed`).
+**접속을 시도하지 않는 값(서명키·내부 토큰)에 같은 모양을 쓰면 서버는 그냥 뜨고
+그 기능만 조용히 전부 실패한다.**
 
 ### 도커 이미지
 
