@@ -1,6 +1,6 @@
-export const metadata = { title: '설정 · PokeClip' };
+import { redirect } from 'next/navigation';
 
-// 독 4 — 빈 화면 (채널 연동·플러그인·계정은 별도 티켓)
+// 설정 진입 시 첫 구현 화면인 플러그인으로 보낸다 (POK-100 — 나머지 탭은 별도 티켓)
 export default function SettingsPage() {
-  return <h1>설정</h1>;
+  redirect('/settings/plugin');
 }

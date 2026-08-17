@@ -1,0 +1,454 @@
+/* 디자인 1a 홈 대시보드 — 1440px 시안을 1200px 컨테이너 안에서 유동으로 번역.
+   인디고·마젠타 틴트는 브랜드 원색(#586fc4 · #d63f9f)의 투명 혼합이라 시안 값을 그대로 쓴다. */
+
+/* 홈 전체(헤더 포함)를 감싸는 래퍼 — home/page.tsx에서 사용.
+   상단 인디고 그라디언트가 화면 전체 폭으로, 헤더 뒤까지 내려온다 (디자인 1a). */
+.page {
+  position: relative;
+}
+
+.page::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 220px;
+  background: linear-gradient(180deg, rgb(88 111 196 / 0.1), transparent);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.greeting {
+  margin-top: 8px;
+}
+
+.greetingTitle {
+  margin: 0;
+  font-size: 23px;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+
+.greetingSub {
+  margin: 5px 0 0;
+  font-size: 13px;
+  color: var(--pc-color-text-secondary);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 332px;
+  gap: 22px;
+  align-items: start;
+  margin-top: 22px;
+}
+
+.main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.aside {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---------- 이어서 편집 배너 ---------- */
+
+.resumeBanner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 16px;
+  border-radius: 14px;
+  background: linear-gradient(90deg, rgb(88 111 196 / 0.16), rgb(88 111 196 / 0.05));
+  border: 1px solid rgb(88 111 196 / 0.35);
+  margin-bottom: 22px;
+}
+
+.resumeThumb {
+  width: 58px;
+  aspect-ratio: 16 / 9;
+  border-radius: 8px;
+  background: var(--pc-color-bg-inset);
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--pc-color-text-muted);
+}
+
+.resumeBody {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.resumeTitle {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.resumeMeta {
+  font-size: 11.5px;
+  color: var(--pc-color-text-muted);
+  margin-top: 2px;
+}
+
+/* ---------- 라이브 밴드 ---------- */
+
+.liveSection {
+  margin-bottom: 24px;
+}
+
+.sectionLabel {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 11px;
+  font-size: 14.5px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.livePulseDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 99px;
+  background: var(--pc-color-point);
+  animation: pc-home-live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pc-home-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.82);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .livePulseDot {
+    animation: none;
+  }
+}
+
+.liveBand {
+  display: flex;
+  gap: 16px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgb(214 63 159 / 0.38);
+  background: linear-gradient(
+    120deg,
+    rgb(214 63 159 / 0.09),
+    rgb(88 111 196 / 0.07) 55%,
+    transparent
+  );
+}
+
+.liveThumb {
+  width: clamp(260px, 38%, 400px);
+  flex: none;
+  border-radius: 11px;
+}
+
+.livePill {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  background: var(--pc-color-point);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.03em;
+}
+
+/* 영상 위 오버레이 — 테마 불변이라 시안 raw 값 유지 */
+.viewerPill {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  z-index: 2;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.6);
+  color: rgb(255 255 255 / 0.9);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.liveBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 4px;
+}
+
+.liveMetaRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.liveMetaText {
+  font-size: 11.5px;
+  color: var(--pc-color-text-muted);
+}
+
+.liveTitle {
+  font-size: 18px;
+  font-weight: 750;
+  letter-spacing: -0.015em;
+  margin-top: 10px;
+  line-height: 1.35;
+}
+
+.liveStats {
+  margin-top: 12px;
+  font-size: 12.5px;
+  color: var(--pc-color-text-secondary);
+}
+
+.liveStats b {
+  font-weight: 800;
+  color: var(--pc-color-text-primary);
+}
+
+.liveActions {
+  margin-top: auto;
+  padding-top: 12px;
+  display: flex;
+  gap: 8px;
+}
+
+/* 버튼처럼 보이는 링크 — DS Button(solid·ghost, md) 규격을 미러링 (LoginScreen.googleButton 선례) */
+.solidLink,
+.ghostLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 38px;
+  padding: 0 var(--pc-space-4);
+  border-radius: var(--pc-radius-md);
+  font-size: var(--pc-font-size-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.solidLink {
+  background: var(--pc-color-accent);
+  color: var(--pc-color-text-on-accent);
+}
+
+.solidLink:hover {
+  background: var(--pc-color-accent-hover);
+}
+
+.ghostLink {
+  color: var(--pc-color-text-primary);
+}
+
+.ghostLink:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+/* ---------- 지난 방송 · VOD ---------- */
+
+.vodHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 11px;
+}
+
+.vodHeader .sectionLabel {
+  margin: 0;
+}
+
+.vodKeepNote {
+  font-size: 11.5px;
+  color: var(--pc-color-text-muted);
+}
+
+/* 목적지 화면이 아직 없는 링크 자리 (M2) — SettingsSidebar 비활성 항목 선례 */
+.mutedLink {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pc-color-accent-text);
+  opacity: 0.6;
+}
+
+.vodGrid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.vodCard {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.thumb {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--pc-color-bg-inset);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.thumbLabel {
+  font-size: 11px;
+  color: var(--pc-color-text-muted);
+}
+
+.overlayPillTopLeft {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  z-index: 2;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: rgb(0 0 0 / 0.6);
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.overlayTopLeft {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  z-index: 2;
+}
+
+.durationPill {
+  position: absolute;
+  bottom: 7px;
+  right: 7px;
+  z-index: 2;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgb(0 0 0 / 0.62);
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.vodText {
+  line-height: 1.35;
+}
+
+.vodTitle {
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vodMeta {
+  font-size: 10.5px;
+  color: var(--pc-color-text-muted);
+  margin-top: 2px;
+}
+
+/* ---------- 우측 aside 카드 공통 ---------- */
+
+.asideCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 15px 4px;
+}
+
+.asideCardTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.asideCardNote {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--pc-color-text-muted);
+}
+
+.asideRows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.asideRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 15px;
+}
+
+.asideRow + .asideRow {
+  border-top: 1px solid var(--pc-color-border-subtle);
+}
+
+.asideRowTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.asideRowNote {
+  font-size: 11px;
+  color: var(--pc-color-text-muted);
+  flex: none;
+}
+
+.rowProgress {
+  width: 64px;
+  flex: none;
+}
+
+/* ---------- 반응형 ---------- */
+
+@media (max-width: 1023px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .liveBand {
+    flex-direction: column;
+  }
+
+  .liveThumb {
+    width: 100%;
+  }
+}

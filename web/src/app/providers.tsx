@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ThemeProvider } from '@/ui';
+import { ThemeProvider, ToastProvider } from '@/ui';
 
 // DS 소스에는 'use client' 지시자가 없으므로 인터랙티브 DS 컴포넌트
 // (ThemeProvider, useTheme, 훅/핸들러 사용 컴포넌트)는 반드시
@@ -22,7 +22,9 @@ export function Providers({ children }: { children: ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider defaultTheme="dark">{children}</ThemeProvider>
+      <ThemeProvider defaultTheme="dark">
+        <ToastProvider>{children}</ToastProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }
