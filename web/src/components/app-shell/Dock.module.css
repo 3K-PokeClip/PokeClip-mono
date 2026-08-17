@@ -1,42 +1,106 @@
+/* 디자인 Dock — 유리 재질 알약. 라벨은 평소 숨어 있다가 독 호버 또는 활성 항목에서만 펼쳐진다.
+   치수는 디자인(1440px 프레임) px 값 × 셸 배율 (app/shell.css).
+   유리 표현은 반투명 흰빛 레이어라 테마별 값을 직접 잡는다 (시맨틱 토큰으로 표현 불가). */
 .dock {
+  --u: var(--pc-shell-u);
+
+  --dock-fill-top: rgb(255 255 255 / 0.1);
+  --dock-fill-bottom: rgb(255 255 255 / 0.02);
+  --dock-border: rgb(255 255 255 / 0.14);
+  --dock-sheen: rgb(255 255 255 / 0.16);
+  --dock-sheen-bottom: rgb(255 255 255 / 0.04);
+  --dock-item: rgb(255 255 255 / 0.62);
+  --dock-item-hover: rgb(255 255 255 / 0.9);
+  --dock-item-hover-top: rgb(255 255 255 / 0.14);
+  --dock-item-hover-bottom: rgb(255 255 255 / 0.04);
+
   position: fixed;
-  bottom: var(--pc-space-4);
+  bottom: calc(18 * var(--u));
   left: 50%;
   transform: translateX(-50%);
   z-index: var(--pc-z-docked);
   display: flex;
-  gap: var(--pc-space-1);
-  padding: var(--pc-space-1);
-  background: var(--pc-color-bg-surface-raised);
-  border: 1px solid var(--pc-color-border-subtle);
+  align-items: center;
+  gap: calc(5 * var(--u));
+  padding: calc(7 * var(--u));
   border-radius: var(--pc-radius-pill);
-  box-shadow: var(--pc-shadow-lg);
+  background: linear-gradient(150deg, var(--dock-fill-top), var(--dock-fill-bottom));
+  backdrop-filter: blur(24px) saturate(1.6);
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  border: 1px solid var(--dock-border);
+  box-shadow:
+    inset 0 1px 0 var(--dock-sheen),
+    inset 0 -1px 0 var(--dock-sheen-bottom),
+    0 24px 60px rgb(3 10 24 / 0.55),
+    0 4px 14px rgb(0 0 0 / 0.25);
+}
+/* 독에는 view-transition-name을 주지 않는다 (이유는 Dock.tsx 주석 참고).
+   혹시 나중에 붙일 일이 생기면 CSS 모듈이 아니라 인라인 style로 걸어야 한다 —
+   모듈은 값까지 스코프해 `Dock-module__해시__이름`으로 바꿔버린다. */
+
+:global([data-theme='light']) .dock {
+  --dock-fill-top: rgb(255 255 255 / 0.75);
+  --dock-fill-bottom: rgb(255 255 255 / 0.5);
+  --dock-border: rgb(15 20 32 / 0.1);
+  --dock-sheen: rgb(255 255 255 / 0.7);
+  --dock-sheen-bottom: rgb(15 20 32 / 0.03);
+  --dock-item: rgb(15 20 32 / 0.62);
+  --dock-item-hover: rgb(15 20 32 / 0.92);
+  --dock-item-hover-top: rgb(15 20 32 / 0.08);
+  --dock-item-hover-bottom: rgb(15 20 32 / 0.03);
+
+  box-shadow:
+    inset 0 1px 0 var(--dock-sheen),
+    0 24px 60px rgb(15 20 32 / 0.16),
+    0 4px 14px rgb(15 20 32 / 0.08);
 }
 
 .item {
+  position: relative;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: var(--pc-space-0-5);
-  min-width: 64px;
-  padding: var(--pc-space-2) var(--pc-space-3);
+  padding: calc(10 * var(--u));
   border-radius: var(--pc-radius-pill);
-  font-size: var(--pc-font-size-2xs);
-  color: var(--pc-color-text-muted);
+  border: 1px solid transparent;
+  color: var(--dock-item);
+  font-size: calc(13 * var(--u));
+  font-weight: 600;
   text-decoration: none;
+  cursor: pointer;
   transition:
-    background 0.15s ease,
-    color 0.15s ease;
+    background var(--pc-duration-normal) var(--pc-ease-standard),
+    color var(--pc-duration-normal) var(--pc-ease-standard);
 }
 
 .item:hover {
-  color: var(--pc-color-text-primary);
-  background: var(--pc-color-bg-surface-hover);
+  background: linear-gradient(150deg, var(--dock-item-hover-top), var(--dock-item-hover-bottom));
+  color: var(--dock-item-hover);
 }
 
+/* 활성 알약 — 활성 항목에만 렌더된다. 별도 요소인 이유는 탭 사이를 실제로 이동해야 하기 때문이다.
+   Dock.tsx가 <ViewTransition name="pc-dock-pill">로 감싸 브라우저가 옛/새 위치를 보간한다.
+   inset -1px은 .item의 투명 1px 테두리 위에 얹혀 예전 활성 스타일과 같은 자리를 차지한다.
+   색은 테마 공통이다 — 예전 .item[aria-current] 규칙도 라이트/다크 구분이 없었다. */
+.pill {
+  position: absolute;
+  inset: -1px;
+  border-radius: var(--pc-radius-pill);
+  border: 1px solid rgb(255 255 255 / 0.16);
+  background: linear-gradient(
+    150deg,
+    rgb(var(--pc-primary-400-rgb) / 0.55),
+    rgb(var(--pc-primary-500-rgb) / 0.34)
+  );
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.28),
+    0 2px 14px rgb(var(--pc-primary-500-rgb) / 0.38);
+}
+
+/* 배경·테두리는 .pill이 그린다. 여기엔 글자 표현만 남긴다.
+   예전의 padding 9u 오버라이드는 뺐다 — 활성 전환마다 항목 폭이 2u씩 튀었다. */
 .item[aria-current='page'] {
-  color: var(--pc-color-accent-text);
-  background: var(--pc-color-accent-subtle);
+  color: var(--pc-white);
+  font-weight: 650;
 }
 
 .item:focus-visible {
@@ -44,6 +108,59 @@
   outline-offset: 2px;
 }
 
+/* svg의 width/height 속성을 CSS로 덮어써 배율을 태운다.
+   z-index는 절대 배치된 .pill 위로 올리기 위한 것이다 (.label·.badge도 같다) */
+.icon {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  width: calc(19 * var(--u));
+  height: calc(19 * var(--u));
+}
+
+/* 라벨은 독 호버 또는 활성 항목에서만 펼쳐진다 */
 .label {
-  line-height: 1;
+  position: relative;
+  z-index: 1;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition:
+    max-width var(--pc-duration-slower) var(--pc-ease-emphasized),
+    opacity var(--pc-duration-slow) var(--pc-ease-standard),
+    margin var(--pc-duration-slower) var(--pc-ease-emphasized);
+}
+
+.dock:hover .label,
+.item:focus-visible .label {
+  max-width: calc(130 * var(--u));
+  opacity: 1;
+  margin-left: calc(8 * var(--u));
+}
+
+/* 활성 라벨은 펼쳐진 상태로 시작한다 — 트랜지션을 두면 뷰 트랜지션이 새 상태를 캡처하는
+   시점에 아직 접혀 있어 알약이 늘어나며 튄다. 이동 모션은 뷰 트랜지션이 전담한다. */
+.item[aria-current='page'] .label {
+  max-width: calc(130 * var(--u));
+  opacity: 1;
+  margin-left: calc(8 * var(--u));
+  transition: none;
+}
+
+.badge {
+  position: relative;
+  z-index: 1;
+  margin-left: calc(6 * var(--u));
+  min-width: calc(17 * var(--u));
+  height: calc(17 * var(--u));
+  padding: 0 calc(5 * var(--u));
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-point);
+  color: var(--pc-white);
+  font-size: calc(10.5 * var(--u));
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }

@@ -1,0 +1,137 @@
+/* 히어로 폭을 전환하려고 grid 대신 flex를 쓴다 — grid-template-columns는
+   fr 단위라 width처럼 부드럽게 0으로 접을 수 없다 (마플 mauth 로그인과 같은 구조). */
+.split {
+  display: flex;
+  min-height: 100dvh;
+  background: var(--pc-color-bg-canvas);
+  color: var(--pc-color-text-primary);
+}
+
+.left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 48px;
+}
+
+.column {
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.brand {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 64px;
+}
+
+.wordmark {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 36px;
+}
+
+.beta {
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--pc-color-bg-surface);
+  border: 1px solid var(--pc-color-border-subtle);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  color: var(--pc-color-text-muted);
+}
+
+.intro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 40px;
+  text-align: center;
+}
+
+.headline {
+  font-size: 20px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.subtitle {
+  font-size: 13.5px;
+  color: var(--pc-color-text-secondary);
+}
+
+/* 구글 브랜드 버튼 — 흰 배경·다크 텍스트는 브랜드 가이드 고정값 (테마 비대상) */
+.googleButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  height: 52px;
+  border: none;
+  border-radius: 10px;
+  background: #fff;
+  color: #1f1f1f;
+  font-family: var(--pc-font-sans);
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  transition: filter var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+.googleButton:hover {
+  filter: brightness(0.94);
+}
+
+.googleButton:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.terms {
+  margin-top: 24px;
+  font-size: 12.5px;
+  text-align: center;
+  color: var(--pc-color-text-muted);
+}
+
+/* 우측 히어로 — 브랜드 키비주얼. 그라디언트는 이미지 로드 전 배경 (의도적 비토큰).
+   마플 mauth 로그인 방식: 폭은 뷰포트 비례(vw)로 늘고 줄며, 좁아지면 display:none이
+   아니라 width 0 + opacity 0으로 접혀 전환이 걸린다. object-fit: cover라 접히는
+   동안에도 이미지 비율이 깨지지 않고 크롭만 변한다.
+   40vw = 디자인 1r의 3:2 분할 (마플은 5/12 ≈ 41.7vw).
+   시간은 토큰이라 prefers-reduced-motion에서 0ms로 떨어진다 (마플 원본은 0.3s ease-out). */
+.hero {
+  position: relative;
+  flex: none;
+  width: 40vw;
+  background: linear-gradient(160deg, #1a1040 0%, #2a1660 55%, #12093a 100%);
+  overflow: hidden;
+  transition:
+    width var(--pc-duration-slow) var(--pc-ease-decelerate),
+    opacity var(--pc-duration-slow) var(--pc-ease-decelerate);
+}
+
+.heroImage {
+  object-fit: cover;
+  object-position: center;
+}
+
+/* 마플과 같은 1440px 경계 — 이하에서 히어로가 접힌다 */
+@media (max-width: 1440px) {
+  .hero {
+    width: 0;
+    opacity: 0;
+  }
+}

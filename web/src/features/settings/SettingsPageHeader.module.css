@@ -1,0 +1,12 @@
+.title {
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 4px;
+}
+
+.description {
+  font-size: 12px;
+  color: var(--pc-color-text-muted);
+  margin: 0 0 20px;
+}

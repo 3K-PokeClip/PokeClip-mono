@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { Button } from './Button';
-import { IconButton } from './IconButton';
-import { HStack } from './Stack';
+import { IconButton } from '../IconButton';
+import { HStack } from '../Stack';
 
 const Heart = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">

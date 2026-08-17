@@ -1,0 +1,14 @@
+/* 디자인 1m — 사이드바가 화면 최상단부터 전체 높이를 차지하고, 본문만 스크롤된다.
+   전역 헤더는 홈 전용이라 이 화면에는 없다. */
+.shell {
+  display: flex;
+  min-height: 100dvh;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  /* 사이드바와 같은 배율로 커진다 (app/shell.css). 하단 96 = fixed Dock 여백 */
+  padding: calc(30 * var(--pc-shell-u)) calc(36 * var(--pc-shell-u))
+    calc(96 * var(--pc-shell-u));
+}
