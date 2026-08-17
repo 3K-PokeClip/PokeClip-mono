@@ -15,7 +15,7 @@ import styles from './PluginSettingsScreen.module.css';
 // 연동 코드는 실제 API(useStreamKeyState), 연결 상태는 플러그인 신호 API가 없어 아직 목업.
 export function PluginSettingsScreen() {
   const { connection } = usePluginMockState();
-  const { loading, code, busy, issue, reissue } = useStreamKeyState();
+  const { loading, error, retryStatus, code, busy, issue, reissue } = useStreamKeyState();
   // 재발급은 기존 키를 즉시 죽이므로(ADR-019) 반드시 확인 모달을 거친다 (POK-102 완료조건)
   const [confirmOpen, setConfirmOpen] = useState(false);
 
@@ -30,9 +30,11 @@ export function PluginSettingsScreen() {
         <PairingCodeCard
           code={code}
           loading={loading}
+          error={error}
           busy={busy}
           onIssue={issue}
           onReissue={() => setConfirmOpen(true)}
+          onRetry={retryStatus}
         />
         <DownloadBanner />
       </div>

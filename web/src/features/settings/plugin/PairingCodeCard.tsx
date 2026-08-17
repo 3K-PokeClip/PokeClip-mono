@@ -9,17 +9,22 @@ import styles from './PluginSettingsScreen.module.css';
 export function PairingCodeCard({
   code,
   loading,
+  error,
   busy,
   onIssue,
   onReissue,
+  onRetry,
 }: {
   code: PairingCodeStatus;
   /** 상태 조회 전 — 발급/재발급 어느 쪽도 아직 모른다. */
   loading?: boolean;
+  /** 상태를 한 번도 못 읽음 — 미발급으로 오인시키면 안 된다 (리뷰 #73). */
+  error?: boolean;
   /** 발급·재발급 진행 중 — 이중 클릭 방지. */
   busy?: boolean;
   onIssue: () => void;
   onReissue: () => void;
+  onRetry: () => void;
 }) {
   return (
     <section className={styles.card} aria-labelledby="pairing-code-title">
@@ -32,6 +37,15 @@ export function PairingCodeCard({
 
       {loading ? (
         <Skeleton className={styles.codeSkeleton} />
+      ) : error ? (
+        <div className={styles.codeBoxEmpty}>
+          <div className={styles.codeEmptyText}>
+            연동 코드 상태를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.
+          </div>
+          <Button variant="soft" size="sm" onClick={onRetry}>
+            다시 시도
+          </Button>
+        </div>
       ) : code.issued ? (
         <>
           <div className={styles.codeBox}>
@@ -62,7 +76,9 @@ export function PairingCodeCard({
               재발급
             </Button>
           </div>
-          <div className={styles.metaText}>재발급하면 기존 코드는 즉시 무효화됩니다</div>
+          {/* "기존 코드도 무효화"라고 말하면 거짓 보장이다 — 백엔드 rotate는 미사용
+              페어링 코드를 죽이지 않는다(교환은 현재 키를 준다). 키 만료만 약속한다. (리뷰 #73) */}
+          <div className={styles.metaText}>재발급하면 기존 스트림 키가 즉시 만료됩니다</div>
         </>
       ) : (
         <div className={styles.codeBoxEmpty}>

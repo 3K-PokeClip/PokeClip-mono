@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '@/api/client';
 import {
@@ -29,6 +29,9 @@ export interface PairingCodeStatus {
 export interface StreamKeyState {
   /** 최초 상태 조회 중 — 카드가 스켈레톤을 그린다. */
   loading: boolean;
+  /** 상태를 한 번도 못 읽었다 — 미발급으로 오인시키지 말고 오류·재시도를 그린다. */
+  error: boolean;
+  retryStatus: () => void;
   code: PairingCodeStatus;
   /** 발급·재발급 진행 중 — 버튼 잠금. */
   busy: boolean;
@@ -44,28 +47,47 @@ export function useStreamKeyState(): StreamKeyState {
   const markPluginLinked = useOnboardingStore((s) => s.markPluginLinked);
   const status = useQuery(streamKeyStatusQueryOptions);
   const [justIssued, setJustIssued] = useState<IssuedPairingCode | null>(null);
+  // 재발급은 rotate→발급 비원자 2콜이다. rotate만 성공하고 발급이 실패한 상태를
+  // 기억해 두면 ① 재시도가 키를 불필요하게 또 회전하지 않고 ② 오류 안내가
+  // "기존 키는 이미 만료됐다"는 실상을 말할 수 있다. (리뷰 #73)
+  const rotatedWithoutCodeRef = useRef(false);
 
   const mutation = useMutation({
     mutationFn: async (mode: 'issue' | 'reissue') => {
-      if (mode === 'reissue') {
+      if (mode === 'reissue' && !rotatedWithoutCodeRef.current) {
         try {
           await rotateStreamKey();
+          rotatedWithoutCodeRef.current = true;
         } catch (e) {
           // 404 = 폐기할 키가 없다 — 화면이 낡은(stale) 상태였을 뿐이고,
           // 이어지는 발급의 ensureKey가 키를 만들며 자연 복구된다. 오류로 끊지 않는다.
           if (!(e instanceof ApiError && e.status === 404)) throw e;
         }
       }
-      return issuePairingCode();
+      const issued = await issuePairingCode();
+      rotatedWithoutCodeRef.current = false;
+      return issued;
     },
     onSuccess: (issued) => {
       setJustIssued(issued);
       // 코드 발급 = 온보딩 2단계(플러그인) 완료 (POK-113 시작 가이드 체크)
       markPluginLinked();
-      void queryClient.invalidateQueries({ queryKey: streamKeyStatusQueryOptions.queryKey });
     },
-    onError: (e) => {
-      if (e instanceof ApiError && e.status === 429) {
+    onError: (e, mode) => {
+      const limited = e instanceof ApiError && e.status === 429;
+      if (mode === 'reissue' && rotatedWithoutCodeRef.current) {
+        // rotate는 이미 성공 — 방송 중이었다면 이미 끊겼다. 발급 실패만 말하면
+        // 사용자가 옛 키가 살아 있다고 믿는다.
+        toast({
+          variant: 'danger',
+          title: '기존 키는 이미 만료됐어요',
+          description: limited
+            ? '새 코드 발급이 분당 한도(3회)에 걸렸어요. 잠시 후 재발급을 다시 누르면 코드만 발급돼요.'
+            : '새 코드 발급에 실패했어요. 재발급을 다시 누르면 키 회전 없이 코드만 발급돼요.',
+        });
+        return;
+      }
+      if (limited) {
         // ADR-019: 계정당 분당 3회 — 문구도 그 제한값 그대로 안내한다 (POK-103 완료조건)
         toast({
           variant: 'danger',
@@ -80,11 +102,19 @@ export function useStreamKeyState(): StreamKeyState {
         description: '잠시 후 다시 시도해 주세요.',
       });
     },
+    onSettled: () => {
+      // 실패해도 재조회한다 — rotate만 성공한 경우에도 발행 시각(createdAt)은 이미 바뀌어 있다
+      void queryClient.invalidateQueries({ queryKey: streamKeyStatusQueryOptions.queryKey });
+    },
   });
 
   const { mutate } = mutation;
   const issue = useCallback(() => mutate('issue'), [mutate]);
   const reissue = useCallback(() => mutate('reissue'), [mutate]);
+  const { refetch } = status;
+  const retryStatus = useCallback(() => {
+    void refetch();
+  }, [refetch]);
 
   const createdAt = status.data?.createdAt;
   const issuedAt = justIssued
@@ -95,6 +125,10 @@ export function useStreamKeyState(): StreamKeyState {
 
   return {
     loading: status.isPending,
+    // 데이터를 한 번이라도 읽었으면 그것을 그대로 보여준다 — 재조회 실패에 오류 화면으로
+    // 갈아끼우는 쪽이 더 헷갈린다. "아무것도 모르는" 최초 실패만 오류로 그린다. (리뷰 #73)
+    error: status.isError && status.data === undefined,
+    retryStatus,
     code: {
       // 발급 직후엔 status 재조회가 끝나기 전에도 발급됨으로 보여야 한다
       issued: (status.data?.issued ?? false) || justIssued !== null,

@@ -19,9 +19,10 @@ export function RotateConfirmDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <Dialog.Content>
         <Dialog.Title>연동 코드를 재발급할까요?</Dialog.Title>
+        {/* "기존 코드"는 약속하지 않는다 — rotate는 미사용 페어링 코드를 무효화하지 못한다 (리뷰 #73) */}
         <Dialog.Description>
-          기존 코드와 스트림 키가 즉시 만료됩니다 — 방송 중이라면 송출이 끊겨요. 새 코드는 발급
-          직후 한 번만 표시됩니다.
+          기존 스트림 키가 즉시 만료됩니다 — 방송 중이라면 송출이 끊겨요. 새 코드는 발급 직후 한
+          번만 표시됩니다.
         </Dialog.Description>
         <div className={styles.confirmActions}>
           <Dialog.Close>

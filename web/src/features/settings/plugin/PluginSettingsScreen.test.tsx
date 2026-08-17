@@ -91,10 +91,12 @@ describe('PluginSettingsScreen', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '재발급' }));
 
-    // 필수 경고 문구 — 기존 키 즉시 만료 + 방송 끊김
+    // 필수 경고 문구 — 기존 키 즉시 만료 + 방송 끊김. "기존 코드 무효화"는 약속하지
+    // 않는다 — rotate가 미사용 페어링 코드를 못 죽이므로 거짓 보장이다 (리뷰 #73)
     const dialog = await screen.findByRole('dialog');
-    expect(dialog).toHaveTextContent('기존 코드와 스트림 키가 즉시 만료됩니다');
+    expect(dialog).toHaveTextContent('기존 스트림 키가 즉시 만료됩니다');
     expect(dialog).toHaveTextContent('방송 중이라면 송출이 끊겨요');
+    expect(dialog).not.toHaveTextContent('기존 코드');
     // 경고를 보기 전에는 아무 호출도 나가면 안 된다
     expect(callsTo(spy, '/api/stream-keys/rotate')).toHaveLength(0);
 
@@ -132,6 +134,63 @@ describe('PluginSettingsScreen', () => {
     expect(callsTo(spy, '/api/stream-keys/rotate')).toHaveLength(0);
     expect(callsTo(spy, '/api/stream-keys/pairing-codes')).toHaveLength(1);
     expect(useOnboardingStore.getState().pluginLinked).toBe(true);
+  });
+
+  it('부분 실패(rotate 성공→발급 429) 후 재시도는 키를 다시 회전하지 않는다 (리뷰 #73)', async () => {
+    let pairingCalls = 0;
+    const spy = stubFetch((url, init) => {
+      if (url === '/api/stream-keys/rotate')
+        return jsonResponse(200, { rotatedAt: '2026-08-17T03:00:00Z' });
+      if (url === '/api/stream-keys/pairing-codes') {
+        pairingCalls += 1;
+        return pairingCalls === 1
+          ? jsonResponse(429, { reason: '발급 한도 초과' })
+          : jsonResponse(201, {
+              code: 'KQ4M-7X2P',
+              expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+            });
+      }
+      if (url === '/api/stream-keys' && (init?.method ?? 'GET') === 'GET')
+        return jsonResponse(200, { issued: true, createdAt: CREATED_AT });
+      return jsonResponse(404);
+    });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '재발급' }));
+    fireEvent.click(await screen.findByRole('button', { name: '지금 재발급' }));
+
+    // 발급 실패만 말하면 안 된다 — 키는 이미 회전됐다
+    expect(await screen.findByText('기존 키는 이미 만료됐어요')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '재발급' }));
+    fireEvent.click(await screen.findByRole('button', { name: '지금 재발급' }));
+
+    expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
+    // 회전은 첫 시도의 1회뿐 — 재시도가 방송 키를 또 죽이면 안 된다
+    expect(callsTo(spy, '/api/stream-keys/rotate')).toHaveLength(1);
+    expect(callsTo(spy, '/api/stream-keys/pairing-codes')).toHaveLength(2);
+  });
+
+  it('상태 조회를 한 번도 못 읽으면 미발급이 아니라 오류·다시 시도를 보여준다 (리뷰 #73)', async () => {
+    let statusCalls = 0;
+    stubFetch((url, init) => {
+      if (url === '/api/stream-keys' && (init?.method ?? 'GET') === 'GET') {
+        statusCalls += 1;
+        return statusCalls === 1
+          ? jsonResponse(500, { reason: '서버 오류' })
+          : jsonResponse(200, { issued: true, createdAt: CREATED_AT });
+      }
+      return jsonResponse(404);
+    });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    expect(await screen.findByText(/연동 코드 상태를 불러오지 못했어요/)).toBeInTheDocument();
+    // 키 있는 사용자에게 "발급" 버튼을 보여주면 안 된다
+    expect(screen.queryByRole('button', { name: '코드 발급' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '다시 시도' }));
+
+    expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
   });
 
   it('발급 429는 분당 한도 안내 토스트를 띄운다 (POK-103 완료조건)', async () => {
