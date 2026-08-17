@@ -7,9 +7,9 @@
   padding: 0;
 }
 .item {
-  min-width: 36px;
-  height: 36px;
-  padding: 0 8px;
+  min-width: calc(36 * var(--pc-u));
+  height: calc(36 * var(--pc-u));
+  padding: 0 calc(8 * var(--pc-u));
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -39,8 +39,8 @@
   outline-offset: 2px;
 }
 .ellipsis {
-  min-width: 36px;
-  height: 36px;
+  min-width: calc(36 * var(--pc-u));
+  height: calc(36 * var(--pc-u));
   display: inline-flex;
   align-items: center;
   justify-content: center;

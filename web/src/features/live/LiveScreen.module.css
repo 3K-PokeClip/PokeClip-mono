@@ -6,8 +6,8 @@
 .header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px var(--pc-space-5);
+  gap: calc(12 * var(--pc-u));
+  padding: calc(16 * var(--pc-u)) var(--pc-space-5);
   border-bottom: 1px solid var(--pc-color-border-subtle);
   background: var(--pc-color-bg-surface);
 }
@@ -16,8 +16,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: calc(32 * var(--pc-u));
+  height: calc(32 * var(--pc-u));
   border-radius: var(--pc-radius-md);
   color: var(--pc-color-text-primary);
   flex: none;
@@ -30,21 +30,21 @@
 .livePill {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 11px;
-  border-radius: 99px;
+  gap: calc(6 * var(--pc-u));
+  padding: calc(4 * var(--pc-u)) calc(11 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
   background: var(--pc-color-point);
   color: #fff;
-  font-size: 11.5px;
+  font-size: calc(11.5 * var(--pc-u));
   font-weight: 800;
   letter-spacing: 0.03em;
   flex: none;
 }
 
 .livePillDot {
-  width: 7px;
-  height: 7px;
-  border-radius: 99px;
+  width: calc(7 * var(--pc-u));
+  height: calc(7 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
   background: #fff;
   animation: pc-live-header-pulse 1.6s ease-in-out infinite;
 }
@@ -74,7 +74,7 @@
 
 .headerTitle {
   margin: 0;
-  font-size: 15px;
+  font-size: calc(15 * var(--pc-u));
   font-weight: 750;
   letter-spacing: -0.015em;
   white-space: nowrap;
@@ -83,51 +83,51 @@
 }
 
 .headerMeta {
-  font-size: 11.5px;
+  font-size: calc(11.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
-  margin-top: 2px;
+  margin-top: calc(2 * var(--pc-u));
 }
 
 .headerRight {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: calc(14 * var(--pc-u));
   flex: none;
 }
 
 .editorChip {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 11.5px;
+  gap: calc(7 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
   color: var(--pc-color-text-secondary);
 }
 
 .headerDivider {
   width: 1px;
-  height: 22px;
+  height: calc(22 * var(--pc-u));
   background: var(--pc-color-border-subtle);
 }
 
 .viewerCount {
-  font-size: 12.5px;
+  font-size: calc(12.5 * var(--pc-u));
   font-weight: 700;
 }
 
 /* ---------- 본문 ---------- */
 
 .container {
-  max-width: 1200px;
+  max-width: calc(1200 * var(--pc-u));
   margin: 0 auto;
   /* 하단 여백 — fixed Dock에 콘텐츠가 가리지 않게 (ScreenContainer와 동일) */
-  padding: 22px var(--pc-space-5) 120px;
+  padding: calc(22 * var(--pc-u)) var(--pc-space-5) calc(120 * var(--pc-u));
 }
 
 .grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 404px;
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) calc(404 * var(--pc-u));
+  gap: calc(18 * var(--pc-u));
   align-items: start;
 }
 
@@ -135,11 +135,11 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: calc(14 * var(--pc-u));
 }
 
 .playerFrame {
-  border-radius: 14px;
+  border-radius: calc(14 * var(--pc-u));
   overflow: hidden;
   background: #08090c;
 }
@@ -153,18 +153,18 @@
 .chartHeader {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 14px 16px 2px;
+  gap: calc(9 * var(--pc-u));
+  padding: calc(14 * var(--pc-u)) calc(16 * var(--pc-u)) calc(2 * var(--pc-u));
 }
 
 .chartTitle {
   margin: 0;
-  font-size: 13px;
+  font-size: calc(13 * var(--pc-u));
   font-weight: 750;
 }
 
 .chartNote {
-  font-size: 11px;
+  font-size: calc(11 * var(--pc-u));
   color: var(--pc-color-text-muted);
 }
 
@@ -172,25 +172,25 @@
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
+  gap: calc(5 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
   color: var(--pc-color-text-secondary);
 }
 
 .chartLegendSwatch {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
+  width: calc(8 * var(--pc-u));
+  height: calc(8 * var(--pc-u));
+  border-radius: calc(2 * var(--pc-u));
   background: var(--pc-color-point);
 }
 
 .chartBody {
-  padding: 8px 16px 6px;
+  padding: calc(8 * var(--pc-u)) calc(16 * var(--pc-u)) calc(6 * var(--pc-u));
 }
 
 .chartSvg {
   width: 100%;
-  height: 90px;
+  height: calc(90 * var(--pc-u));
   display: block;
 }
 
@@ -218,10 +218,10 @@
   display: flex;
   justify-content: space-between;
   font-family: var(--pc-font-mono, monospace);
-  font-size: 10px;
+  font-size: calc(10 * var(--pc-u));
   font-weight: 500;
   color: var(--pc-color-text-muted);
-  padding: 4px 0 8px;
+  padding: calc(4 * var(--pc-u)) 0 calc(8 * var(--pc-u));
 }
 
 /* ---------- 채팅 수집 경고 배너 ---------- */
@@ -229,12 +229,12 @@
 .warningBanner {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 11px 14px;
-  border-radius: 11px;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(11 * var(--pc-u)) calc(14 * var(--pc-u));
+  border-radius: calc(11 * var(--pc-u));
   border: 1px solid rgb(230 168 60 / 0.35);
   background: rgb(230 168 60 / 0.07);
-  font-size: 12px;
+  font-size: calc(12 * var(--pc-u));
   color: var(--pc-color-text-secondary);
 }
 
@@ -245,7 +245,7 @@
 
 .warningAction {
   margin-left: auto;
-  font-size: 11.5px;
+  font-size: calc(11.5 * var(--pc-u));
   font-weight: 650;
   color: var(--pc-color-accent-text);
   opacity: 0.6;
@@ -262,20 +262,20 @@
 .highlightHeader {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 15px 10px;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(14 * var(--pc-u)) calc(15 * var(--pc-u)) calc(10 * var(--pc-u));
 }
 
 .highlightHeading {
   margin: 0;
-  font-size: 13.5px;
+  font-size: calc(13.5 * var(--pc-u));
   font-weight: 750;
 }
 
 .filterGroup {
   margin-left: auto;
   display: flex;
-  gap: 5px;
+  gap: calc(5 * var(--pc-u));
 }
 
 /* Tag(칩) 모양의 필터 버튼 — 상호작용이 필요해 span 대신 button */
@@ -283,11 +283,11 @@
   border: 1px solid var(--pc-color-border-subtle);
   background: transparent;
   color: var(--pc-color-text-secondary);
-  font-size: 11.5px;
+  font-size: calc(11.5 * var(--pc-u));
   font-weight: 600;
   font-family: inherit;
-  padding: 3px 10px;
-  border-radius: 99px;
+  padding: calc(3 * var(--pc-u)) calc(10 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
   cursor: pointer;
 }
 
@@ -312,8 +312,8 @@
 .highlightRow {
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 12px 15px;
+  gap: calc(11 * var(--pc-u));
+  padding: calc(12 * var(--pc-u)) calc(15 * var(--pc-u));
   border-top: 1px solid var(--pc-color-border-subtle);
 }
 
@@ -327,7 +327,7 @@
 
 .highlightTime {
   font-family: var(--pc-font-mono, monospace);
-  font-size: 11px;
+  font-size: calc(11 * var(--pc-u));
   font-weight: 600;
   color: var(--pc-color-text-secondary);
   flex: none;
@@ -340,7 +340,7 @@
 }
 
 .highlightTitle {
-  font-size: 12.5px;
+  font-size: calc(12.5 * var(--pc-u));
   font-weight: 650;
   white-space: nowrap;
   overflow: hidden;
@@ -348,29 +348,42 @@
 }
 
 .highlightMeta {
-  font-size: 10.5px;
+  font-size: calc(10.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
-  margin-top: 2px;
+  margin-top: calc(2 * var(--pc-u));
 }
 
 .highlightFooter {
   margin-top: auto;
   display: flex;
   align-items: center;
-  padding: 12px 15px;
+  padding: calc(12 * var(--pc-u)) calc(15 * var(--pc-u));
   border-top: 1px solid var(--pc-color-border-subtle);
 }
 
 .highlightFooterLink {
-  font-size: 11.5px;
+  font-size: calc(11.5 * var(--pc-u));
   font-weight: 600;
   color: var(--pc-color-text-muted);
 }
 
 .highlightFooterNote {
   margin-left: auto;
-  font-size: 11px;
+  font-size: calc(11 * var(--pc-u));
   color: var(--pc-color-text-muted);
+}
+
+/* ---------- 아이콘 스케일 ----------
+   lucide size prop은 px 속성 고정이라 CSS로 유닛에 태운다 */
+
+.backLink svg {
+  width: calc(17 * var(--pc-u));
+  height: calc(17 * var(--pc-u));
+}
+
+.warningIcon {
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
 }
 
 /* ---------- 반응형 ---------- */

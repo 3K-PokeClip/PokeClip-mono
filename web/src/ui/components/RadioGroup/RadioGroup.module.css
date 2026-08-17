@@ -29,8 +29,8 @@
 .dot {
   position: relative;
   display: inline-flex;
-  width: 20px;
-  height: 20px;
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
   flex-shrink: 0;
   border: 1.5px solid var(--pc-color-border-strong);
   border-radius: var(--pc-radius-circle);
@@ -42,8 +42,8 @@
   position: absolute;
   inset: 0;
   margin: auto;
-  width: 8px;
-  height: 8px;
+  width: calc(8 * var(--pc-u));
+  height: calc(8 * var(--pc-u));
   border-radius: var(--pc-radius-circle);
   background: var(--pc-color-accent);
   transform: scale(0);

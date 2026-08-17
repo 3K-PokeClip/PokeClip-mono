@@ -2,7 +2,14 @@ import { forwardRef, type ComponentPropsWithoutRef } from 'react';
 import clsx from 'clsx';
 import styles from './Container.module.css';
 
-const SIZES = { sm: '640px', md: '768px', lg: '1024px', xl: '1280px', full: '100%' } as const;
+// 콘텐츠 스케일 유닛(--pc-u) 기반 — 뷰포트에 비례해 넓어진다 (시안 px × u)
+const SIZES = {
+  sm: 'calc(640 * var(--pc-u))',
+  md: 'calc(768 * var(--pc-u))',
+  lg: 'calc(1024 * var(--pc-u))',
+  xl: 'calc(1280 * var(--pc-u))',
+  full: '100%',
+} as const;
 
 export interface ContainerProps extends ComponentPropsWithoutRef<'div'> {
   size?: keyof typeof SIZES;

@@ -21,8 +21,8 @@
 }
 .track {
   position: relative;
-  width: 40px;
-  height: 24px;
+  width: calc(40 * var(--pc-u));
+  height: calc(24 * var(--pc-u));
   flex-shrink: 0;
   border-radius: var(--pc-radius-pill);
   background: var(--pc-color-border-strong);
@@ -30,10 +30,10 @@
 }
 .thumb {
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 20px;
-  height: 20px;
+  top: calc(2 * var(--pc-u));
+  left: calc(2 * var(--pc-u));
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
   border-radius: var(--pc-radius-circle);
   background: var(--pc-white);
   box-shadow: var(--pc-shadow-sm);
@@ -43,22 +43,23 @@
   background: var(--pc-color-accent);
 }
 .input:checked + .track .thumb {
-  transform: translateX(16px);
+  /* 이동량 = 트랙 40u − 썸 20u − 양쪽 오프셋 2u×2 — 트랙과 같은 배율을 타야 끝까지 찬다 */
+  transform: translateX(calc(16 * var(--pc-u)));
 }
 .input:focus-visible + .track {
   outline: 2px solid var(--pc-color-focus-ring);
   outline-offset: 2px;
 }
 .root[data-size='sm'] .track {
-  width: 32px;
-  height: 18px;
+  width: calc(32 * var(--pc-u));
+  height: calc(18 * var(--pc-u));
 }
 .root[data-size='sm'] .thumb {
-  width: 14px;
-  height: 14px;
+  width: calc(14 * var(--pc-u));
+  height: calc(14 * var(--pc-u));
 }
 .root[data-size='sm'] .input:checked + .track .thumb {
-  transform: translateX(14px);
+  transform: translateX(calc(14 * var(--pc-u)));
 }
 @media (prefers-reduced-motion: reduce) {
   .thumb,

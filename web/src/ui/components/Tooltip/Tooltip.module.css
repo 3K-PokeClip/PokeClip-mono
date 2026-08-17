@@ -9,7 +9,7 @@
   line-height: var(--pc-line-snug);
   box-shadow: var(--pc-shadow-md);
   z-index: var(--pc-z-tooltip);
-  max-width: 260px;
+  max-width: calc(260 * var(--pc-u));
   pointer-events: none;
   animation: pc-tooltip-in var(--pc-duration-fast) var(--pc-ease-standard);
 }

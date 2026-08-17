@@ -7,7 +7,7 @@
   flex-direction: column;
   gap: var(--pc-space-2);
   width: calc(100vw - var(--pc-space-8));
-  max-width: 380px;
+  max-width: calc(380 * var(--pc-u));
   pointer-events: none;
 }
 .toast {
@@ -44,16 +44,16 @@
 .description {
   color: var(--pc-color-text-secondary);
   font-size: var(--pc-font-size-sm);
-  margin-top: 2px;
+  margin-top: calc(2 * var(--pc-u));
 }
 .close {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  margin: -2px -4px -2px 0;
+  width: calc(24 * var(--pc-u));
+  height: calc(24 * var(--pc-u));
+  margin: calc(-2 * var(--pc-u)) calc(-4 * var(--pc-u)) calc(-2 * var(--pc-u)) 0;
   border: 0;
   background: transparent;
   color: var(--pc-color-text-muted);

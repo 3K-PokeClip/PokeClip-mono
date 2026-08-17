@@ -4,7 +4,7 @@
   border-radius: var(--pc-radius-lg);
   box-shadow: var(--pc-shadow-lg);
   z-index: var(--pc-z-dropdown);
-  min-width: 180px;
+  min-width: calc(180 * var(--pc-u));
   padding: var(--pc-space-1);
   animation: pc-menu-in var(--pc-duration-fast) var(--pc-ease-standard);
 }

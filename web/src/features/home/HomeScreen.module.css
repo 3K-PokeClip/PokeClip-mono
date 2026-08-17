@@ -13,35 +13,35 @@
   top: 0;
   left: 0;
   right: 0;
-  height: 220px;
+  height: calc(220 * var(--pc-u));
   background: linear-gradient(180deg, rgb(88 111 196 / 0.1), transparent);
   pointer-events: none;
   z-index: -1;
 }
 
 .greeting {
-  margin-top: 8px;
+  margin-top: calc(8 * var(--pc-u));
 }
 
 .greetingTitle {
   margin: 0;
-  font-size: 23px;
+  font-size: calc(23 * var(--pc-u));
   font-weight: 800;
   letter-spacing: -0.025em;
 }
 
 .greetingSub {
-  margin: 5px 0 0;
-  font-size: 13px;
+  margin: calc(5 * var(--pc-u)) 0 0;
+  font-size: calc(13 * var(--pc-u));
   color: var(--pc-color-text-secondary);
 }
 
 .grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 332px;
-  gap: 22px;
+  grid-template-columns: minmax(0, 1fr) calc(332 * var(--pc-u));
+  gap: calc(22 * var(--pc-u));
   align-items: start;
-  margin-top: 22px;
+  margin-top: calc(22 * var(--pc-u));
 }
 
 .main {
@@ -53,7 +53,7 @@
 .aside {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: calc(12 * var(--pc-u));
 }
 
 /* ---------- 이어서 편집 배너 ---------- */
@@ -61,18 +61,18 @@
 .resumeBanner {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 13px 16px;
-  border-radius: 14px;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(13 * var(--pc-u)) calc(16 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
   background: linear-gradient(90deg, rgb(88 111 196 / 0.16), rgb(88 111 196 / 0.05));
   border: 1px solid rgb(88 111 196 / 0.35);
-  margin-bottom: 22px;
+  margin-bottom: calc(22 * var(--pc-u));
 }
 
 .resumeThumb {
-  width: 58px;
+  width: calc(58 * var(--pc-u));
   aspect-ratio: 16 / 9;
-  border-radius: 8px;
+  border-radius: calc(8 * var(--pc-u));
   background: var(--pc-color-bg-inset);
   flex: none;
   display: flex;
@@ -88,36 +88,36 @@
 }
 
 .resumeTitle {
-  font-size: 13.5px;
+  font-size: calc(13.5 * var(--pc-u));
   font-weight: 700;
 }
 
 .resumeMeta {
-  font-size: 11.5px;
+  font-size: calc(11.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
-  margin-top: 2px;
+  margin-top: calc(2 * var(--pc-u));
 }
 
 /* ---------- 라이브 밴드 ---------- */
 
 .liveSection {
-  margin-bottom: 24px;
+  margin-bottom: calc(24 * var(--pc-u));
 }
 
 .sectionLabel {
   display: flex;
   align-items: center;
-  gap: 9px;
-  margin: 0 0 11px;
-  font-size: 14.5px;
+  gap: calc(9 * var(--pc-u));
+  margin: 0 0 calc(11 * var(--pc-u));
+  font-size: calc(14.5 * var(--pc-u));
   font-weight: 750;
   letter-spacing: -0.01em;
 }
 
 .livePulseDot {
-  width: 9px;
-  height: 9px;
-  border-radius: 99px;
+  width: calc(9 * var(--pc-u));
+  height: calc(9 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
   background: var(--pc-color-point);
   animation: pc-home-live-pulse 1.6s ease-in-out infinite;
 }
@@ -142,9 +142,9 @@
 
 .liveBand {
   display: flex;
-  gap: 16px;
-  padding: 14px;
-  border-radius: 16px;
+  gap: calc(16 * var(--pc-u));
+  padding: calc(14 * var(--pc-u));
+  border-radius: calc(16 * var(--pc-u));
   border: 1px solid rgb(214 63 159 / 0.38);
   background: linear-gradient(
     120deg,
@@ -155,24 +155,24 @@
 }
 
 .liveThumb {
-  width: clamp(260px, 38%, 400px);
+  width: clamp(calc(260 * var(--pc-u)), 38%, calc(400 * var(--pc-u)));
   flex: none;
-  border-radius: 11px;
+  border-radius: calc(11 * var(--pc-u));
 }
 
 .livePill {
   position: absolute;
-  top: 10px;
-  left: 10px;
+  top: calc(10 * var(--pc-u));
+  left: calc(10 * var(--pc-u));
   z-index: 2;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
-  border-radius: 99px;
+  gap: calc(5 * var(--pc-u));
+  padding: calc(3 * var(--pc-u)) calc(9 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
   background: var(--pc-color-point);
   color: #fff;
-  font-size: 11px;
+  font-size: calc(11 * var(--pc-u));
   font-weight: 750;
   letter-spacing: 0.03em;
 }
@@ -180,14 +180,14 @@
 /* 영상 위 오버레이 — 테마 불변이라 시안 raw 값 유지 */
 .viewerPill {
   position: absolute;
-  bottom: 10px;
-  left: 10px;
+  bottom: calc(10 * var(--pc-u));
+  left: calc(10 * var(--pc-u));
   z-index: 2;
-  padding: 2px 8px;
-  border-radius: 6px;
+  padding: calc(2 * var(--pc-u)) calc(8 * var(--pc-u));
+  border-radius: calc(6 * var(--pc-u));
   background: rgb(0 0 0 / 0.6);
   color: rgb(255 255 255 / 0.9);
-  font-size: 11px;
+  font-size: calc(11 * var(--pc-u));
   font-weight: 600;
 }
 
@@ -196,31 +196,31 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding: 6px 4px;
+  padding: calc(6 * var(--pc-u)) calc(4 * var(--pc-u));
 }
 
 .liveMetaRow {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: calc(8 * var(--pc-u));
 }
 
 .liveMetaText {
-  font-size: 11.5px;
+  font-size: calc(11.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
 }
 
 .liveTitle {
-  font-size: 18px;
+  font-size: calc(18 * var(--pc-u));
   font-weight: 750;
   letter-spacing: -0.015em;
-  margin-top: 10px;
+  margin-top: calc(10 * var(--pc-u));
   line-height: 1.35;
 }
 
 .liveStats {
-  margin-top: 12px;
-  font-size: 12.5px;
+  margin-top: calc(12 * var(--pc-u));
+  font-size: calc(12.5 * var(--pc-u));
   color: var(--pc-color-text-secondary);
 }
 
@@ -231,9 +231,9 @@
 
 .liveActions {
   margin-top: auto;
-  padding-top: 12px;
+  padding-top: calc(12 * var(--pc-u));
   display: flex;
-  gap: 8px;
+  gap: calc(8 * var(--pc-u));
 }
 
 /* 버튼처럼 보이는 링크 — DS Button(solid·ghost, md) 규격을 미러링 (LoginScreen.googleButton 선례) */
@@ -242,7 +242,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 38px;
+  height: calc(38 * var(--pc-u));
   padding: 0 var(--pc-space-4);
   border-radius: var(--pc-radius-md);
   font-size: var(--pc-font-size-sm);
@@ -272,8 +272,8 @@
 .vodHeader {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  margin-bottom: 11px;
+  gap: calc(8 * var(--pc-u));
+  margin-bottom: calc(11 * var(--pc-u));
 }
 
 .vodHeader .sectionLabel {
@@ -281,14 +281,14 @@
 }
 
 .vodKeepNote {
-  font-size: 11.5px;
+  font-size: calc(11.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
 }
 
 /* 목적지 화면이 아직 없는 링크 자리 (M2) — SettingsSidebar 비활성 항목 선례 */
 .mutedLink {
   margin-left: auto;
-  font-size: 12px;
+  font-size: calc(12 * var(--pc-u));
   font-weight: 600;
   color: var(--pc-color-accent-text);
   opacity: 0.6;
@@ -299,20 +299,20 @@
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(calc(180 * var(--pc-u)), 1fr));
+  gap: calc(12 * var(--pc-u));
 }
 
 .vodCard {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: calc(7 * var(--pc-u));
 }
 
 .thumb {
   position: relative;
   aspect-ratio: 16 / 9;
-  border-radius: 10px;
+  border-radius: calc(10 * var(--pc-u));
   overflow: hidden;
   background: var(--pc-color-bg-inset);
   display: flex;
@@ -321,39 +321,39 @@
 }
 
 .thumbLabel {
-  font-size: 11px;
+  font-size: calc(11 * var(--pc-u));
   color: var(--pc-color-text-muted);
 }
 
 .overlayPillTopLeft {
   position: absolute;
-  top: 7px;
-  left: 7px;
+  top: calc(7 * var(--pc-u));
+  left: calc(7 * var(--pc-u));
   z-index: 2;
-  padding: 2px 7px;
-  border-radius: 99px;
+  padding: calc(2 * var(--pc-u)) calc(7 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
   background: rgb(0 0 0 / 0.6);
-  font-size: 10px;
+  font-size: calc(10 * var(--pc-u));
   font-weight: 700;
   color: #fff;
 }
 
 .overlayTopLeft {
   position: absolute;
-  top: 7px;
-  left: 7px;
+  top: calc(7 * var(--pc-u));
+  left: calc(7 * var(--pc-u));
   z-index: 2;
 }
 
 .durationPill {
   position: absolute;
-  bottom: 7px;
-  right: 7px;
+  bottom: calc(7 * var(--pc-u));
+  right: calc(7 * var(--pc-u));
   z-index: 2;
-  padding: 1px 6px;
-  border-radius: 5px;
+  padding: calc(1 * var(--pc-u)) calc(6 * var(--pc-u));
+  border-radius: calc(5 * var(--pc-u));
   background: rgb(0 0 0 / 0.62);
-  font-size: 10px;
+  font-size: calc(10 * var(--pc-u));
   font-weight: 600;
   color: #fff;
 }
@@ -363,7 +363,7 @@
 }
 
 .vodTitle {
-  font-size: 12.5px;
+  font-size: calc(12.5 * var(--pc-u));
   font-weight: 650;
   white-space: nowrap;
   overflow: hidden;
@@ -371,9 +371,9 @@
 }
 
 .vodMeta {
-  font-size: 10.5px;
+  font-size: calc(10.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
-  margin-top: 2px;
+  margin-top: calc(2 * var(--pc-u));
 }
 
 /* ---------- 우측 aside 카드 공통 ---------- */
@@ -381,19 +381,19 @@
 .asideCardHeader {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 15px 4px;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(14 * var(--pc-u)) calc(15 * var(--pc-u)) calc(4 * var(--pc-u));
 }
 
 .asideCardTitle {
   margin: 0;
-  font-size: 13px;
+  font-size: calc(13 * var(--pc-u));
   font-weight: 750;
 }
 
 .asideCardNote {
   margin-left: auto;
-  font-size: 10.5px;
+  font-size: calc(10.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
 }
 
@@ -408,8 +408,8 @@
 .asideRow {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 15px;
+  gap: calc(10 * var(--pc-u));
+  padding: calc(10 * var(--pc-u)) calc(15 * var(--pc-u));
 }
 
 .asideRow + .asideRow {
@@ -419,7 +419,7 @@
 .asideRowTitle {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: calc(12.5 * var(--pc-u));
   font-weight: 650;
   white-space: nowrap;
   overflow: hidden;
@@ -427,14 +427,27 @@
 }
 
 .asideRowNote {
-  font-size: 11px;
+  font-size: calc(11 * var(--pc-u));
   color: var(--pc-color-text-muted);
   flex: none;
 }
 
 .rowProgress {
-  width: 64px;
+  width: calc(64 * var(--pc-u));
   flex: none;
+}
+
+/* ---------- 아이콘 스케일 ----------
+   lucide size prop은 px 속성 고정이라 CSS로 유닛에 태운다 */
+
+.resumeThumb svg {
+  width: calc(13 * var(--pc-u));
+  height: calc(13 * var(--pc-u));
+}
+
+.resumeBanner button svg {
+  width: calc(14 * var(--pc-u));
+  height: calc(14 * var(--pc-u));
 }
 
 /* ---------- 반응형 ---------- */

@@ -17,14 +17,14 @@
 .content[data-side='right'] {
   inset-block: 0;
   inset-inline-end: 0;
-  width: min(400px, 90vw);
+  width: min(calc(400 * var(--pc-u)), 90vw);
   border-inline-start: 1px solid var(--pc-color-border-subtle);
   animation: pc-drawer-right var(--pc-duration-normal) var(--pc-ease-decelerate);
 }
 .content[data-side='left'] {
   inset-block: 0;
   inset-inline-start: 0;
-  width: min(400px, 90vw);
+  width: min(calc(400 * var(--pc-u)), 90vw);
   border-inline-end: 1px solid var(--pc-color-border-subtle);
   animation: pc-drawer-left var(--pc-duration-normal) var(--pc-ease-decelerate);
 }

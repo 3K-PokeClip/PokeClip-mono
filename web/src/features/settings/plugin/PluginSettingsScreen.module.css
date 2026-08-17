@@ -1,32 +1,32 @@
 .screen {
-  max-width: 860px;
+  max-width: calc(860 * var(--pc-u));
 }
 
 /* 디자인 1m은 블록 사이 간격이 일정하다 — 각 블록에 margin을 두지 않고 여기서 한 번에 준다 */
 .stack {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: calc(12 * var(--pc-u));
 }
 
 /* 디자인 1m 카드 규격 */
 .card {
   border: 1px solid var(--pc-color-border-subtle);
-  border-radius: 14px;
+  border-radius: calc(14 * var(--pc-u));
   background: var(--pc-color-bg-surface);
-  padding: 16px;
+  padding: calc(16 * var(--pc-u));
 }
 
 .cardTitle {
-  font-size: 13px;
+  font-size: calc(13 * var(--pc-u));
   font-weight: 750;
-  margin: 0 0 4px;
+  margin: 0 0 calc(4 * var(--pc-u));
 }
 
 .metaText {
-  font-size: 10.5px;
+  font-size: calc(10.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
-  margin-top: 9px;
+  margin-top: calc(9 * var(--pc-u));
 }
 
 /* ---------- 연결 상태 배너 (디자인 1m 상단) ----------
@@ -34,9 +34,9 @@
 .statusBanner {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 16px;
-  border-radius: 14px;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(16 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
   border: 1px solid var(--pc-color-border-subtle);
   background: var(--pc-color-bg-surface);
 }
@@ -47,13 +47,13 @@
 }
 
 .statusIcon {
-  width: 42px;
-  height: 42px;
+  width: calc(42 * var(--pc-u));
+  height: calc(42 * var(--pc-u));
   flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
+  border-radius: calc(12 * var(--pc-u));
   background: var(--pc-color-bg-inset);
   color: var(--pc-color-text-muted);
 }
@@ -71,41 +71,44 @@
 .statusTitleRow {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: calc(8 * var(--pc-u));
 }
 
 .statusName {
-  font-size: 13.5px;
+  font-size: calc(13.5 * var(--pc-u));
   font-weight: 700;
 }
 
 .statusMeta {
-  font-size: 11.5px;
+  font-size: calc(11.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
-  margin-top: 2px;
+  margin-top: calc(2 * var(--pc-u));
 }
 
 /* ---------- 연동 코드 ---------- */
 .codeCardDesc {
-  font-size: 11.5px;
+  font-size: calc(11.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
-  margin: 0 0 14px;
+  margin: 0 0 calc(14 * var(--pc-u));
 }
 
 /* 발급됨 — 실선 테두리 안에 상태 요약 */
 .codeBox {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px;
+  gap: calc(12 * var(--pc-u));
+  padding: calc(14 * var(--pc-u));
   border: 1px solid var(--pc-color-border-subtle);
-  border-radius: 10px;
+  border-radius: calc(10 * var(--pc-u));
   background: var(--pc-color-bg-canvas);
 }
 
 .codeCheck {
   flex: none;
   color: #3dbf7f;
+  /* lucide size prop은 px 고정 — 유닛에 태운다 */
+  width: calc(16 * var(--pc-u));
+  height: calc(16 * var(--pc-u));
 }
 
 .codeBody {
@@ -115,20 +118,21 @@
 }
 
 .codeTitle {
-  font-size: 12.5px;
+  font-size: calc(12.5 * var(--pc-u));
   font-weight: 650;
 }
 
 /* 발급 직후 1회만 보이는 코드 원문 (ADR-019) — 서버 규격과 같은 8자리 */
 .codeValue {
   font-family: var(--pc-font-mono, monospace);
-  font-size: 13.5px;
+  /* 이 파일의 다른 치수처럼 콘텐츠 유닛을 탄다 — px 고정이면 대형 화면에서 코드만 안 커진다 */
+  font-size: calc(13.5 * var(--pc-u));
   font-weight: 750;
   letter-spacing: 0.12em;
 }
 
 .codeHint {
-  font-size: 11px;
+  font-size: calc(11 * var(--pc-u));
   color: var(--pc-color-text-muted);
 }
 
@@ -136,15 +140,15 @@
 .codeBoxEmpty {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px;
+  gap: calc(12 * var(--pc-u));
+  padding: calc(14 * var(--pc-u));
   border: 1px dashed var(--pc-color-border-default);
-  border-radius: 10px;
+  border-radius: calc(10 * var(--pc-u));
 }
 
 .codeEmptyText {
   flex: 1;
-  font-size: 12px;
+  font-size: calc(12 * var(--pc-u));
   line-height: 1.5;
   color: var(--pc-color-text-secondary);
 }
@@ -153,9 +157,9 @@
 .downloadBanner {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 13px 16px;
-  border-radius: 12px;
+  gap: calc(12 * var(--pc-u));
+  padding: calc(13 * var(--pc-u)) calc(16 * var(--pc-u));
+  border-radius: calc(12 * var(--pc-u));
   border: 1px solid var(--pc-color-border-subtle);
   background: var(--pc-color-bg-surface);
 }
@@ -163,10 +167,17 @@
 .downloadIcon {
   flex: none;
   color: var(--pc-color-text-muted);
+  width: calc(16 * var(--pc-u));
+  height: calc(16 * var(--pc-u));
+}
+
+.statusIcon svg {
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
 }
 
 .downloadText {
   flex: 1;
-  font-size: 12px;
+  font-size: calc(12 * var(--pc-u));
   color: var(--pc-color-text-secondary);
 }

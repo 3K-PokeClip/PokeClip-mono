@@ -21,6 +21,7 @@
   border: 0;
   background: transparent;
   padding: var(--pc-space-2) var(--pc-space-3);
+  /* .list의 1px 헤어라인 보더에 겹치는 값 — 헤어라인은 배율에서 빼므로 px로 짝을 맞춘다 */
   margin-bottom: -1px;
   font-family: var(--pc-font-sans);
   font-size: var(--pc-font-size-md);

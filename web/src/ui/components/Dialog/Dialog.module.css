@@ -16,7 +16,7 @@
   border-radius: var(--pc-radius-xl);
   box-shadow: var(--pc-shadow-xl);
   width: 100%;
-  max-width: 480px;
+  max-width: calc(480 * var(--pc-u));
   max-height: calc(100vh - var(--pc-space-8));
   overflow: auto;
   padding: var(--pc-space-6);

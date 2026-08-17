@@ -11,11 +11,11 @@
 }
 .tag[data-size='sm'] {
   font-size: var(--pc-font-size-2xs);
-  padding: 3px 8px;
+  padding: calc(3 * var(--pc-u)) calc(8 * var(--pc-u));
 }
 .tag[data-size='md'] {
   font-size: var(--pc-font-size-xs);
-  padding: 4px 10px;
+  padding: calc(4 * var(--pc-u)) calc(10 * var(--pc-u));
 }
 .tag[data-variant='soft'] {
   background: var(--pc-color-accent-subtle);
@@ -34,8 +34,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-inline: 2px -3px;
-  padding: 2px;
+  margin-inline: calc(2 * var(--pc-u)) calc(-3 * var(--pc-u));
+  padding: calc(2 * var(--pc-u));
   border: 0;
   background: transparent;
   color: currentColor;

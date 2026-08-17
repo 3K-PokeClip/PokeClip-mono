@@ -1,12 +1,12 @@
 .title {
-  font-size: 21px;
+  font-size: calc(21 * var(--pc-u));
   font-weight: 800;
   letter-spacing: -0.02em;
-  margin: 0 0 4px;
+  margin: 0 0 calc(4 * var(--pc-u));
 }
 
 .description {
-  font-size: 12px;
+  font-size: calc(12 * var(--pc-u));
   color: var(--pc-color-text-muted);
-  margin: 0 0 20px;
+  margin: 0 0 calc(20 * var(--pc-u));
 }

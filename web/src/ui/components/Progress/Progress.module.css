@@ -1,13 +1,13 @@
 .track {
   position: relative;
   width: 100%;
-  height: 8px;
+  height: calc(8 * var(--pc-u));
   background: var(--pc-color-bg-inset);
   border-radius: var(--pc-radius-pill);
   overflow: hidden;
 }
 .track[data-size='sm'] {
-  height: 6px;
+  height: calc(6 * var(--pc-u));
 }
 .fill {
   height: 100%;
