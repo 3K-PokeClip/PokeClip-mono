@@ -17,6 +17,11 @@ describe('next.config rewrites', () => {
     vi.stubEnv('CLIP_API_URL', 'http://clip.internal:8081');
     expect(await loadRewrites()).toEqual([
       { source: '/api/auth/:path*', destination: 'http://auth.internal:8082/api/auth/:path*' },
+      // 스트림키도 auth 서버 소유 — /api/auth 접두사 밖이라 별도 프록시가 필요하다 (POK-102)
+      {
+        source: '/api/stream-keys/:path*',
+        destination: 'http://auth.internal:8082/api/stream-keys/:path*',
+      },
       { source: '/api/clip/:path*', destination: 'http://clip.internal:8081/api/clip/:path*' },
     ]);
   });
