@@ -13,7 +13,8 @@ export function GlobalHeader() {
         <IconButton variant="ghost" size="sm" aria-label="알림">
           <Bell size={18} aria-hidden />
         </IconButton>
-        <Avatar size="sm" alt="프로필" />
+        {/* src·name 없는 자리표시 상태라 role/aria-label로 접근성 이름을 준다 */}
+        <Avatar size="sm" alt="프로필" role="img" aria-label="프로필" />
       </div>
     </header>
   );
