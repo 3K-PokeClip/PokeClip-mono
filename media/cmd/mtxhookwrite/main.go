@@ -38,9 +38,11 @@ const (
 	lockRetryInterval = 2 * time.Millisecond
 	// spoolFileMode 는 스풀 파일의 계약 모드다.
 	//
-	// 0644 여야 하는 이유: 스풀을 쓰는 것은 MediaMTX 컨테이너(root)이고 읽는 것은
-	// 사이드카 컨테이너의 비특권 계정(UID 10001, media/Dockerfile)이다. umask 가 이 값을
-	// 깎아 0600 이 되면 :ro 로 붙여도 Reader 가 열지 못하고 훅 채널이 무징후로 강등된다.
+	// 0644 여야 하는 이유: 스풀을 쓰는 것은 MediaMTX 컨테이너의 비특권 계정
+	// (UID 10002, media/Dockerfile.mtxhook)이고 읽는 것은 사이드카 컨테이너의 비특권 계정
+	// (UID 10001, media/Dockerfile)이다. **둘의 UID 가 서로 다르므로** 읽기 관계는 소유권이
+	// 아니라 other 읽기 비트로만 성립한다. umask 가 이 값을 깎아 0600 이 되면 :ro 로 붙여도
+	// Reader 가 열지 못하고 훅 채널이 무징후로 강등된다.
 	spoolFileMode = 0o644
 	// defaultSpoolPath 는 compose 의 hooks 볼륨 마운트 지점이다.
 	defaultSpoolPath = "/hooks/events.jsonl"

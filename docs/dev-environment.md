@@ -13,11 +13,45 @@ docker compose up -d --build
 (`media/Dockerfile.mtxhook`). `git pull` 후 첫 기동에는 `--build`를 붙여야 하며,
 그때 한 번만 Go 빌드 때문에 수십 초 더 걸린다.
 
+### ⚠️ 1회만 필요한 볼륨 초기화 (POK-79, media 비특권 전환)
+
+`media`가 root 대신 **UID 10002**로 돈다. 볼륨의 소유권은 **볼륨이 새로 만들어질 때 이미지에서
+복사**되므로, 이 변경 이전에 만들어진 볼륨(root 소유)은 자동으로 고쳐지지 않는다.
+안 하면 **녹화가 조용히 멈춘다.** 아래를 **한 덩어리로** 1회 실행한다 — 중간에 `up -d`만 먼저 하면
+옛 이미지가 볼륨을 root로 굳혀 같은 문제가 재발한다.
+
+```bash
+docker compose down
+docker volume rm pokeclip_recordings pokeclip_dvr pokeclip_hooks
+docker compose up -d --build
+```
+
+- **`docker compose down -v`는 쓰지 않는다.** `pokeclip_pgdata`까지 지워져 로컬 DB가 날아간다.
+- 지워지는 것: 로컬 녹화 파일·DVR 세그먼트·훅 스풀(전부 테스트 산출물). 유지: DB·Redis.
+- **S3 업로더를 켜 둔 경우(개인 override)** 초기화 전에 미업로드 잔여를 확인한다 — 파일을 지우면
+  그 행들은 영영 업로드되지 않는다:
+  ```bash
+  docker compose exec -T -e Q="SELECT upload_state, count(*) FROM stream_segments GROUP BY 1;" \
+    postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$Q"'
+  ```
+- 초기화가 필요한지 확인 — **세 볼륨을 전부** 본다(아무것도 출력되지 않으면 이미 정상):
+  ```bash
+  for v in recordings dvr hooks; do
+    docker run --rm -v "pokeclip_$v:/x" alpine stat -c '%u' /x | grep -qx 10002 \
+      || echo "초기화 필요: pokeclip_$v"
+  done
+  ```
+  ⚠️ **하나만 확인하면 안 된다.** 볼륨은 각각 독립적으로 소유권을 받으므로 일부만 옛 상태일 수
+  있다. 예컨대 `recordings`만 정상이고 `hooks`가 root면 **훅 3종이 전부 `permission denied`로
+  죽어 스풀이 0줄**이 되는데, 녹화는 멀쩡해서 겉으로는 정상으로 보인다.
+  (이 진단이 없는 볼륨을 미리 만들어도 무해하다 — 빈 볼륨은 media 기동 시 정상적으로 채워진다.)
+- 이후에는 `git pull && docker compose up -d --build`로 평소대로 돌아간다.
+
 | 서비스 | 포트 | 용도 |
 |---|---|---|
 | postgres:17 | 5432 | 3번: 스키마 v0 마이그레이션은 여기에 (M1 2단계) |
 | redis:7.4 | 6379 | 3번: 키·TTL·pub/sub 설계 자리 |
-| media (MediaMTX 1.19.3 + 훅 바이너리) | UDP 8890 (SRT) · 1935 (RTMP) · 8888 (LL-HLS) | 1번: Media Origin 자리. 버전 고정은 `media/Dockerfile.mtxhook`의 `FROM` |
+| media (MediaMTX 1.19.3 + 훅 바이너리) | UDP 8890 (SRT) · 1935 (RTMP) · 8888 (LL-HLS) | 1번: Media Origin 자리. 버전 고정은 `media/Dockerfile.mtxhook`의 `FROM`. **비특권 UID 10002로 실행**(POK-79) — 실행 계정 정본도 같은 Dockerfile의 `USER` |
 | media-stub (nginx) | 8080 | 2번: 플레이어 개발용 정적 세그먼트 (`infra/compose/stub/README.md`) |
 | segment-indexer | (포트 없음) | 1번: 녹화 세그먼트를 감지해 `stream_segments`에 기록하는 사이드카 (`media/README.md`) |
 
@@ -283,6 +317,67 @@ docker compose -f docker-compose.yml logs segment-indexer | grep -c uploader_dis
 주의: `AWS_PROFILE`을 override에 넣는 것은 `~/.aws` 마운트 폴백을 켤 때만 —
 마운트 없이 넣으면 SDK가 존재하지 않는 프로필을 찾다 기동이 죽는다(.example 주석 참조).
 환경변수 전체 목록과 의미는 [`media/README.md`](../media/README.md)의 환경변수 절에 있다.
+
+## 권한 문제 트러블슈팅 (media 비특권 전환 이후, POK-79)
+
+`media`는 UID 10002로 돈다. 아래 세 가지가 이 변경으로 새로 생길 수 있는 증상이다.
+**공통 증상은 "오류처럼 안 보인다"는 것** — 빌드도 기동도 성공한 뒤에 조용히 안 써진다.
+
+**1) 녹화 파일이 하나도 안 생긴다 / 스풀에 줄이 안 쌓인다 → 볼륨이 아직 root 소유다**
+
+가장 흔한 원인은 위 "1회만 필요한 볼륨 초기화"를 안 했거나, 초기화 중간에 `up -d`만 먼저 한 경우다.
+
+**세 볼륨을 전부** 본다 — 볼륨마다 독립이라 일부만 옛 상태일 수 있고, 그 경우 증상이 갈린다
+(`recordings`만 root면 녹화가 멈추고, `hooks`만 root면 **녹화는 멀쩡한데 훅만 조용히 죽는다**).
+
+```bash
+for v in recordings dvr hooks; do
+  printf '%s: ' "$v"; docker run --rm -v "pokeclip_$v:/x" alpine stat -c '%u %g %a' /x
+done                                                                     # 셋 다 기대: 10002 10002 755
+docker compose logs media | grep -iE 'permission denied|failed to save'  # 0건이어야 정상
+```
+
+하나라도 `0 0 755`로 나오면 초기화 절차를 **한 덩어리로** 다시 실행한다. 볼륨은 **비어 있을 때만**
+이미지에서 소유권을 받으므로, 파일이 한 개라도 들어간 뒤에는 아무리 재기동해도 안 고쳐진다.
+
+**2) 초기화를 했는데도 root 소유다 → 복사 금지 옵션(`nocopy`)이 붙어 있다**
+
+`docker-compose.yml`은 계약 테스트(`media/internal/mtxhook/runtime_identity_contract_test.go`)가
+막지만, **개인 `docker-compose.override.yml`은 gitignore라 검사할 수 없다.**
+
+```bash
+grep -n nocopy docker-compose.override.yml 2>/dev/null   # 있으면 그 줄을 지운다
+```
+
+**3) media가 아예 안 뜬다 / 설정을 못 읽는다 → 리눅스의 설정 파일 모드 (Mac에서는 재현 안 됨)**
+
+`infra/compose/mediamtx.yml`은 bind mount라 **호스트의 파일 모드가 그대로 보인다.** 체크아웃 umask가
+0077이면 0600이 되어 비root가 읽지 못하고 기동에 실패한다. Docker Desktop(Mac)은 소유권을
+재매핑하므로 이 증상이 나지 않는다 — 리눅스/EC2에서만 발생한다.
+
+```bash
+ls -l infra/compose/mediamtx.yml | cut -c8    # 'r' 이어야 한다 (o+r 비트)
+chmod a+r infra/compose/mediamtx.yml          # 처방
+```
+
+⚠️ **이 처방은 그 설정 파일에 자격증명이 하나도 없기 때문에 성립한다**(전수 확인함). 계약4의 내부
+토큰(`X-Internal-Token`)이나 SRT passphrase가 이 파일에 들어오면 `o+r`은 ADR-018(평문 금지)과
+충돌한다 — 그때는 `o+r` 대신 **소유권·그룹으로** 읽기 권한을 주고, 비밀은 Secrets Manager로 뺀다.
+
+### 되돌리기 (롤백)
+
+머지 방식이 merge commit이라 **첫 부모를 지정해야 한다** — `-m 1`이 없으면 revert가
+`is a merge but no -m option was given`으로 아무것도 하지 않고 끝난다.
+
+```sh
+git revert -m 1 <merge-sha>     # -m 1 = 첫 부모(main) 기준
+docker compose up -d --build
+```
+
+되돌리면 media가 다시 root로 돌고, **root는 10002 소유 디렉토리에도 쓴다** →
+**롤백에는 볼륨 재초기화가 필요 없다.**
+
+훅 채널만 끄는 부분 롤백은 위 "훅 채널 확인"의 "끄는 법(즉시 롤백)"을 쓴다.
 
 ## 2번(플레이어) 로컬 URL 매핑
 
