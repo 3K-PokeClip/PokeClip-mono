@@ -45,3 +45,19 @@ pokeclip:
     key: dGVzdC1vbmx5LWFlcy0yNTYta2V5LTMyYnl0ZXMhISE=
   internal-api:
     token: test-only-internal-token-32bytes-long!!
+  chzzk:
+    app:
+      client-id: test-chzzk-client-id
+      client-secret: test-chzzk-client-secret
+      redirect-uri: http://localhost:8081/oauth/chzzk/callback
+    authorize-uri: https://chzzk.naver.com/account-interlock
+    # 자리표시다. @NotBlank라 비울 수 없고, 실제 주소는 IntegrationTestSupport·RealServerTestSupport가
+    # @DynamicPropertySource로 가짜 서버(FakeChzzkServer)로 덮어쓴다(DynamicPropertySource가 yml보다 우선).
+    api-base-uri: http://127.0.0.1:1
+    state-ttl: PT10M
+    refresh-ahead: PT6H
+    resolve-min-remaining: PT12H
+    refresh:
+      # 컨텍스트마다 틱이 돌면 DB를 뒤지고 HTTP를 시도한다. 배선은 ChzzkTokenRefreshSchedulerTest가 잰다.
+      enabled: false
+      interval: PT10M

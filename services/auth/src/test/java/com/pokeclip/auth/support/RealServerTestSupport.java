@@ -30,5 +30,7 @@ public abstract class RealServerTestSupport {
         registry.add("spring.datasource.url", IntegrationTestSupport.POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", IntegrationTestSupport.POSTGRES::getUsername);
         registry.add("spring.datasource.password", IntegrationTestSupport.POSTGRES::getPassword);
+        // 가짜 치지직도 같은 것을 쓴다 — 없으면 test yml의 자리표시(127.0.0.1:1)로 뜬다.
+        registry.add("pokeclip.chzzk.api-base-uri", IntegrationTestSupport.CHZZK::baseUrl);
     }
 }

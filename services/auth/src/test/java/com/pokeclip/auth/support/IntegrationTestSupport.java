@@ -36,6 +36,13 @@ public abstract class IntegrationTestSupport {
             new PostgreSQLContainer("postgres:17")
                     .withCommand("postgres", "-c", "max_connections=300");
 
+    /**
+     * 가짜 치지직도 static으로 하나만 띄운다. 모든 컨텍스트가 같은 api-base-uri를 받아야
+     * 컨텍스트 캐시가 유지된다 — 개별 테스트가 @DynamicPropertySource로 다른 값을 넣으면
+     * 컨텍스트가 하나 더 뜬다. 상태는 각 테스트 클래스가 @BeforeEach에서 reset()한다.
+     */
+    protected static final FakeChzzkServer CHZZK = FakeChzzkServer.start();
+
     static {
         POSTGRES.start();
         seedNonEmptySchema();
@@ -65,5 +72,6 @@ public abstract class IntegrationTestSupport {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
+        registry.add("pokeclip.chzzk.api-base-uri", CHZZK::baseUrl);
     }
 }

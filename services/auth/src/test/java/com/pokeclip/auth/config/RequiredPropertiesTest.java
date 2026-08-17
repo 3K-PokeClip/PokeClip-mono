@@ -1,5 +1,6 @@
 package com.pokeclip.auth.config;
 
+import com.pokeclip.auth.chzzk.ChzzkProperties;
 import com.pokeclip.auth.google.GoogleAuthProperties;
 import com.pokeclip.auth.streamkey.secret.SecretStoreConfig;
 import com.pokeclip.auth.streamkey.secret.SecretStoreProperties;
@@ -14,6 +15,8 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Base64;
+import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -35,6 +38,9 @@ class RequiredPropertiesTest {
 
     private static final String VALID_INTERNAL_TOKEN = "test-only-internal-token-32bytes-long!!";
 
+    private static final String[] VALID_CHZZK =
+            chzzk("cid", "csecret", "http://localhost:8081/oauth/chzzk/callback");
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withConfiguration(org.springframework.boot.autoconfigure.AutoConfigurations.of(
                     ConfigurationPropertiesAutoConfiguration.class))
@@ -47,7 +53,8 @@ class RequiredPropertiesTest {
             // hasFailed()로 초록"이 된다 — 아래 CORS 테스트 주석이 경고하는
             // 그 상황이다. 비움을 검증하는 테스트는 아래에서 덮어쓴다.
             .withPropertyValues(secretStore(VALID_SECRET_STORE_KEY))
-            .withPropertyValues(internalApi(VALID_INTERNAL_TOKEN));
+            .withPropertyValues(internalApi(VALID_INTERNAL_TOKEN))
+            .withPropertyValues(VALID_CHZZK);
 
     @Test
     void JWT_시크릿이_비어_있으면_부팅이_실패한다() {
@@ -193,6 +200,47 @@ class RequiredPropertiesTest {
         return new String[]{"pokeclip.internal-api.token=" + token};
     }
 
+    /**
+     * 치지직 앱 설정 셋(ID·시크릿·redirect)은 한 앱의 것이라 하나만 빠져도 나머지가
+     * 무의미하다. 원인이 세 갈래로 흩어지지 않게 한 메시지로 모은다 — 그리고 그
+     * 메시지에 시크릿 값이 남으면 안 된다(JWT 시크릿과 같은 이유).
+     */
+    @Test
+    void 치지직_앱_설정_중_하나라도_비면_부팅이_실패하고_원인이_하나로_모인다() {
+        String secretNeedle = "LEAK-chzzk-secret-" + UUID.randomUUID();
+        for (String[] broken : List.of(
+                chzzk("", secretNeedle, "http://x"),
+                chzzk("i", "", "http://x"),
+                chzzk("i", secretNeedle, ""))) {
+            runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                    .withPropertyValues(google("id", "secret"))
+                    .withPropertyValues(cors("http://localhost:3000"))
+                    .withPropertyValues(broken)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(stackTraceOf(context.getStartupFailure()))
+                                .as("치지직 앱 설정이 아닌 다른 이유로 부팅이 실패했다")
+                                .contains("CHZZK_CLIENT_ID·CHZZK_CLIENT_SECRET·CHZZK_REDIRECT_URI")
+                                .as("실패 메시지에 치지직 시크릿이 평문으로 남았다")
+                                .doesNotContain(secretNeedle);
+                    });
+        }
+    }
+
+    private static String[] chzzk(String clientId, String clientSecret, String redirectUri) {
+        return new String[]{
+                "pokeclip.chzzk.app.client-id=" + clientId,
+                "pokeclip.chzzk.app.client-secret=" + clientSecret,
+                "pokeclip.chzzk.app.redirect-uri=" + redirectUri,
+                "pokeclip.chzzk.authorize-uri=https://chzzk.naver.com/account-interlock",
+                "pokeclip.chzzk.api-base-uri=https://openapi.chzzk.naver.com",
+                "pokeclip.chzzk.state-ttl=PT10M",
+                "pokeclip.chzzk.refresh-ahead=PT6H",
+                "pokeclip.chzzk.resolve-min-remaining=PT12H",
+                "pokeclip.chzzk.refresh.enabled=true",
+                "pokeclip.chzzk.refresh.interval=PT10M"};
+    }
+
     private String[] jwt(String secret) {
         return new String[]{
                 "pokeclip.jwt.secret=" + secret,
@@ -214,7 +262,7 @@ class RequiredPropertiesTest {
     }
 
     @EnableConfigurationProperties({JwtProperties.class, GoogleAuthProperties.class, CorsProperties.class,
-            SecretStoreProperties.class, InternalApiProperties.class})
+            SecretStoreProperties.class, InternalApiProperties.class, ChzzkProperties.class})
     static class BoundProperties {
     }
 }

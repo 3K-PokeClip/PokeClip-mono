@@ -18,6 +18,18 @@ class CorsTest extends IntegrationTestSupport {
         this.mockMvc = mockMvc;
     }
 
+    /** 치지직 연동 해제가 DELETE다(POK-93). 허용 메서드에 없으면 브라우저 preflight가 403으로 막혀 화면에서 해제가 안 된다. */
+    @Test
+    void DELETE_preflight가_통과한다() throws Exception {
+        mockMvc.perform(options("/api/chzzk-link")
+                        .header("Origin", "http://localhost:3000")
+                        .header("Access-Control-Request-Method", "DELETE")
+                        .header("Access-Control-Request-Headers", "Authorization"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:3000"))
+                .andExpect(header().string("Access-Control-Allow-Methods", org.hamcrest.Matchers.containsString("DELETE")));
+    }
+
     @Test
     void 허용된_출처의_preflight는_통과한다() throws Exception {
         mockMvc.perform(options("/api/auth/google")

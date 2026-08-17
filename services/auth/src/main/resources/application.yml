@@ -9,6 +9,11 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB:pokeclip}
     username: ${POSTGRES_USER:pokeclip}
     password: ${POSTGRES_PASSWORD:change-me-local-only}
+    hikari:
+      # Hikari 기본값과 같은 10이다. 값을 바꾸는 게 아니라 "운영 풀은 10"을 글로 못박는다 —
+      # 치지직 resolve는 커넥션을 쥔 채 외부 HTTP(read-timeout 5s)를 기다리므로 풀 크기가 곧
+      # 동시 처리 상한이다. ChzzkResolvePoolExhaustionTest가 같은 10에서 동시 25로 잰다.
+      maximum-pool-size: 10
 
   jpa:
     hibernate:
@@ -99,3 +104,24 @@ pokeclip:
     # 이유는 JWT_SECRET과 같다 — 안 주면 리터럴이 바인딩돼 서버는 뜨고
     # 검증 API만 전부 401이 된다.
     token: ${INTERNAL_API_TOKEN:}
+  chzzk:
+    # 앱 셋은 한 덩어리다(ChzzkProperties.App). 하나만 빠져도 부팅에서 죽는다.
+    # 기본값을 빈 문자열로 두는 이유는 JWT_SECRET과 같다.
+    # redirect-uri는 개발자 센터에 앱당 하나만 등록된다(2026-08-17 확인) — 환경마다 앱이 다르다.
+    app:
+      client-id: ${CHZZK_CLIENT_ID:}
+      client-secret: ${CHZZK_CLIENT_SECRET:}
+      redirect-uri: ${CHZZK_REDIRECT_URI:}
+    authorize-uri: https://chzzk.naver.com/account-interlock
+    api-base-uri: https://openapi.chzzk.naver.com
+    # state 수명. code(수 분)보다 길어 "동의 화면에서 지체 → INVALID_CODE"가 실제로 열린 창이다.
+    state-ttl: PT10M
+    # 스케줄러가 이만큼 남았을 때 미리 갱신한다. 방송 길이보다 길고 주기보다 충분히 크다.
+    refresh-ahead: PT6H
+    # 수집기에 넘기기 전 최소 남은 수명. 수집기는 한 번 받은 토큰으로 방송 끝까지 붙어 있는다.
+    resolve-min-remaining: PT12H
+    refresh:
+      # 운영 기본 켜짐. 테스트 프로파일만 끈다 — 컨텍스트마다 틱이 돌아 DB를 뒤지고 HTTP를 시도하므로.
+      # 꺼지면 갱신이 영영 안 돌고 증상은 24시간 뒤에 나온다. ChzzkTokenRefreshSchedulerTest가 배선을 잰다.
+      enabled: true
+      interval: PT10M
