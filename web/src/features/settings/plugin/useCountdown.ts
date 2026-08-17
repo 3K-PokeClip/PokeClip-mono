@@ -25,10 +25,17 @@ function remainingMs(expiresAt: string): number {
 
 export function useCountdown(expiresAt: string | null): Countdown {
   const [ms, setMs] = useState(() => (expiresAt === null ? 0 : remainingMs(expiresAt)));
+  // expiresAt이 바뀐 "그 렌더"에서 즉시 재계산한다(파생 상태 패턴). 이펙트는 페인트 뒤에
+  // 돌기 때문에, 이것이 없으면 새 코드의 첫 프레임이 이전 상태(ms=0)로 그려져
+  // "만료됐어요"가 잠깐 표시되고 role=status가 낭독까지 한다. (리뷰 #74)
+  const [prevExpiresAt, setPrevExpiresAt] = useState(expiresAt);
+  if (prevExpiresAt !== expiresAt) {
+    setPrevExpiresAt(expiresAt);
+    setMs(expiresAt === null ? 0 : remainingMs(expiresAt));
+  }
 
   useEffect(() => {
     if (expiresAt === null) return;
-    setMs(remainingMs(expiresAt)); // 코드가 갈리면(재발급) 즉시 새 기준으로
     const id = window.setInterval(() => {
       const next = remainingMs(expiresAt);
       setMs(next);

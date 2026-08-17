@@ -217,6 +217,35 @@ describe('PluginSettingsScreen', () => {
     expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
   });
 
+  it('발급 직후 상태 재조회가 실패해도 모달을 닫으면 발급됨으로 남는다 (리뷰 #74)', async () => {
+    let issuedOnce = false;
+    stubFetch((url, init) => {
+      if (url === '/api/stream-keys/pairing-codes') {
+        issuedOnce = true;
+        return jsonResponse(201, {
+          code: 'KQ4M-7X2P',
+          expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+        });
+      }
+      if (url === '/api/stream-keys' && (init?.method ?? 'GET') === 'GET')
+        // 발급 뒤 재조회가 일시 오류 — 낙관 캐시가 없으면 카드가 미발급으로 회귀한다
+        return issuedOnce
+          ? jsonResponse(500, { reason: '일시 오류' })
+          : jsonResponse(200, { issued: false });
+      return jsonResponse(404);
+    });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '코드 발급' }));
+    expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '확인했어요' }));
+
+    expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
+    // 미발급으로 되돌아가 중복 발급을 유도하면 안 된다
+    expect(screen.queryByRole('button', { name: '코드 발급' })).not.toBeInTheDocument();
+  });
+
   it('발급 429는 분당 한도 안내 토스트를 띄운다 (POK-103 완료조건)', async () => {
     stubStreamKeyFetch({ issued: false, pairingStatus: 429 });
     renderWithProviders(<PluginSettingsScreen />);

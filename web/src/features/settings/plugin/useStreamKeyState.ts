@@ -8,6 +8,7 @@ import {
   rotateStreamKey,
   streamKeyStatusQueryOptions,
   type IssuedPairingCode,
+  type StreamKeyStatus,
 } from '@/api/streamKeys';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { useToast } from '@/ui';
@@ -72,6 +73,13 @@ export function useStreamKeyState(): StreamKeyState {
     },
     onSuccess: (issued) => {
       setJustIssued(issued);
+      // 발급 성공 = 키 존재 확정(서버 ensureKey). 재조회가 끝나기 전이나 실패한 채로
+      // 모달을 닫아도(justIssued가 비워져도) 카드가 "미발급"으로 되돌아가지 않게
+      // 캐시를 먼저 낙관 갱신한다 — 정확한 createdAt은 onSettled의 재조회가 잡는다. (리뷰 #74)
+      queryClient.setQueryData<StreamKeyStatus>(streamKeyStatusQueryOptions.queryKey, {
+        issued: true,
+        createdAt: new Date().toISOString(),
+      });
       // 코드 발급 = 온보딩 2단계(플러그인) 완료 (POK-113 시작 가이드 체크)
       markPluginLinked();
     },

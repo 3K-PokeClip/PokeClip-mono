@@ -63,4 +63,17 @@ describe('useCountdown', () => {
     expect(result.current.expired).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('expiresAt이 늦게 도착해도 첫 렌더부터 만료로 보이지 않는다 (리뷰 #74)', () => {
+    // 모달은 항상 마운트돼 있고(issued=null) 코드가 나중에 도착한다 — 그 첫 렌더에
+    // 이전 상태(ms=0)가 그려지면 "만료됐어요"가 잠깐 표시·낭독된다
+    const { result, rerender } = renderHook(({ at }: { at: string | null }) => useCountdown(at), {
+      initialProps: { at: null as string | null },
+    });
+
+    rerender({ at: EXPIRES_AT });
+
+    expect(result.current.expired).toBe(false);
+    expect(result.current.label).toBe('10:00');
+  });
 });
