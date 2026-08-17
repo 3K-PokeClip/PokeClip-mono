@@ -68,6 +68,19 @@ async function doRefresh(): Promise<boolean> {
     useAuthStore.getState().clearTokens();
     return false;
   }
+  // 응답을 기다리는 사이 로그아웃됐을 수 있다 — 여기서 setTokens하면 "로그아웃했는데
+  // 세션이 되살아나는" 레이스가 된다. 이 새 refresh는 서버에도 살아 있으므로(로그아웃은
+  // 옛 토큰만 폐기했다) 즉시 폐기까지 해야 로그아웃이 완성된다. (리뷰 #72)
+  if (useAuthStore.getState().refreshToken === null) {
+    void fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: nextRefresh }),
+    }).catch(() => {
+      /* 폐기 실패 — 14일 만료로 수렴하는 것까지만 감수 */
+    });
+    return false;
+  }
   useAuthStore.getState().setTokens({ accessToken, refreshToken: nextRefresh });
   return true;
 }

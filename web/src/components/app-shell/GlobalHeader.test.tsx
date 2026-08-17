@@ -45,6 +45,8 @@ describe('GlobalHeader', () => {
   });
 
   it('로그아웃은 서버 폐기를 부르고 세션을 접은 뒤 /login으로 보낸다', async () => {
+    // 가드가 남겨 뒀던 복원 경로 — 로그아웃한 사람의 것이라 함께 지워져야 한다 (리뷰 #72)
+    window.sessionStorage.setItem('pc-auth-return', '/settings/plugin');
     const spy = stubAuthedFetch();
     renderWithProviders(<GlobalHeader />);
 
@@ -55,6 +57,7 @@ describe('GlobalHeader', () => {
     expect(spy.mock.calls.some(([url]) => url === '/api/auth/logout')).toBe(true);
     expect(useAuthStore.getState().refreshToken).toBeNull();
     expect(window.localStorage.getItem('pc-auth')).toBeNull();
+    expect(window.sessionStorage.getItem('pc-auth-return')).toBeNull();
   });
 
   it('접근성 위반이 없다', async () => {

@@ -62,6 +62,39 @@ describe('apiFetch', () => {
     expect(window.localStorage.getItem('pc-auth')).toBeNull();
   });
 
+  it('회전 응답 대기 중 로그아웃되면 세션을 되살리지 않고 새 refresh를 폐기한다', async () => {
+    let resolveRefresh!: (r: Response) => void;
+    const spy = stubFetch((url) => {
+      if (url === '/api/auth/refresh')
+        return new Promise<Response>((resolve) => {
+          resolveRefresh = resolve;
+        });
+      if (url === '/api/auth/logout') return new Response(null, { status: 204 });
+      return jsonResponse(401, { message: '인증 실패' });
+    });
+
+    const pending = apiFetch('/api/protected').catch((e: unknown) => e);
+    await vi.waitFor(() =>
+      expect(spy.mock.calls.some(([url]) => url === '/api/auth/refresh')).toBe(true),
+    );
+
+    useAuthStore.getState().clearTokens(); // 응답이 오기 전에 사용자가 로그아웃
+    resolveRefresh(jsonResponse(200, { accessToken: 'late-access', refreshToken: 'late-refresh' }));
+
+    const err = await pending;
+    expect((err as ApiError).status).toBe(401);
+    // 세션이 부활하면 안 되고, 서버에 살아남은 새 refresh는 폐기 요청이 나가야 한다
+    expect(useAuthStore.getState().accessToken).toBeNull();
+    expect(useAuthStore.getState().refreshToken).toBeNull();
+    await vi.waitFor(() =>
+      expect(
+        spy.mock.calls.some(
+          ([url, init]) => url === '/api/auth/logout' && String(init?.body).includes('late-refresh'),
+        ),
+      ).toBe(true),
+    );
+  });
+
   it('401이 아닌 오류는 refresh 없이 상태 코드 그대로 던진다 — 429 발급 제한 분기용', async () => {
     const spy = stubFetch(() => jsonResponse(429, { reason: '발급 한도 초과' }));
 

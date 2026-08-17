@@ -4,6 +4,7 @@ import { useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { logoutSession, meQueryOptions } from '@/api/auth';
+import { markIntentionalLogout } from '@/components/app-shell/AuthGuard';
 import { useAuthStore } from '@/stores/auth';
 
 // 세션 훅 (POK-101) — me 쿼리와 로그아웃을 화면에서 쓰기 좋은 모양으로 감싼다.
@@ -33,6 +34,8 @@ export function useLogout() {
     } catch {
       /* 서버 폐기 실패 — 남은 refresh는 14일 뒤 만료된다. 로컬 로그아웃을 우선한다. */
     }
+    // clearTokens가 가드 이펙트를 깨우기 전에 표식부터 — 로그아웃 위치가 복원 경로로 남지 않게
+    markIntentionalLogout();
     clearTokens();
     queryClient.clear(); // 이전 계정의 캐시(me·스트림키 상태)가 다음 로그인에 새면 안 된다
     router.replace('/login');

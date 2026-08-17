@@ -1,6 +1,6 @@
 import { screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AuthGuard } from '@/components/app-shell/AuthGuard';
+import { AuthGuard, markIntentionalLogout } from '@/components/app-shell/AuthGuard';
 import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
@@ -38,6 +38,22 @@ describe('AuthGuard', () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/login'));
     expect(screen.queryByText('보호 콘텐츠')).not.toBeInTheDocument();
     expect(window.sessionStorage.getItem('pc-auth-return')).toBe('/home');
+  });
+
+  it('의도적 로그아웃 직후에는 로그아웃한 화면을 복원 경로로 남기지 않는다', async () => {
+    stubFetch(() => jsonResponse(401, { message: '인증 실패' }));
+    markIntentionalLogout(); // useLogout이 clearTokens 직전에 남기는 표식
+
+    renderWithProviders(
+      <AuthGuard>
+        <div>보호 콘텐츠</div>
+      </AuthGuard>,
+    );
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/login'));
+    expect(window.sessionStorage.getItem('pc-auth-return')).toBeNull();
+    // 표식은 1회용 — 남아 있으면 다음 만료 때 복원 경로 저장을 잘못 억제한다
+    expect(window.sessionStorage.getItem('pc-auth-logout')).toBeNull();
   });
 
   it('세션이 있으면 콘텐츠를 즉시 그리고, refresh 회전으로 me를 부트스트랩한다', async () => {

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { Button, Spinner } from '@/ui';
 import { loginWithGoogle } from '@/api/auth';
 import { useAuthStore } from '@/stores/auth';
@@ -16,6 +17,7 @@ type Phase = { kind: 'working' } | { kind: 'error'; title: string; description: 
 export function OAuthCallbackScreen() {
   const router = useRouter();
   const params = useSearchParams();
+  const queryClient = useQueryClient();
   const [phase, setPhase] = useState<Phase>({ kind: 'working' });
   const startedRef = useRef(false);
 
@@ -51,6 +53,9 @@ export function OAuthCallbackScreen() {
 
     loginWithGoogle(code)
       .then((pair) => {
+        // 자동 로그아웃(401→clearTokens)은 캐시를 못 비운다 — 공용 PC에서 이전 계정의
+        // me 캐시가 새 로그인에 새지 않도록, 토큰을 심기 전에 여기서 비운다. (리뷰 #72)
+        queryClient.clear();
         useAuthStore.getState().setTokens(pair);
         router.replace(stored.returnTo ?? '/home');
       })
@@ -62,7 +67,7 @@ export function OAuthCallbackScreen() {
           description: '잠시 후 로그인 화면에서 다시 시도해 주세요.',
         });
       });
-  }, [params, router]);
+  }, [params, queryClient, router]);
 
   if (phase.kind === 'working') {
     return (

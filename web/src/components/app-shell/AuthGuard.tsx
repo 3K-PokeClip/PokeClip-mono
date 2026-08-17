@@ -9,6 +9,21 @@ import { useAuthHydration, useAuthStore } from '@/stores/auth';
 // 토큰이 localStorage에 있어 미들웨어(서버)는 판단 재료가 없다 — 클라이언트 가드가 정답.
 
 const RETURN_KEY = 'pc-auth-return';
+const LOGOUT_KEY = 'pc-auth-logout';
+
+/**
+ * 의도적 로그아웃 표식 — useLogout이 clearTokens 직전에 부른다. 이것이 없으면
+ * 토큰이 비는 순간 가드 이펙트가 "로그아웃한 사람이 보던 화면"을 복원 경로로
+ * 저장해, 같은 브라우저의 다음 사용자가 그 화면으로 복원된다. (리뷰 #72)
+ */
+export function markIntentionalLogout() {
+  try {
+    sessionStorage.setItem(LOGOUT_KEY, '1');
+    sessionStorage.removeItem(RETURN_KEY);
+  } catch {
+    /* 저장 실패 — 복원 경로가 남는 것까지만 감수 */
+  }
+}
 
 export function AuthGuard({ children }: { children: ReactNode }) {
   useAuthHydration();
@@ -25,8 +40,12 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!hydrated || refreshToken !== null) return;
     try {
+      // 만료·도난 같은 비자발 종료만 복원 경로를 남긴다 — 재로그인 후 보던 화면으로
+      // 돌아가는 게 맞다. 의도적 로그아웃(표식 존재)은 남기지 않는다. 표식은 1회용.
+      const intentional = sessionStorage.getItem(LOGOUT_KEY) !== null;
+      sessionStorage.removeItem(LOGOUT_KEY);
       // 로그인 후 가려던 화면으로 복원 — LoginScreen이 읽어 OAuth state에 실어 보낸다.
-      sessionStorage.setItem(RETURN_KEY, pathname);
+      if (!intentional) sessionStorage.setItem(RETURN_KEY, pathname);
     } catch {
       /* 저장 실패 — /home으로 복원되는 것까지만 감수 */
     }
