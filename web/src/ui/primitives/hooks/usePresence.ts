@@ -5,6 +5,11 @@ export interface PresenceState {
   ref: RefCallback<HTMLElement>;
 }
 
+/** duration은 "0s, 0.3s"처럼 쉼표 목록일 수 있어 하나라도 0보다 큰지로 판별한다. */
+export function hasPositiveDuration(value: string): boolean {
+  return value.split(',').some((d) => parseFloat(d) > 0);
+}
+
 /** Keeps a node mounted through its CSS exit animation after `present` flips to false. */
 export function usePresence(present: boolean): PresenceState {
   const [mounted, setMounted] = useState(present);
@@ -22,8 +27,8 @@ export function usePresence(present: boolean): PresenceState {
     }
     const styles = getComputedStyle(node);
     const animates =
-      (styles.animationName !== 'none' && styles.animationDuration !== '0s') ||
-      styles.transitionDuration !== '0s';
+      (styles.animationName !== 'none' && hasPositiveDuration(styles.animationDuration)) ||
+      hasPositiveDuration(styles.transitionDuration);
     if (!animates) {
       setMounted(false);
       return;
