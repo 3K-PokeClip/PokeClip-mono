@@ -24,6 +24,7 @@ export function PlayerControls({
   onClip,
   onPip,
   onFullscreen,
+  onSettingsOpenChange,
 }: {
   sim: PlayerSimulation;
   chatOn: boolean;
@@ -31,6 +32,8 @@ export function PlayerControls({
   onClip: () => void;
   onPip: () => void;
   onFullscreen: () => void;
+  /** 설정 팝오버 열림 알림 — 열려 있는 동안 GlassPlayer가 컨트롤 숨김을 유보한다 */
+  onSettingsOpenChange?: (open: boolean) => void;
 }) {
   return (
     <div className={styles.buttonRow}>
@@ -103,6 +106,7 @@ export function PlayerControls({
           onQualityChange={sim.setQuality}
           lowLatency={sim.lowLatency}
           onToggleLowLatency={sim.toggleLowLatency}
+          onOpenChange={onSettingsOpenChange}
         />
         <button
           type="button"

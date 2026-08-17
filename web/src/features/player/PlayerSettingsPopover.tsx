@@ -13,14 +13,17 @@ export function PlayerSettingsPopover({
   onQualityChange,
   lowLatency,
   onToggleLowLatency,
+  onOpenChange,
 }: {
   quality: PlayerQuality;
   onQualityChange: (quality: PlayerQuality) => void;
   lowLatency: boolean;
   onToggleLowLatency: () => void;
+  /** 팝오버는 Portal로 뜬다 — 부모가 열림 동안 컨트롤 숨김을 유보하는 데 쓴다 */
+  onOpenChange?: (open: boolean) => void;
 }) {
   return (
-    <Popover side="top" align="end">
+    <Popover side="top" align="end" onOpenChange={onOpenChange}>
       <Popover.Trigger>
         <button type="button" className={styles.glassBtn} aria-label="설정">
           <Settings size={19} aria-hidden />

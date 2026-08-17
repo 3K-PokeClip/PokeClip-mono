@@ -36,13 +36,16 @@ export interface PairingCodeStatus {
 // 이미 포맷된 문자열로 둔다 — 서버와 브라우저의 타임존이 달라도 하이드레이션이 어긋나지 않는다.
 const MOCK_ISSUED_AT = '2026. 8. 2.'; // 디자인 표기값
 
-// 실발급은 서버 몫(auth PairingCodeService, POK-72) — 규격(Crockford Base32 8자리)만 맞춘 목업.
+// 실발급은 서버 몫(auth PairingCodeService, POK-72) — 표기 규격만 맞춘 목업.
+// 서버는 사람이 읽는 자리에서 Crockford Base32 8자리를 XXXX-XXXX로 끊는다 (PairingCodeService.format).
 const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
 function mockPairingCode(): string {
-  return Array.from({ length: 8 }, () =>
-    CODE_ALPHABET.charAt(Math.floor(Math.random() * CODE_ALPHABET.length)),
-  ).join('');
+  const half = () =>
+    Array.from({ length: 4 }, () =>
+      CODE_ALPHABET.charAt(Math.floor(Math.random() * CODE_ALPHABET.length)),
+    ).join('');
+  return `${half()}-${half()}`;
 }
 
 export interface PluginMockState {

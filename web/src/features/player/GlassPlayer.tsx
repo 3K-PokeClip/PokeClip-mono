@@ -32,11 +32,14 @@ export function GlassPlayer({
 }: GlassPlayerProps) {
   const sim = usePlayerSimulation(simulationOptions);
   const [chatOn, setChatOn] = useState(true);
+  // 설정 팝오버는 Portal로 플레이어 밖에 뜬다 — 포커스가 넘어가면 :has(:focus-visible)
+  // 보호가 닿지 않으므로, 열림 상태를 여기서 알고 그동안 컨트롤 숨김을 유보한다.
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const chat = useSimulatedChat(chatOn);
   const { toast } = useToast();
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const controlsShown = sim.controlsVisible || !sim.playing;
+  const controlsShown = sim.controlsVisible || !sim.playing || settingsOpen;
 
   const handleClip = useCallback(() => {
     sim.markClip();
@@ -65,8 +68,10 @@ export function GlassPlayer({
       data-controls={controlsShown ? 'visible' : 'hidden'}
       onMouseMove={sim.wake}
       onMouseLeave={sim.sleep}
-      // 키보드 사용자도 컨트롤을 깨울 수 있어야 한다 — CSS의 :focus-within 유지와 짝
+      // 키보드 사용자도 컨트롤을 깨울 수 있어야 한다 — CSS의 :has(:focus-visible) 유지와 짝
       onFocus={sim.wake}
+      // 탭에 mousemove를 합성하지 않는 터치 환경의 복구 경로 — 숨은 컨트롤은 pointer-events가 없다
+      onPointerDown={sim.wake}
     >
       {/* POK-23: 이 자리에 <video>가 들어간다 */}
       <div className={styles.videoSlot} aria-hidden>
@@ -94,6 +99,7 @@ export function GlassPlayer({
           onClip={handleClip}
           onPip={handlePip}
           onFullscreen={handleFullscreen}
+          onSettingsOpenChange={setSettingsOpen}
         />
       </div>
     </div>

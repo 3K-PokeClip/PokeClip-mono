@@ -5,6 +5,8 @@ import styles from './GlassPlayer.module.css';
 import { LIVE_WINDOW_SECONDS, formatBehind, isAtEdge, progressFraction } from './playerMath';
 
 const KEYBOARD_STEP_SECONDS = 10;
+/** PageUp/PageDown 큰 스텝 — WAI-ARIA slider 패턴의 선택 항목 */
+const KEYBOARD_PAGE_SECONDS = 60;
 /** 클립 구간 마커 폭 — 진행 비율 기준 % (시안 값: 최근 30초 ≈ 윈도우의 일부를 상징) */
 const CLIP_MARK_WIDTH_PCT = 5;
 
@@ -35,7 +37,10 @@ export function PlayerSeekBar({
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // WAI-ARIA slider 패턴: Up/Down도 값 조정 키다 — Up = 값 증가 = 라이브 엣지 쪽
     if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') onSeekBy(KEYBOARD_STEP_SECONDS);
-    else if (event.key === 'ArrowRight' || event.key === 'ArrowUp') onSeekBy(-KEYBOARD_STEP_SECONDS);
+    else if (event.key === 'ArrowRight' || event.key === 'ArrowUp')
+      onSeekBy(-KEYBOARD_STEP_SECONDS);
+    else if (event.key === 'PageDown') onSeekBy(KEYBOARD_PAGE_SECONDS);
+    else if (event.key === 'PageUp') onSeekBy(-KEYBOARD_PAGE_SECONDS);
     else if (event.key === 'End') onReturnToLive();
     else if (event.key === 'Home') onSeekBy(LIVE_WINDOW_SECONDS);
     else return;

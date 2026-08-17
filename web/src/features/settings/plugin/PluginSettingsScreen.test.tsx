@@ -40,7 +40,8 @@ describe('PluginSettingsScreen', () => {
     render(<PluginSettingsScreen />);
 
     // 이전 세션 발급분 — 원문은 이미 사라졌다
-    const CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{8}$/; // Crockford Base32 8자리
+    // 서버의 사람용 표기와 같은 XXXX-XXXX (Crockford Base32, PairingCodeService.format)
+    const CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
     expect(screen.queryByText(CODE_PATTERN)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '재발급' }));

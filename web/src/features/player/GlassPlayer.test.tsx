@@ -1,6 +1,7 @@
-import { render, screen } from '@testing-library/react';
+import { act } from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
 import { GlassPlayer } from '@/features/player/GlassPlayer';
 import type { PlayerSimulationOptions } from '@/features/player/usePlayerSimulation';
@@ -44,6 +45,14 @@ describe('GlassPlayer', () => {
     expect(slider).toHaveAttribute('aria-valuetext', '실시간에서 -01:23');
   });
 
+  it('시크바 PageDown은 60초 뒤로 시킹한다', () => {
+    renderPlayer();
+    const slider = screen.getByRole('slider', { name: '라이브 탐색' });
+
+    fireEvent.keyDown(slider, { key: 'PageDown' });
+    expect(slider).toHaveAttribute('aria-valuenow', '-60');
+  });
+
   it('재생/일시정지가 토글된다', async () => {
     const user = userEvent.setup();
     renderPlayer();
@@ -72,5 +81,24 @@ describe('GlassPlayer', () => {
     expect(screen.getByRole('button', { name: '1080p60' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '720p' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '480p' })).toBeInTheDocument();
+  });
+
+  it('설정 팝오버가 열려 있는 동안엔 자동 숨김이 유보된다', () => {
+    // 팝오버는 Portal로 플레이어 밖에 떠서 포커스 보호가 닿지 않는다 — 열림 상태로 유보한다.
+    // userEvent는 fake timer와 대기가 엉켜 멈추므로 동기 fireEvent를 쓴다.
+    vi.useFakeTimers();
+    try {
+      const { container } = renderPlayer();
+      const player = container.querySelector('[data-controls]');
+
+      fireEvent.click(screen.getByRole('button', { name: '설정' }));
+      act(() => {
+        vi.advanceTimersByTime(4000); // 숨김 타이머(2.8s)를 지나친다
+      });
+
+      expect(player).toHaveAttribute('data-controls', 'visible');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
