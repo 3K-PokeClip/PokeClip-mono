@@ -22,8 +22,6 @@ export interface PairingCodeStatus {
   issued: boolean;
   /** 이미 포맷된 표시용 날짜 — 서버 ISO를 클라 수신 후에만 변환한다(SSR 시 쿼리 데이터가 없어 하이드레이션 안전). */
   issuedAt?: string;
-  /** 발급 직후 1회만 존재하는 코드 원문 (ADR-019) — 서버가 발급 응답에만 실어준다. */
-  justIssuedCode?: string;
 }
 
 export interface StreamKeyState {
@@ -35,7 +33,11 @@ export interface StreamKeyState {
   code: PairingCodeStatus;
   /** 발급·재발급 진행 중 — 버튼 잠금. */
   busy: boolean;
-  /** 미발급 상태의 첫 발급. */
+  /** 발급 직후 1회 표시용 원문+만료 시각 (ADR-019) — 모달(IssuedCodeDialog)만 소비한다. */
+  justIssued: IssuedPairingCode | null;
+  /** 모달을 닫는 지점 — 이 뒤로 원문은 다시 볼 수 없다. */
+  clearJustIssued: () => void;
+  /** 미발급 상태의 첫 발급. 만료 후 "새 코드 발급"도 이 경로다(코드 만료는 키와 무관). */
   issue: () => void;
   /** 재발급 — 반드시 확인 모달(RotateConfirmDialog) 뒤에서만 부른다. */
   reissue: () => void;
@@ -115,6 +117,7 @@ export function useStreamKeyState(): StreamKeyState {
   const retryStatus = useCallback(() => {
     void refetch();
   }, [refetch]);
+  const clearJustIssued = useCallback(() => setJustIssued(null), []);
 
   const createdAt = status.data?.createdAt;
   const issuedAt = justIssued
@@ -133,9 +136,10 @@ export function useStreamKeyState(): StreamKeyState {
       // 발급 직후엔 status 재조회가 끝나기 전에도 발급됨으로 보여야 한다
       issued: (status.data?.issued ?? false) || justIssued !== null,
       issuedAt,
-      justIssuedCode: justIssued?.code,
     },
     busy: mutation.isPending,
+    justIssued,
+    clearJustIssued,
     issue,
     reissue,
   };

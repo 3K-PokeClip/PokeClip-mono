@@ -24,19 +24,26 @@ function stubStreamKeyFetch({
   rotateStatus = 200,
   pairingStatus = 201,
 }: StubOptions = {}) {
+  // 서버 ensureKey처럼 발급 성공이 키를 만든다 — invalidate 후 재조회가 발급됨으로 바뀐다
+  let issuedState = issued;
   return stubFetch((url, init) => {
     if (url === '/api/stream-keys/rotate')
       return rotateStatus === 200
         ? jsonResponse(200, { rotatedAt: '2026-08-17T03:00:00Z' })
         : jsonResponse(rotateStatus, { reason: '폐기할 키가 없다' });
-    if (url === '/api/stream-keys/pairing-codes')
-      return pairingStatus === 201
-        ? jsonResponse(201, { code: 'KQ4M-7X2P', expiresAt: '2026-08-17T03:10:00Z' })
-        : jsonResponse(pairingStatus, { reason: '발급 한도 초과' });
+    if (url === '/api/stream-keys/pairing-codes') {
+      if (pairingStatus !== 201) return jsonResponse(pairingStatus, { reason: '발급 한도 초과' });
+      issuedState = true;
+      return jsonResponse(201, {
+        code: 'KQ4M-7X2P',
+        // 카운트다운이 실시간 기준이라 만료 시각도 지금 기준으로 만든다
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+      });
+    }
     if (url === '/api/stream-keys' && (init?.method ?? 'GET') === 'GET')
       return jsonResponse(
         200,
-        issued ? { issued: true, createdAt: CREATED_AT } : { issued: false },
+        issuedState ? { issued: true, createdAt: CREATED_AT } : { issued: false },
       );
     return jsonResponse(404);
   });
@@ -102,8 +109,10 @@ describe('PluginSettingsScreen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '지금 재발급' }));
 
+    // 새 코드는 모달에서 1회 표시 — 카운트다운과 1회 노출 경고가 같이 붙는다 (POK-103)
     expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
-    expect(screen.getByText(/이 코드는 지금만 보여요/)).toBeInTheDocument();
+    expect(screen.getByText(/한 번만/)).toBeInTheDocument();
+    expect(screen.getByRole('timer')).toHaveTextContent(/\d{2}:\d{2} 후 만료돼요/);
     // rotate가 발급보다 먼저다 — 순서가 뒤집히면 옛 키의 코드가 나간다
     expect(callsTo(spy, '/api/stream-keys/rotate')).toHaveLength(1);
     expect(callsTo(spy, '/api/stream-keys/pairing-codes')).toHaveLength(1);
@@ -190,6 +199,21 @@ describe('PluginSettingsScreen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '다시 시도' }));
 
+    expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
+  });
+
+  it('모달을 닫으면 코드 원문은 어디에도 다시 나오지 않는다 (ADR-019)', async () => {
+    stubStreamKeyFetch({ issued: false });
+    const { container } = renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '코드 발급' }));
+    expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '확인했어요' }));
+
+    expect(screen.queryByText('KQ4M-7X2P')).not.toBeInTheDocument();
+    expect(container.textContent).not.toContain('KQ4M-7X2P');
+    // 카드는 발급됨 상태로 남는다 — 원문 없이
     expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
   });
 

@@ -199,3 +199,63 @@
   gap: var(--pc-space-2);
   margin-top: var(--pc-space-4);
 }
+
+/* ---------- 발급 직후 코드 모달 (디자인 1m ③, POK-103) ---------- */
+
+.issueCodeRow {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  margin-top: var(--pc-space-3);
+}
+
+/* 디자인 ③: 모노 22px, 자간 .12em — 사람이 옮겨 적는 값이라 크게 */
+.issueCode {
+  flex: 1;
+  text-align: center;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: calc(22 * var(--pc-u));
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: calc(13 * var(--pc-u)) calc(12 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-canvas);
+}
+
+.issueCountdown {
+  margin-top: calc(8 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  font-variant-numeric: tabular-nums; /* 초가 바뀌어도 폭이 안 흔들린다 */
+}
+
+/* 디자인 ③ 경고 박스 — 앰버 배경/보더 */
+.issueWarning {
+  display: flex;
+  gap: calc(9 * var(--pc-u));
+  margin-top: calc(12 * var(--pc-u));
+  padding: calc(11 * var(--pc-u)) calc(13 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  background: rgb(240 173 78 / 0.1);
+  border: 1px solid rgb(240 173 78 / 0.3);
+  font-size: calc(11.5 * var(--pc-u));
+  line-height: 1.55;
+  color: var(--pc-color-text-secondary);
+}
+
+.issueWarning b {
+  color: var(--pc-color-text-primary);
+}
+
+.issueExpired {
+  margin-top: var(--pc-space-3);
+  font-size: calc(12.5 * var(--pc-u));
+  line-height: 1.55;
+  color: var(--pc-color-text-secondary);
+}
+
+.issueConfirm {
+  width: 100%;
+  margin-top: calc(18 * var(--pc-u));
+}
