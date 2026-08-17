@@ -181,3 +181,21 @@
   font-size: calc(12 * var(--pc-u));
   color: var(--pc-color-text-secondary);
 }
+
+/* ---------- 연동 코드 실상태 (POK-102) ---------- */
+
+/* 상태 조회 전 자리 — 코드 박스와 같은 높이라 로드 후 레이아웃이 튀지 않는다 */
+.codeSkeleton {
+  display: block;
+  width: 100%;
+  height: calc(64 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+}
+
+/* 재발급 확인 모달 버튼 행 */
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--pc-space-2);
+  margin-top: var(--pc-space-4);
+}
