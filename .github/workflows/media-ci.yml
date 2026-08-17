@@ -1,0 +1,128 @@
+# media/ 전용 CI — 경로 필터로 media 변경 PR에서만 돈다 (ADR-013 모노레포 원칙)
+name: media-ci
+
+on:
+  pull_request:
+    paths:
+      - 'media/**'
+      - '.github/workflows/media-ci.yml' # 이 파일을 고치는 PR은 이 파일로 검증한다
+      # media 계약 테스트 2개가 저장소 루트의 compose를 직접 읽고, 못 읽으면 fail한다
+      # (internal/mtxhook/runtime_identity_contract_test.go, cmd/mtxhookwrite/contract_test.go).
+      # 이 줄이 없으면 compose만 고치는 PR에서 드리프트 탐지 계약이 통째로 잠든다.
+      # media 테스트가 media/ 밖에서 읽는 파일은 현재 이 하나뿐이다 — 새로 생기면 여기도 늘린다.
+      - 'docker-compose.yml'
+
+# 이 워크플로는 GitHub API를 전혀 쓰지 않는다. PR의 코드를 go test로 실행하므로,
+# 토큰 권한을 저장소 기본값에 맡기지 않고 checkout에 필요한 최소치로 못박는다.
+permissions:
+  contents: read
+
+# 같은 PR에 새 커밋이 오면 이전 실행을 취소한다. 낡은 실행이 러너와 서비스 컨테이너를
+# 계속 점유하고 체크 목록을 어지럽히는 것을 막는다.
+# (판정 무결성 목적이 아니다 — 옛 실행의 결과는 옛 SHA의 체크로 남고 최신 SHA의 판정을
+#  덮지 않는다. 이 블록을 지워도 게이트 동작은 같다.)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 잡 이름은 이 잡이 하는 일 전부(gofmt·vet·test)를 담는다.
+  # 훗날 필수 체크로 지정되면 이 id가 그대로 사람이 보는 체크 이름이 된다.
+  check:
+    runs-on: ubuntu-latest
+    # 잡 전체 상한이다(checkout·setup-go·모듈 다운로드·gofmt·vet·test 전부 포함).
+    # 아래 `go test -timeout 20m`은 성격이 다른 상한이다 — 잡 시작이 아니라 각 테스트
+    # 바이너리가 시작한 시점부터 잰다. 그래서 두 값의 "차"가 아니라 아래 부등식으로 잡는다:
+    #   timeout-minutes > (앞 스텝 소요) + (테스트 스텝 정상 총소요) + 여유(≥ 아래 -timeout 값 = 20m)
+    # 마지막 항은 일반 슬랙이 아니라 `-timeout` 값 이상이어야 한다 — 가장 늦게 시작한 테스트
+    # 바이너리가 매달리면 그 시작 시점부터 다시 20m을 쓰기 때문이다. 그만큼을 남겨 둬야 go가
+    # 잡 취소보다 먼저 panic해 goroutine 덤프를 남기고, 원인 추적이 봉쇄되지 않는다.
+    # 로컬 실측(2026-08-17): gofmt·vet 각 1초 미만, `go test -race -count=1 ./...` 총 14~16초
+    # (최장 패키지 internal/recording 13~16초). 즉 앞 두 항의 합이 10분(=30-20)에 한참 못 미쳐
+    # 러너가 로컬보다 여러 배 느려도 부등식이 성립한다. 첫 실행 로그로 재확인하고, 모자라면 이 값을 올린다
+    # (-timeout 하향은 정상 테스트를 자를 위험이 있어 후순위다).
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: media
+
+    # container: 를 쓰지 않는다. 잡을 컨테이너에서 돌리면 기본 사용자가 root가 되고,
+    # internal/mtxhook/reader_test.go:379의 `os.Geteuid() == 0` 가드가 그 테스트를 skip시킨다
+    # — 완료 조건 "skip 0"이 조용히 깨진다. 러너 VM 위에서 직접 도는 지금이 비root다.
+    services:
+      postgres:
+        # 태그를 반드시 고정한다(공식 예제는 태그가 없다). 정본은 버전 정책 —
+        # 최신 메이저 -1, docker-compose.yml 머리 주석. 로컬과 같은 메이저를 유지한다.
+        image: postgres:17
+        env:
+          # 이 비밀번호와 아래 PG_DSN을 평문으로 적는 전제: 비밀이 아니라 테스트 전용 값이다.
+          # 서비스 컨테이너는 잡마다 새 VM에 떠서 잡과 함께 폐기되고, 러너 밖에서 이 PG에 닿는
+          # 경로도 실데이터도 없다. self-hosted 러너로 바꾸면 이 전제가 깨진다(호스트가 상주하고
+          # 사설망에 닿는다) — 그때는 secrets로 옮겨야 한다.
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pokeclip_ci # 관리 접속 대상. 아래 PG_TEST_DB와 반드시 달라야 한다
+        # 잡이 러너 VM에서 직접 도는 경우, 포트를 호스트로 매핑하지 않으면 서비스에 닿을 수 없다.
+        ports:
+          - 5432:5432
+        # 헬스체크를 주지 않으면 러너가 준비를 기다리지 않고 첫 스텝을 시작해 접속이 깨진다.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # PG_DSN은 관리 접속 전용이다(ADR-0002) — CREATE DATABASE 한 문장에만 쓰이고, 표에 대한
+      # 읽기·쓰기는 전부 전용 테스트 DB 안에서 일어난다. 서비스 컨테이너의 postgres는 superuser라
+      # 그 문장이 요구하는 CREATEDB를 이미 갖고 있다(권한 부여 스텝도, DB 생성 스텝도 필요 없다 —
+      # 전용 DB는 testdb_test.go의 newTestPool이 스스로 만들고, 미리 만들어 두면 소유 표식이 없어
+      # 채택 검사에 걸려 오히려 실패한다).
+      # 호스트는 127.0.0.1로 고정한다. localhost는 ::1로 풀릴 수 있고 포트 매핑은 IPv4다.
+      # DB 이름(pokeclip_ci)을 반드시 적는다 — 비우면 서버가 롤 이름으로 접속 대상을 골라
+      # testdb_test.go의 동일 이름 가드가 무력화된다.
+      PG_DSN: postgres://postgres:postgres@127.0.0.1:5432/pokeclip_ci?sslmode=disable
+      # 전용 테스트 DB. PG_DSN의 DB와 달라야 한다(같으면 테스트가 기동 즉시 실패한다).
+      # 서비스 컨테이너는 잡마다 새로 뜨고 잡과 함께 사라져 실행끼리 PG를 공유하지 않는다 —
+      # 이름 충돌 경로가 구조적으로 없어 고정 이름으로 충분하고, 사후 DROP도 필요 없다.
+      PG_TEST_DB: pokeclip_citest
+      # PG_DSN이 어떤 이유로든 비면 통합 케이스가 전량 skip되는데 skip은 성공으로 집계된다.
+      # 이 스위치가 그 상황을 잡 실패로 바꾼다 — 그래서 "초록불"이 곧 "PG_DSN이 살아 있었다"는
+      # 증거가 된다.
+      REQUIRE_PG: "1"
+
+    steps:
+      # v7은 착수 시 확인한 최신 메이저다(2026-08-17, releases/latest = v7.0.1).
+      # web-ci.yml은 아직 v4다 — 갈라져도 무해하며 이번 PR에서 손대지 않는다.
+      - uses: actions/checkout@v7
+
+      # v7은 착수 시 확인한 최신 메이저다(2026-08-17, releases/latest = v7.0.0).
+      - uses: actions/setup-go@v7
+        with:
+          # 버전 정본은 go.mod 한 곳이다. 경로는 저장소 루트 기준이며, 파일이 없으면 액션이 실패한다.
+          go-version-file: media/go.mod
+          # v6부터 기본 캐시 키가 go.sum이 아니라 go.mod다. 명시하지 않으면 go.sum만 바뀐
+          # 의존성 갱신이 캐시를 무효화하지 못한다.
+          cache-dependency-path: media/go.sum
+
+      # kty Q2-B 승인(2026-08-17) — 티켓 문언 밖 추가분.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt 미적용 파일 — 로컬에서 'cd media && gofmt -w .' 후 다시 올려라:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      # kty Q2-B 승인(2026-08-17) — 티켓 문언 밖 추가분.
+      - run: go vet ./...
+
+      # -count=1  : 테스트 캐시를 끈다. 캐시 키는 소스와 환경변수만 보고 DB 상태는 보지 않으므로,
+      #             지난번 통과가 재사용되면 통합 테스트가 실제로는 돌지 않은 채 초록이 된다.
+      # -timeout  : 각 테스트 바이너리의 상한이다(미지정 시 기본 10m). 매달린 테스트를 러너가
+      #             취소하기 전에 go가 먼저 panic해 덤프를 남기도록, 위 timeout-minutes 주석의
+      #             부등식을 만족하는 값으로 잡았다(로컬 정상 총소요 14~16초 대비 20m).
+      # -v를 붙이지 않는다 — 로그가 비대해지고, skip 0 판정은 로그 grep이 아니라 구조로 한다
+      # (초록불 = REQUIRE_PG 가드 미발동, container: 부재 = 비root. skip 경로는 이 둘뿐이다).
+      # -p/-parallel도 명시하지 않는다 — 기본값(GOMAXPROCS)이 러너 스펙 변화를 자동 흡수한다.
+      - run: go test -race -count=1 -timeout 20m ./...
