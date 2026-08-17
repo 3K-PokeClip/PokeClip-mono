@@ -1,9 +1,23 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { axe } from 'jest-axe';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { ChannelSettingsScreen } from '@/features/settings/channels/ChannelSettingsScreen';
+import { useOnboardingStore } from '@/stores/onboarding';
 
 describe('ChannelSettingsScreen', () => {
+  // 연동 상태가 온보딩 스토어(모듈 전역)에 있으므로 테스트마다 초기화한다.
+  beforeEach(() => {
+    window.localStorage.clear();
+    useOnboardingStore.setState({
+      welcomeSeen: false,
+      tourDone: false,
+      channelLinked: false,
+      pluginLinked: false,
+      hydrated: false,
+      tourStep: null,
+    });
+  });
+
   it('신규 계정 기본값은 미연동 — 치지직 연동 버튼과 SOOP 자리를 보여준다', () => {
     render(<ChannelSettingsScreen />);
 

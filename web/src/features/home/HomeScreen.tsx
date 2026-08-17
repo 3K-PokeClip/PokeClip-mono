@@ -7,9 +7,11 @@ import { PublishStatusCard } from './PublishStatusCard';
 import { ResumeEditBanner } from './ResumeEditBanner';
 import { VodGrid } from './VodGrid';
 import { useHomeMockState } from './useHomeMockState';
+import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 
 // 디자인 1a — 홈 대시보드 (하이파이 상태).
-// 빈 상태·시작 가이드는 POK-113에서 이 화면의 분기로 붙는다.
+// 시작 가이드(웰컴·코치마크 투어)는 홈 page의 OnboardingController가 붙인다 (POK-113) —
+// 이 화면은 스포트라이트 타깃(data-tour-id)만 노출한다.
 export function HomeScreen() {
   const { userName, greeting, resumeDraft, dismissResume, live, vods, publishRows, expiringVods } =
     useHomeMockState();
@@ -28,7 +30,11 @@ export function HomeScreen() {
           {live ? <LiveNowBand live={live} /> : null}
           <VodGrid vods={vods} />
         </div>
-        <aside className={styles.aside} aria-label="발행·보관 현황">
+        <aside
+          className={styles.aside}
+          aria-label="발행·보관 현황"
+          data-tour-id={TOUR_TARGET.homeAside}
+        >
           <PublishStatusCard rows={publishRows} />
           <ExpiringVodCard vods={expiringVods} />
         </aside>

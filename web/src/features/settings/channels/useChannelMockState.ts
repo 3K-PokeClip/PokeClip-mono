@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
+import { useOnboardingHydration, useOnboardingStore } from '@/stores/onboarding';
 
 // 디자인 1k 채널 연동 화면의 목업 상태 (POK-112 스텁).
-// 연동 API가 아직 없어 치지직 연동 여부만 로컬 상태로 든다 —
+// 연동 여부는 온보딩 상태(POK-113)와 공유한다 — 시작 가이드 1단계 완료 체크가 이 값에서 나온다.
 // POK-112 본 구현에서 이 훅 내부만 실제 동의 화면 왕복으로 갈아끼우면 화면은 그대로 쓴다.
 
 /** 연동됨 상태의 표기값 (디자인 1k 값 그대로) */
@@ -16,11 +17,13 @@ export interface ChannelMockState {
 }
 
 export function useChannelMockState(): ChannelMockState {
-  // 신규 계정 서사(M2 온보딩)에 맞춰 미연동으로 시작한다.
-  const [chzzkLinked, setChzzkLinked] = useState(false);
+  useOnboardingHydration();
+  // 신규 계정 기본값은 미연동 — 스토어 초기값(false)이 그 서사를 든다.
+  const chzzkLinked = useOnboardingStore((s) => s.channelLinked);
+  const setChannelLinked = useOnboardingStore((s) => s.setChannelLinked);
 
-  const linkChzzk = useCallback(() => setChzzkLinked(true), []);
-  const unlinkChzzk = useCallback(() => setChzzkLinked(false), []);
+  const linkChzzk = useCallback(() => setChannelLinked(true), [setChannelLinked]);
+  const unlinkChzzk = useCallback(() => setChannelLinked(false), [setChannelLinked]);
 
   return { chzzkLinked, linkChzzk, unlinkChzzk };
 }
