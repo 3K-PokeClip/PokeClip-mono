@@ -65,6 +65,9 @@ function persistFlags(flags: OnboardingFlags) {
 export const useOnboardingStore = create<OnboardingState>()((set, get) => {
   /** 플래그 변이는 전부 이 경로로 — 상태 갱신과 영속화가 한 몸이다. */
   const update = (partial: Partial<OnboardingFlags> & { tourStep?: number | null }) => {
+    // 변이 전 하이드레이션 보장 — hydrate 없이 변이하면 아래 persistFlags가
+    // 저장돼 있던 플래그를 기본값으로 덮어쓴다 (직접 진입한 화면에서 실제로 성립하는 경로).
+    if (!get().hydrated) get().hydrate();
     set(partial);
     const { welcomeSeen, tourDone, channelLinked, pluginLinked } = get();
     persistFlags({ welcomeSeen, tourDone, channelLinked, pluginLinked });

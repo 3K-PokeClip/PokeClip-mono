@@ -80,6 +80,26 @@ describe('useOnboardingStore', () => {
     expect(s.welcomeSeen).toBe(false);
   });
 
+  it('hydrate 전에 변이해도 저장된 플래그를 덮어쓰지 않는다', () => {
+    // 직접 진입한 화면이 hydrate 없이 변이하는 경로 — 저장값 위에 기본값이 덮이면 안 된다.
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ v: 1, welcomeSeen: true, channelLinked: true }),
+    );
+
+    useOnboardingStore.getState().markPluginLinked();
+
+    const s = useOnboardingStore.getState();
+    expect(s.welcomeSeen).toBe(true);
+    expect(s.channelLinked).toBe(true);
+    expect(s.pluginLinked).toBe(true);
+    expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!)).toMatchObject({
+      welcomeSeen: true,
+      channelLinked: true,
+      pluginLinked: true,
+    });
+  });
+
   it('boolean이 아닌 저장값은 필드 단위로 걸러낸다', () => {
     window.localStorage.setItem(
       STORAGE_KEY,
