@@ -230,10 +230,9 @@
   font-variant-numeric: tabular-nums; /* 초가 바뀌어도 폭이 안 흔들린다 */
 }
 
-/* 디자인 ③ 경고 박스 — 앰버 배경/보더 */
+/* 디자인 ③ 경고 박스 — 앰버 배경/보더.
+   display:flex를 쓰면 텍스트 노드와 <b>가 각각 플렉스 아이템으로 쪼개져 줄이 갈라진다 — 블록 유지 */
 .issueWarning {
-  display: flex;
-  gap: calc(9 * var(--pc-u));
   margin-top: calc(12 * var(--pc-u));
   padding: calc(11 * var(--pc-u)) calc(13 * var(--pc-u));
   border-radius: calc(10 * var(--pc-u));
