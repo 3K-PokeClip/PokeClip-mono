@@ -10,9 +10,12 @@ const proxies = [
 
 const nextConfig: NextConfig = {
   async rewrites() {
-    return proxies
-      .filter((p): p is { source: string; target: string } => Boolean(p.target))
-      .map((p) => ({ source: p.source, destination: `${p.target}/:path*` }));
+    return (
+      proxies
+        .filter((p): p is { source: string; target: string } => Boolean(p.target))
+        // 백엔드 컨트롤러가 /api/auth·/api/clip 접두사까지 매핑하므로 destination에도 유지한다
+        .map((p) => ({ source: p.source, destination: `${p.target}${p.source}` }))
+    );
   },
 };
 
