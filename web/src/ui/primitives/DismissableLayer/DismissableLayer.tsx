@@ -37,6 +37,9 @@ export function DismissableLayer({
       const target = e.target as Node;
       if (ref.current?.contains(target)) return;
       if (excludeRefs?.some((r) => r.current?.contains(target))) return;
+      // 닫히면서 아래 요소가 눌리는 click-through 방지 — capture 단계라 타깃 도달 전에 소비된다
+      e.preventDefault();
+      e.stopPropagation();
       onDismiss?.();
     }
 

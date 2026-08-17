@@ -9,7 +9,7 @@ const meta: Meta<typeof Text> = {
   args: { children: '스트리밍 클립 제목', size: 'md', tone: 'primary' },
   argTypes: {
     size: { control: 'select', options: ['xs', 'sm', 'md', 'lg', 'xl', '2xl', '3xl'] },
-    weight: { control: 'select', options: ['normal', 'medium', 'semibold', 'bold'] },
+    weight: { control: 'select', options: ['regular', 'medium', 'semibold', 'bold'] },
     tone: {
       control: 'select',
       options: ['primary', 'secondary', 'muted', 'accent', 'danger', 'success'],
