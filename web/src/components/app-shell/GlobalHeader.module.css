@@ -1,25 +1,48 @@
-.header {
-  position: sticky;
-  top: 0;
-  z-index: var(--pc-z-sticky);
+/* 디자인 1a — 투명 헤더. 배경 없이 홈 상단 그라데이션 위에 얹히고,
+   본문(ScreenContainer)과 같은 1200px 폭으로 정렬한다. */
+
+.inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px var(--pc-space-5) 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 56px;
-  padding: 0 var(--pc-space-5);
-  background: var(--pc-color-bg-canvas);
-  border-bottom: 1px solid var(--pc-color-border-subtle);
 }
 
-.logo {
-  font-size: var(--pc-font-size-lg);
-  font-weight: 700;
-  letter-spacing: -0.01em;
+/* 디자인 1a: 34px 심볼 + 17px/800 워드마크 */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   color: var(--pc-color-text-primary);
+}
+
+.wordmark {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
 }
 
 .actions {
   display: flex;
   align-items: center;
   gap: var(--pc-space-2);
+}
+
+.bellWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+/* 읽지 않은 알림 점 — 디자인 1a: 8px point색, canvas 2px 테두리 */
+.unreadDot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 99px;
+  background: var(--pc-color-point);
+  border: 2px solid var(--pc-color-bg-canvas);
 }
