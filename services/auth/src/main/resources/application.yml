@@ -3,12 +3,19 @@ spring:
     name: pokeclip-auth
 
   datasource:
-    # 변수 이름을 팀 docker-compose(.env.example)와 맞췄다. `.env`를 그대로 쓰면
-    # 로컬에서든 compose 안에서든 추가 설정 없이 붙는다.
+    # 변수 이름을 팀 docker-compose(.env.example)와 맞췄다.
     # compose 네트워크 안에서 띄울 때만 DB_HOST=postgres 를 준다.
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB:pokeclip}
-    username: ${POSTGRES_USER:pokeclip}
-    password: ${POSTGRES_PASSWORD:change-me-local-only}
+    #
+    # 셋(POSTGRES_DB·POSTGRES_USER·POSTGRES_PASSWORD)에 기본값을 주지 않는다.
+    # 기본값을 두면 환경변수를 깜빡한 채로 굴러가는데, 그 값은 public 저장소의
+    # .env.example에 적혀 있어 누구나 안다. compose는 같은 변수를 ${VAR:?}(누락 =
+    # 부팅 거부)로 다루므로 정책도 이쪽이 맞다.
+    #
+    # DB_HOST·DB_PORT만 기본값을 남긴다 — .env에 없는 값이라 지우면 로컬이 깨진다.
+    # RequiredPropertiesTest가 이 구분을 그대로 못박는다.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
     hikari:
       # Hikari 기본값과 같은 10이다. 값을 바꾸는 게 아니라 "운영 풀은 10"을 글로 못박는다 —
       # 치지직 resolve는 커넥션을 쥔 채 외부 HTTP(read-timeout 5s)를 기다리므로 풀 크기가 곧
