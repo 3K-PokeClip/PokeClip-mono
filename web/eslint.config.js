@@ -15,8 +15,8 @@ export default tseslint.config(
       '**/storybook-static/',
       '**/coverage/',
       '**/node_modules/',
-      'apps/web/next-env.d.ts',
-      'packages/ui/.design-sync/',
+      'next-env.d.ts',
+      '.design-sync/',
       'ds-bundle/',
       '.ds-sync/',
     ],
@@ -49,13 +49,14 @@ export default tseslint.config(
   },
   storybook.configs['flat/recommended'],
   {
-    files: ['apps/web/**/*.{ts,tsx}'],
+    files: ['src/**/*.{ts,tsx}'],
+    // 디자인 시스템 소스는 Next 앱 코드가 아니므로 Next 전용 룰에서 제외 (예: Avatar의 <img>)
+    ignores: ['src/ui/**'],
     plugins: { '@next/next': nextPlugin },
     rules: {
       ...nextPlugin.configs.recommended.rules,
       ...nextPlugin.configs['core-web-vitals'].rules,
     },
-    settings: { next: { rootDir: 'apps/web/' } },
   },
   prettierConfig,
 );

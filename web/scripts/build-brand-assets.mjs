@@ -2,7 +2,7 @@
  * 브랜드 래스터 자산 생성 — public/brand/pokeclip-symbol.svg 원본에서
  *   - src/app/favicon.ico   (16/32/48 멀티사이즈, 레거시 폴백 — 재생 마크는 라이트 UI 기준 다크)
  *   - src/app/apple-icon.png (180×180, 불투명 다크 캔버스 #141517 — iOS는 투명 배경을 검게 뭉갠다)
- * 재실행: pnpm --filter @pokeclip/web run build:brand
+ * 재실행: pnpm run build:brand
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';

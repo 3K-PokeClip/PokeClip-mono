@@ -30,5 +30,7 @@ jobs:
 
       - run: pnpm lint
 
-      # ui → web 토폴로지 순서. next build가 타입 체크를 포함한다.
+      - run: pnpm test
+
+      # next build가 타입 체크를 포함한다.
       - run: pnpm build

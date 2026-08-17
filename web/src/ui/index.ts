@@ -9,7 +9,7 @@ export type {
 export { useTheme } from './theme/useTheme';
 export { getThemeInitScript, type ThemeInitScriptOptions } from './theme/getThemeInitScript';
 
-// ===== Design token references (also at '@pokeclip/ui/tokens') =====
+// ===== Design token references =====
 export * from './tokens';
 
 // ===== Accessibility primitives (hooks + headless utilities) =====

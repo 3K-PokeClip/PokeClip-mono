@@ -4,7 +4,7 @@
 > 기능 중심 표현: *실시간 라이브에서 하이라이트를 발견하고 바로 클립으로.*
 
 이 문서는 POK-95에서 확정한 브랜드 자산(로고·파비콘·컬러 팔레트·타이포 스케일)의 정본이다.
-컬러·타이포의 상세 토큰 체계는 [COLOR_SYSTEM.md](./COLOR_SYSTEM.md)와 `src/styles/primitives/`를 따른다.
+컬러·타이포의 상세 토큰 체계는 [COLOR_SYSTEM.md](./COLOR_SYSTEM.md)와 `src/ui/styles/primitives/`를 따른다.
 디자인 원본(시안·사용 예시·내보내기 프레임)은 Figma **PokeClip Brand** 파일에 있다.
 
 ---
@@ -27,7 +27,7 @@ PokeClip은 흘러가 버릴 그 순간을 발견하고, 바로 꺼내볼 수 �
 
 ## 2. 로고 유형
 
-원본 파일: `apps/web/public/brand/` (SVG, 워드마크는 아웃라인 처리 완료)
+원본 파일: `public/brand/` (SVG, 워드마크는 아웃라인 처리 완료)
 
 | 유형 | 파일 | 용도 |
 |---|---|---|
@@ -82,22 +82,22 @@ UI 서체는 **Pretendard Variable** (self-host, `--pc-font-sans`), 기본 크�
 | `xs` | 12 | 0.75 | 캡션 |
 | `2xs` | 11 | 0.6875 | 라벨·뱃지 |
 
-행간 `tight 1.2 / snug 1.35 / normal 1.5 / relaxed 1.7` (한글 본문은 1.5 미만 금지), 굵기 `400/500/600/700` — 정본: `src/styles/primitives/typography.css`.
+행간 `tight 1.2 / snug 1.35 / normal 1.5 / relaxed 1.7` (한글 본문은 1.5 미만 금지), 굵기 `400/500/600/700` — 정본: `src/ui/styles/primitives/typography.css`.
 
 ## 7. 파비콘·앱 아이콘
 
 | 파일 | 스펙 | 비고 |
 |---|---|---|
-| `apps/web/src/app/icon.svg` | SVG, 테마 대응 | `prefers-color-scheme`로 재생 마크 색 전환 |
-| `apps/web/src/app/favicon.ico` | 16/32/48 멀티사이즈 | 레거시 폴백 (생성물) |
-| `apps/web/src/app/apple-icon.png` | 180×180 불투명 | 다크 캔버스 위 심볼 (생성물) |
+| `src/app/icon.svg` | SVG, 테마 대응 | `prefers-color-scheme`로 재생 마크 색 전환 |
+| `src/app/favicon.ico` | 16/32/48 멀티사이즈 | 레거시 폴백 (생성물) |
+| `src/app/apple-icon.png` | 180×180 불투명 | 다크 캔버스 위 심볼 (생성물) |
 
 Next.js 16 파일 컨벤션으로 자동 `<link>` 생성 — `metadata.icons` 설정 불필요.
-**재생성:** `pnpm --filter @pokeclip/web run build:brand` (원본 심볼 SVG 변경 시)
+**재생성:** `pnpm run build:brand` (원본 심볼 SVG 변경 시)
 
 ## 8. 모션 (스플래시)
 
-심볼 리빌 애니메이션 원본: `apps/web/public/brand/motion/` (`logo_animated.svg`, `motion.css`)
+심볼 리빌 애니메이션 원본: `public/brand/motion/` (`logo_animated.svg`, `motion.css`)
 
 - **1600ms** 단일 클록: 마젠타 점화(8–20%) → 인디고 리본 스윕(20–72%) → 재생 마크 팝(66–100%, 오버슈트 1.06)
 - `prefers-reduced-motion`: 즉시 최종 프레임 표시

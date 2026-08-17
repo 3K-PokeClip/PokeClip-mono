@@ -1,8 +1,9 @@
-# @pokeclip/ui
+# PokeClip 디자인 시스템 (`src/ui/`)
 
-PokeClip 디자인 시스템 — 다크 우선(dark-first), 접근성을 갖춘 React 컴포넌트 라이브러리.
+PokeClip 디자인 시스템 — 다크 우선(dark-first), 접근성을 갖춘 React 컴포넌트 모음.
+앱 소스(`web/src/ui/`)에 함께 살며 `@/ui`로 직접 import한다 (별도 패키지/빌드 없음).
 
-- **스택**: React 18 + TypeScript(strict) + CSS Modules
+- **스택**: React + TypeScript(strict) + CSS Modules
 - **토큰**: 손수 작성한 CSS 커스텀 프로퍼티(단일 소스) + 얇은 TS 상수 레이어
 - **테마**: 다크 우선, `[data-theme]` 기반 라이트/다크 전환
 - **문서**: Storybook
@@ -10,17 +11,20 @@ PokeClip 디자인 시스템 — 다크 우선(dark-first), 접근성을 갖춘 
 ## 사용
 
 ```ts
-import '@pokeclip/ui/tokens.css'; // 1) 디자인 토큰 (필수, 먼저)
-import '@pokeclip/ui/styles.css'; // 2) 컴포넌트 스타일
-import { ThemeProvider } from '@pokeclip/ui';
+// 루트 레이아웃에서 1회 — 토큰·폰트·리셋
+import '@/ui/styles/global.css';
+
+// 컴포넌트·훅
+import { ThemeProvider, Button } from '@/ui';
 ```
+
+컴포넌트 스타일(CSS Modules)은 각 컴포넌트가 스스로 import하므로 별도 임포트가 필요 없다.
 
 ## 개발
 
 ```bash
 pnpm install
 pnpm storybook     # 컴포넌트/토큰 문서 (http://localhost:6006)
-pnpm build         # dist/ 라이브러리 빌드
 pnpm typecheck     # 타입 체크
 pnpm test          # 유닛/접근성 테스트
 ```

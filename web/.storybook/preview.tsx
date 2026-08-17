@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
 import type { Decorator, Preview } from '@storybook/react-vite';
-import '../src/styles/global.css';
+import '../src/ui/styles/global.css';
 
 function ThemeApplier({ theme, children }: { theme: 'light' | 'dark'; children: ReactNode }) {
   useEffect(() => {

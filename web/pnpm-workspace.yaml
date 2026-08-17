@@ -1,6 +1,4 @@
-packages:
-  - packages/*
-  - apps/*
+# 단일 프로젝트 — packages 키 없음. pnpm 설정 파일로만 사용한다.
 allowBuilds:
   '@parcel/watcher': true
   esbuild: true
