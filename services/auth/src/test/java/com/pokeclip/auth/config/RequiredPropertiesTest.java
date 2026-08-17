@@ -8,14 +8,17 @@ import com.pokeclip.auth.token.JwtConfig;
 import com.pokeclip.auth.token.JwtProperties;
 import com.pokeclip.web.CorsProperties;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.core.io.ClassPathResource;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Base64;
 import java.util.List;
+import java.util.Properties;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -225,6 +228,51 @@ class RequiredPropertiesTest {
                                 .doesNotContain(secretNeedle);
                     });
         }
+    }
+
+    /**
+     * 위의 다른 테스트들이 컨텍스트를 띄워 <b>부팅 거동</b>을 재는 것과 달리, 이것은
+     * <b>설정 파일에 적힌 값</b>을 잰다. DB 접속값은
+     * {@code spring.datasource.*}라 우리 @ConfigurationProperties 클래스를 거치지 않아
+     * @NotBlank를 걸 자리가 없다 — 그래서 yml에서 기본값 자체를 없앤다.
+     *
+     * <p>커밋된 yml에 비밀번호 기본값이 있으면, compose를 거치지 않는 실행(IDE 단독
+     * 기동·AWS 배포)에서 <b>저장소에 공개된 비밀번호로 DB에 붙는 창</b>이 열린다.
+     * public 저장소라 그 값은 누구나 본다.
+     *
+     * <p>보증하는 것은 "yml에 이 값이 적혀 있다"까지다. 부팅이 실제로 거부되는지는
+     * 재지 못한다 — 그쪽은 실측으로 확인하고 기록을 남겼다(POK-161).
+     *
+     * <p><b>문자열이 아니라 YAML로 읽는 이유:</b> 파일을 통째로 문자열로 훑으면
+     * 주석 안의 문자열도 매칭된다. 그러면 실제 설정 줄을 지우고 설명 주석만 남겨도
+     * 초록이 되고, 반대로 주석에 예시를 하나 적으면 멀쩡한 설정이 빨간불이 된다.
+     * 값으로 비교하면 둘 다 닫힌다.
+     *
+     * <p>{@code DB_HOST}·{@code DB_PORT}는 기본값을 <b>일부러 남겼다</b> —
+     * `.env`에 없는 값이라 지우면 로컬 기동이 즉시 깨진다. 그 의도까지 함께 못박아,
+     * 누가 "일관성"을 이유로 넷 다 지우면 빨간불이 되게 한다.
+     */
+    @Test
+    void DB_접속값에_기본값이_남아_있지_않다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+
+        // 파일을 못 읽으면 아래 단언들이 전부 null 비교가 되어 의미를 잃는다.
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+
+        assertThat(properties.getProperty("spring.datasource.username"))
+                .as("POSTGRES_USER에 기본값이 붙었다 — 환경변수를 깜빡해도 조용히 굴러간다")
+                .isEqualTo("${POSTGRES_USER}");
+        assertThat(properties.getProperty("spring.datasource.password"))
+                .as("POSTGRES_PASSWORD에 기본값이 붙었다 — 공개된 비밀번호로 DB에 붙는 창이 열린다")
+                .isEqualTo("${POSTGRES_PASSWORD}");
+        assertThat(properties.getProperty("spring.datasource.url"))
+                .as("POSTGRES_DB에 기본값이 붙었다")
+                .endsWith("/${POSTGRES_DB}")
+                .as("DB_HOST·DB_PORT의 기본값은 일부러 남긴 것이다 — .env에 없어 지우면 로컬이 깨진다")
+                .contains("${DB_HOST:localhost}")
+                .contains("${DB_PORT:5432}");
     }
 
     private static String[] chzzk(String clientId, String clientSecret, String redirectUri) {
