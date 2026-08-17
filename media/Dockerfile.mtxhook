@@ -46,7 +46,14 @@ FROM bluenviron/mediamtx:1.19.3
 
 # /hooks-bin 은 바이너리 자리, /hooks 는 스풀 볼륨 자리다. 둘을 섞지 않는다 —
 # 같은 디렉토리에 두면 볼륨 마운트가 바이너리를 가린다.
-COPY --from=build /out/mtxhookwrite /hooks-bin/mtxhookwrite
+#
+# --chown=0:0 은 **런타임 계정이 자기 훅 바이너리를 덮어쓰지 못하게 root 소유로 못박는 것**이다.
+# 생략하면 안 된다: COPY --from 은 빌드 컨텍스트에서 복사할 때와 달리 **소스 스테이지의 uid 를
+# 보존한다**(실측: 10002 로 만든 파일은 10002 인 채로 넘어온다). 그래서 위 build 스테이지에
+# USER 를 넣는 선의의 변경 하나로 이 바이너리가 10002 소유가 되고, 실행 계정이 그것을
+# 덮어쓸 수 있게 된다. 그 불가능성이 이 비특권 전환의 가장 큰 실질 이득이자
+# ADR-0003 결정 7(read_only 를 넣지 않는 근거)의 전제다.
+COPY --chown=0:0 --from=build /out/mtxhookwrite /hooks-bin/mtxhookwrite
 
 # --chown 은 **숫자만** 쓴다. 이 이미지에는 /etc/passwd 가 없어 이름을 해석할 수단이 없다.
 COPY --chown=10002:10002 --from=prep /prep/recordings /recordings
