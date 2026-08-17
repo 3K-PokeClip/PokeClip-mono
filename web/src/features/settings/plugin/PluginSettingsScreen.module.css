@@ -125,7 +125,8 @@
 /* 발급 직후 1회만 보이는 코드 원문 (ADR-019) — 서버 규격과 같은 8자리 */
 .codeValue {
   font-family: var(--pc-font-mono, monospace);
-  font-size: 13.5px;
+  /* 이 파일의 다른 치수처럼 콘텐츠 유닛을 탄다 — px 고정이면 대형 화면에서 코드만 안 커진다 */
+  font-size: calc(13.5 * var(--pc-u));
   font-weight: 750;
   letter-spacing: 0.12em;
 }
