@@ -261,9 +261,10 @@
   white-space: nowrap;
 }
 
-/* DS의 IconButton(32px)·Avatar(32px)와 lucide size prop은 전부 고정 px이라 셸 배율을 타지 않는다.
-   접힌 레일에서 하단 알림·프로필만 위쪽 메뉴 아이콘보다 작아 보이던 원인이라 여기서 덮어쓴다.
-   글리프는 메뉴 아이콘과 같은 18u, 버튼·아바타 상자는 디자인값 32u를 배율에 태운다. */
+/* DS IconButton·Avatar는 콘텐츠 유닛(--pc-u), 사이드바는 셸 유닛(--pc-shell-u) 기준이라
+   단위가 다르고(브라우저 글꼴 설정을 키우면 곡선이 갈라진다), lucide size prop은 고정 px이다.
+   접힌 레일에서 하단 알림·프로필이 위쪽 메뉴 아이콘과 어긋나지 않게 셸 유닛으로 덮어쓴다.
+   글리프는 메뉴 아이콘과 같은 18u, 버튼·아바타 상자는 디자인값 32u. */
 .brandToggle svg,
 .bellWrap svg {
   width: calc(18 * var(--u));

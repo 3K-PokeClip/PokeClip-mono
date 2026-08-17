@@ -43,7 +43,8 @@
   background: var(--pc-color-accent);
 }
 .input:checked + .track .thumb {
-  transform: translateX(16px);
+  /* 이동량 = 트랙 40u − 썸 20u − 양쪽 오프셋 2u×2 — 트랙과 같은 배율을 타야 끝까지 찬다 */
+  transform: translateX(calc(16 * var(--pc-u)));
 }
 .input:focus-visible + .track {
   outline: 2px solid var(--pc-color-focus-ring);
@@ -58,7 +59,7 @@
   height: calc(14 * var(--pc-u));
 }
 .root[data-size='sm'] .input:checked + .track .thumb {
-  transform: translateX(14px);
+  transform: translateX(calc(14 * var(--pc-u)));
 }
 @media (prefers-reduced-motion: reduce) {
   .thumb,

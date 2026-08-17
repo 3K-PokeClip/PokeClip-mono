@@ -21,7 +21,8 @@
   border: 0;
   background: transparent;
   padding: var(--pc-space-2) var(--pc-space-3);
-  margin-bottom: calc(-1 * var(--pc-u));
+  /* .list의 1px 헤어라인 보더에 겹치는 값 — 헤어라인은 배율에서 빼므로 px로 짝을 맞춘다 */
+  margin-bottom: -1px;
   font-family: var(--pc-font-sans);
   font-size: var(--pc-font-size-md);
   font-weight: var(--pc-weight-medium);
@@ -32,7 +33,7 @@
 }
 .list[data-orientation='vertical'] .trigger {
   margin-bottom: 0;
-  margin-inline-end: calc(-1 * var(--pc-u));
+  margin-inline-end: -1px;
   border-bottom: 0;
   border-inline-end: 2px solid transparent;
 }
