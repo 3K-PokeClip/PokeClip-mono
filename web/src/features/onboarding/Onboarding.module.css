@@ -1,0 +1,243 @@
+/* ===== 웰컴 다이얼로그 (디자인 1a ① — 딤 rgb(5 7 13 / .58)) ===== */
+.welcomeBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--pc-z-modal);
+  display: grid;
+  place-items: center;
+  background: rgb(5 7 13 / 0.58);
+  padding: calc(24 * var(--pc-u));
+}
+
+.welcomeCard {
+  width: calc(440 * var(--pc-u));
+  max-width: 100%;
+  border-radius: calc(18 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-default);
+  background: var(--pc-color-bg-surface);
+  box-shadow: var(--pc-shadow-lg);
+  padding: calc(24 * var(--pc-u)) calc(24 * var(--pc-u)) calc(20 * var(--pc-u));
+}
+
+.welcomeLogo {
+  width: calc(36 * var(--pc-u));
+  height: calc(36 * var(--pc-u));
+  display: block;
+}
+
+.welcomeTitle {
+  font-size: calc(18 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: calc(14 * var(--pc-u)) 0 0;
+}
+
+.welcomeDesc {
+  font-size: calc(12.5 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  line-height: 1.6;
+  margin: calc(6 * var(--pc-u)) 0 0;
+}
+
+.welcomeSteps {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: calc(9 * var(--pc-u));
+  margin: calc(16 * var(--pc-u)) 0 0;
+  padding: 0;
+}
+
+.welcomeStep {
+  display: flex;
+  align-items: center;
+  gap: calc(9 * var(--pc-u));
+}
+
+.welcomeStepNo {
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
+  border-radius: 999px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 800;
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+}
+
+/* 완료 단계 — 번호 대신 체크 (DoD "단계 완료 시 체크 표시") */
+.welcomeStepNo[data-done='true'] {
+  background: var(--pc-color-success-subtle);
+  color: var(--pc-color-success);
+}
+
+/* lucide size prop은 px 고정 — 유닛에 태운다 */
+.welcomeStepNo svg {
+  width: calc(12 * var(--pc-u));
+  height: calc(12 * var(--pc-u));
+}
+
+.welcomeStepLabel {
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 650;
+}
+
+.welcomeActions {
+  display: flex;
+  align-items: center;
+  margin-top: calc(20 * var(--pc-u));
+}
+
+.welcomeStart {
+  margin-left: auto;
+}
+
+/* ===== 투어 카드 공통 (디자인 1a ② — 중앙 400 · 툴팁 330) ===== */
+.tourCard {
+  border-radius: calc(14 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-default);
+  background: var(--pc-color-bg-surface);
+  box-shadow: var(--pc-shadow-lg);
+  padding: calc(16 * var(--pc-u)) calc(16 * var(--pc-u)) calc(13 * var(--pc-u));
+  outline: none;
+  pointer-events: auto;
+}
+
+.centeredBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--pc-z-modal);
+  display: grid;
+  place-items: center;
+  background: rgb(5 7 13 / 0.55);
+  padding: calc(24 * var(--pc-u));
+}
+
+.centeredCard {
+  width: calc(400 * var(--pc-u));
+  max-width: 100%;
+}
+
+.spotCard {
+  position: fixed;
+  width: calc(330 * var(--pc-u));
+  transition:
+    top 0.35s var(--pc-ease-standard),
+    left 0.35s var(--pc-ease-standard);
+}
+
+/* 배치 전 프레임 — 크기 측정 중이라 숨긴다 (2-pass) */
+.spotCard[data-pending='true'] {
+  visibility: hidden;
+}
+
+.cardTitleRow {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+.cardTitle {
+  font-size: calc(13.5 * var(--pc-u));
+  font-weight: 750;
+}
+
+.cardDoneCheck {
+  width: calc(10 * var(--pc-u));
+  height: calc(10 * var(--pc-u));
+  margin-right: calc(3 * var(--pc-u));
+}
+
+.cardBody {
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  line-height: 1.6;
+  margin: calc(7 * var(--pc-u)) 0 0;
+}
+
+.cardFooter {
+  display: flex;
+  align-items: center;
+  gap: calc(5 * var(--pc-u));
+  margin-top: calc(14 * var(--pc-u));
+}
+
+.dots {
+  display: flex;
+  align-items: center;
+  gap: calc(5 * var(--pc-u));
+}
+
+.dot {
+  width: calc(6 * var(--pc-u));
+  height: calc(6 * var(--pc-u));
+  border-radius: 999px;
+  background: var(--pc-color-border-default);
+}
+
+.dotActive {
+  width: calc(16 * var(--pc-u));
+  height: calc(6 * var(--pc-u));
+  border-radius: 999px;
+  background: var(--pc-color-accent);
+}
+
+.cardActions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+}
+
+/* ===== 스포트라이트 (디자인 1a ④ 규칙) ===== */
+.spotRoot {
+  position: fixed;
+  inset: 0;
+  z-index: var(--pc-z-modal);
+  pointer-events: none;
+}
+
+/* box-shadow 딤은 클릭을 못 막는다 — 투명 블로커가 배경 클릭 잠금을 맡는다 */
+.spotBlocker {
+  position: fixed;
+  inset: 0;
+  pointer-events: auto;
+}
+
+.spotRing {
+  position: fixed;
+  /* 헤어라인 계열은 리터럴 px — 유닛에 태우면 띠로 두꺼워진다 */
+  border: 1.5px solid rgb(var(--pc-primary-500-rgb) / 0.9);
+  border-radius: calc(18 * var(--pc-u));
+  /* 컷아웃 트릭 — 링 밖 전체를 딤으로 덮는다 */
+  box-shadow: 0 0 0 200vmax rgb(5 7 13 / 0.55);
+  pointer-events: none;
+  transition:
+    top 0.35s var(--pc-ease-standard),
+    left 0.35s var(--pc-ease-standard),
+    width 0.35s var(--pc-ease-standard),
+    height 0.35s var(--pc-ease-standard);
+}
+
+/* ===== 재진입 칩 (디자인 1a ③ — 우하단 고정) ===== */
+.chip {
+  position: fixed;
+  right: calc(24 * var(--pc-u));
+  bottom: calc(24 * var(--pc-u));
+  z-index: var(--pc-z-banner);
+}
+
+.chip svg {
+  width: calc(13 * var(--pc-u));
+  height: calc(13 * var(--pc-u));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spotRing,
+  .spotCard {
+    transition: none;
+  }
+}

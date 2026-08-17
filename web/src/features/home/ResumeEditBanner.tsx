@@ -1,5 +1,6 @@
 import { Button, IconButton } from '@/ui';
 import { Play, X } from 'lucide-react';
+import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import styles from './HomeScreen.module.css';
 import type { ResumeDraft } from './useHomeMockState';
 
@@ -13,7 +14,11 @@ export function ResumeEditBanner({
   onDismiss: () => void;
 }) {
   return (
-    <section className={styles.resumeBanner} aria-label="이어서 편집">
+    <section
+      className={styles.resumeBanner}
+      aria-label="이어서 편집"
+      data-tour-id={TOUR_TARGET.resumeBanner}
+    >
       <div className={styles.resumeThumb} aria-hidden>
         <Play size={13} fill="currentColor" strokeWidth={0} />
       </div>

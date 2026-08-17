@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { Tag } from '@/ui';
+import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import styles from './HomeScreen.module.css';
 import { Thumb } from './Thumb';
 import type { LiveNow } from './useHomeMockState';
@@ -8,7 +9,7 @@ import type { LiveNow } from './useHomeMockState';
 // 두 액션 모두 라이브 대시보드(1b)로 간다 — "카드 검토"는 우측 카드 목록이 목적지다.
 export function LiveNowBand({ live }: { live: LiveNow }) {
   return (
-    <section aria-label="라이브" className={styles.liveSection}>
+    <section aria-label="라이브" className={styles.liveSection} data-tour-id={TOUR_TARGET.liveBand}>
       <h2 className={styles.sectionLabel}>
         <span className={styles.livePulseDot} aria-hidden />
         라이브

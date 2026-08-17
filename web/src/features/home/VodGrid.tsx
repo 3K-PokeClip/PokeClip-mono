@@ -1,4 +1,5 @@
 import { Badge } from '@/ui';
+import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import styles from './HomeScreen.module.css';
 import { Thumb } from './Thumb';
 import type { HomeVod } from './useHomeMockState';
@@ -7,7 +8,7 @@ import type { HomeVod } from './useHomeMockState';
 // "지난 방송 목록" 화면(1f)은 M2(POK-106)라 링크 자리만 둔다 (SettingsSidebar 선례).
 export function VodGrid({ vods }: { vods: HomeVod[] }) {
   return (
-    <section aria-label="지난 방송 · VOD">
+    <section aria-label="지난 방송 · VOD" data-tour-id={TOUR_TARGET.vodGrid}>
       <div className={styles.vodHeader}>
         <h2 className={styles.sectionLabel}>지난 방송 · VOD</h2>
         <span className={styles.vodKeepNote}>60일 보관</span>
