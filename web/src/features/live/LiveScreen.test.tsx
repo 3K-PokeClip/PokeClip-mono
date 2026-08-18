@@ -2,9 +2,15 @@ import { act } from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
 import { LiveScreen } from '@/features/live/LiveScreen';
+
+// useMediaSource가 쓰는 useSearchParams 대체 — vitest엔 NEXT_PUBLIC_MEDIA_* env가
+// 주입되지 않으므로 소스는 null이 되고, 플레이어는 시뮬레이션 경로로 결정적으로 돈다.
+vi.mock('next/navigation', () => ({
+  useSearchParams: () => new URLSearchParams(),
+}));
 
 // GlassPlayer가 useToast를 쓰므로 ToastProvider로 감싼다 (앱에선 providers.tsx가 담당).
 function renderLive() {

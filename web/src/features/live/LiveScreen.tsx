@@ -2,6 +2,7 @@
 
 import styles from './LiveScreen.module.css';
 import { GlassPlayer } from '@/features/player/GlassPlayer';
+import { useMediaSource } from '@/features/player/mediaSource';
 import { ChatVolumeCard } from './ChatVolumeCard';
 import { ChatWarningBanner } from './ChatWarningBanner';
 import { HighlightCardList } from './HighlightCardList';
@@ -12,6 +13,8 @@ import { useLiveMockState } from './useLiveMockState';
 // ScreenContainer 대신 내부 .container로 본문 폭을 잡는다.
 export function LiveScreen() {
   const { stream, highlights, hiddenCount, chatVolume, chatWarning } = useLiveMockState();
+  // env 미설정이면 null → GlassPlayer가 시뮬레이션으로 폴백 (테스트 포함)
+  const src = useMediaSource();
 
   return (
     <div>
@@ -25,6 +28,7 @@ export function LiveScreen() {
                 channelName={stream.channelName}
                 title={stream.title}
                 viewersNote={`시청자 ${stream.viewers}`}
+                src={src}
                 embed
                 simulationOptions={{ initialUptimeSeconds: stream.uptimeSeconds }}
               />
