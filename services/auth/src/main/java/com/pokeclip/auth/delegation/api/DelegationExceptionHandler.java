@@ -16,7 +16,13 @@ import java.util.Map;
  * ChzzkLinkExceptionHandler와 같은 모양 — 사유를 상태 코드와 본문으로 나눠 내보낸다.
  * 예외 메시지는 로그에도 본문에도 넣지 않는다.
  */
-@RestControllerAdvice(assignableTypes = EditorInvitationController.class)   // 태스크 8에서 위임 컨트롤러를 더한다
+/*
+ * 전역(@RestControllerAdvice)으로 두지 않는다 — 그러면 아래 DataIntegrityViolationException
+ * 핸들러가 다른 컨트롤러의 제약 위반까지 가로챈다. 대신 이 기능의 컨트롤러 둘만 지목한다.
+ * 컨트롤러를 새로 만들면 여기 반드시 더한다. 빠뜨리면 그 컨트롤러의 DelegationException이
+ * 핸들러를 못 만나 500이 된다.
+ */
+@RestControllerAdvice(assignableTypes = {EditorInvitationController.class, EditorDelegationController.class})
 public class DelegationExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(DelegationExceptionHandler.class);

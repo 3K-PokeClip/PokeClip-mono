@@ -19,11 +19,23 @@ import java.util.Optional;
  * but was: INVITATION_EXPIRED})다. 다만 <b>읽은 뒤 UPDATE 전에 상태가 바뀐 경우에만</b>
  * 결과가 갈리므로, 그 사이를 일부러 만드는 그 테스트 하나만 이걸 잰다.
  *
- * <p>{@code extend}·{@code cancel}은 <b>아직 안 재어진다</b> — 떼도 전체가 초록이다
- * (2026-08-18 실측, transaction-auditor 라운드 2). 호출부가 얕은 트랜잭션이라 UPDATE 뒤의
- * 재조회가 <b>새 EntityManager</b>에서 돌고({@code open-in-view: false}) 1차 캐시가
- * 애초에 안 겹치기 때문이다. <b>그래도 지우지 않는다</b> — 그 호출부가 언젠가 바깥
- * 트랜잭션 안으로 들어가면 respond와 똑같은 함정이 열리고, 그때는 아무도 모른다.
+ * <p><b>{@code extend}와 {@code cancel}은 처지가 다르다</b>(transaction-auditor 라운드 3).
+ * 둘 다 지금은 떼도 전체가 초록이지만 이유가 같지 않다.
+ *
+ * <ul>
+ * <li>{@code extend} — <b>소비자가 있다.</b> {@code extendExisting}이 UPDATE 직후
+ *     {@code findById}로 다시 읽는다. 지금 초록인 것은 {@code invite}에 트랜잭션이 없어
+ *     그 재조회가 새 EntityManager에서 돌기 때문일 뿐이고, <b>재는 방법은 있다</b> —
+ *     {@code InvitationStaleCacheTest}가 쓴 TransactionTemplate 수법으로 바깥 트랜잭션을
+ *     열면 연장 전 기한을 읽는 것이 관측된다. 안 넣은 것은 오늘 열리는 프로덕션 경로가
+ *     없어서지 못 재서가 아니다.</li>
+ * <li>{@code cancel} — <b>소비자가 아예 없다.</b> UPDATE가 0행이면 고정 사유를 던질 뿐
+ *     {@code reasonFor} 같은 재조회를 하지 않는다. 읽는 쪽이 없으니 이 옵션이 결과를
+ *     바꿀 수 없다.</li>
+ * </ul>
+ *
+ * <b>둘 다 지우지 않는다</b> — 호출부가 언젠가 바깥 트랜잭션 안으로 들어가거나
+ * {@code cancel}에 재조회가 붙으면 respond와 똑같은 함정이 열린다.
  *
  * <p>InvitationWriter의 「겹치는 방어」와 같은 모양이다 —
  * <b>한쪽을 지워도 초록인 것을 근거로 나머지를 지우지 않는다.</b>
