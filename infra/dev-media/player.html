@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PokeClip 데모 — LL-HLS 1시간 되감기</title>
+<!--
+  멘토 데모용 재생 페이지 (기한부: 2026-08-24 만료, README.md 참조)
+
+  MediaMTX 내장 플레이어를 쓰지 않는 이유: 일시정지 후 재생하면 라이브 위치로 강제 점프해
+  되감기 시연 자체가 성립하지 않는다. 이 페이지는 계약3 4절 중 **데모 적용 4항목**만 책임진다.
+    1. catch-up 끄기 — 플레이어가 지연을 스스로 따라잡지 않는다
+    2. 시크는 "절대 위치 지정" 한 가지 경로로만 — 마우스와 키보드가 같은 함수를 탄다
+    3. 라이브 복귀는 LIVE 버튼을 눌렀을 때만
+    4. 시크 가능 범위는 seekable 기준, 상한 1시간
+  (계약3 4절 5번 −10초 버튼 · 6번 채팅 정렬은 이번 범위 밖)
+
+  사용: /player.html?p=<DEMO_PATH>
+-->
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0f1115; color: #e8ecf1;
+         font: 16px/1.5 -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 20px 48px; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: #8b95a5; font-size: 13px; margin: 0 0 16px; }
+  video { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 10px; display: block; }
+
+  .bar { margin-top: 18px; }
+  input[type=range] { width: 100%; height: 28px; accent-color: #4d9fff; cursor: pointer; }
+
+  .row { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+  button { font: inherit; color: #e8ecf1; background: #222834; border: 1px solid #333d4d;
+           border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+  button:hover { background: #2b3240; }
+  button.live { border-color: #7a2230; }
+  button.live[data-live="1"] { background: #d33a4b; border-color: #d33a4b; color: #fff; }
+
+  .stat { font-variant-numeric: tabular-nums; }
+  .stat b { color: #fff; font-weight: 600; }
+  .spacer { flex: 1 1 auto; }
+  #msg { margin-top: 14px; color: #ffb4b4; font-size: 14px; min-height: 20px; }
+  .badge { font-size: 13px; padding: 3px 9px; border-radius: 999px; background: #222834; color: #8b95a5; }
+  .badge[data-live="1"] { background: #d33a4b; color: #fff; }
+</style>
+</head>
+<body>
+<main>
+  <h1>PokeClip 데모 — LL-HLS 1시간 되감기</h1>
+  <p class="sub">시크바를 끌면 그 시점 영상이 나옵니다. LIVE 버튼을 눌러야만 현재 방송으로 돌아옵니다.</p>
+
+  <video id="video" playsinline muted></video>
+
+  <div class="bar">
+    <!-- 시크바: min/max 는 seekable 기준 절대 시각(초). 값 변경 = 그 절대 위치로 이동, 그 외 동작 없음 -->
+    <input id="seek" type="range" step="1" min="0" max="0" value="0" aria-label="되감기 위치">
+  </div>
+
+  <div class="row">
+    <button id="playpause">일시정지</button>
+    <button id="live" class="live" data-live="1">LIVE</button>
+    <button id="sound">소리 켜기</button>
+    <span id="state" class="badge" data-live="1">LIVE</span>
+    <span class="spacer"></span>
+    <span class="stat">되감기 <b id="behind">0:00</b></span>
+    <span class="stat">축적 <b id="window">0:00</b> / 최대 1:00:00</span>
+  </div>
+
+  <p id="msg"></p>
+</main>
+
+<script>
+(() => {
+  'use strict';
+
+  const DVR_WINDOW_SEC = 3600;   // 되감기 상한 1시간 (서버 hlsSegmentCount 900 x 4s 와 같은 창)
+  const KEY_STEP_SEC = 10;       // 키보드 ←/→ 1회 이동량
+  const LIVE_EDGE_BACKOFF = 3;   // LIVE 복귀 시 라이브 끝에서 이만큼 뒤(부분 세그먼트 대기 회피)
+
+  const video = document.getElementById('video');
+  const seek = document.getElementById('seek');
+  const msg = document.getElementById('msg');
+  const behindEl = document.getElementById('behind');
+  const windowEl = document.getElementById('window');
+  const stateEl = document.getElementById('state');
+  const liveBtn = document.getElementById('live');
+  const playBtn = document.getElementById('playpause');
+  const soundBtn = document.getElementById('sound');
+
+  const streamPath = new URLSearchParams(location.search).get('p');
+  let liveMode = true;   // LIVE 버튼으로만 true 가 된다 (계약3 4절 3번)
+  let scrubbing = false;
+
+  const fail = (t) => { msg.textContent = t; };
+  const fmt = (s) => {
+    if (!isFinite(s) || s < 0) s = 0;
+    const t = Math.floor(s), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+    const mm = h ? String(m).padStart(2, '0') : String(m);
+    return (h ? h + ':' : '') + mm + ':' + String(sec).padStart(2, '0');
+  };
+
+  // 시크 가능 범위 = seekable 기준, 창은 1시간으로 자른다 (계약3 4절 4번)
+  const dvrRange = () => {
+    if (!video.seekable || video.seekable.length === 0) return null;
+    const end = video.seekable.end(video.seekable.length - 1);
+    const start = Math.max(video.seekable.start(0), end - DVR_WINDOW_SEC);
+    return end > start ? { start, end } : null;
+  };
+
+  // 유일한 시크 경로 — 절대 위치 지정만 한다. 라이브 재동기화를 호출하지 않는다 (계약3 4절 2번)
+  const seekTo = (absolute) => {
+    const r = dvrRange();
+    if (!r) return;
+    video.currentTime = Math.min(Math.max(absolute, r.start), r.end);
+    liveMode = false;
+    paint();
+  };
+
+  const goLive = () => {
+    const r = dvrRange();
+    if (!r) return;
+    const hls = window.__hls;
+    const pos = (hls && isFinite(hls.liveSyncPosition)) ? hls.liveSyncPosition : r.end - LIVE_EDGE_BACKOFF;
+    video.currentTime = Math.min(Math.max(pos, r.start), r.end);
+    liveMode = true;
+    video.play().catch(() => {});
+    paint();
+  };
+
+  const paint = () => {
+    const r = dvrRange();
+    if (!r) return;
+    if (!scrubbing) {
+      seek.min = String(Math.floor(r.start));
+      seek.max = String(Math.floor(r.end));
+      seek.value = String(Math.floor(video.currentTime));
+    }
+    const behind = Math.max(0, r.end - video.currentTime);
+    behindEl.textContent = '-' + fmt(behind);
+    windowEl.textContent = fmt(r.end - r.start);
+    const onLive = liveMode ? '1' : '0';
+    stateEl.dataset.live = onLive;
+    liveBtn.dataset.live = onLive;
+    stateEl.textContent = liveMode ? 'LIVE' : '되감기 중';
+    playBtn.textContent = video.paused ? '재생' : '일시정지';
+  };
+
+  // 마우스 드래그와 키보드가 같은 seekTo 를 탄다 — 값 변경 경로는 이 핸들러 하나뿐이다
+  seek.addEventListener('input', () => { scrubbing = true; seekTo(Number(seek.value)); });
+  seek.addEventListener('change', () => { scrubbing = false; });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();   // 시크바가 포커스를 가졌을 때의 기본 1스텝 이동을 막고 같은 경로로 통일
+    seekTo(video.currentTime + (e.key === 'ArrowRight' ? KEY_STEP_SEC : -KEY_STEP_SEC));
+  });
+
+  liveBtn.addEventListener('click', goLive);
+  playBtn.addEventListener('click', () => {
+    // 재생 재개 시 라이브로 당기지 않는다 — 되감은 위치를 그대로 이어서 튼다
+    if (video.paused) video.play().catch(() => {}); else video.pause();
+    paint();
+  });
+  soundBtn.addEventListener('click', () => {
+    video.muted = !video.muted;
+    soundBtn.textContent = video.muted ? '소리 켜기' : '음소거';
+  });
+  video.addEventListener('timeupdate', paint);
+  video.addEventListener('progress', paint);
+
+  const loadScript = (src) => new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = resolve;
+    el.onerror = () => reject(new Error(src));
+    document.head.appendChild(el);
+  });
+
+  const start = () => {
+    // catch-up 끄기 (계약3 4절 1번): 지연이 쌓여도 플레이어가 스스로 라이브로 당기지 않게 하고,
+    // 되감은 구간(최대 1시간)의 버퍼를 버리지 않는다.
+    window.__hls = new Hls({
+      lowLatencyMode: true,
+      liveMaxLatencyDurationCount: 1e9,
+      backBufferLength: 3700
+    });
+    const hls = window.__hls;
+    hls.on(Hls.Events.ERROR, (_, data) => {
+      if (data.fatal) fail('재생 오류: ' + data.type + ' / ' + data.details);
+    });
+    hls.loadSource('/' + streamPath + '/index.m3u8');
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); paint(); });
+    setInterval(paint, 500);
+  };
+
+  if (!streamPath || !/^[A-Za-z0-9_-]+$/.test(streamPath)) {
+    fail('경로가 없습니다. /player.html?p=<DEMO_PATH> 형태로 여세요.');
+    return;
+  }
+  // hls.js 는 MediaMTX 동봉본을 쓴다(저장소에 커밋하지 않는다).
+  // 동봉본이 안 나오면 RUNBOOK "hls.js 폴백" 절차로 /hls.min.js 자리에 1개 내려놓는다.
+  loadScript('/' + streamPath + '/hls.min.js')
+    .catch(() => loadScript('/hls.min.js'))
+    .then(() => {
+      if (!window.Hls || !Hls.isSupported()) { fail('이 브라우저에서 hls.js 를 쓸 수 없습니다 (Chrome 권장).'); return; }
+      start();
+    })
+    .catch(() => fail('hls.js 를 불러오지 못했습니다 — RUNBOOK "hls.js 폴백" 절차를 실행하세요.'));
+})();
+</script>
+</body>
+</html>
