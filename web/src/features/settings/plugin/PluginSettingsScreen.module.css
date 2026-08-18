@@ -178,6 +178,25 @@
 
 /* ---------- 연동 코드 실상태 (POK-102) ---------- */
 
+/* 디자인 ②-1 + 폭 유지: 요청 중에도 버튼 폭은 라벨 폭 그대로다 — 라벨은 자리만 지키게
+   시각만 숨기고(visibility) 스피너를 흐름에서 빼 중앙에 겹친다. VisuallyHidden 텍스트도
+   같이 숨지만 접근 이름은 버튼 aria-label("발급 요청 중")이 담당하므로 잃는 것이 없다 */
+.busyButton {
+  position: relative;
+}
+
+.busyButton[data-loading] > span:not([aria-hidden='true']) {
+  visibility: hidden;
+}
+
+.busyButton[data-loading] > span[aria-hidden='true'] {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* 모달 하단 버튼 행 (만료 상태의 닫기·새 코드 발급) — 디자인 ④: gap 10, 위 간격은 본문 mb 22가 담당 */
 .confirmActions {
   display: flex;

@@ -241,10 +241,12 @@ describe('PluginSettingsScreen', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '재발급' }));
 
-    // 라벨이 사라지고 접근 이름은 aria-label이 대신한다 — 응답까지 비활성
+    // 접근 이름은 aria-label이 대신한다 — 응답까지 비활성
     const busyButton = await screen.findByRole('button', { name: '발급 요청 중' });
     expect(busyButton).toBeDisabled();
-    expect(busyButton).not.toHaveTextContent('재발급');
+    // 라벨은 DOM에 남아 자리를 지킨다(폭 유지) — 시각은 .busyButton CSS가 숨기고,
+    // 접근 이름에서는 aria-label이 이겨 '재발급'으로는 찾을 수 없어야 한다
+    expect(busyButton).toHaveTextContent('재발급');
     expect(screen.queryByRole('button', { name: '재발급' })).not.toBeInTheDocument();
   });
 });
