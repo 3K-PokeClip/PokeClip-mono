@@ -59,4 +59,22 @@ class UserServiceTest extends IntegrationTestSupport {
 
         assertThat(userRepository.count()).isEqualTo(1);
     }
+
+    /**
+     * 구글은 소문자로 주지만 그 약속에 기대지 않는다. 저장이 통일돼 있지 않으면
+     * users.email의 유일 제약이 대소문자만 다른 두 계정을 막지 못한다.
+     */
+    @Test
+    void 대문자가_섞인_이메일은_소문자로_저장된다() {
+        User user = userService.findOrCreate("sub-upper", "Foo@Example.COM", "이름", null);
+
+        assertThat(user.getEmail()).isEqualTo("foo@example.com");
+    }
+
+    @Test
+    void 소문자로_조회하면_대문자로_가입한_계정을_찾는다() {
+        userService.findOrCreate("sub-find", "Bar@Example.COM", "이름", null);
+
+        assertThat(userRepository.findByEmail("bar@example.com")).isPresent();
+    }
 }
