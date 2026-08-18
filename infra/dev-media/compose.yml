@@ -35,7 +35,7 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./player.html:/www/player.html:ro
-      # hls.js 폴백 — MediaMTX 동봉본 /{path}/hls.min.js 가 안 나올 때만 주석을 푼다(RUNBOOK "hls.js 폴백")
-      # - ${DEMO_HOME}/hls.min.js:/www/hls.min.js:ro
+      # hls.js 셀프호스팅(필수) — RUNBOOK 2-3 대로 ./hls.min.js 를 내려받은 뒤 기동한다(2026-08-18 실측: 동봉본 의존 폐기)
+      - ./hls.min.js:/www/hls.min.js:ro
     depends_on:
       - mediamtx

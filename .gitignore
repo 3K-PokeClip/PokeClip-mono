@@ -11,6 +11,7 @@ infra/compose/stub/data/
 
 # 데모 서버 로컬 산출물 (.env·렌더된 설정·DVR — 기한부, 2026-08-24 철거 시 이 줄도 원복)
 infra/dev-media/local/
+infra/dev-media/hls.min.js
 
 # 빌드 산출물
 # go build ./cmd/... 은 패키지 이름으로 실행 파일을 현재 디렉토리에 떨군다.
