@@ -178,7 +178,18 @@ class SqsIntakeRunner {
                     .build());
 
             for (Message message : response.messages()) {
-                handle(message);
+                if (!handle(message)) {
+                    // 못 지운 편지가 나왔다. 계속 돌면 같은 그룹의 뒤 편지가 명부를
+                    // 앞질러 lastSequence를 올리고, 재전송된 앞 편지가 IGNORED_STALE로
+                    // 걸러진 뒤 "더 볼 일 없음"으로 삭제된다 — 큐가 비고 편지 기록이
+                    // 남아 재전송으로도 못 고치는 영구 유실이다(PR #82 P1).
+                    //
+                    // 그룹만 건너뛰는 방법도 있으나(MessageGroupId를 시스템 속성으로
+                    // 받아 그룹별 상태를 둔다) 회차 중단을 골랐다: 정확성은 같고,
+                    // FIFO 배치는 보통 소수 그룹이라 이득이 작은 반면 상태가 하나 는다.
+                    // 안 지운 것들은 가시성 타임아웃 뒤 같은 순서로 다시 온다.
+                    break;
+                }
             }
             status.pollSucceeded(Instant.now());
             return true;
@@ -191,7 +202,13 @@ class SqsIntakeRunner {
         }
     }
 
-    private void handle(Message message) {
+    /**
+     * 편지 하나를 처리한다.
+     *
+     * @return 이 회차를 계속해도 되면 true. <b>false는 "이 편지를 못 지웠다"</b>는
+     *         뜻이고, 그때는 뒤 편지를 건드리면 안 된다 — 위 for 루프 주석 참고
+     */
+    private boolean handle(Message message) {
         LifecycleEnvelope envelope;
         try {
             envelope = mapper.readValue(message.body(), LifecycleEnvelope.class);
@@ -201,7 +218,8 @@ class SqsIntakeRunner {
             log.warn("broadcast.intake.unreadable_dropped messageId={} reason={}",
                     message.messageId(), e.getClass().getSimpleName());
             delete(message);
-            return;
+            // 지웠으므로 큐 앞을 막지 않는다 — 중단 사유가 아니다.
+            return true;
         }
 
         // 모르는 종류는 재시도해도 계속 모른다. 안 지우면 FIFO 같은 그룹의 뒤 편지가
@@ -217,7 +235,7 @@ class SqsIntakeRunner {
             log.warn("broadcast.intake.unknown_type_dropped messageId={} eventId={} eventType={}",
                     message.messageId(), envelope.eventId(), envelope.eventType());
             delete(message);
-            return;
+            return true;
         }
 
         ProcessResult result;
@@ -227,7 +245,8 @@ class SqsIntakeRunner {
             // 지우지 않는다 — 가시성 타임아웃이 지나면 다시 온다. 멱등이라 안전하다.
             log.warn("broadcast.intake.handle_failed eventId={} reason={}",
                     envelope.eventId(), e.getClass().getSimpleName(), e);
-            return;
+            // 이 편지가 큐에 남는다. 뒤 편지를 처리하면 순서가 뒤집힌다.
+            return false;
         }
 
         // 삭제를 try 밖으로 뺐다. 안에 두면 "처리는 됐는데 삭제가 실패"까지
@@ -237,6 +256,7 @@ class SqsIntakeRunner {
         // PROCESSED · DUPLICATE · IGNORED_STALE 셋 다 "더 볼 일 없음"이다.
         log.info("broadcast.intake.handled eventId={} result={}", envelope.eventId(), result);
         delete(message);
+        return true;
     }
 
     private void delete(Message message) {

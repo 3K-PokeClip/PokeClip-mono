@@ -89,6 +89,63 @@ class SqsIntakeRunnerTest {
         }
     }
 
+    /**
+     * <b>같은 그룹의 편지 둘이 한 배치에 온다</b>(감사자 실측: maxNumberOfMessages=10에
+     * started·ended가 순서대로). 앞 편지 처리가 실패했는데 for 루프가 계속 돌면
+     * 뒤 편지가 명부를 앞질러 {@code lastSequence}를 올리고, 재전송된 앞 편지는
+     * {@code IGNORED_STALE}이 되어 <b>러너가 지운다</b> — 큐가 비고 편지 기록이 남아
+     * 재전송으로도 못 고치는 영구 유실이다(PR #82 P1, 전 과정 재현됨).
+     *
+     * <p>그래서 못 지운 편지가 나오면 <b>그 회차를 통째로 끝낸다.</b> 안 지운 것들은
+     * 가시성 타임아웃 뒤 같은 순서로 다시 온다.
+     */
+    @Test
+    void 배치_중_하나가_실패하면_그_회차의_뒤_편지를_처리하지_않는다() {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(
+                startedJson("evt-s", "s1", 1L),
+                envelopeJson("evt-e", "s1", 2L, "broadcast.ended"));
+        List<String> seen = new ArrayList<>();
+        SqsIntakeRunner runner = newRunner(sqs, envelope -> {
+            seen.add(envelope.eventId());
+            throw new IllegalStateException("일시적 실패");
+        });
+
+        runner.pollOnce();
+
+        assertThat(seen)
+                .as("앞 편지를 못 지웠는데 뒤 편지를 처리하면 명부가 앞질러 간다")
+                .containsExactly("evt-s");
+        assertThat(sqs.deletedReceiptHandles()).isEmpty();
+    }
+
+    /** 앞 편지가 잘 끝났으면 뒤 편지도 같은 회차에서 처리한다 — 중단이 지나치게 넓으면 안 된다. */
+    @Test
+    void 앞_편지가_성공하면_같은_회차에서_뒤_편지도_처리한다() {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(
+                startedJson("evt-s", "s1", 1L),
+                envelopeJson("evt-e", "s1", 2L, "broadcast.ended"));
+        SqsIntakeRunner runner = newRunner(sqs, envelope -> ProcessResult.PROCESSED);
+
+        runner.pollOnce();
+
+        assertThat(sqs.deletedReceiptHandles()).containsExactly("rh-0", "rh-1");
+    }
+
+    /**
+     * 버리는 갈래(형식 깨짐·모르는 종류)는 <b>중단 사유가 아니다.</b> 그 편지는 지워졌으니
+     * 큐 앞을 막지 않는다 — 여기서 멈추면 멀쩡한 뒤 편지가 공연히 미뤄진다.
+     */
+    @Test
+    void 읽을_수_없는_편지가_섞여_있어도_뒤_편지는_그_회차에서_처리한다() {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(
+                "{ 이건 JSON이 아니다", startedJson("evt-s", "s1", 1L));
+        SqsIntakeRunner runner = newRunner(sqs, envelope -> ProcessResult.PROCESSED);
+
+        runner.pollOnce();
+
+        assertThat(sqs.deletedReceiptHandles()).containsExactly("rh-0", "rh-1");
+    }
+
     @Test
     void 읽을_수_없는_편지는_지우고_경고를_남긴다() {
         // 파싱 실패는 재시도해도 계속 실패한다. 안 지우면 FIFO 같은 그룹의 뒤 편지가
