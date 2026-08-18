@@ -5,15 +5,16 @@ import { IssuedCodeDialog } from '@/features/settings/plugin/IssuedCodeDialog';
 // 화면 결합 흐름(발급→모달 표시→닫기)은 PluginSettingsScreen.test.tsx가 맡고,
 // 여기는 모달 자체의 두 상태(코드 표시 / 만료)를 직접 검증한다.
 
-function futureIso(minutes: number) {
-  return new Date(Date.now() + minutes * 60 * 1000).toISOString();
+// 마감은 클라 시계 앵커(epoch ms) — 훅이 응답 수신 순간 + TTL로 만들어 넘기는 값 (리뷰 #74)
+function deadlineIn(minutes: number) {
+  return Date.now() + minutes * 60 * 1000;
 }
 
 describe('IssuedCodeDialog', () => {
   it('코드 원문·카운트다운·1회 표시 경고를 함께 보여준다', () => {
     render(
       <IssuedCodeDialog
-        issued={{ code: 'KQ4M-7X2P', expiresAt: futureIso(10) }}
+        issued={{ code: 'KQ4M-7X2P', deadline: deadlineIn(10) }}
         onClose={() => {}}
         onIssueNew={() => {}}
       />,
@@ -34,7 +35,7 @@ describe('IssuedCodeDialog', () => {
     try {
       render(
         <IssuedCodeDialog
-          issued={{ code: 'KQ4M-7X2P', expiresAt: futureIso(10) }}
+          issued={{ code: 'KQ4M-7X2P', deadline: deadlineIn(10) }}
           onClose={() => {}}
           onIssueNew={() => {}}
         />,
@@ -60,7 +61,7 @@ describe('IssuedCodeDialog', () => {
     const onClose = vi.fn();
     render(
       <IssuedCodeDialog
-        issued={{ code: 'KQ4M-7X2P', expiresAt: futureIso(10) }}
+        issued={{ code: 'KQ4M-7X2P', deadline: deadlineIn(10) }}
         onClose={onClose}
         onIssueNew={() => {}}
       />,
@@ -74,7 +75,7 @@ describe('IssuedCodeDialog', () => {
     const onIssueNew = vi.fn();
     render(
       <IssuedCodeDialog
-        issued={{ code: 'KQ4M-7X2P', expiresAt: '2020-01-01T00:00:00Z' }}
+        issued={{ code: 'KQ4M-7X2P', deadline: Date.now() - 1_000 }}
         onClose={() => {}}
         onIssueNew={onIssueNew}
       />,

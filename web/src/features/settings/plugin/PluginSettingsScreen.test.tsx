@@ -69,8 +69,9 @@ describe('PluginSettingsScreen', () => {
     expect(screen.getByRole('region', { name: '플러그인 연결 상태' })).toHaveTextContent('연결됨');
     expect(screen.getByRole('heading', { name: '연동 코드' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '플러그인 다운로드' })).toBeInTheDocument();
+    // 라벨은 "최초 발급일" — 서버가 주는 시각이 키 생성일뿐이라 재발급 후에도 참말이다 (리뷰 #74)
     expect(
-      await screen.findByText(new RegExp(`발행일 ${CREATED_AT_LABEL.replace(/\./g, '\\.')}`)),
+      await screen.findByText(new RegExp(`최초 발급일 ${CREATED_AT_LABEL.replace(/\./g, '\\.')}`)),
     ).toBeInTheDocument();
   });
 
@@ -98,6 +99,34 @@ describe('PluginSettingsScreen', () => {
     expect(callsTo(spy, '/api/stream-keys/pairing-codes')).toHaveLength(1);
     // 경고(확인) 모달도 없다 — 키가 안 죽으니 경고할 위험 자체가 없다
     expect(screen.queryByText(/기존 스트림 키가 즉시 만료됩니다/)).not.toBeInTheDocument();
+
+    // 재발급해도 최초 발급일은 그대로다 — 오늘로 튀었다가 재조회에 과거로 돌아오면 안 된다 (리뷰 #74)
+    fireEvent.click(screen.getByRole('button', { name: '확인했어요' }));
+    expect(
+      await screen.findByText(new RegExp(`최초 발급일 ${CREATED_AT_LABEL.replace(/\./g, '\\.')}`)),
+    ).toBeInTheDocument();
+  });
+
+  it('클라 시계가 서버와 어긋나도(과거 expiresAt) 발급 직후 만료로 보이지 않는다 (리뷰 #74)', async () => {
+    // 시계가 10분 이상 빠른 기기 재현 — 서버 expiresAt이 클라 기준 이미 과거로 온다.
+    // 카운트다운은 응답 수신 순간 + TTL로 앵커하므로 이 값에 흔들리면 안 된다.
+    stubFetch((url, init) => {
+      if (url === '/api/stream-keys/pairing-codes')
+        return jsonResponse(201, {
+          code: 'KQ4M-7X2P',
+          expiresAt: new Date(Date.now() - 60 * 1000).toISOString(),
+        });
+      if (url === '/api/stream-keys' && (init?.method ?? 'GET') === 'GET')
+        return jsonResponse(200, { issued: false });
+      return jsonResponse(404);
+    });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '코드 발급' }));
+
+    expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
+    expect(screen.getByRole('timer')).toHaveTextContent(/(10:00|09:5\d) 후 만료돼요/);
+    expect(screen.queryByText('코드가 만료됐어요')).not.toBeInTheDocument();
   });
 
   it('미발급 상태의 첫 발급도 같은 1콜이고 온보딩 2단계를 완료로 만든다', async () => {

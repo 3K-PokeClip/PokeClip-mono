@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Check, Copy, TriangleAlert } from 'lucide-react';
 import { Button, Dialog, IconButton, VisuallyHidden } from '@/ui';
-import type { IssuedPairingCode } from '@/api/streamKeys';
+import type { DisplayedPairingCode } from './useStreamKeyState';
 import { useCountdown } from './useCountdown';
 import styles from './PluginSettingsScreen.module.css';
 
@@ -18,13 +18,14 @@ export function IssuedCodeDialog({
   onClose,
   onIssueNew,
 }: {
-  issued: IssuedPairingCode | null;
+  issued: DisplayedPairingCode | null;
   busy?: boolean;
   onClose: () => void;
   /** 만료 후 새 코드 발급 — 코드 만료는 키와 무관하므로 rotate 없이 발급 1콜이면 된다. */
   onIssueNew: () => void;
 }) {
-  const countdown = useCountdown(issued?.expiresAt ?? null);
+  // deadline은 클라 시계로 앵커된 값 — 서버 expiresAt 직접 비교의 시계 오차를 피한다 (리뷰 #74)
+  const countdown = useCountdown(issued?.deadline ?? null);
   const [copied, setCopied] = useState(false);
 
   // 새 코드가 오면 복사 표시를 리셋한다 (만료 → 새 코드 발급 경로)

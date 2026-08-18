@@ -49,10 +49,12 @@ export function PairingCodeCard({
           <div className={styles.codeBox}>
             <Check size={16} strokeWidth={2} className={styles.codeCheck} aria-hidden />
             <div className={styles.codeBody}>
-              {/* 디자인 개정: 발행일이 힌트 줄로 내려가고 보안 문구·하단 경고줄은 삭제 —
-                  재발급이 키를 건드리지 않게 되면서(rotate 미사용) 경고할 것도 없어졌다 */}
+              {/* 디자인 개정: 날짜가 힌트 줄로 내려가고 보안 문구·하단 경고줄은 삭제 —
+                  재발급이 키를 건드리지 않게 되면서(rotate 미사용) 경고할 것도 없어졌다.
+                  라벨은 "최초 발급일" — 서버가 주는 시각이 키 생성일(=첫 코드 발급일)뿐이라,
+                  "발행일"이라 쓰면 재발급 후 과거 날짜가 거짓말이 된다. (리뷰 #74) */}
               <div className={styles.codeTitle}>코드가 발급되어 있어요</div>
-              <div className={styles.codeHint}>발행일 {code.issuedAt}</div>
+              <div className={styles.codeHint}>최초 발급일 {code.issuedAt}</div>
             </div>
             <Button variant="soft" size="sm" loading={busy} onClick={onIssue}>
               재발급

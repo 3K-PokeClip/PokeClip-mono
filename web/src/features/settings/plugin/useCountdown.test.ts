@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { formatRemaining, useCountdown } from '@/features/settings/plugin/useCountdown';
 
 const BASE = new Date('2026-08-17T12:00:00Z');
-const EXPIRES_AT = new Date(BASE.getTime() + 10 * 60 * 1000).toISOString();
+// 마감은 클라 시계 앵커(epoch ms) — 서버 ISO가 아니다 (리뷰 #74: 시계 오차 무관)
+const DEADLINE = BASE.getTime() + 10 * 60 * 1000;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -24,8 +25,8 @@ describe('formatRemaining', () => {
 });
 
 describe('useCountdown', () => {
-  it('매 틱 expiresAt - now를 재계산한다 — 틱을 건너뛰어도(탭 스로틀) 실제 시각을 따른다', () => {
-    const { result } = renderHook(() => useCountdown(EXPIRES_AT));
+  it('매 틱 deadline - now를 재계산한다 — 틱을 건너뛰어도(탭 스로틀) 실제 시각을 따른다', () => {
+    const { result } = renderHook(() => useCountdown(DEADLINE));
 
     expect(result.current.label).toBe('10:00');
 
@@ -39,7 +40,7 @@ describe('useCountdown', () => {
   });
 
   it('만료되면 expired가 서고 00:00에 고정된다', () => {
-    const { result } = renderHook(() => useCountdown(EXPIRES_AT));
+    const { result } = renderHook(() => useCountdown(DEADLINE));
 
     act(() => vi.advanceTimersByTime(10 * 60 * 1000 + 1_000));
 
@@ -48,30 +49,30 @@ describe('useCountdown', () => {
   });
 
   it('언마운트·만료 후에는 타이머가 남지 않는다', () => {
-    const { unmount } = renderHook(() => useCountdown(EXPIRES_AT));
+    const { unmount } = renderHook(() => useCountdown(DEADLINE));
     unmount();
     expect(vi.getTimerCount()).toBe(0);
 
-    const { result } = renderHook(() => useCountdown(EXPIRES_AT));
+    const { result } = renderHook(() => useCountdown(DEADLINE));
     act(() => vi.advanceTimersByTime(11 * 60 * 1000));
     expect(result.current.expired).toBe(true);
     expect(vi.getTimerCount()).toBe(0); // 만료 후 빈 인터벌이 계속 돌면 안 된다
   });
 
-  it('expiresAt이 없으면 시간을 세지 않는다', () => {
+  it('deadline이 없으면 시간을 세지 않는다', () => {
     const { result } = renderHook(() => useCountdown(null));
     expect(result.current.expired).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('expiresAt이 늦게 도착해도 첫 렌더부터 만료로 보이지 않는다 (리뷰 #74)', () => {
+  it('deadline이 늦게 도착해도 첫 렌더부터 만료로 보이지 않는다 (리뷰 #74)', () => {
     // 모달은 항상 마운트돼 있고(issued=null) 코드가 나중에 도착한다 — 그 첫 렌더에
     // 이전 상태(ms=0)가 그려지면 "만료됐어요"가 잠깐 표시·낭독된다
-    const { result, rerender } = renderHook(({ at }: { at: string | null }) => useCountdown(at), {
-      initialProps: { at: null as string | null },
+    const { result, rerender } = renderHook(({ at }: { at: number | null }) => useCountdown(at), {
+      initialProps: { at: null as number | null },
     });
 
-    rerender({ at: EXPIRES_AT });
+    rerender({ at: DEADLINE });
 
     expect(result.current.expired).toBe(false);
     expect(result.current.label).toBe('10:00');

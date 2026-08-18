@@ -15,9 +15,18 @@ export interface StreamKeyStatus {
 export interface IssuedPairingCode {
   /** 사람이 읽는 XXXX-XXXX 표기 — 서버가 이미 포맷해서 준다 (PairingCodeService.format). */
   code: string;
-  /** 만료 시각(ISO, 발급 후 10분). */
+  /**
+   * 만료 시각(ISO, 발급 후 10분). 카운트다운에는 쓰지 않는다 — 서버 시각이라 클라
+   * 시계와 직접 비교하면 시계가 어긋난 기기에서 정상 코드가 만료로 보인다. (리뷰 #74)
+   */
   expiresAt: string;
 }
+
+/**
+ * ADR-019 확정 TTL(10분) — 서버 PairingCodeService.TTL과 짝. 카운트다운은 발급 응답을
+ * 받은 순간 + 이 값으로 마감을 앵커해, 클라 시계의 절대값 오차와 무관하게 센다.
+ */
+export const PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
 
 export async function fetchStreamKeyStatus(): Promise<StreamKeyStatus> {
   const res = await apiFetch('/api/stream-keys');

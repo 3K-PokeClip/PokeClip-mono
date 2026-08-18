@@ -5,8 +5,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiError } from '@/api/client';
 import {
   issuePairingCode,
+  PAIRING_CODE_TTL_MS,
   streamKeyStatusQueryOptions,
-  type IssuedPairingCode,
   type StreamKeyStatus,
 } from '@/api/streamKeys';
 import { useOnboardingStore } from '@/stores/onboarding';
@@ -20,8 +20,22 @@ import { useToast } from '@/ui';
 
 export interface PairingCodeStatus {
   issued: boolean;
-  /** 이미 포맷된 표시용 날짜 — 서버 ISO를 클라 수신 후에만 변환한다(SSR 시 쿼리 데이터가 없어 하이드레이션 안전). */
+  /**
+   * 최초 발급일(서버 키 createdAt) — 재발급해도 바뀌지 않는다. 이미 포맷된 표시용
+   * 날짜로, 서버 ISO를 클라 수신 후에만 변환한다(SSR 시 쿼리 데이터가 없어 하이드레이션 안전).
+   */
   issuedAt?: string;
+}
+
+/** 발급 직후 모달(IssuedCodeDialog)이 소비하는 표시용 코드. */
+export interface DisplayedPairingCode {
+  code: string;
+  /**
+   * 만료 마감(클라 시계 epoch ms) = 발급 응답 수신 시각 + PAIRING_CODE_TTL_MS.
+   * 서버 expiresAt을 쓰지 않는 이유: 서버 시각을 클라 시계와 직접 비교하면 시계가
+   * 어긋난 기기에서 정상 코드가 발급 즉시 만료로 보인다. (리뷰 #74)
+   */
+  deadline: number;
 }
 
 export interface StreamKeyState {
@@ -33,8 +47,8 @@ export interface StreamKeyState {
   code: PairingCodeStatus;
   /** 발급 진행 중 — 버튼 잠금. */
   busy: boolean;
-  /** 발급 직후 1회 표시용 원문+만료 시각 (ADR-019) — 모달(IssuedCodeDialog)만 소비한다. */
-  justIssued: IssuedPairingCode | null;
+  /** 발급 직후 1회 표시용 원문+만료 마감 (ADR-019) — 모달(IssuedCodeDialog)만 소비한다. */
+  justIssued: DisplayedPairingCode | null;
   /** 모달을 닫는 지점 — 이 뒤로 원문은 다시 볼 수 없다. */
   clearJustIssued: () => void;
   /** 새 일회용 코드 발급 — 첫 발급·재발급·만료 후 재발급 전부 이 한 경로다. */
@@ -46,19 +60,22 @@ export function useStreamKeyState(): StreamKeyState {
   const { toast } = useToast();
   const markPluginLinked = useOnboardingStore((s) => s.markPluginLinked);
   const status = useQuery(streamKeyStatusQueryOptions);
-  const [justIssued, setJustIssued] = useState<IssuedPairingCode | null>(null);
+  const [justIssued, setJustIssued] = useState<DisplayedPairingCode | null>(null);
 
   const mutation = useMutation({
     mutationFn: issuePairingCode,
     onSuccess: (issued) => {
-      setJustIssued(issued);
+      // 마감은 서버 expiresAt이 아니라 "수신 순간 + TTL"로 앵커한다 — 클라 시계가
+      // 서버와 어긋나 있어도 카운트다운은 같은 시계끼리 비교하게 된다. (리뷰 #74)
+      setJustIssued({ code: issued.code, deadline: Date.now() + PAIRING_CODE_TTL_MS });
       // 발급 성공 = 키 존재 확정(서버 ensureKey). 재조회가 끝나기 전이나 실패한 채로
       // 모달을 닫아도(justIssued가 비워져도) 카드가 "미발급"으로 되돌아가지 않게
-      // 캐시를 먼저 낙관 갱신한다 — 정확한 createdAt은 onSettled의 재조회가 잡는다. (리뷰 #74)
-      queryClient.setQueryData<StreamKeyStatus>(streamKeyStatusQueryOptions.queryKey, {
+      // 캐시를 먼저 낙관 갱신한다. 키가 이미 있었으면 createdAt(최초 발급일)은 그대로
+      // 둔다 — 재발급이 날짜를 오늘로 튀게 하면 재조회가 과거로 되돌릴 때 어긋난다. (리뷰 #74)
+      queryClient.setQueryData<StreamKeyStatus>(streamKeyStatusQueryOptions.queryKey, (prev) => ({
         issued: true,
-        createdAt: new Date().toISOString(),
-      });
+        createdAt: prev?.createdAt ?? new Date().toISOString(),
+      }));
       // 코드 발급 = 온보딩 2단계(플러그인) 완료 (POK-113 시작 가이드 체크)
       markPluginLinked();
     },
@@ -91,12 +108,11 @@ export function useStreamKeyState(): StreamKeyState {
     void refetch();
   }, [refetch]);
 
+  // 카드의 날짜는 서버 createdAt(최초 발급일) 하나만 쓴다 — 발급 직후엔 위 낙관 갱신이
+  // 값을 보장한다. justIssued로 "오늘"을 따로 만들면 재발급 시 재조회가 과거 날짜로
+  // 되돌리면서 화면이 튄다. (리뷰 #74)
   const createdAt = status.data?.createdAt;
-  const issuedAt = justIssued
-    ? new Date().toLocaleDateString('ko-KR')
-    : createdAt
-      ? new Date(createdAt).toLocaleDateString('ko-KR')
-      : undefined;
+  const issuedAt = createdAt ? new Date(createdAt).toLocaleDateString('ko-KR') : undefined;
 
   return {
     loading: status.isPending,
