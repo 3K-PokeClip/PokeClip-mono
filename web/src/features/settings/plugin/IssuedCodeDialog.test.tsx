@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { IssuedCodeDialog } from '@/features/settings/plugin/IssuedCodeDialog';
 
@@ -22,6 +22,33 @@ describe('IssuedCodeDialog', () => {
     expect(screen.getByText('KQ4M-7X2P')).toBeInTheDocument();
     expect(screen.getByRole('timer')).toHaveTextContent(/\d{2}:\d{2} 후 만료돼요/);
     expect(screen.getByText(/10분 동안만/)).toBeInTheDocument();
+  });
+
+  it('복사를 누르면 복사됨으로 바뀌고 5초 뒤 복사로 돌아온다', async () => {
+    Object.defineProperty(window.navigator, 'clipboard', {
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+      configurable: true,
+    });
+    vi.useFakeTimers();
+    try {
+      render(
+        <IssuedCodeDialog
+          issued={{ code: 'KQ4M-7X2P', expiresAt: futureIso(10) }}
+          onClose={() => {}}
+          onIssueNew={() => {}}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: '복사' }));
+      await act(async () => {}); // writeText 프라미스 반영
+      expect(screen.getByRole('button', { name: '복사됨' })).toBeInTheDocument();
+
+      // 피드백은 5초만 — 라벨이 돌아와야 다시 복사할 수 있음이 보인다
+      act(() => vi.advanceTimersByTime(5000));
+      expect(screen.getByRole('button', { name: '복사' })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('확인했어요가 onClose를 부른다 — 그 뒤 원문 재표시 불가는 호출부 책임', () => {

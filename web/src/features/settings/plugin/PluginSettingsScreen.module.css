@@ -23,12 +23,6 @@
   margin: 0 0 calc(4 * var(--pc-u));
 }
 
-.metaText {
-  font-size: calc(10.5 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-  margin-top: calc(9 * var(--pc-u));
-}
-
 /* ---------- 연결 상태 배너 (디자인 1m 상단) ----------
    초록은 "연결됨"에만 쓰는 상태색이라 디자인 값을 그대로 쓴다. */
 .statusBanner {
@@ -192,7 +186,7 @@
   border-radius: calc(10 * var(--pc-u));
 }
 
-/* 재발급 확인 모달 버튼 행 */
+/* 모달 하단 버튼 행 (만료 상태의 닫기·새 코드 발급) */
 .confirmActions {
   display: flex;
   justify-content: flex-end;

@@ -5,14 +5,13 @@ import styles from './PluginSettingsScreen.module.css';
 
 // 디자인 1m 연동 코드 카드. 발급됨/미발급 두 상태를 갖는다.
 // 코드 원문은 여기 없다 — 발급 직후 모달(IssuedCodeDialog)에서만 1회 노출된다 (ADR-019).
-// 발급(1콜)과 재발급(rotate 경유 — 확인 모달 필수)은 흐름이 달라 핸들러를 나눈다.
+// 발급과 재발급은 같은 동작이다(rotate 없음 — 새 코드만 발급) — 라벨만 상태에 맞게 다르다.
 export function PairingCodeCard({
   code,
   loading,
   error,
   busy,
   onIssue,
-  onReissue,
   onRetry,
 }: {
   code: PairingCodeStatus;
@@ -20,10 +19,9 @@ export function PairingCodeCard({
   loading?: boolean;
   /** 상태를 한 번도 못 읽음 — 미발급으로 오인시키면 안 된다 (리뷰 #73). */
   error?: boolean;
-  /** 발급·재발급 진행 중 — 이중 클릭 방지. */
+  /** 발급 진행 중 — 이중 클릭 방지. */
   busy?: boolean;
   onIssue: () => void;
-  onReissue: () => void;
   onRetry: () => void;
 }) {
   return (
@@ -52,11 +50,11 @@ export function PairingCodeCard({
             <Check size={16} strokeWidth={2} className={styles.codeCheck} aria-hidden />
             <div className={styles.codeBody}>
               {/* 디자인 개정: 발행일이 힌트 줄로 내려가고 보안 문구·하단 경고줄은 삭제 —
-                  재발급 경고는 RotateConfirmDialog가 담당한다 (POK-102 완료조건 유지) */}
+                  재발급이 키를 건드리지 않게 되면서(rotate 미사용) 경고할 것도 없어졌다 */}
               <div className={styles.codeTitle}>코드가 발급되어 있어요</div>
               <div className={styles.codeHint}>발행일 {code.issuedAt}</div>
             </div>
-            <Button variant="soft" size="sm" loading={busy} onClick={onReissue}>
+            <Button variant="soft" size="sm" loading={busy} onClick={onIssue}>
               재발급
             </Button>
           </div>

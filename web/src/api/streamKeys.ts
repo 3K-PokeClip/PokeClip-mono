@@ -4,6 +4,7 @@ import { apiFetch } from './client';
 
 // 스트림키·페어링 코드 호출 (POK-102) — auth 서버가 /api/stream-keys/*를 소유한다.
 // 키 원문은 어떤 응답에도 실리지 않는다(ADR-019) — 웹은 유무·시각·페어링 코드만 다룬다.
+// 키 회전(rotate)은 프론트 흐름에서 쓰지 않는다 — 재발급도 같은 키의 새 코드 발급이다.
 
 export interface StreamKeyStatus {
   issued: boolean;
@@ -27,11 +28,6 @@ export const streamKeyStatusQueryOptions = {
   queryKey: ['streamKeys', 'status'] as const,
   queryFn: fetchStreamKeyStatus,
 };
-
-/** 옛 키를 유예 없이 즉시 폐기한다. 404 = 폐기할 키가 없는 계정. */
-export async function rotateStreamKey(): Promise<void> {
-  await apiFetch('/api/stream-keys/rotate', { method: 'POST' });
-}
 
 /** 일회용 코드 발급 — 키가 없으면 서버 ensureKey가 만들므로 최초 발급의 입구이기도 하다. */
 export async function issuePairingCode(): Promise<IssuedPairingCode> {

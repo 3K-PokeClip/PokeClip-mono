@@ -30,6 +30,13 @@ export function IssuedCodeDialog({
     setCopied(false);
   }, [issued?.code]);
 
+  // "복사됨" 피드백은 5초만 유지 — 라벨을 되돌려 다시 복사할 수 있음을 알린다
+  useEffect(() => {
+    if (!copied) return;
+    const id = window.setTimeout(() => setCopied(false), 5000);
+    return () => window.clearTimeout(id);
+  }, [copied]);
+
   if (issued === null) return null;
 
   const copy = async () => {
