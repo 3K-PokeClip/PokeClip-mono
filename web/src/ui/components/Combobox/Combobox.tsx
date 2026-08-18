@@ -5,7 +5,7 @@ import { DismissableLayer } from '../../primitives/DismissableLayer';
 import { useComposedRefs } from '../../primitives/hooks/useComposedRefs';
 import { useControllableState } from '../../primitives/hooks/useControllableState';
 import { useId } from '../../primitives/hooks/useId';
-import { useFloating } from '../../primitives/positioning';
+import { useFloating, useMeasureOnAttach } from '../../primitives/positioning';
 import { useFieldControlProps } from '../Field/Field';
 import type { SelectOption } from '../Select/Select';
 import inputStyles from '../Input/Input.module.css';
@@ -64,7 +64,13 @@ export const Combobox = forwardRef<HTMLInputElement, ComboboxProps>(function Com
   const listId = `${baseId}-listbox`;
   const isDisabled = disabled ?? field.disabled;
   const isInvalid = invalid ?? field['aria-invalid'];
-  const { coords } = useFloating(inputRef, listRef, { side: 'bottom', align: 'start', open });
+  const { coords, update } = useFloating(inputRef, listRef, {
+    side: 'bottom',
+    align: 'start',
+    open,
+  });
+  const measureRef = useMeasureOnAttach(update);
+  const listAttachRef = useComposedRefs<HTMLDivElement>(listRef, measureRef);
 
   // Keep the input text in sync when the selected value changes externally.
   useEffect(() => {
@@ -155,7 +161,7 @@ export const Combobox = forwardRef<HTMLInputElement, ComboboxProps>(function Com
         <Portal>
           <DismissableLayer onDismiss={() => setOpen(false)} excludeRefs={[inputRef]}>
             <div
-              ref={listRef}
+              ref={listAttachRef}
               role="listbox"
               id={listId}
               className={listStyles.listbox}
