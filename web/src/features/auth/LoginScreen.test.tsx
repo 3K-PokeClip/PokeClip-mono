@@ -48,6 +48,21 @@ describe('LoginScreen', () => {
     expect(startGoogleLogin).toHaveBeenCalledWith(undefined);
   });
 
+  it('OAuth 진입이 실패하면 오류를 표면화하고 복원 경로를 되돌린다', () => {
+    window.sessionStorage.setItem('pc-auth-return', '/settings/plugin');
+    startGoogleLogin.mockImplementation(() => {
+      throw new Error('NEXT_PUBLIC_GOOGLE_CLIENT_ID가 없다');
+    });
+    render(<LoginScreen />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Google로 시작하기/ }));
+
+    // 콘솔에만 남으면 "버튼이 안 눌리는" 증상이 된다 — 화면에 문구가 떠야 한다
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    // 소모했던 복원 경로가 되돌아와야 다음 시도에 다시 실린다
+    expect(window.sessionStorage.getItem('pc-auth-return')).toBe('/settings/plugin');
+  });
+
   it('이미 세션이 있으면 /home으로 되돌린다 (역가드)', async () => {
     window.localStorage.setItem('pc-auth', JSON.stringify({ v: 1, refreshToken: 'refresh-1' }));
 

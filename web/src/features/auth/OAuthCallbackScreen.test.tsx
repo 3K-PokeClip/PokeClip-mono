@@ -65,7 +65,7 @@ describe('OAuthCallbackScreen', () => {
     expect(queryClient.getQueryData(['auth', 'me'])).toBeUndefined();
   });
 
-  it.each(['https://evil.example/phish', '//evil.example'])(
+  it.each(['https://evil.example/phish', '//evil.example', '/\\evil.example'])(
     '심긴 외부 URL returnTo(%s)는 무시하고 홈으로 보낸다 — 오픈 리다이렉트 방지',
     async (planted) => {
       window.sessionStorage.setItem(

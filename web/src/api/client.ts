@@ -67,10 +67,18 @@ async function doRefresh(): Promise<boolean> {
     // 네트워크 오류(위 catch)와 같게 토큰을 보존한다. (리뷰 #72)
     return false;
   }
-  const pair: unknown = await res.json();
+  let pair: unknown;
+  try {
+    pair = await res.json();
+  } catch {
+    // 200인데 JSON이 아니다(프록시·캡티브 포털의 가로채기 등) — 세션 판정이 아니라
+    // 서버 계약 위반이므로 5xx와 같게 토큰을 보존한다. SyntaxError가 그대로 새면
+    // apiFetch의 "ApiError만 던진다" 계약도 깨진다. (리뷰 #72)
+    return false;
+  }
   const { accessToken, refreshToken: nextRefresh } = pair as Record<string, unknown>;
   if (typeof accessToken !== 'string' || typeof nextRefresh !== 'string') {
-    useAuthStore.getState().clearTokens();
+    // JSON이지만 토큰 쌍이 아니다 — 위와 같은 계약 위반이라 판정도 같게 보존한다.
     return false;
   }
   // 응답을 기다리는 사이 세션이 바뀌었을 수 있다 — 로그아웃(null)이면 setTokens가

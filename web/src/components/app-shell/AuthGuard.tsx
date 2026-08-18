@@ -57,6 +57,15 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/** consumeReturnPath로 꺼낸 경로를 되돌린다 — OAuth 진입이 실패해 이동하지 못한 경우. */
+export function restoreReturnPath(path: string) {
+  try {
+    sessionStorage.setItem(RETURN_KEY, path);
+  } catch {
+    /* 저장 실패 — /home으로 복원되는 것까지만 감수 */
+  }
+}
+
 /** LoginScreen이 로그인 후 복원 경로를 읽을 때 쓴다 — 읽으면서 지운다(1회용). */
 export function consumeReturnPath(): string | null {
   try {

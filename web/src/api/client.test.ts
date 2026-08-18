@@ -108,6 +108,21 @@ describe('apiFetch', () => {
     expect(useAuthStore.getState().refreshToken).toBe('old-refresh');
   });
 
+  it('refresh가 200인데 JSON이 아니면 토큰을 보존하고 ApiError로 던진다 — 프록시 가로채기 내성', async () => {
+    stubFetch((url) =>
+      url === '/api/auth/refresh'
+        ? new Response('<html>점검 중</html>', {
+            status: 200,
+            headers: { 'Content-Type': 'text/html' },
+          })
+        : jsonResponse(401, { message: '인증 실패' }),
+    );
+
+    // SyntaxError가 아니라 ApiError(401)여야 호출부의 status 분기가 안 깨진다
+    await expect(apiFetch('/api/protected')).rejects.toMatchObject({ status: 401 });
+    expect(useAuthStore.getState().refreshToken).toBe('old-refresh');
+  });
+
   it('회전 대기 중 다른 탭이 세션을 바꾸면 덮어쓰지 않고 새 refresh를 폐기한다', async () => {
     let resolveRefresh!: (r: Response) => void;
     const spy = stubFetch((url) => {
