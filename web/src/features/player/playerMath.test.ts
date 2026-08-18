@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AT_EDGE_THRESHOLD_SECONDS,
+  LIVE_EDGE_BACKOFF_SECONDS,
   LIVE_WINDOW_SECONDS,
   behindFromSeekFraction,
   formatBehind,
@@ -68,5 +69,17 @@ describe('isAtEdge', () => {
     expect(isAtEdge(0)).toBe(true);
     expect(isAtEdge(AT_EDGE_THRESHOLD_SECONDS - 1)).toBe(true);
     expect(isAtEdge(AT_EDGE_THRESHOLD_SECONDS)).toBe(false);
+  });
+});
+
+describe('LIVE_EDGE_BACKOFF_SECONDS', () => {
+  // liveSyncPosition이 없는 폴백(Safari 네이티브·스텁 VOD)에서 엣지로 스냅하면 시차가
+  // 백오프만큼 남은 채 다시 칠해진다. 그 값이 엣지로 안 잡히면 "실시간" 표기가 영영 안 뜬다.
+  it('스냅 직후 남는 시차가 엣지로 잡힌다', () => {
+    expect(isAtEdge(LIVE_EDGE_BACKOFF_SECONDS)).toBe(true);
+  });
+
+  it('부분 세그먼트를 피하려면 0보다 커야 한다', () => {
+    expect(LIVE_EDGE_BACKOFF_SECONDS).toBeGreaterThan(0);
   });
 });

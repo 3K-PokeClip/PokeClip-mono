@@ -5,7 +5,7 @@ import type Hls from 'hls.js';
 import { behindFromCurrentTime, dvrRange } from './dvrWindow';
 import { HLS_DVR_CONFIG } from './hlsConfig';
 import {
-  AT_EDGE_THRESHOLD_SECONDS,
+  LIVE_EDGE_BACKOFF_SECONDS,
   LIVE_WINDOW_SECONDS,
   behindFromSeekFraction,
   isAtEdge,
@@ -66,13 +66,14 @@ export function useHlsPlayback(
       );
       if (isAtEdge(clamped)) {
         // 엣지 스냅 — 정확히 range.end에 붙이면 부분 세그먼트를 기다리며 멎는다.
-        // liveSyncPosition(LL-HLS 권장 지점) 우선, 없으면(스텁 VOD·Safari 네이티브) 3초 백오프
-        // (infra/dev-media/player.html의 LIVE_EDGE_BACKOFF와 같은 값).
+        // liveSyncPosition(LL-HLS 권장 지점) 우선, 없으면(스텁 VOD·Safari 네이티브) 상수만큼
+        // 물러난다. 백오프가 엣지 임계값 이상이면 paint()가 다시 칠하는 순간 atEdge가
+        // false로 뒤집히므로 임계값 미만인 LIVE_EDGE_BACKOFF_SECONDS를 쓴다.
         const sync = hlsRef.current?.liveSyncPosition;
         const pos =
           typeof sync === 'number' && Number.isFinite(sync)
             ? sync
-            : range.end - AT_EDGE_THRESHOLD_SECONDS;
+            : range.end - LIVE_EDGE_BACKOFF_SECONDS;
         video.currentTime = Math.min(range.end, Math.max(range.start, pos));
         setBehind(0);
       } else {
@@ -188,6 +189,8 @@ export function useHlsPlayback(
             hls.recoverMediaError();
             return;
           }
+          // 화면은 마지막 프레임에서 멎고 로그만 남는다 — 사용자에게 보이는 에러 상태는
+          // PlayerSimulation 계약을 넓혀야 해 POK-23에서 다룬다
           console.error('[player] 복구 불가 hls.js 오류:', data.type, data.details);
           hls.destroy();
           hlsRef.current = null;
@@ -217,7 +220,9 @@ export function useHlsPlayback(
       video.removeEventListener('timeupdate', paint);
       hlsRef.current?.destroy();
       hlsRef.current = null;
+      // src 제거만으로는 네트워크·디코더가 붙어 있다 — load()까지 해야 리소스가 해제된다
       video.removeAttribute('src');
+      video.load();
     };
   }, [videoRef, src]);
 
