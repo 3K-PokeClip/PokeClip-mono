@@ -72,9 +72,14 @@ class SqsIntakeRunner {
      * 폴링은 웹 요청과 무관하게 돌아야 하므로 데몬 스레드 하나에 맡긴다.
      * 꺼져 있으면(클라이언트가 없으면) 시작하지 않는다.
      */
+    /** 큐 클라이언트를 받았는지 — 곧 켜졌는지다. 배선이 실제로 닿았는지 검사가 여기를 본다. */
+    boolean hasQueueClient() {
+        return sqs != null;
+    }
+
     @EventListener(ApplicationReadyEvent.class)
     void startLoop() {
-        if (sqs == null) {
+        if (!hasQueueClient()) {
             log.info("broadcast.intake.disabled");
             return;
         }
@@ -146,16 +151,23 @@ class SqsIntakeRunner {
             return;
         }
 
+        ProcessResult result;
         try {
-            ProcessResult result = processor.process(envelope);
-            // PROCESSED · DUPLICATE · IGNORED_STALE 셋 다 "더 볼 일 없음"이다.
-            log.info("broadcast.intake.handled eventId={} result={}", envelope.eventId(), result);
-            delete(message);
+            result = processor.process(envelope);
         } catch (RuntimeException e) {
             // 지우지 않는다 — 가시성 타임아웃이 지나면 다시 온다. 멱등이라 안전하다.
             log.warn("broadcast.intake.handle_failed eventId={} reason={}",
                     envelope.eventId(), e.getClass().getSimpleName(), e);
+            return;
         }
+
+        // 삭제를 try 밖으로 뺐다. 안에 두면 "처리는 됐는데 삭제가 실패"까지
+        // handle_failed로 남아 로그가 원인을 반대로 가리킨다 — 나중에 이 줄을 보는
+        // 사람이 처리 쪽을 뒤진다(감사 2차 지적). 삭제 실패는 큐에 못 닿는 것이므로
+        // pollOnce의 catch가 poll_failed로 받는 것이 맞다.
+        // PROCESSED · DUPLICATE · IGNORED_STALE 셋 다 "더 볼 일 없음"이다.
+        log.info("broadcast.intake.handled eventId={} result={}", envelope.eventId(), result);
+        delete(message);
     }
 
     private void delete(Message message) {

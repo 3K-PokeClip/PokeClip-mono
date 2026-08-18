@@ -24,6 +24,7 @@ final class FakeSqsClient implements SqsClient {
 
     private final List<Message> messages;
     private final boolean failOnReceive;
+    private boolean failOnDelete;
     private final List<String> deleted = new ArrayList<>();
 
     private FakeSqsClient(List<Message> messages, boolean failOnReceive) {
@@ -47,6 +48,13 @@ final class FakeSqsClient implements SqsClient {
         return new FakeSqsClient(List.of(), true);
     }
 
+    /** 꺼내기는 되는데 지우기만 실패한다 — 처리 실패와 갈라 보기 위한 갈래. */
+    static FakeSqsClient thatFailsOnDelete(String... bodies) {
+        FakeSqsClient client = withMessages(bodies);
+        client.failOnDelete = true;
+        return client;
+    }
+
     List<String> deletedReceiptHandles() {
         return List.copyOf(deleted);
     }
@@ -61,6 +69,9 @@ final class FakeSqsClient implements SqsClient {
 
     @Override
     public DeleteMessageResponse deleteMessage(DeleteMessageRequest request) {
+        if (failOnDelete) {
+            throw new IllegalStateException("큐에 못 닿는다 — 삭제 실패");
+        }
         deleted.add(request.receiptHandle());
         return DeleteMessageResponse.builder().build();
     }
