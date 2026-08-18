@@ -16,18 +16,21 @@ type Phase = { kind: 'working' } | { kind: 'error'; title: string; description: 
 
 /**
  * 복원 경로 검증 — returnTo는 같은 오리진 스크립트라면 누구든 쓸 수 있는 sessionStorage에서
- * 온다. 절대 URL이 심기면 로그인 직후 외부로 튕기는 오픈 리다이렉트가 되므로, 앱 내부
- * 경로만 통과시킨다 — "//"는 스킴 상대 URL, "/\\"도 URL 파서가 "\\"를 "/"로 정규화해
- * 같은 것이 되므로(new URL('/\\evil.com', origin) → https://evil.com/) 함께 거른다. (리뷰 #72)
+ * 온다. 절대 URL이 심기면 로그인 직후 외부로 튕기는 오픈 리다이렉트가 된다. 접두사 검사로
+ * 파서를 흉내 내면 정규화 변종에 하나씩 뚫린다 — "//"를 막으면 "\\"가 "/"로 정규화되고
+ * ("/\\evil.com"), 그걸 막으면 탭·LF·CR 제거가 남는다("/\n/evil.com" → "//evil.com").
+ * 실제 내비게이션과 같은 URL 파서로 도달 오리진을 판정하고, 통과하면 파서가 본 그대로의
+ * 내부 경로만 돌려준다. (리뷰 #72)
  */
 function sanitizeReturnTo(returnTo: string | null): string {
-  if (
-    returnTo !== null &&
-    returnTo.startsWith('/') &&
-    !returnTo.startsWith('//') &&
-    !returnTo.startsWith('/\\')
-  )
-    return returnTo;
+  if (returnTo !== null) {
+    try {
+      const url = new URL(returnTo, window.location.origin);
+      if (url.origin === window.location.origin) return url.pathname + url.search + url.hash;
+    } catch {
+      /* 파싱 불가 — 홈으로 */
+    }
+  }
   return '/home';
 }
 
