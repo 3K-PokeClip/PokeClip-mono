@@ -217,14 +217,15 @@ sudo docker compose --env-file /opt/pokeclip-demo/.env -f infra/dev-media/compos
 - compose bind 는 설정 파일이 `:ro`(읽기전용), `dvr` 만 쓰기다 — 위 `config` 출력에서 `read_only: true` 를 확인한다.
 - 디스크: `df -h /` — 1시간 DVR은 20GB 안에 들어온다(6Mbps 기준 약 2.7GB). `record: no` 라 녹화 증가분은 0이다.
 
-### 2-3. hls.js 폴백 (동봉본이 안 나올 때만)
+### 2-3. hls.js 배치 (필수 — 2026-08-18 실측 후 상시 단계로 승격)
 
-`/{경로}/hls.min.js` 가 404 면 재생 페이지가 hls.js 를 못 받는다. 그때만:
+재생 페이지는 hls.js 를 같은 오리진 `/hls.min.js` 에서 받는다(MediaMTX 동봉본 의존은 실측에서 실패해 폐기).
+compose 가 `./hls.min.js` 를 마운트하므로 **compose.yml 과 같은 디렉토리에** 내려받는다:
 
 ```bash
-sudo curl -fsSL -o /opt/pokeclip-demo/hls.min.js https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js
-sudo chown 10002:10002 /opt/pokeclip-demo/hls.min.js
-# compose.yml 의 edge 서비스에서 hls.min.js 볼륨 줄의 주석을 풀고 up -d 로 재기동
+sudo curl -fsSL -o <repo>/infra/dev-media/hls.min.js https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js
+sudo chown 10002:10002 <repo>/infra/dev-media/hls.min.js
+# (마운트는 compose.yml 에 기본 포함 — 2026-08-18부터) up -d 로 재기동
 ```
 
 ---
