@@ -240,6 +240,10 @@ go test ./internal/index/ -v
 `cmd/mtxhookwrite` 테스트는 **바이너리를 직접 빌드해 프로세스 8개를 동시에 띄운다**(줄 섞임 검증).
 `go test`만 있으면 되고 Docker는 필요 없지만, 다른 테스트보다 몇 초 더 걸린다.
 
+CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리지를 함께 재고,
+`internal/index`·`internal/upload`·`internal/indexer` 세 패키지 중 **하나라도 80% 미만이면 잡을
+실패시킨다**. 나머지 패키지는 수치만 로그에 남고 게이트 대상이 아니다.
+
 ## MediaMTX 버전업 체크리스트
 
 **버전을 올리면 `TestPinnedMediaMTXVersionMatchesDockerfile`이 빨간불이 된다. 그 테스트가 이 절로 안내한다.**
