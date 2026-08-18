@@ -24,9 +24,10 @@ describe('IssuedCodeDialog', () => {
     expect(screen.getByText(/10분 동안만/)).toBeInTheDocument();
   });
 
-  it('복사를 누르면 복사됨으로 바뀌고 5초 뒤 복사로 돌아온다', async () => {
+  it('복사 아이콘을 누르면 복사됨 피드백이 뜨고 1.5초 뒤 원래대로 돌아온다', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(window.navigator, 'clipboard', {
-      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+      value: { writeText },
       configurable: true,
     });
     vi.useFakeTimers();
@@ -39,13 +40,17 @@ describe('IssuedCodeDialog', () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole('button', { name: '복사' }));
+      fireEvent.click(screen.getByRole('button', { name: '코드 복사' }));
       await act(async () => {}); // writeText 프라미스 반영
-      expect(screen.getByRole('button', { name: '복사됨' })).toBeInTheDocument();
 
-      // 피드백은 5초만 — 라벨이 돌아와야 다시 복사할 수 있음이 보인다
-      act(() => vi.advanceTimersByTime(5000));
-      expect(screen.getByRole('button', { name: '복사' })).toBeInTheDocument();
+      expect(writeText).toHaveBeenCalledWith('KQ4M-7X2P');
+      // 시각 툴팁과 스크린리더 안내가 같이 뜬다 (디자인 ③: 체크 아이콘 + "복사됨")
+      expect(screen.getByRole('status')).toHaveTextContent('복사됨');
+
+      // 피드백은 1.5초만 (디자인 정본값) — 지나면 다시 복사 대기 상태
+      act(() => vi.advanceTimersByTime(1500));
+      expect(screen.getByRole('status')).toHaveTextContent('');
+      expect(screen.getByRole('button', { name: '코드 복사' })).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

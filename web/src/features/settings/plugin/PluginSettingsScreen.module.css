@@ -196,25 +196,26 @@
 
 /* ---------- 발급 직후 코드 모달 (디자인 1m ③, POK-103) ---------- */
 
-.issueCodeRow {
+/* 디자인 ③ 개정: 코드 박스가 전체 폭 — 코드는 중앙 정렬, 복사 아이콘은 우측 안에 얹힌다.
+   좌우 패딩 46은 아이콘 자리와 대칭을 맞춘 값(코드가 시각적 중앙에 오게). */
+.issueCodeBox {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: calc(8 * var(--pc-u));
+  justify-content: center;
   margin-top: var(--pc-space-3);
+  padding: calc(13 * var(--pc-u)) calc(46 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-canvas);
 }
 
-/* 디자인 ③: 모노 22px, 자간 .12em — 사람이 옮겨 적는 값이라 크게 */
+/* 모노 22px, 자간 .12em — 사람이 옮겨 적는 값이라 크게 */
 .issueCode {
-  flex: 1;
-  text-align: center;
   font-family: ui-monospace, Menlo, monospace;
   font-size: calc(22 * var(--pc-u));
   font-weight: 700;
   letter-spacing: 0.12em;
-  padding: calc(13 * var(--pc-u)) calc(12 * var(--pc-u));
-  border: 1px solid var(--pc-color-border-default);
-  border-radius: calc(10 * var(--pc-u));
-  background: var(--pc-color-bg-canvas);
 }
 
 .issueCountdown {
@@ -224,10 +225,42 @@
   font-variant-numeric: tabular-nums; /* 초가 바뀌어도 폭이 안 흔들린다 */
 }
 
-/* "복사"→"복사됨" 라벨 변화에 폭이 흔들리지 않게 고정 (디자인 78px) */
-.issueCopy {
-  width: calc(78 * var(--pc-u));
-  flex: none;
+.issueCopyWrap {
+  position: absolute;
+  right: calc(8 * var(--pc-u));
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* lucide size prop은 px 고정 — 유닛에 태운다 */
+.issueCopyWrap svg {
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+}
+
+/* 복사 성공 체크 — 연결됨과 같은 상태색 (디자인 값) */
+.issueCopyWrap[data-copied] svg {
+  color: #3dbf7f;
+}
+
+/* 복사 성공 툴팁 — DS Tooltip은 hover 전용(제어 불가)이라 성공 피드백 말풍선을 직접 그린다 */
+.issueCopiedTip {
+  position: absolute;
+  bottom: calc(100% + 6 * var(--pc-u));
+  right: 0;
+  padding: calc(4 * var(--pc-u)) calc(8 * var(--pc-u));
+  border-radius: calc(6 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  border: 1px solid var(--pc-color-border-subtle);
+  box-shadow: var(--pc-shadow-sm);
+  font-size: calc(11 * var(--pc-u));
+  white-space: nowrap;
+  color: var(--pc-color-text-primary);
+}
+
+/* DS 기본 폭(480u)보다 좁은 디자인 폭 410 — 발급·만료 두 상태가 같은 폭을 공유한다 */
+.issueDialog {
+  max-width: calc(410 * var(--pc-u));
 }
 
 /* 디자인 ③ 경고 박스 — 앰버 배경/보더.

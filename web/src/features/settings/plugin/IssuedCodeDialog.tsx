@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Button, Dialog } from '@/ui';
+import { Check, Copy } from 'lucide-react';
+import { Button, Dialog, IconButton, VisuallyHidden } from '@/ui';
 import type { IssuedPairingCode } from '@/api/streamKeys';
 import { useCountdown } from './useCountdown';
 import styles from './PluginSettingsScreen.module.css';
@@ -10,6 +11,7 @@ import styles from './PluginSettingsScreen.module.css';
 // 닫으면(확인·ESC·백드롭 모두) 원문이 사라지고 다시 볼 수 없다 (ADR-019 일회 노출).
 // 열려 있는 동안 10분 카운트다운이 흐르고, 만료되면 ④ 상태로 전환된다 —
 // 제목이 바뀌고 코드를 숨긴 채 재발급을 안내한다.
+// 복사는 코드 박스 우측의 아이콘 버튼 — 성공 시 체크로 1.5초 바뀌고 "복사됨" 툴팁을 띄운다.
 export function IssuedCodeDialog({
   issued,
   busy,
@@ -30,10 +32,10 @@ export function IssuedCodeDialog({
     setCopied(false);
   }, [issued?.code]);
 
-  // "복사됨" 피드백은 5초만 유지 — 라벨을 되돌려 다시 복사할 수 있음을 알린다
+  // 복사 피드백(체크 아이콘 + 툴팁)은 1.5초만 유지 — 디자인 1m ③ 정본값
   useEffect(() => {
     if (!copied) return;
-    const id = window.setTimeout(() => setCopied(false), 5000);
+    const id = window.setTimeout(() => setCopied(false), 1500);
     return () => window.clearTimeout(id);
   }, [copied]);
 
@@ -50,7 +52,8 @@ export function IssuedCodeDialog({
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Content>
+      {/* DS 기본 폭(480)보다 좁은 디자인 폭(410)으로 고정 — 발급·만료 두 상태가 같은 폭을 유지한다 */}
+      <Dialog.Content className={styles.issueDialog}>
         {countdown.expired ? (
           <>
             <Dialog.Title>코드가 만료됐어요</Dialog.Title>
@@ -73,17 +76,20 @@ export function IssuedCodeDialog({
           <>
             <Dialog.Title>연동 코드가 발급되었어요</Dialog.Title>
             <Dialog.Description>OBS 플러그인 설정에 아래 코드를 입력하세요.</Dialog.Description>
-            <div className={styles.issueCodeRow}>
+            <div className={styles.issueCodeBox}>
               <span className={styles.issueCode}>{issued.code}</span>
-              {/* 폭 고정 — "복사"→"복사됨" 라벨 변화에 레이아웃이 흔들리지 않게 (디자인 78px) */}
-              <Button
-                variant="soft"
-                size="md"
-                className={styles.issueCopy}
-                onClick={() => void copy()}
-              >
-                {copied ? '복사됨' : '복사'}
-              </Button>
+              <div className={styles.issueCopyWrap} data-copied={copied || undefined}>
+                {copied ? (
+                  <span className={styles.issueCopiedTip} aria-hidden>
+                    복사됨
+                  </span>
+                ) : null}
+                <IconButton variant="ghost" size="sm" aria-label="코드 복사" onClick={() => void copy()}>
+                  {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+                </IconButton>
+                {/* 시각 피드백(체크·툴팁)과 짝 — 스크린리더에도 복사 성공을 알린다 */}
+                <VisuallyHidden role="status">{copied ? '복사됨' : ''}</VisuallyHidden>
+              </div>
             </div>
             <p className={styles.issueCountdown} role="timer" aria-label="코드 만료까지 남은 시간">
               {countdown.label} 후 만료돼요
