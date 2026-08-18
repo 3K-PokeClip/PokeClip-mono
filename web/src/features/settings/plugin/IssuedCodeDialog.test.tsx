@@ -21,7 +21,7 @@ describe('IssuedCodeDialog', () => {
 
     expect(screen.getByText('KQ4M-7X2P')).toBeInTheDocument();
     expect(screen.getByRole('timer')).toHaveTextContent(/\d{2}:\d{2} 후 만료돼요/);
-    expect(screen.getByText(/한 번만/)).toBeInTheDocument();
+    expect(screen.getByText(/10분 동안만/)).toBeInTheDocument();
   });
 
   it('확인했어요가 onClose를 부른다 — 그 뒤 원문 재표시 불가는 호출부 책임', () => {
@@ -48,8 +48,9 @@ describe('IssuedCodeDialog', () => {
       />,
     );
 
-    // 만료 전환은 낭독돼야 한다 (POK-103 만료 상태 표시)
-    expect(screen.getByRole('status')).toHaveTextContent('코드가 만료됐어요');
+    // 디자인 ④: 제목이 만료로 바뀌고, 안내는 낭독돼야 한다 (POK-103 만료 상태 표시)
+    expect(screen.getByRole('heading', { name: '코드가 만료됐어요' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('발급 후 10분이 지나 코드가 만료되었어요');
     expect(screen.queryByText('KQ4M-7X2P')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '새 코드 발급' }));

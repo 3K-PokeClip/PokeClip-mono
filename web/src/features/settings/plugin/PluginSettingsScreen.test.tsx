@@ -87,7 +87,7 @@ describe('PluginSettingsScreen', () => {
     stubStreamKeyFetch();
     const { container } = renderWithProviders(<PluginSettingsScreen />);
 
-    expect(await screen.findByText(/보안을 위해 코드는 다시 표시되지 않아요/)).toBeInTheDocument();
+    expect(await screen.findByText(/코드가 발급되어 있어요/)).toBeInTheDocument();
     expect(screen.queryByText(CODE_PATTERN)).not.toBeInTheDocument();
     expect(container.textContent).not.toMatch(/srt:\/\//i);
   });
@@ -109,9 +109,9 @@ describe('PluginSettingsScreen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '지금 재발급' }));
 
-    // 새 코드는 모달에서 1회 표시 — 카운트다운과 1회 노출 경고가 같이 붙는다 (POK-103)
+    // 새 코드는 모달에서 1회 표시 — 카운트다운과 10분 유효 안내가 같이 붙는다 (POK-103)
     expect(await screen.findByText('KQ4M-7X2P')).toBeInTheDocument();
-    expect(screen.getByText(/한 번만/)).toBeInTheDocument();
+    expect(screen.getByText(/10분 동안만/)).toBeInTheDocument();
     expect(screen.getByRole('timer')).toHaveTextContent(/\d{2}:\d{2} 후 만료돼요/);
     // rotate가 발급보다 먼저다 — 순서가 뒤집히면 옛 키의 코드가 나간다
     expect(callsTo(spy, '/api/stream-keys/rotate')).toHaveLength(1);

@@ -51,18 +51,15 @@ export function PairingCodeCard({
           <div className={styles.codeBox}>
             <Check size={16} strokeWidth={2} className={styles.codeCheck} aria-hidden />
             <div className={styles.codeBody}>
-              <div className={styles.codeTitle}>코드가 발급되어 있어요 · 발행일 {code.issuedAt}</div>
-              <div className={styles.codeHint}>
-                보안을 위해 코드는 다시 표시되지 않아요 — 잃어버렸다면 재발급하세요
-              </div>
+              {/* 디자인 개정: 발행일이 힌트 줄로 내려가고 보안 문구·하단 경고줄은 삭제 —
+                  재발급 경고는 RotateConfirmDialog가 담당한다 (POK-102 완료조건 유지) */}
+              <div className={styles.codeTitle}>코드가 발급되어 있어요</div>
+              <div className={styles.codeHint}>발행일 {code.issuedAt}</div>
             </div>
             <Button variant="soft" size="sm" loading={busy} onClick={onReissue}>
               재발급
             </Button>
           </div>
-          {/* "기존 코드도 무효화"라고 말하면 거짓 보장이다 — 백엔드 rotate는 미사용
-              페어링 코드를 죽이지 않는다(교환은 현재 키를 준다). 키 만료만 약속한다. (리뷰 #73) */}
-          <div className={styles.metaText}>재발급하면 기존 스트림 키가 즉시 만료됩니다</div>
         </>
       ) : (
         <div className={styles.codeBoxEmpty}>
