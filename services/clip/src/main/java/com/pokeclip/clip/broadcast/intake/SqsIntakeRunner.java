@@ -130,6 +130,22 @@ class SqsIntakeRunner {
             return;
         }
 
+        // 모르는 종류는 재시도해도 계속 모른다. 안 지우면 FIFO 같은 그룹의 뒤 편지가
+        // 영원히 못 넘어온다 — 줄이 막히는 피해가 소식 하나를 놓치는 것보다 크다.
+        //
+        // LifecycleEventType.from은 계속 던진다(태스크 2의 "모르는 종류는 거부한다").
+        // 그것을 재시도 불가로 <b>분류</b>하는 것이 러너의 판단이고, 그 자리가 여기다.
+        // 로그 키를 파싱 실패와 나눈 이유: 이쪽은 1번이 새 이벤트를 냈다는 신호라
+        // "형식이 깨졌다"와 섞이면 안 된다.
+        try {
+            envelope.type();
+        } catch (IllegalArgumentException e) {
+            log.warn("broadcast.intake.unknown_type_dropped messageId={} eventId={} eventType={}",
+                    message.messageId(), envelope.eventId(), envelope.eventType());
+            delete(message);
+            return;
+        }
+
         try {
             ProcessResult result = processor.process(envelope);
             // PROCESSED · DUPLICATE · IGNORED_STALE 셋 다 "더 볼 일 없음"이다.

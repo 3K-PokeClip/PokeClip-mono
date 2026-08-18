@@ -1,8 +1,10 @@
 package com.pokeclip.clip.broadcast.intake;
 
+import ch.qos.logback.classic.Level;
 import com.pokeclip.clip.broadcast.BroadcastEventProcessor;
 import com.pokeclip.clip.broadcast.LifecycleEnvelope;
 import com.pokeclip.clip.broadcast.ProcessResult;
+import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
@@ -72,6 +74,54 @@ class SqsIntakeRunnerTest {
         assertThat(sqs.deletedReceiptHandles()).containsExactly("rh-0");
     }
 
+    /**
+     * 모르는 종류는 재시도해도 계속 모른다. 안 지우면 FIFO 같은 그룹의 뒤 편지가
+     * 영원히 못 넘어온다 — 줄이 막히는 피해가 소식 하나를 놓치는 것보다 크다.
+     *
+     * <p>이 판단은 <b>러너의 것</b>이다. LifecycleEventType.from은 계속 던진다 —
+     * 그것을 "재시도 불가"로 분류하는 자리가 여기다.
+     */
+    @Test
+    void 모르는_종류의_편지는_지우고_종류를_로그에_남긴다() {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(envelopeJson("evt-x", "s1", 1L, "broadcast.paused"));
+        // 진짜 프로세서는 envelope.type()에서 던진다. 스텁이 조용히 성공하면 갈래를
+        // 지워도 편지가 지워져 아래 삭제 단언이 저절로 참이 된다 — 그러면 이 시험이
+        // 로그만 재고 정작 "큐가 안 막힌다"는 못 잰다.
+        SqsIntakeRunner runner = newRunner(sqs, envelope -> {
+            throw new IllegalArgumentException("모르는 생명주기 이벤트: " + envelope.eventType());
+        });
+
+        try (LogCaptor captor = new LogCaptor()) {
+            runner.pollOnce();
+
+            // 형식이 깨진 것과 다른 키를 쓴다 — 후자는 1번이 새 이벤트를 냈다는 신호라
+            // 로그에서 갈라낼 수 있어야 한다.
+            assertThat(captor.messages())
+                    .anyMatch(m -> m.contains("broadcast.intake.unknown_type_dropped"));
+            assertThat(captor.messages())
+                    .as("버린 종류 이름이 없으면 무엇이 새로 생겼는지 알 수 없다")
+                    .anyMatch(m -> m.contains("broadcast.paused"));
+            assertThat(captor.levelOf("broadcast.intake.unknown_type_dropped")).isEqualTo(Level.WARN);
+        }
+
+        assertThat(sqs.deletedReceiptHandles()).containsExactly("rh-0");
+    }
+
+    /** 모르는 종류를 버리는 것이지 아는 종류까지 버리는 것이 아니다. */
+    @Test
+    void 아는_종류는_모르는_종류_갈래로_새지_않는다() {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(envelopeJson("evt-y", "s1", 1L, "broadcast.ended"));
+        SqsIntakeRunner runner = newRunner(sqs, envelope -> {
+            throw new IllegalStateException("DB 연결 끊김");
+        });
+
+        runner.pollOnce();
+
+        assertThat(sqs.deletedReceiptHandles())
+                .as("아는 종류의 처리 실패는 재시도해야 한다")
+                .isEmpty();
+    }
+
     @Test
     void 폴링에_성공하면_마지막_성공_시각이_갱신된다() {
         FakeSqsClient sqs = FakeSqsClient.withMessages();   // 빈 응답도 성공이다
@@ -130,11 +180,15 @@ class SqsIntakeRunnerTest {
     }
 
     private static String startedJson(String eventId, String streamId, long sequence) {
+        return envelopeJson(eventId, streamId, sequence, "broadcast.started");
+    }
+
+    private static String envelopeJson(String eventId, String streamId, long sequence, String eventType) {
         return """
-                {"schemaVersion":1,"eventId":"%s","eventType":"broadcast.started",
+                {"schemaVersion":1,"eventId":"%s","eventType":"%s",
                  "occurredAt":"2026-08-18T00:00:00Z","streamId":"%s","streamerId":"streamer-1",
                  "sequence":%d,"traceId":"trace-1","payload":{}}
-                """.formatted(eventId, streamId, sequence);
+                """.formatted(eventId, eventType, streamId, sequence);
     }
 
     /**
