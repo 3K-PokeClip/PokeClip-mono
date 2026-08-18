@@ -16,7 +16,12 @@ import { DismissableLayer } from '../../primitives/DismissableLayer';
 import { useComposedRefs } from '../../primitives/hooks/useComposedRefs';
 import { useControllableState } from '../../primitives/hooks/useControllableState';
 import { useId } from '../../primitives/hooks/useId';
-import { useFloating, type Align, type Side } from '../../primitives/positioning';
+import {
+  useFloating,
+  useMeasureOnAttach,
+  type Align,
+  type Side,
+} from '../../primitives/positioning';
 import styles from './Popover.module.css';
 
 interface PopoverContextValue {
@@ -97,12 +102,13 @@ const PopoverContent = forwardRef<HTMLDivElement, PopoverContentProps>(function 
   ref,
 ) {
   const ctx = usePopover();
-  const composedRef = useComposedRefs<HTMLDivElement>(ref, ctx.contentRef);
-  const { coords } = useFloating(ctx.triggerRef, ctx.contentRef, {
+  const { coords, update } = useFloating(ctx.triggerRef, ctx.contentRef, {
     side: side ?? ctx.side,
     align: align ?? ctx.align,
     open: ctx.open,
   });
+  const measureRef = useMeasureOnAttach(update);
+  const composedRef = useComposedRefs<HTMLDivElement>(ref, ctx.contentRef, measureRef);
   if (!ctx.open) return null;
   return (
     <Portal>

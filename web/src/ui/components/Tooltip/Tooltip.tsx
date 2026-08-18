@@ -2,7 +2,13 @@ import { useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { Portal } from '../../primitives/Portal';
 import { Slot } from '../../primitives/Slot';
 import { useId } from '../../primitives/hooks/useId';
-import { useFloating, type Align, type Side } from '../../primitives/positioning';
+import { useComposedRefs } from '../../primitives/hooks/useComposedRefs';
+import {
+  useFloating,
+  useMeasureOnAttach,
+  type Align,
+  type Side,
+} from '../../primitives/positioning';
 import styles from './Tooltip.module.css';
 
 export interface TooltipProps {
@@ -27,7 +33,9 @@ export function Tooltip({
   const contentRef = useRef<HTMLDivElement>(null);
   const timer = useRef<number | undefined>(undefined);
   const id = useId();
-  const { coords } = useFloating(triggerRef, contentRef, { side, align, open });
+  const { coords, update } = useFloating(triggerRef, contentRef, { side, align, open });
+  const measureRef = useMeasureOnAttach(update);
+  const contentAttachRef = useComposedRefs<HTMLDivElement>(contentRef, measureRef);
 
   const show = () => {
     window.clearTimeout(timer.current);
@@ -53,7 +61,7 @@ export function Tooltip({
       {open ? (
         <Portal>
           <div
-            ref={contentRef}
+            ref={contentAttachRef}
             role="tooltip"
             id={id}
             className={styles.tooltip}

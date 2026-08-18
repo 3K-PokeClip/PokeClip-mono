@@ -46,6 +46,21 @@
   display: inline-flex;
 }
 
+/* 아바타를 메뉴 트리거로 감싸는 버튼 — 시각은 아바타 그대로, 포커스 링만 얹는다 */
+.avatarButton {
+  display: inline-flex;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--pc-radius-circle);
+}
+
+.avatarButton:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
 /* 읽지 않은 알림 점 — 디자인 1a: 8px point색, canvas 2px 테두리 */
 .unreadDot {
   position: absolute;

@@ -1,4 +1,4 @@
-import { useCallback, useState, type RefObject } from 'react';
+import { useCallback, useState, type RefCallback, type RefObject } from 'react';
 import { useIsomorphicLayoutEffect } from '../hooks/useIsomorphicLayoutEffect';
 
 export type Side = 'top' | 'bottom' | 'left' | 'right';
@@ -97,4 +97,20 @@ export function useFloating(
   }, [open, update]);
 
   return { coords, update };
+}
+
+/**
+ * Portal 콘텐츠용 재측정 ref (useFloating과 짝) — Portal은 SSR 안전을 위해 마운트
+ * 확인 후에야 children을 그리므로, 열림 커밋의 레이아웃 이펙트 시점엔 콘텐츠 DOM이
+ * 없어 첫 측정이 무산된다. 그대로 두면 팝업이 초기 좌표 좌상단에 붙은 채 스크롤·
+ * 리사이즈에만 복구된다. 이 콜백을 콘텐츠 ref "뒤에" 합성하면(측정 대상 ref가 먼저
+ * 채워진 뒤) DOM이 붙는 순간 — 페인트 전 — 다시 재서 첫 프레임부터 제자리에 그려진다.
+ */
+export function useMeasureOnAttach(update: () => void): RefCallback<HTMLElement> {
+  return useCallback(
+    (node) => {
+      if (node !== null) update();
+    },
+    [update],
+  );
 }

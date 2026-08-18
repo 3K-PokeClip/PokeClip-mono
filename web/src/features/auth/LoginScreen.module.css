@@ -99,6 +99,14 @@
   outline-offset: 2px;
 }
 
+/* OAuth 진입 실패 안내 — role=alert와 짝. 버튼과 약관 사이에 끼어든다 */
+.startError {
+  margin-top: calc(12 * var(--pc-u));
+  font-size: calc(12.5 * var(--pc-u));
+  text-align: center;
+  color: var(--pc-color-danger);
+}
+
 .terms {
   margin-top: calc(24 * var(--pc-u));
   font-size: calc(12.5 * var(--pc-u));

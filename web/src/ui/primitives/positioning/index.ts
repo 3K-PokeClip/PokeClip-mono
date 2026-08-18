@@ -1,5 +1,6 @@
 export {
   useFloating,
+  useMeasureOnAttach,
   type Side,
   type Align,
   type Coords,

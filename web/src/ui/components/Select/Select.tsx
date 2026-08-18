@@ -6,7 +6,7 @@ import { useComposedRefs } from '../../primitives/hooks/useComposedRefs';
 import { useControllableState } from '../../primitives/hooks/useControllableState';
 import { useId } from '../../primitives/hooks/useId';
 import { useFieldControlProps } from '../Field/Field';
-import { useFloating } from '../../primitives/positioning';
+import { useFloating, useMeasureOnAttach } from '../../primitives/positioning';
 import styles from './Select.module.css';
 
 export interface SelectOption {
@@ -72,7 +72,13 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
   const listId = `${baseId}-listbox`;
   const isDisabled = disabled ?? field.disabled;
   const isInvalid = invalid ?? field['aria-invalid'];
-  const { coords } = useFloating(triggerRef, listRef, { side: 'bottom', align: 'start', open });
+  const { coords, update } = useFloating(triggerRef, listRef, {
+    side: 'bottom',
+    align: 'start',
+    open,
+  });
+  const measureRef = useMeasureOnAttach(update);
+  const listAttachRef = useComposedRefs<HTMLDivElement>(listRef, measureRef);
 
   const selected = options.find((o) => o.value === val);
   const optionId = (i: number) => `${baseId}-opt-${i}`;
@@ -158,7 +164,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
         <Portal>
           <DismissableLayer onDismiss={() => setOpen(false)} excludeRefs={[triggerRef]}>
             <div
-              ref={listRef}
+              ref={listAttachRef}
               role="listbox"
               id={listId}
               className={styles.listbox}

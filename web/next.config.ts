@@ -5,6 +5,8 @@ import type { NextConfig } from 'next';
 // app/api/** 파일 라우트(/api/ping)가 항상 우선한다.
 const proxies = [
   { source: '/api/auth/:path*', target: process.env.AUTH_API_URL },
+  // 스트림키·페어링 코드(POK-102)도 auth 서버 소유다 (StreamKeyController).
+  { source: '/api/stream-keys/:path*', target: process.env.AUTH_API_URL },
   { source: '/api/clip/:path*', target: process.env.CLIP_API_URL },
 ];
 
