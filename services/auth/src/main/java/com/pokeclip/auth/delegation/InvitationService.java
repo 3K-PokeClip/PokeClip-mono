@@ -166,6 +166,26 @@ public class InvitationService {
         return invitations.findById(invitationId).orElseThrow();
     }
 
+    /**
+     * 만료된 초대도 취소할 수 있다 — 막을 이유가 없고, 막으면 만료된 행이 보낸 목록에
+     * 계속 남아 스트리머가 지울 방법이 없다.
+     *
+     * <p>없는 초대와 남의 초대를 같은 404로 답한다. 가려 주면 id를 훑어 남의 초대가
+     * 존재하는지 알아낼 수 있다.
+     */
+    @Transactional
+    public void cancel(Long streamerId, Long invitationId) {
+        invitations.findById(invitationId)
+                .filter(i -> i.getStreamerId().equals(streamerId))
+                .orElseThrow(() -> new DelegationException(
+                        DelegationFailure.INVITATION_NOT_FOUND, "없거나 내가 보낸 초대가 아니다"));
+        if (invitations.cancel(invitationId, Instant.now()) == 0) {
+            throw new DelegationException(
+                    DelegationFailure.INVITATION_NOT_PENDING, "이미 처리된 초대다");
+        }
+        log.info("auth.invitation.canceled streamerId={} invitationId={}", streamerId, invitationId);
+    }
+
     /** 전부 최신순. 거절·만료도 스트리머가 봐야 하므로 거르지 않는다. 페이징은 없다. */
     @Transactional(readOnly = true)
     public List<SentInvitationResponse> sentBy(Long streamerId) {
