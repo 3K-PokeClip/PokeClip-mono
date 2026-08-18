@@ -57,9 +57,14 @@ async function doRefresh(): Promise<boolean> {
     // 네트워크 일시 장애 — 토큰을 지우면 오프라인 한 번에 로그아웃된다. 남겨 둔다.
     return false;
   }
-  if (!res.ok) {
+  if (res.status === 401 || res.status === 403) {
     // 만료·회전 재사용(도난 감지) — 세션 종료가 맞다. 가드가 스토어 변화를 보고 /login으로 보낸다.
     useAuthStore.getState().clearTokens();
+    return false;
+  }
+  if (!res.ok) {
+    // 5xx·429 등 백엔드 일시 장애 — 배포 중 재시작 한 번에 유효한 refresh가 파기되면 안 된다.
+    // 네트워크 오류(위 catch)와 같게 토큰을 보존한다. (리뷰 #72)
     return false;
   }
   const pair: unknown = await res.json();
@@ -68,10 +73,11 @@ async function doRefresh(): Promise<boolean> {
     useAuthStore.getState().clearTokens();
     return false;
   }
-  // 응답을 기다리는 사이 로그아웃됐을 수 있다 — 여기서 setTokens하면 "로그아웃했는데
-  // 세션이 되살아나는" 레이스가 된다. 이 새 refresh는 서버에도 살아 있으므로(로그아웃은
-  // 옛 토큰만 폐기했다) 즉시 폐기까지 해야 로그아웃이 완성된다. (리뷰 #72)
-  if (useAuthStore.getState().refreshToken === null) {
+  // 응답을 기다리는 사이 세션이 바뀌었을 수 있다 — 로그아웃(null)이면 setTokens가
+  // "로그아웃했는데 세션이 되살아나는" 레이스가 되고, 다른 탭발 교체(로그아웃 후 다른 계정
+  // 로그인)면 늦게 도착한 이 회전이 새 세션을 이전 계정으로 되돌린다. 어느 쪽이든 이 새
+  // refresh는 서버에 살아 있으므로(로그아웃은 옛 토큰만 폐기했다) 즉시 폐기한다. (리뷰 #72)
+  if (useAuthStore.getState().refreshToken !== refreshToken) {
     void fetch('/api/auth/logout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

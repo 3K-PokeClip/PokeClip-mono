@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { useAuthStore } from '@/stores/auth';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { onCrossTabSessionChange, useAuthStore } from '@/stores/auth';
 
 const STORAGE_KEY = 'pc-auth';
 
@@ -49,5 +49,33 @@ describe('useAuthStore', () => {
     expect(useAuthStore.getState().accessToken).toBeNull();
     expect(useAuthStore.getState().refreshToken).toBeNull();
     expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe('다른 탭 동기화', () => {
+  it('다른 값으로 교체되면 access도 비우고 구독자에게 알린다 — 회전과 계정 교체를 구분할 수 없다', () => {
+    useAuthStore.getState().hydrate(); // storage 리스너 바인딩
+    useAuthStore.setState({ accessToken: 'access-a', refreshToken: 'refresh-a', hydrated: true });
+    const listener = vi.fn();
+    const off = onCrossTabSessionChange(listener);
+
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ v: 1, refreshToken: 'refresh-b' }));
+    window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEY }));
+
+    expect(useAuthStore.getState().refreshToken).toBe('refresh-b');
+    expect(useAuthStore.getState().accessToken).toBeNull();
+    expect(listener).toHaveBeenCalledTimes(1);
+    off();
+  });
+
+  it('다른 탭의 로그아웃(null)은 양쪽 토큰을 비운다', () => {
+    useAuthStore.getState().hydrate();
+    useAuthStore.setState({ accessToken: 'access-a', refreshToken: 'refresh-a', hydrated: true });
+
+    window.localStorage.removeItem(STORAGE_KEY);
+    window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEY }));
+
+    expect(useAuthStore.getState().refreshToken).toBeNull();
+    expect(useAuthStore.getState().accessToken).toBeNull();
   });
 });

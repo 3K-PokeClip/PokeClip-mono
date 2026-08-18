@@ -54,6 +54,18 @@ function persistRefreshToken(refreshToken: string | null) {
   }
 }
 
+// 다른 탭발 세션 변경 구독 — 스토어는 queryClient를 모르므로, Providers가 이 콜백으로
+// 이전 세션의 쿼리 캐시(me·스트림키)를 비운다. (리뷰 #72)
+const crossTabListeners = new Set<() => void>();
+
+/** 다른 탭이 바꾼 세션이 이 탭에 반영될 때 불린다. 반환값은 구독 해지 함수. */
+export function onCrossTabSessionChange(listener: () => void): () => void {
+  crossTabListeners.add(listener);
+  return () => {
+    crossTabListeners.delete(listener);
+  };
+}
+
 /**
  * 다른 탭이 회전·로그아웃한 refresh 토큰을 이 탭에 반영한다. storage 이벤트는
  * 변경을 만든 탭에서는 발화하지 않으므로 persist 루프가 생기지 않는다.
@@ -69,14 +81,14 @@ function bindStorageSync() {
   window.addEventListener('storage', (e) => {
     if (e.key !== STORAGE_KEY && e.key !== null) return;
     const stored = readStoredRefreshToken();
-    const { refreshToken, accessToken } = useAuthStore.getState();
+    const { refreshToken } = useAuthStore.getState();
     if (stored === refreshToken) return;
-    // access는 유지한다 — 다른 탭의 회전은 refresh만 갈아끼우고, 이 탭의 access는
-    // 남은 수명 동안 여전히 유효하다. 단 로그아웃(null)은 세션 종료이므로 함께 비운다.
-    useAuthStore.setState({
-      refreshToken: stored,
-      accessToken: stored === null ? null : accessToken,
-    });
+    // access도 함께 비운다 — "다른 값으로 교체"를 같은 세션의 회전이라고 단정할 수 없다.
+    // 프리즈로 로그아웃 이벤트를 놓친 탭은 "로그아웃 후 다른 계정 로그인"도 이 모양으로
+    // 받아, 이전 계정 access(최대 30분)로 조용히 이어가는 노출면이 된다. 회전이었다면
+    // 다음 401에서 새 refresh로 한 번 더 회전하는 비용만 낸다. (리뷰 #72)
+    useAuthStore.setState({ refreshToken: stored, accessToken: null });
+    crossTabListeners.forEach((listener) => listener());
   });
 }
 

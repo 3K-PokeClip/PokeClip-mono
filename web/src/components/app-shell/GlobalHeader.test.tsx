@@ -60,6 +60,23 @@ describe('GlobalHeader', () => {
     expect(window.sessionStorage.getItem('pc-auth-return')).toBeNull();
   });
 
+  it('서버 폐기가 응답하지 않아도 로컬 로그아웃은 즉시 된다', async () => {
+    stubFetch((url) => {
+      if (url === '/api/auth/me') return jsonResponse(200, ME);
+      // auth 서버 행 재현 — 연결만 받고 영원히 응답하지 않는다
+      if (url === '/api/auth/logout') return new Promise<Response>(() => {});
+      return jsonResponse(404);
+    });
+    renderWithProviders(<GlobalHeader />);
+
+    fireEvent.click(screen.getByRole('button', { name: '계정 메뉴' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: '로그아웃' }));
+
+    // 서버 응답을 기다렸다면 이 단언에 도달하지 못한다
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/login'));
+    expect(useAuthStore.getState().refreshToken).toBeNull();
+  });
+
   it('접근성 위반이 없다', async () => {
     stubAuthedFetch();
     const { container } = renderWithProviders(<GlobalHeader />);

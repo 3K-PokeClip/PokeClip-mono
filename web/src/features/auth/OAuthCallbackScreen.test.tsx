@@ -65,6 +65,26 @@ describe('OAuthCallbackScreen', () => {
     expect(queryClient.getQueryData(['auth', 'me'])).toBeUndefined();
   });
 
+  it.each(['https://evil.example/phish', '//evil.example'])(
+    '심긴 외부 URL returnTo(%s)는 무시하고 홈으로 보낸다 — 오픈 리다이렉트 방지',
+    async (planted) => {
+      window.sessionStorage.setItem(
+        STATE_KEY,
+        JSON.stringify({ state: 'state-1', returnTo: planted }),
+      );
+      searchRef.current = new URLSearchParams('code=code-1&state=state-1');
+      stubFetch((url) =>
+        url === '/api/auth/google'
+          ? jsonResponse(200, { accessToken: 'access-1', refreshToken: 'refresh-1' })
+          : jsonResponse(404),
+      );
+
+      renderWithClient(<OAuthCallbackScreen />);
+
+      await waitFor(() => expect(replace).toHaveBeenCalledWith('/home'));
+    },
+  );
+
   it('state가 어긋나면 교환하지 않고 에러 안내를 띄운다', () => {
     window.sessionStorage.setItem(STATE_KEY, JSON.stringify({ state: 'state-1', returnTo: null }));
     searchRef.current = new URLSearchParams('code=code-1&state=state-other');

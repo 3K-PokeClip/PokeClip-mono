@@ -14,6 +14,16 @@ import styles from './OAuthCallbackScreen.module.css';
 
 type Phase = { kind: 'working' } | { kind: 'error'; title: string; description: string };
 
+/**
+ * 복원 경로 검증 — returnTo는 같은 오리진 스크립트라면 누구든 쓸 수 있는 sessionStorage에서
+ * 온다. 절대 URL이 심기면 로그인 직후 외부로 튕기는 오픈 리다이렉트가 되므로, 앱 내부
+ * 경로("/", 단 "//"는 스킴 상대 URL이라 제외)만 통과시킨다. (리뷰 #72)
+ */
+function sanitizeReturnTo(returnTo: string | null): string {
+  if (returnTo !== null && returnTo.startsWith('/') && !returnTo.startsWith('//')) return returnTo;
+  return '/home';
+}
+
 export function OAuthCallbackScreen() {
   const router = useRouter();
   const params = useSearchParams();
@@ -57,7 +67,7 @@ export function OAuthCallbackScreen() {
         // me 캐시가 새 로그인에 새지 않도록, 토큰을 심기 전에 여기서 비운다. (리뷰 #72)
         queryClient.clear();
         useAuthStore.getState().setTokens(pair);
-        router.replace(stored.returnTo ?? '/home');
+        router.replace(sanitizeReturnTo(stored.returnTo));
       })
       .catch(() => {
         // 401 사유 미공개 계약 + 네트워크 실패 — 문구를 나누지 않는다.

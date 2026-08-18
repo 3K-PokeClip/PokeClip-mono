@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { onCrossTabSessionChange } from '@/stores/auth';
 import { ThemeProvider, ToastProvider } from '@/ui';
 
 // DS 소스에는 'use client' 지시자가 없으므로 인터랙티브 DS 컴포넌트
@@ -19,6 +20,10 @@ export function Providers({ children }: { children: ReactNode }) {
         },
       }),
   );
+
+  // 다른 탭이 세션을 바꾸면(로그아웃·재로그인·회전) 이전 세션의 캐시를 비운다 —
+  // 공용 PC에서 이전 계정의 me·스트림키가 다음 세션 화면에 새면 안 된다. (리뷰 #72)
+  useEffect(() => onCrossTabSessionChange(() => queryClient.clear()), [queryClient]);
 
   return (
     <QueryClientProvider client={queryClient}>
