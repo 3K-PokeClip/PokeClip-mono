@@ -12,11 +12,21 @@ import java.util.concurrent.atomic.AtomicReference;
 public class IntakeStatus {
 
     private final boolean enabled;
+    /**
+     * 루프가 실제로 돌기 시작한 때. <b>빈이 만들어진 때가 아니다</b> — 컨텍스트 로딩과
+     * 실제 시작 사이에 간격이 있고, 꺼져 있으면 루프가 아예 안 돈다. null이면
+     * "아직 시작 안 함"이고, 그것과 "돌다가 멈춤"을 가르는 것이 이 칸의 존재 이유다.
+     */
+    private final AtomicReference<Instant> loopStartedAt = new AtomicReference<>();
     private final AtomicReference<Instant> lastPollSucceededAt = new AtomicReference<>();
     private final AtomicReference<String> lastFailureReason = new AtomicReference<>();
 
     public IntakeStatus(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    void loopStarted(Instant at) {
+        loopStartedAt.set(at);
     }
 
     void pollSucceeded(Instant at) {
@@ -29,9 +39,11 @@ public class IntakeStatus {
     }
 
     public Snapshot snapshot() {
-        return new Snapshot(enabled, lastPollSucceededAt.get(), lastFailureReason.get());
+        return new Snapshot(enabled, loopStartedAt.get(), lastPollSucceededAt.get(),
+                lastFailureReason.get());
     }
 
-    public record Snapshot(boolean enabled, Instant lastPollSucceededAt, String lastFailureReason) {
+    public record Snapshot(boolean enabled, Instant loopStartedAt, Instant lastPollSucceededAt,
+                           String lastFailureReason) {
     }
 }

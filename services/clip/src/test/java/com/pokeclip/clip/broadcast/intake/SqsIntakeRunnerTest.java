@@ -318,6 +318,38 @@ class SqsIntakeRunnerTest {
         assertThat(sleeper.requested()).hasSize(2);
     }
 
+    /**
+     * 시작 시각은 <b>빈이 만들어진 때가 아니라 루프가 도는 때</b>여야 한다 —
+     * 컨텍스트 로딩과 실제 시작 사이에 간격이 있고, 꺼져 있으면 루프가 아예 안 돈다.
+     */
+    @Timeout(value = 10, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    @Test
+    void 루프가_시작하면_상태에_시작_시각이_남는다() throws Exception {
+        IntakeStatus status = new IntakeStatus(true);
+        SqsIntakeRunner runner = newRunner(FakeSqsClient.thatFails(),
+                envelope -> ProcessResult.PROCESSED, status, new RecordingSleeper(1));
+
+        runner.startLoop();
+        runner.stop();
+
+        assertThat(status.snapshot().loopStartedAt()).isNotNull();
+    }
+
+    /**
+     * 양성 대조. 이것이 없으면 시작 시각을 생성 시점에 무조건 찍어도 위 검사가
+     * 통과하고, 그러면 꺼진 상태에서도 "기동 중"으로 보인다.
+     */
+    @Test
+    void 꺼져_있으면_루프가_안_돌고_시작_시각도_안_남는다() {
+        IntakeStatus status = new IntakeStatus(false);
+        SqsIntakeRunner runner = newRunner(null,
+                envelope -> ProcessResult.PROCESSED, status, new RecordingSleeper(1));
+
+        runner.startLoop();
+
+        assertThat(status.snapshot().loopStartedAt()).isNull();
+    }
+
     /** 요청받은 대기 시간만 적어 둔다. 실제로는 안 잔다 — 정해진 횟수 뒤 멈추라고 답한다. */
     private static final class RecordingSleeper implements SqsIntakeRunner.Sleeper {
 

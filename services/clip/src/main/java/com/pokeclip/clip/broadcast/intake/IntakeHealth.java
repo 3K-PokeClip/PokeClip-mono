@@ -52,25 +52,47 @@ public class IntakeHealth implements HealthIndicator {
         if (!now.enabled()) {
             return Health.up().withDetail("status", "disabled").build();
         }
+        Instant deadline = Instant.now().minus(staleAfter);
         Instant last = now.lastPollSucceededAt();
-        if (last == null || last.isBefore(Instant.now().minus(staleAfter))) {
-            return Health.down()
-                    .withDetail("status", "stalled")
-                    .withDetail("lastPollSucceededAt", last == null ? "never" : last.toString())
-                    .withDetail("lastFailureReason",
-                            now.lastFailureReason() == null ? "UNKNOWN" : now.lastFailureReason())
-                    .build();
+
+        if (last != null && !last.isBefore(deadline)) {
+            // UP인 동안에도 진행 중인 실패를 드러낸다. 마지막 성공에서 2분이 지나기
+            // 전까지는 UP이 맞지만(그 사이는 일시적 실패와 구분이 안 된다), 사유까지
+            // 감추면 운영자가 시각을 직접 빼서 유추해야 한다.
+            return withFailureReason(Health.up()
+                    .withDetail("status", "polling")
+                    .withDetail("lastPollSucceededAt", last.toString()), now);
         }
-        Health.Builder polling = Health.up()
-                .withDetail("status", "polling")
-                .withDetail("lastPollSucceededAt", last.toString());
-        // UP인 동안에도 진행 중인 실패를 드러낸다. 마지막 성공에서 2분이 지나기
-        // 전까지는 UP이 맞지만(그 사이는 일시적 실패와 구분이 안 된다), 사유까지
-        // 감추면 운영자가 시각을 직접 빼서 유추해야 한다. 실패한 적이 없으면
-        // 칸을 만들지 않는다 — 빈 값이 있으면 노이즈가 된다.
+
+        // 아직 한 번도 성공하지 못했다면 "기동 중"일 수 있다. 롱폴링이 20초라
+        // enabled=true로 뜨면 첫 회차가 끝나기 전까지 성공 기록이 없는데, 그것만
+        // 보고 DOWN을 내면 배포의 기동 판정이 첫 회차를 실패로 읽는다 —
+        // 오케스트레이터가 재시작하고 다시 같은 창이 열려, 코드는 멀쩡한데 기동이
+        // 영영 안 끝나는 재시작 루프가 된다.
+        //
+        // 루프가 시작조차 안 했으면(null) 유예를 주지 않는다. enabled=true인데
+        // 루프가 없는 것은 배선이 끊긴 것이고, 그때 UP으로 두면 폴링이 영원히 안
+        // 도는데 헬스체크만 초록이 된다 — 이 카드가 처음부터 막으려던 상태다.
+        Instant startedAt = now.loopStartedAt();
+        if (last == null && startedAt != null && !startedAt.isBefore(deadline)) {
+            return withFailureReason(Health.up()
+                    .withDetail("status", "starting")
+                    .withDetail("loopStartedAt", startedAt.toString()), now);
+        }
+
+        return Health.down()
+                .withDetail("status", "stalled")
+                .withDetail("lastPollSucceededAt", last == null ? "never" : last.toString())
+                .withDetail("lastFailureReason",
+                        now.lastFailureReason() == null ? "UNKNOWN" : now.lastFailureReason())
+                .build();
+    }
+
+    /** 실패한 적이 없으면 칸을 만들지 않는다 — 빈 값이 있으면 노이즈가 된다. */
+    private Health withFailureReason(Health.Builder builder, IntakeStatus.Snapshot now) {
         if (now.lastFailureReason() != null) {
-            polling.withDetail("lastFailureReason", now.lastFailureReason());
+            builder.withDetail("lastFailureReason", now.lastFailureReason());
         }
-        return polling.build();
+        return builder.build();
     }
 }

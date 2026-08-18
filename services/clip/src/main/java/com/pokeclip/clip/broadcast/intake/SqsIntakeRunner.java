@@ -111,6 +111,9 @@ class SqsIntakeRunner {
             log.info("broadcast.intake.disabled");
             return;
         }
+        // 여기서 알린다 — 빈 생성 시점이 아니라 실제로 도는 시점이어야 health가
+        // "기동 중"과 "돌다가 멈춤"을 가를 수 있다.
+        status.loopStarted(Instant.now());
         loop = Thread.ofPlatform().daemon().name("broadcast-intake").start(this::runLoop);
     }
 

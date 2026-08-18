@@ -98,6 +98,58 @@ class IntakeHealthTest {
         assertThat(health.getDetails()).containsKey("lastPollSucceededAt");
     }
 
+    /**
+     * <b>부팅 직후 첫 회차가 끝나기 전은 실패가 아니다.</b> 롱폴링이 20초라
+     * {@code enabled=true}로 뜨면 그동안 {@code lastPollSucceededAt}이 null인데,
+     * 그것만 보고 DOWN을 내면 배포의 기동 판정이 첫 20초를 실패로 읽는다 —
+     * 오케스트레이터가 컨테이너를 재시작하고 다시 20초 DOWN이 되어
+     * <b>코드는 멀쩡한데 기동이 영영 안 끝나는 재시작 루프</b>가 된다.
+     *
+     * <p>가르는 기준은 "아직 한 번도 못 돌았다"와 "돌다가 멈췄다"의 구분이고,
+     * 그 재료가 루프 시작 시각이다.
+     */
+    @Test
+    void 켜졌고_아직_첫_회차_중이면_기동_중이라_UP이다() {
+        IntakeStatus status = new IntakeStatus(true);
+        status.loopStarted(Instant.now());
+
+        Health health = new IntakeHealth(status, STALE_AFTER).health();
+
+        assertThat(health.getStatus())
+                .as("첫 회차가 끝나기 전을 DOWN으로 두면 기동 판정이 재시작 루프에 빠진다")
+                .isEqualTo(Status.UP);
+        assertThat(health.getDetails()).containsEntry("status", "starting");
+    }
+
+    /**
+     * 반대쪽. 기동 유예가 무한이면 "켜졌는데 영영 안 도는" 상태를 못 잡는다 —
+     * 이 카드가 막으려는 실패가 바로 그것이다.
+     */
+    @Test
+    void 켜졌고_시작했는데도_오래_첫_성공이_없으면_DOWN이다() {
+        IntakeStatus status = new IntakeStatus(true);
+        status.loopStarted(Instant.now().minus(Duration.ofMinutes(10)));
+
+        Health health = new IntakeHealth(status, STALE_AFTER).health();
+
+        assertThat(health.getStatus())
+                .as("시작하고 한참인데 한 번도 못 돌았으면 진짜 문제다")
+                .isEqualTo(Status.DOWN);
+        assertThat(health.getDetails()).containsEntry("lastPollSucceededAt", "never");
+    }
+
+    /**
+     * 켜졌다고 했는데 루프가 아예 시작하지 않은 경우다 — 배선이 끊긴 상태이고,
+     * 이 카드가 처음부터 잡으려던 결함(#4)의 증상이 정확히 이것이다. UP으로 두면
+     * 폴링이 영원히 안 도는데 헬스체크만 초록이 된다.
+     */
+    @Test
+    void 켜졌는데_루프가_시작조차_안_했으면_DOWN이다() {
+        Health health = new IntakeHealth(new IntakeStatus(true), STALE_AFTER).health();
+
+        assertThat(health.getStatus()).isEqualTo(Status.DOWN);
+    }
+
     @Test
     void 켜졌는데_한_번도_성공한_적이_없으면_DOWN이다() {
         Health health = new IntakeHealth(new IntakeStatus(true), STALE_AFTER).health();
