@@ -89,7 +89,8 @@ describe('apiFetch', () => {
     await vi.waitFor(() =>
       expect(
         spy.mock.calls.some(
-          ([url, init]) => url === '/api/auth/logout' && String(init?.body).includes('late-refresh'),
+          ([url, init]) =>
+            url === '/api/auth/logout' && String(init?.body).includes('late-refresh'),
         ),
       ).toBe(true),
     );

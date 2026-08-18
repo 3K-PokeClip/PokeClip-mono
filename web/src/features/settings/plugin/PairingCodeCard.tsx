@@ -4,15 +4,14 @@ import type { PairingCodeStatus } from './useStreamKeyState';
 import styles from './PluginSettingsScreen.module.css';
 
 // 디자인 1m 연동 코드 카드. 발급됨/미발급 두 상태를 갖는다.
-// 코드 원문은 발급 직후 1회만 노출되고 그 뒤로는 다시 뜨지 않는다 (ADR-019).
-// 발급(1콜)과 재발급(rotate 경유 — 확인 모달 필수)은 흐름이 달라 핸들러를 나눈다.
+// 코드 원문은 여기 없다 — 발급 직후 모달(IssuedCodeDialog)에서만 1회 노출된다 (ADR-019).
+// 발급과 재발급은 같은 동작이다(rotate 없음 — 새 코드만 발급) — 라벨만 상태에 맞게 다르다.
 export function PairingCodeCard({
   code,
   loading,
   error,
   busy,
   onIssue,
-  onReissue,
   onRetry,
 }: {
   code: PairingCodeStatus;
@@ -20,10 +19,9 @@ export function PairingCodeCard({
   loading?: boolean;
   /** 상태를 한 번도 못 읽음 — 미발급으로 오인시키면 안 된다 (리뷰 #73). */
   error?: boolean;
-  /** 발급·재발급 진행 중 — 이중 클릭 방지. */
+  /** 발급 진행 중 — 이중 클릭 방지. */
   busy?: boolean;
   onIssue: () => void;
-  onReissue: () => void;
   onRetry: () => void;
 }) {
   return (
@@ -51,34 +49,17 @@ export function PairingCodeCard({
           <div className={styles.codeBox}>
             <Check size={16} strokeWidth={2} className={styles.codeCheck} aria-hidden />
             <div className={styles.codeBody}>
-              {code.justIssuedCode ? (
-                <>
-                  <div className={styles.codeTitle}>
-                    <span className={styles.codeValue}>{code.justIssuedCode}</span> · 발행일{' '}
-                    {code.issuedAt}
-                  </div>
-                  <div className={styles.codeHint}>
-                    이 코드는 지금만 보여요 — OBS 플러그인에 붙여넣은 뒤에는 다시 표시되지 않아요
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className={styles.codeTitle}>
-                    코드가 발급되어 있어요 · 발행일 {code.issuedAt}
-                  </div>
-                  <div className={styles.codeHint}>
-                    보안을 위해 코드는 다시 표시되지 않아요 — 잃어버렸다면 재발급하세요
-                  </div>
-                </>
-              )}
+              {/* 디자인 개정: 날짜가 힌트 줄로 내려가고 보안 문구·하단 경고줄은 삭제 —
+                  재발급이 키를 건드리지 않게 되면서(rotate 미사용) 경고할 것도 없어졌다.
+                  라벨은 "최초 발급일" — 서버가 주는 시각이 키 생성일(=첫 코드 발급일)뿐이라,
+                  "발행일"이라 쓰면 재발급 후 과거 날짜가 거짓말이 된다. (리뷰 #74) */}
+              <div className={styles.codeTitle}>코드가 발급되어 있어요</div>
+              <div className={styles.codeHint}>최초 발급일 {code.issuedAt}</div>
             </div>
-            <Button variant="soft" size="sm" loading={busy} onClick={onReissue}>
+            <Button variant="soft" size="sm" loading={busy} onClick={onIssue}>
               재발급
             </Button>
           </div>
-          {/* "기존 코드도 무효화"라고 말하면 거짓 보장이다 — 백엔드 rotate는 미사용
-              페어링 코드를 죽이지 않는다(교환은 현재 키를 준다). 키 만료만 약속한다. (리뷰 #73) */}
-          <div className={styles.metaText}>재발급하면 기존 스트림 키가 즉시 만료됩니다</div>
         </>
       ) : (
         <div className={styles.codeBoxEmpty}>

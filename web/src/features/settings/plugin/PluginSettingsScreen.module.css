@@ -23,12 +23,6 @@
   margin: 0 0 calc(4 * var(--pc-u));
 }
 
-.metaText {
-  font-size: calc(10.5 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-  margin-top: calc(9 * var(--pc-u));
-}
-
 /* ---------- 연결 상태 배너 (디자인 1m 상단) ----------
    초록은 "연결됨"에만 쓰는 상태색이라 디자인 값을 그대로 쓴다. */
 .statusBanner {
@@ -192,10 +186,120 @@
   border-radius: calc(10 * var(--pc-u));
 }
 
-/* 재발급 확인 모달 버튼 행 */
+/* 모달 하단 버튼 행 (만료 상태의 닫기·새 코드 발급) */
 .confirmActions {
   display: flex;
   justify-content: flex-end;
   gap: var(--pc-space-2);
   margin-top: var(--pc-space-4);
+}
+
+/* ---------- 발급 직후 코드 모달 (디자인 1m ③, POK-103) ---------- */
+
+/* 디자인 ③ 개정: 코드 박스가 전체 폭 — 코드는 중앙 정렬, 복사 아이콘은 우측 안에 얹힌다.
+   좌우 패딩 46은 아이콘 자리와 대칭을 맞춘 값(코드가 시각적 중앙에 오게). */
+.issueCodeBox {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: var(--pc-space-3);
+  padding: calc(13 * var(--pc-u)) calc(46 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-canvas);
+}
+
+/* 모노 22px, 자간 .12em — 사람이 옮겨 적는 값이라 크게 */
+.issueCode {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: calc(22 * var(--pc-u));
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.issueCountdown {
+  margin-top: calc(8 * var(--pc-u));
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  font-variant-numeric: tabular-nums; /* 초가 바뀌어도 폭이 안 흔들린다 */
+}
+
+.issueCopyWrap {
+  position: absolute;
+  right: calc(8 * var(--pc-u));
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* lucide size prop은 px 고정 — 유닛에 태운다 */
+.issueCopyWrap svg {
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+}
+
+/* 복사 성공 체크 — 연결됨과 같은 상태색 (디자인 값) */
+.issueCopyWrap[data-copied] svg {
+  color: #3dbf7f;
+}
+
+/* 복사 성공 툴팁 — DS Tooltip은 hover 전용(제어 불가)이라 성공 피드백 말풍선을 직접 그린다 */
+.issueCopiedTip {
+  position: absolute;
+  bottom: calc(100% + 6 * var(--pc-u));
+  right: 0;
+  padding: calc(4 * var(--pc-u)) calc(8 * var(--pc-u));
+  border-radius: calc(6 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  border: 1px solid var(--pc-color-border-subtle);
+  box-shadow: var(--pc-shadow-sm);
+  font-size: calc(11 * var(--pc-u));
+  white-space: nowrap;
+  color: var(--pc-color-text-primary);
+}
+
+/* DS 기본 폭(480u)보다 좁은 디자인 폭 410 — 발급·만료 두 상태가 같은 폭을 공유한다 */
+.issueDialog {
+  max-width: calc(410 * var(--pc-u));
+}
+
+/* 디자인 ③ 경고 박스 — 앰버 배경/보더 + 좌측 경고 아이콘.
+   flex 자식은 아이콘·span 둘뿐이어야 한다 — 텍스트 노드를 직접 두면 줄이 갈라진다 */
+.issueWarning {
+  display: flex;
+  gap: calc(9 * var(--pc-u));
+  align-items: flex-start;
+  margin-top: calc(14 * var(--pc-u));
+  padding: calc(11 * var(--pc-u)) calc(13 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  background: rgb(240 173 78 / 0.1);
+  border: 1px solid rgb(240 173 78 / 0.3);
+  font-size: calc(11.5 * var(--pc-u));
+  line-height: 1.55;
+  color: var(--pc-color-text-secondary);
+}
+
+/* 앰버 경고 삼각형 (디자인 값 #f0ad4e) — lucide size prop 대신 유닛을 탄다 */
+.issueWarningIcon {
+  flex: none;
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+  margin-top: calc(1 * var(--pc-u));
+  color: #f0ad4e;
+}
+
+.issueWarning b {
+  color: var(--pc-color-text-primary);
+}
+
+.issueExpired {
+  margin-top: var(--pc-space-3);
+  font-size: calc(12.5 * var(--pc-u));
+  line-height: 1.55;
+  color: var(--pc-color-text-secondary);
+}
+
+.issueConfirm {
+  width: 100%;
+  margin-top: calc(18 * var(--pc-u));
 }
