@@ -6,9 +6,13 @@ spring:
     # 변수 이름을 팀 docker-compose(.env.example)와 맞췄다. `.env`를 그대로 쓰면
     # 로컬에서든 compose 안에서든 추가 설정 없이 붙는다.
     # compose 네트워크 안에서 띄울 때만 DB_HOST=postgres 를 준다.
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB:pokeclip}
-    username: ${POSTGRES_USER:pokeclip}
-    password: ${POSTGRES_PASSWORD:change-me-local-only}
+    #
+    # 접속값 셋에는 기본값을 주지 않는다(POK-161). 기본값을 두면 공개 저장소의
+    # .env.example에 적힌 값으로 실제 DB에 붙는 창이 열린다. DB_HOST·DB_PORT는
+    # .env에 없는 값이라 지우면 로컬이 깨진다 — 일부러 남긴다.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
 
   jpa:
     hibernate:
@@ -24,6 +28,12 @@ spring:
     # 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
     # 마이그레이션 번호는 모듈별 대역을 쓴다 — V1xx auth · V2xx clip · V3xx chat.
     table: flyway_schema_history_clip
+    # 공유 DB에서 어느 서버가 먼저 뜰지 정해져 있지 않다. 다른 서버가 이미 표를
+    # 만든 DB에 자기 이력 테이블 없이 뜨면 "Found non-empty schema(s) but no
+    # schema history table"로 죽는다. Testcontainers는 매번 빈 DB라 이걸로는
+    # 안 잡혀서, IntegrationTestSupport가 더미 표를 먼저 심는다.
+    baseline-on-migrate: true
+    baseline-version: 0
 
 logging:
   pattern:
@@ -38,8 +48,33 @@ management:
     web:
       exposure:
         include: health
+  endpoint:
+    health:
+      # 이게 없으면 Boot 기본값 never가 걸려 detail이 HTTP 응답에서 잘린다.
+      # IntakeHealth가 withDetail("status", …)·withDetail("lastPollSucceededAt", …)를
+      # 아무리 잘 만들어도 밖에서는 {"status":"UP"}만 보이고, 그러면 "서버는 떴는데
+      # 수신은 죽은" 상태를 구분할 수 없다 — 이 카드가 막으려는 실패 그 자체다.
+      # PRD 성공 기준이 "상세에 꺼져 있음이 보인다"라 이 줄이 그 기준의 일부다.
+      #
+      # 지금 detail에 담기는 것은 상태 이름·마지막 성공 시각·실패 사유 클래스명뿐이라
+      # 비밀이 없다. 큐 주소는 일부러 안 담는다(IntakeConfiguration 참고).
+      # 비밀이 담기는 detail을 추가하는 날 이 줄을 다시 봐야 한다.
+      show-details: always
 
 pokeclip:
+  broadcast:
+    intake:
+      # 기본이 꺼짐이다. 켜져 있으면 CI·남의 로컬이 뜰 때마다 없는 큐에 붙으려 한다.
+      enabled: ${BROADCAST_INTAKE_ENABLED:false}
+      # 켜져 있을 때만 필수다(IntakeProperties가 검사한다).
+      queue-url: ${BROADCAST_QUEUE_URL:}
+      region: ${AWS_REGION:ap-northeast-2}
+      # 비면 진짜 AWS. 로컬 실측 때만 LocalStack 주소를 준다.
+      endpoint: ${BROADCAST_QUEUE_ENDPOINT:}
+      # SQS 롱폴링 최대값. 짧게 잡으면 빈 응답만 반복해 요청 수가 는다.
+      wait-time: 20s
+      max-messages: 10
+
   cors:
     # 비면 부팅이 실패한다(CorsProperties). 기본값으로 localhost를 주지 않는 이유는
     # 그러면 운영 배포에 localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데
