@@ -83,6 +83,38 @@ public class Broadcast {
                 null, endedAt, null, sequence);
     }
 
+    /**
+     * 시작 편지를 반영한다. 이미 반영한 순서 번호보다 낮거나 같으면 아무것도 하지
+     * 않고 false를 돌려준다 — <b>순서를 바로잡는 것이 아니라 견디는 것</b>이 목표다.
+     *
+     * <p>이미 ENDED인 줄에 시작이 와도 상태를 되돌리지 않는다. 순서 번호가 더
+     * 높다면 시작 시각만 채운다(placeholder였던 줄이 뒤늦게 시작 정보를 얻는 경우).
+     */
+    boolean applyStarted(long sequence, Instant at, String trackManifest) {
+        if (sequence <= this.lastSequence) {
+            return false;
+        }
+        if (this.status != BroadcastStatus.ENDED) {
+            this.status = BroadcastStatus.LIVE;
+        }
+        this.startedAt = at;
+        this.trackManifest = trackManifest;
+        this.lastSequence = sequence;
+        this.updatedAt = Instant.now();
+        return true;
+    }
+
+    boolean applyEnded(long sequence, Instant at) {
+        if (sequence <= this.lastSequence) {
+            return false;
+        }
+        this.status = BroadcastStatus.ENDED;
+        this.endedAt = at;
+        this.lastSequence = sequence;
+        this.updatedAt = Instant.now();
+        return true;
+    }
+
     public Long getId() {
         return id;
     }

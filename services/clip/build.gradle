@@ -23,4 +23,7 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     testImplementation 'org.testcontainers:testcontainers-postgresql'
+
+    // LogCaptor. 경고가 실제로 찍히는지 로그에서 직접 확인한다(auth·chat-collector와 같은 방식).
+    testImplementation testFixtures(project(':web-support'))
 }

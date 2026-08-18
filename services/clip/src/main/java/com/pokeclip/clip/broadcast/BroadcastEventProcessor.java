@@ -6,6 +6,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Optional;
 
 /**
  * 편지 하나를 처리한다. 편지 기록과 명부 갱신이 <b>한 트랜잭션</b>에 들어간다 —
@@ -45,11 +46,40 @@ public class BroadcastEventProcessor {
         return applyToBroadcast(envelope);
     }
 
-    /** 태스크 5에서 규칙을 채운다. 지금은 없으면 만들기만 한다. */
     private ProcessResult applyToBroadcast(LifecycleEnvelope envelope) {
-        if (broadcasts.findByStreamId(envelope.streamId()).isEmpty()) {
-            broadcasts.save(Broadcast.startedNow(envelope.streamId(), envelope.streamerId(),
-                    envelope.sequence(), envelope.occurredAt(), envelope.trackManifestJson()));
+        Optional<Broadcast> existing = broadcasts.findByStreamIdForUpdate(envelope.streamId());
+
+        if (existing.isEmpty()) {
+            // 줄이 없다. 동시에 둘이 만들려 하면 stream_id UNIQUE가 하나만 통과시키고,
+            // 진 쪽은 트랜잭션이 통째로 되감긴 뒤 재전송으로 다시 온다.
+            Broadcast created = switch (envelope.type()) {
+                case BROADCAST_STARTED -> Broadcast.startedNow(envelope.streamId(),
+                        envelope.streamerId(), envelope.sequence(), envelope.occurredAt(),
+                        envelope.trackManifestJson());
+                case BROADCAST_ENDED -> {
+                    // ADR-016의 ended placeholder. 서버를 죽이지 않고 흔적을 남긴다.
+                    log.warn("broadcast.ended_before_started streamId={} eventId={} sequence={}",
+                            envelope.streamId(), envelope.eventId(), envelope.sequence());
+                    yield Broadcast.endedPlaceholder(envelope.streamId(), envelope.streamerId(),
+                            envelope.sequence(), envelope.occurredAt());
+                }
+            };
+            broadcasts.save(created);
+            return ProcessResult.PROCESSED;
+        }
+
+        Broadcast broadcast = existing.get();
+        boolean applied = switch (envelope.type()) {
+            case BROADCAST_STARTED -> broadcast.applyStarted(envelope.sequence(),
+                    envelope.occurredAt(), envelope.trackManifestJson());
+            case BROADCAST_ENDED -> broadcast.applyEnded(envelope.sequence(), envelope.occurredAt());
+        };
+
+        if (!applied) {
+            log.warn("broadcast.event.stale_ignored streamId={} eventId={} sequence={} lastSequence={}",
+                    envelope.streamId(), envelope.eventId(), envelope.sequence(),
+                    broadcast.getLastSequence());
+            return ProcessResult.IGNORED_STALE;
         }
         return ProcessResult.PROCESSED;
     }
