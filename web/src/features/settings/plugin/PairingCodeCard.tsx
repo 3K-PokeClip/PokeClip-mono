@@ -34,7 +34,13 @@ export function PairingCodeCard({
       </p>
 
       {loading ? (
-        <Skeleton className={styles.codeSkeleton} />
+        /* 상태 조회 전 자리 — 코드 박스와 같은 높이(64u)라 로드 후 레이아웃이 튀지 않는다.
+           Skeleton은 height·radius를 항상 인라인 style로 적용해 클래스 값은 덮이므로
+           (기본 16px로 렌더됐다) props/style로 넘겨야 실제로 먹는다 (리뷰 #73) */
+        <Skeleton
+          height="calc(64 * var(--pc-u))"
+          style={{ borderRadius: 'calc(10 * var(--pc-u))' }}
+        />
       ) : error ? (
         <div className={styles.codeBoxEmpty}>
           <div className={styles.codeEmptyText}>

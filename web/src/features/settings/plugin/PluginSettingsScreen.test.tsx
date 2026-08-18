@@ -217,4 +217,16 @@ describe('PluginSettingsScreen', () => {
     // 온보딩 완료 처리는 성공에만 걸린다
     expect(useOnboardingStore.getState().pluginLinked).toBe(false);
   });
+
+  it('상태 조회 중 스켈레톤은 코드 박스 높이를 인라인으로 갖는다 (리뷰 #73)', () => {
+    // Skeleton은 height를 항상 인라인 style로 깔아 클래스 height는 덮인다 —
+    // props로 넘긴 값이 실제 인라인에 실리는지가 회귀 지점이다 (기본 16px로 렌더되던 버그)
+    stubFetch(() => new Promise<Response>(() => {})); // 응답을 붙잡아 로딩 상태를 유지한다
+    renderWithProviders(<PluginSettingsScreen />);
+
+    const card = screen.getByRole('region', { name: '연동 코드' });
+    const skeleton = card.querySelector<HTMLElement>('span[aria-hidden="true"]');
+    expect(skeleton).not.toBeNull();
+    expect(skeleton?.style.height).toBe('calc(64 * var(--pc-u))');
+  });
 });
