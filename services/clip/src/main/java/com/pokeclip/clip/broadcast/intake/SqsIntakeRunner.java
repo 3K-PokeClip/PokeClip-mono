@@ -38,6 +38,15 @@ class SqsIntakeRunner {
     /** 종료 시 마지막 회차가 끝나기를 기다리는 시간. 롱폴링 20초에 여유를 더했다. */
     private static final Duration SHUTDOWN_GRACE = Duration.ofSeconds(25);
 
+    /**
+     * 식별자 칸의 폭. <b>{@code V201__create_broadcasts_and_broadcast_events.sql}의
+     * {@code VARCHAR(128)}과 같은 값이어야 한다</b> — 어긋나면 조용히 깨진다.
+     * 마이그레이션에서 폭을 바꾸면 여기도 바꾼다. 대상은 셋:
+     * {@code broadcasts.streamer_id} · {@code broadcast_events.event_id} ·
+     * {@code broadcast_events.stream_id}.
+     */
+    private static final int MAX_IDENTIFIER_LENGTH = 128;
+
     /** chat-collector 재연결과 같은 값이다. 상한 60초면 복구가 최악 1분 늦는다. */
     private static final Duration FIRST_RETRY_DELAY = Duration.ofSeconds(1);
     private static final Duration MAX_RETRY_DELAY = Duration.ofSeconds(60);
@@ -222,6 +231,25 @@ class SqsIntakeRunner {
             return true;
         }
 
+        // 칸이 빠진 봉투는 파싱을 통과한다 — 글자 칸은 null로 바인딩되기 때문이다.
+        // 그대로 넘기면 저장에서 NOT NULL 위반이 나 handle_failed가 되고, 삭제되지
+        // 않으므로 영구 반복이며 FIFO라 같은 그룹의 뒤 편지가 막힌다(PR #82 P2).
+        // occurredAt은 다르게 아프다 — 그냥 통과해 started_at이 빈 줄을 만들고
+        // 역순 도착 placeholder와 구분되지 않는다.
+        //
+        // 길이도 같은 자리에서 본다 — 128자를 넘는 식별자는 저장에서 거부되는데
+        // 값이 안 바뀌어 재전송으로도 안 풀린다(checkIdentifier 주석 참고).
+        //
+        // 숫자 칸(schemaVersion·sequence)은 여기 없다. Jackson 3가 기본형에 null을
+        // 매핑할 때 MismatchedInputException을 던져 이미 파싱 갈래가 막는다(실측).
+        FieldRejection rejected = firstInvalidField(envelope);
+        if (rejected != null) {
+            log.warn("broadcast.intake.incomplete_dropped messageId={} eventId={} field={} reason={}",
+                    message.messageId(), envelope.eventId(), rejected.field(), rejected.reason());
+            delete(message);
+            return true;
+        }
+
         // 모르는 종류는 재시도해도 계속 모른다. 안 지우면 FIFO 같은 그룹의 뒤 편지가
         // 영원히 못 넘어온다 — 줄이 막히는 피해가 소식 하나를 놓치는 것보다 크다.
         //
@@ -257,6 +285,55 @@ class SqsIntakeRunner {
         log.info("broadcast.intake.handled eventId={} result={}", envelope.eventId(), result);
         delete(message);
         return true;
+    }
+
+    /**
+     * 없으면 처리할 수 없는 칸의 이름. 다 있으면 null.
+     *
+     * <p>어느 칸인지 로그에 남겨야 발행 쪽(1번)이 고칠 자리를 안다 —
+     * "봉투가 이상하다"만으로는 아무도 못 고친다.
+     */
+    private FieldRejection firstInvalidField(LifecycleEnvelope envelope) {
+        FieldRejection eventId = checkIdentifier("eventId", envelope.eventId());
+        if (eventId != null) {
+            return eventId;
+        }
+        FieldRejection streamId = checkIdentifier("streamId", envelope.streamId());
+        if (streamId != null) {
+            return streamId;
+        }
+        FieldRejection streamerId = checkIdentifier("streamerId", envelope.streamerId());
+        if (streamerId != null) {
+            return streamerId;
+        }
+        if (envelope.occurredAt() == null) {
+            return new FieldRejection("occurredAt", "missing");
+        }
+        return null;
+    }
+
+    /**
+     * 없거나, 있어도 칸에 안 들어가는 식별자를 걸러낸다.
+     *
+     * <p><b>PostgreSQL은 긴 값을 자르지 않고 거부한다</b>
+     * ({@code value too long for type character varying(128)}). 그대로 넘기면 저장에서
+     * 터져 {@code handle_failed}가 되는데, 값이 안 바뀌므로 <b>재전송해도 영영 안 풀리고</b>
+     * FIFO라 뒤 이벤트는 시도조차 못 한다 — 그동안 헬스체크는 큐에 닿고 있어 초록이다.
+     * 러너가 "재시도로 언젠가 풀리는 실패"와 "값이 안 바뀌어 영영 안 풀리는 실패"를
+     * 갈라야 하고, 후자는 빠진 칸과 같은 갈래다(PR #89 codex 지적, 재현됨).
+     */
+    private FieldRejection checkIdentifier(String field, String value) {
+        if (value == null || value.isBlank()) {
+            return new FieldRejection(field, "missing");
+        }
+        if (value.length() > MAX_IDENTIFIER_LENGTH) {
+            return new FieldRejection(field, "too_long");
+        }
+        return null;
+    }
+
+    /** 어느 칸이 왜 걸렸는지. "빠졌다"와 "너무 길다"는 발행자에게 다른 신호다. */
+    private record FieldRejection(String field, String reason) {
     }
 
     private void delete(Message message) {

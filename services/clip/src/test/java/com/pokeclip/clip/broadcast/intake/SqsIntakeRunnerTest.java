@@ -7,6 +7,8 @@ import com.pokeclip.clip.broadcast.ProcessResult;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -15,7 +17,9 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
@@ -204,6 +208,128 @@ class SqsIntakeRunnerTest {
         assertThat(sqs.deletedReceiptHandles())
                 .as("아는 종류의 처리 실패는 재시도해야 한다")
                 .isEmpty();
+    }
+
+    /**
+     * <b>칸이 빠진 봉투가 파싱을 통과한다.</b> 글자 칸(eventId·streamId·streamerId)은
+     * 없어도 null로 바인딩되고, 저장에서 NOT NULL 위반이 나 {@code handle_failed}가
+     * 된다 — 삭제되지 않으므로 <b>영구 반복</b>이고 FIFO라 같은 그룹의 뒤 편지가 막힌다
+     * (PR #82 P2, 감사자 재현).
+     *
+     * <p>{@code occurredAt}은 다르게 아프다 — 그냥 PROCESSED가 되어 {@code started_at}이
+     * 빈 줄을 만들고, <b>역순 도착 placeholder와 구분되지 않는다</b>(감사자가 봇 지적
+     * 밖에서 찾았다).
+     *
+     * <p>넷 다 재시도해도 계속 같으므로 "읽을 수 없는 편지"와 같은 갈래로 보낸다.
+     * 로그 키는 나눈다 — 형식이 깨진 것과 칸이 빠진 것은 다른 신호다.
+     */
+    @ParameterizedTest(name = "{0} 누락")
+    @ValueSource(strings = {"eventId", "streamId", "streamerId", "occurredAt"})
+    void 필수_칸이_빠진_봉투는_지우고_어느_칸인지_남긴다(String missing) {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(envelopeWithout(missing));
+        SqsIntakeRunner runner = newRunner(sqs, envelope -> ProcessResult.PROCESSED);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            runner.pollOnce();
+
+            assertThat(captor.messages())
+                    .as("형식이 깨진 것과 칸이 빠진 것은 다른 신호라 키를 나눈다")
+                    .anyMatch(m -> m.contains("broadcast.intake.incomplete_dropped"));
+            assertThat(captor.messages())
+                    .as("어느 칸이 빠졌는지 없으면 발행 쪽을 못 고친다")
+                    .anyMatch(m -> m.contains(missing) && m.contains("reason=missing"));
+            assertThat(captor.levelOf("broadcast.intake.incomplete_dropped")).isEqualTo(Level.WARN);
+        }
+
+        assertThat(sqs.deletedReceiptHandles())
+                .as("안 지우면 영구 반복이고 FIFO라 뒤 편지가 막힌다")
+                .containsExactly("rh-0");
+    }
+
+    /**
+     * <b>PostgreSQL은 긴 값을 자르지 않고 거부한다</b>
+     * ({@code value too long for type character varying(128)}, 감사자 재현).
+     * 걸러내지 않으면 저장에서 터져 {@code handle_failed}가 되는데, <b>값이 안 바뀌므로
+     * 재전송해도 영영 안 풀리고</b> FIFO라 뒤 이벤트는 시도조차 못 한다 —
+     * 그동안 헬스체크는 큐에 닿고 있어 초록이다.
+     *
+     * <p>빠진 칸과 같은 갈래로 버리되 <b>사유는 나눈다</b> — 발행자에게 "빠졌다"와
+     * "너무 길다"는 다른 신호다.
+     */
+    @ParameterizedTest(name = "{0} 129자")
+    @ValueSource(strings = {"eventId", "streamId", "streamerId"})
+    void 식별자가_칸_폭을_넘으면_지우고_너무_길다고_남긴다(String field) {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(envelopeWith(field, "x".repeat(129)));
+        SqsIntakeRunner runner = newRunner(sqs, envelope -> ProcessResult.PROCESSED);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            runner.pollOnce();
+
+            assertThat(captor.messages())
+                    .as("빠진 칸과 사유가 구분되지 않으면 발행 쪽이 어디를 볼지 모른다")
+                    .anyMatch(m -> m.contains("broadcast.intake.incomplete_dropped")
+                            && m.contains(field) && m.contains("reason=too_long"));
+        }
+
+        assertThat(sqs.deletedReceiptHandles())
+                .as("안 지우면 값이 안 바뀌어 영영 안 풀리고 뒤 이벤트가 막힌다")
+                .containsExactly("rh-0");
+    }
+
+    /**
+     * <b>경계의 반대쪽.</b> 이것이 없으면 "무조건 거른다"로 바꿔도 위 검사가 통과한다.
+     * 128자는 칸에 정확히 들어가므로 평소대로 처리돼야 한다.
+     */
+    @ParameterizedTest(name = "{0} 128자")
+    @ValueSource(strings = {"eventId", "streamId", "streamerId"})
+    void 식별자가_칸_폭과_같으면_평소대로_처리한다(String field) {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(envelopeWith(field, "x".repeat(128)));
+        SqsIntakeRunner runner = newRunner(sqs, envelope -> ProcessResult.PROCESSED);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            runner.pollOnce();
+
+            assertThat(captor.messages())
+                    .as("칸에 들어가는 값을 버리면 멀쩡한 이벤트가 사라진다")
+                    .noneMatch(m -> m.contains("broadcast.intake.incomplete_dropped"));
+            assertThat(captor.messages()).anyMatch(m -> m.contains("broadcast.intake.handled"));
+        }
+
+        assertThat(sqs.deletedReceiptHandles()).containsExactly("rh-0");
+    }
+
+    /**
+     * 숫자 칸은 이미 파싱 갈래가 막는다 — Jackson 3가 기본형에 null을 매핑할 때
+     * MismatchedInputException을 던진다(감사자 실측: 봇 지적의 이 대목은 사실과 다르다).
+     * 여기서 확인하는 것은 그 갈래가 <b>여전히</b> 삭제로 이어진다는 것이다.
+     */
+    @Test
+    void 숫자_칸이_빠진_봉투는_파싱_갈래가_막는다() {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(envelopeWithout("sequence"));
+        SqsIntakeRunner runner = newRunner(sqs, envelope -> ProcessResult.PROCESSED);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            runner.pollOnce();
+
+            assertThat(captor.messages())
+                    .anyMatch(m -> m.contains("broadcast.intake.unreadable_dropped"));
+        }
+
+        assertThat(sqs.deletedReceiptHandles()).containsExactly("rh-0");
+    }
+
+    /** 정상 봉투가 이 갈래로 새면 안 된다. */
+    @Test
+    void 칸이_다_있는_봉투는_불완전_갈래로_새지_않는다() {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(startedJson("evt-1", "s1", 1L));
+        SqsIntakeRunner runner = newRunner(sqs, envelope -> ProcessResult.PROCESSED);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            runner.pollOnce();
+
+            assertThat(captor.messages())
+                    .noneMatch(m -> m.contains("broadcast.intake.incomplete_dropped"));
+        }
     }
 
     @Test
@@ -451,6 +577,33 @@ class SqsIntakeRunnerTest {
     private static IntakeProperties propertiesFor() {
         return new IntakeProperties(true, "http://localhost:4566/000000000000/q.fifo",
                 "ap-northeast-2", null, Duration.ofSeconds(20), 10);
+    }
+
+    /** 정상 봉투에서 칸 하나만 뺀다. */
+    private static String envelopeWithout(String field) {
+        Map<String, Object> envelope = baseEnvelope();
+        assertThat(envelope.remove(field)).as("없는 칸 이름을 뺐다: %s", field).isNotNull();
+        return new ObjectMapper().writeValueAsString(envelope);
+    }
+
+    /** 정상 봉투에서 칸 하나만 바꾼다. */
+    private static String envelopeWith(String field, String value) {
+        Map<String, Object> envelope = baseEnvelope();
+        assertThat(envelope.put(field, value)).as("없는 칸 이름을 바꿨다: %s", field).isNotNull();
+        return new ObjectMapper().writeValueAsString(envelope);
+    }
+
+    private static Map<String, Object> baseEnvelope() {
+        return new LinkedHashMap<>(Map.of(
+                "schemaVersion", 1,
+                "eventId", "evt-1",
+                "eventType", "broadcast.started",
+                "occurredAt", "2026-08-18T00:00:00Z",
+                "streamId", "s1",
+                "streamerId", "streamer-1",
+                "sequence", 1,
+                "traceId", "trace-1",
+                "payload", Map.of()));
     }
 
     private static String startedJson(String eventId, String streamId, long sequence) {
