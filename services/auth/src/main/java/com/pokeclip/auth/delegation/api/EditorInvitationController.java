@@ -58,6 +58,18 @@ public class EditorInvitationController {
         service.cancel(userId(jwt), id);
     }
 
+    @PostMapping("/{id}/accept")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void accept(@AuthenticationPrincipal Jwt jwt, @PathVariable Long id) {
+        service.accept(userId(jwt), id);
+    }
+
+    @PostMapping("/{id}/decline")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void decline(@AuthenticationPrincipal Jwt jwt, @PathVariable Long id) {
+        service.decline(userId(jwt), id);
+    }
+
     private static Long userId(Jwt jwt) {
         return Long.valueOf(jwt.getSubject());
     }

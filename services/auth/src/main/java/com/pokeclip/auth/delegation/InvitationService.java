@@ -167,6 +167,70 @@ public class InvitationService {
     }
 
     /**
+     * 수락은 초대 UPDATE와 위임 INSERT가 <b>한 트랜잭션</b>이다. 하나만 되는 경우가 없어야 한다 —
+     * 초대만 ACCEPTED가 되면 권한 없는 편집자가 생기고, 위임만 생기면 이력이 끊긴다.
+     *
+     * <p>여기서 서비스와 쓰기 담당을 나누지 않는다. 나누는 이유는 외부 HTTP를 트랜잭션 밖에
+     * 두려는 것인데(ChzzkLinkService/Writer) 수락에는 외부 호출이 없다. 나누면 프록시 우회
+     * 함정만 새로 생긴다(UserCreator 주석 참고). <b>InvitationWriter를 부르지 않으므로
+     * 이 경로에 REQUIRES_NEW가 없고, 요청당 커넥션은 1개다</b>(invite와 같다).
+     *
+     * <p>DataIntegrityViolationException을 여기서 잡지 않는다 — 제약 위반이 난 트랜잭션은
+     * rollback-only로 표시되고 Hibernate 세션도 오염돼 더 쓸 수 없다. 예외 핸들러가
+     * 제약 이름(uq_delegations_alive_pair)을 보고 409 ALREADY_EDITOR로 바꾼다.
+     * 초대는 PENDING으로 남고 기한이 지나면 만료된다 — 되돌릴 것이 없다.
+     */
+    @Transactional
+    public void accept(Long inviteeId, Long invitationId) {
+        EditorInvitation invitation = mine(inviteeId, invitationId);
+        Instant now = Instant.now();
+        if (invitations.respond(invitationId, InvitationStatus.ACCEPTED, now) == 0) {
+            throw reasonFor(invitationId, now);
+        }
+        delegations.save(EditorDelegation.of(
+                invitation.getStreamerId(), inviteeId, invitationId, now));
+        log.info("auth.delegation.granted streamerId={} editorId={} invitationId={}",
+                invitation.getStreamerId(), inviteeId, invitationId);
+    }
+
+    @Transactional
+    public void decline(Long inviteeId, Long invitationId) {
+        mine(inviteeId, invitationId);
+        Instant now = Instant.now();
+        if (invitations.respond(invitationId, InvitationStatus.DECLINED, now) == 0) {
+            throw reasonFor(invitationId, now);
+        }
+        log.info("auth.invitation.declined editorId={} invitationId={}", inviteeId, invitationId);
+    }
+
+    /** 남의 초대는 존재 여부를 알려주지 않는다 — 없는 것과 같게 404다. */
+    private EditorInvitation mine(Long inviteeId, Long invitationId) {
+        return invitations.findById(invitationId)
+                .filter(i -> i.getInviteeId().equals(inviteeId))
+                .orElseThrow(() -> new DelegationException(
+                        DelegationFailure.INVITATION_NOT_FOUND, "없거나 내 초대가 아니다"));
+    }
+
+    /**
+     * 조건부 UPDATE가 0행일 때만 부른다. 그 사이 또 바뀌어도 무해하다 — 판정용이고
+     * 어느 쪽이든 실패라는 결론은 같다.
+     *
+     * <p><b>이 재조회가 respond의 clearAutomatically = true가 필요한 이유다.</b> 같은
+     * 트랜잭션 안이라 1차 캐시가 살아 있고, 옵션이 없으면 mine()이 올려 둔 <b>낡은 PENDING</b>을
+     * 그대로 읽어 취소된 초대를 「기한이 지났다」고 답한다.
+     */
+    private DelegationException reasonFor(Long invitationId, Instant now) {
+        EditorInvitation fresh = invitations.findById(invitationId)
+                .orElseThrow(() -> new DelegationException(
+                        DelegationFailure.INVITATION_NOT_FOUND, "초대가 사라졌다"));
+        if (fresh.getStatus() != InvitationStatus.PENDING) {
+            return new DelegationException(
+                    DelegationFailure.INVITATION_NOT_PENDING, "이미 처리된 초대다");
+        }
+        return new DelegationException(DelegationFailure.INVITATION_EXPIRED, "기한이 지났다");
+    }
+
+    /**
      * 만료된 초대도 취소할 수 있다 — 막을 이유가 없고, 막으면 만료된 행이 보낸 목록에
      * 계속 남아 스트리머가 지울 방법이 없다.
      *
