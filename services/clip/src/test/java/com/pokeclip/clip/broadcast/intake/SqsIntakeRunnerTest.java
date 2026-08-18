@@ -6,6 +6,7 @@ import com.pokeclip.clip.broadcast.LifecycleEnvelope;
 import com.pokeclip.clip.broadcast.ProcessResult;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -13,6 +14,9 @@ import software.amazon.awssdk.services.sqs.SqsClient;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -215,6 +219,134 @@ class SqsIntakeRunnerTest {
         assertThat(status.snapshot().lastFailureReason()).isNotNull();
     }
 
+    /**
+     * <b>백오프가 없으면 큐에 못 닿는 동안 루프가 쉬지 않고 돈다.</b> 롱폴링 20초는
+     * 연결이 성립한 뒤의 이야기라, 권한이 빠졌거나 없는 큐를 가리키면
+     * receiveMessage가 즉시 던지고 곧바로 다음 회차가 시작된다 — 코어 하나가
+     * 100%로 돌고 poll_failed가 초당 수백 줄 쌓인다.
+     *
+     * <p><b>실제로 자지 않고 "얼마나 자라고 했는지"를 잰다.</b> 시간에 기대면
+     * 간헐 실패를 부른다.
+     */
+    // 루프를 실제로 돌리는 검사다. 백오프가 사라지면 아무것도 루프를 멈추지 않아
+    // 영원히 돈다 — 시한이 없으면 CI가 멈춘 채로 매달린다. SEPARATE_THREAD가 아니면
+    // 기본 시한은 메서드가 끝난 뒤에야 판정하므로 무한 루프를 못 끊는다(실측).
+    // 정상 경로는 마이크로초라 10초는 타이밍 단언이 아니라 안전장치다.
+    @Timeout(value = 10, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    @Test
+    void 폴링이_계속_실패하면_쉬는_간격이_두_배씩_늘어난다() {
+        RecordingSleeper sleeper = new RecordingSleeper(4);
+        SqsIntakeRunner runner = newRunner(FakeSqsClient.thatFails(),
+                envelope -> ProcessResult.PROCESSED, new IntakeStatus(true), sleeper);
+
+        runner.runLoop();
+
+        assertThat(sleeper.requested()).containsExactly(
+                Duration.ofSeconds(1), Duration.ofSeconds(2),
+                Duration.ofSeconds(4), Duration.ofSeconds(8));
+    }
+
+    /**
+     * 성공하면 간격을 되돌린다. 안 되돌리면 한 번 흔들린 뒤로 영영 60초마다 한 번씩만
+     * 꺼내게 된다 — 큐가 멀쩡해졌는데도 처리가 느려진다.
+     */
+    // 루프를 실제로 돌리는 검사다. 백오프가 사라지면 아무것도 루프를 멈추지 않아
+    // 영원히 돈다 — 시한이 없으면 CI가 멈춘 채로 매달린다. SEPARATE_THREAD가 아니면
+    // 기본 시한은 메서드가 끝난 뒤에야 판정하므로 무한 루프를 못 끊는다(실측).
+    // 정상 경로는 마이크로초라 10초는 타이밍 단언이 아니라 안전장치다.
+    @Timeout(value = 10, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    @Test
+    void 폴링에_성공하면_쉬는_간격이_처음으로_돌아간다() {
+        RecordingSleeper sleeper = new RecordingSleeper(3);
+        // 실패 2회 → 성공 1회 → 그 뒤 계속 실패(대본이 끝나면 실패한다)
+        SqsIntakeRunner runner = newRunner(FakeSqsClient.scripted(false, false, true),
+                envelope -> ProcessResult.PROCESSED, new IntakeStatus(true), sleeper);
+
+        runner.runLoop();
+
+        assertThat(sleeper.requested())
+                .as("성공 뒤에도 4초로 이어가면 간격을 안 되돌린 것이다")
+                .containsExactly(Duration.ofSeconds(1), Duration.ofSeconds(2), Duration.ofSeconds(1));
+    }
+
+    /** 성공하면 안 쉰다 — 롱폴링이 이미 대기 역할을 한다. */
+    @Test
+    void 폴링에_성공하면_쉬지_않는다() {
+        RecordingSleeper sleeper = new RecordingSleeper(1);
+        SqsIntakeRunner runner = newRunner(FakeSqsClient.withMessages(),
+                envelope -> ProcessResult.PROCESSED, new IntakeStatus(true), sleeper);
+
+        runner.pollOnce();
+
+        assertThat(sleeper.requested()).isEmpty();
+    }
+
+    /**
+     * <b>자는 동안에도 종료 신호에 반응해야 한다.</b> stop()이 25초를 기다리는데
+     * 백오프가 60초면 종료가 그만큼 늦어진다.
+     *
+     * <p>실물 sleeper를 쓰되 <b>먼저 멈춘 뒤</b> 잰다 — 신호가 이미 와 있으면
+     * 즉시 true로 돌아와야 한다. Thread.sleep으로 구현돼 있으면 60초를 꼬박 자고
+     * false를 돌려준다(느린 실패이지 간헐 실패가 아니다).
+     */
+    @Test
+    void 자는_동안_종료_신호가_오면_기다리지_않고_깬다() throws Exception {
+        SqsIntakeRunner runner = newRunner(FakeSqsClient.thatFails(),
+                envelope -> ProcessResult.PROCESSED);
+
+        runner.stop();
+
+        assertThat(runner.awaitStop(Duration.ofSeconds(60)))
+                .as("종료 신호를 받고도 시한을 다 채우면 배포가 그만큼 늦어진다")
+                .isTrue();
+    }
+
+    /** 자는 도중 종료 신호가 오면 루프가 거기서 끝난다. */
+    // 루프를 실제로 돌리는 검사다. 백오프가 사라지면 아무것도 루프를 멈추지 않아
+    // 영원히 돈다 — 시한이 없으면 CI가 멈춘 채로 매달린다. SEPARATE_THREAD가 아니면
+    // 기본 시한은 메서드가 끝난 뒤에야 판정하므로 무한 루프를 못 끊는다(실측).
+    // 정상 경로는 마이크로초라 10초는 타이밍 단언이 아니라 안전장치다.
+    @Timeout(value = 10, unit = TimeUnit.SECONDS, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+    @Test
+    void 자는_도중_종료_신호가_오면_루프가_끝난다() {
+        RecordingSleeper sleeper = new RecordingSleeper(2);
+        SqsIntakeRunner runner = newRunner(FakeSqsClient.thatFails(),
+                envelope -> ProcessResult.PROCESSED, new IntakeStatus(true), sleeper);
+
+        runner.runLoop();
+
+        assertThat(sleeper.requested()).hasSize(2);
+    }
+
+    /** 요청받은 대기 시간만 적어 둔다. 실제로는 안 잔다 — 정해진 횟수 뒤 멈추라고 답한다. */
+    private static final class RecordingSleeper implements SqsIntakeRunner.Sleeper {
+
+        private final List<Duration> requested = new ArrayList<>();
+        private final int stopAfter;
+
+        RecordingSleeper(int stopAfter) {
+            this.stopAfter = stopAfter;
+        }
+
+        List<Duration> requested() {
+            return List.copyOf(requested);
+        }
+
+        @Override
+        public boolean sleepOrStop(Duration duration) {
+            requested.add(duration);
+            return requested.size() >= stopAfter;
+        }
+    }
+
+    private static SqsIntakeRunner newRunner(SqsClient sqs,
+                                             Function<LifecycleEnvelope, ProcessResult> behavior,
+                                             IntakeStatus status,
+                                             SqsIntakeRunner.Sleeper sleeper) {
+        return new SqsIntakeRunner(sqs, propertiesFor(), status, new StubProcessor(behavior),
+                new ObjectMapper(), sleeper);
+    }
+
     private static SqsIntakeRunner newRunner(SqsClient sqs,
                                              Function<LifecycleEnvelope, ProcessResult> behavior) {
         return newRunner(sqs, behavior, new IntakeStatus(true));
@@ -223,11 +355,13 @@ class SqsIntakeRunnerTest {
     private static SqsIntakeRunner newRunner(SqsClient sqs,
                                              Function<LifecycleEnvelope, ProcessResult> behavior,
                                              IntakeStatus status) {
-        IntakeProperties properties = new IntakeProperties(true,
-                "http://localhost:4566/000000000000/q.fifo", "ap-northeast-2", null,
-                Duration.ofSeconds(20), 10);
-        return new SqsIntakeRunner(sqs, properties, status, new StubProcessor(behavior),
+        return new SqsIntakeRunner(sqs, propertiesFor(), status, new StubProcessor(behavior),
                 new ObjectMapper());
+    }
+
+    private static IntakeProperties propertiesFor() {
+        return new IntakeProperties(true, "http://localhost:4566/000000000000/q.fifo",
+                "ap-northeast-2", null, Duration.ofSeconds(20), 10);
     }
 
     private static String startedJson(String eventId, String streamId, long sequence) {

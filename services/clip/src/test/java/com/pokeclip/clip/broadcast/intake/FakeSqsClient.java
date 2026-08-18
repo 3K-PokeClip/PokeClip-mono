@@ -25,6 +25,8 @@ final class FakeSqsClient implements SqsClient {
     private final List<Message> messages;
     private final boolean failOnReceive;
     private boolean failOnDelete;
+    private final java.util.Deque<Boolean> script = new java.util.ArrayDeque<>();
+    private boolean scripted;
     private final List<String> deleted = new ArrayList<>();
 
     private FakeSqsClient(List<Message> messages, boolean failOnReceive) {
@@ -48,6 +50,20 @@ final class FakeSqsClient implements SqsClient {
         return new FakeSqsClient(List.of(), true);
     }
 
+    /**
+     * 회차마다 닿을지 말지를 대본대로 정한다 — {@code true}면 빈 응답(성공),
+     * {@code false}면 던진다. <b>대본이 끝나면 계속 실패한다</b>: 성공으로 끝나면
+     * 루프가 쉬지 않고 도는 상태가 되어 검사가 안 끝난다.
+     */
+    static FakeSqsClient scripted(boolean... reachable) {
+        FakeSqsClient client = new FakeSqsClient(List.of(), false);
+        client.scripted = true;
+        for (boolean ok : reachable) {
+            client.script.add(ok);
+        }
+        return client;
+    }
+
     /** 꺼내기는 되는데 지우기만 실패한다 — 처리 실패와 갈라 보기 위한 갈래. */
     static FakeSqsClient thatFailsOnDelete(String... bodies) {
         FakeSqsClient client = withMessages(bodies);
@@ -63,6 +79,14 @@ final class FakeSqsClient implements SqsClient {
     public ReceiveMessageResponse receiveMessage(ReceiveMessageRequest request) {
         if (failOnReceive) {
             throw new IllegalStateException("큐에 못 닿는다");
+        }
+        if (scripted) {
+            // 대본이 끝났으면(null) 계속 실패한다 — 성공으로 끝나면 루프가 쉬지 않고
+            // 돌아 검사가 안 끝난다.
+            Boolean reachable = script.poll();
+            if (reachable == null || !reachable) {
+                throw new IllegalStateException("큐에 못 닿는다");
+            }
         }
         return ReceiveMessageResponse.builder().messages(messages).build();
     }
