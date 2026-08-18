@@ -33,7 +33,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 | | 소유 |
 |---|---|
 | `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
-| `clip` | `broadcasts` · `jump_cards` · `stream_segments` (**아직 없다** — 마이그레이션이 비어 있다) |
+| `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` · `stream_segments`(**뒤 둘은 아직 없다**) |
 | chat 계열 | `chat_messages` (V301) — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
 
 **서로의 표를 직접 읽지 않는다.** 필요하면 계약4의 `POST /internal/stream-keys/resolve`로
@@ -137,6 +137,35 @@ DB 접속값은 채우지 않는다.
 | `CHZZK_CLIENT_ID` | 치지직 개발자 센터 앱의 Client ID. 동의 URL에 그대로 실린다 |
 | `CHZZK_CLIENT_SECRET` | 그 앱의 Client Secret. 토큰 교환·갱신·철회 요청 본문에만 쓰고 URL·로그 어디에도 안 나간다 |
 | `CHZZK_REDIRECT_URI` | 동의가 끝난 뒤 치지직이 code·state를 돌려줄 주소. **개발자 센터에 앱당 하나만 등록된다** — 그래서 환경마다 앱을 따로 파고, 로컬은 `http://localhost:8081/oauth/chzzk/callback`으로 등록된 앱을 쓴다 |
+
+**`clip`도 DB 접속값 셋이 없으면 부팅에 실패한다** (POK-82에서 POK-161의 규칙을 옮겼다).
+앱 시크릿은 아직 없고, `CORS_ALLOWED_ORIGINS`는 빈 값이 허용된다.
+
+**`clip`은 환경변수 없이도 뜨지만 방송 이벤트를 받지 않는다.** `BROADCAST_INTAKE_ENABLED`
+기본값이 `false`다 — 켜진 채로 두면 CI와 남의 로컬이 뜰 때마다 없는 큐에 붙으려 한다.
+`chat-collector`의 `CHZZK_ENABLED`와 같은 규칙이다.
+
+| 변수 | 기본값 | 뜻 |
+|---|---|---|
+| `BROADCAST_INTAKE_ENABLED` | `false` | 켜면 SQS 폴링 루프가 돈다 |
+| `BROADCAST_QUEUE_URL` | 빈 값 | 생명주기 FIFO 큐 주소. **켜져 있을 때만 필수** |
+| `AWS_REGION` | `ap-northeast-2` | **켜짐과 무관하게 필수** — 비면 부팅이 죽는다 |
+| `BROADCAST_QUEUE_ENDPOINT` | 빈 값 | 비면 진짜 AWS. LocalStack 실측 때만 준다 |
+
+**켜는 값을 큐 주소와 따로 둔 이유:** 주소가 비었다고 저절로 꺼지면 "로컬에서 일부러
+안 켬"과 "운영에서 설정을 깜빡함"이 똑같이 보인다. 켜져 있는데 주소가 없으면 그건
+실수이므로 부팅을 거부한다. 자격증명은 환경변수에 없다 — SDK 표준 체인(환경변수·프로파일·역할)이 찾는다.
+
+받고 있는지는 헬스체크에 나온다. **꺼둔 것은 실패가 아니라 설정이라 UP이되 상세에 적힌다.**
+
+```bash
+curl -s localhost:8081/actuator/health
+# "broadcastIntake":{"status":"UP","details":{"status":"disabled"}}
+```
+
+켜졌는데 2분 넘게 폴링 성공이 없으면 **DOWN**이고 상세에 `stalled`과 마지막 성공 시각·실패
+사유가 실린다. `management.endpoint.health.show-details: always`가 없으면 이 상세가 응답에서
+잘려 밖에서는 `{"status":"UP"}`만 보인다 — "서버는 떴는데 수신은 죽은" 상태를 구분할 수 없게 된다.
 
 **`chat-collector`는 환경변수 없이도 뜨지만 수집을 시작하지 않는다.** `CHZZK_ENABLED`
 기본값이 `false`다 — 켜진 채로 두면 부팅만으로 치지직 세션을 하나 먹는데, 동시 연결
@@ -253,7 +282,8 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 서버마다 자기 Flyway를 돌리고 **이력 테이블을 나눈다**(`flyway_schema_history_auth` ·
 `..._clip` · `..._chat`). 기본 이름을 쓰면 나중에 뜬 쪽이 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
 마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat.
-지금까지 나간 것은 auth의 `V101`~`V107`과 chat의 `V301`(`chat_messages`)이다.
+지금까지 나간 것은 auth의 `V101`~`V107` · clip의 `V201`(`broadcasts`·`broadcast_events`) ·
+chat의 `V301`(`chat_messages`)이다.
 
 **모든 Flyway 서버(auth 포함)에 `baseline-on-migrate: true` + `baseline-version: 0`이 필수다.**
 공유 DB에서는 어느 서버가 먼저 뜰지 정해져 있지 않다 — 다른 서버가 이미 표를
@@ -262,16 +292,27 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 "두 번째 서버부터"가 아니다: 빈 DB에 chat-collector가 auth보다 먼저 뜨면 auth가
 그 두 번째 서버다. chat-collector가 실물에서 밟았고(2026-08-15), auth도 같은
 메시지로 재현했다(PR #56). Testcontainers·CI는 매번 빈 DB라 그냥은 안 잡히므로
-auth·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 심어 두고 부팅한다 —
-두 줄을 지우면 그 모듈 테스트 전체가 빨강이다. **clip·chat-detector가 Flyway를
-붙일 때도 같은 두 줄이 필요하다.** `baseline-version: 0`인 이유는 기본 1이면 V1
+auth·clip·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 심어 두고 부팅한다 —
+두 줄을 지우면 그 모듈 테스트 전체가 빨강이다. **clip도 POK-82에서 같은 두 줄을 갖췄다**
+(남는 것은 chat-detector뿐이다). `baseline-version: 0`인 이유는 기본 1이면 V1
 이하가 적용 대상에서 빠지기 때문이다.
+
+**이력이 한 줄이 아니라 두 줄인 것이 정상이다.** 남의 표가 있는 DB에 처음 뜨면
+`<< Flyway Baseline >>`(version 0, type `BASELINE`)이 먼저 찍히고 그다음에 자기
+마이그레이션이 온다. clip 실기동 확인(2026-08-18):
+
+```
+ installed_rank | version |              description               |   type   | success
+----------------+---------+----------------------------------------+----------+---------
+              1 | 0       | << Flyway Baseline >>                  | BASELINE | t
+              2 | 201     | create broadcasts and broadcast events | SQL      | t
+```
 1·2번이 읽을 스키마 설명서는 여기서 자동 생성해 [`contracts/db/`](../contracts/db/)로
 내보낼 계획인데 **아직 안 만들었다** — 그 폴더는 비어 있다.
 
-## 상태 (2026-08-05)
+## 상태 (2026-08-18)
 
-`auth`와 `chat-collector`에 내용이 있다.
+`auth`·`clip`·`chat-collector`에 내용이 있다.
 
 | | |
 |---|---|
@@ -303,6 +344,44 @@ auth·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 심어 
 `resolve`는 **키가 틀려도 HTTP 200에 `valid:false`**로 답한다. Media에게
 "키가 틀림"(연결 거절)과 "Auth 장애"(판단 불가)는 조치가 정반대라 둘 다 4xx면
 Go 쪽에서 구분이 안 된다.
+
+### clip — 방송 생명주기 수신 (POK-82)
+
+1번 Media가 SQS FIFO 큐에 넣는 **계약9 봉투**(ADR-016)를 받아 방송 명부에 기록한다.
+표는 둘이다 — `broadcasts`(방송 한 회당 한 줄) · `broadcast_events`(받은 편지 기록, `V201`).
+
+| | |
+|---|---|
+| 수신 | SQS FIFO 롱폴링(20초) · 꺼둠이 기본 |
+| 멱등 | 같은 편지가 두 번 와도 한 번만 처리 (POK-87) |
+| 순서 | 역순 도착을 견디고 상태를 되돌리지 않음 (POK-88) |
+| 운영 | health에 수신 상태 노출 |
+
+**멱등의 방어선은 `INSERT … ON CONFLICT (event_id) DO NOTHING`의 영향 행 수다.**
+0이면 중복, 1이면 새 편지다. 조회 후 삽입은 동시 요청에 뚫리고, **예외 타입으로 가르는
+방식도 안 된다** — `event_id` 중복과 `streamer_id` NOT NULL 위반이 같은
+`DataIntegrityViolationException`이라 **저장 실패가 중복으로 보고돼 러너가 메시지를 지운다.**
+반환값으로 가르면 진짜 실패만 예외로 올라가 러너가 메시지를 남긴다.
+편지 기록과 명부 갱신은 **한 트랜잭션**이다 — 갈라 두면 "기록은 남았는데 명부는 안 바뀐"
+줄이 생기고, 재전송돼도 중복으로 걸러져 영영 반영되지 않는다.
+
+**종료가 시작보다 먼저 와도 죽지 않는다.** 시작 시각을 모르는 채로 줄이 생기고
+(`started_at`이 NULL인 것이 곧 "역순으로 도착했다"는 표시다) 경고가 남는다.
+이미 반영한 `last_sequence`보다 낮은 번호가 뒤늦게 오면 무시한다 —
+**순서를 바로잡는 것이 아니라 견디는 것**이 목표다. 끝난 방송은 더 높은 번호의 시작이
+와도 `ENDED`로 남고 시작 시각만 채운다.
+
+**러너가 편지를 지우는 기준은 "성공"이 아니라 "더 볼 일 없음"이다.** 처리됨·중복·낡음
+셋 다 지운다. 읽을 수 없는 편지와 **모르는 `eventType`도 지운다** — 재시도해도 계속
+실패하는데 안 지우면 FIFO라 **같은 방송의 뒤 편지가 전부 막힌다.** 로그 키는 갈라
+뒀다(`unreadable_dropped` 대 `unknown_type_dropped`) — 후자는 1번이 새 이벤트를 냈다는
+신호라 형식 오류와 섞으면 안 된다. 반대로 **처리가 예외로 끝나면 안 지운다** —
+가시성 타임아웃이 지나면 다시 오고, 처리가 멱등이라 두 번 와도 안전하다.
+
+`streamer_id`에 FK를 걸지 않는다 — 그 표는 auth 소유이고, 서로의 표를 직접 참조하지
+않는 것이 ADR-022의 경계다.
+
+**아직 없는 것:** 렌더 잡 발행(계약1), 세그먼트 인덱스 수신(계약2), 클립·승인.
 
 ### 치지직 채널 연동 (POK-93)
 
@@ -574,18 +653,17 @@ Ctrl+C 뒤 판정 줄의 `uploaded=`와 버킷의 `chat/` 아래 파일 수가 �
 
 ### 나머지
 
-`clip`은 `ClipApplication` 하나뿐이고 마이그레이션도 비어 있다.
 `chat-detector`는 빈 껍데기다. `common`은 소스가 0개다 —
 두 서버가 똑같이 쓰는 계약이 실제로 생기면 그때 채운다.
 
 다음 작업 순서:
 
-1. `clip`에 방송 생명주기 이벤트 FIFO 소비 스텁을 넣는다 (POK-26)
-2. **`pairing_exchange_attempts` 청소 작업을 넣는다.** 교환이 `permitAll`이라
+1. **`pairing_exchange_attempts` 청소 작업을 넣는다.** 교환이 `permitAll`이라
    미인증 트래픽이 행을 쌓는다 — 이게 없으면 운영에 올릴 수 없다
-3. `POST /api/stream-keys/pairing-codes/exchange`의 `X-Forwarded-For` 처리.
+2. `POST /api/stream-keys/pairing-codes/exchange`의 `X-Forwarded-For` 처리.
    ALB 뒤로 가면 전 요청이 같은 IP로 보여 rate limit이 전역 한도가 된다
-4. SQS 대역(ElasticMQ)을 루트 compose에 추가한다 — `clip`이 렌더 잡을 발행하려면 필요하다
+3. SQS 대역(ElasticMQ)을 루트 compose에 추가한다 — `clip`이 렌더 잡을 발행하려면 필요하다.
+   생명주기 수신(POK-82)은 실측을 LocalStack으로 했고, compose에는 아직 큐가 없다
 
 > **ArchUnit 도입 계획은 없어졌다.** auth와 clip 경계를 코드 규칙으로 막으려던 것인데,
 > 프로세스가 갈리면서(ADR-022) 물리적으로 분리됐다. 대신 지킬 것은 **DB 표 소유 경계**다.
