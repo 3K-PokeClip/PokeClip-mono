@@ -3,7 +3,7 @@
 **스트리머의 실시간 방송에서 하이라이트를 자동으로 찾아 클립으로 만들어 주는 SaaS.**
 
 PokeClip 팀 모노레포. 서버·플러그인·웹·워커가 한 저장소에 있고, CI는 바뀐 것만 검사한다(web은 워크플로 경로 필터, media는 잡 레벨 변경 감지).
-`main`은 `media-gate` 체크 하나를 필수로 요구한다 — media 검사가 빨간불이면 PR 머지와 main 직접 push가 막힌다(관리자 우회는 열려 있다).
+`main`과 `develop`은 `media-gate` 체크 하나를 필수로 요구한다 — media 검사가 빨간불이면 PR 머지와 직접 push가 막힌다(관리자 우회는 열려 있다).
 
 ---
 
@@ -119,7 +119,10 @@ docker compose up -d
 
 ## 규칙
 
-- `main` 직접 push 금지 — 브랜치를 파고 PR을 올린다
+- **`develop`이 통합 브랜치다.** 기능은 `feature/POK-NNN-*`를 `develop`에서 파서 `develop`으로 PR을 올린다
+- `main`은 출시 가능한 것만 담는다 — `develop → main` PR(= 릴리스)과 `hotfix/*`로만 들어온다
+- `main`·`develop` 둘 다 직접 push가 막혀 있다. hotfix는 `main`에서 파고, 머지 후 `main → develop` 역머지 PR을 반드시 올린다
+- 머지는 **merge commit 하나뿐이다**(squash·rebase는 저장소 설정에서 껐다)
 - PR은 **기능 하나에 하나**. 줄 수가 아니라 기능이 경계다
 - `contracts/`를 고치는 PR에는 **3명 전원이 리뷰어로 붙는다**
 - **이 저장소는 public이다.** OAuth 시크릿·AWS 키·서명키는 절대 커밋하지 않는다.
