@@ -131,3 +131,11 @@ pokeclip:
       pending-max: ${CHAT_ARCHIVE_PENDING_MAX:60}
       # 수신→아카이브 바구니 상한(채팅 수). DB 바구니와 같은 1만. 넘치면 오래된 것부터(archiveBufferDropped).
       buffer-capacity: ${CHAT_ARCHIVE_BUFFER_MAX:10000}
+  broadcast:
+    # 메모 치우기 주기. 하루에 한 번이면 충분하지만, 프로세스가 하루를 못 살면
+    # 한 번도 안 도므로 짧게 잡는다 — 지울 것이 없으면 DELETE 한 번이라 싸다.
+    # initialDelay도 같은 값이다: fixedDelay의 기본 initialDelay는 0이라
+    # 컨텍스트가 뜨자마자 DELETE가 나가고 부팅과 겹친다(auth 스케줄러도 같은 이유).
+    ended-sweep-interval: ${BROADCAST_ENDED_SWEEP_INTERVAL:PT1H}
+    # 메모 보관 기간. ADR-016의 TTL 24h.
+    ended-retention: ${BROADCAST_ENDED_RETENTION:PT24H}

@@ -23,3 +23,9 @@ pokeclip:
       force-path-style: false
       pending-max: 60
       buffer-capacity: 10000
+  broadcast:
+    # 검사 중에는 배선만 재고 실제로는 안 돌린다 — 첫 틱도 이만큼 뒤다(initialDelay = interval).
+    # 돌면 컨텍스트 수십 개가 각자 표를 치워 EndedStreamStoreTest가 밀어 넣은 오래된 메모를
+    # 지운다(그 검사는 created_at을 과거로 직접 밀어 넣는다). EndedStreamSweeperTest가 이 값을 단언한다.
+    ended-sweep-interval: PT24H
+    ended-retention: PT24H
