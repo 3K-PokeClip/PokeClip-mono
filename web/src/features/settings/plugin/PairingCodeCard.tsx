@@ -62,8 +62,15 @@ export function PairingCodeCard({
               <div className={styles.codeTitle}>코드가 발급되어 있어요</div>
               <div className={styles.codeHint}>최초 발급일 {code.issuedAt}</div>
             </div>
-            <Button variant="soft" size="sm" loading={busy} onClick={onIssue}>
-              재발급
+            {/* 디자인 ②-1: 요청 중엔 라벨 없이 인라인 스피너만 — 이름은 aria-label이 대신한다 */}
+            <Button
+              variant="soft"
+              size="sm"
+              loading={busy}
+              aria-label={busy ? '발급 요청 중' : undefined}
+              onClick={onIssue}
+            >
+              {busy ? null : '재발급'}
             </Button>
           </div>
         </>
@@ -72,8 +79,15 @@ export function PairingCodeCard({
           <div className={styles.codeEmptyText}>
             아직 발급된 코드가 없어요. 코드를 발급하면 OBS 플러그인과 연결할 수 있습니다.
           </div>
-          <Button variant="solid" size="sm" loading={busy} onClick={onIssue}>
-            코드 발급
+          {/* 첫 발급도 같은 요청 상태다 — ②-1과 동일하게 요청 중엔 스피너만 */}
+          <Button
+            variant="solid"
+            size="sm"
+            loading={busy}
+            aria-label={busy ? '발급 요청 중' : undefined}
+            onClick={onIssue}
+          >
+            {busy ? null : '코드 발급'}
           </Button>
         </div>
       )}

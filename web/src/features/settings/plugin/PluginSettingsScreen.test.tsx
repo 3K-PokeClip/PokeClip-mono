@@ -229,4 +229,22 @@ describe('PluginSettingsScreen', () => {
     expect(skeleton).not.toBeNull();
     expect(skeleton?.style.height).toBe('calc(64 * var(--pc-u))');
   });
+
+  it('발급 요청 중엔 버튼이 라벨 없이 스피너만 보이고 비활성이다 (디자인 ②-1)', async () => {
+    stubFetch((url, init) => {
+      if (url === '/api/stream-keys/pairing-codes') return new Promise<Response>(() => {}); // 응답을 붙잡아 요청 중 상태를 유지한다
+      if (url === '/api/stream-keys' && (init?.method ?? 'GET') === 'GET')
+        return jsonResponse(200, { issued: true, createdAt: CREATED_AT });
+      return jsonResponse(404);
+    });
+    renderWithProviders(<PluginSettingsScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '재발급' }));
+
+    // 라벨이 사라지고 접근 이름은 aria-label이 대신한다 — 응답까지 비활성
+    const busyButton = await screen.findByRole('button', { name: '발급 요청 중' });
+    expect(busyButton).toBeDisabled();
+    expect(busyButton).not.toHaveTextContent('재발급');
+    expect(screen.queryByRole('button', { name: '재발급' })).not.toBeInTheDocument();
+  });
 });

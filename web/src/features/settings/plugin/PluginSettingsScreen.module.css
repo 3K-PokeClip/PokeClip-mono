@@ -178,12 +178,11 @@
 
 /* ---------- 연동 코드 실상태 (POK-102) ---------- */
 
-/* 모달 하단 버튼 행 (만료 상태의 닫기·새 코드 발급) */
+/* 모달 하단 버튼 행 (만료 상태의 닫기·새 코드 발급) — 디자인 ④: gap 10, 위 간격은 본문 mb 22가 담당 */
 .confirmActions {
   display: flex;
   justify-content: flex-end;
-  gap: var(--pc-space-2);
-  margin-top: var(--pc-space-4);
+  gap: calc(10 * var(--pc-u));
 }
 
 /* ---------- 발급 직후 코드 모달 (디자인 1m ③, POK-103) ---------- */
@@ -284,10 +283,11 @@
   color: var(--pc-color-text-primary);
 }
 
+/* 디자인 ④ 정본값: 12.5/1.65, 본문 아래 22로 버튼 행과 뗀다 (위 여백은 타이틀 mb가 담당) */
 .issueExpired {
-  margin-top: var(--pc-space-3);
+  margin: 0 0 calc(22 * var(--pc-u));
   font-size: calc(12.5 * var(--pc-u));
-  line-height: 1.55;
+  line-height: 1.65;
   color: var(--pc-color-text-secondary);
 }
 
