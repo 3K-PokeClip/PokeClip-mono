@@ -125,4 +125,30 @@ jobs:
       # -v를 붙이지 않는다 — 로그가 비대해지고, skip 0 판정은 로그 grep이 아니라 구조로 한다
       # (초록불 = REQUIRE_PG 가드 미발동, container: 부재 = 비root. skip 경로는 이 둘뿐이다).
       # -p/-parallel도 명시하지 않는다 — 기본값(GOMAXPROCS)이 러너 스펙 변화를 자동 흡수한다.
-      - run: go test -race -count=1 -timeout 20m ./...
+      # -coverprofile은 -cover를 함께 켠다 — 9개 패키지의 `coverage: NN.N% of statements`가
+      # 이 스텝 로그에 전부 찍힌다(티켓의 "다른 패키지는 측정만"이 이걸로 충족된다).
+      # ./... 한 번 실행이면 결과가 `mode:` 헤더 한 줄짜리 단일 파일로 병합된다(Go 1.10+,
+      # golang/go#6909) — 패키지별 재실행도 프로파일 병합 도구도 필요 없다.
+      # -covermode는 적지 않는다. -race가 켜져 있으면 자동으로 atomic이 되므로,
+      # 상수를 박으면 죽은 값이 되거나 -race와 싸운다.
+      - run: go test -race -count=1 -timeout 20m -coverprofile=cover.out ./...
+
+      # 게이트는 반드시 테스트와 "다른 스텝"이다. 프로파일은 테스트가 실패해도 쓰이므로
+      # (cmd/go/internal/test/test.go의 mergeCoverProfile 호출이 err 검사보다 앞에 있다)
+      # 같은 스텝에 합치면 테스트 실패를 게이트 결과가 덮어 초록이 될 수 있다.
+      # 스텝을 나누면 앞 스텝이 실패한 순간 이 스텝은 아예 돌지 않는다 — if: always()를 붙이지 마라.
+      # 판정은 정수 교차곱(cov*100 < tot*80)이라 반올림·로케일·awk 구현체 차이에 흔들리지 않는다.
+      # 로그의 (527/554문) 정수쌍이 판정의 근거다 — 79.99%는 표시가 80.0%여도 FAIL이 맞다.
+      # 대상 목록을 늘릴 때 internal/ 밖 패키지를 넣으려면 base도 함께 고친다(바뀔 축이 두 곳이다).
+      - name: coverage gate (index·upload·indexer 각 80% 미만이면 실패)
+        run: |
+          set -euo pipefail
+          LC_ALL=C awk -v min=80 -v base="github.com/3K-PokeClip/pokeclip-mono/media/internal/" '
+            NR==1 { next }
+            { f=$1; sub(/:.*/,"",f); sub(/\/[^\/]+$/,"",f); tot[f]+=$2; if ($3>0) cov[f]+=$2 }
+            END { n=split("index,upload,indexer",want,","); rc=0
+              for (i=1;i<=n;i++) { k=base want[i]
+                if (!(k in tot)) { printf "FAIL %-8s 프로파일에 없음 — 테스트가 안 돌았거나 경로 오타\n", want[i]; rc=1 }
+                else if (cov[k]*100 < tot[k]*min) { printf "FAIL %-8s %.1f%% (%d/%d문) < %d%%\n", want[i], cov[k]*100/tot[k], cov[k], tot[k], min; rc=1 }
+                else printf "ok   %-8s %.1f%% (%d/%d문)\n", want[i], cov[k]*100/tot[k], cov[k], tot[k] }
+              exit rc }' cover.out
