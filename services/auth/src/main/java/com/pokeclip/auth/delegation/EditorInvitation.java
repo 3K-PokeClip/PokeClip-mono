@@ -63,6 +63,12 @@ public class EditorInvitation {
         return i;
     }
 
+    /**
+     * <b>프로덕션에서 부르지 않는다 — 엔티티 단위 테스트가 상태를 만들 때만 쓴다.</b>
+     * 실제 상태 전이는 조건을 건 UPDATE({@code respond}·{@code cancel}) 하나뿐이다.
+     * 이걸 서비스에서 부르면 읽고-쓰기 사이에 틈이 생겨 취소와 수락이 겹칠 때
+     * 둘 다 성공한다 — 조건부 UPDATE로 없앤 경합이 그대로 돌아온다.
+     */
     void markResponded(InvitationStatus responded, Instant now) {
         this.status = responded;
         this.respondedAt = now;
