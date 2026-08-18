@@ -1,19 +1,20 @@
-# media/ 전용 CI — 경로 필터로 media 변경 PR에서만 돈다 (ADR-013 모노레포 원칙)
+# media/ 전용 CI — 세 층으로 나뉜다 (ADR-013 모노레포 원칙)
+#   changes    : 무엇이 바뀌었나만 판정한다(싸다)
+#   check      : media를 실제로 검사한다(비싸다 — media가 바뀐 PR에서만 돈다)
+#   media-gate : 위 둘의 결과를 단일 체크 하나로 접는다 = main 브랜치 보호의 필수 체크
+# 워크플로 레벨 `paths:`를 일부러 쓰지 않는다. paths로 스킵된 워크플로는 체크 런이 아예
+# 생기지 않아, 필수 체크로 지정하면 media를 안 건드린 PR이 전부 Pending으로 영원히 잠긴다.
+# 잡 레벨 `if:`로 스킵된 잡은 'skipped'로 보고되고, media-gate가 skipped를 통과로 친다 —
+# 그래서 비용 절감(안 바뀌면 안 검사)과 필수 체크(항상 존재)를 동시에 얻는다.
 name: media-ci
 
 on:
   pull_request:
-    paths:
-      - 'media/**'
-      - '.github/workflows/media-ci.yml' # 이 파일을 고치는 PR은 이 파일로 검증한다
-      # media 계약 테스트 2개가 저장소 루트의 compose를 직접 읽고, 못 읽으면 fail한다
-      # (internal/mtxhook/runtime_identity_contract_test.go, cmd/mtxhookwrite/contract_test.go).
-      # 이 줄이 없으면 compose만 고치는 PR에서 드리프트 탐지 계약이 통째로 잠든다.
-      # media 테스트가 media/ 밖에서 읽는 파일은 현재 이 하나뿐이다 — 새로 생기면 여기도 늘린다.
-      - 'docker-compose.yml'
 
-# 이 워크플로는 GitHub API를 전혀 쓰지 않는다. PR의 코드를 go test로 실행하므로,
-# 토큰 권한을 저장소 기본값에 맡기지 않고 checkout에 필요한 최소치로 못박는다.
+# 이 워크플로에서 GitHub API를 쓰는 곳은 changes 잡의 변경 파일 조회(pull-requests: read)뿐이다.
+# 나머지 잡은 PR의 코드를 go test로 실행할 뿐이라, 토큰 권한을 저장소 기본값에 맡기지 않고
+# checkout에 필요한 최소치로 못박는다.
+# 아래는 워크플로 기본값이다 — 잡에 permissions가 있으면 그 잡에서는 이 값이 통째로 대체된다.
 permissions:
   contents: read
 
@@ -21,14 +22,51 @@ permissions:
 # 계속 점유하고 체크 목록을 어지럽히는 것을 막는다.
 # (판정 무결성 목적이 아니다 — 옛 실행의 결과는 옛 SHA의 체크로 남고 최신 SHA의 판정을
 #  덮지 않는다. 이 블록을 지워도 게이트 동작은 같다.)
+# 필수 체크와의 상호작용: 실행이 취소되면 check 잡이 'cancelled'로 끝나고, media-gate는
+# if: always() 덕에 그래도 돌아 needs.check.result == 'cancelled'를 보고 exit 1 한다 —
+# 즉 옛 SHA의 media-gate가 failure로 남을 수 있다. 이는 의도된 동작이다.
+# 브랜치 보호는 PR의 head SHA에 붙은 체크만 보므로, 옛 SHA의 빨간불은 머지 가부에 영향이 없다.
+# (사람이 체크 목록에서 그 빨간불을 보고 놀랄 수는 있다 — 놀람이지 오판정이 아니다.)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # 이 잡의 이름은 하는 일 그대로다 — "무엇이 바뀌었나"만 판정하고 검사는 하지 않는다.
+  changes:
+    runs-on: ubuntu-latest
+    # 잡 레벨 permissions는 워크플로 레벨을 "대체"한다(합치지 않는다).
+    # pull_request 이벤트에서 paths-filter는 체크아웃 없이 API로 변경 파일 목록을 읽는다 —
+    # 그래서 contents는 필요 없고 pull-requests: read만 있으면 된다.
+    # (근거는 액션 자신의 README·action.yml이다. coder는 이 액션을 checkout과 함께 쓰지만
+    #  그건 그쪽이 push 이벤트도 받기 때문이고, 우리 트리거는 pull_request 단독이다.)
+    permissions:
+      pull-requests: read
+    outputs:
+      media: ${{ steps.filter.outputs.media }} # 문자열 'true'/'false'다
+    steps:
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          # 이 블록은 액션에 문자열로 넘어가지만 액션이 YAML로 파싱한다 — '#'는 주석으로 처리된다.
+          filters: |
+            media:
+              - 'media/**'
+              - '.github/workflows/media-ci.yml' # 이 파일을 고치는 PR은 이 파일로 검증한다
+              # media 계약 테스트 2개가 저장소 루트의 compose를 직접 읽고, 못 읽으면 fail한다
+              # (internal/mtxhook/runtime_identity_contract_test.go, cmd/mtxhookwrite/contract_test.go).
+              # 이 줄이 없으면 compose만 고치는 PR에서 드리프트 탐지 계약이 통째로 잠든다.
+              # media 테스트가 media/ 밖에서 읽는 파일은 현재 이 하나뿐이다 — 새로 생기면 여기도 늘린다.
+              - 'docker-compose.yml'
+
   # 잡 이름은 이 잡이 하는 일 전부(gofmt·vet·test)를 담는다.
-  # 훗날 필수 체크로 지정되면 이 id가 그대로 사람이 보는 체크 이름이 된다.
+  # 이 id는 필수 체크 이름이 아니다 — 필수 체크는 맨 아래 media-gate 하나뿐이다.
   check:
+    needs: changes
+    # 워크플로 레벨 paths 대신 여기서 거른다. paths로 스킵하면 체크가 아예 안 생겨
+    # 필수 체크가 Pending으로 남지만, 잡 레벨 if로 스킵하면 'skipped'로 보고되고
+    # 아래 media-gate가 skipped를 통과로 친다.
+    if: needs.changes.outputs.media == 'true'
     runs-on: ubuntu-latest
     # 잡 전체 상한이다(checkout·setup-go·모듈 다운로드·gofmt·vet·test 전부 포함).
     # 아래 `go test -timeout 20m`은 성격이 다른 상한이다 — 잡 시작이 아니라 각 테스트
@@ -152,3 +190,31 @@ jobs:
                 else if (cov[k]*100 < tot[k]*min) { printf "FAIL %-8s %.1f%% (%d/%d문) < %d%%\n", want[i], cov[k]*100/tot[k], cov[k], tot[k], min; rc=1 }
                 else printf "ok   %-8s %.1f%% (%d/%d문)\n", want[i], cov[k]*100/tot[k], cov[k], tot[k] }
               exit rc }' cover.out
+
+  # 주의: 이 잡의 id는 main 브랜치 보호의 "필수 체크 이름" 그 자체다(체크 런 이름 = 잡 이름).
+  #   바꾸려면 반드시 같은 작업에서 두 곳을 함께 고친다:
+  #     (1) 이 잡 id   (2) gh api -X PUT .../branches/main/protection 의 contexts/checks
+  #   한쪽만 바꾸면 보호가 존재하지 않는 체크를 기다려 모든 PR이 Pending으로 잠긴다.
+  # 주의: 새 검사 잡을 추가하면 반드시 아래 needs에 넣는다 — 빠뜨리면 그 잡이 실패해도 게이트가 통과한다.
+  media-gate:
+    runs-on: ubuntu-latest
+    needs: [changes, check]
+    permissions: {} # 결과만 읽는다. 토큰 권한이 필요 없다.
+    # if: always() — 위 잡이 실패·스킵·취소돼도 이 잡은 반드시 돌아 체크를 만든다.
+    #   이것이 "항상 존재하는 필수 체크"의 정체다.
+    # 층 구분(중요): 이 always()는 '잡' 층이다. check 잡 안의 커버리지 게이트 '스텝'에는
+    #   if: always()를 붙이면 안 된다(위 'coverage gate' 스텝 머리 주석 — 테스트 실패를
+    #   게이트 결과가 덮어 false green이 된다).
+    #   서로 다른 층이고, 한쪽을 다른 쪽의 근거로 인용하면 안 된다.
+    if: always()
+    steps:
+      - name: 필수 검사 집계
+        run: |
+          echo "- changes: ${{ needs.changes.result }}"
+          echo "- check:   ${{ needs.check.result }}"
+          # skipped는 통과로 친다(media 무변경 PR의 정상 경로). failure·cancelled만 실패다.
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" || "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "필수 검사 중 실패하거나 취소된 잡이 있다" >&2
+            exit 1
+          fi
+          echo "필수 검사 통과"
