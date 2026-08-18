@@ -79,6 +79,34 @@ class BroadcastOrderingTest extends IntegrationTestSupport {
                 });
     }
 
+    /**
+     * {@code applyStarted}의 ENDED 보호 분기를 실행하는 유일한 시험이다(감사 1차 지적 1).
+     *
+     * <p>낮은 번호로는 이 분기에 못 닿는다 — 앞의 {@code sequence <= lastSequence}에서
+     * 걸러진다. <b>번호가 더 높은</b> 시작이 와야 반영 경로로 들어가고, 그때 시작 시각은
+     * 채우되 상태는 ENDED로 남아야 한다. 끝난 방송이 다시 LIVE가 되면 그 뒤 파이프라인이
+     * 살아 있는 방송으로 오해한다.
+     */
+    @Test
+    void 종료된_방송에_더_높은_번호의_시작이_와도_상태가_되돌아가지_않는다() {
+        processor.process(Envelopes.ended("e1", "s5", 5L));
+
+        assertThat(processor.process(Envelopes.started("e2", "s5", 7L)))
+                .as("번호가 더 높으니 무시가 아니라 반영이다")
+                .isEqualTo(ProcessResult.PROCESSED);
+
+        assertThat(broadcasts.findByStreamId("s5")).get()
+                .satisfies(b -> {
+                    assertThat(b.getStatus())
+                            .as("끝난 방송이 다시 LIVE가 되면 안 된다")
+                            .isEqualTo(BroadcastStatus.ENDED);
+                    assertThat(b.getStartedAt())
+                            .as("뒤늦게 받은 시작 시각은 채운다")
+                            .isNotNull();
+                    assertThat(b.getLastSequence()).isEqualTo(7L);
+                });
+    }
+
     @Test
     void 낡은_편지여도_받은_기록에는_남는다() {
         processor.process(Envelopes.ended("e1", "s4", 5L));
