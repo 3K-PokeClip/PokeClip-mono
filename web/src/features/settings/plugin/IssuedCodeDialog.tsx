@@ -61,8 +61,7 @@ export function IssuedCodeDialog({
             {/* 만료는 안내가 곧 상태 변화라 낭독돼야 한다 — 카운트다운 자체는 낭독하지 않는다 */}
             <p role="status" className={styles.issueExpired}>
               발급 후 10분이 지나 코드가 만료되었어요.
-              <br />
-              새 코드를 발급해 주세요.
+              <br />새 코드를 발급해 주세요.
             </p>
             <div className={styles.confirmActions}>
               <Button variant="ghost" size="md" onClick={onClose}>
@@ -85,7 +84,12 @@ export function IssuedCodeDialog({
                     복사됨
                   </span>
                 ) : null}
-                <IconButton variant="ghost" size="sm" aria-label="코드 복사" onClick={() => void copy()}>
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  aria-label="코드 복사"
+                  onClick={() => void copy()}
+                >
                   {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
                 </IconButton>
                 {/* 시각 피드백(체크·툴팁)과 짝 — 스크린리더에도 복사 성공을 알린다 */}
