@@ -57,6 +57,36 @@ class IntakeHealthTest {
         assertThat(new IntakeHealth(status, STALE_AFTER).health().getStatus()).isEqualTo(Status.UP);
     }
 
+    /**
+     * <b>UP인 동안에도 진행 중인 실패가 응답에 보여야 한다.</b> 마지막 성공에서 2분이
+     * 지나기 전까지는 UP이 맞지만(그 사이는 일시적 실패와 구분이 안 된다), 그동안
+     * 실패 사유가 응답에 없으면 운영자가 시각을 직접 빼서 유추해야 한다 —
+     * "12:01:30인데 마지막 성공이 12:00:00이네"를 사람이 계산하게 만드는 응답이다.
+     */
+    @Test
+    void 켜져_있고_UP이어도_진행_중인_실패_사유가_상세에_보인다() {
+        IntakeStatus status = new IntakeStatus(true);
+        status.pollSucceeded(Instant.now());
+        status.pollFailed("SdkClientException");
+
+        Health health = new IntakeHealth(status, STALE_AFTER).health();
+
+        assertThat(health.getStatus()).as("2분이 아직 안 지났으므로 UP이 맞다").isEqualTo(Status.UP);
+        assertThat(health.getDetails())
+                .as("실패가 진행 중인데 응답에 아무 신호가 없다")
+                .containsEntry("lastFailureReason", "SdkClientException");
+    }
+
+    /** 실패한 적이 없으면 그 칸을 만들지 않는다 — 빈 값이 있으면 노이즈가 된다. */
+    @Test
+    void 실패한_적이_없으면_실패_사유_칸이_아예_없다() {
+        IntakeStatus status = new IntakeStatus(true);
+        status.pollSucceeded(Instant.now());
+
+        assertThat(new IntakeHealth(status, STALE_AFTER).health().getDetails())
+                .doesNotContainKey("lastFailureReason");
+    }
+
     @Test
     void 켜져_있는데_한동안_성공이_없으면_DOWN이다() {
         IntakeStatus status = new IntakeStatus(true);

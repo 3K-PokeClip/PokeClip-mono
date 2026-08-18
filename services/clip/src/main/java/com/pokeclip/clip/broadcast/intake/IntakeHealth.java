@@ -61,9 +61,16 @@ public class IntakeHealth implements HealthIndicator {
                             now.lastFailureReason() == null ? "UNKNOWN" : now.lastFailureReason())
                     .build();
         }
-        return Health.up()
+        Health.Builder polling = Health.up()
                 .withDetail("status", "polling")
-                .withDetail("lastPollSucceededAt", last.toString())
-                .build();
+                .withDetail("lastPollSucceededAt", last.toString());
+        // UP인 동안에도 진행 중인 실패를 드러낸다. 마지막 성공에서 2분이 지나기
+        // 전까지는 UP이 맞지만(그 사이는 일시적 실패와 구분이 안 된다), 사유까지
+        // 감추면 운영자가 시각을 직접 빼서 유추해야 한다. 실패한 적이 없으면
+        // 칸을 만들지 않는다 — 빈 값이 있으면 노이즈가 된다.
+        if (now.lastFailureReason() != null) {
+            polling.withDetail("lastFailureReason", now.lastFailureReason());
+        }
+        return polling.build();
     }
 }
