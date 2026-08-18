@@ -263,10 +263,13 @@
   max-width: calc(410 * var(--pc-u));
 }
 
-/* 디자인 ③ 경고 박스 — 앰버 배경/보더.
-   display:flex를 쓰면 텍스트 노드와 <b>가 각각 플렉스 아이템으로 쪼개져 줄이 갈라진다 — 블록 유지 */
+/* 디자인 ③ 경고 박스 — 앰버 배경/보더 + 좌측 경고 아이콘.
+   flex 자식은 아이콘·span 둘뿐이어야 한다 — 텍스트 노드를 직접 두면 줄이 갈라진다 */
 .issueWarning {
-  margin-top: calc(12 * var(--pc-u));
+  display: flex;
+  gap: calc(9 * var(--pc-u));
+  align-items: flex-start;
+  margin-top: calc(14 * var(--pc-u));
   padding: calc(11 * var(--pc-u)) calc(13 * var(--pc-u));
   border-radius: calc(10 * var(--pc-u));
   background: rgb(240 173 78 / 0.1);
@@ -274,6 +277,15 @@
   font-size: calc(11.5 * var(--pc-u));
   line-height: 1.55;
   color: var(--pc-color-text-secondary);
+}
+
+/* 앰버 경고 삼각형 (디자인 값 #f0ad4e) — lucide size prop 대신 유닛을 탄다 */
+.issueWarningIcon {
+  flex: none;
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+  margin-top: calc(1 * var(--pc-u));
+  color: #f0ad4e;
 }
 
 .issueWarning b {

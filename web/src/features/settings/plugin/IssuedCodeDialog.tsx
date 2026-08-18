@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Check, Copy } from 'lucide-react';
+import { Check, Copy, TriangleAlert } from 'lucide-react';
 import { Button, Dialog, IconButton, VisuallyHidden } from '@/ui';
 import type { IssuedPairingCode } from '@/api/streamKeys';
 import { useCountdown } from './useCountdown';
@@ -94,9 +94,14 @@ export function IssuedCodeDialog({
             <p className={styles.issueCountdown} role="timer" aria-label="코드 만료까지 남은 시간">
               {countdown.label} 후 만료돼요
             </p>
+            {/* 텍스트는 span 하나로 감싼다 — flex 컨테이너에 텍스트 노드가 직접 놓이면
+                <b>와 별개 플렉스 아이템으로 쪼개져 줄이 갈라진다(이전 버그) */}
             <div className={styles.issueWarning}>
-              이 코드는 발급 후 <b>10분 동안만</b> 유효해요. 시간이 지나면 자동으로 만료되니, 그
-              안에 OBS 플러그인에 입력해 연동을 마쳐 주세요.
+              <TriangleAlert aria-hidden className={styles.issueWarningIcon} />
+              <span>
+                이 코드는 발급 후 <b>10분 동안만</b> 유효해요. 시간이 지나면 자동으로 만료되니, 그
+                안에 OBS 플러그인에 입력해 연동을 마쳐 주세요.
+              </span>
             </div>
             <Button variant="solid" size="md" className={styles.issueConfirm} onClick={onClose}>
               확인했어요
