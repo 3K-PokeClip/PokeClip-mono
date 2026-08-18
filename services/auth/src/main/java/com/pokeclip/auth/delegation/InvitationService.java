@@ -1,5 +1,7 @@
 package com.pokeclip.auth.delegation;
 
+import com.pokeclip.auth.delegation.api.dto.ReceivedInvitationResponse;
+import com.pokeclip.auth.delegation.api.dto.SentInvitationResponse;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -7,11 +9,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -158,6 +164,38 @@ public class InvitationService {
         }
         log.info("auth.invitation.extended streamerId={} invitationId={}", streamerId, invitationId);
         return invitations.findById(invitationId).orElseThrow();
+    }
+
+    /** 전부 최신순. 거절·만료도 스트리머가 봐야 하므로 거르지 않는다. 페이징은 없다. */
+    @Transactional(readOnly = true)
+    public List<SentInvitationResponse> sentBy(Long streamerId) {
+        List<EditorInvitation> rows = invitations.findByStreamerIdOrderByCreatedAtDesc(streamerId);
+        Map<Long, User> byId = usersOf(rows.stream().map(EditorInvitation::getInviteeId).toList());
+        Instant now = Instant.now();
+        return rows.stream()
+                .map(i -> {
+                    User invitee = byId.get(i.getInviteeId());
+                    return SentInvitationResponse.of(i, invitee.getName(), invitee.getEmail(), now);
+                })
+                .toList();
+    }
+
+    /** 응답할 수 있는 것만 — PENDING이면서 기한이 남은 것. */
+    @Transactional(readOnly = true)
+    public List<ReceivedInvitationResponse> receivedBy(Long inviteeId) {
+        List<EditorInvitation> rows = invitations
+                .findByInviteeIdAndStatusAndExpiresAtGreaterThanEqualOrderByCreatedAtDesc(
+                        inviteeId, InvitationStatus.PENDING, Instant.now());
+        Map<Long, User> byId = usersOf(rows.stream().map(EditorInvitation::getStreamerId).toList());
+        return rows.stream()
+                .map(i -> ReceivedInvitationResponse.of(i, byId.get(i.getStreamerId()).getName()))
+                .toList();
+    }
+
+    /** 행마다 조회하면 N+1이다. 한 번에 읽어 id로 맞춘다. */
+    private Map<Long, User> usersOf(List<Long> ids) {
+        return users.findAllById(ids).stream()
+                .collect(Collectors.toMap(User::getId, u -> u));
     }
 
     private Optional<EditorInvitation> pendingBetween(Long streamerId, Long inviteeId) {
