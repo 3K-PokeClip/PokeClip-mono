@@ -1,10 +1,13 @@
 package com.pokeclip.auth;
 
 import com.pokeclip.auth.support.IntegrationTestSupport;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SchemaMigrationTest extends IntegrationTestSupport {
 
@@ -12,6 +15,22 @@ class SchemaMigrationTest extends IntegrationTestSupport {
 
     SchemaMigrationTest(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+
+    /**
+     * 자기_자신_초대는_DB가_막는다가 심는 users 행을 이 클래스가 직접 거둔다.
+     * DelegationTestSupport의 정리로는 안 덮인다 — 이 클래스는 그걸 상속하지 않는다.
+     *
+     * <p>남겨 두면 <b>실패가 엉뚱한 곳에서 터진다.</b> CHECK 제약이 무너져 자식 행까지
+     * 남는 상태를 만들어 보니 전체 267건 중 66건이 죽었고, 죽은 클래스는
+     * SecretLeakTest·AuthControllerTest·Chzzk* 등 이 표와 무관한 것들뿐이라
+     * 범인을 하나도 가리키지 않았다(transaction-auditor 라운드 1 · 직접 재현).
+     */
+    @AfterEach
+    void 심은_행을_거둔다() {
+        jdbc.update("DELETE FROM editor_invitations WHERE streamer_id IN "
+                + "(SELECT id FROM users WHERE google_sub = 'sub-self-invite-check')");
+        jdbc.update("DELETE FROM users WHERE google_sub = 'sub-self-invite-check'");
     }
 
     @Test
@@ -133,5 +152,77 @@ class SchemaMigrationTest extends IntegrationTestSupport {
         String definition = jdbc.queryForObject(
                 "SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_chzzk_links_user_created'", String.class);
         assertThat(definition).contains("user_id").contains("created_at").doesNotContain("WHERE");
+    }
+
+    @Test
+    void Flyway가_초대와_위임_테이블을_만든다() {
+        var tables = jdbc.queryForList(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+                String.class);
+
+        assertThat(tables).contains("editor_invitations", "editor_delegations");
+    }
+
+    /**
+     * 살아있는 초대는 한 쌍당 하나. 부분 인덱스(WHERE status='PENDING')라는 것까지 못박는다 —
+     * 조건이 빠지면 거절·취소된 이력이 남아 있는 상대에게 재초대가 유니크 위반으로 실패한다.
+     */
+    @Test
+    void 살아있는_초대에_한_쌍당_하나_제약이_걸려_있다() {
+        String definition = jdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = 'uq_invitations_pending_pair'",
+                String.class);
+
+        assertThat(definition)
+                .contains("UNIQUE")
+                .contains("streamer_id")
+                .contains("invitee_id")
+                .contains("PENDING");
+    }
+
+    /** 해제 후 재초대·재수락하면 새 행이 쌓여야 하므로 살아있는 것만 하나로 묶는다. */
+    @Test
+    void 살아있는_위임에_한_쌍당_하나_제약이_걸려_있다() {
+        String definition = jdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = 'uq_delegations_alive_pair'",
+                String.class);
+
+        assertThat(definition)
+                .contains("UNIQUE")
+                .contains("streamer_id")
+                .contains("editor_id")
+                .contains("revoked_at IS NULL");
+    }
+
+    /** 이메일로 계정을 정확히 하나 찾는다는 전제가 DB에 박혀 있어야 한다. */
+    @Test
+    void users_email에_유일_제약이_걸려_있다() {
+        var definitions = jdbc.queryForList(
+                "SELECT indexdef FROM pg_indexes WHERE tablename = 'users'", String.class);
+
+        assertThat(definitions).anyMatch(d -> d.contains("UNIQUE") && d.contains("email"));
+    }
+
+    /**
+     * 자기 자신 초대는 앱에서도 막지만 DB가 최후 방어선이다.
+     *
+     * <p>행을 여기서 직접 심는다. {@code SELECT ... FROM users LIMIT 1}로 쓰면 users가 비었을 때
+     * INSERT가 0행으로 조용히 끝나 <b>예외가 안 나고 테스트가 거짓 실패한다</b> — 이 클래스는
+     * 다른 테스트가 계정을 만들어 뒀는지에 기대면 안 된다(실행 순서는 보장되지 않는다).
+     */
+    @Test
+    void 자기_자신_초대는_DB가_막는다() {
+        Long userId = jdbc.queryForObject(
+                "INSERT INTO users (google_sub, email, name, created_at, updated_at) "
+                        + "VALUES ('sub-self-invite-check', 'self-invite-check@example.com', "
+                        + "'자기초대검증', now(), now()) RETURNING id",
+                Long.class);
+
+        assertThatThrownBy(() -> jdbc.update(
+                "INSERT INTO editor_invitations "
+                        + "(streamer_id, invitee_id, status, expires_at, created_at, updated_at) "
+                        + "VALUES (?, ?, 'PENDING', now() + interval '7 days', now(), now())",
+                userId, userId))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 }

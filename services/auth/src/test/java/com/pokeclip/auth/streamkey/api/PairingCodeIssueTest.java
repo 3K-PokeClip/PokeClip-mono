@@ -156,8 +156,9 @@ class PairingCodeIssueTest extends IntegrationTestSupport {
         return "Bearer " + tokenService.issue(user).accessToken();
     }
 
+    /** 이메일에도 유일 제약이 있다(V108). 한 테스트가 계정을 여럿 만드므로 주소도 흩는다. */
     private User newUser() {
-        return userService.findOrCreate(
-                "sub-" + UUID.randomUUID(), "a@example.com", "김태현", null);
+        String id = UUID.randomUUID().toString();
+        return userService.findOrCreate("sub-" + id, id + "@example.com", "김태현", null);
     }
 }

@@ -12,6 +12,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     Optional<User> findByGoogleSub(String googleSub);
 
+    /** 호출부가 소문자로 넘긴다. 저장도 소문자로 통일돼 있다(UserCreator). */
+    Optional<User> findByEmail(String email);
+
     /**
      * 사용자 행에 쓰기 락을 건다. 같은 사용자의 refresh 회전을 직렬화하는 용도다 —
      * 토큰 테이블이 아니라 사용자 행을 잠그는 이유는, 막아야 할 것이 "아직 존재하지

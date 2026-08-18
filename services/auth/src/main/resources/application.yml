@@ -67,6 +67,13 @@ logging:
     # 구체 로거 레벨이 root보다 우선한다. 그래서 LOGGING_LEVEL_ROOT=debug로 내려도
     # 여기는 info다 — 방어를 "운영에서 DEBUG를 켜지 마라"는 사람의 규칙에 맡기지 않는다.
     org.springframework.web: info
+    # SQL 오류를 WARN으로 찍으면서 <b>제약 위반 행의 값을 그대로 붙인다</b> —
+    # uq_users_email에 걸리면 "Key (email)=(...) already exists"로 이메일이 평문으로 남는다
+    # (authz-auditor 실측). 자바에서 예외를 잡아도 이 줄은 이미 찍힌 뒤라 안 사라진다.
+    # 잃는 정보가 없다: 여기 실리는 내용은 예외에 그대로 들어 있고, 우리 핸들러가
+    # 사유 코드로 로그에 남긴다. 이 프로젝트는 유니크 위반을 정상 제어 흐름으로 쓰기까지
+    # 한다(초대·계정 생성 경합) — 그 WARN은 어차피 잡음이다.
+    org.hibernate.orm.jdbc.error: error
   pattern:
     # 기본 콘솔 형식의 레벨 자리에 상관 ID를 끼워 넣는다. 값이 없으면 빈칸이다.
     # logback-spring.xml을 만들지 않는 이유는 배포가 없어 환경별 형식이

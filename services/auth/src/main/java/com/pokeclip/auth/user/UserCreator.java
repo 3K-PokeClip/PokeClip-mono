@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Locale;
 
 /**
  * 계정 생성만 담당한다. UserService에서 떼어낸 이유는 트랜잭션 경계다 —
@@ -23,9 +24,15 @@ class UserCreator {
 
     private final UserRepository userRepository;
 
+    /**
+     * 이메일을 소문자로 통일해 저장한다. users.email의 유일 제약(V108)이 대소문자를
+     * 구분하므로, 통일하지 않으면 Foo@a.com과 foo@a.com이 둘 다 통과해 초대가
+     * 계정을 정확히 하나 찾지 못한다. 로캘을 ROOT로 못박는 이유는 터키어 로캘에서
+     * I가 점 없는 ı로 바뀌어 같은 주소가 다른 값이 되기 때문이다.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     User create(String googleSub, String email, String name, String profileImageUrl) {
         return userRepository.saveAndFlush(
-                User.of(googleSub, email, name, profileImageUrl, Instant.now()));
+                User.of(googleSub, email.toLowerCase(Locale.ROOT), name, profileImageUrl, Instant.now()));
     }
 }

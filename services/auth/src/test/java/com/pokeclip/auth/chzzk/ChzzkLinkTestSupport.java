@@ -93,8 +93,10 @@ public abstract class ChzzkLinkTestSupport extends IntegrationTestSupport {
         userRepository.deleteAll();
     }
 
+    /** 이메일에도 유일 제약이 있다(V108). 한 테스트가 계정을 여럿 만드므로 주소도 흩는다. */
     protected User newUser() {
-        return userService.findOrCreate("sub-" + UUID.randomUUID(), "a@example.com", "김태현", null);
+        String id = UUID.randomUUID().toString();
+        return userService.findOrCreate("sub-" + id, id + "@example.com", "김태현", null);
     }
 
     protected String bearer(User u) {
