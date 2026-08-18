@@ -138,10 +138,26 @@ DB 접속값은 채우지 않는다.
 | `CHZZK_CLIENT_SECRET` | 그 앱의 Client Secret. 토큰 교환·갱신·철회 요청 본문에만 쓰고 URL·로그 어디에도 안 나간다 |
 | `CHZZK_REDIRECT_URI` | 동의가 끝난 뒤 치지직이 code·state를 돌려줄 주소. **개발자 센터에 앱당 하나만 등록된다** — 그래서 환경마다 앱을 따로 파고, 로컬은 `http://localhost:8081/oauth/chzzk/callback`으로 등록된 앱을 쓴다 |
 
-**`clip`도 DB 접속값 셋이 없으면 부팅에 실패한다** (POK-82에서 POK-161의 규칙을 옮겼다).
-앱 시크릿은 아직 없고, `CORS_ALLOWED_ORIGINS`는 빈 값이 허용된다.
+**`clip`은 환경변수 없이는 부팅에 실패한다. 넷이고, auth와 같은 두 갈래다.**
 
-**`clip`은 환경변수 없이도 뜨지만 방송 이벤트를 받지 않는다.** `BROADCAST_INTAKE_ENABLED`
+| 갈래 | 변수 | 어디서 얻나 |
+|---|---|---|
+| **앱 시크릿 하나** | `CORS_ALLOWED_ORIGINS` | **`.env.example`에 없다** — auth의 앱 시크릿 아홉과 같은 규칙이다. `.env`에 직접 넣는다 |
+| **DB 접속값 셋** | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | `.env`에 있다(POK-82에서 POK-161의 규칙을 옮겼다) |
+
+**`cp .env.example .env`만 하고 `clip`을 띄우면 실패한다** — 그 파일에는 DB 접속값
+셋뿐이라 `CORS_ALLOWED_ORIGINS`가 없다. 실제 실패 원문(2026-08-18 실측):
+
+```
+APPLICATION FAILED TO START
+    Property: pokeclip.cors.allowedOrigins
+    Reason: 비어 있을 수 없습니다
+```
+
+빈 값을 허용하지 않는 이유는 auth와 같다 — 기본값으로 localhost를 주면 운영 배포에
+localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로그는 조용하다.
+
+**환경변수를 갖춰도 방송 이벤트는 안 받는다.** `BROADCAST_INTAKE_ENABLED`
 기본값이 `false`다 — 켜진 채로 두면 CI와 남의 로컬이 뜰 때마다 없는 큐에 붙으려 한다.
 `chat-collector`의 `CHZZK_ENABLED`와 같은 규칙이다.
 
@@ -151,6 +167,10 @@ DB 접속값은 채우지 않는다.
 | `BROADCAST_QUEUE_URL` | 빈 값 | 생명주기 FIFO 큐 주소. **켜져 있을 때만 필수** |
 | `AWS_REGION` | `ap-northeast-2` | **켜짐과 무관하게 필수** — 비면 부팅이 죽는다 |
 | `BROADCAST_QUEUE_ENDPOINT` | 빈 값 | 비면 진짜 AWS. LocalStack 실측 때만 준다 |
+
+`wait-time`(20초)·`max-messages`(10)는 yml에만 있고 환경변수가 없다. **둘 다 SQS가 정한
+상한이 있어 넘기면 부팅이 거부된다**(각각 0~20초, 1~10). 상한을 안 막으면 부팅은
+성공하고 호출만 거부돼 폴링이 매 회차 실패한다.
 
 **켜는 값을 큐 주소와 따로 둔 이유:** 주소가 비었다고 저절로 꺼지면 "로컬에서 일부러
 안 켬"과 "운영에서 설정을 깜빡함"이 똑같이 보인다. 켜져 있는데 주소가 없으면 그건
