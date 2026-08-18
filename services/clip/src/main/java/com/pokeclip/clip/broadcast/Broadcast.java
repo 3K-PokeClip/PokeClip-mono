@@ -98,7 +98,13 @@ public class Broadcast {
             this.status = BroadcastStatus.LIVE;
         }
         this.startedAt = at;
-        this.trackManifest = trackManifest;
+        // null로 덮지 않는다. 이 값은 ADR-016이 정한 broadcast.started payload의
+        // 스냅샷이고 한 번 지워지면 복구 경로가 없다 — 뒤에 온 시작에 트랙 정보가
+        // 없다고 지우면 sequence가 올라간 뒤라 낡은 편지 가드에도 안 걸려 조용히
+        // 사라진다. 빈 placeholder를 뒤늦게 채우는 경로는 그대로 산다.
+        if (trackManifest != null) {
+            this.trackManifest = trackManifest;
+        }
         this.lastSequence = sequence;
         this.updatedAt = Instant.now();
         return true;

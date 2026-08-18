@@ -107,6 +107,40 @@ class BroadcastOrderingTest extends IntegrationTestSupport {
                 });
     }
 
+    /**
+     * 트랙 정보는 ADR-016이 "broadcast.started payload의 스냅샷"으로 정한 값이고
+     * <b>한 번 지워지면 복구 경로가 없다.</b> 뒤에 온 시작에 그 값이 없다고 덮어쓰면,
+     * sequence가 올라갔으니 낡은 편지 가드에도 안 걸려 조용히 사라진다.
+     */
+    @Test
+    void 뒤에_온_시작에_트랙_정보가_없어도_기존_값을_지우지_않는다() {
+        processor.process(Envelopes.startedWithManifest("e1", "s6", 1L));
+        processor.process(Envelopes.started("e2", "s6", 2L));
+
+        assertThat(broadcasts.findByStreamId("s6")).get()
+                .satisfies(b -> {
+                    assertThat(b.getTrackManifest())
+                            .as("트랙 정보가 null로 덮였다 — 복구 경로가 없는 값이다")
+                            .contains("manifestVersion");
+                    assertThat(b.getLastSequence()).as("나머지는 정상 반영된다").isEqualTo(2L);
+                });
+    }
+
+    /**
+     * 위 가드가 지나치게 넓으면 이쪽이 깨진다. 종료 선도착으로 생긴 placeholder는
+     * 트랙 정보가 없는 채로 시작하고, 뒤늦게 도착한 시작 편지가 그것을 채워야 한다.
+     */
+    @Test
+    void placeholder에_뒤늦게_온_시작이_트랙_정보를_채운다() {
+        processor.process(Envelopes.ended("e1", "s7", 1L));
+        processor.process(Envelopes.startedWithManifest("e2", "s7", 2L));
+
+        assertThat(broadcasts.findByStreamId("s7")).get()
+                .satisfies(b -> assertThat(b.getTrackManifest())
+                        .as("빈 placeholder에는 채워져야 한다")
+                        .contains("manifestVersion"));
+    }
+
     @Test
     void 낡은_편지여도_받은_기록에는_남는다() {
         processor.process(Envelopes.ended("e1", "s4", 5L));
