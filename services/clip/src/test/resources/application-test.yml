@@ -8,3 +8,11 @@ spring:
 pokeclip:
   cors:
     allowed-origins: http://localhost:3000
+
+  broadcast:
+    intake:
+      # 테스트는 큐에 안 붙는다. 진짜 왕복은 SqsIntakeEndToEndTest가 LocalStack으로 잰다.
+      enabled: false
+      region: ap-northeast-2
+      wait-time: 20s
+      max-messages: 10

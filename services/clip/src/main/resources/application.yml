@@ -50,6 +50,19 @@ management:
         include: health
 
 pokeclip:
+  broadcast:
+    intake:
+      # 기본이 꺼짐이다. 켜져 있으면 CI·남의 로컬이 뜰 때마다 없는 큐에 붙으려 한다.
+      enabled: ${BROADCAST_INTAKE_ENABLED:false}
+      # 켜져 있을 때만 필수다(IntakeProperties가 검사한다).
+      queue-url: ${BROADCAST_QUEUE_URL:}
+      region: ${AWS_REGION:ap-northeast-2}
+      # 비면 진짜 AWS. 로컬 실측 때만 LocalStack 주소를 준다.
+      endpoint: ${BROADCAST_QUEUE_ENDPOINT:}
+      # SQS 롱폴링 최대값. 짧게 잡으면 빈 응답만 반복해 요청 수가 는다.
+      wait-time: 20s
+      max-messages: 10
+
   cors:
     # 비면 부팅이 실패한다(CorsProperties). 기본값으로 localhost를 주지 않는 이유는
     # 그러면 운영 배포에 localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데

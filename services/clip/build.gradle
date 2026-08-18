@@ -3,6 +3,11 @@ plugins {
     id 'org.springframework.boot'
 }
 
+dependencyManagement {
+    // Boot 4.1.0 BOM은 AWS SDK를 관리하지 않는다 — 여기서 한 번만 박는다.
+    imports { mavenBom 'software.amazon.awssdk:bom:2.46.7' }
+}
+
 dependencies {
     implementation project(':common')
     implementation project(':web-support')
@@ -17,12 +22,22 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-flyway'
     implementation 'org.flywaydb:flyway-database-postgresql'
 
+    implementation 'software.amazon.awssdk:sqs'
+    // sqs가 apache5-client를 runtime으로 이미 딸려온다 — 이 줄이 그것을 막는 것은
+    // 아니다. 둘 다 SPI(META-INF/services/…SdkHttpService)에 등록되므로 어느 쪽이
+    // 쓰일지가 클래스패스 순서에 달리고, Apache가 걸리면 그쪽 wire 로거가 상위
+    // DEBUG·TRACE에서 요청 서명을 대량으로 찍는다. 그래서 SqsClient를 만드는 자리마다
+    // httpClient(...)로 이쪽을 명시하고, 그 이름을 여기서 컴파일에 보이게 둔다.
+    implementation 'software.amazon.awssdk:url-connection-client'
+
     runtimeOnly 'org.postgresql:postgresql'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     testImplementation 'org.testcontainers:testcontainers-postgresql'
+    // 가짜 SQS. 2.x 좌표다 — 1.x의 org.testcontainers:localstack가 아니다.
+    testImplementation 'org.testcontainers:testcontainers-localstack'
 
     // LogCaptor. 경고가 실제로 찍히는지 로그에서 직접 확인한다(auth·chat-collector와 같은 방식).
     testImplementation testFixtures(project(':web-support'))
