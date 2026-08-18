@@ -278,14 +278,16 @@ auth·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 심어 
 | 인증 | 구글 로그인·자동가입 · 토큰 발급/회전/로그아웃 · `/api/auth/me` |
 | 스트림키 | 발급 · 검증(계약4) · 페어링 코드 발급/교환 · 재발급 (POK-56) |
 | 채널 연동 | 치지직 동의 왕복 · 토큰 보관(참조만) · 10분 주기 자동 갱신 · 수집기용 resolve · 해제·상태 조회 (POK-93) |
+| 편집자 위임 | 이메일 초대 · 초대함 수락/거절 · 보낸 초대 취소 · 위임 조회 · 양방향 해제 (POK-57) |
 | 운영 | 이벤트 로깅 · 요청 상관 ID · CORS · 구글 호출 타임아웃 |
 
-표는 일곱이다 — `users`·`refresh_tokens`(V101·V102) ·
+표는 아홉이다 — `users`·`refresh_tokens`(V101·V102) ·
 `secrets`·`stream_keys`·`pairing_codes`·`pairing_exchange_attempts`(V103~V106) ·
-`chzzk_channel_links`(V107).
+`chzzk_channel_links`(V107) · `editor_invitations`·`editor_delegations`(V108).
 
 엔드포인트 열: 스트림키 다섯(**계약4 = `POST /internal/stream-keys/resolve`** — 1번 Media가 SRT 연결을
-받기 전에 한 번 부른다) · 치지직 연동 다섯(아래 절). `contracts/api/`에 정본이 아직 없어 여기 적어 둔다.
+받기 전에 한 번 부른다) · 치지직 연동 다섯 · 편집자 위임 아홉(아래 절).
+`contracts/api/`에 정본이 아직 없어 여기 적어 둔다.
 
 | | 부르는 쪽 | 인증 |
 |---|---|---|
@@ -299,6 +301,15 @@ auth·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 심어 
 | `GET /api/chzzk-link` | 웹 | 사용자 JWT |
 | `DELETE /api/chzzk-link` | 웹 | 사용자 JWT |
 | `POST /internal/chzzk-link/resolve` | **chat-collector** | `X-Internal-Token` 헤더 |
+| `POST /api/editor-invitations` | 웹 | 사용자 JWT |
+| `GET /api/editor-invitations/sent` | 웹 | 사용자 JWT |
+| `GET /api/editor-invitations/received` | 웹 | 사용자 JWT |
+| `DELETE /api/editor-invitations/{id}` | 웹 | 사용자 JWT |
+| `POST /api/editor-invitations/{id}/accept` | 웹 | 사용자 JWT |
+| `POST /api/editor-invitations/{id}/decline` | 웹 | 사용자 JWT |
+| `GET /api/editor-delegations/as-streamer` | 웹 | 사용자 JWT |
+| `GET /api/editor-delegations/as-editor` | 웹 | 사용자 JWT |
+| `DELETE /api/editor-delegations/{id}` | 웹 | 사용자 JWT |
 
 `resolve`는 **키가 틀려도 HTTP 200에 `valid:false`**로 답한다. Media에게
 "키가 틀림"(연결 거절)과 "Auth 장애"(판단 불가)는 조치가 정반대라 둘 다 4xx면
@@ -358,6 +369,77 @@ secrets 삭제 뒤에 찍힌다(정리까지 끝났다는 순서 로그) — 큐
 WARN이 신호다. requestId는 잡이 값으로 옮긴다. 정리 스레드 자체의 것은 `auth.chzzk.cleanup.<event>` —
 `rejected`(큐 상한 초과, WARN)·`failed`·`shutdown_timeout`.
 값은 userId·status·hint·causeType·reason·pending만 — 토큰·code·state·channelId는 찍지 않는다.
+
+### 편집자 초대 (POK-57)
+
+**돈 내는 쪽(스트리머)과 매일 쓰는 쪽(편집자)이 다르다.** 스트리머가 이메일로 편집자를
+초대하고, 편집자가 수락하면 **위임**이 생긴다.
+
+**auth가 하는 일은 「위임이 있다」는 사실을 만들고 보관하는 것까지다.** 그 위임으로 편집자가
+실제로 무엇을 할 수 있는지는 앞으로 각 서비스가 조회해서 정하게 **된다** —
+**그 조회용 internal API는 아직 없다**(지금 있는 것은 스트림키·치지직 연동 둘뿐이다).
+POK-57이 **일부러 안 만든 것**이다 — `clip`이 아직 껍데기라 소비자가 없고, `contracts/`는
+3인 공동이라 혼자 정하지 않는다. auth 안에도 위임을 보고 권한을 내주는 엔드포인트는 없다.
+위임 행은 초대 중복 검사 · **수락 시 생성** · 목록 · 해제에만 쓰인다.
+
+**수락 전에는 편집자의 위임 목록에 그 스트리머가 나오지 않고 그 데이터에 접근할 수 없다**
+(PRD 성공기준). 초대함에는 **누가 보냈는지(이름과 id)만** 보인다 — 그게 없으면 응답할 수 없다.
+
+**초대는 7일 살아 있다.** 같은 상대에게 **살아있는 초대가 있는 동안** 다시 초대하면 새 행이
+생기지 않고 **그 초대의 기한만 7일로 다시 밀린다** — 한 쌍당 살아있는 초대는 하나다.
+버튼을 연타하거나 같은 요청이 두 번 와도 결과가 같다.
+**거절·취소된 이력은 지워지지 않고 그대로 쌓인다** — 그 뒤에 다시 초대하면 새 행이 생긴다.
+「하나」는 살아있는 초대에만 해당하지 그 쌍의 전체 행 수가 아니다.
+
+**살아있는 초대는 스트리머당 20개까지.** 자리를 비우려면 보낸 초대를 취소한다.
+**이 상한은 근사값이다** — 동시에 여러 요청이 들어오면 잠깐 넘을 수 있다. 세는 것과 만드는
+것 사이를 락으로 묶지 않았기 때문이다. 일부러 그렇게 뒀다: 상한은 자원 가드지 보안 경계가
+아니고, 정확히 막으려면 로그인·스트림키 회전이 이미 쓰는 계정 행 락을 초대까지 끌어와야 해서
+얻는 것보다 치르는 값이 크다. 넘더라도 권한 없는 편집자가 생기지는 않는다.
+
+**상태는 다섯이다.** `PENDING` · `ACCEPTED` · `DECLINED` · `CANCELED` · `EXPIRED`.
+**`EXPIRED`는 DB에 없다** — 조회 시점에 기한을 보고 만들어 준다. 만료 시각에 값을 바꿔주는
+배치를 두지 않으려는 선택이다(치지직 연동과 같은 원칙). 기한과 **같은 시각은 아직 살아 있고**,
+지난 뒤부터 만료다.
+
+**목록 둘의 범위가 다르다.** `sent`는 거절·만료까지 **전부** 최신순으로 준다(스트리머가 이력을
+봐야 한다. 페이징은 아직 없다). `received`는 **응답할 수 있는 것만** — `PENDING`이면서 기한이
+남은 것. 이미 처리했거나 만료된 초대를 초대함에 남기면 눌러도 실패한다.
+
+**해제는 엔드포인트 하나다.** `DELETE /api/editor-delegations/{id}`를 스트리머가 부르면
+내보내기, 편집자가 부르면 나가기다. **행을 지우지 않고** `revoked_at`·`revoked_by`로 닫는다 —
+내보낸 것과 나간 것은 다른 사건이라 구분해 남긴다. 한 번 정해진 `revoked_by`는 안 바뀐다.
+해제한 뒤 다시 초대·수락하면 **새 행이 쌓인다.**
+
+**실패 사유 여덟.** 남의 초대·위임은 존재 여부를 알려주지 않는다 — 없는 것과 **같은 404**다.
+가려서 답하면 id를 훑어 남의 초대가 있는지 알아낼 수 있다.
+
+| 사유 | 코드 | 언제 |
+|---|---|---|
+| `INVITEE_NOT_FOUND` | 404 | 그 이메일로 가입한 계정이 없다 |
+| `SELF_INVITE` | 400 | 자기 자신을 초대했다 |
+| `ALREADY_EDITOR` | 409 | 이미 살아있는 위임이 있다 |
+| `TOO_MANY_PENDING` | 409 | 살아있는 초대가 20개다 |
+| `INVITATION_NOT_FOUND` | 404 | 없거나 남의 초대다 |
+| `INVITATION_EXPIRED` | 410 | 7일이 지났다 |
+| `INVITATION_NOT_PENDING` | 409 | 이미 수락·거절·취소됐다 |
+| `DELEGATION_NOT_FOUND` | 404 | 없거나 내 위임이 아니다 |
+
+**우리 코드는 이메일을 로그에 찍지 않는다.** 개인정보이고, 실패 로그로 쌓이면 "이 주소가
+가입돼 있나"를 훑은 흔적이 파일에 남는다. 로그에는 id와 사유 코드만 찍는다.
+DB 제약 위반 메시지에 주소가 실려 오던 경로도 닫았다(`org.hibernate.orm.jdbc.error`를 낮췄다).
+
+**다만 한 곳은 프레임워크가 찍는다** — 요청 본문의 이메일이 형식·길이 검증에 걸리면 스프링이
+거부된 값을 WARN으로 남긴다(`DefaultHandlerExceptionResolver`). **거기 남는 것은 가입될 수
+없는 값뿐이다** — 형식이 틀렸거나 320자를 넘는 주소. 열거는 유효하고 등록 가능한 주소로 하는데
+그런 값은 검증을 통과해 이 경로에 오지 않으므로, 걱정한 열거 흔적은 쌓이지 않는다.
+
+**같은 이메일에 다른 구글 계정이 로그인하면 409로 거절한다** (2026-08-18).
+POK-57이 `users.email`에 유일 제약을 걸면서 생긴 경로다 — 구글 계정을 지웠다 같은 주소로
+다시 만들면 계정 식별자(`sub`)가 바뀌어 여기 온다. 이메일이 초대의 열쇠라 두 계정이 같은
+주소를 나눠 가질 수 없다. 응답은 `{"reason":"EMAIL_ALREADY_REGISTERED"}`이고, **어느 주소인지는
+응답에도 로그에도 싣지 않는다.** 다른 인증 실패와 달리 이유를 알려 주는 것은, 사용자가 직접
+풀어야 하는 상태 충돌이라 안 알려주면 재시도만 반복하기 때문이다.
 
 ### chat-collector — 치지직 채팅 수신 (POK-85) · 자동 재연결 (POK-86) · 적재 (POK-84) · S3 원본 아카이브 (POK-116)
 

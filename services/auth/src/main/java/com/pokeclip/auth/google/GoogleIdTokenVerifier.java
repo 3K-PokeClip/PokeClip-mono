@@ -47,9 +47,15 @@ public class GoogleIdTokenVerifier {
             throw new AuthException(AuthFailure.GOOGLE_ID_TOKEN_INVALID, "구글 id_token 검증 실패", e);
         }
 
-        // email_verified를 보지 않는다. 계정 식별은 sub로만 하고 이메일은 표시용이라
-        // 미인증 이메일이 남의 계정으로 이어지지 않는다. 다만 편집자 초대를 이메일로
-        // 매칭하게 되면 그때는 봐야 한다 — 미인증 이메일이 위임 탈취 경로가 된다.
+        // email_verified를 보지 않는다. 계정 식별은 sub로만 한다.
+        //
+        // POK-57(2026-08-18)로 이메일이 편집자 초대의 열쇠가 됐는데도 이 검사를 넣지
+        // 않았다 — 사용자 결정으로 보류했다. 그래서 지금은 미인증 이메일로 가입한 계정이
+        // 남에게 갈 초대를 대신 받을 수 있다. 운영 전에 갚는다(auth/CLAUDE.md 알려진 구멍).
+        //
+        // 같은 POK-57에서 users.email에 유일 제약이 생겨, 같은 주소를 다른 sub가 들고 오면
+        // 409로 거절된다(AuthFailure.EMAIL_ALREADY_REGISTERED). 그건 주소를 나눠 갖는 것을
+        // 막을 뿐이고, 미인증 주소로 먼저 선점하는 위 경로는 그대로 열려 있다.
         return new GoogleUser(
                 jwt.getSubject(),
                 jwt.getClaimAsString("email"),
