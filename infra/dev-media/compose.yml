@@ -1,0 +1,41 @@
+# 멘토 데모용 임시 media 서버 (기한부: 2026-08-24 만료, README.md 참조)
+# 팀 공용 로컬 환경(docker-compose.yml · infra/compose/)과 별개다 — 이 파일은 데모 상자에서만 쓴다.
+#
+# 기동:  sudo docker compose --env-file "$DEMO_HOME/.env" -f infra/dev-media/compose.yml up -d
+# 확인:  같은 명령의 up -d 자리에 config — 포트에 8890/udp 가 찍히는지, bind source 가 절대경로인지 눈으로 본다.
+#
+# ${DEMO_HOME} 은 반드시 절대경로다(render.sh 가드 5, 총 6종). 상대경로면 bind 가 딴 디렉토리나 named volume 이 된다.
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.19.3
+    user: "10002:10002" # 비특권 실행 승계(ADR-039). 공식 이미지를 UID 지정으로 돌려도 정상임은 실측됨
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: UTC
+    ports:
+      # SRT 인제스트 — OBS 가 컨테이너에 직접 닿아야 하므로 반드시 publish 한다(빠지면 송출 전면 실패).
+      - "8890:8890/udp"
+      # HLS 8888 은 publish 하지 않는다 — edge(nginx)만 내부 네트워크로 접근한다(결정 1).
+    volumes:
+      - ${DEMO_HOME}/mediamtx.demo.yml:/mediamtx.yml:ro # render.sh 산출물(root:10002 0640 — 컨테이너는 그룹 읽기만)
+      - ${DEMO_HOME}/dvr:/dvr # LL-HLS 세그먼트 디스크 오프로드
+
+  edge:
+    image: nginx:1-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: UTC
+    ports:
+      - "8888:8888" # 외부에 열리는 유일한 TCP 포트 (SG 는 팀 IP/32 로만 허용)
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./player.html:/www/player.html:ro
+      # hls.js 폴백 — MediaMTX 동봉본 /{path}/hls.min.js 가 안 나올 때만 주석을 푼다(RUNBOOK "hls.js 폴백")
+      # - ${DEMO_HOME}/hls.min.js:/www/hls.min.js:ro
+    depends_on:
+      - mediamtx
