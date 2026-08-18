@@ -1,0 +1,51 @@
+# main으로 오는 PR의 출처를 강제한다 — develop(릴리스)과 hotfix/*(긴급) 둘뿐이다.
+#
+# 왜 워크플로냐: 브랜치 보호에는 "PR 출처 브랜치 제한" 항목이 아예 없다. classic 보호에도,
+# ruleset의 브랜치 규칙 16종에도 없다(2026-08-18 확인). "Require a pull request before merging"은
+# PR을 거치라는 것까지만 강제하고 어느 브랜치에서 온 PR이냐는 보지 않는다.
+# 그래서 필수 체크로 대신 만든다.
+#
+# media-ci와 달리 집계 잡(changes/check/gate 3층)이 필요 없다. 아래 branches: 필터는
+# **base** 브랜치를 보므로 main 대상 PR에는 이 체크가 항상 생기고, develop 대상 PR에는
+# 아예 안 생기는데 develop 보호가 이 체크를 요구하지 않아 Pending으로 잠기지 않는다.
+# (필수 체크는 브랜치별 설정이다. 이 체크는 main 보호에만 등록한다.)
+name: main-source
+
+on:
+  pull_request:
+    branches: [main]
+    # edited가 반드시 있어야 한다. base를 develop에서 main으로 바꾸는 순간 오는 이벤트가
+    # 이것뿐이라, 빠뜨리면 리타게팅 한 번으로 이 검사를 통째로 우회할 수 있다.
+    # (base 변경은 synchronize를 발생시키지 않는다.)
+    types: [opened, reopened, synchronize, edited]
+
+# 판정에 GitHub API를 쓰지 않는다. 체크아웃도 하지 않는다 — 브랜치 이름만 보면 된다.
+permissions: {}
+
+jobs:
+  # 주의: 이 잡 id는 main 브랜치 보호의 "필수 체크 이름" 그 자체다(체크 런 이름 = 잡 id).
+  #   바꾸려면 반드시 같은 작업에서 두 곳을 함께 고친다:
+  #     (1) 이 잡 id   (2) .../branches/main/protection/required_status_checks 의 checks
+  #   한쪽만 바꾸면 보호가 존재하지 않는 체크를 기다려 main 대상 PR이 전부 Pending으로 잠긴다.
+  main-source-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # 브랜치 이름을 ${{ }}로 run 스크립트에 직접 박지 않고 env로 넘긴다.
+      # 이 저장소는 public이라 포크에서 임의 이름의 브랜치로 PR을 열 수 있고,
+      # 직접 보간하면 브랜치 이름이 셸 코드로 실행된다(스크립트 인젝션).
+      - name: 출처 브랜치 판정
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          case "$HEAD_REF" in
+            develop|hotfix/*)
+              echo "허용된 출처: $HEAD_REF"
+              ;;
+            *)
+              echo "main으로 오는 PR의 출처는 develop 또는 hotfix/* 뿐이다 (지금: $HEAD_REF)" >&2
+              echo "기능이면 develop으로 올려라. 긴급 수정이면 main에서 hotfix/*를 파라." >&2
+              exit 1
+              ;;
+          esac
