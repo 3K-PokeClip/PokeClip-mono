@@ -71,6 +71,8 @@ describe('OAuthCallbackScreen', () => {
     '/\\evil.example',
     '/\n/evil.example',
     '/\t/evil.example',
+    // 같은 오리진 절대 URL + "//" 경로 — pathname이 프로토콜 상대 URL로 재해석되는 우회
+    `${window.location.origin}//evil.example`,
   ])(
     '심긴 외부 URL returnTo(%s)는 무시하고 홈으로 보낸다 — 오픈 리다이렉트 방지',
     async (planted) => {

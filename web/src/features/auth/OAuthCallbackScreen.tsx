@@ -26,7 +26,15 @@ function sanitizeReturnTo(returnTo: string | null): string {
   if (returnTo !== null) {
     try {
       const url = new URL(returnTo, window.location.origin);
-      if (url.origin === window.location.origin) return url.pathname + url.search + url.hash;
+      const path = url.pathname + url.search + url.hash;
+      // 반환한 경로 문자열은 내비게이션에서 한 번 더 URL로 해석된다 — 같은 오리진 절대
+      // URL("https://우리//evil.com")의 pathname "//evil.com"이 프로토콜 상대 URL로
+      // 재해석되는 우회까지 막으려면, 재해석 결과의 오리진으로 최종 판정해야 한다.
+      if (
+        url.origin === window.location.origin &&
+        new URL(path, window.location.origin).origin === window.location.origin
+      )
+        return path;
     } catch {
       /* 파싱 불가 — 홈으로 */
     }
