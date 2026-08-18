@@ -8,6 +8,8 @@ import com.pokeclip.auth.google.GoogleUser;
 import com.pokeclip.auth.support.IntegrationTestSupport;
 import com.pokeclip.auth.token.RefreshTokenRepository;
 import com.pokeclip.auth.user.UserRepository;
+import com.pokeclip.auth.user.UserService;
+import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -32,16 +34,18 @@ class AuthControllerTest extends IntegrationTestSupport {
     private final MockMvc mockMvc;
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final UserService userService;
 
     // 목 빈은 컨텍스트 수준에서 교체되므로 필드로 둔다. 생성자 주입 대상이 아니다.
     @MockitoBean GoogleTokenClient googleTokenClient;
     @MockitoBean GoogleIdTokenVerifier googleIdTokenVerifier;
 
     AuthControllerTest(MockMvc mockMvc, UserRepository userRepository,
-                       RefreshTokenRepository refreshTokenRepository) {
+                       RefreshTokenRepository refreshTokenRepository, UserService userService) {
         this.mockMvc = mockMvc;
         this.userRepository = userRepository;
         this.refreshTokenRepository = refreshTokenRepository;
+        this.userService = userService;
     }
 
     @BeforeEach
@@ -235,5 +239,43 @@ class AuthControllerTest extends IntegrationTestSupport {
         return mockMvc.perform(post("/api/auth/refresh")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"refreshToken\":\"" + refreshToken + "\"}"));
+    }
+
+    /**
+     * 같은 이메일에 <b>다른 구글 계정</b>이 로그인하면 정중히 거절한다(사용자 결정 2026-08-18).
+     * 구글 계정을 지웠다 같은 주소로 다시 만들면 sub가 바뀌어 이 경로에 온다.
+     *
+     * <p>V108의 uq_users_email이 열었고, 고치기 전에는 <b>500</b>이었다 —
+     * AuthService.loginWithGoogle에 catch가 없고 DataIntegrityViolationException을
+     * 다루는 핸들러도 없었다. 409인 이유는 요청 자체는 유효한데 현재 상태와 충돌해서다.
+     *
+     * <p><b>이메일은 응답에도 로그에도 안 실린다.</b> 고객 문의가 왔을 때 로그의 사유 코드만
+     * 보고 무슨 일인지 알 수 있어야 하되, 주소가 파일에 쌓이면 안 된다.
+     * Hibernate가 던지기 전에 찍던 WARN까지 같이 막혔는지를 LogCaptor로 확인한다.
+     */
+    @Test
+    void 같은_이메일에_다른_구글_계정이_로그인하면_409고_이메일이_안_샌다() throws Exception {
+        String email = "taken@example.com";
+        userService.findOrCreate("sub-original", email, "먼저", null);
+        given(googleTokenClient.exchangeCodeForIdToken("code-dup")).willReturn("id-dup");
+        given(googleIdTokenVerifier.verify("id-dup"))
+                .willReturn(new GoogleUser("sub-different", email, "나중", null));
+
+        String body;
+        try (LogCaptor logs = new LogCaptor()) {
+            body = mockMvc.perform(post("/api/auth/google")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                     {"code":"code-dup"}
+                                     """))
+                    .andExpect(status().isConflict())
+                    .andReturn().getResponse().getContentAsString();
+
+            assertThat(logs.messages()).noneMatch(m -> m.contains(email));
+            assertThat(logs.messages()).anyMatch(m -> m.contains("EMAIL_ALREADY_REGISTERED"));
+        }
+
+        assertThat(body).doesNotContain(email);
+        assertThat(userRepository.count()).isEqualTo(1);
     }
 }

@@ -27,6 +27,17 @@ public enum AuthFailure {
 
     ACCESS_TOKEN_SUBJECT_INVALID,
 
+    /**
+     * 새 google_sub인데 이메일이 이미 다른 계정에 있다. V108의 uq_users_email이 연 경로다 —
+     * 구글 계정을 지웠다 같은 주소로 다시 만들면 sub가 바뀌어 여기 온다.
+     *
+     * <p><b>이 사유만 409로 답하고 이유를 알려 준다</b>(사용자 결정 2026-08-18 — "정중히 거절").
+     * 나머지 인증 실패는 전부 401 일반 응답 그대로다. 갈리는 근거는 감출 이익이 없다는 것이다 —
+     * 사용자가 직접 풀어야 하는 상태 충돌이라 안 알려주면 재시도만 반복한다.
+     * <b>이메일은 응답에도 로그에도 안 실린다.</b>
+     */
+    EMAIL_ALREADY_REGISTERED,
+
     /** 인증 실패가 아니라 데이터 불일치. DataInconsistencyException이 쓴다. */
     USER_NOT_FOUND
 }

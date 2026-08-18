@@ -1,6 +1,8 @@
 package com.pokeclip.auth.user;
 
+import com.pokeclip.auth.AuthException;
 import com.pokeclip.auth.support.IntegrationTestSupport;
+import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -10,6 +12,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 class UserServiceTest extends IntegrationTestSupport {
 
@@ -76,5 +79,37 @@ class UserServiceTest extends IntegrationTestSupport {
         userService.findOrCreate("sub-find", "Bar@Example.COM", "이름", null);
 
         assertThat(userRepository.findByEmail("bar@example.com")).isPresent();
+    }
+
+    /**
+     * V108이 users.email에 유일 제약을 걸면서 열린 경로다 — 구글 계정을 지웠다 같은 주소로
+     * 다시 만들면 sub가 바뀌어 여기 온다. 그전에는 그냥 두 번째 행이 생기고 끝났다.
+     *
+     * <p><b>재조회가 google_sub으로만 회수하므로 이 조합은 빈손이고, 예외가 그대로 밖으로
+     * 나간다. 그 메시지에 이메일이 평문으로 들어 있다</b>(authz-auditor 라운드 1 중대 1).
+     * 던지기 전에 Hibernate가 org.hibernate.orm.jdbc.error로 이미 WARN을 찍는데,
+     * 이건 자바에서 잡아도 안 사라진다 — application.yml에서 그 로거를 낮춰야 한다.
+     * 그래서 <b>예외와 로그 둘 다</b> 단언한다.
+     *
+     * <p>예외 타입·사유 이름은 <b>잠정</b>이다. 클라이언트에 어떤 코드로 답할지는 사용자
+     * 결정을 기다리는 중이고, 지금은 401 일반 응답이라 새 정보가 나가지 않는다.
+     */
+    @Test
+    void 같은_이메일_다른_sub로_가입해도_이메일이_예외에도_로그에도_안_실린다() {
+        String email = "dup-check@example.com";
+        userService.findOrCreate("sub-first", email, "먼저", null);
+
+        Throwable thrown;
+        try (LogCaptor logs = new LogCaptor()) {
+            thrown = catchThrowable(() -> userService.findOrCreate("sub-second", email, "나중", null));
+
+            assertThat(logs.messages()).noneMatch(m -> m.contains(email));
+        }
+
+        assertThat(thrown).isInstanceOf(AuthException.class);
+        assertThat(String.valueOf(thrown)).doesNotContain(email);
+        // 원인을 달면 체인에 이메일이 남는다. 스택트레이스를 찍는 곳이 하나만 생겨도 샌다.
+        assertThat(thrown.getCause()).isNull();
+        assertThat(userRepository.count()).isEqualTo(1);
     }
 }
