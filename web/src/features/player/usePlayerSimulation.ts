@@ -1,11 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AUTO_HIDE_MS, LIVE_WINDOW_SECONDS, behindFromSeekFraction, isAtEdge } from './playerMath';
+import { LIVE_WINDOW_SECONDS, behindFromSeekFraction, isAtEdge } from './playerMath';
+import { useControlsAutoHide } from './useControlsAutoHide';
 
 // 라이브 재생 시뮬레이션 — 실제 미디어 없이 시안(영상 플레이어 글래스)의 동작을 재현한다.
-// POK-23에서 이 훅 내부만 hls.js 이벤트·<video> 바인딩으로 갈아끼우면
-// 플레이어 UI는 그대로 쓴다 (usePluginMockState 선례). 반환 형태가 그 계약이다.
+// 실재생 경로는 useHlsPlayback — GlassPlayer가 src 유무로 고르며, 이 훅은 src 없는
+// 목업 전용이다. PlayerSimulation 반환 형태가 두 훅이 지키는 계약이다.
 
 /** 클립 구간 마커가 시크바에 남는 시간 (시안 값) */
 export const CLIP_MARK_MS = 3000;
@@ -58,9 +59,8 @@ export function usePlayerSimulation(options: PlayerSimulationOptions = {}): Play
   const [quality, setQuality] = useState<PlayerQuality>(PLAYER_QUALITIES[0]);
   const [lowLatency, setLowLatency] = useState(true);
   const [clipMarked, setClipMarked] = useState(false);
-  const [controlsVisible, setControlsVisible] = useState(true);
+  const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
 
-  const hideTimer = useRef<number>(undefined);
   const clipTimer = useRef<number>(undefined);
 
   // 방송 시간은 항상 흐르고, 일시정지 중엔 라이브 엣지에서 뒤처진다 (DVR).
@@ -72,35 +72,7 @@ export function usePlayerSimulation(options: PlayerSimulationOptions = {}): Play
     return () => window.clearInterval(tick);
   }, [playing]);
 
-  useEffect(
-    () => () => {
-      window.clearTimeout(hideTimer.current);
-      window.clearTimeout(clipTimer.current);
-    },
-    [],
-  );
-
-  const armHide = useCallback(() => {
-    window.clearTimeout(hideTimer.current);
-    hideTimer.current = window.setTimeout(() => setControlsVisible(false), AUTO_HIDE_MS);
-  }, []);
-
-  // 마우스를 움직이지 않아도 재생이 시작되면 자동 숨김이 걸려야 한다 (마운트 직후 포함).
-  // 일시정지 중엔 어차피 컨트롤을 강제 표시하므로 타이머만 풀어 둔다.
-  useEffect(() => {
-    if (playing) armHide();
-    else window.clearTimeout(hideTimer.current);
-  }, [playing, armHide]);
-
-  const wake = useCallback(() => {
-    setControlsVisible(true);
-    armHide();
-  }, [armHide]);
-
-  const sleep = useCallback(() => {
-    window.clearTimeout(hideTimer.current);
-    setControlsVisible(false);
-  }, []);
+  useEffect(() => () => window.clearTimeout(clipTimer.current), []);
 
   const togglePlay = useCallback(() => {
     setPlaying((p) => !p);
