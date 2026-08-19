@@ -33,6 +33,16 @@
   color: rgb(224 242 254 / 0.45);
 }
 
+/* 실재생 <video> — videoSlot을 꽉 채우고, 비율이 다르면 검은 여백으로 감싼다 */
+.video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
 /* ---------- 오버레이 표시/숨김 ---------- */
 
 .topOverlay,

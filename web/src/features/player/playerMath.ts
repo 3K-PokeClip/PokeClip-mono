@@ -8,6 +8,15 @@ export const LIVE_WINDOW_SECONDS = 3600;
 /** 이 값 미만의 시차는 라이브 엣지로 간주하고 0으로 스냅한다 */
 export const AT_EDGE_THRESHOLD_SECONDS = 3;
 
+/**
+ * liveSyncPosition을 모를 때(Safari 네이티브·MSE 미부착) 라이브 끝에서 물러날 거리 —
+ * 정확히 range.end에 붙이면 부분 세그먼트를 기다리며 멎는다
+ * (infra/dev-media/player.html의 LIVE_EDGE_BACKOFF와 같은 값).
+ * 시차를 이 지점(dvrWindow의 liveEdgePosition) 기준으로 재므로 스냅 직후 시차는 0이고,
+ * 따라서 AT_EDGE_THRESHOLD_SECONDS와 묶이지 않는다.
+ */
+export const LIVE_EDGE_BACKOFF_SECONDS = 3;
+
 /** 재생 중 컨트롤 자동 숨김 지연 (디자인 시안 값) */
 export const AUTO_HIDE_MS = 2800;
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AT_EDGE_THRESHOLD_SECONDS,
+  LIVE_EDGE_BACKOFF_SECONDS,
   LIVE_WINDOW_SECONDS,
   behindFromSeekFraction,
   formatBehind,
@@ -68,5 +69,13 @@ describe('isAtEdge', () => {
     expect(isAtEdge(0)).toBe(true);
     expect(isAtEdge(AT_EDGE_THRESHOLD_SECONDS - 1)).toBe(true);
     expect(isAtEdge(AT_EDGE_THRESHOLD_SECONDS)).toBe(false);
+  });
+});
+
+describe('LIVE_EDGE_BACKOFF_SECONDS', () => {
+  // 임계값과의 관계는 여기서 검증하지 않는다 — 시차를 백오프 지점 기준으로 재므로
+  // 스냅 직후 시차는 0이다. 실제 회귀(스냅 → 재칠)는 dvrWindow.test.ts가 잡는다.
+  it('부분 세그먼트를 피하려면 0보다 커야 한다', () => {
+    expect(LIVE_EDGE_BACKOFF_SECONDS).toBeGreaterThan(0);
   });
 });
