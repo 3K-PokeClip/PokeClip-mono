@@ -1,0 +1,102 @@
+# services/ 가 develop 에 들어오면 dev 서버(dev.pokeclip.com)를 그 코드로 갱신한다.
+#
+# 이미지는 EC2 에서 직접 굽는다. 레지스트리(ECR)를 거치지 않는 이유는 t3.small 이
+# 실측에서 빌드를 견뎠고(2026-08-19: 빌드 후 가용 1314MB·디스크 3.9GB 여유),
+# 레지스트리를 넣으면 리포지토리·수명주기 정책·pull 권한이 함께 늘기 때문이다.
+# 빌드가 EC2 를 넘어서는 날 ECR 로 옮긴다 — 그때 바뀌는 것은 이 파일뿐이다.
+#
+# 자격증명은 OIDC 다. 액세스 키를 Secrets 에 두지 않는다 — mono 는 public 이고,
+# 키는 만든 순간부터 회수·교체 대상이 된다.
+name: services-deploy
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - 'services/**'
+      - '.github/workflows/services-deploy.yml' # 이 파일을 고치는 커밋은 이 파일로 검증한다
+
+# id-token 이 OIDC 토큰 발급에 필요하다. contents 는 checkout 용이 아니라
+# (이 잡은 체크아웃하지 않는다) 기본값을 좁히기 위해 명시한다.
+permissions:
+  id-token: write
+  contents: read
+
+# 배포는 겹치면 안 된다. cancel-in-progress 를 켜지 않는 이유는 배포를 중간에
+# 끊으면 EC2 가 "새 코드로 체크아웃됐는데 컨테이너는 옛 이미지"인 상태로 남기 때문이다.
+concurrency:
+  group: services-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::187478112557:role/pokeclip-dev-deploy
+          aws-region: ap-northeast-2
+
+      - name: dev 서버를 최신 develop 으로 갱신한다
+        env:
+          INSTANCE_ID: i-07bcb578cb12f7ade
+          # 이 잡이 SSM 으로 EC2 에 넘기는 셸이다. GITHUB_SHA 를 박아 두면
+          # 배포된 커밋이 무엇인지 EC2 쪽 로그만 봐도 확정된다.
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --timeout-seconds 1800 \
+            --comment "deploy $SHA" \
+            --parameters "commands=[
+              'set -e',
+              'cd /home/ec2-user/pokeclip-mono',
+              'sudo -u ec2-user git fetch --depth 1 origin develop',
+              'sudo -u ec2-user git checkout -B develop FETCH_HEAD',
+              'sudo -u ec2-user git log --oneline -1',
+              'cd services',
+              'sudo -u ec2-user docker compose -f docker-compose.dev.yml up -d --build postgres auth clip',
+              'sudo -u ec2-user docker image prune -f'
+            ]" \
+            --query Command.CommandId --output text)
+
+          echo "SSM CommandId: $CMD_ID"
+
+          # send-command 는 비동기다. 기다리지 않으면 배포가 실패해도 잡이 초록으로 끝난다.
+          # aws ssm wait command-executed 는 최대 대기가 짧아 빌드를 못 기다린다 — 직접 돈다.
+          for _ in $(seq 1 120); do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)
+            [ "$STATUS" = "InProgress" ] || [ "$STATUS" = "Pending" ] || break
+            sleep 15
+          done
+
+          aws ssm get-command-invocation \
+            --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+            --query 'StandardOutputContent' --output text | tail -30
+
+          if [ "$STATUS" != "Success" ]; then
+            echo "::error::배포 실패 (SSM status=$STATUS)"
+            aws ssm get-command-invocation \
+              --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+              --query 'StandardErrorContent' --output text | tail -30
+            exit 1
+          fi
+
+      - name: 밖에서 실제로 응답하는지 확인한다
+        # 컨테이너가 떴다는 것과 밖에서 부를 수 있다는 것은 다르다.
+        # auth 만 외부에 열려 있으므로(보안그룹 8082) 여기서 재는 것도 auth 뿐이다.
+        run: |
+          for i in $(seq 1 40); do
+            CODE=$(curl -s -m 5 -o /dev/null -w "%{http_code}" \
+              http://dev.pokeclip.com:8082/actuator/health || true)
+            if [ "$CODE" = "200" ]; then echo "auth UP (${i}회차)"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::auth 가 400초 안에 응답하지 않았다"
+          exit 1
