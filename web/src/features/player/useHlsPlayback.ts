@@ -2,14 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type Hls from 'hls.js';
-import { behindFromCurrentTime, dvrRange } from './dvrWindow';
+import { behindFromCurrentTime, dvrRange, liveEdgePosition } from './dvrWindow';
 import { HLS_DVR_CONFIG } from './hlsConfig';
-import {
-  LIVE_EDGE_BACKOFF_SECONDS,
-  LIVE_WINDOW_SECONDS,
-  behindFromSeekFraction,
-  isAtEdge,
-} from './playerMath';
+import { LIVE_WINDOW_SECONDS, behindFromSeekFraction, isAtEdge } from './playerMath';
 import { useControlsAutoHide } from './useControlsAutoHide';
 import {
   CLIP_MARK_MS,
@@ -60,24 +55,18 @@ export function useHlsPlayback(
       if (!video) return;
       const range = dvrRange(video.seekable);
       if (!range) return;
+      // 되감기 기준점은 엣지와 같은 지점이어야 한다 — range.end 기준으로 시크하고
+      // liveEdgePosition 기준으로 시차를 재면 둘이 그 차이만큼 어긋난다.
+      const live = liveEdgePosition(range, hlsRef.current?.liveSyncPosition);
       const clamped = Math.min(
-        Math.min(LIVE_WINDOW_SECONDS, range.end - range.start),
+        Math.min(LIVE_WINDOW_SECONDS, live - range.start),
         Math.max(0, behind),
       );
       if (isAtEdge(clamped)) {
-        // 엣지 스냅 — 정확히 range.end에 붙이면 부분 세그먼트를 기다리며 멎는다.
-        // liveSyncPosition(LL-HLS 권장 지점) 우선, 없으면(스텁 VOD·Safari 네이티브) 상수만큼
-        // 물러난다. 백오프가 엣지 임계값 이상이면 paint()가 다시 칠하는 순간 atEdge가
-        // false로 뒤집히므로 임계값 미만인 LIVE_EDGE_BACKOFF_SECONDS를 쓴다.
-        const sync = hlsRef.current?.liveSyncPosition;
-        const pos =
-          typeof sync === 'number' && Number.isFinite(sync)
-            ? sync
-            : range.end - LIVE_EDGE_BACKOFF_SECONDS;
-        video.currentTime = Math.min(range.end, Math.max(range.start, pos));
+        video.currentTime = live;
         setBehind(0);
       } else {
-        video.currentTime = range.end - clamped;
+        video.currentTime = Math.max(range.start, live - clamped);
         setBehind(Math.round(clamped));
       }
     },
@@ -95,7 +84,10 @@ export function useHlsPlayback(
       if (!video) return;
       const range = dvrRange(video.seekable);
       if (!range) return;
-      seekToBehind(behindFromCurrentTime(range, video.currentTime) + deltaSeconds);
+      seekToBehind(
+        behindFromCurrentTime(range, video.currentTime, hlsRef.current?.liveSyncPosition) +
+          deltaSeconds,
+      );
     },
     [videoRef, seekToBehind],
   );
@@ -159,7 +151,7 @@ export function useHlsPlayback(
     const paint = () => {
       const range = dvrRange(video.seekable);
       if (!range) return;
-      setBehind(behindFromCurrentTime(range, video.currentTime));
+      setBehind(behindFromCurrentTime(range, video.currentTime, hlsRef.current?.liveSyncPosition));
     };
     video.addEventListener('play', onPlay);
     video.addEventListener('pause', onPause);

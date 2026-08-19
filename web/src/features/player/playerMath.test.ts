@@ -73,12 +73,8 @@ describe('isAtEdge', () => {
 });
 
 describe('LIVE_EDGE_BACKOFF_SECONDS', () => {
-  // liveSyncPosition이 없는 폴백(Safari 네이티브·스텁 VOD)에서 엣지로 스냅하면 시차가
-  // 백오프만큼 남은 채 다시 칠해진다. 그 값이 엣지로 안 잡히면 "실시간" 표기가 영영 안 뜬다.
-  it('스냅 직후 남는 시차가 엣지로 잡힌다', () => {
-    expect(isAtEdge(LIVE_EDGE_BACKOFF_SECONDS)).toBe(true);
-  });
-
+  // 임계값과의 관계는 여기서 검증하지 않는다 — 시차를 백오프 지점 기준으로 재므로
+  // 스냅 직후 시차는 0이다. 실제 회귀(스냅 → 재칠)는 dvrWindow.test.ts가 잡는다.
   it('부분 세그먼트를 피하려면 0보다 커야 한다', () => {
     expect(LIVE_EDGE_BACKOFF_SECONDS).toBeGreaterThan(0);
   });

@@ -9,12 +9,13 @@ export const LIVE_WINDOW_SECONDS = 3600;
 export const AT_EDGE_THRESHOLD_SECONDS = 3;
 
 /**
- * 엣지 스냅 시 라이브 끝에서 물러날 거리 — 정확히 range.end에 붙이면 부분 세그먼트를
- * 기다리며 멎는다 (infra/dev-media/player.html의 LIVE_EDGE_BACKOFF와 같은 역할).
- * isAtEdge가 strict less-than이라 임계값과 같은 값으로 물러나면 스냅 직후 시차가
- * 정확히 임계값으로 다시 칠해져 atEdge가 false로 뒤집힌다 — 반드시 임계값 미만이어야 한다.
+ * liveSyncPosition을 모를 때(Safari 네이티브·MSE 미부착) 라이브 끝에서 물러날 거리 —
+ * 정확히 range.end에 붙이면 부분 세그먼트를 기다리며 멎는다
+ * (infra/dev-media/player.html의 LIVE_EDGE_BACKOFF와 같은 값).
+ * 시차를 이 지점(dvrWindow의 liveEdgePosition) 기준으로 재므로 스냅 직후 시차는 0이고,
+ * 따라서 AT_EDGE_THRESHOLD_SECONDS와 묶이지 않는다.
  */
-export const LIVE_EDGE_BACKOFF_SECONDS = AT_EDGE_THRESHOLD_SECONDS - 1;
+export const LIVE_EDGE_BACKOFF_SECONDS = 3;
 
 /** 재생 중 컨트롤 자동 숨김 지연 (디자인 시안 값) */
 export const AUTO_HIDE_MS = 2800;
