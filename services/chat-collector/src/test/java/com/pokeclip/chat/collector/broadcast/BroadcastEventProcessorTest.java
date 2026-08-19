@@ -42,7 +42,7 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
     private final EndedStreamStore store;
     private final JdbcTemplate jdbc;
 
-    private final FakeStarter starter = new FakeStarter();
+    private final FakeSessions sessions = new FakeSessions();
     private BroadcastEventProcessor processor;
 
     BroadcastEventProcessorTest(EndedStreamStore store, JdbcTemplate jdbc) {
@@ -53,8 +53,8 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
     @BeforeEach
     void 표를_비우고_판정기를_새로_만든다() {
         jdbc.update("DELETE FROM chat_ended_streams");
-        processor = new BroadcastEventProcessor(store, starter);
-        starter.reset();
+        processor = new BroadcastEventProcessor(store, sessions);
+        sessions.reset();
     }
 
     // 문항 4: 번호만 옮기고 종료 시각은 지금 시각으로 넣는 구현도 지시서 단언을 통과한다 —
@@ -67,7 +67,11 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
         assertThat(result).isEqualTo(ProcessResult.PROCESSED);
         assertThat(store.find("s1").orElseThrow().lastSequence()).isEqualTo(5L);
         assertThat(store.find("s1").orElseThrow().endedAt()).isEqualTo(종료시각);
-        assertThat(starter.userIds()).isEmpty();
+        assertThat(sessions.userIds()).isEmpty();
+        // 메모만 남기고 세션을 안 닫으면 끝난 방송에 붙은 채로 남아 계정별 상한 3개 중
+        // 한 자리를 영영 먹는다. <b>그 방송 번호로</b> 닫는지까지 본다 — 아무거나 닫으면
+        // 남의 방송이 끊긴다.
+        assertThat(sessions.stopped()).containsExactly("s1");
     }
 
     // 문항 4: IGNORED_STALE을 돌려주면서 세션도 여는 구현이 지시서 단언을 통과한다.
@@ -76,14 +80,14 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
     void 끝난_방송에_낮은_번호의_시작이_오면_무시한다() {
         processor.process(ended("s1", 5));
         assertThat(processor.process(started("s1", 3))).isEqualTo(ProcessResult.IGNORED_STALE);
-        assertThat(starter.userIds()).isEmpty();
+        assertThat(sessions.userIds()).isEmpty();
     }
 
     @Test
     void 끝난_방송에_같은_번호의_시작이_와도_무시한다() {
         processor.process(ended("s1", 5));
         assertThat(processor.process(started("s1", 5))).isEqualTo(ProcessResult.IGNORED_STALE);
-        assertThat(starter.userIds()).isEmpty();
+        assertThat(sessions.userIds()).isEmpty();
     }
 
     // streamId가 방송마다 새로 발급된다는 가정 아래, 이것은 정상이 아니라 이상 상황이다.
@@ -100,11 +104,11 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
             assertThat(processor.process(started("s1", 9))).isEqualTo(ProcessResult.IGNORED_STALE);
             assertThat(captor.messages()).anyMatch(l -> l.contains("chat.broadcast.started_after_ended"));
             assertThat(captor.levelOf("chat.broadcast.started_after_ended")).isEqualTo(Level.WARN);
-            assertThat(starter.userIds()).isEmpty();
+            assertThat(sessions.userIds()).isEmpty();
 
             // 양성 대조 — 메모가 없는 방송은 붙는다. 이 줄이 없으면 "늘 무시"가 초록이다.
             assertThat(processor.process(started("s2", 9))).isEqualTo(ProcessResult.PROCESSED);
-            assertThat(starter.userIds()).containsExactly(42L);
+            assertThat(sessions.userIds()).containsExactly(42L);
             assertThat(captor.messages().stream()
                     .filter(l -> l.contains("chat.broadcast.started_after_ended")).count()).isEqualTo(1L);
         }
@@ -128,7 +132,7 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
         assertThat(processor.counters().unreadableStreamerIds()).isEqualTo(2L);
 
         // 신원을 못 읽었으면 세션도 안 연다. 열쇠를 누구 것으로 받을지 모르기 때문이다.
-        assertThat(starter.userIds()).isEmpty();
+        assertThat(sessions.userIds()).isEmpty();
 
         // 정상 편지는 카운터를 안 올린다.
         assertThat(processor.process(started("s3", 1))).isEqualTo(ProcessResult.PROCESSED);
@@ -144,7 +148,7 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
     void 모르는_종류의_편지는_못_읽음으로_버린다() {
         assertThat(processor.process(ofType("broadcast.paused"))).isEqualTo(ProcessResult.UNREADABLE);
         assertThat(processor.counters().unknownTypes()).isEqualTo(1L);
-        assertThat(starter.userIds()).isEmpty();
+        assertThat(sessions.userIds()).isEmpty();
 
         assertThat(processor.process(started("s1", 1))).isEqualTo(ProcessResult.PROCESSED);
         assertThat(processor.counters().unknownTypes()).isEqualTo(1L);
@@ -185,7 +189,7 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
         // 2회차: auth가 살아났고 SQS가 같은 편지를 다시 줬다 → 이번엔 붙어야 한다
         givenLinkResolves();
         assertThat(processor.process(같은_편지)).isEqualTo(ProcessResult.PROCESSED);
-        assertThat(starter.userIds()).containsExactly(42L, 42L);
+        assertThat(sessions.userIds()).containsExactly(42L, 42L);
     }
 
     /**
@@ -204,7 +208,7 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
      * 봉투 카운터가 올랐는지, 신원 카운터는 안 올랐는지, 시작 자리를 안 밟았는지를 같이 본다.
      * 양성 대조는 {@code 정상_봉투는…}·{@code 딱_128자인…} 둘이 진다.
      * <p>문항 4: 검증을 시작 자리 <b>뒤</b>에 두는 구현도 판정만 보면 통과한다 — 끝난 방송에
-     * 붙인 뒤 {@code UNREADABLE}을 돌려주는 모양이다. 그래서 {@code starter}를 같이 본다.
+     * 붙인 뒤 {@code UNREADABLE}을 돌려주는 모양이다. 그래서 {@code sessions}를 같이 본다.
      * <p>문항 1·3: 이 판정기는 세션을 열지 않는다. 잴 대상이 없어 해당하지 않는다.
      * <p>문항 5: 봉투 검증을 통째로 빼면 여섯 다 빨간불(확인함) — 종료 셋은 위 두 예외로,
      * 시작 셋은 {@code PROCESSED}로.
@@ -215,7 +219,7 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
         assertThat(processor.process(못_쓸_편지)).as(왜).isEqualTo(ProcessResult.UNREADABLE);
         assertThat(processor.counters().malformedEnvelopes()).as(왜).isEqualTo(1L);
         assertThat(processor.counters().unreadableStreamerIds()).as(왜).isZero();
-        assertThat(starter.userIds()).as(왜).isEmpty();
+        assertThat(sessions.userIds()).as(왜).isEmpty();
     }
 
     static Stream<Arguments> 표에_못_넣을_봉투들() {
@@ -236,7 +240,7 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
     void 정상_봉투는_그_검증에_안_걸린다() {
         assertThat(processor.process(started("s1", "42", 1))).isEqualTo(ProcessResult.PROCESSED);
         assertThat(processor.counters().malformedEnvelopes()).isZero();
-        assertThat(starter.userIds()).containsExactly(42L);
+        assertThat(sessions.userIds()).containsExactly(42L);
     }
 
     /**
@@ -295,11 +299,11 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
     }
 
     private void givenLinkUnreachable() {
-        starter.willReturn(ProcessResult.RETRY_LATER);
+        sessions.willReturn(ProcessResult.RETRY_LATER);
     }
 
     private void givenLinkResolves() {
-        starter.willReturn(ProcessResult.PROCESSED);
+        sessions.willReturn(ProcessResult.PROCESSED);
     }
 
     private static LifecycleEnvelope ended(String streamId, long sequence) {
@@ -342,18 +346,28 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
     }
 
     /**
-     * 태스크 10에서 열쇠 조회(태스크 7)와 세션 등록부(태스크 9)가 들어올 자리.
-     * 여기서는 판정 결과를 미리 정해 두고, 받은 회원 번호를 기록한다.
+     * 실물은 {@code LinkedSessionStarter}(열쇠 조회 + 세션 등록부)다. 여기서는 판정 결과를
+     * 미리 정해 두고, 받은 회원 번호와 <b>닫으라고 한 방송 번호</b>를 기록한다.
+     *
+     * <p>배선이 실제로 붙는지는 {@code BroadcastSessionWiringTest}가 진짜 빈으로 잰다 —
+     * <b>여기서 초록인 것이 「편지가 세션을 연다」의 증거는 아니다.</b>
      */
-    private static final class FakeStarter implements BroadcastStarter {
+    private static final class FakeSessions implements BroadcastSessions {
 
         private final List<Long> userIds = new ArrayList<>();
+        private final List<String> stopped = new ArrayList<>();
         private ProcessResult next = ProcessResult.PROCESSED;
 
         @Override
         public ProcessResult start(LifecycleEnvelope envelope, StreamerId streamer) {
             userIds.add(streamer.value());
             return next;
+        }
+
+        @Override
+        public boolean stop(String streamId) {
+            stopped.add(streamId);
+            return true;
         }
 
         void willReturn(ProcessResult result) {
@@ -364,8 +378,13 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
             return List.copyOf(userIds);
         }
 
+        List<String> stopped() {
+            return List.copyOf(stopped);
+        }
+
         void reset() {
             userIds.clear();
+            stopped.clear();
             next = ProcessResult.PROCESSED;
         }
     }

@@ -27,18 +27,13 @@ import java.util.concurrent.TimeUnit;
  * 끝난 것</b>은 안 지운다. 가시성 타임아웃이 지나면 큐가 다시 주고, 판정이 멱등이라
  * 두 번 와도 안전하다.
  *
- * <p><b>이 부품은 아직 스프링 빈이 아니다.</b> 조립은 태스크 10이 한다 —
- * {@code BroadcastStarter}의 실물이 없어 {@code BroadcastEventProcessor}를 지금 빈으로
- * 올리면 컨텍스트가 죽고, 가짜 구현으로 때우면 「켜도 방송이 하나도 안 열리는데 health는
- * 초록」이 된다. 이 서버의 조립 관례도 같은 자리다 — {@code CollectorRunner}·
- * {@code EndedStreamSweeper} 둘 다 {@code @Component}가 아니라
- * {@code CollectorApplication}의 {@code @Bean}이 만든다.
+ * <p><b>조립은 {@code IntakeConfiguration.LetterPath}가 한다</b>({@code ObjectProvider<SqsClient>}로
+ * 받는다 — 거기 주석). 이 서버의 조립 관례도 같은 자리다: {@code CollectorRunner}·
+ * {@code EndedStreamSweeper} 둘 다 {@code @Component}가 아니라 {@code @Bean}이 만든다.
  *
- * <p><b>태스크 10이 붙일 것 셋:</b> ① {@code @Bean} 등록({@code ObjectProvider<SqsClient>}로
- * 받는다 — {@code IntakeConfiguration} 주석) · ② 부팅이 끝나면 {@link #runLoop()}를 데몬
- * 스레드에서 시작 · ③ 종료 때 {@link #stop()}을 부르고 그 스레드를 join. 스레드 수명을
- * 여기서 안 정하는 이유는 <b>종료 유예 예산이 태스크 11에서 정해지기 때문</b>이다 —
- * 세션 여럿을 닫는 시간과 마지막 회차를 기다리는 시간이 같은 20초를 나눠 쓴다.
+ * <p><b>스레드 수명은 {@link SqsIntakeLoop}가 든다.</b> 여기서 안 정하는 이유는 종료 유예
+ * 예산이 이 부품의 관심사가 아니기 때문이다 — 세션 여럿을 닫는 시간과 마지막 회차를 기다리는
+ * 시간이 같은 20초를 나눠 쓴다.
  */
 public class SqsIntakeRunner {
 

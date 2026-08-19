@@ -48,6 +48,12 @@ import java.util.concurrent.atomic.AtomicLong;
  * 여전히 맞다. <b>스트리머 여럿은 {@code SessionRegistry}가 든다</b> — 거기서는 같은
  * 사건이 「그 세션만 닫고 등록부에서 지운다」이고, 등록부는 exit 손잡이를 아예 받지 않는다
  * ({@code SessionRegistry.stopOne}, 태스크 9).
+ *
+ * <p>🔴 <b>「수집할 것이 남지 않는다」는 전제는 저절로 참이 아니다.</b> 편지 경로가 같이
+ * 켜져 있으면 여기 세션 하나의 동의 철회가 <b>편지로 연 세션 백 개를 같이 끊는다</b> — 그리고
+ * 그것들을 되살릴 STARTED 편지는 이미 소비돼 큐에 없다. 그래서 두 경로를 같이 켜면 부팅을
+ * 거부한다({@code IntakeConfiguration.LetterPath} 생성자). <b>그 가드를 지우려면 여기
+ * {@link #onPermanentStop}의 exit부터 손봐야 한다.</b>
  */
 public class CollectorRunner implements ApplicationRunner {
 

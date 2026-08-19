@@ -32,15 +32,15 @@ public class BroadcastEventProcessor {
     private static final int STREAM_ID_MAX_LENGTH = 128;
 
     private final EndedStreamStore store;
-    private final BroadcastStarter starter;
+    private final BroadcastSessions sessions;
 
     private final AtomicLong unreadableStreamerIds = new AtomicLong();
     private final AtomicLong unknownTypes = new AtomicLong();
     private final AtomicLong malformedEnvelopes = new AtomicLong();
 
-    public BroadcastEventProcessor(EndedStreamStore store, BroadcastStarter starter) {
+    public BroadcastEventProcessor(EndedStreamStore store, BroadcastSessions sessions) {
         this.store = store;
-        this.starter = starter;
+        this.sessions = sessions;
     }
 
     public ProcessResult process(LifecycleEnvelope envelope) {
@@ -127,6 +127,16 @@ public class BroadcastEventProcessor {
      */
     private ProcessResult handleEnded(LifecycleEnvelope envelope) {
         store.remember(envelope.streamId(), envelope.sequence(), envelope.occurredAt());
+        // <b>메모가 먼저다.</b> 닫고 나서 메모를 남기면 그 사이에 재전송된 시작 편지가
+        // 세션을 다시 열고, 뒤이어 들어온 메모는 이미 열린 세션을 막지 못한다 — 끝난
+        // 방송에 붙은 채로 남아 계정별 상한 3개 중 한 자리를 영영 먹는다. 지금은 편지를
+        // 꺼내는 스레드가 하나라 그 끼어듦이 없지만, 순서가 지키는 것을 스레드 수에
+        // 기대게 두지 않는다.
+        //
+        // <b>닫을 세션이 없어도 PROCESSED다.</b> 종료 편지는 재전송으로 두 번 오고, 우리가
+        // 뜨기 전에 시작한 방송은 애초에 연 적이 없다. 그것을 RETRY_LATER로 돌리면
+        // 영원히 다시 받는다.
+        sessions.stop(envelope.streamId());
         return ProcessResult.PROCESSED;
     }
 
@@ -144,6 +154,6 @@ public class BroadcastEventProcessor {
             }
             return ProcessResult.IGNORED_STALE;
         }
-        return starter.start(envelope, streamer);
+        return sessions.start(envelope, streamer);
     }
 }
