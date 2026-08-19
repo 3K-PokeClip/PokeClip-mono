@@ -249,8 +249,13 @@ public class StreamSession {
      * <p>토큰은 안 바꾼다. 이미 이 토큰으로 수립·구독이 끝났고, 바꿔도 열려 있는 소켓에는
      * 영향이 없다 — 쓰이는 곳은 <b>닫을 때의 구독 반납</b>뿐이라 그때 옛 토큰이 맞다.
      */
-    public void retarget(SessionKey newKey) {
+    public long retarget(SessionKey newKey) {
         this.key = newKey;
+        // <b>방송 단위 지표를 새 경계에서 다시 센다.</b> 소켓과 세션은 그대로지만 방송이
+        // 바뀌었으므로, 안 자르면 stream= 레이블만 새 방송이고 그 안의 숫자는 앞 방송
+        // 것을 안고 간다. 돌려주는 값은 <b>부르는 쪽이 프로세스 누계로 옮긴다</b> —
+        // 여기서 0으로 만들기만 하면 그만큼 총량이 줄어 판정 줄이 유실로 읽는다.
+        return metrics.beginBroadcast();
     }
 
     /**

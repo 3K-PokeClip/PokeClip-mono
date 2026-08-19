@@ -16,6 +16,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -132,9 +133,23 @@ class StreamIdStampingTest extends IntegrationTestSupport {
                 restClientBuilder, buffer, persister, ChatArchive.NONE);
     }
 
+    /**
+     * <b>부르는 순서대로 방송 시작 시각이 늦어진다.</b> 대부분의 검사가 「먼저 연 방송 →
+     * 나중 방송」 순으로 부르므로 그 의도와 맞는다. 앞뒤를 뒤집어 재는 검사는
+     * {@link #keyStartedAt} 로 시각을 직접 준다.
+     */
     private static SessionKey key(String streamId, long streamerId, String channelId) {
-        return new SessionKey(streamId, streamerId, channelId);
+        return keyStartedAt(streamId, streamerId, channelId,
+                Instant.EPOCH.plusSeconds(KEY_SEQ.incrementAndGet()));
     }
+
+    private static SessionKey keyStartedAt(String streamId, long streamerId, String channelId,
+                                           Instant startedAt) {
+        return new SessionKey(streamId, streamerId, channelId, startedAt);
+    }
+
+    private static final java.util.concurrent.atomic.AtomicLong KEY_SEQ =
+            new java.util.concurrent.atomic.AtomicLong();
 
     private static String chatJson(String channelId, String content, long messageTime) {
         return "{\"channelId\":\"" + channelId + "\",\"senderChannelId\":\"u-1\","

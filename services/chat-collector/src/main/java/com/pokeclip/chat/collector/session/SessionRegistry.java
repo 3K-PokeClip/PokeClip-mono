@@ -16,6 +16,7 @@ import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -30,6 +31,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 살아 있는 세션을 방송 번호로 찾는다. <b>스트리머 여럿을 동시에 수집하는 자리다.</b>
@@ -218,12 +220,17 @@ public class SessionRegistry {
         CollectionStatus status = new CollectionStatus();
         CollectionMetrics metrics = new CollectionMetrics();
         CountDownLatch stopSignal = new CountDownLatch(1);
+        // <b>자기 자신을 지목하는 손잡이다.</b> 세션 생성자가 콜백을 받으므로 여기서
+        // 세션을 직접 캡처할 수 없어 한 칸을 먼저 세운다. 세션이 만들어진 <b>뒤</b>에
+        // 채우고, 콜백은 그 세션이 열린 뒤에만 불리므로 늘 채워진 것을 본다.
+        AtomicReference<StreamSession> self = new AtomicReference<>();
         StreamSession session = new StreamSession(
                 key, accessToken, properties, status, metrics,
                 new ReconnectPolicy(properties.reconnectFirstDelay(), properties.reconnectMaxDelay()),
                 restClient, buffer, persister, archive,
                 reconnectors, stopSignal, intakeClosed, releasesInFlight, lastSessionNo,
-                reason -> stopOne(streamerId, reason));
+                reason -> stopOne(streamerId, self.get(), reason));
+        self.set(session);
         Entry entry = new Entry(session, status, metrics, stopSignal);
         // <b>자리를 먼저 잡는다.</b> 수립이 끝난 뒤에 넣으면 REST 왕복 두 번 동안
         // 자리가 비어 있어, 같은 편지가 두 번 오면 세션이 둘 선다.
@@ -255,10 +262,25 @@ public class SessionRegistry {
             // 않는 이유는 그쪽이다 — 큐에 남은 편지가 다시 오는 것이 재시도다.
             log.warn("chat.registry.open_failed stream={} reason={}", streamId, e.reason());
         }
-        // 못 세웠으면 자리를 비운다. 안 비우면 <b>세션이 없는데 있는 것으로 보여</b>
-        // 다음 편지가 「이미 열림」으로 걸리고 그 스트리머는 영영 안 붙는다.
-        // 우리가 넣은 것일 때만 지운다 — 그 사이 남이 자리를 잡았으면 남의 것이다.
-        sessions.remove(streamerId, entry);
+        // 못 세웠으면 자리를 비우고 <b>그 세션을 닫는다.</b> 자리만 비우면 안 되는 이유는
+        // <b>수립이 실패해도 그 세션의 재연결 루프는 이미 떠 있을 수 있다</b>는 것이다 —
+        // 수립 중에 끊기면 절단이 {@code requestReconnect}를 태우고, 그 루프는 자기
+        // {@code stopSignal}만 본다. 등록부가 자리에서 지우는 것을 루프는 모른다.
+        //
+        // 그러면 백오프 뒤 <b>스스로 다시 붙어</b> 등록부가 모르는 세션이 된다:
+        // ① 계정당 상한 3개를 우리 손으로 태운다(429는 속도 제한이 아니라 「자리 없음」이라
+        //    시간이 아니라 자리가 풀려야 낫는다 — 태스크 1 실계정) ② {@link #shutdown()}이
+        //    훑을 곳에 없어 못 닫는다 ③ 같은 편지가 다시 오면 같은 계정에 소켓이 둘 서고,
+        //    구독 대상이 토큰 주인이라 <b>같은 채팅이 두 소켓에 다 들어온다.</b>
+        //
+        // <b>수립이 예외로 끝나는 길도 여기로 합류한다.</b> 위 catch가 아래로 흘러온다 —
+        // 갈래마다 따로 두면 한쪽만 고친 상태가 조용히 남는다.
+        //
+        // 우리가 넣은 것일 때만 지우고 닫는다 — 그 사이 남이 자리를 잡았으면 남의 것이고,
+        // {@code stopOne}이 먼저 가져갔으면 받은 양이 두 번 걷힌다.
+        if (sessions.remove(streamerId, entry)) {
+            closeEntry(streamId, entry);
+        }
         return false;
     }
 
@@ -280,16 +302,57 @@ public class SessionRegistry {
      *         그 편지가 지워져야 하기 때문이다
      */
     private boolean retargetOrSkip(Entry seated, SessionKey key) {
-        String current = seated.session().key().streamId();
-        if (current.equals(key.streamId())) {
+        SessionKey current = seated.session().key();
+        if (current.streamId().equals(key.streamId())) {
             log.info("chat.registry.open_skipped stream={} reason=ALREADY_OPEN", key.streamId());
             return false;
         }
+        // <b>지금 걷는 방송보다 늦게 시작한 방송만 자리를 가져간다.</b> 없으면 늦게 도착한
+        // 앞 방송의 시작 편지가 <b>살아 있는 뒤 방송을 자기 쪽으로 되돌린다</b> — 그 뒤
+        // 앞 방송의 종료 편지가 오면 세션이 닫히는데, 뒤 방송의 시작 편지는 이미 소비돼
+        // 되살릴 길이 없다. 도달 경로는 이 클래스가 이미 아는 사실이다: FIFO 그룹이 방송
+        // 번호라 같은 스트리머의 두 방송은 순서 보장이 없고, 앞 방송의 시작이 auth 장애로
+        // RETRY_LATER에 걸려 밀리면 뒤 방송이 먼저 처리된다(codex P1, 재현함).
+        //
+        // <b>{@code sequence}로는 못 가른다</b> — 방송 안에서만 뜻이 있는 번호라
+        // 다른 방송끼리 비교하면 아무것도 아니다.
+        if (!key.startedAt().isAfter(current.startedAt())) {
+            log.warn("chat.registry.stale_start_rejected streamer={} current={} rejected={} "
+                            + "currentStartedAt={} rejectedStartedAt={}",
+                    key.streamerId(), current.streamId(), key.streamId(),
+                    current.startedAt(), key.startedAt());
+            return false;
+        }
         // 세션이 「지금 어느 방송인가」의 유일한 주인이다. 등록부가 따로 들면 어긋난다.
-        seated.session().retarget(key);
+        // <b>앞 방송이 받은 양은 여기서 프로세스 누계로 옮긴다</b> — 세션의 방송 단위
+        // 지표는 새 경계에서 0부터 다시 세므로, 안 옮기면 그만큼 총량이 줄어
+        // 판정 줄이 유실로 읽는다.
+        closedReceived.addAndGet(seated.session().retarget(key));
+        // <b>바꾼 뒤 자리를 다시 본다.</b> 위 조회와 여기 사이에 그 세션이 영구 정지로
+        // 자리를 잃었을 수 있고, 그러면 방금 이름을 바꾼 것은 <b>이미 닫힌 세션</b>이다.
+        // 그때 true를 돌려주면 편지가 지워지는데 등록부에는 이 방송이 없다 — 영구 유실이다
+        // (codex P1. 좁은 창이라 <b>재현하지 못했다</b> — 결정적으로 여는 장치를 못 만들었다).
+        // false면 편지가 큐에 남아 다음 회차에 다시 온다.
+        if (sessions.get(key.streamerId()) != seated) {
+            log.warn("chat.registry.retarget_lost_seat streamer={} stream={}",
+                    key.streamerId(), key.streamId());
+            return false;
+        }
         log.info("chat.registry.retargeted streamer={} from={} to={}",
-                key.streamerId(), current, key.streamId());
+                key.streamerId(), current.streamId(), key.streamId());
         return true;
+    }
+
+    /**
+     * 이 시작 편지가 <b>지금 걷는 방송보다 이른가</b> — 즉 다시 물어도 답이 안 바뀌는가.
+     *
+     * <p>{@link #open}이 false를 돌려준 뒤 편지를 <b>지울지 남길지</b>를 가르는 값이다.
+     * 낡은 시작을 「나중에 다시」로 두면 그 방송의 FIFO 그룹 앞을 영원히 막는다 —
+     * 몇 번을 다시 물어도 그 편지는 계속 낡았기 때문이다.
+     */
+    public boolean isStaleStart(long streamerId, Instant startedAt) {
+        Entry entry = sessions.get(streamerId);
+        return entry != null && !startedAt.isAfter(entry.session().key().startedAt());
     }
 
     /**
@@ -349,7 +412,11 @@ public class SessionRegistry {
                 continue;
             }
             String streamId = entry.session().key().streamId();
-            closings.add(reconnectors.submit(() -> closeEntry(streamId, entry)));
+            // <b>누계는 여기서 옮긴다 — 제출한 스레드 안에서 하면 늦다.</b> 자리는 이미
+            // 뺐는데 그 스레드가 스케줄될 때까지 총량이 그 세션 몫만큼 비고, 예산을
+            // 넘겨 포기하면 그 상태로 판정 줄이 찍힌다(detach 주석).
+            long detached = detach(entry);
+            closings.add(reconnectors.submit(() -> closeEntry(streamId, entry, detached)));
         }
         awaitClosed(closings);
     }
@@ -532,31 +599,80 @@ public class SessionRegistry {
      * 세션 하나가 끝났다고 낼 것이 아니다 — 낸다면 스트리머가 한 명 그만둘 때마다
      * "최종" 판정이 쌓이고 그중 어느 것도 최종이 아니다.
      *
-     * <p><b>스트리머로 지운다.</b> 방송 번호로 지우면 그 사이에 갈아끼워진 새 방송을 못 찾아
-     * 자리가 안 비워진다. 이 호출은 <b>그 세션의 재연결 루프 스레드 위</b>이고, 그 세션의
-     * 뒷정리는 루프가 들어올 때 이미 끝냈으므로({@code reconnectLoop} 첫 줄) 아래
-     * {@code close}는 자리가 빈 것을 보고 곧장 돌아온다 — 자기 자신을 기다리지 않는다.
+     * <p><b>스트리머로 지우되 값까지 본다.</b> 방송 번호로 지우면 그 사이에 갈아끼워진 새
+     * 방송을 못 찾아 자리가 안 비워지고, 반대로 <b>스트리머만 보고 지우면 그 자리에 이미
+     * 앉은 다음 세션을 낡은 신호가 끊는다</b> — {@link #close(String)}·{@link #closeAll()}이
+     * 값까지 보는 것과 같은 이유인데 여기만 빠져 있었다(감사 재현: 낡은 손잡이를 부르니
+     * {@code active=1 connected=true}가 {@code active=0 connected=false}가 됐다).
+     *
+     * <p><b>실제 도달 경로는 재현하지 못했다.</b> 창은 루프가 {@code while}을 통과하고
+     * 이 콜백에 닿기까지의 몇 줄이라 붙잡을 I/O가 없다. 다만 <b>유령 세션이 그 창을 크게
+     * 넓혔다</b> — 등록부가 모르는 루프는 언제 재시도 불가 사유를 만날지 모르는데 그 자리에는
+     * 이미 새 세션이 앉아 있다. 그쪽은 위 {@code open()}에서 막았고, 여기 비대칭 자체는
+     * 그것과 별개로 남아 있어서 같이 맞춘다.
+     *
+     * <p>이 호출은 <b>그 세션의 재연결 루프 스레드 위</b>이고, 그 세션의 뒷정리는 루프가
+     * 들어올 때 이미 끝냈으므로({@code reconnectLoop} 첫 줄) 아래 {@code close}는 자리가
+     * 빈 것을 보고 곧장 돌아온다 — 자기 자신을 기다리지 않는다.
+     *
+     * @param caller 이 신호를 낸 세션. <b>자리 주인이 그것이 아니면 아무것도 안 한다.</b>
+     *               갈아끼움(retarget)은 세션 객체를 그대로 두므로 여기서 안 걸린다
      */
-    private void stopOne(long streamerId, StopReason reason) {
-        Entry entry = sessions.remove(streamerId);
-        if (entry == null) {
-            return;                       // 이미 닫혔다
+    private void stopOne(long streamerId, StreamSession caller, StopReason reason) {
+        Entry entry = sessions.get(streamerId);
+        if (entry == null || entry.session() != caller) {
+            return;                       // 이미 닫혔거나, 그 자리는 남의 세션이다
+        }
+        if (!sessions.remove(streamerId, entry)) {
+            return;                       // 위 검사와 여기 사이에 남이 가져갔다
         }
         String streamId = entry.session().key().streamId();
         log.warn("chat.registry.stopped stream={} reason={} retriable=false", streamId, reason);
         closeEntry(streamId, entry);
     }
 
+    /** 자리를 뺀 세션의 누계를 옮기고 닫는다. 닫기를 제출하는 쪽은 아래 셋째 인자를 쓴다. */
+    private void closeEntry(String streamId, Entry entry) {
+        closeEntry(streamId, entry, detach(entry));
+    }
+
+    /**
+     * <b>자리를 뺀 세션의 누계를 그 자리에서 즉시 옮긴다.</b> 호출부는 이미
+     * {@code sessions.remove}를 마쳤으므로, 이 줄이 늦어지는 만큼
+     * {@link #receivedTotal()}이 그 세션 몫만큼 <b>작게 나오는 창</b>이 열린다 —
+     * {@link #closeAll()}은 닫기를 다른 스레드에 제출하므로 그 스레드가 스케줄될
+     * 때까지, 그리고 닫기 자체가 반납 왕복만큼(반개방이면 초 단위) 벌어진다.
+     *
+     * <p>그 창에서 {@code closeAll}이 예산을 넘겨 포기하거나 닫기가 던지면
+     * <b>작아진 값이 그대로 판정 줄에 실린다</b>({@code CollectorRunner.stop()}이 바로
+     * 다음 줄에서 찍는다). 등식
+     * {@code received = persisted + conflicts + poisoned + dropped}가 깨지는데,
+     * 그것이 유실을 알아채는 유일한 계기다.
+     *
+     * @return 옮긴 양. 닫는 도중에 더 들어온 몫을 델타로 더하는 데 쓴다
+     */
+    private long detach(Entry entry) {
+        long received = entry.metrics().totalReceived();
+        closedReceived.addAndGet(received);
+        return received;
+    }
+
     /**
      * <b>멈춤 신호를 먼저 내리고 닫는다.</b> 순서를 뒤집으면 뒷정리가 끝난 뒤에도
      * 재연결 루프가 살아 있어 <b>방금 닫은 방송에 다시 붙는다</b> — 종료 편지를 받고
      * 닫았는데 스스로 되살아나는 세션이 된다.
+     *
+     * @param detached {@link #detach}가 이미 옮긴 양. <b>닫는 도중에 들어온 몫만</b>
+     *                 finally에서 더한다 — 통째로 다시 더하면 두 번 세고, 안 더하면
+     *                 {@code stopSignal} 이후에 흘러든 채팅이 빠진다
      */
-    private void closeEntry(String streamId, Entry entry) {
+    private void closeEntry(String streamId, Entry entry, long detached) {
         entry.stopSignal().countDown();
-        entry.session().close();
-        // 받은 양을 걷어 둔다. 안 걷으면 세션이 닫힐 때마다 총량이 줄어든다.
-        closedReceived.addAndGet(entry.metrics().totalReceived());
-        log.info("chat.registry.closed stream={} active={}", streamId, sessions.size());
+        try {
+            entry.session().close();
+        } finally {
+            closedReceived.addAndGet(entry.metrics().totalReceived() - detached);
+            log.info("chat.registry.closed stream={} active={}", streamId, sessions.size());
+        }
     }
 }

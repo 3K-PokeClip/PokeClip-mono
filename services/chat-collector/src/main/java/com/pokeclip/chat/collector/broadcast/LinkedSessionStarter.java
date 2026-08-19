@@ -39,19 +39,38 @@ public class LinkedSessionStarter implements BroadcastSessions {
      */
     @Override
     public ProcessResult start(LifecycleEnvelope envelope, StreamerId streamer) {
+        // <b>이미 그 방송을 걷고 있으면 auth에 묻지 않는다.</b> SQS는 at-least-once라
+        // 같은 시작 편지가 두 번 온다. 그때 열쇠부터 물으면 <b>auth가 아픈 동안 그 중복이
+        // RETRY_LATER가 되어 그 방송의 FIFO 그룹 앞을 막고</b>, 뒤따르는 종료 편지가
+        // 배달되지 못해 이미 끝난 방송의 세션이 auth가 나을 때까지 열려 있는다
+        // (codex P2, 재현함 — auth 503에서 registry.open이 호출조차 안 됐다).
+        //
+        // 아래 registry.open도 같은 판정을 하지만 그것은 열쇠를 받아 온 <b>뒤</b>다.
+        // 여기서 먼저 거르는 것은 「열쇠를 물을 필요조차 없다」를 가르는 것이라 층이 다르다.
+        if (envelope.streamId().equals(registry.currentStreamIdOf(streamer.value()))) {
+            return ProcessResult.PROCESSED;
+        }
         LinkResolution resolution = link.resolve(streamer.value());
         if (!resolution.usable()) {
             // 사유를 여기서 다시 해석하지 않는다 — 어떤 사유가 영구인지는 auth 계약을 아는
             // ChzzkLinkClient가 이미 판정했다. 두 곳에서 보면 한쪽만 낡는다.
             return resolution.retryable() ? ProcessResult.RETRY_LATER : ProcessResult.PROCESSED;
         }
-        SessionKey key = new SessionKey(envelope.streamId(), streamer.value(), resolution.channelId());
+        SessionKey key = new SessionKey(envelope.streamId(), streamer.value(),
+                resolution.channelId(), envelope.occurredAt());
         if (registry.open(key, resolution.accessToken())) {
             return ProcessResult.PROCESSED;
         }
-        return envelope.streamId().equals(registry.currentStreamIdOf(streamer.value()))
-                ? ProcessResult.PROCESSED
-                : ProcessResult.RETRY_LATER;
+        if (envelope.streamId().equals(registry.currentStreamIdOf(streamer.value()))) {
+            return ProcessResult.PROCESSED;
+        }
+        // <b>낡은 시작은 지운다.</b> 지금 걷는 방송이 이 편지보다 나중에 시작했으면
+        // 다시 물어도 답이 안 바뀐다 — 「나중에 다시」로 두면 그 방송의 FIFO 그룹 앞을
+        // 영원히 막는다. 자리를 못 얻은 다른 이유(그 사이 세션이 죽음)는 재시도가 맞다.
+        if (registry.isStaleStart(streamer.value(), envelope.occurredAt())) {
+            return ProcessResult.IGNORED_STALE;
+        }
+        return ProcessResult.RETRY_LATER;
     }
 
     @Override

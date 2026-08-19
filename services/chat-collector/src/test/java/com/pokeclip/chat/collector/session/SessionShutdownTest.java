@@ -18,6 +18,7 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -348,6 +349,53 @@ class SessionShutdownTest extends IntegrationTestSupport {
         }
     }
 
+    /**
+     * <b>종료가 닫을 수 있는 것은 자리에 있는 세션뿐이다.</b> 수립이 실패했는데 그 세션의
+     * 재연결 루프가 살아 있으면, 그것은 백오프 뒤 다시 붙고 <b>자리에는 없다</b> —
+     * {@link SessionRegistry#shutdown()}이 훑을 곳에 없으므로 구독도 소켓도 그대로 남는다.
+     *
+     * <p>프로세스가 죽어도 서버 쪽 자리는 <b>10초~4분 42초</b> 남고(급사 경로, CLAUDE.md 실측)
+     * 상한은 계정당 3개다. 짧은 간격으로 재배포하면 새 프로세스가 못 붙는다.
+     *
+     * <p><b>고치는 자리는 {@code shutdown()}이 아니라 {@code open()}이다.</b> 종료가 훑을
+     * 목록에 넣는 것이 아니라, 애초에 되살아날 루프를 남기지 않는다.
+     */
+    // 문항 1: 다중화가 아니라 「실패한 수립의 뒷정리」를 잰다 — 세션 하나로 성립한다.
+    // 문항 2: {@code isConnected==false}는 소켓이 한 번도 안 섰어도 참이다 —
+    //         연결 수 델타로 실제로 섰던 것을 먼저 못박고, 반납 델타로 구독까지 본다.
+    // 문항 4: {@code activeCount()==0}은 이 결함에서 <b>언제나 참</b>이다(자리를 비웠으니까).
+    //         그것만 보면 유령을 영영 못 본다 — 상대 쪽 소켓이 판정한다.
+    // 문항 5: open()의 실패 자리에서 closeEntry 호출을 빼면 빨간불(확인함).
+    @Test
+    void 수립에_실패한_세션이_종료_뒤에도_서버에_남지_않는다() throws Exception {
+        givenRegistry();
+        int connectionsBefore = behavior.connectionCount();
+        int releasesBefore = behavior.unsubscribeCallCount();
+        behavior.closeAfterSubscribed = true;
+
+        assertThat(registry.open(key("s1", 1L, "chGhost"), "tokGhostShutdown")).isFalse();
+        behavior.closeAfterSubscribed = false;
+        assertThat(behavior.connectionCount() - connectionsBefore)
+                .as("소켓이 한 번도 안 섰으면 아래 단언은 아무것도 안 잰다")
+                .isGreaterThanOrEqualTo(1);
+        // 유령이 되살아날 시간을 준다. 백오프 첫 지연이 200ms다.
+        Thread.sleep(2_000);
+
+        registry.shutdown();
+
+        assertThat(registry.activeCount()).isZero();
+        // 구독까지 본다 — 소켓만 보면 「닫혔지만 구독은 남은」 구현을 놓친다.
+        // <b>다만 판별자는 소켓이다</b>: 처방을 되돌려도 이 값은 1 이상이었다(주입으로
+        // 확인함). 감사 프로브가 {@code unsubDelta=0}을 본 것과 다른데, 그쪽이 어느 창에서
+        // 잰 값인지까지는 대조하지 않았다.
+        assertThat(behavior.unsubscribeCallCount() - releasesBefore)
+                .as("종료가 지나갔는데 구독이 남으면 계정당 상한 3개 중 하나가 묶인 채다")
+                .isGreaterThanOrEqualTo(1);
+        assertThat(behavior.isConnected("tokGhostShutdown"))
+                .as("종료가 지나갔는데 소켓이 살아 있으면 그 자리는 아무도 못 돌려준다")
+                .isFalse();
+    }
+
     // ------------------------------------------------------------------
     // 도우미
     // ------------------------------------------------------------------
@@ -383,9 +431,23 @@ class SessionShutdownTest extends IntegrationTestSupport {
                         "--spring.datasource.password=" + POSTGRES.getPassword());
     }
 
+    /**
+     * <b>부르는 순서대로 방송 시작 시각이 늦어진다.</b> 대부분의 검사가 「먼저 연 방송 →
+     * 나중 방송」 순으로 부르므로 그 의도와 맞는다. 앞뒤를 뒤집어 재는 검사는
+     * {@link #keyStartedAt} 로 시각을 직접 준다.
+     */
     private static SessionKey key(String streamId, long streamerId, String channelId) {
-        return new SessionKey(streamId, streamerId, channelId);
+        return keyStartedAt(streamId, streamerId, channelId,
+                Instant.EPOCH.plusSeconds(KEY_SEQ.incrementAndGet()));
     }
+
+    private static SessionKey keyStartedAt(String streamId, long streamerId, String channelId,
+                                           Instant startedAt) {
+        return new SessionKey(streamId, streamerId, channelId, startedAt);
+    }
+
+    private static final java.util.concurrent.atomic.AtomicLong KEY_SEQ =
+            new java.util.concurrent.atomic.AtomicLong();
 
     /**
      * <b>내 토큰의 소켓만 센다.</b> 가짜 서버는 스프링 컨텍스트 하나에 하나뿐이라 전체 수를
