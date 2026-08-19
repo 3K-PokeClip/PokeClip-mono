@@ -41,6 +41,8 @@ services:
       postgres:
         condition: service_healthy   # Flyway 가 뜨자마자 붙으므로 DB가 준비된 뒤여야 한다
     ports:
+      # 넷 중 이것만 밖에 연다. 프론트가 부르는 API가 auth 에만 있다
+      # (나머지 셋은 @RestController 가 0개다). 보안그룹도 8082 만 연다.
       - "8082:8082"
     environment:
       # compose 네트워크 안에서는 서비스 이름이 곧 호스트 이름이다.
@@ -74,7 +76,9 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8081:8081"
+      # 루프백에 묶는다. clip은 HTTP API가 없고(SQS 소비자) 헬스체크만 있어
+      # 밖에서 부를 것이 없다 — EC2 안에서 curl localhost:8081 로만 본다.
+      - "127.0.0.1:8081:8081"
     environment:
       DB_HOST: postgres
       POSTGRES_USER: ${POSTGRES_USER:?}
@@ -97,7 +101,8 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8083:8083"
+      # 루프백에 묶는다(clip과 같은 이유 — chat-collector도 컨트롤러가 0개다).
+      - "127.0.0.1:8083:8083"
     environment:
       DB_HOST: postgres
       POSTGRES_USER: ${POSTGRES_USER:?}
@@ -120,7 +125,8 @@ services:
     restart: unless-stopped
     # DB·외부 연동이 아직 없다. postgres 를 기다릴 이유가 없다.
     ports:
-      - "8084:8084"
+      # 루프백에 묶는다(clip과 같은 이유).
+      - "127.0.0.1:8084:8084"
     environment:
       JAVA_TOOL_OPTIONS: -Xmx192m
 
