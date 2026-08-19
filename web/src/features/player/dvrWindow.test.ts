@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { behindFromCurrentTime, dvrRange, liveEdgePosition, type SeekableLike } from './dvrWindow';
+import {
+  behindFromCurrentTime,
+  dvrRange,
+  liveEdgePosition,
+  rewindWindowSeconds,
+  type SeekableLike,
+} from './dvrWindow';
 import { LIVE_EDGE_BACKOFF_SECONDS, LIVE_WINDOW_SECONDS, isAtEdge } from './playerMath';
 
 // TimeRanges 호환 plain object — jsdom 미디어 구현 없이 검증한다
@@ -115,5 +121,27 @@ describe('엣지 스냅 후 재칠해도 엣지로 남는다', () => {
     const sync = 288;
     const live = liveEdgePosition(range, sync);
     expect(behindFromCurrentTime(range, live - 60, sync)).toBe(60);
+  });
+});
+
+describe('rewindWindowSeconds', () => {
+  it('방송이 창보다 짧으면 방송 길이가 곧 되감기 폭이다', () => {
+    // seekable 0..600, 라이브 지점 590 → 되감을 수 있는 건 590초뿐
+    expect(rewindWindowSeconds({ start: 0, end: 600 }, 590)).toBe(590);
+  });
+
+  it('창을 넘으면 계약 상한 1시간으로 자른다', () => {
+    expect(rewindWindowSeconds({ start: 0, end: 7200 }, 7100)).toBe(LIVE_WINDOW_SECONDS);
+  });
+
+  it('라이브 지점이 창 시작으로 붕괴하면 0이다 — 방송 시작 직후', () => {
+    // 창이 라이브 지연폭보다 짧으면 liveEdgePosition이 range.start로 클램프된다
+    expect(rewindWindowSeconds({ start: 100, end: 102 }, 100)).toBe(0);
+  });
+
+  it('syncPosition이 없으면 백오프 지점 기준이다 (Safari 네이티브)', () => {
+    expect(rewindWindowSeconds({ start: 0, end: 600 }, null)).toBe(
+      600 - LIVE_EDGE_BACKOFF_SECONDS,
+    );
   });
 });

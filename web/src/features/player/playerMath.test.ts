@@ -8,6 +8,7 @@ import {
   formatUptime,
   isAtEdge,
   progressFraction,
+  seekFractionFromPointer,
 } from './playerMath';
 
 describe('formatBehind — 계약3 4절 시차 표기', () => {
@@ -40,27 +41,71 @@ describe('formatUptime', () => {
 });
 
 describe('behindFromSeekFraction', () => {
-  it('클릭 위치를 시차로 환산한다 (우측 끝 = 엣지)', () => {
-    expect(behindFromSeekFraction(1)).toBe(0);
-    expect(behindFromSeekFraction(0.5)).toBe(LIVE_WINDOW_SECONDS / 2);
+  it('시크바 위치를 시차로 환산한다 (우측 끝 = 엣지)', () => {
+    expect(behindFromSeekFraction(1, LIVE_WINDOW_SECONDS)).toBe(0);
+    expect(behindFromSeekFraction(0.5, LIVE_WINDOW_SECONDS)).toBe(LIVE_WINDOW_SECONDS / 2);
   });
 
   it('엣지 3초 미만은 0으로 스냅한다', () => {
     const nearEdge = 1 - 2 / LIVE_WINDOW_SECONDS; // 시차 2초 지점
-    expect(behindFromSeekFraction(nearEdge)).toBe(0);
+    expect(behindFromSeekFraction(nearEdge, LIVE_WINDOW_SECONDS)).toBe(0);
   });
 
   it('범위를 벗어난 입력은 0..윈도우로 클램프한다', () => {
-    expect(behindFromSeekFraction(-0.2)).toBe(LIVE_WINDOW_SECONDS);
-    expect(behindFromSeekFraction(1.7)).toBe(0);
+    expect(behindFromSeekFraction(-0.2, LIVE_WINDOW_SECONDS)).toBe(LIVE_WINDOW_SECONDS);
+    expect(behindFromSeekFraction(1.7, LIVE_WINDOW_SECONDS)).toBe(0);
+  });
+
+  it('창이 짧으면 그 창 기준으로 환산한다 — POK-32', () => {
+    // 방송 10분: 왼쪽 끝이 방송 시작점이어야 한다 (1시간 기준이면 좌측 83%가 죽은 영역)
+    expect(behindFromSeekFraction(0, 600)).toBe(600);
+    expect(behindFromSeekFraction(0.5, 600)).toBe(300);
+  });
+
+  it('창은 계약 상한 1시간으로 잘린다', () => {
+    expect(behindFromSeekFraction(0.5, 99999)).toBe(LIVE_WINDOW_SECONDS / 2);
+  });
+
+  it('되감을 곳이 없으면 항상 0이다', () => {
+    expect(behindFromSeekFraction(0, 0)).toBe(0);
+    expect(behindFromSeekFraction(0, -10)).toBe(0);
+    expect(behindFromSeekFraction(0, Number.NaN)).toBe(0);
   });
 });
 
 describe('progressFraction', () => {
   it('엣지는 1, 윈도우 끝은 0', () => {
-    expect(progressFraction(0)).toBe(1);
-    expect(progressFraction(LIVE_WINDOW_SECONDS)).toBe(0);
-    expect(progressFraction(LIVE_WINDOW_SECONDS * 2)).toBe(0);
+    expect(progressFraction(0, LIVE_WINDOW_SECONDS)).toBe(1);
+    expect(progressFraction(LIVE_WINDOW_SECONDS, LIVE_WINDOW_SECONDS)).toBe(0);
+    expect(progressFraction(LIVE_WINDOW_SECONDS * 2, LIVE_WINDOW_SECONDS)).toBe(0);
+  });
+
+  it('창이 짧으면 그 창 기준으로 채운다 — POK-32', () => {
+    expect(progressFraction(300, 600)).toBe(0.5);
+    expect(progressFraction(600, 600)).toBe(0);
+  });
+
+  it('되감을 곳이 없으면 엣지(1)로 둔다 — 0 나눗셈 방어', () => {
+    // 방어가 없으면 NaN이 CSS width로 나가 트랙이 사라진다
+    expect(progressFraction(0, 0)).toBe(1);
+    expect(progressFraction(10, 0)).toBe(1);
+    expect(progressFraction(1, Number.NaN)).toBe(1);
+  });
+});
+
+describe('seekFractionFromPointer', () => {
+  it('트랙 안 좌표를 비율로 환산한다', () => {
+    expect(seekFractionFromPointer({ left: 100, width: 400 }, 300)).toBe(0.5);
+    expect(seekFractionFromPointer({ left: 100, width: 400 }, 100)).toBe(0);
+  });
+
+  it('트랙 밖으로 나간 드래그 좌표는 0..1로 클램프한다', () => {
+    expect(seekFractionFromPointer({ left: 100, width: 400 }, 40)).toBe(0);
+    expect(seekFractionFromPointer({ left: 100, width: 400 }, 900)).toBe(1);
+  });
+
+  it('폭이 없으면 계산 불가라 null이다', () => {
+    expect(seekFractionFromPointer({ left: 0, width: 0 }, 50)).toBeNull();
   });
 });
 
