@@ -94,6 +94,38 @@ describe('GlassPlayer', () => {
     );
   });
 
+  it('수정자 키 조합은 가로채지 않는다 — 브라우저 뒤로 가기가 살아 있어야 한다', () => {
+    // 회귀: 전역 단축키는 영상을 한 번 클릭하면 활성화된다. Cmd+←(macOS)·Alt+←(Win)로
+    // 이전 페이지에 가려던 사용자가 영상만 되감기고, preventDefault 탓에 뒤로 가기도 죽었다.
+    const { container } = renderPlayer();
+    const player = container.querySelector('[data-controls]')!;
+    const slider = screen.getByRole('slider', { name: '라이브 탐색' });
+
+    for (const modifier of ['metaKey', 'ctrlKey', 'altKey']) {
+      const notPrevented = fireEvent.keyDown(player, { key: 'ArrowLeft', [modifier]: true });
+      expect(slider).toHaveAttribute('aria-valuenow', '0');
+      // 시킹하지 않았으면 기본 동작도 막지 않아야 브라우저가 뒤로 갈 수 있다
+      expect(notPrevented).toBe(true);
+    }
+  });
+
+  it('키 자동반복은 무시한다 — 누르고 있어도 시크가 폭주하지 않는다', () => {
+    // 회귀: OS 키 반복(초당 ~30회)이 그대로 시킹돼 hls.js가 매번 버퍼를 비웠다.
+    // 드래그를 "놓을 때 한 번만" 커밋한 것과 같은 이유의 방어다.
+    const { container } = renderPlayer();
+    const player = container.querySelector('[data-controls]')!;
+
+    fireEvent.keyDown(player, { key: 'ArrowLeft' });
+    for (let i = 0; i < 5; i += 1) {
+      fireEvent.keyDown(player, { key: 'ArrowLeft', repeat: true });
+    }
+    // 첫 타건 1회만 반영된다 — 가드가 없으면 -60이다
+    expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+      'aria-valuenow',
+      '-10',
+    );
+  });
+
   it('시크바에서 누른 키는 전역 단축키가 다시 처리하지 않는다', () => {
     renderPlayer();
     const slider = screen.getByRole('slider', { name: '라이브 탐색' });
