@@ -61,6 +61,14 @@ dependencies {
 }
 
 tasks.named('test') {
+    // DocumentedEnvVarsTest가 이 파일을 읽는다. 선언하지 않으면 Gradle이 입력으로 안 세고,
+    // README만 고친 실행에서 test 태스크가 UP-TO-DATE로 통째로 건너뛴다 —
+    // 문서에서 환경변수를 지워도 초록이다(2026-08-19에 결함 주입으로 실측하다 드러났다).
+    // 반대 방향(yml에 변수 추가)은 processResources가 이미 입력이라 원래 다시 돈다.
+    inputs.file(rootProject.file('README.md'))
+            .withPropertyName('servicesReadme')
+            .withPathSensitivity(PathSensitivity.NONE)
+
     // pgjdbc는 socketTimeout으로 끊긴 배치의 뒷정리에서 `assert false`를 밟는다
     // (BatchResultHandler.isAutoCommit — 닫힌 커넥션의 getAutoCommit, 42.7.11 실측).
     // Gradle 테스트 JVM은 -ea가 기본이라 운영에서 PSQLException(08006)으로 오는
