@@ -271,9 +271,13 @@ public class CollectorRunner implements ApplicationRunner {
     /**
      * 세션 하나를 연다. <b>검사가 직접 부르는 자리라 남겨 둔다</b> — 무엇을 하는지는
      * {@link StreamSession#open()}에 있다.
+     *
+     * <p><b>{@code enabled}를 보는 쪽({@link StreamSession#openIfEnabled()})으로 부른다.</b>
+     * 여기는 옛 경로다 — 설정만 보고 한 채널에 붙는 길이라 그 스위치가 그대로 뜻을 갖는다.
+     * 편지로 여는 등록부는 그 값을 안 본다.
      */
     public boolean start() {
-        return session.open();
+        return session.openIfEnabled();
     }
 
     /**

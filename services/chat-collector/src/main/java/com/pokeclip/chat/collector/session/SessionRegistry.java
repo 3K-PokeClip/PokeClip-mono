@@ -58,7 +58,33 @@ public class SessionRegistry {
     private record Entry(StreamSession session, CollectionStatus status,
                          CollectionMetrics metrics, CountDownLatch stopSignal) { }
 
-    private final ConcurrentHashMap<String, Entry> sessions = new ConcurrentHashMap<>();
+    /**
+     * <b>자리 열쇠는 방송이 아니라 스트리머다.</b> 한 사람은 동시에 두 방송을 할 수 없다.
+     *
+     * <p>방송 번호로 자리를 가르면 <b>같은 스트리머에 번호가 둘일 때 치지직 세션이 둘 선다.</b>
+     * 실제로 아끼는 자원은 번호가 아니라 사람이다 — 연결 상한 3개는 <b>계정별</b>이고, 구독
+     * 대상은 채널·방송 파라미터가 아니라 <b>토큰 주인</b>이 정한다(CLAUDE.md 「스트리머 여러 명」).
+     * 소켓 둘이 서면 <b>같은 채팅이 두 번 들어오고</b> 상한 3개 중 둘을 우리 손으로 태운다
+     * (재현: {@code authCalls=2 connections=2 connectedTokens=[tokSame]}, 채팅 1건 → 바구니 2건).
+     *
+     * <p><b>도달 경로가 실재한다.</b> SQS FIFO의 {@code MessageGroupId}가 방송 번호라
+     * 같은 스트리머의 앞 방송 ENDED와 다음 방송 STARTED는 <b>서로 다른 그룹이라 순서 보장이
+     * 없다.</b> 끝난 방송 메모도 방송 번호가 열쇠라 다른 번호를 못 막는다.
+     *
+     * <p><b>토큰이 아니라 {@code streamerId}로 가른다.</b> 토큰은 갱신되면 문자열이 바뀌어
+     * 「같은 사람의 새 토큰」을 못 알아본다 — 그러면 이 방어선이 조용히 뚫린다.
+     *
+     * <p>「지금 어느 방송인가」는 여기 따로 안 든다. <b>세션이 든다</b>({@code session.key()}) —
+     * 두 곳에 두면 갈아끼울 때 어긋나고, 어긋난 쪽을 태스크 12가 읽으면 채팅이 틀린 방송
+     * 번호로 기록된다.
+     */
+    private final ConcurrentHashMap<Long, Entry> sessions = new ConcurrentHashMap<>();
+
+    /**
+     * 닫힌 세션이 받은 채팅의 누계. <b>살아 있는 세션 몫만 더하면 세션이 닫힐 때마다
+     * 총량이 줄어든다</b> — 판정 줄이 그것을 「받은 게 없다」로 읽는다.
+     */
+    private final AtomicLong closedReceived = new AtomicLong();
 
     /**
      * 재연결 루프가 도는 실행기. <b>가상 스레드다(Java 21).</b>
@@ -87,6 +113,12 @@ public class SessionRegistry {
      * 세션이 나눠 쓴다.</b> 게이트는 「종료가 싱크를 닫기 직전」이라는 프로세스 사건이고,
      * 반납 수는 종료가 인터럽트 전에 한 번 읽는 값이며, 번호는 로그에서 세션을 가리키는
      * 전역 이름이다. 실제로 쓰는 것은 태스크 11(동시 종료)이다.
+     *
+     * <p><b>🔴 {@code lastSessionNo}는 읽지 마라.</b> 세션이 자리를 잡을 때마다 덮어써서
+     * 「가장 나중에 자리를 잡은 세션」이 된다 — 세션이 N개면 뜻이 없는 값이다. 러너에서는
+     * 판정 줄이 이것을 「이 프로세스가 몇 번째까지 갔나」로 읽는데, 등록부에서 같은 식으로
+     * 집으면 <b>남의 세션 번호가 나간다.</b> 세션 번호가 필요하면 세션이 자기 것을 들게
+     * 한다(태스크 13). 지금 등록부 경로에서 읽는 코드는 0곳이다.
      */
     private final AtomicBoolean intakeClosed = new AtomicBoolean();
     private final AtomicInteger releasesInFlight = new AtomicInteger();
@@ -119,6 +151,11 @@ public class SessionRegistry {
      */
     public boolean open(SessionKey key, String accessToken) {
         String streamId = key.streamId();
+        long streamerId = key.streamerId();
+        Entry seated = sessions.get(streamerId);
+        if (seated != null) {
+            return retargetOrSkip(seated, key);
+        }
         CollectionStatus status = new CollectionStatus();
         CollectionMetrics metrics = new CollectionMetrics();
         CountDownLatch stopSignal = new CountDownLatch(1);
@@ -127,13 +164,15 @@ public class SessionRegistry {
                 new ReconnectPolicy(properties.reconnectFirstDelay(), properties.reconnectMaxDelay()),
                 restClient, buffer, persister, archive,
                 reconnectors, stopSignal, intakeClosed, releasesInFlight, lastSessionNo,
-                reason -> stopOne(streamId, reason));
+                reason -> stopOne(streamerId, reason));
         Entry entry = new Entry(session, status, metrics, stopSignal);
         // <b>자리를 먼저 잡는다.</b> 수립이 끝난 뒤에 넣으면 REST 왕복 두 번 동안
         // 자리가 비어 있어, 같은 편지가 두 번 오면 세션이 둘 선다.
-        if (sessions.putIfAbsent(streamId, entry) != null) {
-            log.info("chat.registry.open_skipped stream={} reason=ALREADY_OPEN", streamId);
-            return false;
+        Entry raced = sessions.putIfAbsent(streamerId, entry);
+        if (raced != null) {
+            // 위 get과 여기 사이에 그 스트리머의 자리가 찼다. 우리 것은 아직 아무것도
+            // 안 열었으므로 버리고 자리 주인 쪽 규칙을 그대로 따른다.
+            return retargetOrSkip(raced, key);
         }
         // <b>수립은 맵 밖에서 한다.</b> 발급·구독 왕복 두 번이 맵의 락 안에 들어가면
         // 그 사이 다른 방송의 열기·닫기가 전부 막힌다.
@@ -147,20 +186,61 @@ public class SessionRegistry {
             log.warn("chat.registry.open_failed stream={} reason={}", streamId, e.reason());
         }
         // 못 세웠으면 자리를 비운다. 안 비우면 <b>세션이 없는데 있는 것으로 보여</b>
-        // 다음 편지가 ALREADY_OPEN으로 걸리고 그 방송은 영영 안 붙는다.
+        // 다음 편지가 「이미 열림」으로 걸리고 그 스트리머는 영영 안 붙는다.
         // 우리가 넣은 것일 때만 지운다 — 그 사이 남이 자리를 잡았으면 남의 것이다.
-        sessions.remove(streamId, entry);
+        sessions.remove(streamerId, entry);
         return false;
+    }
+
+    /**
+     * 그 스트리머의 자리가 이미 차 있다. <b>새 방송이면 번호만 갈아끼고, 같은 방송이면
+     * 아무것도 안 한다.</b>
+     *
+     * <p><b>닫았다 새로 열지 않는다.</b> 그 사이의 채팅이 유실되기 때문이다 — 실시간
+     * 푸시라 늦게 붙으면 그 구간을 되받을 방법이 없다. 그리고 <b>닫지 않는 한 새 방송의
+     * 채팅은 이미 이 소켓으로 들어오고 있다</b>(구독은 토큰 주인의 채팅이라 방송을 못 고른다).
+     *
+     * <p><b>거절해도 안 된다.</b> 거절하면 등록부는 앞 방송이 현재라고 믿는데 소켓으로는
+     * 새 방송의 채팅이 들어온다. 그러면 ① 태스크 12가 그 채팅을 <b>끝난 방송 번호로</b>
+     * 찍고 ② 뒤늦게 온 앞 방송의 ENDED가 <b>살아 있는 새 방송을 끊고</b> ③ 그것을 되살릴
+     * STARTED 편지는 이미 소비돼 큐에 없다.
+     *
+     * @return 갈아끼웠으면 true. 같은 방송이면 false다 — <b>그것이 시작 편지의 멱등
+     *         방어선이다</b>(태스크 10). 갈아끼움이 true인 것은 「더 볼 일 없음」이라
+     *         그 편지가 지워져야 하기 때문이다
+     */
+    private boolean retargetOrSkip(Entry seated, SessionKey key) {
+        String current = seated.session().key().streamId();
+        if (current.equals(key.streamId())) {
+            log.info("chat.registry.open_skipped stream={} reason=ALREADY_OPEN", key.streamId());
+            return false;
+        }
+        // 세션이 「지금 어느 방송인가」의 유일한 주인이다. 등록부가 따로 들면 어긋난다.
+        seated.session().retarget(key);
+        log.info("chat.registry.retargeted streamer={} from={} to={}",
+                key.streamerId(), current, key.streamId());
+        return true;
     }
 
     /**
      * 이 방송의 수집을 멈춘다.
      *
-     * @return 닫을 세션이 있었는가. 없으면 false다 — 종료 편지가 두 번 와도 무해하다
+     * <p><b>그 방송이 아직 현재일 때만 닫는다.</b> 이미 다음 방송으로 갈아낀 뒤에 앞 방송의
+     * 종료 편지가 늦게 오는 길이 있는데(FIFO 그룹이 방송 번호라 순서 보장이 없다), 거기서
+     * 닫으면 <b>살아 있는 새 방송을 끊는다</b> — 그리고 그것을 되살릴 STARTED 편지는 이미
+     * 소비돼 큐에 없다.
+     *
+     * @return 닫을 세션이 있었는가. 없거나 <b>옛 번호</b>면 false다 — 종료 편지가 두 번 와도,
+     *         늦게 와도 무해하다
      */
     public boolean close(String streamId) {
-        Entry entry = sessions.remove(streamId);
+        Entry entry = findByStreamId(streamId);
         if (entry == null) {
+            return false;
+        }
+        long streamerId = entry.session().key().streamerId();
+        // 그 사이에 갈아끼워졌으면 지우지 않는다. 값까지 맞을 때만 지운다.
+        if (!sessions.remove(streamerId, entry)) {
             return false;
         }
         closeEntry(streamId, entry);
@@ -175,7 +255,7 @@ public class SessionRegistry {
      * <b>나란히 닫는 것은 태스크 11이다</b> — 예산 계산도 거기 있다.
      */
     public void closeAll() {
-        for (String streamId : List.copyOf(sessions.keySet())) {
+        for (String streamId : activeStreamIds()) {
             close(streamId);
         }
     }
@@ -184,8 +264,57 @@ public class SessionRegistry {
         return sessions.size();
     }
 
+    /** 지금 걷고 있는 방송 번호들. 스트리머마다 하나다. */
     public Collection<String> activeStreamIds() {
-        return List.copyOf(sessions.keySet());
+        return sessions.values().stream()
+                .map(e -> e.session().key().streamId())
+                .toList();
+    }
+
+    /**
+     * 그 스트리머가 <b>지금</b> 하고 있는 방송의 번호. 안 걷고 있으면 null이다.
+     *
+     * <p>세션에게 묻는다 — 등록부가 따로 들면 갈아끼울 때 어긋나고, <b>어긋난 쪽을 태스크
+     * 12가 읽으면 채팅이 틀린 방송 번호로 기록된다.</b>
+     */
+    public String currentStreamIdOf(long streamerId) {
+        Entry entry = sessions.get(streamerId);
+        return entry == null ? null : entry.session().key().streamId();
+    }
+
+    /**
+     * 이 등록부가 받은 채팅의 총량. <b>닫힌 세션 몫도 포함한다.</b>
+     *
+     * <p>계획이 태스크 9에 요구한 <b>합산 경로</b>다. 판정 줄의 등식
+     * {@code received = persisted + conflicts + poisoned + dropped}는 좌변만 세션별이고
+     * 우변은 공유 부품의 프로세스 누계라, 합산할 길이 없으면 <b>등식이 깨지는 것이 아니라
+     * 「받은 게 없다」로 읽힌다</b> — 유실을 알아채는 유일한 계기가 죽는다.
+     *
+     * <p><b>{@code CollectionMetrics}를 합쳐서 주지 않는다.</b> 그 클래스에는 병합이 없고,
+     * 스무 항 중 여럿은 더할 수 있는 값이 아니다 — 지연 중앙값은 표본을 버린 뒤라 다시 못
+     * 내고, 최대 수신 공백·최대 ping 간격은 최댓값이며, 절단 시각은 「마지막 하나」다.
+     * 억지로 하나로 만들면 <b>판정 줄이 조용히 틀린 숫자를 싣는다.</b> 등식이 실제로
+     * 필요로 하는 좌변은 {@code received} 하나라 그것만 정확하게 낸다.
+     *
+     * <p><b>판정 줄에 싣는 배선은 아직 없다.</b> 그 줄을 내는 곳이
+     * {@code CollectorRunner.logVerdictOnce}이고 러너는 등록부를 모른다 — 이어 주는 것은
+     * 종료를 다루는 태스크 11이다. 여기는 그쪽이 쓸 값을 내주는 데까지다.
+     */
+    public long receivedTotal() {
+        return closedReceived.get()
+                + sessions.values().stream().mapToLong(e -> e.metrics().totalReceived()).sum();
+    }
+
+    /**
+     * 그 방송이 받은 채팅 수. 없거나 이미 닫혔으면 0이다.
+     *
+     * <p><b>세션별 지표가 실제로 갈려 있는지를 재는 자다.</b> 지표를 나눠 쓰면 두 방송이
+     * 서로의 수를 읽는다 — 그때 {@code beginSession()}의 수신 시계 되잡기가 남의 수신
+     * 공백까지 지워, 한 방송이 한 건도 못 받는데 공백이 안 자라는 상태가 된다.
+     */
+    public long receivedOf(String streamId) {
+        Entry entry = findByStreamId(streamId);
+        return entry == null ? 0L : entry.metrics().totalReceived();
     }
 
     /**
@@ -195,7 +324,7 @@ public class SessionRegistry {
      * 재접속이 성공해 "재연결 중인데 사유는 없음"이 나온다({@code CollectionStatus} 주석).
      */
     public CollectionStatus.Snapshot statusOf(String streamId) {
-        Entry entry = sessions.get(streamId);
+        Entry entry = findByStreamId(streamId);
         return entry == null ? null : entry.status().snapshot();
     }
 
@@ -204,6 +333,20 @@ public class SessionRegistry {
         return (int) sessions.values().stream()
                 .filter(e -> e.status().state() == CollectionStatus.State.RECONNECTING)
                 .count();
+    }
+
+    /**
+     * 방송 번호로 자리를 찾는다. <b>훑는다</b> — 자리 열쇠가 스트리머라 역방향 색인이 없다.
+     * 동시 수집 상한이 스트리머 100명이라(설계 전제) 훑는 비용이 색인을 유지하는 비용보다 싸고,
+     * 색인을 따로 두면 갈아끼울 때 어긋나는 자리가 하나 더 생긴다.
+     */
+    private Entry findByStreamId(String streamId) {
+        for (Entry entry : sessions.values()) {
+            if (entry.session().key().streamId().equals(streamId)) {
+                return entry;
+            }
+        }
+        return null;
     }
 
     /**
@@ -219,15 +362,17 @@ public class SessionRegistry {
      * 세션 하나가 끝났다고 낼 것이 아니다 — 낸다면 스트리머가 한 명 그만둘 때마다
      * "최종" 판정이 쌓이고 그중 어느 것도 최종이 아니다.
      *
-     * <p>이 호출은 <b>그 세션의 재연결 루프 스레드 위</b>다. 그 세션의 뒷정리는
-     * 루프가 들어올 때 이미 끝냈으므로({@code reconnectLoop} 첫 줄) 여기 {@code close}는
-     * 자리가 빈 것을 보고 곧장 돌아온다 — 자기 자신을 기다리지 않는다.
+     * <p><b>스트리머로 지운다.</b> 방송 번호로 지우면 그 사이에 갈아끼워진 새 방송을 못 찾아
+     * 자리가 안 비워진다. 이 호출은 <b>그 세션의 재연결 루프 스레드 위</b>이고, 그 세션의
+     * 뒷정리는 루프가 들어올 때 이미 끝냈으므로({@code reconnectLoop} 첫 줄) 아래
+     * {@code close}는 자리가 빈 것을 보고 곧장 돌아온다 — 자기 자신을 기다리지 않는다.
      */
-    private void stopOne(String streamId, StopReason reason) {
-        Entry entry = sessions.remove(streamId);
+    private void stopOne(long streamerId, StopReason reason) {
+        Entry entry = sessions.remove(streamerId);
         if (entry == null) {
             return;                       // 이미 닫혔다
         }
+        String streamId = entry.session().key().streamId();
         log.warn("chat.registry.stopped stream={} reason={} retriable=false", streamId, reason);
         closeEntry(streamId, entry);
     }
@@ -240,6 +385,8 @@ public class SessionRegistry {
     private void closeEntry(String streamId, Entry entry) {
         entry.stopSignal().countDown();
         entry.session().close();
+        // 받은 양을 걷어 둔다. 안 걷으면 세션이 닫힐 때마다 총량이 줄어든다.
+        closedReceived.addAndGet(entry.metrics().totalReceived());
         log.info("chat.registry.closed stream={} active={}", streamId, sessions.size());
     }
 }

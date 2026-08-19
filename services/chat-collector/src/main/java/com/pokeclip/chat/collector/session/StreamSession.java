@@ -63,8 +63,17 @@ public class StreamSession {
     /** 실측 30초. 요약 주기는 하트비트와 무관하다 — 얹으면 8/1이 재현된다. */
     private static final Duration SUMMARY_PERIOD = Duration.ofSeconds(30);
 
-    /** 이 세션이 누구의 것인가. <b>태스크 8에서는 들고만 있는다</b> — {@link SessionKey} 참고. */
-    private final SessionKey key;
+    /**
+     * 이 세션이 누구의 <b>어느 방송</b>인가.
+     *
+     * <p><b>스트리머는 그대로인데 방송 번호만 바뀐다</b>(방송을 껐다 켜면 새 번호가 나온다).
+     * 그때 세션·소켓은 그대로 두고 이 값만 갈아낀다 — {@link #retarget(SessionKey)}.
+     *
+     * <p><b>그래서 final이 아니다.</b> 갈아끼우지 않으면 새 방송의 채팅이 <b>끝난 방송 번호로</b>
+     * 기록된다 — 치지직 구독은 「토큰 주인의 채팅」이라 방송을 못 고르므로 소켓은 하나인 채
+     * 새 방송의 채팅이 계속 들어오기 때문이다.
+     */
+    private volatile SessionKey key;
 
     /**
      * 이 세션이 쓰는 치지직 유저 토큰. <b>{@code properties.accessToken()}을 직접 안 읽는다</b> —
@@ -205,9 +214,27 @@ public class StreamSession {
         this.onPermanentStop = onPermanentStop;
     }
 
-    /** 이 세션이 누구의 것인가. 태스크 9의 등록부가 {@code streamId}로 찾는다. */
+    /** 이 세션이 누구의 어느 방송인가. 등록부가 {@code streamId}로 찾는다. */
     public SessionKey key() {
         return key;
+    }
+
+    /**
+     * <b>같은 스트리머의 새 방송으로 갈아낀다. 세션도 소켓도 그대로다.</b>
+     *
+     * <p>닫았다 새로 여는 것이 아니라 번호만 바꾸는 이유는 <b>그 사이의 채팅이 유실되기
+     * 때문</b>이다 — 채팅은 실시간 푸시라 늦게 붙으면 그 구간을 되받을 방법이 없다.
+     * 게다가 치지직 구독은 「토큰 주인의 채팅」이라 방송을 못 고르므로, 닫지 않는 한
+     * 새 방송의 채팅은 <b>이미 이 소켓으로 들어오고 있다.</b>
+     *
+     * <p><b>스트리머가 같을 때만 부른다</b> — 등록부가 그것을 보장한다. 사람이 바뀌면
+     * 토큰도 소켓도 달라야 하므로 갈아끼우기가 성립하지 않는다.
+     *
+     * <p>토큰은 안 바꾼다. 이미 이 토큰으로 수립·구독이 끝났고, 바꿔도 열려 있는 소켓에는
+     * 영향이 없다 — 쓰이는 곳은 <b>닫을 때의 구독 반납</b>뿐이라 그때 옛 토큰이 맞다.
+     */
+    public void retarget(SessionKey newKey) {
+        this.key = newKey;
     }
 
     /**
@@ -378,13 +405,40 @@ public class StreamSession {
     private static final AtomicLong SESSION_SEQ = new AtomicLong();
 
     /**
+     * <b>옛 경로의 입구 — {@code enabled} 스위치를 보는 자리는 여기뿐이다.</b>
+     *
+     * <p>그 스위치는 <b>프로세스 공용 설정</b>이라 「이 서버가 설정만 보고 한 채널에
+     * 붙는가」를 뜻한다. 방송 편지로 여는 세션은 이미 <b>붙어라</b>를 들은 것이므로 그
+     * 값을 볼 이유가 없다 — {@code SessionRegistry}는 {@link #open()}을 직접 부른다.
+     *
+     * <p><b>여기 두지 않고 {@code open()} 안에 두면 조용히 죽는다.</b> 운영 기본값이
+     * {@code CHZZK_ENABLED:false}라({@code application.yml}) 편지로 연 세션이 전부 그
+     * 자리에서 돌아가고, 로그는 {@code INFO chat.collector.disabled} 한 줄뿐이라
+     * 「편지는 지워졌는데 그 방송은 영영 안 걷힌다」가 된다. 태스크 8이 토큰에 대해 세운
+     * 규칙(<b>설정에서 읽는 코드가 하나라도 남으면 그 세션만 남의 것으로 붙는다</b>,
+     * {@code accessToken} 주석)과 같은 이유다 — 감사에서 중대로 잡혔다.
+     *
+     * @return 이 호출이 수집을 시작시켰는가. 꺼져 있으면 false다
+     */
+    public boolean openIfEnabled() {
+        if (!properties.enabled()) {
+            // 붙지 않는다. 로그 한 줄은 남긴다 — "왜 채팅이 안 들어오지"의
+            // 첫 번째 답이 대개 이것이다.
+            log.info("chat.collector.disabled");
+            status.disabled();
+            return false;
+        }
+        return open();
+    }
+
+    /**
      * 부팅 경로. <b>첫 시도부터 실패한 것도 재연결 대상이다</b> — 치지직이 잠깐
      * 아플 때 부팅 타이밍이 겹쳤다는 이유로 그 프로세스가 영영 수집을 안 하면,
      * 사람이 알아채고 재배포할 때까지의 채팅이 통째로 사라진다.
      */
     public void openFromBoot() {
         try {
-            open();
+            openIfEnabled();
         } catch (SessionEstablishException e) {
             // 사유가 영구면 루프가 첫 바퀴에서 즉시 멈춘다.
             // stopped 줄은 open()이 detail까지 실어 이미 남겼다.
@@ -404,14 +458,6 @@ public class StreamSession {
      *         치운다.</b> 사유를 보고 재시도할지 판단하는 것은 부르는 쪽 일이다
      */
     public boolean open() {
-        if (!properties.enabled()) {
-            // 붙지 않는다. 로그 한 줄은 남긴다 — "왜 채팅이 안 들어오지"의
-            // 첫 번째 답이 대개 이것이다.
-            log.info("chat.collector.disabled");
-            status.disabled();
-            return false;
-        }
-
         ChatSession opening = sessionFactory.apply(new ChzzkSessionClient(
                 restClient, properties.baseUrl(), accessToken));
         SessionScope scope = SessionScope.opening(opening);
