@@ -139,3 +139,17 @@ pokeclip:
     ended-sweep-interval: ${BROADCAST_ENDED_SWEEP_INTERVAL:PT1H}
     # 메모 보관 기간. ADR-016의 TTL 24h.
     ended-retention: ${BROADCAST_ENDED_RETENTION:PT24H}
+    intake:
+      # 기본이 꺼짐이다. 켜져 있으면 CI·남의 로컬이 뜰 때마다 큐를 두드린다.
+      # 큐 주소가 비었다고 저절로 꺼지지 않는다 — "일부러 안 켬"과 "설정을 깜빡함"이
+      # 똑같이 보이면 안 되므로, 켜졌는데 주소가 없으면 부팅이 실패한다.
+      enabled: ${BROADCAST_INTAKE_ENABLED:false}
+      queue-url: ${BROADCAST_QUEUE_URL:}
+      region: ${AWS_REGION:ap-northeast-2}
+      # 비면 진짜 AWS. LocalStack 주소(scheme+host+port)를 줄 수 있다.
+      endpoint: ${BROADCAST_QUEUE_ENDPOINT:}
+      # SQS 상한이 20초다. 넘기면 호출이 거부되는데 부팅은 성공한다 —
+      # 그래서 IntakeProperties가 부팅에서 막는다.
+      wait-time: ${BROADCAST_QUEUE_WAIT:20s}
+      # SQS가 한 번에 주는 최대치가 10이다.
+      max-messages: ${BROADCAST_QUEUE_MAX_MESSAGES:10}

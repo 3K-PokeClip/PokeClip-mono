@@ -18,6 +18,12 @@ dependencies {
     implementation 'software.amazon.awssdk:s3'
     implementation 'software.amazon.awssdk:apache5-client'
 
+    // 1번 Media가 넣는 방송 생명주기 편지를 꺼낸다(계약9, ADR-016).
+    // url-connection-client를 같이 넣지 않는다 — 위 apache5-client가 이미 있어 SDK HTTP
+    // 구현이 둘이 되고, 빌더가 명시를 빠뜨리면 "Multiple HTTP implementations"로 죽는다.
+    // SqsClient는 S3Clients와 같이 Apache5HttpClient를 명시한다.
+    implementation 'software.amazon.awssdk:sqs'
+
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
 
