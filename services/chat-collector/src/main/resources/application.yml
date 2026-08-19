@@ -153,3 +153,10 @@ pokeclip:
       wait-time: ${BROADCAST_QUEUE_WAIT:20s}
       # SQS가 한 번에 주는 최대치가 10이다.
       max-messages: ${BROADCAST_QUEUE_MAX_MESSAGES:10}
+  link:
+    # auth의 내부 API 주소(8082). 컨테이너 안에서는 호스트가 서비스 이름이다.
+    auth-base-url: ${AUTH_BASE_URL:http://localhost:8082}
+    # auth의 /internal/** 체인이 X-Internal-Token으로 보는 값. 기본값을 빈 문자열로 두고
+    # ChzzkLinkClient 생성자에서 잡는다 — 안 주면 리터럴 "${INTERNAL_API_TOKEN}"이 바인딩돼
+    # 서버는 뜨고 열쇠 조회만 전부 401이 되며, 401은 재시도 갈래라 편지가 큐에서 영원히 돈다.
+    internal-token: ${INTERNAL_API_TOKEN:}
