@@ -185,6 +185,31 @@ describe('GlassPlayer', () => {
     expect(slider).toHaveAttribute('aria-valuenow', '0');
   });
 
+  it('시크바에서 키보드로 시킹하는 동안 컨트롤이 사라지지 않는다', () => {
+    // 회귀: 전역 핸들러가 슬라이더 타겟에서 wake보다 먼저 반환해 숨김 타이머가 갱신되지
+    // 않았다. 클릭으로 포커스가 들어간 시크바는 :focus-visible이 아니라 CSS 유보도 안 걸려,
+    // 마우스를 안 움직이고 화살표만 누르면 되감기는 계속되는데 시크바·시차 표기가 사라졌다.
+    vi.useFakeTimers();
+    try {
+      const { container } = renderPlayer();
+      const player = container.querySelector('[data-controls]');
+      const slider = screen.getByRole('slider', { name: '라이브 탐색' });
+
+      act(() => {
+        vi.advanceTimersByTime(2000); // 숨김 타이머(2.8s) 직전
+      });
+      fireEvent.keyDown(slider, { key: 'ArrowLeft' });
+      act(() => {
+        vi.advanceTimersByTime(2000); // 타이머가 갱신되지 않았다면 이 지점에서 숨는다
+      });
+
+      expect(player).toHaveAttribute('data-controls', 'visible');
+      expect(slider).toHaveAttribute('aria-valuenow', '-10');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('설정 팝오버가 열려 있는 동안엔 자동 숨김이 유보된다', () => {
     // 팝오버는 Portal로 플레이어 밖에 떠서 포커스 보호가 닿지 않는다 — 열림 상태로 유보한다.
     // userEvent는 fake timer와 대기가 엉켜 멈추므로 동기 fireEvent를 쓴다.

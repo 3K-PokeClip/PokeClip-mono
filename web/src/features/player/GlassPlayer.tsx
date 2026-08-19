@@ -114,6 +114,12 @@ function GlassPlayerBody({
     (event: KeyboardEvent<HTMLDivElement>) => {
       // 포털로 뜬 오버레이(설정 팝오버) 안에서 누른 키는 그쪽 것이다
       if (!isInsidePlayer(event.target)) return;
+      // 플레이어 안의 키 입력은 시킹으로 이어지지 않아도 "보고 있다"는 신호다 — onMouseMove와
+      // 같은 자리에 둔다. 아래 컨트롤 예외로 빠지는 키까지 깨워야 하는 이유는 CSS 유보가
+      // :focus-visible 기준이기 때문이다: 클릭으로 포커스가 들어간 시크바·볼륨 슬라이더는
+      // :focus-visible이 아니라, 화살표만 누르는 동안 컨트롤이 사라져 되감기는 계속되는데
+      // 시차 표기와 시크바만 없어진다.
+      sim.wake();
       // 화살표에 자기 동작이 있는 컨트롤 위에서는 그쪽을 우선한다 — 볼륨 슬라이더의 음량
       // 조절, 그리고 시크바 자신(버블링돼 올라온 키를 여기서 또 처리하면 두 번 시킹된다).
       // button은 일부러 뺐다 — 화살표에 기본 동작이 없고, 재생 버튼을 누른 뒤 그대로
@@ -130,7 +136,6 @@ function GlassPlayerBody({
       else if (intent.kind === 'toFraction') sim.seekToFraction(intent.fraction);
       else sim.returnToLive();
       event.preventDefault();
-      sim.wake();
     },
     [sim],
   );
