@@ -20,11 +20,23 @@ public class BroadcastEventProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(BroadcastEventProcessor.class);
 
+    /**
+     * <b>{@code chat_ended_streams.stream_id}의 폭이다({@code V303}의 {@code VARCHAR(128)}).</b>
+     * clip의 {@code broadcasts.stream_id}({@code V201})도 같은 폭이다.
+     *
+     * <p><b>어긋나면 조용히 깨진다.</b> 이 값이 크면 표에 못 들어가는 편지가 판정을 통과해
+     * 저장에서 터지고(아래 참고), 작으면 멀쩡한 방송이 버려지는데 카운터만 오른다.
+     * 마이그레이션을 고칠 때 여기도 같이 고친다 — {@code 딱_128자인_방송_번호는_표에_들어간다}가
+     * 실제로 128자를 넣어 보므로 어긋나면 검사가 잡는다.
+     */
+    private static final int STREAM_ID_MAX_LENGTH = 128;
+
     private final EndedStreamStore store;
     private final BroadcastStarter starter;
 
     private final AtomicLong unreadableStreamerIds = new AtomicLong();
     private final AtomicLong unknownTypes = new AtomicLong();
+    private final AtomicLong malformedEnvelopes = new AtomicLong();
 
     public BroadcastEventProcessor(EndedStreamStore store, BroadcastStarter starter) {
         this.store = store;
@@ -37,6 +49,16 @@ public class BroadcastEventProcessor {
             // 재시도해도 계속 실패하는데 안 지우면 FIFO라 같은 방송의 뒤 편지가 전부 막힌다.
             log.warn("chat.broadcast.unknown_type_dropped eventType={}", envelope.eventType());
             unknownTypes.incrementAndGet();
+            return ProcessResult.UNREADABLE;
+        }
+        if (!readableEnvelope(envelope)) {
+            // 원문 값은 안 찍는다 — 129자짜리가 그대로 로그에 박히면 읽을 수 없다.
+            log.warn("chat.broadcast.malformed_envelope_dropped eventId={} eventType={} "
+                            + "streamIdLength={} occurredAtMissing={}",
+                    envelope.eventId(), envelope.eventType(),
+                    envelope.streamId() == null ? -1 : envelope.streamId().length(),
+                    envelope.occurredAt() == null);
+            malformedEnvelopes.incrementAndGet();
             return ProcessResult.UNREADABLE;
         }
         StreamerId streamer = StreamerId.parse(envelope.streamerId());
@@ -57,7 +79,42 @@ public class BroadcastEventProcessor {
     }
 
     public BroadcastCounters counters() {
-        return new BroadcastCounters(unreadableStreamerIds.get(), unknownTypes.get());
+        return new BroadcastCounters(unreadableStreamerIds.get(), unknownTypes.get(), malformedEnvelopes.get());
+    }
+
+    /**
+     * 표에 넣을 수 있는 봉투인가. <b>「이 편지를 읽을 수 있는가」는 이미 이 판정기가 지는
+     * 질문이다</b> — 모르는 종류도 못 읽는 {@code streamerId}도 같은 자리에서
+     * {@code UNREADABLE}로 나간다. {@code streamId}가 없거나 너무 긴 것도 같은 질문이다.
+     *
+     * <p>🔴 <b>안 거르면 그 방송의 큐가 영구히 막힌다.</b> 태스크 6이 실물 DB로 쟀다 —
+     * 종료 편지의 {@code streamId}가 {@code null}이거나 129자면
+     * {@code DataIntegrityViolationException}, {@code occurredAt}이 {@code null}이면
+     * {@code Timestamp.from}에서 {@code NullPointerException}이다. 셋 다 {@code process()}
+     * 밖으로 나가 러너가 「안 지우고 회차 중단」으로 받는데, <b>재전송돼도 값이 안 바뀌므로
+     * 영영 안 풀린다.</b> {@code MessageGroupId}가 {@code streamId}라 그 방송의 뒤 편지가
+     * 전부 막히고, 폴링 자체는 성공하므로 health는 초록이다.
+     *
+     * <p>시작 편지는 지금 안 터진다 — {@code find(null)}이 0행이라 통과해서 <b>이름 없는 방송에
+     * 세션이 열린다.</b> 터지지 않을 뿐 같은 못 쓸 편지이므로 같이 막는다(태스크 10의 세션
+     * 등록부가 {@code streamId}를 열쇠로 쓴다).
+     *
+     * <p>clip도 PR #89에서 같은 자리를 막았지만 <b>거긴 러너다</b> — 그쪽
+     * {@code LifecycleEventType.from}이 예외를 던지는 설계라 러너가 분류를 맡았다.
+     * 우리 {@code from}은 {@code UNKNOWN}을 값으로 돌려주므로 전제가 다르다.
+     *
+     * <p>{@code streamerId}는 여기서 안 본다. 바로 아래 {@link StreamerId#parse}가 막는다 —
+     * 두 곳에서 보면 어느 쪽이 막았는지가 카운터로 안 갈린다.
+     *
+     * <p>{@code occurredAt}은 종류를 안 가리고 본다. 지금 쓰는 것은 ENDED뿐이지만, 종류마다
+     * 다른 규칙을 두면 「읽을 수 있는 봉투」의 뜻이 갈린다. 계약9는 모든 종류에 이 칸을 요구한다.
+     */
+    private static boolean readableEnvelope(LifecycleEnvelope envelope) {
+        String streamId = envelope.streamId();
+        return streamId != null
+                && !streamId.isBlank()
+                && streamId.length() <= STREAM_ID_MAX_LENGTH
+                && envelope.occurredAt() != null;
     }
 
     /**
