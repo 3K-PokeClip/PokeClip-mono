@@ -39,7 +39,8 @@ export function useHlsPlayback(
   const clipTimer = useRef<number>(undefined);
 
   // 방송 경과는 스트림 메타데이터에 없다 — 시뮬레이션처럼 시드+티커로 표시만 유지한다.
-  // 방송 상태 API가 생기면 그 티켓에서 교체.
+  // 방송 상태 API가 생기면 그 티켓에서 교체하며, 그때 아래 src 전환 초기화에 uptime도
+  // 넣어야 한다 — 지금은 시드가 스트림과 무관한 단일 상수라 안 넣어도 티가 안 난다.
   useEffect(() => {
     const tick = window.setInterval(() => setUptime((s) => s + 1), 1000);
     return () => window.clearInterval(tick);
