@@ -2,9 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type Hls from 'hls.js';
-import { behindFromCurrentTime, dvrRange, liveEdgePosition } from './dvrWindow';
+import {
+  behindFromCurrentTime,
+  dvrRange,
+  liveEdgePosition,
+  rewindWindowSeconds,
+} from './dvrWindow';
 import { HLS_DVR_CONFIG } from './hlsConfig';
-import { LIVE_WINDOW_SECONDS, behindFromSeekFraction, isAtEdge } from './playerMath';
+import { behindFromSeekFraction, isAtEdge } from './playerMath';
 import { useControlsAutoHide } from './useControlsAutoHide';
 import {
   CLIP_MARK_MS,
@@ -29,6 +34,8 @@ export function useHlsPlayback(
   const [muted, setMuted] = useState(true);
   const [volume, setVolumeState] = useState(70);
   const [behindSeconds, setBehind] = useState(0);
+  // 매니페스트 로드 전엔 되감을 곳이 없다 — 0이면 시크바가 엣지에 붙는다 (POK-32)
+  const [windowSeconds, setWindowSeconds] = useState(0);
   const [uptimeSeconds, setUptime] = useState(options.initialUptimeSeconds ?? 0);
   const [quality, setQuality] = useState<PlayerQuality>(PLAYER_QUALITIES[0]);
   const [lowLatency, setLowLatency] = useState(true);
@@ -65,11 +72,10 @@ export function useHlsPlayback(
       if (!range) return;
       // 되감기 기준점은 엣지와 같은 지점이어야 한다 — range.end 기준으로 시크하고
       // liveEdgePosition 기준으로 시차를 재면 둘이 그 차이만큼 어긋난다.
-      const live = liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null);
-      const clamped = Math.min(
-        Math.min(LIVE_WINDOW_SECONDS, live - range.start),
-        Math.max(0, behind),
-      );
+      const sync = hlsRef.current?.liveSyncPosition ?? null;
+      const live = liveEdgePosition(range, sync);
+      // 상한은 시크바 좌측 끝과 같은 함수에서 온다 — 어긋나면 눌러도 안 가는 영역이 생긴다
+      const clamped = Math.min(rewindWindowSeconds(range, sync), Math.max(0, behind));
       if (isAtEdge(clamped)) {
         // 창이 라이브 지연폭보다 짧으면(방송 시작 직후) live가 range.start로 붕괴한다 —
         // 스냅할 지점이 없는데 시크하면 재생 중인 위치에서 뒤로 끌려간다. 그땐 두고 본다.
@@ -84,8 +90,8 @@ export function useHlsPlayback(
   );
 
   const seekToFraction = useCallback(
-    (fraction: number) => seekToBehind(behindFromSeekFraction(fraction)),
-    [seekToBehind],
+    (fraction: number) => seekToBehind(behindFromSeekFraction(fraction, windowSeconds)),
+    [seekToBehind, windowSeconds],
   );
 
   const seekBy = useCallback(
@@ -153,6 +159,8 @@ export function useHlsPlayback(
     // 같은 값이라 no-op. 새 소스의 자동재생이 거부되면 playing=false로 남아 재생 버튼이 노출된다.
     setPlaying(false);
     setBehind(0);
+    // 이전 스트림의 창 폭이 새 스트림 시크바에 남으면 안 된다
+    setWindowSeconds(0);
 
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
@@ -164,9 +172,11 @@ export function useHlsPlayback(
     const paint = () => {
       const range = dvrRange(video.seekable);
       if (!range) return;
-      setBehind(
-        behindFromCurrentTime(range, video.currentTime, hlsRef.current?.liveSyncPosition ?? null),
-      );
+      const sync = hlsRef.current?.liveSyncPosition ?? null;
+      // 창 폭도 정수로 반올림한다 — live - range.start는 계속 흐르는 실수라 그대로 세팅하면
+      // timeupdate마다 값이 달라져 리렌더가 돈다 (시차를 반올림하는 이유와 같다)
+      setWindowSeconds(Math.round(rewindWindowSeconds(range, sync)));
+      setBehind(behindFromCurrentTime(range, video.currentTime, sync));
     };
     video.addEventListener('play', onPlay);
     video.addEventListener('pause', onPause);
@@ -239,6 +249,7 @@ export function useHlsPlayback(
     volume,
     behindSeconds,
     atEdge: isAtEdge(behindSeconds),
+    windowSeconds,
     uptimeSeconds,
     quality,
     lowLatency,

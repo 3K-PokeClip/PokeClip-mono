@@ -28,6 +28,12 @@ export interface PlayerSimulation {
   volume: number;
   behindSeconds: number;
   atEdge: boolean;
+  /**
+   * 되감을 수 있는 폭(초) — 시크바의 좌측 끝이다 (계약3 4절 4번, POK-32).
+   * 상한은 LIVE_WINDOW_SECONDS이고 방송이 짧으면 그만큼만이다. 실재생은 seekable에서,
+   * 시뮬레이션은 방송 경과에서 파생한다.
+   */
+  windowSeconds: number;
   uptimeSeconds: number;
   quality: PlayerQuality;
   lowLatency: boolean;
@@ -63,10 +69,17 @@ export function usePlayerSimulation(options: PlayerSimulationOptions = {}): Play
 
   const clipTimer = useRef<number>(undefined);
 
+  // 방송 시작 전으로는 되감을 수 없다 — 실재생이 seekable에서 창을 얻는 것과 같은 물리다.
+  // 고정 1시간으로 두면 짧은 방송 경로를 목업·스토리북에서 영영 볼 수 없다 (POK-32).
+  const windowSeconds = Math.min(LIVE_WINDOW_SECONDS, uptimeSeconds);
+
   // 방송 시간은 항상 흐르고, 일시정지 중엔 라이브 엣지에서 뒤처진다 (DVR).
   useEffect(() => {
     const tick = window.setInterval(() => {
       setUptime((s) => s + 1);
+      // 상한이 windowSeconds가 아니라 계약 상한인 건 의도다 — 일시정지 중엔 시차와 방송
+      // 경과가 같이 1초씩 늘어 시차가 창을 앞지르지 않는다. windowSeconds를 여기 넣으면
+      // deps에 걸려 인터벌이 매초 재설정될 뿐이다.
       if (!playing) setBehind((b) => Math.min(LIVE_WINDOW_SECONDS, b + 1));
     }, 1000);
     return () => window.clearInterval(tick);
@@ -79,16 +92,22 @@ export function usePlayerSimulation(options: PlayerSimulationOptions = {}): Play
     wake();
   }, [wake]);
 
-  const seekToFraction = useCallback((fraction: number) => {
-    setBehind(behindFromSeekFraction(fraction));
-  }, []);
+  const seekToFraction = useCallback(
+    (fraction: number) => {
+      setBehind(behindFromSeekFraction(fraction, windowSeconds));
+    },
+    [windowSeconds],
+  );
 
-  const seekBy = useCallback((deltaSeconds: number) => {
-    setBehind((b) => {
-      const next = Math.min(LIVE_WINDOW_SECONDS, Math.max(0, b + deltaSeconds));
-      return isAtEdge(next) ? 0 : next;
-    });
-  }, []);
+  const seekBy = useCallback(
+    (deltaSeconds: number) => {
+      setBehind((b) => {
+        const next = Math.min(windowSeconds, Math.max(0, b + deltaSeconds));
+        return isAtEdge(next) ? 0 : next;
+      });
+    },
+    [windowSeconds],
+  );
 
   const markClip = useCallback(() => {
     setClipMarked(true);
@@ -108,6 +127,7 @@ export function usePlayerSimulation(options: PlayerSimulationOptions = {}): Play
     volume,
     behindSeconds,
     atEdge: isAtEdge(behindSeconds),
+    windowSeconds,
     uptimeSeconds,
     quality,
     lowLatency,

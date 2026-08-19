@@ -45,6 +45,64 @@ describe('GlassPlayer', () => {
     expect(slider).toHaveAttribute('aria-valuetext', '실시간에서 -01:23');
   });
 
+  it('시크바 범위는 되감기 창을 따른다 — 방송이 짧으면 그만큼만', () => {
+    // 창을 1시간으로 고정하면 짧은 방송에서 시크바 왼쪽이 눌러도 안 가는 영역이 된다 (POK-32)
+    renderPlayer({ initialUptimeSeconds: 600 });
+    expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+      'aria-valuemin',
+      '-600',
+    );
+  });
+
+  it('방송이 창보다 길면 상한은 계약값 1시간이다', () => {
+    renderPlayer({ initialUptimeSeconds: 5043 });
+    expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+      'aria-valuemin',
+      '-3600',
+    );
+  });
+
+  it('플레이어 어디에 포커스가 있어도 화살표로 되감을 수 있다', () => {
+    // 시크바에 Tab 포커스를 넣지 않아도 먹어야 한다 (POK-32)
+    const { container } = renderPlayer();
+    const player = container.querySelector('[data-controls]')!;
+
+    fireEvent.keyDown(player, { key: 'ArrowLeft' });
+    expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+      'aria-valuenow',
+      '-10',
+    );
+  });
+
+  it('볼륨 슬라이더 위에서는 화살표가 시킹하지 않는다', () => {
+    // 네이티브 input[type=range]는 preventDefault를 안 해서 타겟 검사로 걸러야 한다
+    renderPlayer();
+    fireEvent.keyDown(screen.getByRole('slider', { name: '볼륨' }), { key: 'ArrowLeft' });
+    expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+      'aria-valuenow',
+      '0',
+    );
+  });
+
+  it('재생 버튼을 누른 뒤에도 화살표로 되감을 수 있다', () => {
+    // 버튼엔 화살표 기본 동작이 없다 — 클릭 직후 단축키가 죽으면 "전역"이 아니다
+    renderPlayer();
+    fireEvent.keyDown(screen.getByRole('button', { name: '일시정지' }), { key: 'ArrowLeft' });
+    expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+      'aria-valuenow',
+      '-10',
+    );
+  });
+
+  it('시크바에서 누른 키는 전역 단축키가 다시 처리하지 않는다', () => {
+    renderPlayer();
+    const slider = screen.getByRole('slider', { name: '라이브 탐색' });
+
+    fireEvent.keyDown(slider, { key: 'ArrowLeft' });
+    // 이중 처리되면 -20이 된다
+    expect(slider).toHaveAttribute('aria-valuenow', '-10');
+  });
+
   it('시크바 PageDown은 60초 뒤로 시킹한다', () => {
     renderPlayer();
     const slider = screen.getByRole('slider', { name: '라이브 탐색' });

@@ -14,6 +14,13 @@
     inset 0 1px 0 rgb(255 255 255 / 0.08);
 }
 
+/* 전역 시킹 단축키를 받으려고 tabIndex=-1을 준다 — 클릭으로 포커스가 들어오지만
+   그건 사용자가 요청한 포커스가 아니므로 테두리를 그리지 않는다.
+   키보드 사용자의 :focus-visible은 그대로 살아 있다. */
+.player:focus {
+  outline: none;
+}
+
 .embed {
   border-radius: 0;
   border: none;
@@ -240,6 +247,10 @@
   align-items: center;
   cursor: pointer;
   margin-bottom: calc(6 * var(--pc-u));
+  /* 터치 드래그가 페이지 스크롤로 가로채이지 않게 — 포인터 이벤트로 시킹하므로 필수 */
+  touch-action: none;
+  /* 마우스 드래그 중 주변 텍스트가 선택되지 않게 */
+  user-select: none;
 }
 
 .seekArea:focus-visible {

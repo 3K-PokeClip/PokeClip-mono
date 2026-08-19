@@ -69,3 +69,15 @@ export function behindFromCurrentTime(
   const behind = Math.round(liveEdgePosition(range, syncPosition) - currentTime);
   return Math.min(LIVE_WINDOW_SECONDS, Math.max(0, behind));
 }
+
+/**
+ * 되감을 수 있는 폭(초) — 시크바 좌측 끝이자 seekToBehind의 클램프 상한이다 (POK-32).
+ *
+ * 방송이 창보다 짧으면 이 값이 곧 방송 길이다 (계약3 4절 4번 "seekable 범위 기준,
+ * 상한은 DVR 창"). 두 용도가 같은 식을 각자 적으면 나중에 한쪽만 바뀌고, 그 순간
+ * 시크바 왼쪽에 눌러도 안 가는 영역이 생긴다 — 이 티켓이 고치는 버그와 같은 종류다.
+ */
+export function rewindWindowSeconds(range: DvrRange, syncPosition: number | null): number {
+  const width = liveEdgePosition(range, syncPosition) - range.start;
+  return Math.min(LIVE_WINDOW_SECONDS, Math.max(0, width));
+}

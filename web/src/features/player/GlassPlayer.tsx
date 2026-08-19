@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { useToast } from '@/ui';
 import styles from './GlassPlayer.module.css';
@@ -8,6 +8,7 @@ import { PlayerChatOverlay } from './PlayerChatOverlay';
 import { PlayerControls } from './PlayerControls';
 import { PlayerSeekBar } from './PlayerSeekBar';
 import { PlayerTopOverlay } from './PlayerTopOverlay';
+import { seekIntentForKey } from './playerKeys';
 import { useHlsPlayback } from './useHlsPlayback';
 import {
   usePlayerSimulation,
@@ -74,11 +75,15 @@ function GlassPlayerBody({
   // 설정 팝오버는 Portal로 플레이어 밖에 뜬다 — 포커스가 넘어가면 :has(:focus-visible)
   // 보호가 닿지 않으므로, 열림 상태를 여기서 알고 그동안 컨트롤 숨김을 유보한다.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 드래그 중 포인터가 플레이어 밖으로 나가면 onMouseLeave가 컨트롤을 숨겨 시크바가 사라진다.
+  // 마우스 드래그는 :focus-visible이 아니라 CSS의 포커스 예외절도 안 걸린다 — 팝오버(settingsOpen)와
+  // 같은 방식으로 드래그 동안 숨김을 유보한다.
+  const [seeking, setSeeking] = useState(false);
   const chat = useSimulatedChat(chatOn);
   const { toast } = useToast();
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const controlsShown = sim.controlsVisible || !sim.playing || settingsOpen;
+  const controlsShown = sim.controlsVisible || !sim.playing || settingsOpen || seeking;
 
   const handleClip = useCallback(() => {
     sim.markClip();
@@ -88,6 +93,43 @@ function GlassPlayerBody({
   const handlePip = useCallback(() => {
     toast({ title: '미니 플레이어는 준비 중이에요' });
   }, [toast]);
+
+  // 시킹 단축키를 플레이어 전역으로 — 시크바에 Tab 포커스를 넣지 않아도 화살표가 먹는다 (POK-32).
+  // 키맵은 시크바와 같은 seekIntentForKey를 쓰므로 둘이 어긋날 수 없다.
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      // 화살표에 자기 동작이 있는 컨트롤 위에서는 그쪽을 우선한다 — 볼륨 슬라이더의 음량
+      // 조절, 그리고 시크바 자신(버블링돼 올라온 키를 여기서 또 처리하면 두 번 시킹된다).
+      // button은 일부러 뺐다 — 화살표에 기본 동작이 없고, 재생 버튼을 누른 뒤 그대로
+      // 되감으려는 게 자연스럽다 (버튼을 넣으면 클릭 직후 단축키가 죽는다).
+      if (
+        event.target instanceof Element &&
+        event.target.closest('input, select, textarea, [role="slider"], [contenteditable]')
+      ) {
+        return;
+      }
+      const intent = seekIntentForKey(event.key);
+      if (!intent) return;
+      if (intent.kind === 'by') sim.seekBy(intent.seconds);
+      else if (intent.kind === 'toFraction') sim.seekToFraction(intent.fraction);
+      else sim.returnToLive();
+      event.preventDefault();
+      sim.wake();
+    },
+    [sim],
+  );
+
+  // 화면을 클릭하면 컨테이너가 포커스를 받아 전역 단축키가 먹는다. 버튼·슬라이더를 눌렀을 땐
+  // 그쪽 포커스를 뺏지 않는다 — Tab 이동 중 포커스가 튀면 접근성 회귀다.
+  const handlePointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      sim.wake();
+      if (event.target instanceof Element && event.target.closest('button, input, [role="slider"]'))
+        return;
+      containerRef.current?.focus({ preventScroll: true });
+    },
+    [sim],
+  );
 
   const handleFullscreen = useCallback(() => {
     const el = containerRef.current;
@@ -110,7 +152,10 @@ function GlassPlayerBody({
       // 키보드 사용자도 컨트롤을 깨울 수 있어야 한다 — CSS의 :has(:focus-visible) 유지와 짝
       onFocus={sim.wake}
       // 탭에 mousemove를 합성하지 않는 터치 환경의 복구 경로 — 숨은 컨트롤은 pointer-events가 없다
-      onPointerDown={sim.wake}
+      onPointerDown={handlePointerDown}
+      // 전역 시킹 단축키 수신용 — Tab 순서엔 넣지 않고 클릭으로만 포커스가 들어온다
+      tabIndex={-1}
+      onKeyDown={handleKeyDown}
     >
       <div className={styles.videoSlot} aria-hidden>
         {videoNode ?? <span className={styles.videoLabel}>라이브 방송 화면</span>}
@@ -125,10 +170,12 @@ function GlassPlayerBody({
       <div className={styles.controls}>
         <PlayerSeekBar
           behindSeconds={sim.behindSeconds}
+          windowSeconds={sim.windowSeconds}
           clipMarked={sim.clipMarked}
           onSeekToFraction={sim.seekToFraction}
           onSeekBy={sim.seekBy}
           onReturnToLive={sim.returnToLive}
+          onSeekingChange={setSeeking}
         />
         <PlayerControls
           sim={sim}
