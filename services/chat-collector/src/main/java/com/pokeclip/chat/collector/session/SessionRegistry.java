@@ -93,6 +93,21 @@ public class SessionRegistry {
     private final AtomicLong closedReceived = new AtomicLong();
 
     /**
+     * 이 프로세스가 <b>실제로 세운</b> 세션의 수. 지금 붙어 있는 수가 아니라 누계다.
+     *
+     * <p>최종 판정 줄의 {@code session=}은 <b>러너 자신의</b> 마지막 세션 번호라 편지
+     * 경로에서는 언제나 0이다 — 러너가 세션을 하나도 안 열기 때문이다. 그러면 판정 줄만
+     * 보고 「이 프로세스는 아무것도 안 걷었다」로 읽힌다. 이 값이 그 자리를 메운다.
+     *
+     * <p><b>{@code lastSessionNo}를 쓰지 않는다.</b> 그것은 「가장 나중에 자리를 잡은 세션」이라
+     * 세션이 N개면 뜻이 없고, 판정 줄에 실으면 <b>남의 번호가 나간다</b>(감사 사소-1).
+     *
+     * <p>번호 갈아끼움(retarget)은 안 센다. 세션도 소켓도 그대로이므로 새로 선 것이 아니다 —
+     * 세면 방송 수가 되고, 그러면 이 항이 「몇 명을 걷었나」를 못 말한다.
+     */
+    private final AtomicLong sessionsOpened = new AtomicLong();
+
+    /**
      * 재연결 루프가 도는 실행기. <b>가상 스레드다(Java 21).</b>
      *
      * <p><b>크기를 정한 풀은 안 된다.</b> 풀이 N이면 N+1번째 세션은 재연결 루프에
@@ -232,6 +247,7 @@ public class SessionRegistry {
         // 그 사이 다른 방송의 열기·닫기가 전부 막힌다.
         try {
             if (session.open()) {
+                sessionsOpened.incrementAndGet();
                 return true;
             }
         } catch (SessionEstablishException e) {
@@ -394,6 +410,11 @@ public class SessionRegistry {
         return sessions.size();
     }
 
+    /** 이 프로세스가 세운 세션의 누계. 판정 줄이 싣는다 — 위 필드 주석이 이유다. */
+    public long sessionsOpened() {
+        return sessionsOpened.get();
+    }
+
     /** 지금 걷고 있는 방송 번호들. 스트리머마다 하나다. */
     public Collection<String> activeStreamIds() {
         return sessions.values().stream()
@@ -458,12 +479,31 @@ public class SessionRegistry {
         return entry == null ? null : entry.status().snapshot();
     }
 
-    /** 지금 다시 붙는 중인 방송의 수. 태스크 13이 health 상세에 싣는다. */
-    public int reconnectingCount() {
-        return (int) sessions.values().stream()
-                .filter(e -> e.status().state() == CollectionStatus.State.RECONNECTING)
-                .count();
+    /**
+     * 지금 몇이 붙어 있고 <b>그중 몇이 다시 붙는 중인가.</b> health가 상세에 싣는다.
+     *
+     * <p><b>한 번의 순회로 낸다.</b> 붙어 있는 수와 재연결 중인 수를 이어 세면 그 사이에
+     * 세션이 닫혀 <b>재연결 중인 수가 붙어 있는 수보다 큰</b> 응답이 나간다 — 읽는 사람은
+     * 그것을 「집계가 깨졌다」가 아니라 「내가 뭘 잘못 읽었다」로 읽고 진짜 신호를 흘린다.
+     * {@link CollectionStatus}가 상태와 사유를 한 참조로 묶은 것과 같은 이유다.
+     *
+     * <p>순회 자체는 {@code ConcurrentHashMap}이라 약한 일관성이다 — 도중에 들어온 세션이
+     * 보일 수도 안 보일 수도 있다. <b>막을 수 있는 것은 두 값이 서로 어긋나는 것까지다.</b>
+     */
+    public Counts counts() {
+        int active = 0;
+        int reconnecting = 0;
+        for (Entry entry : sessions.values()) {
+            active++;
+            if (entry.status().state() == CollectionStatus.State.RECONNECTING) {
+                reconnecting++;
+            }
+        }
+        return new Counts(active, reconnecting);
     }
+
+    /** @param reconnecting {@code active}의 부분집합이다. 둘을 더하지 마라 */
+    public record Counts(int active, int reconnecting) { }
 
     /**
      * 방송 번호로 자리를 찾는다. <b>훑는다</b> — 자리 열쇠가 스트리머라 역방향 색인이 없다.

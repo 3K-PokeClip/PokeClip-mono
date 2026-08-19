@@ -194,7 +194,8 @@ public class FakeChzzkBehavior {
         try {
             s.close(org.springframework.web.socket.CloseStatus.NORMAL);
         } catch (Exception e) {
-            throw new IllegalStateException("가짜 서버 절단 실패 token=" + accessToken, e);
+            // 토큰 원문 금지 — 이유는 require() 주석에.
+            throw new IllegalStateException("가짜 서버 절단 실패 " + attachedCount(), e);
         }
     }
 
@@ -231,7 +232,8 @@ public class FakeChzzkBehavior {
             try {
                 s.sendMessage(new TextMessage(frame));
             } catch (Exception e) {
-                throw new IllegalStateException("가짜 서버 전송 실패 token=" + accessToken, e);
+                // 토큰 원문 금지 — 이유는 require() 주석에.
+                throw new IllegalStateException("가짜 서버 전송 실패 " + attachedCount(), e);
             }
         }
     }
@@ -240,14 +242,30 @@ public class FakeChzzkBehavior {
         sendTo(accessToken, "42[\"SYSTEM\",\"" + escape(innerJson) + "\"]");
     }
 
+    /**
+     * <b>예외 메시지에 토큰을 실으면 안 된다.</b> 절단 뒷정리 중에 클라이언트 ping이
+     * 도착하면 pong을 돌려주려다 여기서 던지는데, 그 예외를 스프링 WebSocket
+     * 데코레이터가 그대로 로그에 찍는다 — 가짜 서버가 만든 유출로
+     * {@code ChatLogLeakTest}가 빨간불이 된다. 절단과 ping이 겹치는 창이 좁아
+     * <b>부하가 걸린 모듈 전체 실행에서만</b> 났다.
+     *
+     * <p>진단에 필요한 것은 「어느 토큰인가」가 아니라 「무엇이 없었는가」다 —
+     * 표에 아예 없는 것(신원을 못 찾음)과 있었는데 닫힌 것(절단)은 원인이 다르다.
+     */
     private WebSocketSession require(String accessToken) {
         WebSocketSession s = byToken.get(accessToken);
         if (s == null || !s.isOpen()) {
             throw new IllegalStateException(
-                    "가짜 서버에 그 스트리머의 열린 세션이 없다 token=" + accessToken
-                            + " 붙어 있는 토큰=" + byToken.keySet());
+                    "가짜 서버에 그 스트리머의 열린 세션이 없다"
+                            + " 세션=" + (s == null ? "표에_없음" : "닫힘")
+                            + " " + attachedCount());
         }
         return s;
+    }
+
+    /** 토큰 목록 대신 개수만. {@code byToken.keySet()}은 남의 토큰까지 통째로 샌다. */
+    private String attachedCount() {
+        return "붙어_있는_토큰_수=" + byToken.size();
     }
 
     int authStatusFor(String accessToken) {

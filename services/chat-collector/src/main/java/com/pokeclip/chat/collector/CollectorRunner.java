@@ -462,7 +462,7 @@ public class CollectorRunner implements ApplicationRunner {
         // 「마지막 하나」다. <b>지금 이 줄의 그 항목들은 러너 자신의 세션 것뿐이라 편지
         // 경로에서는 0이다</b> — 세션별 값은 chat.session.ended 줄이 낸다(ping·pong).
         // 조용히 틀린 숫자를 싣느니 안 싣는다. 세션별 관측은 태스크 13이 맡는다.
-        SummaryLogger.logFinalVerdict(lastSessionNo.get(), metrics.verdict(), reason,
+        SummaryLogger.logFinalVerdict(lastSessionNo.get(), registrySessions(), metrics.verdict(), reason,
                 registryReceived(), persister, buffer.droppedCount(), archive.counters());
     }
 
@@ -511,6 +511,16 @@ public class CollectorRunner implements ApplicationRunner {
      */
     private long registryReceived() {
         return registry == null ? 0L : registry.receivedTotal();
+    }
+
+    /**
+     * 편지로 세운 세션의 누계. <b>판정 줄의 {@code session=}이 편지 경로에서 늘 0이라
+     * 이 항이 그 자리를 메운다</b> — 그 번호는 이 러너 자신의 것이고, 러너는 편지 경로에서
+     * 세션을 하나도 안 연다. 등록부의 {@code lastSessionNo}를 집으면 <b>남의 번호가
+     * 나간다</b>(감사 사소-1).
+     */
+    private long registrySessions() {
+        return registry == null ? 0L : registry.sessionsOpened();
     }
 
     @PreDestroy

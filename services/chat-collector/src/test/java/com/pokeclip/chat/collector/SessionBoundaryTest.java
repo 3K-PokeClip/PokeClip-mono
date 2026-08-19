@@ -4,6 +4,7 @@ import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.TestPersistence;
+import com.pokeclip.chat.collector.support.TestHealth;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -90,7 +91,7 @@ class SessionBoundaryTest extends IntegrationTestSupport {
         assertThat(status.reason())
                 .as("무엇 때문에 끊겼는지가 없으면 재시도할 사유인지 사람이 못 가른다")
                 .isEqualTo(StopReason.TRANSPORT_CLOSED);
-        assertThat(new CollectorHealth(status).health().getStatus())
+        assertThat(TestHealth.legacyOnly(status).health().getStatus())
                 .as("재연결 중에는 채팅이 실제로 안 들어온다. UP이면 밖에서 아무 신호도 없다")
                 .isEqualTo(Status.DOWN);
 
@@ -131,7 +132,7 @@ class SessionBoundaryTest extends IntegrationTestSupport {
                 .as("establishing()이 RECONNECTING을 안 덮으므로, "
                         + "collectingIfPending()이 RECONNECTING도 받아야 올라온다")
                 .isEqualTo(CollectionStatus.State.COLLECTING);
-        assertThat(new CollectorHealth(status).health().getStatus())
+        assertThat(TestHealth.legacyOnly(status).health().getStatus())
                 .as("다시 붙었는데 DOWN으로 남으면 배포·헬스체크가 영영 안 통과한다")
                 .isEqualTo(Status.UP);
     }

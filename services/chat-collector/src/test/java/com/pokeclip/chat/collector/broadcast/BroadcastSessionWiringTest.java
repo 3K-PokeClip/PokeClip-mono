@@ -131,6 +131,14 @@ class BroadcastSessionWiringTest extends IntegrationTestSupport {
         int polls = queue.polls();
         queue.reset();
         awaitUntil(AWAIT, () -> queue.polls() >= polls + 2);
+        // <b>기다린 것을 단언한다.</b> {@code awaitUntil}은 시한이 차면 <b>조용히</b>
+        // 돌아온다({@code IntegrationTestSupport} 헤더) — 그러면 이미 꺼내 간 회차가
+        // 아직 도는 채로 다음 검사가 시작되고, 그 검사는 자기가 안 보낸 편지의 결과를
+        // 본다. 여기서 안 세우면 그 사고가 <b>다음 검사의 엉뚱한 단언</b>으로 나타나
+        // 원인이 이 파일 밖에 있는 것처럼 보인다.
+        assertThat(queue.polls())
+                .as("회차가 안 멎었다 — 이미 꺼내 간 편지가 다음 검사 중에 세션을 연다")
+                .isGreaterThanOrEqualTo(polls + 2);
         // <b>한 번 더 지운다.</b> 첫 지우기와 회차가 끝나는 사이에 그 회차가 남긴 삭제 기록이
         // 들어온다 — 그것을 안 지우면 다음 검사의 {@code deleted()}가 남의 편지로 시작한다
         // (결함 주입 도중 실제로 그렇게 빨간불이 났다).
@@ -163,7 +171,9 @@ class BroadcastSessionWiringTest extends IntegrationTestSupport {
 
         String letter = queue.deliver(started("evt-1", "s1", 42L, 1));
 
-        awaitUntil(AWAIT, () -> registry.activeStreamIds().contains("s1"));
+        // 자리 잡은 것과 붙은 것은 다른 시각이다 — 아래 종료 갈래의 같은 주석 참고.
+        awaitUntil(AWAIT, () -> registry.activeStreamIds().contains("s1")
+                && behavior.connectedTokens().contains("tok42"));
         assertThat(registry.activeStreamIds()).containsExactly("s1");
         assertThat(behavior.connectedTokens())
                 .as("설정 토큰은 비어 있다 — auth가 준 열쇠로 붙지 않았으면 여기서 갈린다")
@@ -186,7 +196,13 @@ class BroadcastSessionWiringTest extends IntegrationTestSupport {
         AUTH.grants(43L, "ch43", "tok43");
         queue.deliver(started("evt-1", "s1", 42L, 1));
         queue.deliver(started("evt-2", "s2", 43L, 1));
-        awaitUntil(AWAIT, () -> registry.activeCount() == 2);
+        // <b>자리 잡은 수와 붙은 수는 다르다.</b> {@code activeCount()}는 {@code sessions.size()}이고,
+        // {@code open()}은 <b>자리를 {@code putIfAbsent}로 먼저 잡고 수립은 락 밖에서</b> 한다 —
+        // 그래서 이 값이 2가 된 시점에 둘째 소켓은 아직 안 붙었을 수 있다. 등록부만 기다리고
+        // 아래에서 <b>가짜 서버 쪽</b>을 단언하면 그 창만큼 간헐로 깨진다(2026-08-19 전수 실행에서
+        // {@code ["tok42"]} 하나만 잡혀 실측으로 걸렸다). 상대 쪽에서 재는 갈래는 상대 쪽을 기다린다.
+        awaitUntil(AWAIT, () -> registry.activeCount() == 2
+                && behavior.connectedTokens().containsAll(List.of("tok42", "tok43")));
         // awaitUntil은 시한이 차면 <b>조용히</b> 돌아온다. 여기서 안 세우면 「하나도 안 열렸다」가
         // 아래 토큰 단언의 실패로 둔갑해 원인이 반대로 보인다(실제로 그렇게 헤맸다).
         assertThat(registry.activeCount()).as("둘 다 안 열렸으면 아래 갈래는 성립조차 안 한다").isEqualTo(2);
@@ -200,6 +216,12 @@ class BroadcastSessionWiringTest extends IntegrationTestSupport {
         awaitUntil(AWAIT, () -> registry.activeCount() == 1);
         assertThat(queue.deleted()).as("종료 편지가 큐에 남으면 그 방송이 영원히 다시 닫힌다").contains(bye);
         assertThat(registry.activeStreamIds()).containsExactly("s2");
+        // <b>자리가 빈 것과 서버가 절단을 관측한 것은 다른 시각이다.</b> 위 대기는 등록부만
+        // 보는데, 소켓을 닫는 것은 우리 쪽이고 종료 프레임이 가짜 서버에 닿는 것은 비동기다
+        // ({@code FakeChzzkBehavior.awaitSessionClosed} 주석). 그 창이 이 갈래를 간헐로
+        // 깨뜨렸다 — 2026-08-19 전수 실행에서 {@code SessionRegistryTest}의 같은 모양이
+        // 실측으로 걸렸고, 거기는 {@code SessionShutdownTest}가 이미 이 대기를 앞세우고 있었다.
+        awaitUntil(AWAIT, () -> !behavior.isConnected("tok42"));
         assertThat(behavior.isConnected("tok42")).as("닫으라고 한 쪽은 실제로 끊겨야 한다").isFalse();
         assertThat(behavior.isConnected("tok43"))
                 .as("종료 편지 한 통이 남의 소켓까지 닫으면 그 방송들의 채팅이 통째로 사라진다")

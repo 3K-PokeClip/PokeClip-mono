@@ -220,6 +220,22 @@ public class StreamSession {
     }
 
     /**
+     * 로그에 실을 방송 번호. <b>세션이 여럿이면 이것이 없는 줄은 아무에게도 안 쓸모없다</b> —
+     * 30초마다 구분 불가능한 줄이 세션 수만큼 나가고, 「일부만 안 걷힌다」를 로그로 못 가른다.
+     *
+     * <p><b>부를 때마다 읽는다.</b> {@link #retarget(SessionKey)}이 번호를 갈아끼우므로
+     * 붙들어 두면 끝난 방송 번호가 계속 나간다.
+     *
+     * <p>옛 경로({@code CHZZK_ENABLED})는 번호를 알 방법이 없어 {@code none}이다
+     * ({@link SessionKey#legacy()}). <b>비워 두지 않는다</b> — 항이 사라지면 「모른다」와
+     * 「이 줄은 원래 그 항이 없다」가 같아진다.
+     */
+    private String stream() {
+        String streamId = key.streamId();
+        return streamId == null ? "none" : streamId;
+    }
+
+    /**
      * <b>같은 스트리머의 새 방송으로 갈아낀다. 세션도 소켓도 그대로다.</b>
      *
      * <p>닫았다 새로 여는 것이 아니라 번호만 바꾸는 이유는 <b>그 사이의 채팅이 유실되기
@@ -496,7 +512,7 @@ public class StreamSession {
         if (skipReason != null) {
             // 조용히 돌아가지 않는다 — 재연결 루프가 왜 안 붙었는지 알 길이 없으면
             // 그것이 곧 조용한 실패다.
-            log.warn("chat.session.start_skipped reason={}", skipReason);
+            log.warn("chat.session.start_skipped stream={} reason={}", stream(), skipReason);
             return false;
         }
         // <b>싱크를 걸기 직전이다.</b> 수신 시계를 여기서 다시 잡지 않고 아래
@@ -529,7 +545,10 @@ public class StreamSession {
                     heartbeatListenerFactory.apply(no));
             // 값이 아니라 읽는 길을 넘긴다 — 삼킨 예외 수는 계속 늘어난다.
             // 세션은 이 덩어리의 것이라 바뀌지 않으므로 그쪽을 직접 읽는다.
-            SummaryLogger logger = SummaryLogger.start(metrics, beat, SUMMARY_PERIOD,
+            // <b>값이 아니라 읽는 길을 넘긴다</b> — 같은 스트리머의 새 방송이 오면
+            // 소켓은 그대로 두고 번호만 갈아끼므로(retarget), 여기서 문자열을 붙들면
+            // 그 뒤 30초 줄이 전부 <b>끝난 방송 번호</b>를 달고 나간다.
+            SummaryLogger logger = SummaryLogger.start(this::stream, metrics, beat, SUMMARY_PERIOD,
                     opening::sinkFailureCount, persister, buffer::droppedCount, archive.counters());
 
             // <b>가드를 보는 것과 상태를 올리는 것이 한 덩어리여야 한다.</b> 위 이른
@@ -589,8 +608,8 @@ public class StreamSession {
             if (since != null) {
                 metrics.recordOutage(since, Instant.now());
             }
-            log.info("chat.session.collecting pingIntervalMs={} sendPeriodMs={}",
-                    established.handshake().pingInterval().toMillis(),
+            log.info("chat.session.collecting stream={} pingIntervalMs={} sendPeriodMs={}",
+                    stream(), established.handshake().pingInterval().toMillis(),
                     established.handshake().sendPeriod().toMillis());
             return true;
         } catch (SessionEstablishException e) {
@@ -601,8 +620,8 @@ public class StreamSession {
             // SESSION_AUTH_FAILED는 500인지 타임아웃인지를, CONNECT_REFUSED는
             // DNS인지 TLS인지 연결 거부인지를 말하지 못한다. 재연결이 반복 실패할 때
             // 사람은 같은 줄만 보고 엉뚱한 곳을 판다.
-            log.warn("chat.session.stopped stage={} reason={} detail={}",
-                    e.stage(), e.reason(), e.getMessage());
+            log.warn("chat.session.stopped stream={} stage={} reason={} detail={}",
+                    stream(), e.stage(), e.reason(), e.getMessage());
             // <b>여기서 status.stopped()를 찍지 않는다.</b> STOPPED는 안 덮이는
             // 상태라, 재시도해도 되는 실패(5xx·시한 초과)에 찍어 두면 재연결이
             // 붙어도 영영 못 올라온다. 재시도 여부는 사유를 받은 쪽이 정한다.
@@ -644,7 +663,7 @@ public class StreamSession {
         return new HeartbeatListener() {
             @Override
             public void onSendFailed(PingFailure.Cause cause) {
-                log.warn("chat.session.ping_send_failed cause={}", cause);
+                log.warn("chat.session.ping_send_failed stream={} cause={}", stream(), cause);
                 // MISUSE는 우리 버그다. 재연결로 덮으면 버그는 영영 안 보이고
                 // 자리만 태우므로 사유를 갈라서 넘긴다.
                 requestReconnect(sessionNo, cause == PingFailure.Cause.MISUSE
@@ -653,7 +672,7 @@ public class StreamSession {
 
             @Override
             public void onPongTimeout(Duration gap) {
-                log.warn("chat.session.pong_timeout gapMs={}", gap.toMillis());
+                log.warn("chat.session.pong_timeout stream={} gapMs={}", stream(), gap.toMillis());
                 requestReconnect(sessionNo, StopReason.PONG_TIMEOUT);
             }
         };
@@ -711,7 +730,7 @@ public class StreamSession {
         if (stale) {
             // 낡은 신호다. 그 세션은 이미 치워졌고, 받아들이면 지금 붙어 있는
             // 세션을 헐어 구독을 반납하고 health를 DOWN으로 되돌린다.
-            log.debug("chat.session.signal_stale session={} reason={}", sessionNo, reason);
+            log.debug("chat.session.signal_stale session={} stream={} reason={}", sessionNo, stream(), reason);
             return;
         }
         if (!mine) {
@@ -764,8 +783,8 @@ public class StreamSession {
                 if (!ReconnectPolicy.retriable(reason)) {
                     // 수집이 다시 시작될 가능성이 없어졌다.
                     // 판정이 나가야 할 두 시점 중 하나다(다른 하나는 stop()).
-                    log.warn("chat.session.stopped reason={} retriable=false attempt={}",
-                            reason, attempt);
+                    log.warn("chat.session.stopped stream={} reason={} retriable=false attempt={}",
+                            stream(), reason, attempt);
                     status.stopped(reason);
                     // <b>그 뒤는 세션이 정하지 않는다.</b> 잔량 회수·판정·프로세스 종료는
                     // 전부 프로세스 단위의 일이라 여기서 부르면 <b>한 스트리머의 동의 철회가
@@ -787,8 +806,8 @@ public class StreamSession {
                     Thread.currentThread().interrupt();
                     return;
                 }
-                log.info("chat.session.reconnecting attempt={} afterMs={} lastReason={}",
-                        attempt, delay.toMillis(), reason);
+                log.info("chat.session.reconnecting stream={} attempt={} afterMs={} lastReason={}",
+                        stream(), attempt, delay.toMillis(), reason);
                 try {
                     if (open()) {
                         return;           // 붙었다. 다음 절단은 새 루프가 받는다
@@ -891,7 +910,7 @@ public class StreamSession {
      * 재연결 루프가 붙어도 {@code start_skipped}만 반복한다.
      */
     private void handleClosed(SessionScope scope) {
-        log.warn("chat.session.closed reason={}", StopReason.TRANSPORT_CLOSED);
+        log.warn("chat.session.closed stream={} reason={}", stream(), StopReason.TRANSPORT_CLOSED);
         // <b>이 세션의 끝은 절단이다.</b> 아래 요청이 낡은 신호로 걸러지거나 종료
         // 중이라 버려져도, 이 세션을 치우는 쪽은 여전히 이 사유로 줄을 남겨야 한다.
         scope.cutReason().compareAndSet(null, StopReason.TRANSPORT_CLOSED);
@@ -948,7 +967,7 @@ public class StreamSession {
         if (event != null) {
             metrics.recordSystemEvent(event.type());
             if ("revoked".equals(event.type())) {
-                log.warn("chat.session.revoked");
+                log.warn("chat.session.revoked stream={}", stream());
                 // <b>여기서 멈추지 않으면 COLLECTING(health UP)인 채로 채팅만 안 온다.</b>
                 // 구독이 서버 쪽에서 취소된 것이라 소켓은 멀쩡하고 onClose도 안 온다 —
                 // 감지원 셋(전송 절단 · pong 임계 · ping 송신 실패) 중 무엇도 안 걸린다.
@@ -1023,8 +1042,8 @@ public class StreamSession {
     private void releaseLate(SessionScope scope) {
         ChatSession.Release released = releaseAndClose(scope);
         if (released != ChatSession.Release.SKIPPED) {
-            log.info("chat.session.released session={} subscription={} late=true",
-                    scope.no().get(), released);
+            log.info("chat.session.released session={} stream={} subscription={} late=true",
+                    scope.no().get(), stream(), released);
         }
     }
 
@@ -1103,17 +1122,26 @@ public class StreamSession {
         // 다시 읽는 코드를 남기지 않는다. 소켓을 닫는 것보다 먼저다:
         // 닫다가 터져도 이 줄은 남는다.
         if (status.state() != CollectionStatus.State.DISABLED) {
-            log.info("chat.session.ended session={} reason={} maxPingGap={}ms maxPongGap={}ms"
-                            + " sendFailures={}",
-                    scope.no().get(), reason == null ? "SHUTDOWN" : reason,
-                    maxPingGap.toMillis(), maxPongGap.toMillis(), sendFailures);
+            // <b>최대 수신 공백은 여기가 유일한 자리다.</b> 판정 줄은 프로세스 누계인데
+            // 이 값은 <b>최댓값이라 세션끼리 더할 수 없어</b> 거기 안 실린다 — 편지 경로에서는
+            // 러너가 세션을 하나도 안 열어 판정 줄의 그 항이 늘 0이다. 즉 이 줄이 없으면
+            // "한 방송이 오래 아무것도 못 받았다"가 어느 줄에도 안 남는다.
+            //
+            // <b>지표 객체가 든 누계다.</b> 편지 경로는 세션마다 지표가 따로라 그 방송의
+            // 값이고, 옛 경로는 프로세스에 하나뿐이라 판정 줄과 같은 값이 나온다.
+            log.info("chat.session.ended session={} stream={} reason={} maxPingGap={}ms"
+                            + " maxPongGap={}ms maxReceiveGap={}ms sendFailures={}",
+                    scope.no().get(), stream(), reason == null ? "SHUTDOWN" : reason,
+                    maxPingGap.toMillis(), maxPongGap.toMillis(),
+                    metrics.verdict().maxReceiveGap().toMillis(), sendFailures);
         }
 
         // 구독을 반납하고 끊는다고 알린다. 안 하면 세션 반납이 우리가 아니라
         // 서버가 죽은 전송을 알아채는 때에 달리고, 실측에서 10초와 4분 42초로
         // 갈렸다. 연결 상한이 3개라 짧은 간격의 재시작 세 번이면 막힌다.
         ChatSession.Release released = releaseAndClose(scope);
-        log.info("chat.session.released session={} subscription={}", scope.no().get(), released);
+        log.info("chat.session.released session={} stream={} subscription={}",
+                scope.no().get(), stream(), released);
     }
 
     /**

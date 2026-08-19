@@ -1,0 +1,323 @@
+package com.pokeclip.chat.collector;
+
+import com.pokeclip.chat.collector.archive.ChatArchive;
+import com.pokeclip.chat.collector.broadcast.BroadcastEventProcessor;
+import com.pokeclip.chat.collector.broadcast.BroadcastSessions;
+import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
+import com.pokeclip.chat.collector.broadcast.LifecycleEnvelope;
+import com.pokeclip.chat.collector.broadcast.ProcessResult;
+import com.pokeclip.chat.collector.broadcast.StreamerId;
+import com.pokeclip.chat.collector.broadcast.intake.IntakeProperties;
+import com.pokeclip.chat.collector.broadcast.intake.IntakeStatus;
+import com.pokeclip.chat.collector.broadcast.intake.SqsIntakeRunner;
+import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
+import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.session.SessionKey;
+import com.pokeclip.chat.collector.session.SessionRegistry;
+import com.pokeclip.chat.collector.support.IntegrationTestSupport;
+import com.pokeclip.chat.collector.support.TestPersistence;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.health.contributor.Health;
+import org.springframework.boot.health.contributor.Status;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.web.client.RestClient;
+import software.amazon.awssdk.services.sqs.SqsClient;
+import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
+import software.amazon.awssdk.services.sqs.model.ReceiveMessageResponse;
+import software.amazon.awssdk.services.sqs.model.SqsException;
+import tools.jackson.databind.ObjectMapper;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * <b>몇 명이 붙어 있고 그중 몇이 안 걷히고 있는지가 health에 나오는가.</b>
+ *
+ * <p>세션이 하나뿐일 때는 "수집이 도는가"가 곧 "이 서버가 건강한가"였다. 여럿이면
+ * 그 등식이 깨진다 — 열 명 중 한 명이 재연결 중이라고 전체를 DOWN으로 두면 나머지
+ * 아홉이 멀쩡한데 배포가 막히고, 반대로 <b>편지를 아예 못 꺼내고 있는데</b> 붙어 있는
+ * 세션이 하나도 없으면 UP처럼 보인다. 그래서 이 카드는 두 가지를 갈랐다:
+ * <b>개별 세션 상태는 상세로, 전체 DOWN은 「편지를 못 받는 상태」로.</b>
+ *
+ * <p><b>다중 세션 문항</b>({@code .claude/skills/multi-session-test-reality}) —
+ * 갈래마다 답을 주석으로 붙였다. 특히 문항 2가 위험한 자리다: health 상세 단언은
+ * <b>그 키가 아예 없어도 통과하는 모양</b>으로 쓰기 쉬워서, 전부 {@code containsEntry}로
+ * 값까지 본다.
+ */
+@FakeChzzkTest
+class CollectorHealthTest extends IntegrationTestSupport {
+
+    private static final Duration AWAIT = Duration.ofSeconds(10);
+    private static final Instant 발생시각 = Instant.parse("2026-08-19T00:00:00Z");
+
+    /** 재연결 상한을 크게 둬야 끊긴 세션이 RECONNECTING에 머문다. 짧으면 바로 붙어 관측 창이 닫힌다. */
+    private static final Duration FIRST_DELAY = Duration.ofMillis(200);
+    private static final Duration MAX_DELAY = Duration.ofSeconds(60);
+
+    @LocalServerPort int port;
+    @Autowired FakeChzzkBehavior behavior;
+    @Autowired RestClient.Builder restClientBuilder;
+    @Autowired EndedStreamStore store;
+
+    /** 옛 경로의 상태. 편지 경로를 쓰는 프로세스에서는 DISABLED로 남는다(같이 못 켠다). */
+    private final CollectionStatus legacy = new CollectionStatus();
+    private final IntakeStatus intake = new IntakeStatus(true);
+    private final ToggleQueue queue = new ToggleQueue();
+
+    private SessionRegistry registry;
+    private BroadcastEventProcessor processor;
+    private SqsIntakeRunner intakeRunner;
+
+    @AfterEach
+    void tearDown() {
+        if (registry != null) registry.closeAll();
+        behavior.reset();
+    }
+
+    // 문항 1: 세션 하나로 바꾸면 activeSessions=1이라 이 단언이 빨간불이다 — 그래서 둘을 연다.
+    // 문항 4: activeSessions=2는 <b>둘이 같은 스트리머여도</b> 참이다. 그때 치지직 소켓은
+    //         하나뿐이고 같은 채팅이 두 번 들어온다 — 상대 쪽이 본 토큰 수를 같이 본다.
+    @Test
+    void 붙어_있는_방송_수가_health에_보인다() {
+        given();
+        registry.open(key("s1", 1L, "chA"), "tokA");
+        registry.open(key("s2", 2L, "chB"), "tokB");
+
+        assertThat(health().getDetails())
+                .as("몇이 붙어 있는지가 안 나가면 「아홉은 멀쩡한데 하나가 안 걷힌다」를 밖에서 못 본다")
+                .containsEntry("activeSessions", 2);
+        assertThat(behavior.connectedTokens())
+                .as("같은 스트리머에 둘을 세도 activeSessions는 2다. 상대 쪽에서 센다")
+                .containsExactlyInAnyOrder("tokA", "tokB");
+    }
+
+    /**
+     * 1번이 식별자 체계를 UUID로 바꾸면 <b>모든 방송이 조용히 안 걷힌다.</b> 편지는 계속
+     * 오고 폴링도 성공하므로 health는 초록이고 예외도 없다 — 이 값이 유일한 신호다.
+     */
+    // 문항 2: containsEntry는 키가 없으면 빨간불이다. isNotNegative 같은 단언이면
+    //         키가 없어도 통과하는 모양이 되므로 값까지 본다.
+    // 문항 4: 셋을 한 카운터로 합친 구현도 이 단언 하나만으로는 통과한다 —
+    //         나머지 둘이 0인지 같이 본다(1번이 고칠 자리가 셋 다 다르다).
+    // 문항 5: health에서 이 항만 빼면 이 갈래만 빨간불이다(주입 C1).
+    @Test
+    void 신원_매칭_실패가_health에_보인다() {
+        given();
+
+        assertThat(processor.process(started("e1", "s1", "uuid-form"))).isEqualTo(ProcessResult.UNREADABLE);
+
+        assertThat(health().getDetails())
+                .containsEntry("unreadableStreamerIds", 1L)
+                .containsEntry("unknownTypes", 0L)
+                .containsEntry("malformedEnvelopes", 0L);
+    }
+
+    // 문항 4: 위 갈래와 같은 이유로 나머지 둘이 0인지 같이 본다.
+    // 문항 5: health에서 이 항만 빼면 이 갈래만 빨간불이다(주입 C2).
+    @Test
+    void 모르는_종류의_편지가_health에_보인다() {
+        given();
+
+        assertThat(processor.process(envelope("e1", "broadcast.paused", "s1", "42")))
+                .isEqualTo(ProcessResult.UNREADABLE);
+
+        assertThat(health().getDetails())
+                .containsEntry("unknownTypes", 1L)
+                .containsEntry("unreadableStreamerIds", 0L)
+                .containsEntry("malformedEnvelopes", 0L);
+    }
+
+    // 문항 4: 위 갈래와 같은 이유로 나머지 둘이 0인지 같이 본다.
+    // 문항 5: health에서 이 항만 빼면 이 갈래만 빨간불이다(주입 C3).
+    @Test
+    void 못_쓸_봉투가_health에_보인다() {
+        given();
+
+        assertThat(processor.process(envelope("e1", "broadcast.ended", null, "42")))
+                .isEqualTo(ProcessResult.UNREADABLE);
+
+        assertThat(health().getDetails())
+                .containsEntry("malformedEnvelopes", 1L)
+                .containsEntry("unreadableStreamerIds", 0L)
+                .containsEntry("unknownTypes", 0L);
+    }
+
+    /**
+     * <b>전체 DOWN은 여기 하나다.</b> 편지를 못 꺼내면 새 방송이 하나도 안 붙는다 —
+     * 그런데 이미 붙어 있던 세션은 멀쩡히 채팅을 받으므로 세션 쪽 신호로는 안 드러난다.
+     *
+     * <p>세 단계를 한 갈래에 둔 이유는 <b>양성 대조</b>다. DOWN만 재면
+     * {@code healthy()}가 늘 false여도 통과한다(문항 2). 앞의 UP과 뒤의 UP이 그 길을 막는다.
+     */
+    // 문항 2: 「한 번도 못 돌았다」도 UP이라 첫 단언이 그것을 못박는다 —
+    //         부팅 직후 창에서 DOWN이면 뜰 때마다 빨간불이 뜬다.
+    // 문항 5: health가 IntakeStatus를 안 보게 되돌리면 가운데 DOWN이 빨간불이다(주입 B).
+    @Test
+    void 편지를_한_건도_못_받고_있으면_health가_DOWN이다() {
+        given();
+        assertThat(health().getStatus())
+                .as("켜졌는데 아직 한 번도 못 돌았을 뿐이면 건강하다")
+                .isEqualTo(Status.UP);
+
+        queue.reachable = false;
+        assertThat(intakeRunner.pollOnce()).as("한 회차가 실제로 실패해야 이 갈래가 성립한다").isFalse();
+
+        assertThat(health().getStatus())
+                .as("편지를 못 꺼내면 새 방송이 하나도 안 붙는데 세션 쪽 신호로는 안 드러난다")
+                .isEqualTo(Status.DOWN);
+
+        queue.reachable = true;
+        assertThat(intakeRunner.pollOnce()).isTrue();
+        assertThat(health().getStatus())
+                .as("회복을 못 읽으면 health가 영영 DOWN이라 다시 붙은 것을 아무도 모른다")
+                .isEqualTo(Status.UP);
+    }
+
+    /**
+     * <b>방송이 없는 시간대가 정상이다.</b> 여기서 DOWN이면 밤마다 알람이 운다.
+     */
+    // 문항 2: 「UP이다」는 등록부를 아예 안 읽는 구현에서도 참이다 — 그래서
+    //         activeSessions=0을 같이 단언한다. 그 키가 없으면 여기서 빨간불이다.
+    @Test
+    void 세션이_하나도_없어도_UP이다() {
+        given();
+
+        assertThat(registry.counts().active()).isZero();
+        assertThat(health().getStatus()).isEqualTo(Status.UP);
+        assertThat(health().getDetails()).containsEntry("activeSessions", 0);
+    }
+
+    /**
+     * <b>한 명이 끊겼다고 전체를 DOWN으로 두면 나머지 아홉이 멀쩡한데 배포가 막힌다.</b>
+     * 세션이 하나뿐일 때는 그 규칙이 맞았고, 여럿이 되면서 성립하지 않는다.
+     */
+    // 문항 1: 세션 하나면 「나머지는 멀쩡하다」가 성립하지 않는다. 둘을 열고 하나만 끊는다.
+    // 문항 2: 「UP이다」만 재면 등록부를 안 읽는 구현도 통과한다 —
+    //         reconnectingSessions=1이 그 자리를 지킨다(그 키가 없으면 빨간불).
+    // 문항 4: reconnectingSessions=1은 <b>멀쩡한 쪽이 같이 끊겨도</b> 참일 수 있다.
+    //         상대 쪽에서 B의 소켓이 살아 있는지를 같이 본다.
+    @Test
+    void 한_방송이_재연결_중이어도_전체가_DOWN이_되지는_않는다() throws Exception {
+        given();
+        registry.open(key("s1", 1L, "chA"), "tokA");
+        registry.open(key("s2", 2L, "chB"), "tokB");
+        // A만 영영 못 붙게 막는다. 안 막으면 즉시 다시 붙어 재연결 구간을 한 번도 못 본다.
+        behavior.failSessionCreateFor("tokA", 503);
+
+        behavior.dropConnectionFor("tokA");
+
+        // 키가 없으면 NPE가 아니라 아래 단언이 이유를 말하게 한다 — 순서를 뒤집어 널을 안 깬다.
+        awaitUntil(AWAIT, () -> Integer.valueOf(1).equals(health().getDetails().get("reconnectingSessions")));
+        assertThat(health().getDetails())
+                .as("누가 안 걷히고 있는지가 상세에 없으면 「전체는 UP」이 곧 「아무 문제 없음」으로 읽힌다")
+                .containsEntry("reconnectingSessions", 1)
+                .containsEntry("activeSessions", 2);
+        assertThat(health().getStatus())
+                .as("한 명이 끊겼다고 전체를 DOWN으로 두면 나머지가 멀쩡한데 배포가 막힌다")
+                .isEqualTo(Status.UP);
+        assertThat(behavior.isConnected("tokB"))
+                .as("멀쩡한 쪽까지 같이 끊겼으면 reconnectingSessions=1은 우연히 맞은 것이다")
+                .isTrue();
+    }
+
+    // ------------------------------------------------------------------
+    // 도우미
+    // ------------------------------------------------------------------
+
+    private void given() {
+        registry = new SessionRegistry(
+                new ChzzkProperties(true, "설정-토큰-쓰면-안-된다",
+                        "http://localhost:" + port, Duration.ofSeconds(5), FIRST_DELAY, MAX_DELAY),
+                restClientBuilder,
+                new ChatBuffer(1_000), TestPersistence.disabledPersister(), ChatArchive.NONE);
+        // 판정기는 <b>진짜 표</b>를 쓴다. 여기서 보는 갈래 셋은 표에 닿기 전에 갈리지만,
+        // 가짜로 바꾸면 「닿기 전에 갈린다」는 사실 자체가 검사에서 사라진다.
+        processor = new BroadcastEventProcessor(store, new RefusingSessions());
+        intakeRunner = new SqsIntakeRunner(queue, intakeProperties(), intake, processor, new ObjectMapper());
+    }
+
+    private Health health() {
+        return new CollectorHealth(legacy, registry, intake, provider(processor)).health();
+    }
+
+    private static SessionKey key(String streamId, long streamerId, String channelId) {
+        return new SessionKey(streamId, streamerId, channelId);
+    }
+
+    private static LifecycleEnvelope started(String eventId, String streamId, String streamerId) {
+        return envelope(eventId, "broadcast.started", streamId, streamerId);
+    }
+
+    private static LifecycleEnvelope envelope(String eventId, String eventType,
+                                              String streamId, String streamerId) {
+        return new LifecycleEnvelope(1, eventId, eventType, 발생시각, streamId, streamerId, 1L, "t-1", null);
+    }
+
+    private static IntakeProperties intakeProperties() {
+        return new IntakeProperties(true, "http://localhost/queue", "ap-northeast-2", "",
+                Duration.ofSeconds(1), 10);
+    }
+
+    private static ObjectProvider<BroadcastEventProcessor> provider(BroadcastEventProcessor processor) {
+        return new ObjectProvider<>() {
+            @Override
+            public BroadcastEventProcessor getObject() {
+                return processor;
+            }
+
+            @Override
+            public BroadcastEventProcessor getObject(Object... args) {
+                return processor;
+            }
+        };
+    }
+
+    /**
+     * 못 쓸 편지 셋은 <b>세션 자리에 닿기 전에</b> 갈려야 한다. 닿으면 여기서 터진다 —
+     * 「세지긴 했는데 세션도 열었다」가 조용히 통과하는 길을 막는다.
+     */
+    private static final class RefusingSessions implements BroadcastSessions {
+        @Override
+        public ProcessResult start(LifecycleEnvelope envelope, StreamerId streamer) {
+            throw new AssertionError("못 쓸 편지가 세션 자리까지 갔다");
+        }
+
+        @Override
+        public boolean stop(String streamId) {
+            throw new AssertionError("못 쓸 편지가 세션 자리까지 갔다");
+        }
+    }
+
+    /**
+     * 큐에 닿을지 말지를 검사가 정한다. {@code receiveMessage}만 동작하고 나머지는 SDK
+     * 인터페이스의 기본 구현이 그대로라, 러너가 그 밖의 무언가를 부르면 터져서 드러난다.
+     */
+    private static final class ToggleQueue implements SqsClient {
+
+        volatile boolean reachable = true;
+
+        @Override
+        public ReceiveMessageResponse receiveMessage(ReceiveMessageRequest request) {
+            if (!reachable) {
+                throw SqsException.builder().message("unreachable").build();
+            }
+            return ReceiveMessageResponse.builder().messages(List.of()).build();
+        }
+
+        @Override
+        public String serviceName() {
+            return "sqs";
+        }
+
+        @Override
+        public void close() {
+        }
+    }
+}

@@ -12,4 +12,13 @@ package com.pokeclip.chat.collector.broadcast;
  * 「식별자 체계가 바뀌었다」, {@code malformedEnvelopes}는 「봉투의 칸이 비었거나 너무 길다」이다.
  */
 public record BroadcastCounters(long unreadableStreamerIds, long unknownTypes, long malformedEnvelopes) {
+
+    /**
+     * 판정기가 아예 없는 프로세스(편지 경로 꺼짐)의 값.
+     *
+     * <p><b>「꺼져서 0」과 「켜졌는데 버린 게 없어서 0」을 이 값이 가르지는 못한다.</b>
+     * health의 {@code letterIntake=disabled}가 그것을 가른다 — 여기서 항을 빼 버리면
+     * 읽는 쪽에서 「그런 값은 원래 없다」와 「오늘은 0이다」가 같아진다.
+     */
+    public static final BroadcastCounters NONE = new BroadcastCounters(0L, 0L, 0L);
 }

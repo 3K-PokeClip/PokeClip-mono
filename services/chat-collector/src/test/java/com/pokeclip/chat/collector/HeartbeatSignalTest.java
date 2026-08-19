@@ -109,8 +109,8 @@ class HeartbeatSignalTest extends IntegrationTestSupport {
 
             assertThat(captor.messages())
                     .as("이 줄이 안 나가면 ping이 안 나가고 있다는 사실이 어디에도 안 남는다")
-                    .contains("chat.session.ping_send_failed cause=MISUSE",
-                            "chat.session.ping_send_failed cause=CONNECTION_DEAD");
+                    .contains("chat.session.ping_send_failed stream=none cause=MISUSE",
+                            "chat.session.ping_send_failed stream=none cause=CONNECTION_DEAD");
         }
     }
 
