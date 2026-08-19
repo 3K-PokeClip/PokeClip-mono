@@ -5,6 +5,7 @@ import com.pokeclip.chat.collector.CollectionStatus;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
+import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.TestPersistence;
 import org.junit.jupiter.api.AfterEach;
@@ -51,6 +52,8 @@ class SessionRegistryTest extends IntegrationTestSupport {
     @Autowired RestClient.Builder restClientBuilder;
 
     private SessionRegistry registry;
+    /** 등록부 세션이 실제로 채팅을 흘려보내는 바구니. 세션 격리를 재려면 바늘이 흘러야 한다. */
+    private ChatBuffer buffer;
 
     @AfterEach
     void tearDown() {
@@ -299,19 +302,228 @@ class SessionRegistryTest extends IntegrationTestSupport {
         assertThat(behavior.isConnected("tokA")).isFalse();
     }
 
+    /**
+     * <b>같은 스트리머의 새 방송이 오면 연결을 새로 열지 않는다.</b>
+     *
+     * <p>치지직 구독은 「토큰 주인의 채팅」이라 방송을 못 고른다(구독 API에 채널·방송
+     * 파라미터가 없다). 연결을 둘 열면 <b>같은 채팅이 두 번 들어오고</b> 계정별 상한 3개 중
+     * 둘을 우리 손으로 태운다.
+     *
+     * <p>도달 경로: SQS FIFO의 그룹 열쇠가 방송 번호라 같은 스트리머의 앞 ENDED와 다음
+     * STARTED는 순서 보장이 없다.
+     */
+    // 문항 4: activeCount()==1만 보면 <b>둘째가 소켓만 열고 등록만 안 한</b> 구현도 통과한다.
+    //         상대 쪽에서 발급 호출과 접속 수를 같이 본다.
+    // 문항 5: 자리 열쇠를 streamId로 되돌리면 authCalls=2·connections=2로 빨간불 — 확인함(주입 G).
+    @Test
+    void 같은_스트리머의_새_방송이_오면_연결을_새로_열지_않는다() {
+        givenRegistry();
+        assertThat(registry.open(key("s1", 42L, "chA"), "tok42")).isTrue();
+        int authCallsAfterFirst = behavior.authCallCount();
+        int connectionsAfterFirst = behavior.connectionCount();
+
+        registry.open(key("s2", 42L, "chA"), "tok42");
+
+        assertThat(registry.activeCount()).isEqualTo(1);
+        assertThat(behavior.authCallCount()).isEqualTo(authCallsAfterFirst);
+        assertThat(behavior.connectionCount())
+                .as("접속이 늘었으면 그 소켓으로 같은 채팅이 한 번 더 들어온다")
+                .isEqualTo(connectionsAfterFirst);
+    }
+
+    /**
+     * <b>세션은 그대로 두고 방송 번호만 갈아낀다.</b>
+     *
+     * <p>닫았다 새로 열면 그 사이의 채팅이 유실된다 — 실시간 푸시라 되받을 방법이 없다.
+     * 그리고 닫지 않는 한 <b>새 방송의 채팅은 이미 이 소켓으로 들어오고 있다.</b>
+     * 갈아끼우지 않으면 태스크 12가 그 채팅을 <b>끝난 방송 번호로</b> 찍는다.
+     *
+     * <p>{@code currentStreamIdOf}는 <b>세션에게 묻는다</b> — 등록부의 딱지만 바꾸고 세션은
+     * 옛 번호를 든 구현이 여기서 걸린다.
+     */
+    // 문항 5: retarget을 no-op으로 되돌리면 "s1"이 나와 빨간불 — 확인함(주입 K).
+    @Test
+    void 같은_스트리머의_새_방송이_오면_방송_번호만_갈아낀다() {
+        givenRegistry();
+        registry.open(key("s1", 42L, "chA"), "tok42");
+
+        assertThat(registry.open(key("s2", 42L, "chA"), "tok42"))
+                .as("갈아끼웠으면 그 편지는 「더 볼 일 없음」이라 지워져야 한다")
+                .isTrue();
+
+        assertThat(registry.currentStreamIdOf(42L)).isEqualTo("s2");
+        assertThat(registry.activeStreamIds()).containsExactly("s2");
+        assertThat(registry.statusOf("s1")).as("옛 번호로는 더 이상 안 찾혀야 한다").isNull();
+    }
+
+    /**
+     * 양성 대조. <b>「늘 하나만 연다」인 구현에서도 위 검사 둘은 초록이다.</b>
+     */
+    @Test
+    void 다른_스트리머는_각자_연결을_연다() {
+        givenRegistry();
+        assertThat(registry.open(key("s1", 42L, "chA"), "tok42")).isTrue();
+        int authCallsAfterFirst = behavior.authCallCount();
+
+        assertThat(registry.open(key("s2", 43L, "chB"), "tok43")).isTrue();
+
+        assertThat(registry.activeCount()).isEqualTo(2);
+        assertThat(behavior.authCallCount()).isEqualTo(authCallsAfterFirst + 1);
+        assertThat(behavior.connectedTokens()).containsExactlyInAnyOrder("tok42", "tok43");
+    }
+
+    /**
+     * <b>이미 갈아낀 뒤에 옛 번호로 닫으면 아무 일도 안 한다.</b>
+     *
+     * <p>앞 방송의 종료 편지가 늦게 오는 길이다(FIFO 그룹이 방송 번호라 순서 보장이 없다).
+     * 거기서 닫으면 <b>살아 있는 새 방송을 끊고</b>, 그것을 되살릴 STARTED 편지는 이미
+     * 소비돼 큐에 없다.
+     */
+    // 문항 4: close가 false를 주면서 <b>소켓은 닫는</b> 구현도 반환값만 보면 통과한다.
+    //         상대 쪽 소켓이 살아 있는지 같이 본다.
+    // 문항 5: retarget을 no-op으로 되돌리면 세션이 옛 번호를 든 채라 close("s1")이 <b>살아 있는
+    //         새 방송을 끊는다</b> — 빨간불 확인함(주입 K). 「현재일 때만 닫는다」를 지키는 것은
+    //         세션이 번호의 유일한 주인이라는 구조 자체다.
+    @Test
+    void 이미_다음_방송으로_갈아낀_뒤에_옛_번호로_닫으면_아무_일도_안_한다() {
+        givenRegistry();
+        registry.open(key("s1", 42L, "chA"), "tok42");
+        registry.open(key("s2", 42L, "chA"), "tok42");
+
+        assertThat(registry.close("s1")).isFalse();
+
+        assertThat(registry.activeCount()).isEqualTo(1);
+        assertThat(registry.currentStreamIdOf(42L)).isEqualTo("s2");
+        assertThat(behavior.isConnected("tok42"))
+                .as("살아 있는 새 방송의 소켓을 끊으면 그 구간 채팅이 통째로 사라진다")
+                .isTrue();
+    }
+
+    @Test
+    void 끝난_방송의_번호로_닫으면_그_세션이_닫힌다() {
+        givenRegistry();
+        registry.open(key("s1", 42L, "chA"), "tok42");
+
+        assertThat(registry.close("s1")).isTrue();
+
+        assertThat(registry.activeCount()).isZero();
+        assertThat(registry.currentStreamIdOf(42L)).isNull();
+        assertThat(behavior.isConnected("tok42")).isFalse();
+    }
+
+    /**
+     * 그 스트리머의 방송이 닫히면 <b>다음 방송은 새 연결로 열려야 한다.</b>
+     * 자리를 스트리머로 잡는 것이 「한 번 열면 그 사람은 영영 못 연다」가 되면 안 된다.
+     */
+    @Test
+    void 앞_방송을_닫으면_같은_스트리머의_다음_방송이_열린다() {
+        givenRegistry();
+        registry.open(key("s1", 42L, "chA"), "tok42");
+        registry.close("s1");
+
+        assertThat(registry.open(key("s2", 42L, "chA"), "tok42")).isTrue();
+        assertThat(registry.activeStreamIds()).containsExactly("s2");
+        assertThat(behavior.isConnected("tok42")).isTrue();
+    }
+
+    /**
+     * <b>두 방송의 채팅이 안 섞인다.</b> 지표를 나눠 쓰면 서로의 수를 읽는다.
+     *
+     * <p>이 갈래가 없으면 세션별 {@code CollectionMetrics}를 공유 하나로 되돌려도
+     * <b>전부 초록이다</b>(감사가 실측으로 잡았다). 되돌렸을 때의 결말은 요약 줄이 겹치는
+     * 정도가 아니라, {@code beginSession()}의 수신 시계 되잡기가 <b>남의 수신 공백을
+     * 지우는</b> 것이다 — 한 방송이 한 건도 못 받는데 공백이 안 자란다.
+     *
+     * <p>등록부 검사가 여태 {@code unusedBuffer()}를 써서 <b>채팅이 한 건도 안 흘렀다.</b>
+     * 여기서 처음 흘린다.
+     */
+    // 문항 1: 세션 하나면 「섞인다」가 성립하지 않는다.
+    // 문항 4: 합계(8)만 보면 <b>둘이 서로의 것을 세도</b> 통과한다. 각자 자기 것만 세는지 본다.
+    // 문항 5: 지표를 공유 하나로 되돌리면 둘 다 8을 읽어 빨간불 — 확인함(주입 H).
+    @Test
+    void 두_방송의_채팅이_안_섞인다() throws Exception {
+        givenRegistry();
+        registry.open(key("s1", 1L, "chA"), "tokA");
+        registry.open(key("s2", 2L, "chB"), "tokB");
+
+        for (int i = 0; i < 5; i++) {
+            behavior.emitChatTo("tokA", "{\"content\":\"a" + i + "\",\"messageTime\":" + (i + 1) + "}");
+        }
+        for (int i = 0; i < 3; i++) {
+            behavior.emitChatTo("tokB", "{\"content\":\"b" + i + "\",\"messageTime\":" + (i + 1) + "}");
+        }
+
+        awaitUntil(AWAIT, () -> buffer.size() >= 8);
+        assertThat(buffer.size()).as("바늘이 코드 안을 지나갔는가 — 안 흐르면 아래 단언이 0==0이다").isEqualTo(8);
+        assertThat(registry.receivedOf("s1")).isEqualTo(5);
+        assertThat(registry.receivedOf("s2")).isEqualTo(3);
+        assertThat(registry.receivedTotal()).isEqualTo(8);
+    }
+
+    /**
+     * <b>닫힌 세션이 받은 몫도 총량에 남는다.</b> 살아 있는 세션만 더하면 세션이 닫힐 때마다
+     * 총량이 줄고, 판정 줄이 그것을 <b>「받은 게 없다」</b>로 읽는다 — 유실을 알아채는
+     * 유일한 계기가 죽는다.
+     */
+    // 문항 5: closeEntry의 closedReceived 누적을 빼면 5→0으로 빨간불 — 확인함(주입 I).
+    @Test
+    void 세션이_닫혀도_받은_양은_총량에_남는다() throws Exception {
+        givenRegistry();
+        registry.open(key("s1", 1L, "chA"), "tokA");
+        for (int i = 0; i < 5; i++) {
+            behavior.emitChatTo("tokA", "{\"content\":\"a" + i + "\",\"messageTime\":" + (i + 1) + "}");
+        }
+        awaitUntil(AWAIT, () -> registry.receivedTotal() >= 5);
+        assertThat(registry.receivedTotal()).isEqualTo(5);
+
+        registry.close("s1");
+
+        assertThat(registry.receivedTotal())
+                .as("닫혔다고 받은 사실이 사라지면 판정 줄이 유실을 못 잡는다")
+                .isEqualTo(5);
+    }
+
+    /**
+     * <b>{@code CHZZK_ENABLED}가 꺼져 있어도 편지로 연 세션은 붙는다.</b>
+     *
+     * <p>그 스위치는 프로세스 공용 설정이고 운영 기본값이 false다({@code application.yml}).
+     * 등록부가 그것을 보면 <b>편지로 연 세션이 전부 조용히 돌아간다</b> — 로그는 INFO 한 줄뿐이라
+     * 「편지는 지워졌는데 그 방송은 영영 안 걷힌다」가 된다.
+     */
+    // 문항 2: opened==true만 보면 <b>세션 발급을 안 하고 true를 주는</b> 구현도 통과한다.
+    //         상대 쪽에서 실제 접속을 본다.
+    // 문항 5: enabled 검사를 open()으로 되돌리면 opened=false로 빨간불 — 확인함(주입 J).
+    @Test
+    void 설정_스위치가_꺼져_있어도_편지로_연_세션은_붙는다() {
+        givenRegistry(false);
+
+        assertThat(registry.open(key("s1", 1L, "chA"), "tokA")).isTrue();
+
+        assertThat(registry.activeCount()).isEqualTo(1);
+        assertThat(behavior.isConnected("tokA"))
+                .as("true만 주고 실제로는 안 붙는 구현을 여기서 가른다")
+                .isTrue();
+        assertThat(stateOf("s1")).isEqualTo(CollectionStatus.State.COLLECTING);
+    }
+
     // ------------------------------------------------------------------
     // 도우미
     // ------------------------------------------------------------------
 
     private void givenRegistry() {
+        givenRegistry(true);
+    }
+
+    private void givenRegistry(boolean enabled) {
+        buffer = new ChatBuffer(1_000);
         registry = new SessionRegistry(
                 // <b>설정 토큰은 안 쓰인다.</b> 세션마다 자기 토큰으로 붙는 것을
                 // 위 connectedTokens() 단언이 지킨다 — 여기에 진짜 같은 값을 두면
                 // 설정에서 읽는 회귀가 그 단언을 통과해 버린다.
-                new ChzzkProperties(true, "설정-토큰-쓰면-안-된다",
+                new ChzzkProperties(enabled, "설정-토큰-쓰면-안-된다",
                         "http://localhost:" + port, Duration.ofSeconds(5), FIRST_DELAY, MAX_DELAY),
                 restClientBuilder,
-                TestPersistence.unusedBuffer(), TestPersistence.disabledPersister(),
+                buffer, TestPersistence.disabledPersister(),
                 ChatArchive.NONE);
     }
 
