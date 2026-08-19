@@ -14,13 +14,19 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -112,7 +118,17 @@ public class SessionRegistry {
      * 수신 게이트 · 나가 있는 반납 수 · 마지막 세션 번호. <b>이 셋은 프로세스 단위라
      * 세션이 나눠 쓴다.</b> 게이트는 「종료가 싱크를 닫기 직전」이라는 프로세스 사건이고,
      * 반납 수는 종료가 인터럽트 전에 한 번 읽는 값이며, 번호는 로그에서 세션을 가리키는
-     * 전역 이름이다. 실제로 쓰는 것은 태스크 11(동시 종료)이다.
+     * 전역 이름이다.
+     *
+     * <p><b>게이트는 {@link #closeAll()}이 세션을 다 닫은 뒤에 내린다.</b> 러너의 것과
+     * <b>다른 객체다</b> — 러너가 자기 게이트를 내리는 시점(싱크 닫기 직전)은 이 등록부의
+     * 종료보다 뒤이고, 하나로 합치려면 러너↔등록부가 서로를 참조해야 해서 빈 순환이 된다
+     * (판정 줄이 등록부의 수신량을 읽는 방향이 이미 러너→등록부다).
+     *
+     * <p><b>🔴 {@code releasesInFlight}를 읽는 코드는 여기 0곳이다.</b> 러너에서는 그 값이
+     * 「인터럽트 전에 더 기다릴까」를 정하는데, 등록부는 <b>인터럽트를 아예 안 한다</b>
+     * ({@link #shutdown()}이 실행기에 {@code shutdown()}만 부른다) — 더 기다려서 지킬 것이 없다.
+     * 세션 생성자가 요구해서 넘길 뿐이다.
      *
      * <p><b>🔴 {@code lastSessionNo}는 읽지 마라.</b> 세션이 자리를 잡을 때마다 덮어써서
      * 「가장 나중에 자리를 잡은 세션」이 된다 — 세션이 N개면 뜻이 없는 값이다. 러너에서는
@@ -123,6 +139,34 @@ public class SessionRegistry {
     private final AtomicBoolean intakeClosed = new AtomicBoolean();
     private final AtomicInteger releasesInFlight = new AtomicInteger();
     private final AtomicLong lastSessionNo = new AtomicLong();
+
+    /**
+     * <b>종료 빗장.</b> 서면 이 등록부는 세션을 더 열지 않는다.
+     *
+     * <p>정지 신호 뒤에도 편지 한 통이 더 들어올 수 있다 — 큐 롱폴링(최대 20초)에 들어간
+     * {@code receiveMessage}는 인터럽트로 안 끊기고, 돌아오면 <b>이미 받은 편지를 마저
+     * 처리한다</b>({@code SqsIntakeLoop.JOIN_WAIT}는 2초다). 그 회차를 기다려 주면
+     * <b>그 하나로 종료 유예 20초를 다 쓴다.</b> 그래서 기다리지 않고 여기서 막는다.
+     *
+     * <p><b>편지는 안 잃는다.</b> {@code open()}이 false이고 그 스트리머의 현재 방송도 없으면
+     * {@code LinkedSessionStarter}가 {@code RETRY_LATER}를 내므로 편지는 지워지지 않고
+     * 큐에 남는다 — 가시성 타임아웃 뒤 다음 프로세스가 받는다.
+     */
+    private final AtomicBoolean closing = new AtomicBoolean();
+
+    /**
+     * 살아 있는 세션 전부를 닫는 데 쓰는 예산. <b>세션 수와 무관한 값이다</b> —
+     * 나란히 닫으므로 전체 = 가장 느린 하나다(태스크 1 실계정: 반납 셋 총 소요 67ms =
+     * 최대 개별 소요, 전 구간 HTTP/2).
+     *
+     * <p>산수는 <b>관측이 아니라 시한</b>이다 — 반납 REST 접속 2초 + 읽기 5초
+     * ({@code spring.http.clients}) + 소켓 닫기 1초(태스크 8B 실측: 첫 {@code .get(1s)}가
+     * 만료되면 catch로 빠져 둘째가 안 돈다). 실측 왕복은 55~69ms라 평시에는 이 예산에
+     * 근처도 안 간다.
+     *
+     * <p>종료 유예 20초 안의 자리: 마지막 회차 join 2 + <b>여기 8</b> + 싱크 닫기 5 = 15초.
+     */
+    static final Duration CLOSE_ALL_BUDGET = Duration.ofSeconds(8);
 
     private final ChzzkProperties properties;
     private final RestClient restClient;
@@ -173,6 +217,16 @@ public class SessionRegistry {
             // 위 get과 여기 사이에 그 스트리머의 자리가 찼다. 우리 것은 아직 아무것도
             // 안 열었으므로 버리고 자리 주인 쪽 규칙을 그대로 따른다.
             return retargetOrSkip(raced, key);
+        }
+        // <b>빗장을 자리 잡은 뒤에 본다.</b> 앞에서만 보면 「빗장 없음을 읽고 → closeAll이
+        // 자리를 다 걷어가고 → 우리가 자리를 잡는」 순서에서 아무도 안 닫는 세션이 남는다.
+        // 뒤에서 보면 둘 중 하나다 — 빗장을 보고 우리가 물러나거나, 우리 자리가 걷어가는
+        // 쪽 눈에 들어오거나. (빗장 쓰기가 걷어가기보다 먼저이므로, false를 읽었다는 것은
+        // 우리 자리가 그 전에 이미 맵에 있었다는 뜻이다. <b>재현이 아니라 논증이다.</b>)
+        if (closing.get()) {
+            sessions.remove(streamerId, entry);
+            log.info("chat.registry.open_skipped stream={} reason=SHUTTING_DOWN", streamId);
+            return false;
         }
         // <b>수립은 맵 밖에서 한다.</b> 발급·구독 왕복 두 번이 맵의 락 안에 들어가면
         // 그 사이 다른 방송의 열기·닫기가 전부 막힌다.
@@ -248,15 +302,91 @@ public class SessionRegistry {
     }
 
     /**
-     * 살아 있는 세션을 전부 닫는다.
+     * 살아 있는 세션을 <b>나란히</b> 닫는다.
      *
-     * <p><b>지금은 하나씩이다.</b> 세션당 (반납 55~69ms + 소켓 닫기 1초, 태스크 1·8B 실측)이라
-     * 열 명이면 약 11초로 종료 유예 20초 안이지만 백 명이면 넘는다.
-     * <b>나란히 닫는 것은 태스크 11이다</b> — 예산 계산도 거기 있다.
+     * <p><b>순차로 닫으면 (반납 + 소켓 닫기) × 세션 수다.</b> 실측 기준 세션당 약 1.07초
+     * (반납 55~69ms + 소켓 닫기 1초, 태스크 1·8B)라 열 명이면 약 11초, 백 명이면 유예
+     * 20초를 넘긴다. 나란히 닫으면 전체가 가장 느린 하나가 된다.
+     *
+     * <p><b>「동시에 부른다」와 「동시에 나간다」는 다르다.</b> {@link RestClient}가 프로세스에
+     * 하나라 같은 호스트 동시 연결 상한에 걸리면 실제로는 배치로 나가고 예산이 배치 수만큼
+     * 곱해진다. {@code SessionShutdownTest.반납이_실제로_겹쳐서_나간다}가 그것을 <b>상대 쪽에서
+     * 행동으로</b> 잰다(가짜 서버 안에 반납이 동시에 몇 개 들어와 있었나).
+     *
+     * <p><b>🔴 그 검사는 가짜 서버를 상대로 잰다.</b> 가짜는 HTTP/1.1이라 커넥션을 나눠 써서
+     * 겹치고, 치지직은 HTTP/2라 커넥션 하나에 스트림으로 몰려 겹친다 — <b>결론은 같고 이유가
+     * 다르다.</b> 판정 근거는 태스크 1의 실계정 프로브다: 세션 셋 동시 반납이 총 67ms·69ms로
+     * <b>최대 개별 소요와 같았고</b>(배치면 합인 178ms·184ms가 나온다) 전 구간 HTTP_2였다.
+     * 그래서 세션별 클라이언트도 반납 전용 풀도 두지 않았다.
+     *
+     * <p><b>여기는 빗장을 안 건다.</b> 부르고 나서도 이 등록부는 계속 쓸 수 있다 —
+     * 새 편지가 오면 다시 연다. 돌아올 수 없는 종료는 {@link #shutdown()}이다.
+     * (그 구분이 없을 때 검사들의 뒷정리가 빗장을 걸어 버려 다음 검사의 편지가 전부
+     * 조용히 안 열렸다 — 2026-08-19에 전수 검사가 그것을 잡았다.)
      */
     public void closeAll() {
-        for (String streamId : activeStreamIds()) {
-            close(streamId);
+        List<Future<?>> closings = new ArrayList<>();
+        for (Map.Entry<Long, Entry> seat : sessions.entrySet()) {
+            Entry entry = seat.getValue();
+            // 값까지 맞을 때만 걷는다. 그 사이에 stopOne·close가 가져갔으면 남의 것이다.
+            if (!sessions.remove(seat.getKey(), entry)) {
+                continue;
+            }
+            String streamId = entry.session().key().streamId();
+            closings.add(reconnectors.submit(() -> closeEntry(streamId, entry)));
+        }
+        awaitClosed(closings);
+    }
+
+    /**
+     * <b>프로세스가 끝난다 — 빗장을 걸고 전부 닫는다.</b> {@link #closeAll()}과 달리
+     * <b>돌아올 수 없다.</b>
+     *
+     * <p>둘을 가른 이유: {@code closeAll()}은 「지금 붙어 있는 것을 다 닫는다」이고 그 뒤에도
+     * 등록부는 계속 쓰인다(검사들의 뒷정리가 그 뜻으로 부른다 — 빗장을 거기 두었더니
+     * <b>다음 검사의 편지가 전부 조용히 안 열렸다</b>). 이쪽은 종료 전용이다.
+     *
+     * <p>순서가 요점이다 — <b>빗장 → 전부 닫기 → 수신 게이트 → 실행기.</b>
+     * 게이트를 앞에 내리면 아직 살아 있는 세션의 채팅을 <b>퍼시스터가 멀쩡한데도</b> 버린다.
+     * 뒤에 내리면 소켓이 닫힌 뒤 콜백에 남아 있던 마지막 프레임이 <b>곧 닫힐 바구니</b>에
+     * 들어가 아무도 저장하지 않는다.
+     */
+    public void shutdown() {
+        // 빗장부터 건다. 자리를 걷어내는 동안 새 세션이 들어오면 아무도 그것을 닫지 않는다 —
+        // 자리를 잡은 뒤 빗장을 다시 보는 open()의 검사와 짝이다.
+        closing.set(true);
+        closeAll();
+        intakeClosed.set(true);
+        // <b>{@code shutdownNow()}가 아니다.</b> 인터럽트하면 나가 있는 반납 REST가 즉시
+        // 실패하는데 세션 키는 이미 소모된 뒤라 <b>아무도 다시 못 보낸다</b> — 서버 쪽 자리가
+        // 10초~4분 42초 남고(실측) 상한은 계정당 3개다. 가상 스레드라 JVM 종료를 안 붙든다.
+        reconnectors.shutdown();
+    }
+
+    /**
+     * 예산 안에서 닫히기를 기다린다. <b>시한이 차도 취소하지 않는다</b> —
+     * {@code cancel(true)}는 인터럽트라 위와 같은 이유로 반납을 끊는다. 못 기다린 것은
+     * 프로세스가 죽을 때까지 데몬 위에서 계속 돈다.
+     */
+    private void awaitClosed(List<Future<?>> closings) {
+        long deadline = System.nanoTime() + CLOSE_ALL_BUDGET.toNanos();
+        for (int i = 0; i < closings.size(); i++) {
+            try {
+                closings.get(i).get(Math.max(deadline - System.nanoTime(), 0), TimeUnit.NANOSECONDS);
+            } catch (TimeoutException e) {
+                // 전부 같은 시한을 나눠 쓰므로 하나가 만료하면 남은 것도 만료다.
+                // 조용히 넘어가면 「닫았다」와 「예산이 모자랐다」가 구분되지 않는다.
+                log.warn("chat.registry.close_timeout budgetMs={} pending={}",
+                        CLOSE_ALL_BUDGET.toMillis(), closings.size() - i);
+                return;
+            } catch (ExecutionException e) {
+                // 하나가 터져도 나머지는 닫는다. 자리는 이미 걷어냈으므로 재시도할 곳이 없다.
+                log.warn("chat.registry.close_failed reason={}",
+                        e.getCause().getClass().getSimpleName());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
         }
     }
 

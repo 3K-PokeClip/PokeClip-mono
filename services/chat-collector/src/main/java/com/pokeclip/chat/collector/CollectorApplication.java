@@ -6,6 +6,7 @@ import com.pokeclip.chat.collector.broadcast.EndedStreamSweeper;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
+import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.flywaydb.core.Flyway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -73,9 +74,9 @@ public class CollectorApplication {
     CollectorRunner collectorRunner(ChzzkProperties properties, CollectionStatus status,
                                     RestClient.Builder restClientBuilder,
                                     ChatBuffer buffer, ChatPersister persister,
-                                    ChatArchive archive) {
+                                    ChatArchive archive, SessionRegistry registry) {
         return new CollectorRunner(properties, status, restClientBuilder, buffer, persister, archive,
-                () -> System.exit(1));
+                registry, () -> System.exit(1));
     }
 
     /**

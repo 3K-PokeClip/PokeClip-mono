@@ -168,22 +168,37 @@ public final class SummaryLogger implements AutoCloseable {
      * <p>요약과 같은 규칙이다. 본문·작성자 식별자·닉네임·토큰은 어느 필드에도 없다.
      */
     public static void logFinalVerdict(long session, CollectionMetrics.Verdict verdict,
-                                       Object stopReason,
+                                       Object stopReason, long otherSessionsReceived,
                                        PersistCounters counters, long dropped,
                                        ArchiveCounters archive) {
-        log.info("{}", renderVerdict(session, verdict, stopReason, counters.persistedCount(),
-                counters.conflictedCount(), counters.poisonedCount(), dropped, archive));
+        log.info("{}", renderVerdict(session, verdict, stopReason, otherSessionsReceived,
+                counters.persistedCount(), counters.conflictedCount(), counters.poisonedCount(),
+                dropped, archive));
     }
 
-    /** 순수 함수라 로그 없이도 검사할 수 있다. */
+    /**
+     * 순수 함수라 로그 없이도 검사할 수 있다.
+     *
+     * @param otherSessionsReceived {@code verdict} 밖의 세션들이 받은 채팅 수 — 스트리머
+     *                              여럿을 동시에 걷을 때 {@code SessionRegistry}의 몫이다.
+     *                              <b>등식의 좌변이라 반드시 합쳐야 한다</b>: 우변 넷
+     *                              (persisted·conflicts·poisoned·dropped)은 공유 부품의
+     *                              프로세스 누계인데 좌변만 세션별이라, 안 합치면 등식이
+     *                              깨지는 것이 아니라 <b>「받은 게 없다」로 읽힌다.</b>
+     *                              <b>더할 수 있는 것만 여기로 온다</b> — 최댓값(수신 공백·
+     *                              ping/pong 간격)과 「마지막 하나」(절단 시각·지연 중앙값)는
+     *                              합치면 조용히 틀린 숫자가 되므로 안 싣는다
+     */
     public static String renderVerdict(long session, CollectionMetrics.Verdict v,
-                                       Object stopReason,
+                                       Object stopReason, long otherSessionsReceived,
                                        long persisted, long conflicted, long poisoned, long dropped,
                                        ArchiveCounters archive) {
         return "chat.session.verdict"
                 // 첫 항이다. 줄을 세션 단위로 고르는 사람도 도구도 여기서 갈린다.
+                // <b>편지 경로에서는 이 러너가 연 세션이 없어 0이다</b> — 세션 번호는
+                // 세션별 줄(chat.session.ended)이 든다.
                 + " session=" + session
-                + " received=" + v.totalReceived()
+                + " received=" + (v.totalReceived() + otherSessionsReceived)
                 + " collectedFor=" + duration(v.totalCollectedFor())
                 + " lastReceivedAt=" + instant(v.lastReceivedAt())
                 + " maxReceiveGap=" + duration(v.maxReceiveGap())

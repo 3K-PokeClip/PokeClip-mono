@@ -167,12 +167,25 @@ public class FakeChzzkBehavior {
     private final java.util.Map<String, Integer> authStatusByToken =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+    /** 토큰별 구독 반납 상태. 없으면 전역 {@link #unsubscribeStatus}를 쓴다. */
+    private final java.util.Map<String, Integer> unsubscribeStatusByToken =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     /**
      * 이 스트리머의 세션 발급만 실패시킨다. 재연결 루프를 한 세션만 백오프에
      * 가둬 두는 손잡이다 — 전역 {@link #authStatus}로는 전부 같이 막힌다.
      */
     public void failSessionCreateFor(String accessToken, int status) {
         authStatusByToken.put(accessToken, status);
+    }
+
+    /**
+     * 이 스트리머의 구독 반납만 실패시킨다. 전역 {@link #unsubscribeStatus}로는 전부 같이
+     * 막혀서 <b>「하나가 실패해도 나머지는 닫힌다」를 잴 수가 없다</b> — 전부 실패하면
+     * "나머지"가 없다.
+     */
+    public void failReleaseFor(String accessToken, int status) {
+        unsubscribeStatusByToken.put(accessToken, status);
     }
 
     /** 이 스트리머의 소켓만 끊는다. 다른 스트리머의 소켓은 그대로 둔다. */
@@ -241,6 +254,10 @@ public class FakeChzzkBehavior {
         return authStatusByToken.getOrDefault(accessToken, authStatus);
     }
 
+    int unsubscribeStatusFor(String accessToken) {
+        return unsubscribeStatusByToken.getOrDefault(accessToken, unsubscribeStatus);
+    }
+
     void rememberFor(String accessToken, WebSocketSession s) {
         byToken.put(accessToken, s);
         tokenBySocketId.put(s.getId(), accessToken);
@@ -291,6 +308,20 @@ public class FakeChzzkBehavior {
      * 여기(로컬 톰캣)와 치지직이 다를 수 있어, 실물과 대조하려면 양쪽 다 적혀 있어야 한다.
      */
     private final List<String> unsubscribeProtocols = new CopyOnWriteArrayList<>();
+    /**
+     * <b>지금 이 서버 안에 들어와 있는 반납 요청의 수</b>와 그 최댓값.
+     *
+     * <p>도착 시각만으로는 겹침을 못 읽는다 — 뭉치 경계를 몇 ms로 잡느냐에 답이 달라지고,
+     * 그 값은 우리가 고르는 것이다. <b>"안에 몇이 같이 있었나"는 고를 것이 없다.</b>
+     * 관측점이 상대 쪽인 것은 같은 이유다: 우리 쪽에서 "동시에 던졌다"를 세면 커넥션 풀이
+     * 배치로 쪼갠 것을 못 본다(multi-session-test-reality 문항 3).
+     *
+     * <p><b>🔴 이 값은 가짜 서버(HTTP/1.1)가 잰 것이다.</b> 치지직은 HTTP/2라 커넥션 하나에
+     * 몰리므로 <b>겹치는 이유가 다르다.</b> 판정 근거는 태스크 1의 실계정 프로브다
+     * (세션 셋 동시 반납 총 67ms·69ms = 최대 개별 소요, 전부 HTTP_2).
+     */
+    private final AtomicInteger releasesInServer = new AtomicInteger();
+    private final AtomicInteger maxConcurrentReleases = new AtomicInteger();
     private final AtomicInteger closedSessions = new AtomicInteger();
     private final AtomicBoolean unsubscribeSawOpenSession = new AtomicBoolean();
 
@@ -337,6 +368,12 @@ public class FakeChzzkBehavior {
 
     /** 위 도착들과 같은 순서의 프로토콜 목록. */
     public List<String> unsubscribeProtocols() { return List.copyOf(unsubscribeProtocols); }
+
+    /**
+     * 반납 요청이 이 서버 안에 <b>동시에</b> 몇 개까지 들어와 있었나. 1이면 배치로 나간 것이다 —
+     * 코드가 동시여도 커넥션 풀·락이 막으면 그렇게 된다.
+     */
+    public int maxConcurrentReleases() { return maxConcurrentReleases.get(); }
 
     /**
      * 반납 REST가 도착했을 때 WS 세션이 열려 있었는가.
@@ -476,6 +513,12 @@ public class FakeChzzkBehavior {
         WebSocketSession s = byToken.get(accessToken);
         unsubscribeSawOpenSession.set(s != null && s.isOpen());
         unsubscribeCalls.incrementAndGet();
+        maxConcurrentReleases.accumulateAndGet(releasesInServer.incrementAndGet(), Math::max);
+    }
+
+    /** 반납 하나가 이 서버를 빠져나갔다. 부르는 자리는 응답 갈래 셋을 감싸는 finally 하나다. */
+    void endUnsubscribeCall() {
+        releasesInServer.decrementAndGet();
     }
 
     /**
@@ -495,6 +538,8 @@ public class FakeChzzkBehavior {
         received.clear();
         authCalls.set(0);
         unsubscribeCalls.set(0);
+        releasesInServer.set(0);
+        maxConcurrentReleases.set(0);
         unsubscribeArrivalNanos.clear();
         unsubscribeProtocols.clear();
         closedSessions.set(0);
@@ -509,6 +554,7 @@ public class FakeChzzkBehavior {
         byToken.clear();
         tokenBySocketId.clear();
         authStatusByToken.clear();
+        unsubscribeStatusByToken.clear();
         tokenByHandle.clear();
         pingIntervalMillis = 1000;
         pingTimeoutMillis = 2400;
