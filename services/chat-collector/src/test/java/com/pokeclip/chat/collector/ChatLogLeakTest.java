@@ -245,7 +245,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
     void 적재_경로가_돌아도_본문이_로그에_안_남는다() {
         try (LogCaptor captor = new LogCaptor()) {
             ChatBuffer buffer = new ChatBuffer(100);
-            buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+            buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
                     1_754_300_000_000L, 1_754_300_000_175L));
             int saved = new ChatPersister(jdbc, buffer).flushOnce();
             // 양성 대조. 표까지 안 갔다면 적재 경로가 바늘을 나른 적이 없다.
@@ -260,7 +260,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
                     throw new DataAccessResourceFailureException("db down");
                 }
             };
-            buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+            buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
                     1_754_300_000_001L, 1_754_300_000_176L));
             assertThat(new ChatPersister(broken, buffer).flushOnce()).isZero();
             assertThat(renderAll(captor))
@@ -275,7 +275,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
             new ChatPersister(jdbc, buffer).flushOnce();
             ChatPersister isolating = new ChatPersister(
                     TestPersistence.rejecting22(jdbc.getDataSource(), CONTENT), buffer);
-            buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+            buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
                     1_754_300_000_002L, 1_754_300_000_177L));
             isolating.flushOnce();
             assertThat(isolating.poisonedCount())
@@ -331,7 +331,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
             Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
             setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
             try {
-                buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+                buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
                         1_754_300_000_010L, 1_754_300_000_185L));
                 assertThat(persister.flushOnce())
                         .as("표까지 안 갔다면 바인딩 로거가 바늘을 나른 적이 없다").isEqualTo(1);
@@ -346,7 +346,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
                 Level before = levelOf(pinned);
                 setLevel(pinned, Level.TRACE);
                 try {
-                    buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+                    buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
                             1_754_300_000_011L, 1_754_300_000_186L));
                     assertThat(persister.flushOnce()).isEqualTo(1);
                 } finally {

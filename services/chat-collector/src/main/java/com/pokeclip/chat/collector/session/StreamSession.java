@@ -933,8 +933,12 @@ public class StreamSession {
             metrics.recordMessage(message, receivedAt);
             // 넣기만 한다. 여기서 I/O를 하면 이 스레드(WS 수신)가 붙들려
             // 채팅 폭주 때 수신이 밀린다 — 저장은 chzzk-persist 스레드가 한다.
-            buffer.offer(new PersistableChat(message.channelId(), message.senderChannelId(),
-                    message.content(), message.messageTimeMillis(), receivedAt));
+            // 번호를 <b>받는 이 시점에</b> 읽는다. 어딘가에 붙들어 두면 retarget으로
+            // 갈아낀 뒤의 채팅이 끝난 방송 번호로 남는다 — 소켓은 그대로인 채 새 방송의
+            // 채팅이 계속 들어오기 때문이다(StreamIdStampingTest).
+            buffer.offer(new PersistableChat(key.streamId(), message.channelId(),
+                    message.senderChannelId(), message.content(),
+                    message.messageTimeMillis(), receivedAt));
             // 원본도 넣기만 한다 — 인코드·창·업로드는 전부 아카이브 스레드 몫이다.
             archive.offer(new ArchivableChat(message.channelId(), receivedAt, message.raw()));
             return;
