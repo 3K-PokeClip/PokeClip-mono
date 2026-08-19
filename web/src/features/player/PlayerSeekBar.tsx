@@ -51,8 +51,13 @@ export function PlayerSeekBar({
   // 드래그 중엔 prop을 읽지 않는다 — paint 루프(timeupdate·1초 틱)가 시차를 갱신해도 썸이 튀지 않는다.
   // 프리뷰도 커밋과 같은 함수로 환산해야 엣지 3초 스냅이 양쪽에 똑같이 걸린다
   // (다른 식을 쓰면 "-00:02"를 보여주고 놓으면 "실시간"이 되는 거짓말이 된다).
-  const displayBehind =
+  const rawBehind =
     dragFraction === null ? behindSeconds : behindFromSeekFraction(dragFraction, windowSeconds);
+  // 창을 넘어선 시차는 좌측 끝으로 잡아둔다. behindFromCurrentTime은 계약 상한(1시간)으로만
+  // 자르므로, 보존이 그보다 짧은 스트림에서 오래 멈춰 있으면 시차가 windowSeconds를 넘어선다.
+  // 클램프가 한 곳에 있어야 ARIA 값·표기·트랙이 같은 수를 쓴다 — valuenow에만 걸면
+  // 스크린리더가 좌측 끝에 붙은 썸을 두고 그보다 큰 시차를 읽는다.
+  const displayBehind = Math.min(rawBehind, windowSeconds);
   const atEdge = isAtEdge(displayBehind);
   const pct = progressFraction(displayBehind, windowSeconds) * 100;
   // 클립 마커는 프리뷰를 따라가지 않는다 — 실제 재생 지점 기준 구간이라 스크럽과 무관하다
@@ -114,7 +119,7 @@ export function PlayerSeekBar({
       aria-label="라이브 탐색"
       aria-valuemin={-windowSeconds}
       aria-valuemax={0}
-      aria-valuenow={-Math.min(displayBehind, windowSeconds)}
+      aria-valuenow={-displayBehind}
       aria-valuetext={atEdge ? '실시간' : `실시간에서 ${formatBehind(displayBehind)}`}
       className={styles.seekArea}
       onPointerDown={handlePointerDown}

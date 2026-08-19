@@ -1,6 +1,13 @@
 'use client';
 
-import { useCallback, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
+import {
+  useCallback,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
+} from 'react';
 import clsx from 'clsx';
 import { useToast } from '@/ui';
 import styles from './GlassPlayer.module.css';

@@ -143,4 +143,13 @@ describe('PlayerSeekBar 되감기 창', () => {
     fireEvent.pointerUp(slider, { pointerId: 1, clientX: 500 });
     expect(props.onSeekToFraction).toHaveBeenCalledWith(0.5);
   });
+
+  it('창을 넘어선 시차는 값과 표기가 함께 좌측 끝으로 잡힌다', () => {
+    // 회귀: 시차는 계약 상한(1시간)으로만 잘려서 보존이 그보다 짧은 스트림에선 창을 넘어선다.
+    // valuenow에만 클램프를 걸면 스크린리더가 "-10:00" 지점의 썸을 두고 "-33:20"을 읽는다.
+    const { slider } = renderSeekBar({ windowSeconds: 600, behindSeconds: 2000 });
+
+    expect(slider).toHaveAttribute('aria-valuenow', '-600');
+    expect(slider).toHaveAttribute('aria-valuetext', '실시간에서 -10:00');
+  });
 });
