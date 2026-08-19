@@ -1,0 +1,128 @@
+# dev.pokeclip.com (EC2 i-07bcb578cb12f7ade) 에서 백엔드 4개 + PostgreSQL 을 상시 띄운다.
+#
+# 저장소 루트의 docker-compose.yml 과 다른 파일이다 — 저쪽은 로컬 개발용이라
+# media·세그먼트 인덱서·스텁까지 띄우고, 이쪽은 3번이 맡은 Spring 서버만 띄운다.
+#
+#   cd services && cp .env.dev.example .env && vi .env   # 값을 채운다
+#   docker compose -f docker-compose.dev.yml up -d --build
+#
+# 빌드 컨텍스트가 services/ 여야 한다. Dockerfile 들이 settings.gradle 을 위로 찾아
+# 올라가므로 저장소 루트에서 빌드하면 못 찾는다.
+
+name: pokeclip-dev
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?cp .env.dev.example .env 먼저 실행하세요}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?cp .env.dev.example .env 먼저 실행하세요}
+      POSTGRES_DB: ${POSTGRES_DB:?cp .env.dev.example .env 먼저 실행하세요}
+    volumes:
+      # 컨테이너를 지우고 다시 만들어도 데이터가 남는 자리다. 이 줄이 없으면
+      # docker compose down 한 번에 계정·방송·채팅이 전부 사라진다.
+      - pgdata:/var/lib/postgresql/data
+    # ports 를 열지 않는다. 붙는 것은 같은 compose 네트워크의 서버 4개뿐이고,
+    # 5432 를 EC2 밖으로 내면 퍼블릭 IP에 열린 DB가 된다.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  auth:
+    image: pokeclip-auth:dev
+    build:
+      context: .
+      dockerfile: auth/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy   # Flyway 가 뜨자마자 붙으므로 DB가 준비된 뒤여야 한다
+    ports:
+      - "8082:8082"
+    environment:
+      # compose 네트워크 안에서는 서비스 이름이 곧 호스트 이름이다.
+      DB_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      # 아래 아홉은 전부 없으면 부팅이 죽는다(@NotBlank · CorsProperties ·
+      # ChzzkProperties.App 컴팩트 생성자). 빈 문자열도 죽는다 — 값을 반드시 채운다.
+      JWT_SECRET: ${JWT_SECRET:?}
+      SECRET_STORE_KEY: ${SECRET_STORE_KEY:?}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:?}
+      CHZZK_CLIENT_ID: ${CHZZK_CLIENT_ID:?}
+      CHZZK_CLIENT_SECRET: ${CHZZK_CLIENT_SECRET:?}
+      CHZZK_REDIRECT_URI: ${CHZZK_REDIRECT_URI:?}
+      # t3.small 은 2GB다. 힙을 안 묶으면 JVM 이 물리 메모리의 1/4씩 잡아
+      # 넷이 합쳐 한도를 넘고, 커널이 아무거나 하나를 죽인다.
+      JAVA_TOOL_OPTIONS: -Xmx256m
+
+  clip:
+    image: pokeclip-clip:dev
+    build:
+      context: .
+      dockerfile: clip/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      DB_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?}
+      # SQS 수신은 기본이 꺼짐이다. 켜려면 큐 URL 이 함께 필요하다(IntakeProperties).
+      BROADCAST_INTAKE_ENABLED: ${BROADCAST_INTAKE_ENABLED:-false}
+      BROADCAST_QUEUE_URL: ${BROADCAST_QUEUE_URL:-}
+      AWS_REGION: ${AWS_REGION:-ap-northeast-2}
+      JAVA_TOOL_OPTIONS: -Xmx256m
+
+  chat-collector:
+    image: pokeclip-chat-collector:dev
+    build:
+      context: .
+      dockerfile: chat-collector/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    environment:
+      DB_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      # 수집은 기본이 꺼짐이다. 켜면 실제 치지직 세션을 잡아 연결 상한 3개를 먹는다.
+      CHZZK_ENABLED: ${CHZZK_ENABLED:-false}
+      CHZZK_ACCESS_TOKEN: ${CHZZK_ACCESS_TOKEN:-}
+      # 비면 S3 아카이브가 통째로 꺼진다.
+      S3_BUCKET: ${S3_BUCKET:-}
+      AWS_REGION: ${AWS_REGION:-ap-northeast-2}
+      # 채팅 버퍼를 1만 건까지 들고 있어 넷 중 가장 많이 쓴다.
+      JAVA_TOOL_OPTIONS: -Xmx320m
+
+  chat-detector:
+    image: pokeclip-chat-detector:dev
+    build:
+      context: .
+      dockerfile: chat-detector/Dockerfile
+    restart: unless-stopped
+    # DB·외부 연동이 아직 없다. postgres 를 기다릴 이유가 없다.
+    ports:
+      - "8084:8084"
+    environment:
+      JAVA_TOOL_OPTIONS: -Xmx192m
+
+volumes:
+  pgdata:
