@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector.session;
 
 import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.CollectionStatus;
+import com.pokeclip.chat.collector.StopReason;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
@@ -20,6 +21,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -496,6 +498,62 @@ class SessionRegistryTest extends IntegrationTestSupport {
     }
 
     /**
+     * 🔴 <b>닫는 「중」에도 총량이 유지된다.</b> 위 검사는 {@code close()}가 <b>끝난 뒤</b>를
+     * 재므로 이 창을 못 본다.
+     *
+     * <p>{@code closeAll()}은 자리를 map에서 <b>먼저</b> 빼고 {@code closeEntry}를 제출한다.
+     * 누계를 {@code session.close()} <b>뒤에</b> 더하면 그 사이 총량이 <b>0으로 보인다</b> —
+     * 반납 왕복이 걸리는 시간만큼(실측 세션당 수백 ms, 반개방이면 초 단위) 창이 열려 있다.
+     * {@code closeAll}이 8초 예산을 넘겨 포기하고 나가면 <b>그 값이 그대로 판정 줄에 실린다</b>
+     * ({@code CollectorRunner.stop()}이 바로 다음 줄에서 찍는다).
+     *
+     * <p>문항 1: 세션 하나로도 성립한다 — 재는 것이 「자리 뺌과 누계 이관 사이」라 세션 수와
+     * 무관하다. 다중 세션 요소가 없는 것이 맞다.
+     * <p>문항 3: 겹치는 것을 만들려면 닫기가 <b>실제로 오래 걸려야</b> 한다 — 가짜 서버의
+     * 반납을 3초 붙들어 그 창을 손으로 잡을 수 있게 벌린다. 지연이 없으면 닫기가 밀리초에
+     * 끝나 창을 못 잡고, 그때는 이 검사가 <b>고치기 전에도 초록</b>이다.
+     * <p>문항 5: 누계 이관을 {@code close()} 뒤로 되돌리면 0으로 빨간불(확인함 — 프로브
+     * {@code F1ClosedReceivedProbeTest}가 그 상태를 재현해 이 검사를 만들었다).
+     */
+    @Test
+    void 닫는_중에도_받은_양이_총량에_남는다() throws Exception {
+        givenRegistry();
+        assertThat(registry.open(key("s1", 1L, "chA"), "tokA")).isTrue();
+        // <b>자리를 잡은 것과 소켓이 붙은 것은 다르다</b>(3층 CLAUDE.md). 붙기 전에 쏘면
+        // 그 채팅은 어디에도 안 남고, 아래가 0을 재면서 초록으로 지나간다.
+        awaitUntil(AWAIT, () -> behavior.isConnected("tokA"));
+        assertThat(behavior.isConnected("tokA")).as("소켓이 붙었다").isTrue();
+
+        for (int i = 0; i < 5; i++) {
+            behavior.emitChatTo("tokA", "{\"content\":\"a" + i + "\",\"messageTime\":" + (i + 1) + "}");
+        }
+        awaitUntil(AWAIT, () -> registry.receivedTotal() >= 5);
+        // <b>awaitUntil은 시한이 차면 조용히 돌아온다</b> — 여기서 안 재면 채팅이 한 건도
+        // 안 들어온 판이 아래 창 단언까지 그대로 흘러가 「0==0」으로 통과하거나,
+        // 엉뚱한 자리에서 빨간불이 난다(실제로 그랬다).
+        assertThat(registry.receivedTotal()).as("바늘이 흘렀는가").isEqualTo(5);
+
+        behavior.unsubscribeDelay = Duration.ofSeconds(3);
+        try {
+            Thread closer = new Thread(registry::closeAll, "close-all");
+            closer.start();
+
+            // 자리가 빠진 순간이 창의 시작이다. 여기서 총량을 읽는 것이 판정 줄이 하는 일이다.
+            awaitUntil(AWAIT, () -> registry.activeCount() == 0);
+            assertThat(registry.receivedTotal())
+                    .as("닫는 중에 판정 줄이 읽으면 이 값이 나간다")
+                    .isEqualTo(5);
+
+            closer.join(AWAIT.toMillis() * 3);
+            assertThat(closer.isAlive()).as("닫기가 끝났다").isFalse();
+        } finally {
+            behavior.unsubscribeDelay = Duration.ZERO;
+        }
+
+        assertThat(registry.receivedTotal()).as("닫힌 뒤에도 그대로다").isEqualTo(5);
+    }
+
+    /**
      * <b>{@code CHZZK_ENABLED}가 꺼져 있어도 편지로 연 세션은 붙는다.</b>
      *
      * <p>그 스위치는 프로세스 공용 설정이고 운영 기본값이 false다({@code application.yml}).
@@ -605,6 +663,176 @@ class SessionRegistryTest extends IntegrationTestSupport {
         return Long.parseLong(rest.substring(0, rest.indexOf("ms")));
     }
 
+    /**
+     * <b>수립 중에 끊기면 그 세션의 재연결 루프는 이미 떠 있다.</b> 자리만 비우고
+     * 멈춤 신호를 안 내리면 그 루프가 백오프 뒤 <b>스스로 다시 붙는다</b> —
+     * 등록부가 모르는, 아무도 닫을 수 없는 세션이다.
+     *
+     * <p>실재하는 창이다({@code closeAfterSubscribed} 주석: 토큰 revoke나 연결 상한
+     * 초과가 여기 떨어진다). 결말 셋 — ① <b>계정당 상한 3개를 우리 손으로 태운다.</b>
+     * 429는 속도 제한이 아니라 「자리 없음」이라 시간이 아니라 자리가 풀려야 낫는다
+     * (태스크 1 실계정) ② {@link SessionRegistry#shutdown()}이 자리에 없는 그것을 못 닫아
+     * 서버 쪽 자리가 10초~4분 42초 남는다 ③ 같은 편지가 다시 오면 <b>같은 계정에 소켓이
+     * 둘 선다</b> — 구독 대상이 토큰 주인이라 같은 채팅이 두 소켓에 다 들어온다.
+     */
+    // 문항 1: 이 갈래는 다중화가 아니라 「실패한 수립의 뒷정리」를 잰다. 세션 하나로
+    //         성립하고, 둘로 늘려도 같은 것을 재므로 하나만 연다.
+    // 문항 2: "안 붙어 있다"는 <b>아무것도 안 일어나도 참</b>이다 — 소켓이 실제로 섰던
+    //         것을 연결 수 델타로 먼저 못박는다.
+    // 문항 3: 해당 없음. 동시성을 안 잰다.
+    // 문항 4: {@code activeCount()==0}은 <b>「자리 잡은 수」라 유령을 못 본다</b> —
+    //         이 결함이 바로 그 모양이다. 판정은 상대 쪽 소켓이 한다.
+    // 문항 5: open()의 실패 자리에서 closeEntry 호출을 빼면 빨간불(확인함).
+    @Test
+    void 수립_중에_끊겨_실패한_세션은_스스로_다시_붙지_않는다() throws Exception {
+        givenRegistry();
+        int connectionsBefore = behavior.connectionCount();
+        int releasesBefore = behavior.unsubscribeCallCount();
+        behavior.closeAfterSubscribed = true;
+
+        assertThat(registry.open(key("s1", 1L, "chA"), "tokGhost"))
+                .as("수립이 절단으로 끝났는데 붙었다고 보고하면 루프가 그것을 믿고 빠져나간다")
+                .isFalse();
+        // <b>막는 것을 치운다.</b> 유령이 살아 있다면 이제 깨끗하게 다시 붙는다 —
+        // 안 치우면 되살아난 소켓이 곧바로 또 끊겨 "안 붙어 있다"가 우연히 참이 된다.
+        behavior.closeAfterSubscribed = false;
+
+        assertThat(behavior.connectionCount() - connectionsBefore)
+                .as("소켓이 한 번도 안 섰으면 아래 단언은 아무것도 안 잰다")
+                .isGreaterThanOrEqualTo(1);
+
+        // <b>부정 단언이라 시간이 필요하다.</b> 백오프 첫 지연이 200ms라 3초면 재시도가
+        // 여러 번 지나간다 — 감사 재현이 3초에서 되살아난 소켓을 봤다.
+        Thread.sleep(3_000);
+
+        // <b>구독도 본다 — 소켓이 닫혀도 서버 쪽 구독이 남으면</b> 상한 3개 중 하나가
+        // 그대로 묶인다(급사 경로에서 10초~4분 42초).
+        //
+        // <b>🔴 이 값은 판별자가 아니라 양성 대조다.</b> 처방을 되돌린 상태에서도 1 이상이
+        // 나온다(주입으로 확인함) — 유령이 되살아나기 <i>전에</i> 앞 소켓의 절단 정리가
+        // 반납을 이미 보내기 때문이다. 그래서 단언 순서를 구독→소켓으로 두어도 <b>빨간불은
+        // 소켓 쪽에서 난다.</b> 감사 프로브가 종료 뒤에 {@code unsubDelta=0}을 본 것과
+        // 다른데, <b>어느 창에서 잰 값인지까지는 대조하지 않았다.</b> 판정은 소켓이 한다.
+        assertThat(behavior.unsubscribeCallCount() - releasesBefore)
+                .as("구독이 서버에 남으면 소켓만 닫아도 그 자리는 안 돌아온다")
+                .isGreaterThanOrEqualTo(1);
+        assertThat(behavior.isConnected("tokGhost"))
+                .as("등록부가 모르는 소켓이 살아 있으면 아무도 그것을 닫지 못한다")
+                .isFalse();
+        assertThat(registry.activeCount()).isZero();
+        assertThat(registry.currentStreamIdOf(1L))
+                .as("자리도 비어 있어야 다음 편지가 「이미 열림」으로 안 걸린다")
+                .isNull();
+    }
+
+    /**
+     * <b>같은 유령의 예외 갈래.</b> 절단이 먼저 오고 수립이 시한 만료로 <b>던지면</b>
+     * {@code open()}은 위 갈래가 아니라 {@code catch (SessionEstablishException)}으로
+     * 빠진다. 두 길은 코드에서 같은 자리로 합류하지만, <b>합류가 깨지는 순간 한쪽만
+     * 고친 구현이 그대로 초록이 된다</b> — 이번 카드에서 「쌍둥이 중 한쪽만」이 세 번 나왔다.
+     */
+    // 문항 1·3·4: 위 갈래와 같다.
+    // 문항 2: 시한 만료로 실제로 예외 갈래를 탔는지는 연결 수 델타와 반납 건수로 본다.
+    // 문항 5: 정상 반환 갈래만 닫도록 고친 구현에서 빨간불이다(확인함) —
+    //         합류 자리를 지우고 성공 갈래에만 처방을 두어 재현했다.
+    @Test
+    void 수립이_예외로_끝나도_그_세션은_스스로_다시_붙지_않는다() throws Exception {
+        // 시한을 1초로 줄인다. 5초면 이 갈래 하나가 검사 시간을 통째로 먹는다.
+        givenRegistry(true, Duration.ofSeconds(1));
+        int connectionsBefore = behavior.connectionCount();
+        int releasesBefore = behavior.unsubscribeCallCount();
+        behavior.sendSubscribed = false;        // ⑤가 영영 안 온다 — 시한까지 매달린다
+        behavior.closeAfterSubscribed = true;   // 그 전에 이미 끊긴다
+
+        assertThat(registry.open(key("s1", 1L, "chA"), "tokGhostThrow"))
+                .as("수립이 예외로 끝났는데 붙었다고 보고하면 안 된다")
+                .isFalse();
+        behavior.closeAfterSubscribed = false;
+        behavior.sendSubscribed = true;         // 이제 다시 붙을 수 있다
+
+        assertThat(behavior.connectionCount() - connectionsBefore)
+                .as("소켓이 한 번도 안 섰으면 아래 단언은 아무것도 안 잰다")
+                .isGreaterThanOrEqualTo(1);
+
+        Thread.sleep(3_000);
+
+        assertThat(behavior.unsubscribeCallCount() - releasesBefore)
+                .as("구독이 서버에 남으면 소켓만 닫아도 그 자리는 안 돌아온다")
+                .isGreaterThanOrEqualTo(1);
+        assertThat(behavior.isConnected("tokGhostThrow"))
+                .as("예외 갈래에만 유령이 남으면 종료가 그 자리를 영영 못 돌려준다")
+                .isFalse();
+        assertThat(registry.activeCount()).isZero();
+        assertThat(registry.currentStreamIdOf(1L)).isNull();
+    }
+
+    /**
+     * <b>낡은 세션의 영구 정지 손잡이가 그 자리에 앉은 다음 세션을 끊으면 안 된다.</b>
+     *
+     * <p>{@code close(streamId)}·{@code closeAll()}은 자리를 걷을 때 값까지 보는데
+     * 영구 정지 경로만 스트리머로 지우고 있었다 — <b>비대칭이다.</b> 그러면 이미 갈아끼워진
+     * 새 세션을 낡은 신호가 닫고, 그것을 되살릴 STARTED 편지는 이미 소비돼 큐에 없다.
+     *
+     * <p><b>실제 도달 경로는 재현하지 못했다.</b> 창이 재연결 루프의 {@code while} 통과와
+     * 이 콜백 도달 사이 몇 줄이라 붙잡을 I/O가 없다. 그래서 <b>손잡이를 리플렉션으로 꺼내
+     * 직접 부른다</b> — 창을 벌리는 대신 창 안에서 일어나는 일을 그대로 재연한다.
+     * 재현 못 한 것은 「그 창에 실제로 떨어지는 빈도」이지 「떨어지면 무슨 일이 나는가」가 아니다.
+     */
+    // 문항 1: 세션 하나로는 「앞 세션의 신호가 뒤 세션을 끊는다」가 성립하지 않는다.
+    //         같은 스트리머 자리에 세션을 <b>연달아 둘</b> 세운다.
+    // 문항 2: {@code activeCount()==1}은 신호를 <b>아예 안 보내도</b> 참이다 —
+    //         손잡이를 실제로 부른 것을 소켓 생존과 방송 번호로 같이 본다.
+    // 문항 4: 자리가 1이어도 <b>그 자리 주인이 앞 세션</b>이면 틀린 상태다 — 번호를 본다.
+    // 문항 5: {@code stopOne}의 값 비교를 빼면(스트리머로만 지우면) 새 세션이 닫혀
+    //         빨간불이다(확인함).
+    @Test
+    void 낡은_세션의_영구_정지가_그_자리의_새_세션을_안_끊는다() throws Exception {
+        givenRegistry();
+        assertThat(registry.open(key("s1", 7L, "chA"), "tokOld")).isTrue();
+        Consumer<StopReason> staleHandle = permanentStopHandleOf("s1");
+
+        // 앞 세션을 닫고 같은 스트리머 자리에 새 세션을 세운다. 갈아끼움(retarget)이
+        // 아니라 <b>다른 세션 객체</b>여야 한다 — 갈아끼움은 객체를 그대로 둔다.
+        assertThat(registry.close("s1")).isTrue();
+        assertThat(registry.open(key("s2", 7L, "chB"), "tokNew")).isTrue();
+        assertThat(behavior.isConnected("tokNew")).isTrue();
+
+        // 낡은 손잡이가 이제야 도착한다.
+        staleHandle.accept(StopReason.REVOKED);
+
+        assertThat(registry.currentStreamIdOf(7L))
+                .as("낡은 신호가 자리 주인을 안 보고 지우면 살아 있는 새 방송이 끊긴다")
+                .isEqualTo("s2");
+        assertThat(behavior.isConnected("tokNew"))
+                .as("자리는 남기고 소켓만 닫는 구현이 여기서 걸린다")
+                .isTrue();
+        assertThat(registry.activeCount()).isEqualTo(1);
+    }
+
+    /**
+     * 그 방송 세션이 들고 있는 <b>영구 정지 손잡이</b>를 꺼낸다. 등록부가 세션에 넘긴
+     * 콜백이고, 재연결 루프가 재시도 불가 사유를 확정했을 때 부르는 바로 그것이다.
+     */
+    @SuppressWarnings("unchecked")
+    private Consumer<StopReason> permanentStopHandleOf(String streamId) throws Exception {
+        java.lang.reflect.Field sessionsField = SessionRegistry.class.getDeclaredField("sessions");
+        sessionsField.setAccessible(true);
+        java.util.Map<Long, ?> seats = (java.util.Map<Long, ?>) sessionsField.get(registry);
+        for (Object entry : seats.values()) {
+            java.lang.reflect.Method sessionOf = entry.getClass().getDeclaredMethod("session");
+            sessionOf.setAccessible(true);
+            StreamSession session = (StreamSession) sessionOf.invoke(entry);
+            if (!session.key().streamId().equals(streamId)) {
+                continue;
+            }
+            java.lang.reflect.Field handle =
+                    StreamSession.class.getDeclaredField("onPermanentStop");
+            handle.setAccessible(true);
+            return (Consumer<StopReason>) handle.get(session);
+        }
+        throw new AssertionError("자리에 " + streamId + " 세션이 없다");
+    }
+
     // ------------------------------------------------------------------
     // 도우미
     // ------------------------------------------------------------------
@@ -614,13 +842,17 @@ class SessionRegistryTest extends IntegrationTestSupport {
     }
 
     private void givenRegistry(boolean enabled) {
+        givenRegistry(enabled, Duration.ofSeconds(5));
+    }
+
+    private void givenRegistry(boolean enabled, Duration establishTimeout) {
         buffer = new ChatBuffer(1_000);
         registry = new SessionRegistry(
                 // <b>설정 토큰은 안 쓰인다.</b> 세션마다 자기 토큰으로 붙는 것을
                 // 위 connectedTokens() 단언이 지킨다 — 여기에 진짜 같은 값을 두면
                 // 설정에서 읽는 회귀가 그 단언을 통과해 버린다.
                 new ChzzkProperties(enabled, "설정-토큰-쓰면-안-된다",
-                        "http://localhost:" + port, Duration.ofSeconds(5), FIRST_DELAY, MAX_DELAY),
+                        "http://localhost:" + port, establishTimeout, FIRST_DELAY, MAX_DELAY),
                 restClientBuilder,
                 buffer, TestPersistence.disabledPersister(),
                 ChatArchive.NONE);
