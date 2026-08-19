@@ -14,7 +14,13 @@ import software.amazon.awssdk.services.sqs.SqsClientBuilder;
 import java.net.URI;
 
 /**
- * 큐 클라이언트와 상태 빈. <b>러너는 아직 여기서 안 만든다</b> — 아래 {@code sqsClient} 주석 참고.
+ * 큐 클라이언트와 상태 빈. <b>이 둘만 둔다</b> — 편지 경로의 나머지 부품은
+ * {@link LetterPathConfiguration}이 만든다.
+ *
+ * <p><b>한 파일에 몰지 않는 이유가 실측으로 생겼다</b>: 검사가 이 설정만 떼어 띄우는데
+ * ({@code SqsIntakeRunnerTest}가 {@code ApplicationContextRunner}로 큐 클라이언트의
+ * 켜짐/꺼짐을 잰다), 중첩 {@code @Configuration}은 그 컨텍스트에도 같이 등록된다 —
+ * 등록부·설정 빈이 없는 그곳에서 부팅이 깨져 <b>그 검사가 빨간불이 됐다.</b>
  */
 @Configuration
 // 운영 컨텍스트는 @ConfigurationPropertiesScan이 이미 잡지만, 검사가 이 설정만 떼어
@@ -27,12 +33,13 @@ public class IntakeConfiguration {
     /**
      * 꺼져 있으면 클라이언트를 아예 등록하지 않는다.
      *
-     * <p>🔴 <b>이 빈을 받는 쪽은 {@code ObjectProvider<SqsClient>}를 쓴다.
-     * {@code Optional<SqsClient>}는 안 된다</b> — Spring이 {@code Optional<T>} 주입 지점을
-     * 「T 타입 빈을 optional로 찾기」로 가로채, 빈이 실제로 있어도 늘 빈손이 온다.
-     * 그러면 켜도 폴링이 영원히 시작되지 않는데 테스트는 전부 초록이다(clip 실측 2026-08-18).
-     * <b>이 함정은 러너를 빈으로 올리는 태스크 10에서 실제로 열린다</b> —
-     * {@code SqsIntakeRunner} 생성자가 null을 거부하므로 밟으면 부팅이 죽어서 드러난다.
+     * <p>🔴 <b>이 빈이 {@code Optional<SqsClient>}를 돌려주게 바꾸지 마라.</b> 그러면 컨테이너에
+     * {@code SqsClient} 타입 빈이 없고, 받는 쪽의 {@code Optional<SqsClient>} 주입 지점은
+     * {@code SqsClient}를 optional로 찾으므로 <b>이 빈을 영영 못 만난다</b> — 켜도 폴링이 시작되지
+     * 않는다({@code OptionalBeanShapeProbeTest}가 실물 컨텍스트로 잰다).
+     * <b>받는 쪽 파라미터가 {@code Optional}인 것 자체는 문제가 아니다</b>(2026-08-19 실측) —
+     * 위험한 것은 빈의 타입이다. 받는 쪽은 {@code ObjectProvider}를 쓴다: 빈손이면
+     * {@code SqsIntakeRunner} 생성자가 거부해 부팅이 죽으므로 조용히 안 도는 길이 없다.
      *
      * <p><b>HTTP 클라이언트를 명시한다.</b> {@code S3Clients}와 같은 이유이자 같은 구현이다 —
      * 시한을 기본값에 맡기지 않는다. 롱폴링(최대 20초)보다 소켓 시한이 짧으면 매 회차가

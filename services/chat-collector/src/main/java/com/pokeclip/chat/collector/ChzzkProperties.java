@@ -9,7 +9,13 @@ import org.springframework.validation.annotation.Validated;
 import java.time.Duration;
 
 /**
- * <p><b>enabled 기본값이 false다.</b> 켜져 있으면 CI·테스트·남의 로컬이 뜰 때마다
+ * <p><b>{@code enabled}는 「옛 경로」의 스위치다</b>(POK-127). 편지 없이 <b>설정에 적힌 토큰
+ * 하나로 한 채널만</b> 붙이는 길이고, 실측·디버깅용으로 남겨 뒀다 — 운영은 방송 편지로
+ * 붙는다({@code pokeclip.broadcast.intake}). <b>둘을 같이 켜면 부팅이 거부된다</b>:
+ * 여기서 연 세션이 영구 정지하면 {@code CollectorRunner}가 프로세스를 내려 편지로 연 세션
+ * 전부를 끊는다({@code IntakeConfiguration.LetterPath} 생성자에 이유가 있다).
+ *
+ * <p><b>기본값이 false다.</b> 켜져 있으면 CI·테스트·남의 로컬이 뜰 때마다
  * 치지직에 붙으려 하고, 연결 상한 3개(Access Token 기준)를 말없이 먹는다.
  * 그러면 정작 실측할 때 막히는데 원인이 어디에도 안 보인다.
  * 실측은 프로파일 local에서만 켠다.
