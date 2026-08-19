@@ -68,6 +68,9 @@ export function PlayerSeekBar({
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
     // 우클릭·가운데 클릭으로 시킹되면 안 된다
     if (event.pointerType === 'mouse' && event.button !== 0) return;
+    // 드래그 중 닿은 두 번째 손가락에게 드래그를 넘기지 않는다 — 넘기면 원래 손가락의 move가
+    // 전부 무시되고, 그 손가락을 떼도 커밋되지 않은 채 엉뚱한 지점으로 시킹된다
+    if (dragPointerRef.current !== null) return;
     dragPointerRef.current = event.pointerId;
     // 트랙 밖으로 나가도 move/up을 계속 받는다. jsdom엔 없는 API라 옵셔널 호출한다.
     event.currentTarget.setPointerCapture?.(event.pointerId);

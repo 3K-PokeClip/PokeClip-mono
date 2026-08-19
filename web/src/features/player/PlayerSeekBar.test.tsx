@@ -98,6 +98,24 @@ describe('PlayerSeekBar 드래그', () => {
     expect(props.onSeekToFraction).toHaveBeenCalledWith(0.5);
   });
 
+  it('드래그 중 닿은 두 번째 손가락에게 드래그를 넘기지 않는다', () => {
+    const { slider, props } = renderSeekBar();
+
+    fireEvent.pointerDown(slider, { pointerId: 1, button: 0, clientX: 700 });
+    // 두 번째 손가락(손바닥 스침 등)이 시크바에 닿는다
+    fireEvent.pointerDown(slider, { pointerId: 2, button: 0, clientX: 200 });
+    expect(slider).toHaveAttribute('aria-valuenow', '-1080'); // 첫 손가락 위치 유지
+
+    // 첫 손가락의 드래그가 계속 살아 있다
+    fireEvent.pointerMove(slider, { pointerId: 1, clientX: 600 });
+    expect(slider).toHaveAttribute('aria-valuenow', '-1440');
+
+    fireEvent.pointerUp(slider, { pointerId: 1, clientX: 600 });
+    expect(props.onSeekToFraction).toHaveBeenCalledTimes(1);
+    expect(props.onSeekToFraction).toHaveBeenCalledWith(0.6);
+    expect(props.onSeekingChange).toHaveBeenLastCalledWith(false);
+  });
+
   it('마우스 우클릭은 드래그를 시작하지 않는다', () => {
     const { slider, props } = renderSeekBar();
 

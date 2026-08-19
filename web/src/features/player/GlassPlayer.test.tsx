@@ -141,6 +141,18 @@ describe('GlassPlayer', () => {
     expect(screen.getByRole('button', { name: '480p' })).toBeInTheDocument();
   });
 
+  it('설정 팝오버 안에서 누른 화살표는 배경 영상을 시킹하지 않는다', () => {
+    // 팝오버는 Portal로 body에 붙지만 React는 React 트리를 따라 버블링시킨다 —
+    // 컨테이너의 전역 단축키가 그 키를 삼키면 포커스 트랩 뒤에서 영상이 움직인다
+    renderPlayer();
+    const slider = screen.getByRole('slider', { name: '라이브 탐색' });
+
+    fireEvent.click(screen.getByRole('button', { name: '설정' }));
+    fireEvent.keyDown(screen.getByRole('button', { name: '자동 (1080p)' }), { key: 'ArrowLeft' });
+
+    expect(slider).toHaveAttribute('aria-valuenow', '0');
+  });
+
   it('설정 팝오버가 열려 있는 동안엔 자동 숨김이 유보된다', () => {
     // 팝오버는 Portal로 플레이어 밖에 떠서 포커스 보호가 닿지 않는다 — 열림 상태로 유보한다.
     // userEvent는 fake timer와 대기가 엉켜 멈추므로 동기 fireEvent를 쓴다.

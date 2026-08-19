@@ -94,10 +94,19 @@ function GlassPlayerBody({
     toast({ title: '미니 플레이어는 준비 중이에요' });
   }, [toast]);
 
+  // 설정 팝오버는 Portal로 document.body에 붙지만, React는 DOM이 아니라 React 트리를 따라
+  // 이벤트를 버블링시킨다 — 팝오버 안에서 누른 키·클릭이 여기까지 올라온다. DismissableLayer는
+  // 네이티브 document 리스너만 써서 합성 이벤트를 막지 못하므로 DOM 포함 관계로 직접 가른다.
+  // 없으면 팝오버가 열린 채 화살표를 눌렀을 때 뒤에서 영상이 시킹된다.
+  const isInsidePlayer = (target: EventTarget | null) =>
+    target instanceof Node && containerRef.current?.contains(target) === true;
+
   // 시킹 단축키를 플레이어 전역으로 — 시크바에 Tab 포커스를 넣지 않아도 화살표가 먹는다 (POK-32).
   // 키맵은 시크바와 같은 seekIntentForKey를 쓰므로 둘이 어긋날 수 없다.
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
+      // 포털로 뜬 오버레이(설정 팝오버) 안에서 누른 키는 그쪽 것이다
+      if (!isInsidePlayer(event.target)) return;
       // 화살표에 자기 동작이 있는 컨트롤 위에서는 그쪽을 우선한다 — 볼륨 슬라이더의 음량
       // 조절, 그리고 시크바 자신(버블링돼 올라온 키를 여기서 또 처리하면 두 번 시킹된다).
       // button은 일부러 뺐다 — 화살표에 기본 동작이 없고, 재생 버튼을 누른 뒤 그대로
@@ -124,6 +133,8 @@ function GlassPlayerBody({
   const handlePointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
       sim.wake();
+      // 팝오버 안을 눌렀는데 여기로 포커스를 가져오면 그쪽 포커스 트랩이 깨진다
+      if (!isInsidePlayer(event.target)) return;
       if (event.target instanceof Element && event.target.closest('button, input, [role="slider"]'))
         return;
       containerRef.current?.focus({ preventScroll: true });
