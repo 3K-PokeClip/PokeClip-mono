@@ -57,13 +57,15 @@ export function useHlsPlayback(
       if (!range) return;
       // 되감기 기준점은 엣지와 같은 지점이어야 한다 — range.end 기준으로 시크하고
       // liveEdgePosition 기준으로 시차를 재면 둘이 그 차이만큼 어긋난다.
-      const live = liveEdgePosition(range, hlsRef.current?.liveSyncPosition);
+      const live = liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null);
       const clamped = Math.min(
         Math.min(LIVE_WINDOW_SECONDS, live - range.start),
         Math.max(0, behind),
       );
       if (isAtEdge(clamped)) {
-        video.currentTime = live;
+        // 창이 라이브 지연폭보다 짧으면(방송 시작 직후) live가 range.start로 붕괴한다 —
+        // 스냅할 지점이 없는데 시크하면 재생 중인 위치에서 뒤로 끌려간다. 그땐 두고 본다.
+        if (live > range.start) video.currentTime = live;
         setBehind(0);
       } else {
         video.currentTime = Math.max(range.start, live - clamped);
@@ -85,7 +87,7 @@ export function useHlsPlayback(
       const range = dvrRange(video.seekable);
       if (!range) return;
       seekToBehind(
-        behindFromCurrentTime(range, video.currentTime, hlsRef.current?.liveSyncPosition) +
+        behindFromCurrentTime(range, video.currentTime, hlsRef.current?.liveSyncPosition ?? null) +
           deltaSeconds,
       );
     },
@@ -151,7 +153,9 @@ export function useHlsPlayback(
     const paint = () => {
       const range = dvrRange(video.seekable);
       if (!range) return;
-      setBehind(behindFromCurrentTime(range, video.currentTime, hlsRef.current?.liveSyncPosition));
+      setBehind(
+        behindFromCurrentTime(range, video.currentTime, hlsRef.current?.liveSyncPosition ?? null),
+      );
     };
     video.addEventListener('play', onPlay);
     video.addEventListener('pause', onPause);
