@@ -49,8 +49,9 @@ public class ChatPersister implements PersistCounters {
 
     private static final String INSERT = """
             INSERT INTO chat_messages
-              (channel_id, sender_channel_id, content, message_time, received_at, content_sha256)
-            VALUES (?, ?, ?, ?, ?, ?)
+              (stream_id, channel_id, sender_channel_id, content, message_time, received_at,
+               content_sha256)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT ON CONSTRAINT uq_chat_messages_fingerprint DO NOTHING
             """;
 
@@ -375,9 +376,10 @@ public class ChatPersister implements PersistCounters {
         return poisoned.get();
     }
 
+    /** 순서는 record·INSERT와 같다 — 셋이 갈리면 값이 남의 칸에 조용히 들어간다. */
     private static Object[] toRow(PersistableChat chat) {
         return new Object[] {
-                chat.channelId(), chat.senderChannelId(), chat.content(),
+                chat.streamId(), chat.channelId(), chat.senderChannelId(), chat.content(),
                 Timestamp.from(Instant.ofEpochMilli(chat.messageTimeMillis())),
                 Timestamp.from(Instant.ofEpochMilli(chat.receivedAtMillis())),
                 sha256Hex(chat.content())

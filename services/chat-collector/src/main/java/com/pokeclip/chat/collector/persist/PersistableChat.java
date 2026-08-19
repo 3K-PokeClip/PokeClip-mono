@@ -3,8 +3,13 @@ package com.pokeclip.chat.collector.persist;
 /**
  * 표에 넣을 채팅 한 건. toString을 두지 않는다 — record 기본 toString이
  * content를 통째로 찍는데, 로그에 실수로 넘기면 평문이 나간다(ChatMessage와 같은 규칙).
+ *
+ * @param streamId 이 채팅이 어느 방송의 것인가. <b>null이 곧 「모른다」는 표시다</b> —
+ *                 편지 없이 붙은 옛 경로(CHZZK_ENABLED)에는 방송 번호가 없다. 여기서
+ *                 예외를 던지면 그 경로의 수집 자체가 죽으므로 비어 있는 것을 허용한다
  */
 public record PersistableChat(
+        String streamId,
         String channelId,
         String senderChannelId,
         String content,
