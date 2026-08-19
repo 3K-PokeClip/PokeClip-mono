@@ -187,17 +187,27 @@ public class FakeChzzkServer implements WebSocketConfigurer {
             // 실패해도 도착한 사실은 센다. 안 세면 "왔는데 터졌다"와 "아예 안 왔다"가
             // 같아 보인다. 프로토콜을 같이 넘기는 이유는 도착 시각만으로는 "겹쳤다"를
             // 해석할 수 없기 때문이다 — HTTP/2면 커넥션 하나에 다 몰린다.
-            behavior.countUnsubscribeCall(request.getProtocol(), bearerToken(request));
+            String token = bearerToken(request);
+            behavior.countUnsubscribeCall(request.getProtocol(), token);
             // 세는 것이 먼저다. 붙들고 있는 동안 뒷정리 스레드가 여기 갇혀 있으므로,
             // 테스트는 이 카운터로 "갇힌 시점"을 정확히 집어낼 수 있다.
-            if (!behavior.unsubscribeDelay.isZero()) {
-                Thread.sleep(behavior.unsubscribeDelay.toMillis());
+            //
+            // <b>나가고 들어오는 것을 try/finally로 감싼다.</b> 겹친 수는 "지금 이 안에 몇이
+            // 있나"라 나가는 자리를 한 곳으로 모아야 세진다 — 아래 return이 둘이라
+            // 손으로 빼면 한 갈래를 빼먹고 그때 겹침이 실제보다 크게 보인다.
+            try {
+                if (!behavior.unsubscribeDelay.isZero()) {
+                    Thread.sleep(behavior.unsubscribeDelay.toMillis());
+                }
+                // 토큰별 스위치가 전역보다 우선한다. 없으면 전역 값이라 기존 검사는 그대로다.
+                int status = behavior.unsubscribeStatusFor(token);
+                if (status != 200) {
+                    return ResponseEntity.status(status).body(errorBody(status));
+                }
+                return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
+            } finally {
+                behavior.endUnsubscribeCall();
             }
-            if (behavior.unsubscribeStatus != 200) {
-                return ResponseEntity.status(behavior.unsubscribeStatus)
-                        .body(errorBody(behavior.unsubscribeStatus));
-            }
-            return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
         }
     }
 

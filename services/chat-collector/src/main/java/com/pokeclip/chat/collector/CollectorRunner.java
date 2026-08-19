@@ -9,6 +9,7 @@ import com.pokeclip.chat.collector.observe.SummaryLogger;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.session.SessionKey;
+import com.pokeclip.chat.collector.session.SessionRegistry;
 import com.pokeclip.chat.collector.session.StreamSession;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -208,6 +209,21 @@ public class CollectorRunner implements ApplicationRunner {
     }
 
     /**
+     * 편지로 연 세션들의 등록부. <b>이 러너가 여는 세션(옛 경로)과 겹치지 않는다</b> —
+     * 두 경로는 같이 켜지지 못한다(부팅 거부).
+     *
+     * <p><b>왜 러너가 등록부를 드는가</b>: 종료의 나머지 절차(수신 게이트 · 싱크 닫기 ·
+     * 최종 판정)가 전부 여기 있어서다. 등록부가 스스로 닫으면 그 닫기와 싱크 닫기의 순서가
+     * <b>빈 파괴 순서에 달리는데</b>, 싱크가 먼저 닫히면 아직 살아 있는 세션의 채팅이
+     * 닫힌 퍼시스터로 들어가 아무도 저장하지 않는다(감사 1 중대-2 ③의 재현이 그 모양이다).
+     * 판정 줄의 수신량도 등록부에서 읽어야 하므로 참조는 어차피 이 방향으로 하나 필요하다.
+     *
+     * <p><b>null일 수 있다.</b> 러너를 직접 만드는 검사가 스무 곳이 넘고 그중 등록부를 쓰는
+     * 것은 없다 — 옛 경로만 재는 검사들이다. 운영 배선은 아래 공개 생성자로 실물을 준다.
+     */
+    private final SessionRegistry registry;
+
+    /**
      * 영구 정지 판정 뒤 프로세스를 내리는 손잡이. 운영은 {@code System.exit(1)}
      * ({@code CollectorApplication}의 빈 정의), 검사는 가짜다 — 실제 exit은 테스트
      * JVM을 죽인다.
@@ -223,13 +239,26 @@ public class CollectorRunner implements ApplicationRunner {
     CollectorRunner(ChzzkProperties properties, CollectionStatus status,
                     RestClient.Builder restClientBuilder,
                     ChatBuffer buffer, ChatPersister persister) {
-        this(properties, status, restClientBuilder, buffer, persister, ChatArchive.NONE, () -> { });
+        this(properties, status, restClientBuilder, buffer, persister, ChatArchive.NONE,
+                null, () -> { });
+    }
+
+    /**
+     * <b>검사용 — 등록부가 없다.</b> 아카이브와 exit은 주면서 편지 경로는 안 쓰는 검사가
+     * 여섯 곳이다. 그 자리마다 {@code null}을 손으로 적으면 「왜 null인가」를 여섯 번 다시
+     * 읽게 된다.
+     */
+    CollectorRunner(ChzzkProperties properties, CollectionStatus status,
+                    RestClient.Builder restClientBuilder,
+                    ChatBuffer buffer, ChatPersister persister,
+                    ChatArchive archive, Runnable exitAction) {
+        this(properties, status, restClientBuilder, buffer, persister, archive, null, exitAction);
     }
 
     public CollectorRunner(ChzzkProperties properties, CollectionStatus status,
                            RestClient.Builder restClientBuilder,
                            ChatBuffer buffer, ChatPersister persister,
-                           ChatArchive archive, Runnable exitAction) {
+                           ChatArchive archive, SessionRegistry registry, Runnable exitAction) {
         this.properties = properties;
         this.status = status;
         // 빌더는 프로토타입 빈이다. 한 번만 build()해서 들고 있는다.
@@ -237,6 +266,7 @@ public class CollectorRunner implements ApplicationRunner {
         this.buffer = buffer;
         this.persister = persister;
         this.archive = archive;
+        this.registry = registry;
         this.exitAction = exitAction;
         // <b>세션은 여기서 하나만 만든다.</b> 스트리머별로 여러 개를 여는 것은
         // SessionRegistry가 한다 — 여기를 늘리면 두 곳이 같은 일을 하게 된다.
@@ -422,8 +452,18 @@ public class CollectorRunner implements ApplicationRunner {
         //
         // 번호는 이 프로세스가 마지막으로 연 세션의 것이다. 판정은 프로세스 전체의
         // 누계라 "몇 번째까지 갔나"를 그 번호가 말한다.
+        // <b>등식의 좌변만 세션별이다.</b> persisted·conflicts·poisoned·dropped 넷은 공유
+        // 부품(퍼시스터·바구니)의 프로세스 누계라 합칠 것이 없고, received만 세션마다 따로
+        // 센다 — 등록부 몫을 안 더하면 등식이 깨지는 것이 아니라 <b>「받은 게 없다」로
+        // 읽힌다</b>(유실을 알아채는 유일한 계기가 죽는다).
+        //
+        // <b>더할 수 있는 항만 더한다.</b> 최대 수신 공백·최대 ping/pong 간격은 최댓값이라
+        // 더하면 안 되고, 지연 중앙값은 표본을 버린 뒤라 다시 못 내며, 절단 시각은
+        // 「마지막 하나」다. <b>지금 이 줄의 그 항목들은 러너 자신의 세션 것뿐이라 편지
+        // 경로에서는 0이다</b> — 세션별 값은 chat.session.ended 줄이 낸다(ping·pong).
+        // 조용히 틀린 숫자를 싣느니 안 싣는다. 세션별 관측은 태스크 13이 맡는다.
         SummaryLogger.logFinalVerdict(lastSessionNo.get(), metrics.verdict(), reason,
-                persister, buffer.droppedCount(), archive.counters());
+                registryReceived(), persister, buffer.droppedCount(), archive.counters());
     }
 
     /**
@@ -452,6 +492,25 @@ public class CollectorRunner implements ApplicationRunner {
             Duration remaining = Duration.ofNanos(sinksCloseDeadlineNanos.get() - System.nanoTime());
             archive.awaitClosed(remaining.isNegative() ? Duration.ZERO : remaining);
         }
+    }
+
+    /**
+     * 편지로 연 세션 전부를 닫고 <b>더 열리지 않게 빗장을 건다.</b> 예산·동시성·빗장은
+     * 등록부가 든다({@link SessionRegistry#shutdown()}) — 여기서 아는 것은
+     * 「싱크보다 먼저」라는 순서뿐이다.
+     */
+    private void closeRegistrySessions() {
+        if (registry != null) {
+            registry.shutdown();
+        }
+    }
+
+    /**
+     * 편지로 연 세션들이 받은 채팅의 총량. <b>닫힌 세션 몫도 들어 있다</b> — 안 그러면
+     * 세션이 닫힐 때마다 총량이 줄어 판정 줄이 유실을 못 잡는다.
+     */
+    private long registryReceived() {
+        return registry == null ? 0L : registry.receivedTotal();
     }
 
     @PreDestroy
@@ -497,9 +556,20 @@ public class CollectorRunner implements ApplicationRunner {
         // <b>수신을 먼저 끊고 나서 close.</b> 게이트가 열린 채 close하면 마무리 flush
         // 도중에도 채팅이 계속 들어와 flush가 끝을 못 보고(바쁜 방송 + 느린 DB) 예산을
         // 넘긴다 — 그 뒤 판정 등식이 안 닫힌다. 소켓이 아니라 게이트로 끊는 이유는
-        // intakeClosed 주석에 있다. 종료 순서: 게이트 내림 →
-        // [archive.beginClose ‖ persister.close ‖ archive.awaitClosed] →
-        // shutdownNow → cleanUpOnce(반납·소켓 닫기) → 판정.
+        // intakeClosed 주석에 있다.
+        //
+        // <b>프로세스 종료 전체의 순서다</b>: 편지 그만 받기({@code SqsIntakeLoop.stop()} —
+        // 라이프사이클이라 빈 파괴보다 먼저 통째로 끝난다) → 마지막 회차 빗장(등록부가 더
+        // 안 연다. 롱폴링 최대 20초를 기다려 주면 <b>그 하나로 유예 20초를 다 쓴다</b>) →
+        // <b>등록부 세션 닫기</b>(나란히, 예산 8초) → 게이트 내림 →
+        // [archive.beginClose ‖ persister.close ‖ archive.awaitClosed](5초) →
+        // shutdownNow → cleanUpOnce(옛 경로 세션의 반납·소켓 닫기) → 판정.
+        //
+        // <b>등록부가 싱크보다 먼저다.</b> 뒤집으면 아직 살아 있는 세션의 채팅이 이미 닫힌
+        // 퍼시스터로 들어가 아무도 저장하지 않는다 — 감사가 재현한 「싱크가 닫힌 뒤에도
+        // 채팅이 계속 담겼다」가 그 모양이다. 아래 판정 줄이 읽는 수신량도 이 호출이
+        // 걷어 둔다(등록부가 닫힌 세션 몫을 누적한다).
+        closeRegistrySessions();
         intakeClosed.set(true);
         // <b>인터럽트 전에 퍼시스터 닫기를 선점한다.</b> 재연결 스레드가 영구 정지
         // 판정 안에서 close를 들고 있을 수 있는데, 아래 shutdownNow가 그 스레드를
@@ -516,7 +586,15 @@ public class CollectorRunner implements ApplicationRunner {
         // 판정이 나가야 할 두 시점 중 둘째. 영구 정지에서 이미 나갔으면 가드가 막는다.
         // <b>꺼져 있으면 안 낸다</b> — 원래 cleanUpOnce의 판정 호출이 그 검사를 달고
         // 있었고, 여기로 옮기면서 빠뜨리면 꺼진 서버가 종료마다 received=0 판정을 뱉는다.
-        if (status.state() != CollectionStatus.State.DISABLED) {
+        //
+        // <b>단, 편지 경로는 옛 경로를 반드시 꺼야 한다</b>(같이 켜면 부팅 거부).
+        // 그래서 이 검사만 두면 <b>운영에서 판정 줄이 한 줄도 안 나간다</b> —
+        // 등록부가 받은 것이 있으면 낸다.
+        //
+        // 남는 구멍은 정직하게 적는다: 편지 경로가 켜졌지만 채팅을 한 건도 못 받은
+        // 프로세스는 판정 줄이 없다. 그때는 등식 다섯 항이 전부 0이라 실을 것이 없고,
+        // 세션을 열고 닫은 사실은 chat.registry.* 줄이 든다.
+        if (status.state() != CollectionStatus.State.DISABLED || registryReceived() > 0) {
             // 퍼시스터 닫기는 logVerdictOnce 안이다 — 수신은 위에서 이미 끊겼으므로
             // 그 시점의 버퍼가 이 프로세스의 전부고, 판정 직전의 close가 그것을 싣는다.
             // DISABLED로 여길 안 지나는 경우의 닫기는 스프링 @PreDestroy가 덮는다.

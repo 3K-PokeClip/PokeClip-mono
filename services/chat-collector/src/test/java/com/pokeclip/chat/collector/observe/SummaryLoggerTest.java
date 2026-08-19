@@ -118,7 +118,7 @@ class SummaryLoggerTest {
     void 판정_줄에는_archiveRunId까지_실린다() {
         // stopReason null = 정상 종료(SHUTDOWN) — StopReason에는 SHUTDOWN 상수가 없다.
         String line = SummaryLogger.renderVerdict(1L, new CollectionMetrics().verdict(), null,
-                0L, 0L, 0L, 0L, counters(0, 0, 0, 0, 0, 0, "k7x2m9pq"));
+                0L, 0L, 0L, 0L, 0L, counters(0, 0, 0, 0, 0, 0, "k7x2m9pq"));
         for (String key : REQUIRED_ARCHIVE) assertThat(line).contains(key);
         assertThat(line).contains("archiveRunId=k7x2m9pq");
     }
