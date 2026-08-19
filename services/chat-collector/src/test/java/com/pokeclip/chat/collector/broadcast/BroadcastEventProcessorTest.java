@@ -5,6 +5,9 @@ import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
@@ -12,8 +15,10 @@ import org.springframework.test.context.ActiveProfiles;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 /**
  * 편지 하나를 어떻게 판정하는지를 잰다. <b>판정값 넷의 뜻은 러너의 삭제 기준이다</b> —
@@ -183,6 +188,112 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
         assertThat(starter.userIds()).containsExactly(42L, 42L);
     }
 
+    /**
+     * 🔴 <b>이 갈래가 없으면 그 방송의 큐가 영구히 막힌다.</b> 태스크 6이 실물 DB로 재 봤다 —
+     * 종료 편지의 {@code streamId}가 {@code null}이거나 129자면
+     * {@code DataIntegrityViolationException}({@code stream_id}는 {@code VARCHAR(128)} PK),
+     * {@code occurredAt}이 {@code null}이면 {@code Timestamp.from}에서 {@code NullPointerException}.
+     * 셋 다 {@code process()} 밖으로 나가 러너가 「안 지우고 회차 중단」으로 받는데, 재전송돼도
+     * 값이 안 바뀌므로 영영 안 풀린다. 폴링은 성공하므로 <b>health는 초록이다.</b>
+     *
+     * <p>시작 편지는 지금 안 터진다 — {@code find(null)}은 0행이라 그냥 통과해 <b>이름 없는
+     * 방송에 세션이 열린다.</b> 터지지 않을 뿐 같은 못 쓸 편지이므로 같이 막는다
+     * (태스크 10의 세션 등록부가 {@code streamId}를 열쇠로 쓴다).
+     *
+     * <p>문항 2: 「늘 {@code UNREADABLE}」인 구현에도 판정 한 줄은 초록이다 — 이 갈래에서
+     * 봉투 카운터가 올랐는지, 신원 카운터는 안 올랐는지, 시작 자리를 안 밟았는지를 같이 본다.
+     * 양성 대조는 {@code 정상_봉투는…}·{@code 딱_128자인…} 둘이 진다.
+     * <p>문항 4: 검증을 시작 자리 <b>뒤</b>에 두는 구현도 판정만 보면 통과한다 — 끝난 방송에
+     * 붙인 뒤 {@code UNREADABLE}을 돌려주는 모양이다. 그래서 {@code starter}를 같이 본다.
+     * <p>문항 1·3: 이 판정기는 세션을 열지 않는다. 잴 대상이 없어 해당하지 않는다.
+     * <p>문항 5: 봉투 검증을 통째로 빼면 여섯 다 빨간불(확인함) — 종료 셋은 위 두 예외로,
+     * 시작 셋은 {@code PROCESSED}로.
+     */
+    @ParameterizedTest(name = "{1}")
+    @MethodSource("표에_못_넣을_봉투들")
+    void 표에_못_넣을_봉투는_못_읽음으로_버린다(LifecycleEnvelope 못_쓸_편지, String 왜) {
+        assertThat(processor.process(못_쓸_편지)).as(왜).isEqualTo(ProcessResult.UNREADABLE);
+        assertThat(processor.counters().malformedEnvelopes()).as(왜).isEqualTo(1L);
+        assertThat(processor.counters().unreadableStreamerIds()).as(왜).isZero();
+        assertThat(starter.userIds()).as(왜).isEmpty();
+    }
+
+    static Stream<Arguments> 표에_못_넣을_봉투들() {
+        // 129자는 표의 폭(V303 VARCHAR(128))보다 딱 한 자 길다.
+        // 반대쪽 경계는 「딱_128자인_방송_번호는_표에_들어간다」가 잡는다.
+        String 한_자_긴_번호 = "s".repeat(129);
+        return Stream.of(
+                arguments(ended(null, 1), "종료 — 방송 번호가 없다"),
+                arguments(ended(한_자_긴_번호, 1), "종료 — 방송 번호가 128자를 넘는다"),
+                arguments(endedWithoutOccurredAt("s1"), "종료 — 종료 시각이 없다"),
+                arguments(started(null, "42", 1), "시작 — 방송 번호가 없다"),
+                arguments(started("", "42", 1), "시작 — 방송 번호가 비었다"),
+                arguments(started(한_자_긴_번호, "42", 1), "시작 — 방송 번호가 128자를 넘는다"));
+    }
+
+    // 양성 대조. 위 갈래들은 「늘 UNREADABLE」인 구현에도 전부 초록이다(문항 2).
+    @Test
+    void 정상_봉투는_그_검증에_안_걸린다() {
+        assertThat(processor.process(started("s1", "42", 1))).isEqualTo(ProcessResult.PROCESSED);
+        assertThat(processor.counters().malformedEnvelopes()).isZero();
+        assertThat(starter.userIds()).containsExactly(42L);
+    }
+
+    /**
+     * 양성 대조이면서 <b>상수를 표의 폭에 묶는 자리다.</b> 딱 128자를 실제로 표에 넣어 본다 —
+     * 상수가 {@code V303}의 {@code VARCHAR(128)}보다 커지면 위 129자 갈래가, 작아지면
+     * 여기가 빨간불이 된다. 양쪽이 다 닫힌다.
+     *
+     * <p>문항 4: 129자만 재면 {@code >=}로 쓴 오프바이원이 초록이다 — <b>멀쩡한 방송이
+     * 조용히 버려지는데</b> 카운터만 오르고 아무도 원인을 모른다.
+     * <p>문항 5: 상수를 127로 낮추면 빨간불(확인함).
+     */
+    @Test
+    void 딱_128자인_방송_번호는_표에_들어간다() {
+        String 폭에_꼭_맞는_번호 = "s".repeat(128);
+
+        assertThat(processor.process(ended(폭에_꼭_맞는_번호, 5))).isEqualTo(ProcessResult.PROCESSED);
+        assertThat(store.find(폭에_꼭_맞는_번호).orElseThrow().lastSequence()).isEqualTo(5L);
+        assertThat(processor.counters().malformedEnvelopes()).isZero();
+    }
+
+    /**
+     * 1번이 고칠 자리가 다르다 — 「식별자 체계를 바꿨다」와 「봉투가 깨졌다」는 다른 사건이다.
+     * 한 값으로 합치면 어느 쪽인지 모른 채 health만 아프다.
+     *
+     * <p>문항 4: 두 카운터를 다 올리는 구현도 「1 이상」 단언은 통과한다 — 정확히 1인지 본다.
+     * <p>문항 5: 봉투 검증을 신원 검사 뒤로 옮기면 마지막 두 줄이 빨간불(확인함).
+     */
+    @Test
+    void 못_쓸_편지_카운터는_신원_불량과_따로_센다() {
+        processor.process(started(null, "42", 1));
+        processor.process(started("s1", "uuid-form", 1));
+        assertThat(processor.counters().malformedEnvelopes()).isEqualTo(1L);
+        assertThat(processor.counters().unreadableStreamerIds()).isEqualTo(1L);
+
+        // 둘 다 깨졌으면 봉투로 센다 — 검사 순서를 그렇게 정했다. 신원 경고는 streamId를
+        // 찍는데 봉투가 깨졌으면 그 값 자체가 못 믿을 것이라, 「식별자 체계가 바뀌었다」로
+        // 읽히면 1번이 엉뚱한 곳을 판다.
+        processor.process(started(null, "uuid-form", 1));
+        assertThat(processor.counters().malformedEnvelopes()).isEqualTo(2L);
+        assertThat(processor.counters().unreadableStreamerIds()).isEqualTo(1L);
+    }
+
+    /**
+     * 모르는 종류는 봉투를 안 본다. 우리가 안 쓰는 종류라 {@code streamId}·{@code occurredAt}이
+     * 비어 있어도 이상하지 않고, 그것을 봉투 불량으로 세면 <b>「1번이 새 종류를 보내기
+     * 시작했다」는 진짜 신호가 봉투 카운터에 묻힌다.</b>
+     *
+     * <p>문항 5: 봉투 검증을 종류 검사 앞으로 옮기면 빨간불(확인함).
+     */
+    @Test
+    void 모르는_종류는_봉투가_깨져도_종류로_센다() {
+        assertThat(processor.process(envelope("broadcast.paused", null, "42", 1)))
+                .isEqualTo(ProcessResult.UNREADABLE);
+        assertThat(processor.counters().unknownTypes()).isEqualTo(1L);
+        assertThat(processor.counters().malformedEnvelopes()).isZero();
+    }
+
     private void givenLinkUnreachable() {
         starter.willReturn(ProcessResult.RETRY_LATER);
     }
@@ -217,8 +328,17 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
      * 그 우연 때문에 같이 빨간불이 됐다(확인함). 방어선이 어느 갈래인지 흐려지므로 갈랐다.
      */
     private static LifecycleEnvelope envelope(String eventType, String streamId, String streamerId, long sequence) {
+        return envelope(eventType, streamId, streamerId, sequence, 종료시각);
+    }
+
+    private static LifecycleEnvelope endedWithoutOccurredAt(String streamId) {
+        return envelope("broadcast.ended", streamId, "42", 1, null);
+    }
+
+    private static LifecycleEnvelope envelope(String eventType, String streamId, String streamerId,
+                                              long sequence, Instant occurredAt) {
         return new LifecycleEnvelope(1, "evt-" + eventType + "-" + streamId + "-" + sequence, eventType,
-                종료시각, streamId, streamerId, sequence, "trace-1", null);
+                occurredAt, streamId, streamerId, sequence, "trace-1", null);
     }
 
     /**
