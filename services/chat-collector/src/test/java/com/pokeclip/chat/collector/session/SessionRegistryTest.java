@@ -8,6 +8,7 @@ import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.TestPersistence;
+import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +18,7 @@ import org.springframework.web.client.RestClient;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -116,6 +118,8 @@ class SessionRegistryTest extends IntegrationTestSupport {
 
         assertThat(registry.activeCount()).isEqualTo(1);
         assertThat(registry.activeStreamIds()).containsExactly("s2");
+        // 자리가 빈 것과 서버가 절단을 관측한 것은 다른 시각이다 — 아래 갈래의 같은 주석 참고.
+        awaitUntil(AWAIT, () -> !behavior.isConnected("tokA"));
         assertThat(behavior.isConnected("tokA")).as("닫으라고 한 쪽은 실제로 닫혀야 한다").isFalse();
         assertThat(behavior.isConnected("tokB")).as("안 닫으라고 한 쪽의 소켓이 살아 있는가").isTrue();
         // <b>「닫은 뒤에 되살아나지 않는가」는 여기서 안 잰다.</b> 붙어 있는 세션을 닫는
@@ -299,6 +303,12 @@ class SessionRegistryTest extends IntegrationTestSupport {
         assertThat(behavior.isConnected("tokB"))
                 .as("철회한 쪽만 끊겨야 한다. 나머지 소켓이 같이 닫히면 전원이 멈춘 것이다")
                 .isTrue();
+        // <b>등록부에서 빠진 것과 서버가 절단을 관측한 것은 다른 시각이다</b> — 소켓을 닫는
+        // 것은 우리 쪽이고, 종료 프레임이 서버에 닿는 것은 비동기다
+        // ({@code FakeChzzkBehavior.awaitSessionClosed} 주석). 위 대기는 자리가 빈 것만
+        // 보므로 여기서 한 번 더 기다린다 — {@code SessionShutdownTest}가 같은 관측점에
+        // 같은 대기를 앞세운다. 시한이 차도 조용히 돌아오므로 판정은 아래 단언이 한다.
+        awaitUntil(AWAIT, () -> !behavior.isConnected("tokA"));
         assertThat(behavior.isConnected("tokA")).isFalse();
     }
 
@@ -400,7 +410,7 @@ class SessionRegistryTest extends IntegrationTestSupport {
     }
 
     @Test
-    void 끝난_방송의_번호로_닫으면_그_세션이_닫힌다() {
+    void 끝난_방송의_번호로_닫으면_그_세션이_닫힌다() throws Exception {
         givenRegistry();
         registry.open(key("s1", 42L, "chA"), "tok42");
 
@@ -408,6 +418,8 @@ class SessionRegistryTest extends IntegrationTestSupport {
 
         assertThat(registry.activeCount()).isZero();
         assertThat(registry.currentStreamIdOf(42L)).isNull();
+        // 자리가 빈 것과 서버가 절단을 관측한 것은 다른 시각이다 — 위 갈래의 같은 주석 참고.
+        awaitUntil(AWAIT, () -> !behavior.isConnected("tok42"));
         assertThat(behavior.isConnected("tok42")).isFalse();
     }
 
@@ -504,6 +516,93 @@ class SessionRegistryTest extends IntegrationTestSupport {
                 .as("true만 주고 실제로는 안 붙는 구현을 여기서 가른다")
                 .isTrue();
         assertThat(stateOf("s1")).isEqualTo(CollectionStatus.State.COLLECTING);
+    }
+
+    /**
+     * <b>세션 줄이 전부 어느 방송의 것인지 말하는가.</b>
+     *
+     * <p>감사 1이 잡은 자리다 — {@code StreamSession}의 로그 14줄 중 방송 번호를 싣는 줄이
+     * <b>0줄</b>이었다. 세션이 하나였을 때는 프로세스에 세션이 그것뿐이라 없어도 됐지만,
+     * 여럿이면 {@code chat.session.reconnecting}·{@code closed}·{@code pong_timeout}이
+     * <b>누구 것인지 모르는 줄</b>이 된다. 「일부만 안 걷힌다」를 로그로 가르는 열쇠다.
+     *
+     * <p>등록부 줄({@code chat.registry.*})은 원래 {@code stream=}을 싣는다 — 갈림이
+     * 정확히 등록부에서 끊겨 있었다.
+     */
+    // 문항 1: 세션 하나면 「누구 것인지」가 애초에 안 헷갈린다. 둘을 열고 <b>둘 다</b> 나오는지 본다.
+    // 문항 2: 빈 목록에 allMatch는 자동으로 참이다 — 줄 수를 먼저 못박는다.
+    // 문항 4: allMatch만 보면 <b>모든 줄에 같은 번호를 박은</b> 구현도 통과한다.
+    //         s1과 s2가 각각 나오는지 같이 본다.
+    @Test
+    void 세션_줄이_전부_어느_방송의_것인지_말한다() throws Exception {
+        givenRegistry();
+        try (LogCaptor captor = new LogCaptor()) {
+            registry.open(key("s1", 1L, "chA"), "tokA");
+            registry.open(key("s2", 2L, "chB"), "tokB");
+            // A만 끊어 절단·재연결 줄을 실제로 만든다. 안 끊으면 수립 줄만 남아
+            // 「누구 것인지 모르는 줄」이 가장 많이 나오는 갈래를 하나도 안 본다.
+            behavior.failSessionCreateFor("tokA", 503);
+            behavior.dropConnectionFor("tokA");
+            awaitUntil(AWAIT, () -> attemptOf("s1") >= 1);
+            registry.closeAll();
+
+            // <b>판정 줄은 뺀다.</b> 그것은 세션이 아니라 프로세스의 줄이라 가리킬 방송이
+            // 하나가 아니다(세션 수는 registrySessions=가 든다).
+            List<String> sessionLines = captor.messages().stream()
+                    .filter(m -> m.startsWith("chat.session.")
+                            && !m.startsWith("chat.session.verdict"))
+                    .toList();
+
+            assertThat(sessionLines)
+                    .as("줄이 거의 없으면 아래 allMatch는 빈 목록 위에서 자동으로 참이다")
+                    .hasSizeGreaterThan(4);
+            assertThat(sessionLines)
+                    .as("방송 번호가 없는 줄은 세션이 여럿일 때 누구 것인지 영영 모른다")
+                    .allMatch(m -> m.contains(" stream="));
+            assertThat(sessionLines).anyMatch(m -> m.contains(" stream=s1"));
+            assertThat(sessionLines).anyMatch(m -> m.contains(" stream=s2"));
+        }
+    }
+
+    /**
+     * <b>최대 수신 공백이 편지 경로에서 어디에도 안 실리던 자리</b>(태스크 11이 넘긴 숙제).
+     *
+     * <p>판정 줄은 프로세스 누계인데 이 값은 <b>최댓값이라 세션끼리 더할 수 없어</b>
+     * 거기 못 싣는다 — 그리고 편지 경로에서는 러너가 세션을 하나도 안 열어 그 항이 늘 0이다.
+     * 즉 세션 종료 줄이 없으면 <b>「한 방송이 오래 아무것도 못 받았다」가 어느 줄에도 안 남는다.</b>
+     */
+    // 문항 2: contains("maxReceiveGap=")이면 0ms를 박아 둔 구현도 통과한다.
+    //         공백을 실제로 만들고 값을 파싱해 본다.
+    // 문항 4: 값이 실려도 <b>남의 세션 것</b>이면 뜻이 없다 — stream=s1인 줄에서 읽는다.
+    @Test
+    void 세션_종료_줄이_그_방송의_최대_수신_공백을_싣는다() throws Exception {
+        givenRegistry();
+        try (LogCaptor captor = new LogCaptor()) {
+            registry.open(key("s1", 1L, "chA"), "tokA");
+            behavior.emitChatTo("tokA", "{\"content\":\"a\",\"messageTime\":1}");
+            awaitUntil(AWAIT, () -> registry.receivedOf("s1") == 1);
+            assertThat(registry.receivedOf("s1")).as("첫 건이 안 오면 공백을 만들 상대가 없다").isEqualTo(1);
+            Thread.sleep(300);
+            behavior.emitChatTo("tokA", "{\"content\":\"b\",\"messageTime\":2}");
+            awaitUntil(AWAIT, () -> registry.receivedOf("s1") == 2);
+            assertThat(registry.receivedOf("s1")).as("둘째 건이 안 오면 공백이 안 재어진다").isEqualTo(2);
+
+            registry.close("s1");
+
+            String ended = captor.messages().stream()
+                    .filter(m -> m.startsWith("chat.session.ended") && m.contains(" stream=s1 "))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("s1의 세션 종료 줄이 없다"));
+            assertThat(millisOf(ended, "maxReceiveGap="))
+                    .as("0ms를 박아 두면 「오래 못 받았다」가 어느 줄에도 안 남는다")
+                    .isGreaterThanOrEqualTo(200);
+        }
+    }
+
+    /** {@code 키=123ms} 꼴에서 숫자만. 형식이 바뀌면 파싱이 터져 그대로 빨간불이 된다. */
+    private static long millisOf(String line, String key) {
+        String rest = line.substring(line.indexOf(key) + key.length());
+        return Long.parseLong(rest.substring(0, rest.indexOf("ms")));
     }
 
     // ------------------------------------------------------------------

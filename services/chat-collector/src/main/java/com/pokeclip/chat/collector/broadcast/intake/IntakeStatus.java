@@ -19,7 +19,7 @@ public class IntakeStatus {
         this.enabled = enabled;
     }
 
-    void pollSucceeded(Instant at) {
+    public void pollSucceeded(Instant at) {
         lastPollSucceededAt.set(at);
         // 회복을 지우지 않으면 health가 영영 DOWN이라 다시 붙은 것을 아무도 모른다.
         lastFailureReason.set(null);

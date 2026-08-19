@@ -335,6 +335,16 @@ class SessionShutdownTest extends IntegrationTestSupport {
             assertThat(captor.messages())
                     .as("등록부 몫을 안 합치면 received=0이고 「받은 게 없다」로 읽힌다")
                     .anyMatch(m -> m.startsWith("chat.session.verdict") && m.contains(" received=8 "));
+            // <b>{@code session=}은 이 러너 자신의 번호라 편지 경로에서 늘 0이다.</b>
+            // 그것만 보면 「이 프로세스는 세션을 하나도 안 열었다」로 읽힌다 — 실제로는 둘이다.
+            // 문항 2: registrySessions=만 찾으면 0이어도 통과한다. 값을 본다.
+            // 문항 4: 등록부의 lastSessionNo를 집는 구현은 <b>남의 번호</b>를 싣는데
+            //         그 값도 우연히 2일 수 있다 — 세션을 둘 열고 채팅을 흘린 이 갈래에서
+            //         그 둘은 갈리지 않는다. 갈리는 것은 「닫힌 세션도 센다」쪽이고
+            //         그것은 SessionRegistryTest가 진다.
+            assertThat(captor.messages())
+                    .as("편지 경로에서 몇을 걷었는지를 말하는 항이 이것 하나다")
+                    .anyMatch(m -> m.startsWith("chat.session.verdict session=0 registrySessions=2 "));
         }
     }
 

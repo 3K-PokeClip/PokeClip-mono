@@ -4,6 +4,7 @@ import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.TestPersistence;
+import com.pokeclip.chat.collector.support.TestHealth;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -105,7 +106,7 @@ class CollectorConfigTest extends IntegrationTestSupport {
             runner.start();
 
             assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
-            assertThat(new CollectorHealth(status).health().getStatus()).isEqualTo(Status.UP);
+            assertThat(TestHealth.legacyOnly(status).health().getStatus()).isEqualTo(Status.UP);
 
             // 양성 대조. 상태만 COLLECTING으로 바꾸고 아무 데도 안 붙는 러너도
             // 위 두 줄을 통과한다. 수립 절차를 실제로 탔다는 증거가 필요하다.
@@ -132,7 +133,7 @@ class CollectorConfigTest extends IntegrationTestSupport {
             assertThat(status.state()).isEqualTo(CollectionStatus.State.STOPPED);
             assertThat(status.reason()).isEqualTo(StopReason.SESSION_AUTH_REJECTED);
 
-            var health = new CollectorHealth(status).health();
+            var health = TestHealth.legacyOnly(status).health();
             assertThat(health.getStatus()).isEqualTo(Status.DOWN);
             assertThat(health.getDetails())
                     .as("밖에서 보이는 이름이 바로 이 값이다. 거부와 일시 실패가 같은 문자열이면 "
@@ -169,7 +170,7 @@ class CollectorConfigTest extends IntegrationTestSupport {
             // 것은 그대로 DOWN이어야 한다</b> — 재연결 중에도 채팅은 안 들어온다.
             assertThat(status.state()).isEqualTo(CollectionStatus.State.RECONNECTING);
             assertThat(status.reason()).isEqualTo(StopReason.TRANSPORT_CLOSED);
-            assertThat(new CollectorHealth(status).health().getStatus()).isEqualTo(Status.DOWN);
+            assertThat(TestHealth.legacyOnly(status).health().getStatus()).isEqualTo(Status.DOWN);
         }
 
         /** 꺼져 있으면 붙지 않는다. 상태 문자열만 맞추는 것으로는 부족하다. */

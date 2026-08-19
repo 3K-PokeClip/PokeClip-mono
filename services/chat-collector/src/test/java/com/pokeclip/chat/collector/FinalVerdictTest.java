@@ -167,7 +167,7 @@ class FinalVerdictTest extends IntegrationTestSupport {
             assertThat(captor.messages())
                     .as("반납할 키가 없었던 결말이 skipped로 안 나가면 반납 실패와 구분이 안 된다")
                     .contains("chat.session.released session=" + runner.lastSessionNo()
-                            + " subscription=skipped");
+                            + " stream=none subscription=skipped");
         }
     }
 

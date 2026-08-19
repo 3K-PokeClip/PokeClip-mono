@@ -7,6 +7,7 @@ import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.observe.HeartbeatListener;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.TestPersistence;
+import com.pokeclip.chat.collector.support.TestHealth;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -79,7 +80,7 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
                     .as("정리가 이미 끝났는데 COLLECTING이면 health는 UP인 채로 수집만 죽는다")
                     .isNotEqualTo(CollectionStatus.State.COLLECTING);
             assertThat(status.reason()).isEqualTo(StopReason.TRANSPORT_CLOSED);
-            assertThat(new CollectorHealth(status).health().getStatus().getCode())
+            assertThat(TestHealth.legacyOnly(status).health().getStatus().getCode())
                     .as("수집이 죽었는데 health가 UP이면 밖에서는 아무 신호도 없다")
                     .isEqualTo("DOWN");
 
@@ -142,7 +143,7 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
         assertThat(status.state())
                 .as("수립 시한 만료가 COLLECTING을 찍으면 정리는 끝났는데 health는 UP이 된다")
                 .isNotEqualTo(CollectionStatus.State.COLLECTING);
-        assertThat(new CollectorHealth(status).health().getStatus().getCode())
+        assertThat(TestHealth.legacyOnly(status).health().getStatus().getCode())
                 .as("수집이 죽었는데 health가 UP이면 밖에서는 아무 신호도 없다")
                 .isEqualTo("DOWN");
         assertThat(status.reason())
@@ -270,7 +271,7 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
         assertThat(status.state())
                 .as("정리가 이미 끝났는데 COLLECTING이면 health는 UP인 채로 수집만 죽는다")
                 .isNotEqualTo(CollectionStatus.State.COLLECTING);
-        assertThat(new CollectorHealth(status).health().getStatus().getCode())
+        assertThat(TestHealth.legacyOnly(status).health().getStatus().getCode())
                 .as("수집이 죽었는데 health가 UP이면 밖에서는 아무 신호도 없다")
                 .isEqualTo("DOWN");
 
@@ -367,7 +368,7 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
             assertThat(captor.messages())
                     .as("늦은 반납을 평상시 반납과 같은 줄로 내보내면 세션당 한 줄이라는 모양이 흐려진다")
                     .contains("chat.session.released session=" + session
-                            + " subscription=returned late=true");
+                            + " stream=none subscription=returned late=true");
         }
     }
 
@@ -412,7 +413,7 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
                     // 번호를 상수로 박지 않는다 — LogCaptor는 JVM 전역이라
                     // 남의 러너가 늦게 찍은 줄을 내 것으로 읽는다.
                     String skipped = "chat.session.released session="
-                            + CutBeforeKeyRunner.this.lastSessionNo() + " subscription=skipped";
+                            + CutBeforeKeyRunner.this.lastSessionNo() + " stream=none subscription=skipped";
                     opened.set(awaitQuietly(() -> captor.messages().contains(skipped)));
                 }
             };
