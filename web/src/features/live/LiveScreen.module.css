@@ -144,6 +144,12 @@
   background: #08090c;
 }
 
+/* 플레이어 Suspense 폴백 — GlassPlayer 루트와 같은 16:9로 자리를 지킨다 */
+.playerFallback {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+}
+
 .aside {
   min-width: 0;
 }

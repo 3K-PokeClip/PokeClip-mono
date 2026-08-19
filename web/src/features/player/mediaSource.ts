@@ -19,7 +19,9 @@ export function buildMediaSourceUrl(
   env: MediaSourceEnv,
 ): string | null {
   if (streamParam && STREAM_ID_RE.test(streamParam) && env.liveBaseUrl) {
-    return `${env.liveBaseUrl}/${streamParam}/index.m3u8`;
+    // base의 트레일링 슬래시 정규화 — 배포 env에 슬래시를 붙여 넣으면 이중 슬래시 URL이
+    // 되고, 302 세션 리다이렉트 엣지가 그 경로를 다른 리소스로 라우팅할 수 있다.
+    return `${env.liveBaseUrl.replace(/\/+$/, '')}/${streamParam}/index.m3u8`;
   }
   return env.stubUrl || null;
 }

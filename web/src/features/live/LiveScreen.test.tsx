@@ -6,11 +6,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
 import { LiveScreen } from '@/features/live/LiveScreen';
 
-// useMediaSource가 쓰는 useSearchParams 대체 — vitest엔 NEXT_PUBLIC_MEDIA_* env가
-// 주입되지 않으므로 소스는 null이 되고, 플레이어는 시뮬레이션 경로로 결정적으로 돈다.
+// useMediaSource가 쓰는 useSearchParams 대체 — 아래 env 고정과 함께 소스를 null로 만들어
+// 플레이어가 시뮬레이션 경로로 결정적으로 돌게 한다.
 vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
+
+// env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도
+// 시뮬레이션 경로가 유지되도록 빈 값으로 고정한다 (빈 문자열 → useMediaSource가 null 반환).
+vi.stubEnv('NEXT_PUBLIC_MEDIA_STUB_URL', '');
+vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', '');
 
 // GlassPlayer가 useToast를 쓰므로 ToastProvider로 감싼다 (앱에선 providers.tsx가 담당).
 function renderLive() {

@@ -47,6 +47,13 @@ export function useHlsPlayback(
 
   useEffect(() => () => window.clearTimeout(clipTimer.current), []);
 
+  // 초기 볼륨은 마운트 1회만 — src 전환(?stream= 변경) 이펙트에 두면 사용자가 만진
+  // 볼륨이 스트림을 바꿀 때마다 70으로 되돌아간다.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video) video.volume = 0.7;
+  }, [videoRef]);
+
   // 유일한 시크 경로 (계약3 4절 2번) — 마우스·키보드·LIVE 복귀가 전부 이 함수를 탄다.
   // 라이브 재동기화를 호출하지 않는다.
   const seekToBehind = useCallback(
@@ -141,7 +148,10 @@ export function useHlsPlayback(
     let recoveredNetwork = false;
     let recoveredMedia = false;
 
-    video.volume = 0.7;
+    // src 전환(?stream= 변경) 시 이전 스트림의 상태가 남지 않게 초기화 — 첫 마운트에선
+    // 같은 값이라 no-op. 새 소스의 자동재생이 거부되면 playing=false로 남아 재생 버튼이 노출된다.
+    setPlaying(false);
+    setBehind(0);
 
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);

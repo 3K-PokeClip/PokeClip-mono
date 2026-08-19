@@ -16,6 +16,11 @@ describe('buildMediaSourceUrl', () => {
     expect(buildMediaSourceUrl('cam_01-a', env)).toBe('http://live.test/cam_01-a/index.m3u8');
   });
 
+  it('base의 트레일링 슬래시를 정규화한다 — 이중 슬래시 URL 방지', () => {
+    const slashed = { ...env, liveBaseUrl: 'http://live.test/' };
+    expect(buildMediaSourceUrl('test', slashed)).toBe('http://live.test/test/index.m3u8');
+  });
+
   it('부정 형식 id는 스텁으로 폴백 — 경로 조작 방지', () => {
     expect(buildMediaSourceUrl('../secret', env)).toBe(env.stubUrl);
     expect(buildMediaSourceUrl('a/b', env)).toBe(env.stubUrl);
