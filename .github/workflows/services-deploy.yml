@@ -5,8 +5,16 @@
 # 레지스트리를 넣으면 리포지토리·수명주기 정책·pull 권한이 함께 늘기 때문이다.
 # 빌드가 EC2 를 넘어서는 날 ECR 로 옮긴다 — 그때 바뀌는 것은 이 파일뿐이다.
 #
-# 자격증명은 OIDC 다. 액세스 키를 Secrets 에 두지 않는다 — mono 는 public 이고,
-# 키는 만든 순간부터 회수·교체 대상이 된다.
+# 자격증명은 액세스 키다. OIDC 를 먼저 붙였는데 이 계정에서 거부됐다 —
+# sub·audience·인증서 지문이 전부 일치하고 IAM 전파도 기다렸는데
+# "Not authorized to perform sts:AssumeRoleWithWebIdentity" 가 났다.
+# 이 계정은 상위 조직의 멤버 계정이고(Organizations API 가 권한 거부) SCP 가
+# 외부 신원 페더레이션을 막는 것으로 보이나 확증은 못 했다.
+#
+# 대신 키의 권한을 "dev EC2 한 대에 셸 보내기" 하나로 묶었다
+# (IAM 사용자 pokeclip-dev-deployer). 키가 새더라도 그 이상은 못 한다.
+# SCP 가 풀리는 날 이 잡의 자격증명 스텝만 role-to-assume 으로 되돌리면 된다 —
+# 역할 pokeclip-dev-deploy 와 OIDC 공급자는 지우지 않고 남겨 뒀다.
 name: services-deploy
 
 on:
@@ -16,10 +24,9 @@ on:
       - 'services/**'
       - '.github/workflows/services-deploy.yml' # 이 파일을 고치는 커밋은 이 파일로 검증한다
 
-# id-token 이 OIDC 토큰 발급에 필요하다. contents 는 checkout 용이 아니라
+# 액세스 키를 쓰므로 id-token 은 필요 없다. contents 는 checkout 용이 아니라
 # (이 잡은 체크아웃하지 않는다) 기본값을 좁히기 위해 명시한다.
 permissions:
-  id-token: write
   contents: read
 
 # 배포는 겹치면 안 된다. cancel-in-progress 를 켜지 않는 이유는 배포를 중간에
@@ -35,7 +42,8 @@ jobs:
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::187478112557:role/pokeclip-dev-deploy
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ap-northeast-2
 
       - name: dev 서버를 최신 develop 으로 갱신한다
