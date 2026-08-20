@@ -1,13 +1,19 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Side } from '@/components/app-shell/Side';
+import { useSidebarStore } from '@/stores/sidebar';
 
 const nav = vi.hoisted(() => ({ pathname: '/settings/plugin' }));
 
 vi.mock('next/navigation', () => ({
   usePathname: () => nav.pathname,
 }));
+
+// 접힘은 모듈 전역 스토어다 — 테스트 사이에 새지 않게 되돌린다
+beforeEach(() => {
+  useSidebarStore.setState({ collapsed: false });
+});
 
 describe('Side — 설정', () => {
   it('설정 메뉴 7개 중 채널 연동·플러그인만 링크이고 현재 경로를 활성으로 표시한다', () => {
@@ -55,6 +61,23 @@ describe('Side — 방송', () => {
 
     // 지난 방송 화면은 별도 티켓 — 있는 척하지 않는다
     expect(screen.getByText('지난 방송').closest('[aria-disabled="true"]')).not.toBeNull();
+  });
+
+  it('접힘이 그룹을 넘어 유지된다 — 설정에서 접으면 방송에서도 접혀 있다', async () => {
+    // 두 그룹이 각자 자기 레이아웃에서 Side를 마운트한다. 접힘이 컴포넌트 지역 상태면
+    // 탭을 옮길 때마다 접어둔 사이드바가 혼자 펼쳐진다.
+    const user = userEvent.setup();
+    nav.pathname = '/settings/plugin';
+    const settings = render(<Side menu="settings" />);
+    await user.click(screen.getByRole('button', { name: '사이드바 접기' }));
+    settings.unmount();
+
+    nav.pathname = '/broadcast/livenow';
+    render(<Side menu="broadcast" />);
+    expect(screen.getByRole('button', { name: '사이드바 펼치기' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
   });
 
   it('그룹 안 다른 화면에 있으면 라이브 대시보드가 활성이 아니다', () => {

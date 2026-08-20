@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -18,6 +17,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { Avatar, IconButton } from '@/ui';
+import { useSidebarStore } from '@/stores/sidebar';
 import { isDockHrefActive } from './dockTransition';
 import styles from './Side.module.css';
 
@@ -75,7 +75,9 @@ const MENUS: Record<SideMenu, Group[]> = {
 
 export function Side({ menu }: { menu: SideMenu }) {
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
+  // 그룹을 옮겨도 접힘이 따라간다 — 지역 상태로 두면 레이아웃이 갈릴 때마다 초기화된다
+  const collapsed = useSidebarStore((s) => s.collapsed);
+  const toggleCollapsed = useSidebarStore((s) => s.toggle);
 
   return (
     <aside className={styles.sidebar} data-collapsed={collapsed}>
@@ -96,7 +98,7 @@ export function Side({ menu }: { menu: SideMenu }) {
             size="sm"
             aria-label={collapsed ? '사이드바 펼치기' : '사이드바 접기'}
             aria-expanded={!collapsed}
-            onClick={() => setCollapsed((c) => !c)}
+            onClick={toggleCollapsed}
           >
             {/* 크기는 CSS가 셸 배율로 정한다 — size prop은 덮어써져 무의미 */}
             <Menu aria-hidden />
