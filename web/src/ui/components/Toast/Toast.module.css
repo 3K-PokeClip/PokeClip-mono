@@ -1,64 +1,132 @@
+/* 우측 하단 고정 · 여백 24px · 폭 344px · 모달과 드로어 위(z: toast). (ADR-044) */
 .viewport {
   position: fixed;
-  inset-block-end: var(--pc-space-4);
-  inset-inline-end: var(--pc-space-4);
+  inset-block-end: var(--pc-space-6);
+  inset-inline-end: var(--pc-space-6);
   z-index: var(--pc-z-toast);
   display: flex;
   flex-direction: column;
-  gap: var(--pc-space-2);
-  width: calc(100vw - var(--pc-space-8));
-  max-width: calc(380 * var(--pc-u));
+  gap: calc(9 * var(--pc-u));
+  width: calc(344 * var(--pc-u));
+  max-width: calc(100vw - var(--pc-space-8));
+  /* 토스트가 없는 자리는 아래 화면이 그대로 눌려야 한다. 카드만 되살린다. */
   pointer-events: none;
 }
+
+/* 좁은 화면에서는 하단 전체 폭으로 붙는다. (tokens/breakpoints.ts의 sm=480) */
+@media (max-width: 479px) {
+  .viewport {
+    inset-inline: 0;
+    inset-block-end: 0;
+    width: 100%;
+    max-width: 100%;
+    padding: var(--pc-space-3);
+  }
+}
+
+/* 4개 이상일 때 접힌 개수 표시 — 지운 게 아니라 숨긴 것이다. */
+.collapsed {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  padding: calc(4 * var(--pc-u)) calc(11 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-bg-surface);
+  box-shadow: var(--pc-shadow-md);
+  color: var(--pc-color-text-secondary);
+  font-size: var(--pc-font-size-xs);
+  font-weight: var(--pc-weight-bold);
+}
+.collapsed::before {
+  content: '';
+  width: calc(5 * var(--pc-u));
+  height: calc(5 * var(--pc-u));
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-point);
+}
+
 .toast {
   pointer-events: auto;
-  display: flex;
-  gap: var(--pc-space-3);
-  align-items: flex-start;
-  background: var(--pc-color-bg-surface-raised);
-  color: var(--pc-color-text-primary);
-  border: 1px solid var(--pc-color-border-default);
-  border-inline-start: 3px solid var(--pc-color-accent);
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--pc-color-border-subtle);
   border-radius: var(--pc-radius-lg);
+  background: var(--pc-color-bg-surface);
   box-shadow: var(--pc-shadow-lg);
-  padding: var(--pc-space-3) var(--pc-space-4);
+  /* 최신이 아래. 오래된 것은 위로 밀리며 살짝 작아진다. */
+  transform-origin: 100% 100%;
+  transform: scale(calc(1 - var(--pc-toast-depth, 0) * 0.025));
+  opacity: calc(1 - var(--pc-toast-depth, 0) * 0.16);
+  transition:
+    transform var(--pc-duration-normal) var(--pc-ease-standard),
+    opacity var(--pc-duration-normal) var(--pc-ease-standard);
   animation: pc-toast-in var(--pc-duration-normal) var(--pc-ease-decelerate);
 }
-.toast[data-variant='success'] {
-  border-inline-start-color: var(--pc-color-success);
+.toast[data-tone='error'] {
+  border-color: rgb(var(--pc-red-400-rgb) / 0.42);
 }
-.toast[data-variant='danger'] {
-  border-inline-start-color: var(--pc-color-danger);
+.toast[data-tone='warning'] {
+  border-color: rgb(var(--pc-yellow-500-rgb) / 0.42);
 }
-.toast[data-variant='info'] {
-  border-inline-start-color: var(--pc-color-info);
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: calc(11 * var(--pc-u));
+  padding: calc(12 * var(--pc-u)) calc(14 * var(--pc-u));
 }
+
+.icon {
+  flex: none;
+  color: var(--pc-color-accent-text);
+}
+.toast[data-tone='success'] .icon {
+  color: var(--pc-color-success);
+}
+.toast[data-tone='error'] .icon {
+  color: var(--pc-color-danger);
+}
+.toast[data-tone='warning'] .icon {
+  color: var(--pc-color-warning);
+}
+
 .body {
   flex: 1;
   min-width: 0;
+  line-height: 1.4;
 }
 .title {
-  font-weight: var(--pc-weight-semibold);
-  font-size: var(--pc-font-size-md);
-}
-.description {
-  color: var(--pc-color-text-secondary);
   font-size: var(--pc-font-size-sm);
-  margin-top: calc(2 * var(--pc-u));
+  font-weight: var(--pc-weight-bold);
 }
+/* 보조설명은 1줄 — 넘치면 자른다. */
+.description {
+  margin-top: calc(1 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  font-size: var(--pc-font-size-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.progress {
+  padding: 0 calc(14 * var(--pc-u)) calc(11 * var(--pc-u));
+}
+
 .close {
-  flex-shrink: 0;
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: calc(24 * var(--pc-u));
-  height: calc(24 * var(--pc-u));
-  margin: calc(-2 * var(--pc-u)) calc(-4 * var(--pc-u)) calc(-2 * var(--pc-u)) 0;
+  width: calc(22 * var(--pc-u));
+  height: calc(22 * var(--pc-u));
   border: 0;
+  border-radius: var(--pc-radius-sm);
   background: transparent;
   color: var(--pc-color-text-muted);
   cursor: pointer;
-  border-radius: var(--pc-radius-sm);
 }
 .close:hover {
   color: var(--pc-color-text-primary);
@@ -68,18 +136,49 @@
   outline: 2px solid var(--pc-color-focus-ring);
   outline-offset: 1px;
 }
+
+/* 남은 시간 — 포인터·포커스로 멈추면 이 바도 같이 멈춘다. */
+.timer {
+  height: calc(2 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+}
+.timerFill {
+  height: 100%;
+  width: 100%;
+  opacity: 0.5;
+  background: var(--pc-color-accent);
+  animation-name: pc-toast-bar;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+.toast[data-tone='success'] .timerFill {
+  background: var(--pc-color-success);
+}
+.toast[data-tone='warning'] .timerFill {
+  background: var(--pc-color-warning);
+}
+
 @keyframes pc-toast-in {
   from {
     opacity: 0;
-    transform: translateX(16px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
+    transform: translateY(8px) scale(calc(1 - var(--pc-toast-depth, 0) * 0.025));
   }
 }
+@keyframes pc-toast-bar {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .toast {
+    animation: none;
+    transition: none;
+  }
+  .timerFill {
     animation: none;
   }
 }

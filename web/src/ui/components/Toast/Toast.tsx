@@ -1,90 +1,435 @@
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FocusEvent,
+  type PointerEvent,
+  type ReactNode,
+} from 'react';
+import { hasOpenDismissableLayer } from '../../primitives/DismissableLayer';
 import { Portal } from '../../primitives/Portal';
+import { Button } from '../Button';
+import { Progress } from '../Progress';
+import { Spinner } from '../Spinner';
 import styles from './Toast.module.css';
 
-export type ToastVariant = 'default' | 'success' | 'danger' | 'info';
+export type ToastTone = 'success' | 'info' | 'warning' | 'error' | 'progress';
 
-export interface ToastOptions {
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
+interface ToastBase {
+  tone: ToastTone;
+  title: ReactNode;
+  description?: ReactNode;
+  /** 톤 기본값을 덮어쓴다. 0이면 자동으로 닫히지 않는다. */
+  duration?: number;
+  /** 같은 키가 연속으로 오면 새로 쌓지 않고 최신 토스트를 갱신한다. 기본값은 톤. */
+  dedupeKey?: string;
+  /** `progress` 톤 전용 0~100. 주면 본문 아래에 진행 바를 함께 그린다. */
+  progress?: number;
+}
+
+/**
+ * 액션은 최대 1개다 — `action`과 `undo`는 함께 쓸 수 없고, `destructive`로 표시한
+ * 결과에는 `undo`를 붙일 수 없다. 되돌릴 수 없는 일에 되돌리기 버튼을 붙이면
+ * 거짓말이 되기 때문이다(ADR-044). 삭제·연동 해제 같은 파괴적 동작은 모달로
+ * 확인받고 토스트는 결과만 알린다.
+ */
+export type ToastOptions =
+  | (ToastBase & { action?: ToastAction; undo?: never; destructive?: boolean })
+  | (ToastBase & { undo: () => void; action?: never; destructive?: never });
+
+/** 이미 떠 있는 토스트의 내용을 바꾼다. 톤이나 지속을 주면 타이머를 다시 건다. */
+export interface ToastPatch {
+  tone?: ToastTone;
   title?: ReactNode;
   description?: ReactNode;
-  variant?: ToastVariant;
-  /** Auto-dismiss delay in ms; 0 keeps it until dismissed. */
+  progress?: number;
   duration?: number;
 }
-interface ToastItem extends ToastOptions {
+
+/**
+ * 톤별 자동 닫힘(ms). 0은 "자동으로 닫히지 않는다"는 뜻이다 — 오류는 조치를
+ * 요구하고 진행 중은 아직 끝나지 않아서, 5초 뒤 지우면 사용자가 상태를 잃는다.
+ */
+const TONE_DURATION: Record<ToastTone, number> = {
+  success: 5000,
+  info: 5000,
+  warning: 7000,
+  error: 0,
+  progress: 0,
+};
+
+/** 못 보는 사용자에게 읽어 주는 방식 — 조치가 필요한 톤만 하던 말을 끊는다. */
+const TONE_ROLE: Record<ToastTone, 'status' | 'alert'> = {
+  success: 'status',
+  info: 'status',
+  progress: 'status',
+  warning: 'alert',
+  error: 'alert',
+};
+
+/** 동시에 보이는 개수. 넘치면 「이전 알림 N개 더」로 접힌다. */
+const MAX_VISIBLE = 3;
+/** 접힌 것까지 포함한 보관 상한 — 상한이 없으면 화면 구석이 목록이 된다. */
+const MAX_KEPT = 6;
+
+interface ToastItem extends ToastBase {
   id: string;
+  /** 갱신될 때마다 오른다. 타이머 바를 리마운트해 처음부터 다시 흐르게 하는 키. */
+  version: number;
+  action?: ToastAction;
+  destructive?: boolean;
+}
+
+interface TimerState {
+  /** 남은 시간(ms). 정지할 때마다 흘러간 만큼 깎아서 되돌려 담는다. */
+  remaining: number;
+  startedAt: number;
+  handle: number | null;
 }
 
 interface ToastContextValue {
   toast: (options: ToastOptions) => string;
+  update: (id: string, patch: ToastPatch) => void;
   dismiss: (id: string) => void;
+  dismissAll: () => void;
 }
 const ToastContext = createContext<ToastContextValue | null>(null);
 
-function ToastCard({ toast, onClose }: { toast: ToastItem; onClose: () => void }) {
-  const assertive = toast.variant === 'danger';
+function resolveDuration(item: Pick<ToastBase, 'tone' | 'duration'>): number {
+  return item.duration ?? TONE_DURATION[item.tone];
+}
+
+/** `undo`를 액션 자리 하나로 정규화한다 — 둘은 같은 자리를 쓰고 최대 1개다. */
+function normalize(options: ToastOptions): Omit<ToastItem, 'id' | 'version'> {
+  const { undo, action, ...base } = options as ToastBase & {
+    undo?: () => void;
+    action?: ToastAction;
+    destructive?: boolean;
+  };
+  return {
+    ...base,
+    dedupeKey: base.dedupeKey ?? base.tone,
+    action: undo ? { label: '되돌리기', onClick: undo } : action,
+  };
+}
+
+function ToneIcon({ tone }: { tone: Exclude<ToastTone, 'progress'> }) {
+  const common = {
+    viewBox: '0 0 24 24',
+    width: 18,
+    height: 18,
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 2.1,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+    className: styles.icon,
+  };
+  switch (tone) {
+    case 'success':
+      return (
+        <svg {...common}>
+          <path d="M5 12.5l4.5 4.5L19 7.5" />
+        </svg>
+      );
+    case 'error':
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="9.1" strokeWidth="1.9" />
+          <path d="M12 7.2v6.2M12 16.9h.01" />
+        </svg>
+      );
+    case 'warning':
+      return (
+        <svg {...common}>
+          <path d="M10.3 3.9 2.6 17.4A2 2 0 0 0 4.3 20.4h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+          <path d="M12 9.4v4.3M12 17h.01" />
+        </svg>
+      );
+    case 'info':
+      return (
+        <svg {...common}>
+          <path d="M13 3L5 13.5h6L11 21l8-10.5h-6L13 3z" />
+        </svg>
+      );
+  }
+}
+
+function ToastCard({
+  item,
+  depth,
+  paused,
+  onClose,
+}: {
+  item: ToastItem;
+  depth: number;
+  paused: boolean;
+  onClose: () => void;
+}) {
+  const role = TONE_ROLE[item.tone];
+  const duration = resolveDuration(item);
   return (
     <div
       className={styles.toast}
-      data-variant={toast.variant ?? 'default'}
-      role={assertive ? 'alert' : 'status'}
-      aria-live={assertive ? 'assertive' : 'polite'}
+      data-tone={item.tone}
+      style={{ '--pc-toast-depth': depth } as CSSProperties}
+      role={role}
+      aria-live={role === 'alert' ? 'assertive' : 'polite'}
       aria-atomic="true"
     >
-      <div className={styles.body}>
-        {toast.title != null ? <div className={styles.title}>{toast.title}</div> : null}
-        {toast.description != null ? (
-          <div className={styles.description}>{toast.description}</div>
+      <div className={styles.row}>
+        {item.tone === 'progress' ? (
+          <Spinner size="sm" className={styles.icon} aria-hidden="true" />
+        ) : (
+          <ToneIcon tone={item.tone} />
+        )}
+        <div className={styles.body}>
+          <div className={styles.title}>{item.title}</div>
+          {item.description != null ? (
+            <div className={styles.description}>{item.description}</div>
+          ) : null}
+        </div>
+        {item.action ? (
+          <Button variant="ghost" size="sm" onClick={item.action.onClick}>
+            {item.action.label}
+          </Button>
         ) : null}
+        <button type="button" className={styles.close} aria-label="닫기" onClick={onClose}>
+          <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M6 6l12 12M18 6L6 18"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              fill="none"
+            />
+          </svg>
+        </button>
       </div>
-      <button type="button" className={styles.close} aria-label="닫기" onClick={onClose}>
-        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-          <path
-            d="M3.5 3.5l7 7M10.5 3.5l-7 7"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
+      {item.tone === 'progress' && item.progress != null ? (
+        <div className={styles.progress}>
+          <Progress value={item.progress} size="sm" label="진행률" />
+        </div>
+      ) : null}
+      {duration > 0 ? (
+        <div className={styles.timer} aria-hidden="true">
+          <div
+            key={item.version}
+            className={styles.timerFill}
+            style={{
+              animationDuration: `${duration}ms`,
+              animationPlayState: paused ? 'paused' : 'running',
+            }}
           />
-        </svg>
-      </button>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 export interface ToastProviderProps {
   children: ReactNode;
-  /** Default auto-dismiss delay in ms. */
-  duration?: number;
 }
 
-/** Provides an imperative `toast()` API and renders the toast viewport. */
-export function ToastProvider({ children, duration = 4000 }: ToastProviderProps) {
+/** 전역 피드백 표면. 명령형 `toast()` API와 우측 하단 스택을 함께 제공한다. */
+export function ToastProvider({ children }: ToastProviderProps) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const counter = useRef(0);
+  const [paused, setPaused] = useState(false);
 
-  const dismiss = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+  // 목록의 정본은 ref다 — 같은 틱에 연달아 들어오는 토스트가 서로의 결과를 못 보고
+  // 갱신 대신 새로 쌓이는 일을 막는다. state는 그 사본이다.
+  const listRef = useRef<ToastItem[]>([]);
+  const timers = useRef(new Map<string, TimerState>());
+  const counter = useRef(0);
+  const hovering = useRef(false);
+  const focusing = useRef(false);
+  const pausedRef = useRef(false);
+
+  const commit = useCallback(() => setToasts([...listRef.current]), []);
+
+  const clearTimer = useCallback((id: string) => {
+    const timer = timers.current.get(id);
+    if (timer?.handle != null) window.clearTimeout(timer.handle);
+    timers.current.delete(id);
   }, []);
+
+  const dismiss = useCallback(
+    (id: string) => {
+      clearTimer(id);
+      listRef.current = listRef.current.filter((t) => t.id !== id);
+      commit();
+    },
+    [clearTimer, commit],
+  );
+
+  const startTimer = useCallback(
+    (id: string, ms: number) => {
+      clearTimer(id);
+      if (ms <= 0) return;
+      if (pausedRef.current) {
+        // 포인터가 이미 올라와 있으면 재개될 때까지 남은 시간만 들고 기다린다.
+        timers.current.set(id, { remaining: ms, startedAt: 0, handle: null });
+        return;
+      }
+      timers.current.set(id, {
+        remaining: ms,
+        startedAt: Date.now(),
+        handle: window.setTimeout(() => dismiss(id), ms),
+      });
+    },
+    [clearTimer, dismiss],
+  );
+
+  const setPausedState = useCallback(
+    (next: boolean) => {
+      if (next === pausedRef.current) return;
+      pausedRef.current = next;
+      const now = Date.now();
+      timers.current.forEach((timer, id) => {
+        if (next) {
+          if (timer.handle == null) return;
+          window.clearTimeout(timer.handle);
+          timer.handle = null;
+          timer.remaining = Math.max(1, timer.remaining - (now - timer.startedAt));
+        } else {
+          if (timer.handle != null) return;
+          timer.startedAt = now;
+          timer.handle = window.setTimeout(() => dismiss(id), timer.remaining);
+        }
+      });
+      setPaused(next);
+    },
+    [dismiss],
+  );
+
+  const syncPaused = useCallback(() => {
+    setPausedState(hovering.current || focusing.current);
+  }, [setPausedState]);
 
   const toast = useCallback(
     (options: ToastOptions) => {
-      counter.current += 1;
-      const id = `pc-toast-${counter.current}`;
-      setToasts((prev) => [...prev, { id, ...options }]);
-      const d = options.duration ?? duration;
-      if (d > 0) window.setTimeout(() => dismiss(id), d);
+      const next = normalize(options);
+      const list = listRef.current;
+      const last = list[list.length - 1];
+
+      let id: string;
+      if (last && last.dedupeKey === next.dedupeKey) {
+        // 같은 종류가 연속으로 발생하면 새로 쌓지 않고 최신 토스트를 갱신한다.
+        id = last.id;
+        list[list.length - 1] = { ...next, id, version: last.version + 1 };
+      } else {
+        counter.current += 1;
+        id = `pc-toast-${counter.current}`;
+        list.push({ ...next, id, version: 0 });
+        if (list.length > MAX_KEPT) {
+          list.splice(0, list.length - MAX_KEPT).forEach((dropped) => clearTimer(dropped.id));
+        }
+      }
+
+      startTimer(id, resolveDuration(next));
+      commit();
       return id;
     },
-    [duration, dismiss],
+    [clearTimer, commit, startTimer],
   );
 
+  const update = useCallback(
+    (id: string, patch: ToastPatch) => {
+      const list = listRef.current;
+      const index = list.findIndex((t) => t.id === id);
+      const current = list[index];
+      if (!current) return;
+      const merged: ToastItem = { ...current, ...patch, version: current.version + 1 };
+      list[index] = merged;
+      if (patch.tone !== undefined || patch.duration !== undefined) {
+        startTimer(id, resolveDuration(merged));
+      }
+      commit();
+    },
+    [commit, startTimer],
+  );
+
+  const dismissAll = useCallback(() => {
+    listRef.current.forEach((t) => clearTimer(t.id));
+    listRef.current = [];
+    commit();
+  }, [clearTimer, commit]);
+
+  // Esc는 최신 토스트를 닫는다. 다만 모달·드로어가 열려 있으면 그쪽 몫이다 —
+  // 토스트는 포커스를 가두지 않으니 나를 붙잡은 것이 먼저 닫혀야 한다.
+  useEffect(() => {
+    if (toasts.length === 0) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Escape' || hasOpenDismissableLayer()) return;
+      const latest = listRef.current[listRef.current.length - 1];
+      if (latest) dismiss(latest.id);
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [toasts.length, dismiss]);
+
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      pending.forEach((timer) => {
+        if (timer.handle != null) window.clearTimeout(timer.handle);
+      });
+      pending.clear();
+    };
+  }, []);
+
+  const visible = toasts.slice(-MAX_VISIBLE);
+  const hidden = toasts.length - visible.length;
+
+  // pointerover/focusin은 자식에서 버블링돼 pointer-events:none인 뷰포트까지 올라온다.
+  // 카드 사이를 옮겨 다닐 때 정지가 풀리지 않도록 relatedTarget으로 걸러 낸다.
+  const leaving = (e: PointerEvent<HTMLDivElement> | FocusEvent<HTMLDivElement>) =>
+    !e.currentTarget.contains(e.relatedTarget as Node | null);
+
   return (
-    <ToastContext.Provider value={{ toast, dismiss }}>
+    <ToastContext.Provider value={{ toast, update, dismiss, dismissAll }}>
       {children}
       <Portal>
-        <div className={styles.viewport}>
-          {toasts.map((t) => (
-            <ToastCard key={t.id} toast={t} onClose={() => dismiss(t.id)} />
+        <div
+          className={styles.viewport}
+          onPointerOver={() => {
+            hovering.current = true;
+            syncPaused();
+          }}
+          onPointerOut={(e) => {
+            if (!leaving(e)) return;
+            hovering.current = false;
+            syncPaused();
+          }}
+          onFocus={() => {
+            focusing.current = true;
+            syncPaused();
+          }}
+          onBlur={(e) => {
+            if (!leaving(e)) return;
+            focusing.current = false;
+            syncPaused();
+          }}
+        >
+          {hidden > 0 ? <div className={styles.collapsed}>이전 알림 {hidden}개 더</div> : null}
+          {visible.map((item, i) => (
+            <ToastCard
+              key={item.id}
+              item={item}
+              depth={visible.length - 1 - i}
+              paused={paused}
+              onClose={() => dismiss(item.id)}
+            />
           ))}
         </div>
       </Portal>
@@ -92,7 +437,7 @@ export function ToastProvider({ children, duration = 4000 }: ToastProviderProps)
   );
 }
 
-/** Access the imperative toast API. Requires a `ToastProvider` ancestor. */
+/** 명령형 토스트 API. `ToastProvider` 하위에서만 쓸 수 있다. */
 export function useToast(): ToastContextValue {
   const c = useContext(ToastContext);
   if (!c) throw new Error('useToast must be used within a ToastProvider.');

@@ -1,7 +1,9 @@
 export {
   ToastProvider,
   useToast,
+  type ToastAction,
   type ToastOptions,
+  type ToastPatch,
   type ToastProviderProps,
-  type ToastVariant,
+  type ToastTone,
 } from './Toast';
