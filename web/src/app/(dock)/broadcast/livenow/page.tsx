@@ -1,4 +1,3 @@
-import { ScreenTransition } from '@/components/app-shell/ScreenTransition';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
 
 export const metadata = { title: '라이브 · PokeClip' };
@@ -8,9 +7,5 @@ export const metadata = { title: '라이브 · PokeClip' };
 // useSearchParams(?stream=)의 프리렌더 Suspense 경계는 LiveScreen 안
 // 플레이어 영역에 있다 — 화면 전체가 아니라 플레이어만 CSR로 전환된다.
 export default function LivePage() {
-  return (
-    <ScreenTransition>
-      <LiveScreen />
-    </ScreenTransition>
-  );
+  return <LiveScreen />;
 }

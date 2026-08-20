@@ -5,7 +5,7 @@ import { Thumb } from './Thumb';
 import type { HomeVod } from './useHomeMockState';
 
 // 디자인 1a ③ — 지난 방송·VOD 그리드.
-// "지난 방송 목록" 화면(1f)은 M2(POK-106)라 링크 자리만 둔다 (SettingsSidebar 선례).
+// "지난 방송 목록" 화면(1f)은 M2(POK-106)라 링크 자리만 둔다 (Side 비활성 항목 선례).
 export function VodGrid({ vods }: { vods: HomeVod[] }) {
   return (
     <section aria-label="지난 방송 · VOD" data-tour-id={TOUR_TARGET.vodGrid}>

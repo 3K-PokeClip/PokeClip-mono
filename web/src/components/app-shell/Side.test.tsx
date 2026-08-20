@@ -1,15 +1,18 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { SettingsSidebar } from '@/features/settings/SettingsSidebar';
+import { Side } from '@/components/app-shell/Side';
+
+const nav = vi.hoisted(() => ({ pathname: '/settings/plugin' }));
 
 vi.mock('next/navigation', () => ({
-  usePathname: () => '/settings/plugin',
+  usePathname: () => nav.pathname,
 }));
 
-describe('SettingsSidebar', () => {
+describe('Side — 설정', () => {
   it('설정 메뉴 7개 중 채널 연동·플러그인만 링크이고 현재 경로를 활성으로 표시한다', () => {
-    render(<SettingsSidebar />);
+    nav.pathname = '/settings/plugin';
+    render(<Side menu="settings" />);
 
     const links = screen.getAllByRole('link');
     expect(links).toHaveLength(2);
@@ -25,8 +28,9 @@ describe('SettingsSidebar', () => {
   });
 
   it('토글 버튼이 접힘 상태를 전환한다', async () => {
+    nav.pathname = '/settings/plugin';
     const user = userEvent.setup();
-    render(<SettingsSidebar />);
+    render(<Side menu="settings" />);
 
     const toggle = screen.getByRole('button', { name: '사이드바 접기' });
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
@@ -35,6 +39,31 @@ describe('SettingsSidebar', () => {
     expect(screen.getByRole('button', { name: '사이드바 펼치기' })).toHaveAttribute(
       'aria-expanded',
       'false',
+    );
+  });
+});
+
+describe('Side — 방송', () => {
+  it('라이브 대시보드만 링크이고 지난 방송은 비활성이다', () => {
+    nav.pathname = '/broadcast/livenow';
+    render(<Side menu="broadcast" />);
+
+    const links = screen.getAllByRole('link');
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute('href', '/broadcast/livenow');
+    expect(links[0]).toHaveAttribute('aria-current', 'page');
+
+    // 지난 방송 화면은 별도 티켓 — 있는 척하지 않는다
+    expect(screen.getByText('지난 방송').closest('[aria-disabled="true"]')).not.toBeNull();
+  });
+
+  it('그룹 안 다른 화면에 있으면 라이브 대시보드가 활성이 아니다', () => {
+    // 그룹 루트가 화면을 겸했다면 하위 경로 매칭으로 여기서도 활성이 됐을 자리다
+    nav.pathname = '/broadcast/vod';
+    render(<Side menu="broadcast" />);
+
+    expect(screen.getByRole('link', { name: /라이브 대시보드/ })).not.toHaveAttribute(
+      'aria-current',
     );
   });
 });
