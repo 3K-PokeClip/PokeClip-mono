@@ -2,6 +2,12 @@ import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
 
 const layerStack: symbol[] = [];
 
+/** 열려 있는 dismissable 레이어(모달·드로어·팝오버)가 있는지.
+ *  토스트처럼 레이어 밖에서 Esc를 듣는 표면이 우선순위를 양보할 때 쓴다. */
+export function hasOpenDismissableLayer(): boolean {
+  return layerStack.length > 0;
+}
+
 export interface DismissableLayerProps {
   children: ReactNode;
   onDismiss?: () => void;

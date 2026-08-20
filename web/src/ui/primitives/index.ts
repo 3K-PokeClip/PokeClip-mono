@@ -11,6 +11,10 @@ export {
 } from './roving';
 export { Portal, type PortalProps } from './Portal';
 export { FocusScope, type FocusScopeProps } from './FocusScope';
-export { DismissableLayer, type DismissableLayerProps } from './DismissableLayer';
+export {
+  DismissableLayer,
+  hasOpenDismissableLayer,
+  type DismissableLayerProps,
+} from './DismissableLayer';
 export { LiveRegionProvider, useAnnouncer, type Politeness } from './LiveRegion';
 export { useFloating, type Side, type Align, type Coords } from './positioning';

@@ -1,1 +1,5 @@
-export { DismissableLayer, type DismissableLayerProps } from './DismissableLayer';
+export {
+  DismissableLayer,
+  hasOpenDismissableLayer,
+  type DismissableLayerProps,
+} from './DismissableLayer';
