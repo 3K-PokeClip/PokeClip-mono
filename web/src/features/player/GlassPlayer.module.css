@@ -61,7 +61,7 @@
    포커스 중인 버튼이 사라지지 않도록, 키보드 포커스가 안에 있는 동안은 숨김을 유보한다.
    :focus-within이 아니라 :has(:focus-visible)인 이유 — 마우스 클릭도 버튼에 포커스를
    남기는데(Chrome 등), focus-within으로 잡으면 클릭 한 번에 자동 숨김이 영영 안 돈다.
-   (SettingsSidebar.module.css의 .brand:has(:focus-visible) 선례) */
+   (Side.module.css의 .brand:has(:focus-visible) 선례) */
 .player[data-controls='hidden']:not(:has(:focus-visible)) .topOverlay,
 .player[data-controls='hidden']:not(:has(:focus-visible)) .controls {
   opacity: 0;

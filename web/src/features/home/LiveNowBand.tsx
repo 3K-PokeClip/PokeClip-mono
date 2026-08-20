@@ -31,10 +31,10 @@ export function LiveNowBand({ live }: { live: LiveNow }) {
             감지된 카드 <b>{live.detectedCards}</b> · 클립 완료 <b>{live.completedClips}</b>
           </div>
           <div className={styles.liveActions}>
-            <Link href="/live" className={styles.solidLink}>
+            <Link href="/broadcast/livenow" className={styles.solidLink}>
               대시보드 열기
             </Link>
-            <Link href="/live" className={styles.ghostLink}>
+            <Link href="/broadcast/livenow" className={styles.ghostLink}>
               카드 검토
             </Link>
           </div>

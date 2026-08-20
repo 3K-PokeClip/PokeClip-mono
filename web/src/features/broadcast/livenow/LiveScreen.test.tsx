@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
-import { LiveScreen } from '@/features/live/LiveScreen';
+import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
 
 // useMediaSource가 쓰는 useSearchParams 대체 — 아래 env 고정과 함께 소스를 null로 만들어
 // 플레이어가 시뮬레이션 경로로 결정적으로 돌게 한다.

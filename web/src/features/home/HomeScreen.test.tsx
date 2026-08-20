@@ -53,7 +53,13 @@ describe('LiveNowBand', () => {
 
     expect(screen.getByText('LIVE 1:24:03')).toBeInTheDocument();
     expect(screen.getByText(LIVE.title)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '대시보드 열기' })).toHaveAttribute('href', '/live');
-    expect(screen.getByRole('link', { name: '카드 검토' })).toHaveAttribute('href', '/live');
+    expect(screen.getByRole('link', { name: '대시보드 열기' })).toHaveAttribute(
+      'href',
+      '/broadcast/livenow',
+    );
+    expect(screen.getByRole('link', { name: '카드 검토' })).toHaveAttribute(
+      'href',
+      '/broadcast/livenow',
+    );
   });
 });

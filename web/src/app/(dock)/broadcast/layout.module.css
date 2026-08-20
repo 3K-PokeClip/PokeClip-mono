@@ -1,0 +1,12 @@
+/* 방송 그룹 셸 — 사이드바가 화면 최상단부터 전체 높이를 차지하고 본문만 스크롤된다
+   (설정 1m과 같은 구조). 본문 패딩은 두지 않는다 — 라이브 대시보드가 전폭 자체 헤더를
+   갖고 본문 폭·하단 독 여백을 스스로 잡는다(LiveScreen.module.css .container). */
+.shell {
+  display: flex;
+  min-height: 100dvh;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+}

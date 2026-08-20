@@ -8,9 +8,9 @@ import {
 describe('dockTransitionType', () => {
   it('오른쪽 탭이면 forward, 왼쪽 탭이면 back이다', () => {
     expect(dockTransitionType('/home', '/settings')).toBe('dock-forward');
-    expect(dockTransitionType('/live', '/clips')).toBe('dock-forward');
+    expect(dockTransitionType('/broadcast', '/clips')).toBe('dock-forward');
     expect(dockTransitionType('/settings', '/home')).toBe('dock-back');
-    expect(dockTransitionType('/clips', '/live')).toBe('dock-back');
+    expect(dockTransitionType('/clips', '/broadcast')).toBe('dock-back');
   });
 
   it('하위 경로에서 출발해도 그 탭 기준으로 방향을 잡는다', () => {
@@ -18,7 +18,7 @@ describe('dockTransitionType', () => {
   });
 
   it('같은 탭이면 방향이 없다 — 슬라이드가 돌면 안 된다', () => {
-    expect(dockTransitionType('/live', '/live')).toBeUndefined();
+    expect(dockTransitionType('/broadcast', '/broadcast')).toBeUndefined();
     expect(dockTransitionType('/settings/plugin', '/settings')).toBeUndefined();
   });
 

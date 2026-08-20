@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { ScreenTransition } from '@/components/app-shell/ScreenTransition';
-import { SettingsSidebar } from '@/features/settings/SettingsSidebar';
+import { Side } from '@/components/app-shell/Side';
 import styles from './layout.module.css';
 
 // 설정 하위 화면 공용 셸 — 좌측 사이드바 + 콘텐츠 (디자인 Side 이식)
@@ -12,7 +12,7 @@ export default function SettingsLayout({ children }: { children: ReactNode }) {
   return (
     <ScreenTransition>
       <div className={styles.shell}>
-        <SettingsSidebar />
+        <Side menu="settings" />
         {/* 본문 랜드마크 — 사이드바 없는 화면은 ScreenContainer가 같은 역할을 한다 */}
         <main className={styles.content}>{children}</main>
       </div>

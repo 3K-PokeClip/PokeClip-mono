@@ -285,7 +285,7 @@
   color: var(--pc-color-text-muted);
 }
 
-/* 목적지 화면이 아직 없는 링크 자리 (M2) — SettingsSidebar 비활성 항목 선례 */
+/* 목적지 화면이 아직 없는 링크 자리 (M2) — Side 비활성 항목 선례 */
 .mutedLink {
   margin-left: auto;
   font-size: calc(12 * var(--pc-u));

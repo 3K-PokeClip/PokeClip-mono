@@ -11,7 +11,7 @@ import styles from './Dock.module.css';
 // 아이콘은 lucide로 통일한다 — 크기는 CSS(.icon)가 셸 배율로 덮어쓰므로 size prop을 두지 않는다.
 const ITEM_META: Record<DockHref, { label: string; Icon: LucideIcon }> = {
   '/home': { label: '홈', Icon: House },
-  '/live': { label: '라이브', Icon: Radio },
+  '/broadcast': { label: '방송', Icon: Radio },
   // 디자인의 클립 아이콘은 가위다 (clapperboard 아님)
   '/clips': { label: '클립', Icon: Scissors },
   '/settings': { label: '설정', Icon: Settings },
