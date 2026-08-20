@@ -94,11 +94,11 @@ function GlassPlayerBody({
 
   const handleClip = useCallback(() => {
     sim.markClip();
-    toast({ title: '최근 30초 클립이 저장되었습니다', variant: 'success' });
+    toast({ tone: 'success', title: '최근 30초 클립이 저장되었습니다' });
   }, [sim, toast]);
 
   const handlePip = useCallback(() => {
-    toast({ title: '미니 플레이어는 준비 중이에요' });
+    toast({ tone: 'info', title: '미니 플레이어는 준비 중이에요' });
   }, [toast]);
 
   // 설정 팝오버는 Portal로 document.body에 붙지만, React는 DOM이 아니라 React 트리를 따라

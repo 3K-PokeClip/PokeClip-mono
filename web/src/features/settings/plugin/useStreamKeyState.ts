@@ -83,14 +83,14 @@ export function useStreamKeyState(): StreamKeyState {
       if (e instanceof ApiError && e.status === 429) {
         // ADR-019: 계정당 분당 3회 — 문구도 그 제한값 그대로 안내한다 (POK-103 완료조건)
         toast({
-          variant: 'danger',
+          tone: 'error',
           title: '코드 발급이 잠시 제한됐어요',
           description: '1분에 3회까지만 발급할 수 있어요. 잠시 후 다시 시도해 주세요.',
         });
         return;
       }
       toast({
-        variant: 'danger',
+        tone: 'error',
         title: '코드 발급에 실패했어요',
         description: '잠시 후 다시 시도해 주세요.',
       });
