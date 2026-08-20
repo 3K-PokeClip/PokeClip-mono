@@ -1,0 +1,86 @@
+/* 시안 1t. 시안은 1440×760 아트보드지만 실제 화면은 뷰포트를 채운다.
+   overflow는 숫자가 좁은 폭에서 넘칠 때 가로 스크롤이 생기지 않게 하는 안전망이다
+   (세로는 min-height라 요소가 자라므로 잘리지 않는다). */
+.screen {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: var(--pc-color-bg-canvas);
+  color: var(--pc-color-text-primary);
+}
+
+/* 상단 260px 그라데이션. 시안의 rgb(88 111 196 / .10)은 --pc-color-accent와
+   같은 색이라 원시값을 박지 않고 토큰에서 투명도를 뽑는다 — 테마가 바뀌면 같이 바뀐다. */
+.wash {
+  position: absolute;
+  inset: 0 0 auto;
+  height: calc(260 * var(--pc-u));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--pc-color-accent) 10%, transparent),
+    transparent
+  );
+  pointer-events: none;
+}
+
+.content {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 calc(40 * var(--pc-u)) calc(20 * var(--pc-u));
+  text-align: center;
+}
+
+.art {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  margin-bottom: calc(18 * var(--pc-u));
+}
+
+.numeral {
+  /* 시안은 300px 고정이지만 좁은 폭에서 좌우가 잘려 나가므로 뷰포트에 태운다.
+     22vw면 1440px에서 316px > 300px이라 시안 구간은 그대로 300px을 쓴다. */
+  font-size: min(calc(300 * var(--pc-u)), 22vw);
+  font-weight: 800;
+  line-height: 0.92;
+  letter-spacing: 0.06em;
+  color: color-mix(in srgb, var(--pc-color-accent) 20%, transparent);
+  user-select: none;
+  pointer-events: none;
+}
+
+/* next/image의 width·height 속성은 px 고정이라 CSS로 유닛에 태운다.
+   원본 여백을 자르지 않아야 시안의 250px·bottom -4px 구도가 그대로 산다. */
+.poki {
+  position: absolute;
+  bottom: calc(-4 * var(--pc-u));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(calc(250 * var(--pc-u)), 18.3vw);
+  height: auto;
+}
+
+.title {
+  font-size: calc(26 * var(--pc-u));
+  font-weight: 800;
+  line-height: 1.3;
+  letter-spacing: -0.025em;
+}
+
+.description {
+  margin-top: calc(9 * var(--pc-u));
+  font-size: calc(13 * var(--pc-u));
+  line-height: 1.65;
+  color: var(--pc-color-text-secondary);
+}
+
+.action {
+  display: flex;
+  margin-top: calc(26 * var(--pc-u));
+}
