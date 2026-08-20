@@ -13,6 +13,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 /**
  * 30초마다 요약 한 줄. <b>자기 전용 스케줄러를 갖는다.</b>
@@ -40,6 +41,9 @@ public final class SummaryLogger implements AutoCloseable {
     private SummaryLogger() { }
 
     /**
+     * @param stream       어느 방송의 줄인가. <b>값이 아니라 공급자로 받는다</b> — 같은
+     *                     스트리머의 새 방송이 오면 소켓은 그대로 두고 번호만 갈아끼므로
+     *                     (retarget), 붙들어 두면 그 뒤 줄이 전부 끝난 방송 번호를 단다
      * @param sinkFailures 삼킨 싱크 예외의 수를 읽어 오는 곳. ChatSession이 들고
      *                     있는 값이라 공급자로 받는다 — 세션은 재수립마다 바뀐다
      * @param counters     적재 카운터 묶음(persisted·conflicts·poisoned) —
@@ -47,8 +51,8 @@ public final class SummaryLogger implements AutoCloseable {
      * @param dropped      버퍼 상한 초과로 버린 수. 소유가 ChatBuffer라 따로 받는다
      * @param archive      아카이브 카운터 여섯 + runId 묶음. 아카이브가 꺼져 있으면 {@link ArchiveCounters#NONE}
      */
-    public static SummaryLogger start(CollectionMetrics metrics, Heartbeat heartbeat,
-                                      Duration period, LongSupplier sinkFailures,
+    public static SummaryLogger start(Supplier<String> stream, CollectionMetrics metrics,
+                                      Heartbeat heartbeat, Duration period, LongSupplier sinkFailures,
                                       PersistCounters counters, LongSupplier dropped,
                                       ArchiveCounters archive) {
         SummaryLogger logger = new SummaryLogger();
@@ -56,7 +60,7 @@ public final class SummaryLogger implements AutoCloseable {
         logger.scheduler.scheduleAtFixedRate(() -> {
             logger.emitterThreadNames.add(Thread.currentThread().getName());
             try {
-                log.info("{}", render(metrics.snapshot(), heartbeat, sinkFailures.getAsLong(),
+                log.info("{}", render(stream.get(), metrics.snapshot(), heartbeat, sinkFailures.getAsLong(),
                         counters.persistedCount(), counters.conflictedCount(),
                         counters.poisonedCount(), dropped.getAsLong(), archive));
             } catch (RuntimeException e) {
@@ -70,10 +74,14 @@ public final class SummaryLogger implements AutoCloseable {
     }
 
     /** 순수 함수라 스케줄러 없이도 검사할 수 있다. */
-    public static String render(CollectionMetrics.Snapshot s, Heartbeat heartbeat, long sinkFailures,
-                                long persisted, long conflicted, long poisoned, long dropped,
-                                ArchiveCounters archive) {
+    public static String render(String stream, CollectionMetrics.Snapshot s, Heartbeat heartbeat,
+                                long sinkFailures, long persisted, long conflicted, long poisoned,
+                                long dropped, ArchiveCounters archive) {
         return "chat.summary"
+                // <b>첫 항이다.</b> 스트리머가 여럿이면 30초마다 이 줄이 세션 수만큼 나가는데,
+                // 이것이 없으면 <b>서로 구분되지 않는 줄 N개</b>가 된다 — 「일부만 안 걷힌다」를
+                // 로그로 가르는 유일한 열쇠다. 옛 경로는 방송 번호를 몰라 none이다.
+                + " stream=" + stream
                 + " received=" + s.received()
                 + " maxReceiveGap=" + duration(s.maxReceiveGap())
                 + " lastReceivedAt=" + instant(s.lastReceivedAt())
@@ -141,7 +149,11 @@ public final class SummaryLogger implements AutoCloseable {
      *       <b>{@code lastOutageFrom}만 있고 {@code lastOutageTo}가 {@code none}이면
      *       끊긴 채로 끝난 것이다</b> — 그때 {@code outage}는 판정 시각까지의
      *       하한이지 유실의 전부가 아니다
-     *   <li>{@code session}은 경계가 아니라 몇 번째 세션의 판정인가다
+     *   <li>{@code session}은 경계가 아니라 몇 번째 세션의 판정인가다. <b>러너 자신의
+     *       세션 번호라 편지 경로에서는 0이다</b> — 러너가 세션을 하나도 안 열기 때문이고,
+     *       그 경로에서 「몇을 걷었나」를 말하는 것은 바로 아래 {@code registrySessions}다
+     *   <li>{@code registrySessions}는 편지로 <b>실제로 세운</b> 세션의 누계다(닫힌 것도 센다).
+     *       번호 갈아끼움은 안 센다 — 세션도 소켓도 그대로라 새로 선 것이 아니다
      *   <li>{@code reason}은 경계가 아니라 그 판정의 사유다
      * </ul>
      *
@@ -167,23 +179,45 @@ public final class SummaryLogger implements AutoCloseable {
      *
      * <p>요약과 같은 규칙이다. 본문·작성자 식별자·닉네임·토큰은 어느 필드에도 없다.
      */
-    public static void logFinalVerdict(long session, CollectionMetrics.Verdict verdict,
-                                       Object stopReason,
+    public static void logFinalVerdict(long session, long registrySessions,
+                                       CollectionMetrics.Verdict verdict,
+                                       Object stopReason, long otherSessionsReceived,
                                        PersistCounters counters, long dropped,
                                        ArchiveCounters archive) {
-        log.info("{}", renderVerdict(session, verdict, stopReason, counters.persistedCount(),
-                counters.conflictedCount(), counters.poisonedCount(), dropped, archive));
+        log.info("{}", renderVerdict(session, registrySessions, verdict, stopReason, otherSessionsReceived,
+                counters.persistedCount(), counters.conflictedCount(), counters.poisonedCount(),
+                dropped, archive));
     }
 
-    /** 순수 함수라 로그 없이도 검사할 수 있다. */
-    public static String renderVerdict(long session, CollectionMetrics.Verdict v,
-                                       Object stopReason,
+    /**
+     * 순수 함수라 로그 없이도 검사할 수 있다.
+     *
+     * @param otherSessionsReceived {@code verdict} 밖의 세션들이 받은 채팅 수 — 스트리머
+     *                              여럿을 동시에 걷을 때 {@code SessionRegistry}의 몫이다.
+     *                              <b>등식의 좌변이라 반드시 합쳐야 한다</b>: 우변 넷
+     *                              (persisted·conflicts·poisoned·dropped)은 공유 부품의
+     *                              프로세스 누계인데 좌변만 세션별이라, 안 합치면 등식이
+     *                              깨지는 것이 아니라 <b>「받은 게 없다」로 읽힌다.</b>
+     *                              <b>더할 수 있는 것만 여기로 온다</b> — 최댓값(수신 공백·
+     *                              ping/pong 간격)과 「마지막 하나」(절단 시각·지연 중앙값)는
+     *                              합치면 조용히 틀린 숫자가 되므로 안 싣는다
+     */
+    public static String renderVerdict(long session, long registrySessions,
+                                       CollectionMetrics.Verdict v,
+                                       Object stopReason, long otherSessionsReceived,
                                        long persisted, long conflicted, long poisoned, long dropped,
                                        ArchiveCounters archive) {
         return "chat.session.verdict"
                 // 첫 항이다. 줄을 세션 단위로 고르는 사람도 도구도 여기서 갈린다.
+                // <b>편지 경로에서는 이 러너가 연 세션이 없어 0이다</b> — 세션 번호는
+                // 세션별 줄(chat.session.ended)이 든다.
                 + " session=" + session
-                + " received=" + v.totalReceived()
+                // <b>편지 경로에서 이 프로세스가 몇을 걷었는지는 여기 하나에만 있다.</b>
+                // 위 session=은 러너 자신의 것이라 그 경로에서 늘 0이고, 아래 received는
+                // 세션 수가 아니라 채팅 수다 — 이 항이 없으면 "세션 0개"로 읽힌다.
+                // <b>더할 수 있는 값이라</b> 실을 수 있다(최댓값·「마지막 하나」는 못 싣는다).
+                + " registrySessions=" + registrySessions
+                + " received=" + (v.totalReceived() + otherSessionsReceived)
                 + " collectedFor=" + duration(v.totalCollectedFor())
                 + " lastReceivedAt=" + instant(v.lastReceivedAt())
                 + " maxReceiveGap=" + duration(v.maxReceiveGap())

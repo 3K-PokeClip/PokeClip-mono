@@ -2,7 +2,9 @@ package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.ActiveProfiles;
@@ -49,17 +51,38 @@ class CollectorHealthEndpointTest {
     /**
      * 켜졌는데 실패. PRD 상태표가 {@code DOWN (reason: SESSION_AUTH_FAILED 등)}을
      * 규정한 행이다. 죽은 포트로 향하게 해 가짜 서버 없이 실패를 만든다.
+     *
+     * <p><b>재시도 간격을 크게 주고 검사가 끝나면 러너를 멈춘다.</b> 죽은 포트라 재연결은
+     * 영원히 실패하는데 스프링은 이 컨텍스트를 JVM이 끝날 때까지 캐시한다 — 그대로 두면
+     * {@code application-test.yml}의 상한 1초에 맞춰 <b>남은 모든 테스트가 도는 내내</b>
+     * {@code chat.session.stopped ... reason=SESSION_AUTH_FAILED}가 1초마다 찍힌다.
+     * {@code LogCaptor}는 root 로거에 붙는 JVM 전역이라 그 줄이 <b>남의 단언 창</b>에
+     * 들어간다: {@code StopDiagnosticsTest}가 자기 러너의 첫 {@code stopped} 줄인 줄 알고
+     * 이 줄을 집어 간헐 빨간불이 났다(2026-08-19 재현 — 그 검사의 {@code LogCaptor}를
+     * 열어 두고 1.5초 기다린 뒤 러너를 띄우면 100% 빨간불).
+     *
+     * <p><b>{@code CollectorBootWiringTest}와 같은 두 겹이다</b>(그쪽 클래스 주석 참고).
+     * 같은 자리를 한쪽만 막아 두었던 것이 이 결함이다 — 한쪽을 고치면 다른 쪽을 나란히 본다.
      */
     @SpringBootTest(
             webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
             properties = {
                     "pokeclip.chzzk.enabled=true",
-                    "pokeclip.chzzk.base-url=http://localhost:1"
+                    "pokeclip.chzzk.base-url=http://localhost:1",
+                    "pokeclip.chzzk.reconnect-first-delay=30s",
+                    "pokeclip.chzzk.reconnect-max-delay=30s"
             })
     @ActiveProfiles("test")
     static class 수집이_멈췄을_때 extends IntegrationTestSupport {
 
         @LocalServerPort int port;
+        @Autowired CollectorRunner runner;
+
+        /** 컨텍스트는 캐시돼 JVM 끝까지 산다. 안 멈추면 위 클래스 주석의 그 상태가 된다. */
+        @AfterEach
+        void tearDown() {
+            runner.stop();
+        }
 
         @Test
         void health가_DOWN이고_응답_본문에_사유가_실린다() throws Exception {

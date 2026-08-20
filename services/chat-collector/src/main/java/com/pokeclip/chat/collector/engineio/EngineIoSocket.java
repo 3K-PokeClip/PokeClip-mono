@@ -11,6 +11,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
@@ -32,9 +33,23 @@ public final class EngineIoSocket implements PingSender, AutoCloseable {
     private final HttpClient httpClient;
 
     private final WebSocket webSocket;
-    private final Object sendLock = new Object();
+    /**
+     * 송신을 한 번에 하나로 묶는다. <b>{@code synchronized}가 아니다</b> — 이 잠금 안에서
+     * {@code .get(...)}으로 기다리는데, Java 21은 {@code synchronized} 안에서 블로킹하면
+     * 가상 스레드를 캐리어에 고정한다. 캐리어는 CPU 수만큼뿐이라 세션이 스트리머 수만큼
+     * 늘어나면 붙들린 만큼 다른 세션이 굶는다(실측: 스무 개 동시 → pinned 20, 소요 2배).
+     *
+     * <p><b>되돌리지 마라.</b> 상호배제는 둘이 같으므로 「한 번에 하나만 보낸다」는
+     * 불변식은 그대로다. {@code EngineIoSocketPinningTest}가 이 선택을 지킨다.
+     */
+    private final ReentrantLock sendLock = new ReentrantLock();
 
-    private EngineIoSocket(HttpClient httpClient, WebSocket webSocket) {
+    /**
+     * <b>패키지 전용이다</b> — {@code classify}와 같은 이유로 열어 뒀다. 송신이 안 끝나는
+     * 소켓을 물려야 잠금 안의 대기를 잴 수 있는데, 가짜 서버로는 그 상태를 만들 수 없다
+     * ({@code sendText}의 future는 상대 응답이 아니라 전송 완료로 끝난다 — 실측).
+     */
+    EngineIoSocket(HttpClient httpClient, WebSocket webSocket) {
         this.httpClient = httpClient;
         this.webSocket = webSocket;
     }
@@ -168,14 +183,16 @@ public final class EngineIoSocket implements PingSender, AutoCloseable {
      */
     @Override
     public void sendPing() {
-        synchronized (sendLock) {
-            try {
-                webSocket.sendText(EngineIoFrame.PING_TEXT, true)
-                        .get(5, TimeUnit.SECONDS);
-            } catch (Exception e) {
-                // URI를 메시지에 담지 않는다 — 쿼리에 auth 토큰이 들어 있다.
-                throw new PingFailure(classify(e), e);
-            }
+        sendLock.lock();
+        try {
+            webSocket.sendText(EngineIoFrame.PING_TEXT, true)
+                    .get(5, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            // URI를 메시지에 담지 않는다 — 쿼리에 auth 토큰이 들어 있다.
+            throw new PingFailure(classify(e), e);
+        } finally {
+            // synchronized와 달리 수동이다. 빠뜨리면 이 소켓은 영영 다시 못 보낸다.
+            sendLock.unlock();
         }
     }
 
@@ -211,7 +228,8 @@ public final class EngineIoSocket implements PingSender, AutoCloseable {
      */
     @Override
     public void close() {
-        synchronized (sendLock) {
+        sendLock.lock();
+        try {
             try {
                 webSocket.sendText(EngineIoFrame.CLOSE_TEXT, true).get(1, TimeUnit.SECONDS);
                 webSocket.sendClose(WebSocket.NORMAL_CLOSURE, "").get(1, TimeUnit.SECONDS);
@@ -223,6 +241,9 @@ public final class EngineIoSocket implements PingSender, AutoCloseable {
             // 무기한 막는데, 여기는 종료 경로라 한 번 멈추면 뒤따르는 정리가
             // 통째로 건너뛰어진다.
             httpClient.shutdownNow();
+        } finally {
+            // synchronized와 달리 수동이다. 빠뜨리면 이 소켓은 영영 다시 못 보낸다.
+            sendLock.unlock();
         }
     }
 }

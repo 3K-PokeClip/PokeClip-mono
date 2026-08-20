@@ -33,6 +33,7 @@ import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * T7. 채팅 본문·작성자 식별자·닉네임·토큰이 <b>어느 경로에서도</b> 로그에 안 남는지.
@@ -165,6 +166,39 @@ class ChatLogLeakTest extends IntegrationTestSupport {
     }
 
     /**
+     * 위 검사가 <b>모듈 전체 실행에서만</b> 간헐로 빨간불이던 원인은 운영 코드가 아니라
+     * <b>가짜 서버</b>였다. 절단 뒷정리와 클라이언트 ping이 겹치면 pong을 돌려주려다
+     * 세션이 닫혀 있어 예외가 나는데, 그 메시지에 토큰이 실려 스프링 WebSocket
+     * 데코레이터가 ERROR로 찍었다 — {@code LogCaptor}는 root에 붙으므로 그 줄이
+     * 그대로 단언 창에 들어온다.
+     *
+     * <p>겹치는 창을 결정적으로 못 세우므로 <b>예외 자체를 직접 세운다.</b> 붙어 있지
+     * 않은 토큰으로 부르면 같은 {@code require()}가 던진다 — 간헐 갈래와 <b>같은 줄</b>이다.
+     * 이 검사가 없으면 다음 사람이 진단 메시지에 토큰을 다시 넣어도 초록이고,
+     * 그 회귀는 또 전체 실행에서만 간헐로 나타난다.
+     */
+    @Test
+    void 가짜_서버_예외에_토큰이_실리지_않는다() throws Exception {
+        // 표에 TOKEN을 실어 둔다. 붙어 있는 토큰 목록을 통째로 붙이던 자리가
+        // 남의 토큰까지 새는지 보려면 표가 비어 있으면 안 된다.
+        CollectionStatus status = start();
+        assertThat(status.state()).isEqualTo(CollectionStatus.State.COLLECTING);
+
+        String unattached = needle("access-token-unattached");
+        Throwable thrown = catchThrowable(() -> behavior.dropConnectionFor(unattached));
+
+        assertThat(thrown)
+                .as("안 붙어 있는 토큰이면 require()가 던져야 아래 검사가 무언가를 본다")
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(thrown.getMessage())
+                .as("무엇이 없었는지는 남아야 한다 — 마스킹이 진단을 지우면 안 된다")
+                .contains("열린 세션이 없다");
+
+        // 물어본 토큰과 표에 있던 토큰 둘 다 안 나가야 한다.
+        assertNoSecretsIn(thrown.getMessage(), List.of(unattached, TOKEN));
+    }
+
+    /**
      * <b>로그로 실제로 나가는 요약 줄</b>을 훑는다. SummaryLoggerTest는 render()를
      * 직접 부르므로 그 결과가 어떻게 찍히는지는 거기서 안 본다. 완료 조건은
      * "render가 본문을 안 담는다"가 아니라 "나가는 줄에 본문이 없다"다.
@@ -185,7 +219,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
             }
             awaitReceived(5);
 
-            try (SummaryLogger logger = SummaryLogger.start(runner.metrics(),
+            try (SummaryLogger logger = SummaryLogger.start(() -> "none", runner.metrics(),
                     Heartbeat.idleForTest(), Duration.ofMillis(150),
                     () -> 0L, TestPersistence.disabledPersister(), () -> 0L, ArchiveCounters.NONE)) {
                 awaitSummaryLine(captor);
@@ -245,7 +279,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
     void 적재_경로가_돌아도_본문이_로그에_안_남는다() {
         try (LogCaptor captor = new LogCaptor()) {
             ChatBuffer buffer = new ChatBuffer(100);
-            buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+            buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
                     1_754_300_000_000L, 1_754_300_000_175L));
             int saved = new ChatPersister(jdbc, buffer).flushOnce();
             // 양성 대조. 표까지 안 갔다면 적재 경로가 바늘을 나른 적이 없다.
@@ -260,7 +294,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
                     throw new DataAccessResourceFailureException("db down");
                 }
             };
-            buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+            buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
                     1_754_300_000_001L, 1_754_300_000_176L));
             assertThat(new ChatPersister(broken, buffer).flushOnce()).isZero();
             assertThat(renderAll(captor))
@@ -275,7 +309,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
             new ChatPersister(jdbc, buffer).flushOnce();
             ChatPersister isolating = new ChatPersister(
                     TestPersistence.rejecting22(jdbc.getDataSource(), CONTENT), buffer);
-            buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+            buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
                     1_754_300_000_002L, 1_754_300_000_177L));
             isolating.flushOnce();
             assertThat(isolating.poisonedCount())
@@ -331,7 +365,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
             Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
             setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
             try {
-                buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+                buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
                         1_754_300_000_010L, 1_754_300_000_185L));
                 assertThat(persister.flushOnce())
                         .as("표까지 안 갔다면 바인딩 로거가 바늘을 나른 적이 없다").isEqualTo(1);
@@ -346,7 +380,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
                 Level before = levelOf(pinned);
                 setLevel(pinned, Level.TRACE);
                 try {
-                    buffer.offer(new PersistableChat("leak-ch", SENDER, CONTENT,
+                    buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
                             1_754_300_000_011L, 1_754_300_000_186L));
                     assertThat(persister.flushOnce()).isEqualTo(1);
                 } finally {

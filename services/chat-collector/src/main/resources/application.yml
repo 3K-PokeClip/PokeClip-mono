@@ -96,8 +96,13 @@ logging:
 
 pokeclip:
   chzzk:
-    # 기본이 꺼짐이다. 켜져 있으면 CI·남의 로컬이 뜰 때마다 붙으려 하고
-    # 연결 상한 3개를 말없이 먹는다. 실측할 때만 프로파일 local에서 켠다.
+    # 편지 없이 설정에 적힌 토큰 하나로 한 채널만 붙이는 옛 경로다. 실측·디버깅용으로
+    # 남긴다 — 운영에서는 꺼 두고 아래 broadcast.intake의 방송 편지로 붙는다.
+    # 켜져 있으면 CI·남의 로컬이 뜰 때마다 붙으려 하고 연결 상한 3개를 말없이 먹는다.
+    #
+    # 이것과 broadcast.intake.enabled를 같이 켜면 부팅이 거부된다 — 옛 경로 세션의
+    # 영구 정지(REVOKED·401·403)가 프로세스를 exit 1로 내려 편지로 연 세션 전부를
+    # 끊고, 그 방송들을 되살릴 STARTED 편지는 이미 소비돼 큐에 없다.
     enabled: ${CHZZK_ENABLED:false}
     # 기본값을 빈 문자열로 두고 @NotBlank로 잡는다(auth와 같은 규칙).
     # 안 주면 리터럴 "${CHZZK_ACCESS_TOKEN}"이 바인딩돼 서버는 뜨고 수집만 실패한다.
@@ -131,3 +136,36 @@ pokeclip:
       pending-max: ${CHAT_ARCHIVE_PENDING_MAX:60}
       # 수신→아카이브 바구니 상한(채팅 수). DB 바구니와 같은 1만. 넘치면 오래된 것부터(archiveBufferDropped).
       buffer-capacity: ${CHAT_ARCHIVE_BUFFER_MAX:10000}
+  broadcast:
+    # 메모 치우기 주기. 하루에 한 번이면 충분하지만, 프로세스가 하루를 못 살면
+    # 한 번도 안 도므로 짧게 잡는다 — 지울 것이 없으면 DELETE 한 번이라 싸다.
+    # initialDelay도 같은 값이다: fixedDelay의 기본 initialDelay는 0이라
+    # 컨텍스트가 뜨자마자 DELETE가 나가고 부팅과 겹친다(auth 스케줄러도 같은 이유).
+    ended-sweep-interval: ${BROADCAST_ENDED_SWEEP_INTERVAL:PT1H}
+    # 메모 보관 기간. ADR-016의 TTL 24h.
+    ended-retention: ${BROADCAST_ENDED_RETENTION:PT24H}
+    intake:
+      # 운영의 시작 경로다. 켜면 이 큐의 방송 편지가 세션을 열고 닫는다.
+      # 기본이 꺼짐이다. 켜져 있으면 CI·남의 로컬이 뜰 때마다 큐를 두드린다.
+      # 큐 주소가 비었다고 저절로 꺼지지 않는다 — "일부러 안 켬"과 "설정을 깜빡함"이
+      # 똑같이 보이면 안 되므로, 켜졌는데 주소가 없으면 부팅이 실패한다.
+      #
+      # 켜면 pokeclip.link.*(auth 주소·내부 토큰)가 실제로 쓰인다 — 그 둘이 비면
+      # 부팅이 죽는다. 꺼져 있으면 열쇠를 물을 일이 없어 아예 안 만든다.
+      enabled: ${BROADCAST_INTAKE_ENABLED:false}
+      queue-url: ${BROADCAST_QUEUE_URL:}
+      region: ${AWS_REGION:ap-northeast-2}
+      # 비면 진짜 AWS. LocalStack 주소(scheme+host+port)를 줄 수 있다.
+      endpoint: ${BROADCAST_QUEUE_ENDPOINT:}
+      # SQS 상한이 20초다. 넘기면 호출이 거부되는데 부팅은 성공한다 —
+      # 그래서 IntakeProperties가 부팅에서 막는다.
+      wait-time: ${BROADCAST_QUEUE_WAIT:20s}
+      # SQS가 한 번에 주는 최대치가 10이다.
+      max-messages: ${BROADCAST_QUEUE_MAX_MESSAGES:10}
+  link:
+    # auth의 내부 API 주소(8082). 컨테이너 안에서는 호스트가 서비스 이름이다.
+    auth-base-url: ${AUTH_BASE_URL:http://localhost:8082}
+    # auth의 /internal/** 체인이 X-Internal-Token으로 보는 값. 기본값을 빈 문자열로 두고
+    # ChzzkLinkClient 생성자에서 잡는다 — 안 주면 리터럴 "${INTERNAL_API_TOKEN}"이 바인딩돼
+    # 서버는 뜨고 열쇠 조회만 전부 401이 되며, 401은 재시도 갈래라 편지가 큐에서 영원히 돈다.
+    internal-token: ${INTERNAL_API_TOKEN:}

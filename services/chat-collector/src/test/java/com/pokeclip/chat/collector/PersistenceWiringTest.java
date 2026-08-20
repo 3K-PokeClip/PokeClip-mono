@@ -100,6 +100,35 @@ class PersistenceWiringTest extends IntegrationTestSupport {
     }
 
     /**
+     * <b>옛 경로의 채팅은 방송 번호가 비어 있다.</b> 편지 없이 {@code CHZZK_ENABLED}로
+     * 붙으면 방송 번호를 알 방법이 없다 — 구독은 「토큰 주인의 채팅」이라 방송을 못 고른다.
+     * NULL이 곧 「모른다」는 표시이고, 여기서 저장이 막히면 이 경로의 수집 자체가 죽는다.
+     */
+    // 문항 1: 세션 하나짜리 경로를 일부러 재는 갈래다 — 옛 경로에는 세션이 하나뿐이다.
+    // 문항 2: isNull은 <b>행이 없어도</b> 참처럼 보이므로 행 수를 먼저 확인한다.
+    //         그리고 <b>번호를 아무 데도 안 찍는 구현에서도 초록</b>이다 — 실제로 찍히는지는
+    //         StreamIdStampingTest가 잰다. 여기는 옛 경로만 본다.
+    // 문항 5: 러너가 legacy() 대신 번호를 지어내게 되돌리면 빨간불 — 확인함(주입 S).
+    @Test
+    void 옛_경로의_채팅은_방송_번호가_비어_있다() throws Exception {
+        start();
+
+        behavior.emitChat("{\"channelId\":\"wiring-legacy\",\"senderChannelId\":\"s-l\","
+                + "\"content\":\"옛경로\",\"messageTime\":1723600500000}");
+        awaitReceived(1);
+        awaitRows("wiring-legacy", 1);
+
+        assertThat(countRows("wiring-legacy"))
+                .as("저장이 막히면 옛 경로의 수집 자체가 죽는다")
+                .isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT stream_id FROM chat_messages WHERE channel_id = 'wiring-legacy'",
+                String.class))
+                .as("모르는 번호를 지어내 찍으면 없는 방송의 반응이 표에 생긴다")
+                .isNull();
+    }
+
+    /**
      * 완료 조건 2(중복 0건)의 자동판. 치지직은 백필을 안 하지만, 재연결 직후
      * 우리 쪽 이중 처리가 같은 채팅을 두 번 넣으려 할 때를 재현하는 가장
      * 실전적인 경로가 절단 → 재연결 → 같은 프레임 재송신이다.

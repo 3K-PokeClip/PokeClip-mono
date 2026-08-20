@@ -1,13 +1,17 @@
 package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.archive.ChatArchive;
+import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
+import com.pokeclip.chat.collector.broadcast.EndedStreamSweeper;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
+import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.flywaydb.core.Flyway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
@@ -16,10 +20,12 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.web.client.RestClient;
 
 import java.sql.SQLException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -27,6 +33,8 @@ import java.util.concurrent.TimeUnit;
 // CollectorRunner 주입이 실패한다(auth도 같은 것이 붙어 있다).
 @ConfigurationPropertiesScan
 @SpringBootApplication
+// 끝난 방송 메모 치우기(EndedStreamSweeper). 없으면 @Scheduled가 애노테이션만 남고 아무것도 안 돈다.
+@EnableScheduling
 public class CollectorApplication {
 
     private static final Logger log = LoggerFactory.getLogger(CollectorApplication.class);
@@ -66,9 +74,21 @@ public class CollectorApplication {
     CollectorRunner collectorRunner(ChzzkProperties properties, CollectionStatus status,
                                     RestClient.Builder restClientBuilder,
                                     ChatBuffer buffer, ChatPersister persister,
-                                    ChatArchive archive) {
+                                    ChatArchive archive, SessionRegistry registry) {
         return new CollectorRunner(properties, status, restClientBuilder, buffer, persister, archive,
-                () -> System.exit(1));
+                registry, () -> System.exit(1));
+    }
+
+    /**
+     * 스위퍼도 {@code @Component}가 아니라 여기서 만든다 — 보관 기간({@code Duration})과 시계
+     * ({@code Supplier<Instant>})는 스프링이 만들 수 있는 타입이 아니라, 생성자에 그대로 두면
+     * 부팅이 죽는다({@code EndedStreamSweeper} 주석의 실측 메시지). 값은 {@code @Value}로 받는다.
+     */
+    @Bean
+    EndedStreamSweeper endedStreamSweeper(
+            EndedStreamStore store,
+            @Value("${pokeclip.broadcast.ended-retention}") Duration retention) {
+        return new EndedStreamSweeper(store, retention, Instant::now);
     }
 
     static final class RetryingMigrationStrategy

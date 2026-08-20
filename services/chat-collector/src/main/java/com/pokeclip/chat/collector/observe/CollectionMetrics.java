@@ -169,6 +169,40 @@ public final class CollectionMetrics {
     }
 
     /**
+     * <b>같은 소켓으로 다음 방송을 걷기 시작한다</b>(갈아끼움).
+     *
+     * <p>{@link #beginSession()}과 다른 일이다 — 그쪽은 <b>세션</b>이 다시 선 것이라 수신
+     * 시계만 되잡는다. 여기는 <b>세션은 그대로인데 방송만 바뀐</b> 자리라, 방송 단위로 세는
+     * 값을 전부 0에서 다시 시작한다. 안 그러면 {@code stream=} 레이블이 새 방송을 가리키는
+     * 동안 그 안의 숫자는 앞 방송 것을 안고 간다 — {@code SessionRegistry.receivedOf}가
+     * 「이 방송이 받은 양」이라고 문서화한 값에 <b>앞 방송 몫이 그대로 섞였다</b>
+     * (codex P2, 재현함: 갈아끼운 직후 새 방송의 수신량이 앞 방송의 5였다).
+     *
+     * <p><b>세션 단위 값은 안 건드린다</b>({@code totalCollectedMillis}·ping/pong 간격·
+     * 절단 구간). 소켓이 그대로라 그 세션은 끝나지 않았고, 판정 줄은 프로세스 전체를
+     * 말하는 자리라 방송 경계로 잘리면 안 된다.
+     *
+     * @return 앞 방송이 받은 양. <b>부르는 쪽이 프로세스 누계로 옮겨야 한다</b> —
+     *         여기서 0으로 만들기만 하면 그만큼 총량이 줄어 판정 줄이 유실로 읽는다
+     */
+    public long beginBroadcast() {
+        synchronized (lock) {
+            long carried = totalReceived;
+            totalReceived = 0;
+            received = 0;
+            delaysMillis.clear();
+            maxReceiveGapMillis = 0;
+            orderViolations = 0;
+            decodeFailures = 0;
+            systemEvents.clear();
+            lastReceivedAtMillis = 0;
+            previousReceivedAtMillis = 0;
+            previousMessageTimeMillis = 0;
+            return carried;
+        }
+    }
+
+    /**
      * 끊겼다가 다시 붙었다. <b>얼마나 · 언제 놓쳤는지만 적는다</b> —
      * 수신 시계는 {@link #beginSession()}이 이미 다시 잡았다.
      *

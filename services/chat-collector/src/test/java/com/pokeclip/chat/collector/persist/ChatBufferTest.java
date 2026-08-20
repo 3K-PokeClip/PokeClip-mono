@@ -7,7 +7,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ChatBufferTest {
 
     private static PersistableChat chat(int i) {
-        return new PersistableChat("ch", "s-" + i, "m" + i, 1000L + i, 2000L + i);
+        return new PersistableChat(null, "ch", "s-" + i, "m" + i, 1000L + i, 2000L + i);
     }
 
     @Test

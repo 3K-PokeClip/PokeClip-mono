@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector;
 
+import ch.qos.logback.classic.spi.ILoggingEvent;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
@@ -174,8 +175,27 @@ class StopDiagnosticsTest extends IntegrationTestSupport {
         runner.run(null);
     }
 
+    /**
+     * <b>이 검사 스레드가 찍은 줄만 고른다.</b> {@code LogCaptor}는 root 로거에 붙는
+     * <b>JVM 전역</b>이라, 캐시된 남의 컨텍스트가 재연결하며 찍는 {@code stopped} 줄이
+     * 이 창에 들어온다 — 「첫 줄」로 집으면 그것을 자기 줄로 읽고 간헐 빨간불이 난다
+     * (2026-08-19 재현: {@code CollectorHealthEndpointTest.수집이_멈췄을_때}의 컨텍스트가
+     * 1초마다 {@code detail=cause=ResourceAccessException}을 찍었고, 창을 1.5초 열어 두면
+     * 100% 그 줄이 먼저다).
+     *
+     * <p><b>스레드가 열쇠인 이유</b> — {@code stopped} 줄에는 세션 번호가 없어
+     * {@code endedLine}처럼 번호로 못 가른다. 대신 {@code start()}가 부르는
+     * {@code run() → openFromBoot() → open()}이 <b>전부 동기</b>라 그 줄은 이 검사
+     * 스레드에서 나오고, 남의 컨텍스트 것은 재연결 스레드에서 나온다.
+     *
+     * <p>그 시끄러움 자체는 저쪽에서 없앴다. <b>여기는 다음에 시끄러운 컨텍스트가
+     * 생겨도 이 검사가 안 흔들리게 하는 두 번째 겹이다.</b>
+     */
     private static String stoppedLine(LogCaptor captor) {
-        return captor.messages().stream()
+        String self = Thread.currentThread().getName();
+        return captor.events().stream()
+                .filter(e -> self.equals(e.getThreadName()))
+                .map(ILoggingEvent::getFormattedMessage)
                 .filter(m -> m.startsWith("chat.session.stopped"))
                 .findFirst()
                 .orElse(null);
