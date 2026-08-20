@@ -79,6 +79,9 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `/broadcast/livenow`                      | 라이브 대시보드 (지난 방송 `/broadcast/vod`는 별도 티켓)           |
 | `/dev`                                    | 개발용 데모 (테마 전환 · Zustand 카운터 · TanStack Query 예시)     |
 | `/api/ping`                               | 서버 핸들러 앵커                                                   |
+| 그 밖의 모든 주소                         | 404 폴백 (`app/not-found.tsx`) — 아래 참조                         |
+
+**404 계약.** `app/not-found.tsx` 하나가 두 경우를 다 받는다 — 어떤 경로에도 안 걸린 주소, 그리고 상세 화면이 `notFound()`를 던진 경우. **자원이 없으면(만료·삭제·권한 회수) 상세 화면은 `notFound()`를 던져 이 화면을 재사용한다** — 「없음」과 「만료」를 문구로 가르지 않는다 (POK-204 · ADR-045). 루트에 두는 게 조건이다: `(dock)` 안에 두면 `AuthGuard`가 먼저 걸려 비로그인 사용자에게 404 대신 `/login`이 뜬다.
 
 ### 환경변수 (`.env.example` → `.env.local`)
 
