@@ -1,4 +1,6 @@
-/* 시안 1t. 시안은 1440×760 아트보드지만 실제 화면은 뷰포트를 채운다. */
+/* 시안 1t. 시안은 1440×760 아트보드지만 실제 화면은 뷰포트를 채운다.
+   overflow는 숫자가 좁은 폭에서 넘칠 때 가로 스크롤이 생기지 않게 하는 안전망이다
+   (세로는 min-height라 요소가 자라므로 잘리지 않는다). */
 .screen {
   position: relative;
   display: flex;
@@ -42,12 +44,15 @@
 }
 
 .numeral {
-  font-size: calc(300 * var(--pc-u));
+  /* 시안은 300px 고정이지만 좁은 폭에서 좌우가 잘려 나가므로 뷰포트에 태운다.
+     22vw면 1440px에서 316px > 300px이라 시안 구간은 그대로 300px을 쓴다. */
+  font-size: min(calc(300 * var(--pc-u)), 22vw);
   font-weight: 800;
   line-height: 0.92;
   letter-spacing: 0.06em;
   color: color-mix(in srgb, var(--pc-color-accent) 20%, transparent);
   user-select: none;
+  pointer-events: none;
 }
 
 /* next/image의 width·height 속성은 px 고정이라 CSS로 유닛에 태운다.
@@ -57,7 +62,7 @@
   bottom: calc(-4 * var(--pc-u));
   left: 50%;
   transform: translateX(-50%);
-  width: calc(250 * var(--pc-u));
+  width: min(calc(250 * var(--pc-u)), 18.3vw);
   height: auto;
 }
 

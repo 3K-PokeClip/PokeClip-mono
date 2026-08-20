@@ -83,6 +83,16 @@ describe('LinkButton', () => {
     expect(screen.getByTestId('arrow').parentElement).toHaveAttribute('aria-hidden', 'true');
   });
 
+  it('href가 항상 실려 링크 롤과 포커스를 잃지 않는다', () => {
+    // href 없는 <a>는 link 롤도 포커스도 없으면서 버튼과 똑같이 보인다.
+    // 타입에서 href를 required로 막았고(리뷰 #100), 런타임에서도 고정한다.
+    render(<LinkButton href="/home">홈으로 가기</LinkButton>);
+
+    const link = screen.getByRole('link', { name: '홈으로 가기' });
+    link.focus();
+    expect(link).toHaveFocus();
+  });
+
   it('접근성 위반이 없다', async () => {
     const { container } = render(<LinkButton href="/home">홈으로 가기</LinkButton>);
 

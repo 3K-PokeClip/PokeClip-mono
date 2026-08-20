@@ -22,8 +22,8 @@ export function NotFoundScreen() {
           <Image
             src="/brand/poki-404.webp"
             alt="클립을 잃어버린 포키 캐릭터"
-            width={500}
-            height={333}
+            width={675}
+            height={450}
             priority
             className={styles.poki}
           />

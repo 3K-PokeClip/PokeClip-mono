@@ -7,8 +7,15 @@ import styles from '../Button/Button.module.css';
 
 export interface LinkButtonProps extends Omit<
   AnchorHTMLAttributes<HTMLAnchorElement>,
-  'className'
+  'className' | 'href'
 > {
+  /**
+   * Required. An anchor without `href` has no `link` role and is not focusable,
+   * yet renders pixel-identical to a solid button — a control keyboard and
+   * screen-reader users silently cannot reach. Render text instead when there
+   * is nowhere to go.
+   */
+  href: string;
   variant?: ButtonVariant;
   size?: ButtonSize;
   fullWidth?: boolean;
@@ -17,8 +24,16 @@ export interface LinkButtonProps extends Omit<
   /**
    * Anchor component to render. Defaults to `a` so this package stays
    * framework-free — Next apps pass `as={Link}`, Storybook keeps the default.
+   *
+   * Must render an anchor and forward the props it receives: the button look is
+   * carried by `className` and `data-variant`/`data-size`, so a component that
+   * drops them renders an unstyled link with no type error.
+   *
+   * `href` is required in the constraint because this component always passes
+   * one down — routers like `next/link` declare it required and would not fit
+   * a constraint that made it optional.
    */
-  as?: ElementType;
+  as?: ElementType<AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }>;
   className?: string;
 }
 
