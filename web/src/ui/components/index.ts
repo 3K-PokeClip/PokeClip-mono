@@ -14,6 +14,7 @@ export * from './Avatar';
 export * from './Card';
 // Form
 export * from './Button';
+export * from './LinkButton';
 export * from './IconButton';
 export * from './Tag';
 export * from './Field';
