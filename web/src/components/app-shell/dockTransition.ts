@@ -1,7 +1,7 @@
 /** 독 탭 순서와 전환 방향. 렌더와 분리해 둔 이유는 transitionTypes가 DOM 속성으로
  *  나가지 않아 렌더 테스트로는 검증할 수 없기 때문이다 — 순수 함수로 직접 테스트한다. */
 
-export const DOCK_HREFS = ['/home', '/live', '/clips', '/settings'] as const;
+export const DOCK_HREFS = ['/home', '/broadcast', '/clips', '/settings'] as const;
 
 export type DockHref = (typeof DOCK_HREFS)[number];
 

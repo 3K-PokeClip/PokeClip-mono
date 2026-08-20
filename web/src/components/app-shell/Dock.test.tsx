@@ -4,7 +4,7 @@ import { Dock } from '@/components/app-shell/Dock';
 import styles from '@/components/app-shell/Dock.module.css';
 
 vi.mock('next/navigation', () => ({
-  usePathname: () => '/live',
+  usePathname: () => '/broadcast/livenow',
 }));
 
 describe('Dock', () => {
@@ -14,12 +14,12 @@ describe('Dock', () => {
     const links = screen.getAllByRole('link');
     expect(links.map((link) => link.getAttribute('href'))).toEqual([
       '/home',
-      '/live',
+      '/broadcast',
       '/clips',
       '/settings',
     ]);
 
-    expect(screen.getByRole('link', { name: /라이브/ })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: /방송/ })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByRole('link', { name: /홈/ })).not.toHaveAttribute('aria-current');
   });
 
@@ -29,7 +29,7 @@ describe('Dock', () => {
 
     expect(container.querySelectorAll(`.${styles.pill}`)).toHaveLength(1);
     expect(
-      screen.getByRole('link', { name: /라이브/ }).querySelector(`.${styles.pill}`),
+      screen.getByRole('link', { name: /방송/ }).querySelector(`.${styles.pill}`),
     ).not.toBeNull();
   });
 });

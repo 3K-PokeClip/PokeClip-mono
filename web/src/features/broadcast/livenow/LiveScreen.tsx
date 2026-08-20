@@ -17,7 +17,7 @@ import { useLiveMockState, type LiveStream } from './useLiveMockState';
 // 화면 전체가 아니라 플레이어만 빠지도록 여기서 분리하고 경계는 playerFrame 안에 둔다.
 //
 // 다만 지금 이 라우트의 프리렌더 HTML은 어차피 비어 있다 — AuthGuard가 hydrate 전에
-// (dock) 서브트리를 통째로 null로 만들기 때문이다(.next/server/app/live.html로 확인).
+// (dock) 서브트리를 통째로 null로 만들기 때문이다(.next/server/app/broadcast/livenow.html로 확인).
 // 경계를 좁힌 이득은 AuthGuard가 서버에서도 그릴 수 있게 되는 시점에 생긴다.
 // 이 주석을 LCP·SEO 근거로 쓰지 말 것.
 function LivePlayer({ stream }: { stream: LiveStream }) {
