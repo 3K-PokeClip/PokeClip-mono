@@ -563,6 +563,92 @@ describe('Toast', () => {
     expect(screen.getByText(long)).toHaveAttribute('title', long);
   });
 
+  // 6차 리뷰 #101 — 카드는 그대로인데 안쪽 버튼만 사라지면 blur가 안 온다.
+  // 카드 id만 보면 정지가 영영 안 풀려 이후 토스트까지 전부 멈춘다.
+  it('포커스한 액션이 update로 사라져도 정지가 풀린다', () => {
+    setup();
+    let id = '';
+    act(() => {
+      id = api.toast({
+        tone: 'progress',
+        title: '업로드 중',
+        action: { label: '취소', onClick: vi.fn() },
+      });
+    });
+    act(() => screen.getByRole('button', { name: '취소' }).focus());
+
+    act(() => api.update(id, { tone: 'success', title: '마쳤습니다', action: null }));
+
+    // 포커스는 같은 카드의 닫기로 옮겨간다 — 스택 안이니 정지는 규칙대로 유지된다
+    const close = screen.getByRole('button', { name: '닫기' });
+    expect(document.activeElement).toBe(close);
+    advance(10_000);
+    expect(screen.getByText('마쳤습니다')).toBeInTheDocument();
+
+    // 사용자가 스택을 벗어나면 남은 시간부터 이어서 닫힌다.
+    // 고치기 전에는 포커스가 허공(body)에 있는데도 정지가 걸린 채라 영영 안 닫혔다.
+    act(() => close.blur());
+    advance(5000);
+    expect(screen.queryByText('마쳤습니다')).not.toBeInTheDocument();
+  });
+
+  // 6차 리뷰 #101 — 톤만으로 합치면 내용이 다른 오류가 앞 오류를 통째로 덮어쓴다.
+  it('내용이 다른 오류는 합쳐지지 않는다', () => {
+    setup();
+    act(() => {
+      api.toast({
+        tone: 'error',
+        title: '코드 발급이 잠시 제한됐어요',
+        description: '1분에 3회까지만 발급할 수 있어요.',
+      });
+      api.toast({ tone: 'error', title: '코드 발급에 실패했어요' });
+    });
+
+    expect(cards()).toHaveLength(2);
+    expect(screen.getByText('코드 발급이 잠시 제한됐어요')).toBeInTheDocument();
+  });
+
+  it('같은 제목이 반복되면 여전히 하나로 합쳐진다', () => {
+    setup();
+    act(() => {
+      api.toast({ tone: 'error', title: '업로드에 실패했습니다', description: '1번째' });
+      api.toast({ tone: 'error', title: '업로드에 실패했습니다', description: '2번째' });
+    });
+
+    expect(cards()).toHaveLength(1);
+    expect(screen.getByText('2번째')).toBeInTheDocument();
+  });
+
+  // 6차 리뷰 #101 — dismissAll도 포커스를 돌려줘야 한다.
+  it('dismissAll도 들어오기 전 자리로 포커스를 돌려준다', () => {
+    const { getByText } = setup(<button type="button">바깥 버튼</button>);
+    const outside = getByText('바깥 버튼');
+    act(() => outside.focus());
+    act(() => {
+      api.toast({ tone: 'error', title: '토스트' });
+    });
+    act(() => screen.getByRole('button', { name: '닫기' }).focus());
+
+    act(() => api.dismissAll());
+    expect(document.activeElement).toBe(outside);
+  });
+
+  // 6차 리뷰 #101 — 접힌 카드는 애니메이션이 끊기지 않게 숨겨야 한다.
+  it('접힌 카드는 display가 아니라 visibility로 숨는다', () => {
+    setup();
+    act(() => {
+      ['a', 'b', 'c', 'd'].forEach((k) =>
+        api.toast({ tone: 'error', title: `${k}번`, dedupeKey: k }),
+      );
+    });
+
+    const collapsed = screen.getByText('a번').closest('[data-tone]') as HTMLElement;
+    expect(collapsed).toHaveAttribute('data-collapsed');
+    const style = getComputedStyle(collapsed);
+    expect(style.visibility).toBe('hidden');
+    expect(style.display).not.toBe('none');
+  });
+
   it('접근성 위반이 없다', async () => {
     vi.useRealTimers();
     const { container } = setup();

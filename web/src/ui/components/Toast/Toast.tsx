@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -128,9 +129,14 @@ function resolveDuration(item: Pick<ToastBase, 'tone' | 'duration'>): number {
  * 둘이 한 카드와 한 id를 공유해 서로의 진행률을 덮어쓴다. 합치려면 같은 작업임을
  * `dedupeKey`로 밝혀야 한다.
  */
-function mergeKey(item: Pick<ToastBase, 'tone' | 'dedupeKey'>): string | null {
+function mergeKey(item: Pick<ToastBase, 'tone' | 'dedupeKey' | 'title'>): string | null {
   if (item.dedupeKey !== undefined) return item.dedupeKey;
-  return item.tone === 'progress' ? null : item.tone;
+  if (item.tone === 'progress') return null;
+  // 톤만으로 합치면 **내용이 다른** 알림도 앞 것을 덮어쓴다. 오류는 자동으로 닫히지
+  // 않아 계속 최신 자리에 남으므로, 같은 화면의 다른 오류 안내가 통째로 사라진다.
+  // ADR-044의 "같은 종류가 연속으로 발생하면 갱신"은 같은 사건의 반복을 겨눈 규칙이라
+  // 제목까지 같을 때만 합친다. 그래도 합치려면 dedupeKey로 밝힌다.
+  return typeof item.title === 'string' ? `${item.tone}:${item.title}` : null;
 }
 
 /** `undo`를 액션 자리 하나로 정규화한다 — 둘은 같은 자리를 쓰고 최대 1개다. */
@@ -434,6 +440,7 @@ export function ToastProvider({ children }: ToastProviderProps) {
   );
 
   const dismissAll = useCallback(() => {
+    restoreFocus.current = viewportRef.current?.contains(document.activeElement) ?? false;
     listRef.current.forEach((t) => clearTimer(t.id));
     listRef.current = [];
     commit();
@@ -463,9 +470,14 @@ export function ToastProvider({ children }: ToastProviderProps) {
       hoveredId.current = null;
       changed = true;
     }
-    if (focusedId.current !== null && !visibleIds.has(focusedId.current)) {
+    // 포커스는 카드 id만으로 못 믿는다 — 카드는 그대로인데 안쪽 버튼만 사라지면
+    // (update로 액션을 뗄 때) blur가 안 와서 정지가 영영 안 풀린다. 실제 위치를 본다.
+    const focusInside = viewportRef.current?.contains(document.activeElement) ?? false;
+    if (focusedId.current !== null && (!focusInside || !visibleIds.has(focusedId.current))) {
       focusedId.current = null;
       changed = true;
+      // 포커스가 갈 곳 없이 body로 떨어졌으면(접힘·액션 제거) 남은 카드로 넘긴다.
+      if (document.activeElement === document.body) restoreFocus.current = true;
     }
     if (changed) syncPaused();
   }, [toasts, syncPaused]);
@@ -475,6 +487,10 @@ export function ToastProvider({ children }: ToastProviderProps) {
   useEffect(() => {
     if (!restoreFocus.current) return;
     restoreFocus.current = false;
+    // 토스트 액션이 모달을 열었다면 그쪽 FocusScope가 이미 포커스를 잡았다. 자식 효과가
+    // 먼저 돌기 때문에, 여기서 옮기면 방금 연 모달에서 포커스를 도로 빼앗는다.
+    const active = document.activeElement;
+    if (active && active !== document.body && !viewportRef.current?.contains(active)) return;
     const buttons = viewportRef.current?.querySelectorAll<HTMLButtonElement>(
       '[data-toast-id]:not([data-collapsed]) button[aria-label="닫기"]',
     );
@@ -504,6 +520,13 @@ export function ToastProvider({ children }: ToastProviderProps) {
   // 타이머 바가 처음부터 다시 흐르고 role="alert"가 같은 경고를 또 읽는다.
   const hidden = Math.max(0, toasts.length - MAX_VISIBLE);
 
+  // 함수 넷은 안정적인데 감싼 객체가 매 렌더 새로 만들어지면, 포인터를 올렸다 떼는
+  // 것만으로도(paused 변경) useToast 소비자가 전부 리렌더된다.
+  const api = useMemo(
+    () => ({ toast, update, dismiss, dismissAll }),
+    [toast, update, dismiss, dismissAll],
+  );
+
   // pointerover/focusin은 자식에서 버블링돼 pointer-events:none인 뷰포트까지 올라온다.
   // 카드 사이를 옮겨 다닐 때 정지가 풀리지 않도록 relatedTarget으로 걸러 낸다.
   const leaving = (e: PointerEvent<HTMLDivElement> | FocusEvent<HTMLDivElement>) =>
@@ -514,7 +537,7 @@ export function ToastProvider({ children }: ToastProviderProps) {
     null;
 
   return (
-    <ToastContext.Provider value={{ toast, update, dismiss, dismissAll }}>
+    <ToastContext.Provider value={api}>
       {children}
       <Portal>
         <div

@@ -100,6 +100,7 @@ function TonesDemo() {
                 update(id, {
                   tone: 'success',
                   title: '업로드를 마쳤습니다',
+                  description: '보관함에서 볼 수 있어요',
                   progress: null,
                   action: null,
                 });

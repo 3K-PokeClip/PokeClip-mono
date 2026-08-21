@@ -66,9 +66,14 @@
     opacity var(--pc-duration-normal) var(--pc-ease-standard);
   animation: pc-toast-in var(--pc-duration-normal) var(--pc-ease-decelerate);
 }
-/* 접힌 카드도 마운트는 유지한다 — 보이지만 않는다. */
+/* 접힌 카드도 마운트는 유지한다 — 보이지만 않는다.
+   display:none을 쓰면 CSS 애니메이션이 끊겨 다시 보일 때 타이머 바가 처음부터
+   흐른다. visibility로 숨기면 남은 시간은 계속 흐른다. */
 .toast[data-collapsed] {
-  display: none;
+  position: absolute;
+  inset-block-end: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 .toast[data-tone='error'] {
   border-color: rgb(var(--pc-red-400-rgb) / 0.42);
