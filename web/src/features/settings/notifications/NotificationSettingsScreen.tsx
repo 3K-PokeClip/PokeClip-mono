@@ -8,6 +8,8 @@ import {
   CRITICAL_ITEMS,
   DO_NOT_DISTURB_DEFAULT,
   NORMAL_ITEMS,
+  type EmailKey,
+  type InappKey,
   type NotificationItem,
 } from './notificationItems';
 import styles from './NotificationSettingsScreen.module.css';
@@ -17,25 +19,31 @@ import styles from './NotificationSettingsScreen.module.css';
 // 스위치 값은 어디에도 저장하지 않는다 — 서버·localStorage·전역 스토어·모듈 캐시 전부 없다.
 // 아래 useState는 저장이 아니라 스위치가 눌리는 것을 보여 주기 위한 렌더 상태이고,
 // 화면을 벗어나면 사라진다. 저장 위치는 백엔드 연결 티켓에서 정하며, 그때 이 useState가
-// 상태 훅으로 승격된다 — useChannelMockState → useChzzkLinkState가 밟은 길과 같다.
+// 상태 훅으로 승격된다 — useChannelMockState처럼 목업 훅을 실제 왕복으로 갈아끼우는 자리다.
 
+// 키를 항목 목록에서 뽑아 쓴다 — Record<string, …>로 두면 목록에 없는 키를 읽어도,
+// 일반 항목이 inapp 기본값을 빠뜨려도 타입이 잡지 못하고 스위치가 비제어로 샌다.
 interface Toggles {
-  /** 항목 key → 이메일 on/off (중요·일반 전부) */
-  email: Record<string, boolean>;
-  /** 항목 key → 인앱 on/off (일반만 — 중요 알림의 인앱은 항상 켜져 있어 값을 갖지 않는다) */
-  inapp: Record<string, boolean>;
+  /** 이메일 on/off — 중요·일반 전부 */
+  email: Record<EmailKey, boolean>;
+  /** 인앱 on/off — 일반만. 중요 알림의 인앱은 항상 켜져 있어 값을 갖지 않는다 */
+  inapp: Record<InappKey, boolean>;
   /** 방송 중 방해 금지 */
   dnd: boolean;
 }
 
 function initialToggles(): Toggles {
-  const email: Record<string, boolean> = {};
-  const inapp: Record<string, boolean> = {};
-  for (const item of [...CRITICAL_ITEMS, ...NORMAL_ITEMS]) {
-    email[item.key] = item.email;
-    if (item.inapp !== undefined) inapp[item.key] = item.inapp;
-  }
-  return { email, inapp, dnd: DO_NOT_DISTURB_DEFAULT };
+  return {
+    // 정확히 목록을 훑어 만들므로 키가 빠질 수 없다 — 그 사실을 단언으로 옮긴다
+    email: Object.fromEntries(
+      [...CRITICAL_ITEMS, ...NORMAL_ITEMS].map((item) => [item.key, item.email]),
+    ) as Record<EmailKey, boolean>,
+    inapp: Object.fromEntries(NORMAL_ITEMS.map((item) => [item.key, item.inapp])) as Record<
+      InappKey,
+      boolean
+    >,
+    dnd: DO_NOT_DISTURB_DEFAULT,
+  };
 }
 
 export function NotificationSettingsScreen() {
@@ -43,8 +51,10 @@ export function NotificationSettingsScreen() {
   const criticalId = useId();
   const normalId = useId();
 
-  const setChannel = (channel: 'email' | 'inapp', key: string, next: boolean) =>
-    setToggles((prev) => ({ ...prev, [channel]: { ...prev[channel], [key]: next } }));
+  const setEmail = (key: EmailKey, next: boolean) =>
+    setToggles((prev) => ({ ...prev, email: { ...prev.email, [key]: next } }));
+  const setInapp = (key: InappKey, next: boolean) =>
+    setToggles((prev) => ({ ...prev, inapp: { ...prev.inapp, [key]: next } }));
 
   return (
     <div className={styles.screen}>
@@ -67,7 +77,7 @@ export function NotificationSettingsScreen() {
                 size="sm"
                 aria-label="이메일"
                 checked={toggles.email[item.key]}
-                onChange={(e) => setChannel('email', item.key, e.target.checked)}
+                onChange={(e) => setEmail(item.key, e.target.checked)}
               />
             </span>
           </NotificationRow>
@@ -87,7 +97,7 @@ export function NotificationSettingsScreen() {
                 size="sm"
                 aria-label="인앱"
                 checked={toggles.inapp[item.key]}
-                onChange={(e) => setChannel('inapp', item.key, e.target.checked)}
+                onChange={(e) => setInapp(item.key, e.target.checked)}
               />
             </span>
             <span className={styles.switchCell}>
@@ -95,7 +105,7 @@ export function NotificationSettingsScreen() {
                 size="sm"
                 aria-label="이메일"
                 checked={toggles.email[item.key]}
-                onChange={(e) => setChannel('email', item.key, e.target.checked)}
+                onChange={(e) => setEmail(item.key, e.target.checked)}
               />
             </span>
           </NotificationRow>

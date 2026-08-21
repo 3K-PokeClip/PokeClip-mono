@@ -6,20 +6,30 @@
 //
 // 화면에 그리는 순서가 곧 배열 순서다 — 시안의 행 순서를 그대로 든다.
 
-export interface NotificationItem {
+interface BaseItem {
   key: string;
   title: string;
   desc: string;
-  /** 인앱 기본값. 중요 알림에는 없다 — 항상 켜져 있어 값을 가질 수 없다. */
-  inapp?: boolean;
   email: boolean;
 }
+
+/** 중요 알림 — 인앱은 항상 켜져 있어 끌 값 자체가 없다. */
+export interface CriticalItem extends BaseItem {
+  inapp?: never;
+}
+
+/** 일반 알림 — 인앱 기본값을 반드시 갖는다. */
+export interface NormalItem extends BaseItem {
+  inapp: boolean;
+}
+
+export type NotificationItem = CriticalItem | NormalItem;
 
 /**
  * 중요 알림 — 인앱은 항상 켜져 있고 이메일만 켜고 끈다.
  * 결제 실패는 IA에만 있던 항목이다.
  */
-export const CRITICAL_ITEMS: readonly NotificationItem[] = [
+export const CRITICAL_ITEMS = [
   {
     key: 'youtube-link-expired',
     title: '유튜브 연동 만료 · 업로드 실패',
@@ -50,13 +60,13 @@ export const CRITICAL_ITEMS: readonly NotificationItem[] = [
     desc: '구독 결제가 처리되지 않았을 때',
     email: true,
   },
-];
+] as const satisfies readonly CriticalItem[];
 
 /**
  * 일반 알림 — 인앱·이메일을 각각 켜고 끈다.
  * 방송 시작·승인 결과는 IA에만 있던 항목이다.
  */
-export const NORMAL_ITEMS: readonly NotificationItem[] = [
+export const NORMAL_ITEMS = [
   {
     key: 'broadcast-start',
     title: '방송 시작',
@@ -99,7 +109,14 @@ export const NORMAL_ITEMS: readonly NotificationItem[] = [
     inapp: false,
     email: true,
   },
-];
+] as const satisfies readonly NormalItem[];
+
+/** 이메일 열을 갖는 항목 키 — 중요·일반 전부 */
+export type EmailKey =
+  (typeof CRITICAL_ITEMS)[number]['key'] | (typeof NORMAL_ITEMS)[number]['key'];
+
+/** 인앱 열을 갖는 항목 키 — 일반만. 중요의 인앱은 켜짐 고정이라 상태가 없다 */
+export type InappKey = (typeof NORMAL_ITEMS)[number]['key'];
 
 /** 「방송 중 방해 금지」 기본값 (디자인 1n은 켜진 상태로 그린다) */
 export const DO_NOT_DISTURB_DEFAULT = true;
