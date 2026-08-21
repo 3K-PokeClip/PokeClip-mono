@@ -7,6 +7,10 @@ const proxies = [
   { source: '/api/auth/:path*', target: process.env.AUTH_API_URL },
   // 스트림키·페어링 코드(POK-102)도 auth 서버 소유다 (StreamKeyController).
   { source: '/api/stream-keys/:path*', target: process.env.AUTH_API_URL },
+  // 치지직 채널 연동(POK-205)도 auth 서버 소유다 (ChzzkLinkController).
+  // :path*는 빈 세그먼트도 잡으므로 이 한 줄이 /api/chzzk-link 자체(GET·POST·DELETE)와
+  // /api/chzzk-link/start를 함께 덮는다 — stream-keys가 같은 모양으로 이미 돌고 있다.
+  { source: '/api/chzzk-link/:path*', target: process.env.AUTH_API_URL },
   { source: '/api/clip/:path*', target: process.env.CLIP_API_URL },
 ];
 
