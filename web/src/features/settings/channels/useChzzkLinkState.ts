@@ -1,8 +1,13 @@
 'use client';
 
-import { useCallback, useEffect } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { chzzkLinkQueryOptions, startChzzkLink, type ChzzkLinkState } from '@/api/chzzkLink';
+import { useCallback, useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  chzzkLinkQueryOptions,
+  startChzzkLink,
+  unlinkChzzk,
+  type ChzzkLinkState,
+} from '@/api/chzzkLink';
 import { useOnboardingStore } from '@/stores/onboarding';
 import { useToast } from '@/ui';
 import { goToChzzkConsent, warnIfCallbackMismatch } from './chzzkOAuth';
@@ -30,12 +35,21 @@ export interface ChzzkLinkViewState {
   /** 첫 연동·다시 연동 전부 이 한 경로다 — 서버가 준 authorizeUrl로 나간다. */
   startLink: () => void;
   retry: () => void;
+  /** 해제 확인 모달 — 파괴적 동작이라 모달로 확인받고 토스트는 결과만 알린다 (ADR-044). */
+  confirmOpen: boolean;
+  openConfirm: () => void;
+  closeConfirm: () => void;
+  /** 해제 실행. 요청 중에는 모달이 닫히지 않는다. */
+  confirmUnlink: () => void;
+  unlinking: boolean;
 }
 
 export function useChzzkLinkState(): ChzzkLinkViewState {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const setChannelLinked = useOnboardingStore((s) => s.setChannelLinked);
   const status = useQuery(chzzkLinkQueryOptions);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const start = useMutation({
     mutationFn: startChzzkLink,
@@ -54,6 +68,35 @@ export function useChzzkLinkState(): ChzzkLinkViewState {
     },
   });
 
+  const unlink = useMutation({
+    mutationFn: unlinkChzzk,
+    onSuccess: () => {
+      // 재조회가 끝나기 전에도 행이 미연동으로 서게 캐시를 먼저 갱신한다.
+      queryClient.setQueryData<ChzzkLinkState>(chzzkLinkQueryOptions.queryKey, { linked: false });
+      // destructive 표식이 undo를 컴파일 단계에서 막는다 (ADR-044). 실제로 되돌릴 수 없다 —
+      // 서버가 옛 토큰을 secrets에서 지우고 치지직에 revoke까지 던진다.
+      toast({
+        tone: 'success',
+        destructive: true,
+        title: '치지직 연동을 해제했어요',
+        description: '하이라이트 감지가 중단됐어요.',
+      });
+    },
+    onError: () => {
+      toast({
+        tone: 'error',
+        title: '연동 해제에 실패했어요',
+        description: '잠시 후 다시 시도해 주세요.',
+      });
+    },
+    onSettled: () => {
+      // 성공·실패 모두 모달을 닫는다 — 결과는 토스트가 알린다. 모달에 오류를 또 그리면
+      // 같은 말이 두 번 나온다 (ADR-044: 토스트는 결과만 알린다).
+      setConfirmOpen(false);
+      void queryClient.invalidateQueries({ queryKey: chzzkLinkQueryOptions.queryKey });
+    },
+  });
+
   // 홈 시작 가이드 1단계 체크는 이 플래그를 본다. 필자는 이 이펙트 하나뿐이고,
   // 계약의 `linked`(ACTIVE·EXPIRED만 true)를 그대로 따라간다 — 쓰는 곳이 둘이면 갈라진다.
   const linked = status.data?.linked;
@@ -65,6 +108,10 @@ export function useChzzkLinkState(): ChzzkLinkViewState {
 
   const { mutate } = start;
   const startLink = useCallback(() => mutate(), [mutate]);
+  const { mutate: mutateUnlink } = unlink;
+  const confirmUnlink = useCallback(() => mutateUnlink(), [mutateUnlink]);
+  const openConfirm = useCallback(() => setConfirmOpen(true), []);
+  const closeConfirm = useCallback(() => setConfirmOpen(false), []);
   const { refetch } = status;
   const retry = useCallback(() => {
     void refetch();
@@ -80,6 +127,11 @@ export function useChzzkLinkState(): ChzzkLinkViewState {
     starting: start.isPending,
     startLink,
     retry,
+    confirmOpen,
+    openConfirm,
+    closeConfirm,
+    confirmUnlink,
+    unlinking: unlink.isPending,
   };
 }
 

@@ -8,7 +8,7 @@ import styles from './ChannelSettingsScreen.module.css';
 
 // 치지직 행 — 훅이 접어 준 view만 읽는다. 상태 판단은 여기서 하지 않는다.
 export function ChzzkChannelRow({ state }: { state: ChzzkLinkViewState }) {
-  const { view, channelName, linkedAt, starting, startLink, retry } = state;
+  const { view, channelName, linkedAt, starting, startLink, retry, openConfirm } = state;
 
   return (
     <ChannelRow
@@ -17,7 +17,7 @@ export function ChzzkChannelRow({ state }: { state: ChzzkLinkViewState }) {
       name="치지직"
       badge={badgeOf(view)}
       meta={metaOf(view, channelName, linkedAt)}
-      action={actionOf(view, starting, startLink, retry)}
+      action={actionOf(view, starting, startLink, retry, openConfirm)}
     />
   );
 }
@@ -77,7 +77,14 @@ function actionOf(
   starting: boolean,
   startLink: () => void,
   retry: () => void,
+  openConfirm: () => void,
 ) {
+  const unlinkButton = (
+    <Button variant="ghost" size="sm" onClick={openConfirm}>
+      연동 해제
+    </Button>
+  );
+
   switch (view) {
     case 'loading':
       return <Skeleton height="calc(28 * var(--pc-u))" width="calc(56 * var(--pc-u))" />;
@@ -88,10 +95,23 @@ function actionOf(
         </Button>
       );
     case 'active':
-      // 「연동 해제」는 파괴적 동작이라 확인 모달과 함께 붙인다 (ADR-044).
-      return null;
+      // 누르면 바로 해제하지 않는다 — 확인 모달이 받는다 (ADR-044).
+      return unlinkButton;
     case 'expired':
+      // 살아 있는 행이라(revoked_at IS NULL) 해제가 실제로 먹는다. 복구가 앞이다.
+      return (
+        <>
+          <Button variant="soft" size="sm" loading={starting} onClick={startLink}>
+            다시 연동
+          </Button>
+          {unlinkButton}
+        </>
+      );
     case 'broken':
+      // 「연동 해제」를 두지 않는다. 서버 기준 이미 revoke된 행이라(revoke는
+      // revoked_at IS NULL인 행만 닫는다) DELETE가 204만 주고 아무것도 하지 않는다 —
+      // 버튼을 달면 눌러도 상태가 안 변하는 버튼이 된다. 누락이 아니다.
+      //
       // 재연동은 409가 아니다 — 서버의 중복 검사가 다른 사용자만 걸러내고(create의
       // userId 필터), 옛 행은 닫힌다. 그래서 복구가 동의 재왕복 한 번으로 성립한다.
       return (

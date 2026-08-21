@@ -18,6 +18,7 @@ vi.mock('@/features/settings/channels/chzzkOAuth', async (importOriginal) => ({
   goToChzzkConsent,
 }));
 
+const LINK_URL = '/api/chzzk-link';
 const START_URL = '/api/chzzk-link/start';
 
 /** GET /api/chzzk-link 응답만 갈아끼우는 스텁 — 나머지는 케이스에서 덧붙인다. */
@@ -86,8 +87,10 @@ describe('ChannelSettingsScreen — 연동 상태 표시', () => {
     renderWithProviders(<ChannelSettingsScreen />);
 
     expect(await screen.findByText('갱신 필요')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '다시 연동' })).toBeInTheDocument();
+    expect(chzzk().getByRole('button', { name: '다시 연동' })).toBeInTheDocument();
     expect(screen.getByText(/하이라이트 감지가 멈출 수 있어요/)).toBeInTheDocument();
+    // 살아 있는 행이라 해제도 실제로 먹는다
+    expect(chzzk().getByRole('button', { name: '연동 해제' })).toBeInTheDocument();
   });
 
   it('BROKEN은 끊김을 조용히 삼키지 않고 다시 연동을 내준다', async () => {
@@ -95,7 +98,9 @@ describe('ChannelSettingsScreen — 연동 상태 표시', () => {
     renderWithProviders(<ChannelSettingsScreen />);
 
     expect(await screen.findByText('연동 끊김')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '다시 연동' })).toBeInTheDocument();
+    expect(chzzk().getByRole('button', { name: '다시 연동' })).toBeInTheDocument();
+    // 서버 기준 이미 닫힌 행이라 DELETE가 무동작이다 — 눌러도 안 되는 버튼을 두지 않는다
+    expect(chzzk().queryByRole('button', { name: '연동 해제' })).not.toBeInTheDocument();
   });
 
   it('UNLINKED는 미연동과 같게 그린다 — 해제한 채널 이름을 남기지 않는다', async () => {
@@ -190,5 +195,71 @@ describe('ChannelSettingsScreen — 온보딩·다른 플랫폼', () => {
 
     await screen.findByText('연동됨');
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe('ChannelSettingsScreen — 연동 해제', () => {
+  /** GET은 unlinked 플래그를 따라가고, DELETE 응답은 케이스가 정한다. */
+  function stubUnlink(deleteStatus: number) {
+    let unlinked = false;
+    return stubFetch((url, init) => {
+      if (url === LINK_URL && init?.method === 'DELETE') {
+        if (deleteStatus === 204) unlinked = true;
+        return jsonResponse(deleteStatus, deleteStatus === 204 ? undefined : { reason: 'X' });
+      }
+      return jsonResponse(200, unlinked ? { linked: false } : linked('ACTIVE'));
+    });
+  }
+  const deleteCalls = (spy: ReturnType<typeof stubFetch>) =>
+    spy.mock.calls.filter(([url, init]) => url === LINK_URL && init?.method === 'DELETE');
+
+  it('바로 해제하지 않는다 — 모달이 결과 3줄을 먼저 보여주고, 취소하면 요청이 안 나간다', async () => {
+    const user = userEvent.setup();
+    const spy = stubUnlink(204);
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await user.click(await chzzk().findByRole('button', { name: '연동 해제' }));
+
+    const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.getByText('치지직 연동을 해제할까요?')).toBeInTheDocument();
+    expect(dialog.getByText('하이라이트 감지가 중단돼요')).toBeInTheDocument();
+    expect(dialog.getByText('지난 방송과 보관함의 클립은 그대로 남아요')).toBeInTheDocument();
+    expect(dialog.getByText('진행 중인 작업은 즉시 중단돼요')).toBeInTheDocument();
+    expect(deleteCalls(spy)).toHaveLength(0);
+
+    await user.click(dialog.getByRole('button', { name: '취소' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(deleteCalls(spy)).toHaveLength(0);
+    expect(screen.getByText('연동됨')).toBeInTheDocument();
+  });
+
+  it('확인하면 해제하고 결과를 토스트로만 알린다 — 되돌리기를 붙이지 않는다', async () => {
+    const user = userEvent.setup();
+    const spy = stubUnlink(204);
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await user.click(await chzzk().findByRole('button', { name: '연동 해제' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '연동 해제' }));
+
+    expect(await screen.findByText('치지직 연동을 해제했어요')).toBeInTheDocument();
+    expect(deleteCalls(spy)).toHaveLength(1);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('연동됨')).not.toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: '되돌리기' })).not.toBeInTheDocument();
+    await waitFor(() => expect(useOnboardingStore.getState().channelLinked).toBe(false));
+  });
+
+  it('해제에 실패하면 오류를 알리고 연동 상태를 그대로 둔다', async () => {
+    const user = userEvent.setup();
+    stubUnlink(500);
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await user.click(await chzzk().findByRole('button', { name: '연동 해제' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '연동 해제' }));
+
+    expect(await screen.findByText('연동 해제에 실패했어요')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByText('연동됨')).toBeInTheDocument();
   });
 });

@@ -87,3 +87,28 @@
   gap: calc(8 * var(--pc-u));
   flex: none;
 }
+
+/* ---------- 연동 해제 확인 모달 (시안 1k, ADR-044) ---------- */
+
+.unlinkDialog {
+  max-width: calc(410 * var(--pc-u));
+}
+
+/* 무엇이 멈추고 무엇이 남는지 — 시안 1k의 3줄 */
+.unlinkConsequences {
+  margin: calc(14 * var(--pc-u)) 0 0;
+  padding-left: calc(18 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+  gap: calc(6 * var(--pc-u));
+  font-size: calc(12.5 * var(--pc-u));
+  line-height: 1.5;
+  color: var(--pc-color-text-secondary);
+}
+
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(10 * var(--pc-u));
+  margin-top: calc(20 * var(--pc-u));
+}
