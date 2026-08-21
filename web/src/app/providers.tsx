@@ -21,8 +21,9 @@ export function Providers({ children }: { children: ReactNode }) {
       }),
   );
 
-  // 다른 탭이 세션을 바꾸면(로그아웃·재로그인·회전) 이전 세션의 캐시를 비운다 —
-  // 공용 PC에서 이전 계정의 me·스트림키가 다음 세션 화면에 새면 안 된다. (리뷰 #72)
+  // 다른 탭이 세션을 바꾸면(로그아웃·재로그인·storage 폴백 동기화) 이전 세션의 캐시를 비운다 —
+  // 공용 PC에서 이전 계정의 me·스트림키가 다음 세션 화면에 새면 안 된다. 같은 세션의 회전에는
+  // 불리지 않는다 — 비우면 헤더 없는 me 401 → 재회전의 탭 간 핑퐁이 된다. (리뷰 #72 · POK-211)
   useEffect(() => onCrossTabSessionChange(() => queryClient.clear()), [queryClient]);
 
   return (

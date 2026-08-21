@@ -36,6 +36,29 @@ async function errorMessage(res: Response): Promise<string> {
 // 전 세션을 끊는다. 같은 이유로 이 경로에는 재시도를 절대 넣지 않는다.
 let inflightRefresh: Promise<boolean> | null = null;
 
+/**
+ * 회전 401 뒤 옆 탭의 회전 메시지를 기다리는 시간. 두 탭이 같은 refresh로 동시에 회전하면
+ * (브라우저가 탭 여러 개를 한꺼번에 복원할 때 흔하다) 서버는 진 쪽에 401을 준다 — 10초 유예
+ * 안이라 탈취로 보지 않는다. 이긴 탭의 메시지가 이 401보다 먼저 온다는 보장이 없다: 진 쪽은
+ * 본문 없이 status만 보고 즉시 처리하는데 이긴 쪽은 JSON을 읽은 뒤에야 알린다. 진짜 만료·도난
+ * 이면 로그인 복귀가 이만큼 늦는다. (POK-211)
+ */
+const SIBLING_ROTATION_GRACE_MS = 500;
+
+function waitForSessionChange(sent: string, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    };
+    const unsubscribe = useAuthStore.subscribe((s) => {
+      if (s.refreshToken !== sent) done();
+    });
+    const timer = setTimeout(done, ms);
+  });
+}
+
 export function refreshSession(): Promise<boolean> {
   inflightRefresh ??= doRefresh().finally(() => {
     inflightRefresh = null;
@@ -58,7 +81,18 @@ async function doRefresh(): Promise<boolean> {
     return false;
   }
   if (res.status === 401 || res.status === 403) {
-    // 만료·회전 재사용(도난 감지) — 세션 종료가 맞다. 가드가 스토어 변화를 보고 /login으로 보낸다.
+    // 만료·회전 재사용(도난 감지)이면 세션 종료가 맞다. 다만 옆 탭이 같은 토큰으로 먼저 회전한
+    // 것일 수 있으니(동시 회전의 진 쪽) 그 탭의 메시지를 잠깐 기다린다.
+    if (useAuthStore.getState().refreshToken === refreshToken)
+      await waitForSessionChange(refreshToken, SIBLING_ROTATION_GRACE_MS);
+    const now = useAuthStore.getState();
+    if (now.refreshToken !== refreshToken) {
+      // 응답을 기다리는 사이 세션이 바뀌었다. 옆 탭이 내 토큰을 회전해 이어받았다면 그 access로
+      // 재시도한다. 로그아웃·계정 교체·폴백 동기화면 스토어는 건드리지 않고 이 요청만 실패로
+      // 끝낸다 — 다른 계정의 Bearer로 이 요청이 완료되면 안 된다. (리뷰 #72)
+      return now.rotatedFrom === refreshToken && now.accessToken !== null;
+    }
+    // 가드가 스토어 변화를 보고 /login으로 보낸다.
     useAuthStore.getState().clearTokens();
     return false;
   }
@@ -95,7 +129,8 @@ async function doRefresh(): Promise<boolean> {
     });
     return false;
   }
-  useAuthStore.getState().setTokens({ accessToken, refreshToken: nextRefresh });
+  // 같은 세션의 회전 — 다른 탭은 캐시를 유지한 채 이 쌍을 이어받는다. (POK-211)
+  useAuthStore.getState().rotateTokens({ accessToken, refreshToken: nextRefresh });
   return true;
 }
 

@@ -91,7 +91,8 @@ describe('AuthGuard', () => {
       </AuthGuard>,
     );
 
-    await waitFor(() => expect(replace).toHaveBeenCalledWith('/login'));
+    // 회전 401 뒤 옆 탭의 회전을 0.5초 기다리는 유예(client.ts)만큼 늦게 온다
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/login'), { timeout: 3000 });
     expect(useAuthStore.getState().refreshToken).toBeNull();
     expect(screen.queryByText('보호 콘텐츠')).not.toBeInTheDocument();
   });

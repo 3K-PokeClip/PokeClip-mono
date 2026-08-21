@@ -9,11 +9,20 @@ function bearerOf(init?: RequestInit): string | null {
 
 beforeEach(() => {
   window.localStorage.clear();
-  useAuthStore.setState({ accessToken: 'old-access', refreshToken: 'old-refresh', hydrated: true });
+  useAuthStore.setState({
+    accessToken: 'old-access',
+    refreshToken: 'old-refresh',
+    hydrated: true,
+    rotatedFrom: null,
+  });
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  if (vi.isFakeTimers()) {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
 });
 
 describe('apiFetch', () => {
@@ -50,16 +59,98 @@ describe('apiFetch', () => {
     expect(refreshCalls).toHaveLength(1);
   });
 
-  it('refresh까지 401이면(만료·도난 감지) 토큰을 비우고 401로 던진다', async () => {
-    stubFetch((url) =>
-      url === '/api/auth/refresh'
-        ? jsonResponse(401, { message: '인증 실패' })
-        : jsonResponse(401, { message: '인증 실패' }),
-    );
+  it('refresh까지 401이면(만료·도난 감지) 옆 탭을 잠깐 기다린 뒤 토큰을 비우고 401로 던진다', async () => {
+    vi.useFakeTimers();
+    stubFetch(() => jsonResponse(401, { message: '인증 실패' }));
 
-    await expect(apiFetch('/api/protected')).rejects.toMatchObject({ status: 401 });
+    const pending = apiFetch('/api/protected').catch((e: unknown) => e);
+    await vi.runAllTimersAsync(); // 옆 탭의 회전 메시지는 오지 않는다 — 유예가 끝난다
+
+    expect(((await pending) as ApiError).status).toBe(401);
     expect(useAuthStore.getState().refreshToken).toBeNull();
     expect(window.localStorage.getItem('pc-auth')).toBeNull();
+  });
+
+  it('회전 성공은 직전 refresh를 prev로 실어 다른 탭에 알린다 — 같은 사슬만 이어받게', async () => {
+    stubFetch((url, init) => {
+      if (url === '/api/auth/refresh')
+        return jsonResponse(200, { accessToken: 'new-access', refreshToken: 'new-refresh' });
+      return bearerOf(init) === 'Bearer new-access'
+        ? jsonResponse(200, { ok: true })
+        : jsonResponse(401, { message: '인증 실패' });
+    });
+    const received: unknown[] = [];
+    const peer = new BroadcastChannel('pc-auth');
+    peer.onmessage = (e) => received.push(e.data);
+
+    await apiFetch('/api/protected');
+
+    expect(received).toEqual([
+      {
+        v: 1,
+        type: 'rotate',
+        prev: 'old-refresh',
+        pair: { accessToken: 'new-access', refreshToken: 'new-refresh' },
+      },
+    ]);
+    peer.close();
+  });
+
+  it('회전 401 직후 옆 탭이 같은 토큰을 먼저 회전한 메시지가 오면 세션을 접지 않고 그 access로 재시도한다', async () => {
+    vi.useFakeTimers();
+    const spy = stubFetch((url, init) => {
+      // 동시 회전의 진 쪽 — 서버는 10초 유예 안이라 폐기 없이 401만 준다
+      if (url === '/api/auth/refresh') return jsonResponse(401, { message: '인증 실패' });
+      return bearerOf(init) === 'Bearer sibling-access'
+        ? jsonResponse(200, { ok: true })
+        : jsonResponse(401, { message: '인증 실패' });
+    });
+    useAuthStore.getState().hydrate(); // 채널 바인딩
+
+    const pending = apiFetch('/api/protected');
+    await vi.waitFor(() =>
+      expect(spy.mock.calls.some(([url]) => url === '/api/auth/refresh')).toBe(true),
+    );
+    new BroadcastChannel('pc-auth').postMessage({
+      v: 1,
+      type: 'rotate',
+      prev: 'old-refresh',
+      pair: { accessToken: 'sibling-access', refreshToken: 'sibling-refresh' },
+    });
+    await vi.runAllTimersAsync();
+
+    expect((await pending).status).toBe(200);
+    expect(useAuthStore.getState()).toMatchObject({
+      accessToken: 'sibling-access',
+      refreshToken: 'sibling-refresh',
+    });
+    expect(spy.mock.calls.filter(([url]) => url === '/api/auth/refresh')).toHaveLength(1);
+    expect(spy.mock.calls.some(([url]) => url === '/api/auth/logout')).toBe(false);
+  });
+
+  it('회전 401 대기 중 다른 계정의 로그인이 오면 그 계정의 토큰으로 이 요청을 완료하지 않는다', async () => {
+    vi.useFakeTimers();
+    const spy = stubFetch(() => jsonResponse(401, { message: '인증 실패' }));
+    useAuthStore.getState().hydrate();
+
+    const pending = apiFetch('/api/protected').catch((e: unknown) => e);
+    await vi.waitFor(() =>
+      expect(spy.mock.calls.some(([url]) => url === '/api/auth/refresh')).toBe(true),
+    );
+    new BroadcastChannel('pc-auth').postMessage({
+      v: 1,
+      type: 'login',
+      pair: { accessToken: 'other-access', refreshToken: 'other-refresh' },
+    });
+    await vi.runAllTimersAsync();
+
+    expect(((await pending) as ApiError).status).toBe(401);
+    // 새 계정 세션은 그대로 두고(clear 없음), 다른 계정의 Bearer로 재시도하지도 않는다
+    expect(useAuthStore.getState()).toMatchObject({
+      accessToken: 'other-access',
+      refreshToken: 'other-refresh',
+    });
+    expect(spy.mock.calls.filter(([url]) => url === '/api/protected')).toHaveLength(1);
   });
 
   it('회전 응답 대기 중 로그아웃되면 세션을 되살리지 않고 새 refresh를 폐기한다', async () => {
