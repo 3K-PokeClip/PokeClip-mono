@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type AnchorHTMLAttributes } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { Button, Spinner } from '@/ui';
+import { LinkButton, Spinner } from '@/ui';
 import { loginWithGoogle } from '@/api/auth';
 import { useAuthStore } from '@/stores/auth';
 import { consumeOAuthState } from './googleOAuth';
@@ -13,6 +14,16 @@ import styles from './OAuthCallbackScreen.module.css';
 // 여기 머무는 시간은 교환 왕복 한 번뿐이라 화면은 스피너와 실패 안내가 전부다.
 
 type Phase = { kind: 'working' } | { kind: 'error'; title: string; description: string };
+
+/**
+ * 히스토리를 남기지 않는 링크. 이 화면의 콜백 URL은 code·state를 한 번 쓰고 버린
+ * 주소라, 뒤로 가기로 돌아오면 소모된 state 때문에 「로그인을 확인할 수 없어요」가
+ * 다시 뜬다. `next/link`의 `replace`는 앵커 속성이 아니라 LinkButton 타입으로는
+ * 못 넘기므로, 모듈 스코프 래퍼로 고정해 넘긴다.
+ */
+function ReplaceLink(props: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) {
+  return <Link {...props} replace />;
+}
 
 /**
  * 복원 경로 검증 — returnTo는 같은 오리진 스크립트라면 누구든 쓸 수 있는 sessionStorage에서
@@ -110,9 +121,9 @@ export function OAuthCallbackScreen() {
     <main className={styles.screen}>
       <h1 className={styles.title}>{phase.title}</h1>
       <p className={styles.description}>{phase.description}</p>
-      <Button variant="solid" size="md" onClick={() => router.replace('/login')}>
+      <LinkButton as={ReplaceLink} href="/login" variant="solid" size="md">
         로그인 화면으로
-      </Button>
+      </LinkButton>
     </main>
   );
 }

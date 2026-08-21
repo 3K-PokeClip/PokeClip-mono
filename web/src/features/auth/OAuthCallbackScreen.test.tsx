@@ -1,5 +1,5 @@
 import { StrictMode, type ReactElement } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OAuthCallbackScreen } from '@/features/auth/OAuthCallbackScreen';
@@ -113,7 +113,7 @@ describe('OAuthCallbackScreen', () => {
     expect(screen.getByText('로그인이 취소되었어요')).toBeInTheDocument();
   });
 
-  it('교환 401이면 실패 안내를 띄우고 버튼이 로그인 화면으로 보낸다', async () => {
+  it('교환 401이면 실패 안내를 띄우고 로그인 화면으로 가는 링크를 준다', async () => {
     window.sessionStorage.setItem(STATE_KEY, JSON.stringify({ state: 'state-1', returnTo: null }));
     searchRef.current = new URLSearchParams('code=code-1&state=state-1');
     stubFetch(() => jsonResponse(401, { message: '인증 실패' }));
@@ -121,7 +121,7 @@ describe('OAuthCallbackScreen', () => {
     renderWithClient(<OAuthCallbackScreen />);
 
     expect(await screen.findByText('로그인에 실패했어요')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '로그인 화면으로' }));
-    expect(replace).toHaveBeenCalledWith('/login');
+    // 버튼이 아니라 링크여야 한다 — 가운데 클릭·새 탭이 살아 있고, JS 없이도 간다.
+    expect(screen.getByRole('link', { name: '로그인 화면으로' })).toHaveAttribute('href', '/login');
   });
 });
