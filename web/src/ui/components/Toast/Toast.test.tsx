@@ -651,6 +651,21 @@ describe('Toast', () => {
     expect(style.display).not.toBe('none');
   });
 
+  // 7차 리뷰 #101 — 접힌 카드를 전부 마운트한 채 두면 자동으로 안 닫히는 톤이
+  // 쌓일 때 DOM이 무한히 자란다. 개수는 사실대로 세되 DOM은 완충까지만 남긴다.
+  it('접힌 카드는 완충 범위까지만 DOM에 남고 개수는 사실대로 센다', () => {
+    setup();
+    act(() => {
+      Array.from({ length: 10 }, (_, i) => `${i}번`).forEach((title) =>
+        api.toast({ tone: 'error', title }),
+      );
+    });
+
+    expect(cards()).toHaveLength(3);
+    expect(document.querySelectorAll('[data-toast-id]')).toHaveLength(6);
+    expect(screen.getByText('이전 알림 7개 더')).toBeInTheDocument();
+  });
+
   it('접근성 위반이 없다', async () => {
     vi.useRealTimers();
     const { container } = setup();

@@ -112,16 +112,28 @@
   font-size: var(--pc-font-size-sm);
   font-weight: var(--pc-weight-bold);
 }
-/* 보조설명은 1줄 — 넘치면 자르되 title로 전문을 볼 수 있게 한다. */
+/*
+ * 보조설명. ADR-044는 1줄이라고 적었지만 2줄까지 허용한다 — 이미 나가 있는 안내
+ * 문구(발급 제한 429 등)가 한 줄에서 뒷문장째 잘리는데, title 툴팁은 마우스에만
+ * 뜨므로 키보드·터치 사용자는 끝내 못 본다. 그래도 넘치면 카드에 포인터를 올리거나
+ * 안쪽에 포커스가 들어올 때 전문을 편다.
+ */
 .description {
   margin-top: calc(1 * var(--pc-u));
   /* 시안은 muted지만 secondary로 둔다 — muted는 이 배경에서 AA에 못 미치고,
      이 컴포넌트가 이전에도 secondary였다. */
   color: var(--pc-color-text-secondary);
   font-size: var(--pc-font-size-xs);
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
+}
+.toast:hover .description,
+.toast:focus-within .description {
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
 }
 
 .progress {

@@ -91,6 +91,16 @@ const TONE_ROLE: Record<ToastTone, 'status' | 'alert'> = {
  * 3개로 묶여 있고 항목 하나가 가벼워 받아들이는 비용이지, 안 자란다는 뜻이 아니다.
  */
 const MAX_VISIBLE = 3;
+/**
+ * 렌더 트리에 남기는 개수. 접힌 카드를 마운트한 채 두는 건 잠깐 밀렸다 돌아오는
+ * 토스트의 타이머 바와 낭독을 지키려는 것이지 전부 들고 있으려는 게 아니다.
+ * 보이는 3개 + 완충 3개면 그 목적에 충분하고, 그보다 아래는 DOM에서 뺀다 —
+ * 자동으로 안 닫히는 톤이 쌓이면 카드 수백 개가 숨은 채 남는다.
+ *
+ * 목록(listRef) 자체에는 상한을 두지 않는다. 버리면 「이전 알림 N개 더」가 실제보다
+ * 적게 세는데, 접기는 "지운 게 아니라 숨긴 것"이라(ADR-044) 개수는 사실이어야 한다.
+ */
+const MAX_MOUNTED = 6;
 
 interface ToastItem extends ToastBase {
   id: string;
@@ -500,8 +510,9 @@ export function ToastProvider({ children }: ToastProviderProps) {
     };
   }, []);
 
-  // 접힌 것도 렌더 트리에는 남긴다. 언마운트했다가 다시 붙이면 같은 토스트인데도
-  // 타이머 바가 처음부터 다시 흐르고 role="alert"가 같은 경고를 또 읽는다.
+  // 접힌 것도 완충 범위까지는 렌더 트리에 남긴다. 언마운트했다가 다시 붙이면 같은
+  // 토스트인데도 타이머 바가 처음부터 다시 흐르고 role="alert"가 같은 경고를 또 읽는다.
+  const mounted = toasts.slice(-MAX_MOUNTED);
   const hidden = Math.max(0, toasts.length - MAX_VISIBLE);
 
   // 함수 넷은 안정적인데 감싼 객체가 매 렌더 새로 만들어지면, 포인터를 올렸다 떼는
@@ -562,8 +573,8 @@ export function ToastProvider({ children }: ToastProviderProps) {
           }}
         >
           {hidden > 0 ? <div className={styles.collapsed}>이전 알림 {hidden}개 더</div> : null}
-          {toasts.map((item, i) => {
-            const depth = toasts.length - 1 - i;
+          {mounted.map((item, i) => {
+            const depth = mounted.length - 1 - i;
             return (
               <ToastCard
                 key={item.id}
