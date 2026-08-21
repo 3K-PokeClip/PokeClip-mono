@@ -103,6 +103,28 @@ describe('ProfilePhotoDialog', () => {
     expect(dialog().getByText('잠시 후 선택 화면으로 돌아갑니다')).toBeInTheDocument();
   });
 
+  it('파일을 끌어오면 받을 수 있다고 표시한다 — 드래그 중에는 :hover가 서지 않는다', async () => {
+    await open();
+    const zone = dropzone();
+
+    fireEvent.dragEnter(zone, { dataTransfer: { types: ['Files'] } });
+    expect(zone).toHaveAttribute('data-dragover');
+
+    fireEvent.dragLeave(zone);
+    expect(zone).not.toHaveAttribute('data-dragover');
+  });
+
+  it('드롭하면 강조를 걷는다 — 업로드 단계까지 강조가 따라가지 않는다', async () => {
+    await open();
+    const zone = dropzone();
+
+    fireEvent.dragEnter(zone, { dataTransfer: { types: ['Files'] } });
+    drop(zone, fileOf('face-cam-0812.png', 'image/png', Math.round(2.4 * 1024 * 1024)));
+
+    expect(dialog().getByText('2 / 3 · 업로드')).toBeInTheDocument();
+    expect(document.querySelector('[data-dragover]')).toBeNull();
+  });
+
   it('③ 정상 파일은 업로드 단계로 넘어가 파일과 진행률을 보여 준다', async () => {
     await open();
 

@@ -84,7 +84,11 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
   const fadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shakeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const uploadTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  /** 연속 실패 횟수 — 2회째부터는 흔들지 않고 문구만 바꾼다(시안). */
+  /**
+   * 에러 화면을 붙들고 있는 동안 겹쳐 난 실패 횟수 — 2회째부터는 흔들지 않고 문구만
+   * 바꾼다(시안의 멀미 방지). 선택 화면으로 복귀하면 0으로 끊긴다: 「연속」은 쉼 없이
+   * 이어진 실패를 말하는 것이지 「첫 실패 이후 전부」가 아니다.
+   */
   const errorStreak = useRef(0);
 
   const clearTimers = useCallback(() => {
@@ -135,6 +139,9 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
         shakeTimer.current = setTimeout(() => setShaking(false), 340);
       }
       restoreTimer.current = setTimeout(() => {
+        // 선택 화면으로 돌아온 순간 「연속」은 끊긴다. 여기서 안 지우면 카운터가 계속
+        // 쌓여 첫 실패 뒤의 모든 실패가 조용해지고, 원인을 짚어 주던 흔들림이 사라진다.
+        errorStreak.current = 0;
         setStep('empty');
         if (quiet) return; // 동작 줄이기 — 페이드 없이 상태만 바꾼다
         setRestoring(true);

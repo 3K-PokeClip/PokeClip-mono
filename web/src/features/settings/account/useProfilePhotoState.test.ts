@@ -100,6 +100,21 @@ describe('useProfilePhotoState', () => {
     expect(result.current.errorTitle).toBe('9.0MB 파일은 올릴 수 없어요');
   });
 
+  it('선택 화면으로 돌아온 뒤의 실패는 다시 흔든다 — 연속이 끊겼다', () => {
+    const { result } = setup();
+
+    act(() => result.current.selectFile(OVERSIZE()));
+    expect(result.current.shaking).toBe(true);
+
+    // 2.4초 유지 + 0.3초 복귀를 다 태워 선택 화면으로 돌아온다
+    act(() => void vi.advanceTimersByTime(2400 + 300));
+    expect(result.current.step).toBe('empty');
+
+    // 여기서도 조용하면 첫 실패 뒤 흔들림이 영영 사라진다 — 원인을 짚어 주는 신호를 잃는다
+    act(() => result.current.selectFile(OVERSIZE()));
+    expect(result.current.shaking).toBe(true);
+  });
+
   it('복귀 대기 중 다시 놓으면 타이머를 취소하고 즉시 업로드로 간다', () => {
     const { result } = setup();
     act(() => result.current.selectFile(OVERSIZE()));

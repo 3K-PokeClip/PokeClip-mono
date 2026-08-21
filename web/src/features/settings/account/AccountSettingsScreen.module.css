@@ -424,8 +424,11 @@
     background 0.15s;
 }
 
+/* 드래그 중에는 브라우저가 :hover를 주지 않는다 — 파일을 끌어온 상태는 훅이 붙이는
+   data-dragover가 맡는다. 셋이 같은 「받을 수 있다」를 말하므로 표현도 같다 */
 .dropzone:hover,
-.dropzone:focus-visible {
+.dropzone:focus-visible,
+.dropzone[data-dragover] {
   border-color: var(--pc-color-accent);
   background: var(--pc-color-accent-subtle);
 }
@@ -433,6 +436,12 @@
 /* 에러에서 돌아올 때만 — 모달을 닫지 않고 이 면만 되돌아온다 (1p 복귀 규칙 2.74s) */
 .dropzone[data-restoring] {
   animation: pc-account-dz-restore 300ms ease-out;
+}
+
+/* 자식이 포인터를 받으면 자식 위로 지날 때마다 드롭존에 dragleave가 떠 강조가 깜빡인다 */
+.dropzone > *,
+.errorZone > * {
+  pointer-events: none;
 }
 
 .dropzoneIcon {
@@ -497,6 +506,13 @@
   align-items: center;
   justify-content: center;
   gap: calc(8 * var(--pc-u));
+}
+
+/* 복귀를 기다리는 2.4초 동안에도 다시 놓을 수 있다 — 받을 수 있음을 테두리로 알린다.
+   위험색은 유지한다: 방금 거절한 면이 초록불처럼 보이면 성공한 줄 안다 */
+.errorZone[data-dragover] {
+  border-color: var(--pc-color-danger);
+  background: color-mix(in srgb, var(--pc-color-danger) 12%, transparent);
 }
 
 /* 한 번만 흔든다 — 연속 실패에서는 훅이 이 표식을 붙이지 않는다 (멀미 방지) */

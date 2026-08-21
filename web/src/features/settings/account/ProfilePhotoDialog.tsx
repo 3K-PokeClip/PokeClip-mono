@@ -16,12 +16,21 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
   const fileInput = useRef<HTMLInputElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const [transform, setTransform] = useState<CropTransform>(INITIAL_CROP);
+  // 드래그 중에는 :hover가 서지 않는다 — 파일을 끌어오는 내내 브라우저가 hover를
+  // 주지 않아 CSS만으로는 「여기 놓으면 된다」를 보여 줄 수 없다. 직접 든다.
+  const [dragOver, setDragOver] = useState(false);
 
   // 새 그림이 오면 잘라내기를 처음부터 — 앞 사진의 위치·확대가 남아 있으면 엉뚱하게 잘린다.
   // 토스트의 「편집」으로 되돌아올 때는 imageSrc가 그대로라 직전 위치를 지킨다.
   useEffect(() => {
     setTransform(INITIAL_CROP);
   }, [photo.imageSrc]);
+
+  // 단계가 바뀌면 표시를 걷는다 — 드롭 직후 dragleave가 안 오는 경우가 있어
+  // 그대로 두면 업로드·크롭으로 넘어간 뒤에도 강조가 남는다.
+  useEffect(() => {
+    setDragOver(false);
+  }, [photo.step]);
 
   function pick(files: FileList | null) {
     const file = files?.[0];
@@ -30,8 +39,24 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
 
   function handleDrop(e: DragEvent<HTMLElement>) {
     e.preventDefault();
+    setDragOver(false);
     pick(e.dataTransfer.files);
   }
+
+  /** 드롭을 받는 면이 공유하는 드래그 표시 — 자식은 pointer-events:none이라 헛발이 없다. */
+  const dropTargetProps = {
+    onDragEnter: (e: DragEvent<HTMLElement>) => {
+      e.preventDefault();
+      setDragOver(true);
+    },
+    onDragOver: (e: DragEvent<HTMLElement>) => {
+      e.preventDefault();
+      setDragOver(true);
+    },
+    onDragLeave: () => setDragOver(false),
+    onDrop: handleDrop,
+    'data-dragover': dragOver || undefined,
+  };
 
   function choosePreset(index: number) {
     const preset = PRESET_AVATARS[index];
@@ -88,8 +113,7 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
               className={styles.dropzone}
               data-restoring={photo.restoring || undefined}
               onClick={() => fileInput.current?.click()}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={handleDrop}
+              {...dropTargetProps}
             >
               <Upload aria-hidden className={styles.dropzoneIcon} />
               <span className={styles.dropzoneTitle}>사진을 끌어다 놓거나 클릭해 선택</span>
@@ -111,8 +135,7 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
               role="alert"
               className={styles.errorZone}
               data-shaking={photo.shaking || undefined}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={handleDrop}
+              {...dropTargetProps}
             >
               <AlertCircle aria-hidden className={styles.errorIcon} />
               <span className={styles.errorTitle}>{photo.errorTitle}</span>
