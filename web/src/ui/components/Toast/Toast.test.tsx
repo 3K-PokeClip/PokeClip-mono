@@ -146,7 +146,9 @@ describe('Toast', () => {
     expect(screen.getByText('경고').closest('[data-tone]')).toHaveAttribute('role', 'alert');
   });
 
-  it('Esc로 최신 토스트가 닫힌다', () => {
+  // 토스트는 Esc로 닫지 않는다 — 닫기 버튼이나 타이머가 닫는다.
+  // Esc를 전역에서 가로채면 IME 조합 취소나 다른 모달의 Esc가 안 읽은 오류를 지운다.
+  it('Esc는 토스트를 건드리지 않는다', () => {
     setup();
     act(() => {
       api.toast({ tone: 'error', title: '먼저', dedupeKey: 'a' });
@@ -154,11 +156,11 @@ describe('Toast', () => {
     });
 
     fireEvent.keyDown(document, { key: 'Escape' });
-    expect(screen.queryByText('나중')).not.toBeInTheDocument();
     expect(screen.getByText('먼저')).toBeInTheDocument();
+    expect(screen.getByText('나중')).toBeInTheDocument();
   });
 
-  it('모달·드로어가 열려 있으면 Esc를 그쪽에 양보한다', () => {
+  it('모달이 열려 있어도 Esc는 모달만 닫는다', () => {
     const onDismiss = vi.fn();
     setup(
       <DismissableLayer onDismiss={onDismiss}>

@@ -13,7 +13,6 @@ export { Portal, type PortalProps } from './Portal';
 export { FocusScope, type FocusScopeProps } from './FocusScope';
 export {
   DismissableLayer,
-  hasOpenDismissableLayer,
   OUTSIDE_POINTER_EXEMPT_ATTR,
   type DismissableLayerProps,
 } from './DismissableLayer';

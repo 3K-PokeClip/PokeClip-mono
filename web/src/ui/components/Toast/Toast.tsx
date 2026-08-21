@@ -11,10 +11,7 @@ import {
   type PointerEvent,
   type ReactNode,
 } from 'react';
-import {
-  hasOpenDismissableLayer,
-  OUTSIDE_POINTER_EXEMPT_ATTR,
-} from '../../primitives/DismissableLayer';
+import { OUTSIDE_POINTER_EXEMPT_ATTR } from '../../primitives/DismissableLayer';
 import { Portal } from '../../primitives/Portal';
 import { Button } from '../Button';
 import { Progress } from '../Progress';
@@ -446,20 +443,7 @@ export function ToastProvider({ children }: ToastProviderProps) {
     commit();
   }, [clearTimer, commit]);
 
-  // Esc는 최신 토스트를 닫는다. 다만 모달·드로어가 열려 있으면 그쪽 몫이다 —
-  // 토스트는 포커스를 가두지 않으니 나를 붙잡은 것이 먼저 닫혀야 한다.
-  useEffect(() => {
-    if (toasts.length === 0) return;
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key !== 'Escape' || hasOpenDismissableLayer()) return;
-      const latest = listRef.current[listRef.current.length - 1];
-      if (latest) dismiss(latest.id);
-    }
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [toasts.length, dismiss]);
-
-  // 정지를 붙들던 카드가 사라지면(닫기·Esc·스택 밖으로 밀림) 해제 이벤트가 오지
+  // 정지를 붙들던 카드가 사라지면(닫기·스택 밖으로 밀림) 해제 이벤트가 오지
   // 않는다. 렌더가 바뀔 때마다 보이는 카드 기준으로 정지 상태를 다시 계산한다 —
   // 여기서 "안 보이면 해제"로 두어야 정지가 고착되지 않는다. 밀려난 자리에 포인터가
   // 그대로 있는 경우는 아래 onPointerMove가 다시 잡는다.
