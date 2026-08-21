@@ -192,6 +192,89 @@ describe('Toast', () => {
     expect(screen.queryByText('업로드 실패')).not.toBeInTheDocument();
   });
 
+  // 리뷰 #101 — 정지를 붙들던 카드가 사라지면 pointerout·blur가 오지 않는다.
+  // 그때 정지가 안 풀리면 이후 토스트가 영영 자동으로 닫히지 않았다.
+  it('포인터를 올린 채 닫아도 다음 토스트는 정상적으로 닫힌다', () => {
+    setup();
+    act(() => {
+      api.toast({ tone: 'success', title: '첫 토스트', dedupeKey: 'a' });
+    });
+    fireEvent.pointerOver(card(0));
+    fireEvent.click(screen.getByRole('button', { name: '닫기' }));
+
+    act(() => {
+      api.toast({ tone: 'success', title: '두 번째 토스트', dedupeKey: 'b' });
+    });
+    advance(5000);
+    expect(screen.queryByText('두 번째 토스트')).not.toBeInTheDocument();
+  });
+
+  it('닫기 버튼에 포커스를 준 채 닫아도 다음 토스트는 정상적으로 닫힌다', () => {
+    setup();
+    act(() => {
+      api.toast({ tone: 'success', title: '첫 토스트', dedupeKey: 'a' });
+    });
+    const close = screen.getByRole('button', { name: '닫기' });
+    act(() => close.focus());
+    act(() => close.click());
+
+    act(() => {
+      api.toast({ tone: 'success', title: '두 번째 토스트', dedupeKey: 'b' });
+    });
+    advance(5000);
+    expect(screen.queryByText('두 번째 토스트')).not.toBeInTheDocument();
+  });
+
+  // 리뷰 #101 — 내용만 바꾸는 갱신이 타이머 바만 되감아 실제 닫힘 시각과 어긋났다.
+  it('내용만 바꾸는 update는 데드라인을 옮기지 않는다', () => {
+    setup();
+    let id = '';
+    act(() => {
+      id = api.toast({ tone: 'success', title: '처음 제목' });
+    });
+
+    // 타이머 바는 version을 key로 쓴다 — 같은 노드가 유지돼야 되감기지 않는다.
+    const barBefore = card(0).lastElementChild?.firstElementChild;
+    advance(4000);
+    act(() => api.update(id, { title: '바뀐 제목' }));
+    expect(screen.getByText('바뀐 제목')).toBeInTheDocument();
+    expect(card(0).lastElementChild?.firstElementChild).toBe(barBefore);
+
+    advance(999);
+    expect(screen.getByText('바뀐 제목')).toBeInTheDocument();
+    advance(1);
+    expect(screen.queryByText('바뀐 제목')).not.toBeInTheDocument();
+  });
+
+  it('톤을 바꾸는 update는 새 톤의 자동 닫힘으로 타이머를 다시 건다', () => {
+    setup();
+    let id = '';
+    act(() => {
+      id = api.toast({ tone: 'progress', title: '업로드 중', progress: 40 });
+    });
+    advance(10_000);
+    expect(screen.getByText('업로드 중')).toBeInTheDocument();
+
+    act(() => api.update(id, { tone: 'success', title: '업로드 완료' }));
+    advance(4999);
+    expect(screen.getByText('업로드 완료')).toBeInTheDocument();
+    advance(1);
+    expect(screen.queryByText('업로드 완료')).not.toBeInTheDocument();
+  });
+
+  // 리뷰 #101 — 접기는 지운 게 아니라 숨긴 것이라 개수가 사실이어야 한다.
+  it('접힘 개수가 실제로 숨은 개수와 같다', () => {
+    setup();
+    act(() => {
+      ['1', '2', '3', '4', '5', '6', '7', '8'].forEach((n) =>
+        api.toast({ tone: 'error', title: `${n}번`, dedupeKey: n }),
+      );
+    });
+
+    expect(cards()).toHaveLength(3);
+    expect(screen.getByText('이전 알림 5개 더')).toBeInTheDocument();
+  });
+
   it('접근성 위반이 없다', async () => {
     vi.useRealTimers();
     const { container } = setup();

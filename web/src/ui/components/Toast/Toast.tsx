@@ -76,10 +76,14 @@ const TONE_ROLE: Record<ToastTone, 'status' | 'alert'> = {
   error: 'alert',
 };
 
-/** 동시에 보이는 개수. 넘치면 「이전 알림 N개 더」로 접힌다. */
+/**
+ * 동시에 보이는 개수. 넘치면 「이전 알림 N개 더」로 접힌다.
+ *
+ * 초과분을 버리지 않는 이유 — 접기는 "지운 게 아니라 숨긴 것"이라(ADR-044) 개수가
+ * 사실이어야 한다. 보관 상한을 두면 라벨이 실제보다 적게 세게 된다. 같은 종류가
+ * 연달아 오면 갱신으로 합쳐지므로(dedupeKey) 목록이 무한정 자라지도 않는다.
+ */
 const MAX_VISIBLE = 3;
-/** 접힌 것까지 포함한 보관 상한 — 상한이 없으면 화면 구석이 목록이 된다. */
-const MAX_KEPT = 6;
 
 interface ToastItem extends ToastBase {
   id: string;
@@ -181,6 +185,7 @@ function ToastCard({
   return (
     <div
       className={styles.toast}
+      data-toast-id={item.id}
       data-tone={item.tone}
       style={{ '--pc-toast-depth': depth } as CSSProperties}
       role={role}
@@ -251,8 +256,11 @@ export function ToastProvider({ children }: ToastProviderProps) {
   const listRef = useRef<ToastItem[]>([]);
   const timers = useRef(new Map<string, TimerState>());
   const counter = useRef(0);
-  const hovering = useRef(false);
-  const focusing = useRef(false);
+  // 어떤 카드가 정지를 붙들고 있는지 id로 기억한다. 불리언으로 두면 그 카드가
+  // 사라질 때 해제 이벤트가 오지 않아(제거된 노드는 React 트리에서도 빠진다)
+  // 정지가 영영 안 풀린다.
+  const hoveredId = useRef<string | null>(null);
+  const focusedId = useRef<string | null>(null);
   const pausedRef = useRef(false);
 
   const commit = useCallback(() => setToasts([...listRef.current]), []);
@@ -313,7 +321,7 @@ export function ToastProvider({ children }: ToastProviderProps) {
   );
 
   const syncPaused = useCallback(() => {
-    setPausedState(hovering.current || focusing.current);
+    setPausedState(hoveredId.current !== null || focusedId.current !== null);
   }, [setPausedState]);
 
   const toast = useCallback(
@@ -331,16 +339,13 @@ export function ToastProvider({ children }: ToastProviderProps) {
         counter.current += 1;
         id = `pc-toast-${counter.current}`;
         list.push({ ...next, id, version: 0 });
-        if (list.length > MAX_KEPT) {
-          list.splice(0, list.length - MAX_KEPT).forEach((dropped) => clearTimer(dropped.id));
-        }
       }
 
       startTimer(id, resolveDuration(next));
       commit();
       return id;
     },
-    [clearTimer, commit, startTimer],
+    [commit, startTimer],
   );
 
   const update = useCallback(
@@ -349,11 +354,17 @@ export function ToastProvider({ children }: ToastProviderProps) {
       const index = list.findIndex((t) => t.id === id);
       const current = list[index];
       if (!current) return;
-      const merged: ToastItem = { ...current, ...patch, version: current.version + 1 };
+      // 내용만 바꾸는 갱신은 데드라인을 건드리지 않는다. version은 타이머 바를
+      // 리마운트하는 키라, 여기서 같이 올리면 바만 처음부터 흘러 실제 닫힘 시각과
+      // 어긋난다 — 타이머를 다시 거는 갱신에서만 올린다.
+      const rearm = patch.tone !== undefined || patch.duration !== undefined;
+      const merged: ToastItem = {
+        ...current,
+        ...patch,
+        version: current.version + (rearm ? 1 : 0),
+      };
       list[index] = merged;
-      if (patch.tone !== undefined || patch.duration !== undefined) {
-        startTimer(id, resolveDuration(merged));
-      }
+      if (rearm) startTimer(id, resolveDuration(merged));
       commit();
     },
     [commit, startTimer],
@@ -378,6 +389,22 @@ export function ToastProvider({ children }: ToastProviderProps) {
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [toasts.length, dismiss]);
 
+  // 정지를 붙들던 카드가 사라지면(닫기·Esc·스택 밖으로 밀림) 해제 이벤트가 오지
+  // 않는다. 렌더가 바뀔 때마다 살아 있는 카드 기준으로 정지 상태를 다시 계산한다.
+  useEffect(() => {
+    const visibleIds = new Set(toasts.slice(-MAX_VISIBLE).map((t) => t.id));
+    let changed = false;
+    if (hoveredId.current !== null && !visibleIds.has(hoveredId.current)) {
+      hoveredId.current = null;
+      changed = true;
+    }
+    if (focusedId.current !== null && !visibleIds.has(focusedId.current)) {
+      focusedId.current = null;
+      changed = true;
+    }
+    if (changed) syncPaused();
+  }, [toasts, syncPaused]);
+
   useEffect(() => {
     const pending = timers.current;
     return () => {
@@ -396,28 +423,32 @@ export function ToastProvider({ children }: ToastProviderProps) {
   const leaving = (e: PointerEvent<HTMLDivElement> | FocusEvent<HTMLDivElement>) =>
     !e.currentTarget.contains(e.relatedTarget as Node | null);
 
+  const cardIdOf = (e: PointerEvent<HTMLDivElement> | FocusEvent<HTMLDivElement>) =>
+    (e.target as Element | null)?.closest?.('[data-toast-id]')?.getAttribute('data-toast-id') ??
+    null;
+
   return (
     <ToastContext.Provider value={{ toast, update, dismiss, dismissAll }}>
       {children}
       <Portal>
         <div
           className={styles.viewport}
-          onPointerOver={() => {
-            hovering.current = true;
+          onPointerOver={(e) => {
+            hoveredId.current = cardIdOf(e);
             syncPaused();
           }}
           onPointerOut={(e) => {
             if (!leaving(e)) return;
-            hovering.current = false;
+            hoveredId.current = null;
             syncPaused();
           }}
-          onFocus={() => {
-            focusing.current = true;
+          onFocus={(e) => {
+            focusedId.current = cardIdOf(e);
             syncPaused();
           }}
           onBlur={(e) => {
             if (!leaving(e)) return;
-            focusing.current = false;
+            focusedId.current = null;
             syncPaused();
           }}
         >
