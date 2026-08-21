@@ -100,7 +100,7 @@ function TonesDemo() {
                 update(id, {
                   tone: 'success',
                   title: '업로드를 마쳤습니다',
-                  progress: undefined,
+                  progress: null,
                   action: null,
                 });
                 return;

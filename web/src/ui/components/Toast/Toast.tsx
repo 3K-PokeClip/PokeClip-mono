@@ -54,7 +54,8 @@ export interface ToastPatch {
   tone?: ToastTone;
   title?: ReactNode;
   description?: ReactNode;
-  progress?: number;
+  /** 진행률을 바꾼다. `null`이면 진행 바를 뗀다. */
+  progress?: number | null;
   duration?: number;
   /** 액션을 갈아 끼운다. `null`이면 뗀다 — 끝난 일에 「취소」가 남지 않게. */
   action?: ToastAction | null;
@@ -98,7 +99,6 @@ interface ToastItem extends ToastBase {
   /** 갱신될 때마다 오른다. 타이머 바를 리마운트해 처음부터 다시 흐르게 하는 키. */
   version: number;
   action?: ToastAction;
-  destructive?: boolean;
 }
 
 interface TimerState {
@@ -135,11 +135,14 @@ function mergeKey(item: Pick<ToastBase, 'tone' | 'dedupeKey'>): string | null {
 
 /** `undo`를 액션 자리 하나로 정규화한다 — 둘은 같은 자리를 쓰고 최대 1개다. */
 function normalize(options: ToastOptions): Omit<ToastItem, 'id' | 'version'> {
-  const { undo, action, ...base } = options as ToastBase & {
+  // `destructive`는 되돌리기를 컴파일 단계에서 막는 타입 표식일 뿐이라 런타임까지
+  // 싣지 않는다 — 렌더·톤·닫힘 어디에도 쓰이지 않는 상태를 남기지 않는다.
+  const { undo, action, destructive, ...base } = options as ToastBase & {
     undo?: () => void;
     action?: ToastAction;
     destructive?: boolean;
   };
+  void destructive;
   return {
     ...base,
     action: undo ? { label: '되돌리기', onClick: undo } : action,
@@ -192,11 +195,13 @@ function ToneIcon({ tone }: { tone: Exclude<ToastTone, 'progress'> }) {
 function ToastCard({
   item,
   depth,
+  collapsed,
   paused,
   onClose,
 }: {
   item: ToastItem;
   depth: number;
+  collapsed: boolean;
   paused: boolean;
   onClose: () => void;
 }) {
@@ -206,6 +211,7 @@ function ToastCard({
     <div
       className={styles.toast}
       data-toast-id={item.id}
+      data-collapsed={collapsed || undefined}
       data-tone={item.tone}
       style={{ '--pc-toast-depth': depth } as CSSProperties}
       role={role}
@@ -223,11 +229,26 @@ function ToastCard({
         <div className={styles.body}>
           <div className={styles.title}>{item.title}</div>
           {item.description != null ? (
-            <div className={styles.description}>{item.description}</div>
+            <div
+              className={styles.description}
+              // 한 줄로 자르는 대신 전문을 볼 수단은 남긴다.
+              title={typeof item.description === 'string' ? item.description : undefined}
+            >
+              {item.description}
+            </div>
           ) : null}
         </div>
         {item.action ? (
-          <Button variant="ghost" size="sm" onClick={item.action.onClick}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              // 누른 뒤 닫는다 — 안 닫으면 되돌리기를 두 번 눌러 같은 동작이 두 번
+              // 실행되고, 되돌린 뒤에도 원래 결과 문구가 사실인 척 남는다.
+              item.action?.onClick();
+              onClose();
+            }}
+          >
             {item.action.label}
           </Button>
         ) : null}
@@ -285,10 +306,10 @@ export function ToastProvider({ children }: ToastProviderProps) {
   const focusedId = useRef<string | null>(null);
   const pausedRef = useRef(false);
   const viewportRef = useRef<HTMLDivElement>(null);
-  // 카드가 갈릴 때 포인터가 어디 있었는지 되짚기 위한 마지막 좌표.
-  const pointerAt = useRef<{ x: number; y: number } | null>(null);
-  // 포커스를 들고 있던 카드를 닫았을 때, 다음 카드로 포커스를 넘길지 표시.
+  // 포커스를 들고 있던 카드를 닫았을 때, 어디로 포커스를 넘길지 표시.
   const restoreFocus = useRef(false);
+  // 스택 밖에서 포커스가 들어온 자리 — 마지막 토스트를 닫으면 여기로 돌려준다.
+  const focusOrigin = useRef<HTMLElement | null>(null);
 
   const commit = useCallback(() => setToasts([...listRef.current]), []);
 
@@ -391,11 +412,18 @@ export function ToastProvider({ children }: ToastProviderProps) {
       // 내용만 바꾸는 갱신은 데드라인을 건드리지 않는다. version은 타이머 바를
       // 리마운트하는 키라, 여기서 같이 올리면 바만 처음부터 흘러 실제 닫힘 시각과
       // 어긋난다 — 타이머를 다시 거는 갱신에서만 올린다.
-      const rearm = patch.tone !== undefined || patch.duration !== undefined;
+      // `undefined`는 "안 준 것"으로만 읽는다. 스프레드는 키만 있으면 값이
+      // undefined여도 덮어써서, `update(id, { tone: 없을수도있는값 })` 한 번에
+      // 카드가 톤과 라이브 리전 자격을 조용히 잃는다. 지우려면 `null`을 준다.
+      const given = Object.fromEntries(
+        Object.entries(patch).filter(([, v]) => v !== undefined),
+      ) as ToastPatch;
+      const rearm = given.tone !== undefined || given.duration !== undefined;
       const merged: ToastItem = {
         ...current,
-        ...patch,
-        action: patch.action === null ? undefined : (patch.action ?? current.action),
+        ...given,
+        progress: given.progress === null ? undefined : (given.progress ?? current.progress),
+        action: given.action === null ? undefined : (given.action ?? current.action),
         version: current.version + (rearm ? 1 : 0),
       };
       list[index] = merged;
@@ -439,17 +467,6 @@ export function ToastProvider({ children }: ToastProviderProps) {
       focusedId.current = null;
       changed = true;
     }
-    // 카드가 갈리면 브라우저는 멈춰 있는 포인터에 pointerover를 다시 쏘지 않는다.
-    // 마지막 좌표 아래에 카드가 있으면 정지를 그대로 넘겨받는다.
-    if (hoveredId.current === null && pointerAt.current) {
-      const { x, y } = pointerAt.current;
-      const under = document.elementFromPoint?.(x, y)?.closest('[data-toast-id]');
-      const id = under?.getAttribute('data-toast-id') ?? null;
-      if (id !== null && visibleIds.has(id)) {
-        hoveredId.current = id;
-        changed = true;
-      }
-    }
     if (changed) syncPaused();
   }, [toasts, syncPaused]);
 
@@ -459,9 +476,18 @@ export function ToastProvider({ children }: ToastProviderProps) {
     if (!restoreFocus.current) return;
     restoreFocus.current = false;
     const buttons = viewportRef.current?.querySelectorAll<HTMLButtonElement>(
-      '[data-toast-id] button[aria-label="닫기"]',
+      '[data-toast-id]:not([data-collapsed]) button[aria-label="닫기"]',
     );
-    buttons?.[buttons.length - 1]?.focus();
+    const next = buttons?.[buttons.length - 1];
+    if (next) {
+      next.focus();
+      return;
+    }
+    // 남은 카드가 없으면 스택에 들어오기 전 자리로 돌려준다. 그러지 않으면 포커스가
+    // body로 떨어져 다음 Tab이 문서 처음부터 시작한다.
+    const origin = focusOrigin.current;
+    focusOrigin.current = null;
+    if (origin?.isConnected) origin.focus();
   }, [toasts]);
 
   useEffect(() => {
@@ -474,8 +500,9 @@ export function ToastProvider({ children }: ToastProviderProps) {
     };
   }, []);
 
-  const visible = toasts.slice(-MAX_VISIBLE);
-  const hidden = toasts.length - visible.length;
+  // 접힌 것도 렌더 트리에는 남긴다. 언마운트했다가 다시 붙이면 같은 토스트인데도
+  // 타이머 바가 처음부터 다시 흐르고 role="alert"가 같은 경고를 또 읽는다.
+  const hidden = Math.max(0, toasts.length - MAX_VISIBLE);
 
   // pointerover/focusin은 자식에서 버블링돼 pointer-events:none인 뷰포트까지 올라온다.
   // 카드 사이를 옮겨 다닐 때 정지가 풀리지 않도록 relatedTarget으로 걸러 낸다.
@@ -497,12 +524,10 @@ export function ToastProvider({ children }: ToastProviderProps) {
           // 토스트 클릭을 "바깥 클릭"으로 읽고 닫혀 버린다.
           {...{ [OUTSIDE_POINTER_EXEMPT_ATTR]: '' }}
           onPointerOver={(e) => {
-            pointerAt.current = { x: e.clientX, y: e.clientY };
             hoveredId.current = cardIdOf(e);
             syncPaused();
           }}
           onPointerMove={(e) => {
-            pointerAt.current = { x: e.clientX, y: e.clientY };
             // 스택이 밀려 카드가 갈리면 브라우저는 멈춰 있는 포인터에 pointerover를
             // 다시 쏘지 않는다. 움직임에서 현재 카드를 다시 읽어 정지를 되찾는다.
             const id = cardIdOf(e);
@@ -512,11 +537,14 @@ export function ToastProvider({ children }: ToastProviderProps) {
           }}
           onPointerOut={(e) => {
             if (!leaving(e)) return;
-            pointerAt.current = null;
             hoveredId.current = null;
             syncPaused();
           }}
           onFocus={(e) => {
+            // 스택 밖에서 처음 들어왔다면 그 자리를 기억해 둔다.
+            if (focusedId.current === null && e.relatedTarget instanceof HTMLElement) {
+              if (!e.currentTarget.contains(e.relatedTarget)) focusOrigin.current = e.relatedTarget;
+            }
             focusedId.current = cardIdOf(e);
             syncPaused();
           }}
@@ -527,15 +555,19 @@ export function ToastProvider({ children }: ToastProviderProps) {
           }}
         >
           {hidden > 0 ? <div className={styles.collapsed}>이전 알림 {hidden}개 더</div> : null}
-          {visible.map((item, i) => (
-            <ToastCard
-              key={item.id}
-              item={item}
-              depth={visible.length - 1 - i}
-              paused={paused}
-              onClose={() => dismiss(item.id)}
-            />
-          ))}
+          {toasts.map((item, i) => {
+            const depth = toasts.length - 1 - i;
+            return (
+              <ToastCard
+                key={item.id}
+                item={item}
+                depth={Math.min(depth, MAX_VISIBLE - 1)}
+                collapsed={depth >= MAX_VISIBLE}
+                paused={paused}
+                onClose={() => dismiss(item.id)}
+              />
+            );
+          })}
         </div>
       </Portal>
     </ToastContext.Provider>

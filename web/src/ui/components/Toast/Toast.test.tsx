@@ -20,8 +20,9 @@ function setup(extra?: React.ReactNode) {
   );
 }
 
+/** 보이는 카드만. 접힌 카드는 마운트는 유지하되 화면에서 빠진다. */
 function cards() {
-  return Array.from(document.querySelectorAll<HTMLElement>('[data-tone]'));
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-tone]:not([data-collapsed])'));
 }
 
 function card(index: number): HTMLElement {
@@ -116,7 +117,8 @@ describe('Toast', () => {
 
     expect(cards()).toHaveLength(3);
     expect(screen.getByText('이전 알림 1개 더')).toBeInTheDocument();
-    expect(screen.queryByText('1번')).not.toBeInTheDocument();
+    // 접힌 카드는 마운트는 유지하되(재마운트 = 바 되감김·경고 재낭독) 화면에선 빠진다
+    expect(screen.getByText('1번').closest('[data-tone]')).toHaveAttribute('data-collapsed');
     // 최신이 아래 — 마지막 카드가 가장 최근 것이다.
     expect(card(2)).toHaveTextContent('4번');
   });
@@ -336,12 +338,19 @@ describe('Toast', () => {
       });
     });
 
-    await user.click(screen.getByRole('button', { name: '재인증' }));
-    expect(onAction).toHaveBeenCalledTimes(1);
-    expect(onDismiss).not.toHaveBeenCalled();
-
     await user.click(screen.getByRole('button', { name: '닫기' }));
     expect(screen.queryByText('업로드에 실패했습니다')).not.toBeInTheDocument();
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    act(() => {
+      api.toast({
+        tone: 'error',
+        title: '다시 실패했습니다',
+        action: { label: '재인증', onClick: onAction },
+      });
+    });
+    await user.click(screen.getByRole('button', { name: '재인증' }));
+    expect(onAction).toHaveBeenCalledTimes(1);
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
@@ -445,6 +454,113 @@ describe('Toast', () => {
 
     expect(screen.queryByText('나중')).not.toBeInTheDocument();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: '닫기' }));
+  });
+
+  // 5차 리뷰 #101 — 4차의 elementFromPoint 되짚기가 낡은 좌표로 새 토스트를
+  // 유령 호버로 잡아 전역 정지를 고착시켰다. 되짚기를 걷어냈으니 다시 나면 안 된다.
+  it('마우스로 닫은 뒤 뜬 새 토스트는 유령 호버에 걸리지 않는다', () => {
+    // jsdom에는 elementFromPoint가 없어 그 분기가 아예 안 돌았다 — 브라우저처럼 심는다
+    (document as unknown as { elementFromPoint: unknown }).elementFromPoint = () =>
+      document.querySelector('[data-toast-id]');
+    try {
+      setup();
+      act(() => {
+        api.toast({ tone: 'success', title: '첫 토스트', dedupeKey: 'a' });
+      });
+      fireEvent.pointerOver(card(0), { clientX: 100, clientY: 200 });
+      fireEvent.click(screen.getByRole('button', { name: '닫기' }));
+
+      act(() => {
+        api.toast({ tone: 'success', title: '두 번째 토스트', dedupeKey: 'b' });
+      });
+      advance(5000);
+      expect(screen.queryByText('두 번째 토스트')).not.toBeInTheDocument();
+    } finally {
+      delete (document as unknown as { elementFromPoint?: unknown }).elementFromPoint;
+    }
+  });
+
+  // 5차 리뷰 #101 — undefined는 "안 준 것"이다. 스프레드가 덮어써 톤을 지우면
+  // 카드가 역할·아이콘·자동 닫힘을 통째로 잃는다.
+  it('update에 undefined를 줘도 톤이 지워지지 않는다', () => {
+    setup();
+    let id = '';
+    act(() => {
+      id = api.toast({ tone: 'success', title: '발행 완료' });
+    });
+    act(() => api.update(id, { tone: undefined, title: '갱신됨' }));
+
+    const el = screen.getByText('갱신됨').closest('[data-tone]');
+    expect(el).toHaveAttribute('data-tone', 'success');
+    expect(el).toHaveAttribute('role', 'status');
+  });
+
+  it('progress: null로 진행 바를 뗀다', () => {
+    setup();
+    let id = '';
+    act(() => {
+      id = api.toast({ tone: 'progress', title: '업로드 중', progress: 40 });
+    });
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+
+    act(() => api.update(id, { tone: 'success', title: '마쳤습니다', progress: null }));
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  // 5차 리뷰 #101 — 접혔다 돌아온 토스트를 재마운트하면 바가 되감기고 경고가 다시 읽힌다.
+  it('접혔다 다시 보여도 같은 DOM 노드를 유지한다', () => {
+    setup();
+    act(() => {
+      ['a', 'b', 'c'].forEach((k) => api.toast({ tone: 'error', title: `${k}번`, dedupeKey: k }));
+    });
+    const nodeA = screen.getByText('a번').closest('[data-tone]');
+
+    act(() => {
+      api.toast({ tone: 'error', title: 'd번', dedupeKey: 'd' });
+    });
+    expect(nodeA).toHaveAttribute('data-collapsed');
+
+    act(() => api.dismiss(card(cards().length - 1).getAttribute('data-toast-id')!));
+    expect(screen.getByText('a번').closest('[data-tone]')).toBe(nodeA);
+  });
+
+  // 5차 리뷰 #101 — 마지막 하나를 닫으면 넘겨줄 카드가 없어 포커스가 body로 떨어졌다.
+  it('마지막 토스트를 닫으면 들어오기 전 자리로 포커스가 돌아간다', () => {
+    const { getByText } = setup(<button type="button">바깥 버튼</button>);
+    const outside = getByText('바깥 버튼');
+    act(() => outside.focus());
+
+    act(() => {
+      api.toast({ tone: 'error', title: '유일한 토스트' });
+    });
+    const close = screen.getByRole('button', { name: '닫기' });
+    act(() => close.focus());
+    act(() => close.click());
+
+    expect(document.activeElement).toBe(outside);
+  });
+
+  // 5차 리뷰 #101 — 액션을 눌러도 안 닫히면 같은 동작을 두 번 실행할 수 있다.
+  it('액션을 누르면 토스트가 닫힌다', () => {
+    const undo = vi.fn();
+    setup();
+    act(() => {
+      api.toast({ tone: 'success', title: '기본 편집자로 변경했어요', undo });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '되돌리기' }));
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('기본 편집자로 변경했어요')).not.toBeInTheDocument();
+  });
+
+  it('보조설명 전문을 title로 볼 수 있다', () => {
+    setup();
+    const long = '1분에 3회까지만 발급할 수 있어요. 잠시 후 다시 시도해 주세요.';
+    act(() => {
+      api.toast({ tone: 'error', title: '코드 발급이 잠시 제한됐어요', description: long });
+    });
+
+    expect(screen.getByText(long)).toHaveAttribute('title', long);
   });
 
   it('접근성 위반이 없다', async () => {

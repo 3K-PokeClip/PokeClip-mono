@@ -58,11 +58,17 @@
   /* 최신이 아래. 오래된 것은 위로 밀리며 살짝 작아진다. */
   transform-origin: 100% 100%;
   transform: scale(calc(1 - var(--pc-toast-depth, 0) * 0.025));
-  opacity: calc(1 - var(--pc-toast-depth, 0) * 0.16);
+  /* 시안은 0.16 단계인데 0.08로 낮춘다 — 보조설명이 이미 대비 여유가 없어서
+     뒤 카드에서 AA 아래로 더 떨어졌다. 물러나 보이는 효과는 scale이 맡는다. */
+  opacity: calc(1 - var(--pc-toast-depth, 0) * 0.08);
   transition:
     transform var(--pc-duration-normal) var(--pc-ease-standard),
     opacity var(--pc-duration-normal) var(--pc-ease-standard);
   animation: pc-toast-in var(--pc-duration-normal) var(--pc-ease-decelerate);
+}
+/* 접힌 카드도 마운트는 유지한다 — 보이지만 않는다. */
+.toast[data-collapsed] {
+  display: none;
 }
 .toast[data-tone='error'] {
   border-color: rgb(var(--pc-red-400-rgb) / 0.42);
@@ -101,10 +107,12 @@
   font-size: var(--pc-font-size-sm);
   font-weight: var(--pc-weight-bold);
 }
-/* 보조설명은 1줄 — 넘치면 자른다. */
+/* 보조설명은 1줄 — 넘치면 자르되 title로 전문을 볼 수 있게 한다. */
 .description {
   margin-top: calc(1 * var(--pc-u));
-  color: var(--pc-color-text-muted);
+  /* 시안은 muted지만 secondary로 둔다 — muted는 이 배경에서 AA에 못 미치고,
+     이 컴포넌트가 이전에도 secondary였다. */
+  color: var(--pc-color-text-secondary);
   font-size: var(--pc-font-size-xs);
   white-space: nowrap;
   overflow: hidden;
