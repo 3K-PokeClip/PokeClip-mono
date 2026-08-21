@@ -80,8 +80,11 @@ const TONE_ROLE: Record<ToastTone, 'status' | 'alert'> = {
  * 동시에 보이는 개수. 넘치면 「이전 알림 N개 더」로 접힌다.
  *
  * 초과분을 버리지 않는 이유 — 접기는 "지운 게 아니라 숨긴 것"이라(ADR-044) 개수가
- * 사실이어야 한다. 보관 상한을 두면 라벨이 실제보다 적게 세게 된다. 같은 종류가
- * 연달아 오면 갱신으로 합쳐지므로(dedupeKey) 목록이 무한정 자라지도 않는다.
+ * 사실이어야 한다. 보관 상한을 두면 라벨이 실제보다 적게 세게 된다.
+ *
+ * 대신 목록은 자랄 수 있다. dedupe는 **직전 토스트하고만** 비교하므로 오류와
+ * 진행처럼 자동으로 안 닫히는 톤이 번갈아 들어오면 합쳐지지 않고 쌓인다. 렌더는
+ * 3개로 묶여 있고 항목 하나가 가벼워 받아들이는 비용이지, 안 자란다는 뜻이 아니다.
  */
 const MAX_VISIBLE = 3;
 
@@ -390,7 +393,9 @@ export function ToastProvider({ children }: ToastProviderProps) {
   }, [toasts.length, dismiss]);
 
   // 정지를 붙들던 카드가 사라지면(닫기·Esc·스택 밖으로 밀림) 해제 이벤트가 오지
-  // 않는다. 렌더가 바뀔 때마다 살아 있는 카드 기준으로 정지 상태를 다시 계산한다.
+  // 않는다. 렌더가 바뀔 때마다 보이는 카드 기준으로 정지 상태를 다시 계산한다 —
+  // 여기서 "안 보이면 해제"로 두어야 정지가 고착되지 않는다. 밀려난 자리에 포인터가
+  // 그대로 있는 경우는 아래 onPointerMove가 다시 잡는다.
   useEffect(() => {
     const visibleIds = new Set(toasts.slice(-MAX_VISIBLE).map((t) => t.id));
     let changed = false;
@@ -435,6 +440,14 @@ export function ToastProvider({ children }: ToastProviderProps) {
           className={styles.viewport}
           onPointerOver={(e) => {
             hoveredId.current = cardIdOf(e);
+            syncPaused();
+          }}
+          onPointerMove={(e) => {
+            // 스택이 밀려 카드가 갈리면 브라우저는 멈춰 있는 포인터에 pointerover를
+            // 다시 쏘지 않는다. 움직임에서 현재 카드를 다시 읽어 정지를 되찾는다.
+            const id = cardIdOf(e);
+            if (id === hoveredId.current) return;
+            hoveredId.current = id;
             syncPaused();
           }}
           onPointerOut={(e) => {

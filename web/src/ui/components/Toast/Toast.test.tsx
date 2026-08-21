@@ -275,6 +275,44 @@ describe('Toast', () => {
     expect(screen.getByText('이전 알림 5개 더')).toBeInTheDocument();
   });
 
+  // 재리뷰 #101 — 스택이 밀려 정지를 붙들던 카드가 언마운트되면 정지가 풀린다.
+  // 포인터가 여전히 스택 위에 있으면 움직임 한 번으로 다시 잡혀야 한다.
+  it('스택이 밀려도 포인터가 움직이면 정지를 되찾는다', () => {
+    setup();
+    act(() => {
+      ['a', 'b', 'c'].forEach((k) => api.toast({ tone: 'success', title: `${k}번`, dedupeKey: k }));
+    });
+    fireEvent.pointerOver(card(0));
+    advance(10_000);
+    expect(screen.getByText('a번')).toBeInTheDocument();
+
+    // 4번째가 오면 a가 스택 밖으로 밀린다 — 여기서 정지가 한 번 풀린다
+    act(() => {
+      api.toast({ tone: 'success', title: 'd번', dedupeKey: 'd' });
+    });
+    // 포인터가 그대로 스택 위에 있다는 신호
+    fireEvent.pointerMove(card(0));
+
+    advance(10_000);
+    expect(screen.getByText('d번')).toBeInTheDocument();
+  });
+
+  // 재리뷰 #101 — dedupe는 직전 토스트하고만 비교한다. 자동으로 안 닫히는 톤이
+  // 번갈아 오면 합쳐지지 않고 쌓이는데, 접힘 개수가 그 사실을 그대로 말해야 한다.
+  it('자동으로 안 닫히는 톤이 번갈아 오면 합쳐지지 않고 쌓인다', () => {
+    setup();
+    act(() => {
+      for (let i = 0; i < 4; i++) {
+        api.toast({ tone: 'error', title: `실패 ${i}` });
+        api.toast({ tone: 'progress', title: `재시도 ${i}` });
+      }
+    });
+    advance(60_000);
+
+    expect(cards()).toHaveLength(3);
+    expect(screen.getByText('이전 알림 5개 더')).toBeInTheDocument();
+  });
+
   it('접근성 위반이 없다', async () => {
     vi.useRealTimers();
     const { container } = setup();
