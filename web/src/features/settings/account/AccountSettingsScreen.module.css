@@ -88,13 +88,10 @@
   background: #fff;
 }
 
-/* 시안은 20이지만 24로 둔다. 시안이 쓴 공식 마크는 48 viewBox를 거의 꽉 채우는데
-   지금 쓰는 GoogleGIcon(24 viewBox)은 글리프가 81.5%만 차지해, 같은 20을 주면 실제
-   보이는 크기가 시안보다 17% 작다. 20 / 0.815 ≈ 24가 시안과 같은 크기가 된다.
-   공식 마크로 통일하게 되면 이 보정을 걷고 20으로 되돌려야 한다. */
+/* 시안 1p 값 그대로. 공식 마크가 viewBox를 꽉 채우므로 보정이 필요 없다 */
 .googleTile svg {
-  width: calc(24 * var(--pc-u));
-  height: calc(24 * var(--pc-u));
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
   display: block;
 }
 

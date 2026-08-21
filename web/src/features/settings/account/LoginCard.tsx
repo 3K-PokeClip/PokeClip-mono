@@ -1,5 +1,5 @@
 import { Badge } from '@/ui';
-import { GoogleGIcon } from '@/features/auth/GoogleGIcon';
+import { GoogleMark } from './GoogleMark';
 import styles from './AccountSettingsScreen.module.css';
 
 // 디자인 1p 「로그인」 카드. 읽기 전용이다 — 로그인 수단을 바꾸는 자리가 아니다.
@@ -15,8 +15,7 @@ export function LoginCard({ email }: { email: string }) {
       </h2>
       <div className={styles.loginRow}>
         <span className={styles.googleTile}>
-          {/* 크기는 .googleTile svg가 셸 배율로 정한다 — size prop은 덮어써진다 */}
-          <GoogleGIcon />
+          <GoogleMark />
         </span>
         <div className={styles.loginBody}>
           <div className={styles.loginName}>Google로 로그인</div>
