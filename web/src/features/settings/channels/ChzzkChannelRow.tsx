@@ -1,22 +1,23 @@
 'use client';
 
-import { Tv } from 'lucide-react';
 import { Badge, Button, Skeleton } from '@/ui';
 import { ChannelRow } from './ChannelRow';
+import { ChzzkMark } from './ChannelMarks';
 import type { ChzzkLinkViewState } from './useChzzkLinkState';
 import styles from './ChannelSettingsScreen.module.css';
 
 // 치지직 행 — 훅이 접어 준 view만 읽는다. 상태 판단은 여기서 하지 않는다.
+// 1k이 그린 것은 「정상」 하나뿐이고, 나머지 상태는 서버 계약(status 넷)에서 온다.
 export function ChzzkChannelRow({ state }: { state: ChzzkLinkViewState }) {
-  const { view, channelName, linkedAt, starting, startLink, retry, openConfirm } = state;
+  const { view, channelName, starting, startLink, retry, openConfirm } = state;
 
   return (
     <ChannelRow
-      icon={<Tv aria-hidden />}
+      icon={<ChzzkMark />}
       iconClassName={styles.chzzkIcon}
       name="치지직"
       badge={badgeOf(view)}
-      meta={metaOf(view, channelName, linkedAt)}
+      meta={metaOf(view, channelName)}
       action={actionOf(view, starting, startLink, retry, openConfirm)}
     />
   );
@@ -27,7 +28,7 @@ function badgeOf(view: ChzzkLinkViewState['view']) {
     case 'active':
       return (
         <Badge tone="success" variant="soft" size="sm">
-          연동됨
+          정상
         </Badge>
       );
     case 'expired':
@@ -47,11 +48,7 @@ function badgeOf(view: ChzzkLinkViewState['view']) {
   }
 }
 
-function metaOf(
-  view: ChzzkLinkViewState['view'],
-  channelName: string | undefined,
-  linkedAt: string | undefined,
-) {
+function metaOf(view: ChzzkLinkViewState['view'], channelName: string | undefined) {
   switch (view) {
     case 'loading':
       // 행 높이를 유지해 로드 후 레이아웃이 튀지 않게 한다. Skeleton은 높이를 인라인
@@ -60,9 +57,8 @@ function metaOf(
     case 'unavailable':
       return '연동 상태를 불러오지 못했어요';
     case 'active':
-      // 시안 1k의 「팔로워 4.2만 · 마지막 방송 오늘」은 백엔드가 주지 않는 값이라
-      // 채널명 + 연동일로 대체했다. 없는 숫자를 지어내지 않는다.
-      return [channelName, linkedAt && `${linkedAt} 연동`].filter(Boolean).join(' · ');
+      // 1k은 채널명 한 줄이다 — 연동일·팔로워 같은 걸 덧붙이지 않는다.
+      return channelName ?? '치지직 채널';
     case 'expired':
       return `${channelName ?? '치지직 채널'} · 연동이 만료돼 하이라이트 감지가 멈출 수 있어요`;
     case 'broken':

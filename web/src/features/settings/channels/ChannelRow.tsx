@@ -22,7 +22,7 @@ export function ChannelRow({
   name: string;
   badge?: ReactNode;
   meta: ReactNode;
-  /** 버튼 하나 또는 둘. 둘이면 복구 동작이 앞이다. */
+  /** 버튼 하나 또는 둘(둘이면 복구 동작이 앞이다). 누를 것이 없으면 null. */
   action: ReactNode;
 }) {
   const nameId = useId();
@@ -39,7 +39,7 @@ export function ChannelRow({
         </div>
         <div className={styles.rowMeta}>{meta}</div>
       </div>
-      <div className={styles.rowActions}>{action}</div>
+      {action !== null && <div className={styles.rowActions}>{action}</div>}
     </div>
   );
 }

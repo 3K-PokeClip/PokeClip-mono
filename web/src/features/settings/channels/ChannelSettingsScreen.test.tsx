@@ -69,17 +69,17 @@ describe('ChannelSettingsScreen — 연동 상태 표시', () => {
 
     expect(screen.getByRole('heading', { name: '채널 연동' })).toBeInTheDocument();
     expect(await chzzk().findByRole('button', { name: '연동' })).toBeInTheDocument();
-    expect(screen.queryByText('연동됨')).not.toBeInTheDocument();
+    expect(screen.queryByText('정상')).not.toBeInTheDocument();
     expect(screen.queryByText(/게임하는너구리/)).not.toBeInTheDocument();
   });
 
-  it('ACTIVE는 연동됨 배지와 채널명·연동일을 보여준다', async () => {
+  it('ACTIVE는 정상 배지와 채널명 한 줄을 보여준다 (1k)', async () => {
     stubLinkStatus(linked('ACTIVE'));
     renderWithProviders(<ChannelSettingsScreen />);
 
-    expect(await screen.findByText('연동됨')).toBeInTheDocument();
-    // 시안의 「팔로워 · 마지막 방송」 자리를 채널명 + 연동일로 대체했다
-    expect(chzzk().getByText(/^게임하는너구리 · .+ 연동$/)).toBeInTheDocument();
+    expect(await screen.findByText('정상')).toBeInTheDocument();
+    // 1k의 보조설명은 채널명 한 줄이다 — 연동일·팔로워를 덧붙이지 않는다
+    expect(chzzk().getByText('게임하는너구리')).toBeInTheDocument();
   });
 
   it('EXPIRED는 갱신 필요로 알리고 다시 연동을 내준다', async () => {
@@ -123,7 +123,7 @@ describe('ChannelSettingsScreen — 연동 상태 표시', () => {
     stubLinkStatus(linked('ACTIVE'));
     const { container } = renderWithProviders(<ChannelSettingsScreen />);
 
-    await screen.findByText('연동됨');
+    await screen.findByText('정상');
     expect(container.innerHTML).not.toContain('chan-secret-1');
   });
 });
@@ -166,7 +166,7 @@ describe('ChannelSettingsScreen — 온보딩·다른 플랫폼', () => {
     stubLinkStatus(linked('ACTIVE'));
     renderWithProviders(<ChannelSettingsScreen />);
 
-    await screen.findByText('연동됨');
+    await screen.findByText('정상');
     await waitFor(() => expect(useOnboardingStore.getState().channelLinked).toBe(true));
   });
 
@@ -185,7 +185,7 @@ describe('ChannelSettingsScreen — 온보딩·다른 플랫폼', () => {
 
     await chzzk().findByRole('button', { name: '연동' });
     expect(row('SOOP').getByRole('button', { name: '연동' })).toBeDisabled();
-    expect(row('유튜브').getByRole('button', { name: '연동' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '계정 추가 연동' })).toBeDisabled();
     // 치지직 쪽은 반대로 눌리는 상태여야 한다 — 전부 비활성이면 이 케이스가 무의미해진다
     expect(chzzk().getByRole('button', { name: '연동' })).toBeEnabled();
   });
@@ -197,19 +197,21 @@ describe('ChannelSettingsScreen — 온보딩·다른 플랫폼', () => {
     const youtube = row('유튜브');
     expect(youtube.getByText('준비 중')).toBeInTheDocument();
     expect(youtube.getByText(/클립 업로드 연동은 준비 중이에요/)).toBeInTheDocument();
-    expect(youtube.getByRole('button', { name: '연동' })).toBeDisabled();
-    // 업로드 자리는 감지 자리(방송 채널)와 섹션을 가른다
-    expect(screen.getByRole('heading', { name: '업로드 채널' })).toBeInTheDocument();
-    // 재연동 안내는 이벤트 기반이다 — 상시 노출하지 않는다
-    expect(screen.queryByText(/재연동/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/재인증/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '계정 추가 연동' })).toBeDisabled();
+    // 1k의 구획 이름 그대로 — 방송 채널(감지)과 자리를 가른다
+    expect(screen.getByRole('heading', { name: '유튜브 계정' })).toBeInTheDocument();
+    // 재연동 안내는 이벤트 기반이다 — 평소엔 경고 UI 자체가 없다. 1k의 안내 문구는
+    // "언제 뜨는지"를 설명할 뿐이라 「재연동 필요」 배지·「다시 연동」 버튼으로 판정한다.
+    expect(youtube.queryByText('재연동 필요')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '다시 연동' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '재인증' })).not.toBeInTheDocument();
   });
 
   it('접근성 위반이 없다', async () => {
     stubLinkStatus(linked('ACTIVE'));
     const { container } = renderWithProviders(<ChannelSettingsScreen />);
 
-    await screen.findByText('연동됨');
+    await screen.findByText('정상');
     expect(await axe(container)).toHaveNoViolations();
   });
 });
@@ -237,17 +239,23 @@ describe('ChannelSettingsScreen — 연동 해제', () => {
     await user.click(await chzzk().findByRole('button', { name: '연동 해제' }));
 
     const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.getByText('치지직 연동 해제')).toBeInTheDocument();
     expect(dialog.getByText('치지직 연동을 해제할까요?')).toBeInTheDocument();
-    expect(dialog.getByText('하이라이트 감지가 중단돼요')).toBeInTheDocument();
-    expect(dialog.getByText('지난 방송과 보관함의 클립은 그대로 남아요')).toBeInTheDocument();
-    expect(dialog.getByText('진행 중인 작업은 즉시 중단돼요')).toBeInTheDocument();
+    expect(
+      dialog.getByText('해제하면 방송을 켜도 하이라이트를 감지하지 않아요.'),
+    ).toBeInTheDocument();
+    expect(
+      dialog.getByText('이미 저장된 지난 방송과 보관함 클립은 그대로 남아요.'),
+    ).toBeInTheDocument();
+    expect(dialog.getByText('진행 중인 감지·클립 작업은 즉시 중단됩니다.')).toBeInTheDocument();
+    expect(dialog.getByText('해제 후에도 언제든 다시 연동할 수 있어요.')).toBeInTheDocument();
     expect(deleteCalls(spy)).toHaveLength(0);
 
     await user.click(dialog.getByRole('button', { name: '취소' }));
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(deleteCalls(spy)).toHaveLength(0);
-    expect(screen.getByText('연동됨')).toBeInTheDocument();
+    expect(screen.getByText('정상')).toBeInTheDocument();
   });
 
   it('확인하면 해제하고 결과를 토스트로만 알린다 — 되돌리기를 붙이지 않는다', async () => {
@@ -261,7 +269,7 @@ describe('ChannelSettingsScreen — 연동 해제', () => {
     expect(await screen.findByText('치지직 연동을 해제했어요')).toBeInTheDocument();
     expect(deleteCalls(spy)).toHaveLength(1);
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    await waitFor(() => expect(screen.queryByText('연동됨')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('정상')).not.toBeInTheDocument());
     expect(screen.queryByRole('button', { name: '되돌리기' })).not.toBeInTheDocument();
     await waitFor(() => expect(useOnboardingStore.getState().channelLinked).toBe(false));
   });
@@ -276,6 +284,6 @@ describe('ChannelSettingsScreen — 연동 해제', () => {
 
     expect(await screen.findByText('연동 해제에 실패했어요')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(screen.getByText('연동됨')).toBeInTheDocument();
+    expect(screen.getByText('정상')).toBeInTheDocument();
   });
 });
