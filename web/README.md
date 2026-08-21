@@ -69,18 +69,20 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 
 ### 라우트 맵
 
-| 경로                                      | 내용                                                               |
-| ----------------------------------------- | ------------------------------------------------------------------ |
-| `/`                                       | `/home` 리다이렉트 — 세션 분기는 `(dock)`의 AuthGuard가 한다       |
-| `/login`                                  | 로그인 진입 (셸 없음) — 세션이 있으면 `/home`으로 역가드           |
-| `/auth/callback`                          | 구글 OAuth 복귀 — code를 토큰으로 교환 (백엔드 redirect_uri)       |
-| `/oauth/chzzk/callback`                   | 치지직 동의 복귀 — code·state를 연동으로 교환 (아래 참조)          |
-| `/home` `/broadcast` `/clips` `/settings` | 독 4개 — `(dock)` 그룹 공유 셸(AuthGuard + 하단 Dock)              |
-| `/broadcast`                              | `/broadcast/livenow` 리다이렉트 — 방송 그룹은 좌측 `Side`를 갖는다 |
-| `/broadcast/livenow`                      | 라이브 대시보드 (지난 방송 `/broadcast/vod`는 별도 티켓)           |
-| `/dev`                                    | 개발용 데모 (테마 전환 · Zustand 카운터 · TanStack Query 예시)     |
-| `/api/ping`                               | 서버 핸들러 앵커                                                   |
-| 그 밖의 모든 주소                         | 404 폴백 (`app/not-found.tsx`) — 아래 참조                         |
+| 경로                                                              | 내용                                                               |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `/`                                                               | `/home` 리다이렉트 — 세션 분기는 `(dock)`의 AuthGuard가 한다       |
+| `/login`                                                          | 로그인 진입 (셸 없음) — 세션이 있으면 `/home`으로 역가드           |
+| `/auth/callback`                                                  | 구글 OAuth 복귀 — code를 토큰으로 교환 (백엔드 redirect_uri)       |
+| `/oauth/chzzk/callback`                                           | 치지직 동의 복귀 — code·state를 연동으로 교환 (아래 참조)          |
+| `/home` `/broadcast` `/clips` `/settings`                         | 독 4개 — `(dock)` 그룹 공유 셸(AuthGuard + 하단 Dock)              |
+| `/broadcast`                                                      | `/broadcast/livenow` 리다이렉트 — 방송 그룹은 좌측 `Side`를 갖는다 |
+| `/broadcast/livenow`                                              | 라이브 대시보드 (지난 방송 `/broadcast/vod`는 별도 티켓)           |
+| `/settings`                                                       | `/settings/plugin` 리다이렉트 — 설정 그룹도 좌측 `Side`를 갖는다   |
+| `/settings/channels` `/settings/plugin` `/settings/notifications` | 채널 연동 · 플러그인 · 알림 설정 (나머지 설정 화면은 별도 티켓)    |
+| `/dev`                                                            | 개발용 데모 (테마 전환 · Zustand 카운터 · TanStack Query 예시)     |
+| `/api/ping`                                                       | 서버 핸들러 앵커                                                   |
+| 그 밖의 모든 주소                                                 | 404 폴백 (`app/not-found.tsx`) — 아래 참조                         |
 
 **치지직 콜백 계약.** `/oauth/chzzk/callback`은 `(dock)` **밖**이라 `AuthGuard`가 덮지 않는다 — 세션 판정은 화면이 직접 하고, 세션이 없으면 로그인으로 보낸 뒤 `/settings/channels`로 되돌아온다. 이 경로는 백엔드 `CHZZK_REDIRECT_URI`, 그리고 **치지직 개발자 센터에 등록된 redirect URI**와 **정확히 같아야 한다** — 개발자 센터는 앱당 하나만 등록하므로 환경마다 앱을 따로 판다. 프론트에 치지직용 env는 없다(동의 URL을 백엔드가 조립한다). 어긋나면 개발 빌드 콘솔에 경고가 뜬다(`chzzkOAuth.warnIfCallbackMismatch`) — 그게 없으면 증상이 "동의를 다 마친 뒤 낯선 주소에서 막힘"으로만 나타난다.
 
