@@ -1,5 +1,5 @@
-import { StrictMode, type ReactElement } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode, type AnchorHTMLAttributes, type ReactElement, type ReactNode } from 'react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OAuthCallbackScreen } from '@/features/auth/OAuthCallbackScreen';
@@ -15,6 +15,20 @@ const { replace, searchRef } = vi.hoisted(() => ({
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace }),
   useSearchParams: () => searchRef.current,
+}));
+
+// next/link의 replace는 DOM에 흔적을 안 남긴다. 이 화면이 replace로 가는 것이
+// 이 화면의 요점이라(소모된 콜백 URL로 뒤로 가기 방지) 속성으로 드러내 고정한다.
+vi.mock('next/link', () => ({
+  default: ({
+    replace: isReplace,
+    children,
+    ...rest
+  }: { replace?: boolean; children?: ReactNode } & AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a data-replace={isReplace ? '' : undefined} {...rest}>
+      {children}
+    </a>
+  ),
 }));
 
 const STATE_KEY = 'pc-oauth-state';
@@ -113,7 +127,7 @@ describe('OAuthCallbackScreen', () => {
     expect(screen.getByText('로그인이 취소되었어요')).toBeInTheDocument();
   });
 
-  it('교환 401이면 실패 안내를 띄우고 버튼이 로그인 화면으로 보낸다', async () => {
+  it('교환 401이면 실패 안내를 띄우고 로그인 화면으로 가는 링크를 준다', async () => {
     window.sessionStorage.setItem(STATE_KEY, JSON.stringify({ state: 'state-1', returnTo: null }));
     searchRef.current = new URLSearchParams('code=code-1&state=state-1');
     stubFetch(() => jsonResponse(401, { message: '인증 실패' }));
@@ -121,7 +135,10 @@ describe('OAuthCallbackScreen', () => {
     renderWithClient(<OAuthCallbackScreen />);
 
     expect(await screen.findByText('로그인에 실패했어요')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '로그인 화면으로' }));
-    expect(replace).toHaveBeenCalledWith('/login');
+    // 버튼이 아니라 링크여야 한다 — 가운데 클릭·새 탭이 살아 있고, JS 없이도 간다.
+    const link = screen.getByRole('link', { name: '로그인 화면으로' });
+    expect(link).toHaveAttribute('href', '/login');
+    // 히스토리를 남기면 뒤로 가기가 소모된 state의 콜백 URL로 돌아간다.
+    expect(link).toHaveAttribute('data-replace');
   });
 });
