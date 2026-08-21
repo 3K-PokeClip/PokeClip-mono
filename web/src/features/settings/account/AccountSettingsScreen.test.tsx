@@ -147,15 +147,18 @@ describe('AccountSettingsScreen — 탈퇴', () => {
     expect(useAuthStore.getState().refreshToken).toBe('refresh-1');
   });
 
-  it('확정하면 세션을 접고 탈퇴 완료 화면으로 보낸다', async () => {
+  it('확정하면 세션은 그대로 둔 채 탈퇴 완료 화면으로 보낸다', async () => {
     const user = userEvent.setup();
     await renderScreen();
 
     await user.click(screen.getByRole('button', { name: '탈퇴하기' }));
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '탈퇴하기' }));
 
-    expect(useAuthStore.getState().refreshToken).toBeNull();
     expect(nav.replace).toHaveBeenCalledWith('/goodbye');
+    // 여기서 토큰을 지우면 그 리렌더로 깨어난 AuthGuard가 /login으로 보내 이동을 채간다.
+    // 세션 정리는 가드 밖인 /goodbye가 맡는다 — 표식만 남기고 나간다.
+    expect(useAuthStore.getState().refreshToken).toBe('refresh-1');
+    expect(window.sessionStorage.getItem('pc-withdrawn')).toBe('1');
   });
 
   it('미결제 잔액이 있으면 재확인 대신 차단 상태가 뜬다', async () => {
@@ -173,5 +176,18 @@ describe('AccountSettingsScreen — 탈퇴', () => {
 
     await user.click(dialog.getByRole('button', { name: '결제 내역으로 이동' }));
     expect(nav.push).toHaveBeenCalledWith('/settings/billing');
+  });
+
+  it('프로덕션에서는 목업 토글이 죽어 없는 청구 금액이 뜨지 않는다', async () => {
+    const user = userEvent.setup();
+    nav.search = 'mock=blocked';
+    vi.stubEnv('NODE_ENV', 'production');
+    await renderScreen();
+
+    await user.click(screen.getByRole('button', { name: '탈퇴하기' }));
+
+    const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.queryByText('₩12,900')).toBeNull();
+    expect(dialog.getByRole('button', { name: '탈퇴하기' })).toBeInTheDocument();
   });
 });

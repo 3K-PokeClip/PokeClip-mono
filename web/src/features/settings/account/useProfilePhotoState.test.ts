@@ -143,6 +143,56 @@ describe('useProfilePhotoState', () => {
     expect(result.current.progress).toBe(100);
   });
 
+  it('닫은 뒤 도착한 읽기는 버린다 — 닫은 모달이 혼자 다시 열리지 않는다', () => {
+    // onload를 붙들었다가 원할 때 터뜨린다
+    let fire: (() => void) | null = null;
+    vi.stubGlobal(
+      'FileReader',
+      class {
+        result = DATA_URL;
+        onload: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        readAsDataURL() {
+          fire = () => this.onload?.();
+        }
+      },
+    );
+    const { result } = setup();
+
+    act(() => result.current.selectFile(OK_FILE()));
+    expect(result.current.step).toBe('empty'); // 아직 읽는 중
+
+    act(() => result.current.close());
+    act(() => fire?.());
+
+    expect(result.current.step).toBe('idle');
+  });
+
+  it('새로 고르면 먼저 시작한 읽기가 나중에 끝나도 덮어쓰지 못한다', () => {
+    const fires: Array<() => void> = [];
+    vi.stubGlobal(
+      'FileReader',
+      class {
+        result = DATA_URL;
+        onload: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        readAsDataURL() {
+          fires.push(() => this.onload?.());
+        }
+      },
+    );
+    const { result } = setup();
+
+    act(() => result.current.selectFile(fileOf('first.png', 'image/png', 1024)));
+    act(() => result.current.selectFile(fileOf('second.png', 'image/png', 2048)));
+
+    act(() => fires[1]?.()); // 나중 것이 먼저 끝난다
+    expect(result.current.fileLabel).toContain('second.png');
+
+    act(() => fires[0]?.()); // 뒤늦게 도착한 첫 읽기
+    expect(result.current.fileLabel).toContain('second.png');
+  });
+
   it('업로드 취소는 선택 화면으로 되돌린다', () => {
     const { result } = setup();
     act(() => result.current.selectFile(OK_FILE()));

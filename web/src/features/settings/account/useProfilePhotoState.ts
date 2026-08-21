@@ -90,21 +90,29 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
    * 이어진 실패를 말하는 것이지 「첫 실패 이후 전부」가 아니다.
    */
   const errorStreak = useRef(0);
+  /**
+   * 진행 중인 FileReader의 세대. 모달을 닫거나 다른 것을 고르면 올려서 뒤늦게 도착하는
+   * onload를 버린다 — 안 그러면 닫은 모달이 업로드 단계로 혼자 다시 열리고, 먼저 시작한
+   * 읽기가 나중에 끝나 새 선택을 덮어쓴다.
+   */
+  const readSeq = useRef(0);
 
-  const clearTimers = useCallback(() => {
+  /** 예약된 타이머와 진행 중인 읽기를 한꺼번에 버린다 — 단계를 옮기는 모든 자리가 부른다. */
+  const resetPending = useCallback(() => {
     for (const t of [restoreTimer, fadeTimer, shakeTimer]) {
       if (t.current !== null) clearTimeout(t.current);
       t.current = null;
     }
     if (uploadTimer.current !== null) clearInterval(uploadTimer.current);
     uploadTimer.current = null;
+    readSeq.current += 1;
   }, []);
 
-  useEffect(() => clearTimers, [clearTimers]);
+  useEffect(() => resetPending, [resetPending]);
 
   const startUpload = useCallback(
     (file: File, dataUrl: string) => {
-      clearTimers();
+      resetPending();
       errorStreak.current = 0;
       setShaking(false);
       setRestoring(false);
@@ -124,12 +132,12 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
         });
       }, UPLOAD_TICK_MS);
     },
-    [clearTimers],
+    [resetPending],
   );
 
   const fail = useCallback(
     (title: string) => {
-      clearTimers();
+      resetPending();
       errorStreak.current += 1;
       setErrorTitle(title);
       setStep('error');
@@ -148,7 +156,7 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
         fadeTimer.current = setTimeout(() => setRestoring(false), RESTORE_MS);
       }, ERROR_HOLD_MS);
     },
-    [clearTimers],
+    [resetPending],
   );
 
   const selectFile = useCallback(
@@ -161,9 +169,17 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
         fail(`${megabytes(file.size)} 파일은 올릴 수 없어요`);
         return;
       }
+      // 이 읽기의 세대를 붙들어 둔다 — 도착했을 때 아직 유효한지 이것으로 판별한다
+      const seq = (readSeq.current += 1);
       const reader = new FileReader();
-      reader.onload = () => startUpload(file, String(reader.result));
-      reader.onerror = () => fail('파일을 읽지 못했어요');
+      reader.onload = () => {
+        if (seq !== readSeq.current) return; // 닫혔거나 다른 것을 고른 뒤 — 버린다
+        startUpload(file, String(reader.result));
+      };
+      reader.onerror = () => {
+        if (seq !== readSeq.current) return;
+        fail('파일을 읽지 못했어요');
+      };
       reader.readAsDataURL(file);
     },
     [fail, startUpload],
@@ -171,40 +187,40 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
 
   const selectImage = useCallback(
     (dataUrl: string) => {
-      clearTimers();
+      resetPending();
       errorStreak.current = 0;
       setShaking(false);
       setRestoring(false);
       setImageSrc(dataUrl);
       setStep('crop');
     },
-    [clearTimers],
+    [resetPending],
   );
 
   const open = useCallback(() => {
-    clearTimers();
+    resetPending();
     errorStreak.current = 0;
     setShaking(false);
     setRestoring(false);
     setStep('empty');
-  }, [clearTimers]);
+  }, [resetPending]);
 
   const close = useCallback(() => {
-    clearTimers();
+    resetPending();
     setShaking(false);
     setRestoring(false);
     setStep('idle');
-  }, [clearTimers]);
+  }, [resetPending]);
 
   const cancelUpload = useCallback(() => {
-    clearTimers();
+    resetPending();
     setProgress(0);
     setStep('empty');
-  }, [clearTimers]);
+  }, [resetPending]);
 
   const apply = useCallback(
     (dataUrl: string) => {
-      clearTimers();
+      resetPending();
       onApply(dataUrl);
       setStep('idle');
       toast({
@@ -215,7 +231,7 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
         action: { label: '편집', onClick: () => setStep('crop') },
       });
     },
-    [clearTimers, onApply, toast],
+    [resetPending, onApply, toast],
   );
 
   return {

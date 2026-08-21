@@ -1,6 +1,12 @@
 'use client';
 
-import { useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+} from 'react';
 import { Minus, Plus, RotateCcw } from 'lucide-react';
 import { IconButton, Slider } from '@/ui';
 import { baseScale, zoomToScale, type CropTransform } from './cropImage';
@@ -14,17 +20,39 @@ export function PhotoCropStage({
   transform,
   onChange,
   imgRef,
+  maskPx,
+  onMaskPxChange,
 }: {
   src: string;
   transform: CropTransform;
   onChange: (next: CropTransform) => void;
   imgRef: RefObject<HTMLImageElement | null>;
+  /** 실측한 마스크 지름 — 내보내기와 나눠 쓰므로 위에서 들고 있다. */
+  maskPx: number;
+  onMaskPxChange: (px: number) => void;
 }) {
   const [shortSide, setShortSide] = useState(0);
+  const maskRef = useRef<HTMLSpanElement>(null);
   // 드래그 시작 지점과 그때의 이동값 — 매 move마다 차이만 더한다
   const drag = useRef<{ pointerX: number; pointerY: number; x: number; y: number } | null>(null);
 
-  const scale = baseScale(shortSide) * zoomToScale(transform.zoom);
+  const scale = baseScale(shortSide, maskPx) * zoomToScale(transform.zoom);
+
+  // 마스크는 --pc-u를 타고 창 폭에 비례해 커진다 — 상수로 두면 창이 넓을 때 미리보기와
+  // 잘라낸 결과가 갈린다. 그려진 지름을 재서 양쪽이 같은 값을 쓰게 한다.
+  useEffect(() => {
+    const el = maskRef.current;
+    if (el === null) return;
+    const measure = () => {
+      const px = el.getBoundingClientRect().width;
+      if (px > 0) onMaskPxChange(px); // 0이면 아직 레이아웃 전 — 기준값을 유지한다
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [onMaskPxChange]);
 
   function handlePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -71,7 +99,7 @@ export function PhotoCropStage({
             setShortSide(Math.min(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight))
           }
         />
-        <span className={styles.cropMask} aria-hidden />
+        <span ref={maskRef} className={styles.cropMask} aria-hidden />
         <span className={styles.cropHint}>드래그해서 위치 조정</span>
       </div>
 

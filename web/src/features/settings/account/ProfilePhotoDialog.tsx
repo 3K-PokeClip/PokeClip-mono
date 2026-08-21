@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { AlertCircle, Upload, X } from 'lucide-react';
 import { Button, Dialog, IconButton, Progress, Spinner } from '@/ui';
-import { cropToDataUrl, INITIAL_CROP, type CropTransform } from './cropImage';
+import { cropToDataUrl, INITIAL_CROP, MASK_PX, type CropTransform } from './cropImage';
 import { PhotoCropStage } from './PhotoCropStage';
 import { cssColor, PRESET_AVATARS, presetAvatarDataUrl } from './profilePresets';
 import type { ProfilePhotoState } from './useProfilePhotoState';
@@ -16,6 +16,9 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
   const fileInput = useRef<HTMLInputElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const [transform, setTransform] = useState<CropTransform>(INITIAL_CROP);
+  // 크롭 스테이지가 재서 알려 주는 마스크의 실제 지름. 미리보기와 내보내기가 같은 값을
+  // 써야 보이는 대로 잘린다 — 시안 기준값(176)은 재기 전까지의 대비값일 뿐이다.
+  const [maskPx, setMaskPx] = useState(MASK_PX);
   // 드래그 중에는 :hover가 서지 않는다 — 파일을 끌어오는 내내 브라우저가 hover를
   // 주지 않아 CSS만으로는 「여기 놓으면 된다」를 보여 줄 수 없다. 직접 든다.
   const [dragOver, setDragOver] = useState(false);
@@ -69,7 +72,7 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
     const img = imgRef.current;
     const source = photo.imageSrc;
     if (img === null || source === null) return;
-    photo.apply(cropToDataUrl(img, transform, source));
+    photo.apply(cropToDataUrl(img, transform, source, maskPx));
   }
 
   const presets = (
@@ -176,6 +179,8 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
                 transform={transform}
                 onChange={setTransform}
                 imgRef={imgRef}
+                maskPx={maskPx}
+                onMaskPxChange={setMaskPx}
               />
             </div>
             <div className={styles.cropActions}>

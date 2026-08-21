@@ -4,9 +4,8 @@ import { useCallback, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { meQueryOptions, type Me } from '@/api/auth';
-import { markIntentionalLogout } from '@/components/app-shell/AuthGuard';
+import { markWithdrawn } from '@/features/account/withdrawHandoff';
 import { useMe } from '@/features/auth/useSession';
-import { useAuthStore } from '@/stores/auth';
 import { useToast } from '@/ui';
 
 // 디자인 1p 설정 · 계정의 상태 (POK-206).
@@ -78,20 +77,24 @@ export function useAccountMockState(): AccountViewState {
   );
 
   const completeWithdraw = useCallback(() => {
-    // POK-171 백엔드가 붙으면 여기서 탈퇴를 부르고, 성공한 뒤에 아래 세션 정리를 한다.
+    // POK-171 백엔드가 붙으면 여기서 탈퇴를 부르고, 성공한 뒤에 아래로 넘어간다.
     // 지금은 아무것도 지우지 않는다 — 같은 계정으로 다시 로그인하면 그대로 돌아온다.
-    markIntentionalLogout(); // 가드가 「탈퇴한 사람이 보던 화면」을 복원 경로로 남기지 않게
-    useAuthStore.getState().clearTokens();
-    queryClient.clear();
+    //
+    // 세션은 여기서 접지 않는다. clearTokens()가 도는 순간 AuthGuard가 리렌더되고 그
+    // 이펙트가 의도적 종료 표식과 무관하게 /login으로 보내는데, 그것이 바로 아래 이동보다
+    // 나중에 호출돼 이긴다 — 완료 화면이 뜰 틈이 없다. 가드 밖으로 나간 뒤 /goodbye가 접는다.
+    markWithdrawn();
     router.replace('/goodbye');
-  }, [queryClient, router]);
+  }, [router]);
 
   return {
     me,
     draftName,
     dirty,
     facts: WITHDRAW_FACTS,
-    blocked: searchParams.get('mock') === 'blocked',
+    // 개발에서만 켠다. 프로덕션 번들에서는 이 항이 통째로 죽어(NODE_ENV 치환) 주소를
+    // 쳐도 없는 미결제 금액이 뜨지 않는다
+    blocked: process.env.NODE_ENV !== 'production' && searchParams.get('mock') === 'blocked',
     setDraftName: setTyped,
     saveName,
     applyPhoto,

@@ -17,7 +17,12 @@ export interface CropTransform {
 /** 1p의 슬라이더 초기값은 42다. */
 export const INITIAL_CROP: CropTransform = { x: 0, y: 0, zoom: 42, rotation: 0 };
 
-/** 원형 마스크 지름 (1p). 배율 1에서 이 원이 꽉 찬다. */
+/**
+ * 시안 1p의 원형 마스크 지름. **실제 렌더 지름이 아니다** — CSS가 `calc(176 * var(--pc-u))`
+ * 이고 `--pc-u`는 루트 font-size(`clamp(1rem, 1.1104vw, 1.35rem)`)를 타므로 뷰포트가
+ * 1441px을 넘으면 이보다 커진다(1920px에서 약 234px). 그래서 계산은 실측한 지름을 받고,
+ * 이 상수는 시안 기준값이자 **측정 불가일 때의 대비값**으로만 쓴다.
+ */
 export const MASK_PX = 176;
 
 /** 내보내는 정사각 크기. 1p의 업로드 안내가 「정사각 512px 권장」이다. */
@@ -28,9 +33,12 @@ export function zoomToScale(zoom: number): number {
   return 1 + zoom / 50;
 }
 
-/** 원본 픽셀 → 스테이지 픽셀 배율. 짧은 변이 원을 꽉 채우는 크기가 기준(배율 1). */
-export function baseScale(naturalShortSide: number): number {
-  return naturalShortSide === 0 ? 1 : MASK_PX / naturalShortSide;
+/**
+ * 원본 픽셀 → 스테이지 픽셀 배율. 짧은 변이 원을 꽉 채우는 크기가 기준(배율 1).
+ * `maskPx`는 **화면에 실제로 그려진** 마스크 지름이어야 미리보기와 결과가 같아진다.
+ */
+export function baseScale(naturalShortSide: number, maskPx: number): number {
+  return naturalShortSide === 0 ? 1 : maskPx / naturalShortSide;
 }
 
 /**
@@ -44,6 +52,8 @@ export function cropToDataUrl(
   img: HTMLImageElement,
   transform: CropTransform,
   fallback: string,
+  /** 화면에 그려진 마스크 지름. 미리보기가 쓴 것과 같은 값이어야 한다. */
+  maskPx: number,
 ): string {
   const shortSide = Math.min(img.naturalWidth, img.naturalHeight);
   if (shortSide === 0) return fallback; // 아직 못 읽은 이미지 — 캔버스를 잡을 것도 없다
@@ -53,9 +63,9 @@ export function cropToDataUrl(
   const ctx = canvas.getContext('2d');
   if (ctx === null) return fallback;
 
-  // 스테이지 px → 출력 px 배율. 마스크(176)가 출력(512)으로 늘어난 만큼 이동량도 늘어난다
-  const k = OUTPUT_PX / MASK_PX;
-  const scale = baseScale(shortSide) * zoomToScale(transform.zoom) * k;
+  // 스테이지 px → 출력 px 배율. 마스크가 출력(512)으로 늘어난 만큼 이동량도 늘어난다
+  const k = OUTPUT_PX / maskPx;
+  const scale = baseScale(shortSide, maskPx) * zoomToScale(transform.zoom) * k;
 
   // CSS의 translate → rotate → scale 순서를 그대로 옮긴다
   ctx.translate(OUTPUT_PX / 2 + transform.x * k, OUTPUT_PX / 2 + transform.y * k);
