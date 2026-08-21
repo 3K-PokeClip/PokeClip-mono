@@ -1,0 +1,95 @@
+/* 디자인 1n 설정 · 알림 — 카드 2개, 각 카드가 「이름 / 인앱 / 이메일」 3열 격자다. */
+
+.screen {
+  max-width: calc(860 * var(--pc-u));
+}
+
+/* 시안의 제목-카드 간격은 20u인데 SettingsPageHeader가 자체로 4u를 든다 */
+.header {
+  margin-bottom: calc(16 * var(--pc-u));
+}
+
+.card {
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  overflow: hidden;
+}
+
+.criticalCard {
+  margin-bottom: calc(12 * var(--pc-u));
+}
+
+/* 열 폭 84u는 두 카드가 공유한다 — 갈리면 스위치 열이 어긋난다 */
+.columnHeader,
+.row {
+  display: grid;
+  grid-template-columns: 1fr calc(84 * var(--pc-u)) calc(84 * var(--pc-u));
+  border-bottom: 1px solid var(--pc-color-border-subtle);
+}
+
+.columnHeader {
+  padding: calc(11 * var(--pc-u)) calc(16 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-muted);
+}
+
+.channelHead {
+  text-align: center;
+}
+
+.row {
+  align-items: center;
+  padding: calc(12 * var(--pc-u)) calc(16 * var(--pc-u));
+}
+
+.rowBody {
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.rowTitle {
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 650;
+}
+
+.rowDesc {
+  margin-top: calc(1 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.switchCell {
+  display: flex;
+  justify-content: center;
+}
+
+.lockNote {
+  display: flex;
+  align-items: center;
+  gap: calc(7 * var(--pc-u));
+  margin: 0;
+  padding: calc(10 * var(--pc-u)) calc(16 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* lucide size prop은 px 고정 — 유닛에 태운다 */
+.lockNote svg {
+  width: calc(12 * var(--pc-u));
+  height: calc(12 * var(--pc-u));
+  flex: none;
+}
+
+/* 방해 금지는 종류가 아니라 그 위에 걸리는 규칙이라 3열 격자를 쓰지 않는다 */
+.dndRow {
+  display: flex;
+  align-items: center;
+  gap: calc(10 * var(--pc-u));
+  padding: calc(12 * var(--pc-u)) calc(16 * var(--pc-u));
+}
+
+.dndRow .rowBody {
+  flex: 1;
+}
