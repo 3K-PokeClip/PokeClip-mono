@@ -70,6 +70,28 @@ describe('AccountSettingsScreen — 표시', () => {
     expect(save).toBeEnabled();
   });
 
+  it('끝에 공백만 붙여서는 저장이 풀리지 않는다 — 저장은 트림 후 값을 쓴다', async () => {
+    const user = userEvent.setup();
+    await renderScreen();
+
+    await user.type(screen.getByLabelText('표시 이름'), '   ');
+
+    // 풀리면 눌러도 값은 그대로인데 「변경했습니다」가 뜬다
+    expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
+  });
+
+  it('me가 오기 전에는 저장이 잠겨 있다 — 갈아 끼울 대상이 없다', async () => {
+    const user = userEvent.setup();
+    // me를 영원히 붙들어 둔다
+    stubFetch(() => new Promise<Response>(() => {})); // 영원히 미해결 — me가 오지 않는 상태
+    renderWithProviders(<AccountSettingsScreen />);
+
+    await user.type(await screen.findByLabelText('표시 이름'), '너구리씨');
+
+    expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
+    expect(screen.queryByText('표시 이름을 변경했습니다')).toBeNull();
+  });
+
   it('이름을 저장하면 토스트가 결과를 알린다', async () => {
     const user = userEvent.setup();
     await renderScreen();

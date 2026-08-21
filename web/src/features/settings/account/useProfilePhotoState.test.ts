@@ -193,6 +193,28 @@ describe('useProfilePhotoState', () => {
     expect(result.current.fileLabel).toContain('second.png');
   });
 
+  it('상한을 갓 넘긴 파일도 5.0MB로 표기되지 않는다 — 올려서 적는다', () => {
+    const { result } = setup();
+
+    // 5,250,000B = 5.006MB. 반올림하면 「5.0MB 파일은 올릴 수 없어요」가 되어
+    // 「5MB 이하」 안내와 나란히 놓였을 때 왜 거절됐는지 알 수 없다
+    act(() => result.current.selectFile(fileOf('edge.png', 'image/png', 5_250_000)));
+
+    expect(result.current.errorTitle).toBe('5.1MB 파일은 올릴 수 없어요');
+  });
+
+  it('같은 그림을 다시 골라도 선택 세대가 올라간다 — 크롭 위치가 초기화될 자리', () => {
+    const { result } = setup();
+    const same = 'data:image/png;base64,SAME';
+
+    act(() => result.current.selectImage(same));
+    const first = result.current.selectionSeq;
+
+    act(() => result.current.open());
+    act(() => result.current.selectImage(same)); // imageSrc는 그대로다
+    expect(result.current.selectionSeq).toBeGreaterThan(first);
+  });
+
   it('업로드 취소는 선택 화면으로 되돌린다', () => {
     const { result } = setup();
     act(() => result.current.selectFile(OK_FILE()));

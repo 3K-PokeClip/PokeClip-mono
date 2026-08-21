@@ -499,6 +499,11 @@
 /* ---------- ② 에러 ---------- */
 
 .errorZone {
+  appearance: none;
+  width: 100%;
+  color: inherit;
+  font-family: inherit;
+  cursor: pointer;
   height: calc(150 * var(--pc-u));
   border: 1.5px dashed color-mix(in srgb, var(--pc-color-danger) 60%, transparent);
   border-radius: calc(14 * var(--pc-u));
@@ -520,6 +525,13 @@
 /* 한 번만 흔든다 — 연속 실패에서는 훅이 이 표식을 붙이지 않는다 (멀미 방지) */
 .errorZone[data-shaking] {
   animation: pc-account-dz-shake 340ms ease-in-out;
+}
+
+.errorMessage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
 }
 
 .errorIcon {

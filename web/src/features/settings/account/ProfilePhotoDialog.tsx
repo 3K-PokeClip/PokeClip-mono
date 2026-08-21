@@ -23,11 +23,12 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
   // 주지 않아 CSS만으로는 「여기 놓으면 된다」를 보여 줄 수 없다. 직접 든다.
   const [dragOver, setDragOver] = useState(false);
 
-  // 새 그림이 오면 잘라내기를 처음부터 — 앞 사진의 위치·확대가 남아 있으면 엉뚱하게 잘린다.
-  // 토스트의 「편집」으로 되돌아올 때는 imageSrc가 그대로라 직전 위치를 지킨다.
+  // 새로 고른 그림이면 잘라내기를 처음부터 — 앞 사진의 위치·확대가 남으면 엉뚱하게 잘린다.
+  // imageSrc가 아니라 선택 세대에 거는 이유: 같은 기본 아바타·같은 파일을 다시 고르면
+  // 문자열이 그대로라 초기화가 안 돈다. 토스트의 「편집」은 세대를 올리지 않아 위치를 지킨다.
   useEffect(() => {
     setTransform(INITIAL_CROP);
-  }, [photo.imageSrc]);
+  }, [photo.selectionSeq]);
 
   // 단계가 바뀌면 표시를 걷는다 — 드롭 직후 dragleave가 안 오는 경우가 있어
   // 그대로 두면 업로드·크롭으로 넘어간 뒤에도 강조가 남는다.
@@ -134,18 +135,24 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
         {photo.step === 'error' && (
           <div className={styles.photoBody}>
             {/* 모달 전체가 아니라 드롭존만 흔든다 — 원인이 어디인지 짚어 주려고 (1p) */}
-            <div
-              role="alert"
+            {/* 안내가 「클릭해 선택」이라고 말하므로 실제로 눌려야 한다. 바깥을 버튼으로 두어
+                포인터·키보드 양쪽에서 열리게 하고, 낭독용 alert는 안쪽 span이 든다 —
+                버튼에 role="alert"를 얹으면 버튼이라는 사실이 지워진다. */}
+            <button
+              type="button"
               className={styles.errorZone}
               data-shaking={photo.shaking || undefined}
+              onClick={() => fileInput.current?.click()}
               {...dropTargetProps}
             >
-              <AlertCircle aria-hidden className={styles.errorIcon} />
-              <span className={styles.errorTitle}>{photo.errorTitle}</span>
-              <span className={styles.errorHint}>
-                5MB 이하로 줄여 다시 끌어다 놓거나 클릭해 선택해 주세요
+              <span role="alert" className={styles.errorMessage}>
+                <AlertCircle aria-hidden className={styles.errorIcon} />
+                <span className={styles.errorTitle}>{photo.errorTitle}</span>
+                <span className={styles.errorHint}>
+                  5MB 이하로 줄여 다시 끌어다 놓거나 클릭해 선택해 주세요
+                </span>
               </span>
-            </div>
+            </button>
             <div className={styles.presetRow}>
               <span className={styles.presetLabel}>잠시 후 선택 화면으로 돌아갑니다</span>
               {presets}

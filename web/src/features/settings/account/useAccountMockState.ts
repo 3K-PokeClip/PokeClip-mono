@@ -50,7 +50,11 @@ export function useAccountMockState(): AccountViewState {
   // 하나로 합치면 이름을 지운 순간 서버 이름이 되살아나 입력이 되감긴다.
   const [typed, setTyped] = useState<string | null>(null);
   const draftName = typed ?? me?.name ?? '';
-  const dirty = draftName.trim().length > 0 && draftName !== me?.name;
+  // 저장이 쓰는 값(트림 후)으로 판정한다 — 트림 전 값으로 재면 끝에 공백만 붙여도 저장이
+  // 풀리고, 눌러도 값은 그대로인데 「변경했습니다」가 뜬다.
+  // me가 아직 없으면 잠근다: 갈아 끼울 대상이 없어 저장이 no-op인데 입력만 비워진다.
+  const trimmedName = draftName.trim();
+  const dirty = me !== undefined && trimmedName.length > 0 && trimmedName !== me.name;
 
   /** me 캐시를 갈아 헤더 아바타까지 함께 바뀌게 한다 — 서버에는 가지 않는다. */
   const patchMe = useCallback(
@@ -63,11 +67,11 @@ export function useAccountMockState(): AccountViewState {
   );
 
   const saveName = useCallback(() => {
-    const next = draftName.trim();
-    patchMe({ name: next });
+    if (!dirty) return; // 버튼이 잠겨 있어도 호출부가 늘면 여기가 마지막 방어선이다
+    patchMe({ name: trimmedName });
     setTyped(null); // me를 다시 따라가게 되돌린다 — 저장한 값과 입력값이 같아진다
     toast({ tone: 'success', title: '표시 이름을 변경했습니다' });
-  }, [draftName, patchMe, toast]);
+  }, [dirty, trimmedName, patchMe, toast]);
 
   const applyPhoto = useCallback(
     (dataUrl: string) => {

@@ -17,6 +17,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { Avatar, IconButton } from '@/ui';
+import { useMe } from '@/features/auth/useSession';
 import { useSidebarStore } from '@/stores/sidebar';
 import { isDockHrefActive } from './dockTransition';
 import styles from './Side.module.css';
@@ -75,6 +76,9 @@ const MENUS: Record<SideMenu, Group[]> = {
 
 export function Side({ menu }: { menu: SideMenu }) {
   const pathname = usePathname();
+  // 로그인한 사람을 그대로 보인다. 하드코딩이던 시절엔 계정 화면에서 사진·이름을 바꿔도
+  // 바로 옆 사이드바만 남처럼 남아, 「헤더·사이드바에 바로 반영」이라는 토스트가 거짓이 됐다.
+  const { data: me } = useMe();
   // 그룹을 옮겨도 접힘이 따라간다 — 지역 상태로 두면 레이아웃이 갈릴 때마다 초기화된다
   const collapsed = useSidebarStore((s) => s.collapsed);
   const toggleCollapsed = useSidebarStore((s) => s.toggle);
@@ -142,9 +146,12 @@ export function Side({ menu }: { menu: SideMenu }) {
         </div>
       ))}
       <div className={styles.userBlock}>
-        <Avatar size="sm" name="너구리" className={styles.userAvatar} />
+        {/* me 로딩 중엔 이름 없는 빈 아바타 — 이니셜이 나중에 채워져도 어긋날 것이 없다
+            (GlobalHeader와 같은 처리) */}
+        <Avatar size="sm" src={me?.profileImageUrl} name={me?.name} className={styles.userAvatar} />
         <div className={styles.userText}>
-          <div className={styles.userName}>너구리</div>
+          <div className={styles.userName}>{me?.name ?? ''}</div>
+          {/* 등급·역할은 아직 목업 — 구독 API가 없다 (별도 티켓) */}
           <div className={styles.userRole}>스트리머 · Pro</div>
         </div>
         <div className={styles.bellWrap}>

@@ -62,8 +62,9 @@ export function AccountSettingsScreen() {
         onClose={() => setWithdrawOpen(false)}
       />
 
-      {/* 기본 아바타 글리프는 표시 이름의 첫 글자 (Avatar의 이니셜 규칙과 같은 재료) */}
-      <ProfilePhotoDialog photo={photo} glyph={name.trim().charAt(0)} />
+      {/* 기본 아바타 글리프는 표시 이름의 첫 「글자」 — charAt은 이모지의 서로게이트 쌍을
+          반으로 잘라 깨진 문자를 그린다. Array.from은 코드 포인트 단위로 끊는다. */}
+      <ProfilePhotoDialog photo={photo} glyph={Array.from(name.trim())[0] ?? ''} />
     </div>
   );
 }

@@ -173,6 +173,40 @@ describe('ProfilePhotoDialog', () => {
     expect(dialog().getByText('3 / 3 · 크롭')).toBeInTheDocument();
   });
 
+  it('편집으로 돌아오면 자르던 자리를 잇고, 새로 고르면 처음부터 시작한다', async () => {
+    const { user } = await open();
+    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+
+    // 확대를 바꿔 「자르던 자리」를 만든다
+    const slider = dialog().getByRole('slider', { name: '확대' });
+    slider.focus();
+    await user.keyboard('{ArrowRight}{ArrowRight}');
+    const moved = slider.getAttribute('aria-valuenow');
+    expect(moved).not.toBe('42');
+
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+    await user.click(await screen.findByRole('button', { name: '편집' }));
+    expect(dialog().getByRole('slider', { name: '확대' })).toHaveAttribute('aria-valuenow', moved);
+
+    // 같은 기본 아바타를 다시 고르면 초기값으로 돌아온다
+    await user.click(dialog().getByRole('button', { name: '닫기' }));
+    await user.click(screen.getByRole('button', { name: '사진 수정' }));
+    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+    expect(dialog().getByRole('slider', { name: '확대' })).toHaveAttribute('aria-valuenow', '42');
+  });
+
+  it('에러 면을 클릭하면 파일 선택기가 열린다 — 안내가 「클릭해 선택」이라고 말한다', async () => {
+    const { user } = await open();
+    // 모달은 Portal로 body에 붙는다 — container에는 없다
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const opened = vi.spyOn(input, 'click');
+
+    drop(dropzone(), fileOf('big.png', 'image/png', Math.round(8.2 * 1024 * 1024)));
+    await user.click(screen.getByRole('alert').closest('button') as HTMLElement);
+
+    expect(opened).toHaveBeenCalled();
+  });
+
   it('닫기로 언제든 빠져나온다', async () => {
     const { user } = await open();
 

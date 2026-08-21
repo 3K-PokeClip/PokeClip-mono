@@ -35,6 +35,15 @@ function megabytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
 }
 
+/**
+ * 거절 문구 전용 표기 — 소수 첫째 자리에서 **올린다**. 반올림하면 상한(5,242,880)을
+ * 갓 넘긴 파일이 「5.0MB 파일은 올릴 수 없어요」가 되어, 「5MB 이하」 안내와 나란히 놓였을 때
+ * 왜 거절됐는지 알 수 없다.
+ */
+function megabytesCeil(bytes: number): string {
+  return `${(Math.ceil((bytes / 1024 / 1024) * 10) / 10).toFixed(1)}MB`;
+}
+
 function prefersReducedMotion(): boolean {
   return (
     typeof window !== 'undefined' &&
@@ -54,6 +63,8 @@ export interface ProfilePhotoState {
   /** 업로드 중 파일 표기 `이름 · 크기`. */
   fileLabel: string;
   progress: number;
+  /** 새로 고른 그림마다 올라간다 — 크롭 위치를 언제 초기화할지 가르는 값. */
+  selectionSeq: number;
   /** 드롭존을 한 번 흔드는 중. 연속 실패·동작 줄이기에서는 켜지지 않는다. */
   shaking: boolean;
   /** 에러에서 선택 화면으로 되돌아오는 중 — 페이드 + scale. */
@@ -76,6 +87,13 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
   const [errorTitle, setErrorTitle] = useState('');
   const [fileLabel, setFileLabel] = useState('');
   const [progress, setProgress] = useState(0);
+  const progressRef = useRef(0);
+  /**
+   * 「새로 고른 그림」의 세대. 크롭 위치 초기화가 이것에 걸린다 — imageSrc 문자열에 걸면
+   * 같은 기본 아바타·같은 파일을 다시 골랐을 때 값이 안 변해 직전 위치·회전이 남는다.
+   * 토스트의 「편집」은 올리지 않는다: 방금 자른 자리를 그대로 이어 손보는 동선이다.
+   */
+  const [selectionSeq, setSelectionSeq] = useState(0);
   const [shaking, setShaking] = useState(false);
   const [restoring, setRestoring] = useState(false);
 
@@ -118,18 +136,25 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
       setRestoring(false);
       setImageSrc(dataUrl);
       setFileLabel(`${file.name} · ${megabytes(file.size)}`);
+      progressRef.current = 0;
       setProgress(0);
       setStep('uploading');
       uploadTimer.current = setInterval(() => {
-        setProgress((prev) => {
-          const next = prev + UPLOAD_STEP;
-          if (next < 100) return next;
+        // 진행률은 ref로 센다 — setState 업데이터 안에서 끝을 판정하면 StrictMode가 그
+        // 업데이터를 두 번 태우면서 부수효과(타이머 정리·단계 이동)도 두 번 돈다
+        const next = progressRef.current + UPLOAD_STEP;
+        if (next >= 100) {
+          progressRef.current = 100;
+          setProgress(100);
           // 올릴 서버가 없어 확정 버튼을 둘 자리가 없다 — 다 차면 그대로 크롭으로 넘긴다
           if (uploadTimer.current !== null) clearInterval(uploadTimer.current);
           uploadTimer.current = null;
+          setSelectionSeq((n) => n + 1);
           setStep('crop');
-          return 100;
-        });
+          return;
+        }
+        progressRef.current = next;
+        setProgress(next);
       }, UPLOAD_TICK_MS);
     },
     [resetPending],
@@ -166,7 +191,7 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
         return;
       }
       if (file.size > MAX_BYTES) {
-        fail(`${megabytes(file.size)} 파일은 올릴 수 없어요`);
+        fail(`${megabytesCeil(file.size)} 파일은 올릴 수 없어요`);
         return;
       }
       // 이 읽기의 세대를 붙들어 둔다 — 도착했을 때 아직 유효한지 이것으로 판별한다
@@ -192,6 +217,7 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
       setShaking(false);
       setRestoring(false);
       setImageSrc(dataUrl);
+      setSelectionSeq((n) => n + 1);
       setStep('crop');
     },
     [resetPending],
@@ -241,6 +267,7 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
     errorTitle,
     fileLabel,
     progress,
+    selectionSeq,
     shaking,
     restoring,
     open,

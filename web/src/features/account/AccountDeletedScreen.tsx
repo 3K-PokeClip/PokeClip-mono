@@ -29,10 +29,15 @@ export function AccountDeletedScreen() {
   useEffect(() => {
     if (settled.current) return;
     settled.current = true;
-    // 탈퇴로 온 것이 아니면(주소창 직접 진입) 남의 세션을 접지 않는다
-    if (!consumeWithdrawn()) return;
-
     const { refreshToken, clearTokens } = useAuthStore.getState();
+    // 탈퇴로 온 것이 아니면(주소창 직접 진입) 남의 세션을 접지 않는다. 로그인 상태라면
+    // 「탈퇴가 완료되었어요」를 보일 이유도 없으므로 돌려보낸다 — 탈퇴 직후 새로고침은
+    // 토큰이 이미 비어 있어 여기 걸리지 않고 화면에 머문다.
+    if (!consumeWithdrawn()) {
+      if (refreshToken !== null) router.replace('/home');
+      return;
+    }
+
     // 서버 refresh 세션도 폐기한다 — 안 하면 탈퇴가 일반 로그아웃보다 덜 정리하는 꼴이 되어
     // 「탈퇴했다」고 믿는 사용자의 토큰이 만료(14일)까지 회전 가능한 채 남는다.
     // 실패는 무시한다(useLogout과 같은 계약) — 로컬 정리는 이미 끝났다.
@@ -44,7 +49,7 @@ export function AccountDeletedScreen() {
     markIntentionalLogout(); // 뒤로 가기로 가드에 걸려도 복원 경로를 남기지 않게
     clearTokens();
     queryClient.clear(); // 이전 계정의 me·스트림키가 다음 로그인에 새면 안 된다
-  }, [queryClient]);
+  }, [queryClient, router]);
 
   return (
     <main className={styles.screen}>
