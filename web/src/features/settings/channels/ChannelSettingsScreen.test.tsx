@@ -1,54 +1,194 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChannelSettingsScreen } from '@/features/settings/channels/ChannelSettingsScreen';
+import type { ChzzkLinkStatus } from '@/api/chzzkLink';
+import { useAuthStore } from '@/stores/auth';
 import { useOnboardingStore } from '@/stores/onboarding';
+import { jsonResponse, stubFetch } from '@/test/mockFetch';
+import { renderWithProviders } from '@/test/testProviders';
 
-describe('ChannelSettingsScreen', () => {
-  // 연동 상태가 온보딩 스토어(모듈 전역)에 있으므로 테스트마다 초기화한다.
-  beforeEach(() => {
-    window.localStorage.clear();
-    useOnboardingStore.setState({
-      welcomeSeen: false,
-      tourDone: false,
-      channelLinked: false,
-      pluginLinked: false,
-      hydrated: false,
-      tourStep: null,
-    });
+const { goToChzzkConsent } = vi.hoisted(() => ({ goToChzzkConsent: vi.fn() }));
+
+// location.assign은 jsdom이 못 흉내 낸다 — 이동은 모킹하고, 등록 주소 판정은
+// chzzkOAuth.test.ts가 순수 함수로 검증한다. (googleOAuth와 같은 분리)
+vi.mock('@/features/settings/channels/chzzkOAuth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/features/settings/channels/chzzkOAuth')>()),
+  goToChzzkConsent,
+}));
+
+const START_URL = '/api/chzzk-link/start';
+
+/** GET /api/chzzk-link 응답만 갈아끼우는 스텁 — 나머지는 케이스에서 덧붙인다. */
+function stubLinkStatus(body: unknown, status = 200) {
+  return stubFetch((url, init) => {
+    if (url === START_URL && init?.method === 'POST') {
+      return jsonResponse(200, { authorizeUrl: 'https://chzzk.naver.com/account-interlock?x=1' });
+    }
+    return jsonResponse(status, body);
   });
+}
 
-  it('신규 계정 기본값은 미연동 — 치지직 연동 버튼과 SOOP 자리를 보여준다', () => {
-    render(<ChannelSettingsScreen />);
+const linked = (status: ChzzkLinkStatus, extra: Record<string, unknown> = {}) => ({
+  linked: status === 'ACTIVE' || status === 'EXPIRED',
+  status,
+  channelId: 'chan-secret-1',
+  channelName: '게임하는너구리',
+  linkedAt: '2026-08-21T03:00:00Z',
+  ...extra,
+});
+
+/** 채널 행 안으로 범위를 좁힌다 — 「연동」 버튼은 행마다 있어 이름만으로는 구분되지 않는다. */
+const row = (name: string) => within(screen.getByRole('group', { name }));
+const chzzk = () => row('치지직');
+
+beforeEach(() => {
+  window.localStorage.clear();
+  goToChzzkConsent.mockReset();
+  useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
+  useOnboardingStore.setState({
+    welcomeSeen: false,
+    tourDone: false,
+    channelLinked: false,
+    pluginLinked: false,
+    hydrated: true,
+    tourStep: null,
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('ChannelSettingsScreen — 연동 상태 표시', () => {
+  it('연동이 없으면 연동 버튼만 보인다 — 배지도 채널명도 없다', async () => {
+    stubLinkStatus({ linked: false });
+    renderWithProviders(<ChannelSettingsScreen />);
 
     expect(screen.getByRole('heading', { name: '채널 연동' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '방송 채널' })).toBeInTheDocument();
-    expect(screen.getByText(/연동하면 치지직 방송에서 하이라이트를 감지해요/)).toBeInTheDocument();
+    expect(await chzzk().findByRole('button', { name: '연동' })).toBeInTheDocument();
     expect(screen.queryByText('연동됨')).not.toBeInTheDocument();
-
-    // SOOP은 자리만 — 버튼 비활성
-    const buttons = screen.getAllByRole('button', { name: '연동' });
-    expect(buttons).toHaveLength(2);
-    expect(buttons[1]).toBeDisabled();
+    expect(screen.queryByText(/게임하는너구리/)).not.toBeInTheDocument();
   });
 
-  it('연동을 누르면 연동됨 배지와 해제 버튼으로 바뀌고, 해제하면 원복된다', () => {
-    render(<ChannelSettingsScreen />);
+  it('ACTIVE는 연동됨 배지와 채널명·연동일을 보여준다', async () => {
+    stubLinkStatus(linked('ACTIVE'));
+    renderWithProviders(<ChannelSettingsScreen />);
 
-    // 첫 번째 '연동' 버튼이 치지직 행 (SOOP은 비활성)
-    fireEvent.click(screen.getAllByRole('button', { name: '연동' })[0]!);
+    expect(await screen.findByText('연동됨')).toBeInTheDocument();
+    // 시안의 「팔로워 · 마지막 방송」 자리를 채널명 + 연동일로 대체했다
+    expect(chzzk().getByText(/^게임하는너구리 · .+ 연동$/)).toBeInTheDocument();
+  });
 
-    expect(screen.getByText('연동됨')).toBeInTheDocument();
-    expect(screen.getByText(/게임하는너구리/)).toBeInTheDocument();
+  it('EXPIRED는 갱신 필요로 알리고 다시 연동을 내준다', async () => {
+    stubLinkStatus(linked('EXPIRED'));
+    renderWithProviders(<ChannelSettingsScreen />);
 
-    fireEvent.click(screen.getByRole('button', { name: '연동 해제' }));
+    expect(await screen.findByText('갱신 필요')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '다시 연동' })).toBeInTheDocument();
+    expect(screen.getByText(/하이라이트 감지가 멈출 수 있어요/)).toBeInTheDocument();
+  });
 
-    expect(screen.queryByText('연동됨')).not.toBeInTheDocument();
-    expect(screen.getByText(/연동하면 치지직 방송에서 하이라이트를 감지해요/)).toBeInTheDocument();
+  it('BROKEN은 끊김을 조용히 삼키지 않고 다시 연동을 내준다', async () => {
+    stubLinkStatus(linked('BROKEN', { linked: false }));
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    expect(await screen.findByText('연동 끊김')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '다시 연동' })).toBeInTheDocument();
+  });
+
+  it('UNLINKED는 미연동과 같게 그린다 — 해제한 채널 이름을 남기지 않는다', async () => {
+    stubLinkStatus(linked('UNLINKED', { linked: false }));
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    expect(await chzzk().findByRole('button', { name: '연동' })).toBeInTheDocument();
+    expect(screen.queryByText(/게임하는너구리/)).not.toBeInTheDocument();
+  });
+
+  it('상태 조회에 실패하면 다시 시도를 내준다 — 미연동으로 오인시키지 않는다', async () => {
+    stubLinkStatus({ reason: 'BOOM' }, 500);
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    expect(await screen.findByRole('button', { name: '다시 시도' })).toBeInTheDocument();
+    expect(chzzk().queryByRole('button', { name: '연동' })).not.toBeInTheDocument();
+  });
+
+  it('channelId가 화면 어디에도 나오지 않는다 — API 경계에서 버린다', async () => {
+    stubLinkStatus(linked('ACTIVE'));
+    const { container } = renderWithProviders(<ChannelSettingsScreen />);
+
+    await screen.findByText('연동됨');
+    expect(container.innerHTML).not.toContain('chan-secret-1');
+  });
+});
+
+describe('ChannelSettingsScreen — 연동 시작', () => {
+  it('연동을 누르면 서버가 준 동의 URL로 나간다', async () => {
+    const user = userEvent.setup();
+    const spy = stubLinkStatus({ linked: false });
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await user.click(await chzzk().findByRole('button', { name: '연동' }));
+
+    await waitFor(() =>
+      expect(goToChzzkConsent).toHaveBeenCalledWith(
+        'https://chzzk.naver.com/account-interlock?x=1',
+      ),
+    );
+    expect(
+      spy.mock.calls.filter(([url, init]) => url === START_URL && init?.method === 'POST'),
+    ).toHaveLength(1);
+  });
+
+  it('동의 URL 발급에 실패하면 오류를 알리고 이동하지 않는다', async () => {
+    const user = userEvent.setup();
+    stubFetch((url, init) => {
+      if (url === START_URL && init?.method === 'POST') return jsonResponse(502, { reason: 'X' });
+      return jsonResponse(200, { linked: false });
+    });
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await user.click(await chzzk().findByRole('button', { name: '연동' }));
+
+    expect(await screen.findByText('연동을 시작하지 못했어요')).toBeInTheDocument();
+    expect(goToChzzkConsent).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChannelSettingsScreen — 온보딩·다른 플랫폼', () => {
+  it('시작 가이드 1단계 플래그가 서버의 linked를 그대로 따라간다', async () => {
+    stubLinkStatus(linked('ACTIVE'));
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await screen.findByText('연동됨');
+    await waitFor(() => expect(useOnboardingStore.getState().channelLinked).toBe(true));
+  });
+
+  it('BROKEN이면 플래그가 서지 않는다 — 감지가 실제로 안 되는 상태다', async () => {
+    useOnboardingStore.setState({ channelLinked: true });
+    stubLinkStatus(linked('BROKEN', { linked: false }));
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await screen.findByText('연동 끊김');
+    await waitFor(() => expect(useOnboardingStore.getState().channelLinked).toBe(false));
+  });
+
+  it('SOOP은 자리만 있고 누를 수 없다', async () => {
+    stubLinkStatus({ linked: false });
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await chzzk().findByRole('button', { name: '연동' });
+    expect(row('SOOP').getByRole('button', { name: '연동' })).toBeDisabled();
+    // 치지직 쪽은 반대로 눌리는 상태여야 한다 — 둘 다 비활성이면 이 케이스가 무의미해진다
+    expect(chzzk().getByRole('button', { name: '연동' })).toBeEnabled();
   });
 
   it('접근성 위반이 없다', async () => {
-    const { container } = render(<ChannelSettingsScreen />);
+    stubLinkStatus(linked('ACTIVE'));
+    const { container } = renderWithProviders(<ChannelSettingsScreen />);
+
+    await screen.findByText('연동됨');
     expect(await axe(container)).toHaveNoViolations();
   });
 });

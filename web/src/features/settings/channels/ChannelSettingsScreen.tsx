@@ -1,15 +1,16 @@
 'use client';
 
-import { Tv } from 'lucide-react';
-import { Badge, Button } from '@/ui';
+import { Button } from '@/ui';
 import { SettingsPageHeader } from '../SettingsPageHeader';
-import { CHZZK_LINKED_META, useChannelMockState } from './useChannelMockState';
+import { ChannelRow } from './ChannelRow';
+import { ChzzkChannelRow } from './ChzzkChannelRow';
+import { useChzzkLinkState } from './useChzzkLinkState';
 import styles from './ChannelSettingsScreen.module.css';
 
-// 디자인 1k 설정 · 채널 연동의 방송 채널 섹션만 옮긴 목업 스텁 (POK-112).
-// 유튜브 채널 섹션(OAuth 연동·업로드 채널 선택·재인증)은 POK-112 본 구현에서 붙인다.
+// 디자인 1k 설정 · 채널 연동 (POK-205). 조립만 한다 — 상태 판단은 useChzzkLinkState,
+// 상태별 표현은 ChzzkChannelRow가 갖는다.
 export function ChannelSettingsScreen() {
-  const { chzzkLinked, linkChzzk, unlinkChzzk } = useChannelMockState();
+  const chzzk = useChzzkLinkState();
 
   return (
     <div className={styles.screen}>
@@ -17,52 +18,25 @@ export function ChannelSettingsScreen() {
         title="채널 연동"
         description="방송 플랫폼에서 하이라이트를 감지하고, 유튜브로 클립을 업로드합니다"
       />
-      <section aria-label="방송 채널">
-        <h2 className={styles.sectionTitle}>방송 채널</h2>
+      {/* aria-label 대신 제목 참조 — 제목 텍스트와 접근 이름이 중복 낭독되지 않게 (PairingCodeCard 선례) */}
+      <section aria-labelledby="broadcast-channels-title">
+        <h2 id="broadcast-channels-title" className={styles.sectionTitle}>
+          방송 채널
+        </h2>
         <div className={styles.rows}>
-          <div className={styles.row}>
-            {/* 치지직 아이콘 자산은 POK-112 본 구현에서 — 그전까지 lucide 플레이스홀더 */}
-            <span className={`${styles.channelIcon} ${styles.chzzkIcon}`}>
-              <Tv aria-hidden />
-            </span>
-            <div className={styles.rowBody}>
-              <div className={styles.rowTitleRow}>
-                <span className={styles.rowName}>치지직</span>
-                {chzzkLinked && (
-                  <Badge tone="success" variant="soft" size="sm">
-                    연동됨
-                  </Badge>
-                )}
-              </div>
-              <div className={styles.rowMeta}>
-                {chzzkLinked ? CHZZK_LINKED_META : '연동하면 치지직 방송에서 하이라이트를 감지해요'}
-              </div>
-            </div>
-            {chzzkLinked ? (
-              <Button variant="ghost" size="sm" onClick={unlinkChzzk}>
-                연동 해제
-              </Button>
-            ) : (
-              <Button variant="soft" size="sm" onClick={linkChzzk}>
+          <ChzzkChannelRow state={chzzk} />
+          <ChannelRow
+            icon={<SoopMark />}
+            iconClassName={styles.soopIcon}
+            name="SOOP"
+            meta="연동하면 SOOP 방송에서도 하이라이트를 감지해요"
+            /* SOOP은 IA대로 자리만 — 백엔드가 없다. 있는 척하지 않으려고 누를 수 없게 둔다. */
+            action={
+              <Button variant="soft" size="sm" disabled>
                 연동
               </Button>
-            )}
-          </div>
-          <div className={styles.row}>
-            <span className={`${styles.channelIcon} ${styles.soopIcon}`}>
-              <SoopMark />
-            </span>
-            <div className={styles.rowBody}>
-              <div className={styles.rowTitleRow}>
-                <span className={styles.rowName}>SOOP</span>
-              </div>
-              <div className={styles.rowMeta}>연동하면 SOOP 방송에서도 하이라이트를 감지해요</div>
-            </div>
-            {/* SOOP 연동은 IA대로 자리만 — 기능은 별도 배치 */}
-            <Button variant="soft" size="sm" disabled>
-              연동
-            </Button>
-          </div>
+            }
+          />
         </div>
       </section>
     </div>

@@ -79,3 +79,11 @@
   color: var(--pc-color-text-muted);
   margin-top: calc(2 * var(--pc-u));
 }
+
+/* 액션 자리 — 만료 상태는 복구(다시 연동)와 해제 둘을 나란히 둔다 */
+.rowActions {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  flex: none;
+}
