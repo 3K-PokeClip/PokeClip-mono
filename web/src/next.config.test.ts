@@ -22,6 +22,11 @@ describe('next.config rewrites', () => {
         source: '/api/stream-keys/:path*',
         destination: 'http://auth.internal:8082/api/stream-keys/:path*',
       },
+      // 치지직 연동도 auth 서버 소유 — :path*가 빈 세그먼트도 잡아 /api/chzzk-link 자체까지 덮는다 (POK-205)
+      {
+        source: '/api/chzzk-link/:path*',
+        destination: 'http://auth.internal:8082/api/chzzk-link/:path*',
+      },
       { source: '/api/clip/:path*', destination: 'http://clip.internal:8081/api/clip/:path*' },
     ]);
   });
