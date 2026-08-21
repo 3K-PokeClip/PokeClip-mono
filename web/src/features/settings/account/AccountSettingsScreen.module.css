@@ -1,0 +1,693 @@
+/* 디자인 1p 설정 · 계정 */
+
+.screen {
+  max-width: calc(720 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- 카드 공통 (1p 프로필 · 로그인) ---------- */
+
+.card {
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  padding: calc(18 * var(--pc-u));
+  margin-bottom: calc(12 * var(--pc-u));
+}
+
+.cardTitle {
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+  margin: 0 0 calc(14 * var(--pc-u));
+}
+
+.cardActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: calc(14 * var(--pc-u));
+}
+
+/* ---------- 프로필 카드 (1p ①) ---------- */
+
+.avatarRow {
+  display: flex;
+  align-items: center;
+  gap: calc(16 * var(--pc-u));
+  margin-bottom: calc(16 * var(--pc-u));
+}
+
+.avatarBody {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.avatarLabel {
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 700;
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: calc(12 * var(--pc-u));
+}
+
+.fieldLabel {
+  display: block;
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-secondary);
+  margin-bottom: calc(6 * var(--pc-u));
+}
+
+/* 1p의 입력 높이는 36 — DS 기본(md 40)과 갈린다 */
+.field {
+  height: calc(36 * var(--pc-u));
+  width: 100%;
+}
+
+/* ---------- 로그인 카드 (1p ②) ---------- */
+
+.loginRow {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--pc-u));
+}
+
+/* 구글 마크는 흰 타일 위 4색이다 — 어두운 배경에 그대로 얹으면 파랑이 묻힌다 */
+.googleTile {
+  width: calc(36 * var(--pc-u));
+  height: calc(36 * var(--pc-u));
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: calc(10 * var(--pc-u));
+  background: #fff;
+}
+
+.googleTile svg {
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
+  display: block;
+}
+
+.loginBody {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.loginName {
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 650;
+}
+
+.loginEmail {
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* ---------- 탈퇴 진입점 (1p ①) ---------- */
+
+/* 파괴적 동작이라 버튼도 카드도 아니다 — 구분선 아래 저강도 텍스트 링크 하나 */
+.withdrawRow {
+  margin-top: calc(26 * var(--pc-u));
+  padding-top: calc(14 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+}
+
+.withdrawLink {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  text-decoration: underline;
+  text-decoration-color: var(--pc-color-border-default);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* 시인성은 호버에서만 준다 — 평소에 눈에 띄면 실수로 눌린다 */
+.withdrawLink:hover,
+.withdrawLink:focus-visible {
+  color: var(--pc-color-danger);
+  text-decoration-color: var(--pc-color-danger);
+}
+
+/* ---------- 모달 공통 머리 (1p ② ③) ---------- */
+
+/* 폭을 max-width가 아니라 width로 못박는다: 오버레이가 grid + place-items:center라
+   그리드 아이템이 fit-content로 잡히고, DS .content의 width:100%가 그 폭을 되받아
+   내용이 좁은 단계(크롭 — 이미지가 absolute라 폭에 기여하지 않는다)에서 모달이 접힌다 */
+/* DS .content와 특이도가 같으면 번들 순서가 승자를 정한다 — 클래스를 겹쳐 올린다
+   (UnlinkChzzkDialog가 같은 이유로 쓰는 수법) */
+.withdrawDialog.withdrawDialog {
+  width: calc(520 * var(--pc-u));
+  max-width: 100%;
+  max-height: calc(740 * var(--pc-u));
+  border-radius: calc(18 * var(--pc-u));
+  border-color: var(--pc-color-border-default);
+  /* 안쪽 여백은 머리·본문·푸터가 각자 갖는다 */
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dialogHead {
+  flex: none;
+  padding: calc(24 * var(--pc-u)) calc(26 * var(--pc-u)) 0;
+}
+
+.dialogEyebrow {
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-muted);
+  letter-spacing: 0.04em;
+  margin-bottom: calc(10 * var(--pc-u));
+}
+
+/* DS Dialog.Title의 .title과 특이도를 맞부딪히지 않게 겹쳐 올린다 */
+.dialogTitle.dialogTitle {
+  font-size: calc(17 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.dialogLead {
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  margin: calc(5 * var(--pc-u)) 0 0;
+}
+
+.dialogDivider {
+  height: 1px;
+  background: var(--pc-color-border-subtle);
+  margin-top: calc(16 * var(--pc-u));
+}
+
+/* 1p ②는 취소 1 : 탈퇴 2 폭이다 — 반반이 아니다 */
+.dialogActions {
+  flex: none;
+  display: flex;
+  gap: calc(10 * var(--pc-u));
+  padding: calc(16 * var(--pc-u)) calc(26 * var(--pc-u)) calc(22 * var(--pc-u));
+}
+
+.dialogActions > *:first-child {
+  flex: 1;
+}
+
+.dialogActions > *:last-child {
+  flex: 2;
+}
+
+/* ---------- 탈퇴 재확인 본문 (1p ②) ---------- */
+
+.withdrawBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: calc(16 * var(--pc-u)) calc(26 * var(--pc-u)) calc(4 * var(--pc-u));
+  line-height: 1.55;
+}
+
+.groupTitle {
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 750;
+  margin: 0 0 calc(8 * var(--pc-u));
+}
+
+/* 무엇이 지워지고 무엇이 남는지를 갈라 말하는 번호 목록 */
+.consequences {
+  margin: 0 0 calc(12 * var(--pc-u));
+  padding-left: calc(18 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: calc(6 * var(--pc-u));
+}
+
+/* 실제 수치 — 「모두 삭제됩니다」가 몇 개인지를 눈으로 보여 준다 */
+.factBox {
+  display: flex;
+  flex-direction: column;
+  border-radius: calc(12 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  padding: calc(4 * var(--pc-u)) calc(16 * var(--pc-u));
+  margin-bottom: calc(18 * var(--pc-u));
+}
+
+.factBoxSingle {
+  padding: calc(13 * var(--pc-u)) calc(16 * var(--pc-u));
+  margin-bottom: calc(16 * var(--pc-u));
+}
+
+.factRow {
+  display: flex;
+  align-items: center;
+  padding: calc(9 * var(--pc-u)) 0;
+}
+
+.factBoxSingle .factRow {
+  padding: 0;
+}
+
+.factDivider {
+  height: 1px;
+  background: var(--pc-color-border-subtle);
+}
+
+.factLabel {
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 650;
+}
+
+/* 숫자는 고정폭 — 자릿수가 달라도 오른쪽 끝이 흔들리지 않는다 */
+.factValue {
+  margin-left: auto;
+  font: 700 calc(13 * var(--pc-u)) var(--pc-font-mono);
+}
+
+.footnoteDivider {
+  height: 1px;
+  background: var(--pc-color-border-subtle);
+  margin-bottom: calc(14 * var(--pc-u));
+}
+
+.footnote {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.footnote + .footnote {
+  margin-top: calc(8 * var(--pc-u));
+}
+
+.footnoteLink {
+  color: var(--pc-color-accent-text);
+}
+
+/* ---------- 차단 상태 (1p ③) ---------- */
+
+.blockedDialog.blockedDialog {
+  width: calc(430 * var(--pc-u));
+  max-width: 100%;
+  border-radius: calc(18 * var(--pc-u));
+  border-color: var(--pc-color-border-default);
+  padding: calc(24 * var(--pc-u)) calc(26 * var(--pc-u)) calc(22 * var(--pc-u));
+}
+
+.blockedTitle.blockedTitle {
+  font-size: calc(15 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.blockedLead {
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  line-height: 1.6;
+  margin: calc(6 * var(--pc-u)) 0 0;
+}
+
+/* 막는 이유가 금액이므로 위험색으로 짚는다 — 1p의 유일한 위험색 면이다 */
+.unpaidBox {
+  display: flex;
+  align-items: center;
+  border-radius: calc(12 * var(--pc-u));
+  background: color-mix(in srgb, var(--pc-color-danger) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pc-color-danger) 32%, transparent);
+  padding: calc(13 * var(--pc-u)) calc(16 * var(--pc-u));
+  margin: calc(16 * var(--pc-u)) 0 calc(18 * var(--pc-u));
+}
+
+.unpaidValue {
+  margin-left: auto;
+  font: 700 calc(13 * var(--pc-u)) var(--pc-font-mono);
+  color: var(--pc-color-danger);
+}
+
+.blockedActions {
+  display: flex;
+  gap: calc(10 * var(--pc-u));
+}
+
+.blockedActions > *:first-child {
+  flex: 1;
+}
+
+.blockedActions > *:last-child {
+  flex: 2;
+}
+
+/* ---------- 프로필 사진 모달 (1p ①~④) ---------- */
+
+.photoDialog.photoDialog {
+  width: calc(512 * var(--pc-u));
+  max-width: 100%;
+  border-radius: calc(16 * var(--pc-u));
+  border-color: var(--pc-color-border-default);
+  padding: 0;
+  overflow: hidden;
+}
+
+.photoHead {
+  display: flex;
+  align-items: center;
+  gap: calc(10 * var(--pc-u));
+  padding: calc(16 * var(--pc-u)) calc(18 * var(--pc-u)) calc(13 * var(--pc-u));
+  border-bottom: 1px solid var(--pc-color-border-subtle);
+}
+
+.photoTitle.photoTitle {
+  font-size: calc(13.5 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.photoStep {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.photoClose {
+  margin-left: auto;
+}
+
+.photoBody {
+  padding: calc(18 * var(--pc-u));
+}
+
+/* 진짜 파일 선택기 — 드롭존 버튼이 대신 눌린다 */
+.fileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---------- ① 사진 선택 ---------- */
+
+.dropzone {
+  appearance: none;
+  width: 100%;
+  height: calc(150 * var(--pc-u));
+  border: 1.5px dashed var(--pc-color-border-default);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  color: inherit;
+  font-family: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(8 * var(--pc-u));
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.dropzone:hover,
+.dropzone:focus-visible {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent-subtle);
+}
+
+/* 에러에서 돌아올 때만 — 모달을 닫지 않고 이 면만 되돌아온다 (1p 복귀 규칙 2.74s) */
+.dropzone[data-restoring] {
+  animation: pc-account-dz-restore 300ms ease-out;
+}
+
+.dropzoneIcon {
+  width: calc(24 * var(--pc-u));
+  height: calc(24 * var(--pc-u));
+  stroke-width: 1.6;
+  color: var(--pc-color-text-secondary);
+}
+
+.dropzoneTitle {
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 700;
+}
+
+.dropzoneHint {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.presetRow {
+  display: flex;
+  align-items: center;
+  gap: calc(10 * var(--pc-u));
+  margin-top: calc(13 * var(--pc-u));
+}
+
+.presetLabel {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.presetSwatches {
+  margin-left: auto;
+  display: flex;
+  gap: calc(7 * var(--pc-u));
+}
+
+.presetSwatch {
+  appearance: none;
+  width: calc(30 * var(--pc-u));
+  height: calc(30 * var(--pc-u));
+  border-radius: var(--pc-radius-circle);
+  border: 1px solid var(--pc-color-border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 800;
+  cursor: pointer;
+}
+
+/* ---------- ② 에러 ---------- */
+
+.errorZone {
+  height: calc(150 * var(--pc-u));
+  border: 1.5px dashed color-mix(in srgb, var(--pc-color-danger) 60%, transparent);
+  border-radius: calc(14 * var(--pc-u));
+  background: color-mix(in srgb, var(--pc-color-danger) 5%, transparent);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+/* 한 번만 흔든다 — 연속 실패에서는 훅이 이 표식을 붙이지 않는다 (멀미 방지) */
+.errorZone[data-shaking] {
+  animation: pc-account-dz-shake 340ms ease-in-out;
+}
+
+.errorIcon {
+  width: calc(24 * var(--pc-u));
+  height: calc(24 * var(--pc-u));
+  stroke-width: 1.7;
+  color: var(--pc-color-danger);
+}
+
+.errorTitle {
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-danger);
+}
+
+.errorHint {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* ---------- ③ 업로드 ---------- */
+
+.uploadZone {
+  height: calc(150 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(12 * var(--pc-u));
+}
+
+.uploadTitle {
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 700;
+}
+
+.uploadBar {
+  display: block;
+  width: calc(200 * var(--pc-u));
+}
+
+.uploadFile {
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.uploadActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(8 * var(--pc-u));
+  margin-top: calc(13 * var(--pc-u));
+}
+
+/* ---------- ④ 크롭 ---------- */
+
+.cropBody {
+  padding: calc(18 * var(--pc-u)) calc(18 * var(--pc-u)) 0;
+}
+
+.cropStage {
+  position: relative;
+  height: calc(230 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  overflow: hidden;
+  /* 마스크 밖을 어둡게 깔아 잘릴 자리를 눈으로 가른다 (1p) */
+  background: #07080b;
+  cursor: move;
+  touch-action: none;
+}
+
+.cropImage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: center;
+  /* 전역 img 규칙이 있어도 원본 크기를 유지해야 배율 계산이 맞는다 */
+  max-width: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.cropMask {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(176 * var(--pc-u));
+  height: calc(176 * var(--pc-u));
+  border-radius: var(--pc-radius-circle);
+  border: 2px solid rgb(255 255 255 / 0.92);
+  box-shadow: 0 0 0 9999px rgb(7 8 11 / 0.58);
+  pointer-events: none;
+}
+
+.cropHint {
+  position: absolute;
+  left: calc(12 * var(--pc-u));
+  bottom: calc(12 * var(--pc-u));
+  padding: calc(3 * var(--pc-u)) calc(9 * var(--pc-u));
+  border-radius: calc(7 * var(--pc-u));
+  background: rgb(0 0 0 / 0.55);
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 600;
+  color: rgb(255 255 255 / 0.92);
+  pointer-events: none;
+}
+
+.cropControls {
+  display: flex;
+  align-items: center;
+  gap: calc(10 * var(--pc-u));
+  margin-top: calc(15 * var(--pc-u));
+}
+
+.cropZoomIcon {
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+  flex: none;
+  color: var(--pc-color-text-muted);
+}
+
+.cropSlider {
+  flex: 1;
+  min-width: 0;
+}
+
+.cropControlDivider {
+  width: 1px;
+  height: calc(20 * var(--pc-u));
+  background: var(--pc-color-border-subtle);
+  flex: none;
+}
+
+.cropActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(16 * var(--pc-u)) calc(18 * var(--pc-u)) calc(18 * var(--pc-u));
+}
+
+/* ---------- 모션 (1p 「모션 · 복귀 규칙」) ---------- */
+
+/* ±6 → ±4 → ±2. 진폭을 줄여 가며 잦아든다 */
+@keyframes pc-account-dz-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  15% {
+    transform: translateX(calc(-6 * var(--pc-u)));
+  }
+  30% {
+    transform: translateX(calc(6 * var(--pc-u)));
+  }
+  50% {
+    transform: translateX(calc(-4 * var(--pc-u)));
+  }
+  70% {
+    transform: translateX(calc(4 * var(--pc-u)));
+  }
+  85% {
+    transform: translateX(calc(-2 * var(--pc-u)));
+  }
+}
+
+@keyframes pc-account-dz-restore {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 훅도 표식을 붙이지 않지만, 스타일 쪽에서도 한 번 더 막는다 */
+@media (prefers-reduced-motion: reduce) {
+  .dropzone[data-restoring],
+  .errorZone[data-shaking] {
+    animation: none;
+  }
+}

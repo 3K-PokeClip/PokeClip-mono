@@ -1,0 +1,167 @@
+import { fireEvent, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { axe } from 'jest-axe';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ProfilePhotoDialog } from '@/features/settings/account/ProfilePhotoDialog';
+import { useProfilePhotoState } from '@/features/settings/account/useProfilePhotoState';
+import { renderWithProviders } from '@/test/testProviders';
+
+// 모달의 3단계가 시안대로 갈리는지 본다. 시간에 걸린 복귀 규칙은 상태 기계 쪽
+// (useProfilePhotoState.test.ts)이 시계를 붙잡고 따로 검사한다.
+
+const DATA_URL = 'data:image/png;base64,AAA';
+
+class SyncFileReader {
+  result: string = DATA_URL;
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  readAsDataURL() {
+    this.onload?.();
+  }
+}
+
+function fileOf(name: string, type: string, size: number): File {
+  const file = new File(['x'], name, { type });
+  Object.defineProperty(file, 'size', { value: size });
+  return file;
+}
+
+const onApply = vi.fn();
+
+function Harness() {
+  const photo = useProfilePhotoState(onApply);
+  return (
+    <>
+      <button type="button" onClick={photo.open}>
+        사진 수정
+      </button>
+      <ProfilePhotoDialog photo={photo} glyph="너" />
+    </>
+  );
+}
+
+const dialog = () => within(screen.getByRole('dialog'));
+const dropzone = () => screen.getByRole('button', { name: /사진을 끌어다 놓거나 클릭해 선택/ });
+
+function drop(target: HTMLElement, file: File) {
+  fireEvent.drop(target, { dataTransfer: { files: [file], types: ['Files'] } });
+}
+
+beforeEach(() => {
+  onApply.mockReset();
+  vi.stubGlobal('FileReader', SyncFileReader);
+  // jsdom에는 캔버스가 없다 — 기본 아바타를 만드는 자리만 통과시킨다
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    fillRect: vi.fn(),
+    fillText: vi.fn(),
+    translate: vi.fn(),
+    rotate: vi.fn(),
+    scale: vi.fn(),
+    drawImage: vi.fn(),
+  } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(
+    'data:image/png;base64,PRESET',
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+async function open() {
+  const user = userEvent.setup();
+  const view = renderWithProviders(<Harness />);
+  await user.click(screen.getByRole('button', { name: '사진 수정' }));
+  return { user, ...view };
+}
+
+describe('ProfilePhotoDialog', () => {
+  it('① 선택 — 드롭존 안내와 기본 아바타 6종이 함께 뜬다', async () => {
+    await open();
+
+    expect(dialog().getByText('1 / 3 · 사진 선택')).toBeInTheDocument();
+    expect(
+      dialog().getByText('JPG · PNG · WebP · 5MB 이하 · 정사각 512px 권장'),
+    ).toBeInTheDocument();
+    expect(dialog().getByText('사진 대신 기본 아바타')).toBeInTheDocument();
+    expect(dialog().getAllByRole('button', { name: /^기본 아바타 \d$/ })).toHaveLength(6);
+  });
+
+  it('② 5MB를 넘기면 모달을 닫지 않고 그 자리에서 알린다', async () => {
+    await open();
+
+    drop(dropzone(), fileOf('face-cam-0812.png', 'image/png', Math.round(8.2 * 1024 * 1024)));
+
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(dialog().getByText('8.2MB 파일은 올릴 수 없어요')).toBeInTheDocument();
+    expect(
+      dialog().getByText('5MB 이하로 줄여 다시 끌어다 놓거나 클릭해 선택해 주세요'),
+    ).toBeInTheDocument();
+    // 「처음부터 다시」로 읽히지 않게 단계 표시를 유지한다
+    expect(dialog().getByText('1 / 3 · 사진 선택')).toBeInTheDocument();
+    expect(dialog().getByText('잠시 후 선택 화면으로 돌아갑니다')).toBeInTheDocument();
+  });
+
+  it('③ 정상 파일은 업로드 단계로 넘어가 파일과 진행률을 보여 준다', async () => {
+    await open();
+
+    drop(dropzone(), fileOf('face-cam-0812.png', 'image/png', Math.round(2.4 * 1024 * 1024)));
+
+    expect(dialog().getByText('2 / 3 · 업로드')).toBeInTheDocument();
+    expect(dialog().getByText('사진을 올리는 중이에요')).toBeInTheDocument();
+    expect(dialog().getByText('face-cam-0812.png · 2.4MB')).toBeInTheDocument();
+    expect(dialog().getByRole('progressbar', { name: '업로드 진행률' })).toBeInTheDocument();
+    expect(dialog().getByRole('button', { name: '취소' })).toBeInTheDocument();
+  });
+
+  it('④ 기본 아바타는 업로드를 건너뛰고 곧장 크롭에 든다', async () => {
+    const { user } = await open();
+
+    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+
+    expect(dialog().getByText('3 / 3 · 크롭')).toBeInTheDocument();
+    expect(dialog().getByText('드래그해서 위치 조정')).toBeInTheDocument();
+    expect(dialog().getByRole('slider', { name: '확대' })).toBeInTheDocument();
+    expect(dialog().getByRole('button', { name: '왼쪽으로 90도 회전' })).toBeInTheDocument();
+  });
+
+  it('⑤ 적용은 결과를 넘기고 모달을 닫은 뒤 토스트로 알린다', async () => {
+    const { user } = await open();
+    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+
+    expect(onApply).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(await screen.findByText('프로필 사진을 변경했습니다')).toBeInTheDocument();
+    expect(screen.getByText('헤더·사이드바에 바로 반영')).toBeInTheDocument();
+    // 되돌릴 수 없는 일이 아니라 다시 손보는 일이다 — 되돌리기가 아니라 편집이 붙는다
+    expect(screen.getByRole('button', { name: '편집' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '되돌리기' })).not.toBeInTheDocument();
+  });
+
+  it('토스트의 편집은 크롭으로 되돌아간다', async () => {
+    const { user } = await open();
+    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+
+    await user.click(await screen.findByRole('button', { name: '편집' }));
+
+    expect(dialog().getByText('3 / 3 · 크롭')).toBeInTheDocument();
+  });
+
+  it('닫기로 언제든 빠져나온다', async () => {
+    const { user } = await open();
+
+    await user.click(dialog().getByRole('button', { name: '닫기' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('접근성 위반이 없다', async () => {
+    const { container } = await open();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});

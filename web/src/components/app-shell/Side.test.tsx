@@ -16,21 +16,23 @@ beforeEach(() => {
 });
 
 describe('Side — 설정', () => {
-  it('설정 메뉴 7개 중 채널 연동·플러그인·알림 설정만 링크이고 현재 경로를 활성으로 표시한다', () => {
+  it('설정 메뉴 7개 중 채널 연동·플러그인·알림 설정·계정만 링크이고 현재 경로를 활성으로 표시한다', () => {
     nav.pathname = '/settings/plugin';
     render(<Side menu="settings" />);
 
     const links = screen.getAllByRole('link');
-    expect(links).toHaveLength(3);
+    expect(links).toHaveLength(4);
     expect(links[0]).toHaveAttribute('href', '/settings/channels');
     expect(links[0]).not.toHaveAttribute('aria-current');
     expect(links[1]).toHaveAttribute('href', '/settings/plugin');
     expect(links[1]).toHaveAttribute('aria-current', 'page');
     expect(links[2]).toHaveAttribute('href', '/settings/notifications');
     expect(links[2]).not.toHaveAttribute('aria-current');
+    expect(links[3]).toHaveAttribute('href', '/settings/account');
+    expect(links[3]).not.toHaveAttribute('aria-current');
 
-    // 나머지 4개는 비활성 (하위 티켓에서 라우트가 생기면 링크로 전환)
-    for (const label of ['편집자 관리', '구독 · 결제', '계정', '도움말 · 문의']) {
+    // 나머지 3개는 비활성 (하위 티켓에서 라우트가 생기면 링크로 전환)
+    for (const label of ['편집자 관리', '구독 · 결제', '도움말 · 문의']) {
       expect(screen.getByText(label).closest('[aria-disabled="true"]')).not.toBeNull();
     }
   });
