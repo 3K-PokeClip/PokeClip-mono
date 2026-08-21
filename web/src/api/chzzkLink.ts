@@ -3,6 +3,8 @@
 import { ApiError, apiFetch } from './client';
 
 // 치지직 채널 연동 호출 (POK-205) — auth 서버가 /api/chzzk-link/*를 소유한다 (ChzzkLinkController).
+// 계약 정본: https://kth4778.github.io/pokeclip-api-docs/#api (auth 명세의 「치지직 연동」 태그).
+// 아래 타입·오류 코드는 그 OpenAPI 문서와 필드 단위로 대조했다.
 // state는 서버가 HMAC으로 서명해 authorizeUrl 안에 넣는다(TTL 10분) — 구글과 달리 프론트는
 // state를 만들지도 보관하지도 비교하지도 않는다. 돌아온 값을 그대로 되돌려주기만 한다.
 // 토큰은 어떤 응답에도 실리지 않는다 (ADR-038).

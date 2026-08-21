@@ -9,7 +9,8 @@ const proxies = [
   { source: '/api/stream-keys/:path*', target: process.env.AUTH_API_URL },
   // 치지직 채널 연동(POK-205)도 auth 서버 소유다 (ChzzkLinkController).
   // :path*는 빈 세그먼트도 잡으므로 이 한 줄이 /api/chzzk-link 자체(GET·POST·DELETE)와
-  // /api/chzzk-link/start를 함께 덮는다 — stream-keys가 같은 모양으로 이미 돌고 있다.
+  // /api/chzzk-link/start를 함께 덮는다 — dev 서버에 실측했다(둘 다 백엔드까지 도달해
+  // 401, 매칭 안 되는 주소는 404).
   { source: '/api/chzzk-link/:path*', target: process.env.AUTH_API_URL },
   { source: '/api/clip/:path*', target: process.env.CLIP_API_URL },
 ];
