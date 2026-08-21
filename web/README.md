@@ -102,6 +102,14 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 rewrites는 env가 있을 때만 걸리므로 앱 기동에는 지장이 없다. 백엔드 로컬 기동은
 [`docs/dev-environment.md`](../docs/dev-environment.md).
 
+### 세션·토큰 저장과 다중 탭
+
+- access(30분)는 **메모리에만**, refresh(14일)만 `localStorage`(`pc-auth`)에 둔다 — `stores/auth.ts`. localStorage의 refresh가 **정본**이다.
+- 탭 사이 전파는 `BroadcastChannel('pc-auth')`: `login`(새 세션 — 받는 탭은 쿼리 캐시를 비운다) · `rotate`(같은 세션의 refresh 회전 — 받는 탭은 **내 refresh의 직계 후속일 때만** access까지 이어받고 캐시는 그대로 둔다) · `logout`. 받는 탭은 localStorage를 쓰지 않는다.
+- `storage` 이벤트는 **폴백**이다 — 100ms 뒤 정본을 다시 읽어 채널이 이미 맞췄으면 아무것도 하지 않고, 아니면 이전 계약대로 access를 비우고 캐시를 지운다(회전인지 계정 교체인지 알 수 없으므로). 탭이 다시 보일 때(`visibilitychange`·`pageshow`)도 같은 재확인을 한다.
+- 회전 요청이 401을 받으면 **0.5초 동안 옆 탭의 `rotate`를 기다린다** — 두 탭이 같은 refresh로 동시에 회전하면(탭 여러 개를 한꺼번에 복원) 진 쪽이 401을 받는데, 서버는 10초 유예 안의 중복을 탈취로 보지 않는다. 이어받으면 그 access로 재시도하고, 아무것도 안 오면 세션을 접는다(진짜 만료는 그만큼 늦게 `/login`).
+- **알려진 한계**: BroadcastChannel이 없는 환경과 구버전 번들 탭이 섞인 창에서는 폴백만 동작해 회전 핑퐁(POK-211)이 재발할 수 있다. 회전의 절대 직렬화(`navigator.locks`)는 후속.
+
 ## 규칙
 
 - **DS 소비 방식**: 디자인 시스템은 `src/ui/` 소스를 `@/ui`로 직접 import한다.
