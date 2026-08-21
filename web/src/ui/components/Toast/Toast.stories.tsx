@@ -83,7 +83,9 @@ function TonesDemo() {
           onClick={() => {
             const id = toast({
               tone: 'progress',
-              title: '클립 업로드 중 · 0%',
+              // 퍼센트는 제목이 아니라 진행 바가 들고 있다 — 제목을 갱신하면
+              // 라이브 리전이 갱신마다 다시 읽혀 다른 안내를 덮는다.
+              title: '클립 업로드 중',
               description: '고민상담 레전드 사연 · 약 40초 남음',
               progress: 0,
               action: { label: '취소', onClick: () => {} },
@@ -93,11 +95,17 @@ function TonesDemo() {
               pct += 10;
               if (pct >= 100) {
                 clearInterval(tick);
-                // 진행 → 결과. 톤이 바뀌면 그 톤의 자동 닫힘으로 타이머를 다시 건다.
-                update(id, { tone: 'success', title: '업로드를 마쳤습니다', progress: undefined });
+                // 진행 → 결과. 톤이 바뀌면 그 톤의 자동 닫힘으로 타이머를 다시 걸고,
+                // 끝난 일에 「취소」가 남지 않도록 액션도 함께 뗀다.
+                update(id, {
+                  tone: 'success',
+                  title: '업로드를 마쳤습니다',
+                  progress: undefined,
+                  action: null,
+                });
                 return;
               }
-              update(id, { title: `클립 업로드 중 · ${pct}%`, progress: pct });
+              update(id, { progress: pct });
             }, 400);
           }}
         >

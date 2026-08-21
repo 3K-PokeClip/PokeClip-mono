@@ -56,6 +56,8 @@ export interface ToastPatch {
   description?: ReactNode;
   progress?: number;
   duration?: number;
+  /** 액션을 갈아 끼운다. `null`이면 뗀다 — 끝난 일에 「취소」가 남지 않게. */
+  action?: ToastAction | null;
 }
 
 /**
@@ -118,9 +120,17 @@ function resolveDuration(item: Pick<ToastBase, 'tone' | 'duration'>): number {
   return item.duration ?? TONE_DURATION[item.tone];
 }
 
-/** 연속으로 온 토스트를 합칠지 가르는 키. 지정이 없으면 톤이 그 역할을 한다. */
-function mergeKey(item: Pick<ToastBase, 'tone' | 'dedupeKey'>): string {
-  return item.dedupeKey ?? item.tone;
+/**
+ * 연속으로 온 토스트를 합칠지 가르는 키. `null`이면 절대 합치지 않는다.
+ *
+ * 지정이 없으면 톤이 그 역할을 하되 **`progress`는 예외**다. 진행 토스트는 저마다
+ * 다른 작업이고 호출자가 id를 들고 갱신하는데, 톤으로 합치면 동시에 도는 업로드
+ * 둘이 한 카드와 한 id를 공유해 서로의 진행률을 덮어쓴다. 합치려면 같은 작업임을
+ * `dedupeKey`로 밝혀야 한다.
+ */
+function mergeKey(item: Pick<ToastBase, 'tone' | 'dedupeKey'>): string | null {
+  if (item.dedupeKey !== undefined) return item.dedupeKey;
+  return item.tone === 'progress' ? null : item.tone;
 }
 
 /** `undo`를 액션 자리 하나로 정규화한다 — 둘은 같은 자리를 쓰고 최대 1개다. */
@@ -200,7 +210,9 @@ function ToastCard({
       style={{ '--pc-toast-depth': depth } as CSSProperties}
       role={role}
       aria-live={role === 'alert' ? 'assertive' : 'polite'}
-      aria-atomic="true"
+      // 진행 토스트는 내용이 계속 바뀐다. atomic이면 갱신마다 제목+보조설명 전체가
+      // 다시 읽혀 다른 안내를 덮는다 — 바뀐 부분만 읽히게 둔다.
+      aria-atomic={item.tone === 'progress' ? 'false' : 'true'}
     >
       <div className={styles.row}>
         {item.tone === 'progress' ? (
@@ -272,6 +284,11 @@ export function ToastProvider({ children }: ToastProviderProps) {
   const hoveredId = useRef<string | null>(null);
   const focusedId = useRef<string | null>(null);
   const pausedRef = useRef(false);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  // 카드가 갈릴 때 포인터가 어디 있었는지 되짚기 위한 마지막 좌표.
+  const pointerAt = useRef<{ x: number; y: number } | null>(null);
+  // 포커스를 들고 있던 카드를 닫았을 때, 다음 카드로 포커스를 넘길지 표시.
+  const restoreFocus = useRef(false);
 
   const commit = useCallback(() => setToasts([...listRef.current]), []);
 
@@ -283,6 +300,10 @@ export function ToastProvider({ children }: ToastProviderProps) {
 
   const dismiss = useCallback(
     (id: string) => {
+      const active = document.activeElement;
+      restoreFocus.current =
+        active instanceof Element &&
+        active.closest('[data-toast-id]')?.getAttribute('data-toast-id') === id;
       clearTimer(id);
       listRef.current = listRef.current.filter((t) => t.id !== id);
       commit();
@@ -343,7 +364,8 @@ export function ToastProvider({ children }: ToastProviderProps) {
       let id: string;
       // 키는 저장하지 않고 비교할 때 파생한다 — 파생값을 담아 두면 update()로 톤이
       // 바뀌어도 키가 옛 톤에 묶여, 원래 톤의 다음 토스트가 그 자리를 덮어쓴다.
-      if (last && mergeKey(last) === mergeKey(next)) {
+      const key = mergeKey(next);
+      if (last && key !== null && mergeKey(last) === key) {
         // 같은 종류가 연속으로 발생하면 새로 쌓지 않고 최신 토스트를 갱신한다.
         id = last.id;
         list[list.length - 1] = { ...next, id, version: last.version + 1 };
@@ -373,6 +395,7 @@ export function ToastProvider({ children }: ToastProviderProps) {
       const merged: ToastItem = {
         ...current,
         ...patch,
+        action: patch.action === null ? undefined : (patch.action ?? current.action),
         version: current.version + (rearm ? 1 : 0),
       };
       list[index] = merged;
@@ -416,8 +439,30 @@ export function ToastProvider({ children }: ToastProviderProps) {
       focusedId.current = null;
       changed = true;
     }
+    // 카드가 갈리면 브라우저는 멈춰 있는 포인터에 pointerover를 다시 쏘지 않는다.
+    // 마지막 좌표 아래에 카드가 있으면 정지를 그대로 넘겨받는다.
+    if (hoveredId.current === null && pointerAt.current) {
+      const { x, y } = pointerAt.current;
+      const under = document.elementFromPoint?.(x, y)?.closest('[data-toast-id]');
+      const id = under?.getAttribute('data-toast-id') ?? null;
+      if (id !== null && visibleIds.has(id)) {
+        hoveredId.current = id;
+        changed = true;
+      }
+    }
     if (changed) syncPaused();
   }, [toasts, syncPaused]);
+
+  // #5 — 포커스를 들고 있던 카드가 닫히면 포커스가 body로 떨어져 다음 Tab이 문서
+  // 처음부터 시작한다. 남은 카드가 있으면 그 닫기 버튼으로 옮겨 자리를 지킨다.
+  useEffect(() => {
+    if (!restoreFocus.current) return;
+    restoreFocus.current = false;
+    const buttons = viewportRef.current?.querySelectorAll<HTMLButtonElement>(
+      '[data-toast-id] button[aria-label="닫기"]',
+    );
+    buttons?.[buttons.length - 1]?.focus();
+  }, [toasts]);
 
   useEffect(() => {
     const pending = timers.current;
@@ -446,15 +491,18 @@ export function ToastProvider({ children }: ToastProviderProps) {
       {children}
       <Portal>
         <div
+          ref={viewportRef}
           className={styles.viewport}
           // 토스트는 모달·드로어 위에 뜨는 표면이다. 표식이 없으면 그 레이어들이
           // 토스트 클릭을 "바깥 클릭"으로 읽고 닫혀 버린다.
           {...{ [OUTSIDE_POINTER_EXEMPT_ATTR]: '' }}
           onPointerOver={(e) => {
+            pointerAt.current = { x: e.clientX, y: e.clientY };
             hoveredId.current = cardIdOf(e);
             syncPaused();
           }}
           onPointerMove={(e) => {
+            pointerAt.current = { x: e.clientX, y: e.clientY };
             // 스택이 밀려 카드가 갈리면 브라우저는 멈춰 있는 포인터에 pointerover를
             // 다시 쏘지 않는다. 움직임에서 현재 카드를 다시 읽어 정지를 되찾는다.
             const id = cardIdOf(e);
@@ -464,6 +512,7 @@ export function ToastProvider({ children }: ToastProviderProps) {
           }}
           onPointerOut={(e) => {
             if (!leaving(e)) return;
+            pointerAt.current = null;
             hoveredId.current = null;
             syncPaused();
           }}

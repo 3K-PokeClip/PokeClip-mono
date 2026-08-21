@@ -363,6 +363,90 @@ describe('Toast', () => {
     expect(screen.getByText('다음 클립 업로드 중')).toBeInTheDocument();
   });
 
+  // 4차 리뷰 #101 — 진행 토스트는 저마다 다른 작업이다. 톤으로 합치면 동시에
+  // 도는 업로드 둘이 한 카드와 한 id를 공유해 서로의 진행률을 덮어쓴다.
+  it('동시에 도는 진행 토스트 둘은 합쳐지지 않고 각자 id를 받는다', () => {
+    setup();
+    let a = '';
+    let b = '';
+    act(() => {
+      a = api.toast({ tone: 'progress', title: '클립 A 업로드 중', progress: 0 });
+      b = api.toast({ tone: 'progress', title: '클립 B 업로드 중', progress: 0 });
+    });
+
+    expect(a).not.toBe(b);
+    expect(cards()).toHaveLength(2);
+
+    act(() => api.update(a, { progress: 50 }));
+    expect(screen.getByText('클립 A 업로드 중')).toBeInTheDocument();
+    expect(screen.getByText('클립 B 업로드 중')).toBeInTheDocument();
+  });
+
+  it('dedupeKey를 밝히면 진행 토스트도 합쳐진다', () => {
+    setup();
+    act(() => {
+      api.toast({ tone: 'progress', title: '첫 갱신', dedupeKey: 'upload-1' });
+      api.toast({ tone: 'progress', title: '두 번째 갱신', dedupeKey: 'upload-1' });
+    });
+
+    expect(cards()).toHaveLength(1);
+    expect(screen.getByText('두 번째 갱신')).toBeInTheDocument();
+  });
+
+  // 4차 리뷰 #101 — 끝난 일에 「취소」가 남으면 안 된다.
+  it('update로 액션을 뗄 수 있다', () => {
+    setup();
+    let id = '';
+    act(() => {
+      id = api.toast({
+        tone: 'progress',
+        title: '업로드 중',
+        action: { label: '취소', onClick: vi.fn() },
+      });
+    });
+    expect(screen.getByRole('button', { name: '취소' })).toBeInTheDocument();
+
+    act(() => api.update(id, { tone: 'success', title: '업로드를 마쳤습니다', action: null }));
+    expect(screen.queryByRole('button', { name: '취소' })).not.toBeInTheDocument();
+    expect(screen.getByText('업로드를 마쳤습니다')).toBeInTheDocument();
+  });
+
+  // 4차 리뷰 #101 — 진행 토스트는 갱신마다 카드 전체가 다시 읽히면 안 된다.
+  it('진행 토스트만 aria-atomic이 꺼진다', () => {
+    setup();
+    act(() => {
+      api.toast({ tone: 'progress', title: '업로드 중', dedupeKey: 'p' });
+      api.toast({ tone: 'success', title: '발행 완료', dedupeKey: 's' });
+    });
+
+    expect(screen.getByText('업로드 중').closest('[data-tone]')).toHaveAttribute(
+      'aria-atomic',
+      'false',
+    );
+    expect(screen.getByText('발행 완료').closest('[data-tone]')).toHaveAttribute(
+      'aria-atomic',
+      'true',
+    );
+  });
+
+  // 4차 리뷰 #101 — 포커스를 들고 있던 카드를 닫으면 포커스가 body로 떨어져
+  // 다음 Tab이 문서 처음부터 시작한다. 남은 카드로 넘겨 자리를 지킨다.
+  it('포커스한 토스트를 닫으면 남은 토스트로 포커스가 넘어간다', () => {
+    setup();
+    act(() => {
+      api.toast({ tone: 'error', title: '먼저', dedupeKey: 'a' });
+      api.toast({ tone: 'error', title: '나중', dedupeKey: 'b' });
+    });
+
+    const closers = screen.getAllByRole('button', { name: '닫기' });
+    const last = closers[closers.length - 1]!;
+    act(() => last.focus());
+    act(() => last.click());
+
+    expect(screen.queryByText('나중')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '닫기' }));
+  });
+
   it('접근성 위반이 없다', async () => {
     vi.useRealTimers();
     const { container } = setup();

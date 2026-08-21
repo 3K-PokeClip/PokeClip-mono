@@ -178,7 +178,8 @@
     animation: none;
     transition: none;
   }
-  .timerFill {
-    animation: none;
+  /* 바를 멈추면 꽉 찬 채로 남아 남은 시간을 잘못 알린다 — 차라리 감춘다. */
+  .timer {
+    display: none;
   }
 }
