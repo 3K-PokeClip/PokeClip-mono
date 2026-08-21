@@ -16,7 +16,8 @@ import { create } from 'zustand';
 //   로그인(login)·로그아웃(logout)은 다른 탭이 이전 세션의 캐시를 비우게 하고, 같은 세션의
 //   회전(rotate)은 access까지 메모리로 이어받되 캐시는 건드리지 않는다 — 회전마다 access를
 //   비우고 캐시를 지우면 상대 탭이 헤더 없는 me 401 → 재회전으로 되받아쳐 두 탭이 끝없이
-//   핑퐁한다. storage 이벤트는 채널이 없거나 메시지를 놓친 경우의 폴백으로만 남는다.
+//   핑퐁한다. storage 이벤트는 채널이 없거나 메시지를 놓친 경우의 폴백으로만 남고, 탭이 다시
+//   보이는 순간과 회전 직전(api/client)에는 정본을 즉시 다시 읽어 묵은 토큰으로 회전하지 않게 한다.
 //   BroadcastChannel이 없는 환경(지원 브라우저에는 전부 있다 — Chrome 54+, Firefox 38+,
 //   Safari 15.4+)과 구버전 번들 탭이 섞인 창에서는 폴백 = 이전 계약이라 핑퐁이 재발할 수 있다.
 //   감수하는 한계로 적어 둔다.
@@ -56,27 +57,43 @@ type CrossTabMessage =
   | { v: 1; type: 'rotate'; prev: string; pair: TokenPair }
   | { v: 1; type: 'logout' };
 
-function readStoredRefreshToken(): string | null {
-  if (typeof window === 'undefined') return null;
+/**
+ * 정본(localStorage)의 refresh를 읽는다. "없음"은 null, "읽을 수 없음"(쿠키 전면 차단 등으로
+ * 접근 자체가 throw)은 undefined — 둘을 구분해야 읽을 수 없는 탭의 메모리 세션을 비우지 않는다.
+ */
+function readStoredRefreshToken(): string | null | undefined {
+  if (typeof window === 'undefined') return undefined;
+  let raw: string | null;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
+    raw = window.localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return undefined;
+  }
+  if (!raw) return null;
+  try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== 'object' || parsed === null) return null;
     const token = (parsed as Record<string, unknown>).refreshToken;
     return typeof token === 'string' && token !== '' ? token : null;
   } catch {
-    /* 손상 JSON·프라이빗 모드 — 비로그인으로 진행 */
+    /* 손상 JSON — 비로그인으로 진행 */
     return null;
   }
 }
+
+// 마지막 persist가 실패했는가 — 그랬다면 정본에는 이 탭의 세션이 없으므로 정본과 맞추는 순간
+// 메모리 세션이 사라진다. "저장 실패는 새로고침 시 재로그인까지만 감수"라는 계약을 지키려면
+// 그 탭은 정본 동기화에서 빠져야 한다.
+let persistFailed = false;
 
 function persistRefreshToken(refreshToken: string | null) {
   try {
     if (refreshToken === null) window.localStorage.removeItem(STORAGE_KEY);
     else window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ v: 1, refreshToken }));
+    persistFailed = false;
   } catch {
     /* 저장 실패는 무시 — 새로고침 시 로그인이 다시 필요해지는 것까지만 감수한다 */
+    persistFailed = true;
   }
 }
 
@@ -188,9 +205,14 @@ let recheckTimer: ReturnType<typeof setTimeout> | null = null;
  * 로그아웃을 놓친 탭이 이전 계정 access로 조용히 이어가는 노출면을 막는다, 리뷰 #72).
  * 회전이었다면 다음 401에서 새 refresh로 한 번 더 회전하는 비용만 낸다 — 그 회전은 채널로
  * 전파되어 상대 탭이 조용히 이어받으므로 되받아치지 않는다.
+ * 정본을 읽을 수 없거나 이 탭의 저장이 실패한 상태면 건드리지 않는다 — 그 탭에 정본은 없다.
+ * api/client가 회전 직전에도 부른다: 묵은 refresh로 회전하면 10초 유예 밖 재사용이라 서버가
+ * 전 세션을 끊는다.
  */
-function reconcileWithStorage() {
+export function reconcileSessionWithStorage() {
+  if (persistFailed) return;
   const stored = readStoredRefreshToken();
+  if (stored === undefined) return;
   if (stored === useAuthStore.getState().refreshToken) return;
   useAuthStore.setState({ refreshToken: stored, accessToken: null, rotatedFrom: null });
   notifySessionChanged();
@@ -204,7 +226,7 @@ function scheduleReconcile() {
   if (recheckTimer !== null) return; // 연속 이벤트는 한 번만 — 발화 시점의 최신값을 읽는다
   recheckTimer = setTimeout(() => {
     recheckTimer = null;
-    reconcileWithStorage();
+    reconcileSessionWithStorage();
   }, STORAGE_RECHECK_DELAY_MS);
 }
 
@@ -220,12 +242,14 @@ function bindCrossTabSync() {
     scheduleReconcile();
   });
   // 프리즈·bfcache로 메시지를 놓친 탭은 묵은 refresh를 들고 있다. 그걸로 회전하면 10초 유예
-  // 밖이라 서버가 전 세션을 끊는다 — 다시 보이는 순간 정본과 맞춘다.
+  // 밖이라 서버가 전 세션을 끊는다 — 다시 보이는 순간 정본과 맞춘다. 지연 없이 동기로:
+  // TanStack focusManager가 같은 visibilitychange(window)에서 stale 쿼리를 즉시 재요청하는데,
+  // document 리스너인 여기가 먼저 돌아야 그 재요청이 묵은 토큰으로 나가지 않는다.
   window.addEventListener('pageshow', (e) => {
-    if (e.persisted) scheduleReconcile();
+    if (e.persisted) reconcileSessionWithStorage();
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') scheduleReconcile();
+    if (document.visibilityState === 'visible') reconcileSessionWithStorage();
   });
 }
 
@@ -237,7 +261,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   hydrate: () => {
     bindCrossTabSync();
     if (get().hydrated) return; // StrictMode 이중 이펙트 안전
-    set({ refreshToken: readStoredRefreshToken(), hydrated: true });
+    set({ refreshToken: readStoredRefreshToken() ?? null, hydrated: true });
   },
   setTokens: (pair) => {
     bindCrossTabSync(); // 로그인 콜백은 hydrate 없이 들어온다 — 그래도 다른 탭의 변경은 받아야 한다

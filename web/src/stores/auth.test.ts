@@ -72,6 +72,68 @@ describe('useAuthStore', () => {
   });
 });
 
+describe('탭 복귀 시 정본 동기화', () => {
+  it('탭이 다시 보이면 지연 없이 정본과 맞춘다 — TanStack의 포커스 재요청보다 먼저', () => {
+    useAuthStore.getState().hydrate();
+    useAuthStore.setState({ accessToken: 'access-a', refreshToken: 'refresh-a', hydrated: true });
+    const listener = vi.fn();
+    const off = onCrossTabSessionChange(listener);
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ v: 1, refreshToken: 'refresh-b' }));
+
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: 'refresh-b' });
+    expect(listener).toHaveBeenCalledTimes(1);
+    off();
+  });
+
+  it('정본을 읽을 수 없으면(접근 차단) 메모리 세션을 건드리지 않는다', () => {
+    useAuthStore.getState().hydrate();
+    useAuthStore.setState({ accessToken: 'access-a', refreshToken: 'refresh-a', hydrated: true });
+    const listener = vi.fn();
+    const off = onCrossTabSessionChange(listener);
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new DOMException('차단', 'SecurityError');
+    });
+
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(useAuthStore.getState()).toMatchObject({
+      accessToken: 'access-a',
+      refreshToken: 'refresh-a',
+    });
+    expect(listener).not.toHaveBeenCalled();
+    getItem.mockRestore();
+    off();
+  });
+
+  it('저장이 실패한 탭은 정본 동기화에서 빠진다 — 새로고침 시 재로그인까지만 감수한다는 계약', () => {
+    useAuthStore.getState().hydrate();
+    const listener = vi.fn();
+    const off = onCrossTabSessionChange(listener);
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('용량 초과', 'QuotaExceededError');
+    });
+    useAuthStore.getState().setTokens({ accessToken: 'access-1', refreshToken: 'refresh-1' }); // 메모리만 남는다
+
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(useAuthStore.getState()).toMatchObject({
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+    });
+    expect(listener).not.toHaveBeenCalled();
+
+    // 저장이 다시 되면 정본 동기화도 돌아온다
+    setItem.mockRestore();
+    useAuthStore.getState().rotateTokens({ accessToken: 'access-2', refreshToken: 'refresh-2' });
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ v: 1, refreshToken: 'refresh-3' }));
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(useAuthStore.getState()).toMatchObject({ accessToken: null, refreshToken: 'refresh-3' });
+    expect(listener).toHaveBeenCalledTimes(1);
+    off();
+  });
+});
+
 // 채널 메시지 없이 storage 이벤트만 온 경우의 폴백 — 두 탭의 상호 반응은 auth.crossTab.test.ts
 describe('다른 탭 동기화 — storage 폴백', () => {
   beforeEach(() => {

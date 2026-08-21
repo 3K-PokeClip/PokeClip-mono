@@ -1,6 +1,6 @@
 'use client';
 
-import { useAuthStore } from '@/stores/auth';
+import { reconcileSessionWithStorage, useAuthStore } from '@/stores/auth';
 
 // 인증 붙은 fetch 래퍼 (POK-101) — Bearer 부착과 401→refresh 회전→1회 재시도를
 // 한 곳에서 처리한다. 백엔드 401은 사유를 알려주지 않으므로(만료·서명 오류·계정 없음
@@ -36,12 +36,28 @@ async function errorMessage(res: Response): Promise<string> {
 // 전 세션을 끊는다. 같은 이유로 이 경로에는 재시도를 절대 넣지 않는다.
 let inflightRefresh: Promise<boolean> | null = null;
 
+// 탭 사이에서도 직렬화한다 (POK-211). 두 탭이 같은 refresh로 동시에 회전하면(탭 여러 개를
+// 한꺼번에 복원할 때 흔하다) 서버는 진 쪽에 401을 주는데, 클라이언트는 그것을 만료·도난과
+// 구분할 수 없다. Web Locks로 한 번에 한 탭만 회전하게 하면 뒤따르는 탭은 락 안에서 정본이
+// 바뀐 것을 보고 보낼 필요가 없어진다. 이긴 탭은 락을 놓기 전에 localStorage를 쓴다.
+const REFRESH_LOCK = 'pc-auth:refresh';
+
+function crossTabLock(): LockManager | null {
+  if (typeof navigator === 'undefined') return null;
+  return navigator.locks ?? null;
+}
+
+function withCrossTabLock<T>(task: () => Promise<T>): Promise<T> {
+  const locks = crossTabLock();
+  if (locks === null) return task();
+  return locks.request(REFRESH_LOCK, task) as Promise<T>;
+}
+
 /**
- * 회전 401 뒤 옆 탭의 회전 메시지를 기다리는 시간. 두 탭이 같은 refresh로 동시에 회전하면
- * (브라우저가 탭 여러 개를 한꺼번에 복원할 때 흔하다) 서버는 진 쪽에 401을 준다 — 10초 유예
- * 안이라 탈취로 보지 않는다. 이긴 탭의 메시지가 이 401보다 먼저 온다는 보장이 없다: 진 쪽은
- * 본문 없이 status만 보고 즉시 처리하는데 이긴 쪽은 JSON을 읽은 뒤에야 알린다. 진짜 만료·도난
- * 이면 로그인 복귀가 이만큼 늦는다. (POK-211)
+ * Web Locks가 없는 환경에서만 쓰는 폴백 — 회전 401 뒤 옆 탭의 회전 메시지를 기다리는 시간.
+ * 이긴 탭의 메시지가 이 401보다 먼저 온다는 보장이 없다: 진 쪽은 본문 없이 status만 보고
+ * 즉시 처리하는데 이긴 쪽은 JSON을 읽은 뒤에야 알린다. 진짜 만료·도난이면 로그인 복귀가
+ * 이만큼 늦는다. 대기가 끝나도 정본(localStorage)을 한 번 더 읽어 세션을 접지 않을 길을 찾는다.
  */
 const SIBLING_ROTATION_GRACE_MS = 500;
 
@@ -60,15 +76,33 @@ function waitForSessionChange(sent: string, ms: number): Promise<void> {
 }
 
 export function refreshSession(): Promise<boolean> {
-  inflightRefresh ??= doRefresh().finally(() => {
+  inflightRefresh ??= runRefresh().finally(() => {
     inflightRefresh = null;
   });
   return inflightRefresh;
 }
 
-async function doRefresh(): Promise<boolean> {
-  const { refreshToken } = useAuthStore.getState();
-  if (refreshToken === null) return false;
+async function runRefresh(): Promise<boolean> {
+  const sent = useAuthStore.getState().refreshToken;
+  if (sent === null) return false;
+  return withCrossTabLock(() => doRefresh(sent));
+}
+
+/** @param sent 락을 기다리기 전에 들고 있던 refresh — 기다리는 사이 바뀌었는지의 기준 */
+async function doRefresh(sent: string): Promise<boolean> {
+  // 보내기 직전에 정본을 다시 읽는다 — 프리즈·bfcache로 채널 메시지를 놓친 탭이 묵은 refresh로
+  // 회전하면 10초 유예 밖 재사용이라 서버가 전 세션을 끊는다. 이벤트 순서에 기대지 않는다.
+  reconcileSessionWithStorage();
+  const state = useAuthStore.getState();
+  if (state.refreshToken === null) return false; // 기다리는 사이 로그아웃
+  if (state.refreshToken !== sent) {
+    // 옆 탭이 내 토큰을 먼저 회전해 이어받았다 — 보낼 것이 없다. 그 access로 재시도하면 된다.
+    if (state.rotatedFrom === sent && state.accessToken !== null) return true;
+    // 다른 계정 로그인 — 이 요청을 그 계정의 Bearer로 완료하면 안 된다. (리뷰 #72)
+    if (state.accessToken !== null) return false;
+    // 정본으로만 맞춰진 상태(access 없음) — 아래에서 정본 토큰으로 회전한다.
+  }
+  const refreshToken = state.refreshToken;
   let res: Response;
   try {
     res = await fetch('/api/auth/refresh', {
@@ -81,10 +115,12 @@ async function doRefresh(): Promise<boolean> {
     return false;
   }
   if (res.status === 401 || res.status === 403) {
-    // 만료·회전 재사용(도난 감지)이면 세션 종료가 맞다. 다만 옆 탭이 같은 토큰으로 먼저 회전한
-    // 것일 수 있으니(동시 회전의 진 쪽) 그 탭의 메시지를 잠깐 기다린다.
-    if (useAuthStore.getState().refreshToken === refreshToken)
+    // 만료·회전 재사용(도난 감지)이면 세션 종료가 맞다. 락이 없는 환경에서는 옆 탭이 같은
+    // 토큰으로 먼저 회전한 것일 수 있으니(동시 회전의 진 쪽) 그 탭의 메시지를 잠깐 기다린다.
+    if (crossTabLock() === null && useAuthStore.getState().refreshToken === refreshToken)
       await waitForSessionChange(refreshToken, SIBLING_ROTATION_GRACE_MS);
+    // 메시지는 늦어도 정본은 이미 쓰였을 수 있다 — 세션을 접기 전에 한 번 더 읽는다.
+    reconcileSessionWithStorage();
     const now = useAuthStore.getState();
     if (now.refreshToken !== refreshToken) {
       // 응답을 기다리는 사이 세션이 바뀌었다. 옆 탭이 내 토큰을 회전해 이어받았다면 그 access로

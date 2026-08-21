@@ -134,6 +134,7 @@ describe('ChzzkCallbackScreen', () => {
     // 로그아웃으로 읽으면 LoginScreen 역가드가 살아있는 refreshToken을 보고 /home으로
     // 튕겨, 로그인하라는 안내를 받고도 로그인 화면에 갈 수 없게 된다.
     useAuthStore.setState({ accessToken: null, refreshToken: 'refresh-1', hydrated: true });
+    window.localStorage.setItem('pc-auth', JSON.stringify({ v: 1, refreshToken: 'refresh-1' })); // 회전 직전 정본 동기화가 읽는 값
     stubFetch((url) => (url === '/api/auth/refresh' ? jsonResponse(500, {}) : jsonResponse(401)));
     renderScreen(<ChzzkCallbackScreen />);
 
