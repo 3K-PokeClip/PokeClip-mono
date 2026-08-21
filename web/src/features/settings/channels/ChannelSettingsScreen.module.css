@@ -1,5 +1,10 @@
+/* 방송 채널·업로드 채널 두 구획 — 간격은 블록마다 두지 않고 여기서 한 번에 준다
+   (PluginSettingsScreen의 .stack과 같은 규칙) */
 .screen {
   max-width: calc(860 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+  gap: calc(22 * var(--pc-u));
 }
 
 /* 디자인 1k 섹션 제목 */
@@ -43,6 +48,17 @@
 
 /* lucide size prop은 px 고정 — 유닛에 태운다 */
 .chzzkIcon svg {
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
+}
+
+/* 유튜브는 아직 연동할 수 없다 — 아이콘도 준비 중 톤으로 죽여 둔다 */
+.youtubeIcon {
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-muted);
+}
+
+.youtubeIcon svg {
   width: calc(20 * var(--pc-u));
   height: calc(20 * var(--pc-u));
 }

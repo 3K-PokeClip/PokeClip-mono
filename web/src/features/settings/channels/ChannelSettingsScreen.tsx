@@ -5,6 +5,7 @@ import { SettingsPageHeader } from '../SettingsPageHeader';
 import { ChannelRow } from './ChannelRow';
 import { ChzzkChannelRow } from './ChzzkChannelRow';
 import { UnlinkChzzkDialog } from './UnlinkChzzkDialog';
+import { YoutubeChannelSection } from './YoutubeChannelSection';
 import { useChzzkLinkState } from './useChzzkLinkState';
 import styles from './ChannelSettingsScreen.module.css';
 
@@ -40,6 +41,7 @@ export function ChannelSettingsScreen() {
           />
         </div>
       </section>
+      <YoutubeChannelSection />
       <UnlinkChzzkDialog
         open={chzzk.confirmOpen}
         busy={chzzk.unlinking}

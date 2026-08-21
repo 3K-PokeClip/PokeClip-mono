@@ -179,14 +179,30 @@ describe('ChannelSettingsScreen — 온보딩·다른 플랫폼', () => {
     await waitFor(() => expect(useOnboardingStore.getState().channelLinked).toBe(false));
   });
 
-  it('SOOP은 자리만 있고 누를 수 없다', async () => {
+  it('백엔드가 없는 SOOP·유튜브는 자리만 있고 누를 수 없다 — 있는 척하지 않는다', async () => {
     stubLinkStatus({ linked: false });
     renderWithProviders(<ChannelSettingsScreen />);
 
     await chzzk().findByRole('button', { name: '연동' });
     expect(row('SOOP').getByRole('button', { name: '연동' })).toBeDisabled();
-    // 치지직 쪽은 반대로 눌리는 상태여야 한다 — 둘 다 비활성이면 이 케이스가 무의미해진다
+    expect(row('유튜브').getByRole('button', { name: '연동' })).toBeDisabled();
+    // 치지직 쪽은 반대로 눌리는 상태여야 한다 — 전부 비활성이면 이 케이스가 무의미해진다
     expect(chzzk().getByRole('button', { name: '연동' })).toBeEnabled();
+  });
+
+  it('유튜브가 안 붙었다는 사실이 화면에 드러난다 — 배지·문구·비활성 버튼 세 겹', async () => {
+    stubLinkStatus({ linked: false });
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    const youtube = row('유튜브');
+    expect(youtube.getByText('준비 중')).toBeInTheDocument();
+    expect(youtube.getByText(/클립 업로드 연동은 준비 중이에요/)).toBeInTheDocument();
+    expect(youtube.getByRole('button', { name: '연동' })).toBeDisabled();
+    // 업로드 자리는 감지 자리(방송 채널)와 섹션을 가른다
+    expect(screen.getByRole('heading', { name: '업로드 채널' })).toBeInTheDocument();
+    // 재연동 안내는 이벤트 기반이다 — 상시 노출하지 않는다
+    expect(screen.queryByText(/재연동/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/재인증/)).not.toBeInTheDocument();
   });
 
   it('접근성 위반이 없다', async () => {
