@@ -1,4 +1,4 @@
-import { callbackMatchesOrigin, CHZZK_CALLBACK_PATH } from './chzzkOAuth';
+import { assertChzzkConsentUrl, callbackMatchesOrigin, CHZZK_CALLBACK_PATH } from './chzzkOAuth';
 
 const ORIGIN = 'http://localhost:3000';
 const authorizeUrl = (redirectUri: string) =>
@@ -31,5 +31,28 @@ describe('callbackMatchesOrigin', () => {
     ).toBe(false);
     expect(callbackMatchesOrigin(authorizeUrl('not-a-url'), ORIGIN)).toBe(false);
     expect(callbackMatchesOrigin('그냥 문자열', ORIGIN)).toBe(false);
+  });
+});
+
+describe('assertChzzkConsentUrl', () => {
+  it('https 동의 URL은 통과시킨다', () => {
+    expect(() =>
+      assertChzzkConsentUrl(authorizeUrl(`${ORIGIN}${CHZZK_CALLBACK_PATH}`)),
+    ).not.toThrow();
+  });
+
+  it('javascript: 스킴을 막는다 — location.assign에 실리면 우리 오리진에서 실행된다', () => {
+    expect(() => assertChzzkConsentUrl('javascript:alert(1)')).toThrow();
+  });
+
+  it('http·URL 아닌 값도 막는다', () => {
+    expect(() => assertChzzkConsentUrl('http://chzzk.naver.com/account-interlock')).toThrow();
+    expect(() => assertChzzkConsentUrl('그냥 문자열')).toThrow();
+  });
+
+  it('오류 메시지에 URL을 담지 않는다 — 서명된 state가 들어 있다', () => {
+    expect(() => assertChzzkConsentUrl('javascript:alert(1)')).toThrow(
+      /^치지직 동의 URL이 https가 아니다$/,
+    );
   });
 });

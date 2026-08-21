@@ -9,7 +9,7 @@ import styles from './ChannelSettingsScreen.module.css';
 // 치지직 행 — 훅이 접어 준 view만 읽는다. 상태 판단은 여기서 하지 않는다.
 // 1k이 그린 것은 「정상」 하나뿐이고, 나머지 상태는 서버 계약(status 넷)에서 온다.
 export function ChzzkChannelRow({ state }: { state: ChzzkLinkViewState }) {
-  const { view, channelName, starting, startLink, retry, openConfirm } = state;
+  const { view, channelName, starting, retrying, startLink, retry, openConfirm } = state;
 
   return (
     <ChannelRow
@@ -18,7 +18,7 @@ export function ChzzkChannelRow({ state }: { state: ChzzkLinkViewState }) {
       name="치지직"
       badge={badgeOf(view)}
       meta={metaOf(view, channelName)}
-      action={actionOf(view, starting, startLink, retry, openConfirm)}
+      action={actionOf(view, starting, retrying, startLink, retry, openConfirm)}
     />
   );
 }
@@ -71,6 +71,7 @@ function metaOf(view: ChzzkLinkViewState['view'], channelName: string | undefine
 function actionOf(
   view: ChzzkLinkViewState['view'],
   starting: boolean,
+  retrying: boolean,
   startLink: () => void,
   retry: () => void,
   openConfirm: () => void,
@@ -86,7 +87,7 @@ function actionOf(
       return <Skeleton height="calc(28 * var(--pc-u))" width="calc(56 * var(--pc-u))" />;
     case 'unavailable':
       return (
-        <Button variant="soft" size="sm" onClick={retry}>
+        <Button variant="soft" size="sm" loading={retrying} onClick={retry}>
           다시 시도
         </Button>
       );

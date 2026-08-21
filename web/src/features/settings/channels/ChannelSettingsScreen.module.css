@@ -180,7 +180,9 @@
   margin-bottom: calc(10 * var(--pc-u));
 }
 
-.unlinkTitle {
+/* DS Dialog.Title의 .title(margin·font-size·font-weight)과 특이도가 같으면 번들 순서가
+   승자를 정한다 — .unlinkDialog와 같은 이유로 클래스를 겹쳐 올린다 */
+.unlinkTitle.unlinkTitle {
   font-size: calc(17 * var(--pc-u));
   font-weight: 800;
   letter-spacing: -0.02em;

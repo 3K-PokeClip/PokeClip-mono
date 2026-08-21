@@ -10,7 +10,7 @@ import {
 } from '@/api/chzzkLink';
 import { useOnboardingHydration, useOnboardingStore } from '@/stores/onboarding';
 import { useToast } from '@/ui';
-import { goToChzzkConsent, warnIfCallbackMismatch } from './chzzkOAuth';
+import { assertChzzkConsentUrl, goToChzzkConsent, warnIfCallbackMismatch } from './chzzkOAuth';
 
 // 치지직 연동 실상태 훅 (POK-205) — useChannelMockState의 교체 주석이 약속한 자리.
 // useStreamKeyState와 같은 규약이다: 상태 판단은 전부 여기서 하고 화면은 결과만 읽는다.
@@ -30,6 +30,8 @@ export interface ChzzkLinkViewState {
   channelName?: string;
   /** 동의 URL 발급 중 — 버튼 잠금. */
   starting: boolean;
+  /** 조회 실패 후 다시 시도가 도는 중 — 버튼에 진행 표시를 준다. */
+  retrying: boolean;
   /** 첫 연동·다시 연동 전부 이 한 경로다 — 서버가 준 authorizeUrl로 나간다. */
   startLink: () => void;
   retry: () => void;
@@ -55,7 +57,13 @@ export function useChzzkLinkState(): ChzzkLinkViewState {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const start = useMutation({
-    mutationFn: startChzzkLink,
+    // 검증을 mutationFn 안에서 한다 — onSuccess에서 던지면 잡히지 않고 unhandled로 샌다.
+    // 여기서 던지면 아래 onError의 「연동을 시작하지 못했어요」 경로로 그대로 흐른다.
+    mutationFn: async () => {
+      const authorizeUrl = await startChzzkLink();
+      assertChzzkConsentUrl(authorizeUrl);
+      return authorizeUrl;
+    },
     onSuccess: (authorizeUrl) => {
       // 등록 주소가 어긋나 있으면 동의를 다 마친 뒤에야 증상이 나온다 — 개발 빌드에서 미리 알린다.
       warnIfCallbackMismatch(authorizeUrl);
@@ -127,6 +135,9 @@ export function useChzzkLinkState(): ChzzkLinkViewState {
     view,
     channelName: named ? status.data?.channelName : undefined,
     starting: start.isPending,
+    // isPending이 아닌 isFetching이다 — 최초 조회는 view가 'loading'이라 겹치지 않고,
+    // 여기서 잡아야 할 것은 실패 후 재조회다.
+    retrying: status.isFetching,
     startLink,
     retry,
     confirmOpen,

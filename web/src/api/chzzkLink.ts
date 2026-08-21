@@ -119,13 +119,16 @@ export interface ChzzkLinkMessage {
   description: string;
 }
 
-// INVALID_STATE는 "만료", INVALID_CODE는 "무효"로 가른다. 사용자가 할 일은 둘 다
-// "동의부터 다시"로 같지만, 전자는 원인이 시간(state TTL 10분)이라 "천천히 하지 마세요"라는
-// 정보를 준다. 409만 재시도가 답이 아니라 구체 지시를 넣는다.
+// INVALID_STATE와 INVALID_CODE는 사용자가 할 일이 둘 다 "동의부터 다시"로 같지만 원인이
+// 달라 문구를 가른다. 다만 INVALID_STATE를 만료 하나로 단정하지 않는다 — 서버의
+// ChzzkLinkStateCodec.matches(state, userId, now)는 TTL 초과뿐 아니라 **다른 사용자의
+// state·위조**도 같은 코드로 떨어뜨린다(동의 도중 다른 탭에서 계정을 바꾸면 바로 이것이다).
+// 409만 재시도가 답이 아니라 구체 지시를 넣는다.
 const FAILURE_MESSAGE: Record<ChzzkLinkFailure, ChzzkLinkMessage> = {
   INVALID_STATE: {
-    title: '연동 요청이 만료됐어요',
-    description: '동의 화면에서 시간이 너무 지났어요. 연동을 처음부터 다시 시작해 주세요.',
+    title: '연동 요청을 확인할 수 없어요',
+    description:
+      '동의 화면에서 시간이 너무 지났거나, 그 사이 로그인 계정이 바뀌었어요. 연동을 처음부터 다시 시작해 주세요.',
   },
   INVALID_CODE: {
     title: '연동을 마치지 못했어요',

@@ -1,17 +1,12 @@
 'use client';
 
-import { useEffect, useRef, useState, type AnchorHTMLAttributes } from 'react';
-import Link from 'next/link';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { LinkButton, Spinner, useToast } from '@/ui';
 import { ApiError } from '@/api/client';
-import {
-  chzzkLinkFailureMessage,
-  chzzkLinkQueryOptions,
-  completeChzzkLink,
-  type ChzzkLinkState,
-} from '@/api/chzzkLink';
+import { chzzkLinkFailureMessage, chzzkLinkQueryOptions, completeChzzkLink } from '@/api/chzzkLink';
+import { ReplaceLink } from '@/components/ReplaceLink';
 import { restoreReturnPath } from '@/components/app-shell/AuthGuard';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 import { CHANNEL_SETTINGS_PATH } from './chzzkOAuth';
@@ -23,14 +18,6 @@ import styles from './ChzzkCallbackScreen.module.css';
 // 실패 화면을 쓰는 건 돌아갈 셸이 없어서인데, 여기는 사용자가 방금 떠나온 화면이 확정돼
 // 있다. 오류 토스트는 자동으로 닫히지 않으므로(ADR-044) 결과를 놓칠 위험도 없다.
 // 예외는 세션이 죽은 경우뿐 — 그때만 화면으로 막는다.
-
-/**
- * 히스토리를 남기지 않는 링크. 이 콜백 URL은 code를 한 번 쓰고 버린 주소라, 뒤로 가기로
- * 돌아오면 소모된 code로 재교환을 시도하게 된다. (구글 콜백과 같은 이유·같은 래퍼)
- */
-function ReplaceLink(props: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) {
-  return <Link {...props} replace />;
-}
 
 export function ChzzkCallbackScreen() {
   useAuthHydration();
@@ -77,14 +64,13 @@ export function ChzzkCallbackScreen() {
 
     completeChzzkLink({ code, state })
       .then((linked) => {
-        // 재조회가 끝나기 전에도 목적지 화면이 「연동됨」으로 서게 캐시를 먼저 심는다.
-        queryClient.setQueryData<ChzzkLinkState>(chzzkLinkQueryOptions.queryKey, {
-          linked: true,
-          status: 'ACTIVE',
-          channelName: linked.channelName,
-          linkedAt: linked.linkedAt,
-        });
-        void queryClient.invalidateQueries({ queryKey: chzzkLinkQueryOptions.queryKey });
+        // 낙관 갱신으로 채널을 심지 않는다. 다른 탭이 계정을 바꾸면 크로스탭 핸들러가
+        // 쿼리 캐시를 비우는데(Providers), 그 뒤 늦게 도착한 이 응답이 **이전 계정의**
+        // 채널명을 되살린다 — 이어지는 재조회가 실패하면 unavailable 판정이
+        // `data === undefined`라 그 값이 화면에 그대로 남는다. 대신 캐시를 비워
+        // 목적지가 처음부터 다시 읽게 한다(스켈레톤 한 번). 남은 옛 값을 그냥 두면
+        // 성공 토스트 직후에 「미연동」이 잠깐 스치므로 invalidate가 아니라 remove다.
+        queryClient.removeQueries({ queryKey: chzzkLinkQueryOptions.queryKey });
         // 온보딩 플래그는 여기서 건드리지 않는다 — 필자는 useChzzkLinkState의 미러링
         // 이펙트 하나뿐이고, 목적지 화면이 마운트되며 서버 진실로 반영한다.
         toast({

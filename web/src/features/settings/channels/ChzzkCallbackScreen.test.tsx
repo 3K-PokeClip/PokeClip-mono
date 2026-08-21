@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChzzkCallbackScreen } from '@/features/settings/channels/ChzzkCallbackScreen';
-import { chzzkLinkQueryOptions, type ChzzkLinkState } from '@/api/chzzkLink';
+import { chzzkLinkQueryOptions } from '@/api/chzzkLink';
 import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { createTestQueryClient } from '@/test/testProviders';
@@ -71,10 +71,10 @@ describe('ChzzkCallbackScreen', () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/settings/channels'));
     expect(await screen.findByText('치지직 채널을 연동했어요')).toBeInTheDocument();
 
-    const cached = queryClient.getQueryData<ChzzkLinkState>(chzzkLinkQueryOptions.queryKey);
-    expect(cached).toMatchObject({ linked: true, status: 'ACTIVE', channelName: '게임하는너구리' });
-    // channelId는 API 경계에서 버린다 — 캐시에 남지 않아야 한다
-    expect(JSON.stringify(cached)).not.toContain('chan-secret-1');
+    // 캐시에 계정 데이터를 심지 않는다 — 다른 탭이 계정을 바꾼 뒤 늦게 도착한 응답이
+    // 이전 계정 채널을 되살리지 않게, 비워서 목적지가 처음부터 읽게 한다
+    expect(queryClient.getQueryData(chzzkLinkQueryOptions.queryKey)).toBeUndefined();
+    expect(document.body.innerHTML).not.toContain('chan-secret-1');
   });
 
   it('StrictMode 이중 마운트에도 교환은 정확히 한 번이다 — code는 1회용이다', async () => {
@@ -96,7 +96,7 @@ describe('ChzzkCallbackScreen', () => {
   });
 
   it.each([
-    [400, 'INVALID_STATE', '연동 요청이 만료됐어요'],
+    [400, 'INVALID_STATE', '연동 요청을 확인할 수 없어요'],
     [400, 'INVALID_CODE', '연동을 마치지 못했어요'],
     [409, 'CHANNEL_ALREADY_LINKED', '이미 다른 계정에 연동된 채널이에요'],
     [502, 'CHZZK_UNAVAILABLE', '치지직과 연결하지 못했어요'],

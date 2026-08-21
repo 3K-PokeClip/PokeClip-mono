@@ -15,6 +15,22 @@ export const CHZZK_CALLBACK_PATH = '/oauth/chzzk/callback';
 export const CHANNEL_SETTINGS_PATH = '/settings/channels';
 
 /**
+ * 동의 URL이 우리가 보낼 수 있는 주소인지 확인한다. 값 자체는 우리 백엔드가 주지만
+ * (`ChzzkLinkService.startUrl`), 설정이 바뀌거나 프록시 응답이 변조되면 `javascript:`
+ * 같은 스킴이 그대로 `location.assign`에 실려 **우리 오리진에서 실행**된다. 입구에서 막는다.
+ * 메시지에 URL을 담지 않는다 — 그 안에 서명된 state가 들어 있다.
+ */
+export function assertChzzkConsentUrl(authorizeUrl: string): void {
+  let url: URL;
+  try {
+    url = new URL(authorizeUrl);
+  } catch {
+    throw new Error('치지직 동의 URL 형식이 올바르지 않다');
+  }
+  if (url.protocol !== 'https:') throw new Error('치지직 동의 URL이 https가 아니다');
+}
+
+/**
  * 동의 화면으로 이동한다. 치지직 오리진으로 나가는 하드 내비게이션이라 router를 쓰지 않는다.
  * jsdom이 location.assign을 흉내 내지 못하므로 모듈에 가둬 테스트에서 통째로 모킹한다
  * (googleOAuth와 같은 이유·같은 모양).

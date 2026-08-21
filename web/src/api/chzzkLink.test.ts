@@ -35,11 +35,14 @@ describe('chzzkLinkFailureMessage', () => {
     expect(description).toContain('다른 PokeClip 계정');
   });
 
-  it('400 둘을 서로 다른 문구로 가른다 — 만료와 무효는 원인이 다르다', () => {
-    const expired = chzzkLinkFailureMessage(new ApiError(400, 'INVALID_STATE'));
-    const invalid = chzzkLinkFailureMessage(new ApiError(400, 'INVALID_CODE'));
-    expect(expired.title).not.toBe(invalid.title);
-    expect(expired.title).toContain('만료');
+  it('400 둘을 서로 다른 문구로 가른다 — state 불일치와 code 무효는 원인이 다르다', () => {
+    const badState = chzzkLinkFailureMessage(new ApiError(400, 'INVALID_STATE'));
+    const badCode = chzzkLinkFailureMessage(new ApiError(400, 'INVALID_CODE'));
+    expect(badState.title).not.toBe(badCode.title);
+    // INVALID_STATE는 TTL 초과만이 아니라 계정 불일치·위조도 같은 코드로 온다 —
+    // 만료 하나로 단정하면 다른 탭에서 계정을 바꾼 사용자에게 틀린 원인을 말하게 된다
+    expect(badState.description).toContain('시간이 너무 지났거나');
+    expect(badState.description).toContain('계정이 바뀌었어요');
   });
 
   it('모르는 실패는 폴백 문구로 — reason 원문을 사용자에게 노출하지 않는다', () => {
