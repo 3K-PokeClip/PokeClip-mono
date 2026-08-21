@@ -10,7 +10,10 @@ import {
   type PointerEvent,
   type ReactNode,
 } from 'react';
-import { hasOpenDismissableLayer } from '../../primitives/DismissableLayer';
+import {
+  hasOpenDismissableLayer,
+  OUTSIDE_POINTER_EXEMPT_ATTR,
+} from '../../primitives/DismissableLayer';
 import { Portal } from '../../primitives/Portal';
 import { Button } from '../Button';
 import { Progress } from '../Progress';
@@ -115,6 +118,11 @@ function resolveDuration(item: Pick<ToastBase, 'tone' | 'duration'>): number {
   return item.duration ?? TONE_DURATION[item.tone];
 }
 
+/** 연속으로 온 토스트를 합칠지 가르는 키. 지정이 없으면 톤이 그 역할을 한다. */
+function mergeKey(item: Pick<ToastBase, 'tone' | 'dedupeKey'>): string {
+  return item.dedupeKey ?? item.tone;
+}
+
 /** `undo`를 액션 자리 하나로 정규화한다 — 둘은 같은 자리를 쓰고 최대 1개다. */
 function normalize(options: ToastOptions): Omit<ToastItem, 'id' | 'version'> {
   const { undo, action, ...base } = options as ToastBase & {
@@ -124,7 +132,6 @@ function normalize(options: ToastOptions): Omit<ToastItem, 'id' | 'version'> {
   };
   return {
     ...base,
-    dedupeKey: base.dedupeKey ?? base.tone,
     action: undo ? { label: '되돌리기', onClick: undo } : action,
   };
 }
@@ -334,7 +341,9 @@ export function ToastProvider({ children }: ToastProviderProps) {
       const last = list[list.length - 1];
 
       let id: string;
-      if (last && last.dedupeKey === next.dedupeKey) {
+      // 키는 저장하지 않고 비교할 때 파생한다 — 파생값을 담아 두면 update()로 톤이
+      // 바뀌어도 키가 옛 톤에 묶여, 원래 톤의 다음 토스트가 그 자리를 덮어쓴다.
+      if (last && mergeKey(last) === mergeKey(next)) {
         // 같은 종류가 연속으로 발생하면 새로 쌓지 않고 최신 토스트를 갱신한다.
         id = last.id;
         list[list.length - 1] = { ...next, id, version: last.version + 1 };
@@ -438,6 +447,9 @@ export function ToastProvider({ children }: ToastProviderProps) {
       <Portal>
         <div
           className={styles.viewport}
+          // 토스트는 모달·드로어 위에 뜨는 표면이다. 표식이 없으면 그 레이어들이
+          // 토스트 클릭을 "바깥 클릭"으로 읽고 닫혀 버린다.
+          {...{ [OUTSIDE_POINTER_EXEMPT_ATTR]: '' }}
           onPointerOver={(e) => {
             hoveredId.current = cardIdOf(e);
             syncPaused();

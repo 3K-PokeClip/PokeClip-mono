@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { DismissableLayer } from '../../primitives/DismissableLayer';
 import { ToastProvider, useToast } from './Toast';
@@ -311,6 +312,55 @@ describe('Toast', () => {
 
     expect(cards()).toHaveLength(3);
     expect(screen.getByText('이전 알림 5개 더')).toBeInTheDocument();
+  });
+
+  // 3차 리뷰 #101 — 토스트는 모달·드로어 위에 뜨는 표면이다. 그 레이어들이
+  // 토스트 클릭을 "바깥 클릭"으로 읽고 닫히면 사용자의 입력이 날아간다.
+  it('열린 모달 위에서 토스트를 눌러도 그 모달이 닫히지 않는다', async () => {
+    // 오류 토스트는 자동으로 안 닫히니 가짜 타이머가 필요 없다 — userEvent는 실제
+    // 타이머 위에서 쓴다.
+    vi.useRealTimers();
+    const user = userEvent.setup();
+    const onDismiss = vi.fn();
+    const onAction = vi.fn();
+    setup(
+      <DismissableLayer onDismiss={onDismiss}>
+        <div>드로어 내용</div>
+      </DismissableLayer>,
+    );
+    act(() => {
+      api.toast({
+        tone: 'error',
+        title: '업로드에 실패했습니다',
+        action: { label: '재인증', onClick: onAction },
+      });
+    });
+
+    await user.click(screen.getByRole('button', { name: '재인증' }));
+    expect(onAction).toHaveBeenCalledTimes(1);
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: '닫기' }));
+    expect(screen.queryByText('업로드에 실패했습니다')).not.toBeInTheDocument();
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  // 3차 리뷰 #101 — 합치는 키를 저장해 두면 톤이 바뀌어도 옛 톤에 묶인다.
+  it('update로 톤을 바꾸면 원래 톤의 다음 토스트가 따로 쌓인다', () => {
+    setup();
+    let id = '';
+    act(() => {
+      id = api.toast({ tone: 'progress', title: '업로드 중' });
+    });
+    act(() => api.update(id, { tone: 'success', title: '업로드를 마쳤습니다' }));
+
+    act(() => {
+      api.toast({ tone: 'progress', title: '다음 클립 업로드 중' });
+    });
+
+    expect(cards()).toHaveLength(2);
+    expect(screen.getByText('업로드를 마쳤습니다')).toBeInTheDocument();
+    expect(screen.getByText('다음 클립 업로드 중')).toBeInTheDocument();
   });
 
   it('접근성 위반이 없다', async () => {
