@@ -77,9 +77,11 @@
   background: #000;
 }
 
+/* 24 뷰박스 안에서 글자가 차지하는 폭이 약 57%뿐이라(x 4.9~18.6), 뷰박스를 24로 그리면
+   SOOP(30×17)·유튜브보다 눈에 띄게 작아 보인다. 실제 마크가 20px쯤 되게 34로 키운다 */
 .chzzkIcon svg {
-  width: calc(24 * var(--pc-u));
-  height: calc(24 * var(--pc-u));
+  width: calc(34 * var(--pc-u));
+  height: calc(34 * var(--pc-u));
 }
 
 /* SOOP·유튜브 마크는 흰 타일 위 브랜드 컬러 (1k 그대로) */

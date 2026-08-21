@@ -45,7 +45,7 @@ export function YoutubeChannelSection() {
               준비 중
             </Badge>
           }
-          meta="클립 업로드 연동은 준비 중이에요. 준비되면 여기에서 유튜브 계정 하나를 연결할 수 있어요"
+          meta="클립 업로드 연동은 준비 중이에요. 준비되면 여기에서 유튜브 계정을 연결할 수 있어요"
           action={null}
         />
         <div className={styles.note}>
