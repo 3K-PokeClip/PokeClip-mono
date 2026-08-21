@@ -8,7 +8,7 @@ import {
   unlinkChzzk,
   type ChzzkLinkState,
 } from '@/api/chzzkLink';
-import { useOnboardingStore } from '@/stores/onboarding';
+import { useOnboardingHydration, useOnboardingStore } from '@/stores/onboarding';
 import { useToast } from '@/ui';
 import { goToChzzkConsent, warnIfCallbackMismatch } from './chzzkOAuth';
 
@@ -28,8 +28,6 @@ export interface ChzzkLinkViewState {
   view: ChzzkView;
   /** `none`·`loading`·`unavailable`에서는 없다 — 미연동 화면에 채널명이 남지 않게. */
   channelName?: string;
-  /** 이미 ko-KR로 포맷된 표시용 날짜. 클라에서 데이터를 받은 뒤에만 변환한다(SSR 안전). */
-  linkedAt?: string;
   /** 동의 URL 발급 중 — 버튼 잠금. */
   starting: boolean;
   /** 첫 연동·다시 연동 전부 이 한 경로다 — 서버가 준 authorizeUrl로 나간다. */
@@ -45,6 +43,11 @@ export interface ChzzkLinkViewState {
 }
 
 export function useChzzkLinkState(): ChzzkLinkViewState {
+  // 아래 미러링이 저장된 값과 비교하므로 스토어가 먼저 서 있어야 한다. 이 훅을 부르지
+  // 않으면 온보딩 스토어를 세우는 곳이 /home의 OnboardingController뿐이라, 이 화면으로
+  // 직접 들어오면 정적 기본값(false)과 비교하게 되고 stale 플래그가 그대로 살아남는다.
+  // 선언 순서상 이 훅의 이펙트가 아래 미러링 이펙트보다 먼저 돈다.
+  useOnboardingHydration();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const setChannelLinked = useOnboardingStore((s) => s.setChannelLinked);
@@ -123,7 +126,6 @@ export function useChzzkLinkState(): ChzzkLinkViewState {
   return {
     view,
     channelName: named ? status.data?.channelName : undefined,
-    linkedAt: named ? formatLinkedAt(status.data?.linkedAt) : undefined,
     starting: start.isPending,
     startLink,
     retry,
@@ -148,10 +150,4 @@ function toView(isPending: boolean, isError: boolean, data: ChzzkLinkState | und
   if (data?.status === 'EXPIRED') return 'expired';
   if (data?.status === 'BROKEN') return 'broken';
   return 'none';
-}
-
-function formatLinkedAt(iso: string | undefined): string | undefined {
-  if (iso === undefined) return undefined;
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? undefined : date.toLocaleDateString('ko-KR');
 }

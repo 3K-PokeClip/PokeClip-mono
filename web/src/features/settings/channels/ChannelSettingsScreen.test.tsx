@@ -20,12 +20,18 @@ vi.mock('@/features/settings/channels/chzzkOAuth', async (importOriginal) => ({
 
 const LINK_URL = '/api/chzzk-link';
 const START_URL = '/api/chzzk-link/start';
+// warnIfCallbackMismatch는 모킹하지 않고 원본을 태운다 — 등록 주소가 맞는 동의 URL이면
+// 조용해야 하고, 그 성질 자체가 회귀 대상이다. redirectUri를 빼면 케이스마다 경고가 찍혀
+// 진짜 회귀 경고와 구분되지 않는다. (jsdom 기본 오리진이 localhost:3000이다)
+const AUTHORIZE_URL = `https://chzzk.naver.com/account-interlock?clientId=cid&redirectUri=${encodeURIComponent(
+  'http://localhost:3000/oauth/chzzk/callback',
+)}&state=signed`;
 
 /** GET /api/chzzk-link 응답만 갈아끼우는 스텁 — 나머지는 케이스에서 덧붙인다. */
 function stubLinkStatus(body: unknown, status = 200) {
   return stubFetch((url, init) => {
     if (url === START_URL && init?.method === 'POST') {
-      return jsonResponse(200, { authorizeUrl: 'https://chzzk.naver.com/account-interlock?x=1' });
+      return jsonResponse(200, { authorizeUrl: AUTHORIZE_URL });
     }
     return jsonResponse(status, body);
   });
@@ -136,11 +142,7 @@ describe('ChannelSettingsScreen — 연동 시작', () => {
 
     await user.click(await chzzk().findByRole('button', { name: '연동' }));
 
-    await waitFor(() =>
-      expect(goToChzzkConsent).toHaveBeenCalledWith(
-        'https://chzzk.naver.com/account-interlock?x=1',
-      ),
-    );
+    await waitFor(() => expect(goToChzzkConsent).toHaveBeenCalledWith(AUTHORIZE_URL));
     expect(
       spy.mock.calls.filter(([url, init]) => url === START_URL && init?.method === 'POST'),
     ).toHaveLength(1);
@@ -168,6 +170,33 @@ describe('ChannelSettingsScreen — 온보딩·다른 플랫폼', () => {
 
     await screen.findByText('정상');
     await waitFor(() => expect(useOnboardingStore.getState().channelLinked).toBe(true));
+  });
+
+  it('스토어가 서기 전 직접 진입해도 저장된 stale 플래그를 서버 진실로 덮는다', async () => {
+    // /settings/channels로 바로 들어오는 경로 — 온보딩 스토어를 세우는 OnboardingController는
+    // /home에만 붙어서 여기선 안 돈다. 훅이 스스로 hydrate하지 않으면 정적 기본값(false)과
+    // 비교하게 되고, 저장된 true가 그대로 남아 나중에 시작 가이드에서 되살아난다.
+    window.localStorage.setItem(
+      'pc-onboarding',
+      JSON.stringify({
+        v: 1,
+        welcomeSeen: true,
+        tourDone: true,
+        channelLinked: true,
+        pluginLinked: false,
+      }),
+    );
+    useOnboardingStore.setState({ channelLinked: false, hydrated: false });
+    stubLinkStatus(linked('BROKEN', { linked: false }));
+    renderWithProviders(<ChannelSettingsScreen />);
+
+    await screen.findByText('연동 끊김');
+    // 스토어 값만 보면 기본값 false와 구분되지 않는다 — 저장소에 남은 값으로 판정한다
+    await waitFor(() =>
+      expect(JSON.parse(window.localStorage.getItem('pc-onboarding') ?? '{}').channelLinked).toBe(
+        false,
+      ),
+    );
   });
 
   it('BROKEN이면 플래그가 서지 않는다 — 감지가 실제로 안 되는 상태다', async () => {

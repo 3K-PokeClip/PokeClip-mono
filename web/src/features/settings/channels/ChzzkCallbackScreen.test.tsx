@@ -128,6 +128,32 @@ describe('ChzzkCallbackScreen', () => {
     expect(exchangeCalls(spy)).toHaveLength(0);
   });
 
+  it('회전이 일시적으로 실패하면 로그아웃으로 읽지 않는다 — 로그인 화면은 막다른 길이다', async () => {
+    // 하드 내비게이션으로 도착해 access 토큰이 비어 있고, 마침 auth 서버가 잠깐 5xx인 경우.
+    // doRefresh는 토큰을 보존한 채 실패하지만 apiFetch는 그래도 401을 던진다. 그걸
+    // 로그아웃으로 읽으면 LoginScreen 역가드가 살아있는 refreshToken을 보고 /home으로
+    // 튕겨, 로그인하라는 안내를 받고도 로그인 화면에 갈 수 없게 된다.
+    useAuthStore.setState({ accessToken: null, refreshToken: 'refresh-1', hydrated: true });
+    stubFetch((url) => (url === '/api/auth/refresh' ? jsonResponse(500, {}) : jsonResponse(401)));
+    renderScreen(<ChzzkCallbackScreen />);
+
+    expect(await screen.findByText('연동에 실패했어요')).toBeInTheDocument();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/settings/channels'));
+    expect(screen.queryByRole('link', { name: '로그인 화면으로' })).not.toBeInTheDocument();
+    // 세션은 그대로다 — 사용자는 채널 화면에서 다시 연동을 누르면 된다
+    expect(useAuthStore.getState().refreshToken).toBe('refresh-1');
+  });
+
+  it('회전이 거부돼 세션이 실제로 접히면 로그인 화면으로 보낸다', async () => {
+    useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
+    stubFetch(() => jsonResponse(401));
+    renderScreen(<ChzzkCallbackScreen />);
+
+    expect(await screen.findByRole('link', { name: '로그인 화면으로' })).toBeInTheDocument();
+    // apiFetch가 clearTokens까지 돈 상태 — 이때만 로그인 화면이 막다른 길이 아니다
+    expect(useAuthStore.getState().refreshToken).toBeNull();
+  });
+
   it('세션이 없으면 교환하지 않고 로그인 화면으로 안내한다 — 되돌아올 자리를 남긴다', async () => {
     useAuthStore.setState({ accessToken: null, refreshToken: null, hydrated: true });
     const spy = stubFetch(() => jsonResponse(500));
