@@ -51,6 +51,7 @@ export type ToastOptions =
 export interface ToastPatch {
   tone?: ToastTone;
   title?: ReactNode;
+  /** 보조설명을 바꾼다. `null`이면 뗀다 — 끝난 일에 진행 중 문구가 남지 않게. */
   description?: ReactNode;
   /** 진행률을 바꾼다. `null`이면 진행 바를 뗀다. */
   progress?: number | null;
@@ -279,7 +280,13 @@ function ToastCard({
       </div>
       {item.tone === 'progress' && item.progress != null ? (
         <div className={styles.progress}>
-          <Progress value={item.progress} size="sm" label="진행률" />
+          {/* 진행 토스트는 동시에 여럿 뜰 수 있다 — 라벨이 다 같으면 스크린리더로
+              어느 작업의 진행인지 구분할 수 없다. */}
+          <Progress
+            value={item.progress}
+            size="sm"
+            label={typeof item.title === 'string' ? item.title : '진행률'}
+          />
         </div>
       ) : null}
       {duration > 0 ? (
@@ -569,6 +576,9 @@ export function ToastProvider({ children }: ToastProviderProps) {
           onBlur={(e) => {
             if (!leaving(e)) return;
             focusedId.current = null;
+            // 되돌아갈 자리도 같이 버린다. 남겨 두면 한참 뒤 마지막 토스트를 마우스로
+            // 닫을 때 이미 화면 밖으로 스크롤된 옛 자리로 포커스가 뛴다.
+            focusOrigin.current = null;
             syncPaused();
           }}
         >

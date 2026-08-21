@@ -172,6 +172,7 @@
   width: 100%;
   opacity: 0.5;
   background: var(--pc-color-accent);
+  transform-origin: 0 50%;
   animation-name: pc-toast-bar;
   animation-timing-function: linear;
   animation-fill-mode: forwards;
@@ -189,12 +190,14 @@
     transform: translateY(8px) scale(calc(1 - var(--pc-toast-depth, 0) * 0.025));
   }
 }
+/* width가 아니라 transform을 움직인다 — width는 프레임마다 레이아웃을 다시 잡아,
+   토스트 셋이 동시에 카운트다운하면 그 몇 초 내내 메인 스레드를 붙든다. */
 @keyframes pc-toast-bar {
   from {
-    width: 100%;
+    transform: scaleX(1);
   }
   to {
-    width: 0%;
+    transform: scaleX(0);
   }
 }
 

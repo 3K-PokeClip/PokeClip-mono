@@ -666,6 +666,39 @@ describe('Toast', () => {
     expect(screen.getByText('이전 알림 7개 더')).toBeInTheDocument();
   });
 
+  // 8차 리뷰 #101 — 동시에 뜬 진행 토스트를 스크린리더로 구분할 수 있어야 한다.
+  it('진행 바 라벨이 토스트마다 제목을 따라간다', () => {
+    setup();
+    act(() => {
+      api.toast({ tone: 'progress', title: '클립 A 업로드 중', progress: 10 });
+      api.toast({ tone: 'progress', title: '클립 B 업로드 중', progress: 20 });
+    });
+
+    const labels = screen.getAllByRole('progressbar').map((el) => el.getAttribute('aria-label'));
+    expect(labels).toEqual(['클립 A 업로드 중', '클립 B 업로드 중']);
+  });
+
+  // 8차 리뷰 #101 — 되돌아갈 자리를 안 비우면 한참 뒤 마지막 토스트를 닫을 때
+  // 이미 화면 밖으로 스크롤된 옛 자리로 포커스가 뛴다.
+  it('포커스가 스택을 벗어나면 되돌아갈 자리도 버린다', () => {
+    const { getByText } = setup(<button type="button">바깥 버튼</button>);
+    const outside = getByText('바깥 버튼');
+
+    act(() => {
+      api.toast({ tone: 'error', title: '토스트', dedupeKey: 'a' });
+    });
+    // 바깥 → 토스트로 들어갔다가 다시 바깥으로 나온다 (origin이 기록됐다가 버려진다)
+    act(() => outside.focus());
+    const close = screen.getByRole('button', { name: '닫기' });
+    act(() => close.focus());
+    act(() => close.blur());
+
+    // 그 뒤 마우스로 닫는 경로 — 포커스를 옛 자리로 되돌리면 안 된다
+    act(() => close.focus());
+    act(() => close.click());
+    expect(document.activeElement).not.toBe(outside);
+  });
+
   it('접근성 위반이 없다', async () => {
     vi.useRealTimers();
     const { container } = setup();
