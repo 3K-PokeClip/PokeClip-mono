@@ -447,7 +447,7 @@ auth·clip·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 �
 `chzzk_channel_links`(V107) · `editor_invitations`·`editor_delegations`(V108).
 
 엔드포인트 열: 스트림키 다섯(**계약4 = `POST /internal/stream-keys/resolve`** — 1번 Media가 SRT 연결을
-받기 전에 한 번 부른다) · 치지직 연동 다섯 · 편집자 위임 아홉(아래 절).
+받기 전에 한 번 부른다) · 치지직 연동 다섯 · 편집자 위임 아홉 · **clip용 내부 창구 둘**(POK-175, 아래 절).
 `contracts/api/`에 정본이 아직 없어 여기 적어 둔다.
 
 | | 부르는 쪽 | 인증 |
@@ -471,6 +471,8 @@ auth·clip·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 �
 | `GET /api/editor-delegations/as-streamer` | 웹 | 사용자 JWT |
 | `GET /api/editor-delegations/as-editor` | 웹 | 사용자 JWT |
 | `DELETE /api/editor-delegations/{id}` | 웹 | 사용자 JWT |
+| `POST /internal/editor-delegations/resolve` | **clip** | `X-Internal-Token` 헤더 |
+| `POST /internal/editor-delegations/accessible` | **clip** | `X-Internal-Token` 헤더 |
 
 `resolve`는 **키가 틀려도 HTTP 200에 `valid:false`**로 답한다. Media에게
 "키가 틀림"(연결 거절)과 "Auth 장애"(판단 불가)는 조치가 정반대라 둘 다 4xx면
@@ -574,12 +576,11 @@ WARN이 신호다. requestId는 잡이 값으로 옮긴다. 정리 스레드 자
 **돈 내는 쪽(스트리머)과 매일 쓰는 쪽(편집자)이 다르다.** 스트리머가 이메일로 편집자를
 초대하고, 편집자가 수락하면 **위임**이 생긴다.
 
-**auth가 하는 일은 「위임이 있다」는 사실을 만들고 보관하는 것까지다.** 그 위임으로 편집자가
-실제로 무엇을 할 수 있는지는 앞으로 각 서비스가 조회해서 정하게 **된다** —
-**그 조회용 internal API는 아직 없다**(지금 있는 것은 스트림키·치지직 연동 둘뿐이다).
-POK-57이 **일부러 안 만든 것**이다 — `clip`이 아직 껍데기라 소비자가 없고, `contracts/`는
-3인 공동이라 혼자 정하지 않는다. auth 안에도 위임을 보고 권한을 내주는 엔드포인트는 없다.
-위임 행은 초대 중복 검사 · **수락 시 생성** · 목록 · 해제에만 쓰인다.
+**auth가 하는 일은 「위임이 있다」는 사실을 만들고 보관하는 것, 그리고 물으면 답하는 것까지다.**
+그 위임으로 편집자가 실제로 무엇을 할 수 있는지는 각 서비스가 **아래 내부 창구 둘로 물어서** 정한다
+(POK-175, 2026-08-23). auth 안에 위임을 보고 권한을 내주는 사용자용 엔드포인트는 없다 —
+위임 행은 초대 중복 검사 · **수락 시 생성** · 목록 · 해제 · 내부 창구 응답에 쓰인다.
+`contracts/api/`는 3인 공동이라 정본은 여기 둔다.
 
 **수락 전에는 편집자의 위임 목록에 그 스트리머가 나오지 않고 그 데이터에 접근할 수 없다**
 (PRD 성공기준). 초대함에는 **누가 보냈는지(이름과 id)만** 보인다 — 그게 없으면 응답할 수 없다.
@@ -639,6 +640,69 @@ POK-57이 `users.email`에 유일 제약을 걸면서 생긴 경로다 — 구�
 주소를 나눠 가질 수 없다. 응답은 `{"reason":"EMAIL_ALREADY_REGISTERED"}`이고, **어느 주소인지는
 응답에도 로그에도 싣지 않는다.** 다른 인증 실패와 달리 이유를 알려 주는 것은, 사용자가 직접
 풀어야 하는 상태 충돌이라 안 알려주면 재시도만 반복하기 때문이다.
+
+#### clip용 내부 창구 둘 (POK-175)
+
+clip이 「이 사람이 이 스트리머의 방송을 봐도 되나」를 물을 때 쓴다. `/internal/**` 체인이라
+`X-Internal-Token` 헤더가 필수이고 사용자 JWT로는 못 들어온다(스트림키·치지직 `resolve`와 같은 문).
+
+**🔴 그 잠금은 이 문의 것이 아니라 내부 창구 셋이 나눠 쓰는 것이다.** 이 카드는 새 잠금을 만들지
+않고 이미 있는 것에 올라탔다 — `InternalSecurityConfig`(경로를 잡는 체인)와 `InternalTokenFilter`
+(열쇠를 대조하는 필터)를 고치면 **스트림키·치지직 창구가 같이 영향을 받는다.** 결함 주입으로 실측했다
+(2026-08-23): 체인에서 이 경로를 빼면 범위 밖 **11건**이 같이 깨지고(대부분 `200→401` — 멀쩡한 창구가
+막힌다), 열쇠 검사를 무력화하면 **5건**이 깨진다(전부 `401→200` — 잠긴 창구가 열린다).
+**그 두 파일을 고치는 사람은 세 창구의 테스트를 다 돌린다.** 한 창구만 돌리면 이 사실이 안 보인다.
+
+| 문 | 요청 | 응답 |
+|---|---|---|
+| `POST /internal/editor-delegations/resolve` — 한 쌍 판정 | `{"userId":7,"streamerUserId":3}` | `{"relation":"OWNER"\|"EDITOR"\|"NONE"}` |
+| `POST /internal/editor-delegations/accessible` — 볼 수 있는 스트리머 목록 | `{"userId":7}` | `{"streamers":[{"streamerUserId":7,"relation":"OWNER"},{"streamerUserId":3,"relation":"EDITOR"}]}` |
+
+- **회원 번호는 숫자다**(`users.id`). `streamerId`가 아니라 `streamerUserId`인 이유 — `streamerId`는
+  Media→clip 편지에서 **문자열**(`broadcasts.streamer_id VARCHAR`)로 쓰인다. 그 값을 그대로 넣으면 안 된다
+- **정수로 보내라. 검증이 생각보다 헐겁다** — Jackson이 조용히 바꿔 준다. 규칙은 하나다:
+  **`Long`으로 읽히면 200, 못 읽으면 400.** 통과하는 갈래는 넷뿐이다 — 정수 · 정수 문자열(`"7"`→7) ·
+  소수(`12.9`→**12**. 반올림이 아니라 **절삭**이다. `20.9999`도 20) · 지수 표기(`1.1e1`→11).
+  부호는 안 본다 — 음수 번호(`-11`)도 통과한다.
+  **그 밖은 전부 400이다** — `"abc"`·`true`·`null`·`[11]`·`{"v":11}`·빈 문자열·`Long` 상한 초과·
+  번호 누락·깨진 JSON.
+- **🔴 따옴표 하나로 갈린다.** `20.9`는 200(20으로 잘림)인데 **`"20.9"`는 400**이다.
+  즉 「문자열로 보내도 통한다」는 **정수 문자열에만** 참이고, 소수를 문자열로 감싸면 거부된다.
+  실측으로 전수 확인했다(2026-08-23, 두 문 모두 같다)
+- **그래서 틀린 번호가 400이 아니라 조용히 다른 사람 판정으로 갈 수 있다** — 통과하는 네 갈래
+  안에서는 아무 검사도 없다. 기존 `/internal/chzzk-link/resolve`도 같은 동작이라 일부러 맞춰 뒀다
+  (고치려면 세 창구를 같이 고쳐야 한다)
+- **🔴 모르는 필드는 조용히 버려진다.** `{"userId":11,"streamerUserId":11,"streamerId":"abc"}`는
+  400이 아니라 **200**이고 `streamerId`는 없던 값이 된다. **POK-127의 타입 불일치가 정확히 여기로 온다** —
+  clip이 옛 이름 `streamerId`를 **같이** 실어 보내면 오타를 알려 주지 않고 통과한다.
+  `streamerId`**만** 보내면 그때는 `streamerUserId` 누락으로 400이다
+- **판정 결과는 항상 200.** `NONE`은 「없는 회원 번호」·「해제된 편집자」·「초대만 받음」·「방향 반대」를
+  구분하지 않는다 — clip이 할 일(안 보여줌)이 같다. 요청 형식이 틀리면(번호 누락·숫자 아님) **400**
+- **`OWNER`는 번호 둘이 같을 때다.** 회원 표를 읽지 않는다
+- **목록에서 본인은 `relation == OWNER`로 찾는다.** 첫 줄에 두지만 순서에 의존하지 말 것
+- **목록 응답에 `NONE`은 나오지 않는다.** 목록에 없는 것이 곧 `NONE`이다
+- **다만 그 역은 참이 아니다.** `accessible`은 **없는 회원 번호에도 자기 자신을 `OWNER`로 돌려준다** —
+  `{"userId":999999}` → `{"streamers":[{"streamerUserId":999999,"relation":"OWNER"}]}`.
+  회원 표를 안 읽는다는 계약 그대로다. 이 목록을 그대로 「이 사람이 볼 방송 목록」으로 쓰면
+  **없는 번호가 한 줄 섞인다.**
+- **`resolve`도 없는 번호를 걸러 주지 않는다.** `{"userId":999999,"streamerUserId":999999}`는
+  번호가 같으므로 **`OWNER`**다 — 회원 표를 안 보기 때문이다. 없는 번호가 `NONE`이 되는 것은
+  **짝이 안 맞을 때뿐이다**(`{"userId":999999,"streamerUserId":7}` → `NONE`).
+  **「없는 회원 번호면 NONE」이 아니라 「모르는 사이면 NONE」이다** — 둘은 다르고,
+  「이 번호가 실재하나」를 이 창구에 묻지 마라. 그 판정은 여기 없다
+- **목록은 번호와 관계만.** 이름이 필요하면 따로 묻는다
+- **목록 상한 없음.** 길이는 편집자 본인이 못 늘린다(스트리머가 초대해야 한 줄이 는다)
+- 관찰: `NONE` 판정마다 카운터 `pokeclip.delegation.resolve.none` +1, INFO `auth.delegation.resolve_none userId= streamerUserId=`.
+  회원 표를 안 읽어 「없는 번호가 왔다」를 모르므로 **이 숫자가 튀면** Media가 보내는 스트리머 번호가
+  우리 회원 번호인지부터 본다(POK-127의 미확인 가정)
+- **🔴 그런데 지금 배포되는 설정으로는 그 카운터를 밖에서 못 읽는다.** 막는 것이 둘이다 —
+  ① `application.yml`의 `management.endpoints.web.exposure.include`가 `health`뿐이라 엔드포인트가
+  아예 없고 ② `SecurityConfig`가 `/actuator/health`만 열어 둬 익명은 **401**이다(노출을 켜도 401은 그대로).
+  읽으려면 **셋 다** 필요하다 — `MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,metrics`로 띄우고 ·
+  유효한 사용자 JWT를 달고 · **`NONE`이 한 번은 난 뒤에** 부른다(카운터는 첫 판정 때 등록돼서
+  그 전에는 노출·인증이 맞아도 **404**다. 설정이 틀린 것으로 오해하기 쉬운 자리다).
+  **이 카드는 설정을 바꾸지 않았다** — 운영 노출 정책은 auth 전체와 다른 서버에 걸린 별도 결정이다.
+  그때까지 같은 숫자를 보는 방법은 로그의 `auth.delegation.resolve_none` 줄을 세는 것이다(판정마다 한 줄)
 
 ### chat-collector — 치지직 채팅 수신 (POK-85) · 자동 재연결 (POK-86) · 적재 (POK-84) · S3 원본 아카이브 (POK-116) · **자동 시작·다중 스트리머 (POK-127)** · **수집 상태 창구 (POK-128)**
 

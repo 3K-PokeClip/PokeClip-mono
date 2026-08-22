@@ -1,5 +1,6 @@
 package com.pokeclip.auth.delegation;
 
+import com.pokeclip.auth.delegation.api.dto.AccessibleStreamersResponse;
 import com.pokeclip.auth.delegation.api.dto.DelegationResponse;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -38,6 +40,37 @@ public class DelegationService {
         return toResponses(
                 delegations.findByEditorIdAndRevokedAtIsNullOrderByGrantedAtDesc(editorId),
                 EditorDelegation::getStreamerId);
+    }
+
+    /**
+     * clip이 묻는 「이 사람과 이 스트리머는 무슨 사이인가」. 회원 표는 보지 않는다 —
+     * 번호가 같으면 OWNER, 살아있는 위임이 있으면 EDITOR, 나머지 전부 NONE.
+     *
+     * <p><b>인자 순서가 곧 방향이다.</b> 위임은 스트리머 → 편집자 한 방향이고 조회 인자가 둘 다
+     * Long이라 바꿔 넣어도 컴파일러가 못 잡는다. {@code DelegationResolveTest.방향이_뒤집히면_NONE}이
+     * 이 줄을 잰다.
+     */
+    @Transactional(readOnly = true)
+    public DelegationRelation relationOf(Long userId, Long streamerUserId) {
+        if (userId.equals(streamerUserId)) {
+            return DelegationRelation.OWNER;
+        }
+        if (delegations.existsByStreamerIdAndEditorIdAndRevokedAtIsNull(streamerUserId, userId)) {
+            return DelegationRelation.EDITOR;
+        }
+        return DelegationRelation.NONE;
+    }
+
+    /** 본인 한 줄 + 살아있는 위임의 스트리머들. 목록에 없는 것이 NONE이다. */
+    @Transactional(readOnly = true)
+    public List<AccessibleStreamersResponse.Entry> accessibleStreamers(Long userId) {
+        List<AccessibleStreamersResponse.Entry> out = new ArrayList<>();
+        out.add(new AccessibleStreamersResponse.Entry(userId, DelegationRelation.OWNER));
+        // 인자가 editorId다 — findByStreamerId를 쓰면 「내가 임명한 편집자들」이라는 정반대 목록이 된다.
+        for (EditorDelegation d : delegations.findByEditorIdAndRevokedAtIsNullOrderByGrantedAtDesc(userId)) {
+            out.add(new AccessibleStreamersResponse.Entry(d.getStreamerId(), DelegationRelation.EDITOR));
+        }
+        return List.copyOf(out);
     }
 
     /**
