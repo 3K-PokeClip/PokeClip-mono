@@ -92,7 +92,18 @@ class ChatCollectionStatusResolverTest extends IntegrationTestSupport {
         behavior.failSessionCreateFor("tokA", 503);   // 다시 붙으려 해도 발급이 막혀 재연결 중에 머문다
         behavior.dropConnectionFor("tokA");
 
-        awaitUntil(AWAIT, () -> "reconnecting".equals(resolver.resolve("s1").state()));
+        // 🔴 <b>상태만 기다리면 안 된다 — attempt는 그보다 늦게 오른다.</b> 절단 콜백이 락 안에서
+        // status.reconnecting(…, status.attempt())로 <b>0</b>을 먼저 찍고(StreamSession:718),
+        // attempt++는 재연결 스레드가 cleanUpOnce(구독 반납 REST + 소켓 닫기)를 <b>끝낸 뒤</b>다(:803).
+        // 그 사이가 「reconnecting인데 attempt=0」 창이고 <b>매번 지나간다</b> — 촘촘히 폴링하면 20/20으로
+        // 잡힌다(2026-08-23 프로브). 평소 초록인 것은 창이 awaitUntil의 20ms 간격보다 좁아서일 뿐이라,
+        // 부하가 걸린 모듈 전체 실행에서 폴링이 창 안에 떨어져 <b>아래 attempt 단언이 실제로 빨간불이 났다</b>
+        // (0 >= 1 실패). 그래서 <b>단언할 것을 그대로 기다린다.</b> 상품 쪽은 안 고친다 — 뒷정리 중에
+        // 「아직 0회 시도」라고 답하는 것은 거짓이 아니고, 배너는 state로 켜진다.
+        awaitUntil(AWAIT, () -> {
+            ChatCollectionStatus s = resolver.resolve("s1");
+            return "reconnecting".equals(s.state()) && s.attempt() != null && s.attempt() >= 1;
+        });
         ChatCollectionStatus a = resolver.resolve("s1");
         // 위 awaitUntil은 기다리기만 한다 — 시한을 넘겨도 조용히 빠져나오므로 상태를 여기서 한 번 더 못박는다.
         // 없으면 매핑이 틀렸을 때 10초 뒤 <b>since가 null</b>이라는 엉뚱한 이유로 빨간불이 된다(주입 T3-1 실측).
@@ -157,6 +168,54 @@ class ChatCollectionStatusResolverTest extends IntegrationTestSupport {
 
         assertThat(counting.resolve("x".repeat(129)).state()).isEqualTo("unknown");
         assertThat(lookups.get()).as("칸 폭(128)을 넘는 번호는 표에 있을 수 없다 — 묻지 않는다").isEqualTo(1);
+    }
+
+    // <b>ⓐ(재연결 중 포기)의 「메모가 남기 전 찰나」를 재는 유일한 검사다</b> — 앞 구현자가 넘긴 공백이었다.
+    // 그 자리는 fromLive의 case STOPPED이고, 위 「발급_401로 …」 검사는 <b>메모가 남은 뒤</b>를 보므로
+    // 이 갈래를 통째로 지워도(=default와 합쳐도) 초록이었다.
+    //
+    // 🔴 <b>레코더를 걸지 않는다.</b> onPermanentStop은 등록이 아니라 덮어쓰기라, latch 리스너와
+    // new StoppedStreamRecorder(...)를 둘 다 걸면 <b>레코더가 조용히 떨어져 나간다</b>(critic A2).
+    // 이 검사가 재는 것은 메모가 아니라 「메모를 남기기 전」이므로 애초에 레코더가 필요 없다 —
+    // 없는 편이 오히려 정확하다. 아래 store.find(...).isEmpty()가 그것을 못박는다.
+    //
+    // 문항 1: 다중화가 주제가 아니다 — 세션 하나로 재는 것이 맞다(찰나 하나를 붙드는 검사다).
+    // 문항 2: memoStarted.await()가 true라는 것이 「알림이 실제로 갔다」의 양성 대조다 —
+    //         그것 없이 stopped를 단언하면 아무 일도 안 일어난 경우와 구분이 안 된다.
+    // 문항 3: 리스너를 붙드는 스레드는 그 세션의 재연결 루프(가상 스레드)다. memoStarted가 풀린 시점에
+    //         그 스레드는 notifyPermanentStop 안에 있고, 단언은 그동안 다른 스레드에서 돈다.
+    // 문항 4: 「stopped + needsRelink + since==지금」은 <b>메모 경로로도 통과한다</b>(그 검사의 레코더
+    //         시계가 같은 「지금」이다) — store.find("s1")가 비어 있음을 같이 단언해 등록부를 읽었음을 못박는다.
+    // 문항 5: fromLive의 case STOPPED를 default로 합치면 since=null·needsRelink=false로 빨간불(확인함).
+    @Test
+    void 포기_메모가_남기_전_찰나에도_stopped이고_since는_지금이다() throws Exception {
+        java.util.concurrent.CountDownLatch memoStarted = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch memoRelease = new java.util.concurrent.CountDownLatch(1);
+        registry.onPermanentStop((streamId, reason) -> {
+            memoStarted.countDown();
+            try {
+                memoRelease.await(10, java.util.concurrent.TimeUnit.SECONDS);   // 메모를 쓰는 동안을 흉내낸다
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        registry.open(key("s1", 1L, "tokA"), "tokA");
+        awaitUntil(AWAIT, () -> behavior.isConnected("tokA"));
+        behavior.failSessionCreateFor("tokA", 401);   // 다시 붙으려는 발급이 거절 — ⓐ 포기
+        behavior.dropConnectionFor("tokA");
+        assertThat(memoStarted.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                .as("알림이 실제로 갔다 — 아래 단언들의 양성 대조").isTrue();
+        try {
+            ChatCollectionStatus status = resolver.resolve("s1");
+            assertThat(status.state()).isEqualTo("stopped");
+            assertThat(status.needsRelink()).as("SESSION_AUTH_REJECTED는 다시 연동해야 풀린다").isTrue();
+            assertThat(status.since()).as("메모가 아직 없으니 포기 시각은 「지금」이다 — 메모 경로와 갈리는 지점")
+                    .isEqualTo(status.observedAt()).isEqualTo(지금);
+            assertThat(status.attempt()).as("재연결 중이 아니다").isNull();
+            assertThat(store.find("s1")).as("메모 경로가 아니라 등록부를 읽었다").isEmpty();
+        } finally {
+            memoRelease.countDown();
+        }
     }
 
     private static SessionKey key(String streamId, long streamerId, String channelId) {
