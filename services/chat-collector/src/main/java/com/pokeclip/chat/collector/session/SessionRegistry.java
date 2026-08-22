@@ -214,6 +214,13 @@ public class SessionRegistry {
         this.archive = archive;
     }
 
+    /**
+     * <b>단일 리스너다. 두 번 부르면 앞엣것이 조용히 사라진다</b>(add가 아니라 set) — 이름이
+     * {@code on…}이라 add로 읽히기 쉬워 적어 둔다. 운영 등록처는 {@code LetterPathConfiguration}
+     * 하나뿐이라 지금 도달 경로가 없지만, <b>검사에서 {@code new StoppedStreamRecorder(...)} 뒤에
+     * 한 번 더 부르면 레코더가 떨어져 나가 메모가 안 남는다</b>(POK-128 critic A2 재현).
+     * 리스트로 바꾸지 않은 이유는 지금 둘째 소비자가 없어서다.
+     */
     public void onPermanentStop(BiConsumer<String, StopReason> listener) {
         this.permanentStopListener = listener;
     }

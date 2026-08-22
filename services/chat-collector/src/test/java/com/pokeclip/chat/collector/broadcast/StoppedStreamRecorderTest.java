@@ -63,8 +63,10 @@ class StoppedStreamRecorderTest extends IntegrationTestSupport {
     }
 
     // 길 ⓐ — 붙어 있다가 끊긴 뒤 재연결 발급이 401. stopOne을 탄다.
-    // 문항 4: 메모가 「첫 수립 401」 경로로 남아도 이 단언은 통과한다 — 소켓이 실제로 한 번
-    //         붙었는지(connectionCount>=1)를 같이 봐야 재연결 경로를 탔다는 뜻이 된다.
+    // 문항 4: 메모가 「첫 수립 401」 경로로 남아도 이 단언들은 통과한다 — 경로를 갈라야 한다.
+    //         <b>connectionCount>=1로는 못 가른다</b>: ⓑ의 구독 401 경로에서도 소켓은 한 번 붙는다
+    //         (critic A4 프로브 실측 conn=1). 발급 호출 수를 본다 — 첫 수립 1 + 재연결 시도 1 = 2라
+    //         재연결 루프를 실제로 탔을 때만 2에 닿는다(그 경로 실측 auth=2).
     // 문항 5: stopOne의 알림 한 줄을 지우면 메모가 영영 안 남아 빨간불.
     @Test
     void 재연결_발급이_401이면_포기_메모가_남는다() throws Exception {
@@ -72,13 +74,13 @@ class StoppedStreamRecorderTest extends IntegrationTestSupport {
         new StoppedStreamRecorder(registry, store, () -> 지금);
         registry.open(new SessionKey("s1", 1L, "chA", Instant.EPOCH), "tokA");
         awaitUntil(AWAIT, () -> behavior.isConnected("tokA"));
-        assertThat(behavior.connectionCount())
-                .as("소켓이 한 번은 붙어야 재연결 경로다 — 안 붙었으면 이 검사는 길 ⓑ를 재고 있다")
-                .isGreaterThanOrEqualTo(1);
         behavior.failSessionCreateFor("tokA", 401);
         behavior.dropConnectionFor("tokA");
 
         awaitUntil(AWAIT, () -> store.find("s1").isPresent());
+        assertThat(behavior.authCallCount())
+                .as("발급이 두 번 불려야 재연결 경로다 — 1이면 이 검사는 길 ⓑ를 재고 있다")
+                .isGreaterThanOrEqualTo(2);
         EndedStream memo = store.find("s1").orElseThrow();
         assertThat(memo.stopReason()).isEqualTo(StopReason.SESSION_AUTH_REJECTED.name());
         assertThat(memo.createdAt()).isEqualTo(지금);

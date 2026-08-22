@@ -27,6 +27,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * 스트리머 여럿을 동시에 수집하는가. <b>이 카드에서 검사 진위가 가장 위험한 자리다</b> —
@@ -932,6 +933,64 @@ class SessionRegistryTest extends IntegrationTestSupport {
         }
         awaitUntil(AWAIT, () -> registry.activeCount() == 0);
         assertThat(registry.open(key("s3", 1L, "chA"), "tokA3")).as("자리가 비면 새로 연다").isTrue();
+    }
+
+    // <b>리스너 예외 방어의 안쪽 겹을 재는 유일한 검사다</b>(critic A1). 방어가 두 겹인데 —
+    // 바깥 = StoppedStreamRecorder.record의 catch · 안쪽 = SessionRegistry.notifyPermanentStop의 catch —
+    // 안쪽만 지워도 <b>기존 검사 43개가 전부 초록이었다</b>(감사 실측 green 43 / red 0).
+    // 지우면 알림에서 튄 stopOne이 sessions.remove·closeEntry를 못 돌아 자리가 영구히 남고(active=1),
+    // 이 카드가 넣은 STOPPED 가드가 그 자리를 보고 갈아끼움을 거절하므로
+    // <b>그 스트리머는 새 방송을 영영 못 연다</b>(가드 전에는 갈아끼워졌다).
+    // 문항 1: 다중화가 주제가 아니다 — 두 길(ⓐ·ⓑ)을 재려고 세션을 둘 여는 것이지 세션 수가 요점이 아니다.
+    // 문항 2: activeCount()==0은 <b>애초에 안 열었어도</b> 참이다 — 알림이 두 길 다 실제로 갔는지를
+    //         calls로, 소켓이 섰다 내려갔는지를 connectionCount·closedSessionCount로 같이 본다.
+    // 문항 4: closedSessionCount()는 ⓐ를 <b>가르지 못한다</b> — dropConnectionFor가 서버 쪽 소켓을 닫아
+    //         그 자체로 1이 오른다(FakeChzzkBehavior.forget 확인). 「소켓이 섰다 내려갔다」의 양성 대조로만
+    //         쓰고, 안쪽 겹을 실제로 가르는 것은 ⓐ의 activeCount()==0과 ⓑ의 「open이 안 던진다」다.
+    // 문항 5: 등록부 notifyPermanentStop의 catch를 rethrow로 바꾸면 ⓐ는 자리가 안 비어,
+    //         ⓑ는 open()이 예외로 튀어 빨간불(확인함).
+    @Test
+    void 던지는_리스너를_걸어도_두_길_다_자리가_비고_open은_안_던진다() throws Exception {
+        givenRegistry();
+        List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
+        registry.onPermanentStop((streamId, reason) -> {
+            calls.add(streamId);
+            // 메모 저장이 던지는 상황이다. 바깥 겹(recorder)이 없는 리스너를 일부러 건다 —
+            // 있으면 안쪽 겹을 지워도 아무 일이 안 일어나 이 검사가 다시 아무것도 안 잰다.
+            throw new IllegalStateException("리스너가 던진다");
+        });
+
+        // ⓐ 붙어 있다가 끊긴 뒤 재연결 발급이 401 — 알림은 그 세션의 재연결 루프 위 stopOne에서 간다.
+        assertThat(registry.open(key("s1", 1L, "chA"), "tokA")).isTrue();
+        awaitUntil(AWAIT, () -> behavior.isConnected("tokA"));
+        behavior.failSessionCreateFor("tokA", 401);
+        behavior.dropConnectionFor("tokA");
+
+        awaitUntil(AWAIT, () -> calls.contains("s1"));
+        assertThat(calls).as("알림이 안 갔으면 아래 activeCount 단언은 공짜다").contains("s1");
+        awaitUntil(AWAIT, () -> registry.activeCount() == 0);
+        assertThat(registry.activeCount())
+                .as("리스너가 던져 stopOne이 튀면 자리가 남고 그 스트리머는 새 방송을 영영 못 연다")
+                .isZero();
+        assertThat(behavior.connectionCount()).as("ⓐ는 소켓이 한 번 섰다").isGreaterThanOrEqualTo(1);
+        assertThat(behavior.closedSessionCount()).as("그 소켓이 내려갔다").isGreaterThanOrEqualTo(1);
+
+        // ⓑ 첫 수립에서 발급이 401 — stopOne이 아니라 open()의 catch에서 간다. 소켓은 선 적이 없다.
+        int connectionsAfterA = behavior.connectionCount();
+        behavior.failSessionCreateFor("tokB", 401);
+        java.util.concurrent.atomic.AtomicBoolean openedB =
+                new java.util.concurrent.atomic.AtomicBoolean(true);
+        Throwable thrown = catchThrowable(() -> openedB.set(registry.open(key("s2", 2L, "chB"), "tokB")));
+
+        assertThat(thrown)
+                .as("이 길의 알림은 편지 폴링 스레드 위에서 동기로 돈다 — 튀면 그 회차가 통째로 중단되고 편지가 안 지워진다")
+                .isNull();
+        assertThat(openedB).as("수립에 실패했으니 false다").isFalse();
+        assertThat(calls).contains("s2");
+        assertThat(registry.activeCount()).isZero();
+        assertThat(behavior.connectionCount())
+                .as("ⓑ는 소켓이 선 적이 없다 — 발급에서 끝났다")
+                .isEqualTo(connectionsAfterA);
     }
 
     /**
