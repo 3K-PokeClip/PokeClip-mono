@@ -9,5 +9,11 @@ import java.time.Instant;
  * 다른 것이다. 치우기의 기준은 <b>{@code createdAt}</b>이다 — 종료 통보가 한참 늦게 오면
  * 두 값이 크게 벌어지는데, 그때 {@code endedAt}으로 재면 메모가 남자마자 지워진다.
  */
-public record EndedStream(String streamId, long lastSequence, Instant endedAt, Instant createdAt) {
+public record EndedStream(String streamId, long lastSequence, Instant endedAt, Instant createdAt,
+                          String stopReason) {
+
+    /** 포기한 방송인가. null이면 종료 편지로 정상 종료한 것이다. */
+    public boolean stopped() {
+        return stopReason != null;
+    }
 }

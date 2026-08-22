@@ -43,6 +43,71 @@ class EndedStreamStoreTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM chat_ended_streams");
     }
 
+    private static final Instant 지금 = Instant.parse("2026-08-22T12:00:00Z");
+
+    // 문항 4: 번호만 단언하면 stop_reason을 안 쓰는 구현도 초록이다 — 세 칸 다 본다.
+    @Test
+    void 포기하면_사유와_남긴_시각이_남고_번호는_0이다() {
+        assertThat(store.rememberStopped("s1", "SESSION_AUTH_REJECTED", 지금)).isTrue();
+        EndedStream memo = store.find("s1").orElseThrow();
+        assertThat(memo.stopReason()).isEqualTo("SESSION_AUTH_REJECTED");
+        assertThat(memo.createdAt()).isEqualTo(지금);
+        assertThat(memo.lastSequence()).isZero();
+    }
+
+    // 문항 5: DO NOTHING을 DO UPDATE로 바꾸면 번호가 0으로 내려가 빨간불이다 — 역순 방어가 풀리는 모양.
+    @Test
+    void 종료_메모가_있는_방송을_포기해도_번호가_내려가지_않는다() {
+        store.remember("s1", 7, Instant.parse("2026-08-22T11:00:00Z"));
+        assertThat(store.rememberStopped("s1", "REVOKED", 지금)).isFalse();
+        EndedStream memo = store.find("s1").orElseThrow();
+        assertThat(memo.lastSequence()).isEqualTo(7L);
+        assertThat(memo.stopReason()).as("종료 메모가 이긴다 — 끝난 방송은 끝난 것이다").isNull();
+    }
+
+    @Test
+    void 포기_메모_위에_진짜_종료가_오면_끝난_것으로_바뀐다() {
+        store.rememberStopped("s1", "REVOKED", 지금);
+        assertThat(store.remember("s1", 3, Instant.parse("2026-08-22T12:30:00Z"))).isTrue();
+        EndedStream memo = store.find("s1").orElseThrow();
+        assertThat(memo.lastSequence()).isEqualTo(3L);
+        assertThat(memo.stopReason()).as("포기했다가 방송이 끝났다 — ended다").isNull();
+    }
+
+    @Test
+    void 치우기가_포기_메모도_지운다() {
+        store.rememberStopped("s1", "REVOKED", 아주_예전);
+        assertThat(store.sweepOlderThan(아주_예전.plus(Duration.ofDays(1)))).isEqualTo(1);
+        assertThat(store.find("s1")).isEmpty();
+    }
+
+    /**
+     * 종료 편지(폴링 스레드)와 포기(세션 스레드)가 같은 방송에 동시에 올 수 있다(PRD 가정).
+     * 어느 순서로 겹쳐도 번호는 절대 내려가지 않아야 한다. 200회 반복 — 한 번이라도 0이면 빨강.
+     * 문항 1: 한 스레드로 순서대로 돌리면 언제나 통과한다 — 그래서 실제로 겹친다.
+     * 문항 3: 구현 실측(2026-08-23) 200회 중 종료 먼저 96 · 포기 먼저 104 — 양쪽 순서가 다 나온다(반환값으로 판별:
+     *         종료 먼저 = remember true·rememberStopped false / 포기 먼저 = 둘 다 true). 계획 검증(critic P1)에서는
+     *         94/106이었다. 이 검사는 「겹침 자체」만 책임지고 순서별 결과는 위 두 검사가 따로 잰다.
+     */
+    @Test
+    void 종료와_포기가_동시에_와도_번호는_내려가지_않는다() throws Exception {
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < 200; i++) {
+                String streamId = "race-" + i;
+                java.util.concurrent.CyclicBarrier gate = new java.util.concurrent.CyclicBarrier(2);
+                var ended = pool.submit(() -> { gate.await(); return store.remember(streamId, 5, 지금); });
+                var stopped = pool.submit(() -> { gate.await(); return store.rememberStopped(streamId, "REVOKED", 지금); });
+                ended.get(); stopped.get();
+                assertThat(store.find(streamId).orElseThrow().lastSequence())
+                        .as("%s: 포기가 종료 뒤에 와도 0으로 덮으면 안 된다", streamId)
+                        .isEqualTo(5L);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     // 문항 4: 지시서 단언(번호만)은 ended_at을 안 갱신하는 구현에도 초록이다 — 칸을 더 본다.
     // 문항 5: ON CONFLICT DO UPDATE를 DO NOTHING으로 되돌리면 빨간불(확인함).
     @Test
