@@ -227,15 +227,21 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
             assertThat(reader.statusCode()).isEqualTo(200);
             서두를_틔운다(reader);
 
+            // 🔴 「card가 하나 더 왔다」로 재면 안 된다. 서두를 틔우며 보낸 카드가 아직 오는 중이면
+            // 그것이 먼저 도착해 조건을 만족시키고, 그러면 <b>옛 카드의 도착 시각</b>을 재게 된다
+            // (전송에 20ms만 넣어도 그 일이 실제로 벌어진다 — 실측 `but was: 500000L`).
+            // `awaitName("card", ...)`은 더 나쁘다: 앞 단계의 card로 <b>이미 참</b>이라 한 번도 안
+            // 기다리고, 옛 카드를 집으면 시각차가 <b>음수</b>가 되어 3초 단언이 공짜로 통과한다
+            // (비동기 2차 감사). 그래서 <b>이번에 보낸 그 카드</b>가 올 때까지 기다리고 그것만 잰다.
             Instant sent = Instant.now();
             post2A("s-1", "evt-live", 5_020_000L);
 
-            assertThat(reader.awaitName("card", Duration.ofSeconds(3))).isTrue();
-            SseReader.Event card = 마지막_card(reader);
+            awaitUntil(() -> 카드가_왔나(reader, 5_020_000L), Duration.ofSeconds(3));
+            SseReader.Event card = 카드_찾기(reader, 5_020_000L);
+
             assertThat(Duration.between(sent, card.receivedAt()))
-                    .as("보낸 시각과 받은 시각의 차가 성공 기준이다").isLessThan(Duration.ofSeconds(3));
-            assertThat(MAPPER.readTree(card.data()).get("window").get("startMs").asLong())
-                    .isEqualTo(5_020_000L);
+                    .as("보낸 시각과 그 카드가 도착한 시각의 차가 성공 기준이다")
+                    .isLessThan(Duration.ofSeconds(3));
         }
     }
 
@@ -364,6 +370,14 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         return reader.events().stream()
                 .filter(e -> "card".equals(e.name()) && e.data() != null && !e.data().isEmpty())
                 .anyMatch(e -> MAPPER.readTree(e.data()).get("window").get("startMs").asLong() == windowStartMs);
+    }
+
+    /** 그 창의 카드를 집는다. 「마지막 card」가 아니라 <b>이번에 보낸 그 카드</b>여야 시각이 뜻을 갖는다. */
+    private SseReader.Event 카드_찾기(SseReader reader, long windowStartMs) {
+        return reader.events().stream()
+                .filter(e -> "card".equals(e.name()) && e.data() != null && !e.data().isEmpty())
+                .filter(e -> MAPPER.readTree(e.data()).get("window").get("startMs").asLong() == windowStartMs)
+                .findFirst().orElseThrow();
     }
 
     private SseReader.Event 마지막_card(SseReader reader) {

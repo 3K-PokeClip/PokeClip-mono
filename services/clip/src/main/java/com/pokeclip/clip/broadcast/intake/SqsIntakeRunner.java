@@ -131,6 +131,18 @@ class SqsIntakeRunner {
         return sqs != null;
     }
 
+    /**
+     * 종료 알림 리스너를 받았는지. {@link #hasQueueClient()}와 같은 이유로 있다 —
+     * <b>없으면 방송 종료 알림이 통째로 죽는데 아무 시험도 안 깨진다.</b>
+     *
+     * <p>관통 시험이 러너를 손수 만들며 리스너를 넘기기 때문에 그 시험만으로는
+     * <b>운영 배선</b>({@code @Autowired} 생성자의 {@code ObjectProvider})이 닿았는지 증명되지 않는다 —
+     * 실제로 그 자리를 null로 바꿔도 177건이 전부 초록이었다(비동기 2차 감사).
+     */
+    boolean hasEndedListener() {
+        return endedListener != null;
+    }
+
     @EventListener(ApplicationReadyEvent.class)
     void startLoop() {
         if (!hasQueueClient()) {

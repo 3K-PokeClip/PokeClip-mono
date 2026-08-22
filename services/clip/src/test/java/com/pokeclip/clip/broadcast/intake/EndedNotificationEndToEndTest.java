@@ -47,10 +47,12 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
     private final JumpCardService service;
     private final CardStreamRegistry registry;
     private final JdbcTemplate jdbc;
+    private final SqsIntakeRunner runner;
 
     EndedNotificationEndToEndTest(@LocalServerPort int port, BroadcastEventProcessor processor,
                                   BroadcastRepository broadcasts, BroadcastEventRepository events,
-                                  JumpCardService service, CardStreamRegistry registry, JdbcTemplate jdbc) {
+                                  JumpCardService service, CardStreamRegistry registry, JdbcTemplate jdbc,
+                                  SqsIntakeRunner runner) {
         this.port = port;
         this.processor = processor;
         this.broadcasts = broadcasts;
@@ -58,6 +60,7 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
         this.service = service;
         this.registry = registry;
         this.jdbc = jdbc;
+        this.runner = runner;
     }
 
     @BeforeEach
@@ -82,7 +85,9 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
             assertThat(reader.awaitNamed(1, Duration.ofSeconds(3)))
                     .as("초기 스냅샷이 서야 연결이 실제로 선 것이다").isTrue();
 
-            // 실제 러너 경로. 리스너로 실물 Registry를 넘긴다 — 운영 배선과 같다.
+            // 실제 러너 경로. 다만 리스너를 <b>손수 넘긴다</b> — 이 줄은 「편지 → 러너 → Registry →
+            // 브라우저」가 이어지는 것만 증명하고, <b>운영 배선이 닿았는지는 증명하지 않는다.</b>
+            // 그쪽은 아래 `운영_배선이_리스너를_받는다`가 잰다(둘이 있어야 이음매가 닫힌다).
             new SqsIntakeRunner(LocalStackFixture.client(), 큐_설정(queueUrl),
                     new IntakeStatus(true), processor, MAPPER, null, registry).pollOnce();
 
@@ -90,6 +95,21 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
                     .as("편지 → 러너 → Registry → 브라우저가 이어지지 않았다").isTrue();
             assertThat(reader.awaitClosed(Duration.ofSeconds(3))).isTrue();
         }
+    }
+
+    /**
+     * <b>운영 배선이 실제로 리스너를 받는지</b>를 잰다 — 위 관통 시험은 러너를 손수 만들어
+     * 리스너를 넘기므로 이 자리를 못 본다. 실제로 {@code @Autowired} 생성자의
+     * {@code endedListenerProvider.getIfAvailable()}을 null로 바꿔도 <b>177건이 전부 초록이었다</b>
+     * (비동기 2차 감사) — 운영에서 방송 종료 알림이 통째로 죽어도 신호가 없었다는 뜻이다.
+     *
+     * <p>{@code hasQueueClient()}에 켜짐·꺼짐 대조 둘이 있는 것과 같은 이유로 둔다.
+     */
+    @Test
+    void 운영_배선이_리스너를_받는다() {
+        assertThat(runner.hasEndedListener())
+                .as("이 자리가 비면 방송 종료 알림이 통째로 죽는데 아무 시험도 안 깨진다")
+                .isTrue();
     }
 
     private IntakeProperties 큐_설정(String queueUrl) {

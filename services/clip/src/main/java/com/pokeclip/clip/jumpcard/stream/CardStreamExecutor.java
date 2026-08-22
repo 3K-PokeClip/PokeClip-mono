@@ -8,7 +8,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
@@ -65,11 +64,19 @@ public class CardStreamExecutor {
                     (r, executor) -> {
                         // 넘친 것이 조용히 사라지면 "왜 카드가 안 왔나"를 추적할 방법이 없다.
                         // 재연결이 전체 스냅샷으로 메우므로 버리는 것 자체는 안전하다.
+                        //
+                        // 🔴 여기서 completeWithError를 부르지 않는다. 거부 처리기는 execute()를 부른
+                        // 스레드에서 도는데, 그 스레드가 publish의 afterCommit 안에 있는 요청 스레드다.
+                        // completeWithError는 막힌 send가 쥔 writeLock을 기다리므로 요청 스레드가
+                        // 거기서 잠기고, afterCommit은 커넥션 반납보다 먼저 도는 자리라 JDBC 커넥션을
+                        // 쥔 채로 잠긴다 — 2A 한 번이 59,164ms 걸리는 것을 실측했다(비동기 2차 감사).
+                        // 그것이 POK-93에서 실제로 난 풀 고갈 그림이다.
+                        //
+                        // 그 연결의 스트라이프에 제출하는 방법(대안 나)은 쓸 수 없다 — 지금 그 큐가
+                        // 가득 차서 거부된 참이라 다시 거부된다. 자리 회수는 다음 send 실패가 한다
+                        // (`끊고_다시_열_수_있다`가 재는 경로다).
                         log.warn("jumpcard.stream.rejected stripe={} reason={}", n,
                                 executor.isShutdown() ? "shutdown" : "queue_full");
-                        if (r instanceof Job job) {
-                            job.emitter.completeWithError(new RejectedExecutionException("queue_full"));
-                        }
                     });
         }
     }
