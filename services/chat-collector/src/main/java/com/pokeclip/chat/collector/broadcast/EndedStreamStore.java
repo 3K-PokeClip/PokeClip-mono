@@ -31,12 +31,25 @@ public class EndedStreamStore {
             VALUES (?, ?, ?, ?)
             ON CONFLICT (stream_id) DO UPDATE
                SET last_sequence = EXCLUDED.last_sequence,
-                   ended_at      = EXCLUDED.ended_at
+                   ended_at      = EXCLUDED.ended_at,
+                   stop_reason   = NULL
              WHERE EXCLUDED.last_sequence > chat_ended_streams.last_sequence
             """;
 
+    /**
+     * 포기 메모. <b>이미 메모가 있으면 아무것도 안 한다.</b> 종료 편지(폴링 스레드)와 포기(세션
+     * 스레드)가 같은 방송에 겹칠 수 있는데, 여기가 DO UPDATE면 번호 N이 0으로 내려가
+     * 역순 방어(ADR-016)가 풀린다. 반대 방향(포기 위에 종료)은 위 UPSERT가 「높을 때만」으로
+     * 덮으므로 어느 순서든 번호는 안 내려간다. 번호 0인 이유: 포기 시점엔 편지가 없어 모른다.
+     */
+    private static final String INSERT_STOPPED = """
+            INSERT INTO chat_ended_streams (stream_id, last_sequence, ended_at, created_at, stop_reason)
+            VALUES (?, 0, ?, ?, ?)
+            ON CONFLICT (stream_id) DO NOTHING
+            """;
+
     private static final String SELECT = """
-            SELECT stream_id, last_sequence, ended_at, created_at
+            SELECT stream_id, last_sequence, ended_at, created_at, stop_reason
               FROM chat_ended_streams
              WHERE stream_id = ?
             """;
@@ -66,6 +79,13 @@ public class EndedStreamStore {
         return found.stream().findFirst();
     }
 
+    /** @return 새로 남겼는가. 이미 메모가 있으면 false — 그 메모가 이긴다 */
+    public boolean rememberStopped(String streamId, String reason, Instant now) {
+        // ended_at은 NOT NULL이라 비울 수 없다. 포기엔 편지가 없으니 now를 넣되,
+        // 읽는 쪽(창구)은 포기 메모의 시각을 created_at으로 본다(PRD 결정).
+        return jdbc.update(INSERT_STOPPED, streamId, Timestamp.from(now), Timestamp.from(now), reason) > 0;
+    }
+
     public int sweepOlderThan(Instant cutoff) {
         return jdbc.update("DELETE FROM chat_ended_streams WHERE created_at < ?",
                 Timestamp.from(cutoff));
@@ -76,6 +96,7 @@ public class EndedStreamStore {
                 row.getString("stream_id"),
                 row.getLong("last_sequence"),
                 row.getTimestamp("ended_at").toInstant(),
-                row.getTimestamp("created_at").toInstant());
+                row.getTimestamp("created_at").toInstant(),
+                row.getString("stop_reason"));
     }
 }

@@ -93,6 +93,18 @@ logging:
     software.amazon.awssdk: info
     org.apache.hc.client5.http: info
     io.netty: info
+    # 네 번째 길 — 이번엔 들어오는 요청이다. 위 다섯 줄은 전부 우리가 밖으로 내보내는 길을
+    # 막은 것이고, 들어오는 HTTP는 POK-128 이전에 컨트롤러가 0개라 막을 면적 자체가 없었다.
+    # 수집 상태 창구가 그 면적을 열었다 — clip이 X-Internal-Token 헤더에 내부 토큰을 실어 보낸다.
+    # root를 TRACE로 내리면 톰캣 org.apache.coyote.http11.Http11InputBuffer가 받은 바이트를
+    # "Received [GET /internal/... X-Internal-Token: <값> ...]"로 통째로 찍는다
+    # (2026-08-22 실측: root INFO 0건·DEBUG 0건·TRACE 1건. 톰캣이 JUL FINER로 찍어
+    # 브릿지가 logback DEBUG로 번역하므로 root=DEBUG에서는 안 보인다 — 조건은 root=TRACE 하나다).
+    # 새는 값이 auth와 공유하는 INTERNAL_API_TOKEN이라 채팅 본문보다 파급이 크고, 사람이 TRACE를
+    # 켜는 순간은 정확히 이 창구를 디버깅할 때다. 위 다섯 줄과 같은 이유로 여기 박는다 —
+    # 구체 로거 레벨이 root보다 우선한다. ChatCollectionEndpointTest의
+    # 창구를_쳐도_내부_토큰이_root_TRACE에서_로그에_안_남는다가 이 줄이 실제로 막는지를 행동으로 잰다.
+    org.apache.coyote: info
 
 pokeclip:
   chzzk:

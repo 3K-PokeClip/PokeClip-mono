@@ -44,12 +44,14 @@ import static org.assertj.core.api.Assertions.catchThrowable;
  *
  * <p>탐지기는 {@code auth}의 SecretLeakTest를 그대로 베꼈다. 포맷된 한 줄만
  * 보면 {@code log.error("...", e)}로 새는 값을 못 잡는다 — 그건 ThrowableProxy
- * 안에 있다. 탐지기 도우미는 패키지에 열어 뒀다 — 아카이브 경로(S3 PUT)의 유출 검사
- * {@link ArchiveLogLeakTest}가 <b>같은 탐지기</b>를 쓴다(자기검사 셋은 여기 하나면 된다).
+ * 안에 있다. 탐지기 도우미는 밖에 열어 뒀다 — 아카이브 경로(S3 PUT)의 유출 검사
+ * {@link ArchiveLogLeakTest}와 창구 경로(들어오는 요청 헤더)의 유출 검사
+ * {@code status.ChatCollectionEndpointTest}가 <b>같은 탐지기</b>를 쓴다
+ * (자기검사 셋은 여기 하나면 된다).
  * 그쪽을 여기서 떼어 낸 이유는 이 검사가 LocalStack에 매이지 않게 하려는 것이다.
  */
 @FakeChzzkTest
-class ChatLogLeakTest extends IntegrationTestSupport {
+public class ChatLogLeakTest extends IntegrationTestSupport {
 
     private static final Logger log = LoggerFactory.getLogger(ChatLogLeakTest.class);
 
@@ -527,12 +529,12 @@ class ChatLogLeakTest extends IntegrationTestSupport {
         return "LEAK-" + label + "-" + UUID.randomUUID();
     }
 
-    static void setLevel(String loggerName, Level level) {
+    public static void setLevel(String loggerName, Level level) {
         ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).setLevel(level);
     }
 
     /** 명시 레벨만 돌려준다. 안 박혀 있으면 null이다(부모에서 물려받는 상태). */
-    static Level levelOf(String loggerName) {
+    public static Level levelOf(String loggerName) {
         return ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).getLevel();
     }
 
@@ -540,7 +542,7 @@ class ChatLogLeakTest extends IntegrationTestSupport {
         assertNoSecretsIn(renderAll(captor), secrets);
     }
 
-    static void assertNoSecretsIn(String haystack, List<String> secrets) {
+    public static void assertNoSecretsIn(String haystack, List<String> secrets) {
         for (String secret : secrets) {
             assertThat(secret).as("빈 바늘은 어디서나 발견돼 검사를 무력화한다").isNotEmpty();
             assertThat(haystack).as("비밀이 남았다: " + secret).doesNotContain(secret);
@@ -548,13 +550,13 @@ class ChatLogLeakTest extends IntegrationTestSupport {
     }
 
     /** 모인 로그 전부를 한 덩어리로. 딸려 붙은 예외까지 포함한다. */
-    static String renderAll(LogCaptor captor) {
+    public static String renderAll(LogCaptor captor) {
         return captor.events().stream()
                 .map(ChatLogLeakTest::renderFully)
                 .collect(Collectors.joining("\n"));
     }
 
-    static String renderFully(ILoggingEvent event) {
+    public static String renderFully(ILoggingEvent event) {
         StringBuilder text = new StringBuilder(event.getFormattedMessage());
         appendThrowable(text, event.getThrowableProxy());
         return text.toString();

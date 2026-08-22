@@ -5,6 +5,7 @@ import com.pokeclip.chat.collector.broadcast.BroadcastEventProcessor;
 import com.pokeclip.chat.collector.broadcast.BroadcastSessions;
 import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
 import com.pokeclip.chat.collector.broadcast.LinkedSessionStarter;
+import com.pokeclip.chat.collector.broadcast.StoppedStreamRecorder;
 import com.pokeclip.chat.collector.link.ChzzkLinkClient;
 import com.pokeclip.chat.collector.link.LinkProperties;
 import com.pokeclip.chat.collector.session.SessionRegistry;
@@ -15,6 +16,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestClient;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import tools.jackson.databind.ObjectMapper;
+
+import java.time.Instant;
 
 /**
  * <b>편지 한 통이 세션이 되기까지의 부품 전부.</b> 큐가 꺼져 있으면 하나도 안 만든다 —
@@ -74,6 +77,12 @@ public class LetterPathConfiguration {
     @Bean
     public BroadcastEventProcessor broadcastEventProcessor(EndedStreamStore store, BroadcastSessions sessions) {
         return new BroadcastEventProcessor(store, sessions);
+    }
+
+    /** 편지 경로가 켜진 프로세스에서만 뜻이 있다 — 옛 경로는 등록부를 안 탄다. */
+    @Bean
+    public StoppedStreamRecorder stoppedStreamRecorder(SessionRegistry registry, EndedStreamStore store) {
+        return new StoppedStreamRecorder(registry, store, Instant::now);
     }
 
     /**
