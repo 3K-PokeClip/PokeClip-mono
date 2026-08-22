@@ -10,7 +10,7 @@
 |---|---|---|
 | `common/` | — | 여러 서버가 같이 쓰는 **계약**(공유 엔티티·SQS DTO). 서버가 아니다 |
 | `web-support/` | — | 여러 서버가 같이 쓰는 **웹 인프라**(CORS·상관 ID). 서버가 아니다 |
-| `clip/` | 8081 | 방송 세션 · 세그먼트 인덱스 · 클립 · 승인 · SQS 잡 발행 |
+| `clip/` | 8081 | 방송 세션 · **점프카드 저장·SSE 전송** · 세그먼트 인덱스 · 클립 · 승인 · SQS 잡 발행 |
 | `auth/` | 8082 | 로그인 · 스트림 키 · 채널 연동 · 유튜브 토큰 |
 | `chat-collector/` | 8083 | 치지직·SOOP 채팅 실시간 수집 · 시차 보정 · S3 아카이브 |
 | `chat-detector/` | 8084 | 채팅량 분석으로 하이라이트 후보(점프카드) 판별 |
@@ -33,7 +33,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 | | 소유 |
 |---|---|
 | `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
-| `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` · `stream_segments`(**뒤 둘은 아직 없다**) |
+| `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `stream_segments`(**아직 없다**) |
 | chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302) · `chat_ended_streams` (V303) — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
 
 **서로의 표를 직접 읽지 않는다.** 필요하면 계약4의 `POST /internal/stream-keys/resolve`로
@@ -153,15 +153,22 @@ DB 접속값은 채우지 않는다.
 | `CHZZK_CLIENT_SECRET` | 그 앱의 Client Secret. 토큰 교환·갱신·철회 요청 본문에만 쓰고 URL·로그 어디에도 안 나간다 |
 | `CHZZK_REDIRECT_URI` | 동의가 끝난 뒤 치지직이 code·state를 돌려줄 주소. **웹 프론트의 콜백 라우트**(`/oauth/chzzk/callback`)를 가리켜야 한다 — 백엔드가 받는 주소가 아니다. **개발자 센터에 앱당 하나만 등록된다**(그래서 환경마다 앱을 따로 판다): 로컬 `http://localhost:3000/oauth/chzzk/callback` · dev `http://dev.pokeclip.com/oauth/chzzk/callback` |
 
-**`clip`은 환경변수 없이는 부팅에 실패한다. 넷이고, auth와 같은 두 갈래다.**
+**`clip`은 환경변수 없이는 부팅에 실패한다. 여섯이고, auth와 같은 두 갈래다.**
 
 | 갈래 | 변수 | 어디서 얻나 |
 |---|---|---|
-| **앱 시크릿 하나** | `CORS_ALLOWED_ORIGINS` | **`.env.example`에 없다** — auth의 앱 시크릿 아홉과 같은 규칙이다. `.env`에 직접 넣는다 |
+| **앱 시크릿 셋** | `CORS_ALLOWED_ORIGINS` · `JWT_SECRET` · `INTERNAL_API_TOKEN` | **`.env.example`에 값이 없다** — auth의 앱 시크릿 아홉과 같은 규칙이다. `.env`에 직접 넣는다 |
 | **DB 접속값 셋** | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | `.env`에 있다(POK-82에서 POK-161의 규칙을 옮겼다) |
 
-**`cp .env.example .env`만 하고 `clip`을 띄우면 실패한다** — 그 파일에는 DB 접속값
-셋뿐이라 `CORS_ALLOWED_ORIGINS`가 없다. 실제 실패 원문(2026-08-18 실측):
+**`JWT_SECRET`·`INTERNAL_API_TOKEN`은 auth와 <u>같은 값·같은 이름</u>이어야 한다**(POK-118).
+같은 이름인 이유는 `.env` 한 줄로 두 서버가 뜨게 하려는 것이고, 같은 값이어야 하는 이유는
+**auth가 서명한 토큰을 clip이 검증**하기 때문이다(대칭키 HS256, ADR-047). 값이 갈리면
+서버는 멀쩡히 뜨고 **사람 API만 전부 401**이 된다 — 가장 찾기 어려운 종류의 실패다.
+`INTERNAL_API_TOKEN`도 같다: 서버 간 토큰은 하나이고, 갈리면 판별기가 넣는 카드가 전부 401이 된다.
+**clip은 토큰을 발급하지 않는다** — 검증만 한다(발급자는 auth 하나다).
+
+**`cp .env.example .env`만 하고 `clip`을 띄우면 실패한다** — 그 파일에는 이름만 있고
+`CORS_ALLOWED_ORIGINS`는 아예 없다. 실제 실패 원문(2026-08-18 실측):
 
 ```
 APPLICATION FAILED TO START
@@ -402,8 +409,8 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 서버마다 자기 Flyway를 돌리고 **이력 테이블을 나눈다**(`flyway_schema_history_auth` ·
 `..._clip` · `..._chat`). 기본 이름을 쓰면 나중에 뜬 쪽이 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
 마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat.
-지금까지 나간 것은 auth의 `V101`~`V107` · clip의 `V201`(`broadcasts`·`broadcast_events`) ·
-chat의 `V301`(`chat_messages`)이다.
+지금까지 나간 것은 auth의 `V101`~`V107` · clip의 `V201`(`broadcasts`·`broadcast_events`)과
+`V202`(`jump_cards`, POK-118) · chat의 `V301`(`chat_messages`)이다.
 
 **모든 Flyway 서버(auth 포함)에 `baseline-on-migrate: true` + `baseline-version: 0`이 필수다.**
 공유 DB에서는 어느 서버가 먼저 뜰지 정해져 있지 않다 — 다른 서버가 이미 표를
@@ -513,6 +520,107 @@ Go 쪽에서 구분이 안 된다.
 않는 것이 ADR-022의 경계다.
 
 **아직 없는 것:** 렌더 잡 발행(계약1), 세그먼트 인덱스 수신(계약2), 클립·승인.
+
+### clip — 점프카드 저장·SSE 전송 (POK-118)
+
+판별기(`chat-detector`)가 「이 순간 채팅이 터졌다」고 보낸 지점을 **점프카드**로 보관하고,
+그 방송을 보고 있는 웹 화면에 **SSE로 실시간으로 밀어 넣으며**, 편집자 둘이 같은 카드를
+동시에 집지 못하게 **점유**를 건다. 표는 `jump_cards` 하나(`V202`).
+
+**clip의 첫 사람용 API이고, 첫 시큐리티이며, 첫 비동기 전송이다.**
+
+| 문 | 인증 | 응답 |
+|---|---|---|
+| `POST /internal/broadcasts/{streamId}/highlights` (계약 2A) | `X-Internal-Token` | **201** 새 카드 · **200** 같은 창이 이미 있음(기존 카드 그대로) · 404 `{"error":"broadcast_not_found"}` · 400 `{"error":"invalid_request","field":…}` · 401 |
+| `GET /api/clip/broadcasts/{streamId}/events` (계약 2B, SSE) | Bearer JWT | **200** `text/event-stream` · 404 · 401 · **503** `{"error":"stream_limit","scope":"user\|stream\|total"}` |
+| `POST /api/clip/jump-cards/{id}/claim` | Bearer JWT | 200 카드 · **409 본문이 현재 카드**(누가 잡고 있는지) · 404 `{"error":"jump_card_not_found"}` |
+| `DELETE /api/clip/jump-cards/{id}/claim` | Bearer JWT | **204** · 403 `{"error":"not_claim_owner"}` · 404 |
+| `POST /api/clip/jump-cards/{id}/hide` | Bearer JWT | 200 카드(`hidden:true`) · 404 |
+| `DELETE /api/clip/jump-cards/{id}/hide` | Bearer JWT | 200 카드(`hidden:false`) · 404 |
+
+**중복 방어선은 `(stream_id, source, window_start_ms)` UNIQUE와 `ON CONFLICT … DO NOTHING`의
+영향 행 수 하나뿐이다.** POK-82와 같은 이유로 예외가 아니라 반환값으로 가른다 — 예외로 가르면
+FK·CHECK 위반이 중복으로 보고돼 판별기가 "성공"으로 읽고 다시 안 보낸다. `eventId`는 **추적용**이라
+UNIQUE가 아니다(재전송 때 값이 달라도 같은 창이면 같은 카드다).
+
+**점유는 집을 때 판정한다.** 만료를 치우는 배경 작업이 없다 — `UPDATE … WHERE id = ? AND
+(claimed_by IS NULL OR claimed_by = ? OR claimed_at < now() - interval)` 한 줄이 원자적이라
+동시 요청 둘 중 하나만 영향 행 1을 받는다. 시각 비교는 **DB 시계**다(앱 시계는 서버마다 다르다).
+본인 재호출은 **연장**이고, 아무도 안 잡은 카드를 놓는 것은 **성공**이다(멱등 — 403을 주면
+웹이 새로고침 뒤 놓기를 눌렀을 때 오류를 본다).
+
+**카드가 생겼다/바뀌었다를 알리는 출구는 `CardStreamRegistry.publish` 하나다.**
+발행은 **커밋 뒤**에만 한다(`afterCommit`에서 제출만) — 커밋 전에 보내면 되감긴 카드가 화면에
+뜨고 지울 방법이 없다. 전송은 요청 스레드가 아니라 **전용 스레드**가 한다(POK-93에서 커밋 뒤
+처리를 요청 스레드에 이어 붙였다가 커넥션 풀 데드락을 낸 자리와 같은 분리).
+
+#### 🔴 clip은 한 대여야 한다
+
+**연결 보관소가 프로세스 안 메모리다.** 2대로 띄우면 카드를 받은 인스턴스에 붙어 있는 사람만
+받고 **나머지 절반은 아무것도 못 받는데 에러도 안 난다** — 화면이 조용히 낡는다.
+여러 대로 가려면 `publish` 안을 Redis 발행/구독으로 갈아끼워야 하고, 그것은 별도 카드다.
+갈아끼울 자리를 한 곳에 모아 둔 이유가 이것이다.
+
+#### SSE 운영값 — 전부 추정이다
+
+| 값 | 기본 | 근거 |
+|---|---|---|
+| `heartbeat` | 20초 | 앞단 프록시가 조용한 연결을 끊지 않게. **로컬엔 프록시가 없어 배포 후에만 드러난다** |
+| `timeout` | 4시간 | 연결 수명 상한 |
+| `stripes` | 4 | 전송 스레드 수. 연결은 스트라이프 하나에 고정돼 순서가 지켜진다 |
+| `queue-capacity` | 1000 | 스트라이프당 대기 상한. 넘치면 버리고 WARN — 재연결이 전체 스냅샷으로 메운다 |
+| `max-per-user` | 4 | 탭 몇 개 + 모바일 |
+| `max-per-stream` | 50 | 스트리머 + 편집자(정원은 POK-207 미정) |
+| `max-total` | 500 | 서버 한 대 전체 |
+
+**측정값이 아니라 추정이다.** 동시 사용자 100명 전제에서 넉넉히 잡았고 실사용 후 조정한다.
+
+**연결 수명 = min(4시간, 토큰 exp까지 남은 시간)**이다. 만료 시점에 닫히고 브라우저가 새 토큰으로
+다시 붙는다. **`exp`가 이미 지났으면 아예 열지 않는다(401)** — 디코더의 clock skew 허용치(60초)
+안쪽 토큰은 인증을 통과하는데, 그대로 열면 남은 수명이 음수가 되고 **서블릿 규약상 `timeout <= 0`은
+「시한 없음」이라 만료된 토큰일수록 연결이 더 오래 산다**(실측: `-59311ms` → 45초 뒤에도 살아 있음).
+
+**따라잡기는 전체 스냅샷이다.** 연결 직후 그 방송의 카드를 **전부**(숨긴 것 포함) 순번 순으로
+보낸다. `Last-Event-ID`는 **받아서 로그에만 적고 쓰지 않는다** — 마진 방식으로 바꾸는 날 쓸 자리다.
+
+**연결 직후 주석 한 줄(`: ok`)을 먼저 보낸다.** `SseEmitter`는 첫 쓰기가 있어야 응답을 커밋하는데,
+카드가 0장인 방송(=방금 시작한 방송)에서는 쓸 것이 없어 헤더가 **다음 하트비트까지** 늦는다
+(실측 5.449초, 최악 20초). 받는 쪽에는 「느리다」가 아니라 **「연결이 안 된다」**로 보인다.
+
+#### 실기동 확인 (2026-08-23)
+
+| 무엇 | 결과 |
+|---|---|
+| 2A 저장 → SSE 도착 | **0.079초** (기준 3초의 1/38) |
+| 같은 창 재전송 | `201` 다음 **`200`**, 본문은 기존 카드 그대로, 행 하나 |
+| 응답 헤더 | `Content-Type: text/event-stream` · `X-Accel-Buffering: no` |
+| 하트비트 | 20초 간격으로 `:ping` |
+| 토큰 없이 / 사람 토큰으로 `/internal` | `401` · `401` |
+| 실행 중 WARN·ERROR | **0줄** |
+
+#### 알려진 구멍
+
+- **안 읽는 구독자가 자기 스트라이프를 최대 약 61초 막는다.** send 시한 장치를 **일부러 두지
+  않았다** — `send()`와 `completeWithError()`가 같은 락이라 끊으러 간 스레드가 같이 멈춘다(실측).
+  막힌 연결은 서버의 write timeout이 `IOException`으로 푸는데 **그 값이 약 61초다**(2회 실측,
+  60973ms·60988ms). 같은 스트라이프의 다른 연결은 그동안 이벤트가 밀린다(4개면 최악 1/4)
+- **끊긴 연결의 자리는 즉시 안 돌아온다.** 서버는 **다음 쓰기가 실패해야** 안다 —
+  최대 하트비트 한 주기(20초)까지 상한 계산에 남는다. 자동 회수되지만
+  **탭을 닫고 바로 다시 열면 `max-per-user` 4가 3처럼 느껴질 수 있다**
+- **503이 두 뜻으로 나간다.** 상한 초과는 `{"error":"stream_limit","scope":…}` JSON이지만,
+  토큰 잔여가 아주 짧아 헤더가 나가기 전에 시한이 오면 **본문 없는 503**이 된다
+  (`AsyncRequestTimeoutException`). **웹이 둘을 구분할 수 없다** — 프론트에 알릴 것
+- **실제 토큰 수명은 `exp + 60초`다.** 디코더의 clock skew 허용치가 기본 60초다
+- **health 상세가 익명에게 통째로 나간다**(POK-82부터). `show-details: always` + permitAll
+- **`jwt.getSubject()`가 null이면 상한 집계가 NPE**다. 「불가능」이 아니라
+  **auth `TokenService`가 `subject(user.getId().toString())`를 넣는 한 줄에 걸려 있다** —
+  남의 서버 코드다
+- **편집자 이름이 응답에 없다.** `claimedBy`는 사용자 번호다. **이름을 물어볼 창구는
+  생겼지만**(POK-175가 `develop`에 머지됐다, PR #106) **붙이는 것은 별도 카드다**
+- 내부 토큰에 길이 하한이 없고 `iss`·`typ`을 검증하지 않는다 — auth와 같은 상태다
+
+**아직 없는 것:** 핫키 카드 생성(POK-119) · 카드 목록 API · 만료 정리 배치 · Redis 팬아웃 ·
+`clipped`·`expired` 상태.
 
 ### 치지직 채널 연동 (POK-93)
 
