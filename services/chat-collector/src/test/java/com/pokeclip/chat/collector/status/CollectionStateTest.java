@@ -45,8 +45,12 @@ class CollectionStateTest {
         assertThat(CollectionState.UNKNOWN.wireName()).isEqualTo("unknown");
     }
 
-    // 재연동이 필요한 셋만 true. 나머지 전부 false — 열거값이 늘어도 기본은 false다.
-    // 문항 2: 「늘 false」는 셋에서, 「늘 true」는 나머지에서 빨간불이라 한쪽으로 공짜가 안 된다.
+    // 재연동이 필요한 넷만 true. 나머지 전부 false — 열거값이 늘어도 기본은 false다.
+    // 문항 2: 「늘 false」는 넷에서, 「늘 true」는 나머지에서 빨간불이라 한쪽으로 공짜가 안 된다.
+    //
+    // <b>이 검사가 허용 목록의 잠금장치다.</b> @EnumSource 전수라 StopReason에 값을 더하면
+    // 여기가 반드시 같이 빨간불이 된다 — LINK_UNAVAILABLE을 넣었을 때 실제로 그랬다(봇 1판 C1).
+    // 기대값을 구현에서 뽑아 오면(needsRelink를 그대로 부르면) 그 잠금이 사라지므로 <b>리터럴로</b> 둔다.
     //
     // 오버로드 <b>둘 다</b> 여기서 잰다. 아래 검사가 글자 오버로드를 세 값으로만 보는데
     // 그중 「아는 이름이면서 false여야 하는 값」이 하나도 없어, 글자 쪽만 「아는 이름이면 무조건
@@ -56,10 +60,13 @@ class CollectionStateTest {
     // 회귀하면 우리 버그(SEND_MISUSE)로 멈춘 방송에 「치지직 연동을 다시 하세요」가 24시간 뜬다.
     @ParameterizedTest
     @EnumSource(StopReason.class)
-    void 재연동_필요는_토큰거부_구독거부_철회_셋뿐이다(StopReason reason) {
+    void 재연동_필요는_토큰거부_구독거부_철회_연동없음_넷뿐이다(StopReason reason) {
+        // LINK_UNAVAILABLE만 세션 단계가 아니다 — auth가 열쇠를 영구히 거절해 붙어 보지도
+        // 못한 것이다. 스트리머가 할 일(치지직 연동을 손본다)이 셋과 같아 같은 답으로 둔다.
         boolean expected = reason == StopReason.SESSION_AUTH_REJECTED
                 || reason == StopReason.SUBSCRIBE_REJECTED
-                || reason == StopReason.REVOKED;
+                || reason == StopReason.REVOKED
+                || reason == StopReason.LINK_UNAVAILABLE;
         assertThat(CollectionState.needsRelink(reason)).isEqualTo(expected);
         assertThat(CollectionState.needsRelink(reason.name()))
                 .as("메모 경로(글자)도 같은 답이어야 한다 — clip이 24시간 보는 쪽이다")

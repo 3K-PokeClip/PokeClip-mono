@@ -69,9 +69,15 @@ public class LetterPathConfiguration {
         return new ChzzkLinkClient(restClientBuilder, properties);
     }
 
+    /**
+     * <b>레코더를 같이 문다.</b> auth가 열쇠를 영구히 거절하면 세션이 서 보지도 못해 등록부의
+     * 포기 알림이 울리지 않는데, 그때도 메모는 남아야 한다 — 안 남기면 편지를 지운 뒤
+     * 그 방송이 영원히 {@code unknown}이다(되돌아올 트리거가 없다).
+     */
     @Bean
-    public BroadcastSessions broadcastSessions(ChzzkLinkClient link, SessionRegistry registry) {
-        return new LinkedSessionStarter(link, registry);
+    public BroadcastSessions broadcastSessions(ChzzkLinkClient link, SessionRegistry registry,
+                                               StoppedStreamRecorder recorder) {
+        return new LinkedSessionStarter(link, registry, recorder::record);
     }
 
     @Bean

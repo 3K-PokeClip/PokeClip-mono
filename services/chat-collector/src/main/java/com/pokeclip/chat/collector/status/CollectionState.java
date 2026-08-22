@@ -29,11 +29,18 @@ public enum CollectionState {
         };
     }
 
-    /** 스트리머가 치지직 연동을 다시 해야 풀리는가. 허용 목록 — 사유가 늘어도 기본은 false다. */
+    /**
+     * 스트리머가 치지직 연동을 다시 해야 풀리는가. 허용 목록 — 사유가 늘어도 기본은 false다.
+     *
+     * <p>넷째 {@link StopReason#LINK_UNAVAILABLE}만 <b>세션 단계가 아니다</b> — 앞의 셋은
+     * 붙어 보고 거부당한 것이고 이것은 auth가 열쇠를 안 줘 붙어 보지도 못한 것이다.
+     * 스트리머가 할 일(치지직 연동을 손본다)이 같아서 같은 답으로 둔다.
+     */
     public static boolean needsRelink(StopReason reason) {
         return reason == StopReason.SESSION_AUTH_REJECTED
                 || reason == StopReason.SUBSCRIBE_REJECTED
-                || reason == StopReason.REVOKED;
+                || reason == StopReason.REVOKED
+                || reason == StopReason.LINK_UNAVAILABLE;
     }
 
     /** 메모 표에 적힌 이름으로. 옛 이름·모르는 이름은 false — 모르면 「다시 연동하라」고 하지 않는다. */
