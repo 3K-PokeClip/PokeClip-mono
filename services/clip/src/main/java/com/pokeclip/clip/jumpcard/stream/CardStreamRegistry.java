@@ -175,8 +175,8 @@ public class CardStreamRegistry implements EndedListener {
      * <b>연결이 안 닫힌 채 남기까지</b> 한다(카드 1000장에서 거부 1건 = {@code ended}).
      *
      * <p><b>대가는 밀림이다</b> — 이 태스크가 도는 동안 같은 스트라이프의 다른 연결이 기다린다.
-     * 카드 <b>300장 전송 76ms · 같은 줄의 다른 연결 밀림 32ms</b>(2026-08-23 실측,
-     * {@code StripeHeadOfLineTest}가 계속 잰다). PRD 도착 기준 3초의 <b>1%</b>다.
+     * 카드 <b>300장 전송 71~86ms · 같은 줄의 다른 연결 밀림 32~49ms</b>(2026-08-23, 5회 실측.
+     * {@code StripeHeadOfLineTest}가 계속 잰다). 최악 49ms는 PRD 도착 기준 3초의 <b>1.6%</b>다.
      * 밀림은 <b>늦는 것</b>이고 유실은 <b>안 오는 것</b>이라 밀림을 골랐다.
      * 카드가 수천 장이 되면 이 밀림이 커지므로 그때는 마진 방식(PRD 「따라잡기」)으로 옮긴다.
      */
