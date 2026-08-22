@@ -22,6 +22,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * 열려 있는 연결을 들고 있다가 방송별로 이벤트를 밀어 넣는다.
@@ -124,21 +125,42 @@ public class CardStreamRegistry implements EndedListener {
      * <p><b>끝이 아니라 앞에 둔다.</b> 끝난 방송 경로는 {@code ended}를 보내고 {@code complete()}를
      * 부르므로, 뒤에 두면 이미 닫힌 연결에 쓰게 된다.
      */
+    /** 연결 직후에 보낼 것 — 그 방송 카드 전부와 「이미 끝난 방송인가」. <b>둘을 같이 읽는다</b>. */
+    public record InitialSnapshot(List<JumpCardSnapshot> cards, boolean ended) {
+    }
+
     /**
-     * 연결을 열고 <b>같은 임계구역에서</b> 첫 스냅샷까지 제출한다.
+     * <b>스냅샷을 읽는 것부터 첫 제출까지가 한 임계구역이다.</b>
      *
-     * <p>둘을 따로 부르면 그 사이에 {@link #publish}가 끼어 <b>같은 연결에 새 값 → 옛 값 순으로</b>
-     * 나간다(비동기 2차 감사 사소 ④ — 창을 400ms로 벌려 재현했다). 연결은 {@code open} 시점에
-     * 이미 명부에 있으므로 창이 스냅샷 제출 전체다. {@code publish}도 같은 자물쇠를 쓰므로
-     * <b>publish는 이 블록 앞이나 뒤로만 갈라진다</b> — 앞이면 연결이 아직 없어 안 가고,
-     * 뒤면 스냅샷 다음에 줄을 선다. 둘 다 순서가 맞다.
+     * <p>값이 아니라 <b>「읽는 법」</b>({@code Supplier})을 받는 이유 — 값으로 받으면 호출자가
+     * 자물쇠 <b>밖에서</b> 읽게 되고, 「읽은 뒤 ~ 명부에 오르기 전」 창이 열린다. 그 창에 지나간
+     * 것은 <b>영구히</b> 유실된다(PR #109 봇 지적 ②, 2026-08-23 재현):
+     * <ul>
+     *   <li>카드가 커밋되면 {@link #publish}는 연결이 명부에 없어 지나가고, 스냅샷에는 그보다
+     *       먼저 읽혀서 없다 — <b>재연결 전까지 그 카드를 못 본다</b></li>
+     *   <li>방송이 끝나면 {@link #broadcastEnded}도 같은 이유로 지나가고, 호출자가 이미 읽은
+     *       상태는 {@code LIVE}라 {@code ended=false}로 열린다 — <b>연결이 토큰 만료까지 살아
+     *       있고</b> 클라이언트는 방송이 끝난 줄 모른다(실측: 표는 {@code ended}인데 10초 뒤에도
+     *       안 닫힘)</li>
+     * </ul>
      *
-     * <p>둘 다 큐에 넣기만 하므로 이 자물쇠가 잡히는 시간은 짧다.
+     * <p><b>대가를 알고 고른다.</b> DB 조회가 자물쇠 안으로 들어와 보유 시간이
+     * <b>5.9~22.4ms 늘어난다</b>(카드 300~1200장 실측). 그동안 {@link #open}·{@link #publish}·
+     * {@link #broadcastEnded}가 막힌다. 그래도 감수하는 이유: 22ms는 PRD 도착 기준(3초)의
+     * <b>0.7%</b>이고, 지금 잃는 것은 <b>카드와 {@code ended}의 영구 유실</b>이다.
+     *
+     * <p>🔴 <b>{@code get()}이 {@code open()}보다 먼저다.</b> 뒤로 옮기면 자리가 영구히 샌다 —
+     * {@code open}이 명부에 자리를 잡고 정리 콜백을 거는데, 그 콜백은 서블릿 컨테이너가 emitter를
+     * 받아야 불린다. 그전에 조회가 던지면(커넥션 고갈·쿼리 타임아웃·직렬화 실패) 컨테이너는 그
+     * emitter를 모르므로 자리는 프로세스가 죽을 때까지 남는다(라운드 1 중대,
+     * {@code expected: 0 but was: 1}로 재현한 자리다). 대신 상한 초과로 {@code open}이 던지면
+     * 스냅샷을 헛읽는데, 상한 초과는 드물고 유실보다 싸다.
      */
     public synchronized SseEmitter openWithSnapshot(String streamId, String userId, Duration timeout,
-                                                    List<JumpCardSnapshot> initialCards, boolean ended) {
+                                                    Supplier<InitialSnapshot> initial) {
+        InitialSnapshot snapshot = initial.get();
         SseEmitter emitter = open(streamId, userId, timeout);
-        sendInitial(emitter, initialCards, ended);
+        sendInitial(emitter, snapshot.cards(), snapshot.ended());
         return emitter;
     }
 
