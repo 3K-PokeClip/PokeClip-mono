@@ -184,11 +184,13 @@ class ChatCollectionStatusResolverTest extends IntegrationTestSupport {
     //         그것 없이 stopped를 단언하면 아무 일도 안 일어난 경우와 구분이 안 된다.
     // 문항 3: 리스너를 붙드는 스레드는 그 세션의 재연결 루프(가상 스레드)다. memoStarted가 풀린 시점에
     //         그 스레드는 notifyPermanentStop 안에 있고, 단언은 그동안 다른 스레드에서 돈다.
-    // 문항 4: 「stopped + needsRelink + since==지금」은 <b>메모 경로로도 통과한다</b>(그 검사의 레코더
-    //         시계가 같은 「지금」이다) — store.find("s1")가 비어 있음을 같이 단언해 등록부를 읽었음을 못박는다.
-    // 문항 5: fromLive의 case STOPPED를 default로 합치면 since=null·needsRelink=false로 빨간불(확인함).
+    // 문항 4: since==null은 <b>등록부를 아예 안 읽는 구현으로도 통과한다</b>(unknown도 null이다) —
+    //         state·needsRelink를 같이 보고, store.find("s1")가 비어 있음으로 메모 경로가 아님을 못박는다.
+    //         셋이 동시에 참인 구현은 fromLive의 case STOPPED뿐이다.
+    // 문항 5: fromLive의 case STOPPED를 default로 합치면 needsRelink=false로 빨간불(확인함).
+    //         <b>since는 이제 양쪽 다 null이라 그 갈래를 못 지킨다 — 지키는 것은 needsRelink 단언이다.</b>
     @Test
-    void 포기_메모가_남기_전_찰나에도_stopped이고_since는_지금이다() throws Exception {
+    void 포기_메모가_남기_전_찰나에도_stopped이고_since는_null이다() throws Exception {
         java.util.concurrent.CountDownLatch memoStarted = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch memoRelease = new java.util.concurrent.CountDownLatch(1);
         registry.onPermanentStop((streamId, reason) -> {
@@ -209,8 +211,8 @@ class ChatCollectionStatusResolverTest extends IntegrationTestSupport {
             ChatCollectionStatus status = resolver.resolve("s1");
             assertThat(status.state()).isEqualTo("stopped");
             assertThat(status.needsRelink()).as("SESSION_AUTH_REJECTED는 다시 연동해야 풀린다").isTrue();
-            assertThat(status.since()).as("메모가 아직 없으니 포기 시각은 「지금」이다 — 메모 경로와 갈리는 지점")
-                    .isEqualTo(status.observedAt()).isEqualTo(지금);
+            assertThat(status.since()).as("포기 시각은 스냅숏에 없다 — 호출 시각을 대신 실으면 「얼마나 오래 멈췄나」가 거짓말이 된다")
+                    .isNull();
             assertThat(status.attempt()).as("재연결 중이 아니다").isNull();
             assertThat(store.find("s1")).as("메모 경로가 아니라 등록부를 읽었다").isEmpty();
         } finally {

@@ -68,9 +68,13 @@ public class ChatCollectionStatusResolver {
         return switch (state) {
             case RECONNECTING -> new ChatCollectionStatus(streamId, state.wireName(),
                     live.disconnectedAt(), live.attempt(), false, now);
-            // 등록부가 지우기 직전의 찰나다. 포기 시각은 스냅숏에 없으니 지금으로 — 메모가 남으면 created_at이 이긴다.
+            // 등록부가 지우기 직전의 찰나다. <b>포기 시각은 스냅숏에 없으므로 since를 비운다.</b>
+            // 여기 now를 실었더니 메모가 남기 전까지(반개방이면 최악 10초) 부를 때마다 since가 그 호출
+            // 시각으로 갱신됐다 — clip이 observedAt - since로 「얼마나 오래 멈췄나」를 재면 그 구간 내내
+            // 0이다가 메모가 저장된 뒤 첫 호출에서 갑자기 그만큼 뛴다. 모르는 값을 그럴듯하게 지어내지
+            // 않는다(attempt도 이 상태에선 null이다). 진짜 값은 메모가 남는 순간 created_at으로 온다.
             case STOPPED -> new ChatCollectionStatus(streamId, state.wireName(),
-                    now, null, CollectionState.needsRelink(live.reason()), now);
+                    null, null, CollectionState.needsRelink(live.reason()), now);
             default -> new ChatCollectionStatus(streamId, state.wireName(), null, null, false, now);
         };
     }
