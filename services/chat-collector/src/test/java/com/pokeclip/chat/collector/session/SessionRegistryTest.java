@@ -7,6 +7,7 @@ import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.status.CollectionState;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
@@ -933,6 +934,74 @@ class SessionRegistryTest extends IntegrationTestSupport {
         }
         awaitUntil(AWAIT, () -> registry.activeCount() == 0);
         assertThat(registry.open(key("s3", 1L, "chA"), "tokA3")).as("자리가 비면 새로 연다").isTrue();
+    }
+
+    /**
+     * <b>첫 수립이 영구 실패인 동안에도 창구가 {@code stopped}를 답해야 한다.</b>
+     *
+     * <p>같은 401을 <b>두 길</b>로 맞을 수 있는데 답이 갈렸다 — ⓐ 붙어 있다가 끊겨 재연결
+     * 발급이 거부되면 {@code StreamSession}이 {@code status.stopped(reason)}을 찍고 <b>나서</b>
+     * 알림으로 내려가지만, ⓑ 첫 수립에서 거부되면 그 자리가 {@code status}를 안 건드려
+     * {@code ESTABLISHING} 그대로였다. <b>둘 다 배너를 끄는 값이 아니어야 하는데
+     * {@code establishing}은 배너를 끈다</b>(PRD 응답 표) — 포기 알림을 「지우기 전」에 둔
+     * 결정이 지키려던 것이 ⓑ에서만 안 지켜졌다.
+     *
+     * <p>창의 폭은 메모 INSERT 한 번이라 평시 밀리초이고 DB가 반개방이면 최대 10초다
+     * ({@code socketTimeout}). 유실도 카운터 오류도 없어 <b>사소</b>로 뒀지만,
+     * <b>고쳐 놓고 검사를 안 붙이면 다음 사람이 되돌려도 초록이다</b> — 이 갈래를 지키는
+     * 검사가 이 파일에 하나도 없었다(봇 1판 S1 실측: 되돌려도 491/실패 0).
+     */
+    // 문항 1: 다중화가 주제가 아니다 — 한 세션의 <b>두 길</b>(ⓐ·ⓑ)이 같은 답을 주는지를 잰다.
+    //         세션을 둘 여는 것은 대조군을 세우기 위해서지 세션 수가 요점이 아니다.
+    // 문항 2: 「알림이 갔다」만 보면 status를 안 건드려도 참이다 — 리스너를 붙들어
+    //         <b>그 구간을 고정한 채</b> 등록부가 무엇을 답하는지 직접 읽는다.
+    // 문항 3: 리스너를 붙드는 스레드는 open()을 부른 스레드 자신이다(첫 수립의 catch는
+    //         재연결 루프가 아니라 open의 호출 스레드 위에서 돈다). 그래서 open을 별도
+    //         스레드에 태우고 본 스레드가 그 동안 단언한다.
+    // 문항 4: state==STOPPED만 보면 <b>ⓐ에서만 맞는</b> 구현도 통과한다 — 같은 검사에서
+    //         ⓑ를 재고, 사유가 실렸는지·창구가 needsRelink를 켜는지까지 본다.
+    // 문항 5: SessionRegistry.open의 catch에서 status.stopped(e.reason()) 한 줄을 지우면
+    //         ESTABLISHING이 잡혀 빨간불(확인함).
+    @Test
+    void 첫_수립이_영구_실패한_그_자리에서도_stopped를_답한다() throws Exception {
+        givenRegistry();
+        java.util.concurrent.CountDownLatch memoStarted = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch memoRelease = new java.util.concurrent.CountDownLatch(1);
+        List<StopReason> seen = new java.util.concurrent.CopyOnWriteArrayList<>();
+        registry.onPermanentStop((streamId, reason) -> {
+            seen.add(reason);
+            memoStarted.countDown();
+            try {
+                memoRelease.await(10, java.util.concurrent.TimeUnit.SECONDS);   // 메모가 저장되는 동안
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        // 첫 수립의 발급부터 401 — 소켓이 한 번도 안 선다. ⓐ와 갈리는 지점이 이것이다.
+        behavior.failSessionCreateFor("tokB", 401);
+        Thread opener = new Thread(() -> registry.open(key("s1", 9L, "chB"), "tokB"), "probe-opener");
+        opener.setDaemon(true);
+        opener.start();
+        try {
+            assertThat(memoStarted.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    .as("알림이 안 왔으면 아래 단언은 아무것도 안 잰다").isTrue();
+            assertThat(seen).as("영구 사유로 왔어야 한다").containsExactly(StopReason.SESSION_AUTH_REJECTED);
+            assertThat(behavior.isConnected("tokB")).as("ⓑ는 소켓이 선 적이 없다 — ⓐ와 갈리는 지점").isFalse();
+
+            CollectionStatus.Snapshot now = registry.statusOf("s1");
+            assertThat(now).as("자리는 아직 남아 있다 — 알림 안에서 붙들려 있다").isNotNull();
+            assertThat(now.state())
+                    .as("establishing은 배너를 끄는 값이다 — 포기한 방송이 「붙는 중」으로 보인다")
+                    .isEqualTo(CollectionStatus.State.STOPPED);
+            assertThat(CollectionState.needsRelink(now.reason()))
+                    .as("사유를 안 실으면 창구가 needsRelink를 못 켠다")
+                    .isTrue();
+        } finally {
+            memoRelease.countDown();
+        }
+        opener.join(10_000);
+        awaitUntil(AWAIT, () -> registry.activeCount() == 0);
+        assertThat(registry.activeCount()).as("붙들림이 풀리면 자리가 비어야 한다").isZero();
     }
 
     // <b>리스너 예외 방어의 안쪽 겹을 재는 유일한 검사다</b>(critic A1). 방어가 두 겹인데 —

@@ -302,6 +302,16 @@ public class SessionRegistry {
                 // 최악 10초 선다({@code socketTimeout}, POK-128 critic 실측 10.02초). 비동기로
                 // 빼지 않는다: 같은 DB 상태면 이 편지의 판정이 이미 {@code EndedStreamStore.find}에서
                 // 같은 시한에 막힌 뒤라, 여기만 비동기로 빼도 회차 시간이 안 줄어든다.
+                // <b>알리기 전에 이 자리를 멈춤으로 표시한다.</b> 이 길은 status를 아무도 안
+                // 건드려 ESTABLISHING 그대로인데, 창구에서 establishing은 <b>배너를 끄는 값</b>이다
+                // (PRD 응답 표) — 포기한 방송이 「붙는 중」으로 보인다. 같은 401을 재연결 루프에서
+                // 맞는 길(ⓐ)은 StreamSession이 이미 status.stopped(reason)을 찍고 나서 내려오므로
+                // <b>두 길의 답이 갈려 있었다.</b>
+                //
+                // 덤으로 재연결 루프의 이중 알림 창이 닫힌다: 수립 중 절단으로 루프가 떠 있으면
+                // 그 루프도 onPermanentStop을 부를 수 있는데, STOPPED를 먼저 찍으면 루프가
+                // 자기 앞의 상태 검사에서 돌아선다.
+                status.stopped(e.reason());
                 notifyPermanentStop(streamId, e.reason());
             }
         }
