@@ -2,6 +2,8 @@ package com.pokeclip.clip.jumpcard.stream;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
+import com.pokeclip.clip.broadcast.BroadcastEventProcessor;
+import com.pokeclip.clip.broadcast.Envelopes;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
@@ -13,15 +15,21 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 실제 HTTP로 SSE를 연다. MockMvc로는 비동기 응답을 끝까지 흘려보내지 않아 이 갈래들이 안 보인다.
@@ -39,14 +47,19 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     private final BroadcastRepository broadcasts;
     private final CardStreamRegistry registry;
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate transactions;
+    private final BroadcastEventProcessor processor;
 
     JumpCardStreamEndToEndTest(@LocalServerPort int port, JumpCardService service,
-                               BroadcastRepository broadcasts, CardStreamRegistry registry, JdbcTemplate jdbc) {
+                               BroadcastRepository broadcasts, CardStreamRegistry registry, JdbcTemplate jdbc,
+                               TransactionTemplate transactions, BroadcastEventProcessor processor) {
         this.port = port;
         this.service = service;
         this.broadcasts = broadcasts;
         this.registry = registry;
         this.jdbc = jdbc;
+        this.transactions = transactions;
+        this.processor = processor;
     }
 
     /** 카드를 남기면 다른 클래스의 broadcasts.deleteAllInBatch()가 FK로 죽는다. */
@@ -173,6 +186,163 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
             assertThat(reader.await(1, Duration.ofSeconds(3))).isTrue();
             assertThat(reader.awaitClosed(Duration.ofSeconds(6)))
                     .as("만료 뒤에도 연결이 살면 죽은 토큰으로 계속 받는다").isTrue();
+        }
+    }
+
+    // ── 커밋 뒤 발행 · 종료 알림 (태스크 10) ──────────────────────────────
+
+    /** PRD 성공 기준이 3초다. {@code await}가 3초 안에 통과한 것이 아니라 <b>실제 시각차</b>를 잰다. */
+    @Test
+    void 카드를_넣으면_3초_안에_연결된_화면에_card가_온다() {
+        try (SseReader reader = open("s-1", TestTokens.access("t10-live"))) {
+            assertThat(reader.statusCode()).isEqualTo(200);
+            서두를_틔운다(reader);
+
+            Instant sent = Instant.now();
+            post2A("s-1", "evt-live", 5_020_000L);
+
+            assertThat(reader.awaitName("card", Duration.ofSeconds(3))).isTrue();
+            SseReader.Event card = 마지막_card(reader);
+            assertThat(Duration.between(sent, card.receivedAt()))
+                    .as("보낸 시각과 받은 시각의 차가 성공 기준이다").isLessThan(Duration.ofSeconds(3));
+            assertThat(MAPPER.readTree(card.data()).get("window").get("startMs").asLong())
+                    .isEqualTo(5_020_000L);
+        }
+    }
+
+    /** 점유는 남에게 보여야 의미가 있다 — 안 보이면 둘이 같은 카드를 잡는다. */
+    @Test
+    void 집으면_다른_연결에도_card가_온다() {
+        long id = service.record("s-1", auto("evt-claim", 3_000_000L)).card().id();
+
+        try (SseReader watcher = open("s-1", TestTokens.access("t10-watcher"))) {
+            assertThat(watcher.await(1, Duration.ofSeconds(3))).isTrue();
+            int before = watcher.events().size();
+
+            service.claim(id, "t10-claimer");
+
+            assertThat(watcher.awaitName("card", Duration.ofSeconds(3))).isTrue();
+            awaitUntil(() -> watcher.events().size() > before, Duration.ofSeconds(3));
+            assertThat(MAPPER.readTree(마지막_card(watcher).data()).get("claimedBy").asString())
+                    .isEqualTo("t10-claimer");
+        }
+    }
+
+    /**
+     * <b>놓기가 나갈 때 {@code claimedBy}가 비어 있어야 한다.</b> 네이티브 UPDATE 뒤 1차 캐시에
+     * 낡은 엔티티가 남으면 「놓았는데 아직 잡혀 있는」 카드가 화면에 뜬다 —
+     * {@code @Modifying(clearAutomatically = true)}가 그것을 막는다.
+     * 태스크 5까지는 {@code publishAfterCommit}이 비어 있어 이 자리가 가려져 있었다.
+     */
+    @Test
+    void 놓으면_비어_있는_카드가_나간다() {
+        long id = service.record("s-1", auto("evt-release", 4_000_000L)).card().id();
+        service.claim(id, "t10-owner");
+
+        try (SseReader watcher = open("s-1", TestTokens.access("t10-release"))) {
+            assertThat(watcher.await(1, Duration.ofSeconds(3))).isTrue();
+            int before = watcher.events().size();
+
+            service.release(id, "t10-owner");
+
+            awaitUntil(() -> watcher.events().size() > before, Duration.ofSeconds(3));
+            assertThat(MAPPER.readTree(마지막_card(watcher).data()).get("claimedBy").isNull())
+                    .as("놓았는데 잡힌 채로 나가면 아무도 그 카드를 못 집는다").isTrue();
+        }
+    }
+
+    /**
+     * 「안 온다」를 재기 전에 <b>같은 대기로 긍정 경로를 먼저 잰다</b> — 그래야 그 대기 시간이
+     * 충분하다는 증거가 생긴다(async-test-reality 문항 4(가)).
+     */
+    @Test
+    void 트랜잭션이_되감기면_발행되지_않는다() {
+        try (SseReader reader = open("s-1", TestTokens.access("t10-rollback"))) {
+            assertThat(reader.statusCode()).isEqualTo(200);
+            서두를_틔운다(reader);
+
+            // (가) 긍정 경로 — 커밋된 카드가 3초 안에 온다. 이것이 아래 3초 대기의 근거다.
+            service.record("s-1", auto("evt-ok", 1_000_000L));
+            awaitUntil(() -> 카드가_왔나(reader, 1_000_000L), Duration.ofSeconds(3));
+
+            // (나) 되감기
+            assertThatThrownBy(() -> transactions.executeWithoutResult(status -> {
+                service.record("s-1", auto("evt-rollback", 9_000_000L));
+                throw new IllegalStateException("되감기");
+            })).isInstanceOf(IllegalStateException.class);
+
+            // 이벤트 개수를 세지 않는다 — 초기 스냅샷·하트비트가 섞여 흔들린다.
+            // 「되감긴 그 카드가 왔는가」만 본다(문항 5).
+            잠깐(3_000);
+            assertThat(카드가_왔나(reader, 9_000_000L)).as("롤백된 카드가 화면에 나갔다").isFalse();
+        }
+        // 개수가 아니라 「그 카드가 없다」를 잰다 — 개수는 서두를 틔우며 만든 카드까지 세어
+        // 시험 준비를 바꾸면 같이 흔들린다(문항 5).
+        assertThat(service.snapshotsOf("s-1")).extracting(c -> c.window().startMs())
+                .as("되감긴 카드가 표에 남았다").doesNotContain(9_000_000L)
+                .as("같은 트랜잭션 밖의 성공한 카드까지 사라졌다").contains(1_000_000L);
+    }
+
+    @Test
+    void 종료_편지가_처리되면_ended가_오고_닫힌다() {
+        try (SseReader reader = open("s-1", TestTokens.access("t10-ended"))) {
+            서두를_틔운다(reader);
+
+            processor.process(Envelopes.ended("evt-end", "s-1", 2L));
+            registry.broadcastEnded("s-1");
+
+            assertThat(reader.awaitName("ended", Duration.ofSeconds(3))).isTrue();
+            assertThat(reader.awaitClosed(Duration.ofSeconds(3))).isTrue();
+        }
+    }
+
+    /**
+     * 응답 헤더를 실제로 내보낸다. 보낼 것이 하나도 없으면 서버가 아무것도 안 써서 헤더가
+     * 안 나가고 클라이언트가 헤더를 기다린 채 멈춘다(태스크 9 실측).
+     */
+    private void 서두를_틔운다(SseReader reader) {
+        registry.publish(service.snapshotsOf("s-1").isEmpty()
+                ? service.record("s-1", auto("evt-open", 500_000L)).card()
+                : service.snapshotsOf("s-1").get(0));
+        assertThat(reader.await(1, Duration.ofSeconds(3))).isTrue();
+    }
+
+    /** 그 창의 카드가 화면에 도착했는가. 개수 대신 이것을 본다. */
+    private boolean 카드가_왔나(SseReader reader, long windowStartMs) {
+        return reader.events().stream()
+                .filter(e -> "card".equals(e.name()) && e.data() != null && !e.data().isEmpty())
+                .anyMatch(e -> MAPPER.readTree(e.data()).get("window").get("startMs").asLong() == windowStartMs);
+    }
+
+    private SseReader.Event 마지막_card(SseReader reader) {
+        return reader.events().stream().filter(e -> "card".equals(e.name()))
+                .reduce((a, b) -> b).orElseThrow();
+    }
+
+    private void post2A(String streamId, String eventId, long start) {
+        String body = """
+                {"eventId":"%s","source":"auto","streamTimestampMs":%d,
+                 "window":{"startMs":%d,"endMs":%d},"score":97,"evidence":{"multiplier":4.2}}
+                """.formatted(eventId, start + 23_000L, start, start + 42_000L);
+        try {
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create("http://localhost:" + port
+                                    + "/internal/broadcasts/" + streamId + "/highlights"))
+                            .header("X-Internal-Token", "test-only-internal-token-32bytes-long!!")
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(response.statusCode()).isEqualTo(201);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private void 잠깐(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

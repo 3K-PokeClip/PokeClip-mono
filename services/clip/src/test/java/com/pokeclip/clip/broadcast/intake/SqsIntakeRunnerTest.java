@@ -554,6 +554,84 @@ class SqsIntakeRunnerTest {
         }
     }
 
+    // ── 종료 알림 (태스크 10) ──────────────────────────────────────────────
+
+    @Test
+    void 종료_편지를_PROCESSED로_처리하면_리스너가_불린다() {
+        List<String> called = new ArrayList<>();
+        FakeSqsClient sqs = FakeSqsClient.withMessages(endedBody("evt-e", "stream-1", 2L));
+
+        newRunnerWithListener(sqs, envelope -> ProcessResult.PROCESSED, called::add).pollOnce();
+
+        assertThat(called).containsExactly("stream-1");
+    }
+
+    /**
+     * DUPLICATE·IGNORED_STALE은 <b>명부를 안 바꿨다.</b> 그런데도 알리면 붙어 있는 화면이
+     * 멀쩡히 진행 중인 방송에서 쫓겨난다.
+     */
+    @Test
+    void 시작_편지나_DUPLICATE_IGNORED_STALE에는_안_불린다() {
+        List<String> called = new ArrayList<>();
+
+        newRunnerWithListener(FakeSqsClient.withMessages(baseEnvelopeJson()),
+                envelope -> ProcessResult.PROCESSED, called::add).pollOnce();
+        assertThat(called).as("시작 편지에는 안 불려야 한다").isEmpty();
+
+        newRunnerWithListener(FakeSqsClient.withMessages(endedBody("evt-d", "stream-2", 2L)),
+                envelope -> ProcessResult.DUPLICATE, called::add).pollOnce();
+        newRunnerWithListener(FakeSqsClient.withMessages(endedBody("evt-s", "stream-3", 2L)),
+                envelope -> ProcessResult.IGNORED_STALE, called::add).pollOnce();
+
+        assertThat(called).as("명부를 안 바꾼 결과에는 안 불려야 한다").isEmpty();
+    }
+
+    /** 알림 실패는 편지를 되돌리지 않는다 — 이미 지웠고 명부는 반영됐다. */
+    @Test
+    void 리스너가_던져도_편지는_지워지고_회차는_계속된다() {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(endedBody("evt-e", "stream-1", 2L));
+
+        try (LogCaptor captor = new LogCaptor()) {
+            boolean ok = newRunnerWithListener(sqs, envelope -> ProcessResult.PROCESSED,
+                    streamId -> {
+                        throw new IllegalStateException("알림 실패");
+                    }).pollOnce();
+
+            assertThat(ok).as("알림 실패로 회차가 실패로 끝나면 편지가 다시 온다").isTrue();
+            assertThat(sqs.deletedReceiptHandles()).as("이미 명부에 반영됐는데 편지가 남았다").hasSize(1);
+            assertThat(captor.messages())
+                    .anyMatch(m -> m.startsWith("broadcast.intake.ended_listener_failed"));
+        }
+    }
+
+    /** 리스너 없이 만드는 기존 생성자 경로가 그대로 살아 있어야 한다. */
+    @Test
+    void 리스너가_없으면_기존과_같다() {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(endedBody("evt-e", "stream-1", 2L));
+
+        assertThat(newRunner(sqs, envelope -> ProcessResult.PROCESSED).pollOnce()).isTrue();
+        assertThat(sqs.deletedReceiptHandles()).hasSize(1);
+    }
+
+    private static String endedBody(String eventId, String streamId, long sequence) {
+        return """
+                {"schemaVersion":1,"eventId":"%s","eventType":"broadcast.ended",
+                 "occurredAt":"2026-08-23T01:00:00Z","streamId":"%s","streamerId":"streamer-1",
+                 "sequence":%d,"traceId":"trace-1","payload":{}}
+                """.formatted(eventId, streamId, sequence);
+    }
+
+    private static String baseEnvelopeJson() {
+        return new ObjectMapper().writeValueAsString(baseEnvelope());
+    }
+
+    private static SqsIntakeRunner newRunnerWithListener(SqsClient sqs,
+                                                         Function<LifecycleEnvelope, ProcessResult> behavior,
+                                                         EndedListener listener) {
+        return new SqsIntakeRunner(sqs, propertiesFor(), new IntakeStatus(true),
+                new StubProcessor(behavior), new ObjectMapper(), null, listener);
+    }
+
     private static SqsIntakeRunner newRunner(SqsClient sqs,
                                              Function<LifecycleEnvelope, ProcessResult> behavior,
                                              IntakeStatus status,

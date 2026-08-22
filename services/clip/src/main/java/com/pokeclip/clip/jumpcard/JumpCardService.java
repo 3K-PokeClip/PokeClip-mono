@@ -6,10 +6,13 @@ import com.pokeclip.clip.jumpcard.JumpCardErrors.ClaimedByOtherException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.JumpCardNotFoundException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.NotClaimOwnerException;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
+import com.pokeclip.clip.jumpcard.stream.CardStreamRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
@@ -29,13 +32,15 @@ public class JumpCardService {
     private final BroadcastRepository broadcasts;
     private final JumpCardProperties properties;
     private final ObjectMapper mapper;
+    private final CardStreamRegistry registry;
 
     JumpCardService(JumpCardRepository cards, BroadcastRepository broadcasts,
-                    JumpCardProperties properties, ObjectMapper mapper) {
+                    JumpCardProperties properties, ObjectMapper mapper, CardStreamRegistry registry) {
         this.cards = cards;
         this.broadcasts = broadcasts;
         this.properties = properties;
         this.mapper = mapper;
+        this.registry = registry;
     }
 
     @Transactional
@@ -117,7 +122,23 @@ public class JumpCardService {
         return JumpCardSnapshot.of(card, properties.claimTtl(), mapper);
     }
 
-    /** 카드가 생기거나 바뀌었다고 알리는 유일한 자리. 태스크 10이 커밋 뒤 제출로 채운다. */
+    /**
+     * 카드가 생기거나 바뀌었다고 알리는 유일한 자리. <b>커밋 뒤에만</b> 보낸다 —
+     * 커밋 전에 보내면 되감긴 카드가 화면에 뜨고, 지울 방법이 없다.
+     *
+     * <p>{@code afterCommit} 안에서는 <b>제출만</b> 한다. 전송은 {@code CardStreamExecutor}의
+     * 전용 스레드가 하므로 요청 스레드가 느린 브라우저에 묶이지 않는다 — 커밋 뒤 처리를 요청
+     * 스레드에 이어 붙였다가 커넥션 풀 데드락을 낸 자리가 POK-93이다(ChzzkCleanupExecutor와 같은 분리).
+     *
+     * <p>트랜잭션이 없으면 {@code IllegalStateException}이 난다. 그게 맞다 — 자기 호출로
+     * {@code @Transactional} 프록시를 안 탄 것을 여기서 잡아 준다.
+     */
     private void publishAfterCommit(JumpCardSnapshot snapshot) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                registry.publish(snapshot);
+            }
+        });
     }
 }

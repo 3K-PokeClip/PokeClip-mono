@@ -2,6 +2,7 @@ package com.pokeclip.clip.broadcast;
 
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -16,10 +17,12 @@ class BroadcastSchemaTest extends IntegrationTestSupport {
 
     private final BroadcastRepository broadcasts;
     private final BroadcastEventRepository events;
+    private final JdbcTemplate jdbc;
 
-    BroadcastSchemaTest(BroadcastRepository broadcasts, BroadcastEventRepository events) {
+    BroadcastSchemaTest(BroadcastRepository broadcasts, BroadcastEventRepository events, JdbcTemplate jdbc) {
         this.broadcasts = broadcasts;
         this.events = events;
+        this.jdbc = jdbc;
     }
 
     /**
@@ -29,6 +32,9 @@ class BroadcastSchemaTest extends IntegrationTestSupport {
      */
     @BeforeEach
     void 앞_테스트의_흔적을_지운다() {
+        // jump_cards가 broadcasts의 자식이다. 카드를 남긴 클래스가 앞에 돌면
+        // 아래 삭제가 FK로 죽는다(POK-118). 실행 순서에 기대지 않는다.
+        jdbc.update("DELETE FROM jump_cards");
         events.deleteAllInBatch();
         broadcasts.deleteAllInBatch();
     }

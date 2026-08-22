@@ -7,6 +7,7 @@ import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -23,8 +24,12 @@ import java.util.stream.Stream;
  */
 public final class SseReader implements AutoCloseable {
 
-    /** {@code comment}는 하트비트({@code : ping})처럼 이름 없는 줄이다. */
-    public record Event(String name, String id, String data, String comment) {
+    /**
+     * {@code comment}는 하트비트({@code : ping})처럼 이름 없는 줄이다.
+     * {@code receivedAt}은 <b>클라이언트가 받은 시각</b>이다 — 「3초 안에 도착」을 재려면
+     * 「3초 안에 await가 통과했다」가 아니라 실제 시각차를 봐야 한다(문항 4(나)).
+     */
+    public record Event(String name, String id, String data, String comment, Instant receivedAt) {
     }
 
     private final HttpClient client = HttpClient.newHttpClient();
@@ -71,9 +76,9 @@ public final class SseReader implements AutoCloseable {
                     data.append(line.substring(5).trim());
                 } else if (line.startsWith(":")) {
                     // 주석(하트비트). 그 자체가 하나의 이벤트다.
-                    add(new Event(null, null, null, line.substring(1).trim()));
+                    add(new Event(null, null, null, line.substring(1).trim(), Instant.now()));
                 } else if (line.isEmpty() && (name != null || data.length() > 0)) {
-                    add(new Event(name, id, data.toString(), null));
+                    add(new Event(name, id, data.toString(), null, Instant.now()));
                     name = null;
                     id = null;
                     data = new StringBuilder();
@@ -119,6 +124,28 @@ public final class SseReader implements AutoCloseable {
 
     public boolean closed() {
         return closed.getCount() == 0;
+    }
+
+    /** {@code index}번째 이벤트를 받은 시각. */
+    public Instant receivedAt(int index) {
+        return events().get(index).receivedAt();
+    }
+
+    /** 이름이 {@code name}인 이벤트가 올 때까지 기다린다. {@code ended}처럼 종류가 중요한 갈래에 쓴다. */
+    public boolean awaitName(String name, Duration timeout) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (System.nanoTime() < deadline) {
+            if (events().stream().anyMatch(e -> name.equals(e.name()))) {
+                return true;
+            }
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return events().stream().anyMatch(e -> name.equals(e.name()));
     }
 
     public List<Event> events() {

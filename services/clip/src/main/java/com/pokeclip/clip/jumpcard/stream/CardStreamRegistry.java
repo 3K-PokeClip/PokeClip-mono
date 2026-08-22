@@ -1,5 +1,6 @@
 package com.pokeclip.clip.jumpcard.stream;
 
+import com.pokeclip.clip.broadcast.intake.EndedListener;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.StreamLimitExceededException;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import jakarta.annotation.PostConstruct;
@@ -28,7 +29,7 @@ import java.util.function.Function;
  * 인터페이스를 미리 뽑지 않는다 — 껍데기만 남는다.
  */
 @Component
-public class CardStreamRegistry {
+public class CardStreamRegistry implements EndedListener {
 
     /** 연결 하나. {@code seq}가 스트라이프를 정해 같은 연결의 이벤트 순서가 지켜진다. */
     private record Conn(long seq, String streamId, String userId, SseEmitter emitter) {
@@ -134,6 +135,7 @@ public class CardStreamRegistry {
     }
 
     /** 방송이 끝났다. 연결을 열어 둬도 더 올 카드가 없으므로 알리고 닫는다. */
+    @Override
     public void broadcastEnded(String streamId) {
         for (Conn conn : conns.values()) {
             if (conn.streamId().equals(streamId)) {
