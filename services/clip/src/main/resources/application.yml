@@ -62,6 +62,18 @@ management:
       show-details: always
 
 pokeclip:
+  jwt:
+    # auth와 같은 값이어야 한다 — 같은 대칭키로 서명된 토큰을 검증한다(ADR-047).
+    # 이 서버는 발급하지 않는다.
+    # 기본값을 빈 문자열로 두는 이유는 auth와 같다 — 안 주면 리터럴 "${JWT_SECRET}"이
+    # 값으로 바인딩돼 서버는 그냥 뜨고, 사람 API만 전부 401이 되고 신호가 안 남는다.
+    secret: ${JWT_SECRET:}
+
+  internal-api:
+    # 판별기(chat-detector)가 X-Internal-Token 헤더로 보낸다. auth와 같은 값이다 —
+    # 서버 간 토큰은 하나다. 빈 기본값을 두는 이유는 JWT_SECRET과 같다.
+    token: ${INTERNAL_API_TOKEN:}
+
   broadcast:
     intake:
       # 기본이 꺼짐이다. 켜져 있으면 CI·남의 로컬이 뜰 때마다 없는 큐에 붙으려 한다.
