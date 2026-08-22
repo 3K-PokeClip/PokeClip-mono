@@ -14,7 +14,7 @@ import java.time.Duration;
 import java.time.Instant;
 
 /**
- * 시험 전용 토큰 발급기. <b>{@code src/main}에는 이런 코드가 없어야 한다</b>(ADR-047) —
+ * 시험 전용 토큰 발급기. <b>{@code src/main}에는 이런 코드가 없어야 한다</b>(ADR-048) —
  * 발급자는 auth 하나다. clip이 JwtEncoder를 갖는 순간 토큰의 출처가 둘이 된다.
  *
  * <p>키는 {@code application-test.yml}의 {@code pokeclip.jwt.secret}과 같은 문자열이어야

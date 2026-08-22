@@ -12,7 +12,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 
 /**
- * auth와 같은 대칭키(HS256)로 토큰을 <b>검증만</b> 한다(ADR-047). 같은 키로 발급도 할 수
+ * auth와 같은 대칭키(HS256)로 토큰을 <b>검증만</b> 한다(ADR-048). 같은 키로 발급도 할 수
  * 있지만 발급자는 auth 하나다 — 이 서버에 JwtEncoder를 만들지 않는다. 만드는 순간
  * 토큰의 출처가 둘이 된다. 시험이 쓰는 발급기는 test 소스의 TestTokens에만 있다.
  */
