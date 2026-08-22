@@ -12,6 +12,10 @@ class ReconnectPolicyTest {
     private final ReconnectPolicy policy =
             new ReconnectPolicy(Duration.ofSeconds(1), Duration.ofSeconds(60));
 
+    // 결함 주입: ReconnectPolicy에서 {@code case LINK_UNAVAILABLE -> false}를 빼면
+    // 이 검사와 아래 전수 검사가 같이 빨간불이다(확인함 — 고치기 전 상태가 바로 그것이고
+    // 둘 다 단언 실패로 떨어졌다: 27행·59행). 그 값이 default -> true에 앉아 있던 것이
+    // POK-128 critic S1이다.
     @Test
     void 영원히_안_풀리는_사유는_재시도하지_않는다() {
         assertThat(ReconnectPolicy.retriable(StopReason.SESSION_AUTH_REJECTED)).isFalse();
@@ -21,6 +25,9 @@ class ReconnectPolicyTest {
                 .isFalse();
         assertThat(ReconnectPolicy.retriable(StopReason.SEND_MISUSE))
                 .as("우리 버그로 재연결이 돌면 버그는 영영 안 보이고 자리만 태운다")
+                .isFalse();
+        assertThat(ReconnectPolicy.retriable(StopReason.LINK_UNAVAILABLE))
+                .as("연동이 끊긴 것은 스트리머가 다시 연동해야 풀린다. 두들겨서 풀리지 않는다")
                 .isFalse();
     }
 
@@ -49,7 +56,8 @@ class ReconnectPolicyTest {
             boolean denied = reason == StopReason.SESSION_AUTH_REJECTED
                     || reason == StopReason.SUBSCRIBE_REJECTED
                     || reason == StopReason.REVOKED
-                    || reason == StopReason.SEND_MISUSE;
+                    || reason == StopReason.SEND_MISUSE
+                    || reason == StopReason.LINK_UNAVAILABLE;
             assertThat(ReconnectPolicy.retriable(reason))
                     .as("허용 목록으로 짜면 새 사유가 기본으로 영구 정지에 걸린다: " + reason)
                     .isEqualTo(!denied);
