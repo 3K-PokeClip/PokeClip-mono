@@ -2,6 +2,8 @@ package com.pokeclip.auth.delegation.api;
 
 import com.pokeclip.auth.delegation.DelegationRelation;
 import com.pokeclip.auth.delegation.DelegationService;
+import com.pokeclip.auth.delegation.api.dto.AccessibleStreamersRequest;
+import com.pokeclip.auth.delegation.api.dto.AccessibleStreamersResponse;
 import com.pokeclip.auth.delegation.api.dto.DelegationResolveRequest;
 import com.pokeclip.auth.delegation.api.dto.DelegationResolveResponse;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -46,5 +48,10 @@ public class DelegationResolveController {
                     request.userId(), request.streamerUserId());
         }
         return new DelegationResolveResponse(relation);
+    }
+
+    @PostMapping("/accessible")
+    public AccessibleStreamersResponse accessible(@Valid @RequestBody AccessibleStreamersRequest request) {
+        return new AccessibleStreamersResponse(service.accessibleStreamers(request.userId()));
     }
 }

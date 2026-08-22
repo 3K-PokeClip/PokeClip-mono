@@ -1,5 +1,6 @@
 package com.pokeclip.auth.delegation;
 
+import com.pokeclip.auth.delegation.api.dto.AccessibleStreamersResponse;
 import com.pokeclip.auth.delegation.api.dto.DelegationResponse;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
@@ -10,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -57,6 +59,18 @@ public class DelegationService {
             return DelegationRelation.EDITOR;
         }
         return DelegationRelation.NONE;
+    }
+
+    /** 본인 한 줄 + 살아있는 위임의 스트리머들. 목록에 없는 것이 NONE이다. */
+    @Transactional(readOnly = true)
+    public List<AccessibleStreamersResponse.Entry> accessibleStreamers(Long userId) {
+        List<AccessibleStreamersResponse.Entry> out = new ArrayList<>();
+        out.add(new AccessibleStreamersResponse.Entry(userId, DelegationRelation.OWNER));
+        // 인자가 editorId다 — findByStreamerId를 쓰면 「내가 임명한 편집자들」이라는 정반대 목록이 된다.
+        for (EditorDelegation d : delegations.findByEditorIdAndRevokedAtIsNullOrderByGrantedAtDesc(userId)) {
+            out.add(new AccessibleStreamersResponse.Entry(d.getStreamerId(), DelegationRelation.EDITOR));
+        }
+        return List.copyOf(out);
     }
 
     /**
