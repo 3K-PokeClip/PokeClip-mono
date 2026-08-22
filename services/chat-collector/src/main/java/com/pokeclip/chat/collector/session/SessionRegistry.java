@@ -367,10 +367,15 @@ public class SessionRegistry {
             // RETRY_LATER로 편지를 남겨 다음 회차에 빈 자리에 새로 연다(isStaleStart는 false다).
             // PR #98 2판 codex P1 「좁은 창, 재현 못 함」이 이 자리다 — SessionRegistryTest가 리스너를
             // 붙들어 결정적으로 연다.
-            // <b>첫 수립 경로에서는 이 가드가 안 걸린다</b> — 그때 세션은 ESTABLISHING이다. 편지 폴링
-            // 스레드가 하나라 「open() 안에서 블로킹 중에 같은 스트리머의 open()」이 같은 스레드라
-            // 성립하지 않고, 그 창은 수립 REST 동안 원래 열려 있던 것이다(POK-128 critic S3).
-            // <b>수립을 워커로 빼는 날</b>(CLAUDE.md 「다음 카드로 넘긴 것」) ESTABLISHING도 같이 봐야 한다.
+            // <b>첫 수립이 영구 실패한 뒤 알림 구간도 이제 이 가드에 걸린다.</b> 여기 「첫 수립에서는
+            // 안 걸린다 — 그때 ESTABLISHING이다」라고 적혀 있었는데, open()의 catch가 알림 앞에
+            // status.stopped(reason)을 찍게 되면서 그 자리도 STOPPED가 됐다. <b>동작은 안전한 쪽으로
+            // 바뀌었다</b> — 그전에는 그 창에서 갈아끼움이 성립해 위 문단이 「영구 유실」이라 부르는
+            // 바로 그 모양(죽어가는 세션에 이름만 갈아끼우고 편지를 지움)이 될 수 있었다.
+            // <b>지금 도달 경로가 없는 이유는 상태가 아니라 스레드 수다</b> — 편지 폴링이 스레드
+            // 하나(SqsIntakeLoop)이고 registry.open을 부르는 자리도 LinkedSessionStarter 하나뿐이라,
+            // 같은 스레드가 자기 open() 안에서 블로킹 중에 다시 open()을 부를 수 없다.
+            // <b>수립을 워커로 빼는 날</b>(CLAUDE.md 「다음 카드로 넘긴 것」) 이 자리를 다시 본다.
             log.info("chat.registry.open_deferred streamer={} stream={} reason=SEAT_STOPPING",
                     key.streamerId(), key.streamId());
             return false;

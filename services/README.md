@@ -224,24 +224,35 @@ AUTH_BASE_URL=http://localhost:8082 INTERNAL_API_TOKEN=<auth와 같은 값> \
 CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-collector:bootRun
 ```
 
-| 변수 | 기본값 | |
-|---|---|---|
-| `BROADCAST_INTAKE_ENABLED` | `false` | 켜면 편지 폴링 루프가 돈다 |
-| `BROADCAST_QUEUE_URL` | 빈 값 | 생명주기 FIFO 큐 주소. **켜져 있는데 비면 부팅이 죽는다** |
-| `BROADCAST_QUEUE_ENDPOINT` | 빈 값 | 비면 진짜 AWS. LocalStack 실측 때만 준다 |
-| `BROADCAST_QUEUE_WAIT` | `20s` | 롱폴링 대기. **SQS 상한이 20초**라 넘기면 부팅이 죽는다 |
-| `BROADCAST_QUEUE_MAX_MESSAGES` | `10` | 한 회차에 꺼낼 최대 편지 수. **SQS 상한이 10**이다 |
-| `AUTH_BASE_URL` | `http://localhost:8082` | 스트리머 토큰을 물을 auth 주소. 컨테이너 안에서는 서비스 이름 |
-| `INTERNAL_API_TOKEN` | 빈 값 | auth의 `/internal/**`이 `X-Internal-Token`으로 보는 값. **auth에 준 것과 같아야 한다.** POK-128부터는 이 서버의 `/internal/*`(수집 상태 창구)도 같은 값으로 잠근다 — 비면 창구가 전부 401이다 |
-| `BROADCAST_ENDED_SWEEP_INTERVAL` | `PT1H` | 끝난 방송 메모를 치우는 주기 |
-| `BROADCAST_ENDED_RETENTION` | `PT24H` | 그 메모의 보관 기간(ADR-016의 TTL 24h) |
-| `AWS_REGION` | `ap-northeast-2` | 큐·S3 공용 |
+**`compose` 칸은 `docker-compose.dev.yml`의 `chat-collector` 블록이 실제로 넘기는지다.**
+`—`는 넘기지 **않는다**는 뜻이고 그래도 정상이다 — yml 기본값이 dev에 그대로 쓸 만한 값이라
+일부러 뺐다. 표를 compose와 같은 것으로 읽지 마라.
+
+| 변수 | 기본값 | compose | |
+|---|---|---|---|
+| `BROADCAST_INTAKE_ENABLED` | `false` | ✅ `CHAT_`\* | 켜면 편지 폴링 루프가 돈다 |
+| `BROADCAST_QUEUE_URL` | 빈 값 | ✅ `CHAT_`\* | 생명주기 FIFO 큐 주소. **켜져 있는데 비면 부팅이 죽는다** |
+| `BROADCAST_QUEUE_ENDPOINT` | 빈 값 | — | 비면 진짜 AWS. LocalStack 실측 때만 준다 |
+| `BROADCAST_QUEUE_WAIT` | `20s` | — | 롱폴링 대기. **SQS 상한이 20초**라 넘기면 부팅이 죽는다 |
+| `BROADCAST_QUEUE_MAX_MESSAGES` | `10` | — | 한 회차에 꺼낼 최대 편지 수. **SQS 상한이 10**이다 |
+| `AUTH_BASE_URL` | `http://localhost:8082` | ✅ | 스트리머 토큰을 물을 auth 주소. 컨테이너 안에서는 서비스 이름 |
+| `INTERNAL_API_TOKEN` | 빈 값 | ✅ | auth의 `/internal/**`이 `X-Internal-Token`으로 보는 값. **auth에 준 것과 같아야 한다.** POK-128부터는 이 서버의 `/internal/*`(수집 상태 창구)도 같은 값으로 잠근다 — 비면 창구가 전부 401이다 |
+| `BROADCAST_ENDED_SWEEP_INTERVAL` | `PT1H` | — | 끝난 방송 메모를 치우는 주기 |
+| `BROADCAST_ENDED_RETENTION` | `PT24H` | — | 그 메모의 보관 기간(ADR-016의 TTL 24h) |
+| `AWS_REGION` | `ap-northeast-2` | ✅ | 큐·S3 공용 |
+
+**🔴 `CHAT_`\*는 「호스트 쪽 이름이 다르다」는 표시다.** 서버가 컨테이너 안에서 읽는 이름은
+표에 적힌 그대로이고, `.env`에서 받는 이름만 `CHAT_BROADCAST_INTAKE_ENABLED`·
+`CHAT_BROADCAST_QUEUE_URL`이다. **`clip`이 같은 두 이름을 이미 쓰기 때문이다** — 한 변수로
+묶으면 두 서버가 같은 큐를 가리키고, SQS는 한 편지를 한 소비자에게만 주므로 서로 편지를
+뺏는다. 아래 「나머지」가 적은 대로 **팬아웃이라 큐가 둘**이어야 한다.
 
 **켜는 값을 큐 주소와 따로 둔 이유는 `clip`과 같다** — 주소가 비었다고 저절로 꺼지면
 "로컬에서 일부러 안 켬"과 "운영에서 설정을 깜빡함"이 똑같이 보인다. 자격증명은 환경변수에
 없다(SDK 표준 체인).
 
-**🔴 이 표에 값을 더하면 `docker-compose.dev.yml`의 `chat-collector` 블록에도 같이 넣어라.
+**🔴 이 표에 값을 더하면 `docker-compose.dev.yml`의 `chat-collector` 블록에도 같이 넣어라 —
+`compose` 칸이 `—`인 것처럼 yml 기본값으로 충분한 값은 빼도 된다. 빼면 그 칸에 `—`를 적어라.
 그것을 지키는 검사가 저장소에 하나도 없다**(`grep -rn "docker-compose" --include="*.java"` → 0건).
 실제로 POK-127이 편지 변수 넷을 표에만 적고 compose에 안 넣어, dev로 띄운 수집기가 **편지를 한 통도
 안 먹으면서 health는 초록**이었다(2026-08-23에 실물로 재현: 부팅 WARN `chat.internal_api.locked` +
