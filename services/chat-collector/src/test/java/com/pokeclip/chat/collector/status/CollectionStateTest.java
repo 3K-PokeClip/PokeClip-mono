@@ -47,6 +47,13 @@ class CollectionStateTest {
 
     // 재연동이 필요한 셋만 true. 나머지 전부 false — 열거값이 늘어도 기본은 false다.
     // 문항 2: 「늘 false」는 셋에서, 「늘 true」는 나머지에서 빨간불이라 한쪽으로 공짜가 안 된다.
+    //
+    // 오버로드 <b>둘 다</b> 여기서 잰다. 아래 검사가 글자 오버로드를 세 값으로만 보는데
+    // 그중 「아는 이름이면서 false여야 하는 값」이 하나도 없어, 글자 쪽만 「아는 이름이면 무조건
+    // true」로 바꿔도 모듈 486검사가 전부 초록이었다(2026-08-22 감사 주입 I11c, 이 줄을 넣기 전에
+    // 재현함). 그런데 <b>창구가 실제로 부르는 쪽이 글자 오버로드다</b> — 열거값 쪽은 등록부가
+    // 지워지기 직전 밀리초짜리 찰나에만 쓰이고, 메모는 24시간 살아 clip이 사실상 늘 그것을 본다.
+    // 회귀하면 우리 버그(SEND_MISUSE)로 멈춘 방송에 「치지직 연동을 다시 하세요」가 24시간 뜬다.
     @ParameterizedTest
     @EnumSource(StopReason.class)
     void 재연동_필요는_토큰거부_구독거부_철회_셋뿐이다(StopReason reason) {
@@ -54,6 +61,9 @@ class CollectionStateTest {
                 || reason == StopReason.SUBSCRIBE_REJECTED
                 || reason == StopReason.REVOKED;
         assertThat(CollectionState.needsRelink(reason)).isEqualTo(expected);
+        assertThat(CollectionState.needsRelink(reason.name()))
+                .as("메모 경로(글자)도 같은 답이어야 한다 — clip이 24시간 보는 쪽이다")
+                .isEqualTo(expected);
     }
 
     // 메모 표의 사유는 <b>글자</b>다 — 열거값 이름을 바꾸거나 지운 뒤에도 옛 이름이 표에 남아 있다.
