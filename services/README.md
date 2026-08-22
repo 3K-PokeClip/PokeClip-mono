@@ -241,6 +241,13 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 "로컬에서 일부러 안 켬"과 "운영에서 설정을 깜빡함"이 똑같이 보인다. 자격증명은 환경변수에
 없다(SDK 표준 체인).
 
+**🔴 이 표에 값을 더하면 `docker-compose.dev.yml`의 `chat-collector` 블록에도 같이 넣어라.
+그것을 지키는 검사가 저장소에 하나도 없다**(`grep -rn "docker-compose" --include="*.java"` → 0건).
+실제로 POK-127이 편지 변수 넷을 표에만 적고 compose에 안 넣어, dev로 띄운 수집기가 **편지를 한 통도
+안 먹으면서 health는 초록**이었다(2026-08-23에 실물로 재현: 부팅 WARN `chat.internal_api.locked` +
+올바른 토큰으로도 창구 401, `/actuator/health`만 200). **위험이 배포 시점에만 생기는 모양이라
+로컬·CI는 전부 초록이다.**
+
 **`AUTH_BASE_URL`·`INTERNAL_API_TOKEN`이 비면 부팅이 죽는데, 켜져 있을 때만 그렇다.**
 둘을 쓰는 부품이 **큐가 켜졌을 때만 만들어지기** 때문이다 — 안 그러면 CI와 남의 로컬이
 쓰지도 않는 토큰이 없다고 매번 죽는다. 반대로 켜졌는데 비면 반드시 죽여야 한다:
