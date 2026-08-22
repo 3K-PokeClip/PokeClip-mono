@@ -79,7 +79,7 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
                 "http://localhost:" + port + "/api/clip/broadcasts/s-queue/events",
                 Map.of("Authorization", "Bearer " + TestTokens.access("t10-queue")))) {
 
-            assertThat(reader.await(1, Duration.ofSeconds(3)))
+            assertThat(reader.awaitNamed(1, Duration.ofSeconds(3)))
                     .as("초기 스냅샷이 서야 연결이 실제로 선 것이다").isTrue();
 
             // 실제 러너 경로. 리스너로 실물 Registry를 넘긴다 — 운영 배선과 같다.

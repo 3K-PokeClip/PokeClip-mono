@@ -45,13 +45,20 @@ class JumpCardStreamHeartbeatTest extends IntegrationTestSupport {
 
     /** 앞단 프록시가 조용한 연결을 끊지 않게 하는 장치다. 안 오면 배포 후에 연결이 툭툭 끊긴다. */
     @Test
-    void 하트비트가_온다() {
+    void 하트비트가_온다() throws Exception {
         try (SseReader reader = new SseReader(
                 "http://localhost:" + port + "/api/clip/broadcasts/s-1/events",
                 Map.of("Authorization", "Bearer " + TestTokens.access("heartbeat")))) {
 
-            assertThat(reader.await(1, Duration.ofSeconds(4))).as("1초 주기인데 4초 안에 안 왔다").isTrue();
-            assertThat(reader.events()).extracting(SseReader.Event::comment).contains("ping");
+            // 연결 직후 나가는 주석("ok")이 아니라 <b>하트비트</b>가 왔는지를 본다.
+            // await(1)로 세면 "ok" 하나로 즉시 통과해 하트비트를 안 재게 된다.
+            long deadline = System.nanoTime() + Duration.ofSeconds(4).toNanos();
+            while (System.nanoTime() < deadline
+                    && reader.events().stream().noneMatch(e -> "ping".equals(e.comment()))) {
+                Thread.sleep(50);
+            }
+            assertThat(reader.events()).extracting(SseReader.Event::comment)
+                    .as("1초 주기인데 4초 안에 하트비트가 안 왔다").contains("ping");
         }
     }
 }

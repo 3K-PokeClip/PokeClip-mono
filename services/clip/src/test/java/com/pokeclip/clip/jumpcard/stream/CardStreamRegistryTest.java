@@ -123,14 +123,16 @@ class CardStreamRegistryTest {
         CardStreamRegistry registry = registry(props(4, 50, 500));
         RecordingEmitter live = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
         registry.sendInitial(live, List.of(snapshot("s-1", 1L), snapshot("s-1", 2L)), false);
-        awaitUntil(() -> live.events().size() == 2);
-        assertThat(live.events()).extracting(RecordingEmitter.Event::name).containsExactly("card", "card");
+        awaitUntil(() -> live.named().size() == 2);
+        // 이름 있는 것만 센다 — sendInitial은 헤더를 즉시 커밋시키려고 주석("ok")을 먼저 보낸다.
+        assertThat(live.named()).extracting(RecordingEmitter.Event::name).containsExactly("card", "card");
+        assertThat(live.events().get(0).comment()).as("첫 쓰기가 주석이어야 헤더가 바로 나간다").isEqualTo("ok");
         assertThat(live.completed()).as("진행 중인 방송이면 열어 둔다").isFalse();
 
         RecordingEmitter ended = (RecordingEmitter) registry.open("s-2", "u-2", Duration.ofMinutes(1));
         registry.sendInitial(ended, List.of(snapshot("s-2", 3L)), true);
-        awaitUntil(() -> ended.events().size() == 2);
-        assertThat(ended.events()).extracting(RecordingEmitter.Event::name).containsExactly("card", "ended");
+        awaitUntil(() -> ended.named().size() == 2);
+        assertThat(ended.named()).extracting(RecordingEmitter.Event::name).containsExactly("card", "ended");
         awaitUntil(ended::completed);
     }
 
@@ -252,6 +254,11 @@ class CardStreamRegistryTest {
 
         void fireCompletion() {
             List.copyOf(completionCallbacks).forEach(Runnable::run);
+        }
+
+        /** 이름 있는 것만. 주석(ok·ping)을 뺀다. */
+        List<Event> named() {
+            return events().stream().filter(e -> e.name() != null).toList();
         }
 
         List<Event> events() {

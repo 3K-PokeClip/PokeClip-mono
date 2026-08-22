@@ -148,6 +148,28 @@ public final class SseReader implements AutoCloseable {
         return events().stream().anyMatch(e -> name.equals(e.name()));
     }
 
+    /** 이름이 있는 이벤트만. 주석(하트비트·연결 확인용 ok)을 뺀 것이다. */
+    public List<Event> named() {
+        return events().stream().filter(e -> e.name() != null).toList();
+    }
+
+    /** 이름 있는 이벤트가 {@code count}개 모일 때까지. 주석은 안 센다. */
+    public boolean awaitNamed(int count, Duration timeout) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (System.nanoTime() < deadline) {
+            if (named().size() >= count) {
+                return true;
+            }
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return named().size() >= count;
+    }
+
     public List<Event> events() {
         synchronized (events) {
             return List.copyOf(events);

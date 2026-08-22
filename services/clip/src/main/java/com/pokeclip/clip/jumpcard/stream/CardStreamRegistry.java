@@ -108,12 +108,24 @@ public class CardStreamRegistry implements EndedListener {
         return emitter;
     }
 
-    /** 연결 직후 전체 스냅샷. 끝난 방송이면 {@code ended}를 붙이고 닫는다. */
+    /**
+     * 연결 직후 전체 스냅샷. 끝난 방송이면 {@code ended}를 붙이고 닫는다.
+     *
+     * <p><b>주석 한 줄을 먼저 보낸다.</b> {@code SseEmitter}는 <b>첫 쓰기가 있어야 응답을 커밋</b>하는데,
+     * 카드가 0장이고 방송이 진행 중이면 여기서 아무것도 안 써서 헤더가 <b>다음 하트비트까지</b>
+     * 늦는다(실측 5.449초, 최악 20초). 받는 쪽에서 그것은 「느리다」가 아니라 <b>「연결이 안 된다」</b>로
+     * 보인다 — 브라우저 {@code EventSource.onopen}이 그만큼 안 온다. 방송이 막 시작해 카드가 아직
+     * 없을 때가 정확히 이 상태다.
+     *
+     * <p><b>끝이 아니라 앞에 둔다.</b> 끝난 방송 경로는 {@code ended}를 보내고 {@code complete()}를
+     * 부르므로, 뒤에 두면 이미 닫힌 연결에 쓰게 된다.
+     */
     public void sendInitial(SseEmitter emitter, List<JumpCardSnapshot> cards, boolean ended) {
         Conn conn = conns.get(emitter);
         if (conn == null) {
             return;
         }
+        executor.submit(conn.stripe(), emitter, () -> emitter.send(SseEmitter.event().comment("ok")));
         for (JumpCardSnapshot card : cards) {
             executor.submit(conn.stripe(), emitter, () -> emitter.send(cardEvent(card)));
         }

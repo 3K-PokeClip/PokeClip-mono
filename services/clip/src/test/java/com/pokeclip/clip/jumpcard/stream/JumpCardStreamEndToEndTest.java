@@ -78,15 +78,44 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
 
         try (SseReader reader = open("s-1", TestTokens.access("e2e-snapshot"))) {
             assertThat(reader.statusCode()).isEqualTo(200);
-            assertThat(reader.await(2, Duration.ofSeconds(3))).as("PRD 기준이 3초다").isTrue();
+            assertThat(reader.awaitNamed(2, Duration.ofSeconds(3))).as("PRD 기준이 3초다").isTrue();
 
-            assertThat(reader.events()).extracting(SseReader.Event::name).containsExactly("card", "card");
-            assertThat(reader.events()).extracting(e -> json(e).get("hidden").asBoolean())
+            assertThat(reader.named()).extracting(SseReader.Event::name).containsExactly("card", "card");
+            assertThat(reader.named()).extracting(e -> json(e).get("hidden").asBoolean())
                     .as("숨긴 것이 뒤에 바뀌었으니 순번 순으로는 뒤다").containsExactly(false, true);
             assertThat(reader.headers().firstValue("X-Accel-Buffering"))
                     .as("앞단 프록시가 모아 보내면 「3초 내 도착」이 깨진다").hasValue("no");
             assertThat(reader.headers().firstValue("Content-Type").orElse(""))
                     .startsWith("text/event-stream");
+        }
+    }
+
+    /**
+     * <b>카드가 0장인 방송에 붙어도 헤더가 바로 온다.</b>
+     *
+     * <p>{@code SseEmitter}는 첫 쓰기가 있어야 응답을 커밋한다. 카드가 없고 방송이 진행 중이면
+     * 쓸 것이 없어 헤더가 <b>다음 하트비트까지</b> 늦는다(실기동 실측 5.449초, 최악 20초).
+     * 브라우저에는 「느리다」가 아니라 <b>「연결이 안 된다」</b>로 보인다.
+     * <b>방송이 막 시작해 카드가 아직 없을 때가 정확히 이 상태다.</b>
+     *
+     * <p>이 클래스는 하트비트가 운영 기본값(20초)이라 이 갈래가 실제로 드러난다 —
+     * 하트비트를 짧게 준 컨텍스트에서는 우연히 통과한다.
+     */
+    @Test
+    void 카드가_0장인_방송에_붙어도_헤더가_바로_온다() {
+        broadcasts.save(Broadcast.startedNow("s-empty", "u-1", 3L, Instant.now(), null));
+        assertThat(service.snapshotsOf("s-empty")).as("카드가 0장이어야 이 갈래를 잰다").isEmpty();
+
+        long startedAt = System.nanoTime();
+        try (SseReader reader = open("s-empty", TestTokens.access("t11-empty"))) {
+            // SseReader 생성자가 헤더를 받을 때까지 막힌다 — 여기까지 온 시간이 곧 헤더 지연이다.
+            Duration untilHeaders = Duration.ofNanos(System.nanoTime() - startedAt);
+
+            assertThat(reader.statusCode()).isEqualTo(200);
+            assertThat(reader.headers().firstValue("Content-Type").orElse("")).startsWith("text/event-stream");
+            assertThat(untilHeaders)
+                    .as("헤더가 하트비트까지 늦으면 브라우저는 연결 실패로 본다")
+                    .isLessThan(Duration.ofSeconds(1));
         }
     }
 
@@ -98,8 +127,8 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
 
         try (SseReader reader = open("s-1", TestTokens.access("e2e-reconnect"),
                 Map.of("Last-Event-ID", "999"))) {
-            assertThat(reader.await(2, Duration.ofSeconds(3))).isTrue();
-            assertThat(reader.events()).hasSize(2);
+            assertThat(reader.awaitNamed(2, Duration.ofSeconds(3))).isTrue();
+            assertThat(reader.named()).hasSize(2);
         }
     }
 
@@ -122,7 +151,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         String token = TestTokens.access("e2e-reopen");
         try (SseReader reader = open("s-reopen", token)) {
             assertThat(reader.statusCode()).isEqualTo(200);
-            assertThat(reader.await(1, Duration.ofSeconds(3))).isTrue();
+            assertThat(reader.awaitNamed(1, Duration.ofSeconds(3))).isTrue();
         }
         assertThat(registry.connectionCount()).isEqualTo(baseline + 1);
 
@@ -161,8 +190,8 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         service.record("s-ended", auto("evt-1", 1_000_000L));
 
         try (SseReader reader = open("s-ended", TestTokens.access("e2e-ended"))) {
-            assertThat(reader.await(2, Duration.ofSeconds(3))).isTrue();
-            assertThat(reader.events()).extracting(SseReader.Event::name).containsExactly("card", "ended");
+            assertThat(reader.awaitNamed(2, Duration.ofSeconds(3))).isTrue();
+            assertThat(reader.named()).extracting(SseReader.Event::name).containsExactly("card", "ended");
             assertThat(reader.awaitClosed(Duration.ofSeconds(3)))
                     .as("더 올 카드가 없는데 열어 두면 연결만 먹는다").isTrue();
         }
@@ -183,7 +212,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
 
         try (SseReader reader = open("s-1", shortLived)) {
             assertThat(reader.statusCode()).as("본문=%s", reader.body()).isEqualTo(200);
-            assertThat(reader.await(1, Duration.ofSeconds(3))).isTrue();
+            assertThat(reader.awaitNamed(1, Duration.ofSeconds(3))).isTrue();
             assertThat(reader.awaitClosed(Duration.ofSeconds(6)))
                     .as("만료 뒤에도 연결이 살면 죽은 토큰으로 계속 받는다").isTrue();
         }
@@ -216,13 +245,13 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         long id = service.record("s-1", auto("evt-claim", 3_000_000L)).card().id();
 
         try (SseReader watcher = open("s-1", TestTokens.access("t10-watcher"))) {
-            assertThat(watcher.await(1, Duration.ofSeconds(3))).isTrue();
-            int before = watcher.events().size();
+            assertThat(watcher.awaitNamed(1, Duration.ofSeconds(3))).isTrue();
+            int before = watcher.named().size();
 
             service.claim(id, "t10-claimer");
 
             assertThat(watcher.awaitName("card", Duration.ofSeconds(3))).isTrue();
-            awaitUntil(() -> watcher.events().size() > before, Duration.ofSeconds(3));
+            awaitUntil(() -> watcher.named().size() > before, Duration.ofSeconds(3));
             assertThat(MAPPER.readTree(마지막_card(watcher).data()).get("claimedBy").asString())
                     .isEqualTo("t10-claimer");
         }
@@ -240,12 +269,12 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         service.claim(id, "t10-owner");
 
         try (SseReader watcher = open("s-1", TestTokens.access("t10-release"))) {
-            assertThat(watcher.await(1, Duration.ofSeconds(3))).isTrue();
-            int before = watcher.events().size();
+            assertThat(watcher.awaitNamed(1, Duration.ofSeconds(3))).isTrue();
+            int before = watcher.named().size();
 
             service.release(id, "t10-owner");
 
-            awaitUntil(() -> watcher.events().size() > before, Duration.ofSeconds(3));
+            awaitUntil(() -> watcher.named().size() > before, Duration.ofSeconds(3));
             assertThat(MAPPER.readTree(마지막_card(watcher).data()).get("claimedBy").isNull())
                     .as("놓았는데 잡힌 채로 나가면 아무도 그 카드를 못 집는다").isTrue();
         }
@@ -304,7 +333,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         registry.publish(service.snapshotsOf("s-1").isEmpty()
                 ? service.record("s-1", auto("evt-open", 500_000L)).card()
                 : service.snapshotsOf("s-1").get(0));
-        assertThat(reader.await(1, Duration.ofSeconds(3))).isTrue();
+        assertThat(reader.awaitNamed(1, Duration.ofSeconds(3))).isTrue();
     }
 
     /**
