@@ -6,6 +6,7 @@ import com.pokeclip.clip.jumpcard.JumpCardErrors.InvalidHighlightException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.JumpCardNotFoundException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.NotClaimOwnerException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.StreamLimitExceededException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.TokenAlreadyExpiredException;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -61,6 +62,12 @@ public class JumpCardExceptionHandler {
         Map<String, Object> body = error("stream_limit");
         body.put("scope", e.scope());
         return json(HttpStatus.SERVICE_UNAVAILABLE, body);
+    }
+
+    /** 401. 다른 401(체인이 내는 것)과 상태 코드가 같아야 프론트가 한 갈래로 처리한다. */
+    @ExceptionHandler(TokenAlreadyExpiredException.class)
+    ResponseEntity<Map<String, Object>> tokenExpired(TokenAlreadyExpiredException e) {
+        return json(HttpStatus.UNAUTHORIZED, error("token_expired"));
     }
 
     @ExceptionHandler(InvalidHighlightException.class)

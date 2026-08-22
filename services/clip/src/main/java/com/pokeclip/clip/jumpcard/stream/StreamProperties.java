@@ -17,10 +17,13 @@ public record StreamProperties(Duration heartbeat, Duration timeout, int stripes
                                int maxPerUser, int maxPerStream, int maxTotal) {
 
     public StreamProperties {
-        if (heartbeat == null) {
+        // 0 이하를 허용하면 SseEmitter가 「시한 없음」이 되어 연결이 안 죽는다 —
+        // 설정 한 줄(timeout: PT0S)만으로 만료 토큰 불사 연결과 같은 상태가 된다(인가 2차 감사).
+        // 아래 숫자 넷과 같은 모양으로 막는다. 대칭이 깨져 있던 자리다.
+        if (heartbeat == null || heartbeat.isZero() || heartbeat.isNegative()) {
             heartbeat = Duration.ofSeconds(20);
         }
-        if (timeout == null) {
+        if (timeout == null || timeout.isZero() || timeout.isNegative()) {
             timeout = Duration.ofHours(4);
         }
         if (stripes <= 0) {

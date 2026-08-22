@@ -99,6 +99,21 @@ public final class JumpCardErrors {
         }
     }
 
+    /**
+     * 401. 토큰은 서명·형식이 멀쩡한데 <b>이미 만료</b>다.
+     *
+     * <p>디코더의 clock skew 허용치(기본 60초) 안쪽 토큰이 인증을 통과해 여기까지 온다.
+     * 그대로 열면 남은 수명이 <b>음수</b>가 되고, 서블릿 규약상 timeout ≤ 0은 「시한 없음」이라
+     * <b>만료된 토큰일수록 연결이 더 오래 산다</b>(실측: exp 59초 전 → timeout -59311ms →
+     * 45초 뒤에도 살아 있고 하트비트 23개 수신). 그래서 아예 열지 않는다.
+     */
+    public static class TokenAlreadyExpiredException extends RuntimeException {
+
+        public TokenAlreadyExpiredException() {
+            super("이미 만료된 토큰으로는 통로를 열지 않는다");
+        }
+    }
+
     private JumpCardErrors() {
     }
 }

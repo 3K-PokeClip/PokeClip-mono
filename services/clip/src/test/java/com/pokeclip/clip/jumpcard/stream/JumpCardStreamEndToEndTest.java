@@ -307,6 +307,29 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         assertThat(reader.await(1, Duration.ofSeconds(3))).isTrue();
     }
 
+    /**
+     * <b>이미 만료된 토큰으로는 통로가 안 열린다.</b> 디코더의 clock skew 허용치(기본 60초)
+     * 안쪽 토큰은 인증을 통과해 컨트롤러까지 온다 — 그때 남은 수명이 음수이고,
+     * 서블릿 규약상 {@code timeout <= 0}은 「시한 없음」이라 <b>만료된 토큰일수록 연결이 더
+     * 오래 산다</b>(인가 2차 감사 실측: exp 59초 전 → timeout -59311ms → 45초 뒤에도 살아 있음).
+     *
+     * <p>기존 {@code 토큰_만료_시각에_연결이_닫힌다}는 exp가 <b>미래</b>인 토큰이라 이 창을 안 지난다.
+     */
+    @Test
+    void 이미_만료된_토큰으로는_통로가_안_열리고_연결도_안_남는다() {
+        service.record("s-1", auto("evt-expired", 2_000_000L));
+        int before = registry.connectionCount();
+
+        // skew 허용치(60초) 안쪽이라 인증은 통과한다 — 그래서 컨트롤러의 가드가 유일한 방어선이다.
+        String expired = TestTokens.access("t10-expired", Instant.now().minusSeconds(30));
+
+        try (SseReader reader = open("s-1", expired)) {
+            assertThat(reader.statusCode()).as("본문=%s", reader.body()).isEqualTo(401);
+        }
+        assertThat(registry.connectionCount())
+                .as("401인데 연결이 남으면 그 연결은 시한이 없어 영영 산다").isEqualTo(before);
+    }
+
     /** 그 창의 카드가 화면에 도착했는가. 개수 대신 이것을 본다. */
     private boolean 카드가_왔나(SseReader reader, long windowStartMs) {
         return reader.events().stream()

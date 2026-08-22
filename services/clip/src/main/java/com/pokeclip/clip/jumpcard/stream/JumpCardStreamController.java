@@ -4,6 +4,7 @@ import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.broadcast.BroadcastStatus;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.BroadcastNotFoundException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.TokenAlreadyExpiredException;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +60,16 @@ public class JumpCardStreamController {
         // 연결 수명 = min(설정값, 토큰 exp까지). 만료 시점에 닫히고 브라우저가 새 토큰으로 다시 붙는다.
         // exp가 없는 토큰은 JwtConfig가 이미 401로 막았다(setAllowEmptyExpiryClaim(false)).
         Duration untilExpiry = Duration.between(Instant.now(), jwt.getExpiresAt());
+
+        // 남은 수명이 0 이하면 열지 않는다. 디코더의 clock skew 허용치(기본 60초) 안쪽
+        // 토큰은 인증을 통과하는데, 그대로 열면 SseEmitter가 음수 시한을 받고
+        // 서블릿 규약상 timeout <= 0은 「시한 없음」이라 연결이 영영 산다 —
+        // 만료된 토큰일수록 오래 사는 뒤집힌 결과가 된다(인가 2차 감사 실측).
+        // 하한을 두는 방식(max(untilExpiry, 최소값))은 만료 토큰으로 연 연결을 살려 주므로 쓰지 않는다.
+        if (untilExpiry.isZero() || untilExpiry.isNegative()) {
+            throw new TokenAlreadyExpiredException();
+        }
+
         Duration timeout = untilExpiry.compareTo(properties.timeout()) < 0 ? untilExpiry : properties.timeout();
 
         // 상한 초과면 StreamLimitExceededException → 503
