@@ -125,8 +125,14 @@ services:
       AUTH_BASE_URL: ${AUTH_BASE_URL:-http://auth:8082}
       # 편지 경로는 기본이 꺼짐이다. 꺼져 있으면 방송 편지를 한 통도 안 먹으므로
       # 창구는 열려 있어도 모든 방송에 unknown 을 답한다(실측). 큐를 붙일 때 둘을 같이 켠다.
-      BROADCAST_INTAKE_ENABLED: ${BROADCAST_INTAKE_ENABLED:-false}
-      BROADCAST_QUEUE_URL: ${BROADCAST_QUEUE_URL:-}
+      #
+      # 🔴 컨테이너 안 이름은 clip 과 같지만 호스트(.env) 이름은 갈라 받는다. 방송 편지는
+      # 팬아웃이라 큐가 둘이어야 하는데(README 「나머지」), 한 변수로 묶으면 두 서버가 같은
+      # 큐를 가리킨다. SQS 는 한 편지를 한 소비자에게만 주므로 그때 둘이 편지를 서로 뺏는다 —
+      # clip 이 STARTED 를 먼저 집는 회차는 그 방송의 채팅이 안 걷히고, 반대 순서에서는
+      # clip 이 방송 세션을 못 만든다. 둘 다 조용히 안 되는 모양이라 로그로도 안 드러난다.
+      BROADCAST_INTAKE_ENABLED: ${CHAT_BROADCAST_INTAKE_ENABLED:-false}
+      BROADCAST_QUEUE_URL: ${CHAT_BROADCAST_QUEUE_URL:-}
       # 채팅 버퍼를 1만 건까지 들고 있어 넷 중 가장 많이 쓴다.
       JAVA_TOOL_OPTIONS: -Xmx320m
 
