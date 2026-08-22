@@ -13,6 +13,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.stream.IntStream;
 
@@ -155,6 +157,71 @@ class CardStreamRegistryTest {
         assertThat(other.completed()).isFalse();
     }
 
+    /**
+     * <b>{@code broadcastEnded}가 연결을 여는 도중에 끼어도 순서가 지켜진다.</b>
+     *
+     * <p><b>창이 둘이다</b>(2026-08-23 재현). 봇은 앞의 하나만 지적했다.
+     * <ul>
+     *   <li><b>(가) 등록 직후 ~ 첫 제출 전</b> — {@code ended}가 스냅샷 <b>전체</b>보다 먼저 간다.
+     *       클라이언트가 받는 것은 {@code ended} <b>하나뿐</b>이고, 뒤따르는 카드는 이미 닫힌
+     *       emitter에 쓰다 {@code IllegalStateException}으로 삼켜진다(카드 5장 중 도착 0장)</li>
+     *   <li><b>(나) 스냅샷을 제출하는 도중</b> — 앞 카드는 가고 <b>뒤 카드가 거부</b>된다.
+     *       이 창은 카드 수에 비례한다({@code openWithSnapshot} 실측 0.011~1.830ms,
+     *       카드 0~1000장)</li>
+     * </ul>
+     *
+     * <p>같은 자물쇠가 둘 다 닫는다 — {@code broadcastEnded}에 {@code synchronized}가 붙으면
+     * 종료 알림은 {@code openWithSnapshot} <b>앞이나 뒤로만</b> 갈라진다.
+     *
+     * <p>훅에서 <b>200ms를 잔다</b>. 자물쇠가 없으면 그 사이에 {@code broadcastEnded}가 통째로
+     * 끝나고(재현됨), 있으면 락에서 기다리다 이 블록이 끝난 뒤에 돈다. 「안 기다려서 통과」의
+     * 반대 방향이라 느린 기계에서 더 안전하다.
+     */
+    @Test
+    void broadcastEnded가_연결을_여는_도중에_끼어도_스냅샷이_먼저_간다() throws Exception {
+        executor = new CardStreamExecutor(4, 1000);
+        Thread[] ender = new Thread[1];
+        RecordingEmitter[] made = new RecordingEmitter[1];
+
+        registry = new CardStreamRegistry(executor, props(4, 50, 500), mapper, d -> {
+            RecordingEmitter emitter = new RecordingEmitter(() -> {
+                CountDownLatch aboutToEnd = new CountDownLatch(1);
+                ender[0] = new Thread(() -> {
+                    aboutToEnd.countDown();
+                    registry.broadcastEnded("s-1");
+                }, "ender");
+                ender[0].start();
+                try {
+                    aboutToEnd.await(5, TimeUnit.SECONDS);
+                    Thread.sleep(200);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            made[0] = emitter;
+            return emitter;
+        });
+
+        List<JumpCardSnapshot> cards =
+                IntStream.rangeClosed(1, 5).mapToObj(i -> snapshot("s-1", i)).toList();
+        registry.openWithSnapshot("s-1", "u-1", Duration.ofMinutes(1), cards, false);
+        ender[0].join(5_000);
+
+        RecordingEmitter emitter = made[0];
+        // awaitUntil을 안 쓴다 — 못 모으면 거기서 터져 <b>무엇이 왔는지</b>를 못 본다.
+        // 여기서는 실패의 이유가 「몇 개가 아니라 어떤 순서인가」라 목록이 보여야 한다.
+        long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
+        while (emitter.named().size() < 6 && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(emitter.named()).extracting(RecordingEmitter.Event::name)
+                .as("ended가 먼저 나가면 클라이언트는 카드 0장에 ended만 받는다")
+                .containsExactly("card", "card", "card", "card", "card", "ended");
+        assertThat(emitter.rejectedCount())
+                .as("닫힌 뒤에 쓴 것이 있으면 그만큼 카드가 조용히 사라진 것이다").isZero();
+        awaitUntil(emitter::completed);
+    }
+
     @Test
     void ping은_모든_연결에_주석을_보낸다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
@@ -241,15 +308,50 @@ class CardStreamRegistryTest {
 
         private final List<Event> events = Collections.synchronizedList(new ArrayList<>());
         private final List<Runnable> completionCallbacks = Collections.synchronizedList(new ArrayList<>());
+        private final List<SseEventBuilder> rejected = Collections.synchronizedList(new ArrayList<>());
+        /** {@code open()}이 명부에 자리를 잡은 <b>직후</b> 돌 훅. 임계구역을 벌리는 데 쓴다. */
+        private final Runnable afterRegister;
         private volatile boolean completed;
+
+        RecordingEmitter() {
+            this(null);
+        }
+
+        RecordingEmitter(Runnable afterRegister) {
+            this.afterRegister = afterRegister;
+        }
+
+        /**
+         * {@code open()}이 <b>마지막으로</b> 부르는 자리다 — {@code conns.put}은 끝났고
+         * {@code sendInitial}은 아직이다. 그 사이를 벌리려고 여기에 훅을 건다.
+         */
+        @Override
+        public void onError(java.util.function.Consumer<Throwable> callback) {
+            if (afterRegister != null) {
+                afterRegister.run();
+            }
+        }
 
         /**
          * 조각을 <b>먼저 이어 붙인 뒤</b> 줄 단위로 읽는다. {@code SseEventBuilder}는
          * {@code "id:41\nevent:card\ndata:"}를 한 조각으로 내보내고 본문을 다음 조각에 담는다 —
          * 조각마다 {@code startsWith}로 보면 {@code event}·{@code id}가 통째로 안 잡힌다(실측).
          */
+        /**
+         * 실물과 같은 규칙이다 — <b>{@code complete()} 뒤의 send는
+         * {@code IllegalStateException}</b>(spring-webmvc 7.0.8
+         * {@code ResponseBodyEmitter.send(Set)}의
+         * {@code Assert.state(!this.complete, "ResponseBodyEmitter has already completed")}).
+         * 서블릿 밖의 진짜 {@code SseEmitter}는 {@code handler == null}이라 이 갈래를 안 타므로
+         * 여기서 흉내낸다. 이것이 없으면 「닫힌 뒤에도 카드가 도착한 것처럼」 보여
+         * 순서가 깨진 것을 못 잡는다.
+         */
         @Override
         public void send(SseEventBuilder builder) {
+            if (completed) {
+                rejected.add(builder);
+                throw new IllegalStateException("ResponseBodyEmitter has already completed");
+            }
             StringBuilder raw = new StringBuilder();
             for (DataWithMediaType chunk : builder.build()) {
                 raw.append(String.valueOf(chunk.getData()));
@@ -300,6 +402,10 @@ class CardStreamRegistryTest {
 
         boolean completed() {
             return completed;
+        }
+
+        int rejectedCount() {
+            return rejected.size();
         }
     }
 }

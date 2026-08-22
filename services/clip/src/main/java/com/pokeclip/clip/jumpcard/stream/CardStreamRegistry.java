@@ -173,9 +173,30 @@ public class CardStreamRegistry implements EndedListener {
         }
     }
 
-    /** 방송이 끝났다. 연결을 열어 둬도 더 올 카드가 없으므로 알리고 닫는다. */
+    /**
+     * 방송이 끝났다. 연결을 열어 둬도 더 올 카드가 없으므로 알리고 닫는다.
+     *
+     * <p>{@code synchronized}인 이유 — {@link #openWithSnapshot}과 겹치면 <b>{@code ended}가
+     * 스냅샷을 앞질러</b> 같은 스트라이프 큐에 들어간다. 그러면 {@code ended}가 먼저 나가고
+     * {@code complete()}가 돌아, 뒤따르는 카드는 <b>이미 닫힌 emitter에 쓰다</b>
+     * {@code IllegalStateException}으로 삼켜진다({@code Job}이 {@code completeWithError}로 받는다).
+     *
+     * <p><b>창이 둘이다</b>(2026-08-23 재현, PR #109 봇 지적 ①). 지적은 앞의 하나만 봤다.
+     * <ul>
+     *   <li><b>(가) 등록 직후 ~ 첫 제출 전</b> — {@code ended}가 스냅샷 <b>전체</b>를 앞지른다.
+     *       클라이언트가 받는 것은 {@code ended} 하나뿐이다(카드 5장 중 도착 <b>0장</b> 실측)</li>
+     *   <li><b>(나) 스냅샷을 제출하는 도중</b> — 앞 카드는 가고 <b>뒤 카드가 거부</b>된다.
+     *       이 창은 카드 수에 비례한다({@code openWithSnapshot} 실측 0.011~1.830ms, 카드 0~1000장)</li>
+     * </ul>
+     *
+     * <p>같은 자물쇠가 둘 다 닫는다 — 종료 알림은 {@code openWithSnapshot} <b>앞이나 뒤로만</b>
+     * 갈라진다. 앞이면 연결이 아직 명부에 없어 안 가고(그 경우는 컨트롤러가 스냅샷을 락 안에서
+     * 읽어 막는다), 뒤면 스냅샷 다음에 줄을 선다.
+     *
+     * <p>여기도 <b>큐에 넣기만</b> 하므로 자물쇠가 잡히는 시간은 짧다.
+     */
     @Override
-    public void broadcastEnded(String streamId) {
+    public synchronized void broadcastEnded(String streamId) {
         for (Conn conn : conns.values()) {
             if (conn.streamId().equals(streamId)) {
                 executor.submit(conn.stripe(), conn.emitter(), () -> {
