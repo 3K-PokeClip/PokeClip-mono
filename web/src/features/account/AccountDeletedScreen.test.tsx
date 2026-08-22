@@ -15,6 +15,7 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: nav.replace }) 
 beforeEach(() => {
   nav.replace.mockReset();
   window.sessionStorage.clear();
+  window.localStorage.clear();
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
 });
 
@@ -69,12 +70,42 @@ describe('AccountDeletedScreen — 세션 정리', () => {
     expect(window.sessionStorage.getItem('pc-withdrawn')).toBeNull();
   });
 
-  it('주소창으로 직접 들어오면 남의 세션을 건드리지 않는다', () => {
+  it('주소창으로 직접 들어오면 남의 세션을 건드리지 않고 돌려보낸다', () => {
     const fetchSpy = stubFetch(() => jsonResponse(204));
 
     renderWithProviders(<AccountDeletedScreen />);
 
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(useAuthStore.getState().refreshToken).toBe('refresh-1');
+    expect(nav.replace).toHaveBeenCalledWith('/home');
+  });
+
+  // /goodbye는 (dock) 밖이라 가드가 하이드레이션을 걸어 주지 않는다. 화면이 스스로 걸지
+  // 않으면 스토어가 초기값(refreshToken: null)에 머물러 로그인한 사람도 로그아웃으로
+  // 판정된다 — 이전 테스트는 hydrated를 손으로 세팅해 그 사실을 가리고 있었다.
+  it('콜드 로드에서도 저장된 세션을 읽어 판정한다 — 스스로 하이드레이션한다', async () => {
+    stubFetch(() => jsonResponse(204));
+    window.localStorage.setItem('pc-auth', JSON.stringify({ refreshToken: 'stored-1' }));
+    useAuthStore.setState({ accessToken: null, refreshToken: null, hydrated: false });
+
+    renderWithProviders(<AccountDeletedScreen />);
+
+    await waitFor(() => expect(nav.replace).toHaveBeenCalledWith('/home'));
+  });
+
+  it('로그인 화면으로는 의도적 종료 표식을 걷고 나간다', async () => {
+    const user = userEvent.setup();
+    markWithdrawn();
+    stubFetch(() => jsonResponse(204));
+    renderWithProviders(<AccountDeletedScreen />);
+    await waitFor(() => expect(useAuthStore.getState().refreshToken).toBeNull());
+    expect(window.sessionStorage.getItem('pc-auth-logout')).toBe('1');
+
+    await user.click(screen.getByRole('button', { name: '로그인 화면으로' }));
+
+    // 남겨 두면 다음에 비자발적으로 끊겼을 때 가드가 의도적 종료로 오해해
+    // 복원 경로를 저장하지 않는다
+    expect(window.sessionStorage.getItem('pc-auth-logout')).toBeNull();
+    expect(nav.replace).toHaveBeenCalledWith('/login');
   });
 });

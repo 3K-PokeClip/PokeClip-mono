@@ -6,6 +6,7 @@ import { LoginCard } from './LoginCard';
 import { ProfileCard } from './ProfileCard';
 import { ProfilePhotoDialog } from './ProfilePhotoDialog';
 import { useAccountMockState } from './useAccountMockState';
+import { firstGrapheme } from './profilePresets';
 import { useProfilePhotoState } from './useProfilePhotoState';
 import { WithdrawBlockedDialog } from './WithdrawBlockedDialog';
 import { WithdrawDialog } from './WithdrawDialog';
@@ -62,9 +63,8 @@ export function AccountSettingsScreen() {
         onClose={() => setWithdrawOpen(false)}
       />
 
-      {/* 기본 아바타 글리프는 표시 이름의 첫 「글자」 — charAt은 이모지의 서로게이트 쌍을
-          반으로 잘라 깨진 문자를 그린다. Array.from은 코드 포인트 단위로 끊는다. */}
-      <ProfilePhotoDialog photo={photo} glyph={Array.from(name.trim())[0] ?? ''} />
+      {/* 기본 아바타 글리프는 표시 이름의 첫 글자 — 이모지·국기를 쪼개지 않게 그래핌 단위 */}
+      <ProfilePhotoDialog photo={photo} glyph={firstGrapheme(name)} />
     </div>
   );
 }

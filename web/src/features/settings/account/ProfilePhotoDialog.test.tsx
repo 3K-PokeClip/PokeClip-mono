@@ -41,6 +41,11 @@ function Harness() {
 }
 
 const dialog = () => within(screen.getByRole('dialog'));
+
+/** jsdom은 이미지를 디코드하지 않아 onLoad가 뜨지 않는다 — 「적용」을 열려면 직접 발화시킨다. */
+function markImageDecoded() {
+  fireEvent.load(document.querySelector('[role="dialog"] img') as HTMLImageElement);
+}
 const dropzone = () => screen.getByRole('button', { name: /사진을 끌어다 놓거나 클릭해 선택/ });
 
 function drop(target: HTMLElement, file: File) {
@@ -151,6 +156,7 @@ describe('ProfilePhotoDialog', () => {
   it('⑤ 적용은 결과를 넘기고 모달을 닫은 뒤 토스트로 알린다', async () => {
     const { user } = await open();
     await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+    markImageDecoded();
 
     await user.click(dialog().getByRole('button', { name: '적용' }));
 
@@ -166,6 +172,7 @@ describe('ProfilePhotoDialog', () => {
   it('토스트의 편집은 크롭으로 되돌아간다', async () => {
     const { user } = await open();
     await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+    markImageDecoded();
     await user.click(dialog().getByRole('button', { name: '적용' }));
 
     await user.click(await screen.findByRole('button', { name: '편집' }));
@@ -178,6 +185,7 @@ describe('ProfilePhotoDialog', () => {
     await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
 
     // 확대를 바꿔 「자르던 자리」를 만든다
+    markImageDecoded();
     const slider = dialog().getByRole('slider', { name: '확대' });
     slider.focus();
     await user.keyboard('{ArrowRight}{ArrowRight}');
@@ -205,6 +213,27 @@ describe('ProfilePhotoDialog', () => {
     await user.click(screen.getByRole('alert').closest('button') as HTMLElement);
 
     expect(opened).toHaveBeenCalled();
+  });
+
+  it('원본이 디코드되기 전에는 적용을 잠근다 — 잘리지 않은 원본이 저장되지 않게', async () => {
+    const { user } = await open();
+    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+
+    expect(dialog().getByRole('button', { name: '적용' })).toBeDisabled();
+
+    markImageDecoded();
+    expect(dialog().getByRole('button', { name: '적용' })).toBeEnabled();
+  });
+
+  it('읽을 수 없는 파일이면 적용을 막고 이유를 알린다', async () => {
+    const { user } = await open();
+    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+
+    fireEvent.error(document.querySelector('[role="dialog"] img') as HTMLImageElement);
+
+    expect(dialog().getByRole('alert')).toHaveTextContent('사진으로 읽을 수 없어요');
+    expect(dialog().getByRole('button', { name: '적용' })).toBeDisabled();
+    expect(onApply).not.toHaveBeenCalled();
   });
 
   it('닫기로 언제든 빠져나온다', async () => {

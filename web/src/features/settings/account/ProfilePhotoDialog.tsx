@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { AlertCircle, Upload, X } from 'lucide-react';
 import { Button, Dialog, IconButton, Progress, Spinner } from '@/ui';
 import { cropToDataUrl, INITIAL_CROP, MASK_PX, type CropTransform } from './cropImage';
-import { PhotoCropStage } from './PhotoCropStage';
+import { PhotoCropStage, type CropStatus } from './PhotoCropStage';
 import { cssColor, PRESET_AVATARS, presetAvatarDataUrl } from './profilePresets';
 import type { ProfilePhotoState } from './useProfilePhotoState';
 import styles from './AccountSettingsScreen.module.css';
@@ -19,6 +19,10 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
   // 크롭 스테이지가 재서 알려 주는 마스크의 실제 지름. 미리보기와 내보내기가 같은 값을
   // 써야 보이는 대로 잘린다 — 시안 기준값(176)은 재기 전까지의 대비값일 뿐이다.
   const [maskPx, setMaskPx] = useState(MASK_PX);
+  // 원본이 디코드되기 전에는 잘라낼 수 없다 — 그 상태로 「적용」하면 cropImage가 원본을
+  // 그대로 돌려줘(잘리지 않은 사진) 저장되고, 디코드 자체가 안 되는 파일이면 아바타가
+  // 깨진 채 토스트만 「변경했습니다」라고 말한다.
+  const [cropStatus, setCropStatus] = useState<CropStatus>('loading');
   // 드래그 중에는 :hover가 서지 않는다 — 파일을 끌어오는 내내 브라우저가 hover를
   // 주지 않아 CSS만으로는 「여기 놓으면 된다」를 보여 줄 수 없다. 직접 든다.
   const [dragOver, setDragOver] = useState(false);
@@ -29,6 +33,12 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
   useEffect(() => {
     setTransform(INITIAL_CROP);
   }, [photo.selectionSeq]);
+
+  // 그림이 바뀌면 디코드를 다시 기다린다 — 앞 그림의 ready가 남으면 새 그림을 못 읽은 채
+  // 「적용」이 열린다
+  useEffect(() => {
+    setCropStatus('loading');
+  }, [photo.imageSrc]);
 
   // 단계가 바뀌면 표시를 걷는다 — 드롭 직후 dragleave가 안 오는 경우가 있어
   // 그대로 두면 업로드·크롭으로 넘어간 뒤에도 강조가 남는다.
@@ -72,7 +82,7 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
   function applyCrop() {
     const img = imgRef.current;
     const source = photo.imageSrc;
-    if (img === null || source === null) return;
+    if (img === null || source === null || cropStatus !== 'ready') return;
     photo.apply(cropToDataUrl(img, transform, source, maskPx));
   }
 
@@ -188,13 +198,24 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
                 imgRef={imgRef}
                 maskPx={maskPx}
                 onMaskPxChange={setMaskPx}
+                onStatusChange={setCropStatus}
               />
+              {cropStatus === 'error' && (
+                <p role="alert" className={styles.cropError}>
+                  이 파일은 사진으로 읽을 수 없어요. 다른 사진을 골라 주세요.
+                </p>
+              )}
             </div>
             <div className={styles.cropActions}>
               <Button variant="outline" size="sm" onClick={photo.close}>
                 취소
               </Button>
-              <Button variant="solid" size="sm" onClick={applyCrop}>
+              <Button
+                variant="solid"
+                size="sm"
+                disabled={cropStatus !== 'ready'}
+                onClick={applyCrop}
+              >
                 적용
               </Button>
             </div>

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   baseScale,
+  clampOffset,
   cropToDataUrl,
   INITIAL_CROP,
   MASK_PX,
@@ -89,5 +90,42 @@ describe('cropToDataUrl', () => {
     const k = OUTPUT_PX / wideMask; // 176을 쓰면 k가 1.33배 커져 이동이 과장된다
     expect(ctx.translate).toHaveBeenCalledWith(OUTPUT_PX / 2 + 10 * k, OUTPUT_PX / 2 - 20 * k);
     vi.restoreAllMocks();
+  });
+});
+
+describe('clampOffset', () => {
+  const M = 176;
+
+  it('마스크를 덮는 범위 밖으로는 밀리지 않는다', () => {
+    // 512 원본을 확대 100(3배)로 보면 반폭 264 — 원 반지름 88을 뺀 176까지만 밀 수 있다
+    const t = clampOffset({ x: 9999, y: -9999, zoom: 100, rotation: 0 }, 512, 512, M);
+    expect(t.x).toBeCloseTo(176);
+    expect(t.y).toBeCloseTo(-176);
+  });
+
+  it('범위 안의 값은 그대로 둔다', () => {
+    const t = clampOffset({ x: 10, y: -20, zoom: 100, rotation: 0 }, 512, 512, M);
+    expect(t.x).toBe(10);
+    expect(t.y).toBe(-20);
+  });
+
+  it('확대가 최소면 그림이 원과 같아 중앙에 고정된다', () => {
+    const t = clampOffset({ x: 50, y: 50, zoom: 0, rotation: 0 }, 512, 512, M);
+    expect(t.x).toBe(0);
+    expect(t.y).toBe(0);
+  });
+
+  it('90도 회전이면 가로·세로 한계가 뒤바뀐다', () => {
+    // 세로로 긴 원본(400×800)을 90도 돌리면 가로가 길어진다
+    const upright = clampOffset({ x: 9999, y: 9999, zoom: 0, rotation: 0 }, 400, 800, M);
+    const turned = clampOffset({ x: 9999, y: 9999, zoom: 0, rotation: -90 }, 400, 800, M);
+    expect(upright.x).toBeCloseTo(0);
+    expect(turned.y).toBeCloseTo(0);
+    expect(turned.x).toBeCloseTo(upright.y);
+  });
+
+  it('크기를 아직 모르면 건드리지 않는다', () => {
+    const t = { x: 5, y: 5, zoom: 42, rotation: 0 };
+    expect(clampOffset(t, 0, 0, M)).toBe(t);
   });
 });

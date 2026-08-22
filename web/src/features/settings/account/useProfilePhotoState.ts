@@ -254,7 +254,12 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
         title: '프로필 사진을 변경했습니다',
         description: '헤더·사이드바에 바로 반영',
         // 되돌리기가 아니라 편집이다 — 바꾼 사진을 다시 잘라내러 크롭으로 돌아간다
-        action: { label: '편집', onClick: () => setStep('crop') },
+        // 닫혀 있을 때만 되돌아간다 — 토스트가 떠 있는 사이 새 사진을 고르는 중이었다면
+        // 그 작업을 방금 적용한 사진의 크롭으로 덮어써 진행 중인 선택을 잃는다
+        action: {
+          label: '편집',
+          onClick: () => setStep((prev) => (prev === 'idle' ? 'crop' : prev)),
+        },
       });
     },
     [resetPending, onApply, toast],

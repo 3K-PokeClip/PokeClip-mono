@@ -51,3 +51,18 @@ export function presetAvatarDataUrl(preset: PresetAvatar, glyph: string): string
   ctx.fillText(glyph, OUTPUT_PX / 2, OUTPUT_PX / 2);
   return canvas.toDataURL('image/png');
 }
+
+/**
+ * 표시 이름의 첫 「글자」. 코드 포인트 단위(Array.from)로는 부족하다 — 국기(지역 표시 쌍),
+ * 피부색 수식자, ZWJ 가족 이모지는 여러 코드 포인트가 모여 한 글자를 이루므로 첫 것만
+ * 떼면 깨진 글자가 그려진다. Intl.Segmenter가 있으면 그래핌 단위로 끊는다.
+ */
+export function firstGrapheme(name: string): string {
+  const text = name.trim();
+  if (text === '') return '';
+  if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
+    const [first] = new Intl.Segmenter('ko', { granularity: 'grapheme' }).segment(text);
+    if (first !== undefined) return first.segment;
+  }
+  return Array.from(text)[0] ?? '';
+}

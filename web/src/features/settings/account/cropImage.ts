@@ -74,3 +74,33 @@ export function cropToDataUrl(
   ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
   return canvas.toDataURL('image/png');
 }
+
+/**
+ * 이동량을 그림이 마스크를 계속 덮는 범위로 자른다.
+ *
+ * 없으면 그림을 원 밖으로 완전히 끌어낸 채 「적용」할 수 있고, 그 결과는 캔버스 기본값
+ * (투명)만 담긴 정사각 PNG다 — 아바타가 빈 원이 되고 되돌릴 안내도 없다.
+ * 확대·회전이 바뀌면 덮는 범위도 달라지므로 그때마다 다시 잘라야 한다.
+ */
+export function clampOffset(
+  transform: CropTransform,
+  naturalWidth: number,
+  naturalHeight: number,
+  maskPx: number,
+): CropTransform {
+  if (naturalWidth === 0 || naturalHeight === 0) return transform;
+  const scale =
+    baseScale(Math.min(naturalWidth, naturalHeight), maskPx) * zoomToScale(transform.zoom);
+  // 90·270도에서는 가로·세로가 뒤바뀐다
+  const swapped = Math.abs(transform.rotation / 90) % 2 === 1;
+  const halfWidth = ((swapped ? naturalHeight : naturalWidth) * scale) / 2;
+  const halfHeight = ((swapped ? naturalWidth : naturalHeight) * scale) / 2;
+  // 그림 반폭에서 원 반지름을 뺀 만큼까지만 밀 수 있다. 음수면(덮지 못하면) 중앙 고정.
+  const limitX = Math.max(0, halfWidth - maskPx / 2);
+  const limitY = Math.max(0, halfHeight - maskPx / 2);
+  return {
+    ...transform,
+    x: Math.min(limitX, Math.max(-limitX, transform.x)),
+    y: Math.min(limitY, Math.max(-limitY, transform.y)),
+  };
+}

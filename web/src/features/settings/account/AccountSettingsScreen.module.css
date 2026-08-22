@@ -151,7 +151,10 @@
 .withdrawDialog.withdrawDialog {
   width: calc(520 * var(--pc-u));
   max-width: 100%;
-  max-height: calc(740 * var(--pc-u));
+  /* DS .content의 뷰포트 캡을 대체하지 않고 함께 건다 — 고정값만 남기면 짧은 화면
+     (1366×768이면 크롬 제외 약 650px)에서 모달이 740px까지 자라 푸터의 취소·탈퇴하기가
+     화면 밖으로 밀린다. 오버레이가 fixed + 스크롤 락이라 닿을 방법이 없다. */
+  max-height: min(calc(740 * var(--pc-u)), calc(100dvh - var(--pc-space-8)));
   border-radius: calc(18 * var(--pc-u));
   border-color: var(--pc-color-border-default);
   /* 안쪽 여백은 머리·본문·푸터가 각자 갖는다 */
@@ -643,6 +646,12 @@
   font-weight: 600;
   color: rgb(255 255 255 / 0.92);
   pointer-events: none;
+}
+
+.cropError {
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-danger);
+  margin: calc(10 * var(--pc-u)) 0 0;
 }
 
 .cropControls {
