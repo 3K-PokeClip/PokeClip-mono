@@ -37,6 +37,51 @@ public final class JumpCardErrors {
         }
     }
 
+    /** 404. 카드 자체가 없다. */
+    public static class JumpCardNotFoundException extends RuntimeException {
+        private final long id;
+
+        public JumpCardNotFoundException(long id) {
+            super("없는 카드다: " + id);
+            this.id = id;
+        }
+
+        public long id() {
+            return id;
+        }
+    }
+
+    /**
+     * 409. 남이 잡고 있다. <b>현재 카드를 함께 싣는다</b> — 웹이 "누가 잡고 있는지"를
+     * 바로 보여줘야 편집자가 새로고침 없이 상황을 안다.
+     */
+    public static class ClaimedByOtherException extends RuntimeException {
+        private final transient JumpCardSnapshot current;
+
+        public ClaimedByOtherException(JumpCardSnapshot current) {
+            super("남이 잡고 있는 카드다: " + current.id());
+            this.current = current;
+        }
+
+        public JumpCardSnapshot current() {
+            return current;
+        }
+    }
+
+    /** 403. 남이 잡은 카드를 놓으려 했다. 아무도 안 잡은 카드를 놓는 것은 성공이다(멱등). */
+    public static class NotClaimOwnerException extends RuntimeException {
+        private final long id;
+
+        public NotClaimOwnerException(long id) {
+            super("내가 잡은 카드가 아니다: " + id);
+            this.id = id;
+        }
+
+        public long id() {
+            return id;
+        }
+    }
+
     private JumpCardErrors() {
     }
 }

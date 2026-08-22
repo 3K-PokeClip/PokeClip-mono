@@ -43,4 +43,39 @@ public interface JumpCardRepository extends JpaRepository<JumpCard, Long> {
                        @Param("end") long end,
                        @Param("score") Integer score,
                        @Param("evidence") String evidenceJson);
+
+    /**
+     * 집을 때 판정한다 — 만료를 치우는 배경 작업이 없다. UPDATE 하나가 원자적이라 락이
+     * 필요 없고, 동시 요청 둘 중 하나만 영향 행 1을 받는다.
+     *
+     * <p>{@code now()}는 DB 시계다. 앱 시계로 재면 서버마다 달라 "누가 먼저 잡았나"가
+     * 서버에 따라 갈린다.
+     *
+     * <p>{@code claimed_by = :me} 갈래는 <b>본인 재호출을 연장으로 만든다</b>. 없으면
+     * 본인도 영향 행 0을 받아 자기가 잡은 카드에 409를 맞는다.
+     *
+     * @return 1이면 내가 잡았다(또는 연장했다). 0이면 없는 카드이거나 남이 잡고 있다 — 호출자가 가른다
+     */
+    @Modifying(clearAutomatically = true)
+    @Query(value = """
+            UPDATE jump_cards SET claimed_by = :me, claimed_at = now()
+             WHERE id = :id
+               AND (claimed_by IS NULL OR claimed_by = :me OR claimed_at < now() - make_interval(secs => :ttlSeconds))
+            """, nativeQuery = true)
+    int claim(@Param("id") long id, @Param("me") String me, @Param("ttlSeconds") long ttlSeconds);
+
+    /** @return 1이면 놓았다. 0이면 없는 카드이거나 남이 잡고 있다 — 호출자가 가른다 */
+    @Modifying(clearAutomatically = true)
+    @Query(value = "UPDATE jump_cards SET claimed_by = NULL, claimed_at = NULL WHERE id = :id AND claimed_by = :me",
+            nativeQuery = true)
+    int release(@Param("id") long id, @Param("me") String me);
+
+    @Modifying(clearAutomatically = true)
+    @Query(value = "UPDATE jump_cards SET hidden_at = now(), hidden_by = :me WHERE id = :id", nativeQuery = true)
+    int hide(@Param("id") long id, @Param("me") String me);
+
+    /** 되돌리기는 누구나 한다 — 숨긴 사람만 되돌릴 수 있으면 그 사람이 자리를 비웠을 때 막힌다. */
+    @Modifying(clearAutomatically = true)
+    @Query(value = "UPDATE jump_cards SET hidden_at = NULL, hidden_by = NULL WHERE id = :id", nativeQuery = true)
+    int unhide(@Param("id") long id);
 }

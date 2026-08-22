@@ -2,6 +2,9 @@ package com.pokeclip.clip.jumpcard;
 
 import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.BroadcastNotFoundException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.ClaimedByOtherException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.JumpCardNotFoundException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.NotClaimOwnerException;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
+import java.util.function.IntSupplier;
 
 /** 카드를 쓰는 유일한 자리. 쓰기는 전부 네이티브 SQL이라 DB 시계와 순번 트리거를 탄다. */
 @Service
@@ -58,6 +62,50 @@ public class JumpCardService {
                     streamId, source, request.window().startMs(), request.eventId());
         }
         return new RecordResult(inserted == 1, snapshot);
+    }
+
+    @Transactional
+    public JumpCardSnapshot claim(long id, String userId) {
+        int updated = cards.claim(id, userId, properties.claimTtl().toSeconds());
+        JumpCard card = cards.findById(id).orElseThrow(() -> new JumpCardNotFoundException(id));
+        if (updated == 0) {
+            // 행은 있는데 못 잡았다 = 남이 잡고 있다. 「없는 카드」는 위 orElseThrow가 이미 갈랐다.
+            throw new ClaimedByOtherException(snapshot(card));
+        }
+        JumpCardSnapshot snapshot = snapshot(card);
+        publishAfterCommit(snapshot);
+        return snapshot;
+    }
+
+    @Transactional
+    public void release(long id, String userId) {
+        // 먼저 읽는 이유: 영향 행 0이 「없는 카드」인지 「남의 것」인지 갈라야 404와 403이 다르게 나간다.
+        JumpCard card = cards.findById(id).orElseThrow(() -> new JumpCardNotFoundException(id));
+        // 영향 행 0의 뜻이 둘이다 — 「남이 잡고 있다」와 「아무도 안 잡았다」.
+        // 후자는 이미 목표 상태이므로 성공으로 본다(멱등). 전자만 403이다.
+        if (cards.release(id, userId) == 0 && card.getClaimedBy() != null) {
+            throw new NotClaimOwnerException(id);
+        }
+        publishAfterCommit(snapshot(cards.findById(id).orElseThrow()));
+    }
+
+    @Transactional
+    public JumpCardSnapshot hide(long id, String userId) {
+        return touch(id, () -> cards.hide(id, userId));
+    }
+
+    @Transactional
+    public JumpCardSnapshot unhide(long id, String userId) {
+        return touch(id, () -> cards.unhide(id));
+    }
+
+    private JumpCardSnapshot touch(long id, IntSupplier write) {
+        if (write.getAsInt() == 0) {
+            throw new JumpCardNotFoundException(id);
+        }
+        JumpCardSnapshot snapshot = snapshot(cards.findById(id).orElseThrow());
+        publishAfterCommit(snapshot);
+        return snapshot;
     }
 
     @Transactional(readOnly = true)
