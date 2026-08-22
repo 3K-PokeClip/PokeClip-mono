@@ -13,9 +13,13 @@ class ReconnectPolicyTest {
             new ReconnectPolicy(Duration.ofSeconds(1), Duration.ofSeconds(60));
 
     // 결함 주입: ReconnectPolicy에서 {@code case LINK_UNAVAILABLE -> false}를 빼면
-    // 이 검사와 아래 전수 검사가 같이 빨간불이다(확인함 — 고치기 전 상태가 바로 그것이고
-    // 둘 다 단언 실패로 떨어졌다: 27행·59행). 그 값이 default -> true에 앉아 있던 것이
-    // POK-128 critic S1이다.
+    // 이 검사와 아래 <b>거부_목록에_없는_사유는_전부_재시도한다</b>가 같이 빨간불이다
+    // (확인함 — 고치기 전 상태가 바로 그것이고 둘 다 단언 실패로 떨어졌다).
+    // 그 값이 default -> true에 앉아 있던 것이 POK-128 critic S1이다.
+    //
+    // <b>행 번호로 가리키지 않는다</b> — 한때 「27행·59행」이라 적었는데 이 주석 자신의 길이(4줄)만큼
+    // 밀려 실제로는 31·63행이었고, 27·59행은 엉뚱한 검사를 가리키고 있었다(critic round3b).
+    // 주석을 더하는 순간 낡는 참조다. 검사 이름은 안 밀린다.
     @Test
     void 영원히_안_풀리는_사유는_재시도하지_않는다() {
         assertThat(ReconnectPolicy.retriable(StopReason.SESSION_AUTH_REJECTED)).isFalse();
