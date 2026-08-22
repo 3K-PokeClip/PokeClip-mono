@@ -112,6 +112,30 @@ class HighlightIntakeControllerTest extends IntegrationTestSupport {
                 .andExpect(status().isBadRequest());
     }
 
+    /**
+     * <b>{@code event_id}는 {@code VARCHAR(128)}이다.</b> 길이 검증이 없으면 그 값이 DB까지 가서
+     * {@code value too long for type character varying(128)}(SQLState 22001)로 터지고
+     * <b>500</b>이 나간다 — 계약은 400 {@code invalid_request}다(PR #109 봇 지적 ⑤, 재현 확인).
+     *
+     * <p>500이면 <b>판별기가 재시도한다.</b> 같은 payload라 영영 성공하지 못하고(실측: 재시도도
+     * 500), 그 카드는 버려지는데 원인은 「clip 서버 오류」로 보인다. 요청이 잘못된 것이라면
+     * 판별기가 그것을 알아야 재시도를 멈춘다.
+     *
+     * <p>길이 검증 없이 DB까지 가는 칸은 <b>{@code eventId} 하나뿐이다</b> — {@code streamId}는
+     * 명부에 없어 404로 먼저 걸리고, {@code source}는 컨트롤러가 400으로 좁혀 던진다(재현 확인).
+     */
+    @Test
+    void eventId가_128자를_넘으면_400이고_128자는_통과한다() throws Exception {
+        mvc.perform(요청("e".repeat(129), 1_000L, 2_000L, 1_500L))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_request"))
+                .andExpect(jsonPath("$.field").value("eventId"));
+        assertThat(cards.findAll()).as("400인데 행이 남으면 검증이 DB 뒤에 있는 것이다").isEmpty();
+
+        mvc.perform(요청("e".repeat(128), 3_000L, 4_000L, 3_500L))
+                .andExpect(status().isCreated());
+    }
+
     @Test
     void 모르는_출처면_400이다() throws Exception {
         mvc.perform(post("/internal/broadcasts/s-1/highlights")
