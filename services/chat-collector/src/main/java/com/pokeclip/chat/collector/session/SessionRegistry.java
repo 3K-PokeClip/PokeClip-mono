@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 
 /**
  * 살아 있는 세션을 방송 번호로 찾는다. <b>스트리머 여럿을 동시에 수집하는 자리다.</b>
@@ -185,6 +186,16 @@ public class SessionRegistry {
      */
     static final Duration CLOSE_ALL_BUDGET = Duration.ofSeconds(8);
 
+    /**
+     * 재시도로 안 풀리는 사유가 확정됐을 때 <b>등록부에서 지우기 전에</b> 부른다. 기본은 아무것도 안 한다.
+     * 등록부는 저장소를 모른다 — 메모를 남기는 쪽({@code StoppedStreamRecorder})이 건다.
+     *
+     * <p><b>지우기 전인 이유</b>: 지운 뒤에 알리면 메모가 남기 전까지 창구가 그 방송을 {@code unknown}
+     * (배너 끔)으로 답한다 — 가장 나쁜 상태가 가장 안전하게 보이는 틈이다. 앞에 두면 그 동안 STOPPED로
+     * 남아 {@code stopped}를 답한다. 반납은 안 밀린다 — 두 호출 지점 다 소켓·구독이 이미 없다.
+     */
+    private volatile BiConsumer<String, StopReason> permanentStopListener = (streamId, reason) -> { };
+
     private final ChzzkProperties properties;
     private final RestClient restClient;
     private final ChatBuffer buffer;
@@ -201,6 +212,20 @@ public class SessionRegistry {
         this.buffer = buffer;
         this.persister = persister;
         this.archive = archive;
+    }
+
+    public void onPermanentStop(BiConsumer<String, StopReason> listener) {
+        this.permanentStopListener = listener;
+    }
+
+    /** 리스너가 던져도 등록부는 멀쩡해야 한다. 타입 이름만 — 메시지엔 DB 주소가 들어 있다. */
+    private void notifyPermanentStop(String streamId, StopReason reason) {
+        try {
+            permanentStopListener.accept(streamId, reason);
+        } catch (Throwable t) {
+            log.warn("chat.registry.stop_listener_failed stream={} causeType={}",
+                    streamId, t.getClass().getSimpleName());
+        }
     }
 
     /**
@@ -261,6 +286,17 @@ public class SessionRegistry {
             // 사유별 갈래는 편지를 판정하는 쪽이 정한다(태스크 10). 여기서 재시도하지
             // 않는 이유는 그쪽이다 — 큐에 남은 편지가 다시 오는 것이 재시도다.
             log.warn("chat.registry.open_failed stream={} reason={}", streamId, e.reason());
+            if (!ReconnectPolicy.retriable(e.reason())) {
+                // <b>첫 수립에서 영구 실패.</b> 이 길은 재연결 루프를 안 타므로 stopOne이 안 불린다.
+                // 여기서 알려야 창구가 stopped를 답하고, 같은 시작 편지의 재전송이 다음 회차에
+                // 「끝난 방송 뒤의 시작」으로 지워져 영원히 도는 것을 멈춘다.
+                //
+                // <b>이 알림은 편지 폴링 스레드 위에서 동기로 돈다</b> — DB가 반개방이면 그 회차가
+                // 최악 10초 선다({@code socketTimeout}, POK-128 critic 실측 10.02초). 비동기로
+                // 빼지 않는다: 같은 DB 상태면 이 편지의 판정이 이미 {@code EndedStreamStore.find}에서
+                // 같은 시한에 막힌 뒤라, 여기만 비동기로 빼도 회차 시간이 안 줄어든다.
+                notifyPermanentStop(streamId, e.reason());
+            }
         }
         // 못 세웠으면 자리를 비우고 <b>그 세션을 닫는다.</b> 자리만 비우면 안 되는 이유는
         // <b>수립이 실패해도 그 세션의 재연결 루프는 이미 떠 있을 수 있다</b>는 것이다 —
@@ -305,6 +341,21 @@ public class SessionRegistry {
         SessionKey current = seated.session().key();
         if (current.streamId().equals(key.streamId())) {
             log.info("chat.registry.open_skipped stream={} reason=ALREADY_OPEN", key.streamId());
+            return false;
+        }
+        if (seated.status().state() == CollectionStatus.State.STOPPED) {
+            // 포기가 확정돼 지워지는 중인 세션이다 — 포기 메모를 남기는 동안(DB 시한 최악 10초) 자리에
+            // 남는다. 여기에 새 방송을 갈아끼우면 이름만 바뀐 죽은 세션에 편지가 소비되고(true -> 삭제)
+            // 곧 지워져 새 방송은 등록부에도 큐에도 없다 — 영구 유실. 거절하면 LinkedSessionStarter가
+            // RETRY_LATER로 편지를 남겨 다음 회차에 빈 자리에 새로 연다(isStaleStart는 false다).
+            // PR #98 2판 codex P1 「좁은 창, 재현 못 함」이 이 자리다 — SessionRegistryTest가 리스너를
+            // 붙들어 결정적으로 연다.
+            // <b>첫 수립 경로에서는 이 가드가 안 걸린다</b> — 그때 세션은 ESTABLISHING이다. 편지 폴링
+            // 스레드가 하나라 「open() 안에서 블로킹 중에 같은 스트리머의 open()」이 같은 스레드라
+            // 성립하지 않고, 그 창은 수립 REST 동안 원래 열려 있던 것이다(POK-128 critic S3).
+            // <b>수립을 워커로 빼는 날</b>(CLAUDE.md 「다음 카드로 넘긴 것」) ESTABLISHING도 같이 봐야 한다.
+            log.info("chat.registry.open_deferred streamer={} stream={} reason=SEAT_STOPPING",
+                    key.streamerId(), key.streamId());
             return false;
         }
         // <b>지금 걷는 방송보다 늦게 시작한 방송만 자리를 가져간다.</b> 없으면 늦게 도착한
@@ -623,10 +674,14 @@ public class SessionRegistry {
         if (entry == null || entry.session() != caller) {
             return;                       // 이미 닫혔거나, 그 자리는 남의 세션이다
         }
+        String streamId = entry.session().key().streamId();
+        // <b>지우기 전에 알린다</b>(permanentStopListener 주석). 이 스레드는 그 세션의 재연결 루프이고
+        // 뒷정리(cleanUpOnce)는 루프 첫 줄에서 이미 끝났으므로, 알림이 DB 시한에 걸려도 반납은 안 밀린다.
+        // 그 동안 이 자리는 STOPPED로 남는다 — retargetOrSkip이 그것을 보고 갈아끼움을 거절한다.
+        notifyPermanentStop(streamId, reason);
         if (!sessions.remove(streamerId, entry)) {
             return;                       // 위 검사와 여기 사이에 남이 가져갔다
         }
-        String streamId = entry.session().key().streamId();
         log.warn("chat.registry.stopped stream={} reason={} retriable=false", streamId, reason);
         closeEntry(streamId, entry);
     }

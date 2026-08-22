@@ -114,6 +114,21 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
         }
     }
 
+    // 포기 메모(번호 0) 위에 같은 방송의 시작 편지(번호 >= 1)가 다시 오면 — 영원히 도는 편지를 여기서 멈춘다.
+    // 문항 2: noneMatch(started_after_ended)는 로그가 한 줄도 없어도 참이다 —
+    //         anyMatch(started_after_stopped)를 <b>먼저</b> 단언한다.
+    // 문항 5: handleStarted의 갈래를 지우면 started_after_ended가 찍혀 둘째 단언이 빨간불.
+    @Test
+    void 포기_메모가_있는_방송의_시작_편지는_지워지고_로그가_종료와_갈린다() throws Exception {
+        store.rememberStopped("s1", "SESSION_AUTH_REJECTED", Instant.parse("2026-08-22T12:00:00Z"));
+        try (LogCaptor captor = new LogCaptor()) {
+            assertThat(processor.process(started("s1", 1))).isEqualTo(ProcessResult.IGNORED_STALE);
+            assertThat(captor.messages()).anyMatch(m -> m.startsWith("chat.broadcast.started_after_stopped"));
+            assertThat(captor.messages()).noneMatch(m -> m.startsWith("chat.broadcast.started_after_ended"));
+        }
+        assertThat(sessions.userIds()).as("세션을 열지 않았다").isEmpty();
+    }
+
     // 문항 2: 「카운터가 늘 1」인 구현도 한 줄짜리 단언은 통과한다 — 부르기 전 0을 먼저 보고,
     //         두 번째 불량 편지에서 2가 되는지도 본다(계획 검증 S6: 편지마다 올린다.
     //         한 번만 올리면 「1번이 식별자 체계를 바꿨다」와 「한 건 이상했다」가 구분되지 않는다).

@@ -896,6 +896,44 @@ class SessionRegistryTest extends IntegrationTestSupport {
         assertThat(registry.activeCount()).isEqualTo(1);
     }
 
+    // 문항 5: retargetOrSkip의 STOPPED 가드를 지우면 open이 true(갈아끼움)를 돌려줘 빨간불 —
+    //         PR #98 2판 codex P1 「좁은 창, 재현 못 함」을 리스너를 붙들어 결정적으로 연다.
+    // 문항 4: open()==false만 보면 「자리 없음」과 구분이 안 된다 — 이름이 안 바뀌었는지·편지가 남는지(isStaleStart=false)도 본다.
+    // 문항 3: 리스너를 붙드는 스레드는 그 세션의 재연결 루프(가상 스레드)다. memoStarted가 풀린
+    //         시점에 그 스레드는 permanentStopListener.accept 안에 있고, 아래 단언은 그 동안 돈다.
+    @Test
+    void 포기_메모를_남기는_동안은_stopped로_남고_새_방송은_갈아끼우지_않는다() throws Exception {
+        givenRegistry();
+        java.util.concurrent.CountDownLatch memoStarted = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch memoRelease = new java.util.concurrent.CountDownLatch(1);
+        registry.onPermanentStop((streamId, reason) -> {
+            memoStarted.countDown();
+            try {
+                memoRelease.await(10, java.util.concurrent.TimeUnit.SECONDS);   // DB가 느린 동안을 흉내낸다
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        registry.open(key("s1", 1L, "chA"), "tokA");
+        awaitUntil(AWAIT, () -> behavior.isConnected("tokA"));
+        behavior.failSessionCreateFor("tokA", 401);
+        behavior.dropConnectionFor("tokA");
+        assertThat(memoStarted.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        try {
+            assertThat(stateOf("s1")).as("메모를 남기는 동안 등록부에 STOPPED로 남는다 — 창구가 stopped를 답하는 근거")
+                    .isEqualTo(CollectionStatus.State.STOPPED);
+            SessionKey next = key("s2", 1L, "chA");
+            assertThat(registry.open(next, "tokA2")).as("죽은 세션에 갈아끼우면 안 된다").isFalse();
+            assertThat(registry.currentStreamIdOf(1L)).as("이름이 바뀌지 않았다").isEqualTo("s1");
+            assertThat(registry.isStaleStart(1L, next.startedAt()))
+                    .as("편지는 낡은 것이 아니다 — RETRY_LATER로 남아 다음 회차에 온다").isFalse();
+        } finally {
+            memoRelease.countDown();
+        }
+        awaitUntil(AWAIT, () -> registry.activeCount() == 0);
+        assertThat(registry.open(key("s3", 1L, "chA"), "tokA3")).as("자리가 비면 새로 연다").isTrue();
+    }
+
     /**
      * 그 방송 세션이 들고 있는 <b>영구 정지 손잡이</b>를 꺼낸다. 등록부가 세션에 넘긴
      * 콜백이고, 재연결 루프가 재시도 불가 사유를 확정했을 때 부르는 바로 그것이다.

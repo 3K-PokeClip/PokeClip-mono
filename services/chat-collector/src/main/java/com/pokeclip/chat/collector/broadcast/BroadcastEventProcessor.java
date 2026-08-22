@@ -149,8 +149,15 @@ public class BroadcastEventProcessor {
         Optional<EndedStream> ended = store.find(envelope.streamId());
         if (ended.isPresent()) {
             if (envelope.sequence() > ended.get().lastSequence()) {
-                log.warn("chat.broadcast.started_after_ended streamId={} sequence={} endedSequence={}",
-                        envelope.streamId(), envelope.sequence(), ended.get().lastSequence());
+                if (ended.get().stopped()) {
+                    // 포기 메모(번호 0) 위의 시작 — 재전송이거나, 재연동 전에 다시 켠 것이다. 같은 토큰이면
+                    // 또 401이라 열 이유가 없고, 여는 트리거 자체가 없다(POK-127 미결). 내부 로그라 사유 이름을 찍는다.
+                    log.warn("chat.broadcast.started_after_stopped streamId={} sequence={} stopReason={}",
+                            envelope.streamId(), envelope.sequence(), ended.get().stopReason());
+                } else {
+                    log.warn("chat.broadcast.started_after_ended streamId={} sequence={} endedSequence={}",
+                            envelope.streamId(), envelope.sequence(), ended.get().lastSequence());
+                }
             }
             return ProcessResult.IGNORED_STALE;
         }
