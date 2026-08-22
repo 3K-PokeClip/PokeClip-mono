@@ -4,8 +4,11 @@ import com.pokeclip.auth.delegation.DelegationRelation;
 import com.pokeclip.auth.delegation.DelegationService;
 import com.pokeclip.auth.delegation.api.dto.DelegationResolveRequest;
 import com.pokeclip.auth.delegation.api.dto.DelegationResolveResponse;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -27,11 +30,21 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class DelegationResolveController {
 
+    private static final Logger log = LoggerFactory.getLogger(DelegationResolveController.class);
+
     private final DelegationService service;
+    private final MeterRegistry meterRegistry;
 
     @PostMapping("/resolve")
     public DelegationResolveResponse resolve(@Valid @RequestBody DelegationResolveRequest request) {
         DelegationRelation relation = service.relationOf(request.userId(), request.streamerUserId());
+        if (relation == DelegationRelation.NONE) {
+            // 회원 표를 안 읽으므로 「없는 번호가 왔다」를 모른다. NONE 자체를 세서 튀면 조사한다(PRD 결정).
+            meterRegistry.counter("pokeclip.delegation.resolve.none").increment();
+            // WARN이 아닌 이유는 남의 방송 링크를 열어보는 것이 정상 트래픽이기 때문이다.
+            log.info("auth.delegation.resolve_none userId={} streamerUserId={}",
+                    request.userId(), request.streamerUserId());
+        }
         return new DelegationResolveResponse(relation);
     }
 }

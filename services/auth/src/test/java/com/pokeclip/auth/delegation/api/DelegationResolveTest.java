@@ -10,6 +10,7 @@ import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
 import com.pokeclip.auth.user.UserService;
+import com.pokeclip.web.support.LogCaptor;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -18,6 +19,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 import java.time.Instant;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -114,6 +116,39 @@ class DelegationResolveTest extends DelegationTestSupport {
         grant(streamer, editor);
         mockMvc.perform(resolve(streamer.getId(), editor.getId()))
                 .andExpect(jsonPath("$.relation").value("NONE"));
+    }
+
+    // ── NONE 관찰 ─────────────────────────────────────────────────────
+
+    /**
+     * 회원 표를 안 읽으므로 「없는 번호가 왔다」를 영영 모른다. Media가 보내는 스트리머 번호가
+     * 우리 회원 번호인지가 미확인 가정(POK-127)이라, 틀리면 모든 판정이 조용히 NONE이 된다.
+     * 그래서 NONE 자체를 센다 — 숫자가 튀면 그때 조사한다.
+     */
+    @Test
+    void NONE이면_카운터가_정확히_1_오른다() throws Exception {
+        User a = newUser();
+        User b = newUser();
+        double before = meterRegistry.counter("pokeclip.delegation.resolve.none").count();
+
+        mockMvc.perform(resolve(a.getId(), b.getId())).andExpect(jsonPath("$.relation").value("NONE"));
+        mockMvc.perform(resolve(a.getId(), a.getId())).andExpect(jsonPath("$.relation").value("OWNER"));
+
+        assertThat(meterRegistry.counter("pokeclip.delegation.resolve.none").count()).isEqualTo(before + 1);
+    }
+
+    /** 기존 두 창구의 resolve_rejected와 같은 자리·같은 수위(INFO). 값은 번호 둘뿐이다. */
+    @Test
+    void NONE이면_번호_둘만_담은_INFO_한_줄() throws Exception {
+        User a = newUser();
+        User b = newUser();
+        try (LogCaptor logs = new LogCaptor()) {
+            mockMvc.perform(resolve(a.getId(), b.getId()));
+            assertThat(logs.messages())
+                    .anyMatch(m -> m.startsWith("auth.delegation.resolve_none")
+                            && m.contains("userId=" + a.getId())
+                            && m.contains("streamerUserId=" + b.getId()));
+        }
     }
 
     // ── 요청 형식 ─────────────────────────────────────────────────────
