@@ -41,6 +41,25 @@ public class DelegationService {
     }
 
     /**
+     * clip이 묻는 「이 사람과 이 스트리머는 무슨 사이인가」. 회원 표는 보지 않는다 —
+     * 번호가 같으면 OWNER, 살아있는 위임이 있으면 EDITOR, 나머지 전부 NONE.
+     *
+     * <p><b>인자 순서가 곧 방향이다.</b> 위임은 스트리머 → 편집자 한 방향이고 조회 인자가 둘 다
+     * Long이라 바꿔 넣어도 컴파일러가 못 잡는다. {@code DelegationResolveTest.방향이_뒤집히면_NONE}이
+     * 이 줄을 잰다.
+     */
+    @Transactional(readOnly = true)
+    public DelegationRelation relationOf(Long userId, Long streamerUserId) {
+        if (userId.equals(streamerUserId)) {
+            return DelegationRelation.OWNER;
+        }
+        if (delegations.existsByStreamerIdAndEditorIdAndRevokedAtIsNull(streamerUserId, userId)) {
+            return DelegationRelation.EDITOR;
+        }
+        return DelegationRelation.NONE;
+    }
+
+    /**
      * 스트리머와 편집자가 같은 엔드포인트를 쓴다. 부른 사람이 그 행의 어느 쪽인지로
      * revoked_by가 갈린다 — 내보낸 것과 나간 것은 다른 사건이라 구분해 남긴다.
      *
