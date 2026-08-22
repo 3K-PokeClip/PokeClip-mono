@@ -1,6 +1,7 @@
 package com.pokeclip.clip.support;
 
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -55,6 +56,21 @@ public abstract class IntegrationTestSupport {
         } catch (java.sql.SQLException e) {
             throw new IllegalStateException("baseline 시나리오 시드 실패", e);
         }
+    }
+
+    /**
+     * 표를 <b>자식부터</b> 비운다. {@code jump_cards}가 {@code broadcasts}의 자식이라
+     * 카드를 먼저 안 지우면 방송 삭제가 FK로 죽는데, <b>단독 실행에서는 안 보이고 모듈 전체에서만
+     * 터진다</b>(POK-118에서 실제로 밟았다 — 새 시험이 카드를 남기자 같은 패키지의 다른 클래스
+     * 셋이 깨졌다).
+     *
+     * <p>이 헬퍼를 두는 이유는 <b>새 시험 클래스가 그 순서를 몰라도 안 열리게</b> 하는 것이다.
+     * 정리가 필요한 클래스는 {@code @BeforeEach}에서 이것을 부른다.
+     */
+    protected static void 방송과_카드를_비운다(JdbcTemplate jdbc) {
+        jdbc.update("DELETE FROM jump_cards");
+        jdbc.update("DELETE FROM broadcast_events");
+        jdbc.update("DELETE FROM broadcasts");
     }
 
     @DynamicPropertySource

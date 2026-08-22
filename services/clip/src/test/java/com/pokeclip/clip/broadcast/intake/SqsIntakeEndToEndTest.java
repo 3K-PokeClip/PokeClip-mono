@@ -9,6 +9,7 @@ import com.pokeclip.clip.broadcast.BroadcastStatus;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.LocalStackFixture;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
@@ -31,17 +32,26 @@ class SqsIntakeEndToEndTest extends IntegrationTestSupport {
     private final BroadcastEventProcessor processor;
     private final BroadcastRepository broadcasts;
     private final BroadcastEventRepository events;
+    private final JdbcTemplate jdbc;
 
     SqsIntakeEndToEndTest(BroadcastEventProcessor processor, BroadcastRepository broadcasts,
-                          BroadcastEventRepository events) {
+                          BroadcastEventRepository events, JdbcTemplate jdbc) {
         this.processor = processor;
         this.broadcasts = broadcasts;
         this.events = events;
+        this.jdbc = jdbc;
     }
 
-    /** 앞 클래스들과 같은 DB를 쓴다. 둘째 시험의 hasSize(1)이 남은 줄에 오염된다. */
+    /**
+     * 앞 클래스들과 같은 DB를 쓴다. 둘째 시험의 hasSize(1)이 남은 줄에 오염된다.
+     *
+     * <p><b>카드를 먼저 지운다</b> — {@code jump_cards}가 {@code broadcasts}의 자식이라
+     * 앞 클래스가 카드를 남기면 아래 {@code deleteAllInBatch()}가 FK로 죽는다(POK-118).
+     * 단독 실행은 통과하고 모듈 전체에서만 터지는 자리다.
+     */
     @BeforeEach
     void 앞_테스트의_흔적을_지운다() {
+        jdbc.update("DELETE FROM jump_cards");
         events.deleteAllInBatch();
         broadcasts.deleteAllInBatch();
     }

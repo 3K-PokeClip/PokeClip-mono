@@ -9,6 +9,20 @@ pokeclip:
   cors:
     allowed-origins: http://localhost:3000
 
+  jwt:
+    # TestTokens.SECRET과 같은 문자열이어야 한다. 갈리면 인증 시험이 통째로 401이 된다.
+    secret: test-only-jwt-secret-at-least-32-bytes!!
+
+  internal-api:
+    token: test-only-internal-token-32bytes-long!!
+
+  jump-card:
+    stream:
+      # 시험은 한 사용자로 연결을 여러 번 열고 닫는다. 끊긴 자리는 즉시 반납되지 않아서
+      # (서버는 다음 쓰기가 실패해야 안다) 운영 기본값 4로는 뒤 시험이 503으로 오염된다.
+      # 상한 자체를 재는 시험은 자기 @TestPropertySource로 4를 다시 건다.
+      max-per-user: 50
+
   broadcast:
     intake:
       # 테스트는 큐에 안 붙는다. 진짜 왕복은 SqsIntakeEndToEndTest가 LocalStack으로 잰다.

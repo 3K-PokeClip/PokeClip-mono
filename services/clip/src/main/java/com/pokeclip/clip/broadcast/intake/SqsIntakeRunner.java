@@ -2,6 +2,7 @@ package com.pokeclip.clip.broadcast.intake;
 
 import com.pokeclip.clip.broadcast.BroadcastEventProcessor;
 import com.pokeclip.clip.broadcast.LifecycleEnvelope;
+import com.pokeclip.clip.broadcast.LifecycleEventType;
 import com.pokeclip.clip.broadcast.ProcessResult;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -57,6 +58,8 @@ class SqsIntakeRunner {
     private final IntakeStatus status;
     private final BroadcastEventProcessor processor;
     private final ObjectMapper mapper;
+    /** null이면 안 부른다 — 리스너 없이 만드는 기존 생성자 경로(검사 넷)가 그대로 산다. */
+    private final EndedListener endedListener;
 
     private final PollBackoff backoff = new PollBackoff(FIRST_RETRY_DELAY, MAX_RETRY_DELAY);
     private final Sleeper sleeper;
@@ -83,19 +86,32 @@ class SqsIntakeRunner {
      * Spring이 그 지점을 "SqsClient 빈을 optional로 찾기"로 가로채, 빈이 실제로 있어도
      * 껍데기만 오는 함정이 있다(IntakeConfiguration 주석 참고).
      */
+    /**
+     * 리스너도 {@code ObjectProvider}로 받는다. 필수로 받으면 러너만 올리는 얇은 컨텍스트가
+     * {@code EndedListener} 빈이 없어 통째로 안 뜬다 — {@code SqsClient}와 같은 이유이고,
+     * 실제로 {@code 켜진_컨텍스트에서_러너가_큐_클라이언트를_받는다}가 그렇게 깨졌다.
+     */
     @Autowired
     SqsIntakeRunner(ObjectProvider<SqsClient> sqsProvider, IntakeProperties properties,
-                    IntakeStatus status, BroadcastEventProcessor processor, ObjectMapper mapper) {
-        this(sqsProvider.getIfAvailable(), properties, status, processor, mapper);
+                    IntakeStatus status, BroadcastEventProcessor processor, ObjectMapper mapper,
+                    ObjectProvider<EndedListener> endedListenerProvider) {
+        this(sqsProvider.getIfAvailable(), properties, status, processor, mapper, null,
+                endedListenerProvider.getIfAvailable());
     }
 
     SqsIntakeRunner(SqsClient sqs, IntakeProperties properties, IntakeStatus status,
                     BroadcastEventProcessor processor, ObjectMapper mapper) {
-        this(sqs, properties, status, processor, mapper, null);
+        this(sqs, properties, status, processor, mapper, null, null);
     }
 
     SqsIntakeRunner(SqsClient sqs, IntakeProperties properties, IntakeStatus status,
                     BroadcastEventProcessor processor, ObjectMapper mapper, Sleeper sleeper) {
+        this(sqs, properties, status, processor, mapper, sleeper, null);
+    }
+
+    SqsIntakeRunner(SqsClient sqs, IntakeProperties properties, IntakeStatus status,
+                    BroadcastEventProcessor processor, ObjectMapper mapper, Sleeper sleeper,
+                    EndedListener endedListener) {
         this.sqs = sqs;
         this.properties = properties;
         this.status = status;
@@ -103,6 +119,7 @@ class SqsIntakeRunner {
         this.mapper = mapper;
         // 기본은 종료 신호를 기다리는 실물이다. 검사만 가짜를 넣는다.
         this.sleeper = sleeper != null ? sleeper : this::awaitStop;
+        this.endedListener = endedListener;
     }
 
     /**
@@ -112,6 +129,18 @@ class SqsIntakeRunner {
     /** 큐 클라이언트를 받았는지 — 곧 켜졌는지다. 배선이 실제로 닿았는지 검사가 여기를 본다. */
     boolean hasQueueClient() {
         return sqs != null;
+    }
+
+    /**
+     * 종료 알림 리스너를 받았는지. {@link #hasQueueClient()}와 같은 이유로 있다 —
+     * <b>없으면 방송 종료 알림이 통째로 죽는데 아무 시험도 안 깨진다.</b>
+     *
+     * <p>관통 시험이 러너를 손수 만들며 리스너를 넘기기 때문에 그 시험만으로는
+     * <b>운영 배선</b>({@code @Autowired} 생성자의 {@code ObjectProvider})이 닿았는지 증명되지 않는다 —
+     * 실제로 그 자리를 null로 바꿔도 177건이 전부 초록이었다(비동기 2차 감사).
+     */
+    boolean hasEndedListener() {
+        return endedListener != null;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -284,7 +313,29 @@ class SqsIntakeRunner {
         // PROCESSED · DUPLICATE · IGNORED_STALE 셋 다 "더 볼 일 없음"이다.
         log.info("broadcast.intake.handled eventId={} result={}", envelope.eventId(), result);
         delete(message);
+        notifyEnded(envelope, result);
         return true;
+    }
+
+    /**
+     * 방송이 정말 끝났을 때만 알린다 — DUPLICATE·IGNORED_STALE은 명부를 안 바꿨으므로
+     * 알리면 붙어 있는 화면이 멀쩡한 방송에서 쫓겨난다.
+     *
+     * <p>삭제 뒤에 부른다. 알림 실패는 편지를 되돌리지 않는다 — 이미 지웠고 명부는 반영됐다.
+     * 붙어 있는 화면은 재연결 때 {@code ended}를 받는다(알려진 구멍).
+     */
+    private void notifyEnded(LifecycleEnvelope envelope, ProcessResult result) {
+        if (endedListener == null
+                || envelope.type() != LifecycleEventType.BROADCAST_ENDED
+                || result != ProcessResult.PROCESSED) {
+            return;
+        }
+        try {
+            endedListener.broadcastEnded(envelope.streamId());
+        } catch (RuntimeException e) {
+            log.warn("broadcast.intake.ended_listener_failed streamId={} causeType={}",
+                    envelope.streamId(), e.getClass().getSimpleName());
+        }
     }
 
     /**
