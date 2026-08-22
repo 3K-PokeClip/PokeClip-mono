@@ -1,4 +1,4 @@
-import type { ReactElement } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import { render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '@/ui';
@@ -23,4 +23,9 @@ export function renderWithProviders(ui: ReactElement) {
     </QueryClientProvider>,
   );
   return { ...result, queryClient };
+}
+
+/** 훅 테스트용 래퍼 — 토스트만 필요한 훅을 renderHook에 걸 때 쓴다. */
+export function withToastProvider({ children }: { children: ReactNode }) {
+  return <ToastProvider>{children}</ToastProvider>;
 }

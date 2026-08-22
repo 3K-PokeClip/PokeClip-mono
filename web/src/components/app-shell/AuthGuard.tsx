@@ -25,6 +25,19 @@ export function markIntentionalLogout() {
   }
 }
 
+/**
+ * 표식을 쓰지 않고 걷는다 — 가드 밖에서 세션을 접은 화면(/goodbye)이 스스로 로그인으로
+ * 나갈 때 부른다. 안 걷으면 표식이 탭 세션에 남아, 다음에 **비자발적으로** 끊겼을 때
+ * 가드가 그것을 의도적 종료로 읽고 복원 경로를 저장하지 않는다.
+ */
+export function clearIntentionalLogout() {
+  try {
+    sessionStorage.removeItem(LOGOUT_KEY);
+  } catch {
+    /* 삭제 실패 — 표식이 남는 것까지만 감수 */
+  }
+}
+
 export function AuthGuard({ children }: { children: ReactNode }) {
   useAuthHydration();
   const hydrated = useAuthStore((s) => s.hydrated);

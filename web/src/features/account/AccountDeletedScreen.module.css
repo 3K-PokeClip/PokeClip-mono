@@ -1,0 +1,38 @@
+/* 디자인 1p ④ 탈퇴 완료 — 차단 상태(③)와 달리 그림자가 없다. 의도적으로 차분하다. */
+
+.screen {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(24 * var(--pc-u));
+}
+
+.card {
+  width: 100%;
+  max-width: calc(430 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(18 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  padding: calc(24 * var(--pc-u)) calc(26 * var(--pc-u));
+}
+
+.title {
+  font-size: calc(15 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.lead {
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  line-height: 1.6;
+  margin: calc(6 * var(--pc-u)) 0 0;
+}
+
+/* 1p ④의 버튼은 전체 폭이 아니라 왼쪽에 붙는다 */
+.actions {
+  display: flex;
+  margin-top: calc(16 * var(--pc-u));
+}
