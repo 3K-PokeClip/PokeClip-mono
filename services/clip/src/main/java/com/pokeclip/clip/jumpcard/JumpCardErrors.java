@@ -20,6 +20,23 @@ public final class JumpCardErrors {
         }
     }
 
+    /**
+     * 400. <b>{@code IllegalArgumentException}을 통째로 400으로 잡지 않으려고</b> 좁혀 던지는 타입이다 —
+     * 내부 버그로 나온 같은 예외가 「요청이 잘못됐다」로 둔갑하면 판별기가 재시도를 멈춘다.
+     */
+    public static class InvalidHighlightException extends RuntimeException {
+        private final String field;
+
+        public InvalidHighlightException(String field) {
+            super("요청이 잘못됐다: " + field);
+            this.field = field;
+        }
+
+        public String field() {
+            return field;
+        }
+    }
+
     private JumpCardErrors() {
     }
 }
