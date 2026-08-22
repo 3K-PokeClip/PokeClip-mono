@@ -13,6 +13,7 @@ export function ProfileCard({
   photoUrl,
   draftName,
   dirty,
+  editable,
   onDraftNameChange,
   onSave,
   onEditPhoto,
@@ -22,6 +23,7 @@ export function ProfileCard({
   photoUrl: string | undefined;
   draftName: string;
   dirty: boolean;
+  editable: boolean;
   onDraftNameChange: (next: string) => void;
   onSave: () => void;
   onEditPhoto: () => void;
@@ -41,7 +43,9 @@ export function ProfileCard({
         <div className={styles.avatarBody}>
           <div className={styles.avatarLabel}>프로필 사진</div>
         </div>
-        <Button variant="soft" size="sm" onClick={onEditPhoto}>
+        {/* me가 오기 전엔 잠근다 — 열어 두면 잘라낸 사진이 캐시에 못 들어가고 조용히
+            버려지는데 토스트만 「변경했습니다」라고 말한다 (저장 버튼과 같은 이유) */}
+        <Button variant="soft" size="sm" disabled={!editable} onClick={onEditPhoto}>
           사진 수정
         </Button>
       </div>

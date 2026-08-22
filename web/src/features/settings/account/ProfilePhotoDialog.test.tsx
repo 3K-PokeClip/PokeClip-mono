@@ -236,6 +236,37 @@ describe('ProfilePhotoDialog', () => {
     expect(onApply).not.toHaveBeenCalled();
   });
 
+  it('방향키로도 사진 위치를 옮긴다 — 포인터 전용이면 키보드로는 중앙 고정뿐이다', async () => {
+    const { user } = await open();
+    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+    markImageDecoded();
+
+    const stage = dialog().getByRole('group', { name: /사진 위치 조정/ });
+    expect(stage).toHaveAttribute('tabindex', '0');
+
+    const img = document.querySelector('[role="dialog"] img') as HTMLImageElement;
+    const before = img.style.transform;
+    stage.focus();
+    await user.keyboard('{ArrowRight}');
+
+    // jsdom은 naturalWidth가 0이라 클램프가 통과시킨다 — 이동 자체가 붙는지만 본다
+    expect(img.style.transform).not.toBe(before);
+  });
+
+  it('같은 그림으로 재진입해도 디코드를 다시 기다린다', async () => {
+    const { user } = await open();
+    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+    markImageDecoded();
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+
+    // 토스트 「편집」으로 같은 그림에 재진입 — imageSrc는 그대로다
+    await user.click(await screen.findByRole('button', { name: '편집' }));
+
+    // 직전 ready가 남아 있으면 새 <img>가 읽히기도 전에 적용이 열려
+    // 잘리지 않은 원본이 저장된다
+    expect(dialog().getByRole('button', { name: '적용' })).toBeDisabled();
+  });
+
   it('닫기로 언제든 빠져나온다', async () => {
     const { user } = await open();
 

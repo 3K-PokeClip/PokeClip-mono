@@ -4,6 +4,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from 'react';
@@ -49,6 +50,20 @@ export function PhotoCropStage({
     onChange(clampOffset(next, natural.width, natural.height, maskPx));
   }
 
+  // 디코드 대기 상태의 주인은 <img>를 든 이쪽이다. 다이얼로그가 imageSrc 변화로만
+  // 리셋하면, 같은 그림으로 재진입할 때(토스트 「편집」·같은 프리셋) 직전 ready가 남아
+  // 새 <img>가 읽히기도 전에 「적용」이 열린다.
+  useEffect(() => {
+    onStatusChange('loading');
+  }, [src, onStatusChange]);
+
+  // ② 클램프는 commit 경로에만 걸려 있어 새는 자리가 둘 있다 — 디코드가 끝나 치수를
+  // 처음 알게 될 때, 그리고 창이 줄어 마스크가 작아질 때. 둘 다 여기서 다시 자른다.
+  // clampOffset은 바뀐 것이 없으면 같은 객체를 돌려주므로 이 이펙트가 자신을 깨우지 않는다.
+  useEffect(() => {
+    onChange(clampOffset(transform, natural.width, natural.height, maskPx));
+  }, [natural.width, natural.height, maskPx, transform, onChange]);
+
   // 마스크는 --pc-u를 타고 창 폭에 비례해 커진다 — 상수로 두면 창이 넓을 때 미리보기와
   // 잘라낸 결과가 갈린다. 그려진 지름을 재서 양쪽이 같은 값을 쓰게 한다.
   useEffect(() => {
@@ -89,10 +104,29 @@ export function PhotoCropStage({
     drag.current = null;
   }
 
+  /** 방향키로도 옮긴다 — 포인터 전용이면 키보드 사용자는 중앙 고정 크롭밖에 못 만든다. */
+  function handleKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    const step = e.shiftKey ? 16 : 4; // Shift로 크게 — 큰 사진을 끝까지 옮기려면 필요하다
+    const move: Record<string, [number, number]> = {
+      ArrowLeft: [-step, 0],
+      ArrowRight: [step, 0],
+      ArrowUp: [0, -step],
+      ArrowDown: [0, step],
+    };
+    const delta = move[e.key];
+    if (delta === undefined) return;
+    e.preventDefault(); // 스테이지가 포커스를 가진 동안 화면이 함께 스크롤되지 않게
+    commit({ ...transform, x: transform.x + delta[0], y: transform.y + delta[1] });
+  }
+
   return (
     <>
       <div
         className={styles.cropStage}
+        role="group"
+        aria-label="사진 위치 조정 — 방향키로 옮기고 Shift를 누르면 크게 움직여요"
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={endDrag}

@@ -98,9 +98,10 @@ export function clampOffset(
   // 그림 반폭에서 원 반지름을 뺀 만큼까지만 밀 수 있다. 음수면(덮지 못하면) 중앙 고정.
   const limitX = Math.max(0, halfWidth - maskPx / 2);
   const limitY = Math.max(0, halfHeight - maskPx / 2);
-  return {
-    ...transform,
-    x: Math.min(limitX, Math.max(-limitX, transform.x)),
-    y: Math.min(limitY, Math.max(-limitY, transform.y)),
-  };
+  const x = Math.min(limitX, Math.max(-limitX, transform.x));
+  const y = Math.min(limitY, Math.max(-limitY, transform.y));
+  // 바뀐 것이 없으면 같은 객체를 돌려준다 — 호출부가 이 결과를 그대로 상태에 넣으므로,
+  // 매번 새 객체를 주면 재클램프 이펙트가 자기 자신을 깨워 무한 루프가 된다
+  if (x === transform.x && y === transform.y) return transform;
+  return { ...transform, x, y };
 }

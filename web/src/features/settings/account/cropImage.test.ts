@@ -124,6 +124,18 @@ describe('clampOffset', () => {
     expect(turned.x).toBeCloseTo(upright.y);
   });
 
+  it('바뀐 것이 없으면 같은 객체를 돌려준다 — 재클램프 이펙트가 자신을 깨우지 않게', () => {
+    const t = { x: 10, y: -20, zoom: 100, rotation: 0 };
+    expect(clampOffset(t, 512, 512, M)).toBe(t);
+  });
+
+  it('마스크가 줄면 한계도 줄어 이미 밀어 둔 값이 다시 잘린다', () => {
+    const wide = clampOffset({ x: 9999, y: 0, zoom: 100, rotation: 0 }, 512, 512, 234);
+    const narrow = clampOffset(wide, 512, 512, 176);
+    expect(narrow.x).toBeLessThan(wide.x);
+    expect(narrow.x).toBeCloseTo(176);
+  });
+
   it('크기를 아직 모르면 건드리지 않는다', () => {
     const t = { x: 5, y: 5, zoom: 42, rotation: 0 };
     expect(clampOffset(t, 0, 0, M)).toBe(t);

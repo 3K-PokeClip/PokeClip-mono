@@ -71,6 +71,17 @@ describe('useProfilePhotoState', () => {
     expect(result.current.errorTitle).toBe('JPG · PNG · WebP만 올릴 수 있어요');
   });
 
+  it('안내는 실패 종류를 따라간다 — 형식 오류에 「5MB 이하로 줄여」라 하지 않는다', () => {
+    const { result } = setup();
+
+    act(() => result.current.selectFile(fileOf('clip.gif', 'image/gif', 1024)));
+    expect(result.current.errorHint).not.toContain('5MB');
+    expect(result.current.errorHint).toContain('형식');
+
+    act(() => result.current.selectFile(OVERSIZE()));
+    expect(result.current.errorHint).toContain('5MB');
+  });
+
   it('흔들림은 340ms에 끝나고, 2.4초 뒤 선택 화면으로 돌아오며 300ms 복귀가 붙는다', () => {
     const { result } = setup();
     act(() => result.current.selectFile(OVERSIZE()));

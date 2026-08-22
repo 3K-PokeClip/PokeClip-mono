@@ -34,12 +34,6 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
     setTransform(INITIAL_CROP);
   }, [photo.selectionSeq]);
 
-  // 그림이 바뀌면 디코드를 다시 기다린다 — 앞 그림의 ready가 남으면 새 그림을 못 읽은 채
-  // 「적용」이 열린다
-  useEffect(() => {
-    setCropStatus('loading');
-  }, [photo.imageSrc]);
-
   // 단계가 바뀌면 표시를 걷는다 — 드롭 직후 dragleave가 안 오는 경우가 있어
   // 그대로 두면 업로드·크롭으로 넘어간 뒤에도 강조가 남는다.
   useEffect(() => {
@@ -158,9 +152,7 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
               <span role="alert" className={styles.errorMessage}>
                 <AlertCircle aria-hidden className={styles.errorIcon} />
                 <span className={styles.errorTitle}>{photo.errorTitle}</span>
-                <span className={styles.errorHint}>
-                  5MB 이하로 줄여 다시 끌어다 놓거나 클릭해 선택해 주세요
-                </span>
+                <span className={styles.errorHint}>{photo.errorHint}</span>
               </span>
             </button>
             <div className={styles.presetRow}>

@@ -93,19 +93,15 @@ describe('AccountDeletedScreen — 세션 정리', () => {
     await waitFor(() => expect(nav.replace).toHaveBeenCalledWith('/home'));
   });
 
-  it('로그인 화면으로는 의도적 종료 표식을 걷고 나간다', async () => {
-    const user = userEvent.setup();
+  it('의도적 종료 표식을 남긴다 — 뒤로 가기로 가드에 걸려도 복원 경로가 저장되지 않게', async () => {
     markWithdrawn();
     stubFetch(() => jsonResponse(204));
+
     renderWithProviders(<AccountDeletedScreen />);
+
     await waitFor(() => expect(useAuthStore.getState().refreshToken).toBeNull());
+    // 표식을 걷는 것은 로그인 화면의 몫이다 (LoginScreen.test.tsx) — 여기서 걷으면
+    // 뒤로 가기로 보호 화면에 들어갔을 때 그 경로가 복원 대상으로 남는다
     expect(window.sessionStorage.getItem('pc-auth-logout')).toBe('1');
-
-    await user.click(screen.getByRole('button', { name: '로그인 화면으로' }));
-
-    // 남겨 두면 다음에 비자발적으로 끊겼을 때 가드가 의도적 종료로 오해해
-    // 복원 경로를 저장하지 않는다
-    expect(window.sessionStorage.getItem('pc-auth-logout')).toBeNull();
-    expect(nav.replace).toHaveBeenCalledWith('/login');
   });
 });

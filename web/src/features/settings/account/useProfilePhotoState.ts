@@ -60,6 +60,8 @@ export interface ProfilePhotoState {
   imageSrc: string | null;
   /** 에러 제목 — 실제 파일 크기가 들어간다. */
   errorTitle: string;
+  /** 에러 제목에 맞는 해결 안내. 크기·형식·읽기 실패가 각자 다른 말을 해야 한다. */
+  errorHint: string;
   /** 업로드 중 파일 표기 `이름 · 크기`. */
   fileLabel: string;
   progress: number;
@@ -81,10 +83,11 @@ export interface ProfilePhotoState {
 }
 
 export function useProfilePhotoState(onApply: (dataUrl: string) => void): ProfilePhotoState {
-  const { toast } = useToast();
+  const { toast, dismiss } = useToast();
   const [step, setStep] = useState<PhotoStep>('idle');
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [errorTitle, setErrorTitle] = useState('');
+  const [errorHint, setErrorHint] = useState('');
   const [fileLabel, setFileLabel] = useState('');
   const [progress, setProgress] = useState(0);
   const progressRef = useRef(0);
@@ -114,6 +117,8 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
    * 읽기가 나중에 끝나 새 선택을 덮어쓴다.
    */
   const readSeq = useRef(0);
+  /** 방금 띄운 성공 토스트 — 화면이 사라지면 함께 걷는다. */
+  const toastId = useRef<string | null>(null);
 
   /** 예약된 타이머와 진행 중인 읽기를 한꺼번에 버린다 — 단계를 옮기는 모든 자리가 부른다. */
   const resetPending = useCallback(() => {
@@ -127,6 +132,15 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
   }, []);
 
   useEffect(() => resetPending, [resetPending]);
+
+  // 토스트는 전역 Provider에 살지만 「편집」은 이 훅의 setStep을 닫아 둔다 — 계정 화면이
+  // 언마운트되면 눌러도 아무 일이 없는 죽은 버튼이 된다. 화면과 수명을 맞춘다.
+  useEffect(
+    () => () => {
+      if (toastId.current !== null) dismiss(toastId.current);
+    },
+    [dismiss],
+  );
 
   const startUpload = useCallback(
     (file: File, dataUrl: string) => {
@@ -161,10 +175,11 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
   );
 
   const fail = useCallback(
-    (title: string) => {
+    (title: string, hint: string) => {
       resetPending();
       errorStreak.current += 1;
       setErrorTitle(title);
+      setErrorHint(hint);
       setStep('error');
       const quiet = prefersReducedMotion() || errorStreak.current > 1;
       setShaking(!quiet);
@@ -187,11 +202,14 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
   const selectFile = useCallback(
     (file: File) => {
       if (!ACCEPTED.includes(file.type)) {
-        fail('JPG · PNG · WebP만 올릴 수 있어요');
+        fail('JPG · PNG · WebP만 올릴 수 있어요', '다른 형식으로 저장한 뒤 다시 올려 주세요');
         return;
       }
       if (file.size > MAX_BYTES) {
-        fail(`${megabytesCeil(file.size)} 파일은 올릴 수 없어요`);
+        fail(
+          `${megabytesCeil(file.size)} 파일은 올릴 수 없어요`,
+          '5MB 이하로 줄여 다시 끌어다 놓거나 클릭해 선택해 주세요',
+        );
         return;
       }
       // 이 읽기의 세대를 붙들어 둔다 — 도착했을 때 아직 유효한지 이것으로 판별한다
@@ -203,7 +221,7 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
       };
       reader.onerror = () => {
         if (seq !== readSeq.current) return;
-        fail('파일을 읽지 못했어요');
+        fail('파일을 읽지 못했어요', '파일이 손상되지 않았는지 확인한 뒤 다시 시도해 주세요');
       };
       reader.readAsDataURL(file);
     },
@@ -249,7 +267,7 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
       resetPending();
       onApply(dataUrl);
       setStep('idle');
-      toast({
+      toastId.current = toast({
         tone: 'success',
         title: '프로필 사진을 변경했습니다',
         description: '헤더·사이드바에 바로 반영',
@@ -270,6 +288,7 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
     stepLabel: step === 'idle' ? '' : STEP_LABEL[step],
     imageSrc,
     errorTitle,
+    errorHint,
     fileLabel,
     progress,
     selectionSeq,

@@ -106,6 +106,13 @@ describe('AccountSettingsScreen — 표시', () => {
     expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
   });
 
+  it('me가 오기 전에는 사진 수정도 잠근다 — 잘라낸 사진이 조용히 버려지지 않게', async () => {
+    stubFetch(() => new Promise<Response>(() => {})); // 영원히 미해결
+    renderWithProviders(<AccountSettingsScreen />);
+
+    expect(await screen.findByRole('button', { name: '사진 수정' })).toBeDisabled();
+  });
+
   it('접근성 위반이 없다', async () => {
     const { container } = await renderScreen();
     expect(await axe(container)).toHaveNoViolations();

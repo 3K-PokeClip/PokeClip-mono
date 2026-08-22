@@ -34,6 +34,8 @@ export interface AccountViewState {
   draftName: string;
   /** 저장 버튼이 살아 있는지 — 비어 있거나 그대로면 누를 것이 없다. */
   dirty: boolean;
+  /** me가 도착해 프로필을 고칠 수 있는 상태인지. 아니면 갈아 끼울 대상이 없다. */
+  editable: boolean;
   facts: typeof WITHDRAW_FACTS;
   /** 미결제 잔액이 있어 탈퇴가 막힌 상태. 결제 도메인이 없어 `?mock=blocked`로만 켜진다. */
   blocked: boolean;
@@ -79,9 +81,12 @@ export function useAccountMockState(): AccountViewState {
 
   const applyPhoto = useCallback(
     (dataUrl: string) => {
+      // me가 없으면 patchMe가 no-op이라 사진이 조용히 버려진다 — 성공 토스트만 뜨는 것을
+      // 막으려면 여기서 끊는 것으로는 부족하고 「사진 수정」 자체가 잠겨야 한다(editable).
+      if (me === undefined) return;
       patchMe({ profileImageUrl: dataUrl });
     },
-    [patchMe],
+    [me, patchMe],
   );
 
   const completeWithdraw = useCallback(() => {
@@ -99,6 +104,7 @@ export function useAccountMockState(): AccountViewState {
     me,
     draftName,
     dirty,
+    editable: me !== undefined,
     facts: WITHDRAW_FACTS,
     // 개발에서만 켠다. 프로덕션 번들에서는 이 항이 통째로 죽어(NODE_ENV 치환) 주소를
     // 쳐도 없는 미결제 금액이 뜨지 않는다

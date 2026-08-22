@@ -36,6 +36,7 @@ export function AccountSettingsScreen() {
         photoUrl={account.me?.profileImageUrl}
         draftName={account.draftName}
         dirty={account.dirty}
+        editable={account.editable}
         onDraftNameChange={account.setDraftName}
         onSave={account.saveName}
         onEditPhoto={photo.open}

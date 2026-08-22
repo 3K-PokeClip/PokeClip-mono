@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { logoutSession } from '@/api/auth';
-import { clearIntentionalLogout, markIntentionalLogout } from '@/components/app-shell/AuthGuard';
+import { markIntentionalLogout } from '@/components/app-shell/AuthGuard';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 import { Button } from '@/ui';
 import { consumeWithdrawn } from './withdrawHandoff';
@@ -57,13 +57,6 @@ export function AccountDeletedScreen() {
     queryClient.clear(); // 이전 계정의 me·스트림키가 다음 로그인에 새면 안 된다
   }, [hydrated, refreshToken, queryClient, router]);
 
-  function goToLogin() {
-    // 여기서 나가면 가드에 걸릴 일이 없어 표식을 소비할 곳이 없다 — 직접 걷는다.
-    // 남겨 두면 다음에 비자발적으로 끊겼을 때 가드가 의도적 종료로 오해한다.
-    clearIntentionalLogout();
-    router.replace('/login');
-  }
-
   return (
     <main className={styles.screen}>
       <section className={styles.card}>
@@ -72,7 +65,7 @@ export function AccountDeletedScreen() {
           계정과 보관함 데이터가 삭제되었습니다. 같은 Google 계정으로 다시 가입할 수 있어요.
         </p>
         <div className={styles.actions}>
-          <Button variant="soft" size="md" onClick={goToLogin}>
+          <Button variant="soft" size="md" onClick={() => router.replace('/login')}>
             로그인 화면으로
           </Button>
         </div>
