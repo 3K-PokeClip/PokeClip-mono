@@ -82,6 +82,23 @@ public final class JumpCardErrors {
         }
     }
 
+    /**
+     * 503. 연결 상한을 넘었다. {@code scope}가 「어느 상한인가」를 말한다 — 본문에 실어야
+     * 웹이 "탭을 닫아라"(user)와 "잠시 뒤 다시"(total)를 구분해 안내한다.
+     */
+    public static class StreamLimitExceededException extends RuntimeException {
+        private final String scope;
+
+        public StreamLimitExceededException(String scope) {
+            super("연결 상한을 넘었다: " + scope);
+            this.scope = scope;
+        }
+
+        public String scope() {
+            return scope;
+        }
+    }
+
     private JumpCardErrors() {
     }
 }

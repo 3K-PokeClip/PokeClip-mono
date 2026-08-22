@@ -1,0 +1,267 @@
+package com.pokeclip.clip.jumpcard.stream;
+
+import com.pokeclip.clip.jumpcard.JumpCardErrors.StreamLimitExceededException;
+import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
+import com.pokeclip.clip.jumpcard.JumpCardSource;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import tools.jackson.databind.ObjectMapper;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.function.BooleanSupplier;
+import java.util.stream.IntStream;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * 연결 보관소의 규칙을 잰다. 스프링을 안 띄우고 실물 {@code CardStreamExecutor}(스트라이프 1)를 쓴다 —
+ * 가짜 executor를 쓰면 "전송이 정말 다른 스레드에서 도는가"를 못 재고 순서 시험이 의미를 잃는다.
+ *
+ * <p><b>{@code complete()}·타임아웃 콜백은 여기서 못 잰다.</b> 서블릿 밖 {@code SseEmitter}는
+ * {@code handler == null}이라 콜백을 안 부른다(plan-critic 소스+실측). 그래서
+ * 「연결이 닫히면 자리가 돌아온다」는 태스크 9의 실 HTTP 시험이 잰다.
+ * 여기서는 <b>등록 경로</b>(onCompletion에 remove를 걸었는가)만 손으로 콜백을 불러 확인한다.
+ */
+class CardStreamRegistryTest {
+
+    private final ObjectMapper mapper = new ObjectMapper();
+    private CardStreamExecutor executor;
+    private CardStreamRegistry registry;
+
+    @AfterEach
+    void 정리() {
+        if (registry != null) {
+            registry.stop();
+        }
+        if (executor != null) {
+            executor.shutdown();
+        }
+    }
+
+    private CardStreamRegistry registry(StreamProperties properties) {
+        executor = new CardStreamExecutor(1, 1000);
+        registry = new CardStreamRegistry(executor, properties, mapper, d -> new RecordingEmitter());
+        return registry;
+    }
+
+    private static StreamProperties props(int maxPerUser, int maxPerStream, int maxTotal) {
+        // heartbeat를 길게 둔다 — 시험 중 스케줄이 끼어들면 받은 이벤트에 ping이 섞인다.
+        return new StreamProperties(Duration.ofHours(1), Duration.ofHours(1), 1, 1000,
+                maxPerUser, maxPerStream, maxTotal);
+    }
+
+    @Test
+    void 사용자당_상한을_넘기면_거절한다() {
+        CardStreamRegistry registry = registry(props(2, 50, 500));
+        registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        registry.open("s-1", "u-1", Duration.ofMinutes(1));
+
+        assertThatThrownBy(() -> registry.open("s-2", "u-1", Duration.ofMinutes(1)))
+                .as("방송이 달라도 사람 기준으로 센다")
+                .isInstanceOf(StreamLimitExceededException.class)
+                .satisfies(e -> assertThat(((StreamLimitExceededException) e).scope()).isEqualTo("user"));
+    }
+
+    @Test
+    void 방송당_상한과_전체_상한도_센다() {
+        CardStreamRegistry perStream = registry(props(500, 2, 500));
+        perStream.open("s-1", "u-1", Duration.ofMinutes(1));
+        perStream.open("s-1", "u-2", Duration.ofMinutes(1));
+        assertThatThrownBy(() -> perStream.open("s-1", "u-3", Duration.ofMinutes(1)))
+                .isInstanceOf(StreamLimitExceededException.class)
+                .satisfies(e -> assertThat(((StreamLimitExceededException) e).scope()).isEqualTo("stream"));
+        perStream.stop();
+        executor.shutdown();
+
+        CardStreamRegistry total = registry(props(500, 500, 2));
+        total.open("s-1", "u-1", Duration.ofMinutes(1));
+        total.open("s-2", "u-2", Duration.ofMinutes(1));
+        assertThatThrownBy(() -> total.open("s-3", "u-3", Duration.ofMinutes(1)))
+                .isInstanceOf(StreamLimitExceededException.class)
+                .satisfies(e -> assertThat(((StreamLimitExceededException) e).scope()).isEqualTo("total"));
+    }
+
+    /**
+     * 컨테이너가 부를 콜백을 손으로 흉내낸다 — <b>등록 경로만</b> 재는 시험이다.
+     * 진짜 「끊기면 반납된다」는 태스크 9가 실 HTTP로 잰다.
+     */
+    @Test
+    void 콜백이_불리면_자리가_돌아온다() {
+        CardStreamRegistry registry = registry(props(4, 50, 500));
+        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        assertThat(registry.connectionCount()).isEqualTo(1);
+
+        emitter.fireCompletion();
+
+        assertThat(registry.connectionCount()).isZero();
+    }
+
+    @Test
+    void publish는_그_방송의_연결에만_간다() {
+        CardStreamRegistry registry = registry(props(4, 50, 500));
+        RecordingEmitter a = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        RecordingEmitter b = (RecordingEmitter) registry.open("s-1", "u-2", Duration.ofMinutes(1));
+        RecordingEmitter other = (RecordingEmitter) registry.open("s-2", "u-3", Duration.ofMinutes(1));
+
+        registry.publish(snapshot("s-1", 41L));
+
+        awaitUntil(() -> a.events().size() == 1 && b.events().size() == 1);
+        assertThat(a.events().get(0).name()).isEqualTo("card");
+        assertThat(a.events().get(0).id()).as("SSE id는 그 카드의 eventSeq다").isEqualTo("41");
+        assertThat(a.events().get(0).data()).contains("\"source\":\"auto\"");
+        assertThat(other.events()).as("다른 방송에 새면 편집자가 남의 방송 카드를 본다").isEmpty();
+    }
+
+    @Test
+    void sendInitial은_카드_전부를_보내고_끝난_방송이면_ended_뒤에_닫는다() {
+        CardStreamRegistry registry = registry(props(4, 50, 500));
+        RecordingEmitter live = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        registry.sendInitial(live, List.of(snapshot("s-1", 1L), snapshot("s-1", 2L)), false);
+        awaitUntil(() -> live.events().size() == 2);
+        assertThat(live.events()).extracting(RecordingEmitter.Event::name).containsExactly("card", "card");
+        assertThat(live.completed()).as("진행 중인 방송이면 열어 둔다").isFalse();
+
+        RecordingEmitter ended = (RecordingEmitter) registry.open("s-2", "u-2", Duration.ofMinutes(1));
+        registry.sendInitial(ended, List.of(snapshot("s-2", 3L)), true);
+        awaitUntil(() -> ended.events().size() == 2);
+        assertThat(ended.events()).extracting(RecordingEmitter.Event::name).containsExactly("card", "ended");
+        awaitUntil(ended::completed);
+    }
+
+    @Test
+    void broadcastEnded는_그_방송_연결에_ended를_보내고_닫는다() {
+        CardStreamRegistry registry = registry(props(4, 50, 500));
+        RecordingEmitter mine = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        RecordingEmitter other = (RecordingEmitter) registry.open("s-2", "u-2", Duration.ofMinutes(1));
+
+        registry.broadcastEnded("s-1");
+
+        awaitUntil(() -> mine.events().size() == 1);
+        assertThat(mine.events().get(0).name()).isEqualTo("ended");
+        awaitUntil(mine::completed);
+        assertThat(other.events()).isEmpty();
+        assertThat(other.completed()).isFalse();
+    }
+
+    @Test
+    void ping은_모든_연결에_주석을_보낸다() {
+        CardStreamRegistry registry = registry(props(4, 50, 500));
+        RecordingEmitter a = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        RecordingEmitter b = (RecordingEmitter) registry.open("s-2", "u-2", Duration.ofMinutes(1));
+
+        registry.ping();
+
+        awaitUntil(() -> a.events().size() == 1 && b.events().size() == 1);
+        assertThat(a.events().get(0).comment()).isEqualTo("ping");
+    }
+
+    /** 순서가 뒤바뀌면 화면이 「집음 → 놓음」을 거꾸로 받는다. */
+    @Test
+    void 같은_연결의_이벤트는_순서대로_온다() {
+        CardStreamRegistry registry = registry(props(4, 50, 500));
+        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+
+        for (int i = 1; i <= 50; i++) {
+            registry.publish(snapshot("s-1", i));
+        }
+
+        awaitUntil(() -> emitter.events().size() == 50);
+        assertThat(emitter.events()).extracting(RecordingEmitter.Event::id)
+                .containsExactlyElementsOf(IntStream.rangeClosed(1, 50).mapToObj(Integer::toString).toList());
+    }
+
+    private JumpCardSnapshot snapshot(String streamId, long eventSeq) {
+        return new JumpCardSnapshot(eventSeq, streamId, JumpCardSource.AUTO, 1_500L,
+                new JumpCardSnapshot.Window(1_000L, 2_000L), 97, null, null, null, null,
+                false, null, eventSeq, Instant.parse("2026-08-23T00:00:00Z"));
+    }
+
+    private void awaitUntil(BooleanSupplier condition) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("3초 안에 조건이 참이 되지 않았다");
+            }
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
+            }
+        }
+    }
+
+    /**
+     * 보낸 것을 적는 가짜 emitter. 서블릿 응답 없이 {@code SseEmitter.send}를 부르면 터지므로 덮는다.
+     * 콜백은 컨테이너가 부르는 것이라 여기서 손으로 부른다.
+     */
+    private static final class RecordingEmitter extends SseEmitter {
+
+        record Event(String name, String id, String data, String comment) {
+        }
+
+        private final List<Event> events = Collections.synchronizedList(new ArrayList<>());
+        private final List<Runnable> completionCallbacks = Collections.synchronizedList(new ArrayList<>());
+        private volatile boolean completed;
+
+        /**
+         * 조각을 <b>먼저 이어 붙인 뒤</b> 줄 단위로 읽는다. {@code SseEventBuilder}는
+         * {@code "id:41\nevent:card\ndata:"}를 한 조각으로 내보내고 본문을 다음 조각에 담는다 —
+         * 조각마다 {@code startsWith}로 보면 {@code event}·{@code id}가 통째로 안 잡힌다(실측).
+         */
+        @Override
+        public void send(SseEventBuilder builder) {
+            StringBuilder raw = new StringBuilder();
+            for (DataWithMediaType chunk : builder.build()) {
+                raw.append(String.valueOf(chunk.getData()));
+            }
+
+            String name = null;
+            String id = null;
+            String comment = null;
+            StringBuilder data = new StringBuilder();
+            for (String line : raw.toString().split("\n")) {
+                if (line.startsWith("event:")) {
+                    name = line.substring("event:".length()).trim();
+                } else if (line.startsWith("id:")) {
+                    id = line.substring("id:".length()).trim();
+                } else if (line.startsWith("data:")) {
+                    data.append(line.substring("data:".length()).trim());
+                } else if (line.startsWith(":")) {
+                    comment = line.substring(1).trim();
+                }
+            }
+            events.add(new Event(name, id, data.toString(), comment));
+        }
+
+        @Override
+        public void onCompletion(Runnable callback) {
+            completionCallbacks.add(callback);
+        }
+
+        @Override
+        public void complete() {
+            completed = true;
+        }
+
+        void fireCompletion() {
+            List.copyOf(completionCallbacks).forEach(Runnable::run);
+        }
+
+        List<Event> events() {
+            synchronized (events) {
+                return List.copyOf(events);
+            }
+        }
+
+        boolean completed() {
+            return completed;
+        }
+    }
+}
