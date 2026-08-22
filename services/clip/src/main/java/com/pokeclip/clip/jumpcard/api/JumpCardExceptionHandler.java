@@ -5,8 +5,10 @@ import com.pokeclip.clip.jumpcard.JumpCardErrors.ClaimedByOtherException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.InvalidHighlightException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.JumpCardNotFoundException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.NotClaimOwnerException;
+import com.pokeclip.clip.jumpcard.JumpCardErrors.StreamLimitExceededException;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -27,12 +29,12 @@ public class JumpCardExceptionHandler {
 
     @ExceptionHandler(BroadcastNotFoundException.class)
     ResponseEntity<Map<String, Object>> broadcastNotFound(BroadcastNotFoundException e) {
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error("broadcast_not_found"));
+        return json(HttpStatus.NOT_FOUND, error("broadcast_not_found"));
     }
 
     @ExceptionHandler(JumpCardNotFoundException.class)
     ResponseEntity<Map<String, Object>> jumpCardNotFound(JumpCardNotFoundException e) {
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error("jump_card_not_found"));
+        return json(HttpStatus.NOT_FOUND, error("jump_card_not_found"));
     }
 
     /**
@@ -41,19 +43,31 @@ public class JumpCardExceptionHandler {
      */
     @ExceptionHandler(ClaimedByOtherException.class)
     ResponseEntity<JumpCardSnapshot> claimedByOther(ClaimedByOtherException e) {
-        return ResponseEntity.status(HttpStatus.CONFLICT).body(e.current());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .contentType(MediaType.APPLICATION_JSON).body(e.current());
     }
 
     @ExceptionHandler(NotClaimOwnerException.class)
     ResponseEntity<Map<String, Object>> notClaimOwner(NotClaimOwnerException e) {
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("not_claim_owner"));
+        return json(HttpStatus.FORBIDDEN, error("not_claim_owner"));
+    }
+
+    /**
+     * 503. {@code scope}를 실어야 웹이 "탭을 닫아라"(user)와 "잠시 뒤 다시"(total)를 구분해 안내한다.
+     * SSE 경로에서 나가지만 본문은 JSON이다 — 연결이 서기 전에 끝나므로 event-stream이 아니다.
+     */
+    @ExceptionHandler(StreamLimitExceededException.class)
+    ResponseEntity<Map<String, Object>> streamLimit(StreamLimitExceededException e) {
+        Map<String, Object> body = error("stream_limit");
+        body.put("scope", e.scope());
+        return json(HttpStatus.SERVICE_UNAVAILABLE, body);
     }
 
     @ExceptionHandler(InvalidHighlightException.class)
     ResponseEntity<Map<String, Object>> invalid(InvalidHighlightException e) {
         Map<String, Object> body = error("invalid_request");
         body.put("field", e.field());
-        return ResponseEntity.badRequest().body(body);
+        return json(HttpStatus.BAD_REQUEST, body);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -62,7 +76,17 @@ public class JumpCardExceptionHandler {
         if (e.getFieldError() != null) {
             body.put("field", e.getFieldError().getField());
         }
-        return ResponseEntity.badRequest().body(body);
+        return json(HttpStatus.BAD_REQUEST, body);
+    }
+
+    /**
+     * <b>Content-Type을 명시해야 한다.</b> SSE 문은 {@code produces=text/event-stream}이고
+     * 브라우저 EventSource는 {@code Accept: text/event-stream}을 보낸다 — 그 상태로 JSON을 돌려주면
+     * 협상에 실패해 {@code HttpMediaTypeNotAcceptableException}이 나고 <b>404·503이 500으로 둔갑한다</b>
+     * (실측: 없는 방송 → 500, 상한 초과 → 500). 명시하면 협상을 건너뛴다.
+     */
+    private ResponseEntity<Map<String, Object>> json(HttpStatus status, Map<String, Object> body) {
+        return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).body(body);
     }
 
     private Map<String, Object> error(String code) {

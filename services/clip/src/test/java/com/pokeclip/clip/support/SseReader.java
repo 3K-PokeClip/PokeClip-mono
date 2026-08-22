@@ -1,0 +1,156 @@
+package com.pokeclip.clip.support;
+
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpHeaders;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
+
+/**
+ * 실제 HTTP로 SSE를 열고 줄을 백그라운드로 읽어 모은다.
+ *
+ * <p>MockMvc로는 이걸 못 잰다 — 비동기 응답을 끝까지 흘려보내지 않는다. 「3초 안에 도착」·
+ * 「연결이 닫힌다」·「자리가 반납된다」는 진짜 소켓이 있어야 보인다.
+ */
+public final class SseReader implements AutoCloseable {
+
+    /** {@code comment}는 하트비트({@code : ping})처럼 이름 없는 줄이다. */
+    public record Event(String name, String id, String data, String comment) {
+    }
+
+    private final HttpClient client = HttpClient.newHttpClient();
+    private final List<Event> events = Collections.synchronizedList(new ArrayList<>());
+    /** 오류 응답은 SSE가 아니라 JSON 한 줄이다 — 이벤트로 안 잡히므로 원문도 따로 모은다. */
+    private final List<String> rawLines = Collections.synchronizedList(new ArrayList<>());
+    private final HttpResponse<Stream<String>> response;
+    private final Thread reader;
+    private final CountDownLatch closed = new CountDownLatch(1);
+    private volatile CountDownLatch wanted = new CountDownLatch(0);
+
+    public SseReader(String url, Map<String, String> headers) {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(url))
+                .header("Accept", "text/event-stream")
+                .timeout(Duration.ofSeconds(30))
+                .GET();
+        headers.forEach(builder::header);
+        try {
+            this.response = client.send(builder.build(), HttpResponse.BodyHandlers.ofLines());
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+
+        this.reader = new Thread(this::readLoop, "sse-reader");
+        this.reader.setDaemon(true);
+        this.reader.start();
+    }
+
+    private void readLoop() {
+        String name = null;
+        String id = null;
+        StringBuilder data = new StringBuilder();
+        try {
+            for (String line : (Iterable<String>) response.body()::iterator) {
+                rawLines.add(line);
+                if (line.startsWith("id:")) {
+                    id = line.substring(3).trim();
+                } else if (line.startsWith("event:")) {
+                    name = line.substring(6).trim();
+                } else if (line.startsWith("data:")) {
+                    data.append(line.substring(5).trim());
+                } else if (line.startsWith(":")) {
+                    // 주석(하트비트). 그 자체가 하나의 이벤트다.
+                    add(new Event(null, null, null, line.substring(1).trim()));
+                } else if (line.isEmpty() && (name != null || data.length() > 0)) {
+                    add(new Event(name, id, data.toString(), null));
+                    name = null;
+                    id = null;
+                    data = new StringBuilder();
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // 서버가 끊었다. closed()가 그것을 말한다.
+        } finally {
+            closed.countDown();
+        }
+    }
+
+    private void add(Event event) {
+        events.add(event);
+        wanted.countDown();
+    }
+
+    /** {@code count}개가 모일 때까지 기다린다. 상한은 성공 기준과 같게 부른 쪽이 정한다. */
+    public boolean await(int count, Duration timeout) {
+        CountDownLatch latch = new CountDownLatch(Math.max(0, count - events.size()));
+        wanted = latch;
+        // 기다리기 직전에 이미 다 왔을 수 있다.
+        for (int i = events.size(); i > 0 && latch.getCount() > 0; i--) {
+            latch.countDown();
+        }
+        try {
+            return latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS) || events.size() >= count;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    /** 서버가 스트림을 닫을 때까지 기다린다. */
+    public boolean awaitClosed(Duration timeout) {
+        try {
+            return closed.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    public boolean closed() {
+        return closed.getCount() == 0;
+    }
+
+    public List<Event> events() {
+        synchronized (events) {
+            return List.copyOf(events);
+        }
+    }
+
+    /** 응답 본문 원문. 200이 아닌 응답의 JSON을 볼 때 쓴다. */
+    public String body() {
+        awaitClosed(Duration.ofSeconds(3));
+        synchronized (rawLines) {
+            return String.join("\n", rawLines);
+        }
+    }
+
+    public int statusCode() {
+        return response.statusCode();
+    }
+
+    public HttpHeaders headers() {
+        return response.headers();
+    }
+
+    /**
+     * {@code client.close()}를 쓰지 않는다 — 그것은 <b>진행 중인 요청이 끝날 때까지 기다린다</b>.
+     * SSE는 서버가 끊기 전엔 안 끝나므로 시험이 통째로 멈춘다(실측: 전수 실행이 2분 넘게 hang).
+     * {@code shutdownNow()}가 연결을 즉시 닫아 서버 쪽 자리도 다음 쓰기에서 회수된다.
+     */
+    @Override
+    public void close() {
+        client.shutdownNow();
+        reader.interrupt();
+    }
+}
