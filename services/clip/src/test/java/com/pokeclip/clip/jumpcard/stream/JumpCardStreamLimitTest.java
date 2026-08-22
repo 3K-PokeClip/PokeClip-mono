@@ -25,7 +25,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <b>뒤 시험들이 전부 503으로 오염된다</b>(plan-critic 실측).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@TestPropertySource(properties = "pokeclip.jump-card.stream.max-per-user=4")
+@TestPropertySource(properties = {
+        "pokeclip.jump-card.stream.max-per-user=4",
+        // 이 시험의 방송에는 카드가 없어 서버가 쓸 것이 없다 — 하트비트가 첫 쓰기가 되어
+        // 응답 헤더가 그때까지 안 나간다. 운영 기본값 20초면 한 건에 80초다(전수 3분 중 80초).
+        "pokeclip.jump-card.stream.heartbeat=PT1S"
+})
 class JumpCardStreamLimitTest extends IntegrationTestSupport {
 
     private final int port;

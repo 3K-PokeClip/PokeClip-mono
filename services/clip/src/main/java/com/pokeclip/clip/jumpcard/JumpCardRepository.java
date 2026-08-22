@@ -70,12 +70,28 @@ public interface JumpCardRepository extends JpaRepository<JumpCard, Long> {
             nativeQuery = true)
     int release(@Param("id") long id, @Param("me") String me);
 
+    /**
+     * <b>이미 숨겨진 카드는 건드리지 않는다.</b> 조건이 없으면 나중에 누른 사람이 {@code hidden_by}를
+     * 덮어써 <b>「누가 숨겼나」의 추적 대상이 마지막에 누른 사람으로 바뀐다</b> — 얕은 인가를 감수한
+     * 근거가 그 추적이었으므로 그것이 무너진다(로컬 리뷰 사소 ④).
+     *
+     * @return 1이면 이번에 숨겼다. 0이면 없는 카드이거나 <b>이미 숨겨져 있다</b> — 호출자가 가른다
+     */
     @Modifying(clearAutomatically = true)
-    @Query(value = "UPDATE jump_cards SET hidden_at = now(), hidden_by = :me WHERE id = :id", nativeQuery = true)
+    @Query(value = """
+            UPDATE jump_cards SET hidden_at = now(), hidden_by = :me
+             WHERE id = :id AND hidden_at IS NULL
+            """, nativeQuery = true)
     int hide(@Param("id") long id, @Param("me") String me);
 
-    /** 되돌리기는 누구나 한다 — 숨긴 사람만 되돌릴 수 있으면 그 사람이 자리를 비웠을 때 막힌다. */
+    /**
+     * 되돌리기는 누구나 한다 — 숨긴 사람만 되돌릴 수 있으면 그 사람이 자리를 비웠을 때 막힌다.
+     * 안 숨겨진 카드에는 0행이다(무의미한 이벤트를 안 내보내려고).
+     */
     @Modifying(clearAutomatically = true)
-    @Query(value = "UPDATE jump_cards SET hidden_at = NULL, hidden_by = NULL WHERE id = :id", nativeQuery = true)
+    @Query(value = """
+            UPDATE jump_cards SET hidden_at = NULL, hidden_by = NULL
+             WHERE id = :id AND hidden_at IS NOT NULL
+            """, nativeQuery = true)
     int unhide(@Param("id") long id);
 }

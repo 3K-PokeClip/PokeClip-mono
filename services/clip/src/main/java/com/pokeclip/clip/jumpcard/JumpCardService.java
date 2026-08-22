@@ -84,32 +84,50 @@ public class JumpCardService {
 
     @Transactional
     public void release(long id, String userId) {
-        // 먼저 읽는 이유: 영향 행 0이 「없는 카드」인지 「남의 것」인지 갈라야 404와 403이 다르게 나간다.
-        JumpCard card = cards.findById(id).orElseThrow(() -> new JumpCardNotFoundException(id));
+        // 먼저 존재만 본다. 영향 행 0이 「없는 카드」인지 「남의 것」인지 갈라야 404와 403이 다르게 나간다.
+        if (!cards.existsById(id)) {
+            throw new JumpCardNotFoundException(id);
+        }
+
         // 영향 행 0의 뜻이 둘이다 — 「남이 잡고 있다」와 「아무도 안 잡았다」.
         // 후자는 이미 목표 상태이므로 성공으로 본다(멱등). 전자만 403이다.
-        if (cards.release(id, userId) == 0 && card.getClaimedBy() != null) {
-            throw new NotClaimOwnerException(id);
+        //
+        // 그 판정을 UPDATE <b>뒤에</b> 읽은 값으로 한다. 앞에서 읽은 값으로 가르면, 읽은 뒤
+        // UPDATE 전에 남이 놓아 버린 경우 「지금은 아무도 안 잡았는데 403」이 나간다 —
+        // 데이터는 맞고 응답 코드만 사실과 다른 상태다(로컬 리뷰 사소 ③).
+        if (cards.release(id, userId) == 0) {
+            JumpCard after = cards.findById(id).orElseThrow(() -> new JumpCardNotFoundException(id));
+            if (after.getClaimedBy() != null) {
+                throw new NotClaimOwnerException(id);
+            }
         }
         publishAfterCommit(snapshot(cards.findById(id).orElseThrow()));
     }
 
     @Transactional
     public JumpCardSnapshot hide(long id, String userId) {
-        return touch(id, () -> cards.hide(id, userId));
+        return toggleHidden(id, () -> cards.hide(id, userId));
     }
 
     @Transactional
     public JumpCardSnapshot unhide(long id, String userId) {
-        return touch(id, () -> cards.unhide(id));
+        return toggleHidden(id, () -> cards.unhide(id));
     }
 
-    private JumpCardSnapshot touch(long id, IntSupplier write) {
-        if (write.getAsInt() == 0) {
-            throw new JumpCardNotFoundException(id);
+    /**
+     * <b>이미 그 상태면 성공이다(멱등).</b> 404를 주면 웹이 새로고침 뒤 숨기기를 눌렀을 때 오류를
+     * 본다 — {@code release}를 멱등으로 둔 것과 같은 이유다. 없는 카드만 404다.
+     *
+     * <p>안 바뀌었으면 <b>발행하지 않는다</b>. 안 그러면 아무것도 안 바뀐 카드가 통로로 나가
+     * 화면이 헛돈다(감사가 {@code unhide}에서 지적한 자리).
+     */
+    private JumpCardSnapshot toggleHidden(long id, IntSupplier write) {
+        int updated = write.getAsInt();
+        JumpCard card = cards.findById(id).orElseThrow(() -> new JumpCardNotFoundException(id));
+        JumpCardSnapshot snapshot = snapshot(card);
+        if (updated == 1) {
+            publishAfterCommit(snapshot);
         }
-        JumpCardSnapshot snapshot = snapshot(cards.findById(id).orElseThrow());
-        publishAfterCommit(snapshot);
         return snapshot;
     }
 

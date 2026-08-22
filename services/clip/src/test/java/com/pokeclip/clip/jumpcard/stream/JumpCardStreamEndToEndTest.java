@@ -2,8 +2,6 @@ package com.pokeclip.clip.jumpcard.stream;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
-import com.pokeclip.clip.broadcast.BroadcastEventProcessor;
-import com.pokeclip.clip.broadcast.Envelopes;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
@@ -48,18 +46,16 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     private final CardStreamRegistry registry;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transactions;
-    private final BroadcastEventProcessor processor;
 
     JumpCardStreamEndToEndTest(@LocalServerPort int port, JumpCardService service,
                                BroadcastRepository broadcasts, CardStreamRegistry registry, JdbcTemplate jdbc,
-                               TransactionTemplate transactions, BroadcastEventProcessor processor) {
+                               TransactionTemplate transactions) {
         this.port = port;
         this.service = service;
         this.broadcasts = broadcasts;
         this.registry = registry;
         this.jdbc = jdbc;
         this.transactions = transactions;
-        this.processor = processor;
     }
 
     /** 카드를 남기면 다른 클래스의 broadcasts.deleteAllInBatch()가 FK로 죽는다. */
@@ -318,12 +314,17 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
                 .as("같은 트랜잭션 밖의 성공한 카드까지 사라졌다").contains(1_000_000L);
     }
 
+    /**
+     * <b>방아쇠가 {@code broadcastEnded} 손 호출임을 이름에 적었다.</b> 전에는 이름이
+     * 「종료 편지가 처리되면」인데 바로 다음 줄이 손 호출이라 <b>편지 처리는 단언에 아무 기여를
+     * 안 했다</b> — 그대로 두면 다음 사람이 「편지 경로를 재는 시험」으로 읽는다(감사 사소 ⑥).
+     * 편지 경로는 {@code EndedNotificationEndToEndTest}가 진짜 큐로 잰다.
+     */
     @Test
-    void 종료_편지가_처리되면_ended가_오고_닫힌다() {
+    void broadcastEnded를_부르면_ended가_오고_닫힌다() {
         try (SseReader reader = open("s-1", TestTokens.access("t10-ended"))) {
             서두를_틔운다(reader);
 
-            processor.process(Envelopes.ended("evt-end", "s-1", 2L));
             registry.broadcastEnded("s-1");
 
             assertThat(reader.awaitName("ended", Duration.ofSeconds(3))).isTrue();

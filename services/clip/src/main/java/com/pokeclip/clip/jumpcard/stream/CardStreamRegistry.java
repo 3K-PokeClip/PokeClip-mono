@@ -124,6 +124,24 @@ public class CardStreamRegistry implements EndedListener {
      * <p><b>끝이 아니라 앞에 둔다.</b> 끝난 방송 경로는 {@code ended}를 보내고 {@code complete()}를
      * 부르므로, 뒤에 두면 이미 닫힌 연결에 쓰게 된다.
      */
+    /**
+     * 연결을 열고 <b>같은 임계구역에서</b> 첫 스냅샷까지 제출한다.
+     *
+     * <p>둘을 따로 부르면 그 사이에 {@link #publish}가 끼어 <b>같은 연결에 새 값 → 옛 값 순으로</b>
+     * 나간다(비동기 2차 감사 사소 ④ — 창을 400ms로 벌려 재현했다). 연결은 {@code open} 시점에
+     * 이미 명부에 있으므로 창이 스냅샷 제출 전체다. {@code publish}도 같은 자물쇠를 쓰므로
+     * <b>publish는 이 블록 앞이나 뒤로만 갈라진다</b> — 앞이면 연결이 아직 없어 안 가고,
+     * 뒤면 스냅샷 다음에 줄을 선다. 둘 다 순서가 맞다.
+     *
+     * <p>둘 다 큐에 넣기만 하므로 이 자물쇠가 잡히는 시간은 짧다.
+     */
+    public synchronized SseEmitter openWithSnapshot(String streamId, String userId, Duration timeout,
+                                                    List<JumpCardSnapshot> initialCards, boolean ended) {
+        SseEmitter emitter = open(streamId, userId, timeout);
+        sendInitial(emitter, initialCards, ended);
+        return emitter;
+    }
+
     public void sendInitial(SseEmitter emitter, List<JumpCardSnapshot> cards, boolean ended) {
         Conn conn = conns.get(emitter);
         if (conn == null) {
@@ -141,8 +159,13 @@ public class CardStreamRegistry implements EndedListener {
         }
     }
 
-    /** 카드가 생기거나 바뀌었다고 알리는 <b>유일한 출구</b>. */
-    public void publish(JumpCardSnapshot card) {
+    /**
+     * 카드가 생기거나 바뀌었다고 알리는 <b>유일한 출구</b>.
+     *
+     * <p>{@code synchronized}인 이유는 {@link #openWithSnapshot}과 겹치지 않기 위해서다 —
+     * 겹치면 갓 붙은 연결에 새 값이 옛 스냅샷보다 먼저 간다.
+     */
+    public synchronized void publish(JumpCardSnapshot card) {
         for (Conn conn : conns.values()) {
             if (conn.streamId().equals(card.streamId())) {
                 executor.submit(conn.stripe(), conn.emitter(), () -> conn.emitter().send(cardEvent(card)));

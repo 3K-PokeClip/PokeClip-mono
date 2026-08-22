@@ -46,14 +46,17 @@ class CardStreamRegistryTest {
     }
 
     private CardStreamRegistry registry(StreamProperties properties) {
-        executor = new CardStreamExecutor(1, 1000);
+        // 🔴 스트라이프를 운영과 같은 4로 둔다. 1개면 Conn.stripe()가 무엇을 돌려주든 전부 0번
+        // 줄로 가서, `같은_연결의_이벤트는_순서대로_온다`가 <b>고정이 깨진 것을 못 본다</b>
+        // (감사가 stripe()를 난수로 바꿔도 3/3 초록임을 재현했다).
+        executor = new CardStreamExecutor(4, 1000);
         registry = new CardStreamRegistry(executor, properties, mapper, d -> new RecordingEmitter());
         return registry;
     }
 
     private static StreamProperties props(int maxPerUser, int maxPerStream, int maxTotal) {
         // heartbeat를 길게 둔다 — 시험 중 스케줄이 끼어들면 받은 이벤트에 ping이 섞인다.
-        return new StreamProperties(Duration.ofHours(1), Duration.ofHours(1), 1, 1000,
+        return new StreamProperties(Duration.ofHours(1), Duration.ofHours(1), 4, 1000,
                 maxPerUser, maxPerStream, maxTotal);
     }
 

@@ -83,8 +83,9 @@ public class JumpCardStreamController {
         List<JumpCardSnapshot> snapshot = service.snapshotsOf(streamId);
 
         // 상한 초과면 StreamLimitExceededException → 503
-        SseEmitter emitter = registry.open(streamId, jwt.getSubject(), timeout);
-        registry.sendInitial(emitter, snapshot, broadcast.getStatus() == BroadcastStatus.ENDED);
+        // 여는 것과 첫 스냅샷 제출이 한 임계구역이라 그 사이에 publish가 못 낀다.
+        SseEmitter emitter = registry.openWithSnapshot(streamId, jwt.getSubject(), timeout,
+                snapshot, broadcast.getStatus() == BroadcastStatus.ENDED);
 
         return ResponseEntity.ok()
                 // 앞단 프록시가 모아 보내면 "3초 내 도착"이 깨진다. 로컬엔 프록시가 없어 배포 후에만 난다.

@@ -299,6 +299,39 @@ class JumpCardServiceTest extends IntegrationTestSupport {
                 .as("먼저 잡은 쪽이 주인으로 남아야 한다").isEqualTo("u-A");
     }
 
+    /**
+     * <b>이미 숨긴 카드를 남이 다시 숨겨도 「누가 숨겼나」가 안 바뀐다.</b>
+     *
+     * <p>조건 없이 덮어쓰면 추적 대상이 <b>마지막에 누른 사람</b>으로 바뀐다 — 감사가 얕은 인가를
+     * 감수한 근거가 「{@code hidden_by}로 추적된다」였으므로 그 근거가 무너진다(로컬 리뷰 사소 ④).
+     *
+     * <p>그렇다고 404를 주지 않는다. 웹이 새로고침 뒤 숨기기를 눌렀을 때 오류를 보게 된다 —
+     * {@code release}를 멱등으로 둔 것과 같은 이유로 <b>200 + 현재 카드</b>다.
+     */
+    @Test
+    void 이미_숨긴_카드를_다시_숨겨도_숨긴_사람이_안_바뀐다() {
+        long id = 카드();
+        JumpCardSnapshot first = service.hide(id, "u-A");
+
+        JumpCardSnapshot again = service.hide(id, "u-B");
+
+        assertThat(again.hidden()).as("이미 숨김이어도 성공이다(멱등)").isTrue();
+        assertThat(again.hiddenBy()).as("추적 대상이 마지막에 누른 사람으로 바뀌었다").isEqualTo("u-A");
+        assertThat(again.eventSeq()).as("아무것도 안 바뀌었으니 순번도 그대로다").isEqualTo(first.eventSeq());
+    }
+
+    /** 안 숨겨진 카드를 되돌리는 것도 성공이고, 바뀐 게 없으니 순번도 안 오른다. */
+    @Test
+    void 안_숨겨진_카드를_되돌려도_성공이고_순번이_안_오른다() {
+        long id = 카드();
+        long before = service.snapshotsOf("s-1").get(0).eventSeq();
+
+        JumpCardSnapshot result = service.unhide(id, "u-A");
+
+        assertThat(result.hidden()).isFalse();
+        assertThat(result.eventSeq()).isEqualTo(before);
+    }
+
     private long 카드() {
         return service.record("s-1", auto("evt-1", 5_020_000L)).card().id();
     }
