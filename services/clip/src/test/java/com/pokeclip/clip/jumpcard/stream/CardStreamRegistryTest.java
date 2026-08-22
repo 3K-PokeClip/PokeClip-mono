@@ -17,6 +17,7 @@ import java.util.function.BooleanSupplier;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -161,6 +162,33 @@ class CardStreamRegistryTest {
 
         awaitUntil(() -> a.events().size() == 1 && b.events().size() == 1);
         assertThat(a.events().get(0).comment()).isEqualTo("ping");
+    }
+
+    /**
+     * <b>이 시험이 재는 것은 「{@code ping()}이 예외를 밖으로 내보내지 않는다」다</b> —
+     * 「스케줄러가 안 죽는다」를 직접 재는 것이 <b>아니다.</b>
+     *
+     * <p>주기 작업이 예외를 던지면 {@code scheduleAtFixedRate}가 이후 실행을 취소하고 재개하지
+     * 않는 것은 <b>JDK의 규약</b>이라 우리가 시험으로 뒤집을 대상이 아니다. 우리가 통제할 수 있는
+     * 것은 <b>예외를 새지 않게 하는 것</b> 하나뿐이고, 그것이 방어의 본질이라 그대로 잰다.
+     *
+     * <p>한 번 새면 모든 연결의 {@code :ping}이 영구히 멈추고 앞단 프록시가 조용해진 연결을
+     * 끊기 시작한다 — <b>하트비트의 존재 이유가 바로 그것을 막는 것</b>인데 로그도 안 남는다.
+     */
+    @Test
+    void ping이_예외를_만나도_밖으로_안_샌다() {
+        executor = new CardStreamExecutor(1, 10) {
+            @Override
+            public void submit(int stripe, SseEmitter emitter, SendAction action) {
+                throw new IllegalStateException("전송 제출이 터졌다");
+            }
+        };
+        registry = new CardStreamRegistry(executor, props(4, 50, 500), mapper, d -> new RecordingEmitter());
+        registry.open("s-1", "u-1", Duration.ofMinutes(1));
+
+        assertThatCode(registry::ping)
+                .as("예외가 새면 scheduleAtFixedRate가 이 작업을 취소하고 다시는 안 돈다")
+                .doesNotThrowAnyException();
     }
 
     /** 순서가 뒤바뀌면 화면이 「집음 → 놓음」을 거꾸로 받는다. */

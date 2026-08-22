@@ -4,6 +4,8 @@ import com.pokeclip.clip.broadcast.intake.EndedListener;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.StreamLimitExceededException;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -30,6 +32,8 @@ import java.util.function.Function;
  */
 @Component
 public class CardStreamRegistry implements EndedListener {
+
+    private static final Logger log = LoggerFactory.getLogger(CardStreamRegistry.class);
 
     /** 연결 하나. {@code seq}가 스트라이프를 정해 같은 연결의 이벤트 순서가 지켜진다. */
     private record Conn(long seq, String streamId, String userId, SseEmitter emitter) {
@@ -159,11 +163,23 @@ public class CardStreamRegistry implements EndedListener {
         }
     }
 
-    /** 앞단 프록시가 조용한 연결을 끊지 않게 주석 한 줄을 보낸다. 주석은 클라이언트가 무시한다. */
+    /**
+     * 앞단 프록시가 조용한 연결을 끊지 않게 주석 한 줄을 보낸다. 주석은 클라이언트가 무시한다.
+     *
+     * <p><b>절대 던지지 않는다.</b> {@code scheduleAtFixedRate}는 주기 작업이 예외를 던지면
+     * <b>이후 실행을 취소하고 재개하지 않는다</b> — 한 번 새면 모든 연결의 하트비트가 영구히 멈추고,
+     * 앞단 프록시가 조용해진 연결을 끊기 시작한다. 하트비트의 존재 이유가 바로 그것을 막는 것인데
+     * 로그도 안 남는 조용한 고장이 된다. 그래서 {@code Throwable}까지 받아 삼키고 흔적을 남긴다.
+     */
     void ping() {
-        for (Conn conn : conns.values()) {
-            executor.submit(conn.stripe(), conn.emitter(),
-                    () -> conn.emitter().send(SseEmitter.event().comment("ping")));
+        try {
+            for (Conn conn : conns.values()) {
+                executor.submit(conn.stripe(), conn.emitter(),
+                        () -> conn.emitter().send(SseEmitter.event().comment("ping")));
+            }
+        } catch (Throwable t) {
+            log.warn("jumpcard.stream.ping_failed connections={} causeType={}",
+                    conns.size(), t.getClass().getSimpleName());
         }
     }
 

@@ -6,6 +6,7 @@ import com.pokeclip.clip.broadcast.BroadcastStatus;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.BroadcastNotFoundException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.TokenAlreadyExpiredException;
 import com.pokeclip.clip.jumpcard.JumpCardService;
+import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -22,6 +23,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 
 /** 계약 2B — 웹이 카드를 실시간으로 받는 문. */
 @RestController
@@ -72,10 +74,17 @@ public class JumpCardStreamController {
 
         Duration timeout = untilExpiry.compareTo(properties.timeout()) < 0 ? untilExpiry : properties.timeout();
 
+        // 🔴 연결을 잡기 전에 읽는다. 순서가 뒤집히면 자리가 영구히 샌다 —
+        // registry.open()이 conns에 자리를 잡고 정리 콜백 셋을 거는데, 그 콜백은 서블릿 컨테이너가
+        // emitter를 받아 비동기 요청을 시작해야 불린다. 컨트롤러가 그 전에 예외로 끝나면 컨테이너는
+        // 그 emitter를 모르므로 타임아웃도 완료도 오류도 일으킬 주체가 없고, 자리는 프로세스가
+        // 죽을 때까지 남는다. snapshotsOf는 DB를 읽고 jsonb를 파싱하므로 던질 수 있다
+        // (커넥션 고갈·쿼리 타임아웃·직렬화 실패). 만료 토큰 불사 연결과 같은 실패 모양이다.
+        List<JumpCardSnapshot> snapshot = service.snapshotsOf(streamId);
+
         // 상한 초과면 StreamLimitExceededException → 503
         SseEmitter emitter = registry.open(streamId, jwt.getSubject(), timeout);
-        registry.sendInitial(emitter, service.snapshotsOf(streamId),
-                broadcast.getStatus() == BroadcastStatus.ENDED);
+        registry.sendInitial(emitter, snapshot, broadcast.getStatus() == BroadcastStatus.ENDED);
 
         return ResponseEntity.ok()
                 // 앞단 프록시가 모아 보내면 "3초 내 도착"이 깨진다. 로컬엔 프록시가 없어 배포 후에만 난다.
