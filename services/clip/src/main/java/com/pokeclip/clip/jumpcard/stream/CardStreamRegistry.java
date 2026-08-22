@@ -164,21 +164,38 @@ public class CardStreamRegistry implements EndedListener {
         return emitter;
     }
 
+    /**
+     * <b>스냅샷 전체가 태스크 <u>하나</u>다.</b> 카드 하나당 태스크 하나로 제출하면 큐를
+     * <b>카드 수만큼</b> 먹고, 상한(운영 1000)을 넘으면 거부 처리기가 조용히 버린다.
+     *
+     * <p>그 버림이 여기서는 회복되지 않는다 — {@code CardStreamExecutor}의 거부 주석이 기대는
+     * 「재연결이 전체 스냅샷으로 메운다」가 <b>초기 스냅샷에는 거짓</b>이기 때문이다.
+     * 재연결해도 같은 스냅샷이라 <b>같은 자리에서 또 잘린다</b>(2026-08-23 실측: 1200장에서
+     * 201건 유실이 재연결 2회차에도 그대로, 도착 1000장). 처음 잘리는 것이 {@code ended}라
+     * <b>연결이 안 닫힌 채 남기까지</b> 한다(카드 1000장에서 거부 1건 = {@code ended}).
+     *
+     * <p><b>대가는 밀림이다</b> — 이 태스크가 도는 동안 같은 스트라이프의 다른 연결이 기다린다.
+     * 카드 <b>300장 전송 76ms · 같은 줄의 다른 연결 밀림 32ms</b>(2026-08-23 실측,
+     * {@code StripeHeadOfLineTest}가 계속 잰다). PRD 도착 기준 3초의 <b>1%</b>다.
+     * 밀림은 <b>늦는 것</b>이고 유실은 <b>안 오는 것</b>이라 밀림을 골랐다.
+     * 카드가 수천 장이 되면 이 밀림이 커지므로 그때는 마진 방식(PRD 「따라잡기」)으로 옮긴다.
+     */
     public void sendInitial(SseEmitter emitter, List<JumpCardSnapshot> cards, boolean ended) {
         Conn conn = conns.get(emitter);
         if (conn == null) {
             return;
         }
-        executor.submit(conn.stripe(), emitter, () -> emitter.send(SseEmitter.event().comment("ok")));
-        for (JumpCardSnapshot card : cards) {
-            executor.submit(conn.stripe(), emitter, () -> emitter.send(cardEvent(card)));
-        }
-        if (ended) {
-            executor.submit(conn.stripe(), emitter, () -> {
+        executor.submit(conn.stripe(), emitter, () -> {
+            // 주석이 첫 쓰기여야 헤더가 바로 나간다(아래 문단).
+            emitter.send(SseEmitter.event().comment("ok"));
+            for (JumpCardSnapshot card : cards) {
+                emitter.send(cardEvent(card));
+            }
+            if (ended) {
                 emitter.send(SseEmitter.event().name("ended"));
                 emitter.complete();
-            });
-        }
+            }
+        });
     }
 
     /**

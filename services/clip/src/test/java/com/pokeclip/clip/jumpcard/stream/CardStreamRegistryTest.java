@@ -3,6 +3,7 @@ package com.pokeclip.clip.jumpcard.stream;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.StreamLimitExceededException;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.jumpcard.JumpCardSource;
+import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -140,6 +141,48 @@ class CardStreamRegistryTest {
         awaitUntil(() -> ended.named().size() == 2);
         assertThat(ended.named()).extracting(RecordingEmitter.Event::name).containsExactly("card", "ended");
         awaitUntil(ended::completed);
+    }
+
+    /**
+     * <b>초기 스냅샷은 큐를 한 칸만 쓴다.</b>
+     *
+     * <p>카드 하나당 태스크 하나로 제출하면 큐를 <b>카드 수만큼</b> 먹는다. 상한(운영 1000)을
+     * 넘으면 거부 처리기가 조용히 버리고, <b>재연결해도 같은 스냅샷이라 같은 자리에서 또 잘린다</b>
+     * (PR #109 봇 지적 ③, 2026-08-23 재현 — 1200장에서 201건 유실이 재연결 2회차에도 그대로).
+     * 처음 잘리는 것이 {@code ended}라 <b>연결이 안 닫히기까지</b> 한다.
+     *
+     * <p>여기서는 큐 상한을 <b>2</b>로 조여 카드 200장을 민다. 쪼개 제출하면 201건 중 199건이
+     * 거부되고, 한 태스크로 묶으면 한 칸이면 충분하다.
+     */
+    @Test
+    void 초기_스냅샷은_카드가_많아도_큐를_한_칸만_쓴다() {
+        executor = new CardStreamExecutor(1, 2);
+        registry = new CardStreamRegistry(executor, props(4, 50, 500), mapper, d -> new RecordingEmitter());
+        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        List<JumpCardSnapshot> cards =
+                IntStream.rangeClosed(1, 200).mapToObj(i -> snapshot("s-1", i)).toList();
+
+        try (LogCaptor captor = new LogCaptor()) {
+            registry.sendInitial(emitter, cards, true);
+            long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (emitter.named().size() < 201 && System.nanoTime() < deadline) {
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            assertThat(captor.messages().stream().filter(m -> m.startsWith("jumpcard.stream.rejected")))
+                    .as("초기 스냅샷이 거부되면 그 카드는 재연결해도 같은 자리에서 또 잘린다")
+                    .isEmpty();
+        }
+
+        assertThat(emitter.named()).as("카드 200장 + ended").hasSize(201);
+        assertThat(emitter.named().get(200).name())
+                .as("ended가 거부되면 연결이 안 닫힌 채 불완전하게 남는다").isEqualTo("ended");
+        assertThat(emitter.events().get(0).comment())
+                .as("한 태스크로 묶여도 헤더를 틔우는 주석이 여전히 첫 쓰기여야 한다").isEqualTo("ok");
+        awaitUntil(emitter::completed);
     }
 
     @Test
