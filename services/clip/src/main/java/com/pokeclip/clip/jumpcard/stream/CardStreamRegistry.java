@@ -133,12 +133,21 @@ public class CardStreamRegistry implements EndedListener {
     }
 
     /**
-     * 상한 셋을 한 번에 센다.
+     * <b>상한 셋을 센다. 넘겼으면 던진다.</b>
+     *
+     * <p>🔴 <b>이 계산이 한 곳에 있어야 한다.</b> {@link #openWithSnapshot}이 DB 조회 <b>앞에서</b>
+     * 한 번, {@link #open}이 자리를 잡기 <b>직전에</b> 한 번 부른다. 두 자리에 조건을 각각 적으면
+     * 언젠가 갈리고, 갈리는 순간 앞 검사만 통과해 <b>스냅샷을 헛읽는 일이 그대로 돌아온다</b> —
+     * 그것이 이 메서드를 뽑은 이유의 전부다. 기준·순서·예외가 같아야 하므로 <b>복사하지 말고
+     * 이 메서드를 불러라.</b>
+     *
+     * <p>둘 다 <b>같은 자물쇠 안</b>이라 사이에 남이 못 낀다 — 앞 검사가 통과하면 뒤 검사도
+     * 통과한다. 두 번 세는 비용은 {@code conns} 순회 둘(상한 500)이고 DB가 없다.
      *
      * <p>{@code synchronized}인 이유 — 세는 것과 더하는 것 사이에 남이 끼면 상한이 하나 넘는다.
      * 연결을 여는 것은 드문 일이라 이 직렬화의 대가가 작다.
      */
-    public synchronized SseEmitter open(String streamId, String userId, Duration timeout) {
+    private void checkLimits(String streamId, String userId) {
         long perUser = conns.values().stream().filter(c -> c.userId().equals(userId)).count();
         long perStream = conns.values().stream().filter(c -> c.streamId().equals(streamId)).count();
         if (perUser >= properties.maxPerUser()) {
@@ -150,6 +159,16 @@ public class CardStreamRegistry implements EndedListener {
         if (conns.size() >= properties.maxTotal()) {
             throw new StreamLimitExceededException("total");
         }
+    }
+
+    /**
+     * 자리를 잡고 정리 콜백을 건다. 상한은 {@link #checkLimits}가 본다.
+     *
+     * <p>{@code synchronized}인 이유 — 세는 것과 더하는 것 사이에 남이 끼면 상한이 하나 넘는다.
+     * 연결을 여는 것은 드문 일이라 이 직렬화의 대가가 작다.
+     */
+    public synchronized SseEmitter open(String streamId, String userId, Duration timeout) {
+        checkLimits(streamId, userId);
 
         SseEmitter emitter = emitterFactory.apply(timeout);
         conns.put(emitter, new Conn(seq.getAndIncrement(), streamId, userId, emitter));
@@ -207,6 +226,18 @@ public class CardStreamRegistry implements EndedListener {
     public synchronized SseEmitter openWithSnapshot(String streamId, String userId,
                                                     Supplier<Duration> timeout,
                                                     Supplier<InitialSnapshot> initial) {
+        // 🔴 <b>DB 조회 앞이다.</b> 상한을 넘긴 요청은 어차피 아래 open()이 거절하는데, 그전에
+        // 스냅샷을 읽으면 <b>거절될 요청이 자물쇠 안에서 그 방송 카드 전부를 읽는다</b>.
+        // 재연결 루프는 그것을 초당 수백 번 한다 — 2026-08-24 재현(PR #113 봇 지적 ②):
+        // 503 1615회에 조회 1615회(비율 1.00), 5초 중 자물쇠가 41~72% 잡혀 있었고 그동안
+        // publish 막힘 중앙값이 55us → 499us(300장) · 2010us(1200장)로 뛰었다.
+        // 거절되는 쪽은 안 아프고(왕복 2~4ms) 같은 자물쇠를 기다리는 남의 화면이 아프다.
+        //
+        // 아래 open()의 검사를 <b>지우지 않는다</b>. 여기 것은 「조회를 아끼는」 사전 검사이고,
+        // 자리를 잡는 것과 원자적인 최종 판정은 그쪽이다. 둘 다 checkLimits 하나를 부르므로
+        // 기준이 갈릴 수 없다.
+        checkLimits(streamId, userId);
+
         InitialSnapshot snapshot = initial.get();
         // 🔴 시한도 <b>값이 아니라 「재는 법」</b>으로 받아 여기서 다시 잰다. 호출자가 자물쇠 밖에서
         // 잰 값을 넘기면, 그 뒤 자물쇠 대기와 위 조회에 흐른 시간이 시한에 안 반영된다 —
