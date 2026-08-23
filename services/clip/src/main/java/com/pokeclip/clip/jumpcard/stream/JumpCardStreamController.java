@@ -29,6 +29,9 @@ public class JumpCardStreamController {
 
     private static final Logger log = LoggerFactory.getLogger(JumpCardStreamController.class);
 
+    /** 이 아래로 남은 토큰은 열지 않는다. SseEmitter가 받는 long ms로 자르면 0이 되기 때문이다. */
+    private static final Duration MIN_LIFETIME = Duration.ofMillis(1);
+
     private final BroadcastRepository broadcasts;
     private final JumpCardService service;
     private final CardStreamRegistry registry;
@@ -100,12 +103,22 @@ public class JumpCardStreamController {
         // exp가 없는 토큰은 JwtConfig가 이미 401로 막았다(setAllowEmptyExpiryClaim(false)).
         Duration untilExpiry = Duration.between(Instant.now(), jwt.getExpiresAt());
 
-        // 남은 수명이 0 이하면 열지 않는다. 디코더의 clock skew 허용치(기본 60초) 안쪽
+        // 남은 수명이 1ms 미만이면 열지 않는다. 디코더의 clock skew 허용치(기본 60초) 안쪽
         // 토큰은 인증을 통과하는데, 그대로 열면 SseEmitter가 음수 시한을 받고
         // 서블릿 규약상 timeout <= 0은 「시한 없음」이라 연결이 영영 산다 —
         // 만료된 토큰일수록 오래 사는 뒤집힌 결과가 된다(인가 2차 감사 실측).
         // 하한을 두는 방식(max(untilExpiry, 최소값))은 만료 토큰으로 연 연결을 살려 주므로 쓰지 않는다.
-        if (untilExpiry.isZero() || untilExpiry.isNegative()) {
+        //
+        // 🔴 기준이 「0 이하」가 아니라 toMillis()다. 아래 emitter 팩토리가 Duration을 long ms로
+        // 자르므로, 0 < 남은수명 < 1ms는 0도 음수도 아닌데 잘리면 0이 된다 — 같은 「시한 없음」이다
+        // (PR #111 봇 지적 ④, 2026-08-23 재현: 실제로 시한 0짜리 emitter가 나왔다).
+        // 진짜 토큰의 exp는 초 단위라(실측 nano=0) 이 창은 초 경계 직전 1ms 하나지만, 닫혀 있지 않다.
+        // 자르는 쪽과 재는 쪽의 단위를 맞추는 것이 요점이다.
+        //
+        // untilExpiry.toMillis()로 쓰지 않는다 — 아주 먼 exp에서 long을 넘겨
+        // ArithmeticException("long overflow")이 되고, 401이어야 할 자리가 500이 된다
+        // (Instant.MAX로 실측). Duration끼리 비교하면 그 자리가 없다.
+        if (untilExpiry.compareTo(MIN_LIFETIME) < 0) {
             throw new TokenAlreadyExpiredException();
         }
 
