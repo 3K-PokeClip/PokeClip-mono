@@ -77,9 +77,23 @@ public final class SseReader implements AutoCloseable {
                 } else if (line.startsWith(":")) {
                     // 주석(하트비트). 그 자체가 하나의 이벤트다.
                     add(new Event(null, null, null, line.substring(1).trim(), Instant.now()));
-                } else if (line.isEmpty() && (name != null || data.length() > 0)) {
-                    add(new Event(name, id, data.toString(), null, Instant.now()));
+                } else if (line.isEmpty()) {
+                    // 🔴 <b>data 버퍼가 비면 이벤트를 만들지 않는다.</b> WHATWG HTML 9.2.6
+                    // 「dispatch the event」 2단계가 "If the data buffer is an empty string, set the
+                    // data buffer and the event type buffer to the empty string and return"이라
+                    // MessageEvent를 만드는 4단계에 도달하지 못한다 — 브라우저는 그 이벤트를 버린다.
+                    //
+                    // 전에는 「name이 있으면」도 이벤트로 셌고, 그래서 data 없이 나가던
+                    // event:ended\n\n 를 <b>도착한 것으로 세어</b> 결함을 통째로 가렸다
+                    // (2026-08-23 재현: 같은 바이트를 Chrome 148과 undici는 둘 다 버렸다).
+                    // 시험 파서가 실물보다 관대하면 시험이 초록인 것은 아무 뜻이 없다.
+                    if (data.length() > 0) {
+                        add(new Event(name, id, data.toString(), null, Instant.now()));
+                    }
                     name = null;
+                    // 규약은 last event ID 버퍼를 비우지 않는다("The buffer does not get reset").
+                    // 여기서 비우는 것은 의도된 차이다 — 시험이 보는 것은 「그 이벤트에 붙어 온 id」라
+                    // 앞 이벤트의 id가 흘러들면 순서 시험이 거짓으로 통과한다.
                     id = null;
                     data = new StringBuilder();
                 }

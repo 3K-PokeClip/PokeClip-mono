@@ -201,7 +201,7 @@ public class CardStreamRegistry implements EndedListener {
                 emitter.send(cardEvent(card));
             }
             if (ended) {
-                emitter.send(SseEmitter.event().name("ended"));
+                emitter.send(endedEvent());
                 emitter.complete();
             }
         });
@@ -248,7 +248,7 @@ public class CardStreamRegistry implements EndedListener {
         for (Conn conn : conns.values()) {
             if (conn.streamId().equals(streamId)) {
                 executor.submit(conn.stripe(), conn.emitter(), () -> {
-                    conn.emitter().send(SseEmitter.event().name("ended"));
+                    conn.emitter().send(endedEvent());
                     conn.emitter().complete();
                 });
             }
@@ -277,6 +277,24 @@ public class CardStreamRegistry implements EndedListener {
 
     public int connectionCount() {
         return conns.size();
+    }
+
+    /**
+     * <b>{@code data}가 반드시 있어야 한다.</b> WHATWG HTML 9.2.6 「dispatch the event」 2단계가
+     * "If the data buffer is an empty string, set the data buffer and the event type buffer to the
+     * empty string and return"이라, {@code data} 줄이 하나도 없는 이벤트는 브라우저가
+     * <b>MessageEvent를 만들기 전에 버린다</b> — {@code addEventListener("ended", …)}가 안 불린다.
+     *
+     * <p>전에는 {@code SseEmitter.event().name("ended")}만 보내 실제 바이트가
+     * {@code event:ended\n\n}이었고, 그것을 Chrome 148과 undici(WHATWG 구현) <b>둘 다 버렸다</b>
+     * (2026-08-23 재현, PR #112 봇 지적 ①). 우리 {@code SseReader}가 규약보다 관대해서 시험은
+     * 초록이었다 — <b>그 파서도 같이 고쳤고, 고치니 헛통과하던 시험 여섯 개가 빨간불이 됐다.</b>
+     *
+     * <p>내용이 {@code &#123;&#125;}인 이유: 받는 쪽이 쓸 값이 없다. 빈 문자열({@code data:\n})로도
+     * 규약은 만족하지만, 웹이 {@code JSON.parse(e.data)}를 그대로 걸 수 있게 빈 객체를 준다.
+     */
+    private SseEmitter.SseEventBuilder endedEvent() {
+        return SseEmitter.event().name("ended").data("{}", MediaType.APPLICATION_JSON);
     }
 
     private SseEmitter.SseEventBuilder cardEvent(JumpCardSnapshot card) {
