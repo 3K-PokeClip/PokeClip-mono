@@ -170,6 +170,55 @@ class ChatCollectionStatusResolverTest extends IntegrationTestSupport {
         assertThat(lookups.get()).as("칸 폭(128)을 넘는 번호는 표에 있을 수 없다 — 묻지 않는다").isEqualTo(1);
     }
 
+    // <b>봇 2판 codex P2를 재는 검사다 — 이 갈래를 재는 검사가 0개였다.</b> {@code observedAt}을
+    // {@code resolve} 첫 줄에서 찍으면 {@code store.find}가 느린 동안 그만큼 낡은 시각이 실린다.
+    // 재현(2026-08-23, pg_sleep으로 진짜 DB 지연): 1·3·9초에서 observedAt이 각각 1004·3009·9013ms
+    // 과거였고, 조회 중에 포기 메모가 생기면 since가 observedAt보다 <b>미래</b>가 되어 clip이 재는
+    // observedAt - since가 <b>−1501ms</b>로 나갔다. 고친 뒤 같은 프로브가 0ms·+1508ms다.
+    //
+    // 재는 방법: 시계가 <b>부를 때마다 1초씩 흐른다.</b> 조회 안에서 한 번 읽어 두면, 답의 observedAt이
+    // 그보다 뒤인지로 「조회를 마친 뒤에 찍혔는가」가 부등호 하나로 갈린다. 진짜 지연(pg_sleep)은
+    // 프로브에서만 쓰고 검사에는 안 넣는다 — 9초를 자는 검사를 모듈 전체에 남길 이유가 없다.
+    //
+    // 문항 1: 다중 세션이 주제가 아니다 — 등록부에 <b>없는</b> 방송을 재는 검사라 세션 0개가 맞다.
+    // 문항 2: 조회가 아예 안 불리면 조회_중이 null이라 단언이 NPE로 죽는다(자동 참이 아니다).
+    //         state 단언 둘이 「엉뚱한 갈래를 재고 있지 않다」의 양성 대조다.
+    // 문항 3: 단일 스레드다 — 겹침을 재지 않는다.
+    // 문항 4: 부등호만 보면 <b>갈래마다 따로 찍는 구현</b>도 통과한다(둘 다 조회 뒤니까). 그래서
+    //         resolve 한 번당 시계 호출 수를 같이 센다 — 첫 줄 도장이 남아 있으면 2가 아니라 3이다.
+    // 문항 5: clock.get()을 resolve 첫 줄로 되돌리면 ended 갈래의 부등호에서 빨간불이다(확인함) —
+    //         「2026-08-22T12:00:01Z to be strictly after 2026-08-22T12:00:02Z」. 거기서 멈추므로
+    //         뒤의 단언들은 그 실행에서 안 돈다.
+    @Test
+    void observedAt은_표를_읽은_뒤에_찍히고_갈래_둘이_같은_도장을_쓴다() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger 시계_호출 = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.function.Supplier<Instant> 흐르는_시계 = () -> 지금.plusSeconds(시계_호출.incrementAndGet());
+        java.util.concurrent.atomic.AtomicReference<Instant> 조회_중 =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        ChatCollectionStatusResolver 느린_표를_문_창구 = new ChatCollectionStatusResolver(registry,
+                new EndedStreamStore(jdbc) {
+                    @Override
+                    public Optional<EndedStream> find(String streamId) {
+                        조회_중.set(흐르는_시계.get());   // 조회가 도는 「그 순간」의 시각
+                        return super.find(streamId);
+                    }
+                }, 흐르는_시계);
+
+        store.remember("s9", 4, Instant.parse("2026-08-22T11:30:00Z"));
+        int 메모_전 = 시계_호출.get();
+        ChatCollectionStatus 메모 = 느린_표를_문_창구.resolve("s9");
+        assertThat(메모.state()).as("메모 갈래를 재고 있다").isEqualTo("ended");
+        assertThat(메모.observedAt()).as("조회를 마친 뒤에 찍는다 — 첫 줄에서 찍으면 조회에 걸린 시간만큼 낡는다")
+                .isAfter(조회_중.get());
+        assertThat(시계_호출.get() - 메모_전).as("조회 한 번 + 도장 한 번. 3이면 첫 줄 도장이 남아 있다").isEqualTo(2);
+
+        int 모름_전 = 시계_호출.get();
+        ChatCollectionStatus 모름 = 느린_표를_문_창구.resolve("never-heard");
+        assertThat(모름.state()).as("unknown 갈래를 재고 있다").isEqualTo("unknown");
+        assertThat(모름.observedAt()).isAfter(조회_중.get());
+        assertThat(시계_호출.get() - 모름_전).as("메모가 없는 갈래도 같은 도장 하나를 쓴다").isEqualTo(2);
+    }
+
     // <b>ⓐ(재연결 중 포기)의 「메모가 남기 전 찰나」를 재는 유일한 검사다</b> — 앞 구현자가 넘긴 공백이었다.
     // 그 자리는 fromLive의 case STOPPED이고, 위 「발급_401로 …」 검사는 <b>메모가 남은 뒤</b>를 보므로
     // 이 갈래를 통째로 지워도(=default와 합쳐도) 초록이었다.

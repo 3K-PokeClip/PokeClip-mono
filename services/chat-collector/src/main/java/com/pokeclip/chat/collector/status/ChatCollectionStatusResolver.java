@@ -48,18 +48,33 @@ public class ChatCollectionStatusResolver {
         this.clock = clock;
     }
 
+    /**
+     * <b>{@code observedAt}은 갈래마다 답을 만들기 직전에 찍는다. 메서드 첫 줄로 올리지 마라.</b>
+     * 거기서 찍으면 {@code store.find}가 느린 동안(반개방이면 최악 10초, {@code socketTimeout}) 그만큼
+     * 낡은 시각이 실린다 — 실측: DB를 1·3·9초 재우면 {@code observedAt}이 정확히 1004·3009·9013ms
+     * 과거였다(2026-08-23, {@code pg_sleep}으로 진짜 지연). <b>더 나쁜 갈래는 부호가 뒤집히는 것이다</b> —
+     * 조회가 도는 동안 그 방송의 포기 메모가 남으면 {@code since}(메모의 {@code created_at})가
+     * {@code observedAt}보다 <b>미래</b>가 되어, clip이 {@code observedAt - since}로 재는
+     * 「얼마나 오래 멈췄나」가 <b>음수</b>로 나간다(실측 −1501ms). 조회를 마친 뒤에 찍으면 그 시각은
+     * 조회가 그 행을 본 시점 이후이므로 두 갈래가 같이 닫힌다.
+     *
+     * <p>DB를 묻는 갈래 둘({@code fromMemo}·{@code unknown})은 <b>조회 뒤 한 번만</b> 찍는다 —
+     * 갈래마다 따로 찍으면 같은 조회 결과에 다른 시각이 붙는다.
+     */
     public ChatCollectionStatus resolve(String streamId) {
-        Instant now = clock.get();
         if (streamId.length() > MAX_STREAM_ID_LENGTH) {
-            return unknown(streamId, now);
+            return unknown(streamId, clock.get());
         }
         // <b>스냅숏 한 참조로 읽는다.</b> 낱개 getter를 이어 부르면 그 사이 재접속이 성공해
         // 「reconnecting인데 끊긴 시각 없음」이 나온다(CollectionStatus 주석).
         CollectionStatus.Snapshot live = registry.statusOf(streamId);
         if (live != null) {
-            return fromLive(streamId, live, now);
+            // 스냅숏을 읽은 뒤에 찍는다 — reconnecting의 since(disconnectedAt)보다 앞선 observedAt이
+            // 안 나가게. 이 갈래에서 now는 observedAt으로만 쓰인다(STOPPED의 since는 null이다).
+            return fromLive(streamId, live, clock.get());
         }
         Optional<EndedStream> memo = store.find(streamId);
+        Instant now = clock.get();
         return memo.map(m -> fromMemo(streamId, m, now)).orElseGet(() -> unknown(streamId, now));
     }
 
