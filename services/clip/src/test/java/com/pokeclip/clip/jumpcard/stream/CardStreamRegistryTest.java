@@ -57,6 +57,34 @@ class CardStreamRegistryTest {
         return registry;
     }
 
+    /**
+     * <b>소비 자리를 잰다.</b> {@code StreamProperties}가 값을 덮는 것과 {@code startHeartbeat}이
+     * 안 던지는 것은 <b>다른 사실</b>이다 — 이번 결함이 정확히 그 틈에서 났다(바인딩 자리에만
+     * {@code compareTo} 가드를 두고 소비 자리를 안 지켰다).
+     *
+     * <p>🔴 <b>{@code properties}를 손으로 만들어 넣으면 이 시험이 거짓으로 초록이 된다</b> —
+     * 레코드 생성자가 이미 덮은 값이 들어가기 때문이다. 그래서 <b>덮이기 전 원값</b>이 아니라
+     * <b>레코드를 거친 값</b>을 쓰되, 레코드가 덮지 <b>않는</b> 경우(경계 바로 아래)까지 같이
+     * 걸어 {@code toMillis()}가 실제로 불리는 것을 확인한다.
+     */
+    @Test
+    void 아주_큰_heartbeat로도_기동이_안_죽는다() {
+        StreamProperties 넘치는값 = new StreamProperties(Duration.parse("PT2562047788016H"),
+                Duration.ofHours(1), 4, 1000, 4, 50, 500);
+        assertThatCode(() -> registry(넘치는값).startHeartbeat())
+                .as("toMillis()가 long을 넘기면 @PostConstruct에서 컨텍스트가 통째로 죽는다")
+                .doesNotThrowAnyException();
+        정리();
+
+        StreamProperties 경계바로아래 = new StreamProperties(Duration.parse("PT2562047788015H"),
+                Duration.ofHours(1), 4, 1000, 4, 50, 500);
+        assertThat(경계바로아래.heartbeat().toMillis())
+                .as("이 값은 덮이지 않고 그대로 스케줄러에 들어간다 — 자를 수 있어야 한다")
+                .isEqualTo(9_223_372_036_854_000_000L);
+        assertThatCode(() -> registry(경계바로아래).startHeartbeat())
+                .doesNotThrowAnyException();
+    }
+
     private static StreamProperties props(int maxPerUser, int maxPerStream, int maxTotal) {
         // heartbeat를 길게 둔다 — 시험 중 스케줄이 끼어들면 받은 이벤트에 ping이 섞인다.
         return new StreamProperties(Duration.ofHours(1), Duration.ofHours(1), 4, 1000,

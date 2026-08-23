@@ -144,6 +144,42 @@ class StreamPropertiesTest {
         }
     }
 
+    /**
+     * <b>{@code heartbeat}에는 상한도 필요하다.</b> 하한만 두면 <b>아주 큰 값</b>이 통과하는데,
+     * {@code CardStreamRegistry.startHeartbeat}의 {@code toMillis()}가 그것을 자르다
+     * {@code ArithmeticException("long overflow")}으로 <b>부팅을 죽인다</b>
+     * (2026-08-24 실기동 재현, PR #113 봇 지적 ④).
+     *
+     * <p><b>경계를 두 값으로 못박는다.</b> 넘치는 자리는 초 값이
+     * {@code Long.MAX_VALUE / 1000 = 9,223,372,036,854,775}를 넘을 때다:
+     * <ul>
+     *   <li>{@code PT2562047788015H} = 9,223,372,036,854,000초 → {@code toMillis()} 성공 → <b>그대로 쓴다</b></li>
+     *   <li>{@code PT2562047788016H} = 9,223,372,036,857,600초 → {@code toMillis()} 던짐 → <b>덮는다</b></li>
+     * </ul>
+     *
+     * <p>🔴 <b>봇이 예로 든 {@code PT100000000000H}로 시험을 쓰면 아무것도 안 재게 된다</b> —
+     * 그 값은 {@code toMillis()}가 360,000,000,000,000,000을 돌려주고 <b>부팅도 멀쩡히 된다</b>
+     * (같은 날 실기동으로 확인: {@code Started ClipApplication in 2.569 seconds}).
+     * 그래서 아래 마지막 단언이 그 값을 <b>덮이지 않는 쪽</b>에 둔다.
+     */
+    @Test
+    void heartbeat가_ms로_자를_수_없을_만큼_크면_기본값이_들어간다() {
+        assertThat(new StreamProperties(Duration.parse("PT2562047788016H"), Duration.ofHours(4),
+                4, 1000, 4, 50, 500).heartbeat())
+                .as("toMillis()가 long을 넘겨 startHeartbeat에서 부팅이 죽는다")
+                .isEqualTo(Duration.ofSeconds(20));
+
+        assertThat(new StreamProperties(Duration.parse("PT2562047788015H"), Duration.ofHours(4),
+                4, 1000, 4, 50, 500).heartbeat())
+                .as("경계 바로 아래는 자를 수 있으므로 덮으면 안 된다")
+                .isEqualTo(Duration.parse("PT2562047788015H"));
+
+        assertThat(new StreamProperties(Duration.parse("PT100000000000H"), Duration.ofHours(4),
+                4, 1000, 4, 50, 500).heartbeat())
+                .as("봇이 든 값이다. 오버플로하지 않으므로 이것으로 시험을 쓰면 아무것도 안 잰다")
+                .isEqualTo(Duration.parse("PT100000000000H"));
+    }
+
     /** 양성 대조. 하한이 지나치게 넓으면 멀쩡한 설정까지 기본값으로 덮는다. */
     @Test
     void 멀쩡한_값은_그대로_쓴다() {
