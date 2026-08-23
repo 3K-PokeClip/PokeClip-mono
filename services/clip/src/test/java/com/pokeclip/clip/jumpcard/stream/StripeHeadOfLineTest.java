@@ -33,6 +33,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <b>밀림이 없는 것이 우연</b>이 되고, 그러면 이 시험은 아무것도 안 잰다.
  *
  * <p>기준은 PRD의 「카드가 3초 안에 화면에 온다」다.
+ *
+ * <p><b>실측값은 기계 부하에 따라 통째로 달라진다.</b> 위 출력과 자기 측정을 비교하려면 어느
+ * 조건인지 봐야 한다 — 카드 300장, 둘 다 2026-08-23 각 5회:
+ * <ul>
+ *   <li><b>부하 중</b>(load 148, 같은 기계에 {@code yes} 20개) — 전송 71~86ms · 밀림 32~49ms</li>
+ *   <li><b>깨끗</b>(load 2.4~4.9) — 전송 32~114ms · 밀림 15~24ms
+ *       (전송은 3회차 하나가 114ms로 튀어 부하 중 범위와 겹친다)</li>
+ * </ul>
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @TestPropertySource(properties = {
