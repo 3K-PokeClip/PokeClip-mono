@@ -112,6 +112,35 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
                 .isTrue();
     }
 
+    /**
+     * <b>큐를 못 지운 것이 브라우저까지 번지면 안 된다.</b> 위 관통 시험은 정상 경로만 보므로
+     * 이 자리를 못 본다 — 재현에서는 명부가 {@code ENDED}로 커밋됐는데도 붙어 있던 연결이
+     * {@code ended}를 못 받고 <b>자리를 문 채 남았다</b>({@code connectionCount=1}, 8.07초까지 확인).
+     */
+    @Test
+    void 삭제가_실패해도_붙어_있던_연결이_종료를_받고_닫힌다() {
+        // 카드를 하나 둔다 — 카드가 0장이면 연결 직후 나가는 것이 주석("ok") 하나뿐이라
+        // awaitNamed(1)로는 「연결이 섰다」를 못 잰다(이 시험을 처음 쓸 때 그렇게 헛짚었다).
+        service.record("s-queue", auto("evt-card-del", 2_000_000L));
+
+        try (SseReader reader = new SseReader(
+                "http://localhost:" + port + "/api/clip/broadcasts/s-queue/events",
+                Map.of("Authorization", "Bearer " + TestTokens.access("t10-delete-fail")))) {
+
+            assertThat(reader.awaitNamed(1, Duration.ofSeconds(3)))
+                    .as("초기 스냅샷이 서야 연결이 실제로 선 것이다").isTrue();
+
+            FakeSqsClient sqs = FakeSqsClient.thatFailsOnDelete(종료_편지("evt-del", "s-queue", 2L));
+            new SqsIntakeRunner(sqs, 큐_설정("http://localhost:4566/000000000000/unused.fifo"),
+                    new IntakeStatus(true), processor, MAPPER, null, registry).pollOnce();
+
+            assertThat(sqs.deletedReceiptHandles()).as("삭제는 실패한 채여야 이 갈래를 잰 것이다").isEmpty();
+            assertThat(reader.awaitName("ended", Duration.ofSeconds(5)))
+                    .as("편지를 못 지웠다고 화면이 끝난 방송에 남으면 안 된다").isTrue();
+            assertThat(reader.awaitClosed(Duration.ofSeconds(3))).isTrue();
+        }
+    }
+
     private IntakeProperties 큐_설정(String queueUrl) {
         return new IntakeProperties(true, queueUrl, LocalStackFixture.region(),
                 LocalStackFixture.endpoint(), Duration.ofSeconds(5), 10);

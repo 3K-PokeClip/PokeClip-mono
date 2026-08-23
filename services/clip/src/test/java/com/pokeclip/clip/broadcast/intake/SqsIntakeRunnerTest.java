@@ -604,6 +604,44 @@ class SqsIntakeRunnerTest {
         }
     }
 
+    /**
+     * <b>편지를 못 지운 것과 방송이 끝난 것은 별개다.</b> {@code delete}가 던지면 그 뒤의
+     * {@code notifyEnded}까지 못 가서 <b>붙어 있는 화면이 종료를 영영 못 받는다</b> —
+     * 재전달이 와도 {@code processor}가 {@code DUPLICATE}를 주고 알림은 {@code PROCESSED}만
+     * 타므로 <b>두 번째 기회가 없다</b>(PR #111 봇 지적 ①, 2026-08-23 재현).
+     *
+     * <p>그래서 알림을 삭제 <b>앞</b>으로 옮겼다. 알림은 명부가 이미 반영된 뒤의 통보이고,
+     * 편지를 지우는 것과 순서를 맞출 이유가 없다.
+     */
+    @Test
+    void 삭제가_실패해도_종료_알림은_간다() {
+        FakeSqsClient sqs = FakeSqsClient.thatFailsOnDelete(endedBody("evt-e", "s-1", 2L));
+        List<String> notified = new ArrayList<>();
+
+        newRunnerWithListener(sqs, envelope -> ProcessResult.PROCESSED, notified::add).pollOnce();
+
+        assertThat(sqs.deletedReceiptHandles()).as("삭제는 여전히 실패한 채다").isEmpty();
+        assertThat(notified)
+                .as("편지를 못 지웠다는 이유로 종료 알림이 사라지면 화면이 끝난 방송에 남는다")
+                .containsExactly("s-1");
+    }
+
+    /**
+     * <b>순서를 바꿔도 안 닫히는 구멍</b>을 못 박는다. 재전달은 {@code DUPLICATE}라 알림을
+     * 안 타므로, <b>유실을 실제로 막는 것은 순서가 아니라 「첫 번째에 알렸는가」다.</b>
+     * 이 갈래가 초록인 채로 남아 있어야 다음 사람이 "재전달이 메워 준다"고 오해하지 않는다.
+     */
+    @Test
+    void 재전달은_어느_순서에서도_알림을_안_탄다() {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(endedBody("evt-e", "s-1", 2L));
+        List<String> notified = new ArrayList<>();
+
+        newRunnerWithListener(sqs, envelope -> ProcessResult.DUPLICATE, notified::add).pollOnce();
+
+        assertThat(sqs.deletedReceiptHandles()).hasSize(1);
+        assertThat(notified).as("DUPLICATE가 알림을 타면 멀쩡한 방송에서 화면이 쫓겨난다").isEmpty();
+    }
+
     /** 리스너 없이 만드는 기존 생성자 경로가 그대로 살아 있어야 한다. */
     @Test
     void 리스너가_없으면_기존과_같다() {
