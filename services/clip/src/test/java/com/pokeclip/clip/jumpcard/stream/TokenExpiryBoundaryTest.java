@@ -15,6 +15,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -50,12 +51,14 @@ class TokenExpiryBoundaryTest extends IntegrationTestSupport {
 
     private final JumpCardStreamController controller;
     private final BroadcastRepository broadcasts;
+    private final CardStreamRegistry registry;
     private final JdbcTemplate jdbc;
 
     TokenExpiryBoundaryTest(JumpCardStreamController controller, BroadcastRepository broadcasts,
-                            JdbcTemplate jdbc) {
+                            CardStreamRegistry registry, JdbcTemplate jdbc) {
         this.controller = controller;
         this.broadcasts = broadcasts;
+        this.registry = registry;
         this.jdbc = jdbc;
     }
 
@@ -123,6 +126,53 @@ class TokenExpiryBoundaryTest extends IntegrationTestSupport {
         SseEmitter emitter = open(Instant.MAX, "boundary-far");
 
         assertThat(emitter.getTimeout()).isEqualTo(3000L);
+    }
+
+    /**
+     * <b>재는 시점과 시한이 걸리는 시점 사이에 자물쇠 대기가 통째로 들어간다.</b>
+     *
+     * <p>{@code untilExpiry}를 컨트롤러 입구에서 한 번만 재면, {@code openWithSnapshot}이
+     * 자물쇠를 기다리는 동안 {@code exp}가 지나가도 그 낡은 값이 emitter에 걸린다 —
+     * <b>만료된 토큰으로 연 연결이 {@code exp + 대기시간}까지 산다</b>
+     * (2026-08-23 재현, PR #112 봇 지적 ④: 자물쇠를 3초 쥐었더니 만료 <b>2,508ms 뒤에</b>
+     * 200으로 열렸고 연결이 {@code exp}를 <b>3,398ms</b> 넘겨 살았다).
+     *
+     * <p>입구의 가드는 그대로 둔다 — 명백히 만료된 토큰을 자물쇠를 잡기 전에 거르는 빠른 실패다.
+     * 이 시험이 재는 것은 <b>두 번째</b> 판정이 자물쇠 안에 있는가다.
+     *
+     * <p>자물쇠를 밖에서 쥐는 것은 {@code publish}·{@code broadcastEnded}가 쓰는 모니터와
+     * 같은 것을 잡는 것이다({@code synchronized} 인스턴스 메서드의 모니터는 인스턴스 자신이다).
+     * 실제 운영에서 이 대기를 만드는 것은 남의 {@code openWithSnapshot}이 자물쇠 안에서 도는
+     * DB 조회(5.9~22.4ms 실측)와 {@code publish}·{@code broadcastEnded}다.
+     */
+    @Test
+    void 자물쇠를_기다리는_사이에_만료되면_열지_않는다() throws Exception {
+        Duration hold = Duration.ofMillis(600);
+        Instant exp = Instant.now().plusMillis(150);   // 기다리는 동안 지나간다
+
+        CountDownLatch held = new CountDownLatch(1);
+        Thread holder = new Thread(() -> {
+            synchronized (registry) {
+                held.countDown();
+                try {
+                    Thread.sleep(hold.toMillis());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }, "expiry-lock-holder");
+        holder.setDaemon(true);
+        holder.start();
+        held.await();
+        Thread.sleep(20);   // 자물쇠를 확실히 쥔 뒤에 요청한다
+
+        try {
+            assertThatThrownBy(() -> open(exp, "boundary-lock-wait"))
+                    .as("자물쇠를 기다리는 동안 exp가 지났는데 열리면 그 연결은 만료 토큰으로 산다")
+                    .isInstanceOf(TokenAlreadyExpiredException.class);
+        } finally {
+            holder.join();
+        }
     }
 
     @Test

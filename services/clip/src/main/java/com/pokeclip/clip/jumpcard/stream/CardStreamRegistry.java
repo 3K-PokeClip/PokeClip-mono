@@ -156,10 +156,20 @@ public class CardStreamRegistry implements EndedListener {
      * {@code expected: 0 but was: 1}로 재현한 자리다). 대신 상한 초과로 {@code open}이 던지면
      * 스냅샷을 헛읽는데, 상한 초과는 드물고 유실보다 싸다.
      */
-    public synchronized SseEmitter openWithSnapshot(String streamId, String userId, Duration timeout,
+    public synchronized SseEmitter openWithSnapshot(String streamId, String userId,
+                                                    Supplier<Duration> timeout,
                                                     Supplier<InitialSnapshot> initial) {
         InitialSnapshot snapshot = initial.get();
-        SseEmitter emitter = open(streamId, userId, timeout);
+        // 🔴 시한도 <b>값이 아니라 「재는 법」</b>으로 받아 여기서 다시 잰다. 호출자가 자물쇠 밖에서
+        // 잰 값을 넘기면, 그 뒤 자물쇠 대기와 위 조회에 흐른 시간이 시한에 안 반영된다 —
+        // 만료된 토큰으로 연 연결이 exp를 넘겨 산다(PR #112 봇 지적 ④, 2026-08-23 재현:
+        // 자물쇠를 3초 쥐었더니 만료 2,508ms 뒤에 200으로 열렸고 연결이 exp를 3,398ms 넘겼다).
+        //
+        // 🔴 <b>open() 앞이다.</b> 뒤로 옮기면 여기서 던질 때 자리가 영구히 샌다 — open이 명부에
+        // 자리를 잡고 거는 정리 콜백은 서블릿 컨테이너가 emitter를 받아야 불리는데, 컨테이너는
+        // 그 emitter를 모른다(라운드 1 중대와 같은 자리, 위 문단 참고).
+        Duration remaining = timeout.get();
+        SseEmitter emitter = open(streamId, userId, remaining);
         sendInitial(emitter, snapshot.cards(), snapshot.ended());
         return emitter;
     }
@@ -287,8 +297,7 @@ public class CardStreamRegistry implements EndedListener {
      *
      * <p>전에는 {@code SseEmitter.event().name("ended")}만 보내 실제 바이트가
      * {@code event:ended\n\n}이었고, 그것을 Chrome 148과 undici(WHATWG 구현) <b>둘 다 버렸다</b>
-     * (2026-08-23 재현, PR #112 봇 지적 ①). 우리 {@code SseReader}가 규약보다 관대해서 시험은
-     * 초록이었다 — <b>그 파서도 같이 고쳤고, 고치니 헛통과하던 시험 여섯 개가 빨간불이 됐다.</b>
+     * (2026-08-23 재현). 우리 {@code SseReader}가 관대해서 시험은 초록이었다 — 그 파서도 같이 고쳤다.
      *
      * <p>내용이 {@code &#123;&#125;}인 이유: 받는 쪽이 쓸 값이 없다. 빈 문자열({@code data:\n})로도
      * 규약은 만족하지만, 웹이 {@code JSON.parse(e.data)}를 그대로 걸 수 있게 빈 객체를 준다.

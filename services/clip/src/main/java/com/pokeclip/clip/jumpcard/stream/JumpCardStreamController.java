@@ -99,30 +99,10 @@ public class JumpCardStreamController {
             log.debug("jumpcard.stream.last_event_id streamId={} last={}", streamId, last);
         }
 
-        // 연결 수명 = min(설정값, 토큰 exp까지). 만료 시점에 닫히고 브라우저가 새 토큰으로 다시 붙는다.
-        // exp가 없는 토큰은 JwtConfig가 이미 401로 막았다(setAllowEmptyExpiryClaim(false)).
-        Duration untilExpiry = Duration.between(Instant.now(), jwt.getExpiresAt());
-
-        // 남은 수명이 1ms 미만이면 열지 않는다. 디코더의 clock skew 허용치(기본 60초) 안쪽
-        // 토큰은 인증을 통과하는데, 그대로 열면 SseEmitter가 음수 시한을 받고
-        // 서블릿 규약상 timeout <= 0은 「시한 없음」이라 연결이 영영 산다 —
-        // 만료된 토큰일수록 오래 사는 뒤집힌 결과가 된다(인가 2차 감사 실측).
-        // 하한을 두는 방식(max(untilExpiry, 최소값))은 만료 토큰으로 연 연결을 살려 주므로 쓰지 않는다.
-        //
-        // 🔴 기준이 「0 이하」가 아니라 toMillis()다. 아래 emitter 팩토리가 Duration을 long ms로
-        // 자르므로, 0 < 남은수명 < 1ms는 0도 음수도 아닌데 잘리면 0이 된다 — 같은 「시한 없음」이다
-        // (PR #111 봇 지적 ④, 2026-08-23 재현: 실제로 시한 0짜리 emitter가 나왔다).
-        // 진짜 토큰의 exp는 초 단위라(실측 nano=0) 이 창은 초 경계 직전 1ms 하나지만, 닫혀 있지 않다.
-        // 자르는 쪽과 재는 쪽의 단위를 맞추는 것이 요점이다.
-        //
-        // untilExpiry.toMillis()로 쓰지 않는다 — 아주 먼 exp에서 long을 넘겨
-        // ArithmeticException("long overflow")이 되고, 401이어야 할 자리가 500이 된다
-        // (Instant.MAX로 실측). Duration끼리 비교하면 그 자리가 없다.
-        if (untilExpiry.compareTo(MIN_LIFETIME) < 0) {
-            throw new TokenAlreadyExpiredException();
-        }
-
-        Duration timeout = untilExpiry.compareTo(properties.timeout()) < 0 ? untilExpiry : properties.timeout();
+        // 입구에서 한 번 거른다 — 명백히 만료된 토큰이 자물쇠를 잡으러 가지 않게 하는 빠른 실패다.
+        // 🔴 <b>이 값은 emitter에 안 걸린다.</b> 자물쇠 대기와 스냅샷 조회에 시간이 흐르므로
+        // 실제 시한은 openWithSnapshot이 자물쇠 <b>안에서</b> 다시 잰다(아래 timeoutFor 참고).
+        timeoutFor(jwt);
 
         // 🔴 스냅샷을 여기서 읽지 않고 <b>읽는 법</b>을 넘긴다. 값으로 읽으면 자물쇠 밖이 되고,
         // 「읽은 뒤 ~ 명부에 오르기 전」 창에 지나간 카드와 ended가 영구히 유실된다
@@ -133,7 +113,8 @@ public class JumpCardStreamController {
         // 조회 하나(약 1.4ms)를 더 내고 그 갈래를 닫는다.
         //
         // 상한 초과면 StreamLimitExceededException → 503.
-        SseEmitter emitter = registry.openWithSnapshot(streamId, jwt.getSubject(), timeout,
+        SseEmitter emitter = registry.openWithSnapshot(streamId, jwt.getSubject(),
+                () -> timeoutFor(jwt),
                 () -> new CardStreamRegistry.InitialSnapshot(
                         service.snapshotsOf(streamId),
                         broadcasts.findByStreamId(streamId)
@@ -145,5 +126,40 @@ public class JumpCardStreamController {
                 .header("X-Accel-Buffering", "no")
                 .header(HttpHeaders.CACHE_CONTROL, "no-cache")
                 .body(emitter);
+    }
+
+    /**
+     * 연결 수명 = min(설정값, 토큰 {@code exp}까지). 만료 시점에 닫히고 브라우저가 새 토큰으로
+     * 다시 붙는다. {@code exp}가 없는 토큰은 {@code JwtConfig}가 이미 401로 막았다
+     * ({@code setAllowEmptyExpiryClaim(false)}).
+     *
+     * <p><b>두 번 부른다 — 입구에서 한 번, 자물쇠 안에서 한 번.</b> 값이 아니라 이 메서드를
+     * {@code Supplier}로 넘기는 이유가 그것이다. 입구 것은 빠른 실패이고, emitter에 실제로
+     * 걸리는 것은 자물쇠 안의 두 번째다. <b>한 번만 재면 그 사이(자물쇠 대기 + 스냅샷 조회)에
+     * 만료된 토큰이 그대로 열린다</b> — PR #112 봇 지적 ④, 2026-08-23 재현: 자물쇠를 3초 쥐었더니
+     * 만료 <b>2,508ms 뒤에</b> 200으로 열렸고 연결이 {@code exp}를 <b>3,398ms</b> 넘겨 살았다.
+     *
+     * <p>남은 수명이 1ms 미만이면 열지 않는다. 디코더의 clock skew 허용치(기본 60초) 안쪽
+     * 토큰은 인증을 통과하는데, 그대로 열면 {@code SseEmitter}가 음수 시한을 받고 서블릿 규약상
+     * {@code timeout <= 0}은 「시한 없음」이라 연결이 영영 산다 — 만료된 토큰일수록 오래 사는
+     * 뒤집힌 결과가 된다(인가 2차 감사 실측). 하한을 두는 방식({@code max(untilExpiry, 최소값)})은
+     * 만료 토큰으로 연 연결을 살려 주므로 쓰지 않는다.
+     *
+     * <p>🔴 기준이 「0 이하」가 아니라 {@code toMillis()}다. emitter 팩토리가 {@code Duration}을
+     * long ms로 자르므로, {@code 0 < 남은수명 < 1ms}는 0도 음수도 아닌데 잘리면 0이 된다 —
+     * 같은 「시한 없음」이다(PR #111 봇 지적 ④, 2026-08-23 재현: 실제로 시한 0짜리 emitter가 나왔다).
+     * 진짜 토큰의 {@code exp}는 초 단위라(실측 nano=0) 이 창은 초 경계 직전 1ms 하나지만,
+     * 닫혀 있지 않다. 자르는 쪽과 재는 쪽의 단위를 맞추는 것이 요점이다.
+     *
+     * <p>{@code untilExpiry.toMillis()}로 쓰지 않는다 — 아주 먼 {@code exp}에서 long을 넘겨
+     * {@code ArithmeticException("long overflow")}이 되고, 401이어야 할 자리가 500이 된다
+     * ({@code Instant.MAX}로 실측). {@code Duration}끼리 비교하면 그 자리가 없다.
+     */
+    private Duration timeoutFor(Jwt jwt) {
+        Duration untilExpiry = Duration.between(Instant.now(), jwt.getExpiresAt());
+        if (untilExpiry.compareTo(MIN_LIFETIME) < 0) {
+            throw new TokenAlreadyExpiredException();
+        }
+        return untilExpiry.compareTo(properties.timeout()) < 0 ? untilExpiry : properties.timeout();
     }
 }

@@ -247,7 +247,7 @@ class CardStreamRegistryTest {
 
         List<JumpCardSnapshot> cards =
                 IntStream.rangeClosed(1, 5).mapToObj(i -> snapshot("s-1", i)).toList();
-        registry.openWithSnapshot("s-1", "u-1", Duration.ofMinutes(1),
+        registry.openWithSnapshot("s-1", "u-1", () -> Duration.ofMinutes(1),
                 () -> new CardStreamRegistry.InitialSnapshot(cards, false));
         ender[0].join(5_000);
 
