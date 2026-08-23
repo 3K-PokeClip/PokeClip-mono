@@ -40,6 +40,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li><b>부하 중</b>(load 148, 같은 기계에 {@code yes} 20개) — 전송 71~86ms · 밀림 32~49ms</li>
  *   <li><b>깨끗</b>(load 2.4~4.9) — 전송 32~114ms · 밀림 15~24ms
  *       (전송은 3회차 하나가 114ms로 튀어 부하 중 범위와 겹친다)</li>
+ *   <li><b>전수 실행 중</b>(같은 JVM에서 앞선 시험이 먼저 돈 뒤) — 전송 17~24ms · 밀림 5ms.
+ *       같은 기계·같은 부하라도 <b>단독이냐 전수냐</b>로 또 갈린다</li>
  * </ul>
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
