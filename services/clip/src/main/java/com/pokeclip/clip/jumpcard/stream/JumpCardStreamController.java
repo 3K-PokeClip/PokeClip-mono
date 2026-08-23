@@ -12,6 +12,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -41,6 +42,37 @@ public class JumpCardStreamController {
         this.properties = properties;
     }
 
+    /**
+     * <b>{@code @Transactional}은 커넥션 <u>획득</u>을 자물쇠 밖으로 빼려고 붙었다.</b>
+     *
+     * <p>스냅샷 조회는 {@code openWithSnapshot}의 자물쇠 <b>안</b>에서 돈다(그래야 「읽은 뒤 ~
+     * 명부에 오르기 전」 창이 안 열린다). 트랜잭션이 없으면 그 조회가 <b>자물쇠 안에서</b>
+     * 커넥션을 새로 얻어야 하고, 풀이 비어 있으면 자물쇠를 쥔 채 {@code connection-timeout}
+     * (운영 기본 <b>30초</b>)만큼 기다린다. 그동안 {@code publish}·{@code open}·
+     * {@code broadcastEnded}가 전부 막힌다 — 실측 {@code publish} <b>3142ms</b> ·
+     * {@code open} <b>3116ms</b>(풀 2·시한 3초).
+     *
+     * <p>🔴 <b>그것이 고갈을 스스로 만든다.</b> {@code afterCommit}은 커넥션 반납 <b>전</b>이라
+     * ({@code activeConnections=1}·{@code resourceBound=true} 실측) 막힌 {@code publish}가 커넥션을
+     * <b>쥔 채</b> 기다린다. 커넥션이 안 돌아오니 조회는 계속 굶는다. 외부 점유자 없이
+     * {@code publish} 둘만으로 풀이 마른 채 시한까지 유지되는 것을 재현했다.
+     *
+     * <p>트랜잭션을 여기서 열면 커넥션은 <b>위의 {@code findByStreamId}</b>에서 확보되고
+     * (자물쇠 밖이다) 자물쇠 안의 조회는 <b>그것을 재사용</b>한다.
+     *
+     * <p>🔴 <b>대가는 사라지지 않고 방향이 뒤집힌다.</b> 전에는 자물쇠를 쥔 채 커넥션을 기다렸고,
+     * 이제는 커넥션을 쥔 채 자물쇠를 기다린다. <b>어느 쪽이 나은지가 이 결정의 전부라 재 봤다</b> —
+     * 자물쇠 보유가 조회 한 번으로 끝나 기다림이 짧다: 같은 배치에서 발행 최악 막힘
+     * <b>743~2022ms → 0~1ms</b>(고친 뒤는 전수 5회 + 단독 1회, 전부 0~1ms.
+     * {@code OpenDoesNotBlockPublishTest}가 계속 잰다).
+     *
+     * <p><b>SSE가 오래 살아 있는 것과 무관하다.</b> 이 메서드는 {@code openWithSnapshot}이
+     * 돌아오면 끝나고 트랜잭션도 거기서 닫힌다 — 전송은 {@code CardStreamExecutor}의 전용
+     * 스레드가 한다. 커넥션을 쥐는 시간은 <b>연결 수명(최대 4시간)이 아니라 카드 0장 11ms ·
+     * 300장 26ms</b>다(스냅샷 조회~트랜잭션 완료 실측). 연결이 살아 있는 동안
+     * {@code activeConnections=0}인 것도 확인했다.
+     */
+    @Transactional(readOnly = true)
     @GetMapping(value = "/api/clip/broadcasts/{streamId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<SseEmitter> open(@PathVariable String streamId,
                                            @AuthenticationPrincipal Jwt jwt,
