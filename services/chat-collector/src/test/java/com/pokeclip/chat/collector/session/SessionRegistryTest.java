@@ -7,6 +7,7 @@ import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.status.CollectionState;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
@@ -27,6 +28,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * 스트리머 여럿을 동시에 수집하는가. <b>이 카드에서 검사 진위가 가장 위험한 자리다</b> —
@@ -601,6 +603,28 @@ class SessionRegistryTest extends IntegrationTestSupport {
      * 끝나 창을 못 잡고, 그때는 이 검사가 <b>고치기 전에도 초록</b>이다.
      * <p>문항 5: 누계 이관을 {@code close()} 뒤로 되돌리면 0으로 빨간불(확인함 — 프로브
      * {@code F1ClosedReceivedProbeTest}가 그 상태를 재현해 이 검사를 만들었다).
+     *
+     * <p>🔴 <b>이 검사가 드물게 빨간불일 수 있다. 그때 값은 반드시 0이고, 검사 문제가 아니라
+     * 코드에 실재하는 창이다 — 일부러 안 고쳤다.</b> {@code closeAll()}은 {@code sessions.remove}로
+     * 자리를 <b>먼저</b> 빼고 <b>다음 문장</b>에서 {@code detach}로 누계를 옮긴다. 그 두 문장
+     * 사이에서 총량은 그 세션 몫만큼 0으로 보이고, 아래가 {@code activeCount()==0}으로 창의
+     * 시작을 잡으므로 {@code remove} 직후 그 스레드가 선점되면 폴링이 창 안에 들어온다.
+     *
+     * <p><b>재현 방법(결정적)</b>: {@code closeAll()}의 {@code remove}와 {@code detach} 사이에
+     * {@code Thread.sleep(500)}을 넣으면 아래 「닫는 중에 판정 줄이 읽으면 이 값이 나간다」
+     * 단언이 {@code expected: 5L but was: 0L}로 떨어진다(POK-128 critic이 실제로 그렇게 재현했다). <b>부하로는 못 연다</b> — 스피너
+     * 20개(코어 10)를 띄우고 6회 돌려 6/6 초록이었다.
+     *
+     * <p><b>안 고치는 이유</b>: 운영 영향이 없고, 순서를 뒤집으면 더 나쁘다. 판정 줄은
+     * {@code closeAll()}을 부른 <b>같은 스레드</b>가 그 다음 줄에서 찍으므로 이 창을 지나갈 수
+     * 없다(다른 스레드가 하필 그 몇 인스트럭션에 읽으면 총량이 작게 나가지만, 그 창을
+     * 결정적으로 여는 장치는 못 만들었다). {@code detach}를 {@code remove} 앞에 두면 그 사이에
+     * 읽는 쪽이 같은 몫을 <b>두 번</b> 세어 총량이 커진다 — 지금 순서는 남는 오차가 「작게
+     * 보이는」 쪽이라 유실을 놓치지 않는 방향이다.
+     *
+     * <p><b>구현자가 처음에 「타이밍 의존 검사 문제」로 본 것은 절반만 맞았다</b> — 타이밍에
+     * 의존하는 것은 맞지만 검사가 잘못 잰 것이 아니라 <b>코드의 창을 정확히 잡은 것</b>이다.
+     * <b>0이 아닌 다른 값으로 깨지면 그때는 다른 결함이다.</b>
      */
     @Test
     void 닫는_중에도_받은_양이_총량에_남는다() throws Exception {
@@ -894,6 +918,170 @@ class SessionRegistryTest extends IntegrationTestSupport {
                 .as("자리는 남기고 소켓만 닫는 구현이 여기서 걸린다")
                 .isTrue();
         assertThat(registry.activeCount()).isEqualTo(1);
+    }
+
+    // 문항 5: retargetOrSkip의 STOPPED 가드를 지우면 open이 true(갈아끼움)를 돌려줘 빨간불 —
+    //         PR #98 2판 codex P1 「좁은 창, 재현 못 함」을 리스너를 붙들어 결정적으로 연다.
+    // 문항 4: open()==false만 보면 「자리 없음」과 구분이 안 된다 — 이름이 안 바뀌었는지·편지가 남는지(isStaleStart=false)도 본다.
+    // 문항 3: 리스너를 붙드는 스레드는 그 세션의 재연결 루프(가상 스레드)다. memoStarted가 풀린
+    //         시점에 그 스레드는 permanentStopListener.accept 안에 있고, 아래 단언은 그 동안 돈다.
+    @Test
+    void 포기_메모를_남기는_동안은_stopped로_남고_새_방송은_갈아끼우지_않는다() throws Exception {
+        givenRegistry();
+        java.util.concurrent.CountDownLatch memoStarted = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch memoRelease = new java.util.concurrent.CountDownLatch(1);
+        registry.onPermanentStop((streamId, reason) -> {
+            memoStarted.countDown();
+            try {
+                memoRelease.await(10, java.util.concurrent.TimeUnit.SECONDS);   // DB가 느린 동안을 흉내낸다
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        registry.open(key("s1", 1L, "chA"), "tokA");
+        awaitUntil(AWAIT, () -> behavior.isConnected("tokA"));
+        behavior.failSessionCreateFor("tokA", 401);
+        behavior.dropConnectionFor("tokA");
+        assertThat(memoStarted.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        try {
+            assertThat(stateOf("s1")).as("메모를 남기는 동안 등록부에 STOPPED로 남는다 — 창구가 stopped를 답하는 근거")
+                    .isEqualTo(CollectionStatus.State.STOPPED);
+            SessionKey next = key("s2", 1L, "chA");
+            assertThat(registry.open(next, "tokA2")).as("죽은 세션에 갈아끼우면 안 된다").isFalse();
+            assertThat(registry.currentStreamIdOf(1L)).as("이름이 바뀌지 않았다").isEqualTo("s1");
+            assertThat(registry.isStaleStart(1L, next.startedAt()))
+                    .as("편지는 낡은 것이 아니다 — RETRY_LATER로 남아 다음 회차에 온다").isFalse();
+        } finally {
+            memoRelease.countDown();
+        }
+        awaitUntil(AWAIT, () -> registry.activeCount() == 0);
+        assertThat(registry.open(key("s3", 1L, "chA"), "tokA3")).as("자리가 비면 새로 연다").isTrue();
+    }
+
+    /**
+     * <b>첫 수립이 영구 실패인 동안에도 창구가 {@code stopped}를 답해야 한다.</b>
+     *
+     * <p>같은 401을 <b>두 길</b>로 맞을 수 있는데 답이 갈렸다 — ⓐ 붙어 있다가 끊겨 재연결
+     * 발급이 거부되면 {@code StreamSession}이 {@code status.stopped(reason)}을 찍고 <b>나서</b>
+     * 알림으로 내려가지만, ⓑ 첫 수립에서 거부되면 그 자리가 {@code status}를 안 건드려
+     * {@code ESTABLISHING} 그대로였다. <b>둘 다 배너를 끄는 값이 아니어야 하는데
+     * {@code establishing}은 배너를 끈다</b>(PRD 응답 표) — 포기 알림을 「지우기 전」에 둔
+     * 결정이 지키려던 것이 ⓑ에서만 안 지켜졌다.
+     *
+     * <p>창의 폭은 메모 INSERT 한 번이라 평시 밀리초이고 DB가 반개방이면 최대 10초다
+     * ({@code socketTimeout}). 유실도 카운터 오류도 없어 <b>사소</b>로 뒀지만,
+     * <b>고쳐 놓고 검사를 안 붙이면 다음 사람이 되돌려도 초록이다</b> — 이 갈래를 지키는
+     * 검사가 이 파일에 하나도 없었다(봇 1판 S1 실측: 되돌려도 491/실패 0).
+     */
+    // 문항 1: 다중화가 주제가 아니다 — 한 세션의 <b>두 길</b>(ⓐ·ⓑ)이 같은 답을 주는지를 잰다.
+    //         세션을 둘 여는 것은 대조군을 세우기 위해서지 세션 수가 요점이 아니다.
+    // 문항 2: 「알림이 갔다」만 보면 status를 안 건드려도 참이다 — 리스너를 붙들어
+    //         <b>그 구간을 고정한 채</b> 등록부가 무엇을 답하는지 직접 읽는다.
+    // 문항 3: 리스너를 붙드는 스레드는 open()을 부른 스레드 자신이다(첫 수립의 catch는
+    //         재연결 루프가 아니라 open의 호출 스레드 위에서 돈다). 그래서 open을 별도
+    //         스레드에 태우고 본 스레드가 그 동안 단언한다.
+    // 문항 4: state==STOPPED만 보면 <b>ⓐ에서만 맞는</b> 구현도 통과한다 — 같은 검사에서
+    //         ⓑ를 재고, 사유가 실렸는지·창구가 needsRelink를 켜는지까지 본다.
+    // 문항 5: SessionRegistry.open의 catch에서 status.stopped(e.reason()) 한 줄을 지우면
+    //         ESTABLISHING이 잡혀 빨간불(확인함).
+    @Test
+    void 첫_수립이_영구_실패한_그_자리에서도_stopped를_답한다() throws Exception {
+        givenRegistry();
+        java.util.concurrent.CountDownLatch memoStarted = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch memoRelease = new java.util.concurrent.CountDownLatch(1);
+        List<StopReason> seen = new java.util.concurrent.CopyOnWriteArrayList<>();
+        registry.onPermanentStop((streamId, reason) -> {
+            seen.add(reason);
+            memoStarted.countDown();
+            try {
+                memoRelease.await(10, java.util.concurrent.TimeUnit.SECONDS);   // 메모가 저장되는 동안
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        // 첫 수립의 발급부터 401 — 소켓이 한 번도 안 선다. ⓐ와 갈리는 지점이 이것이다.
+        behavior.failSessionCreateFor("tokB", 401);
+        Thread opener = new Thread(() -> registry.open(key("s1", 9L, "chB"), "tokB"), "probe-opener");
+        opener.setDaemon(true);
+        opener.start();
+        try {
+            assertThat(memoStarted.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    .as("알림이 안 왔으면 아래 단언은 아무것도 안 잰다").isTrue();
+            assertThat(seen).as("영구 사유로 왔어야 한다").containsExactly(StopReason.SESSION_AUTH_REJECTED);
+            assertThat(behavior.isConnected("tokB")).as("ⓑ는 소켓이 선 적이 없다 — ⓐ와 갈리는 지점").isFalse();
+
+            CollectionStatus.Snapshot now = registry.statusOf("s1");
+            assertThat(now).as("자리는 아직 남아 있다 — 알림 안에서 붙들려 있다").isNotNull();
+            assertThat(now.state())
+                    .as("establishing은 배너를 끄는 값이다 — 포기한 방송이 「붙는 중」으로 보인다")
+                    .isEqualTo(CollectionStatus.State.STOPPED);
+            assertThat(CollectionState.needsRelink(now.reason()))
+                    .as("사유를 안 실으면 창구가 needsRelink를 못 켠다")
+                    .isTrue();
+        } finally {
+            memoRelease.countDown();
+        }
+        opener.join(10_000);
+        awaitUntil(AWAIT, () -> registry.activeCount() == 0);
+        assertThat(registry.activeCount()).as("붙들림이 풀리면 자리가 비어야 한다").isZero();
+    }
+
+    // <b>리스너 예외 방어의 안쪽 겹을 재는 유일한 검사다</b>(critic A1). 방어가 두 겹인데 —
+    // 바깥 = StoppedStreamRecorder.record의 catch · 안쪽 = SessionRegistry.notifyPermanentStop의 catch —
+    // 안쪽만 지워도 <b>기존 검사 43개가 전부 초록이었다</b>(감사 실측 green 43 / red 0).
+    // 지우면 알림에서 튄 stopOne이 sessions.remove·closeEntry를 못 돌아 자리가 영구히 남고(active=1),
+    // 이 카드가 넣은 STOPPED 가드가 그 자리를 보고 갈아끼움을 거절하므로
+    // <b>그 스트리머는 새 방송을 영영 못 연다</b>(가드 전에는 갈아끼워졌다).
+    // 문항 1: 다중화가 주제가 아니다 — 두 길(ⓐ·ⓑ)을 재려고 세션을 둘 여는 것이지 세션 수가 요점이 아니다.
+    // 문항 2: activeCount()==0은 <b>애초에 안 열었어도</b> 참이다 — 알림이 두 길 다 실제로 갔는지를
+    //         calls로, 소켓이 섰다 내려갔는지를 connectionCount·closedSessionCount로 같이 본다.
+    // 문항 4: closedSessionCount()는 ⓐ를 <b>가르지 못한다</b> — dropConnectionFor가 서버 쪽 소켓을 닫아
+    //         그 자체로 1이 오른다(FakeChzzkBehavior.forget 확인). 「소켓이 섰다 내려갔다」의 양성 대조로만
+    //         쓰고, 안쪽 겹을 실제로 가르는 것은 ⓐ의 activeCount()==0과 ⓑ의 「open이 안 던진다」다.
+    // 문항 5: 등록부 notifyPermanentStop의 catch를 rethrow로 바꾸면 ⓐ는 자리가 안 비어,
+    //         ⓑ는 open()이 예외로 튀어 빨간불(확인함).
+    @Test
+    void 던지는_리스너를_걸어도_두_길_다_자리가_비고_open은_안_던진다() throws Exception {
+        givenRegistry();
+        List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
+        registry.onPermanentStop((streamId, reason) -> {
+            calls.add(streamId);
+            // 메모 저장이 던지는 상황이다. 바깥 겹(recorder)이 없는 리스너를 일부러 건다 —
+            // 있으면 안쪽 겹을 지워도 아무 일이 안 일어나 이 검사가 다시 아무것도 안 잰다.
+            throw new IllegalStateException("리스너가 던진다");
+        });
+
+        // ⓐ 붙어 있다가 끊긴 뒤 재연결 발급이 401 — 알림은 그 세션의 재연결 루프 위 stopOne에서 간다.
+        assertThat(registry.open(key("s1", 1L, "chA"), "tokA")).isTrue();
+        awaitUntil(AWAIT, () -> behavior.isConnected("tokA"));
+        behavior.failSessionCreateFor("tokA", 401);
+        behavior.dropConnectionFor("tokA");
+
+        awaitUntil(AWAIT, () -> calls.contains("s1"));
+        assertThat(calls).as("알림이 안 갔으면 아래 activeCount 단언은 공짜다").contains("s1");
+        awaitUntil(AWAIT, () -> registry.activeCount() == 0);
+        assertThat(registry.activeCount())
+                .as("리스너가 던져 stopOne이 튀면 자리가 남고 그 스트리머는 새 방송을 영영 못 연다")
+                .isZero();
+        assertThat(behavior.connectionCount()).as("ⓐ는 소켓이 한 번 섰다").isGreaterThanOrEqualTo(1);
+        assertThat(behavior.closedSessionCount()).as("그 소켓이 내려갔다").isGreaterThanOrEqualTo(1);
+
+        // ⓑ 첫 수립에서 발급이 401 — stopOne이 아니라 open()의 catch에서 간다. 소켓은 선 적이 없다.
+        int connectionsAfterA = behavior.connectionCount();
+        behavior.failSessionCreateFor("tokB", 401);
+        java.util.concurrent.atomic.AtomicBoolean openedB =
+                new java.util.concurrent.atomic.AtomicBoolean(true);
+        Throwable thrown = catchThrowable(() -> openedB.set(registry.open(key("s2", 2L, "chB"), "tokB")));
+
+        assertThat(thrown)
+                .as("이 길의 알림은 편지 폴링 스레드 위에서 동기로 돈다 — 튀면 그 회차가 통째로 중단되고 편지가 안 지워진다")
+                .isNull();
+        assertThat(openedB).as("수립에 실패했으니 false다").isFalse();
+        assertThat(calls).contains("s2");
+        assertThat(registry.activeCount()).isZero();
+        assertThat(behavior.connectionCount())
+                .as("ⓑ는 소켓이 선 적이 없다 — 발급에서 끝났다")
+                .isEqualTo(connectionsAfterA);
     }
 
     /**

@@ -54,5 +54,25 @@ public enum StopReason {
      * 다시 붙어도 서버가 구독을 또 취소한다.
      */
     REVOKED,
-    TRANSPORT_CLOSED
+    TRANSPORT_CLOSED,
+
+    /**
+     * <b>치지직 연동이 없거나 끊겨 세션을 열어 보지도 못했다.</b> 위 값들과 달리 이것은
+     * <b>세션 단계가 아니라 그 앞</b>이다 — auth가 열쇠를 영구히 거절해 발급 REST를 한 번도
+     * 안 쳤다. <b>재시도해도 영원히 안 풀린다.</b>
+     *
+     * <p><b>auth 거절 사유 넷을 여기 뭉친다</b> — {@code UNLINKED}(스트리머가 해제) ·
+     * {@code BROKEN}(치지직이 갱신을 거부, 재동의해야 풀린다) · {@code NOT_LINKED}(연동한 적 없음) ·
+     * 계약 위반({@code valid:true}인데 채널·토큰·만료 중 하나가 빔). 스트리머 관점에서 넷 다
+     * 「수집이 안 되고 치지직 연동을 손봐야 한다」로 같고, 그것이 창구의 {@code needsRelink}가
+     * 뜻하는 바다. 가르려면 {@code LinkResolution}이 사유를 들고 와야 하는데({@code boolean
+     * retryable} 하나뿐이다) 그것은 auth 계약(POK-93)을 건드리는 일이라 이 카드의 범위를 넘는다.
+     * 계약 위반은 health 카운터({@code unreadableStreamerIds})가 이미 따로 드러낸다.
+     *
+     * <p><b>{@code NOT_LINKED}까지 넣어 「연동한 적 없는 정상 트래픽」에도 배너가 뜨는 것은
+     * 감수한 것이다</b> — 안 뜨면 그 스트리머는 왜 채팅이 안 걷히는지 영영 모른다. 배너 문구가
+     * 「다시」를 전제하면 그 사람에겐 어색해진다는 것을 {@code services/README.md}
+     * 「2번이 알아야 할 것」에 적어 뒀다.
+     */
+    LINK_UNAVAILABLE
 }

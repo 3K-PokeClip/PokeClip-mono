@@ -5,6 +5,8 @@ import com.pokeclip.chat.collector.CollectorApplication;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkServer;
 import com.pokeclip.chat.collector.session.SessionRegistry;
+import com.pokeclip.chat.collector.status.ChatCollectionStatus;
+import com.pokeclip.chat.collector.status.ChatCollectionStatusResolver;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -96,6 +98,7 @@ class BroadcastSessionWiringTest extends IntegrationTestSupport {
     @Autowired FakeQueue queue;
     @Autowired ChzzkProperties chzzk;
     @Autowired JdbcTemplate jdbc;
+    @Autowired ChatCollectionStatusResolver status;
 
     @DynamicPropertySource
     static void wiring(DynamicPropertyRegistry registry) {
@@ -289,6 +292,52 @@ class BroadcastSessionWiringTest extends IntegrationTestSupport {
         assertThat(registry.activeCount()).isZero();
         assertThat(AUTH.callCount()).as("아무것도 안 물어봤으면 위 단언들이 전부 공짜로 참이다")
                 .isGreaterThanOrEqualTo(2);
+    }
+
+    /**
+     * <b>연동이 영구히 거절된 방송도 「포기」로 남는다.</b> 편지를 지우면 되돌아올 트리거가
+     * 없으므로, 지우기 <b>전에</b> 메모를 남기지 않으면 그 방송은 영원히 {@code unknown}이다 —
+     * 배너를 끄는 값이라 스트리머는 왜 채팅이 안 걷히는지 화면에서 못 본다.
+     *
+     * <p><b>사유 넷을 안 가른다</b>({@code UNLINKED}·{@code BROKEN}·{@code NOT_LINKED}·계약 위반).
+     * 스트리머 관점에서 넷 다 「수집이 안 되고 치지직 연동을 손봐야 한다」로 같고, 그것이
+     * {@code needsRelink}의 뜻이다. 가르려면 {@code LinkResolution}이 사유를 들고 와야 하는데
+     * 그것은 auth 계약(POK-93)을 건드리는 일이라 이 카드의 범위를 넘는다. 계약 위반은
+     * health 카운터({@code unreadableStreamerIds})가 따로 드러낸다.
+     */
+    // 문항 1: 세션이 <b>하나도 안 열리는</b> 갈래다 — 다중화가 주제가 아니라 「안 열린 것을 남기는가」다.
+    // 문항 2: 「편지가 지워졌다」는 <b>고치기 전에도 참</b>이다(그것이 이 결함의 모양이다) —
+    //         지워진 뒤 창구가 무엇을 답하는지를 같이 봐야 이 갈래가 무언가를 잰다.
+    // 문항 4: state=="stopped"만 보면 <b>메모 없이 등록부에 죽은 자리가 남은</b> 구현도 통과한다 —
+    //         등록부가 비었는지·메모가 실제로 한 행 들어갔는지를 같이 본다.
+    // 문항 5: LinkedSessionStarter의 recorder 호출을 지우면 state=unknown·needsRelink=false로
+    //         빨간불(확인함 — 아래 결함 주입).
+    @Test
+    void 연동이_영구히_거절되면_포기로_남아_창구가_stopped를_답한다() throws Exception {
+        AUTH.refuses(42L, "UNLINKED");
+
+        String letter = queue.deliver(started("evt-1", "s1", 42L, 1));
+
+        awaitUntil(AWAIT, () -> queue.deleted().contains(letter));
+        assertThat(queue.deleted()).as("편지가 안 지워졌으면 이 갈래는 아직 시작도 안 했다").contains(letter);
+        assertThat(AUTH.callCount()).as("auth를 안 물어봤으면 아래 단언이 전부 공짜다").isGreaterThanOrEqualTo(1);
+        assertThat(registry.activeCount()).as("거절당했는데 자리가 남으면 다른 결함이다").isZero();
+
+        awaitUntil(AWAIT, () -> jdbc.queryForObject(
+                "SELECT count(*) FROM chat_ended_streams WHERE stream_id = 's1'", Integer.class) == 1);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM chat_ended_streams WHERE stream_id = 's1'", Integer.class))
+                .as("메모가 0행이면 편지가 지워진 뒤 되돌아올 트리거가 없어 영구 unknown이다")
+                .isEqualTo(1);
+
+        ChatCollectionStatus answer = status.resolve("s1");
+        assertThat(answer.state())
+                .as("창구가 unknown을 답하면 배너가 꺼진다 — 가장 나쁜 상태가 가장 안전한 답으로 보인다")
+                .isEqualTo("stopped");
+        assertThat(answer.needsRelink())
+                .as("치지직 연동을 다시 해야 풀리는 갈래다 — false면 스트리머가 할 일을 모른다")
+                .isTrue();
+        assertThat(answer.since()).as("포기 시각은 메모의 created_at에서 온다").isNotNull();
     }
 
     /**

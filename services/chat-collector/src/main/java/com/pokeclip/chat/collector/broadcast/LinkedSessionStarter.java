@@ -1,9 +1,12 @@
 package com.pokeclip.chat.collector.broadcast;
 
+import com.pokeclip.chat.collector.StopReason;
 import com.pokeclip.chat.collector.link.ChzzkLinkClient;
 import com.pokeclip.chat.collector.link.LinkResolution;
 import com.pokeclip.chat.collector.session.SessionKey;
 import com.pokeclip.chat.collector.session.SessionRegistry;
+
+import java.util.function.BiConsumer;
 
 /**
  * 편지 하나를 <b>열쇠 조회 → 세션 열기</b>로 잇는다. 이 카드에서 부품이 하나로 물리는 자리다.
@@ -16,10 +19,20 @@ public class LinkedSessionStarter implements BroadcastSessions {
 
     private final ChzzkLinkClient link;
     private final SessionRegistry registry;
+    /**
+     * 포기한 방송을 메모에 남기는 손잡이({@code StoppedStreamRecorder::record}).
+     *
+     * <p><b>등록부의 {@code onPermanentStop}을 타지 않고 직접 받는다.</b> 그 알림은 세션이
+     * 선 뒤에만 울리는데, 여기서 남겨야 하는 것은 <b>세션이 서 보지도 못한</b> 방송이다.
+     * 등록부에 그 갈래를 태우려면 열지도 않은 방송을 등록부가 알아야 해서 층이 어긋난다.
+     */
+    private final BiConsumer<String, StopReason> recorder;
 
-    public LinkedSessionStarter(ChzzkLinkClient link, SessionRegistry registry) {
+    public LinkedSessionStarter(ChzzkLinkClient link, SessionRegistry registry,
+                                BiConsumer<String, StopReason> recorder) {
         this.link = link;
         this.registry = registry;
+        this.recorder = recorder;
     }
 
     /**
@@ -54,7 +67,22 @@ public class LinkedSessionStarter implements BroadcastSessions {
         if (!resolution.usable()) {
             // 사유를 여기서 다시 해석하지 않는다 — 어떤 사유가 영구인지는 auth 계약을 아는
             // ChzzkLinkClient가 이미 판정했다. 두 곳에서 보면 한쪽만 낡는다.
-            return resolution.retryable() ? ProcessResult.RETRY_LATER : ProcessResult.PROCESSED;
+            if (resolution.retryable()) {
+                return ProcessResult.RETRY_LATER;
+            }
+            // <b>지우기 전에 남긴다.</b> 편지가 이 방송의 유일한 트리거라, 메모 없이 지우면
+            // 창구가 그 방송에 <b>영원히</b> unknown을 답한다 — 배너를 끄는 값이라
+            // 「가장 나쁜 상태가 가장 안전한 답으로 보이는」 틈이고, 여기서는 그 틈이
+            // 찰나가 아니라 영구다(되돌아올 편지가 없다). PRD 결정 95가 포기 알림을
+            // 「지우기 전」에 둔 이유가 그것이다.
+            //
+            // <b>사유 넷을 안 가른다</b> — LINK_UNAVAILABLE의 주석에 근거를 적었다.
+            //
+            // 던지지 않는다: recorder(=StoppedStreamRecorder.record)가 Throwable까지 삼키고
+            // 경고만 남긴다. DB가 죽어 메모를 못 남기면 그 방송은 여전히 unknown이다 —
+            // 그것은 이 갈래가 아니라 그 클래스의 알려진 한계다.
+            recorder.accept(envelope.streamId(), StopReason.LINK_UNAVAILABLE);
+            return ProcessResult.PROCESSED;
         }
         SessionKey key = new SessionKey(envelope.streamId(), streamer.value(),
                 resolution.channelId(), envelope.occurredAt());

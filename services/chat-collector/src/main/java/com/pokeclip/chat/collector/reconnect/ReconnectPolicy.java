@@ -37,6 +37,13 @@ public final class ReconnectPolicy {
             case SESSION_AUTH_REJECTED, SUBSCRIBE_REJECTED, REVOKED -> false;
             // 우리가 잘못 쓴 것이다. 재연결하면 버그가 자동 복구에 덮인다
             case SEND_MISUSE -> false;
+            // 치지직 연동이 없거나 끊겼다. 스트리머가 다시 연동해야 풀리는 것이라
+            // 두들겨서 낫지 않는다. <b>지금 이 값이 세션 경로로 들어오는 길은 없다</b> —
+            // 만드는 자리가 LinkedSessionStarter 하나뿐이고 거기서는 세션을 아예 안 연다
+            // (전수 grep으로 확인). 그래도 여기 적는 이유는 기본값이 "재시도한다"라
+            // 나중에 누가 이 사유를 세션 경로에 실으면 그 방송이 백오프 상한마다 영원히
+            // auth를 두들기는데 <b>그때 아무 검사도 안 깨지기</b> 때문이다.
+            case LINK_UNAVAILABLE -> false;
             default -> true;
         };
     }
