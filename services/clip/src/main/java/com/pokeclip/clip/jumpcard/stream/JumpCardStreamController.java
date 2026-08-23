@@ -57,7 +57,7 @@ public class JumpCardStreamController {
      * <b>쥔 채</b> 기다린다. 커넥션이 안 돌아오니 조회는 계속 굶는다. 외부 점유자 없이
      * {@code publish} 둘만으로 풀이 마른 채 시한까지 유지되는 것을 재현했다.
      *
-     * <p>트랜잭션을 여기서 열면 커넥션은 <b>위의 {@code findByStreamId}</b>에서 확보되고
+     * <p>트랜잭션을 여기서 열면 커넥션은 <b>위의 {@code existsByStreamId}</b>에서 확보되고
      * (자물쇠 밖이다) 자물쇠 안의 조회는 <b>그것을 재사용</b>한다.
      *
      * <p>🔴 <b>대가는 사라지지 않고 방향이 뒤집힌다.</b> 전에는 자물쇠를 쥔 채 커넥션을 기다렸고,
@@ -80,7 +80,12 @@ public class JumpCardStreamController {
                                            @RequestParam(value = "lastEventId", required = false) String lastFromQuery) {
         // 없는 방송이면 연결을 열기 전에 404다. 여기서 <b>상태를 들고 가지 않는다</b> —
         // 이 값은 임계구역 밖이라 낡는다. 상태는 아래 Supplier가 락 안에서 다시 읽는다.
-        if (broadcasts.findByStreamId(streamId).isEmpty()) {
+        //
+        // 🔴 findByStreamId가 아니라 existsByStreamId다. 되돌리면 아래 재조회가 죽는다 —
+        // 엔티티를 여기서 영속성 컨텍스트에 올리면, 같은 트랜잭션인 그 조회가 JPQL을 던지고도
+        // 1차 캐시의 낡은 인스턴스를 받는다(2026-08-23 실측: 창에서 끝난 방송이 LIVE로 보였다).
+        // 여기 필요한 것은 「있느냐」뿐이라 엔티티가 필요 없다.
+        if (!broadcasts.existsByStreamId(streamId)) {
             throw new BroadcastNotFoundException(streamId);
         }
 
