@@ -142,6 +142,13 @@ class TokenExpiryBoundaryTest extends IntegrationTestSupport {
      *
      * <p>자물쇠를 밖에서 쥐는 것은 {@code publish}·{@code broadcastEnded}가 쓰는 모니터와
      * 같은 것을 잡는 것이다({@code synchronized} 인스턴스 메서드의 모니터는 인스턴스 자신이다).
+     *
+     * <p>🔴 <b>그래서 이 시험은 registry가 {@code synchronized}를 쓴다는 데 의존한다.</b>
+     * 자물쇠를 {@code ReentrantLock}으로 바꾸면 여기가 <b>다른 것을 잡게 되어 지연을 못 만들고
+     * 조용히 헛통과한다</b> — 바꾸는 사람은 이 시험을 같이 고쳐야 한다
+     * ({@code PublishOrderTest}도 같은 의존이 있다. 저장소에서 그 둘뿐이다).
+     * 검증 장치가 대상과 어긋나면 아무것도 안 재고도 초록이 된다 — 이 판에서 {@code SseReader}가
+     * 관대해 {@code ended} 시험 여섯 개가 헛통과하던 것과 같은 모양이다.
      * 실제 운영에서 이 대기를 만드는 것은 남의 {@code openWithSnapshot}이 자물쇠 안에서 도는
      * DB 조회(5.9~22.4ms 실측)와 {@code publish}·{@code broadcastEnded}다.
      */

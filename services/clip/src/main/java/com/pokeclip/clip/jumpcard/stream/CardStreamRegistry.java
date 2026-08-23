@@ -14,8 +14,11 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -44,6 +47,51 @@ public class CardStreamRegistry implements EndedListener {
     }
 
     private final Map<SseEmitter, Conn> conns = new ConcurrentHashMap<>();
+
+    /**
+     * 방송별 · <b>카드별</b> 마지막 발행 순번. {@link #publish}가 이보다 낮거나 같은
+     * {@code eventSeq}를 버리는 데 쓴다.
+     *
+     * <p>🔴 <b>카드별이어야 한다.</b> {@code jump_card_event_seq}는 방송별이 아니라
+     * <b>전역 시퀀스</b>다(V202). 연결이나 방송 단위로 워터마크 하나만 두면 <b>다른 카드</b>의
+     * 변경이 그 값을 올려서, 늦게 도착한 카드의 갱신을 「이미 더 큰 번호가 갔다」는 이유로
+     * <b>영영 버린다</b> — 그 카드가 화면에 낡은 채로 굳는다.
+     *
+     * <p>바깥 맵을 방송으로 가르는 이유는 <b>지울 자리를 만들기 위해서다</b>. 카드별 맵만 두면
+     * 무엇을 버려도 되는지 알 수 없어 프로세스 수명 동안 자란다.
+     *
+     * <p><b>평범한 {@code HashMap}이다.</b> 만지는 곳이 {@code publish}·{@code broadcastEnded}·
+     * {@link #sweepIdleStreams} 셋뿐이고 <b>전부 같은 자물쇠 안</b>이라 동시 접근이 없다.
+     * <b>연결 정리 콜백({@code conns.remove})은 자물쇠 밖에서 도니 여기를 만지면 안 된다.</b>
+     *
+     * <p><b>수명은 「그 방송에 연결이 살아 있는 동안」이다.</b> 이 표가 막는 것은 <b>열려 있는
+     * 연결</b>에 낡은 값이 나가는 것이고, {@link #publish}는 {@code streamId}가 같은 연결에만
+     * 보낸다. 연결이 하나도 없는 방송의 항목은 그 순간 아무것도 지키지 않으므로
+     * {@link #sweepIdleStreams}가 하트비트마다 버린다.
+     *
+     * <p>🔴 <b>{@link #broadcastEnded}에만 맡길 수 없다.</b> 그 자리는 SQS 생명주기 이벤트로만
+     * 불리는데 {@code BROADCAST_INTAKE_ENABLED}의 <b>기본값이 {@code false}</b>다. 통로가 꺼진
+     * 배포에서는 <b>한 번도 안 불려</b> 모든 방송·모든 카드의 항목이 프로세스 수명 동안 쌓인다 —
+     * 설계 전제(동시 방송 100 × 카드 300)면 하루 3만 항목이다. 전에 이 자리에 「항목 몇
+     * 개짜리라 두고 본다」고 적혀 있었는데, 그 근거가 성립하지 않는다.
+     *
+     * <p><b>버린 뒤 새 연결이 붙어도 되는 근거</b>: 새 연결은 {@link #openWithSnapshot}이
+     * <b>같은 자물쇠 안에서</b> 읽은 DB 스냅샷으로 시작하므로, 명부에 오르는 순간 그 방송 카드의
+     * 커밋된 상태를 전부 들고 있다. 표가 비어 있어도 뒤로 갈 자리가 없다.
+     *
+     * <p><b>남는 창 하나 — 재현하지 않았다.</b> {@code publish}는 트랜잭션 <b>안</b>에서 읽은
+     * 스냅샷을 {@code afterCommit}에서 낸다({@code JumpCardService.publishAfterCommit}). 그래서
+     * 「커밋은 됐는데 {@code afterCommit}이 아직 안 돈」 발행만이 새 연결의 스냅샷보다 낡을 수
+     * 있다. 열리려면 그 창 안에 <b>같은 카드의 더 큰 순번이 이미 커밋되고 · 그 방송 연결이 전부
+     * 끊기고 · 쓸기가 돌고 · 새 연결이 스냅샷까지 읽어야</b> 한다.
+     *
+     * <p>🔴 <b>새 연결의 스냅샷으로 표를 채워 그 창을 막으려 하지 마라 — 대칭인 창이 열린다.</b>
+     * 표는 방송별로 <b>공유</b>인데 스냅샷은 <b>연결별</b>이다. 먼저 붙어 있던 연결이 아직 못 본
+     * 순번을 새 연결의 스냅샷이 채우면 뒤이은 {@code publish}가 「이미 보냈다」로 버려져
+     * <b>먼저 붙은 연결이 그 갱신을 영영 못 본다</b>. {@code putIfAbsent}로 해도 같다 —
+     * 그 카드가 아직 표에 없는 때가 정확히 그 경우다.
+     */
+    private final Map<String, Map<Long, Long>> lastPublishedSeq = new HashMap<>();
     private final AtomicLong seq = new AtomicLong();
     private final ScheduledExecutorService heartbeat =
             Executors.newSingleThreadScheduledExecutor(r -> {
@@ -228,6 +276,9 @@ public class CardStreamRegistry implements EndedListener {
      * 겹치면 갓 붙은 연결에 새 값이 옛 스냅샷보다 먼저 간다.
      */
     public synchronized void publish(JumpCardSnapshot card) {
+        if (isStale(card)) {
+            return;
+        }
         for (Conn conn : conns.values()) {
             // 반환값을 안 본다 — 여기서 버려진 것은 <b>재연결이 전체 스냅샷으로 메운다</b>.
             // 종료 알림만 메울 것이 없어 자리를 회수한다(broadcastEnded).
@@ -235,6 +286,37 @@ public class CardStreamRegistry implements EndedListener {
                 executor.submit(conn.stripe(), conn.emitter(), () -> conn.emitter().send(cardEvent(card)));
             }
         }
+    }
+
+    /**
+     * <b>이 카드에 대해 이미 더 크거나 같은 순번을 보냈는가.</b> 그렇다면 지금 것은 낡았다.
+     *
+     * <p>순서를 바로잡는 것이 아니라 <b>낡은 것을 안 보내는 것</b>이 처방인 이유:
+     * {@code publish}의 자물쇠를 공정 락으로 바꿔도 그것이 보존하는 것은 「자물쇠에 줄 선 순서」이고,
+     * <b>커밋 순서와 {@code afterCommit} 도달 순서는 애초에 별개다</b>(각자 다른 요청 스레드에서
+     * 돈다). 줄에 서는 순서가 이미 뒤집혀 있으면 공정 락도 낡은 값을 먼저 보낸다.
+     *
+     * <p>재현(2026-08-23, PR #112 봇 지적 ③): 대기 순서를 N → N+1로 강제하면
+     * <b>100회 시도 100회</b> 뒤집혔고, 마지막에 적용되는 것이 낡은 쪽이라
+     * <b>놓은 카드가 집힌 것으로 남았다.</b>
+     *
+     * <p><b>같은 순번도 버린다</b>({@code <=}). 같은 {@code eventSeq}면 내용도 같으므로
+     * 다시 보내 봐야 화면이 헛돌 뿐이다 — {@code toggleHidden}이 「안 바뀌었으면 발행 안 함」으로
+     * 막는 것과 같은 이유다.
+     *
+     * <p><b>중간 이벤트가 빠질 수 있다.</b> 낡은 것을 버리므로 화면은 N+1만 받고 N을 못 본다.
+     * 무해하다 — 카드는 <b>상태</b>이지 사건의 나열이 아니고, 최신이 맞으면 화면이 맞다.
+     */
+    private boolean isStale(JumpCardSnapshot card) {
+        Map<Long, Long> seqs = lastPublishedSeq.computeIfAbsent(card.streamId(), key -> new HashMap<>());
+        Long previous = seqs.get(card.id());
+        if (previous != null && card.eventSeq() <= previous) {
+            log.info("jumpcard.stream.stale_publish_skipped streamId={} cardId={} eventSeq={} lastSeq={}",
+                    card.streamId(), card.id(), card.eventSeq(), previous);
+            return true;
+        }
+        seqs.put(card.id(), card.eventSeq());
+        return false;
     }
 
     /**
@@ -272,6 +354,11 @@ public class CardStreamRegistry implements EndedListener {
                 }
             }
         }
+        // 더 올 카드가 없으므로 순번 표도 여기서 버린다 — 기다릴 필요가 없어 즉시 치운다.
+        // 🔴 <b>이 자리에만 맡기지 않는다.</b> 여기는 SQS 생명주기 이벤트로만 불리는데
+        // BROADCAST_INTAKE_ENABLED 기본값이 false라 통로가 꺼진 배포에서는 한 번도 안 불린다.
+        // 그때 실제로 치우는 것은 sweepIdleStreams다(필드 주석).
+        lastPublishedSeq.remove(streamId);
     }
 
     /**
@@ -316,6 +403,13 @@ public class CardStreamRegistry implements EndedListener {
                 executor.submit(conn.stripe(), conn.emitter(),
                         () -> conn.emitter().send(SseEmitter.event().comment("ping")));
             }
+            // 하트비트가 이 클래스의 <b>유일한 주기 훅</b>이라 순번 표 청소를 여기 얹는다.
+            // 🔴 <b>전송보다 뒤다.</b> 앞에 두면 이 메서드가 <b>자물쇠를 기다리게</b> 되어
+            // ping이 그만큼 밀린다 — {@code openWithSnapshot}이 DB 조회를 자물쇠 안에서 한다
+            // (5.9~22.4ms 실측, DB가 늘어지면 더). 앞단 프록시가 조용한 연결을 끊지 않게 하는
+            // 것이 이 메서드의 존재 이유라 그쪽을 먼저 보낸다. 대신 위에서 던지면 이번 회차의
+            // 청소를 건너뛰는데, 다음 주기가 다시 오므로 새는 것이 아니라 늦는 것이다.
+            sweepIdleStreams();
         } catch (Throwable t) {
             log.warn("jumpcard.stream.ping_failed connections={} causeType={}",
                     conns.size(), t.getClass().getSimpleName());
@@ -324,6 +418,38 @@ public class CardStreamRegistry implements EndedListener {
 
     public int connectionCount() {
         return conns.size();
+    }
+
+    /**
+     * <b>연결이 하나도 없는 방송의 순번 표를 버린다.</b> {@link #ping}이 주기마다 부른다.
+     *
+     * <p>왜 여기냐 — 표를 버려도 되는 순간은 「그 방송의 마지막 연결이 사라진 때」인데,
+     * 그 순간을 아는 자리({@code conns.remove} 정리 콜백)는 서블릿 컨테이너가
+     * <b>자물쇠 밖에서</b> 부른다. {@code lastPublishedSeq}가 평범한 {@code HashMap}으로
+     * 버틸 수 있는 근거가 「자물쇠 안에서만 만진다」라 거기서 만지면 그 근거가 무너진다.
+     * 그래서 <b>이미 자물쇠 규율을 지키는 주기 작업이 늦게 치운다.</b>
+     *
+     * <p><b>대가는 최대 한 주기(기본 20초)의 지연이다.</b> 그 지연이 이득이기도 하다 —
+     * 그 안에 재연결하면 표를 그대로 물려받아 필드 주석의 「남는 창」조차 안 열린다.
+     *
+     * <p>{@code conns}를 매번 훑는다. 상한이 전체 500이라 한 번에 500개짜리 순회 하나이고,
+     * 20초에 한 번이다. 방송별 연결 수를 따로 세어 두면 그 수를 갱신하는 자리가
+     * {@code open}·정리 콜백 둘로 갈리는데 <b>콜백이 자물쇠 밖</b>이라 같은 문제로 돌아온다.
+     */
+    synchronized void sweepIdleStreams() {
+        if (lastPublishedSeq.isEmpty()) {
+            return;
+        }
+        Set<String> live = new HashSet<>();
+        for (Conn conn : conns.values()) {
+            live.add(conn.streamId());
+        }
+        lastPublishedSeq.keySet().retainAll(live);
+    }
+
+    /** 순번 표가 들고 있는 방송 수. <b>새는지 재는 검사만</b> 쓴다. */
+    synchronized int trackedStreamCount() {
+        return lastPublishedSeq.size();
     }
 
     /**

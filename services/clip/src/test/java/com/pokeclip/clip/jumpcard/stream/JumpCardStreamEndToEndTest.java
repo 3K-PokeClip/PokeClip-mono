@@ -153,8 +153,13 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
 
         // 카드를 저장하는 것으로는 안 밀린다 — publishAfterCommit이 아직 비어 있다(태스크 10이 채운다).
         // 여기서 재는 것은 「쓰기가 실패하면 자리가 반납된다」이므로 출구를 직접 부른다.
+        //
+        // 🔴 <b>순번을 매번 올린다.</b> 같은 스냅샷을 그대로 30번 보내면 두 번째부터
+        // 「낡은 발행」으로 걸러져 <b>쓰기가 한 번밖에 안 일어나고 자리가 안 반납된다</b>
+        // (CardStreamRegistry.isStale — 순번이 같으면 내용도 같으므로 버린다).
+        // 실제로 카드가 서른 번 바뀌면 트리거가 순번을 서른 번 올리므로 이쪽이 운영과 같은 모양이다.
         for (int i = 0; i < 30; i++) {
-            registry.publish(card);
+            registry.publish(순번을_올린다(card, card.eventSeq() + 1 + i));
         }
         awaitUntil(() -> registry.connectionCount() == baseline, Duration.ofSeconds(10));
 
@@ -411,6 +416,13 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /** 같은 카드의 <b>다음</b> 상태. 순번만 바꾼다 — record라 복사 생성자가 없다. */
+    private JumpCardSnapshot 순번을_올린다(JumpCardSnapshot card, long eventSeq) {
+        return new JumpCardSnapshot(card.id(), card.streamId(), card.source(), card.streamTimestampMs(),
+                card.window(), card.score(), card.evidence(), card.claimedBy(), card.claimedAt(),
+                card.claimExpiresAt(), card.hidden(), card.hiddenBy(), eventSeq, card.createdAt());
     }
 
     private HighlightRequest auto(String eventId, long start) {

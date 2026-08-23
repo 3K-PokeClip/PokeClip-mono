@@ -305,6 +305,66 @@ class CardStreamRegistryTest {
                 .doesNotThrowAnyException();
     }
 
+    /**
+     * <b>연결이 없어진 방송의 순번 표는 남지 않는다.</b>
+     *
+     * <p>비우는 다른 자리({@code broadcastEnded})는 SQS 생명주기 이벤트로만 불리는데
+     * {@code BROADCAST_INTAKE_ENABLED} 기본값이 {@code false}라 <b>통로가 꺼진 배포에서는
+     * 한 번도 안 불린다.</b> 그러면 모든 방송·모든 카드의 항목이 프로세스 수명 동안 쌓인다.
+     *
+     * <p><b>방송 둘로 재는 이유</b>: 연결이 살아 있는 방송({@code s-2})까지 같이 지우면
+     * 그 방송의 순서 보장이 깨진다. {@code lastPublishedSeq.clear()}로 통째로 비우는 구현도
+     * 「연결 없는 것이 사라졌다」는 만족하므로, <b>남아야 할 쪽을 같이 세지 않으면 그 구현이
+     * 통과한다.</b> 주입으로 확인함 — {@code clear()}로 바꾸면 마지막 단언이
+     * {@code expected: 1 but was: 0}으로 빨간불이다.
+     */
+    @Test
+    void 연결이_없어진_방송의_순번표를_하트비트가_버린다() {
+        CardStreamRegistry registry = registry(props(4, 50, 500));
+        RecordingEmitter gone = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        registry.open("s-2", "u-2", Duration.ofMinutes(1));
+        registry.publish(snapshot("s-1", 41L));
+        registry.publish(snapshot("s-2", 42L));
+        assertThat(registry.trackedStreamCount()).as("두 방송 다 순번을 들고 있다").isEqualTo(2);
+
+        gone.fireCompletion();
+        registry.ping();
+
+        assertThat(registry.trackedStreamCount())
+                .as("연결이 없어진 방송의 항목이 남으면 프로세스 수명 동안 쌓인다").isEqualTo(1);
+    }
+
+    /**
+     * <b>표를 버린 뒤에도 「낡은 것은 안 보낸다」가 그대로 선다.</b>
+     *
+     * <p>버려도 되는 근거는 새 연결이 {@code openWithSnapshot}의 DB 스냅샷으로 최신 상태를
+     * 들고 시작한다는 것이고, 그 뒤의 발행은 <b>빈 표에서 다시 쌓인다</b>. 이 시험이 그
+     * 「다시 쌓임」을 잰다 — 여기가 깨지면 표를 버리는 값이 화면이 뒤로 가는 대가로 바뀐다.
+     *
+     * <p>마커는 <b>다른 카드</b>라 순번 비교에 안 걸린다. 같은 연결 = 같은 스트라이프라
+     * FIFO가 보장되므로 마커가 도착했으면 앞의 둘은 이미 처리가 끝났다 —
+     * {@code sleep}으로 기다리면 「덜 와서 통과」하는 시험이 된다.
+     */
+    @Test
+    void 순번표를_버린_뒤_새_연결에도_낡은_순번은_안_간다() {
+        CardStreamRegistry registry = registry(props(4, 50, 500));
+        RecordingEmitter gone = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        registry.publish(snapshot("s-1", 7L, 100L));
+        gone.fireCompletion();
+        registry.ping();
+        assertThat(registry.trackedStreamCount()).as("여기가 0이 아니면 아래가 옛 표로 통과한다").isZero();
+
+        RecordingEmitter fresh = (RecordingEmitter) registry.open("s-1", "u-2", Duration.ofMinutes(1));
+        registry.publish(snapshot("s-1", 7L, 200L));
+        registry.publish(snapshot("s-1", 7L, 150L));
+        registry.publish(snapshot("s-1", 8L, 300L));
+
+        awaitUntil(() -> fresh.named().stream().anyMatch(e -> "300".equals(e.id())));
+        assertThat(fresh.named()).extracting(RecordingEmitter.Event::id)
+                .as("150이 섞이면 놓은 카드가 집힌 것으로 화면에 남는다")
+                .containsExactly("200", "300");
+    }
+
     /** 순서가 뒤바뀌면 화면이 「집음 → 놓음」을 거꾸로 받는다. */
     @Test
     void 같은_연결의_이벤트는_순서대로_온다() {
@@ -321,7 +381,12 @@ class CardStreamRegistryTest {
     }
 
     private JumpCardSnapshot snapshot(String streamId, long eventSeq) {
-        return new JumpCardSnapshot(eventSeq, streamId, JumpCardSource.AUTO, 1_500L,
+        return snapshot(streamId, eventSeq, eventSeq);
+    }
+
+    /** 카드 번호와 순번을 따로 줘야 하는 시험용 — 순번 표가 <b>카드별</b>이라 둘이 갈려야 잰다. */
+    private JumpCardSnapshot snapshot(String streamId, long id, long eventSeq) {
+        return new JumpCardSnapshot(id, streamId, JumpCardSource.AUTO, 1_500L,
                 new JumpCardSnapshot.Window(1_000L, 2_000L), 97, null, null, null, null,
                 false, null, eventSeq, Instant.parse("2026-08-23T00:00:00Z"));
     }
