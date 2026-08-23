@@ -62,6 +62,16 @@ public class CardStreamExecutor {
                         return t;
                     },
                     (r, executor) -> {
+                        // 🔴 거부됐다는 사실을 호출자에게 <b>돌려준다</b>. 이 처리기는 예외를 안 던지고
+                        // 정상 복귀하므로, 표시를 안 남기면 submit이 성공과 구별되지 않는다 —
+                        // broadcastEnded가 성공처럼 보이고 SQS 러너가 편지를 지운다
+                        // (PR #112 봇 지적 ②, 재현: 0ms에 예외 없이 반환·연결은 60초 뒤에도 살아 있음).
+                        //
+                        // execute()를 부른 <b>그 스레드에서 동기적으로</b> 도는 자리라
+                        // submit이 반환할 때 값이 이미 확정이다.
+                        if (r instanceof Job job) {
+                            job.rejected = true;
+                        }
                         // 넘친 것이 조용히 사라지면 "왜 카드가 안 왔나"를 추적할 방법이 없다.
                         //
                         // 🔴 "재연결이 전체 스냅샷으로 메운다"는 <b>실시간 발행(publish)에만</b> 참이다.
@@ -88,15 +98,30 @@ public class CardStreamExecutor {
     /**
      * {@code stripe}는 호출자가 연결에 고정해 준 번호다. 같은 연결의 작업은 같은 스레드에서
      * 순서대로 돈다 — 다른 스레드로 나가면 「집음 → 놓음」이 뒤바뀌어 화면이 옛 상태를 나중에 받는다.
+     *
+     * @return 큐에 들어갔으면 {@code true}, 큐가 차서 버려졌으면 {@code false}.
+     *         <b>버려진 것을 회복할 방법은 호출자마다 다르므로 여기서 정하지 않는다</b> —
+     *         실시간 발행은 재연결이 메우고({@link CardStreamRegistry#publish}),
+     *         종료 알림은 메울 것이 없어 자리를 회수한다
+     *         ({@link CardStreamRegistry#broadcastEnded}).
      */
-    public void submit(int stripe, SseEmitter emitter, SendAction action) {
-        stripes[Math.floorMod(stripe, stripes.length)].execute(new Job(emitter, action));
+    public boolean submit(int stripe, SseEmitter emitter, SendAction action) {
+        Job job = new Job(emitter, action);
+        stripes[Math.floorMod(stripe, stripes.length)].execute(job);
+        return !job.rejected;
     }
 
     private static final class Job implements Runnable {
 
         private final SseEmitter emitter;
         private final SendAction action;
+
+        /**
+         * 거부 처리기가 세운다. {@code volatile}인 이유는 값이 아니라 <b>규약</b>이다 —
+         * 지금은 {@code execute()}를 부른 같은 스레드에서 세워지고 같은 스레드가 읽지만,
+         * 그 사실이 {@code ThreadPoolExecutor} 구현에 달려 있어 밖에서 보장되지 않는다.
+         */
+        private volatile boolean rejected;
 
         Job(SseEmitter emitter, SendAction action) {
             this.emitter = emitter;

@@ -293,7 +293,7 @@ class CardStreamRegistryTest {
     void ping이_예외를_만나도_밖으로_안_샌다() {
         executor = new CardStreamExecutor(1, 10) {
             @Override
-            public void submit(int stripe, SseEmitter emitter, SendAction action) {
+            public boolean submit(int stripe, SseEmitter emitter, SendAction action) {
                 throw new IllegalStateException("전송 제출이 터졌다");
             }
         };

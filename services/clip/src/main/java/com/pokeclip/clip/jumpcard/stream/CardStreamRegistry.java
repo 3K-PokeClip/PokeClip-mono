@@ -204,6 +204,10 @@ public class CardStreamRegistry implements EndedListener {
         if (conn == null) {
             return;
         }
+        // 반환값을 안 본다 — <b>스냅샷 전체가 태스크 하나</b>라 큐를 한 칸만 쓴다(위 문단).
+        // 그 한 칸이 거부될 확률은 극히 낮고, 여기서 자리를 빼면 <b>연결 직후에 통로가 죽는다</b>
+        // (broadcastEnded와 달리 클라이언트가 아직 아무것도 못 받은 상태다).
+        // 🔴 카드마다 태스크로 <b>되돌리면 이 전제가 깨진다</b> — 그때는 여기에도 그물이 필요하다.
         executor.submit(conn.stripe(), emitter, () -> {
             // 주석이 첫 쓰기여야 헤더가 바로 나간다(아래 문단).
             emitter.send(SseEmitter.event().comment("ok"));
@@ -225,6 +229,8 @@ public class CardStreamRegistry implements EndedListener {
      */
     public synchronized void publish(JumpCardSnapshot card) {
         for (Conn conn : conns.values()) {
+            // 반환값을 안 본다 — 여기서 버려진 것은 <b>재연결이 전체 스냅샷으로 메운다</b>.
+            // 종료 알림만 메울 것이 없어 자리를 회수한다(broadcastEnded).
             if (conn.streamId().equals(card.streamId())) {
                 executor.submit(conn.stripe(), conn.emitter(), () -> conn.emitter().send(cardEvent(card)));
             }
@@ -257,12 +263,42 @@ public class CardStreamRegistry implements EndedListener {
     public synchronized void broadcastEnded(String streamId) {
         for (Conn conn : conns.values()) {
             if (conn.streamId().equals(streamId)) {
-                executor.submit(conn.stripe(), conn.emitter(), () -> {
+                boolean queued = executor.submit(conn.stripe(), conn.emitter(), () -> {
                     conn.emitter().send(endedEvent());
                     conn.emitter().complete();
                 });
+                if (!queued) {
+                    dropRejectedEnded(conn, streamId);
+                }
             }
         }
+    }
+
+    /**
+     * <b>큐가 차서 {@code ended}를 못 보냈다. 자리만 회수하고 emitter는 건드리지 않는다.</b>
+     *
+     * <p>안 빼면 그 연결이 <b>죽은 채로 상한을 먹는다</b> — 2026-08-23 재현(PR #112 봇 지적 ②):
+     * {@code broadcastEnded}가 0ms에 예외 없이 반환하고 {@code connectionCount}가 60초 뒤에도 1이었다.
+     * 그동안 하트비트도 같은 큐에서 거부돼 <b>회복 계기 자체가 큐에 못 들어갔다.</b>
+     * 명부에서 빼면 {@link #publish}·{@link #ping}이 더는 그 큐를 두드리지 않는다.
+     *
+     * <p>🔴 <b>{@code complete()}도 {@code completeWithError()}도 부르지 않는다.</b> 둘 다
+     * {@code ResponseBodyEmitter}의 <b>같은 {@code writeLock}</b>을 잡는데(spring-webmvc 7.0.8 소스),
+     * 지금은 막힌 {@code send}가 그 락을 쥐고 있다 — 부르는 스레드가 거기서 같이 잠긴다.
+     * 1판에서 요청 스레드가 <b>59,164ms</b> 잠긴 그림이 정확히 그것이다.
+     *
+     * <p><b>알림은 그대로 유실된다.</b> 이 처방이 고치는 것은 「자리와 큐를 계속 먹는 것」이지
+     * 「알림이 가는 것」이 아니다 — 그래서 로그 이름이 {@code ended_dropped}다. 클라이언트는
+     * emitter 시한(= 토큰 {@code exp})에 끊긴 뒤 <b>재연결 때 스냅샷에서</b> {@code ended}를 받는다.
+     *
+     * <p>{@code conns}가 {@code ConcurrentHashMap}이라 순회 중 삭제가 안전하고, 나중에
+     * {@code onCompletion} 콜백이 또 지워도 멱등이다.
+     */
+    private void dropRejectedEnded(Conn conn, String streamId) {
+        conns.remove(conn.emitter());
+        log.warn("jumpcard.stream.ended_dropped streamId={} connections={} "
+                + "reason=queue_full detail=연결을 명부에서 뺐다. 알림은 재연결 때 스냅샷이 대신한다",
+                streamId, conns.size());
     }
 
     /**
@@ -276,6 +312,7 @@ public class CardStreamRegistry implements EndedListener {
     void ping() {
         try {
             for (Conn conn : conns.values()) {
+                // 반환값을 안 본다 — 하트비트는 다음 주기가 다시 온다.
                 executor.submit(conn.stripe(), conn.emitter(),
                         () -> conn.emitter().send(SseEmitter.event().comment("ping")));
             }
