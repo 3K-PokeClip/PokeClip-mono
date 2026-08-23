@@ -246,6 +246,34 @@ public class CardStreamRegistry implements EndedListener {
      * </ul>
      * 밀림은 <b>늦는 것</b>이고 유실은 <b>안 오는 것</b>이라 밀림을 골랐다.
      * 카드가 수천 장이 되면 이 밀림이 커지므로 그때는 마진 방식(PRD 「따라잡기」)으로 옮긴다.
+     *
+     * <p>🔴 <b>이 전송이 전용 스레드가 아니라 요청 스레드에서 나갈 수 있다 — 못 고친다.</b>
+     * {@code ResponseBodyEmitter}는 MVC가 emitter를 받기 전의 {@code send}를 <b>early-send
+     * 버퍼</b>에 쌓고, 그 버퍼를 비우는 것이 <b>요청 스레드</b>다
+     * ({@code ResponseBodyEmitterReturnValueHandler.handleReturnValue} → {@code initialize} →
+     * {@code sendInternal}). 아래 제출이 MVC보다 먼저 돌면 스냅샷이 거기 쌓인다 —
+     * 실측 최대 <b>454건 · 350,637자 · 4,024us</b>(카드 300장·안 읽는 소켓 10개, 2026-08-23).
+     * 열 연결 중 넷은 0건이라 <b>실행마다 갈린다</b>.
+     * <ul>
+     *   <li><b>공개 훅이 없다 — 셋을 시도해 보고 적는다</b>(「찾아봤는데 못 찾았다」와
+     *       「존재하지 않는다」는 다르므로 막힌 자리를 남긴다):
+     *       ① {@code send(Set&lt;DataWithMediaType&gt;)} 오버라이드는 <b>불리지 않는다</b> —
+     *       {@code SseEmitter.send(SseEventBuilder)}가 {@code super.send(dataToSend)}로
+     *       <b>정적 바인딩</b>해 서브클래스를 건너뛴다(spring-webmvc 7.0.8, 127~131행).
+     *       ② {@code extendResponse}(protected)는 불리지만 {@code initialize} <b>앞</b>이라
+     *       그 뒤에도 창이 남는다 — 실측으로 {@code extendResponse} 시점 52건이
+     *       {@code initialize} 시점 <b>454건</b>으로 늘었다.
+     *       ③ {@code initialize} 오버라이드는 되지만 package-private이라
+     *       <b>{@code org.springframework.web.servlet.mvc.method.annotation} 패키지에 클래스를
+     *       둬야 한다</b>(계측할 때 실제로 그렇게 했다). 이 셋 말고 다른 길을 찾으면 이 문단이 틀린 것이다</li>
+     *   <li><b>위의 「태스크 하나로 묶기」가 만든 것이 아니다.</b> 카드마다 쪼개 재도 규모가
+     *       같았다(382건 · 294,813자). 창을 정하는 것은 태스크 경계가 아니라 handler 부착 여부다</li>
+     *   <li><b>커넥션은 안 쥔다.</b> 컨트롤러의 트랜잭션은 {@code initialize} 전에 닫힌다 —
+     *       잃는 것은 워커 하나이고 POK-93의 풀 고갈과 급이 다르다</li>
+     *   <li><b>{@code initialize}를 오버라이드해 첫 전송을 미루지 않는다.</b> 그러면 첫 전송이
+     *       자물쇠 <b>밖</b>으로 나가 「새 카드가 스냅샷을 앞지름」이 재발한다 — PR #109가 고친
+     *       구멍이다. 4ms를 아끼려고 그것을 되살리는 것은 손해다</li>
+     * </ul>
      */
     public void sendInitial(SseEmitter emitter, List<JumpCardSnapshot> cards, boolean ended) {
         Conn conn = conns.get(emitter);
