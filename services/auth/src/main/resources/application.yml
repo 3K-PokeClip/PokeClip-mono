@@ -139,3 +139,29 @@ pokeclip:
       # 꺼지면 갱신이 영영 안 돌고 증상은 24시간 뒤에 나온다. ChzzkTokenRefreshSchedulerTest가 배선을 잰다.
       enabled: true
       interval: PT10M
+  youtube:
+    # 앱 셋은 한 덩어리다(YoutubeProperties.App). 하나만 빠져도 부팅에서 죽는다.
+    # 로그인용 구글 앱(pokeclip.google.*)과 다른 GCP 앱이다 — 업로드 권한은 프로젝트 단위
+    # 심사 대상이라 폭발 반경을 나눴다.
+    app:
+      client-id: ${YOUTUBE_CLIENT_ID:}
+      client-secret: ${YOUTUBE_CLIENT_SECRET:}
+      redirect-uri: ${YOUTUBE_REDIRECT_URI:}
+    authorize-uri: https://accounts.google.com/o/oauth2/v2/auth
+    # 로그인(pokeclip.google.token-uri)과 주소가 같지만 별개 키로 둔다 — 앱이 다르다.
+    token-uri: https://oauth2.googleapis.com/token
+    revoke-uri: https://oauth2.googleapis.com/revoke
+    # channels.list의 뿌리.
+    api-base-uri: https://www.googleapis.com
+    # state 수명. 치지직과 같은 이유로 10분이다.
+    state-ttl: PT10M
+    # 워커에 넘기기 전 최소 남은 수명. 구글 access가 1시간이라 치지직(12시간)과 자릿수가 다르다 —
+    # 이보다 적게 남았으면 resolve가 즉석 갱신해서 준다.
+    resolve-min-remaining: PT30M
+    check:
+      # 철회 점검. 운영 기본 켜짐, 테스트 프로파일만 끈다(치지직과 같은 이유).
+      enabled: true
+      # 틱 주기. 선별이 staleness로 거르므로 틱이 잦아도 회원당 구글 호출은 하루 1회다.
+      interval: PT1H
+      # 이보다 오래 확인 안 한 연동만 점검한다.
+      staleness: PT24H

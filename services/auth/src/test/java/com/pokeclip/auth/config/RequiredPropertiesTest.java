@@ -6,6 +6,7 @@ import com.pokeclip.auth.streamkey.secret.SecretStoreConfig;
 import com.pokeclip.auth.streamkey.secret.SecretStoreProperties;
 import com.pokeclip.auth.token.JwtConfig;
 import com.pokeclip.auth.token.JwtProperties;
+import com.pokeclip.auth.youtube.YoutubeProperties;
 import com.pokeclip.web.CorsProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
@@ -44,6 +45,9 @@ class RequiredPropertiesTest {
     private static final String[] VALID_CHZZK =
             chzzk("cid", "csecret", "http://localhost:8081/oauth/chzzk/callback");
 
+    private static final String[] VALID_YOUTUBE =
+            youtube("ycid", "ycsecret", "http://localhost:8081/oauth/youtube/callback");
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withConfiguration(org.springframework.boot.autoconfigure.AutoConfigurations.of(
                     ConfigurationPropertiesAutoConfiguration.class))
@@ -57,7 +61,8 @@ class RequiredPropertiesTest {
             // 그 상황이다. 비움을 검증하는 테스트는 아래에서 덮어쓴다.
             .withPropertyValues(secretStore(VALID_SECRET_STORE_KEY))
             .withPropertyValues(internalApi(VALID_INTERNAL_TOKEN))
-            .withPropertyValues(VALID_CHZZK);
+            .withPropertyValues(VALID_CHZZK)
+            .withPropertyValues(VALID_YOUTUBE);
 
     @Test
     void JWT_시크릿이_비어_있으면_부팅이_실패한다() {
@@ -275,6 +280,32 @@ class RequiredPropertiesTest {
                 .contains("${DB_PORT:5432}");
     }
 
+    /**
+     * 유튜브 앱 설정 셋도 치지직과 같은 이유로 한 덩어리다 — 하나만 빠지면 나머지가 무의미하고,
+     * 실패 메시지에 시크릿이 남으면 안 된다. 치지직 앱과 <b>다른 GCP 앱</b>이라 값이 별개다.
+     */
+    @Test
+    void 유튜브_앱_설정_중_하나라도_비면_부팅이_실패하고_원인이_하나로_모인다() {
+        String secretNeedle = "LEAK-youtube-secret-" + UUID.randomUUID();
+        for (String[] broken : List.of(
+                youtube("", secretNeedle, "http://x"),
+                youtube("i", "", "http://x"),
+                youtube("i", secretNeedle, ""))) {
+            runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                    .withPropertyValues(google("id", "secret"))
+                    .withPropertyValues(cors("http://localhost:3000"))
+                    .withPropertyValues(broken)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(stackTraceOf(context.getStartupFailure()))
+                                .as("유튜브 앱 설정이 아닌 다른 이유로 부팅이 실패했다")
+                                .contains("YOUTUBE_CLIENT_ID·YOUTUBE_CLIENT_SECRET·YOUTUBE_REDIRECT_URI")
+                                .as("실패 메시지에 유튜브 시크릿이 평문으로 남았다")
+                                .doesNotContain(secretNeedle);
+                    });
+        }
+    }
+
     private static String[] chzzk(String clientId, String clientSecret, String redirectUri) {
         return new String[]{
                 "pokeclip.chzzk.app.client-id=" + clientId,
@@ -287,6 +318,26 @@ class RequiredPropertiesTest {
                 "pokeclip.chzzk.resolve-min-remaining=PT12H",
                 "pokeclip.chzzk.refresh.enabled=true",
                 "pokeclip.chzzk.refresh.interval=PT10M"};
+    }
+
+    /**
+     * {@code @NotBlank}·{@code @NotNull}이 걸린 값을 <b>전부</b> 채운다. 하나라도 빠지면 위 테스트가
+     * 유튜브 앱 검증이 아닌 이유로 실패하면서 {@code hasFailed()}로 초록이 된다.
+     */
+    private static String[] youtube(String clientId, String clientSecret, String redirectUri) {
+        return new String[]{
+                "pokeclip.youtube.app.client-id=" + clientId,
+                "pokeclip.youtube.app.client-secret=" + clientSecret,
+                "pokeclip.youtube.app.redirect-uri=" + redirectUri,
+                "pokeclip.youtube.authorize-uri=https://accounts.google.com/o/oauth2/v2/auth",
+                "pokeclip.youtube.token-uri=https://oauth2.googleapis.com/token",
+                "pokeclip.youtube.revoke-uri=https://oauth2.googleapis.com/revoke",
+                "pokeclip.youtube.api-base-uri=https://www.googleapis.com",
+                "pokeclip.youtube.state-ttl=PT10M",
+                "pokeclip.youtube.resolve-min-remaining=PT30M",
+                "pokeclip.youtube.check.enabled=true",
+                "pokeclip.youtube.check.interval=PT1H",
+                "pokeclip.youtube.check.staleness=PT24H"};
     }
 
     private String[] jwt(String secret) {
@@ -310,7 +361,8 @@ class RequiredPropertiesTest {
     }
 
     @EnableConfigurationProperties({JwtProperties.class, GoogleAuthProperties.class, CorsProperties.class,
-            SecretStoreProperties.class, InternalApiProperties.class, ChzzkProperties.class})
+            SecretStoreProperties.class, InternalApiProperties.class, ChzzkProperties.class,
+            YoutubeProperties.class})
     static class BoundProperties {
     }
 }
