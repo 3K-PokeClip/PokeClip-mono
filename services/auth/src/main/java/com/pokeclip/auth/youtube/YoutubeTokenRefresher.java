@@ -54,7 +54,13 @@ public class YoutubeTokenRefresher {
         }
         Optional<YoutubeChannelLink> found = links.findByUserIdAndRevokedAtIsNull(userId);   // 락 뒤 재읽기
         if (found.isEmpty()) {
-            return RefreshResult.of(RefreshOutcome.NOT_LINKED);
+            // 「왜 없는가」(해제·갱신 거부·애초에 안 함)도 여기서, 같은 락 안에서 읽는다.
+            // 호출부가 락 밖에서 마지막 행을 다시 읽으면 그 사이 커밋된 새 연동(ACTIVE)을 집어
+            // UNLINKED로 오분류한다 — 방금 동의를 마친 회원에게 「해제했다」고 답하는 꼴이다
+            // (로컬 리뷰 2026-08-24). 락 안에서는 일관된 스냅샷이라 ACTIVE가 나올 수 없다.
+            return RefreshResult.of(RefreshOutcome.NOT_LINKED,
+                    links.findFirstByUserIdOrderByCreatedAtDesc(userId)
+                            .map(YoutubeChannelLink::status).orElse(null));
         }
         YoutubeChannelLink link = found.get();
         if (link.getAccessExpiresAt().isAfter(now.plus(minRemaining))) {
