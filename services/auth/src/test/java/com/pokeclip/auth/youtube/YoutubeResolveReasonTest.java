@@ -33,26 +33,23 @@ class YoutubeResolveReasonTest extends YoutubeLinkTestSupport {
 
     private final YoutubeProperties properties;
     private final YoutubeOAuthClient oauthClient;
-    private final YoutubeTokenDiscarder discarder;
 
     YoutubeResolveReasonTest(MockMvc mockMvc, UserService userService, UserRepository userRepository,
                              TokenService tokenService, YoutubeLinkStateCodec codec,
                              YoutubeChannelLinkRepository linkRepository, SecretStore secretStore,
                              YoutubeLinkWriter writer, JdbcTemplate jdbc, YoutubeCleanupExecutor cleanup,
-                             YoutubeProperties properties, YoutubeOAuthClient oauthClient,
-                             YoutubeTokenDiscarder discarder) {
+                             YoutubeProperties properties, YoutubeOAuthClient oauthClient) {
         super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer,
                 jdbc, cleanup);
         this.properties = properties;
         this.oauthClient = oauthClient;
-        this.discarder = discarder;
     }
 
     /** 갱신기가 준 결과만으로 사유를 고르게 조립한다 — 그 판정이 락 안에서 났는지가 이 검사의 요점이다. */
     private YoutubeLinkService serviceWith(RefreshResult stubbed) {
         YoutubeTokenRefresher refresher = mock(YoutubeTokenRefresher.class);
         when(refresher.refreshIfExpiringWithin(any(), any())).thenReturn(stubbed);
-        return new YoutubeLinkService(properties, codec, oauthClient, writer, discarder, refresher, linkRepository);
+        return new YoutubeLinkService(properties, codec, oauthClient, writer, refresher, linkRepository);
     }
 
     /**
