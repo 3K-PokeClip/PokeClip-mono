@@ -76,27 +76,6 @@ public class YoutubeLinkWriter {
     }
 
     /**
-     * 업로드 대상 재선택. 회원 행 락 → 살아있는 행 조회(없으면 NOT_LINKED) → 새 채널의 타인 점유 확인(409)
-     * → UPDATE. 한 커밋. 토큰은 계정 단위라 손대지 않는다.
-     */
-    @Transactional
-    public YoutubeChannelLink selectChannel(Long userId, YoutubeChannel channel) {
-        users.findByIdForUpdate(userId)
-                .orElseThrow(() -> new IllegalStateException("사용자가 없다 userId=" + userId));
-        YoutubeChannelLink link = links.findByUserIdAndRevokedAtIsNull(userId)
-                .orElseThrow(() -> new YoutubeLinkException(YoutubeLinkFailure.NOT_LINKED, "살아있는 연동이 없다"));
-        links.findByChannelIdAndRevokedAtIsNull(channel.channelId())
-                .filter(other -> !other.getUserId().equals(userId))
-                .ifPresent(other -> {
-                    throw new YoutubeLinkException(YoutubeLinkFailure.CHANNEL_ALREADY_LINKED, "다른 계정에 묶인 채널이다");
-                });
-        link.selectChannel(channel.channelId(), channel.channelName());
-        // 커밋 전에 찍으면 롤백 시 거짓 알리바이가 된다(auth/CLAUDE.md 「일어났다는 로그」).
-        logAfterCommit(() -> log.info("auth.youtube.link.channel_selected userId={}", userId));
-        return link;
-    }
-
-    /**
      * 살아있는 내 연동을 닫고, 커밋 뒤에 secrets 삭제 → 로그 → (해제일 때만) 옛 토큰 revoke. 락 뒤에 부른다.
      *
      * <p>🔴 <b>{@code revokeOldToken}이 갈래를 가른다 — 치지직과 다른 자리다.</b> 치지직은 어느 경로에서든

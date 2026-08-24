@@ -99,15 +99,6 @@ public class YoutubeChannelLink {
     }
 
     /**
-     * 업로드 대상 재선택. 채널만 바뀐다 — 토큰은 계정 단위라 채널을 바꿔도 그대로 쓴다.
-     * 살아있는 행에만 부른다(Writer가 보장한다).
-     */
-    public void selectChannel(String channelId, String channelName) {
-        this.channelId = channelId;
-        this.channelName = channelName;
-    }
-
-    /**
      * 상태는 컬럼이 아니라 파생이다 — 상태 컬럼과 시각 컬럼이 어긋날 자리를 없앤다.
      * 치지직과 달리 시각 인자가 없다: access 만료는 상태가 아니라 갱신으로 해소되는 일상이다.
      */

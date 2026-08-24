@@ -66,17 +66,4 @@ class YoutubeChannelLinkTest {
         assertThat(link.getAccessExpiresAt()).isEqualTo(NOW.plus(Duration.ofHours(2)));
     }
 
-    /** 업로드 대상 재선택 — 채널만 바뀌고 토큰 참조·만료·갱신 시각은 그대로다. */
-    @Test
-    void selectChannel은_채널만_바꾼다() {
-        YoutubeChannelLink link = alive();
-        link.selectChannel("UC-other", "다른 채널");
-        assertThat(link.getChannelId()).isEqualTo("UC-other");
-        assertThat(link.getChannelName()).isEqualTo("다른 채널");
-        assertThat(link.getAccessTokenRef()).isEqualTo("youtube-access:a");
-        assertThat(link.getRefreshTokenRef()).isEqualTo("youtube-refresh:r");
-        assertThat(link.getAccessExpiresAt()).isEqualTo(NOW.plus(Duration.ofHours(1)));
-        assertThat(link.getLastRefreshedAt()).isEqualTo(NOW);
-        assertThat(link.status()).isEqualTo(LinkStatus.ACTIVE);
-    }
 }

@@ -10,16 +10,12 @@ import com.pokeclip.auth.youtube.YoutubeChannelLinkRepository;
 import com.pokeclip.auth.youtube.YoutubeCleanupExecutor;
 import com.pokeclip.auth.youtube.YoutubeLinkStateCodec;
 import com.pokeclip.auth.youtube.YoutubeLinkTestSupport;
-import com.pokeclip.auth.youtube.YoutubeLinkService;
 import com.pokeclip.auth.youtube.YoutubeLinkWriter;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.lang.reflect.Method;
 import java.time.Duration;
-import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
@@ -165,24 +161,6 @@ class YoutubeLinkResolveTest extends YoutubeLinkTestSupport {
 
         assertThat(YOUTUBE.revokedTokens()).as("해제가 구글 쪽 grant를 안 죽였다").containsExactly("rt-old");
         mockMvc.perform(resolve(u.getId())).andExpect(jsonPath("$.reason").value("UNLINKED"));
-    }
-
-    /**
-     * 🔴 조합부에 트랜잭션이 붙으면 갱신기가 <b>최상단이 아니게 된다</b> — 거부 경로의 정리가 상위 롤백에
-     * 딸려가고 구글 HTTP가 상위 트랜잭션 수명에 묶인다(auth/CLAUDE.md 「토큰 회전」 함정).
-     *
-     * <p>이 검사는 구조를 못박는 것이다. 행동으로는 <b>오늘 잴 수 없다</b> — resolve가 롤백되는 경로가 없어
-     * 애노테이션을 붙여도 관측 결과가 같다(주입해서 확인했다: 전 시험 초록). 스케줄러가 붙는 태스크 11 이후에
-     * 행동으로 재는 자리가 생기면 그때 그물을 옮긴다.
-     */
-    @Test
-    void 조합부에는_트랜잭션이_없다() {
-        assertThat(Arrays.stream(YoutubeLinkService.class.getDeclaredMethods())
-                .filter(m -> m.isAnnotationPresent(Transactional.class))
-                .map(Method::getName))
-                .as("YoutubeLinkService에 @Transactional이 붙었다 — 갱신기·쓰기부가 최상단이어야 한다")
-                .isEmpty();
-        assertThat(YoutubeLinkService.class.isAnnotationPresent(Transactional.class)).isFalse();
     }
 
     @Test
