@@ -47,27 +47,62 @@ public abstract class IntegrationTestSupport {
      * ... but no schema history table"로 죽는다. 여기 심어 두면 모든 스프링
      * 테스트가 이 시나리오를 지나가므로 baseline 설정을 지우는 회귀가 즉시
      * 전체 빨강이 된다.
+     *
+     * <p>여기서 {@code stream_segments}도 함께 심는다. <b>이 표의 소유는 1번(Media)이라
+     * clip의 Flyway 마이그레이션에 넣으면 안 된다</b>(ADR-030) — 운영에서는 media가 먼저
+     * 만들어 둔 표를 우리가 읽기만 한다. 테스트 DB에는 그 표를 만드는 사람이 없으므로
+     * 여기가 그 자리다.
      */
     private static void seedNonEmptySchema() {
         try (java.sql.Connection connection = java.sql.DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
              java.sql.Statement statement = connection.createStatement()) {
             statement.execute("CREATE TABLE auth_placeholder_for_baseline (id int)");
+            // 정본은 media/internal/index/ddl.go (소유 1번). 이 사본이 어긋나는 것은
+            // 계약이 막는다 — 컬럼 변경은 3번(우리) 승인 필수라(ADR-030, 계약 4절)
+            // 1번이 바꾸면 우리가 먼저 안다. 그때 이 시드도 같이 고친다.
+            //
+            // stream_segments_local_path_uq 인덱스는 일부러 뺐다. 그것은 1번의 쓰기
+            // 멱등용이고 우리는 읽기만 한다 — 시드에 넣으면 「clip도 그 이름에
+            // 의존한다」는 거짓 신호가 된다.
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS stream_segments (
+                        stream_id        text        NOT NULL,
+                        seq              bigint      NOT NULL,
+                        start_pts_ms     bigint      NOT NULL,
+                        start_wall_utc   timestamptz NOT NULL,
+                        duration_ms      int         NOT NULL,
+                        s3_key           text        NOT NULL,
+                        local_path       text,
+                        upload_state     text        NOT NULL DEFAULT 'pending',
+                        uploaded_at      timestamptz,
+                        bytes            bigint,
+                        is_discontinuity boolean     NOT NULL DEFAULT false,
+                        PRIMARY KEY (stream_id, seq)
+                    )""");
         } catch (java.sql.SQLException e) {
             throw new IllegalStateException("baseline 시나리오 시드 실패", e);
         }
     }
 
     /**
-     * 표를 <b>자식부터</b> 비운다. {@code jump_cards}가 {@code broadcasts}의 자식이라
-     * 카드를 먼저 안 지우면 방송 삭제가 FK로 죽는데, <b>단독 실행에서는 안 보이고 모듈 전체에서만
-     * 터진다</b>(POK-118에서 실제로 밟았다 — 새 시험이 카드를 남기자 같은 패키지의 다른 클래스
-     * 셋이 깨졌다).
+     * 표 넷을 <b>자식부터</b> 비운다 — {@code stream_segments} · {@code jump_cards} ·
+     * {@code broadcast_events} · {@code broadcasts}. {@code jump_cards}가
+     * {@code broadcasts}의 자식이라 카드를 먼저 안 지우면 방송 삭제가 FK로 죽는데,
+     * <b>단독 실행에서는 안 보이고 모듈 전체에서만 터진다</b>(POK-118에서 실제로 밟았다 —
+     * 새 시험이 카드를 남기자 같은 패키지의 다른 클래스 셋이 깨졌다).
+     *
+     * <p>{@code stream_segments}는 <b>이 시드에 한해</b> FK가 없어 순서가 자유롭다
+     * (정본 계약은 {@code stream_id}에 {@code broadcasts} FK를 적어 두었고, 시드는 그것을
+     * 안 만든다 — 세그먼트 조회 시험이 부모 행을 필요로 하지 않는다). 그래도 맨 앞에 두는 것은
+     * 운영 표의 모양과 같은 순서를 유지해, 나중에 시드에 FK가 생겨도 이 헬퍼가 안 깨지게
+     * 하려는 것이다.
      *
      * <p>이 헬퍼를 두는 이유는 <b>새 시험 클래스가 그 순서를 몰라도 안 열리게</b> 하는 것이다.
      * 정리가 필요한 클래스는 {@code @BeforeEach}에서 이것을 부른다.
      */
     protected static void 방송과_카드를_비운다(JdbcTemplate jdbc) {
+        jdbc.update("DELETE FROM stream_segments");
         jdbc.update("DELETE FROM jump_cards");
         jdbc.update("DELETE FROM broadcast_events");
         jdbc.update("DELETE FROM broadcasts");
