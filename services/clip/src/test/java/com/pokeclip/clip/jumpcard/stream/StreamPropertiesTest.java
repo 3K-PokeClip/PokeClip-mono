@@ -3,6 +3,10 @@ package com.pokeclip.clip.jumpcard.stream;
 import ch.qos.logback.classic.Level;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAutoConfiguration;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import java.time.Duration;
 
@@ -180,6 +184,70 @@ class StreamPropertiesTest {
                 .isEqualTo(Duration.parse("PT100000000000H"));
     }
 
+    /**
+     * <b>{@code stripes}에도 상한이 필요하다 — {@code heartbeat}와 같은 모양의 구멍이다.</b>
+     * 하한만 두면 아주 큰 값이 통과하는데 {@code CardStreamExecutor}가 그 수만큼 배열을 잡다
+     * <b>부팅이 죽는다</b>(2026-08-24 실기동:
+     * {@code OutOfMemoryError: Requested array size exceeds VM limit}, PR #114 재현 중 발견).
+     *
+     * <p><b>경계를 둘로 못박는다.</b> 상한(1024)은 그대로 쓰고 1만 넘어도 덮는다 —
+     * 하나만 쓰면 「상한이 있다」는 알아도 어디인지는 못 잡는다.
+     */
+    @Test
+    void stripes가_상한을_넘으면_기본값이_들어간다() {
+        assertThat(new StreamProperties(Duration.ofSeconds(20), Duration.ofHours(4),
+                1024, 1000, 4, 50, 500).stripes())
+                .as("상한 정각은 스레드 1024개다 — 덮으면 안 된다").isEqualTo(1024);
+
+        assertThat(new StreamProperties(Duration.ofSeconds(20), Duration.ofHours(4),
+                1025, 1000, 4, 50, 500).stripes())
+                .as("1만 넘어도 덮어야 경계가 못 박힌다").isEqualTo(4);
+
+        assertThat(new StreamProperties(Duration.ofSeconds(20), Duration.ofHours(4),
+                Integer.MAX_VALUE, 1000, 4, 50, 500).stripes())
+                .as("실기동에서 부팅을 죽인 값이다").isEqualTo(4);
+    }
+
+    /**
+     * <b>덮는 것만으로는 부족하고 「그래서 뜨는가」까지 봐야 한다.</b> 죽던 자리가
+     * {@code StreamProperties}가 아니라 <b>그 값을 받은 {@code CardStreamExecutor}의 생성자</b>라,
+     * 두 빈을 같이 올려야 이 갈래를 실제로 지나간다.
+     *
+     * <p>상한을 지우면 여기서 {@code OutOfMemoryError}가 난다 — 배열 <b>크기 검사</b>에서 즉시
+     * 터지므로 힙을 먹지 않는다(결함 주입으로 확인).
+     */
+    @Test
+    void stripes가_아주_커도_컨텍스트가_뜬다() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class))
+                .withUserConfiguration(BoundProperties.class)
+                .withBean(CardStreamExecutor.class)
+                .withPropertyValues("pokeclip.jump-card.stream.stripes=2147483647")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(StreamProperties.class).stripes()).isEqualTo(4);
+                    assertThat(context).hasSingleBean(CardStreamExecutor.class);
+                });
+    }
+
+    /**
+     * <b>같이 훑은 나머지 {@code int} 설정은 상한이 필요 없다 — 이것도 적어 둬야 다시 안 훑는다.</b>
+     * {@code queue-capacity}는 {@code LinkedBlockingQueue}라 <b>지연 할당</b>이고
+     * ({@code ArrayBlockingQueue}였다면 {@code stripes}와 같은 자리였다), 상한 셋은 비교에만 쓴다.
+     * 2026-08-24 실기동: 넷 다 {@code 2147483647}로 부팅 성공({@code Started ClipApplication
+     * in 2.186 seconds})했고 SSE 연결도 200이었다.
+     */
+    @Test
+    void 나머지_int_설정은_최대값이어도_그대로_쓴다() {
+        StreamProperties properties = new StreamProperties(Duration.ofSeconds(20), Duration.ofHours(4),
+                4, Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE);
+
+        assertThat(properties.queueCapacity()).isEqualTo(Integer.MAX_VALUE);
+        assertThat(properties.maxPerUser()).isEqualTo(Integer.MAX_VALUE);
+        assertThat(properties.maxPerStream()).isEqualTo(Integer.MAX_VALUE);
+        assertThat(properties.maxTotal()).isEqualTo(Integer.MAX_VALUE);
+    }
+
     /** 양성 대조. 하한이 지나치게 넓으면 멀쩡한 설정까지 기본값으로 덮는다. */
     @Test
     void 멀쩡한_값은_그대로_쓴다() {
@@ -199,5 +267,9 @@ class StreamPropertiesTest {
                 Duration.ofSeconds(20), Duration.ofMillis(1), 4, 1000, 4, 50, 500);
 
         assertThat(properties.timeout()).isEqualTo(Duration.ofMillis(1));
+    }
+
+    @EnableConfigurationProperties(StreamProperties.class)
+    static class BoundProperties {
     }
 }

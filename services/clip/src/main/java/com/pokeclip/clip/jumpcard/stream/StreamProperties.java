@@ -18,21 +18,51 @@ import java.time.Duration;
  * {@code IntakeProperties}는 던진다 — 불일치가 아니라 클래스마다 이미 서 있던 정책을 따른
  * 결과다. 통일은 별도 카드다.
  *
- * <p>🔴 <b>{@code Duration} 설정을 새로 추가하는 사람이 읽을 것.</b> 이 서버에는 설정을
- * {@code Duration}으로 받아 놓고 <b>정수로 잘라서</b> 쓰는 자리가 셋 있고, 검증을 자르기
- * <b>전</b> 값에만 걸면 셋 다 뚫린다. 세 자리가 <b>서로 다른 방향으로</b> 망가지므로
- * 「하나 고쳤으니 됐다」가 성립하지 않는다(PR #111에서 실제로 둘만 닫고 하나를 놓쳤다):
- * <ul>
- *   <li>{@code timeout} → {@code toMillis()} → {@code SseEmitter}. 0이면 「시한 없음」이라
- *       <b>연결이 안 죽는다</b>. 증상이 없다</li>
- *   <li>{@code heartbeat} → {@code toMillis()} → {@code CardStreamRegistry.startHeartbeat}의
- *       {@code scheduleAtFixedRate}. <b>양쪽 끝이 다 부팅을 죽인다</b> — 0이면
- *       {@code IllegalArgumentException}, 아주 크면 {@code toMillis()} 자체가
- *       {@code ArithmeticException}이다(둘 다 실기동 실측). 그래서 <b>이 값에만 하한과 상한을
- *       모두 건다</b>({@code MAX_MILLIS} 주석에 timeout과 다른 이유가 있다)</li>
- *   <li>{@code JumpCardProperties.claimTtl} → {@code toSeconds()} → 점유 SQL.
- *       0이면 <b>모든 점유가 즉시 탈취 가능</b>해진다</li>
- * </ul>
+ * <p>🔴 <b>설정을 새로 추가하는 사람이 읽을 것 — 판정 기준은 「잘린 값을 쓰는 <u>하류</u>가
+ * 터지는가」다.</b> 전에는 「<u>자르는 지점</u>이 던지는가」로 봤고, 그 기준으로 자리 여섯을
+ * 「전수 확인」한 결과가 <b>둘을 통째로 놓쳤다</b>(2026-08-24, PR #114 봇 지적 ②와 그 재현 중 발견).
+ * 놓친 이유가 기준에 그대로 있다 — {@code toSeconds()}는 <b>어떤 값에도 안 던지고</b>
+ * ({@code Duration}은 내부가 이미 초다) {@code int} 설정은 <b>애초에 자르지 않는다</b>.
+ * 터지는 것은 언제나 <b>그 값을 받은 쪽</b>이다.
+ *
+ * <p>같은 기준으로 이 서버 설정을 전부 다시 훑은 결과다. <b>「안전한 것」도 적는다 —
+ * 그래야 다음 사람이 같은 것을 또 훑지 않는다.</b>
+ * <table border="1">
+ *   <caption>설정 → 하류 → 하류가 터지는가</caption>
+ *   <tr><th>설정</th><th>하류</th><th>하류가 터지면</th><th>지금</th></tr>
+ *   <tr><td>{@code heartbeat}</td><td>{@code toMillis()} → {@code scheduleAtFixedRate}</td>
+ *       <td><b>양쪽 끝이 다 부팅을 죽인다</b> — 0이면 {@code IllegalArgumentException},
+ *           아주 크면 {@code toMillis()}가 {@code ArithmeticException}</td>
+ *       <td>하한·상한 둘 다({@link #MIN_MILLIS}·{@link #MAX_MILLIS})</td></tr>
+ *   <tr><td>{@code timeout}</td><td>{@code toMillis()} → {@code SseEmitter}</td>
+ *       <td>0이면 「시한 없음」이라 <b>연결이 안 죽는다</b>. 증상이 없다</td>
+ *       <td><b>하한만</b> — 상한은 {@code timeoutFor}의 {@code min(토큰 exp)}가 막는다
+ *           ({@link #MAX_MILLIS} 주석)</td></tr>
+ *   <tr><td>{@code stripes}</td><td>{@code new ThreadPoolExecutor[n]}</td>
+ *       <td>🔴 {@code OutOfMemoryError: Requested array size exceeds VM limit}로
+ *           <b>부팅이 죽는다</b>(실기동)</td>
+ *       <td>하한·상한 둘 다({@link #MAX_STRIPES})</td></tr>
+ *   <tr><td>{@code queueCapacity}</td><td>{@code new LinkedBlockingQueue&lt;&gt;(n)}</td>
+ *       <td><b>안 터진다</b> — 링크드라 지연 할당이다. {@code ArrayBlockingQueue}였다면
+ *           {@code stripes}와 같은 자리였다</td>
+ *       <td>하한만. {@code 2147483647}로 실기동 확인</td></tr>
+ *   <tr><td>{@code maxPerUser}·{@code maxPerStream}·{@code maxTotal}</td><td>비교에만 쓴다</td>
+ *       <td><b>안 터진다</b>(셋 다 {@code 2147483647}로 실기동 + SSE 200 확인)</td>
+ *       <td>하한만</td></tr>
+ *   <tr><td>{@code JumpCardProperties.claimTtl}</td>
+ *       <td>{@code toSeconds()} → 점유 SQL · {@code claimedAt.plus(ttl)}</td>
+ *       <td>🔴 0이면 <b>모든 점유가 즉시 탈취 가능</b>. 아주 크면 DB가 SQLState <b>22008</b>로
+ *           터져 <b>claim이 전부 500</b>이고, 더 크면 읽기(SSE 스냅샷)까지 500이 된다</td>
+ *       <td>하한·상한 둘 다({@code JumpCardProperties.MAX_CLAIM_TTL} 주석에 하류 셋의 한계가 있다)</td></tr>
+ *   <tr><td>{@code IntakeProperties.waitTime}·{@code maxMessages}</td>
+ *       <td>{@code (int) toSeconds()} → SQS</td>
+ *       <td>범위 밖이면 <b>호출이 거부돼 폴링이 매번 실패</b>한다(부팅은 된다)</td>
+ *       <td>{@code IntakeProperties}가 던진다 / {@code @Min}·{@code @Max}</td></tr>
+ * </table>
+ *
+ * <p><b>망가지는 방향이 자리마다 달라서</b>(연결이 안 죽는다 · 부팅이 죽는다 · 점유가 탈취된다 ·
+ * 요청이 500이 된다) 「하나 고쳤으니 됐다」가 성립하지 않는다. PR #111에서 셋 중 둘만 닫았고,
+ * PR #113에서 {@code heartbeat} 상한만 닫았으며, 여기까지 오는 데 <b>판정 기준 자체를 고쳐야</b> 했다.
  * <b>자르는 쪽과 재는 쪽의 단위를 맞춘다</b> — 여기 둘은 1ms 하한, {@code claimTtl}은
  * 초 단위로 떨어질 것을 요구한다.
  */
@@ -82,6 +112,27 @@ public record StreamProperties(Duration heartbeat, Duration timeout, int stripes
      */
     private static final Duration MAX_MILLIS = Duration.ofMillis(Long.MAX_VALUE);
 
+    /**
+     * <b>스트라이프 수의 상한. 여기는 「몇 바이트까지 되나」가 아니라 「스레드 몇 개가 말이 되나」로 잡는다.</b>
+     *
+     * <p>왜 상한이 필요한가 — {@code CardStreamExecutor}가 생성자에서
+     * {@code new ThreadPoolExecutor[stripeCount]}를 잡는다. 2026-08-24 실기동:
+     * {@code stripes=2147483647}로 부팅하면
+     * {@code java.lang.OutOfMemoryError: Requested array size exceeds VM limit}로
+     * <b>컨텍스트가 통째로 죽는다</b>. 게다가 {@code heartbeat}와 <b>증상까지 같다</b> —
+     * 오류 메시지가 {@code sqsIntakeRunner}를 먼저 부르므로 운영자가 엉뚱한 데서 원인을 찾는다.
+     *
+     * <p>🔴 <b>배열 한계(약 21억)로 막으면 안 된다.</b> 그것은 {@code OutOfMemoryError} 직전까지
+     * 허용하는 것이라 아무것도 안 막는 셈이다. <b>스트라이프 하나가 전송 스레드 하나</b>이고
+     * ({@code ThreadPoolExecutor(1, 1, …)}), 서버 한 대의 연결 상한({@code max-total} 기본
+     * <b>500</b>)보다 많은 스트라이프는 <b>영영 안 쓰이는 스레드</b>다. 연결마다 스레드를 하나씩
+     * 줘도 500이면 끝난다. 1024는 그 두 배로, 상한을 올려 잡은 배포까지 덮는 여유값이다.
+     *
+     * <p>스레드는 첫 제출 때 생기므로 안 쓰는 스트라이프는 {@code ThreadPoolExecutor} 객체
+     * 하나씩만 남는다 — 1024까지는 대가가 사실상 없다.
+     */
+    private static final int MAX_STRIPES = 1024;
+
     public StreamProperties {
         // 🔴 heartbeat도 toMillis()로 잘려 scheduleAtFixedRate에 들어간다
         // (CardStreamRegistry.startHeartbeat). PT0.0005S는 0도 음수도 아니라 「0 이하」 가드를
@@ -115,7 +166,11 @@ public record StreamProperties(Duration heartbeat, Duration timeout, int stripes
             }
             timeout = DEFAULT_TIMEOUT;
         }
-        if (stripes <= 0) {
+        // 🔴 상한도 건다. 하한만 두면 아주 큰 값이 통과하는데, CardStreamExecutor가 그 수만큼
+        // 배열을 잡다 OutOfMemoryError로 <b>부팅을 죽인다</b>(실기동 확인, MAX_STRIPES 주석).
+        // heartbeat와 같은 모양의 구멍이었고 — 「자르기가 던지는가」로만 봤기 때문에 —
+        // int 설정이라는 이유로 전수 확인에서 통째로 빠져 있었다(클래스 주석의 판정 기준).
+        if (stripes <= 0 || stripes > MAX_STRIPES) {
             stripes = 4;
         }
         if (queueCapacity <= 0) {
