@@ -96,7 +96,11 @@ public class YoutubeLinkWriter {
             links.revokeAlive(userId, now, RevokeReason.USER_UNLINKED);
             String accessRef = old.getAccessTokenRef();
             String refreshRef = old.getRefreshTokenRef();
-            cleanup.afterCommit(userId, () -> cleanupOld(userId, accessRef, refreshRef, oldAccess, oldRefresh, event));
+            // 옛 채널도 넘긴다 — 이 행이 닫힌 뒤 다른 회원이 같은 채널을 연동했다면 그 사람의 구글 계정이
+            // 곧 이 토큰의 계정이라, 버리면 남의 멀쩡한 연동이 끊긴다(봇 리뷰 PR #116).
+            String oldChannelId = old.getChannelId();
+            cleanup.afterCommit(userId, () -> cleanupOld(userId, oldChannelId, accessRef, refreshRef,
+                    oldAccess, oldRefresh, event));
         });
     }
 
@@ -114,16 +118,35 @@ public class YoutubeLinkWriter {
      * 그 지연이 분 단위가 될 수 있어 창이 실제로 열린다. <b>발사 시점에</b> 살아있는 연동이 있으면 버리지 않는다 —
      * 재연동이 없었다면 살아있는 행도 없으므로 정상 해제의 동작은 그대로다.
      */
-    void cleanupOld(Long userId, String accessRef, String refreshRef, String oldAccess, String oldRefresh,
-                    String event) {
+    void cleanupOld(Long userId, String channelId, String accessRef, String refreshRef,
+                    String oldAccess, String oldRefresh, String event) {
+        RuntimeException deleteFailure = null;
         try {
-            secretStore.delete(accessRef);
-            secretStore.delete(refreshRef);
-            log.info("{} userId={}", event, userId);
+            // 둘을 각각 시도한다 — 하나가 던져도 나머지는 지운다. 한 try로 묶으면 첫 실패가 둘째를
+            // 건너뛰어 그 비밀이 secrets에 영구히 남는다(봇 리뷰 PR #116). 예외는 아래에서 다시 올려
+            // 잡이 cleanup.failed WARN으로 남기게 한다.
+            deleteFailure = deleteQuietly(accessRef, null);
+            deleteFailure = deleteQuietly(refreshRef, deleteFailure);
+            if (deleteFailure == null) {
+                log.info("{} userId={}", event, userId);
+            }
         } finally {
             if (oldAccess != null || oldRefresh != null) {
-                discarder.discardIfNoLiveLink(userId, oldAccess, oldRefresh);
+                discarder.discardIfNoLiveLink(userId, channelId, oldAccess, oldRefresh);
             }
+        }
+        if (deleteFailure != null) {
+            throw deleteFailure;
+        }
+    }
+
+    /** 지우고, 실패하면 예외를 모아 둔다(먼저 난 것을 유지한다) — 나머지 삭제를 막지 않으려고. */
+    private RuntimeException deleteQuietly(String ref, RuntimeException earlier) {
+        try {
+            secretStore.delete(ref);
+            return earlier;
+        } catch (RuntimeException e) {
+            return earlier != null ? earlier : e;
         }
     }
 

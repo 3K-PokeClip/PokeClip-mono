@@ -134,16 +134,34 @@ public class YoutubeTokenRefresher {
         String accessRef = link.getAccessTokenRef();
         String refreshRef = link.getRefreshTokenRef();
         cleanup.afterCommit(userId, () -> {
+            RuntimeException deleteFailure = null;
             try {
-                secretStore.delete(accessRef);   // REQUIRES_NEW라 커밋 뒤에도 실제로 지워진다
-                secretStore.delete(refreshRef);
-                log.warn("auth.youtube.link.refresh_rejected userId={} status={}", userId, status);
+                // 둘을 각각 시도한다 — 하나가 던져도 나머지는 지운다(YoutubeLinkWriter.cleanupOld와 한 쌍).
+                // 한 try로 묶으면 첫 실패가 둘째를 건너뛰어 그 비밀이 secrets에 영구히 남는다(봇 리뷰 PR #116).
+                deleteFailure = deleteQuietly(accessRef, null);   // REQUIRES_NEW라 커밋 뒤에도 실제로 지워진다
+                deleteFailure = deleteQuietly(refreshRef, deleteFailure);
+                if (deleteFailure == null) {
+                    log.warn("auth.youtube.link.refresh_rejected userId={} status={}", userId, status);
+                }
             } finally {
                 // delete가 던져도 revoke는 시도한다 — 안 그러면 죽은 grant의 흔적이 구글에 남는다.
                 discarder.discard(userId, null, refreshToken);   // 한 번이면 충분하다(grant 전체가 죽는다)
             }
+            if (deleteFailure != null) {
+                throw deleteFailure;
+            }
         });
         return RefreshResult.of(RefreshOutcome.REJECTED);
+    }
+
+    /** 지우고, 실패하면 예외를 모아 둔다(먼저 난 것을 유지한다) — 나머지 삭제를 막지 않으려고. */
+    private RuntimeException deleteQuietly(String ref, RuntimeException earlier) {
+        try {
+            secretStore.delete(ref);
+            return earlier;
+        } catch (RuntimeException e) {
+            return earlier != null ? earlier : e;
+        }
     }
 
     /**

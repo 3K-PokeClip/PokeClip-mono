@@ -99,8 +99,16 @@ class YoutubeLinkFailureCleanupTest extends YoutubeLinkTestSupport {
         assertThat(linkRepository.findFirstByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
     }
 
+    /**
+     * 🔴 409는 예외다 — <b>버리지 않는다.</b> 「그 채널이 남에게 묶여 있다」는 뜻이고, 채널이 같으면
+     * <b>구글 계정도 같다.</b> 그 계정의 토큰을 revoke하면 원래 주인의 멀쩡한 연동이 끊긴다
+     * (봇 리뷰 PR #116에서 재현). 이 회원에게 살아있는 행이 없다는 것만으로는 부족하다 —
+     * <b>revoke의 영향 범위가 「이 회원」이 아니라 「그 구글 계정」</b>이기 때문이다.
+     *
+     * <p>이 검사는 원래 「409도 버린다」를 못박고 있었다. 그 단언이 바로 결함이었다.
+     */
     @Test
-    void 연동이_없는_회원의_409도_받은_토큰을_버린다() throws Exception {
+    void 연동이_없는_회원이라도_409면_버리지_않는다() throws Exception {
         User owner = newUser();
         YoutubeChannelLink theirs = linked(owner);
         YOUTUBE.channelsResponds(200, "{\"items\":[{\"id\":\"" + theirs.getChannelId()
@@ -110,7 +118,8 @@ class YoutubeLinkFailureCleanupTest extends YoutubeLinkTestSupport {
         mockMvc.perform(link(other)).andExpect(status().isConflict());
         awaitCleanup();
 
-        assertThat(YOUTUBE.revokedTokens()).containsExactly("rt-1");
+        assertThat(YOUTUBE.revokedTokens())
+                .as("남이 쓰는 채널이라 409인데 그 구글 계정의 토큰을 버렸다").isEmpty();
     }
 
     // ── 살아있는 연동이 있을 때: 아무것도 버리지 않는다 (치명-1의 두 번째 갈래) ──────

@@ -88,7 +88,7 @@ public class YoutubeLinkService {
         } catch (YoutubeUnavailableException e) {
             // 응답에서 토큰까지는 읽혔는데 그 뒤가 깨진 경우(refresh 부재 포함)는 토큰이 예외에 실려 온다 —
             // 구글엔 이미 발급됐으므로 버린다. 값은 로그·응답 어디에도 옮기지 않는다.
-            discardIfIssued(userId, e.issuedTokens().orElse(null));
+            discardIfIssued(userId, null, e.issuedTokens().orElse(null));   // 채널을 아직 못 읽었다
             log.warn("auth.youtube.link.unavailable userId={} causeType={}", userId, e.causeType());
             throw new YoutubeLinkException(YoutubeLinkFailure.YOUTUBE_UNAVAILABLE, "구글 응답 없음");
         }
@@ -99,21 +99,21 @@ public class YoutubeLinkService {
             channels = oauthClient.listChannels(tokens.accessToken());
         } catch (YoutubeRejectedException e) {
             // 403 insufficientPermissions(readonly 없음)가 여기로 온다 — 영구라 동의부터 다시(실측 A ④).
-            discardIfIssued(userId, tokens);
+            discardIfIssued(userId, null, tokens);
             log.info("auth.youtube.link.rejected userId={} status={}", userId, e.status());
             throw new YoutubeLinkException(YoutubeLinkFailure.INVALID_CODE, "구글이 채널 조회를 거부했다");
         } catch (YoutubeUnavailableException e) {
             // 5xx·타임아웃·403 할당량 — 재시도하면 되는 자리다.
-            discardIfIssued(userId, tokens);
+            discardIfIssued(userId, null, tokens);
             log.warn("auth.youtube.link.unavailable userId={} causeType={}", userId, e.causeType());
             throw new YoutubeLinkException(YoutubeLinkFailure.YOUTUBE_UNAVAILABLE, "구글 응답 없음");
         } catch (RuntimeException e) {
-            discardIfIssued(userId, tokens);
+            discardIfIssued(userId, null, tokens);
             throw e;
         }
         if (channels.isEmpty()) {
             // items 키 부재도 빈 배열도 여기로 온다 — 「채널을 먼저 만드세요」지 형식 붕괴가 아니다.
-            discardIfIssued(userId, tokens);
+            discardIfIssued(userId, null, tokens);   // 채널이 없으니 점유를 볼 것도 없다
             log.info("auth.youtube.link.no_channel userId={}", userId);
             throw new YoutubeLinkException(YoutubeLinkFailure.NO_CHANNEL, "구글 계정에 유튜브 채널이 없다");
         }
@@ -127,10 +127,12 @@ public class YoutubeLinkService {
         } catch (YoutubeLinkException | DataIntegrityViolationException e) {
             // 둘 다 채널 중복이다(사전 조회 / 경합 시 DB 유니크 — YoutubeLinkWriter.create 주석).
             // 롤백됐다 — secrets도 같이(put이 REQUIRED). 커밋이 없으니 afterCommit도 못 쓴다.
-            discardIfIssued(userId, tokens);
+            // 🔴 채널을 넘긴다 — 409는 「그 채널이 남에게 묶여 있다」는 뜻이고, 채널이 같으면 구글 계정도 같다.
+            // 그 계정의 토큰을 버리면 원래 주인의 멀쩡한 연동이 끊긴다(봇 리뷰 PR #116).
+            discardIfIssued(userId, selected.channelId(), tokens);
             throw new YoutubeLinkException(YoutubeLinkFailure.CHANNEL_ALREADY_LINKED, "다른 계정에 묶인 채널이다");
         } catch (RuntimeException e) {
-            discardIfIssued(userId, tokens);   // 풀 고갈·DB 다운. 예외는 그대로(500)
+            discardIfIssued(userId, selected.channelId(), tokens);   // 풀 고갈·DB 다운. 예외는 그대로(500)
             throw e;
         }
         log.info("auth.youtube.link.created userId={}", userId);
@@ -148,7 +150,7 @@ public class YoutubeLinkService {
         String scope = tokens.scope();
         boolean granted = scope != null && List.of(scope.trim().split("\\s+")).contains(SCOPE_UPLOAD);
         if (!granted) {
-            discardIfIssued(userId, tokens);
+            discardIfIssued(userId, null, tokens);   // 채널을 아직 못 읽었다
             log.info("auth.youtube.link.scope_missing userId={}", userId);
             throw new YoutubeLinkException(YoutubeLinkFailure.SCOPE_MISSING, "동의에 업로드 권한이 없다");
         }
@@ -159,9 +161,9 @@ public class YoutubeLinkService {
      * {@link YoutubeTokenDiscarder#discardIfNoLiveLink}에 있다. 이 갈래를 무조건 버리기로 바꾸면
      * 실패 한 번이 그 회원의 기존 연동을 끊는다.
      */
-    private void discardIfIssued(Long userId, YoutubeTokens tokens) {
+    private void discardIfIssued(Long userId, String channelId, YoutubeTokens tokens) {
         if (tokens != null) {
-            discarder.discardIfNoLiveLink(userId, tokens.accessToken(), tokens.refreshToken());
+            discarder.discardIfNoLiveLink(userId, channelId, tokens.accessToken(), tokens.refreshToken());
         }
     }
 
