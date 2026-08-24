@@ -2,7 +2,8 @@
 CREATE TABLE youtube_channel_links (
     id                BIGSERIAL    PRIMARY KEY,
     user_id           BIGINT       NOT NULL REFERENCES users (id),
-    -- channels.list가 준 값. 「업로드 대상으로 고른 채널」이라 치지직과 달리 재선택으로 바뀐다(UPDATE 경로).
+    -- channels.list가 준 값. 동의 시점에 확정되고 그 뒤로 UPDATE되지 않는다 — 구글은 고른 채널 하나만
+    -- 그 토큰에 묶어 주므로(2026-08-24 실측) 바꾸는 수단은 재연동(새 행)뿐이다.
     -- 사용자 입력을 그대로 저장하지 않는다(목록 대조 후 저장). 로그에도 찍지 않는다.
     channel_id        VARCHAR(64)  NOT NULL,
     channel_name      TEXT         NOT NULL,
@@ -39,5 +40,5 @@ CREATE INDEX idx_youtube_links_user_created
     ON youtube_channel_links (user_id, created_at);
 
 COMMENT ON TABLE youtube_channel_links IS '유튜브 채널 연동. 토큰은 secrets 참조만, 상태는 revoked_at·revoke_reason에서 파생 (POK-121)';
-COMMENT ON COLUMN youtube_channel_links.channel_id IS '업로드 대상으로 고른 채널. 재선택으로 바뀐다 (PUT /api/youtube-link/channel)';
+COMMENT ON COLUMN youtube_channel_links.channel_id IS '업로드 대상 채널. 동의 시점에 확정되고 UPDATE되지 않는다 — 바꾸는 수단은 재연동(새 행)뿐 (2026-08-24 실측)';
 COMMENT ON COLUMN youtube_channel_links.revoke_reason IS 'USER_UNLINKED=사용자 해제·재연동, REFRESH_REJECTED=구글이 갱신을 invalid_grant로 거부(철회·만료)';
