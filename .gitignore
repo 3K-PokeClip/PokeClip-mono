@@ -24,6 +24,14 @@ web/dist/
 # IDE
 .idea/
 .vscode/
+# Eclipse·STS(Buildship)가 만든다. 전부 자동 생성물이라 지워도 IDE 를 열면 다시 생긴다.
+# services/**/bin/ 은 Gradle 의 build/ 와 같은 .class 를 중복 컴파일한 것이다 —
+# 위의 services/**/build/ 와 같은 성격인데 이 줄이 없어서 591개가 노출돼 있었다(2026-08-24).
+.classpath
+.project
+.factorypath
+.settings/
+services/**/bin/
 
 # OS
 .DS_Store
