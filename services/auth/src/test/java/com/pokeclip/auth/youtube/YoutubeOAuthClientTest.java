@@ -130,6 +130,31 @@ class YoutubeOAuthClientTest {
      * 502만 반복해서 본다. 그 경로의 영구 판정은 「동의부터 다시」라는 복구 가능한 안내라 손해가 되돌려진다.
      * 두 경로가 갈리지 않으면 정책 분리가 아무것도 안 하는 것이다.
      */
+    /**
+     * 🔴 403 할당량·속도 계열은 <b>전부</b> 일시다. codex는 {@code dailyLimitExceeded} 하나를 짚었지만
+     * 전수로 세니 <b>셋</b>이 빠져 있었다(봇 3판 P2-3) — 「같은 뿌리, 한 자리만」이 또 났던 자리다.
+     * 이 검사는 목록이 아니라 <b>규칙</b>을 지킨다: 「할당량·속도로 막힌 것은 시간이 지나면 풀린다 = 영구가 아니다」.
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "[{index}] {0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "quotaExceeded", "dailyLimitExceeded", "rateLimitExceeded",
+            "userRateLimitExceeded", "servingLimitExceeded", "dailyLimitExceededUnreg"})
+    void 할당량_속도_계열_403은_전부_일시다(String reason) {
+        google.channelsResponds(403, "{\"error\":{\"code\":403,\"errors\":[{\"reason\":\"" + reason + "\"}]}}");
+
+        assertThatThrownBy(() -> client.listChannels("at-x"))
+                .as("%s를 영구로 닫으면 사용자가 재동의해도 안 풀린다", reason)
+                .isInstanceOf(YoutubeUnavailableException.class);
+    }
+
+    /** 대조군 — 할당량이 아닌 403(권한 부족)은 영구다. 갈리지 않으면 「전부 일시」가 규칙이 아니라 실수가 된다. */
+    @Test
+    void 권한_부족_403은_영구다() {
+        google.channelsResponds(403, "{\"error\":{\"code\":403,\"errors\":[{\"reason\":\"insufficientPermissions\"}]}}");
+
+        assertThatThrownBy(() -> client.listChannels("at-x")).isInstanceOf(YoutubeRejectedException.class);
+    }
+
     @Test
     void 교환은_모르는_4xx를_거부로_본다() {
         google.tokenResponds(401, "not json");

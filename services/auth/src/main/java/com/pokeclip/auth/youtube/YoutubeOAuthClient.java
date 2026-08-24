@@ -181,18 +181,28 @@ public class YoutubeOAuthClient {
      *       {@code unsupported_grant_type} — <b>우리 앱·요청 설정</b> 문제(시크릿 회전·오타·앱 상태 변경).
      *       철회 점검이 하루 한 번 전 회원을 훑으므로, 설정이 어긋난 날 이것들을 영구로 닫으면
      *       <b>전 회원의 연동이 한꺼번에 죽고 재동의해도 안 풀린다</b>(봇 리뷰 PR #116).</li>
-     *   <li>403 할당량 셋 — 일 10,000유닛 소진. 태평양시 자정에 스스로 풀린다.</li>
+     *   <li><b>403 할당량·속도 여섯</b> — 일 10,000유닛 소진이나 순간 속도 초과. 태평양시 자정이나 잠시 뒤 스스로 풀린다.</li>
      * </ul>
+     *
+     * <p>🔴 <b>목록이 아니라 규칙으로 읽어라</b> — 「할당량·속도로 막힌 것은 시간이 지나면 풀린다 = 영구가 아니다」.
+     * 처음에 셋만 넣었다가 봇 리뷰가 {@code dailyLimitExceeded}를 짚었고, <b>그때 전수로 세니 셋이 더 빠져 있었다</b>
+     * (봇 3판 P2-3). 하나씩 채우면 또 빠뜨린다. <b>구글이 새 reason을 추가하면 이 규칙에 맞는지로 판단한다.</b>
+     * {@code dailyLimitExceededUnreg}는 미등록 앱용이라 우리에겐 안 올 값이지만, 규칙을 예외 없이 두는 편이
+     * 「왜 이건 빠졌지」를 없애서 넣었다.
      */
     /** 갱신에서 <b>유일하게</b> 영구인 코드 — 철회·만료·code 소모. */
     private static final String INVALID_GRANT = "invalid_grant";
 
+    // ⚠ Map.of는 10쌍이 상한이고 지금 정확히 10쌍이다. 하나 더 넣을 때는 Map.ofEntries로 바꾼다.
     private static final Map<String, String> TEMPORARY_ERROR_CODES = Map.of(
             "invalid_client", "InvalidClient",
             "unauthorized_client", "UnauthorizedClient",
             "invalid_request", "InvalidRequest",
             "unsupported_grant_type", "UnsupportedGrantType",
             "quotaExceeded", "QuotaExceeded",
+            "dailyLimitExceeded", "DailyLimitExceeded",
+            "dailyLimitExceededUnreg", "DailyLimitExceededUnreg",
+            "servingLimitExceeded", "ServingLimitExceeded",
             "rateLimitExceeded", "RateLimitExceeded",
             "userRateLimitExceeded", "UserRateLimitExceeded");
 
