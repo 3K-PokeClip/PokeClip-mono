@@ -52,8 +52,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:?}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
       POSTGRES_DB: ${POSTGRES_DB:?}
-      # 아래 아홉은 전부 없으면 부팅이 죽는다(@NotBlank · CorsProperties ·
-      # ChzzkProperties.App 컴팩트 생성자). 빈 문자열도 죽는다 — 값을 반드시 채운다.
+      # 아래 열셋을 compose가 전부 필수로 건다(:?). 그중 열둘은 값이 없으면 앱도 부팅에서 죽는다
+      # (@NotBlank · CorsProperties · ChzzkProperties.App · YoutubeProperties.App 컴팩트 생성자).
+      # 빈 문자열도 죽는다 — 값을 반드시 채운다. GOOGLE_REDIRECT_URI만 앱에 기본값이 있지만
+      # 환경마다 달라 여기서는 명시를 강제한다.
+      # 컨테이너는 호스트 셸의 변수를 자동으로 물려받지 않는다 — 여기 없는 값은 dev에서 그냥 빈다.
       JWT_SECRET: ${JWT_SECRET:?}
       SECRET_STORE_KEY: ${SECRET_STORE_KEY:?}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?}
@@ -64,6 +67,11 @@ services:
       CHZZK_CLIENT_ID: ${CHZZK_CLIENT_ID:?}
       CHZZK_CLIENT_SECRET: ${CHZZK_CLIENT_SECRET:?}
       CHZZK_REDIRECT_URI: ${CHZZK_REDIRECT_URI:?}
+      # 유튜브 셋(POK-121). 로그인용 구글 앱과 다른 GCP 앱이다 — 업로드 권한은 프로젝트 단위 심사 대상이라
+      # 폭발 반경을 나눴다. 셋 중 하나만 비어도 YoutubeProperties.App이 부팅을 세운다.
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:?}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:?}
+      YOUTUBE_REDIRECT_URI: ${YOUTUBE_REDIRECT_URI:?}
       # t3.small 은 2GB다. 힙을 안 묶으면 JVM 이 물리 메모리의 1/4씩 잡아
       # 넷이 합쳐 한도를 넘고, 커널이 아무거나 하나를 죽인다.
       JAVA_TOOL_OPTIONS: -Xmx256m

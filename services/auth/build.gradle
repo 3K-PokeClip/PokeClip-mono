@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.PathSensitivity
+
 plugins {
     id 'java'
     id 'org.springframework.boot'
@@ -30,4 +32,13 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     testImplementation 'org.testcontainers:testcontainers-postgresql'
+}
+
+// DeploymentEnvVarsTest는 저장소의 배포 파일 둘을 읽는다. 입력으로 선언하지 않으면 그 파일만 바뀐 커밋에서
+// Gradle이 테스트를 UP-TO-DATE로 건너뛰어 — 검사가 있는데도 안 도는 상태가 된다(실측: 변수를 지워도 초록,
+// --rerun에서만 빨간불). 그 시험이 막으려는 사고가 정확히 「compose에만 빠뜨림」이라 치명적인 구멍이다.
+tasks.named('test') {
+    inputs.files(rootProject.file('docker-compose.dev.yml'), rootProject.file('.env.dev.example'))
+            .withPropertyName('deploymentEnvFiles')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
 }
