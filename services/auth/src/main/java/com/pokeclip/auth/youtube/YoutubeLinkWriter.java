@@ -25,12 +25,11 @@ public class YoutubeLinkWriter {
     private final YoutubeChannelLinkRepository links;
     private final SecretStore secretStore;
     private final UserRepository users;
-    private final YoutubeTokenDiscarder discarder;
     private final YoutubeCleanupExecutor cleanup;
 
     /**
      * 회원 행 락 → 채널 중복 확인 → (살아있는 내 연동 폐기) → secrets put 2 → INSERT. 한 커밋.
-     * 커밋 뒤: 옛 secrets 삭제 → 로그. <b>옛 토큰 revoke는 없다</b>(아래 {@link #closeAlive} 참고).
+     * 커밋 뒤: 옛 secrets 삭제 → 로그. <b>구글 revoke는 어느 경로에도 없다</b>(아래 {@link #closeAlive} 참고).
      *
      * <p>채널 중복은 DB 부분 유니크(uq_youtube_links_alive_channel)가 최종 방어다 — 앱 락은
      * 인스턴스가 여럿이면 성립하지 않는다. 그런데도 앞서 조회로 한 번 거르는 이유는 로그 위생이다:
@@ -51,7 +50,7 @@ public class YoutubeLinkWriter {
                     throw new YoutubeLinkException(YoutubeLinkFailure.CHANNEL_ALREADY_LINKED, "다른 계정에 묶인 채널이다");
                 });
         // 재연동 — 옛 행을 닫되 옛 토큰은 구글에 그대로 둔다(revokeOldToken=false).
-        closeAlive(userId, now, "auth.youtube.link.relinked", false);
+        closeAlive(userId, now, "auth.youtube.link.relinked");
         String accessRef = "youtube-access:" + UUID.randomUUID();
         String refreshRef = "youtube-refresh:" + UUID.randomUUID();
         secretStore.put(accessRef, tokens.accessToken());
@@ -64,91 +63,64 @@ public class YoutubeLinkWriter {
      * 사용자 해제. 회원 행 락 → 살아있는 행 revoke(USER_UNLINKED) → 커밋 뒤 정리.
      * 살아있는 행이 없으면 아무것도 안 한다(204 멱등).
      *
-     * <p><b>여기서만</b> 옛 토큰을 구글에서 철회한다 — 사용자 의도가 「구글 쪽 허락도 지워라」다.
+     * <p><b>구글에는 아무것도 보내지 않는다</b> — 왜인지는 {@link #closeAlive} javadoc에 있다.
      */
     @Transactional
     public void revoke(Long userId, Instant now) {
         users.findByIdForUpdate(userId)
                 .orElseThrow(() -> new IllegalStateException("사용자가 없다 userId=" + userId));
-        closeAlive(userId, now, "auth.youtube.link.unlinked", true);
+        closeAlive(userId, now, "auth.youtube.link.unlinked");
     }
 
     /**
-     * 살아있는 내 연동을 닫고, 커밋 뒤에 secrets 삭제 → 로그 → (해제일 때만) 옛 토큰 revoke. 락 뒤에 부른다.
+     * 살아있는 내 연동을 닫고, 커밋 뒤에 secrets 삭제 → 로그. 락 뒤에 부른다.
      *
-     * <p>🔴 <b>{@code revokeOldToken}이 갈래를 가른다 — 치지직과 다른 자리다.</b> 치지직은 어느 경로에서든
-     * 옛 토큰을 revoke했지만, 구글 revoke는 「그 쌍」이 아니라 그 사용자가 이 프로젝트에 준 <b>동의 전부</b>를
-     * 죽인다. 그래서 <b>재연동에서 부르면 방금 저장한 새 토큰까지 죽는다</b>(표는 ACTIVE인데 첫 갱신이
-     * invalid_grant → BROKEN). 재연동은 새 동의가 옛 grant를 대체하므로 따로 죽일 필요도 없다.
-     * 사용자 해제(DELETE)만 true다.
+     * <p>🔴 <b>구글에 revoke를 보내지 않는다 — 해제(DELETE)도 마찬가지다.</b> 「해제인데 구글에서 안 지운다고?」가
+     * 당연한 물음이라 근거를 적어 둔다(2026-08-24 사용자 결정, 봇 3판 P1):
      *
-     * <p>그래서 <b>revoke하지 않는 갈래는 옛 토큰 원문을 읽지도 않는다</b> — 치지직이 커밋 전에 하던
-     * {@code secretStore.get} 두 번이 재연동 경로에서 사라진다.
+     * <ul>
+     *   <li><b>ⓐ 구글 revoke는 계정 단위다.</b> 「그 토큰 쌍」이 아니라 그 <b>구글 계정</b>이 우리 앱에 준 동의
+     *       전부를 죽인다(실측 A ⑥). 그래서 같은 채널을 방금 연동한 <b>다른 회원</b>(또는 같은 사람의 새 PokeClip 계정)의
+     *       grant까지 함께 죽는다 — 우리가 만들지도 않았고 우리 것도 아닌 토큰이다.</li>
+     *   <li><b>ⓑ 조건으로는 못 막는다.</b> 가드가 「이 채널을 남이 쓰나」를 확인한 <b>뒤</b> revoke가 나가기 <b>전</b>
+     *       사이에 다른 회원이 커밋하면 그만이다(재현함). 그 회원은 <b>다른 users 행</b>을 잠그므로 우리 락은
+     *       직렬화하지 못한다. 채널 단위 직렬화로 창을 닫으려면 <b>revoke를 락 안에 넣어야</b> 하는데,
+     *       그것은 트랜잭션 안에서 외부 HTTP를 기다리는 것 — 이 PR이 두 번 피한 풀 고갈 패턴이다.</li>
+     *   <li><b>ⓒ 대신 참조를 지운다.</b> secrets에서 원문이 사라지므로 <b>우리는 그 토큰을 다시 못 쓴다</b>.
+     *       access는 1시간이면 죽고, 사용자는 구글 계정 화면에서 직접 지울 수 있다
+     *       (<a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a> — 웹이 그 링크를 안내한다).</li>
+     * </ul>
+     *
+     * <p><b>revoke가 남는 자리는 갱신 거부 하나뿐이다</b>({@code YoutubeTokenRefresher.reject}) —
+     * 그 토큰은 이미 {@code invalid_grant}로 죽어 있어 아무의 grant도 끊지 못한다.
      *
      * <p>정리는 afterCommit에서 <b>제출만</b> 하고 전용 스레드({@link YoutubeCleanupExecutor})가 돈다 —
      * afterCommit 안에서 REQUIRES_NEW delete를 직접 부르면 원 커넥션을 쥔 채 두 번째를 요구해 풀 데드락이 된다.
      */
-    private void closeAlive(Long userId, Instant now, String event, boolean revokeOldToken) {
+    private void closeAlive(Long userId, Instant now, String event) {
         links.findByUserIdAndRevokedAtIsNull(userId).ifPresent(old -> {
-            // 정리 시점에는 secrets를 지운 뒤라 못 읽는다 — 필요한 갈래만 커밋 전에 읽어 둔다.
-            String oldAccess = revokeOldToken ? secretStore.get(old.getAccessTokenRef()).orElse(null) : null;
-            String oldRefresh = revokeOldToken ? secretStore.get(old.getRefreshTokenRef()).orElse(null) : null;
             links.revokeAlive(userId, now, RevokeReason.USER_UNLINKED);
             String accessRef = old.getAccessTokenRef();
             String refreshRef = old.getRefreshTokenRef();
-            // 옛 채널도 넘긴다 — 이 행이 닫힌 뒤 다른 회원이 같은 채널을 연동했다면 그 사람의 구글 계정이
-            // 곧 이 토큰의 계정이라, 버리면 남의 멀쩡한 연동이 끊긴다(봇 리뷰 PR #116).
-            String oldChannelId = old.getChannelId();
-            cleanup.afterCommit(userId, () -> cleanupOld(userId, oldChannelId, accessRef, refreshRef,
-                    oldAccess, oldRefresh, event));
+            cleanup.afterCommit(userId, () -> cleanupOld(userId, accessRef, refreshRef, event));
         });
     }
 
     /**
-     * 정리 잡 본문(전용 스레드). DB 효과 먼저(delete는 REQUIRES_NEW라 커밋 뒤에도 실제로 지워진다),
-     * 외부 best-effort는 마지막. 단 delete가 던져도(SecretStore가 원격 구현이면 흔하다) revoke는 반드시
-     * 시도한다 — 안 그러면 해제한 토큰이 구글에 살아남는다. delete의 예외는 잡이 {@code cleanup.failed}
-     * WARN으로 남긴다. package-private은 단위 테스트용.
-     *
-     * <p>옛 토큰 원문이 둘 다 null이면 revoke 갈래가 아니다(재연동) — 아무것도 안 부른다.
-     *
-     * <p>🔴 <b>여기는 revoke를 한다 — 연동 실패 정리와 다르다.</b> 실패 정리는 revoke를 아예 걷어냈지만
-     * (판별자가 없는 경로가 있어 조건으로 못 막는다 — {@code YoutubeLinkService.link} 참고), <b>해제는
-     * 사용자 의도가 「구글 쪽 허락도 지워라」</b>이므로 안 부르면 기능이 성립하지 않는다. 「해제도 조건부로 하면
-     * 되잖아」가 아니라 <b>여기서는 버리는 것이 목적 자체</b>다.
-     *
-     * <p><b>그래서 좁은 창 하나가 남는다</b> — 이 잡이 밀린 사이 재연동이 <b>교환은 끝나고 저장은 전</b>인
-     * 순간이면 가드가 우리 표에서 아무것도 못 보고 revoke가 나간다. 커밋 <b>뒤</b> 재연동은 아래 락이 막았고,
-     * 남은 커밋 전 구간은 <b>열어 둔 채 간다</b>(auth/CLAUDE.md 알려진 구멍 20 — 완화책 셋과 각각의 대가,
-     * 특히 (가)가 커넥션을 쥔 채 외부 호출을 하게 되는 실측이 거기 있다). 실패 방향이 안전하다 —
-     * 사용자는 BROKEN을 보고 재연동하면 풀린다.
-     *
-     * <p>버리기는 {@code discardIfNoLiveLink}다(감사 3라운드 중대-1). 이 잡은 큐에서 밀릴 수 있고,
-     * 그 사이 사용자가 재연동을 끝내면 뒤늦은 revoke가 구글 동의 <b>전부</b>를 죽여 <b>방금 만든 새 grant까지</b>
-     * 끊는다(표는 ACTIVE인데 다음 갱신이 invalid_grant). 철회 점검 틱이 정리 잡을 무더기로 넣는 날에는
-     * 그 지연이 분 단위가 될 수 있어 창이 실제로 열린다. <b>발사 시점에</b> 살아있는 연동이 있으면 버리지 않는다 —
-     * 재연동이 없었다면 살아있는 행도 없으므로 정상 해제의 동작은 그대로다.
+     * 정리 잡 본문(전용 스레드). secrets 두 개를 지우고 「정리까지 끝났다」를 로그로 남긴다.
+     * <b>구글 호출은 없다</b> — 왜 없는지는 {@link #closeAlive} javadoc에 있다.
+     * package-private은 단위 테스트용.
      */
-    void cleanupOld(Long userId, String channelId, String accessRef, String refreshRef,
-                    String oldAccess, String oldRefresh, String event) {
-        RuntimeException deleteFailure = null;
-        try {
-            // 둘을 각각 시도한다 — 하나가 던져도 나머지는 지운다. 한 try로 묶으면 첫 실패가 둘째를
-            // 건너뛰어 그 비밀이 secrets에 영구히 남는다(봇 리뷰 PR #116). 예외는 아래에서 다시 올려
-            // 잡이 cleanup.failed WARN으로 남기게 한다.
-            deleteFailure = deleteQuietly(accessRef, null);
-            deleteFailure = deleteQuietly(refreshRef, deleteFailure);
-            if (deleteFailure == null) {
-                log.info("{} userId={}", event, userId);
-            }
-        } finally {
-            if (oldAccess != null || oldRefresh != null) {
-                discarder.discardIfNoLiveLink(userId, channelId, oldAccess, oldRefresh);
-            }
-        }
+    void cleanupOld(Long userId, String accessRef, String refreshRef, String event) {
+        // 둘을 각각 시도한다 — 하나가 던져도 나머지는 지운다. 한 try로 묶으면 첫 실패가 둘째를
+        // 건너뛰어 그 비밀이 secrets에 영구히 남는다(봇 리뷰 PR #116). 예외는 마지막에 다시 올려
+        // 잡이 cleanup.failed WARN으로 남기게 한다.
+        RuntimeException deleteFailure = deleteQuietly(accessRef, null);
+        deleteFailure = deleteQuietly(refreshRef, deleteFailure);
         if (deleteFailure != null) {
             throw deleteFailure;
         }
+        log.info("{} userId={}", event, userId);
     }
 
     /** 지우고, 실패하면 예외를 모아 둔다(먼저 난 것을 유지한다) — 나머지 삭제를 막지 않으려고. */

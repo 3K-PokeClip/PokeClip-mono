@@ -20,9 +20,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * 쓰기부의 계약 — 한 커밋, 커밋 뒤 정리, 그리고 <b>revoke를 언제 부르고 언제 안 부르는가</b>(계획 2절 결정 8).
  *
- * <p>구글 revoke는 그 사용자가 이 프로젝트에 준 동의 전부를 죽인다. 그래서 재연동 정리에서 옛 토큰을
- * revoke하면 <b>방금 저장한 새 토큰이 같이 죽는다</b> — 표는 ACTIVE인데 첫 갱신이 invalid_grant다.
- * 그 사건을 실제로 재는 것이 {@code cascadeOnRevoke} 검사 둘이다.
+ * <p>구글 revoke는 그 <b>구글 계정</b>이 우리 앱에 준 동의 전부를 죽인다. 그래서 이 클래스의 어느 경로도
+ * (재연동이든 <b>사용자 해제든</b>) 구글에 revoke를 보내지 않는다 — 보내면 방금 저장한 새 토큰이나
+ * 같은 채널을 연동한 다른 회원의 grant가 함께 죽는다. 근거는 {@code YoutubeLinkWriter.closeAlive} javadoc.
+ *
+ * <p>{@code cascadeOnRevoke} 검사들이 그것을 실물로 잰다 — 그 모드에서는 revoke가 한 번이라도 나가면
+ * 해당 계정의 갱신이 즉시 죽으므로, <b>갱신이 되는 것이 「안 보냈다」의 증거</b>다.
  */
 class YoutubeLinkWriterTest extends YoutubeLinkTestSupport {
 
@@ -90,11 +93,16 @@ class YoutubeLinkWriterTest extends YoutubeLinkTestSupport {
     }
 
     /**
-     * 위 검사가 <b>실제로 무언가를 잰다</b>는 대조군 — 같은 캐스케이드 모드에서 <b>사용자 해제</b>는
-     * revoke를 부르므로 그 뒤의 갱신이 거부된다. 둘이 갈리지 않으면 위 검사는 아무것도 안 재는 것이다.
+     * 🔴 <b>해제도 구글에 revoke를 보내지 않는다</b>(2026-08-24 사용자 결정, 봇 3판 P1).
+     * 캐스케이드 모드를 켜 두면 revoke가 나가는 순간 그 계정의 grant가 통째로 죽는데,
+     * 여기서 아무것도 안 죽는다는 것이 「안 보냈다」의 실물 증거다.
+     *
+     * <p>왜 안 보내나 — 구글 revoke는 계정 단위라 같은 채널을 방금 연동한 <b>다른 회원</b>의 grant까지
+     * 죽이고, 그 창은 조건으로 못 막는다(가드 확인과 revoke 발사 사이는 락으로 직렬화되지 않는다).
+     * 대신 <b>참조를 지워 우리가 못 쓰게</b> 하고, 사용자는 구글 계정 화면에서 직접 지운다.
      */
     @Test
-    void 사용자_해제는_같은_모드에서_토큰을_실제로_죽인다() {
+    void 사용자_해제는_행을_닫고_secrets를_지우되_구글을_부르지_않는다() {
         YOUTUBE.cascadeOnRevoke(true);
         User u = newUser();
         YoutubeChannelLink link = linked(u, "at-1", "rt-1");
@@ -103,25 +111,14 @@ class YoutubeLinkWriterTest extends YoutubeLinkTestSupport {
         writer.revoke(u.getId(), Instant.now());
         awaitCleanup();
 
-        assertThat(YOUTUBE.revokedTokens()).containsExactly(refresh);
-        assertThatThrownBy(() -> oauthClient.refresh(refresh)).isInstanceOf(YoutubeRejectedException.class);
-    }
-
-    /** 해제는 refresh를 우선으로 <b>한 번만</b> 부른다 — 구글은 한 번이면 grant 전체가 죽는다. */
-    @Test
-    void 사용자_해제는_행을_남기고_revoke를_한_번_부른다() {
-        User u = newUser();
-        YoutubeChannelLink link = linked(u, "at-1", "rt-1");
-
-        writer.revoke(u.getId(), Instant.now());
-        awaitCleanup();
-
         YoutubeChannelLink closed = linkRepository.findById(link.getId()).orElseThrow();
         assertThat(closed.isRevoked()).isTrue();
         assertThat(closed.status()).isEqualTo(LinkStatus.UNLINKED);
-        assertThat(secretStore.get(link.getAccessTokenRef())).isEmpty();
-        assertThat(YOUTUBE.revokedTokens()).containsExactly("rt-1");
-        assertThat(YOUTUBE.revokeCalls()).isEqualTo(1);
+        assertThat(secretStore.get(link.getAccessTokenRef())).as("참조를 지워 우리가 못 쓰게 한다").isEmpty();
+        assertThat(secretStore.get(link.getRefreshTokenRef())).isEmpty();
+        assertThat(YOUTUBE.revokeCalls()).as("해제가 구글을 불렀다").isZero();
+        assertThat(oauthClient.refresh(refresh).accessToken())
+                .as("그 토큰이 구글에서 죽었다 = revoke가 나갔다는 뜻이다").isNotNull();
     }
 
     @Test

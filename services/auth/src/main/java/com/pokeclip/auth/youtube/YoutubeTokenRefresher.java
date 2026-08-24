@@ -145,7 +145,7 @@ public class YoutubeTokenRefresher {
                 }
             } finally {
                 // delete가 던져도 revoke는 시도한다 — 안 그러면 죽은 grant의 흔적이 구글에 남는다.
-                discarder.discard(userId, null, refreshToken);   // 한 번이면 충분하다(grant 전체가 죽는다)
+                discarder.discard(userId, refreshToken);   // 한 번이면 충분하다(grant 전체가 죽는다)
             }
             if (deleteFailure != null) {
                 throw deleteFailure;

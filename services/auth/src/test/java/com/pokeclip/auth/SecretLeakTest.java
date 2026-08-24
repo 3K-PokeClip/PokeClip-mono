@@ -619,7 +619,7 @@ class SecretLeakTest extends IntegrationTestSupport {
             mockMvc.perform(delete("/api/youtube-link").header("Authorization", bearer))
                     .andExpect(status().isNoContent());
             assertThat(youtubeCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
-            assertThat(YOUTUBE.revokedTokens()).as("해제가 구글에 실제로 나갔다").contains(YT_REFRESH);
+            assertThat(YOUTUBE.revokeCalls()).as("해제는 구글에 아무것도 보내지 않는다").isZero();
             YOUTUBE.tokenResponds(200, tokenJson(YT_ACCESS, YT_REFRESH));
             String state2 = youtubeCodec.issue(user.getId(), Instant.now());
             mockMvc.perform(post("/api/youtube-link").header("Authorization", bearer)

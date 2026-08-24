@@ -27,16 +27,12 @@ import static org.mockito.Mockito.when;
 class YoutubeTokenDiscarderTest {
 
     private FakeYoutubeServer google;
-    private YoutubeDiscardGuard guard;
     private YoutubeTokenDiscarder discarder;
 
     @BeforeEach
     void setUp() {
         google = FakeYoutubeServer.start();
-        guard = mock(YoutubeDiscardGuard.class);
-        when(guard.blocksDiscard(any(), any())).thenReturn(false);
-        discarder = new YoutubeTokenDiscarder(
-                new YoutubeOAuthClient(RestClient.builder(), props(google)), guard);
+        discarder = new YoutubeTokenDiscarder(new YoutubeOAuthClient(RestClient.builder(), props(google)));
     }
 
     @AfterEach
@@ -47,49 +43,17 @@ class YoutubeTokenDiscarderTest {
     /** 치지직은 둘 다 불렀다. 구글은 한 번이면 grant 전체가 죽으므로 둘째 호출은 무의미하고 로그만 시끄럽다. */
     @Test
     void refresh가_있으면_그것만_한_번_버린다() {
-        discarder.discard(7L, "at-x", "rt-x");
+        discarder.discard(7L, "rt-x");
 
         assertThat(google.revokedTokens()).containsExactly("rt-x");
-        assertThat(google.revokeCalls()).isEqualTo(1);
-    }
-
-    @Test
-    void refresh가_없으면_access를_한_번_버린다() {
-        discarder.discard(7L, "at-x", null);
-
-        assertThat(google.revokedTokens()).containsExactly("at-x");
         assertThat(google.revokeCalls()).isEqualTo(1);
     }
 
     @Test
     void 버릴_토큰이_없으면_구글을_부르지_않는다() {
-        discarder.discard(7L, null, null);
+        discarder.discard(7L, null);
 
         assertThat(google.revokeCalls()).isZero();
-    }
-
-    /**
-     * 🔴 결정 8의 핵심 — 실패 정리가 <b>살아있는 연동을 죽이지 않게</b> 한다.
-     * 버려진 access는 1시간이면 스스로 죽지만, 멀쩡한 연동을 죽이면 사용자가 재동의해야 한다.
-     */
-    @Test
-    void 가드가_막으면_아예_버리지_않는다() {
-        when(guard.blocksDiscard(7L, "UC-a")).thenReturn(true);
-
-        try (LogCaptor logs = new LogCaptor()) {
-            discarder.discardIfNoLiveLink(7L, "UC-a", "at-x", "rt-x");
-
-            assertThat(google.revokeCalls()).as("살아있는 연동이 있는데 revoke를 불렀다").isZero();
-            assertThat(logs.messages()).contains("auth.youtube.link.discard_skipped userId=7 reason=LIVE_LINK");
-            assertThat(logs.levelOf("auth.youtube.link.discard_skipped")).isEqualTo(Level.INFO);
-        }
-    }
-
-    @Test
-    void 가드가_안_막으면_버린다() {
-        discarder.discardIfNoLiveLink(7L, "UC-a", "at-x", "rt-x");
-
-        assertThat(google.revokedTokens()).containsExactly("rt-x");
     }
 
     /**
@@ -100,7 +64,7 @@ class YoutubeTokenDiscarderTest {
     void 이미_죽은_토큰은_INFO_구글_장애는_WARN이다() {
         google.revokeResponds(400, "{\"error\":\"invalid_token\"}");
         try (LogCaptor logs = new LogCaptor()) {
-            discarder.discard(7L, "at-x", "rt-x");
+            discarder.discard(7L, "rt-x");
 
             assertThat(logs.messages()).contains("auth.youtube.link.token_already_dead userId=7 status=400");
             assertThat(logs.levelOf("auth.youtube.link.token_already_dead")).isEqualTo(Level.INFO);
@@ -108,7 +72,7 @@ class YoutubeTokenDiscarderTest {
 
         google.revokeResponds(503, "{}");
         try (LogCaptor logs = new LogCaptor()) {
-            discarder.discard(8L, "at-y", "rt-y");
+            discarder.discard(8L, "rt-y");
 
             assertThat(logs.messages()).contains("auth.youtube.link.orphan_token userId=8 causeType=Http503");
             assertThat(logs.levelOf("auth.youtube.link.orphan_token")).isEqualTo(Level.WARN);
@@ -120,7 +84,7 @@ class YoutubeTokenDiscarderTest {
     void 실패_로그에_토큰_원문이_없다() {
         google.revokeResponds(503, "{}");
         try (LogCaptor logs = new LogCaptor()) {
-            discarder.discard(7L, "LEAK-at-needle", "LEAK-rt-needle");
+            discarder.discard(7L, "LEAK-rt-needle");
 
             // 「없다」를 재기 전에 「나갔다」를 먼저 재둔다 — discard가 조용히 조기 반환하게 바뀌면
             // 로그가 통째로 비어 아래 noneMatch가 자동으로 참이 된다(감사 1라운드 사소-C).

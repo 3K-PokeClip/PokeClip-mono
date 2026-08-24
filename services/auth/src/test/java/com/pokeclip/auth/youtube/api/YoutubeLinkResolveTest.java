@@ -151,7 +151,10 @@ class YoutubeLinkResolveTest extends YoutubeLinkTestSupport {
                 .andExpect(jsonPath("$.reason").doesNotExist());
     }
 
-    /** 대조군 — 같은 모드에서 <b>사용자 해제</b>는 실제로 grant를 죽인다. 둘이 안 갈리면 위 검사는 아무것도 안 잰다. */
+    /**
+     * 대조군 — 해제 뒤에는 <b>우리 표가 UNLINKED</b>라 창구가 거절한다. 캐스케이드 모드를 켜 두었는데도
+     * 구글 호출이 0인 것이 「해제는 구글에 안 보낸다」의 증거다.
+     */
     @Test
     void 대조군_해제_뒤_같은_회원이_다시_연동하지_않으면_resolve는_UNLINKED다() throws Exception {
         YOUTUBE.cascadeOnRevoke(true);
@@ -161,7 +164,7 @@ class YoutubeLinkResolveTest extends YoutubeLinkTestSupport {
                 .andExpect(status().isNoContent());
         awaitCleanup();
 
-        assertThat(YOUTUBE.revokedTokens()).as("해제가 구글 쪽 grant를 안 죽였다").containsExactly("rt-old");
+        assertThat(YOUTUBE.revokeCalls()).as("해제는 구글에 아무것도 보내지 않는다").isZero();
         mockMvc.perform(resolve(u.getId())).andExpect(jsonPath("$.reason").value("UNLINKED"));
     }
 
