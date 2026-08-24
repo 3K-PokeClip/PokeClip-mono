@@ -36,7 +36,6 @@ public class YoutubeLinkService {
     private final YoutubeLinkStateCodec stateCodec;
     private final YoutubeOAuthClient oauthClient;
     private final YoutubeLinkWriter writer;
-    private final YoutubeTokenDiscarder discarder;
     private final YoutubeTokenRefresher refresher;
     private final YoutubeChannelLinkRepository links;
 
@@ -67,11 +66,23 @@ public class YoutubeLinkService {
     /**
      * 동의 콜백 완료. state 검증 → 교환 → scope 대조 → 채널 목록 → 채널 확정 → 저장.
      *
-     * <p>🔴 <b>실패 정리가 치지직과 다르다.</b> 치지직은 「교환에 성공한 뒤 실패하면 무조건 버린다」가
-     * 불변식이었다({@code ChzzkLinkService.link}). 구글에서 그대로 하면 revoke 한 번이 그 회원의
-     * <b>동의 전부</b>를 죽여(실측 A ⑥) <b>멀쩡한 기존 연동까지 끊는다</b>. 그래서 정리 진입점이
-     * {@link YoutubeTokenDiscarder#discardIfNoLiveLink}다 — 살아있는 연동이 있으면 아무것도 안 버리고,
-     * 버려진 access가 1시간 뒤 스스로 죽게 둔다.
+     * <p>🔴 <b>실패해도 받은 토큰을 버리지 않는다 — 치지직과 정반대다.</b> 치지직은 「교환에 성공한 뒤
+     * 실패하면 무조건 버린다」가 불변식이었지만({@code ChzzkLinkService.link}), 구글 revoke는
+     * <b>계정+프로젝트 단위</b>라 한 번 부르면 그 구글 계정이 우리 앱에 준 동의가 전부 죽는다(실측 A ⑥).
+     *
+     * <p><b>조건을 붙여 막으려다 세 판을 썼다.</b> 「이 회원에게 살아있는 행이 있나」→ 「이 채널을 남이 쓰나」→
+     * 「회원 행 락으로 직렬화」까지 갔는데도 <b>두 구멍이 남았다</b>: ① 다른 회원의 재연동이 <b>교환은 끝나고
+     * 저장은 전</b>인 순간(우리 표에 아직 없다) ② scope 미달처럼 <b>채널을 읽기도 전에</b> 실패하는 경로
+     * (판별자 자체가 없다). 근본 원인은 하나다 — <b>revoke의 영향 범위는 「그 구글 계정」인데 우리가 가진
+     * 판별자는 「회원·채널」뿐</b>이다.
+     *
+     * <p>그래서 조건을 더 붙이는 대신 <b>이 경로에서 revoke를 없앴다</b>(2026-08-24 사용자 결정).
+     * 대가는 실패한 시도의 grant가 구글에 남는 것 하나다 — access는 1시간이면 죽고, refresh는
+     * <b>우리가 참조를 저장하지 않아 아무도 못 쓰며</b>(실패 경로는 저장 전이거나 롤백된 뒤다),
+     * 사용자는 구글 계정 화면에서 직접 철회할 수 있다.
+     *
+     * <p><b>revoke가 남아 있는 자리는 둘뿐이다</b> — 사용자 해제({@code YoutubeLinkWriter.revoke})와
+     * 갱신 거부({@code YoutubeTokenRefresher.reject}). 둘 다 「그 토큰을 죽이는 것」이 목적 자체다.
      */
     public LinkResult link(Long userId, String code, String state) {
         Instant now = Instant.now();
@@ -86,9 +97,8 @@ public class YoutubeLinkService {
             log.info("auth.youtube.link.rejected userId={} status={}", userId, e.status());
             throw new YoutubeLinkException(YoutubeLinkFailure.INVALID_CODE, "구글이 교환을 거부했다");
         } catch (YoutubeUnavailableException e) {
-            // 응답에서 토큰까지는 읽혔는데 그 뒤가 깨진 경우(refresh 부재 포함)는 토큰이 예외에 실려 온다 —
-            // 구글엔 이미 발급됐으므로 버린다. 값은 로그·응답 어디에도 옮기지 않는다.
-            discardIfIssued(userId, null, e.issuedTokens().orElse(null));   // 채널을 아직 못 읽었다
+            // 응답에서 토큰까지는 읽혔는데 그 뒤가 깨진 경우(refresh 부재 포함)는 토큰이 예외에 실려 온다.
+            // 그래도 버리지 않는다 — 아래 「왜 실패 정리가 revoke를 안 하나」 참고. 값은 어디에도 옮기지 않는다.
             log.warn("auth.youtube.link.unavailable userId={} causeType={}", userId, e.causeType());
             throw new YoutubeLinkException(YoutubeLinkFailure.YOUTUBE_UNAVAILABLE, "구글 응답 없음");
         }
@@ -99,21 +109,15 @@ public class YoutubeLinkService {
             channels = oauthClient.listChannels(tokens.accessToken());
         } catch (YoutubeRejectedException e) {
             // 403 insufficientPermissions(readonly 없음)가 여기로 온다 — 영구라 동의부터 다시(실측 A ④).
-            discardIfIssued(userId, null, tokens);
             log.info("auth.youtube.link.rejected userId={} status={}", userId, e.status());
             throw new YoutubeLinkException(YoutubeLinkFailure.INVALID_CODE, "구글이 채널 조회를 거부했다");
         } catch (YoutubeUnavailableException e) {
             // 5xx·타임아웃·403 할당량 — 재시도하면 되는 자리다.
-            discardIfIssued(userId, null, tokens);
             log.warn("auth.youtube.link.unavailable userId={} causeType={}", userId, e.causeType());
             throw new YoutubeLinkException(YoutubeLinkFailure.YOUTUBE_UNAVAILABLE, "구글 응답 없음");
-        } catch (RuntimeException e) {
-            discardIfIssued(userId, null, tokens);
-            throw e;
         }
         if (channels.isEmpty()) {
             // items 키 부재도 빈 배열도 여기로 온다 — 「채널을 먼저 만드세요」지 형식 붕괴가 아니다.
-            discardIfIssued(userId, null, tokens);   // 채널이 없으니 점유를 볼 것도 없다
             log.info("auth.youtube.link.no_channel userId={}", userId);
             throw new YoutubeLinkException(YoutubeLinkFailure.NO_CHANNEL, "구글 계정에 유튜브 채널이 없다");
         }
@@ -127,13 +131,7 @@ public class YoutubeLinkService {
         } catch (YoutubeLinkException | DataIntegrityViolationException e) {
             // 둘 다 채널 중복이다(사전 조회 / 경합 시 DB 유니크 — YoutubeLinkWriter.create 주석).
             // 롤백됐다 — secrets도 같이(put이 REQUIRED). 커밋이 없으니 afterCommit도 못 쓴다.
-            // 🔴 채널을 넘긴다 — 409는 「그 채널이 남에게 묶여 있다」는 뜻이고, 채널이 같으면 구글 계정도 같다.
-            // 그 계정의 토큰을 버리면 원래 주인의 멀쩡한 연동이 끊긴다(봇 리뷰 PR #116).
-            discardIfIssued(userId, selected.channelId(), tokens);
             throw new YoutubeLinkException(YoutubeLinkFailure.CHANNEL_ALREADY_LINKED, "다른 계정에 묶인 채널이다");
-        } catch (RuntimeException e) {
-            discardIfIssued(userId, selected.channelId(), tokens);   // 풀 고갈·DB 다운. 예외는 그대로(500)
-            throw e;
         }
         log.info("auth.youtube.link.created userId={}", userId);
         return new LinkResult(saved.getChannelId(), saved.getChannelName(), saved.getCreatedAt());
@@ -150,20 +148,8 @@ public class YoutubeLinkService {
         String scope = tokens.scope();
         boolean granted = scope != null && List.of(scope.trim().split("\\s+")).contains(SCOPE_UPLOAD);
         if (!granted) {
-            discardIfIssued(userId, null, tokens);   // 채널을 아직 못 읽었다
             log.info("auth.youtube.link.scope_missing userId={}", userId);
             throw new YoutubeLinkException(YoutubeLinkFailure.SCOPE_MISSING, "동의에 업로드 권한이 없다");
-        }
-    }
-
-    /**
-     * 받은 토큰을 버린다 — <b>살아있는 연동이 없을 때만</b>. 조건이 왜 필요한지는 {@link #link} 주석과
-     * {@link YoutubeTokenDiscarder#discardIfNoLiveLink}에 있다. 이 갈래를 무조건 버리기로 바꾸면
-     * 실패 한 번이 그 회원의 기존 연동을 끊는다.
-     */
-    private void discardIfIssued(Long userId, String channelId, YoutubeTokens tokens) {
-        if (tokens != null) {
-            discarder.discardIfNoLiveLink(userId, channelId, tokens.accessToken(), tokens.refreshToken());
         }
     }
 

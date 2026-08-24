@@ -22,19 +22,21 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 🔴 연동 <b>실패</b>가 무엇을 버리는가. 이 PR에서 제일 비싼 실패가 여기 있다.
+ * 🔴 연동 <b>실패</b>가 무엇을 버리는가 — <b>아무것도 버리지 않는다.</b>
  *
- * <p>구글 revoke는 「그 토큰 쌍」이 아니라 그 사용자가 우리 앱에 준 <b>동의 전부</b>를 죽인다(실측 A ⑥ —
- * 1차 refresh만 revoke했더니 직전까지 갱신되던 2차 refresh가 400 invalid_grant로 죽었다). 그래서
- * 치지직의 불변식(「교환에 성공한 뒤 실패하면 무조건 버린다」)을 그대로 미러하면, <b>실패 한 번이
- * 그 회원의 멀쩡한 기존 연동을 통째로 끊는다</b> — 표는 ACTIVE인데 다음 갱신이 invalid_grant다.
+ * <p>구글 revoke는 「그 토큰 쌍」이 아니라 그 <b>구글 계정</b>이 우리 앱에 준 동의 <b>전부</b>를 죽인다
+ * (실측 A ⑥). 그래서 실패한 시도의 토큰을 버리는 순간 <b>남의(또는 내 다른 계정의) 멀쩡한 연동이 끊긴다.</b>
  *
- * <p>그래서 갈래가 둘이다. 살아있는 연동이 <b>없으면</b> 버리고(고아 토큰을 남기지 않는다),
- * <b>있으면</b> 안 버린다(버려진 access는 1시간이면 스스로 죽는다). 아래 검사들은 두 갈래를 나란히 잰다 —
- * 한쪽만 있으면 「아무것도 안 버린다」로 바꿔도 초록이다.
+ * <p><b>조건을 붙여 막으려다 세 판을 썼다</b> — 「이 회원의 살아있는 행」 → 「이 채널을 남이 쓰나」 →
+ * 「회원 행 락」. 그래도 <b>교환은 끝나고 저장은 전인 순간</b>과 <b>채널을 읽기도 전에 실패하는 경로</b>가
+ * 남았다(봇 리뷰 2판). 판별자가 「회원·채널」인데 영향 범위가 「구글 계정」이라 원리적으로 안 덮인다.
+ * 그래서 <b>이 경로의 revoke 자체를 없앴다</b>(2026-08-24 사용자 결정).
  *
- * <p>「기존 연동이 여전히 유효하다」는 가짜 구글의 캐스케이드 모드를 켜고 그 refresh로 실제 갱신을
- * 시도해 잰다. resolve는 태스크 9에서 생기므로 그때 같은 사건을 창구로 한 번 더 건다.
+ * <p>대가는 실패한 시도의 grant가 구글에 남는 것 하나다 — access는 1시간이면 죽고, refresh는
+ * <b>우리가 참조를 저장하지 않아 아무도 못 쓴다</b>. 사용자는 구글 계정 화면에서 직접 철회할 수 있다.
+ *
+ * <p>아래 검사들은 갈래마다 <b>revoke가 한 번도 안 나가는 것</b>을 재고, 살아있는 연동이 있는 갈래는
+ * <b>그 연동이 실제로 계속 쓸 수 있는 상태</b>(캐스케이드 모드에서 갱신 성공)까지 확인한다.
  */
 class YoutubeLinkFailureCleanupTest extends YoutubeLinkTestSupport {
 
@@ -57,8 +59,12 @@ class YoutubeLinkFailureCleanupTest extends YoutubeLinkTestSupport {
 
     // ── 살아있는 연동이 없을 때: 받은 토큰을 버린다 ────────────────────────────────
 
+    /**
+     * scope 미달은 <b>채널을 읽기도 전에</b> 갈린다 — 이 경로에는 「그 토큰이 어느 채널의 것인가」라는
+     * 판별자가 아예 없다. 조건으로 막을 수 없는 자리라서 revoke를 안 하는 쪽이 유일하게 안전하다.
+     */
     @Test
-    void 연동이_없는_회원의_scope_실패는_받은_토큰을_한_번_버린다() throws Exception {
+    void 연동이_없는_회원의_scope_실패도_토큰을_버리지_않는다() throws Exception {
         User user = newUser();
         YOUTUBE.tokenResponds(200, SCOPE_MISSING_TOKENS);
 
@@ -66,11 +72,11 @@ class YoutubeLinkFailureCleanupTest extends YoutubeLinkTestSupport {
                 .andExpect(jsonPath("$.reason").value("SCOPE_MISSING"));
         awaitCleanup();
 
-        assertThat(YOUTUBE.revokedTokens()).as("refresh 우선 한 번").containsExactly("rt-x");
+        assertThat(YOUTUBE.revokeCalls()).as("실패 정리는 구글을 부르지 않는다").isZero();
     }
 
     @Test
-    void 연동이_없는_회원의_채널_0개_실패도_받은_토큰을_버린다() throws Exception {
+    void 연동이_없는_회원의_채널_0개_실패도_토큰을_버리지_않는다() throws Exception {
         User user = newUser();
         YOUTUBE.channelsResponds(200, "{\"items\":[]}");
 
@@ -78,15 +84,15 @@ class YoutubeLinkFailureCleanupTest extends YoutubeLinkTestSupport {
                 .andExpect(jsonPath("$.reason").value("NO_CHANNEL"));
         awaitCleanup();
 
-        assertThat(YOUTUBE.revokedTokens()).containsExactly("rt-1");
+        assertThat(YOUTUBE.revokeCalls()).isZero();
     }
 
     /**
      * 교환 응답에 refresh_token이 없으면 갱신할 수 없는 반쪽 연동이라 만들지 않는다(502).
-     * 그런데 access는 이미 발급됐다 — 클라이언트가 그것을 예외에 실어 보내야 여기서 버릴 수 있다.
+     * access는 이미 발급됐지만 <b>버리지 않는다</b> — 1시간이면 죽고, 그 사이 남의 연동을 끊는 대가가 훨씬 크다.
      */
     @Test
-    void 교환에_refresh가_없으면_502이고_받은_access를_버린다() throws Exception {
+    void 교환에_refresh가_없으면_502이고_받은_access도_버리지_않는다() throws Exception {
         User user = newUser();
         YOUTUBE.tokenResponds(200, "{\"access_token\":\"at-only\",\"expires_in\":3600,"
                 + "\"scope\":\"" + FakeYoutubeServer.SCOPE_GRANTED + "\"}");
@@ -95,7 +101,7 @@ class YoutubeLinkFailureCleanupTest extends YoutubeLinkTestSupport {
                 .andExpect(jsonPath("$.reason").value("YOUTUBE_UNAVAILABLE"));
         awaitCleanup();
 
-        assertThat(YOUTUBE.revokedTokens()).containsExactly("at-only");
+        assertThat(YOUTUBE.revokeCalls()).isZero();
         assertThat(linkRepository.findFirstByUserIdOrderByCreatedAtDesc(user.getId())).isEmpty();
     }
 
