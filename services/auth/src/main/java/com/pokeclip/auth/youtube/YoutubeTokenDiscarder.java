@@ -29,7 +29,7 @@ public class YoutubeTokenDiscarder {
     private static final Logger log = LoggerFactory.getLogger(YoutubeTokenDiscarder.class);
 
     private final YoutubeOAuthClient oauthClient;
-    private final YoutubeChannelLinkRepository links;
+    private final YoutubeDiscardGuard guard;
 
     /**
      * 한 번만 부른다(위 javadoc). <b>부르는 자리는 둘뿐이다</b> — 사용자 해제(DELETE)와 갱신 거부 정리(BROKEN).
@@ -54,15 +54,20 @@ public class YoutubeTokenDiscarder {
     }
 
     /**
-     * 실패 정리 전용 진입점 — 교환은 성공했는데 그 뒤(scope 대조·채널 0개·409·5xx)가 실패한 자리에서 부른다.
+     * 실패·정리 진입점 — 교환은 성공했는데 그 뒤(scope 대조·채널 0개·409·5xx)가 실패한 자리와
+     * 사용자 해제의 커밋 뒤 정리에서 부른다.
      *
-     * <p><b>왜 조건부인가</b> — revoke가 이 사용자의 동의 <b>전체</b>를 죽이므로, 실패한 시도의 토큰을 버리는
-     * 순간 <b>이 회원의 멀쩡한 기존 연동까지 죽는다</b>(표는 ACTIVE인데 토큰만 죽어 다음 resolve가 BROKEN).
+     * <p><b>왜 조건부인가</b> — revoke가 그 <b>구글 계정</b>의 동의 <b>전체</b>를 죽이므로, 실패한 시도의
+     * 토큰을 버리는 순간 <b>멀쩡한 연동까지 죽는다</b>(표는 ACTIVE인데 토큰만 죽어 다음 resolve가 BROKEN).
      * 버려진 access는 <b>1시간이면 스스로 죽는다</b> — 살아있는 연동을 죽이는 대가가 훨씬 크다.
-     * 그래서 살아있는 행이 있으면 아무것도 하지 않고 그 사실을 로그로 남긴다.
+     *
+     * <p>판정은 {@link YoutubeDiscardGuard}가 락 안에서 한다(진행 중인 재연동과 남이 쓰는 채널까지 본다).
+     * <b>revoke는 그 트랜잭션 밖에서</b> 돈다 — 커넥션을 쥔 채 외부 HTTP를 기다리지 않는다.
+     *
+     * @param channelId 이 토큰이 가리키는 채널. 모르면 null(교환 실패·scope 부족 — 채널을 아직 못 읽었다)
      */
-    public void discardIfNoLiveLink(Long userId, String accessToken, String refreshToken) {
-        if (links.findByUserIdAndRevokedAtIsNull(userId).isPresent()) {
+    public void discardIfNoLiveLink(Long userId, String channelId, String accessToken, String refreshToken) {
+        if (guard.blocksDiscard(userId, channelId)) {
             log.info("auth.youtube.link.discard_skipped userId={} reason=LIVE_LINK", userId);
             return;
         }

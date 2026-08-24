@@ -27,16 +27,16 @@ import static org.mockito.Mockito.when;
 class YoutubeTokenDiscarderTest {
 
     private FakeYoutubeServer google;
-    private YoutubeChannelLinkRepository links;
+    private YoutubeDiscardGuard guard;
     private YoutubeTokenDiscarder discarder;
 
     @BeforeEach
     void setUp() {
         google = FakeYoutubeServer.start();
-        links = mock(YoutubeChannelLinkRepository.class);
-        when(links.findByUserIdAndRevokedAtIsNull(any())).thenReturn(Optional.empty());
+        guard = mock(YoutubeDiscardGuard.class);
+        when(guard.blocksDiscard(any(), any())).thenReturn(false);
         discarder = new YoutubeTokenDiscarder(
-                new YoutubeOAuthClient(RestClient.builder(), props(google)), links);
+                new YoutubeOAuthClient(RestClient.builder(), props(google)), guard);
     }
 
     @AfterEach
@@ -73,11 +73,11 @@ class YoutubeTokenDiscarderTest {
      * 버려진 access는 1시간이면 스스로 죽지만, 멀쩡한 연동을 죽이면 사용자가 재동의해야 한다.
      */
     @Test
-    void 살아있는_연동이_있으면_아예_버리지_않는다() {
-        when(links.findByUserIdAndRevokedAtIsNull(7L)).thenReturn(Optional.of(aliveLink()));
+    void 가드가_막으면_아예_버리지_않는다() {
+        when(guard.blocksDiscard(7L, "UC-a")).thenReturn(true);
 
         try (LogCaptor logs = new LogCaptor()) {
-            discarder.discardIfNoLiveLink(7L, "at-x", "rt-x");
+            discarder.discardIfNoLiveLink(7L, "UC-a", "at-x", "rt-x");
 
             assertThat(google.revokeCalls()).as("살아있는 연동이 있는데 revoke를 불렀다").isZero();
             assertThat(logs.messages()).contains("auth.youtube.link.discard_skipped userId=7 reason=LIVE_LINK");
@@ -86,8 +86,8 @@ class YoutubeTokenDiscarderTest {
     }
 
     @Test
-    void 살아있는_연동이_없으면_버린다() {
-        discarder.discardIfNoLiveLink(7L, "at-x", "rt-x");
+    void 가드가_안_막으면_버린다() {
+        discarder.discardIfNoLiveLink(7L, "UC-a", "at-x", "rt-x");
 
         assertThat(google.revokedTokens()).containsExactly("rt-x");
     }
