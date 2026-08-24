@@ -33,7 +33,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 | | 소유 |
 |---|---|
 | `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
-| `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `stream_segments`(**아직 없다**) |
+| `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `broadcasts.vod_expires_at` (V203, POK-117) |
 | chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302) · `chat_ended_streams` (V303) — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
 
 **서로의 표를 직접 읽지 않는다.** 필요하면 계약4의 `POST /internal/stream-keys/resolve`로
@@ -153,11 +153,11 @@ DB 접속값은 채우지 않는다.
 | `CHZZK_CLIENT_SECRET` | 그 앱의 Client Secret. 토큰 교환·갱신·철회 요청 본문에만 쓰고 URL·로그 어디에도 안 나간다 |
 | `CHZZK_REDIRECT_URI` | 동의가 끝난 뒤 치지직이 code·state를 돌려줄 주소. **웹 프론트의 콜백 라우트**(`/oauth/chzzk/callback`)를 가리켜야 한다 — 백엔드가 받는 주소가 아니다. **개발자 센터에 앱당 하나만 등록된다**(그래서 환경마다 앱을 따로 판다): 로컬 `http://localhost:3000/oauth/chzzk/callback` · dev `http://dev.pokeclip.com/oauth/chzzk/callback` |
 
-**`clip`은 환경변수 없이는 부팅에 실패한다. 여섯이고, auth와 같은 두 갈래다.**
+**`clip`은 환경변수 없이는 부팅에 실패한다. 일곱이고, auth와 같은 두 갈래다.**
 
 | 갈래 | 변수 | 어디서 얻나 |
 |---|---|---|
-| **앱 시크릿 셋** | `CORS_ALLOWED_ORIGINS` · `JWT_SECRET` · `INTERNAL_API_TOKEN` | **`.env.example`에 값이 없다** — auth의 앱 시크릿 아홉과 같은 규칙이다. `.env`에 직접 넣는다 |
+| **앱 시크릿 넷** | `CORS_ALLOWED_ORIGINS` · `JWT_SECRET` · `INTERNAL_API_TOKEN` · **`AUTH_BASE_URL`**(POK-117) | **`.env.example`에 값이 없다** — auth의 앱 시크릿 아홉과 같은 규칙이다. `.env`에 직접 넣는다. 다만 `AUTH_BASE_URL`은 시크릿이 아닌 주소라 예시 값이 적혀 있다(`http://localhost:8082`, compose 안에서는 `http://auth:8082`) |
 | **DB 접속값 셋** | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | `.env`에 있다(POK-82에서 POK-161의 규칙을 옮겼다) |
 
 **`JWT_SECRET`·`INTERNAL_API_TOKEN`은 auth와 <u>같은 값·같은 이름</u>이어야 한다**(POK-118).
@@ -515,7 +515,7 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 `..._clip` · `..._chat`). 기본 이름을 쓰면 나중에 뜬 쪽이 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
 마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat.
 지금까지 나간 것은 auth의 `V101`~`V107` · clip의 `V201`(`broadcasts`·`broadcast_events`)과
-`V202`(`jump_cards`, POK-118) · chat의 `V301`(`chat_messages`)이다.
+`V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117) · chat의 `V301`(`chat_messages`)이다.
 
 **모든 Flyway 서버(auth 포함)에 `baseline-on-migrate: true` + `baseline-version: 0`이 필수다.**
 공유 DB에서는 어느 서버가 먼저 뜰지 정해져 있지 않다 — 다른 서버가 이미 표를
@@ -900,6 +900,68 @@ the event type buffer to the empty string and return"* 이라 `MessageEvent`를 
 
 **아직 없는 것:** 핫키 카드 생성(POK-119) · 카드 목록 API · 만료 정리 배치 · Redis 팬아웃 ·
 `clipped`·`expired` 상태.
+
+### clip — 구간→세그먼트 변환 (POK-117)
+
+**「3분 20초부터 3분 50초까지」를 실제 영상 조각 목록으로 바꿔 준다.** 편집기 미리보기가
+이 문으로 「지금 어디까지 볼 수 있나」를 묻고, 나중에 렌더 잡(POK-125)이 같은 판정을
+서비스 계층에서 재사용한다.
+
+```
+GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
+```
+
+| 응답 칸 | 뜻 |
+|---|---|
+| `segments[]` | `seq` · `startPtsMs` · `durationMs` · `discontinuity`. **`s3Key`는 안 나간다** |
+| `availableFromMs` | 목록 첫 조각의 시작. 목록이 비면 `startMs` |
+| `availableUntilMs` | 목록 마지막 조각의 끝. 목록이 비면 `startMs` |
+| `complete` | `availableFromMs <= startMs && availableUntilMs >= endMs` |
+
+**🔴 목록과 `availableFromMs`·`availableUntilMs`는 조각 경계라 요청 구간보다 넓어질 수 있다.**
+조각이 4초 단위라 그 경계로만 잘린다 — 요청 `[5000,9000)`에 `availableUntilMs=12000`이 정상이다
+(실기동 확인). **요청한 구간으로 정확히 자르는 것은 호출자(플레이어) 몫이다** —
+`availableUntilMs`를 그대로 재생 끝점으로 쓰면 요청보다 긴 영상을 튼다.
+
+**목록은 「가장 앞의 끊김 없는 구간」 하나다.** 겹치는 조각 중 `upload_state='uploaded'`인
+첫 조각부터 `seq`가 이어지는 동안만 싣고, 끊기면 거기서 멈춘다(그 뒤에 올라온 조각이 또 있어도
+버린다). 가운데가 빈 목록을 주면 화면이 이어 붙여 영상이 튀기 때문이다.
+
+**요청 머리가 비어 있어도 뒤를 보여준다.** 방송이 끊겨 앞 조각이 없으면 `availableFromMs`가
+요청 시작보다 커지고 `complete=false`가 된다 — 아무것도 안 주면 「아직 안 올라옴」과
+「영영 없음」이 똑같이 막히는데, 이 API는 둘을 구분하지 못한다.
+
+**`upload_state='failed'`는 `pending`과 같이 「아직 아님」으로 본다** — 계약-세그먼트인덱스
+3절이 `failed → uploaded` 역전이를 명시한다(재기동·주기 스위퍼가 다시 집어 올린다).
+
+| 상태 | 언제 |
+|---|---|
+| **400** | `startMs<0` · `endMs<=startMs` · 구간이 30분 초과 · 파라미터 형식 오류 |
+| **404** | 없는 방송 **그리고** 볼 자격이 없는 방송 — **본문이 바이트 단위로 같다**(구분되면 남의 방송 존재가 샌다). 실제 사유는 로그에만. **본문만 같아서는 안 갈렸다** — 자격 판정은 auth 왕복을 타고 없는 방송은 안 타서 중앙값이 1.5ms 대 4.4ms로 벌어졌다(실측 1,240회, 한 번만 재도 99.5% 구분). 그래서 **이 404는 요청 도착 뒤 25ms가 차야 나간다**(200·400·410·503은 안 늦춘다) |
+| **410** | 보관 기한(`vod_expires_at`)이 지난 방송. 자격이 있는 호출자에게만 도달한다 |
+| **503** | auth 자격 창구에 못 닿음. **판정 불가는 통과가 아니라 거절이다** |
+
+자격은 auth에 물어서 판정한다(`POST /internal/editor-delegations/resolve`, POK-175).
+그래서 **`AUTH_BASE_URL`이 새 필수 환경변수다** — 없으면 부팅을 거부한다.
+
+**보관 기한은 종료 이벤트를 받을 때 `ended_at + 60일`로 채운다**(ADR-004의 VOD 60일).
+`V203`이 그 칸을 만들고 이미 끝난 방송에 소급 적용한다. 라이브 중인 방송은 NULL이다.
+
+**알려진 한계 다섯**
+- **404의 시간 맞추기는 평상시만 막는다.** auth가 아파서 자격 창구가 느려지면(시한이 connect 2초 +
+  read 5초) 자격 판정을 타는 404가 25ms를 훌쩍 넘어, 그 시간차로 방송의 실재가 다시 구분된다.
+  고정 지연으로는 못 덮는다 — 왕복 자체를 없애야 닫힌다
+- **auth가 죽어 있으면 상태 코드 자체가 실재를 가른다.** 그동안 없는 방송은 404, 실재하는 방송은
+  **503**이다 — 자격 판정이 방송 조회에 성공한 뒤에만 도달하기 때문이다. 시간이 아니라 코드라
+  25ms 바닥으로 못 덮는다. **503을 404로 접는 길은 일부러 안 골랐다** — 화면이 「없는 방송」으로
+  단정하면 auth가 살아난 뒤에도 편집자가 다시 시도하지 않는다. 즉 이 구멍은 **auth 장애 중에만**
+  열리고, 그때는 미리보기가 어차피 아무에게도 안 열린다
+- **개발용 compose에는 `stream_segments`가 없다**(그 파일에 media·인덱서가 없다). 거기서 이 API를
+  부르면 500이다. media가 뜨면 표가 생긴다 — 로컬에서는 media 컨테이너를 띄우거나 정본 DDL을 심는다
+- **종료 이벤트가 유실된 방송은 기한이 영영 안 채워진다** — 만료 판정을 못 한다
+- **계약이 인정한 `failed` 고착 하나** — 실패한 조각이 그 스트림의 마지막인 채로 방송이 끝나면
+  후속이 없어 자동 회복되지 않는다. 그 구간을 포함한 요청은 영원히 `complete=false`이고,
+  처치는 1번 쪽 운영자 수동 개입이다
 
 ### 치지직 채널 연동 (POK-93)
 
