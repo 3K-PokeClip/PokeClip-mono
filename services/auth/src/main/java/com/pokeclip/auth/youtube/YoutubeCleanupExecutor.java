@@ -40,6 +40,8 @@ public class YoutubeCleanupExecutor {
     static final int THREADS = 2;
     static final int QUEUE_CAPACITY = 1000;
     static final Duration SHUTDOWN_WAIT = Duration.ofSeconds(10);
+    /** 인터럽트한 뒤 워커가 실제로 빠져나올 때까지만 — 종료 유예(15초) 안에 들어가야 한다. */
+    static final Duration FORCED_STOP_WAIT = Duration.ofSeconds(2);
 
     private final ThreadPoolExecutor pool;
     /** 제출·완료 카운터. awaitIdle이 큐·활성 수 대신 이것을 본다 — TPE의 take()~실행 사이 창에서 둘 다 0으로 보인다. */
@@ -107,15 +109,32 @@ public class YoutubeCleanupExecutor {
         return true;
     }
 
+    /**
+     * 종료. 유예 안에 안 끝나면 <b>인터럽트한다</b>({@code shutdownNow}).
+     *
+     * <p>🔴 예전에는 로그만 찍고 반환했는데, 워커가 <b>비데몬</b>이라 JVM이 큐가 빌 때까지 안 죽었다 —
+     * 실측: {@code shutdown()}이 10초 만에 반환한 뒤에도 잡이 인터럽트 없이 끝까지 돌았다(봇 3판 P2-2).
+     * 우리가 README·인프라에 적어 둔 <b>종료 유예 15초를 넘길 수 있다</b>는 뜻이고, 그러면 오케스트레이터가
+     * SIGKILL로 끊어 <b>어차피 유실되면서 배포만 느려진다.</b>
+     *
+     * <p>대가는 <b>대기 중이던 secrets 삭제가 유실되는 것</b>이다 — 다만 그것은 이 클래스가 처음부터
+     * 문서화한 성질이다(위 「프로세스가 죽으면 고아 secret이 남는다」). 유실 건수를 로그로 남겨
+     * 나중에 찾을 수 있게 한다.
+     */
     @PreDestroy
     void shutdown() {
         pool.shutdown();
         try {
             if (!pool.awaitTermination(SHUTDOWN_WAIT.toMillis(), TimeUnit.MILLISECONDS)) {
-                log.warn("auth.youtube.cleanup.shutdown_timeout pending={}",
-                        pool.getQueue().size() + pool.getActiveCount());
+                int dropped = pool.getQueue().size() + pool.getActiveCount();
+                log.warn("auth.youtube.cleanup.shutdown_timeout pending={}", dropped);
+                pool.shutdownNow();   // 비데몬 워커를 깨워 JVM이 종료 유예 안에 죽게 한다
+                if (!pool.awaitTermination(FORCED_STOP_WAIT.toMillis(), TimeUnit.MILLISECONDS)) {
+                    log.warn("auth.youtube.cleanup.shutdown_forced pending={}", dropped);
+                }
             }
         } catch (InterruptedException e) {
+            pool.shutdownNow();
             Thread.currentThread().interrupt();
         }
     }

@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -47,5 +49,54 @@ class YoutubeCleanupExecutorTest {
         } finally {
             executor.shutdown();
         }
+    }
+
+    /**
+     * 🔴 유예 안에 안 끝나는 잡은 <b>인터럽트한다</b>. 워커가 비데몬이라 안 그러면 JVM이 큐가 빌 때까지
+     * 안 죽고 종료 유예(15초)를 넘긴다(봇 3판 P2-2 실측: 로그만 찍고 반환한 뒤에도 잡이 끝까지 돌았다).
+     */
+    @Test
+    void 유예를_넘긴_잡은_인터럽트하고_종료한다() throws Exception {
+        YoutubeCleanupExecutor executor = new YoutubeCleanupExecutor();
+        CountDownLatch started = new CountDownLatch(1);
+        AtomicBoolean interrupted = new AtomicBoolean();
+        executor.submit(executor.new Job(1L, null, () -> {
+            started.countDown();
+            try {
+                Thread.sleep(YoutubeCleanupExecutor.SHUTDOWN_WAIT.plusSeconds(30).toMillis());
+            } catch (InterruptedException e) {
+                interrupted.set(true);
+                Thread.currentThread().interrupt();
+            }
+        }));
+        assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+
+        long startedAt = System.nanoTime();
+        executor.shutdown();
+        long elapsed = Duration.ofNanos(System.nanoTime() - startedAt).toMillis();
+
+        assertThat(interrupted).as("잡이 인터럽트되지 않았다 — 비데몬 워커가 JVM을 붙잡는다").isTrue();
+        assertThat(elapsed).as("종료 유예 15초 안에 끝나야 한다")
+                .isLessThan(YoutubeCleanupExecutor.SHUTDOWN_WAIT
+                        .plus(YoutubeCleanupExecutor.FORCED_STOP_WAIT).plusSeconds(2).toMillis());
+    }
+
+    /** 정상 갈래 — 유예 안에 끝나는 잡은 인터럽트 없이 완주한다. 위 검사가 「무조건 끊는다」로 바뀌면 여기서 걸린다. */
+    @Test
+    void 유예_안에_끝나는_잡은_그대로_완주한다() throws Exception {
+        YoutubeCleanupExecutor executor = new YoutubeCleanupExecutor();
+        AtomicBoolean finished = new AtomicBoolean();
+        executor.submit(executor.new Job(1L, null, () -> {
+            try {
+                Thread.sleep(200);
+                finished.set(true);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+
+        executor.shutdown();
+
+        assertThat(finished).as("유예 안에 끝나는 잡을 끊었다").isTrue();
     }
 }
