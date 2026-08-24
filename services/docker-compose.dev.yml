@@ -42,7 +42,7 @@ services:
         condition: service_healthy   # Flyway 가 뜨자마자 붙으므로 DB가 준비된 뒤여야 한다
     ports:
       # 넷 중 이것만 밖에 연다. 다만 "API가 auth 에만 있다"는 이제 틀렸다 —
-      # 2026-08-23 실측 @RestController: auth 12 · clip 4 · chat-collector 0 · chat-detector 0.
+      # 2026-08-24 실측 @RestController: auth 13 · clip 4 · chat-collector 2 · chat-detector 0.
       # clip 도 웹이 부르는 API를 갖게 됐지만 앞단 프록시가 생길 때 연다(아래 clip 절).
       # 보안그룹도 8082 만 연다.
       - "8082:8082"
@@ -117,8 +117,10 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      # 루프백에 묶는다. clip 과 달리 이쪽은 진짜로 @RestController 가 0개라
-      # 밖에서 부를 것이 아직 없다.
+      # 루프백에 묶는다. @RestController 는 이제 0개가 아니다(POK-128 수집 상태 창구,
+      # POK-92 영상 위치 창구) — 다만 둘 다 clip 이 compose 네트워크 안에서 부르는
+      # 내부 창구라 밖에 열 이유가 없다. X-Internal-Token 하나로만 잠기므로 밖에 열면
+      # 그 토큰이 유일한 방어선이 된다.
       - "127.0.0.1:8083:8083"
     environment:
       DB_HOST: postgres
@@ -161,7 +163,8 @@ services:
     restart: unless-stopped
     # DB·외부 연동이 아직 없다. postgres 를 기다릴 이유가 없다.
     ports:
-      # 루프백에 묶는다(chat-collector 와 같은 이유 — @RestController 가 0개다).
+      # 루프백에 묶는다(chat-collector 와 같은 이유 — 밖에 열 이유가 없다).
+      # 이쪽은 아직 @RestController 가 실제로 0개이기도 하다.
       - "127.0.0.1:8084:8084"
     environment:
       JAVA_TOOL_OPTIONS: -Xmx192m
