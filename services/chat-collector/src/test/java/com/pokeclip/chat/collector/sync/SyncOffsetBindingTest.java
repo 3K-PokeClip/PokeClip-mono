@@ -27,19 +27,26 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code DatasourceTimeoutTest}와 같은 자세로 잰다 — <b>값을 단언하지 말고 그 값으로만 나오는
  * 결과가 나오는지 본다.</b>
  *
- * <h2>왜 음수인가</h2>
- * 기본값이 0이라 <b>0을 쓰면 「우연히 기본값과 같아서」 통과한다.</b> 음수는 yml 기본값도
- * 아니고(0) 「설정을 못 읽어 0이 된」 상태와도 갈린다. 음수를 실제로 쓰는 것이 이 카드의
- * 결정이기도 하다 — 보정값의 부호가 환경에 따라 뒤집힌다({@link SyncProperties} javadoc).
+ * <h2>왜 음수인가 — 피해야 할 값이 <b>둘</b>이다</h2>
+ * <b>0</b>을 쓰면 「설정을 못 읽어 0이 된」 상태와 구분되지 않고, <b>yml 기본값(3900)</b>을
+ * 쓰면 「플레이스홀더가 환경변수를 못 읽고 자기 기본값으로 떨어진」 상태와 구분되지 않는다.
+ * 음수는 그 둘 어느 쪽도 아니다. 음수를 실제로 쓰는 것이 이 카드의 결정이기도 하다 —
+ * 보정값의 부호가 환경에 따라 뒤집힌다({@link SyncProperties} javadoc).
  *
  * <p>이 컨텍스트는 {@code properties}가 달라 캐시가 갈린다 — 그것이 목적이다. 실물
  * {@code application.yml}의 그 줄이 <b>플레이스홀더를 통해</b> 이 값을 읽어야만 초록이다.
+ *
+ * <p><b>🔴 「yml 기본값이 0으로 되돌아갔다」를 여기서 재려 하지 마라.</b> 이 컨텍스트는
+ * {@code CHAT_SYNC_OFFSET_MS}를 직접 주므로 <b>플레이스홀더의 기본값 자리를 아예 안 지나간다</b> —
+ * 여기에 {@code defaultOffsetMs != 0}을 걸면 그것은 언제나 참인 장식이다. 그 그물은
+ * 보정값을 안 덮어쓰는 컨텍스트에 있다
+ * ({@code VideoPositionCalculatorTest.실물_기본_보정값이_자리_표시_0이_아니다()}).
  */
 @SpringBootTest(properties = "CHAT_SYNC_OFFSET_MS=" + SyncOffsetBindingTest.OFFSET_MS)
 @ActiveProfiles("test")
 class SyncOffsetBindingTest extends IntegrationTestSupport {
 
-    /** yml 기본값(0)과도, 「안 걸려서 0」과도 갈리는 값. 부호가 방향까지 검증한다. */
+    /** yml 기본값(3900)과도, 「안 걸려서 0」과도 갈리는 값. 부호가 방향까지 검증한다. */
     static final String OFFSET_MS = "-1500";
 
     private static final long OFFSET = Long.parseLong(OFFSET_MS);

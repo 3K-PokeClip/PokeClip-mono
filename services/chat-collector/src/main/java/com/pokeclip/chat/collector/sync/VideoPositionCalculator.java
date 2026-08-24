@@ -15,6 +15,21 @@ import java.util.Optional;
  * <b>다시 물으면 답이 바뀔 수 있다</b>(조각이 아직 장부에 안 들어왔다). {@code NO_FOOTAGE}는
  * <b>영영 없다</b>. 부르는 쪽이 재시도 루프를 돌지 말지가 이 구분에 달려 있다.
  *
+ * <h2>🔴 방송 시작 직후 「보정값만큼」은 {@code NO_FOOTAGE}다 — 결함이 아니라 정의다</h2>
+ * 기본 보정값이 양수이므로(2026-08-24 실측 3.9초) {@code messageTime}에서 그만큼을 빼면
+ * <b>방송이 시작하고 처음 그 시간 동안의 채팅은 첫 조각보다 이른 시각</b>이 된다. 그래서
+ * <b>모든 방송이 시작할 때마다</b> 그 구간이 {@code NO_FOOTAGE}(영영 없음)로 나간다.
+ *
+ * <p><b>그것이 옳다.</b> 보정값의 뜻은 「이 채팅은 그만큼 전의 화면에 대한 반응이다」이고,
+ * 방송이 막 시작한 시점에 그 화면은 녹화에 없다. 「다시 물으면 답이 바뀔 수 있다」도 거짓이
+ * 아니다 — 장부는 INSERT만 되고 seq 1이 첫 조각이라 그 사실은 뒤집히지 않는다.
+ *
+ * <p><b>버그로 보고 「위치 0으로 접어 주는」 처방을 넣지 마라</b> — 없던 화면을 가리키는 클립이
+ * 만들어진다. 판정 축({@link VideoPosition.State} javadoc)의 <b>위험한 쪽</b>이므로 부르는
+ * 쪽(clip·판별기)이 이 구간을 알고 배선해야 한다.
+ * {@code VideoPositionCalculatorTest.방송_시작_직후_보정값만큼은_영영_없다()}가 <b>실물 yml
+ * 기본값이 걸린 컨텍스트에서</b> 이 갈래를 잰다 — 보정 0으로 만든 계산기로는 안 지나간다.
+ *
  * <h2>{@code min(delta, duration)} 클램프 — 실효 상한이 1500ms다</h2>
  * 이어진 조각은 {@code next.start_pts == floor.start_pts + floor.duration}이므로
  * ({@code media/internal/indexer/indexer.go:528}), 드리프트로 {@code delta}가 길이를 넘는
