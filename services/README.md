@@ -1078,15 +1078,19 @@ scope는 둘 — 업로드(`youtube.upload`)와 채널 조회(`youtube.readonly`
 
 🔴 **구글 revoke는 「그 토큰 쌍」이 아니라 그 사용자가 이 앱에 준 동의 전부를 죽인다.**
 공식 문서대로이고 실측으로도 확인했다(1차 refresh만 revoke했더니 직전까지 갱신되던 2차 refresh가
-`400 invalid_grant`로 죽었다). **치지직의 「쌍 무효화」와 근본이 다르다.** 그래서 revoke를 부르는
-자리를 넷으로 갈라 못박았다 — 아무 데서나 부르면 **멀쩡한 연동을 우리 손으로 끊는다.**
+`400 invalid_grant`로 죽었다). **치지직의 「쌍 무효화」와 근본이 다르다.**
+
+🔴 **그래서 revoke를 부르는 자리가 하나뿐이다.** 처음엔 갈래를 넷으로 갈라 조건을 붙였는데,
+봇 리뷰 세 판에 걸쳐 **조건으로는 못 막는다**는 것이 재현으로 드러나 결국 뺐다(2026-08-24).
+근본 원인은 하나다 — **revoke의 영향 범위는 「그 구글 계정」인데 우리가 가진 판별자는 「회원·채널」뿐**이고,
+그것조차 없는 경로(scope 미달)와 표에 아직 없는 순간(교환 직후·저장 전)이 있다.
 
 | 경로 | revoke | 왜 |
 |---|---|---|
-| 사용자 해제 `DELETE` | **부른다**(1회, refresh 우선) | 사용자 의도가 「구글 쪽 허락도 지워라」다. 단 **정리가 도는 시점에 살아있는 연동이 있으면 안 부른다** — 정리 잡이 큐에서 밀린 사이 사용자가 재연동했을 수 있다 |
-| 갱신 거부 → `BROKEN` | **부른다**(1회) | 이미 죽은 grant라 부작용이 없다 |
+| **갱신 거부 → `BROKEN`** | **부른다**(1회) | 그 토큰은 이미 `invalid_grant`로 죽어 있다 — 살아있는 grant에 닿지 않으므로 남을 해칠 수 없다. **유일하게 남은 자리다** |
+| **사용자 해제 `DELETE`** | **안 부른다** | 계정 단위라 같은 채널을 방금 연동한 **다른 회원**의 연동까지 끊는다. 대신 secrets를 지워 **우리가 못 쓰게** 하고, 사용자는 구글 계정 화면에서 직접 지운다(아래 「웹에 필요한 것」) |
 | **재연동** | **안 부른다** | 새 동의가 옛 grant를 대체한다. 부르면 방금 저장한 새 토큰이 죽는다 |
-| **연동 실패 정리**(scope 없음·채널 0개·409·5xx) | **살아있는 연동이 있으면 안 부른다** | 버려진 access는 1시간이면 스스로 죽는다. 살아있는 연동을 죽이는 대가가 훨씬 크다 |
+| **연동 실패 정리**(scope 없음·채널 0개·409·5xx) | **안 부른다** | scope 미달은 **채널을 읽기도 전에** 갈려 판별자가 아예 없다. 버려진 access는 1시간이면 스스로 죽는다 |
 
 **`resolve`(업로드 워커용) 계약.** `POST /internal/youtube-link/resolve {userId}` — `X-Internal-Token`
 헤더, `/internal/**` 체인(치지직 `resolve`와 같은 문). **우리 회원 번호(`users.id`)만 받는다.**
@@ -1116,13 +1120,16 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 드러내는 것이 목적이다. 회원당 구글 호출은 하루 1회다. `pokeclip.youtube.check.enabled`는 **기본
 켜짐**이고 프로퍼티를 빠뜨려도 켜진다(`matchIfMissing`) — 테스트 프로파일만 명시적으로 끈다.
 
-**종료 유예 15초 이상** — 치지직과 같은 이유다. 커밋 뒤 정리(secrets 삭제·구글 revoke)가 전용 스레드
-2개(`YoutubeCleanupExecutor`)에서 돌고 종료 시 최대 10초 기다린다. 두 서버가 각자 스레드 2개를 쓴다.
+**종료 유예 15초 이상** — 치지직과 같은 이유다. 커밋 뒤 정리(secrets 삭제)가 전용 스레드
+2개(`YoutubeCleanupExecutor`)에서 돌고 종료 시 최대 10초 기다린다(넘기면 인터럽트하고 2초 더).
+두 서버가 각자 스레드 2개를 쓴다.
 
 로그는 `auth.youtube.link.<event> userId=` 영어 한 줄이다(`created`·`relinked`·`unlinked`·`refreshed`·
-`refresh_rejected`·`refresh_failed`·`check_tick_failed`·`rejected`·`unavailable`·`scope_missing`·`no_channel`·
-`orphan_token`(WARN — 5xx·타임아웃)·`token_already_dead`(INFO — 4xx, 이미 무효)·`discard_skipped`(INFO —
-살아있는 연동이 있어 버리지 않았다)·`resolve_rejected`·`failed`). 정리 스레드 자체의 것은
+`refresh_rejected`·`refresh_failed`·`check_tick_failed`·`check_batch_capped`(INFO — 후보가 틱당 상한 25를 넘어
+잘렸다, 남은 후보는 다음 틱이 가져간다)·`rejected`·`unavailable`·`scope_missing`·`no_channel`·
+`orphan_token`(WARN — 5xx·타임아웃)·`token_already_dead`(INFO — 4xx, 이미 무효)·`resolve_rejected`·`failed`).
+**`orphan_token`·`token_already_dead`는 갱신 거부 경로에서만 난다** — 유일하게 revoke를 부르는 자리다.
+정리 스레드 자체의 것은
 `auth.youtube.cleanup.<event>` — `rejected`(큐 상한 초과, WARN)·`failed`·`shutdown_timeout`.
 값은 userId·status·causeType·reason만 — 토큰·code·state·channelId는 찍지 않는다.
 

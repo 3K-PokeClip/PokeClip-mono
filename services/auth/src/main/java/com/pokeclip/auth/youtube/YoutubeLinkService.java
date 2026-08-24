@@ -81,8 +81,9 @@ public class YoutubeLinkService {
      * <b>우리가 참조를 저장하지 않아 아무도 못 쓰며</b>(실패 경로는 저장 전이거나 롤백된 뒤다),
      * 사용자는 구글 계정 화면에서 직접 철회할 수 있다.
      *
-     * <p><b>revoke가 남아 있는 자리는 둘뿐이다</b> — 사용자 해제({@code YoutubeLinkWriter.revoke})와
-     * 갱신 거부({@code YoutubeTokenRefresher.reject}). 둘 다 「그 토큰을 죽이는 것」이 목적 자체다.
+     * <p><b>revoke가 남아 있는 자리는 하나뿐이다</b> — 갱신 거부({@code YoutubeTokenRefresher.reject}).
+     * <b>사용자 해제도 보내지 않는다</b>(같은 이유로 뺐다 — {@code YoutubeLinkWriter.closeAlive} javadoc).
+     * 그 하나가 남은 이유는 「그 토큰이 이미 죽어서」다 — 살아있는 grant에 닿지 않으므로 남을 해칠 수 없다.
      */
     public LinkResult link(Long userId, String code, String state) {
         Instant now = Instant.now();
