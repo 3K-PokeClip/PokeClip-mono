@@ -1121,8 +1121,9 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 켜짐**이고 프로퍼티를 빠뜨려도 켜진다(`matchIfMissing`) — 테스트 프로파일만 명시적으로 끈다.
 
 **종료 유예 15초 이상** — 치지직과 같은 이유다. 커밋 뒤 정리(secrets 삭제)가 전용 스레드
-2개(`YoutubeCleanupExecutor`)에서 돌고 종료 시 최대 10초 기다린다(넘기면 인터럽트하고 2초 더).
-두 서버가 각자 스레드 2개를 쓴다.
+2개(`YoutubeCleanupExecutor`)에서 돌고 종료 시 최대 3초 기다린다(넘기면 인터럽트하고 1초 더).
+두 서버가 각자 스레드 2개를 쓰고, **치지직 10초 + 유튜브 4초 = 14초**가 위 15초의 근거다 —
+유튜브가 짧은 이유는 정리 잡에 외부 HTTP가 거의 없기 때문이다(구글 revoke를 걷어냈다).
 
 로그는 `auth.youtube.link.<event> userId=` 영어 한 줄이다(`created`·`relinked`·`unlinked`·`refreshed`·
 `refresh_rejected`·`refresh_failed`·`check_tick_failed`·`check_batch_capped`(INFO — 후보가 틱당 상한 25를 넘어
