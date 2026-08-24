@@ -79,6 +79,47 @@ class JumpCardPropertiesTest {
                 });
     }
 
+    /**
+     * <b>상한. 하한과 뿌리가 같고 방향만 반대다</b> — {@code toSeconds()}가 넘긴 값을
+     * <b>하류가</b> 감당 못 한다. 2026-08-24 재현(PR #114 봇 지적 ②): {@code PT2562047788015H}로
+     * 부팅하면 <b>서버는 뜨고</b>({@code Started ClipApplication in 2.267 seconds})
+     * claim만 전부 500이 된다 — {@code ERROR: interval out of range} · SQLState 22008.
+     *
+     * <p><b>통과 최대와 막힘 최소를 나란히 둔다.</b> 하나만 쓰면 「상한이 있다」는 알아도
+     * 「어디인지」는 못 잡는다 — 경계를 하루 옮겨도 시험이 안 깨진다.
+     */
+    @Test
+    void 점유_시한_상한의_양쪽_경계() {
+        runner.withPropertyValues("pokeclip.jump-card.claim-ttl=P36500D")
+                .run(context -> {
+                    assertThat(context).as("100년 정각은 통과해야 한다").hasNotFailed();
+                    assertThat(context.getBean(JumpCardProperties.class).claimTtl())
+                            .isEqualTo(Duration.ofDays(36_500));
+                });
+
+        runner.withPropertyValues("pokeclip.jump-card.claim-ttl=P36500DT1S")
+                .run(context -> {
+                    assertThat(context).as("1초만 넘어도 막아야 경계가 못 박힌다").hasFailed();
+                    assertThat(stackTraceOf(context.getStartupFailure()))
+                            .contains("pokeclip.jump-card.claim-ttl")
+                            .contains("이하여야 한다");
+                });
+    }
+
+    /**
+     * <b>봇이 든 값 그대로.</b> 이 값이 통과하면 claim이 전부 500이 된다 —
+     * 시험이 실물 재현과 같은 값을 쓰게 해서 「무엇을 막는 건지」가 안 흐려지게 한다.
+     */
+    @Test
+    void 봇이_든_거대_값은_부팅에서_막힌다() {
+        runner.withPropertyValues("pokeclip.jump-card.claim-ttl=PT2562047788015H")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(stackTraceOf(context.getStartupFailure()))
+                            .contains("pokeclip.jump-card.claim-ttl");
+                });
+    }
+
     /** 양성 대조 — 설정을 안 주면 기본값으로 뜬다. 이 갈래를 깨면 로컬·CI가 통째로 안 뜬다. */
     @Test
     void 설정이_없으면_기본_30분으로_뜬다() {
@@ -110,6 +151,10 @@ class JumpCardPropertiesTest {
                 .isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> new JumpCardProperties(Duration.ofMillis(500)))
                 .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> new JumpCardProperties(Duration.ofDays(36_500).plusSeconds(1)))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(new JumpCardProperties(Duration.ofDays(36_500)).claimTtl())
+                .isEqualTo(Duration.ofDays(36_500));
         assertThat(new JumpCardProperties(null).claimTtl()).isEqualTo(Duration.ofMinutes(30));
     }
 
