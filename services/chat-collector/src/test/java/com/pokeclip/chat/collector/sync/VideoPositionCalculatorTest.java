@@ -12,6 +12,8 @@ import org.springframework.test.context.ActiveProfiles;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -47,8 +49,10 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
     private static final String LATE = "calc-late";
     private static final String INVERTED = "calc-inverted";
     private static final String FAR_JUMP = "calc-far-jump";
+    private static final String RACE = "calc-race";
 
-    private static final List<String> STREAMS = List.of(NORMAL, DRIFT, EMPTY, LATE, INVERTED, FAR_JUMP);
+    private static final List<String> STREAMS =
+            List.of(NORMAL, DRIFT, EMPTY, LATE, INVERTED, FAR_JUMP, RACE);
 
     private final JdbcTemplate jdbc;
     private final SegmentLedger ledger;
@@ -342,6 +346,80 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
         정상_방송을_넣는다();
 
         assertThat(물어본다(EMPTY, 1000).state()).isEqualTo(VideoPosition.State.NOT_YET_INDEXED);
+    }
+
+    /**
+     * <b>「빈손이다」와 「조각이 하나도 없다」를 두 왕복으로 읽는 사이에 첫 조각이 들어오는
+     * 창이다.</b> 그 창에서 {@code NO_FOOTAGE}(영영 없음)를 답하면 부르는 쪽이 재시도를
+     * 그만두는데, 같은 시각을 곧바로 다시 물으면 {@code CONVERTED}다 — <b>채팅에는 백필이
+     * 없어 그 채팅의 하이라이트가 영영 없어진다.</b> 판정 축({@link VideoPosition.State}
+     * javadoc)이 말하는 「다시 물으면 답이 바뀔 수 있는가」의 <b>반대 방향 실패</b>이고,
+     * 이쪽이 더 나쁘다: 영원히 다시 묻는 쪽은 결국 답을 얻지만 포기한 쪽은 못 얻는다.
+     *
+     * <p><b>창을 넓히지 않고 결정적으로 잰다.</b> 감사 2는 두 왕복 사이에
+     * {@code Thread.sleep(300)}을 주입해 재현했는데, 그것은 실물 코드를 고쳐야 하는 판이라
+     * 검사로 남길 수 없다. 대신 <b>장부 쪽 왕복 하나를 가로채</b> 그 왕복이 나가기 직전에
+     * 첫 조각을 넣는다 — 운영에서 벌어지는 순서(floor 빈손 → 첫 조각 INSERT → 존재 확인)와
+     * 정확히 같고 시간에 안 기댄다.
+     *
+     * <p><b>어느 처방을 골랐는지를 이 검사가 안 본다.</b> 존재 확인을 먼저 묻든(순서 뒤집기)
+     * 빈손일 때 다시 묻든(재조회) 둘 다 초록이다 — 재는 것은 구조가 아니라 답이다.
+     */
+    @Test
+    void 두_왕복_사이에_첫_조각이_들어와도_영영_없음이_아니다() {
+        // 이 방송은 장부가 비어 있는 상태로 시작한다(@BeforeEach가 비웠다).
+        AtomicBoolean inserted = new AtomicBoolean();
+        SegmentLedger racing = new SegmentLedger(jdbc) {
+            @Override
+            public boolean hasAnySegment(String streamId) {
+                // floor 왕복은 이미 빈손으로 끝났고 이 왕복은 아직 안 나갔다 — 그 사이다.
+                if (inserted.compareAndSet(false, true)) {
+                    StreamSegmentsFixture.insert(jdbc, RACE, 1, 0, T0, 4000, false);
+                }
+                return super.hasAnySegment(streamId);
+            }
+        };
+
+        VideoPosition located = new VideoPositionCalculator(racing, new SyncProperties(0, Map.of()))
+                .locate(RACE, "calc-channel", T0.plusMillis(1000));
+
+        assertThat(located.state())
+                .as("첫 조각이 물어본 시각보다 이르다 — 지금 다시 물으면 CONVERTED인 자리다")
+                .isEqualTo(VideoPosition.State.CONVERTED);
+        assertThat(located.positionMs()).isEqualTo(1000L);
+        assertThat(located.segmentSeq()).isEqualTo(1L);
+    }
+
+    /**
+     * <b>변환되는 경로의 왕복 수가 예산이다.</b> 판별기(POK-59)가 붙으면 이 창구를
+     * <b>채팅마다</b> 부른다 — 위 창을 「존재 확인을 늘 먼저 묻는」 순서 뒤집기로 닫으면
+     * 정상 경로 전부가 왕복 하나를 더 쓴다. 그래서 「빈손일 때만 다시 묻는」 쪽을 골랐고,
+     * 그 결정을 지키는 것이 이 검사다.
+     *
+     * <p>대조로 장부가 빈 방송을 같이 묻는다 — 그쪽은 <b>물어야 한다</b>. 안 그러면
+     * 「존재 확인을 아예 안 부르는」 구현(= {@code NOT_YET_INDEXED}가 사라진다)도 초록이다.
+     */
+    @Test
+    void 변환되는_경로는_장부_존재를_안_묻는다() {
+        정상_방송을_넣는다();
+
+        AtomicInteger asked = new AtomicInteger();
+        SegmentLedger counting = new SegmentLedger(jdbc) {
+            @Override
+            public boolean hasAnySegment(String streamId) {
+                asked.incrementAndGet();
+                return super.hasAnySegment(streamId);
+            }
+        };
+        VideoPositionCalculator calculator = new VideoPositionCalculator(counting, new SyncProperties(0, Map.of()));
+
+        assertThat(calculator.locate(NORMAL, "calc-channel", T0.plusMillis(1500)).state())
+                .isEqualTo(VideoPosition.State.CONVERTED);
+        assertThat(asked).as("floor가 잡히면 존재 확인이 필요 없다").hasValue(0);
+
+        assertThat(calculator.locate(EMPTY, "calc-channel", T0.plusMillis(1000)).state())
+                .isEqualTo(VideoPosition.State.NOT_YET_INDEXED);
+        assertThat(asked).as("장부가 빈 방송은 물어야 가른다 — 양성 대조").hasValue(1);
     }
 
     /** 조용한 0을 막는다 — 위치가 없는 판정이 {@code positionMs=0}으로 나가면 0초를 가리킨다. */

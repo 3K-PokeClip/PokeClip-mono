@@ -76,9 +76,23 @@ public class VideoPositionCalculator {
         if (found.isEmpty()) {
             // 「이 시각보다 이른 조각이 없다」와 「조각이 하나도 없다」는 다른 상태다.
             // 앞은 첫 조각 이전(영영 없음), 뒤는 장부가 아직(다시 물으면 됨).
-            return ledger.hasAnySegment(streamId)
-                    ? VideoPosition.noFootage(offset)
-                    : VideoPosition.notYetIndexed(offset);
+            if (!ledger.hasAnySegment(streamId)) {
+                return VideoPosition.notYetIndexed(offset);
+            }
+            // 🔴 여기서 곧장 NO_FOOTAGE를 답하면 안 된다. 위 두 왕복 「사이」에 이 방송의 첫
+            // 조각이 들어오면 「floor 빈손 + 조각 있음」이 서는데, 그 조각의 벽시계는 물어본
+            // 시각보다 이르므로 지금 다시 물으면 CONVERTED다 — 「영영 없음」은 거짓이고
+            // 부르는 쪽은 그것을 믿고 재시도를 그만둔다. 채팅에는 백필이 없어 그 채팅의
+            // 하이라이트가 영영 없어진다(감사 2가 창 300ms 주입으로 재현).
+            //
+            // 그래서 빈손일 때만 한 번 더 묻는다. 재조회도 빈손이면 진짜 첫 조각 이전이고
+            // (장부는 INSERT만 되므로 그 사실은 뒤집히지 않는다), 잡히면 그것이 더 최신이라
+            // 더 정확하다. 존재 확인을 floor보다 「먼저」 묻는 순서로도 닫히지만, 그러면
+            // 변환되는 경로 전부가 왕복 하나를 더 쓴다 — 판별기(POK-59)가 채팅마다 부른다.
+            found = ledger.floorByWallClock(streamId, adjusted);
+            if (found.isEmpty()) {
+                return VideoPosition.noFootage(offset);
+            }
         }
 
         LedgerFloor floor = found.get();

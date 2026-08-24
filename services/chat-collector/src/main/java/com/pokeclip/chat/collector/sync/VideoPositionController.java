@@ -37,6 +37,25 @@ public class VideoPositionController {
      */
     private static final String FORMATS = "epoch ms(1787529601000) 또는 ISO-8601(2026-08-24T12:00:00Z)";
 
+    /**
+     * 받아 주는 시각의 범위. <b>{@code long}에는 들어가는데 PostgreSQL {@code timestamptz}에는
+     * 안 들어가는 구간이 있다</b> — 그 값을 그대로 던지면 DB가 거절해 <b>500</b>이 되는데,
+     * 이 창구에서 500은 「표가 없다·DB가 죽었다」는 뜻으로 계약돼 있다(clip이 「수집 서버 장애」로
+     * 읽는다). <b>부르는 쪽 입력 오류를 그 신호에 실으면 없는 장애를 쫓게 만든다.</b>
+     *
+     * <p>실측(2026-08-24): {@code 9223372036854775807}(Long.MAX epoch ms) ·
+     * {@code +292278994-08-17T07:12:55.807Z} · {@code -1000000000-01-01T00:00:00Z} 셋 다 500이었다.
+     *
+     * <p><b>표의 한계(294276 AD)가 아니라 「채팅 시각일 수 있는가」로 좁혔다.</b> 표에 맞추면
+     * 연 287396 같은 값이 통과하는데, 그런 값은 어차피 조각이 없어 {@code not_yet_indexed}로
+     * 나가고 <b>부르는 쪽을 영원한 재시도에 넣는다</b> — 입력 오류를 「곧 온다」로 답하는 셈이다.
+     * 하한이 epoch 0인 것은 그것이 epoch ms 형식의 바닥이라서이고(0은 통과한다),
+     * 상한 2200은 <b>이 서비스가 살아 있을 리 없는 미래</b>를 자르는 자리다.
+     * 단위 착각(ms를 나노초로 보냄, {@code 1.787e18})이 정확히 이 그물에 걸린다.
+     */
+    private static final Instant EARLIEST = Instant.parse("1970-01-01T00:00:00Z");
+    private static final Instant LATEST = Instant.parse("2200-01-01T00:00:00Z");
+
     private final VideoPositionCalculator calculator;
 
     public VideoPositionController(VideoPositionCalculator calculator) {
@@ -61,6 +80,12 @@ public class VideoPositionController {
         } catch (DateTimeParseException | NumberFormatException e) {
             // 받은 값을 본문에 되돌려 싣지 않는다 — 반사된 값이 그대로 로그·화면에 흐른다.
             return ResponseEntity.badRequest().body(new Error("messageTime을 읽을 수 없다. " + FORMATS));
+        }
+        if (at.isBefore(EARLIEST) || at.isAfter(LATEST)) {
+            // 받은 값은 본문에 안 싣는다(위 catch와 같은 이유). 로그도 안 남긴다 —
+            // 미인증은 필터가 막지만 인증된 부르는 쪽이 자릿수를 틀리면 요청마다 한 줄이 쌓인다.
+            return ResponseEntity.badRequest()
+                    .body(new Error("messageTime이 다룰 수 있는 범위 밖이다. " + FORMATS));
         }
         VideoPosition position = calculator.locate(streamId, channelId, at);
         return ResponseEntity.ok(new Body(streamId, position.state().wireName(),

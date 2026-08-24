@@ -177,6 +177,40 @@ class VideoPositionEndpointTest {
         }
 
         /**
+         * <b>{@code long}에는 들어가는데 표에는 안 들어가는 구간이 있다.</b> 그 값을 그대로
+         * 던지면 PostgreSQL이 거절해 500이 되는데, 이 창구의 500은 「표가 없다·DB가 죽었다」로
+         * 계약된 신호다(clip이 「수집 서버 장애」로 읽는다) — 부르는 쪽 입력 오류를 그 신호에
+         * 실으면 없는 장애를 쫓게 만든다.
+         *
+         * <p>실측(2026-08-24, 감사 2): 아래 셋이 전부 <b>500</b>이었다. 특히 첫째는
+         * <b>epoch 단위를 나노초로 착각하면 정확히 밟는 구간</b>이다.
+         *
+         * <p><b>양성 대조 둘을 같이 본다.</b> 안 그러면 「전부 400을 내는」 구현도 초록이다 —
+         * 연 9999는 우리가 허용하기로 한 범위 안이고, epoch 0은 하한 경계 그 자체다.
+         */
+        @Test
+        void 다룰_수_없는_범위의_시각은_400이다() throws Exception {
+            for (String raw : List.of("9223372036854775807",
+                    "%2B292278994-08-17T07%3A12%3A55.807Z",
+                    "-1000000000-01-01T00%3A00%3A00Z",
+                    "1960-01-01T00%3A00%3A00Z")) {
+                HttpResponse<String> response = get(port,
+                        "/internal/streams/" + NORMAL + "/video-position?messageTime=" + raw, TOKEN);
+                assertThat(response.statusCode()).as("입력 %s", raw).isEqualTo(400);
+                assertThat(response.body()).as("입력 %s", raw).contains("\"error\":").contains("epoch ms");
+            }
+
+            assertThat(get(port, "/internal/streams/" + NORMAL + "/video-position?messageTime=4102444800000",
+                    TOKEN).statusCode())
+                    .as("연 2100은 우리가 받기로 한 범위 안이다 — 양성 대조")
+                    .isEqualTo(200);
+            assertThat(get(port, "/internal/streams/" + NORMAL + "/video-position?messageTime=0",
+                    TOKEN).statusCode())
+                    .as("epoch 0은 하한 경계 그 자체다 — 막으면 안 된다")
+                    .isEqualTo(200);
+        }
+
+        /**
          * {@code required=false}로 받는 이유. 기본값({@code required=true})이면 스프링이
          * 자기 본문으로 400을 내고 위 형식 안내가 안 실린다 — 같은 실수인데 답이 둘로 갈린다.
          */
