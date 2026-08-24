@@ -43,6 +43,9 @@ public abstract class IntegrationTestSupport {
      */
     protected static final FakeChzzkServer CHZZK = FakeChzzkServer.start();
 
+    /** 가짜 구글도 같은 이유로 static 하나다. 상태는 각 테스트 클래스가 {@code @BeforeEach}에서 reset()한다. */
+    protected static final FakeYoutubeServer YOUTUBE = FakeYoutubeServer.start();
+
     static {
         POSTGRES.start();
         seedNonEmptySchema();
@@ -73,5 +76,9 @@ public abstract class IntegrationTestSupport {
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("pokeclip.chzzk.api-base-uri", CHZZK::baseUrl);
+        // 유튜브는 주소가 셋이다 — 토큰·철회는 별개 키, 채널 목록만 api-base-uri 아래에 붙는다.
+        registry.add("pokeclip.youtube.token-uri", YOUTUBE::tokenUri);
+        registry.add("pokeclip.youtube.revoke-uri", YOUTUBE::revokeUri);
+        registry.add("pokeclip.youtube.api-base-uri", YOUTUBE::baseUrl);
     }
 }
