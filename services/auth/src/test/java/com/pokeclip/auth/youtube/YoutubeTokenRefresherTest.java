@@ -227,8 +227,7 @@ class YoutubeTokenRefresherTest extends YoutubeLinkTestSupport {
         // 이미 만료된 access로 시작한다 — 요구 수명(30분)을 「갱신 뒤에는 충족, 갱신 전에는 미충족」으로
         // 두어야 첫 스레드만 구글을 부르고 나머지는 SKIPPED_FRESH가 된다. 요구를 새 토큰 수명(1시간)보다
         // 크게 잡으면 갱신 뒤에도 임박이라 열 스레드가 전부 부르는 것이 정상이 돼 아무것도 못 잰다.
-        jdbc.update("UPDATE youtube_channel_links SET access_expires_at = now() - interval '1 minute' WHERE id = ?",
-                link.getId());
+        accessRemaining(link, Duration.ofMinutes(-1));
         YOUTUBE.tokenDelays(Duration.ofMillis(300));   // 경합 창을 벌린다
         ExecutorService pool = Executors.newFixedThreadPool(10);
         CountDownLatch go = new CountDownLatch(1);
