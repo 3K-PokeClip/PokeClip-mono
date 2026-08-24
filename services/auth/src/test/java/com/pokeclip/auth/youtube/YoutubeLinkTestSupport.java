@@ -13,6 +13,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
@@ -113,6 +114,16 @@ public abstract class YoutubeLinkTestSupport extends IntegrationTestSupport {
 
     protected YoutubeChannelLink linked(User u) {
         return linked(u, "at-old", "rt-old");
+    }
+
+    /**
+     * access가 「이만큼 남은」 상태로 만든다. 구글 access는 1시간짜리라 즉석 갱신·임박 갈래를 재려면
+     * 만료를 앞당겨야 한다 — 요구 수명을 새 토큰 수명보다 크게 잡는 방식은 갱신 뒤에도 임박이라
+     * 아무것도 안 잰다. 음수 Duration이면 이미 만료된 행이다.
+     */
+    protected void accessRemaining(YoutubeChannelLink link, Duration remaining) {
+        jdbc.update("UPDATE youtube_channel_links SET access_expires_at = ? WHERE id = ?",
+                Timestamp.from(Instant.now().plus(remaining)), link.getId());
     }
 
     protected int secretCount() {

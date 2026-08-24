@@ -41,12 +41,14 @@ class YoutubeLinkStatusAndUnlinkTest extends YoutubeLinkTestSupport {
         return get("/api/youtube-link").header("Authorization", bearer(u));
     }
 
+    /** 「키가 없다」는 {@code doesNotExist()}로 못 잰다 — 값이 null인 키도 통과한다(resolve 쪽에서 실측). 본문으로 본다. */
     @Test
     void 연동이_없으면_linked_false이고_아무_필드도_없다() throws Exception {
-        mockMvc.perform(statusOf(newUser())).andExpect(status().isOk())
+        String body = mockMvc.perform(statusOf(newUser())).andExpect(status().isOk())
                 .andExpect(jsonPath("$.linked").value(false))
-                .andExpect(jsonPath("$.status").doesNotExist())
-                .andExpect(jsonPath("$.channelId").doesNotExist());
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(body).doesNotContain("status").doesNotContain("channelId").doesNotContain("channelName");
     }
 
     @Test

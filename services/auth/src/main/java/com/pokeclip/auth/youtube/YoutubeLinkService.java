@@ -37,6 +37,7 @@ public class YoutubeLinkService {
     private final YoutubeOAuthClient oauthClient;
     private final YoutubeLinkWriter writer;
     private final YoutubeTokenDiscarder discarder;
+    private final YoutubeTokenRefresher refresher;
     private final YoutubeChannelLinkRepository links;
 
     /** {@code {}}에 넣지 않는다 — channelId. */
@@ -172,5 +173,33 @@ public class YoutubeLinkService {
     /** 트랜잭션은 writer에 있다(자기 호출 함정). 살아있는 행이 없으면 아무것도 안 하고 조용히 끝. */
     public void unlink(Long userId) {
         writer.revoke(userId, Instant.now());
+    }
+
+    /**
+     * 업로드 워커용. 남은 수명이 resolveMinRemaining(30분)보다 짧으면 즉석 갱신하고 새 토큰을 준다 —
+     * 구글 access는 1시간짜리라 워커가 받은 토큰으로 긴 업로드를 시작하면 도중에 죽는다.
+     *
+     * <p><b>트랜잭션이 없다</b> — refresher가 최상단이어야 한다. 갱신 뒤 행도 secrets도 두 번째로 읽지 않고
+     * refresher가 락 안에서 만든 스냅샷(access 원문 포함)만 쓴다. 두 읽기 사이에 해제·재연동과 정리 스레드의
+     * delete가 끼면 「행은 있는데 secret 없음」(500)이 된다.
+     *
+     * <p>일시 실패에 임박한 토큰을 대신 주지 않는다 — 워커가 곧 죽을 토큰으로 업로드를 시작하는 것보다
+     * 「지금은 안 된다」가 낫다.
+     */
+    public YoutubeResolveResult resolve(Long userId) {
+        RefreshResult r = refresher.refreshIfExpiringWithin(userId, properties.resolveMinRemaining());
+        return switch (r.outcome()) {
+            case REFRESHED, SKIPPED_FRESH -> {
+                RefreshResult.LinkSnapshot s = r.snapshot();
+                yield new YoutubeResolveResult(true, s.channelId(), s.accessToken(), s.accessExpiresAt(), null);
+            }
+            case REJECTED -> YoutubeResolveResult.rejected("BROKEN");
+            case UNAVAILABLE -> YoutubeResolveResult.rejected("REFRESH_UNAVAILABLE");
+            // 살아있는 행이 없다 — 애초에 안 한 것(NOT_LINKED)과 사용자가 끊은 것(UNLINKED)과
+            // 갱신이 거부된 것(BROKEN)은 호출자에게 다른 사건이라 마지막 행으로 가른다.
+            case NOT_LINKED -> YoutubeResolveResult.rejected(links.findFirstByUserIdOrderByCreatedAtDesc(userId)
+                    .map(last -> last.status() == LinkStatus.BROKEN ? "BROKEN" : "UNLINKED")
+                    .orElse("NOT_LINKED"));
+        };
     }
 }
