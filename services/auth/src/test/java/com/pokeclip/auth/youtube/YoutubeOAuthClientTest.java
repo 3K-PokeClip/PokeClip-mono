@@ -101,12 +101,42 @@ class YoutubeOAuthClientTest {
         google.tokenResponds(401, "{\"error\":\"invalid_client\"}");
         assertThatThrownBy(() -> client.refresh("rt")).isInstanceOf(YoutubeUnavailableException.class)
                 .satisfies(e -> assertThat(((YoutubeUnavailableException) e).causeType()).isEqualTo("InvalidClient"));
+    }
 
-        // 본문이 JSON이 아니거나 error가 없으면 코드가 없으니 Rejected 그대로.
+    /**
+     * 🔴 <b>갱신은 화이트리스트다</b> — 영구는 {@code invalid_grant} 하나뿐이고, 본문이 JSON이 아니거나
+     * {@code error}가 없거나 모르는 코드면 <b>전부 일시</b>다. 갱신의 영구 판정은 행을 되돌릴 수 없게 닫는데,
+     * 철회 점검이 하루 한 번 전 회원을 훑으므로 모르는 오류 하나가 <b>전 회원을 한꺼번에 닫을 수 있다</b>
+     * (봇 리뷰 2판). causeType에 응답 값을 옮기지 않는 것도 함께 잰다.
+     */
+    @Test
+    void 갱신은_invalid_grant만_거부고_나머지_4xx는_일시다() {
+        google.tokenResponds(400, "{\"error\":\"invalid_grant\"}");
+        assertThatThrownBy(() -> client.refresh("rt")).isInstanceOf(YoutubeRejectedException.class);
+
+        for (String body : new String[]{"not json", "{\"error_description\":\"x\"}",
+                "<html>404</html>", "{\"error\":\"brand_new_code\"}", ""}) {
+            google.tokenResponds(401, body);
+            assertThatThrownBy(() -> client.refresh("rt"))
+                    .as("본문 %s — 모르면 일시여야 한다", body)
+                    .isInstanceOf(YoutubeUnavailableException.class)
+                    .satisfies(e -> assertThat(((YoutubeUnavailableException) e).causeType())
+                            .doesNotContain("brand_new_code").doesNotContain("html"));
+        }
+    }
+
+    /**
+     * 🔴 <b>교환은 반대다(블랙리스트).</b> 모르는 4xx를 일시로 돌리면 사용자가 <b>영영 재동의를 안내받지 못하고</b>
+     * 502만 반복해서 본다. 그 경로의 영구 판정은 「동의부터 다시」라는 복구 가능한 안내라 손해가 되돌려진다.
+     * 두 경로가 갈리지 않으면 정책 분리가 아무것도 안 하는 것이다.
+     */
+    @Test
+    void 교환은_모르는_4xx를_거부로_본다() {
         google.tokenResponds(401, "not json");
-        assertThatThrownBy(() -> client.refresh("rt")).isInstanceOf(YoutubeRejectedException.class);
-        google.tokenResponds(401, "{\"error_description\":\"x\"}");
-        assertThatThrownBy(() -> client.refresh("rt")).isInstanceOf(YoutubeRejectedException.class);
+        assertThatThrownBy(() -> client.exchange("code")).isInstanceOf(YoutubeRejectedException.class);
+
+        google.tokenResponds(401, "{\"error\":\"brand_new_code\"}");
+        assertThatThrownBy(() -> client.exchange("code")).isInstanceOf(YoutubeRejectedException.class);
     }
 
     @Test

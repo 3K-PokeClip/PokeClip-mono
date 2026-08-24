@@ -113,9 +113,11 @@ public class YoutubeOAuthClient {
      */
     private YoutubeTokens tokens(MultiValueMap<String, String> form, boolean requireRefresh) {
         // Map으로 받는다 — GoogleTokenClient와 같은 이유(ParameterizedTypeReference 리플렉션 회피).
+        // 갱신만 화이트리스트 정책이다(아래 ErrorPolicy) — requireRefresh가 곧 「교환인가」다.
+        ErrorPolicy policy = requireRefresh ? ErrorPolicy.DEFAULT : ErrorPolicy.REFRESH;
         Map<?, ?> body = call(() -> restClient.post().uri(properties.tokenUri())
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(form)
-                .retrieve().body(Map.class));
+                .retrieve().body(Map.class), policy);
         if (body == null) {
             throw malformed("body", null);
         }
@@ -182,6 +184,9 @@ public class YoutubeOAuthClient {
      *   <li>403 할당량 셋 — 일 10,000유닛 소진. 태평양시 자정에 스스로 풀린다.</li>
      * </ul>
      */
+    /** 갱신에서 <b>유일하게</b> 영구인 코드 — 철회·만료·code 소모. */
+    private static final String INVALID_GRANT = "invalid_grant";
+
     private static final Map<String, String> TEMPORARY_ERROR_CODES = Map.of(
             "invalid_client", "InvalidClient",
             "unauthorized_client", "UnauthorizedClient",
@@ -196,7 +201,28 @@ public class YoutubeOAuthClient {
      * Unavailable(원인 타입 이름만). 응답 본문은 어디에도 옮기지 않는다 — 읽는 것은 오류 코드 하나뿐이고
      * 그것도 위 표와 비교만 한다. 429·408과 표에 있는 코드는 4xx라도 일시로 본다.
      */
+    /**
+     * 4xx를 영구(Rejected)와 일시(Unavailable)로 가르는 기준. <b>경로마다 다르다.</b>
+     *
+     * <p><b>{@link #REFRESH} — 화이트리스트.</b> 영구는 {@code invalid_grant} <b>하나뿐</b>이고
+     * 나머지는 전부 일시다(모르는 코드·본문이 JSON이 아님·{@code error} 필드 없음·프록시가 만든 404/HTML 포함).
+     * 갱신 실패의 영구 판정은 행을 <b>BROKEN으로 닫고 되돌릴 수 없게</b> 하는데, 철회 점검이 하루 한 번
+     * 살아있는 연동을 전부 훑으므로 <b>모르는 오류 하나로 전 회원이 한꺼번에 닫힐 수 있다</b>(봇 리뷰 2판).
+     * 「모르면 일시」가 안전한 쪽이다 — 일시로 잘못 봐도 다음 틱에 다시 시도할 뿐이다.
+     *
+     * <p><b>{@link #DEFAULT} — 블랙리스트.</b> 교환·채널 조회는 반대다. 거기서 모르는 4xx를 일시로 돌리면
+     * 사용자가 <b>영영 재동의를 안내받지 못하고</b> 502만 반복해서 본다. 그 경로의 영구 판정은
+     * 「동의부터 다시」라는 <b>복구 가능한</b> 안내라서 되돌릴 수 없는 손해가 없다.
+     */
+    private enum ErrorPolicy {
+        REFRESH, DEFAULT
+    }
+
     private static <T> T call(Supplier<T> action) {
+        return call(action, ErrorPolicy.DEFAULT);
+    }
+
+    private static <T> T call(Supplier<T> action, ErrorPolicy policy) {
         try {
             return action.get();
         } catch (RestClientResponseException e) {
@@ -206,6 +232,13 @@ public class YoutubeOAuthClient {
             }
             if (e.getStatusCode().is4xxClientError()) {
                 String code = errorCode(e);
+                if (policy == ErrorPolicy.REFRESH) {
+                    // 화이트리스트 — 「이 grant가 죽었다」를 뜻하는 코드만 영구다.
+                    if (INVALID_GRANT.equals(code)) {
+                        throw new YoutubeRejectedException(status);
+                    }
+                    throw new YoutubeUnavailableException(code == null ? "Http" + status : safeName(code));
+                }
                 // Map.of(...)는 get(null)에서 NPE다(ImmutableCollections). 본문이 JSON이 아니거나
                 // 오류 코드가 없으면 여기 null이 온다 — 그때는 코드가 없으니 Rejected 그대로.
                 String temporary = code == null ? null : TEMPORARY_ERROR_CODES.get(code);
@@ -218,6 +251,15 @@ public class YoutubeOAuthClient {
         } catch (RestClientException e) {
             throw new YoutubeUnavailableException(e.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * causeType에 실을 이름. <b>응답 값을 그대로 옮기지 않는다</b> — 아는 코드는 고정 이름으로 바꾸고,
+     * 모르는 코드는 이름을 만들지 않고 상태만 남긴다(구글이 오류 본문에 무엇을 담을지 우리가 정하지 못한다).
+     */
+    private static String safeName(String code) {
+        String known = TEMPORARY_ERROR_CODES.get(code);
+        return known != null ? known : "UnknownRefreshError";
     }
 
     /**

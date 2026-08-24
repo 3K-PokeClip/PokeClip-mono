@@ -197,17 +197,23 @@ class YoutubeTokenRefresherTest extends YoutubeLinkTestSupport {
      * 문제라 재동의로 안 풀리는데, 철회 점검이 하루 한 번 살아있는 연동을 전부 훑으므로 설정이 어긋난 날
      * <b>전 회원이 되돌릴 수 없게 BROKEN으로 닫힌다</b>(봇 리뷰 PR #116에서 재현).
      */
-    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.ParameterizedTest(name = "[{index}] {0}")
     @org.junit.jupiter.params.provider.ValueSource(strings = {
-            "unauthorized_client", "invalid_request", "unsupported_grant_type"})
-    void 우리_설정_문제인_4xx는_행을_닫지_않는다(String errorCode) {
+            "{\"error\":\"unauthorized_client\"}",
+            "{\"error\":\"invalid_request\"}",
+            "{\"error\":\"unsupported_grant_type\"}",
+            "{\"error\":\"some_code_google_adds_next_year\"}",
+            "<html><body>404 Not Found</body></html>",
+            "{\"message\":\"error 필드가 없다\"}",
+            ""})
+    void invalid_grant이_아닌_4xx는_행을_닫지_않는다(String body) {
         User u = newUser();
         YoutubeChannelLink link = linked(u, "at-old", "rt-old");
-        YOUTUBE.tokenResponds(400, "{\"error\":\"" + errorCode + "\"}");
+        YOUTUBE.tokenResponds(400, body);
 
         RefreshResult r = refresher.refreshIfExpiringWithin(u.getId(), Duration.ofHours(2));
 
-        assertThat(r.outcome()).as("%s는 재동의로 안 풀린다 — 닫으면 복구 수단이 없다", errorCode)
+        assertThat(r.outcome()).as("%s는 「이 grant가 죽었다」가 아니다 — 닫으면 복구 수단이 없다", body)
                 .isEqualTo(RefreshOutcome.UNAVAILABLE);
         assertThat(linkRepository.findById(link.getId()).orElseThrow().isRevoked()).isFalse();
         assertThat(secretStore.get(link.getRefreshTokenRef())).contains("rt-old");
