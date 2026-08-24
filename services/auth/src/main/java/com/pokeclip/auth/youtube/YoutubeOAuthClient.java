@@ -56,8 +56,11 @@ public class YoutubeOAuthClient {
      * 철회. 실패는 예외로 — 호출부가 삼킬지 정한다.
      *
      * <p><b>한 번이면 충분하고, 아무 데서나 부르면 안 된다</b> — 구글 revoke는 그 사용자가 이 프로젝트에
-     * 준 동의 <b>전부</b>를 무효화한다(access·refresh 모두, 언제 발급됐든). 부르는 자리는 사용자 해제와
-     * 갱신 거부 정리 둘뿐이다(계획 2절 결정 8).
+     * 준 동의 <b>전부</b>를 무효화한다(access·refresh 모두, 언제 발급됐든).
+     * <b>부르는 자리는 갱신 거부 정리 하나뿐이다</b>({@code YoutubeTokenRefresher.reject}) —
+     * 그 토큰은 이미 죽어 있어 남의 grant에 닿지 않는다. 해제·재연동·실패 정리는 봇 리뷰 세 판을 거쳐
+     * 전부 뺐다(2026-08-24): 조건으로는 「확인과 발사 사이」 창을 못 막고, 닫으려면 revoke를 DB 락 안에
+     * 넣어야 하는데 그것이 트랜잭션 안 외부 호출이다.
      */
     public void revoke(String token) {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
