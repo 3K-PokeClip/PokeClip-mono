@@ -122,6 +122,9 @@ class YoutubeTokenDiscarderTest {
         try (LogCaptor logs = new LogCaptor()) {
             discarder.discard(7L, "LEAK-at-needle", "LEAK-rt-needle");
 
+            // 「없다」를 재기 전에 「나갔다」를 먼저 재둔다 — discard가 조용히 조기 반환하게 바뀌면
+            // 로그가 통째로 비어 아래 noneMatch가 자동으로 참이 된다(감사 1라운드 사소-C).
+            assertThat(logs.messages()).anyMatch(m -> m.contains("auth.youtube.link.orphan_token"));
             assertThat(logs.messages()).noneMatch(m -> m.contains("LEAK-at-needle") || m.contains("LEAK-rt-needle"));
         }
     }
