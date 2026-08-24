@@ -39,9 +39,22 @@ public class YoutubeCleanupExecutor {
 
     static final int THREADS = 2;
     static final int QUEUE_CAPACITY = 1000;
-    static final Duration SHUTDOWN_WAIT = Duration.ofSeconds(10);
-    /** 인터럽트한 뒤 워커가 실제로 빠져나올 때까지만 — 종료 유예(15초) 안에 들어가야 한다. */
-    static final Duration FORCED_STOP_WAIT = Duration.ofSeconds(2);
+    /**
+     * 🔴 <b>치지직({@code ChzzkCleanupExecutor})은 10초인데 여기는 3초다 — 오타가 아니다.</b>
+     * 「같은 값이어야 맞지 않나」로 되돌리기 전에 이유를 읽어라.
+     *
+     * <p><b>10초였던 이유가 이 PR에서 사라졌다.</b> 그 값은 정리 잡에 든 <b>구글 revoke(외부 HTTP, 최대 5초)가
+     * 최대 2회</b>일 수 있어서 잡은 것이었다. 그런데 해제·재연동·실패 정리에서 revoke를 전부 걷어내면서
+     * (계정 단위라 남의 연동을 끊는다 — {@code YoutubeLinkWriter.closeAlive} javadoc) <b>남은 정리 잡은
+     * 대부분 {@code secretStore.delete} 둘(DB)뿐</b>이고, revoke를 포함하는 것은 <b>갱신 거부 경로 하나</b>다.
+     *
+     * <p><b>치지직은 여전히 10초가 필요하다</b> — 그쪽은 정리마다 revoke를 2회 부른다. 그래서 그 파일은
+     * 건드리지 않는다. 스프링이 {@code @PreDestroy}를 순차로 부르므로 <b>합이 예산</b>이고,
+     * 10 + 3 + 1 = <b>14초</b>로 문서화한 15초 안에 든다({@code YoutubeShutdownBudgetTest}가 셋을 대조한다).
+     */
+    static final Duration SHUTDOWN_WAIT = Duration.ofSeconds(3);
+    /** 인터럽트한 뒤 워커가 빠져나올 때까지만. DB 삭제 하나 끝내는 시간이면 충분하다. */
+    static final Duration FORCED_STOP_WAIT = Duration.ofSeconds(1);
 
     private final ThreadPoolExecutor pool;
     /** 제출·완료 카운터. awaitIdle이 큐·활성 수 대신 이것을 본다 — TPE의 take()~실행 사이 창에서 둘 다 0으로 보인다. */
