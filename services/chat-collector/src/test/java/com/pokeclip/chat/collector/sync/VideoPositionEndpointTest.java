@@ -23,6 +23,7 @@ import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 영상 위치 창구를 <b>밖에서</b> 친다. 변환 규칙 자체는 {@link VideoPositionCalculatorTest}가
@@ -53,6 +54,37 @@ class VideoPositionEndpointTest {
         HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path));
         if (token != null) request.header("X-Internal-Token", token);
         return HttpClient.newHttpClient().send(request.GET().build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    /**
+     * 조각 장부를 지운 채 창구를 한 번 치고 <b>반드시 되살린다</b> — 이 표는 Flyway 밖이라
+     * 스프링 컨텍스트가 갈려도 하나이고, 안 되살리면 뒤에 도는 검사가 전부 깨진다.
+     */
+    static HttpResponse<String> 표를_지우고_친다(int port, String token, JdbcTemplate jdbc) throws Exception {
+        try {
+            StreamSegmentsFixture.dropTable(jdbc);
+            return get(port, "/internal/streams/" + NORMAL + "/video-position?messageTime=" + T0, token);
+        } finally {
+            StreamSegmentsFixture.ensureTable(jdbc);
+        }
+    }
+
+    /**
+     * 500 본문이 <b>스프링 기본 네 필드({@code timestamp}·{@code status}·{@code error}·{@code path})
+     * 말고는 아무것도 안 싣는지</b> 잰다.
+     *
+     * <p><b>「무엇이 없어야 하나」가 아니라 「무엇만 있어야 하나」다.</b> 예외 메시지가 실리는
+     * 순간 SQL 전문과 DB 오류가 통째로 나가므로 아래 부정 단언은 <b>자동으로 참이 아니다</b> —
+     * {@link 오류_본문에_예외_메시지를_실은_프로세스}가 그것을 실물로 보인다.
+     */
+    static void assertNoExceptionDetailIn(String body) {
+        assertThat(body)
+                .as("스프링 기본 500 본문 네 필드 말고는 아무것도 실리면 안 된다")
+                .contains("\"status\":500")
+                .doesNotContain("stream_segments")
+                .doesNotContain("SELECT")
+                .doesNotContain("bad SQL grammar")
+                .doesNotContain("Exception");
     }
 
     @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -137,11 +169,25 @@ class VideoPositionEndpointTest {
         /**
          * {@code Instant.parse}는 오프셋 표기도 받고 <b>그때 결과가 옳다</b> — 400 메시지에
          * 「UTC」라고만 적으면 부르는 쪽이 되는 것을 안 된다고 읽는다. 그래서 되는 것을 잰다.
+         *
+         * <p><b>🔴 다만 {@code %2B}로 인코딩해야 한다.</b> 쿼리 스트링에서 {@code +}는 공백으로
+         * 디코드되므로 사람이 curl에 그대로 치면 <b>400이다</b>. 인코딩한 쪽만 재면
+         * <b>검사가 실물보다 관대해</b> 「오프셋 표기는 그냥 된다」는 오해가 남는다(감사 2 B3) —
+         * 그래서 <b>안 되는 쪽도 같이 잰다</b>. 이 400은 결함이 아니라 규약이고, 우리가 아는
+         * 한계에 그물을 씌우는 것이 이 줄의 목적이다.
          */
         @Test
-        void 오프셋_표기로_줘도_같은_결과다() throws Exception {
+        void 오프셋_표기는_인코딩하면_되고_안_하면_400이다() throws Exception {
             assertThat(물어본다(NORMAL, "messageTime=2026-08-24T09:00:01%2B09:00"))
                     .isEqualTo(물어본다(NORMAL, "messageTime=" + T0.plusMillis(1000)));
+
+            HttpResponse<String> raw = get(port,
+                    "/internal/streams/" + NORMAL + "/video-position?messageTime=2026-08-24T09:00:01+09:00",
+                    TOKEN);
+            assertThat(raw.statusCode())
+                    .as("+ 가 공백으로 디코드돼 파싱이 깨진다 — 규약대로이고 문서가 이 간극을 말해야 한다")
+                    .isEqualTo(400);
+            assertThat(raw.body()).contains("\"error\":");
         }
 
         /** seq3 끝(T0+12s)과 seq5 시작(T0+20s) 사이. 위치·조각 번호가 <b>둘 다</b> null이어야 한다. */
@@ -233,19 +279,21 @@ class VideoPositionEndpointTest {
          * 묻는다.</b> 그 상태가 실제로 500이 되는지를 아무도 확인하지 않은 주장으로 남기지 않으려고
          * 여기서 만들어 본다.
          *
+         * <h2>무엇을 재고 무엇을 못 재나</h2>
+         * <b>접속값 셋(비밀번호·계정·JDBC URL)이 없다는 단언은 여기서 자동으로 참이다</b> —
+         * 표 없음의 근본 예외({@code PSQLException: relation … does not exist})에 그 셋이 원래
+         * 안 들어 있다(감사 2 B4). 그래도 남기는 이유는 <b>예외 종류가 바뀌면 뜻이 생기기
+         * 때문</b>이고(접속 실패 예외에는 URL이 실린다), 진짜 방어선을 재는 것은 그 아래
+         * <b>「스프링 기본 네 필드뿐이다」</b> 쪽이다. 예외 메시지가 본문에 실리는 순간
+         * SQL 전문이 통째로 나가므로 그 단언들은 자동으로 참이 아니다 —
+         * {@link 오류_본문에_예외_메시지를_실은_프로세스}가 그것을 실물로 보인다.
+         *
          * <p><b>표를 반드시 되살린다.</b> 안 그러면 뒤에 도는 검사가 전부 깨진다 —
          * 이 표는 Flyway 밖이라 컨텍스트가 갈려도 하나다.
          */
         @Test
-        void 표가_없으면_500이고_본문에_접속정보가_없다() throws Exception {
-            HttpResponse<String> response;
-            try {
-                StreamSegmentsFixture.dropTable(jdbc);
-                response = get(port,
-                        "/internal/streams/" + NORMAL + "/video-position?messageTime=" + T0, TOKEN);
-            } finally {
-                StreamSegmentsFixture.ensureTable(jdbc);
-            }
+        void 표가_없으면_500이고_본문이_스프링_기본_네_필드뿐이다() throws Exception {
+            HttpResponse<String> response = 표를_지우고_친다(port, TOKEN, jdbc);
 
             assertThat(response.statusCode()).isEqualTo(500);
             ChatLogLeakTest.assertNoSecretsIn(response.body(),
@@ -253,6 +301,7 @@ class VideoPositionEndpointTest {
             assertThat(response.body())
                     .as("판정 이름이 실리면 부르는 쪽이 장애를 정상 판정으로 읽는다")
                     .doesNotContain("not_yet_indexed").doesNotContain("no_footage");
+            assertNoExceptionDetailIn(response.body());
         }
 
         /**
@@ -301,6 +350,48 @@ class VideoPositionEndpointTest {
                         .anyMatch(e -> e.getLoggerName().startsWith(COYOTE)
                                 && ChatLogLeakTest.renderFully(e).contains(TOKEN));
             }
+        }
+    }
+
+    /**
+     * <b>위 {@code 표가_없으면_500이고_본문이_스프링_기본_네_필드뿐이다}의 양성 대조다.</b>
+     * 그 검사의 부정 단언들이 무엇을 잡는지를 <b>실제로 유출을 열어</b> 보인다 —
+     * 안 그러면 「아무것도 안 재는 초록」과 구분되지 않는다.
+     *
+     * <p><b>🔴 스위치 이름이 Boot 4.1에서 옮겨졌다: {@code spring.web.error.*}다.</b>
+     * 예전 이름 {@code server.error.include-message}는 <b>바인딩되지 않고 오류도 없다</b> —
+     * {@code Environment}에는 값이 들어가는데 응답은 안 바뀐다(2026-08-24 실측. 감사 2가
+     * 그 이름으로 재현에 실패해 「켜면 열린다」를 못 세웠던 자리다). {@code ErrorProperties}가
+     * {@code spring-boot-autoconfigure}로 옮겨가면서 접두가 바뀌었고, 옛 이름은
+     * {@code spring-boot-web-server}의 메타데이터에만 남아 <b>더 헷갈린다.</b>
+     * 이 서버의 {@code spring.http.clients.*} 단복수 함정과 같은 모양이다 —
+     * <b>설정으로 거는 것은 값이 아니라 행동으로 잰다.</b>
+     *
+     * <p>우리 {@code application.yml}은 이 스위치를 어느 이름으로도 안 건드린다(기본값
+     * {@code never}가 방어선이다). 그래서 여기서만 켜고, 켜면 실제로 열리는 것을 못박는다.
+     */
+    @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+            properties = {"pokeclip.link.internal-token=" + TOKEN,
+                    "spring.web.error.include-message=always"})
+    @ActiveProfiles("test")
+    static class 오류_본문에_예외_메시지를_실은_프로세스 extends IntegrationTestSupport {
+
+        @LocalServerPort int port;
+        @Autowired JdbcTemplate jdbc;
+
+        @Test
+        void 스위치를_켜면_SQL_전문이_통째로_샌다() throws Exception {
+            HttpResponse<String> response = 표를_지우고_친다(port, TOKEN, jdbc);
+
+            assertThat(response.statusCode()).isEqualTo(500);
+            assertThat(response.body())
+                    .as("예외 메시지가 실리면 우리가 던진 SQL이 그대로 밖으로 나간다")
+                    .contains("stream_segments")
+                    .contains("SELECT");
+
+            assertThatThrownBy(() -> assertNoExceptionDetailIn(response.body()))
+                    .as("기본 프로세스의 그 부정 단언은 이 본문을 잡는다 — 자동으로 참이 아니다")
+                    .isInstanceOf(AssertionError.class);
         }
     }
 
