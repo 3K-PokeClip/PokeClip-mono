@@ -1070,7 +1070,7 @@ scope는 둘 — 업로드(`youtube.upload`)와 채널 조회(`youtube.readonly`
 | `POST /api/youtube-link/start` | 200 `{authorizeUrl}` — `state`는 URL 안에 있다(표 없이 서명, 10분) |
 | `POST /api/youtube-link` `{code, state}` | 201 `{channelId, channelName, linkedAt}` · 400 `INVALID_STATE` · 400 `INVALID_CODE`(구글이 교환·채널 조회를 4xx로 거부 — code 소모·만료·권한 부족, **동의부터 다시**) · 400 `SCOPE_MISSING`(업로드 권한 미동의) · 400 `NO_CHANNEL`(구글 계정에 유튜브 채널이 없다 — 먼저 만들어야 한다) · 409 `CHANNEL_ALREADY_LINKED` · 502 `YOUTUBE_UNAVAILABLE`(5xx·타임아웃·429·408·`invalid_client`·**403 할당량**) |
 | `GET /api/youtube-link` | 200 `{linked:false}` 또는 `{linked, channelId, channelName, status, linkedAt, lastRefreshedAt, accessExpiresAt}`. `status` ∈ `ACTIVE`·`BROKEN`·`UNLINKED`(파생). **치지직과 달리 `EXPIRED`가 없다** — 구글 access는 1시간짜리라 늘 만료돼 있고 갱신으로 항상 해소되므로 상태가 아니다. `linked`는 `ACTIVE`일 때만 true |
-| `DELETE /api/youtube-link` | 204 (없어도 204). 행은 남고(`revoked_at`+`USER_UNLINKED`) 커밋 뒤에 secrets 삭제·구글 revoke |
+| `DELETE /api/youtube-link` | 204 (없어도 204). 행은 남고(`revoked_at`+`USER_UNLINKED`) 커밋 뒤에 secrets 삭제. 🔴 **구글에는 revoke를 보내지 않는다** — 아래 |
 | `POST /internal/youtube-link/resolve` `{userId}` | **항상 200** — 아래 |
 
 오류 본문은 `{"reason": "<위 코드>"}` 한 필드다. 토큰·code·state·채널 ID는 응답·로그 어디에도 안 남는다
@@ -1096,6 +1096,15 @@ scope는 둘 — 업로드(`youtube.upload`)와 채널 조회(`youtube.readonly`
 임박한 토큰은 주지 않는다, 잠시 뒤 다시 부르면 된다). 거절 응답에는 `accessToken` 필드가 아예 없다.
 **남은 수명이 30분(`resolve-min-remaining`)보다 짧으면 넘기기 전에 즉석 갱신한다** — 구글 access가
 1시간짜리라 치지직(12시간)과 자릿수가 다르다.
+
+🔴 **해제해도 구글 쪽 허락은 남는다 — 웹이 안내해야 한다(2번 몫).** `DELETE`는 우리 표의 행을 닫고
+**secrets의 토큰 원문을 지운다**(우리는 다시 못 쓴다). 그러나 구글에 `revoke`는 보내지 않는다 —
+구글 revoke는 **그 구글 계정이 우리 앱에 준 동의 전부**를 죽이므로, 같은 채널을 방금 연동한 **다른 회원**의
+연동까지 끊는다. 조건으로 막으려 세 판을 썼지만 「확인과 발사 사이」 창이 남았고, 그것을 닫으려면
+revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기했다. 근거는 `services/auth/CLAUDE.md` 「알려진 구멍」 20번.
+
+> **웹에 필요한 것**: 해제 완료 화면에 「구글 계정에서도 권한을 지우려면」 안내와
+> <https://myaccount.google.com/permissions> 링크. 이것이 사용자가 구글 쪽 허락을 지우는 유일한 수단이다.
 
 **refresh는 재사용형이다.** 갱신 응답에 `refresh_token`이 **없는 것이 정상**이고 그때는 기존 것을
 계속 쓴다(있으면 교체). 치지직 코드를 그대로 베껴 무조건 덮어쓰면 `null`을 써 넣어 연동이 통째로 죽는다.

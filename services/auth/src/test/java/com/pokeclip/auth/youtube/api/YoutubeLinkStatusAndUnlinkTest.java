@@ -82,8 +82,9 @@ class YoutubeLinkStatusAndUnlinkTest extends YoutubeLinkTestSupport {
                 .andExpect(jsonPath("$.channelName").exists());
     }
 
+    /** 해제는 <b>우리 쪽 참조만</b> 지운다 — 구글 revoke는 보내지 않는다(`YoutubeLinkWriter.closeAlive` javadoc). */
     @Test
-    void DELETE하면_204_행은_남고_secrets는_지워지고_토큰은_한_번_버려진다() throws Exception {
+    void DELETE하면_204_행은_남고_secrets는_지워지되_구글은_안_부른다() throws Exception {
         User u = newUser();
         YoutubeChannelLink link = linked(u, "at-mine", "rt-mine");
 
@@ -95,8 +96,7 @@ class YoutubeLinkStatusAndUnlinkTest extends YoutubeLinkTestSupport {
         assertThat(after.getRevokeReason()).isEqualTo(RevokeReason.USER_UNLINKED);
         assertThat(secretStore.get(link.getAccessTokenRef())).isEmpty();
         assertThat(secretStore.get(link.getRefreshTokenRef())).isEmpty();
-        assertThat(YOUTUBE.revokedTokens()).as("해제는 refresh 하나로 grant 전체를 죽인다")
-                .containsExactly("rt-mine");
+        assertThat(YOUTUBE.revokeCalls()).as("해제가 구글을 불렀다 — 남의 grant까지 죽는다").isZero();
         mockMvc.perform(statusOf(u)).andExpect(jsonPath("$.linked").value(false))
                 .andExpect(jsonPath("$.status").value("UNLINKED"));
     }

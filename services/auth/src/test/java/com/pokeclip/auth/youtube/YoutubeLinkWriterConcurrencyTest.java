@@ -113,6 +113,10 @@ class YoutubeLinkWriterConcurrencyTest extends YoutubeLinkTestSupport {
     /**
      * 🔴 정리 잡이 <b>큐에서 밀리는 동안</b> 사용자가 재연동을 끝내는 경로(감사 3라운드 중대-1).
      *
+     * <p><b>지금은 해제 정리가 구글을 아예 안 부르므로 이 사건이 원리적으로 안 난다</b>(2026-08-24 결정).
+     * 그래도 남겨 둔다 — <b>누가 해제 정리에 revoke를 되살리면 즉시 빨간불</b>이 되는 회귀 그물이다.
+     * 캐스케이드 모드를 켜 두었으므로 revoke가 한 번이라도 나가면 새 refresh가 죽어 아래 단언이 깨진다.
+     *
      * <p>해제(DELETE)의 정리 잡은 옛 토큰의 revoke를 품고 전용 스레드로 간다. 그 잡이 늦게 발사되면
      * 구글 revoke가 <b>그 사용자의 동의 전부</b>를 죽이므로 <b>방금 만든 새 grant까지 끊는다</b> —
      * 표는 ACTIVE인데 다음 갱신이 invalid_grant다. 사용자 눈에는 「다시 연동했는데 또 끊겼다」로 보인다.
@@ -136,6 +140,7 @@ class YoutubeLinkWriterConcurrencyTest extends YoutubeLinkTestSupport {
         hold.countDown();                                     // 이제 밀린 정리 잡이 발사된다
         awaitCleanup();
 
+        assertThat(YOUTUBE.revokeCalls()).as("해제 정리가 구글을 불렀다 — 되살아났다").isZero();
         String newRefresh = secretStore.get(fresh.getRefreshTokenRef()).orElseThrow();
         assertThat(oauthClient.refresh(newRefresh).accessToken())
                 .as("밀린 해제 정리의 revoke가 방금 만든 새 grant까지 죽였다").isNotNull();

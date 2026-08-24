@@ -122,7 +122,7 @@ class YoutubeResolvePoolExhaustionTest extends YoutubeLinkTestSupport {
         System.out.printf("youtube 거부 resolve 동시 %d · 풀 10 · 지연 2s · 총 %dms%n", CALLERS, elapsedMs);
     }
 
-    /** 해제도 같은 자리(커밋 뒤 secrets 삭제 + revoke)를 지난다 — 재연동의 옛 행 폐기와 같은 코드다. */
+    /** 해제도 같은 자리(커밋 뒤 secrets 삭제)를 지난다 — 재연동의 옛 행 폐기와 같은 코드다. 구글 호출은 없다. */
     @Test
     void 풀보다_많은_회원_25명이_동시에_해제해도_전부_204이고_secrets가_결국_지워진다() throws Exception {
         List<User> users = linkedUsers();
@@ -136,7 +136,7 @@ class YoutubeResolvePoolExhaustionTest extends YoutubeLinkTestSupport {
         assertThat(elapsedMs).as("Hikari 30s 대기 타임아웃이 났다 = 풀 데드락").isLessThan(30_000);
         assertThat(cleanup.awaitIdle(Duration.ofSeconds(10))).isTrue();
         assertThat(secretCount()).as("고아 secret").isZero();
-        assertThat(YOUTUBE.revokeCalls()).as("회원마다 한 번 — 구글은 한 번이면 grant 전체가 죽는다").isEqualTo(CALLERS);
+        assertThat(YOUTUBE.revokeCalls()).as("해제는 구글에 아무것도 보내지 않는다").isZero();
         System.out.printf("youtube unlink 동시 %d · 풀 10 · 총 %dms%n", CALLERS, elapsedMs);
     }
 

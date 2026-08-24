@@ -54,7 +54,12 @@ public class YoutubeLinkController {
                 .orElseGet(LinkStatusResponse::none);
     }
 
-    /** 살아있는 연동이 없어도 204 — 멱등. 행은 남고 토큰은 구글에서 철회한다. */
+    /**
+     * 살아있는 연동이 없어도 204 — 멱등. 행은 남고(`revoked_at`) <b>토큰 시크릿만 지운다</b>.
+     * <b>구글에 revoke는 보내지 않는다</b> — 계정 단위라 남의 연동까지 끊기 때문이다
+     * (근거는 {@code YoutubeLinkWriter.closeAlive} javadoc). 사용자가 구글 쪽 허락까지 지우려면
+     * 구글 계정 화면에서 직접 한다 — 웹이 그 링크를 안내한다.
+     */
     @DeleteMapping
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void unlink(@AuthenticationPrincipal Jwt jwt) {
