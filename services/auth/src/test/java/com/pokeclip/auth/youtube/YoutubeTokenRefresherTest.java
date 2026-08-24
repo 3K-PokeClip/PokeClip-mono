@@ -191,6 +191,42 @@ class YoutubeTokenRefresherTest extends YoutubeLinkTestSupport {
         assertThat(secretStore.get(link.getRefreshTokenRef())).contains("rt-old");
     }
 
+    /**
+     * 🔴 refresh 4xx 중 <b>영구는 {@code invalid_grant} 하나</b>다 — 「이 grant가 죽었다」를 뜻하는 코드가 그것뿐이다.
+     * {@code unauthorized_client}·{@code invalid_request}·{@code unsupported_grant_type}은 <b>우리 앱·요청 설정</b>
+     * 문제라 재동의로 안 풀리는데, 철회 점검이 하루 한 번 살아있는 연동을 전부 훑으므로 설정이 어긋난 날
+     * <b>전 회원이 되돌릴 수 없게 BROKEN으로 닫힌다</b>(봇 리뷰 PR #116에서 재현).
+     */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "unauthorized_client", "invalid_request", "unsupported_grant_type"})
+    void 우리_설정_문제인_4xx는_행을_닫지_않는다(String errorCode) {
+        User u = newUser();
+        YoutubeChannelLink link = linked(u, "at-old", "rt-old");
+        YOUTUBE.tokenResponds(400, "{\"error\":\"" + errorCode + "\"}");
+
+        RefreshResult r = refresher.refreshIfExpiringWithin(u.getId(), Duration.ofHours(2));
+
+        assertThat(r.outcome()).as("%s는 재동의로 안 풀린다 — 닫으면 복구 수단이 없다", errorCode)
+                .isEqualTo(RefreshOutcome.UNAVAILABLE);
+        assertThat(linkRepository.findById(link.getId()).orElseThrow().isRevoked()).isFalse();
+        assertThat(secretStore.get(link.getRefreshTokenRef())).contains("rt-old");
+    }
+
+    /** 대조군 — 진짜로 이 grant가 죽은 경우만 영구다. 위와 갈리지 않으면 분류가 아무것도 안 하는 것이다. */
+    @Test
+    void invalid_grant만_행을_닫는다() {
+        User u = newUser();
+        YoutubeChannelLink link = linked(u, "at-old", "rt-old");
+        YOUTUBE.tokenResponds(400, "{\"error\":\"invalid_grant\"}");
+
+        RefreshResult r = refresher.refreshIfExpiringWithin(u.getId(), Duration.ofHours(2));
+        awaitCleanup();
+
+        assertThat(r.outcome()).isEqualTo(RefreshOutcome.REJECTED);
+        assertThat(linkRepository.findById(link.getId()).orElseThrow().status()).isEqualTo(LinkStatus.BROKEN);
+    }
+
     /** 403 할당량 소진은 태평양시 자정에 스스로 풀린다 — 끊으면 전 회원이 재동의해야 한다. */
     @Test
     void 갱신이_403_quotaExceeded면_행을_그대로_둔다() {
