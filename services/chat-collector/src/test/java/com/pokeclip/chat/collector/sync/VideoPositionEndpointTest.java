@@ -36,9 +36,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class VideoPositionEndpointTest {
 
     /**
-     * 유출 검사의 바늘이기도 하다. <b>{@code ChatCollectionEndpointTest}와 값이 같다</b> —
-     * 그래야 두 창구 검사가 같은 스프링 컨텍스트를 공유한다(캐시 키가 프로퍼티까지 본다).
-     * 그쪽 상수는 package-private이라 참조할 수 없어 리터럴을 맞춰 둔다.
+     * 유출 검사의 바늘이기도 하다. <b>{@code ChatCollectionEndpointTest}와 값을 맞춰 둔다</b>
+     * (그쪽 상수는 package-private이라 참조할 수 없다). 원래 그 목적은 두 창구 검사가 같은
+     * 스프링 컨텍스트를 공유하는 것이었는데, <b>지금은 공유하지 않는다</b> — 아래
+     * {@link 토큰이_설정된_프로세스}가 보정값을 하나 더 박아 캐시 키가 갈렸다(2026-08-24).
+     * 값을 그대로 맞춰 두는 것은 <b>두 창구가 같은 문을 쓴다는 것이 한눈에 보여야</b> 하고,
+     * 프로퍼티를 도로 맞추면 언제든 다시 공유되기 때문이다. 대가는 컨텍스트 하나가 더 뜨는 것뿐이다.
      */
     static final String TOKEN = "test-internal-token";
 
@@ -87,8 +90,19 @@ class VideoPositionEndpointTest {
                 .doesNotContain("Exception");
     }
 
+    /**
+     * <b>보정값을 0으로 못박는다.</b> 이 검사가 재는 것은 창구의 모양(판정·본문·401·400·500)이지
+     * 「기본 보정값이 얼마인가」가 아니다. 안 박으면 아래 기대값들이 {@code application.yml}의
+     * 실측 기본값에 매달려, <b>운영 값을 다시 잴 때마다 이 파일이 같이 빨간불이 된다</b>
+     * (2026-08-24에 0 → 3900으로 올리자 세 검사가 실제로 그랬다). 기본값을 실제로 재는 것은
+     * {@link SyncOffsetBindingTest}이고 그쪽은 <b>0도 실측값도 아닌</b> 값을 일부러 쓴다.
+     *
+     * <p>0을 고른 이유는 조각 데이터와의 산수를 사람이 눈으로 따라갈 수 있어서다 —
+     * {@code messageTime}이 곧 조각 안 위치이므로 아래 표의 벽시계 열을 그대로 읽으면 된다.
+     */
     @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-            properties = "pokeclip.link.internal-token=" + TOKEN)
+            properties = {"pokeclip.link.internal-token=" + TOKEN,
+                    "pokeclip.sync.default-offset-ms=0"})
     @ActiveProfiles("test")
     static class 토큰이_설정된_프로세스 extends IntegrationTestSupport {
 
