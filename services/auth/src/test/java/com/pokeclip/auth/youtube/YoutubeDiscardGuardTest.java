@@ -35,18 +35,20 @@ class YoutubeDiscardGuardTest extends YoutubeLinkTestSupport {
     private final YoutubeTokenDiscarder discarder;
     private final YoutubeOAuthClient oauthClient;
     private final PlatformTransactionManager txManager;
+    private final YoutubeDiscardGuard guard;
 
     YoutubeDiscardGuardTest(MockMvc mockMvc, UserService userService, UserRepository userRepository,
                             TokenService tokenService, YoutubeLinkStateCodec codec,
                             YoutubeChannelLinkRepository linkRepository, SecretStore secretStore,
                             YoutubeLinkWriter writer, JdbcTemplate jdbc, YoutubeCleanupExecutor cleanup,
                             YoutubeTokenDiscarder discarder, YoutubeOAuthClient oauthClient,
-                            PlatformTransactionManager txManager) {
+                            PlatformTransactionManager txManager, YoutubeDiscardGuard guard) {
         super(mockMvc, userService, userRepository, tokenService, codec, linkRepository, secretStore, writer,
                 jdbc, cleanup);
         this.discarder = discarder;
         this.oauthClient = oauthClient;
         this.txManager = txManager;
+        this.guard = guard;
     }
 
     /**
@@ -95,6 +97,31 @@ class YoutubeDiscardGuardTest extends YoutubeLinkTestSupport {
         assertThat(YOUTUBE.revokedTokens()).as("남의 채널이라 409인데 그 계정의 토큰을 버렸다").isEmpty();
         assertThat(oauthClient.refresh(ownerRefresh).accessToken())
                 .as("원래 주인의 연동이 끊겼다 — revoke는 구글 계정 단위로 먹는다").isNotNull();
+    }
+
+    /**
+     * 🔴 <b>여기까지가 가드가 막을 수 있는 경계다</b> — 그 바깥을 시험으로 못박는다.
+     *
+     * <p>재연동이 <b>교환은 끝나고(구글엔 grant가 이미 있다) 저장은 아직 전</b>인 순간에는 우리 표에
+     * 아무것도 없어 가드가 못 본다. 락도 소용없다 — {@code writer.create}가 아직 시작되지 않아 잠글 것이 없다.
+     * 그래서 <b>해제 정리가 그 순간 발사되면 새 grant가 죽는다</b>(봇 리뷰 2판 ②).
+     *
+     * <p><b>이 시험은 결함을 기록한다</b>(characterization). 「막힌 곳」({@code 재연동이_진행_중이면…})과
+     * 나란히 두어 <b>경계가 어디인지를 코드에서 읽게</b> 하려는 것이다. 완화책 셋과 각각의 대가는
+     * {@code auth/CLAUDE.md} 「알려진 구멍」 20번에 있다 — (가)는 커넥션을 쥔 채 외부 호출을 하게 되고
+     * (실측: afterCommit 시점 활성 커넥션 1), (다)는 미완료 행 청소가 필요해져 POK-89와 부딪힌다.
+     *
+     * <p><b>이 시험이 빨간불이 되면 창이 닫혔다는 뜻이다</b> — 그때 알려진 구멍 20번과 이 시험을 함께 지운다.
+     */
+    @Test
+    void 저장_전_재연동은_가드가_못_본다_알려진_한계() {
+        User u = newUser();
+
+        // 「교환은 끝났고 저장은 전」 = 우리 표에 그 회원의 행도, 그 채널의 행도 없다.
+        boolean blocks = guard.blocksDiscard(u.getId(), "UC-exchanged-not-saved");
+
+        assertThat(blocks)
+                .as("가드가 이 상태를 보게 됐다면 창이 닫힌 것이다 — 알려진 구멍 20번을 지워라").isFalse();
     }
 
     /** 대조군 — 아무도 안 쓰는 채널이면 그대로 버린다. 위 둘이 「아무것도 안 버린다」로 바뀌면 여기서 걸린다. */
