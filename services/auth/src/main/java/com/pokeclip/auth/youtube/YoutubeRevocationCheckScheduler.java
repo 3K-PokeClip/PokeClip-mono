@@ -35,6 +35,20 @@ public class YoutubeRevocationCheckScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(YoutubeRevocationCheckScheduler.class);
 
+    /**
+     * 🔴 틱 하나가 처리하는 후보 상한. <b>스프링 기본 스케줄러는 스레드가 하나</b>다(실측: corePoolSize=1) —
+     * 이 틱이 오래 돌면 <b>치지직 갱신 틱까지 밀린다</b>. 구글 장애로 회원마다 read-timeout(5s)을 먹으면
+     * 후보 100명에 500초이고, 치지직 틱 주기가 10분이라 한 틱이 통째로 사라진다(봇 3판 P2-1).
+     *
+     * <p>25는 <b>최악 125초</b>(25 × 5s)로 치지직 10분 틱 안에 넉넉히 들어가는 값이다. 남은 후보는 다음 틱이
+     * 가져간다 — 선별이 {@code lastRefreshedAt} 오름차순이라 오래된 것부터 순서대로 소진되고,
+     * 틱이 1시간마다 도므로 회원 100명이면 하루 안에 전부 돈다(우리 전제는 동시 100명이다).
+     *
+     * <p>전용 executor 대신 상한을 고른 이유: 스레드를 늘리면 구글 호출이 <b>동시에</b> 나가 할당량을 더 빨리
+     * 태우고, 이 작업은 급하지 않다(하루 한 번 확인이 목적이다).
+     */
+    static final int BATCH_LIMIT = 25;
+
     private final YoutubeChannelLinkRepository links;
     private final YoutubeTokenRefresher refresher;
     private final YoutubeProperties properties;
@@ -52,6 +66,10 @@ public class YoutubeRevocationCheckScheduler {
     public void tick() {
         List<Long> candidates = links.findUserIdsNotRefreshedSince(
                 Instant.now().minus(properties.check().staleness()));
+        if (candidates.size() > BATCH_LIMIT) {
+            log.info("auth.youtube.link.check_batch_capped candidates={} limit={}", candidates.size(), BATCH_LIMIT);
+            candidates = candidates.subList(0, BATCH_LIMIT);
+        }
         for (Long userId : candidates) {
             try {
                 refresher.refreshIfExpiringWithin(userId, Duration.ZERO);

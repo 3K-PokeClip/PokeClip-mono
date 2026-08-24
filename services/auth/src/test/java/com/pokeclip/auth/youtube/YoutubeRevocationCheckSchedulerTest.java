@@ -84,6 +84,45 @@ class YoutubeRevocationCheckSchedulerTest {
         verify(refresher).refreshIfExpiringWithin(3L, Duration.ZERO);
     }
 
+    /**
+     * 🔴 틱 하나가 후보를 <b>무한정</b> 처리하면 스프링 기본 스케줄러 스레드(corePoolSize=1, 실측)를 오래 붙잡아
+     * <b>치지직 갱신 틱까지 막는다</b> — 구글 장애로 회원마다 read-timeout(5s)이면 후보 100명에 500초다
+     * (봇 3판 P2-1). 그래서 틱당 상한을 둔다. 남은 후보는 다음 틱이 가져간다 — 후보 정렬이
+     * {@code lastRefreshedAt} 오름차순이라 오래된 것부터 순서대로 소진된다.
+     */
+    @Test
+    void 틱_하나가_처리하는_후보에_상한이_있다() {
+        YoutubeChannelLinkRepository links = mock(YoutubeChannelLinkRepository.class);
+        YoutubeTokenRefresher refresher = mock(YoutubeTokenRefresher.class);
+        List<Long> many = java.util.stream.LongStream.rangeClosed(1, YoutubeRevocationCheckScheduler.BATCH_LIMIT + 20)
+                .boxed().toList();
+        when(links.findUserIdsNotRefreshedSince(any())).thenReturn(many);
+
+        new YoutubeRevocationCheckScheduler(links, refresher, testProps()).tick();
+
+        verify(refresher, org.mockito.Mockito.times(YoutubeRevocationCheckScheduler.BATCH_LIMIT))
+                .refreshIfExpiringWithin(any(), any());
+    }
+
+    /** 상한을 넘긴 후보가 <b>다음 틱에</b> 처리된다 — 「상한을 뒀더니 영영 안 돈다」가 되면 안 된다. */
+    @Test
+    void 상한을_넘긴_후보는_다음_틱이_가져간다() {
+        YoutubeChannelLinkRepository links = mock(YoutubeChannelLinkRepository.class);
+        YoutubeTokenRefresher refresher = mock(YoutubeTokenRefresher.class);
+        // 1틱: 갱신되지 않은 것이 상한+2개 → 2틱에서는 앞 상한개가 빠진 목록이 온다(선별이 lastRefreshedAt 기준이라)
+        List<Long> first = java.util.stream.LongStream.rangeClosed(1, YoutubeRevocationCheckScheduler.BATCH_LIMIT + 2)
+                .boxed().toList();
+        List<Long> second = List.of(9001L, 9002L);
+        when(links.findUserIdsNotRefreshedSince(any())).thenReturn(first, second);
+        YoutubeRevocationCheckScheduler scheduler = new YoutubeRevocationCheckScheduler(links, refresher, testProps());
+
+        scheduler.tick();
+        scheduler.tick();
+
+        verify(refresher).refreshIfExpiringWithin(9001L, Duration.ZERO);
+        verify(refresher).refreshIfExpiringWithin(9002L, Duration.ZERO);
+    }
+
     /** 선별 기준 시각이 「지금 − staleness」인지. 부호를 뒤집으면 미래 시각이 되어 살아있는 행이 전부 후보가 된다. */
     @Test
     void 후보_기준_시각은_지금에서_staleness만큼_이전이다() {
