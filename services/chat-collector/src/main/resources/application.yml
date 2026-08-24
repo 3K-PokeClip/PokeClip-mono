@@ -192,6 +192,12 @@ pokeclip:
     # 기본값 0은 자리 표시다 — 실측이 이 줄을 갱신한다. 근거(측정 장소·회차 수치·
     # P₂ 읽기 오차)는 services/README.md에 같이 남긴다. 0인 채로 두면 보정이 항등이라
     # 변환은 돌지만 위치가 사람 체감과 어긋난다.
+    #
+    # SyncOffsetBindingTest가 이 줄이 실제로 걸리는지를 행동으로 잰다 — 값 단언이 아니라
+    # 음수 보정을 실제로 먹여 변환 결과가 그만큼 밀리는지 본다. 줄을 지우거나 변수 이름에
+    # 오타를 내면 SyncProperties 빈은 그대로 뜨고 defaultOffsetMs만 조용히 0이 된다
+    # (둘 다 주입해서 빨간불을 확인했다). RestClient.create()·spring.http.client 단수형과
+    # 같은 모양의 함정이다 — 설정은 완벽한데 값이 안 걸리고 서버는 뜬다.
     default-offset-ms: ${CHAT_SYNC_OFFSET_MS:0}
     # 채널별 덮어쓰기는 pokeclip.sync.channel-offset-ms.<채널ID>: <ms> 로 준다.
     # 환경변수가 아니라 yml이다 — 채널마다 다른 값이라 이름을 미리 못 정한다.
