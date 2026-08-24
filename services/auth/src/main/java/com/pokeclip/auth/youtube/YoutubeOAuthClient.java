@@ -170,11 +170,23 @@ public class YoutubeOAuthClient {
      * 4xx인데 「이 토큰이 무효」가 아닌 코드들 → 일시(재시도). 값은 열거 코드와 <b>비교만</b> 하고,
      * causeType에는 여기 고정된 이름만 실린다(응답 값을 옮기지 않는다).
      *
-     * <p>{@code invalid_client}는 우리 앱 설정 문제(시크릿 회전·오타)라 영구로 닫으면 회원 전원이 재동의해야 한다.
-     * 403 할당량 셋은 YouTube Data API가 일 10,000유닛을 소진했을 때다 — 태평양시 자정에 스스로 풀린다.
+     * <p>🔴 <b>넣는 기준</b>: 영구(BROKEN)로 닫아도 되는 것은 <b>「이 refresh grant가 죽었다」를 뜻하는 코드뿐</b>이고,
+     * 구글에서 그것은 {@code invalid_grant} 하나다(철회·만료·code 소모). <b>나머지 4xx는 전부 여기 온다</b> —
+     * 재동의로 풀리지 않는 것을 영구로 닫으면 <b>복구 수단이 없어지기</b> 때문이다.
+     *
+     * <ul>
+     *   <li>{@code invalid_client}·{@code unauthorized_client}·{@code invalid_request}·
+     *       {@code unsupported_grant_type} — <b>우리 앱·요청 설정</b> 문제(시크릿 회전·오타·앱 상태 변경).
+     *       철회 점검이 하루 한 번 전 회원을 훑으므로, 설정이 어긋난 날 이것들을 영구로 닫으면
+     *       <b>전 회원의 연동이 한꺼번에 죽고 재동의해도 안 풀린다</b>(봇 리뷰 PR #116).</li>
+     *   <li>403 할당량 셋 — 일 10,000유닛 소진. 태평양시 자정에 스스로 풀린다.</li>
+     * </ul>
      */
     private static final Map<String, String> TEMPORARY_ERROR_CODES = Map.of(
             "invalid_client", "InvalidClient",
+            "unauthorized_client", "UnauthorizedClient",
+            "invalid_request", "InvalidRequest",
+            "unsupported_grant_type", "UnsupportedGrantType",
             "quotaExceeded", "QuotaExceeded",
             "rateLimitExceeded", "RateLimitExceeded",
             "userRateLimitExceeded", "UserRateLimitExceeded");
