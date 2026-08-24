@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.sync;
 
+import java.util.Locale;
+
 /**
  * 채팅 시각 하나를 영상 위치로 바꾼 결과.
  *
@@ -31,7 +33,18 @@ public record VideoPosition(State state, Long positionMs, Long segmentSeq, long 
      * 사이의 진짜 공백이거나, 벽시계가 역행해 위치를 믿을 수 없는 구간이다. 둘을 뭉치면
      * 부르는 쪽이 영영 안 올 것을 영원히 다시 묻는다.
      */
-    public enum State { CONVERTED, NOT_YET_INDEXED, NO_FOOTAGE }
+    public enum State {
+        CONVERTED, NOT_YET_INDEXED, NO_FOOTAGE;
+
+        /**
+         * 밖에 나가는 이름은 소문자다({@code CollectionState} 선례) — 이 서버의 창구 둘이
+         * 같은 모양이어야 부르는 쪽이 형식을 두 벌 배선하지 않는다. <b>이름은 clip과의 약속이다</b> —
+         * 열거 상수 이름을 바꾸면 wire 이름도 같이 바뀐다.
+         */
+        public String wireName() {
+            return name().toLowerCase(Locale.ROOT);
+        }
+    }
 
     public static VideoPosition converted(long positionMs, long segmentSeq, long appliedOffsetMs) {
         return new VideoPosition(State.CONVERTED, positionMs, segmentSeq, appliedOffsetMs);
