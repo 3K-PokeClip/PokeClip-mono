@@ -181,3 +181,24 @@ pokeclip:
     # ChzzkLinkClient 생성자에서 잡는다 — 안 주면 리터럴 "${INTERNAL_API_TOKEN}"이 바인딩돼
     # 서버는 뜨고 열쇠 조회만 전부 401이 되며, 401은 재시도 갈래라 편지가 큐에서 영원히 돈다.
     internal-token: ${INTERNAL_API_TOKEN:}
+  sync:
+    # 채팅 시각에서 빼는 보정값(ms)이다. 한 항이 아니라 합이다 —
+    # (방송 지연 + 시청자 반응 지연 + 전달 지연) − 우리 인제스트 지연.
+    #
+    # 여기에 치지직 시계와 이 기계 시계의 차이까지 섞여 있고 그 차이는 고정이 아니다:
+    # 같은 코드로 잰 전달 지연이 2026-08-05에 +175ms, 08-15에 −39~−70ms였다.
+    # 그래서 부호를 미리 못 박아 음수를 허용하고, 기계·환경이 바뀌면 다시 잰다.
+    #
+    # 기본값 0은 자리 표시다 — 실측이 이 줄을 갱신한다. 근거(측정 장소·회차 수치·
+    # P₂ 읽기 오차)는 services/README.md에 같이 남긴다. 0인 채로 두면 보정이 항등이라
+    # 변환은 돌지만 위치가 사람 체감과 어긋난다.
+    default-offset-ms: ${CHAT_SYNC_OFFSET_MS:0}
+    # 채널별 덮어쓰기는 pokeclip.sync.channel-offset-ms.<채널ID>: <ms> 로 준다.
+    # 환경변수가 아니라 yml이다 — 채널마다 다른 값이라 이름을 미리 못 정한다.
+    #
+    # 🔴 여기에 `channel-offset-ms: {}`(빈 맵)를 쓰지 마라. Spring의
+    # YamlProcessor.buildFlattenedMap이 그것을 빈 문자열로 평탄화하고, Binder가
+    # String → Map<String,Long> 변환기를 못 찾아 BindException이 난다.
+    # SyncProperties는 @ConfigurationPropertiesScan이 모든 컨텍스트에 올리므로
+    # 스프링 검사 전부와 운영 부팅이 통째로 죽는다(계획 검증이 재현). 줄을 아예 안 쓰면
+    # compact 생성자가 null을 빈 맵으로 받는다 — 그래서 여기 주석만 있고 키가 없다.

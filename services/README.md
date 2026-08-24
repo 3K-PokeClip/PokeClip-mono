@@ -247,6 +247,7 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 | `BROADCAST_ENDED_SWEEP_INTERVAL` | `PT1H` | — | 끝난 방송 메모를 치우는 주기 |
 | `BROADCAST_ENDED_RETENTION` | `PT24H` | — | 그 메모의 보관 기간(ADR-016의 TTL 24h) |
 | `AWS_REGION` | `ap-northeast-2` | ✅ | 큐·S3 공용 |
+| `CHAT_SYNC_OFFSET_MS` | `0` | — | 채팅 시각에서 빼는 보정값(ms). **음수를 허용한다.** 실측으로 정한다 — 아래 참고 |
 
 **🔴 `CHAT_`\*는 「호스트 쪽 이름이 다르다」는 표시다.** 서버가 컨테이너 안에서 읽는 이름은
 표에 적힌 그대로이고, `.env`에서 받는 이름만 `CHAT_BROADCAST_INTAKE_ENABLED`·
@@ -257,6 +258,22 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 **켜는 값을 큐 주소와 따로 둔 이유는 `clip`과 같다** — 주소가 비었다고 저절로 꺼지면
 "로컬에서 일부러 안 켬"과 "운영에서 설정을 깜빡함"이 똑같이 보인다. 자격증명은 환경변수에
 없다(SDK 표준 체인).
+
+**`CHAT_SYNC_OFFSET_MS`의 `CHAT_`은 위 표시와 무관하다** — 그쪽은 `compose` 칸에 붙어
+「`.env`에서 받는 이름만 다르다」는 뜻이고, 이쪽은 **서버가 읽는 이름 자체**가 그렇다.
+
+**보정값은 실측으로 정한다. 기본값 `0`은 자리 표시다.** 이 값에는 (방송 지연 + 시청자 반응
+지연 + 전달 지연) − 우리 인제스트 지연이 **합으로** 들어 있고, 거기에 치지직 시계와 그 기계
+시계의 차이까지 섞인다. 같은 코드로 잰 전달 지연이 2026-08-05에 `+175ms`, 08-15에
+`−39~−70ms`였다 — **부호조차 환경이 정하므로 음수를 허용한다.** 기계나 배포 환경이 바뀌면
+**반드시 다시 잰다.** `compose` 칸이 `—`인 것은 dev에 쓸 값이 아직 없어서다(측정 장소가
+로컬이다). 0인 채로 두어도 변환은 돌지만 위치가 사람 체감과 어긋난다.
+
+**채널별 덮어쓰기는 환경변수가 아니라 yml이다** — `pokeclip.sync.channel-offset-ms.<채널ID>: <ms>`.
+채널마다 값이 달라 변수 이름을 미리 정할 수 없다. 🔴 **빈 맵(`channel-offset-ms: {}`)을
+적으면 부팅이 통째로 죽는다** — 빈 문자열로 평탄화돼 `Map`으로 바인딩되지 않고, 이 설정은
+모든 스프링 컨텍스트에 올라가므로 검사 전부와 운영 부팅이 같이 죽는다. **줄을 아예 안 적으면**
+빈 맵이 된다.
 
 **🔴 이 표에 값을 더하면 `docker-compose.dev.yml`의 `chat-collector` 블록에도 같이 넣어라 —
 `compose` 칸이 `—`인 것처럼 yml 기본값으로 충분한 값은 빼도 된다. 빼면 그 칸에 `—`를 적어라.

@@ -51,11 +51,21 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
     private static final List<String> STREAMS = List.of(NORMAL, DRIFT, EMPTY, LATE, INVERTED, FAR_JUMP);
 
     private final JdbcTemplate jdbc;
+    private final SegmentLedger ledger;
     private final VideoPositionCalculator calculator;
 
     VideoPositionCalculatorTest(SegmentLedger ledger, JdbcTemplate jdbc) {
         this.jdbc = jdbc;
+        this.ledger = ledger;
         this.calculator = new VideoPositionCalculator(ledger, new SyncProperties(0, Map.of()));
+    }
+
+    /**
+     * 보정값이 다른 계산기를 만든다. <b>보정 검사만 이것을 쓴다</b> — 나머지는 위
+     * {@link #calculator}(보정 0)라 뺄셈이 항등이고, 그래서 보정 경로를 하나도 안 잰다.
+     */
+    private VideoPositionCalculator 보정이(long defaultOffsetMs, Map<String, Long> perChannel) {
+        return new VideoPositionCalculator(ledger, new SyncProperties(defaultOffsetMs, perChannel));
     }
 
     @BeforeEach
@@ -447,5 +457,79 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
                     .as("정상 방송은 조용하다")
                     .noneMatch(line -> line.startsWith("chat.sync.wall_clock_inverted"));
         }
+    }
+
+    // ── 보정값 ────────────────────────────────────────────────────────────────
+    //
+    // 🔴 네 검사 모두 시각을 조각 경계를 넘도록 골랐다. 보정을 넣고도 같은 조각 안에 머무는
+    // 시각을 쓰면 뺄셈을 통째로 지워도 위치만 조금 달라질 뿐 판정과 조각 번호가 그대로라
+    // 초록이 된다 — 감사 1의 INJ-1이 정확히 그 모양으로 위 검사 열다섯을 다 통과했다.
+    // 그래서 여기서는 보정이 빠지면 segmentSeq가 달라진다. appliedOffsetMs도 같이 단언한다:
+    // 0이 아닌 값이 실려 나오는 자리가 없으면 상수 0을 돌려주는 구현과 구분되지 않는다.
+
+    /**
+     * 보정 2000이면 {@code T0+5500}에 친 채팅은 {@code T0+3500} 시점의 화면을 보고 친 것이다 —
+     * <b>조각이 seq2에서 seq1로 바뀐다.</b>
+     */
+    @Test
+    void 채널에_보정값이_있으면_그것을_쓴다() {
+        정상_방송을_넣는다();
+
+        VideoPosition located = 보정이(0, Map.of("calc-channel", 2000L))
+                .locate(NORMAL, "calc-channel", T0.plusMillis(5500));
+
+        assertThat(located.state()).isEqualTo(VideoPosition.State.CONVERTED);
+        assertThat(located.positionMs()).as("5500 − 2000 = 3500").isEqualTo(3500L);
+        assertThat(located.segmentSeq()).as("보정을 안 빼면 seq2다").isEqualTo(1L);
+        assertThat(located.appliedOffsetMs()).as("판정과 무관하게 늘 실린다").isEqualTo(2000L);
+    }
+
+    /** 맵에 있는 것은 <b>다른</b> 채널이다. 그 값(9000)을 잘못 집으면 첫 조각 이전이 된다. */
+    @Test
+    void 채널에_없으면_기본값이다() {
+        정상_방송을_넣는다();
+
+        VideoPosition located = 보정이(1000, Map.of("calc-other-channel", 9000L))
+                .locate(NORMAL, "calc-channel", T0.plusMillis(4500));
+
+        assertThat(located.state()).isEqualTo(VideoPosition.State.CONVERTED);
+        assertThat(located.positionMs()).as("4500 − 1000 = 3500").isEqualTo(3500L);
+        assertThat(located.segmentSeq()).as("보정을 안 빼면 seq2다").isEqualTo(1L);
+        assertThat(located.appliedOffsetMs()).isEqualTo(1000L);
+    }
+
+    /**
+     * <b>음수 보정은 시각을 미래로 민다.</b> 부호를 미리 못 박는다 — 실측 전력에 {@code +175ms}와
+     * {@code −39ms}가 둘 다 있고, 치지직 시계와 우리 시계의 차이가 섞여 있어 환경이 정한다.
+     */
+    @Test
+    void 음수_보정값이면_보정된_시각이_미래로_간다() {
+        정상_방송을_넣는다();
+
+        VideoPosition located = 보정이(-1000, Map.of())
+                .locate(NORMAL, "calc-channel", T0.plusMillis(3500));
+
+        assertThat(located.state()).isEqualTo(VideoPosition.State.CONVERTED);
+        assertThat(located.positionMs()).as("3500 − (−1000) = 4500").isEqualTo(4500L);
+        assertThat(located.segmentSeq()).as("보정을 안 빼면 seq1이다 — 미래로 밀려 조각이 바뀐다").isEqualTo(2L);
+        assertThat(located.appliedOffsetMs()).isEqualTo(-1000L);
+    }
+
+    /**
+     * 채널을 모르는 자리가 있다(옛 경로 {@code CHZZK_ENABLED}). 그때 <b>보정을 건너뛰지 않는다</b> —
+     * 건너뛰면 그 경로만 조용히 다른 답을 낸다. 맵에 이 방송의 채널 값을 일부러 넣어 뒀다:
+     * {@code null}로 그것을 집으려 하면 {@code Map.of()}의 {@code getOrDefault}가 NPE를 던진다.
+     */
+    @Test
+    void 채널이_null이면_기본값이다() {
+        정상_방송을_넣는다();
+
+        VideoPosition located = 보정이(2000, Map.of("calc-channel", 9000L))
+                .locate(NORMAL, null, T0.plusMillis(5500));
+
+        assertThat(located.state()).isEqualTo(VideoPosition.State.CONVERTED);
+        assertThat(located.positionMs()).as("5500 − 2000 = 3500").isEqualTo(3500L);
+        assertThat(located.segmentSeq()).as("보정을 건너뛰면 seq2다").isEqualTo(1L);
+        assertThat(located.appliedOffsetMs()).isEqualTo(2000L);
     }
 }
