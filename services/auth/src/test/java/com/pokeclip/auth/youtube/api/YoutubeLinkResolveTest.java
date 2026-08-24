@@ -105,8 +105,9 @@ class YoutubeLinkResolveTest extends YoutubeLinkTestSupport {
         accessRemaining(linked(u, "at-old", "rt-old"), Duration.ofMinutes(10));
         YOUTUBE.tokenResponds(400, "{\"error\":\"invalid_grant\"}");
 
-        mockMvc.perform(resolve(u.getId())).andExpect(jsonPath("$.reason").value("BROKEN"))
-                .andExpect(jsonPath("$.accessToken").doesNotExist());
+        String body = mockMvc.perform(resolve(u.getId())).andExpect(jsonPath("$.reason").value("BROKEN"))
+                .andReturn().getResponse().getContentAsString();
+        assertThat(body).as("끊긴 연동의 응답에 토큰 키가 남았다").doesNotContain("accessToken").doesNotContain("at-old");
         awaitCleanup();
         mockMvc.perform(resolve(u.getId())).andExpect(jsonPath("$.reason").value("BROKEN"));   // 행이 닫혔어도 사유는 유지
 
@@ -122,10 +123,11 @@ class YoutubeLinkResolveTest extends YoutubeLinkTestSupport {
                 .andExpect(status().isNoContent());
         awaitCleanup();
 
-        mockMvc.perform(resolve(u.getId())).andExpect(status().isOk())
+        String body = mockMvc.perform(resolve(u.getId())).andExpect(status().isOk())
                 .andExpect(jsonPath("$.valid").value(false))
                 .andExpect(jsonPath("$.reason").value("UNLINKED"))
-                .andExpect(jsonPath("$.accessToken").doesNotExist());
+                .andReturn().getResponse().getContentAsString();
+        assertThat(body).as("해제된 연동의 응답에 토큰 키가 남았다").doesNotContain("accessToken").doesNotContain("at-old");
     }
 
     /**

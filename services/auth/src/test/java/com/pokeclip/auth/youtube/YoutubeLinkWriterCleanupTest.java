@@ -11,6 +11,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * 커밋 뒤 정리 잡의 본문 — 통합으로는 SecretStore를 실패시킬 수 없어 단위로 잰다.
@@ -32,7 +33,10 @@ class YoutubeLinkWriterCleanupTest {
         assertThatThrownBy(() -> writer.cleanupOld(7L, "ref-a", "ref-r", "at-old", "rt-old",
                 "auth.youtube.link.unlinked")).isInstanceOf(IllegalStateException.class);
 
-        verify(discarder).discard(7L, "at-old", "rt-old");
+        // 진입점은 조건부인 쪽이다 — 이 잡이 큐에서 밀린 사이 재연동이 끝났으면 버리면 안 된다(감사 3라운드 중대-1).
+        // 「조건이 실제로 갈린다」는 YoutubeLinkWriterConcurrencyTest가 실물 배선으로 잰다.
+        verify(discarder).discardIfNoLiveLink(7L, "at-old", "rt-old");
+        verify(discarder, never()).discard(any(), any(), any());
     }
 
     /**
@@ -45,6 +49,6 @@ class YoutubeLinkWriterCleanupTest {
 
         verify(secretStore).delete("ref-a");
         verify(secretStore).delete("ref-r");
-        verify(discarder, never()).discard(any(), any(), any());
+        verifyNoInteractions(discarder);
     }
 }

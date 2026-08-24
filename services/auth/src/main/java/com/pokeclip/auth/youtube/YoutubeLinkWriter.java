@@ -7,8 +7,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -109,6 +107,12 @@ public class YoutubeLinkWriter {
      * WARN으로 남긴다. package-private은 단위 테스트용.
      *
      * <p>옛 토큰 원문이 둘 다 null이면 revoke 갈래가 아니다(재연동) — 아무것도 안 부른다.
+     *
+     * <p>🔴 <b>버리기는 {@code discardIfNoLiveLink}다</b>(감사 3라운드 중대-1). 이 잡은 큐에서 밀릴 수 있고,
+     * 그 사이 사용자가 재연동을 끝내면 뒤늦은 revoke가 구글 동의 <b>전부</b>를 죽여 <b>방금 만든 새 grant까지</b>
+     * 끊는다(표는 ACTIVE인데 다음 갱신이 invalid_grant). 철회 점검 틱이 정리 잡을 무더기로 넣는 날에는
+     * 그 지연이 분 단위가 될 수 있어 창이 실제로 열린다. <b>발사 시점에</b> 살아있는 연동이 있으면 버리지 않는다 —
+     * 재연동이 없었다면 살아있는 행도 없으므로 정상 해제의 동작은 그대로다.
      */
     void cleanupOld(Long userId, String accessRef, String refreshRef, String oldAccess, String oldRefresh,
                     String event) {
@@ -118,22 +122,9 @@ public class YoutubeLinkWriter {
             log.info("{} userId={}", event, userId);
         } finally {
             if (oldAccess != null || oldRefresh != null) {
-                discarder.discard(userId, oldAccess, oldRefresh);
+                discarder.discardIfNoLiveLink(userId, oldAccess, oldRefresh);
             }
         }
     }
 
-    /**
-     * "일어났다"는 로그는 커밋 뒤에만 — 커밋 전에 찍으면 롤백 시 거짓 알리바이다. 같은 스레드 동기
-     * afterCommit이라 MDC 상관 ID도 살아 있다({@code ChzzkTokenRefresher.logAfterCommit}과 같은 모양).
-     * 정리 큐로 보내지 않는다 — 그 큐는 revoke(최대 5s)와 공유되고 거부될 수 있다.
-     */
-    private static void logAfterCommit(Runnable action) {
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                action.run();
-            }
-        });
-    }
 }
