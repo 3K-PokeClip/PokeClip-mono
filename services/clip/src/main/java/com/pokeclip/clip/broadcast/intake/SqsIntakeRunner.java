@@ -2,6 +2,7 @@ package com.pokeclip.clip.broadcast.intake;
 
 import com.pokeclip.clip.broadcast.BroadcastEventProcessor;
 import com.pokeclip.clip.broadcast.LifecycleEnvelope;
+import com.pokeclip.clip.broadcast.LifecycleEventType;
 import com.pokeclip.clip.broadcast.ProcessResult;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -57,6 +58,8 @@ class SqsIntakeRunner {
     private final IntakeStatus status;
     private final BroadcastEventProcessor processor;
     private final ObjectMapper mapper;
+    /** null이면 안 부른다 — 리스너 없이 만드는 기존 생성자 경로(검사 넷)가 그대로 산다. */
+    private final EndedListener endedListener;
 
     private final PollBackoff backoff = new PollBackoff(FIRST_RETRY_DELAY, MAX_RETRY_DELAY);
     private final Sleeper sleeper;
@@ -83,19 +86,32 @@ class SqsIntakeRunner {
      * Spring이 그 지점을 "SqsClient 빈을 optional로 찾기"로 가로채, 빈이 실제로 있어도
      * 껍데기만 오는 함정이 있다(IntakeConfiguration 주석 참고).
      */
+    /**
+     * 리스너도 {@code ObjectProvider}로 받는다. 필수로 받으면 러너만 올리는 얇은 컨텍스트가
+     * {@code EndedListener} 빈이 없어 통째로 안 뜬다 — {@code SqsClient}와 같은 이유이고,
+     * 실제로 {@code 켜진_컨텍스트에서_러너가_큐_클라이언트를_받는다}가 그렇게 깨졌다.
+     */
     @Autowired
     SqsIntakeRunner(ObjectProvider<SqsClient> sqsProvider, IntakeProperties properties,
-                    IntakeStatus status, BroadcastEventProcessor processor, ObjectMapper mapper) {
-        this(sqsProvider.getIfAvailable(), properties, status, processor, mapper);
+                    IntakeStatus status, BroadcastEventProcessor processor, ObjectMapper mapper,
+                    ObjectProvider<EndedListener> endedListenerProvider) {
+        this(sqsProvider.getIfAvailable(), properties, status, processor, mapper, null,
+                endedListenerProvider.getIfAvailable());
     }
 
     SqsIntakeRunner(SqsClient sqs, IntakeProperties properties, IntakeStatus status,
                     BroadcastEventProcessor processor, ObjectMapper mapper) {
-        this(sqs, properties, status, processor, mapper, null);
+        this(sqs, properties, status, processor, mapper, null, null);
     }
 
     SqsIntakeRunner(SqsClient sqs, IntakeProperties properties, IntakeStatus status,
                     BroadcastEventProcessor processor, ObjectMapper mapper, Sleeper sleeper) {
+        this(sqs, properties, status, processor, mapper, sleeper, null);
+    }
+
+    SqsIntakeRunner(SqsClient sqs, IntakeProperties properties, IntakeStatus status,
+                    BroadcastEventProcessor processor, ObjectMapper mapper, Sleeper sleeper,
+                    EndedListener endedListener) {
         this.sqs = sqs;
         this.properties = properties;
         this.status = status;
@@ -103,6 +119,7 @@ class SqsIntakeRunner {
         this.mapper = mapper;
         // 기본은 종료 신호를 기다리는 실물이다. 검사만 가짜를 넣는다.
         this.sleeper = sleeper != null ? sleeper : this::awaitStop;
+        this.endedListener = endedListener;
     }
 
     /**
@@ -112,6 +129,18 @@ class SqsIntakeRunner {
     /** 큐 클라이언트를 받았는지 — 곧 켜졌는지다. 배선이 실제로 닿았는지 검사가 여기를 본다. */
     boolean hasQueueClient() {
         return sqs != null;
+    }
+
+    /**
+     * 종료 알림 리스너를 받았는지. {@link #hasQueueClient()}와 같은 이유로 있다 —
+     * <b>없으면 방송 종료 알림이 통째로 죽는데 아무 시험도 안 깨진다.</b>
+     *
+     * <p>관통 시험이 러너를 손수 만들며 리스너를 넘기기 때문에 그 시험만으로는
+     * <b>운영 배선</b>({@code @Autowired} 생성자의 {@code ObjectProvider})이 닿았는지 증명되지 않는다 —
+     * 실제로 그 자리를 null로 바꿔도 177건이 전부 초록이었다(비동기 2차 감사).
+     */
+    boolean hasEndedListener() {
+        return endedListener != null;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -283,8 +312,62 @@ class SqsIntakeRunner {
         // pollOnce의 catch가 poll_failed로 받는 것이 맞다.
         // PROCESSED · DUPLICATE · IGNORED_STALE 셋 다 "더 볼 일 없음"이다.
         log.info("broadcast.intake.handled eventId={} result={}", envelope.eventId(), result);
+        // 🔴 알림이 삭제보다 <b>먼저</b>다. 뒤에 두면 delete가 던질 때 알림까지 못 가고,
+        // 재전달은 DUPLICATE라 알림을 안 타므로 영구 유실이 된다(아래 notifyEnded 주석).
+        notifyEnded(envelope, result);
         delete(message);
         return true;
+    }
+
+    /**
+     * 방송이 정말 끝났을 때만 알린다 — DUPLICATE·IGNORED_STALE은 명부를 안 바꿨으므로
+     * 알리면 붙어 있는 화면이 멀쩡한 방송에서 쫓겨난다.
+     *
+     * <p><b>삭제 <u>앞</u>에서 부른다.</b> 전에는 뒤에 있었는데, {@code delete}가 던지면
+     * 여기까지 오지도 못했다 — 명부는 {@code ENDED}로 커밋됐는데 붙어 있던 연결은
+     * {@code ended}를 못 받고 <b>자리를 문 채 남았다</b>(2026-08-23 재현, PR #111 봇 지적 ①:
+     * {@code connectionCount=1}, 8.07초까지 확인. 순서를 바꾸니 <b>19ms</b>에 닫혔다).
+     * 알림은 명부가 이미 반영된 뒤의 통보라 편지 삭제와 순서를 맞출 이유가 없다.
+     *
+     * <p>알림 실패는 편지를 되돌리지 않는다 — 명부는 반영됐고 예외는 여기서 삼킨다.
+     *
+     * <p>🔴 <b>순서를 바꿔도 안 닫히는 구멍 셋.</b> 재현으로 확인한 것만 적는다.
+     * <ul>
+     *   <li><b>리스너가 던지면 알림은 그대로 유실된다.</b> 아래 {@code catch}가 삼키고
+     *       {@code delete}는 성공하므로 편지도 사라진다. <b>순서와 무관</b>하다 —
+     *       교체 상태에서도 같은 갈래가 그대로 재현됐다</li>
+     *   <li><b>재전달로는 어느 순서에서도 못 푼다.</b> 두 번째로 온 편지는
+     *       {@code processor}가 {@code DUPLICATE}를 주고 아래 가드가 {@code PROCESSED}만
+     *       통과시킨다. <b>유실을 막는 것은 순서가 아니라 「첫 번째에 알렸는가」다</b>
+     *       ({@code 재전달은_어느_순서에서도_알림을_안_탄다}가 이 사실을 못 박는다)</li>
+     *   <li><b>{@code delete}가 이 호출 뒤로 밀린다.</b> {@code CardStreamRegistry.broadcastEnded}는
+     *       {@code openWithSnapshot}과 <b>같은 모니터의 {@code synchronized}</b>이고 그쪽은
+     *       자물쇠 안에서 DB 조회를 한다. 밀림이 가시성 타임아웃(큐 설정. SQS 기본 30초이고
+     *       우리 설정에는 없다 — 큐는 1번 소유다)을 넘기면 편지가 재전달되는데,
+     *       그 재전달은 위 둘째 이유로 알림을 못 탄다.
+     *       <b>재 봤다(2026-08-23, 각 5회)</b>: 비경합 <b>4~8us</b>(첫 회차 1121us는 JIT 예열) ·
+     *       자물쇠를 <b>500ms</b> 쥐고 있으면 <b>490~497ms</b>. <b>밀림은 곧 자물쇠 보유 시간이다.</b>
+     *       {@code openWithSnapshot}의 보유가 5.9~22.4ms(카드 300~1200장 실측)이므로 경합 하나당
+     *       최악 <b>22ms</b>이고, 30초를 넘기려면 그런 보유가 <b>연달아 1300번</b> 자물쇠를 안 놓아야
+     *       한다. 동시 100명 전제에서는 무시할 수준이라 순서를 바꾸는 쪽을 골랐다 —
+     *       <b>밀린 삭제는 편지가 한 번 더 오는 것이고(멱등이라 안전) 안 간 알림은 영영 안 온다.</b></li>
+     * </ul>
+     *
+     * <p>붙어 있는 화면은 재연결 때 {@code ended}를 받는다 — 위 구멍 셋 모두에 걸리는 완화이고,
+     * 재현으로 확인했다(재연결 즉시 {@code ended} 수신·닫힘).
+     */
+    private void notifyEnded(LifecycleEnvelope envelope, ProcessResult result) {
+        if (endedListener == null
+                || envelope.type() != LifecycleEventType.BROADCAST_ENDED
+                || result != ProcessResult.PROCESSED) {
+            return;
+        }
+        try {
+            endedListener.broadcastEnded(envelope.streamId());
+        } catch (RuntimeException e) {
+            log.warn("broadcast.intake.ended_listener_failed streamId={} causeType={}",
+                    envelope.streamId(), e.getClass().getSimpleName());
+        }
     }
 
     /**

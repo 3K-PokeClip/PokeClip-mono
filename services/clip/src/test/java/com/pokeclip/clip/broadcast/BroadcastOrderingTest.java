@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -13,17 +14,22 @@ class BroadcastOrderingTest extends IntegrationTestSupport {
     private final BroadcastEventProcessor processor;
     private final BroadcastRepository broadcasts;
     private final BroadcastEventRepository events;
+    private final JdbcTemplate jdbc;
 
     BroadcastOrderingTest(BroadcastEventProcessor processor, BroadcastRepository broadcasts,
-                          BroadcastEventRepository events) {
+                          BroadcastEventRepository events, JdbcTemplate jdbc) {
         this.processor = processor;
         this.broadcasts = broadcasts;
         this.events = events;
+        this.jdbc = jdbc;
     }
 
     /** 이 클래스의 테스트 넷이 e1·e2를 재사용한다. 정리가 없으면 서로를 막는다. */
     @BeforeEach
     void 앞_테스트의_흔적을_지운다() {
+        // jump_cards가 broadcasts의 자식이다. 카드를 남긴 클래스가 앞에 돌면
+        // 아래 삭제가 FK로 죽는다(POK-118). 실행 순서에 기대지 않는다.
+        jdbc.update("DELETE FROM jump_cards");
         events.deleteAllInBatch();
         broadcasts.deleteAllInBatch();
     }
