@@ -46,8 +46,9 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
     private static final String EMPTY = "calc-empty";
     private static final String LATE = "calc-late";
     private static final String INVERTED = "calc-inverted";
+    private static final String FAR_JUMP = "calc-far-jump";
 
-    private static final List<String> STREAMS = List.of(NORMAL, DRIFT, EMPTY, LATE, INVERTED);
+    private static final List<String> STREAMS = List.of(NORMAL, DRIFT, EMPTY, LATE, INVERTED, FAR_JUMP);
 
     private final JdbcTemplate jdbc;
     private final VideoPositionCalculator calculator;
@@ -102,6 +103,32 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
         StreamSegmentsFixture.insert(jdbc, INVERTED, 2, 4000, T0, 4000, false);
     }
 
+    /**
+     * seq1~4는 정상인데 <b>seq10 하나만 과거로 튄</b> 방송. 위 {@link #시계가_역행한_방송을_넣는다()}와
+     * 같은 종류의 데이터인데 <b>튄 조각이 floor에서 멀다.</b>
+     *
+     * <pre>
+     * seq  pts     wall       비고
+     *  1   0       T0
+     *  2   4000    T0+4s
+     *  3   8000    T0+8s      ← T0+9s를 물으면 여기가 floor다
+     *  4   12000   T0+12s     ← floor의 바로 다음. 벽시계가 floor보다 늦다 — 쌍이 멀쩡해 보인다
+     * 10   16000   T0+6s      ← 과거로 튄 조각. maxCandidateSeq만 이것을 본다
+     * </pre>
+     *
+     * <p><b>seq4가 이 데이터의 핵심이다.</b> 그것이 없으면 floor의 바로 다음이 튄 seq10 자신이라
+     * 「floor와 그 다음만 비교하는」 구현도 잡아낸다 — 그러면 이 검사가 후보 집합 전체의 최댓값을
+     * 보는 이유를 못 지킨다. seq4를 넣으면 그 쌍이 비감소라 <b>{@code maxCandidateSeq}만이
+     * 유일한 그물</b>이 된다({@link LedgerFloor} javadoc의 그 데이터다).
+     */
+    private void 먼_조각만_과거로_튄_방송을_넣는다() {
+        StreamSegmentsFixture.insert(jdbc, FAR_JUMP, 1, 0, T0, 4000, false);
+        StreamSegmentsFixture.insert(jdbc, FAR_JUMP, 2, 4000, T0.plusMillis(4000), 4000, false);
+        StreamSegmentsFixture.insert(jdbc, FAR_JUMP, 3, 8000, T0.plusMillis(8000), 4000, false);
+        StreamSegmentsFixture.insert(jdbc, FAR_JUMP, 4, 12_000, T0.plusMillis(12_000), 4000, false);
+        StreamSegmentsFixture.insert(jdbc, FAR_JUMP, 10, 16_000, T0.plusMillis(6000), 4000, false);
+    }
+
     private VideoPosition 물어본다(String streamId, long afterT0Ms) {
         return calculator.locate(streamId, "calc-channel", T0.plusMillis(afterT0Ms));
     }
@@ -151,23 +178,49 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
     }
 
     /**
+     * <b>미세 어긋남 「연장」 갈래를 재는 유일한 자리다 — 위치는 일부러 안 본다.</b>
+     * 3950은 seq1의 길이(3900)를 넘었지만 다음 조각이 이어져 있으므로 여전히 seq1의 몫이다.
+     * 연장 갈래를 지우면 여기가 {@code NO_FOOTAGE}가 되고, 그 순간 <b>PRD 성공 기준
+     * 「이어진 조각 사이의 ms급 어긋남은 공백으로 오판하지 않는다」가 깨진다.</b>
+     *
+     * <p><b>위치를 단언하지 않는 것이 이 검사의 설계다.</b> 단언하면 클램프 결함까지 여기서
+     * 빨간불이 나고, 그러면 아래 {@link #드리프트_구간은_조각_끝에_머문다()}와 그물이 겹쳐
+     * <b>이름이 무엇을 지키는지가 흐려진다</b>. 두 규칙에 그물을 하나씩 준다.
+     */
+    @Test
+    void 드리프트_구간도_공백이_아니다() {
+        드리프트가_있는_방송을_넣는다();
+
+        VideoPosition extended = 물어본다(DRIFT, 3950);
+        assertThat(extended.state())
+                .as("길이를 50ms 넘겼지만 다음 조각이 이어져 있다")
+                .isEqualTo(VideoPosition.State.CONVERTED);
+        assertThat(extended.segmentSeq()).as("아직 seq1의 몫이다").isEqualTo(1L);
+    }
+
+    /**
      * <b>{@code min(delta, duration)} 클램프를 재는 유일한 자리다.</b> 기준 데이터는 드리프트가
      * 0이라 조각 안에서 {@code delta}가 {@code duration}에 절대 못 닿는다 — 클램프를 지워도
-     * 다른 열넷이 전부 초록이다.
+     * 다른 검사가 전부 초록이다.
      *
      * <p>그리고 클램프의 값어치가 여기서 보인다: 3900에 머물다가 경계에서 <b>정확히 그 값으로</b>
      * 이어진다. 클램프가 없으면 3950이었다가 4000ms 지점에서 3900으로 <b>뒤로 튄다</b>.
+     *
+     * <p>이 검사는 연장 갈래가 살아 있어야 성립한다(3950이 그 갈래를 타야 클램프에 닿는다) —
+     * 그래서 연장 갈래를 지우면 여기도 같이 빨간불이다. <b>반대 방향은 갈라져 있다</b>:
+     * 클램프만 지우면 위 {@link #드리프트_구간도_공백이_아니다()}는 초록이고 여기만 빨갛다.
      */
     @Test
     void 드리프트_구간은_조각_끝에_머문다() {
         드리프트가_있는_방송을_넣는다();
 
-        assertThat(물어본다(DRIFT, 3899).positionMs()).as("아직 길이 안이다").isEqualTo(3899L);
+        assertThat(물어본다(DRIFT, 3899).positionMs())
+                .as("아직 길이 안이라 클램프가 안 걸린다 — 상수 3900을 돌려주는 구현을 막는다")
+                .isEqualTo(3899L);
 
-        VideoPosition clamped = 물어본다(DRIFT, 3950);
-        assertThat(clamped.state()).isEqualTo(VideoPosition.State.CONVERTED);
-        assertThat(clamped.positionMs()).as("delta 3950인데 길이 3900에서 멈춘다").isEqualTo(3900L);
-        assertThat(clamped.segmentSeq()).isEqualTo(1L);
+        assertThat(물어본다(DRIFT, 3950).positionMs())
+                .as("delta 3950인데 길이 3900에서 멈춘다")
+                .isEqualTo(3900L);
 
         VideoPosition next = 물어본다(DRIFT, 4000);
         assertThat(next.positionMs()).as("경계에서 정확히 이어진다 — 뒤로 안 튄다").isEqualTo(3900L);
@@ -320,6 +373,35 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
         VideoPosition inverted = 물어본다(INVERTED, 11_000);
         assertThat(inverted.state()).isEqualTo(VideoPosition.State.NO_FOOTAGE);
         assertThat(inverted.positionMs()).isNull();
+    }
+
+    /**
+     * <b>역행의 셋째 모양이다 — 튄 조각이 floor에서 멀다.</b> 앞의 둘은 튄 조각이 floor의 바로
+     * 이웃이라 「floor와 그 다음만 비교하는」 구현으로도 잡히지만, 이 데이터는 그 쌍이
+     * 비감소라({@code seq3@T0+8s} → {@code seq4@T0+12s}) <b>{@code maxCandidateSeq}만이 그물이다.</b>
+     *
+     * <p>이 검사가 없으면 신호를 「후보 집합 전체의 최댓값」에서 이웃 비교로 바꾸는 「최적화」를
+     * 막을 것이 아무것도 없다 — 나머지 역행 검사 둘은 그 구현에서도 초록이다.
+     *
+     * <p>대조로 튀기 전 구간을 같이 묻는다. <b>같은 방송에서 오탐이 0인 것까지 봐야</b>
+     * 「역행 신호가 켜지면 무조건 접는다」가 아니라 「켜질 자리에만 켜진다」가 지켜진다.
+     */
+    @Test
+    void 멀리_떨어진_조각만_과거로_튀어도_NO_FOOTAGE다() {
+        먼_조각만_과거로_튄_방송을_넣는다();
+
+        VideoPosition inverted = 물어본다(FAR_JUMP, 9000);
+        assertThat(inverted.state())
+                .as("floor는 seq3인데 후보 안에 seq10이 있다")
+                .isEqualTo(VideoPosition.State.NO_FOOTAGE);
+        assertThat(inverted.positionMs()).isNull();
+
+        VideoPosition clean = 물어본다(FAR_JUMP, 5000);
+        assertThat(clean.state())
+                .as("튄 조각(T0+6s)보다 이른 구간은 후보에 안 들어온다 — 오탐 0")
+                .isEqualTo(VideoPosition.State.CONVERTED);
+        assertThat(clean.positionMs()).isEqualTo(5000L);
+        assertThat(clean.segmentSeq()).isEqualTo(2L);
     }
 
     /**

@@ -9,8 +9,15 @@ package com.pokeclip.chat.collector.sync;
  * 만든다 — 생성자를 직접 부르지 못하게 막지는 않지만, <b>위치 없는 판정에 위치를 실을 방법이
  * 팩터리에는 없다</b>.
  *
- * @param positionMs      영상 시작을 0으로 한 위치(ms)
- * @param segmentSeq      그 위치가 들어 있는 조각 번호
+ * <p><b>{@code positionMs}는 영상 전체 기준 절대 위치이고 {@code segmentSeq}는 참고값이다.</b>
+ * 둘을 「이 조각 파일 안에서 seek할 오프셋」 쌍으로 쓰면 경계에서 어긋난다 — 미세 어긋남 연장
+ * 갈래에서 {@code delta}가 조각 길이와 같으면 클램프 때문에 {@code positionMs}가 <b>다음 조각의
+ * {@code start_pts}와 같아지는데</b> {@code segmentSeq}는 여전히 앞 조각이다. 그 자리에서
+ * 조각 파일을 열어 seek하면 마지막 프레임 하나를 넘어간다. <b>클램프 결정의 직접적 귀결이고
+ * 알고 받아들인 것이다</b> — 근거는 {@link VideoPositionCalculator} javadoc의 클램프 절.
+ *
+ * @param positionMs      영상 시작을 0으로 한 <b>절대</b> 위치(ms)
+ * @param segmentSeq      그 위치가 들어 있는 조각 번호(참고값)
  * @param appliedOffsetMs 이 답을 낼 때 실제로 뺀 보정값. <b>판정과 무관하게 늘 싣는다</b> —
  *                        「왜 이 위치가 나왔나」를 밖에서 재현하려면 이 값이 필요하다
  */

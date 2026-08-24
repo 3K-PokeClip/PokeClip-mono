@@ -27,6 +27,18 @@ import java.util.Optional;
  * PRD가 말한 「미세 어긋남 … ms급」과 자릿수가 다르다 — <b>알고 받아들인 것이다.</b>
  * 1번이 그 상수를 바꾸면 이 문장의 숫자도 같이 바뀐다.
  *
+ * <h2>{@code is_discontinuity}는 「PTS가 끊겼다」와 동치가 아니다</h2>
+ * 표지는 drift가 tolerance를 넘을 때만 서는 것이 아니다 — 훅이 세션 경계를 확인해도 선다
+ * ({@code indexer.go:556}의 {@code isDiscont = isDiscont || breakHit}). 그때 PTS는
+ * {@code cur.NextPTSMS()}로 <b>정확히 이어져 있어</b>({@code indexer.go:527-528}) 위 등식이
+ * <b>표지가 선 조각에서도 성립한다.</b> 즉 표지와 PTS 연속성은 별개다.
+ *
+ * <p>그 경우 우리는 연장 갈래를 안 타고 {@code delta ≥ duration}에서 {@code NO_FOOTAGE}를 준다.
+ * <b>일부러 그렇다</b> — 그 벽시계 구간은 방송이 실제로 끊겨 녹화가 없었던 시간이고, 「없던
+ * 하이라이트를 만들지 않는다」는 PRD의 공백 정책과 같은 방향이다. PRD 자체가 「이어져 있음」을
+ * <b>표지 없음</b>으로 정의했다. <b>「표지 = PTS 끊김」으로 읽고 연장 조건을 {@code start_pts}
+ * 비교로 바꾸지 마라</b> — 그러면 녹화가 없던 구간이 변환된다.
+ *
  * <h2>벽시계가 역행한 구간은 접는다</h2>
  * 1번 인덱서는 drift가 음수이고 tolerance를 넘으면 {@code log.Error("negative_drift")}를 찍고
  * <b>그 행을 그대로 INSERT한다</b>({@code indexer.go:538-548}). 즉 이 데이터는 실재하고,
