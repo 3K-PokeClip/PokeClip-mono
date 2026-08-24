@@ -10,12 +10,23 @@ import jakarta.persistence.Table;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import java.time.Duration;
 import java.time.Instant;
 
 /** 방송 명부. 방송 한 회당 한 줄이고 stream_id가 그 방송의 이름이다. */
 @Entity
 @Table(name = "broadcasts")
 public class Broadcast {
+
+    /**
+     * 방송이 끝난 뒤 원본을 얼마나 보관하는가(ADR-004 — VOD 60일).
+     *
+     * <p><b>설정으로 빼지 않는다.</b> 환경(로컬·운영)마다 달라지는 값이 아니라
+     * 요금제 축의 값이다 — 바뀌는 날은 상품이 바뀌는 날이고, 그때는 이미 채워진
+     * 줄을 어떻게 할지도 함께 정해야 한다. 환경변수로 두면 그 결정이 조용히
+     * 배포 설정으로 흘러내린다.
+     */
+    public static final Duration VOD_RETENTION = Duration.ofDays(60);
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -37,6 +48,10 @@ public class Broadcast {
 
     @Column(name = "ended_at")
     private Instant endedAt;
+
+    /** NULL이 「아직 안 끝나 기한이 없다」는 뜻이다. 값은 종료 처리 때만 찬다. */
+    @Column(name = "vod_expires_at")
+    private Instant vodExpiresAt;
 
     // columnDefinition만으로는 부족하다 — @JdbcTypeCode가 없으면 드라이버가 varchar로
     // 보내고 "column is of type jsonb but expression is of type character varying"로
@@ -79,8 +94,13 @@ public class Broadcast {
     /** ADR-016의 ended placeholder — 시작을 못 본 채 끝을 먼저 받은 줄. */
     public static Broadcast endedPlaceholder(String streamId, String streamerId,
                                              long sequence, Instant endedAt) {
-        return new Broadcast(streamId, streamerId, BroadcastStatus.ENDED,
+        Broadcast placeholder = new Broadcast(streamId, streamerId, BroadcastStatus.ENDED,
                 null, endedAt, null, sequence);
+        // 생성자에 칸을 더하지 않고 여기서 채운다 — startedNow는 endedAt이 null이라
+        // 같은 식을 태울 수 없고, 생성자에 기한을 받는 칸을 열면 두 팩토리가 서로
+        // 다른 값을 넣을 수 있는 구멍이 생긴다. 기한은 종료 시각에서만 나온다.
+        placeholder.vodExpiresAt = endedAt.plus(VOD_RETENTION);
+        return placeholder;
     }
 
     /**
@@ -116,6 +136,7 @@ public class Broadcast {
         }
         this.status = BroadcastStatus.ENDED;
         this.endedAt = at;
+        this.vodExpiresAt = at.plus(VOD_RETENTION);
         this.lastSequence = sequence;
         this.updatedAt = Instant.now();
         return true;
@@ -143,6 +164,10 @@ public class Broadcast {
 
     public Instant getEndedAt() {
         return endedAt;
+    }
+
+    public Instant getVodExpiresAt() {
+        return vodExpiresAt;
     }
 
     public String getTrackManifest() {
