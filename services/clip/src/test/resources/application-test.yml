@@ -16,6 +16,16 @@ pokeclip:
   internal-api:
     token: test-only-internal-token-32bytes-long!!
 
+  auth-client:
+    # 🔴 이 줄이 없으면 clip의 모든 @SpringBootTest가 죽는다. base-url의 운영 기본값이
+    # 비어 있고(부팅 게이트), @ConfigurationPropertiesScan이 이 프로퍼티를 모든 컨텍스트에
+    # 올리며, DelegationResolveClient가 조건 없이 만들어져 validate()가 전 부팅을 막는다
+    # (계획 검증 실측: HealthEndpointTest FAILED ← IllegalStateException).
+    #
+    # 아무도 안 듣는 포트다. 진짜 auth를 부르는 시험은 각자 가짜 서버 주소로 덮어쓰므로,
+    # 여기로 요청이 나가면 그것은 덮어쓰기를 빠뜨린 것이고 즉시 연결 거부로 드러난다.
+    base-url: http://127.0.0.1:1
+
   jump-card:
     stream:
       # 시험은 한 사용자로 연결을 여러 번 열고 닫는다. 끊긴 자리는 즉시 반납되지 않아서

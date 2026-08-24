@@ -13,6 +13,12 @@ dependencies {
     implementation project(':web-support')
 
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+    // RestClient 클래스 자체는 webmvc가 끌어오는 spring-web에 있지만, RestClient.Builder
+    // 자동설정과 spring.http.clients.* 타임아웃 바인딩은 이 스타터에서 온다. 없으면
+    // RestClient.Builder 빈이 아예 없어 주입이 NoSuchBeanDefinitionException으로 죽고,
+    // 시한 설정은 오류 없이 통째로 무시된다(계획 검증 실측: beans=[] · 5s가 어디에도 안 걸림).
+    // chat-collector·auth가 같은 이유로 명시한다.
+    implementation 'org.springframework.boot:spring-boot-starter-restclient'
     implementation 'org.springframework.boot:spring-boot-starter-security'
     implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-resource-server'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'

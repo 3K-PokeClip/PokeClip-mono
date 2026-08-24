@@ -1,5 +1,7 @@
 package com.pokeclip.clip.config;
 
+import com.pokeclip.clip.delegation.AuthClientProperties;
+import com.pokeclip.clip.delegation.DelegationResolveClient;
 import com.pokeclip.web.CorsProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
@@ -8,6 +10,7 @@ import org.springframework.boot.autoconfigure.context.ConfigurationPropertiesAut
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.web.client.RestClient;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -51,13 +54,18 @@ class RequiredPropertiesTest {
             .withConfiguration(AutoConfigurations.of(ConfigurationPropertiesAutoConfiguration.class))
             // JwtConfig까지 넣는 이유: 시크릿 길이 검증이 바인딩이 아니라 빈 등록 시점에 돈다.
             // 프로퍼티 클래스만 등록하면 그 검증이 실행되지 않는다.
-            .withUserConfiguration(BoundProperties.class, JwtConfig.class)
+            // DelegationResolveClient도 같은 이유다 — auth 주소 검증이 그 생성자에서 돈다.
+            .withUserConfiguration(BoundProperties.class, JwtConfig.class, DelegationResolveClient.class)
+            // 운영에서는 자동설정이 주는 빌더다. 여기서는 그 자동설정을 안 켜므로 직접 준다 —
+            // 이 러너가 재는 것은 시한이 아니라 「부팅이 죽는가」다.
+            .withBean(RestClient.Builder.class, RestClient::builder)
             // 새 필수 프로퍼티는 여기서 한 번만 채운다. 개별 테스트에 하나씩 더하는 방식은
             // 하나만 빠뜨려도 그 테스트가 "엉뚱한 이유로 실패하면서 hasFailed()로 초록"이 된다.
             // 비움을 검증하는 테스트는 아래에서 같은 키를 다시 걸어 덮어쓴다.
             .withPropertyValues("pokeclip.cors.allowed-origins=http://localhost:3000",
                     "pokeclip.jwt.secret=" + VALID_JWT_SECRET,
-                    "pokeclip.internal-api.token=" + VALID_INTERNAL_TOKEN);
+                    "pokeclip.internal-api.token=" + VALID_INTERNAL_TOKEN,
+                    "pokeclip.auth-client.base-url=http://auth:8082");
 
     /**
      * hasFailed()만 보면 안 된다. 나중에 BoundProperties에 클래스를 더 넣다가 필수 값을
@@ -141,6 +149,40 @@ class RequiredPropertiesTest {
                 });
     }
 
+    /**
+     * auth 주소는 시크릿 둘과 처지가 다르다 — 값이 비어도 리터럴이 바인딩되는 문제가 아니라,
+     * <b>자격 판정을 아무한테도 못 물어보는 상태</b>가 된다. 그 상태로 뜨면 세그먼트 미리보기가
+     * 전부 503이고 서버는 UP이다. 그래서 빈 값에서 부팅을 죽인다(PRD 결정).
+     *
+     * <p>실패를 실제로 만드는 것은 {@code DelegationResolveClient} 생성자다 — 이 프로퍼티는
+     * {@code @ConfigurationPropertiesScan}이 모든 컨텍스트에 올리므로 애노테이션으로 걸면
+     * 이 값을 안 쓰는 부팅까지 죽는다(chat-collector의 {@code LinkProperties}와 같은 이유).
+     * clip에서는 그 클라이언트가 조건 없이 올라가므로 결과적으로 <b>모든 부팅</b>이 게이트를 지난다.
+     */
+    @Test
+    void auth_주소가_비어_있으면_부팅이_실패한다() {
+        runner.withPropertyValues("pokeclip.auth-client.base-url=")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(stackTraceOf(context.getStartupFailure()))
+                            .as("auth 주소가 아닌 다른 이유로 부팅이 실패했다")
+                            .contains("pokeclip.auth-client.base-url");
+                });
+    }
+
+    /**
+     * 위 게이트는 <b>기본값이 비어 있을 때만</b> 게이트다. {@code application.yml}에 진짜
+     * 주소가 박히면 아무 환경변수 없이도 뜨고, 그 주소는 배포처마다 틀리다.
+     */
+    @Test
+    void auth_주소에_기본값이_박혀_있지_않다() {
+        Properties properties = applicationYml();
+
+        assertThat(properties.getProperty("pokeclip.auth-client.base-url"))
+                .as("AUTH_BASE_URL에 진짜 주소가 박혔거나 빈 기본값이 지워졌다")
+                .isEqualTo("${AUTH_BASE_URL:}");
+    }
+
     private String[] cors(String origins) {
         return new String[]{"pokeclip.cors.allowed-origins=" + origins};
     }
@@ -151,7 +193,8 @@ class RequiredPropertiesTest {
         return out.toString();
     }
 
-    @EnableConfigurationProperties({CorsProperties.class, JwtProperties.class, InternalApiProperties.class})
+    @EnableConfigurationProperties({CorsProperties.class, JwtProperties.class, InternalApiProperties.class,
+            AuthClientProperties.class})
     static class BoundProperties {
     }
 
