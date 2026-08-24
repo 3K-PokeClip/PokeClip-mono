@@ -39,6 +39,26 @@ class SyncPropertiesValidationTest {
 
     // ---------------------------------------------------------------- 생성자 그물
 
+    /**
+     * <b>상한 값 자체를 지키는 유일한 자리다.</b> 아래 검사들은 전부 이 상수를 <b>기호로</b>
+     * 참조하므로 4,500이든 15억이든 아무 값으로 바꿔도 다 초록이다(주입으로 확인).
+     * 그런데 이 숫자는 <b>글자로 세 곳에 복제돼 있다</b> — {@code services/README.md}의
+     * {@code CHAT_SYNC_OFFSET_MS} 표 행과 그 아래 「±600000ms(10분)」 문단,
+     * {@code application.yml}의 {@code pokeclip.sync} 주석. 넷이 같이 안 움직이면 문서가 거짓이 된다.
+     *
+     * <p><b>여기서는 값 단언이 장식이 아니다 — 이것은 실측값이 아니라 정책값이다.</b>
+     * 기본 보정값과 정반대다: 그쪽은 재실측마다 바뀌므로 값을 단언하지 않고 「0이 아니다」만
+     * 본다({@code VideoPositionCalculatorTest.실물_기본_보정값이_자리_표시_0이_아니다()}).
+     * 이쪽은 {@link SyncProperties#MAX_ABS_OFFSET_MS} javadoc이 <b>「실측이 상한에 가까워지는
+     * 날에 다시 본다」로 안 좁히기로 못박아</b> 뒀으므로 바뀔 때가 곧 문서를 고칠 때다.
+     */
+    @Test
+    void 상한_값_자체를_지킨다() {
+        assertThat(SyncProperties.MAX_ABS_OFFSET_MS)
+                .as("바꾸려면 services/README.md 두 곳과 application.yml 주석의 ±600000(10분)도 같이 고친다")
+                .isEqualTo(600_000L);
+    }
+
     @Test
     void 자릿수를_착각한_기본_보정값을_거부한다() {
         assertThatThrownBy(() -> new SyncProperties(1_500_000_000L, Map.of()))

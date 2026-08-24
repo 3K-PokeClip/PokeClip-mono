@@ -29,6 +29,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code new SyncProperties(0, Map.of())}가 「보정 없음」을 눈에 보이게 한다. 빈 배선 자체는
  * 컨텍스트가 뜨는 것으로 이미 지켜진다.
  *
+ * <p><b>예외가 맨 아래 「실물 기본 보정값」 절 둘이다.</b> 이 컨텍스트는 보정값을 안 덮어써서
+ * <b>실물 {@code application.yml}의 기본값이 그대로 걸린 유일한 자리</b>다 — 그래서 거기서만
+ * 빈을 받는다. 자세한 이유는 그 절의 주석에 있다.
+ *
  * <h2>기준 데이터가 왜 이 숫자인지</h2>
  * {@link #정상_방송을_넣는다()}의 네 조각은 1번 인덱서의 PTS 규칙과 <b>산술적으로 맞물려
  * 있다</b>({@code media/internal/indexer/indexer.go:521-570}). 이어진 조각은
@@ -50,18 +54,27 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
     private static final String INVERTED = "calc-inverted";
     private static final String FAR_JUMP = "calc-far-jump";
     private static final String RACE = "calc-race";
+    private static final String WIRED = "calc-wired-offset";
 
     private static final List<String> STREAMS =
-            List.of(NORMAL, DRIFT, EMPTY, LATE, INVERTED, FAR_JUMP, RACE);
+            List.of(NORMAL, DRIFT, EMPTY, LATE, INVERTED, FAR_JUMP, RACE, WIRED);
 
     private final JdbcTemplate jdbc;
     private final SegmentLedger ledger;
     private final VideoPositionCalculator calculator;
 
-    VideoPositionCalculatorTest(SegmentLedger ledger, JdbcTemplate jdbc) {
+    /** 맨 아래 「실물 기본 보정값」 절 전용. 나머지는 위 {@link #calculator}(보정 0)를 쓴다. */
+    private final SyncProperties wiredProperties;
+
+    private final VideoPositionCalculator wiredCalculator;
+
+    VideoPositionCalculatorTest(SegmentLedger ledger, JdbcTemplate jdbc,
+                                SyncProperties wiredProperties, VideoPositionCalculator wiredCalculator) {
         this.jdbc = jdbc;
         this.ledger = ledger;
         this.calculator = new VideoPositionCalculator(ledger, new SyncProperties(0, Map.of()));
+        this.wiredProperties = wiredProperties;
+        this.wiredCalculator = wiredCalculator;
     }
 
     /**
@@ -609,5 +622,80 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
         assertThat(located.positionMs()).as("5500 − 2000 = 3500").isEqualTo(3500L);
         assertThat(located.segmentSeq()).as("보정을 건너뛰면 seq2다").isEqualTo(1L);
         assertThat(located.appliedOffsetMs()).isEqualTo(2000L);
+    }
+
+    // ── 실물 기본 보정값 ──────────────────────────────────────────────────────────
+    //
+    // 🔴 아래 둘만 실물 application.yml의 기본 보정값을 지나간다. 나머지 자리는 전부 다른
+    // 값으로 덮여 있다 — 위 검사들은 new SyncProperties(…)로 직접 만들고,
+    // VideoPositionEndpointTest는 properties로 0을 박아 뒀고, SyncOffsetBindingTest는
+    // 환경변수로 음수를 준다. 그래서 「양수 기본 보정값이 걸린 프로세스」의 갈래가 통째로
+    // 비어 있었고(최종 감사 C1), yml 기본값을 0으로 되돌려도 549건이 전부 초록이었다(C2).
+    //
+    // 값을 단언하지 않는다. 기본값은 실측이라 다시 잴 때마다 바뀌고, 값 단언은 그때
+    // 기계적으로 같이 고쳐져 아무것도 안 잡는 장식이 된다. 아래는 「0이 아니다」와
+    // 「그 값에서 파생한 경계」만 본다 — 재실측해도 고칠 것이 없다.
+
+    /**
+     * <b>기본 보정값이 「자리 표시」 0으로 되돌아가는 것만 정확히 잡는다.</b>
+     *
+     * <p>0은 이 설정의 <b>자리 표시 상태</b>다 — 실측 전에 그 값이었고, yml 줄을 지우거나
+     * 변수 이름에 오타를 내도 {@link SyncProperties} 빈이 조용히 그 값으로 뜬다. 그런데
+     * <b>실측값이 0이 될 수는 없다</b>: 보정값의 지배 항(방송 지연 · 시청자 반응 지연)이 초
+     * 단위이기 때문이다({@link SyncProperties} javadoc). 그래서 이 단언은 재실측에 안 흔들리고
+     * 되돌림 하나만 잡는다.
+     *
+     * <p>0으로 되돌아가면 <b>위치가 실측값만큼 통째로 어긋난 답이 {@code appliedOffsetMs=0}과
+     * 함께 조용히 나간다</b> — 이 카드가 다른 자리에서 막은 「그럴듯하게 틀린 답」과 같은 모양이다.
+     *
+     * <p><b>이 단언을 {@link SyncOffsetBindingTest}에 두면 아무것도 안 잰다</b> — 그쪽은
+     * {@code CHAT_SYNC_OFFSET_MS}를 직접 줘서 플레이스홀더의 기본값(`:3900`)을 안 지나간다.
+     */
+    @Test
+    void 실물_기본_보정값이_자리_표시_0이_아니다() {
+        assertThat(wiredProperties.defaultOffsetMs())
+                .as("application.yml의 default-offset-ms가 자리 표시 0으로 되돌아갔다")
+                .isNotZero();
+    }
+
+    /**
+     * <b>🔴 방송 시작 직후 「보정값만큼」의 채팅은 {@code NO_FOOTAGE}다 — 결함이 아니라 정의다.</b>
+     * 그 채팅이 반응한 화면은 녹화가 시작되기 전이라 영상에 정말 없다.
+     * 근거는 {@link VideoPositionCalculator} javadoc의 그 절에 있다.
+     *
+     * <p><b>이 갈래는 기본값이 0에서 실측값으로 올라간 순간 새로 열렸고 그때까지 아무 그물이
+     * 없었다</b>(최종 감사 C1). 판정 축의 <b>위험한 쪽</b>(재시도를 그만두는 쪽)인데 이제
+     * <b>모든 방송이 시작할 때마다</b> 그쪽으로 답하므로, 회귀하면 반드시 드러나야 한다.
+     *
+     * <p><b>시각을 실측값에서 파생시킨다.</b> {@code T0+1000}처럼 고정 숫자로 적으면 다음
+     * 재실측이 그보다 작은 값을 내는 순간 이 검사가 뜻 없이 빨개진다.
+     *
+     * <p><b>양수 보정을 전제한다</b> — 음수로 재실측되면 이 갈래 자체가 사라지므로(보정된 시각이
+     * 미래로 밀린다) 여기가 빨개지는 것이 맞다. 그때는 위 javadoc 문장도 같이 고쳐야 한다.
+     */
+    @Test
+    void 방송_시작_직후_보정값만큼은_영영_없다() {
+        StreamSegmentsFixture.insert(jdbc, WIRED, 1, 0, T0, 4000, false);
+
+        long offset = wiredProperties.defaultOffsetMs();
+        assertThat(offset).as("아래 산수는 양수 보정을 전제한다").isPositive();
+
+        for (long at : new long[]{0, offset / 2, offset - 1}) {
+            VideoPosition tooEarly = wiredCalculator.locate(WIRED, null, T0.plusMillis(at));
+            assertThat(tooEarly.state())
+                    .as("방송 시작 %dms 뒤 — 보정을 빼면 첫 조각보다 이르다", at)
+                    .isEqualTo(VideoPosition.State.NO_FOOTAGE);
+            assertThat(tooEarly.positionMs()).isNull();
+        }
+
+        VideoPosition boundary = wiredCalculator.locate(WIRED, null, T0.plusMillis(offset));
+        assertThat(boundary.state())
+                .as("경계에서 변환이 시작된다 — 양성 대조. 늘 NO_FOOTAGE인 구현을 막는다")
+                .isEqualTo(VideoPosition.State.CONVERTED);
+        assertThat(boundary.positionMs()).as("보정된 시각이 정확히 첫 조각의 시작이다").isZero();
+        assertThat(boundary.segmentSeq()).isEqualTo(1L);
+        assertThat(boundary.appliedOffsetMs())
+                .as("실린 보정값이 실제로 쓰인 값이어야 한다")
+                .isEqualTo(offset);
     }
 }
