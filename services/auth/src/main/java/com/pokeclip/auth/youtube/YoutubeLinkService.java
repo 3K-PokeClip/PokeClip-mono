@@ -165,6 +165,18 @@ public class YoutubeLinkService {
         }
     }
 
+    /**
+     * 살아있는 연동이 없는 이유를 워커가 읽을 사유로 옮긴다. 인자는 <b>갱신기가 락 안에서 본</b> 마지막 행의
+     * 상태다(행 자체가 없으면 null). ACTIVE는 올 수 없다 — 락 안에서 「살아있는 행이 없다」고 판정한 뒤라
+     * 같은 스냅샷에서 살아있는 행이 마지막 행일 수 없기 때문이다.
+     */
+    private static String reasonOf(LinkStatus lastStatus) {
+        if (lastStatus == null) {
+            return "NOT_LINKED";
+        }
+        return lastStatus == LinkStatus.BROKEN ? "BROKEN" : "UNLINKED";
+    }
+
     /** 화면용. 닫힌 행도 준다 — 「끊겼다」를 보여줘야 하므로. */
     public Optional<YoutubeChannelLink> latest(Long userId) {
         return links.findFirstByUserIdOrderByCreatedAtDesc(userId);
@@ -197,9 +209,10 @@ public class YoutubeLinkService {
             case UNAVAILABLE -> YoutubeResolveResult.rejected("REFRESH_UNAVAILABLE");
             // 살아있는 행이 없다 — 애초에 안 한 것(NOT_LINKED)과 사용자가 끊은 것(UNLINKED)과
             // 갱신이 거부된 것(BROKEN)은 호출자에게 다른 사건이라 마지막 행으로 가른다.
-            case NOT_LINKED -> YoutubeResolveResult.rejected(links.findFirstByUserIdOrderByCreatedAtDesc(userId)
-                    .map(last -> last.status() == LinkStatus.BROKEN ? "BROKEN" : "UNLINKED")
-                    .orElse("NOT_LINKED"));
+            // 🔴 그 마지막 행은 갱신기가 락 안에서 본 것이다. 여기서 리포지토리를 다시 부르지 않는다 —
+            // 락 밖에서 읽으면 판정과 읽기 사이에 커밋된 새 연동(ACTIVE)을 집어 UNLINKED로 오분류한다
+            // (로컬 리뷰 2026-08-24). 「조회를 여기로 되돌리면 더 단순한데」라고 생각되는 자리다.
+            case NOT_LINKED -> YoutubeResolveResult.rejected(reasonOf(r.lastStatus()));
         };
     }
 }
