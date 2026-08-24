@@ -15,10 +15,6 @@ public enum YoutubeLinkFailure {
     NO_CHANNEL,
     /** 다른 계정에 이미 묶인 채널. 409 */
     CHANNEL_ALREADY_LINKED,
-    /** 살아있는 연동이 없다. 404 */
-    NOT_LINKED,
-    /** 갱신이 거부돼 끊긴 연동(BROKEN) — 재동의가 복구 수단이다. 409 */
-    LINK_BROKEN,
     /** 구글 5xx·타임아웃·형식 오류·429·408·invalid_client·403 할당량. 502 */
     YOUTUBE_UNAVAILABLE
 }

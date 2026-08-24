@@ -150,45 +150,6 @@ class YoutubeLinkWriterTest extends YoutubeLinkTestSupport {
                         .isEqualTo(YoutubeLinkFailure.CHANNEL_ALREADY_LINKED));
     }
 
-    @Test
-    void 재선택은_채널만_바꾸고_토큰은_그대로다() {
-        User u = newUser();
-        YoutubeChannelLink link = linked(u, "at-1", "rt-1");
-
-        YoutubeChannelLink updated = writer.selectChannel(u.getId(), new YoutubeChannel("UC-second", "두번째"));
-
-        assertThat(updated.getId()).isEqualTo(link.getId());
-        YoutubeChannelLink reloaded = linkRepository.findById(link.getId()).orElseThrow();
-        assertThat(reloaded.getChannelId()).isEqualTo("UC-second");
-        assertThat(reloaded.getChannelName()).isEqualTo("두번째");
-        assertThat(reloaded.getAccessTokenRef()).isEqualTo(link.getAccessTokenRef());
-        assertThat(secretStore.get(reloaded.getRefreshTokenRef())).contains("rt-1");
-        assertThat(YOUTUBE.revokeCalls()).as("재선택은 토큰을 건드리지 않는다").isZero();
-    }
-
-    @Test
-    void 재선택_대상이_남에게_묶여_있으면_거부한다() {
-        User owner = newUser();
-        User me = newUser();
-        YoutubeChannelLink theirs = linked(owner);
-        linked(me);
-
-        assertThatThrownBy(() -> writer.selectChannel(me.getId(), new YoutubeChannel(theirs.getChannelId(), "채널")))
-                .isInstanceOf(YoutubeLinkException.class)
-                .satisfies(e -> assertThat(((YoutubeLinkException) e).failure())
-                        .isEqualTo(YoutubeLinkFailure.CHANNEL_ALREADY_LINKED));
-    }
-
-    @Test
-    void 연동이_없으면_재선택은_NOT_LINKED다() {
-        User u = newUser();
-
-        assertThatThrownBy(() -> writer.selectChannel(u.getId(), new YoutubeChannel("UC-x", "채널")))
-                .isInstanceOf(YoutubeLinkException.class)
-                .satisfies(e -> assertThat(((YoutubeLinkException) e).failure())
-                        .isEqualTo(YoutubeLinkFailure.NOT_LINKED));
-    }
-
     /**
      * {@code SecretStore.put}이 REQUIRED라 저장이 롤백되면 secrets도 같이 사라진다 —
      * 고아 secret이 남지 않는다. INSERT를 실패시키려고 컬럼 상한(channel_id VARCHAR(64))을 넘긴다.

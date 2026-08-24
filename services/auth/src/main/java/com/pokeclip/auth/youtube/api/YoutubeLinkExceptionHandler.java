@@ -35,8 +35,7 @@ public class YoutubeLinkExceptionHandler {
     private static HttpStatus statusOf(YoutubeLinkFailure failure) {
         return switch (failure) {
             case INVALID_STATE, INVALID_CODE, SCOPE_MISSING, NO_CHANNEL -> HttpStatus.BAD_REQUEST;
-            case CHANNEL_ALREADY_LINKED, LINK_BROKEN -> HttpStatus.CONFLICT;
-            case NOT_LINKED -> HttpStatus.NOT_FOUND;
+            case CHANNEL_ALREADY_LINKED -> HttpStatus.CONFLICT;
             case YOUTUBE_UNAVAILABLE -> HttpStatus.BAD_GATEWAY;
         };
     }
