@@ -31,4 +31,21 @@ public interface BroadcastRepository extends JpaRepository<Broadcast, Long> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select b from Broadcast b where b.streamId = :streamId")
     Optional<Broadcast> findByStreamIdForUpdate(@Param("streamId") String streamId);
+
+    /**
+     * 보관 기한이 지났는가를 <b>DB 시계로</b> 판정한다(PRD 결정). 앱 시계로 재면 서버마다
+     * 판정이 갈려, 같은 방송이 어느 인스턴스에 붙느냐에 따라 보이기도 하고 안 보이기도 한다.
+     *
+     * <p><b>{@code Boolean}(박스형)으로 받는다</b> — primitive {@code boolean}이면 0행일 때
+     * 언박싱에서 죽는다. 0행은 실제로 생길 수 있다: 부르는 쪽이 방송을 먼저 조회하고
+     * <b>그 사이에 auth 왕복(최대 7초)이 끼므로</b>, 만료 삭제 배치가 붙는 날 그 창에서
+     * 행이 사라질 수 있다. 그때 옳은 답은 만료가 아니라 「없는 방송」 쪽이지만, 여기서는
+     * {@code null}로 두어 <b>죽지 않는 것이 먼저다</b>.
+     *
+     * <p>그래서 부르는 쪽은 {@code Boolean.TRUE.equals(...)}로 판정한다 —
+     * 0행({@code null})과 기한이 NULL인 방송(아직 안 끝남) 둘 다 「만료 아님」으로 떨어진다.
+     */
+    @Query(value = "SELECT b.vod_expires_at IS NOT NULL AND b.vod_expires_at < now() "
+            + "FROM broadcasts b WHERE b.stream_id = :streamId", nativeQuery = true)
+    Boolean isVodExpired(@Param("streamId") String streamId);
 }
