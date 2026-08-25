@@ -720,7 +720,13 @@ class SecretLeakTest extends IntegrationTestSupport {
             } finally {
                 setLevel(SPRING_WEB_LOGGER, levelBefore);
             }
-            assertThat(CHZZK.tokenCalls()).as("바늘이 실제로 나갔다").isEqualTo(2);
+            assertThat(CHZZK.tokenCalls())
+                    .as("""
+                            바늘이 실제로 나갔다. 호출 수가 이보다 <b>늘었으면</b> 유출이 아니라 \
+                            application.yml의 spring.http.clients.imperative.factory=jdk 핀이 빠진 것이다 — \
+                            그러면 스택이 httpclient5로 바뀌고 그쪽 기본 재시도(429·503에 1회, 간격 1초)가 \
+                            같은 요청을 한 번 더 내보낸다.""")
+                    .isEqualTo(2);
 
             String debugLog = renderAll(captor);
             for (String secret : List.of(CHZZK_CODE, CHZZK_CLIENT_SECRET, state, CHZZK_REFRESH)) {
