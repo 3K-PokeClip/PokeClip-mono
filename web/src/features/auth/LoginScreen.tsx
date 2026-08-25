@@ -3,7 +3,11 @@
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { consumeReturnPath, restoreReturnPath } from '@/components/app-shell/AuthGuard';
+import {
+  clearIntentionalLogout,
+  consumeReturnPath,
+  restoreReturnPath,
+} from '@/components/app-shell/AuthGuard';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 import { GoogleGIcon } from './GoogleGIcon';
 import { startGoogleLogin } from './googleOAuth';
@@ -14,6 +18,13 @@ import styles from './LoginScreen.module.css';
 export function LoginScreen() {
   const router = useRouter();
   useAuthHydration();
+  // 의도적 종료 표식은 「가드가 복원 경로를 남기지 않게」 하는 1회용 힌트다. 로그인
+  // 화면에 닿았으면 그 수명은 끝났다 — 가드를 거치지 않고 온 경우(/goodbye)에는
+  // 소비될 자리가 없어 표식이 탭에 남고, 나중에 비자발적으로 끊겼을 때 그것이
+  // 의도적 종료로 오해되어 복원 경로를 잃는다.
+  useEffect(() => {
+    clearIntentionalLogout();
+  }, []);
   const hydrated = useAuthStore((s) => s.hydrated);
   const refreshToken = useAuthStore((s) => s.refreshToken);
   const [startFailed, setStartFailed] = useState(false);

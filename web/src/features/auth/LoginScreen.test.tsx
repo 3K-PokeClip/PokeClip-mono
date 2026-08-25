@@ -77,4 +77,15 @@ describe('LoginScreen', () => {
       expect(await axe(container)).toHaveNoViolations();
     });
   });
+
+  // 표식은 「가드가 복원 경로를 남기지 않게」 하는 1회용 힌트다. 가드를 거치지 않고 오는
+  // 경로(/goodbye 탈퇴 완료)에서는 소비될 자리가 없어 탭에 남고, 나중에 비자발적으로
+  // 끊겼을 때 그것이 의도적 종료로 오해되어 복원 경로를 잃는다.
+  it('묵은 의도적 종료 표식을 걷는다', () => {
+    window.sessionStorage.setItem('pc-auth-logout', '1');
+
+    render(<LoginScreen />);
+
+    expect(window.sessionStorage.getItem('pc-auth-logout')).toBeNull();
+  });
 });
