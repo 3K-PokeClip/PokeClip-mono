@@ -552,6 +552,12 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117) · chat-collector의 `V301`(`chat_messages`) ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
+**🔴 `V305`는 수집 서버 대역인데 그것을 전제로 도는 것은 판별 서버다.** 판별 서버는
+「최근에 채팅이 온 방송」을 **매초** 뽑고 그 조회가 `idx_chat_messages_received`를 탄다 —
+**수집 서버 배포가 밀려 그 인덱스가 없으면 판별 서버는 아무 신호 없이 전체 훑기를 한다**
+(60만 행 실측: 인덱스 있을 때 1.1ms, 없을 때 19.5ms로 **약 18배**). 표가 있는 곳에
+인덱스도 둔다는 소유 경계는 그대로지만, 대가가 이것이다 — **둘은 같이 배포한다.**
+
 **모든 Flyway 서버(auth 포함)에 `baseline-on-migrate: true` + `baseline-version: 0`이 필수다.**
 공유 DB에서는 어느 서버가 먼저 뜰지 정해져 있지 않다 — 다른 서버가 이미 표를
 만들어 놓은 DB에 자기 이력 테이블 없이 뜨는 서버는 baseline 없이
