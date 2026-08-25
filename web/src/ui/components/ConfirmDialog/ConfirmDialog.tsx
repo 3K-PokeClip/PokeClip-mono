@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react';
 import { useId } from '../../primitives/hooks/useId';
 import { Button } from '../Button/Button';
 import { Dialog } from '../Dialog/Dialog';
@@ -8,9 +7,8 @@ import styles from './ConfirmDialog.module.css';
 // 동작은 모달로 확인받고 토스트는 결과만 알린다. 그래서 이 모달은 오류를 그리지 않는다.
 //
 // 원래 화면 로컬(UnlinkChzzkDialog)이던 골격을 두 번째 파괴적 확인(편집자 내보내기,
-// POK-208)이 생기면서 승격했다. 두 사용처의 차이는 문자열과, 제목 아래 선택 슬롯 하나다 —
-// 1l 내보내기 모달이 확인 대상(아바타·이름) 카드를 제목과 구분선 사이에 끼운다.
-// 이름 입력 확인·체크박스 동의 같은 더 큰 구조 차이가 필요해지면 그때 넓힌다.
+// POK-208)이 생기면서 승격했다. 두 사용처의 차이가 전부 문자열이라 프롭도 문자열만 받는다 —
+// 이름 입력 확인·체크박스 동의 같은 구조 차이가 필요해지면 그때 슬롯을 연다.
 
 export interface ConfirmDialogProps {
   open: boolean;
@@ -20,8 +18,6 @@ export interface ConfirmDialogProps {
   eyebrow: string;
   /** 「~할까요?」 형 질문. */
   title: string;
-  /** 제목과 구분선 사이의 확인 대상 요약(1l 내보내기 모달의 대상 카드 자리). 스타일은 호출부가 갖는다. */
-  subject?: ReactNode;
   /** 무엇이 멈추고 무엇이 남는지 — 사용자가 판단할 재료. 번호 목록으로 그린다. */
   consequences: readonly string[];
   /** 목록 아래 각주. 예: 「해제 후에도 언제든 다시 연동할 수 있어요.」 */
@@ -38,7 +34,6 @@ export function ConfirmDialog({
   busy,
   eyebrow,
   title,
-  subject,
   consequences,
   footnote,
   cancelLabel = '취소',
@@ -63,7 +58,6 @@ export function ConfirmDialog({
         <div className={styles.head}>
           <div className={styles.eyebrow}>{eyebrow}</div>
           <Dialog.Title className={styles.title}>{title}</Dialog.Title>
-          {subject !== undefined && <div className={styles.subject}>{subject}</div>}
           <div className={styles.divider} />
         </div>
         <div className={styles.body}>

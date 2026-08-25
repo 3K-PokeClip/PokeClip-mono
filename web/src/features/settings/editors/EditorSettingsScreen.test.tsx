@@ -266,9 +266,9 @@ describe('EditorSettingsScreen — 내보내기', () => {
         name: '박편집 님을 편집자에서 빼고, 내 방송 접근을 막을까요?',
       }),
     );
-    // 무엇이 함께 무효가 되는지를 알린다 — 티켓 완료 조건. 대상 카드(1l ⑦)도 선다
+    // 무엇이 함께 무효가 되는지를 알린다 — 티켓 완료 조건. 대상 표시는 제목의 이름뿐이다(1l ⑦)
     expect(dialog.getByText(/대기 중이던 승인 요청은 무효가 됩니다/)).toBeInTheDocument();
-    expect(dialog.getByText('5월 12일 합류')).toBeInTheDocument();
+    expect(dialog.queryByText('5월 12일 합류')).not.toBeInTheDocument();
 
     await user.click(dialog.getByRole('button', { name: '취소' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());

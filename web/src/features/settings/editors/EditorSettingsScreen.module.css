@@ -318,35 +318,6 @@
   line-height: 1.5;
 }
 
-/* ---------- 내보내기 재확인 모달의 대상 카드 (1l ⑦) ---------- */
-
-.kickSubject {
-  display: flex;
-  align-items: center;
-  gap: calc(10 * var(--pc-u));
-  padding: calc(11 * var(--pc-u)) calc(13 * var(--pc-u));
-  border: 1px solid var(--pc-color-border-subtle);
-  border-radius: calc(12 * var(--pc-u));
-  background: var(--pc-color-bg-inset);
-}
-
-.kickSubjectBody {
-  flex: 1;
-  min-width: 0;
-  line-height: 1.35;
-}
-
-.kickSubjectName {
-  font-size: calc(12.5 * var(--pc-u));
-  font-weight: 700;
-}
-
-.kickSubjectMeta {
-  font-size: calc(11 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-  margin-top: calc(1 * var(--pc-u));
-}
-
 /* ---------- 초대 모달 (1l ③) ---------- */
 
 /* DS 기본 폭(480)을 1l 값(410)으로 덮는다 — 특이도 더블링 이유는 ConfirmDialog.module.css 참조 */

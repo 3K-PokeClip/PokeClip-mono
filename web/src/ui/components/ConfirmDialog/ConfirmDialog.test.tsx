@@ -30,18 +30,6 @@ describe('ConfirmDialog', () => {
     ]);
   });
 
-  it('renders the subject slot between title and consequences when given', () => {
-    render(
-      <ConfirmDialog
-        {...BASE}
-        subject={<div data-testid="subject-card">박편집 · 5월 12일 합류</div>}
-        onCancel={vi.fn()}
-        onConfirm={vi.fn()}
-      />,
-    );
-    expect(screen.getByTestId('subject-card')).toBeInTheDocument();
-  });
-
   it('confirms with the danger button and cancels with the outline button', async () => {
     const user = userEvent.setup();
     const onCancel = vi.fn();
