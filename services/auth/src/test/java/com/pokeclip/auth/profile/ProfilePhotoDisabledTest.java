@@ -11,6 +11,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -56,6 +58,24 @@ class ProfilePhotoDisabledTest extends ProfileTestSupport {
         assertThat(userRepository.findById(u.getId()).orElseThrow().getProfilePhotoKey())
                 .as("창고가 실패했는데 표가 사진을 가리키면 안 된다")
                 .isNull();
+    }
+
+    /**
+     * 🔴 <b>아무나 부를 수 있는 경로다</b>(permitAll). 창고가 꺼진 배포에서는 표 서명키도 빈 문자열이라,
+     * 꺼짐 판정 없이 표 검증으로 들어가면 {@code SecretKeySpec}이 던지는
+     * {@code IllegalArgumentException}이 그대로 <b>500</b>이 된다 — 인증 없이 500을 무한히 만들 수 있다.
+     * 꺼진 상태에서도 답은 사진이 켜졌을 때의 거절과 <b>같은 404</b>여야 한다.
+     */
+    @Test
+    void 사진_꺼내기는_404다() throws Exception {
+        // 🔴 표의 <b>모양이 맞아야</b> 서명 계산까지 간다. aaa.bbb.ccc.ddd처럼 숫자가 아닌 칸이
+        // 있으면 파싱 단계에서 먼저 거부돼 빈 서명키에 닿지도 않는다 — 그 글자로 재면
+        // 꺼짐 판정을 지워도 초록이다(주입해서 확인했다). 만료 시각은 넉넉히 미래로 둔다.
+        long farFuture = Instant.now().getEpochSecond() + 86_400;
+        mockMvc.perform(get("/api/profile-photos/1?token=1." + farFuture + ".0.c2ln"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/profile-photos/1"))
+                .andExpect(status().isNotFound());
     }
 
     @Test

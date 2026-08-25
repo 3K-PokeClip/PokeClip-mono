@@ -10,6 +10,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.time.Instant;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -19,6 +20,7 @@ public class ProfilePhotoService {
 
     private final PhotoStorage storage;
     private final PhotoAttacher attacher;
+    private final PhotoProperties properties;
 
     /**
      * <b>창고 먼저, 표 나중이다.</b> 뒤집으면 표는 새 사진을 가리키는데 파일이 없는 상태가 생긴다.
@@ -43,6 +45,33 @@ public class ProfilePhotoService {
         // 사람을 특정하지 않지만 남길 이유도 없다.
         log.info("auth.profile.photo.uploaded userId={}", userId);
         return user;
+    }
+
+    /**
+     * <b>빈손 하나로 거절 넷을 뭉친다.</b> 표가 틀렸든 만료됐든 남의 번호든 그런 사진이 없든
+     * 그런 회원이 없든 — 부르는 쪽이 받는 것은 같은 {@code Optional.empty()}다. 갈라 주면
+     * 「그 회원이 사진을 올렸는가」가 표 없이도 새어 나가고, 사진을 비공개로 둔 이유
+     * (편집자 프라이버시)가 그 자리에서 무너진다.
+     *
+     * <p><b>표(表)를 읽지 않는다.</b> 「이 회원이 사진을 올렸나」를 DB로 먼저 물어 거르면
+     * 「안 올린 회원」은 창고에 안 가고 「올렸는데 파일이 없는 회원」은 창고에 가서, 본문이 같아도
+     * <b>걸리는 시간이 갈린다</b>(POK-117에서 404 두 갈래가 1.5ms 대 4.4ms로 갈렸고 한 번만 재도
+     * 구분됐다). 창고에 바로 묻는 지금 모양은 그 둘이 같은 길을 간다.
+     *
+     * <p>꺼짐 판정만 앞에 둔다 — 회원별 값이 아니라 서버 전체의 설정이라 갈래를 만들지 않는다.
+     * 이 줄이 없으면 창고가 꺼진 배포에서 서명키가 빈 문자열이고, {@code SecretKeySpec}이 던지는
+     * {@code IllegalArgumentException}이 <b>아무나 부를 수 있는 이 경로의 500</b>이 된다.
+     *
+     * <p>여기에 {@code @Transactional}이 없는 것도 의도다 — 창고 호출은 외부 HTTP다.
+     */
+    public Optional<StoredPhoto> read(long userId, String token) {
+        if (!properties.enabled()) {
+            return Optional.empty();
+        }
+        if (!PhotoToken.verify(properties.tokenSecret(), token, userId, Instant.now())) {
+            return Optional.empty();
+        }
+        return storage.get(userId);
     }
 
     /**
