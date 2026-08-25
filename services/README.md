@@ -1713,6 +1713,7 @@ Ctrl+C 뒤 판정 줄의 `uploaded=`와 버킷의 `chat/` 아래 파일 수가 �
 | `POSTGRES_PASSWORD` | **없음** | ✅ | 위와 같다 |
 | `INTERNAL_API_TOKEN` | 빈 값 | ✅ | clip·수집 서버의 `/internal/**`에 **보낼** 값. 그쪽에 준 것과 같아야 한다 |
 | `CLIP_BASE_URL` | `http://localhost:8081` | ✅ `http://clip:8081` | 점프카드를 넣는 곳 |
+| `CLIP_MAX_ATTEMPTS` | `3` | — | 카드 발행 총 시도 횟수(재시도 포함). **4xx는 이 횟수와 무관하게 한 번만 보낸다** — 같은 본문이라 다시 보내도 같은 답이다 |
 | `COLLECTOR_BASE_URL` | `http://localhost:8083` | ✅ `http://chat-collector:8083` | 채팅 시각을 영상 위치로 바꿔 주는 창구(POK-92) |
 | `DETECTION_SCHEDULER_POOL_SIZE` | `3` | — | 🔴 주기 작업이 셋인데 스프링 기본 풀이 **1**이다. 하나면 치우기가 도는 동안 판정이 통째로 멈춘다 |
 | `DETECTION_CYCLE_INTERVAL` | `1s` | — | 한 바퀴 도는 간격. 발행 창보다 촘촘해야 창이 안 밀린다 |
