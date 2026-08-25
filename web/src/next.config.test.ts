@@ -27,6 +27,15 @@ describe('next.config rewrites', () => {
         source: '/api/chzzk-link/:path*',
         destination: 'http://auth.internal:8082/api/chzzk-link/:path*',
       },
+      // 편집자 위임·초대도 auth 서버 소유 (POK-208)
+      {
+        source: '/api/editor-delegations/:path*',
+        destination: 'http://auth.internal:8082/api/editor-delegations/:path*',
+      },
+      {
+        source: '/api/editor-invitations/:path*',
+        destination: 'http://auth.internal:8082/api/editor-invitations/:path*',
+      },
       { source: '/api/clip/:path*', destination: 'http://clip.internal:8081/api/clip/:path*' },
     ]);
   });

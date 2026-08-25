@@ -32,6 +32,7 @@ export * from './Progress';
 export * from './Tooltip';
 export * from './Popover';
 export * from './Dialog';
+export * from './ConfirmDialog';
 export * from './Drawer';
 export * from './Toast';
 // Menus (M8)

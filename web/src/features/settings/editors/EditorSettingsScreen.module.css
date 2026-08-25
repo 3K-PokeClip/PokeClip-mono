@@ -1,0 +1,353 @@
+/* 디자인 1l 설정 · 편집자 관리 */
+
+.screen {
+  max-width: calc(860 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+}
+
+/* 1l 상단 — h1과 「편집자 초대」 버튼이 같은 행이다. SettingsPageHeader에는 액션 슬롯이
+   없으므로(1k~1q 공통 헤더) 이 화면이 행으로 감싼다 */
+.headerRow {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--pc-u));
+}
+
+.headerRow > header {
+  flex: 1;
+}
+
+.headerAction {
+  flex: none;
+}
+
+/* 1l은 h1 아래 20px에서 목록이 시작한다 — 헤더 h1이 갖는 4px에 나머지를 더한다 */
+.rows {
+  margin-top: calc(16 * var(--pc-u));
+  margin-bottom: calc(22 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+  gap: calc(10 * var(--pc-u));
+}
+
+/* 1l 편집자 행 카드 — 1k 채널 행과 같은 규격이다 */
+.row {
+  display: flex;
+  align-items: center;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(15 * var(--pc-u)) calc(16 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+}
+
+.rowBody {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.rowName {
+  font-size: calc(13.5 * var(--pc-u));
+  font-weight: 700;
+}
+
+.rowMeta {
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  margin-top: calc(2 * var(--pc-u));
+}
+
+/* 1l 대기 중인 초대 행 — 점선이 「아직 편집자가 아니다」를 말한다 */
+.pendingRow {
+  display: flex;
+  align-items: center;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(14 * var(--pc-u)) calc(16 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1.5px dashed var(--pc-color-border-default);
+}
+
+.pendingIcon {
+  width: calc(40 * var(--pc-u));
+  height: calc(40 * var(--pc-u));
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-muted);
+}
+
+.pendingTitle {
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-text-secondary);
+}
+
+/* 조회 실패 폴백 — 행 개수를 모르는 상태라 목록 자리 한 덩어리로 그린다 */
+.fallbackCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(15 * var(--pc-u)) calc(16 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+}
+
+.fallbackText {
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+/* 1l ④ 빈 상태 — 무엇을 맡길 수 있는지 설명하고 초대로 유도한다 */
+.emptyCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: calc(10 * var(--pc-u));
+  padding: calc(30 * var(--pc-u)) calc(24 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1.5px dashed var(--pc-color-border-default);
+}
+
+.emptyIcon {
+  width: calc(46 * var(--pc-u));
+  height: calc(46 * var(--pc-u));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-muted);
+}
+
+.emptyTitle {
+  font-size: calc(13.5 * var(--pc-u));
+  font-weight: 750;
+}
+
+.emptyBody {
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  line-height: 1.55;
+  max-width: calc(300 * var(--pc-u));
+}
+
+/* 1l 하단 안내 — 내보내기의 결과(승인 요청 무효)를 목록 곁에서 미리 말해 둔다.
+   목록이 갖는 22px과 합쳐 시안의 목록↓22 + 안내↑4 간격이 된다 */
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(7 * var(--pc-u));
+  margin: calc(4 * var(--pc-u)) 0 0;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  line-height: 1.6;
+}
+
+.note svg {
+  width: calc(13 * var(--pc-u));
+  height: calc(13 * var(--pc-u));
+  flex: none;
+  margin-top: calc(2 * var(--pc-u));
+}
+
+/* ---------- 권한 2단계 비교 팝오버 (1l ②) ---------- */
+
+/* 안내 문구 속 인라인 링크형 트리거 — 버튼 기본 모양을 지우고 본문 활자에 맞춘다 */
+.compareTrigger {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin-left: calc(2 * var(--pc-u));
+  font: inherit;
+  font-weight: 650;
+  color: var(--pc-color-accent-text);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.compareTrigger:hover {
+  filter: brightness(1.25);
+}
+
+/* DS Popover 기본(최소 폭 200·안쪽 여백)을 1l ② 값으로 덮는다 — 특이도 더블링 이유는
+   ConfirmDialog.module.css 참조 */
+.comparePanel.comparePanel {
+  width: calc(392 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  padding: 0;
+  overflow: hidden;
+}
+
+.compareHead {
+  display: flex;
+  align-items: center;
+  gap: calc(7 * var(--pc-u));
+  padding: calc(12 * var(--pc-u)) calc(14 * var(--pc-u)) calc(10 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.compareTitle {
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 750;
+  color: var(--pc-color-text-primary);
+}
+
+.compareClose {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin-left: auto;
+  display: flex;
+  color: var(--pc-color-text-muted);
+  cursor: pointer;
+}
+
+.compareTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.compareCol {
+  width: calc(104 * var(--pc-u));
+}
+
+/* 신뢰 열 강조 — 시안 ②의 accent 틴트. 토큰에 알파 변형이 없어 시안의 원값을 그대로 쓴다 */
+.compareTrusted {
+  border-left-color: rgb(88 111 196 / 0.3) !important;
+  border-top-color: rgb(88 111 196 / 0.2) !important;
+  background: rgb(88 111 196 / 0.07);
+}
+
+.compareTable th,
+.compareTable td {
+  border-top: 1px solid var(--pc-color-border-subtle);
+  text-align: left;
+  font-weight: inherit;
+}
+
+.compareTable th[scope='col'],
+.compareTable tbody td {
+  border-left: 1px solid var(--pc-color-border-subtle);
+}
+
+.compareColHead {
+  padding: calc(6 * var(--pc-u)) calc(12 * var(--pc-u)) calc(8 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 750;
+}
+
+.compareColHead.compareTrusted {
+  color: var(--pc-color-accent-text);
+}
+
+.compareColSub {
+  display: block;
+  margin-top: calc(3 * var(--pc-u));
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 400;
+  color: var(--pc-color-text-muted);
+}
+
+.compareRowHead,
+.compareRowHeadStrong {
+  padding: calc(9 * var(--pc-u)) calc(14 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  border-left: 0 !important;
+}
+
+.compareRowHeadStrong {
+  font-weight: 700;
+  color: var(--pc-color-text-primary);
+}
+
+.compareCell {
+  padding: calc(9 * var(--pc-u)) calc(12 * var(--pc-u));
+  vertical-align: middle;
+}
+
+.compareYes {
+  display: block;
+  color: var(--pc-color-success);
+}
+
+.compareNo {
+  display: block;
+  color: var(--pc-color-text-muted);
+}
+
+.compareTimed,
+.compareInstant {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(5 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
+}
+
+.compareTimed {
+  color: var(--pc-color-text-secondary);
+}
+
+.compareTimed svg {
+  color: var(--pc-color-text-muted);
+}
+
+.compareInstant {
+  font-weight: 700;
+  color: var(--pc-color-accent-text);
+}
+
+.compareFoot {
+  padding: calc(10 * var(--pc-u)) calc(14 * var(--pc-u)) calc(12 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  line-height: 1.5;
+}
+
+/* ---------- 초대 모달 (1l ③) ---------- */
+
+/* DS 기본 폭(480)을 1l 값(410)으로 덮는다 — 특이도 더블링 이유는 ConfirmDialog.module.css 참조 */
+.inviteDialog.inviteDialog {
+  max-width: calc(410 * var(--pc-u));
+}
+
+.inviteTitle.inviteTitle {
+  font-size: calc(15 * var(--pc-u));
+  font-weight: 750;
+  margin: 0 0 calc(5 * var(--pc-u));
+}
+
+.inviteLead.inviteLead {
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  line-height: 1.55;
+  margin: 0 0 calc(18 * var(--pc-u));
+}
+
+.inviteErrorDetail {
+  display: block;
+  margin-top: calc(2 * var(--pc-u));
+  font-weight: 400;
+  color: var(--pc-color-text-secondary);
+}
+
+.inviteActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(10 * var(--pc-u));
+  margin-top: calc(18 * var(--pc-u));
+}

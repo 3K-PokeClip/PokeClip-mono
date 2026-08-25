@@ -58,7 +58,7 @@ const MENUS: Record<SideMenu, Group[]> = {
       title: '채널 · 협업자',
       items: [
         { key: 'link', label: '채널 연동', Icon: Link2, href: '/settings/channels' },
-        { key: 'editors', label: '편집자 관리', Icon: Users },
+        { key: 'editors', label: '편집자 관리', Icon: Users, href: '/settings/editors' },
       ],
     },
     {
