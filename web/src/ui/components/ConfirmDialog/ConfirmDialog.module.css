@@ -13,14 +13,6 @@
   padding: calc(24 * var(--pc-u)) calc(26 * var(--pc-u)) 0;
 }
 
-.eyebrow {
-  font-size: calc(11 * var(--pc-u));
-  font-weight: 700;
-  color: var(--pc-color-text-muted);
-  letter-spacing: 0.04em;
-  margin-bottom: calc(10 * var(--pc-u));
-}
-
 /* DS Dialog.Title의 .title(margin·font-size·font-weight)과 특이도가 같으면 번들 순서가
    승자를 정한다 — .dialog와 같은 이유로 클래스를 겹쳐 올린다 */
 .title.title {

@@ -6,7 +6,6 @@ import { ConfirmDialog } from './ConfirmDialog';
 const BASE = {
   open: true,
   busy: false,
-  eyebrow: '치지직 연동 해제',
   title: '치지직 연동을 해제할까요?',
   consequences: ['감지가 멈춰요.', '보관함 클립은 남아요.'],
   footnote: '언제든 다시 연동할 수 있어요.',
@@ -18,7 +17,6 @@ describe('ConfirmDialog', () => {
     render(<ConfirmDialog {...BASE} onCancel={vi.fn()} onConfirm={vi.fn()} />);
 
     const dialog = screen.getByRole('dialog', { name: '치지직 연동을 해제할까요?' });
-    expect(screen.getByText('치지직 연동 해제')).toBeInTheDocument();
     expect(screen.getByText('언제든 다시 연동할 수 있어요.')).toBeInTheDocument();
 
     // 설명은 각주가 아니라 결과 목록이 맡는다 — aria-describedby가 ol을 가리킨다.

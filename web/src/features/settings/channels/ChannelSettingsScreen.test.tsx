@@ -268,7 +268,8 @@ describe('ChannelSettingsScreen — 연동 해제', () => {
     await user.click(await chzzk().findByRole('button', { name: '연동 해제' }));
 
     const dialog = within(screen.getByRole('dialog'));
-    expect(dialog.getByText('치지직 연동 해제')).toBeInTheDocument();
+    // 카테고리 라벨(eyebrow)은 없다 — 1k 갱신 시안이 제목만 남긴다
+    expect(dialog.queryByText('치지직 연동 해제')).not.toBeInTheDocument();
     expect(dialog.getByText('치지직 연동을 해제할까요?')).toBeInTheDocument();
     expect(
       dialog.getByText('해제하면 방송을 켜도 하이라이트를 감지하지 않아요.'),

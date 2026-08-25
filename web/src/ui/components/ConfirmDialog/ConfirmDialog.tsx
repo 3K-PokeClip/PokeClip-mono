@@ -9,13 +9,14 @@ import styles from './ConfirmDialog.module.css';
 // 원래 화면 로컬(UnlinkChzzkDialog)이던 골격을 두 번째 파괴적 확인(편집자 내보내기,
 // POK-208)이 생기면서 승격했다. 두 사용처의 차이가 전부 문자열이라 프롭도 문자열만 받는다 —
 // 이름 입력 확인·체크박스 동의 같은 구조 차이가 필요해지면 그때 슬롯을 연다.
+//
+// 카테고리 라벨(eyebrow)은 없다 — 초기 시안에 있었지만 1k 해제 모달 셋·1l ⑦이 전부
+// 제목만 남기는 쪽으로 갱신됐다(2026-08-25 확인). 제목이 곧 무엇을 하는지다.
 
 export interface ConfirmDialogProps {
   open: boolean;
   /** 요청 진행 중 — 확인 버튼이 잠기고 Esc·백드롭으로도 닫히지 않는다. */
   busy: boolean;
-  /** 제목 위 카테고리 라벨. 예: 「치지직 연동 해제」 */
-  eyebrow: string;
   /** 「~할까요?」 형 질문. */
   title: string;
   /** 무엇이 멈추고 무엇이 남는지 — 사용자가 판단할 재료. 번호 목록으로 그린다. */
@@ -32,7 +33,6 @@ export interface ConfirmDialogProps {
 export function ConfirmDialog({
   open,
   busy,
-  eyebrow,
   title,
   consequences,
   footnote,
@@ -56,7 +56,6 @@ export function ConfirmDialog({
           Dialog.Content의 aria-describedby는 rest가 뒤에 퍼져 여기서 덮인다. */}
       <Dialog.Content className={styles.dialog} aria-describedby={consequencesId}>
         <div className={styles.head}>
-          <div className={styles.eyebrow}>{eyebrow}</div>
           <Dialog.Title className={styles.title}>{title}</Dialog.Title>
           <div className={styles.divider} />
         </div>

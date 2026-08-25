@@ -31,7 +31,6 @@ export function UnlinkChzzkDialog({
     <ConfirmDialog
       open={open}
       busy={busy}
-      eyebrow="치지직 연동 해제"
       title="치지직 연동을 해제할까요?"
       consequences={CONSEQUENCES}
       footnote="해제 후에도 언제든 다시 연동할 수 있어요."

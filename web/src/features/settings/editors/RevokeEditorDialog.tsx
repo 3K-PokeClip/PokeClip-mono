@@ -28,7 +28,6 @@ export function RevokeEditorDialog({
     <ConfirmDialog
       open={target !== null}
       busy={busy}
-      eyebrow="편집자 내보내기"
       title={`${name} 님을 편집자에서 빼고, 내 방송 접근을 막을까요?`}
       consequences={[
         '지금 바로 내 방송의 하이라이트·클립을 볼 수 없게 됩니다.',
