@@ -6,6 +6,7 @@ import { SettingsPageHeader } from '../SettingsPageHeader';
 import { EditorRow } from './EditorRow';
 import { InviteEditorDialog } from './InviteEditorDialog';
 import { PendingInvitationRow } from './PendingInvitationRow';
+import { PermissionComparisonPopover } from './PermissionComparisonPopover';
 import { RevokeEditorDialog } from './RevokeEditorDialog';
 import { useEditorSettingsState, type EditorSettingsViewState } from './useEditorSettingsState';
 import styles from './EditorSettingsScreen.module.css';
@@ -13,10 +14,11 @@ import styles from './EditorSettingsScreen.module.css';
 // 디자인 1l 설정 · 편집자 관리 (POK-208). 조립만 한다 — 상태 판단은
 // useEditorSettingsState, 행 표현은 EditorRow·PendingInvitationRow가 갖는다.
 //
-// 시안과 어긋나게 그리는 것들(전부 티켓이 정본으로 지정): 정원 배지 「2 / 3」·정원 초과
-// 사전 모달은 정원 API(POK-207)가 없어 아직 없다 — 상한 도달은 초대 모달의 409 문구가
-// 알린다. 권한 등급 드롭다운·비교 팝오버·「권한 2단계 비교」 링크는 등급 결정 대기라
-// 넣지 않는다.
+// 시안과 어긋나게 그리는 것들: 정원 배지 「2 / 3」·정원 초과 사전 모달은 정원
+// API(POK-207)가 없어 아직 없다 — 상한 도달은 초대 모달의 409 문구가 알린다. 권한 등급
+// **동작**(행 드롭다운·초대 권한 선택·권한 변경 토스트)은 등급 결정 대기라 넣지 않는다.
+// 비교 팝오버는 안내 전용이라 시안대로 넣었다(2026-08-25 결정) — 티켓 완료 조건의
+// 「비교 팝오버를 넣지 않는다」와 어긋나는 점은 PR·Jira에 기록했다.
 export function EditorSettingsScreen() {
   const state = useEditorSettingsState();
 
@@ -40,7 +42,10 @@ export function EditorSettingsScreen() {
       {state.view === 'ready' && state.editors.length > 0 && (
         <p className={styles.note}>
           <Info aria-hidden="true" />
-          편집자를 내보내면 즉시 적용되고, 대기 중이던 승인 요청은 무효가 됩니다
+          <span>
+            편집자를 내보내면 즉시 적용되고, 대기 중이던 승인 요청은 무효가 됩니다{' '}
+            <PermissionComparisonPopover />
+          </span>
         </p>
       )}
 

@@ -348,6 +348,61 @@ describe('EditorSettingsScreen — 초대 취소', () => {
   });
 });
 
+describe('EditorSettingsScreen — 권한 2단계 비교 팝오버', () => {
+  it('안내 문구의 트리거로 열리고, 2단계 열과 4개 행 안내가 선다', async () => {
+    stubEditors();
+    const user = userEvent.setup();
+    renderWithProviders(<EditorSettingsScreen />);
+    await screen.findByRole('group', { name: '박편집' });
+
+    await user.click(screen.getByRole('button', { name: '권한 2단계 비교' }));
+    const panel = within(await screen.findByRole('dialog', { name: '권한 2단계 비교' }));
+
+    expect(panel.getByRole('columnheader', { name: /기본/ })).toHaveTextContent('승인 필요');
+    expect(panel.getByRole('columnheader', { name: /신뢰/ })).toHaveTextContent('직접 업로드');
+    for (const label of [
+      '검토 · 클립 편집',
+      '보관함 저장 · 템플릿 사용',
+      '유튜브 업로드',
+      '템플릿 · 채널 설정 변경',
+    ]) {
+      expect(panel.getByRole('rowheader', { name: label })).toBeInTheDocument();
+    }
+    // 유튜브 업로드 행 — 기본은 승인 후, 신뢰는 즉시
+    expect(panel.getByText('승인 후')).toBeInTheDocument();
+    expect(panel.getByText('즉시')).toBeInTheDocument();
+    expect(panel.getByText(/새 편집자는 기본으로 시작하고/)).toBeInTheDocument();
+  });
+
+  it('닫기 버튼과 Esc로 닫힌다', async () => {
+    stubEditors();
+    const user = userEvent.setup();
+    renderWithProviders(<EditorSettingsScreen />);
+    await screen.findByRole('group', { name: '박편집' });
+
+    await user.click(screen.getByRole('button', { name: '권한 2단계 비교' }));
+    await user.click(screen.getByRole('button', { name: '닫기' }));
+    expect(screen.queryByRole('dialog', { name: '권한 2단계 비교' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '권한 2단계 비교' }));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: '권한 2단계 비교' })).not.toBeInTheDocument();
+  });
+
+  it('팝오버가 열린 상태에서 axe 위반이 없다', async () => {
+    stubEditors();
+    const user = userEvent.setup();
+    renderWithProviders(<EditorSettingsScreen />);
+    await screen.findByRole('group', { name: '박편집' });
+
+    await user.click(screen.getByRole('button', { name: '권한 2단계 비교' }));
+    // 팝오버는 포털로 뜨므로 다이얼로그 요소를 직접 검사한다 — 본문 랜드마크는 앱 레이아웃 몫
+    expect(
+      await axe(await screen.findByRole('dialog', { name: '권한 2단계 비교' })),
+    ).toHaveNoViolations();
+  });
+});
+
 describe('EditorSettingsScreen — 접근성', () => {
   it('목록 상태에서 axe 위반이 없다', async () => {
     stubEditors();

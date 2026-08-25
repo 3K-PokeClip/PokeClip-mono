@@ -158,6 +158,166 @@
   margin-top: calc(2 * var(--pc-u));
 }
 
+/* ---------- 권한 2단계 비교 팝오버 (1l ②) ---------- */
+
+/* 안내 문구 속 인라인 링크형 트리거 — 버튼 기본 모양을 지우고 본문 활자에 맞춘다 */
+.compareTrigger {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin-left: calc(2 * var(--pc-u));
+  font: inherit;
+  font-weight: 650;
+  color: var(--pc-color-accent-text);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.compareTrigger:hover {
+  filter: brightness(1.25);
+}
+
+/* DS Popover 기본(최소 폭 200·안쪽 여백)을 1l ② 값으로 덮는다 — 특이도 더블링 이유는
+   ConfirmDialog.module.css 참조 */
+.comparePanel.comparePanel {
+  width: calc(392 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  padding: 0;
+  overflow: hidden;
+}
+
+.compareHead {
+  display: flex;
+  align-items: center;
+  gap: calc(7 * var(--pc-u));
+  padding: calc(12 * var(--pc-u)) calc(14 * var(--pc-u)) calc(10 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.compareTitle {
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 750;
+  color: var(--pc-color-text-primary);
+}
+
+.compareClose {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin-left: auto;
+  display: flex;
+  color: var(--pc-color-text-muted);
+  cursor: pointer;
+}
+
+.compareTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.compareCol {
+  width: calc(104 * var(--pc-u));
+}
+
+/* 신뢰 열 강조 — 시안 ②의 accent 틴트. 토큰에 알파 변형이 없어 시안의 원값을 그대로 쓴다 */
+.compareTrusted {
+  border-left-color: rgb(88 111 196 / 0.3) !important;
+  border-top-color: rgb(88 111 196 / 0.2) !important;
+  background: rgb(88 111 196 / 0.07);
+}
+
+.compareTable th,
+.compareTable td {
+  border-top: 1px solid var(--pc-color-border-subtle);
+  text-align: left;
+  font-weight: inherit;
+}
+
+.compareTable th[scope='col'],
+.compareTable tbody td {
+  border-left: 1px solid var(--pc-color-border-subtle);
+}
+
+.compareColHead {
+  padding: calc(6 * var(--pc-u)) calc(12 * var(--pc-u)) calc(8 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 750;
+}
+
+.compareColHead.compareTrusted {
+  color: var(--pc-color-accent-text);
+}
+
+.compareColSub {
+  display: block;
+  margin-top: calc(3 * var(--pc-u));
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 400;
+  color: var(--pc-color-text-muted);
+}
+
+.compareRowHead,
+.compareRowHeadStrong {
+  padding: calc(9 * var(--pc-u)) calc(14 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  border-left: 0 !important;
+}
+
+.compareRowHeadStrong {
+  font-weight: 700;
+  color: var(--pc-color-text-primary);
+}
+
+.compareCell {
+  padding: calc(9 * var(--pc-u)) calc(12 * var(--pc-u));
+  vertical-align: middle;
+}
+
+.compareYes {
+  display: block;
+  color: var(--pc-color-success);
+}
+
+.compareNo {
+  display: block;
+  color: var(--pc-color-text-muted);
+}
+
+.compareTimed,
+.compareInstant {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(5 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
+}
+
+.compareTimed {
+  color: var(--pc-color-text-secondary);
+}
+
+.compareTimed svg {
+  color: var(--pc-color-text-muted);
+}
+
+.compareInstant {
+  font-weight: 700;
+  color: var(--pc-color-accent-text);
+}
+
+.compareFoot {
+  padding: calc(10 * var(--pc-u)) calc(14 * var(--pc-u)) calc(12 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  line-height: 1.5;
+}
+
 /* ---------- 내보내기 재확인 모달의 대상 카드 (1l ⑦) ---------- */
 
 .kickSubject {
