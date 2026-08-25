@@ -13,9 +13,9 @@ import java.util.OptionalLong;
  * {@code chat_metrics}를 읽고 쓰고 치운다. DB 접근은 JPA가 아니라 {@link JdbcTemplate}이다
  * (chat-collector의 {@code EndedStreamStore}와 같은 모양).
  *
- * <p><b>import 넷 중 셋({@code Timestamp}·{@code Instant}·{@code OptionalLong})은 이 태스크에서
- * 안 쓴다.</b> 태스크 6(발행권)과 7(치우기)이 이 클래스에 메서드를 더하면서 쓴다 — 계획 검증이
- * 그때 컴파일이 깨지는 것을 잡았고(F2), 여기서 미리 넣어 둔다.
+ * <p>{@code Timestamp}·{@code Instant}·{@code OptionalLong} import 셋은 태스크 2에서 미리
+ * 넣어 뒀던 것이고 <b>여기 {@code claimForPublish}에서 드디어 쓰인다</b> — 계획 검증 F2가
+ * 예고한 자리다(태스크 3까지는 안 쓰였다).
  */
 @Component
 public class ChatMetricsStore {
@@ -62,6 +62,41 @@ public class ChatMetricsStore {
                         r.messageCount(), r.chatterCount()})
                 .toList());
         return java.util.Arrays.stream(affected).sum();
+    }
+
+    /**
+     * 발행권을 잡는다. <b>영향 행이 1일 때만 내가 보낸다.</b> 조회 후 갱신으로 가르면 동시
+     * 요청에 뚫린다(auth·clip의 같은 자리 선례).
+     *
+     * <p><b>실패해도 되돌리지 않는다.</b> 늦게 도착한 카드는 편집자 화면을 과거로 오염시키므로
+     * 버리는 편이 낫다(PRD 결정). 되돌리면 다음 바퀴가 또 집어 같은 실패를 반복한다.
+     */
+    private static final String CLAIM = """
+            UPDATE chat_metrics SET published_at = ?
+             WHERE stream_id = ? AND window_size_ms = ? AND window_start_ms = ?
+               AND published_at IS NULL
+            RETURNING id
+            """;
+
+    /** @return 잡았으면 그 줄의 번호. 이미 누가 잡았으면 빈 값 */
+    public OptionalLong claimForPublish(String streamId, long windowSizeMs, long windowStartMs, Instant now) {
+        List<Long> ids = jdbc.queryForList(CLAIM, Long.class,
+                Timestamp.from(now), streamId, windowSizeMs, windowStartMs);
+        return ids.isEmpty() ? OptionalLong.empty() : OptionalLong.of(ids.get(0));
+    }
+
+    /** 아직 발행권이 안 잡힌 창들을 오래된 것부터. 발행 창 크기만 본다. */
+    private static final String UNPUBLISHED = """
+            SELECT stream_id, window_size_ms, window_start_ms, message_count, chatter_count
+              FROM chat_metrics
+             WHERE stream_id = ? AND window_size_ms = ? AND published_at IS NULL
+             ORDER BY window_start_ms
+            """;
+
+    public List<MetricRow> unpublished(String streamId, long windowSizeMs) {
+        return jdbc.query(UNPUBLISHED, (rs, n) -> new MetricRow(
+                rs.getString("stream_id"), rs.getLong("window_size_ms"), rs.getLong("window_start_ms"),
+                rs.getInt("message_count"), rs.getInt("chatter_count")), streamId, windowSizeMs);
     }
 
     public int[] baselineCounts(String streamId, long windowSizeMs,
