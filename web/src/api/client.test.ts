@@ -217,15 +217,27 @@ describe('apiFetch', () => {
     );
   });
 
-  it('refresh가 5xx면 토큰을 보존한다 — 배포 중 일시 장애로 세션을 죽이면 안 된다', async () => {
+  it('refresh가 5xx면 토큰을 보존하고 503으로 던진다 — 인프라 장애를 세션 만료로 위장하지 않는다 (POK-217)', async () => {
     stubFetch((url) =>
       url === '/api/auth/refresh'
         ? jsonResponse(503, { message: '점검 중' })
         : jsonResponse(401, { message: '인증 실패' }),
     );
 
-    await expect(apiFetch('/api/protected')).rejects.toMatchObject({ status: 401 });
+    // 401 '세션이 만료됐어요'로 던지면 거짓말이다 — 토큰은 살아 있고 다음 시도는 대개 성공한다
+    await expect(apiFetch('/api/protected')).rejects.toMatchObject({ status: 503 });
     // 세션은 살아 있어야 한다 — 다음 시도가 같은 refresh로 다시 회전한다
+    expect(useAuthStore.getState().refreshToken).toBe('old-refresh');
+  });
+
+  it('refresh가 네트워크 오류로 못 나가도 같다 — 토큰 보존 + 503 (POK-217)', async () => {
+    stubFetch((url) =>
+      url === '/api/auth/refresh'
+        ? Promise.reject(new TypeError('Failed to fetch'))
+        : jsonResponse(401, { message: '인증 실패' }),
+    );
+
+    await expect(apiFetch('/api/protected')).rejects.toMatchObject({ status: 503 });
     expect(useAuthStore.getState().refreshToken).toBe('old-refresh');
   });
 
@@ -239,8 +251,9 @@ describe('apiFetch', () => {
         : jsonResponse(401, { message: '인증 실패' }),
     );
 
-    // SyntaxError가 아니라 ApiError(401)여야 호출부의 status 분기가 안 깨진다
-    await expect(apiFetch('/api/protected')).rejects.toMatchObject({ status: 401 });
+    // SyntaxError가 아니라 ApiError여야 호출부의 status 분기가 안 깨진다 — 계약 위반도
+    // 세션 판정 불가이므로 5xx·네트워크 오류와 같게 503이다
+    await expect(apiFetch('/api/protected')).rejects.toMatchObject({ status: 503 });
     expect(useAuthStore.getState().refreshToken).toBe('old-refresh');
   });
 

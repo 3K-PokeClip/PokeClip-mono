@@ -150,8 +150,23 @@ const FALLBACK_MESSAGE: ChzzkLinkMessage = {
   description: '잠시 후 다시 시도해 주세요.',
 };
 
+// reason 없이 온 5xx — 백엔드 판정이 아니라 **백엔드에 닿지 못한** 실패다 (POK-217:
+// dev 프록시가 재시작 중인 auth에 연결하지 못하면 본문 없는 500이 온다. apiFetch의
+// refresh 불가 판정 503도 같은 부류). code·state는 이미 주소창에서 지워졌으므로
+// 사용자가 할 일은 폴백의 "다시 시도"가 아니라 연동을 처음부터 다시 시작하는 것이다.
+const TRANSPORT_FAILURE_STATUS = new Set([500, 502, 503, 504]);
+
+const TRANSPORT_FAILURE_MESSAGE: ChzzkLinkMessage = {
+  title: '서버와 연결이 원활하지 않아요',
+  description: '연동이 완료되지 않았어요. 잠시 후 채널 설정에서 연동을 다시 시작해 주세요.',
+};
+
 /** 연동 교환 실패를 사용자 문구로. 알 수 없는 실패는 폴백으로 — reason 원문을 노출하지 않는다. */
 export function chzzkLinkFailureMessage(e: unknown): ChzzkLinkMessage {
   const failure = chzzkLinkFailureOf(e);
-  return failure === null ? FALLBACK_MESSAGE : FAILURE_MESSAGE[failure];
+  if (failure !== null) return FAILURE_MESSAGE[failure];
+  // reason 매칭(위)이 먼저다 — 502가 CHZZK_UNAVAILABLE을 싣고 오면 그 문구가 이긴다.
+  if (e instanceof ApiError && TRANSPORT_FAILURE_STATUS.has(e.status))
+    return TRANSPORT_FAILURE_MESSAGE;
+  return FALLBACK_MESSAGE;
 }

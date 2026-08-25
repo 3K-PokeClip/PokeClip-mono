@@ -31,10 +31,18 @@ async function errorMessage(res: Response): Promise<string> {
   return `요청이 실패했다 (${res.status})`;
 }
 
+/**
+ * refresh 회전의 결과. 'rotated'만 재시도로 이어진다. 'ended'는 세션이 실제로 끝났거나
+ * 다른 세션으로 바뀐 경우고, 'unavailable'은 서버·네트워크 일시 장애로 **세션 판정 자체를
+ * 못 내린** 경우다 — 이 구분이 없으면 백엔드 재시작 한 번이 "세션이 만료됐어요"로 보인다
+ * (POK-217: 토큰은 보존되는데 문구는 만료라고 말하는 어긋남).
+ */
+type RefreshOutcome = 'rotated' | 'ended' | 'unavailable';
+
 // refresh 회전은 single-flight로 직렬화한다. 동시 401 여러 건이 각자 회전을 부르면
 // 첫 성공이 나머지를 전부 "이미 쓴 토큰"으로 만들고, 서버는 재사용을 도난으로 보고
 // 전 세션을 끊는다. 같은 이유로 이 경로에는 재시도를 절대 넣지 않는다.
-let inflightRefresh: Promise<boolean> | null = null;
+let inflightRefresh: Promise<RefreshOutcome> | null = null;
 
 // 탭 사이에서도 직렬화한다 (POK-211). 두 탭이 같은 refresh로 동시에 회전하면(탭 여러 개를
 // 한꺼번에 복원할 때 흔하다) 서버는 진 쪽에 401을 주는데, 클라이언트는 그것을 만료·도난과
@@ -75,31 +83,31 @@ function waitForSessionChange(sent: string, ms: number): Promise<void> {
   });
 }
 
-export function refreshSession(): Promise<boolean> {
+export function refreshSession(): Promise<RefreshOutcome> {
   inflightRefresh ??= runRefresh().finally(() => {
     inflightRefresh = null;
   });
   return inflightRefresh;
 }
 
-async function runRefresh(): Promise<boolean> {
+async function runRefresh(): Promise<RefreshOutcome> {
   const sent = useAuthStore.getState().refreshToken;
-  if (sent === null) return false;
+  if (sent === null) return 'ended';
   return withCrossTabLock(() => doRefresh(sent));
 }
 
 /** @param sent 락을 기다리기 전에 들고 있던 refresh — 기다리는 사이 바뀌었는지의 기준 */
-async function doRefresh(sent: string): Promise<boolean> {
+async function doRefresh(sent: string): Promise<RefreshOutcome> {
   // 보내기 직전에 정본을 다시 읽는다 — 프리즈·bfcache로 채널 메시지를 놓친 탭이 묵은 refresh로
   // 회전하면 10초 유예 밖 재사용이라 서버가 전 세션을 끊는다. 이벤트 순서에 기대지 않는다.
   reconcileSessionWithStorage();
   const state = useAuthStore.getState();
-  if (state.refreshToken === null) return false; // 기다리는 사이 로그아웃
+  if (state.refreshToken === null) return 'ended'; // 기다리는 사이 로그아웃
   if (state.refreshToken !== sent) {
     // 옆 탭이 내 토큰을 먼저 회전해 이어받았다 — 보낼 것이 없다. 그 access로 재시도하면 된다.
-    if (state.rotatedFrom === sent && state.accessToken !== null) return true;
+    if (state.rotatedFrom === sent && state.accessToken !== null) return 'rotated';
     // 다른 계정 로그인 — 이 요청을 그 계정의 Bearer로 완료하면 안 된다. (리뷰 #72)
-    if (state.accessToken !== null) return false;
+    if (state.accessToken !== null) return 'ended';
     // 정본으로만 맞춰진 상태(access 없음) — 아래에서 정본 토큰으로 회전한다.
   }
   const refreshToken = state.refreshToken;
@@ -112,7 +120,7 @@ async function doRefresh(sent: string): Promise<boolean> {
     });
   } catch {
     // 네트워크 일시 장애 — 토큰을 지우면 오프라인 한 번에 로그아웃된다. 남겨 둔다.
-    return false;
+    return 'unavailable';
   }
   if (res.status === 401 || res.status === 403) {
     // 만료·회전 재사용(도난 감지)이면 세션 종료가 맞다. 락이 없는 환경에서는 옆 탭이 같은
@@ -126,16 +134,16 @@ async function doRefresh(sent: string): Promise<boolean> {
       // 응답을 기다리는 사이 세션이 바뀌었다. 옆 탭이 내 토큰을 회전해 이어받았다면 그 access로
       // 재시도한다. 로그아웃·계정 교체·폴백 동기화면 스토어는 건드리지 않고 이 요청만 실패로
       // 끝낸다 — 다른 계정의 Bearer로 이 요청이 완료되면 안 된다. (리뷰 #72)
-      return now.rotatedFrom === refreshToken && now.accessToken !== null;
+      return now.rotatedFrom === refreshToken && now.accessToken !== null ? 'rotated' : 'ended';
     }
     // 가드가 스토어 변화를 보고 /login으로 보낸다.
     useAuthStore.getState().clearTokens();
-    return false;
+    return 'ended';
   }
   if (!res.ok) {
     // 5xx·429 등 백엔드 일시 장애 — 배포 중 재시작 한 번에 유효한 refresh가 파기되면 안 된다.
     // 네트워크 오류(위 catch)와 같게 토큰을 보존한다. (리뷰 #72)
-    return false;
+    return 'unavailable';
   }
   let pair: unknown;
   try {
@@ -144,12 +152,12 @@ async function doRefresh(sent: string): Promise<boolean> {
     // 200인데 JSON이 아니다(프록시·캡티브 포털의 가로채기 등) — 세션 판정이 아니라
     // 서버 계약 위반이므로 5xx와 같게 토큰을 보존한다. SyntaxError가 그대로 새면
     // apiFetch의 "ApiError만 던진다" 계약도 깨진다. (리뷰 #72)
-    return false;
+    return 'unavailable';
   }
   const { accessToken, refreshToken: nextRefresh } = pair as Record<string, unknown>;
   if (typeof accessToken !== 'string' || typeof nextRefresh !== 'string') {
     // JSON이지만 토큰 쌍이 아니다 — 위와 같은 계약 위반이라 판정도 같게 보존한다.
-    return false;
+    return 'unavailable';
   }
   // 응답을 기다리는 사이 세션이 바뀌었을 수 있다 — 로그아웃(null)이면 setTokens가
   // "로그아웃했는데 세션이 되살아나는" 레이스가 되고, 다른 탭발 교체(로그아웃 후 다른 계정
@@ -163,11 +171,11 @@ async function doRefresh(sent: string): Promise<boolean> {
     }).catch(() => {
       /* 폐기 실패 — 14일 만료로 수렴하는 것까지만 감수 */
     });
-    return false;
+    return 'ended';
   }
   // 같은 세션의 회전 — 다른 탭은 캐시를 유지한 채 이 쌍을 이어받는다. (POK-211)
   useAuthStore.getState().rotateTokens({ accessToken, refreshToken: nextRefresh });
-  return true;
+  return 'rotated';
 }
 
 function send(path: string, init: RequestInit): Promise<Response> {
@@ -190,7 +198,7 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     return res;
   }
   const refreshed = await refreshSession();
-  if (refreshed) {
+  if (refreshed === 'rotated') {
     const retry = await send(path, init);
     if (retry.status !== 401) {
       if (!retry.ok) throw new ApiError(retry.status, await errorMessage(retry));
@@ -198,6 +206,12 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     }
     // 회전 직후에도 401 — 정상 경로가 아니다(서버 측 세션 폐기 등). 세션을 접는다.
     useAuthStore.getState().clearTokens();
+  }
+  if (refreshed === 'unavailable') {
+    // 세션 판정이 아니라 인프라 일시 장애다(백엔드 재시작·프록시 연결 실패 — POK-217).
+    // 401로 던지면 "세션이 만료됐어요"가 거짓말이 된다 — 토큰은 보존돼 있고 다음 시도는
+    // 대개 성공한다. 백엔드가 직접 답했다면 줬을 코드(503)로 던져 status 분기에 태운다.
+    throw new ApiError(503, '서버와 연결이 원활하지 않아요');
   }
   throw new ApiError(401, '세션이 만료됐어요');
 }

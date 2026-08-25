@@ -110,8 +110,16 @@ describe('ChzzkCallbackScreen', () => {
     expect(document.body.textContent).not.toContain(reason);
   });
 
-  it('모르는 실패는 폴백 문구로 알린다', async () => {
+  it('5xx는 도달 실패 문구로 — 연동을 다시 시작하라고 알린다 (POK-217)', async () => {
     stubFetch(() => jsonResponse(500, { reason: 'BOOM' }));
+    renderScreen(<ChzzkCallbackScreen />);
+
+    expect(await screen.findByText('서버와 연결이 원활하지 않아요')).toBeInTheDocument();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/settings/channels'));
+  });
+
+  it('모르는 4xx 실패는 폴백 문구로 알린다', async () => {
+    stubFetch(() => jsonResponse(400, { reason: 'BOOM' }));
     renderScreen(<ChzzkCallbackScreen />);
 
     expect(await screen.findByText('연동에 실패했어요')).toBeInTheDocument();
@@ -130,15 +138,15 @@ describe('ChzzkCallbackScreen', () => {
 
   it('회전이 일시적으로 실패하면 로그아웃으로 읽지 않는다 — 로그인 화면은 막다른 길이다', async () => {
     // 하드 내비게이션으로 도착해 access 토큰이 비어 있고, 마침 auth 서버가 잠깐 5xx인 경우.
-    // doRefresh는 토큰을 보존한 채 실패하지만 apiFetch는 그래도 401을 던진다. 그걸
-    // 로그아웃으로 읽으면 LoginScreen 역가드가 살아있는 refreshToken을 보고 /home으로
-    // 튕겨, 로그인하라는 안내를 받고도 로그인 화면에 갈 수 없게 된다.
+    // doRefresh는 토큰을 보존한 채 실패하고 apiFetch는 이를 503으로 던진다(POK-217).
+    // 이것을 로그아웃으로 읽으면 LoginScreen 역가드가 살아있는 refreshToken을 보고
+    // /home으로 튕겨, 로그인하라는 안내를 받고도 로그인 화면에 갈 수 없게 된다.
     useAuthStore.setState({ accessToken: null, refreshToken: 'refresh-1', hydrated: true });
     window.localStorage.setItem('pc-auth', JSON.stringify({ v: 1, refreshToken: 'refresh-1' })); // 회전 직전 정본 동기화가 읽는 값
     stubFetch((url) => (url === '/api/auth/refresh' ? jsonResponse(500, {}) : jsonResponse(401)));
     renderScreen(<ChzzkCallbackScreen />);
 
-    expect(await screen.findByText('연동에 실패했어요')).toBeInTheDocument();
+    expect(await screen.findByText('서버와 연결이 원활하지 않아요')).toBeInTheDocument();
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/settings/channels'));
     expect(screen.queryByRole('link', { name: '로그인 화면으로' })).not.toBeInTheDocument();
     // 세션은 그대로다 — 사용자는 채널 화면에서 다시 연동을 누르면 된다
