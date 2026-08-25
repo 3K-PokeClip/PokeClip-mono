@@ -64,6 +64,8 @@ pokeclip:
   clip-client:
     # 카드를 넣는 곳. compose 네트워크에서는 서비스 이름이 곧 호스트다.
     base-url: ${CLIP_BASE_URL:http://localhost:8081}
+    # 재시도를 포함한 총 시도 횟수. 무한 재시도를 안 하는 이유는 ClipClientProperties javadoc에.
+    max-attempts: ${CLIP_MAX_ATTEMPTS:3}
 
   collector-client:
     # 채팅 시각을 영상 위치로 바꿔 주는 창구(POK-92).
