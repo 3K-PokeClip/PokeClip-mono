@@ -78,7 +78,12 @@ class PhotoTokenTest {
 
     @Test
     void 모양이_아닌_글자는_조용히_거부한다() {
-        for (String junk : new String[]{"", ".", "a.b.c.d", "7.1.2", "7.x.1.sig", "eyJhbGciOiJIUzI1NiJ9.x.y"}) {
+        // 마지막 갈래는 유효한 표에 칸을 덧붙인 것이다. 앞 여섯은 어차피 파싱이나 만료에서 걸려
+        // 칸 수 검사를 지워도 전부 거부되므로(주입으로 확인), 이 갈래가 없으면 「네 칸이어야 한다」를
+        // 아무도 재지 않는다 — 서명이 앞 세 칸에만 걸려 있어 꼬리를 붙인 표가 그대로 통과한다.
+        String tailAppended = PhotoToken.issue(SECRET, 7L, 1000L, T) + ".extra";
+        for (String junk : new String[]{"", ".", "a.b.c.d", "7.1.2", "7.x.1.sig", "eyJhbGciOiJIUzI1NiJ9.x.y",
+                tailAppended}) {
             assertThat(PhotoToken.verify(SECRET, junk, 7L, T)).as("입력 %s", junk).isFalse();
         }
     }
