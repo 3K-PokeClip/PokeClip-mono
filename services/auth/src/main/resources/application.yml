@@ -60,8 +60,15 @@ spring:
       # 오류 없이 바꾼다(이 카드에서 재현: JdkClientHttpRequestFactory →
       # HttpComponentsClientHttpRequestFactory). 위 connect 2s·read 5s는 구글·치지직·유튜브
       # 호출 전부에 걸린 실측값이라, 층이 바뀌면 어디서 끊는지를 다시 재야 하는 것이 된다.
+      #
+      # 이 핀을 잃으면 시한만 늘어나는 게 아니다 — httpclient5 5.6.1의 기본 재시도가 429·503에
+      # 1회(간격 1초) 붙고, 상태코드 기반이라 POST도 탄다. 치지직 갱신은 users 행 락을 쥔 채
+      # HTTP를 기다리므로(「알려진 구멍」 10번) 그 한 번이 그대로 잠금 시간이 된다.
+      # AWS SDK 자기 경로는 무관하다 — apache5-client가 disableAutomaticRetries를 부른다.
+      # 이 증폭은 스프링 쪽 핀을 잃었을 때만 생긴다.
+      #
       # 단수형 spring.http.client.factory는 deprecated 별칭이고 spring.http.clients.factory는 없다.
-      # RestClientFactoryTest가 구현체를 직접 단언한다.
+      # RestClientFactoryTest가 RestClient·RestTemplate 양쪽 구현체를 직접 단언한다.
       imperative:
         factory: jdk
 
