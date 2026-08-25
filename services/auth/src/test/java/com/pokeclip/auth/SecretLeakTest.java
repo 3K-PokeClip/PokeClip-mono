@@ -23,6 +23,12 @@ import com.pokeclip.auth.user.UserRepository;
 import com.pokeclip.auth.user.UserService;
 import com.pokeclip.auth.support.FakeHttpServer;
 import com.pokeclip.auth.support.IntegrationTestSupport;
+import com.pokeclip.auth.youtube.YoutubeChannel;
+import com.pokeclip.auth.youtube.YoutubeCleanupExecutor;
+import com.pokeclip.auth.youtube.YoutubeLinkStateCodec;
+import com.pokeclip.auth.youtube.YoutubeLinkWriter;
+import com.pokeclip.auth.youtube.YoutubeTokens;
+import com.pokeclip.auth.youtube.api.dto.YoutubeResolveRequest;
 import com.pokeclip.web.RequestIdFilter;
 import com.pokeclip.web.support.LogCaptor;
 import jakarta.validation.constraints.NotBlank;
@@ -84,6 +90,9 @@ class SecretLeakTest extends IntegrationTestSupport {
 
     private static final String SPRING_WEB_LOGGER = "org.springframework.web";
 
+    /** 유니크 위반 메시지에 컬럼 값(채널 ID·이메일)이 실려 나오는 로거. application.yml이 error로 눌러 둔다. */
+    private static final String HIBERNATE_JDBC_ERROR_LOGGER = "org.hibernate.orm.jdbc.error";
+
     private static final String GOOGLE_CODE = needle("google-code");
 
     /** application-test.yml 대신 아래 @DynamicPropertySource로 주입한다. */
@@ -108,6 +117,13 @@ class SecretLeakTest extends IntegrationTestSupport {
     private static final String CHZZK_CODE = needle("chzzk-code");
     private static final String CHZZK_CLIENT_SECRET = needle("chzzk-client-secret");
     private static final String CHZZK_CHANNEL_ID = needle("chzzk-channel");
+
+    /** 유튜브 바늘. 토큰 둘·채널은 가짜 구글이 돌려주고, code는 요청에, 시크릿은 설정(@DynamicPropertySource)에서 온다. */
+    private static final String YT_ACCESS = needle("youtube-access");
+    private static final String YT_REFRESH = needle("youtube-refresh");
+    private static final String YT_CODE = needle("youtube-code");
+    private static final String YT_CLIENT_SECRET = needle("youtube-client-secret");
+    private static final String YT_CHANNEL_ID = needle("youtube-channel");
 
     /**
      * DEBUG에서 실제로 새는 것. 요청·응답 본문에 실려 다니는 둘뿐이다.
@@ -139,12 +155,19 @@ class SecretLeakTest extends IntegrationTestSupport {
     private final ChzzkLinkStateCodec stateCodec;
     private final ChzzkLinkWriter linkWriter;
     private final ChzzkCleanupExecutor cleanup;
+    private final YoutubeLinkStateCodec youtubeCodec;
+    private final YoutubeLinkWriter youtubeWriter;
+    private final YoutubeCleanupExecutor youtubeCleanup;
+    private final com.pokeclip.auth.youtube.YoutubeChannelLinkRepository youtubeLinks;
 
     SecretLeakTest(MockMvc mockMvc, TokenService tokenService, UserService userService,
                    UserRepository userRepository,
                    RefreshTokenRepository refreshTokenRepository,
                    JdbcTemplate jdbcTemplate, Environment environment,
-                   ChzzkLinkStateCodec stateCodec, ChzzkLinkWriter linkWriter, ChzzkCleanupExecutor cleanup) {
+                   ChzzkLinkStateCodec stateCodec, ChzzkLinkWriter linkWriter, ChzzkCleanupExecutor cleanup,
+                   YoutubeLinkStateCodec youtubeCodec, YoutubeLinkWriter youtubeWriter,
+                   YoutubeCleanupExecutor youtubeCleanup,
+                   com.pokeclip.auth.youtube.YoutubeChannelLinkRepository youtubeLinks) {
         this.mockMvc = mockMvc;
         this.tokenService = tokenService;
         this.userService = userService;
@@ -155,6 +178,10 @@ class SecretLeakTest extends IntegrationTestSupport {
         this.stateCodec = stateCodec;
         this.linkWriter = linkWriter;
         this.cleanup = cleanup;
+        this.youtubeCodec = youtubeCodec;
+        this.youtubeWriter = youtubeWriter;
+        this.youtubeCleanup = youtubeCleanup;
+        this.youtubeLinks = youtubeLinks;
     }
 
     /**
@@ -168,6 +195,7 @@ class SecretLeakTest extends IntegrationTestSupport {
         registry.add("pokeclip.google.client-secret", () -> CLIENT_SECRET);
         registry.add("pokeclip.jwt.secret", () -> JWT_SECRET);
         registry.add("pokeclip.chzzk.app.client-secret", () -> CHZZK_CLIENT_SECRET);
+        registry.add("pokeclip.youtube.app.client-secret", () -> YT_CLIENT_SECRET);
     }
 
     @AfterAll
@@ -178,6 +206,7 @@ class SecretLeakTest extends IntegrationTestSupport {
     @BeforeEach
     void setUp() {
         CHZZK.reset();   // 같은 static 가짜 서버를 다른 클래스와 나눠 쓴다. 여기서 심은 needle이 다음으로 새지 않게.
+        YOUTUBE.reset();
         clearStreamKeyChildren();
         refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
@@ -187,6 +216,7 @@ class SecretLeakTest extends IntegrationTestSupport {
     @AfterEach
     void tearDown() {
         cleanup.awaitIdle(Duration.ofSeconds(5));   // 전용 스레드의 정리가 다음 클래스의 CHZZK.reset() 뒤에 도착하지 않게
+        youtubeCleanup.awaitIdle(Duration.ofSeconds(5));   // 유튜브 쪽도 같은 이유 — 안 걸면 정리 로그가 다음 클래스로 샌다
         clearStreamKeyChildren();
         refreshTokenRepository.deleteAll();
     }
@@ -194,6 +224,7 @@ class SecretLeakTest extends IntegrationTestSupport {
     /** FK 함정. 자식 행을 남기면 다른 테스트의 부모 정리를 막는다. */
     private void clearStreamKeyChildren() {
         jdbcTemplate.update("DELETE FROM chzzk_channel_links");
+        jdbcTemplate.update("DELETE FROM youtube_channel_links");
         jdbcTemplate.update("DELETE FROM pairing_exchange_attempts");
         jdbcTemplate.update("DELETE FROM pairing_codes");
         jdbcTemplate.update("DELETE FROM stream_keys");
@@ -474,6 +505,189 @@ class SecretLeakTest extends IntegrationTestSupport {
     }
 
     /**
+     * {@code org.hibernate.orm.jdbc.error}를 WARN으로 올리면 유니크 위반 메시지에 <b>컬럼 값이 그대로</b> 실린다
+     * ({@code Key (channel_id)=(…) already exists}). 채널 ID는 로그에 안 찍는 값이므로 그 한 줄이 방어선이고,
+     * 지금까지 어느 검사도 그것을 못박지 않았다(감사 1라운드 사소-D).
+     *
+     * <p>web 로거와 같은 모양으로 잰다 — 기본값 없는 {@code getProperty}(줄이 사라지면 빨간불) +
+     * <b>양성 재현</b>(WARN에서 실제로 새는 것). 음성(기본 레벨에서 안 샘)은 같은 흐름에서 이어 잰다.
+     */
+    @Test
+    void 하이버네이트_JDBC_오류를_WARN으로_켜면_채널ID가_새므로_설정에서_켜지_않는다() {
+        String level = environment.getProperty("logging.level." + HIBERNATE_JDBC_ERROR_LOGGER);
+        assertThat(level).as("application.yml에 이 로거 레벨이 박혀 있어야 root를 내려도 버틴다").isNotNull();
+        assertThat(Level.toLevel(level, Level.DEBUG).toInt())
+                .as("아래가 재현하는 유출이 이 레벨에서 열린다: " + level)
+                .isGreaterThanOrEqualTo(Level.ERROR.toInt());
+        Level levelBefore = levelOf(HIBERNATE_JDBC_ERROR_LOGGER);
+        assertThat(levelBefore).isNotNull();
+
+        var owner = userService.findOrCreate(needle("yt-dup-owner"), "dup1@example.com", "김태현", null);
+        var other = userService.findOrCreate(needle("yt-dup-other"), "dup2@example.com", "김태현", null);
+        youtubeWriter.create(owner.getId(), new YoutubeChannel(YT_CHANNEL_ID, "채널"),
+                new YoutubeTokens(YT_ACCESS, YT_REFRESH, Duration.ofHours(1), null));
+
+        // ① 기본 레벨(error) — 같은 위반을 내도 값이 안 샌다.
+        try (LogCaptor quiet = new LogCaptor()) {
+            assertThatThrownBy(() -> insertDuplicateChannel(other.getId()))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            assertNoSecretsIn(quiet, List.of(YT_CHANNEL_ID));
+        }
+
+        // ② WARN으로 올리면 — 같은 위반이 채널 ID를 통째로 찍는다. 이 재현이 ①의 근거다.
+        try (LogCaptor loud = new LogCaptor()) {
+            setLevel(HIBERNATE_JDBC_ERROR_LOGGER, Level.WARN);
+            try {
+                assertThatThrownBy(() -> insertDuplicateChannel(other.getId()))
+                        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+            } finally {
+                setLevel(HIBERNATE_JDBC_ERROR_LOGGER, levelBefore);
+            }
+            assertThat(renderAll(loud))
+                    .as("WARN에서 더는 안 샌다면 application.yml의 그 줄을 다시 볼 때다")
+                    .contains(YT_CHANNEL_ID);
+        }
+    }
+
+    /** 사전 조회를 거치지 않고 DB 유니크(uq_youtube_links_alive_channel)까지 그대로 보낸다 — Hibernate가 그 예외를 찍는 자리다. */
+    private void insertDuplicateChannel(Long userId) {
+        youtubeLinks.saveAndFlush(com.pokeclip.auth.youtube.YoutubeChannelLink.of(
+                userId, YT_CHANNEL_ID, "채널", null, "youtube-access:dup", "youtube-refresh:dup",
+                Instant.now().plus(Duration.ofHours(1)), Instant.now()));
+    }
+
+    /**
+     * 유튜브 연동 경로 전체를 HTTP로 태운다 — 정상 연동·즉석 갱신·해제·재연동·교환 거부·갱신 거부.
+     * 가짜 구글이 바늘 토큰·바늘 채널을 돌려주고, 거부 본문에도 바늘을 싣는다(핸들러가 원인 본문을
+     * 옮기기 시작하면 여기서 걸린다). 바늘이 <b>실제로 구글로 나갔는지</b>도 함께 재므로
+     * 「경로가 안 돌아서 초록」이 되지 않는다.
+     */
+    @Test
+    void 유튜브_연동_경로를_돌려도_토큰_code_채널이_로그에_남지_않는다() throws Exception {
+        var user = userService.findOrCreate(needle("youtube-sub"), "yt@example.com", "김태현", null);
+        String bearer = "Bearer " + tokenService.issue(user).accessToken();
+        String state = youtubeCodec.issue(user.getId(), Instant.now());
+        YOUTUBE.tokenResponds(200, tokenJson(YT_ACCESS, YT_REFRESH));
+        YOUTUBE.channelsResponds(200, "{\"items\":[{\"id\":\"" + YT_CHANNEL_ID
+                + "\",\"snippet\":{\"title\":\"채널\"}}]}");
+        List<String> needles = List.of(YT_ACCESS, YT_REFRESH, YT_CODE, YT_CLIENT_SECRET, YT_CHANNEL_ID,
+                state, JWT_SECRET);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            // ① 동의 URL — 여기에 시크릿이 실리면 브라우저 주소창에 그대로 남는다.
+            String startBody = mockMvc.perform(post("/api/youtube-link/start").header("Authorization", bearer))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(startBody).as("동의 URL에는 시크릿이 없다").doesNotContain(YT_CLIENT_SECRET);
+            assertThat(startBody).as("동의 URL 형태가 맞는지").contains("access_type=offline");
+
+            // ② 연동 — 응답에 채널은 있고 토큰은 없다.
+            String linked = mockMvc.perform(post("/api/youtube-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + YT_CODE + "\",\"state\":\"" + state + "\"}"))
+                    .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+            assertThat(linked).contains(YT_CHANNEL_ID).doesNotContain(YT_ACCESS).doesNotContain(YT_REFRESH);
+            assertThat(YOUTUBE.tokenRequests()).as("바늘이 실제로 구글로 나갔다").anySatisfy(r ->
+                    assertThat(r).containsEntry("code", YT_CODE).containsEntry("client_secret", YT_CLIENT_SECRET));
+
+            // ③ 내부 창구 — 여기서는 토큰을 준다(그것이 계약이다). 로그에는 남지 않아야 한다.
+            String resolved = mockMvc.perform(post("/internal/youtube-link/resolve")
+                            .header("X-Internal-Token", INTERNAL_TOKEN)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"userId\":" + user.getId() + "}"))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(resolved).contains(YT_ACCESS).contains(YT_CHANNEL_ID);
+
+            // ④ 즉석 갱신 — access를 만료시켜 갱신 경로를 태운다. 새 바늘도 안 새야 한다.
+            String refreshedAccess = needle("youtube-access-refreshed");
+            jdbcTemplate.update("UPDATE youtube_channel_links SET access_expires_at = now() - interval '1 hour' "
+                    + "WHERE user_id = ?", user.getId());
+            YOUTUBE.tokenResponds(200, tokenJson(refreshedAccess, null));   // 갱신 응답엔 refresh가 없다(실물)
+            String refreshed = mockMvc.perform(post("/internal/youtube-link/resolve")
+                            .header("X-Internal-Token", INTERNAL_TOKEN)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"userId\":" + user.getId() + "}"))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(refreshed).contains(refreshedAccess);
+            assertThat(YOUTUBE.tokenRequests()).anySatisfy(r -> assertThat(r).containsEntry("refresh_token", YT_REFRESH));
+            // 커밋 뒤 로그가 정리 스레드가 아니라 요청 스레드에서 찍혀 상관 ID가 살아 있다.
+            assertThat(captor.mdcOf("auth.youtube.link.refreshed", RequestIdFilter.MDC_KEY)).isNotBlank();
+            assertThat(captor.events()).filteredOn(ev -> ev.getFormattedMessage().startsWith("auth.youtube.link.refreshed"))
+                    .isNotEmpty()
+                    .allSatisfy(ev -> assertThat(ev.getThreadName()).doesNotStartWith("youtube-cleanup-"));
+
+            // ⑤ 해제 → 재연동. 두 경로의 커밋 뒤 로그(unlinked·relinked)가 실제로 찍히는지도 여기서 못박는다.
+            mockMvc.perform(delete("/api/youtube-link").header("Authorization", bearer))
+                    .andExpect(status().isNoContent());
+            assertThat(youtubeCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
+            assertThat(YOUTUBE.revokeCalls()).as("해제는 구글에 아무것도 보내지 않는다").isZero();
+            YOUTUBE.tokenResponds(200, tokenJson(YT_ACCESS, YT_REFRESH));
+            String state2 = youtubeCodec.issue(user.getId(), Instant.now());
+            mockMvc.perform(post("/api/youtube-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + YT_CODE + "\",\"state\":\"" + state2 + "\"}"))
+                    .andExpect(status().isCreated());
+            youtubeWriter.create(user.getId(), new YoutubeChannel(YT_CHANNEL_ID, "채널"),
+                    new YoutubeTokens(YT_ACCESS, YT_REFRESH, Duration.ofHours(1), null));   // relinked 경로
+            assertThat(youtubeCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
+
+            // ⑥ 교환 거부 — 거부 본문에 바늘이 들어 있다. 핸들러가 그것을 옮기면 여기서 걸린다.
+            YOUTUBE.tokenResponds(400, "{\"error\":\"invalid_grant\",\"error_description\":\"bad code "
+                    + YT_CODE + " secret " + YT_CLIENT_SECRET + "\"}");
+            String rejected = mockMvc.perform(post("/api/youtube-link").header("Authorization", bearer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"code\":\"" + YT_CODE + "\",\"state\":\""
+                                    + youtubeCodec.issue(user.getId(), Instant.now()) + "\"}"))
+                    .andExpect(status().isBadRequest()).andReturn().getResponse().getContentAsString();
+            assertThat(rejected).contains("INVALID_CODE").doesNotContain(YT_CODE).doesNotContain(YT_CLIENT_SECRET);
+
+            // ⑦ 갱신 거부 → BROKEN. 거부 본문에 refresh 바늘을 싣는다.
+            jdbcTemplate.update("UPDATE youtube_channel_links SET access_expires_at = now() - interval '1 hour' "
+                    + "WHERE user_id = ? AND revoked_at IS NULL", user.getId());
+            YOUTUBE.tokenResponds(400, "{\"error\":\"invalid_grant\",\"error_description\":\"revoked "
+                    + YT_REFRESH + "\"}");
+            String broken = mockMvc.perform(post("/internal/youtube-link/resolve")
+                            .header("X-Internal-Token", INTERNAL_TOKEN)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"userId\":" + user.getId() + "}"))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            assertThat(broken).contains("BROKEN");
+            assertThat(youtubeCleanup.awaitIdle(Duration.ofSeconds(5))).isTrue();
+
+            assertThat(captor.messages())
+                    .as("경로가 아예 안 돌았다. 그러면 아무것도 검사하지 않은 것이다")
+                    .anyMatch(m -> m.startsWith("auth.youtube.link.created"))
+                    .anyMatch(m -> m.startsWith("auth.youtube.link.refreshed"))
+                    .anyMatch(m -> m.startsWith("auth.youtube.link.unlinked"))
+                    .anyMatch(m -> m.startsWith("auth.youtube.link.relinked"))
+                    .anyMatch(m -> m.startsWith("auth.youtube.link.rejected"))
+                    .anyMatch(m -> m.startsWith("auth.youtube.link.refresh_rejected"));
+            assertNoSecretsIn(captor, needles);
+            assertNoSecretsIn(captor, List.of(refreshedAccess));
+            assertNoSecretsIn(broken, List.of(YT_ACCESS, YT_REFRESH, refreshedAccess));
+
+            // ⑧ 통째로 찍는 코드가 들어온 것 자체를 잡는다. record toString은 단순 이름만 쓰므로
+            //    LinkResult[·LinkSnapshot[·RefreshResult[·LinkStatusResponse[는 위 치지직 목록이 이미 덮는다.
+            assertThat(String.join("\n", captor.messages()))
+                    .doesNotContain("YoutubeTokens[")
+                    .doesNotContain("YoutubeChannel[")
+                    .doesNotContain("YoutubeResolveResult[")
+                    .doesNotContain("YoutubeResolveResponse[")
+                    .doesNotContain("LinkResult[")
+                    .doesNotContain("LinkSnapshot[")
+                    .doesNotContain("RefreshResult[")
+                    .doesNotContain("LinkStatusResponse[");
+        }
+    }
+
+    /** 구글 토큰 응답 한 벌. refresh가 null이면 빼고 만든다 — 갱신 응답의 실물 모양이다. */
+    private static String tokenJson(String access, String refresh) {
+        return "{\"access_token\":\"" + access + "\""
+                + (refresh == null ? "" : ",\"refresh_token\":\"" + refresh + "\"")
+                + ",\"expires_in\":3600,\"token_type\":\"Bearer\",\"scope\":\""
+                + com.pokeclip.auth.support.FakeYoutubeServer.SCOPE_GRANTED + "\"}";
+    }
+
+    /**
      * 치지직 쪽 DEBUG 유출 재현(감사 1회차 실측). {@code DefaultRestClient.logBody}는 폼뿐 아니라
      * JSON(Map) 본문도 {@code Writing [{clientId=…, clientSecret=…, code=…, state=…}]}로 통째로 찍는다 —
      * client_secret·code·state·refresh 토큰 원문 넷이 샌다. {@code application.yml}의
@@ -571,6 +785,12 @@ class SecretLeakTest extends IntegrationTestSupport {
         assertThat(constraintsOn(LinkRequest.class, "code")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(LinkRequest.class, "state")).containsExactly(NotBlank.class);
         assertThat(constraintsOn(ChzzkResolveRequest.class, "userId")).containsExactly(NotNull.class);
+        assertThat(constraintsOn(YoutubeResolveRequest.class, "userId")).containsExactly(NotNull.class);
+        // 유튜브 LinkRequest는 FQN이다 — 위에서 치지직 LinkRequest를 이미 import했다.
+        assertThat(constraintsOn(com.pokeclip.auth.youtube.api.dto.LinkRequest.class, "code"))
+                .containsExactly(NotBlank.class);
+        assertThat(constraintsOn(com.pokeclip.auth.youtube.api.dto.LinkRequest.class, "state"))
+                .containsExactly(NotBlank.class);
     }
 
     /**

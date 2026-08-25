@@ -61,3 +61,21 @@ pokeclip:
       # 컨텍스트마다 틱이 돌면 DB를 뒤지고 HTTP를 시도한다. 배선은 ChzzkTokenRefreshSchedulerTest가 잰다.
       enabled: false
       interval: PT10M
+  youtube:
+    app:
+      client-id: test-youtube-client-id
+      client-secret: test-youtube-client-secret
+      redirect-uri: http://localhost:8081/oauth/youtube/callback
+    authorize-uri: https://accounts.google.com/o/oauth2/v2/auth
+    # 자리표시다. @NotBlank라 비울 수 없고, 실제 주소는 IntegrationTestSupport·RealServerTestSupport가
+    # @DynamicPropertySource로 가짜 서버(FakeYoutubeServer)로 덮어쓴다(DynamicPropertySource가 yml보다 우선).
+    token-uri: http://127.0.0.1:1
+    revoke-uri: http://127.0.0.1:1
+    api-base-uri: http://127.0.0.1:1
+    state-ttl: PT10M
+    resolve-min-remaining: PT30M
+    check:
+      # 치지직 갱신 스케줄러와 같은 이유로 끈다. 배선은 전용 테스트가 잰다.
+      enabled: false
+      interval: PT1H
+      staleness: PT24H

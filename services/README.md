@@ -121,19 +121,25 @@ set -a && . ../.env && set +a
 | `chat-collector` | `./gradlew :chat-collector:bootRun` | http://localhost:8083/actuator/health |
 | `chat-detector` | `./gradlew :chat-detector:bootRun` | http://localhost:8084/actuator/health |
 
-**`auth`는 환경변수 없이는 일부러 부팅에 실패한다. 열둘이고, 두 갈래로 나뉜다.**
+**`auth`는 환경변수 없이는 일부러 부팅에 실패한다. 열다섯이고, 두 갈래로 나뉜다.**
 
 | 갈래 | 변수 | 어디서 얻나 |
 |---|---|---|
-| **앱 시크릿 아홉** | `JWT_SECRET` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `CORS_ALLOWED_ORIGINS` · `SECRET_STORE_KEY`(base64 32바이트) · `INTERNAL_API_TOKEN` · `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` · `CHZZK_REDIRECT_URI` | **`.env.example`에 없다** — public 저장소라 예시 값도 두지 않는다. 각자 받아서 넣는다 |
+| **앱 시크릿 열둘** | `JWT_SECRET` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `CORS_ALLOWED_ORIGINS` · `SECRET_STORE_KEY`(base64 32바이트) · `INTERNAL_API_TOKEN` · `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` · `CHZZK_REDIRECT_URI` · `YOUTUBE_CLIENT_ID` · `YOUTUBE_CLIENT_SECRET` · `YOUTUBE_REDIRECT_URI` | **`.env.example`에 없다** — public 저장소라 예시 값도 두지 않는다. 각자 받아서 넣는다 |
 | **DB 접속값 셋** | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | `.env`에 있다. 위 실행 절차의 `set -a && . ../.env` 줄이 싣는다 |
 
-**막는 방식이 갈래마다 다르다.** 앱 시크릿 아홉은 빈 기본값(`${VAR:}`)을 주고 부팅 검증으로
+**막는 방식이 갈래마다 다르다.** 앱 시크릿 열둘은 빈 기본값(`${VAR:}`)을 주고 부팅 검증으로
 잡는다 — 기본값을 아예 안 주면 리터럴 `"${VAR}"`이 바인딩돼 **서버는 뜨고 헬스체크도
 통과하는데 그 기능만 전부 실패하기** 때문이다. DB 접속값 셋은 반대로 기본값 자체를 없앴다(POK-161).
 그쪽은 서버가 실제로 접속을 시도하는 값이라 리터럴이 들어가도 접속 실패로 죽어 신호가 남는다.
 
-**IDE로 띄운다면** 실행 구성의 환경변수에 위 열둘을 넣거나, `.env`를 읽어 주는 플러그인을 쓴다.
+**🔴 이 표에 값을 더하면 `docker-compose.dev.yml`의 `auth` 블록과 `.env.dev.example`에도 같이 넣어라.**
+컨테이너는 호스트 셸의 변수를 자동으로 물려받지 않는다 — 표에만 적으면 **dev 배포만 부팅 실패 루프**에 빠지고
+로컬·CI는 전부 초록이다(같은 함정을 POK-127이 chat-collector에서 실물로 겪었다. 아래 「나머지」 절 참고).
+**POK-121이 이 규칙을 그대로 어겼고**(유튜브 셋을 표에만 적었다) 봇 리뷰가 잡았다 —
+그래서 지금은 `DeploymentEnvVarsTest`가 auth의 필수 변수와 두 파일을 대조한다.
+
+**IDE로 띄운다면** 실행 구성의 환경변수에 위 열다섯을 넣거나, `.env`를 읽어 주는 플러그인을 쓴다.
 `application-local.yml`(gitignore) 프로파일만으로는 부족하다 — 그 파일은 앱 시크릿만 채우고
 DB 접속값은 채우지 않는다.
 
@@ -152,6 +158,23 @@ DB 접속값은 채우지 않는다.
 | `CHZZK_CLIENT_ID` | 치지직 개발자 센터 앱의 Client ID. 동의 URL에 그대로 실린다 |
 | `CHZZK_CLIENT_SECRET` | 그 앱의 Client Secret. 토큰 교환·갱신·철회 요청 본문에만 쓰고 URL·로그 어디에도 안 나간다 |
 | `CHZZK_REDIRECT_URI` | 동의가 끝난 뒤 치지직이 code·state를 돌려줄 주소. **웹 프론트의 콜백 라우트**(`/oauth/chzzk/callback`)를 가리켜야 한다 — 백엔드가 받는 주소가 아니다. **개발자 센터에 앱당 하나만 등록된다**(그래서 환경마다 앱을 따로 판다): 로컬 `http://localhost:3000/oauth/chzzk/callback` · dev `http://dev.pokeclip.com/oauth/chzzk/callback` |
+
+**유튜브 셋도 한 덩어리다.** 같은 이유로 셋 중 무엇이 비든 한 메시지
+(`유튜브 앱 설정(YOUTUBE_CLIENT_ID·YOUTUBE_CLIENT_SECRET·YOUTUBE_REDIRECT_URI)이 비었다`)로 죽는다.
+**로그인용 구글 앱(`GOOGLE_*`)과 다른 GCP 앱이다** — 업로드 권한은 프로젝트 단위 심사 대상이라
+폭발 반경을 나눴다. 로그인 앱이 심사에 걸려도 로그인은 계속 돌아야 한다.
+
+| | 뜻 |
+|---|---|
+| `YOUTUBE_CLIENT_ID` | GCP 콘솔 OAuth 클라이언트의 Client ID. 동의 URL에 그대로 실린다 |
+| `YOUTUBE_CLIENT_SECRET` | 그 앱의 Client Secret. 토큰 교환·갱신·철회 요청 본문에만 쓰고 URL·로그 어디에도 안 나간다 |
+| `YOUTUBE_REDIRECT_URI` | 동의가 끝난 뒤 구글이 code·state를 돌려줄 주소. **웹 프론트의 콜백 라우트**(`/oauth/youtube/callback`)다 — 백엔드 주소가 아니다. GCP 콘솔에는 여러 개를 등록할 수 있어 치지직과 달리 환경마다 앱을 나눌 필요는 없다. 🔴 **비-localhost는 `https`여야 한다** — 구글이 http 리디렉션을 `localhost`·`127.0.0.1`에만 허용한다. (`GOOGLE_REDIRECT_URI`가 아직 http인 것은 별개 항목이다 — POK-205에서 함께 정리한다) |
+
+🔴 **테스트 모드에서는 refresh 토큰이 7일이면 죽는다.** 앱이 「테스트」 상태인 동안 구글이 주는
+refresh는 **7일 −1초**(실측: 교환 응답에 `refresh_token_expires_in: 604799`가 실려 온다)만 산다.
+그 뒤로는 갱신이 `invalid_grant`로 거부돼 연동이 `BROKEN`이 되고, 사용자가 **재동의**해야 풀린다.
+데모 계정은 주 1회 재연동이 필요하다는 뜻이다. 해소 수단은 **OAuth 동의 화면 심사 통과**뿐이다
+(우리 코드로 늘릴 수 없다). 우리는 그 필드를 읽지 않는다 — 판정은 갱신 거부로만 한다.
 
 **`clip`은 환경변수 없이는 부팅에 실패한다. 일곱이고, auth와 같은 두 갈래다.**
 
@@ -574,6 +597,11 @@ auth·clip·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 �
 | `GET /api/chzzk-link` | 웹 | 사용자 JWT |
 | `DELETE /api/chzzk-link` | 웹 | 사용자 JWT |
 | `POST /internal/chzzk-link/resolve` | **chat-collector** | `X-Internal-Token` 헤더 |
+| `POST /api/youtube-link/start` | 웹 | 사용자 JWT |
+| `POST /api/youtube-link` | 웹 | 사용자 JWT |
+| `GET /api/youtube-link` | 웹 | 사용자 JWT |
+| `DELETE /api/youtube-link` | 웹 | 사용자 JWT |
+| `POST /internal/youtube-link/resolve` | **clip·업로드 워커** | `X-Internal-Token` 헤더 |
 | `POST /api/editor-invitations` | 웹 | 사용자 JWT |
 | `GET /api/editor-invitations/sent` | 웹 | 사용자 JWT |
 | `GET /api/editor-invitations/received` | 웹 | 사용자 JWT |
@@ -1017,6 +1045,97 @@ secrets 삭제 뒤에 찍힌다(정리까지 끝났다는 순서 로그) — 큐
 WARN이 신호다. requestId는 잡이 값으로 옮긴다. 정리 스레드 자체의 것은 `auth.chzzk.cleanup.<event>` —
 `rejected`(큐 상한 초과, WARN)·`failed`·`shutdown_timeout`.
 값은 userId·status·hint·causeType·reason·pending만 — 토큰·code·state·channelId는 찍지 않는다.
+
+### 유튜브 채널 연동 (POK-121)
+
+**로그인용 구글과 별개 앱이다.** 스트리머가 자기 유튜브 채널을 한 번 묶어 두면, 업로드 워커가
+그 스트리머의 access token을 auth에서 받아 클립을 올린다. 왕복 모양은 치지직과 같다 —
+`POST /api/youtube-link/start`가 준 `authorizeUrl`로 프론트가 사용자를 보내고, 구글이
+`YOUTUBE_REDIRECT_URI`로 돌려준 `code`·`state`를 프론트가 `POST /api/youtube-link {code, state}`로 넘긴다.
+
+🔴 **채널은 동의 시점에 정해지고, 나중에 바꿀 수 없다 (2026-08-24 실측).** 구글 동의 화면이
+계정·브랜드 계정을 고르게 하고, 그 토큰으로 `channels.list?mine=true`를 부르면 **고른 채널 하나만**
+돌아온다(브랜드 계정 `PokeClip2`·개인 계정 `PokeClip1` 둘 다 `totalResults: 1`). 다른 채널은 그 토큰으로
+**보이지도 접근되지도 않는다.** 그래서 **채널 목록·재선택 API가 없다** — 만들려다 실측으로 접었다.
+**채널을 바꾸는 수단은 재연동뿐이다**(같은 `POST /api/youtube-link`가 옛 행을 닫고 새 행을 만든다).
+하위 티켓 POK-142의 「채널이 둘 이상이면 고를 수 있다」는 구조적으로 성립하지 않는다.
+
+동의 URL에는 `access_type=offline`·`prompt=consent`가 **둘 다** 있어야 refresh 토큰이 온다.
+scope는 둘 — 업로드(`youtube.upload`)와 채널 조회(`youtube.readonly`). **upload만으로는
+`channels.list`가 403 `insufficientPermissions`다**(실측). 받은 scope에 upload가 없으면 400
+`SCOPE_MISSING`으로 거절한다(응답의 scope 순서는 요청과 반대로 온다 — 우리 대조는 포함 여부다).
+
+| | 응답 |
+|---|---|
+| `POST /api/youtube-link/start` | 200 `{authorizeUrl}` — `state`는 URL 안에 있다(표 없이 서명, 10분) |
+| `POST /api/youtube-link` `{code, state}` | 201 `{channelId, channelName, linkedAt}` · 400 `INVALID_STATE` · 400 `INVALID_CODE`(구글이 교환·채널 조회를 4xx로 거부 — code 소모·만료·권한 부족, **동의부터 다시**) · 400 `SCOPE_MISSING`(업로드 권한 미동의) · 400 `NO_CHANNEL`(구글 계정에 유튜브 채널이 없다 — 먼저 만들어야 한다) · 409 `CHANNEL_ALREADY_LINKED` · 502 `YOUTUBE_UNAVAILABLE`(5xx·타임아웃·429·408·`invalid_client`·**403 할당량**) |
+| `GET /api/youtube-link` | 200 `{linked:false}` 또는 `{linked, channelId, channelName, status, linkedAt, lastRefreshedAt, accessExpiresAt}`. `status` ∈ `ACTIVE`·`BROKEN`·`UNLINKED`(파생). **치지직과 달리 `EXPIRED`가 없다** — 구글 access는 1시간짜리라 늘 만료돼 있고 갱신으로 항상 해소되므로 상태가 아니다. `linked`는 `ACTIVE`일 때만 true |
+| `DELETE /api/youtube-link` | 204 (없어도 204). 행은 남고(`revoked_at`+`USER_UNLINKED`) 커밋 뒤에 secrets 삭제. 🔴 **구글에는 revoke를 보내지 않는다** — 아래 |
+| `POST /internal/youtube-link/resolve` `{userId}` | **항상 200** — 아래 |
+
+오류 본문은 `{"reason": "<위 코드>"}` 한 필드다. 토큰·code·state·채널 ID는 응답·로그 어디에도 안 남는다
+(`SecretLeakTest`가 왕복 전체를 태워 확인한다).
+
+🔴 **구글 revoke는 「그 토큰 쌍」이 아니라 그 사용자가 이 앱에 준 동의 전부를 죽인다.**
+공식 문서대로이고 실측으로도 확인했다(1차 refresh만 revoke했더니 직전까지 갱신되던 2차 refresh가
+`400 invalid_grant`로 죽었다). **치지직의 「쌍 무효화」와 근본이 다르다.**
+
+🔴 **그래서 revoke를 부르는 자리가 하나뿐이다.** 처음엔 갈래를 넷으로 갈라 조건을 붙였는데,
+봇 리뷰 세 판에 걸쳐 **조건으로는 못 막는다**는 것이 재현으로 드러나 결국 뺐다(2026-08-24).
+근본 원인은 하나다 — **revoke의 영향 범위는 「그 구글 계정」인데 우리가 가진 판별자는 「회원·채널」뿐**이고,
+그것조차 없는 경로(scope 미달)와 표에 아직 없는 순간(교환 직후·저장 전)이 있다.
+
+| 경로 | revoke | 왜 |
+|---|---|---|
+| **갱신 거부 → `BROKEN`** | **부른다**(1회) | 그 토큰은 이미 `invalid_grant`로 죽어 있다 — 살아있는 grant에 닿지 않으므로 남을 해칠 수 없다. **유일하게 남은 자리다** |
+| **사용자 해제 `DELETE`** | **안 부른다** | 계정 단위라 같은 채널을 방금 연동한 **다른 회원**의 연동까지 끊는다. 대신 secrets를 지워 **우리가 못 쓰게** 하고, 사용자는 구글 계정 화면에서 직접 지운다(아래 「웹에 필요한 것」) |
+| **재연동** | **안 부른다** | 새 동의가 옛 grant를 대체한다. 부르면 방금 저장한 새 토큰이 죽는다 |
+| **연동 실패 정리**(scope 없음·채널 0개·409·5xx) | **안 부른다** | scope 미달은 **채널을 읽기도 전에** 갈려 판별자가 아예 없다. 버려진 access는 1시간이면 스스로 죽는다 |
+
+**`resolve`(업로드 워커용) 계약.** `POST /internal/youtube-link/resolve {userId}` — `X-Internal-Token`
+헤더, `/internal/**` 체인(치지직 `resolve`와 같은 문). **우리 회원 번호(`users.id`)만 받는다.**
+**항상 HTTP 200**이다: `{valid:true, channelId, accessToken, expiresAt}` 또는 `{valid:false, reason}`.
+`reason`은 넷 — `NOT_LINKED`(연동한 적 없음) · `UNLINKED`(사용자가 해제) · `BROKEN`(구글이 갱신을
+거부 — 철회·테스트 모드 7일 만료, 재동의해야 풀린다) · `REFRESH_UNAVAILABLE`(즉석 갱신이 일시 실패 —
+임박한 토큰은 주지 않는다, 잠시 뒤 다시 부르면 된다). 거절 응답에는 `accessToken` 필드가 아예 없다.
+**남은 수명이 30분(`resolve-min-remaining`)보다 짧으면 넘기기 전에 즉석 갱신한다** — 구글 access가
+1시간짜리라 치지직(12시간)과 자릿수가 다르다.
+
+🔴 **해제해도 구글 쪽 허락은 남는다 — 웹이 안내해야 한다(2번 몫).** `DELETE`는 우리 표의 행을 닫고
+**secrets의 토큰 원문을 지운다**(우리는 다시 못 쓴다). 그러나 구글에 `revoke`는 보내지 않는다 —
+구글 revoke는 **그 구글 계정이 우리 앱에 준 동의 전부**를 죽이므로, 같은 채널을 방금 연동한 **다른 회원**의
+연동까지 끊는다. 조건으로 막으려 세 판을 썼지만 「확인과 발사 사이」 창이 남았고, 그것을 닫으려면
+revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기했다. 근거는 `services/auth/CLAUDE.md` 「알려진 구멍」 20번.
+
+> **웹에 필요한 것**: 해제 완료 화면에 「구글 계정에서도 권한을 지우려면」 안내와
+> <https://myaccount.google.com/permissions> 링크. 이것이 사용자가 구글 쪽 허락을 지우는 유일한 수단이다.
+
+**refresh는 재사용형이다.** 갱신 응답에 `refresh_token`이 **없는 것이 정상**이고 그때는 기존 것을
+계속 쓴다(있으면 교체). 치지직 코드를 그대로 베껴 무조건 덮어쓰면 `null`을 써 넣어 연동이 통째로 죽는다.
+
+**철회 점검 스케줄러.** 치지직의 「만료 임박 선갱신」과 **축이 다르다** — 구글 access는 1시간이라
+그 기준으로는 살아있는 행이 늘 전부 걸린다. 대신 `@Scheduled`가 **1시간마다**
+(`pokeclip.youtube.check.interval=PT1H`) **24시간 넘게 확인 안 한**(`staleness=PT24H`) 살아있는 연동만
+골라 갱신을 한 번 시도한다. 사용자가 구글 쪽에서 권한을 끊은 것을 **업로드 직전이 아니라 미리**
+드러내는 것이 목적이다. 회원당 구글 호출은 하루 1회다. `pokeclip.youtube.check.enabled`는 **기본
+켜짐**이고 프로퍼티를 빠뜨려도 켜진다(`matchIfMissing`) — 테스트 프로파일만 명시적으로 끈다.
+
+**종료 유예 15초 이상** — 치지직과 같은 이유다. 커밋 뒤 정리(secrets 삭제)가 전용 스레드
+2개(`YoutubeCleanupExecutor`)에서 돌고 종료 시 최대 3초 기다린다(넘기면 인터럽트하고 1초 더).
+두 서버가 각자 스레드 2개를 쓰고, **치지직 10초 + 유튜브 4초 = 14초**가 위 15초의 근거다 —
+유튜브가 짧은 이유는 정리 잡에 외부 HTTP가 거의 없기 때문이다(구글 revoke를 걷어냈다).
+
+로그는 `auth.youtube.link.<event> userId=` 영어 한 줄이다(`created`·`relinked`·`unlinked`·`refreshed`·
+`refresh_rejected`·`refresh_failed`·`check_tick_failed`·`check_batch_capped`(INFO — 후보가 틱당 상한 25를 넘어
+잘렸다, 남은 후보는 다음 틱이 가져간다)·`rejected`·`unavailable`·`scope_missing`·`no_channel`·
+`orphan_token`(WARN — 5xx·타임아웃)·`token_already_dead`(INFO — 4xx, 이미 무효)·`resolve_rejected`·`failed`).
+**`orphan_token`·`token_already_dead`는 갱신 거부 경로에서만 난다** — 유일하게 revoke를 부르는 자리다.
+정리 스레드 자체의 것은
+`auth.youtube.cleanup.<event>` — `rejected`(큐 상한 초과, WARN)·`failed`·`shutdown_timeout`.
+값은 userId·status·causeType·reason만 — 토큰·code·state·channelId는 찍지 않는다.
+
+**마이그레이션은 `V109__create_youtube_channel_links.sql`이다.** 살아있는 행에만 걸리는 부분 유니크
+둘(`channel_id`·`user_id`)이 최종 방어선이고, 점검 후보용 인덱스는 `last_refreshed_at` 축이다.
 
 ### 편집자 초대 (POK-57)
 

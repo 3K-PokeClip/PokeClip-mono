@@ -32,5 +32,9 @@ public abstract class RealServerTestSupport {
         registry.add("spring.datasource.password", IntegrationTestSupport.POSTGRES::getPassword);
         // 가짜 치지직도 같은 것을 쓴다 — 없으면 test yml의 자리표시(127.0.0.1:1)로 뜬다.
         registry.add("pokeclip.chzzk.api-base-uri", IntegrationTestSupport.CHZZK::baseUrl);
+        // IntegrationTestSupport와 쌍둥이 자리다 — 한쪽만 고치면 톰캣을 띄우는 테스트가 자리표시(127.0.0.1:1)로 뜬다.
+        registry.add("pokeclip.youtube.token-uri", IntegrationTestSupport.YOUTUBE::tokenUri);
+        registry.add("pokeclip.youtube.revoke-uri", IntegrationTestSupport.YOUTUBE::revokeUri);
+        registry.add("pokeclip.youtube.api-base-uri", IntegrationTestSupport.YOUTUBE::baseUrl);
     }
 }
