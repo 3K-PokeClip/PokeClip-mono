@@ -1,5 +1,6 @@
 package com.pokeclip.chat.detector.metrics;
 
+import com.pokeclip.chat.detector.config.DetectionProperties.Metric;
 import com.pokeclip.chat.detector.support.IntegrationTestSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,7 +39,8 @@ class ChatMetricsStoreTest extends IntegrationTestSupport {
 
     @BeforeEach
     void 내_줄만_치운다() {
-        jdbc.update("DELETE FROM chat_metrics WHERE stream_id = ?", STREAM);
+        // 접두어로 지운다 — 아래 「남의 방송」 검사가 STREAM + "-other" 도 넣는다.
+        jdbc.update("DELETE FROM chat_metrics WHERE stream_id LIKE ?", STREAM + "%");
     }
 
     private MetricRow 줄(long windowStartMs, int messageCount, int chatterCount) {
@@ -81,6 +83,73 @@ class ChatMetricsStoreTest extends IntegrationTestSupport {
     void 빈_묶음은_DB를_안_건드리고_0이다() {
         assertThat(store.upsert(List.of())).isZero();
         assertThat(줄수()).isZero();
+    }
+
+    /**
+     * 🔴 <b>지금 창은 자기 기준선에 안 들어간다.</b> 들어가면 스파이크가 자기 기준을 올려
+     * <b>클수록 덜 잡힌다</b> — 이 기능이 조용히 반대로 도는 자리다.
+     *
+     * <p>{@code window_start_ms < ?}의 부등호 하나가 그 경계다. {@code <=}로 바꿔도
+     * <b>다른 검사 마흔셋이 전부 초록</b>이었다(주입 K7, 직접 실측). 판정기 쪽 검사는
+     * 배열을 손으로 만들어 넘기므로 <b>조회가 무엇을 담아 주는지는 안 본다.</b>
+     */
+    @Test
+    void 기준선에_지금_창은_안_들어간다() {
+        store.upsert(List.of(줄(1_000_000L, 10, 5), 줄(1_005_000L, 12, 6), 줄(1_010_000L, 999, 300)));
+
+        int[] counts = store.baselineCounts(STREAM, 5_000L, 1_010_000L, 0L, Metric.MESSAGE);
+
+        assertThat(counts).containsExactly(12, 10);
+        assertThat(counts).as("지금 창(999)이 자기 기준선에 섞이면 안 된다").doesNotContain(999);
+    }
+
+    /**
+     * 최신순이다. 지금은 중앙값이 순서를 안 타지만 <b>javadoc이 최신순이라고 약속</b>하고
+     * {@code ORDER BY ... DESC}가 그것만을 위해 있다. 뒤에서 「최근 N개만」처럼 순서에
+     * 기대는 코드가 붙으면 그때는 조용히 틀린다 — 약속을 지금 고정한다.
+     */
+    @Test
+    void 기준선은_최신순이다() {
+        store.upsert(List.of(줄(1_000_000L, 1, 1), 줄(1_005_000L, 2, 2), 줄(1_010_000L, 3, 3)));
+
+        assertThat(store.baselineCounts(STREAM, 5_000L, 1_015_000L, 0L, Metric.MESSAGE))
+                .containsExactly(3, 2, 1);
+    }
+
+    /** 지표를 사람 수로 바꾸면 <b>읽는 칸</b>도 바뀐다. 안 바뀌면 판정만 CHATTER고 기준선은 MESSAGE다. */
+    @Test
+    void 지표를_바꾸면_기준선도_그_칸을_읽는다() {
+        store.upsert(List.of(줄(1_000_000L, 50, 1), 줄(1_005_000L, 60, 2)));
+
+        assertThat(store.baselineCounts(STREAM, 5_000L, 1_010_000L, 0L, Metric.MESSAGE))
+                .containsExactly(60, 50);
+        assertThat(store.baselineCounts(STREAM, 5_000L, 1_010_000L, 0L, Metric.CHATTER))
+                .containsExactly(2, 1);
+    }
+
+    /** 기간 밖(너무 오래된 창)은 안 들어간다 — 「평소」는 롤링이다. */
+    @Test
+    void 기준선_기간보다_오래된_창은_빠진다() {
+        store.upsert(List.of(줄(1_000_000L, 7, 3), 줄(1_005_000L, 8, 4)));
+
+        assertThat(store.baselineCounts(STREAM, 5_000L, 1_010_000L, 1_005_000L, Metric.MESSAGE))
+                .containsExactly(8);
+    }
+
+    /** 남의 방송·다른 창 크기는 안 섞인다. */
+    @Test
+    void 남의_방송과_다른_창_크기는_기준선에_안_섞인다() {
+        store.upsert(List.of(줄(1_000_000L, 11, 5),
+                new MetricRow(STREAM, 3_000L, 1_002_000L, 77, 7),
+                new MetricRow(STREAM + "-other", 5_000L, 1_000_000L, 88, 8)));
+
+        assertThat(store.baselineCounts(STREAM, 5_000L, 1_010_000L, 0L, Metric.MESSAGE))
+                .containsExactly(11);
+    }
+
+    @Test
+    void 쌓인_창이_없으면_빈_배열이다() {
+        assertThat(store.baselineCounts(STREAM, 5_000L, 1_010_000L, 0L, Metric.MESSAGE)).isEmpty();
     }
 
     private Integer 줄수() {
