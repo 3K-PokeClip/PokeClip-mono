@@ -2,6 +2,8 @@ package com.pokeclip.chat.detector;
 
 import com.pokeclip.chat.detector.config.DetectionProperties;
 import com.pokeclip.chat.detector.metrics.ChatMetricsStore;
+import com.pokeclip.chat.detector.metrics.ChatWindowReader;
+import com.pokeclip.chat.detector.observe.LateArrivalReporter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
@@ -56,6 +58,13 @@ public class DetectorApplication {
     @Bean
     MetricsSweeper metricsSweeper(ChatMetricsStore store, DetectionProperties props) {
         return new MetricsSweeper(store, props.retention(), Instant::now);
+    }
+
+    @Bean
+    LateArrivalReporter lateArrivalReporter(ChatWindowReader reader, DetectionProperties props) {
+        return new LateArrivalReporter(reader,
+                () -> reader.activeStreams(Instant.now().minus(props.activeStreamWindow())),
+                props.windowGrace(), props.publishWindowMs(), props.lateReportInterval(), Instant::now);
     }
 
     @Bean
