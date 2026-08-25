@@ -47,6 +47,19 @@ spring:
     # "아무것도 스킵하지 않는다"를 정확히 말하려면 0이다.
     baseline-version: 0
 
+  servlet:
+    multipart:
+      # 잘라낸 512x512 PNG가 들어갈 크기. 크기 판정을 서블릿 층에서 하므로 앱이 바이트를
+      # 다 받기 전에 끊는다 — 글자로 받았다면 재기 전에 이미 다 받아 놓게 된다.
+      max-file-size: 2MB
+      # 🔴 <b>요청 상한은 파일 상한보다 커야 한다.</b> 둘을 2MB로 같게 뒀더니 정확히 2MB인
+      # 파일이 413이었다(실측) — max-file-size는 파일만 재는데 이쪽은 multipart 경계와
+      # 파트 헤더까지 더해 재므로 <b>먼저 걸린다.</b> 그러면 실효 상한이 문서가 말하는 2MB보다
+      # 작아지고, README의 「자르는 크기가 약 723px를 넘으면 거부된다」는 경계도 그만큼 낮아진다.
+      # 3MB는 파일 상한 2MB + 오버헤드에 넉넉한 여유다. 파일 자체는 여전히 위 줄이 자른다.
+      # ProfilePhotoSizeLimitTest.정확히_상한인_파일은_통과한다가 이 관계를 못박는다.
+      max-request-size: 3MB
+
   http:
     clients:
       # 단수형 spring.http.client.*는 4.0.0부터 deprecated고, 실제로 아무것도
@@ -188,3 +201,18 @@ pokeclip:
       interval: PT1H
       # 이보다 오래 확인 안 한 연동만 점검한다.
       staleness: PT24H
+  profile-photo:
+    # 창고 이름이 비면 사진 기능이 통째로 꺼진다(chat-collector의 S3_BUCKET 관례). CI·팀원 로컬 기본.
+    # 이름을 PROFILE_PHOTO_ 접두어로 두는 이유: S3_BUCKET은 chat-collector가 이미 쓴다.
+    # 같은 이름이면 .env.dev.example이 값을 하나만 가져 두 서버가 같은 창고를 가리킨다.
+    bucket: ${PROFILE_PHOTO_S3_BUCKET:}
+    region: ${AWS_REGION:ap-northeast-2}
+    # 비면 진짜 AWS. LocalStack·MinIO 등 호환 스토리지 주소(scheme+host+port).
+    endpoint: ${PROFILE_PHOTO_S3_ENDPOINT:}
+    force-path-style: ${PROFILE_PHOTO_S3_FORCE_PATH_STYLE:false}
+    # 사진 표 서명키. 로그인 토큰(JWT_SECRET)과 다른 값이어야 한다 — 같으면 두 종류가 섞일 여지가 생긴다.
+    # 창고 이름이 차 있는데 이것이 비면 PhotoProperties가 부팅을 세운다.
+    token-secret: ${PROFILE_PHOTO_TOKEN_SECRET:}
+    # 사진 주소의 앞부분(예 http://localhost:8082). 화면과 서버가 다른 주소에 있어 절대 주소가 필요하고,
+    # 요청에서 유추하면 프록시 뒤에서 틀린다(X-Forwarded 미처리 — 「알려진 구멍」).
+    base-url: ${PROFILE_PHOTO_BASE_URL:}
