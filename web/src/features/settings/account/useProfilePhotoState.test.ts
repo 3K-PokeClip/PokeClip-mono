@@ -126,6 +126,19 @@ describe('useProfilePhotoState', () => {
     expect(result.current.shaking).toBe(true);
   });
 
+  it('연속 실패에서도 복귀 페이드는 살아 있다 — 빼는 것은 흔들림뿐이다', () => {
+    const { result } = setup();
+
+    act(() => result.current.selectFile(OVERSIZE()));
+    act(() => result.current.selectFile(OVERSIZE())); // 연속 — 흔들림은 빠진다
+    expect(result.current.shaking).toBe(false);
+
+    act(() => void vi.advanceTimersByTime(2400));
+    expect(result.current.step).toBe('empty');
+    // 멀미 방지는 흔들림에 대한 것이다. 페이드까지 빼면 시안의 복귀 규칙이 깨진다
+    expect(result.current.restoring).toBe(true);
+  });
+
   it('복귀 대기 중 다시 놓으면 타이머를 취소하고 즉시 업로드로 간다', () => {
     const { result } = setup();
     act(() => result.current.selectFile(OVERSIZE()));

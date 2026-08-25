@@ -113,6 +113,13 @@ describe('AccountSettingsScreen — 표시', () => {
     expect(await screen.findByRole('button', { name: '사진 수정' })).toBeDisabled();
   });
 
+  it('me가 오기 전에는 탈퇴 진입점도 잠근다 — 이름 없는 인사말이 뜨지 않게', async () => {
+    stubFetch(() => new Promise<Response>(() => {})); // 영원히 미해결
+    renderWithProviders(<AccountSettingsScreen />);
+
+    expect(await screen.findByRole('button', { name: '탈퇴하기' })).toBeDisabled();
+  });
+
   it('접근성 위반이 없다', async () => {
     const { container } = await renderScreen();
     expect(await axe(container)).toHaveNoViolations();

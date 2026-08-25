@@ -134,8 +134,13 @@
   cursor: pointer;
 }
 
+.withdrawLink:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 /* 시인성은 호버에서만 준다 — 평소에 눈에 띄면 실수로 눌린다 */
-.withdrawLink:hover,
+.withdrawLink:hover:enabled,
 .withdrawLink:focus-visible {
   color: var(--pc-color-danger);
   text-decoration-color: var(--pc-color-danger);

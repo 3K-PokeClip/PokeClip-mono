@@ -45,7 +45,14 @@ export function AccountSettingsScreen() {
       <LoginCard email={email} />
 
       <div className={styles.withdrawRow}>
-        <button type="button" className={styles.withdrawLink} onClick={() => setWithdrawOpen(true)}>
+        {/* 저장·사진 수정과 같은 가드다 — me가 없으면 모달 인사말의 이름이 비어
+            「님, 정말 탈퇴하시나요?」가 된다 */}
+        <button
+          type="button"
+          className={styles.withdrawLink}
+          disabled={!account.editable}
+          onClick={() => setWithdrawOpen(true)}
+        >
           탈퇴하기
         </button>
       </div>

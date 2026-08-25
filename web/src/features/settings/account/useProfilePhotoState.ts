@@ -181,9 +181,12 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
       setErrorTitle(title);
       setErrorHint(hint);
       setStep('error');
-      const quiet = prefersReducedMotion() || errorStreak.current > 1;
-      setShaking(!quiet);
-      if (!quiet) {
+      // 두 억제는 이유가 달라 범위도 다르다. 동작 줄이기는 흔들림·페이드를 모두 빼고,
+      // 연속 실패는 멀미 방지로 흔들림만 뺀다 — 복귀 페이드는 그대로 둔다(시안 복귀 규칙).
+      const reducedMotion = prefersReducedMotion();
+      const skipShake = reducedMotion || errorStreak.current > 1;
+      setShaking(!skipShake);
+      if (!skipShake) {
         shakeTimer.current = setTimeout(() => setShaking(false), 340);
       }
       restoreTimer.current = setTimeout(() => {
@@ -191,7 +194,7 @@ export function useProfilePhotoState(onApply: (dataUrl: string) => void): Profil
         // 쌓여 첫 실패 뒤의 모든 실패가 조용해지고, 원인을 짚어 주던 흔들림이 사라진다.
         errorStreak.current = 0;
         setStep('empty');
-        if (quiet) return; // 동작 줄이기 — 페이드 없이 상태만 바꾼다
+        if (reducedMotion) return; // 동작 줄이기에서만 페이드를 뺀다
         setRestoring(true);
         fadeTimer.current = setTimeout(() => setRestoring(false), RESTORE_MS);
       }, ERROR_HOLD_MS);
