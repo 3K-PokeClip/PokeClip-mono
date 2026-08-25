@@ -108,6 +108,38 @@ public class ChatWindowReader {
         this.jdbc = jdbc;
     }
 
+    /**
+     * 전달 지연 분포. <b>절댓값을 쓰지 않는다</b> — 지연의 부호는 환경에 따라 뒤집히고
+     * (수집 서버가 시계 오프셋 혼입으로 −39~−70ms를 실측했다), 음수를 접으면 멀쩡한 채팅이
+     * 「늦었다」로 잡힌다. 늦은 것은 <b>양수 방향으로만</b> 늦은 것이다.
+     *
+     * <p>{@code MAX}가 아니라 {@code COALESCE(MAX(...), 0)}이다 — 줄이 없으면 {@code MAX}는
+     * {@code NULL}이고 그것을 {@code long}으로 읽으면 0이 되지만, 명시하지 않으면 다음 사람이
+     * 「없을 때 뭐가 나오지」를 다시 조사한다.
+     */
+    private static final String LATE_ARRIVALS = """
+            SELECT count(*)                                            AS total,
+                   count(*) FILTER (WHERE delay_ms > ?)                AS beyond_grace,
+                   count(*) FILTER (WHERE delay_ms > ?)                AS beyond_window_and_grace,
+                   COALESCE(MAX(delay_ms), 0)                          AS max_delay_ms
+              FROM (SELECT EXTRACT(EPOCH FROM (received_at - message_time)) * 1000 AS delay_ms
+                      FROM chat_messages
+                     WHERE stream_id = ?
+                       AND received_at >= ? AND received_at < ?) d
+            """;
+
+    /**
+     * @param graceMs           유예. 이보다 늦으면 놓칠 수 있었다
+     * @param windowAndGraceMs  발행 창 + 유예. 이보다 늦으면 반드시 놓쳤다
+     */
+    public LateArrivalCount lateArrivals(String streamId, Instant since, Instant until,
+                                         long graceMs, long windowAndGraceMs) {
+        return jdbc.queryForObject(LATE_ARRIVALS, (rs, n) -> new LateArrivalCount(
+                        rs.getLong("total"), rs.getLong("beyond_grace"),
+                        rs.getLong("beyond_window_and_grace"), rs.getLong("max_delay_ms")),
+                graceMs, windowAndGraceMs, streamId, Timestamp.from(since), Timestamp.from(until));
+    }
+
     /** 이 시각 이후로 채팅이 온 방송 번호들. 끝난 방송은 채팅이 끊겨 저절로 빠진다. */
     public List<String> activeStreams(Instant since) {
         return jdbc.queryForList(ACTIVE_STREAMS, String.class, Timestamp.from(since));
