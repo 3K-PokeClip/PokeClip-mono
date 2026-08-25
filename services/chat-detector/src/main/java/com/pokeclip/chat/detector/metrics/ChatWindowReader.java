@@ -113,15 +113,22 @@ public class ChatWindowReader {
      * (수집 서버가 시계 오프셋 혼입으로 −39~−70ms를 실측했다), 음수를 접으면 멀쩡한 채팅이
      * 「늦었다」로 잡힌다. 늦은 것은 <b>양수 방향으로만</b> 늦은 것이다.
      *
-     * <p>{@code MAX}가 아니라 {@code COALESCE(MAX(...), 0)}이다 — 줄이 없으면 {@code MAX}는
-     * {@code NULL}이고 그것을 {@code long}으로 읽으면 0이 되지만, 명시하지 않으면 다음 사람이
-     * 「없을 때 뭐가 나오지」를 다시 조사한다.
+     * <p>🔴 <b>줄이 없을 때 0을 실어 보내지 않는다.</b> 예전에는 {@code COALESCE(MAX(...), 0)}
+     * 이었는데, 그러면 {@link LateArrivalCount#EMPTY}가 {@code Long.MIN_VALUE}인 것이
+     * <b>합산에서 무력해진다</b> — {@code Math.max(MIN_VALUE, 0)}이 0이라, 지연이 전부 음수인
+     * 방송이 섞여 있어도 최댓값이 0으로 깔린다. 계획 검증 F12를 자바 쪽만 고치고
+     * <b>SQL 쪽을 안 봐서</b> 한 자리가 남아 있었다(감사가 읽다 찾았다).
+     *
+     * <p><b>그때 「도달 못 한다」던 이유가 설정값 우연이었다</b> — {@code late-report-interval}(10분)이
+     * {@code active-stream-window}(60초)보다 커서 활성 방송은 늘 줄이 있었다. 두 설정 사이에
+     * 교차 검사가 없어 앞의 값을 뒤의 값 아래로 내리면 되살아난다. <b>지금은 뿌리를 고쳤으므로
+     * 그 관계에 기대지 않는다.</b>
      */
     private static final String LATE_ARRIVALS = """
             SELECT count(*)                                            AS total,
                    count(*) FILTER (WHERE delay_ms > ?)                AS beyond_grace,
                    count(*) FILTER (WHERE delay_ms > ?)                AS beyond_window_and_grace,
-                   COALESCE(MAX(delay_ms), 0)                          AS max_delay_ms
+                   MAX(delay_ms)                                       AS max_delay_ms
               FROM (SELECT EXTRACT(EPOCH FROM (received_at - message_time)) * 1000 AS delay_ms
                       FROM chat_messages
                      WHERE stream_id = ?
@@ -134,9 +141,18 @@ public class ChatWindowReader {
      */
     public LateArrivalCount lateArrivals(String streamId, Instant since, Instant until,
                                          long graceMs, long windowAndGraceMs) {
-        return jdbc.queryForObject(LATE_ARRIVALS, (rs, n) -> new LateArrivalCount(
-                        rs.getLong("total"), rs.getLong("beyond_grace"),
-                        rs.getLong("beyond_window_and_grace"), rs.getLong("max_delay_ms")),
+        return jdbc.queryForObject(LATE_ARRIVALS, (rs, n) -> {
+                    // 줄이 없으면 MAX는 NULL이다. rs.getLong은 그것을 0으로 주므로 직접 가른다 —
+                    // 「잰 것이 없다」와 「최댓값이 0이다」는 다르다.
+                    //
+                    // 🔴 wasNull()은 <b>바로 앞에 읽은 칸</b>을 가리킨다. 다른 getLong을 먼저
+                    // 부르면 그쪽 칸의 답이 온다 — 처음에 그렇게 써서 검사가 잡았다.
+                    long max = rs.getLong("max_delay_ms");
+                    boolean 잰_것이_없다 = rs.wasNull();
+                    return new LateArrivalCount(rs.getLong("total"), rs.getLong("beyond_grace"),
+                            rs.getLong("beyond_window_and_grace"),
+                            잰_것이_없다 ? Long.MIN_VALUE : max);
+                },
                 graceMs, windowAndGraceMs, streamId, Timestamp.from(since), Timestamp.from(until));
     }
 
@@ -159,20 +175,41 @@ public class ChatWindowReader {
      * 이번 PR이 만든 표를 이번 PR이 고치는 이력을 남기지 않으려고. 카드는 급증한 창에만 나가므로
      * 이 조회의 빈도는 변환 창구 호출과 같다. {@code idx_chat_messages_stream_received}를 탄다.
      *
-     * @return 그 창에 채팅이 없으면 빈 값. 집계된 창이라 정상적으로는 늘 값이 있다
+     * <h3>🔴 {@code countedUntil} 상한이 반드시 있어야 한다</h3>
+     *
+     * 이 조회는 <b>발행 직전</b>에 도는데, 그때는 집계가 끝난 지 시간이 좀 지났다(발행권을 잡고
+     * 실행기로 넘어가고 clip 재시도까지 끼면 초 단위다). 그 사이 <b>같은 창에 늦은 채팅이 더
+     * 도착하면</b> 상한이 없을 때 {@code max}가 뒤로 밀린다.
+     *
+     * <p>그 채팅은 {@code ON CONFLICT DO NOTHING} 때문에 <b>판정에 쓰이지도 않은</b> 채팅이다.
+     * 그런데도 「우리가 다 받은 시각」을 밀어 {@code ourLatencyMs}를 <b>작게</b> 만든다 —
+     * {@code max}는 늘기만 하므로 오차가 한 방향이고, <b>목표를 재는 숫자가 늘 낙관적으로</b>
+     * 틀린다(감사 2회차 뒤 지적, 내가 코드로 확인).
+     *
+     * <p>그래서 <b>집계에 쓰인 채팅만</b> 보도록 자른다. 상한은 발행권을 잡은 시각이다 —
+     * 집계와 발행권 잡기가 <b>같은 바퀴</b>라({@code collect} 직후 {@code detectAndPublish})
+     * 밀리초 차이의 촘촘한 상한이다.
+     *
+     * <p><b>어긋나는 방향이 안전하다</b>: 실제 집계 조회는 바퀴 시각보다 <b>조금 뒤</b>에 돌므로
+     * 그 사이 도착한 채팅은 집계엔 들어가고 여기선 빠진다 — 그러면 {@code max}가 조금 이르고
+     * 우리 구간이 <b>실제보다 길게</b> 나온다. 낙관이 아니라 비관 쪽이다.
+     *
+     * @return 그 창에 <b>상한 안에</b> 도착한 채팅이 없으면 빈 값. 집계된 창은 그 정의상
+     *         집계 시점 이전에 도착한 채팅이 최소 하나 있으므로 정상적으로는 늘 값이 있다
      */
-    public Optional<Instant> lastReceivedAt(String streamId, Instant from, Instant to) {
+    public Optional<Instant> lastReceivedAt(String streamId, Instant from, Instant to, Instant countedUntil) {
         Timestamp last = jdbc.queryForObject(LAST_RECEIVED, Timestamp.class,
-                streamId, Timestamp.from(from), Timestamp.from(to));
+                streamId, Timestamp.from(from), Timestamp.from(to), Timestamp.from(countedUntil));
         return Optional.ofNullable(last).map(Timestamp::toInstant);
     }
 
-    /** 경계는 집계와 같다 — {@code >= from AND < to}. 다르면 다른 창의 채팅이 섞인다. */
+    /** 창 경계는 집계와 같다 — {@code >= from AND < to}. 다르면 다른 창의 채팅이 섞인다. */
     private static final String LAST_RECEIVED = """
             SELECT max(received_at)
               FROM chat_messages
              WHERE stream_id = ?
                AND message_time >= ? AND message_time < ?
+               AND received_at  <  ?
             """;
 
     /** {@code [from, to)} 구간을 창 크기로 묶어 센다. 채팅이 없는 창은 줄이 안 나온다. */

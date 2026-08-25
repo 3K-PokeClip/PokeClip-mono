@@ -38,9 +38,14 @@ public class HighlightPublisher {
         this.props = props;
     }
 
-    /** @return 카드가 실제로 clip에 들어갔나 */
+    /**
+     * @param countedUntil 집계에 쓰인 채팅의 도착 시각 상한 — <b>발행권을 잡은 시각</b>이다.
+     *                     이 뒤에 도착한 채팅은 판정에 안 쓰였으므로 우리 구간 계산에서도 뺀다
+     * @param now          지금. 우리 구간·총 시간의 끝점이다
+     * @return 카드가 실제로 clip에 들어갔나
+     */
     public boolean publish(String streamId, long metricId, long windowStartMs,
-                           SpikeVerdict verdict, Instant now) {
+                           SpikeVerdict verdict, Instant countedUntil, Instant now) {
         long windowSizeMs = verdict.windowSizeMs();
 
         // 창 시작 시각 하나로만 부른다. 양 끝은 보정값이 같다고 보고 산수로 낸다.
@@ -72,7 +77,7 @@ public class HighlightPublisher {
         }
 
         ClipHighlightClient.PublishResult result = clip.publish(card);
-        logLatency(streamId, card, windowStartMs, windowSizeMs, position, verdict, result, now);
+        logLatency(streamId, card, windowStartMs, windowSizeMs, position, verdict, result, countedUntil, now);
         return result == ClipHighlightClient.PublishResult.CREATED
                 || result == ClipHighlightClient.PublishResult.ALREADY_EXISTS;
     }
@@ -99,13 +104,14 @@ public class HighlightPublisher {
      */
     private void logLatency(String streamId, HighlightCard card, long windowStartMs, long windowSizeMs,
                             VideoPosition position, SpikeVerdict verdict,
-                            ClipHighlightClient.PublishResult result, Instant now) {
+                            ClipHighlightClient.PublishResult result, Instant countedUntil, Instant now) {
         long windowClosedMs = windowStartMs + windowSizeMs;
         // 🔴 빈손이면 눈금으로 되돌아가지 않는다. 그러면 전달 지연을 0으로 본 값이 나오는데
         // 그건 「지연이 없었다」는 거짓이고, 목표치를 정할 때 그 거짓이 표본에 섞인다.
         // 모르면 모른다고 적는다 — 아래 총 시간이 이미 쓰는 규약과 같은 모양이다.
         String our = reader
-                .lastReceivedAt(streamId, Instant.ofEpochMilli(windowStartMs), Instant.ofEpochMilli(windowClosedMs))
+                .lastReceivedAt(streamId, Instant.ofEpochMilli(windowStartMs),
+                        Instant.ofEpochMilli(windowClosedMs), countedUntil)
                 .map(receivedAt -> String.valueOf(now.toEpochMilli() - receivedAt.toEpochMilli()))
                 .orElse("unknown");
         // 총 시간만 창이 닫힌 시각에서 잰다 — 장면 발생부터라 전달 지연이 들어가야 맞다.

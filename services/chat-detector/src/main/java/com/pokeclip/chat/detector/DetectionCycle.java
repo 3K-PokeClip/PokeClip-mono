@@ -203,7 +203,9 @@ public class DetectionCycle {
                 // 그 사이 코드가 앞으로 바뀌기 때문이고, 그때 조용히 사라지는 것이 이 기능에서
                 // 가장 나쁜 실패이기 때문이다.
                 try {
-                    publisher.publish(streamId, id, windowStartMs, verdict, Instant.now());
+                    // now = 발행권을 잡은 시각(집계에 쓰인 채팅의 상한), Instant.now() = 지금.
+                    // 둘을 같은 값으로 접으면 발행이 밀린 만큼 우리 구간이 사라진다.
+                    publisher.publish(streamId, id, windowStartMs, verdict, now, Instant.now());
                 } catch (Throwable t) {
                     log.warn("detect.publish_threw streamId={} metricId={} causeType={}",
                             streamId, id, t.getClass().getSimpleName());

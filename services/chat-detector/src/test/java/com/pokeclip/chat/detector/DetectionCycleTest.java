@@ -320,6 +320,38 @@ class DetectionCycleTest extends IntegrationTestSupport {
     }
 
     /**
+     * 🔴 <b>발행에 넘기는 상한은 「지금」이 아니라 바퀴의 시각이다.</b>
+     *
+     * <p>그 상한은 「집계에 쓰인 채팅의 도착 시각 한계」다. 발행은 실행기에서 돌고 clip 재시도까지
+     * 끼면 바퀴에서 초 단위로 떨어질 수 있는데, 거기서 {@code Instant.now()}를 넘기면 <b>그 사이
+     * 도착한(판정에 안 쓰인) 채팅</b>이 「우리가 다 받은 시각」에 섞여 우리 구간이 늘 낙관적으로 틀린다.
+     *
+     * <p>발행기 쪽 검사({@code 집계에_쓰인_채팅만_보도록_상한을_건다})는 <b>받은 값을 어떻게 쓰는지</b>만
+     * 본다. <b>그 값을 만들어 넘기는 쪽</b>이 여기다 — 배선을 「지금」으로 바꿔도 백스물한 건이
+     * 전부 초록이었다(주입 S2로 실측).
+     */
+    @Test
+    void 발행에_넘기는_상한은_바퀴의_시각이다() {
+        급증_한_건을_심는다();
+        java.time.Instant 바퀴_시각 = T0.plusSeconds(10);
+
+        java.util.List<java.time.Instant> 넘어간_상한 = new java.util.ArrayList<>();
+        HighlightPublisher 기록기 = new HighlightPublisher(null, null, reader, props) {
+            @Override
+            public boolean publish(String streamId, long metricId, long windowStartMs,
+                                   SpikeVerdict verdict, java.time.Instant countedUntil,
+                                   java.time.Instant now) {
+                넘어간_상한.add(countedUntil);
+                return true;
+            }
+        };
+        new DetectionCycle(reader, metricsStore, detector, 기록기, props, Runnable::run)
+                .runOnce(바퀴_시각);
+
+        assertThat(넘어간_상한).as("바퀴의 시각을 그대로 넘겨야 한다").containsExactly(바퀴_시각);
+    }
+
+    /**
      * 🔴 <b>실행기에 던진 일이 터져도 조용히 사라지지 않는다.</b> 발행권은 이미 잡혀 재시도가
      * 없으므로, 로그가 없으면 그 카드는 흔적 없이 없어진다(감사 2회차 R-5).
      *
@@ -333,7 +365,8 @@ class DetectionCycleTest extends IntegrationTestSupport {
         HighlightPublisher 터지는_발행기 = new HighlightPublisher(null, null, reader, props) {
             @Override
             public boolean publish(String streamId, long metricId, long windowStartMs,
-                                   SpikeVerdict verdict, java.time.Instant now) {
+                                   SpikeVerdict verdict, java.time.Instant countedUntil,
+                                   java.time.Instant now) {
                 throw new IllegalStateException("주입된 실패");
             }
         };
@@ -400,7 +433,8 @@ class DetectionCycleTest extends IntegrationTestSupport {
         HighlightPublisher 기록하는_발행기 = new HighlightPublisher(null, null, reader, props) {
             @Override
             public boolean publish(String streamId, long metricId, long windowStartMs,
-                                   SpikeVerdict verdict, java.time.Instant now) {
+                                   SpikeVerdict verdict, java.time.Instant countedUntil,
+                                   java.time.Instant now) {
                 발행됨.add(streamId);
                 return true;
             }
