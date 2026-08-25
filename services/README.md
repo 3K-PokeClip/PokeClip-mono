@@ -41,7 +41,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 
 ## 두 서버가 같이 쓰는 것은 어디 두나
 
-**자리는 `web-support/` 하나다** — 웹 인프라(CORS 허용 메서드 GET·POST·PATCH·DELETE · 상관 ID 필터).
+**자리는 `web-support/` 하나다** — 웹 인프라(CORS 허용 메서드 GET·POST·PUT·PATCH·DELETE · 상관 ID 필터).
 테스트 도우미(`LogCaptor`)는 같은 모듈의 `testFixtures`에 있다.
 
 `web-support`는 이 앱들의 패키지 밖이라 컴포넌트 스캔에 안 걸린다 —

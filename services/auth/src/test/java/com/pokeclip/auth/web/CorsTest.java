@@ -45,6 +45,21 @@ class CorsTest extends IntegrationTestSupport {
                 .andExpect(header().string("Access-Control-Allow-Methods", org.hamcrest.Matchers.containsString("PATCH")));
     }
 
+    /**
+     * 사진 올리기가 PUT이다(POK-207 {@code PUT /api/auth/me/photo}). 허용 메서드에 없으면 브라우저
+     * preflight가 403으로 막혀 화면에서 사진 저장이 안 된다 — PATCH·DELETE와 같은 자리다.
+     */
+    @Test
+    void PUT_preflight가_통과한다() throws Exception {
+        mockMvc.perform(options("/api/auth/me/photo")
+                        .header("Origin", "http://localhost:3000")
+                        .header("Access-Control-Request-Method", "PUT")
+                        .header("Access-Control-Request-Headers", "Authorization"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:3000"))
+                .andExpect(header().string("Access-Control-Allow-Methods", org.hamcrest.Matchers.containsString("PUT")));
+    }
+
     @Test
     void 허용된_출처의_preflight는_통과한다() throws Exception {
         mockMvc.perform(options("/api/auth/google")
