@@ -875,6 +875,56 @@ class SecretLeakTest extends IntegrationTestSupport {
         }
     }
 
+    /**
+     * 프로필 사진이 나가는 길에 붙은 로거 셋. AWS SDK 2.46.7의 HTTP 클라이언트는 Apache 5이고,
+     * {@code org.apache.hc.client5.http.wire}는 요청 본문 전체를, {@code .headers}는 Authorization
+     * 값을 DEBUG에 찍는다. SDK 상위 계층 DEBUG는 서명 canonical request를 대량으로 남긴다.
+     * netty는 async 클라이언트용이라 지금은 안 도는 길이지만 s3가 딸려오므로 같이 막는다.
+     */
+    private static final List<String> STORAGE_QUIET_LOGGERS =
+            List.of("software.amazon.awssdk", "org.apache.hc.client5.http", "io.netty");
+
+    /**
+     * 위 셋을 info로 눌러 두는 application.yml 세 줄을 지금까지 어느 검사도 안 지켰다 —
+     * 지워도 아무 데서도 안 걸린다(계획 검증 1회차). 창고 호출이 실제로 도는 것은
+     * 뒤 태스크가 얹고, <b>여기서는 배선만 잰다</b>.
+     *
+     * <p>web 로거와 같은 모양이다 — 기본값 없는 {@code getProperty}(줄이 사라지면 빨간불) +
+     * logback까지 닿았는지(프로퍼티만 있고 안 박히면 방어가 없는 것과 같다). 거기에 한 겹 더:
+     * <b>root를 TRACE로 내린 채</b> 유효 레벨을 본다. 구체 로거 레벨이 root보다 우선한다는 것이
+     * 이 방어의 전제인데, 그 전제를 글로만 적어 두면 다음 사람이 "root로 막으면 되지"로 지운다.
+     */
+    @Test
+    void 창고_SDK_로거는_root를_TRACE로_내려도_INFO_아래로_안_간다() {
+        for (String logger : STORAGE_QUIET_LOGGERS) {
+            String level = environment.getProperty("logging.level." + logger);
+            assertThat(level)
+                    .as(logger + " 레벨이 application.yml에 박혀 있어야 root를 내려도 버틴다")
+                    .isNotNull();
+            assertThat(Level.toLevel(level, Level.DEBUG).toInt())
+                    .as(logger + "가 이 레벨이면 본문·Authorization이 열린다: " + level)
+                    .isGreaterThanOrEqualTo(Level.INFO.toInt());
+            assertThat(levelOf(logger))
+                    .as(logger + ": 프로퍼티가 Environment에만 있고 logback까지 안 닿았다")
+                    .isNotNull();
+        }
+
+        // 여기서부터가 양성 대조다. root를 TRACE로 내려도 셋의 판정 레벨이 안 따라 내려가야
+        // 한다 — 따라 내려간다면 방어가 "운영에서 root를 안 내린다"는 사람의 규칙에 걸려 있는 것이다.
+        Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
+        assertThat(rootBefore).as("root에 명시 레벨이 없으면 아래 복원이 상속을 지운다").isNotNull();
+        try {
+            setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
+            for (String logger : STORAGE_QUIET_LOGGERS) {
+                assertThat(effectiveLevelOf(logger).toInt())
+                        .as(logger + "가 root=TRACE를 그대로 물려받았다 — 세 줄 중 이 줄이 없다")
+                        .isGreaterThanOrEqualTo(Level.INFO.toInt());
+            }
+        } finally {
+            setLevel(Logger.ROOT_LOGGER_NAME, rootBefore);
+        }
+    }
+
     @Test
     void 탐지기는_메시지에_있는_비밀을_잡는다() {
         String planted = needle("planted-in-message");
@@ -980,6 +1030,11 @@ class SecretLeakTest extends IntegrationTestSupport {
     /** 명시 레벨만 돌려준다. 안 박혀 있으면 null이다(부모에서 물려받는 상태). */
     private static Level levelOf(String loggerName) {
         return ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).getLevel();
+    }
+
+    /** 상속까지 반영한 실제 판정 레벨. 명시 레벨이 없으면 부모(끝은 root) 값이 온다. */
+    private static Level effectiveLevelOf(String loggerName) {
+        return ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).getEffectiveLevel();
     }
 
     private static void assertNoSecretsIn(LogCaptor captor, List<String> secrets) {
