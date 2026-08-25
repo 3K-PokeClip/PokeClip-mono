@@ -34,6 +34,13 @@ public class User {
     @Column(name = "profile_image_url")
     private String profileImageUrl;
 
+    /** 창고의 파일 이름. 비면 구글이 준 profileImageUrl을 쓴다. */
+    @Column(name = "profile_photo_key")
+    private String profilePhotoKey;
+
+    @Column(name = "profile_photo_updated_at")
+    private Instant profilePhotoUpdatedAt;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -62,6 +69,21 @@ public class User {
      */
     public void changeName(String trimmedName, Instant now) {
         this.name = trimmedName;
+        this.updatedAt = now;
+    }
+
+    /**
+     * 올린 사진을 가리키게 한다. <b>구글 주소를 비운다</b> — 되돌리기가 비목표라 영영 안 읽히고,
+     * 안 쓰는 외부 주소를 계속 보관할 명분이 없다(PRD). 영구 손실은 아니다: 구글은 로그인할 때마다
+     * 이름·사진을 다시 보내온다(지금은 받아서 버린다).
+     *
+     * <p>파일 이름을 여기서 짓지 않고 받아 온다 — 이름 짓는 법은 창고의 규칙이고(PhotoStorage.keyOf),
+     * 엔티티가 그것을 알면 창고를 갈아탈 때 두 곳이 갈린다.
+     */
+    public void attachPhoto(String key, Instant now) {
+        this.profilePhotoKey = key;
+        this.profilePhotoUpdatedAt = now;
+        this.profileImageUrl = null;
         this.updatedAt = now;
     }
 }
