@@ -1,5 +1,7 @@
 package com.pokeclip.chat.detector;
 
+import com.pokeclip.chat.detector.config.DetectionProperties;
+import com.pokeclip.chat.detector.metrics.ChatMetricsStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
@@ -9,6 +11,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.time.Instant;
 
 @SpringBootApplication
 @ConfigurationPropertiesScan
@@ -45,6 +49,15 @@ public class DetectorApplication {
      * 기대고 있다</b> — 후보가 둘이라 타입만으로는 못 고르고 이름으로 풀린다.
      * <b>그 파라미터 이름을 바꾸면 주입이 모호해져 부팅이 죽는다.</b>
      */
+    /**
+     * {@code Duration}·{@code Supplier<Instant>}는 스프링이 만들 수 있는 타입이 아니라
+     * {@code @Component}로 두면 부팅이 죽는다. 그래서 여기서 조립한다.
+     */
+    @Bean
+    MetricsSweeper metricsSweeper(ChatMetricsStore store, DetectionProperties props) {
+        return new MetricsSweeper(store, props.retention(), Instant::now);
+    }
+
     @Bean
     TaskExecutor publishExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();

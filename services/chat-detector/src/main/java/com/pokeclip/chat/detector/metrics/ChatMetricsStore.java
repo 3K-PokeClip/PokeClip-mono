@@ -99,6 +99,19 @@ public class ChatMetricsStore {
                 rs.getInt("message_count"), rs.getInt("chatter_count")), streamId, windowSizeMs);
     }
 
+    /**
+     * {@code idx_chat_metrics_created}를 탄다.
+     *
+     * <p>경계는 {@code <}다 — 그 시각에 딱 만들어진 줄은 <b>남긴다</b>. {@code <=}로 밀면
+     * 보관 기간이 조용히 하루−1이 된다.
+     */
+    private static final String SWEEP = "DELETE FROM chat_metrics WHERE created_at < ?";
+
+    /** @return 지운 줄 수 */
+    public int sweepOlderThan(Instant before) {
+        return jdbc.update(SWEEP, Timestamp.from(before));
+    }
+
     public int[] baselineCounts(String streamId, long windowSizeMs,
                                 long beforeWindowStartMs, long sinceWindowStartMs,
                                 DetectionProperties.Metric metric) {
