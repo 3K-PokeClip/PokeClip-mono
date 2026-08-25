@@ -213,7 +213,7 @@ describe('EditorSettingsScreen — 초대', () => {
     expect(screen.getByRole('dialog', { name: '편집자 초대' })).toBeInTheDocument();
   });
 
-  it('정원이 차면 자리 비우는 방법(취소·회수)까지 사유에 담긴다 — 티켓 완료 조건', async () => {
+  it('정원이 차면 자리 비우는 방법(취소)이 사유에 담긴다 — 내보내기는 효과 없는 해법이라 없다', async () => {
     stubEditors((url, init) => {
       if (url === INVITE_URL && init?.method === 'POST')
         return jsonResponse(409, { reason: 'TOO_MANY_PENDING' });
@@ -229,7 +229,8 @@ describe('EditorSettingsScreen — 초대', () => {
 
     const alert = await dialog.findByRole('alert');
     expect(alert).toHaveTextContent('취소');
-    expect(alert).toHaveTextContent('내보내');
+    // 이 409는 PENDING 초대 수만 센다 — 내보내기를 권하면 실행해도 소용없는 안내가 된다
+    expect(alert).not.toHaveTextContent('내보내');
   });
 
   it('실패 문구는 모달을 닫았다 다시 열면 남지 않는다', async () => {
@@ -349,6 +350,48 @@ describe('EditorSettingsScreen — 초대 취소', () => {
           url === '/api/editor-invitations/11' && (init as RequestInit)?.method === 'DELETE',
       ),
     ).toBe(true);
+  });
+});
+
+describe('EditorSettingsScreen — 초대 취소 경합', () => {
+  it('상대가 먼저 응답한 409 INVITATION_NOT_PENDING도 「이미 처리된 초대예요」로 알린다', async () => {
+    stubEditors((url, init) => {
+      if (url === '/api/editor-invitations/11' && init?.method === 'DELETE')
+        return jsonResponse(409, { reason: 'INVITATION_NOT_PENDING' });
+      return undefined;
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<EditorSettingsScreen />);
+    await screen.findByRole('group', { name: '박편집' });
+
+    await user.click(row(/cut\.master@gmail\.com/).getByRole('button', { name: '취소' }));
+
+    expect(await screen.findByText('이미 처리된 초대예요')).toBeInTheDocument();
+    expect(screen.queryByText('초대 취소에 실패했어요')).not.toBeInTheDocument();
+  });
+
+  it('동시 취소에서 각 행의 잠금이 따로 유지된다 — 마지막 호출만 따라가지 않는다', async () => {
+    const first = SENT[0] as (typeof SENT)[number];
+    const second = { ...first, id: 12, inviteeEmail: 'second.pending@example.com' };
+    stubFetch((url, init) => {
+      if (init?.method === 'DELETE') return new Promise<Response>(() => {}); // 응답 보류
+      if (url === DELEGATIONS_URL) return jsonResponse(200, DELEGATIONS);
+      if (url === SENT_URL) return jsonResponse(200, [first, second]);
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<EditorSettingsScreen />);
+    await screen.findByRole('group', { name: '박편집' });
+
+    const firstCancel = row(/cut\.master@gmail\.com/).getByRole('button', { name: '취소' });
+    await user.click(firstCancel);
+    await user.click(row(/second\.pending@example\.com/).getByRole('button', { name: /취소/ }));
+
+    // 두 DELETE가 모두 미결인 동안 두 행의 버튼이 전부 잠겨 있어야 한다
+    expect(firstCancel).toHaveAttribute('aria-busy', 'true');
+    expect(
+      row(/second\.pending@example\.com/).getByRole('button', { name: /취소/ }),
+    ).toHaveAttribute('aria-busy', 'true');
   });
 });
 

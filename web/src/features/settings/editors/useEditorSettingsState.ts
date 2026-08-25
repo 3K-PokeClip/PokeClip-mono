@@ -57,8 +57,9 @@ export interface EditorSettingsViewState {
   /** 초대 취소 — 확인 모달이 없다. 같은 이메일로 다시 초대하면 되돌아가는 동작이라
    *  파괴적이지 않다 (시안 1l도 확인 없이 취소한다). */
   cancelInvitation: (invitation: SentInvitation) => void;
-  /** 취소가 도는 초대의 id — 해당 행의 버튼만 잠근다. 없으면 null. */
-  cancelingId: number | null;
+  /** 취소가 도는 초대 id들 — 해당 행의 버튼만 잠근다. mutation.variables는 마지막 호출만
+   *  기억해 동시 취소에서 앞 행의 잠금이 풀리므로, 진행 중 집합을 직접 든다. */
+  cancelingIds: ReadonlySet<number>;
 }
 
 export function useEditorSettingsState(): EditorSettingsViewState {
@@ -68,6 +69,7 @@ export function useEditorSettingsState(): EditorSettingsViewState {
   const invitations = useQuery(sentInvitationsQueryOptions);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<EditorDelegation | null>(null);
+  const [cancelingIds, setCancelingIds] = useState<ReadonlySet<number>>(new Set());
 
   // 초대 수락·내보내기·취소가 두 리소스에 걸쳐 상태를 옮기므로 어느 뮤테이션이든 둘 다 갱신한다.
   // 실패 경로에도 부른다 — ALREADY_EDITOR·404는 내 목록이 낡았다는 뜻이라 실패가 곧 갱신 사유다.
@@ -133,6 +135,9 @@ export function useEditorSettingsState(): EditorSettingsViewState {
 
   const cancel = useMutation({
     mutationFn: (invitation: SentInvitation) => requestCancelInvitation(invitation.id),
+    onMutate: (invitation) => {
+      setCancelingIds((prev) => new Set(prev).add(invitation.id));
+    },
     onSuccess: () => {
       toast({
         tone: 'success',
@@ -141,7 +146,14 @@ export function useEditorSettingsState(): EditorSettingsViewState {
       });
     },
     onError: (e) => {
-      if (e instanceof ApiError && e.status === 404 && e.message === 'INVITATION_NOT_FOUND') {
+      // 상대가 먼저 응답한 경합은 상태에 따라 둘로 갈라져 온다 — 목록 조회 뒤 수락·거절이
+      // 끼어들면 409 INVITATION_NOT_PENDING(「이미 처리된 초대다」), 행 자체가 사라졌으면
+      // 404 INVITATION_NOT_FOUND. 사용자에게는 같은 상황이라 한 문구로 합친다.
+      const alreadySettled =
+        e instanceof ApiError &&
+        ((e.status === 409 && e.message === 'INVITATION_NOT_PENDING') ||
+          (e.status === 404 && e.message === 'INVITATION_NOT_FOUND'));
+      if (alreadySettled) {
         toast({
           tone: 'error',
           title: '이미 처리된 초대예요',
@@ -155,7 +167,14 @@ export function useEditorSettingsState(): EditorSettingsViewState {
         description: '잠시 후 다시 시도해 주세요.',
       });
     },
-    onSettled: invalidateLists,
+    onSettled: (_data, _error, invitation) => {
+      setCancelingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(invitation.id);
+        return next;
+      });
+      invalidateLists();
+    },
   });
 
   const { reset: resetInvite } = invite;
@@ -182,8 +201,12 @@ export function useEditorSettingsState(): EditorSettingsViewState {
 
   const { mutate: mutateCancel } = cancel;
   const cancelInvitation = useCallback(
-    (invitation: SentInvitation) => mutateCancel(invitation),
-    [mutateCancel],
+    (invitation: SentInvitation) => {
+      // 진행 중인 행의 재클릭 방어 — 버튼 loading이 막지만 상태로도 한 번 더 막는다.
+      if (cancelingIds.has(invitation.id)) return;
+      mutateCancel(invitation);
+    },
+    [cancelingIds, mutateCancel],
   );
 
   const { refetch: refetchDelegations } = delegations;
@@ -219,7 +242,7 @@ export function useEditorSettingsState(): EditorSettingsViewState {
     confirmRevoke,
     revoking: revoke.isPending,
     cancelInvitation,
-    cancelingId: cancel.isPending ? (cancel.variables?.id ?? null) : null,
+    cancelingIds,
   };
 }
 

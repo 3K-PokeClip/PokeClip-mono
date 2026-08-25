@@ -143,6 +143,8 @@ export interface EditorInviteMessage {
 // TOO_MANY_PENDING이 자리 비우는 방법까지 말하는 이유: 정원 배지·사전 차단 UI가 아직
 // 없어서(정원 API는 POK-207) 상한을 처음 만나는 자리가 바로 이 문구다. 티켓 완료 조건
 // 「정원 초과 시 초대가 막히고 자리를 비우는 방법을 알린다」를 여기서 갚는다.
+// 해법은 **취소뿐이다** — 이 409는 PENDING 초대 수만 센다(InvitationService.MAX_PENDING).
+// 편집자를 내보내도 이 카운트는 안 줄어드므로 내보내기를 안내에 넣지 않는다.
 const FAILURE_MESSAGE: Record<EditorInviteFailure, EditorInviteMessage> = {
   SELF_INVITE: {
     title: '자기 자신은 초대할 수 없어요',
@@ -158,7 +160,7 @@ const FAILURE_MESSAGE: Record<EditorInviteFailure, EditorInviteMessage> = {
   TOO_MANY_PENDING: {
     title: '대기 중인 초대가 가득 찼어요',
     description:
-      '초대는 동시에 20건까지만 대기할 수 있어요. 대기 중인 초대를 취소하거나 편집자를 내보내 자리를 비운 뒤 다시 시도해 주세요.',
+      '초대는 동시에 20건까지만 대기할 수 있어요. 대기 중인 초대를 취소해 자리를 비운 뒤 다시 시도해 주세요.',
   },
 };
 

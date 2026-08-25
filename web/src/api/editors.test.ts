@@ -134,10 +134,11 @@ describe('inviteFailureMessage', () => {
     expect(message.description).toContain('먼저 가입한 사람만');
   });
 
-  it('정원이 차면 자리를 비우는 방법을 알린다 — 취소와 내보내기 둘 다', () => {
+  it('정원이 차면 자리를 비우는 방법(취소)을 알린다 — 내보내기는 이 카운트를 안 줄이므로 없어야 한다', () => {
     const message = inviteFailureMessage(new ApiError(409, 'TOO_MANY_PENDING'));
     expect(message.description).toContain('취소');
-    expect(message.description).toContain('내보내');
+    // 409는 PENDING 초대 수만 센다 — 내보내기를 권하면 효과 없는 해법을 안내하게 된다
+    expect(message.description).not.toContain('내보내');
   });
 
   it('409 둘을 서로 다른 문구로 가른다', () => {

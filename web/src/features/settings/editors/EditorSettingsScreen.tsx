@@ -114,7 +114,7 @@ function listOf(state: EditorSettingsViewState) {
             <PendingInvitationRow
               key={invitation.id}
               invitation={invitation}
-              canceling={state.cancelingId === invitation.id}
+              canceling={state.cancelingIds.has(invitation.id)}
               onCancel={state.cancelInvitation}
             />
           ))}
