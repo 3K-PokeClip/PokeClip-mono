@@ -126,6 +126,10 @@ describe('EditorSettingsScreen — 목록', () => {
     expect(await screen.findByText('아직 편집자가 없어요')).toBeInTheDocument();
     expect(screen.getByText(/하이라이트 검토와 클립 편집을 맡길 수 있어요/)).toBeInTheDocument();
 
+    // 하단 안내와 「권한 2단계 비교」 트리거는 편집자 0명이어도 항상 있다
+    expect(screen.getByText(/편집자를 내보내면 즉시 적용되고/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '권한 2단계 비교' })).toBeInTheDocument();
+
     // 1l ④에는 카드 안 초대 버튼이 없다 — 같은 이름의 버튼은 헤더 하나뿐이어야 한다
     await user.click(screen.getByRole('button', { name: '편집자 초대' }));
     expect(await screen.findByRole('dialog', { name: '편집자 초대' })).toBeInTheDocument();

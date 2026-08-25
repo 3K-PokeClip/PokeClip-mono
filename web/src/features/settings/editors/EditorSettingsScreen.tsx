@@ -39,7 +39,9 @@ export function EditorSettingsScreen() {
 
       <div className={styles.rows}>{listOf(state)}</div>
 
-      {state.view === 'ready' && state.editors.length > 0 && (
+      {/* 편집자 0명이어도 항상 그린다 — 안내와 「권한 2단계 비교」가 목록 유무와 무관한
+          화면 상수다 (2026-08-25 확인). 조회가 서기 전(loading·unavailable)에만 숨긴다. */}
+      {state.view === 'ready' && (
         <p className={styles.note}>
           <Info aria-hidden="true" />
           <span>
