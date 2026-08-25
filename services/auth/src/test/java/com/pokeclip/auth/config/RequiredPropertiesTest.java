@@ -2,6 +2,7 @@ package com.pokeclip.auth.config;
 
 import com.pokeclip.auth.chzzk.ChzzkProperties;
 import com.pokeclip.auth.google.GoogleAuthProperties;
+import com.pokeclip.auth.profile.PhotoProperties;
 import com.pokeclip.auth.streamkey.secret.SecretStoreConfig;
 import com.pokeclip.auth.streamkey.secret.SecretStoreProperties;
 import com.pokeclip.auth.token.JwtConfig;
@@ -281,6 +282,43 @@ class RequiredPropertiesTest {
     }
 
     /**
+     * 위 두 사진 테스트는 <b>값이 주어졌을 때</b>의 거동을 잰다. 이것은 yml에 그 자리가 실제로
+     * <b>선언돼 있는지</b>를 잰다 — 사진 설정 블록을 통째로 지워도 아무것도 안 깨지던 자리다
+     * (주입으로 확인: 블록 삭제 → 전 시험 초록).
+     *
+     * <p>DeploymentEnvVarsTest가 필수 변수 목록을 <b>이 yml에서 뽑기 때문에</b> 그렇다 —
+     * 선언을 지우면 요구도 같이 사라져 스스로를 못 지킨다. 그래서 선언 자체를 여기서 못박는다.
+     * {@code ${VAR:}}(빈 기본값)가 「부팅 검증으로 잡는 필수 값」이라는 표시이고,
+     * 그 모양이 아니면 그 검사가 compose·.env.dev.example을 강제하지 않는다.
+     *
+     * <p>{@code force-path-style}만 기본값이 있다 — 켜고 끄는 스위치라 값이 필요 없고,
+     * 그래서 <b>DeploymentEnvVarsTest가 이 하나만 못 잡는다</b>(손으로 챙긴 자리다).
+     * 그 의도까지 함께 못박아, 누가 "일관성"을 이유로 넷과 같은 모양으로 바꾸면 빨간불이 되게 한다.
+     */
+    @Test
+    void 사진_설정이_yml에_빈_기본값으로_선언돼_있다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+
+        assertThat(properties.getProperty("pokeclip.profile-photo.bucket"))
+                .as("창고 이름 선언이 없다 — 사진 기능의 켜짐/꺼짐 스위치가 사라진다")
+                .isEqualTo("${PROFILE_PHOTO_S3_BUCKET:}");
+        assertThat(properties.getProperty("pokeclip.profile-photo.endpoint"))
+                .isEqualTo("${PROFILE_PHOTO_S3_ENDPOINT:}");
+        assertThat(properties.getProperty("pokeclip.profile-photo.token-secret"))
+                .as("표 서명키 선언이 없다 — 배포 파일 검사가 이 변수를 강제하지 않게 된다")
+                .isEqualTo("${PROFILE_PHOTO_TOKEN_SECRET:}");
+        assertThat(properties.getProperty("pokeclip.profile-photo.base-url"))
+                .isEqualTo("${PROFILE_PHOTO_BASE_URL:}");
+        assertThat(properties.getProperty("pokeclip.profile-photo.force-path-style"))
+                .as("스위치라 기본값을 일부러 뒀다 — 넷과 같은 모양으로 바꾸면 값 없이 뜨는 길이 막힌다")
+                .isEqualTo("${PROFILE_PHOTO_S3_FORCE_PATH_STYLE:false}");
+    }
+
+    /**
      * 유튜브 앱 설정 셋도 치지직과 같은 이유로 한 덩어리다 — 하나만 빠지면 나머지가 무의미하고,
      * 실패 메시지에 시크릿이 남으면 안 된다. 치지직 앱과 <b>다른 GCP 앱</b>이라 값이 별개다.
      */
@@ -304,6 +342,58 @@ class RequiredPropertiesTest {
                                 .doesNotContain(secretNeedle);
                     });
         }
+    }
+
+    /**
+     * <b>레코드 단위 시험(PhotoPropertiesTest)은 생성자만 잰다</b> — 그것이 부팅 실패로 이어지는지는
+     * 컨텍스트를 띄워 봐야 안다. 창고 이름만 채우고 나머지를 비우면 사진을 올릴 수는 있는데 볼 수가
+     * 없는 상태가 되고, 그대로 뜨면 사진을 올리는 순간에야 원인 모를 오류가 난다.
+     *
+     * <p>PhotoToken이 이 검증에 기대고 있다 — 빈 서명키는 {@code SecretKeySpec}에서
+     * {@code IllegalArgumentException}이 되는데 그것은 {@code sign}의 catch를 빠져나간다.
+     */
+    @Test
+    void 창고_이름만_있고_나머지가_비면_부팅이_실패하고_서명키가_남지_않는다() {
+        String secretNeedle = "LEAK-photo-secret-" + UUID.randomUUID();
+        for (String[] broken : List.of(
+                photo("bucket", "", "http://localhost:8082"),
+                photo("bucket", secretNeedle, ""))) {
+            runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                    .withPropertyValues(google("id", "secret"))
+                    .withPropertyValues(cors("http://localhost:3000"))
+                    .withPropertyValues(broken)
+                    .run(context -> {
+                        assertThat(context).hasFailed();
+                        assertThat(stackTraceOf(context.getStartupFailure()))
+                                .as("사진 설정이 아닌 다른 이유로 부팅이 실패했다")
+                                .contains("PROFILE_PHOTO_")
+                                .as("실패 메시지에 사진 표 서명키가 평문으로 남았다")
+                                .doesNotContain(secretNeedle);
+                    });
+        }
+    }
+
+    /** 창고 이름이 비면 나머지가 없어도 정상이다 — 사진 기능만 꺼진 채 서버가 뜬다(CI·팀원 로컬 기본). */
+    @Test
+    void 창고_이름이_비면_나머지가_없어도_부팅한다() {
+        runner.withPropertyValues(jwt("test-only-secret-key-at-least-32-bytes-long!!"))
+                .withPropertyValues(google("id", "secret"))
+                .withPropertyValues(cors("http://localhost:3000"))
+                .withPropertyValues(photo("", "", ""))
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(PhotoProperties.class).enabled()).isFalse();
+                });
+    }
+
+    private static String[] photo(String bucket, String tokenSecret, String baseUrl) {
+        return new String[]{
+                "pokeclip.profile-photo.bucket=" + bucket,
+                "pokeclip.profile-photo.region=ap-northeast-2",
+                "pokeclip.profile-photo.endpoint=",
+                "pokeclip.profile-photo.force-path-style=false",
+                "pokeclip.profile-photo.token-secret=" + tokenSecret,
+                "pokeclip.profile-photo.base-url=" + baseUrl};
     }
 
     private static String[] chzzk(String clientId, String clientSecret, String redirectUri) {
@@ -362,7 +452,7 @@ class RequiredPropertiesTest {
 
     @EnableConfigurationProperties({JwtProperties.class, GoogleAuthProperties.class, CorsProperties.class,
             SecretStoreProperties.class, InternalApiProperties.class, ChzzkProperties.class,
-            YoutubeProperties.class})
+            YoutubeProperties.class, PhotoProperties.class})
     static class BoundProperties {
     }
 }
