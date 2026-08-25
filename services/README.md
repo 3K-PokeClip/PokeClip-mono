@@ -34,6 +34,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 | `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
 | `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `broadcasts.vod_expires_at` (V203, POK-117) |
 | chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302) · `chat_ended_streams` (V303) — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
+| `chat-detector` | `chat_metrics` (V401, POK-120) — **판별 서버 단독 소유다.** 위 `chat_messages`와 달리 공동 소유가 아니라 이 서버만 읽고 쓴다 |
 
 **서로의 표를 직접 읽지 않는다.** 필요하면 계약4의 `POST /internal/stream-keys/resolve`로
 묻는다. 이 선이 무너지면 따로 배포되는데 DB로 묶인 **분산 모놀리스**가 된다 —
@@ -545,10 +546,11 @@ compose와 메이저 버전이 갈리면 로컬·CI만 통과하고 실제 DB에
 Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(`auth/src/main/resources/db/migration/`)에 둔다.**
 
 서버마다 자기 Flyway를 돌리고 **이력 테이블을 나눈다**(`flyway_schema_history_auth` ·
-`..._clip` · `..._chat`). 기본 이름을 쓰면 나중에 뜬 쪽이 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
-마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat.
+`..._clip` · `..._chat` · `..._chat_detector`). 기본 이름을 쓰면 나중에 뜬 쪽이 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
+마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat-collector · `V4xx` chat-detector.
 지금까지 나간 것은 auth의 `V101`~`V107` · clip의 `V201`(`broadcasts`·`broadcast_events`)과
-`V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117) · chat의 `V301`(`chat_messages`)이다.
+`V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117) · chat-collector의 `V301`(`chat_messages`) ·
+chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **모든 Flyway 서버(auth 포함)에 `baseline-on-migrate: true` + `baseline-version: 0`이 필수다.**
 공유 DB에서는 어느 서버가 먼저 뜰지 정해져 있지 않다 — 다른 서버가 이미 표를
@@ -557,9 +559,9 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 "두 번째 서버부터"가 아니다: 빈 DB에 chat-collector가 auth보다 먼저 뜨면 auth가
 그 두 번째 서버다. chat-collector가 실물에서 밟았고(2026-08-15), auth도 같은
 메시지로 재현했다(PR #56). Testcontainers·CI는 매번 빈 DB라 그냥은 안 잡히므로
-auth·clip·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 심어 두고 부팅한다 —
-두 줄을 지우면 그 모듈 테스트 전체가 빨강이다. **clip도 POK-82에서 같은 두 줄을 갖췄다**
-(남는 것은 chat-detector뿐이다). `baseline-version: 0`인 이유는 기본 1이면 V1
+네 서버의 `IntegrationTestSupport`가 남의 표를 먼저 심어 두고 부팅한다 —
+두 줄을 지우면 그 모듈 테스트 전체가 빨강이다. **chat-detector도 POK-120에서 같은 두 줄을 갖췄다 —
+이제 Flyway를 도는 서버 넷이 전부 갖췄다.** `baseline-version: 0`인 이유는 기본 1이면 V1
 이하가 적용 대상에서 빠지기 때문이다.
 
 **이력이 한 줄이 아니라 두 줄인 것이 정상이다.** 남의 표가 있는 DB에 처음 뜨면
@@ -1681,9 +1683,53 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 버킷은 먼저 만들어야 한다(`aws --endpoint-url=http://localhost:4566 s3 mb s3://pokeclip-chat`).
 Ctrl+C 뒤 판정 줄의 `uploaded=`와 버킷의 `chat/` 아래 파일 수가 같아야 한다.
 
+### chat-detector — 기반: DB·Flyway·집계 표 (POK-120)
+
+**이 서버가 DB에 붙은 첫 판이다.** 채팅을 눈금 창마다 세어 `chat_metrics`에 남긴다 —
+급증 판정과 카드 발행은 뒤 태스크에서 이 표 위에 올라간다.
+
+표는 하나다 — `chat_metrics`(`V401`). 한 줄이 「어느 방송의, 몇 초짜리 창의, 어느 눈금」이고
+`UNIQUE (stream_id, window_size_ms, window_start_ms)`가 같은 창을 두 줄로 만들지 않는다.
+
+**HTTP 문을 하나도 열지 않는다.** `actuator`의 `health`만 노출한다 — `/internal/**`이 없으므로
+`X-Internal-Token`은 **보낼 때만** 쓴다(clip·수집 서버의 문을 여는 열쇠). 그래서 시큐리티
+스타터도, `web-support`의 CORS도 안 붙인다(`CORS_ALLOWED_ORIGINS`가 필요 없는 유일한 서버다).
+
+**`compose` 칸은 `docker-compose.dev.yml`의 `chat-detector` 블록이 실제로 넘기는지다.**
+`—`는 넘기지 **않는다**는 뜻이고 그래도 정상이다 — yml 기본값이 dev에 그대로 쓸 만하다.
+
+| 변수 | 기본값 | compose | |
+|---|---|---|---|
+| `DB_HOST` | `localhost` | ✅ `postgres` | compose 안에서는 서비스 이름이 곧 호스트다 |
+| `DB_PORT` | `5432` | — | `.env`에 없는 값이라 기본값을 남긴다 |
+| `POSTGRES_DB` | **없음** | ✅ | **기본값을 일부러 안 준다**(POK-161). 셸에 없으면 리터럴이 그대로 바인딩돼 `FATAL: password authentication failed`로 죽는다 |
+| `POSTGRES_USER` | **없음** | ✅ | 위와 같다 |
+| `POSTGRES_PASSWORD` | **없음** | ✅ | 위와 같다 |
+| `INTERNAL_API_TOKEN` | 빈 값 | ✅ | clip·수집 서버의 `/internal/**`에 **보낼** 값. 그쪽에 준 것과 같아야 한다 |
+| `CLIP_BASE_URL` | `http://localhost:8081` | ✅ `http://clip:8081` | 점프카드를 넣는 곳 |
+| `COLLECTOR_BASE_URL` | `http://localhost:8083` | ✅ `http://chat-collector:8083` | 채팅 시각을 영상 위치로 바꿔 주는 창구(POK-92) |
+| `DETECTION_SCHEDULER_POOL_SIZE` | `3` | — | 🔴 주기 작업이 셋인데 스프링 기본 풀이 **1**이다. 하나면 치우기가 도는 동안 판정이 통째로 멈춘다 |
+| `DETECTION_CYCLE_INTERVAL` | `1s` | — | 한 바퀴 도는 간격. 발행 창보다 촘촘해야 창이 안 밀린다 |
+| `DETECTION_WINDOW_SIZES_MS` | `3000,5000,10000` | — | 집계할 창 크기들 |
+| `DETECTION_PUBLISH_WINDOW_MS` | `5000` | — | 판정·발행에 쓰는 창. **위 목록에 없으면 부팅이 죽는다** |
+| `DETECTION_WINDOW_GRACE` | `2s` | — | 창이 지나고 더 기다리는 시간. **우리 구간 지연에 그대로 더해진다** |
+| `DETECTION_LATE_REPORT_INTERVAL` | `10m` | — | 늦게 온 채팅을 세어 찍는 간격. 위 유예값을 조정할 근거를 모은다 |
+| `DETECTION_ACTIVE_STREAM_WINDOW` | `60s` | — | 이 시간 안에 채팅이 온 방송만 센다 |
+| `DETECTION_COLLECT_LOOKBACK` | `1m` | — | 한 바퀴가 되돌아보며 다시 집계하는 기간. **아래 베이스라인 기간과 다른 값이다** — 15분으로 두면 100 방송에서 1초 주기를 못 지킨다 |
+| `DETECTION_BASELINE_WINDOW` | `15m` | — | "평소"를 보는 기간 |
+| `DETECTION_WARMUP_WINDOWS` | `24` | — | 이만큼 안 쌓이면 카드를 안 낸다. 켜자마자는 아무 채팅이나 무한대 배율이다 |
+| `DETECTION_SPIKE_RATIO` | `3.0` | — | 배율 임계(ADR-011). **바꿀 때는 높은 쪽이 안전하다** — 가짜 카드가 놓친 것보다 비싸다 |
+| `DETECTION_MIN_COUNT` | `10` | — | 절대 최소 건수. 작은 채널의 2건→4건 같은 허수 배율을 자른다 |
+| `DETECTION_METRIC` | `MESSAGE` | — | `MESSAGE` 또는 `CHATTER`. 사람 수는 지금 집계만 하고 판정엔 안 쓴다 |
+| `DETECTION_RETENTION` | `24h` | — | 집계 줄 보관 기간 |
+| `DETECTION_SWEEP_INTERVAL` | `10m` | — | 보관 기간이 지난 줄을 치우는 주기 |
+
+**임계값 셋(`SPIKE_RATIO`·`MIN_COUNT`·`WARMUP_WINDOWS`)은 확정값이 아니다.** 멘토 협업이
+미결이라 설정으로 빼 뒀다 — 실측 뒤에 다시 정한다.
+
 ### 나머지
 
-`chat-detector`는 빈 껍데기다.
+`chat-detector`는 DB·Flyway·집계 표까지 놓였다(POK-120 태스크 1). 판정·발행은 아직 없다.
 
 다음 작업 순서:
 

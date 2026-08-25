@@ -174,12 +174,24 @@ services:
       context: .
       dockerfile: chat-detector/Dockerfile
     restart: unless-stopped
-    # DB·외부 연동이 아직 없다. postgres 를 기다릴 이유가 없다.
+    # DB 를 쓰게 됐다. postgres 가 뜬 뒤에 올라와야 한다.
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       # 루프백에 묶는다(chat-collector 와 같은 이유 — 밖에 열 이유가 없다).
       # 이쪽은 아직 @RestController 가 실제로 0개이기도 하다.
       - "127.0.0.1:8084:8084"
     environment:
+      DB_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      # clip·chat-collector 의 /internal/** 을 여는 열쇠. 셋이 같은 값이다.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?}
+      # compose 네트워크 안에서는 서비스 이름이 곧 호스트 이름이다.
+      CLIP_BASE_URL: http://clip:8081
+      COLLECTOR_BASE_URL: http://chat-collector:8083
       JAVA_TOOL_OPTIONS: -Xmx192m
 
 volumes:
