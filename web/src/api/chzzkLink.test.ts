@@ -53,4 +53,30 @@ describe('chzzkLinkFailureMessage', () => {
     });
     expect(JSON.stringify(message)).not.toContain('SOME_INTERNAL_CODE');
   });
+
+  it('reason 없는 5xx는 도달 실패로 — 연동을 처음부터 다시 시작하라고 안내한다 (POK-217)', () => {
+    // dev 프록시가 재시작 중인 auth에 닿지 못하면 본문 없는 500, apiFetch의 refresh
+    // 불가 판정이면 503이 온다. code·state는 이미 지워졌으므로 "다시 시도"가 아니라
+    // 연동 재시작이 사용자가 실제로 할 일이다.
+    for (const status of [500, 502, 503, 504]) {
+      const message = chzzkLinkFailureMessage(new ApiError(status, `요청이 실패했다 (${status})`));
+      expect(message.title).toBe('서버와 연결이 원활하지 않아요');
+      expect(message.description).toContain('연동을 다시 시작');
+    }
+  });
+
+  it('502라도 reason이 CHZZK_UNAVAILABLE이면 치지직 문구가 이긴다 — 도달 실패 판정보다 먼저', () => {
+    const message = chzzkLinkFailureMessage(new ApiError(502, 'CHZZK_UNAVAILABLE'));
+    expect(message.title).toBe('치지직과 연결하지 못했어요');
+  });
+
+  it('fetch가 거부된 네트워크 단절(TypeError)도 도달 실패다 — 사용자 상황이 5xx와 같다', () => {
+    const message = chzzkLinkFailureMessage(new TypeError('Failed to fetch'));
+    expect(message.title).toBe('서버와 연결이 원활하지 않아요');
+    expect(message.description).toContain('연동을 다시 시작');
+  });
+
+  it('TypeError가 아닌 알 수 없는 예외는 폴백이다 — 버그를 연결 장애로 위장하지 않는다', () => {
+    expect(chzzkLinkFailureMessage(new Error('boom')).title).toBe('연동에 실패했어요');
+  });
 });

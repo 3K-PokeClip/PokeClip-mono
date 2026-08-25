@@ -81,12 +81,12 @@ export function ChzzkCallbackScreen() {
         back();
       })
       .catch((e: unknown) => {
-        // 401이 곧 세션 종료는 아니다. doRefresh는 네트워크 오류·5xx·형식 위반일 때
-        // **토큰을 보존한 채** 실패하는데(배포 중 재시작 한 번에 유효한 refresh가 파기되면
-        // 안 되므로), apiFetch는 그 경우에도 401을 던진다. 그걸 로그아웃으로 읽으면
-        // 로그인 화면 역가드가 살아있는 refreshToken을 보고 /home으로 튕겨 막다른 길이
-        // 된다 — 안내는 로그인하라는데 로그인 화면에 갈 수 없다. 세션이 실제로 접힌
-        // 경우(apiFetch가 clearTokens까지 돌아 토큰이 빈 경우)만 로그인으로 보낸다.
+        // 401이 곧 세션 종료는 아니다. refresh가 인프라 장애로 못 돈 경우는 apiFetch가
+        // 503으로 던지지만(POK-217), 다른 계정으로 바뀐 레이스 등 토큰이 남은 401이
+        // 여전히 있다. 그걸 로그아웃으로 읽으면 로그인 화면 역가드가 살아있는
+        // refreshToken을 보고 /home으로 튕겨 막다른 길이 된다 — 안내는 로그인하라는데
+        // 로그인 화면에 갈 수 없다. 세션이 실제로 접힌 경우(apiFetch가 clearTokens까지
+        // 돌아 토큰이 빈 경우)만 로그인으로 보낸다.
         if (
           e instanceof ApiError &&
           e.status === 401 &&

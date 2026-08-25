@@ -101,8 +101,13 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `NEXT_PUBLIC_MEDIA_STUB_URL`      | 스텁 m3u8 주소           | 플레이어 개발용 정적 세그먼트 ([`infra/compose/stub/`](../infra/compose/stub/)) |
 | `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL` | LL-HLS 베이스            | 진짜 미디어 서버 (`{base}/{streamId}/index.m3u8`)                               |
 
-서버 주소는 **코드에 하드코딩하지 않는다** — env 참조만. 백엔드 서버가 안 떠 있어도
-rewrites는 env가 있을 때만 걸리므로 앱 기동에는 지장이 없다. 백엔드 로컬 기동은
+서버 주소는 **코드에 하드코딩하지 않는다** — env 참조만. env가 없으면 해당 rewrites가
+아예 걸리지 않으므로 백엔드 없이도 **기동·빌드는 된다**. 다만 env가 있는데 백엔드가 안
+떠 있으면(재시작 중 포함) 그 경로의 요청은 프록시 연결 실패로 **500**이 난다 — dev 로그의
+`Failed to proxy ... AggregateError`가 그 신호다 (POK-217,
+[트러블슈팅](../docs/dev-environment.md#dev-프록시-트러블슈팅-pok-217)). rewrites 대상은
+**빌드 시점에 굳는다** — `next start`는 실행 시점 env를 읽지 않으므로, 운영 빌드의 프록시
+대상을 바꾸려면 다시 빌드해야 한다. 백엔드 로컬 기동은
 [`docs/dev-environment.md`](../docs/dev-environment.md).
 
 ### 세션·토큰 저장과 다중 탭
