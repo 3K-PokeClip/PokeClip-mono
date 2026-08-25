@@ -9,7 +9,6 @@ dependencyManagement {
 }
 
 dependencies {
-    implementation project(':common')
     implementation project(':web-support')
 
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'

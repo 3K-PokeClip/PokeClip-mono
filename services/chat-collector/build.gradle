@@ -9,7 +9,6 @@ dependencyManagement {
 }
 
 dependencies {
-    implementation project(':common')
 
     // 채팅 원본 1분 파일을 S3에 올린다(POK-116). s3가 runtime으로 끌어오는 HTTP 클라이언트는
     // Apache 5(apache-client 4가 아니다) — S3Clients가 시한을 박으려면 컴파일에서 보여야 해서 명시.
