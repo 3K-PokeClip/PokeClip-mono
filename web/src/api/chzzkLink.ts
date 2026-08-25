@@ -168,5 +168,9 @@ export function chzzkLinkFailureMessage(e: unknown): ChzzkLinkMessage {
   // reason 매칭(위)이 먼저다 — 502가 CHZZK_UNAVAILABLE을 싣고 오면 그 문구가 이긴다.
   if (e instanceof ApiError && TRANSPORT_FAILURE_STATUS.has(e.status))
     return TRANSPORT_FAILURE_MESSAGE;
+  // fetch 자체가 거부된 네트워크 단절(TypeError)도 같은 상황이다 — code는 이미
+  // 소실됐고 그 자리의 "다시 시도"는 실행 불가능하다. 단 TypeError로 좁힌다:
+  // 다른 예외까지 합류시키면 프로그래밍 버그가 연결 장애 문구로 위장된다.
+  if (e instanceof TypeError) return TRANSPORT_FAILURE_MESSAGE;
   return FALLBACK_MESSAGE;
 }

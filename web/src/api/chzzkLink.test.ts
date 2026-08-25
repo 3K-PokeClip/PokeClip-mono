@@ -70,7 +70,13 @@ describe('chzzkLinkFailureMessage', () => {
     expect(message.title).toBe('치지직과 연결하지 못했어요');
   });
 
-  it('ApiError가 아닌 실패(네트워크 TypeError)는 여전히 폴백이다', () => {
-    expect(chzzkLinkFailureMessage(new TypeError('network')).title).toBe('연동에 실패했어요');
+  it('fetch가 거부된 네트워크 단절(TypeError)도 도달 실패다 — 사용자 상황이 5xx와 같다', () => {
+    const message = chzzkLinkFailureMessage(new TypeError('Failed to fetch'));
+    expect(message.title).toBe('서버와 연결이 원활하지 않아요');
+    expect(message.description).toContain('연동을 다시 시작');
+  });
+
+  it('TypeError가 아닌 알 수 없는 예외는 폴백이다 — 버그를 연결 장애로 위장하지 않는다', () => {
+    expect(chzzkLinkFailureMessage(new Error('boom')).title).toBe('연동에 실패했어요');
   });
 });
