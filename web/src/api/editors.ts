@@ -158,7 +158,7 @@ const FAILURE_MESSAGE: Record<EditorInviteFailure, EditorInviteMessage> = {
   TOO_MANY_PENDING: {
     title: '대기 중인 초대가 가득 찼어요',
     description:
-      '초대는 동시에 20건까지만 대기할 수 있어요. 대기 중인 초대를 취소하거나 기존 편집자 권한을 회수해 자리를 비운 뒤 다시 시도해 주세요.',
+      '초대는 동시에 20건까지만 대기할 수 있어요. 대기 중인 초대를 취소하거나 편집자를 내보내 자리를 비운 뒤 다시 시도해 주세요.',
   },
 };
 

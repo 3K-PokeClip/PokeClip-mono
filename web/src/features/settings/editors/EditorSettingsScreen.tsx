@@ -40,7 +40,7 @@ export function EditorSettingsScreen() {
       {state.view === 'ready' && state.editors.length > 0 && (
         <p className={styles.note}>
           <Info aria-hidden="true" />
-          권한 회수는 즉시 적용되고, 대기 중이던 승인 요청은 무효가 됩니다
+          편집자를 내보내면 즉시 적용되고, 대기 중이던 승인 요청은 무효가 됩니다
         </p>
       )}
 
@@ -83,19 +83,17 @@ function listOf(state: EditorSettingsViewState) {
       );
     default:
       if (state.empty) {
+        // 1l ④에는 카드 안 초대 버튼이 없다 — 초대 진입점은 헤더 버튼 하나다.
         return (
           <div className={styles.emptyCard}>
             <span className={styles.emptyIcon} aria-hidden="true">
-              <UserPlus size={20} />
+              <UserPlus size={21} />
             </span>
             <span className={styles.emptyTitle}>아직 편집자가 없어요</span>
             <span className={styles.emptyBody}>
               편집자를 초대하면 하이라이트 검토와 클립 편집을 맡길 수 있어요. 업로드는
               기본적으로 내 승인을 거칩니다.
             </span>
-            <Button variant="solid" size="sm" onClick={state.openInvite}>
-              편집자 초대
-            </Button>
           </div>
         );
       }

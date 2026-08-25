@@ -31,6 +31,11 @@
   margin: 0;
 }
 
+/* 확인 대상 요약 카드 자리 — 1l 내보내기 모달은 제목 아래 14px에 대상 카드를 둔다 */
+.subject {
+  margin-top: calc(14 * var(--pc-u));
+}
+
 .divider {
   height: 1px;
   background: var(--pc-color-border-subtle);

@@ -10,16 +10,20 @@ describe('joinedLabel', () => {
 describe('expiresLabel', () => {
   const now = new Date('2026-08-25T09:00:00Z');
 
-  it('남은 기간을 일 단위 ceil로 그린다 — 발송 직후 7일', () => {
+  it('하루 이상은 일 단위 round다 — 발송 직후(7일 - 몇 분)가 「7일」, 25시간이 「1일」', () => {
+    expect(expiresLabel('2026-09-01T08:57:00Z', now)).toBe('7일 후 만료');
     expect(expiresLabel('2026-09-01T09:00:00Z', now)).toBe('7일 후 만료');
+    expect(expiresLabel('2026-08-26T10:00:00Z', now)).toBe('1일 후 만료');
   });
 
-  it('하루 미만 잔여도 올림이다 — 23시간 59분은 「1일 후 만료」', () => {
-    expect(expiresLabel('2026-08-26T08:59:00Z', now)).toBe('1일 후 만료');
+  it('하루 미만은 시간 단위 floor다 — 시안 1l의 「18시간 후 만료」', () => {
+    expect(expiresLabel('2026-08-26T03:30:00Z', now)).toBe('18시간 후 만료');
+    expect(expiresLabel('2026-08-26T08:59:00Z', now)).toBe('23시간 후 만료');
   });
 
-  it('경계와 과거는 「오늘 만료」로 클램프한다 — 조회 후 경과·시계 오차 대비', () => {
-    expect(expiresLabel('2026-08-25T09:00:00Z', now)).toBe('오늘 만료');
-    expect(expiresLabel('2026-08-25T08:00:00Z', now)).toBe('오늘 만료');
+  it('1시간 미만·경계·과거는 「곧 만료」로 클램프한다 — 조회 후 경과·시계 오차 대비', () => {
+    expect(expiresLabel('2026-08-25T09:30:00Z', now)).toBe('곧 만료');
+    expect(expiresLabel('2026-08-25T09:00:00Z', now)).toBe('곧 만료');
+    expect(expiresLabel('2026-08-25T08:00:00Z', now)).toBe('곧 만료');
   });
 });

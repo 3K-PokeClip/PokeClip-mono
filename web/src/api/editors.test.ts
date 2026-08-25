@@ -134,10 +134,10 @@ describe('inviteFailureMessage', () => {
     expect(message.description).toContain('먼저 가입한 사람만');
   });
 
-  it('정원이 차면 자리를 비우는 방법을 알린다 — 취소와 회수 둘 다', () => {
+  it('정원이 차면 자리를 비우는 방법을 알린다 — 취소와 내보내기 둘 다', () => {
     const message = inviteFailureMessage(new ApiError(409, 'TOO_MANY_PENDING'));
     expect(message.description).toContain('취소');
-    expect(message.description).toContain('회수');
+    expect(message.description).toContain('내보내');
   });
 
   it('409 둘을 서로 다른 문구로 가른다', () => {

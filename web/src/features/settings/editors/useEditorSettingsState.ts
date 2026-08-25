@@ -45,12 +45,12 @@ export interface EditorSettingsViewState {
   inviting: boolean;
   inviteError: EditorInviteMessage | null;
 
-  /** 회수 확인 모달 — 파괴적 동작이라 모달로 확인받고 토스트는 결과만 알린다 (ADR-044).
-   *  boolean 대신 대상 자체가 상태다 — 이름이 모달·토스트 문구에 필요하다. null = 닫힘. */
+  /** 내보내기(위임 해제) 확인 모달 — 파괴적 동작이라 모달로 확인받고 토스트는 결과만
+   *  알린다 (ADR-044). boolean 대신 대상 자체가 상태다 — 이름이 모달·토스트 문구에 필요하다. */
   revokeTarget: EditorDelegation | null;
   openRevoke: (editor: EditorDelegation) => void;
   closeRevoke: () => void;
-  /** 회수 실행. 요청 중에는 모달이 닫히지 않는다. */
+  /** 내보내기 실행. 요청 중에는 모달이 닫히지 않는다. */
   confirmRevoke: () => void;
   revoking: boolean;
 
@@ -69,7 +69,7 @@ export function useEditorSettingsState(): EditorSettingsViewState {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<EditorDelegation | null>(null);
 
-  // 초대 수락·회수·취소가 두 리소스에 걸쳐 상태를 옮기므로 어느 뮤테이션이든 둘 다 갱신한다.
+  // 초대 수락·내보내기·취소가 두 리소스에 걸쳐 상태를 옮기므로 어느 뮤테이션이든 둘 다 갱신한다.
   // 실패 경로에도 부른다 — ALREADY_EDITOR·404는 내 목록이 낡았다는 뜻이라 실패가 곧 갱신 사유다.
   const invalidateLists = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: editorDelegationsQueryOptions.queryKey });
@@ -98,27 +98,29 @@ export function useEditorSettingsState(): EditorSettingsViewState {
     mutationFn: (target: EditorDelegation) => revokeDelegation(target.id),
     onSuccess: (_data, target) => {
       // destructive 표식이 undo를 컴파일 단계에서 막는다 (ADR-044). 실제로 되돌릴 수 없다 —
-      // 회수 즉시 대기 중이던 승인 요청이 무효가 되므로 되돌려도 그 요청은 안 돌아온다.
+      // 내보내는 즉시 대기 중이던 승인 요청이 무효가 되므로 되돌려도 그 요청은 안 돌아온다.
+      // 시안 ⑥의 부제는 「편집자 1 / 3 · 승인 요청 1건 무효」지만 정원·건수가 POK-207 몫이라
+      // 무효 고지만 남긴다. 호칭은 시안 제목처럼 「님」을 붙인다 — 조사(을/를)도 갈리지 않는다.
       toast({
         tone: 'success',
         destructive: true,
-        title: `${target.name}의 편집 권한을 회수했어요`,
+        title: `${target.name} 님을 편집자에서 내보냈어요`,
         description: '대기 중이던 승인 요청이 무효가 됐어요.',
       });
     },
     onError: (e) => {
-      // 없는 것과 같은 404 — 다른 탭·기기에서 이미 회수됐거나 편집자가 스스로 나갔다.
+      // 없는 것과 같은 404 — 다른 탭·기기에서 이미 내보냈거나 편집자가 스스로 나갔다.
       if (e instanceof ApiError && e.status === 404 && e.message === 'DELEGATION_NOT_FOUND') {
         toast({
           tone: 'error',
-          title: '이미 회수된 권한이에요',
+          title: '이미 내보낸 편집자예요',
           description: '다른 곳에서 먼저 처리됐어요. 목록을 최신으로 갱신했어요.',
         });
         return;
       }
       toast({
         tone: 'error',
-        title: '권한 회수에 실패했어요',
+        title: '편집자 내보내기에 실패했어요',
         description: '잠시 후 다시 시도해 주세요.',
       });
     },

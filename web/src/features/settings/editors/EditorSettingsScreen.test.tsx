@@ -27,7 +27,7 @@ const SENT = [
     inviteeName: '컷마스터',
     inviteeEmail: 'cut.master@gmail.com',
     status: 'PENDING',
-    expiresAt: inFuture(6.5),
+    expiresAt: inFuture(6.9),
     createdAt: '2026-08-25T09:00:00Z',
   },
   // 이력 — 화면에 나오면 안 되는 것들
@@ -91,13 +91,13 @@ describe('EditorSettingsScreen — 목록', () => {
     expect(screen.queryByRole('group')).not.toBeInTheDocument();
   });
 
-  it('편집자 행은 이름·합류일·회수 버튼, 대기 초대 행은 이메일·만료일·취소 버튼이다', async () => {
+  it('편집자 행은 이름·합류일·내보내기 버튼, 대기 초대 행은 이메일·만료일·취소 버튼이다', async () => {
     stubEditors();
     renderWithProviders(<EditorSettingsScreen />);
 
     const park = within(await screen.findByRole('group', { name: '박편집' }));
     expect(park.getByText('5월 12일 합류')).toBeInTheDocument();
-    expect(park.getByRole('button', { name: '회수' })).toBeInTheDocument();
+    expect(park.getByRole('button', { name: '내보내기' })).toBeInTheDocument();
     expect(row('김컷').getByText('7월 3일 합류')).toBeInTheDocument();
 
     const pending = row(/cut\.master@gmail\.com/);
@@ -115,7 +115,7 @@ describe('EditorSettingsScreen — 목록', () => {
     expect(screen.queryByText(/expired@example\.com/)).not.toBeInTheDocument();
   });
 
-  it('편집자도 대기 초대도 없으면 빈 상태가 서고, 그 안의 초대 버튼이 모달을 연다', async () => {
+  it('편집자도 대기 초대도 없으면 빈 상태가 선다 — 초대 진입점은 헤더 버튼 하나다 (1l ④)', async () => {
     stubFetch((url) => {
       if (url === DELEGATIONS_URL || url === SENT_URL) return jsonResponse(200, []);
       throw new Error(`unexpected fetch: ${url}`);
@@ -126,9 +126,8 @@ describe('EditorSettingsScreen — 목록', () => {
     expect(await screen.findByText('아직 편집자가 없어요')).toBeInTheDocument();
     expect(screen.getByText(/하이라이트 검토와 클립 편집을 맡길 수 있어요/)).toBeInTheDocument();
 
-    // 헤더와 빈 상태에 같은 이름의 버튼이 둘이다 — 빈 상태 쪽을 누른다
-    const buttons = screen.getAllByRole('button', { name: '편집자 초대' });
-    await user.click(buttons[buttons.length - 1] as HTMLElement);
+    // 1l ④에는 카드 안 초대 버튼이 없다 — 같은 이름의 버튼은 헤더 하나뿐이어야 한다
+    await user.click(screen.getByRole('button', { name: '편집자 초대' }));
     expect(await screen.findByRole('dialog', { name: '편집자 초대' })).toBeInTheDocument();
   });
 
@@ -226,7 +225,7 @@ describe('EditorSettingsScreen — 초대', () => {
 
     const alert = await dialog.findByRole('alert');
     expect(alert).toHaveTextContent('취소');
-    expect(alert).toHaveTextContent('회수');
+    expect(alert).toHaveTextContent('내보내');
   });
 
   it('실패 문구는 모달을 닫았다 다시 열면 남지 않는다', async () => {
@@ -255,18 +254,21 @@ describe('EditorSettingsScreen — 초대', () => {
   });
 });
 
-describe('EditorSettingsScreen — 회수', () => {
-  it('회수는 확인 모달을 거친다 — 취소하면 DELETE가 나가지 않는다', async () => {
+describe('EditorSettingsScreen — 내보내기', () => {
+  it('내보내기는 확인 모달을 거친다 — 취소하면 DELETE가 나가지 않는다', async () => {
     const spy = stubEditors();
     const user = userEvent.setup();
     renderWithProviders(<EditorSettingsScreen />);
 
-    await user.click(row(await findGroupName('박편집')).getByRole('button', { name: '회수' }));
+    await user.click(row(await findGroupName('박편집')).getByRole('button', { name: '내보내기' }));
     const dialog = within(
-      await screen.findByRole('dialog', { name: '박편집님의 편집 권한을 회수할까요?' }),
+      await screen.findByRole('dialog', {
+        name: '박편집 님을 편집자에서 빼고, 내 방송 접근을 막을까요?',
+      }),
     );
-    // 무엇이 함께 무효가 되는지를 알린다 — 티켓 완료 조건
+    // 무엇이 함께 무효가 되는지를 알린다 — 티켓 완료 조건. 대상 카드(1l ⑦)도 선다
     expect(dialog.getByText(/대기 중이던 승인 요청은 무효가 됩니다/)).toBeInTheDocument();
+    expect(dialog.getByText('5월 12일 합류')).toBeInTheDocument();
 
     await user.click(dialog.getByRole('button', { name: '취소' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -284,13 +286,15 @@ describe('EditorSettingsScreen — 회수', () => {
     const user = userEvent.setup();
     renderWithProviders(<EditorSettingsScreen />);
 
-    await user.click(row(await findGroupName('박편집')).getByRole('button', { name: '회수' }));
+    await user.click(row(await findGroupName('박편집')).getByRole('button', { name: '내보내기' }));
     const dialog = within(
-      await screen.findByRole('dialog', { name: '박편집님의 편집 권한을 회수할까요?' }),
+      await screen.findByRole('dialog', {
+        name: '박편집 님을 편집자에서 빼고, 내 방송 접근을 막을까요?',
+      }),
     );
-    await user.click(dialog.getByRole('button', { name: /권한 회수/ }));
+    await user.click(dialog.getByRole('button', { name: '내보내기' }));
 
-    expect(await screen.findByText('박편집의 편집 권한을 회수했어요')).toBeInTheDocument();
+    expect(await screen.findByText('박편집 님을 편집자에서 내보냈어요')).toBeInTheDocument();
     expect(screen.getByText('대기 중이던 승인 요청이 무효가 됐어요.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '되돌리기' })).not.toBeInTheDocument();
     expect(
@@ -301,7 +305,7 @@ describe('EditorSettingsScreen — 회수', () => {
     ).toBe(true);
   });
 
-  it('이미 회수된 위임(404)은 오류 토스트로 알리고 목록을 갱신한다', async () => {
+  it('이미 내보낸 위임(404)은 오류 토스트로 알리고 목록을 갱신한다', async () => {
     stubEditors((url, init) => {
       if (url === '/api/editor-delegations/3' && init?.method === 'DELETE')
         return jsonResponse(404, { reason: 'DELEGATION_NOT_FOUND' });
@@ -310,12 +314,12 @@ describe('EditorSettingsScreen — 회수', () => {
     const user = userEvent.setup();
     renderWithProviders(<EditorSettingsScreen />);
 
-    await user.click(row(await findGroupName('박편집')).getByRole('button', { name: '회수' }));
+    await user.click(row(await findGroupName('박편집')).getByRole('button', { name: '내보내기' }));
     await user.click(
-      within(await screen.findByRole('dialog')).getByRole('button', { name: /권한 회수/ }),
+      within(await screen.findByRole('dialog')).getByRole('button', { name: '내보내기' }),
     );
 
-    expect(await screen.findByText('이미 회수된 권한이에요')).toBeInTheDocument();
+    expect(await screen.findByText('이미 내보낸 편집자예요')).toBeInTheDocument();
   });
 });
 
