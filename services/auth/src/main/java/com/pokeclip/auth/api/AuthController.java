@@ -7,6 +7,7 @@ import com.pokeclip.auth.api.dto.GoogleLoginRequest;
 import com.pokeclip.auth.api.dto.MeResponse;
 import com.pokeclip.auth.api.dto.RefreshRequest;
 import com.pokeclip.auth.api.dto.TokenResponse;
+import com.pokeclip.auth.api.dto.UpdateNameRequest;
 import com.pokeclip.auth.token.TokenService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -14,6 +15,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -36,6 +38,15 @@ public class AuthController {
     @GetMapping("/me")
     public MeResponse me(@AuthenticationPrincipal Jwt jwt) {
         return MeResponse.from(authService.me(userId(jwt)));
+    }
+
+    /**
+     * 회원 번호를 본문으로 받지 않는다 — 토큰의 주인만 자기 것을 고친다.
+     * 사진은 모양이 달라(파일) 별도 창구가 된다.
+     */
+    @PatchMapping("/me")
+    public MeResponse updateName(@AuthenticationPrincipal Jwt jwt, @RequestBody UpdateNameRequest request) {
+        return MeResponse.from(authService.updateName(userId(jwt), request.name()));
     }
 
     /**
