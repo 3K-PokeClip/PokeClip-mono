@@ -30,6 +30,21 @@ class CorsTest extends IntegrationTestSupport {
                 .andExpect(header().string("Access-Control-Allow-Methods", org.hamcrest.Matchers.containsString("DELETE")));
     }
 
+    /**
+     * 회원정보 수정이 PATCH다(POK-207 {@code PATCH /api/auth/me}). 허용 메서드에 없으면 브라우저
+     * preflight가 403으로 막혀 화면에서 이름 저장이 안 된다 — DELETE와 같은 자리다.
+     */
+    @Test
+    void PATCH_preflight가_통과한다() throws Exception {
+        mockMvc.perform(options("/api/auth/me")
+                        .header("Origin", "http://localhost:3000")
+                        .header("Access-Control-Request-Method", "PATCH")
+                        .header("Access-Control-Request-Headers", "Authorization"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:3000"))
+                .andExpect(header().string("Access-Control-Allow-Methods", org.hamcrest.Matchers.containsString("PATCH")));
+    }
+
     @Test
     void 허용된_출처의_preflight는_통과한다() throws Exception {
         mockMvc.perform(options("/api/auth/google")
