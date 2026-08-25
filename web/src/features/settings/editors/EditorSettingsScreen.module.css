@@ -1,0 +1,190 @@
+/* 디자인 1l 설정 · 편집자 관리 */
+
+.screen {
+  max-width: calc(860 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+}
+
+/* 1l 상단 — h1과 「편집자 초대」 버튼이 같은 행이다. SettingsPageHeader에는 액션 슬롯이
+   없으므로(1k~1q 공통 헤더) 이 화면이 행으로 감싼다 */
+.headerRow {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--pc-u));
+}
+
+.headerRow > header {
+  flex: 1;
+}
+
+.headerAction {
+  flex: none;
+}
+
+/* 1l은 h1 아래 20px에서 목록이 시작한다 — 헤더 h1이 갖는 4px에 나머지를 더한다 */
+.rows {
+  margin-top: calc(16 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+  gap: calc(10 * var(--pc-u));
+}
+
+/* 1l 편집자 행 카드 — 1k 채널 행과 같은 규격이다 */
+.row {
+  display: flex;
+  align-items: center;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(15 * var(--pc-u)) calc(16 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+}
+
+.rowBody {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.rowName {
+  font-size: calc(13.5 * var(--pc-u));
+  font-weight: 700;
+}
+
+.rowMeta {
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  margin-top: calc(2 * var(--pc-u));
+}
+
+/* 1l 대기 중인 초대 행 — 점선이 「아직 편집자가 아니다」를 말한다 */
+.pendingRow {
+  display: flex;
+  align-items: center;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(14 * var(--pc-u)) calc(16 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1.5px dashed var(--pc-color-border-default);
+}
+
+.pendingIcon {
+  width: calc(40 * var(--pc-u));
+  height: calc(40 * var(--pc-u));
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-muted);
+}
+
+.pendingTitle {
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-text-secondary);
+}
+
+/* 조회 실패 폴백 — 행 개수를 모르는 상태라 목록 자리 한 덩어리로 그린다 */
+.fallbackCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(15 * var(--pc-u)) calc(16 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+}
+
+.fallbackText {
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+/* 1l ④ 빈 상태 — 무엇을 맡길 수 있는지 설명하고 초대로 유도한다 */
+.emptyCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: calc(10 * var(--pc-u));
+  padding: calc(30 * var(--pc-u)) calc(24 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1.5px dashed var(--pc-color-border-default);
+}
+
+.emptyIcon {
+  width: calc(46 * var(--pc-u));
+  height: calc(46 * var(--pc-u));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-muted);
+}
+
+.emptyTitle {
+  font-size: calc(13.5 * var(--pc-u));
+  font-weight: 750;
+}
+
+.emptyBody {
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  line-height: 1.55;
+  max-width: calc(300 * var(--pc-u));
+}
+
+/* 1l 하단 안내 — 회수의 결과(승인 요청 무효)를 목록 곁에서 미리 말해 둔다 */
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(7 * var(--pc-u));
+  margin: calc(22 * var(--pc-u)) 0 0;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  line-height: 1.6;
+}
+
+.note svg {
+  width: calc(14 * var(--pc-u));
+  height: calc(14 * var(--pc-u));
+  flex: none;
+  margin-top: calc(1.5 * var(--pc-u));
+}
+
+/* ---------- 초대 모달 (1l ③) ---------- */
+
+/* DS 기본 폭(480)을 1l 값(410)으로 덮는다 — 특이도 더블링 이유는 ConfirmDialog.module.css 참조 */
+.inviteDialog.inviteDialog {
+  max-width: calc(410 * var(--pc-u));
+}
+
+.inviteTitle.inviteTitle {
+  font-size: calc(15 * var(--pc-u));
+  font-weight: 750;
+  margin: 0;
+}
+
+.inviteLead.inviteLead {
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  margin: calc(6 * var(--pc-u)) 0 calc(16 * var(--pc-u));
+}
+
+.inviteErrorDetail {
+  display: block;
+  margin-top: calc(2 * var(--pc-u));
+  font-weight: 400;
+  color: var(--pc-color-text-secondary);
+}
+
+.inviteActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(10 * var(--pc-u));
+  margin-top: calc(18 * var(--pc-u));
+}
