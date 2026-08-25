@@ -8,6 +8,7 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * {@code chat_messages}를 읽는다. <b>쓰지 않는다.</b>
@@ -111,6 +112,36 @@ public class ChatWindowReader {
     public List<String> activeStreams(Instant since) {
         return jdbc.queryForList(ACTIVE_STREAMS, String.class, Timestamp.from(since));
     }
+
+    /**
+     * 그 창의 채팅 중 <b>가장 늦게 우리에게 닿은 시각</b>. 시각 축 표 <b>3번</b>(우리 구간 지연)이
+     * 쓰는 값이다.
+     *
+     * <p><b>왜 필요한가.</b> 「우리 구간」은 <b>우리가 그 창을 다 받은 순간</b>부터 재야 한다.
+     * 창이 닫힌 시각({@code message_time} 눈금)부터 재면 그 안에 <b>전달 지연과 시계 어긋남</b>이
+     * 섞이고, 그러면 시청자가 늦게 쳤다는 이유로 우리 목표가 실패한다 — PRD의 사용자 결정이
+     * 정확히 그것을 막으려고 「판정은 우리 손 안에만 건다」로 내려졌다(감사 2회차 R-2).
+     *
+     * <p><b>발행 직전에 카드당 한 번만 부른다.</b> 집계({@code countWindows})는 한 바퀴에 300번
+     * 도는 뜨거운 자리라 거기에 칸을 얹지 않았고, {@code chat_metrics}에 칸을 더하지도 않았다 —
+     * 이번 PR이 만든 표를 이번 PR이 고치는 이력을 남기지 않으려고. 카드는 급증한 창에만 나가므로
+     * 이 조회의 빈도는 변환 창구 호출과 같다. {@code idx_chat_messages_stream_received}를 탄다.
+     *
+     * @return 그 창에 채팅이 없으면 빈 값. 집계된 창이라 정상적으로는 늘 값이 있다
+     */
+    public Optional<Instant> lastReceivedAt(String streamId, Instant from, Instant to) {
+        Timestamp last = jdbc.queryForObject(LAST_RECEIVED, Timestamp.class,
+                streamId, Timestamp.from(from), Timestamp.from(to));
+        return Optional.ofNullable(last).map(Timestamp::toInstant);
+    }
+
+    /** 경계는 집계와 같다 — {@code >= from AND < to}. 다르면 다른 창의 채팅이 섞인다. */
+    private static final String LAST_RECEIVED = """
+            SELECT max(received_at)
+              FROM chat_messages
+             WHERE stream_id = ?
+               AND message_time >= ? AND message_time < ?
+            """;
 
     /** {@code [from, to)} 구간을 창 크기로 묶어 센다. 채팅이 없는 창은 줄이 안 나온다. */
     public List<MetricRow> countWindows(String streamId, long windowSizeMs, Instant from, Instant to) {
