@@ -1,0 +1,81 @@
+package com.pokeclip.auth.profile;
+
+import com.pokeclip.auth.token.TokenService;
+import com.pokeclip.auth.user.User;
+import com.pokeclip.auth.user.UserRepository;
+import com.pokeclip.auth.user.UserService;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.web.servlet.MockMvc;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * 창고 이름이 비면 <b>사진만 꺼지고 이름 수정·로그인은 그대로 돈다.</b> 1번의 창고 준비를 안 기다리고
+ * 이번 세션을 끝낼 수 있는 근거가 이것이라, 재는 자리가 있어야 한다.
+ *
+ * <p>값을 명시로 비운다 — application-test.yml이 지금은 비어 있지만 나중에 채워질 수 있고,
+ * 그러면 이 검사가 조용히 「켜진 상태」를 재게 된다.
+ */
+@SpringBootTest(properties = {
+        "pokeclip.profile-photo.bucket=",
+        "pokeclip.profile-photo.token-secret=",
+        "pokeclip.profile-photo.base-url="
+})
+class ProfilePhotoDisabledTest extends ProfileTestSupport {
+
+    ProfilePhotoDisabledTest(MockMvc mockMvc, UserRepository userRepository, UserService userService,
+                             TokenService tokenService, JdbcTemplate jdbc) {
+        super(mockMvc, userRepository, userService, tokenService, jdbc);
+    }
+
+    @Test
+    void 사진_올리기는_503이다() throws Exception {
+        User u = newUser();
+        byte[] body = new byte[512];
+        System.arraycopy(new byte[]{(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}, 0, body, 0, 8);
+
+        mockMvc.perform(multipart("/api/auth/me/photo")
+                        .file(new MockMultipartFile("file", "me.png", "image/png", body))
+                        .header("Authorization", bearer(u))
+                        .with(r -> {
+                            r.setMethod("PUT");
+                            return r;
+                        }))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.reason").value("PHOTO_STORAGE_DISABLED"));
+
+        assertThat(userRepository.findById(u.getId()).orElseThrow().getProfilePhotoKey())
+                .as("창고가 실패했는데 표가 사진을 가리키면 안 된다")
+                .isNull();
+    }
+
+    @Test
+    void 이름_수정은_그대로_된다() throws Exception {
+        User u = newUser();
+
+        mockMvc.perform(patch("/api/auth/me")
+                        .header("Authorization", bearer(u))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"새 이름\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("새 이름"));
+    }
+
+    @Test
+    void 회원_정보의_사진_주소는_구글_주소_그대로다() throws Exception {
+        User u = newUser();
+
+        mockMvc.perform(get("/api/auth/me").header("Authorization", bearer(u)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.profileImageUrl").value(u.getProfileImageUrl()));
+    }
+}
