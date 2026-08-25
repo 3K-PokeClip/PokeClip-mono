@@ -215,6 +215,35 @@ class ChatWindowReaderTest extends IntegrationTestSupport {
         assertThat(rows.get(0).messageCount()).isEqualTo(1);
     }
 
+    /**
+     * 🔴 <b>집계가 끝난 뒤 도착한 채팅은 「우리가 다 받은 시각」에 안 섞인다.</b>
+     * 그 채팅은 {@code ON CONFLICT DO NOTHING} 때문에 판정에 쓰이지도 않았는데, 상한이 없으면
+     * {@code max}를 밀어 우리 구간을 <b>실제보다 짧게</b> 만든다(감사 2회차 뒤 지적).
+     */
+    @Test
+    void 늦게_도착한_채팅은_그_창을_다_받은_시각에_안_섞인다() {
+        Instant 집계시점 = T0.plusSeconds(7);
+        채팅("s1", "u1", T0.plusMillis(1_000), T0.plusSeconds(6));   // 집계에 들어갔다
+        채팅("s1", "u2", T0.plusMillis(2_000), T0.plusSeconds(30));  // 한참 뒤에 도착 — 안 쓰였다
+
+        assertThat(reader.lastReceivedAt("s1", T0, T0.plusSeconds(5), 집계시점))
+                .contains(T0.plusSeconds(6));
+    }
+
+    /**
+     * 상한을 걸어도 <b>집계된 창은 빈손이 되지 않는다.</b> 집계에 쓰인 채팅은 그 정의상
+     * 집계 시점 이전에 도착했기 때문이다 — 이 수정의 대가({@code unknown} 빈도)가 0이라는 근거다.
+     */
+    @Test
+    void 상한을_걸어도_집계된_창은_빈손이_아니다() {
+        채팅("s1", "u1", T0.plusMillis(1_000), T0.plusSeconds(6));
+
+        List<MetricRow> 집계 = reader.countWindows("s1", 5_000L, T0, T0.plusSeconds(5));
+        assertThat(집계).hasSize(1);
+
+        assertThat(reader.lastReceivedAt("s1", T0, T0.plusSeconds(5), T0.plusSeconds(7))).isPresent();
+    }
+
     @Test
     void 남의_방송_채팅은_안_섞인다() {
         채팅("s1", "u1", T0);

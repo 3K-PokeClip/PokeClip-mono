@@ -21,6 +21,12 @@ import java.util.function.Supplier;
  * {@code beyondWindowAndGrace}가 크면 실제로 채팅을 놓치고 있으므로 늘려야 한다.
  * 얼마로 올릴지는 {@code maxDelayMs}가 정한다.
  *
+ * <p>🔴 로그의 {@code observed=}는 <b>그 기간에 본 채팅 전부</b>다 — 늦은 것의 합이 아니라
+ * <b>분모</b>다. 예전에는 키가 {@code total=}이었는데 그러면 「늦은 것의 총합」으로 읽혀
+ * 읽는 사람이 비율을 거꾸로 잡는다. <b>로그를 읽는 사람은 코드를 안 본다.</b>
+ * 필드 이름({@code total})은 그대로 뒀다 — {@code plus}가 더하는 값이라 「합계」가 맞고,
+ * 잘못 읽히는 것은 <b>로그 한 줄만 보는 자리</b>이기 때문이다.
+ *
  * <p><b>{@code @Component}가 아니다.</b> {@code Duration}·{@code Supplier}는 스프링이 만들 수
  * 있는 타입이 아니라 부팅이 죽는다. 조립은 {@code DetectorApplication}의 {@code @Bean}이 한다.
  */
@@ -71,7 +77,7 @@ public class LateArrivalReporter {
 
             // 한 줄에 다 싣는다. 나눠 찍으면 같은 시점의 값을 이어 붙이는 일이 읽는 쪽 몫이 된다.
             log.info("detect.late_arrivals windowGraceMs={} lookbackMs={} streams={} "
-                            + "total={} beyondGrace={} beyondWindowAndGrace={} maxDelayMs={}",
+                            + "observed={} beyondGrace={} beyondWindowAndGrace={} maxDelayMs={}",
                     graceMs, lookback.toMillis(), streams.size(),
                     total.total(), total.beyondGrace(), total.beyondWindowAndGrace(),
                     total.maxDelayForLog());

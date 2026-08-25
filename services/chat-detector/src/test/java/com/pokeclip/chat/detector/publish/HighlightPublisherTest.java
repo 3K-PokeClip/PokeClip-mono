@@ -36,6 +36,11 @@ class HighlightPublisherTest {
     /** 그 창을 우리가 다 받은 시각. 기본은 전달 지연 0(창이 닫힌 시각과 같다). */
     private java.util.Optional<Instant> lastReceivedAt =
             java.util.Optional.of(Instant.ofEpochMilli(WINDOW_START_MS + 5_000));
+    /** 조회에 실제로 넘어간 상한. 발행권을 잡은 시각이어야 한다. */
+    private Instant 넘어간_상한;
+
+    /** 발행권을 잡은 시각. 지금(now)보다 앞선다 — 발행이 밀릴 수 있으므로. */
+    private static final Instant CLAIMED_AT = Instant.ofEpochMilli(WINDOW_START_MS + 5_000 + 500);
     private PublishResult publishResult = PublishResult.CREATED;
     private final List<HighlightCard> published = new java.util.ArrayList<>();
     private final List<Call> located = new java.util.ArrayList<>();
@@ -64,7 +69,9 @@ class HighlightPublisherTest {
         com.pokeclip.chat.detector.metrics.ChatWindowReader reader =
                 new com.pokeclip.chat.detector.metrics.ChatWindowReader(null) {
                     @Override
-                    public java.util.Optional<Instant> lastReceivedAt(String streamId, Instant from, Instant to) {
+                    public java.util.Optional<Instant> lastReceivedAt(String streamId, Instant from,
+                                                                      Instant to, Instant countedUntil) {
+                        넘어간_상한 = countedUntil;
                         return lastReceivedAt;
                     }
                 };
@@ -74,7 +81,7 @@ class HighlightPublisherTest {
     /** 창 시작 시각 하나로만 변환을 부른다. 채팅마다 부르면 수집 서버가 감당 못 한다. */
     @Test
     void 변환_창구를_카드당_한_번만_부른다() {
-        publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, Instant.now());
+        publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, CLAIMED_AT, Instant.now());
 
         assertThat(located).containsExactly(new Call("s1", WINDOW_START_MS));
     }
@@ -82,7 +89,7 @@ class HighlightPublisherTest {
     /** 창 양 끝은 보정값이 같으므로 산수로 낸다. 지점은 창 가운데다. */
     @Test
     void 창_양_끝을_산수로_낸다() {
-        publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, Instant.now());
+        publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, CLAIMED_AT, Instant.now());
 
         assertThat(published).singleElement().satisfies(card -> {
             assertThat(card.windowStartMs()).isEqualTo(30_000L);
@@ -97,7 +104,7 @@ class HighlightPublisherTest {
     void 영영_없음이면_카드를_안_낸다() {
         position = new VideoPosition(State.NO_FOOTAGE, null, 3_900L);
 
-        assertThat(publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, Instant.now())).isFalse();
+        assertThat(publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, CLAIMED_AT, Instant.now())).isFalse();
         assertThat(published).isEmpty();
     }
 
@@ -105,7 +112,7 @@ class HighlightPublisherTest {
     void 아직_없음이면_카드를_안_낸다() {
         position = new VideoPosition(State.NOT_YET_INDEXED, null, 3_900L);
 
-        assertThat(publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, Instant.now())).isFalse();
+        assertThat(publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, CLAIMED_AT, Instant.now())).isFalse();
         assertThat(published).isEmpty();
     }
 
@@ -113,7 +120,7 @@ class HighlightPublisherTest {
     void 창구가_모르면_카드를_안_낸다() {
         position = new VideoPosition(State.UNAVAILABLE, null, null);
 
-        assertThat(publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, Instant.now())).isFalse();
+        assertThat(publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, CLAIMED_AT, Instant.now())).isFalse();
         assertThat(published).isEmpty();
     }
 
@@ -125,7 +132,7 @@ class HighlightPublisherTest {
     void 위치가_음수면_보내기_전에_거른다() {
         position = new VideoPosition(State.CONVERTED, -1_000L, 3_900L);
 
-        assertThat(publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, Instant.now())).isFalse();
+        assertThat(publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, CLAIMED_AT, Instant.now())).isFalse();
         assertThat(published).isEmpty();
     }
 
@@ -141,7 +148,7 @@ class HighlightPublisherTest {
         // LogCaptor는 루트 로거에 붙어 모든 줄을 모은다. 이벤트 이름 접두어로 거른다 —
         // 이 클래스가 levelOf(eventPrefix)를 두고 있는 것과 같은 쓰임이다.
         try (LogCaptor captor = new LogCaptor()) {
-            publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, now);
+            publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, CLAIMED_AT, now);
 
             assertThat(captor.messages())
                     .filteredOn(m -> m.startsWith("detect.card_published"))
@@ -151,6 +158,22 @@ class HighlightPublisherTest {
                             // 총 시간: 우리 구간 + 보정값(장면 발생 → 채팅 도착) = 6,400ms
                             .contains("totalLatencyMs=6400"));
         }
+    }
+
+    /**
+     * 🔴 <b>집계에 쓰인 채팅만 본다.</b> 조회에 넘기는 상한이 「지금」이 아니라
+     * <b>발행권을 잡은 시각</b>이어야 한다 — 발행은 실행기에서 돌고 clip 재시도까지 끼면
+     * 바퀴에서 초 단위로 떨어질 수 있는데, 그 사이 도착한 채팅은 <b>판정에 쓰이지도 않았다.</b>
+     * 상한이 「지금」이면 그 채팅이 {@code max}를 밀어 우리 구간이 <b>늘 낙관적으로</b> 틀린다.
+     */
+    @Test
+    void 집계에_쓰인_채팅만_보도록_상한을_건다() {
+        Instant now = Instant.ofEpochMilli(WINDOW_START_MS + 5_000 + 2_500);
+
+        publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, CLAIMED_AT, now);
+
+        assertThat(넘어간_상한).as("상한이 발행권을 잡은 시각이어야 한다").isEqualTo(CLAIMED_AT);
+        assertThat(넘어간_상한).as("「지금」을 넘기면 늦게 온 채팅이 섞인다").isNotEqualTo(now);
     }
 
     /**
@@ -170,7 +193,7 @@ class HighlightPublisherTest {
         lastReceivedAt = java.util.Optional.of(Instant.ofEpochMilli(WINDOW_START_MS + 5_000 + 1_000));
 
         try (LogCaptor captor = new LogCaptor()) {
-            publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, now);
+            publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, CLAIMED_AT, now);
 
             assertThat(captor.messages())
                     .filteredOn(m -> m.startsWith("detect.card_published"))
@@ -190,7 +213,7 @@ class HighlightPublisherTest {
         lastReceivedAt = java.util.Optional.empty();
 
         try (LogCaptor captor = new LogCaptor()) {
-            publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, Instant.now());
+            publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, CLAIMED_AT, Instant.now());
 
             assertThat(captor.messages())
                     .filteredOn(m -> m.startsWith("detect.card_published"))
@@ -212,7 +235,7 @@ class HighlightPublisherTest {
         position = new VideoPosition(State.CONVERTED, 30_000L, null);
 
         try (LogCaptor captor = new LogCaptor()) {
-            publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, Instant.now());
+            publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, CLAIMED_AT, Instant.now());
 
             assertThat(captor.messages())
                     .filteredOn(m -> m.startsWith("detect.card_published"))

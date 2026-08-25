@@ -109,14 +109,43 @@ class LateArrivalReporterTest extends IntegrationTestSupport {
         assertThat(LateArrivalCount.EMPTY.maxDelayForLog()).isEqualTo("none");
     }
 
+    /**
+     * 🔴 채팅이 없으면 최댓값은 <b>0이 아니라 「없음」</b>이다.
+     *
+     * <p>예전에는 SQL이 {@code COALESCE(MAX(...), 0)}이라 0을 실어 보냈다. 그러면
+     * {@code EMPTY}가 {@code Long.MIN_VALUE}인 것이 <b>합산에서 무력해진다</b> —
+     * 계획 검증 F12를 자바 쪽만 고치고 SQL 쪽을 안 봐서 한 자리가 남아 있었다
+     * (「같은 뿌리인데 한 자리만」의 일곱 번째, 감사가 읽다 찾았다).
+     */
     @Test
-    void 채팅이_없으면_전부_0이다() {
+    void 채팅이_없으면_건수는_0이고_최댓값은_없음이다() {
         LateArrivalCount count = reader.lateArrivals("s1",
                 T0.minusSeconds(60), T0.plusSeconds(60), 2_000L, 7_000L);
 
         assertThat(count.total()).isZero();
         assertThat(count.beyondGrace()).isZero();
-        assertThat(count.maxDelayMs()).isZero();
+        assertThat(count.maxDelayMs()).isEqualTo(Long.MIN_VALUE);
+        assertThat(count.maxDelayForLog()).isEqualTo("none");
+    }
+
+    /**
+     * 🔴 <b>줄이 없는 방송이 섞여도 최댓값이 0으로 안 깔린다.</b> F12가 SQL 쪽으로 되살아나던
+     * 자리다 — 빈 방송이 0을 실어 보내면 {@code Math.max(-3000, 0)}이 0이 된다.
+     *
+     * <p>예전에 이것이 「도달 못 한다」던 이유는 <b>설정값 우연</b>이었다(관측 기간 10분 &gt;
+     * 활성 창 60초라 활성 방송은 늘 줄이 있다). 두 설정 사이에 교차 검사가 없어 앞의 값을
+     * 뒤의 값 아래로 내리면 되살아났다. <b>뿌리를 고쳤으므로 이제 그 관계에 안 기댄다.</b>
+     */
+    @Test
+    void 줄이_없는_방송이_섞여도_최댓값이_0으로_안_깔린다() {
+        채팅("s2", T0, -3_000);   // s1에는 한 건도 없다
+
+        LateArrivalCount 합 = LateArrivalCount.EMPTY
+                .plus(reader.lateArrivals("s1", T0.minusSeconds(60), T0.plusSeconds(60), 2_000L, 7_000L))
+                .plus(reader.lateArrivals("s2", T0.minusSeconds(60), T0.plusSeconds(60), 2_000L, 7_000L));
+
+        assertThat(합.maxDelayMs()).isEqualTo(-3_000);
+        assertThat(합.maxDelayForLog()).isEqualTo("-3000");
     }
 
     @Test
@@ -145,7 +174,7 @@ class LateArrivalReporterTest extends IntegrationTestSupport {
                     .filteredOn(m -> m.startsWith("detect.late_arrivals"))
                     .singleElement().satisfies(line -> assertThat(line)
                             .contains("windowGraceMs=2000")
-                            .contains("total=2")
+                            .contains("observed=2")
                             .contains("beyondGrace=1")
                             .contains("beyondWindowAndGrace=0")
                             .contains("maxDelayMs=2500"));
@@ -169,7 +198,7 @@ class LateArrivalReporterTest extends IntegrationTestSupport {
                     .filteredOn(m -> m.startsWith("detect.late_arrivals"))
                     .singleElement().satisfies(line -> assertThat(line)
                             .contains("streams=2")
-                            .contains("total=2")
+                            .contains("observed=2")
                             .contains("beyondGrace=2")
                             // 최댓값은 합이 아니라 최댓값이다.
                             .contains("maxDelayMs=3000"));
