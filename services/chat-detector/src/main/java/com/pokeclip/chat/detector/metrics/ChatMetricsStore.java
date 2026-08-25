@@ -1,5 +1,6 @@
 package com.pokeclip.chat.detector.metrics;
 
+import com.pokeclip.chat.detector.config.DetectionProperties;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -35,6 +36,22 @@ public class ChatMetricsStore {
         this.jdbc = jdbc;
     }
 
+    /**
+     * 이 창 <b>직전</b>의 같은 창 크기 값들을 최신순으로. 지금 창은 뺀다 —
+     * 넣으면 스파이크가 자기 기준선을 올려 클수록 덜 잡힌다.
+     *
+     * <p>{@code idx_chat_metrics_baseline (stream_id, window_size_ms, window_start_ms DESC)}를 탄다.
+     */
+    private static final String BASELINE = """
+            SELECT %s
+              FROM chat_metrics
+             WHERE stream_id = ?
+               AND window_size_ms = ?
+               AND window_start_ms <  ?
+               AND window_start_ms >= ?
+             ORDER BY window_start_ms DESC
+            """;
+
     /** @return 실제로 새로 들어간 줄 수. 이미 있던 창은 안 센다 */
     public int upsert(List<MetricRow> rows) {
         if (rows.isEmpty()) {
@@ -45,5 +62,15 @@ public class ChatMetricsStore {
                         r.messageCount(), r.chatterCount()})
                 .toList());
         return java.util.Arrays.stream(affected).sum();
+    }
+
+    public int[] baselineCounts(String streamId, long windowSizeMs,
+                                long beforeWindowStartMs, long sinceWindowStartMs,
+                                DetectionProperties.Metric metric) {
+        // 칸 이름은 열거형이 정하므로 값이 둘뿐이다 — 밖에서 온 문자열이 아니다.
+        String column = metric == DetectionProperties.Metric.CHATTER ? "chatter_count" : "message_count";
+        return jdbc.queryForList(BASELINE.formatted(column), Integer.class,
+                        streamId, windowSizeMs, beforeWindowStartMs, sinceWindowStartMs)
+                .stream().mapToInt(Integer::intValue).toArray();
     }
 }
