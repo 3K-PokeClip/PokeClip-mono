@@ -119,6 +119,30 @@ class MetricsSweeperTest extends IntegrationTestSupport {
     }
 
     /**
+     * 🔴 <b>{@code Error}가 새도 그 주기가 안 죽는다.</b> 아래 검사는 {@code IllegalStateException}
+     * (={@code RuntimeException})을 던지므로 <b>{@code catch} 폭을 좁혀도 통과한다</b>
+     * (감사 3회차 W-3). 표가 영영 안 치워지는데 아무 신호가 없는 것이 그 대가다.
+     */
+    @Test
+    void 치우기가_Error에도_안_죽는다() {
+        ChatMetricsStore 에러를_던지는_store = new ChatMetricsStore(jdbc) {
+            @Override
+            public int sweepOlderThan(Instant before) {
+                throw new AssertionError("주입된 Error");
+            }
+        };
+        MetricsSweeper sweeper = new MetricsSweeper(에러를_던지는_store, Duration.ofHours(24), () -> NOW);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            sweeper.sweep();   // Error가 밖으로 나오면 이 줄에서 검사가 실패한다
+
+            assertThat(captor.messages())
+                    .filteredOn(m -> m.startsWith("detect.metrics_sweep_failed"))
+                    .singleElement().satisfies(line -> assertThat(line).contains("AssertionError"));
+        }
+    }
+
+    /**
      * 🔴 치우다 터져도 다음 주기가 돌아야 한다. @Scheduled는 태스크가 한 번 던지면 그 뒤로
      * 안 도는데, 그러면 표가 영영 안 치워지면서 아무 신호도 없다.
      */
