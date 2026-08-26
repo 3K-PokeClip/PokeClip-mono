@@ -30,10 +30,70 @@ public record PhotoProperties(
         String baseUrl
 ) {
 
+    /**
+     * 표 서명키의 최소 길이. HMAC-SHA256의 블록이 64바이트이고 그보다 짧은 키는 그만큼
+     * 탐색 공간이 줄어든다. {@code JwtConfig}가 로그인 키에 쓰는 값과 같게 둔다 —
+     * 두 키의 세기가 갈리면 약한 쪽이 전체의 세기가 된다.
+     */
+    private static final int MIN_SECRET_BYTES = 32;
+
     public PhotoProperties {
         if (present(bucket)) {
             require(tokenSecret, "PROFILE_PHOTO_TOKEN_SECRET");
             require(baseUrl, "PROFILE_PHOTO_BASE_URL");
+            requireStrongSecret(tokenSecret);
+            requireAbsoluteUrl(baseUrl);
+        }
+    }
+
+    /**
+     * 🔴 <b>비어 있지 않은 것만으로는 부족하다</b>(PR #133 codex P1, 실측: 길이 1도 통과했다).
+     *
+     * <p>사진 주소는 <b>서명과 그 재료를 함께 실어 브라우저에 내보낸다.</b> 주소 하나만 손에 넣으면
+     * 후보 키를 오프라인에서 무한히 시험할 수 있고, 맞히면 <b>아무 회원 번호로나 표를 만들어</b>
+     * 남의 사진을 연다 — 로그인 토큰과 키를 가른 것이 그 순간 무의미해진다.
+     *
+     * <p>{@code JwtConfig.jwtSecretKey}가 로그인 키에 하는 것과 같은 검사다. <b>값은 메시지에
+     * 넣지 않는다</b> — 부팅 실패 리포트는 로그·CI 출력에 그대로 남는다.
+     */
+    private static void requireStrongSecret(String secret) {
+        int bytes = secret.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        if (bytes < MIN_SECRET_BYTES) {
+            throw new IllegalStateException(
+                    "PROFILE_PHOTO_TOKEN_SECRET이 너무 짧다 — %d바이트 이상이어야 한다(지금 %d). 값은 로그에 남기지 않는다"
+                            .formatted(MIN_SECRET_BYTES, bytes));
+        }
+    }
+
+    /**
+     * 🔴 <b>상대 주소는 조용히 실패한다</b>(PR #133 codex P2, 실측: {@code "not a url"}도 통과했다).
+     *
+     * <p>{@link PhotoUrls}가 이 값을 <b>그대로 앞에 붙여</b> 내보내므로, 스킴이 없으면 브라우저가
+     * <b>화면의 주소를 기준으로 풀어</b> 엉뚱한 곳을 찾는다. 올리기는 성공하고 저장도 되는데
+     * <b>그림만 안 보인다</b> — 서버 로그에도 아무 흔적이 없다.
+     *
+     * <p>끝의 슬래시도 막는다. 붙어 있으면 주소가 {@code …8082//api/…}가 되는데, 서버에 따라
+     * 404가 되기도 하고 통과하기도 해서 <b>환경마다 갈린다.</b>
+     */
+    private static void requireAbsoluteUrl(String baseUrl) {
+        java.net.URI uri;
+        try {
+            uri = java.net.URI.create(baseUrl);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("PROFILE_PHOTO_BASE_URL이 주소 모양이 아니다. 값은 로그에 남기지 않는다");
+        }
+        boolean absolute = uri.isAbsolute()
+                && ("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))
+                && uri.getHost() != null;
+        if (!absolute) {
+            throw new IllegalStateException(
+                    "PROFILE_PHOTO_BASE_URL이 절대 주소가 아니다 — http(s)://호스트[:포트] 모양이어야 한다. "
+                            + "브라우저가 붙는 주소이므로 스킴이 없으면 화면 주소를 기준으로 풀려 사진만 조용히 안 보인다. "
+                            + "값은 로그에 남기지 않는다");
+        }
+        if (baseUrl.endsWith("/")) {
+            throw new IllegalStateException(
+                    "PROFILE_PHOTO_BASE_URL은 끝에 슬래시를 두지 않는다 — 주소가 //api/…가 되어 환경마다 갈린다");
         }
     }
 

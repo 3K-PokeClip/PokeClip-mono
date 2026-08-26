@@ -12,6 +12,23 @@ import lombok.NoArgsConstructor;
 
 import java.time.Instant;
 
+/**
+ * 🔴 <b>{@code @DynamicUpdate}가 있어야 이름 수정과 사진 수정이 서로 안 덮는다</b>
+ * (PR #133 codex P2, 재현함).
+ *
+ * <p>Hibernate 기본값은 <b>매핑된 칸을 전부</b> UPDATE에 싣는다. 두 창구가 같은 회원 행을
+ * 각자 읽어 각자 커밋하면, <b>나중에 커밋한 쪽이 상대가 방금 넣은 값을 옛 스냅샷으로 되돌린다</b> —
+ * 실측에서 사진을 붙이는 트랜잭션이 방금 바뀐 이름을 되돌렸다. 사진 쪽이 지워지는 방향이면
+ * <b>S3 파일이 주인 없이 남는다.</b>
+ *
+ * <p>이 애너테이션이 붙으면 <b>그 트랜잭션에서 실제로 바뀐 칸만</b> 나간다. 이름 수정은
+ * {@code name}·{@code updated_at}만, 사진 붙이기는 사진 칸들과 {@code updated_at}만 쓴다 —
+ * 겹치는 것은 {@code updated_at} 하나이고 그것은 마지막이 이기면 그만이다.
+ *
+ * <p>락이나 버전 칸 대신 이것을 쓴 이유: 락은 토큰 회전·스트림키 재발급이 쓰는 같은 행을
+ * 붙들어 그 경로의 대기를 늘리고, 버전 칸은 마이그레이션이다. <b>이 방법은 둘 다 없다.</b>
+ */
+@org.hibernate.annotations.DynamicUpdate
 @Entity
 @Table(name = "users")
 @Getter

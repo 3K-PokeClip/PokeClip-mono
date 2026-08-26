@@ -34,7 +34,7 @@ class S3PhotoStorageFailureTest {
     private static PhotoProperties propertiesFor(String bucket) {
         return new PhotoProperties(bucket, PhotoLocalStackFixture.region(),
                 PhotoLocalStackFixture.endpoint(), true,
-                "unused-by-this-test", "http://unused.invalid");
+                "unused-by-this-test-but-32-bytes", "http://unused.invalid");
     }
 
     /**

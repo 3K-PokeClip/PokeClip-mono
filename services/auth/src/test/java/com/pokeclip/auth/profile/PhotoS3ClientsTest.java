@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class PhotoS3ClientsTest {
 
     private static PhotoProperties props(String endpoint) {
-        return new PhotoProperties("bucket", "ap-northeast-2", endpoint, true, "secret", "http://localhost:8082");
+        return new PhotoProperties("bucket", "ap-northeast-2", endpoint, true, "unused-by-this-test-but-32-bytes", "http://localhost:8082");
     }
 
     @Test

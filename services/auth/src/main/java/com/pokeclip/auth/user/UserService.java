@@ -149,11 +149,23 @@ public class UserService {
         return new String(cps, start, end - start);
     }
 
+    /**
+     * 🔴 <b>결합 표시도 보이지 않는다</b>(PR #133 codex P2, 실측: U+FE0F·U+034F·U+0300이 통과했다).
+     *
+     * <p>이모지 변형 선택자(U+FE0F)·자소 결합자(U+034F)·악센트 같은 것들은 <b>혼자서는 아무것도
+     * 그리지 않는다</b>(유니코드 분류 {@code NON_SPACING_MARK}). 앞 글자에 얹히는 표시라서,
+     * 그것만으로 이름을 만들면 <b>빈 이름처럼 보이는데 검사는 통과한다</b> — 막으려던 바로 그 상태다.
+     *
+     * <p>앞뒤만 자르므로 이모지 안의 U+FE0F는 안 잘린다 — 그 문자는 늘 글자 <b>뒤</b>에 오고,
+     * 이름이 그것으로 <b>시작</b>하는 경우는 앞에 얹힐 글자가 없어 어차피 안 보인다.
+     */
     private static boolean isInvisible(int codePoint) {
         int type = Character.getType(codePoint);
         return Character.isWhitespace(codePoint)
                 || type == Character.SPACE_SEPARATOR
                 || type == Character.FORMAT
-                || type == Character.CONTROL;
+                || type == Character.CONTROL
+                || type == Character.NON_SPACING_MARK
+                || type == Character.ENCLOSING_MARK;
     }
 }

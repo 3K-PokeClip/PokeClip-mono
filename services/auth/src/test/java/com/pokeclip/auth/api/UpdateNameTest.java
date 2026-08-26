@@ -73,6 +73,12 @@ class UpdateNameTest extends ProfileTestSupport {
                 {"U+2003 EM SPACE", "\u2003"},
                 {"U+200B ZWSP", "\u200B"},
                 {"섞어서", "\u3000\u00A0\u200B"},
+                // 🔴 결합 표시도 혼자서는 아무것도 그리지 않는다 (PR #133 codex P2, 실측)
+                {"U+FE0F 이모지 변형자", "\uFE0F"},
+                {"U+034F 자소 결합자", "\u034F"},
+                {"U+0300 결합 억양", "\u0300"},
+                {"U+20E3 감싸는 표시", "\u20E3"},
+                {"공백과 섞어서", "\u3000\uFE0F\u034F"},
         };
         for (String[] c : cases) {
             User u = newUser();
