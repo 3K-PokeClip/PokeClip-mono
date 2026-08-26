@@ -95,6 +95,14 @@ public record PhotoProperties(
             throw new IllegalStateException(
                     "PROFILE_PHOTO_BASE_URL은 끝에 슬래시를 두지 않는다 — 주소가 //api/…가 되어 환경마다 갈린다");
         }
+        // 🔴 쿼리·조각이 붙어 있으면 그 뒤에 경로를 이어 붙이게 된다(PR #135 codex, 실측).
+        // "…example?x=1" + "/api/profile-photos/7" = "…example?x=1/api/profile-photos/7" —
+        // 브라우저는 호스트 뿌리를 부르고 그림은 영영 안 온다. 경로(/sub)는 막지 않는다:
+        // 프록시 뒤 서브패스 배포에서 필요할 수 있고, 이어 붙여도 뜻이 유지된다.
+        if (uri.getRawQuery() != null || uri.getRawFragment() != null) {
+            throw new IllegalStateException(
+                    "PROFILE_PHOTO_BASE_URL에 쿼리나 조각을 두지 않는다 — 뒤에 경로가 이어 붙어 주소가 깨진다");
+        }
     }
 
     public boolean enabled() {

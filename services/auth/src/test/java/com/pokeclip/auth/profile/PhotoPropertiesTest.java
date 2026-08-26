@@ -104,7 +104,9 @@ class PhotoPropertiesTest {
     @Test
     void 절대_주소가_아니면_부팅에서_죽는다() {
         for (String bad : new String[]{"dev.pokeclip.com:8082", "/photos", "not a url", "ftp://x.example",
-                "http://localhost:8082/"}) {
+                "http://localhost:8082/",
+                // 🔴 쿼리·조각이 있으면 뒤에 경로가 이어 붙어 주소가 깨진다 (PR #135 codex)
+                "https://api.example?x=1", "https://api.example#x"}) {
             assertThatThrownBy(() -> of("bucket", OK_SECRET, bad))
                     .as("%s", bad)
                     .isInstanceOf(IllegalStateException.class)
@@ -112,5 +114,8 @@ class PhotoPropertiesTest {
         }
         assertThat(of("bucket", OK_SECRET, "https://dev.pokeclip.com").enabled()).as("https 도 된다").isTrue();
         assertThat(of("bucket", OK_SECRET, OK_URL).enabled()).as("포트가 있어도 된다").isTrue();
+        assertThat(of("bucket", OK_SECRET, "https://api.example/sub").enabled())
+                .as("경로는 막지 않는다 — 프록시 뒤 서브패스 배포에서 필요하고 이어 붙여도 뜻이 유지된다")
+                .isTrue();
     }
 }

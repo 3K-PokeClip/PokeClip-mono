@@ -50,7 +50,7 @@ public class ProfileUpdateExceptionHandler {
      */
     private static HttpStatus statusOf(ProfileUpdateFailure failure) {
         return switch (failure) {
-            case NAME_BLANK, NAME_TOO_LONG -> HttpStatus.BAD_REQUEST;
+            case NAME_BLANK, NAME_TOO_LONG, NAME_INVALID_CHARACTER -> HttpStatus.BAD_REQUEST;
             // PAYLOAD_TOO_LARGE는 Spring 7에서 deprecated다. 코드는 같은 413이다.
             case PHOTO_TOO_LARGE -> HttpStatus.CONTENT_TOO_LARGE;
             case PHOTO_NOT_AN_IMAGE -> HttpStatus.UNSUPPORTED_MEDIA_TYPE;

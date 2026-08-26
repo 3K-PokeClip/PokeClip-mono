@@ -103,9 +103,13 @@ public class UserService {
      */
     @Transactional
     public User updateName(Long userId, String rawName) {
-        String trimmed = stripInvisible(rawName);
-        if (trimmed.isEmpty()) {
+        String trimmed = stripEdgeBlanks(rawName);
+        if (!hasVisible(trimmed)) {
             throw new ProfileUpdateException(ProfileUpdateFailure.NAME_BLANK, "이름이 비어 있다");
+        }
+        if (hasControlCharacter(trimmed)) {
+            throw new ProfileUpdateException(
+                    ProfileUpdateFailure.NAME_INVALID_CHARACTER, "이름에 쓸 수 없는 문자가 있다");
         }
         if (trimmed.codePointCount(0, trimmed.length()) > NAME_MAX_CODE_POINTS) {
             throw new ProfileUpdateException(ProfileUpdateFailure.NAME_TOO_LONG, "이름이 너무 길다");
@@ -118,54 +122,82 @@ public class UserService {
     }
 
     /**
-     * 앞뒤의 <b>보이지 않는 문자</b>를 자른다.
+     * 앞뒤의 <b>공백류</b>를 자른다.
      *
      * <p>🔴 <b>{@code trim()}으로는 부족했다</b>(PR #127 codex, 실측). 그것은 U+0020 이하만
      * 자르므로 전각 공백(U+3000)·NBSP(U+00A0)·EM SPACE(U+2003)·ZWSP(U+200B)로만 이루어진
-     * 이름이 <b>그대로 저장됐다</b> — 화면에는 이름이 없는 것처럼 보이고, 편집자 목록이
-     * 누가 누군지 말해 주지 못한다. 창구를 직접 부르는 쪽에서만 닿지만 막을 자리는 여기다.
+     * 이름이 <b>그대로 저장됐다.</b> {@code strip()}으로 바꾸는 것도 답이 아니다 —
+     * U+00A0·U+200B는 {@code Character.isWhitespace}가 false다.
      *
-     * <p><b>{@code strip()}으로 바꾸는 것도 답이 아니다</b> — U+3000·U+2003은 잡지만
-     * U+00A0·U+200B는 {@code Character.isWhitespace}가 false라 그대로 남는다.
-     * 그래서 공백 분류({@code SPACE_SEPARATOR})와 형식 문자({@code FORMAT})까지 본다.
+     * <p>🔴 <b>결합 표시는 여기서 자르지 않는다</b>(PR #135 codex, 재현함). 한때 넣었다가
+     * <b>정상 이름을 망가뜨렸다</b> — 분해형 {@code Café}가 {@code Cafe}가 되고 {@code ❤️}가
+     * 변형 선택자를 잃었다. 그 문자들은 <b>앞 글자에 얹히는 것</b>이라 글자와 함께 있으면
+     * 이름의 일부다. <b>혼자만 있을 때가 문제</b>이고 그것은 {@link #hasVisible}이 본다.
      *
      * <p><b>자르는 것은 앞뒤뿐이다.</b> 가운데까지 접으면 "김 태현"이 "김태현"이 되고,
-     * 이모지를 잇는 ZWJ(U+200D, FORMAT)가 사라져 <b>이모지 이름이 깨진다</b> —
-     * 그 문자는 항상 글자 사이에 오므로 앞뒤만 자르면 안전하다.
+     * 이모지를 잇는 ZWJ(U+200D)가 사라져 이모지 이름이 깨진다.
      */
-    private static String stripInvisible(String raw) {
+    private static String stripEdgeBlanks(String raw) {
         if (raw == null) {
             return "";
         }
         int[] cps = raw.codePoints().toArray();
         int start = 0;
         int end = cps.length;
-        while (start < end && isInvisible(cps[start])) {
+        while (start < end && isEdgeBlank(cps[start])) {
             start++;
         }
-        while (end > start && isInvisible(cps[end - 1])) {
+        while (end > start && isEdgeBlank(cps[end - 1])) {
             end--;
         }
         return new String(cps, start, end - start);
     }
 
-    /**
-     * 🔴 <b>결합 표시도 보이지 않는다</b>(PR #133 codex P2, 실측: U+FE0F·U+034F·U+0300이 통과했다).
-     *
-     * <p>이모지 변형 선택자(U+FE0F)·자소 결합자(U+034F)·악센트 같은 것들은 <b>혼자서는 아무것도
-     * 그리지 않는다</b>(유니코드 분류 {@code NON_SPACING_MARK}). 앞 글자에 얹히는 표시라서,
-     * 그것만으로 이름을 만들면 <b>빈 이름처럼 보이는데 검사는 통과한다</b> — 막으려던 바로 그 상태다.
-     *
-     * <p>앞뒤만 자르므로 이모지 안의 U+FE0F는 안 잘린다 — 그 문자는 늘 글자 <b>뒤</b>에 오고,
-     * 이름이 그것으로 <b>시작</b>하는 경우는 앞에 얹힐 글자가 없어 어차피 안 보인다.
-     */
-    private static boolean isInvisible(int codePoint) {
+    /** 자를 것 — 공백 성격의 문자들. <b>결합 표시는 여기 없다</b>(위 javadoc). */
+    private static boolean isEdgeBlank(int codePoint) {
         int type = Character.getType(codePoint);
         return Character.isWhitespace(codePoint)
                 || type == Character.SPACE_SEPARATOR
                 || type == Character.FORMAT
-                || type == Character.CONTROL
-                || type == Character.NON_SPACING_MARK
-                || type == Character.ENCLOSING_MARK;
+                || type == Character.CONTROL;
+    }
+
+    /**
+     * <b>눈에 보이는 글자가 하나라도 있나.</b>
+     *
+     * <p>🔴 결합 표시만으로 된 이름을 막는 자리다(PR #133 codex, 실측: U+FE0F·U+034F·U+0300이
+     * 저장됐다). 그것들은 <b>혼자서는 아무것도 그리지 않아</b> 빈 이름처럼 보이는데,
+     * 공백도 형식 문자도 아니라 위 트림에 안 걸린다.
+     *
+     * <p><b>자르지 않고 세기만 한다</b> — 자르면 {@code Café}의 억양이 사라진다.
+     */
+    private static boolean hasVisible(String name) {
+        return name.codePoints().anyMatch(cp -> {
+            int type = Character.getType(cp);
+            return !(Character.isWhitespace(cp)
+                    || type == Character.SPACE_SEPARATOR
+                    || type == Character.FORMAT
+                    || type == Character.CONTROL
+                    || type == Character.NON_SPACING_MARK
+                    || type == Character.ENCLOSING_MARK
+                    || type == Character.COMBINING_SPACING_MARK
+                    || type == Character.UNASSIGNED);
+        });
+    }
+
+    /**
+     * 🔴 <b>가운데 제어문자는 500을 만든다</b>(PR #135 codex, 재현함).
+     *
+     * <p>{@code "A\0B"}처럼 NUL이 <b>가운데</b> 있으면 앞뒤 트림에 안 걸리고 길이 검사도 통과한 뒤
+     * 저장에서 터진다 — PostgreSQL이 {@code invalid byte sequence for encoding "UTF8": 0x00}으로
+     * 거절하고, 그것은 <b>사유를 담은 400이 아니라 500</b>이다. 화면은 이유를 못 읽는다.
+     * (chat-collector가 채팅 적재에서 이미 겪은 자리와 같은 문자다.)
+     *
+     * <p>개행·탭도 함께 막는다. 저장은 되지만 <b>목록 화면이 깨진다</b> — 이름은 한 줄이다.
+     *
+     * <p><b>형식 문자(ZWJ 등)는 막지 않는다</b> — 이모지를 잇는 데 쓰이고 가운데 있는 것이 정상이다.
+     */
+    private static boolean hasControlCharacter(String name) {
+        return name.codePoints().anyMatch(cp -> Character.getType(cp) == Character.CONTROL);
     }
 }

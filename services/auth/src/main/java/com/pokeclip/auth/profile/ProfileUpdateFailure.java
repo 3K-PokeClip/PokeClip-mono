@@ -9,6 +9,12 @@ public enum ProfileUpdateFailure {
 
     NAME_BLANK,
     NAME_TOO_LONG,
+    /**
+     * 이름에 제어문자(NUL·개행·탭 등)가 섞였다. NUL은 PostgreSQL이 저장을 거절해
+     * <b>사유 없는 500</b>이 되고, 개행·탭은 저장은 되지만 목록 화면을 깨뜨린다.
+     * 형식 문자(ZWJ 등)는 여기 안 든다 — 이모지를 잇는 데 쓰인다.
+     */
+    NAME_INVALID_CHARACTER,
     PHOTO_NOT_AN_IMAGE,
     PHOTO_TOO_LARGE,
     PHOTO_STORAGE_DISABLED

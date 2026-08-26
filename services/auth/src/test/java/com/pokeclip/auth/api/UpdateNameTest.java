@@ -93,6 +93,71 @@ class UpdateNameTest extends ProfileTestSupport {
         }
     }
 
+    /**
+     * 🔴 <b>결합 표시가 글자에 얹혀 있으면 이름의 일부다</b>(PR #135 codex, 재현함).
+     *
+     * <p>한때 「보이지 않는 문자」에 넣어 앞뒤에서 잘랐는데 <b>정상 이름이 망가졌다</b> —
+     * 분해형 {@code Café}가 {@code Cafe}가 되고 {@code ❤️}가 변형 선택자를 잃었다.
+     * <b>혼자만 있을 때만</b> 빈 이름으로 본다(위 검사).
+     */
+    @Test
+    void 글자에_얹힌_결합_표시는_지우지_않는다() throws Exception {
+        String[] names = {
+                "Cafe\u0301",
+                "\u2764\uFE0F",
+                "\uAE40\uD0DC\uD604\u0301",
+                "\u0301Cafe",
+        };
+        for (String name : names) {
+            User u = newUser();
+
+            mockMvc.perform(rename(u, name))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.name").value(name));
+
+            assertThat(userRepository.findById(u.getId()).orElseThrow().getName())
+                    .as("입력 %s", name.codePoints().mapToObj(Integer::toHexString).toList())
+                    .isEqualTo(name);
+        }
+    }
+
+    /**
+     * 🔴 <b>가운데 제어문자는 500을 만들었다</b>(PR #135 codex, 재현함).
+     *
+     * <p>NUL이 가운데 있으면 앞뒤 트림에 안 걸리고 길이 검사도 통과한 뒤 저장에서 터진다 —
+     * PostgreSQL이 {@code invalid byte sequence} 로 거절하고 그것은 <b>사유를 담은 400이 아니라
+     * 500</b>이다. 개행·탭은 저장은 되지만 목록 화면이 깨진다.
+     */
+    @Test
+    void 가운데_제어문자는_400으로_거절한다() throws Exception {
+        // 🔴 <b>가운데</b>만 대상이다 — 앞뒤에 있는 제어문자는 트림이 잘라내고 그것이 맞다
+        //    (\u0007경보 는 「경보」로 저장된다). 그 갈래는 위 「앞뒤의 …」 검사가 덮는다.
+        for (String name : new String[]{"A\u0000B", "A\nB", "A\tB", "가\u000B나"}) {
+            User u = newUser();
+
+            mockMvc.perform(rename(u, name))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.reason").value("NAME_INVALID_CHARACTER"));
+
+            assertThat(userRepository.findById(u.getId()).orElseThrow().getName())
+                    .as("거절됐으면 옛 이름이 그대로다 — %s",
+                            name.codePoints().mapToObj(Integer::toHexString).toList())
+                    .isEqualTo("김태현");
+        }
+    }
+
+    /** 이모지를 잇는 문자는 가운데 있는 것이 정상이다 — 제어문자와 함께 막으면 이모지 이름이 죽는다. */
+    @Test
+    void 이모지를_잇는_문자는_가운데_있어도_된다() throws Exception {
+        User u = newUser();
+        String family = "\uD83D\uDC68\u200D\uD83D\uDC69";
+
+        mockMvc.perform(rename(u, family))
+                .andExpect(status().isOk());
+
+        assertThat(userRepository.findById(u.getId()).orElseThrow().getName()).isEqualTo(family);
+    }
+
     /** 앞뒤의 보이지 않는 문자도 잘라야 한다 — 안 자르면 화면의 이름이 한 칸 밀려 보인다. */
     @Test
     void 앞뒤의_보이지_않는_문자도_잘라서_저장한다() throws Exception {
@@ -178,9 +243,21 @@ class UpdateNameTest extends ProfileTestSupport {
                 .as("남의 이름은 그대로다").isEqualTo("김태현");
     }
 
+    /**
+     * 🔴 <b>본문을 손으로 이어 붙이면 안 된다.</b> 개행·탭·NUL 같은 제어문자를 그대로 넣으면
+     * <b>JSON 문법이 깨져</b> Jackson이 먼저 거절하고, 그러면 사유를 담은 우리 400이 아니라
+     * 스프링의 빈 400이 나간다 — <b>검사가 우리 코드에 닿지도 못한다.</b>
+     * 실제 화면은 {@code JSON.stringify}를 쓰므로 그런 문자도 이스케이프돼 서버까지 온다.
+     */
     private MockHttpServletRequestBuilder rename(User u, String name) {
         return patch("/api/auth/me").header("Authorization", bearer(u))
                 .contentType(APPLICATION_JSON)
-                .content("{\"name\":\"" + name + "\"}");
+                .content(body(name));
+    }
+
+    /** Boot 4.1은 Jackson <b>3</b>이라 패키지가 {@code tools.jackson.*}다({@code com.fasterxml}이 아니다). */
+    private static String body(String name) {
+        return tools.jackson.databind.json.JsonMapper.builder().build()
+                .writeValueAsString(java.util.Map.of("name", name));
     }
 }
