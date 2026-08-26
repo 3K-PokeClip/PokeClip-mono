@@ -53,9 +53,4 @@ public class AuthService {
                 .orElseThrow(() -> new DataInconsistencyException(
                         AuthFailure.USER_NOT_FOUND, "토큰의 주인이 없다", userId));
     }
-
-    /** 이름 수정은 UserService가 트랜잭션 최상단으로 처리한다 — 이 클래스는 조합만 한다. */
-    public User updateName(Long userId, String rawName) {
-        return userService.updateName(userId, rawName);
-    }
 }

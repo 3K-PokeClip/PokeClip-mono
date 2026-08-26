@@ -72,16 +72,6 @@ services:
       YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:?}
       YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:?}
       YOUTUBE_REDIRECT_URI: ${YOUTUBE_REDIRECT_URI:?}
-      # 프로필 사진(POK-207). 창고 이름이 비면 사진 기능만 꺼진다 — 그래서 :? 가 아니라 :- 다.
-      # 나머지 셋은 창고 이름이 차 있을 때만 필수이고, 그 판정은 PhotoProperties가 부팅에서 한다.
-      # 🔴 FORCE_PATH_STYLE은 앱에 기본값(false)이 있어 DeploymentEnvVarsTest의 정규식(${VAR:})에
-      # 안 걸린다 — 그 검사가 이 한 줄만 못 잡으니 손으로 챙긴다.
-      PROFILE_PHOTO_S3_BUCKET: ${PROFILE_PHOTO_S3_BUCKET:-}
-      PROFILE_PHOTO_S3_ENDPOINT: ${PROFILE_PHOTO_S3_ENDPOINT:-}
-      PROFILE_PHOTO_S3_FORCE_PATH_STYLE: ${PROFILE_PHOTO_S3_FORCE_PATH_STYLE:-false}
-      PROFILE_PHOTO_TOKEN_SECRET: ${PROFILE_PHOTO_TOKEN_SECRET:-}
-      PROFILE_PHOTO_BASE_URL: ${PROFILE_PHOTO_BASE_URL:-}
-      AWS_REGION: ${AWS_REGION:-ap-northeast-2}
       # t3.small 은 2GB다. 힙을 안 묶으면 JVM 이 물리 메모리의 1/4씩 잡아
       # 넷이 합쳐 한도를 넘고, 커널이 아무거나 하나를 죽인다.
       JAVA_TOOL_OPTIONS: -Xmx256m
