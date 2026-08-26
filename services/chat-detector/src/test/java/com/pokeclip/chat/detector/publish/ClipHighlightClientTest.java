@@ -107,6 +107,28 @@ class ClipHighlightClientTest {
         assertThat(calls).hasValue(3);
     }
 
+    /**
+     * 🔴 <b>404는 다른 4xx와 다르다 — 다시 보내면 답이 바뀐다</b>(봇 리뷰 1판, codex).
+     *
+     * <p>clip 은 그 방송을 아직 모를 때 404를 준다. 그런데 방송 시작 알림을 <b>수집기와 clip 이
+     * 각자 다른 큐에서</b> 받으므로, clip 이 늦으면 <b>채팅은 이미 쌓이는데 clip 에는 방송 행이
+     * 없다.</b> 그 사이 급증 카드를 영구 실패로 접으면 그 하이라이트는 영영 사라진다.
+     *
+     * <p><b>근거는 clip 코드 자신이다</b> — {@code JumpCardService.record} 가
+     * 「FK 위반은 500이 되고, <b>판별기는 404를 받아야 재시도 상한을 센다</b>」라고 적어 뒀다.
+     * clip 이 재시도를 전제로 설계한 자리다.
+     *
+     * <p><b>즉시 재시도는 안 한다</b> — 이 안에서 몇 밀리초 만에 다시 보내 봐야 clip 이 그 사이
+     * 방송을 만들 리 없다. 바퀴를 넘겨 다시 시도하도록 부르는 쪽에 알린다.
+     */
+    @Test
+    void clip이_방송을_아직_모르면_다음_바퀴로_미룬다() {
+        status = 404;
+
+        assertThat(client(3).publish(CARD)).isEqualTo(PublishResult.BROADCAST_NOT_FOUND);
+        assertThat(calls).as("즉시 재시도는 낭비다").hasValue(1);
+    }
+
     /** 401도 재시도로 안 풀린다 — 토큰이 틀린 것이라 같은 헤더로 몇 번을 보내도 같다. */
     @Test
     void 인증이_거부되면_재시도하지_않는다() {

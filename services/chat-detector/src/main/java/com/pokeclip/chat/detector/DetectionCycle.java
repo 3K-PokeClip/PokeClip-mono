@@ -17,7 +17,6 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.OptionalLong;
 
 /**
  * 한 바퀴: 활성 방송을 고르고 → 닫힌 창을 집계하고 → 판정하고 → 발행을 의뢰한다.
@@ -92,7 +91,7 @@ public class DetectionCycle {
                 if (collected == 0) {
                     activeButEmpty.add(streamId);
                 }
-                detectAndPublish(streamId, now);
+                detectAndPublish(streamId, now, until);
             } catch (Exception e) {
                 // 어느 방송에서 터졌는지 남긴다 — 이것이 없으면 「그 방송만 카드가 안 나간다」를
                 // 알 길이 없다. 예외 메시지는 안 찍는다(본문이 딸려 올 수 있다).
@@ -173,11 +172,23 @@ public class DetectionCycle {
         return rows.size();
     }
 
-    /** 발행 창만 판정한다. 나머지 크기는 쌓아만 둔다 — 여럿을 발행하면 카드가 여러 장이 된다. */
-    private void detectAndPublish(String streamId, Instant now) {
+    /**
+     * 발행 창만 판정한다. 나머지 크기는 쌓아만 둔다 — 여럿을 발행하면 카드가 여러 장이 된다.
+     *
+     * <p>🔴 <b>판정 대상의 하한을 집계와 같은 산식으로 낸다</b>(로컬 리뷰 라운드 2).
+     * {@code collect}가 되돌아보는 첫 눈금과 <b>글자 그대로 같은 식</b>이라야 「집계는 하는데
+     * 판정은 안 하는 창」이나 그 반대가 안 생긴다. 하한이 없으면 보관 기간 전체가 대상이 되고,
+     * 발행 창 설정을 바꾸는 날 과거 24시간치가 한 바퀴에 쏟아진다 —
+     * 사정은 {@link ChatMetricsStore#unpublished}의 javadoc에 숫자와 함께 적었다.
+     *
+     * @param until 집계 상한(바퀴 시각 − 유예). {@code collect}가 받은 것과 <b>같은 값</b>이다
+     */
+    private void detectAndPublish(String streamId, Instant now, Instant until) {
         long windowSizeMs = props.publishWindowMs();
+        long since = WindowGrid.floorTo(
+                until.minus(props.collectLookback()).toEpochMilli(), windowSizeMs);
 
-        for (MetricRow row : store.unpublished(streamId, windowSizeMs)) {
+        for (MetricRow row : store.unpublished(streamId, windowSizeMs, since)) {
             long baselineFrom = row.windowStartMs() - props.baselineWindow().toMillis();
             SpikeVerdict verdict = detector.judge(row, store.baselineCounts(
                     streamId, windowSizeMs, row.windowStartMs(), baselineFrom, props.metric()));
@@ -188,11 +199,16 @@ public class DetectionCycle {
                 store.claimForPublish(streamId, windowSizeMs, row.windowStartMs(), now);
                 continue;
             }
-            OptionalLong metricId = store.claimForPublish(streamId, windowSizeMs, row.windowStartMs(), now);
-            if (metricId.isEmpty()) {
+            java.util.Optional<ChatMetricsStore.Claim> claim =
+                    store.claimForPublish(streamId, windowSizeMs, row.windowStartMs(), now);
+            if (claim.isEmpty()) {
                 continue;
             }
-            long id = metricId.getAsLong();
+            long id = claim.get().metricId();
+            // 🔴 상한은 「지금」이 아니라 이 창을 <b>처음</b> 집은 시각이다(봇 리뷰 2판).
+            // 되돌렸다 다시 집는 창에서 now 를 쓰면 상한이 재시도마다 뒤로 밀리고,
+            // 판정에 쓰이지도 않은 늦은 채팅이 우리 구간을 실제보다 짧게 만든다.
+            Instant countedUntil = claim.get().firstClaimedAt();
             long windowStartMs = row.windowStartMs();
             publishExecutor.execute(() -> {
                 // 🔴 던지면 카드가 사라지는데 발행권은 이미 잡혀 재시도가 없다. 실행기 스레드의
@@ -203,9 +219,19 @@ public class DetectionCycle {
                 // 그 사이 코드가 앞으로 바뀌기 때문이고, 그때 조용히 사라지는 것이 이 기능에서
                 // 가장 나쁜 실패이기 때문이다.
                 try {
-                    // now = 발행권을 잡은 시각(집계에 쓰인 채팅의 상한), Instant.now() = 지금.
-                    // 둘을 같은 값으로 접으면 발행이 밀린 만큼 우리 구간이 사라진다.
-                    publisher.publish(streamId, id, windowStartMs, verdict, now, Instant.now());
+                    // countedUntil = 이 창을 처음 집은 시각(집계에 쓰인 채팅의 상한).
+                    // 끝점은 값이 아니라 시계를 넘긴다 — 발행이 끝난 뒤에 찍혀야 우리 왕복이
+                    // 우리 구간에 들어간다. 여기서 Instant.now()를 찍어 넘기면 보내기 전 시각이다.
+                    HighlightPublisher.Outcome outcome =
+                            publisher.publish(streamId, id, windowStartMs, verdict, countedUntil, Instant::now);
+                    // 🔴 계약이 「재시도할 자리」로 명시한 것만 되돌린다(라운드 2에서 넣고
+                    // 라운드 3에서 폭을 좁혔다). 조각이 아직 장부에 안 온 것은 몇 초 뒤면
+                    // 풀리는데, 발행권이 잡힌 채로 두면 그 창은 영영 다시 안 집히고
+                    // 하이라이트가 사라진다 — 채팅에는 백필이 없어 되찾을 방법도 없다.
+                    // 「창구를 못 물었다」를 여기 넣으면 안 되는 이유는 HighlightPublisher에.
+                    if (outcome == HighlightPublisher.Outcome.RETRY_LATER) {
+                        store.releaseClaim(id);
+                    }
                 } catch (Throwable t) {
                     log.warn("detect.publish_threw streamId={} metricId={} causeType={}",
                             streamId, id, t.getClass().getSimpleName());
