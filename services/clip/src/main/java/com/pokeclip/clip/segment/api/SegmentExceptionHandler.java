@@ -10,10 +10,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -31,8 +29,20 @@ import java.util.Map;
  * <b>전역 쪽이 이겼다</b> — 404가 403으로 바뀌며 시험 3건이 빨간불이 됐다.
  *
  * <p>그러니 지금 응답이 옳은 근거는 「좁혔다」가 아니라 <b>「두 조언의 예외 타입이 하나도
- * 안 겹친다」</b>이다(감사 2회차 전수 확인: 8 × 4 양방향 0건).
- * <b>좋은 소식은 그 사고가 조용하지 않다는 것이다</b> — 겹치는 날 404 갈래 셋이 즉시 빨간불이 된다.
+ * 안 겹친다」</b>이다(감사 2회차 전수 확인, POK-174에서 재확인).
+ *
+ * <p>🔴 <b>「겹치는 날 즉시 빨간불이 된다」고 적어 뒀던 것은 반만 맞았다 — 봉투가 다를 때만이다.</b>
+ * POK-174가 파라미터 400 둘({@code MethodArgumentTypeMismatchException}·
+ * {@code MissingServletRequestParameterException})을 <b>여기서 전역으로 옮기면서</b> 일부러
+ * 양쪽에 같은 타입을 둔 채 재 봤는데 <b>세그먼트 시험이 하나도 안 깨졌다</b> — 두 조언의
+ * {@code field(...)} 봉투가 한 바이트도 안 달랐기 때문이다. 전역이 이기고 있다는 것은
+ * 전역 쪽 본문을 바꿔 보고서야 드러났다({@code 숫자가_아닌_startMs도_같은_400_봉투다} 빨강).
+ * <b>겹침을 알려 주는 것은 시험이 아니라 봉투의 차이다.</b>
+ *
+ * <p><b>파라미터 400 둘은 여기 없다 — 전역으로 옮겼다</b>(POK-174). 좁힌 조언에 두면
+ * <b>새 문에는 안 걸려</b> 스프링 기본 {@code /error} 봉투가 나가고, 양쪽에 두면 전역이 이겨
+ * 이쪽이 죽은 코드가 된다. 이 문의 400 셋이 여전히 같은 봉투인 것은
+ * {@code 숫자가_아닌_startMs도_같은_400_봉투다}·{@code 파라미터가_빠져도_같은_400_봉투다}가 잠근다.
  *
  * <p><b>{@code Exception}·{@code IllegalArgumentException}을 통째로 잡지 않는다</b>
  * ({@code JumpCardExceptionHandler}와 같은 이유) — 내부 버그로 나온 예외가 4xx로 둔갑하면
@@ -88,32 +98,6 @@ public class SegmentExceptionHandler {
     @ExceptionHandler(InvalidRangeException.class)
     ResponseEntity<Map<String, Object>> invalidRange(InvalidRangeException e) {
         return json(HttpStatus.BAD_REQUEST, field(e.field()));
-    }
-
-    /**
-     * 400. <b>{@code startMs=abc}처럼 값이 {@code long}으로 안 바뀌면 컨트롤러 메서드에 들어오기
-     * 전에 끝난다</b> — 그러면 위 갈래를 못 지나고 스프링 기본 {@code /error} 봉투로 나가,
-     * 웹이 같은 400에 <b>모양이 다른 본문 둘</b>을 받는다(감사 2회차 C2). 여기서 같은 모양으로 맞춘다.
-     *
-     * <p>{@code long} 범위를 넘는 값도 같은 예외다(변환 실패).
-     *
-     * <p>🔴 <b>이 타입을 여기 두는 것이 안전한 이유는 「좁혔기 때문」이 아니다.</b>
-     * {@code assignableTypes}는 우선권을 주지 않는다 — 전역 조언이 같은 타입을 다루면 그쪽이 이긴다
-     * (감사 2회차 J13 실측). 안전한 것은 {@code JumpCardExceptionHandler}가 이 타입도,
-     * {@code MissingServletRequestParameterException}도 <b>안 다루기</b> 때문이다.
-     * 그쪽에 같은 타입을 더하는 날 이 문의 400 갈래들이 빨간불로 알려 준다.
-     */
-    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
-    ResponseEntity<Map<String, Object>> typeMismatch(MethodArgumentTypeMismatchException e) {
-        // 값 자체는 안 싣는다 — 자유 입력을 그대로 되돌려주는 자리가 되면 안 된다.
-        // 칸 이름은 우리 시그니처에서 온 고정 문자열이다.
-        return json(HttpStatus.BAD_REQUEST, field(e.getName()));
-    }
-
-    /** 400. 위와 같은 뿌리의 다른 갈래 — 값이 안 바뀌는 것이 아니라 아예 없는 경우다. */
-    @ExceptionHandler(MissingServletRequestParameterException.class)
-    ResponseEntity<Map<String, Object>> missingParameter(MissingServletRequestParameterException e) {
-        return json(HttpStatus.BAD_REQUEST, field(e.getParameterName()));
     }
 
     /**
