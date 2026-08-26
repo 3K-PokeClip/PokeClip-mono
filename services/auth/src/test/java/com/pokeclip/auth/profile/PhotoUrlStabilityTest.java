@@ -39,11 +39,14 @@ class PhotoUrlStabilityTest extends PhotoTestSupport {
     private static final byte[] PNG_MAGIC = {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
 
     private final PhotoUrls photoUrls;
+    private final PhotoAttacher attacher;
 
     PhotoUrlStabilityTest(MockMvc mockMvc, UserRepository userRepository, UserService userService,
-                          TokenService tokenService, JdbcTemplate jdbc, PhotoUrls photoUrls) {
+                          TokenService tokenService, JdbcTemplate jdbc, PhotoUrls photoUrls,
+                          PhotoAttacher attacher) {
         super(mockMvc, userRepository, userService, tokenService, jdbc);
         this.photoUrls = photoUrls;
+        this.attacher = attacher;
     }
 
     @Test
@@ -105,8 +108,6 @@ class PhotoUrlStabilityTest extends PhotoTestSupport {
      * <p><b>같은 회원인지 확인한다</b> — 회원이 달라서 주소가 달라진 것이면 아무것도 안 잰 것이다.
      * 갈리는 칸이 표의 {@code version}(사진 수정일시)인지도 따로 본다.
      *
-     * <p>수정일시는 <b>초</b> 단위로 표에 실린다. 같은 초에 두 번 올리면 주소가 안 바뀌므로
-     * 초가 넘어갈 때까지 기다린 뒤 두 번째를 올린다 — 기다림 없이 재면 이 검사가 뒤집힌다.
      */
     @Test
     void 사진을_바꾸면_주소가_즉시_달라지고_새_그림이_나온다() throws Exception {
@@ -114,7 +115,6 @@ class PhotoUrlStabilityTest extends PhotoTestSupport {
         byte[] first = upload(u, png("first.png", 1));
         String before = photoUrlFromMe(u);
 
-        awaitNextSecond();
         byte[] second = upload(u, png("second.png", 2));
         String after = photoUrlFromMe(u);
 
@@ -131,6 +131,106 @@ class PhotoUrlStabilityTest extends PhotoTestSupport {
         assertThat(fetch(after))
                 .as("새 주소로 꺼낸 것이 방금 올린 그림이어야 한다")
                 .isEqualTo(second);
+    }
+
+    /**
+     * 🔴 <b>같은 초에 두 번 올려도 주소가 달라져야 한다.</b> version이 수정일시의 <b>초</b>였을 때
+     * 감사자가 연달아 두 번 올리기를 10회 해서 <b>10/10 같은 초·10/10 같은 주소</b>를 봤다
+     * (올리기 왕복 7ms). 사람이 0.3초 간격으로 두 번 누르면 약 70%다.
+     *
+     * <p><b>서버는 새 그림을 내보낸다 — 틀리는 것은 브라우저다.</b> 주소가 글자까지 같은데
+     * {@code Cache-Control: private, max-age=600}이 붙어 있어 <b>캐시된 옛 그림을 최대 10분</b> 본다.
+     * PRD 성공 기준(「사진을 바꾼 직후 새 그림이 나온다」)이 깨지는 자리다.
+     *
+     * <p>위 검사는 초가 넘어갈 때까지 기다려서 이 결함을 <b>통째로 피해 가고 있었다.</b>
+     * 여기서는 기다리지 않고, <b>두 번이 실제로 같은 초에 떨어진 것을 확인한 뒤</b> 잰다 —
+     * 초가 갈렸으면 재려던 상황이 아니라 아무것도 안 잰 것이다.
+     */
+    @Test
+    void 같은_초에_두_번_올려도_주소가_달라진다() throws Exception {
+        User u = newUser();
+        Instant firstAt;
+        Instant secondAt;
+        String before;
+        String after;
+        byte[] second;
+        int tries = 0;
+        do {
+            upload(u, png("first.png", 1));
+            firstAt = photoUpdatedAt(u);
+            before = photoUrlFromMe(u);
+            second = upload(u, png("second.png", 2));
+            secondAt = photoUpdatedAt(u);
+            after = photoUrlFromMe(u);
+            tries++;
+        } while (firstAt.getEpochSecond() != secondAt.getEpochSecond() && tries < 5);
+
+        assertThat(firstAt.getEpochSecond())
+                .as("두 번이 같은 초에 떨어져야 이 검사가 뜻을 가진다 — 실측 10/10이라 대개 한 바퀴다")
+                .isEqualTo(secondAt.getEpochSecond());
+        assertThat(after).as("같은 초여도 주소가 달라져야 브라우저가 새 그림을 받는다").isNotEqualTo(before);
+        assertThat(versionOf(after))
+                .as("갈리는 칸은 사진 수정일시여야 한다")
+                .isNotEqualTo(versionOf(before));
+        assertThat(fetch(after)).as("새 주소로 꺼낸 것이 두 번째 그림이어야 한다").isEqualTo(second);
+    }
+
+    /**
+     * 🔴 <b>같은 초로는 부족하다 — 같은 밀리초에도 갈려야 한다</b>(PR #127 codex P2).
+     * 탭 둘에서 동시에 올리면 두 저장이 같은 밀리초에 떨어질 수 있고, 그때 밀리초로 자른
+     * 버전은 <b>글자까지 같은 주소</b>를 만든다. 그러면 먼저 받은 주소를 캐시한 브라우저가
+     * 두 번째 사진을 <b>10분 동안 못 본다</b> — 위 검사가 막으려던 바로 그 실패다.
+     *
+     * <p>업로드 왕복이 약 7ms라 실기동으로는 같은 밀리초를 만들기 어렵다. 그래서 표를 거치지 않고
+     * <b>주소를 짓는 쪽을 직접 부른다</b> — 재는 것은 「같은 밀리초, 다른 마이크로초가 다른 주소를
+     * 내는가」이지 업로드 경로가 아니다. 그 마이크로초가 DB를 왕복해도 살아 있는지는 아래에서 따로 잰다.
+     */
+    @Test
+    void 같은_밀리초_안에서_바꿔도_주소가_달라진다() throws Exception {
+        User u = newUser();
+        upload(u, png("first.png", 1));
+        User user = userRepository.findById(u.getId()).orElseThrow();
+        String key = "profile-photos/" + u.getId();
+
+        Instant base = photoUpdatedAt(u);
+        // 밀리초 경계로 내린 뒤 1마이크로초만 민다.
+        Instant earlier = Instant.ofEpochSecond(base.getEpochSecond(),
+                (base.getNano() / 1_000_000) * 1_000_000L);
+        Instant later = earlier.plusNanos(1_000);
+        assertThat(earlier.toEpochMilli())
+                .as("두 시각이 같은 밀리초여야 이 검사가 뜻을 가진다 — 갈렸으면 아무것도 안 잰 것이다")
+                .isEqualTo(later.toEpochMilli());
+
+        // 부르는 시각은 같게 둔다 — 갈려야 하는 것은 만료가 아니라 사진 버전이다.
+        Instant now = Instant.now();
+        user.attachPhoto(key, earlier);
+        String first = photoUrls.of(user, now);
+        user.attachPhoto(key, later);
+        String second = photoUrls.of(user, now);
+
+        assertThat(versionOf(second))
+                .as("밀리초로 자르면 여기서 같아진다")
+                .isNotEqualTo(versionOf(first));
+        assertThat(second).isNotEqualTo(first);
+    }
+
+    /**
+     * 🔴 <b>위 검사는 이것이 참일 때만 뜻을 가진다.</b> 마이크로초가 표를 왕복하며 잘리면
+     * 위는 메모리에서만 참이고 실제 주소는 여전히 겹친다. {@code TIMESTAMPTZ}가 마이크로초까지
+     * 저장한다는 것에 기대고 있으므로, 컬럼 타입을 바꾸는 날 여기가 빨간불이 되어야 한다.
+     */
+    @Test
+    void 사진_시각의_마이크로초가_표를_왕복해도_살아_있다() {
+        User u = newUser();
+        // 마이크로초 자리가 0이 아닌 값을 일부러 만든다 — 0이면 「잘려도 같다」라 아무것도 안 잰다.
+        Instant stamped = Instant.ofEpochSecond(Instant.now().getEpochSecond(), 123_456_000L);
+        assertThat(stamped.getNano() % 1_000_000).as("밀리초 아래 자리가 있어야 잰다").isNotZero();
+
+        attacher.attach(u.getId(), stamped);   // 실제 표 갱신 경로. 자체 트랜잭션이라 여기서 커밋된다
+
+        assertThat(photoUpdatedAt(u))
+                .as("마이크로초가 잘리면 같은 밀리초의 두 업로드가 다시 겹친다")
+                .isEqualTo(stamped);
     }
 
     /** 그 주소를 실제로 불러 200이 나오는지까지 본다 — 주소만 맞고 안 열리면 화면은 깨진 그림이다. */
@@ -174,6 +274,10 @@ class PhotoUrlStabilityTest extends PhotoTestSupport {
                 .andReturn().getResponse().getContentAsByteArray();
     }
 
+    private Instant photoUpdatedAt(User u) {
+        return userRepository.findById(u.getId()).orElseThrow().getProfilePhotoUpdatedAt();
+    }
+
     private static String pathOf(String url) {
         return URI.create(url).getPath();
     }
@@ -182,14 +286,6 @@ class PhotoUrlStabilityTest extends PhotoTestSupport {
     private static String versionOf(String url) {
         String token = URI.create(url).getQuery().substring("token=".length());
         return token.split("\\.", -1)[2];
-    }
-
-    /** 표의 version은 수정일시의 <b>초</b>다. 같은 초에 두 번 올리면 주소가 안 바뀐다. */
-    private static void awaitNextSecond() throws InterruptedException {
-        long start = Instant.now().getEpochSecond();
-        while (Instant.now().getEpochSecond() == start) {
-            Thread.sleep(20);
-        }
     }
 
     /** 바이트마다 다른 값을 넣는다 — 0으로만 채우면 「엉뚱한 파일을 내보냈다」를 못 잡는다. */

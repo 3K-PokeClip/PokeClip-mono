@@ -44,7 +44,22 @@ public class PhotoUrls {
             return user.getProfileImageUrl();
         }
         // 사진을 바꾸면 이 값이 달라지고, 그래야 브라우저가 들고 있던 옛 그림을 버린다.
-        long version = user.getProfilePhotoUpdatedAt().getEpochSecond();
+        //
+        // 🔴 <b>마이크로초까지 쓴다.</b> 이 자리를 두 번 좁혔다.
+        //   초  → 연달아 두 번 올린 것이 같은 초에 떨어져 주소가 글자까지 같아졌다
+        //         (감사자 실측 10/10, 올리기 왕복 7ms)
+        //   밀리초 → 탭 둘에서 동시에 올리면 같은 밀리초에 떨어질 수 있다(PR #127 codex P2)
+        // 주소가 같아지면 서버가 새 그림을 내보내도 Cache-Control이 private·max-age=600이라
+        // <b>브라우저가 옛 그림을 최대 10분</b> 본다.
+        //
+        // <b>마이크로초가 상한이다</b> — 표의 칸이 TIMESTAMPTZ라 거기까지만 저장된다.
+        // 나노초를 쓰면 올린 직후 응답(메모리 값)과 다음 회원 정보 조회(표에서 읽은 값)의
+        // 주소가 갈려 <b>캐시 전제가 반대로 무너진다.</b>
+        // 완전히 없애려면 표에 따로 세는 칸을 두어야 하는데 그것은 마이그레이션이다.
+        //
+        // 옛 주소는 안 깨진다 — PhotoToken.verify가 이 칸의 모양만 보고 값은 안 본다.
+        Instant photoAt = user.getProfilePhotoUpdatedAt();
+        long version = photoAt.getEpochSecond() * 1_000_000L + photoAt.getNano() / 1_000;
         String token = PhotoToken.issue(properties.tokenSecret(), user.getId(), version, now);
         // 화면과 서버가 다른 주소에 있어 절대 주소여야 한다.
         return properties.baseUrl() + "/api/profile-photos/" + user.getId() + "?token=" + token;
