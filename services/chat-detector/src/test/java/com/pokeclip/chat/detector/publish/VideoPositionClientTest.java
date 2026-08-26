@@ -14,6 +14,7 @@ import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -37,7 +38,19 @@ class VideoPositionClientTest {
 
     @BeforeEach
     void 가짜_수집서버를_띄운다() throws IOException {
-        server = HttpServer.create(new InetSocketAddress(0), 0);
+        // 🔴 <b>루프백에 명시적으로 바인딩한다.</b> 주소 없이 포트만 주면 <b>와일드카드</b>에 붙는데
+        // (실측: {@code [0:0:0:0:0:0:0:0]:57646}), 커널이 <b>같은 번호의 127.0.0.1 바인딩을
+        // 충돌로 보지 않는다.</b> 뒤늦게 뜬 아무 프로그램이나 그 번호를 잡을 수 있고,
+        // 잡으면 <b>더 구체적인 주소라 요청을 통째로 가져간다.</b>
+        //
+        // 증상은 「가짜 서버의 호출 횟수가 1이어야 하는데 0」이고 <b>0.01초에 끝나</b> 시한도
+        // 아니다. 다시 돌리면 초록이라 재현이 안 된다. POK-174(clip)가 재서 찾았고
+        // <b>MCP 서버와 IntelliJ 빌드 서버가 실제로 그 시험에 답한 것</b>을 잡았다.
+        //
+        // 🔴 <b>URL을 127.0.0.1로 쓴다고 안전한 것이 아니다</b> — 가로채는 쪽이 그 주소를
+        // 잡으므로 <b>바인딩 주소가 정한다</b>(재현: 와일드카드면 localhost·127.0.0.1 둘 다
+        // 가로채는 쪽이 답했고, 루프백에 붙이면 가로채기 바인딩 자체가 거부된다).
+        server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         server.createContext("/internal/streams", exchange -> {
             receivedTokens.add(String.valueOf(exchange.getRequestHeaders().getFirst("X-Internal-Token")));
             receivedQueries.add(exchange.getRequestURI().getQuery());
@@ -197,5 +210,24 @@ class VideoPositionClientTest {
 
         assertThat(position.state()).isEqualTo(State.UNAVAILABLE);
         assertThat(elapsedMs).isLessThan(2_500);
+    }
+
+    /**
+     * 🔴 <b>가짜 서버가 루프백에만 붙어야 한다.</b> 이 갈래가 없으면 주소를 다시 와일드카드로
+     * 되돌려도 <b>아무 검사가 안 깨진다</b> — 「초록이 나온 자리가 곧 무방비」다.
+     *
+     * <p>와일드카드면 같은 번호를 {@code 127.0.0.1}로 잡는 다른 프로그램이 <b>요청을 통째로
+     * 가져간다.</b> 증상은 「호출 횟수가 1이어야 하는데 0」이고 <b>0.01초에 끝나</b> 시한도
+     * 아니며 다시 돌리면 초록이라 <b>재현이 안 된다.</b>
+     *
+     * <p>이 기계에 개발 세션이 여럿 도는 동안 가로챌 프로그램이 그만큼 많다 —
+     * POK-174가 <b>MCP 서버와 IntelliJ 빌드 서버가 실제로 답한 것</b>을 잡았다.
+     */
+    @Test
+    void 가짜_창구은_루프백에만_붙는다() {
+        assertThat(server.getAddress().getAddress().isLoopbackAddress())
+                .as("와일드카드에 붙으면 다른 프로그램이 같은 번호를 잡아 요청을 가져간다: %s",
+                        server.getAddress())
+                .isTrue();
     }
 }
