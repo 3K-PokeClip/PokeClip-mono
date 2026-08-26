@@ -18,6 +18,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -301,6 +302,40 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.field").value("cursor"));
 
         assertThat(AUTH.callCount()).as("형식 오류에 auth 왕복을 태우면 안 된다").isZero();
+    }
+
+    /**
+     * 🔴 <b>「칸이 비어 있다」와 「칸을 안 줬다」를 같게 본다.</b> 스프링은 {@code ?cursor=}를
+     * {@code null}이 아니라 <b>{@code ""}</b>로 넘긴다({@code defaultValue}가 있어야 대체한다) —
+     * 고치기 전에는 그 빈 문자열이 표시를 푸는 자리로 그대로 가서 <b>첫 장이 400</b>이었다.
+     * 웹이 {@code cursor=${표시 ?? ''}} 같은 흔한 모양으로 쓰면 홈 화면이 안 열린다.
+     *
+     * <p><b>{@code limit}은 이미 이렇게 군다</b> — {@code Integer}라 변환기가 빈 문자열을
+     * {@code null}로 바꿔 기본값을 탄다. 같은 응답의 두 칸이 다르게 굴던 것을 맞춘 것이다.
+     *
+     * <p>🔴 이것은 {@code ListLimit}의 「0을 조용히 봐 주지 않는다」와 <b>충돌하지 않는다</b> —
+     * {@code 0}은 <b>값을 준 것</b>이고 빈 문자열은 <b>값이 없는 것</b>이다. 그래서
+     * {@code ?limit=0}은 지금도 400이다(바로 위 갈래가 그것을 잰다).
+     */
+    @Test
+    void 빈_이어받기_표시는_안_준_것과_같다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-1", TestIds.STREAMER, "live");
+        방송을_넣는다("s-2", TestIds.STREAMER, "live");
+
+        // 앞엣것은 웹이 `cursor=${표시 ?? ''}`로 보내는 모양 그대로다.
+        // 뒤엣것은 공백만 있는 값 — 🔴 URL에 `%20`으로 쓰면 MockMvc가 한 번 더 감싸 리터럴
+        // "%20"이 되어(빈 값이 아니라 진짜 깨진 표시다) 400이 맞다. 그래서 칸 값으로 싣는다.
+        for (ResultActions 응답 : List.of(
+                목록("?state=live&limit=2&cursor="),
+                mvc.perform(get("/api/clip/broadcasts")
+                        .param("state", "live").param("limit", "2").param("cursor", " ")
+                        .header("Authorization", "Bearer " + TestTokens.access(요청자))))) {
+            응답.andExpect(status().isOk())
+                    .andExpect(jsonPath("$.broadcasts.length()").value(2))
+                    .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-2"))
+                    .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-1"));
+        }
     }
 
     // ── 거절 ────────────────────────────────────────────────────

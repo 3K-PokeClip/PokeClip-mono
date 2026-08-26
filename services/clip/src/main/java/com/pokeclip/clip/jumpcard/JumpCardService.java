@@ -232,7 +232,7 @@ public class JumpCardService {
      *
      * @param requesterSubject JWT {@code sub} — 우리가 발급·검증한 토큰의 회원 번호(문자열)
      * @param limit {@code null}이면 {@link #DEFAULT_LIST_LIMIT}
-     * @param cursor {@code null}이면 첫 장
+     * @param cursor {@code null}<b>이거나 빈 문자열이면</b> 첫 장 ({@code CursorCodec.decodeOrFirstPage})
      * @throws com.pokeclip.clip.paging.InvalidListParamException 개수가 범위 밖이다 (400)
      * @throws com.pokeclip.clip.paging.InvalidCursorException 표시가 우리 모양이 아니다 (400)
      * @throws com.pokeclip.clip.delegation.AccessErrors.NotViewableException
@@ -245,7 +245,7 @@ public class JumpCardService {
         int size = ListLimit.resolve(limit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
         // 표시는 두 값을 함께 싣는다 — 하나만 오면 같은 방송 시간의 뒷줄이 조용히 빠진다
         // (CursorCodec.Kind.CARD의 칸 수 검사가 그것을 막는다. findPage 주석 참고).
-        List<Long> after = cursor == null ? null : CursorCodec.decode(CursorCodec.Kind.CARD, cursor);
+        List<Long> after = CursorCodec.decodeOrFirstPage(CursorCodec.Kind.CARD, cursor);
 
         guard.requireViewable(requesterSubject, streamId);
 

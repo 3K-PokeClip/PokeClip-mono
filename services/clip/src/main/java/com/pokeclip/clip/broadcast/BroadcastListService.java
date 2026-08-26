@@ -84,7 +84,7 @@ public class BroadcastListService {
     /**
      * @param requesterSubject JWT {@code sub} — 우리가 발급·검증한 토큰의 회원 번호(문자열)
      * @param limit {@code null}이면 {@link #DEFAULT_LIMIT}
-     * @param cursor {@code null}이면 첫 장
+     * @param cursor {@code null}<b>이거나 빈 문자열이면</b> 첫 장 ({@code CursorCodec.decodeOrFirstPage})
      * @throws InvalidListParamException 개수가 범위 밖이다 (400)
      * @throws com.pokeclip.clip.paging.InvalidCursorException 이어받기 표시가 우리 모양이 아니다 (400)
      * @throws AccessErrors.NotViewableException 토큰의 주체를 회원 번호로 못 읽는다 (404)
@@ -92,8 +92,8 @@ public class BroadcastListService {
      */
     public BroadcastPage list(String requesterSubject, BroadcastState state, Integer limit, String cursor) {
         int size = ListLimit.resolve(limit, DEFAULT_LIMIT, MAX_LIMIT);
-        Long afterId = cursor == null ? null
-                : CursorCodec.decode(CursorCodec.Kind.BROADCAST, cursor).get(0);
+        List<Long> after = CursorCodec.decodeOrFirstPage(CursorCodec.Kind.BROADCAST, cursor);
+        Long afterId = after == null ? null : after.get(0);
         long userId = 요청자_번호(requesterSubject);
 
         AccessibleResult accessible = delegation.accessible(userId);

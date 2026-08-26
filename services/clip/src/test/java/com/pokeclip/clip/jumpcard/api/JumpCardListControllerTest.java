@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -227,6 +228,34 @@ class JumpCardListControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.field").value("cursor"));
 
         assertThat(AUTH.lastPath()).as("형식 오류에 자격 창구를 두드리면 안 된다").isNotEqualTo(RESOLVE);
+    }
+
+    /**
+     * 🔴 <b>「칸이 비어 있다」와 「칸을 안 줬다」를 같게 본다.</b> 방송 목록 문과 <b>같은 규칙</b>이다 —
+     * 한쪽만 접으면 웹이 두 문에 같은 모양으로 보내도 한쪽만 400이 된다.
+     *
+     * <p>고치기 전에는 스프링이 넘기는 빈 문자열이 표시를 푸는 자리로 그대로 가서 <b>첫 장이 400</b>
+     * 이었다({@code limit}은 박스형이라 이미 기본값을 타고 있었다).
+     */
+    @Test
+    void 빈_이어받기_표시는_안_준_것과_같다() throws Exception {
+        볼_수_있다("OWNER");
+        카드를_넣는다(내_방송, 1000, "auto");
+        카드를_넣는다(내_방송, 2000, "auto");
+
+        // 앞엣것은 웹이 `cursor=${표시 ?? ''}`로 보내는 모양 그대로다.
+        // 뒤엣것은 공백만 있는 값 — 🔴 URL에 `%20`으로 쓰면 MockMvc가 한 번 더 감싸 리터럴
+        // "%20"이 되어(빈 값이 아니라 진짜 깨진 표시다) 400이 맞다. 그래서 칸 값으로 싣는다.
+        for (ResultActions 응답 : List.of(
+                목록("?limit=2&cursor="),
+                mvc.perform(get("/api/clip/broadcasts/" + 내_방송 + "/jump-cards")
+                        .param("limit", "2").param("cursor", " ")
+                        .header("Authorization", "Bearer " + TestTokens.access(요청자))))) {
+            응답.andExpect(status().isOk())
+                    .andExpect(jsonPath("$.cards.length()").value(2))
+                    .andExpect(jsonPath("$.cards[0].streamTimestampMs").value(1000))
+                    .andExpect(jsonPath("$.cards[1].streamTimestampMs").value(2000));
+        }
     }
 
     /**
