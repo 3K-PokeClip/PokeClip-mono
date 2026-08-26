@@ -36,6 +36,11 @@ describe('next.config rewrites', () => {
         source: '/api/editor-invitations/:path*',
         destination: 'http://auth.internal:8082/api/editor-invitations/:path*',
       },
+      // 유튜브 연동도 auth 서버 소유 — 한 줄이 /api/youtube-link 자체와 /start를 덮는다 (POK-221)
+      {
+        source: '/api/youtube-link/:path*',
+        destination: 'http://auth.internal:8082/api/youtube-link/:path*',
+      },
       { source: '/api/clip/:path*', destination: 'http://clip.internal:8081/api/clip/:path*' },
     ]);
   });

@@ -23,27 +23,6 @@
   margin: 0 0 calc(10 * var(--pc-u));
 }
 
-/* 유튜브 구획 머리 — 제목 + 보조 카운트 + 우측 액션이 한 줄 (1k) */
-.sectionHead {
-  display: flex;
-  align-items: center;
-  gap: calc(9 * var(--pc-u));
-  margin-bottom: calc(10 * var(--pc-u));
-}
-
-.sectionHead .sectionTitle {
-  margin: 0;
-}
-
-.sectionSub {
-  font-size: calc(11.5 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-}
-
-.sectionHeadAction {
-  margin-left: auto;
-}
-
 .rows {
   display: flex;
   flex-direction: column;
@@ -98,11 +77,6 @@
 .youtubeIcon svg {
   width: calc(26 * var(--pc-u));
   height: calc(26 * var(--pc-u));
-}
-
-/* 아직 연결할 수 없는 자리는 마크를 죽여 둔다 — 있는 척하지 않는다 */
-.pending {
-  opacity: 0.55;
 }
 
 .rowBody {
