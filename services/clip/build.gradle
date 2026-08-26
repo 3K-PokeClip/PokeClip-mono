@@ -37,6 +37,14 @@ dependencies {
     // httpClient(...)로 이쪽을 명시하고, 그 이름을 여기서 컴파일에 보이게 둔다.
     implementation 'software.amazon.awssdk:url-connection-client'
 
+    // 나가는 HTTP의 실제 스택이다 — awssdk:sqs가 apache5-client를 통해 runtime으로 이미
+    // 끌고 오고, 스프링의 ClientHttpRequestFactoryBuilder.detect()가 그것을 고른다.
+    // 여기 명시하는 것은 버전을 바꾸려는 것이 아니라(dependencyManagement가 5.6.1로 고정한다.
+    // 선언 전후 해석값이 같은 것을 확인했다) <b>컴파일에 보이게</b> 하려는 것이다 —
+    // HttpClientRetryConfig가 이 스택의 기본 재시도(429·503 되걸기)를 끈다.
+    // 이 줄을 지우면 그 설정이 컴파일되지 않는다.
+    implementation 'org.apache.httpcomponents.client5:httpclient5'
+
     runtimeOnly 'org.postgresql:postgresql'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'

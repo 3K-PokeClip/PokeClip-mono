@@ -19,6 +19,10 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>{@code @Transactional}이 없다.</b> auth 왕복이 최대 7초인데 트랜잭션 안에서 돌면
  * 그동안 커넥션을 쥔다. 선례인 {@code SegmentQueryService}도 같은 이유로 없다.
+ *
+ * <p>「최대 7초」({@code connect 2s + read 5s})가 참인 것은 <b>되걸기를 껐기 때문이다</b> —
+ * 안 껐을 때는 {@code 429}·{@code 503}에서 왕복이 둘이라 <b>14초</b>였다(감사 1라운드 실측).
+ * {@link com.pokeclip.clip.config.HttpClientRetryConfig} 참고.
  */
 @Component
 public class BroadcastAccessGuard {

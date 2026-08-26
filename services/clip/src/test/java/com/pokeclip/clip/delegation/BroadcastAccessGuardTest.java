@@ -7,6 +7,8 @@ import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -119,16 +121,25 @@ class BroadcastAccessGuardTest extends IntegrationTestSupport {
     /**
      * 404로 접지 않는다. 화면이 「없는 방송」이라고 단정하면 auth가 살아난 뒤에도 편집자는
      * 다시 시도하지 않는다.
+     *
+     * <p>🔴 <b>상태 셋을 도는 것이 이 갈래의 핵심이다.</b> 원래 500 하나만 걸었는데,
+     * <b>500은 HTTP 계층이 되걸지 않는 유일한 5xx</b>였다 — 그래서 「2 이상이면 재시도」라고
+     * 적어 둔 횟수 단언이 <b>재시도가 안 일어나는 상태만 보고 있었다</b>(감사 1라운드).
+     * {@code 503}·{@code 429}가 그 사각이고, 그 둘을 넣자 실제로 2가 나왔다.
+     *
+     * <p>이 시험은 <b>운영 스택</b>을 탄다 — 판정기가 스프링이 주입한 {@code RestClient.Builder}를
+     * 쓰기 때문이다. 그 스택이 무엇인지는 {@code AuthRetryContractTest}가 못박는다.
      */
-    @Test
-    void 못_물으면_판정_불가다() {
-        AUTH.respondWith(RESOLVE, 500, "");
+    @ParameterizedTest(name = "auth 상태={0}")
+    @ValueSource(ints = {500, 503, 429})
+    void 못_물으면_판정_불가다(int status) {
+        AUTH.respondWith(RESOLVE, status, "");
 
         assertThatThrownBy(() -> guard.requireViewable(스트리머, "s-1"))
                 .isInstanceOf(AccessErrors.AuthUnavailableException.class);
 
         assertThat(AUTH.callCount())
-                .as("정확히 한 번 — 0이면 아예 안 물은 것이고 2 이상이면 재시도다")
+                .as("사람이 기다리는 요청 안이다 — 되걸면 최악 대기가 두 배가 되고 톰캣 스레드를 그만큼 더 쥔다")
                 .isEqualTo(1);
     }
 

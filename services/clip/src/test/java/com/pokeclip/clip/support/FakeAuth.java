@@ -54,6 +54,9 @@ public final class FakeAuth implements AutoCloseable {
     private volatile Response fallback = 아무_경로도_안_정했을_때;
     private volatile Duration delay = Duration.ZERO;
 
+    /** {상태, Location}. {@link #redirectTo}가 걸면 경로를 안 가리고 이것으로만 답한다. */
+    private volatile String[] redirect;
+
     private FakeAuth(HttpServer server, ExecutorService threads) {
         this.server = server;
         this.threads = threads;
@@ -91,6 +94,18 @@ public final class FakeAuth implements AutoCloseable {
         byPath.put(path, new Response(status, body));
     }
 
+    /**
+     * 경로를 안 가리고 이 상태 코드와 {@code Location}으로만 답한다.
+     *
+     * <p><b>리다이렉트를 안 따라가는 것을 재려고 있다.</b> HC5 기본 전략은 {@code 307}·{@code 308}에서
+     * <b>원 요청을 그대로 다시 보낸다</b> — 헤더와 본문이 통째로 따라가므로 {@code X-Internal-Token}이
+     * 리다이렉트가 가리키는 아무 출처에나 도착한다. {@code 301}·{@code 302}·{@code 303}은 POST를
+     * GET으로 바꾼 <b>새 요청</b>이라 토큰·본문은 안 따라가지만 <b>따라가는 것 자체는 같다</b>.
+     */
+    public void redirectTo(int status, String location) {
+        this.redirect = new String[]{String.valueOf(status), location};
+    }
+
     public void holdFor(Duration delay) {
         this.delay = delay;
     }
@@ -104,6 +119,7 @@ public final class FakeAuth implements AutoCloseable {
      */
     public void reset() {
         byPath.clear();
+        redirect = null;
         fallback = 아무_경로도_안_정했을_때;
         delay = Duration.ZERO;
         calls.set(0);
@@ -153,6 +169,12 @@ public final class FakeAuth implements AutoCloseable {
                 Thread.currentThread().interrupt();
                 return;
             }
+        }
+        if (redirect != null) {
+            exchange.getResponseHeaders().add("Location", redirect[1]);
+            exchange.sendResponseHeaders(Integer.parseInt(redirect[0]), -1);
+            exchange.close();
+            return;
         }
         Response response = byPath.getOrDefault(path, fallback);
         byte[] bytes = response.body().getBytes(StandardCharsets.UTF_8);

@@ -27,6 +27,13 @@ import java.util.List;
  *
  * <p><b>재시도하지 않는다.</b> 이 호출은 사람이 기다리는 요청 안에서 돈다 — 한 번 더 걸면
  * 시한이 두 배가 되고 톰캣 스레드를 그만큼 더 쥔다.
+ *
+ * <p>🔴 <b>그 문장은 오래 거짓이었다.</b> 우리 코드는 안 걸었지만 <b>HTTP 스택이 걸었다</b> —
+ * Apache HC5가 {@code 429}·{@code 503}만 한 번 되건다(감사 1라운드 실측:
+ * {@code 401·500·502·504 → 1회}, {@code 429·503 → 2회}). 지금은
+ * {@link com.pokeclip.clip.config.HttpClientRetryConfig}가 그것을 <b>명시적으로 꺼서</b>
+ * 이 문장을 참으로 만든다 — <b>그 설정을 「불필요한 중복」으로 지우면 이 문장이 다시 거짓이 된다.</b>
+ * {@code AuthRetryContractTest}가 두 메서드 모두에 대해 「요청은 한 번」을 고정한다.
  */
 @Component
 public class DelegationResolveClient {
