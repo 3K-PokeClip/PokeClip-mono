@@ -58,7 +58,11 @@ public final class PhotoToken {
         if (token == null) {
             return false;
         }
-        String[] parts = token.split("\\.");
+        // limit −1이 아니면 split이 <b>꼬리의 빈 칸을 지운다</b>(Java split(regex) 규약).
+        // 그러면 "7.100.0.sig."도 길이가 4이고 parts[3]은 여전히 서명이라 그대로 통과한다 —
+        // 점을 몇 개든 붙일 수 있으니 같은 사진에 유효한 주소가 무한히 생기고, 같은 십분 창에서
+        // 글자까지 같게 만들어 둔 캐시 전제가 무너진다.
+        String[] parts = token.split("\\.", -1);
         if (parts.length != 4) {
             return false;
         }

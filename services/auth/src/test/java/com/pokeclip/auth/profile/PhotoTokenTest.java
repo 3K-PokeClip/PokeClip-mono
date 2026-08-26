@@ -78,13 +78,32 @@ class PhotoTokenTest {
 
     @Test
     void 모양이_아닌_글자는_조용히_거부한다() {
-        // 마지막 갈래는 유효한 표에 칸을 덧붙인 것이다. 앞 여섯은 어차피 파싱이나 만료에서 걸려
+        // 뒤 셋은 유효한 표에 꼬리를 붙인 것이다. 앞 여섯은 어차피 파싱이나 만료에서 걸려
         // 칸 수 검사를 지워도 전부 거부되므로(주입으로 확인), 이 갈래가 없으면 「네 칸이어야 한다」를
         // 아무도 재지 않는다 — 서명이 앞 세 칸에만 걸려 있어 꼬리를 붙인 표가 그대로 통과한다.
-        String tailAppended = PhotoToken.issue(SECRET, 7L, 1000L, T) + ".extra";
+        String valid = PhotoToken.issue(SECRET, 7L, 1000L, T);
         for (String junk : new String[]{"", ".", "a.b.c.d", "7.1.2", "7.x.1.sig", "eyJhbGciOiJIUzI1NiJ9.x.y",
-                tailAppended}) {
+                valid + ".extra", valid + ".", valid + "..."}) {
             assertThat(PhotoToken.verify(SECRET, junk, 7L, T)).as("입력 %s", junk).isFalse();
         }
+    }
+
+    /**
+     * 🔴 <b>꼬리에 붙은 점만 재는 갈래를 따로 둔다.</b> 위 목록은 갈래가 아홉이라 하나가 조용히
+     * 통과해도 「어딘가 틀렸다」로만 읽힌다. {@code split(regex)}는 <b>꼬리의 빈 칸을 지우므로</b>
+     * ({@code "a.b.c.d.".split("\\.")} → 길이 4) 점을 몇 개 붙여도 칸 수가 그대로 넷이고
+     * {@code parts[3]}은 여전히 서명이다 — limit −1을 빠뜨리면 여기서만 걸린다.
+     *
+     * <p>권한이 늘지는 않는다. 대신 <b>같은 사진에 서로 다른 유효 주소가 무한히 생겨</b>
+     * 브라우저 캐시가 통째로 무의미해진다(같은 십분 창에서 글자까지 같게 만든 이유가 그것이다).
+     */
+    @Test
+    void 꼬리에_점을_붙인_표는_거부한다() {
+        String valid = PhotoToken.issue(SECRET, 7L, 1000L, T);
+        assertThat(PhotoToken.verify(SECRET, valid, 7L, T)).as("기준선이 통과해야 아래가 의미를 갖는다").isTrue();
+
+        assertThat(PhotoToken.verify(SECRET, valid + ".", 7L, T)).isFalse();
+        assertThat(PhotoToken.verify(SECRET, valid + "..", 7L, T)).isFalse();
+        assertThat(PhotoToken.verify(SECRET, valid + "...", 7L, T)).isFalse();
     }
 }
