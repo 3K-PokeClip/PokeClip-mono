@@ -218,6 +218,26 @@ class LateArrivalReporterTest extends IntegrationTestSupport {
         }
     }
 
+    /**
+     * 🔴 <b>{@code Error}가 새도 그 주기가 안 죽는다.</b> 아래 검사는 {@code IllegalStateException}
+     * (={@code RuntimeException})을 던지므로 <b>{@code catch} 폭을 좁혀도 통과한다</b>
+     * (감사 3회차 W-3). 유예값을 정할 근거가 영영 안 쌓이는 것이 그 대가다.
+     */
+    @Test
+    void 관측이_Error에도_안_죽는다() {
+        LateArrivalReporter reporter = new LateArrivalReporter(reader,
+                () -> { throw new AssertionError("주입된 Error"); },
+                Duration.ofSeconds(2), 5_000L, Duration.ofMinutes(10), () -> T0);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            reporter.report();   // Error가 밖으로 나오면 이 줄에서 검사가 실패한다
+
+            assertThat(captor.messages())
+                    .filteredOn(m -> m.startsWith("detect.late_arrivals_failed"))
+                    .singleElement().satisfies(line -> assertThat(line).contains("AssertionError"));
+        }
+    }
+
     /** 🔴 터져도 다음 주기가 돌아야 한다. 관측이 판별을 멈추면 앞뒤가 바뀐다. */
     @Test
     void 터져도_예외가_밖으로_안_나간다() {

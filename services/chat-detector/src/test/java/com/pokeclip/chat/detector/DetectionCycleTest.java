@@ -352,6 +352,45 @@ class DetectionCycleTest extends IntegrationTestSupport {
     }
 
     /**
+     * 🔴 <b>지연의 끝점은 「지금」이다 — 바퀴의 시각이 아니다.</b>
+     *
+     * <p>발행은 실행기에서 돌고 clip 재시도까지 끼면 바퀴에서 <b>초 단위로 떨어질 수 있다.</b>
+     * 끝점을 바퀴 시각으로 접으면 <b>그 밀린 시간이 우리 구간에서 통째로 사라진다</b> —
+     * 목표를 재는 숫자가 또 낙관 쪽으로 틀린다.
+     *
+     * <p><b>위 {@code 발행에_넘기는_상한은_바퀴의_시각이다}와 일부러 갈라 놓았다.</b> 한 단언에
+     * 묶으면 「값 둘 중 하나만 재는 검사」를 고치면서 같은 모양을 새로 만든다 — 그것이
+     * 감사 3회차 W-2의 내용이었다(상한은 재는데 끝점을 안 쟀다).
+     */
+    @Test
+    void 지연의_끝점은_바퀴_시각이_아니라_지금이다() {
+        급증_한_건을_심는다();
+        java.time.Instant 바퀴_시각 = T0.plusSeconds(10);
+
+        java.util.List<java.time.Instant> 넘어간_끝점 = new java.util.ArrayList<>();
+        HighlightPublisher 기록기 = new HighlightPublisher(null, null, reader, props) {
+            @Override
+            public boolean publish(String streamId, long metricId, long windowStartMs,
+                                   SpikeVerdict verdict, java.time.Instant countedUntil,
+                                   java.time.Instant now) {
+                넘어간_끝점.add(now);
+                return true;
+            }
+        };
+
+        java.time.Instant 부르기_전 = java.time.Instant.now();
+        new DetectionCycle(reader, metricsStore, detector, 기록기, props, Runnable::run)
+                .runOnce(바퀴_시각);
+        java.time.Instant 부른_뒤 = java.time.Instant.now();
+
+        assertThat(넘어간_끝점).singleElement().satisfies(끝점 -> {
+            assertThat(끝점).as("바퀴 시각으로 접으면 밀린 시간이 사라진다").isNotEqualTo(바퀴_시각);
+            assertThat(끝점).as("실행기가 실제로 도는 벽시계여야 한다")
+                    .isBetween(부르기_전, 부른_뒤);
+        });
+    }
+
+    /**
      * 🔴 <b>실행기에 던진 일이 터져도 조용히 사라지지 않는다.</b> 발행권은 이미 잡혀 재시도가
      * 없으므로, 로그가 없으면 그 카드는 흔적 없이 없어진다(감사 2회차 R-5).
      *
@@ -398,6 +437,34 @@ class DetectionCycleTest extends IntegrationTestSupport {
             assertThat(captor.messages())
                     .filteredOn(m -> m.startsWith("detect.cycle_failed"))
                     .isNotEmpty();
+        }
+    }
+
+    /**
+     * 🔴 <b>{@code Error}가 새도 그 주기가 안 죽는다.</b> 위 검사는 {@code DROP TABLE}로
+     * {@code DataAccessException}(={@code RuntimeException})을 만들므로 <b>{@code catch} 폭을
+     * {@code RuntimeException}으로 좁혀도 통과한다</b> — 「그물이 이름보다 좁다」(감사 3회차 W-3).
+     *
+     * <p>{@code Error}가 밖으로 나가면 스프링이 그 주기를 다시 안 돌린다. 판별이 통째로 멈추는데
+     * 아무 신호가 없다 — 이 기능에서 가장 나쁜 실패다.
+     */
+    @Test
+    void 주기가_Error에도_안_죽는다() {
+        ChatWindowReader 에러를_던지는_리더 = new ChatWindowReader(jdbc) {
+            @Override
+            public java.util.List<String> activeStreams(java.time.Instant since) {
+                throw new AssertionError("주입된 Error");
+            }
+        };
+        DetectionCycle 갈아끼운_바퀴 = new DetectionCycle(에러를_던지는_리더, metricsStore, detector,
+                realPublisher, props, Runnable::run);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            갈아끼운_바퀴.tick();   // Error가 밖으로 나오면 이 줄에서 검사가 실패한다
+
+            assertThat(captor.messages())
+                    .filteredOn(m -> m.startsWith("detect.cycle_failed"))
+                    .singleElement().satisfies(line -> assertThat(line).contains("AssertionError"));
         }
     }
 
