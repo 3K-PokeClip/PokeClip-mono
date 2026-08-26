@@ -2,6 +2,7 @@ package com.pokeclip.clip.jumpcard.stream;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
+import com.pokeclip.clip.delegation.BroadcastAccessGuard;
 import com.pokeclip.clip.jumpcard.JumpCardProperties;
 import com.pokeclip.clip.jumpcard.JumpCardRepository;
 import com.pokeclip.clip.jumpcard.JumpCardService;
@@ -52,8 +53,8 @@ class StreamOpenFailureTest extends IntegrationTestSupport {
         @Bean
         JumpCardService jumpCardService(JumpCardRepository cards, BroadcastRepository broadcasts,
                                         JumpCardProperties properties, ObjectMapper mapper,
-                                        CardStreamRegistry registry) {
-            return new ThrowingSnapshotService(cards, broadcasts, properties, mapper, registry);
+                                        CardStreamRegistry registry, BroadcastAccessGuard guard) {
+            return new ThrowingSnapshotService(cards, broadcasts, properties, mapper, registry, guard);
         }
     }
 

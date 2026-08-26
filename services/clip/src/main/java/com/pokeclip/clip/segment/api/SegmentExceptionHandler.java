@@ -4,6 +4,7 @@ import com.pokeclip.clip.segment.SegmentErrors.AuthUnavailableException;
 import com.pokeclip.clip.segment.SegmentErrors.InvalidRangeException;
 import com.pokeclip.clip.segment.SegmentErrors.NotViewableException;
 import com.pokeclip.clip.segment.SegmentErrors.VodExpiredException;
+import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

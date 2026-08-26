@@ -1,12 +1,15 @@
 package com.pokeclip.clip.jumpcard;
 
 import com.pokeclip.clip.broadcast.BroadcastRepository;
+import com.pokeclip.clip.delegation.BroadcastAccessGuard;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.BroadcastNotFoundException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.ClaimedByOtherException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.JumpCardNotFoundException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.NotClaimOwnerException;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
 import com.pokeclip.clip.jumpcard.stream.CardStreamRegistry;
+import com.pokeclip.clip.paging.CursorCodec;
+import com.pokeclip.clip.paging.ListLimit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -28,19 +31,28 @@ public class JumpCardService {
     public record RecordResult(boolean created, JumpCardSnapshot card) {
     }
 
+    /** 웹이 개수를 안 주면 이만큼. 방송(20)보다 큰 것은 한 방송에 1,200장이 쌓인 실측이 있어서다(PRD). */
+    public static final int DEFAULT_LIST_LIMIT = 50;
+
+    /** 넘겨 달라고 해도 여기서 깎는다(PRD 결정). 판정은 {@link ListLimit}에 있다 — 목록 문 둘이 나눠 쓴다. */
+    public static final int MAX_LIST_LIMIT = 200;
+
     private final JumpCardRepository cards;
     private final BroadcastRepository broadcasts;
     private final JumpCardProperties properties;
     private final ObjectMapper mapper;
     private final CardStreamRegistry registry;
+    private final BroadcastAccessGuard guard;
 
     JumpCardService(JumpCardRepository cards, BroadcastRepository broadcasts,
-                    JumpCardProperties properties, ObjectMapper mapper, CardStreamRegistry registry) {
+                    JumpCardProperties properties, ObjectMapper mapper, CardStreamRegistry registry,
+                    BroadcastAccessGuard guard) {
         this.cards = cards;
         this.broadcasts = broadcasts;
         this.properties = properties;
         this.mapper = mapper;
         this.registry = registry;
+        this.guard = guard;
     }
 
     @Transactional
@@ -129,6 +141,56 @@ public class JumpCardService {
             publishAfterCommit(snapshot);
         }
         return snapshot;
+    }
+
+    /**
+     * 카드 목록 한 장.
+     *
+     * <p><b>자격 판정이 조회보다 앞이다.</b> 뒤로 옮기면 자격 없는 사람의 요청이 그 방송 카드를
+     * 읽고 나서 거절된다 — 응답은 같지만 시간이 갈리고, 그것만으로 방송의 실재가 샌다.
+     * 요청 칸(개수·표시)은 그보다도 앞이다: 뒤로 밀면 형식 오류 하나가 auth 왕복(최대 7초)을
+     * 태우고, 그러고도 나가는 응답이 400이다({@code BroadcastListService}와 같은 순서).
+     *
+     * <p>🔴 <b>{@code @Transactional}을 붙이지 마라.</b> 붙이면 auth 왕복(최대 7초) 동안 DB 커넥션을
+     * 쥔다 — 사람이 기다리는 요청 하나가 풀에서 자리를 그만큼 뺏는다. <b>{@code readOnly}를 빼도,
+     * 판정을 먼저 하고 조회를 나중에 해도 마찬가지다</b>: 커넥션은 첫 질의가 아니라 <b>트랜잭션이
+     * 열릴 때</b> 잡힌다(POK-174 실측, {@code BroadcastListService} 주석에 재현 기록이 있다).
+     * 조회가 하나뿐이라 트랜잭션으로 얻는 것도 없다.
+     *
+     * <p><b>이 클래스의 다른 메서드에 {@code @Transactional}이 붙어 있는 것과 어긋나 보이지만
+     * 아니다</b> — 그쪽들은 쓰기이고 커밋 뒤 발행({@code afterCommit})이 트랜잭션을 필요로 한다.
+     * 「정리」로 여기에 붙이면 {@code BroadcastListTransactionTest.카드_목록도_auth_왕복_동안_커넥션을_안_쥔다}가
+     * 빨간불이 된다 — 그 그물은 애너테이션이 아니라 <b>왕복 중 활성 커넥션 수</b>를 잰다.
+     *
+     * @param requesterSubject JWT {@code sub} — 우리가 발급·검증한 토큰의 회원 번호(문자열)
+     * @param limit {@code null}이면 {@link #DEFAULT_LIST_LIMIT}
+     * @param cursor {@code null}이면 첫 장
+     * @throws com.pokeclip.clip.paging.InvalidListParamException 개수가 범위 밖이다 (400)
+     * @throws com.pokeclip.clip.paging.InvalidCursorException 표시가 우리 모양이 아니다 (400)
+     * @throws com.pokeclip.clip.delegation.AccessErrors.NotViewableException
+     *         방송이 없거나 볼 자격이 없다 (404, 같은 본문)
+     * @throws com.pokeclip.clip.delegation.AccessErrors.AuthUnavailableException
+     *         자격을 물어보지 못했다 (503)
+     */
+    public JumpCardPage listOf(String requesterSubject, String streamId, boolean includeHidden,
+                               Integer limit, String cursor) {
+        int size = ListLimit.resolve(limit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
+        // 표시는 두 값을 함께 싣는다 — 하나만 오면 같은 방송 시간의 뒷줄이 조용히 빠진다
+        // (CursorCodec.Kind.CARD의 칸 수 검사가 그것을 막는다. findPage 주석 참고).
+        List<Long> after = cursor == null ? null : CursorCodec.decode(CursorCodec.Kind.CARD, cursor);
+
+        guard.requireViewable(requesterSubject, streamId);
+
+        // 상한 하나를 더 받아 「다음 장이 있나」를 본다. 개수를 따로 세면 질의가 하나 더 돈다.
+        List<JumpCard> rows = cards.findPage(streamId, includeHidden,
+                after == null ? null : after.get(0), after == null ? null : after.get(1), size + 1);
+        boolean hasMore = rows.size() > size;
+        List<JumpCard> page = hasMore ? rows.subList(0, size) : rows;
+        JumpCard last = page.isEmpty() ? null : page.get(page.size() - 1);
+        String next = hasMore
+                ? CursorCodec.encode(CursorCodec.Kind.CARD, last.getStreamTimestampMs(), last.getId())
+                : null;
+        return new JumpCardPage(page.stream().map(this::snapshot).toList(), next);
     }
 
     @Transactional(readOnly = true)

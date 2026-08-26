@@ -6,6 +6,7 @@ import com.pokeclip.clip.delegation.DelegationResolveClient;
 import com.pokeclip.clip.delegation.ResolveResult;
 import com.pokeclip.clip.paging.CursorCodec;
 import com.pokeclip.clip.paging.InvalidListParamException;
+import com.pokeclip.clip.paging.ListLimit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -57,7 +58,12 @@ public class BroadcastListService {
 
     private static final Logger log = LoggerFactory.getLogger(BroadcastListService.class);
 
-    /** 웹이 개수를 안 주면 이만큼. 카드(50)보다 작은 것은 한 줄이 훨씬 굵어서다. */
+    /**
+     * 웹이 개수를 안 주면 이만큼. 카드(50)보다 작은 것은 한 줄이 훨씬 굵어서다.
+     *
+     * <p><b>값만 여기 있고 판정은 {@link ListLimit}에 있다</b> — 카드 목록 문이 같은 계약을
+     * 웹에 약속하므로, 판정을 복사해 두면 한쪽을 고칠 때 다른 쪽이 조용히 갈린다(POK-174).
+     */
     public static final int DEFAULT_LIMIT = 20;
 
     /** 넘겨 달라고 해도 여기서 깎는다(PRD 결정). */
@@ -81,7 +87,7 @@ public class BroadcastListService {
      * @throws AccessErrors.AuthUnavailableException 볼 수 있는 스트리머를 물어보지 못했다 (503)
      */
     public BroadcastPage list(String requesterSubject, BroadcastState state, Integer limit, String cursor) {
-        int size = 개수를_정한다(limit);
+        int size = ListLimit.resolve(limit, DEFAULT_LIMIT, MAX_LIMIT);
         Long afterId = cursor == null ? null
                 : CursorCodec.decode(CursorCodec.Kind.BROADCAST, cursor).get(0);
         long userId = 요청자_번호(requesterSubject);
@@ -118,22 +124,6 @@ public class BroadcastListService {
                 ? CursorCodec.encode(CursorCodec.Kind.BROADCAST, page.get(page.size() - 1).getId())
                 : null;
         return new BroadcastPage(page, relations, next);
-    }
-
-    /**
-     * 안 주면 기본, 넘치면 깎고, <b>0 이하는 거절한다</b>.
-     *
-     * <p>0을 「기본으로 봐 주는」 길도 있었지만 안 골랐다 — 웹이 계산 실수로 0을 보낸 것과
-     * 일부러 0장을 요구한 것이 구분이 안 되고, 조용히 20장을 주면 그 실수가 안 드러난다.
-     */
-    private static int 개수를_정한다(Integer limit) {
-        if (limit == null) {
-            return DEFAULT_LIMIT;
-        }
-        if (limit <= 0) {
-            throw new InvalidListParamException("limit");
-        }
-        return Math.min(limit, MAX_LIMIT);
     }
 
     /**

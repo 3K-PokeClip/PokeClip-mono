@@ -6,6 +6,7 @@ import com.pokeclip.clip.delegation.DelegationResolveClient;
 import com.pokeclip.clip.delegation.ResolveResult;
 import com.pokeclip.clip.segment.SegmentQueryService;
 import com.pokeclip.clip.support.IntegrationTestSupport;
+import com.pokeclip.clip.support.NotFoundFloor;
 import com.pokeclip.clip.support.TestTokens;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.BeforeEach;

@@ -1,6 +1,7 @@
 package com.pokeclip.clip.segment.api;
 
 import com.pokeclip.clip.segment.SegmentQueryService;
+import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;

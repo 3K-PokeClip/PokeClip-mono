@@ -1,6 +1,7 @@
 package com.pokeclip.clip.jumpcard;
 
 import com.pokeclip.clip.broadcast.BroadcastRepository;
+import com.pokeclip.clip.delegation.BroadcastAccessGuard;
 import com.pokeclip.clip.jumpcard.stream.CardStreamRegistry;
 import tools.jackson.databind.ObjectMapper;
 
@@ -18,8 +19,8 @@ public class ThrowingSnapshotService extends JumpCardService {
 
     public ThrowingSnapshotService(JumpCardRepository cards, BroadcastRepository broadcasts,
                                    JumpCardProperties properties, ObjectMapper mapper,
-                                   CardStreamRegistry registry) {
-        super(cards, broadcasts, properties, mapper, registry);
+                                   CardStreamRegistry registry, BroadcastAccessGuard guard) {
+        super(cards, broadcasts, properties, mapper, registry, guard);
     }
 
     /** DB 커넥션 고갈·쿼리 타임아웃·jsonb 직렬화 실패를 대신한다 — 셋 다 여기서 예외로 나온다. */

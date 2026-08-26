@@ -1,5 +1,6 @@
 package com.pokeclip.clip.broadcast;
 
+import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.TestIds;
 import com.zaxxer.hikari.HikariDataSource;
@@ -19,6 +20,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * 🔴 <b>지켜야 할 불변식 하나만 잰다 — 「auth 왕복 동안 DB 커넥션을 쥐지 않는다」.</b>
+ *
+ * <p><b>목록 문 <u>둘</u>을 잰다</b>(방송 · 카드). 이름이 방송 쪽으로 남아 있는 것은 표집 장치가
+ * 여기 있어서다 — 쪼개면 이 클래스의 대부분인 도우미가 복사된다. 카드 목록 쪽에서 이 그물을
+ * 찾아오는 길은 {@code JumpCardService.listOf}의 주석에 적어 두었다.
  *
  * <p><b>애너테이션의 유무를 재지 않는 것이 이 클래스의 요점이다.</b> 「{@code @Transactional}이
  * 붙었나」로 그물을 만들면 그것은 <b>우리가 믿는 것의 모양</b>이지 코드가 하는 일이 아니다.
@@ -66,11 +71,15 @@ class BroadcastListTransactionTest extends IntegrationTestSupport {
      */
     private static final Duration 표집_간격 = Duration.ofMillis(2);
 
+    private static final String RESOLVE = "/internal/editor-delegations/resolve";
+
     private final BroadcastListService service;
+    private final JumpCardService cardService;
     private final JdbcTemplate jdbc;
 
-    BroadcastListTransactionTest(BroadcastListService service, JdbcTemplate jdbc) {
+    BroadcastListTransactionTest(BroadcastListService service, JumpCardService cardService, JdbcTemplate jdbc) {
         this.service = service;
+        this.cardService = cardService;
         this.jdbc = jdbc;
     }
 
@@ -111,6 +120,48 @@ class BroadcastListTransactionTest extends IntegrationTestSupport {
         assertThat(요청.isAlive()).as("요청이 안 끝났다 — 표집 결과를 믿을 수 없다").isFalse();
         assertThat(최대.get())
                 .as("auth 왕복(최대 7초) 동안 커넥션을 쥐고 있다 — 풀에서 자리를 그만큼 뺏는다")
+                .isZero();
+    }
+
+    /**
+     * 🔴 <b>카드 목록 문도 같은 불변식 위에 있다.</b> 이쪽이 더 새기 쉽다 —
+     * {@code JumpCardService}의 다른 메서드는 <b>전부</b> {@code @Transactional}이라(쓰기라서 필요하다)
+     * 목록 메서드만 안 붙은 것이 실수처럼 보인다. 그 「정리」가 들어오는 순간 auth 왕복(최대 7초)
+     * 동안 커넥션을 쥔다.
+     *
+     * <p>대조 셋은 위 갈래와 같다 — 표집기가 살아 있나 · 요청이 auth까지 갔나 · 요청이 끝났나.
+     */
+    @Test
+    void 카드_목록도_auth_왕복_동안_커넥션을_안_쥔다() throws Exception {
+        HikariDataSource 풀 = (HikariDataSource) jdbc.getDataSource();
+
+        int 손으로_쥐었을_때 = 손으로_하나_쥐고_센다(풀);
+
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
+        방송을_넣는다("s-tx-card", TestIds.STREAMER);
+        AUTH.holdFor(붙드는_시간);
+
+        AtomicInteger 최대 = new AtomicInteger();
+        Thread 요청 = new Thread(
+                () -> cardService.listOf(요청자, "s-tx-card", false, 20, null), "tx-probe-card");
+        try {
+            요청.start();
+            auth에_도착할_때까지_기다린다();
+            표집한다(풀, 최대);
+            요청.join(5_000);
+        } finally {
+            AUTH.holdFor(Duration.ZERO);
+        }
+
+        assertThat(손으로_쥐었을_때)
+                .as("표집기가 쥔 커넥션을 못 본다 — 아래 0은 아무것도 안 재고 있다")
+                .isPositive();
+        assertThat(AUTH.callCount())
+                .as("요청이 auth까지 안 갔다 — active=0은 「안 쥐었다」가 아니라 「아무 일도 안 했다」다")
+                .isPositive();
+        assertThat(요청.isAlive()).as("요청이 안 끝났다 — 표집 결과를 믿을 수 없다").isFalse();
+        assertThat(최대.get())
+                .as("auth 왕복 동안 커넥션을 쥐고 있다 — 사람이 기다리는 요청이 풀에서 자리를 그만큼 뺏는다")
                 .isZero();
     }
 

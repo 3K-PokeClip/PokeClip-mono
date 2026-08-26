@@ -11,6 +11,8 @@ import com.pokeclip.clip.jumpcard.JumpCardErrors.TokenAlreadyExpiredException;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.paging.InvalidCursorException;
 import com.pokeclip.clip.paging.InvalidListParamException;
+import com.pokeclip.clip.support.NotFoundFloor;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -49,13 +51,29 @@ public class JumpCardExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(JumpCardExceptionHandler.class);
 
+    /**
+     * 404. <b>이 갈래는 사람 문과 내부 문이 함께 쓴다</b> — 통로 열기(사람)와 판별기가 카드를 넣는
+     * 문({@code POST /internal/…/highlights})이 같은 예외를 던진다. 그래서 바닥은
+     * {@link NotFoundFloor#awaitFloorIfMarked}로 <b>기준이 찍힌 요청에만</b> 건다.
+     * 내부 문에는 감출 존재가 없고(서버 간 토큰) 판별기는 404를 재시도 상한으로 세므로,
+     * 거기에 25ms를 무는 것은 순수한 비용이다(계획 검증 m5).
+     */
     @ExceptionHandler(BroadcastNotFoundException.class)
-    ResponseEntity<Map<String, Object>> broadcastNotFound(BroadcastNotFoundException e) {
+    ResponseEntity<Map<String, Object>> broadcastNotFound(BroadcastNotFoundException e,
+                                                          HttpServletRequest request) {
+        NotFoundFloor.awaitFloorIfMarked(request);
         return json(HttpStatus.NOT_FOUND, error("broadcast_not_found"));
     }
 
+    /**
+     * 404. 위와 같은 바닥을 탄다 — <b>카드 번호를 훑어 보는 것도 같은 종류의 탐색</b>이라
+     * 「없는 카드」와 「자격 없어 못 보는 카드」가 시간으로 갈리면 안 된다. 그 두 갈래를 실제로
+     * 만드는 것은 문 넷에 판정을 붙이는 태스크 8이고, 바닥은 지금 미리 자리를 잡아 둔다.
+     */
     @ExceptionHandler(JumpCardNotFoundException.class)
-    ResponseEntity<Map<String, Object>> jumpCardNotFound(JumpCardNotFoundException e) {
+    ResponseEntity<Map<String, Object>> jumpCardNotFound(JumpCardNotFoundException e,
+                                                         HttpServletRequest request) {
+        NotFoundFloor.awaitFloorIfMarked(request);
         return json(HttpStatus.NOT_FOUND, error("jump_card_not_found"));
     }
 
@@ -119,14 +137,17 @@ public class JumpCardExceptionHandler {
      * ({@code SegmentExceptionHandler}와 같은 판단).
      *
      * <p>🔴 <b>본문이 같은 것만으로는 안 갈린다 — 시간이 갈린다.</b> 「없는 방송」은 auth를
-     * 안 부르고 「자격 없음」은 왕복을 태운다. 세그먼트 문은 그것을 {@code NotFoundFloor}로
-     * 덮는데 <b>여기는 아직 안 덮었다</b> — 그 클래스가 지금 {@code segment.api}에 package-private으로
-     * 있어서다. 옮겨 와 이 자리에 다는 것이 태스크 6이고, <b>그때까지 카드 문의 두 404는
-     * 시간으로 구분된다.</b>
+     * 안 부르고 「자격 없음」은 왕복을 태운다(세그먼트 문에서 1.5ms 대 4.4ms 실측). 그래서
+     * {@link NotFoundFloor}가 두 갈래를 같은 바닥 뒤로 민다 — 그 클래스는 이 카드에서
+     * {@code segment.api}를 떠나 {@code support}로 옮겨 왔고, 사람 문 둘이 나눠 쓴다.
      */
     @ExceptionHandler(AccessErrors.NotViewableException.class)
-    ResponseEntity<Map<String, Object>> notViewable(AccessErrors.NotViewableException e) {
+    ResponseEntity<Map<String, Object>> notViewable(AccessErrors.NotViewableException e,
+                                                    HttpServletRequest request) {
+        // 값은 우리 코드가 정한 고정 문자열이다 — 외부 입력이 그대로 로그로 가지 않는다.
         log.info("clip.access.not_viewable reason={}", e.reason());
+        // 기다림이 로그 뒤인 것은 의도다 — 로그를 쓰는 시간까지 바닥 안에 들어간다.
+        NotFoundFloor.awaitFloorIfMarked(request);
         return json(HttpStatus.NOT_FOUND, error("broadcast_not_found"));
     }
 
