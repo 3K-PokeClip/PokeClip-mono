@@ -40,6 +40,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class JumpCardServiceTest extends IntegrationTestSupport {
 
+    private static final String RESOLVE = "/internal/editor-delegations/resolve";
+
     // static 메서드(auto)가 쓰므로 인스턴스 필드로 두면 컴파일되지 않는다.
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -65,6 +67,7 @@ class JumpCardServiceTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
         broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.now(), null));
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
     private static HighlightRequest auto(String eventId, long start) {
