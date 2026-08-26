@@ -26,24 +26,15 @@ public class ProfilePhotoService {
      * <b>창고 먼저, 표 나중이다.</b> 뒤집으면 표는 새 사진을 가리키는데 파일이 없는 상태가 생긴다.
      * 이 순서면 최악이 「파일만 새것, 주소는 잠시 옛것」이고 다음 시도에 맞춰진다.
      *
-     * <p>🔴 <b>그 「최악」이 화면에서 어떻게 보이는지 적어 둔다</b>(PR #127 codex P1).
-     * 표 갱신이 실패하면 사용자는 오류를 받는데 <b>파일은 이미 바뀌어 있다.</b> 옛 주소는
-     * 안 깨지므로({@link PhotoToken#verify}가 버전 값을 안 본다) 그 주소를 들고 있던 화면은
-     * <b>새 그림을 본다</b> — 「실패했다는데 바뀌었다」로 보이고, 캐시가 도는 최대 10분 동안
-     * 화면마다 옛 그림과 새 그림이 갈릴 수 있다.
+     * <p>🔴 <b>그 「최악」이 화면에서 어떻게 보이는지가 결함이었다</b>(PR #127 codex P1, 재현함).
+     * 표 갱신이 실패하면 사용자는 오류를 받는데 <b>파일은 이미 바뀌어 있었다.</b> 옛 주소는
+     * 안 깨지므로({@link PhotoToken#verify}가 버전 값을 안 본다) 그 주소를 들고 있던 화면이
+     * <b>새 그림을 봤다</b> — 「실패했다는데 바뀌었다」로 보인다.
      *
-     * <p><b>고치지 않았다.</b> 처방은 파일 이름에 버전을 붙이는 것인데, 그러면
-     * 「회원마다 파일 하나로 고정해 주인 없는 파일이 생길 수가 없다」는 PRD 결정이 무너지고
-     * <b>고아 파일 청소가 딸려온다</b> — 국소 수정이 아니다. 표 갱신 실패는 DB 장애이고,
-     * 그때 잘못 보이는 것은 <b>자기 사진</b>이라 새는 정보도 없다.
-     * <b>되돌릴 조건</b>: 사진에 이력이 필요해지거나(되돌리기·여러 장) 파일 이름 규칙을
-     * 어차피 바꾸는 카드가 오면 그때 함께 본다.
-     *
-     * <p><b>창고 호출은 트랜잭션 밖이다.</b> 표 갱신만 {@link PhotoAttacher}가 트랜잭션 안에서 한다 —
-     * DB 커넥션을 쥔 채 외부 HTTP를 기다리면 풀이 마른다(「알려진 구멍」 9·10번).
-     *
-     * <p><b>형식은 내용의 앞머리로 가른다</b> — 밝힌 이름표를 믿지 않는다. 판정이 저장보다 먼저라
-     * 거부한 파일은 창고에 닿지도 않는다.
+     * <p><b>파일 자리를 둘로 갈라 닫았다</b>({@link PhotoStorage#keyOf}). 실패하면 표가 안 바뀌므로
+     * 주소도 안 바뀌고, 그 주소는 <b>옛 자리</b>를 가리킨다. 새 파일은 반대 자리에 남지만 아무도
+     * 안 가리키고 <b>다음 업로드가 그 자리를 다시 골라 덮어쓴다</b> — 청소 작업이 필요 없다.
+     * 처음에는 「고아 청소가 딸려온다」를 이유로 미뤘는데, <b>자리를 둘로만 두면 그 대가가 없다.</b>
      */
     public User upload(long userId, MultipartFile file) {
         byte[] bytes = readAll(file);
@@ -51,8 +42,9 @@ public class ProfilePhotoService {
                 .orElseThrow(() -> new ProfileUpdateException(
                         ProfileUpdateFailure.PHOTO_NOT_AN_IMAGE, "그림이 아니다"));
 
-        storage.put(userId, bytes, type);
-        User user = attacher.attach(userId, Instant.now());
+        long version = nextVersion(userId);
+        storage.put(userId, version, bytes, type);
+        User user = attacher.attach(userId, version);
 
         // 커밋이 끝난 뒤라 이 줄은 「실제로 일어났다」를 뜻한다. 값은 userId만 — 파일 이름·형식은
         // 사람을 특정하지 않지만 남길 이유도 없다.
@@ -91,7 +83,26 @@ public class ProfilePhotoService {
         if (!PhotoToken.verify(properties.tokenSecret(), token, userId, Instant.now())) {
             return Optional.empty();
         }
-        return storage.get(userId);
+        // 자리는 표가 아니라 <b>주소에 실린 버전</b>에서 얻는다 — 표를 읽으면 위 문단의 전제가 무너진다.
+        return storage.get(userId, PhotoToken.versionOf(token));
+    }
+
+    /**
+     * <b>지금 쓰는 자리의 반대를 고른다.</b> 버전의 홀짝이 자리를 정하는데(PhotoStorage.keyOf)
+     * 버전은 시각이라 우연히 같은 자리가 될 수 있다 — 그러면 <b>덮어쓰게 되어 이 설계가 무의미해진다.</b>
+     * 같으면 한 칸(1마이크로초) 밀어 반대로 만든다. 그 어긋남은 무해하다 — 이 값이 하는 일은
+     * 자리를 정하는 것과 캐시를 비우는 것뿐이다.
+     *
+     * <p>사진을 올린 적이 없으면 아무 자리나 된다.
+     */
+    private long nextVersion(long userId) {
+        long version = PhotoStorage.versionOf(Instant.now());
+        Long current = attacher.currentVersion(userId);
+        if (current != null && Math.floorMod(version, PhotoStorage.SLOTS)
+                == Math.floorMod(current, PhotoStorage.SLOTS)) {
+            version++;
+        }
+        return version;
     }
 
     /**

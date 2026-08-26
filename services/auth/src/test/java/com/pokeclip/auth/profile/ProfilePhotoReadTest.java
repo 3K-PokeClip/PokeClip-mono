@@ -224,8 +224,20 @@ class ProfilePhotoReadTest extends PhotoTestSupport {
         }
     }
 
-    private static String token(long userId) {
-        return PhotoToken.issue(PhotoLocalStackFixture.TOKEN_SECRET, userId, 0, Instant.now());
+    /**
+     * 🔴 <b>버전을 아무 값이나 넣으면 안 된다</b> — 그 값이 <b>파일 자리를 정하기 때문이다</b>
+     * (자리 둘을 번갈아 쓴다. {@link PhotoStorage#keyOf}). 예전에는 캐시를 비우는 용도뿐이라
+     * 0을 박아 뒀는데, 그러면 사진이 반대 자리에 있을 때 404가 난다.
+     *
+     * <p>서명 규약은 여전히 여기서 <b>다시</b> 만든다 — 그것이 이 검사가 지키려는 것이고,
+     * 버전 값을 표에서 읽는 것은 그 취지와 무관하다.
+     */
+    private String token(long userId) {
+        long version = userRepository.findById(userId)
+                .map(User::getProfilePhotoUpdatedAt)
+                .map(PhotoStorage::versionOf)
+                .orElse(0L);
+        return PhotoToken.issue(PhotoLocalStackFixture.TOKEN_SECRET, userId, version, Instant.now());
     }
 
     private static String photoUrl(long userId, String token) {

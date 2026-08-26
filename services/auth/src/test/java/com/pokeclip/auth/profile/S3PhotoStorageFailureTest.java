@@ -49,7 +49,7 @@ class S3PhotoStorageFailureTest {
              LogCaptor logs = new LogCaptor()) {
             S3PhotoStorage storage = new S3PhotoStorage(s3, missing);
 
-            assertThat(storage.get(777L))
+            assertThat(storage.get(777L, 0L))
                     .as("창고 예외가 그대로 올라가면 로그인 없이 닿는 경로가 500이 된다")
                     .isEmpty();
 
@@ -69,7 +69,7 @@ class S3PhotoStorageFailureTest {
              LogCaptor logs = new LogCaptor()) {
             S3PhotoStorage storage = new S3PhotoStorage(s3, PhotoLocalStackFixture.BUCKET);
 
-            assertThat(storage.get(999_777L))
+            assertThat(storage.get(999_777L, 0L))
                     .as("올린 적 없는 회원 — 예외가 아니라 빈손이다")
                     .isEmpty();
 

@@ -72,14 +72,25 @@ public final class PhotoLocalStackFixture {
         return LOCALSTACK.getEndpoint().toString();
     }
 
-    /** 창고에 실제로 들어갔는지 우리 코드를 안 거치고 확인한다. 없으면 빈손이다. */
-    public static Optional<byte[]> downloadPhoto(long userId) {
+    /**
+     * 창고에 실제로 들어갔는지 우리 코드를 안 거치고 확인한다. 없으면 빈손이다.
+     *
+     * <p><b>자리 번호를 받는다</b> — 파일 이름이 회원마다 하나가 아니라 <b>둘을 번갈아 쓴다</b>
+     * (버전의 홀짝). 표 갱신이 실패했을 때 옛 주소가 새 그림을 주지 않게 하려는 것이고,
+     * 확인하는 쪽도 어느 자리인지 말해야 한다.
+     */
+    public static Optional<byte[]> downloadPhoto(long userId, int slot) {
         try {
             return Optional.of(S3.getObjectAsBytes(GetObjectRequest.builder()
-                    .bucket(BUCKET).key("profile-photos/" + userId).build()).asByteArray());
+                    .bucket(BUCKET).key("profile-photos/" + userId + "/" + slot).build()).asByteArray());
         } catch (NoSuchKeyException e) {
             return Optional.empty();
         }
+    }
+
+    /** 자리 둘 중 아무 데나 있으면 그것. 「저장이 됐나/안 됐나」만 볼 때 쓴다. */
+    public static Optional<byte[]> downloadAnyPhoto(long userId) {
+        return downloadPhoto(userId, 0).or(() -> downloadPhoto(userId, 1));
     }
 
     private static PhotoProperties properties() {

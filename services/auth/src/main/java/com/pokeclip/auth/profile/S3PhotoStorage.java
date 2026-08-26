@@ -34,10 +34,10 @@ class S3PhotoStorage implements PhotoStorage, AutoCloseable {
     }
 
     @Override
-    public void put(long userId, byte[] bytes, ImageType type) {
+    public void put(long userId, long version, byte[] bytes, ImageType type) {
         s3.putObject(PutObjectRequest.builder()
                         .bucket(bucket)
-                        .key(PhotoStorage.keyOf(userId))
+                        .key(PhotoStorage.keyOf(userId, version))
                         .contentType(type.contentType())
                         .build(),
                 RequestBody.fromBytes(bytes));
@@ -61,11 +61,11 @@ class S3PhotoStorage implements PhotoStorage, AutoCloseable {
      * 「저장됐다」고 믿는다. 여기만 삼기는 이유는 최악이 「그림이 안 보인다」여서다.
      */
     @Override
-    public Optional<StoredPhoto> get(long userId) {
+    public Optional<StoredPhoto> get(long userId, long version) {
         try {
             ResponseBytes<GetObjectResponse> object = s3.getObjectAsBytes(GetObjectRequest.builder()
                     .bucket(bucket)
-                    .key(PhotoStorage.keyOf(userId))
+                    .key(PhotoStorage.keyOf(userId, version))
                     .build());
             return Optional.of(new StoredPhoto(object.asByteArray(), object.response().contentType()));
         } catch (NoSuchKeyException e) {
@@ -81,13 +81,21 @@ class S3PhotoStorage implements PhotoStorage, AutoCloseable {
         }
     }
 
-    /** 없는 것을 지워도 S3는 성공으로 답한다 — 멱등이라 탈퇴(POK-171)가 재시도해도 된다. */
+    /**
+     * 없는 것을 지워도 S3는 성공으로 답한다 — 멱등이라 탈퇴(POK-171)가 재시도해도 된다.
+     *
+     * <p><b>자리 둘을 모두 지운다.</b> 살아 있는 쪽이 어디인지 표를 봐야 알 수 있는데,
+     * 표 갱신이 실패한 뒤라면 <b>표가 가리키지 않는 자리에도 파일이 있다</b> —
+     * 그것까지 지워야 탈퇴가 「개인정보를 다 지웠다」가 된다.
+     */
     @Override
-    public void delete(long userId) {
-        s3.deleteObject(DeleteObjectRequest.builder()
-                .bucket(bucket)
-                .key(PhotoStorage.keyOf(userId))
-                .build());
+    public void deleteAll(long userId) {
+        for (int slot = 0; slot < PhotoStorage.SLOTS; slot++) {
+            s3.deleteObject(DeleteObjectRequest.builder()
+                    .bucket(bucket)
+                    .key(PhotoStorage.keyOf(userId, slot))
+                    .build());
+        }
     }
 
     /** 종료할 때 커넥션 풀을 닫는다. 스프링이 빈 파괴 시 close()를 찾아 부른다. */

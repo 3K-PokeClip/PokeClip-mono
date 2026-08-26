@@ -226,7 +226,8 @@ class PhotoUrlStabilityTest extends PhotoTestSupport {
         Instant stamped = Instant.ofEpochSecond(Instant.now().getEpochSecond(), 123_456_000L);
         assertThat(stamped.getNano() % 1_000_000).as("밀리초 아래 자리가 있어야 잰다").isNotZero();
 
-        attacher.attach(u.getId(), stamped);   // 실제 표 갱신 경로. 자체 트랜잭션이라 여기서 커밋된다
+        // 실제 표 갱신 경로. 자체 트랜잭션이라 여기서 커밋된다
+        attacher.attach(u.getId(), PhotoStorage.versionOf(stamped));
 
         assertThat(photoUpdatedAt(u))
                 .as("마이크로초가 잘리면 같은 밀리초의 두 업로드가 다시 겹친다")

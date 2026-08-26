@@ -27,15 +27,30 @@ class PhotoAttacher {
 
     /**
      * 락을 잡지 않는다. 같은 회원이 사진을 동시에 두 번 올리면 마지막이 이기고 그만이다 —
-     * 파일 이름이 하나로 고정이라 어느 쪽이 이겨도 표와 파일이 어긋나지 않는다
+     * 이긴 쪽의 버전이 표에 남고 그 버전이 곧 자리라, 어느 쪽이 이겨도 표와 파일이 어긋나지 않는다
      * ({@code UserService.updateName}과 같은 판단).
      */
     @Transactional
-    User attach(long userId, Instant now) {
+    User attach(long userId, long version) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new DataInconsistencyException(
                         AuthFailure.USER_NOT_FOUND, "토큰의 주인이 없다", userId));
-        user.attachPhoto(PhotoStorage.keyOf(userId), now);
+        user.attachPhoto(PhotoStorage.keyOf(userId, version), PhotoStorage.instantOf(version));
         return user;
+    }
+
+    /**
+     * 지금 어느 자리를 쓰고 있나 — 없으면 {@code null}.
+     *
+     * <p>올리는 쪽이 <b>반대 자리</b>를 고르려면 이 값이 필요하다. 읽기 하나가 늘지만
+     * 올리는 경로는 사람이 누르는 자리라 드물고, <b>꺼내는 경로는 이 조회를 안 탄다</b> —
+     * 거기서 표를 읽으면 존재가 시간으로 새기 때문이다.
+     */
+    @Transactional(readOnly = true)
+    Long currentVersion(long userId) {
+        return userRepository.findById(userId)
+                .map(User::getProfilePhotoUpdatedAt)
+                .map(PhotoStorage::versionOf)
+                .orElse(null);
     }
 }

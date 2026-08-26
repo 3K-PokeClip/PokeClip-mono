@@ -57,9 +57,13 @@ public class PhotoUrls {
         // 주소가 갈려 <b>캐시 전제가 반대로 무너진다.</b>
         // 완전히 없애려면 표에 따로 세는 칸을 두어야 하는데 그것은 마이그레이션이다.
         //
+        // 🔴 <b>이 값이 파일 자리도 정한다</b>(PhotoStorage.keyOf) — 홀짝으로 두 자리를 번갈아 쓴다.
+        // 그래서 표 갱신이 실패해 이 값이 안 바뀌면 주소도 안 바뀌고, 그 주소는 옛 자리를 가리킨다.
+        //
         // 옛 주소는 안 깨진다 — PhotoToken.verify가 이 칸의 모양만 보고 값은 안 본다.
-        Instant photoAt = user.getProfilePhotoUpdatedAt();
-        long version = photoAt.getEpochSecond() * 1_000_000L + photoAt.getNano() / 1_000;
+        // 계산은 PhotoStorage 한 곳에만 둔다 — 여기와 파일 이름이 같은 값을 써야 하고,
+        // 두 곳에서 따로 세면 언젠가 갈린다.
+        long version = PhotoStorage.versionOf(user.getProfilePhotoUpdatedAt());
         String token = PhotoToken.issue(properties.tokenSecret(), user.getId(), version, now);
         // 화면과 서버가 다른 주소에 있어 절대 주소여야 한다.
         return properties.baseUrl() + "/api/profile-photos/" + user.getId() + "?token=" + token;

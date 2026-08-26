@@ -90,8 +90,17 @@ class PhotoKeySeparationTest extends PhotoTestSupport {
                 .isNotEqualTo(jwtProperties.secret());
     }
 
-    private static String photoToken(long userId) {
-        return PhotoToken.issue(PhotoLocalStackFixture.TOKEN_SECRET, userId, 0, Instant.now());
+    /**
+     * 🔴 <b>버전이 파일 자리를 정하므로 표에서 읽어 넣는다</b>({@link PhotoStorage#keyOf}).
+     * 0을 박으면 사진이 반대 자리에 있을 때 404가 나고, 그러면 이 검사의 뒷줄
+     * (「사진 표로는 200」)이 <b>사진이 아예 안 나가는 상태에서도</b> 빨간불이 되어 원인을 흐린다.
+     */
+    private String photoToken(long userId) {
+        long version = userRepository.findById(userId)
+                .map(User::getProfilePhotoUpdatedAt)   // 안 올린 회원이면 여기서 빈손이 된다
+                .map(PhotoStorage::versionOf)
+                .orElse(0L);
+        return PhotoToken.issue(PhotoLocalStackFixture.TOKEN_SECRET, userId, version, Instant.now());
     }
 
     private void upload(User u) throws Exception {

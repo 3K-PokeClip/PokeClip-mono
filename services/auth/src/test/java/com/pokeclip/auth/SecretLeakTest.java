@@ -968,8 +968,12 @@ class SecretLeakTest extends IntegrationTestSupport {
                             }))
                     .andExpect(status().isOk());
 
+            // 버전이 파일 자리를 정하므로(자리 둘을 번갈아 쓴다) 표에서 읽어 넣는다 —
+            // 0을 박으면 사진이 반대 자리에 있을 때 404가 나고 이 검사는 아무것도 안 재게 된다.
+            long photoVersion = com.pokeclip.auth.profile.PhotoStorage.versionOf(
+                    userRepository.findById(user.getId()).orElseThrow().getProfilePhotoUpdatedAt());
             String token = com.pokeclip.auth.profile.PhotoToken.issue(
-                    PhotoLocalStackFixture.TOKEN_SECRET, user.getId(), 0, Instant.now());
+                    PhotoLocalStackFixture.TOKEN_SECRET, user.getId(), photoVersion, Instant.now());
             mockMvc.perform(get("/api/profile-photos/" + user.getId() + "?token=" + token))
                     .andExpect(status().isOk());
 

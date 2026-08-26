@@ -76,17 +76,17 @@ class ProfilePhotoTransactionBoundaryTest extends ProfileTestSupport {
         private Boolean transactionActiveDuringPut;
 
         @Override
-        public void put(long userId, byte[] bytes, ImageType type) {
+        public void put(long userId, long version, byte[] bytes, ImageType type) {
             transactionActiveDuringPut = TransactionSynchronizationManager.isActualTransactionActive();
         }
 
         @Override
-        public Optional<StoredPhoto> get(long userId) {
+        public Optional<StoredPhoto> get(long userId, long version) {
             return Optional.empty();
         }
 
         @Override
-        public void delete(long userId) {
+        public void deleteAll(long userId) {
         }
     }
 }

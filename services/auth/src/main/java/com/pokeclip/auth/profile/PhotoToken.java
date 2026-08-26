@@ -91,6 +91,20 @@ public final class PhotoToken {
                 parts[3].getBytes(UTF_8));
     }
 
+    /**
+     * 표에 실린 버전. <b>{@link #verify}를 통과한 표에만 쓴다</b> — 거기서 칸 수와 숫자 모양을
+     * 이미 봤으므로 여기서 다시 안 본다.
+     *
+     * <p>이 값이 <b>파일 자리를 정한다</b>({@link PhotoStorage#keyOf}). 꺼내는 쪽이 표를 안 읽고도
+     * 자리를 알 수 있어야 「사진을 올렸는가」가 시간으로 안 샌다.
+     *
+     * <p>값 자체는 여전히 검증하지 않는다 — 아무 숫자나 넣어도 그 회원의 자리 둘 중 하나이고,
+     * 둘 다 그 회원의 사진이라 남의 것이 나오지 않는다.
+     */
+    public static long versionOf(String token) {
+        return Long.parseLong(token.split("\\.", -1)[2]);
+    }
+
     private static String sign(String secret, String payload) {
         try {
             Mac mac = Mac.getInstance(HMAC);

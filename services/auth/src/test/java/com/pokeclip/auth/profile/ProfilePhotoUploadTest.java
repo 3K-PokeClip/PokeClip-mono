@@ -49,12 +49,14 @@ class ProfilePhotoUploadTest extends PhotoTestSupport {
         // 응답의 profileImageUrl은 여기서 단언하지 않는다. 태스크 7 전까지 그 칸은 null이다.
 
         User reloaded = userRepository.findById(u.getId()).orElseThrow();
-        assertThat(reloaded.getProfilePhotoKey()).isEqualTo("profile-photos/" + u.getId());
+        assertThat(reloaded.getProfilePhotoKey())
+                .as("자리 번호까지 이름에 들어간다 — 둘을 번갈아 쓴다")
+                .isIn("profile-photos/" + u.getId() + "/0", "profile-photos/" + u.getId() + "/1");
         assertThat(reloaded.getProfilePhotoUpdatedAt()).isNotNull();
         assertThat(reloaded.getProfileImageUrl())
                 .as("올린 순간 구글 주소를 비운다 — 되돌리기가 비목표라 영영 안 읽힌다")
                 .isNull();
-        assertThat(PhotoLocalStackFixture.downloadPhoto(u.getId()))
+        assertThat(PhotoLocalStackFixture.downloadAnyPhoto(u.getId()))
                 .as("창고에 실제로 들어갔는가 — 우리 코드를 안 거치고 확인한다")
                 .get().asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.BYTE_ARRAY)
                 .hasSize(512);
@@ -81,8 +83,16 @@ class ProfilePhotoUploadTest extends PhotoTestSupport {
                 .isAfter(before);
     }
 
+    /**
+     * 🔴 <b>전제가 뒤집혔다.</b> 원래는 「같은 이름을 덮어쓴다」였는데, 그러면 <b>창고에 쓴 뒤
+     * 표 갱신이 실패했을 때</b> 파일만 새것이 되고 옛 주소가 그 새 그림을 준다
+     * (PR #127 codex, 재현함). 그래서 <b>자리 둘을 번갈아 쓴다.</b>
+     *
+     * <p>자리가 둘뿐이라 주인 없는 파일은 회원당 최대 하나이고 <b>다음 업로드가 그 자리를
+     * 다시 골라 덮어쓴다</b> — 청소 작업이 필요 없다. 탈퇴(POK-171)는 둘 다 지운다.
+     */
     @Test
-    void 다시_올리면_같은_이름을_덮어쓴다() throws Exception {
+    void 다시_올리면_반대_자리에_쓴다() throws Exception {
         User u = newUser();
         upload(u, png("first.png"));
         String keyAfterFirst = userRepository.findById(u.getId()).orElseThrow().getProfilePhotoKey();
@@ -91,9 +101,23 @@ class ProfilePhotoUploadTest extends PhotoTestSupport {
 
         assertThat(keyAfterFirst).as("첫 업로드가 표에 아무것도 안 남기면 둘 다 null이라 아래 비교가 저절로 참이 된다").isNotNull();
         assertThat(keyAfterSecond)
-                .as("이름이 같아야 주인 없는 파일이 생길 수가 없다 — 탈퇴(POK-171)가 지울 것도 하나다")
-                .isEqualTo(keyAfterFirst);
-        assertThat(PhotoLocalStackFixture.downloadPhoto(u.getId())).isPresent();
+                .as("같은 자리에 덮어쓰면 표 갱신 실패가 옛 주소로 새 그림을 흘린다")
+                .isNotEqualTo(keyAfterFirst);
+        assertThat(PhotoLocalStackFixture.downloadPhoto(u.getId(), 0)).as("자리 0").isPresent();
+        assertThat(PhotoLocalStackFixture.downloadPhoto(u.getId(), 1)).as("자리 1").isPresent();
+    }
+
+    /** 세 번째는 첫 자리로 돌아온다 — 자리가 둘뿐이라는 것이 파일 수를 묶는다. */
+    @Test
+    void 세_번_올려도_파일은_둘뿐이다() throws Exception {
+        User u = newUser();
+        upload(u, png("first.png"));
+        String first = userRepository.findById(u.getId()).orElseThrow().getProfilePhotoKey();
+        upload(u, png("second.png"));
+        upload(u, png("third.png"));
+        String third = userRepository.findById(u.getId()).orElseThrow().getProfilePhotoKey();
+
+        assertThat(third).as("자리가 둘이므로 세 번째는 첫 자리로 돌아온다").isEqualTo(first);
     }
 
     @Test
@@ -110,7 +134,7 @@ class ProfilePhotoUploadTest extends PhotoTestSupport {
                 .andExpect(status().isUnsupportedMediaType())
                 .andExpect(jsonPath("$.reason").value("PHOTO_NOT_AN_IMAGE"));
 
-        assertThat(PhotoLocalStackFixture.downloadPhoto(u.getId()))
+        assertThat(PhotoLocalStackFixture.downloadAnyPhoto(u.getId()))
                 .as("거부한 것이 창고에 남으면 안 된다 — 판정보다 저장이 먼저면 그렇게 된다")
                 .isEmpty();
         assertThat(userRepository.findById(u.getId()).orElseThrow().getProfilePhotoKey()).isNull();
@@ -135,7 +159,7 @@ class ProfilePhotoUploadTest extends PhotoTestSupport {
         User u = newUser();
         upload(u, png("me.png"));
 
-        StoredPhoto stored = storage.get(u.getId()).orElseThrow();
+        StoredPhoto stored = storage.get(u.getId(), currentVersion(u)).orElseThrow();
         assertThat(stored.contentType()).isEqualTo("image/png");
         assertThat(stored.bytes()).hasSize(512);
     }
@@ -143,7 +167,8 @@ class ProfilePhotoUploadTest extends PhotoTestSupport {
     /** 없는 사진은 빈손이다 — 창고가 던지는 NoSuchKey를 그대로 흘리면 태스크 6이 500을 낸다. */
     @Test
     void 없는_사진을_꺼내면_빈손이다() {
-        assertThat(storage.get(999_999_999L)).isEmpty();
+        assertThat(storage.get(999_999_999L, 0L)).isEmpty();
+        assertThat(storage.get(999_999_999L, 1L)).as("자리 둘 다 비어 있다").isEmpty();
     }
 
     /** 탈퇴(POK-171)가 부를 자리다. 지운 뒤에는 빈손이어야 한다. */
@@ -152,9 +177,16 @@ class ProfilePhotoUploadTest extends PhotoTestSupport {
         User u = newUser();
         upload(u, png("me.png"));
 
-        storage.delete(u.getId());
+        storage.deleteAll(u.getId());
 
-        assertThat(PhotoLocalStackFixture.downloadPhoto(u.getId())).isEmpty();
+        assertThat(PhotoLocalStackFixture.downloadPhoto(u.getId(), 0)).as("자리 0").isEmpty();
+        assertThat(PhotoLocalStackFixture.downloadPhoto(u.getId(), 1)).as("자리 1").isEmpty();
+    }
+
+    /** 지금 표가 가리키는 자리. 꺼내는 쪽은 주소의 버전을 쓰지만 여기서는 표로 확인한다. */
+    private long currentVersion(User u) {
+        return PhotoStorage.versionOf(
+                userRepository.findById(u.getId()).orElseThrow().getProfilePhotoUpdatedAt());
     }
 
     private void upload(User u, MockMultipartFile file) throws Exception {
