@@ -39,9 +39,10 @@ public final class PhotoToken {
 
     private PhotoToken() { }
 
-    public static String issue(String secret, long userId, long photoVersionEpochSec, Instant now) {
+    /** {@code photoVersion}의 단위는 여기서 정하지 않는다 — 부르는 쪽(PhotoUrls)이 정하고 여기는 싣기만 한다. */
+    public static String issue(String secret, long userId, long photoVersion, Instant now) {
         long exp = expiryFor(now);
-        String payload = userId + "." + exp + "." + photoVersionEpochSec;
+        String payload = userId + "." + exp + "." + photoVersion;
         return payload + "." + sign(secret, payload);
     }
 
