@@ -181,7 +181,7 @@ class DetectionCycleTest extends IntegrationTestSupport {
         // 이미 잡힌 줄은 안 나와야 한다.
         store().claimForPublish("s1", 5_000L, T0.plusSeconds(5).toEpochMilli(), T0);
 
-        assertThat(store().unpublished("s1", 5_000L)).singleElement().satisfies(row -> {
+        assertThat(store().unpublished("s1", 5_000L, 되돌아보기_하한())).singleElement().satisfies(row -> {
             assertThat(row.streamId()).isEqualTo("s1");
             assertThat(row.windowSizeMs()).isEqualTo(5_000L);
             assertThat(row.windowStartMs()).isEqualTo(T0.toEpochMilli());
@@ -198,7 +198,7 @@ class DetectionCycleTest extends IntegrationTestSupport {
                 VALUES ('s1', 5000, ?, 1, 1), ('s1', 3000, ?, 2, 2), ('s2', 5000, ?, 3, 3)
                 """, T0.toEpochMilli(), T0.toEpochMilli(), T0.toEpochMilli());
 
-        assertThat(store().unpublished("s1", 5_000L)).singleElement()
+        assertThat(store().unpublished("s1", 5_000L, 되돌아보기_하한())).singleElement()
                 .satisfies(row -> assertThat(row.messageCount()).isEqualTo(1));
     }
 
@@ -338,11 +338,11 @@ class DetectionCycleTest extends IntegrationTestSupport {
         java.util.List<java.time.Instant> 넘어간_상한 = new java.util.ArrayList<>();
         HighlightPublisher 기록기 = new HighlightPublisher(null, null, reader, props) {
             @Override
-            public boolean publish(String streamId, long metricId, long windowStartMs,
+            public Outcome publish(String streamId, long metricId, long windowStartMs,
                                    SpikeVerdict verdict, java.time.Instant countedUntil,
-                                   java.time.Instant now) {
+                                   java.util.function.Supplier<java.time.Instant> clock) {
                 넘어간_상한.add(countedUntil);
-                return true;
+                return Outcome.SENT;
             }
         };
         new DetectionCycle(reader, metricsStore, detector, 기록기, props, Runnable::run)
@@ -370,11 +370,11 @@ class DetectionCycleTest extends IntegrationTestSupport {
         java.util.List<java.time.Instant> 넘어간_끝점 = new java.util.ArrayList<>();
         HighlightPublisher 기록기 = new HighlightPublisher(null, null, reader, props) {
             @Override
-            public boolean publish(String streamId, long metricId, long windowStartMs,
+            public Outcome publish(String streamId, long metricId, long windowStartMs,
                                    SpikeVerdict verdict, java.time.Instant countedUntil,
-                                   java.time.Instant now) {
-                넘어간_끝점.add(now);
-                return true;
+                                   java.util.function.Supplier<java.time.Instant> clock) {
+                넘어간_끝점.add(clock.get());
+                return Outcome.SENT;
             }
         };
 
@@ -403,9 +403,9 @@ class DetectionCycleTest extends IntegrationTestSupport {
 
         HighlightPublisher 터지는_발행기 = new HighlightPublisher(null, null, reader, props) {
             @Override
-            public boolean publish(String streamId, long metricId, long windowStartMs,
+            public Outcome publish(String streamId, long metricId, long windowStartMs,
                                    SpikeVerdict verdict, java.time.Instant countedUntil,
-                                   java.time.Instant now) {
+                                   java.util.function.Supplier<java.time.Instant> clock) {
                 throw new IllegalStateException("주입된 실패");
             }
         };
@@ -469,6 +469,89 @@ class DetectionCycleTest extends IntegrationTestSupport {
     }
 
     /** 급증 하나가 실제로 발행까지 가는 상태를 표에 만든다. 기준선 둘은 이미 발행권이 잡힌 줄이다. */
+    /** 검사가 쓰는 하한. 운영 코드와 같은 산식이다 — 바퀴 시각 − 유예(0) − 되돌아보기(1분). */
+    private long 되돌아보기_하한() {
+        return com.pokeclip.chat.detector.metrics.WindowGrid.floorTo(
+                T0.plusSeconds(10).minus(props.collectLookback()).toEpochMilli(), 5_000L);
+    }
+
+    /**
+     * 🔴 <b>되돌아보기 밖의 창은 판정 대상이 아니다</b>(로컬 리뷰 라운드 2).
+     *
+     * <p>하한이 없으면 <b>보관 기간(24시간) 전체</b>가 매 바퀴 대상이 된다. 상시 비용도 크지만
+     * (100방송 순회 105~308ms 실측) 진짜 사고는 <b>발행 창 설정을 바꾸는 날</b>이다 —
+     * 발행 창이 아닌 크기의 줄은 발행권이 영영 안 잡혀 쌓이므로, 그 크기로 바꾸면
+     * 과거 24시간치 <b>288만 줄</b>이 첫 바퀴의 판정 대상이 되고 판별이 멈춘다(조회만 1,024ms).
+     *
+     * <p>여기서는 그 상황을 <b>같은 모양으로 작게</b> 만든다: 되돌아보기(1분)보다 훨씬 오래된
+     * 창을 발행권 없이 심어 두고, 한 바퀴가 그것을 <b>건드리지 않는지</b> 본다.
+     */
+    @Test
+    void 되돌아보기보다_오래된_창은_판정하지_않는다() {
+        채팅("s1", "u1", T0);
+        long 아주_오래된_창 = T0.minusSeconds(3600).toEpochMilli();
+        jdbc.update("""
+                INSERT INTO chat_metrics (stream_id, window_size_ms, window_start_ms, message_count, chatter_count)
+                VALUES ('s1', 5000, ?, 999, 999)
+                """, 아주_오래된_창);
+
+        cycle.runOnce(T0.plusSeconds(10));
+
+        Timestamp 그_줄의_발행권 = jdbc.queryForObject(
+                "SELECT published_at FROM chat_metrics WHERE stream_id = 's1' AND window_start_ms = ?",
+                Timestamp.class, 아주_오래된_창);
+        assertThat(그_줄의_발행권).as("되돌아보기 밖의 창은 집히지도 않아야 한다").isNull();
+    }
+
+    /**
+     * 🔴 <b>「다시 물으면 답이 바뀌는」 것은 발행권을 되돌린다</b>(로컬 리뷰 라운드 2).
+     *
+     * <p>발행권은 카드를 보내기 <b>전에</b> 잡는다. 조각이 아직 장부에 안 온 것뿐인데 그대로
+     * 두면 그 창은 영영 다시 안 집히고, <b>채팅에는 백필이 없어</b> 되찾을 방법도 없다.
+     * 수집 서버 계약이 정확히 그것을 경고한다 — 「{@code not_yet_indexed}는 재시도할 자리다」.
+     *
+     * <p>판정이 창이 닫히고 유예 2초 뒤에 도는 반면 조각은 완성돼야 장부에 들어가므로,
+     * 조각 길이가 유예보다 길거나 인덱서가 잠깐 밀리면 <b>정상 운영에서 온다.</b>
+     */
+    @Test
+    void 조각이_아직_없으면_발행권을_되돌린다() {
+        급증_한_건을_심는다();
+        바퀴를_돌린다(HighlightPublisher.Outcome.RETRY_LATER);
+
+        assertThat(발행권이_잡힌_시각(T0.toEpochMilli()))
+                .as("몇 초 뒤면 답이 바뀌므로 다음 바퀴가 다시 집어야 한다").isNull();
+    }
+
+    /** 반대 갈래. 다시 물어도 같은 것을 되돌리면 같은 실패를 무한히 반복한다. */
+    @Test
+    void 영영_없는_것은_발행권을_안_되돌린다() {
+        급증_한_건을_심는다();
+        바퀴를_돌린다(HighlightPublisher.Outcome.GIVE_UP);
+
+        assertThat(발행권이_잡힌_시각(T0.toEpochMilli()))
+                .as("다시 물어도 같으므로 잡은 채로 둔다").isNotNull();
+    }
+
+    /** 발행기가 정해진 답만 내놓게 갈아끼우고 한 바퀴를 돈다. 실행기는 그 자리에서 돌린다. */
+    private void 바퀴를_돌린다(HighlightPublisher.Outcome 답) {
+        HighlightPublisher 정해진_답 = new HighlightPublisher(null, null, reader, props) {
+            @Override
+            public Outcome publish(String streamId, long metricId, long windowStartMs,
+                                   SpikeVerdict verdict, java.time.Instant countedUntil,
+                                   java.util.function.Supplier<java.time.Instant> clock) {
+                return 답;
+            }
+        };
+        new DetectionCycle(reader, metricsStore, detector, 정해진_답, props, Runnable::run)
+                .runOnce(T0.plusSeconds(10));
+    }
+
+    private Timestamp 발행권이_잡힌_시각(long windowStartMs) {
+        return jdbc.queryForObject(
+                "SELECT published_at FROM chat_metrics WHERE stream_id = 's1' AND window_size_ms = 5000"
+                        + " AND window_start_ms = ?", Timestamp.class, windowStartMs);
+    }
+
     private void 급증_한_건을_심는다() {
         채팅("s1", "u1", T0);
         jdbc.update("""
@@ -499,11 +582,11 @@ class DetectionCycleTest extends IntegrationTestSupport {
         java.util.List<String> 발행됨 = new java.util.ArrayList<>();
         HighlightPublisher 기록하는_발행기 = new HighlightPublisher(null, null, reader, props) {
             @Override
-            public boolean publish(String streamId, long metricId, long windowStartMs,
+            public Outcome publish(String streamId, long metricId, long windowStartMs,
                                    SpikeVerdict verdict, java.time.Instant countedUntil,
-                                   java.time.Instant now) {
+                                   java.util.function.Supplier<java.time.Instant> clock) {
                 발행됨.add(streamId);
-                return true;
+                return Outcome.SENT;
             }
         };
         DetectionCycle 갈아끼운_바퀴 = new DetectionCycle(reader, metricsStore, detector,
