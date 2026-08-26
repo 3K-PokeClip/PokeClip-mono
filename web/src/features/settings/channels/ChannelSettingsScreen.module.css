@@ -111,22 +111,20 @@
 }
 
 /* 1k 하단 안내 박스 — 아이콘 + 문구 */
+/* 갱신 시안(1k)은 박스가 아니라 평문 캡션이다 — 배경·보더·패딩 없이 행 목록 뒤에 붙는다 */
 .note {
   display: flex;
-  gap: calc(9 * var(--pc-u));
+  gap: calc(7 * var(--pc-u));
   align-items: flex-start;
-  padding: calc(12 * var(--pc-u)) calc(15 * var(--pc-u));
-  border-radius: calc(12 * var(--pc-u));
-  border: 1px solid var(--pc-color-border-subtle);
-  background: var(--pc-color-bg-inset);
-  font-size: calc(11.5 * var(--pc-u));
+  margin-top: calc(4 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
   color: var(--pc-color-text-muted);
   line-height: 1.6;
 }
 
 .note svg {
-  width: calc(15 * var(--pc-u));
-  height: calc(15 * var(--pc-u));
+  width: calc(13 * var(--pc-u));
+  height: calc(13 * var(--pc-u));
   flex: none;
-  margin-top: calc(1 * var(--pc-u));
+  margin-top: calc(2 * var(--pc-u));
 }
