@@ -17,6 +17,43 @@ public interface JumpCardRepository extends JpaRepository<JumpCard, Long> {
     List<JumpCard> findAllByStreamIdOrderByEventSeqAsc(String streamId);
 
     /**
+     * 카드 목록 한 장. <b>정렬이 {@code event_seq}가 아니라 {@code stream_timestamp_ms}다.</b>
+     *
+     * <p>🔴 두 가지 이유가 겹친다. ① {@code event_seq}는 <b>마지막으로 바뀐 순서</b>라 카드를
+     * 숨기면 트리거({@code trg_jump_cards_touch})가 순번을 올려 <b>목록에서 자리가 바뀐다</b>.
+     * ② 그 시퀀스는 트랜잭션 밖에서 증가해 번호 순서와 커밋 순서가 다를 수 있고, 이어받기
+     * 조건({@code seq > last})으로 쓰면 <b>카드가 조용히 빠진다</b>({@code V202} 주석·PRD 결정).
+     *
+     * <p>{@code stream_timestamp_ms}는 저장될 때 정해지고 쓰기 경로(점유·숨김)가 안 건드린다.
+     * 다만 <b>유일하지 않다</b> — 자동과 핫키가 같은 시각을 가질 수 있어({@code uq_jump_cards_window}가
+     * {@code (방송, 출처, 창 시작)}이라 막지 않는다) {@code id}로 마저 가른다.
+     *
+     * <p>🔴 <b>{@code afterTs}와 {@code afterId}는 함께 오거나 함께 비어야 한다.</b> 시각만 주면
+     * {@code (stream_timestamp_ms = :afterTs AND id > NULL)}이 NULL로 평가돼 <b>같은 방송 시간의
+     * 뒷줄이 조용히 빠진다</b>(계획 검증 실측). 그것을 막는 자리는 여기가 아니라
+     * {@code CursorCodec}의 칸 수 검사이고, 빠지는 모습 자체는
+     * {@code JumpCardListQueryTest.afterId가_없으면_같은_방송_시간의_뒷줄이_빠진다}가 고정한다.
+     *
+     * <p>{@code :includeHidden = TRUE} 갈래를 SQL 안에 두는 이유는 {@code BroadcastRepository.findPage}와
+     * 같다 — 쿼리를 둘로 나누면 나머지 조건이 갈릴 자리가 생긴다.
+     */
+    @Query(value = """
+            SELECT * FROM jump_cards
+             WHERE stream_id = :streamId
+               AND (:includeHidden = TRUE OR hidden_at IS NULL)
+               AND (CAST(:afterTs AS BIGINT) IS NULL
+                    OR stream_timestamp_ms > CAST(:afterTs AS BIGINT)
+                    OR (stream_timestamp_ms = CAST(:afterTs AS BIGINT) AND id > CAST(:afterId AS BIGINT)))
+             ORDER BY stream_timestamp_ms ASC, id ASC
+             LIMIT :limit
+            """, nativeQuery = true)
+    List<JumpCard> findPage(@Param("streamId") String streamId,
+                            @Param("includeHidden") boolean includeHidden,
+                            @Param("afterTs") Long afterTs,
+                            @Param("afterId") Long afterId,
+                            @Param("limit") int limit);
+
+    /**
      * 이 한 줄이 중복 방어선이다. 조회 후 삽입은 동시 요청에 뚫린다 — ON CONFLICT는
      * PostgreSQL이 원자적으로 판정하므로 그 틈이 없다.
      *
