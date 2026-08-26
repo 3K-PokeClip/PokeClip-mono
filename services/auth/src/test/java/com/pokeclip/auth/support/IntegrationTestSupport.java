@@ -30,16 +30,11 @@ public abstract class IntegrationTestSupport {
      * <b>{@code FATAL: sorry, too many clients already}</b>로 컨텍스트 로딩이
      * 무너진다 — 30 × 컨텍스트 수가 100을 넘기 때문이다.
      *
-     * <p>600인 이유: 사진 검사 넷이 컨텍스트를 더해 지금 <b>15개</b>이고 15 × 30 = 450이다.
-     * <b>300으로는 실제로 넘쳤다</b> — POK-207 태스크 5에서 사진·유튜브 검사 13건이 이 메시지로
-     * 한꺼번에 죽었다(사진과 무관한 유튜브 검사가 같이 죽는다는 것이 이 값의 성질이다).
-     * Hikari는 minimumIdle 기본값이 maximumPoolSize라 컨텍스트마다 30까지 실제로 연다.
-     * 딱 맞는 450이 아니라 600인 이유는 PostgreSQL이 superuser 몫 3을 따로 떼어 두기도 하고,
-     * <b>컨텍스트를 더하는 다음 카드가 같은 벽에 부딪히지 않게</b>다.
+     * <p>300인 이유: 컨텍스트가 8개 안팎이고 8 × 30 = 240이라 여유를 뒀다.
      */
     protected static final PostgreSQLContainer POSTGRES =
             new PostgreSQLContainer("postgres:17")
-                    .withCommand("postgres", "-c", "max_connections=600");
+                    .withCommand("postgres", "-c", "max_connections=300");
 
     /**
      * 가짜 치지직도 static으로 하나만 띄운다. 모든 컨텍스트가 같은 api-base-uri를 받아야

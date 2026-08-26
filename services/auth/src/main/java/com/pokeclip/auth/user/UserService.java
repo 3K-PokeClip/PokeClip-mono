@@ -2,17 +2,11 @@ package com.pokeclip.auth.user;
 
 import com.pokeclip.auth.AuthException;
 import com.pokeclip.auth.AuthFailure;
-import com.pokeclip.auth.DataInconsistencyException;
-import com.pokeclip.auth.profile.ProfileUpdateException;
-import com.pokeclip.auth.profile.ProfileUpdateFailure;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
-import java.time.Instant;
 
 @Service
 @RequiredArgsConstructor
@@ -27,12 +21,6 @@ public class UserService {
      * ({@code uq_users_email}이 V108과 쌍인 것과 같다.)
      */
     private static final String GOOGLE_SUB_CONSTRAINT = "users_google_sub_key";
-
-    /**
-     * 코드 포인트로 센다 — 표(VARCHAR(255))가 세는 단위와 같아야 「검증 통과 → 저장 거부」가 안 생긴다.
-     * String.length()로 세면 이모지 하나가 2로 잡혀 30자 상한이 사람마다 다른 뜻이 된다.
-     */
-    public static final int NAME_MAX_CODE_POINTS = 30;
 
     private final UserRepository userRepository;
     private final UserCreator userCreator;
@@ -91,69 +79,5 @@ public class UserService {
             return userRepository.findByGoogleSub(googleSub).orElseThrow(() -> e);
         }
         throw e;
-    }
-
-    /**
-     * 표시 이름을 바꾼다. <b>findOrCreate는 건드리지 않는다</b> — 재로그인이 프로필을 안 덮는 성질이
-     * 이미 참이고(POK-53), 이 카드는 그것을 규칙으로 굳히기만 한다(ProfileSurvivesReloginTest).
-     *
-     * <p>같은 회원의 동시 수정을 직렬화하지 않는다. 토큰 회전·스트림키 재발급이 users 행 락을 쓰는
-     * 이유는 <b>아직 없는 행</b>을 막기 위해서인데, 이름은 한 컬럼을 덮어쓰는 것이라 마지막 요청이
-     * 이기면 그만이다. 락을 얹으면 그 경로들의 대기만 늘어난다.
-     */
-    @Transactional
-    public User updateName(Long userId, String rawName) {
-        String trimmed = stripInvisible(rawName);
-        if (trimmed.isEmpty()) {
-            throw new ProfileUpdateException(ProfileUpdateFailure.NAME_BLANK, "이름이 비어 있다");
-        }
-        if (trimmed.codePointCount(0, trimmed.length()) > NAME_MAX_CODE_POINTS) {
-            throw new ProfileUpdateException(ProfileUpdateFailure.NAME_TOO_LONG, "이름이 너무 길다");
-        }
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new DataInconsistencyException(
-                        AuthFailure.USER_NOT_FOUND, "토큰의 주인이 없다", userId));
-        user.changeName(trimmed, Instant.now());
-        return user;
-    }
-
-    /**
-     * 앞뒤의 <b>보이지 않는 문자</b>를 자른다.
-     *
-     * <p>🔴 <b>{@code trim()}으로는 부족했다</b>(PR #127 codex, 실측). 그것은 U+0020 이하만
-     * 자르므로 전각 공백(U+3000)·NBSP(U+00A0)·EM SPACE(U+2003)·ZWSP(U+200B)로만 이루어진
-     * 이름이 <b>그대로 저장됐다</b> — 화면에는 이름이 없는 것처럼 보이고, 편집자 목록이
-     * 누가 누군지 말해 주지 못한다. 창구를 직접 부르는 쪽에서만 닿지만 막을 자리는 여기다.
-     *
-     * <p><b>{@code strip()}으로 바꾸는 것도 답이 아니다</b> — U+3000·U+2003은 잡지만
-     * U+00A0·U+200B는 {@code Character.isWhitespace}가 false라 그대로 남는다.
-     * 그래서 공백 분류({@code SPACE_SEPARATOR})와 형식 문자({@code FORMAT})까지 본다.
-     *
-     * <p><b>자르는 것은 앞뒤뿐이다.</b> 가운데까지 접으면 "김 태현"이 "김태현"이 되고,
-     * 이모지를 잇는 ZWJ(U+200D, FORMAT)가 사라져 <b>이모지 이름이 깨진다</b> —
-     * 그 문자는 항상 글자 사이에 오므로 앞뒤만 자르면 안전하다.
-     */
-    private static String stripInvisible(String raw) {
-        if (raw == null) {
-            return "";
-        }
-        int[] cps = raw.codePoints().toArray();
-        int start = 0;
-        int end = cps.length;
-        while (start < end && isInvisible(cps[start])) {
-            start++;
-        }
-        while (end > start && isInvisible(cps[end - 1])) {
-            end--;
-        }
-        return new String(cps, start, end - start);
-    }
-
-    private static boolean isInvisible(int codePoint) {
-        int type = Character.getType(codePoint);
-        return Character.isWhitespace(codePoint)
-                || type == Character.SPACE_SEPARATOR
-                || type == Character.FORMAT
-                || type == Character.CONTROL;
     }
 }

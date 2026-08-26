@@ -5,22 +5,8 @@ plugins {
     id 'org.springframework.boot'
 }
 
-dependencyManagement {
-    // Boot 4.1.0 BOM은 AWS SDK를 관리하지 않는다 — 여기서 한 번만 박는다(chat-collector와 같은 버전).
-    imports { mavenBom 'software.amazon.awssdk:bom:2.46.7' }
-}
-
 dependencies {
     implementation project(':web-support')
-
-    // 프로필 사진을 S3에 둔다(POK-207). s3가 runtime으로 끌어오는 HTTP 클라이언트는 Apache 5인데,
-    // 그것이 클래스패스에 오르면 Boot가 RestClient 스택을 JDK에서 Apache5로 조용히 바꾼다 —
-    // 구글·치지직·유튜브 호출의 실측 시한이 다른 층에서 끊게 된다. application.yml의
-    // spring.http.clients.imperative.factory=jdk가 막고 RestClientFactoryTest가 지킨다.
-    // 시한을 클라이언트에 박으려면 컴파일에서 보여야 해서 apache5-client를 명시한다.
-    // url-connection-client는 넣지 않는다 — sync 구현이 둘이 되면 빌더가 SPI 순서에 갈린다.
-    implementation 'software.amazon.awssdk:s3'
-    implementation 'software.amazon.awssdk:apache5-client'
 
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     implementation 'org.springframework.boot:spring-boot-starter-security'
@@ -45,8 +31,6 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     testImplementation 'org.testcontainers:testcontainers-postgresql'
-    // 가짜 S3. 2.x 좌표다 — 1.x의 org.testcontainers:localstack가 아니다.
-    testImplementation 'org.testcontainers:testcontainers-localstack'
 }
 
 // DeploymentEnvVarsTest는 저장소의 배포 파일 둘을 읽는다. 입력으로 선언하지 않으면 그 파일만 바뀐 커밋에서
