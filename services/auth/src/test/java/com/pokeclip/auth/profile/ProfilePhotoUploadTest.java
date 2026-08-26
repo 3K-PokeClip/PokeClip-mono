@@ -10,6 +10,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -56,6 +58,27 @@ class ProfilePhotoUploadTest extends PhotoTestSupport {
                 .as("창고에 실제로 들어갔는가 — 우리 코드를 안 거치고 확인한다")
                 .get().asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.BYTE_ARRAY)
                 .hasSize(512);
+    }
+
+    /**
+     * 🔴 <b>사진 경로의 {@code updated_at}이 아무 데도 안 재어져 있었다</b>(최종 감사).
+     * {@code User.attachPhoto}의 {@code this.updatedAt = now;}를 지워도 587건이 전부 초록이었다 —
+     * 그 칸을 단언하는 시험이 {@code UpdateNameTest} 하나뿐이라 <b>이름 경로만 재고 있었다.</b>
+     * PRD 성공 기준 8번(「{@code updated_at}이 실제로 갱신된다」)이 반만 닫혀 있던 자리다.
+     *
+     * <p>앞뒤 모두 표에서 읽는다 — 만들 때의 값은 나노초까지 있고 표는 마이크로초로 자르므로,
+     * 한쪽만 메모리 값으로 비교하면 「안 움직였는데 참」이 나올 수 있다.
+     */
+    @Test
+    void 사진을_올려도_수정일시가_갱신된다() throws Exception {
+        User u = newUser();
+        Instant before = userRepository.findById(u.getId()).orElseThrow().getUpdatedAt();
+
+        upload(u, png("me.png"));
+
+        assertThat(userRepository.findById(u.getId()).orElseThrow().getUpdatedAt())
+                .as("이름 수정과 같은 규칙이다 — 사진도 프로필 변경이다")
+                .isAfter(before);
     }
 
     @Test
