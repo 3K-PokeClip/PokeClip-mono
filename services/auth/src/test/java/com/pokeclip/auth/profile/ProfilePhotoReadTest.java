@@ -7,15 +7,18 @@ import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
 import com.pokeclip.auth.user.UserService;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpMethod;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -191,6 +194,34 @@ class ProfilePhotoReadTest extends PhotoTestSupport {
 
         mockMvc.perform(get(photoUrl(u.getId(), accessToken)))
                 .andExpect(status().isNotFound());
+    }
+
+    /**
+     * 🔴 <b>「GET만 연다」가 주석에만 있고 아무 데도 안 재어져 있었다</b>(감사 2라운드).
+     * {@code SecurityConfig}에서 {@code HttpMethod.GET}을 지워도 68건이 전부 초록이었다 —
+     * 오늘 안 뚫리는 이유는 이 뿌리에 GET 말고 매핑이 없어서일 뿐이다.
+     * <b>나중에 이 뿌리에 POST가 생기면 그날 조용히 열린다.</b>
+     *
+     * <p>표까지 옳게 실어 보낸다 — 표가 맞아도 GET이 아니면 안 열린다는 것이 재려는 것이다.
+     *
+     * <p><b>HEAD도 401이다</b>(여기서 안 잰다). GET 매처가 HEAD를 안 덮기 때문인데,
+     * {@code <img>}는 HEAD를 안 쓰므로 화면이 안 깨지고 <b>어느 쪽이든 정보가 안 샌다</b> —
+     * 401은 사진이 있는지 없는지를 말해 주지 않는다. <b>결함이 아니라 지금 상태다</b>
+     * (감사 2라운드에서 판단하고 그대로 뒀다). 단언으로 못박지 않은 것은, HEAD를 여는 날이
+     * 오면 그것이 고침이지 회귀가 아니기 때문이다.
+     */
+    @Test
+    void 사진_경로는_GET만_열려_있다() throws Exception {
+        User u = newUser();
+        upload(u, png("me.png", "image/png"));
+        String url = photoUrl(u.getId(), token(u.getId()));
+
+        for (HttpMethod method : List.of(HttpMethod.POST, HttpMethod.PUT, HttpMethod.PATCH, HttpMethod.DELETE)) {
+            int status = mockMvc.perform(request(method, url)).andReturn().getResponse().getStatus();
+            assertThat(status)
+                    .as("%s는 토큰을 요구해야 한다 — 이 뿌리에 매핑이 없어서 안 뚫리는 것과 다르다", method)
+                    .isEqualTo(401);
+        }
     }
 
     private static String token(long userId) {
