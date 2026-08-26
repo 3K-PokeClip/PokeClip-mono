@@ -62,5 +62,30 @@ public record DetectionProperties(@NotNull Duration cycleInterval,
             throw new IllegalArgumentException(
                     "publish-window-ms(" + publishWindowMs + ")가 window-sizes-ms에 없다: " + windowSizesMs);
         }
+
+        // 🔴 @NotNull 은 값이 있는지만 본다 — 0이나 음수를 그대로 통과시킨다.
+        // codex 가 retention 하나를 짚었고(0이면 sweep 이 매 주기 표를 통째로 비워
+        // 기준선이 사라지는데 아무 오류도 없다), 같은 구멍이 나머지 여섯에도 있어
+        // 전수를 세어 한꺼번에 닫는다. window-sizes-ms 에 0을 막은 것과 같은 계열이고,
+        // 그때 한 자리만 막은 것이 여기까지 왔다.
+        requirePositive("cycle-interval", cycleInterval);
+        requirePositive("late-report-interval", lateReportInterval);
+        requirePositive("active-stream-window", activeStreamWindow);
+        requirePositive("collect-lookback", collectLookback);
+        requirePositive("baseline-window", baselineWindow);
+        requirePositive("retention", retention);
+
+        // 🔴 window-grace 만 0을 허용한다. 「유예 없이 바로 집계」는 뜻이 서는 설정이고
+        // 검사들이 실제로 그 값을 쓴다. 음수는 아직 안 닫힌 창을 집계하게 만들어 막는다.
+        if (windowGrace.isNegative()) {
+            throw new IllegalArgumentException("window-grace는 음수일 수 없다: " + windowGrace);
+        }
+    }
+
+    /** 0도 음수도 막는다. 어느 칸인지 이름을 실어야 부팅 실패에서 바로 찾는다. */
+    private static void requirePositive(String name, Duration value) {
+        if (value.isZero() || value.isNegative()) {
+            throw new IllegalArgumentException(name + "은(는) 0보다 커야 한다: " + value);
+        }
     }
 }

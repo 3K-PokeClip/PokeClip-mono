@@ -244,6 +244,59 @@ class ChatWindowReaderTest extends IntegrationTestSupport {
         assertThat(reader.lastReceivedAt("s1", T0, T0.plusSeconds(5), T0.plusSeconds(7))).isPresent();
     }
 
+    /**
+     * 🔴 <b>「우리가 다 받은 시각」 조회의 범위가 집계와 같아야 한다</b>(봇 리뷰 1판, claude).
+     *
+     * <p>상한만 걸려 있으면 그 방송의 <b>처음부터</b> 지금까지가 스캔 범위가 되고, 실제로는
+     * 인덱스를 <b>아예 안 탄다</b>(6시간·216,000행에서 순차 훑기 10.742ms 대 0.249ms, 43배).
+     * 이 조회는 카드 한 장마다 발행 실행기 위에서 돌고 방송이 길수록 커진다.
+     *
+     * <p>여기서는 그 하한이 <b>집계와 같은 폭</b>인지를 잰다 — 좁게 잡으면 집계에 들어간 채팅이
+     * 여기서 빠져 우리 구간이 거짓으로 짧아지거나 {@code unknown}이 된다.
+     * 전달이 여유({@code RECEIVED_SLACK}, 5분) 가까이 늦은 채팅으로 경계를 민다.
+     */
+    @Test
+    void 다_받은_시각_조회가_집계와_같은_폭을_본다() {
+        // 전달이 4분 늦었다 — 여유 5분 안이므로 집계에 들어간다.
+        Instant 늦게_도착 = T0.plusSeconds(240);
+        채팅("s1", "u1", T0.plusMillis(1_000), 늦게_도착);
+
+        assertThat(reader.countWindows("s1", 5_000L, T0, T0.plusSeconds(5)))
+                .as("집계는 이 채팅을 본다").hasSize(1);
+        assertThat(reader.lastReceivedAt("s1", T0, T0.plusSeconds(5), T0.plusSeconds(300)))
+                .as("같은 채팅을 여기서도 봐야 한다 — 하한을 좁게 잡으면 여기서만 빠진다")
+                .contains(늦게_도착);
+    }
+
+    /**
+     * 🔴 <b>쌍둥이 조회 둘이 같은 방어를 갖는지 대조한다</b>(봇 리뷰 1판 뒤에 만들었다).
+     *
+     * <p><b>이것은 성능 검사가 아니다.</b> 하한이 없으면 조회가 <b>느려질 뿐 답은 같아서</b>,
+     * 실제로 하한을 지우고 전부 돌려 보니 <b>160건이 그대로 초록이었다.</b> 「초록이 나온
+     * 자리가 곧 무방비」라 그 자리를 이 검사로 메운다.
+     *
+     * <p>재는 것은 「SQL 이 이렇게 생겼나」가 아니라 <b>「두 조회가 같은 칸을 같은 방식으로
+     * 막고 있나」</b>다. {@code COUNT_WINDOWS}는 처음부터 {@code received_at} 을 양쪽으로
+     * 걸었는데 {@code LAST_RECEIVED}는 상한만 걸려 있었고, <b>그 비대칭을 다섯 라운드의
+     * 로컬 리뷰가 못 잡았다</b> — 봇이 잡았다.
+     *
+     * <p>느려지는 정도는 6시간·216,000행에서 <b>순차 훑기 10.742ms 대 인덱스 0.249ms(43배)</b>이고,
+     * 앞쪽만 방송 길이에 선형으로 커진다. 이 조회는 카드 한 장마다 발행 실행기 위에서 돈다.
+     */
+    @Test
+    void 두_조회가_모두_받은_시각을_양쪽으로_막는다() throws Exception {
+        for (String 이름 : List.of("COUNT_WINDOWS", "LAST_RECEIVED")) {
+            java.lang.reflect.Field f = ChatWindowReader.class.getDeclaredField(이름);
+            f.setAccessible(true);
+            String sql = (String) f.get(null);
+
+            assertThat(sql).as("%s 에 received_at 하한이 없다 — 인덱스를 못 탄다", 이름)
+                    .containsPattern("received_at\\s*>=\\s*\\?");
+            assertThat(sql).as("%s 에 received_at 상한이 없다", 이름)
+                    .containsPattern("received_at\\s*<\\s*\\?");
+        }
+    }
+
     @Test
     void 남의_방송_채팅은_안_섞인다() {
         채팅("s1", "u1", T0);

@@ -232,17 +232,42 @@ public class ChatWindowReader {
      */
     public Optional<Instant> lastReceivedAt(String streamId, Instant from, Instant to, Instant countedUntil) {
         Timestamp last = jdbc.queryForObject(LAST_RECEIVED, Timestamp.class,
-                streamId, Timestamp.from(from), Timestamp.from(to), Timestamp.from(countedUntil));
+                streamId, Timestamp.from(from), Timestamp.from(to),
+                // 하한은 집계와 같은 폭이다. SQL 과 이 인자를 <b>같이</b> 고쳐야 한다 —
+                // 한쪽만 바꾸면 파라미터 개수가 어긋나 부팅이 아니라 그 조회에서만 터진다.
+                Timestamp.from(from.minus(RECEIVED_SLACK)), Timestamp.from(countedUntil));
         return Optional.ofNullable(last).map(Timestamp::toInstant);
     }
 
-    /** 창 경계는 집계와 같다 — {@code >= from AND < to}. 다르면 다른 창의 채팅이 섞인다. */
+    /**
+     * 창 경계는 집계와 같다 — {@code >= from AND < to}. 다르면 다른 창의 채팅이 섞인다.
+     *
+     * <h2>🔴 {@code received_at} 하한이 반드시 있어야 한다(봇 리뷰 1판, claude)</h2>
+     *
+     * 상한만 걸면 {@code idx_chat_messages_stream_received} 를 <b>아예 안 탄다</b> —
+     * {@code received_at < ?} 하나로는 선택도가 나빠 플래너가 순차 훑기를 고른다.
+     * 6시간·초당 10건(216,000행)으로 실측한 차이:
+     *
+     * <table>
+     *   <tr><th>하한</th><th>계획</th><th>시간</th><th>버퍼</th></tr>
+     *   <tr><td>없음(고치기 전)</td><td><b>Parallel Seq Scan</b></td><td><b>10.742 ms</b></td><td>2,187</td></tr>
+     *   <tr><td>있음</td><td>Bitmap Index Scan</td><td><b>0.249 ms</b></td><td>55</td></tr>
+     * </table>
+     *
+     * <p><b>43배이고, 앞쪽만 방송 길이에 선형으로 커진다</b> — {@code chat_messages} 에는
+     * 삭제 경로가 없다. 이 조회는 <b>카드 한 장마다 발행 실행기</b>(core 2 · queue 100) 위에서
+     * 도는데, 급증이 몰리는 구간에서 큐가 차면 카드가 조용히 버려진다.
+     *
+     * <p><b>폭은 {@code COUNT_WINDOWS} 와 같은 {@link #RECEIVED_SLACK} 이다.</b> 집계에 쓰인
+     * 채팅과 정확히 같은 범위라야 「집계엔 들었는데 여기선 빠진」 채팅이 안 생긴다.
+     * <b>쌍둥이 SQL 인데 한쪽만 막혀 있었다</b> — 바로 위가 같은 함정을 이미 알고 있었다.
+     */
     private static final String LAST_RECEIVED = """
             SELECT max(received_at)
               FROM chat_messages
              WHERE stream_id = ?
                AND message_time >= ? AND message_time < ?
-               AND received_at  <  ?
+               AND received_at  >= ? AND received_at  <  ?
             """;
 
     /** {@code [from, to)} 구간을 창 크기로 묶어 센다. 채팅이 없는 창은 줄이 안 나온다. */
