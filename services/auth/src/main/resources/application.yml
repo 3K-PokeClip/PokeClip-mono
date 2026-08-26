@@ -47,19 +47,6 @@ spring:
     # "아무것도 스킵하지 않는다"를 정확히 말하려면 0이다.
     baseline-version: 0
 
-  servlet:
-    multipart:
-      # 잘라낸 512x512 PNG가 들어갈 크기. 크기 판정을 서블릿 층에서 하므로 앱이 바이트를
-      # 다 받기 전에 끊는다 — 글자로 받았다면 재기 전에 이미 다 받아 놓게 된다.
-      max-file-size: 2MB
-      # 🔴 <b>요청 상한은 파일 상한보다 커야 한다.</b> 둘을 2MB로 같게 뒀더니 정확히 2MB인
-      # 파일이 413이었다(실측) — max-file-size는 파일만 재는데 이쪽은 multipart 경계와
-      # 파트 헤더까지 더해 재므로 <b>먼저 걸린다.</b> 그러면 실효 상한이 문서가 말하는 2MB보다
-      # 작아지고, README의 「자르는 크기가 약 723px를 넘으면 거부된다」는 경계도 그만큼 낮아진다.
-      # 3MB는 파일 상한 2MB + 오버헤드에 넉넉한 여유다. 파일 자체는 여전히 위 줄이 자른다.
-      # ProfilePhotoSizeLimitTest.정확히_상한인_파일은_통과한다가 이 관계를 못박는다.
-      max-request-size: 3MB
-
   http:
     clients:
       # 단수형 spring.http.client.*는 4.0.0부터 deprecated고, 실제로 아무것도
@@ -69,21 +56,6 @@ spring:
       # 설정이지 구글 인증 설정이 아니므로 여기가 맞는 자리다.
       connect-timeout: 2s
       read-timeout: 5s
-      # s3가 Apache5를 딸려와 httpclient5가 클래스패스에 오르면 Boot가 RestClient 구현을
-      # 오류 없이 바꾼다(이 카드에서 재현: JdkClientHttpRequestFactory →
-      # HttpComponentsClientHttpRequestFactory). 위 connect 2s·read 5s는 구글·치지직·유튜브
-      # 호출 전부에 걸린 실측값이라, 층이 바뀌면 어디서 끊는지를 다시 재야 하는 것이 된다.
-      #
-      # 이 핀을 잃으면 시한만 늘어나는 게 아니다 — httpclient5 5.6.1의 기본 재시도가 429·503에
-      # 1회(간격 1초) 붙고, 상태코드 기반이라 POST도 탄다. 치지직 갱신은 users 행 락을 쥔 채
-      # HTTP를 기다리므로(「알려진 구멍」 10번) 그 한 번이 그대로 잠금 시간이 된다.
-      # AWS SDK 자기 경로는 무관하다 — apache5-client가 disableAutomaticRetries를 부른다.
-      # 이 증폭은 스프링 쪽 핀을 잃었을 때만 생긴다.
-      #
-      # 단수형 spring.http.client.factory는 deprecated 별칭이고 spring.http.clients.factory는 없다.
-      # RestClientFactoryTest가 RestClient·RestTemplate 양쪽 구현체를 직접 단언한다.
-      imperative:
-        factory: jdk
 
 logging:
   level:
@@ -102,14 +74,6 @@ logging:
     # 사유 코드로 로그에 남긴다. 이 프로젝트는 유니크 위반을 정상 제어 흐름으로 쓰기까지
     # 한다(초대·계정 생성 경합) — 그 WARN은 어차피 잡음이다.
     org.hibernate.orm.jdbc.error: error
-    # 사진이 나가는 길 — S3 PUT 본문. AWS SDK 2.46.7의 HTTP 클라이언트는 Apache 5이고
-    # org.apache.hc.client5.http.wire(본문 전체)·.headers(Authorization 값)가 DEBUG에 찍는다.
-    # SDK 상위 계층 DEBUG는 서명 canonical request를 대량으로 남긴다. netty는 async
-    # 클라이언트용이라 지금은 안 도는 길이지만 s3가 딸려오므로 같이 막는다.
-    # 구체 로거가 root보다 우선하므로 root=TRACE로도 안 뚫린다 — SecretLeakTest가 그것까지 잰다.
-    software.amazon.awssdk: info
-    org.apache.hc.client5.http: info
-    io.netty: info
   pattern:
     # 기본 콘솔 형식의 레벨 자리에 상관 ID를 끼워 넣는다. 값이 없으면 빈칸이다.
     # logback-spring.xml을 만들지 않는 이유는 배포가 없어 환경별 형식이
@@ -201,18 +165,3 @@ pokeclip:
       interval: PT1H
       # 이보다 오래 확인 안 한 연동만 점검한다.
       staleness: PT24H
-  profile-photo:
-    # 창고 이름이 비면 사진 기능이 통째로 꺼진다(chat-collector의 S3_BUCKET 관례). CI·팀원 로컬 기본.
-    # 이름을 PROFILE_PHOTO_ 접두어로 두는 이유: S3_BUCKET은 chat-collector가 이미 쓴다.
-    # 같은 이름이면 .env.dev.example이 값을 하나만 가져 두 서버가 같은 창고를 가리킨다.
-    bucket: ${PROFILE_PHOTO_S3_BUCKET:}
-    region: ${AWS_REGION:ap-northeast-2}
-    # 비면 진짜 AWS. LocalStack·MinIO 등 호환 스토리지 주소(scheme+host+port).
-    endpoint: ${PROFILE_PHOTO_S3_ENDPOINT:}
-    force-path-style: ${PROFILE_PHOTO_S3_FORCE_PATH_STYLE:false}
-    # 사진 표 서명키. 로그인 토큰(JWT_SECRET)과 다른 값이어야 한다 — 같으면 두 종류가 섞일 여지가 생긴다.
-    # 창고 이름이 차 있는데 이것이 비면 PhotoProperties가 부팅을 세운다.
-    token-secret: ${PROFILE_PHOTO_TOKEN_SECRET:}
-    # 사진 주소의 앞부분(예 http://localhost:8082). 화면과 서버가 다른 주소에 있어 절대 주소가 필요하고,
-    # 요청에서 유추하면 프록시 뒤에서 틀린다(X-Forwarded 미처리 — 「알려진 구멍」).
-    base-url: ${PROFILE_PHOTO_BASE_URL:}

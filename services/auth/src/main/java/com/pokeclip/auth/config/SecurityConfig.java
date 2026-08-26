@@ -2,7 +2,6 @@ package com.pokeclip.auth.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -32,13 +31,6 @@ public class SecurityConfig {
                         // /api/auth/refresh에 이은 두 번째 permitAll이라 같은 함정을
                         // 공유한다 — 이 경로의 실패 로그에 건수로 알람을 걸면 안 된다.
                         .requestMatchers("/api/stream-keys/pairing-codes/exchange").permitAll()
-                        // 그림 태그는 인증 헤더를 못 싣는다(웹은 쿠키를 안 쓴다). 자격은 주소에 실린
-                        // 사진 표가 대신한다 — 그 표로 열 수 있는 것은 그림 한 장뿐이고 몇 분이면 죽는다.
-                        // /api/auth/refresh·페어링 교환에 이은 세 번째 permitAll이라 같은 함정을
-                        // 공유한다: 이 경로의 실패 로그에 건수로 알람을 걸면 안 된다.
-                        //
-                        // GET만 연다. 사진을 바꾸는 PUT은 /api/auth/me/photo에 있고 토큰을 요구한다.
-                        .requestMatchers(HttpMethod.GET, "/api/profile-photos/**").permitAll()
                         // 컨테이너가 400·404·405를 만들 때 요청을 /error로 ERROR 디스패치하는데,
                         // 시큐리티 체인은 그 디스패치에도 걸린다(AuthorizationFilter의
                         // filterErrorDispatch 기본값이 true다). 여기를 열지 않으면 미인증
