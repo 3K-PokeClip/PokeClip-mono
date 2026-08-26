@@ -5,6 +5,7 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -27,7 +28,15 @@ public final class FakeHttpServer implements AutoCloseable {
     /** 지정한 시간만큼 끌었다가 응답한다. delay가 0이면 즉시 응답한다. */
     public static FakeHttpServer respondingWith(String path, int status, String body, Duration delay) {
         try {
-            HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+            // 🔴 <b>주소를 정하지 않으면 IPv6 와일드카드에 붙고, 그러면 남이 같은 번호의
+            //    127.0.0.1 을 잡을 수 있다</b> — ServerSocket 의 기본 reuseAddress 가 true 라
+            //    아무 프로그램이나 기본 설정 그대로 가로챈다(이 기계에서 100/100 실측).
+            //    가로채면 더 구체적인 주소라 localhost 요청을 통째로 가져가고, 시험은
+            //    「연결 실패」나 「호출 0회」로 간헐 실패한다 — 재현이 안 돼 원인을 못 찾는다.
+            //    루프백에 못박으면 커널이 그 번호를 예약해 창 자체가 없어진다(0/100).
+            //    POK-174(clip) 세션이 6,000회 중 4회를 실제로 잡아 알려 왔다.
+            HttpServer server = HttpServer.create(
+                    new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
             server.createContext(path, exchange -> {
                 if (!delay.isZero()) {
                     try {

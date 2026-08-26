@@ -23,6 +23,7 @@ import com.pokeclip.auth.user.UserRepository;
 import com.pokeclip.auth.user.UserService;
 import com.pokeclip.auth.support.FakeHttpServer;
 import com.pokeclip.auth.support.IntegrationTestSupport;
+import com.pokeclip.auth.support.PhotoLocalStackFixture;
 import com.pokeclip.auth.youtube.YoutubeChannel;
 import com.pokeclip.auth.youtube.YoutubeCleanupExecutor;
 import com.pokeclip.auth.youtube.YoutubeLinkStateCodec;
@@ -60,6 +61,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -196,6 +198,10 @@ class SecretLeakTest extends IntegrationTestSupport {
         registry.add("pokeclip.jwt.secret", () -> JWT_SECRET);
         registry.add("pokeclip.chzzk.app.client-secret", () -> CHZZK_CLIENT_SECRET);
         registry.add("pokeclip.youtube.app.client-secret", () -> YT_CLIENT_SECRET);
+        // 사진 창고를 여기서도 켠다. 창고를 끄면 S3 호출이 아예 안 일어나 아래 검사가
+        // 「찾을 것이 없어서 통과」한다. 이 클래스는 이미 자기 @DynamicPropertySource를
+        // 갖고 있으므로 컨텍스트가 더 늘지 않는다.
+        PhotoLocalStackFixture.register(registry);
     }
 
     @AfterAll
@@ -720,7 +726,13 @@ class SecretLeakTest extends IntegrationTestSupport {
             } finally {
                 setLevel(SPRING_WEB_LOGGER, levelBefore);
             }
-            assertThat(CHZZK.tokenCalls()).as("바늘이 실제로 나갔다").isEqualTo(2);
+            assertThat(CHZZK.tokenCalls())
+                    .as("""
+                            바늘이 실제로 나갔다. 호출 수가 이보다 <b>늘었으면</b> 유출이 아니라 \
+                            application.yml의 spring.http.clients.imperative.factory=jdk 핀이 빠진 것이다 — \
+                            그러면 스택이 httpclient5로 바뀌고 그쪽 기본 재시도(429·503에 1회, 간격 1초)가 \
+                            같은 요청을 한 번 더 내보낸다.""")
+                    .isEqualTo(2);
 
             String debugLog = renderAll(captor);
             for (String secret : List.of(CHZZK_CODE, CHZZK_CLIENT_SECRET, state, CHZZK_REFRESH)) {
@@ -875,6 +887,127 @@ class SecretLeakTest extends IntegrationTestSupport {
         }
     }
 
+    /**
+     * 프로필 사진이 나가는 길에 붙은 로거 셋. AWS SDK 2.46.7의 HTTP 클라이언트는 Apache 5이고,
+     * {@code org.apache.hc.client5.http.wire}는 요청 본문 전체를, {@code .headers}는 Authorization
+     * 값을 DEBUG에 찍는다. SDK 상위 계층 DEBUG는 서명 canonical request를 대량으로 남긴다.
+     * netty는 async 클라이언트용이라 지금은 안 도는 길이지만 s3가 딸려오므로 같이 막는다.
+     */
+    private static final List<String> STORAGE_QUIET_LOGGERS =
+            List.of("software.amazon.awssdk", "org.apache.hc.client5.http", "io.netty");
+
+    /**
+     * 위 셋을 info로 눌러 두는 application.yml 세 줄을 지금까지 어느 검사도 안 지켰다 —
+     * 지워도 아무 데서도 안 걸린다(계획 검증 1회차). 창고 호출이 실제로 도는 것은
+     * 뒤 태스크가 얹고, <b>여기서는 배선만 잰다</b>.
+     *
+     * <p>web 로거와 같은 모양이다 — 기본값 없는 {@code getProperty}(줄이 사라지면 빨간불) +
+     * logback까지 닿았는지(프로퍼티만 있고 안 박히면 방어가 없는 것과 같다). 거기에 한 겹 더:
+     * <b>root를 TRACE로 내린 채</b> 유효 레벨을 본다. 구체 로거 레벨이 root보다 우선한다는 것이
+     * 이 방어의 전제인데, 그 전제를 글로만 적어 두면 다음 사람이 "root로 막으면 되지"로 지운다.
+     */
+    @Test
+    void 창고_SDK_로거는_root를_TRACE로_내려도_INFO_아래로_안_간다() {
+        for (String logger : STORAGE_QUIET_LOGGERS) {
+            String level = environment.getProperty("logging.level." + logger);
+            assertThat(level)
+                    .as(logger + " 레벨이 application.yml에 박혀 있어야 root를 내려도 버틴다")
+                    .isNotNull();
+            assertThat(Level.toLevel(level, Level.DEBUG).toInt())
+                    .as(logger + "가 이 레벨이면 본문·Authorization이 열린다: " + level)
+                    .isGreaterThanOrEqualTo(Level.INFO.toInt());
+            assertThat(levelOf(logger))
+                    .as(logger + ": 프로퍼티가 Environment에만 있고 logback까지 안 닿았다")
+                    .isNotNull();
+        }
+
+        // 여기서부터가 양성 대조다. root를 TRACE로 내려도 셋의 판정 레벨이 안 따라 내려가야
+        // 한다 — 따라 내려간다면 방어가 "운영에서 root를 안 내린다"는 사람의 규칙에 걸려 있는 것이다.
+        Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
+        assertThat(rootBefore).as("root에 명시 레벨이 없으면 아래 복원이 상속을 지운다").isNotNull();
+        try {
+            setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
+            for (String logger : STORAGE_QUIET_LOGGERS) {
+                assertThat(effectiveLevelOf(logger).toInt())
+                        .as(logger + "가 root=TRACE를 그대로 물려받았다 — 세 줄 중 이 줄이 없다")
+                        .isGreaterThanOrEqualTo(Level.INFO.toInt());
+            }
+        } finally {
+            setLevel(Logger.ROOT_LOGGER_NAME, rootBefore);
+        }
+    }
+
+    /**
+     * 위 검사는 <b>배선</b>만 본다 — 세 로거의 레벨이 박혀 있는지. 여기서는 <b>창고 호출을 실제로 돌린다.</b>
+     * root를 TRACE로 내린 채 사진을 올리고 다시 꺼내므로, application.yml의 세 줄 중 하나라도 없으면
+     * Apache 5 wire 로거가 <b>PUT 본문 전체</b>를, headers 로거가 <b>Authorization 값</b>을 찍는다.
+     *
+     * <p>바늘을 사진 바이트 안에 심는다 — 실제로 나가는 물건이라야 「본문이 찍히면 걸린다」가 참이 된다.
+     * 서명 쪽은 값이 매번 달라 바늘을 못 심으므로 서명 <b>방식 이름</b>(AWS4-HMAC-SHA256)으로 잡는다.
+     * 그 글자는 Authorization 값과 canonical request 양쪽에 들어 있어 어느 쪽이 새도 걸린다.
+     */
+    @Test
+    void 사진_경로를_돌려도_바이트도_서명도_로그에_남지_않는다() throws Exception {
+        var user = userService.findOrCreate(needle("photo-sub"), "photo@example.com", "김태현", null);
+        String bearer = "Bearer " + tokenService.issue(user).accessToken();
+        String photoNeedle = needle("photo-bytes");
+
+        try (LogCaptor captor = new LogCaptor()) {
+            // LogCaptor가 생성자에서 root를 INFO로 올려 둔다. 그 위에서 다시 내려야
+            // 「구체 로거가 root보다 우선한다」는 전제가 실제로 시험된다.
+            // close()가 LogCaptor 생성 이전 레벨로 되돌리므로 여기서 따로 복원하지 않는다.
+            setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
+
+            mockMvc.perform(multipart("/api/auth/me/photo")
+                            .file(new org.springframework.mock.web.MockMultipartFile(
+                                    "file", "me.png", "image/png", pngContaining(photoNeedle)))
+                            .header("Authorization", bearer)
+                            .with(r -> {
+                                r.setMethod("PUT");
+                                return r;
+                            }))
+                    .andExpect(status().isOk());
+
+            // 버전이 파일 자리를 정하므로(자리 둘을 번갈아 쓴다) 표에서 읽어 넣는다 —
+            // 0을 박으면 사진이 반대 자리에 있을 때 404가 나고 이 검사는 아무것도 안 재게 된다.
+            long photoVersion = com.pokeclip.auth.profile.PhotoStorage.versionOf(
+                    userRepository.findById(user.getId()).orElseThrow().getProfilePhotoUpdatedAt());
+            String token = com.pokeclip.auth.profile.PhotoToken.issue(
+                    PhotoLocalStackFixture.TOKEN_SECRET, user.getId(), photoVersion, Instant.now());
+            mockMvc.perform(get("/api/profile-photos/" + user.getId() + "?token=" + token))
+                    .andExpect(status().isOk());
+
+            assertThat(captor.messages())
+                    .as("경로가 아예 안 돌았다. 그러면 아무것도 검사하지 않은 것이다")
+                    .anyMatch(m -> m.startsWith("auth.profile.photo.uploaded"));
+
+            assertNoSecretsIn(captor, List.of(photoNeedle));
+
+            // 사유마다 따로 단언한다. 한 체인에 묶으면 어느 줄이 걸렸든 첫 as()의 문구가 나와
+            // 원인을 잘못 짚게 된다.
+            String logged = renderAll(captor);
+            assertThat(logged)
+                    .as("S3 서명이 로그에 남았다 — application.yml의 창고 로거 세 줄 중 하나가 없다")
+                    .doesNotContain("AWS4-HMAC-SHA256");
+            assertThat(logged)
+                    .as("설정 record를 통째로 찍으면 표 서명키가 그대로 나간다")
+                    .doesNotContain("PhotoProperties[");
+            assertThat(logged)
+                    .as("꺼낸 그림을 통째로 찍으면 바이트가 배열 주소가 아니라 내용으로 나갈 수 있다")
+                    .doesNotContain("StoredPhoto[");
+        }
+    }
+
+    /** 앞 8바이트는 PNG 표식(내용 판정이 통과해야 창고까지 간다), 그 뒤에 바늘을 심는다. */
+    private static byte[] pngContaining(String needle) {
+        byte[] magic = {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+        byte[] tail = needle.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        byte[] body = new byte[magic.length + tail.length];
+        System.arraycopy(magic, 0, body, 0, magic.length);
+        System.arraycopy(tail, 0, body, magic.length, tail.length);
+        return body;
+    }
+
     @Test
     void 탐지기는_메시지에_있는_비밀을_잡는다() {
         String planted = needle("planted-in-message");
@@ -980,6 +1113,11 @@ class SecretLeakTest extends IntegrationTestSupport {
     /** 명시 레벨만 돌려준다. 안 박혀 있으면 null이다(부모에서 물려받는 상태). */
     private static Level levelOf(String loggerName) {
         return ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).getLevel();
+    }
+
+    /** 상속까지 반영한 실제 판정 레벨. 명시 레벨이 없으면 부모(끝은 root) 값이 온다. */
+    private static Level effectiveLevelOf(String loggerName) {
+        return ((ch.qos.logback.classic.Logger) LoggerFactory.getLogger(loggerName)).getEffectiveLevel();
     }
 
     private static void assertNoSecretsIn(LogCaptor captor, List<String> secrets) {
