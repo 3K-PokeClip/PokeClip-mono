@@ -13,7 +13,15 @@ public interface JumpCardRepository extends JpaRepository<JumpCard, Long> {
     /** 자연키 조회. {@code uq_jump_cards_window}와 같은 세 칸이다. */
     Optional<JumpCard> findByStreamIdAndSourceAndWindowStartMs(String streamId, JumpCardSource source, long windowStartMs);
 
-    /** 연결 직후 스냅샷. 숨긴 카드도 포함한다 — 숨김은 표시 여부이지 삭제가 아니다. */
+    /**
+     * 그 방송 카드 전부, 순번 순. 숨긴 카드도 포함한다 — 숨김은 표시 여부이지 삭제가 아니다.
+     *
+     * <p>🔴 <b>이름이 「연결 직후 스냅샷」이던 자리다. POK-174가 그 전송을 없앴다</b> —
+     * 통로는 지난 카드를 안 보내고 따라잡기는 <b>바로 아래 {@link #findPage}</b>가 맡는다.
+     * 그래서 이 메서드의 <b>운영 호출자가 0</b>이다(남긴 이유는 {@code JumpCardService.snapshotsOf} 주석).
+     * 네 줄 아래 javadoc이 「{@code event_seq}로 이어받으면 카드가 조용히 빠진다」고 말하는 것과
+     * 같은 사실이다 — <b>새 목록 문에서 이 정렬을 쓰지 마라</b>.
+     */
     List<JumpCard> findAllByStreamIdOrderByEventSeqAsc(String streamId);
 
     /**

@@ -2,11 +2,6 @@ package com.pokeclip.clip.jumpcard.stream;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
-import com.pokeclip.clip.delegation.BroadcastAccessGuard;
-import com.pokeclip.clip.jumpcard.JumpCardProperties;
-import com.pokeclip.clip.jumpcard.JumpCardRepository;
-import com.pokeclip.clip.jumpcard.JumpCardService;
-import com.pokeclip.clip.jumpcard.ThrowingSnapshotService;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.SseReader;
 import com.pokeclip.clip.support.TestIds;
@@ -14,16 +9,14 @@ import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
-import tools.jackson.databind.ObjectMapper;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doThrow;
 
 /**
  * <b>통로를 여는 도중 실패해도 연결 자리가 남으면 안 된다.</b>
@@ -36,38 +29,32 @@ import static org.assertj.core.api.Assertions.assertThat;
  * (인가 2차의 만료 토큰 불사 연결과 같은 실패 모양이다).
  *
  * <p>막는 방법은 <b>연결을 잡기 전에 던질 것을 다 던지는 것</b>이다 —
- * 컨트롤러가 {@code snapshotsOf()}를 {@code open()} 앞에서 부른다.
+ * {@code openWithSnapshot}이 {@code initial.get()}을 {@code open()} <b>앞에서</b> 부른다.
+ *
+ * <p>🔴 <b>POK-174가 실패를 심는 자리를 옮겼다.</b> 전에는 {@code JumpCardService.snapshotsOf}만
+ * 던지는 하위 클래스를 빈으로 덮어썼는데, 초기 카드 전송이 없어져 <b>그 메서드가 이 경로에서
+ * 아예 안 불린다</b>. 지금 자물쇠 안에서 도는 것은 방송 상태 조회 하나라 그쪽을 던지게 한다 —
+ * 실물 코드에서 그것이 던지는 상황은 커넥션 고갈·쿼리 타임아웃이다.
+ * (덕분에 {@code allow-bean-definition-overriding}과 시험용 하위 클래스가 함께 사라졌다.)
+ *
+ * <p>🔴 <b>자격 판정이 쓰는 조회는 안 건드린다</b>({@code findStreamerIdByStreamId}) —
+ * 그것까지 던지면 <b>연결 자리를 잡기도 전에</b> 끝나 이 시험이 아무것도 안 잰다.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = "spring.main.allow-bean-definition-overriding=true")
-@Import(StreamOpenFailureTest.FailingSnapshotConfig.class)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class StreamOpenFailureTest extends IntegrationTestSupport {
 
-    /**
-     * 운영 소스를 안 건드리고 빈만 덮는다 — 같은 이름({@code jumpCardService})으로 등록해
-     * 실물을 대체한다(인가 2차 감사가 CORS 주입에 쓴 방법과 같다).
-     */
-    @TestConfiguration
-    static class FailingSnapshotConfig {
+    private static final String RESOLVE = "/internal/editor-delegations/resolve";
 
-        @Bean
-        JumpCardService jumpCardService(JumpCardRepository cards, BroadcastRepository broadcasts,
-                                        JumpCardProperties properties, ObjectMapper mapper,
-                                        CardStreamRegistry registry, BroadcastAccessGuard guard) {
-            return new ThrowingSnapshotService(cards, broadcasts, properties, mapper, registry, guard);
-        }
-    }
+    @MockitoSpyBean
+    private BroadcastRepository broadcasts;
 
     private final int port;
     private final CardStreamRegistry registry;
-    private final BroadcastRepository broadcasts;
     private final JdbcTemplate jdbc;
 
-    StreamOpenFailureTest(@LocalServerPort int port, CardStreamRegistry registry,
-                          BroadcastRepository broadcasts, JdbcTemplate jdbc) {
+    StreamOpenFailureTest(@LocalServerPort int port, CardStreamRegistry registry, JdbcTemplate jdbc) {
         this.port = port;
         this.registry = registry;
-        this.broadcasts = broadcasts;
         this.jdbc = jdbc;
     }
 
@@ -76,11 +63,15 @@ class StreamOpenFailureTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
         broadcasts.save(Broadcast.startedNow("s-fail", TestIds.STREAMER, 1L, java.time.Instant.now(), null));
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
     @Test
-    void 스냅샷_읽기가_실패해도_연결_자리가_안_남는다() {
+    void 자물쇠_안_조회가_실패해도_연결_자리가_안_남는다() {
         int before = registry.connectionCount();
+        // 방송 픽스처를 심은 뒤에 건다 — 위 save가 이 조회를 안 쓰지만 순서를 뒤집을 이유가 없다.
+        doThrow(new IllegalStateException("방송 상태 읽기 실패(시험용)"))
+                .when(broadcasts).findByStreamId("s-fail");
 
         try (SseReader reader = new SseReader(
                 "http://localhost:" + port + "/api/clip/broadcasts/s-fail/events",
@@ -89,6 +80,8 @@ class StreamOpenFailureTest extends IntegrationTestSupport {
             assertThat(reader.statusCode()).as("실패는 실패대로 나가야 한다").isEqualTo(500);
         }
 
+        assertThat(AUTH.callCount())
+                .as("자격 판정 앞에서 죽었다 — 연결 자리를 잡는 데까지 가지도 않았다").isPositive();
         assertThat(registry.connectionCount())
                 .as("연결을 잡은 뒤 실패하면 그 자리는 프로세스가 죽을 때까지 남는다")
                 .isEqualTo(before);

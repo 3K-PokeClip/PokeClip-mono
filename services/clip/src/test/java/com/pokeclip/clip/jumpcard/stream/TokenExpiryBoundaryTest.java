@@ -8,6 +8,7 @@ import com.pokeclip.clip.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -47,6 +48,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         "pokeclip.jump-card.stream.max-total=100000"})
 class TokenExpiryBoundaryTest extends IntegrationTestSupport {
 
+    private static final String RESOLVE = "/internal/editor-delegations/resolve";
+
+    /**
+     * 이 클래스가 손으로 만드는 {@code sub}의 앞자리. <b>숫자여야 한다</b> — 자격 판정이
+     * 회원 번호를 {@code Long.parseLong}으로 읽으므로 {@code boundary-…} 같은 값은 auth에
+     * 닿기도 전에 「볼 수 없다」로 접힌다({@code TestIds} 주석). {@code TestIds.STREAMER}와도 다르다.
+     */
+    private static final String 요청자_앞자리 = "51";
+
     /** 오프셋을 훑는 횟수. 재현 때 12~15회에 한 번 창에 들어갔다. */
     private static final int ATTEMPTS = 300;
 
@@ -67,6 +77,8 @@ class TokenExpiryBoundaryTest extends IntegrationTestSupport {
     void 정리() {
         방송과_카드를_비운다(jdbc);
         broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.now(), null));
+        // 답을 안 걸면 자격 판정이 503이라 시한 가드에 닿지 못한다 — 이 클래스는 시한만 잰다.
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
     /**
@@ -81,7 +93,7 @@ class TokenExpiryBoundaryTest extends IntegrationTestSupport {
         for (int attempt = 0; attempt < ATTEMPTS; attempt++) {
             long offsetNanos = 200_000L + (attempt % 200) * 25_000L; // 0.2ms ~ 5.2ms
             try {
-                SseEmitter emitter = open(Instant.now().plusNanos(offsetNanos), "boundary-" + attempt);
+                SseEmitter emitter = open(Instant.now().plusNanos(offsetNanos), 요청자_앞자리 + attempt);
                 Long timeout = emitter.getTimeout();
                 outcome.merge(timeout == null ? "timeout=null" : "timeout>=1", 1, Integer::sum);
 
@@ -102,7 +114,7 @@ class TokenExpiryBoundaryTest extends IntegrationTestSupport {
     /** 경계 바로 위. 하한을 넓게 잡으면 멀쩡한 짧은 토큰까지 막힌다. */
     @Test
     void 남은_수명이_1ms_이상이면_연다() {
-        SseEmitter emitter = open(Instant.now().plus(Duration.ofSeconds(2)), "boundary-ok");
+        SseEmitter emitter = open(Instant.now().plus(Duration.ofSeconds(2)), 요청자_앞자리 + "01");
 
         assertThat(emitter.getTimeout()).isBetween(1L, 3000L);
     }
@@ -110,7 +122,7 @@ class TokenExpiryBoundaryTest extends IntegrationTestSupport {
     /** 양성 대조. 넉넉한 토큰은 설정 상한을 그대로 받는다. */
     @Test
     void 넉넉한_토큰은_설정값을_받는다() {
-        SseEmitter emitter = open(Instant.now().plus(Duration.ofMinutes(30)), "boundary-normal");
+        SseEmitter emitter = open(Instant.now().plus(Duration.ofMinutes(30)), 요청자_앞자리 + "02");
 
         assertThat(emitter.getTimeout()).isEqualTo(3000L);
     }
@@ -124,7 +136,7 @@ class TokenExpiryBoundaryTest extends IntegrationTestSupport {
      */
     @Test
     void 아주_먼_만료_토큰도_500이_아니라_설정값을_받는다() {
-        SseEmitter emitter = open(Instant.MAX, "boundary-far");
+        SseEmitter emitter = open(Instant.MAX, 요청자_앞자리 + "03");
 
         assertThat(emitter.getTimeout()).isEqualTo(3000L);
     }
@@ -175,7 +187,7 @@ class TokenExpiryBoundaryTest extends IntegrationTestSupport {
         Thread.sleep(20);   // 자물쇠를 확실히 쥔 뒤에 요청한다
 
         try {
-            assertThatThrownBy(() -> open(exp, "boundary-lock-wait"))
+            assertThatThrownBy(() -> open(exp, 요청자_앞자리 + "04"))
                     .as("자물쇠를 기다리는 동안 exp가 지났는데 열리면 그 연결은 만료 토큰으로 산다")
                     .isInstanceOf(TokenAlreadyExpiredException.class);
         } finally {
@@ -185,7 +197,7 @@ class TokenExpiryBoundaryTest extends IntegrationTestSupport {
 
     @Test
     void 이미_만료된_토큰은_401이다() {
-        assertThatThrownBy(() -> open(Instant.now().minusSeconds(30), "boundary-expired"))
+        assertThatThrownBy(() -> open(Instant.now().minusSeconds(30), 요청자_앞자리 + "05"))
                 .isInstanceOf(TokenAlreadyExpiredException.class);
     }
 
@@ -196,6 +208,6 @@ class TokenExpiryBoundaryTest extends IntegrationTestSupport {
                 .issuedAt(expiresAt.minus(Duration.ofMinutes(30)))
                 .expiresAt(expiresAt)
                 .build();
-        return controller.open("s-1", jwt, null, null).getBody();
+        return controller.open("s-1", jwt, null, null, new MockHttpServletRequest()).getBody();
     }
 }

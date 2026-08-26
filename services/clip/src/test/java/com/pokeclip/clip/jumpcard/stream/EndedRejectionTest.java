@@ -57,6 +57,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 })
 class EndedRejectionTest extends IntegrationTestSupport {
 
+    private static final String RESOLVE = "/internal/editor-delegations/resolve";
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final int port;
@@ -77,6 +79,7 @@ class EndedRejectionTest extends IntegrationTestSupport {
     @BeforeEach
     void 정리() {
         방송과_카드를_비운다(jdbc);
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
     @Test

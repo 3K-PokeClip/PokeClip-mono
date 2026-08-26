@@ -63,11 +63,15 @@ public class BroadcastListService {
      *
      * <p><b>값만 여기 있고 판정은 {@link ListLimit}에 있다</b> — 카드 목록 문이 같은 계약을
      * 웹에 약속하므로, 판정을 복사해 두면 한쪽을 고칠 때 다른 쪽이 조용히 갈린다(POK-174).
+     *
+     * <p><b>{@code private}인 것은 밖에서 읽는 곳이 없기 때문이다</b>(시험 포함, 2026-08-26 전수).
+     * <b>값의 정본은 커밋되는 {@code services/README.md}</b>이고 웹은 거기서 읽는다 —
+     * 코드에서 이 값을 참조해야 할 소비자가 생기는 날 넓힌다.
      */
-    public static final int DEFAULT_LIMIT = 20;
+    private static final int DEFAULT_LIMIT = 20;
 
     /** 넘겨 달라고 해도 여기서 깎는다(PRD 결정). */
-    public static final int MAX_LIMIT = 100;
+    private static final int MAX_LIMIT = 100;
 
     private final BroadcastRepository broadcasts;
     private final DelegationResolveClient delegation;

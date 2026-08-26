@@ -27,6 +27,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @TestPropertySource(properties = "pokeclip.jump-card.stream.heartbeat=PT1S")
 class JumpCardStreamHeartbeatTest extends IntegrationTestSupport {
 
+    private static final String RESOLVE = "/internal/editor-delegations/resolve";
+
     private final int port;
     private final BroadcastRepository broadcasts;
     private final JdbcTemplate jdbc;
@@ -42,6 +44,7 @@ class JumpCardStreamHeartbeatTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
         broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.now(), null));
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
     /** 앞단 프록시가 조용한 연결을 끊지 않게 하는 장치다. 안 오면 배포 후에 연결이 툭툭 끊긴다. */

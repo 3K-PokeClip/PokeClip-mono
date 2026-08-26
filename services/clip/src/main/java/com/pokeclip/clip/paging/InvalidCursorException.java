@@ -10,6 +10,10 @@ package com.pokeclip.clip.paging;
  *
  * <p>사유를 안 싣는다 — 어느 칸이 틀렸는지({@code cursor})는 조언이 알고, 그 안에서
  * 태그가 틀렸는지 칸 수가 틀렸는지는 <b>웹이 고칠 수 있는 정보가 아니다</b>(표시는 불투명하다).
+ *
+ * <p><b>그래서 메시지 셋은 응답에도 로그에도 안 나간다</b>(단언도 없다). 그것이 의도다 —
+ * 남는 자리는 <b>스택 트레이스</b>뿐이고, 세 갈래 중 어느 것이 터졌는지를 사람이 붙어서
+ * 볼 때만 쓴다. 이 값을 응답이나 로그로 내보내려면 <b>위 문단부터 다시 정해야 한다</b>.
  */
 public class InvalidCursorException extends RuntimeException {
 

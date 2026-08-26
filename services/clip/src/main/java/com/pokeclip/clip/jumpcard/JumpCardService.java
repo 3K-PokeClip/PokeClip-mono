@@ -31,11 +31,16 @@ public class JumpCardService {
     public record RecordResult(boolean created, JumpCardSnapshot card) {
     }
 
-    /** 웹이 개수를 안 주면 이만큼. 방송(20)보다 큰 것은 한 방송에 1,200장이 쌓인 실측이 있어서다(PRD). */
-    public static final int DEFAULT_LIST_LIMIT = 50;
+    /**
+     * 웹이 개수를 안 주면 이만큼. 방송(20)보다 큰 것은 한 방송에 1,200장이 쌓인 실측이 있어서다(PRD).
+     *
+     * <p><b>{@code private}인 것은 밖에서 읽는 곳이 없기 때문이다</b>(시험 포함, 2026-08-26 전수).
+     * 값의 정본은 커밋되는 {@code services/README.md}다 — {@code BroadcastListService}와 같은 규칙.
+     */
+    private static final int DEFAULT_LIST_LIMIT = 50;
 
     /** 넘겨 달라고 해도 여기서 깎는다(PRD 결정). 판정은 {@link ListLimit}에 있다 — 목록 문 둘이 나눠 쓴다. */
-    public static final int MAX_LIST_LIMIT = 200;
+    private static final int MAX_LIST_LIMIT = 200;
 
     private final JumpCardRepository cards;
     private final BroadcastRepository broadcasts;

@@ -52,6 +52,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 })
 class SlowSubscriberBackpressureTest extends IntegrationTestSupport {
 
+    private static final String RESOLVE = "/internal/editor-delegations/resolve";
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String INTERNAL = "test-only-internal-token-32bytes-long!!";
 
@@ -73,6 +75,7 @@ class SlowSubscriberBackpressureTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
         broadcasts.save(Broadcast.startedNow("s-slow", TestIds.STREAMER, 1L, Instant.now(), null));
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
     @Test

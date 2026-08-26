@@ -75,7 +75,7 @@ class CardStreamExecutorTest {
         }
     }
 
-    /** 넘치면 조용히 사라지지 않는다 — 재연결이 스냅샷으로 메우지만 원인은 남아야 한다. */
+    /** 넘치면 조용히 사라지지 않는다 — 메우는 것은 카드 목록 문이고(POK-174), 원인은 남아야 한다. */
     @Test
     void 큐가_차면_버리고_경고를_남긴다() throws Exception {
         CardStreamExecutor executor = new CardStreamExecutor(1, 1);

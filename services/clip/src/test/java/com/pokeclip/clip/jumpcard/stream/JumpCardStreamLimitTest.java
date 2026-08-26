@@ -2,7 +2,6 @@ package com.pokeclip.clip.jumpcard.stream;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
-import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.SseReader;
 import com.pokeclip.clip.support.TestIds;
@@ -40,17 +39,22 @@ import static org.mockito.Mockito.verify;
 })
 class JumpCardStreamLimitTest extends IntegrationTestSupport {
 
-    /** 「상한에 걸린 시도가 스냅샷을 읽었는가」를 세려고 감싼다. 세는 것 말고는 실물 그대로다. */
+    private static final String RESOLVE = "/internal/editor-delegations/resolve";
+
+    /**
+     * 「상한에 걸린 시도가 자물쇠 안에서 DB를 읽었는가」를 세려고 감싼다. 세는 것 말고는 실물 그대로다.
+     *
+     * <p>🔴 POK-174 전에는 {@code JumpCardService.snapshotsOf}를 셌는데 초기 카드 전송이 없어져
+     * 그 메서드가 이 경로에서 <b>아예 안 불린다</b> — 그대로 두면 이 갈래는 무엇을 고쳐도 초록이다.
+     */
     @MockitoSpyBean
-    private JumpCardService service;
+    private BroadcastRepository broadcasts;
 
     private final int port;
-    private final BroadcastRepository broadcasts;
     private final JdbcTemplate jdbc;
 
-    JumpCardStreamLimitTest(@LocalServerPort int port, BroadcastRepository broadcasts, JdbcTemplate jdbc) {
+    JumpCardStreamLimitTest(@LocalServerPort int port, JdbcTemplate jdbc) {
         this.port = port;
-        this.broadcasts = broadcasts;
         this.jdbc = jdbc;
     }
 
@@ -59,6 +63,7 @@ class JumpCardStreamLimitTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
         broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.now(), null));
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
     /** 503의 이유가 상한인지 서버 오류인지 구분하려면 본문의 scope까지 봐야 한다(문항 2·5). */
@@ -100,7 +105,7 @@ class JumpCardStreamLimitTest extends IntegrationTestSupport {
      * 흔들리지 않는다.
      */
     @Test
-    void 상한에_걸린_시도는_스냅샷을_읽지_않는다() {
+    void 상한에_걸린_시도는_자물쇠_안에서_DB를_읽지_않는다() {
         String token = TestTokens.access("2102");
         List<SseReader> opened = new ArrayList<>();
         try {
@@ -111,7 +116,7 @@ class JumpCardStreamLimitTest extends IntegrationTestSupport {
             }
 
             // 여기까지의 조회 4회는 정상이다. 이 뒤로 거절되는 것만 센다.
-            clearInvocations(service);
+            clearInvocations(broadcasts);
 
             for (int i = 0; i < 20; i++) {
                 try (SseReader rejected = open(token)) {
@@ -119,7 +124,7 @@ class JumpCardStreamLimitTest extends IntegrationTestSupport {
                 }
             }
 
-            verify(service, never()).snapshotsOf(anyString());
+            verify(broadcasts, never()).findByStreamId(anyString());
         } finally {
             opened.forEach(SseReader::close);
         }
