@@ -1,6 +1,7 @@
 package com.pokeclip.auth.profile;
 
 import com.pokeclip.auth.token.JwtProperties;
+import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.assertj.AssertableApplicationContext;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -89,6 +90,57 @@ class PhotoConfigurationTest {
             assertThat(context).hasNotFailed();
             assertThat(context).getBean(PhotoStorage.class).isSameAs(PhotoStorage.NONE);
         });
+    }
+
+    /**
+     * 🔴 <b>부팅 시점에 신호가 없으면 운영자가 503의 원인을 못 본다</b>(실기동 NG 1건).
+     * 조용히 {@code PhotoStorage.NONE}이 돌아가고 아무 데도 줄이 안 남는다.
+     * 태스크 7이 <b>요청 시점</b>에 WARN을 넣었지만 그것은 「사진을 이미 올린 회원」 갈래뿐이고,
+     * 창고를 한 번도 안 켠 배포에서는 그 줄조차 안 난다. chat-collector
+     * {@code ArchiveConfiguration}의 {@code chat.archive.disabled}와 같은 자리다.
+     *
+     * <p><b>{@code @SpringBootTest}로는 이 줄을 못 잡는다</b> — 컨텍스트가 캐시돼서 시험 메서드가
+     * 돌기 <b>전에</b> 이미 떠 있고, 그때는 LogCaptor가 아직 안 붙어 있다. 여기서는
+     * {@code ApplicationContextRunner}가 {@code run()} 안에서 컨텍스트를 만들어서 잡힌다
+     * (선례도 조립 메서드를 직접 부른다).
+     */
+    @Test
+    void 사진이_꺼지면_부팅_로그에_한_줄_남는다() {
+        try (LogCaptor logs = new LogCaptor()) {
+            runnerWith(photo("", ""), jwt(SHARED)).run(context ->
+                    assertThat(context).hasNotFailed());
+
+            assertThat(logs.messages())
+                    .as("운영자가 503의 원인을 로그로 볼 수 있어야 한다")
+                    .anyMatch(m -> m.equals("auth.profile.photo.disabled reason=no_bucket"));
+        }
+    }
+
+    /**
+     * 켜진 쪽에도 한 줄 남긴다 — 꺼짐만 찍으면 「줄이 없다」가 <b>꺼진 것</b>과
+     * <b>이 코드가 안 돈 것</b> 둘 다를 뜻하게 된다.
+     *
+     * <p>🔴 <b>창고 이름과 서명키는 안 찍는다.</b> 선례가 그렇고(「버킷 이름은 안 찍는다」),
+     * 서명키는 말할 것도 없다. 찍는 것은 붙는 방법(지역·엔드포인트 유무·path-style)뿐이다 —
+     * 창고에 못 붙을 때 운영자가 봐야 하는 것이 그 셋이다.
+     */
+    @Test
+    void 사진이_켜지면_부팅_로그에_한_줄_남고_창고_이름과_키는_안_실린다() {
+        String bucket = "some-private-bucket-name";
+        try (LogCaptor logs = new LogCaptor()) {
+            runnerWith(photo(bucket, SHARED), jwt("a-totally-different-login-secret-32b!!")).run(context ->
+                    assertThat(context).hasNotFailed());
+
+            String line = logs.messages().stream()
+                    .filter(m -> m.startsWith("auth.profile.photo.enabled"))
+                    .findFirst()
+                    .orElse(null);
+            assertThat(line).as("켜진 것도 한 줄로 보여야 한다").isNotNull();
+            assertThat(line)
+                    .as("창고 이름·서명키는 로그에 남기지 않는다")
+                    .doesNotContain(bucket)
+                    .doesNotContain(SHARED);
+        }
     }
 
     private static String rootMessageOf(AssertableApplicationContext context) {
