@@ -6,6 +6,7 @@ import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.SseReader;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.BeforeEach;
@@ -117,7 +118,7 @@ class OpenDoesNotBlockPublishTest extends IntegrationTestSupport {
      */
     @Test
     void 스냅샷은_컨트롤러가_이미_연_트랜잭션에서_읽힌다() {
-        broadcasts.save(Broadcast.startedNow("s-tx", "u-1", 903L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-tx", TestIds.STREAMER, 903L, Instant.now(), null));
 
         AtomicReference<String> 트랜잭션이름 = new AtomicReference<>();
         doAnswer(invocation -> {
@@ -125,7 +126,7 @@ class OpenDoesNotBlockPublishTest extends IntegrationTestSupport {
             return invocation.callRealMethod();
         }).when(service).snapshotsOf(anyString());
 
-        try (SseReader reader = open("s-tx", TestTokens.access("tx"))) {
+        try (SseReader reader = open("s-tx", TestTokens.access("2201"))) {
             assertThat(reader.statusCode()).as("본문=%s", reader.body()).isEqualTo(200);
         }
 
@@ -150,7 +151,7 @@ class OpenDoesNotBlockPublishTest extends IntegrationTestSupport {
      */
     @Test
     void 풀이_바쁜_동안_연결을_열어도_카드_발행이_막히지_않는다() throws Exception {
-        broadcasts.save(Broadcast.startedNow("s-blk", "u-1", 901L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-blk", TestIds.STREAMER, 901L, Instant.now(), null));
         카드를_심는다("s-blk");
         // 재는 쪽이 DB를 쓰면 무엇 때문에 막혔는지 갈리지 않는다. 미리 읽어 둔다.
         JumpCardSnapshot 카드 = registry == null ? null : service.snapshotsOf("s-blk").get(0);
@@ -162,7 +163,7 @@ class OpenDoesNotBlockPublishTest extends IntegrationTestSupport {
         assertThat(점유시작.await(10, TimeUnit.SECONDS)).as("풀이 바빠야 이 시험이 무언가를 잰다").isTrue();
 
         AtomicReference<SseReader> 연결 = new AtomicReference<>();
-        Thread 여는쪽 = new Thread(() -> 연결.set(open("s-blk", TestTokens.access("blk"))), "여는쪽");
+        Thread 여는쪽 = new Thread(() -> 연결.set(open("s-blk", TestTokens.access("2202"))), "여는쪽");
         여는쪽.start();
 
         Duration 최악 = Duration.ZERO;

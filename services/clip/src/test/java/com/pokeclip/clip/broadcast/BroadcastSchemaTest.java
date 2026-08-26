@@ -1,6 +1,7 @@
 package com.pokeclip.clip.broadcast;
 
 import com.pokeclip.clip.support.IntegrationTestSupport;
+import com.pokeclip.clip.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.api.Test;
@@ -41,7 +42,7 @@ class BroadcastSchemaTest extends IntegrationTestSupport {
 
     @Test
     void 명부에_방송을_저장하고_읽는다() {
-        broadcasts.save(Broadcast.startedNow("stream-1", "streamer-1", 1L,
+        broadcasts.save(Broadcast.startedNow("stream-1", TestIds.STREAMER, 1L,
                 Instant.parse("2026-08-18T00:00:00Z"), null));
 
         assertThat(broadcasts.findByStreamId("stream-1")).isPresent().get()
@@ -55,7 +56,7 @@ class BroadcastSchemaTest extends IntegrationTestSupport {
 
     @Test
     void 종료_placeholder는_시작_시각이_비어_있다() {
-        broadcasts.save(Broadcast.endedPlaceholder("stream-2", "streamer-1", 5L,
+        broadcasts.save(Broadcast.endedPlaceholder("stream-2", TestIds.STREAMER, 5L,
                 Instant.parse("2026-08-18T01:00:00Z")));
 
         assertThat(broadcasts.findByStreamId("stream-2")).isPresent().get()

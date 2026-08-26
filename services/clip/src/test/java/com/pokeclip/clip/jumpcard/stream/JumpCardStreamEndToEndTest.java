@@ -7,6 +7,7 @@ import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.SseReader;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -63,16 +64,16 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     void 정리() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-1", "u-1", 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.now(), null));
     }
 
     @Test
     void 연결_직후_그_방송_카드_전부가_순번_순으로_오고_숨긴_것은_hidden_true다() {
         long first = service.record("s-1", auto("evt-1", 1_000_000L)).card().id();
         service.record("s-1", auto("evt-2", 2_000_000L));
-        service.hide(first, "u-9");   // 뒤에 바뀌었으니 순번이 뒤로 간다
+        service.hide(first, "1702");   // 뒤에 바뀌었으니 순번이 뒤로 간다
 
-        try (SseReader reader = open("s-1", TestTokens.access("e2e-snapshot"))) {
+        try (SseReader reader = open("s-1", TestTokens.access("1701"))) {
             assertThat(reader.statusCode()).isEqualTo(200);
             assertThat(reader.awaitNamed(2, Duration.ofSeconds(3))).as("PRD 기준이 3초다").isTrue();
 
@@ -99,11 +100,11 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
      */
     @Test
     void 카드가_0장인_방송에_붙어도_헤더가_바로_온다() {
-        broadcasts.save(Broadcast.startedNow("s-empty", "u-1", 3L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-empty", TestIds.STREAMER, 3L, Instant.now(), null));
         assertThat(service.snapshotsOf("s-empty")).as("카드가 0장이어야 이 갈래를 잰다").isEmpty();
 
         long startedAt = System.nanoTime();
-        try (SseReader reader = open("s-empty", TestTokens.access("t11-empty"))) {
+        try (SseReader reader = open("s-empty", TestTokens.access("1703"))) {
             // SseReader 생성자가 헤더를 받을 때까지 막힌다 — 여기까지 온 시간이 곧 헤더 지연이다.
             Duration untilHeaders = Duration.ofNanos(System.nanoTime() - startedAt);
 
@@ -121,7 +122,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         service.record("s-1", auto("evt-1", 1_000_000L));
         service.record("s-1", auto("evt-2", 2_000_000L));
 
-        try (SseReader reader = open("s-1", TestTokens.access("e2e-reconnect"),
+        try (SseReader reader = open("s-1", TestTokens.access("1704"),
                 Map.of("Last-Event-ID", "999"))) {
             assertThat(reader.awaitNamed(2, Duration.ofSeconds(3))).isTrue();
             assertThat(reader.named()).hasSize(2);
@@ -140,11 +141,11 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         // 전용 방송을 쓴다. connectionCount()는 서버 전체 수라 다른 시험이 열어 둔 연결이
         // 섞이면 "0이 된다"를 못 잰다 — 그 연결들은 다음 쓰기가 있어야 정리되기 때문이다.
         // 그래서 기준선을 재고, 이 시험이 연 자리 하나가 돌아오는 것만 본다.
-        broadcasts.save(Broadcast.startedNow("s-reopen", "u-1", 2L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-reopen", TestIds.STREAMER, 2L, Instant.now(), null));
         JumpCardSnapshot card = service.record("s-reopen", auto("evt-drain", 100_000L)).card();
 
         int baseline = registry.connectionCount();
-        String token = TestTokens.access("e2e-reopen");
+        String token = TestTokens.access("1705");
         try (SseReader reader = open("s-reopen", token)) {
             assertThat(reader.statusCode()).isEqualTo(200);
             assertThat(reader.awaitNamed(1, Duration.ofSeconds(3))).isTrue();
@@ -173,24 +174,24 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         try (SseReader none = new SseReader(url("s-1"), Map.of())) {
             assertThat(none.statusCode()).isEqualTo(401);
         }
-        try (SseReader bad = open("s-1", TestTokens.tampered(TestTokens.access("e2e-badsig")))) {
+        try (SseReader bad = open("s-1", TestTokens.tampered(TestTokens.access("1706")))) {
             assertThat(bad.statusCode()).isEqualTo(401);
         }
     }
 
     @Test
     void 없는_방송은_404다() {
-        try (SseReader reader = open("s-없음", TestTokens.access("e2e-nostream"))) {
+        try (SseReader reader = open("s-없음", TestTokens.access("1707"))) {
             assertThat(reader.statusCode()).isEqualTo(404);
         }
     }
 
     @Test
     void 끝난_방송에_붙으면_스냅샷_뒤_ended가_오고_닫힌다() {
-        broadcasts.save(Broadcast.endedPlaceholder("s-ended", "u-1", 9L, Instant.now()));
+        broadcasts.save(Broadcast.endedPlaceholder("s-ended", TestIds.STREAMER, 9L, Instant.now()));
         service.record("s-ended", auto("evt-1", 1_000_000L));
 
-        try (SseReader reader = open("s-ended", TestTokens.access("e2e-ended"))) {
+        try (SseReader reader = open("s-ended", TestTokens.access("1708"))) {
             assertThat(reader.awaitNamed(2, Duration.ofSeconds(3))).isTrue();
             assertThat(reader.named()).extracting(SseReader.Event::name).containsExactly("card", "ended");
             assertThat(reader.awaitClosed(Duration.ofSeconds(3)))
@@ -209,7 +210,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     @Test
     void 토큰_만료_시각에_연결이_닫힌다() {
         service.record("s-1", auto("evt-exp", 1_000_000L));
-        String shortLived = TestTokens.access("e2e-exp", Instant.now().plusSeconds(2));
+        String shortLived = TestTokens.access("1709", Instant.now().plusSeconds(2));
 
         try (SseReader reader = open("s-1", shortLived)) {
             assertThat(reader.statusCode()).as("본문=%s", reader.body()).isEqualTo(200);
@@ -224,7 +225,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     /** PRD 성공 기준이 3초다. {@code await}가 3초 안에 통과한 것이 아니라 <b>실제 시각차</b>를 잰다. */
     @Test
     void 카드를_넣으면_3초_안에_연결된_화면에_card가_온다() {
-        try (SseReader reader = open("s-1", TestTokens.access("t10-live"))) {
+        try (SseReader reader = open("s-1", TestTokens.access("1710"))) {
             assertThat(reader.statusCode()).isEqualTo(200);
             서두를_틔운다(reader);
 
@@ -251,16 +252,16 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     void 집으면_다른_연결에도_card가_온다() {
         long id = service.record("s-1", auto("evt-claim", 3_000_000L)).card().id();
 
-        try (SseReader watcher = open("s-1", TestTokens.access("t10-watcher"))) {
+        try (SseReader watcher = open("s-1", TestTokens.access("1711"))) {
             assertThat(watcher.awaitNamed(1, Duration.ofSeconds(3))).isTrue();
             int before = watcher.named().size();
 
-            service.claim(id, "t10-claimer");
+            service.claim(id, "1712");
 
             assertThat(watcher.awaitName("card", Duration.ofSeconds(3))).isTrue();
             awaitUntil(() -> watcher.named().size() > before, Duration.ofSeconds(3));
             assertThat(MAPPER.readTree(마지막_card(watcher).data()).get("claimedBy").asString())
-                    .isEqualTo("t10-claimer");
+                    .isEqualTo("1712");
         }
     }
 
@@ -273,13 +274,13 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     @Test
     void 놓으면_비어_있는_카드가_나간다() {
         long id = service.record("s-1", auto("evt-release", 4_000_000L)).card().id();
-        service.claim(id, "t10-owner");
+        service.claim(id, "1714");
 
-        try (SseReader watcher = open("s-1", TestTokens.access("t10-release"))) {
+        try (SseReader watcher = open("s-1", TestTokens.access("1713"))) {
             assertThat(watcher.awaitNamed(1, Duration.ofSeconds(3))).isTrue();
             int before = watcher.named().size();
 
-            service.release(id, "t10-owner");
+            service.release(id, "1714");
 
             awaitUntil(() -> watcher.named().size() > before, Duration.ofSeconds(3));
             assertThat(MAPPER.readTree(마지막_card(watcher).data()).get("claimedBy").isNull())
@@ -293,7 +294,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
      */
     @Test
     void 트랜잭션이_되감기면_발행되지_않는다() {
-        try (SseReader reader = open("s-1", TestTokens.access("t10-rollback"))) {
+        try (SseReader reader = open("s-1", TestTokens.access("1715"))) {
             assertThat(reader.statusCode()).isEqualTo(200);
             서두를_틔운다(reader);
 
@@ -327,7 +328,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
      */
     @Test
     void broadcastEnded를_부르면_ended가_오고_닫힌다() {
-        try (SseReader reader = open("s-1", TestTokens.access("t10-ended"))) {
+        try (SseReader reader = open("s-1", TestTokens.access("1716"))) {
             서두를_틔운다(reader);
 
             registry.broadcastEnded("s-1");
@@ -362,7 +363,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         int before = registry.connectionCount();
 
         // skew 허용치(60초) 안쪽이라 인증은 통과한다 — 그래서 컨트롤러의 가드가 유일한 방어선이다.
-        String expired = TestTokens.access("t10-expired", Instant.now().minusSeconds(30));
+        String expired = TestTokens.access("1717", Instant.now().minusSeconds(30));
 
         try (SseReader reader = open("s-1", expired)) {
             assertThat(reader.statusCode()).as("본문=%s", reader.body()).isEqualTo(401);

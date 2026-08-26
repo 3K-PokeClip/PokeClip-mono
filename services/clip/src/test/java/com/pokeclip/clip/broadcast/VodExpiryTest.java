@@ -1,6 +1,7 @@
 package com.pokeclip.clip.broadcast;
 
 import com.pokeclip.clip.support.IntegrationTestSupport;
+import com.pokeclip.clip.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
@@ -167,7 +168,7 @@ class VodExpiryTest extends IntegrationTestSupport {
                         INSERT INTO broadcasts
                             (stream_id, streamer_id, status, started_at, ended_at, last_sequence, vod_expires_at)
                         VALUES (?, ?, ?, ?, ?, ?, NULL)""",
-                streamId, "streamer-1", status.dbValue(),
+                streamId, TestIds.STREAMER, status.dbValue(),
                 startedAt == null ? null : OffsetDateTime.ofInstant(startedAt, ZoneOffset.UTC),
                 endedAt == null ? null : OffsetDateTime.ofInstant(endedAt, ZoneOffset.UTC),
                 1L);
@@ -185,11 +186,11 @@ class VodExpiryTest extends IntegrationTestSupport {
 
     private static LifecycleEnvelope started(String streamId, long sequence) {
         return new LifecycleEnvelope(1, streamId + "-" + sequence, "broadcast.started",
-                STARTED_AT, streamId, "streamer-1", sequence, "trace-vod", MAPPER.createObjectNode());
+                STARTED_AT, streamId, TestIds.STREAMER, sequence, "trace-vod", MAPPER.createObjectNode());
     }
 
     private static LifecycleEnvelope ended(String streamId, long sequence, Instant at) {
         return new LifecycleEnvelope(1, streamId + "-" + sequence, "broadcast.ended",
-                at, streamId, "streamer-1", sequence, "trace-vod", MAPPER.createObjectNode());
+                at, streamId, TestIds.STREAMER, sequence, "trace-vod", MAPPER.createObjectNode());
     }
 }

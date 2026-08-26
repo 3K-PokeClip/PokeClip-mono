@@ -5,6 +5,7 @@ import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.SseReader;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -76,18 +77,18 @@ class StripeHeadOfLineTest extends IntegrationTestSupport {
 
     @Test
     void 스냅샷_300장을_보내는_동안_같은_줄의_다른_연결이_3초_안에_받는다() {
-        broadcasts.save(Broadcast.startedNow("s-hol-big", "u-1", 801L, Instant.now(), null));
-        broadcasts.save(Broadcast.startedNow("s-hol-small", "u-1", 802L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-hol-big", TestIds.STREAMER, 801L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-hol-small", TestIds.STREAMER, 802L, Instant.now(), null));
         카드를_심는다("s-hol-big", SNAPSHOT_CARDS);
         카드를_심는다("s-hol-small", 1);
 
-        try (SseReader small = open("s-hol-small", TestTokens.access("hol-small"))) {
+        try (SseReader small = open("s-hol-small", TestTokens.access("1801"))) {
             assertThat(small.awaitNamed(1, Duration.ofSeconds(5)))
                     .as("작은 연결이 자리를 잡은 뒤라야 밀림을 잰다").isTrue();
             int before = small.named().size();
 
             Instant openedBig = Instant.now();
-            try (SseReader big = open("s-hol-big", TestTokens.access("hol-big"))) {
+            try (SseReader big = open("s-hol-big", TestTokens.access("1802"))) {
                 // 큰 스냅샷 태스크가 지금 스트라이프를 잡고 있다. 그 줄에 하나 더 밀어 넣는다.
                 Instant published = Instant.now();
                 registry.publish(service.snapshotsOf("s-hol-small").get(0));

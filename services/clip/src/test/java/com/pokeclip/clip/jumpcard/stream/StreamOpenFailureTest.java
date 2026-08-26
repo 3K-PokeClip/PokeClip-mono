@@ -8,6 +8,7 @@ import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.jumpcard.ThrowingSnapshotService;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.SseReader;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,7 +74,7 @@ class StreamOpenFailureTest extends IntegrationTestSupport {
     void 정리() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-fail", "u-1", 1L, java.time.Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-fail", TestIds.STREAMER, 1L, java.time.Instant.now(), null));
     }
 
     @Test
@@ -82,7 +83,7 @@ class StreamOpenFailureTest extends IntegrationTestSupport {
 
         try (SseReader reader = new SseReader(
                 "http://localhost:" + port + "/api/clip/broadcasts/s-fail/events",
-                Map.of("Authorization", "Bearer " + TestTokens.access("open-failure")))) {
+                Map.of("Authorization", "Bearer " + TestTokens.access("1401")))) {
 
             assertThat(reader.statusCode()).as("실패는 실패대로 나가야 한다").isEqualTo(500);
         }

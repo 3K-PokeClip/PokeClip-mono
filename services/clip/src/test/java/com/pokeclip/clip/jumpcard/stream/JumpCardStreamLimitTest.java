@@ -5,6 +5,7 @@ import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.SseReader;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -57,13 +58,13 @@ class JumpCardStreamLimitTest extends IntegrationTestSupport {
     void 정리() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-1", "u-1", 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.now(), null));
     }
 
     /** 503의 이유가 상한인지 서버 오류인지 구분하려면 본문의 scope까지 봐야 한다(문항 2·5). */
     @Test
     void 사용자당_상한을_넘기면_503이고_본문이_이유를_말한다() {
-        String token = TestTokens.access("limit-user");
+        String token = TestTokens.access("2101");
         List<SseReader> opened = new ArrayList<>();
         try {
             for (int i = 0; i < 4; i++) {
@@ -100,7 +101,7 @@ class JumpCardStreamLimitTest extends IntegrationTestSupport {
      */
     @Test
     void 상한에_걸린_시도는_스냅샷을_읽지_않는다() {
-        String token = TestTokens.access("limit-nosnapshot");
+        String token = TestTokens.access("2102");
         List<SseReader> opened = new ArrayList<>();
         try {
             for (int i = 0; i < 4; i++) {

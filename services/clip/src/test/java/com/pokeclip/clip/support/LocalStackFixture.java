@@ -119,8 +119,8 @@ public final class LocalStackFixture {
     public static String startedJson(String eventId, String streamId, long sequence) {
         return """
                 {"schemaVersion":1,"eventId":"%s","eventType":"broadcast.started",
-                 "occurredAt":"2026-08-18T00:00:00Z","streamId":"%s","streamerId":"streamer-1",
+                 "occurredAt":"2026-08-18T00:00:00Z","streamId":"%s","streamerId":"%s",
                  "sequence":%d,"traceId":"trace-1","payload":{"trackManifest":{"manifestVersion":3}}}
-                """.formatted(eventId, streamId, sequence);
+                """.formatted(eventId, streamId, TestIds.STREAMER, sequence);
     }
 }

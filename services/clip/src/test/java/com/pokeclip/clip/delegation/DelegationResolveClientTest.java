@@ -1,6 +1,7 @@
 package com.pokeclip.clip.delegation;
 
 import com.pokeclip.clip.config.InternalApiProperties;
+import com.pokeclip.clip.support.FakeAuth;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

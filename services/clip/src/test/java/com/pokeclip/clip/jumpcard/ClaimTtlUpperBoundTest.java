@@ -5,6 +5,7 @@ import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.SseReader;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -61,7 +62,7 @@ class ClaimTtlUpperBoundTest extends IntegrationTestSupport {
     @BeforeEach
     void 정리() {
         방송과_카드를_비운다(jdbc);
-        broadcasts.save(Broadcast.startedNow("s-ttl-max", "u-1", 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-ttl-max", TestIds.STREAMER, 1L, Instant.now(), null));
     }
 
     @Test
@@ -70,17 +71,17 @@ class ClaimTtlUpperBoundTest extends IntegrationTestSupport {
 
         long cardId = service.record("s-ttl-max", auto()).card().id();
 
-        JumpCardSnapshot claimed = service.claim(cardId, "u-A");
+        JumpCardSnapshot claimed = service.claim(cardId, "1102");
 
         assertThat(claimed.claimedBy()).as("점유 SQL이 interval을 만들지 못하면 여기 오기 전에 500이다")
-                .isEqualTo("u-A");
+                .isEqualTo("1102");
         assertThat(claimed.claimExpiresAt())
                 .as("Instant.plus가 상한을 못 넘기면 여기서 DateTimeException이 난다")
                 .isEqualTo(claimed.claimedAt().plus(MAX));
 
         try (SseReader reader = new SseReader(
                 "http://localhost:" + port + "/api/clip/broadcasts/s-ttl-max/events",
-                Map.of("Authorization", "Bearer " + TestTokens.access("ttl-max-reader")))) {
+                Map.of("Authorization", "Bearer " + TestTokens.access("1101")))) {
 
             assertThat(reader.statusCode())
                     .as("집힌 카드가 있는 방송의 스냅샷이 곧 claimedAt.plus(ttl)를 부르는 자리다")

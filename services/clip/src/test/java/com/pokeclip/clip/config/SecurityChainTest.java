@@ -65,7 +65,7 @@ class SecurityChainTest extends IntegrationTestSupport {
      */
     @Test
     void exp가_없는_토큰은_401이다() {
-        assertThat(get("/api/clip/nothing", bearer(TestTokens.accessWithoutExpiry("expless"))).statusCode())
+        assertThat(get("/api/clip/nothing", bearer(TestTokens.accessWithoutExpiry("1001"))).statusCode())
                 .isEqualTo(401);
     }
 

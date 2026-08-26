@@ -6,6 +6,7 @@ import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.SseReader;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.BeforeEach;
@@ -80,12 +81,12 @@ class EndedRejectionTest extends IntegrationTestSupport {
 
     @Test
     void 큐가_차서_ended를_못_보내면_자리를_바로_회수한다() throws Exception {
-        broadcasts.save(Broadcast.startedNow("s-full", "u-1", 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-full", TestIds.STREAMER, 1L, Instant.now(), null));
         String big = "x".repeat(20_000);
 
         try (LogCaptor logs = new LogCaptor();
              Socket socket = new Socket("localhost", port)) {
-            안_읽는_연결을_연다(socket, "s-full", "ended-rejected");
+            안_읽는_연결을_연다(socket, "s-full", "1901");
             awaitUntil(() -> registry.connectionCount() == 1, Duration.ofSeconds(3),
                     "연결이 명부에 안 올랐다");
 
@@ -120,11 +121,11 @@ class EndedRejectionTest extends IntegrationTestSupport {
     /** 대조군 — 같은 설정에서 큐에 자리가 있으면 실제로 보내고 닫는다. 「항상 빼는 것」이 아니다. */
     @Test
     void 큐에_자리가_있으면_ended가_실제로_가고_닫힌다() {
-        broadcasts.save(Broadcast.startedNow("s-room", "u-1", 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-room", TestIds.STREAMER, 1L, Instant.now(), null));
 
         try (LogCaptor logs = new LogCaptor();
              SseReader reader = new SseReader("http://localhost:" + port + "/api/clip/broadcasts/s-room/events",
-                     Map.of("Authorization", "Bearer " + TestTokens.access("ended-room")))) {
+                     Map.of("Authorization", "Bearer " + TestTokens.access("1902")))) {
             assertThat(reader.await(1, Duration.ofSeconds(3))).isTrue();
 
             registry.broadcastEnded("s-room");

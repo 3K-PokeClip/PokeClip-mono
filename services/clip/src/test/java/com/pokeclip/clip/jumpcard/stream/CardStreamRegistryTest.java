@@ -94,10 +94,10 @@ class CardStreamRegistryTest {
     @Test
     void 사용자당_상한을_넘기면_거절한다() {
         CardStreamRegistry registry = registry(props(2, 50, 500));
-        registry.open("s-1", "u-1", Duration.ofMinutes(1));
-        registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        registry.open("s-1", "2401", Duration.ofMinutes(1));
+        registry.open("s-1", "2401", Duration.ofMinutes(1));
 
-        assertThatThrownBy(() -> registry.open("s-2", "u-1", Duration.ofMinutes(1)))
+        assertThatThrownBy(() -> registry.open("s-2", "2401", Duration.ofMinutes(1)))
                 .as("방송이 달라도 사람 기준으로 센다")
                 .isInstanceOf(StreamLimitExceededException.class)
                 .satisfies(e -> assertThat(((StreamLimitExceededException) e).scope()).isEqualTo("user"));
@@ -106,18 +106,18 @@ class CardStreamRegistryTest {
     @Test
     void 방송당_상한과_전체_상한도_센다() {
         CardStreamRegistry perStream = registry(props(500, 2, 500));
-        perStream.open("s-1", "u-1", Duration.ofMinutes(1));
-        perStream.open("s-1", "u-2", Duration.ofMinutes(1));
-        assertThatThrownBy(() -> perStream.open("s-1", "u-3", Duration.ofMinutes(1)))
+        perStream.open("s-1", "2401", Duration.ofMinutes(1));
+        perStream.open("s-1", "2402", Duration.ofMinutes(1));
+        assertThatThrownBy(() -> perStream.open("s-1", "2403", Duration.ofMinutes(1)))
                 .isInstanceOf(StreamLimitExceededException.class)
                 .satisfies(e -> assertThat(((StreamLimitExceededException) e).scope()).isEqualTo("stream"));
         perStream.stop();
         executor.shutdown();
 
         CardStreamRegistry total = registry(props(500, 500, 2));
-        total.open("s-1", "u-1", Duration.ofMinutes(1));
-        total.open("s-2", "u-2", Duration.ofMinutes(1));
-        assertThatThrownBy(() -> total.open("s-3", "u-3", Duration.ofMinutes(1)))
+        total.open("s-1", "2401", Duration.ofMinutes(1));
+        total.open("s-2", "2402", Duration.ofMinutes(1));
+        assertThatThrownBy(() -> total.open("s-3", "2403", Duration.ofMinutes(1)))
                 .isInstanceOf(StreamLimitExceededException.class)
                 .satisfies(e -> assertThat(((StreamLimitExceededException) e).scope()).isEqualTo("total"));
     }
@@ -129,7 +129,7 @@ class CardStreamRegistryTest {
     @Test
     void 콜백이_불리면_자리가_돌아온다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
         assertThat(registry.connectionCount()).isEqualTo(1);
 
         emitter.fireCompletion();
@@ -140,9 +140,9 @@ class CardStreamRegistryTest {
     @Test
     void publish는_그_방송의_연결에만_간다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter a = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
-        RecordingEmitter b = (RecordingEmitter) registry.open("s-1", "u-2", Duration.ofMinutes(1));
-        RecordingEmitter other = (RecordingEmitter) registry.open("s-2", "u-3", Duration.ofMinutes(1));
+        RecordingEmitter a = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
+        RecordingEmitter b = (RecordingEmitter) registry.open("s-1", "2402", Duration.ofMinutes(1));
+        RecordingEmitter other = (RecordingEmitter) registry.open("s-2", "2403", Duration.ofMinutes(1));
 
         registry.publish(snapshot("s-1", 41L));
 
@@ -156,7 +156,7 @@ class CardStreamRegistryTest {
     @Test
     void sendInitial은_카드_전부를_보내고_끝난_방송이면_ended_뒤에_닫는다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter live = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        RecordingEmitter live = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
         registry.sendInitial(live, List.of(snapshot("s-1", 1L), snapshot("s-1", 2L)), false);
         awaitUntil(() -> live.named().size() == 2);
         // 이름 있는 것만 센다 — sendInitial은 헤더를 즉시 커밋시키려고 주석("ok")을 먼저 보낸다.
@@ -164,7 +164,7 @@ class CardStreamRegistryTest {
         assertThat(live.events().get(0).comment()).as("첫 쓰기가 주석이어야 헤더가 바로 나간다").isEqualTo("ok");
         assertThat(live.completed()).as("진행 중인 방송이면 열어 둔다").isFalse();
 
-        RecordingEmitter ended = (RecordingEmitter) registry.open("s-2", "u-2", Duration.ofMinutes(1));
+        RecordingEmitter ended = (RecordingEmitter) registry.open("s-2", "2402", Duration.ofMinutes(1));
         registry.sendInitial(ended, List.of(snapshot("s-2", 3L)), true);
         awaitUntil(() -> ended.named().size() == 2);
         assertThat(ended.named()).extracting(RecordingEmitter.Event::name).containsExactly("card", "ended");
@@ -186,7 +186,7 @@ class CardStreamRegistryTest {
     void 초기_스냅샷은_카드가_많아도_큐를_한_칸만_쓴다() {
         executor = new CardStreamExecutor(1, 2);
         registry = new CardStreamRegistry(executor, props(4, 50, 500), mapper, d -> new RecordingEmitter());
-        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
         List<JumpCardSnapshot> cards =
                 IntStream.rangeClosed(1, 200).mapToObj(i -> snapshot("s-1", i)).toList();
 
@@ -216,8 +216,8 @@ class CardStreamRegistryTest {
     @Test
     void broadcastEnded는_그_방송_연결에_ended를_보내고_닫는다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter mine = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
-        RecordingEmitter other = (RecordingEmitter) registry.open("s-2", "u-2", Duration.ofMinutes(1));
+        RecordingEmitter mine = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
+        RecordingEmitter other = (RecordingEmitter) registry.open("s-2", "2402", Duration.ofMinutes(1));
 
         registry.broadcastEnded("s-1");
 
@@ -275,7 +275,7 @@ class CardStreamRegistryTest {
 
         List<JumpCardSnapshot> cards =
                 IntStream.rangeClosed(1, 5).mapToObj(i -> snapshot("s-1", i)).toList();
-        registry.openWithSnapshot("s-1", "u-1", () -> Duration.ofMinutes(1),
+        registry.openWithSnapshot("s-1", "2401", () -> Duration.ofMinutes(1),
                 () -> new CardStreamRegistry.InitialSnapshot(cards, false));
         ender[0].join(5_000);
 
@@ -297,8 +297,8 @@ class CardStreamRegistryTest {
     @Test
     void ping은_모든_연결에_주석을_보낸다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter a = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
-        RecordingEmitter b = (RecordingEmitter) registry.open("s-2", "u-2", Duration.ofMinutes(1));
+        RecordingEmitter a = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
+        RecordingEmitter b = (RecordingEmitter) registry.open("s-2", "2402", Duration.ofMinutes(1));
 
         registry.ping();
 
@@ -326,7 +326,7 @@ class CardStreamRegistryTest {
             }
         };
         registry = new CardStreamRegistry(executor, props(4, 50, 500), mapper, d -> new RecordingEmitter());
-        registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        registry.open("s-1", "2401", Duration.ofMinutes(1));
 
         assertThatCode(registry::ping)
                 .as("예외가 새면 scheduleAtFixedRate가 이 작업을 취소하고 다시는 안 돈다")
@@ -349,8 +349,8 @@ class CardStreamRegistryTest {
     @Test
     void 연결이_없어진_방송의_순번표를_하트비트가_버린다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter gone = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
-        registry.open("s-2", "u-2", Duration.ofMinutes(1));
+        RecordingEmitter gone = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
+        registry.open("s-2", "2402", Duration.ofMinutes(1));
         registry.publish(snapshot("s-1", 41L));
         registry.publish(snapshot("s-2", 42L));
         assertThat(registry.trackedStreamCount()).as("두 방송 다 순번을 들고 있다").isEqualTo(2);
@@ -376,13 +376,13 @@ class CardStreamRegistryTest {
     @Test
     void 순번표를_버린_뒤_새_연결에도_낡은_순번은_안_간다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter gone = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        RecordingEmitter gone = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
         registry.publish(snapshot("s-1", 7L, 100L));
         gone.fireCompletion();
         registry.ping();
         assertThat(registry.trackedStreamCount()).as("여기가 0이 아니면 아래가 옛 표로 통과한다").isZero();
 
-        RecordingEmitter fresh = (RecordingEmitter) registry.open("s-1", "u-2", Duration.ofMinutes(1));
+        RecordingEmitter fresh = (RecordingEmitter) registry.open("s-1", "2402", Duration.ofMinutes(1));
         registry.publish(snapshot("s-1", 7L, 200L));
         registry.publish(snapshot("s-1", 7L, 150L));
         registry.publish(snapshot("s-1", 8L, 300L));
@@ -397,7 +397,7 @@ class CardStreamRegistryTest {
     @Test
     void 같은_연결의_이벤트는_순서대로_온다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
 
         for (int i = 1; i <= 50; i++) {
             registry.publish(snapshot("s-1", i));

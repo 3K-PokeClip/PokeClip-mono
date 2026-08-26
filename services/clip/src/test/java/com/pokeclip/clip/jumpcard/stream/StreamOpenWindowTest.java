@@ -5,6 +5,7 @@ import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.SseReader;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -79,7 +80,7 @@ class StreamOpenWindowTest extends IntegrationTestSupport {
 
     @Test
     void 스냅샷을_읽은_뒤_연결이_열리는_사이에_카드가_커밋돼도_그_연결에_온다() {
-        broadcasts.save(Broadcast.startedNow("s-win-card", "u-1", 701L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-win-card", TestIds.STREAMER, 701L, Instant.now(), null));
         post2A("s-win-card", "evt-before", 1_000_000L);
 
         AtomicInteger inWindowStatus = new AtomicInteger();
@@ -90,7 +91,7 @@ class StreamOpenWindowTest extends IntegrationTestSupport {
             잠깐(500);
         });
 
-        try (SseReader reader = open("s-win-card", TestTokens.access("win-card"))) {
+        try (SseReader reader = open("s-win-card", TestTokens.access("2001"))) {
             assertThat(reader.statusCode()).as("본문=%s", reader.body()).isEqualTo(200);
             awaitUntil(() -> 카드창시작(reader).contains(5_000_000L), Duration.ofSeconds(5));
             assertThat(카드창시작(reader))
@@ -103,7 +104,7 @@ class StreamOpenWindowTest extends IntegrationTestSupport {
 
     @Test
     void 스냅샷을_읽은_뒤_연결이_열리는_사이에_방송이_끝나도_ended를_받는다() {
-        broadcasts.save(Broadcast.startedNow("s-win-end", "u-1", 702L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-win-end", TestIds.STREAMER, 702L, Instant.now(), null));
         post2A("s-win-end", "evt-1", 1_000_000L);
 
         열린_창에서("s-win-end", () -> {
@@ -116,7 +117,7 @@ class StreamOpenWindowTest extends IntegrationTestSupport {
             잠깐(500);
         });
 
-        try (SseReader reader = open("s-win-end", TestTokens.access("win-end"))) {
+        try (SseReader reader = open("s-win-end", TestTokens.access("2002"))) {
             assertThat(reader.statusCode()).as("본문=%s", reader.body()).isEqualTo(200);
             assertThat(reader.awaitName("ended", Duration.ofSeconds(5)))
                     .as("표는 ended인데 ended를 못 받으면 그 연결은 토큰 만료까지 살아 있고 "
@@ -141,7 +142,7 @@ class StreamOpenWindowTest extends IntegrationTestSupport {
      */
     @Test
     void 창에서_방송이_끝나고_알림이_지나가도_재조회가_ended를_잡는다() {
-        broadcasts.save(Broadcast.startedNow("s-win-stale", "u-1", 703L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-win-stale", TestIds.STREAMER, 703L, Instant.now(), null));
         post2A("s-win-stale", "evt-1", 1_000_000L);
 
         열린_창에서("s-win-stale", () -> {
@@ -158,7 +159,7 @@ class StreamOpenWindowTest extends IntegrationTestSupport {
             }
         });
 
-        try (SseReader reader = open("s-win-stale", TestTokens.access("win-stale"))) {
+        try (SseReader reader = open("s-win-stale", TestTokens.access("2003"))) {
             assertThat(reader.statusCode()).as("본문=%s", reader.body()).isEqualTo(200);
             assertThat(reader.awaitName("ended", Duration.ofSeconds(5)))
                     .as("재조회가 낡은 값을 보면 ended=false로 열려 이 연결은 토큰 만료까지 산다")

@@ -5,6 +5,7 @@ import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
 import com.pokeclip.clip.support.IntegrationTestSupport;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -71,7 +72,7 @@ class SlowSubscriberBackpressureTest extends IntegrationTestSupport {
     void 정리() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-slow", "u-1", 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-slow", TestIds.STREAMER, 1L, Instant.now(), null));
     }
 
     @Test
@@ -84,7 +85,7 @@ class SlowSubscriberBackpressureTest extends IntegrationTestSupport {
             out.write(("GET /api/clip/broadcasts/s-slow/events HTTP/1.1\r\n"
                     + "Host: localhost:" + port + "\r\n"
                     + "Accept: text/event-stream\r\n"
-                    + "Authorization: Bearer " + TestTokens.access("slow-subscriber") + "\r\n"
+                    + "Authorization: Bearer " + TestTokens.access("1301") + "\r\n"
                     + "\r\n").getBytes(StandardCharsets.UTF_8));
             out.flush();
             // 여기서부터 getInputStream()을 한 번도 안 읽는다. 그것이 조건 ②다.

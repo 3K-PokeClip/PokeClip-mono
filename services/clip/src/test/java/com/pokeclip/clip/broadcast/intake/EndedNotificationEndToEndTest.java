@@ -10,6 +10,7 @@ import com.pokeclip.clip.jumpcard.stream.CardStreamRegistry;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.LocalStackFixture;
 import com.pokeclip.clip.support.SseReader;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -68,7 +69,7 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM jump_cards");
         events.deleteAllInBatch();
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-queue", "u-1", 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-queue", TestIds.STREAMER, 1L, Instant.now(), null));
     }
 
     @Test
@@ -80,7 +81,7 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
 
         try (SseReader reader = new SseReader(
                 "http://localhost:" + port + "/api/clip/broadcasts/s-queue/events",
-                Map.of("Authorization", "Bearer " + TestTokens.access("t10-queue")))) {
+                Map.of("Authorization", "Bearer " + TestTokens.access("2301")))) {
 
             assertThat(reader.awaitNamed(1, Duration.ofSeconds(3)))
                     .as("초기 스냅샷이 서야 연결이 실제로 선 것이다").isTrue();
@@ -125,7 +126,7 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
 
         try (SseReader reader = new SseReader(
                 "http://localhost:" + port + "/api/clip/broadcasts/s-queue/events",
-                Map.of("Authorization", "Bearer " + TestTokens.access("t10-delete-fail")))) {
+                Map.of("Authorization", "Bearer " + TestTokens.access("2302")))) {
 
             assertThat(reader.awaitNamed(1, Duration.ofSeconds(3)))
                     .as("초기 스냅샷이 서야 연결이 실제로 선 것이다").isTrue();
@@ -155,8 +156,8 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
     private static String 종료_편지(String eventId, String streamId, long sequence) {
         return """
                 {"schemaVersion":1,"eventId":"%s","eventType":"broadcast.ended",
-                 "occurredAt":"2026-08-23T01:00:00Z","streamId":"%s","streamerId":"u-1",
+                 "occurredAt":"2026-08-23T01:00:00Z","streamId":"%s","streamerId":"%s",
                  "sequence":%d,"traceId":"trace-1","payload":{}}
-                """.formatted(eventId, streamId, sequence);
+                """.formatted(eventId, streamId, TestIds.STREAMER, sequence);
     }
 }

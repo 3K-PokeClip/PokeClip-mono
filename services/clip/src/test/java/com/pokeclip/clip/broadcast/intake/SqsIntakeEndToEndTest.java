@@ -8,6 +8,7 @@ import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.broadcast.BroadcastStatus;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.LocalStackFixture;
+import com.pokeclip.clip.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.api.Test;
@@ -124,9 +125,9 @@ class SqsIntakeEndToEndTest extends IntegrationTestSupport {
     private static String endedJson(String eventId, String streamId, long sequence) {
         return """
                 {"schemaVersion":1,"eventId":"%s","eventType":"broadcast.ended",
-                 "occurredAt":"2026-08-18T01:00:00Z","streamId":"%s","streamerId":"streamer-1",
+                 "occurredAt":"2026-08-18T01:00:00Z","streamId":"%s","streamerId":"%s",
                  "sequence":%d,"traceId":"trace-1","payload":{}}
-                """.formatted(eventId, streamId, sequence);
+                """.formatted(eventId, streamId, TestIds.STREAMER, sequence);
     }
 
     /**
