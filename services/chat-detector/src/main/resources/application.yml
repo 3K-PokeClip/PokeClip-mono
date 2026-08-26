@@ -2,6 +2,50 @@ spring:
   application:
     name: pokeclip-chat-detector
 
+  datasource:
+    # 셋에 기본값을 주지 않는다(POK-161). public 저장소의 .env.example 값으로 DB에 붙는
+    # 창을 막는다. DB_HOST·DB_PORT는 .env에 없는 값이라 기본값을 남긴다.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
+    hikari:
+      data-source-properties:
+        # 🔴 JDBC 반개방(연결은 받고 응답 없음)은 이것만 끊는다 — queryTimeout·Hikari
+        # connection-timeout은 20~35초 넘게 매달린다(services/CLAUDE.md 실측).
+        # 이 서버는 DB 접근이 전부 스케줄러 스레드 위에서 도므로 반개방 한 번이면
+        # 판정이 영영 멈추는데 아무 신호가 없다(계획 검증 F11).
+        # 정수로 주면 Hikari가 조용히 무시한다 — yml에서 String으로 바인딩돼 먹는다.
+        socketTimeout: 10
+
+  flyway:
+    enabled: true
+    # 네 서버가 DB 하나를 공유한다. 기본 이력 테이블 이름을 쓰면 나중에 뜬 쪽이 남의 이력을
+    # 자기 것으로 읽고 부팅에 실패한다. 수집 서버가 이미 flyway_schema_history_chat을 쓰므로
+    # 이름을 갈라야 한다 — 그쪽 이름은 안 바꾼다(바꾸면 쌓인 이력이 끊긴다).
+    # 번호 대역은 V4xx다. V1xx auth · V2xx clip · V3xx chat-collector.
+    table: flyway_schema_history_chat_detector
+    # 공유 DB에서 어느 서버가 먼저 뜰지 정해져 있지 않다. 남이 이미 표를 만든 DB에 자기 이력
+    # 테이블 없이 뜨면 "Found non-empty schema(s) ... but no schema history table"로 죽는다.
+    # Testcontainers는 매번 빈 DB라 이걸로 안 잡혀서 IntegrationTestSupport가 더미 표를 심는다.
+    baseline-on-migrate: true
+    baseline-version: 0
+
+  http:
+    clients:
+      # 복수형이다. 단수형 spring.http.client.*는 4.0.0부터 아무것도 바인딩하지 않고 오류도
+      # 없어 시한이 조용히 사라진다(auth·chat-collector·clip에서 세 번 밟은 함정).
+      # 두 창구가 연결만 받고 답을 안 하면 이 시한이 유일한 탈출구다.
+      connect-timeout: 2s
+      read-timeout: 3s
+
+  # 🔴 @Scheduled가 셋인데(판정 1초 · 치우기 10분 · 늦은도착 10분) 기본 풀 크기가 1이다
+  # (계획 검증 F9가 실제 컨텍스트에서 getPoolSize()=1을 확인했다). 하나면 치우기가 도는
+  # 동안 판정이 통째로 멈춘다 — 보관 기간이 지난 수십만 줄 DELETE가 그 자리다.
+  task:
+    scheduling:
+      pool:
+        size: ${DETECTION_SCHEDULER_POOL_SIZE:3}
+
 server:
   port: 8084
 
@@ -10,3 +54,63 @@ management:
     web:
       exposure:
         include: health
+
+pokeclip:
+  internal-api:
+    # 이 서버는 /internal/** 문을 열지 않는다. 이 토큰은 보낼 때만 쓴다 —
+    # clip과 수집 서버의 문을 여는 열쇠이고 셋이 같은 값이다.
+    token: ${INTERNAL_API_TOKEN:}
+
+  clip-client:
+    # 카드를 넣는 곳. compose 네트워크에서는 서비스 이름이 곧 호스트다.
+    base-url: ${CLIP_BASE_URL:http://localhost:8081}
+    # 재시도를 포함한 총 시도 횟수. 무한 재시도를 안 하는 이유는 ClipClientProperties javadoc에.
+    max-attempts: ${CLIP_MAX_ATTEMPTS:3}
+
+  collector-client:
+    # 채팅 시각을 영상 위치로 바꿔 주는 창구(POK-92).
+    base-url: ${COLLECTOR_BASE_URL:http://localhost:8083}
+
+  detection:
+    # 한 바퀴 도는 간격. 발행 창(5초)보다 촘촘해야 창이 밀리지 않는다.
+    cycle-interval: ${DETECTION_CYCLE_INTERVAL:1s}
+    # 집계할 창 크기들. 판정·발행은 아래 publish-window-ms 하나로만 한다.
+    window-sizes-ms: ${DETECTION_WINDOW_SIZES_MS:3000,5000,10000}
+    publish-window-ms: ${DETECTION_PUBLISH_WINDOW_MS:5000}
+    # 창이 지나고 이만큼 더 기다린 뒤에 집계한다. 전달 지연(실측 중앙값 175ms)과 재연결
+    # 지연으로 늦게 도착하는 채팅을 놓치지 않기 위해서다.
+    #
+    # 🔴 이 값이 우리 구간 지연에 그대로 더해진다. 목표가 3초인데 2초를 여기서 쓰면
+    # 나머지 일에 1초밖에 안 남는다 — 비중이 커서 실측 없이 고정하면 안 된다.
+    # K·M·목표치와 같은 이유로 설정이다(사용자 결정).
+    #
+    # 조정 근거는 detect.late_arrivals 로그가 만든다 — 이 값을 넘겨 도착한 채팅이
+    # 몇 건인지 주기적으로 센다. 0에 가까우면 줄여서 지연을 벌 수 있고, 많으면 늘려야 한다.
+    # 그 숫자가 없으면 영영 2초에 머문다.
+    window-grace: ${DETECTION_WINDOW_GRACE:2s}
+    # 늦게 온 채팅을 세어 요약을 찍는 간격. 유예값 조정의 근거를 모은다.
+    late-report-interval: ${DETECTION_LATE_REPORT_INTERVAL:10m}
+    # 이 시간 안에 채팅이 온 방송만 센다. 끝난 방송은 채팅이 끊겨 저절로 빠진다.
+    active-stream-window: ${DETECTION_ACTIVE_STREAM_WINDOW:60s}
+    # 🔴 한 바퀴가 되돌아보며 다시 집계하는 기간. 베이스라인 기간(15분)과 다른 값이다 —
+    # 15분으로 두면 매 바퀴 15분치를 다시 세느라 100 방송에서 1초 주기를 못 지킨다
+    # (계획 검증 F8: 방송 하나 8ms 실측 → 바쁜 방송 100개면 8.3초). 그 밀림이 그대로
+    # 「우리 구간 지연」에 더해진다. 1분이면 한 바퀴가 밀리거나 잠깐 끊겨도 메워진다.
+    collect-lookback: ${DETECTION_COLLECT_LOOKBACK:1m}
+    # "평소"를 보는 기간. 연구노트 "10~20분"의 가운데. 멘토 협업 미결이라 설정으로 둔다.
+    baseline-window: ${DETECTION_BASELINE_WINDOW:15m}
+    # 평소를 말하려면 창이 최소 이만큼 쌓여야 한다. 이 수에 못 미치면 카드를 안 낸다
+    # (연구노트 6절의 워밍업 — 확정 정책이다). 켜자마자는 아무 채팅이나 무한대 배율이 된다.
+    warmup-windows: ${DETECTION_WARMUP_WINDOWS:24}
+    # 배율 임계. ADR-011 "평균 대비 2~3배". 멘토 협업 미결이라 임시값이다.
+    # 🔴 바꿀 때는 높은 쪽이 안전하다 — 가짜 카드는 기능을 안 쓰게 만들고, 놓친 것은
+    # 편집자가 원래 하던 대로 찾으면 된다. 손해가 대칭이 아니다(PRD 결정).
+    spike-ratio: ${DETECTION_SPIKE_RATIO:3.0}
+    # 절대 최소 건수. 작은 채널의 2건→4건 같은 허수 배율을 자른다. 근거 없는 임시값이다.
+    min-count: ${DETECTION_MIN_COUNT:10}
+    # 판정에 쓰는 지표. MESSAGE 또는 CHATTER. 기본은 MESSAGE다 — 말한 사람 수는
+    # 기능명세 C7(M5)이라 이번엔 집계만 하고 판정엔 안 쓴다.
+    metric: ${DETECTION_METRIC:MESSAGE}
+    # 집계 줄 보관 기간. 지나면 치운다.
+    retention: ${DETECTION_RETENTION:24h}
+    sweep-interval: ${DETECTION_SWEEP_INTERVAL:10m}
