@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -35,5 +37,30 @@ class ProfileSurvivesReloginTest extends ProfileTestSupport {
 
         assertThat(again.getName()).isEqualTo("내가고친이름");
         assertThat(again.getProfileImageUrl()).as("사진 칸도 같은 규칙이다").isEqualTo(photo);
+    }
+
+    /**
+     * 올린 사진에도 같은 규칙이 걸린다. 재로그인이 구글 사진을 다시 채워 넣으면 <b>올린 사진이
+     * 밀려나는 것이 아니라 둘이 동시에 있게 되고</b>, 어느 쪽을 보여줄지가 그날의 우연이 된다.
+     *
+     * <p>표에만 만든다 — 이 컨텍스트는 사진이 꺼져 있어 창구로는 못 올린다. 재는 것은 창고가 아니라
+     * {@code findOrCreate}가 표를 덮는지 여부다.
+     */
+    @Test
+    void 올려둔_사진은_구글이_다른_사진을_보내와도_안_덮인다() {
+        User created = newUser();
+        String sub = created.getGoogleSub();
+        String key = "profile-photos/" + created.getId();
+        User loaded = userRepository.findById(created.getId()).orElseThrow();
+        loaded.attachPhoto(key, Instant.now());
+        userRepository.save(loaded);
+
+        User again = userService.findOrCreate(sub, created.getEmail(), "구글이름바뀜",
+                "https://lh3.googleusercontent.com/other");
+
+        assertThat(again.getProfilePhotoKey()).as("올린 사진을 가리키는 칸이 그대로여야 한다").isEqualTo(key);
+        assertThat(again.getProfileImageUrl())
+                .as("구글 주소가 다시 채워지면 사진 둘이 공존해 어느 쪽이 보일지가 우연이 된다")
+                .isNull();
     }
 }

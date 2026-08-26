@@ -8,7 +8,9 @@ import com.pokeclip.auth.api.dto.MeResponse;
 import com.pokeclip.auth.api.dto.RefreshRequest;
 import com.pokeclip.auth.api.dto.TokenResponse;
 import com.pokeclip.auth.api.dto.UpdateNameRequest;
+import com.pokeclip.auth.profile.PhotoUrls;
 import com.pokeclip.auth.token.TokenService;
+import com.pokeclip.auth.user.User;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -22,6 +24,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Instant;
+
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
@@ -29,6 +33,7 @@ public class AuthController {
 
     private final AuthService authService;
     private final TokenService tokenService;
+    private final PhotoUrls photoUrls;
 
     @PostMapping("/google")
     public TokenResponse loginWithGoogle(@Valid @RequestBody GoogleLoginRequest request) {
@@ -37,7 +42,8 @@ public class AuthController {
 
     @GetMapping("/me")
     public MeResponse me(@AuthenticationPrincipal Jwt jwt) {
-        return MeResponse.from(authService.me(userId(jwt)));
+        User user = authService.me(userId(jwt));
+        return MeResponse.from(user, photoUrls.of(user, Instant.now()));
     }
 
     /**
@@ -46,7 +52,8 @@ public class AuthController {
      */
     @PatchMapping("/me")
     public MeResponse updateName(@AuthenticationPrincipal Jwt jwt, @RequestBody UpdateNameRequest request) {
-        return MeResponse.from(authService.updateName(userId(jwt), request.name()));
+        User user = authService.updateName(userId(jwt), request.name());
+        return MeResponse.from(user, photoUrls.of(user, Instant.now()));
     }
 
     /**

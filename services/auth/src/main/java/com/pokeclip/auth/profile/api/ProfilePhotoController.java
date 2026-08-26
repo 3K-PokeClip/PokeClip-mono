@@ -1,8 +1,12 @@
 package com.pokeclip.auth.profile.api;
 
+import com.pokeclip.auth.AuthException;
+import com.pokeclip.auth.AuthFailure;
 import com.pokeclip.auth.api.dto.MeResponse;
 import com.pokeclip.auth.profile.PhotoToken;
+import com.pokeclip.auth.profile.PhotoUrls;
 import com.pokeclip.auth.profile.ProfilePhotoService;
+import com.pokeclip.auth.user.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
@@ -16,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.Instant;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -34,11 +39,14 @@ import java.util.concurrent.TimeUnit;
 public class ProfilePhotoController {
 
     private final ProfilePhotoService service;
+    private final PhotoUrls photoUrls;
 
     /** 회원 번호를 받지 않는다 — 토큰의 주인만 자기 것을 고친다. */
     @PutMapping("/api/auth/me/photo")
     public MeResponse upload(@AuthenticationPrincipal Jwt jwt, @RequestParam("file") MultipartFile file) {
-        return MeResponse.from(service.upload(userId(jwt), file));
+        // 올린 직후 응답이 바로 새 주소를 실어야 화면이 한 번 더 묻지 않고 새 그림을 건다.
+        User user = service.upload(userId(jwt), file);
+        return MeResponse.from(user, photoUrls.of(user, Instant.now()));
     }
 
     /**
@@ -65,7 +73,29 @@ public class ProfilePhotoController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    /**
+     * {@code AuthController.userId}와 같은 모양으로 감싼다 — 한쪽만 감싸면 같은 입력이 한쪽에서는
+     * 401이고 다른 쪽에서는 500이 된다. {@code TokenSubjectRejectionTest}가 둘을 나란히 잰다.
+     *
+     * <p>오늘은 닿지 않는다 — 우리 발급기는 {@code sub}에 항상 회원 번호를 넣고 서명 검증을 통과한
+     * 토큰만 여기까지 온다. <b>아무도 안 밟기 때문에 더 갈라지기 쉬운 자리다.</b>
+     *
+     * <p>🔴 <b>이 모양인 것은 아홉 중 둘뿐이다.</b> auth에서 {@code Long.valueOf(jwt.getSubject())}를
+     * 하는 자리를 전수로 세면 <b>아홉 자리(여덟 파일)</b>이고, 나머지 <b>일곱 자리(여섯 파일)</b>는
+     * 아직 안 감쌌다 —
+     * {@code ChzzkLinkController:60} · {@code YoutubeLinkController:70} ·
+     * <b>{@code StreamKeyController:27}·{@code :38}(한 파일에 두 자리다)</b> ·
+     * {@code PairingCodeController:30} · {@code EditorDelegationController:43} ·
+     * {@code EditorInvitationController:74}.
+     * <b>파일 수로 세지 마라</b> — 이 문장을 처음 쓸 때 여섯 파일을 여섯 자리로 세어 하나를 빠뜨렸다.
+     * POK-207이 자기가 만든 창구 둘만 맞춘 것이고 <b>「쌍둥이를 다 맞췄다」가 아니다.</b>
+     * 그 일곱은 auth의 「알려진 구멍」에 적어 뒀다. {@code sub} 규약을 바꿀 일이 생기면 아홉을 함께 본다.
+     */
     private static Long userId(Jwt jwt) {
-        return Long.valueOf(jwt.getSubject());
+        try {
+            return Long.valueOf(jwt.getSubject());
+        } catch (NumberFormatException e) {
+            throw new AuthException(AuthFailure.ACCESS_TOKEN_SUBJECT_INVALID, "토큰의 주체를 읽을 수 없다", e);
+        }
     }
 }

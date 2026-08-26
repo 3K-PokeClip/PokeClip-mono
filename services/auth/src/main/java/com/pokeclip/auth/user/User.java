@@ -61,6 +61,15 @@ public class User {
     }
 
     /**
+     * 올린 사진이 있는가. {@code profilePhotoKey}가 사진 유무의 유일한 근거다 —
+     * V110의 컬럼 주석과 같은 말이고, {@code attachPhoto}가 두 칸을 한 번에 채우므로
+     * 한쪽만 차 있는 상태는 코드로 만들어지지 않는다.
+     */
+    public boolean hasUploadedPhoto() {
+        return profilePhotoKey != null;
+    }
+
+    /**
      * 표시 이름을 바꾼다. <b>트림·길이 판정은 부르는 쪽이 끝낸 뒤 넘긴다</b> — 엔티티가 형식 규칙을
      * 들고 있으면 같은 규칙이 서비스 검증과 두 벌이 되고, 한쪽만 고쳐지는 날이 온다.
      *

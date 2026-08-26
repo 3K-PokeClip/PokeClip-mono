@@ -31,6 +31,9 @@ public final class PhotoLocalStackFixture {
     /** 로그인 토큰과 <b>다른 값</b>이어야 한다 — PhotoToken이 그 분리에 기대고 있다. */
     public static final String TOKEN_SECRET = "test-only-photo-secret-32bytes-long!!";
 
+    /** 사진 주소의 앞부분. 회원 정보가 <b>절대 주소</b>를 준다는 것을 재려면 검사가 이 값을 알아야 한다. */
+    public static final String BASE_URL = "http://localhost:8082";
+
     private static final LocalStackContainer LOCALSTACK =
             new LocalStackContainer("localstack/localstack:4.14.0").withServices("s3");
 
@@ -58,7 +61,7 @@ public final class PhotoLocalStackFixture {
         // LocalStack은 가상 호스트 이름을 못 푼다 — path-style이 아니면 붙지 못한다.
         registry.add("pokeclip.profile-photo.force-path-style", () -> "true");
         registry.add("pokeclip.profile-photo.token-secret", () -> TOKEN_SECRET);
-        registry.add("pokeclip.profile-photo.base-url", () -> "http://localhost:8082");
+        registry.add("pokeclip.profile-photo.base-url", () -> BASE_URL);
     }
 
     public static String region() {
@@ -81,7 +84,7 @@ public final class PhotoLocalStackFixture {
 
     private static PhotoProperties properties() {
         return new PhotoProperties(BUCKET, LOCALSTACK.getRegion(), LOCALSTACK.getEndpoint().toString(),
-                true, TOKEN_SECRET, "http://localhost:8082");
+                true, TOKEN_SECRET, BASE_URL);
     }
 
     /** LocalStack 기동 직후 첫 요청이 401로 튄 적이 있다(선례 1/4회, 재현 못 함) — 3회·500ms 재시도. */
