@@ -1,6 +1,8 @@
 package com.pokeclip.auth.profile;
 
 import com.pokeclip.auth.token.JwtProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -14,13 +16,27 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class PhotoConfiguration {
 
+    private static final Logger log = LoggerFactory.getLogger(PhotoConfiguration.class);
+
     @Bean
     PhotoStorage photoStorage(PhotoProperties properties, JwtProperties jwtProperties) {
         if (!properties.enabled()) {
+            // 🔴 조용히 꺼지면 운영자가 사진 창구의 503을 보고도 원인을 로그에서 못 찾는다
+            // (실기동 검증 NG). 요청 시점의 WARN(PhotoUrls)은 「사진을 이미 올린 회원」 갈래뿐이라,
+            // 창고를 한 번도 안 켠 배포에서는 그 줄조차 안 난다.
+            // chat-collector ArchiveConfiguration의 chat.archive.disabled와 같은 자리·같은 모양이다.
+            log.info("auth.profile.photo.disabled reason=no_bucket");
             return PhotoStorage.NONE;
         }
         requireDistinctSecrets(properties, jwtProperties);
-        return new S3PhotoStorage(PhotoS3Clients.create(properties), properties.bucket());
+        S3PhotoStorage storage = new S3PhotoStorage(PhotoS3Clients.create(properties), properties.bucket());
+        // 켜진 쪽도 한 줄 남긴다 — 꺼짐만 찍으면 「줄이 없다」가 <b>꺼진 것</b>과
+        // <b>이 코드가 안 돈 것</b> 둘 다를 뜻하게 된다.
+        // 창고 이름·서명키는 안 싣는다(선례와 같다). 창고에 못 붙을 때 운영자가 봐야 하는 것은
+        // 「어디로·어떻게 붙는가」뿐이다.
+        log.info("auth.profile.photo.enabled region={} endpointOverride={} forcePathStyle={}",
+                properties.region(), properties.hasEndpoint(), properties.forcePathStyle());
+        return storage;
     }
 
     /**
