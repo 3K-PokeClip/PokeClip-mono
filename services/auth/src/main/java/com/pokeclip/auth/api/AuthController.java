@@ -7,18 +7,24 @@ import com.pokeclip.auth.api.dto.GoogleLoginRequest;
 import com.pokeclip.auth.api.dto.MeResponse;
 import com.pokeclip.auth.api.dto.RefreshRequest;
 import com.pokeclip.auth.api.dto.TokenResponse;
+import com.pokeclip.auth.api.dto.UpdateNameRequest;
+import com.pokeclip.auth.profile.PhotoUrls;
 import com.pokeclip.auth.token.TokenService;
+import com.pokeclip.auth.user.User;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.time.Instant;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -27,6 +33,7 @@ public class AuthController {
 
     private final AuthService authService;
     private final TokenService tokenService;
+    private final PhotoUrls photoUrls;
 
     @PostMapping("/google")
     public TokenResponse loginWithGoogle(@Valid @RequestBody GoogleLoginRequest request) {
@@ -35,7 +42,18 @@ public class AuthController {
 
     @GetMapping("/me")
     public MeResponse me(@AuthenticationPrincipal Jwt jwt) {
-        return MeResponse.from(authService.me(userId(jwt)));
+        User user = authService.me(userId(jwt));
+        return MeResponse.from(user, photoUrls.of(user, Instant.now()));
+    }
+
+    /**
+     * 회원 번호를 본문으로 받지 않는다 — 토큰의 주인만 자기 것을 고친다.
+     * 사진은 모양이 달라(파일) 별도 창구가 된다.
+     */
+    @PatchMapping("/me")
+    public MeResponse updateName(@AuthenticationPrincipal Jwt jwt, @RequestBody UpdateNameRequest request) {
+        User user = authService.updateName(userId(jwt), request.name());
+        return MeResponse.from(user, photoUrls.of(user, Instant.now()));
     }
 
     /**

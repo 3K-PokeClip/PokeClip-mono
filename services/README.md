@@ -41,7 +41,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 
 ## 두 서버가 같이 쓰는 것은 어디 두나
 
-**자리는 `web-support/` 하나다** — 웹 인프라(CORS 허용 메서드 GET·POST·DELETE · 상관 ID 필터).
+**자리는 `web-support/` 하나다** — 웹 인프라(CORS 허용 메서드 GET·POST·PUT·PATCH·DELETE · 상관 ID 필터).
 테스트 도우미(`LogCaptor`)는 같은 모듈의 `testFixtures`에 있다.
 
 `web-support`는 이 앱들의 패키지 밖이라 컴포넌트 스캔에 안 걸린다 —
@@ -131,12 +131,32 @@ set -a && . ../.env && set +a
 | `chat-collector` | `./gradlew :chat-collector:bootRun` | http://localhost:8083/actuator/health |
 | `chat-detector` | `./gradlew :chat-detector:bootRun` | http://localhost:8084/actuator/health |
 
-**`auth`는 환경변수 없이는 일부러 부팅에 실패한다. 열다섯이고, 두 갈래로 나뉜다.**
+**`auth`가 읽는 환경변수는 스물이고, 세 갈래로 나뉜다. 갈래마다 「없으면 어떻게 되나」가 다르다.**
 
-| 갈래 | 변수 | 어디서 얻나 |
-|---|---|---|
-| **앱 시크릿 열둘** | `JWT_SECRET` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `CORS_ALLOWED_ORIGINS` · `SECRET_STORE_KEY`(base64 32바이트) · `INTERNAL_API_TOKEN` · `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` · `CHZZK_REDIRECT_URI` · `YOUTUBE_CLIENT_ID` · `YOUTUBE_CLIENT_SECRET` · `YOUTUBE_REDIRECT_URI` | **`.env.example`에 없다** — public 저장소라 예시 값도 두지 않는다. 각자 받아서 넣는다 |
-| **DB 접속값 셋** | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | `.env`에 있다. 위 실행 절차의 `set -a && . ../.env` 줄이 싣는다 |
+| 갈래 | 변수 | 없으면 | 어디서 얻나 |
+|---|---|---|---|
+| **앱 시크릿 열둘** | `JWT_SECRET` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `CORS_ALLOWED_ORIGINS` · `SECRET_STORE_KEY`(base64 32바이트) · `INTERNAL_API_TOKEN` · `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` · `CHZZK_REDIRECT_URI` · `YOUTUBE_CLIENT_ID` · `YOUTUBE_CLIENT_SECRET` · `YOUTUBE_REDIRECT_URI` | **부팅 실패** | **`.env.example`에 없다** — public 저장소라 예시 값도 두지 않는다. 각자 받아서 넣는다 |
+| **DB 접속값 셋** | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | **부팅 실패**(DB가 접속을 거절한다) | `.env`에 있다. 위 실행 절차의 `set -a && . ../.env` 줄이 싣는다 |
+| **사진 창고 다섯**(POK-207) | `PROFILE_PHOTO_S3_BUCKET` · `PROFILE_PHOTO_TOKEN_SECRET` · `PROFILE_PHOTO_BASE_URL` · `PROFILE_PHOTO_S3_ENDPOINT` · `PROFILE_PHOTO_S3_FORCE_PATH_STYLE` | **그냥 뜬다. 사진 기능만 꺼진다** | 창고는 1번이 판다. 로컬은 가짜 저장소(LocalStack)를 띄워 쓴다 |
+
+**🔴 셋째 갈래는 「조건부 필수」다.** 나머지 둘과 성격이 다르니 규칙을 정확히 적어 둔다.
+
+| 규칙 | 안 지키면 |
+|---|---|
+| `PROFILE_PHOTO_S3_BUCKET`이 **비면 사진 기능만 꺼지고 나머지 넷은 아예 안 본다** | 로그인·이름 수정은 그대로 돈다. 사진 올리기만 **503**, 사진 꺼내기는 **404** |
+| 차 있으면 `PROFILE_PHOTO_TOKEN_SECRET`·`PROFILE_PHOTO_BASE_URL`이 **필수가 된다** | **부팅이 죽는다.** 안 막으면 「사진을 올릴 수는 있는데 볼 수가 없는」 상태로 뜬다 |
+| `PROFILE_PHOTO_TOKEN_SECRET`은 **`JWT_SECRET`과 달라야 한다** | **부팅이 죽는다.** 같으면 사진 표가 로그인 토큰이 될 길이 열린다(아래 사진 절) |
+| `PROFILE_PHOTO_BASE_URL`은 **브라우저가 붙는 주소**다 (예 `http://localhost:8082`) | 🔴 clip의 `AUTH_BASE_URL`(**서버끼리** 붙는 주소, compose 안에서는 `http://auth:8082`)과 **뜻이 반대다.** 여기에 컨테이너 이름을 적으면 브라우저가 못 붙어 **사진만 조용히 안 보인다** |
+| `PROFILE_PHOTO_S3_ENDPOINT`·`_FORCE_PATH_STYLE`은 **가짜 저장소용**이다 | 비우면 진짜 AWS. LocalStack·MinIO는 가상 호스트 이름을 못 풀어 `_FORCE_PATH_STYLE=true`가 필요하다 |
+
+**꺼진 것은 부팅 로그로 확인한다** — `auth.profile.photo.disabled reason=no_bucket`,
+켜졌으면 `auth.profile.photo.enabled region=… endpointOverride=… forcePathStyle=…`.
+창고 이름과 서명키는 안 찍는다.
+
+🔴 **`PROFILE_PHOTO_S3_FORCE_PATH_STYLE`은 `DeploymentEnvVarsTest`가 못 잡는다.**
+기본값이 `${…:false}`라 「빈 기본값」 정규식에 안 걸린다. **손으로 챙긴다.**
+정규식을 넓히지 않는 이유는 `AWS_REGION`·`DB_HOST`처럼 일부러 기본값을 둔 것들이
+필수로 잡혀 예외 목록이 따라오기 때문이다.
 
 **막는 방식이 갈래마다 다르다.** 앱 시크릿 열둘은 빈 기본값(`${VAR:}`)을 주고 부팅 검증으로
 잡는다 — 기본값을 아예 안 주면 리터럴 `"${VAR}"`이 바인딩돼 **서버는 뜨고 헬스체크도
@@ -149,7 +169,7 @@ set -a && . ../.env && set +a
 **POK-121이 이 규칙을 그대로 어겼고**(유튜브 셋을 표에만 적었다) 봇 리뷰가 잡았다 —
 그래서 지금은 `DeploymentEnvVarsTest`가 auth의 필수 변수와 두 파일을 대조한다.
 
-**IDE로 띄운다면** 실행 구성의 환경변수에 위 열다섯을 넣거나, `.env`를 읽어 주는 플러그인을 쓴다.
+**IDE로 띄운다면** 실행 구성의 환경변수에 위 열다섯(부팅에 필요한 것)을 넣거나, `.env`를 읽어 주는 플러그인을 쓴다.
 `application-local.yml`(gitignore) 프로파일만으로는 부족하다 — 그 파일은 앱 시크릿만 채우고
 DB 접속값은 채우지 않는다.
 
@@ -517,7 +537,7 @@ terminationGracePeriodSeconds: 20 # k8s
 
 **셋에는 기본값이 없다**(POK-161). 커밋되는 파일에 비밀번호 기본값을 두면 **public
 저장소에 공개된 값으로 DB에 붙는 창**이 열리기 때문이다. 실행에 필요한 것은 위
-「환경변수 열둘」 표를 본다.
+「환경변수 스물」 표를 본다.
 
 **이 방식을 다른 시크릿에 확대하지 않는다.** 여기가 통하는 것은 서버가 실제로 접속을
 시도하는 값이라서다 — 값이 없으면 리터럴 `${POSTGRES_PASSWORD}`가 그대로 비밀번호가
@@ -575,7 +595,7 @@ auth·clip·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 �
 1·2번이 읽을 스키마 설명서는 여기서 자동 생성해 [`contracts/db/`](../contracts/db/)로
 내보낼 계획인데 **아직 안 만들었다** — 그 폴더는 비어 있다.
 
-## 상태 (2026-08-18)
+## 상태 (2026-08-26)
 
 `auth`·`clip`·`chat-collector`에 내용이 있다.
 
@@ -583,16 +603,24 @@ auth·clip·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 �
 |---|---|
 | 인증 | 구글 로그인·자동가입 · 토큰 발급/회전/로그아웃 · `/api/auth/me` |
 | 스트림키 | 발급 · 검증(계약4) · 페어링 코드 발급/교환 · 재발급 (POK-56) |
-| 채널 연동 | 치지직 동의 왕복 · 토큰 보관(참조만) · 10분 주기 자동 갱신 · 수집기용 resolve · 해제·상태 조회 (POK-93) |
+| 채널 연동 | **치지직** — 동의 왕복 · 토큰 보관(참조만) · 10분 주기 자동 갱신 · 수집기용 resolve · 해제·상태 조회 (POK-93) · **유튜브** — 같은 왕복 모양 · **채널은 동의 때 확정(재선택 없음)** · 1시간 주기 철회 점검 · 워커용 resolve · 해제 (POK-121) |
 | 편집자 위임 | 이메일 초대 · 초대함 수락/거절 · 보낸 초대 취소 · 위임 조회 · 양방향 해제 (POK-57) |
-| 운영 | 이벤트 로깅 · 요청 상관 ID · CORS · 구글 호출 타임아웃 |
+| 회원정보 수정 | 표시 이름(30자, 코드포인트로 센다) · 프로필 사진 업로드/내보내기 · 죽어 있던 `updated_at` 갱신 (POK-207) |
+| 운영 | 이벤트 로깅 · 요청 상관 ID · CORS(`GET`·`POST`·`PUT`·`PATCH`·`DELETE`) · 구글 호출 타임아웃 |
 
-표는 아홉이다 — `users`·`refresh_tokens`(V101·V102) ·
+표는 열이다 — `users`·`refresh_tokens`(V101·V102) ·
 `secrets`·`stream_keys`·`pairing_codes`·`pairing_exchange_attempts`(V103~V106) ·
-`chzzk_channel_links`(V107) · `editor_invitations`·`editor_delegations`(V108).
+`chzzk_channel_links`(V107) · `editor_invitations`·`editor_delegations`(V108) ·
+`youtube_channel_links`(V109).
+**`V110`은 표를 만들지 않는다** — `users`에 칸 둘(`profile_photo_key`·`profile_photo_updated_at`)을 더한다.
 
-엔드포인트 열: 스트림키 다섯(**계약4 = `POST /internal/stream-keys/resolve`** — 1번 Media가 SRT 연결을
-받기 전에 한 번 부른다) · 치지직 연동 다섯 · 편집자 위임 아홉 · **clip용 내부 창구 둘**(POK-175, 아래 절).
+🔴 **`PATCH`·`PUT`은 POK-207이 CORS 허용 목록에 넣은 것이다.** 없으면 화면의 「저장」이
+preflight에서 막혀 **창구는 멀쩡한데 브라우저만 못 부른다.** 자리는 `web-support/CorsConfig` 하나다.
+
+아래 표의 창구는 **스물아홉**이다 — 스트림키 다섯(**계약4 = `POST /internal/stream-keys/resolve`** —
+1번 Media가 SRT 연결을 받기 전에 한 번 부른다) · 치지직 연동 다섯 · **유튜브 연동 다섯**(POK-121) ·
+편집자 위임 아홉 · **clip용 내부 창구 둘**(POK-175, 아래 절) · **회원정보 수정 셋**(POK-207).
+로그인·토큰 창구 넷(`/api/auth/google`·`/refresh`·`/logout`·`/me`)은 이 표에 없다 — 위 「인증」 줄이 그것이다.
 `contracts/api/`에 정본이 아직 없어 여기 적어 둔다.
 
 | | 부르는 쪽 | 인증 |
@@ -623,6 +651,40 @@ auth·clip·chat-collector의 `IntegrationTestSupport`가 남의 표를 먼저 �
 | `DELETE /api/editor-delegations/{id}` | 웹 | 사용자 JWT |
 | `POST /internal/editor-delegations/resolve` | **clip** | `X-Internal-Token` 헤더 |
 | `POST /internal/editor-delegations/accessible` | **clip** | `X-Internal-Token` 헤더 |
+| `PATCH /api/auth/me` | 웹 | 사용자 JWT |
+| `PUT /api/auth/me/photo` | 웹 | 사용자 JWT (**multipart/form-data**) |
+| `GET /api/profile-photos/{userId}?token=…` | **웹의 그림 태그** | **사진 표**(세 번째 `permitAll`) |
+
+**표시 이름 규칙 셋** — 웹이 같은 판정을 화면에서 먼저 해야 왕복이 준다.
+
+| | |
+|---|---|
+| 길이 | **30자. 코드 포인트로 센다** — JS에서 `[...name].length`다. `String.length`로 세면 이모지가 두 글자로 잡혀 화면과 서버가 갈린다 |
+| 앞뒤 공백 | **잘라서 저장한다.** 가운데는 안 건드린다 — 접으면 "김 태현"이 "김태현"이 된다 |
+| 🔴 보이지 않는 문자 | **전각 공백(U+3000)·NBSP(U+00A0)·ZWSP(U+200B) 등도 공백으로 본다.** 그것만으로 된 이름은 `NAME_BLANK`로 거절한다 — 안 막으면 **이름이 없는 것처럼 보이는 계정**이 생겨 편집자 목록이 누가 누군지 말해 주지 못한다. 화면 쪽 주의: JS `trim()`은 전각 공백·NBSP는 자르지만 **ZWSP(U+200B)는 못 자른다**(공백이 아니라 형식 문자라서다). 화면에서 먼저 거르려면 그 하나를 따로 봐야 한다 |
+
+**실패는 사유를 갈라 알린다** — 오류 본문은 `{"reason": "<코드>"}` 한 필드다.
+**로그인 실패(전부 401 한 가지)와 정책이 반대다**: 여기는 사용자가 직접 고칠 수 있는 실패라
+감출 이익이 없다(스트림키 창구와 같은 계열).
+
+| 사유 | 상태 | 언제 | 화면이 할 말 |
+|---|---|---|---|
+| `NAME_BLANK` | 400 | 이름이 비었거나 **보이지 않는 문자뿐** | 이름을 입력하세요 |
+| `NAME_TOO_LONG` | 400 | 코드 포인트 30 초과 | 30자 이내로 |
+| `PHOTO_TOO_LARGE` | **413** | 파일이 2MB 초과 | **줄여서 다시** |
+| `PHOTO_NOT_AN_IMAGE` | **415** | 내용 앞머리가 PNG/JPEG/WEBP가 아님 | 그림 파일을 고르세요 |
+| `PHOTO_STORAGE_DISABLED` | **503** | 창고 설정이 비어 사진 기능이 꺼짐 | **잠시 뒤에 다시** |
+
+🔴 **셋을 400으로 뭉치지 않은 이유가 이 표의 마지막 칸이다** — 「줄여서 다시」와
+「잠시 뒤에 다시」는 사용자가 할 행동이 다르다. **상태 코드만 보고 갈라도 되게** 만들어 뒀다.
+
+**`PHOTO_TOO_LARGE`는 우리 코드가 바이트를 만지기 전에 난다** — 크기는 서블릿 층이 자른다.
+그래서 그 갈래만 다른 예외에서 같은 사유로 옮겨 온다.
+
+**마지막 줄만 인증이 다르다.** 그림 태그(`<img src=…>`)는 `Authorization` 헤더를 못 싣고
+웹은 쿠키를 안 쓴다 — 자격을 **주소에 실린 사진 표**가 대신한다. 그 표로 열 수 있는 것은
+그림 한 장뿐이고 10~20분이면 죽는다(아래 사진 절). `/api/auth/refresh`·페어링 코드 교환에 이은
+**세 번째 `permitAll`**이라 같은 함정을 공유한다 — **이 경로의 실패 로그에 건수로 알람을 걸면 안 된다.**
 
 `resolve`는 **키가 틀려도 HTTP 200에 `valid:false`**로 답한다. Media에게
 "키가 틀림"(연결 거절)과 "Auth 장애"(판단 불가)는 조치가 정반대라 둘 다 4xx면
@@ -750,7 +812,7 @@ the event type buffer to the empty string and return"* 이라 `MessageEvent`를 
 | `stripes` | 4 | 전송 스레드 수. 연결은 스트라이프 하나에 고정돼 순서가 지켜진다. **1024를 넘으면 기본값으로 덮는다** — 스트라이프 하나가 스레드 하나이고 연결 상한(`max-total` 500)보다 많으면 영영 안 쓰이는 스레드다. 안 막으면 `OutOfMemoryError: Requested array size exceeds VM limit`로 **부팅이 죽는다**(실기동) |
 | `queue-capacity` | 1000 | 스트라이프당 대기 상한. 넘치면 버리고 WARN — **실시간 발행만** 재연결이 메운다(초기 스냅샷은 태스크 하나라 큐를 한 칸만 쓴다) |
 | `max-per-user` | 4 | 탭 몇 개 + 모바일 |
-| `max-per-stream` | 50 | 스트리머 + 편집자(정원은 POK-207 미정) |
+| `max-per-stream` | 50 | 스트리머 + 편집자. **편집자 정원은 아직 정해진 카드가 없다** — POK-207이 「편집자 관리 API」에서 회원정보 수정으로 범위를 바꾸면서 그 항목이 카드 밖으로 나갔다(POK-208도 아니다: 화면이 직접 셀 수 있어 미뤘다). 필요해지면 새 카드다 |
 | `max-total` | 500 | 서버 한 대 전체 |
 
 **측정값이 아니라 추정이다.** 동시 사용자 100명 전제에서 넉넉히 잡았고 실사용 후 조정한다.
@@ -1146,6 +1208,102 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 
 **마이그레이션은 `V109__create_youtube_channel_links.sql`이다.** 살아있는 행에만 걸리는 부분 유니크
 둘(`channel_id`·`user_id`)이 최종 방어선이고, 점검 후보용 인덱스는 `last_refreshed_at` 축이다.
+
+### 회원정보 수정 — 표시 이름·프로필 사진 (POK-207)
+
+표시 이름은 표의 한 칸을 덮어쓰면 끝이다. **사진이 어려운 쪽이고, 어려운 이유가 저장이 아니라 공개 범위다.**
+
+**왜 창고를 공개하지 않나.** 사진을 S3에 두고 그 주소를 그대로 내보내면, **주소만 아는 사람은
+누구든 그 그림을 본다.** 이 제품에서 그 그림은 대개 **전담 편집자의 얼굴**이고, 그러면
+「이 사람이 어느 스트리머와 일하는가」가 주소 하나로 새어 나간다. 편집자는 돈을 내는 쪽이 아니라
+**매일 쓰는 쪽**이고, 그 사실이 새는 것을 스스로 막을 방법이 없다. 그래서 **창고를 열지 않고
+auth가 직접 내보낸다**(PRD 결정).
+
+🔴 **「비공개」의 정확한 범위를 오해하지 마라.** 영원히 나만 보는 그림이 아니다 —
+**주소(사진 표)를 손에 넣은 사람은 그 표가 죽을 때까지 10~20분간 볼 수 있다.**
+막는 것은 「주소를 모르는 사람이 우연히·무작위로 보는 것」이지 「주소를 받은 사람이 보는 것」이 아니다.
+그 이상이 필요해지면 표에 권한을 얹을 것이 아니라 **설계를 다시 해야 한다.**
+
+**사진 표는 계정 열쇠가 아니다 — 그런데 그것을 지키는 것이 무엇인지가 중요하다.**
+
+| | |
+|---|---|
+| 모양 | `userId.exp.version.signature` — **네 칸**, 점으로 가른다(base64url 알파벳에 점이 없어 서명에 구분자가 섞일 수 없다) |
+| 🔴 **오늘 실제로 갈리는 것** | **문법이다.** 로그인 토큰(JWT)은 세 칸이고 사진 표는 네 칸이라 **서로의 파서가 상대를 못 읽는다.** 감사자가 두 키를 같게 놓고 창구를 전부 두들겨 확인했다 — 하나도 안 뚫린다 |
+| 그럼 키는 | `PROFILE_PHOTO_TOKEN_SECRET`이 `JWT_SECRET`과 같으면 **부팅이 죽는다**(`PhotoConfiguration`) |
+| 🔴 **그래서 위험한 자리** | **표 형식을 JWT로 바꾸는 순간 문법 방어가 통째로 사라진다.** 가장 흔한 리팩터링이다. 그날 남는 것은 키 검증 하나뿐이고, 두 키가 같게 배포돼 있으면 **사진 표가 곧 로그인 토큰**이 된다 |
+| 얹지 마라 | 이 표에 다른 권한을 더하는 순간 진짜 자격증명이 되고, 「자격증명을 주소에 안 싣는다」와 정면으로 부딪힌다 |
+
+**주소가 언제 바뀌고 언제 안 바뀌나.** 회원 정보(`GET /api/auth/me`)는 60초마다·탭에 돌아올 때마다
+다시 불린다. 부를 때마다 표를 새로 만들면 **주소가 매번 달라져 같은 그림을 계속 다시 받는다.**
+
+- **만료를 10분 경계에 맞춘다** → 같은 창 안에서는 주소가 **글자까지 같다.** 남은 수명은 10~20분이다
+- **사진을 바꾸면 즉시 달라진다** → 표의 `version`이 사진 수정일시다
+- 🔴 **`version`은 밀리초다.** 초였을 때 **연달아 두 번 올린 10회가 10/10 같은 주소**였다(올리기 왕복 7ms).
+  사람이 0.3초 간격으로 두 번 누르면 약 70%다. **서버는 새 그림을 내보내는데 브라우저가 옛 그림을 최대 10분 본다**
+  (`Cache-Control: private, max-age=600`). 밀리초로 바꿔 닫았다
+- **옛 주소는 안 깨진다** — `PhotoToken.verify`에는 「지금 사진의 version」을 받는 자리가 **아예 없다.**
+  일부러 그렇게 뒀다: 조이면 사진을 바꾸는 순간 브라우저가 들고 있는 옛 주소가 전부 404가 된다
+
+**파일 이름은 회원마다 하나로 고정이다** — `profile-photos/{회원번호}`. 다시 올리면 덮어쓴다.
+**주인 없는 파일이 생길 수가 없고, 탈퇴(POK-171)가 지울 것도 하나다.**
+올리는 순간 구글이 준 `profile_image_url`을 **비운다** — 되돌리기가 비목표라 영영 안 읽히고,
+둘 다 남기면 어느 쪽을 보여줄지가 그날의 우연이 된다. 영구 손실은 아니다(구글은 로그인할 때마다 다시 보내온다).
+
+**거절은 전부 404다.** 표가 틀렸든 만료됐든 그런 사진이 없든 그런 회원이 없든 **같은 한 줄에서**
+만들어진다. 갈라 주면 「그 회원이 사진을 올렸는가」가 표 없이도 새어 나가고, 비공개로 둔 이유가
+그 자리에서 무너진다. **본문만 같게 해서는 부족하다** — 표를 통과하기 전에는 창고에 안 가므로
+갈래마다 걸리는 시간이 같다(감사자가 일곱 갈래를 섞어 각 200회 재서 확정했다).
+**표 없이도 창고에 가는 갈래가 하나라도 생기면 그 성질이 즉시 무너진다** — 순서를 바꾸거나 앞에 조회를 끼우지 마라.
+
+**형식은 내용의 앞머리로 가른다.** 올린 쪽이 밝힌 이름표를 믿지 않고, 나갈 때도 우리가 판정한 값을
+싣는다(`X-Content-Type-Options: nosniff`와 함께). 이름표를 그대로 실으면 그림이 아닌 것이
+보는 사람의 브라우저에서 실행된다.
+
+**창고 호출은 트랜잭션 밖이다.** 표 갱신만 `PhotoAttacher`가 트랜잭션 안에서 한다 —
+DB 커넥션을 쥔 채 외부 HTTP를 기다리면 풀이 마른다(auth가 이미 두 자리에서 밟았다).
+**창고 먼저, 표 나중이다.** 뒤집으면 「표는 새 사진을 가리키는데 파일이 없는」 상태가 생긴다.
+
+**실측값 (2026-08-26).**
+
+| | |
+|---|---|
+| 512×512 PNG 최악 | **1,025KB** — 상한 2MB의 절반이다 |
+| 사진 꺼내는 시간 | **중앙값 8.1ms** (1MB, 창고 왕복 포함) |
+| 🔴 **되돌릴 조건** | 웹이 **자르는 크기가 약 723px을 넘으면** 2MB를 넘는다 — 그날 **정상적인 사진이 413으로 거부된다.** 자르는 크기를 키우려면 상한도 같이 본다 |
+
+**크기 상한(2MB)은 서블릿 층이 자른다**(`spring.servlet.multipart.max-file-size`).
+🔴 **짝인 `max-request-size`는 3MB로 더 크게 둔다** — 같은 값으로 두면 요청 쪽이 multipart
+경계·파트 헤더까지 더해 재므로 **먼저 걸리고, 정확히 2MB인 파일이 413이 된다**(실측).
+그러면 실효 상한이 위 숫자보다 작아진다. **파일 상한을 올릴 때 이 값도 같이 올린다.**
+🔴 **MockMvc로는 그 상한을 못 잰다** — 이미 파싱된 요청을 넣어 DispatcherServlet이 재파싱을
+건너뛰므로 **상한을 지워도 초록이다.** 진짜 톰캣을 띄우는 `ProfilePhotoSizeLimitTest`가 잰다.
+
+**창고가 꺼진 배포에서 사진을 올려 둔 회원이 있으면** 회원 정보의 사진 주소가 `null`이 된다
+(올릴 때 구글 주소를 비웠으니까). 화면은 이니셜을 그리고 **에러는 아무 데도 안 난다** —
+**의도한 동작이고 데이터는 안 잃는다**(설정을 되돌리면 그대로 복구된다).
+그 상태를 아무도 모르는 것이 유일한 문제라 요청마다 `auth.profile.photo.unreachable userId=`
+WARN을 남긴다. **건수로 알람 걸지 마라** — 사진을 올린 회원 수 × 폴링 빈도에 비례한다.
+한 줄이라도 뜨는 것 자체가 신호다.
+
+**창고 이름이 틀렸거나 창고가 못 답하면** 사진을 꺼내는 쪽은 **500이 아니라 빈손(404)**을 낸다.
+그 경로는 로그인 없이 닿으므로(그림 태그가 부른다) 예외를 그대로 흘리면 **설정 하나가 틀린 배포에서
+사진 요청이 전부 500**이 되고 그 500은 아무나 만들 수 있다. 대신 `auth.profile.photo.read_failed
+userId= causeType=` WARN을 남긴다 — `causeType`이 원인을 가른다(`NoSuchBucketException`이면 창고
+이름, `SdkClientException`이면 그물·시한). **여기도 건수로 알람 걸지 마라, 같은 이유다.**
+**「아직 안 올렸다」는 이 줄을 안 낸다** — 부재는 장애가 아니라서, 그것까지 찍으면 진짜 신호가 묻힌다.
+**올리는 쪽은 반대로 삼키지 않는다** — 저장 실패를 빈손으로 바꾸면 사용자가 「저장됐다」고 믿는다.
+
+**마이그레이션은 `V110__add_profile_photo_columns.sql`이다** — 표를 만들지 않고 `users`에
+칸 둘을 더한다(`profile_photo_key`·`profile_photo_updated_at`).
+
+🔴 **`s3`를 넣으면서 기존 HTTP 스택이 바뀔 뻔했다.** AWS SDK가 **Apache5 HTTP 클라이언트를
+runtime으로 딸려오고**, 그것이 클래스패스에 오르면 Boot가 `RestClient` 구현을 JDK에서 Apache5로
+**오류 없이** 바꾼다. auth의 `connect-timeout: 2s`/`read-timeout: 5s`는 **구글·치지직·유튜브 호출 전부**에
+걸린 실측값이라 스택이 바뀌면 어느 층에서 끊는지가 달라진다.
+`spring.http.clients.imperative.factory: jdk` 한 줄로 막고 `RestClientFactoryTest`가 지킨다 —
+**그 줄을 지우거나 새 SDK를 넣을 때 반드시 그 검사를 돌려라.**
+같은 이유로 Apache5 wire 로거를 눌러 뒀다(DEBUG에서 요청 본문과 `Authorization` 값을 통째로 찍는다).
 
 ### 편집자 초대 (POK-57)
 
