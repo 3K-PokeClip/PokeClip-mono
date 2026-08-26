@@ -4,6 +4,7 @@ import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.SseReader;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +27,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @TestPropertySource(properties = "pokeclip.jump-card.stream.heartbeat=PT1S")
 class JumpCardStreamHeartbeatTest extends IntegrationTestSupport {
 
+    private static final String RESOLVE = "/internal/editor-delegations/resolve";
+
     private final int port;
     private final BroadcastRepository broadcasts;
     private final JdbcTemplate jdbc;
@@ -40,7 +43,8 @@ class JumpCardStreamHeartbeatTest extends IntegrationTestSupport {
     void 정리() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-1", "u-1", 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.now(), null));
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
     /** 앞단 프록시가 조용한 연결을 끊지 않게 하는 장치다. 안 오면 배포 후에 연결이 툭툭 끊긴다. */
@@ -48,7 +52,7 @@ class JumpCardStreamHeartbeatTest extends IntegrationTestSupport {
     void 하트비트가_온다() throws Exception {
         try (SseReader reader = new SseReader(
                 "http://localhost:" + port + "/api/clip/broadcasts/s-1/events",
-                Map.of("Authorization", "Bearer " + TestTokens.access("heartbeat")))) {
+                Map.of("Authorization", "Bearer " + TestTokens.access("1501")))) {
 
             // 연결 직후 나가는 주석("ok")이 아니라 <b>하트비트</b>가 왔는지를 본다.
             // await(1)로 세면 "ok" 하나로 즉시 통과해 하트비트를 안 재게 된다.

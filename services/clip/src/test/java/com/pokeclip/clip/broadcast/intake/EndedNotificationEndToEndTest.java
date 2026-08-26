@@ -10,6 +10,7 @@ import com.pokeclip.clip.jumpcard.stream.CardStreamRegistry;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.LocalStackFixture;
 import com.pokeclip.clip.support.SseReader;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -37,6 +38,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class EndedNotificationEndToEndTest extends IntegrationTestSupport {
+
+    private static final String RESOLVE = "/internal/editor-delegations/resolve";
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -68,7 +71,8 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM jump_cards");
         events.deleteAllInBatch();
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-queue", "u-1", 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-queue", TestIds.STREAMER, 1L, Instant.now(), null));
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
     @Test
@@ -80,10 +84,10 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
 
         try (SseReader reader = new SseReader(
                 "http://localhost:" + port + "/api/clip/broadcasts/s-queue/events",
-                Map.of("Authorization", "Bearer " + TestTokens.access("t10-queue")))) {
+                Map.of("Authorization", "Bearer " + TestTokens.access("2301")))) {
 
-            assertThat(reader.awaitNamed(1, Duration.ofSeconds(3)))
-                    .as("초기 스냅샷이 서야 연결이 실제로 선 것이다").isTrue();
+            assertThat(reader.await(1, Duration.ofSeconds(3)))
+                    .as("연결 직후 주석이 와야 연결이 실제로 선 것이다").isTrue();
 
             // 실제 러너 경로. 다만 리스너를 <b>손수 넘긴다</b> — 이 줄은 「편지 → 러너 → Registry →
             // 브라우저」가 이어지는 것만 증명하고, <b>운영 배선이 닿았는지는 증명하지 않는다.</b>
@@ -119,16 +123,14 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
      */
     @Test
     void 삭제가_실패해도_붙어_있던_연결이_종료를_받고_닫힌다() {
-        // 카드를 하나 둔다 — 카드가 0장이면 연결 직후 나가는 것이 주석("ok") 하나뿐이라
-        // awaitNamed(1)로는 「연결이 섰다」를 못 잰다(이 시험을 처음 쓸 때 그렇게 헛짚었다).
-        service.record("s-queue", auto("evt-card-del", 2_000_000L));
-
+        // POK-174부터는 연결 직후 나가는 것이 주석("ok")뿐이다 — 그래서 await(1)로 센다.
+        // 전에는 카드를 하나 심어 awaitNamed(1)로 셌다.
         try (SseReader reader = new SseReader(
                 "http://localhost:" + port + "/api/clip/broadcasts/s-queue/events",
-                Map.of("Authorization", "Bearer " + TestTokens.access("t10-delete-fail")))) {
+                Map.of("Authorization", "Bearer " + TestTokens.access("2302")))) {
 
-            assertThat(reader.awaitNamed(1, Duration.ofSeconds(3)))
-                    .as("초기 스냅샷이 서야 연결이 실제로 선 것이다").isTrue();
+            assertThat(reader.await(1, Duration.ofSeconds(3)))
+                    .as("연결 직후 주석이 와야 연결이 실제로 선 것이다").isTrue();
 
             FakeSqsClient sqs = FakeSqsClient.thatFailsOnDelete(종료_편지("evt-del", "s-queue", 2L));
             new SqsIntakeRunner(sqs, 큐_설정("http://localhost:4566/000000000000/unused.fifo"),
@@ -155,8 +157,8 @@ class EndedNotificationEndToEndTest extends IntegrationTestSupport {
     private static String 종료_편지(String eventId, String streamId, long sequence) {
         return """
                 {"schemaVersion":1,"eventId":"%s","eventType":"broadcast.ended",
-                 "occurredAt":"2026-08-23T01:00:00Z","streamId":"%s","streamerId":"u-1",
+                 "occurredAt":"2026-08-23T01:00:00Z","streamId":"%s","streamerId":"%s",
                  "sequence":%d,"traceId":"trace-1","payload":{}}
-                """.formatted(eventId, streamId, sequence);
+                """.formatted(eventId, streamId, TestIds.STREAMER, sequence);
     }
 }

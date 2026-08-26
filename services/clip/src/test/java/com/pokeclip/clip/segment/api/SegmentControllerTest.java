@@ -6,6 +6,7 @@ import com.pokeclip.clip.delegation.DelegationResolveClient;
 import com.pokeclip.clip.delegation.ResolveResult;
 import com.pokeclip.clip.segment.SegmentQueryService;
 import com.pokeclip.clip.support.IntegrationTestSupport;
+import com.pokeclip.clip.support.NotFoundFloor;
 import com.pokeclip.clip.support.TestTokens;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.BeforeEach;
@@ -67,6 +68,24 @@ class SegmentControllerTest extends IntegrationTestSupport {
      * 바닥을 줄이는 날 이 값도 같이 줄어, 「덮이는 범위 안」이라는 전제가 유지된다.
      */
     private static final Duration 느린_창구 = NotFoundFloor.FLOOR.dividedBy(2);
+
+    /**
+     * 차이를 잴 때 한 갈래를 몇 번 두드리나. <b>최솟값을 쓰므로 표본이 많을수록 참값에 붙는다</b> —
+     * 지연 잡음은 한쪽(느린 쪽)으로만 붙기 때문이다.
+     *
+     * <p>🔴 <b>3이었고 그것이 흔들렸다</b>(세 세션이 CPU를 나눠 쓰는 중 20회에 3회 빨강).
+     * 표본 수를 바꿔 가며 15회씩 재서 골랐다 — 차이의 최댓값이
+     * <b>3 → 6.723 · 6 → 8.563 · 9 → 4.101 · 15 → 2.763</b>(ms, 문턱 6.0)였다.
+     * 15는 문턱까지 <b>2배 넘는 여유</b>가 있고, 그러고도 부분 회귀(7ms쯤)는 문턱 위로 나온다.
+     *
+     * <p><b>문턱을 올리거나 {@link NotFoundFloor#FLOOR}를 키우는 길은 안 골랐다.</b> 바닥을 키우면
+     * 문턱도 같이 커지지만(문턱이 {@code FLOOR}의 1/4에 묶여 있다) <b>모든 404가 그만큼 느려진다</b> —
+     * 감출 것이 없는 응답에까지 무는 비용이다. 표본 수는 운영 비용이 0이다.
+     * 무엇보다 <b>회귀의 서명이 표본에 하나도 없었다</b> — 회귀라면 차이가 심은 지연만큼(12ms)
+     * 벌어져야 하는데 12ms 근처가 0개였고 분포가 0.02~8.6에 연속이었다. <b>잡음이 문턱을 넘은
+     * 것이지 신호가 아니다.</b>
+     */
+    private static final int 표본_수 = 15;
 
     /** 조각의 벽시계 시각은 이 경로에 안 쓰인다 — NOT NULL을 채우려고 둔 값이다. */
     private static final OffsetDateTime 아무_UTC_시각 =
@@ -337,7 +356,11 @@ class SegmentControllerTest extends IntegrationTestSupport {
      *
      * <p>단언은 <b>차이</b>에 건다. 절대 시각은 부하에 따라 통째로 밀리지만 두 갈래가 같이 밀리므로
      * 차이는 안 밀린다. 문턱은 심은 지연의 절반이다 — 회귀가 나면 차이가 심은 지연만큼(문턱의 2배)
-     * 벌어지고, 정상이면 실측 0.7ms 수준이라 양쪽으로 여유가 있다.
+     * 벌어진다.
+     *
+     * <p>🔴 <b>「정상이면 0.7ms 수준이라 여유가 있다」고 적어 뒀던 것은 한가한 기계의 값이었다.</b>
+     * 세션 셋이 CPU를 나눠 쓰는 중에는 표본 3으로 잰 차이가 <b>6.7ms까지</b> 튀어 문턱(6.0)을
+     * 넘었다. 고친 것은 문턱이 아니라 <b>표본 수</b>다 — 근거는 {@link #표본_수}에 있다.
      */
     @Test
     void auth가_느려도_두_404가_같은_시각에_나간다() throws Exception {
@@ -348,8 +371,8 @@ class SegmentControllerTest extends IntegrationTestSupport {
         });
 
         가장_빠른_응답_ms(1, "s-없는방송", status().isNotFound());  // 워밍업 — 첫 요청만 유독 느리다
-        double 없는_방송 = 가장_빠른_응답_ms(3, "s-없는방송", status().isNotFound());
-        double 자격_없음 = 가장_빠른_응답_ms(3, "s-floor-slow", status().isNotFound());
+        double 없는_방송 = 가장_빠른_응답_ms(표본_수, "s-없는방송", status().isNotFound());
+        double 자격_없음 = 가장_빠른_응답_ms(표본_수, "s-floor-slow", status().isNotFound());
 
         assertThat(Math.abs(자격_없음 - 없는_방송))
                 .as("두 404의 시각이 심은 지연만큼 갈렸다 — 기준 시각이 갈림 뒤에 찍힌 것이다")

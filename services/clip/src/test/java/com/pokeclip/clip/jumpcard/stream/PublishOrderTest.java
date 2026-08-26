@@ -8,6 +8,7 @@ import com.pokeclip.clip.jumpcard.JumpCardSource;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.SseReader;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -52,6 +53,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class PublishOrderTest extends IntegrationTestSupport {
 
+    private static final String RESOLVE = "/internal/editor-delegations/resolve";
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** 재현과 같은 횟수. 한 번만 하면 「우연히 안 뒤집힘」과 구별되지 않는다. */
@@ -75,7 +78,8 @@ class PublishOrderTest extends IntegrationTestSupport {
     @BeforeEach
     void 정리() {
         방송과_카드를_비운다(jdbc);
-        broadcasts.save(Broadcast.startedNow("s-ord", "u-1", 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-ord", TestIds.STREAMER, 1L, Instant.now(), null));
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
     @Test
@@ -88,13 +92,14 @@ class PublishOrderTest extends IntegrationTestSupport {
         int missing = 0;
 
         try (SseReader reader = new SseReader("http://localhost:" + port + "/api/clip/broadcasts/s-ord/events",
-                Map.of("Authorization", "Bearer " + TestTokens.access("publish-order")))) {
-            assertThat(reader.awaitNamed(2, Duration.ofSeconds(3))).as("초기 스냅샷 2장").isTrue();
+                Map.of("Authorization", "Bearer " + TestTokens.access("1601")))) {
+            // 연결이 명부에 올랐는지는 주석으로 본다 — 통로는 지난 카드를 안 보낸다(POK-174).
+            assertThat(reader.await(1, Duration.ofSeconds(3))).as("주석조차 안 왔다").isTrue();
 
             for (int i = 0; i < TRIALS; i++) {
                 long stale = 1_000L + i * 2L;          // 집힘 — 낡은 쪽
                 long fresh = stale + 1;                // 놓임 — 최신
-                JumpCardSnapshot claimed = snapshot(cardId, stale, "u-A");
+                JumpCardSnapshot claimed = snapshot(cardId, stale, "1602");
                 JumpCardSnapshot released = snapshot(cardId, fresh, null);
 
                 Thread first = new Thread(() -> registry.publish(claimed), "publish-N");

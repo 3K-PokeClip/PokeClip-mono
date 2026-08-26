@@ -1,3 +1,14 @@
+# 🔴 RANDOM_PORT 톰캣도 루프백에만 붙인다 — 기본값(주소 없음)은 와일드카드다.
+# 와일드카드로 잡은 임시 포트는 자리를 못 지킨다: 커널이 IPv6 와일드카드와 IPv4 루프백을
+# 주소 계열이 달라 충돌로 보지 않아, 뒤늦게 뜬 아무 프로세스나 127.0.0.1:같은포트를 잡을 수
+# 있고 잡으면 더 구체적인 주소라 localhost 트래픽을 통째로 가져간다. 그러면 시험이
+# 「연결은 됐는데 우리 서버가 아니었다」로 깨지고 원인이 우리 코드처럼 보인다 —
+# clip/CLAUDE.md의 StripeHeadOfLineTest 「header parser received no bytes」가 그 모양이다.
+# 실측(2026-08-26): 이 줄이 없으면 톰캣 포트를 127.0.0.1로 가로채는 데 100% 성공했다.
+# 같은 뿌리를 FakeAuth도 밟고 있었다(전수 16회 중 2회 빨간불) — 거기는 코드에서 고쳤다.
+server:
+  address: 127.0.0.1
+
 spring:
   jpa:
     hibernate:
@@ -22,8 +33,14 @@ pokeclip:
     # 올리며, DelegationResolveClient가 조건 없이 만들어져 validate()가 전 부팅을 막는다
     # (계획 검증 실측: HealthEndpointTest FAILED ← IllegalStateException).
     #
-    # 아무도 안 듣는 포트다. 진짜 auth를 부르는 시험은 각자 가짜 서버 주소로 덮어쓰므로,
-    # 여기로 요청이 나가면 그것은 덮어쓰기를 빠뜨린 것이고 즉시 연결 거부로 드러난다.
+    # 🔴 스프링 시험에서는 이 값이 실제로 쓰이지 않는다 — IntegrationTestSupport가
+    # @DynamicPropertySource로 가짜 auth의 주소를 덮는다(POK-174). 그래서 「덮어쓰기를
+    # 빠뜨리면 연결 거부로 드러난다」는 옛 설명은 더 이상 맞지 않는다. 지금 그 자리를
+    # 지키는 것은 가짜 auth의 초기 응답이 503이라는 것이다 — 답을 안 건 시험은 통과가
+    # 아니라 거절을 받는다.
+    #
+    # 컨텍스트를 안 띄우는 시험(AccessibleClientTest·DelegationResolveClientTest)은
+    # 각자 가짜 서버를 세워 생성자에 직접 넣으므로 이 값과 무관하다.
     base-url: http://127.0.0.1:1
 
   jump-card:

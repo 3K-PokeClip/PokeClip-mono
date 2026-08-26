@@ -3,6 +3,7 @@ package com.pokeclip.clip.jumpcard;
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.support.IntegrationTestSupport;
+import com.pokeclip.clip.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -45,7 +46,7 @@ class JumpCardSchemaTest extends IntegrationTestSupport {
     void 앞_테스트의_흔적을_지운다() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-1", "u-1", 1L, Instant.parse("2026-08-23T00:00:00Z"), null));
+        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.parse("2026-08-23T00:00:00Z"), null));
     }
 
     @Test
@@ -128,12 +129,12 @@ class JumpCardSchemaTest extends IntegrationTestSupport {
     @Test
     void 스냅샷은_claimExpiresAt을_ttl로_계산한다() {
         long id = insert("s-1", "auto", "evt-1", 5_043_000L, 5_020_000L, 5_062_000L, 97, "{\"multiplier\":4.2}");
-        jdbc.update("UPDATE jump_cards SET claimed_by = 'u-9', claimed_at = now() WHERE id = ?", id);
+        jdbc.update("UPDATE jump_cards SET claimed_by = '1251', claimed_at = now() WHERE id = ?", id);
 
         JumpCardSnapshot snapshot = JumpCardSnapshot.of(cards.findById(id).orElseThrow(),
                 Duration.ofMinutes(30), mapper);
 
-        assertThat(snapshot.claimedBy()).isEqualTo("u-9");
+        assertThat(snapshot.claimedBy()).isEqualTo("1251");
         assertThat(snapshot.claimExpiresAt()).isEqualTo(snapshot.claimedAt().plus(Duration.ofMinutes(30)));
         assertThat(snapshot.evidence().get("multiplier").asDouble()).isEqualTo(4.2);
         assertThat(snapshot.hidden()).isFalse();

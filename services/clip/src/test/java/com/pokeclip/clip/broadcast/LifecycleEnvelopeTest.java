@@ -24,7 +24,7 @@ class LifecycleEnvelopeTest {
                   "eventType": "broadcast.started",
                   "occurredAt": "2026-08-18T00:00:00Z",
                   "streamId": "stream-1",
-                  "streamerId": "streamer-1",
+                  "streamerId": "7",
                   "sequence": 1,
                   "traceId": "trace-1",
                   "payload": {"trackManifest": {"manifestVersion": 3}}
@@ -46,7 +46,7 @@ class LifecycleEnvelopeTest {
         String json = """
                 {"schemaVersion":1,"eventId":"evt-2","eventType":"broadcast.ended",
                  "occurredAt":"2026-08-18T01:00:00Z","streamId":"stream-1",
-                 "streamerId":"streamer-1","sequence":2,"traceId":"t","payload":{},
+                 "streamerId":"7","sequence":2,"traceId":"t","payload":{},
                  "futureField":"값"}
                 """;
 

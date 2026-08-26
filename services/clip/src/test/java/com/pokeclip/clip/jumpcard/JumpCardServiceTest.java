@@ -9,6 +9,7 @@ import com.pokeclip.clip.jumpcard.JumpCardErrors.NotClaimOwnerException;
 import com.pokeclip.clip.jumpcard.JumpCardService.RecordResult;
 import com.pokeclip.clip.jumpcard.api.HighlightRequest;
 import com.pokeclip.clip.support.IntegrationTestSupport;
+import com.pokeclip.clip.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -39,6 +40,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class JumpCardServiceTest extends IntegrationTestSupport {
 
+    private static final String RESOLVE = "/internal/editor-delegations/resolve";
+
     // static 메서드(auto)가 쓰므로 인스턴스 필드로 두면 컴파일되지 않는다.
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -63,7 +66,8 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     void 정리() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-1", "u-1", 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.now(), null));
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
     private static HighlightRequest auto(String eventId, long start) {
@@ -119,7 +123,7 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     /** 종료 이벤트가 먼저 도착해도 판별기의 마지막 카드가 버려지면 안 된다. */
     @Test
     void 끝난_방송에도_들어간다() {
-        broadcasts.save(Broadcast.endedPlaceholder("s-ended", "u-1", 9L, Instant.now()));
+        broadcasts.save(Broadcast.endedPlaceholder("s-ended", TestIds.STREAMER, 9L, Instant.now()));
 
         assertThat(service.record("s-ended", auto("e", 1_000L)).created()).isTrue();
     }
@@ -139,13 +143,13 @@ class JumpCardServiceTest extends IntegrationTestSupport {
         long a = service.record("s-1", auto("a", 1_000L)).card().id();
         long b = service.record("s-1", auto("b", 9_000L)).card().id();
         // a가 뒤에 바뀌었으니 순번이 b보다 크다 — 정렬 기준이 id가 아니라 event_seq임을 잰다.
-        jdbc.update("UPDATE jump_cards SET hidden_at = now(), hidden_by = 'u-2' WHERE id = ?", a);
+        jdbc.update("UPDATE jump_cards SET hidden_at = now(), hidden_by = '1204' WHERE id = ?", a);
 
         List<JumpCardSnapshot> snapshots = service.snapshotsOf("s-1");
 
         assertThat(snapshots).extracting(JumpCardSnapshot::id).containsExactly(b, a);
         assertThat(snapshots.get(1).hidden()).isTrue();
-        assertThat(snapshots.get(1).hiddenBy()).isEqualTo("u-2");
+        assertThat(snapshots.get(1).hiddenBy()).isEqualTo("1204");
     }
 
     // ── 점유·숨김 (태스크 5) ────────────────────────────────────────────────
@@ -160,8 +164,8 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     void 빈_카드를_둘이_동시에_집으면_한_명만_성공한다() throws Exception {
         long id = 카드();
 
-        List<Object> results = 동시에(() -> 결과로(() -> service.claim(id, "u-A")),
-                () -> 결과로(() -> service.claim(id, "u-B")));
+        List<Object> results = 동시에(() -> 결과로(() -> service.claim(id, "1201")),
+                () -> 결과로(() -> service.claim(id, "1202")));
 
         assertThat(results).filteredOn(r -> r instanceof JumpCardSnapshot).hasSize(1);
         assertThat(results).filteredOn(r -> r instanceof ClaimedByOtherException).hasSize(1);
@@ -171,10 +175,10 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     @Test
     void 본인이_다시_집으면_성공이고_만료가_연장된다() throws Exception {
         long id = 카드();
-        JumpCardSnapshot first = service.claim(id, "u-A");
+        JumpCardSnapshot first = service.claim(id, "1201");
         Thread.sleep(20);
 
-        JumpCardSnapshot again = service.claim(id, "u-A");
+        JumpCardSnapshot again = service.claim(id, "1201");
 
         assertThat(again.claimedAt()).isAfter(first.claimedAt());
         assertThat(again.claimExpiresAt()).isAfter(first.claimExpiresAt());
@@ -183,22 +187,22 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     @Test
     void 남의_것은_만료_전엔_거절되고_거절에_현재_카드가_실린다() {
         long id = 카드();
-        service.claim(id, "u-A");
+        service.claim(id, "1201");
 
-        assertThatThrownBy(() -> service.claim(id, "u-B"))
+        assertThatThrownBy(() -> service.claim(id, "1202"))
                 .isInstanceOf(ClaimedByOtherException.class)
                 .satisfies(e -> assertThat(((ClaimedByOtherException) e).current().claimedBy())
-                        .as("409에 「누가 잡고 있나」가 실려야 웹이 이름을 띄운다").isEqualTo("u-A"));
+                        .as("409에 「누가 잡고 있나」가 실려야 웹이 이름을 띄운다").isEqualTo("1201"));
     }
 
     /** 만료를 치우는 배경 작업이 없다. 시각 비교는 DB 시계로 한다. */
     @Test
     void 남의_것도_만료_후엔_집는다() {
         long id = 카드();
-        service.claim(id, "u-A");
+        service.claim(id, "1201");
         jdbc.update("UPDATE jump_cards SET claimed_at = now() - interval '31 minutes' WHERE id = ?", id);
 
-        assertThat(service.claim(id, "u-B").claimedBy()).isEqualTo("u-B");
+        assertThat(service.claim(id, "1202").claimedBy()).isEqualTo("1202");
     }
 
     /**
@@ -209,35 +213,35 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     void 아무도_안_잡은_카드를_놓으면_그냥_성공한다() {
         long id = 카드();
 
-        assertThatNoException().isThrownBy(() -> service.release(id, "u-A"));
+        assertThatNoException().isThrownBy(() -> service.release(id, "1201"));
         assertThat(cards.findById(id).orElseThrow().getClaimedBy()).isNull();
     }
 
     @Test
     void 놓기는_본인만_된다() {
         long id = 카드();
-        service.claim(id, "u-A");
+        service.claim(id, "1201");
 
-        assertThatThrownBy(() -> service.release(id, "u-B")).isInstanceOf(NotClaimOwnerException.class);
+        assertThatThrownBy(() -> service.release(id, "1202")).isInstanceOf(NotClaimOwnerException.class);
 
-        service.release(id, "u-A");
+        service.release(id, "1201");
         assertThat(cards.findById(id).orElseThrow().getClaimedBy()).isNull();
     }
 
     @Test
     void 없는_카드는_JumpCardNotFound다() {
-        assertThatThrownBy(() -> service.claim(999L, "u")).isInstanceOf(JumpCardNotFoundException.class);
+        assertThatThrownBy(() -> service.claim(999L, "1203")).isInstanceOf(JumpCardNotFoundException.class);
     }
 
     @Test
     void 숨기고_되돌린다_누가_숨겼는지_남는다() {
         long id = 카드();
 
-        JumpCardSnapshot hidden = service.hide(id, "u-A");
+        JumpCardSnapshot hidden = service.hide(id, "1201");
         assertThat(hidden.hidden()).isTrue();
-        assertThat(hidden.hiddenBy()).isEqualTo("u-A");
+        assertThat(hidden.hiddenBy()).isEqualTo("1201");
 
-        JumpCardSnapshot back = service.unhide(id, "u-B");
+        JumpCardSnapshot back = service.unhide(id, "1202");
         assertThat(back.hidden()).isFalse();
         assertThat(back.hiddenBy()).isNull();
         assertThat(back.eventSeq()).as("바뀌었으니 순번이 올라야 한다").isGreaterThan(hidden.eventSeq());
@@ -260,7 +264,7 @@ class JumpCardServiceTest extends IntegrationTestSupport {
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             Future<?> winner = pool.submit(() -> transactions.executeWithoutResult(status -> {
-                service.claim(id, "u-A");
+                service.claim(id, "1201");
                 aClaimed.countDown();
                 try {
                     // 커밋을 700ms 붙잡는다 — 그 사이 B의 UPDATE가 행 락에서 멈춘다.
@@ -274,7 +278,7 @@ class JumpCardServiceTest extends IntegrationTestSupport {
             Future<Object> loser = pool.submit(() -> {
                 long startedAt = System.nanoTime();
                 try {
-                    return new Object[]{service.claim(id, "u-B"), Duration.ofNanos(System.nanoTime() - startedAt)};
+                    return new Object[]{service.claim(id, "1202"), Duration.ofNanos(System.nanoTime() - startedAt)};
                 } catch (RuntimeException e) {
                     return new Object[]{e, Duration.ofNanos(System.nanoTime() - startedAt)};
                 }
@@ -289,14 +293,14 @@ class JumpCardServiceTest extends IntegrationTestSupport {
 
             assertThat(blockedFor).as("안 막혔다면 두 트랜잭션이 안 겹친 것이다").isGreaterThan(Duration.ofMillis(400));
             assertThat(result[0]).isInstanceOf(ClaimedByOtherException.class);
-            assertThat(((ClaimedByOtherException) result[0]).current().claimedBy()).isEqualTo("u-A");
+            assertThat(((ClaimedByOtherException) result[0]).current().claimedBy()).isEqualTo("1201");
         } finally {
             aMayCommit.countDown();
             pool.shutdownNow();
         }
 
         assertThat(cards.findById(id).orElseThrow().getClaimedBy())
-                .as("먼저 잡은 쪽이 주인으로 남아야 한다").isEqualTo("u-A");
+                .as("먼저 잡은 쪽이 주인으로 남아야 한다").isEqualTo("1201");
     }
 
     /**
@@ -311,12 +315,12 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     @Test
     void 이미_숨긴_카드를_다시_숨겨도_숨긴_사람이_안_바뀐다() {
         long id = 카드();
-        JumpCardSnapshot first = service.hide(id, "u-A");
+        JumpCardSnapshot first = service.hide(id, "1201");
 
-        JumpCardSnapshot again = service.hide(id, "u-B");
+        JumpCardSnapshot again = service.hide(id, "1202");
 
         assertThat(again.hidden()).as("이미 숨김이어도 성공이다(멱등)").isTrue();
-        assertThat(again.hiddenBy()).as("추적 대상이 마지막에 누른 사람으로 바뀌었다").isEqualTo("u-A");
+        assertThat(again.hiddenBy()).as("추적 대상이 마지막에 누른 사람으로 바뀌었다").isEqualTo("1201");
         assertThat(again.eventSeq()).as("아무것도 안 바뀌었으니 순번도 그대로다").isEqualTo(first.eventSeq());
     }
 
@@ -326,7 +330,7 @@ class JumpCardServiceTest extends IntegrationTestSupport {
         long id = 카드();
         long before = service.snapshotsOf("s-1").get(0).eventSeq();
 
-        JumpCardSnapshot result = service.unhide(id, "u-A");
+        JumpCardSnapshot result = service.unhide(id, "1201");
 
         assertThat(result.hidden()).isFalse();
         assertThat(result.eventSeq()).isEqualTo(before);

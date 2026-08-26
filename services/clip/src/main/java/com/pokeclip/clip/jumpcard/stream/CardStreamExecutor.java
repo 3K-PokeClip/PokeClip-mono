@@ -74,10 +74,12 @@ public class CardStreamExecutor {
                         }
                         // 넘친 것이 조용히 사라지면 "왜 카드가 안 왔나"를 추적할 방법이 없다.
                         //
-                        // 🔴 "재연결이 전체 스냅샷으로 메운다"는 <b>실시간 발행(publish)에만</b> 참이다.
-                        // 초기 스냅샷에는 거짓이다 — 재연결해도 같은 스냅샷이라 같은 자리에서 또
-                        // 잘린다(2026-08-23 실측: 1200장에서 201건 유실이 2회차에도 그대로).
-                        // 그래서 sendInitial은 카드 수와 무관하게 태스크 하나만 제출한다.
+                        // 🔴 <b>POK-174 뒤로 재연결은 어느 쪽도 안 메운다</b> — 통로가 지난 카드를 아예
+                        // 안 보낸다. 버려진 카드를 메우는 것은 <b>카드 목록 문</b>이고 언제 다시 부를지는
+                        // 화면이 정한다("통로 먼저, 목록 나중"). 전에 적혀 있던 "재연결이 전체 스냅샷으로
+                        // 메운다"는 실시간 발행에만 참이었고 초기 스냅샷에는 그때도 거짓이었다 — 재연결해도
+                        // 같은 스냅샷이라 같은 자리에서 또 잘렸다(2026-08-23 실측: 1200장에서 201건 유실이
+                        // 2회차에도 그대로). 지금 sendInitial은 카드를 안 실어 태스크 하나 = 큐 한 칸이다.
                         //
                         // 🔴 여기서 completeWithError를 부르지 않는다. 거부 처리기는 execute()를 부른
                         // 스레드에서 도는데, 그 스레드가 publish의 afterCommit 안에 있는 요청 스레드다.
@@ -101,8 +103,8 @@ public class CardStreamExecutor {
      *
      * @return 큐에 들어갔으면 {@code true}, 큐가 차서 버려졌으면 {@code false}.
      *         <b>버려진 것을 회복할 방법은 호출자마다 다르므로 여기서 정하지 않는다</b> —
-     *         실시간 발행은 재연결이 메우고({@link CardStreamRegistry#publish}),
-     *         종료 알림은 메울 것이 없어 자리를 회수한다
+     *         실시간 발행은 <b>카드 목록 문</b>이 메우고(POK-174 뒤로 재연결은 안 메운다 —
+     *         {@link CardStreamRegistry#publish}), 종료 알림은 메울 것이 없어 자리를 회수한다
      *         ({@link CardStreamRegistry#broadcastEnded}).
      */
     public boolean submit(int stripe, SseEmitter emitter, SendAction action) {

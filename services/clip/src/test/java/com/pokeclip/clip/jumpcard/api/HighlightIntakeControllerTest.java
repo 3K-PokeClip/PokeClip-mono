@@ -4,6 +4,7 @@ import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.jumpcard.JumpCardRepository;
 import com.pokeclip.clip.support.IntegrationTestSupport;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,7 +49,7 @@ class HighlightIntakeControllerTest extends IntegrationTestSupport {
     void 정리() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-1", "u-1", 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.now(), null));
     }
 
     @Test

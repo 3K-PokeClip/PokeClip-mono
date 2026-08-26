@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level;
 import com.pokeclip.clip.broadcast.BroadcastEventProcessor;
 import com.pokeclip.clip.broadcast.LifecycleEnvelope;
 import com.pokeclip.clip.broadcast.ProcessResult;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -654,9 +655,9 @@ class SqsIntakeRunnerTest {
     private static String endedBody(String eventId, String streamId, long sequence) {
         return """
                 {"schemaVersion":1,"eventId":"%s","eventType":"broadcast.ended",
-                 "occurredAt":"2026-08-23T01:00:00Z","streamId":"%s","streamerId":"streamer-1",
+                 "occurredAt":"2026-08-23T01:00:00Z","streamId":"%s","streamerId":"%s",
                  "sequence":%d,"traceId":"trace-1","payload":{}}
-                """.formatted(eventId, streamId, sequence);
+                """.formatted(eventId, streamId, TestIds.STREAMER, sequence);
     }
 
     private static String baseEnvelopeJson() {
@@ -716,7 +717,7 @@ class SqsIntakeRunnerTest {
                 "eventType", "broadcast.started",
                 "occurredAt", "2026-08-18T00:00:00Z",
                 "streamId", "s1",
-                "streamerId", "streamer-1",
+                "streamerId", TestIds.STREAMER,
                 "sequence", 1,
                 "traceId", "trace-1",
                 "payload", Map.of()));
@@ -729,9 +730,9 @@ class SqsIntakeRunnerTest {
     private static String envelopeJson(String eventId, String streamId, long sequence, String eventType) {
         return """
                 {"schemaVersion":1,"eventId":"%s","eventType":"%s",
-                 "occurredAt":"2026-08-18T00:00:00Z","streamId":"%s","streamerId":"streamer-1",
+                 "occurredAt":"2026-08-18T00:00:00Z","streamId":"%s","streamerId":"%s",
                  "sequence":%d,"traceId":"trace-1","payload":{}}
-                """.formatted(eventId, eventType, streamId, sequence);
+                """.formatted(eventId, eventType, streamId, TestIds.STREAMER, sequence);
     }
 
     /**

@@ -10,6 +10,9 @@ import org.springframework.web.client.RestClientResponseException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * 「이 회원이 이 스트리머의 방송을 열 수 있나」를 auth에 묻는다. 계약 정본은 auth의
  * {@code DelegationResolveController}다 — <b>판정은 항상 HTTP 200</b>이고 {@code NONE}도 200이다.
@@ -24,6 +27,13 @@ import tools.jackson.databind.ObjectMapper;
  *
  * <p><b>재시도하지 않는다.</b> 이 호출은 사람이 기다리는 요청 안에서 돈다 — 한 번 더 걸면
  * 시한이 두 배가 되고 톰캣 스레드를 그만큼 더 쥔다.
+ *
+ * <p>🔴 <b>그 문장은 오래 거짓이었다.</b> 우리 코드는 안 걸었지만 <b>HTTP 스택이 걸었다</b> —
+ * Apache HC5가 {@code 429}·{@code 503}만 한 번 되건다(감사 1라운드 실측:
+ * {@code 401·500·502·504 → 1회}, {@code 429·503 → 2회}). 지금은
+ * {@link com.pokeclip.clip.config.HttpClientRetryConfig}가 그것을 <b>명시적으로 꺼서</b>
+ * 이 문장을 참으로 만든다 — <b>그 설정을 「불필요한 중복」으로 지우면 이 문장이 다시 거짓이 된다.</b>
+ * {@code AuthRetryContractTest}가 두 메서드 모두에 대해 「요청은 한 번」을 고정한다.
  */
 @Component
 public class DelegationResolveClient {
@@ -33,6 +43,8 @@ public class DelegationResolveClient {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static final String RESOLVE_PATH = "/internal/editor-delegations/resolve";
+
+    private static final String ACCESSIBLE_PATH = "/internal/editor-delegations/accessible";
 
     /** auth의 {@code InternalTokenFilter}가 보는 이름. 빠지면 401이다. */
     private static final String INTERNAL_TOKEN_HEADER = "X-Internal-Token";
@@ -102,6 +114,79 @@ public class DelegationResolveClient {
             // (clip/CLAUDE.md 「알려진 구멍」의 같은 모양). 무엇이 왔는지는 auth 쪽 열거형에서 본다.
             default -> unavailable(userId, "unknown_relation");
         };
+    }
+
+    /**
+     * 이 회원이 볼 수 있는 스트리머 전부. 방송 목록 화면이 쓴다.
+     *
+     * <p><b>목록에 {@code NONE}은 안 나온다</b> — 없는 것이 곧 {@code NONE}이다.
+     * 그리고 <b>없는 회원 번호에도 자기 자신이 {@code OWNER}로 한 줄 온다</b>(auth가 회원 표를
+     * 안 읽는다). 그 번호로 방송을 찾으면 0건이라 목록에 안 나타나므로 그대로 둔다.
+     *
+     * <p>{@link #resolve}와 같이 <b>예외를 던지지 않는다.</b> 못 물으면 {@code available=false}다.
+     */
+    public AccessibleResult accessible(long userId) {
+        try {
+            String body = restClient.post()
+                    .uri(baseUrl + ACCESSIBLE_PATH)
+                    .header(INTERNAL_TOKEN_HEADER, internalToken)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    // 🔴 칸은 userId 하나다. streamerId 같은 옛 이름을 같이 실으면 auth가
+                    // 400이 아니라 200을 주고(모르는 필드를 조용히 버린다) 오타가 안 드러난다.
+                    .body("{\"userId\":" + userId + "}")
+                    .retrieve()
+                    .body(String.class);
+            return readAccessible(userId, body);
+        } catch (RestClientResponseException e) {
+            return unavailableList(userId, "status=" + e.getStatusCode().value());
+        } catch (Exception e) {
+            return unavailableList(userId, e.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * 한 줄이라도 읽을 수 없으면 <b>목록 전체</b>를 거절한다. 그 줄만 버리면 볼 수 있는 방송이
+     * 목록에서 조용히 사라지는데, 화면에는 그냥 없는 것으로 보인다 — 거절하면 503이라
+     * 사람이 다시 누르고 로그가 남는다.
+     */
+    private AccessibleResult readAccessible(long userId, String body) {
+        JsonNode streamers = MAPPER.readTree(body).path("streamers");
+        // 🔴 칸 이름 하나만 믿으면 안 된다 — relation·streamerUserId는 안 믿으면서 이것만 믿고
+        // 있었다(감사 1라운드). 칸이 없거나 배열이 아니면 순회가 통째로 비어 <b>「볼 방송이
+        // 없다」는 참인 답</b>이 나가고, 화면은 그것을 단정한다. 로그도 안 남아 발견 수단이 없다.
+        // 실측한 모양 여섯이 전부 그랬다: {} · null · "x" · 오타난 칸 · {} · 숫자.
+        if (!streamers.isArray()) {
+            return unavailableList(userId, "bad_streamers");
+        }
+        List<AccessibleResult.Entry> entries = new ArrayList<>();
+        for (JsonNode node : streamers) {
+            ResolveResult relation = switch (node.path("relation").asString("")) {
+                case "OWNER" -> ResolveResult.OWNER;
+                case "EDITOR" -> ResolveResult.EDITOR;
+                // NONE도 여기서는 모르는 값이다 — 목록에 없는 것이 곧 NONE이라 실려 올 이유가 없고,
+                // 실려 온다면 계약이 우리가 아는 것과 다르다는 뜻이다.
+                default -> null;
+            };
+            if (relation == null) {
+                return unavailableList(userId, "unknown_relation");
+            }
+            JsonNode id = node.path("streamerUserId");
+            // 🔴 asLong()은 칸이 없거나 숫자가 아니면 조용히 0을 준다 — 그 0으로 방송을 찾으면
+            // 0건이라 <b>틀린 목록이 「참인 답」으로 나간다</b>. 정수가 아닌 수도 막는다:
+            // 7.9가 7로 잘리면 남의 목록이 나갈 수 있고, 회원 번호는 정수다.
+            if (!id.isIntegralNumber() || !id.canConvertToLong()) {
+                return unavailableList(userId, "bad_streamer_id");
+            }
+            entries.add(new AccessibleResult.Entry(id.longValue(), relation));
+        }
+        return AccessibleResult.of(entries);
+    }
+
+    private AccessibleResult unavailableList(long userId, String cause) {
+        // resolve 쪽과 같은 이유로 WARN이고, 받은 값 자체는 안 싣는다 — auth가 주는 값이지만
+        // 개행이 섞이면 로그 한 줄이 여러 줄로 쪼개져 없던 기록을 위조할 수 있다.
+        log.warn("clip.delegation.accessible_unavailable userId={} cause={}", userId, cause);
+        return AccessibleResult.unavailable();
     }
 
     private ResolveResult unavailable(long userId, String cause) {

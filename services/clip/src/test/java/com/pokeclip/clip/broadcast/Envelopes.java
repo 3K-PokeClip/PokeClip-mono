@@ -1,5 +1,6 @@
 package com.pokeclip.clip.broadcast;
 
+import com.pokeclip.clip.support.TestIds;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
@@ -11,21 +12,21 @@ public final class Envelopes {
 
     public static LifecycleEnvelope started(String eventId, String streamId, long sequence) {
         return new LifecycleEnvelope(1, eventId, "broadcast.started",
-                Instant.parse("2026-08-18T00:00:00Z"), streamId, "streamer-1", sequence,
+                Instant.parse("2026-08-18T00:00:00Z"), streamId, TestIds.STREAMER, sequence,
                 "trace-1", MAPPER.createObjectNode());
     }
 
     /** trackManifest에 값이 든 봉투. jsonb 왕복을 실제로 재려면 이것이 필요하다. */
     public static LifecycleEnvelope startedWithManifest(String eventId, String streamId, long sequence) {
         return new LifecycleEnvelope(1, eventId, "broadcast.started",
-                Instant.parse("2026-08-18T00:00:00Z"), streamId, "streamer-1", sequence,
+                Instant.parse("2026-08-18T00:00:00Z"), streamId, TestIds.STREAMER, sequence,
                 "trace-1", MAPPER.readTree("""
                         {"trackManifest": {"manifestVersion": 3, "tracks": 6}}"""));
     }
 
     public static LifecycleEnvelope ended(String eventId, String streamId, long sequence) {
         return new LifecycleEnvelope(1, eventId, "broadcast.ended",
-                Instant.parse("2026-08-18T01:00:00Z"), streamId, "streamer-1", sequence,
+                Instant.parse("2026-08-18T01:00:00Z"), streamId, TestIds.STREAMER, sequence,
                 "trace-1", MAPPER.createObjectNode());
     }
 

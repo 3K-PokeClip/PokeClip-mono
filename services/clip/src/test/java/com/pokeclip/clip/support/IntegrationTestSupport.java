@@ -1,5 +1,6 @@
 package com.pokeclip.clip.support;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
@@ -34,9 +35,30 @@ public abstract class IntegrationTestSupport {
             new PostgreSQLContainer("postgres:17")
                     .withCommand("postgres", "-c", "max_connections=300");
 
+    /**
+     * 스프링이 보는 auth는 이것 <b>하나뿐</b>이다. JVM에 하나만 두는 이유는 컨텍스트 캐시다 —
+     * 클래스마다 서버를 띄우면 {@code base-url} 값이 달라져 캐시 키가 갈리고, 컨텍스트가
+     * 열셋에서 서른 몇 개로 늘어 각자 Hikari 풀을 들고 {@code max_connections=300}을 향해 간다.
+     *
+     * <p>대가는 <b>응답 상태가 JVM 전역</b>이라는 것이다. 그래서 {@link #가짜_auth를_초기화한다()}가
+     * 매 시험 앞에서 되돌리고, 초기 상태는 <b>503</b>이다 — 답을 안 건 시험이 200을 받으면
+     * 자격 판정을 통째로 안 재면서 초록이 된다.
+     */
+    protected static final FakeAuth AUTH = FakeAuth.start();
+
     static {
         POSTGRES.start();
         seedNonEmptySchema();
+    }
+
+    /**
+     * 🔴 상위 클래스의 {@code @BeforeEach}가 하위보다 <b>먼저</b> 돈다(JUnit 5 규약).
+     * 그래서 하위가 {@code @BeforeEach}에서 자기 답을 걸면 그것이 남는다 — 순서가 반대였다면
+     * 이 초기화가 하위의 설정을 지웠을 것이다.
+     */
+    @BeforeEach
+    protected void 가짜_auth를_초기화한다() {
+        AUTH.reset();
     }
 
     /**
@@ -113,5 +135,15 @@ public abstract class IntegrationTestSupport {
         registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
         registry.add("spring.datasource.username", POSTGRES::getUsername);
         registry.add("spring.datasource.password", POSTGRES::getPassword);
+    }
+
+    /**
+     * {@code application-test.yml}의 주소(아무도 안 듣는 포트)를 {@link #AUTH}로 덮는다.
+     * <b>여기 한 곳에서만</b> 덮는 것이 규칙이다 — 클래스마다 자기 {@code @DynamicPropertySource}를
+     * 달면 컨텍스트 캐시가 갈린다.
+     */
+    @DynamicPropertySource
+    static void authClientProperties(DynamicPropertyRegistry registry) {
+        registry.add("pokeclip.auth-client.base-url", AUTH::baseUrl);
     }
 }

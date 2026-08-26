@@ -3,7 +3,6 @@ package com.pokeclip.clip.jumpcard.stream;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.StreamLimitExceededException;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.jumpcard.JumpCardSource;
-import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -94,10 +93,10 @@ class CardStreamRegistryTest {
     @Test
     void 사용자당_상한을_넘기면_거절한다() {
         CardStreamRegistry registry = registry(props(2, 50, 500));
-        registry.open("s-1", "u-1", Duration.ofMinutes(1));
-        registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        registry.open("s-1", "2401", Duration.ofMinutes(1));
+        registry.open("s-1", "2401", Duration.ofMinutes(1));
 
-        assertThatThrownBy(() -> registry.open("s-2", "u-1", Duration.ofMinutes(1)))
+        assertThatThrownBy(() -> registry.open("s-2", "2401", Duration.ofMinutes(1)))
                 .as("방송이 달라도 사람 기준으로 센다")
                 .isInstanceOf(StreamLimitExceededException.class)
                 .satisfies(e -> assertThat(((StreamLimitExceededException) e).scope()).isEqualTo("user"));
@@ -106,18 +105,18 @@ class CardStreamRegistryTest {
     @Test
     void 방송당_상한과_전체_상한도_센다() {
         CardStreamRegistry perStream = registry(props(500, 2, 500));
-        perStream.open("s-1", "u-1", Duration.ofMinutes(1));
-        perStream.open("s-1", "u-2", Duration.ofMinutes(1));
-        assertThatThrownBy(() -> perStream.open("s-1", "u-3", Duration.ofMinutes(1)))
+        perStream.open("s-1", "2401", Duration.ofMinutes(1));
+        perStream.open("s-1", "2402", Duration.ofMinutes(1));
+        assertThatThrownBy(() -> perStream.open("s-1", "2403", Duration.ofMinutes(1)))
                 .isInstanceOf(StreamLimitExceededException.class)
                 .satisfies(e -> assertThat(((StreamLimitExceededException) e).scope()).isEqualTo("stream"));
         perStream.stop();
         executor.shutdown();
 
         CardStreamRegistry total = registry(props(500, 500, 2));
-        total.open("s-1", "u-1", Duration.ofMinutes(1));
-        total.open("s-2", "u-2", Duration.ofMinutes(1));
-        assertThatThrownBy(() -> total.open("s-3", "u-3", Duration.ofMinutes(1)))
+        total.open("s-1", "2401", Duration.ofMinutes(1));
+        total.open("s-2", "2402", Duration.ofMinutes(1));
+        assertThatThrownBy(() -> total.open("s-3", "2403", Duration.ofMinutes(1)))
                 .isInstanceOf(StreamLimitExceededException.class)
                 .satisfies(e -> assertThat(((StreamLimitExceededException) e).scope()).isEqualTo("total"));
     }
@@ -129,7 +128,7 @@ class CardStreamRegistryTest {
     @Test
     void 콜백이_불리면_자리가_돌아온다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
         assertThat(registry.connectionCount()).isEqualTo(1);
 
         emitter.fireCompletion();
@@ -140,9 +139,9 @@ class CardStreamRegistryTest {
     @Test
     void publish는_그_방송의_연결에만_간다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter a = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
-        RecordingEmitter b = (RecordingEmitter) registry.open("s-1", "u-2", Duration.ofMinutes(1));
-        RecordingEmitter other = (RecordingEmitter) registry.open("s-2", "u-3", Duration.ofMinutes(1));
+        RecordingEmitter a = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
+        RecordingEmitter b = (RecordingEmitter) registry.open("s-1", "2402", Duration.ofMinutes(1));
+        RecordingEmitter other = (RecordingEmitter) registry.open("s-2", "2403", Duration.ofMinutes(1));
 
         registry.publish(snapshot("s-1", 41L));
 
@@ -153,71 +152,40 @@ class CardStreamRegistryTest {
         assertThat(other.events()).as("다른 방송에 새면 편집자가 남의 방송 카드를 본다").isEmpty();
     }
 
-    @Test
-    void sendInitial은_카드_전부를_보내고_끝난_방송이면_ended_뒤에_닫는다() {
-        CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter live = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
-        registry.sendInitial(live, List.of(snapshot("s-1", 1L), snapshot("s-1", 2L)), false);
-        awaitUntil(() -> live.named().size() == 2);
-        // 이름 있는 것만 센다 — sendInitial은 헤더를 즉시 커밋시키려고 주석("ok")을 먼저 보낸다.
-        assertThat(live.named()).extracting(RecordingEmitter.Event::name).containsExactly("card", "card");
-        assertThat(live.events().get(0).comment()).as("첫 쓰기가 주석이어야 헤더가 바로 나간다").isEqualTo("ok");
-        assertThat(live.completed()).as("진행 중인 방송이면 열어 둔다").isFalse();
-
-        RecordingEmitter ended = (RecordingEmitter) registry.open("s-2", "u-2", Duration.ofMinutes(1));
-        registry.sendInitial(ended, List.of(snapshot("s-2", 3L)), true);
-        awaitUntil(() -> ended.named().size() == 2);
-        assertThat(ended.named()).extracting(RecordingEmitter.Event::name).containsExactly("card", "ended");
-        awaitUntil(ended::completed);
-    }
-
     /**
-     * <b>초기 스냅샷은 큐를 한 칸만 쓴다.</b>
+     * 🔴 <b>뜻이 뒤집힌 갈래.</b> 전에는 「카드 전부를 보내고 끝난 방송이면 {@code ended}」를 쟀고,
+     * 지금은 <b>지난 카드가 안 나가는 것</b>을 잰다(POK-174 — 따라잡기는 목록 문이 맡는다).
+     * 지우지 않고 뒤집는 이유는 지우면 카드 전송이 되살아나도 이 층에서는 아무도 모르기 때문이다.
      *
-     * <p>카드 하나당 태스크 하나로 제출하면 큐를 <b>카드 수만큼</b> 먹는다. 상한(운영 1000)을
-     * 넘으면 거부 처리기가 조용히 버리고, <b>재연결해도 같은 스냅샷이라 같은 자리에서 또 잘린다</b>
-     * (PR #109 봇 지적 ③, 2026-08-23 재현 — 1200장에서 201건 유실이 재연결 2회차에도 그대로).
-     * 처음 잘리는 것이 {@code ended}라 <b>연결이 안 닫히기까지</b> 한다.
-     *
-     * <p>여기서는 큐 상한을 <b>2</b>로 조여 카드 200장을 민다. 쪼개 제출하면 201건 중 199건이
-     * 거부되고, 한 태스크로 묶으면 한 칸이면 충분하다.
+     * <p>같이 사라진 갈래 하나를 적어 둔다 — {@code 초기_스냅샷은_카드가_많아도_큐를_한_칸만_쓴다}는
+     * 「카드 200장을 큐 2짜리 실행기로 밀어도 거부가 없다」를 쟀는데, 보낼 카드가 없어져
+     * <b>잴 대상 자체가 없다</b>. 카드 전송이 되살아나는 것을 막는 그물은 이 갈래와
+     * {@code StreamAccessTest}에 있다.
      */
     @Test
-    void 초기_스냅샷은_카드가_많아도_큐를_한_칸만_쓴다() {
-        executor = new CardStreamExecutor(1, 2);
-        registry = new CardStreamRegistry(executor, props(4, 50, 500), mapper, d -> new RecordingEmitter());
-        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
-        List<JumpCardSnapshot> cards =
-                IntStream.rangeClosed(1, 200).mapToObj(i -> snapshot("s-1", i)).toList();
+    void sendInitial은_주석만_보내고_끝난_방송이면_ended_뒤에_닫는다() {
+        CardStreamRegistry registry = registry(props(4, 50, 500));
+        RecordingEmitter live = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
+        registry.sendInitial(live, false);
+        awaitUntil(() -> !live.events().isEmpty());
+        assertThat(live.events().get(0).comment()).as("첫 쓰기가 주석이어야 헤더가 바로 나간다").isEqualTo("ok");
+        assertThat(live.named()).as("지난 카드가 나갔다 — 화면이 같은 카드를 두 경로로 받는다").isEmpty();
+        assertThat(live.completed()).as("진행 중인 방송이면 열어 둔다").isFalse();
 
-        try (LogCaptor captor = new LogCaptor()) {
-            registry.sendInitial(emitter, cards, true);
-            long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-            while (emitter.named().size() < 201 && System.nanoTime() < deadline) {
-                try {
-                    Thread.sleep(10);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-            assertThat(captor.messages().stream().filter(m -> m.startsWith("jumpcard.stream.rejected")))
-                    .as("초기 스냅샷이 거부되면 그 카드는 재연결해도 같은 자리에서 또 잘린다")
-                    .isEmpty();
-        }
-
-        assertThat(emitter.named()).as("카드 200장 + ended").hasSize(201);
-        assertThat(emitter.named().get(200).name())
-                .as("ended가 거부되면 연결이 안 닫힌 채 불완전하게 남는다").isEqualTo("ended");
-        assertThat(emitter.events().get(0).comment())
-                .as("한 태스크로 묶여도 헤더를 틔우는 주석이 여전히 첫 쓰기여야 한다").isEqualTo("ok");
-        awaitUntil(emitter::completed);
+        RecordingEmitter ended = (RecordingEmitter) registry.open("s-2", "2402", Duration.ofMinutes(1));
+        registry.sendInitial(ended, true);
+        awaitUntil(() -> ended.named().size() == 1);
+        assertThat(ended.named()).extracting(RecordingEmitter.Event::name).containsExactly("ended");
+        assertThat(ended.events().get(0).comment())
+                .as("끝난 방송에서도 주석이 먼저여야 한다 — ended가 먼저면 닫힌 뒤에 쓰게 된다").isEqualTo("ok");
+        awaitUntil(ended::completed);
     }
 
     @Test
     void broadcastEnded는_그_방송_연결에_ended를_보내고_닫는다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter mine = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
-        RecordingEmitter other = (RecordingEmitter) registry.open("s-2", "u-2", Duration.ofMinutes(1));
+        RecordingEmitter mine = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
+        RecordingEmitter other = (RecordingEmitter) registry.open("s-2", "2402", Duration.ofMinutes(1));
 
         registry.broadcastEnded("s-1");
 
@@ -231,17 +199,16 @@ class CardStreamRegistryTest {
     /**
      * <b>{@code broadcastEnded}가 연결을 여는 도중에 끼어도 순서가 지켜진다.</b>
      *
-     * <p><b>창이 둘이다</b>(2026-08-23 재현). 봇은 앞의 하나만 지적했다.
-     * <ul>
-     *   <li><b>(가) 등록 직후 ~ 첫 제출 전</b> — {@code ended}가 스냅샷 <b>전체</b>보다 먼저 간다.
-     *       클라이언트가 받는 것은 {@code ended} <b>하나뿐</b>이고, 뒤따르는 카드는 이미 닫힌
-     *       emitter에 쓰다 {@code IllegalStateException}으로 삼켜진다(카드 5장 중 도착 0장)</li>
-     *   <li><b>(나) 스냅샷을 제출하는 도중</b> — 앞 카드는 가고 <b>뒤 카드가 거부</b>된다.
-     *       이 창은 카드 수에 비례한다({@code openWithSnapshot} 실측 0.011~1.830ms,
-     *       카드 0~1000장)</li>
-     * </ul>
+     * <p><b>창은 등록 직후 ~ 첫 제출 전</b>이다(2026-08-23 재현). 자물쇠가 없으면 {@code ended}가
+     * 초기 전송보다 <b>먼저</b> 가고, 그 뒤에 오는 주석은 이미 닫힌 emitter에 쓰다
+     * {@code IllegalStateException}으로 삼켜진다.
      *
-     * <p>같은 자물쇠가 둘 다 닫는다 — {@code broadcastEnded}에 {@code synchronized}가 붙으면
+     * <p>🔴 <b>POK-174가 이 시험의 단언을 옮겼다.</b> 초기 전송에 카드가 없어져 이름 있는 이벤트는
+     * {@code ended} 하나뿐이고, 그것만 보면 순서를 못 잰다. 그래서 <b>주석까지 포함한
+     * {@code events()}의 순서</b>를 본다 — 자물쇠가 없으면 {@code ended}가 앞서고 주석은
+     * 거부되므로 순서와 {@code rejectedCount} 둘 다 빨간불이 된다.
+     *
+     * <p>같은 자물쇠가 닫는다 — {@code broadcastEnded}에 {@code synchronized}가 붙으면
      * 종료 알림은 {@code openWithSnapshot} <b>앞이나 뒤로만</b> 갈라진다.
      *
      * <p>훅에서 <b>200ms를 잔다</b>. 자물쇠가 없으면 그 사이에 {@code broadcastEnded}가 통째로
@@ -249,7 +216,7 @@ class CardStreamRegistryTest {
      * 반대 방향이라 느린 기계에서 더 안전하다.
      */
     @Test
-    void broadcastEnded가_연결을_여는_도중에_끼어도_스냅샷이_먼저_간다() throws Exception {
+    void broadcastEnded가_연결을_여는_도중에_끼어도_초기_전송이_먼저_간다() throws Exception {
         executor = new CardStreamExecutor(4, 1000);
         Thread[] ender = new Thread[1];
         RecordingEmitter[] made = new RecordingEmitter[1];
@@ -273,32 +240,30 @@ class CardStreamRegistryTest {
             return emitter;
         });
 
-        List<JumpCardSnapshot> cards =
-                IntStream.rangeClosed(1, 5).mapToObj(i -> snapshot("s-1", i)).toList();
-        registry.openWithSnapshot("s-1", "u-1", () -> Duration.ofMinutes(1),
-                () -> new CardStreamRegistry.InitialSnapshot(cards, false));
+        registry.openWithSnapshot("s-1", "2401", () -> Duration.ofMinutes(1),
+                () -> new CardStreamRegistry.InitialSnapshot(false));
         ender[0].join(5_000);
 
         RecordingEmitter emitter = made[0];
         // awaitUntil을 안 쓴다 — 못 모으면 거기서 터져 <b>무엇이 왔는지</b>를 못 본다.
         // 여기서는 실패의 이유가 「몇 개가 아니라 어떤 순서인가」라 목록이 보여야 한다.
         long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
-        while (emitter.named().size() < 6 && System.nanoTime() < deadline) {
+        while (emitter.events().size() < 2 && System.nanoTime() < deadline) {
             Thread.sleep(10);
         }
-        assertThat(emitter.named()).extracting(RecordingEmitter.Event::name)
-                .as("ended가 먼저 나가면 클라이언트는 카드 0장에 ended만 받는다")
-                .containsExactly("card", "card", "card", "card", "card", "ended");
+        assertThat(emitter.events()).extracting(e -> e.comment() != null ? ":" + e.comment() : e.name())
+                .as("ended가 먼저 나가면 뒤따르는 주석이 닫힌 emitter에 쓰이며 삼켜진다")
+                .containsExactly(":ok", "ended");
         assertThat(emitter.rejectedCount())
-                .as("닫힌 뒤에 쓴 것이 있으면 그만큼 카드가 조용히 사라진 것이다").isZero();
+                .as("닫힌 뒤에 쓴 것이 있으면 그만큼 조용히 사라진 것이다").isZero();
         awaitUntil(emitter::completed);
     }
 
     @Test
     void ping은_모든_연결에_주석을_보낸다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter a = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
-        RecordingEmitter b = (RecordingEmitter) registry.open("s-2", "u-2", Duration.ofMinutes(1));
+        RecordingEmitter a = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
+        RecordingEmitter b = (RecordingEmitter) registry.open("s-2", "2402", Duration.ofMinutes(1));
 
         registry.ping();
 
@@ -326,7 +291,7 @@ class CardStreamRegistryTest {
             }
         };
         registry = new CardStreamRegistry(executor, props(4, 50, 500), mapper, d -> new RecordingEmitter());
-        registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        registry.open("s-1", "2401", Duration.ofMinutes(1));
 
         assertThatCode(registry::ping)
                 .as("예외가 새면 scheduleAtFixedRate가 이 작업을 취소하고 다시는 안 돈다")
@@ -349,8 +314,8 @@ class CardStreamRegistryTest {
     @Test
     void 연결이_없어진_방송의_순번표를_하트비트가_버린다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter gone = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
-        registry.open("s-2", "u-2", Duration.ofMinutes(1));
+        RecordingEmitter gone = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
+        registry.open("s-2", "2402", Duration.ofMinutes(1));
         registry.publish(snapshot("s-1", 41L));
         registry.publish(snapshot("s-2", 42L));
         assertThat(registry.trackedStreamCount()).as("두 방송 다 순번을 들고 있다").isEqualTo(2);
@@ -365,8 +330,10 @@ class CardStreamRegistryTest {
     /**
      * <b>표를 버린 뒤에도 「낡은 것은 안 보낸다」가 그대로 선다.</b>
      *
-     * <p>버려도 되는 근거는 새 연결이 {@code openWithSnapshot}의 DB 스냅샷으로 최신 상태를
-     * 들고 시작한다는 것이고, 그 뒤의 발행은 <b>빈 표에서 다시 쌓인다</b>. 이 시험이 그
+     * <p>🔴 <b>버려도 되는 근거가 POK-174로 바뀌었다.</b> 전에는 「새 연결이
+     * {@code openWithSnapshot}의 DB 스냅샷으로 최신 상태를 들고 시작한다」였는데 그 스냅샷은
+     * 이제 {@code ended} 하나다. 지금 서는 것은 <b>화면이 통로를 연 뒤에 카드 목록 문을
+     * 부른다</b>는 순서이고, 그 뒤의 발행은 <b>빈 표에서 다시 쌓인다</b>. 이 시험이 그
      * 「다시 쌓임」을 잰다 — 여기가 깨지면 표를 버리는 값이 화면이 뒤로 가는 대가로 바뀐다.
      *
      * <p>마커는 <b>다른 카드</b>라 순번 비교에 안 걸린다. 같은 연결 = 같은 스트라이프라
@@ -376,13 +343,13 @@ class CardStreamRegistryTest {
     @Test
     void 순번표를_버린_뒤_새_연결에도_낡은_순번은_안_간다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter gone = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        RecordingEmitter gone = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
         registry.publish(snapshot("s-1", 7L, 100L));
         gone.fireCompletion();
         registry.ping();
         assertThat(registry.trackedStreamCount()).as("여기가 0이 아니면 아래가 옛 표로 통과한다").isZero();
 
-        RecordingEmitter fresh = (RecordingEmitter) registry.open("s-1", "u-2", Duration.ofMinutes(1));
+        RecordingEmitter fresh = (RecordingEmitter) registry.open("s-1", "2402", Duration.ofMinutes(1));
         registry.publish(snapshot("s-1", 7L, 200L));
         registry.publish(snapshot("s-1", 7L, 150L));
         registry.publish(snapshot("s-1", 8L, 300L));
@@ -397,7 +364,7 @@ class CardStreamRegistryTest {
     @Test
     void 같은_연결의_이벤트는_순서대로_온다() {
         CardStreamRegistry registry = registry(props(4, 50, 500));
-        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        RecordingEmitter emitter = (RecordingEmitter) registry.open("s-1", "2401", Duration.ofMinutes(1));
 
         for (int i = 1; i <= 50; i++) {
             registry.publish(snapshot("s-1", i));

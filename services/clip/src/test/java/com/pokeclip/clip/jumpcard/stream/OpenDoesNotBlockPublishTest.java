@@ -5,7 +5,9 @@ import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.jumpcard.JumpCardService;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.support.IntegrationTestSupport;
+import com.pokeclip.clip.support.Spies;
 import com.pokeclip.clip.support.SseReader;
+import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.BeforeEach;
@@ -46,11 +48,15 @@ import static org.mockito.Mockito.doAnswer;
  * 유지됐다. 이 코드가 <b>고갈을 스스로 만든다</b>는 뜻이다.
  *
  * <p>처방은 <b>조회를 락 밖으로</b>가 아니라 <b>기다림을 락 밖으로</b>다(조회 대기 자체는 락
- * 안이든 밖이든 같았다 — 510ms 대 509ms). 컨트롤러가 {@code @Transactional(readOnly = true)}로
+ * 안이든 밖이든 같았다 — 510ms 대 509ms). {@link StreamOpener}가 {@code @Transactional(readOnly = true)}로
  * 트랜잭션을 먼저 열면 커넥션 획득이 자물쇠 <b>앞</b>에서 끝나고, 자물쇠 안의 조회는 그
  * 커넥션을 <b>재사용</b>한다.
  *
- * <p><b>그물을 두 겹으로 둔다.</b> 하나는 구조({@code snapshotsOf}가 불릴 때 트랜잭션이 이미
+ * <p>🔴 <b>POK-174가 표적을 옮겼다</b> — 자물쇠 안에서 도는 조회가 {@code JumpCardService.snapshotsOf}에서
+ * {@code BroadcastRepository.findByStreamId}로 바뀌었다(초기 카드 전송이 없어졌다). 옛 표적을
+ * 그대로 두면 이 클래스는 <b>불리지 않는 메서드</b>를 감시하며 초록이 된다.
+ *
+ * <p><b>그물을 두 겹으로 둔다.</b> 하나는 구조(자물쇠 안 조회가 불릴 때 트랜잭션이 이미
  * 열려 있는가), 하나는 실제 막힘(ms). 구조 쪽이 결정적이고, 막힘 쪽이 <b>대가의 방향이 뒤집힌
  * 뒤의 값</b>을 계속 잰다 — 이제는 커넥션을 쥔 채 자물쇠를 기다리므로 그 시간이 짧아야 한다.
  *
@@ -81,19 +87,22 @@ class OpenDoesNotBlockPublishTest extends IntegrationTestSupport {
      */
     private static final Duration 기준 = Duration.ofMillis(120);
 
+    private static final String RESOLVE = "/internal/editor-delegations/resolve";
+
+    /** 자물쇠 <b>안</b>에서 도는 조회. 여기가 「어느 트랜잭션에서 도나」를 볼 수 있는 유일한 자리다. */
     @MockitoSpyBean
-    private JumpCardService service;
+    private BroadcastRepository broadcasts;
 
     private final int port;
-    private final BroadcastRepository broadcasts;
+    private final JumpCardService service;
     private final CardStreamRegistry registry;
     private final JdbcTemplate jdbc;
     private final DataSource dataSource;
 
-    OpenDoesNotBlockPublishTest(@LocalServerPort int port, BroadcastRepository broadcasts,
+    OpenDoesNotBlockPublishTest(@LocalServerPort int port, JumpCardService service,
                                 CardStreamRegistry registry, JdbcTemplate jdbc, DataSource dataSource) {
         this.port = port;
-        this.broadcasts = broadcasts;
+        this.service = service;
         this.registry = registry;
         this.jdbc = jdbc;
         this.dataSource = dataSource;
@@ -102,30 +111,35 @@ class OpenDoesNotBlockPublishTest extends IntegrationTestSupport {
     @BeforeEach
     void 정리() {
         방송과_카드를_비운다(jdbc);
+        // 답을 안 걸면 자격 판정이 503이라 통로가 안 열린다 — 이 클래스는 자격이 아니라 막힘을 잰다.
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
     /**
-     * 구조 그물. {@code snapshotsOf}가 자물쇠 안에서 불릴 때, 그것이 도는 트랜잭션은
-     * <b>컨트롤러가 자물쇠 밖에서 이미 연 것</b>이어야 한다. 자기 트랜잭션을 새로 연다면
-     * 커넥션 획득도 자물쇠 안에서 한다는 뜻이다.
+     * 구조 그물. 자물쇠 안의 조회가 도는 트랜잭션은 <b>자물쇠 밖에서 이미 열린 것</b>이어야 한다.
+     * 자기 트랜잭션을 새로 연다면 커넥션 획득도 자물쇠 안에서 한다는 뜻이다.
      *
      * <p><b>「트랜잭션이 열려 있는가」로는 못 잰다</b> — {@code @MockitoSpyBean}은 트랜잭션 프록시
      * <b>안쪽</b>에서 돌아 {@code isActualTransactionActive()}가 어느 쪽이든 참이다(처음 그렇게
      * 짰다가 결함 상태에서 초록을 봤다). 대신 <b>트랜잭션 이름</b>을 본다 — 이름은 트랜잭션을
-     * 처음 시작한 메서드로 정해지고, 참여(REQUIRED)는 이름을 바꾸지 않는다. 컨트롤러가 열었으면
-     * {@code JumpCardStreamController.open}, 아니면 {@code JumpCardService.snapshotsOf}다.
+     * 처음 시작한 메서드로 정해지고, 참여(REQUIRED)는 이름을 바꾸지 않는다. 밖에서 열었으면
+     * {@code StreamOpener.open}, 아니면 리포지터리 자신의 이름이다.
+     *
+     * <p>🔴 <b>이름을 {@code StreamOpener}에서 읽는다</b>(POK-174). 컨트롤러가 트랜잭션을 직접 열면
+     * auth 왕복(최대 7초) 동안 커넥션을 쥐므로 그 자리를 별도 빈으로 뺐다 — 그래서 이름도 바뀐다.
      */
     @Test
-    void 스냅샷은_컨트롤러가_이미_연_트랜잭션에서_읽힌다() {
-        broadcasts.save(Broadcast.startedNow("s-tx", "u-1", 903L, Instant.now(), null));
+    void 자물쇠_안_조회는_이미_열린_트랜잭션에서_돈다() {
+        broadcasts.save(Broadcast.startedNow("s-tx", TestIds.STREAMER, 903L, Instant.now(), null));
 
         AtomicReference<String> 트랜잭션이름 = new AtomicReference<>();
         doAnswer(invocation -> {
             트랜잭션이름.set(TransactionSynchronizationManager.getCurrentTransactionName());
-            return invocation.callRealMethod();
-        }).when(service).snapshotsOf(anyString());
+            // callRealMethod()가 아니라 Spies다 — 리포지터리 목에서는 그것이 안 된다(Spies 주석).
+            return Spies.real(invocation);
+        }).when(broadcasts).findByStreamId(anyString());
 
-        try (SseReader reader = open("s-tx", TestTokens.access("tx"))) {
+        try (SseReader reader = open("s-tx", TestTokens.access("2201"))) {
             assertThat(reader.statusCode()).as("본문=%s", reader.body()).isEqualTo(200);
         }
 
@@ -133,14 +147,14 @@ class OpenDoesNotBlockPublishTest extends IntegrationTestSupport {
                 .as("자물쇠 안의 조회가 트랜잭션을 새로 연다 = 커넥션 획득이 자물쇠 안이다. "
                         + "풀이 비면 자물쇠를 쥔 채 connection-timeout(운영 30초)만큼 기다리고, "
                         + "그동안 막히는 publish는 afterCommit이라 커넥션을 쥐고 있어 되먹임이 된다")
-                .isEqualTo("com.pokeclip.clip.jumpcard.stream.JumpCardStreamController.open");
+                .isEqualTo("com.pokeclip.clip.jumpcard.stream.StreamOpener.open");
     }
 
     /**
      * 막힘 그물. 풀이 계속 바쁜 상태에서 연결을 열며, 그동안 발행이 얼마나 막히는지 최악을 잰다.
      *
-     * <p><b>점유를 스핀으로 한다</b> — 한 번 잡고 오래 쥐면 컨트롤러의 <b>첫 조회</b>
-     * ({@code findByStreamId}, 자물쇠 밖이다)가 그 대기를 통째로 흡수해 자물쇠 안 조회는
+     * <p><b>점유를 스핀으로 한다</b> — 한 번 잡고 오래 쥐면 자물쇠 <b>밖</b>의 첫 조회
+     * (자격 판정의 {@code findStreamerIdByStreamId})가 그 대기를 통째로 흡수해 자물쇠 안 조회는
      * 기다릴 것이 없어진다. 그러면 결함이 있어도 초록이다(처음 이 시험을 그렇게 짜서
      * <b>0ms</b>가 나왔다). 놨다 잡았다를 반복해야 「첫 조회는 통과했는데 두 번째는 못 얻는」
      * 자리가 생긴다.
@@ -150,7 +164,7 @@ class OpenDoesNotBlockPublishTest extends IntegrationTestSupport {
      */
     @Test
     void 풀이_바쁜_동안_연결을_열어도_카드_발행이_막히지_않는다() throws Exception {
-        broadcasts.save(Broadcast.startedNow("s-blk", "u-1", 901L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-blk", TestIds.STREAMER, 901L, Instant.now(), null));
         카드를_심는다("s-blk");
         // 재는 쪽이 DB를 쓰면 무엇 때문에 막혔는지 갈리지 않는다. 미리 읽어 둔다.
         JumpCardSnapshot 카드 = registry == null ? null : service.snapshotsOf("s-blk").get(0);
@@ -162,7 +176,7 @@ class OpenDoesNotBlockPublishTest extends IntegrationTestSupport {
         assertThat(점유시작.await(10, TimeUnit.SECONDS)).as("풀이 바빠야 이 시험이 무언가를 잰다").isTrue();
 
         AtomicReference<SseReader> 연결 = new AtomicReference<>();
-        Thread 여는쪽 = new Thread(() -> 연결.set(open("s-blk", TestTokens.access("blk"))), "여는쪽");
+        Thread 여는쪽 = new Thread(() -> 연결.set(open("s-blk", TestTokens.access("2202"))), "여는쪽");
         여는쪽.start();
 
         Duration 최악 = Duration.ZERO;
