@@ -1,0 +1,30 @@
+/* 교환 대기·실패 안내 — 치지직 콜백(ChzzkCallbackScreen)과 같은 캔버스 중앙 정렬. */
+.screen {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(14 * var(--pc-u));
+  padding: calc(24 * var(--pc-u));
+  background: var(--pc-color-bg-canvas);
+  color: var(--pc-color-text-primary);
+  text-align: center;
+}
+
+.working {
+  font-size: calc(14 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+.title {
+  font-size: calc(20 * var(--pc-u));
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.description {
+  font-size: calc(13.5 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+  margin-bottom: calc(8 * var(--pc-u));
+}

@@ -6,14 +6,17 @@ import { ChannelRow } from './ChannelRow';
 import { SoopMark } from './ChannelMarks';
 import { ChzzkChannelRow } from './ChzzkChannelRow';
 import { UnlinkChzzkDialog } from './UnlinkChzzkDialog';
+import { UnlinkYoutubeDialog } from './UnlinkYoutubeDialog';
 import { YoutubeChannelSection } from './YoutubeChannelSection';
 import { useChzzkLinkState } from './useChzzkLinkState';
+import { useYoutubeLinkState } from './useYoutubeLinkState';
 import styles from './ChannelSettingsScreen.module.css';
 
-// 디자인 1k 설정 · 채널 연동 (POK-205). 조립만 한다 — 상태 판단은 useChzzkLinkState,
-// 상태별 표현은 ChzzkChannelRow가 갖는다.
+// 디자인 1k 설정 · 채널 연동 (POK-205 치지직 · POK-221 유튜브). 조립만 한다 —
+// 상태 판단은 use*LinkState 훅, 상태별 표현은 *ChannelRow가 갖는다.
 export function ChannelSettingsScreen() {
   const chzzk = useChzzkLinkState();
+  const youtube = useYoutubeLinkState();
 
   return (
     <div className={styles.screen}>
@@ -40,12 +43,18 @@ export function ChannelSettingsScreen() {
           />
         </div>
       </section>
-      <YoutubeChannelSection />
+      <YoutubeChannelSection state={youtube} />
       <UnlinkChzzkDialog
         open={chzzk.confirmOpen}
         busy={chzzk.unlinking}
         onCancel={chzzk.closeConfirm}
         onConfirm={chzzk.confirmUnlink}
+      />
+      <UnlinkYoutubeDialog
+        open={youtube.confirmOpen}
+        busy={youtube.unlinking}
+        onCancel={youtube.closeConfirm}
+        onConfirm={youtube.confirmUnlink}
       />
     </div>
   );

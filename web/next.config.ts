@@ -17,6 +17,11 @@ const proxies = [
   // /api/editor-invitations 자체(POST)와 /sent·/{id}를 한 줄씩이 함께 덮는다.
   { source: '/api/editor-delegations/:path*', target: process.env.AUTH_API_URL },
   { source: '/api/editor-invitations/:path*', target: process.env.AUTH_API_URL },
+  // 유튜브 채널 연동(POK-221)도 auth 서버 소유다 (YoutubeLinkController). chzzk-link처럼
+  // :path*가 빈 세그먼트도 잡으므로 이 한 줄이 /api/youtube-link 자체(GET·POST·DELETE)와
+  // /api/youtube-link/start를 함께 덮는다 — dev 서버에 실측했다(둘 다 백엔드까지 도달해
+  // 401, 매칭 안 되는 주소는 404).
+  { source: '/api/youtube-link/:path*', target: process.env.AUTH_API_URL },
   { source: '/api/clip/:path*', target: process.env.CLIP_API_URL },
 ];
 

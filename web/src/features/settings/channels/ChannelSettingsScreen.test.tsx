@@ -9,7 +9,10 @@ import { useOnboardingStore } from '@/stores/onboarding';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 
-const { goToChzzkConsent } = vi.hoisted(() => ({ goToChzzkConsent: vi.fn() }));
+const { goToChzzkConsent, goToYoutubeConsent } = vi.hoisted(() => ({
+  goToChzzkConsent: vi.fn(),
+  goToYoutubeConsent: vi.fn(),
+}));
 
 // location.assign은 jsdom이 못 흉내 낸다 — 이동은 모킹하고, 등록 주소 판정은
 // chzzkOAuth.test.ts가 순수 함수로 검증한다. (googleOAuth와 같은 분리)
@@ -17,22 +20,46 @@ vi.mock('@/features/settings/channels/chzzkOAuth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/features/settings/channels/chzzkOAuth')>()),
   goToChzzkConsent,
 }));
+vi.mock('@/features/settings/channels/youtubeOAuth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/features/settings/channels/youtubeOAuth')>()),
+  goToYoutubeConsent,
+}));
 
 const LINK_URL = '/api/chzzk-link';
 const START_URL = '/api/chzzk-link/start';
+const YT_LINK_URL = '/api/youtube-link';
+const YT_START_URL = '/api/youtube-link/start';
 // warnIfCallbackMismatch는 모킹하지 않고 원본을 태운다 — 등록 주소가 맞는 동의 URL이면
 // 조용해야 하고, 그 성질 자체가 회귀 대상이다. redirectUri를 빼면 케이스마다 경고가 찍혀
 // 진짜 회귀 경고와 구분되지 않는다. (jsdom 기본 오리진이 localhost:3000이다)
 const AUTHORIZE_URL = `https://chzzk.naver.com/account-interlock?clientId=cid&redirectUri=${encodeURIComponent(
   'http://localhost:3000/oauth/chzzk/callback',
 )}&state=signed`;
+// 유튜브(구글)는 표준 OAuth라 파라미터가 snake_case다 — camelCase로 만들면
+// warnIfCallbackMismatch가 케이스마다 경고를 찍는다.
+const YT_AUTHORIZE_URL = `https://accounts.google.com/o/oauth2/v2/auth?client_id=cid&redirect_uri=${encodeURIComponent(
+  'http://localhost:3000/oauth/youtube/callback',
+)}&state=signed`;
 
-/** GET /api/chzzk-link 응답만 갈아끼우는 스텁 — 나머지는 케이스에서 덧붙인다. */
-function stubLinkStatus(body: unknown, status = 200) {
+/**
+ * 플랫폼별 GET 응답을 갈아끼우는 스텁 — 치지직·유튜브가 같은 화면에 사니 URL로 갈라야
+ * 한다. 한 본문을 양쪽에 주면 「연동 끊김」·「다시 시도」 같은 문구가 두 행에 동시에 떠
+ * 단일 매치 단언이 깨진다.
+ */
+function stubLinkStatus(
+  body: unknown,
+  status = 200,
+  ytBody: unknown = { linked: false },
+  ytStatus = 200,
+) {
   return stubFetch((url, init) => {
     if (url === START_URL && init?.method === 'POST') {
       return jsonResponse(200, { authorizeUrl: AUTHORIZE_URL });
     }
+    if (url === YT_START_URL && init?.method === 'POST') {
+      return jsonResponse(200, { authorizeUrl: YT_AUTHORIZE_URL });
+    }
+    if (url === YT_LINK_URL) return jsonResponse(ytStatus, ytBody);
     return jsonResponse(status, body);
   });
 }
@@ -53,6 +80,7 @@ const chzzk = () => row('치지직');
 beforeEach(() => {
   window.localStorage.clear();
   goToChzzkConsent.mockReset();
+  goToYoutubeConsent.mockReset();
   useAuthStore.setState({ accessToken: 'access-1', refreshToken: 'refresh-1', hydrated: true });
   useOnboardingStore.setState({
     welcomeSeen: false,
@@ -208,39 +236,50 @@ describe('ChannelSettingsScreen — 온보딩·다른 플랫폼', () => {
     await waitFor(() => expect(useOnboardingStore.getState().channelLinked).toBe(false));
   });
 
-  it('백엔드가 없는 SOOP·유튜브는 자리만 있고 누를 수 없다 — 있는 척하지 않는다', async () => {
+  it('백엔드가 없는 SOOP은 자리만 있고 누를 수 없다 — 있는 척하지 않는다', async () => {
     stubLinkStatus({ linked: false });
     renderWithProviders(<ChannelSettingsScreen />);
 
     await chzzk().findByRole('button', { name: '연동' });
     expect(row('SOOP').getByRole('button', { name: '연동' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '계정 추가 연동' })).toBeDisabled();
-    // 치지직 쪽은 반대로 눌리는 상태여야 한다 — 전부 비활성이면 이 케이스가 무의미해진다
+    // 실배선된 두 행은 반대로 눌리는 상태여야 한다 — 전부 비활성이면 이 케이스가 무의미해진다
     expect(chzzk().getByRole('button', { name: '연동' })).toBeEnabled();
+    expect(row('유튜브').getByRole('button', { name: '연동' })).toBeEnabled();
   });
 
-  it('유튜브가 안 붙었다는 사실이 화면에 드러난다 — 배지·문구·비활성 버튼 세 겹', async () => {
+  it('유튜브가 실배선됐다 — 준비 중 세 겹과 다계정 UI가 없고 연동이 눌린다 (POK-221)', async () => {
     stubLinkStatus({ linked: false });
     renderWithProviders(<ChannelSettingsScreen />);
 
     const youtube = row('유튜브');
-    expect(youtube.getByText('준비 중')).toBeInTheDocument();
-    expect(youtube.getByText(/클립 업로드 연동은 준비 중이에요/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '계정 추가 연동' })).toBeDisabled();
+    expect(await youtube.findByRole('button', { name: '연동' })).toBeEnabled();
+    // POK-205의 「준비 중」 세 겹이 전부 걷혔다
+    expect(youtube.queryByText('준비 중')).not.toBeInTheDocument();
+    expect(youtube.queryByText(/클립 업로드 연동은 준비 중이에요/)).not.toBeInTheDocument();
+    // 「계정 추가 연동」은 비활성이 아니라 **부재**다 — 다계정 미지원 확정(ADR-052)으로
+    // 시안 1k의 다계정 UI를 넣지 않는다. 채널 변경은 해제 후 재연동 안내가 대신한다.
+    expect(screen.queryByRole('button', { name: '계정 추가 연동' })).not.toBeInTheDocument();
+    expect(screen.getByText(/연동을 해제한 뒤 다시 연동/)).toBeInTheDocument();
     // 1k의 구획 이름 그대로 — 방송 채널(감지)과 자리를 가른다
     expect(screen.getByRole('heading', { name: '유튜브 계정' })).toBeInTheDocument();
-    // 재연동 안내는 이벤트 기반이다 — 평소엔 경고 UI 자체가 없다. 1k의 안내 문구는
-    // "언제 뜨는지"를 설명할 뿐이라 「재연동 필요」 배지·「다시 연동」 버튼으로 판정한다.
-    expect(youtube.queryByText('재연동 필요')).not.toBeInTheDocument();
+    // 재연동 안내는 이벤트 기반이다 — 평시(미연동)엔 경고 UI 자체가 없다 (POK-205 규약 승계)
+    expect(youtube.queryByText('연동 끊김')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '다시 연동' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '재인증' })).not.toBeInTheDocument();
   });
 
   it('접근성 위반이 없다', async () => {
-    stubLinkStatus(linked('ACTIVE'));
+    stubLinkStatus(linked('ACTIVE'), 200, {
+      linked: true,
+      status: 'ACTIVE',
+      channelId: 'yt-secret-1',
+      channelName: '포켓클립 채널',
+    });
     const { container } = renderWithProviders(<ChannelSettingsScreen />);
 
-    await screen.findByText('정상');
+    // 두 행이 모두 활성(배지·채널명·해제 버튼)인 상태로 검사한다
+    await screen.findByText('게임하는너구리');
+    await screen.findByText('포켓클립 채널');
     expect(await axe(container)).toHaveNoViolations();
   });
 });
@@ -254,6 +293,9 @@ describe('ChannelSettingsScreen — 연동 해제', () => {
         if (deleteStatus === 204) unlinked = true;
         return jsonResponse(deleteStatus, deleteStatus === 204 ? undefined : { reason: 'X' });
       }
+      // 유튜브 행은 이 묶음의 관심 밖 — 미연동으로 눕혀 「정상」·「연동 해제」가
+      // 치지직 행에서만 나오게 한다 (단일 매치 단언의 전제).
+      if (url === YT_LINK_URL) return jsonResponse(200, { linked: false });
       return jsonResponse(200, unlinked ? { linked: false } : linked('ACTIVE'));
     });
   }
