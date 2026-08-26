@@ -25,6 +25,24 @@ public interface BroadcastRepository extends JpaRepository<Broadcast, Long> {
     boolean existsByStreamId(String streamId);
 
     /**
+     * 스트리머 번호 <b>한 칸만</b> 뽑는다. auth에 자격을 물으려면 이 값이 필요한데,
+     * {@code findByStreamId}로 엔티티를 올리면 안 되기 때문에 따로 있다.
+     *
+     * <p><b>{@code existsByStreamId} 주석과 같은 뿌리다.</b> 스칼라 조회는 엔티티를
+     * 영속성 컨텍스트에 안 올린다. {@code BroadcastAccessGuard}가 이것만 쓰는 이유는
+     * 판정 뒤에 부르는 쪽({@code JumpCardStreamController.open})이 같은 트랜잭션 안에서
+     * 방송 상태를 <b>다시</b> 읽어 「그 사이에 끝났는가」를 보기 때문이다 — 앞에서 엔티티를
+     * 올려 두면 그 재조회가 JPQL을 던지고도 1차 캐시의 낡은 인스턴스를 돌려준다.
+     * 계획 검증이 재현했다({@code StreamOpenWindowTest} FAILED).
+     *
+     * <p><b>{@code SegmentQueryService}가 {@code findByStreamId}를 쓰는 것은 정상이다</b> —
+     * 그쪽은 판정 뒤에 방송을 다시 안 읽는다(만료 판정이 네이티브 스칼라 쿼리라 1차 캐시를
+     * 안 지난다). 쌍둥이지만 역할이 달라 다른 것이 맞다.
+     */
+    @Query("select b.streamerId from Broadcast b where b.streamId = :streamId")
+    Optional<String> findStreamerIdByStreamId(@Param("streamId") String streamId);
+
+    /**
      * 같은 방송 줄을 고치는 동안 다른 처리를 세운다. FIFO 큐가 같은 그룹을 동시에
      * 주지 않으므로 드물지만, 그것은 큐의 보장이지 우리 코드의 보장이 아니다.
      */
