@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.List;
 import java.util.Optional;
 
 public interface BroadcastRepository extends JpaRepository<Broadcast, Long> {
@@ -49,6 +50,33 @@ public interface BroadcastRepository extends JpaRepository<Broadcast, Long> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select b from Broadcast b where b.streamId = :streamId")
     Optional<Broadcast> findByStreamIdForUpdate(@Param("streamId") String streamId);
+
+    /**
+     * 방송 목록 한 장. <b>정렬과 이어받기가 둘 다 {@code id}다</b> — 시작·종료 시각은
+     * 뒤늦게 온 알림이 갱신하므로({@link Broadcast#applyStarted}·{@link Broadcast#applyEnded})
+     * 이어받기 기준으로 쓰면 중복·누락이 난다. {@code id}는 그 방송을 처음 안 순서이고
+     * 절대 안 변한다 — 같은 방송의 알림이 다시 와도 새 줄이 안 생긴다({@code stream_id} UNIQUE).
+     *
+     * <p><b>{@code streamerIds}는 문자열이다.</b> auth는 숫자를 주는데 이 칸은 {@code VARCHAR}라
+     * 부르는 쪽이 바꿔 넣는다. 🔴 <b>그 변환이 관대하지 않다</b> — {@code "007"}이 든 줄은
+     * {@code 7}로 못 찾는다. 세그먼트 조회는 반대 방향({@code parseLong})이라 그 줄을 열어 주므로
+     * <b>두 문의 판정이 갈린다.</b> 알려진 한계이고 {@code BroadcastListQueryTest}가 고정한다.
+     *
+     * <p>{@code afterId}가 {@code null}이면 첫 장이다. {@code :afterId IS NULL} 갈래를 SQL 안에
+     * 두는 이유 — 쿼리를 둘로 나누면 나머지 조건이 갈릴 자리가 생긴다.
+     */
+    @Query(value = """
+            SELECT * FROM broadcasts
+             WHERE streamer_id IN (:streamerIds)
+               AND status IN (:statuses)
+               AND (CAST(:afterId AS BIGINT) IS NULL OR id < CAST(:afterId AS BIGINT))
+             ORDER BY id DESC
+             LIMIT :limit
+            """, nativeQuery = true)
+    List<Broadcast> findPage(@Param("streamerIds") List<String> streamerIds,
+                             @Param("statuses") List<String> statuses,
+                             @Param("afterId") Long afterId,
+                             @Param("limit") int limit);
 
     /**
      * 보관 기한이 지났는가를 <b>DB 시계로</b> 판정한다(PRD 결정). 앱 시계로 재면 서버마다
