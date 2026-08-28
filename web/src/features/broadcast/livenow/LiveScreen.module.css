@@ -1,139 +1,37 @@
-/* 디자인 1b 라이브 대시보드 — 전폭 헤더 + 1200px 본문.
+/* 디자인 1b 라이브 대시보드 — 페이지 헤더 없이 콘텐츠부터.
+   세로로 길게 쌓아 문서 스크롤로 내려가는 화면이라 높이를 뷰포트에 맞추지 않는다.
    마젠타·앰버 틴트는 상태색이라 시안 값을 그대로 쓴다. */
-
-/* ---------- 자체 헤더 ---------- */
-
-.header {
-  display: flex;
-  align-items: center;
-  gap: calc(12 * var(--pc-u));
-  padding: calc(16 * var(--pc-u)) var(--pc-space-5);
-  border-bottom: 1px solid var(--pc-color-border-subtle);
-  background: var(--pc-color-bg-surface);
-}
-
-.backLink {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: calc(32 * var(--pc-u));
-  height: calc(32 * var(--pc-u));
-  border-radius: var(--pc-radius-md);
-  color: var(--pc-color-text-primary);
-  flex: none;
-}
-
-.backLink:hover {
-  background: var(--pc-color-bg-surface-hover);
-}
-
-.livePill {
-  display: flex;
-  align-items: center;
-  gap: calc(6 * var(--pc-u));
-  padding: calc(4 * var(--pc-u)) calc(11 * var(--pc-u));
-  border-radius: calc(99 * var(--pc-u));
-  background: var(--pc-color-point);
-  color: #fff;
-  font-size: calc(11.5 * var(--pc-u));
-  font-weight: 800;
-  letter-spacing: 0.03em;
-  flex: none;
-}
-
-.livePillDot {
-  width: calc(7 * var(--pc-u));
-  height: calc(7 * var(--pc-u));
-  border-radius: calc(99 * var(--pc-u));
-  background: #fff;
-  animation: pc-live-header-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes pc-live-header-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.55;
-    transform: scale(0.82);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .livePillDot {
-    animation: none;
-  }
-}
-
-.headerTitleBlock {
-  min-width: 0;
-  line-height: 1.3;
-}
-
-.headerTitle {
-  margin: 0;
-  font-size: calc(15 * var(--pc-u));
-  font-weight: 750;
-  letter-spacing: -0.015em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.headerMeta {
-  font-size: calc(11.5 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-  margin-top: calc(2 * var(--pc-u));
-}
-
-.headerRight {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: calc(14 * var(--pc-u));
-  flex: none;
-}
-
-.editorChip {
-  display: flex;
-  align-items: center;
-  gap: calc(7 * var(--pc-u));
-  font-size: calc(11.5 * var(--pc-u));
-  color: var(--pc-color-text-secondary);
-}
-
-.headerDivider {
-  width: 1px;
-  height: calc(22 * var(--pc-u));
-  background: var(--pc-color-border-subtle);
-}
-
-.viewerCount {
-  font-size: calc(12.5 * var(--pc-u));
-  font-weight: 700;
-}
 
 /* ---------- 본문 ---------- */
 
 .container {
   /* 2단 → 1단 전환을 뷰포트가 아니라 이 본문 폭으로 재기 위한 컨테이너 (아래 @container) */
   container-type: inline-size;
-  max-width: calc(1200 * var(--pc-u));
-  margin: 0 auto;
+  /* 폭을 가두지 않는다 — 사이드바를 접으면 늘어난 자리를 화면이 그대로 쓴다.
+     상한(1200u)을 두면 접어서 벌어둔 폭이 좌우 빈 여백으로만 남았다. */
   /* 하단 여백 — fixed Dock에 콘텐츠가 가리지 않게 (ScreenContainer와 동일) */
-  padding: calc(22 * var(--pc-u)) var(--pc-space-5) calc(120 * var(--pc-u));
+  padding: calc(20 * var(--pc-u)) calc(28 * var(--pc-u)) calc(120 * var(--pc-u));
+  /* 위(영상·카드·채팅) 아래(통계)로 쌓고 문서 스크롤로 내려간다 — 높이를 뷰포트에 맞추지 않는다 */
+  display: flex;
+  flex-direction: column;
+  gap: calc(16 * var(--pc-u));
 }
 
+/* 좌: 영상·정보·카드 / 우: 채팅 패널. 채팅은 좌측 열 높이를 따라 늘어난다(자체 높이 고정 아님) */
 .grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) calc(404 * var(--pc-u));
-  gap: calc(18 * var(--pc-u));
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: calc(16 * var(--pc-u));
+  align-items: stretch;
 }
 
-.main {
+/* 채팅을 접으면 트랙 자체를 걷는다 — 빈 명시 트랙이라도 그 앞의 column-gap은 그려져,
+   두고 두면 본문 오른쪽에 16u짜리 죽은 여백이 상시 남는다 */
+.gridSolo {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.mainCol {
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -152,137 +50,790 @@
   aspect-ratio: 16 / 9;
 }
 
-.aside {
+/* ---------- 방송 정보 바 (영상 아래) ---------- */
+
+.infoBar {
+  display: flex;
+  align-items: center;
+  gap: calc(16 * var(--pc-u));
+  padding: calc(13 * var(--pc-u)) calc(16 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+}
+
+/* 카테고리 이미지 창구가 없어 라벨만 든 자리 표시 */
+.infoThumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(46 * var(--pc-u));
+  height: calc(61 * var(--pc-u));
+  border-radius: calc(9 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-muted);
+  font-size: calc(9 * var(--pc-u));
+  text-align: center;
+  flex: none;
+}
+
+.infoBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(6 * var(--pc-u));
+}
+
+.infoTitleRow {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
   min-width: 0;
 }
 
-/* ---------- 채팅량 카드 ---------- */
+.infoTitle {
+  margin: 0;
+  font-size: calc(17 * var(--pc-u));
+  font-weight: 750;
+  letter-spacing: -0.015em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
-.chartHeader {
+.infoTagRow {
   display: flex;
   align-items: center;
-  gap: calc(9 * var(--pc-u));
-  padding: calc(14 * var(--pc-u)) calc(16 * var(--pc-u)) calc(2 * var(--pc-u));
+  gap: calc(6 * var(--pc-u));
+  flex-wrap: wrap;
 }
 
-.chartTitle {
-  margin: 0;
-  font-size: calc(13 * var(--pc-u));
-  font-weight: 750;
+.infoCategory {
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-accent-text);
 }
 
-.chartNote {
+.infoStats {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  flex: none;
+  align-self: flex-end;
+  margin-bottom: calc(2 * var(--pc-u));
+}
+
+.infoViewers {
   font-size: calc(11 * var(--pc-u));
   color: var(--pc-color-text-muted);
 }
 
-.chartLegend {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: calc(5 * var(--pc-u));
-  font-size: calc(11 * var(--pc-u));
-  color: var(--pc-color-text-secondary);
+.infoViewers b {
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--pc-color-text-primary);
 }
 
-.chartLegendSwatch {
-  width: calc(8 * var(--pc-u));
-  height: calc(8 * var(--pc-u));
-  border-radius: calc(2 * var(--pc-u));
+.infoDivider {
+  width: 1px;
+  height: calc(11 * var(--pc-u));
+  background: var(--pc-color-border-subtle);
+}
+
+.infoUptime {
+  display: inline-flex;
+  align-items: baseline;
+  gap: calc(4 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-point-text, var(--pc-color-point));
+}
+
+.infoUptimeValue {
+  font-family: var(--pc-font-mono, monospace);
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.infoRule {
+  width: 1px;
+  height: calc(44 * var(--pc-u));
+  background: var(--pc-color-border-subtle);
+  flex: none;
+}
+
+/* ---------- 수동 마킹 ---------- */
+
+.markBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: calc(5 * var(--pc-u));
+  width: calc(132 * var(--pc-u));
+  flex: none;
+}
+
+.markHotkey {
+  font-family: var(--pc-font-mono, monospace);
+  font-size: calc(9.5 * var(--pc-u));
+  font-weight: 600;
+  padding: calc(1 * var(--pc-u)) calc(4 * var(--pc-u));
+  margin-left: calc(5 * var(--pc-u));
+  border-radius: calc(4 * var(--pc-u));
+  background: rgb(255 255 255 / 0.22);
+}
+
+.markFeedback {
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 650;
+  line-height: 1.3;
+  text-align: center;
+  color: var(--pc-color-point-text, var(--pc-color-point));
+}
+
+/* 빈 자리를 미리 잡아 두지 않는다 — 잡아 두면 안 눌렀을 때도 블록이 버튼보다 커져
+   버튼이 바의 가운데선 위로 밀린다(시안은 마킹 중일 때만 이 줄이 선다).
+   display:none이 아니라 흐름에서만 빼는 이유 — 저쪽은 role="status"를 접근성 트리에서
+   통째로 지워, 글이 생기는 순간이 「살아 있는 리전의 변화」가 아니라 「리전의 등장」이 된다.
+   그러면 낭독을 놓칠 수 있어, 조건부로 렌더하지 않으려던 의도가 무너진다. */
+.markFeedback:empty {
+  position: absolute;
+}
+
+/* ---------- 하이라이트 카드 패널 ---------- */
+
+.cardPanel {
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  overflow: hidden;
+}
+
+.cardPanelHeader {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(12 * var(--pc-u)) calc(16 * var(--pc-u)) calc(10 * var(--pc-u));
+}
+
+.cardPanelHeading {
+  margin: 0;
+  font-size: calc(13.5 * var(--pc-u));
+  font-weight: 750;
+}
+
+.cardPanelNote {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.cardPanelDivider {
+  width: 1px;
+  height: calc(16 * var(--pc-u));
+  background: var(--pc-color-border-subtle);
+  margin: 0 calc(3 * var(--pc-u));
+}
+
+.cardPanelLink {
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 650;
+}
+
+.cardTrack {
+  list-style: none;
+  margin: 0;
+  display: flex;
+  gap: calc(12 * var(--pc-u));
+  padding: calc(2 * var(--pc-u)) calc(16 * var(--pc-u)) calc(14 * var(--pc-u));
+  overflow-x: auto;
+}
+
+.cardSlot {
+  flex: none;
+  width: calc(280 * var(--pc-u));
+  display: flex;
+}
+
+/* ---------- 하이라이트 카드 ---------- */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  overflow: hidden;
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
+}
+
+.card:hover {
+  border-color: var(--pc-color-border-default);
+  transform: translateY(calc(-2 * var(--pc-u)));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    transition: none;
+  }
+
+  .card:hover {
+    transform: none;
+  }
+}
+
+/* 방금 감지·마킹된 카드 */
+.cardEmphasized {
+  border-color: rgb(214 63 159 / 0.45);
+  background: rgb(214 63 159 / 0.05);
+}
+
+.cardDimmed {
+  opacity: 0.55;
+}
+
+.cardThumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: none;
+  padding: 0;
+  background: var(--pc-color-bg-inset);
+  cursor: pointer;
+  flex: none;
+}
+
+.cardThumbLabel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.cardSpark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(3 * var(--pc-u));
+  width: 100%;
+  height: calc(22 * var(--pc-u));
+  display: block;
+  opacity: 0.9;
+}
+
+.cardSpark polyline {
+  fill: none;
+  stroke: var(--pc-color-point);
+  stroke-width: 1.2;
+}
+
+.cardPosTrack {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: calc(3 * var(--pc-u));
+  background: rgb(255 255 255 / 0.14);
+}
+
+.cardPosMark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: calc(12 * var(--pc-u));
+  margin-left: calc(-6 * var(--pc-u));
   background: var(--pc-color-point);
 }
 
-.chartBody {
-  padding: calc(8 * var(--pc-u)) calc(16 * var(--pc-u)) calc(6 * var(--pc-u));
+.cardScore {
+  position: absolute;
+  top: calc(8 * var(--pc-u));
+  left: calc(8 * var(--pc-u));
 }
 
-.chartSvg {
+.cardReason {
+  position: absolute;
+  top: calc(8 * var(--pc-u));
+  right: calc(8 * var(--pc-u));
+  padding: calc(2 * var(--pc-u)) calc(8 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
+  background: rgb(0 0 0 / 0.55);
+  color: rgb(255 255 255 / 0.85);
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 650;
+}
+
+.cardDuration {
+  position: absolute;
+  right: calc(8 * var(--pc-u));
+  bottom: calc(9 * var(--pc-u));
+  padding: calc(1 * var(--pc-u)) calc(6 * var(--pc-u));
+  border-radius: calc(5 * var(--pc-u));
+  background: rgb(0 0 0 / 0.62);
+  color: #fff;
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 600;
+}
+
+.cardProcessing {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 0.72);
+}
+
+.cardBody {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6 * var(--pc-u));
+  padding: calc(11 * var(--pc-u)) calc(13 * var(--pc-u)) calc(12 * var(--pc-u));
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: calc(13.5 * var(--pc-u));
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cardMeta {
+  margin: 0;
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cardStatusRow {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  margin-top: calc(2 * var(--pc-u));
+}
+
+.cardTimeAgo {
+  margin-left: auto;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.cardProgressRow {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+.cardProgressRow > *:first-child {
+  flex: 1;
+}
+
+.cardProgressValue {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  flex: none;
+}
+
+.cardActions {
+  display: flex;
+  gap: calc(6 * var(--pc-u));
+  margin-top: calc(4 * var(--pc-u));
+}
+
+.cardActions > button:not(:last-child) {
+  flex: 1;
+}
+
+/* ---------- 만드는 중인 카드 자리 ---------- */
+
+.pendingCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(8 * var(--pc-u));
   width: 100%;
-  height: calc(90 * var(--pc-u));
+  min-height: calc(300 * var(--pc-u));
+  border: calc(1.5 * var(--pc-u)) dashed var(--pc-color-point);
+  border-radius: calc(14 * var(--pc-u));
+  background: rgb(214 63 159 / 0.06);
+}
+
+.pendingLabel {
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-point-text, var(--pc-color-point));
+}
+
+.pendingNote {
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* ---------- 실시간 통계 ---------- */
+
+.statsPanel {
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  overflow: hidden;
+}
+
+.statsHeader {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(13 * var(--pc-u)) calc(18 * var(--pc-u)) calc(11 * var(--pc-u));
+}
+
+.statsHeaderIcon {
+  color: var(--pc-color-text-muted);
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+  flex: none;
+}
+
+.statsHeading {
+  margin: 0;
+  font-size: calc(13.5 * var(--pc-u));
+  font-weight: 750;
+}
+
+.statsLegend {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: calc(10 * var(--pc-u));
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: calc(5 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+.legendChat {
+  width: calc(8 * var(--pc-u));
+  height: calc(2.5 * var(--pc-u));
+  background: var(--pc-color-accent);
+}
+
+.legendViewer {
+  width: calc(8 * var(--pc-u));
+  height: calc(2.5 * var(--pc-u));
+  background: var(--pc-color-success, #4cae7d);
+}
+
+.legendHighlight {
+  width: calc(8 * var(--pc-u));
+  height: calc(8 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
+  background: var(--pc-color-point);
+}
+
+.legendDonation {
+  width: calc(8 * var(--pc-u));
+  height: calc(8 * var(--pc-u));
+  background: #e6a83c;
+  transform: rotate(45deg);
+}
+
+.statsBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) calc(252 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+}
+
+.statsChartCol {
+  padding: calc(14 * var(--pc-u)) calc(18 * var(--pc-u));
+  min-width: 0;
+}
+
+/* 마커를 얹을 기준 — 선은 안쪽 svg가, 도형은 밖의 요소가 그린다 (LiveStatsPanel 주석 참고) */
+.statsChart {
+  position: relative;
+}
+
+.statsSvg {
+  width: 100%;
+  height: calc(150 * var(--pc-u));
   display: block;
 }
 
-.chartArea {
-  fill: rgb(88 111 196 / 0.16);
+/* 마커는 좌표만 비율로 잡고 크기는 고정 — 차트가 가로로 늘어나도 모양이 유지된다 */
+.statsHighlight,
+.statsDonation {
+  position: absolute;
+  width: calc(10 * var(--pc-u));
+  height: calc(10 * var(--pc-u));
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.statsHighlight {
+  border-radius: 50%;
+  background: var(--pc-color-point);
+}
+
+.statsDonation {
+  background: #e6a83c;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.statsChatArea {
+  fill: rgb(88 111 196 / 0.14);
   stroke: none;
 }
 
-.chartLine {
+.statsChatLine {
   fill: none;
   stroke: var(--pc-color-accent);
   stroke-width: 2;
 }
 
-.chartMarker {
-  fill: var(--pc-color-point);
+.statsViewerLine {
+  fill: none;
+  stroke: var(--pc-color-success, #4cae7d);
+  stroke-width: 2;
 }
 
-.chartEdge {
+.statsNow {
   stroke: var(--pc-color-point);
   stroke-width: 2;
 }
 
-.chartAxis {
+/* 어느 카테고리로 얼마나 방송했는지 — 타임라인 바로 아래 붙어 구간을 읽게 한다 */
+.categoryBar {
+  display: flex;
+  height: calc(16 * var(--pc-u));
+  border-radius: calc(6 * var(--pc-u));
+  overflow: hidden;
+  margin-top: calc(8 * var(--pc-u));
+}
+
+.categorySegment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  font-size: calc(9.5 * var(--pc-u));
+  font-weight: 650;
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+}
+
+.categorySegment:last-child {
+  background: var(--pc-color-accent);
+  color: var(--pc-color-text-on-accent, #fff);
+}
+
+.statsAxis {
   display: flex;
   justify-content: space-between;
   font-family: var(--pc-font-mono, monospace);
   font-size: calc(10 * var(--pc-u));
   font-weight: 500;
   color: var(--pc-color-text-muted);
-  padding: calc(4 * var(--pc-u)) 0 calc(8 * var(--pc-u));
+  padding: calc(6 * var(--pc-u)) 0 0;
 }
 
-/* ---------- 채팅 수집 경고 배너 ---------- */
-
-.warningBanner {
-  display: flex;
-  align-items: center;
-  gap: calc(8 * var(--pc-u));
-  padding: calc(11 * var(--pc-u)) calc(14 * var(--pc-u));
-  border-radius: calc(11 * var(--pc-u));
-  border: 1px solid rgb(230 168 60 / 0.35);
-  background: rgb(230 168 60 / 0.07);
-  font-size: calc(12 * var(--pc-u));
-  color: var(--pc-color-text-secondary);
-}
-
-.warningIcon {
-  color: #e6a83c;
-  flex: none;
-}
-
-.warningAction {
-  margin-left: auto;
-  font-size: calc(11.5 * var(--pc-u));
-  font-weight: 650;
-  color: var(--pc-color-accent-text);
-  opacity: 0.6;
-  flex: none;
-}
-
-/* ---------- 하이라이트 카드 목록 ---------- */
-
-.highlightCard {
+.statsMetrics {
+  margin: 0;
+  border-left: 1px solid var(--pc-color-border-subtle);
   display: flex;
   flex-direction: column;
 }
 
-.highlightHeader {
+.metricRow {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: calc(8 * var(--pc-u));
-  padding: calc(14 * var(--pc-u)) calc(15 * var(--pc-u)) calc(10 * var(--pc-u));
+  padding: calc(10 * var(--pc-u)) calc(16 * var(--pc-u));
 }
 
-.highlightHeading {
+.metricRow + .metricRow {
+  border-top: 1px solid var(--pc-color-border-subtle);
+}
+
+.metricLabel {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.metricValue {
   margin: 0;
-  font-size: calc(13.5 * var(--pc-u));
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: calc(7 * var(--pc-u));
+  font-size: calc(14.5 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.metricNote {
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 600;
+  letter-spacing: normal;
+  color: var(--pc-color-text-muted);
+}
+
+/* ---------- 실시간 채팅 패널 ---------- */
+
+.chatPanel {
+  display: flex;
+  flex-direction: column;
+  width: calc(332 * var(--pc-u));
+  min-height: 0;
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  overflow: hidden;
+}
+
+.chatHeader {
+  display: flex;
+  align-items: center;
+  gap: calc(7 * var(--pc-u));
+  padding: calc(10 * var(--pc-u)) calc(10 * var(--pc-u)) calc(10 * var(--pc-u))
+    calc(14 * var(--pc-u));
+  border-bottom: 1px solid var(--pc-color-border-subtle);
+}
+
+.chatHeaderIcon {
+  color: var(--pc-color-text-muted);
+  flex: none;
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+}
+
+.chatHeading {
+  font-size: calc(13 * var(--pc-u));
   font-weight: 750;
 }
 
-.filterGroup {
+.chatCollapse {
   margin-left: auto;
+}
+
+.chatSurges {
   display: flex;
+  align-items: center;
+  gap: calc(5 * var(--pc-u));
+  padding: calc(9 * var(--pc-u)) calc(14 * var(--pc-u));
+  border-bottom: 1px solid var(--pc-color-border-subtle);
+  overflow: hidden;
+}
+
+.chatSurgeLabel {
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-muted);
+  flex: none;
+}
+
+/* 최근 줄이 아래에 쌓인다 — 넘치면 위쪽이 잘린다(시안과 같은 처리) */
+.chatList {
+  list-style: none;
+  margin: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: calc(9 * var(--pc-u));
+  padding: calc(12 * var(--pc-u)) calc(14 * var(--pc-u));
+  overflow: hidden;
+}
+
+.chatLine {
+  font-size: calc(12 * var(--pc-u));
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.chatName {
+  font-weight: 700;
+  color: var(--pc-color-text-secondary);
+}
+
+/* 닉네임 색 로테이션 — 누가 말하는지 줄 단위로 갈라 보이게 하는 장치라 시안 값을 그대로 쓴다 */
+.chatName[data-color='1'] {
+  color: var(--pc-color-success, #4cae7d);
+}
+
+.chatName[data-color='2'] {
+  color: var(--pc-color-accent-text);
+}
+
+.chatName[data-color='3'] {
+  color: #b48ef0;
+}
+
+.chatName[data-color='4'] {
+  color: #e6a83c;
+}
+
+.chatName[data-color='5'] {
+  color: var(--pc-color-point-text, var(--pc-color-point));
+}
+
+.chatText {
+  color: var(--pc-color-text-secondary);
+}
+
+.chatDonation {
+  display: flex;
+  flex-direction: column;
+  gap: calc(3 * var(--pc-u));
+  padding: calc(8 * var(--pc-u)) calc(10 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  border: 1px solid rgb(230 168 60 / 0.3);
+  background: rgb(230 168 60 / 0.1);
+}
+
+.chatDonationHead {
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 750;
+  color: #e6a83c;
+}
+
+.chatDonationText {
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+.chatSystem {
+  padding: calc(7 * var(--pc-u)) calc(10 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  background: rgb(214 63 159 / 0.08);
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 650;
+  line-height: 1.45;
+  color: var(--pc-color-point-text, var(--pc-color-point));
+}
+
+/* ---------- 필터 칩 ---------- */
+
+.filterGroup {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
   gap: calc(5 * var(--pc-u));
 }
 
@@ -309,103 +860,37 @@
   color: var(--pc-color-accent-text);
 }
 
-.highlightRows {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.highlightRow {
-  display: flex;
-  align-items: center;
-  gap: calc(11 * var(--pc-u));
-  padding: calc(12 * var(--pc-u)) calc(15 * var(--pc-u));
-  border-top: 1px solid var(--pc-color-border-subtle);
-}
-
-.highlightRowEmphasized {
-  background: rgb(214 63 159 / 0.05);
-}
-
-.highlightRowExpired {
-  opacity: 0.55;
-}
-
-.highlightTime {
-  font-family: var(--pc-font-mono, monospace);
-  font-size: calc(11 * var(--pc-u));
-  font-weight: 600;
-  color: var(--pc-color-text-secondary);
-  flex: none;
-}
-
-.highlightBody {
-  flex: 1;
-  min-width: 0;
-  line-height: 1.35;
-}
-
-.highlightTitle {
-  font-size: calc(12.5 * var(--pc-u));
-  font-weight: 650;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.highlightMeta {
-  font-size: calc(10.5 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-  margin-top: calc(2 * var(--pc-u));
-}
-
-.highlightFooter {
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  padding: calc(12 * var(--pc-u)) calc(15 * var(--pc-u));
-  border-top: 1px solid var(--pc-color-border-subtle);
-}
-
-.highlightFooterLink {
-  font-size: calc(11.5 * var(--pc-u));
-  font-weight: 600;
-  color: var(--pc-color-text-muted);
-}
-
-.highlightFooterNote {
-  margin-left: auto;
-  font-size: calc(11 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-}
-
-/* ---------- 아이콘 스케일 ----------
-   lucide size prop은 px 속성 고정이라 CSS로 유닛에 태운다 */
-
-.backLink svg {
-  width: calc(17 * var(--pc-u));
-  height: calc(17 * var(--pc-u));
-}
-
-.warningIcon {
-  width: calc(15 * var(--pc-u));
-  height: calc(15 * var(--pc-u));
-}
-
 /* ---------- 반응형 ---------- */
 
 /* 기준이 뷰포트가 아니라 본문 폭인 이유 — 방송 그룹 셸의 사이드바가 폭을 먼저 가져간다.
    뷰포트로 재면 1024~1109px에서 1단 전환이 안 걸려 플레이어(minmax)가 옆 하이라이트 열
    (404)보다 좁아진다. 사이드바는 펼침 244 · 접힘 68로 폭이 변하므로 뺄 값을 미리 박을 수도
-   없다. 983 = 옛 기준 1023에서 .container 좌우 패딩(20×2)을 뺀 값 — 컨테이너 쿼리는
-   콘텐츠 박스를 재므로 사이드바 없는 화면의 전환 지점은 그대로 유지된다.
+   없다. 983은 옛 기준 뷰포트 1023에서 그때의 .container 좌우 패딩(20×2)을 뺀 값이다 —
+   컨테이너 쿼리는 콘텐츠 박스를 재므로 그 시절 사이드바 없는 화면의 전환 지점과 같았다.
    단위가 px이 아니라 rem인 이유 — 이 파일의 치수는 전부 `N * var(--pc-u)`(= N/16 rem)로
-   셸 배율을 타는데 임계값만 px으로 박으면 배율이 커진 넓은 화면에서 하이라이트 열(404u)만
-   같이 커져 다시 역전된다. 61.4375rem = 983 * var(--pc-u)와 같은 값이다. */
+   셸 배율을 타는데 임계값만 px으로 박으면 배율이 커진 넓은 화면에서 채팅 열(332u)만
+   같이 커져 다시 역전된다. 61.4375rem = 983 * var(--pc-u)와 같은 값이다.
+   1b 개편으로 우측 열이 404u → 332u, 좌우 패딩이 20u → 28u가 됐지만 임계값은 그대로 뒀다.
+   좁아진 우측 열은 역전이 일어나는 방향이 아니고, 패딩이 8u씩 늘어난 만큼 사이드바 없는
+   화면의 전환 지점만 뷰포트 1023 → 1039로 밀린다 — 값을 다시 잡을 거라면 983이 아니라
+   「원하는 뷰포트 폭 − 좌우 패딩(28×2)」에서 출발해야 한다. */
 @container (max-width: 61.4375rem) {
   .grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 1단이 되면 채팅은 카드 아래로 내려온다 — 고정 폭을 놓아야 본문 폭을 채운다 */
+  .chatPanel {
+    width: auto;
+  }
+
+  /* 지표 열도 아래로 — 좁은 폭에서 252u를 떼어 주면 차트가 읽을 수 없게 눌린다 */
+  .statsBody {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .statsMetrics {
+    border-left: none;
+    border-top: 1px solid var(--pc-color-border-subtle);
   }
 }

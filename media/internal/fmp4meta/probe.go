@@ -20,7 +20,7 @@ type DurationProbe func(path string) (durationMS int64, err error)
 // 구현 근거 — U4 해소 실측(abema/go-mp4 v1.7.1):
 //
 //	mp4.Probe(io.ReadSeeker) (*ProbeInfo, error) 의 ProbeInfo.Duration/Timescale 을 쓴다.
-//	이 값은 moov/mvhd 에서 오며 MediaMTX 1.19.3 기준 "트랙 중 최대 길이"와 일치한다
+//	이 값은 moov/mvhd 에서 오며 MediaMTX 1.19.3·1.20.1 기준 "트랙 중 최대 길이"와 일치한다(1.20.1 실산출물 mvhd 4.117s = max track 재확인)
 //	(ffprobe 독립 실측 대조: segment_4s 4012ms = 비디오 트랙, tail_2s 2042ms = 오디오 트랙).
 //	ProbeInfo.Segments 의 Duration 합은 실제 길이의 절반만 나와 쓸 수 없었다.
 //

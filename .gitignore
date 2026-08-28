@@ -1,5 +1,10 @@
 # 로컬 시크릿 — 이 저장소는 public이다. 키가 한 번 올라가면 지워도 히스토리에 남는다
-.env
+# 🔴 `.env` 만 막으면 `.env.backup`·`.env.bak` 같은 사본이 그대로 통과한다 —
+# 2026-08-24(POK-117)에 실제로 그렇게 추적 대상에 떴고 2026-08-27에 또 났다.
+# 그래서 `.env` 로 시작하는 것을 전부 막고 값 없는 견본만 되돌린다(web/.gitignore 와 같은 방식).
+.env*
+!.env.example
+!.env.dev.example
 # 개인 override — .example 을 cp 해서 쓴다. 자격증명 보간이 들어가므로 커밋 금지
 docker-compose.override.yml
 *.pem
