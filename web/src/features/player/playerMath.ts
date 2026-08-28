@@ -62,6 +62,21 @@ export function formatUptime(seconds: number): string {
 }
 
 /**
+ * 시계 표기 → 초. formatUptime의 역함수로 `1:24:03`·`24:03` 둘 다 받는다.
+ * 하이라이트 카드의 timestamp가 이미 포맷된 문자열이라(계약 필드) 시점 이동에 되돌릴 값이 필요하다.
+ * 시계 표기가 아니면 null — 호출부가 시킹을 건너뛴다.
+ */
+export function parseClockLabel(label: string): number | null {
+  const parts = label.trim().split(':');
+  if (parts.length !== 2 && parts.length !== 3) return null;
+  if (!parts.every((part) => /^\d{1,3}$/.test(part))) return null;
+  const values = parts.map(Number);
+  // 뒤 두 칸은 분·초다 — 60 이상이면 시계 표기가 아니다
+  if (values.slice(1).some((value) => value >= 60)) return null;
+  return values.reduce((acc, value) => acc * 60 + value, 0);
+}
+
+/**
  * 시크바 진행 비율 0..1 — 엣지(시차 0)가 1.
  *
  * windowSeconds는 필수 인자다 (계약3 4절 4번, POK-32). 상한을 LIVE_WINDOW_SECONDS로

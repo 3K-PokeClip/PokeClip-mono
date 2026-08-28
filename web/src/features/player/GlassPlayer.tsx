@@ -2,11 +2,13 @@
 
 import {
   useCallback,
+  useImperativeHandle,
   useRef,
   useState,
   type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
+  type Ref,
 } from 'react';
 import clsx from 'clsx';
 import { useToast } from '@/ui';
@@ -16,6 +18,7 @@ import { PlayerControls } from './PlayerControls';
 import { PlayerSeekBar } from './PlayerSeekBar';
 import { PlayerTopOverlay } from './PlayerTopOverlay';
 import { seekIntentForKey } from './playerKeys';
+import { progressFraction } from './playerMath';
 import { useHlsPlayback } from './useHlsPlayback';
 import {
   usePlayerSimulation,
@@ -27,6 +30,12 @@ import { useSimulatedChat } from './useSimulatedChat';
 // 리퀴드 글래스 라이브 플레이어 (시안 "영상 플레이어 글래스").
 // src가 있으면 hls.js 실재생(useHlsPlayback), 없으면 목업(usePlayerSimulation) —
 // 훅 규칙상 조건부 호출이 안 되므로 컴포넌트 단위로 갈라 태운다. Body는 어느 쪽인지 모른다.
+/** 바깥에서 플레이어에 내리는 명령 — sim이 Body 안에서 생겨 상태로는 끌어올릴 수 없다 */
+export interface GlassPlayerController {
+  /** 방송 경과 시각(초)으로 이동 — 되감기 창 밖은 가장 오래된 지점으로 클램프 */
+  seekToUptime: (uptimeSeconds: number) => void;
+}
+
 export interface GlassPlayerProps {
   channelName: string;
   title: string;
@@ -37,6 +46,14 @@ export interface GlassPlayerProps {
   embed?: boolean;
   /** 테스트용 시뮬레이션 초기값 */
   simulationOptions?: PlayerSimulationOptions;
+  /**
+   * 바깥 채팅 패널(1b 대시보드)의 열림 상태 — 플레이어 안 채팅 오버레이(chatOn)와는 다른 것이다.
+   * onToggleChatPanel이 있을 때만 컨트롤에 토글 버튼이 생긴다.
+   */
+  chatPanelOpen?: boolean;
+  onToggleChatPanel?: () => void;
+  /** 카드 클릭 → 시점 이동 같은 바깥 명령의 통로 */
+  controllerRef?: Ref<GlassPlayerController>;
 }
 
 export function GlassPlayer(props: GlassPlayerProps) {
@@ -75,6 +92,9 @@ function GlassPlayerBody({
   title,
   viewersNote,
   embed = false,
+  chatPanelOpen,
+  onToggleChatPanel,
+  controllerRef,
   sim,
   videoNode,
 }: GlassPlayerBodyProps) {
@@ -100,6 +120,20 @@ function GlassPlayerBody({
   const handlePip = useCallback(() => {
     toast({ tone: 'info', title: '미니 플레이어는 준비 중이에요' });
   }, [toast]);
+
+  // 절대 시각(방송 경과)으로 받는 이유는 시차가 마운트 뒤에도 계속 흐르기 때문이다 —
+  // 카드가 든 "1:24:03"은 고정값이라 시차로 바꿔 건네면 누르는 순간마다 어긋난다.
+  useImperativeHandle(
+    controllerRef,
+    () => ({
+      seekToUptime: (target: number) => {
+        const behind = Math.min(sim.windowSeconds, Math.max(0, sim.uptimeSeconds - target));
+        sim.seekToFraction(progressFraction(behind, sim.windowSeconds));
+        sim.wake();
+      },
+    }),
+    [sim],
+  );
 
   // 설정 팝오버는 Portal로 document.body에 붙지만, React는 DOM이 아니라 React 트리를 따라
   // 이벤트를 버블링시킨다 — 팝오버 안에서 누른 키·클릭이 여기까지 올라온다. DismissableLayer는
@@ -204,6 +238,8 @@ function GlassPlayerBody({
           sim={sim}
           chatOn={chatOn}
           onToggleChat={() => setChatOn((on) => !on)}
+          chatPanelOpen={chatPanelOpen}
+          onToggleChatPanel={onToggleChatPanel}
           onClip={handleClip}
           onPip={handlePip}
           onFullscreen={handleFullscreen}

@@ -7,6 +7,7 @@ import {
   formatBehind,
   formatUptime,
   isAtEdge,
+  parseClockLabel,
   progressFraction,
   seekFractionFromPointer,
 } from './playerMath';
@@ -37,6 +38,30 @@ describe('formatUptime', () => {
   it('1시간 미만은 M:SS', () => {
     expect(formatUptime(754)).toBe('12:34');
     expect(formatUptime(7)).toBe('0:07');
+  });
+});
+
+describe('parseClockLabel — formatUptime의 역함수', () => {
+  it('H:MM:SS·M:SS를 초로 되돌린다', () => {
+    expect(parseClockLabel('1:24:03')).toBe(5043);
+    expect(parseClockLabel('12:34')).toBe(754);
+    expect(parseClockLabel('0:07')).toBe(7);
+  });
+
+  it('formatUptime과 왕복한다 — 카드 timestamp가 이 왕복 위에 선다', () => {
+    for (const seconds of [0, 7, 754, 5043, 3599, 3600]) {
+      expect(parseClockLabel(formatUptime(seconds))).toBe(seconds);
+    }
+  });
+
+  it('시계 표기가 아니면 null이다 — 호출부가 시킹을 건너뛴다', () => {
+    expect(parseClockLabel('방금')).toBeNull();
+    expect(parseClockLabel('1:24:03:07')).toBeNull();
+    expect(parseClockLabel('5043')).toBeNull();
+    expect(parseClockLabel('1:2a:03')).toBeNull();
+    // 분·초 칸이 60을 넘으면 시계가 아니다
+    expect(parseClockLabel('1:60:03')).toBeNull();
+    expect(parseClockLabel('1:24:99')).toBeNull();
   });
 });
 

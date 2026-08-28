@@ -1,12 +1,17 @@
-import { act } from 'react';
+import { act, createRef, type ComponentProps } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
-import { GlassPlayer } from '@/features/player/GlassPlayer';
+import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import type { PlayerSimulationOptions } from '@/features/player/usePlayerSimulation';
 
-function renderPlayer(simulationOptions?: PlayerSimulationOptions) {
+type PanelProps = Pick<
+  ComponentProps<typeof GlassPlayer>,
+  'chatPanelOpen' | 'onToggleChatPanel' | 'controllerRef'
+>;
+
+function renderPlayer(simulationOptions?: PlayerSimulationOptions, panelProps?: PanelProps) {
   return render(
     <ToastProvider>
       <GlassPlayer
@@ -15,6 +20,7 @@ function renderPlayer(simulationOptions?: PlayerSimulationOptions) {
         viewersNote="시청자 1,842"
         embed
         simulationOptions={simulationOptions}
+        {...panelProps}
       />
     </ToastProvider>,
   );
@@ -208,6 +214,48 @@ describe('GlassPlayer', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('바깥 채팅 패널 콜백이 없으면 패널 토글 버튼도 없다', () => {
+    // 플레이어를 단독으로 쓰는 화면(VOD 등)에 없는 패널의 버튼이 생기면 안 된다
+    renderPlayer();
+    expect(screen.queryByRole('button', { name: '실시간 채팅 패널' })).not.toBeInTheDocument();
+  });
+
+  it('패널 토글 버튼이 열림 상태를 aria-pressed로 알리고 클릭이 콜백으로 간다', async () => {
+    const user = userEvent.setup();
+    const onToggleChatPanel = vi.fn();
+    renderPlayer(undefined, { chatPanelOpen: false, onToggleChatPanel });
+
+    const button = screen.getByRole('button', { name: '실시간 채팅 패널' });
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(button);
+    expect(onToggleChatPanel).toHaveBeenCalledOnce();
+  });
+
+  it('컨트롤러의 시점 이동이 방송 경과 시각을 시차로 환산한다', () => {
+    // 카드가 든 "1:24:03"은 고정값이라 절대 시각으로 받는다 — 시차로 건네면 흐르는 동안 어긋난다
+    const controllerRef = createRef<GlassPlayerController>();
+    renderPlayer({ initialUptimeSeconds: 5043 }, { controllerRef });
+
+    act(() => controllerRef.current?.seekToUptime(4960));
+    expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+      'aria-valuenow',
+      '-83',
+    );
+  });
+
+  it('되감기 창 밖 시각은 창 끝으로 클램프된다', () => {
+    // 만료 임박 카드(1시간 밖)를 눌러도 시크바가 범위를 벗어나면 안 된다
+    const controllerRef = createRef<GlassPlayerController>();
+    renderPlayer({ initialUptimeSeconds: 5043 }, { controllerRef });
+
+    act(() => controllerRef.current?.seekToUptime(0));
+    expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+      'aria-valuenow',
+      '-3600',
+    );
   });
 
   it('설정 팝오버가 열려 있는 동안엔 자동 숨김이 유보된다', () => {
