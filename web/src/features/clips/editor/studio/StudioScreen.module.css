@@ -4,7 +4,6 @@
 .screen {
   display: flex;
   flex-direction: column;
-  /* 독(하단 탭)이 가리는 만큼 빼고 화면을 꽉 채운다 */
   /* 독이 없는 전체 화면 그룹((fullscreen))에 있다 — 뷰포트를 끝까지 쓴다 */
   height: 100dvh;
   min-height: calc(640 * var(--pc-u));

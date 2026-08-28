@@ -295,9 +295,14 @@ export interface ClipEditorMockState {
    * 볼륨 슬라이더처럼 이어지는 조작에 그대로 펼쳐 붙이는 포인터 핸들러.
    * DS Slider는 pointermove마다 onValueChange를 부르므로 묶지 않으면
    * 드래그 한 번이 히스토리 상한을 넘긴다.
+   *
+   * 시작을 캡처 단계(onPointerDownCapture)로 받는 것이 핵심이다. Slider는 자기
+   * onPointerDown 뒤에 {...rest}를 펼치므로, 같은 이름으로 넘기면 포인터 캡처와
+   * 값 설정을 하던 Slider의 핸들러를 덮어써 마우스 조작이 통째로 죽는다.
+   * onPointerUp 계열은 Slider가 쓰지 않아 그대로 전달돼도 안전하다.
    */
   gestureHandlers: {
-    onPointerDown: () => void;
+    onPointerDownCapture: () => void;
     onPointerUp: () => void;
     onPointerCancel: () => void;
     onLostPointerCapture: () => void;
@@ -535,6 +540,8 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
         (recipe.range.startSeconds + recipe.range.endSeconds) / 2,
         zoom,
         MOCK_SOURCE.durationSeconds,
+        // 구간보다 조금 넉넉하게 — 양쪽에 핸들을 끌어 넣을 여백이 남는다
+        (recipe.range.endSeconds - recipe.range.startSeconds) * 1.15,
       ),
     [recipe.range.startSeconds, recipe.range.endSeconds, zoom],
   );
@@ -600,7 +607,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     endGesture,
     gestureHandlers: useMemo(
       () => ({
-        onPointerDown: beginGesture,
+        onPointerDownCapture: beginGesture,
         // 취소·캡처 상실도 끝으로 친다 — 안 그러면 창이 고정된 채 남고
         // 이후 편집이 계속 같은 히스토리 항목을 덮어쓴다
         onPointerUp: endGesture,

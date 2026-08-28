@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { screen, within } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { describe, expect, it } from 'vitest';
@@ -241,6 +241,36 @@ describe('StudioScreen', () => {
     expect(Number(start.getAttribute('aria-valuemin'))).toBeGreaterThan(0);
     expect(Number(end.getAttribute('aria-valuenow')) - Number(start.getAttribute('aria-valuemin')))
       .toBeLessThanOrEqual(180);
+  });
+
+  it('볼륨 슬라이더가 포인터로 살아 있다 — 제스처 핸들러가 DS 핸들러를 덮지 않는다', () => {
+    renderStudio();
+
+    const [slider] = screen.getAllByRole('slider', { name: /볼륨/ });
+    if (slider === undefined) throw new Error('볼륨 슬라이더가 없다');
+    // jsdom에는 포인터 캡처가 없어 Slider 내부에서 던진다 — 있는 척만 해 준다
+    const root = slider.parentElement?.parentElement as HTMLElement;
+    root.setPointerCapture = () => {};
+    root.hasPointerCapture = () => true;
+
+    fireEvent.pointerDown(root, { clientX: 10, pointerId: 1 });
+
+    // Slider의 onPointerDown이 살아 있으면 썸에 포커스가 간다.
+    // 우리 핸들러가 덮어썼다면 이 줄이 깨진다 (실제로 그렇게 깨진 적이 있다).
+    expect(document.activeElement).toBe(slider);
+  });
+
+  it('구간이 창보다 길어져도 핸들 둘이 남는다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    const end = screen.getByRole('slider', { name: '구간 끝점' });
+    end.focus();
+    // 5초씩 20번이면 구간이 100초를 넘겨 100% 줌 창(75초)보다 길어진다
+    for (let i = 0; i < 20; i += 1) await user.keyboard('{Shift>}{ArrowRight}{/Shift}');
+
+    expect(screen.getByRole('slider', { name: '구간 시작점' })).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: '구간 끝점' })).toBeInTheDocument();
   });
 
   it('접근성 위반이 없다', async () => {

@@ -37,6 +37,9 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
   const startFraction = secondsToFraction(state.range.startSeconds, state.view);
   const endFraction = secondsToFraction(state.range.endSeconds, state.view);
   const playheadFraction = secondsToFraction(state.playheadSeconds, state.view);
+  const playheadVisible =
+    state.playheadSeconds >= state.view.startSeconds &&
+    state.playheadSeconds <= state.view.endSeconds;
 
   const moveEdgeFromPointer = (edge: 'start' | 'end', clientX: number) => {
     const overlay = overlayRef.current;
@@ -203,13 +206,9 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
                   width: `${(endFraction - startFraction) * 100}%`,
                 }}
               >
-                {(['start', 'end'] as const).map((edge) => {
-                  const at = edge === 'start' ? state.range.startSeconds : state.range.endSeconds;
-                  // 창 밖으로 밀려난 핸들은 가장자리에 붙어 「거기 있는 것처럼」 보인다 —
-                  // 조작하면 엉뚱한 시각으로 튀므로 아예 내주지 않는다
-                  const offscreen = at < state.view.startSeconds || at > state.view.endSeconds;
-                  if (offscreen) return null;
-                  return (
+                {/* 핸들은 늘 그린다. 창이 구간을 품도록 잡혀 있어 밖으로 밀려나지 않고,
+                    숨기면 구간이 창보다 길어지는 순간 둘 다 사라져 조작 자체가 막힌다. */}
+                {(['start', 'end'] as const).map((edge) => (
                   <button
                     key={edge}
                     type="button"
@@ -247,12 +246,15 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
                     onLostPointerCapture={onHandlePointerUp}
                     onKeyDown={onHandleKeyDown(edge)}
                   />
-                  );
-                })}
+                ))}
               </div>
-              <div className={styles.playhead} style={{ left: `${playheadFraction * 100}%` }}>
-                <span className={styles.playheadTip} aria-hidden />
-              </div>
+              {/* 창 밖이면 그리지 않는다. 클램프된 채 두면 눈금 가장자리에 딱 붙어
+                  실제와 다른 시각을 현재 위치처럼 읽게 한다. */}
+              {playheadVisible ? (
+                <div className={styles.playhead} style={{ left: `${playheadFraction * 100}%` }}>
+                  <span className={styles.playheadTip} aria-hidden />
+                </div>
+              ) : null}
             </div>
           </div>
 

@@ -1,3 +1,4 @@
+import { MAX_RANGE_LABEL } from '../timelineMath';
 import styles from './sections.module.css';
 import type { ClipEditorMockState } from '../useClipEditorMockState';
 
@@ -9,7 +10,7 @@ export function RangeSection({ state }: { state: ClipEditorMockState }) {
       <div className={styles.sectionHead}>
         <span className={styles.sectionTitle}>구간 선택</span>
       </div>
-      <p className={styles.hint}>핸들을 드래그해서 조절 · 최대 3:00</p>
+      <p className={styles.hint}>핸들을 드래그해서 조절 · 최대 {MAX_RANGE_LABEL}</p>
 
       <div className={styles.timecodeRow}>
         <span className={styles.timecodeLabel}>시작</span>

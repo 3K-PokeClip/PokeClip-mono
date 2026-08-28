@@ -184,8 +184,15 @@ export function viewWindow(
   centerSeconds: number,
   zoom: number,
   durationSeconds: number,
+  /**
+   * 창이 최소한 이만큼은 보여야 한다 — 선택 구간을 넣어 준다.
+   * 구간보다 좁은 창은 핸들을 창 밖으로 밀어내고, 그러면 그 핸들은
+   * 가장자리에 붙어 엉뚱한 시각을 가리키거나 아예 조작할 수 없게 된다.
+   */
+  minSpanSeconds = 0,
 ): TimelineView {
-  const span = Math.min(durationSeconds, (BASE_VIEW_SECONDS * 100) / zoom);
+  const zoomSpan = (BASE_VIEW_SECONDS * 100) / zoom;
+  const span = Math.min(durationSeconds, Math.max(zoomSpan, minSpanSeconds));
   const half = span / 2;
   const start = Math.min(Math.max(0, centerSeconds - half), Math.max(0, durationSeconds - span));
   return { startSeconds: roundMs(start), endSeconds: roundMs(start + span) };

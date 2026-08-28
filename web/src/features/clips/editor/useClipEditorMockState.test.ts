@@ -205,7 +205,7 @@ describe('useClipEditorMockState', () => {
     const { result } = renderEditor();
     act(() => result.current.setLayout('9:16'));
 
-    act(() => result.current.gestureHandlers.onPointerDown());
+    act(() => result.current.gestureHandlers.onPointerDownCapture());
     for (const v of [70, 60, 50, 40, 30]) {
       act(() => result.current.setTrackVolume('mic', v));
     }
@@ -222,7 +222,7 @@ describe('useClipEditorMockState', () => {
   it('드래그가 취소돼도 제스처가 끝난다 — 창이 고정된 채 남지 않는다', () => {
     const { result } = renderEditor();
 
-    act(() => result.current.gestureHandlers.onPointerDown());
+    act(() => result.current.gestureHandlers.onPointerDownCapture());
     const frozen = result.current.view;
     act(() => result.current.gestureHandlers.onPointerCancel());
 
