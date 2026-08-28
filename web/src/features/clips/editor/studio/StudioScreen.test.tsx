@@ -273,6 +273,40 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('slider', { name: '구간 끝점' })).toBeInTheDocument();
   });
 
+  it('스위치를 누른 뒤에도 ⌘Z가 먹는다 — DS Switch는 checkbox라 글자 입력이 아니다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    await user.click(screen.getByRole('tab', { name: '오디오' }));
+    const mic = screen.getByRole('switch', { name: '마이크 사용' });
+    await user.click(mic);
+    expect(mic).not.toBeChecked();
+
+    // 포커스가 스위치(input)에 남은 채로 되돌린다
+    await user.keyboard('{Meta>}z{/Meta}');
+    expect(screen.getByRole('switch', { name: '마이크 사용' })).toBeChecked();
+  });
+
+  it('키마다 주인이 다르다 — 버튼 위 화살표는 시킹, 슬라이더 위 Space는 재생', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    // 버튼은 화살표를 안 쓴다 → 시킹이 통과해야 한다
+    const play = screen.getByRole('button', { name: '재생' });
+    play.focus();
+    // 트랜스포트의 현재 시각만 본다 (타임코드 박스·눈금에도 1:22가 있다)
+    const clock = () =>
+      screen.getByRole('button', { name: '5초 뒤로' }).parentElement?.textContent ?? '';
+    const before = clock();
+    await user.keyboard('{ArrowRight}');
+    expect(clock()).not.toBe(before);
+
+    // 슬라이더는 Space를 안 쓴다 → 재생이 통과해야 한다
+    screen.getByRole('slider', { name: '구간 시작점' }).focus();
+    await user.keyboard(' ');
+    expect(screen.getByRole('button', { name: '일시정지' })).toBeInTheDocument();
+  });
+
   it('접근성 위반이 없다', async () => {
     const { container } = renderStudio();
     await act(async () => {
