@@ -6,12 +6,13 @@ import { GlassPlayer, type GlassPlayerController } from '@/features/player/Glass
 import { useMediaSource } from '@/features/player/mediaSource';
 import { parseClockLabel } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
-import { ChatVolumeCard } from './ChatVolumeCard';
 import { HighlightCardPanel } from './HighlightCardPanel';
+import { LiveStatsPanel } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
 import { useChatPanelMockState } from './useChatPanelMockState';
 import { useLiveDetailsMockState } from './useLiveDetailsMockState';
 import { useLiveMockState, type LiveStream } from './useLiveMockState';
+import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useManualMarking } from './useManualMarking';
 
 // 디자인 1b — 라이브 대시보드. 시안은 페이지 헤더 없이 콘텐츠부터 시작하고,
@@ -62,9 +63,17 @@ export function LiveScreen() {
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
   const chat = useChatPanelMockState(chatPanelOpen);
+  const stats = useLiveStatsMockState();
 
-  // 찍어 만든 카드가 앞, 그다음이 감지된 카드 — 필터 개수도 이 합친 목록에서 센다
+  // 찍어 만든 카드가 앞, 그다음이 감지된 카드 — 필터 개수도 통계의 하이라이트 줄도
+  // 이 합친 목록에서 센다. 어느 한쪽을 따로 세면 두 표기가 언젠가 어긋난다.
   const cards = [...marking.manualCards, ...highlights];
+  const manualCount = cards.filter((card) => card.source === 'manual').length;
+  const highlightSummary = {
+    total: cards.length,
+    auto: cards.length - manualCount,
+    manual: manualCount,
+  };
 
   const handleSeek = useCallback((timestamp: string) => {
     const seconds = parseClockLabel(timestamp);
@@ -100,7 +109,6 @@ export function LiveScreen() {
             pendingLabel={marking.pendingLabel}
             onSeek={handleSeek}
           />
-          <ChatVolumeCard series={chatVolume} />
         </div>
         {chatPanelOpen ? (
           <ChatPanel
@@ -111,6 +119,15 @@ export function LiveScreen() {
           />
         ) : null}
       </div>
+      {/* 전폭 — 스크롤로 내려와 만나는 자리다 */}
+      <LiveStatsPanel
+        chatVolume={chatVolume}
+        viewerLine={stats.viewerLine}
+        donations={stats.donations}
+        categorySegments={stats.categorySegments}
+        metrics={stats.metrics}
+        highlightSummary={highlightSummary}
+      />
     </main>
   );
 }

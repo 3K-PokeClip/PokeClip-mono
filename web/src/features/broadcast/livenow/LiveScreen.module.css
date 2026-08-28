@@ -11,6 +11,10 @@
   margin: 0 auto;
   /* 하단 여백 — fixed Dock에 콘텐츠가 가리지 않게 (ScreenContainer와 동일) */
   padding: calc(22 * var(--pc-u)) var(--pc-space-5) calc(120 * var(--pc-u));
+  /* 위(영상·카드·채팅) 아래(통계)로 쌓고 문서 스크롤로 내려간다 — 높이를 뷰포트에 맞추지 않는다 */
+  display: flex;
+  flex-direction: column;
+  gap: calc(16 * var(--pc-u));
 }
 
 /* 좌: 영상·정보·카드 / 우: 채팅 패널. 채팅은 좌측 열 높이를 따라 늘어난다(자체 높이 고정 아님) */
@@ -466,80 +470,194 @@
   color: var(--pc-color-text-muted);
 }
 
-/* ---------- 채팅량 카드 ---------- */
+/* ---------- 실시간 통계 ---------- */
 
-.chartHeader {
-  display: flex;
-  align-items: center;
-  gap: calc(9 * var(--pc-u));
-  padding: calc(14 * var(--pc-u)) calc(16 * var(--pc-u)) calc(2 * var(--pc-u));
+.statsPanel {
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  overflow: hidden;
 }
 
-.chartTitle {
+.statsHeader {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(13 * var(--pc-u)) calc(18 * var(--pc-u)) calc(11 * var(--pc-u));
+}
+
+.statsHeaderIcon {
+  color: var(--pc-color-text-muted);
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+  flex: none;
+}
+
+.statsHeading {
   margin: 0;
-  font-size: calc(13 * var(--pc-u));
+  font-size: calc(13.5 * var(--pc-u));
   font-weight: 750;
 }
 
-.chartNote {
-  font-size: calc(11 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-}
-
-.chartLegend {
+.statsLegend {
   margin-left: auto;
   display: flex;
   align-items: center;
+  gap: calc(10 * var(--pc-u));
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
   gap: calc(5 * var(--pc-u));
-  font-size: calc(11 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
   color: var(--pc-color-text-secondary);
 }
 
-.chartLegendSwatch {
+.legendChat {
+  width: calc(8 * var(--pc-u));
+  height: calc(2.5 * var(--pc-u));
+  background: var(--pc-color-accent);
+}
+
+.legendViewer {
+  width: calc(8 * var(--pc-u));
+  height: calc(2.5 * var(--pc-u));
+  background: var(--pc-color-success, #4cae7d);
+}
+
+.legendHighlight {
   width: calc(8 * var(--pc-u));
   height: calc(8 * var(--pc-u));
-  border-radius: calc(2 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
   background: var(--pc-color-point);
 }
 
-.chartBody {
-  padding: calc(8 * var(--pc-u)) calc(16 * var(--pc-u)) calc(6 * var(--pc-u));
+.legendDonation {
+  width: calc(8 * var(--pc-u));
+  height: calc(8 * var(--pc-u));
+  background: #e6a83c;
+  transform: rotate(45deg);
 }
 
-.chartSvg {
+.statsBody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) calc(252 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+}
+
+.statsChartCol {
+  padding: calc(14 * var(--pc-u)) calc(18 * var(--pc-u));
+  min-width: 0;
+}
+
+.statsSvg {
   width: 100%;
-  height: calc(90 * var(--pc-u));
+  height: calc(150 * var(--pc-u));
   display: block;
 }
 
-.chartArea {
-  fill: rgb(88 111 196 / 0.16);
+.statsChatArea {
+  fill: rgb(88 111 196 / 0.14);
   stroke: none;
 }
 
-.chartLine {
+.statsChatLine {
   fill: none;
   stroke: var(--pc-color-accent);
   stroke-width: 2;
 }
 
-.chartMarker {
+.statsViewerLine {
+  fill: none;
+  stroke: var(--pc-color-success, #4cae7d);
+  stroke-width: 2;
+}
+
+.statsHighlight {
   fill: var(--pc-color-point);
 }
 
-.chartEdge {
+.statsDonation {
+  fill: #e6a83c;
+}
+
+.statsNow {
   stroke: var(--pc-color-point);
   stroke-width: 2;
 }
 
-.chartAxis {
+/* 어느 카테고리로 얼마나 방송했는지 — 타임라인 바로 아래 붙어 구간을 읽게 한다 */
+.categoryBar {
+  display: flex;
+  height: calc(16 * var(--pc-u));
+  border-radius: calc(6 * var(--pc-u));
+  overflow: hidden;
+  margin-top: calc(8 * var(--pc-u));
+}
+
+.categorySegment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  font-size: calc(9.5 * var(--pc-u));
+  font-weight: 650;
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+}
+
+.categorySegment:last-child {
+  background: var(--pc-color-accent);
+  color: var(--pc-color-text-on-accent, #fff);
+}
+
+.statsAxis {
   display: flex;
   justify-content: space-between;
   font-family: var(--pc-font-mono, monospace);
   font-size: calc(10 * var(--pc-u));
   font-weight: 500;
   color: var(--pc-color-text-muted);
-  padding: calc(4 * var(--pc-u)) 0 calc(8 * var(--pc-u));
+  padding: calc(6 * var(--pc-u)) 0 0;
+}
+
+.statsMetrics {
+  margin: 0;
+  border-left: 1px solid var(--pc-color-border-subtle);
+  display: flex;
+  flex-direction: column;
+}
+
+.metricRow {
+  display: flex;
+  align-items: baseline;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(10 * var(--pc-u)) calc(16 * var(--pc-u));
+}
+
+.metricRow + .metricRow {
+  border-top: 1px solid var(--pc-color-border-subtle);
+}
+
+.metricLabel {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.metricValue {
+  margin: 0;
+  margin-left: auto;
+  font-size: calc(14.5 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.metricNote {
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-text-muted);
+  margin-left: calc(5 * var(--pc-u));
 }
 
 /* ---------- 실시간 채팅 패널 ---------- */
@@ -730,5 +848,15 @@
   /* 1단이 되면 채팅은 카드 아래로 내려온다 — 고정 폭을 놓아야 본문 폭을 채운다 */
   .chatPanel {
     width: auto;
+  }
+
+  /* 지표 열도 아래로 — 좁은 폭에서 252u를 떼어 주면 차트가 읽을 수 없게 눌린다 */
+  .statsBody {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .statsMetrics {
+    border-left: none;
+    border-top: 1px solid var(--pc-color-border-subtle);
   }
 }

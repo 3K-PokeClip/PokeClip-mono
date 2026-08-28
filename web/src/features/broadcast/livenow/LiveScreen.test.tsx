@@ -194,6 +194,44 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
   });
 });
 
+describe('LiveScreen — 실시간 통계', () => {
+  it('지표 스택과 범례·시간축을 그린다', () => {
+    renderLive();
+
+    expect(screen.getByText('최고 시청자')).toBeInTheDocument();
+    expect(screen.getByText('2,310')).toBeInTheDocument();
+    expect(screen.getByText('12,480')).toBeInTheDocument();
+    expect(screen.getByText('분당 평균 채팅')).toBeInTheDocument();
+    expect(screen.getByText('저스트 채팅 29분')).toBeInTheDocument();
+    expect(screen.getByText('19:12')).toBeInTheDocument();
+  });
+
+  it('타임라인이 채팅량·시청자·하이라이트·후원을 한 그림으로 알린다', () => {
+    renderLive();
+
+    expect(
+      screen.getByRole('img', {
+        name: '방송 타임라인 — 채팅량과 시청자 추이, 하이라이트 4곳, 후원 2회',
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it('하이라이트 지표는 카드 목록에서 센다 — 마킹하면 필터와 같이 움직인다', () => {
+    vi.useFakeTimers();
+    renderLive();
+
+    expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'F8' });
+    act(() => {
+      vi.advanceTimersByTime(CARD_CREATE_MS);
+    });
+
+    expect(screen.getByText('자동 6 · 수동 3')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+  });
+});
+
 describe('LiveScreen — 접근성', () => {
   it('접근성 위반이 없다', async () => {
     const { container } = renderLive();
