@@ -249,15 +249,15 @@ CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리�
 **버전을 올리면 `TestPinnedMediaMTXVersionMatchesDockerfile`이 빨간불이 된다. 그 테스트가 이 절로 안내한다.**
 ([`internal/mtxhook/version_contract_test.go`](internal/mtxhook/version_contract_test.go) —
 Dockerfile의 `FROM` 태그와 테스트 안 상수 `pinnedMediaMTXVersion`을 대조한다. 상수를 고치는
-행위가 곧 "아래 전제 8개를 새 버전에서 재확인했다"는 서명이다. 실패 메시지에 8개 목록이 그대로 들어 있다.)
+행위가 곧 "아래 전제 9개를 새 버전에서 재확인했다"는 서명이다. 실패 메시지에 9개 목록이 그대로 들어 있다.)
 
 버전 고정의 유일한 자리는 [`media/Dockerfile.mtxhook`](Dockerfile.mtxhook)의 `FROM`이다
 (compose의 `image:`가 `build:`로 바뀌면서 옮겨왔다). 훅 파라미터 이름은 버전 사이에 조용히
 바뀌거나 사라질 수 있고, **훅이 실행되지 않아도 아무 오류가 나지 않는다**. 그래서 절차를 고정한다.
 
-### 버전에 묶인 전제 8곳 — 절차보다 먼저 확인한다
+### 버전에 묶인 전제 9곳 — 절차보다 먼저 확인한다
 
-버전을 고정하는 자리는 한 곳이지만, **"1.19.3이라서 참인 사실"에 기대는 자리는 아래 8곳**이다.
+버전을 고정하는 자리는 한 곳이지만, **"고정 버전이라서 참인 사실"에 기대는 자리는 아래 9곳**이다.
 전제가 깨져도 예외도 로그도 나지 않는다 — 훅이 조용히 안 돌거나 길이가 조용히 틀릴 뿐이다.
 "닻"은 그 자리를 `git grep`으로 바로 찾기 위한 문구다(줄 번호는 금방 낡아서 적지 않는다).
 
@@ -271,10 +271,9 @@ Dockerfile의 `FROM` 태그와 테스트 안 상수 `pinnedMediaMTXVersion`을 �
 | 6 | `media/internal/fmp4meta/probe_test.go` + `testdata/`<br>(닻: `채취: MediaMTX`) | 픽스처 3종이 **1.19.3이 `recordPath`로 직접 떨어뜨린 원본**이다(1.20.1 산출물과 박스 배치 동일 확인 — 2026-08-28, 재채취 불요). 검증 대상이 MediaMTX의 박스 배치라서 재인코딩본으로는 대체할 수 없다 | 5번 대조가 어긋났을 때만 손댄다 — 새 버전 산출물로 픽스처를 다시 채취하고 오라클(ffprobe 실측값)도 함께 갱신한다. 어긋나지 않으면 그대로 둔다 |
 | 7 | `media/internal/recording/settle.go`<br>(닻: `업스트림 기본값 recordPartDuration`) | 업스트림 기본값 `recordPartDuration` = 1s. 쓰기와 쓰기 사이 공백을 "다 썼다"로 오해하지 않으려면 공백의 2배는 기다려야 하므로, 그 2배가 `SEGMENT_SETTLE_WAIT` 2s의 근거다 | 새 태그의 업스트림 기본 설정 파일(`mediamtx.yml`)에서 `recordPartDuration` 값을 확인한다. **1s보다 커졌으면 `SEGMENT_SETTLE_WAIT`를 그 2배로 올린다** — 안 올리면 절반짜리 파일을 완성으로 판정한다 |
 | 8 | `media/Dockerfile.mtxhook`<br>(닻: `USER 10002:10002`) | **MediaMTX가 루트FS·CWD에 쓰지 않는다.** 비root(UID 10002)로 도니까 쓰려는 순간 실패한다. 우리 설정은 `moq: no`라 참이지만, `moq`/`webrtc`/`rtsps`를 켜며 `auto.key`류 자동 생성 경로를 쓰면 비root에서 기동 자체가 실패한다(POK-79 실험 E7) | 새 버전 **기본 설정**에서 CWD에 파일을 쓰는 지점이 늘었는지 본다. 실물 확인은 기동 로그에 `failed to save`·`permission denied`가 뜨는지 — `docker compose logs media \| grep -iE 'permission denied\|failed to save'`가 0건이어야 한다 |
+| 9 | HLS 서빙 경계<br>(닻: `302 cookieCheck`) | **HLS 첫 요청은 302 `cookieCheck` 리다이렉트를 돈다 — 1.19.3에도 있던 동작이며 이번(1.20.1 전환)에 처음 체크리스트화했다**(우리 2026-08-17 결정 문서·v1.19.3 원문 대조). **버전별 델타**: 1.20.1은 plain HTTP에서 일반 쿠키를 중단하고 **Partitioned 쿠키(HTTPS 전용)로 통합**, HTTP에선 쿠키 미회신 시 **`?session=` 쿼리로 폴백**(만료 시 401 — 실측)·iOS UA 400 분기 제거. CDN(Bearer) 경로는 302를 우회한다 | CDN·서명 쿠키·매니페스트 TTL 경계에서 실측 — 캐시가 302·Set-Cookie를 어떻게 다루는지, **HTTP 오리진에서 세션 쿼리가 캐시 키를 오염시키는지**. 이 행은 버전 특정이 아니라 **서빙 경계 상시 리스크**다 — 롤백해도 걷어내지 않고 델타 서술만 그 버전 값으로 갱신한다. ADR-050 선결 A |
 
-| 9 | HLS 서빙 경계<br>(닻: 이 행 — v1.20.1 신설) | **HLS 첫 요청에 302 `cookieCheck` 리다이렉트 + `Set-Cookie`가 붙는다**(1.19.3에 없던 동작). `index.m3u8`은 마스터이고 미디어 목록은 세션 쿼리가 붙으며 만료 시 401 | CDN·서명 쿠키·매니페스트 TTL 경계에서 실측한다 — `curl -si :8888/{path}/index.m3u8`이 302를 주는지, 캐시가 302·Set-Cookie를 어떻게 다루는지. ADR-050 선결 A 리스크 |
-
-**1.19.3 → 1.20.1 재검증 기록 (2026-08-28)**: 8곳 전항 확인 — ①`all_others` 송출로 훅 3종 실발화(스풀 기록) ②`shellquote.Split` 후 `expandEnv` 순서 불변(`cmd_os.go:16→22`) ③④`runOnReady` deprecated 별칭 생존(`conf/path.go:354`)·기동 WARN 0 ⑤1.20.1 실산출물 mvhd 4.117s = 최대 트랙 길이 일치 ⑥박스 배치 동일(ftyp·moov·(moof·mdat)×N — 픽스처 유지) ⑦`recordPartDuration` 기본 1s 불변(`conf/path.go:376`) ⑧UID 10002로 녹화 기록·권한 오류 0(+상류 read-only FS 복원 커밋 `c9f003f`). 부수: 상류 `a56c635`가 우리가 겪은 설정 API 데드락을 해소.
+**1.19.3 → 1.20.1 재검증 기록 (2026-08-28)**: 기존 8곳 전항 확인 + 9번 신설(체크리스트화) — ①`all_others` 송출로 훅 3종 실발화(스풀 기록) ②`shellquote.Split` 후 `expandEnv` 순서 불변(`cmd_os.go:16→22`) ③④`runOnReady` deprecated 별칭 생존(`conf/path.go:354`)·기동 WARN 0 ⑤1.20.1 실산출물 mvhd 4.117s = 최대 트랙 길이 일치 ⑥박스 배치 동일(ftyp·moov·(moof·mdat)×N — 픽스처 유지) ⑦`recordPartDuration` 기본 1s 불변(`conf/path.go:376`) ⑧UID 10002로 녹화 기록·권한 오류 0(+상류 read-only FS 복원 커밋 `c9f003f`). 부수: 상류 `a56c635`가 우리가 겪은 설정 API 데드락을 해소.
 
 전제는 아니지만 **버전 문자열을 그대로 적어 둔 곳이 2군데** 더 있다. 함께 고친다 —
 [`docs/dev-environment.md`](../docs/dev-environment.md)의 서비스 표와
