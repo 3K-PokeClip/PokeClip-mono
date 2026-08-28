@@ -68,11 +68,7 @@ describe('useClipEditorMockState', () => {
 
     expect(result.current.range).toEqual(before);
     expect(result.current.rangeRejection?.reason).toBe('tooLong');
-    const firstNonce = result.current.rangeRejection?.nonce ?? 0;
-
-    // 같은 거부가 이어져도 흔들림이 다시 돌도록 nonce가 오른다
-    act(() => result.current.setRangeEdge('start', before.endSeconds - 181));
-    expect(result.current.rangeRejection?.nonce).toBe(firstNonce + 1);
+    expect(result.current.rangeRejection?.message).toContain('최대 3:00');
   });
 
   it('5초 미만으로 줄이려 해도 거부한다', () => {

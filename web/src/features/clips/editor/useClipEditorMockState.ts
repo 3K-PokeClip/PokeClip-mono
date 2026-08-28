@@ -113,8 +113,6 @@ export type SubtitleState =
 export interface RangeRejection {
   reason: RangeRejectionReason;
   message: string;
-  /** 같은 거부가 이어져도 흔들림이 다시 돌도록 매번 올린다 — 화면이 key로 쓴다 */
-  nonce: number;
 }
 
 /**
@@ -483,11 +481,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       const result = resolveRangeEdge(edge, seconds, recipe.range, MOCK_SOURCE.durationSeconds);
       const rejection = result.rejection;
       if (rejection !== null) {
-        setRangeRejection((previous) => ({
-          reason: rejection,
-          message: rangeRejectionMessage(rejection),
-          nonce: (previous?.nonce ?? 0) + 1,
-        }));
+        setRangeRejection({ reason: rejection, message: rangeRejectionMessage(rejection) });
         return;
       }
       setRangeRejection(null);

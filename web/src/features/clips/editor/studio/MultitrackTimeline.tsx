@@ -194,14 +194,6 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
                   width: `${(endFraction - startFraction) * 100}%`,
                 }}
               >
-                {/* 흔들림은 핸들을 품지 않는 겉껍질만 다시 마운트해 돌린다.
-                    핸들까지 리마운트하면 드래그 중 포인터 캡처가 끊기고
-                    키보드 포커스가 body로 떨어져 화살표가 재생헤드를 움직인다. */}
-                <span
-                  key={state.rangeRejection?.nonce ?? 'settled'}
-                  className={state.rangeRejection !== null ? styles.rangeBoxRejected : undefined}
-                  aria-hidden
-                />
                 {(['start', 'end'] as const).map((edge) => (
                   <button
                     key={edge}
@@ -244,11 +236,12 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
               </span>
             ))}
             <span className={styles.legendNote}>
-              3:00 초과로는 핸들이 늘어나지 않아요 · 초과 시도 시 흔들림 + 안내
+              3:00 초과로는 핸들이 늘어나지 않아요
             </span>
           </div>
 
-          {/* 거부 안내는 라이브 영역에 둔다 — 흔들림만으로는 스크린리더에 아무 일도 안 일어난다 */}
+          {/* 거부를 알리는 유일한 창구다. 라이브 영역이라 초점을 뺏지 않고 읽어 주고,
+              비어 있어도 자리를 지킨다 — 글자와 함께 생기면 스크린리더가 놓친다. */}
           <p className={styles.rejection} role="status">
             {state.rangeRejection?.message ?? ''}
           </p>
