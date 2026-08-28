@@ -6,12 +6,6 @@ import type { ClipEditorMockState } from './useClipEditorMockState';
 // 시안 1d 가운데 — 레이아웃 세그먼트 + 9:16/1:1/상하분할 미리보기.
 // 크롭 위치 드래그·소스 교체는 목업이라 실제 픽셀을 옮기지 않는다.
 
-/** 상하분할 위/아래 소스 — 자리바꿈은 이 배열 순서만 뒤집는다 */
-const SPLIT_SOURCES = [
-  { key: 'game', badge: '소스 1 · 게임', placeholder: '게임 화면', tone: 'accent' as const },
-  { key: 'cam', badge: '소스 2 · 캠', placeholder: '페이스캠', tone: 'point' as const },
-];
-
 export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
   const subtitleText =
     state.subtitle.status === 'ready'
@@ -19,8 +13,8 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
       : null;
 
   const split = state.layout === 'split';
-  const sources = state.sourcesSwapped ? [...SPLIT_SOURCES].reverse() : SPLIT_SOURCES;
-  const panes = split ? sources : sources.slice(0, 1);
+  // 소스와 그 순서는 훅이 정한다 — 자리바꿈 반영도 저쪽 몫이다
+  const panes = split ? state.sources : state.sources.slice(0, 1);
   // 상하분할 경계 위치(%) — 시안 1.5 : 1
   const topShare = (state.splitRatio / (state.splitRatio + 1)) * 100;
 
@@ -44,11 +38,13 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
             const isBottom = split && index === 1;
             return (
               <div
-                key={source.key}
+                key={source.id}
                 className={styles.sourcePane}
                 data-position={isTop ? 'top' : undefined}
                 style={{ flex: split ? (isTop ? state.splitRatio : 1) : 1 }}
-                onDoubleClick={state.swapSources}
+                // 자리바꿈은 소스가 둘일 때만 뜻이 있다 — 단일 모드에서 더블클릭하면
+                // 눈에 보이는 변화 없이 실행취소 한 칸만 쌓인다
+                onDoubleClick={split ? state.swapSources : undefined}
               >
                 <span className={styles.sourcePlaceholder}>{source.placeholder}</span>
                 <span className={styles.sourceBadge} data-tone={source.tone}>

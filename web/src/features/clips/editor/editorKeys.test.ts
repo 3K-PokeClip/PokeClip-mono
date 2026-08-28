@@ -46,6 +46,19 @@ describe('editorIntentForKey', () => {
     expect(editorIntentForKey({ key: 'ArrowRight', repeat: true })).toBeNull();
   });
 
+  it('한글 입력 상태에서도 I·O·⌘Z가 먹는다 — 물리 글쇠로 본다', () => {
+    // 한글 입력기가 켜져 있으면 key가 자모로 온다. 대상 사용자가 한국어라 흔한 상태다.
+    expect(editorIntentForKey({ key: 'ㅑ', code: 'KeyI' })).toEqual({ kind: 'markIn' });
+    expect(editorIntentForKey({ key: 'ㅐ', code: 'KeyO' })).toEqual({ kind: 'markOut' });
+    expect(editorIntentForKey({ key: 'ㅋ', code: 'KeyZ', metaKey: true })).toEqual({
+      kind: 'undo',
+    });
+  });
+
+  it('물리 글쇠가 다르면 글자가 같아도 안 먹는다', () => {
+    expect(editorIntentForKey({ key: 'i', code: 'KeyK' })).toBeNull();
+  });
+
   it('모르는 키는 null이다', () => {
     expect(editorIntentForKey({ key: 'q' })).toBeNull();
     expect(editorIntentForKey({ key: 'Enter' })).toBeNull();

@@ -24,6 +24,12 @@ export type EditorIntent =
 /** 이벤트에서 실제로 보는 것만 — React 합성 이벤트와 네이티브 KeyboardEvent 둘 다 만족한다 */
 export type EditorKeyEvent = {
   key: string;
+  /**
+   * 물리 글쇠(`KeyI`·`KeyO`·`KeyZ`). 문자 키는 입력기·레이아웃을 타서
+   * 한글 입력 상태에서는 key가 `ㅑ`·`ㅐ`·`ㅋ`로 들어온다 — 대상 사용자가
+   * 한국어라 그 상태가 기본값에 가깝다. code가 있으면 그쪽을 먼저 믿는다.
+   */
+  code?: string;
   repeat?: boolean;
   metaKey?: boolean;
   ctrlKey?: boolean;
@@ -43,7 +49,7 @@ export function editorIntentForKey(event: EditorKeyEvent): EditorIntent | null {
   if (event.repeat) return null;
 
   const hasUndoModifier = (event.metaKey ?? false) || (event.ctrlKey ?? false);
-  if (hasUndoModifier && !(event.altKey ?? false) && event.key.toLowerCase() === 'z') {
+  if (hasUndoModifier && !(event.altKey ?? false) && matchesLetter(event, 'z')) {
     return event.shiftKey ? { kind: 'redo' } : { kind: 'undo' };
   }
 
@@ -63,14 +69,17 @@ export function editorIntentForKey(event: EditorKeyEvent): EditorIntent | null {
     default:
       break;
   }
-  switch (event.key.toLowerCase()) {
-    case 'i':
-      return { kind: 'markIn' };
-    case 'o':
-      return { kind: 'markOut' };
-    default:
-      return null;
+  if (matchesLetter(event, 'i')) return { kind: 'markIn' };
+  if (matchesLetter(event, 'o')) return { kind: 'markOut' };
+  return null;
+}
+
+/** 물리 글쇠를 먼저 보고, 없을 때만 문자로 떨어진다 (테스트·구형 이벤트 대비) */
+function matchesLetter(event: EditorKeyEvent, letter: 'i' | 'o' | 'z'): boolean {
+  if (event.code !== undefined && event.code !== '') {
+    return event.code === `Key${letter.toUpperCase()}`;
   }
+  return event.key.toLowerCase() === letter;
 }
 
 export interface ShortcutLegendItem {

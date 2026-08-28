@@ -240,6 +240,48 @@ describe('useClipEditorMockState', () => {
     expect(result.current.playheadSeconds).toBe(result.current.range.startSeconds);
   });
 
+  it('원본 끝에서 더 밀어도 이력이 쌓이지 않는다', () => {
+    const { result } = renderEditor();
+
+    // 끝점을 원본 끝까지 보낸 뒤 한 번 더 민다
+    act(() => result.current.setRangeEdge('end', result.current.sourceDurationSeconds));
+    const afterFirst = result.current.canUndo;
+    act(() => result.current.setRangeEdge('end', result.current.sourceDurationSeconds + 50));
+    act(() => result.current.undo());
+
+    expect(afterFirst).toBe(true);
+    // 두 번째 밀기가 이력을 안 쌓았으므로 한 번의 undo로 처음 구간에 돌아온다
+    expect(result.current.range.endSeconds).toBe(4940.8);
+  });
+
+  it('자리바꿈은 상하분할에서만 먹는다 — 9:16으로 새지 않는다', () => {
+    const { result } = renderEditor();
+
+    expect(result.current.sources[0]?.id).toBe('game');
+    act(() => result.current.swapSources());
+    expect(result.current.sources[0]?.id).toBe('cam');
+
+    act(() => result.current.setLayout('9:16'));
+    // 단일 소스 모드에서는 늘 첫 소스(게임)가 온다
+    expect(result.current.sources[0]?.id).toBe('game');
+  });
+
+  it('슬라이더 키 자동반복은 썸까지 가지 못한다', () => {
+    const { result } = renderEditor();
+    let stopped = false;
+    const stopPropagation = () => {
+      stopped = true;
+    };
+
+    // DS Slider는 defaultPrevented를 안 보므로 전파를 끊어야 실제로 막힌다
+    result.current.gestureHandlers.onKeyDownCapture({ repeat: true, stopPropagation });
+    expect(stopped).toBe(true);
+
+    stopped = false;
+    result.current.gestureHandlers.onKeyDownCapture({ repeat: false, stopPropagation });
+    expect(stopped).toBe(false);
+  });
+
   it('줌은 단계로 움직이고 표기가 따라온다', () => {
     const { result } = renderEditor();
 

@@ -97,6 +97,16 @@ export interface TitleSuggestion {
   text: string;
 }
 
+/** 미리보기에 깔리는 원본 화면. 상하분할이면 둘, 아니면 첫 칸만 쓴다 */
+export interface EditorSource {
+  id: string;
+  /** 화면 위 배지 — 「소스 1 · 게임」 */
+  badge: string;
+  /** 아직 영상이 없을 때 자리에 적는 말 */
+  placeholder: string;
+  tone: 'accent' | 'point';
+}
+
 export interface EditorImageItem {
   id: string;
   name: string;
@@ -193,6 +203,12 @@ const MOCK_TITLE_SUGGESTIONS: readonly TitleSuggestion[] = [
   { id: 'title-1', text: '1대3 클러치 미쳤다 #발로란트' },
   { id: 'title-2', text: '승급전 마지막 한타 대역전극' },
   { id: 'title-3', text: '이걸 쫓아온다고? 결말 실화' },
+];
+
+/** 시안 1d-a 상하분할의 두 소스 — 배선 티켓에서 클립이 실제로 가진 소스로 바뀐다 */
+const MOCK_SOURCES: readonly EditorSource[] = [
+  { id: 'game', badge: '소스 1 · 게임', placeholder: '게임 화면', tone: 'accent' },
+  { id: 'cam', badge: '소스 2 · 캠', placeholder: '페이스캠', tone: 'point' },
 ];
 
 const MOCK_IMAGES: readonly EditorImageItem[] = [
@@ -306,6 +322,8 @@ export interface ClipEditorMockState {
     onPointerUp: () => void;
     onPointerCancel: () => void;
     onLostPointerCapture: () => void;
+    /** DS Slider의 키보드 경로는 자동반복을 거르지 않는다 — 여기서 막는다 */
+    onKeyDownCapture: (event: { repeat?: boolean; stopPropagation: () => void }) => void;
   };
   markIn: () => void;
   markOut: () => void;
@@ -316,6 +334,8 @@ export interface ClipEditorMockState {
   setLayout: (layout: EditorLayout) => void;
   splitRatio: number;
   setSplitRatio: (ratio: number) => void;
+  /** 자리바꿈이 이미 반영된 순서로 온다 — 화면은 순서를 따지지 않는다 */
+  sources: readonly EditorSource[];
   sourcesSwapped: boolean;
   swapSources: () => void;
 
@@ -496,6 +516,14 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       // 경계 밖이면 값을 그대로 둔다 — 핸들이 거기서 멈추는 것이 곧 안내다
       // (범례가 5초~3:00을 미리 적어 둔다)
       if (rejection !== null) return;
+      // 원본 끝에 닿아 같은 값으로 잘렸으면 아무 일도 하지 않는다 —
+      // resolveRangeEdge는 값이 같아도 새 객체를 주므로 여기서 걸러야 한다
+      if (
+        result.range.startSeconds === recipe.range.startSeconds &&
+        result.range.endSeconds === recipe.range.endSeconds
+      ) {
+        return;
+      }
       commit((current) => ({ ...current, range: result.range }));
     },
     [commit, recipe.range],
@@ -613,6 +641,14 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
         onPointerUp: endGesture,
         onPointerCancel: endGesture,
         onLostPointerCapture: endGesture,
+        // 눌러둔 화살표가 초당 수십 번 값을 바꾸면 상한(50)을 넘겨 이전 편집이 밀려난다.
+        // editorKeys·구간 핸들이 같은 이유로 막는 그 실패 모드다.
+        //
+        // preventDefault로는 못 막는다 — DS Slider의 onKeyDown이 defaultPrevented를
+        // 보지 않는다. 캡처 단계에서 전파를 끊어 썸까지 가지 못하게 한다.
+        onKeyDownCapture: (event) => {
+          if (event.repeat === true) event.stopPropagation();
+        },
       }),
       [beginGesture, endGesture],
     ),
@@ -632,6 +668,12 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
         commit((current) => ({ ...current, splitRatio: Math.min(3, Math.max(0.4, ratio)) })),
       [commit],
     ),
+    // 자리바꿈은 상하분할에서만 뜻이 있다 — 단일 소스 모드까지 새면
+    // 9:16을 골랐을 때 게임 화면 대신 캠이 뜬다
+    sources:
+      recipe.layout === 'split' && recipe.sourcesSwapped
+        ? [...MOCK_SOURCES].reverse()
+        : MOCK_SOURCES,
     sourcesSwapped: recipe.sourcesSwapped,
     swapSources: useCallback(
       () => commit((current) => ({ ...current, sourcesSwapped: !current.sourcesSwapped })),
