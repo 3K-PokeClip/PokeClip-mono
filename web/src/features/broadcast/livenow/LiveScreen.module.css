@@ -542,32 +542,139 @@
   padding: calc(4 * var(--pc-u)) 0 calc(8 * var(--pc-u));
 }
 
-/* ---------- 채팅 수집 경고 배너 ---------- */
+/* ---------- 실시간 채팅 패널 ---------- */
 
-.warningBanner {
+.chatPanel {
+  display: flex;
+  flex-direction: column;
+  width: calc(332 * var(--pc-u));
+  min-height: 0;
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  overflow: hidden;
+}
+
+.chatHeader {
   display: flex;
   align-items: center;
-  gap: calc(8 * var(--pc-u));
-  padding: calc(11 * var(--pc-u)) calc(14 * var(--pc-u));
-  border-radius: calc(11 * var(--pc-u));
-  border: 1px solid rgb(230 168 60 / 0.35);
-  background: rgb(230 168 60 / 0.07);
+  gap: calc(7 * var(--pc-u));
+  padding: calc(10 * var(--pc-u)) calc(10 * var(--pc-u)) calc(10 * var(--pc-u))
+    calc(14 * var(--pc-u));
+  border-bottom: 1px solid var(--pc-color-border-subtle);
+}
+
+.chatHeaderIcon {
+  color: var(--pc-color-text-muted);
+  flex: none;
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+}
+
+.chatHeading {
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+}
+
+.chatCollapse {
+  margin-left: auto;
+}
+
+.chatSurges {
+  display: flex;
+  align-items: center;
+  gap: calc(5 * var(--pc-u));
+  padding: calc(9 * var(--pc-u)) calc(14 * var(--pc-u));
+  border-bottom: 1px solid var(--pc-color-border-subtle);
+  overflow: hidden;
+}
+
+.chatSurgeLabel {
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-muted);
+  flex: none;
+}
+
+/* 최근 줄이 아래에 쌓인다 — 넘치면 위쪽이 잘린다(시안과 같은 처리) */
+.chatList {
+  list-style: none;
+  margin: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: calc(9 * var(--pc-u));
+  padding: calc(12 * var(--pc-u)) calc(14 * var(--pc-u));
+  overflow: hidden;
+}
+
+.chatLine {
+  font-size: calc(12 * var(--pc-u));
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.chatName {
+  font-weight: 700;
+  color: var(--pc-color-text-secondary);
+}
+
+/* 닉네임 색 로테이션 — 누가 말하는지 줄 단위로 갈라 보이게 하는 장치라 시안 값을 그대로 쓴다 */
+.chatName[data-color='1'] {
+  color: var(--pc-color-success, #4cae7d);
+}
+
+.chatName[data-color='2'] {
+  color: var(--pc-color-accent-text);
+}
+
+.chatName[data-color='3'] {
+  color: #b48ef0;
+}
+
+.chatName[data-color='4'] {
+  color: #e6a83c;
+}
+
+.chatName[data-color='5'] {
+  color: var(--pc-color-point-text, var(--pc-color-point));
+}
+
+.chatText {
+  color: var(--pc-color-text-secondary);
+}
+
+.chatDonation {
+  display: flex;
+  flex-direction: column;
+  gap: calc(3 * var(--pc-u));
+  padding: calc(8 * var(--pc-u)) calc(10 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  border: 1px solid rgb(230 168 60 / 0.3);
+  background: rgb(230 168 60 / 0.1);
+}
+
+.chatDonationHead {
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 750;
+  color: #e6a83c;
+}
+
+.chatDonationText {
   font-size: calc(12 * var(--pc-u));
   color: var(--pc-color-text-secondary);
 }
 
-.warningIcon {
-  color: #e6a83c;
-  flex: none;
-}
-
-.warningAction {
-  margin-left: auto;
-  font-size: calc(11.5 * var(--pc-u));
+.chatSystem {
+  padding: calc(7 * var(--pc-u)) calc(10 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  background: rgb(214 63 159 / 0.08);
+  font-size: calc(11 * var(--pc-u));
   font-weight: 650;
-  color: var(--pc-color-accent-text);
-  opacity: 0.6;
-  flex: none;
+  line-height: 1.45;
+  color: var(--pc-color-point-text, var(--pc-color-point));
 }
 
 /* ---------- 필터 칩 ---------- */
@@ -603,14 +710,6 @@
   color: var(--pc-color-accent-text);
 }
 
-/* ---------- 아이콘 스케일 ----------
-   lucide size prop은 px 속성 고정이라 CSS로 유닛에 태운다 */
-
-.warningIcon {
-  width: calc(15 * var(--pc-u));
-  height: calc(15 * var(--pc-u));
-}
-
 /* ---------- 반응형 ---------- */
 
 /* 기준이 뷰포트가 아니라 본문 폭인 이유 — 방송 그룹 셸의 사이드바가 폭을 먼저 가져간다.
@@ -626,5 +725,10 @@
 @container (max-width: 61.4375rem) {
   .grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 1단이 되면 채팅은 카드 아래로 내려온다 — 고정 폭을 놓아야 본문 폭을 채운다 */
+  .chatPanel {
+    width: auto;
   }
 }

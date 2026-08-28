@@ -1,14 +1,15 @@
 'use client';
 
-import { Suspense, useCallback, useRef, type Ref } from 'react';
+import { Suspense, useCallback, useRef, useState, type Ref } from 'react';
 import styles from './LiveScreen.module.css';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import { useMediaSource } from '@/features/player/mediaSource';
 import { parseClockLabel } from '@/features/player/playerMath';
+import { ChatPanel } from './ChatPanel';
 import { ChatVolumeCard } from './ChatVolumeCard';
-import { ChatWarningBanner } from './ChatWarningBanner';
 import { HighlightCardPanel } from './HighlightCardPanel';
 import { StreamInfoBar } from './StreamInfoBar';
+import { useChatPanelMockState } from './useChatPanelMockState';
 import { useLiveDetailsMockState } from './useLiveDetailsMockState';
 import { useLiveMockState, type LiveStream } from './useLiveMockState';
 import { useManualMarking } from './useManualMarking';
@@ -27,9 +28,13 @@ import { useManualMarking } from './useManualMarking';
 function LivePlayer({
   stream,
   controllerRef,
+  chatPanelOpen,
+  onToggleChatPanel,
 }: {
   stream: LiveStream;
   controllerRef: Ref<GlassPlayerController>;
+  chatPanelOpen: boolean;
+  onToggleChatPanel: () => void;
 }) {
   // env 미설정이면 null → GlassPlayer가 시뮬레이션으로 폴백 (테스트 포함)
   const src = useMediaSource();
@@ -42,6 +47,8 @@ function LivePlayer({
       embed
       simulationOptions={{ initialUptimeSeconds: stream.uptimeSeconds }}
       controllerRef={controllerRef}
+      chatPanelOpen={chatPanelOpen}
+      onToggleChatPanel={onToggleChatPanel}
     />
   );
 }
@@ -51,6 +58,10 @@ export function LiveScreen() {
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const marking = useManualMarking(stream.uptimeLabel);
   const playerRef = useRef<GlassPlayerController>(null);
+  // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 컨트롤의 토글 버튼이다
+  const [chatPanelOpen, setChatPanelOpen] = useState(true);
+  const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
+  const chat = useChatPanelMockState(chatPanelOpen);
 
   // 찍어 만든 카드가 앞, 그다음이 감지된 카드 — 필터 개수도 이 합친 목록에서 센다
   const cards = [...marking.manualCards, ...highlights];
@@ -68,7 +79,12 @@ export function LiveScreen() {
           <div className={styles.playerFrame}>
             {/* 폴백은 플레이어와 같은 16:9 빈 블록 — 서스펜드 중에도 레이아웃이 흔들리지 않는다 */}
             <Suspense fallback={<div className={styles.playerFallback} aria-hidden />}>
-              <LivePlayer stream={stream} controllerRef={playerRef} />
+              <LivePlayer
+                stream={stream}
+                controllerRef={playerRef}
+                chatPanelOpen={chatPanelOpen}
+                onToggleChatPanel={toggleChatPanel}
+              />
             </Suspense>
           </div>
           <StreamInfoBar
@@ -85,8 +101,15 @@ export function LiveScreen() {
             onSeek={handleSeek}
           />
           <ChatVolumeCard series={chatVolume} />
-          {chatWarning ? <ChatWarningBanner /> : null}
         </div>
+        {chatPanelOpen ? (
+          <ChatPanel
+            surges={chat.surges}
+            messages={chat.messages}
+            collectionWarning={chatWarning}
+            onCollapse={toggleChatPanel}
+          />
+        ) : null}
       </div>
     </main>
   );

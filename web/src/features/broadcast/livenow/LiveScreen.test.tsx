@@ -156,12 +156,45 @@ describe('LiveScreen — 수동 마킹', () => {
   });
 });
 
-describe('LiveScreen — 접근성', () => {
-  it('채팅 수집 경고 배너를 보여준다', () => {
+describe('LiveScreen — 실시간 채팅 패널', () => {
+  it('급증 키워드·후원·하이라이트 감지 줄을 그린다', () => {
     renderLive();
-    expect(screen.getByText(/채팅 수집이 잠시 끊겼어요/)).toBeInTheDocument();
+
+    expect(screen.getByText('ㅋㅋㅋㅋ ×214')).toBeInTheDocument();
+    expect(screen.getByText('미쳤다 ×86')).toBeInTheDocument();
+    expect(screen.getByText('도네초코 · 치즈 5,000')).toBeInTheDocument();
+    expect(screen.getByText('승급 기원!! 가즈아')).toBeInTheDocument();
+    expect(
+      screen.getByText('하이라이트 감지 · 1:24:03 구간이 카드로 만들어졌어요'),
+    ).toBeInTheDocument();
   });
 
+  it('수집 상태를 채팅 헤더 배지가 말한다 — 옛 본문 경고 배너 자리를 승계했다', () => {
+    renderLive();
+
+    expect(screen.getByText('수집 끊김')).toBeInTheDocument();
+    expect(screen.queryByText(/채팅 수집이 잠시 끊겼어요/)).not.toBeInTheDocument();
+  });
+
+  it('접으면 패널이 사라지고, 플레이어 토글로 되살아난다', async () => {
+    const user = userEvent.setup();
+    renderLive();
+
+    const panel = screen.getByRole('complementary', { name: '실시간 채팅' });
+    expect(panel).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
+    expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).not.toBeInTheDocument();
+
+    // 패널이 사라져도 복귀 통로는 플레이어 안에 남는다
+    const toggle = screen.getByRole('button', { name: '실시간 채팅 패널' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await user.click(toggle);
+    expect(screen.getByRole('complementary', { name: '실시간 채팅' })).toBeInTheDocument();
+  });
+});
+
+describe('LiveScreen — 접근성', () => {
   it('접근성 위반이 없다', async () => {
     const { container } = renderLive();
     // usePlayerSimulation의 1초 tick이 axe 실행(1초 이상) 중에 발화한다 — act로 감싸 흡수
