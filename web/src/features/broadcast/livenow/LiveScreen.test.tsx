@@ -215,6 +215,15 @@ describe('LiveScreen — 실시간 통계', () => {
     ).toBeInTheDocument();
   });
 
+  it('하이라이트 내역은 총계 앞에 선다 — 총계가 다른 지표와 같은 오른쪽 끝에 맞는다', () => {
+    renderLive();
+
+    const note = screen.getByText('자동 6 · 수동 2');
+    const value = note.parentElement;
+    expect(value?.textContent).toBe('자동 6 · 수동 28');
+    expect(note.nextElementSibling).toHaveTextContent('8');
+  });
+
   it('하이라이트 지표는 카드 목록에서 센다 — 마킹하면 필터와 같이 움직인다', () => {
     vi.useFakeTimers();
     renderLive();

@@ -130,11 +130,12 @@ export function LiveStatsPanel({
           ))}
           <div className={styles.metricRow}>
             <dt className={styles.metricLabel}>하이라이트</dt>
+            {/* 시안은 내역을 숫자 앞에 둔다 — 총계가 다른 지표들과 같은 오른쪽 끝에 서야 읽힌다 */}
             <dd className={styles.metricValue}>
-              {highlightSummary.total}
               <span className={styles.metricNote}>
                 자동 {highlightSummary.auto} · 수동 {highlightSummary.manual}
               </span>
+              <span>{highlightSummary.total}</span>
             </dd>
           </div>
         </dl>

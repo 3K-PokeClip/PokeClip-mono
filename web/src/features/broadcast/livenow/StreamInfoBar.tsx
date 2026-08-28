@@ -67,9 +67,10 @@ export function StreamInfoBar({
           수동 마킹
           <kbd className={styles.markHotkey}>{MARK_HOTKEY}</kbd>
         </Button>
-        {/* 눌렀다는 사실이 화면에만 남으면 스크린리더 사용자는 마킹됐는지 알 수 없다 */}
+        {/* 눌렀다는 사실이 화면에만 남으면 스크린리더 사용자는 마킹됐는지 알 수 없다.
+            쉴 때는 비운다 — CSS가 빈 요소를 접어 버튼이 바의 가운데에 그대로 선다. */}
         <span className={styles.markFeedback} role="status">
-          {pendingLabel ? `${pendingLabel} 마킹됨 · 카드 생성 중` : ''}
+          {pendingLabel ? `${pendingLabel} 마킹됨 · 카드 생성 중` : null}
         </span>
       </div>
     </section>
