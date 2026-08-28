@@ -3,6 +3,10 @@
 // 디자인 1b 라이브 대시보드의 목업 상태.
 // 감지 파이프라인·방송 상태 API가 아직 없어 표시값은 전부 목업(디자인 1b 표기값)이다 —
 // 연동 티켓에서 이 훅 내부만 useQuery/실시간 구독으로 갈아끼우면 화면은 그대로 쓴다.
+//
+// ⚠ 반환 형태는 계약이다 (POK-180 SSE 실연동이 "화면은 그대로, 훅 내부만" 전제로 선다).
+// 값은 시안을 따라 바꿔도 되지만 필드·유니온을 늘리면 저쪽이 채울 수 없는 자리가 생긴다.
+// 시안이 요구하는데 여기 없는 표기값은 useLiveDetailsMockState로 간다.
 
 export interface LiveStream {
   title: string;
@@ -29,7 +33,7 @@ export interface LiveHighlight {
   meta: string;
   status: HighlightStatus;
   source: HighlightSource;
-  /** scored일 때만 존재 */
+  /** 채점 점수 — 채점 전(unprocessed)·수동 카드에는 없다 */
   score?: number;
   /** editing일 때 편집 중인 사람 */
   editorName?: string;
@@ -68,6 +72,14 @@ const MOCK_HIGHLIGHTS: LiveHighlight[] = [
     emphasized: true,
   },
   {
+    id: 'hl-7',
+    timestamp: '1:15:20',
+    title: '핫키로 남긴 백도어 각',
+    meta: '수동 마킹 · 48초 · 9분 전',
+    status: 'manual',
+    source: 'manual',
+  },
+  {
     id: 'hl-2',
     timestamp: '1:07:50',
     title: '시청자 참여 미션 성공',
@@ -82,6 +94,7 @@ const MOCK_HIGHLIGHTS: LiveHighlight[] = [
     meta: '채팅 ×3.1 급증 · 1분 5초 · 26분 전',
     status: 'editing',
     source: 'auto',
+    score: 92,
     editorName: '박편집',
   },
   {
@@ -91,6 +104,16 @@ const MOCK_HIGHLIGHTS: LiveHighlight[] = [
     meta: '채팅 ×2.8 급증 · 38초 · 37분 전',
     status: 'clipped',
     source: 'auto',
+    score: 85,
+  },
+  {
+    id: 'hl-8',
+    timestamp: '0:39:55',
+    title: '정글 3연속 카운터',
+    meta: '키워드 감지 · 51초 · 44분 전',
+    status: 'scored',
+    source: 'auto',
+    score: 78,
   },
   {
     id: 'hl-5',
@@ -140,7 +163,7 @@ const MOCK_CHAT_VOLUME: ChatVolumeSeries = {
     [440, 34],
     [640, 30],
   ],
-  timeLabels: ['0:24', '0:44', '1:04', '지금'],
+  timeLabels: ['19:12', '19:41', '20:10', '지금'],
 };
 
 export interface LiveMockState {
