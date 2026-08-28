@@ -10,6 +10,7 @@ import {
   rangeGaugeFraction,
   rangeLengthSeconds,
   resolveRangeEdge,
+  rulerTicks,
   secondsFromPointer,
   secondsToFraction,
   viewWindow,
@@ -116,6 +117,10 @@ describe('창 환산', () => {
   it('포인터 좌표를 초로 옮긴다 — 폭이 0이면 계산 불가라 null', () => {
     expect(secondsFromPointer({ left: 0, width: 300 }, 150, view)).toBeCloseTo(4937.5);
     expect(secondsFromPointer({ left: 0, width: 0 }, 150, view)).toBeNull();
+  });
+
+  it('눈금은 창을 균등 분할한다 — 줌을 바꾸면 함께 움직인다', () => {
+    expect(rulerTicks(view, 6)).toEqual([4900, 4915, 4930, 4945, 4960, 4975]);
   });
 
   it('보이는 창은 중심을 따라가되 원본 밖으로 나가지 않는다', () => {

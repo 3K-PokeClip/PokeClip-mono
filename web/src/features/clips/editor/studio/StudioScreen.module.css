@@ -1,0 +1,472 @@
+/* 시안 1d-a 스튜디오형 — 도구 레일 + 도구 패널 + 미리보기 + 멀티트랙 타임라인.
+   1440×960 시안을 폭에 맞춰 늘린다(고정 크기가 아니다). */
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  /* 독(하단 탭)이 가리는 만큼 빼고 화면을 꽉 채운다 */
+  height: calc(100vh - var(--pc-dock-height, calc(64 * var(--pc-u))));
+  min-height: calc(640 * var(--pc-u));
+  background: var(--pc-color-bg-canvas);
+  color: var(--pc-color-text-primary);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* ---------- 도구 레일 ---------- */
+
+.toolRail {
+  width: calc(58 * var(--pc-u));
+  flex: none;
+  border-right: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+  padding: calc(10 * var(--pc-u)) 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+}
+
+.toolButton {
+  width: calc(46 * var(--pc-u));
+  padding: calc(8 * var(--pc-u)) 0 calc(6 * var(--pc-u));
+  border-radius: calc(10 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+  font-size: calc(9 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-text-muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.toolButton:hover {
+  background: var(--pc-color-bg-surface-hover);
+  color: var(--pc-color-text-secondary);
+}
+
+.toolButton[aria-selected='true'] {
+  font-weight: 700;
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+}
+
+.toolButton:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* ---------- 도구 패널 ---------- */
+
+.toolPanel {
+  width: calc(296 * var(--pc-u));
+  flex: none;
+  min-height: 0;
+  border-right: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+  padding: calc(14 * var(--pc-u));
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+
+.toolPanel:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* ---------- 타임라인 ---------- */
+
+.timeline {
+  flex: none;
+  border-top: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+  padding: calc(8 * var(--pc-u)) calc(20 * var(--pc-u)) calc(6 * var(--pc-u));
+}
+
+.resizeHandle {
+  height: calc(9 * var(--pc-u));
+  margin: calc(-8 * var(--pc-u)) calc(-20 * var(--pc-u)) calc(2 * var(--pc-u));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  touch-action: none;
+  background: none;
+  border: 0;
+  width: calc(100% + calc(40 * var(--pc-u)));
+  padding: 0;
+}
+
+.resizeHandle:hover {
+  background: rgb(255 255 255 / 0.03);
+}
+
+.resizeHandle:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.resizeGrip {
+  width: calc(44 * var(--pc-u));
+  height: calc(3 * var(--pc-u));
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-border-default);
+}
+
+.timelineHead {
+  display: flex;
+  align-items: center;
+  gap: calc(9 * var(--pc-u));
+  margin-bottom: calc(3 * var(--pc-u));
+}
+
+.timelineTitle {
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 750;
+}
+
+.timelineSummary {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.timelineSummary b {
+  color: var(--pc-color-text-secondary);
+  font-weight: 700;
+}
+
+.zoomGroup {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+  color: var(--pc-color-text-secondary);
+}
+
+.zoomValue {
+  font:
+    600 calc(10.5 * var(--pc-u)) ui-monospace,
+    Menlo,
+    monospace;
+}
+
+.ruler {
+  display: flex;
+  justify-content: space-between;
+  font:
+    500 calc(10 * var(--pc-u)) ui-monospace,
+    Menlo,
+    monospace;
+  color: var(--pc-color-text-muted);
+  padding-left: calc(180 * var(--pc-u));
+  margin-bottom: calc(5 * var(--pc-u));
+}
+
+.laneArea {
+  position: relative;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.lanes {
+  display: flex;
+  flex-direction: column;
+  gap: calc(5 * var(--pc-u));
+}
+
+/* ---------- 트랙 행 ---------- */
+
+.trackRow {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+.trackLabel {
+  width: calc(172 * var(--pc-u));
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-text-secondary);
+}
+
+.trackControls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+}
+
+.trackSlider {
+  width: calc(44 * var(--pc-u));
+}
+
+.trackValue {
+  font:
+    600 calc(9.5 * var(--pc-u)) ui-monospace,
+    Menlo,
+    monospace;
+  color: var(--pc-color-text-muted);
+  width: calc(24 * var(--pc-u));
+  text-align: right;
+}
+
+.lane {
+  flex: 1;
+  min-width: 0;
+  height: calc(26 * var(--pc-u));
+  border-radius: calc(6 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  position: relative;
+  overflow: hidden;
+}
+
+.lane[data-kind='video'] {
+  height: calc(34 * var(--pc-u));
+}
+
+.laneFilmstrip {
+  width: 100%;
+  height: 100%;
+  background: repeating-linear-gradient(
+    90deg,
+    rgb(120 140 210 / 0.26) 0 calc(54 * var(--pc-u)),
+    rgb(120 140 210 / 0.1) calc(54 * var(--pc-u)) calc(56 * var(--pc-u))
+  );
+}
+
+.laneWave {
+  width: 100%;
+  height: 70%;
+  margin: auto 0;
+  border-radius: calc(3 * var(--pc-u));
+  background: repeating-linear-gradient(
+    90deg,
+    rgb(140 160 230 / 0.45) 0 2px,
+    transparent 2px 5px
+  );
+}
+
+.laneMuted {
+  opacity: 0.35;
+}
+
+/* ---------- 클립 ---------- */
+
+.clip {
+  position: absolute;
+  top: calc(3 * var(--pc-u));
+  bottom: calc(3 * var(--pc-u));
+  border-radius: calc(5 * var(--pc-u));
+  display: flex;
+  align-items: center;
+  gap: calc(5 * var(--pc-u));
+  padding: 0 calc(8 * var(--pc-u));
+  font-size: calc(10 * var(--pc-u));
+  line-height: 1;
+  font-weight: 650;
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: grab;
+  border: 1px solid var(--pc-color-accent);
+  background: rgb(88 111 196 / 0.28);
+  color: var(--pc-color-accent-text);
+  font-family: inherit;
+}
+
+.clip[data-kind='sfx'] {
+  border-color: var(--pc-color-point);
+  background: rgb(212 70 151 / 0.3);
+  color: var(--pc-color-point-text);
+  justify-content: center;
+  padding: 0 calc(4 * var(--pc-u));
+}
+
+.clip[data-kind='image'] {
+  border: 1px dashed var(--pc-color-border-default);
+  background: rgb(255 255 255 / 0.05);
+  color: var(--pc-color-text-muted);
+  font-weight: 600;
+}
+
+.clip[aria-pressed='true'],
+.clip:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 1px;
+}
+
+/* 트림 핸들은 시안대로 hover·포커스에서만 보인다 */
+.clipTrim {
+  position: absolute;
+  top: calc(2 * var(--pc-u));
+  bottom: calc(2 * var(--pc-u));
+  width: calc(5 * var(--pc-u));
+  border-radius: calc(3 * var(--pc-u));
+  background: var(--pc-color-accent);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.3);
+  cursor: col-resize;
+  opacity: 0;
+}
+
+.clip:hover .clipTrim,
+.clip:focus-visible .clipTrim {
+  opacity: 1;
+}
+
+.clipTrimStart {
+  left: calc(2 * var(--pc-u));
+}
+
+.clipTrimEnd {
+  right: calc(2 * var(--pc-u));
+}
+
+/* ---------- 구간 오버레이 · 플레이헤드 ---------- */
+
+.overlay {
+  position: absolute;
+  left: calc(180 * var(--pc-u));
+  right: 0;
+  top: calc(-4 * var(--pc-u));
+  bottom: calc(-4 * var(--pc-u));
+  pointer-events: none;
+}
+
+.rangeBox {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border: 2px solid var(--pc-color-accent);
+  background: rgb(88 111 196 / 0.1);
+  border-radius: calc(8 * var(--pc-u));
+}
+
+/* 3:00을 넘기려 하면 핸들이 늘어나는 대신 흔들린다 (시안 1d-a 안내문) */
+.rangeBoxRejected {
+  animation: pc-editor-shake 0.45s ease;
+}
+
+@keyframes pc-editor-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  15% {
+    transform: translateX(calc(-6 * var(--pc-u)));
+  }
+  30% {
+    transform: translateX(calc(6 * var(--pc-u)));
+  }
+  45% {
+    transform: translateX(calc(-4 * var(--pc-u)));
+  }
+  60% {
+    transform: translateX(calc(4 * var(--pc-u)));
+  }
+  80% {
+    transform: translateX(calc(-2 * var(--pc-u)));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rangeBoxRejected {
+    animation: none;
+  }
+}
+
+.rangeHandle {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: calc(10 * var(--pc-u));
+  height: calc(28 * var(--pc-u));
+  border-radius: calc(5 * var(--pc-u));
+  background: var(--pc-color-accent);
+  border: 0;
+  padding: 0;
+  cursor: col-resize;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.rangeHandleStart {
+  left: calc(-5 * var(--pc-u));
+}
+
+.rangeHandleEnd {
+  right: calc(-5 * var(--pc-u));
+}
+
+.rangeHandle:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--pc-color-point);
+}
+
+.playheadTip {
+  position: absolute;
+  top: calc(-5 * var(--pc-u));
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: calc(5 * var(--pc-u)) solid transparent;
+  border-right: calc(5 * var(--pc-u)) solid transparent;
+  border-top: calc(6 * var(--pc-u)) solid var(--pc-color-point);
+}
+
+/* ---------- 범례 · 안내 ---------- */
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: calc(14 * var(--pc-u));
+  margin-top: calc(9 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  flex-wrap: wrap;
+}
+
+.legend b {
+  font-weight: 700;
+  color: var(--pc-color-text-secondary);
+}
+
+.legendNote {
+  margin-left: auto;
+}
+
+.rejection {
+  margin-top: calc(6 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-warning);
+  min-height: calc(14 * var(--pc-u));
+}
+
+.previewColumn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: calc(14 * var(--pc-u));
+}

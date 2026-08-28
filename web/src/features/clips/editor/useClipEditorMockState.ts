@@ -192,6 +192,31 @@ const MOCK_SFX_PRESETS = ['띠용', '박수', '두둥'] as const;
 
 const MOCK_BGM_LABEL = 'Neon Drive.mp3';
 
+/**
+ * 고를 수 있는 값의 목록도 데이터다 — 화면에 배열을 박아두면
+ * 자막 모드가 늘어날 때 화면을 고쳐야 한다(레시피 항목이라 서버가 알게 될 값이다).
+ */
+export const LAYOUT_OPTIONS: readonly { value: EditorLayout; label: string }[] = [
+  { value: '9:16', label: '9:16' },
+  { value: '1:1', label: '1:1' },
+  { value: 'split', label: '상하분할' },
+];
+
+export const SUBTITLE_MODE_OPTIONS: readonly { value: SubtitleMode; label: string }[] = [
+  { value: 'burn-cc', label: '번인+CC' },
+  { value: 'burn', label: '번인' },
+  { value: 'cc', label: 'CC' },
+];
+
+/** 시안 좌측 도구 레일 — 순서가 곧 화면 순서다 */
+export const TOOL_OPTIONS: readonly { value: EditorTool; label: string }[] = [
+  { value: 'range', label: '구간' },
+  { value: 'subtitle', label: '자막' },
+  { value: 'audio', label: '오디오' },
+  { value: 'bgm', label: 'BGM·효과' },
+  { value: 'image', label: '이미지' },
+];
+
 function initialRecipe(): EditorRecipe {
   return {
     range: MOCK_SOURCE.range,
@@ -257,6 +282,7 @@ export interface ClipEditorMockState {
 
   // 레이아웃 (E5)
   layout: EditorLayout;
+  layoutOptions: readonly { value: EditorLayout; label: string }[];
   setLayout: (layout: EditorLayout) => void;
   splitRatio: number;
   setSplitRatio: (ratio: number) => void;
@@ -274,6 +300,8 @@ export interface ClipEditorMockState {
   subtitle: SubtitleState;
   subtitleFontLabel: string;
   subtitleMode: SubtitleMode;
+  subtitleModeLabel: string;
+  subtitleModeOptions: readonly { value: SubtitleMode; label: string }[];
   setSubtitleMode: (mode: SubtitleMode) => void;
   generateSubtitles: () => void;
   selectedSubtitleId: string | null;
@@ -294,6 +322,7 @@ export interface ClipEditorMockState {
   sourceDurationSeconds: number;
   view: TimelineView;
   activeTool: EditorTool;
+  toolOptions: readonly { value: EditorTool; label: string }[];
   setActiveTool: (tool: EditorTool) => void;
   timelineCollapsed: boolean;
   toggleTimeline: () => void;
@@ -495,6 +524,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     rangeRejection,
 
     layout: recipe.layout,
+    layoutOptions: LAYOUT_OPTIONS,
     setLayout: useCallback(
       (layout: EditorLayout) =>
         commit((current) => (current.layout === layout ? current : { ...current, layout })),
@@ -535,6 +565,9 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     subtitle,
     subtitleFontLabel: MOCK_SOURCE.subtitleFontLabel,
     subtitleMode: recipe.subtitleMode,
+    subtitleModeLabel:
+      SUBTITLE_MODE_OPTIONS.find((o) => o.value === recipe.subtitleMode)?.label ?? '',
+    subtitleModeOptions: SUBTITLE_MODE_OPTIONS,
     setSubtitleMode: useCallback(
       (mode: SubtitleMode) =>
         commit((current) =>
@@ -564,6 +597,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     sourceDurationSeconds: MOCK_SOURCE.durationSeconds,
     view,
     activeTool,
+    toolOptions: TOOL_OPTIONS,
     setActiveTool,
     timelineCollapsed,
     toggleTimeline: useCallback(() => setTimelineCollapsed((v) => !v), []),

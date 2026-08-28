@@ -1,0 +1,349 @@
+/* 시안 1d 도구 패널 안쪽 — 구간·자막·제목·오디오·BGM·이미지 섹션이 함께 쓴다. */
+
+.section {
+  display: grid;
+  align-content: start;
+  gap: calc(11 * var(--pc-u));
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+.sectionTitle {
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+}
+
+.sectionAction {
+  margin-left: auto;
+}
+
+.hint {
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  line-height: 1.55;
+}
+
+.fieldLabel {
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-secondary);
+  margin-bottom: calc(6 * var(--pc-u));
+}
+
+.divider {
+  height: 1px;
+  background: var(--pc-color-border-subtle);
+}
+
+.tagRow {
+  display: flex;
+  gap: calc(5 * var(--pc-u));
+  flex-wrap: wrap;
+}
+
+.tagButton {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  border-radius: var(--pc-radius-pill);
+}
+
+.tagButton:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* ---------- 구간 ---------- */
+
+.timecodeRow {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  flex-wrap: wrap;
+}
+
+.timecodeLabel {
+  font-size: calc(11 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-text-secondary);
+}
+
+.timecodeBox {
+  font:
+    600 calc(11.5 * var(--pc-u)) ui-monospace,
+    Menlo,
+    monospace;
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: calc(7 * var(--pc-u));
+  padding: calc(4 * var(--pc-u)) calc(9 * var(--pc-u));
+  background: var(--pc-color-bg-canvas);
+}
+
+.gaugeRow {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+.gaugeTrack {
+  flex: 1;
+  height: calc(5 * var(--pc-u));
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-bg-inset);
+  overflow: hidden;
+}
+
+.gaugeFill {
+  height: 100%;
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-accent);
+}
+
+.gaugeLabel {
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  white-space: nowrap;
+}
+
+/* ---------- 자막 ---------- */
+
+.fontSelect {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: calc(8 * var(--pc-u));
+  padding: calc(7 * var(--pc-u)) calc(10 * var(--pc-u));
+  background: var(--pc-color-bg-canvas);
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 650;
+  width: 100%;
+  color: inherit;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.fontSelectChevron {
+  margin-left: auto;
+  color: var(--pc-color-text-muted);
+}
+
+.pending {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  margin-top: calc(6 * var(--pc-u));
+  padding: calc(6 * var(--pc-u)) calc(9 * var(--pc-u));
+  border: 1px dashed var(--pc-color-border-default);
+  border-radius: calc(8 * var(--pc-u));
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.subtitleList {
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(9 * var(--pc-u));
+  background: var(--pc-color-bg-canvas);
+  padding: calc(5 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+  gap: calc(2 * var(--pc-u));
+  margin: 0;
+  list-style: none;
+}
+
+.subtitleRow {
+  display: flex;
+  gap: calc(8 * var(--pc-u));
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  font-size: calc(11.5 * var(--pc-u));
+  line-height: 1.45;
+  padding: calc(6 * var(--pc-u)) calc(8 * var(--pc-u));
+  border-radius: calc(6 * var(--pc-u));
+  border: 0;
+  background: none;
+  color: var(--pc-color-text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.subtitleRow:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.subtitleRow[aria-current='true'] {
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-text-primary);
+  font-weight: 650;
+}
+
+.subtitleRow[data-non-speech='true'] {
+  color: var(--pc-color-text-muted);
+}
+
+.subtitleRow:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: -2px;
+}
+
+.subtitleTime {
+  font:
+    600 calc(10 * var(--pc-u)) ui-monospace,
+    Menlo,
+    monospace;
+  color: var(--pc-color-text-muted);
+  flex: none;
+  padding-top: calc(1 * var(--pc-u));
+}
+
+.subtitleRow[aria-current='true'] .subtitleTime {
+  color: var(--pc-color-accent-text);
+}
+
+.subtitleText {
+  flex: 1;
+}
+
+.subtitleEditIcon {
+  flex: none;
+  color: var(--pc-color-accent-text);
+  margin-top: calc(1 * var(--pc-u));
+}
+
+/* ---------- 제목 추천 ---------- */
+
+.locked {
+  opacity: 0.55;
+}
+
+.titleList {
+  display: flex;
+  flex-direction: column;
+  gap: calc(5 * var(--pc-u));
+}
+
+.titleOption {
+  font-size: calc(12 * var(--pc-u));
+  padding: calc(7 * var(--pc-u)) calc(11 * var(--pc-u));
+  border-radius: calc(8 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  background: none;
+  color: var(--pc-color-text-secondary);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.titleOption[aria-pressed='true'] {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+  font-weight: 650;
+}
+
+.titleOption:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* ---------- 오디오 · BGM ---------- */
+
+.trackRow {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+.trackName {
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 650;
+  flex: 1;
+  min-width: 0;
+}
+
+.trackValue {
+  font:
+    600 calc(10 * var(--pc-u)) ui-monospace,
+    Menlo,
+    monospace;
+  color: var(--pc-color-text-muted);
+  width: calc(26 * var(--pc-u));
+  text-align: right;
+}
+
+.trackSlider {
+  width: calc(84 * var(--pc-u));
+}
+
+/* ---------- 이미지 ---------- */
+
+.imageRow {
+  display: flex;
+  align-items: center;
+  gap: calc(9 * var(--pc-u));
+  padding: calc(7 * var(--pc-u)) calc(9 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(9 * var(--pc-u));
+}
+
+.imageThumb {
+  width: calc(26 * var(--pc-u));
+  height: calc(26 * var(--pc-u));
+  flex: none;
+  border-radius: calc(6 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  border: 1px solid var(--pc-color-border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--pc-color-text-muted);
+}
+
+.imageBody {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.imageName {
+  display: block;
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 650;
+}
+
+.imagePlacement {
+  display: block;
+  font-size: calc(10 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.dashedAction {
+  margin-top: calc(7 * var(--pc-u));
+  padding: calc(9 * var(--pc-u));
+  border: 1px dashed var(--pc-color-border-default);
+  border-radius: calc(9 * var(--pc-u));
+  text-align: center;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  width: 100%;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.dashedAction:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.dashedAction:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}

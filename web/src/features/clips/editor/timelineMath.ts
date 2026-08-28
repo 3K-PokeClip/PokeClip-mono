@@ -184,3 +184,15 @@ export function clampTimelineHeight(px: number): number {
   if (!Number.isFinite(px)) return DEFAULT_TIMELINE_HEIGHT;
   return Math.round(Math.min(MAX_TIMELINE_HEIGHT, Math.max(MIN_TIMELINE_HEIGHT, px)));
 }
+
+/**
+ * 눈금자 눈금 위치(초). 창을 균등 분할한다 —
+ * 줌을 바꾸면 눈금도 따라 움직여야 해서 시안 값(1:21:40…1:22:55)을 박아둘 수 없다.
+ */
+export function rulerTicks(view: TimelineView, count = 6): number[] {
+  if (count < 2) return [view.startSeconds];
+  const span = view.endSeconds - view.startSeconds;
+  return Array.from({ length: count }, (_, i) =>
+    roundMs(view.startSeconds + (span * i) / (count - 1)),
+  );
+}
