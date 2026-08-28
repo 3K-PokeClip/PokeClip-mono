@@ -267,6 +267,12 @@
   border-radius: calc(14 * var(--pc-u));
   background: var(--pc-color-bg-surface);
   overflow: hidden;
+  /* 카드 안의 VisuallyHidden(낭독용 요약)은 position:absolute다. 여기가 컨테이닝 블록이
+     아니면 그 상자가 문서 최상위에 매달려, 가로로 밀려난 카드의 자리까지 문서 폭이
+     늘어난다 — 화면에는 아무것도 안 보이는데 페이지가 옆으로 스크롤됐다.
+     레일의 overflow로는 못 막는다(컨테이닝 블록이 레일 바깥이면 클리핑 대상이 아니다).
+     hover의 transform이 우연히 같은 일을 해서 증상이 들쭉날쭉했다. */
+  position: relative;
   transition:
     border-color 0.15s,
     transform 0.15s;
