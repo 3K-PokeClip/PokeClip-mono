@@ -216,22 +216,29 @@ describe('GlassPlayer', () => {
     }
   });
 
-  it('바깥 채팅 패널 콜백이 없으면 패널 토글 버튼도 없다', () => {
+  it('바깥 채팅 패널 콜백이 없으면 채팅 열기 버튼도 없다', () => {
     // 플레이어를 단독으로 쓰는 화면(VOD 등)에 없는 패널의 버튼이 생기면 안 된다
     renderPlayer();
-    expect(screen.queryByRole('button', { name: '실시간 채팅 패널' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '채팅 열기' })).not.toBeInTheDocument();
   });
 
-  it('패널 토글 버튼이 열림 상태를 aria-pressed로 알리고 클릭이 콜백으로 간다', async () => {
+  it('채팅 패널이 열려 있으면 여는 버튼은 뜨지 않는다', () => {
+    renderPlayer(undefined, { chatPanelOpen: true, onToggleChatPanel: vi.fn() });
+    expect(screen.queryByRole('button', { name: '채팅 열기' })).not.toBeInTheDocument();
+  });
+
+  it('채팅 패널이 접혀 있으면 상단에 여는 버튼이 서고, 클릭이 콜백으로 간다', async () => {
     const user = userEvent.setup();
     const onToggleChatPanel = vi.fn();
     renderPlayer(undefined, { chatPanelOpen: false, onToggleChatPanel });
 
-    const button = screen.getByRole('button', { name: '실시간 채팅 패널' });
-    expect(button).toHaveAttribute('aria-pressed', 'false');
-
-    await user.click(button);
+    await user.click(screen.getByRole('button', { name: '채팅 열기' }));
     expect(onToggleChatPanel).toHaveBeenCalledOnce();
+  });
+
+  it('방송 경과 시간을 플레이어에 두지 않는다 — 영상 아래 방송 정보 바가 말한다', () => {
+    renderPlayer({ initialUptimeSeconds: 5043 });
+    expect(screen.queryByText('1:24:03')).not.toBeInTheDocument();
   });
 
   it('컨트롤러의 시점 이동이 방송 경과 시각을 시차로 환산한다', () => {

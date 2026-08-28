@@ -7,10 +7,10 @@
 .container {
   /* 2단 → 1단 전환을 뷰포트가 아니라 이 본문 폭으로 재기 위한 컨테이너 (아래 @container) */
   container-type: inline-size;
-  max-width: calc(1200 * var(--pc-u));
-  margin: 0 auto;
+  /* 폭을 가두지 않는다 — 사이드바를 접으면 늘어난 자리를 화면이 그대로 쓴다.
+     상한(1200u)을 두면 접어서 벌어둔 폭이 좌우 빈 여백으로만 남았다. */
   /* 하단 여백 — fixed Dock에 콘텐츠가 가리지 않게 (ScreenContainer와 동일) */
-  padding: calc(22 * var(--pc-u)) var(--pc-space-5) calc(120 * var(--pc-u));
+  padding: calc(20 * var(--pc-u)) calc(28 * var(--pc-u)) calc(120 * var(--pc-u));
   /* 위(영상·카드·채팅) 아래(통계)로 쌓고 문서 스크롤로 내려간다 — 높이를 뷰포트에 맞추지 않는다 */
   display: flex;
   flex-direction: column;

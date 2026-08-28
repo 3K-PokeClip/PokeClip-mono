@@ -48,7 +48,7 @@ export interface GlassPlayerProps {
   simulationOptions?: PlayerSimulationOptions;
   /**
    * 바깥 채팅 패널(1b 대시보드)의 열림 상태 — 플레이어 안 채팅 오버레이(chatOn)와는 다른 것이다.
-   * onToggleChatPanel이 있을 때만 컨트롤에 토글 버튼이 생긴다.
+   * 닫혀 있을 때만 상단 오버레이 우측에 여는 버튼이 선다(시안 영상 플레이어 글래스).
    */
   chatPanelOpen?: boolean;
   onToggleChatPanel?: () => void;
@@ -221,7 +221,8 @@ function GlassPlayerBody({
         channelName={channelName}
         title={title}
         viewersNote={viewersNote}
-        uptimeSeconds={sim.uptimeSeconds}
+        chatPanelOpen={chatPanelOpen}
+        onToggleChatPanel={onToggleChatPanel}
       />
       {chatOn ? <PlayerChatOverlay messages={chat} /> : null}
       <div className={styles.controls}>
@@ -238,8 +239,6 @@ function GlassPlayerBody({
           sim={sim}
           chatOn={chatOn}
           onToggleChat={() => setChatOn((on) => !on)}
-          chatPanelOpen={chatPanelOpen}
-          onToggleChatPanel={onToggleChatPanel}
           onClip={handleClip}
           onPip={handlePip}
           onFullscreen={handleFullscreen}

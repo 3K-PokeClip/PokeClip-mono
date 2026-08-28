@@ -176,20 +176,19 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     expect(screen.queryByText(/채팅 수집이 잠시 끊겼어요/)).not.toBeInTheDocument();
   });
 
-  it('접으면 패널이 사라지고, 플레이어 토글로 되살아난다', async () => {
+  it('접으면 패널이 사라지고, 플레이어 상단의 여는 버튼으로 되살아난다', async () => {
     const user = userEvent.setup();
     renderLive();
 
-    const panel = screen.getByRole('complementary', { name: '실시간 채팅' });
-    expect(panel).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: '실시간 채팅' })).toBeInTheDocument();
+    // 열려 있는 동안엔 여는 버튼이 자리를 차지하지 않는다
+    expect(screen.queryByRole('button', { name: '채팅 열기' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
     expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).not.toBeInTheDocument();
 
     // 패널이 사라져도 복귀 통로는 플레이어 안에 남는다
-    const toggle = screen.getByRole('button', { name: '실시간 채팅 패널' });
-    expect(toggle).toHaveAttribute('aria-pressed', 'false');
-    await user.click(toggle);
+    await user.click(screen.getByRole('button', { name: '채팅 열기' }));
     expect(screen.getByRole('complementary', { name: '실시간 채팅' })).toBeInTheDocument();
   });
 });

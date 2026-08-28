@@ -155,26 +155,42 @@
   max-width: calc(320 * var(--pc-u));
 }
 
-.uptimePill {
+/* 바깥 채팅 패널을 여는 동그란 버튼 — 패널이 접혔을 때만 이 자리에 선다 */
+.chatOpenBtn {
   display: flex;
   align-items: center;
-  gap: calc(8 * var(--pc-u));
-  border: 1px solid rgb(255 255 255 / 0.16);
-  background: linear-gradient(150deg, rgb(20 34 56 / 0.55), rgb(14 24 42 / 0.35));
-  backdrop-filter: blur(16px);
-  border-radius: calc(999 * var(--pc-u));
-  padding: calc(8 * var(--pc-u)) calc(16 * var(--pc-u));
+  justify-content: center;
+  width: calc(40 * var(--pc-u));
+  height: calc(40 * var(--pc-u));
+  border: 1px solid rgb(255 255 255 / 0.22);
+  background: linear-gradient(150deg, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0.04));
+  backdrop-filter: blur(14px);
+  border-radius: 50%;
+  padding: 0;
   flex-shrink: 0;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.14);
   color: #eaf6ff;
-  font-size: calc(14 * var(--pc-u));
-  font-weight: 600;
-  font-family: var(--pc-font-mono, monospace);
-  letter-spacing: 0.02em;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.3),
+    0 6px 18px rgb(4 12 28 / 0.28);
+  transition:
+    transform 0.15s ease,
+    background 0.15s ease;
 }
 
-.uptimePill svg {
-  color: rgb(165 180 252 / 0.9);
+.chatOpenBtn:hover {
+  background: linear-gradient(150deg, rgb(255 255 255 / 0.28), rgb(255 255 255 / 0.1));
+  transform: translateY(calc(-1 * var(--pc-u)));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chatOpenBtn {
+    transition: none;
+  }
+
+  .chatOpenBtn:hover {
+    transform: none;
+  }
 }
 
 /* ---------- 채팅 오버레이 ---------- */
@@ -542,10 +558,14 @@
   height: calc(19 * var(--pc-u));
 }
 
-.uptimePill svg,
 .qualityCheck {
   width: calc(14 * var(--pc-u));
   height: calc(14 * var(--pc-u));
+}
+
+.chatOpenBtn svg {
+  width: calc(17 * var(--pc-u));
+  height: calc(17 * var(--pc-u));
 }
 
 @media (prefers-reduced-motion: reduce) {

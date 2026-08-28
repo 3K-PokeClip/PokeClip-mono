@@ -3,7 +3,6 @@
 import {
   Maximize,
   MessageSquare,
-  PanelRight,
   Pause,
   PictureInPicture2,
   Play,
@@ -22,8 +21,6 @@ export function PlayerControls({
   sim,
   chatOn,
   onToggleChat,
-  chatPanelOpen,
-  onToggleChatPanel,
   onClip,
   onPip,
   onFullscreen,
@@ -32,9 +29,6 @@ export function PlayerControls({
   sim: PlayerSimulation;
   chatOn: boolean;
   onToggleChat: () => void;
-  /** 바깥 채팅 패널(1b) 열림 상태 — 콜백이 있을 때만 토글 버튼이 생긴다 */
-  chatPanelOpen?: boolean;
-  onToggleChatPanel?: () => void;
   onClip: () => void;
   onPip: () => void;
   onFullscreen: () => void;
@@ -99,18 +93,6 @@ export function PlayerControls({
         >
           <MessageSquare size={19} aria-hidden />
         </button>
-        {/* 바깥 패널은 플레이어 밖에 있어 접으면 되살릴 곳이 없다 — 복귀 통로를 여기 둔다 */}
-        {onToggleChatPanel ? (
-          <button
-            type="button"
-            className={clsx(styles.glassBtn, chatPanelOpen && styles.glassBtnActive)}
-            aria-label="실시간 채팅 패널"
-            aria-pressed={chatPanelOpen ?? false}
-            onClick={onToggleChatPanel}
-          >
-            <PanelRight size={19} aria-hidden />
-          </button>
-        ) : null}
         <button
           type="button"
           className={styles.glassBtn}
