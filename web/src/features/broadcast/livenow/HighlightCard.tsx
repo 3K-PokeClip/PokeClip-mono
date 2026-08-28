@@ -2,7 +2,7 @@
 
 import { Bookmark } from 'lucide-react';
 import clsx from 'clsx';
-import { Badge, Button, IconButton, Progress, Spinner, VisuallyHidden } from '@/ui';
+import { Badge, Button, IconButton, LinkButton, Progress, Spinner, VisuallyHidden } from '@/ui';
 import styles from './LiveScreen.module.css';
 import { cardViewFor, cardVisualFor } from './highlightCardView';
 import type { CardVisual } from './useLiveDetailsMockState';
@@ -121,11 +121,13 @@ export function HighlightCard({
           </div>
         ) : null}
         {view.showActions ? (
-          // 편집기(POK-107 계열)·업로드 라우트가 아직 없다 — 자리만 두고 비활성
+          // 「편집」은 편집기 목업으로 들어간다 — 어느 카드를 눌러도 같은 목업이 뜬다.
+          // 카드별 클립을 실제로 여는 것은 레시피 배선(POK-107) 몫이라 아직 id를 싣지 않는다.
+          // 업로드·보관함 저장은 각자 라우트가 설 때까지 비활성으로 둔다.
           <div className={styles.cardActions}>
-            <Button variant="soft" size="sm" disabled>
+            <LinkButton href="/clips/editor" variant="soft" size="sm">
               편집
-            </Button>
+            </LinkButton>
             <Button variant="solid" size="sm" disabled>
               원클릭 업로드
             </Button>
