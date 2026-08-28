@@ -25,7 +25,7 @@ export function SeekIcon({
    * 16단위 아이콘이 앉아 있던 것이 그 탓이다. 버튼(sm = 32단위)은 그대로 두고
    * 그 안에서만 키운다.
    */
-  size = 21,
+  size = 19,
 }: {
   direction: 'back' | 'forward';
   seconds: number;
