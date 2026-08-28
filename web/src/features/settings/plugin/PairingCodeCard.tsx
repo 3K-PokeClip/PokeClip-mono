@@ -44,7 +44,7 @@ export function PairingCodeCard({
       ) : error ? (
         <div className={styles.codeBoxEmpty}>
           <div className={styles.codeEmptyText}>
-            연동 코드 상태를 불러오지 못했어요.
+            연동 코드 상태를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.
           </div>
           <Button variant="soft" size="sm" onClick={onRetry}>
             다시 시도
