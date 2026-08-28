@@ -25,6 +25,12 @@
   align-items: stretch;
 }
 
+/* 채팅을 접으면 트랙 자체를 걷는다 — 빈 명시 트랙이라도 그 앞의 column-gap은 그려져,
+   두고 두면 본문 오른쪽에 16u짜리 죽은 여백이 상시 남는다 */
+.gridSolo {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .mainCol {
   min-width: 0;
   display: flex;

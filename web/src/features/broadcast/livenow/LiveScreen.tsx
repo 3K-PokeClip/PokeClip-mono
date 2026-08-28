@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useCallback, useMemo, useRef, useState, type Ref } from 'react';
+import clsx from 'clsx';
 import styles from './LiveScreen.module.css';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import { useMediaSource } from '@/features/player/mediaSource';
@@ -105,7 +106,7 @@ export function LiveScreen() {
 
   return (
     <main className={styles.container}>
-      <div className={styles.grid}>
+      <div className={clsx(styles.grid, !chatPanelOpen && styles.gridSolo)}>
         <div className={styles.mainCol}>
           <div className={styles.playerFrame}>
             {/* 폴백은 플레이어와 같은 16:9 빈 블록 — 서스펜드 중에도 레이아웃이 흔들리지 않는다 */}

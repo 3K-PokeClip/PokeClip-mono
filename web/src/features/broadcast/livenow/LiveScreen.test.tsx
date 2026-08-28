@@ -72,8 +72,7 @@ describe('LiveScreen — 하이라이트 카드', () => {
     vi.useFakeTimers();
     const { container } = renderLive();
 
-    const emphasizedCount = () =>
-      container.querySelectorAll('[class*="cardEmphasized"]').length;
+    const emphasizedCount = () => container.querySelectorAll('[class*="cardEmphasized"]').length;
     expect(emphasizedCount()).toBe(1);
 
     fireEvent.keyDown(document, { key: 'F8' });

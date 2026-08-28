@@ -86,7 +86,12 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
         ) : null}
         {shown.map((highlight) => (
           <li key={highlight.id} className={styles.cardSlot}>
-            <HighlightCard highlight={highlight} stream={stream} visuals={visuals} onSeek={onSeek} />
+            <HighlightCard
+              highlight={highlight}
+              stream={stream}
+              visuals={visuals}
+              onSeek={onSeek}
+            />
           </li>
         ))}
       </ul>
