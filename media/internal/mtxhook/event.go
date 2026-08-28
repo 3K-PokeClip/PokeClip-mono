@@ -19,7 +19,7 @@ import (
 
 // Kind 는 훅 종류다.
 //
-// 구명칭 runOnReady 는 쓰지 않는다 — v1.19.3 에서 그것은 runOnAvailable 로 매핑되며
+// 구명칭 runOnReady 는 쓰지 않는다 — v1.19.3·v1.20.1 에서 그것은 runOnAvailable 로 매핑되며(1.20.1 은 deprecated 표기)
 // "읽기 가능" 축이지 세션(Online) 축이 아니다.
 type Kind uint8
 

@@ -40,9 +40,9 @@ RUN mkdir -p /prep/recordings /prep/dvr /prep/hooks
 # 태그 pin을 쓴다. digest pin(멀티아키 index digest는 아키텍처와 무관한 단일 값이라
 # 어느 플랫폼에서든 그대로 쓸 수 있다)은 같은 태그를 다시 밀어 올리는 업스트림 재푸시까지
 # 막아 주지만, 아직 로컬 dev 단계라 태그 추적의 편의를 택했다.
-# 필요하면 `docker buildx imagetools inspect bluenviron/mediamtx:1.19.3` 로 index digest를
-# 확인해 `FROM bluenviron/mediamtx:1.19.3@sha256:...` 형태로 바꾼다.
-FROM bluenviron/mediamtx:1.19.3
+# 필요하면 `docker buildx imagetools inspect bluenviron/mediamtx:1.20.1` 로 index digest를
+# 확인해 `FROM bluenviron/mediamtx:1.20.1@sha256:...` 형태로 바꾼다.
+FROM bluenviron/mediamtx:1.20.1
 
 # /hooks-bin 은 바이너리 자리, /hooks 는 스풀 볼륨 자리다. 둘을 섞지 않는다 —
 # 같은 디렉토리에 두면 볼륨 마운트가 바이너리를 가린다.
