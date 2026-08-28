@@ -60,15 +60,15 @@ describe('useClipEditorMockState', () => {
     expect(result.current.selectedSubtitleId).toBe('sub-1');
   });
 
-  it('3분을 넘기려 하면 구간을 그대로 두고 거부 신호를 올린다', () => {
+  it('3분을 넘기려 하면 구간이 그대로 멈춘다', () => {
     const { result } = renderEditor();
     const before = result.current.range;
 
     act(() => result.current.setRangeEdge('start', before.endSeconds - 181));
 
     expect(result.current.range).toEqual(before);
-    expect(result.current.rangeRejection?.reason).toBe('tooLong');
-    expect(result.current.rangeRejection?.message).toContain('최대 3:00');
+    // 되돌릴 거리도 생기지 않는다 — 아무 일도 일어나지 않았다
+    expect(result.current.canUndo).toBe(false);
   });
 
   it('5초 미만으로 줄이려 해도 거부한다', () => {
@@ -78,19 +78,19 @@ describe('useClipEditorMockState', () => {
     act(() => result.current.setRangeEdge('end', before.startSeconds + 4));
 
     expect(result.current.range).toEqual(before);
-    expect(result.current.rangeRejection?.reason).toBe('tooShort');
+    expect(result.current.canUndo).toBe(false);
   });
 
-  it('경계 안쪽으로 옮기면 적용되고 거부 신호가 사라진다', () => {
+  it('막힌 뒤에도 경계 안쪽 조작은 그대로 먹는다', () => {
     const { result } = renderEditor();
+    const before = result.current.range;
 
-    act(() => result.current.setRangeEdge('end', result.current.range.startSeconds + 4));
-    expect(result.current.rangeRejection).not.toBeNull();
+    act(() => result.current.setRangeEdge('end', before.startSeconds + 4));
+    expect(result.current.range).toEqual(before);
 
     act(() =>
       result.current.setRangeEdge('start', result.current.range.endSeconds - MAX_RANGE_SECONDS),
     );
-    expect(result.current.rangeRejection).toBeNull();
     expect(result.current.rangeLengthSeconds).toBe(MAX_RANGE_SECONDS);
   });
 
@@ -199,16 +199,6 @@ describe('useClipEditorMockState', () => {
     // 놓으면 새 구간을 따라 창이 다시 잡힌다
     act(() => result.current.endGesture());
     expect(result.current.view).not.toEqual(frozen);
-  });
-
-  it('되돌리면 거부 안내가 사라진다', () => {
-    const { result } = renderEditor();
-
-    act(() => result.current.setRangeEdge('end', result.current.range.startSeconds + 4));
-    expect(result.current.rangeRejection).not.toBeNull();
-
-    act(() => result.current.undo());
-    expect(result.current.rangeRejection).toBeNull();
   });
 
   it('줌은 단계로 움직이고 표기가 따라온다', () => {

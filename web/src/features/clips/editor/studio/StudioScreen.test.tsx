@@ -78,7 +78,7 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('radio', { name: '번인+CC' })).toBeChecked();
   });
 
-  it('구간을 5초 미만으로 줄이려 하면 값이 그대로고 안내가 뜬다', async () => {
+  it('구간을 5초 미만으로 줄이려 하면 핸들이 거기서 멈춘다', async () => {
     const user = userEvent.setup();
     renderStudio();
 
@@ -86,11 +86,12 @@ describe('StudioScreen', () => {
     expect(startHandle).toHaveAttribute('aria-valuetext', expect.stringContaining('12.4초'));
 
     startHandle.focus();
-    // 1초씩 8번 당기면 12.4초 → 4.4초라 마지막 한 번이 거부된다
+    // 1초씩 8번 당기면 12.4초 → 4.4초라 마지막 한 번이 막힌다
     for (let i = 0; i < 8; i += 1) await user.keyboard('{ArrowRight}');
 
-    expect(screen.getByRole('status')).toHaveTextContent('구간은 최소 5초부터예요');
     expect(startHandle).toHaveAttribute('aria-valuetext', expect.stringContaining('5.4초'));
+    // 규칙은 범례가 미리 말해 둔다
+    expect(screen.getByText(/5초 미만·3:00 초과로는 핸들이 움직이지 않아요/)).toBeInTheDocument();
   });
 
   it('되감기·감기 버튼이 아이콘 안의 초로 갈린다 — 방향만으로는 구분되지 않는다', () => {

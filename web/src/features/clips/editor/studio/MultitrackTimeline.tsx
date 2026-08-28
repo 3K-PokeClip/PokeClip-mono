@@ -5,6 +5,7 @@ import { formatUptime } from '@/features/player/playerMath';
 import styles from './StudioScreen.module.css';
 import { TimelineTrackRow } from './TimelineTrackRow';
 import {
+  MAX_RANGE_LABEL,
   MIN_RANGE_SECONDS,
   rulerTicks,
   secondsFromPointer,
@@ -236,15 +237,10 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
               </span>
             ))}
             <span className={styles.legendNote}>
-              3:00 초과로는 핸들이 늘어나지 않아요
+              {MIN_RANGE_SECONDS}초 미만·{MAX_RANGE_LABEL} 초과로는 핸들이 움직이지 않아요
             </span>
           </div>
 
-          {/* 거부를 알리는 유일한 창구다. 라이브 영역이라 초점을 뺏지 않고 읽어 주고,
-              비어 있어도 자리를 지킨다 — 글자와 함께 생기면 스크린리더가 놓친다. */}
-          <p className={styles.rejection} role="status">
-            {state.rangeRejection?.message ?? ''}
-          </p>
         </>
       ) : null}
     </section>

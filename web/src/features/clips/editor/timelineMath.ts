@@ -92,13 +92,6 @@ export function resolveRangeEdge(
   return { range: next, rejection: null };
 }
 
-/** 거부 안내문 — 시안 하단 문구와 같은 말을 쓴다 */
-export function rangeRejectionMessage(reason: RangeRejectionReason): string {
-  return reason === 'tooLong'
-    ? `구간은 최대 ${MAX_RANGE_LABEL}까지예요 — 여기서 더 늘어나지 않아요.`
-    : `구간은 최소 ${MIN_RANGE_SECONDS}초부터예요 — 여기서 더 줄어들지 않아요.`;
-}
-
 /**
  * 길이를 십분의 일 초 정수로 — 표기 셋(구간·게이지·트랜스포트)이 모두 이 값에서 나온다.
  * 내림이다: 12.49초를 12.5로 올리면 표기가 실제보다 길어 보인다.

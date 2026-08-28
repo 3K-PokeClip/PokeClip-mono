@@ -26,13 +26,11 @@ import {
   formatTimecodeTenths,
   rangeGaugeFraction,
   rangeLengthSeconds,
-  rangeRejectionMessage,
   resolveRangeEdge,
   clampTimelineHeight,
   viewWindow,
   zoomStep,
   type ClipRange,
-  type RangeRejectionReason,
   type TimelineView,
 } from './timelineMath';
 
@@ -109,11 +107,6 @@ export type SubtitleState =
   | { status: 'idle'; estimateLabel: string }
   | { status: 'generating' }
   | { status: 'ready'; items: SubtitleItem[] };
-
-export interface RangeRejection {
-  reason: RangeRejectionReason;
-  message: string;
-}
 
 /**
  * 되돌리기 대상 — ADR-009의 레시피(구간·크롭·트랙·볼륨·자막 스타일·제목)와 같은 범위다.
@@ -300,7 +293,6 @@ export interface ClipEditorMockState {
   endGesture: () => void;
   markIn: () => void;
   markOut: () => void;
-  rangeRejection: RangeRejection | null;
 
   // 레이아웃 (E5)
   layout: EditorLayout;
@@ -385,7 +377,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     initialSubtitleStatus === 'ready' ? (MOCK_SUBTITLES[0]?.id ?? null) : null,
   );
 
-  const [rangeRejection, setRangeRejection] = useState<RangeRejection | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [activeTool, setActiveTool] = useState<EditorTool>('subtitle');
   const [timelineCollapsed, setTimelineCollapsed] = useState(false);
@@ -480,11 +471,9 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     (edge: 'start' | 'end', seconds: number) => {
       const result = resolveRangeEdge(edge, seconds, recipe.range, MOCK_SOURCE.durationSeconds);
       const rejection = result.rejection;
-      if (rejection !== null) {
-        setRangeRejection({ reason: rejection, message: rangeRejectionMessage(rejection) });
-        return;
-      }
-      setRangeRejection(null);
+      // 경계 밖이면 값을 그대로 둔다 — 핸들이 거기서 멈추는 것이 곧 안내다
+      // (범례가 5초~3:00을 미리 적어 둔다)
+      if (rejection !== null) return;
       commit((current) => ({ ...current, range: result.range }));
     },
     [commit, recipe.range],
@@ -547,14 +536,8 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     canUndo: historyCanUndo(history),
     canRedo: historyCanRedo(history),
     // 되돌리면 구간이 다른 값이 되므로 직전 거부 안내는 더 이상 그 구간의 이야기가 아니다
-    undo: useCallback(() => {
-      setRangeRejection(null);
-      setHistory(undoHistory);
-    }, []),
-    redo: useCallback(() => {
-      setRangeRejection(null);
-      setHistory(redoHistory);
-    }, []),
+    undo: useCallback(() => setHistory(undoHistory), []),
+    redo: useCallback(() => setHistory(redoHistory), []),
     saveTemplate: useCallback(
       () => toast({ tone: 'success', title: '템플릿으로 저장했어요' }),
       [toast],
@@ -600,7 +583,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     endGesture,
     markIn,
     markOut,
-    rangeRejection,
 
     layout: recipe.layout,
     layoutOptions: LAYOUT_OPTIONS,

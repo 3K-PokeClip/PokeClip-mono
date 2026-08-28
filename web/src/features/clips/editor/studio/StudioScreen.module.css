@@ -439,7 +439,7 @@
   border-top: calc(6 * var(--pc-u)) solid var(--pc-color-point);
 }
 
-/* ---------- 범례 · 안내 ---------- */
+/* ---------- 범례 ---------- */
 
 .legend {
   display: flex;
@@ -460,14 +460,6 @@
   margin-left: auto;
 }
 
-.rejection {
-  margin-top: calc(6 * var(--pc-u));
-  font-size: calc(10.5 * var(--pc-u));
-  font-weight: 650;
-  color: var(--pc-color-warning);
-  min-height: calc(13 * var(--pc-u));
-  margin: calc(4 * var(--pc-u)) 0 0;
-}
 
 .previewColumn {
   flex: 1;
