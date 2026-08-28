@@ -5,7 +5,8 @@
   display: flex;
   flex-direction: column;
   /* 독(하단 탭)이 가리는 만큼 빼고 화면을 꽉 채운다 */
-  height: calc(100vh - var(--pc-dock-height, calc(64 * var(--pc-u))));
+  /* 독은 fixed라 흐름에서 자리를 차지하지 않는다 — 띄운 높이(바닥 18px + 몸통)만큼 비운다 */
+  height: calc(100vh - calc(92 * var(--pc-u)));
   min-height: calc(640 * var(--pc-u));
   background: var(--pc-color-bg-canvas);
   color: var(--pc-color-text-primary);
@@ -180,7 +181,7 @@
 .lanes {
   display: flex;
   flex-direction: column;
-  gap: calc(5 * var(--pc-u));
+  gap: calc(4 * var(--pc-u));
 }
 
 /* ---------- 트랙 행 ---------- */
@@ -226,7 +227,7 @@
 .lane {
   flex: 1;
   min-width: 0;
-  height: calc(26 * var(--pc-u));
+  height: calc(24 * var(--pc-u));
   border-radius: calc(6 * var(--pc-u));
   background: var(--pc-color-bg-inset);
   position: relative;
@@ -234,7 +235,7 @@
 }
 
 .lane[data-kind='video'] {
-  height: calc(34 * var(--pc-u));
+  height: calc(30 * var(--pc-u));
 }
 
 .laneFilmstrip {
@@ -460,7 +461,8 @@
   font-size: calc(10.5 * var(--pc-u));
   font-weight: 650;
   color: var(--pc-color-warning);
-  min-height: calc(14 * var(--pc-u));
+  min-height: calc(13 * var(--pc-u));
+  margin: calc(4 * var(--pc-u)) 0 0;
 }
 
 .previewColumn {

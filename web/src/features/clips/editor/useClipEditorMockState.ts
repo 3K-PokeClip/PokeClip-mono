@@ -29,7 +29,6 @@ import {
   clampTimelineHeight,
   viewWindow,
   zoomStep,
-  DEFAULT_TIMELINE_HEIGHT,
   type ClipRange,
   type RangeRejectionReason,
   type TimelineView,
@@ -326,8 +325,9 @@ export interface ClipEditorMockState {
   setActiveTool: (tool: EditorTool) => void;
   timelineCollapsed: boolean;
   toggleTimeline: () => void;
-  timelineHeight: number;
-  setTimelineHeight: (px: number) => void;
+  /** 사용자가 끌어 정한 높이(px). null이면 트랙 수에 맞춘 기본 높이다 */
+  timelineHeight: number | null;
+  setTimelineHeight: (px: number | null) => void;
   zoom: number;
   zoomLabel: string;
   zoomIn: () => void;
@@ -362,7 +362,9 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [activeTool, setActiveTool] = useState<EditorTool>('subtitle');
   const [timelineCollapsed, setTimelineCollapsed] = useState(false);
-  const [timelineHeight, setTimelineHeightState] = useState(DEFAULT_TIMELINE_HEIGHT);
+  // 기본은 내용에 맞춘다 — 화면 배율(--pc-u)이 rem을 따라 커지면 레인도 함께 커지는데
+  // 여기에 고정 픽셀 상한을 걸면 배율이 큰 화면에서 마지막 트랙이 잘린다.
+  const [timelineHeight, setTimelineHeightState] = useState<number | null>(null);
   const [zoom, setZoom] = useState(100);
 
   // 언마운트 뒤 남은 목업 타이머가 상태를 건드리지 않게 잡아 둔다
@@ -603,7 +605,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     toggleTimeline: useCallback(() => setTimelineCollapsed((v) => !v), []),
     timelineHeight,
     setTimelineHeight: useCallback(
-      (px: number) => setTimelineHeightState(clampTimelineHeight(px)),
+      (px: number | null) => setTimelineHeightState(px === null ? null : clampTimelineHeight(px)),
       [],
     ),
     zoom,

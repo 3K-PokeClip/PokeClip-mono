@@ -7,7 +7,6 @@ import { TimelineTrackRow } from './TimelineTrackRow';
 import {
   MAX_RANGE_SECONDS,
   MIN_RANGE_SECONDS,
-  clampTimelineHeight,
   rulerTicks,
   secondsFromPointer,
   secondsToFraction,
@@ -31,6 +30,7 @@ const HEIGHT_STEP_PX = 24;
 export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const draggingEdge = useRef<'start' | 'end' | null>(null);
+  const laneAreaRef = useRef<HTMLDivElement>(null);
   const heightDragOrigin = useRef<{ y: number; height: number } | null>(null);
 
   const startFraction = secondsToFraction(state.range.startSeconds, state.view);
@@ -75,7 +75,10 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
 
   const onResizePointerDown = (event: PointerEvent<HTMLButtonElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
-    heightDragOrigin.current = { y: event.clientY, height: state.timelineHeight };
+    // 아직 끈 적이 없으면(기본 높이) 지금 그려진 높이에서 이어서 끈다
+    const current =
+      state.timelineHeight ?? (laneAreaRef.current?.getBoundingClientRect().height ?? 0);
+    heightDragOrigin.current = { y: event.clientY, height: current };
   };
 
   const onResizePointerMove = (event: PointerEvent<HTMLButtonElement>) => {
@@ -86,12 +89,14 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
   };
 
   const onResizeKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const current =
+      state.timelineHeight ?? (laneAreaRef.current?.getBoundingClientRect().height ?? 0);
     if (event.key === 'ArrowUp') {
       event.preventDefault();
-      state.setTimelineHeight(state.timelineHeight + HEIGHT_STEP_PX);
+      state.setTimelineHeight(current + HEIGHT_STEP_PX);
     } else if (event.key === 'ArrowDown') {
       event.preventDefault();
-      state.setTimelineHeight(state.timelineHeight - HEIGHT_STEP_PX);
+      state.setTimelineHeight(current - HEIGHT_STEP_PX);
     }
   };
 
@@ -108,7 +113,7 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
             heightDragOrigin.current = null;
           }}
           onKeyDown={onResizeKeyDown}
-          onDoubleClick={() => state.setTimelineHeight(clampTimelineHeight(Number.NaN))}
+          onDoubleClick={() => state.setTimelineHeight(null)}
         >
           <span className={styles.resizeGrip} aria-hidden />
         </button>
@@ -157,7 +162,13 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
             ))}
           </div>
 
-          <div className={styles.laneArea} style={{ maxHeight: `${state.timelineHeight}px` }}>
+          <div
+            className={styles.laneArea}
+            ref={laneAreaRef}
+            style={
+              state.timelineHeight === null ? undefined : { maxHeight: `${state.timelineHeight}px` }
+            }
+          >
             <div className={styles.lanes}>
               {state.tracks.map((track) => (
                 <TimelineTrackRow

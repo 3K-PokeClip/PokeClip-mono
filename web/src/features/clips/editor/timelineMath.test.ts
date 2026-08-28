@@ -141,8 +141,8 @@ describe('줌·높이', () => {
   });
 
   it('타임라인 높이는 범위 안으로 자른다', () => {
-    expect(clampTimelineHeight(10)).toBe(150);
+    expect(clampTimelineHeight(10)).toBe(120);
     expect(clampTimelineHeight(9999)).toBe(460);
-    expect(clampTimelineHeight(Number.NaN)).toBe(232);
+    expect(clampTimelineHeight(Number.NaN)).toBe(190);
   });
 });

@@ -289,6 +289,10 @@
   align-items: center;
   gap: calc(4 * var(--pc-u));
   margin-top: calc(11 * var(--pc-u));
+  /* 미리보기와 형제 요소라 .preview의 패딩을 물려받지 못한다 — 같은 값을 직접 준다 */
+  padding: 0 calc(20 * var(--pc-u));
+  flex-wrap: wrap;
+  row-gap: calc(8 * var(--pc-u));
 }
 
 .transportTime {

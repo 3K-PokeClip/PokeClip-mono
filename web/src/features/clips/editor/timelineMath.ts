@@ -21,9 +21,9 @@ export const BASE_VIEW_SECONDS = 75;
 export const ZOOM_LEVELS = [50, 100, 200, 400] as const;
 
 /** 타임라인 높이 드래그 범위 — 시안 기본값과 접기 직전 최소 높이 */
-export const MIN_TIMELINE_HEIGHT = 150;
+export const MIN_TIMELINE_HEIGHT = 120;
 export const MAX_TIMELINE_HEIGHT = 460;
-export const DEFAULT_TIMELINE_HEIGHT = 232;
+export const DEFAULT_TIMELINE_HEIGHT = 190;
 
 export type RangeRejectionReason = 'tooShort' | 'tooLong';
 
