@@ -19,7 +19,13 @@ const SHAPES = {
 export function SeekIcon({
   direction,
   seconds,
-  size = 17,
+  /**
+   * 디자인 단위(--pc-u)다. width/height 속성에 숫자를 그대로 넣으면 원시 px이라
+   * 배율이 큰 화면에서 버튼만 커지고 아이콘은 제자리에 남는다 — 32단위 버튼 안에
+   * 16단위 아이콘이 앉아 있던 것이 그 탓이다. 버튼(sm = 32단위)은 그대로 두고
+   * 그 안에서만 키운다.
+   */
+  size = 21,
 }: {
   direction: 'back' | 'forward';
   seconds: number;
@@ -29,8 +35,7 @@ export function SeekIcon({
   return (
     <svg
       viewBox="0 0 24 24"
-      width={size}
-      height={size}
+      style={{ width: `calc(${size} * var(--pc-u))`, height: `calc(${size} * var(--pc-u))` }}
       fill="none"
       stroke="currentColor"
       strokeWidth={1.7}

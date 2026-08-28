@@ -29,7 +29,11 @@ export function TransportBar({
         aria-label={state.playing ? '일시정지' : '재생'}
         onClick={state.togglePlay}
       >
-        {state.playing ? <Pause size={22} aria-hidden /> : <Play size={22} aria-hidden />}
+        {state.playing ? (
+          <Pause className={styles.transportPlayIcon} aria-hidden />
+        ) : (
+          <Play className={styles.transportPlayIcon} aria-hidden />
+        )}
       </IconButton>
       <IconButton variant="ghost" size="sm" aria-label="1초 앞으로" onClick={() => state.seekBy(1)}>
         <SeekIcon direction="forward" seconds={1} />

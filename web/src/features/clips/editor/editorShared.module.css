@@ -299,6 +299,13 @@
   row-gap: calc(8 * var(--pc-u));
 }
 
+/* 재생 아이콘도 같은 이유로 디자인 단위로 잰다 — 되감기(21단위)보다 작아지면
+   가운데 주 버튼이 곁다리보다 작아 보인다. 버튼(md = 40단위)은 그대로다. */
+.transportPlayIcon {
+  width: calc(25 * var(--pc-u));
+  height: calc(25 * var(--pc-u));
+}
+
 .transportTime {
   font:
     600 calc(12 * var(--pc-u)) ui-monospace,
