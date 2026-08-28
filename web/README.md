@@ -78,6 +78,8 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `/home` `/broadcast` `/clips` `/settings`                                             | 독 4개 — `(dock)` 그룹 공유 셸(AuthGuard + 하단 Dock)                  |
 | `/broadcast`                                                                          | `/broadcast/livenow` 리다이렉트 — 방송 그룹은 좌측 `Side`를 갖는다     |
 | `/broadcast/livenow`                                                                  | 라이브 대시보드 (지난 방송 `/broadcast/vod`는 별도 티켓)               |
+| `/clips/editor`                                                                       | 클립 편집기 진입 — 기본 모드로 리다이렉트 (간편/정밀 설정은 이후 티켓) |
+| `/clips/editor/studio`                                                                | 클립 편집기 스튜디오형 목업 (시안 1d-a) — 전폭 자체 헤더, `Side` 없음  |
 | `/settings`                                                                           | `/settings/plugin` 리다이렉트 — 설정 그룹도 좌측 `Side`를 갖는다       |
 | `/settings/channels` `/settings/plugin` `/settings/notifications` `/settings/account` | 채널 연동 · 플러그인 · 알림 설정 · 계정 (나머지 설정 화면은 별도 티켓) |
 | `/goodbye`                                                                            | 탈퇴 완료 안내 (셸 없음) — 토큰이 빈 직후라 `(dock)` 안에서는 못 뜬다  |

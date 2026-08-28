@@ -1,11 +1,12 @@
-import { Button, IconButton } from '@/ui';
+import { IconButton, LinkButton } from '@/ui';
 import { Play, X } from 'lucide-react';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
 import styles from './HomeScreen.module.css';
 import type { ResumeDraft } from './useHomeMockState';
 
 // 디자인 1a 상단 — 편집하던 클립 이어가기 배너.
-// 클립 편집기는 M2(POK-107)라 진입 버튼은 비활성으로 둔다.
+// 진입 버튼은 클립 편집기 목업으로 간다 — 이어받을 편집본을 실제로 여는 것은
+// 레시피 배선(POK-107) 몫이라 아직 어떤 편집본인지 싣지 않는다.
 export function ResumeEditBanner({
   draft,
   onDismiss,
@@ -26,9 +27,9 @@ export function ResumeEditBanner({
         <div className={styles.resumeTitle}>편집하던 클립이 있어요 — “{draft.title}”</div>
         <div className={styles.resumeMeta}>{draft.meta}</div>
       </div>
-      <Button variant="solid" size="sm" disabled>
+      <LinkButton href="/clips/editor" variant="solid" size="sm">
         이어서 편집
-      </Button>
+      </LinkButton>
       <IconButton variant="ghost" size="sm" aria-label="배너 닫기" onClick={onDismiss}>
         <X size={14} aria-hidden />
       </IconButton>

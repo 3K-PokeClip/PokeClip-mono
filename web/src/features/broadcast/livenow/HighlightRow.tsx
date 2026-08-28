@@ -1,10 +1,12 @@
 import clsx from 'clsx';
-import { Badge, Button } from '@/ui';
+import { Badge, Button, LinkButton } from '@/ui';
 import styles from './LiveScreen.module.css';
 import type { LiveHighlight } from './useLiveMockState';
 
 // 하이라이트 카드 한 행 — 상태별 배지·버튼 조합 (디자인 1b).
-// "편집"·"업로드"는 클립 편집기(M2 · POK-107)·업로드 전까지 비활성.
+// "편집"은 클립 편집기 목업으로 들어간다 — 어느 카드를 눌러도 같은 목업이 뜬다.
+// 카드별 클립을 실제로 여는 것은 배선 티켓(POK-107) 몫이라 아직 id를 싣지 않는다.
+// "업로드"는 업로드 모달(POK-111) 전까지 비활성으로 둔다.
 function RowActions({ highlight }: { highlight: LiveHighlight }) {
   switch (highlight.status) {
     case 'scored':
@@ -13,9 +15,9 @@ function RowActions({ highlight }: { highlight: LiveHighlight }) {
           <Badge tone="point" variant="solid" size="sm">
             {highlight.score}점
           </Badge>
-          <Button variant="solid" size="sm" disabled>
+          <LinkButton href="/clips/editor" variant="solid" size="sm">
             편집
-          </Button>
+          </LinkButton>
         </>
       );
     case 'manual':
@@ -24,9 +26,9 @@ function RowActions({ highlight }: { highlight: LiveHighlight }) {
           <Badge tone="neutral" variant="soft" size="sm">
             수동
           </Badge>
-          <Button variant="soft" size="sm" disabled>
+          <LinkButton href="/clips/editor" variant="soft" size="sm">
             편집
-          </Button>
+          </LinkButton>
         </>
       );
     case 'editing':
@@ -52,9 +54,9 @@ function RowActions({ highlight }: { highlight: LiveHighlight }) {
           <Badge tone="neutral" variant="soft" size="sm">
             미처리
           </Badge>
-          <Button variant="soft" size="sm" disabled>
+          <LinkButton href="/clips/editor" variant="soft" size="sm">
             편집
-          </Button>
+          </LinkButton>
         </>
       );
     case 'expired':

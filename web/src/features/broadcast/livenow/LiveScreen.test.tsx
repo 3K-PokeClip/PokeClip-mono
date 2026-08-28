@@ -53,6 +53,15 @@ describe('LiveScreen', () => {
     expect(screen.getByText('만료')).toBeInTheDocument();
   });
 
+  it('"편집"은 클립 편집기로 가고 "업로드"는 아직 잠겨 있다', () => {
+    renderLive();
+
+    const edits = screen.getAllByRole('link', { name: '편집' });
+    expect(edits).toHaveLength(3);
+    for (const edit of edits) expect(edit).toHaveAttribute('href', '/clips/editor');
+    expect(screen.getByRole('button', { name: '업로드' })).toBeDisabled();
+  });
+
   it('"자동" 필터를 누르면 수동 마킹 카드가 사라진다', async () => {
     const user = userEvent.setup();
     renderLive();
