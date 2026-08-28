@@ -23,7 +23,7 @@ import (
 
 // pinnedMediaMTXVersion 은 media/Dockerfile.mtxhook 의 FROM 태그와 같아야 하는 값이다.
 // 이 값을 고치는 행위 = "아래 8개 전제를 새 버전에서 재확인했다"는 선언이다.
-const pinnedMediaMTXVersion = "1.19.3"
+const pinnedMediaMTXVersion = "1.20.1"
 
 // mediaMTXImage 는 버전을 고정하는 베이스 이미지 이름이다. 같은 Dockerfile 에 빌드
 // 스테이지 FROM(golang:...)이 따로 있으므로 이 이름을 포함한 FROM 만 대상으로 삼는다.
@@ -40,7 +40,7 @@ const checklistSection = "MediaMTX 버전업 체크리스트"
 // 줄 번호는 일부러 적지 않는다 — 금방 낡는다. 대신 grep 으로 바로 찾히는 닻을 적는다.
 const versionUpgradeGuide = `
 버전을 올렸다면 이 상수도 같이 고치고, media/README.md 의 "` + checklistSection + `"를 따른다.
-아래 8곳은 "지금 고정된 버전이라서 참인 사실"에 기대고 있다. 새 버전에서도 참인지 확인한
+아래 9곳은 "지금 고정된 버전이라서 참인 사실"에 기대고 있다. 새 버전에서도 참인지 확인한
 뒤에 상수를 고쳐라 — 전제가 깨져도 오류는 나지 않는다(훅 실패는 무징후다).
 
  1. infra/compose/mediamtx.yml  (닻: "pathDefaults 는 all_others 에도 상속된다")
@@ -67,10 +67,13 @@ const versionUpgradeGuide = `
     순간 실패한다. moq: no 라 지금은 참이지만 moq/webrtc/rtsps + auto.key 류를 켜면 비root
     에서 기동 자체가 실패한다(POK-79 E7). → 새 버전 기본 설정의 CWD 쓰기 지점을 확인하고,
     기동 로그에 "failed to save"·"permission denied" 가 없는지 본다.
+ 9. media/README.md 전제 표 9행  (닻: "302 cookieCheck")
+    v1.20.1 부터 HLS 첫 요청이 302 cookieCheck 리다이렉트를 돌린다. CDN·서명 쿠키·TTL 경계에서
+    재검증한다 — 낮은 버전으로 되돌리면 이 행이 무의미해지므로 함께 걷어낸다.
 `
 
 // 버전 고정 자리(Dockerfile 의 FROM)와 이 파일의 상수가 어긋나면 빨간불이 된다.
-// 상수는 "8개 전제를 재확인했다"는 서명이므로, 서명 없이 FROM 만 올라가는 것을 막는다.
+// 상수는 "9개 전제를 재확인했다"는 서명이므로, 서명 없이 FROM 만 올라가는 것을 막는다.
 func TestPinnedMediaMTXVersionMatchesDockerfile(t *testing.T) {
 	tag := mediaMTXTagFromDockerfile(t, readDockerfile(t))
 

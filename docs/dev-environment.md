@@ -51,7 +51,7 @@ docker compose up -d --build
 |---|---|---|
 | postgres:17 | 5432 | 3번: 스키마 v0 마이그레이션은 여기에 (M1 2단계) |
 | redis:7.4 | 6379 | 3번: 키·TTL·pub/sub 설계 자리 |
-| media (MediaMTX 1.19.3 + 훅 바이너리) | UDP 8890 (SRT) · 1935 (RTMP) · 8888 (LL-HLS) | 1번: Media Origin 자리. 버전 고정은 `media/Dockerfile.mtxhook`의 `FROM`. **비특권 UID 10002로 실행**(POK-79) — 실행 계정 정본도 같은 Dockerfile의 `USER` |
+| media (MediaMTX 1.20.1 + 훅 바이너리) | UDP 8890 (SRT) · 1935 (RTMP) · 8888 (LL-HLS) | 1번: Media Origin 자리. 버전 고정은 `media/Dockerfile.mtxhook`의 `FROM`. **비특권 UID 10002로 실행**(POK-79) — 실행 계정 정본도 같은 Dockerfile의 `USER` |
 | media-stub (nginx) | 8080 | 2번: 플레이어 개발용 정적 세그먼트 (`infra/compose/stub/README.md`) |
 | segment-indexer | (포트 없음) | 1번: 녹화 세그먼트를 감지해 `stream_segments`에 기록하는 사이드카 (`media/README.md`) |
 

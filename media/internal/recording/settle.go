@@ -21,7 +21,7 @@ type SettleOptions struct {
 	// 기본 2s 의 근거: MediaMTX 는 영상을 모았다가 recordPartDuration 주기로 디스크에 쓴다.
 	// 쓰기와 쓰기 사이의 공백을 "다 썼다"로 오해하면 절반짜리 파일을 완성으로 판정하므로
 	// 공백 길이의 2배는 기다려야 한다(설계 2.1절 "쓰기 주기의 2배 이상").
-	// v1.19.3 업스트림 기본값 recordPartDuration = 1s 를 실측 확인했으므로 2 x 1s = 2s.
+	// v1.19.3·v1.20.1 업스트림 기본값 recordPartDuration = 1s(conf/path.go 확인)이므로 2 x 1s = 2s.
 	SettleWait time.Duration
 	// MaxSettle 을 넘기면 포기하고 ErrSettleTimeout 을 돌려준다.
 	MaxSettle time.Duration
