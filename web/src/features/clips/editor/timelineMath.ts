@@ -11,8 +11,15 @@ export const MIN_RANGE_SECONDS = 5;
 /** 클립 길이 상한 — 유튜브 Shorts 한도에 정렬 (ADR-009) */
 export const MAX_RANGE_SECONDS = 180;
 
-/** 상한 표기 — 게이지·안내문이 같은 문자열을 쓰도록 여기 한 곳에 둔다 */
+/** 상한을 타임코드로 — 게이지처럼 시각을 나열하는 자리(`0:12.4 / 최대 3:00`) */
 export const MAX_RANGE_LABEL = '3:00';
+
+/**
+ * 상한을 말로 — 안내 문장이 쓴다. 「5초 미만·3:00 초과」처럼 한 문장 안에서
+ * 말과 타임코드가 섞이면 읽는 사람이 두 번 셈해야 한다.
+ * 두 표기 모두 MAX_RANGE_SECONDS 하나에서 나온다.
+ */
+export const MAX_RANGE_TEXT = `${MAX_RANGE_SECONDS / 60}분`;
 
 /** 100% 배율에서 타임라인에 보이는 폭 — 시안 눈금자(1:21:40~1:22:55) */
 export const BASE_VIEW_SECONDS = 75;

@@ -5,7 +5,7 @@ import { formatUptime } from '@/features/player/playerMath';
 import styles from './StudioScreen.module.css';
 import { TimelineTrackRow } from './TimelineTrackRow';
 import {
-  MAX_RANGE_LABEL,
+  MAX_RANGE_TEXT,
   MIN_RANGE_SECONDS,
   rulerTicks,
   secondsFromPointer,
@@ -237,7 +237,7 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
               </span>
             ))}
             <span className={styles.legendNote}>
-              {MIN_RANGE_SECONDS}초 미만·{MAX_RANGE_LABEL} 초과로는 핸들이 움직이지 않아요
+              {MIN_RANGE_SECONDS}초 미만·{MAX_RANGE_TEXT} 초과로는 핸들이 움직이지 않아요
             </span>
           </div>
 

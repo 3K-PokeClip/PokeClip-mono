@@ -91,7 +91,7 @@ describe('StudioScreen', () => {
 
     expect(startHandle).toHaveAttribute('aria-valuetext', expect.stringContaining('5.4초'));
     // 규칙은 범례가 미리 말해 둔다
-    expect(screen.getByText(/5초 미만·3:00 초과로는 핸들이 움직이지 않아요/)).toBeInTheDocument();
+    expect(screen.getByText('5초 미만·3분 초과로는 핸들이 움직이지 않아요')).toBeInTheDocument();
   });
 
   it('되감기·감기 버튼이 아이콘 안의 초로 갈린다 — 방향만으로는 구분되지 않는다', () => {
