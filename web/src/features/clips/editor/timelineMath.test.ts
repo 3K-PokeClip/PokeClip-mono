@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_RANGE_SECONDS,
+  ZOOM_LEVELS,
   MIN_RANGE_SECONDS,
   clampTimelineHeight,
   formatDurationTenths,
+  formatLengthLabel,
   formatRangeGauge,
   formatTimecodeTenths,
   fractionToSeconds,
@@ -81,6 +83,18 @@ describe('표기', () => {
     expect(formatDurationTenths(180)).toBe('3:00.0');
   });
 
+  it('트랜스포트 길이와 게이지가 같은 값을 말한다 — 반올림 규칙이 하나다', () => {
+    // 포인터로 고른 구간은 밀리초 단위라 반올림이 갈리면 12.5초 / 0:12.4로 어긋난다
+    expect(formatLengthLabel(12.46)).toBe('12.4초');
+    expect(formatDurationTenths(12.46)).toBe('0:12.4');
+  });
+
+  it('재생 tick이 만든 부동소수 값에서도 없는 시각을 찍지 않는다', () => {
+    // 초와 소수를 따로 반올림하면 1:22:14.10이 나온다
+    expect(formatTimecodeTenths(4934.999999999999)).toBe('1:22:15.0');
+    expect(formatTimecodeTenths(4928.4)).toBe('1:22:08.4');
+  });
+
   it('절대 시각을 1:22:08.4로 적는다', () => {
     expect(formatTimecodeTenths(4928.4)).toBe('1:22:08.4');
     expect(formatTimecodeTenths(4940.8)).toBe('1:22:20.8');
@@ -136,8 +150,13 @@ describe('줌·높이', () => {
   it('줌은 단계로 움직이고 끝에서는 멈춘다', () => {
     expect(zoomStep(100, 'in')).toBe(200);
     expect(zoomStep(100, 'out')).toBe(50);
-    expect(zoomStep(50, 'out')).toBe(50);
+    expect(zoomStep(25, 'out')).toBe(25);
     expect(zoomStep(400, 'in')).toBe(400);
+  });
+
+  it('가장 넓은 줌에서는 창이 최대 구간보다 넓다 — 마우스로 3:00에 닿는 길', () => {
+    const widest = viewWindow(2000, ZOOM_LEVELS[0], DURATION);
+    expect(widest.endSeconds - widest.startSeconds).toBeGreaterThan(MAX_RANGE_SECONDS);
   });
 
   it('타임라인 높이는 범위 안으로 자른다', () => {

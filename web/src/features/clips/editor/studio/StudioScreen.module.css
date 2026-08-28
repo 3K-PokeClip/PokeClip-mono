@@ -391,8 +391,14 @@
 }
 
 /* 3:00을 넘기려 하면 핸들이 늘어나는 대신 흔들린다 (시안 1d-a 안내문) */
+/* 흔들림은 구간 상자를 덮는 빈 겉껍질이 대신 돈다 — 핸들을 리마운트하지 않기 위해서다 */
 .rangeBoxRejected {
+  position: absolute;
+  inset: calc(-2 * var(--pc-u));
+  border: 2px solid var(--pc-color-accent);
+  border-radius: calc(8 * var(--pc-u));
   animation: pc-editor-shake 0.45s ease;
+  pointer-events: none;
 }
 
 @keyframes pc-editor-shake {

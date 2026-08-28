@@ -1,5 +1,6 @@
 import { Captions, ChevronDown, Lock, Pencil } from 'lucide-react';
-import { Badge, Button, Tag } from '@/ui';
+import { Badge, Button } from '@/ui';
+import { Segmented } from '../Segmented';
 import styles from './sections.module.css';
 import { TitleSection } from './TitleSection';
 import type { ClipEditorMockState } from '../useClipEditorMockState';
@@ -61,25 +62,13 @@ export function SubtitleSection({ state }: { state: ClipEditorMockState }) {
           </span>
         </div>
 
-        <div className={styles.tagRow} role="radiogroup" aria-label="자막 표시 방식">
-          {state.subtitleModeOptions.map((option) => {
-            const selected = option.value === state.subtitleMode;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                className={styles.tagButton}
-                onClick={() => state.setSubtitleMode(option.value)}
-              >
-                <Tag variant={selected ? 'solid' : 'soft'} size="sm">
-                  {option.label}
-                </Tag>
-              </button>
-            );
-          })}
-        </div>
+        {/* 태그 모양이지만 하는 일은 라디오 그룹이라 화살표 이동까지 갖춘 Segmented를 쓴다 */}
+        <Segmented
+          label="자막 표시 방식"
+          options={state.subtitleModeOptions}
+          value={state.subtitleMode}
+          onChange={state.setSubtitleMode}
+        />
 
         <div>
           <div className={styles.fieldLabel} id="subtitle-font-label">

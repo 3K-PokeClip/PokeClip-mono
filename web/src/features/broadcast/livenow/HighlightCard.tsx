@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+
 import { Bookmark } from 'lucide-react';
 import clsx from 'clsx';
 import { Badge, Button, IconButton, LinkButton, Progress, Spinner, VisuallyHidden } from '@/ui';
@@ -125,7 +127,7 @@ export function HighlightCard({
           // 카드별 클립을 실제로 여는 것은 레시피 배선(POK-107) 몫이라 아직 id를 싣지 않는다.
           // 업로드·보관함 저장은 각자 라우트가 설 때까지 비활성으로 둔다.
           <div className={styles.cardActions}>
-            <LinkButton href="/clips/editor" variant="soft" size="sm">
+            <LinkButton as={Link} href="/clips/editor" variant="soft" size="sm">
               편집
             </LinkButton>
             <Button variant="solid" size="sm" disabled>

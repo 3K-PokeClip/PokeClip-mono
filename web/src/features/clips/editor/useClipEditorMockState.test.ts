@@ -172,6 +172,49 @@ describe('useClipEditorMockState', () => {
     window.localStorage.removeItem('pc-editor-panel-side');
   });
 
+  it('드래그 한 번은 실행취소 한 칸이다 — 이력을 삼키지 않는다', () => {
+    const { result } = renderEditor();
+    act(() => result.current.setLayout('9:16'));
+    const beforeDrag = result.current.range;
+
+    act(() => result.current.beginGesture());
+    for (const seconds of [4950, 4955, 4960, 4965, 4970]) {
+      act(() => result.current.setRangeEdge('end', seconds));
+    }
+    act(() => result.current.endGesture());
+
+    expect(result.current.range.endSeconds).toBe(4970);
+    // 한 번 되돌리면 드래그 이전 구간으로, 두 번이면 레이아웃 이전으로 간다
+    act(() => result.current.undo());
+    expect(result.current.range).toEqual(beforeDrag);
+    act(() => result.current.undo());
+    expect(result.current.layout).toBe('split');
+    expect(result.current.canUndo).toBe(false);
+  });
+
+  it('드래그 중에는 타임라인 창이 고정된다 — 눈금이 손 아래에서 미끄러지지 않게', () => {
+    const { result } = renderEditor();
+
+    act(() => result.current.beginGesture());
+    const frozen = result.current.view;
+    act(() => result.current.setRangeEdge('end', 4970));
+    expect(result.current.view).toEqual(frozen);
+
+    // 놓으면 새 구간을 따라 창이 다시 잡힌다
+    act(() => result.current.endGesture());
+    expect(result.current.view).not.toEqual(frozen);
+  });
+
+  it('되돌리면 거부 안내가 사라진다', () => {
+    const { result } = renderEditor();
+
+    act(() => result.current.setRangeEdge('end', result.current.range.startSeconds + 4));
+    expect(result.current.rangeRejection).not.toBeNull();
+
+    act(() => result.current.undo());
+    expect(result.current.rangeRejection).toBeNull();
+  });
+
   it('줌은 단계로 움직이고 표기가 따라온다', () => {
     const { result } = renderEditor();
 
@@ -181,5 +224,7 @@ describe('useClipEditorMockState', () => {
     act(() => result.current.zoomOut());
     act(() => result.current.zoomOut());
     expect(result.current.zoomLabel).toBe('50%');
+    act(() => result.current.zoomOut());
+    expect(result.current.zoomLabel).toBe('25%');
   });
 });

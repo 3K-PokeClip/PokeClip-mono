@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { IconButton, LinkButton } from '@/ui';
 import { Play, X } from 'lucide-react';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
@@ -27,7 +28,7 @@ export function ResumeEditBanner({
         <div className={styles.resumeTitle}>편집하던 클립이 있어요 — “{draft.title}”</div>
         <div className={styles.resumeMeta}>{draft.meta}</div>
       </div>
-      <LinkButton href="/clips/editor" variant="solid" size="sm">
+      <LinkButton as={Link} href="/clips/editor" variant="solid" size="sm">
         이어서 편집
       </LinkButton>
       <IconButton variant="ghost" size="sm" aria-label="배너 닫기" onClick={onDismiss}>

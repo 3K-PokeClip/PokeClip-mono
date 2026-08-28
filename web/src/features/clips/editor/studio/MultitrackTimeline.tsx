@@ -5,7 +5,6 @@ import { formatUptime } from '@/features/player/playerMath';
 import styles from './StudioScreen.module.css';
 import { TimelineTrackRow } from './TimelineTrackRow';
 import {
-  MAX_RANGE_SECONDS,
   MIN_RANGE_SECONDS,
   rulerTicks,
   secondsFromPointer,
@@ -48,6 +47,8 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
   const onHandlePointerDown = (edge: 'start' | 'end') => (event: PointerEvent<HTMLElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     draggingEdge.current = edge;
+    // 드래그 한 번을 실행취소 한 칸으로 묶고, 그 동안 타임라인 창을 붙잡는다
+    state.beginGesture();
     moveEdgeFromPointer(edge, event.clientX);
   };
 
@@ -58,6 +59,7 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
   };
 
   const onHandlePointerUp = () => {
+    if (draggingEdge.current !== null) state.endGesture();
     draggingEdge.current = null;
   };
 
@@ -165,8 +167,10 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
           <div
             className={styles.laneArea}
             ref={laneAreaRef}
+            // 기본(null)은 트랙 수에 맞춘다. 사용자가 정한 값은 height로 걸어야
+            // 내용보다 크게도 늘릴 수 있다 — maxHeight만으로는 줄이기만 된다.
             style={
-              state.timelineHeight === null ? undefined : { maxHeight: `${state.timelineHeight}px` }
+              state.timelineHeight === null ? undefined : { height: `${state.timelineHeight}px` }
             }
           >
             <div className={styles.lanes}>
@@ -184,25 +188,38 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
 
             <div className={styles.overlay} ref={overlayRef}>
               <div
-                // 거부될 때마다 key가 바뀌어 흔들림 애니메이션이 처음부터 다시 돈다
-                key={state.rangeRejection?.nonce ?? 'settled'}
-                className={`${styles.rangeBox} ${
-                  state.rangeRejection !== null ? styles.rangeBoxRejected : ''
-                }`}
+                className={styles.rangeBox}
                 style={{
                   left: `${startFraction * 100}%`,
                   width: `${(endFraction - startFraction) * 100}%`,
                 }}
               >
+                {/* 흔들림은 핸들을 품지 않는 겉껍질만 다시 마운트해 돌린다.
+                    핸들까지 리마운트하면 드래그 중 포인터 캡처가 끊기고
+                    키보드 포커스가 body로 떨어져 화살표가 재생헤드를 움직인다. */}
+                <span
+                  key={state.rangeRejection?.nonce ?? 'settled'}
+                  className={state.rangeRejection !== null ? styles.rangeBoxRejected : undefined}
+                  aria-hidden
+                />
                 {(['start', 'end'] as const).map((edge) => (
                   <button
                     key={edge}
                     type="button"
                     role="slider"
                     aria-label={edge === 'start' ? '구간 시작점' : '구간 끝점'}
-                    aria-valuemin={MIN_RANGE_SECONDS}
-                    aria-valuemax={MAX_RANGE_SECONDS}
-                    aria-valuenow={state.rangeLengthSeconds}
+                    // 이름·키 조작이 「경계 위치」를 뜻하므로 값도 위치로 읽어 준다.
+                    // 길이를 실으면 시작점에서 ArrowRight(증가)에 값이 줄어드는 모순이 생기고
+                    // 두 핸들이 늘 같은 숫자를 말한다.
+                    aria-valuemin={edge === 'start' ? 0 : state.range.startSeconds + MIN_RANGE_SECONDS}
+                    aria-valuemax={
+                      edge === 'start'
+                        ? state.range.endSeconds - MIN_RANGE_SECONDS
+                        : state.sourceDurationSeconds
+                    }
+                    aria-valuenow={
+                      edge === 'start' ? state.range.startSeconds : state.range.endSeconds
+                    }
                     aria-valuetext={`${edge === 'start' ? state.rangeStartLabel : state.rangeEndLabel} · 구간 ${state.rangeLengthLabel}`}
                     className={`${styles.rangeHandle} ${
                       edge === 'start' ? styles.rangeHandleStart : styles.rangeHandleEnd

@@ -171,6 +171,52 @@ describe('StudioScreen', () => {
     expect(tabs).toEqual(['구간', '자막', '오디오', 'BGM·효과', '이미지']);
   });
 
+  it('버튼을 누른 뒤에도 ⌘Z가 먹는다 — 포커스가 버튼에 남는 것이 정상 흐름이다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    await user.click(screen.getByRole('radio', { name: '9:16' }));
+    expect(screen.getByRole('radio', { name: '9:16' })).toBeChecked();
+
+    // 클릭한 버튼에 포커스가 남은 채로 되돌린다
+    await user.keyboard('{Meta>}z{/Meta}');
+    expect(screen.getByRole('radio', { name: '상하분할' })).toBeChecked();
+  });
+
+  it('버튼 위에서 Space는 여전히 버튼을 누른다 — 재생을 가로채지 않는다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    const oneToOne = screen.getByRole('radio', { name: '1:1' });
+    oneToOne.focus();
+    await user.keyboard(' ');
+
+    expect(oneToOne).toBeChecked();
+    expect(screen.getByRole('button', { name: '재생' })).toBeInTheDocument();
+  });
+
+  it('레이아웃 묶음을 화살표로 옮길 수 있다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    screen.getByRole('radio', { name: '상하분할' }).focus();
+    await user.keyboard('{ArrowLeft}');
+
+    expect(screen.getByRole('radio', { name: '1:1' })).toBeChecked();
+  });
+
+  it('구간 핸들이 각자 자기 경계 위치를 읽어 준다', () => {
+    renderStudio();
+
+    const start = screen.getByRole('slider', { name: '구간 시작점' });
+    const end = screen.getByRole('slider', { name: '구간 끝점' });
+    // 둘이 같은 값을 말하면 스크린리더가 두 핸들을 구분하지 못한다
+    expect(start.getAttribute('aria-valuenow')).not.toBe(end.getAttribute('aria-valuenow'));
+    expect(Number(end.getAttribute('aria-valuenow'))).toBeGreaterThan(
+      Number(start.getAttribute('aria-valuenow')),
+    );
+  });
+
   it('접근성 위반이 없다', async () => {
     const { container } = renderStudio();
     await act(async () => {

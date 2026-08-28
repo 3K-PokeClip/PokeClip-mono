@@ -17,8 +17,12 @@ export const MAX_RANGE_LABEL = '3:00';
 /** 100% 배율에서 타임라인에 보이는 폭 — 시안 눈금자(1:21:40~1:22:55) */
 export const BASE_VIEW_SECONDS = 75;
 
-/** 줌 단계 — 시안의 `100%` 표기가 기본값이다 */
-export const ZOOM_LEVELS = [50, 100, 200, 400] as const;
+/**
+ * 줌 단계 — 시안의 `100%`가 기본값이다.
+ * 25%를 두는 이유: 창이 최대 구간(180초)보다 좁으면 포인터 환산이 창에 갇혀
+ * 마우스로는 3:00을 만들 수 없다. 75초 기준 25%에서 창이 300초가 되어 그 문이 열린다.
+ */
+export const ZOOM_LEVELS = [25, 50, 100, 200, 400] as const;
 
 /** 타임라인 높이 드래그 범위 — 시안 기본값과 접기 직전 최소 높이 */
 export const MIN_TIMELINE_HEIGHT = 120;
@@ -95,24 +99,40 @@ export function rangeRejectionMessage(reason: RangeRejectionReason): string {
     : `구간은 최소 ${MIN_RANGE_SECONDS}초부터예요 — 여기서 더 줄어들지 않아요.`;
 }
 
-/** 구간 길이 표기 — `0:12.4` (상한이 3분이라 시간 자리는 없다) */
-export function formatDurationTenths(seconds: number): string {
-  const s = Math.max(0, seconds);
-  const m = Math.floor(s / 60);
-  const rest = s - m * 60;
-  // 내림이다 — 12.49초를 12.5로 올리면 표기가 실제보다 길어 보인다
-  const tenths = Math.floor(roundMs(rest) * 10) / 10;
-  return `${m}:${pad2(Math.floor(tenths))}.${Math.round((tenths % 1) * 10)}`;
+/**
+ * 길이를 십분의 일 초 정수로 — 표기 셋(구간·게이지·트랜스포트)이 모두 이 값에서 나온다.
+ * 내림이다: 12.49초를 12.5로 올리면 표기가 실제보다 길어 보인다.
+ */
+function lengthTenths(seconds: number): number {
+  return Math.max(0, Math.floor(roundMs(seconds) * 10));
 }
 
-/** 절대 시각 표기 — `1:22:08.4` (시안 시작·끝 타임코드 박스) */
+/** 구간 길이 표기 — `0:12.4` (상한이 3분이라 시간 자리는 없다) */
+export function formatDurationTenths(seconds: number): string {
+  const tenths = lengthTenths(seconds);
+  const whole = Math.floor(tenths / 10);
+  return `${Math.floor(whole / 60)}:${pad2(whole % 60)}.${tenths % 10}`;
+}
+
+/** 트랜스포트의 구간 길이 표기 — `12.4초`. 게이지와 같은 값에서 나와야 어긋나지 않는다 */
+export function formatLengthLabel(seconds: number): string {
+  const tenths = lengthTenths(seconds);
+  return `${Math.floor(tenths / 10)}.${tenths % 10}초`;
+}
+
+/**
+ * 절대 시각 표기 — `1:22:08.4` (시안 시작·끝 타임코드 박스).
+ *
+ * 십분의 일 초 정수 하나로 반올림한 뒤 모든 자리를 거기서 파생시킨다.
+ * 초와 소수를 따로 반올림하면 재생 tick이 만든 4934.999…에서 초는 14로 남고
+ * 소수만 10으로 올라가 `1:22:14.10` 같은 없는 시각이 찍힌다.
+ */
 export function formatTimecodeTenths(seconds: number): string {
-  const s = Math.max(0, seconds);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const secWhole = Math.floor(s % 60);
-  const tenth = Math.floor(roundMs(s % 1) * 10);
-  return `${h}:${pad2(m)}:${pad2(secWhole)}.${tenth}`;
+  const tenths = Math.max(0, Math.round(seconds * 10));
+  const whole = Math.floor(tenths / 10);
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor((whole % 3600) / 60);
+  return `${h}:${pad2(m)}:${pad2(whole % 60)}.${tenths % 10}`;
 }
 
 /** 길이 게이지 표기 — `0:12.4 / 최대 3:00` */

@@ -14,8 +14,18 @@ import { useClipEditorMockState, type ClipEditorOptions } from '../useClipEditor
 // 시안 1d-a 클립 편집기(스튜디오형). 전폭 자체 헤더를 가지므로 ScreenContainer를 쓰지 않는다
 // (라이브 대시보드 선례). 데이터·동작은 전부 useClipEditorMockState 뒤에 있다.
 
-/** 전역 단축키를 흘려보낼 대상 — 여기 포커스가 있으면 그 요소의 키 조작이 우선이다 */
-const INTERACTIVE = 'input, textarea, select, button, [role="slider"], [contenteditable]';
+/**
+ * 글자를 받는 곳 — 어떤 편집 단축키도 여기서는 비켜선다.
+ * (⌘Z는 브라우저·OS의 실행취소가 먼저다)
+ */
+const TEXT_ENTRY = 'input, textarea, select, [contenteditable]';
+
+/**
+ * 키에 자기 동작이 있는 위젯 — Space·화살표·I/O만 양보한다.
+ * 버튼을 통째로 막으면 안 된다: 클릭하면 포커스가 버튼에 남아,
+ * 범례가 광고하는 ⌘Z가 그 뒤로 영영 먹지 않는다.
+ */
+const KEY_OWNING = 'button, [role="slider"]';
 
 export function StudioScreen(options: ClipEditorOptions = {}) {
   const state = useClipEditorMockState(options);
@@ -23,11 +33,15 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
 
   useEffect(() => {
     function onKeyDown(event: globalThis.KeyboardEvent) {
-      // 버튼·슬라이더 위에서는 그 요소의 키가 먼저다 — Space가 버튼을 누르는 대신
-      // 재생을 토글해버리면 키보드 사용자가 아무 버튼도 못 누른다 (GlassPlayer 선례).
-      if (event.target instanceof Element && event.target.closest(INTERACTIVE) !== null) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest(TEXT_ENTRY) != null) return;
       const intent = editorIntentForKey(event);
       if (intent === null) return;
+      // Space가 버튼을 누르는 대신 재생을 토글하면 키보드 사용자가 아무 버튼도 못 누른다.
+      // 되돌리기만은 위젯 위에서도 통과시킨다 — 버튼에 포커스가 남는 것이 정상 흐름이라
+      // 여기서 막으면 ⌘Z가 사실상 죽는다.
+      const undoLike = intent.kind === 'undo' || intent.kind === 'redo';
+      if (!undoLike && target?.closest(KEY_OWNING) != null) return;
       event.preventDefault();
       switch (intent.kind) {
         case 'togglePlay':

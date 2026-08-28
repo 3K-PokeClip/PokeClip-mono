@@ -32,6 +32,15 @@ export function pushHistory<T>(history: History<T>, next: T, limit = HISTORY_LIM
   };
 }
 
+/**
+ * 현재 상태만 갈아끼운다 — 새 항목을 쌓지 않는다.
+ * 드래그처럼 이어지는 제스처의 중간 값을 담는 자리다. 매 포인터 이동마다 쌓으면
+ * 제스처 하나가 상한(HISTORY_LIMIT)을 넘겨 그 이전 편집을 통째로 밀어낸다.
+ */
+export function replacePresent<T>(history: History<T>, present: T): History<T> {
+  return { past: history.past, present, future: history.future };
+}
+
 export function canUndo<T>(history: History<T>): boolean {
   return history.past.length > 0;
 }

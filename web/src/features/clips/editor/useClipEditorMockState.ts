@@ -16,10 +16,12 @@ import {
   createHistory,
   pushHistory,
   redoHistory,
+  replacePresent,
   undoHistory,
   type History,
 } from './editorHistory';
 import {
+  formatLengthLabel,
   formatRangeGauge,
   formatTimecodeTenths,
   rangeGaugeFraction,
@@ -295,6 +297,9 @@ export interface ClipEditorMockState {
   rangeGaugeLabel: string;
   rangeGaugeFraction: number;
   setRangeEdge: (edge: 'start' | 'end', seconds: number) => void;
+  /** 드래그 시작·끝 — 그 사이의 변경은 실행취소 한 칸으로 묶이고 타임라인 창이 고정된다 */
+  beginGesture: () => void;
+  endGesture: () => void;
   markIn: () => void;
   markOut: () => void;
   rangeRejection: RangeRejection | null;
@@ -419,13 +424,37 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     [],
   );
 
+  // 드래그 한 번을 실행취소 한 칸으로 묶는다. 첫 변경만 쌓고 나머지는 현재 상태를 갈아끼운다 —
+  // 포인터가 움직일 때마다 쌓으면 제스처 하나가 상한을 넘겨 이전 편집을 밀어낸다.
+  const gesturing = useRef(false);
+  const gestureOpened = useRef(false);
+
+  const beginGesture = useCallback(() => {
+    gesturing.current = true;
+    gestureOpened.current = false;
+    setFrozenView(liveViewRef.current);
+  }, []);
+
+  const endGesture = useCallback(() => {
+    gesturing.current = false;
+    gestureOpened.current = false;
+    setFrozenView(null);
+  }, []);
+
   const commit = useCallback((update: (recipe: EditorRecipe) => EditorRecipe) => {
     setHistory((current) => {
       const next = update(current.present);
       // 같은 값을 다시 고르면 히스토리를 늘리지 않는다 — ↺가 아무 일도 안 하는 것처럼 보인다
-      return next === current.present ? current : pushHistory(current, next);
+      if (next === current.present) return current;
+      if (gesturing.current && gestureOpened.current) return replacePresent(current, next);
+      if (gesturing.current) gestureOpened.current = true;
+      return pushHistory(current, next);
     });
   }, []);
+
+  // 드래그 중에는 타임라인 창을 붙잡는다. 창이 구간 중심을 따라 움직이면 포인터→초 환산
+  // 기준이 이벤트마다 옮겨가, 눈금이 손 아래에서 미끄러지고 늘리기가 창 폭에서 멎는다.
+  const [frozenView, setFrozenView] = useState<TimelineView | null>(null);
 
   const clampPlayhead = useCallback(
     (seconds: number) => Math.min(MOCK_SOURCE.durationSeconds, Math.max(0, seconds)),
@@ -467,14 +496,12 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     [commit, recipe.range],
   );
 
-  const markIn = useCallback(
-    () => setRangeEdge('start', playheadSeconds),
-    [setRangeEdge, playheadSeconds],
-  );
-  const markOut = useCallback(
-    () => setRangeEdge('end', playheadSeconds),
-    [setRangeEdge, playheadSeconds],
-  );
+  // 플레이헤드를 ref로 읽는다 — 의존성에 걸면 재생 중 100ms마다 콜백 신원이 바뀌어
+  // 전역 키 리스너가 해제·재등록을 반복한다.
+  const playheadRef = useRef(playheadSeconds);
+  playheadRef.current = playheadSeconds;
+  const markIn = useCallback(() => setRangeEdge('start', playheadRef.current), [setRangeEdge]);
+  const markOut = useCallback(() => setRangeEdge('end', playheadRef.current), [setRangeEdge]);
 
   const generateSubtitles = useCallback(() => {
     setSubtitleStatus('generating');
@@ -502,7 +529,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     [recipe.trackVolumes, recipe.trackMuted],
   );
 
-  const view = useMemo(
+  const liveView = useMemo(
     () =>
       viewWindow(
         (recipe.range.startSeconds + recipe.range.endSeconds) / 2,
@@ -511,6 +538,10 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       ),
     [recipe.range.startSeconds, recipe.range.endSeconds, zoom],
   );
+  // 제스처가 시작될 때의 창을 그대로 붙잡아 둔다
+  const liveViewRef = useRef(liveView);
+  liveViewRef.current = liveView;
+  const view = frozenView ?? liveView;
 
   const length = rangeLengthSeconds(recipe.range);
   const titlesLocked = subtitleStatus !== 'ready';
@@ -521,8 +552,15 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     autosaveLabel: MOCK_SOURCE.autosaveLabel,
     canUndo: historyCanUndo(history),
     canRedo: historyCanRedo(history),
-    undo: useCallback(() => setHistory(undoHistory), []),
-    redo: useCallback(() => setHistory(redoHistory), []),
+    // 되돌리면 구간이 다른 값이 되므로 직전 거부 안내는 더 이상 그 구간의 이야기가 아니다
+    undo: useCallback(() => {
+      setRangeRejection(null);
+      setHistory(undoHistory);
+    }, []),
+    redo: useCallback(() => {
+      setRangeRejection(null);
+      setHistory(redoHistory);
+    }, []),
     saveTemplate: useCallback(
       () => toast({ tone: 'success', title: '템플릿으로 저장했어요' }),
       [toast],
@@ -560,10 +598,12 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     rangeLengthSeconds: length,
     rangeStartLabel: formatTimecodeTenths(recipe.range.startSeconds),
     rangeEndLabel: formatTimecodeTenths(recipe.range.endSeconds),
-    rangeLengthLabel: `${length.toFixed(1)}초`,
+    rangeLengthLabel: formatLengthLabel(length),
     rangeGaugeLabel: formatRangeGauge(length),
     rangeGaugeFraction: rangeGaugeFraction(length),
     setRangeEdge,
+    beginGesture,
+    endGesture,
     markIn,
     markOut,
     rangeRejection,
