@@ -1,20 +1,25 @@
-import { act } from 'react';
+import { act, createRef, type ComponentProps } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
-import { GlassPlayer } from '@/features/player/GlassPlayer';
+import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import type { PlayerSimulationOptions } from '@/features/player/usePlayerSimulation';
 
-function renderPlayer(simulationOptions?: PlayerSimulationOptions) {
+type PanelProps = Pick<
+  ComponentProps<typeof GlassPlayer>,
+  'chatPanelOpen' | 'onToggleChatPanel' | 'controllerRef'
+>;
+
+function renderPlayer(simulationOptions?: PlayerSimulationOptions, panelProps?: PanelProps) {
   return render(
     <ToastProvider>
       <GlassPlayer
         channelName="게임하는너구리"
-        title="새벽 랭크 올리기"
-        viewersNote="시청자 1,842"
+        viewersNote="1,842명 시청 중"
         embed
         simulationOptions={simulationOptions}
+        {...panelProps}
       />
     </ToastProvider>,
   );
@@ -208,6 +213,61 @@ describe('GlassPlayer', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('바깥 채팅 패널 콜백이 없으면 채팅 열기 버튼도 없다', () => {
+    // 플레이어를 단독으로 쓰는 화면(VOD 등)에 없는 패널의 버튼이 생기면 안 된다
+    renderPlayer();
+    expect(screen.queryByRole('button', { name: '채팅 열기' })).not.toBeInTheDocument();
+  });
+
+  it('채팅 패널이 열려 있으면 여는 버튼은 뜨지 않는다', () => {
+    renderPlayer(undefined, { chatPanelOpen: true, onToggleChatPanel: vi.fn() });
+    expect(screen.queryByRole('button', { name: '채팅 열기' })).not.toBeInTheDocument();
+  });
+
+  it('채팅 패널이 접혀 있으면 상단에 여는 버튼이 서고, 클릭이 콜백으로 간다', async () => {
+    const user = userEvent.setup();
+    const onToggleChatPanel = vi.fn();
+    renderPlayer(undefined, { chatPanelOpen: false, onToggleChatPanel });
+
+    await user.click(screen.getByRole('button', { name: '채팅 열기' }));
+    expect(onToggleChatPanel).toHaveBeenCalledOnce();
+  });
+
+  it('방송 경과 시간을 플레이어에 두지 않는다 — 영상 아래 방송 정보 바가 말한다', () => {
+    renderPlayer({ initialUptimeSeconds: 5043 });
+    expect(screen.queryByText('1:24:03')).not.toBeInTheDocument();
+  });
+
+  it('상단 필은 채널명과 시청자 수만 말한다 — 시안의 라이브 줄이다', () => {
+    renderPlayer();
+    expect(screen.getByText('게임하는너구리')).toBeInTheDocument();
+    expect(screen.getByText('1,842명 시청 중')).toBeInTheDocument();
+  });
+
+  it('컨트롤러의 시점 이동이 방송 경과 시각을 시차로 환산한다', () => {
+    // 카드가 든 "1:24:03"은 고정값이라 절대 시각으로 받는다 — 시차로 건네면 흐르는 동안 어긋난다
+    const controllerRef = createRef<GlassPlayerController>();
+    renderPlayer({ initialUptimeSeconds: 5043 }, { controllerRef });
+
+    act(() => controllerRef.current?.seekToUptime(4960));
+    expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+      'aria-valuenow',
+      '-83',
+    );
+  });
+
+  it('되감기 창 밖 시각은 창 끝으로 클램프된다', () => {
+    // 만료 임박 카드(1시간 밖)를 눌러도 시크바가 범위를 벗어나면 안 된다
+    const controllerRef = createRef<GlassPlayerController>();
+    renderPlayer({ initialUptimeSeconds: 5043 }, { controllerRef });
+
+    act(() => controllerRef.current?.seekToUptime(0));
+    expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+      'aria-valuenow',
+      '-3600',
+    );
   });
 
   it('설정 팝오버가 열려 있는 동안엔 자동 숨김이 유보된다', () => {
