@@ -1,5 +1,6 @@
-import { Pause, Play, RotateCcw, RotateCw } from 'lucide-react';
+import { Pause, Play } from 'lucide-react';
 import { IconButton, Switch } from '@/ui';
+import { SeekIcon } from './SeekIcon';
 import { Segmented } from './Segmented';
 import styles from './editorShared.module.css';
 import type { ClipEditorMockState } from './useClipEditorMockState';
@@ -17,10 +18,10 @@ export function TransportBar({
   return (
     <div className={styles.transport}>
       <IconButton variant="ghost" size="sm" aria-label="5초 뒤로" onClick={() => state.seekBy(-5)}>
-        <RotateCcw size={17} aria-hidden />
+        <SeekIcon direction="back" seconds={5} />
       </IconButton>
       <IconButton variant="ghost" size="sm" aria-label="1초 뒤로" onClick={() => state.seekBy(-1)}>
-        <RotateCcw size={15} aria-hidden />
+        <SeekIcon direction="back" seconds={1} />
       </IconButton>
       <IconButton
         variant="ghost"
@@ -31,10 +32,10 @@ export function TransportBar({
         {state.playing ? <Pause size={22} aria-hidden /> : <Play size={22} aria-hidden />}
       </IconButton>
       <IconButton variant="ghost" size="sm" aria-label="1초 앞으로" onClick={() => state.seekBy(1)}>
-        <RotateCw size={15} aria-hidden />
+        <SeekIcon direction="forward" seconds={1} />
       </IconButton>
       <IconButton variant="ghost" size="sm" aria-label="5초 앞으로" onClick={() => state.seekBy(5)}>
-        <RotateCw size={17} aria-hidden />
+        <SeekIcon direction="forward" seconds={5} />
       </IconButton>
       <span className={styles.transportTime}>{state.playheadLabel}</span>
       {showRangeLength ? (

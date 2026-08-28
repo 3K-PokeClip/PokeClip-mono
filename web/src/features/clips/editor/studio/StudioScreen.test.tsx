@@ -93,6 +93,16 @@ describe('StudioScreen', () => {
     expect(startHandle).toHaveAttribute('aria-valuetext', expect.stringContaining('5.4초'));
   });
 
+  it('되감기·감기 버튼이 아이콘 안의 초로 갈린다 — 방향만으로는 구분되지 않는다', () => {
+    renderStudio();
+
+    // 시안 1d는 원형 화살표 안에 5·1을 적어 네 버튼을 가른다
+    expect(screen.getByRole('button', { name: '5초 뒤로' })).toHaveTextContent('5');
+    expect(screen.getByRole('button', { name: '1초 뒤로' })).toHaveTextContent('1');
+    expect(screen.getByRole('button', { name: '1초 앞으로' })).toHaveTextContent('1');
+    expect(screen.getByRole('button', { name: '5초 앞으로' })).toHaveTextContent('5');
+  });
+
   it('단축키로 재생을 토글하고 되돌린다', async () => {
     const user = userEvent.setup();
     renderStudio();
