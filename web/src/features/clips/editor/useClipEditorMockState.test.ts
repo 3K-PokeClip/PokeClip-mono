@@ -157,6 +157,21 @@ describe('useClipEditorMockState', () => {
     expect(result.current.playheadSeconds).toBeCloseTo(result.current.range.startSeconds, 5);
   });
 
+  it('패널 위치를 옮기면 브라우저에 남는다 — 다음 방문에도 그 자리다', () => {
+    window.localStorage.removeItem('pc-editor-panel-side');
+    const first = renderEditor();
+
+    expect(first.result.current.panelSide).toBe('left');
+    act(() => first.result.current.togglePanelSide());
+    expect(first.result.current.panelSide).toBe('right');
+    expect(window.localStorage.getItem('pc-editor-panel-side')).toBe('right');
+
+    // 새로 마운트해도 저장된 자리에서 시작한다
+    const second = renderEditor();
+    expect(second.result.current.panelSide).toBe('right');
+    window.localStorage.removeItem('pc-editor-panel-side');
+  });
+
   it('줌은 단계로 움직이고 표기가 따라온다', () => {
     const { result } = renderEditor();
 

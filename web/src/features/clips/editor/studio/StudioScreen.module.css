@@ -18,6 +18,19 @@
   display: flex;
 }
 
+/* 레일 + 패널을 오른쪽으로. DOM 순서는 그대로 두고 방향만 뒤집어
+   미리보기·타임라인은 제자리에 남는다 (시안: 미리보기·타임라인은 그대로). */
+.body[data-panel-side='right'] {
+  flex-direction: row-reverse;
+}
+
+/* 경계선도 따라 넘어간다 — 안 넘기면 화면 바깥쪽에 선이 남고 패널 사이가 빈다 */
+.body[data-panel-side='right'] .toolRail,
+.body[data-panel-side='right'] .toolPanel {
+  border-right: 0;
+  border-left: 1px solid var(--pc-color-border-subtle);
+}
+
 /* ---------- 도구 레일 ---------- */
 
 .toolRail {
@@ -30,6 +43,29 @@
   flex-direction: column;
   align-items: center;
   gap: calc(4 * var(--pc-u));
+}
+
+.toolList {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+}
+
+/* 시안: 패널 위치 버튼은 레일 맨 아래에 가는 선을 두고 떨어져 앉는다 */
+.railFooter {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  padding-top: calc(8 * var(--pc-u));
+}
+
+.railDivider {
+  width: calc(30 * var(--pc-u));
+  height: 1px;
+  background: var(--pc-color-border-subtle);
 }
 
 .toolButton {

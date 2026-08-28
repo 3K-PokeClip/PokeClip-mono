@@ -144,6 +144,33 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('radio', { name: '9:16' })).toBeChecked();
   });
 
+  it('패널 위치 버튼이 레일과 패널을 좌우로 옮긴다 — 미리보기·타임라인은 그대로', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    const body = screen.getByRole('main');
+    expect(body).toHaveAttribute('data-panel-side', 'left');
+
+    const toggle = screen.getByRole('button', { name: '패널 위치 · 오른쪽으로 옮기기' });
+    await user.click(toggle);
+
+    expect(body).toHaveAttribute('data-panel-side', 'right');
+    // 다시 누르면 돌아갈 수 있게 안내가 뒤집힌다
+    expect(
+      screen.getByRole('button', { name: '패널 위치 · 왼쪽으로 옮기기' }),
+    ).toBeInTheDocument();
+    // 옮겨도 도구·타임라인은 그대로 선다
+    expect(screen.getByRole('region', { name: '자막' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '타임라인' })).toBeInTheDocument();
+  });
+
+  it('패널 위치는 도구 탭 묶음에 끼지 않는다', () => {
+    renderStudio();
+
+    const tabs = screen.getAllByRole('tab').map((t) => t.textContent);
+    expect(tabs).toEqual(['구간', '자막', '오디오', 'BGM·효과', '이미지']);
+  });
+
   it('접근성 위반이 없다', async () => {
     const { container } = renderStudio();
     await act(async () => {

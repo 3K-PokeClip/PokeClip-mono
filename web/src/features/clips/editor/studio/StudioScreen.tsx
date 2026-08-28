@@ -57,11 +57,14 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
   return (
     <div className={styles.screen}>
       <EditorHeader state={state} showTemplateSave />
-      <main className={styles.body}>
+      <main className={styles.body} data-panel-side={state.panelSide}>
         <ToolRail
           tools={state.toolOptions}
           activeTool={state.activeTool}
           onSelect={state.setActiveTool}
+          panelSide={state.panelSide}
+          panelSideTip={state.panelSideTip}
+          onTogglePanelSide={state.togglePanelSide}
         />
         <ToolPanel state={state} />
         <div className={styles.previewColumn}>
