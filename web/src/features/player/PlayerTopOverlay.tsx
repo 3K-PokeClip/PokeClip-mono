@@ -4,7 +4,7 @@ import styles from './GlassPlayer.module.css';
 import { formatUptime } from './playerMath';
 
 // 플레이어 상단 오버레이 — 채널 필 + 방송 경과 필 (시안 영상 플레이어 글래스).
-// 뒤로가기는 1b에선 화면 헤더(LiveHeader)가 담당하므로 여기엔 없다.
+// 뒤로가기는 1b에서 페이지 헤더가 사라진 뒤 사이드 메뉴가 담당하므로 여기엔 없다.
 export function PlayerTopOverlay({
   channelName,
   title,

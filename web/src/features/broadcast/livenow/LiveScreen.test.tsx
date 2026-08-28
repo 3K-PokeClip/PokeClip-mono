@@ -1,10 +1,11 @@
 import { act } from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
+import { CARD_CREATE_MS } from '@/features/broadcast/livenow/useManualMarking';
 
 // useMediaSource가 쓰는 useSearchParams 대체 — 아래 env 고정과 함께 소스를 null로 만들어
 // 플레이어가 시뮬레이션 경로로 결정적으로 돌게 한다.
@@ -26,31 +27,47 @@ function renderLive() {
   );
 }
 
-describe('LiveScreen', () => {
-  it('헤더에 방송 제목·LIVE 배지·시청자 수를 렌더한다', () => {
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('LiveScreen — 방송 정보 바', () => {
+  it('영상 아래 줄에 제목·태그·시청자·경과 시간을 세운다', () => {
     renderLive();
 
     expect(
       screen.getByRole('heading', { name: '새벽 랭크 올리기 — 다이아 승급전 가보자' }),
     ).toBeInTheDocument();
-    // 헤더 필 + 플레이어 오버레이 — LIVE 표기는 두 곳이다
-    expect(screen.getAllByText('LIVE').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('시청자 1,842')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '홈으로' })).toHaveAttribute('href', '/home');
-    // 자체 헤더를 갖는 화면도 본문 랜드마크는 있어야 한다
+    expect(screen.getByText('리그 오브 레전드')).toBeInTheDocument();
+    expect(screen.getByText('다이아승급')).toBeInTheDocument();
+    expect(screen.getByText('1,842명')).toBeInTheDocument();
+    expect(screen.getByText('스트리밍 중')).toBeInTheDocument();
     expect(screen.getByRole('main')).toBeInTheDocument();
   });
 
-  it('하이라이트 6행을 상태 배지와 함께 렌더한다', () => {
+  it('페이지 헤더가 없다 — 시안 1b는 콘텐츠부터 시작한다', () => {
+    renderLive();
+    expect(screen.queryByRole('link', { name: '홈으로' })).not.toBeInTheDocument();
+  });
+});
+
+describe('LiveScreen — 하이라이트 카드', () => {
+  it('상태 배지를 계약 status에 맞춰 그린다', () => {
     renderLive();
 
     expect(screen.getByText('97점')).toBeInTheDocument();
-    // '수동'은 필터 칩과 상태 배지 양쪽에 있다
-    expect(screen.getAllByText('수동').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('편집 중 · 박편집')).toBeInTheDocument();
     expect(screen.getByText('클립 완료')).toBeInTheDocument();
     expect(screen.getByText('미처리')).toBeInTheDocument();
     expect(screen.getByText('만료')).toBeInTheDocument();
+  });
+
+  it('필터 칩이 실제 카드 수를 센다 — 시안 표기와 같은 전체 8 · 자동 6 · 수동 2', () => {
+    renderLive();
+
+    expect(screen.getByRole('button', { name: '전체 8' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: '자동 6' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
   });
 
   it('"자동" 필터를 누르면 수동 마킹 카드가 사라진다', async () => {
@@ -58,11 +75,88 @@ describe('LiveScreen', () => {
     renderLive();
 
     expect(screen.getByText('시청자 참여 미션 성공')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '자동' }));
+    await user.click(screen.getByRole('button', { name: '자동 6' }));
     expect(screen.queryByText('시청자 참여 미션 성공')).not.toBeInTheDocument();
     expect(screen.getByText('승급전 마지막 한타 역전')).toBeInTheDocument();
   });
 
+  it('카드를 누르면 그 시점으로 영상이 이동한다', async () => {
+    const user = userEvent.setup();
+    renderLive();
+
+    // 0:47:22 = 2842초, 방송 경과 5043초 → 시차 2201초
+    await user.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
+      'aria-valuenow',
+      '-2201',
+    );
+  });
+});
+
+describe('LiveScreen — 수동 마킹', () => {
+  // 3초를 실제로 기다리면 스위트가 느려진다. userEvent는 fake timer와 엉키므로 fireEvent를 쓴다
+  // (GlassPlayer 테스트의 자동 숨김 케이스와 같은 이유).
+
+  it('버튼을 누르면 피드백과 만드는 중 자리가 서고, 잠시 뒤 카드가 된다', () => {
+    vi.useFakeTimers();
+    renderLive();
+
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    expect(screen.getByText('1:24:03 마킹됨 · 카드 생성 중')).toBeInTheDocument();
+    expect(screen.getByText('카드 만드는 중…')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(CARD_CREATE_MS);
+    });
+
+    expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '1:24:03 수동 마킹' })).toBeInTheDocument();
+    // 만들어진 카드가 필터 개수에도 바로 반영된다
+    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
+  });
+
+  it('F8을 누르면 어디에 포커스가 있든 같은 흐름이 돈다', () => {
+    vi.useFakeTimers();
+    renderLive();
+
+    fireEvent.keyDown(document, { key: 'F8' });
+    expect(screen.getByText('카드 만드는 중…')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(CARD_CREATE_MS);
+    });
+    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+  });
+
+  it('만드는 중에 또 눌러도 카드는 하나만 생긴다', () => {
+    vi.useFakeTimers();
+    renderLive();
+
+    fireEvent.keyDown(document, { key: 'F8' });
+    fireEvent.keyDown(document, { key: 'F8' });
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+
+    act(() => {
+      vi.advanceTimersByTime(CARD_CREATE_MS);
+    });
+    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+  });
+
+  it('자동반복과 입력 중인 곳에서 누른 F8은 무시한다', () => {
+    renderLive();
+
+    // 누르고 있으면 초당 수십 장이 생긴다
+    fireEvent.keyDown(document, { key: 'F8', repeat: true });
+    expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
+
+    // 볼륨 슬라이더처럼 키에 자기 동작이 있는 위젯 위에서도 가로채지 않는다
+    fireEvent.keyDown(screen.getByRole('slider', { name: '볼륨' }), { key: 'F8' });
+    expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
+  });
+});
+
+describe('LiveScreen — 접근성', () => {
   it('채팅 수집 경고 배너를 보여준다', () => {
     renderLive();
     expect(screen.getByText(/채팅 수집이 잠시 끊겼어요/)).toBeInTheDocument();
