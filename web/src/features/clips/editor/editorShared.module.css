@@ -270,10 +270,14 @@
   outline-offset: -2px;
 }
 
+.segmented[data-size='sm'] {
+  border-radius: calc(8 * var(--pc-u));
+}
+
+/* 라운딩은 컨테이너에만 준다 — 칸마다 주면 선택된 칸이 홀로 뜬 알약처럼 보인다 */
 .segmented[data-size='sm'] .segment {
   padding: calc(3 * var(--pc-u)) calc(9 * var(--pc-u));
   font-size: calc(10.5 * var(--pc-u));
-  border-radius: calc(8 * var(--pc-u));
 }
 
 /* 배속은 액센트 채움 대신 은은한 틴트 — 시안 1d */
@@ -313,6 +317,16 @@
   display: flex;
   align-items: center;
   gap: calc(7 * var(--pc-u));
+}
+
+/* 시안은 라벨이 스위치 왼쪽에 온다. Switch가 <label>로 둘을 감싸고 있어
+   순서만 뒤집으면 글자를 눌러도 토글되는 성질이 그대로 남는다.
+   data-size로 특이도를 올려 DS의 .root 글꼴·색을 확실히 덮는다. */
+.loopSwitch[data-size='sm'] {
+  flex-direction: row-reverse;
+  gap: calc(7 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
 }
 
 .transportDivider {

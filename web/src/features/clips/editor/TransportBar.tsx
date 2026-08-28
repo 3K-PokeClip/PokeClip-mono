@@ -53,6 +53,7 @@ export function TransportBar({
         <span className={styles.transportDivider} aria-hidden />
         <Switch
           size="sm"
+          className={styles.loopSwitch}
           label="구간 반복"
           checked={state.loop}
           onChange={state.toggleLoop}
