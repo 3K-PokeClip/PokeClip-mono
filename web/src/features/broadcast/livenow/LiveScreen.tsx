@@ -42,8 +42,7 @@ function LivePlayer({
   return (
     <GlassPlayer
       channelName={stream.channelName}
-      title={stream.title}
-      viewersNote={`시청자 ${stream.viewers}`}
+      viewersNote={`${stream.viewers}명 시청 중`}
       src={src}
       embed
       simulationOptions={{ initialUptimeSeconds: stream.uptimeSeconds }}

@@ -16,8 +16,7 @@ function renderPlayer(simulationOptions?: PlayerSimulationOptions, panelProps?: 
     <ToastProvider>
       <GlassPlayer
         channelName="게임하는너구리"
-        title="새벽 랭크 올리기"
-        viewersNote="시청자 1,842"
+        viewersNote="1,842명 시청 중"
         embed
         simulationOptions={simulationOptions}
         {...panelProps}
@@ -239,6 +238,12 @@ describe('GlassPlayer', () => {
   it('방송 경과 시간을 플레이어에 두지 않는다 — 영상 아래 방송 정보 바가 말한다', () => {
     renderPlayer({ initialUptimeSeconds: 5043 });
     expect(screen.queryByText('1:24:03')).not.toBeInTheDocument();
+  });
+
+  it('상단 필은 채널명과 시청자 수만 말한다 — 시안의 라이브 줄이다', () => {
+    renderPlayer();
+    expect(screen.getByText('게임하는너구리')).toBeInTheDocument();
+    expect(screen.getByText('1,842명 시청 중')).toBeInTheDocument();
   });
 
   it('컨트롤러의 시점 이동이 방송 경과 시각을 시차로 환산한다', () => {

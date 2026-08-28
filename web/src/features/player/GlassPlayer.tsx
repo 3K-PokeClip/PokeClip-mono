@@ -38,7 +38,7 @@ export interface GlassPlayerController {
 
 export interface GlassPlayerProps {
   channelName: string;
-  title: string;
+  /** 상단 필의 아래 줄 — 라이브는 「1,842명 시청 중」 (시안은 여기에 제목을 두지 않는다) */
   viewersNote: string;
   /** HLS 재생 소스(m3u8) — 없으면 목업 시뮬레이션으로 동작한다 */
   src?: string | null;
@@ -89,7 +89,6 @@ interface GlassPlayerBodyProps extends GlassPlayerProps {
 
 function GlassPlayerBody({
   channelName,
-  title,
   viewersNote,
   embed = false,
   chatPanelOpen,
@@ -219,7 +218,6 @@ function GlassPlayerBody({
       </div>
       <PlayerTopOverlay
         channelName={channelName}
-        title={title}
         viewersNote={viewersNote}
         chatPanelOpen={chatPanelOpen}
         onToggleChatPanel={onToggleChatPanel}
