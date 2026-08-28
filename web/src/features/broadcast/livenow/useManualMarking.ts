@@ -41,11 +41,12 @@ function createManualCard(sequence: number, timestamp: string): LiveHighlight {
 }
 
 /**
- * @param timestamp 마킹으로 남길 시각 표기. 목업 단계에선 방송 경과 표기(stream.uptimeLabel)를
- *   그대로 쓴다 — 흐르는 시각은 플레이어 시뮬레이션 안에 있어 여기서 읽을 수 없고, 어차피
- *   시안 표기값과 같은 값이다.
+ * @param readTimestamp 누른 그 순간의 시각 표기를 읽는다. 값이 아니라 함수로 받는 이유 둘 —
+ *   경과는 매초 흐르므로 마운트 때 값을 굳히면 나중에 누른 마킹이 과거로 찍히고,
+ *   값으로 받으면 매초 바뀌는 인자 탓에 아래 document 리스너가 초마다 다시 붙는다.
+ *   호출부가 정체성이 고정된 함수를 준다.
  */
-export function useManualMarking(timestamp: string): ManualMarkingState {
+export function useManualMarking(readTimestamp: () => string): ManualMarkingState {
   const [pendingLabel, setPendingLabel] = useState<string | null>(null);
   const [manualCards, setManualCards] = useState<LiveHighlight[]>([]);
   const timer = useRef<number>(undefined);
@@ -57,6 +58,9 @@ export function useManualMarking(timestamp: string): ManualMarkingState {
     // 만드는 중에 또 누르면 앞 카드가 자리를 잃는다 — 시안에도 자리는 하나뿐이다
     if (busy.current) return;
     busy.current = true;
+    // 카드가 서기까지 3초가 흐르므로 시각은 누른 순간에 굳힌다 — 다 만들어진 뒤에 읽으면
+    // 카드가 3초 뒤를 가리켜, 눌러서 이동했을 때 마킹한 장면을 지나쳐 있다.
+    const timestamp = readTimestamp();
     setPendingLabel(timestamp);
     timer.current = window.setTimeout(() => {
       sequence.current += 1;
@@ -64,7 +68,7 @@ export function useManualMarking(timestamp: string): ManualMarkingState {
       setPendingLabel(null);
       busy.current = false;
     }, CARD_CREATE_MS);
-  }, [timestamp]);
+  }, [readTimestamp]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

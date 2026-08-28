@@ -116,6 +116,41 @@ describe('LiveScreen — 수동 마킹', () => {
     expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
   });
 
+  it('경과 시간이 흐르고, 마킹은 멈춘 값이 아니라 그때의 시각을 찍는다', () => {
+    // 회귀: 표기와 마킹이 목업 상수 1:24:03에 묶여 있어, 열어 둔 채 누른 카드가 과거를 가리켰다
+    vi.useFakeTimers();
+    renderLive();
+
+    expect(screen.getByText('1:24:03')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(120_000); // 2분
+    });
+    expect(screen.getByText('1:26:03')).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'F8' });
+    expect(screen.getByText('1:26:03 마킹됨 · 카드 생성 중')).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(CARD_CREATE_MS);
+    });
+    // 카드가 서기까지 3초가 더 흘러도 시각은 누른 순간으로 굳어 있다
+    expect(screen.getByRole('heading', { name: '1:26:03 수동 마킹' })).toBeInTheDocument();
+  });
+
+  it('「자동」을 보고 있을 땐 만드는 중 자리도 두지 않는다', () => {
+    // 만들어질 카드는 수동이라 이 필터에선 안 보인다 — 자리만 섰다 사라지면 실패로 읽힌다
+    vi.useFakeTimers();
+    renderLive();
+
+    fireEvent.click(screen.getByRole('button', { name: '자동 6' }));
+    fireEvent.keyDown(document, { key: 'F8' });
+
+    expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
+    // 눌린 것 자체는 버튼 아래 피드백이 말한다
+    expect(screen.getByText(/마킹됨 · 카드 생성 중/)).toBeInTheDocument();
+  });
+
   it('F8을 누르면 어디에 포커스가 있든 같은 흐름이 돈다', () => {
     vi.useFakeTimers();
     renderLive();

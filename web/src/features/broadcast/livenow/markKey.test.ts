@@ -35,6 +35,9 @@ describe('isTypingTarget — 입력 중인 곳인가', () => {
     expect(isTypingTarget(element('<textarea></textarea>'))).toBe(true);
     expect(isTypingTarget(element('<select></select>'))).toBe(true);
     expect(isTypingTarget(element('<div contenteditable="true"></div>'))).toBe(true);
+    // 빈 값과 plaintext-only도 편집 영역이다 — ="true"로 좁히면 여기서 누른 키가 새어 나간다
+    expect(isTypingTarget(element('<div contenteditable></div>'))).toBe(true);
+    expect(isTypingTarget(element('<div contenteditable="plaintext-only"></div>'))).toBe(true);
     // 시크바처럼 키에 자기 동작이 있는 위젯도 같이 막는다
     expect(isTypingTarget(element('<div role="slider"></div>'))).toBe(true);
   });

@@ -2,6 +2,7 @@
 
 import {
   useCallback,
+  useEffect,
   useImperativeHandle,
   useRef,
   useState,
@@ -54,6 +55,11 @@ export interface GlassPlayerProps {
   onToggleChatPanel?: () => void;
   /** 카드 클릭 → 시점 이동 같은 바깥 명령의 통로 */
   controllerRef?: Ref<GlassPlayerController>;
+  /**
+   * 방송 경과가 흐를 때마다 알린다 — 시계의 주인은 플레이어다.
+   * 바깥에서 따로 재면 두 시계가 어긋나, 「지금」 찍은 표시가 플레이어의 지금과 달라진다.
+   */
+  onUptimeChange?: (uptimeSeconds: number) => void;
 }
 
 export function GlassPlayer(props: GlassPlayerProps) {
@@ -94,6 +100,7 @@ function GlassPlayerBody({
   chatPanelOpen,
   onToggleChatPanel,
   controllerRef,
+  onUptimeChange,
   sim,
   videoNode,
 }: GlassPlayerBodyProps) {
@@ -119,6 +126,11 @@ function GlassPlayerBody({
   const handlePip = useCallback(() => {
     toast({ tone: 'info', title: '미니 플레이어는 준비 중이에요' });
   }, [toast]);
+
+  // 흐르는 경과를 바깥에 알린다 — 화면의 경과 표기와 「지금」 마킹이 이 값을 쓴다.
+  useEffect(() => {
+    onUptimeChange?.(sim.uptimeSeconds);
+  }, [sim.uptimeSeconds, onUptimeChange]);
 
   // 절대 시각(방송 경과)으로 받는 이유는 시차가 마운트 뒤에도 계속 흐르기 때문이다 —
   // 카드가 든 "1:24:03"은 고정값이라 시차로 바꿔 건네면 누르는 순간마다 어긋난다.

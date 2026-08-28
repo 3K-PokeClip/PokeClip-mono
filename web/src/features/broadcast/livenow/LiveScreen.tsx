@@ -4,7 +4,7 @@ import { Suspense, useCallback, useRef, useState, type Ref } from 'react';
 import styles from './LiveScreen.module.css';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import { useMediaSource } from '@/features/player/mediaSource';
-import { parseClockLabel } from '@/features/player/playerMath';
+import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
 import { HighlightCardPanel } from './HighlightCardPanel';
 import { LiveStatsPanel } from './LiveStatsPanel';
@@ -31,11 +31,13 @@ function LivePlayer({
   controllerRef,
   chatPanelOpen,
   onToggleChatPanel,
+  onUptimeChange,
 }: {
   stream: LiveStream;
   controllerRef: Ref<GlassPlayerController>;
   chatPanelOpen: boolean;
   onToggleChatPanel: () => void;
+  onUptimeChange: (uptimeSeconds: number) => void;
 }) {
   // env 미설정이면 null → GlassPlayer가 시뮬레이션으로 폴백 (테스트 포함)
   const src = useMediaSource();
@@ -49,6 +51,7 @@ function LivePlayer({
       controllerRef={controllerRef}
       chatPanelOpen={chatPanelOpen}
       onToggleChatPanel={onToggleChatPanel}
+      onUptimeChange={onUptimeChange}
     />
   );
 }
@@ -56,8 +59,18 @@ function LivePlayer({
 export function LiveScreen() {
   const { stream, highlights, chatVolume, chatWarning } = useLiveMockState();
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
-  const marking = useManualMarking(stream.uptimeLabel);
   const playerRef = useRef<GlassPlayerController>(null);
+
+  // 시계의 주인은 플레이어다. 표기는 매초 다시 그려야 하니 상태로, 「지금 몇 시인가」를 묻는
+  // 마킹은 다시 그릴 이유가 없으니 ref로 받는다 — 둘을 한 값에서 끌어 써야 어긋나지 않는다.
+  const [uptimeLabel, setUptimeLabel] = useState(stream.uptimeLabel);
+  const uptimeRef = useRef(stream.uptimeSeconds);
+  const handleUptimeChange = useCallback((seconds: number) => {
+    uptimeRef.current = seconds;
+    setUptimeLabel(formatUptime(seconds));
+  }, []);
+  const readMarkTimestamp = useCallback(() => formatUptime(uptimeRef.current), []);
+  const marking = useManualMarking(readMarkTimestamp);
   // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 컨트롤의 토글 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
@@ -92,12 +105,14 @@ export function LiveScreen() {
                 controllerRef={playerRef}
                 chatPanelOpen={chatPanelOpen}
                 onToggleChatPanel={toggleChatPanel}
+                onUptimeChange={handleUptimeChange}
               />
             </Suspense>
           </div>
           <StreamInfoBar
             stream={stream}
             meta={streamMeta}
+            uptimeLabel={uptimeLabel}
             pendingLabel={marking.pendingLabel}
             onMark={marking.mark}
           />

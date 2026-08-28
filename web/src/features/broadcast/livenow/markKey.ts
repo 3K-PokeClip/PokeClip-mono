@@ -33,13 +33,17 @@ export function isMarkHotkey(event: MarkKeyEvent): boolean {
 
 /**
  * 글자를 입력하는 중인 곳인가 — 전역 리스너라 제목 수정·검색창까지 닿는다.
- * GlassPlayer의 컨테이너 가드와 같은 선택자에 contenteditable·textbox를 더한다.
+ * GlassPlayer의 컨테이너 가드에 textbox를 더한 것이다.
+ *
+ * contenteditable을 값으로 좁히지 않는 이유 — `<div contenteditable>`(빈 값)과
+ * `plaintext-only`도 편집 영역이라 `="true"`로 받으면 그 안에서 누른 키가 가드를 통과한다.
+ * 대신 명시적 false만 뺀다.
  */
 export function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return (
     target.closest(
-      'input, select, textarea, [contenteditable="true"], [role="slider"], [role="textbox"]',
+      'input, select, textarea, [contenteditable]:not([contenteditable="false"]), [role="slider"], [role="textbox"]',
     ) !== null
   );
 }

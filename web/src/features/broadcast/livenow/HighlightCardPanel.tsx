@@ -65,7 +65,9 @@ export function HighlightCardPanel({
       </div>
       {/* 가로 스크롤 영역은 키보드로도 훑을 수 있어야 한다 (axe scrollable-region-focusable) */}
       <ul className={styles.cardTrack} tabIndex={0} aria-label="하이라이트 카드 목록">
-        {pendingLabel ? (
+        {/* 만들어질 카드는 수동이다 — 「자동」을 보고 있을 땐 자리도 두지 않는다.
+            아니면 자리만 3초 섰다 사라지고 카드는 안 보여 마킹이 실패한 것처럼 읽힌다. */}
+        {pendingLabel && filter !== 'auto' ? (
           <li className={styles.cardSlot}>
             <div className={styles.pendingCard}>
               <Spinner size="sm" label="카드 만드는 중" />

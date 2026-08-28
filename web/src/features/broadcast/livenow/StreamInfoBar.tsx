@@ -13,11 +13,14 @@ import type { LiveStream } from './useLiveMockState';
 export function StreamInfoBar({
   stream,
   meta,
+  uptimeLabel,
   pendingLabel,
   onMark,
 }: {
   stream: LiveStream;
   meta: StreamMeta;
+  /** 흐르는 경과 표기 — 시계의 주인은 플레이어라 화면이 받아 내려준다 */
+  uptimeLabel: string;
   /** 만드는 중인 카드의 시각 — 있으면 버튼 아래 피드백이 선다 */
   pendingLabel: string | null;
   onMark: () => void;
@@ -51,7 +54,7 @@ export function StreamInfoBar({
         </span>
         <span className={styles.infoDivider} aria-hidden />
         <span className={styles.infoUptime}>
-          <span className={styles.infoUptimeValue}>{stream.uptimeLabel}</span>
+          <span className={styles.infoUptimeValue}>{uptimeLabel}</span>
           <span>스트리밍 중</span>
         </span>
       </div>

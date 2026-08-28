@@ -83,7 +83,10 @@ export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
       const pick = POOL[counter.current % POOL.length];
       if (!pick) return;
       counter.current += 1;
-      setMessages((prev) => [...prev.slice(-(KEEP_LAST - 1)), { ...pick, id: counter.current }]);
+      // id를 갱신 함수 밖에서 굳힌다 — 안에서 ref를 읽으면 React가 갱신을 다시 돌릴 때
+      // 같은 번호가 두 번 붙어 키가 겹친다(useSimulatedChat과 같은 모양).
+      const next: ChatPanelMessage = { ...pick, id: counter.current };
+      setMessages((prev) => [...prev.slice(-(KEEP_LAST - 1)), next]);
     }, CHAT_PANEL_INTERVAL_MS);
     return () => window.clearInterval(tick);
   }, [enabled]);

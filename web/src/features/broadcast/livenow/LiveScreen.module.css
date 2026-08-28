@@ -190,9 +190,11 @@
 
 /* 빈 자리를 미리 잡아 두지 않는다 — 잡아 두면 안 눌렀을 때도 블록이 버튼보다 커져
    버튼이 바의 가운데선 위로 밀린다(시안은 마킹 중일 때만 이 줄이 선다).
-   요소 자체는 남겨 둔다 — role="status"를 조건부로 붙였다 떼면 알림이 더 불안정하다. */
+   display:none이 아니라 흐름에서만 빼는 이유 — 저쪽은 role="status"를 접근성 트리에서
+   통째로 지워, 글이 생기는 순간이 「살아 있는 리전의 변화」가 아니라 「리전의 등장」이 된다.
+   그러면 낭독을 놓칠 수 있어, 조건부로 렌더하지 않으려던 의도가 무너진다. */
 .markFeedback:empty {
-  display: none;
+  position: absolute;
 }
 
 /* ---------- 하이라이트 카드 패널 ---------- */
@@ -556,10 +558,35 @@
   min-width: 0;
 }
 
+/* 마커를 얹을 기준 — 선은 안쪽 svg가, 도형은 밖의 요소가 그린다 (LiveStatsPanel 주석 참고) */
+.statsChart {
+  position: relative;
+}
+
 .statsSvg {
   width: 100%;
   height: calc(150 * var(--pc-u));
   display: block;
+}
+
+/* 마커는 좌표만 비율로 잡고 크기는 고정 — 차트가 가로로 늘어나도 모양이 유지된다 */
+.statsHighlight,
+.statsDonation {
+  position: absolute;
+  width: calc(10 * var(--pc-u));
+  height: calc(10 * var(--pc-u));
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.statsHighlight {
+  border-radius: 50%;
+  background: var(--pc-color-point);
+}
+
+.statsDonation {
+  background: #e6a83c;
+  transform: translate(-50%, -50%) rotate(45deg);
 }
 
 .statsChatArea {
@@ -577,14 +604,6 @@
   fill: none;
   stroke: var(--pc-color-success, #4cae7d);
   stroke-width: 2;
-}
-
-.statsHighlight {
-  fill: var(--pc-color-point);
-}
-
-.statsDonation {
-  fill: #e6a83c;
 }
 
 .statsNow {
@@ -809,7 +828,6 @@
   display: flex;
   align-items: center;
   margin-left: auto;
-  display: flex;
   gap: calc(5 * var(--pc-u));
 }
 

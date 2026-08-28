@@ -26,10 +26,15 @@ const LEGEND = [
   { label: '후원', className: styles.legendDonation },
 ];
 
-/** 후원 마커 — 시안의 마름모 */
-function donationDiamond([x, y]: Point): string {
-  const r = 7;
-  return `M${x - r} ${y} L${x} ${y - r} L${x + r} ${y} L${x} ${y + r} Z`;
+/**
+ * 마커를 SVG 밖 요소로 놓기 위한 백분율 좌표.
+ *
+ * 차트는 `preserveAspectRatio="none"`이라 가로로만 늘어난다 — 그 안에 둔 원·마름모는
+ * 폭이 넓어질수록 타원·납작한 사각형이 된다(`non-scaling-stroke`는 선 굵기만 지킨다).
+ * 도형을 밖에 두고 위치만 비율로 잡으면 폭과 무관하게 모양이 유지된다.
+ */
+function markerStyle([x, y]: Point) {
+  return { left: `${(x / TIMELINE_WIDTH) * 100}%`, top: `${(y / TIMELINE_HEIGHT) * 100}%` };
 }
 
 export function LiveStatsPanel({
@@ -67,43 +72,52 @@ export function LiveStatsPanel({
       </div>
       <div className={styles.statsBody}>
         <div className={styles.statsChartCol}>
-          <svg
-            viewBox={`0 0 ${TIMELINE_WIDTH} ${TIMELINE_HEIGHT}`}
-            preserveAspectRatio="none"
-            className={styles.statsSvg}
+          <div
+            className={styles.statsChart}
             role="img"
             aria-label={`방송 타임라인 — 채팅량과 시청자 추이, 하이라이트 ${markers.length}곳, 후원 ${donations.length}회`}
           >
-            <polygon points={toAreaAttribute(chatLine)} className={styles.statsChatArea} />
-            <polyline
-              points={toPointsAttribute(chatLine)}
-              className={styles.statsChatLine}
-              vectorEffect="non-scaling-stroke"
-            />
-            <polyline
-              points={toPointsAttribute(viewerLine)}
-              className={styles.statsViewerLine}
-              vectorEffect="non-scaling-stroke"
-            />
-            {markers.map(([x, y]) => (
-              <circle key={`hl-${x}-${y}`} cx={x} cy={y} r={5} className={styles.statsHighlight} />
-            ))}
-            {donations.map((point) => (
-              <path
-                key={`donation-${point[0]}-${point[1]}`}
-                d={donationDiamond(point)}
-                className={styles.statsDonation}
+            <svg
+              viewBox={`0 0 ${TIMELINE_WIDTH} ${TIMELINE_HEIGHT}`}
+              preserveAspectRatio="none"
+              className={styles.statsSvg}
+              aria-hidden
+            >
+              <polygon points={toAreaAttribute(chatLine)} className={styles.statsChatArea} />
+              <polyline
+                points={toPointsAttribute(chatLine)}
+                className={styles.statsChatLine}
+                vectorEffect="non-scaling-stroke"
+              />
+              <polyline
+                points={toPointsAttribute(viewerLine)}
+                className={styles.statsViewerLine}
+                vectorEffect="non-scaling-stroke"
+              />
+              {/* 지금 이 순간 — 오른쪽 끝의 세로선 */}
+              <line
+                x1={TIMELINE_WIDTH}
+                y1={0}
+                x2={TIMELINE_WIDTH}
+                y2={TIMELINE_HEIGHT}
+                className={styles.statsNow}
+              />
+            </svg>
+            {markers.map((point) => (
+              <span
+                key={`hl-${point[0]}-${point[1]}`}
+                className={styles.statsHighlight}
+                style={markerStyle(point)}
               />
             ))}
-            {/* 지금 이 순간 — 오른쪽 끝의 세로선 */}
-            <line
-              x1={TIMELINE_WIDTH}
-              y1={0}
-              x2={TIMELINE_WIDTH}
-              y2={TIMELINE_HEIGHT}
-              className={styles.statsNow}
-            />
-          </svg>
+            {donations.map((point) => (
+              <span
+                key={`donation-${point[0]}-${point[1]}`}
+                className={styles.statsDonation}
+                style={markerStyle(point)}
+              />
+            ))}
+          </div>
           <div className={styles.categoryBar}>
             {categorySegments.map((segment) => (
               <span
