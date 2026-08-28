@@ -1,5 +1,6 @@
 'use client';
 
+import { memo } from 'react';
 import { MessageSquare, PanelRightClose } from 'lucide-react';
 import { Badge, IconButton, Tag } from '@/ui';
 import styles from './LiveScreen.module.css';
@@ -35,7 +36,7 @@ function ChatLine({ message }: { message: ChatPanelMessage }) {
   );
 }
 
-export function ChatPanel({
+export const ChatPanel = memo(function ChatPanel({
   surges,
   messages,
   collectionWarning,
@@ -52,15 +53,20 @@ export function ChatPanel({
       <div className={styles.chatHeader}>
         <MessageSquare size={15} aria-hidden className={styles.chatHeaderIcon} />
         <span className={styles.chatHeading}>실시간 채팅</span>
-        {collectionWarning ? (
-          <Badge tone="warning" variant="soft" size="sm">
-            수집 끊김
-          </Badge>
-        ) : (
-          <Badge tone="success" variant="soft" size="sm">
-            수집 중
-          </Badge>
-        )}
+        {/* 배지를 갈아끼우는 게 아니라 늘 서 있는 리전 안에서 글만 바꾼다 —
+            지운 경고 배너가 갖고 있던 role="status"를 여기가 승계한다. 없으면 수집이
+            끊기는 순간을 눈으로 보는 사람만 알고, 듣는 사람은 헤더로 돌아와야 안다. */}
+        <span role="status">
+          {collectionWarning ? (
+            <Badge tone="warning" variant="soft" size="sm">
+              수집 끊김
+            </Badge>
+          ) : (
+            <Badge tone="success" variant="soft" size="sm">
+              수집 중
+            </Badge>
+          )}
+        </span>
         <IconButton
           variant="ghost"
           size="sm"
@@ -87,4 +93,4 @@ export function ChatPanel({
       </ul>
     </aside>
   );
-}
+});

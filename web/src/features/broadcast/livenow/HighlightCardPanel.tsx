@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import Link from 'next/link';
 import clsx from 'clsx';
 import { Spinner } from '@/ui';
@@ -21,17 +21,22 @@ const FILTERS: Array<{ value: Filter; label: string }> = [
   { value: 'manual', label: '수동' },
 ];
 
-export function HighlightCardPanel({
+// memo인 이유 — 화면이 경과 표기 때문에 매초 다시 그려진다. 카드 9장의 파형 문자열 생성과
+// 필터링이 초당 한 번씩 다시 도는 것을 막는다(ChatPanel·LiveStatsPanel도 같은 이유).
+export const HighlightCardPanel = memo(function HighlightCardPanel({
   highlights,
   stream,
   visuals,
   pendingLabel,
+  detectionPaused,
   onSeek,
 }: {
   highlights: LiveHighlight[];
   stream: LiveStream;
   visuals: Record<string, CardVisual>;
   pendingLabel: string | null;
+  /** 수집이 끊겨 자동 탐지가 멈춘 상태 — 감지 중이라고 말하면 거짓이 된다 */
+  detectionPaused: boolean;
   onSeek: (timestamp: string) => void;
 }) {
   const [filter, setFilter] = useState<Filter>('all');
@@ -44,7 +49,10 @@ export function HighlightCardPanel({
     <section className={styles.cardPanel} aria-label="하이라이트 카드">
       <div className={styles.cardPanelHeader}>
         <h2 className={styles.cardPanelHeading}>하이라이트 카드</h2>
-        <span className={styles.cardPanelNote}>자동 감지 중 · 카드 클릭 = 시점 이동</span>
+        <span className={styles.cardPanelNote}>
+          {detectionPaused ? '자동 감지 멈춤 · 핫키로 직접 남길 수 있어요' : '자동 감지 중'} · 카드
+          클릭 = 시점 이동
+        </span>
         <div className={styles.filterGroup} role="group" aria-label="하이라이트 필터">
           {FILTERS.map(({ value, label }) => (
             <button
@@ -84,4 +92,4 @@ export function HighlightCardPanel({
       </ul>
     </section>
   );
-}
+});

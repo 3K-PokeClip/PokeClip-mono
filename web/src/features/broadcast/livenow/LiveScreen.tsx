@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useRef, useState, type Ref } from 'react';
+import { Suspense, useCallback, useMemo, useRef, useState, type Ref } from 'react';
 import styles from './LiveScreen.module.css';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import { useMediaSource } from '@/features/player/mediaSource';
@@ -74,18 +74,28 @@ export function LiveScreen() {
   // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 컨트롤의 토글 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
-  const chat = useChatPanelMockState(chatPanelOpen);
+  // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
+  // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다).
+  const chat = useChatPanelMockState(chatPanelOpen && !chatWarning);
   const stats = useLiveStatsMockState();
 
   // 찍어 만든 카드가 앞, 그다음이 감지된 카드 — 필터 개수도 통계의 하이라이트 줄도
   // 이 합친 목록에서 센다. 어느 한쪽을 따로 세면 두 표기가 언젠가 어긋난다.
-  const cards = [...marking.manualCards, ...highlights];
-  const manualCount = cards.filter((card) => card.source === 'manual').length;
-  const highlightSummary = {
-    total: cards.length,
-    auto: cards.length - manualCount,
-    manual: manualCount,
-  };
+  //
+  // 경과 표기 때문에 이 컴포넌트는 매초 다시 그려진다 — 목록·요약이 매번 새 객체면
+  // 아래 패널들의 memo가 통째로 무력해지므로 여기서 정체성을 붙잡아 둔다.
+  const cards = useMemo(
+    () =>
+      [...marking.manualCards, ...highlights].map((card, index) =>
+        // 강조는 「방금」이라는 뜻이라 맨 앞 하나만 남긴다 — 마킹할수록 쌓이면 아무 말도 안 하게 된다
+        index === 0 || !card.emphasized ? card : { ...card, emphasized: false },
+      ),
+    [marking.manualCards, highlights],
+  );
+  const highlightSummary = useMemo(() => {
+    const manual = cards.filter((card) => card.source === 'manual').length;
+    return { total: cards.length, auto: cards.length - manual, manual };
+  }, [cards]);
 
   const handleSeek = useCallback((timestamp: string) => {
     const seconds = parseClockLabel(timestamp);
@@ -121,6 +131,7 @@ export function LiveScreen() {
             stream={stream}
             visuals={cardVisuals}
             pendingLabel={marking.pendingLabel}
+            detectionPaused={chatWarning}
             onSeek={handleSeek}
           />
         </div>

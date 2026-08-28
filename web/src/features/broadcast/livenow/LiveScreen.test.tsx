@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -60,6 +60,27 @@ describe('LiveScreen — 하이라이트 카드', () => {
     expect(screen.getByText('클립 완료')).toBeInTheDocument();
     expect(screen.getByText('미처리')).toBeInTheDocument();
     expect(screen.getByText('만료')).toBeInTheDocument();
+  });
+
+  it('점수가 보이는 곳에만 있지 않다 — 듣는 쪽에도 남긴다', () => {
+    // 시안상 점수는 썸네일 위에만 있는데 그쪽은 aria-hidden이라 어디서도 안 읽혔다
+    renderLive();
+    expect(screen.getByText('97점 · 채팅 급증 · 길이 0:42')).toBeInTheDocument();
+  });
+
+  it('강조는 맨 앞 카드 하나뿐이다 — 마킹할수록 쌓이면 「방금」이라는 뜻을 잃는다', () => {
+    vi.useFakeTimers();
+    const { container } = renderLive();
+
+    const emphasizedCount = () =>
+      container.querySelectorAll('[class*="cardEmphasized"]').length;
+    expect(emphasizedCount()).toBe(1);
+
+    fireEvent.keyDown(document, { key: 'F8' });
+    act(() => {
+      vi.advanceTimersByTime(CARD_CREATE_MS);
+    });
+    expect(emphasizedCount()).toBe(1);
   });
 
   it('필터 칩이 실제 카드 수를 센다 — 시안 표기와 같은 전체 8 · 자동 6 · 수동 2', () => {
@@ -204,11 +225,28 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     ).toBeInTheDocument();
   });
 
-  it('수집 상태를 채팅 헤더 배지가 말한다 — 옛 본문 경고 배너 자리를 승계했다', () => {
+  it('수집 상태를 채팅 헤더의 라이브 리전이 말한다 — 옛 본문 경고 배너 자리를 승계했다', () => {
     renderLive();
 
-    expect(screen.getByText('수집 끊김')).toBeInTheDocument();
+    // 배지를 갈아끼우는 게 아니라 늘 서 있는 리전 안에서 글만 바뀌어야 알림이 닿는다
+    const panel = screen.getByRole('complementary', { name: '실시간 채팅' });
+    expect(within(panel).getByRole('status')).toHaveTextContent('수집 끊김');
     expect(screen.queryByText(/채팅 수집이 잠시 끊겼어요/)).not.toBeInTheDocument();
+  });
+
+  it('수집이 끊긴 동안엔 새 채팅도 자동 감지도 멈춘 것으로 말한다', () => {
+    // 회귀: 「수집 끊김」이라면서 3.5초마다 새 메시지가 쌓이고 「자동 감지 중」이라고 했다
+    vi.useFakeTimers();
+    renderLive();
+
+    expect(screen.getByText(/자동 감지 멈춤/)).toBeInTheDocument();
+    expect(screen.queryByText('자동 감지 중 · 카드 클릭 = 시점 이동')).not.toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(20_000); // 목업 간격(3.5초)을 여러 번 지난다
+    });
+    // 흐르고 있었다면 이 풀의 첫 메시지가 들어왔을 것이다
+    expect(screen.queryByText('방금 그거 다시 보여주세요')).not.toBeInTheDocument();
   });
 
   it('접으면 패널이 사라지고, 플레이어 상단의 여는 버튼으로 되살아난다', async () => {

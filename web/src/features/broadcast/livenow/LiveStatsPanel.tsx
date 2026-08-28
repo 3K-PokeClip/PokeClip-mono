@@ -1,5 +1,6 @@
 'use client';
 
+import { memo } from 'react';
 import { ChartLine } from 'lucide-react';
 import styles from './LiveScreen.module.css';
 import {
@@ -37,7 +38,7 @@ function markerStyle([x, y]: Point) {
   return { left: `${(x / TIMELINE_WIDTH) * 100}%`, top: `${(y / TIMELINE_HEIGHT) * 100}%` };
 }
 
-export function LiveStatsPanel({
+export const LiveStatsPanel = memo(function LiveStatsPanel({
   chatVolume,
   viewerLine,
   donations,
@@ -156,4 +157,4 @@ export function LiveStatsPanel({
       </div>
     </section>
   );
-}
+});

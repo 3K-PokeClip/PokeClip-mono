@@ -2,7 +2,7 @@
 
 import { Bookmark } from 'lucide-react';
 import clsx from 'clsx';
-import { Badge, Button, IconButton, Progress, Spinner } from '@/ui';
+import { Badge, Button, IconButton, Progress, Spinner, VisuallyHidden } from '@/ui';
 import styles from './LiveScreen.module.css';
 import { cardViewFor, cardVisualFor } from './highlightCardView';
 import type { CardVisual } from './useLiveDetailsMockState';
@@ -103,6 +103,17 @@ export function HighlightCard({
           </Badge>
           {visual.timeAgo ? <span className={styles.cardTimeAgo}>{visual.timeAgo}</span> : null}
         </div>
+        {/* 점수·사유·길이는 시안상 썸네일 위에만 있는데 그쪽은 aria-hidden이다(버튼 이름을
+            덮어써 자식 글이 읽히지 않는다). 카드를 정렬하는 근거인 점수를 듣는 쪽에도 남긴다. */}
+        <VisuallyHidden>
+          {[
+            highlight.score !== undefined ? `${highlight.score}점` : null,
+            visual.reason,
+            visual.duration ? `길이 ${visual.duration}` : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
+        </VisuallyHidden>
         {processing && visual.progress !== null ? (
           <div className={styles.cardProgressRow}>
             <Progress value={visual.progress} size="sm" label="클립 생성 진행률" />
