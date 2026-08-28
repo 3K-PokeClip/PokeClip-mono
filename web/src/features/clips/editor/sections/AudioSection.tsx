@@ -41,6 +41,7 @@ export function AudioSection({
             className={styles.trackSlider}
             label={`${track.label} 볼륨`}
             value={track.volume ?? 0}
+            {...state.gestureHandlers}
             onValueChange={(volume) => state.setTrackVolume(track.id, volume)}
           />
           <span className={styles.trackValue}>{track.volume}%</span>

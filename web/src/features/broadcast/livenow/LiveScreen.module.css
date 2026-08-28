@@ -459,7 +459,9 @@
   margin-top: calc(4 * var(--pc-u));
 }
 
-.cardActions > button:not(:last-child) {
+/* 마지막(아이콘 버튼)만 빼고 늘린다. 요소 이름으로 고르면 「편집」이 링크가 되는 순간
+   빠져나가 한쪽만 늘어난다 — 실제로 그렇게 어긋난 적이 있다. */
+.cardActions > *:not(:last-child) {
   flex: 1;
 }
 

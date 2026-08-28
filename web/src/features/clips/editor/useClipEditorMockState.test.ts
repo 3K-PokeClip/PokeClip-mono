@@ -201,6 +201,45 @@ describe('useClipEditorMockState', () => {
     expect(result.current.view).not.toEqual(frozen);
   });
 
+  it('볼륨 드래그도 실행취소 한 칸이다 — 슬라이더 문이 제스처를 연다', () => {
+    const { result } = renderEditor();
+    act(() => result.current.setLayout('9:16'));
+
+    act(() => result.current.gestureHandlers.onPointerDown());
+    for (const v of [70, 60, 50, 40, 30]) {
+      act(() => result.current.setTrackVolume('mic', v));
+    }
+    act(() => result.current.gestureHandlers.onPointerUp());
+
+    expect(result.current.tracks[1]?.volume).toBe(30);
+    act(() => result.current.undo());
+    expect(result.current.tracks[1]?.volume).toBe(80);
+    // 드래그 이전 편집도 그대로 남아 있다
+    act(() => result.current.undo());
+    expect(result.current.layout).toBe('split');
+  });
+
+  it('드래그가 취소돼도 제스처가 끝난다 — 창이 고정된 채 남지 않는다', () => {
+    const { result } = renderEditor();
+
+    act(() => result.current.gestureHandlers.onPointerDown());
+    const frozen = result.current.view;
+    act(() => result.current.gestureHandlers.onPointerCancel());
+
+    act(() => result.current.setRangeEdge('end', 4970));
+    expect(result.current.view).not.toEqual(frozen);
+  });
+
+  it('구간 앞에서 재생하면 반복이 구간 안으로 데려온다', () => {
+    const { result } = renderEditor();
+
+    act(() => result.current.seekTo(result.current.range.startSeconds - 20));
+    act(() => result.current.togglePlay());
+    act(() => vi.advanceTimersByTime(100));
+
+    expect(result.current.playheadSeconds).toBe(result.current.range.startSeconds);
+  });
+
   it('줌은 단계로 움직이고 표기가 따라온다', () => {
     const { result } = renderEditor();
 

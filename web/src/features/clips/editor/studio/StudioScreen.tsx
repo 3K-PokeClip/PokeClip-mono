@@ -40,8 +40,11 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
       // Space가 버튼을 누르는 대신 재생을 토글하면 키보드 사용자가 아무 버튼도 못 누른다.
       // 되돌리기만은 위젯 위에서도 통과시킨다 — 버튼에 포커스가 남는 것이 정상 흐름이라
       // 여기서 막으면 ⌘Z가 사실상 죽는다.
-      const undoLike = intent.kind === 'undo' || intent.kind === 'redo';
-      if (!undoLike && target?.closest(KEY_OWNING) != null) return;
+      // 위젯이 제 것으로 쓰는 키만 양보한다: Space는 버튼을 누르고, 화살표는
+      // roving·슬라이더가 값을 옮긴다. ⌘Z·I·O는 버튼에 네이티브 동작이 없어
+      // 여기서 막으면 범례가 광고한 조작이 흔한 흐름에서 죽는다.
+      const widgetOwns = intent.kind === 'togglePlay' || intent.kind === 'seekBy';
+      if (widgetOwns && target?.closest(KEY_OWNING) != null) return;
       event.preventDefault();
       switch (intent.kind) {
         case 'togglePlay':

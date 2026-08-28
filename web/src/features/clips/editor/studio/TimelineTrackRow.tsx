@@ -11,7 +11,11 @@ import { Slider } from '@/ui';
 import styles from './StudioScreen.module.css';
 import { TimelineClip } from './TimelineClip';
 import type { TimelineView } from '../timelineMath';
-import type { EditorTrack, EditorTrackKind } from '../useClipEditorMockState';
+import type {
+  ClipEditorMockState,
+  EditorTrack,
+  EditorTrackKind,
+} from '../useClipEditorMockState';
 
 // 시안 1d-a 타임라인 한 줄 — 라벨 열(172px) + 레인.
 // 레인을 어떻게 그릴지는 트랙 종류가 정한다: 영상은 필름스트립, 마이크·게임은 파형,
@@ -32,12 +36,15 @@ export function TimelineTrackRow({
   selectedClipId,
   onSelectClip,
   onVolumeChange,
+  gestureHandlers,
 }: {
   track: EditorTrack;
   view: TimelineView;
   selectedClipId: string | null;
   onSelectClip: (clipId: string) => void;
   onVolumeChange: (trackId: string, volume: number) => void;
+  /** 드래그 한 번을 실행취소 한 칸으로 묶는다 */
+  gestureHandlers: ClipEditorMockState['gestureHandlers'];
 }) {
   const Icon = TRACK_ICONS[track.kind];
   const waveform = track.kind === 'mic' || track.kind === 'game';
@@ -53,6 +60,7 @@ export function TimelineTrackRow({
               className={styles.trackSlider}
               label={`${track.label} 볼륨`}
               value={track.volume}
+              {...gestureHandlers}
               onValueChange={(volume) => onVolumeChange(track.id, volume)}
             />
             <span className={styles.trackValue}>{track.volume}%</span>

@@ -91,7 +91,7 @@ describe('StudioScreen', () => {
 
     expect(startHandle).toHaveAttribute('aria-valuetext', expect.stringContaining('5.4초'));
     // 규칙은 범례가 미리 말해 둔다
-    expect(screen.getByText('5초 미만·3분 초과로는 핸들이 움직이지 않아요')).toBeInTheDocument();
+    expect(screen.getByText('5초 미만, 3분 초과로는 핸들이 움직이지 않아요')).toBeInTheDocument();
   });
 
   it('되감기·감기 버튼이 아이콘 안의 초로 갈린다 — 방향만으로는 구분되지 않는다', () => {
@@ -216,6 +216,31 @@ describe('StudioScreen', () => {
     expect(Number(end.getAttribute('aria-valuenow'))).toBeGreaterThan(
       Number(start.getAttribute('aria-valuenow')),
     );
+  });
+
+  it('버튼에 포커스가 있어도 I·O는 통과한다 — Space·화살표는 계속 양보한다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    const play = screen.getByRole('button', { name: '재생' });
+    play.focus();
+    await user.keyboard('{o}');
+
+    // O가 끝점을 플레이헤드로 당겼으니 되돌릴 거리가 생긴다
+    expect(screen.getByRole('button', { name: '작업 이전으로' })).toBeEnabled();
+    // Space는 여전히 버튼 것이라 재생으로 새지 않는다
+    expect(screen.getByRole('button', { name: '재생' })).toBeInTheDocument();
+  });
+
+  it('핸들 ARIA 범위가 3분 상한까지 반영한다', () => {
+    renderStudio();
+
+    const start = screen.getByRole('slider', { name: '구간 시작점' });
+    const end = screen.getByRole('slider', { name: '구간 끝점' });
+    // 시작 핸들의 최소는 0이 아니라 「끝 − 3분」이다
+    expect(Number(start.getAttribute('aria-valuemin'))).toBeGreaterThan(0);
+    expect(Number(end.getAttribute('aria-valuenow')) - Number(start.getAttribute('aria-valuemin')))
+      .toBeLessThanOrEqual(180);
   });
 
   it('접근성 위반이 없다', async () => {

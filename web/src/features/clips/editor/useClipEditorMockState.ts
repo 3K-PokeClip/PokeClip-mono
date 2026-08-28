@@ -291,6 +291,17 @@ export interface ClipEditorMockState {
   /** 드래그 시작·끝 — 그 사이의 변경은 실행취소 한 칸으로 묶이고 타임라인 창이 고정된다 */
   beginGesture: () => void;
   endGesture: () => void;
+  /**
+   * 볼륨 슬라이더처럼 이어지는 조작에 그대로 펼쳐 붙이는 포인터 핸들러.
+   * DS Slider는 pointermove마다 onValueChange를 부르므로 묶지 않으면
+   * 드래그 한 번이 히스토리 상한을 넘긴다.
+   */
+  gestureHandlers: {
+    onPointerDown: () => void;
+    onPointerUp: () => void;
+    onPointerCancel: () => void;
+    onLostPointerCapture: () => void;
+  };
   markIn: () => void;
   markOut: () => void;
 
@@ -431,13 +442,16 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   }, []);
 
   const commit = useCallback((update: (recipe: EditorRecipe) => EditorRecipe) => {
+    // 제스처 첫 커밋인지를 업데이터 밖에서 정한다. 안에서 ref를 건드리면 업데이터가
+    // 불순해져, StrictMode의 이중 호출에서 첫 호출이 표식을 켜고 실제로 반영되는
+    // 두 번째 호출이 pushHistory 대신 replacePresent를 탄다 — 드래그 직전 상태가 사라진다.
+    const replace = gesturing.current && gestureOpened.current;
+    if (gesturing.current) gestureOpened.current = true;
     setHistory((current) => {
       const next = update(current.present);
       // 같은 값을 다시 고르면 히스토리를 늘리지 않는다 — ↺가 아무 일도 안 하는 것처럼 보인다
       if (next === current.present) return current;
-      if (gesturing.current && gestureOpened.current) return replacePresent(current, next);
-      if (gesturing.current) gestureOpened.current = true;
-      return pushHistory(current, next);
+      return replace ? replacePresent(current, next) : pushHistory(current, next);
     });
   }, []);
 
@@ -455,6 +469,9 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     if (!playing) return undefined;
     const timer = setInterval(() => {
       setPlayheadSeconds((current) => {
+        // 구간 앞에서 재생을 시작했으면 반복은 구간 안으로 데려온다 —
+        // 끝 경계만 보면 「구간 반복」을 켜 둔 채로 클립 밖을 재생한다
+        if (loop && current < recipe.range.startSeconds) return recipe.range.startSeconds;
         const next = current + 0.1 * speed;
         if (next >= recipe.range.endSeconds) {
           if (loop) return recipe.range.startSeconds;
@@ -581,6 +598,17 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     setRangeEdge,
     beginGesture,
     endGesture,
+    gestureHandlers: useMemo(
+      () => ({
+        onPointerDown: beginGesture,
+        // 취소·캡처 상실도 끝으로 친다 — 안 그러면 창이 고정된 채 남고
+        // 이후 편집이 계속 같은 히스토리 항목을 덮어쓴다
+        onPointerUp: endGesture,
+        onPointerCancel: endGesture,
+        onLostPointerCapture: endGesture,
+      }),
+      [beginGesture, endGesture],
+    ),
     markIn,
     markOut,
 

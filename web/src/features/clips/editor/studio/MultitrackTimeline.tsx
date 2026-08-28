@@ -5,6 +5,7 @@ import { formatUptime } from '@/features/player/playerMath';
 import styles from './StudioScreen.module.css';
 import { TimelineTrackRow } from './TimelineTrackRow';
 import {
+  MAX_RANGE_SECONDS,
   MAX_RANGE_TEXT,
   MIN_RANGE_SECONDS,
   rulerTicks,
@@ -50,7 +51,8 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
     draggingEdge.current = edge;
     // 드래그 한 번을 실행취소 한 칸으로 묶고, 그 동안 타임라인 창을 붙잡는다
     state.beginGesture();
-    moveEdgeFromPointer(edge, event.clientX);
+    // 여기서 바로 옮기지 않는다 — 구간이 창보다 넓어 핸들이 가장자리에 클램프돼 있으면
+    // 끌지도 않았는데 클릭만으로 경계가 창 끝 시각으로 점프한다. 움직임은 pointermove가 낸다.
   };
 
   const onHandlePointerMove = (event: PointerEvent<HTMLElement>) => {
@@ -59,12 +61,17 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
     moveEdgeFromPointer(edge, event.clientX);
   };
 
+  // pointercancel·캡처 상실도 끝이다 — 놓친 채로 두면 창이 고정된 채 남고
+  // 이후 편집이 계속 같은 히스토리 항목을 덮어쓴다
   const onHandlePointerUp = () => {
     if (draggingEdge.current !== null) state.endGesture();
     draggingEdge.current = null;
   };
 
   const onHandleKeyDown = (edge: 'start' | 'end') => (event: KeyboardEvent<HTMLElement>) => {
+    // 자동반복은 버린다 — 누르고 있으면 키 반복마다 히스토리가 한 칸씩 쌓여
+    // 상한을 밀어낸다 (editorKeys.ts가 같은 이유로 버리는 것과 같다)
+    if (event.repeat) return;
     const step = event.shiftKey ? EDITOR_SEEK_SHIFT_STEP_SECONDS : EDITOR_SEEK_STEP_SECONDS;
     const current = edge === 'start' ? state.range.startSeconds : state.range.endSeconds;
     if (event.key === 'ArrowLeft') {
@@ -183,6 +190,7 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
                   selectedClipId={state.selectedClipId}
                   onSelectClip={state.selectClip}
                   onVolumeChange={state.setTrackVolume}
+                  gestureHandlers={state.gestureHandlers}
                 />
               ))}
             </div>
@@ -195,7 +203,13 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
                   width: `${(endFraction - startFraction) * 100}%`,
                 }}
               >
-                {(['start', 'end'] as const).map((edge) => (
+                {(['start', 'end'] as const).map((edge) => {
+                  const at = edge === 'start' ? state.range.startSeconds : state.range.endSeconds;
+                  // 창 밖으로 밀려난 핸들은 가장자리에 붙어 「거기 있는 것처럼」 보인다 —
+                  // 조작하면 엉뚱한 시각으로 튀므로 아예 내주지 않는다
+                  const offscreen = at < state.view.startSeconds || at > state.view.endSeconds;
+                  if (offscreen) return null;
+                  return (
                   <button
                     key={edge}
                     type="button"
@@ -204,11 +218,20 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
                     // 이름·키 조작이 「경계 위치」를 뜻하므로 값도 위치로 읽어 준다.
                     // 길이를 실으면 시작점에서 ArrowRight(증가)에 값이 줄어드는 모순이 생기고
                     // 두 핸들이 늘 같은 숫자를 말한다.
-                    aria-valuemin={edge === 'start' ? 0 : state.range.startSeconds + MIN_RANGE_SECONDS}
+                    // 길이 상한(3분)까지 반영한다 — 안 하면 「0부터」라 안내해 놓고
+                    // 그쪽으로는 값이 움직이지 않는다
+                    aria-valuemin={
+                      edge === 'start'
+                        ? Math.max(0, state.range.endSeconds - MAX_RANGE_SECONDS)
+                        : state.range.startSeconds + MIN_RANGE_SECONDS
+                    }
                     aria-valuemax={
                       edge === 'start'
                         ? state.range.endSeconds - MIN_RANGE_SECONDS
-                        : state.sourceDurationSeconds
+                        : Math.min(
+                            state.sourceDurationSeconds,
+                            state.range.startSeconds + MAX_RANGE_SECONDS,
+                          )
                     }
                     aria-valuenow={
                       edge === 'start' ? state.range.startSeconds : state.range.endSeconds
@@ -220,9 +243,12 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
                     onPointerDown={onHandlePointerDown(edge)}
                     onPointerMove={onHandlePointerMove}
                     onPointerUp={onHandlePointerUp}
+                    onPointerCancel={onHandlePointerUp}
+                    onLostPointerCapture={onHandlePointerUp}
                     onKeyDown={onHandleKeyDown(edge)}
                   />
-                ))}
+                  );
+                })}
               </div>
               <div className={styles.playhead} style={{ left: `${playheadFraction * 100}%` }}>
                 <span className={styles.playheadTip} aria-hidden />
@@ -237,7 +263,7 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
               </span>
             ))}
             <span className={styles.legendNote}>
-              {MIN_RANGE_SECONDS}초 미만·{MAX_RANGE_TEXT} 초과로는 핸들이 움직이지 않아요
+              {MIN_RANGE_SECONDS}초 미만, {MAX_RANGE_TEXT} 초과로는 핸들이 움직이지 않아요
             </span>
           </div>
 
