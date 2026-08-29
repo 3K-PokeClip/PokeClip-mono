@@ -78,6 +78,8 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `/home` `/broadcast` `/clips` `/settings`                                             | 독 4개 — `(dock)` 그룹 공유 셸(AuthGuard + 하단 Dock)                  |
 | `/broadcast`                                                                          | `/broadcast/livenow` 리다이렉트 — 방송 그룹은 좌측 `Side`를 갖는다     |
 | `/broadcast/livenow`                                                                  | 라이브 대시보드 (지난 방송 `/broadcast/vod`는 별도 티켓)               |
+| `/clips/editor`                                                                       | 클립 편집기 진입 — 기본 모드로 리다이렉트 (간편/정밀 설정은 이후 티켓) |
+| `/clips/editor/studio`                                                                | 클립 편집기 스튜디오형 목업 (시안 1d-a) — `(fullscreen)` 그룹, 독 없음 |
 | `/settings`                                                                           | `/settings/plugin` 리다이렉트 — 설정 그룹도 좌측 `Side`를 갖는다       |
 | `/settings/channels` `/settings/plugin` `/settings/notifications` `/settings/account` | 채널 연동 · 플러그인 · 알림 설정 · 계정 (나머지 설정 화면은 별도 티켓) |
 | `/goodbye`                                                                            | 탈퇴 완료 안내 (셸 없음) — 토큰이 빈 직후라 `(dock)` 안에서는 못 뜬다  |
@@ -86,6 +88,8 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | 그 밖의 모든 주소                                                                     | 404 폴백 (`app/not-found.tsx`) — 아래 참조                             |
 
 **치지직 콜백 계약.** `/oauth/chzzk/callback`은 `(dock)` **밖**이라 `AuthGuard`가 덮지 않는다 — 세션 판정은 화면이 직접 하고, 세션이 없으면 로그인으로 보낸 뒤 `/settings/channels`로 되돌아온다. 이 경로는 백엔드 `CHZZK_REDIRECT_URI`, 그리고 **치지직 개발자 센터에 등록된 redirect URI**와 **정확히 같아야 한다** — 개발자 센터는 앱당 하나만 등록하므로 환경마다 앱을 따로 판다. 프론트에 치지직용 env는 없다(동의 URL을 백엔드가 조립한다). 어긋나면 개발 빌드 콘솔에 경고가 뜬다(`chzzkOAuth.warnIfCallbackMismatch`) — 그게 없으면 증상이 "동의를 다 마친 뒤 낯선 주소에서 막힘"으로만 나타난다.
+
+**전체 화면 계약.** 클립 편집기는 `(dock)`이 아니라 `(fullscreen)` 그룹에 둔다 — 시안 1d는 하단 독 없이 타임라인이 화면 바닥에 붙는 작업 화면이다. 두 그룹의 차이는 Dock 하나뿐이라 로그인 가드는 `(fullscreen)/layout.tsx`가 똑같이 덮는다. 독이 없으니 **나가는 길은 화면이 직접 내야 한다** — 편집기 헤더의 「보관함으로」가 그 자리다. `/clips`는 `(dock)`에, `/clips/editor`는 `(fullscreen)`에 있지만 URL 경로가 겹치지 않아 충돌하지 않는다.
 
 **탈퇴 완료 계약.** `/goodbye`도 `(dock)` **밖**에 둔다 — `AuthGuard`는 refresh 토큰이 비는 순간 `/login`으로 보내므로, 탈퇴 직후 상태인 이 화면은 가드 안에서는 뜰 틈이 없다. 탈퇴 확정은 `markIntentionalLogout()`을 먼저 찍어 이 경로가 복원 경로로 남지 않게 한다 (POK-206). ⚠ 탈퇴 백엔드(POK-171)가 아직 없어 실제로 지워지는 것은 없다.
 

@@ -62,6 +62,16 @@ describe('LiveScreen — 하이라이트 카드', () => {
     expect(screen.getByText('만료')).toBeInTheDocument();
   });
 
+  it('"편집"은 클립 편집기로 가고, 업로드는 아직 잠겨 있다', () => {
+    renderLive();
+
+    const edits = screen.getAllByRole('link', { name: '편집' });
+    expect(edits.length).toBeGreaterThan(0);
+    for (const edit of edits) expect(edit).toHaveAttribute('href', '/clips/editor');
+    // 업로드 라우트(POK-111)는 아직 없다 — 자리만 두고 비활성
+    expect(screen.getAllByRole('button', { name: '원클릭 업로드' })[0]).toBeDisabled();
+  });
+
   it('점수가 보이는 곳에만 있지 않다 — 듣는 쪽에도 남긴다', () => {
     // 시안상 점수는 썸네일 위에만 있는데 그쪽은 aria-hidden이라 어디서도 안 읽혔다
     renderLive();

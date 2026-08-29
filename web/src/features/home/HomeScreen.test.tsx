@@ -29,6 +29,15 @@ describe('HomeScreen', () => {
     expect(screen.getByRole('heading', { name: '만료 임박 VOD' })).toBeInTheDocument();
   });
 
+  it('이어서 편집 배너가 클립 편집기로 간다', () => {
+    render(<HomeScreen />);
+
+    expect(screen.getByRole('link', { name: '이어서 편집' })).toHaveAttribute(
+      'href',
+      '/clips/editor',
+    );
+  });
+
   it('이어서 편집 배너를 닫을 수 있다', async () => {
     const user = userEvent.setup();
     render(<HomeScreen />);
