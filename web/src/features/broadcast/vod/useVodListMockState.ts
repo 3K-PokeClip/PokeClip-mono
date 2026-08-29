@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useToast } from '@/ui';
 import { excludeLive, filterByPeriod } from './vodListView';
 
 // 시안 1f 지난 방송 목록의 목업 상태.
@@ -45,9 +46,19 @@ export interface VodRowVisual {
   cardCount: number;
   /** 만료 임박 행의 「저장하지 않은 카드 N개가 함께 삭제됩니다」 */
   unsavedCardCount?: number;
-  /** 「풀 VOD 받는 중 N%」 — 다운로드 플로우는 이 티켓 범위 밖이고 표기만 재현한다 */
-  downloadProgress?: number;
 }
+
+/**
+ * 풀 VOD 내려받기 상태 — 시안 1f의 행 오른쪽 조작부 3분기가 이 값에서 갈린다.
+ *
+ * ⚠ 실제로 받는 일은 아직 아무것도 안 한다. 받기를 시작하면 「준비 중인 기능」 토스트가
+ * 뜨고 행은 idle에 머문다 — 다운로드 백엔드가 기능명세·계약에 아직 없기 때문이다(POK-226).
+ * 화면은 시안대로 세 상태를 모두 그릴 수 있어야 하므로 목업이 두 상태를 심어 둔다.
+ */
+export type VodDownloadState =
+  { kind: 'idle' } | { kind: 'downloading'; progress: number } | { kind: 'done' };
+
+export const VOD_DOWNLOAD_IDLE: VodDownloadState = { kind: 'idle' };
 
 export type VodPeriodFilter = 'all' | '7d' | '30d' | 'custom';
 
@@ -61,6 +72,7 @@ export interface VodCustomRange {
 export interface VodListOptions {
   broadcasts?: VodBroadcast[];
   visuals?: Record<string, VodRowVisual>;
+  downloads?: Record<string, VodDownloadState>;
 }
 
 export interface VodListMockState {
@@ -75,6 +87,12 @@ export interface VodListMockState {
   setFilter: (filter: VodPeriodFilter) => void;
   customRange: VodCustomRange;
   setCustomRange: (range: VodCustomRange) => void;
+  downloads: Record<string, VodDownloadState>;
+  /** 화질을 고르고 받기를 눌렀을 때 — 지금은 「준비 중」만 알린다 */
+  requestDownload: (streamId: string, quality: string) => void;
+  cancelDownload: (streamId: string) => void;
+  /** 「받기 완료」를 눌러 다시 받기 — 자리를 idle로 되돌린다 */
+  resetDownload: (streamId: string) => void;
 }
 
 // 「지금」을 고정한다. 클라이언트 시계로 계산하면 하이드레이션이 어긋나고(MOCK_GREETING 선례),
@@ -125,13 +143,7 @@ const MOCK_ROWS: MockRow[] = [
   {
     streamId: 'stream-2607',
     endedAt: ago(1, 2),
-    visual: {
-      title: '고민상담 라디오',
-      durationSec: 11144,
-      cardCount: 6,
-      // 받는 중 — 풀 VOD 저장 진행률(B5 목업 전용)
-      downloadProgress: 46,
-    },
+    visual: { title: '고민상담 라디오', durationSec: 11144, cardCount: 6 },
   },
   {
     streamId: 'stream-2606',
@@ -213,12 +225,46 @@ const MOCK_VISUALS: Record<string, VodRowVisual> = Object.fromEntries(
 
 const EMPTY_RANGE: VodCustomRange = { from: null, to: null };
 
+// 시안이 그리는 세 상태를 한 화면에서 다 볼 수 있게 둘을 심어 둔다 — 받기를 눌러도
+// 지금은 「준비 중」만 뜨므로, 심지 않으면 받는 중·받기 완료 자리를 아무도 못 본다.
+const MOCK_DOWNLOADS: Record<string, VodDownloadState> = {
+  'stream-2607': { kind: 'downloading', progress: 46 },
+  'stream-2604': { kind: 'done' },
+};
+
 export function useVodListMockState(options: VodListOptions = {}): VodListMockState {
+  const { toast } = useToast();
   const [filter, setFilter] = useState<VodPeriodFilter>('all');
   const [customRange, setCustomRange] = useState<VodCustomRange>(EMPTY_RANGE);
+  const [downloads, setDownloads] = useState<Record<string, VodDownloadState>>(
+    () => options.downloads ?? MOCK_DOWNLOADS,
+  );
 
   const source = options.broadcasts ?? MOCK_BROADCASTS;
   const visuals = options.visuals ?? MOCK_VISUALS;
+
+  const setDownload = useCallback((streamId: string, state: VodDownloadState) => {
+    setDownloads((prev) => ({ ...prev, [streamId]: state }));
+  }, []);
+
+  // 받기를 실제로 시작하지 않는다 — 다운로드 백엔드가 기능명세·계약에 아직 없다.
+  // 진행 중인 척하고 멈춰 있느니 준비 중이라고 말하는 편이 낫다(ADR-044의 「거짓말 금지」).
+  const requestDownload = useCallback(() => {
+    toast({
+      tone: 'info',
+      title: '준비 중인 기능이에요',
+      description: '풀 VOD 내려받기는 아직 준비 중이에요. 준비되면 알려드릴게요.',
+    });
+  }, [toast]);
+
+  const cancelDownload = useCallback(
+    (streamId: string) => setDownload(streamId, VOD_DOWNLOAD_IDLE),
+    [setDownload],
+  );
+  const resetDownload = useCallback(
+    (streamId: string) => setDownload(streamId, VOD_DOWNLOAD_IDLE),
+    [setDownload],
+  );
 
   // 필터링은 순수 함수에 맡긴다 — 연동 때 이 계산이 서버 질의 조건으로 옮겨가더라도
   // 화면은 클라에서 걸렀는지 서버가 걸러 줬는지 몰라야 한다.
@@ -237,5 +283,9 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     setFilter,
     customRange,
     setCustomRange,
+    downloads,
+    requestDownload,
+    cancelDownload,
+    resetDownload,
   };
 }

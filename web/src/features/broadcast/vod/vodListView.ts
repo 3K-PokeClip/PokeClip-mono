@@ -8,8 +8,8 @@ import { formatUptime } from '@/features/player/playerMath';
 import type {
   VodBroadcast,
   VodCustomRange,
+  VodDownloadState,
   VodPeriodFilter,
-  VodRowVisual,
 } from './useVodListMockState';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -58,14 +58,16 @@ export function durationLabel(durationSec: number | null): string | null {
   return formatUptime(durationSec);
 }
 
-/** 시안 1f 행이 아는 상태 — 계약의 status·보관 기한·목업 진행률이 여기로 접힌다 */
+/** 시안 1f 행이 아는 상태 — 계약의 status·보관 기한·내려받기 상태가 여기로 접힌다 */
 export type VodRowView =
   /** 방금 종료 — VOD가 아직 없어 열 수 없다 */
   | { kind: 'preparing' }
   /** 보관 기한이 지나 지워진 것 — 줄은 남지만 열 것이 없다 */
   | { kind: 'expired' }
-  /** 풀 VOD 저장 중 — 행 안에서 진행률을 보여준다 (B5 미구현이라 목업 전용 상태다) */
+  /** 풀 VOD 저장 중 — 썸네일이 진행률로 덮인다 (B5 미구현이라 목업 전용 상태다) */
   | { kind: 'downloading'; progress: number }
+  /** 다 받아 둔 것 — 다시 받을 수 있다 */
+  | { kind: 'done' }
   | { kind: 'ready' };
 
 const VIEW_BY_STATUS: Record<VodBroadcast['status'], 'preparing' | 'ready'> = {
@@ -81,21 +83,50 @@ const VIEW_BY_STATUS: Record<VodBroadcast['status'], 'preparing' | 'ready'> = {
  * 던지게 돼 있지만(README 404 계약) 그것은 목록이 낡았을 때의 그물이고, 만료를 이미 아는
  * 자리에서까지 열리는 척할 이유는 아니다.
  */
-export function rowViewFor(
-  item: VodBroadcast,
-  visual: VodRowVisual | undefined,
-  now: Date,
-): VodRowView {
+export function rowViewFor(item: VodBroadcast, download: VodDownloadState, now: Date): VodRowView {
   if (VIEW_BY_STATUS[item.status] === 'preparing') return { kind: 'preparing' };
   if (ddayFor(item.vodExpiresAt, now).kind === 'expired') return { kind: 'expired' };
-  const progress = visual?.downloadProgress;
-  if (progress !== undefined) return { kind: 'downloading', progress };
+  if (download.kind === 'downloading') return { kind: 'downloading', progress: download.progress };
+  if (download.kind === 'done') return { kind: 'done' };
   return { kind: 'ready' };
 }
 
-/** 뷰어로 들어갈 수 있는 행인지 — 링크·체브런·다운로드 자리를 함께 가른다 */
+/** 뷰어로 들어갈 수 있는 행인지 — 링크·체브런을 함께 가른다 */
 export function isOpenable(view: VodRowView): boolean {
-  return view.kind === 'ready' || view.kind === 'downloading';
+  return view.kind === 'ready' || view.kind === 'downloading' || view.kind === 'done';
+}
+
+/**
+ * 화질 선택지와 예상 크기. 크기를 행마다 계산하는 이유는, 6시간짜리와 2시간짜리가 같은
+ * 「6.2GB」를 달면 목업을 보는 사람이 바로 거짓임을 알기 때문이다. 초당 바이트는 시안
+ * 표기값(4:12:08 → 6.2GB · 2.4GB · 180MB)이 그대로 나오게 잡았다.
+ *
+ * 실기능이 붙으면 이 값은 서버가 준다 — 그때 이 함수는 사라진다.
+ */
+export interface VodQualityOption {
+  id: 'original' | 'sd' | 'audio';
+  label: string;
+  size: string;
+}
+
+const QUALITY_SPECS: { id: VodQualityOption['id']; label: string; bytesPerSecond: number }[] = [
+  { id: 'original', label: '원본 화질 · 1080p60', bytesPerSecond: 410_000 },
+  { id: 'sd', label: '720p30', bytesPerSecond: 159_000 },
+  { id: 'audio', label: '오디오만 · MP3', bytesPerSecond: 11_900 },
+];
+
+function sizeLabel(bytes: number): string {
+  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)}GB`;
+  return `${Math.round(bytes / 1_000_000)}MB`;
+}
+
+export function qualityOptionsFor(durationSec: number | null): VodQualityOption[] {
+  return QUALITY_SPECS.map(({ id, label, bytesPerSecond }) => ({
+    id,
+    label,
+    // 길이를 모르면 크기도 모른다 — 지어내지 않고 자리를 비운다
+    size: durationSec === null ? '크기 미상' : sizeLabel(durationSec * bytesPerSecond),
+  }));
 }
 
 /**

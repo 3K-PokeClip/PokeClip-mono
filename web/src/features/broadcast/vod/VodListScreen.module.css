@@ -150,6 +150,54 @@
   color: #fff;
 }
 
+/* ---------- 받는 중 · 썸네일 오버레이 (시안 1f ②) ---------- */
+
+.dlOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background: rgb(16 17 21 / 0.66);
+  backdrop-filter: saturate(0.6) blur(1px);
+}
+
+/* 받은 만큼 아래에서 차오른다 */
+.dlFill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgb(255 255 255 / 0.13);
+  border-top: 1.5px solid var(--pc-color-accent);
+  transition: height 0.35s linear;
+}
+
+.dlText {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(1 * var(--pc-u));
+  color: #fff;
+}
+
+.dlPercent {
+  font-family: var(--pc-font-mono);
+  font-size: calc(21 * var(--pc-u));
+  font-weight: 750;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.dlCaption {
+  font-size: calc(9.5 * var(--pc-u));
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: rgb(255 255 255 / 0.82);
+}
+
 .rowText {
   flex: 1;
   min-width: 0;
@@ -230,13 +278,103 @@
   font-weight: 600;
 }
 
-.rowDownload {
-  flex: none;
-}
-
 .rowChevron {
   color: var(--pc-color-text-muted);
   flex: none;
+}
+
+/* 다 받아 둔 행 — 눌러서 다시 받는다 */
+.donePill {
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+  height: calc(30 * var(--pc-u));
+  padding: 0 calc(9 * var(--pc-u));
+  border: none;
+  border-radius: calc(8 * var(--pc-u));
+  background: color-mix(in srgb, var(--pc-color-success) 14%, transparent);
+  font-family: inherit;
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-success-text, var(--pc-color-success));
+  cursor: pointer;
+  flex: none;
+  pointer-events: auto;
+}
+
+/* ---------- 화질 선택 팝오버 (시안 1f ①) ---------- */
+
+.pickPanel {
+  width: calc(288 * var(--pc-u));
+  padding: calc(15 * var(--pc-u));
+}
+
+.pickTitle {
+  margin: 0;
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+}
+
+.pickSub {
+  margin: calc(3 * var(--pc-u)) 0 0;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.pickOptions {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6 * var(--pc-u));
+  margin-top: calc(12 * var(--pc-u));
+}
+
+.pickOption {
+  gap: calc(9 * var(--pc-u));
+  padding: calc(9 * var(--pc-u)) calc(11 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(10 * var(--pc-u));
+}
+
+.pickOption:hover {
+  border-color: var(--pc-color-border-default);
+}
+
+.pickOption:has(input:checked) {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent-subtle);
+}
+
+/* Radio가 label 내용을 span 하나로 감싸므로, 이름과 크기를 가르는 것은 그 span이다 */
+.pickOption > span:last-child {
+  display: flex;
+  align-items: center;
+  gap: calc(9 * var(--pc-u));
+  flex: 1;
+  min-width: 0;
+}
+
+.pickOptionLabel {
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 650;
+}
+
+.pickOptionSize {
+  margin-left: auto;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.pickNote {
+  margin: calc(10 * var(--pc-u)) 0 0;
+  font-size: calc(10.5 * var(--pc-u));
+  line-height: 1.5;
+  color: var(--pc-color-text-muted);
+}
+
+.pickActions {
+  display: flex;
+  gap: calc(8 * var(--pc-u));
+  margin-top: calc(12 * var(--pc-u));
 }
 
 /* ---------- 빈 상태 ---------- */

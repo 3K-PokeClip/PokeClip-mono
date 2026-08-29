@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { VodBroadcast, VodRowVisual } from './useVodListMockState';
+import type { VodBroadcast, VodDownloadState } from './useVodListMockState';
 import {
   dateLabel,
   ddayFor,
@@ -7,6 +7,7 @@ import {
   excludeLive,
   filterByPeriod,
   isOpenable,
+  qualityOptionsFor,
   rowViewFor,
 } from './vodListView';
 
@@ -27,10 +28,6 @@ function broadcast(patch: Partial<VodBroadcast> = {}): VodBroadcast {
     vodExpiresAt: iso(57 * DAY_MS),
     ...patch,
   };
-}
-
-function visual(patch: Partial<VodRowVisual> = {}): VodRowVisual {
-  return { title: '합방 특집 — 4인 내전', durationSec: 15128, cardCount: 11, ...patch };
 }
 
 describe('vodListView — ddayFor', () => {
@@ -92,48 +89,77 @@ describe('vodListView — durationLabel', () => {
 });
 
 describe('vodListView — rowViewFor', () => {
+  const idle: VodDownloadState = { kind: 'idle' };
+
   it('방금 끝난 방송은 준비 중이다', () => {
-    expect(rowViewFor(broadcast({ status: 'ended' }), visual(), NOW)).toEqual({
-      kind: 'preparing',
-    });
+    expect(rowViewFor(broadcast({ status: 'ended' }), idle, NOW)).toEqual({ kind: 'preparing' });
   });
 
-  it('진행률이 있으면 받는 중이다', () => {
-    expect(rowViewFor(broadcast(), visual({ downloadProgress: 46 }), NOW)).toEqual({
+  it('받는 중이면 진행률을 그대로 싣는다', () => {
+    expect(rowViewFor(broadcast(), { kind: 'downloading', progress: 46 }, NOW)).toEqual({
       kind: 'downloading',
       progress: 46,
     });
   });
 
-  it('VOD가 준비됐고 받는 중도 아니면 볼 수 있는 행이다', () => {
-    expect(rowViewFor(broadcast(), visual(), NOW)).toEqual({ kind: 'ready' });
-    expect(rowViewFor(broadcast(), undefined, NOW)).toEqual({ kind: 'ready' });
-  });
-
-  it('진행률 0%도 받는 중이다 — 없는 것과 0은 다르다', () => {
-    expect(rowViewFor(broadcast(), visual({ downloadProgress: 0 }), NOW)).toEqual({
+  it('진행률 0%도 받는 중이다 — 시작하자마자의 상태다', () => {
+    expect(rowViewFor(broadcast(), { kind: 'downloading', progress: 0 }, NOW)).toEqual({
       kind: 'downloading',
       progress: 0,
     });
   });
 
-  it('보관 기한이 지났으면 받는 중이든 아니든 만료다 — 열 것이 없다', () => {
+  it('다 받아 뒀으면 완료다', () => {
+    expect(rowViewFor(broadcast(), { kind: 'done' }, NOW)).toEqual({ kind: 'done' });
+  });
+
+  it('VOD가 준비됐고 받는 중도 아니면 볼 수 있는 행이다', () => {
+    expect(rowViewFor(broadcast(), idle, NOW)).toEqual({ kind: 'ready' });
+  });
+
+  it('보관 기한이 지났으면 받기 상태와 무관하게 만료다 — 열 것이 없다', () => {
     const gone = broadcast({ vodExpiresAt: iso(-DAY_MS) });
-    expect(rowViewFor(gone, visual(), NOW)).toEqual({ kind: 'expired' });
-    expect(rowViewFor(gone, visual({ downloadProgress: 46 }), NOW)).toEqual({ kind: 'expired' });
+    expect(rowViewFor(gone, idle, NOW)).toEqual({ kind: 'expired' });
+    expect(rowViewFor(gone, { kind: 'downloading', progress: 46 }, NOW)).toEqual({
+      kind: 'expired',
+    });
+    expect(rowViewFor(gone, { kind: 'done' }, NOW)).toEqual({ kind: 'expired' });
   });
 
   it('기한을 모르는 vod_ready는 만료로 접지 않는다 — 모르는 것과 지난 것은 다르다', () => {
-    expect(rowViewFor(broadcast({ vodExpiresAt: null }), visual(), NOW)).toEqual({ kind: 'ready' });
+    expect(rowViewFor(broadcast({ vodExpiresAt: null }), idle, NOW)).toEqual({ kind: 'ready' });
   });
 });
 
 describe('vodListView — isOpenable', () => {
-  it('준비 중·만료 행은 뷰어로 들어갈 수 없다', () => {
+  it('준비 중·만료 행만 뷰어로 못 들어간다 — 받는 중에도 VOD는 이미 있다', () => {
     expect(isOpenable({ kind: 'preparing' })).toBe(false);
     expect(isOpenable({ kind: 'expired' })).toBe(false);
     expect(isOpenable({ kind: 'ready' })).toBe(true);
     expect(isOpenable({ kind: 'downloading', progress: 46 })).toBe(true);
+    expect(isOpenable({ kind: 'done' })).toBe(true);
+  });
+});
+
+describe('vodListView — qualityOptionsFor', () => {
+  it('시안 표기값을 그대로 낸다 — 4:12:08이면 6.2GB · 2.4GB · 180MB', () => {
+    expect(qualityOptionsFor(15128).map((q) => `${q.label} ${q.size}`)).toEqual([
+      '원본 화질 · 1080p60 6.2GB',
+      '720p30 2.4GB',
+      '오디오만 · MP3 180MB',
+    ]);
+  });
+
+  it('짧은 방송은 더 작게 적힌다 — 길이와 무관한 고정값이 아니다', () => {
+    expect(qualityOptionsFor(3600)[0]!.size).toBe('1.5GB');
+  });
+
+  it('길이를 모르면 크기도 모른다 — 지어내지 않는다', () => {
+    expect(qualityOptionsFor(null).map((q) => q.size)).toEqual([
+      '크기 미상',
+      '크기 미상',
+      '크기 미상',
+    ]);
   });
 });
 

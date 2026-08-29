@@ -2,7 +2,7 @@
 
 import { Video } from 'lucide-react';
 import { Badge } from '@/ui';
-import { useVodListMockState, type VodListOptions } from './useVodListMockState';
+import { useVodListMockState, VOD_DOWNLOAD_IDLE, type VodListOptions } from './useVodListMockState';
 import { VodPeriodFilter } from './VodPeriodFilter';
 import { VodRow } from './VodRow';
 import styles from './VodListScreen.module.css';
@@ -16,8 +16,20 @@ import styles from './VodListScreen.module.css';
 // ADR-004와 어긋나고, 시안 오류로 판정됐다)과 풀 VOD 다운로드 플로우(명세·계약에 없는
 // 신규 기능이라 명세 개정이 먼저다). 행의 다운로드 버튼은 자리만 두고 비활성이다.
 export function VodListScreen(options: VodListOptions = {}) {
-  const { now, broadcasts, totalCount, visuals, filter, setFilter, customRange, setCustomRange } =
-    useVodListMockState(options);
+  const {
+    now,
+    broadcasts,
+    totalCount,
+    visuals,
+    filter,
+    setFilter,
+    customRange,
+    setCustomRange,
+    downloads,
+    requestDownload,
+    cancelDownload,
+    resetDownload,
+  } = useVodListMockState(options);
 
   return (
     <main className={styles.container}>
@@ -58,7 +70,16 @@ export function VodListScreen(options: VodListOptions = {}) {
       ) : (
         <ul className={styles.list} aria-label="지난 방송 목록">
           {broadcasts.map((item) => (
-            <VodRow key={item.streamId} item={item} visual={visuals[item.streamId]} now={now} />
+            <VodRow
+              key={item.streamId}
+              item={item}
+              visual={visuals[item.streamId]}
+              download={downloads[item.streamId] ?? VOD_DOWNLOAD_IDLE}
+              now={now}
+              onRequestDownload={(quality) => requestDownload(item.streamId, quality)}
+              onCancelDownload={() => cancelDownload(item.streamId)}
+              onResetDownload={() => resetDownload(item.streamId)}
+            />
           ))}
         </ul>
       )}
