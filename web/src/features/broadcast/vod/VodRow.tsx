@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import { ChevronRight, Download } from 'lucide-react';
 import { Badge, IconButton, Progress, Spinner, Tag, VisuallyHidden } from '@/ui';
 import type { VodBroadcast, VodRowVisual } from './useVodListMockState';
-import { dateLabel, ddayFor, durationLabel, rowViewFor } from './vodListView';
+import { dateLabel, ddayFor, durationLabel, isOpenable, rowViewFor } from './vodListView';
 import styles from './VodListScreen.module.css';
 
 // 시안 1f의 목록 행 하나. 표시 규칙은 전부 vodListView가 정한다 — 이 파일은 그리기만 한다.
@@ -23,12 +23,13 @@ export function VodRow({
   visual: VodRowVisual | undefined;
   now: Date;
 }) {
-  const view = rowViewFor(item, visual);
+  const view = rowViewFor(item, visual, now);
   const title = visual?.title ?? '제목 없는 방송';
   const duration = durationLabel(visual?.durationSec ?? null);
   const date = dateLabel(item);
   const dday = ddayFor(item.vodExpiresAt, now);
   const preparing = view.kind === 'preparing';
+  const openable = isOpenable(view);
   // 시안의 붉은 테두리 행 — 곧 사라질 것을 색과 문장 양쪽으로 말한다
   const urgent = dday.kind === 'active' && dday.urgent;
 
@@ -68,14 +69,15 @@ export function VodRow({
       </div>
 
       <div className={styles.rowText}>
-        {preparing ? (
-          // 열 VOD가 아직 없다 — aria-disabled 링크로 포커스를 받게 하느니 링크를 안 만든다
-          <span className={styles.rowTitle}>{title}</span>
-        ) : (
+        {openable ? (
           <Link href={`/broadcast/vod/${item.streamId}`} className={styles.rowLink}>
             {title}
             {duration ? <VisuallyHidden> · 길이 {duration}</VisuallyHidden> : null}
           </Link>
+        ) : (
+          // 열 VOD가 없다(준비 중이거나 이미 지워졌다) — aria-disabled 링크로 포커스를
+          // 받게 하느니 링크를 안 만든다
+          <span className={styles.rowTitle}>{title}</span>
         )}
         <p className={styles.rowMeta}>{meta}</p>
       </div>
@@ -137,9 +139,9 @@ export function VodRow({
         ) : null}
 
         {/* 열 수 있는 행만 「들어간다」고 말한다 */}
-        {preparing ? null : (
+        {openable ? (
           <ChevronRight size={16} className={styles.rowChevron} aria-hidden="true" />
-        )}
+        ) : null}
       </div>
     </li>
   );

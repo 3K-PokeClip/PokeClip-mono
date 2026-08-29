@@ -135,11 +135,13 @@
   color: var(--pc-color-text-muted);
 }
 
+/* 덮개 링크보다 위층이라(z-index) 클릭을 삼킨다 — 읽으라고 있는 표시이지 누를 것이 아니다 */
 .durationPill {
   position: absolute;
   bottom: calc(6 * var(--pc-u));
   right: calc(6 * var(--pc-u));
   z-index: 2;
+  pointer-events: none;
   padding: calc(1 * var(--pc-u)) calc(6 * var(--pc-u));
   border-radius: calc(5 * var(--pc-u));
   background: rgb(0 0 0 / 0.62);
@@ -162,12 +164,14 @@
   text-decoration: none;
 }
 
-/* 링크 하나가 행 전체를 덮는다 — 행을 <Link>로 감싸면 안의 버튼이 링크 안의 버튼이 된다 */
+/* 링크 하나가 행 전체를 덮는다 — 행을 <Link>로 감싸면 안의 버튼이 링크 안의 버튼이 된다.
+   반경은 덮는 대상(.row)의 값을 그대로 적는다 — inherit는 반경이 없는 .rowLink에서
+   0을 물려받아 포커스 링만 각지게 그린다 */
 .rowLink::after {
   content: '';
   position: absolute;
   inset: 0;
-  border-radius: inherit;
+  border-radius: calc(14 * var(--pc-u));
 }
 
 .rowLink:focus-visible {
@@ -186,14 +190,22 @@
 }
 
 /* 조작부는 덮개 링크 위층이다 — 다운로드 버튼을 누를 수 있어야 한다(지금은 비활성이지만
-   활성화되는 날에도 이 순서가 맞다) */
+   활성화되는 날에도 이 순서가 맞다).
+   다만 위층인 채로 두면 태그·배지·체브런처럼 누를 것이 아닌 것들까지 덮개를 가려
+   행 오른쪽이 통째로 클릭 사각지대가 된다 — 그래서 영역은 클릭을 통과시키고
+   실제 조작 요소만 다시 받는다. */
 .rowActions {
   position: relative;
   z-index: 1;
+  pointer-events: none;
   display: flex;
   align-items: center;
   gap: calc(8 * var(--pc-u));
   flex: none;
+}
+
+.rowActions button {
+  pointer-events: auto;
 }
 
 .rowProgress {

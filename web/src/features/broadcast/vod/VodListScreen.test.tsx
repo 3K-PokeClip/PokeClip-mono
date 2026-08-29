@@ -143,6 +143,34 @@ describe('VodListScreen — 기간 필터', () => {
   });
 });
 
+describe('VodListScreen — 보관 만료', () => {
+  // 기한이 지난 방송도 목록에 남는다(계약). 줄은 남되 열 것이 없다 —
+  // 「보관 만료」를 달고서 뷰어 링크를 함께 내면 한 줄이 두 말을 한다.
+  const expired = [
+    {
+      streamId: 'stream-old',
+      status: 'vod_ready' as const,
+      relation: 'OWNER' as const,
+      startedAt: '2026-05-01T19:00:00+09:00',
+      endedAt: '2026-05-01T23:00:00+09:00',
+      vodExpiresAt: '2026-06-30T23:00:00+09:00',
+    },
+  ];
+  const visuals = {
+    'stream-old': { title: '지워진 방송', durationSec: 14400, cardCount: 2 },
+  };
+
+  it('만료된 행은 링크도 다운로드도 내지 않는다', () => {
+    render(<VodListScreen broadcasts={expired} visuals={visuals} />);
+    const row = rowAt(0);
+
+    expect(within(row).getByText('보관 만료')).toBeInTheDocument();
+    expect(within(row).getByText('지워진 방송')).toBeInTheDocument();
+    expect(within(row).queryByRole('link')).toBeNull();
+    expect(within(row).queryByRole('button', { name: '풀 버전 다운로드' })).toBeNull();
+  });
+});
+
 describe('VodListScreen — 빈 상태', () => {
   it('방송이 하나도 없으면 60일 보관을 안내하고 필터를 감춘다', () => {
     render(<VodListScreen broadcasts={[]} />);

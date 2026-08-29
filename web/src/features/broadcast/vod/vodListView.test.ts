@@ -6,6 +6,7 @@ import {
   durationLabel,
   excludeLive,
   filterByPeriod,
+  isOpenable,
   rowViewFor,
 } from './vodListView';
 
@@ -92,26 +93,47 @@ describe('vodListView — durationLabel', () => {
 
 describe('vodListView — rowViewFor', () => {
   it('방금 끝난 방송은 준비 중이다', () => {
-    expect(rowViewFor(broadcast({ status: 'ended' }), visual())).toEqual({ kind: 'preparing' });
+    expect(rowViewFor(broadcast({ status: 'ended' }), visual(), NOW)).toEqual({
+      kind: 'preparing',
+    });
   });
 
   it('진행률이 있으면 받는 중이다', () => {
-    expect(rowViewFor(broadcast(), visual({ downloadProgress: 46 }))).toEqual({
+    expect(rowViewFor(broadcast(), visual({ downloadProgress: 46 }), NOW)).toEqual({
       kind: 'downloading',
       progress: 46,
     });
   });
 
   it('VOD가 준비됐고 받는 중도 아니면 볼 수 있는 행이다', () => {
-    expect(rowViewFor(broadcast(), visual())).toEqual({ kind: 'ready' });
-    expect(rowViewFor(broadcast(), undefined)).toEqual({ kind: 'ready' });
+    expect(rowViewFor(broadcast(), visual(), NOW)).toEqual({ kind: 'ready' });
+    expect(rowViewFor(broadcast(), undefined, NOW)).toEqual({ kind: 'ready' });
   });
 
   it('진행률 0%도 받는 중이다 — 없는 것과 0은 다르다', () => {
-    expect(rowViewFor(broadcast(), visual({ downloadProgress: 0 }))).toEqual({
+    expect(rowViewFor(broadcast(), visual({ downloadProgress: 0 }), NOW)).toEqual({
       kind: 'downloading',
       progress: 0,
     });
+  });
+
+  it('보관 기한이 지났으면 받는 중이든 아니든 만료다 — 열 것이 없다', () => {
+    const gone = broadcast({ vodExpiresAt: iso(-DAY_MS) });
+    expect(rowViewFor(gone, visual(), NOW)).toEqual({ kind: 'expired' });
+    expect(rowViewFor(gone, visual({ downloadProgress: 46 }), NOW)).toEqual({ kind: 'expired' });
+  });
+
+  it('기한을 모르는 vod_ready는 만료로 접지 않는다 — 모르는 것과 지난 것은 다르다', () => {
+    expect(rowViewFor(broadcast({ vodExpiresAt: null }), visual(), NOW)).toEqual({ kind: 'ready' });
+  });
+});
+
+describe('vodListView — isOpenable', () => {
+  it('준비 중·만료 행은 뷰어로 들어갈 수 없다', () => {
+    expect(isOpenable({ kind: 'preparing' })).toBe(false);
+    expect(isOpenable({ kind: 'expired' })).toBe(false);
+    expect(isOpenable({ kind: 'ready' })).toBe(true);
+    expect(isOpenable({ kind: 'downloading', progress: 46 })).toBe(true);
   });
 });
 

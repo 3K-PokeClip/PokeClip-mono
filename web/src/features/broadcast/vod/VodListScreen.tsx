@@ -50,8 +50,11 @@ export function VodListScreen(options: VodListOptions = {}) {
           </p>
         </div>
       ) : broadcasts.length === 0 ? (
-        // 「아직 없다」와 「이 기간에 없다」는 다른 말이다 — 빈 상태 카드를 재사용하면 거짓이 된다
-        <p className={styles.filterEmpty}>이 기간에 끝난 방송이 없어요.</p>
+        // 「아직 없다」와 「이 기간에 없다」는 다른 말이다 — 빈 상태 카드를 재사용하면 거짓이 된다.
+        // 목록이 통째로 사라지는 자리라 role="status"로 낭독시킨다(StreamInfoBar 선례).
+        <p className={styles.filterEmpty} role="status">
+          이 기간에 끝난 방송이 없어요.
+        </p>
       ) : (
         <ul className={styles.list} aria-label="지난 방송 목록">
           {broadcasts.map((item) => (
