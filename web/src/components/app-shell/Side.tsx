@@ -49,7 +49,7 @@ const MENUS: Record<SideMenu, Group[]> = {
       title: '방송',
       items: [
         { key: 'livenow', label: '라이브 대시보드', Icon: Radio, href: '/broadcast/livenow' },
-        { key: 'vod', label: '지난 방송', Icon: History },
+        { key: 'vod', label: '지난 방송', Icon: History, href: '/broadcast/vod' },
       ],
     },
   ],

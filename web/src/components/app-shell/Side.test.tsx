@@ -65,17 +65,18 @@ describe('Side — 설정', () => {
 });
 
 describe('Side — 방송', () => {
-  it('라이브 대시보드만 링크이고 지난 방송은 비활성이다', () => {
+  it('두 화면 모두 링크이고 지금 보는 쪽만 활성이다', () => {
     nav.pathname = '/broadcast/livenow';
     renderWithProviders(<Side menu="broadcast" />);
 
-    const links = screen.getAllByRole('link');
-    expect(links).toHaveLength(1);
-    expect(links[0]).toHaveAttribute('href', '/broadcast/livenow');
-    expect(links[0]).toHaveAttribute('aria-current', 'page');
+    const live = screen.getByRole('link', { name: /라이브 대시보드/ });
+    expect(live).toHaveAttribute('href', '/broadcast/livenow');
+    expect(live).toHaveAttribute('aria-current', 'page');
 
-    // 지난 방송 화면은 별도 티켓 — 있는 척하지 않는다
-    expect(screen.getByText('지난 방송').closest('[aria-disabled="true"]')).not.toBeNull();
+    // 지난 방송 목록(POK-226)이 생겨 비활성 자리가 링크가 됐다
+    const vod = screen.getByRole('link', { name: /지난 방송/ });
+    expect(vod).toHaveAttribute('href', '/broadcast/vod');
+    expect(vod).not.toHaveAttribute('aria-current');
   });
 
   it('접힘이 그룹을 넘어 유지된다 — 설정에서 접으면 방송에서도 접혀 있다', async () => {
