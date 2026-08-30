@@ -84,8 +84,11 @@ const VIEW_BY_STATUS: Record<VodBroadcast['status'], 'preparing' | 'ready'> = {
  * 자리에서까지 열리는 척할 이유는 아니다.
  */
 export function rowViewFor(item: VodBroadcast, download: VodDownloadState, now: Date): VodRowView {
-  if (VIEW_BY_STATUS[item.status] === 'preparing') return { kind: 'preparing' };
+  // 만료를 상태보다 먼저 본다. 뒤집으면 기한이 지나도록 `ended`에 머문 방송이 「준비 중」으로
+  // 접히는데, 화면은 만료 배지를 따로 계산하므로 한 줄이 「곧 준비돼요」와 「이미 지워졌어요」를
+  // 동시에 말한다. 기한이 지났으면 무엇을 기다리든 오지 않는다.
   if (ddayFor(item.vodExpiresAt, now).kind === 'expired') return { kind: 'expired' };
+  if (VIEW_BY_STATUS[item.status] === 'preparing') return { kind: 'preparing' };
   if (download.kind === 'downloading') return { kind: 'downloading', progress: download.progress };
   if (download.kind === 'done') return { kind: 'done' };
   return { kind: 'ready' };
@@ -150,11 +153,15 @@ function dayBoundary(day: string, edge: 'start' | 'end'): number | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day.trim());
   if (!match) return null;
   const [, year, month, date] = match;
-  const time =
-    edge === 'start'
-      ? new Date(Number(year), Number(month) - 1, Number(date), 0, 0, 0, 0).getTime()
-      : new Date(Number(year), Number(month) - 1, Number(date), 23, 59, 59, 999).getTime();
-  return Number.isFinite(time) ? time : null;
+  const y = Number(year);
+  const m = Number(month);
+  const d = Number(date);
+  const at =
+    edge === 'start' ? new Date(y, m - 1, d, 0, 0, 0, 0) : new Date(y, m - 1, d, 23, 59, 59, 999);
+  // 자릿수만 맞고 없는 날짜(2월 31일·13월)는 JS Date가 조용히 다음 달로 굴린다. 굴러갔으면
+  // 「안 준 것」으로 접는다 — 안 그러면 사용자가 안 고른 3월 3일부터로 목록이 걸린다.
+  if (at.getFullYear() !== y || at.getMonth() !== m - 1 || at.getDate() !== d) return null;
+  return at.getTime();
 }
 
 /**

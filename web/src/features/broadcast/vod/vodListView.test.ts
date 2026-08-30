@@ -129,6 +129,17 @@ describe('vodListView — rowViewFor', () => {
   it('기한을 모르는 vod_ready는 만료로 접지 않는다 — 모르는 것과 지난 것은 다르다', () => {
     expect(rowViewFor(broadcast({ vodExpiresAt: null }), idle, NOW)).toEqual({ kind: 'ready' });
   });
+
+  // 만료가 상태보다 앞선다. 뒤집히면 화면이 「준비 중」과 「보관 만료」를 한 줄에서 같이 말한다.
+  it('기한이 지나도록 ended에 머문 방송은 준비 중이 아니라 만료다', () => {
+    const stuck = broadcast({ status: 'ended', vodExpiresAt: iso(-DAY_MS) });
+    expect(rowViewFor(stuck, idle, NOW)).toEqual({ kind: 'expired' });
+  });
+
+  it('기한이 안 지난 ended는 그대로 준비 중이다', () => {
+    const fresh = broadcast({ status: 'ended', vodExpiresAt: iso(DAY_MS) });
+    expect(rowViewFor(fresh, idle, NOW)).toEqual({ kind: 'preparing' });
+  });
 });
 
 describe('vodListView — isOpenable', () => {
@@ -241,5 +252,20 @@ describe('vodListView — filterByPeriod', () => {
 
   it('못 읽는 날짜는 안 준 것으로 접는다', () => {
     expect(filterByPeriod(items, 'custom', { from: '어제', to: null }, NOW)).toHaveLength(5);
+  });
+
+  // 자릿수만 맞고 없는 날짜는 JS Date가 다음 달로 굴린다 — 굴러간 날짜로 거르면
+  // 사용자가 고르지도 않은 구간이 걸린다
+  it('없는 날짜(2월 31일·13월)도 안 준 것으로 접는다', () => {
+    for (const bad of ['2026-02-31', '2026-13-01', '2026-04-00']) {
+      expect(filterByPeriod(items, 'custom', { from: bad, to: null }, NOW)).toHaveLength(5);
+      expect(filterByPeriod(items, 'custom', { from: null, to: bad }, NOW)).toHaveLength(5);
+    }
+  });
+
+  it('있는 날짜는 그대로 건다 — 윤년 2월 29일', () => {
+    const leap = [broadcast({ streamId: '윤년', endedAt: '2028-02-29T20:00:00+09:00' })];
+    const range = { from: '2028-02-29', to: '2028-02-29' };
+    expect(filterByPeriod(leap, 'custom', range, NOW)).toHaveLength(1);
   });
 });
