@@ -246,13 +246,16 @@ CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리�
 
 ## MediaMTX 버전업 체크리스트
 
-**버전을 올리면 `TestPinnedMediaMTXVersionMatchesDockerfile`이 빨간불이 된다. 그 테스트가 이 절로 안내한다.**
-([`internal/mtxhook/version_contract_test.go`](internal/mtxhook/version_contract_test.go) —
-Dockerfile의 `FROM` 태그와 테스트 안 상수 `pinnedMediaMTXVersion`을 대조한다. 상수를 고치는
-행위가 곧 "아래 전제 9개를 새 버전에서 재확인했다"는 서명이다. 실패 메시지에 9개 목록이 그대로 들어 있다.)
+**핀이 어긋나면 [`internal/mtxhook/version_contract_test.go`](internal/mtxhook/version_contract_test.go)가
+빨간불이 되고, 그 실패 메시지가 이 절로 안내한다.** 상수는 셋이고 책임이 다르다 —
+`pinnedMediaMTXTag`(FROM 태그와 대조)·`pinnedMediaMTXDigest`(FROM digest와 대조)·
+**`upstreamBaseVersion`(아래 전제 9곳을 짊어지는 상수)**. **9곳 재확인의 서명은 마지막 하나이고**,
+그 값이 바뀌는 순간만 진짜 버전업이다(포크 태그의 `.1`→`.2`는 우리 수정만 바뀐 것이다).
+실패 메시지에 9개 목록이 그대로 들어 있다.
 
 버전 고정의 유일한 자리는 [`media/Dockerfile.mtxhook`](Dockerfile.mtxhook)의 `FROM`이다
-(compose의 `image:`가 `build:`로 바뀌면서 옮겨왔다). 훅 파라미터 이름은 버전 사이에 조용히
+(compose의 `image:`가 `build:`로 바뀌면서 옮겨왔다). **지금 그 줄은 상류 공식 이미지가 아니라
+우리 포크 빌드를 태그+digest로 가리킨다** — 아래 "이미지 출처에 묶인 전제" 절을 함께 읽는다. 훅 파라미터 이름은 버전 사이에 조용히
 바뀌거나 사라질 수 있고, **훅이 실행되지 않아도 아무 오류가 나지 않는다**. 그래서 절차를 고정한다.
 
 ### 버전에 묶인 전제 9곳 — 절차보다 먼저 확인한다
@@ -275,14 +278,50 @@ Dockerfile의 `FROM` 태그와 테스트 안 상수 `pinnedMediaMTXVersion`을 �
 
 **1.19.3 → 1.20.1 재검증 기록 (2026-08-28)**: 기존 8곳 전항 확인 + 9번 신설(체크리스트화) — ①`all_others` 송출로 훅 3종 실발화(스풀 기록) ②`shellquote.Split` 후 `expandEnv` 순서 불변(`cmd_os.go:16→22`) ③④`runOnReady` deprecated 별칭 생존(`conf/path.go:354`)·기동 WARN 0 ⑤1.20.1 실산출물 mvhd 4.117s = 최대 트랙 길이 일치 ⑥박스 배치 동일(ftyp·moov·(moof·mdat)×N — 픽스처 유지) ⑦`recordPartDuration` 기본 1s 불변(`conf/path.go:376`) ⑧UID 10002로 녹화 기록·권한 오류 0(+상류 read-only FS 복원 커밋 `c9f003f`). 부수: 상류 `a56c635`가 우리가 겪은 설정 API 데드락을 해소.
 
-전제는 아니지만 **버전 문자열을 그대로 적어 둔 곳이 2군데** 더 있다. 함께 고친다 —
-[`docs/dev-environment.md`](../docs/dev-environment.md)의 서비스 표와
-[`Dockerfile.mtxhook`](Dockerfile.mtxhook)의 digest pin 안내 주석.
+전제는 아니지만 **버전 문자열을 그대로 적어 둔 곳**이 더 있다. 함께 고친다 —
+[`docs/dev-environment.md`](../docs/dev-environment.md)의 서비스 표,
+[`Dockerfile.mtxhook`](Dockerfile.mtxhook) 주석의 상류 베이스 서술,
+그리고 [`infra/dev-media/compose.yml`](../infra/dev-media/compose.yml)의 상류 이미지 태그
+(그쪽은 임시 데모용이라 본선 핀을 따라가지 않는다 — ADR-040 만료분, 철거 대기).
+
+### 이미지 출처에 묶인 전제 — 우리 포크 라인(`pokeclip`)
+
+위 9곳이 **MediaMTX 버전**에 묶인 전제라면, 이것은 **어느 이미지냐**에 묶인 전제 하나다.
+
+`FROM`이 가리키는 것은 상류 공식 이미지가 아니라 우리 포크 빌드
+`ghcr.io/xodbs1021/mediamtx`다. 이 이미지에만 있는 것은 **슬레이트(송출이 끊겼을 때 서버가
+대신 내보내는 대기 화면) 구간을 녹화에서 빼는 스위치** `alwaysAvailableRecorded`이며,
+상류 제안(PR #5767)은 아직 머지 전이다. 결정 근거는 ADR-050 선결 B(ⓑ 자체 빌드 선행).
+
+| 전제 | 깨지면 무슨 일이 나나 | 어떻게 재확인하는가 |
+|---|---|---|
+| `FROM`이 우리 포크 빌드를 가리킨다<br>(닻: `pokeclip`) | 공식 이미지로 되돌리면 스위치가 사라져 **대기 화면이 다시 녹화되어 저장소로 올라간다 — 오류도 로그도 없이** | 기동 로그 첫 줄의 버전 문자열이 `v…-pokeclip.N`인지 본다(`docker compose logs media \| head -1`). 기계 방어는 `TestPinnedMediaMTXDigestMatchesDockerfile` |
+
+**핀은 태그와 digest를 함께 적는다.** 태그(`v1.20.1-pokeclip.1`)는 사람이 읽는 이름이고,
+digest는 불변 좌표다 — 같은 태그를 다시 밀어도 가리키는 이미지가 바뀌지 않는다. 그래서
+버전 대조 테스트도 둘 다 본다(`pinnedMediaMTXTag`·`pinnedMediaMTXDigest`).
+
+**새 이미지를 만들 때**: `xodbs1021/mediamtx`의 `pokeclip` 라인에 커밋 → `*-pokeclip.*` 태그를
+민다 → `pokeclip-image` 워크플로가 멀티아치 이미지를 GHCR에 올리고 **실행 요약에 `FROM …@sha256:`
+한 줄을 찍는다** → 그 값을 `Dockerfile.mtxhook`과 테스트 상수 2개에 옮긴다. 이미지 생성은
+자동이고 제품 반영은 수동이다 — 핀 교체가 이 절의 재확인을 동반해야 하기 때문이다.
+
+**상류에 머지되면**(포크가 필요 없어지면) **포크 전용 장치를 전부 걷어낸다** — 빠뜨리면 공식
+태그에서 포크 전용 단언이 남아 빨간불이 된다. 정리 목록은
+[`version_contract_test.go`](internal/mtxhook/version_contract_test.go)의 `forkPinGuide`에 번호로
+적혀 있다(FROM 복귀 · `mediaMTXImage` 복귀 · 태그 상수 정리 · digest 상수와 그 테스트 삭제 ·
+포크 전용 테스트 2종 삭제 · 이 절 삭제). 경로 설정의 `alwaysAvailableRecorded`는 그대로 둔다 —
+파라미터 이름이 같다.
+
+**포크 태그와 상류 버전의 관계**: 태그는 `v<상류버전>-pokeclip.<N>` 형식이고, 테스트
+`TestPinnedTagCarriesUpstreamBaseVersion`이 그 대응을 지킨다. `.1`→`.2`처럼 뒤 숫자만 오르는
+것은 **우리 수정만 바뀐 것**이라 위 9곳 재확인 대상이 아니다. 앞의 상류 버전이 바뀌는 순간이
+진짜 버전업이고, 그때 `upstreamBaseVersion`을 함께 고치며 9곳을 재확인한다.
 
 ### 절차
 
 1. **`FROM` 변경은 별도 PR로 낸다.** 다른 변경과 섞으면 회귀 원인을 가를 수 없다.
-2. 위 표 8개를 확인한 뒤 **같은 PR에서 `pinnedMediaMTXVersion`을 새 태그로 고친다.**
+2. 위 표 9곳을 확인한 뒤 **같은 PR에서 `upstreamBaseVersion`을 새 상류 버전으로 고친다.**
    확인 없이 상수만 맞추면 이 장치는 무력해진다 — 상수 수정은 확인했다는 서명이지 형식 절차가 아니다.
 3. 기동 로그에서 **deprecated/unknown 파라미터 WARN**을 확인한다 — `docker compose logs media | head -50`.
    훅 3종의 이름이 그대로 살아 있는지가 핵심이다.
