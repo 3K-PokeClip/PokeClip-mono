@@ -59,22 +59,34 @@ public abstract class WithdrawalTestSupport extends IntegrationTestSupport {
      * 지우려 들어 자식 표의 외래키에 걸리기 때문이다(services/CLAUDE.md 「자식 테이블 행을 남기는 테스트」).
      *
      * <p>자식을 먼저 지운다 — {@code refresh_tokens}({@link #bearer}가 만든다) ·
-     * {@code pairing_codes}·{@code stream_keys}(스트림키 갈래가 만든다).
-     * <b>이 목록은 이 계층이 실제로 만드는 것까지다</b> — 연동 표·초대 표를 심는 시험을 더하는 태스크는
+     * {@code pairing_codes}·{@code stream_keys}(스트림키 갈래가 만든다) ·
+     * {@code chzzk_channel_links}·{@code youtube_channel_links}(연동 갈래가 만든다).
+     * <b>이 목록은 이 계층이 실제로 만드는 것까지다</b> — 초대 표를 심는 시험을 더하는 태스크는
      * 자기 표를 여기 같이 더한다. 안 더하면 다음 클래스의 부모 정리가 외래키로 막힌다.
      *
-     * <p>🔴 <b>{@code secrets}를 {@code stream_keys}보다 <u>먼저</u> 지운다.</b> 그 표에는 회원 칸이 없어
-     * <b>스트림키 행을 통해서만</b> 그 회원 몫을 고를 수 있다 — 순서를 뒤집으면 고를 열쇠가 먼저 사라져
-     * 비밀값이 <b>주인 없이</b> 남는다. 탈퇴는 아직 비밀값을 안 지우므로(태스크 7) 이 계층이 매 시험마다
-     * 하나씩 남기고, 그것이 뒤 시험의 「주인 없는 비밀값 0건」을 오염시킨다.
+     * <p>🔴 <b>{@code secrets}를 그것을 가리키는 표보다 <u>먼저</u> 지운다.</b> 그 표에는 회원 칸이 없어
+     * <b>스트림키·연동 행을 통해서만</b> 그 회원 몫을 고를 수 있다 — 순서를 뒤집으면 고를 열쇠가 먼저
+     * 사라져 비밀값이 <b>주인 없이</b> 남는다. 탈퇴는 아직 스트림키 비밀값을 안 지우므로(태스크 7) 이 계층이
+     * 매 시험마다 하나씩 남기고, 그것이 뒤 시험의 「주인 없는 비밀값 0건」을 오염시킨다.
+     *
+     * <p>연동 쪽 비밀값은 해제 정리가 <b>대개</b> 먼저 지운다. 그래도 여기서 다시 지우는 이유는 정리가
+     * 안 도는 갈래(연동만 심고 탈퇴를 안 하는 시험)가 있어서다 — 없는 행을 지우는 것은 0행일 뿐 무해하다.
      */
     @AfterEach
     void 심은_행을_거둔다() {
         for (Long id : 심은_회원) {
             jdbc.update("DELETE FROM secrets WHERE ref IN "
                     + "(SELECT passphrase_ref FROM stream_keys WHERE user_id = ?)", id);
+            jdbc.update("DELETE FROM secrets WHERE ref IN "
+                    + "(SELECT access_token_ref FROM chzzk_channel_links WHERE user_id = ? "
+                    + "UNION SELECT refresh_token_ref FROM chzzk_channel_links WHERE user_id = ?)", id, id);
+            jdbc.update("DELETE FROM secrets WHERE ref IN "
+                    + "(SELECT access_token_ref FROM youtube_channel_links WHERE user_id = ? "
+                    + "UNION SELECT refresh_token_ref FROM youtube_channel_links WHERE user_id = ?)", id, id);
             jdbc.update("DELETE FROM pairing_codes WHERE user_id = ?", id);
             jdbc.update("DELETE FROM stream_keys WHERE user_id = ?", id);
+            jdbc.update("DELETE FROM chzzk_channel_links WHERE user_id = ?", id);
+            jdbc.update("DELETE FROM youtube_channel_links WHERE user_id = ?", id);
             jdbc.update("DELETE FROM refresh_tokens WHERE user_id = ?", id);
             jdbc.update("DELETE FROM users WHERE id = ?", id);
         }

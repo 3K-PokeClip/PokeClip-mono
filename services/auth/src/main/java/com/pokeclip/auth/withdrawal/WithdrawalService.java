@@ -2,11 +2,13 @@ package com.pokeclip.auth.withdrawal;
 
 import com.pokeclip.auth.AuthFailure;
 import com.pokeclip.auth.DataInconsistencyException;
+import com.pokeclip.auth.chzzk.ChzzkLinkWriter;
 import com.pokeclip.auth.streamkey.StreamKeyRepository;
 import com.pokeclip.auth.streamkey.pairing.PairingCodeRepository;
 import com.pokeclip.auth.token.RefreshTokenRepository;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
+import com.pokeclip.auth.youtube.YoutubeLinkWriter;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +41,8 @@ public class WithdrawalService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final StreamKeyRepository streamKeyRepository;
     private final PairingCodeRepository pairingCodeRepository;
+    private final ChzzkLinkWriter chzzkLinkWriter;
+    private final YoutubeLinkWriter youtubeLinkWriter;
 
     @Transactional
     public void withdraw(Long userId) {
@@ -82,6 +86,26 @@ public class WithdrawalService {
         // 살아있는 키를 읽고(새로 만들지 않고) 그 키는 곧 이 트랜잭션이 폐기한다.
         streamKeyRepository.revokeAlive(userId, now);
         pairingCodeRepository.consumeAliveOfUser(userId, now);
+
+        // 🔴 채널 연동은 기존 해제 경로를 그대로 부른다 — 여기에 UPDATE를 새로 쓰지 않는다.
+        //
+        // 표만 닫으면 절반이다. 그쪽 revoke가 커밋 뒤에 등록하는 것이 셋 더 있다:
+        // 비밀값(토큰 원문) 삭제 · 정리 스레드 제출 · 치지직 토큰 무효화. 여기서 표를 직접 닫으면
+        // 그 셋이 통째로 빠지고, 빠진 것이 조용하다 — 응답은 204고 표는 닫혀 있다.
+        //
+        // 🔴 새 폐기 사유도 만들지 않는다. USER_UNLINKED가 그대로 박혀야 두 연동의 정책 차이가
+        // 자동으로 지켜진다 — 치지직은 커밋 뒤 토큰 무효화를 보내고 유튜브는 안 보낸다.
+        // (구글 revoke는 「그 토큰」이 아니라 그 계정이 우리 앱에 준 동의 전부를 죽여, 같은 채널을
+        // 방금 연동한 다른 회원의 grant까지 끊는다 — POK-121 실측·결정. YoutubeLinkWriter javadoc.)
+        // 사유를 WITHDRAWN 같은 새 값으로 바꾸면 그쪽 상태 파생과 resolve의 UNLINKED 매핑이 갈린다.
+        //
+        // 🔴 둘 다 @Transactional(REQUIRED)이라 이 트랜잭션에 참여한다. 각자 users를 다시
+        // findByIdForUpdate 하지만 같은 트랜잭션이라 락 재진입이고 무해하다.
+        // 그 무해함은 「탈퇴가 락을 먼저 잡고 부른다」에 기대고 있다 — 이 호출을 락 밖으로
+        // (예: 별도 트랜잭션·커밋 뒤로) 옮기는 사람은 같은 회원 행을 두 번 잠그는 것이 되므로
+        // 경합 상대와 엇갈려 데드락 후보가 된다.
+        chzzkLinkWriter.revoke(userId, now);
+        youtubeLinkWriter.revoke(userId, now);
 
         // 🔴 비밀값(secrets)은 여기서 안 지운다 — 태스크 7의 커밋 뒤 전용 스레드로 간다.
         // afterCommit 안에서 REQUIRES_NEW인 secretStore.delete를 직접 부르면 원 커넥션을 쥔 채
