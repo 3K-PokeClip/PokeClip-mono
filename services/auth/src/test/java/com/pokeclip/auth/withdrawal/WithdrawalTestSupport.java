@@ -60,8 +60,9 @@ public abstract class WithdrawalTestSupport extends IntegrationTestSupport {
      *
      * <p>자식을 먼저 지운다 — {@code refresh_tokens}({@link #bearer}가 만든다) ·
      * {@code pairing_codes}·{@code stream_keys}(스트림키 갈래가 만든다) ·
-     * {@code chzzk_channel_links}·{@code youtube_channel_links}(연동 갈래가 만든다).
-     * <b>이 목록은 이 계층이 실제로 만드는 것까지다</b> — 초대 표를 심는 시험을 더하는 태스크는
+     * {@code chzzk_channel_links}·{@code youtube_channel_links}(연동 갈래가 만든다) ·
+     * {@code editor_delegations}·{@code editor_invitations}(편집자 관계 갈래가 만든다).
+     * <b>이 목록은 이 계층이 실제로 만드는 것까지다</b> — 새 표를 심는 시험을 더하는 태스크는
      * 자기 표를 여기 같이 더한다. 안 더하면 다음 클래스의 부모 정리가 외래키로 막힌다.
      *
      * <p>🔴 <b>{@code secrets}를 그것을 가리키는 표보다 <u>먼저</u> 지운다.</b> 그 표에는 회원 칸이 없어
@@ -87,6 +88,11 @@ public abstract class WithdrawalTestSupport extends IntegrationTestSupport {
             jdbc.update("DELETE FROM stream_keys WHERE user_id = ?", id);
             jdbc.update("DELETE FROM chzzk_channel_links WHERE user_id = ?", id);
             jdbc.update("DELETE FROM youtube_channel_links WHERE user_id = ?", id);
+            // 🔴 위임을 초대보다 먼저 지운다 — editor_delegations.invitation_id가 초대를 가리킨다.
+            // 그리고 둘 다 회원을 두 칸(streamer_id·editor_id / streamer_id·invitee_id)으로
+            // 가리키므로 한 칸만 지우면 상대 쪽 회원의 정리가 외래키에 막힌다.
+            jdbc.update("DELETE FROM editor_delegations WHERE streamer_id = ? OR editor_id = ?", id, id);
+            jdbc.update("DELETE FROM editor_invitations WHERE streamer_id = ? OR invitee_id = ?", id, id);
             jdbc.update("DELETE FROM refresh_tokens WHERE user_id = ?", id);
             jdbc.update("DELETE FROM users WHERE id = ?", id);
         }

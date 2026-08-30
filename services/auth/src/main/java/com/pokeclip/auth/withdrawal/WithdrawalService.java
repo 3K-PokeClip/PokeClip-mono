@@ -3,6 +3,8 @@ package com.pokeclip.auth.withdrawal;
 import com.pokeclip.auth.AuthFailure;
 import com.pokeclip.auth.DataInconsistencyException;
 import com.pokeclip.auth.chzzk.ChzzkLinkWriter;
+import com.pokeclip.auth.delegation.EditorDelegationRepository;
+import com.pokeclip.auth.delegation.EditorInvitationRepository;
 import com.pokeclip.auth.streamkey.StreamKeyRepository;
 import com.pokeclip.auth.streamkey.pairing.PairingCodeRepository;
 import com.pokeclip.auth.token.RefreshTokenRepository;
@@ -43,6 +45,8 @@ public class WithdrawalService {
     private final PairingCodeRepository pairingCodeRepository;
     private final ChzzkLinkWriter chzzkLinkWriter;
     private final YoutubeLinkWriter youtubeLinkWriter;
+    private final EditorDelegationRepository delegationRepository;
+    private final EditorInvitationRepository invitationRepository;
 
     @Transactional
     public void withdraw(Long userId) {
@@ -107,6 +111,22 @@ public class WithdrawalService {
         chzzkLinkWriter.revoke(userId, now);
         youtubeLinkWriter.revoke(userId, now);
 
+        // 🔴 편집자 관계는 양쪽 방향을 다 닫는다. 이 회원은 남의 편집자이기도 하고 자기 방송의
+        // 스트리머이기도 하므로, 한 방향만 닫으면 반대쪽이 통째로 남는다 — 탈퇴자가 남의 방송을
+        // 계속 편집하거나, 사라진 스트리머의 초대가 남의 초대함에서 아직 수락을 기다린다.
+        //
+        // 🔴 여기서 쓰는 쿼리 둘은 조건이 한 줄에 두 갈래다(streamer/editor · streamer/invitee).
+        // 한 갈래만 재는 시험은 나머지를 지워도 초록이라 WithdrawalDelegationTest가 갈래마다 따로 잰다.
+        //
+        // 사유가 WITHDRAWAL·CANCELED인 이유는 각 쿼리의 javadoc에 있다 — 요지는 「사람이 한 행동」과
+        // 「계정이 사라진 것」을 상대 화면에서 갈라 보이게 하는 것이다(PRD D5·D9).
+        //
+        // 🔴 두 쿼리는 clearAutomatically = true인데 flushAutomatically가 없다(기존 respond·cancel과
+        // 같은 모양이다). 여기 앞에 쌓인 영속성 변경이 없어서 지금은 무해하다 — 아래 익명화 재조회가
+        // 마지막이라는 것과 함께 봐야 한다.
+        delegationRepository.revokeAllOfUser(userId, now);
+        invitationRepository.cancelAllOfUser(userId, now);
+
         // 🔴 비밀값(secrets)은 여기서 안 지운다 — 태스크 7의 커밋 뒤 전용 스레드로 간다.
         // afterCommit 안에서 REQUIRES_NEW인 secretStore.delete를 직접 부르면 원 커넥션을 쥔 채
         // 두 번째를 요구해 풀 데드락이 된다(auth/CLAUDE.md 「알려진 구멍」 9, 풀 10·동시 25 → 21건 실패).
@@ -125,10 +145,15 @@ public class WithdrawalService {
         // 🔴 「익명화를 맨 앞으로 옮긴다」로 고치지 마라 — 우연히 듣는다. 그것이 듣는 이유는
         // revokeAlive·consumeAliveOfUser에 붙은 flushAutomatically = true가 비우기 전에 먼저
         // 밀어내 주기 때문인데, 위임·초대 쿼리에는 그것이 없다(기존 respond·cancel과 같은 모양).
-        // 그 둘만 남는 순서로 누가 바꾸는 날 같은 결함이 조용히 돌아온다. 계획 검증 실측:
+        // 계획 검증 실측:
         //   익명화 먼저                                 → deleted_at 찍힘  (초록)
         //   익명화 먼저 + clearAutomatically만 있는 쿼리 → deleted_at=null (빨간불)
         //   마지막에 재조회                              → deleted_at 찍힘  (초록, 순서와 무관)
+        //
+        // 🔴 그 「누가 바꾸는 날」이 태스크 6에 실제로 왔다 — 위 위임·초대 쿼리 둘이
+        // flushAutomatically 없이 clearAutomatically만 갖는다. 주입으로 확정했다(태스크 6):
+        // 재조회+익명화를 그 둘 「앞」으로 옮기면(관리 상태에서 쓴 직후 그 둘이 비운다)
+        // WithdrawalTest 5건이 빨간불이다. 이 재조회는 회수 단계 전부보다 뒤에 있어야 한다.
         //
         // 대가는 탈퇴 한 건당 SELECT 하나다. 탈퇴는 드문 요청이라 무시할 수 있다.
         userRepository.findById(userId)
