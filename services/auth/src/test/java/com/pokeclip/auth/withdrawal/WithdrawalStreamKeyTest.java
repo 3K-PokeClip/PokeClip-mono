@@ -13,6 +13,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -56,14 +57,17 @@ class WithdrawalStreamKeyTest extends WithdrawalTestSupport {
     private static final String EXCHANGE = "/api/stream-keys/pairing-codes/exchange";
 
     private final StreamKeyService streamKeyService;
+    /** 비밀값은 커밋 뒤 전용 스레드가 지운다 — 세기 전에 그것이 끝났는지 물어야 한다. */
+    private final WithdrawalCleanupExecutor cleanup;
     /** 락 대기 갈래만 창구를 안 거친다 — 락을 쥔 채 부르는 것이 요점이라 MockMvc를 낄 자리가 없다. */
     private final WithdrawalService withdrawalService;
 
     WithdrawalStreamKeyTest(MockMvc mockMvc, UserService userService, TokenService tokenService,
                             JdbcTemplate jdbc, StreamKeyService streamKeyService,
-                            WithdrawalService withdrawalService) {
+                            WithdrawalCleanupExecutor cleanup, WithdrawalService withdrawalService) {
         super(mockMvc, userService, tokenService, jdbc);
         this.streamKeyService = streamKeyService;
+        this.cleanup = cleanup;
         this.withdrawalService = withdrawalService;
     }
 
@@ -240,7 +244,7 @@ class WithdrawalStreamKeyTest extends WithdrawalTestSupport {
      * 깨어난 UPDATE는 옛 키가 이미 폐기된 것을 보고 <b>0행</b>을 돌려주고, 새 키는 그 문장의 스냅샷
      * 밖이라 손도 못 댄다 → <b>탈퇴한 계정에 살아있는 키가 남는다.</b>
      *
-     * <p>재는 것이 셋인 이유: ①은 「자격이 남았나」, ②는 「이 회원 몫 비밀값이 정확히 하나인가」,
+     * <p>재는 것이 셋인 이유: ①은 「자격이 남았나」, ②는 「이 회원 몫 비밀값이 남았나」,
      * ③은 「주인 없는 비밀값이 생겼나」다.
      *
      * <p>🔴 <b>②가 없으면 ③은 아무것도 안 잰다</b>(주입 H 실측). 재발급이 옛 비밀값 삭제를 통째로
@@ -248,10 +252,13 @@ class WithdrawalStreamKeyTest extends WithdrawalTestSupport {
      * 쌓이는 것은 고아가 아니라 <b>주인이 죽은</b> 비밀값이다. 둘은 다른 사고다:
      * ②는 「안 지웠다」, ③은 「엉뚱한 것을 지웠다」({@code StreamKeyRotateTest}가 잡는 그 갈래).
      *
-     * <p>②가 <b>1</b>인 이유: 재발급은 매번 새 비밀값을 만들고 <b>직전 것을 커밋 뒤에 지운다.</b>
-     * 탈퇴가 먼저 이기면 처음 것 하나가 남고, 재발급이 R번 이기면 마지막 것 하나가 남는다 —
-     * 어느 순서든 하나다. (탈퇴는 비밀값을 아직 안 지운다. 그것은 태스크 7이다.)
-     * ③을 <b>차이로</b> 재는 것은 다른 시험 클래스가 남긴 것을 우리 탓으로 세지 않기 위해서다.
+     * <p>🔴 <b>②는 태스크 7에서 「1」에서 「0」으로 바뀌었다.</b> 그전에는 탈퇴가 비밀값을 안 지워서
+     * 「어느 순서든 하나가 남는다」가 참이었다. 지금은 커밋 뒤 정리가 <b>이 회원의 키 전부(폐기 포함)</b>의
+     * 자리를 지우므로, 재발급이 직전 것을 못 지운 회원의 몫까지 함께 사라진다 — 그것이 PRD 성공 기준 7이다.
+     * <b>그래서 세기 전에 정리 잡을 기다린다</b>({@code awaitIdle}) — 안 기다리면 이 줄은 경합으로 갈리고,
+     * 정리 코드를 통째로 지워도 우연히 초록일 수 있다.
+     *
+     * <p>③을 <b>차이로</b> 재는 것은 다른 시험 클래스가 남긴 것을 우리 탓으로 세지 않기 위해서다.
      *
      * <p>{@code StreamKeyRotateTest.동시에_재발급해도_secret이_고아로_남지_않는다}와 같은 모양이다 —
      * submit → countDown → get 순서를 지킨다. {@code invokeAll}은 전부 끝날 때까지 블록하는데
@@ -296,9 +303,12 @@ class WithdrawalStreamKeyTest extends WithdrawalTestSupport {
             assertThat(aliveKeys(user))
                     .as("🔴 탈퇴한 계정에 살아있는 키가 남았다. 재발급이 탈퇴의 폐기 문장을 앞질렀다")
                     .isZero();
+            assertThat(cleanup.awaitIdle(Duration.ofSeconds(20)))
+                    .as("정리 잡이 시한 안에 안 끝났다 — 아래 「0건」이 「아직 안 지웠다」를 보는 것이 된다")
+                    .isTrue();
             assertThat(secretsOf(user))
-                    .as("이 회원 몫 비밀값이 하나가 아니다 — 재발급이 직전 것을 안 지웠다")
-                    .isEqualTo(1);
+                    .as("🔴 탈퇴한 계정 몫의 비밀값이 남았다 — 커밋 뒤 정리가 폐기된 키의 자리를 빠뜨렸다")
+                    .isZero();
             assertThat(orphanStreamKeySecrets() - orphansBefore)
                     .as("주인 없는 비밀값이 늘었다 — 폐기한 키와 삭제한 ref가 서로 다른 키다")
                     .isZero();

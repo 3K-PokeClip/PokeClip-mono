@@ -5,8 +5,10 @@ import com.pokeclip.auth.DataInconsistencyException;
 import com.pokeclip.auth.chzzk.ChzzkLinkWriter;
 import com.pokeclip.auth.delegation.EditorDelegationRepository;
 import com.pokeclip.auth.delegation.EditorInvitationRepository;
+import com.pokeclip.auth.profile.PhotoStorage;
 import com.pokeclip.auth.streamkey.StreamKeyRepository;
 import com.pokeclip.auth.streamkey.pairing.PairingCodeRepository;
+import com.pokeclip.auth.streamkey.secret.SecretStore;
 import com.pokeclip.auth.token.RefreshTokenRepository;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
@@ -20,6 +22,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 탈퇴 — 한 트랜잭션. <b>회원 행 락 안에서</b> 돈다.
@@ -47,6 +50,9 @@ public class WithdrawalService {
     private final YoutubeLinkWriter youtubeLinkWriter;
     private final EditorDelegationRepository delegationRepository;
     private final EditorInvitationRepository invitationRepository;
+    private final SecretStore secretStore;
+    private final PhotoStorage photoStorage;
+    private final WithdrawalCleanupExecutor cleanup;
 
     @Transactional
     public void withdraw(Long userId) {
@@ -127,14 +133,23 @@ public class WithdrawalService {
         delegationRepository.revokeAllOfUser(userId, now);
         invitationRepository.cancelAllOfUser(userId, now);
 
-        // 🔴 비밀값(secrets)은 여기서 안 지운다 — 태스크 7의 커밋 뒤 전용 스레드로 간다.
-        // afterCommit 안에서 REQUIRES_NEW인 secretStore.delete를 직접 부르면 원 커넥션을 쥔 채
-        // 두 번째를 요구해 풀 데드락이 된다(auth/CLAUDE.md 「알려진 구멍」 9, 풀 10·동시 25 → 21건 실패).
+        // 🔴 표 밖에 남는 것 둘 — 스트림키 비밀값과 사진 파일. 여기서 지우지 않고 자리만 읽어 둔다.
         //
-        // 🔴 그 정리를 붙이는 사람에게: passphrase_ref를 findByUserIdAndRevokedAtIsNull로 읽으려면
-        // 반드시 위 revokeAlive 앞이어야 한다. 뒤에서 읽으면 빈손이 돌아오고 그것이 조용하다 —
-        // 지울 것이 없다고 읽어 비밀값이 영영 남는다. (행 자체는 revoked_at만 채워진 채 살아 있으므로
-        // "이 회원의 폐기된 키"를 따로 조회하는 길도 있다. 어느 쪽이든 한 곳에서만 읽는다.)
+        // 이 트랜잭션 안에서 지우면 안 되는 이유가 둘 다 다르다: 비밀값 삭제는 REQUIRES_NEW라
+        // 원 커넥션을 쥔 채 두 번째를 요구하고(「알려진 구멍」 9 — 풀 10·동시 25에서 21건 실패),
+        // 사진 삭제는 외부 HTTP라 커넥션을 쥔 채 최대 8초를 기다린다(9·10번).
+        // afterCommit 안에서 직접 부르는 것도 같다 — JpaTransactionManager는 afterCommit을 다 돌린
+        // 뒤에야 커넥션을 돌려준다. 그래서 전용 스레드에 제출만 한다.
+        //
+        // 🔴 「살아있는 키 하나」가 아니라 이 회원의 키 전부(폐기 포함)를 읽는다.
+        // 재발급을 여러 번 한 회원은 폐기된 키가 여럿이고 각각의 비밀값이 남아 있을 수 있다 —
+        // 「정확히 하나」는 불변식이 아니다(passphraseRefsOfUser javadoc). 그 덕에 순서 제약도 없다:
+        // revokeAlive는 revoked_at만 채우고 행과 passphrase_ref는 그대로 산다.
+        List<String> passphraseRefs = streamKeyRepository.passphraseRefsOfUser(userId);
+
+        // 🔴 연동 둘은 자기 비밀값 정리를 이미 등록했다(ChzzkLinkWriter·YoutubeLinkWriter가
+        // 각자 자기 정리 스레드에 제출한다). 여기서 그것까지 다시 등록하면 같은 것을 두 번 지운다.
+        cleanup.afterCommit(userId, () -> cleanUp(userId, passphraseRefs));
 
         // 🔴 락은 이 트랜잭션이 계속 쥐고 있다. 그래도 다시 읽는 이유는 회수 단계들이 쓰는
         // @Modifying(clearAutomatically = true) 쿼리가 영속성 컨텍스트를 비워, 맨 앞에서 락으로
@@ -169,6 +184,45 @@ public class WithdrawalService {
         // 「지웠다」는 거짓 알리바이가 되고, 개인정보 삭제 문의에서 조사를 그 자리에서 멈추게 한다.
         // afterCommit은 같은 스레드 동기 실행이라 MDC 상관 ID도 살아 있다.
         logAfterCommit(() -> log.info("auth.withdrawal.completed userId={}", userId));
+    }
+
+    /**
+     * 정리 잡 본문(전용 스레드). <b>package-private은 시험용</b>이다 — 종료 시한에 잘리는 갈래를
+     * 재려면 스프링이 관리하는 풀 말고 다른 풀 위에서 이 본문을 돌려야 한다.
+     *
+     * <p>🔴 <b>둘을 각각 시도한다.</b> 한 try로 묶으면 앞의 실패가 뒤를 통째로 건너뛰어
+     * 그 자리가 영구히 남는다 — 유튜브 정리에서 봇 리뷰(PR #116)가 잡은 것과 같은 모양이다.
+     * 예외는 마지막에 다시 올려 잡이 {@code cleanup.failed} WARN으로 남기게 한다.
+     *
+     * <p><b>사진은 자리 둘을 모두 지운다</b>({@code PhotoStorage.deleteAll}). 표가 가리키지 않는
+     * 자리에도 파일이 있을 수 있어서다 — 창고에 쓴 뒤 표 갱신이 실패한 경우(「알려진 구멍」 23).
+     * 표의 키만 보고 지우면 그 파일이 남고, 그러면 <b>이미 나간 사진 주소가 계속 200</b>이다.
+     * 창고가 꺼져 있으면 자리지기가 아무것도 안 한다 — 예외도 안 던지므로 탈퇴가 막히지 않는다.
+     */
+    void cleanUp(Long userId, List<String> passphraseRefs) {
+        // 들어간 것을 먼저 남긴다 — 종료 시한에 잘리면 이 줄만 남고 아래 completed가 안 남는다.
+        // 그 짝의 어긋남이 「사진이 안 지워진 회원」을 가리키는 유일한 실마리다.
+        // shutdown_timeout은 「그런 일이 있었다」만 말하고 누구인지는 안 알려준다.
+        log.info("auth.withdrawal.cleanup.started userId={}", userId);
+        RuntimeException failure = null;
+        for (String ref : passphraseRefs) {
+            failure = deleteQuietly(() -> secretStore.delete(ref), failure);
+        }
+        failure = deleteQuietly(() -> photoStorage.deleteAll(userId), failure);
+        if (failure != null) {
+            throw failure;
+        }
+        log.info("auth.withdrawal.cleanup.completed userId={}", userId);
+    }
+
+    /** 지우고, 실패하면 예외를 모아 둔다(먼저 난 것을 유지한다) — 나머지 삭제를 막지 않으려고. */
+    private static RuntimeException deleteQuietly(Runnable delete, RuntimeException earlier) {
+        try {
+            delete.run();
+            return earlier;
+        } catch (RuntimeException e) {
+            return earlier != null ? earlier : e;
+        }
     }
 
     private void logAfterCommit(Runnable logging) {
