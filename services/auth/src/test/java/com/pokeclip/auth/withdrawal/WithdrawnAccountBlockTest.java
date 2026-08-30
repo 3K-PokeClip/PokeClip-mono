@@ -173,9 +173,16 @@ class WithdrawnAccountBlockTest extends IntegrationTestSupport {
     // ── 안 걸려야 하는 것 ───────────────────────────────────────────────
 
     /**
-     * 재발급은 {@code permitAll}이고 표를 헤더로 안 싣는다 — 주체가 없으니 필터가 볼 것이 없다.
-     * <b>그래서 탈퇴해도 평소대로 돈다.</b> 갱신 표를 실제로 죽이는 것은 태스크 3의 몫이고,
-     * 여기서 「막힌다」로 굳히면 그 태스크가 무엇을 새로 하는지가 흐려진다.
+     * 재발급은 {@code permitAll}이고 <b>표를 헤더에 안 실었을 때만</b> 주체가 없다 —
+     * 그때는 필터가 볼 것이 없어 탈퇴해도 평소대로 돈다.
+     * 🔴 <b>「permitAll이면 안 걸린다」는 틀린 문장이다</b>(2회차 감사 실측) —
+     * 같은 요청에 Authorization 헤더를 실으면 {@code BearerTokenAuthenticationFilter}가
+     * {@code permitAll} 경로에서도 인증을 끝내므로 <b>주체가 생기고 필터가 막는다.</b>
+     * 아래 두 갈래가 그 사실을 나란히 못박는다.
+     *
+     * <p>이 상태는 {@code deleted_at}만 직접 넣어 만든 것이라 <b>갱신 표가 살아 있다.</b>
+     * 갱신 표를 실제로 죽이는 것은 탈퇴 창구(POK-171 태스크 3)의 몫이고, 그 창구는 여기를 안 지난다 —
+     * 그래서 이 시험은 태스크 3 뒤에도 그대로 초록이어야 한다.
      */
     @Test
     void 로그인_없이_부르는_재발급은_탈퇴해도_평소대로_된다() throws Exception {
@@ -183,10 +190,27 @@ class WithdrawnAccountBlockTest extends IntegrationTestSupport {
         TokenPair pair = tokenService.issue(user);
         withdraw(user);
 
-        mockMvc.perform(post("/api/auth/refresh")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"refreshToken\":\"" + pair.refreshToken() + "\"}"))
+        mockMvc.perform(refresh(pair.refreshToken()))
                 .andExpect(status().isOk());
+    }
+
+    /**
+     * 위와 <b>같은 요청에 표만 실었다.</b> 헤더 하나로 200과 401이 갈리는 것이 요지다 —
+     * 「표를 헤더로 안 싣는다」는 클라이언트 구현에 대한 가정이지 서버가 보장하는 것이 아니다.
+     *
+     * <p>방향은 <b>보안 강화 쪽</b>이라 고칠 것은 코드가 아니라 적힌 사실이다. 다만 탈퇴 직후 30분
+     * 동안 같은 요청이 헤더 유무로 갈리므로, 프론트가 재발급에 access 표를 함께 싣기 시작하면
+     * 이 시험이 그 사실을 먼저 말해 준다.
+     */
+    @Test
+    void 같은_재발급도_표를_실으면_필터가_막는다() throws Exception {
+        User user = newUser();
+        String token = bearer(user);
+        TokenPair pair = tokenService.issue(user);
+        withdraw(user);
+
+        mockMvc.perform(refresh(pair.refreshToken()).header("Authorization", token))
+                .andExpect(status().isUnauthorized());
     }
 
     /**
@@ -195,7 +219,9 @@ class WithdrawnAccountBlockTest extends IntegrationTestSupport {
      *
      * <p>🔴 <b>이 검사는 「빈으로 등록하지 마라」를 재지 못한다.</b> 실제로 {@code @Component}를
      * 붙여 전역 등록해 봤는데 <b>초록이었다</b>(주입 D) — 전역이 되어도 그 체인엔 주체가 없어
-     * 필터가 아무것도 안 하기 때문이다. 그 규칙을 재는 것은 아래
+     * <b>여기서는</b> 막을 것이 없기 때문이다. 🔴 <b>「필터가 아무것도 안 한다」로 읽지 마라</b> —
+     * 일반 인증 경로에서는 인스턴스 둘이 다 돌고 표 조회가 는다(2회차 감사 실측:
+     * 진입 15→23 · 조회 13→19). 그 규칙을 재는 것은 아래
      * {@code 필터는_빈으로_등록되지_않는다}이고, 여기가 재는 것은
      * <b>「필터가 본문의 회원 번호를 보지 않는다」</b>이다 — 나중에 그렇게 고치면 여기가 빨간불이 된다.
      */
@@ -217,7 +243,8 @@ class WithdrawnAccountBlockTest extends IntegrationTestSupport {
      *
      * <p>빈이 되면 서블릿이 전역 등록해 <b>보안 체인 밖에서도</b> 돌고, 끼우는 자리가 명시가 아니라
      * 등록 순서에 딸려 간다. 그 회귀는 <b>응답으로는 안 보인다</b>(위 내부 창구 검사가 초록이었다) —
-     * 그래서 빈 목록을 직접 센다.
+     * 그래도 값이 없는 것은 아니다: 통과한 요청마다 회원 표 조회가 하나 더 나간다
+     * (2회차 감사 실측 13→19). 응답으로 안 보이니 <b>빈 목록을 직접 센다.</b>
      */
     @Test
     void 필터는_빈으로_등록되지_않는다() {
@@ -304,6 +331,13 @@ class WithdrawnAccountBlockTest extends IntegrationTestSupport {
                     r.setMethod("PUT");
                     return r;
                 });
+    }
+
+    /** 두 갈래가 <b>같은 요청</b>이어야 「헤더 하나로 갈린다」가 참이 된다. 그래서 한 자리에서 만든다. */
+    private MockHttpServletRequestBuilder refresh(String refreshToken) {
+        return post("/api/auth/refresh")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"refreshToken\":\"" + refreshToken + "\"}");
     }
 
     private MockHttpServletRequestBuilder postChzzkLink(String token) {

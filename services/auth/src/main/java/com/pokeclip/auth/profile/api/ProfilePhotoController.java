@@ -75,21 +75,24 @@ public class ProfilePhotoController {
 
     /**
      * {@code AuthController.userId}와 같은 모양으로 감싼다 — 한쪽만 감싸면 같은 입력이 한쪽에서는
-     * 401이고 다른 쪽에서는 500이 된다. {@code TokenSubjectRejectionTest}가 둘을 나란히 잰다.
+     * 401이고 다른 쪽에서는 500이 된다. {@code TokenSubjectRejectionTest}가 <b>셋</b>을 나란히 잰다
+     * (POK-171이 {@code WithdrawalController.userId}를 감싼 쪽에 더했다).
      *
      * <p>오늘은 닿지 않는다 — 우리 발급기는 {@code sub}에 항상 회원 번호를 넣고 서명 검증을 통과한
      * 토큰만 여기까지 온다. <b>아무도 안 밟기 때문에 더 갈라지기 쉬운 자리다.</b>
      *
-     * <p>🔴 <b>이 모양인 것은 아홉 중 둘뿐이다.</b> auth에서 {@code Long.valueOf(jwt.getSubject())}를
-     * 하는 자리를 전수로 세면 <b>아홉 자리(여덟 파일)</b>이고, 나머지 <b>일곱 자리(여섯 파일)</b>는
+     * <p>🔴 <b>이 모양인 것은 열 중 셋뿐이다.</b> auth에서 {@code Long.valueOf(jwt.getSubject())}를
+     * 하는 자리를 전수로 세면 <b>열 자리(아홉 파일)</b>이고, 나머지 <b>일곱 자리(여섯 파일)</b>는
      * 아직 안 감쌌다 —
      * {@code ChzzkLinkController:60} · {@code YoutubeLinkController:70} ·
      * <b>{@code StreamKeyController:27}·{@code :38}(한 파일에 두 자리다)</b> ·
      * {@code PairingCodeController:30} · {@code EditorDelegationController:43} ·
      * {@code EditorInvitationController:74}.
      * <b>파일 수로 세지 마라</b> — 이 문장을 처음 쓸 때 여섯 파일을 여섯 자리로 세어 하나를 빠뜨렸다.
-     * POK-207이 자기가 만든 창구 둘만 맞춘 것이고 <b>「쌍둥이를 다 맞췄다」가 아니다.</b>
-     * 그 일곱은 auth의 「알려진 구멍」에 적어 뒀다. {@code sub} 규약을 바꿀 일이 생기면 아홉을 함께 본다.
+     * POK-207이 자기가 만든 창구 둘만, POK-171이 자기가 만든 창구 하나만 맞춘 것이고
+     * <b>「쌍둥이를 다 맞췄다」가 아니다.</b> <b>안 감싼 일곱은 그대로다</b> —
+     * 새 창구가 늘어도 그 일곱은 안 줄어든다. auth의 「알려진 구멍」 22에 적어 뒀다.
+     * {@code sub} 규약을 바꿀 일이 생기면 열을 함께 본다.
      */
     private static Long userId(Jwt jwt) {
         try {
