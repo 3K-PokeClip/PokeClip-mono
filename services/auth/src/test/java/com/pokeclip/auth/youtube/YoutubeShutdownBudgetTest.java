@@ -13,15 +13,20 @@ import java.util.regex.Pattern;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 종료 예산 — <b>두 정리 스레드 풀의 대기 시간 합</b>이 우리가 문서화하고 인프라에 요구한 종료 유예 안에 드는가.
+ * 종료 예산 — <b>세 정리 스레드 풀의 대기 시간 합</b>이 우리가 문서화하고 인프라에 요구한 종료 유예 안에 드는가.
  *
- * <p>🔴 스프링은 {@code @PreDestroy}를 <b>순차로</b> 부른다. 치지직과 유튜브가 각각 자기 풀을 기다리므로
- * <b>합이 곧 예산</b>이다. 예전에는 10 + 10 + 강제 2 = <b>최대 22초</b>로 문서화한 15초를 넘겼다(봇 4판 P2-3) —
- * 넘기면 오케스트레이터가 SIGKILL로 끊어 <b>어차피 유실되면서 배포만 느려진다.</b>
+ * <p>🔴 스프링은 {@code @PreDestroy}를 <b>순차로</b> 부른다. 치지직·유튜브·탈퇴가 각각 자기 풀을
+ * 기다리므로 <b>합이 곧 예산</b>이다. 예전에는 10 + 10 + 강제 2 = <b>최대 22초</b>로 문서화한 15초를
+ * 넘겼다(봇 4판 P2-3) — 넘기면 오케스트레이터가 SIGKILL로 끊어 <b>어차피 유실되면서 배포만 느려진다.</b>
  *
- * <p>숫자를 세 곳에서 읽어 맞춘다: 유튜브 상수 · <b>치지직 상수</b>(리플렉션 — package-private이고
- * <b>고치지 않는다</b>. revoke 2회가 남아 그 10초가 지금도 필요하다) · <b>README의 「종료 유예 N초 이상」</b>.
- * 셋 중 하나만 바뀌어도 여기서 걸린다 — 문서와 코드가 갈라지는 것을 사람 눈으로 막을 수 없어서 검사로 둔다.
+ * <p>🔴 <b>이 파일은 이름만 유튜브지 성격은 「전 서버 예산 검사」다.</b> 세 번째 풀(탈퇴, POK-171)이
+ * 생겼을 때 이 검사는 <b>여전히 둘만 더해 14 ≤ 20을 재고 통과했다</b> — 이름과 목적이 둘 다 거짓이 되는
+ * 자리라, 풀을 더하는 사람이 여기 한 줄을 같이 더해야 한다. 그것만은 기계가 대신 못 한다.
+ *
+ * <p>숫자를 네 곳에서 읽어 맞춘다: 유튜브 상수 · <b>치지직 상수</b>(리플렉션 — package-private이고
+ * <b>고치지 않는다</b>. revoke 2회가 남아 그 10초가 지금도 필요하다) · <b>탈퇴 상수</b>(리플렉션, 같은 이유) ·
+ * <b>README의 「종료 유예 N초 이상」</b>.
+ * 넷 중 하나만 바뀌어도 여기서 걸린다 — 문서와 코드가 갈라지는 것을 사람 눈으로 막을 수 없어서 검사로 둔다.
  */
 class YoutubeShutdownBudgetTest {
 
@@ -45,7 +50,20 @@ class YoutubeShutdownBudgetTest {
 
     /** 치지직 상수는 package-private이라 리플렉션으로 읽는다 — <b>읽기만 한다.</b> */
     private static Duration chzzkShutdownWait() throws Exception {
-        Field f = Class.forName("com.pokeclip.auth.chzzk.ChzzkCleanupExecutor").getDeclaredField("SHUTDOWN_WAIT");
+        return waitConstant("com.pokeclip.auth.chzzk.ChzzkCleanupExecutor", "SHUTDOWN_WAIT");
+    }
+
+    /**
+     * 탈퇴 풀(POK-171)도 package-private이라 같은 방식으로 읽는다. <b>강제 대기까지 더해야</b> 실제 예산이다 —
+     * 그쪽은 유튜브처럼 시한을 넘기면 인터럽트하고 1초를 더 기다린다.
+     */
+    private static Duration withdrawalWait() throws Exception {
+        return waitConstant("com.pokeclip.auth.withdrawal.WithdrawalCleanupExecutor", "SHUTDOWN_WAIT")
+                .plus(waitConstant("com.pokeclip.auth.withdrawal.WithdrawalCleanupExecutor", "FORCED_STOP_WAIT"));
+    }
+
+    private static Duration waitConstant(String className, String field) throws Exception {
+        Field f = Class.forName(className).getDeclaredField(field);
         f.setAccessible(true);
         return (Duration) f.get(null);
     }
@@ -71,15 +89,17 @@ class YoutubeShutdownBudgetTest {
     }
 
     @Test
-    void 두_정리_풀의_대기_합이_문서화한_종료_유예_안이다() throws Exception {
+    void 세_정리_풀의_대기_합이_문서화한_종료_유예_안이다() throws Exception {
         Duration chzzk = chzzkShutdownWait();
         Duration youtube = YoutubeCleanupExecutor.SHUTDOWN_WAIT.plus(YoutubeCleanupExecutor.FORCED_STOP_WAIT);
-        Duration total = chzzk.plus(youtube);
+        Duration withdrawal = withdrawalWait();
+        Duration total = chzzk.plus(youtube).plus(withdrawal);
 
         assertThat(total)
-                .as("치지직 %s + 유튜브 %s = %s — 문서화한 종료 유예 %s를 넘는다. "
-                        + "치지직은 revoke 2회가 남아 줄일 수 없으니 유튜브 쪽을 줄여라",
-                        chzzk, youtube, total, documentedGrace())
+                .as("치지직 %s + 유튜브 %s + 탈퇴 %s = %s — 문서화한 종료 유예 %s를 넘는다. "
+                        + "치지직은 revoke 2회가 남아 줄일 수 없고 탈퇴는 사진 창고(최대 8초)를 기다리니, "
+                        + "줄일 수 있는 쪽부터 보고 그래도 안 되면 README와 인프라 요구를 함께 올려라",
+                        chzzk, youtube, withdrawal, total, documentedGrace())
                 .isLessThanOrEqualTo(documentedGrace());
     }
 
