@@ -1,0 +1,202 @@
+// 지난 방송 목록의 표시 규칙 — 계약(VodBroadcast)에서 시안 1f 행이 필요한 것을 만든다.
+//
+// 렌더에서 떼어낸 이유는 highlightCardView와 같다: D-day 경계와 기간 필터는 날짜 조합이
+// 많아 jsdom 렌더로 훑기보다 여기서 전수 검사하는 편이 싸다. status 유니온이 늘면 아래
+// 표가 타입으로 깨진다 — 화면이 조용히 빈 행을 그리는 대신 빌드가 멈춘다.
+
+import { formatUptime } from '@/features/player/playerMath';
+import type {
+  VodBroadcast,
+  VodCustomRange,
+  VodDownloadState,
+  VodPeriodFilter,
+} from './useVodListMockState';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** 만료 임박 경계 — 홈 ExpiringVod의 「D-3 이하 붉은 배지」(useHomeMockState)와 같은 값이다 */
+export const VOD_EXPIRY_URGENT_DAYS = 3;
+
+const DATE_FORMAT = new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric' });
+
+export type VodDday =
+  | { kind: 'active'; label: string; urgent: boolean }
+  /** 기한이 지난 방송도 목록에 남는다 — 계약이 vodExpiresAt을 싣는 이유다 */
+  | { kind: 'expired' }
+  | { kind: 'unknown' };
+
+/**
+ * 보관 만료까지 남은 날 → 「D-54」. ceil이라 오늘 안에 끝나는 것도 D-1로 읽힌다 —
+ * 남은 시간이 조금이라도 있으면 「오늘까지」이지 「끝났다」가 아니다.
+ */
+export function ddayFor(vodExpiresAt: string | null, now: Date): VodDday {
+  if (!vodExpiresAt) return { kind: 'unknown' };
+  const remaining = new Date(vodExpiresAt).getTime() - now.getTime();
+  if (!Number.isFinite(remaining)) return { kind: 'unknown' };
+  if (remaining <= 0) return { kind: 'expired' };
+  const days = Math.ceil(remaining / DAY_MS);
+  return { kind: 'active', label: `D-${days}`, urgent: days <= VOD_EXPIRY_URGENT_DAYS };
+}
+
+/**
+ * 행의 방송일 → 「7월 26일」. 끝난 방송이므로 endedAt이 기준이고, 종료 알림이 아직 없으면
+ * startedAt으로 물러선다. 둘 다 비면 null이다 — 계약이 startedAt에 null을 허용하고
+ * (ADR-016 종료 선도착) 「감추거나 지어내지 않는다」가 그 칸의 규칙이라, 화면이
+ * 「방송일 미상」을 그린다.
+ */
+export function dateLabel(item: VodBroadcast): string | null {
+  const source = item.endedAt ?? item.startedAt;
+  if (!source) return null;
+  const time = new Date(source).getTime();
+  if (!Number.isFinite(time)) return null;
+  return DATE_FORMAT.format(time);
+}
+
+/** 썸네일 위 길이 표기 — 「4:12:08」. 준비 중이라 아직 모르면 null */
+export function durationLabel(durationSec: number | null): string | null {
+  if (durationSec === null || !Number.isFinite(durationSec)) return null;
+  return formatUptime(durationSec);
+}
+
+/** 시안 1f 행이 아는 상태 — 계약의 status·보관 기한·내려받기 상태가 여기로 접힌다 */
+export type VodRowView =
+  /** 방금 종료 — VOD가 아직 없어 열 수 없다 */
+  | { kind: 'preparing' }
+  /** 보관 기한이 지나 지워진 것 — 줄은 남지만 열 것이 없다 */
+  | { kind: 'expired' }
+  /** 풀 VOD 저장 중 — 썸네일이 진행률로 덮인다 (B5 미구현이라 목업 전용 상태다) */
+  | { kind: 'downloading'; progress: number }
+  /** 다 받아 둔 것 — 다시 받을 수 있다 */
+  | { kind: 'done' }
+  | { kind: 'ready' };
+
+const VIEW_BY_STATUS: Record<VodBroadcast['status'], 'preparing' | 'ready'> = {
+  // live는 이 화면에 오지 않는다(excludeLive) — 와도 열 수 있는 것이 없으니 준비 중으로 접는다
+  live: 'preparing',
+  ended: 'preparing',
+  vod_ready: 'ready',
+};
+
+/**
+ * 만료를 여기서 함께 보는 이유: 기한이 지난 방송도 목록에 남는데(계약), 그 줄이 「보관 만료」를
+ * 달고서 뷰어 링크를 함께 내면 한 줄이 두 말을 한다. 상세 화면은 없어진 자원에 `notFound()`를
+ * 던지게 돼 있지만(README 404 계약) 그것은 목록이 낡았을 때의 그물이고, 만료를 이미 아는
+ * 자리에서까지 열리는 척할 이유는 아니다.
+ */
+export function rowViewFor(item: VodBroadcast, download: VodDownloadState, now: Date): VodRowView {
+  // 만료를 상태보다 먼저 본다. 뒤집으면 기한이 지나도록 `ended`에 머문 방송이 「준비 중」으로
+  // 접히는데, 화면은 만료 배지를 따로 계산하므로 한 줄이 「곧 준비돼요」와 「이미 지워졌어요」를
+  // 동시에 말한다. 기한이 지났으면 무엇을 기다리든 오지 않는다.
+  if (ddayFor(item.vodExpiresAt, now).kind === 'expired') return { kind: 'expired' };
+  if (VIEW_BY_STATUS[item.status] === 'preparing') return { kind: 'preparing' };
+  if (download.kind === 'downloading') return { kind: 'downloading', progress: download.progress };
+  if (download.kind === 'done') return { kind: 'done' };
+  return { kind: 'ready' };
+}
+
+/** 뷰어로 들어갈 수 있는 행인지 — 링크·체브런을 함께 가른다 */
+export function isOpenable(view: VodRowView): boolean {
+  return view.kind === 'ready' || view.kind === 'downloading' || view.kind === 'done';
+}
+
+/**
+ * 화질 선택지와 예상 크기. 크기를 행마다 계산하는 이유는, 6시간짜리와 2시간짜리가 같은
+ * 「6.2GB」를 달면 목업을 보는 사람이 바로 거짓임을 알기 때문이다. 초당 바이트는 시안
+ * 표기값(4:12:08 → 6.2GB · 2.4GB · 180MB)이 그대로 나오게 잡았다.
+ *
+ * 실기능이 붙으면 이 값은 서버가 준다 — 그때 이 함수는 사라진다.
+ */
+export interface VodQualityOption {
+  id: 'original' | 'sd' | 'audio';
+  label: string;
+  size: string;
+}
+
+const QUALITY_SPECS: { id: VodQualityOption['id']; label: string; bytesPerSecond: number }[] = [
+  { id: 'original', label: '원본 화질 · 1080p60', bytesPerSecond: 410_000 },
+  { id: 'sd', label: '720p30', bytesPerSecond: 159_000 },
+  { id: 'audio', label: '오디오만 · MP3', bytesPerSecond: 11_900 },
+];
+
+function sizeLabel(bytes: number): string {
+  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)}GB`;
+  return `${Math.round(bytes / 1_000_000)}MB`;
+}
+
+export function qualityOptionsFor(durationSec: number | null): VodQualityOption[] {
+  return QUALITY_SPECS.map(({ id, label, bytesPerSecond }) => ({
+    id,
+    label,
+    // 길이를 모르면 크기도 모른다 — 지어내지 않고 자리를 비운다
+    size: durationSec === null ? '크기 미상' : sizeLabel(durationSec * bytesPerSecond),
+  }));
+}
+
+/**
+ * 「지난 방송」이므로 방송 중인 것은 뺀다. 목록 문은 `state=past`로 부르지만 그것은 서버에
+ * 거는 조건이고, 화면이 무엇을 그리는지는 화면이 정한다 — 목업이 live를 실어도 여기서 걸린다.
+ */
+export function excludeLive(items: readonly VodBroadcast[]): VodBroadcast[] {
+  return items.filter((item) => item.status !== 'live');
+}
+
+/** 기간 필터가 보는 시각 — 끝난 시각이 기준이고, 없으면 시작 시각으로 물러선다 */
+function periodTimeOf(item: VodBroadcast): number | null {
+  const source = item.endedAt ?? item.startedAt;
+  if (!source) return null;
+  const time = new Date(source).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+/** 'YYYY-MM-DD' → 그 날의 시작(00:00) / 끝(23:59:59.999) 로컬 시각. 못 읽으면 null */
+function dayBoundary(day: string, edge: 'start' | 'end'): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day.trim());
+  if (!match) return null;
+  const [, year, month, date] = match;
+  const y = Number(year);
+  const m = Number(month);
+  const d = Number(date);
+  const at =
+    edge === 'start' ? new Date(y, m - 1, d, 0, 0, 0, 0) : new Date(y, m - 1, d, 23, 59, 59, 999);
+  // 자릿수만 맞고 없는 날짜(2월 31일·13월)는 JS Date가 조용히 다음 달로 굴린다. 굴러갔으면
+  // 「안 준 것」으로 접는다 — 안 그러면 사용자가 안 고른 3월 3일부터로 목록이 걸린다.
+  if (at.getFullYear() !== y || at.getMonth() !== m - 1 || at.getDate() !== d) return null;
+  return at.getTime();
+}
+
+/**
+ * 기간 칩 필터. 시각을 모르는 방송(startedAt·endedAt 둘 다 null)은 어느 기간에도 못 넣으므로
+ * 「전체」에서만 보인다 — 지어낸 날짜로 아무 칸에나 넣는 것보다 낫다.
+ *
+ * 「기간 지정」은 한쪽만 채운 상태를 제약 없음으로 본다. 반쯤 입력하는 동안 목록이 텅 비면
+ * 고장으로 읽히기 때문이다. from이 to보다 뒤면 결과가 0이고, 화면이 그 사실을 문장으로 말한다.
+ */
+export function filterByPeriod(
+  items: readonly VodBroadcast[],
+  filter: VodPeriodFilter,
+  customRange: VodCustomRange,
+  now: Date,
+): VodBroadcast[] {
+  if (filter === 'all') return [...items];
+
+  if (filter === 'custom') {
+    const from = customRange.from ? dayBoundary(customRange.from, 'start') : null;
+    const to = customRange.to ? dayBoundary(customRange.to, 'end') : null;
+    if (from === null && to === null) return [...items];
+    return items.filter((item) => {
+      const time = periodTimeOf(item);
+      if (time === null) return false;
+      if (from !== null && time < from) return false;
+      if (to !== null && time > to) return false;
+      return true;
+    });
+  }
+
+  const days = filter === '7d' ? 7 : 30;
+  const since = now.getTime() - days * DAY_MS;
+  return items.filter((item) => {
+    const time = periodTimeOf(item);
+    // 경계 포함 — 「7일」은 지금부터 168시간 전까지이고 그 시각 자체도 안에 든다
+    return time !== null && time >= since;
+  });
+}

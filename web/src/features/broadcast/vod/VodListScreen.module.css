@@ -1,0 +1,423 @@
+/* 디자인 1f 방송 · 지난 방송 목록 */
+
+.container {
+  padding: calc(30 * var(--pc-u)) calc(32 * var(--pc-u)) calc(96 * var(--pc-u));
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- 헤더 ---------- */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--pc-u));
+  margin-bottom: calc(20 * var(--pc-u));
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: calc(21 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+/* 필터 칩 — LiveScreen의 하이라이트 필터와 같은 모양이다. 세 번째 화면이 같은 칩을
+   원하면 그때 공용 컴포넌트로 올린다(editorDates의 「세 번째가 원하면」 관행) */
+.filterGroup {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  gap: calc(5 * var(--pc-u));
+}
+
+.filterChip {
+  border: 1px solid var(--pc-color-border-subtle);
+  background: transparent;
+  color: var(--pc-color-text-secondary);
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 600;
+  font-family: inherit;
+  padding: calc(3 * var(--pc-u)) calc(10 * var(--pc-u));
+  border-radius: calc(99 * var(--pc-u));
+  cursor: pointer;
+}
+
+.filterChip:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.filterChipActive {
+  background: var(--pc-color-accent-subtle);
+  border-color: transparent;
+  color: var(--pc-color-accent-text);
+}
+
+/* 「기간 지정」을 고르면 헤더 아래 한 줄로 펴진다 — 칩 줄을 넘겨 받으려고 width 100% */
+.customRange {
+  width: 100%;
+  display: flex;
+  gap: calc(12 * var(--pc-u));
+  flex-wrap: wrap;
+}
+
+.customRangeField {
+  display: flex;
+  align-items: center;
+  gap: calc(7 * var(--pc-u));
+}
+
+.customRangeLabel {
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-text-secondary);
+}
+
+/* ---------- 목록 ---------- */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(600 * var(--pc-u)), 1fr));
+  gap: calc(10 * var(--pc-u));
+  align-items: start;
+}
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: calc(16 * var(--pc-u));
+  padding: calc(12 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-surface);
+  transition: border-color 0.15s;
+}
+
+.row:hover {
+  border-color: var(--pc-color-border-default);
+}
+
+/* VOD가 아직 없어 열 수 없는 행 — 흐리게 두고 링크도 안 만든다 */
+.rowPreparing {
+  opacity: 0.75;
+}
+
+.rowPreparing:hover {
+  border-color: var(--pc-color-border-subtle);
+}
+
+/* 곧 만료될 행. 색만으로 말하지 않는다 — 붉은 D-day 배지와 삭제 안내 문장이 함께 선다 */
+.rowUrgent,
+.rowUrgent:hover {
+  border-color: color-mix(in srgb, var(--pc-color-danger) 40%, transparent);
+}
+
+.thumb {
+  position: relative;
+  width: calc(150 * var(--pc-u));
+  aspect-ratio: 16 / 9;
+  border-radius: calc(9 * var(--pc-u));
+  overflow: hidden;
+  background: var(--pc-color-bg-inset);
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.thumbLabel {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* 덮개 링크보다 위층이라(z-index) 클릭을 삼킨다 — 읽으라고 있는 표시이지 누를 것이 아니다 */
+.durationPill {
+  position: absolute;
+  bottom: calc(6 * var(--pc-u));
+  right: calc(6 * var(--pc-u));
+  z-index: 2;
+  pointer-events: none;
+  padding: calc(1 * var(--pc-u)) calc(6 * var(--pc-u));
+  border-radius: calc(5 * var(--pc-u));
+  background: rgb(0 0 0 / 0.62);
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 600;
+  color: #fff;
+}
+
+/* ---------- 받는 중 · 썸네일 오버레이 (시안 1f ②) ---------- */
+
+.dlOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background: rgb(16 17 21 / 0.66);
+  backdrop-filter: saturate(0.6) blur(1px);
+}
+
+/* 받은 만큼 아래에서 차오른다 */
+.dlFill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgb(255 255 255 / 0.13);
+  border-top: 1.5px solid var(--pc-color-accent);
+  transition: height 0.35s linear;
+}
+
+.dlText {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(1 * var(--pc-u));
+  color: #fff;
+}
+
+.dlPercent {
+  font-family: var(--pc-font-mono);
+  font-size: calc(21 * var(--pc-u));
+  font-weight: 750;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.dlCaption {
+  font-size: calc(9.5 * var(--pc-u));
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: rgb(255 255 255 / 0.82);
+}
+
+.rowText {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.rowTitle,
+.rowLink {
+  font-size: calc(14 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-primary);
+  text-decoration: none;
+}
+
+/* 링크 하나가 행 전체를 덮는다 — 행을 <Link>로 감싸면 안의 버튼이 링크 안의 버튼이 된다.
+   반경은 덮는 대상(.row)의 값을 그대로 적는다 — inherit는 반경이 없는 .rowLink에서
+   0을 물려받아 포커스 링만 각지게 그린다 */
+.rowLink::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: calc(14 * var(--pc-u));
+}
+
+.rowLink:focus-visible {
+  outline: none;
+}
+
+.rowLink:focus-visible::after {
+  outline: 2px solid var(--pc-color-accent);
+  outline-offset: calc(2 * var(--pc-u));
+}
+
+.rowMeta {
+  margin: calc(3 * var(--pc-u)) 0 0;
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* 조작부는 덮개 링크 위층이다 — 다운로드 버튼을 누를 수 있어야 한다(지금은 비활성이지만
+   활성화되는 날에도 이 순서가 맞다).
+   다만 위층인 채로 두면 태그·배지·체브런처럼 누를 것이 아닌 것들까지 덮개를 가려
+   행 오른쪽이 통째로 클릭 사각지대가 된다 — 그래서 영역은 클릭을 통과시키고
+   실제 조작 요소만 다시 받는다. */
+.rowActions {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  flex: none;
+}
+
+.rowActions button {
+  pointer-events: auto;
+}
+
+.rowProgress {
+  display: flex;
+  flex-direction: column;
+  gap: calc(4 * var(--pc-u));
+  width: calc(130 * var(--pc-u));
+  flex: none;
+}
+
+.rowProgressHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-accent-text);
+}
+
+.rowProgressPercent {
+  font-family: var(--pc-font-mono);
+  font-weight: 600;
+}
+
+.rowChevron {
+  color: var(--pc-color-text-muted);
+  flex: none;
+}
+
+/* 다 받아 둔 행 — 눌러서 다시 받는다 */
+.donePill {
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+  height: calc(30 * var(--pc-u));
+  padding: 0 calc(9 * var(--pc-u));
+  border: none;
+  border-radius: calc(8 * var(--pc-u));
+  background: color-mix(in srgb, var(--pc-color-success) 14%, transparent);
+  font-family: inherit;
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-success-text, var(--pc-color-success));
+  cursor: pointer;
+  flex: none;
+  pointer-events: auto;
+}
+
+/* ---------- 화질 선택 팝오버 (시안 1f ①) ---------- */
+
+.pickPanel {
+  width: calc(288 * var(--pc-u));
+  padding: calc(15 * var(--pc-u));
+}
+
+.pickTitle {
+  margin: 0;
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 750;
+}
+
+.pickSub {
+  margin: calc(3 * var(--pc-u)) 0 0;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.pickOptions {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6 * var(--pc-u));
+  margin-top: calc(12 * var(--pc-u));
+}
+
+.pickOption {
+  gap: calc(9 * var(--pc-u));
+  padding: calc(9 * var(--pc-u)) calc(11 * var(--pc-u));
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(10 * var(--pc-u));
+}
+
+.pickOption:hover {
+  border-color: var(--pc-color-border-default);
+}
+
+.pickOption:has(input:checked) {
+  border-color: var(--pc-color-accent);
+  background: var(--pc-color-accent-subtle);
+}
+
+/* Radio가 label 내용을 span 하나로 감싸므로, 이름과 크기를 가르는 것은 그 span이다 */
+.pickOption > span:last-child {
+  display: flex;
+  align-items: center;
+  gap: calc(9 * var(--pc-u));
+  flex: 1;
+  min-width: 0;
+}
+
+.pickOptionLabel {
+  font-size: calc(12 * var(--pc-u));
+  font-weight: 650;
+}
+
+.pickOptionSize {
+  margin-left: auto;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.pickNote {
+  margin: calc(10 * var(--pc-u)) 0 0;
+  font-size: calc(10.5 * var(--pc-u));
+  line-height: 1.5;
+  color: var(--pc-color-text-muted);
+}
+
+.pickActions {
+  display: flex;
+  gap: calc(8 * var(--pc-u));
+  margin-top: calc(12 * var(--pc-u));
+}
+
+/* ---------- 빈 상태 ---------- */
+
+.emptyCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: calc(10 * var(--pc-u));
+  padding: calc(30 * var(--pc-u)) calc(24 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1.5px dashed var(--pc-color-border-default);
+}
+
+.emptyIcon {
+  width: calc(46 * var(--pc-u));
+  height: calc(46 * var(--pc-u));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-muted);
+}
+
+.emptyTitle {
+  margin: 0;
+  font-size: calc(13.5 * var(--pc-u));
+  font-weight: 750;
+}
+
+.emptyBody {
+  margin: 0;
+  max-width: calc(300 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+  line-height: 1.6;
+  color: var(--pc-color-text-muted);
+}
+
+/* 기간을 좁혀 아무것도 안 남은 자리 — 빈 상태 카드와 다른 말이라 다른 모양이다 */
+.filterEmpty {
+  margin: calc(6 * var(--pc-u)) 0 0;
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
