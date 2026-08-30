@@ -62,10 +62,17 @@ public abstract class WithdrawalTestSupport extends IntegrationTestSupport {
      * {@code pairing_codes}·{@code stream_keys}(스트림키 갈래가 만든다).
      * <b>이 목록은 이 계층이 실제로 만드는 것까지다</b> — 연동 표·초대 표를 심는 시험을 더하는 태스크는
      * 자기 표를 여기 같이 더한다. 안 더하면 다음 클래스의 부모 정리가 외래키로 막힌다.
+     *
+     * <p>🔴 <b>{@code secrets}를 {@code stream_keys}보다 <u>먼저</u> 지운다.</b> 그 표에는 회원 칸이 없어
+     * <b>스트림키 행을 통해서만</b> 그 회원 몫을 고를 수 있다 — 순서를 뒤집으면 고를 열쇠가 먼저 사라져
+     * 비밀값이 <b>주인 없이</b> 남는다. 탈퇴는 아직 비밀값을 안 지우므로(태스크 7) 이 계층이 매 시험마다
+     * 하나씩 남기고, 그것이 뒤 시험의 「주인 없는 비밀값 0건」을 오염시킨다.
      */
     @AfterEach
     void 심은_행을_거둔다() {
         for (Long id : 심은_회원) {
+            jdbc.update("DELETE FROM secrets WHERE ref IN "
+                    + "(SELECT passphrase_ref FROM stream_keys WHERE user_id = ?)", id);
             jdbc.update("DELETE FROM pairing_codes WHERE user_id = ?", id);
             jdbc.update("DELETE FROM stream_keys WHERE user_id = ?", id);
             jdbc.update("DELETE FROM refresh_tokens WHERE user_id = ?", id);

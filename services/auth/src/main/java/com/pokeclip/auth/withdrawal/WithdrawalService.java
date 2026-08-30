@@ -2,6 +2,8 @@ package com.pokeclip.auth.withdrawal;
 
 import com.pokeclip.auth.AuthFailure;
 import com.pokeclip.auth.DataInconsistencyException;
+import com.pokeclip.auth.streamkey.StreamKeyRepository;
+import com.pokeclip.auth.streamkey.pairing.PairingCodeRepository;
 import com.pokeclip.auth.token.RefreshTokenRepository;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
@@ -35,6 +37,8 @@ public class WithdrawalService {
 
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final StreamKeyRepository streamKeyRepository;
+    private final PairingCodeRepository pairingCodeRepository;
 
     @Transactional
     public void withdraw(Long userId) {
@@ -62,6 +66,31 @@ public class WithdrawalService {
         }
 
         refreshTokenRepository.revokeAllOfUser(userId, now);
+
+        // 🔴 송출 자격은 표 둘로 나뉘어 있고 둘 다 닫아야 회수가 끝난다.
+        //
+        // 키만 폐기하면 회수가 안 된다 — 페어링 교환은 로그인이 없어(코드 자체가 자격증명이다)
+        // 전면 차단 필터가 못 막는데, 그 경로가 부르는 ensureKey는 "살아있는 키가 없다"를
+        // 「아직 안 만들었다」로 읽고 새 키를 발급한다. 살아있는 코드 하나가 탈퇴자 명의의
+        // 새 송출 자격이 되는 것이다.
+        //
+        // 반대로 코드만 닫아도 안 된다 — 이미 나간 streamid·passphrase로 계속 송출된다.
+        //
+        // 🔴 이 순서(폐기 → 회수)를 뒤집어도 안전하지만, 뒤집는 사람은 교환과의 경합을 다시 봐야 한다.
+        // 지금 순서에서 안전한 이유: 교환은 markUsed로 코드 행을 먼저 잠그므로, 그 사이에 낀 탈퇴는
+        // consumeAliveOfUser에서 막혀 교환보다 먼저 커밋하지 못한다. 그래서 교환은 항상 폐기 전의
+        // 살아있는 키를 읽고(새로 만들지 않고) 그 키는 곧 이 트랜잭션이 폐기한다.
+        streamKeyRepository.revokeAlive(userId, now);
+        pairingCodeRepository.consumeAliveOfUser(userId, now);
+
+        // 🔴 비밀값(secrets)은 여기서 안 지운다 — 태스크 7의 커밋 뒤 전용 스레드로 간다.
+        // afterCommit 안에서 REQUIRES_NEW인 secretStore.delete를 직접 부르면 원 커넥션을 쥔 채
+        // 두 번째를 요구해 풀 데드락이 된다(auth/CLAUDE.md 「알려진 구멍」 9, 풀 10·동시 25 → 21건 실패).
+        //
+        // 🔴 그 정리를 붙이는 사람에게: passphrase_ref를 findByUserIdAndRevokedAtIsNull로 읽으려면
+        // 반드시 위 revokeAlive 앞이어야 한다. 뒤에서 읽으면 빈손이 돌아오고 그것이 조용하다 —
+        // 지울 것이 없다고 읽어 비밀값이 영영 남는다. (행 자체는 revoked_at만 채워진 채 살아 있으므로
+        // "이 회원의 폐기된 키"를 따로 조회하는 길도 있다. 어느 쪽이든 한 곳에서만 읽는다.)
 
         // 🔴 락은 이 트랜잭션이 계속 쥐고 있다. 그래도 다시 읽는 이유는 회수 단계들이 쓰는
         // @Modifying(clearAutomatically = true) 쿼리가 영속성 컨텍스트를 비워, 맨 앞에서 락으로
