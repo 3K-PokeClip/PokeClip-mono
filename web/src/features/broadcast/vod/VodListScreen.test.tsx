@@ -44,8 +44,8 @@ describe('VodListScreen — 행 상태', () => {
 
     expect(within(row).getByText('풀 VOD 받는 중')).toBeInTheDocument();
     expect(within(row).getByText('46%')).toBeInTheDocument();
-    expect(within(row).getByRole('button', { name: '다운로드 취소' })).toBeInTheDocument();
-    expect(within(row).queryByRole('button', { name: '풀 버전 다운로드' })).toBeNull();
+    expect(within(row).getByRole('button', { name: /^다운로드 취소/ })).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: /^풀 버전 다운로드/ })).toBeNull();
   });
 
   it('다 받아 둔 행은 「받기 완료」를 낸다', () => {
@@ -53,7 +53,7 @@ describe('VodListScreen — 행 상태', () => {
     const row = rowAt(4);
 
     expect(within(row).getByRole('button', { name: /받기 완료/ })).toBeInTheDocument();
-    expect(within(row).queryByRole('button', { name: '풀 버전 다운로드' })).toBeNull();
+    expect(within(row).queryByRole('button', { name: /^풀 버전 다운로드/ })).toBeNull();
   });
 
   it('보통 행은 방송일·카드 수·D-day와 길이를 보여준다', () => {
@@ -97,9 +97,20 @@ describe('VodListScreen — 이동', () => {
     renderWithProviders(<VodListScreen />);
 
     // 준비 중(받을 VOD가 없다)·받는 중(이미 받고 있다)·받기 완료를 뺀 아홉 행
-    expect(screen.getAllByRole('button', { name: '풀 버전 다운로드' })).toHaveLength(9);
-    expect(within(rowAt(0)).queryByRole('button', { name: '풀 버전 다운로드' })).toBeNull();
-    expect(within(rowAt(1)).queryByRole('button', { name: '풀 버전 다운로드' })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /^풀 버전 다운로드/ })).toHaveLength(9);
+    expect(within(rowAt(0)).queryByRole('button', { name: /^풀 버전 다운로드/ })).toBeNull();
+    expect(within(rowAt(1)).queryByRole('button', { name: /^풀 버전 다운로드/ })).toBeNull();
+  });
+
+  // 버튼 목록으로 훑는 사람에게는 같은 이름 아홉 개가 구분이 안 된다
+  it('행마다 다운로드 버튼 이름이 다르다', () => {
+    renderWithProviders(<VodListScreen />);
+
+    const names = screen
+      .getAllByRole('button', { name: /^풀 버전 다운로드/ })
+      .map((button) => button.getAttribute('aria-label'));
+    expect(new Set(names).size).toBe(names.length);
+    expect(names).toContain('풀 버전 다운로드 · 합방 특집 — 4인 내전');
   });
 });
 
@@ -108,9 +119,9 @@ describe('VodListScreen — 풀 VOD 내려받기', () => {
     const user = userEvent.setup();
     renderWithProviders(<VodListScreen />);
 
-    await user.click(within(rowAt(2)).getByRole('button', { name: '풀 버전 다운로드' }));
+    await user.click(within(rowAt(2)).getByRole('button', { name: /^풀 버전 다운로드/ }));
 
-    const panel = screen.getByRole('dialog', { name: '풀 버전 다운로드' });
+    const panel = screen.getByRole('dialog', { name: /^풀 버전 다운로드/ });
     expect(within(panel).getByText('합방 특집 — 4인 내전 · 4:12:08')).toBeInTheDocument();
     // 크기는 길이에서 계산한다 — 행마다 같은 값이 아니다
     expect(within(panel).getByText('6.2GB')).toBeInTheDocument();
@@ -124,8 +135,8 @@ describe('VodListScreen — 풀 VOD 내려받기', () => {
     const user = userEvent.setup();
     renderWithProviders(<VodListScreen />);
 
-    await user.click(within(rowAt(2)).getByRole('button', { name: '풀 버전 다운로드' }));
-    const panel = screen.getByRole('dialog', { name: '풀 버전 다운로드' });
+    await user.click(within(rowAt(2)).getByRole('button', { name: /^풀 버전 다운로드/ }));
+    const panel = screen.getByRole('dialog', { name: /^풀 버전 다운로드/ });
     await user.click(within(panel).getByRole('radio', { name: /720p30/ }));
 
     expect(within(panel).getByRole('radio', { name: /720p30/ })).toBeChecked();
@@ -136,11 +147,11 @@ describe('VodListScreen — 풀 VOD 내려받기', () => {
     const user = userEvent.setup();
     renderWithProviders(<VodListScreen />);
 
-    await user.click(within(rowAt(2)).getByRole('button', { name: '풀 버전 다운로드' }));
+    await user.click(within(rowAt(2)).getByRole('button', { name: /^풀 버전 다운로드/ }));
     await user.click(screen.getByRole('button', { name: '다운로드 시작' }));
 
     expect(await screen.findByText('준비 중인 기능이에요')).toBeInTheDocument();
-    expect(within(rowAt(2)).getByRole('button', { name: '풀 버전 다운로드' })).toBeInTheDocument();
+    expect(within(rowAt(2)).getByRole('button', { name: /^풀 버전 다운로드/ })).toBeInTheDocument();
     expect(within(rowAt(2)).queryByText('풀 VOD 받는 중')).toBeNull();
   });
 
@@ -148,10 +159,10 @@ describe('VodListScreen — 풀 VOD 내려받기', () => {
     const user = userEvent.setup();
     renderWithProviders(<VodListScreen />);
 
-    await user.click(within(rowAt(1)).getByRole('button', { name: '다운로드 취소' }));
+    await user.click(within(rowAt(1)).getByRole('button', { name: /^다운로드 취소/ }));
 
     expect(within(rowAt(1)).queryByText('풀 VOD 받는 중')).toBeNull();
-    expect(within(rowAt(1)).getByRole('button', { name: '풀 버전 다운로드' })).toBeInTheDocument();
+    expect(within(rowAt(1)).getByRole('button', { name: /^풀 버전 다운로드/ })).toBeInTheDocument();
   });
 
   it('「받기 완료」를 누르면 다시 받을 수 있는 자리로 돌아간다', async () => {
@@ -160,7 +171,7 @@ describe('VodListScreen — 풀 VOD 내려받기', () => {
 
     await user.click(within(rowAt(4)).getByRole('button', { name: /받기 완료/ }));
 
-    expect(within(rowAt(4)).getByRole('button', { name: '풀 버전 다운로드' })).toBeInTheDocument();
+    expect(within(rowAt(4)).getByRole('button', { name: /^풀 버전 다운로드/ })).toBeInTheDocument();
   });
 });
 
@@ -234,7 +245,15 @@ describe('VodListScreen — 보관 만료', () => {
     expect(within(row).getByText('보관 만료')).toBeInTheDocument();
     expect(within(row).getByText('지워진 방송')).toBeInTheDocument();
     expect(within(row).queryByRole('link')).toBeNull();
-    expect(within(row).queryByRole('button', { name: '풀 버전 다운로드' })).toBeNull();
+    expect(within(row).queryByRole('button', { name: /^풀 버전 다운로드/ })).toBeNull();
+  });
+
+  // 썸네일 위 길이는 aria-hidden이라, 링크가 없는 행에서도 길이를 따로 남기지 않으면
+  // 듣는 쪽만 그 정보를 통째로 잃는다
+  it('링크가 없어도 길이는 듣는 쪽에 남는다', () => {
+    renderWithProviders(<VodListScreen broadcasts={expired} visuals={visuals} />);
+
+    expect(within(rowAt(0)).getByText(/길이 4:00:00/)).toBeInTheDocument();
   });
 });
 

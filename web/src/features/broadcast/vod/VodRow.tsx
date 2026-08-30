@@ -112,6 +112,11 @@ export function VodRow({
       </div>
 
       <div className={styles.rowText}>
+        {/*
+          썸네일 위 길이 표시는 aria-hidden이라 듣는 쪽에는 여기서만 남는다. 링크가 있는 행은
+          링크 이름에 실어 「제목 · 길이」로 읽히게 하고, 링크가 없는 행(준비 중·만료)도
+          길이를 아는 이상 빠뜨리지 않는다.
+        */}
         {openable ? (
           <Link href={`/broadcast/vod/${item.streamId}`} className={styles.rowLink}>
             {title}
@@ -120,7 +125,10 @@ export function VodRow({
         ) : (
           // 열 VOD가 없다(준비 중이거나 이미 지워졌다) — aria-disabled 링크로 포커스를
           // 받게 하느니 링크를 안 만든다
-          <span className={styles.rowTitle}>{title}</span>
+          <span className={styles.rowTitle}>
+            {title}
+            {duration ? <VisuallyHidden> · 길이 {duration}</VisuallyHidden> : null}
+          </span>
         )}
         <p className={styles.rowMeta}>{meta}</p>
       </div>
@@ -157,7 +165,11 @@ export function VodRow({
         {view.kind === 'ready' ? (
           <Popover open={pickOpen} onOpenChange={setPickOpen} side="bottom" align="end">
             <Popover.Trigger>
-              <IconButton variant="ghost" size="sm" aria-label="풀 버전 다운로드">
+              {/*
+                이름에 제목을 함께 싣는다. 화면에서는 어느 행의 버튼인지 눈으로 보이지만,
+                버튼 목록으로 훑는 사람에게는 같은 이름 아홉 개가 구분이 안 된다.
+              */}
+              <IconButton variant="ghost" size="sm" aria-label={`풀 버전 다운로드 · ${title}`}>
                 <Download size={15} aria-hidden="true" />
               </IconButton>
             </Popover.Trigger>
@@ -215,7 +227,7 @@ export function VodRow({
           <IconButton
             variant="ghost"
             size="sm"
-            aria-label="다운로드 취소"
+            aria-label={`다운로드 취소 · ${title}`}
             onClick={onCancelDownload}
           >
             <X size={14} aria-hidden="true" />
@@ -226,7 +238,7 @@ export function VodRow({
           <button type="button" className={styles.donePill} onClick={onResetDownload}>
             <Check size={12} aria-hidden="true" />
             받기 완료
-            <VisuallyHidden> · 다시 받기</VisuallyHidden>
+            <VisuallyHidden> · {title} · 다시 받기</VisuallyHidden>
           </button>
         ) : null}
 
