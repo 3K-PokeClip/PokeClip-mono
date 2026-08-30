@@ -218,8 +218,15 @@ class LiveBroadcastQueryTest extends IntegrationTestSupport {
     /**
      * 실행 단계의 계획만 돌려준다 — {@code Planning:} 아래 버퍼는 계획 수립 비용이라 섞으면 안 된다.
      *
-     * <p>🔴 여기 {@code LIMIT 500}은 <b>진짜 쌍둥이다.</b> 운영이 실제로 던질 상한을 그대로 재야
-     * 계획이 같아진다 — 태스크 3이 상한 상수를 만들면 <b>이 숫자도 같이 본다</b>.
+     * <p>🔴 <b>상한을 {@link LiveBroadcastService#FETCH_ROWS}에서 끌어온다.</b> 여기 숫자를
+     * 베끼면 운영 상한과 진짜 쌍둥이가 된다 — 태스크 2에서 {@code LIMIT 500}으로 박아 두고
+     * 태스크 3에 넘긴 자리다. 운영이 던지는 수가 상한(500)이 아니라 <b>상한+1</b>인 것에도
+     * 뜻이 있다 — 「잘렸나」를 개수 질의 없이 보려고 한 줄을 더 받는다.
+     *
+     * <p><b>상한이 이 시험의 판정을 실제로 움직이는지 쟀다</b> — 위 단언 셋 중 <b>버퍼 천장만
+     * 움직인다</b>. 계획의 모양은 상한 20~100,000에서 안 갈렸고, 버퍼는 갈렸다(측정값은
+     * {@link LiveBroadcastService#FETCH_ROWS} 주석). 다른 수로 재면 천장이 <b>운영과 다른
+     * 질의</b>를 재게 된다.
      */
     private String 실행계획() {
         List<String> lines = jdbc.queryForList("""
@@ -228,7 +235,7 @@ class LiveBroadcastQueryTest extends IntegrationTestSupport {
                           FROM broadcasts
                          WHERE status = 'live'
                          ORDER BY started_at DESC NULLS LAST
-                         LIMIT 500""")
+                         LIMIT %d""".formatted(LiveBroadcastService.FETCH_ROWS))
                 .stream().map(row -> String.valueOf(row.get("QUERY PLAN"))).toList();
         int planningAt = lines.indexOf("Planning:");
         return String.join("\n", planningAt < 0 ? lines : lines.subList(0, planningAt));

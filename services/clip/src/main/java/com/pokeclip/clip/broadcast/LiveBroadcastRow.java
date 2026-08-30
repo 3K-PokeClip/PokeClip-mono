@@ -7,7 +7,8 @@ import java.time.Instant;
  * 이것을 준다(POK-218).
  *
  * <p><b>엔티티가 아니라 인터페이스 프로젝션이다.</b> {@link Broadcast}를 그대로 돌려주면
- * {@code track_manifest}(jsonb)를 상한만큼 — 최대 500줄 — 같이 읽는다. 그 칸은 이 창구가
+ * {@code track_manifest}(jsonb)를 상한만큼 같이 읽는다 — 잘림 판정에 한 줄을 더 받으므로
+ * <b>최대 501줄</b>이다({@link LiveBroadcastService#FETCH_ROWS}). 그 칸은 이 창구가
  * 한 번도 안 쓰는 값이고, 크기가 1번(Media)이 넣는 트랙 수에 따라 커진다.
  *
  * <p>도는 것을 확인했다(계획 검증, 2026-08-31) — Spring Data가 {@code jdk.proxy}로 구현을
