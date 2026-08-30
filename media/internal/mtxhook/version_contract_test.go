@@ -272,8 +272,8 @@ func digestOf(t *testing.T, ref string) string {
 
 // tagOf 는 이미지 참조에서 태그만 떼어 낸다.
 //
-// digest pin(`이미지:태그@sha256:...`)도 받는다 — Dockerfile 주석이 그 형태로 바꾸는 길을
-// 열어 두고 있으므로, 그때 이 장치가 형식 때문에 죽으면 안 된다.
+// digest pin(`이미지:태그@sha256:...`)을 받는다 — 지금 FROM 이 실제로 그 형태다.
+// 태그와 digest 를 각각 대조하므로 여기서는 digest 를 떼어 내고 태그만 본다.
 // 레지스트리 호스트에 포트가 붙는 경우(`host:5000/...`)를 위해 마지막 `/` 뒤에서 자른다.
 func tagOf(t *testing.T, ref string) string {
 	t.Helper()

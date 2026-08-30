@@ -246,10 +246,12 @@ CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리�
 
 ## MediaMTX 버전업 체크리스트
 
-**버전을 올리면 `TestPinnedMediaMTXVersionMatchesDockerfile`이 빨간불이 된다. 그 테스트가 이 절로 안내한다.**
-([`internal/mtxhook/version_contract_test.go`](internal/mtxhook/version_contract_test.go) —
-Dockerfile의 `FROM` 태그와 테스트 안 상수 `pinnedMediaMTXVersion`을 대조한다. 상수를 고치는
-행위가 곧 "아래 전제 9개를 새 버전에서 재확인했다"는 서명이다. 실패 메시지에 9개 목록이 그대로 들어 있다.)
+**핀이 어긋나면 [`internal/mtxhook/version_contract_test.go`](internal/mtxhook/version_contract_test.go)가
+빨간불이 되고, 그 실패 메시지가 이 절로 안내한다.** 상수는 셋이고 책임이 다르다 —
+`pinnedMediaMTXTag`(FROM 태그와 대조)·`pinnedMediaMTXDigest`(FROM digest와 대조)·
+**`upstreamBaseVersion`(아래 전제 9곳을 짊어지는 상수)**. **9곳 재확인의 서명은 마지막 하나이고**,
+그 값이 바뀌는 순간만 진짜 버전업이다(포크 태그의 `.1`→`.2`는 우리 수정만 바뀐 것이다).
+실패 메시지에 9개 목록이 그대로 들어 있다.
 
 버전 고정의 유일한 자리는 [`media/Dockerfile.mtxhook`](Dockerfile.mtxhook)의 `FROM`이다
 (compose의 `image:`가 `build:`로 바뀌면서 옮겨왔다). **지금 그 줄은 상류 공식 이미지가 아니라
@@ -297,7 +299,7 @@ Dockerfile의 `FROM` 태그와 테스트 안 상수 `pinnedMediaMTXVersion`을 �
 
 **핀은 태그와 digest를 함께 적는다.** 태그(`v1.20.1-pokeclip.1`)는 사람이 읽는 이름이고,
 digest는 불변 좌표다 — 같은 태그를 다시 밀어도 가리키는 이미지가 바뀌지 않는다. 그래서
-버전 대조 테스트도 둘 다 본다(`pinnedMediaMTXVersion`·`pinnedMediaMTXDigest`).
+버전 대조 테스트도 둘 다 본다(`pinnedMediaMTXTag`·`pinnedMediaMTXDigest`).
 
 **새 이미지를 만들 때**: `xodbs1021/mediamtx`의 `pokeclip` 라인에 커밋 → `*-pokeclip.*` 태그를
 민다 → `pokeclip-image` 워크플로가 멀티아치 이미지를 GHCR에 올리고 **실행 요약에 `FROM …@sha256:`
@@ -319,7 +321,7 @@ digest는 불변 좌표다 — 같은 태그를 다시 밀어도 가리키는 �
 ### 절차
 
 1. **`FROM` 변경은 별도 PR로 낸다.** 다른 변경과 섞으면 회귀 원인을 가를 수 없다.
-2. 위 표 8개를 확인한 뒤 **같은 PR에서 `pinnedMediaMTXVersion`을 새 태그로 고친다.**
+2. 위 표 9곳을 확인한 뒤 **같은 PR에서 `upstreamBaseVersion`을 새 상류 버전으로 고친다.**
    확인 없이 상수만 맞추면 이 장치는 무력해진다 — 상수 수정은 확인했다는 서명이지 형식 절차가 아니다.
 3. 기동 로그에서 **deprecated/unknown 파라미터 WARN**을 확인한다 — `docker compose logs media | head -50`.
    훅 3종의 이름이 그대로 살아 있는지가 핵심이다.
