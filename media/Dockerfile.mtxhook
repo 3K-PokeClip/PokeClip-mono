@@ -2,8 +2,10 @@
 #
 # 왜 공식 이미지를 그대로 쓰지 않는가: 훅은 MediaMTX 컨테이너 **안에서** 실행되는 명령인데
 # 표준 이미지는 scratch 라 셸도 curl 도 없다(실측). 훅이 부를 수 있는 것은 컨테이너 안에
-# 놓인 정적 바이너리뿐이라, 공식 이미지 위에 mtxhookwrite 를 COPY 한 층만 얹는다.
-# 서버 자체는 손대지 않으며 ENTRYPOINT 도 베이스 것을 그대로 물려받는다.
+# 놓인 정적 바이너리뿐이라, 베이스 이미지 위에 mtxhookwrite 를 COPY 한 층만 얹는다.
+# **이 파일이 더하는 것은 훅 바이너리와 권한 층뿐이고 ENTRYPOINT 도 베이스 것을 물려받는다.**
+# 서버 바이너리 자체의 수정(슬레이트 무녹화)은 여기가 아니라 아래 FROM 이 가리키는
+# 포크 빌드 안에 들어 있다 — 그 사정은 FROM 바로 위 주석에 있다.
 #
 # **버전 고정의 유일한 집이 아래 FROM 이다.** compose 의 image: 가 build: 로 바뀌면서
 # pin 위치가 여기로 옮겨왔다 — 버전을 올릴 때는 이 줄만 고치고, media/README.md 의
@@ -37,12 +39,26 @@ RUN CGO_ENABLED=0 go build -trimpath -o /out/mtxhookwrite ./cmd/mtxhookwrite
 FROM alpine:3 AS prep
 RUN mkdir -p /prep/recordings /prep/dvr /prep/hooks
 
-# 태그 pin을 쓴다. digest pin(멀티아키 index digest는 아키텍처와 무관한 단일 값이라
-# 어느 플랫폼에서든 그대로 쓸 수 있다)은 같은 태그를 다시 밀어 올리는 업스트림 재푸시까지
-# 막아 주지만, 아직 로컬 dev 단계라 태그 추적의 편의를 택했다.
-# 필요하면 `docker buildx imagetools inspect bluenviron/mediamtx:1.20.1` 로 index digest를
-# 확인해 `FROM bluenviron/mediamtx:1.20.1@sha256:...` 형태로 바꾼다.
-FROM bluenviron/mediamtx:1.20.1
+# 베이스는 **우리 포크 빌드**다 — 상류 공식 이미지가 아니다.
+#
+# 왜: 슬레이트(송출이 끊겼을 때 서버가 대신 내보내는 대기 화면)가 녹화 파일로도 저장되는데,
+# 그걸 끄는 스위치 `alwaysAvailableRecorded` 가 상류에 아직 없다. 제안은 상류 PR #5767 이고
+# 우리가 검증·보강해 리뷰를 냈지만 머지 시점은 상류에 달려 있다. 기다리는 동안 우리 라인이
+# 그 수정을 싣는다 — ADR-050 선결 B 결정(ⓑ 자체 빌드 선행).
+#
+# 무엇이 들어 있나: 상류 main(e175003) + PR #5767 리베이스 + 정적 소스 갭 2건 수정 + 회귀 테스트.
+# **베이스 MediaMTX 는 그대로 1.20.1** 이라 아래 "버전에 묶인 전제 9곳"은 전부 유지된다.
+#
+# 어떻게 만들어지나: xodbs1021/mediamtx 의 `pokeclip` 라인에 `*-pokeclip.*` 태그를 밀면
+# 워크플로가 멀티아치 이미지를 GHCR 에 올리고 실행 요약에 digest 를 찍는다. 그 값을 여기 붙인다.
+#
+# **태그와 digest 를 함께 적는다.** 태그는 사람이 읽는 이름이고, digest 는 불변 좌표다
+# (같은 태그를 다시 밀어도 이 줄이 가리키는 이미지는 바뀌지 않는다).
+#
+# 상류에 머지되면: 이 FROM 을 `bluenviron/mediamtx:<그 버전>` 으로 되돌리고
+# version_contract_test 의 **포크 전용 상수·테스트를 전부** 정리한다(목록은 그 파일의
+# forkPinGuide 에 번호로 적혀 있다). 경로 설정의 `alwaysAvailableRecorded` 는 그대로 둔다.
+FROM ghcr.io/xodbs1021/mediamtx:v1.20.1-pokeclip.1@sha256:8878310479bac1009bdc8b45f35a906b01b5a4fe2ec3fde52063071626903d17
 
 # /hooks-bin 은 바이너리 자리, /hooks 는 스풀 볼륨 자리다. 둘을 섞지 않는다 —
 # 같은 디렉토리에 두면 볼륨 마운트가 바이너리를 가린다.
