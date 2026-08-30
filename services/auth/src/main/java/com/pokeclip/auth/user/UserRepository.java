@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.Optional;
 
 public interface UserRepository extends JpaRepository<User, Long> {
@@ -23,4 +24,17 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT u FROM User u WHERE u.id = :id")
     Optional<User> findByIdForUpdate(@Param("id") Long id);
+
+    /**
+     * 탈퇴 여부만 읽는다. 엔티티로 읽지 않는 이유는 이 조회가 <b>인증이 필요한 모든 요청</b>에
+     * 붙기 때문이다 — 영속성 컨텍스트에 회원을 올리면 뒤따르는 코드가 그 캐시를 잡는다.
+     *
+     * <p>없는 회원이면 빈손이다. 필터는 그것을 「막지 않음」으로 다룬다 —
+     * 「토큰의 주인이 없다」는 이미 각 창구가 자기 사유로 다룬다(DataInconsistencyException).
+     *
+     * <p><b>{@code Optional<Instant>}는 행이 없을 때와 값이 null일 때가 둘 다 빈손이다</b> —
+     * 예외를 던지지 않는다. 필터가 둘을 같게 다루므로 그 성질이 여기서는 맞다.
+     */
+    @Query("SELECT u.deletedAt FROM User u WHERE u.id = :id")
+    Optional<Instant> findDeletedAtById(@Param("id") Long id);
 }
