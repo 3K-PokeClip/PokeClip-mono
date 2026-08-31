@@ -3,12 +3,17 @@ package com.pokeclip.chat.collector.broadcast.intake;
 import com.pokeclip.chat.collector.broadcast.BroadcastEventProcessor;
 import com.pokeclip.chat.collector.broadcast.LifecycleEnvelope;
 import com.pokeclip.chat.collector.broadcast.ProcessResult;
+import com.pokeclip.chat.collector.broadcast.attach.LaneKey;
+import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.DeleteMessageRequest;
+import software.amazon.awssdk.services.sqs.model.GetQueueAttributesRequest;
+import software.amazon.awssdk.services.sqs.model.GetQueueAttributesResponse;
 import software.amazon.awssdk.services.sqs.model.Message;
+import software.amazon.awssdk.services.sqs.model.QueueAttributeName;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageResponse;
 import tools.jackson.databind.ObjectMapper;
@@ -20,20 +25,32 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 큐에서 방송 생명주기 편지를 꺼내 판정기에 넘기고, <b>더 볼 일이 없어진 것만</b> 지운다.
+ * 큐에서 방송 생명주기 편지를 꺼내 <b>스트리머별 줄에 넣는다.</b> 판정도 삭제도 그 줄 안에서
+ * 일어난다 — 이 스레드는 꺼내서 넘기기만 한다(POK-219).
+ *
+ * <p><b>왜 갈랐나</b>: 예전에는 이 스레드 하나가 꺼내기·판정·auth 왕복·치지직 REST 두 번·
+ * 삭제를 전부 직렬로 했다. 방송 둘이 몰리면 5.09초 + 5.02초 = <b>10.11초</b>로 선형 누적된다
+ * (POK-127 실측). N번째 방송은 앞의 시한이 다 쌓인 뒤에 붙고, <b>채팅에는 백필이 없어
+ * 그 시간이 곧 유실</b>이다.
  *
  * <p>지우는 기준이 「성공」이 아니라 「더 볼 일 없음」이다 — 낡은 편지도, 우리가 못 읽는
  * 편지도 다시 받을 이유가 없으므로 지운다. 반대로 {@code RETRY_LATER}와 <b>판정이 예외로
  * 끝난 것</b>은 안 지운다. 가시성 타임아웃이 지나면 큐가 다시 주고, 판정이 멱등이라
  * 두 번 와도 안전하다.
  *
- * <p><b>조립은 {@code IntakeConfiguration.LetterPath}가 한다</b>({@code ObjectProvider<SqsClient>}로
+ * <p><b>회차 중단이 「줄 중단」으로 바뀌었다.</b> 예전에는 못 지운 편지가 나오면 그 회차의
+ * 나머지를 통째로 안 봤는데(멀쩡한 남의 방송까지 미뤄졌다), 이제는 <b>그 스트리머의 줄에
+ * 쌓인 것만</b> 버린다({@link StreamerSerialExecutor#dropPending}). 막으려는 사고는 같다 —
+ * 뒤 알림이 먼저 반영되면 앞엣것이 「낡음」으로 걸러진 뒤 지워져 재전송으로도 못 고치는
+ * 영구 유실이 된다(clip PR #82 P1).
+ *
+ * <p><b>조립은 {@code LetterPathConfiguration}이 한다</b>({@code ObjectProvider<SqsClient>}로
  * 받는다 — 거기 주석). 이 서버의 조립 관례도 같은 자리다: {@code CollectorRunner}·
  * {@code EndedStreamSweeper} 둘 다 {@code @Component}가 아니라 {@code @Bean}이 만든다.
  *
  * <p><b>스레드 수명은 {@link SqsIntakeLoop}가 든다.</b> 여기서 안 정하는 이유는 종료 유예
- * 예산이 이 부품의 관심사가 아니기 때문이다 — 세션 여럿을 닫는 시간과 마지막 회차를 기다리는
- * 시간이 같은 20초를 나눠 쓴다.
+ * 예산이 이 부품의 관심사가 아니기 때문이다 — 세션 여럿을 닫는 시간과 줄을 비우는 시간이
+ * 같은 20초를 나눠 쓴다.
  */
 public class SqsIntakeRunner {
 
@@ -43,11 +60,27 @@ public class SqsIntakeRunner {
     static final Duration FIRST_RETRY_DELAY = Duration.ofSeconds(1);
     static final Duration MAX_RETRY_DELAY = Duration.ofSeconds(60);
 
+    /**
+     * 줄이 가득 찬 동안 쉬는 간격. <b>백오프가 아니라 고정이다</b> — 포화는 장애가 아니라
+     * 정상적인 밀림이고, 백오프(최대 60초)를 태우면 줄이 비어도 그만큼 아무것도 안 꺼낸다.
+     */
+    static final Duration SATURATED_PAUSE = Duration.ofMillis(200);
+
+    /**
+     * 붙기가 <b>얼마나 오래 걸려도 되는가</b>의 눈금. 이보다 짧으면 아직 붙는 중인 알림을
+     * 큐가 다시 주므로 헛일이 는다(동작은 중복 방어가 지킨다 —
+     * {@code LinkedSessionStarter}가 이미 걷고 있는 방송이면 auth에 묻지도 않는다).
+     * 실측으로 auth 왕복 하나가 5초까지 갔으므로(POK-127) 그 두 배를 눈금으로 잡는다.
+     */
+    static final int MIN_SAFE_VISIBILITY_SECONDS = 10;
+
     private final SqsClient sqs;
     private final IntakeProperties properties;
     private final IntakeStatus status;
     private final BroadcastEventProcessor processor;
     private final ObjectMapper mapper;
+    /** 스트리머별 직렬 줄. 같은 스트리머는 순서대로, 다른 스트리머는 겹쳐서 붙는다. */
+    private final StreamerSerialExecutor lanes;
 
     /**
      * 재연결과 같은 백오프를 그대로 쓴다. 이 서버에 이미 있는 것을 복사하면 한쪽만 고쳐져
@@ -59,6 +92,8 @@ public class SqsIntakeRunner {
     private final CountDownLatch stopSignal = new CountDownLatch(1);
 
     private volatile boolean running = true;
+    /** 마지막 회차에 줄로 넘긴 알림 수. 백프레셔가 실제로 걸렸는지를 검사가 이걸로 본다. */
+    private volatile int acceptedInLastPoll;
 
     /**
      * 자는 동작. 검사가 <b>실제로 자지 않고</b> 「얼마나 자라고 했는지」를 재려면 주입
@@ -71,24 +106,59 @@ public class SqsIntakeRunner {
     }
 
     public SqsIntakeRunner(SqsClient sqs, IntakeProperties properties, IntakeStatus status,
-                           BroadcastEventProcessor processor, ObjectMapper mapper) {
-        this(sqs, properties, status, processor, mapper, null);
+                           BroadcastEventProcessor processor, ObjectMapper mapper,
+                           StreamerSerialExecutor lanes) {
+        this(sqs, properties, status, processor, mapper, lanes, null);
     }
 
     /**
      * @param sqs <b>null을 거부한다.</b> 꺼져 있으면 이 부품을 아예 만들지 않는 것이 맞고,
      *            켜졌는데 null이면 주입이 잘못된 것이다({@code Optional} 함정). 껍데기로
      *            받아 조용히 안 도는 것보다 부팅에서 죽는 편이 낫다
+     * @param lanes 같은 이유로 null을 거부한다. 줄이 없으면 붙이기가 한 건도 안 돈다
      * @param sleeper null이면 종료 신호를 기다리는 실물. 검사만 가짜를 넣는다
      */
     public SqsIntakeRunner(SqsClient sqs, IntakeProperties properties, IntakeStatus status,
-                           BroadcastEventProcessor processor, ObjectMapper mapper, Sleeper sleeper) {
+                           BroadcastEventProcessor processor, ObjectMapper mapper,
+                           StreamerSerialExecutor lanes, Sleeper sleeper) {
         this.sqs = Objects.requireNonNull(sqs, "SqsClient가 없다 — 켜져 있는데 주입이 안 됐다");
         this.properties = properties;
         this.status = status;
         this.processor = processor;
         this.mapper = mapper;
+        this.lanes = Objects.requireNonNull(lanes, "StreamerSerialExecutor가 없다 — 붙이기가 안 돈다");
         this.sleeper = sleeper != null ? sleeper : this::awaitStop;
+    }
+
+    /**
+     * 큐의 가시성 시한을 <b>부팅에 한 번</b> 읽어 남긴다. 실패해도 조용히 넘어간다 —
+     * 이 값은 관측용이지 동작에 안 쓰인다.
+     *
+     * <p><b>왜 남기나</b>: 붙기가 끝나야 알림을 지우게 됐으므로, 시한이 붙기보다 짧으면
+     * 같은 알림이 붙는 도중에 다시 온다. 동작은 중복 방어가 지키지만 헛일이 늘고,
+     * 그때 로그에 이 값이 없으면 원인을 큐 설정이 아니라 우리 코드에서 찾게 된다.
+     */
+    public void reportQueueVisibility() {
+        try {
+            GetQueueAttributesResponse attributes = sqs.getQueueAttributes(
+                    GetQueueAttributesRequest.builder()
+                            .queueUrl(properties.queueUrl())
+                            .attributeNames(QueueAttributeName.VISIBILITY_TIMEOUT)
+                            .build());
+            int seconds = Integer.parseInt(
+                    attributes.attributes().get(QueueAttributeName.VISIBILITY_TIMEOUT));
+            if (seconds < MIN_SAFE_VISIBILITY_SECONDS) {
+                log.warn("broadcast.intake.visibility_short visibilityTimeoutSeconds={} minSafe={}",
+                        seconds, MIN_SAFE_VISIBILITY_SECONDS);
+            } else {
+                log.info("broadcast.intake.visibility visibilityTimeoutSeconds={}", seconds);
+            }
+        } catch (RuntimeException e) {
+            // 권한이 없거나(SQS는 GetQueueAttributes를 따로 요구한다) 값이 숫자가 아니면
+            // 여기로 온다. 위 poll_failed와 같은 이유로 예외 객체를 안 넘긴다 —
+            // SDK 예외 메시지에 큐 주소와 계정 번호가 들어 있다.
+            log.warn("broadcast.intake.visibility_unknown reason={}", e.getClass().getSimpleName());
+        }
     }
 
     /**
@@ -99,6 +169,16 @@ public class SqsIntakeRunner {
     public void runLoop() {
         int consecutiveFailures = 0;
         while (running) {
+            // 🔴 <b>포화를 폴링보다 먼저 본다</b>(계획 검증 M1). 꺼낸 뒤에 거절하면 이미
+            // 늦다 — 받아 둔 알림이 가시성 시한 동안 숨겨지고, FIFO라 그 방송들의 뒤
+            // 알림이 통째로 막힌다. 그동안 pollSucceeded가 계속 찍혀 health는 초록이다.
+            if (lanes.saturated()) {
+                log.info("broadcast.intake.saturated inFlight={}", lanes.inFlight());
+                if (sleeper.sleepOrStop(SATURATED_PAUSE)) {
+                    return;
+                }
+                continue;
+            }
             if (pollOnce()) {
                 consecutiveFailures = 0;
                 continue;
@@ -132,11 +212,20 @@ public class SqsIntakeRunner {
     }
 
     /**
-     * 한 회차. 대부분의 검사는 이 메서드만 부른다.
+     * 한 회차. <b>꺼내서 줄에 넣기까지</b>가 이 메서드다 — 판정도 삭제도 여기서 안 끝난다.
+     * 대부분의 검사는 이 메서드만 부르고 {@link #awaitIdle}로 줄이 비기를 기다린다.
      *
-     * @return 큐에 닿았으면 true. 루프가 백오프를 걸지 정하는 값이다
+     * @return <b>큐에 닿아 건강하다고 셀 수 있으면 true.</b> 가득 차서 안 두드린 회차는
+     *         false다 — true로 세면 2분 {@code stalled} 판정이 안 걸려, 줄이 영영 안
+     *         비는 상태가 health에서 초록으로 보인다
      */
     public boolean pollOnce() {
+        if (lanes.saturated()) {
+            // runLoop가 이미 걸렀지만 검사가 pollOnce를 직접 부른다. 두 자리에 두는
+            // 이유는 그것이고, 여기가 없으면 그 검사들이 포화를 안 재게 된다.
+            acceptedInLastPoll = 0;
+            return false;
+        }
         try {
             ReceiveMessageResponse response = sqs.receiveMessage(ReceiveMessageRequest.builder()
                     .queueUrl(properties.queueUrl())
@@ -144,23 +233,16 @@ public class SqsIntakeRunner {
                     .waitTimeSeconds((int) properties.waitTime().toSeconds())
                     .build());
 
+            int accepted = 0;
             for (Message message : response.messages()) {
-                if (!handle(message)) {
-                    // 못 지운 편지가 나왔다. 계속 돌면 같은 방송의 뒤 편지가 앞질러 처리돼
-                    // 메모의 lastSequence를 올리고, 재전송된 앞 편지가 IGNORED_STALE로
-                    // 걸러진 뒤 「더 볼 일 없음」으로 삭제된다 — 재전송으로도 못 고치는
-                    // 영구 유실이다(clip PR #82 P1).
-                    //
-                    // 규칙은 clip과 같지만 <b>근거는 다르다.</b> clip은 "FIFO 배치가 보통
-                    // 소수 그룹이라 회차 중단의 비용이 작다"고 했는데, 우리 쪽
-                    // MessageGroupId는 방송별(streamId)이라 그룹이 스트리머 수보다 많다 —
-                    // 멀쩡한 남의 방송이 같이 미뤄지므로 비용이 clip보다 크다.
-                    // 그래도 중단을 고르는 이유는 <b>유실이 지연보다 비싸기 때문</b>이고,
-                    // 지연 폭은 큐의 가시성 타임아웃 한 번이다(1번 확인 전, 30초로 가정).
-                    // 그 가정이 크게 틀리면(예: 몇 분) 그룹만 건너뛰는 쪽을 다시 본다.
+                if (!offer(message)) {
+                    // 줄이 그 사이 찼다. 남은 것은 안 건드린다 — 지우지 않았으므로
+                    // 가시성 시한이 지나면 다시 온다.
                     break;
                 }
+                accepted++;
             }
+            acceptedInLastPoll = accepted;
             status.pollSucceeded(Instant.now());
             return true;
         } catch (RuntimeException e) {
@@ -177,51 +259,95 @@ public class SqsIntakeRunner {
     }
 
     /**
-     * 편지 하나를 처리한다.
+     * 편지 하나를 줄에 넘긴다.
      *
-     * @return 이 회차를 계속해도 되면 true. <b>false는 「이 편지를 못 지웠다」</b>는 뜻이고,
+     * @return 줄에 넣었거나 그 자리에서 끝냈으면 true. <b>false는 「줄이 가득 찼다」뿐</b>이고,
      *         그때는 뒤 편지를 건드리면 안 된다 — 위 for 루프 주석 참고
      */
-    private boolean handle(Message message) {
+    private boolean offer(Message message) {
         LifecycleEnvelope envelope;
         try {
             envelope = mapper.readValue(message.body(), LifecycleEnvelope.class);
         } catch (RuntimeException e) {
             // Jackson 3의 JacksonException은 unchecked라 컴파일러가 안 잡아 준다.
-            // 재시도해도 계속 실패한다. 안 지우면 이 편지가 큐 앞을 영원히 막는다.
-            // 본문은 안 찍는다 — 무엇이 깨졌는지는 발행 쪽 로그가 안다.
+            // <b>스트리머를 모르니 줄에 넣을 수 없다.</b> 재시도해도 계속 실패하고,
+            // 안 지우면 이 편지가 큐 앞을 영원히 막는다. 본문은 안 찍는다 —
+            // 무엇이 깨졌는지는 발행 쪽 로그가 안다.
             log.warn("broadcast.intake.unreadable_dropped messageId={} reason={}",
                     message.messageId(), e.getClass().getSimpleName());
             delete(message);
             return true;   // 지웠으므로 큐 앞을 막지 않는다 — 중단 사유가 아니다
         }
+        // 줄 이름은 회원 번호로 정규화한다. 원문 그대로 쓰면 "07"·"007"·"+7"이 전부
+        // 회원 7인데 각각 다른 줄이 되어, 같은 스트리머의 두 방송이 병렬로 수립된다
+        // (LaneKey의 주석에 실측 8종 중 4종이 갈린다고 적어 뒀다). 재부착(태스크 7)도
+        // 같은 정규화를 쓴다 — 안 그러면 두 경로가 다른 줄에 들어간다.
+        String lane = LaneKey.of(envelope.streamerId());
+        return lanes.submit(lane, () -> handleInLane(lane, message, envelope));
+    }
 
+    /**
+     * 줄 안에서 도는 본체. <b>여기서만 지운다.</b>
+     *
+     * <p>실패하면 그 줄의 대기를 버린다 — 뒤 알림이 먼저 반영되면 앞엣것이 「낡음」으로
+     * 걸러진 뒤 지워져 재전송으로도 못 고치는 영구 유실이 된다. 버린 것은 큐에 그대로
+     * 있으므로 가시성 시한이 지나면 다시 온다.
+     */
+    private void handleInLane(String lane, Message message, LifecycleEnvelope envelope) {
         ProcessResult result;
         try {
             result = processor.process(envelope);
-        } catch (RuntimeException e) {
-            // 🔴 판정기는 DB 예외를 일부러 안 삼킨다(태스크 5) — 여기가 유일한 받는 자리다.
-            // DB가 잠깐 죽었을 때 종료 편지를 지우면 메모가 영영 안 남고, 뒤늦게 온 시작
-            // 편지가 세션을 연다. 그래서 안 지우고 회차도 멈춘다.
-            // 위 poll_failed와 같은 이유로 예외 객체를 안 넘긴다 — 판정기가 던지는
-            // 예외의 메시지에 무엇이 실릴지 이쪽에서 알 수 없다.
+        } catch (Throwable t) {
+            // 🔴 <b>폭이 Throwable이다</b>(계획 검증 T3·I6). RuntimeException으로 두면
+            // Error가 실행기의 catch(Throwable)로 새는데 <b>거기서는 dropPending을
+            // 안 부른다</b> — 앞 알림이 실패했는데 뒤 알림이 반영되는, 이 설계가
+            // 막으려던 바로 그 모양이 된다.
+            //
+            // 판정기는 DB 예외를 일부러 안 삼킨다 — 여기가 유일한 받는 자리다.
+            // DB가 잠깐 죽었을 때 종료 편지를 지우면 메모가 영영 안 남고, 뒤늦게 온
+            // 시작 편지가 세션을 연다. 그래서 안 지운다.
+            // 위 poll_failed와 같은 이유로 예외 객체를 안 넘긴다.
             log.warn("broadcast.intake.handle_failed eventId={} reason={}",
-                    envelope.eventId(), e.getClass().getSimpleName());
-            return false;
+                    envelope.eventId(), t.getClass().getSimpleName());
+            lanes.dropPending(lane);
+            return;
         }
-
         if (result == ProcessResult.RETRY_LATER) {
             log.info("broadcast.intake.retry_later eventId={}", envelope.eventId());
-            return false;
+            lanes.dropPending(lane);
+            return;
         }
-
         // 삭제를 판정의 try 밖에 둔다. 안에 두면 「판정은 됐는데 삭제가 실패」까지
-        // handle_failed로 남아 로그가 원인을 반대로 가리킨다. 삭제 실패는 큐에 못 닿는
-        // 것이므로 pollOnce의 catch가 poll_failed로 받는 것이 맞다(clip 감사 2차 지적).
+        // handle_failed로 남아 로그가 원인을 반대로 가리킨다.
         // PROCESSED·IGNORED_STALE·UNREADABLE 셋 다 「더 볼 일 없음」이다.
         log.info("broadcast.intake.handled eventId={} result={}", envelope.eventId(), result);
-        delete(message);
-        return true;
+        try {
+            delete(message);
+        } catch (RuntimeException e) {
+            // 삭제 실패는 큐에 못 닿는 것이다. 여기는 폴링 스레드가 아니라 줄이므로
+            // <b>pollOnce의 catch가 못 받는다</b> — 그래서 여기서 받는다. 안 지운 알림은
+            // 가시성 시한 뒤 다시 오고 판정이 멱등이라 안전하다.
+            //
+            // 🔴 <b>status에도 알린다</b>(계획 검증 T3·I7). 안 알리면 큐에 못 닿는 상태가
+            // health에서 사라진다 — 삭제만 실패하고 수신은 되는 동안 계속 초록이다.
+            log.warn("broadcast.intake.delete_failed eventId={} reason={}",
+                    envelope.eventId(), e.getClass().getSimpleName());
+            status.pollFailed(e.getClass().getSimpleName());
+        }
+    }
+
+    /** @return 예산 안에 줄의 붙이기가 전부 끝나면 true */
+    public boolean awaitIdle(Duration budget) {
+        return lanes.awaitIdle(budget);
+    }
+
+    /** 돌고 있는 것 + 대기 중인 붙이기 수. */
+    public int inFlight() {
+        return lanes.inFlight();
+    }
+
+    int acceptedInLastPoll() {
+        return acceptedInLastPoll;
     }
 
     private void delete(Message message) {

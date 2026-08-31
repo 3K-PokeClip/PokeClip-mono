@@ -3,6 +3,7 @@ package com.pokeclip.chat.collector;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.broadcast.BroadcastEventProcessor;
 import com.pokeclip.chat.collector.broadcast.BroadcastSessions;
+import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
 import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
 import com.pokeclip.chat.collector.broadcast.LifecycleEnvelope;
 import com.pokeclip.chat.collector.broadcast.ProcessResult;
@@ -240,7 +241,9 @@ class CollectorHealthTest extends IntegrationTestSupport {
         // 판정기는 <b>진짜 표</b>를 쓴다. 여기서 보는 갈래 셋은 표에 닿기 전에 갈리지만,
         // 가짜로 바꾸면 「닿기 전에 갈린다」는 사실 자체가 검사에서 사라진다.
         processor = new BroadcastEventProcessor(store, new RefusingSessions());
-        intakeRunner = new SqsIntakeRunner(queue, intakeProperties(), intake, processor, new ObjectMapper());
+        // 줄 상한을 넉넉히 준다 — 이 검사가 재는 것은 health이지 백프레셔가 아니다.
+        intakeRunner = new SqsIntakeRunner(queue, intakeProperties(), intake, processor,
+                new ObjectMapper(), new StreamerSerialExecutor(100));
     }
 
     private Health health() {

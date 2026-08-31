@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import com.pokeclip.chat.collector.broadcast.BroadcastEventProcessor;
 import com.pokeclip.chat.collector.broadcast.ProcessResult;
+import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -22,6 +23,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -55,6 +57,7 @@ class SqsIntakeRunnerTest {
         SqsIntakeRunner runner = newRunner(queue, ProcessResult.PROCESSED);
 
         runner.pollOnce();
+        drain(runner);
 
         assertThat(queue.deleted()).containsExactly("rh-0");
     }
@@ -71,6 +74,7 @@ class SqsIntakeRunnerTest {
         SqsIntakeRunner runner = newRunner(queue, ProcessResult.IGNORED_STALE);
 
         runner.pollOnce();
+        drain(runner);
 
         assertThat(queue.deleted()).containsExactly("rh-0");
     }
@@ -82,6 +86,7 @@ class SqsIntakeRunnerTest {
         SqsIntakeRunner runner = newRunner(queue, ProcessResult.UNREADABLE);
 
         runner.pollOnce();
+        drain(runner);
 
         assertThat(queue.deleted()).containsExactly("rh-0");
     }
@@ -92,6 +97,13 @@ class SqsIntakeRunnerTest {
      * 재전송된 앞 편지가 {@code IGNORED_STALE}로 걸러진 뒤 삭제된다 — 재전송으로도
      * 못 고치는 영구 유실이다(clip PR #82 P1).
      *
+     * <p>🔴 <b>POK-219에서 멈추는 단위가 「회차」에서 「그 줄」로 바뀌었다.</b> 예전에는
+     * 이 회차의 나머지를 통째로 안 봤는데(멀쩡한 남의 방송까지 미뤄졌다), 이제는 그
+     * 스트리머의 줄에 쌓인 것만 버린다({@code StreamerSerialExecutor.dropPending}).
+     * <b>이 검사가 그대로 서는 이유는 셋이 같은 줄이기 때문이다</b> —
+     * {@code startedJson}이 {@code streamerId}를 셋 다 {@code "42"}로 준다.
+     * 방송 번호는 다르지만 줄은 스트리머로 가른다.
+     *
      * <p><b>문항 3</b>: 러너가 애초에 하나씩만 받아오면 이 검사는 아무것도 안 잰다.
      * 그래서 ① 가짜 큐가 <b>받은 회차 수</b>를 세고 1인지 단언하고, ② 가짜 큐가
      * {@code maxNumberOfMessages}를 실제로 지킨다 — 셋이 한 회차에 진짜로 왔다는 뜻이다.
@@ -99,10 +111,10 @@ class SqsIntakeRunnerTest {
      * {@code process}를 한 번밖에 못 세 빨간불이 된다(확인함).
      * <p>문항 4: {@code times(1)}만 세면 <b>둘째를 지우고 첫째를 안 지워도</b> 통과한다 —
      * 그래서 지운 편지의 이름까지 단언한다.
-     * <p>문항 5: {@code break}를 {@code continue}로 바꾸면 빨간불(확인함).
+     * <p>문항 5: {@code dropPending} 두 줄을 지우면 셋째가 돌아 빨간불(확인함).
      */
     @Test
-    void 못_지운_편지가_나오면_그_회차를_즉시_멈춘다() {
+    void 못_지운_편지가_나오면_같은_줄의_뒤_편지를_안_건드린다() {
         FakeQueue queue = FakeQueue.with(
                 startedJson("evt-1", "s1", 1L),
                 startedJson("evt-2", "s2", 1L),
@@ -113,6 +125,7 @@ class SqsIntakeRunnerTest {
         SqsIntakeRunner runner = newRunner(queue, processor);
 
         runner.pollOnce();
+        drain(runner);
 
         assertThat(queue.receiveCount())
                 .as("한 회차에 셋이 실제로 오지 않으면 이 검사는 아무것도 안 잰다")
@@ -161,6 +174,7 @@ class SqsIntakeRunnerTest {
         assertThat(runner.pollOnce())
                 .as("큐에는 닿았다 — 여기서 false를 주면 백오프가 무관한 방송까지 멈춘다")
                 .isTrue();
+        drain(runner);
 
         IntakeStatus.Snapshot snap = status.snapshot();
         assertThat(snap.healthy()).isTrue();
@@ -190,7 +204,11 @@ class SqsIntakeRunnerTest {
             // ② 판정이 던지는 갈래 — 예외 메시지가 무엇이든 실리면 안 된다.
             BroadcastEventProcessor throwing = mock(BroadcastEventProcessor.class);
             given(throwing.process(any())).willThrow(new IllegalStateException("secret-detail"));
-            newRunner(FakeQueue.with(startedJson("evt-1", "s1", 1L)), throwing).pollOnce();
+            SqsIntakeRunner failing = newRunner(FakeQueue.with(startedJson("evt-1", "s1", 1L)), throwing);
+            failing.pollOnce();
+            // handle_failed는 이제 줄 스레드에서 난다. 안 기다리면 아래 긍정 단언이
+            // 0건을 재고 빨간불이 된다 — LogCaptor는 root에 붙어 스레드를 안 가린다.
+            drain(failing);
 
             assertThat(captor.messages())
                     .as("두 갈래가 실제로 로그를 남겼는가 — 안 남으면 아래가 0건을 재고 통과한다")
@@ -218,13 +236,17 @@ class SqsIntakeRunnerTest {
      * DB가 잠깐 죽었을 때 종료 편지를 지우면 메모가 영영 안 남고, 뒤늦게 온 시작 편지가
      * 세션을 연다. 이 카드가 막으려는 실패 그 자체다.
      *
+     * <p>🔴 <b>POK-219에서 멈추는 단위가 「회차」에서 「그 줄」로 바뀌었다.</b> 여기도
+     * 둘이 같은 줄이라(둘 다 {@code streamerId="42"}) 단언은 그대로 선다.
+     * <b>catch의 폭이 {@code Throwable}인 것</b>은 {@code AsyncIntakeTest}가 {@code Error}로 잰다.
+     *
      * <p>문항 4: 예외를 「지우지 않는다」로만 잰다면 <b>뒤 편지를 계속 처리해도</b> 통과한다 —
      * 그러면 위 {@code RETRY_LATER}와 달리 순서가 뒤집힌다. 그래서 뒤 편지가 판정기에
      * 안 갔는지도 같이 잰다.
-     * <p>문항 5: {@code catch}에서 {@code return true}로 바꾸면 빨간불(확인함).
+     * <p>문항 5: {@code catch}에서 {@code dropPending}을 빼면 뒤 편지가 돌아 빨간불(확인함).
      */
     @Test
-    void 판정_중_예외가_나면_지우지_않고_그_회차를_멈춘다() {
+    void 판정_중_예외가_나면_지우지_않고_같은_줄의_뒤_편지를_안_건드린다() {
         FakeQueue queue = FakeQueue.with(
                 startedJson("evt-1", "s1", 1L),
                 startedJson("evt-2", "s2", 1L));
@@ -234,6 +256,7 @@ class SqsIntakeRunnerTest {
 
         try (LogCaptor captor = new LogCaptor()) {
             runner.pollOnce();
+            drain(runner);
 
             assertThat(captor.levelOf("broadcast.intake.handle_failed")).isEqualTo(Level.WARN);
         }
@@ -259,10 +282,12 @@ class SqsIntakeRunnerTest {
 
         try (LogCaptor captor = new LogCaptor()) {
             runner.pollOnce();
+            drain(runner);
 
             assertThat(captor.levelOf("broadcast.intake.unreadable_dropped")).isEqualTo(Level.WARN);
         }
 
+        // rh-0은 폴링 스레드가(줄에 못 넣는다), rh-1은 줄이 지운다 — 순서는 그래서 고정이다.
         assertThat(queue.deleted()).containsExactly("rh-0", "rh-1");
         verify(processor, times(1)).process(any());
     }
@@ -439,9 +464,26 @@ class SqsIntakeRunnerTest {
         return newRunner(queue, processor, status, null);
     }
 
+    /**
+     * <b>줄 상한을 넉넉히(100) 준다.</b> 이 파일의 검사들은 백프레셔를 재는 것이 아니라
+     * 「무엇을 지우고 무엇을 남기나」를 잰다 — 포화 갈래는 {@code AsyncIntakeTest}가 맡는다.
+     * 여기서 상한을 좁게 잡으면 그 검사들이 <b>포화 때문에</b> 빨간불이 되어 원인이 흐려진다.
+     */
     private static SqsIntakeRunner newRunner(FakeQueue queue, BroadcastEventProcessor processor,
                                              IntakeStatus status, SqsIntakeRunner.Sleeper sleeper) {
-        return new SqsIntakeRunner(queue, properties(), status, processor, new ObjectMapper(), sleeper);
+        return new SqsIntakeRunner(queue, properties(), status, processor, new ObjectMapper(),
+                new StreamerSerialExecutor(100), sleeper);
+    }
+
+    /**
+     * 🔴 <b>붙이기가 줄로 옮겨가 {@code pollOnce}가 곧바로 돌아온다</b>(POK-219).
+     * 판정·삭제를 단언하기 <b>전에</b> 반드시 이것을 통과해야 한다 — 안 기다리면
+     * 「아직 안 일어났다」를 「안 일어난다」로 읽고 통과한다(문항 5(가)).
+     */
+    private static void drain(SqsIntakeRunner runner) {
+        assertThat(runner.awaitIdle(Duration.ofSeconds(5)))
+                .as("줄이 5초 안에 안 비었다 — 붙이기가 매달려 있다")
+                .isTrue();
     }
 
     private static IntakeProperties properties() {
@@ -471,8 +513,10 @@ class SqsIntakeRunnerTest {
         /** 회차마다 닿을지 말지. 비면 늘 닿는다. 대본이 끝나면 계속 실패한다. */
         private final Deque<Boolean> script = new ArrayDeque<>();
         private final boolean scripted;
-        private final List<String> deleted = new ArrayList<>();
-        private final List<ReceiveMessageRequest> requests = new ArrayList<>();
+        /** <b>줄 스레드가 쓴다.</b> 삭제가 폴링 스레드를 떠났으므로 동기화가 필요하다. */
+        private final List<String> deleted = Collections.synchronizedList(new ArrayList<>());
+        private final List<ReceiveMessageRequest> requests =
+                Collections.synchronizedList(new ArrayList<>());
 
         private FakeQueue(List<Message> messages, boolean scripted) {
             this.messages = messages;

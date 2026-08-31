@@ -6,6 +6,7 @@ import com.pokeclip.chat.collector.broadcast.BroadcastSessions;
 import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
 import com.pokeclip.chat.collector.broadcast.LinkedSessionStarter;
 import com.pokeclip.chat.collector.broadcast.StoppedStreamRecorder;
+import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
 import com.pokeclip.chat.collector.link.ChzzkLinkClient;
 import com.pokeclip.chat.collector.link.LinkProperties;
 import com.pokeclip.chat.collector.session.SessionRegistry;
@@ -110,8 +111,8 @@ public class LetterPathConfiguration {
     @Bean
     public SqsIntakeRunner sqsIntakeRunner(ObjectProvider<SqsClient> sqs, IntakeProperties properties,
                                            IntakeStatus status, BroadcastEventProcessor processor,
-                                           ObjectMapper mapper) {
-        return new SqsIntakeRunner(sqs.getIfAvailable(), properties, status, processor, mapper);
+                                           ObjectMapper mapper, StreamerSerialExecutor lanes) {
+        return new SqsIntakeRunner(sqs.getIfAvailable(), properties, status, processor, mapper, lanes);
     }
 
     @Bean

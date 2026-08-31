@@ -3,6 +3,7 @@ package com.pokeclip.chat.collector;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
 import com.pokeclip.chat.collector.broadcast.EndedStreamSweeper;
+import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
@@ -59,6 +60,9 @@ public class CollectorApplication {
      * 재시도 중에 드러나면 컨텍스트를 닫아 재시작(컨테이너 restart 정책)이 부팅
      * fail-fast 경로를 타게 한다.
      */
+    /** {@link #streamerSerialExecutor()}의 상한. javadoc이 {@code @value}로 읽으므로 상수다. */
+    private static final int MAX_IN_FLIGHT_ATTACHES = 50;
+
     @Bean
     FlywayMigrationStrategy retryingMigrationStrategy() {
         return new RetryingMigrationStrategy();
@@ -84,6 +88,31 @@ public class CollectorApplication {
      * ({@code Supplier<Instant>})는 스프링이 만들 수 있는 타입이 아니라, 생성자에 그대로 두면
      * 부팅이 죽는다({@code EndedStreamSweeper} 주석의 실측 메시지). 값은 {@code @Value}로 받는다.
      */
+    /**
+     * 스트리머별 직렬 줄. <b>알림 경로와 재부착이 같은 것을 쓴다</b> — 같은 방송에 두 길이
+     * 동시에 붙으려는 것을 막는 것이 줄의 일이라, 각자 하나씩 두면 그 보호가 사라진다.
+     * 그래서 {@code LetterPathConfiguration}도 {@code ReattachConfiguration}도 아닌 여기 둔다
+     * ({@code EndedStreamSweeper}·{@code CollectorRunner}와 같은 자리다 —
+     * {@code int} 파라미터는 스프링이 못 만들어 {@code @Component}로는 안 된다).
+     *
+     * <p><b>닫는 자리도 여기 하나뿐이다.</b> {@code AutoCloseable}이라 스프링이 빈 파괴 때
+     * 닫는데, 그것은 라이프사이클 정지({@code SqsIntakeLoop.stop()})가 <b>통째로 끝난 뒤</b>다
+     * — 그래서 「폴링이 멈추기 전에 실행기가 닫히는」 순서가 존재하지 않는다.
+     * {@code AsyncIntakeShutdownOrderTest}가 실물 컨텍스트로 그것을 잰다.
+     *
+     * <p><b>동시에 진행 중일 수 있는 붙이기 수</b>가 {@value #MAX_IN_FLIGHT_ATTACHES}다 —
+     * 돌고 있는 것과 대기 중인 것을 합쳐서다(계획 검증 C5: 「대기 상한」이 아니다).
+     * SQS가 한 회차에 주는 최대치(10)의 다섯 배라 다섯 회차를 미리 받아 둘 수 있고, 그
+     * 이상은 큐에 두는 편이 낫다(가시성 시한이 지나면 다시 온다). 크게 잡으면 붙이기가
+     * 느릴 때 메모리에만 쌓이고, 작게 잡으면 폴링이 자주 쉰다.
+     * <b>auth 커넥션도 이 값이 정한다</b> — 붙이기 하나가 auth 왕복 하나를 쓰므로
+     * 동시 50이 auth에 한꺼번에 나갈 수 있는 상한이다.
+     */
+    @Bean
+    StreamerSerialExecutor streamerSerialExecutor() {
+        return new StreamerSerialExecutor(MAX_IN_FLIGHT_ATTACHES);
+    }
+
     @Bean
     EndedStreamSweeper endedStreamSweeper(
             EndedStreamStore store,
