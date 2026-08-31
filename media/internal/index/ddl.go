@@ -60,12 +60,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS stream_segments_local_path_uq
 
 -- 조각당 키 2개 (계약-세그먼트인덱스 5-5절, 3번 승인 2026-08-31 · ADR-057).
 -- 위 CREATE TABLE 은 IF NOT EXISTS 라 "이미 존재하는" 표에는 컬럼을 붙이지 않는다.
--- 그래서 기존 표 전파는 아래 ALTER 가 담당한다(신규 표에서는 전부 무해한 no-op).
-ALTER TABLE stream_segments
-    ADD COLUMN IF NOT EXISTS playback_s3_key        text,
-    ADD COLUMN IF NOT EXISTS playback_upload_state  text        NOT NULL DEFAULT 'pending',
-    ADD COLUMN IF NOT EXISTS playback_uploaded_at   timestamptz,
-    ADD COLUMN IF NOT EXISTS playback_bytes         bigint;
+-- 그래서 기존 표 전파는 아래가 담당한다(신규 표에서는 무해한 no-op).
+--
+-- ADD COLUMN IF NOT EXISTS 를 그대로 쓰지 않는 이유: 그 구문도 존재 확인 "전에"
+-- ACCESS EXCLUSIVE 락부터 잡는다 — 기동마다 실행되는 EnsureSchema 특성상, 장기 SELECT 뒤에
+-- ALTER 가 큐잉되면 그 뒤 모든 쿼리가 줄줄이 막힌다. CHECK 와 같은 DO 블록 패턴으로
+-- 카탈로그를 먼저 보고, 컬럼이 없을 때(사실상 최초 1회)만 ALTER 를 실행한다.
+DO $do$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name = 'stream_segments'
+                     AND column_name = 'playback_s3_key') THEN
+        ALTER TABLE stream_segments
+            ADD COLUMN playback_s3_key        text,
+            ADD COLUMN playback_upload_state  text        NOT NULL DEFAULT 'pending',
+            ADD COLUMN playback_uploaded_at   timestamptz,
+            ADD COLUMN playback_bytes         bigint;
+    END IF;
+END $do$;
 
 -- CHECK 2종 (upload_state 는 계약 5-3 확정분인데 실물에 없던 것을 이번에 일치시킨다).
 -- PostgreSQL 은 ADD CONSTRAINT 에 IF NOT EXISTS 가 없다 — EnsureSchema 가 기동마다 전체를
