@@ -157,6 +157,11 @@ public class CollectorHealth implements HealthIndicator {
                 // 여기서 DOWN을 주면 clip 장애가 수집 서버의 배포를 막는데, 정작 재시작으로는
                 // 안 풀린다. 위 버린-편지 셋과 같은 판단이다.
                 .withDetail("reattach", reattach.state().label())
+                // <b>알림 경로의 unreadableStreamerIds와 갈라 둔다.</b> 1번이 고칠 자리는
+                // 같지만 <b>어느 경로가 그것을 봤나</b>가 다르다 — 이쪽만 오르면 clip 명부의
+                // streamerId 표기가 이상한 것이고, 알림 쪽만 오르면 SQS 봉투 쪽이다.
+                // 합치면 그 구분이 사라진다(버린 편지 셋을 안 합친 것과 같은 이유).
+                .withDetail("reattachUnreadableStreamerIds", reattach.unreadableStreamerIds())
                 // <b>버린 편지 셋을 합치지 않는다.</b> 1번이 고칠 자리가 셋 다 다르다 —
                 // unreadableStreamerIds는 「식별자 체계가 바뀌었다」, unknownTypes는
                 // 「우리가 모르는 종류를 보낸다」, malformedEnvelopes는 「봉투의 칸이

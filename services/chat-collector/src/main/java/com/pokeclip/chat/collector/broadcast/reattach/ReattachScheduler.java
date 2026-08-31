@@ -3,7 +3,8 @@ package com.pokeclip.chat.collector.broadcast.reattach;
 import org.springframework.scheduling.annotation.Scheduled;
 
 /**
- * 재부착을 주기적으로 부르고, <b>그 회차가 됐는지를 health가 읽을 자리에 남긴다.</b>
+ * 재부착을 주기적으로 부르고, <b>그 회차가 됐는지와 못 읽은 스트리머 수를 health가 읽을
+ * 자리에 남긴다.</b>
  *
  * <p><b>{@link Reattacher}와 갈라 둔 이유</b>: 재부착기는 「무엇을 줍고 무엇을 거르나」를 알고,
  * 이쪽은 「얼마나 자주 부르고 그 결과를 어디에 알리나」를 안다. 둘은 서로 다른 이유로 바뀐다 —
@@ -30,9 +31,17 @@ import org.springframework.scheduling.annotation.Scheduled;
  * <p>Boot의 {@code spring.task.scheduling.pool.size} 기본값이 <b>1</b>이다
  * (4.1.0 설정 메타데이터로 확인). 이 카드 전에는 {@code @Scheduled}가 하나뿐이라 드러날
  * 자리가 없었다. 지금은 한쪽이 도는 동안 다른 쪽이 밀린다 — <b>둘 다 상한이 있어서
- * 무해하다</b>: 이 회차는 clip REST(접속 2 + 읽기 5)와 메모 조회 하나에 묶이고,
- * 스위퍼는 {@code socketTimeout} 10초에 묶인다. 주기가 1분·1시간이라 밀리는 폭이
- * 주기보다 훨씬 작다. <b>세 번째 {@code @Scheduled}를 더하는 날 이 값을 다시 본다.</b>
+ * 무해하다.</b>
+ *
+ * <p>이 회차의 상한은 <b>약 47초</b>다: clip REST(접속 2 + 읽기 5) + 메모 조회 하나.
+ * 🔴 <b>그 조회에 커넥션 대기가 붙는다</b> — {@code spring.datasource.hikari.connection-timeout}이
+ * 설정에 없어 기본 <b>30초</b>이고, 붙이기 작업 50개가 같은 풀 10개를 나눠 쓴다(감사 라운드 3 H5,
+ * 태스크 8이 이 항을 안 셌다). 거기에 조회 자체의 {@code socketTimeout} 10초가 더해진다.
+ * 스위퍼는 같은 이유로 <b>약 40초</b>다.
+ *
+ * <p><b>결론은 그대로다</b>: 주기가 1분·1시간이라 최악에도 한쪽이 다음 주기를 한 번 밀 뿐이고,
+ * 재부착은 상태가 없어서 밀린 회차를 잃어도 다음 회차가 같은 목록을 다시 받는다.
+ * <b>세 번째 {@code @Scheduled}를 더하는 날 이 값을 다시 본다.</b>
  * (붙이기 자체는 여기서 안 돈다 — 줄 실행기의 가상 스레드가 받는다.)
  */
 public class ReattachScheduler {
@@ -57,7 +66,12 @@ public class ReattachScheduler {
     @Scheduled(fixedDelayString = "${pokeclip.reattach.interval}",
             initialDelayString = "${pokeclip.reattach.initial-delay}")
     public void tick() {
-        if (reattacher.sweep()) {
+        boolean swept = reattacher.sweep();
+        // <b>성패보다 먼저, 성패와 무관하게 옮긴다.</b> 회차가 통째로 실패해도 그 전에
+        // 못 읽은 것을 셌을 수 있다 — 그때 안 옮기면 「clip 명부가 이상하다」는 신호가
+        // 「clip에 못 닿는다」에 가려진다.
+        status.unreadableStreamerIds(reattacher.unreadableStreamerIds());
+        if (swept) {
             status.sweepSucceeded();
         } else {
             status.sweepFailed();

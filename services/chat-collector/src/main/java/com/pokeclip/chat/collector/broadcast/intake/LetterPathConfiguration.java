@@ -71,19 +71,24 @@ public class LetterPathConfiguration {
     }
 
     /**
+     * <b>레코더를 안 문다</b>(POK-219 감사 라운드 3). 이 문은 <b>재부착도 쓰는데</b>
+     * 재부착에는 지울 편지가 없다 — 여기서 메모를 남기면 재부착이 만든 메모 때문에
+     * 재부착 자신이 그 방송을 24시간 건너뛴다. 메모는 편지를 아는 층이 남긴다(아래).
+     */
+    @Bean
+    public BroadcastSessions broadcastSessions(ChzzkLinkClient link, SessionRegistry registry) {
+        return new LinkedSessionStarter(link, registry);
+    }
+
+    /**
      * <b>레코더를 같이 문다.</b> auth가 열쇠를 영구히 거절하면 세션이 서 보지도 못해 등록부의
      * 포기 알림이 울리지 않는데, 그때도 메모는 남아야 한다 — 안 남기면 편지를 지운 뒤
      * 그 방송이 영원히 {@code unknown}이다(되돌아올 트리거가 없다).
      */
     @Bean
-    public BroadcastSessions broadcastSessions(ChzzkLinkClient link, SessionRegistry registry,
-                                               StoppedStreamRecorder recorder) {
-        return new LinkedSessionStarter(link, registry, recorder::record);
-    }
-
-    @Bean
-    public BroadcastEventProcessor broadcastEventProcessor(EndedStreamStore store, BroadcastSessions sessions) {
-        return new BroadcastEventProcessor(store, sessions);
+    public BroadcastEventProcessor broadcastEventProcessor(EndedStreamStore store, BroadcastSessions sessions,
+                                                           StoppedStreamRecorder recorder) {
+        return new BroadcastEventProcessor(store, sessions, recorder::record);
     }
 
     /** 편지 경로가 켜진 프로세스에서만 뜻이 있다 — 옛 경로는 등록부를 안 탄다. */

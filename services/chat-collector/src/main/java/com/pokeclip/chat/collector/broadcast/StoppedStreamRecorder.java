@@ -15,8 +15,13 @@ import java.util.function.Supplier;
  * 그 스레드의 뒷정리가 깨지므로 <b>Throwable까지 잡는다</b>.
  *
  * <p><b>부르는 곳이 둘이다.</b> ① 등록부의 포기 알림(세션이 선 뒤 영구 정지) ②
- * {@link LinkedSessionStarter}가 auth 거절로 세션을 <b>열어 보지도 못했을 때</b> 직접.
- * ②는 등록부를 안 지나므로 ①에 얹을 수 없다.
+ * {@link BroadcastEventProcessor}가 auth 거절({@link ProcessResult#LINK_REFUSED})로 세션이
+ * <b>서 보지도 못한</b> 시작 편지를 지우기 전에. ②는 등록부를 안 지나므로 ①에 얹을 수 없다.
+ *
+ * <p>🔴 <b>②가 한때 {@code LinkedSessionStarter}에 있었다</b>(POK-219 감사 라운드 3에서 옮겼다).
+ * 그 문을 <b>재부착도 쓰게 되면서</b> 편지가 없는 부름까지 메모를 남겼고, 그러면 재부착이
+ * 만든 메모 때문에 <b>재부착 자신이 그 방송을 24시간 건너뛴다.</b> 지금 자리는
+ * 「편지를 지운다」를 아는 층이라 그 갈래가 구조적으로 안 열린다.
  *
  * <p><b>알려진 한계 — 메모를 못 남기면 그 방송은 영구 {@code unknown}이다.</b> 포기 순간 DB가 죽어
  * 있으면 경고 한 줄만 남고(재시도·메모리 대체 없음), 등록부에서 지워진 뒤로는 창구가 배너를 끄는
@@ -36,8 +41,8 @@ public class StoppedStreamRecorder {
     }
 
     /**
-     * <b>{@code public}인 이유</b>: 등록부 알림 말고 {@link LinkedSessionStarter}가 직접 부르는
-     * 자리가 하나 더 있는데({@code LetterPathConfiguration}이 배선한다) 그 설정이
+     * <b>{@code public}인 이유</b>: 등록부 알림 말고 {@link BroadcastEventProcessor}가 직접
+     * 부르는 자리가 하나 더 있는데({@code LetterPathConfiguration}이 배선한다) 그 설정이
      * {@code broadcast.intake} 패키지라 package-private으로는 안 닿는다.
      */
     public void record(String streamId, StopReason reason) {

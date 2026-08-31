@@ -1,7 +1,6 @@
 package com.pokeclip.chat.collector.broadcast;
 
 import com.pokeclip.chat.collector.ChzzkProperties;
-import com.pokeclip.chat.collector.StopReason;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
@@ -27,8 +26,6 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -72,8 +69,7 @@ class LinkedSessionStarterTest extends IntegrationTestSupport {
         auth = FakeAuth.start();
         auth.grants(7L, "channel-1", "token-1");
         registry = newRegistry();
-        LinkedSessionStarter starter = new LinkedSessionStarter(
-                newLinkClient(), registry, (streamId, reason) -> { });
+        LinkedSessionStarter starter = new LinkedSessionStarter(newLinkClient(), registry);
 
         ProcessResult result = starter.start("live-A-001", new StreamerId(true, 7L), 시작);
 
@@ -85,19 +81,24 @@ class LinkedSessionStarterTest extends IntegrationTestSupport {
         assertThat(registry.isStaleStart(7L, 시작.plusSeconds(1))).isFalse();
     }
 
+    /**
+     * 🔴 <b>{@code PROCESSED}가 아니다</b>(POK-219 감사 라운드 3). 러너에게는 둘 다
+     * 「지운다」로 같지만 <b>「붙었나」의 답이 정반대</b>라, 뭉쳐 두면 재부착이 안 붙은
+     * 방송에 공백을 찍는다. <b>메모도 여기서 안 남긴다</b> — 재부착에는 지울 편지가
+     * 없는데 여기서 남기면 재부착이 자기를 24시간 막는다.
+     *
+     * <p>메모를 남기는 쪽은 {@code BroadcastEventProcessorTest}가 잰다.
+     */
     @Test
-    void 연동이_없으면_그_방송_번호로_포기_메모를_남긴다() {
+    void 연동이_영구히_거절되면_세션을_안_열고_LINK_REFUSED로_돌려준다() {
         auth = FakeAuth.start();
         auth.refuses(7L, "NOT_LINKED");
         registry = newRegistry();
-        List<String> 남긴것 = new ArrayList<>();
-        LinkedSessionStarter starter = new LinkedSessionStarter(
-                newLinkClient(), registry, (streamId, reason) -> 남긴것.add(streamId + "/" + reason));
+        LinkedSessionStarter starter = new LinkedSessionStarter(newLinkClient(), registry);
 
         ProcessResult result = starter.start("live-A-001", new StreamerId(true, 7L), 시작);
 
-        assertThat(result).isEqualTo(ProcessResult.PROCESSED);
-        assertThat(남긴것).containsExactly("live-A-001/" + StopReason.LINK_UNAVAILABLE);
+        assertThat(result).isEqualTo(ProcessResult.LINK_REFUSED);
         assertThat(registry.activeCount()).isZero();
     }
 

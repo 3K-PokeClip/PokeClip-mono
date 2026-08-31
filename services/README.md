@@ -454,7 +454,7 @@ curl -s localhost:8083/actuator/health
 # {"collectorHealth":{"status":"UP","details":{
 #   "status":"disabled","activeSessions":2,"reconnectingSessions":0,
 #   "letterIntake":"ok","lastLetterPollAt":"2026-08-18T12:00:00Z","letterFailure":"none",
-#   "letterDeleteFailure":"none","reattach":"ok",
+#   "letterDeleteFailure":"none","reattach":"ok","reattachUnreadableStreamerIds":0,
 #   "unreadableStreamerIds":0,"unknownTypes":0,"malformedEnvelopes":0}}}
 ```
 
@@ -474,6 +474,11 @@ IAM 정책이고, 그 상태에서는 모든 알림이 가시성 시한마다 �
 있나」다. **이 값은 DOWN을 만들지 않는다**: 재부착이 멈춰도 새 방송은 알림으로 그대로 붙으므로
 「새 방송을 하나도 못 받는 상태」가 아니고, 여기서 DOWN을 주면 clip 장애가 이 서버의 배포를
 막는데 정작 재시작으로는 안 풀린다.
+
+**`reattachUnreadableStreamerIds`는 재부착이 숫자로 못 읽은 스트리머 수다.** 아래
+`unreadableStreamerIds`(알림 경로)와 **일부러 갈라 뒀다** — 고칠 자리는 같아도 **어느 쪽이
+그것을 봤나**가 다르다. 이쪽만 오르면 clip 명부의 `streamerId` 표기가 이상한 것이고,
+알림 쪽만 오르면 SQS 봉투 쪽이다. **이 값도 DOWN을 만들지 않는다**(아래 셋과 같은 이유).
 
 **DOWN의 뜻이 POK-127에서 바뀌었다.**
 
@@ -539,8 +544,8 @@ IAM 정책이고, 그 상태에서는 모든 알림이 가시성 시한마다 �
 (사용자 지적, 2026-08-16).
 
 ```yaml
-stop_grace_period: 20s            # compose
-terminationGracePeriodSeconds: 20 # k8s
+stop_grace_period: 20s            # compose — docker-compose.dev.yml 의 chat-collector 에 들어 있다
+terminationGracePeriodSeconds: 20 # k8s (infra/ 는 1번 폴더라 여기서 못 넣는다)
 ```
 
 **급사시키면 서버가 죽은 전송을 알아챌 때까지 자리가 남는다** — 우아하게 끊으면
@@ -2372,6 +2377,45 @@ Ctrl+C 뒤 판정 줄의 `uploaded=`와 버킷의 `chat/` 아래 파일 수가 �
 (`basis`는 마지막 채팅 시각 `LAST_CHAT`, 없으면 방송 시작 `BROADCAST_START`).
 
 **돌고 있는지는 health의 `reattach`로 본다**(`ok`·`starting`·`failing`·`disabled`).
+못 읽은 스트리머 수는 `reattachUnreadableStreamerIds`다.
+
+##### 🔴 재부착은 **포기 기록을 만들지 않는다** — 이미 있는 것은 존중한다
+
+우리는 `chat_ended_streams`의 메모(끝남·포기)를 보고 그 방송을 건너뛴다. **그 메모를
+재부착이 만들면 자기가 자기를 24시간 막는다.** 처음 그 규칙을 정할 때는 메모를 만드는 것이
+**시작 알림뿐**이라고 전제했는데, 재부착이 **같은 문**(`LinkedSessionStarter`)을 쓰면서
+그 전제가 깨졌다 — 재부착이 auth에 거절당하면 자기가 메모를 남기고, 이후 회차가 그 메모를
+보고 그 방송을 거른다.
+
+**증폭 갈래**: auth가 「허락」이라면서 필수 칸을 빠뜨리면(계약 위반) 우리는 그것도 **영구
+거절**로 친다. 그래서 auth가 한 번 잘못 답하면 **한 회차로 살아 있는 방송 전부에** 메모가
+박힌다. 알림 경로만 있을 때는 새 방송에만 번지던 것이다.
+
+**그래서 메모를 남기는 자리를 문 안에서 판정기(`BroadcastEventProcessor`)로 옮겼다.**
+편지가 없는 부름은 그 층을 안 지나가므로 이 갈래가 **구조적으로** 닫힌다. 근거 셋:
+
+1. **재부착에는 메모의 원래 목적이 없다.** 그 메모는 「알림을 지우기 전에 남긴다」인데
+   (지우면 되돌아올 트리거가 없으므로) **재부착은 알림을 하나도 안 지운다**
+2. **자기 메모로 자기를 막는 것**은 이 복구 장치의 목적을 무력화한다
+3. **창구 답이 나빠지지 않는다** — 재부착이 줍는 방송은 어차피 알림이 이미 소비돼 메모가
+   없던 방송이다
+
+**대가**: 연동이 끊긴 스트리머의 방송에 주기마다 auth를 두드린다. auth는 `NOT_LINKED`를
+즉시 답하고 그 로그는 INFO다(미연동 방송 시작이 정상 트래픽이라 이미 그렇게 정해져 있다).
+
+##### 안 쟀지만 기대고 있는 전제 하나 — **두 시각이 같은 눈금인가**
+
+세션은 「지금 어느 방송인가」를 **시작 시각**으로 가른다(늦게 시작한 방송만 자리를 가져간다).
+그 칸을 채우는 곳이 이제 **둘**이다 — 알림 경로는 봉투의 `occurredAt`, 재부착은 clip 명부의
+`startedAt`. **갈아끼움은 그 둘을 직접 비교하는데, 둘이 같은 사건의 같은 시각이라는 것을
+우리는 확인하지 않는다.** 근거는 이 문서의 「시작 알림의 발생 시각(`occurredAt`)이 비면 그
+알림은 버려진다」 한 줄뿐이고, 그것은 1번과 clip이 각자 적은 것이지 우리가 대조한 것이 아니다.
+
+**대조 코드를 안 넣었다.** 넣으려면 같은 방송의 두 값을 나란히 받아야 하는데, 알림이 이미
+소비된 뒤라야 재부착이 그 방송을 줍는다 — **둘이 우리 손에 같이 있는 순간이 없다.**
+**갈리는 날**: clip 쪽이 계통적으로 이르면 재부착이 살아 있는 세션을 못 뺏고(안전한 쪽),
+계통적으로 늦으면 **재부착이 멀쩡한 세션을 자기 쪽으로 되돌린다.** 조용히 어긋나므로
+`chat.registry.retargeted`·`stale_start_rejected`가 이유 없이 늘면 여기를 먼저 본다.
 
 **🔴 두 값을 같이 켜야 한다.** `BROADCAST_INTAKE_ENABLED=false`인 채로
 `CHAT_REATTACH_ENABLED=true`만 주면 **부팅이 거부된다.** 붙이는 문을 편지 경로가 만들고,

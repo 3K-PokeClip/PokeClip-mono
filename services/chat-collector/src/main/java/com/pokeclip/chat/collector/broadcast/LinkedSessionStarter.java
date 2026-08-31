@@ -1,13 +1,11 @@
 package com.pokeclip.chat.collector.broadcast;
 
-import com.pokeclip.chat.collector.StopReason;
 import com.pokeclip.chat.collector.link.ChzzkLinkClient;
 import com.pokeclip.chat.collector.link.LinkResolution;
 import com.pokeclip.chat.collector.session.SessionKey;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 
 import java.time.Instant;
-import java.util.function.BiConsumer;
 
 /**
  * 편지 하나를 <b>열쇠 조회 → 세션 열기</b>로 잇는다. 이 카드에서 부품이 하나로 물리는 자리다.
@@ -20,24 +18,19 @@ public class LinkedSessionStarter implements BroadcastSessions {
 
     private final ChzzkLinkClient link;
     private final SessionRegistry registry;
-    /**
-     * 포기한 방송을 메모에 남기는 손잡이({@code StoppedStreamRecorder::record}).
-     *
-     * <p><b>등록부의 {@code onPermanentStop}을 타지 않고 직접 받는다.</b> 그 알림은 세션이
-     * 선 뒤에만 울리는데, 여기서 남겨야 하는 것은 <b>세션이 서 보지도 못한</b> 방송이다.
-     * 등록부에 그 갈래를 태우려면 열지도 않은 방송을 등록부가 알아야 해서 층이 어긋난다.
-     */
-    private final BiConsumer<String, StopReason> recorder;
 
-    public LinkedSessionStarter(ChzzkLinkClient link, SessionRegistry registry,
-                                BiConsumer<String, StopReason> recorder) {
+    public LinkedSessionStarter(ChzzkLinkClient link, SessionRegistry registry) {
         this.link = link;
         this.registry = registry;
-        this.recorder = recorder;
     }
 
     /**
      * <p><b>편지가 아니라 값 셋을 받는다</b> — 재부착도 이 문을 쓴다(POK-219).
+     *
+     * <p>🔴 <b>{@code PROCESSED}는 「세션이 서 있다」만 뜻한다.</b> auth가 영구히 거절해
+     * <b>세션이 서 보지도 못한</b> 갈래는 {@link ProcessResult#LINK_REFUSED}로 따로 나간다.
+     * 러너에게는 둘 다 「지운다」로 같지만, 재부착에게는 정반대다 — 한 값으로 뭉쳐 두었더니
+     * 재부착이 안 붙은 방송에 공백을 찍고 있었다(감사 라운드 3 H1, 주입으로 재현).
      *
      * <p><b>열쇠부터 받는다.</b> 등록부에 먼저 자리를 잡고 열쇠를 받으러 가면, 못 받았을 때
      * 그 자리를 되돌리는 동안 그 스트리머의 다음 편지가 「이미 열림」으로 걸린다.
@@ -73,19 +66,21 @@ public class LinkedSessionStarter implements BroadcastSessions {
             if (resolution.retryable()) {
                 return ProcessResult.RETRY_LATER;
             }
-            // <b>지우기 전에 남긴다.</b> 편지가 이 방송의 유일한 트리거라, 메모 없이 지우면
-            // 창구가 그 방송에 <b>영원히</b> unknown을 답한다 — 배너를 끄는 값이라
-            // 「가장 나쁜 상태가 가장 안전한 답으로 보이는」 틈이고, 여기서는 그 틈이
-            // 찰나가 아니라 영구다(되돌아올 편지가 없다). PRD 결정 95가 포기 알림을
-            // 「지우기 전」에 둔 이유가 그것이다.
+            // 🔴 <b>여기서 포기 메모를 남기지 않는다 — 부르는 쪽이 남긴다</b>(POK-219 감사
+            // 라운드 3, PRD 결정). 그 메모의 목적은 <b>「편지를 지우기 전에 남긴다」</b>였다:
+            // 편지가 그 방송의 유일한 트리거라 메모 없이 지우면 창구가 영원히 unknown을
+            // 답한다. 그런데 이 문을 <b>재부착도 쓴다</b>(POK-219). 재부착에는 지울 편지가
+            // 없고, 여기서 메모를 남기면 <b>재부착이 만든 메모 때문에 다음 회차부터
+            // 재부착 자신이 그 방송을 24시간 건너뛴다</b> — 이 카드의 목적을 무력화한다.
             //
-            // <b>사유 넷을 안 가른다</b> — LINK_UNAVAILABLE의 주석에 근거를 적었다.
+            // <b>증폭 갈래</b>: ChzzkLinkClient는 auth의 계약 위반(chat.link.incomplete)도
+            // 영구 거절로 친다. auth가 한 번 잘못 답하면 <b>한 회차로 살아 있는 방송
+            // 전부에</b> 메모가 박힌다. 전에는 알림 경로만 있어 새 방송에만 번졌다.
             //
-            // 던지지 않는다: recorder(=StoppedStreamRecorder.record)가 Throwable까지 삼키고
-            // 경고만 남긴다. DB가 죽어 메모를 못 남기면 그 방송은 여전히 unknown이다 —
-            // 그것은 이 갈래가 아니라 그 클래스의 알려진 한계다.
-            recorder.accept(streamId, StopReason.LINK_UNAVAILABLE);
-            return ProcessResult.PROCESSED;
+            // 그래서 「무엇을 했나」만 돌려주고, 「편지를 지우기 전에 남길지」는 편지를
+            // 아는 층(BroadcastEventProcessor)이 정한다. <b>사유 넷은 여기서도 저기서도
+            // 안 가른다</b> — LINK_UNAVAILABLE의 주석에 근거를 적었다.
+            return ProcessResult.LINK_REFUSED;
         }
         SessionKey key = new SessionKey(streamId, streamer.value(),
                 resolution.channelId(), startedAt);

@@ -90,7 +90,9 @@ class ReattacherTest extends IntegrationTestSupport {
     private static final String A001 = "live-R-A001";
     private static final String A999 = "live-R-A999";
     private static final String B001 = "live-R-B001";
-    private static final List<String> STREAMS = List.of(A001, A999, B001);
+    /** 회원 <b>9</b>의 방송. {@link FakeAuth}가 안 아는 회원이라 {@code NOT_LINKED}(영구 거절)로 답한다. */
+    private static final String C001 = "live-R-C001";
+    private static final List<String> STREAMS = List.of(A001, A999, B001, C001);
 
     private static final Instant 시작 = Instant.parse("2026-08-31T04:00:00Z");
     /** 붙는 시점. 시작보다 10분 뒤다 — {@code EPOCH} 되돌림 주입이 갈아끼움을 이기게 하려면 뒤여야 한다. */
@@ -125,8 +127,11 @@ class ReattacherTest extends IntegrationTestSupport {
         auth.grants(7L, "channel-7", "token-7");
         registry = newRegistry();
         lanes = new StreamerSerialExecutor(50);
-        sessions = new RecordingSessions(
-                new LinkedSessionStarter(newLinkClient(), registry, (streamId, reason) -> { }));
+        // 🔴 <b>레코더를 안 문다 — 운영 배선이 그렇다</b>(POK-219 감사 라운드 3).
+        // 한때 여기에 no-op 람다가 물려 있어서, 문이 메모를 남기던 시절에도
+        // 「재부착이 메모를 만든다」가 이 파일에서 안 보였다. 지금은 문 자체에
+        // 레코더가 없다 — 아래 「auth가 영구히 거절하는 갈래」 둘이 그것을 잰다.
+        sessions = new RecordingSessions(new LinkedSessionStarter(newLinkClient(), registry));
         client = mock(LiveBroadcastClient.class);
     }
 
@@ -287,6 +292,62 @@ class ReattacherTest extends IntegrationTestSupport {
                     line.startsWith("chat.reattach.skipped_late")
                             && line.contains("reason=ALREADY_ATTACHED"));
         }
+    }
+
+    // ── auth가 영구히 거절하는 갈래 ──────────────────────────────────────
+
+    /**
+     * {@code sessions.start}가 {@code PROCESSED}를 주는 갈래가 <b>셋</b>인데, 그중 하나
+     * (auth 영구 거절)는 <b>세션이 서지 않는다.</b> 그것을 안 가르면 안 붙은 방송에
+     * 「붙었고 공백은 이만큼」이 나가고 「못 붙었다」는 안 나간다 —
+     * <b>이 카드의 유일한 복구 지표를 세면 회복이 실제보다 많아 보인다.</b>
+     */
+    @Test
+    @Timeout(30)
+    void auth가_영구히_거절하면_안_붙었다고_남기고_공백을_안_찍는다() {
+        returns(live(C001, "9", 시작));
+
+        try (LogCaptor captor = new LogCaptor()) {
+            newReattacher(lanes).sweep();
+
+            assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+            // 문항 6 — 「안 찍혔다」는 재부착이 아예 안 돌아도 참이다. 두드린 것을 같이 잰다.
+            assertThat(sessions.started()).as("문은 실제로 두드렸다").containsExactly(C001);
+            assertThat(registry.currentStreamIdOf(9L)).as("세션은 서지 않았다").isNull();
+            assertThat(captor.messages())
+                    .as("세션이 서지도 않았는데 공백을 찍으면 회복이 실제보다 많아 보인다")
+                    .noneMatch(line -> line.startsWith("chat.reattach.gap_measured"));
+            assertThat(captor.messages()).anyMatch(line ->
+                    line.startsWith("chat.reattach.not_attached")
+                            && line.contains("stream=" + C001)
+                            && line.contains("result=LINK_REFUSED"));
+        }
+    }
+
+    /**
+     * 🔴 <b>재부착이 포기 메모를 만들면 자기가 자기를 24시간 막는다</b>(PRD 결정, 감사 라운드 3).
+     * 그 메모는 「알림을 지우기 전에 남긴다」였는데 <b>재부착에는 지울 알림이 없다.</b>
+     *
+     * <p><b>두 번째 회차를 같이 돌리는 것이 이 검사의 이빨이다.</b> 메모 표만 보면
+     * 「이 검사가 쓰는 문에 레코더가 안 물려 있어서」도 초록이다 — 다음 회차가 실제로
+     * 문을 다시 두드리는 것까지 봐야 <b>거름망({@code sweepOnce}의 {@code findAllIds})이
+     * 그 방송을 안 걸렀다</b>가 재어진다.
+     */
+    @Test
+    @Timeout(30)
+    void 재부착은_포기_메모를_안_만들어_다음_회차가_다시_시도한다() {
+        returns(live(C001, "9", 시작));
+        Reattacher reattacher = newReattacher(lanes);
+
+        reattacher.sweep();
+        assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+        assertThat(store.find(C001)).as("재부착이 남긴 포기 메모").isEmpty();
+
+        reattacher.sweep();
+        assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+        assertThat(sessions.started())
+                .as("메모가 생겼다면 둘째 회차는 후보 단계에서 걸러 문을 안 두드린다")
+                .containsExactly(C001, C001);
     }
 
     // ── 시작 시각 · 스트리머 식별자 ───────────────────────────────────────

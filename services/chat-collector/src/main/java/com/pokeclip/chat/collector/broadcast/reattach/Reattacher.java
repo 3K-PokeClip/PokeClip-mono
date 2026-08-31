@@ -47,6 +47,31 @@ import java.util.function.Supplier;
  *   <li><b>{@code dropPending}을 여기서 부르지 않는다.</b> 아래 {@link #attachOne} 참고.</li>
  * </ol>
  *
+ * <h2>🔴 재부착은 <b>포기 기록을 만들지 않는다</b> — 이미 있는 것은 존중한다</h2>
+ *
+ * 아래 {@link #sweepOnce}가 {@code chat_ended_streams}의 메모를 보고 건너뛰는데,
+ * <b>그 메모를 재부착이 만들면 자기가 자기를 24시간 막는다.</b> 처음 설계할 때는 그 메모를
+ * 만드는 것이 <b>시작 알림뿐</b>이라고 전제했는데, 재부착도 같은 문
+ * ({@code LinkedSessionStarter})을 쓰므로 그 전제가 이 카드에서 깨졌다(감사 라운드 3 H1).
+ *
+ * <p>그래서 메모를 남기는 자리를 문 안에서 <b>{@code BroadcastEventProcessor}</b>로 옮겼다 —
+ * 편지가 없는 부름은 그 층을 안 지나가므로 이 갈래가 <b>구조적으로</b> 닫힌다. 근거 셋:
+ *
+ * <ol>
+ *   <li><b>재부착에는 메모의 원래 목적이 없다.</b> 그 메모는 「알림을 지우기 전에 남긴다」인데
+ *       (지우면 되돌아올 트리거가 없으므로) <b>재부착은 알림을 하나도 안 지운다.</b></li>
+ *   <li><b>자기 메모로 자기를 막는 것</b>은 이 카드의 목적을 무력화한다. 증폭 갈래가 하나
+ *       더 있다 — {@code ChzzkLinkClient}는 auth의 계약 위반({@code chat.link.incomplete})도
+ *       영구 거절로 치므로, auth가 한 번 잘못 답하면 <b>한 회차로 살아 있는 방송 전부에</b>
+ *       메모가 박힌다.</li>
+ *   <li><b>창구 답이 나빠지지 않는다.</b> 재부착이 줍는 방송은 어차피 알림이 이미 소비돼
+ *       메모가 없던 방송이다.</li>
+ * </ol>
+ *
+ * <p><b>대가</b>: 연동이 끊긴 스트리머의 방송에 주기마다 auth를 두드린다. auth는
+ * {@code NOT_LINKED}를 즉시 답하고 그 로그는 INFO다(미연동 방송 시작이 정상 트래픽이라
+ * 이미 그렇게 정해져 있다).
+ *
  * <h2>이 부품이 여는 손실 경로 하나 — 백프레셔를 알림 경로와 나눠 쓴다</h2>
  *
  * {@code StreamerSerialExecutor}의 상한은 <b>프로세스에 하나</b>다. 재부착이 방송 여럿을
@@ -143,6 +168,11 @@ public class Reattacher {
             }
             // 🔴 시각이 없으면 EPOCH다. 갈아끼움은 「더 늦게 시작한 방송만」이라 EPOCH는
             // 절대 못 이긴다 — 자리가 비었을 때만 붙고 살아 있는 세션을 안 뺏는다.
+            //
+            // 🔴 <b>여기 들어가는 값이 clip 명부의 startedAt이고, 알림 경로는 봉투의
+            // occurredAt을 같은 칸에 넣는다.</b> 갈아끼움이 그 둘을 직접 비교하는데
+            // 「둘이 같은 눈금」은 우리가 안 재어 본 전제다 — 근거와 갈릴 때의 증상은
+            // SessionKey javadoc에 적었다(감사 라운드 3 H8).
             Instant startedAt = item.startedAt() != null ? item.startedAt() : Instant.EPOCH;
             // 🔴 원문이 아니라 LaneKey다. 알림 경로와 같은 줄에 들어가는 것이 이 설계의 기둥이고,
             // 표기가 갈리는 여지가 바로 여기다 — 두 발행자가 다른 시스템이다(1번의 SQS 봉투 vs
@@ -208,8 +238,17 @@ public class Reattacher {
         }
         // 🔴 <b>그 사이에 붙었는지도 다시 본다</b>(계획 검증 T5). sessions.start는
         // 「이미 걷고 있음」과 「새로 열었음」에 <b>똑같이 PROCESSED</b>를 준다
-        // (LinkedSessionStarter의 첫 갈래). 안 가르면 gap_measured가 <b>붙지도 않은
-        // 재부착의 공백</b>을 찍어, 나중에 그 로그를 세면 유실이 실제보다 많아 보인다.
+        // (LinkedSessionStarter의 첫 갈래). 안 가르면 gap_measured가 <b>이미 걷고 있던
+        // 방송의 공백</b>을 찍어, 나중에 그 로그를 세면 유실이 실제보다 많아 보인다.
+        //
+        // <b>세 번째 뜻은 이 재확인으로 못 가른다</b> — auth가 영구히 거절하면 세션이 서
+        // 보지도 못하는데 그것도 PROCESSED였다(감사 라운드 3 H1). 그 갈래는 여기서 다시
+        // 묻는 대신 <b>문이 LINK_REFUSED로 갈라서 돌려준다.</b>
+        //
+        // 🔴 <b>왜 「호출 뒤에 currentStreamIdOf를 다시 보기」로 안 풀었나.</b> 그러면
+        // 로그는 맞아지지만 <b>메모가 생기는 것을 못 막는다</b> — H1의 더 큰 절반이
+        // 그쪽이고, 그것은 문 안에서만 닫을 수 있다. 문이 이미 갈라 주므로 여기서
+        // 등록부를 한 번 더 두드릴 이유도 없어졌다.
         if (streamId.equals(registry.currentStreamIdOf(streamer.value()))) {
             log.info("chat.reattach.skipped_late stream={} reason=ALREADY_ATTACHED", streamId);
             return;
@@ -218,9 +257,13 @@ public class Reattacher {
         Gap gap = measurer.measure(streamId, startedAt, clock.get());
         ProcessResult result = sessions.start(streamId, streamer, startedAt);
         if (result != ProcessResult.PROCESSED) {
-            // 살아 있는 뒤 방송을 못 이긴 것(IGNORED_STALE)과 auth가 아픈 것(RETRY_LATER)이
-            // 여기로 온다. <b>둘 다 다음 회차가 같은 목록을 다시 받으므로 여기서 재시도하지
-            // 않는다</b> — 여기서 돌면 그 줄이 그동안 남의 알림을 막는다.
+            // 살아 있는 뒤 방송을 못 이긴 것(IGNORED_STALE) · auth가 아픈 것(RETRY_LATER) ·
+            // <b>auth가 영구히 거절한 것(LINK_REFUSED)</b> 셋이 여기로 온다. <b>셋 다 다음
+            // 회차가 같은 목록을 다시 받으므로 여기서 재시도하지 않는다</b> — 여기서 돌면
+            // 그 줄이 그동안 남의 알림을 막는다.
+            //
+            // LINK_REFUSED도 다음 회차가 다시 시도한다. 그것이 곧 「재부착은 포기 기록을
+            // 만들지 않는다」의 대가이자 목적이다(클래스 javadoc).
             log.info("chat.reattach.not_attached stream={} result={}", streamId, result);
             return;
         }

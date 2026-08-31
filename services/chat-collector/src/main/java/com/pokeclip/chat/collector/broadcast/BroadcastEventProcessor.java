@@ -1,10 +1,12 @@
 package com.pokeclip.chat.collector.broadcast;
 
+import com.pokeclip.chat.collector.StopReason;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiConsumer;
 
 /**
  * 방송 생명주기 편지 하나를 판정한다.
@@ -34,13 +36,29 @@ public class BroadcastEventProcessor {
     private final EndedStreamStore store;
     private final BroadcastSessions sessions;
 
+    /**
+     * 포기한 방송을 메모에 남기는 손잡이({@code StoppedStreamRecorder::record}).
+     *
+     * <p>🔴 <b>이 손잡이가 여기 있는 이유는 「편지를 지운다」를 아는 층이 여기이기 때문이다</b>
+     * (POK-219 감사 라운드 3). 메모의 목적이 <b>「편지를 지우기 전에 남긴다」</b>인데,
+     * 붙이기 문에 두었더니 <b>편지가 없는 재부착까지 메모를 남겨</b> 자기가 자기를 24시간
+     * 건너뛰었다. 편지가 없는 부름은 여기를 안 지나가므로 그 갈래가 구조적으로 닫힌다.
+     *
+     * <p><b>등록부의 {@code onPermanentStop}을 타지 않고 직접 받는다.</b> 그 알림은 세션이
+     * 선 뒤에만 울리는데, 여기서 남겨야 하는 것은 <b>세션이 서 보지도 못한</b> 방송이다.
+     * 등록부에 그 갈래를 태우려면 열지도 않은 방송을 등록부가 알아야 해서 층이 어긋난다.
+     */
+    private final BiConsumer<String, StopReason> recorder;
+
     private final AtomicLong unreadableStreamerIds = new AtomicLong();
     private final AtomicLong unknownTypes = new AtomicLong();
     private final AtomicLong malformedEnvelopes = new AtomicLong();
 
-    public BroadcastEventProcessor(EndedStreamStore store, BroadcastSessions sessions) {
+    public BroadcastEventProcessor(EndedStreamStore store, BroadcastSessions sessions,
+                                   BiConsumer<String, StopReason> recorder) {
         this.store = store;
         this.sessions = sessions;
+        this.recorder = recorder;
     }
 
     public ProcessResult process(LifecycleEnvelope envelope) {
@@ -166,6 +184,24 @@ public class BroadcastEventProcessor {
             }
             return ProcessResult.IGNORED_STALE;
         }
-        return sessions.start(envelope.streamId(), streamer, envelope.occurredAt());
+        ProcessResult result = sessions.start(envelope.streamId(), streamer, envelope.occurredAt());
+        if (result == ProcessResult.LINK_REFUSED) {
+            // <b>지우기 전에 남긴다.</b> 편지가 이 방송의 유일한 트리거라, 메모 없이 지우면
+            // 창구가 그 방송에 <b>영원히</b> unknown을 답한다 — 배너를 끄는 값이라
+            // 「가장 나쁜 상태가 가장 안전한 답으로 보이는」 틈이고, 여기서는 그 틈이
+            // 찰나가 아니라 영구다(되돌아올 편지가 없다). PRD 결정 95가 포기 알림을
+            // 「지우기 전」에 둔 이유가 그것이다.
+            //
+            // <b>사유 넷을 안 가른다</b> — LINK_UNAVAILABLE의 주석에 근거를 적었다.
+            //
+            // 던지지 않는다: recorder(=StoppedStreamRecorder.record)가 Throwable까지 삼키고
+            // 경고만 남긴다. DB가 죽어 메모를 못 남기면 그 방송은 여전히 unknown이다 —
+            // 그것은 이 갈래가 아니라 그 클래스의 알려진 한계다.
+            recorder.accept(envelope.streamId(), StopReason.LINK_UNAVAILABLE);
+        }
+        // <b>PROCESSED로 바꿔서 돌려주지 않는다.</b> 러너는 RETRY_LATER만 남기므로 둘 다
+        // 지워지는데, 값을 바꾸면 broadcast.intake.handled의 result=가 「왜 지웠나」를
+        // 잃는다 — 미연동 스트리머의 방송이 정상 트래픽이라 그 줄이 유일한 단서다.
+        return result;
     }
 }

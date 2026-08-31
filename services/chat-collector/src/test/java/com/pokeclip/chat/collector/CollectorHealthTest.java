@@ -28,6 +28,9 @@ import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.web.client.RestClient;
 import software.amazon.awssdk.services.sqs.SqsClient;
+import software.amazon.awssdk.services.sqs.model.DeleteMessageRequest;
+import software.amazon.awssdk.services.sqs.model.DeleteMessageResponse;
+import software.amazon.awssdk.services.sqs.model.Message;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageResponse;
 import software.amazon.awssdk.services.sqs.model.SqsException;
@@ -36,6 +39,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -151,6 +155,25 @@ class CollectorHealthTest extends IntegrationTestSupport {
                 .containsEntry("malformedEnvelopes", 1L)
                 .containsEntry("unreadableStreamerIds", 0L)
                 .containsEntry("unknownTypes", 0L);
+    }
+
+    /**
+     * 🔴 <b>재부착이 못 읽은 스트리머 수.</b> 1번이 식별자 체계를 바꾸면 알림 경로와
+     * 재부착이 <b>같이</b> 못 읽는다. 알림 쪽 카운터만 health에 실려 있으면, 재부착만
+     * 쓰는 배포(옛 방송을 줍는 중)에서 그 신호가 통째로 안 보인다(감사 라운드 3 H2).
+     *
+     * <p>문항 4 — 알림 쪽 항과 <b>같은 값으로 뭉뚱그린</b> 구현도 첫 단언은 통과한다.
+     * 둘이 갈리는지 같이 본다: 1번이 고칠 자리는 같아도 <b>어느 경로가 그것을 봤나</b>가
+     * 다르고, 재부착만 세는 것은 「알림 경로는 멀쩡한데 clip 명부만 이상하다」를 뜻한다.
+     */
+    @Test
+    void 재부착이_못_읽은_스트리머_수가_health에_보인다() {
+        given();
+        reattach.unreadableStreamerIds(4L);
+
+        assertThat(health().getDetails())
+                .containsEntry("reattachUnreadableStreamerIds", 4L)
+                .containsEntry("unreadableStreamerIds", 0L);
     }
 
     /**
@@ -290,7 +313,10 @@ class CollectorHealthTest extends IntegrationTestSupport {
                 new ChatBuffer(1_000), TestPersistence.disabledPersister(), ChatArchive.NONE);
         // 판정기는 <b>진짜 표</b>를 쓴다. 여기서 보는 갈래 셋은 표에 닿기 전에 갈리지만,
         // 가짜로 바꾸면 「닿기 전에 갈린다」는 사실 자체가 검사에서 사라진다.
-        processor = new BroadcastEventProcessor(store, new RefusingSessions());
+        processor = new BroadcastEventProcessor(store, new RefusingSessions(),
+                (streamId, reason) -> {
+                    throw new AssertionError("못 쓸 편지가 포기 메모까지 갔다");
+                });
         // 줄 상한을 넉넉히 준다 — 이 검사가 재는 것은 health이지 백프레셔가 아니다.
         intakeRunner = new SqsIntakeRunner(queue, intakeProperties(), intake, processor,
                 new ObjectMapper(), new StreamerSerialExecutor(100));
@@ -304,6 +330,49 @@ class CollectorHealthTest extends IntegrationTestSupport {
     private Health healthAt(Instant now) {
         return new CollectorHealth(legacy, registry, intake, reattach, provider(processor), () -> now)
                 .health();
+    }
+
+    /**
+     * 🔴 <b>「받기는 되는데 못 지운다」는 따로 이름을 갖는다.</b> 그 상태에서는 모든 알림이
+     * 가시성 시한마다 무한 재처리되는데, 「큐에 못 닿는다」({@code failing})와 같은 낱말로
+     * 부르면 운영이 고칠 자리를 잘못 찾는다 — 앞은 연결·주소이고 이쪽은 대개
+     * {@code DeleteMessage} 권한이다. `services/README.md`가 밖에 그렇게 약속해 뒀다.
+     *
+     * <p><b>이 갈래를 재는 검사가 0개였다</b>(감사 라운드 3 H3, 주입 Y3이 초록이었다).
+     * {@code healthy()}가 false라 DOWN이 되는 것은 다른 검사가 재고 있었지만,
+     * <b>health 층의 낱말과 상세</b>는 그물 밖이었다 — 이 항을 통째로 지워도 아무도 안 깼다.
+     *
+     * <p>문항 2 — 「늘 delete-failing」인 구현도 첫 단언은 통과한다. 그래서 <b>회복까지</b>
+     * 같은 검사에서 본다: 삭제가 다시 되면 낱말도 상세도 지워져야 한다.
+     * 문항 4 — 낱말만 보면 <b>사유가 안 실려도</b> 통과한다. 운영은 그 사유로 권한 문제를
+     * 알아채므로 {@code letterDeleteFailure}까지 같이 본다.
+     */
+    @Test
+    void 편지를_못_지우면_큐에_못_닿는_것과_다른_이름으로_아프다고_말한다() {
+        given();
+        queue.deletable = false;
+        queue.다음_회차에_못_읽을_편지를_둔다();
+
+        assertThat(intakeRunner.pollOnce()).as("꺼내기 자체는 성공한다").isTrue();
+
+        Health sick = health();
+        assertThat(sick.getStatus()).isEqualTo(Status.DOWN);
+        assertThat(sick.getDetails())
+                .as("「못 닿는다」(failing)와 갈라야 운영이 고칠 자리를 찾는다")
+                .containsEntry("letterIntake", "delete-failing")
+                .containsEntry("letterDeleteFailure", "SqsException")
+                .containsEntry("letterFailure", "none");
+
+        // 회복 — 권한이 붙으면 낱말도 사유도 지워져야 한다.
+        queue.deletable = true;
+        queue.다음_회차에_못_읽을_편지를_둔다();
+        assertThat(intakeRunner.pollOnce()).isTrue();
+
+        Health well = health();
+        assertThat(well.getStatus()).isEqualTo(Status.UP);
+        assertThat(well.getDetails())
+                .containsEntry("letterIntake", "ok")
+                .containsEntry("letterDeleteFailure", "none");
     }
 
     /**
@@ -416,13 +485,31 @@ class CollectorHealthTest extends IntegrationTestSupport {
     private static final class ToggleQueue implements SqsClient {
 
         volatile boolean reachable = true;
+        /** 지우려 들면 터진다. <b>받기는 되는데 못 지운다</b>를 만드는 유일한 손잡이다. */
+        volatile boolean deletable = true;
+        /** 다음 한 회차가 꺼낼 편지. 꺼내고 나면 빈다 — 안 비우면 회차마다 같은 편지가 또 온다. */
+        private final List<Message> pending = new CopyOnWriteArrayList<>();
+
+        void 다음_회차에_못_읽을_편지를_둔다() {
+            pending.add(Message.builder().messageId("m1").receiptHandle("r1").body("{").build());
+        }
 
         @Override
         public ReceiveMessageResponse receiveMessage(ReceiveMessageRequest request) {
             if (!reachable) {
                 throw SqsException.builder().message("unreachable").build();
             }
-            return ReceiveMessageResponse.builder().messages(List.of()).build();
+            List<Message> batch = List.copyOf(pending);
+            pending.clear();
+            return ReceiveMessageResponse.builder().messages(batch).build();
+        }
+
+        @Override
+        public DeleteMessageResponse deleteMessage(DeleteMessageRequest request) {
+            if (!deletable) {
+                throw SqsException.builder().message("no permission").build();
+            }
+            return DeleteMessageResponse.builder().build();
         }
 
         @Override

@@ -4,8 +4,13 @@ import com.pokeclip.chat.collector.broadcast.intake.SqsIntakeLoop;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -34,11 +39,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ShutdownBudgetTest {
 
     /**
-     * 운영에 넘긴 제약. 우리 설정이 아니라 배포 쪽 값이라
-     * ({@code terminationGracePeriodSeconds} / compose {@code stop_grace_period})
-     * 여기서는 {@code services/README.md}가 적은 숫자를 그대로 못박는다.
+     * 운영에 넘긴 제약. 우리 설정이 아니라 배포 쪽 값이다
+     * ({@code terminationGracePeriodSeconds} / compose {@code stop_grace_period}).
+     *
+     * <p>🔴 <b>손으로 베낀 숫자였는데 이제 compose에서 읽는다</b>(POK-219 감사 라운드 3 H7).
+     * 그전에는 이 상수와 {@code services/README.md}만 20초를 말하고 <b>compose에는 그 줄이
+     * 아예 없었다</b> — 도커 기본 10초가 그대로 먹어 예산 17초가 잘리는데, 여기는 초록이었다.
+     * <b>「compose를 보는 검사가 저장소에 0개」가 POK-128부터 적혀 있던 구멍이고 이 값에
+     * 한해 메웠다.</b> k8s 쪽({@code infra/})은 1번 폴더라 여기서 못 본다.
      */
-    private static final Duration GRACE = Duration.ofSeconds(20);
+    private static final Duration GRACE = composeStopGracePeriod();
 
     @Test
     void 종료_예산_네_항의_합이_유예를_안_넘는다() {
@@ -69,6 +79,38 @@ class ShutdownBudgetTest {
         assertThat(GRACE.minus(total))
                 .as("여유를 줄이려면 README의 종료 예산 표를 같이 고쳐라")
                 .isEqualTo(Duration.ofSeconds(3));
+    }
+
+    /**
+     * <b>{@code chat-collector} 블록만 본다.</b> 파일 전체에 정규식을 던지면 남의 서비스가
+     * 적은 값을 우리 것으로 읽는다. 블록 경계는 「들여쓰기 2칸 + 콜론」인 다음 줄이다 —
+     * YAML 파서를 새로 물지 않으려고 이 폭으로 좁혔다(이 파일의 서비스 키가 전부 그 모양이다).
+     *
+     * <p>못 찾으면 <b>시끄럽게 터진다.</b> 조용히 20초로 떨어지면 이 검사는 아무것도 안 잰다.
+     */
+    private static Duration composeStopGracePeriod() {
+        Path compose = Path.of("..", "docker-compose.dev.yml");
+        List<String> lines;
+        try {
+            lines = Files.readAllLines(compose, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new AssertionError("services/docker-compose.dev.yml을 못 읽었다 — "
+                    + "작업 디렉터리가 바뀌었나", e);
+        }
+        boolean inBlock = false;
+        for (String line : lines) {
+            if (line.matches("^ {2}\\S.*:\\s*$")) {
+                inBlock = line.strip().equals("chat-collector:");
+                continue;
+            }
+            if (inBlock && line.strip().startsWith("stop_grace_period:")) {
+                String value = line.substring(line.indexOf(':') + 1).strip();
+                return Duration.ofSeconds(Long.parseLong(value.replace("s", "")));
+            }
+        }
+        throw new AssertionError("docker-compose.dev.yml의 chat-collector 블록에 "
+                + "stop_grace_period가 없다 — 도커 기본 10초라 종료 예산 17초가 잘린다. "
+                + "구독이 반납 안 되고 계정 자리가 남는다(services/README.md 「종료 유예를 20초 준다」)");
     }
 
     private static Duration duration(Class<?> owner, String field) {

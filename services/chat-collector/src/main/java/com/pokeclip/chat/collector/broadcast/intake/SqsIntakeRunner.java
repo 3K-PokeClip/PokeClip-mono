@@ -177,17 +177,32 @@ public class SqsIntakeRunner {
      */
     public void runLoop() {
         int consecutiveFailures = 0;
+        // <b>들어설 때 한 번만 찍는다</b>(감사 라운드 3 H4). SATURATED_PAUSE가 200ms라
+        // 회차마다 찍으면 초당 다섯 줄이고, <b>대량 재부착이 정확히 포화를 만드는
+        // 시나리오라</b> 복구가 도는 내내 로그가 밀려 그 옆의 chat.reattach.*가 안 보인다.
+        //
+        // <b>「얼마나 오래 찼나」를 이 줄이 안 져도 된다.</b> 포화 회차는 큐를 두드리지
+        // 않으므로 마지막 폴링 성공 시각이 안 움직이고, 2분을 넘기면 health가
+        // letterIntake=stalled로 DOWN을 준다. 깊이는 inFlight=가 말한다.
+        //
+        // 지역 변수인 이유: 이 깃발을 보는 곳이 이 루프뿐이다. 필드로 올리면 pollOnce를
+        // 직접 부르는 검사들과 상태를 나눠 갖게 돼 「누가 껐나」가 흐려진다.
+        boolean saturationLogged = false;
         while (running) {
             // 🔴 <b>포화를 폴링보다 먼저 본다</b>(계획 검증 M1). 꺼낸 뒤에 거절하면 이미
             // 늦다 — 받아 둔 알림이 가시성 시한 동안 숨겨지고, FIFO라 그 방송들의 뒤
             // 알림이 통째로 막힌다. 그동안 pollSucceeded가 계속 찍혀 health는 초록이다.
             if (lanes.saturated()) {
-                log.info("broadcast.intake.saturated inFlight={}", lanes.inFlight());
+                if (!saturationLogged) {
+                    log.info("broadcast.intake.saturated inFlight={}", lanes.inFlight());
+                    saturationLogged = true;
+                }
                 if (sleeper.sleepOrStop(SATURATED_PAUSE)) {
                     return;
                 }
                 continue;
             }
+            saturationLogged = false;
             if (pollOnce()) {
                 consecutiveFailures = 0;
                 continue;

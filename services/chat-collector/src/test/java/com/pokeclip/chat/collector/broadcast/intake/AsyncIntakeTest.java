@@ -575,6 +575,66 @@ class AsyncIntakeTest {
         hold.countDown();
     }
 
+    /**
+     * 🔴 <b>포화가 이어지는 동안 같은 줄을 반복해 찍지 않는다</b>(감사 라운드 3 H4).
+     * {@code SATURATED_PAUSE}가 200ms라 매 회차 찍으면 <b>초당 다섯 줄</b>이고,
+     * <b>대량 재부착이 정확히 이 카드가 노리는 시나리오다</b> — 복구가 돌 때마다
+     * 로그가 밀려 정작 그 옆의 {@code chat.reattach.*}가 안 보인다.
+     *
+     * <p><b>「얼마나 오래 찼나」를 이 줄이 안 져도 된다.</b> 포화 회차는 큐를 두드리지
+     * 않으므로 마지막 폴링 성공 시각이 안 움직이고, 2분을 넘기면 health가
+     * {@code letterIntake=stalled}로 DOWN을 준다({@code 가득_찬_회차는_큐가_건강하다고_기록하지_않는다}
+     * 와 {@code CollectorHealthTest}가 그 사슬을 잰다). 깊이는 {@code inFlight=}가 말한다.
+     *
+     * <p>🔴 <b>「한 번만」과 「영영 한 번만」은 다르다.</b> 들어설 때 찍고 <b>빠져나올 때
+     * 깃발을 안 되돌리면</b>, 두 번째 포화는 아무 줄도 안 남긴다 — 첫 번째만 보이는 로그는
+     * 안 보이는 로그보다 나쁘다(「그때 한 번뿐이었다」로 읽힌다). 그래서 이 검사는
+     * <b>포화 → 해소 → 다시 포화</b>를 한 번에 돈다.
+     *
+     * <p>문항 2 — 「아예 안 찍는」 구현도 「반복이 없다」는 통과하고, 「매번 찍는」 구현도
+     * 「두 번 이상 있다」는 통과한다. 그래서 <b>정확히 둘</b>을 재고 값까지 본다.
+     * 문항 5 — 잠든 회차 수({@code slept})를 같이 재서 <b>실제로 다섯 바퀴를 돌았다</b>를
+     * 확인한다. 안 재면 루프가 두 바퀴만 돌고 끝나도 「반복 없음」이 참이다.
+     */
+    @Test
+    @Timeout(20)
+    void 포화가_이어져도_한_줄만_찍고_다시_포화되면_또_찍는다() {
+        FakeQueue queue = new FakeQueue();
+        queue.enqueue("evt-0", "live-0", "0");
+        CountDownLatch 첫째 = new CountDownLatch(1);
+        CountDownLatch 둘째 = new CountDownLatch(1);
+        List<Duration> slept = Collections.synchronizedList(new ArrayList<>());
+        SqsIntakeRunner[] box = new SqsIntakeRunner[1];
+        SqsIntakeRunner runner = newRunner(queue, new IntakeStatus(true), 1, envelope -> {
+            await(envelope.eventId().equals("evt-0") ? 첫째 : 둘째);
+            return ProcessResult.PROCESSED;
+        }, duration -> {
+            slept.add(duration);
+            if (slept.size() == 2) {
+                // 포화를 푼다 — 줄이 실제로 빌 때까지 기다린 뒤 다음 편지를 놓는다.
+                첫째.countDown();
+                assertThat(box[0].awaitIdle(Duration.ofSeconds(5))).isTrue();
+                queue.enqueue("evt-1", "live-1", "1");
+            }
+            return slept.size() >= 3;
+        });
+        box[0] = runner;
+
+        try (LogCaptor captor = new LogCaptor()) {
+            runner.runLoop();
+
+            // 바퀴 1 제출 · 2·3 포화(sleep 1·2) · 4 해소 후 제출 · 5 다시 포화(sleep 3)
+            assertThat(slept).containsExactly(SqsIntakeRunner.SATURATED_PAUSE,
+                    SqsIntakeRunner.SATURATED_PAUSE, SqsIntakeRunner.SATURATED_PAUSE);
+            assertThat(captor.messages())
+                    .filteredOn(line -> line.startsWith("broadcast.intake.saturated"))
+                    .as("이어지는 동안 한 줄 · 다시 포화되면 또 한 줄")
+                    .containsExactly("broadcast.intake.saturated inFlight=1",
+                            "broadcast.intake.saturated inFlight=1");
+        }
+        둘째.countDown();
+    }
+
     // ── 못 읽는 봉투 ───────────────────────────────────────────────────────
 
     /** 스트리머를 모르니 줄에 못 넣는다. 재시도해도 계속 실패하므로 그 자리에서 지운다. */

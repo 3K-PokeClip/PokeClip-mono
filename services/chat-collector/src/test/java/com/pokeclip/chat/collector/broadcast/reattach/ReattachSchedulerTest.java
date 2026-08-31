@@ -48,10 +48,34 @@ class ReattachSchedulerTest {
         assertThat(status.state()).isEqualTo(ReattachStatus.State.OK);
     }
 
+    /**
+     * 🔴 <b>못 읽은 스트리머 수도 같이 옮긴다.</b> 1번이 식별자 체계를 바꾸면 <b>모든 방송이
+     * 이 길</b>인데, 그 값이 {@link Reattacher} 안에만 있으면 로그를 세는 것 말고는 밖에서
+     * 볼 방법이 없다 — 로그로는 「체계가 바뀌었다」와 「한 건 이상했다」가 구분되지 않는다.
+     * 알림 경로의 같은 이름 카운터는 이미 health에 실린다(감사 라운드 3 H2, 쌍둥이 중 한쪽만이었다).
+     *
+     * <p>문항 2: 「한 번만 옮기는」 구현도 첫 단언은 통과한다 — <b>값이 늘어나는 것</b>까지 본다.
+     * 회차가 통째로 실패해도 옮긴다: 목록을 받은 뒤 못 읽은 것을 세고서 던졌을 수 있다.
+     */
+    @Test
+    void 못_읽은_스트리머_수도_health가_읽는_자리에_옮겨진다() {
+        given(reattacher.sweep()).willReturn(true, false);
+        given(reattacher.unreadableStreamerIds()).willReturn(3L, 7L);
+
+        scheduler.tick();
+        assertThat(status.unreadableStreamerIds()).isEqualTo(3L);
+
+        scheduler.tick();
+        assertThat(status.unreadableStreamerIds())
+                .as("회차가 실패해도 그 회차까지 센 값은 옮겨야 한다")
+                .isEqualTo(7L);
+    }
+
     /** 부팅 직후 첫 회차 전에는 「꺼짐」이 아니라 「아직 안 돎」이다 — 둘을 뭉치면 못 가른다. */
     @Test
     void 첫_회차_전에는_아직_안_돈_상태다() {
         assertThat(status.state()).isEqualTo(ReattachStatus.State.STARTING);
+        assertThat(status.unreadableStreamerIds()).isZero();
         assertThat(new ReattachStatus(false).state()).isEqualTo(ReattachStatus.State.DISABLED);
     }
 }

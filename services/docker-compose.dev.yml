@@ -136,6 +136,11 @@ services:
       context: .
       dockerfile: chat-collector/Dockerfile
     restart: unless-stopped
+    # 🔴 compose 기본은 10초인데 이 서버의 종료 예산은 17초다(README 「종료 유예를 20초 준다」).
+    # 잘리면 세션 닫기(구독 반납 REST 8초)가 중간에 끊겨 세션 키가 소모된 채 남고,
+    # 스트리머당 3개뿐인 자리가 하나씩 마른다 — 유예를 15에서 20으로 올린 바로 그 이유다.
+    # 예산 17 + 여유 3 = 20. 예산을 키우면 ShutdownBudgetTest 가 깨지고 이 값도 같이 본다.
+    stop_grace_period: 20s
     depends_on:
       postgres:
         condition: service_healthy

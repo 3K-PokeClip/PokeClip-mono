@@ -1,6 +1,7 @@
 package com.pokeclip.chat.collector.broadcast;
 
 import ch.qos.logback.classic.Level;
+import com.pokeclip.chat.collector.StopReason;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +44,8 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
     private final JdbcTemplate jdbc;
 
     private final FakeSessions sessions = new FakeSessions();
+    /** 판정기가 남긴 포기 메모. 실물은 {@code StoppedStreamRecorder::record}다. */
+    private final List<String> 남긴것 = new ArrayList<>();
     private BroadcastEventProcessor processor;
 
     BroadcastEventProcessorTest(EndedStreamStore store, JdbcTemplate jdbc) {
@@ -53,7 +56,9 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
     @BeforeEach
     void 표를_비우고_판정기를_새로_만든다() {
         jdbc.update("DELETE FROM chat_ended_streams");
-        processor = new BroadcastEventProcessor(store, sessions);
+        남긴것.clear();
+        processor = new BroadcastEventProcessor(store, sessions,
+                (streamId, reason) -> 남긴것.add(streamId + "/" + reason));
         sessions.reset();
     }
 
@@ -311,6 +316,43 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
                 .isEqualTo(ProcessResult.UNREADABLE);
         assertThat(processor.counters().unknownTypes()).isEqualTo(1L);
         assertThat(processor.counters().malformedEnvelopes()).isZero();
+    }
+
+    /**
+     * 🔴 <b>지우기 전에 남긴다.</b> 편지가 그 방송의 유일한 트리거라, 메모 없이 지우면
+     * 창구가 그 방송에 <b>영원히</b> {@code unknown}을 답한다 — 배너를 끄는 값이라
+     * 「가장 나쁜 상태가 가장 안전한 답으로 보이는」 틈이고 여기서는 그 틈이 영구다.
+     *
+     * <p><b>이 자리가 붙이기 문이 아니라 여기인 이유</b>: 문은 재부착도 쓰는데 재부착에는
+     * 지울 편지가 없다. 문에 두면 재부착이 만든 메모가 재부착 자신을 24시간 막는다
+     * (POK-219 감사 라운드 3, {@code ReattacherTest}가 반대편을 잰다).
+     *
+     * <p>판정값을 {@code PROCESSED}로 바꿔 돌려주지 않는다 — 러너는 둘 다 지우지만
+     * {@code broadcast.intake.handled}의 {@code result=}가 「왜 지웠나」를 잃는다.
+     */
+    @Test
+    void 연동이_영구히_거절되면_포기_메모를_남기고_판정값을_그대로_돌려준다() {
+        sessions.willReturn(ProcessResult.LINK_REFUSED);
+
+        assertThat(processor.process(started("s1", 1))).isEqualTo(ProcessResult.LINK_REFUSED);
+
+        assertThat(남긴것).containsExactly("s1/" + StopReason.LINK_UNAVAILABLE);
+    }
+
+    /**
+     * 문항 2 — 위 검사는 「늘 메모를 남기는」 구현에서도 초록이다. 반대쪽을 같이 둔다:
+     * 붙은 방송({@code PROCESSED})·다시 물을 방송({@code RETRY_LATER})에 메모를 남기면
+     * <b>멀쩡한 방송이 24시간 안 걷힌다.</b>
+     */
+    @Test
+    void 붙었거나_다시_물을_방송에는_포기_메모를_안_남긴다() {
+        sessions.willReturn(ProcessResult.PROCESSED);
+        assertThat(processor.process(started("s1", 1))).isEqualTo(ProcessResult.PROCESSED);
+
+        sessions.willReturn(ProcessResult.RETRY_LATER);
+        assertThat(processor.process(started("s2", 1))).isEqualTo(ProcessResult.RETRY_LATER);
+
+        assertThat(남긴것).isEmpty();
     }
 
     private void givenLinkUnreachable() {
