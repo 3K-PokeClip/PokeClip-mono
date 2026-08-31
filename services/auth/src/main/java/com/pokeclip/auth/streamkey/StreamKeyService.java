@@ -3,6 +3,7 @@ package com.pokeclip.auth.streamkey;
 import com.pokeclip.auth.streamkey.secret.SecretStore;
 import com.pokeclip.auth.support.CrockfordBase32;
 import com.pokeclip.auth.support.Sha256;
+import com.pokeclip.auth.user.ActiveUserGuard;
 import com.pokeclip.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -35,17 +36,28 @@ public class StreamKeyService {
     private final StreamKeyCreator streamKeyCreator;
     private final SecretStore secretStore;
     private final UserRepository userRepository;
+    private final ActiveUserGuard activeUserGuard;
     private final SecureRandom random = new SecureRandom();
 
     /**
      * 발급의 유일한 입구다. 지금은 조건 없이 주지만 원래는 결제해야 발급이므로,
      * 나중에 조건 한 줄이 들어갈 자리가 여기 하나뿐이어야 한다.
+     * <b>그 「조건 한 줄」이 실제로 처음 들어온 것이 아래 탈퇴 확인이다.</b>
      *
      * <p>이 메서드에 &#64;Transactional을 걸지 않는다. 걸면 재조회가 삽입 실패와 같은
      * 트랜잭션에 묶여 오염된 세션에서 쿼리를 돌리게 된다
      * (UserService.findOrCreate와 같은 이유).
+     *
+     * <p>🔴 <b>확인이 만드는 갈래 앞이 아니라 맨 앞이다.</b> 「새로 만들 때만 본다」로 두면
+     * <b>이미 있는 키를 탈퇴한 회원에게 그대로 내주는</b> 갈래가 남는다 — 회수를 넘어 만들어진
+     * 키가 하나라도 있으면(위 창) 교환이 그것을 계속 돌려준다. 재는 것은
+     * {@code WithdrawnWriteGuardStreamKeyTest}다.
+     *
+     * <p>대가는 발급·교환마다 회원 표 조회가 하나 느는 것이다. 둘 다 rate limit이 걸린 드문 경로고,
+     * <b>Media가 부르는 {@code resolve}는 이 메서드를 안 지난다</b> — 그쪽 지연은 안 변한다.
      */
     public StreamKeyMaterial ensureKey(Long userId) {
+        activeUserGuard.requireAlive(userId, "streamkey.ensure");
         return findMaterial(userId).orElseGet(() -> createOrRead(userId));
     }
 
