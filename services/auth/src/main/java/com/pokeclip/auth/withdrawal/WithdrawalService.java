@@ -130,8 +130,20 @@ public class WithdrawalService {
         // 🔴 두 쿼리는 clearAutomatically = true인데 flushAutomatically가 없다(기존 respond·cancel과
         // 같은 모양이다). 여기 앞에 쌓인 영속성 변경이 없어서 지금은 무해하다 — 아래 익명화 재조회가
         // 마지막이라는 것과 함께 봐야 한다.
-        delegationRepository.revokeAllOfUser(userId, now);
+        // 🔴 초대가 먼저다. 순서를 뒤집으면 「수락이 탈퇴 사이로 끼어든 위임」이 살아남는다
+        // (PR #148 codex C4, 감사가 재현·처방 검증). 위임을 먼저 치면 READ COMMITTED에서
+        // revokeAllOfUser가 아직 커밋 안 된 위임을 못 보고, 그 뒤 cancelAllOfUser가 초대 행 락에서
+        // 기다렸다가 ACCEPTED를 만나 건너뛴다 — 그 위임은 유일한 일괄 폐기 뒤에 태어나 살아남는다.
+        // 초대를 먼저 치면 탈퇴가 수락의 커밋을 기다린 뒤에 위임을 훑으므로 그것이 보인다.
+        //
+        // 🔴 가나다 순으로 되돌리지 마라. 이 순서가 유일한 방어다 — 수락은 회원 행 락을 안 잡고
+        // (잠그는 것은 초대 행 하나다), 탈퇴가 쥔 락은 FOR NO KEY UPDATE라 위임 INSERT를 안 막는다.
+        // WithdrawalDelegationOrderTest가 못박는다.
+        //
+        // 이 처방은 「위임을 만드는 자리가 초대 수락 하나뿐」에 기대고 있다(확인함 — delegations.save는
+        // InvitationService.accept 한 곳뿐이다). 초대 없이 위임을 만드는 경로가 생기면 다시 계산해야 한다.
         invitationRepository.cancelAllOfUser(userId, now);
+        delegationRepository.revokeAllOfUser(userId, now);
 
         // 🔴 표 밖에 남는 것 둘 — 스트림키 비밀값과 사진 파일. 여기서 지우지 않고 자리만 읽어 둔다.
         //
