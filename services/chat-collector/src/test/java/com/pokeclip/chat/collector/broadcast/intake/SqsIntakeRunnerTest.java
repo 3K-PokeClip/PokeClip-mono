@@ -79,6 +79,25 @@ class SqsIntakeRunnerTest {
         assertThat(queue.deleted()).containsExactly("rh-0");
     }
 
+    /**
+     * <b>auth가 영구히 거절한 편지도 지운다</b>(POK-219). 다시 물어도 답이 같다.
+     *
+     * <p>이 갈래에 그물이 하나도 없었다 — 값이 새로 생겼는데 삭제 기준을 재는 검사 셋이
+     * 옛 값 셋 그대로였다. 러너가 값을 열거하지 않고 {@code RETRY_LATER}만 걸러서
+     * <b>지금은 저절로 맞지만</b>, 그 구조가 바뀌는 날 이 갈래만 조용히 남는다 —
+     * 그러면 그 방송의 FIFO 그룹 앞을 <b>영원히</b> 막는다(다시 물어도 또 거절이다).
+     */
+    @Test
+    void auth가_영구히_거절한_편지도_지운다() {
+        FakeQueue queue = FakeQueue.with(startedJson("evt-1", "s1", 1L));
+        SqsIntakeRunner runner = newRunner(queue, ProcessResult.LINK_REFUSED);
+
+        runner.pollOnce();
+        drain(runner);
+
+        assertThat(queue.deleted()).containsExactly("rh-0");
+    }
+
     /** 우리가 못 읽는다고 판정된 편지도 다시 받아야 못 읽는다. */
     @Test
     void 읽을_수_없다고_판정된_편지도_지운다() {

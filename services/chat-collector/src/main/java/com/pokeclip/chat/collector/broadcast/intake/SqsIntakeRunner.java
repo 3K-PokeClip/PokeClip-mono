@@ -408,7 +408,10 @@ public class SqsIntakeRunner {
         }
         // 삭제를 판정의 try 밖에 둔다. 안에 두면 「판정은 됐는데 삭제가 실패」까지
         // handle_failed로 남아 로그가 원인을 반대로 가리킨다.
-        // PROCESSED·IGNORED_STALE·UNREADABLE 셋 다 「더 볼 일 없음」이다.
+        // PROCESSED·IGNORED_STALE·LINK_REFUSED·UNREADABLE 넷 다 「더 볼 일 없음」이다.
+        // LINK_REFUSED가 POK-219에서 늘었고 이 자리를 실제로 지나간다 — 판정기는 포기 메모를
+        // 남긴 뒤 <b>PROCESSED로 바꾸지 않고 그대로 돌려준다</b>(handleStarted). result=가
+        // 「왜 지웠나」를 잃지 않게 하려는 것인데, 그 값이 여기까지 온다는 뜻이기도 하다.
         log.info("broadcast.intake.handled eventId={} result={}", envelope.eventId(), result);
         deleteOrReport(letter.message(), envelope.eventId());
         return true;

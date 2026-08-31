@@ -22,9 +22,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 /**
- * 편지 하나를 어떻게 판정하는지를 잰다. <b>판정값 넷의 뜻은 러너의 삭제 기준이다</b> —
- * {@code PROCESSED}·{@code IGNORED_STALE}·{@code UNREADABLE}은 지우고
- * {@code RETRY_LATER}만 큐에 남긴다. 그래서 "이 편지를 다시 받아야 하는가"가 판정 기준이다.
+ * 편지 하나를 어떻게 판정하는지를 잰다. <b>판정값 다섯의 뜻은 러너의 삭제 기준이다</b> —
+ * {@code RETRY_LATER}만 큐에 남고 나머지 넷({@code PROCESSED}·{@code IGNORED_STALE}·
+ * {@code LINK_REFUSED}·{@code UNREADABLE})은 지운다. 그래서 "이 편지를 다시 받아야 하는가"가
+ * 판정 기준이다. <b>{@code LINK_REFUSED}는 POK-219가 더했다</b> — 러너에게는
+ * {@code PROCESSED}와 같은 「지운다」이지만 <b>「붙었나」의 답이 정반대</b>라 값을 갈랐다.
  *
  * <p><b>끝난 방송 표는 진짜 PostgreSQL로 잰다.</b> 종료 편지의 멱등이 {@code ON CONFLICT}에
  * 걸려 있어서다 — 가짜 저장소로 바꾸면 그 방어선이 검사에서 사라진다.

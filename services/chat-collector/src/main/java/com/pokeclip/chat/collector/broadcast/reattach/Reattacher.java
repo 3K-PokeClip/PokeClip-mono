@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
@@ -147,7 +148,53 @@ public class Reattacher {
     private void sweepOnce() {
         LiveBroadcasts live = client.list();
         Set<String> attached = Set.copyOf(registry.activeStreamIds());
-        List<LiveBroadcasts.Item> candidates = live.broadcasts().stream()
+        // 🔴 <b>줄 하나의 계약 위반이 그 회차 전부를 죽이지 않게 여기서 먼저 턴다.</b>
+        // 바로 아래 {@code attached.contains}가 JDK 불변 Set이라 {@code contains(null)}에서
+        // <b>크기와 무관하게</b> NPE를 던진다(빈 Set도 그렇다 — 실측). 그러면 이상한 줄 하나가
+        // 그 회차의 <b>다른 모든 방송</b>을 같이 죽이고, 남는 것은 바깥 catch의
+        // {@code causeType=NullPointerException} 한 줄뿐이라 원인도 안 보인다.
+        //
+        // <b>봉투가 깨진 것과 갈린다</b> — {@code broadcasts} 칸 자체가 없으면 회차가 성립하지
+        // 않아 {@link LiveBroadcastClient}가 던지고, <b>줄 하나</b>가 깨진 것은 아래
+        // {@code streamer_id_unreadable}와 같이 세고 넘어간다(LiveBroadcasts javadoc의 방향).
+        //
+        // <b>카운터를 새로 만들지 않았다.</b> {@code unreadableStreamerIds}는 판정기·재부착·
+        // health·README 넷에 걸쳐 있어 짝을 만들면 그 넷이 같이 흔들린다. 그쪽은 「식별자 체계가
+        // 통째로 바뀌었나」를 세야 하는 값이고, {@code stream_id}는 clip의 {@code V201}이
+        // {@code NOT NULL}이라 <b>한 줄만 와도 그 자체가 사건</b>이다 — 로그 한 줄이면 된다.
+        //
+        // 🔴 <b>거름망 자신이 터지는 자리가 한 칸 더 바깥에 있다</b>(로컬 리뷰 라운드 3).
+        // Jackson 3는 배열 원소의 {@code null}을 <b>리스트에 그대로 넣는다</b>(재현함:
+        // {@code {"broadcasts":[null,{…}]}} → {@code size=2}, 첫 원소가 {@code null}).
+        // 그러면 아래 {@code item.streamId()}가 바로 위 방어가 도는 자리까지 가기도 전에
+        // NPE를 던져 <b>같은 결말</b>이 된다 — 회차 전부가 죽고 {@code causeType=NPE} 한 줄만 남는다.
+        //
+        // <b>로그를 갈랐다.</b> 「그 줄을 못 쓴다」는 같지만 <b>원인이 다르다</b> —
+        // 칸이 빈 것은 clip 명부의 값이 이상한 것이고, 원소가 없는 것은 <b>배열 자체</b>가
+        // 이상한 것이다(clip의 {@code LiveBroadcastsResponse.from}이 {@code row -> new Item(…)}이라
+        // 지금 코드로는 원소가 {@code null}일 수 없다 — 그래서 실제로 오면 직렬화 계층이
+        // 바뀌었다는 뜻이다). 한 이름으로 묶으면 {@code stream_id_missing}을 본 사람이
+        // <b>있지도 않은 빈 칸</b>을 찾으러 간다 — 라운드 2가 고치려던 것이 정확히 그 모양이다.
+        List<LiveBroadcasts.Item> rows = live.broadcasts();
+        List<LiveBroadcasts.Item> readable = new ArrayList<>(rows.size());
+        int nullRows = 0;
+        int missingStreamIds = 0;
+        for (LiveBroadcasts.Item item : rows) {
+            if (item == null) {
+                nullRows++;
+            } else if (item.streamId() == null) {
+                missingStreamIds++;
+            } else {
+                readable.add(item);
+            }
+        }
+        if (nullRows > 0) {
+            log.warn("chat.reattach.null_row count={}", nullRows);
+        }
+        if (missingStreamIds > 0) {
+            log.warn("chat.reattach.stream_id_missing count={}", missingStreamIds);
+        }
+        List<LiveBroadcasts.Item> candidates = readable.stream()
                 .filter(item -> !attached.contains(item.streamId()))
                 .toList();
         // 메모 조회는 한 번이다 — 낱개로 물으면 방송 수만큼 왕복한다.
@@ -254,7 +301,12 @@ public class Reattacher {
             return;
         }
         // <b>재는 것이 붙기보다 먼저다.</b> 붙고 나면 새 채팅이 들어와 마지막 채팅 시각이 바뀐다.
-        Gap gap = measurer.measure(streamId, startedAt, clock.get());
+        //
+        // 🔴 <b>그래서 순서는 그대로 두고 실패만 삼킨다</b>(로컬 리뷰 라운드 1). 순서를 뒤집는
+        // 처방도 있었지만 그쪽은 <b>DB가 멀쩡한 평상시에도</b> 값을 망친다 — 붙은 뒤에 재면
+        // 새 채팅이 이미 들어와 공백이 늘 0에 가깝게 찍힌다. 여기서 고치려는 것은 DB가
+        // 아플 때뿐이므로, 그 대가를 모든 회차에 물리는 것은 바꿔치기가 못 된다.
+        Gap gap = measureQuietly(streamId, startedAt);
         ProcessResult result = sessions.start(streamId, streamer, startedAt);
         if (result != ProcessResult.PROCESSED) {
             // 살아 있는 뒤 방송을 못 이긴 것(IGNORED_STALE) · auth가 아픈 것(RETRY_LATER) ·
@@ -269,6 +321,39 @@ public class Reattacher {
         }
         log.info("chat.reattach.gap_measured stream={} basis={} since={} gapMs={}",
                 streamId, gap.basis(), gap.since(), gap.gapMs());
+    }
+
+    /**
+     * 🔴 <b>재는 데 실패해도 붙는다 — 이것은 관측이지 판정이 아니다.</b>
+     *
+     * <p>바로 위 {@code store.find}·{@code currentStreamIdOf}와 성격이 갈린다. 그 둘은
+     * 「붙어도 되는 방송인가」를 정하는 <b>판정</b>이라 실패하면 안 붙는 쪽이 안전한 방향이다.
+     * 이쪽은 <b>로그 한 줄을 위한 관측</b>이라, 실패가 붙이기를 막으면 부수 기능 하나가
+     * 이 카드의 목적을 통째로 무력화한다. 실제로 그랬다 — {@link GapMeasurer}는
+     * {@code chat_messages}에 질의하므로 DB가 반개방이면 {@code socketTimeout}(10초)에
+     * 걸려 던졌고, {@link #attachOne}의 {@code catch}가 그것을 받아
+     * {@code attach_failed}만 남긴 채 <b>붙이기가 아예 안 불렸다.</b>
+     *
+     * <p><b>DB가 아픈 동안 채팅 저장도 안 되지만 세션은 서 있어야 한다</b> — 회복되는 순간
+     * 곧바로 저장이 이어진다. 안 붙어 있으면 회복돼도 걷을 것이 없고 채팅에는 백필이 없다.
+     *
+     * <p><b>폭이 {@code Throwable}인 이유</b>는 위 {@link #attachOne}과 같다 — 좁히면
+     * {@code LinkageError}류가 바깥 {@code catch}로 새어 다시 붙이기를 막는다.
+     * (이 서버의 아카이버 {@code safeTick}이 {@code Throwable}이고 적재 틱이
+     * {@code RuntimeException}인 것이 「쌍둥이 미대조」로 남아 있는 자리와 같은 결이다.)
+     */
+    private Gap measureQuietly(String streamId, Instant startedAt) {
+        try {
+            return measurer.measure(streamId, startedAt, clock.get());
+        } catch (Throwable t) {
+            // 예외 객체를 인자로 넘기지 마라 — SLF4J가 throwable로 인식해 접속 문자열이
+            // 실릴 수 있는 메시지와 스택트레이스를 통째로 렌더한다(sweep의 catch와 같은 이유).
+            log.warn("chat.reattach.gap_measure_failed stream={} causeType={}",
+                    streamId, t.getClass().getSimpleName());
+            // <b>UNKNOWN으로 뭉치지 않는다.</b> 그 값은 이미 「clip이 시작 시각을 안 줬다」이고,
+            // 같은 값으로 두면 뒤에 로그를 세는 쪽이 두 원인을 못 가른다.
+            return new Gap(Gap.Basis.MEASURE_FAILED, null, -1L);
+        }
     }
 
     public long unreadableStreamerIds() {

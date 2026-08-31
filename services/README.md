@@ -2374,7 +2374,45 @@ Ctrl+C 뒤 판정 줄의 `uploaded=`와 버킷의 `chat/` 아래 파일 수가 �
 지연이다 — 한 회차가 통째로 실패해도 다음 회차가 같은 목록을 다시 받는다.
 `chat.reattach.swept received= candidates= submitted= deferred=`가 매 회차를 남기고,
 붙은 뒤 **얼마나 못 걷었는지**를 `chat.reattach.gap_measured basis= since= gapMs=`가 남긴다
-(`basis`는 마지막 채팅 시각 `LAST_CHAT`, 없으면 방송 시작 `BROADCAST_START`).
+(`basis` 넷 — 마지막 채팅 시각 `LAST_CHAT` · 채팅이 없어 방송 시작부터 잰 `BROADCAST_START` ·
+시작 시각조차 clip이 안 준 `UNKNOWN` · **재는 데 실패한 `MEASURE_FAILED`**.
+뒤 둘은 `since`가 비고 `gapMs=-1`이다 — 1970년부터 재면 56년이 찍혀 로그가 거짓말을 한다).
+
+**재는 데 실패해도 붙는다.** 이 측정은 `chat_messages`를 읽으므로 DB가 반개방이면
+`socketTimeout`에 걸려 던지는데, 그것이 붙이기를 막으면 **부수 기능 하나가 이 기능의 목적을
+통째로 무력화한다** — 로그 한 줄을 위한 **관측**이지 「붙어도 되는가」의 **판정**이 아니다.
+DB가 아픈 동안 채팅 저장도 안 되지만, **세션은 서 있어야 회복되는 순간 저장이 이어진다.**
+실패는 `chat.reattach.gap_measure_failed stream= causeType=`가 남긴다.
+
+**clip이 계약을 어기면 그 사실을 이름으로 남긴다.** 이 창구는 「항상 200」이라
+본문이 이상한 것이 유일한 실패 모양인데, 그때 `causeType=NullPointerException`만 남으면
+**clip 잘못인지 우리 버그인지 못 가른다**(`sweep`의 catch가 예외 타입만 찍는다).
+그래서 **던지기 전에** 무엇이 빠졌는지를 적는다 — auth 쪽 `chat.link.incomplete`와 같은 모양이다.
+
+**세 겹이고 각 겹이 뭘 하는지가 다르다** — 봉투 · 원소 · 칸.
+
+| 무엇이 빠졌나 | 어떻게 다루나 | 로그 |
+|---|---|---|
+| **봉투** — `broadcasts` 칸 자체가 없다 | 회차가 성립 안 하므로 **던진다**(다음 회차가 다시 받는다) | `chat.reattach.live_list_incomplete bodyMissing= broadcastsMissing=` |
+| **원소** — 줄 자체가 `null`이다 (`[null]`) | 그 줄만 **세고 넘어간다**. 남은 방송은 붙는다 | `chat.reattach.null_row count=` |
+| **칸** — 줄은 있는데 `streamId`가 없다 | 〃 | `chat.reattach.stream_id_missing count=` |
+| **칸** — `streamerId`를 못 읽는다 | 〃 (**막을 것이 없다** — 이미 안전하다) | `chat.reattach.streamer_id_unreadable stream=` |
+| **칸** — `startedAt`이 없다 | **버리지 않고 붙인다.** 계약이 허용하는 값이다 | 없음 (EPOCH로 읽는다) |
+
+🔴 **줄 하나를 안 털면 그 회차의 다른 방송이 전부 같이 죽는다.** 첫 거름망이
+`Set.copyOf(...).contains(...)`인데 **JDK 불변 Set은 `contains(null)`에서 크기와 무관하게
+NPE를 던진다**(빈 Set도 그렇다 — 실측).
+
+🔴 **`원소`와 `칸`의 로그를 일부러 갈랐다.** 「그 줄을 못 쓴다」는 같지만 **원인이 다르다** —
+칸이 빈 것은 clip 명부의 **값**이 이상한 것이고, 원소가 없는 것은 **배열 자체**가 이상한 것이다
+(clip의 `LiveBroadcastsResponse.from`이 `row -> new Item(…)`이라 **지금 코드로는 원소가 `null`일
+수 없다** — 실제로 오면 직렬화 계층이 바뀌었다는 뜻이다). 한 이름으로 묶으면
+`stream_id_missing`을 본 사람이 **있지도 않은 빈 칸**을 찾으러 간다.
+**Jackson 3는 배열 원소의 `null`을 리스트에 그대로 넣는다**(재현함: `[null,{…}]` → `size=2`).
+
+**`streamerId`·`startedAt`은 막을 것이 없다.** `StreamerId.parse(null)`이 INVALID를,
+`LaneKey.of(null)`이 빈 문자열을 주고(실측), `startedAt`이 없으면 EPOCH로 읽어
+**살아 있는 세션을 못 뺏게 한다**(갈아끼움은 「더 늦게 시작한 방송만」이라 EPOCH는 절대 못 이긴다).
 
 **돌고 있는지는 health의 `reattach`로 본다**(`ok`·`starting`·`failing`·`disabled`).
 못 읽은 스트리머 수는 `reattachUnreadableStreamerIds`다.

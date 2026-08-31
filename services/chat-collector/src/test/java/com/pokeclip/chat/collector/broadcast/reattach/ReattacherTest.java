@@ -30,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -42,6 +43,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -55,6 +57,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -297,8 +300,9 @@ class ReattacherTest extends IntegrationTestSupport {
     // ── auth가 영구히 거절하는 갈래 ──────────────────────────────────────
 
     /**
-     * {@code sessions.start}가 {@code PROCESSED}를 주는 갈래가 <b>셋</b>인데, 그중 하나
-     * (auth 영구 거절)는 <b>세션이 서지 않는다.</b> 그것을 안 가르면 안 붙은 방송에
+     * auth가 영구히 거절한 갈래는 <b>세션이 서 보지도 못한다.</b> 그런데 러너에게는
+     * {@code PROCESSED}와 똑같이 「지운다」라 <b>한때 그 둘이 한 값이었다</b> —
+     * {@code LINK_REFUSED}가 갈라 준 것이 정확히 이 자리다. 안 가르면 안 붙은 방송에
      * 「붙었고 공백은 이만큼」이 나가고 「못 붙었다」는 안 나간다 —
      * <b>이 카드의 유일한 복구 지표를 세면 회복이 실제보다 많아 보인다.</b>
      */
@@ -398,6 +402,91 @@ class ReattacherTest extends IntegrationTestSupport {
         assertThat(reattacher.unreadableStreamerIds()).isEqualTo(1L);
     }
 
+    /**
+     * 🔴 <b>줄 하나의 계약 위반이 그 회차 전부를 죽이면 안 된다</b>(로컬 리뷰 라운드 2 「같은 부류」).
+     *
+     * <p><b>재현한 것</b>: 첫 거름망이 {@code Set.copyOf(...).contains(item.streamId())}인데
+     * JDK의 불변 Set은 {@code contains(null)}에서 <b>크기와 무관하게</b>
+     * {@code NullPointerException}을 던진다(빈 Set도 그렇다 — 실측). 그래서 {@code streamId}가
+     * 없는 줄 <b>하나</b>가 그 회차의 <b>다른 모든 방송</b>을 같이 죽이고,
+     * 남는 것은 {@code chat.reattach.failed causeType=NullPointerException} 한 줄이라
+     * 어느 줄이 이상했는지도 안 보인다.
+     *
+     * <p><b>왜 예외가 아니라 건너뛰기인가</b> — 이 서버에 이미 그 갈래가 있다.
+     * 봉투가 깨진 것({@code broadcasts} 칸 자체가 없음)은 회차가 성립하지 않으므로
+     * {@link LiveBroadcastClient}가 던지고, <b>줄 하나가 깨진 것</b>은
+     * {@code chat.reattach.streamer_id_unreadable}와 같이 <b>세고 넘어간다.</b>
+     * {@link LiveBroadcasts} javadoc이 그 방향을 못박아 뒀다 — 「clip이 그런 줄을 빼면 그 방송은
+     * 영영 안 걷히고 우리는 그런 줄이 있었다는 것조차 모른다」.
+     *
+     * <p><b>카운터를 새로 안 만든다.</b> {@code unreadableStreamerIds}는 판정기·재부착·health·
+     * README 넷에 걸쳐 있어 짝을 하나 더 만들면 그 넷이 같이 흔들린다. 여기서 잃는 것은
+     * <b>진단</b>이고 로그 한 줄이 그것을 준다 — 「식별자 체계가 통째로 바뀌었나」를 세어야 하는
+     * 그 카운터와 달리, {@code stream_id}는 clip 쪽 {@code V201}이 {@code NOT NULL}이라
+     * 한 줄이라도 오면 그 자체가 사건이다.
+     */
+    @Test
+    @Timeout(30)
+    void streamId가_없는_줄은_건너뛰고_나머지는_붙인다() {
+        returns(live(null, "7", 시작), live(B001, "2", 시작));
+
+        try (LogCaptor captor = new LogCaptor()) {
+            newReattacher(lanes).sweep();
+
+            assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+            assertThat(sessions.started()).containsExactly(B001);
+            assertThat(registry.currentStreamIdOf(2L)).isEqualTo(B001);
+            assertThat(captor.levelOf("chat.reattach.stream_id_missing")).isEqualTo(Level.WARN);
+            // 아래 짝 검사와 갈리는 자리 — 칸이 빈 것을 원소가 없는 것으로 세면 안 된다.
+            assertThat(captor.messages())
+                    .noneMatch(line -> line.startsWith("chat.reattach.null_row"));
+            // 양성 대조 — 회차가 통째로 죽었다면 위 단언들은 「안 붙었다」로도 만족될 수 있다.
+            assertThat(captor.messages())
+                    .as("줄 하나가 이상하다고 그 회차가 통째로 죽으면 안 된다")
+                    .noneMatch(line -> line.startsWith("chat.reattach.failed"));
+        }
+    }
+
+    /**
+     * 🔴 <b>위 검사의 짝이다 — 한 칸 바깥이 안 막혀 있었다</b>(로컬 리뷰 라운드 3).
+     * 위는 {@code {"broadcasts":[{"streamId":null,…}]}}를 막고, 여기는
+     * {@code {"broadcasts":[null]}}을 막는다.
+     *
+     * <p><b>재현한 것</b>(가짜 clip에 본문을 직접 줘서): Jackson 3는 배열 원소의 {@code null}을
+     * <b>리스트에 그대로 넣는다</b> — {@code [null, {…}]}에서 {@code size=2}이고 첫 원소가
+     * {@code null}이다. 그러면 위 거름망의 {@code item.streamId()}가 <b>거름망 자신</b>에서
+     * NPE를 던져, 라운드 2가 넣은 방어가 도는 자리까지 못 간다.
+     *
+     * <p><b>왜 로그를 갈랐나</b> — 라운드 2가 고치려던 것이 정확히 「{@code causeType=NPE}만
+     * 남아서 clip 잘못인지 우리 버그인지 안 갈린다」였다. 둘을 한 카운터로 묶으면
+     * {@code stream_id_missing}을 본 사람이 <b>없는 칸을 찾으러</b> 간다 — clip의 명부에는
+     * {@code streamId}가 {@code NOT NULL}이라 그런 줄이 없고, 실제로 깨진 것은 <b>배열</b>이다.
+     * 원인이 다르면 이름도 달라야 그 로그가 진단이 된다.
+     */
+    @Test
+    @Timeout(30)
+    void 줄_자체가_null이면_건너뛰고_나머지는_붙인다() {
+        returnsIncludingNullRow(null, live(B001, "2", 시작));
+
+        try (LogCaptor captor = new LogCaptor()) {
+            newReattacher(lanes).sweep();
+
+            assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+            assertThat(sessions.started()).containsExactly(B001);
+            assertThat(registry.currentStreamIdOf(2L)).isEqualTo(B001);
+            assertThat(captor.levelOf("chat.reattach.null_row")).isEqualTo(Level.WARN);
+            assertThat(captor.messages()).anyMatch(line -> line.equals("chat.reattach.null_row count=1"));
+            // 🔴 이 수정의 목적을 재는 단언 — 거르기만 재고 로그를 안 재면 「왜 갈랐나」가 0개다.
+            assertThat(captor.messages())
+                    .as("칸이 빈 것과 원소가 없는 것은 원인이 달라 이름도 달라야 한다")
+                    .noneMatch(line -> line.startsWith("chat.reattach.stream_id_missing"));
+            // 양성 대조 — 회차가 통째로 죽었다면 위 단언들은 「안 붙었다」로도 만족될 수 있다.
+            assertThat(captor.messages())
+                    .as("줄 하나가 이상하다고 그 회차가 통째로 죽으면 안 된다")
+                    .noneMatch(line -> line.startsWith("chat.reattach.failed"));
+        }
+    }
+
     // ── 실패와 백프레셔 ──────────────────────────────────────────────────
 
     /** 던지면 {@code @Scheduled}가 이 뒤로 안 돈다 — 재부착이 영영 멈추는데 아무 신호도 없다. */
@@ -432,6 +521,79 @@ class ReattacherTest extends IntegrationTestSupport {
                             && line.contains("basis=BROADCAST_START")
                             && line.contains("gapMs=600000"));
         }
+    }
+
+    /**
+     * 🔴 <b>재는 데 실패해도 붙는다.</b> 공백 측정은 로그 한 줄을 위한 <b>관측</b>이지
+     * 「붙어도 되는가」의 <b>판정</b>이 아니다. 바로 위 {@code store.find}와 성격이 갈리는
+     * 자리다 — 그쪽은 실패하면 안 붙는 것이 안전한 방향이지만, 이쪽이 붙이기를 막으면
+     * <b>부수 기능의 실패가 이 카드의 목적을 통째로 무력화한다</b>(로컬 리뷰 라운드 1).
+     *
+     * <p><b>DB가 아픈 동안에는 채팅 저장도 안 된다.</b> 그래도 세션은 서 있어야 DB가 회복될 때
+     * 곧바로 저장이 이어진다 — 안 붙어 있으면 회복돼도 걷을 것이 없고, 채팅에는 백필이 없다.
+     */
+    @Test
+    @Timeout(30)
+    void 공백_측정이_던져도_붙는다() {
+        returns(live(A001, "7", 시작));
+        // 반개방 DB에서 socketTimeout이 끊을 때 나오는 것과 같은 자리의 예외다.
+        GapMeasurer 던지는_측정기 = mock(GapMeasurer.class);
+        given(던지는_측정기.measure(any(), any(), any()))
+                .willThrow(new DataAccessResourceFailureException("반개방"));
+
+        try (LogCaptor captor = new LogCaptor()) {
+            new Reattacher(client, registry, store, 던지는_측정기, lanes, sessions, () -> 지금).sweep();
+
+            assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+            // ① 세션이 실제로 섰다. 「문을 두드렸다」로 갈음하지 않는다 — 붙이기가 아예
+            //    안 불리는 것이 이 결함의 증상이었다.
+            assertThat(registry.currentStreamIdOf(7L)).as("측정 실패가 붙이기를 막으면 안 된다")
+                    .isEqualTo(A001);
+            assertThat(sessions.started()).containsExactly(A001);
+            // ② 붙이기가 실패한 것으로 기록되지 않는다. 이 줄이 남으면 「어느 방송이 안
+            //    붙었나」를 세는 유일한 진단이 거짓말을 한다.
+            assertThat(captor.messages())
+                    .noneMatch(line -> line.startsWith("chat.reattach.attach_failed"));
+            // ③ 「못 쟀다」가 로그에 남고 원인 타입까지 온다. 예외 객체는 안 넘긴다 —
+            //    SLF4J가 throwable로 렌더해 접속 문자열이 통째로 실린다.
+            assertThat(captor.levelOf("chat.reattach.gap_measure_failed")).isEqualTo(Level.WARN);
+            assertThat(captor.messages()).anyMatch(line ->
+                    line.startsWith("chat.reattach.gap_measure_failed")
+                            && line.contains("stream=" + A001)
+                            && line.contains("causeType=DataAccessResourceFailureException"));
+            // ④ 「못 쟀다」와 「공백이 없다」가 갈린다. UNKNOWN으로 뭉치면 「clip이 시작
+            //    시각을 안 줬다」와 섞여 뒤에 로그를 세는 쪽이 두 원인을 못 가른다.
+            assertThat(captor.messages()).anyMatch(line ->
+                    line.startsWith("chat.reattach.gap_measured")
+                            && line.contains("stream=" + A001)
+                            && line.contains("basis=MEASURE_FAILED")
+                            && line.contains("gapMs=-1"));
+        }
+    }
+
+    /**
+     * 🔴 <b>{@code catch}의 폭이 {@code Throwable}인 것을 실제로 잰다.</b> 위 검사만으로는
+     * 안 재어진다 — {@code RuntimeException}으로 좁혀도 <b>그대로 초록이었다</b>(주입 E).
+     * DB 예외가 unchecked라서다. 그러면 {@code LinkageError}류 한 번에 붙이기가 다시
+     * 막히는데 아무 그물도 안 운다.
+     *
+     * <p>이 서버가 같은 자리에 이미 데여 있다 — 아카이버의 틱은 {@code Throwable}이고
+     * 적재의 틱은 {@code RuntimeException}이라 「쌍둥이 미대조」로 {@code CLAUDE.md}에
+     * 남아 있다. 폭이 갈리면 <b>한쪽만 조용히 멈춘다.</b>
+     */
+    @Test
+    @Timeout(30)
+    void 공백_측정이_Error를_던져도_붙는다() {
+        returns(live(A001, "7", 시작));
+        GapMeasurer 터지는_측정기 = mock(GapMeasurer.class);
+        given(터지는_측정기.measure(any(), any(), any()))
+                .willThrow(new NoSuchMethodError("드라이버가 갈렸다"));
+
+        new Reattacher(client, registry, store, 터지는_측정기, lanes, sessions, () -> 지금).sweep();
+
+        assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+        assertThat(registry.currentStreamIdOf(7L)).as("관측의 실패가 붙이기를 막으면 안 된다")
+                .isEqualTo(A001);
     }
 
     /** 버리면 그 방송은 다음 회차까지 안 걷힌다 — 미뤘다는 사실이 로그에 남아야 한다. */
@@ -553,6 +715,14 @@ class ReattacherTest extends IntegrationTestSupport {
 
     private void returns(LiveBroadcasts.Item... items) {
         given(client.list()).willReturn(new LiveBroadcasts(List.of(items), false));
+    }
+
+    /**
+     * {@code returns}를 못 쓴다 — {@code List.of}가 {@code null} 원소를 거부한다.
+     * 실물 경로는 Jackson이 만드는 리스트이고 <b>그쪽은 {@code null}을 담는다</b>(재현함).
+     */
+    private void returnsIncludingNullRow(LiveBroadcasts.Item... items) {
+        given(client.list()).willReturn(new LiveBroadcasts(Arrays.asList(items), false));
     }
 
     private static LiveBroadcasts.Item live(String streamId, String streamerId, Instant startedAt) {

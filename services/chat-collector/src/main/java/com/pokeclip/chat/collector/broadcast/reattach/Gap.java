@@ -21,6 +21,18 @@ public record Gap(Basis basis, Instant since, long gapMs) {
          * {@code since}는 {@code null}이고 {@code gapMs}는 <b>{@code -1}</b>이다 —
          * 1970년부터 재면 56년이 찍혀 로그가 거짓말을 한다.
          */
-        UNKNOWN
+        UNKNOWN,
+        /**
+         * <b>재는 데 실패했다</b> — DB가 반개방이면 {@code socketTimeout}이 끊는다.
+         * {@code since}는 {@code null}이고 {@code gapMs}는 {@code -1}이다.
+         *
+         * <p><b>{@link #UNKNOWN}과 뭉치지 않는다.</b> 그쪽은 「clip이 시작 시각을 안 줬다」이고
+         * 이쪽은 「우리 DB를 못 읽었다」다 — 한 값으로 두면 로그를 세는 쪽이 두 원인을 못 가른다.
+         *
+         * <p><b>{@link GapMeasurer}가 아니라 {@code Reattacher}가 만든다.</b> 측정기는 던지는
+         * 쪽이고, 그것을 「모르는 것도 답이다」로 바꾸는 판단은 <b>부르는 쪽</b>의 것이다 —
+         * 판정에 쓰는 부름이 나중에 생기면 그쪽은 던지는 편이 안전하다.
+         */
+        MEASURE_FAILED
     }
 }

@@ -152,6 +152,79 @@ class LiveBroadcastClientTest {
     }
 
     /**
+     * 🔴 <b>쌍둥이({@code link/ChzzkLinkClient}의 {@code chat.link.incomplete})에서 계약 위반
+     * 방어만 안 베껴 온 자리다</b>(로컬 리뷰 라운드 2).
+     *
+     * <p><b>재현한 것</b>({@code {"truncated":false}}를 주는 가짜 clip): {@link LiveBroadcasts}는
+     * compact 생성자가 없는 record라 Jackson 3가 그 칸에 <b>{@code null}을 넣고</b>, 예외 없이
+     * 통과했다. 터지는 자리는 뒤였다 — {@code truncated=true}면 이 클래스의 잘림 경고,
+     * 아니면 {@code Reattacher.sweepOnce}의 {@code broadcasts().stream()}.
+     *
+     * <p><b>유실은 없다</b>({@code sweep}의 {@code catch (Throwable)}가 받고 알림은 안 건드린다).
+     * 잃는 것은 <b>진단</b>이다 — 재부착이 매 회차 통째로 안 도는데
+     * {@code chat.reattach.failed causeType=NullPointerException}만 남아
+     * <b>clip의 계약 위반인지 우리 버그인지 구분이 안 된다.</b> 그래서 어느 칸이 빠졌는지를
+     * 던지기 <b>전에</b> 남긴다 — {@code sweep}의 catch는 예외 <b>타입만</b> 찍으므로
+     * (주소·토큰 유출을 막으려고 일부러 그렇다) 예외 메시지에 담으면 아무 데도 안 나온다.
+     *
+     * <p><b>빈 목록으로 접지 않는 이유</b>는 이 클래스 javadoc 그대로다 — 「clip이 계약을 어겼다」와
+     * 「방송이 하나도 없다」가 같아지면 부르는 쪽이 그 둘을 못 가른다. compact 생성자로
+     * 빈 리스트를 채우는 처방을 안 고른 것이 이 때문이다.
+     */
+    @Test
+    void broadcasts_칸이_없으면_어느_칸이_빠졌는지_남기고_예외로_나간다() {
+        givenClipResponds(200, """
+                {"truncated":false}""");
+
+        try (LogCaptor captor = new LogCaptor()) {
+            assertThatThrownBy(() -> client().list()).isInstanceOf(IllegalStateException.class);
+
+            assertThat(captor.levelOf("chat.reattach.live_list_incomplete")).isEqualTo(Level.WARN);
+            assertThat(captor.messages()).anyMatch(line ->
+                    line.startsWith("chat.reattach.live_list_incomplete")
+                            && line.contains("bodyMissing=false")
+                            && line.contains("broadcastsMissing=true"));
+        }
+    }
+
+    /**
+     * 터지는 자리가 둘이라 갈래도 둘이다. 여기는 <b>이 클래스 안</b>({@code truncated} 경고가
+     * {@code broadcasts().size()}를 부르는 줄)이고, 위 검사는 {@code Reattacher} 쪽이다.
+     *
+     * <p><b>이 검사가 방어의 순서를 못박는다</b> — 잘림 경고 뒤에 방어를 두면 여전히
+     * {@code NullPointerException}이다.
+     */
+    @Test
+    void 잘렸다는_응답에_broadcasts_칸이_없어도_NPE가_아니다() {
+        givenClipResponds(200, """
+                {"truncated":true}""");
+
+        assertThatThrownBy(() -> client().list())
+                .isNotInstanceOf(NullPointerException.class)
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    /**
+     * 본문이 통째로 빈 200. <b>같은 문으로 나가되 어느 쪽이 빠졌는지가 갈린다</b> —
+     * 두 칸이 늘 같은 값이면 그 로그는 아무것도 안 가른다(쌍둥이가 칸 셋을 따로 싣는 이유와 같다).
+     *
+     * <p>이 갈래의 예외는 이 카드 전부터 있었는데 <b>그것을 재는 검사가 0개였다.</b>
+     */
+    @Test
+    void 본문이_통째로_비어도_같은_줄로_드러난다() {
+        givenClipResponds(200, "");
+
+        try (LogCaptor captor = new LogCaptor()) {
+            assertThatThrownBy(() -> client().list()).isInstanceOf(IllegalStateException.class);
+
+            assertThat(captor.messages()).anyMatch(line ->
+                    line.startsWith("chat.reattach.live_list_incomplete")
+                            && line.contains("bodyMissing=true")
+                            && line.contains("broadcastsMissing=false"));
+        }
+    }
+
+    /**
      * 실패는 <b>예외로 나간다</b> — 빈 목록으로 접으면 「clip이 죽었다」와 「방송이 없다」가
      * 같아지고, 부르는 쪽(태스크 7)이 그 둘을 못 가른다.
      *
