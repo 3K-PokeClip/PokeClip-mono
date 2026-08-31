@@ -9,6 +9,7 @@ import java.util.Deque;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -42,6 +43,13 @@ public final class StreamerSerialExecutor implements AutoCloseable {
     private final int maxInFlight;
 
     public StreamerSerialExecutor(int maxInFlight) {
+        // 0이면 모든 submit이 false라 수집이 통째로 멈춘다 — 이 서버가 반복해 데인
+        // 「켰는데 조용히 안 돈다」다. 지금은 상수를 넘기지만 값이 설정으로 뚫리는 날을
+        // 대비해 만들 때 잡는다.
+        if (maxInFlight <= 0) {
+            throw new IllegalArgumentException(
+                    "maxInFlight는 1 이상이어야 한다 — 0 이하면 알림을 하나도 안 받는다: " + maxInFlight);
+        }
         this.maxInFlight = maxInFlight;
     }
 
@@ -73,9 +81,40 @@ public final class StreamerSerialExecutor implements AutoCloseable {
             return target;
         });
         if (startNow[0]) {
-            workers.execute(() -> run(lane, task));
+            try {
+                workers.execute(() -> run(lane, task));
+            } catch (RejectedExecutionException e) {
+                // 🔴 close() 뒤에 여기로 온다. 이 자리는 run의 catch (Throwable)보다 <b>앞</b>이라
+                // 그 방어선이 통째로 우회된다 — 되돌리지 않으면 줄이 running=true로 맵에 남아
+                // 아무도 nextOrRelease를 안 부르고 그 스트리머가 영구히 막힌다. 더 나쁜 것은
+                // inFlight가 안 내려가 saturated()가 영구 true가 되는 것이다: 그러면
+                // 부르는 쪽이 큐를 아예 안 두드려 <b>모든 스트리머의</b> 알림이 멈춘다.
+                releaseAfterReject(lane);
+                inFlight.decrementAndGet();
+                return false;
+            }
         }
         return true;
+    }
+
+    /**
+     * 실행기가 거절한 줄을 통째로 놓아 준다.
+     *
+     * <p><b>대기까지 버리는 이유</b>: 거절은 실행기가 닫혔다는 뜻이고, 그러면 이 줄의 무엇도
+     * 다시 돌 수 없다. 남겨 두면 그 작업들도 영영 안 돌면서 {@code inFlight}만 붙들어
+     * {@code saturated()}를 영구 true로 만든다. 버린 것은 큐에 그대로 있으므로 가시성 시한이
+     * 지나면 다시 온다 — {@link #dropPending}과 같은 근거다.
+     */
+    private void releaseAfterReject(String lane) {
+        lanes.compute(lane, (key, target) -> {
+            if (target == null) {
+                return null;
+            }
+            inFlight.addAndGet(-target.pending.size());
+            target.pending.clear();
+            target.running = false;
+            return null;   // 줄을 지운다
+        });
     }
 
     /**

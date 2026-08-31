@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 「같은 줄은 하나씩, 다른 줄은 겹쳐서」를 잰다.
@@ -178,7 +179,92 @@ class StreamerSerialExecutorTest {
             executor.submit("streamer-" + i, () -> { });
         }
         assertThat(executor.awaitIdle(Duration.ofSeconds(5))).isTrue();
-        assertThat(executor.laneCount()).isZero();
+        assertThat(awaitLaneCountZero(executor, Duration.ofSeconds(2))).isZero();
         executor.close();
+    }
+
+    /**
+     * 🔴 <b>닫힌 뒤에 받으면 자리도 카운터도 안 남긴다.</b>
+     *
+     * <p>고치기 전에는 {@code workers.execute}가 {@code RejectedExecutionException}을 던지는데
+     * <b>그 시점에 줄은 이미 {@code running=true}로 맵에 들어가 있어</b> 아무도
+     * {@code nextOrRelease}를 안 불렀다 — 그 스트리머가 영구히 막혔다. 게다가
+     * {@code inFlight}가 안 내려가 {@code saturated()}가 영구 true가 되면
+     * <b>모든 스트리머의 알림 꺼내기가 멈춘다.</b>
+     *
+     * <p>{@code run}의 {@code catch (Throwable)}는 이것을 못 막는다 — 그 방어선은
+     * <b>작업이 던지는 것</b>만 받고, {@code execute}가 던지는 것은 그보다 <b>앞</b>이라
+     * 통째로 우회한다. 감사자가 스스로 고른 주입으로 찾았다.
+     */
+    @Test
+    void 닫힌_뒤_받으면_거절하고_자리를_안_남긴다() {
+        StreamerSerialExecutor executor = new StreamerSerialExecutor(100);
+        executor.close();
+
+        assertThat(executor.submit("s", () -> { })).isFalse();
+        assertThat(executor.inFlight()).isZero();
+        assertThat(executor.laneCount()).isZero();
+        assertThat(executor.saturated()).isFalse();
+    }
+
+    /**
+     * 거절이 <b>쌓여도</b> 회계가 안 샌다. 위 검사가 한 번만 보므로 이것을 따로 둔다 —
+     * 고치기 전에는 {@code inFlight}가 거절마다 하나씩 올라 상한 2에서 <b>두 번</b>이면
+     * {@code saturated()}가 영구 true였다.
+     *
+     * <p>문항 6: {@code isFalse()}만 보면 「거절해서 false」와 「상한에 걸려 false」가
+     * 구분되지 않는다. 그래서 {@code inFlight}가 <b>0</b>인 것을 같이 본다 —
+     * 상한 때문이라면 2로 남아 있다.
+     */
+    @Test
+    void 닫힌_뒤_거절이_쌓여도_포화되지_않는다() {
+        StreamerSerialExecutor executor = new StreamerSerialExecutor(2);
+        executor.close();
+
+        assertThat(executor.submit("s", () -> { })).isFalse();
+        assertThat(executor.submit("s", () -> { })).isFalse();
+        assertThat(executor.submit("other", () -> { })).isFalse();
+
+        assertThat(executor.inFlight()).isZero();
+        assertThat(executor.saturated()).isFalse();
+        assertThat(executor.laneCount()).isZero();
+    }
+
+    /**
+     * 상한이 0이면 <b>모든</b> {@code submit}이 false라 수집이 통째로 멈춘다 —
+     * 이 서버가 반복해 데인 「켰는데 조용히 안 돈다」다. 값이 설정으로 뚫리는 날을 대비해
+     * 만들 때 잡는다.
+     */
+    @Test
+    void 상한이_0이하면_만들_때_죽는다() {
+        assertThatThrownBy(() -> new StreamerSerialExecutor(0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maxInFlight");
+        assertThatThrownBy(() -> new StreamerSerialExecutor(-1))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * {@code laneCount()}가 0이 될 때까지 짧은 상한으로 폴링해 <b>0이 아니면 마지막 값</b>을 준다.
+     *
+     * <p>🔴 <b>왜 그냥 단언하지 않나</b>: {@code inFlight}는 {@code run}의 {@code finally}에서
+     * 내려가고 줄 지우기는 <b>그 뒤</b>다. 즉 {@code awaitIdle}이 true를 주는 순간 그 줄은
+     * 아직 맵에 있을 수 있다 — 창이 몇 인스트럭션이라 평소엔 안 걸리지만 <b>결함이 없어도
+     * 빨개질 수 있다</b>(감사가 그 창에 200ms를 주입해 결정적으로 재현했다).
+     *
+     * <p><b>이것이 단언을 무르게 만들지 않는다</b>: 줄이 정말 새면 상한 안에 0이 안 되어
+     * 그대로 빨간불이다({@code nextOrRelease}가 줄을 안 지우는 주입으로 확인 — 100이 유지된다).
+     * {@code awaitIdle}에 {@code lanes.isEmpty()}를 넣는 것과는 다르다. 그러면 <b>구현</b>이
+     * 그것을 기다려 단언이 자동으로 참이 되고, 누수가 있을 때 종료가 예산을 다 쓴다
+     * (계획 검증 I3). <b>기다리는 쪽과 재는 쪽은 그대로 갈라져 있다.</b>
+     */
+    private static int awaitLaneCountZero(StreamerSerialExecutor executor, Duration budget) {
+        long deadline = System.nanoTime() + budget.toNanos();
+        int last = executor.laneCount();
+        while (last != 0 && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+            last = executor.laneCount();
+        }
+        return last;
     }
 }
