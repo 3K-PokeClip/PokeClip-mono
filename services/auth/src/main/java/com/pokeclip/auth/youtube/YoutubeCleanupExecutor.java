@@ -10,6 +10,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -133,17 +134,37 @@ public class YoutubeCleanupExecutor {
      * <p>대가는 <b>대기 중이던 secrets 삭제가 유실되는 것</b>이다 — 다만 그것은 이 클래스가 처음부터
      * 문서화한 성질이다(위 「프로세스가 죽으면 고아 secret이 남는다」). 유실 건수를 로그로 남겨
      * 나중에 찾을 수 있게 한다.
+     *
+     * <p>🔴 <b>버려진 잡의 회원 번호를 한 줄씩 남긴다</b>(PR #148 codex C5, 감사 재현).
+     * 예전에는 {@code shutdownNow()}의 반환값을 <b>버렸다.</b> 큐에서 뽑혀 나온 잡은 {@code run()}을
+     * 못 하므로 {@code started}가 한 줄도 안 찍히고, 거부 핸들러도 안 탄다({@code shutdown()} 뒤에
+     * <b>새로 들어온 것</b>만 잡는다) — 이 클래스가 약속한 회복법(「{@code started}는 있는데
+     * {@code completed}가 없는 회원을 찾는다」)이 <b>이 갈래에서만 성립하지 않았다.</b>
+     *
+     * <p>건수도 갈랐다. 옛 {@code pending}은 <b>돌던 것과 안 돈 것을 뭉친 숫자</b>라 「몇 명이 복구
+     * 불가인가」조차 못 말했다 — 돌던 것은 {@code started}가 찍혀 짝으로 찾을 수 있고, 큐에 있던 것은
+     * 이 줄이 유일한 실마리다.
+     *
+     * <p>줄 수는 최악 큐 상한({@value #QUEUE_CAPACITY})만큼이다. 종료 시점에 한 번뿐이고,
+     * <b>한 줄로 뭉치면 로그 시스템이 자르는 순간 뒷부분이 통째로 사라진다.</b>
      */
     @PreDestroy
     void shutdown() {
         pool.shutdown();
         try {
             if (!pool.awaitTermination(SHUTDOWN_WAIT.toMillis(), TimeUnit.MILLISECONDS)) {
-                int dropped = pool.getQueue().size() + pool.getActiveCount();
-                log.warn("auth.youtube.cleanup.shutdown_timeout pending={}", dropped);
-                pool.shutdownNow();   // 비데몬 워커를 깨워 JVM이 종료 유예 안에 죽게 한다
+                int interrupted = pool.getActiveCount();
+                // 비데몬 워커를 깨워 JVM이 종료 유예 안에 죽게 한다. 반환값은 큐에서 뽑혀 나온 잡들이고
+                // 그것들은 run()을 못 하므로 여기서 안 남기면 회원 번호가 어디에도 안 남는다.
+                List<Runnable> dropped = pool.shutdownNow();
+                log.warn("auth.youtube.cleanup.shutdown_timeout dropped={} interrupted={}",
+                        dropped.size(), interrupted);
+                for (Runnable job : dropped) {
+                    log.warn("auth.youtube.cleanup.dropped userId={}", job instanceof Job j ? j.userId : null);
+                }
                 if (!pool.awaitTermination(FORCED_STOP_WAIT.toMillis(), TimeUnit.MILLISECONDS)) {
-                    log.warn("auth.youtube.cleanup.shutdown_forced pending={}", dropped);
+                    log.warn("auth.youtube.cleanup.shutdown_forced dropped={} interrupted={}",
+                            dropped.size(), interrupted);
                 }
             }
         } catch (InterruptedException e) {

@@ -5,6 +5,7 @@ import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -106,5 +107,67 @@ class WithdrawalCleanupExecutorTest {
         executor.shutdown();
 
         assertThat(finished).as("유예 안에 끝나는 잡을 끊었다").isTrue();
+    }
+
+    /**
+     * 🔴 <b>큐에서 뽑혀 나온 잡은 「누구였는지」가 어디에도 안 남았다</b>(PR #148 codex C5, 감사 재현).
+     *
+     * <p>{@code shutdownNow()}의 반환값을 버리고 있었다. 그 잡들은 {@code run()}을 못 하므로
+     * {@code started}가 <b>한 줄도 안 찍힌다</b> — 이 클래스가 약속한 회복법
+     * (「{@code started}는 있는데 {@code completed}가 없는 회원을 찾는다」)이 <b>이 갈래에서만 성립하지 않는다.</b>
+     * 거부 핸들러도 안 탄다({@code shutdown()} 뒤에 <b>새로 들어온 것</b>만 잡는다).
+     *
+     * <p>🔴 <b>건수 하나로도 부족했다.</b> 옛 {@code pending}은 <b>돌던 것과 안 돈 것을 뭉친 숫자</b>라
+     * 「몇 명이 복구 불가인가」조차 못 말했다 — 돌던 것은 {@code started}가 찍혀 짝으로 찾을 수 있고
+     * 큐에 있던 것은 그렇지 않다. 둘을 갈라 센다.
+     *
+     * <p>로그 줄이 최악 큐 상한(1000)만큼 난다. 종료 시점에 한 번뿐이고, <b>회원 번호를 되찾을
+     * 다른 방법이 없다</b> — 한 줄로 뭉치면 로그 시스템이 자르는 순간 뒷부분이 통째로 사라진다.
+     */
+    @Test
+    void 종료에_잘려_버려진_잡은_회원_번호를_남긴다() throws Exception {
+        WithdrawalCleanupExecutor executor = new WithdrawalCleanupExecutor();
+        CountDownLatch 워커가_잡혔다 = new CountDownLatch(WithdrawalCleanupExecutor.THREADS);
+        CountDownLatch 놓아준다 = new CountDownLatch(1);
+        try (LogCaptor logs = new LogCaptor()) {
+            try {
+                // 워커 둘을 유예보다 오래 붙잡는다 — 그래야 뒤에 넣는 것이 큐에 쌓인 채 종료를 맞는다.
+                for (int i = 0; i < WithdrawalCleanupExecutor.THREADS; i++) {
+                    executor.submit(executor.new Job(1L, null, () -> {
+                        워커가_잡혔다.countDown();
+                        await(놓아준다);
+                    }));
+                }
+                assertThat(워커가_잡혔다.await(5, TimeUnit.SECONDS))
+                        .as("워커가 안 잡혔다 — 아래 잡들이 큐에 안 쌓이므로 아무것도 안 잰다").isTrue();
+
+                for (long userId : List.of(11L, 22L, 33L)) {
+                    executor.submit(executor.new Job(userId, null, () -> { }));
+                }
+
+                executor.shutdown();
+
+                assertThat(logs.messages())
+                        .as("🔴 큐에서 버려진 잡의 회원 번호가 로그에 없다 — started/completed 짝으로도 "
+                                + "못 찾으므로 「사진이 안 지워진 회원」이 영영 안 보인다")
+                        .contains("auth.withdrawal.cleanup.dropped userId=11",
+                                "auth.withdrawal.cleanup.dropped userId=22",
+                                "auth.withdrawal.cleanup.dropped userId=33");
+                assertThat(logs.levelOf("auth.withdrawal.cleanup.dropped")).isEqualTo(Level.WARN);
+                assertThat(logs.messages())
+                        .as("돌던 것과 안 돈 것을 뭉치면 「몇 명이 복구 불가인가」를 못 말한다")
+                        .anyMatch(m -> m.startsWith("auth.withdrawal.cleanup.shutdown_timeout dropped=3 "));
+            } finally {
+                놓아준다.countDown();
+            }
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 }
