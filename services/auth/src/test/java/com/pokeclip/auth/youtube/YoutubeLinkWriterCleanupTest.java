@@ -1,6 +1,7 @@
 package com.pokeclip.auth.youtube;
 
 import com.pokeclip.auth.streamkey.secret.SecretStore;
+import com.pokeclip.auth.user.ActiveUserGuard;
 import com.pokeclip.auth.user.UserRepository;
 import org.junit.jupiter.api.Test;
 
@@ -23,7 +24,8 @@ class YoutubeLinkWriterCleanupTest {
 
     private final SecretStore secretStore = mock(SecretStore.class);
     private final YoutubeLinkWriter writer = new YoutubeLinkWriter(mock(YoutubeChannelLinkRepository.class),
-            secretStore, mock(UserRepository.class), mock(YoutubeCleanupExecutor.class));
+            secretStore, mock(UserRepository.class), mock(ActiveUserGuard.class),
+            mock(YoutubeCleanupExecutor.class));
 
     /**
      * 🔴 access 삭제가 던져도 refresh 삭제를 <b>시도한다</b>. 한 try로 묶으면 첫 실패가 둘째를 건너뛰어
