@@ -57,4 +57,11 @@ tasks.named('test') {
             rootProject.file('README.md'))
             .withPropertyName('contractDocs')
             .withPathSensitivity(PathSensitivity.RELATIVE)
+
+    // TokenSubjectRegistryTest는 소스의 javadoc 문장(전수 명부)을 읽는다. 주석만 바꾸면 클래스 파일이
+    // 그대로라 test가 UP-TO-DATE가 되고 — 명부를 틀린 숫자로 고쳐도 초록이다. 위와 같은 함정이라
+    // main 소스를 입력으로 한 번 더 선언한다(컴파일 입력과 별개다).
+    inputs.files(sourceSets.main.java)
+            .withPropertyName('mainSourcesForDocTests')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
 }

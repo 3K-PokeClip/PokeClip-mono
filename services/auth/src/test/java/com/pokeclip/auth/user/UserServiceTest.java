@@ -78,7 +78,7 @@ class UserServiceTest extends IntegrationTestSupport {
     void 소문자로_조회하면_대문자로_가입한_계정을_찾는다() {
         userService.findOrCreate("sub-find", "Bar@Example.COM", "이름", null);
 
-        assertThat(userRepository.findByEmail("bar@example.com")).isPresent();
+        assertThat(userRepository.findAliveByEmail("bar@example.com")).isPresent();
     }
 
     /**
