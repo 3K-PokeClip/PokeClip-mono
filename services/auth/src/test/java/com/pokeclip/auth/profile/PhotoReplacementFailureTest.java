@@ -2,6 +2,7 @@ package com.pokeclip.auth.profile;
 
 import com.jayway.jsonpath.JsonPath;
 import com.pokeclip.auth.token.TokenService;
+import com.pokeclip.auth.user.ActiveUserGuard;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
 import com.pokeclip.auth.user.UserService;
@@ -40,20 +41,20 @@ class PhotoReplacementFailureTest extends PhotoTestSupport {
 
     private final PhotoStorage storage;
     private final PhotoProperties properties;
-    private final UserRepository users;
+    private final ActiveUserGuard guard;
 
     PhotoReplacementFailureTest(MockMvc mockMvc, UserRepository userRepository, UserService userService,
                                 TokenService tokenService, JdbcTemplate jdbc,
-                                PhotoStorage storage, PhotoProperties properties) {
+                                PhotoStorage storage, PhotoProperties properties, ActiveUserGuard guard) {
         super(mockMvc, userRepository, userService, tokenService, jdbc);
         this.storage = storage;
         this.properties = properties;
-        this.users = userRepository;
+        this.guard = guard;
     }
 
     /** 표 갱신만 실패시킨다 — 창고 호출은 진짜로 일어나야 이 검사가 뜻을 가진다. */
     private ProfilePhotoService serviceWithFailingTable() {
-        PhotoAttacher throwing = new PhotoAttacher(users) {
+        PhotoAttacher throwing = new PhotoAttacher(guard) {
             @Override
             User attach(long userId, long version) {
                 throw new IllegalStateException("표 갱신 실패를 흉내낸다");
