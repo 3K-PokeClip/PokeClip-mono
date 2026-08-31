@@ -1475,7 +1475,7 @@ Unavailable → WARN `orphan_token causeType=Http429/408/InvalidClient`)·`resol
 로그의 자리: `refreshed`만 요청 스레드 동기 afterCommit이고, `relinked`·`unlinked`·`refresh_rejected`는 정리 잡 안에서
 secrets 삭제 뒤에 찍힌다(정리까지 끝났다는 순서 로그) — 큐가 거부되면 그 로그도 함께 사라지고 그때 `cleanup.rejected`
 WARN이 신호다. requestId는 잡이 값으로 옮긴다. 정리 스레드 자체의 것은 `auth.chzzk.cleanup.<event>` —
-`rejected`(큐 상한 초과, WARN)·`failed`·`shutdown_timeout`.
+`rejected`(큐 상한 초과, WARN)·`failed`·`shutdown_timeout`·`dropped`(종료에 잘려 버려진 잡의 회원 번호, WARN).
 값은 userId·status·hint·causeType·reason·pending만 — 토큰·code·state·channelId는 찍지 않는다.
 
 ### 유튜브 채널 연동 (POK-121)
@@ -1566,7 +1566,7 @@ revoke를 DB 락 안에 넣어야 해서(=트랜잭션 안 외부 호출) 포기
 `orphan_token`(WARN — 5xx·타임아웃)·`token_already_dead`(INFO — 4xx, 이미 무효)·`resolve_rejected`·`failed`).
 **`orphan_token`·`token_already_dead`는 갱신 거부 경로에서만 난다** — 유일하게 revoke를 부르는 자리다.
 정리 스레드 자체의 것은
-`auth.youtube.cleanup.<event>` — `rejected`(큐 상한 초과, WARN)·`failed`·`shutdown_timeout`.
+`auth.youtube.cleanup.<event>` — `rejected`(큐 상한 초과, WARN)·`failed`·`shutdown_timeout`·`dropped`(종료에 잘려 버려진 잡의 회원 번호, WARN).
 값은 userId·status·causeType·reason만 — 토큰·code·state·channelId는 찍지 않는다.
 
 **마이그레이션은 `V109__create_youtube_channel_links.sql`이다.** 살아있는 행에만 걸리는 부분 유니크
@@ -1863,6 +1863,46 @@ clip이 「이 사람이 이 스트리머의 방송을 봐도 되나」를 물�
 - **만료된 페어링 코드는 안 건드린다**(이미 못 쓴다). 「방금 썼다」로 덮으면 그 시각이 거짓이 된다
 - `/internal/**`은 별도 체인이라 이 확인이 없다 — **그쪽은 이미 빈손이 된다**(키는 폐기, 위임은 닫힘)
 
+#### 🔴 입구에서 한 번 막는 것으로는 부족하다 — 쓰기 직전에 한 번 더 본다
+
+**입구 필터는 요청이 들어올 때 한 번 본다.** 그 뒤에 생기는 지연은 그대로 창이 된다 —
+필터를 통과한 요청이 처리되는 동안 탈퇴가 커밋되면, 그 요청은 **탈퇴한 계정에 쓴다.**
+창이 좁아 보이지만 **채널 연동은 그 앞에 외부 HTTP가 둘 있어 최대 십수 초**이고,
+**사진 올리기는 창고 호출이 최대 8초**다.
+
+🔴 **회원 행 락은 그것을 안 막는다.** 우리가 쓰는 `PESSIMISTIC_WRITE`가 PostgreSQL에서 내는 것은
+`FOR UPDATE`가 아니라 **`FOR NO KEY UPDATE`**라 `FOR KEY SHARE`가 안 걸린다 —
+**자식 표 INSERT(외래키 검사)가 이 락에 안 막힌다.** 스트림키·페어링 코드·연동·위임·갱신 표가 전부 거기 든다.
+즉 **「탈퇴가 도는 동안에는 새 것이 안 생긴다」는 처음부터 성립하지 않았다**(PR #148에서 탐침으로 확정).
+
+**락을 세게 바꾸지 않았다.** 그 락은 토큰 회전·스트림키 재발급·채널 갱신이 전부 쓰는 공유물이라
+바꾸면 그 경로들의 경합 성질이 통째로 달라진다. 대신 **쓰기 직전에 탈퇴 표시를 본다** —
+확인은 `ActiveUserGuard` 한 곳에 모여 있고 **전수 명부와 그것을 기계로 세는 검사**가 붙어 있다.
+
+| 막는 자리 | 무엇이 안 생기나 |
+|---|---|
+| `StreamKeyService.ensureKey` | 스트림키 신규 발급 · 페어링 코드 발급 · **교환**(로그인이 없어 필터가 원리상 못 막는 경로다) |
+| `PhotoAttacher.currentVersion` | 창고에 올라가는 사진 **파일** |
+| `PhotoAttacher.attach` | `users`의 사진 칸 둘 |
+| `ChzzkLinkWriter.create` · `YoutubeLinkWriter.create` | 연동 행 + OAuth 원문 둘 |
+| `UserService.updateName` | 익명화된 이름의 **되돌리기** |
+| `InvitationService.invite` | 탈퇴자가 **보내는** 초대 (**받는** 쪽은 `findAliveByEmail`이 조회에서 닫는다) |
+
+**응답은 401이고 사유는 로그에만 남는다**(`auth.withdrawn.write_blocked userId= site=`).
+입구 필터가 한 발 먼저 막았을 요청이라 사용자가 볼 일이 거의 없고, 「그 계정이 탈퇴했다」를
+응답으로 알려 줄 이익도 없다.
+
+🔴 **연동 둘만 창이 완전히 닫힌다** — 거기는 어차피 회원 행 락을 잡던 자리라 확인을 락과 함께 하고,
+탈퇴도 같은 락을 잡으므로 직렬화된다. **나머지는 「읽고 나서 쓴다」 사이가 남는다**(락을 새로 얹으면
+잠금 순서가 생겨 교환↔탈퇴가 서로를 기다린다). 남은 창은 **그 트랜잭션 길이만큼**이고 그 안에
+외부 호출이 없다.
+
+🔴 **`TokenService.rotate`는 아직 안 막았다.** 로그인이 도는 중에 탈퇴가 커밋되면 갱신 표 하나가
+일괄 폐기를 넘어갈 수 있고, `rotate`가 탈퇴를 안 보므로 그 표는 **무기한** 새 접근 표를 찍어낸다.
+auth 창구는 필터가 전부 막지만 **clip은 표를 독립으로 검증**하므로 위의 「30분」이 그 계정에서는
+「무기한」이 된다. 막으면 「로그인 없이 부르는 재발급은 탈퇴해도 평소대로 된다」는 **기존 결정이 뒤집힌다** —
+결정 사안이라 별도로 다룬다.
+
 #### 방송 중에 탈퇴하면 — 키는 즉시 죽고 나가던 방송은 안 끊긴다
 
 | | 탈퇴 전 | 탈퇴 후 |
@@ -1921,19 +1961,24 @@ clip이 「이 사람이 이 스트리머의 방송을 봐도 되나」를 물�
 | `auth.withdrawal.cleanup.completed userId=` | INFO | 둘 다 지웠다 |
 | `auth.withdrawal.cleanup.rejected userId= reason=` | **WARN** | 큐 상한 초과·종료 뒤 제출. **잡 본문이 아예 안 돈다** |
 | `auth.withdrawal.cleanup.failed userId= causeType=` | **WARN** | 정리가 던졌다 |
-| `auth.withdrawal.cleanup.shutdown_timeout pending=` · `…shutdown_forced pending=` | **WARN** | 종료 유예에 잘린 건수. **누구인지는 안 알려준다** |
-| `auth.withdrawn.blocked userId=` | INFO | 탈퇴한 표로 두드렸다가 401을 맞았다 |
+| `auth.withdrawal.cleanup.shutdown_timeout dropped= interrupted=` · `…shutdown_forced …` | **WARN** | 종료 유예에 잘렸다. **둘을 갈라 센다** — `dropped`는 큐에서 버려진 것(`started`조차 없다), `interrupted`는 돌다 끊긴 것(`started`는 있다) |
+| `auth.withdrawal.cleanup.dropped userId=` | **WARN** | 🔴 큐에서 버려진 잡 <b>한 건당 한 줄</b>. **그 회원 번호를 되찾을 유일한 실마리다** |
+| `auth.withdrawn.blocked userId=` | INFO | 탈퇴한 표로 두드렸다가 **입구 필터**에 401을 맞았다 |
+| `auth.withdrawn.write_blocked userId= site=` | **WARN** | 🔴 필터를 **지나서** 쓰기 직전에 막혔다. **경합이 실제로 일어났다는 신호다** — 이름이 위와 갈려야 둘을 구분한다 |
 
-값은 `userId`·`pending`·`causeType`·`reason`만이다. **이메일·이름·파일 이름·표는 어디에도 안 찍는다**
-(실기동에서 로그 전체 PII 검색 **0건**).
+값은 `userId`·`dropped`·`interrupted`·`causeType`·`reason`·`site`만이다.
+**이메일·이름·파일 이름·표는 어디에도 안 찍는다**(실기동에서 로그 전체 PII 검색 **0건**).
+`site`는 코드에 박힌 상수다(`streamkey.ensure`·`profile.photo.attach` 등) — 사람이 넣는 값이 아니다.
 
 🔴 **정리가 안 끝난 회원(= 남은 파일의 주인)을 찾는 법은 둘이고, 둘 다 봐야 전수다.**
 
 > ① `cleanup.started`는 있는데 `cleanup.completed`가 **없는** `userId` — 시한에 끊겼거나 정리가 던졌다
 > ② `cleanup.rejected`의 `userId` — **잡이 아예 안 돌아 `started`조차 없다.** ①만 보면 이 갈래를 놓친다
+> ③ `cleanup.dropped`의 `userId` — **종료에 잘려 큐에서 버려졌다.** ②와 같은 이유로 `started`가 없고,
+>   거부 핸들러도 안 타므로 ②로도 안 잡힌다(PR #148에서 메웠다 — 그전에는 이 갈래가 **아예 안 보였다**)
 
 파일 이름은 `profile-photos/<회원번호>/0`과 `/1` **둘**이다.
-`shutdown_timeout`은 「그런 일이 있었다」와 건수만 말한다.
+`shutdown_timeout`은 「그런 일이 있었다」와 건수만 말하고 **누구인지는 `dropped` 줄이 말한다.**
 
 🔴 **`auth.withdrawn.blocked`에 건수로 알람을 걸지 마라.** 이 줄은 `permitAll` 경로에서도 표만 실려 오면
 나므로 **한 사람이 무한히 만들 수 있다**(표 하나로 재발급을 다섯 번 두드리면 다섯 줄).

@@ -95,11 +95,11 @@ public class WithdrawnAccountFilter extends OncePerRequestFilter {
     /**
      * 인증이 끝난 뒤에만 값을 준다. 주체가 없거나 {@code sub}을 회원 번호로 못 읽으면 {@code null}이고
      * 그때는 <b>막지 않는다</b> — 그 판정은 각 창구가 이미 자기 사유로 한다.
-     * 여기서 401을 내면 나머지 열 자리가 어떻게 답하는지가 이 필터의 판단으로 덮인다.
+     * 여기서 401을 내면 나머지 자리가 어떻게 답하는지가 이 필터의 판단으로 덮인다.
      *
      * <p>🔴 <b>이 줄도 전수 명부의 한 자리다</b> — auth에서 {@code Long.valueOf(jwt.getSubject())}를
-     * 하는 <b>열한 자리</b> 중 하나이고, <b>감싸는 모양이 창구 셋과 반대</b>다(그쪽은 던져서 401,
-     * 여기는 {@code null}로 통과). 명부는 {@code ProfilePhotoController.userId} javadoc에 있고
+     * 하는 자리 중 하나이고, <b>감싸는 모양이 창구 쪽과 반대</b>다(그쪽은 던져서 401,
+     * 여기는 {@code null}로 통과). <b>여기에 개수를 적지 않는다</b> — 숫자는 명부 한 줄에만 둔다. 명부는 {@code ProfilePhotoController.userId} javadoc에 있고
      * {@code TokenSubjectRegistryTest}가 기계로 센다 — <b>POK-171이 이 자리를 만들고도
      * 한 커밋 뒤에 자기를 못 세어</b> 그 검사가 생겼다.
      */

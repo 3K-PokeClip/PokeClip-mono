@@ -23,11 +23,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * (감사 2회차가 잡았다). 두 번 다 초록인 채로 틀려 있었다.
  *
  * <p>이 검사가 잡는 것은 <b>자리가 늘거나 줄 때</b>다 — 그때 명부를 안 고치면 빨간불이다.
- * 반대로 <b>안 감싼 일곱을 감싸는 것은 막지 않는다</b>(자리 수가 안 변한다). 「알려진 구멍」 22가
- * 「일곱이 안 감싸져 있다」를 시험으로 굳히지 말라고 한 이유가 그것이고, 여기는 그 금을 안 넘는다.
+ * 반대로 <b>안 감싼 자리를 감싸는 것은 막지 않는다</b>(자리 수가 안 변한다). 「알려진 구멍」 22가
+ * 「안 감싼 자리가 있다」를 시험으로 굳히지 말라고 한 이유가 그것이고, 여기는 그 금을 안 넘는다.
  *
  * <p>「감쌌다」의 판정은 <b>그 줄 바로 뒤 두 줄에 {@code catch (NumberFormatException}이 있는가</b>다.
- * 지금 감싼 넷이 전부 {@code try { return …; } catch (NumberFormatException e)} 한 모양이라 그것으로 충분하다.
+ * 감싼 자리가 전부 {@code try { return …; } catch (NumberFormatException e)} 한 모양이라 그것으로 충분하다.
  * 다른 모양으로 감싸는 자리가 생기면 이 판정부터 고친다.
  *
  * <p>파일만 읽으므로 컨텍스트도 DB도 없다. <b>{@code build.gradle}이 main 소스를 테스트 입력으로 선언한다</b> —
@@ -90,8 +90,8 @@ class TokenSubjectRegistryTest {
         assertThat(sites).as("자리를 하나도 못 찾았다 — 검사가 낡았다").isNotEmpty();
         assertThat(List.of(census.group(1), census.group(2), census.group(3), census.group(4)))
                 .as("명부(%s)와 실제가 어긋난다.%n실제: %d자리 · %d파일 · 감싼 것 %d · 안 감싼 것 %d%n자리: %s%n"
-                                + "🔴 명부를 고칠 자리가 셋이다 — 이 javadoc · WithdrawalController.userId javadoc · "
-                                + "auth/CLAUDE.md 「알려진 구멍」 22",
+                                + "🔴 고칠 곳은 그 한 줄뿐이다 — 숫자를 다른 파일에 옮겨 적지 마라. "
+                                + "예전에는 이 메시지가 세 곳을 고치라고 안내했고, 그래서 한 곳이 낡은 채로 초록이었다",
                         REGISTRY, sites.size(), files, wrapped, sites.size() - wrapped, sites)
                 .containsExactly(String.valueOf(sites.size()), String.valueOf(files),
                         String.valueOf(wrapped), String.valueOf(sites.size() - wrapped));

@@ -86,30 +86,34 @@ public class ProfilePhotoController {
      * <p><b>전수 11자리 · 10파일 · 감싼 것 4 · 안 감싼 것 7</b> (2026-08-31, POK-171 기준).
      * 이 줄은 {@code TokenSubjectRegistryTest}가 기계로 대조한다 — <b>자리가 늘거나 줄면 빨간불</b>이다.
      *
-     * <p><b>감싼 넷 — 그런데 모양이 둘로 갈린다.</b>
+     * <p>🔴 <b>숫자는 이 한 줄에만 둔다.</b> 아래 목록도, 다른 파일의 설명도 세어 둔 수를 다시 적지 않는다 —
+     * 두 군데 적으면 한쪽만 고치는 날이 온다. 실제로 <b>이 명부의 숫자가 한때 여섯 파일에 흩어져 있었고</b>
+     * 그중 하나가 낡은 채로 초록이었다(POK-171 로컬 리뷰). 목록이 곧 개수다.
+     *
+     * <p><b>감싼 자리 — 그런데 모양이 둘로 갈린다.</b>
      * <ul>
-     *   <li><b>던져서 401</b>(셋): {@code AuthController:66} · {@code ProfilePhotoController:99}(여기) ·
+     *   <li><b>던져서 401</b>: {@code AuthController:66} · {@code ProfilePhotoController:99}(여기) ·
      *       {@code WithdrawalController:58}</li>
-     *   <li><b>{@code null}을 돌려 통과</b>(하나): {@code WithdrawnAccountFilter:106} — 창구가 아니라
+     *   <li><b>{@code null}을 돌려 통과</b>: {@code WithdrawnAccountFilter:106} — 창구가 아니라
      *       필터라서 반대다. 여기서 401을 내면 「그 sub을 어떻게 다루나」가 각 창구의 판단이 아니라
      *       필터의 판단으로 덮인다. <b>같은 명부에 있지만 같은 모양이 아니다.</b></li>
      * </ul>
      *
-     * <p><b>안 감싼 일곱(여섯 파일) — 그대로다.</b>
+     * <p><b>안 감싼 자리 — 그대로다.</b>
      * {@code ChzzkLinkController:60} · {@code YoutubeLinkController:70} ·
      * <b>{@code StreamKeyController:27}·{@code :38}(한 파일에 두 자리다)</b> ·
      * {@code PairingCodeController:30} · {@code EditorDelegationController:43} ·
-     * {@code EditorInvitationController:74}. 이 일곱은 {@code NumberFormatException}을 그대로 흘려
-     * 인증 경로가 401이 아니라 <b>500</b>을 낸다. 새 창구가 늘어도 그 일곱은 안 줄어든다.
+     * {@code EditorInvitationController:74}. 이것들은 {@code NumberFormatException}을 그대로 흘려
+     * 인증 경로가 401이 아니라 <b>500</b>을 낸다. 새 창구가 늘어도 이 자리들은 안 줄어든다.
      *
      * <p>🔴 <b>이 명부를 사람이 두 번 연속 틀리게 셌다.</b> POK-207은 한 파일에 두 자리인 것을 놓쳤고
      * (<b>파일 수로 세지 마라</b>), POK-171은 <b>같은 PR의 한 커밋 앞에서 자기가 만든 자리</b>
      * ({@code WithdrawnAccountFilter})를 못 셌다 — <b>세는 시점이 자기 PR의 중간</b>이었기 때문이다.
      * 그래서 숫자를 기계에 넘겼다. 그래도 <b>「쌍둥이를 다 맞췄다」로 읽지 마라</b> —
-     * 감싼 넷이 초록인 것과 안 감싼 일곱이 없는 것은 다른 말이다.
+     * 감싼 자리가 초록인 것과 안 감싼 자리가 없는 것은 다른 말이다.
      *
      * <p>사정은 auth/CLAUDE.md 「알려진 구멍」 22에도 있다(그쪽은 사본이다 — 커밋되지 않는 파일이라
-     * <b>정본은 여기</b>다). {@code sub} 규약을 바꿀 일이 생기면 열하나를 함께 본다.
+     * <b>정본은 여기</b>다). {@code sub} 규약을 바꿀 일이 생기면 이 명부 전체를 함께 본다.
      */
     private static Long userId(Jwt jwt) {
         try {

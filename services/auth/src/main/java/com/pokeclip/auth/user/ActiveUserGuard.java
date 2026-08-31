@@ -25,9 +25,9 @@ import org.springframework.stereotype.Component;
  * <b>전부 쓰는 공유물</b>이라 그 경로들의 경합 성질이 통째로 달라진다. 대신 <b>탈퇴 표시를 본다.</b>
  *
  * <p>🔴 <b>확인을 자리마다 복붙하지 않는 이유</b> — 이 저장소에서 「같은 뿌리인데 한 자리만 고침」이
- * 네 세션 연속 났다(POK-118·120·121·174). {@code isWithdrawn()}을 여덟 자리에 흩뿌리면 아홉째 자리가
- * 생기는 날 조용히 빠진다. 전수 명부와 그것을 기계로 세는 검사는
- * {@code WithdrawalWriteGuardRegistryTest}에 있다.
+ * 네 세션 연속 났다(POK-118·120·121·174). {@code isWithdrawn()}을 자리마다 복붙하면 새 자리가
+ * 생기는 날 조용히 빠진다. <b>전수 명부는 아래에 있고 {@code WithdrawalWriteGuardRegistryTest}가
+ * 그 숫자를 기계로 센다.</b>
  *
  * <h2>이 문이 <b>못</b> 닫는 것</h2>
  *
@@ -41,6 +41,67 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>{@code site}는 상수만 넘긴다.</b> 로그로 나가는 값이라 이메일·이름·채널 이름이 들어가면 안 된다
  * ({@code SecretLeakTest}가 본다).
+ *
+ * <h2>🔴 전수 명부 — 막는 자리 7자리 · 6파일 · 가드 밖 회원 행 락 7자리</h2>
+ *
+ * <p>🔴 <b>숫자는 바로 위 한 줄에만 있다 — 아래 표에는 세어 둔 수를 안 적는다.</b>
+ * 두 군데 적으면 한쪽만 고치는 날이 오고, <b>이 세션에서만 그 일이 세 번</b> 났다
+ * (「알려진 구멍」 22 · {@code sub} 명부 · 이 표). 검사가 읽는 것도 그 한 줄이라,
+ * 숫자가 하나면 검사도 하나면 된다.
+ *
+ * <p><b>그 한 줄을 {@code WithdrawalWriteGuardRegistryTest}가 기계로 센다.</b> 자리가 늘거나 줄면
+ * 빨간불이고, 그때 그 줄을 고치면서 아래 표에 행을 더하게 된다. 사람 눈으로 세는 명부가 <b>두 번 연속 틀렸기 때문에</b>
+ * ({@code TokenSubjectRegistryTest} javadoc) 처음부터 기계에 맡긴다.
+ *
+ * <p><b>세는 기준은 「회원에게 무언가를 새로 만들어 주는 쓰기 경로」다.</b> 🔴 그런데 그 낱말만으로는
+ * <b>이름 수정을 못 센다</b> — 거기는 만들어 주는 것이 아니라 <b>탈퇴가 지운 것을 되돌리는</b> 자리다.
+ * 기준을 「탈퇴가 회수한 것을 되살리는 모든 쓰기」로 읽어야 전수가 된다.
+ *
+ * <h3>막는 자리</h3>
+ * <table border="1">
+ * <caption>탈퇴 확인이 있는 쓰기 경로</caption>
+ * <tr><th>자리</th><th>무엇을 막나</th><th>경합 창</th></tr>
+ * <tr><td>{@code StreamKeyService.ensureKey}</td><td>스트림키 신규 발급 · 페어링 코드 발급 · 교환</td>
+ *     <td><b>남는다</b>(락 없음)</td></tr>
+ * <tr><td>{@code PhotoAttacher.currentVersion}</td><td>창고에 올라가는 사진 <b>파일</b></td>
+ *     <td><b>남는다</b>(락 없음)</td></tr>
+ * <tr><td>{@code PhotoAttacher.attach}</td><td>{@code users}의 사진 칸 둘</td>
+ *     <td><b>남는다</b>(락 없음)</td></tr>
+ * <tr><td>{@code ChzzkLinkWriter.create}</td><td>치지직 연동 행 + secrets 둘</td><td>없다(락과 함께)</td></tr>
+ * <tr><td>{@code YoutubeLinkWriter.create}</td><td>유튜브 연동 행 + secrets 둘</td><td>없다(락과 함께)</td></tr>
+ * <tr><td>{@code UserService.updateName}</td><td>익명화된 이름의 <b>되돌리기</b></td>
+ *     <td><b>남는다</b>(락 없음)</td></tr>
+ * <tr><td>{@code InvitationService.invite}</td><td>탈퇴자가 <b>보내는</b> 초대</td>
+ *     <td><b>남는다</b>(락 없음)</td></tr>
+ * </table>
+ *
+ * <p><b>가드가 아닌 방법으로 닫은 자리</b> — 탈퇴자를 초대 <b>상대</b>로 고르는 경로는
+ * {@code UserRepository.findAliveByEmail}이 조회 단계에서 닫는다. 답이 401이 아니라
+ * 404여야 해서(부르는 쪽 계정은 멀쩡하다) 가드를 안 쓴다.
+ *
+ * <h3>가드 밖 회원 행 락 — 전부 이유가 있다</h3>
+ * <table border="1">
+ * <caption>{@code findByIdForUpdate}를 그대로 쓰는 자리</caption>
+ * <tr><th>자리</th><th>왜 면제인가</th></tr>
+ * <tr><td>{@code WithdrawalService.withdraw}</td><td>탈퇴 자신이다. 막으면 두 번째 호출의 멱등 판정이 사라진다</td></tr>
+ * <tr><td>{@code ChzzkLinkWriter.revoke}</td><td>탈퇴가 익명화 <b>전에</b> 부른다. 막으면 탈퇴가 자기 가드에 걸린다</td></tr>
+ * <tr><td>{@code YoutubeLinkWriter.revoke}</td><td>위와 같다(쌍둥이)</td></tr>
+ * <tr><td>{@code ChzzkTokenRefresher}</td><td>탈퇴가 연동을 닫아 살아있는 링크가 없다 → 아무 일도 안 한다</td></tr>
+ * <tr><td>{@code YoutubeTokenRefresher}</td><td>위와 같다(쌍둥이)</td></tr>
+ * <tr><td>{@code StreamKeyService.rotate}</td><td>탈퇴가 살아있는 키를 폐기해 {@code findAlive}가 빈손 → 404</td></tr>
+ * <tr><td>🔴 {@code TokenService.rotate}</td><td><b>여기만 「닫혀 있어서」가 아니다.</b> 아래 참고</td></tr>
+ * </table>
+ *
+ * <p>🔴 <b>{@code TokenService.rotate}는 열린 채로 남겼다 — 판단을 받아야 하는 자리다.</b>
+ * 로그인이 도는 중에 탈퇴가 커밋되면 {@code refresh_tokens} INSERT가 일괄 폐기를 넘어간다
+ * (자식 표 INSERT라 회원 행 락에 안 막힌다 — 이 클래스 맨 위의 뿌리 그대로). 그 표는 {@code rotate}가
+ * 탈퇴를 안 보므로 <b>무기한</b> 새 접근 표를 찍어낸다. auth 창구는 입구 필터가 전부 막지만
+ * <b>clip은 표를 독립으로 검증한다</b>(ADR-049) — 「탈퇴 뒤 30분」이 「무기한」이 된다.
+ * <b>안 막은 이유</b>: 막으면 {@code WithdrawnAccountBlockTest.로그인_없이_부르는_재발급은_탈퇴해도_평소대로_된다}가
+ * 200→401로 빨간불인데, 그 검사는 「필터가 어디까지 막나」를 <b>일부러</b> 못박은 것이고 javadoc이
+ * 「태스크 3 뒤에도 그대로 초록이어야 한다」고 적어 뒀다. <b>남이 정한 결정을 뒤집는 것이라 혼자 안 정했다.</b>
+ *
+ * @see UserRepository#findByIdForUpdate
  */
 @Component
 @RequiredArgsConstructor

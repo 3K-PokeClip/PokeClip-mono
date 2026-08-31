@@ -21,11 +21,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * <b>회원 번호를 토큰에서 꺼내면서 감싼 자리가 셋이다</b> — 이름을 고치는 창구, 사진을 올리는 창구,
  * 그리고 계정을 지우는 창구(POK-171). 셋이 같은 입력을 다르게 다루면 안 된다.
  *
- * <p>🔴 <b>감싼 셋이 전부는 아니다.</b> auth에서 {@code Long.valueOf(jwt.getSubject())}를 하는 자리는
- * <b>열하나</b>이고, 그중 <b>감싼 것이 넷</b>(창구 셋 + {@code WithdrawnAccountFilter} — 그쪽은 던지지
- * 않고 {@code null}을 돌려 통과시킨다) · <b>안 감싼 것이 일곱</b>이다.
+ * <p>🔴 <b>여기서 재는 창구가 전부는 아니다.</b> auth에는 {@code Long.valueOf(jwt.getSubject())}를 하는
+ * 자리가 더 있고, 감싼 것 중 하나는 {@code WithdrawnAccountFilter}인데 그쪽은 던지지 않고
+ * {@code null}을 돌려 통과시킨다. <b>안 감싼 자리도 남아 있다.</b>
  * 전수 명부는 {@code ProfilePhotoController.userId} javadoc에 있고 {@code TokenSubjectRegistryTest}가
- * 그 숫자를 기계로 대조한다. 여기가 초록인 것을 <b>「쌍둥이를 다 맞췄다」로 읽으면 그 일곱이 영영 안 보인다.</b>
+ * 그 숫자를 기계로 대조한다 — <b>개수는 그 한 줄에만 적는다.</b>
+ * 여기가 초록인 것을 <b>「쌍둥이를 다 맞췄다」로 읽으면 안 감싼 자리가 영영 안 보인다.</b>
  *
  * <p><b>필터를 여기서 안 재는 것은 일부러다</b> — 이 검사는 「같은 입력에 같은 <b>사유</b>로 거절하는가」를
  * 재는데 필터는 거절하지 않는 쪽이 맞기 때문이다({@code WithdrawnAccountFilterTest}가 그쪽을 잰다).
