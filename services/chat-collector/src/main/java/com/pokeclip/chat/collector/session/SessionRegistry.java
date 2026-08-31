@@ -182,7 +182,9 @@ public class SessionRegistry {
      * 만료되면 catch로 빠져 둘째가 안 돈다). 실측 왕복은 55~69ms라 평시에는 이 예산에
      * 근처도 안 간다.
      *
-     * <p>종료 유예 20초 안의 자리: 마지막 회차 join 2 + <b>여기 8</b> + 싱크 닫기 5 = 15초.
+     * <p>종료 유예 20초 안의 자리: 마지막 회차 join 2 + <b>줄 비우기 2</b>(POK-219) +
+     * <b>여기 8</b> + 싱크 닫기 5 = <b>17초</b>. 여유가 3초뿐이므로 이 값을 키우려면
+     * {@code services/README.md}의 종료 예산 표와 {@code ShutdownBudgetTest}를 같이 본다.
      */
     static final Duration CLOSE_ALL_BUDGET = Duration.ofSeconds(8);
 

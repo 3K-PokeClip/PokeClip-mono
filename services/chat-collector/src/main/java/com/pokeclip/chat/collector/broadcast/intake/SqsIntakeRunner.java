@@ -20,7 +20,13 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -39,10 +45,13 @@ import java.util.concurrent.TimeUnit;
  * 두 번 와도 안전하다.
  *
  * <p><b>회차 중단이 「줄 중단」으로 바뀌었다.</b> 예전에는 못 지운 편지가 나오면 그 회차의
- * 나머지를 통째로 안 봤는데(멀쩡한 남의 방송까지 미뤄졌다), 이제는 <b>그 스트리머의 줄에
- * 쌓인 것만</b> 버린다({@link StreamerSerialExecutor#dropPending}). 막으려는 사고는 같다 —
- * 뒤 알림이 먼저 반영되면 앞엣것이 「낡음」으로 걸러진 뒤 지워져 재전송으로도 못 고치는
- * 영구 유실이 된다(clip PR #82 P1).
+ * 나머지를 통째로 안 봤는데(멀쩡한 남의 방송까지 미뤄졌다), 이제는 <b>그 스트리머의 줄만</b>
+ * 멈춘다. 막으려는 사고는 같다 — 뒤 알림이 먼저 반영되면 앞엣것이 「낡음」으로 걸러진 뒤
+ * 지워져 재전송으로도 못 고치는 영구 유실이 된다(clip PR #82 P1).
+ *
+ * <p>🔴 <b>그래서 한 회차의 같은 줄 알림은 「작업 하나」로 넘긴다</b>({@link #handleBatch}).
+ * 알림마다 따로 넘기면 앞엣것의 판정과 뒤엣것의 제출이 경쟁해 <b>줄 중단이 뒤엣것을
+ * 못 덮는 창</b>이 열린다(감사 G1). 그 창과 남는 갈래의 근거는 {@link #handleBatch}에 적었다.
  *
  * <p><b>조립은 {@code LetterPathConfiguration}이 한다</b>({@code ObjectProvider<SqsClient>}로
  * 받는다 — 거기 주석). 이 서버의 조립 관례도 같은 자리다: {@code CollectorRunner}·
@@ -227,20 +236,46 @@ public class SqsIntakeRunner {
             return false;
         }
         try {
-            ReceiveMessageResponse response = sqs.receiveMessage(ReceiveMessageRequest.builder()
+            List<Message> messages = sqs.receiveMessage(ReceiveMessageRequest.builder()
                     .queueUrl(properties.queueUrl())
                     .maxNumberOfMessages(properties.maxMessages())
                     .waitTimeSeconds((int) properties.waitTime().toSeconds())
-                    .build());
+                    .build()).messages();
 
+            // 1단계는 <b>읽기만 한다.</b> 부작용이 없으므로 2단계의 break가 지키는 범위가
+            // 줄지 않는다 — 못 읽는 봉투를 지우는 것도 2단계에서 순서대로 한다.
+            List<LifecycleEnvelope> parsed = new ArrayList<>(messages.size());
+            Map<String, List<Letter>> byLane = new LinkedHashMap<>();
+            for (Message message : messages) {
+                LifecycleEnvelope envelope = parseOrNull(message);
+                parsed.add(envelope);
+                if (envelope != null) {
+                    byLane.computeIfAbsent(LaneKey.of(envelope.streamerId()), key -> new ArrayList<>())
+                            .add(new Letter(message, envelope));
+                }
+            }
+
+            // 2단계는 <b>받은 순서대로</b> 처분한다. 줄 하나는 통째로 작업 하나가 된다.
             int accepted = 0;
-            for (Message message : response.messages()) {
-                if (!offer(message)) {
-                    // 줄이 그 사이 찼다. 남은 것은 안 건드린다 — 지우지 않았으므로
+            Set<String> submitted = new HashSet<>();
+            for (int i = 0; i < messages.size(); i++) {
+                LifecycleEnvelope envelope = parsed.get(i);
+                if (envelope == null) {
+                    dropUnreadable(messages.get(i));
+                    accepted++;
+                    continue;
+                }
+                String lane = LaneKey.of(envelope.streamerId());
+                if (!submitted.add(lane)) {
+                    continue;   // 이 줄은 첫 알림에서 통째로 제출됐다
+                }
+                List<Letter> batch = byLane.get(lane);
+                if (!lanes.submit(lane, () -> handleBatch(lane, batch))) {
+                    // 줄이 찼다. 남은 것은 안 건드린다 — 지우지 않았으므로
                     // 가시성 시한이 지나면 다시 온다.
                     break;
                 }
-                accepted++;
+                accepted += batch.size();
             }
             acceptedInLastPoll = accepted;
             status.pollSucceeded(Instant.now());
@@ -258,81 +293,122 @@ public class SqsIntakeRunner {
         }
     }
 
-    /**
-     * 편지 하나를 줄에 넘긴다.
-     *
-     * @return 줄에 넣었거나 그 자리에서 끝냈으면 true. <b>false는 「줄이 가득 찼다」뿐</b>이고,
-     *         그때는 뒤 편지를 건드리면 안 된다 — 위 for 루프 주석 참고
-     */
-    private boolean offer(Message message) {
-        LifecycleEnvelope envelope;
+    /** 한 회차에서 같은 줄로 갈 알림 하나. 봉투를 두 번 파싱하지 않으려고 같이 든다. */
+    private record Letter(Message message, LifecycleEnvelope envelope) { }
+
+    /** @return 못 읽으면 {@code null}. <b>여기서는 아무것도 지우지 않는다</b> — 1단계는 읽기만 한다 */
+    private LifecycleEnvelope parseOrNull(Message message) {
         try {
-            envelope = mapper.readValue(message.body(), LifecycleEnvelope.class);
+            return mapper.readValue(message.body(), LifecycleEnvelope.class);
         } catch (RuntimeException e) {
             // Jackson 3의 JacksonException은 unchecked라 컴파일러가 안 잡아 준다.
-            // <b>스트리머를 모르니 줄에 넣을 수 없다.</b> 재시도해도 계속 실패하고,
-            // 안 지우면 이 편지가 큐 앞을 영원히 막는다. 본문은 안 찍는다 —
-            // 무엇이 깨졌는지는 발행 쪽 로그가 안다.
-            log.warn("broadcast.intake.unreadable_dropped messageId={} reason={}",
-                    message.messageId(), e.getClass().getSimpleName());
-            delete(message);
-            return true;   // 지웠으므로 큐 앞을 막지 않는다 — 중단 사유가 아니다
+            return null;
         }
-        // 줄 이름은 회원 번호로 정규화한다. 원문 그대로 쓰면 "07"·"007"·"+7"이 전부
-        // 회원 7인데 각각 다른 줄이 되어, 같은 스트리머의 두 방송이 병렬로 수립된다
-        // (LaneKey의 주석에 실측 8종 중 4종이 갈린다고 적어 뒀다). 재부착(태스크 7)도
-        // 같은 정규화를 쓴다 — 안 그러면 두 경로가 다른 줄에 들어간다.
-        String lane = LaneKey.of(envelope.streamerId());
-        return lanes.submit(lane, () -> handleInLane(lane, message, envelope));
     }
 
     /**
-     * 줄 안에서 도는 본체. <b>여기서만 지운다.</b>
-     *
-     * <p>실패하면 그 줄의 대기를 버린다 — 뒤 알림이 먼저 반영되면 앞엣것이 「낡음」으로
-     * 걸러진 뒤 지워져 재전송으로도 못 고치는 영구 유실이 된다. 버린 것은 큐에 그대로
-     * 있으므로 가시성 시한이 지나면 다시 온다.
+     * <b>스트리머를 모르니 줄에 넣을 수 없다.</b> 재시도해도 계속 실패하고, 안 지우면
+     * 이 편지가 큐 앞을 영원히 막는다. 본문은 안 찍는다 — 무엇이 깨졌는지는 발행 쪽 로그가 안다.
      */
-    private void handleInLane(String lane, Message message, LifecycleEnvelope envelope) {
+    private void dropUnreadable(Message message) {
+        log.warn("broadcast.intake.unreadable_dropped messageId={}", message.messageId());
+        deleteOrReport(message, message.messageId());
+    }
+
+    /**
+     * 줄 안에서 도는 본체. <b>한 회차에서 이 줄로 온 알림 전부가 한 작업이다.</b>
+     *
+     * <p>🔴 <b>왜 알림마다가 아니라 줄로 묶는가</b>(감사 G1). 알림마다 따로 제출하면
+     * <b>앞엣것의 판정과 뒤엣것의 제출이 경쟁한다.</b> 앞엣것이 먼저 끝나면
+     * {@link StreamerSerialExecutor#dropPending}이 버릴 것을 못 찾고, 이어서
+     * {@code nextOrRelease}가 줄을 맵에서 지운다 — 그러면 <b>「앞엣것이 실패했다」를 기억할
+     * 상태가 아무 데도 안 남고</b>, 뒤늦게 제출된 알림이 새 줄에서 그대로 돈다.
+     * 앞 알림은 큐에 남고 뒤 알림이 처리·삭제되므로, 재전송된 앞 알림은
+     * {@code IGNORED_STALE}로 걸러진 뒤 지워진다 — <b>되돌릴 길이 없다.</b>
+     *
+     * <p><b>고치기 전에는 순서 보장이 「폴링이 판정보다 빠르다」에 기대고 있었고, 그 전제가
+     * 코드 어디에도 적혀 있지 않았다.</b> 실제로 그 여유는 1밀리초 미만이다 — 실패 갈래는
+     * 전부 DB 왕복을 한 번 지나지만({@code EndedStreamStore.find}), 폴링 쪽은 파싱 한 번뿐이라
+     * 폴링 스레드가 GC나 스케줄 아웃을 한 번 맞으면 뒤집힌다.
+     *
+     * <p>묶으면 그 경쟁 자체가 없어진다 — 이 줄의 이번 회차 알림은 <b>이 작업이 다 쥐고 있다.</b>
+     * 실패하면 나머지를 손대지 않고 멈추는 것이 <b>옛 러너의 회차 {@code break}를 줄 안으로
+     * 옮긴 것</b>이고, 다른 스트리머는 각자의 줄이라 안 밀린다.
+     *
+     * <p><b>회차를 넘는 창은 남는다 — 해롭지 않은 근거는 발행 계약이다.</b> 이 회차의 작업이
+     * 실패해 {@code dropPending}을 부를 때 다음 회차가 아직 제출 전일 수 있다. 그래도 안전한
+     * 이유는 <b>같은 방송의 알림이 같은 {@code MessageGroupId}(= {@code streamId})</b>라,
+     * 앞엣것이 안 지워진 채 in-flight인 동안 SQS FIFO가 다음 것을 <b>주지 않기</b> 때문이다.
+     * 🔴 <b>그것은 우리 코드가 강제하는 것이 아니라 1번의 발행 계약이다</b> — 그룹 열쇠를
+     * 방송별에서 스트리머별로 바꾸는 날 이 보장이 <b>조용히</b> 깨진다.
+     * (같은 스트리머의 <b>다른 방송</b>은 다른 그룹이지만 같은 줄이다. 둘 사이의 순서는 줄이
+     * 아니라 {@code LinkedSessionStarter.isStaleStart}가 보고, 나중 것이 먼저 반영돼도
+     * 앞엣것은 안 지워졌으므로 다시 온다 — 유실이 아니라 지연이다.)
+     *
+     * <p><b>재부착(태스크 7)은 이 보호 밖이다</b> — 스케줄러 스레드가 같은 줄에 따로 제출하므로
+     * 여기서 닫은 것과 같은 모양의 창이 그쪽에 열린다. 그 카드에서 봐야 한다.
+     */
+    private void handleBatch(String lane, List<Letter> batch) {
+        for (Letter letter : batch) {
+            if (!handleOne(letter)) {
+                // 이 배치의 나머지는 손대지 않는다. 그리고 그 줄에 <b>이미 들어와 있던</b>
+                // 다른 회차의 배치도 버린다 — 그것들이 먼저 반영되면 막으려던 모양이 된다.
+                // 버린 것은 큐에 그대로 있으므로 가시성 시한이 지나면 다시 온다.
+                lanes.dropPending(lane);
+                return;
+            }
+        }
+    }
+
+    /** @return 이 줄을 계속 처리해도 되면 true. <b>false는 「앞엣것을 못 끝냈다」</b>는 뜻이다 */
+    private boolean handleOne(Letter letter) {
+        LifecycleEnvelope envelope = letter.envelope();
         ProcessResult result;
         try {
             result = processor.process(envelope);
         } catch (Throwable t) {
             // 🔴 <b>폭이 Throwable이다</b>(계획 검증 T3·I6). RuntimeException으로 두면
-            // Error가 실행기의 catch(Throwable)로 새는데 <b>거기서는 dropPending을
-            // 안 부른다</b> — 앞 알림이 실패했는데 뒤 알림이 반영되는, 이 설계가
-            // 막으려던 바로 그 모양이 된다.
+            // Error가 실행기의 catch(Throwable)로 새는데 <b>거기서는 뒤엣것을 안 멈춘다</b> —
+            // 앞 알림이 실패했는데 뒤 알림이 반영되는, 이 설계가 막으려던 모양이 된다.
             //
             // 판정기는 DB 예외를 일부러 안 삼킨다 — 여기가 유일한 받는 자리다.
             // DB가 잠깐 죽었을 때 종료 편지를 지우면 메모가 영영 안 남고, 뒤늦게 온
             // 시작 편지가 세션을 연다. 그래서 안 지운다.
-            // 위 poll_failed와 같은 이유로 예외 객체를 안 넘긴다.
             log.warn("broadcast.intake.handle_failed eventId={} reason={}",
                     envelope.eventId(), t.getClass().getSimpleName());
-            lanes.dropPending(lane);
-            return;
+            return false;
         }
         if (result == ProcessResult.RETRY_LATER) {
             log.info("broadcast.intake.retry_later eventId={}", envelope.eventId());
-            lanes.dropPending(lane);
-            return;
+            return false;
         }
         // 삭제를 판정의 try 밖에 둔다. 안에 두면 「판정은 됐는데 삭제가 실패」까지
         // handle_failed로 남아 로그가 원인을 반대로 가리킨다.
         // PROCESSED·IGNORED_STALE·UNREADABLE 셋 다 「더 볼 일 없음」이다.
         log.info("broadcast.intake.handled eventId={} result={}", envelope.eventId(), result);
+        deleteOrReport(letter.message(), envelope.eventId());
+        return true;
+    }
+
+    /**
+     * 지우고, 못 지우면 <b>health에 남긴다.</b>
+     *
+     * <p>삭제 실패는 큐에 못 닿는 것이다. 여기는 폴링 스레드가 아니라 줄이므로
+     * {@code pollOnce}의 catch가 못 받는다 — 그래서 여기서 받는다. 안 지운 알림은
+     * 가시성 시한 뒤 다시 오고 판정이 멱등이라 안전하다.
+     *
+     * <p>🔴 <b>{@code pollFailed}가 아니라 {@code deleteFailed}다</b>(감사 G2).
+     * 같은 칸에 담으면 <b>다음 폴링 성공이 그 표시를 지운다</b> — 그런데 삭제만 실패하는
+     * 동안에도 수신은 계속 성공하므로, 20초마다 한 번 깜빡일 뿐 health는 대체로 초록이었다.
+     */
+    private void deleteOrReport(Message message, String label) {
         try {
             delete(message);
+            status.deleteSucceeded();
         } catch (RuntimeException e) {
-            // 삭제 실패는 큐에 못 닿는 것이다. 여기는 폴링 스레드가 아니라 줄이므로
-            // <b>pollOnce의 catch가 못 받는다</b> — 그래서 여기서 받는다. 안 지운 알림은
-            // 가시성 시한 뒤 다시 오고 판정이 멱등이라 안전하다.
-            //
-            // 🔴 <b>status에도 알린다</b>(계획 검증 T3·I7). 안 알리면 큐에 못 닿는 상태가
-            // health에서 사라진다 — 삭제만 실패하고 수신은 되는 동안 계속 초록이다.
             log.warn("broadcast.intake.delete_failed eventId={} reason={}",
-                    envelope.eventId(), e.getClass().getSimpleName());
-            status.pollFailed(e.getClass().getSimpleName());
+                    label, e.getClass().getSimpleName());
+            status.deleteFailed(e.getClass().getSimpleName());
         }
     }
 

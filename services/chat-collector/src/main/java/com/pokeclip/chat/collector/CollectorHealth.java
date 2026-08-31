@@ -132,6 +132,10 @@ public class CollectorHealth implements HealthIndicator {
                 // 이 응답은 밖으로 나간다(IntakeStatus.Snapshot 주석).
                 .withDetail("letterFailure", letters.lastFailureReason() == null
                         ? "none" : letters.lastFailureReason())
+                // <b>삭제 실패를 따로 낸다</b>(감사 G2). 합치면 운영이 고칠 자리를 못 가른다 —
+                // 앞은 큐에 못 닿는 것(연결·주소), 이쪽은 대개 DeleteMessage 권한이다.
+                .withDetail("letterDeleteFailure", letters.lastDeleteFailureReason() == null
+                        ? "none" : letters.lastDeleteFailureReason())
                 // <b>버린 편지 셋을 합치지 않는다.</b> 1번이 고칠 자리가 셋 다 다르다 —
                 // unreadableStreamerIds는 「식별자 체계가 바뀌었다」, unknownTypes는
                 // 「우리가 모르는 종류를 보낸다」, malformedEnvelopes는 「봉투의 칸이
@@ -189,6 +193,11 @@ public class CollectorHealth implements HealthIndicator {
         }
         if (letters.lastFailureReason() != null) {
             return "failing";
+        }
+        // <b>따로 이름을 준다.</b> 「받기는 되는데 못 지운다」는 알림이 가시성 시한마다
+        // 무한 재처리되는 상태라, 「큐에 못 닿는다」와 같은 낱말로 부르면 원인을 잘못 찾는다.
+        if (letters.lastDeleteFailureReason() != null) {
+            return "delete-failing";
         }
         if (stalled) {
             return "stalled";

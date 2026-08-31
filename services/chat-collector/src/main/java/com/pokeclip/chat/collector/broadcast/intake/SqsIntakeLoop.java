@@ -20,7 +20,10 @@ import java.time.Duration;
  * 뒤에도 루프가 도는 순서가 실재한다. 기본 phase({@code Integer.MAX_VALUE})라 다른
  * 라이프사이클보다 <b>먼저</b> 선다: 새 편지를 그만 받는 것이 종료의 첫 걸음이다.
  *
- * <p>🔴 <b>줄을 닫는 실행기가 폴링보다 먼저 닫히는 순서는 없다</b>(POK-219에서 확인).
+ * <p>🔴 <b>빈 파괴가 라이프사이클 정지를 앞지르는 순서는 없다</b>(POK-219에서 확인).
+ * <b>「폴링이 살아 있는 채 실행기가 닫히는 순서는 없다」로 읽지 마라 — 그 순서는 실재한다.</b>
+ * 아래 {@link #JOIN_WAIT} 절이 그 예외다. 앞 문장만 보고 뒤를 안 읽는 것을 막으려고
+ * 여기에도 적는다(감사 재판정 ①: 원래 문장이 이 파일 안에서 앞뒤가 어긋나 있었다).
  * {@code StreamerSerialExecutor}를 닫는 자리는 <b>하나뿐</b>이다 —
  * {@code CollectorApplication.streamerSerialExecutor()}가 만든 {@code AutoCloseable} 빈을
  * 스프링이 파괴할 때다(코드에 {@code close()}를 부르는 다른 자리가 없다).
@@ -30,10 +33,15 @@ import java.time.Duration;
  * {@code AsyncIntakeShutdownOrderTest}가 <b>실물 컨텍스트로</b> 그 순서를 잰다 —
  * 「찾아봤는데 못 찾았다」가 아니라 「그런 순서가 존재하지 않는다」다.
  *
- * <p><b>다만 {@link #JOIN_WAIT}를 넘겨 마지막 회차가 아직 살아 있을 수는 있다.</b>
- * 그때 실행기가 닫히면 그 회차의 {@code submit}이 false를 받는데, 그것은 「줄이 찼다」와
- * 같은 갈래로 처리돼 <b>알림을 지우지 않고</b> 끝난다(태스크 1의 {@code releaseAfterReject}).
- * 조용히 사라지는 알림은 없다.
+ * <p><b>{@link #JOIN_WAIT}를 넘겨 마지막 회차가 아직 살아 있을 수 있다</b> — 이 {@link #stop()}은
+ * 그 스레드를 <b>죽이지 않고 경고만 남긴다.</b> 롱폴링이 최대 20초라 실제로 열리는 창이다.
+ * 그 뒤 빈 파괴가 실행기를 닫으면 갈래가 둘인데 <b>둘 다 알림을 안 잃는다.</b>
+ * ① 그 줄에 도는 것이 없으면 {@code workers.execute}가 거절 → {@code submit} false →
+ * 「줄이 찼다」와 같은 갈래로 {@code break} → <b>안 지운다.</b>
+ * ② 그 줄에 이미 도는 것이 있으면 대기열에 붙고 {@code run} 루프가 꺼내 <b>그대로 실행한다</b> —
+ * 그것이 {@code registry.open}까지 가도 {@code SessionRegistry.shutdown()}이 건 빗장에 걸려
+ * 세션이 서지 않고, {@code delete}가 닫힌 클라이언트를 만나면 예외 → {@code deleteFailed} →
+ * <b>역시 안 지운다.</b>
  */
 public class SqsIntakeLoop implements SmartLifecycle {
 

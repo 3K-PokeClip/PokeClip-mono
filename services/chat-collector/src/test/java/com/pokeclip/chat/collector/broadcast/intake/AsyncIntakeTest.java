@@ -36,6 +36,7 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -100,6 +101,90 @@ class AsyncIntakeTest {
         hold.countDown();
         assertThat(runner.awaitIdle(IDLE_BUDGET)).isTrue();
         assertThat(queue.deleted()).containsExactly("evt-1");
+    }
+
+    /**
+     * 🔴 <b>앞 알림이 실패하면 뒤 알림은 「아직 제출 전」이어도 안 돈다</b> (감사 G1).
+     *
+     * <p><b>왜 이 검사가 따로 필요한가</b>: 아래 {@code 앞_알림이_실패하면…}은 폴링 스레드가
+     * 두 알림을 <b>판정보다 빨리</b> 제출할 때만 초록이다. 그 전제가 코드 어디에도 없었고,
+     * 깨지면 앞 알림은 큐에 남고 뒤 알림이 처리·삭제된다 — 재전송된 앞 알림은
+     * {@code IGNORED_STALE}로 걸러진 뒤 지워지므로 <b>되돌릴 방법이 없다.</b>
+     *
+     * <p><b>창을 시간으로 벌리지 않는다.</b> {@code sleep}으로 벌리면 그 검사는 「그때 그렇게
+     * 느렸다」만 재고 회귀로 남지 않는다. 대신 <b>파싱 시점을 잡는다</b> —
+     * 러너는 {@code mapper.readValue}를 폴링 스레드에서, 두 제출 사이에 부른다.
+     * 둘째 알림의 파싱을 <b>줄이 빌 때까지</b> 막으면 양쪽이 결정적으로 갈린다.
+     *
+     * <ul>
+     *   <li><b>알림마다 따로 제출하는 구현</b>: 첫 알림이 이미 제출돼 있으므로 게이트가
+     *       실제로 막고, 첫 알림이 <b>완전히 끝난 뒤</b>(실패 → {@code dropPending} →
+     *       줄 해제) 둘째가 제출돼 <b>돈다</b> → 빨간불</li>
+     *   <li><b>회차를 줄별로 묶는 구현</b>: 제출 전에 다 파싱하므로 그 시점 {@code inFlight}가
+     *       이미 0이라 게이트가 <b>즉시 통과</b>한다(교착 없음) → 한 배치 → 초록</li>
+     * </ul>
+     *
+     * <p>상한을 넘기면 <b>단언으로 터뜨린다</b> — 조용히 초록이 되는 길을 막는다.
+     */
+    @Test
+    @Timeout(30)
+    void 앞_알림이_실패하면_아직_제출되지_않은_뒤_알림도_안_돈다() {
+        FakeQueue queue = new FakeQueue();
+        queue.enqueue("evt-1", "live-A-001", "7");
+        queue.enqueue("evt-2", "live-A-001", "7");
+        List<String> seen = Collections.synchronizedList(new ArrayList<>());
+        AtomicReference<SqsIntakeRunner> holder = new AtomicReference<>();
+        SqsIntakeRunner runner = newRunner(queue, new IntakeStatus(true), 50,
+                envelope -> {
+                    seen.add(envelope.eventId());
+                    return ProcessResult.RETRY_LATER;
+                },
+                null, new LaneDrainGate(holder, "evt-2"));
+        holder.set(runner);
+
+        runner.pollOnce();
+
+        assertThat(runner.awaitIdle(IDLE_BUDGET)).isTrue();
+        assertThat(seen)
+                .as("앞엣것이 실패했다 — 뒤엣것은 제출 시점과 무관하게 안 돌아야 한다")
+                .containsExactly("evt-1");
+        assertThat(queue.deleted()).as("둘 다 큐에 남아야 다시 온다").isEmpty();
+    }
+
+    /**
+     * 둘째 알림의 <b>파싱</b>을 줄이 빌 때까지 막는 매퍼. 러너가 {@code readValue}를
+     * 폴링 스레드에서 부르는 것을 이용한다 — 시간이 아니라 <b>상태</b>로 막으므로
+     * 고친 구현에서는 즉시 통과한다.
+     */
+    private static final class LaneDrainGate extends ObjectMapper {
+
+        private final transient AtomicReference<SqsIntakeRunner> runner;
+        private final String gatedEventId;
+
+        LaneDrainGate(AtomicReference<SqsIntakeRunner> runner, String gatedEventId) {
+            this.runner = runner;
+            this.gatedEventId = gatedEventId;
+        }
+
+        @Override
+        public <T> T readValue(String content, Class<T> valueType) {
+            if (content.contains(gatedEventId)) {
+                awaitLanesIdle();
+            }
+            return super.readValue(content, valueType);
+        }
+
+        private void awaitLanesIdle() {
+            SqsIntakeRunner target = runner.get();
+            long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+            while (target.inFlight() > 0) {
+                if (System.nanoTime() > deadline) {
+                    // 조용히 통과시키면 이 검사가 아무것도 안 잰 채 초록이 된다.
+                    throw new AssertionError("줄이 10초 안에 안 비었다 — 게이트가 뜻을 잃었다");
+                }
+                Thread.onSpinWait();
+            }
+        }
     }
 
     // ── 겹침과 순서 ────────────────────────────────────────────────────────
@@ -234,6 +319,116 @@ class AsyncIntakeTest {
         assertThat(queue.deleted()).isEmpty();
     }
 
+    /**
+     * 🔴 <b>한 회차의 같은 줄 알림은 「작업 하나」다</b> (감사 G1의 구조를 직접 잰다).
+     *
+     * <p><b>왜 이것이 따로 필요한가</b>: 위 게이트 검사는 <b>파싱이 제출보다 먼저</b>임을
+     * 재지만, 그것만으로는 「줄별로 묶였다」가 안 잡힌다 — 다 파싱해 놓고 알림마다 따로
+     * 제출해도 그 검사는 초록이다(내가 그 되돌림을 넣어 <b>실제로 초록인 것을 봤다</b>).
+     *
+     * <p>실행기의 셈이 그 구조를 그대로 드러낸다. {@code inFlight}는 <b>제출된 작업 수</b>이지
+     * 알림 수가 아니다 — 한 줄에 알림 셋이 와도 묶였으면 <b>1</b>, 안 묶였으면 <b>3</b>이다.
+     */
+    @Test
+    @Timeout(20)
+    void 한_회차의_같은_줄_알림_셋이_작업_하나로_들어간다() {
+        FakeQueue queue = new FakeQueue();
+        queue.enqueue("evt-1", "live-A-001", "7");
+        queue.enqueue("evt-2", "live-A-001", "7");
+        queue.enqueue("evt-3", "live-A-001", "7");
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch hold = new CountDownLatch(1);
+        SqsIntakeRunner runner = newRunner(queue, envelope -> {
+            entered.countDown();
+            await(hold);
+            return ProcessResult.PROCESSED;
+        });
+
+        runner.pollOnce();
+
+        assertThat(awaitLatch(entered))
+                .as("붙이기가 시작조차 안 했으면 아래가 아무것도 안 잰다").isTrue();
+        assertThat(runner.inFlight())
+                .as("셋이 각각 제출됐으면 3이다 — 묶였으면 1")
+                .isEqualTo(1);
+        assertThat(runner.acceptedInLastPoll())
+                .as("그래도 「받은 알림 수」는 셋이다 — 백프레셔가 세는 단위는 알림이다")
+                .isEqualTo(3);
+        hold.countDown();
+    }
+
+    /**
+     * 🔴 <b>같은 회원을 가리키는 다른 문자열은 같은 줄이다 — 러너 층에서 잰다</b>(감사 G3).
+     *
+     * <p>{@code LaneKey}가 {@code "7"}·{@code "007"}·{@code "+7"}을 회원 7로 뭉치도록
+     * 고친 것은 라운드 1(I5)이다. <b>그런데 러너가 그것을 실제로 쓰는지는 아무도 안 쟀다</b> —
+     * 감사자가 러너의 줄 이름을 원문 {@code streamerId}로 되돌렸더니 검사 여섯 클래스가
+     * <b>전부 초록</b>이었다. {@code LaneKeyTest}는 부품만 재고, 순서 검사는 두 알림의
+     * {@code streamerId}가 애초에 같은 글자라 <b>정규화를 안 해도 통과한다.</b>
+     *
+     * <p>여기서는 두 알림의 원문을 <b>일부러 다르게</b> 준다({@code "7"}·{@code "007"}).
+     * 정규화가 살아 있으면 같은 줄이라 앞엣것의 실패가 뒤엣것을 멈추고, 죽으면 다른 줄이라
+     * 뒤엣것이 그대로 돈다.
+     *
+     * <p><b>지금 막는 것보다 앞으로 막는 것이 크다</b>: 태스크 7이 「재부착도 같은 정규화를
+     * 쓴다」에 기대는데, 두 발행자가 서로 다른 시스템이다(1번의 SQS 봉투 대 clip 명부의 칸).
+     * 값이 갈릴 여지가 바로 그 자리다.
+     */
+    @Test
+    @Timeout(20)
+    void 같은_회원을_가리키는_다른_문자열은_같은_줄이다() {
+        FakeQueue queue = new FakeQueue();
+        queue.enqueue("evt-1", "live-A-001", "7");
+        queue.enqueue("evt-2", "live-A-002", "007");
+        List<String> seen = Collections.synchronizedList(new ArrayList<>());
+        SqsIntakeRunner runner = newRunner(queue, envelope -> {
+            seen.add(envelope.eventId());
+            return envelope.eventId().equals("evt-1")
+                    ? ProcessResult.RETRY_LATER : ProcessResult.PROCESSED;
+        });
+
+        runner.pollOnce();
+
+        assertThat(runner.awaitIdle(IDLE_BUDGET)).isTrue();
+        assertThat(seen)
+                .as("\"7\"과 \"007\"이 다른 줄이면 뒤엣것이 그대로 돈다")
+                .containsExactly("evt-1");
+        assertThat(queue.deleted()).isEmpty();
+    }
+
+    /**
+     * 🔴 <b>이 커밋의 둘째 목표를 실패 경로에서 잰다</b>(감사 G6).
+     *
+     * <p>「회차 중단 → 줄 중단」의 이득은 <b>「멀쩡한 남의 방송까지 미뤄지지 않는다」</b>인데,
+     * 그것을 재는 검사가 없었다 — 실패 검사는 둘 다 같은 줄이고, 겹침 검사는 전부 성공
+     * 경로다. 그래서 {@code dropPending}을 「전 줄을 비운다」로 바꿔도 아무 검사가 안 깨졌다.
+     *
+     * <p>여기서는 한 회차에 <b>실패하는 스트리머와 멀쩡한 스트리머</b>를 같이 넣는다.
+     */
+    @Test
+    @Timeout(20)
+    void 한_스트리머가_실패해도_다른_스트리머는_그_회차에_처리된다() {
+        FakeQueue queue = new FakeQueue();
+        queue.enqueue("evt-A1", "live-A-001", "7");
+        queue.enqueue("evt-A2", "live-A-002", "7");
+        queue.enqueue("evt-B1", "live-B-001", "8");
+        List<String> seen = Collections.synchronizedList(new ArrayList<>());
+        SqsIntakeRunner runner = newRunner(queue, envelope -> {
+            seen.add(envelope.eventId());
+            return envelope.eventId().startsWith("evt-A")
+                    ? ProcessResult.RETRY_LATER : ProcessResult.PROCESSED;
+        });
+
+        runner.pollOnce();
+
+        assertThat(runner.awaitIdle(IDLE_BUDGET)).isTrue();
+        assertThat(seen).contains("evt-B1");
+        assertThat(seen).doesNotContain("evt-A2");
+        assertThat(queue.deleted())
+                .as("남의 방송은 이 회차에 끝났고, 실패한 줄의 것은 큐에 남는다")
+                .containsExactly("evt-B1");
+    }
+
     // ── 백프레셔 ───────────────────────────────────────────────────────────
 
     /** 줄이 상한에 닿으면 나머지는 안 받는다 — 안 지웠으므로 가시성 시한 뒤 다시 온다. */
@@ -268,12 +463,17 @@ class AsyncIntakeTest {
      * 즉 그 검사는 {@code break}를 <b>하나도 안 재고 있었다.</b>
      *
      * <p><b>진짜 차이는 「뒤엣것에 손을 대는가」다.</b> 셋째를 못 읽는 봉투로 두면 드러난다 —
-     * {@code continue}는 그것을 파싱해서 <b>지워 버린다.</b> 앞 알림이 아직 큐에 남아 있는데
+     * {@code continue}는 그것을 <b>지워 버린다.</b> 앞 알림이 아직 큐에 남아 있는데
      * 뒤엣것을 먼저 처분하는 모양이고, 이 설계가 막으려는 「뒤가 먼저 반영된다」의 한 갈래다.
+     *
+     * <p>🔴 <b>이름을 「읽어 보지도 않는다」에서 바꿨다</b>(감사 G5와 같은 결). G1을 고치며
+     * 1단계가 회차의 봉투를 <b>다 파싱하게</b> 됐다 — 줄별로 묶으려면 그래야 한다.
+     * 파싱은 부작용이 없고, 지우고 넘기는 <b>처분</b>은 여전히 받은 순서대로 2단계에서만
+     * 일어나므로 이 검사가 지키는 것은 그대로다. 이름이 재는 것과 어긋나지 않게 고쳤다.
      */
     @Test
     @Timeout(20)
-    void 줄이_가득_찬_뒤의_알림은_읽어_보지도_않는다() {
+    void 줄이_가득_찬_뒤의_알림은_지우지도_처리하지도_않는다() {
         FakeQueue queue = new FakeQueue();
         queue.enqueue("evt-1", "live-A-001", "1");
         queue.enqueue("evt-2", "live-B-001", "2");
@@ -394,13 +594,21 @@ class AsyncIntakeTest {
     // ── 삭제 실패 ──────────────────────────────────────────────────────────
 
     /**
-     * 🔴 <b>계획 검증 T3·I7.</b> 삭제는 이제 폴링 스레드가 아니라 줄에서 일어나므로
-     * {@code pollOnce}의 catch가 못 받는다. {@code status}에 안 알리면 <b>큐에 못 닿는
-     * 상태가 health에서 사라진다</b> — 삭제만 실패하고 수신은 되는 동안 계속 초록이다.
+     * 🔴 <b>삭제 실패는 「남는다」 — 다음 폴링 성공이 지우지 않는다</b>(계획 검증 T3·I7 · 감사 G2).
+     *
+     * <p>삭제는 폴링 스레드가 아니라 줄에서 일어나므로 {@code pollOnce}의 catch가 못 받는다.
+     * 그래서 따로 받아 health에 남기는데, <b>폴링 실패와 같은 칸에 담으면
+     * {@code pollSucceeded}가 그것을 지운다.</b> 삭제만 실패하는 동안에도 수신은 계속
+     * 성공하므로, 그러면 롱폴링 주기(20초)마다 한 번 깜빡일 뿐 health는 대체로 초록이다 —
+     * 계획 검증 I7이 겨눈 문장이 정확히 그것이었다.
+     *
+     * <p>🔴 <b>둘째 회차가 이 검사의 핵심이다.</b> 그것이 없으면 「한 회차 안에서만 아프다」와
+     * 「계속 아프다」가 구분되지 않는다 — 감사자가 <b>코드를 한 글자도 안 고치고</b>
+     * 이 한 줄만 더해 결함을 드러냈다.
      */
     @Test
     @Timeout(20)
-    void 삭제가_실패하면_큐가_아프다고_남는다() {
+    void 삭제가_실패하면_다음_회차가_성공해도_계속_아프다고_남는다() {
         FakeQueue queue = new FakeQueue();
         queue.failDeletes();
         queue.enqueue("evt-1", "live-A-001", "7");
@@ -414,8 +622,42 @@ class AsyncIntakeTest {
 
             assertThat(captor.levelOf("broadcast.intake.delete_failed")).isEqualTo(Level.WARN);
         }
+        assertThat(status.snapshot().healthy())
+                .as("첫 회차 직후에는 아프다 — 여기가 초록이면 아래가 아무것도 안 잰다")
+                .isFalse();
+        assertThat(status.snapshot().lastDeleteFailureReason()).isEqualTo("SqsException");
+
+        // 큐가 빈 다음 회차. 알림은 없지만 receiveMessage는 성공한다 — 운영에서는
+        // 롱폴링이 20초마다 이것을 한다.
+        runner.pollOnce();
+
+        assertThat(status.snapshot().healthy())
+                .as("폴링 성공이 삭제 실패를 지우면 안 된다")
+                .isFalse();
+        assertThat(status.snapshot().lastDeleteFailureReason()).isEqualTo("SqsException");
+    }
+
+    /** 회복은 삭제 성공이 지운다. 짝이 없으면 「영영 아프다」도 통과한다(문항 2). */
+    @Test
+    @Timeout(20)
+    void 삭제가_다시_되면_아팠던_기록이_지워진다() {
+        FakeQueue queue = new FakeQueue();
+        queue.failDeletes();
+        queue.enqueue("evt-1", "live-A-001", "7");
+        IntakeStatus status = new IntakeStatus(true);
+        SqsIntakeRunner runner = newRunner(queue, status, 50,
+                envelope -> ProcessResult.PROCESSED);
+        runner.pollOnce();
+        assertThat(runner.awaitIdle(IDLE_BUDGET)).isTrue();
         assertThat(status.snapshot().healthy()).isFalse();
-        assertThat(status.snapshot().lastFailureReason()).isEqualTo("SqsException");
+
+        queue.allowDeletes();
+        queue.enqueue("evt-2", "live-A-001", "7");
+        runner.pollOnce();
+        assertThat(runner.awaitIdle(IDLE_BUDGET)).isTrue();
+
+        assertThat(status.snapshot().healthy()).isTrue();
+        assertThat(status.snapshot().lastDeleteFailureReason()).isNull();
     }
 
     // ── 가시성 시한 ────────────────────────────────────────────────────────
@@ -505,18 +747,91 @@ class AsyncIntakeTest {
     }
 
     /**
-     * 🔴 <b>줄 비우기 예산은 2초다</b>(계획 검증 M3). README의 편지 경로 산수가
-     * join 2 + 세션 닫기 8 + flush 5 = 15초이고 유예는 20초다. 6초를 끼우면 21초라
+     * 🔴 <b>줄 비우기 예산은 2초다</b>(계획 검증 M3). 6초를 끼우면 합이 21초라
      * <b>세션 닫기가 잘려 구독이 반납 안 되고 계정 자리가 남는다.</b>
      *
-     * <p>값을 글자로 못박는다 — 이 숫자가 조용히 커지는 것이 정확히 그 사고다.
+     * <p><b>이 검사는 이 값 하나만 못박는다.</b> 「종료 예산이 유예를 안 넘는다」는 더 큰
+     * 주장은 <b>{@code ShutdownBudgetTest}로 옮겼다</b> — 여기서 재던 {@code JOIN + DRAIN}은
+     * 네 항 중 둘뿐이라, 세션 닫기·flush가 아무리 커져도 초록이었다(감사 G5).
+     * 이름이 주장하는 것과 재는 것을 가르지 않으려고 범위를 좁혀 이름도 바꿨다.
      */
     @Test
-    void 종료_예산이_유예를_안_넘긴다() {
+    void 줄_비우기_예산이_2초다() {
         assertThat(SqsIntakeLoop.DRAIN_WAIT).isEqualTo(Duration.ofSeconds(2));
-        assertThat(SqsIntakeLoop.JOIN_WAIT.plus(SqsIntakeLoop.DRAIN_WAIT))
-                .as("join 2 + 줄 비우기 2 + 세션 닫기 8 + flush 5 = 17초 < 유예 20초")
-                .isLessThanOrEqualTo(Duration.ofSeconds(4));
+    }
+
+    /**
+     * 🔴 <b>줄이 예산 안에 안 비면 경고를 남기고 넘어간다</b>(감사 축 B의 B12 — 미시험이었다).
+     *
+     * <p><b>매달리면 안 되는 이유</b>: 종료 유예가 20초인데 붙이기 하나의 최악은
+     * auth 5초 + 치지직 수립 15초라 <b>기다려서 끝낼 수 있는 값이 아니다.</b> 그래서 예산을
+     * 넘기면 포기하고 다음 단계(세션 닫기)로 간다 — 그것을 못 하면 세션 닫기가 통째로 잘린다.
+     *
+     * <p><b>못 끝낸 붙이기의 알림은 안 지워진다</b>(삭제가 줄 안에 있다). 가시성 시한이
+     * 지나면 다시 오므로 유실이 아니라 지연이다 — 그 사실을 {@code deleted()}로 같이 잰다.
+     */
+    @Test
+    @Timeout(30)
+    void 줄이_예산_안에_안_비면_경고를_남기고_넘어간다() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch hold = new CountDownLatch(1);
+        FakeQueue queue = new FakeQueue();
+        queue.enqueue("evt-1", "live-A-001", "7");
+        SqsIntakeRunner runner = newRunner(queue, envelope -> {
+            entered.countDown();
+            await(hold);
+            return ProcessResult.PROCESSED;
+        });
+        SqsIntakeLoop loop = new SqsIntakeLoop(runner);
+
+        loop.start();
+        assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+        try (LogCaptor captor = new LogCaptor()) {
+            loop.stop();   // 붙이기가 hold에 붙들려 DRAIN_WAIT를 넘긴다
+
+            assertThat(captor.levelOf("broadcast.intake.drain_timeout")).isEqualTo(Level.WARN);
+        }
+        assertThat(queue.deleted())
+                .as("못 끝낸 붙이기의 알림은 안 지워져 다시 온다 — 유실이 아니라 지연이다")
+                .isEmpty();
+        hold.countDown();
+    }
+
+    /**
+     * 🔴 <b>join 예산을 넘긴 폴링 스레드를 죽이지 않는다</b>(감사 축 B의 B11 — 미시험이었다).
+     *
+     * <p>롱폴링에 들어간 {@code receiveMessage}는 인터럽트로도 안 끊기고, 이 서버는
+     * 그것을 <b>일부러 안 죽인다</b> — 스레드는 데몬이라 JVM 종료를 안 붙들고,
+     * 강제로 끊으면 이미 받아 둔 알림의 운명이 흐려진다. 대신 <b>경고를 남긴다</b>:
+     * 조용히 넘어가면 「종료가 끝났다」와 「아직 편지를 처리 중이다」가 구분되지 않는다.
+     *
+     * <p><b>그 창에서 알림을 안 잃는다는 것을 같이 잰다</b> — 롱폴링이 돌아온 뒤에도
+     * {@code running}이 false라 그 회차는 아무것도 안 꺼내고 루프가 끝난다.
+     */
+    @Test
+    @Timeout(30)
+    void 롱폴링에_잠긴_회차는_join을_넘겨도_안_죽이고_경고만_남긴다() throws Exception {
+        CountDownLatch receiving = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        FakeQueue queue = new FakeQueue();
+        queue.blockReceive(receiving, release);
+        queue.enqueue("evt-1", "live-A-001", "7");
+        SqsIntakeRunner runner = newRunner(queue, envelope -> ProcessResult.PROCESSED);
+        SqsIntakeLoop loop = new SqsIntakeLoop(runner);
+
+        loop.start();
+        assertThat(receiving.await(5, TimeUnit.SECONDS))
+                .as("롱폴링에 들어가지 않았으면 아래가 다른 것을 잰다").isTrue();
+        try (LogCaptor captor = new LogCaptor()) {
+            loop.stop();   // join 2초를 넘긴다
+
+            assertThat(captor.levelOf("broadcast.intake.loop_still_running")).isEqualTo(Level.WARN);
+        }
+
+        release.countDown();
+        assertThat(queue.deleted())
+                .as("멈추라는 신호 뒤에는 그 회차가 아무것도 처분하지 않는다")
+                .isEmpty();
     }
 
     // ── 조립 도우미 ────────────────────────────────────────────────────────
@@ -539,18 +854,33 @@ class AsyncIntakeTest {
     private SqsIntakeRunner newRunner(FakeQueue queue, IntakeStatus status, int maxInFlight,
                                       Function<LifecycleEnvelope, ProcessResult> handler,
                                       SqsIntakeRunner.Sleeper sleeper) {
+        return newRunner(queue, status, maxInFlight, handler, sleeper, new ObjectMapper());
+    }
+
+    private SqsIntakeRunner newRunner(FakeQueue queue, IntakeStatus status, int maxInFlight,
+                                      Function<LifecycleEnvelope, ProcessResult> handler,
+                                      SqsIntakeRunner.Sleeper sleeper, ObjectMapper mapper) {
         BroadcastEventProcessor processor = mock(BroadcastEventProcessor.class);
         given(processor.process(any())).willAnswer(
                 invocation -> handler.apply(invocation.getArgument(0)));
         // 검사가 끝나면 JVM이 가상 스레드를 안 붙드므로 따로 닫지 않는다 —
         // 닫으면 awaitIdle 뒤에도 도는 마지막 작업이 거절될 수 있다.
-        return new SqsIntakeRunner(queue, properties(), status, processor, new ObjectMapper(),
+        return new SqsIntakeRunner(queue, properties(), status, processor, mapper,
                 new StreamerSerialExecutor(maxInFlight), sleeper);
     }
 
     private static IntakeProperties properties() {
         return new IntakeProperties(true, QUEUE_URL, "ap-northeast-2", "",
                 Duration.ofSeconds(20), 10);
+    }
+
+    private static boolean awaitLatch(CountDownLatch latch) {
+        try {
+            return latch.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     private static void await(CountDownLatch latch) {
@@ -598,6 +928,8 @@ class AsyncIntakeTest {
         private final AtomicInteger handles = new AtomicInteger();
         private volatile int visibilityTimeoutSeconds = 30;
         private volatile boolean deletesFail;
+        private volatile CountDownLatch receiveEntered;
+        private volatile CountDownLatch receiveRelease;
         private volatile boolean attributesFail;
 
         void enqueue(String eventId, String streamId, String streamerId) {
@@ -619,6 +951,10 @@ class AsyncIntakeTest {
             this.deletesFail = true;
         }
 
+        void allowDeletes() {
+            this.deletesFail = false;
+        }
+
         void failAttributes() {
             this.attributesFail = true;
         }
@@ -631,9 +967,19 @@ class AsyncIntakeTest {
             return receiveCalls.get();
         }
 
+        void blockReceive(CountDownLatch entered, CountDownLatch release) {
+            this.receiveEntered = entered;
+            this.receiveRelease = release;
+        }
+
         @Override
         public ReceiveMessageResponse receiveMessage(ReceiveMessageRequest request) {
             receiveCalls.incrementAndGet();
+            if (receiveRelease != null) {
+                // 롱폴링을 흉내 낸다 — 인터럽트로 안 끊기는 것까지 같다.
+                receiveEntered.countDown();
+                await(receiveRelease);
+            }
             List<Message> batch = new ArrayList<>();
             synchronized (waiting) {
                 while (batch.size() < request.maxNumberOfMessages() && !waiting.isEmpty()) {
