@@ -1,5 +1,7 @@
 package com.pokeclip.chat.collector.broadcast;
 
+import java.time.Instant;
+
 /**
  * 편지가 가리키는 방송의 수집을 <b>실제로</b> 열고 닫는 자리 — 열쇠를 받아오고(태스크 7)
  * 세션 등록부를 여닫는다(태스크 9). 실물은 {@link LinkedSessionStarter}다.
@@ -15,13 +17,17 @@ package com.pokeclip.chat.collector.broadcast;
 public interface BroadcastSessions {
 
     /**
-     * 시작 편지 하나를 붙인다.
+     * 이 방송에 붙는다. <b>부르는 곳이 둘이다</b> — 시작 알림과 재부착(POK-219).
+     *
+     * <p><b>봉투가 아니라 값 셋을 받는다.</b> 재부착에는 SQS 봉투가 없어서, 봉투를 받으면
+     * 재부착이 가짜 봉투를 지어내야 한다 — 그러면 순번·추적 번호가 뜻 없는 값으로 채워져
+     * 로그가 거짓말을 한다.
      *
      * @return <b>판정값을 그대로 돌려준다</b> — 열쇠를 못 받은 이유에 따라 편지를 지울지
      *         남길지가 갈리는데(연동 없음이면 지우고, auth 장애면 남긴다) 그 구분은
      *         이 안쪽에서만 알 수 있다
      */
-    ProcessResult start(LifecycleEnvelope envelope, StreamerId streamer);
+    ProcessResult start(String streamId, StreamerId streamer, Instant startedAt);
 
     /**
      * 그 방송의 수집을 멈춘다.

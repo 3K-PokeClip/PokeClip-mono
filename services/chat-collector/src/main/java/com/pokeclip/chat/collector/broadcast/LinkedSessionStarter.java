@@ -6,6 +6,7 @@ import com.pokeclip.chat.collector.link.LinkResolution;
 import com.pokeclip.chat.collector.session.SessionKey;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 
+import java.time.Instant;
 import java.util.function.BiConsumer;
 
 /**
@@ -36,6 +37,8 @@ public class LinkedSessionStarter implements BroadcastSessions {
     }
 
     /**
+     * <p><b>편지가 아니라 값 셋을 받는다</b> — 재부착도 이 문을 쓴다(POK-219).
+     *
      * <p><b>열쇠부터 받는다.</b> 등록부에 먼저 자리를 잡고 열쇠를 받으러 가면, 못 받았을 때
      * 그 자리를 되돌리는 동안 그 스트리머의 다음 편지가 「이미 열림」으로 걸린다.
      *
@@ -51,7 +54,7 @@ public class LinkedSessionStarter implements BroadcastSessions {
      * FIFO라 그 방송의 뒤 편지가 전부 막힌다.
      */
     @Override
-    public ProcessResult start(LifecycleEnvelope envelope, StreamerId streamer) {
+    public ProcessResult start(String streamId, StreamerId streamer, Instant startedAt) {
         // <b>이미 그 방송을 걷고 있으면 auth에 묻지 않는다.</b> SQS는 at-least-once라
         // 같은 시작 편지가 두 번 온다. 그때 열쇠부터 물으면 <b>auth가 아픈 동안 그 중복이
         // RETRY_LATER가 되어 그 방송의 FIFO 그룹 앞을 막고</b>, 뒤따르는 종료 편지가
@@ -60,7 +63,7 @@ public class LinkedSessionStarter implements BroadcastSessions {
         //
         // 아래 registry.open도 같은 판정을 하지만 그것은 열쇠를 받아 온 <b>뒤</b>다.
         // 여기서 먼저 거르는 것은 「열쇠를 물을 필요조차 없다」를 가르는 것이라 층이 다르다.
-        if (envelope.streamId().equals(registry.currentStreamIdOf(streamer.value()))) {
+        if (streamId.equals(registry.currentStreamIdOf(streamer.value()))) {
             return ProcessResult.PROCESSED;
         }
         LinkResolution resolution = link.resolve(streamer.value());
@@ -81,21 +84,21 @@ public class LinkedSessionStarter implements BroadcastSessions {
             // 던지지 않는다: recorder(=StoppedStreamRecorder.record)가 Throwable까지 삼키고
             // 경고만 남긴다. DB가 죽어 메모를 못 남기면 그 방송은 여전히 unknown이다 —
             // 그것은 이 갈래가 아니라 그 클래스의 알려진 한계다.
-            recorder.accept(envelope.streamId(), StopReason.LINK_UNAVAILABLE);
+            recorder.accept(streamId, StopReason.LINK_UNAVAILABLE);
             return ProcessResult.PROCESSED;
         }
-        SessionKey key = new SessionKey(envelope.streamId(), streamer.value(),
-                resolution.channelId(), envelope.occurredAt());
+        SessionKey key = new SessionKey(streamId, streamer.value(),
+                resolution.channelId(), startedAt);
         if (registry.open(key, resolution.accessToken())) {
             return ProcessResult.PROCESSED;
         }
-        if (envelope.streamId().equals(registry.currentStreamIdOf(streamer.value()))) {
+        if (streamId.equals(registry.currentStreamIdOf(streamer.value()))) {
             return ProcessResult.PROCESSED;
         }
         // <b>낡은 시작은 지운다.</b> 지금 걷는 방송이 이 편지보다 나중에 시작했으면
         // 다시 물어도 답이 안 바뀐다 — 「나중에 다시」로 두면 그 방송의 FIFO 그룹 앞을
         // 영원히 막는다. 자리를 못 얻은 다른 이유(그 사이 세션이 죽음)는 재시도가 맞다.
-        if (registry.isStaleStart(streamer.value(), envelope.occurredAt())) {
+        if (registry.isStaleStart(streamer.value(), startedAt)) {
             return ProcessResult.IGNORED_STALE;
         }
         return ProcessResult.RETRY_LATER;

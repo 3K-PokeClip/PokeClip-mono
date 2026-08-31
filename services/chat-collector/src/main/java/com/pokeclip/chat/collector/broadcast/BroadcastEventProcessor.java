@@ -161,6 +161,6 @@ public class BroadcastEventProcessor {
             }
             return ProcessResult.IGNORED_STALE;
         }
-        return sessions.start(envelope, streamer);
+        return sessions.start(envelope.streamId(), streamer, envelope.occurredAt());
     }
 }

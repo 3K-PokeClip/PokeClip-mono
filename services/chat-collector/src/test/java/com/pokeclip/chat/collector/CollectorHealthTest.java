@@ -345,7 +345,7 @@ class CollectorHealthTest extends IntegrationTestSupport {
      */
     private static final class RefusingSessions implements BroadcastSessions {
         @Override
-        public ProcessResult start(LifecycleEnvelope envelope, StreamerId streamer) {
+        public ProcessResult start(String streamId, StreamerId streamer, Instant startedAt) {
             throw new AssertionError("못 쓸 편지가 세션 자리까지 갔다");
         }
 

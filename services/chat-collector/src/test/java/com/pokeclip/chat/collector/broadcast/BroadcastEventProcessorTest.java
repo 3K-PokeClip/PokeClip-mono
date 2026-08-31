@@ -374,7 +374,7 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
         private ProcessResult next = ProcessResult.PROCESSED;
 
         @Override
-        public ProcessResult start(LifecycleEnvelope envelope, StreamerId streamer) {
+        public ProcessResult start(String streamId, StreamerId streamer, Instant startedAt) {
             userIds.add(streamer.value());
             return next;
         }
