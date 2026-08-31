@@ -79,6 +79,33 @@ public interface BroadcastRepository extends JpaRepository<Broadcast, Long> {
                              @Param("limit") int limit);
 
     /**
+     * 지금 방송 중인 줄을 최근 시작 순으로. <b>수집기가 재시작 뒤 붙을 대상</b>이다(POK-218).
+     *
+     * <p><b>상태를 파라미터가 아니라 리터럴로 쓴다.</b> 파라미터도 지금은 custom plan을 골라
+     * 부분 색인을 타지만(PostgreSQL 17 실측), generic plan이 선택되는 날 플래너가 값을 몰라
+     * 색인의 술어를 함의한다고 증명하지 못해 Seq Scan이 된다({@code force_generic_plan}으로
+     * 재현). 리터럴은 그 가능성 자체를 없앤다. <b>대가는 {@link BroadcastStatus#LIVE}와 갈릴 수
+     * 있다는 것</b>이고, 갈리면 조회가 조용히 0행이 된다 —
+     * {@code LiveBroadcastQueryTest.상태_문자열이_열거형과_갈리지_않는다}가 이 SQL을 직접 읽어 막는다.
+     *
+     * <p>🔴 <b>{@code NULLS LAST}가 정렬과 색인 양쪽에 있어야 한다.</b> PostgreSQL은 {@code DESC}에서
+     * {@code NULLS FIRST}가 기본이라, 이것이 없으면 시각이 빈 줄이 <b>맨 앞</b>을 먹어 상한 500이
+     * 그런 줄로 다 차면 진짜 방송이 하나도 안 나간다. 운영 경로로는 그런 줄이 도달 불가인 것을
+     * {@code LiveStartedAtNeverNullTest}가 재현으로 고정했지만, <b>그 방어는 러너의 봉투 검증 한
+     * 줄뿐</b>이라 사라지는 날을 대비해 둔다 — 비용이 0이다.
+     * 색인({@code V205})도 같은 {@code NULLS LAST}여야 한다. 안 그러면 정렬이 안 맞아 {@code Sort}가
+     * 붙고 색인이 통째로 버려진다(계획 검증 실측: 버퍼 9 → 1,428).
+     */
+    @Query(value = """
+            SELECT stream_id AS streamId, streamer_id AS streamerId, started_at AS startedAt
+              FROM broadcasts
+             WHERE status = 'live'
+             ORDER BY started_at DESC NULLS LAST
+             LIMIT :limit
+            """, nativeQuery = true)
+    List<LiveBroadcastRow> findLive(@Param("limit") int limit);
+
+    /**
      * 보관 기한이 지났는가를 <b>DB 시계로</b> 판정한다(PRD 결정). 앱 시계로 재면 서버마다
      * 판정이 갈려, 같은 방송이 어느 인스턴스에 붙느냐에 따라 보이기도 하고 안 보이기도 한다.
      *
