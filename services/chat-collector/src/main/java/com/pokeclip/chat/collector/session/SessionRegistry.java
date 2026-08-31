@@ -374,10 +374,18 @@ public class SessionRegistry {
             // status.stopped(reason)을 찍게 되면서 그 자리도 STOPPED가 됐다. <b>동작은 안전한 쪽으로
             // 바뀌었다</b> — 그전에는 그 창에서 갈아끼움이 성립해 위 문단이 「영구 유실」이라 부르는
             // 바로 그 모양(죽어가는 세션에 이름만 갈아끼우고 편지를 지움)이 될 수 있었다.
-            // <b>지금 도달 경로가 없는 이유는 상태가 아니라 스레드 수다</b> — 편지 폴링이 스레드
-            // 하나(SqsIntakeLoop)이고 registry.open을 부르는 자리도 LinkedSessionStarter 하나뿐이라,
-            // 같은 스레드가 자기 open() 안에서 블로킹 중에 다시 open()을 부를 수 없다.
-            // <b>수립을 워커로 빼는 날</b>(CLAUDE.md 「다음 카드로 넘긴 것」) 이 자리를 다시 본다.
+            // <b>🔴 「수립을 워커로 빼는 날 다시 본다」던 그 날이 POK-219다 — 다시 봤고, 안 열린다.</b>
+            // 여기 「지금 도달 경로가 없는 이유는 스레드 수다」라고 적혀 있었다: 편지 폴링이 스레드
+            // 하나(SqsIntakeLoop)라 같은 스레드가 자기 open() 안에서 블로킹 중에 다시 open()을 부를
+            // 수 없다는 것. 태스크 3이 수립을 스트리머별 줄로 뺐고 태스크 7이 <b>둘째 제출자</b>
+            // (Reattacher, 스케줄러 스레드)를 붙였다. <b>근거만 바뀌고 결론은 같다</b> —
+            // 이제 이 자리를 지키는 것은 <b>「같은 스트리머는 같은 줄이고 줄 안은 직렬」</b>이다.
+            // 성립 조건 둘을 코드로 확인했다: ① registry.open을 부르는 자리가 여전히
+            // LinkedSessionStarter 하나뿐이다 ② 두 경로 모두 StreamerId.parse가 성공한 것만 그 문에
+            // 넣고(BroadcastEventProcessor.process · Reattacher.sweepOnce), 줄 이름이 LaneKey.of로
+            // <b>Long.toString(streamerId)</b>가 되므로 줄과 자리 열쇠가 일대일이다.
+            // <b>줄 이름이 갈리면 이 보증이 사라진다</b> — ReattacherTest의
+            // {@code 재부착은_알림_경로와_같은_줄에_들어간다}가 "007" 대 "7"로 그것을 지킨다.
             log.info("chat.registry.open_deferred streamer={} stream={} reason=SEAT_STOPPING",
                     key.streamerId(), key.streamId());
             return false;
