@@ -42,7 +42,7 @@ import org.springframework.stereotype.Component;
  * <p><b>{@code site}는 상수만 넘긴다.</b> 로그로 나가는 값이라 이메일·이름·채널 이름이 들어가면 안 된다
  * ({@code SecretLeakTest}가 본다).
  *
- * <h2>🔴 전수 명부 — 막는 자리 7자리 · 6파일 · 가드 밖 회원 행 락 7자리</h2>
+ * <h2>🔴 전수 명부 — 막는 자리 8자리 · 7파일 · 가드 밖 회원 행 락 6자리</h2>
  *
  * <p>🔴 <b>숫자는 바로 위 한 줄에만 있다 — 아래 표에는 세어 둔 수를 안 적는다.</b>
  * 두 군데 적으면 한쪽만 고치는 날이 오고, <b>이 세션에서만 그 일이 세 번</b> 났다
@@ -73,7 +73,17 @@ import org.springframework.stereotype.Component;
  *     <td><b>남는다</b>(락 없음)</td></tr>
  * <tr><td>{@code InvitationService.invite}</td><td>탈퇴자가 <b>보내는</b> 초대</td>
  *     <td><b>남는다</b>(락 없음)</td></tr>
+ * <tr><td>🔴 {@code TokenService.rotate}</td><td>일괄 폐기를 <b>넘어 살아남은 갱신 표</b>의 회전</td>
+ *     <td>없다(락과 함께)</td></tr>
  * </table>
+ *
+ * <p>🔴 <b>{@code TokenService.rotate}가 이 표에서 가장 늦게 들어왔다</b>(사용자 결정 2026-08-31).
+ * 로그인이 도는 중에 탈퇴가 커밋되면 {@code refresh_tokens} INSERT가 일괄 폐기를 넘어 태어나고,
+ * 그 표는 <b>무기한</b> 새 접근 표를 찍어낸다 — auth 창구는 필터가 전부 막지만 <b>clip은 표를 독립으로
+ * 검증하므로</b>(ADR-049) PRD가 적은 「남은 접근 표 최대 30분」이 <b>그 계정에서 거짓</b>이 된다.
+ * 어차피 잡던 락과 함께 보므로 조회가 안 늘고 창도 안 남는다.
+ * 던지는 것이 {@code AuthException}이라 {@code rotate}의 {@code noRollbackFor}가 그대로 덮는다 —
+ * <b>재사용 감지의 무효화가 롤백되면 안 된다</b>는 그 성질은 안 건드렸다.
  *
  * <p><b>가드가 아닌 방법으로 닫은 자리</b> — 탈퇴자를 초대 <b>상대</b>로 고르는 경로는
  * {@code UserRepository.findAliveByEmail}이 조회 단계에서 닫는다. 답이 401이 아니라
@@ -89,17 +99,13 @@ import org.springframework.stereotype.Component;
  * <tr><td>{@code ChzzkTokenRefresher}</td><td>탈퇴가 연동을 닫아 살아있는 링크가 없다 → 아무 일도 안 한다</td></tr>
  * <tr><td>{@code YoutubeTokenRefresher}</td><td>위와 같다(쌍둥이)</td></tr>
  * <tr><td>{@code StreamKeyService.rotate}</td><td>탈퇴가 살아있는 키를 폐기해 {@code findAlive}가 빈손 → 404</td></tr>
- * <tr><td>🔴 {@code TokenService.rotate}</td><td><b>여기만 「닫혀 있어서」가 아니다.</b> 아래 참고</td></tr>
  * </table>
  *
- * <p>🔴 <b>{@code TokenService.rotate}는 열린 채로 남겼다 — 판단을 받아야 하는 자리다.</b>
- * 로그인이 도는 중에 탈퇴가 커밋되면 {@code refresh_tokens} INSERT가 일괄 폐기를 넘어간다
- * (자식 표 INSERT라 회원 행 락에 안 막힌다 — 이 클래스 맨 위의 뿌리 그대로). 그 표는 {@code rotate}가
- * 탈퇴를 안 보므로 <b>무기한</b> 새 접근 표를 찍어낸다. auth 창구는 입구 필터가 전부 막지만
- * <b>clip은 표를 독립으로 검증한다</b>(ADR-049) — 「탈퇴 뒤 30분」이 「무기한」이 된다.
- * <b>안 막은 이유</b>: 막으면 {@code WithdrawnAccountBlockTest.로그인_없이_부르는_재발급은_탈퇴해도_평소대로_된다}가
- * 200→401로 빨간불인데, 그 검사는 「필터가 어디까지 막나」를 <b>일부러</b> 못박은 것이고 javadoc이
- * 「태스크 3 뒤에도 그대로 초록이어야 한다」고 적어 뒀다. <b>남이 정한 결정을 뒤집는 것이라 혼자 안 정했다.</b>
+ * <p>🔴 <b>로그아웃({@code TokenService.logout})에는 일부러 안 넣었다.</b> <b>끊는 동작</b>이라
+ * 탈퇴자에게 해가 없고 오히려 살아남은 표를 스스로 죽이는 쪽이다. 그리고 그 자리가
+ * <b>「입구 필터가 {@code permitAll} 경로를 안 막는다」를 재는 유일한 갈래</b>가 됐다 —
+ * 재발급에 확인이 생기면서 거기서는 <b>필터를 지워도 초록</b>이 되기 때문이다
+ * ({@code WithdrawnAccountBlockTest}의 로그아웃 쌍).
  *
  * @see UserRepository#findByIdForUpdate
  */

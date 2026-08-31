@@ -173,43 +173,72 @@ class WithdrawnAccountBlockTest extends IntegrationTestSupport {
     // ── 안 걸려야 하는 것 ───────────────────────────────────────────────
 
     /**
-     * 재발급은 {@code permitAll}이고 <b>표를 헤더에 안 실었을 때만</b> 주체가 없다 —
-     * 그때는 필터가 볼 것이 없어 탈퇴해도 평소대로 돈다.
-     * 🔴 <b>「permitAll이면 안 걸린다」는 틀린 문장이다</b>(2회차 감사 실측) —
-     * 같은 요청에 Authorization 헤더를 실으면 {@code BearerTokenAuthenticationFilter}가
-     * {@code permitAll} 경로에서도 인증을 끝내므로 <b>주체가 생기고 필터가 막는다.</b>
-     * 아래 두 갈래가 그 사실을 나란히 못박는다.
+     * 🔴 <b>200을 재던 검사가 401을 재는 것으로 바뀌었다</b>(PR #148, 사용자 결정 2026-08-31).
+     * 예전 javadoc은 「태스크 3 뒤에도 그대로 초록이어야 한다」고 적었는데 <b>그 문장이 이제 거짓이다.</b>
+     * 무엇이 바뀌었는지 남겨 둔다.
      *
-     * <p>이 상태는 {@code deleted_at}만 직접 넣어 만든 것이라 <b>갱신 표가 살아 있다.</b>
-     * 갱신 표를 실제로 죽이는 것은 탈퇴 창구(POK-171 태스크 3)의 몫이고, 그 창구는 여기를 안 지난다 —
-     * 그래서 이 시험은 태스크 3 뒤에도 그대로 초록이어야 한다.
+     * <p><b>층이 다르다.</b> 이 검사가 원래 못박은 것은 <b>필터의 성질</b>(「permitAll 경로는 주체가 없어
+     * 안 걸린다」)이었다. 지금 401을 만드는 것은 필터가 아니라 <b>{@code TokenService.rotate} 자신의
+     * 탈퇴 확인</b>이다 — 필터의 성질은 하나도 안 바뀌었고, 그것을 재는 일은
+     * {@link #로그인_없이_부르는_로그아웃은_탈퇴해도_평소대로_된다} 쌍으로 옮겼다.
+     *
+     * <p><b>왜 재발급에만 확인을 얹었나</b> — 살아남은 갱신 표 하나가 <b>무기한</b> 새 접근 표를
+     * 찍어내기 때문이다. auth 창구는 필터가 전부 막지만 clip은 표를 독립 검증하므로(ADR-049)
+     * PRD가 적은 「남은 접근 표 최대 30분」이 그 계정에서 거짓이 된다.
+     * 그 표가 어떻게 살아남는지까지 세워 재는 것은 {@code WithdrawnWriteGuardRefreshTokenTest}다.
+     *
+     * <p>이 상태는 {@code deleted_at}만 직접 넣어 만든 것이라 <b>갱신 표가 살아 있다</b> —
+     * 그래서 「표가 죽어서 401」이 아니라 <b>「탈퇴라서 401」</b>을 잰다. 그 구분이 이 검사의 값이고,
+     * 아래 전제 단언이 그것을 지킨다.
      */
     @Test
-    void 로그인_없이_부르는_재발급은_탈퇴해도_평소대로_된다() throws Exception {
+    void 로그인_없이_부르는_재발급도_탈퇴하면_막힌다() throws Exception {
+        User user = newUser();
+        TokenPair pair = tokenService.issue(user);
+        withdraw(user);
+        assertThat(aliveRefreshTokens(user))
+                .as("갱신 표가 이미 죽어 있으면 「탈퇴라서 막혔다」와 「표가 죽어서 막혔다」가 안 갈린다")
+                .isEqualTo(1);
+
+        mockMvc.perform(refresh(pair.refreshToken()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    /**
+     * 🔴 <b>「permitAll이면 안 걸린다」가 틀린 문장이라는 것을 재는 자리</b>(2회차 감사 실측).
+     * 로그인 없이 부르면 주체가 없어 필터가 볼 것이 없고, 탈퇴해도 평소대로 돈다.
+     * 아래 쌍과 나란히 봐야 「헤더 하나로 갈린다」가 참이 된다.
+     *
+     * <p>🔴 <b>재발급이 아니라 로그아웃으로 옮겨 왔다</b>(PR #148). 재발급에는 이제 {@code rotate}
+     * 자신의 탈퇴 확인이 있어 <b>헤더가 없어도 401</b>이다 — 거기서 재면 <b>필터를 통째로 지워도 초록</b>이라
+     * 이 검사가 아무것도 안 재게 된다. 로그아웃에는 그 확인이 없으므로 401을 내는 것이 <b>필터뿐</b>이다.
+     *
+     * <p>로그아웃에 확인을 안 넣은 것은 일부러다 — <b>끊는 동작</b>이라 탈퇴자에게 해가 없고,
+     * 오히려 살아남은 표를 스스로 죽이는 쪽이다.
+     */
+    @Test
+    void 로그인_없이_부르는_로그아웃은_탈퇴해도_평소대로_된다() throws Exception {
         User user = newUser();
         TokenPair pair = tokenService.issue(user);
         withdraw(user);
 
-        mockMvc.perform(refresh(pair.refreshToken()))
-                .andExpect(status().isOk());
+        mockMvc.perform(logout(pair.refreshToken()))
+                .andExpect(status().isNoContent());
     }
 
     /**
-     * 위와 <b>같은 요청에 표만 실었다.</b> 헤더 하나로 200과 401이 갈리는 것이 요지다 —
+     * 위와 <b>같은 요청에 표만 실었다.</b> 헤더 하나로 204와 401이 갈리는 것이 요지다 —
      * 「표를 헤더로 안 싣는다」는 클라이언트 구현에 대한 가정이지 서버가 보장하는 것이 아니다.
-     *
-     * <p>방향은 <b>보안 강화 쪽</b>이라 고칠 것은 코드가 아니라 적힌 사실이다. 다만 탈퇴 직후 30분
-     * 동안 같은 요청이 헤더 유무로 갈리므로, 프론트가 재발급에 access 표를 함께 싣기 시작하면
-     * 이 시험이 그 사실을 먼저 말해 준다.
+     * <b>여기서 401을 내는 것은 필터뿐이다.</b>
      */
     @Test
-    void 같은_재발급도_표를_실으면_필터가_막는다() throws Exception {
+    void 같은_로그아웃도_표를_실으면_필터가_막는다() throws Exception {
         User user = newUser();
         String token = bearer(user);
         TokenPair pair = tokenService.issue(user);
         withdraw(user);
 
-        mockMvc.perform(refresh(pair.refreshToken()).header("Authorization", token))
+        mockMvc.perform(logout(pair.refreshToken()).header("Authorization", token))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -334,6 +363,18 @@ class WithdrawnAccountBlockTest extends IntegrationTestSupport {
     }
 
     /** 두 갈래가 <b>같은 요청</b>이어야 「헤더 하나로 갈린다」가 참이 된다. 그래서 한 자리에서 만든다. */
+    private MockHttpServletRequestBuilder logout(String refreshToken) {
+        return post("/api/auth/logout")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"refreshToken\":\"" + refreshToken + "\"}");
+    }
+
+    private int aliveRefreshTokens(User user) {
+        return jdbc.queryForObject(
+                "SELECT count(*) FROM refresh_tokens WHERE user_id = ? AND revoked_at IS NULL",
+                Integer.class, user.getId());
+    }
+
     private MockHttpServletRequestBuilder refresh(String refreshToken) {
         return post("/api/auth/refresh")
                 .contentType(MediaType.APPLICATION_JSON)
