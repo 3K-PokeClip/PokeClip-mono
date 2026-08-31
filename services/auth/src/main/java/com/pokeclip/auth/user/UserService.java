@@ -2,7 +2,6 @@ package com.pokeclip.auth.user;
 
 import com.pokeclip.auth.AuthException;
 import com.pokeclip.auth.AuthFailure;
-import com.pokeclip.auth.DataInconsistencyException;
 import com.pokeclip.auth.profile.ProfileUpdateException;
 import com.pokeclip.auth.profile.ProfileUpdateFailure;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +35,7 @@ public class UserService {
 
     private final UserRepository userRepository;
     private final UserCreator userCreator;
+    private final ActiveUserGuard activeUserGuard;
 
     /**
      * 조회 후 없으면 생성한다. 두 요청이 동시에 들어오면 둘 다 "없다"를 보고
@@ -100,6 +100,13 @@ public class UserService {
      * <p>같은 회원의 동시 수정을 직렬화하지 않는다. 토큰 회전·스트림키 재발급이 users 행 락을 쓰는
      * 이유는 <b>아직 없는 행</b>을 막기 위해서인데, 이름은 한 컬럼을 덮어쓰는 것이라 마지막 요청이
      * 이기면 그만이다. 락을 얹으면 그 경로들의 대기만 늘어난다.
+     *
+     * <p>🔴 <b>탈퇴한 회원이면 거절한다</b>(PR #148, 전수 세기에서 찾음). 여기는 「새로 만들어 주는」
+     * 자리가 아니라 <b>탈퇴가 지운 것을 되돌리는</b> 자리다 — 탈퇴는 이름을 「탈퇴한 사용자」로 덮는데,
+     * 필터를 지난 수정이 뒤늦게 도착하면 <b>실명이 표에 다시 박힌다.</b> 응답은 이미 204였고 표는
+     * 익명이었는데 다시 실명이 되는 것이라, 개인정보 삭제 문의에서 「지웠다」가 거짓이 된다.
+     * <b>기준을 「새로 만드는 것」으로만 읽으면 이 자리가 안 세어진다.</b>
+     * 조회는 안 는다 — 어차피 읽던 그 회원을 가드가 대신 읽어 준다.
      */
     @Transactional
     public User updateName(Long userId, String rawName) {
@@ -114,9 +121,7 @@ public class UserService {
         if (trimmed.codePointCount(0, trimmed.length()) > NAME_MAX_CODE_POINTS) {
             throw new ProfileUpdateException(ProfileUpdateFailure.NAME_TOO_LONG, "이름이 너무 길다");
         }
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new DataInconsistencyException(
-                        AuthFailure.USER_NOT_FOUND, "토큰의 주인이 없다", userId));
+        User user = activeUserGuard.requireAlive(userId, "profile.name");
         user.changeName(trimmed, Instant.now());
         return user;
     }
