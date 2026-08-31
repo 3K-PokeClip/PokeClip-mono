@@ -75,24 +75,41 @@ public class ProfilePhotoController {
 
     /**
      * {@code AuthController.userId}와 같은 모양으로 감싼다 — 한쪽만 감싸면 같은 입력이 한쪽에서는
-     * 401이고 다른 쪽에서는 500이 된다. {@code TokenSubjectRejectionTest}가 <b>셋</b>을 나란히 잰다
+     * 401이고 다른 쪽에서는 500이 된다. {@code TokenSubjectRejectionTest}가 <b>창구 셋</b>을 나란히 잰다
      * (POK-171이 {@code WithdrawalController.userId}를 감싼 쪽에 더했다).
      *
      * <p>오늘은 닿지 않는다 — 우리 발급기는 {@code sub}에 항상 회원 번호를 넣고 서명 검증을 통과한
      * 토큰만 여기까지 온다. <b>아무도 안 밟기 때문에 더 갈라지기 쉬운 자리다.</b>
      *
-     * <p>🔴 <b>이 모양인 것은 열 중 셋뿐이다.</b> auth에서 {@code Long.valueOf(jwt.getSubject())}를
-     * 하는 자리를 전수로 세면 <b>열 자리(아홉 파일)</b>이고, 나머지 <b>일곱 자리(여섯 파일)</b>는
-     * 아직 안 감쌌다 —
+     * <h4>전수 명부 — auth에서 {@code Long.valueOf(jwt.getSubject())}를 하는 자리</h4>
+     *
+     * <p><b>전수 11자리 · 10파일 · 감싼 것 4 · 안 감싼 것 7</b> (2026-08-31, POK-171 기준).
+     * 이 줄은 {@code TokenSubjectRegistryTest}가 기계로 대조한다 — <b>자리가 늘거나 줄면 빨간불</b>이다.
+     *
+     * <p><b>감싼 넷 — 그런데 모양이 둘로 갈린다.</b>
+     * <ul>
+     *   <li><b>던져서 401</b>(셋): {@code AuthController:66} · {@code ProfilePhotoController:99}(여기) ·
+     *       {@code WithdrawalController:58}</li>
+     *   <li><b>{@code null}을 돌려 통과</b>(하나): {@code WithdrawnAccountFilter:106} — 창구가 아니라
+     *       필터라서 반대다. 여기서 401을 내면 「그 sub을 어떻게 다루나」가 각 창구의 판단이 아니라
+     *       필터의 판단으로 덮인다. <b>같은 명부에 있지만 같은 모양이 아니다.</b></li>
+     * </ul>
+     *
+     * <p><b>안 감싼 일곱(여섯 파일) — 그대로다.</b>
      * {@code ChzzkLinkController:60} · {@code YoutubeLinkController:70} ·
      * <b>{@code StreamKeyController:27}·{@code :38}(한 파일에 두 자리다)</b> ·
      * {@code PairingCodeController:30} · {@code EditorDelegationController:43} ·
-     * {@code EditorInvitationController:74}.
-     * <b>파일 수로 세지 마라</b> — 이 문장을 처음 쓸 때 여섯 파일을 여섯 자리로 세어 하나를 빠뜨렸다.
-     * POK-207이 자기가 만든 창구 둘만, POK-171이 자기가 만든 창구 하나만 맞춘 것이고
-     * <b>「쌍둥이를 다 맞췄다」가 아니다.</b> <b>안 감싼 일곱은 그대로다</b> —
-     * 새 창구가 늘어도 그 일곱은 안 줄어든다. auth의 「알려진 구멍」 22에 적어 뒀다.
-     * {@code sub} 규약을 바꿀 일이 생기면 열을 함께 본다.
+     * {@code EditorInvitationController:74}. 이 일곱은 {@code NumberFormatException}을 그대로 흘려
+     * 인증 경로가 401이 아니라 <b>500</b>을 낸다. 새 창구가 늘어도 그 일곱은 안 줄어든다.
+     *
+     * <p>🔴 <b>이 명부를 사람이 두 번 연속 틀리게 셌다.</b> POK-207은 한 파일에 두 자리인 것을 놓쳤고
+     * (<b>파일 수로 세지 마라</b>), POK-171은 <b>같은 PR의 한 커밋 앞에서 자기가 만든 자리</b>
+     * ({@code WithdrawnAccountFilter})를 못 셌다 — <b>세는 시점이 자기 PR의 중간</b>이었기 때문이다.
+     * 그래서 숫자를 기계에 넘겼다. 그래도 <b>「쌍둥이를 다 맞췄다」로 읽지 마라</b> —
+     * 감싼 넷이 초록인 것과 안 감싼 일곱이 없는 것은 다른 말이다.
+     *
+     * <p>사정은 auth/CLAUDE.md 「알려진 구멍」 22에도 있다(그쪽은 사본이다 — 커밋되지 않는 파일이라
+     * <b>정본은 여기</b>다). {@code sub} 규약을 바꿀 일이 생기면 열하나를 함께 본다.
      */
     private static Long userId(Jwt jwt) {
         try {

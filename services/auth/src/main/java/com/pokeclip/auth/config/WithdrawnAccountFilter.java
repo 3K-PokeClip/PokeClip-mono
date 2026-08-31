@@ -28,7 +28,7 @@ import java.io.IOException;
  *
  * <p><b>인증된 요청만 본다.</b> 로그인 없이 부르는 경로(로그인·재발급·로그아웃·페어링 교환·
  * 사진 내보내기·오류·헬스체크)는 <b>보통</b> 주체가 없어 그냥 지나간다.
- * 🔴 <b>다만 그 경로에 표를 실어 보내면 주체가 생겨 막힌다</b>(2회차 감사 실측: 탈퇴 회원 +
+ * 🔴 <b>다만 그 경로에 표를 실어 보내면 주체가 생겨 막힌다</b>(plan-critic 필터 회귀 감사 실측, 2026-08-31: 탈퇴 회원 +
  * Authorization 헤더로 재발급·로그아웃이 401. 헤더가 없으면 각각 200·204).
  * {@code BearerTokenAuthenticationFilter}는 {@code permitAll} 경로에서도 헤더가 있으면 인증을 끝낸다.
  * 실질 무해하다 — 탈퇴가 갱신 표를 전부 폐기하므로 어느 쪽이든 실패한다.
@@ -45,7 +45,7 @@ import java.io.IOException;
  * <p>🔴 <b>「그러면 {@code /internal/**}이 막힌다」는 재현되지 않았다.</b> 그 체인은 JWT 인증을
  * 아예 안 해 주체가 없고, 주체가 없으면 이 필터는 막지 않는다. <b>참인 것은 거기까지다.</b>
  * <b>「아무 일도 안 일어난다」는 거짓이다</b> — {@code @Component}를 붙여 전후를 세니
- * <b>필터 진입 15 → 23 · 표 조회 13 → 19 · 인스턴스 1 → 2</b>였다(2회차 감사 실측, 2026-08-31).
+ * <b>필터 진입 15 → 23 · 표 조회 13 → 19 · 인스턴스 1 → 2</b>였다(plan-critic 필터 회귀 감사, 2026-08-31).
  * 숫자가 맞아떨어진다: 막히지 않고 통과한 8회가 서블릿 체인에서 한 번 더 돌고, 그중 주체가 있는
  * 6회가 회원 표를 한 번 더 조회한다. <b>막힌 요청은 첫 필터에서 끝나 두 번째를 안 탄다.</b>
  * 두 인스턴스가 둘 다 도는 이유는 {@code OncePerRequestFilter}의 중복 방지 표식이
@@ -56,8 +56,8 @@ import java.io.IOException;
  *
  * <p><b>이 필터는 인증된 요청마다 표 조회를 하나 더 만든다. 그런데 커넥션 압력은 안 늘었다</b> —
  * 풀 10·동시 25인 해제 갈래를 필터 유무로 재니 75~78ms 대 73~78ms, 피크는 양쪽 10으로 구분되지 않았다
- * (구현자·2회차 감사가 각각 3회씩 독립 측정).
- * 🔴 <b>이유는 {@code open-in-view}가 아니다</b>(그 설명은 2회차 감사가 반증했다 — {@code true}로 켜고
+ * (구현자·plan-critic 필터 회귀 감사가 각각 3회씩 독립 측정).
+ * 🔴 <b>이유는 {@code open-in-view}가 아니다</b>(그 설명은 그 회귀 감사가 반증했다 — {@code true}로 켜고
  * 재도 필터 진입 시점에 바인딩된 자원이 비어 있다. OSIV는 {@code DispatcherServlet} 안 인터셉터고
  * <b>필터는 그 앞</b>이라 켜져 있어도 못 쓴다). 진짜 이유는 리포지토리 호출이 <b>자기 짧은 읽기
  * 트랜잭션에서 끝나고 커넥션을 그 자리에서 반납</b>하는 것이고, 그것은 {@code open-in-view} 값과 무관하다.
@@ -94,8 +94,14 @@ public class WithdrawnAccountFilter extends OncePerRequestFilter {
 
     /**
      * 인증이 끝난 뒤에만 값을 준다. 주체가 없거나 {@code sub}을 회원 번호로 못 읽으면 {@code null}이고
-     * 그때는 <b>막지 않는다</b> — 그 판정은 각 창구가 이미 자기 사유로 한다(auth/CLAUDE.md 「알려진 구멍」 22).
-     * 여기서 401을 내면 그 아홉 자리가 어떻게 답하는지가 이 필터의 판단으로 덮인다.
+     * 그때는 <b>막지 않는다</b> — 그 판정은 각 창구가 이미 자기 사유로 한다.
+     * 여기서 401을 내면 나머지 열 자리가 어떻게 답하는지가 이 필터의 판단으로 덮인다.
+     *
+     * <p>🔴 <b>이 줄도 전수 명부의 한 자리다</b> — auth에서 {@code Long.valueOf(jwt.getSubject())}를
+     * 하는 <b>열한 자리</b> 중 하나이고, <b>감싸는 모양이 창구 셋과 반대</b>다(그쪽은 던져서 401,
+     * 여기는 {@code null}로 통과). 명부는 {@code ProfilePhotoController.userId} javadoc에 있고
+     * {@code TokenSubjectRegistryTest}가 기계로 센다 — <b>POK-171이 이 자리를 만들고도
+     * 한 커밋 뒤에 자기를 못 세어</b> 그 검사가 생겼다.
      */
     private static Long authenticatedUserId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();

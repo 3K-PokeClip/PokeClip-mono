@@ -50,8 +50,11 @@ public class WithdrawalController {
      * <p>오늘은 닿지 않는다 — 우리 발급기는 {@code sub}에 항상 회원 번호를 넣고 서명 검증을 통과한
      * 토큰만 여기까지 온다. <b>아무도 안 밟기 때문에 더 갈라지기 쉬운 자리다.</b>
      *
-     * <p>🔴 <b>이 모양인 것은 열 중 셋뿐이다.</b> 나머지 일곱은 auth/CLAUDE.md 「알려진 구멍」 22에
-     * 전수로 적혀 있다 — 새로 만드는 자리는 감싼 쪽에 넣는다는 것이 그 항목의 지시다.
+     * <p>🔴 <b>이 모양인 것은 열하나 중 셋뿐이다</b>(감싼 넷 중 하나는 {@code WithdrawnAccountFilter}인데
+     * 그쪽은 던지지 않고 {@code null}을 돌려 통과시킨다 — 필터라서 반대다).
+     * 전수 명부는 {@code ProfilePhotoController.userId} javadoc에 있고
+     * {@code TokenSubjectRegistryTest}가 그 숫자를 기계로 대조한다 —
+     * <b>새로 만드는 자리는 감싼 쪽에 넣는다.</b>
      */
     private static Long userId(Jwt jwt) {
         try {

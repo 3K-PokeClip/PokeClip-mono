@@ -22,8 +22,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * 그리고 계정을 지우는 창구(POK-171). 셋이 같은 입력을 다르게 다루면 안 된다.
  *
  * <p>🔴 <b>감싼 셋이 전부는 아니다.</b> auth에서 {@code Long.valueOf(jwt.getSubject())}를 하는 자리는
- * <b>열</b>이고 나머지 일곱은 아직 안 감쌌다 — auth/CLAUDE.md 「알려진 구멍」 22에 전수로 적혀 있다.
- * 여기가 초록인 것을 <b>「쌍둥이를 다 맞췄다」로 읽으면 그 일곱이 영영 안 보인다.</b>
+ * <b>열하나</b>이고, 그중 <b>감싼 것이 넷</b>(창구 셋 + {@code WithdrawnAccountFilter} — 그쪽은 던지지
+ * 않고 {@code null}을 돌려 통과시킨다) · <b>안 감싼 것이 일곱</b>이다.
+ * 전수 명부는 {@code ProfilePhotoController.userId} javadoc에 있고 {@code TokenSubjectRegistryTest}가
+ * 그 숫자를 기계로 대조한다. 여기가 초록인 것을 <b>「쌍둥이를 다 맞췄다」로 읽으면 그 일곱이 영영 안 보인다.</b>
+ *
+ * <p><b>필터를 여기서 안 재는 것은 일부러다</b> — 이 검사는 「같은 입력에 같은 <b>사유</b>로 거절하는가」를
+ * 재는데 필터는 거절하지 않는 쪽이 맞기 때문이다({@code WithdrawnAccountFilterTest}가 그쪽을 잰다).
  *
  * <p>오늘은 어느 쪽도 도달하지 않는다. 우리 발급기는 {@code sub}에 항상 회원 번호를 넣고,
  * 서명 검증을 통과한 토큰만 여기까지 온다. <b>그래서 더 갈라지기 쉬운 자리다</b> —

@@ -30,7 +30,12 @@ public abstract class IntegrationTestSupport {
      * <b>{@code FATAL: sorry, too many clients already}</b>로 컨텍스트 로딩이
      * 무너진다 — 30 × 컨텍스트 수가 100을 넘기 때문이다.
      *
-     * <p>600인 이유: 사진 검사 넷이 컨텍스트를 더해 지금 <b>15개</b>이고 15 × 30 = 450이다.
+     * <p>600인 이유: 지금 컨텍스트가 <b>17개</b>이고 17 × 30 = 510이다 — 사진 검사 넷(POK-207)에
+     * 이어 탈퇴 검사 둘({@code WithdrawalCleanupBoundaryTest}·{@code WithdrawalCleanupDisabledTest},
+     * POK-171)이 각자 {@code @TestConfiguration}으로 컨텍스트를 하나씩 더 만들었다.
+     * <b>남은 여유는 셋이 아니라 「600 − 510 = 90」, 즉 컨텍스트 셋 몫이다</b>
+     * (실측: {@code grep -o "HikariPool-[0-9]*" | sort -u | wc -l} → 17. {@code maxParallelForks}가
+     * 없어 fork는 하나다).
      * <b>300으로는 실제로 넘쳤다</b> — POK-207 태스크 5에서 사진·유튜브 검사 13건이 이 메시지로
      * 한꺼번에 죽었다(사진과 무관한 유튜브 검사가 같이 죽는다는 것이 이 값의 성질이다).
      * Hikari는 minimumIdle 기본값이 maximumPoolSize라 컨텍스트마다 30까지 실제로 연다.
