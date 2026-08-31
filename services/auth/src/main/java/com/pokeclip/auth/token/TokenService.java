@@ -2,9 +2,8 @@ package com.pokeclip.auth.token;
 
 import com.pokeclip.auth.AuthException;
 import com.pokeclip.auth.AuthFailure;
-import com.pokeclip.auth.DataInconsistencyException;
+import com.pokeclip.auth.user.ActiveUserGuard;
 import com.pokeclip.auth.user.User;
-import com.pokeclip.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,7 +43,7 @@ public class TokenService {
     private final JwtEncoder jwtEncoder;
     private final JwtProperties jwtProperties;
     private final RefreshTokenRepository refreshTokenRepository;
-    private final UserRepository userRepository;
+    private final ActiveUserGuard activeUserGuard;
     private final SecureRandom random = new SecureRandom();
 
     @Transactional
@@ -75,6 +74,9 @@ public class TokenService {
      *
      * <p>쓰기가 일어난 뒤 던지는 경로는 재사용 감지와 "토큰의 주인이 없다" 둘이다.
      * 둘 다 커밋되는 것이 맞다 — 후자는 이미 무효화한 토큰을 되살리지 않는 쪽이 안전하다.
+     *
+     * <p>🔴 <b>탈퇴 확인은 쓰기 <u>전</u>이라 그 셈에 안 든다.</b> 던지는 것이 AuthException이므로
+     * noRollbackFor에 걸려 커밋되지만, 그 시점까지 쓴 것이 없어 커밋이든 롤백이든 결과가 같다.
      */
     @Transactional(noRollbackFor = AuthException.class)
     public TokenPair rotate(String refreshToken) {
@@ -87,9 +89,16 @@ public class TokenService {
         // 다른 요청이 발급한 토큰을 놓친다 — PostgreSQL READ COMMITTED에서 UPDATE는
         // 문장 시작 이후 커밋된 행을 대상 집합에 넣지 않기 때문이다. 잠글 토큰 행이
         // 아직 없으므로 사용자 행을 잠근다.
-        User user = userRepository.findByIdForUpdate(userId)
-                .orElseThrow(() -> new DataInconsistencyException(
-                        AuthFailure.USER_NOT_FOUND, "토큰의 주인이 없다", userId));
+        //
+        // 🔴 그 락과 함께 탈퇴 표시도 본다(PR #148, 사용자 결정 2026-08-31). 락만으로는 안 된다 —
+        // 그것은 FOR NO KEY UPDATE라 자식 표 INSERT를 안 막으므로, 로그인이 도는 중에 탈퇴가
+        // 커밋되면 refresh_tokens 행 하나가 일괄 폐기를 넘어 태어난다. 여기서 안 보면 그 표가
+        // 무기한 새 접근 표를 찍어내고, clip은 표를 독립 검증하므로(ADR-049) PRD가 적은
+        // 「남은 접근 표 최대 30분」이 그 계정에서 거짓이 된다.
+        //
+        // 던지는 것은 AuthException이라 아래 noRollbackFor가 그대로 덮는다 — 트랜잭션 성질은 안 바뀐다.
+        // (여기까지는 쓴 것이 없어 커밋되든 롤백되든 결과가 같다.)
+        User user = activeUserGuard.requireAliveWithLock(userId, "token.rotate");
 
         RefreshToken stored = refreshTokenRepository.findByTokenHash(tokenHash)
                 .orElseThrow(() -> new AuthException(AuthFailure.REFRESH_TOKEN_UNKNOWN, "모르는 refresh 토큰이다"));

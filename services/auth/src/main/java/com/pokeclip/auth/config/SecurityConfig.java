@@ -1,5 +1,6 @@
 package com.pokeclip.auth.config;
 
+import com.pokeclip.auth.user.UserRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -8,6 +9,7 @@ import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 
@@ -15,7 +17,8 @@ import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http, JwtDecoder jwtDecoder) throws Exception {
+    SecurityFilterChain securityFilterChain(HttpSecurity http, JwtDecoder jwtDecoder,
+                                            UserRepository userRepository) throws Exception {
         return http
                 // 토큰 인증이라 쿠키를 쓰지 않는다. CSRF 방어의 전제가 없다.
                 .csrf(csrf -> csrf.disable())
@@ -55,6 +58,18 @@ public class SecurityConfig {
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(jwtDecoder)))
+                // 탈퇴한 회원의 남은 접근 표를 막는다(POK-171). 자리가 인증 "뒤"여야
+                // 주체에서 회원 번호를 읽을 수 있다 — 앞에 두면 SecurityContext가 아직
+                // 비어 있어 전 요청을 그냥 통과시킨다(주입으로 확인: 7건이 빨간불).
+                //
+                // 빈으로 두지 않는 이유는 InternalTokenFilter와 같다. @Component를 붙이면
+                // 서블릿이 전역 등록해 끼우는 자리가 명시가 아니라 등록 순서에 딸려 가고,
+                // 보안 체인 밖에서도 돈다. WithdrawnAccountBlockTest가 빈 목록으로 못박는다.
+                //
+                // 🔴 패키지가 Spring Security 6.x와 다르다 — 7.x는
+                // ...resource.web.authentication.BearerTokenAuthenticationFilter다(jar에서 확인).
+                .addFilterAfter(new WithdrawnAccountFilter(userRepository),
+                        BearerTokenAuthenticationFilter.class)
                 .exceptionHandling(handling ->
                         handling.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .build();

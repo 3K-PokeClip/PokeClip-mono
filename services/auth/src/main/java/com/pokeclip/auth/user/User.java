@@ -64,6 +64,10 @@ public class User {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    /** 탈퇴 시각. 비면 살아있는 회원이다(V111). */
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+
     private User(String googleSub, String email, String name, String profileImageUrl, Instant now) {
         this.googleSub = googleSub;
         this.email = email;
@@ -111,5 +115,39 @@ public class User {
         this.profilePhotoUpdatedAt = now;
         this.profileImageUrl = null;
         this.updatedAt = now;
+    }
+
+    /**
+     * 탈퇴한다 — 누구인지 알 수 없는 값으로 바꾸고 탈퇴 시각을 남긴다.
+     *
+     * <p><b>행을 지우지 않는 이유(PRD D2)</b>: 이 회원을 가리키는 외래키가 아홉 자리이고
+     * 그중 넷이 남과 공유하는 관계(초대·위임)다. 지우면 상대방의 이력까지 사라진다.
+     *
+     * <p><b>바꾸는 값에 회원 번호를 섞는 이유</b>: {@code google_sub}(V101)와 {@code email}(V108)이
+     * 둘 다 유일 제약이라 고정 문자열을 쓰면 <b>두 번째 탈퇴자의 저장이 거부된다.</b> 회원 번호는
+     * 이미 그 행의 기본키라 서로 안 겹치고, 남에게 새로 알려 주는 정보도 아니다.
+     * {@code @invalid}는 예약된 최상위 도메인이라 그 주소로는 아무 데도 못 보낸다(RFC 6761).
+     *
+     * <p><b>사진 칸 둘을 한 문장에서 함께 비운다</b> — 나눠 쓰면 중간에 죽었을 때 반쪽 상태가
+     * 남고, 그 상태는 {@code /api/auth/me}를 500으로 만들거나 사진을 조용히 사라지게 한다
+     * (POK-207 감사 실측). V111의 {@code ck_users_photo_columns_paired}가 그것을 DB에서도 막는다.
+     *
+     * <p>창고에 있는 <b>파일 자체는 여기서 안 지운다</b> — 외부 호출이라 트랜잭션 밖에서 해야 한다
+     * (PRD D6, 태스크 7의 전용 정리 스레드).
+     */
+    public void withdraw(Instant now) {
+        this.googleSub = "withdrawn:" + id;
+        this.email = "withdrawn+" + id + "@invalid";
+        this.name = "탈퇴한 사용자";
+        this.profileImageUrl = null;
+        this.profilePhotoKey = null;
+        this.profilePhotoUpdatedAt = null;
+        this.deletedAt = now;
+        this.updatedAt = now;
+    }
+
+    /** 탈퇴했는가. 탈퇴 시각이 있다는 것이 유일한 근거다 — V111의 컬럼 주석과 같은 말이다. */
+    public boolean isWithdrawn() {
+        return deletedAt != null;
     }
 }

@@ -1,6 +1,7 @@
 package com.pokeclip.auth.youtube;
 
 import com.pokeclip.auth.streamkey.secret.SecretStore;
+import com.pokeclip.auth.user.ActiveUserGuard;
 import com.pokeclip.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -25,6 +26,7 @@ public class YoutubeLinkWriter {
     private final YoutubeChannelLinkRepository links;
     private final SecretStore secretStore;
     private final UserRepository users;
+    private final ActiveUserGuard activeUserGuard;
     private final YoutubeCleanupExecutor cleanup;
 
     /**
@@ -36,11 +38,19 @@ public class YoutubeLinkWriter {
      * 유니크 위반이 나면 Hibernate가 "Key (channel_id)=(…)"를 그대로 찍는데 channelId는 로그에 안 찍는다.
      *
      * <p>둘 다 이 트랜잭션을 롤백한다. put은 REQUIRED라 롤백에 같이 딸려가 고아 secret이 안 남는다.
+     *
+     * <p>🔴 <b>「살아있는 회원만」이다</b>(PR #148 codex C3, 재현함). 행의 <b>존재만</b> 보면 탈퇴한
+     * 회원에게 살아있는 연동이 새로 생긴다 — 그 행은 resolve가 그대로 보고, 그 행이 가리키는
+     * secrets(OAuth 원문 둘)는 탈퇴 정리가 이미 지나가서 <b>영구 고아</b>이며, 회원은 전면 차단 필터
+     * 때문에 그 연동을 <b>볼 수도 끊을 수도 없다.</b> 창은 넷 중 가장 넓다 — 이 호출 앞에 외부 HTTP가
+     * 둘 있어 최대 십수 초다.
+     *
+     * <p>확인이 <b>락과 함께</b>라 여기에는 「읽고 나서 쓴다」 사이의 창이 없다. 어차피 잡던 락이고
+     * ({@code FOR NO KEY UPDATE}) 탈퇴도 같은 락을 잡으므로 <b>직렬화된다.</b> 조회도 안 는다.
      */
     @Transactional
     public YoutubeChannelLink create(Long userId, YoutubeChannel selected, YoutubeTokens tokens) {
-        users.findByIdForUpdate(userId)
-                .orElseThrow(() -> new IllegalStateException("사용자가 없다 userId=" + userId));
+        activeUserGuard.requireAliveWithLock(userId, "youtube.link.create");
         // 시각은 락 뒤에 잡는다 — 요청 시작 시각(구글 HTTP 전)을 쓰면 그 사이 다른 경로가 먼저 커밋한 행보다
         // 새 행의 created_at이 앞서, "회원별 최신 행"(GET 상태·resolve NOT_LINKED)이 살아있는 행이 아니게 된다.
         Instant now = Instant.now();
@@ -64,6 +74,12 @@ public class YoutubeLinkWriter {
      * 살아있는 행이 없으면 아무것도 안 한다(204 멱등).
      *
      * <p><b>구글에는 아무것도 보내지 않는다</b> — 왜인지는 {@link #closeAlive} javadoc에 있다.
+     *
+     * <p>🔴 <b>여기에는 「살아있는 회원만」을 넣지 않는다 — 일부러다.</b> 탈퇴가 익명화
+     * ({@code User.withdraw}) <b>전에</b> 이 메서드를 부른다. 넣으면 <b>탈퇴가 자기 가드에 막혀</b>
+     * 연동을 가진 회원이 탈퇴를 못 한다. 「그때는 아직 {@code deleted_at}이 비어 있다」는
+     * <b>순서에 기댄 성질</b>이라 {@code WithdrawnWriteGuardChannelLinkTest.연동을_가진_회원의_탈퇴는_자기_가드에_안_막힌다}가
+     * 못박는다 — 익명화를 앞으로 옮기는 사람은 그 검사가 먼저 빨간불이 된다.
      */
     @Transactional
     public void revoke(Long userId, Instant now) {

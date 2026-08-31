@@ -1008,6 +1008,43 @@ class SecretLeakTest extends IntegrationTestSupport {
         return body;
     }
 
+    /**
+     * 🔴 <b>탈퇴는 개인정보를 지우러 가는 경로다</b> — 그 경로가 지우려는 값을 로그에 남기면
+     * 표에서 지운 의미가 없다. 로그는 표보다 오래 살고 여러 곳으로 복제된다(POK-172 완료 조건).
+     *
+     * <p>바늘을 <b>네 칸에 다 심는다</b> — 구글 식별자·이메일·이름·사진 주소. 한 칸만 심으면
+     * 「어느 칸이 새는지」가 아니라 「그 칸이 안 샌다」만 재게 되고, 나중에 다른 칸을 찍는 코드가
+     * 조용히 통과한다.
+     *
+     * <p>이메일 바늘만 <b>소문자</b>다. {@code UserCreator}가 이메일을 소문자로 통일해 저장하므로
+     * 대문자가 섞인 바늘은 <b>표에 그 글자로 존재하지 않아</b> 검사가 저절로 통과한다.
+     *
+     * <p>여기까지 오는 값은 로그가 <b>회원 번호만</b> 찍는다는 규칙(운영 로깅 절)의 마지막 방어선이다.
+     */
+    @Test
+    void 탈퇴_경로를_돌려도_이메일_이름_구글식별자가_로그에_남지_않는다() throws Exception {
+        String subNeedle = needle("withdraw-sub");
+        String emailNeedle = needle("withdraw-email").toLowerCase(java.util.Locale.ROOT) + "@example.com";
+        String nameNeedle = needle("withdraw-name");
+        String photoNeedle = "https://lh3.googleusercontent.com/" + needle("withdraw-photo");
+
+        var user = userService.findOrCreate(subNeedle, emailNeedle, nameNeedle, photoNeedle);
+        String bearer = "Bearer " + tokenService.issue(user).accessToken();
+
+        try (LogCaptor captor = new LogCaptor()) {
+            mockMvc.perform(delete("/api/auth/me").header("Authorization", bearer))
+                    .andExpect(status().isNoContent());
+            // 막히는 갈래도 태운다 — 「탈퇴한 회원이다」를 알리려고 사유에 개인정보를 실으면 여기서 걸린다.
+            mockMvc.perform(delete("/api/auth/me").header("Authorization", bearer))
+                    .andExpect(status().isUnauthorized());
+
+            assertThat(captor.messages())
+                    .as("탈퇴 경로가 아예 안 돌았다. 그러면 아무것도 검사하지 않은 것이다")
+                    .anyMatch(m -> m.equals("auth.withdrawal.completed userId=" + user.getId()));
+            assertNoSecretsIn(captor, List.of(subNeedle, emailNeedle, nameNeedle, photoNeedle));
+        }
+    }
+
     @Test
     void 탐지기는_메시지에_있는_비밀을_잡는다() {
         String planted = needle("planted-in-message");

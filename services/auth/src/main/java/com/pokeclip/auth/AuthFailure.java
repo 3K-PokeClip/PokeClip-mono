@@ -39,5 +39,15 @@ public enum AuthFailure {
     EMAIL_ALREADY_REGISTERED,
 
     /** 인증 실패가 아니라 데이터 불일치. DataInconsistencyException이 쓴다. */
-    USER_NOT_FOUND
+    USER_NOT_FOUND,
+
+    /**
+     * 탈퇴한 회원인데 <b>새 것을 만들어 주는 쓰기 경로</b>에 도달했다({@code ActiveUserGuard}).
+     *
+     * <p>보통은 입구 필터({@code WithdrawnAccountFilter})가 401로 먼저 막는다. 여기까지 오는 것은
+     * <b>필터를 지난 뒤 탈퇴가 커밋된 요청</b>이거나 <b>로그인이 없는 경로</b>(페어링 교환)뿐이라
+     * 드물다. 응답은 나머지와 같은 401이고 사유는 로그에만 남는다 —
+     * 「그 계정이 탈퇴했다」를 응답으로 알려 줄 이익이 없다.
+     */
+    WITHDRAWN_ACCOUNT
 }

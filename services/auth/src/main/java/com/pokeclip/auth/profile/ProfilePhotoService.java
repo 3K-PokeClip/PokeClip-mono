@@ -1,5 +1,6 @@
 package com.pokeclip.auth.profile;
 
+import com.pokeclip.auth.AuthException;
 import com.pokeclip.auth.user.User;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -35,6 +36,12 @@ public class ProfilePhotoService {
      * 주소도 안 바뀌고, 그 주소는 <b>옛 자리</b>를 가리킨다. 새 파일은 반대 자리에 남지만 아무도
      * 안 가리키고 <b>다음 업로드가 그 자리를 다시 골라 덮어쓴다</b> — 청소 작업이 필요 없다.
      * 처음에는 「고아 청소가 딸려온다」를 이유로 미뤘는데, <b>자리를 둘로만 두면 그 대가가 없다.</b>
+     *
+     * <p>🔴 <b>그 회수 장치가 탈퇴자에게는 안 돈다 — 그래서 거절하는 자리가 스스로 지운다</b>
+     * (PR #149 codex P1, 재현함). 창고 쓰기가 탈퇴 정리({@code PhotoStorage.deleteAll})보다
+     * <b>늦게</b> 끝나면 지워진 자리에 파일이 하나 다시 생기는데, 그 회원에게는 <b>다음 업로드가
+     * 없어</b> 「덮어쓴다」가 영영 안 온다. 표는 비어 있고 응답은 401이라 <b>표를 아무리 뒤져도
+     * 「지웠다」로 보이는데 개인 사진이 창고에 남는다</b> — 이 카드가 막으려던 실패의 정확한 모양이다.
      */
     public User upload(long userId, MultipartFile file) {
         byte[] bytes = readAll(file);
@@ -44,12 +51,56 @@ public class ProfilePhotoService {
 
         long version = nextVersion(userId);
         storage.put(userId, version, bytes, type);
-        User user = attacher.attach(userId, version);
+        User user = attachOrDiscard(userId, version);
 
         // 커밋이 끝난 뒤라 이 줄은 「실제로 일어났다」를 뜻한다. 값은 userId만 — 파일 이름·형식은
         // 사람을 특정하지 않지만 남길 이유도 없다.
         log.info("auth.profile.photo.uploaded userId={}", userId);
         return user;
+    }
+
+    /**
+     * 표 갱신이 <b>탈퇴 확인에 걸려</b> 거절되면 방금 창고에 쓴 파일을 도로 지운다.
+     *
+     * <p>🔴 <b>여기서 부르는 이유는 트랜잭션 경계다.</b> 삭제도 외부 HTTP인데
+     * {@link PhotoAttacher#attach} 안에서 부르면 DB 커넥션을 쥔 채 창고를 기다리게 되고,
+     * 그것이 「알려진 구멍」 9·10번(풀 10·동시 25에서 21/25 실패·30초 마비 실측)이다.
+     * 이 메서드에는 {@code @Transactional}이 없고 프록시가 이미 트랜잭션을 닫은 뒤에 돌아오므로
+     * 삭제는 트랜잭션 <b>밖</b>에서 나간다({@code ProfilePhotoTransactionBoundaryTest}가 못박는다).
+     *
+     * <p>🔴 <b>{@link AuthException}만 잡는다.</b> 그 자리에서 그것을 던지는 것은 가드 하나뿐이고,
+     * 뜻은 「이 회원은 탈퇴했거나 사라졌다」 — 두 경우 모두 <b>그 회원의 사진은 남으면 안 된다.</b>
+     * 다른 실패(DB 오류 등)는 안 잡는다: 거기는 회원이 살아 있어 위 문단의 회수 장치가 그대로 돌고,
+     * 넓게 잡으면 <b>실패할 때마다 지워</b> 「실패해도 옛 자리는 멀쩡하다」는 성질을 건드린다.
+     *
+     * <p><b>자리 하나가 아니라 {@code deleteAll}이다.</b> 탈퇴자에게 참이어야 하는 것은
+     * 「방금 쓴 자리가 비었다」가 아니라 <b>「이 회원의 사진이 하나도 없다」</b>이고, 정리가 쓰는 도구가
+     * 바로 그것이다. 없는 것을 지워도 창고는 성공으로 답하므로 두 번 돌아도 무해하다.
+     *
+     * <p><b>지우다 실패해도 삼킨다.</b> 사용자가 받을 답은 이미 401로 정해져 있고(탈퇴한 계정이다)
+     * 여기서 창고 오류를 올리면 <b>같은 사실에 답이 둘</b>이 된다. 대신 WARN 한 줄을 남긴다 —
+     * 그 줄에 찍힌 회원이 <b>「파일이 남은 사람」</b>이고, 탈퇴 정리의
+     * {@code started}/{@code completed} 짝과 같은 용도다.
+     */
+    private User attachOrDiscard(long userId, long version) {
+        try {
+            return attacher.attach(userId, version);
+        } catch (AuthException e) {
+            discard(userId);
+            throw e;
+        }
+    }
+
+    private void discard(long userId) {
+        try {
+            storage.deleteAll(userId);
+            // 이 줄이 뜨는 것 자체가 「경합이 실제로 일어났다」는 신호다(가드의 write_blocked와 짝).
+            log.info("auth.profile.photo.discarded userId={}", userId);
+        } catch (RuntimeException e) {
+            // 원인은 타입 이름만 — 메시지에 창고 응답 본문이 붙어 오는 경로가 있다(S3PhotoStorage.get과 같은 규약).
+            log.warn("auth.profile.photo.discard_failed userId={} causeType={}",
+                    userId, e.getClass().getSimpleName());
+        }
     }
 
     /**

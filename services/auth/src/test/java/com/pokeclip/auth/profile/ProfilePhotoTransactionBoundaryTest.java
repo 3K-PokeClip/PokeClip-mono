@@ -1,9 +1,11 @@
 package com.pokeclip.auth.profile;
 
+import com.pokeclip.auth.AuthException;
 import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
 import com.pokeclip.auth.user.UserService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
@@ -14,9 +16,12 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 🔴 <b>창고를 부르는 동안 DB 트랜잭션이 열려 있으면 안 된다.</b> 커넥션을 쥔 채 외부 HTTP를
@@ -35,6 +40,7 @@ class ProfilePhotoTransactionBoundaryTest extends ProfileTestSupport {
 
     private final ProfilePhotoService service;
     private final RecordingStorage storage;
+    private final JdbcTemplate jdbcTemplate;
 
     ProfilePhotoTransactionBoundaryTest(MockMvc mockMvc, UserRepository userRepository, UserService userService,
                                         TokenService tokenService, JdbcTemplate jdbc,
@@ -42,15 +48,20 @@ class ProfilePhotoTransactionBoundaryTest extends ProfileTestSupport {
         super(mockMvc, userRepository, userService, tokenService, jdbc);
         this.service = service;
         this.storage = storage;
+        this.jdbcTemplate = jdbc;
+    }
+
+    /** 창고 빈은 컨텍스트에 하나라 시험 사이에 상태가 넘어간다 — 매번 새것으로 시작한다. */
+    @BeforeEach
+    void resetStorage() {
+        storage.reset();
     }
 
     @Test
     void 창고를_부르는_동안에는_트랜잭션이_열려_있지_않다() {
         User u = newUser();
-        byte[] body = new byte[512];
-        System.arraycopy(new byte[]{(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}, 0, body, 0, 8);
 
-        service.upload(u.getId(), new MockMultipartFile("file", "me.png", "image/png", body));
+        service.upload(u.getId(), png());
 
         assertThat(storage.transactionActiveDuringPut)
                 .as("창고 호출이 트랜잭션 안이다 — 커넥션을 쥔 채 최대 8초를 기다리게 된다")
@@ -58,6 +69,40 @@ class ProfilePhotoTransactionBoundaryTest extends ProfileTestSupport {
         assertThat(userRepository.findById(u.getId()).orElseThrow().getProfilePhotoKey())
                 .as("표 갱신은 트랜잭션 안에서 실제로 일어나야 한다")
                 .isNotBlank();
+    }
+
+    /**
+     * 🔴 <b>탈퇴로 거절될 때 방금 쓴 파일을 도로 지우는데, 그 삭제도 외부 HTTP다</b>(PR #149 codex P1).
+     *
+     * <p>거절은 {@code PhotoAttacher.attach}의 트랜잭션 안에서 나는데 <b>보상 삭제를 거기서 부르면</b>
+     * 위 문단의 대가를 그대로 치른다 — 롤백 중인 커넥션을 쥔 채 창고를 기다린다.
+     * 그래서 삭제는 그 트랜잭션이 <b>끝난 뒤</b>, 트랜잭션이 없는 {@code ProfilePhotoService}에서 한다.
+     *
+     * <p>창고 쓰기와 표 갱신 <b>사이</b>에 탈퇴가 커밋된 상태를 만든다 — 앞 관문
+     * ({@code currentVersion})은 통과하고 뒤 관문({@code attach})만 걸리는 유일한 순서다.
+     */
+    @Test
+    void 탈퇴로_거절되면_방금_쓴_파일을_트랜잭션_밖에서_지운다() {
+        User u = newUser();
+        storage.duringPut = () -> jdbcTemplate.update("UPDATE users SET deleted_at = ? WHERE id = ?",
+                Timestamp.from(Instant.now()), u.getId());
+
+        assertThatThrownBy(() -> service.upload(u.getId(), png()))
+                .as("전제: 탈퇴 뒤에 도착한 표 갱신은 거절돼야 한다")
+                .isInstanceOf(AuthException.class);
+
+        assertThat(storage.deleteCalls)
+                .as("🔴 거절만 하고 방금 쓴 파일을 안 지웠다 — 아무도 안 가리키는 개인 사진이 창고에 남는다")
+                .isEqualTo(1);
+        assertThat(storage.transactionActiveDuringDelete)
+                .as("보상 삭제가 트랜잭션 안이다 — 그것도 외부 HTTP라 커넥션을 쥔 채 기다리게 된다")
+                .isFalse();
+    }
+
+    private static MockMultipartFile png() {
+        byte[] body = new byte[512];
+        System.arraycopy(new byte[]{(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}, 0, body, 0, 8);
+        return new MockMultipartFile("file", "me.png", "image/png", body);
     }
 
     @TestConfiguration
@@ -74,10 +119,22 @@ class ProfilePhotoTransactionBoundaryTest extends ProfileTestSupport {
     static class RecordingStorage implements PhotoStorage {
 
         private Boolean transactionActiveDuringPut;
+        private Boolean transactionActiveDuringDelete;
+        private int deleteCalls;
+        /** 창고에 쓰는 <b>동안</b> 벌어질 일. 기본은 아무것도 안 한다. */
+        private Runnable duringPut = () -> { };
+
+        void reset() {
+            transactionActiveDuringPut = null;
+            transactionActiveDuringDelete = null;
+            deleteCalls = 0;
+            duringPut = () -> { };
+        }
 
         @Override
         public void put(long userId, long version, byte[] bytes, ImageType type) {
             transactionActiveDuringPut = TransactionSynchronizationManager.isActualTransactionActive();
+            duringPut.run();
         }
 
         @Override
@@ -87,6 +144,8 @@ class ProfilePhotoTransactionBoundaryTest extends ProfileTestSupport {
 
         @Override
         public void deleteAll(long userId) {
+            transactionActiveDuringDelete = TransactionSynchronizationManager.isActualTransactionActive();
+            deleteCalls++;
         }
     }
 }
