@@ -7,8 +7,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * 끝난 방송 메모를 읽고 쓰고 치운다. 이 서버의 DB 접근 방식은 JPA가 아니라
@@ -77,6 +80,28 @@ public class EndedStreamStore {
     public Optional<EndedStream> find(String streamId) {
         List<EndedStream> found = jdbc.query(SELECT, EndedStreamStore::toMemo, streamId);
         return found.stream().findFirst();
+    }
+
+    /**
+     * 이 방송 번호들 중 <b>메모가 있는 것</b>. 끝났든 포기했든 가리지 않는다 — 재부착은
+     * 둘 다 건너뛰므로 이유를 알 필요가 없다.
+     *
+     * <p><b>한 번에 묻는 이유</b>: 재부착이 방송 200개를 받으면 낱개 조회가 200번이다.
+     * PK 조회라 한 건은 싸지만 왕복이 200번이고, 그동안 다른 방송의 붙이기가 밀린다.
+     *
+     * <p><b>빈 목록을 여기서 막는다.</b> {@code IN ()}은 문법 오류인데, 부르는 쪽이 매번
+     * 막게 두면 언젠가 한 곳이 빠진다 — 재부착은 「방송이 하나도 없는 회차」를 매 주기
+     * 지나가므로 그 갈래가 평상시 경로다.
+     */
+    public Set<String> findAllIds(Collection<String> streamIds) {
+        if (streamIds.isEmpty()) {
+            return Set.of();
+        }
+        String placeholders = String.join(",", Collections.nCopies(streamIds.size(), "?"));
+        List<String> found = jdbc.queryForList(
+                "SELECT stream_id FROM chat_ended_streams WHERE stream_id IN (" + placeholders + ")",
+                String.class, streamIds.toArray());
+        return Set.copyOf(found);
     }
 
     /** @return 새로 남겼는가. 이미 메모가 있으면 false — 그 메모가 이긴다 */
