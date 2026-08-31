@@ -10,6 +10,8 @@ import org.springframework.test.context.ActiveProfiles;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -193,6 +195,38 @@ class EndedStreamStoreTest extends IntegrationTestSupport {
         EndedStream memo = store.find("s1").orElseThrow();
         assertThat(memo.lastSequence()).isEqualTo(9L);
         assertThat(memo.createdAt()).isEqualTo(아주_예전);
+    }
+
+    /**
+     * 재부착이 방송 200개를 받으면 낱개 조회가 200번이다. 한 번으로 줄인다.
+     *
+     * <p><b>끝났든 포기했든 가리지 않는다</b> — 재부착은 둘 다 건너뛰므로 이유를 알 필요가 없다.
+     * 그래서 두 종류의 메모를 나란히 심고 둘 다 나오는지 본다.
+     *
+     * <p>문항 2: 「없는 것」({@code live-C-001})을 같이 물어 <b>전부 다 있다고 답하는 구현</b>을
+     * 막는다 — {@code containsExactlyInAnyOrder}가 여분도 잡는다.
+     * <p>문항 5: {@code IN} 절을 {@code stream_id = ?} 하나로 되돌리면 빨간불(확인함).
+     */
+    @Test
+    void 여러_방송의_메모_유무를_한_번에_읽는다() {
+        store.remember("live-A-001", 5, Instant.parse("2026-08-31T04:00:00Z"));
+        store.rememberStopped("live-B-001", "LINK_UNAVAILABLE", Instant.parse("2026-08-31T04:00:00Z"));
+
+        Set<String> found = store.findAllIds(List.of("live-A-001", "live-B-001", "live-C-001"));
+
+        assertThat(found).containsExactlyInAnyOrder("live-A-001", "live-B-001");
+    }
+
+    /**
+     * {@code IN ()}은 문법 오류다. <b>부르는 쪽이 매번 막게 두면 한 곳이 빠진다</b> — 재부착은
+     * 「방송이 하나도 없는 회차」를 매 주기 지나가므로 그 갈래가 평상시 경로다.
+     *
+     * <p>문항 2: 빈 결과는 「안 물어서 빔」과 「물었는데 없어서 빔」이 같아 보인다. 이 검사가
+     * 재는 것은 <b>예외가 안 난다</b>는 쪽이고, {@code IN} 절이 실제로 도는 것은 위 검사가 잰다.
+     */
+    @Test
+    void 빈_목록을_주면_DB에_안_묻고_빈_결과다() {
+        assertThat(store.findAllIds(List.of())).isEmpty();
     }
 
     /**

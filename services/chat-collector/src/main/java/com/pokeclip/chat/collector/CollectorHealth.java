@@ -3,6 +3,7 @@ package com.pokeclip.chat.collector;
 import com.pokeclip.chat.collector.broadcast.BroadcastCounters;
 import com.pokeclip.chat.collector.broadcast.BroadcastEventProcessor;
 import com.pokeclip.chat.collector.broadcast.intake.IntakeStatus;
+import com.pokeclip.chat.collector.broadcast.reattach.ReattachStatus;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,6 +50,16 @@ public class CollectorHealth implements HealthIndicator {
     private final IntakeStatus intake;
 
     /**
+     * <b>재부착이 돌고 있나.</b> 이 항이 없으면 clip에 몇 시간을 못 닿아도 초록이다 —
+     * 이 카드가 새로 만든 사각이다({@link ReattachStatus}).
+     *
+     * <p>🔴 <b>{@code letterIntake}와 다른 물음이다.</b> 저쪽은 「편지를 꺼낼 수 있나」이고
+     * 이쪽은 「clip에 물어볼 수 있나」다. 그리고 <b>「처리가 막혔나」는 아직 둘 다 아니다</b> —
+     * 그것은 별도 카드로 열려 있다.
+     */
+    private final ReattachStatus reattach;
+
+    /**
      * 편지 경로가 꺼져 있으면 <b>null이다</b> — 판정기 빈 자체가 없다.
      *
      * <p>주입 지점이 {@link ObjectProvider}인 이유는 「없을 수 있다」를 컨테이너가 아는
@@ -84,15 +95,17 @@ public class CollectorHealth implements HealthIndicator {
      */
     @Autowired
     public CollectorHealth(CollectionStatus status, SessionRegistry registry, IntakeStatus intake,
-                           ObjectProvider<BroadcastEventProcessor> processor) {
-        this(status, registry, intake, processor, Instant::now);
+                           ReattachStatus reattach, ObjectProvider<BroadcastEventProcessor> processor) {
+        this(status, registry, intake, reattach, processor, Instant::now);
     }
 
     CollectorHealth(CollectionStatus status, SessionRegistry registry, IntakeStatus intake,
-                    ObjectProvider<BroadcastEventProcessor> processor, Supplier<Instant> clock) {
+                    ReattachStatus reattach, ObjectProvider<BroadcastEventProcessor> processor,
+                    Supplier<Instant> clock) {
         this.status = status;
         this.registry = registry;
         this.intake = intake;
+        this.reattach = reattach;
         this.processor = processor.getIfAvailable();
         this.clock = clock;
         this.createdAt = clock.get();
@@ -132,6 +145,23 @@ public class CollectorHealth implements HealthIndicator {
                 // 이 응답은 밖으로 나간다(IntakeStatus.Snapshot 주석).
                 .withDetail("letterFailure", letters.lastFailureReason() == null
                         ? "none" : letters.lastFailureReason())
+                // <b>삭제 실패를 따로 낸다</b>(감사 G2). 합치면 운영이 고칠 자리를 못 가른다 —
+                // 앞은 큐에 못 닿는 것(연결·주소), 이쪽은 대개 DeleteMessage 권한이다.
+                .withDetail("letterDeleteFailure", letters.lastDeleteFailureReason() == null
+                        ? "none" : letters.lastDeleteFailureReason())
+                // <b>재부착이 돌고 있나</b>(꺼짐·아직 안 돎·도는 중·못 닿음 넷).
+                //
+                // <b>이 값은 DOWN을 만들지 않는다.</b> 재부착은 「알림으로 붙었어야 하는데 못
+                // 붙은 방송」을 줍는 복구 장치이고, 그것이 멈춰도 새 방송은 알림으로 그대로
+                // 붙는다 — 즉 「새 방송을 하나도 못 받는 상태」가 아니다(전체 DOWN의 정의).
+                // 여기서 DOWN을 주면 clip 장애가 수집 서버의 배포를 막는데, 정작 재시작으로는
+                // 안 풀린다. 위 버린-편지 셋과 같은 판단이다.
+                .withDetail("reattach", reattach.state().label())
+                // <b>알림 경로의 unreadableStreamerIds와 갈라 둔다.</b> 1번이 고칠 자리는
+                // 같지만 <b>어느 경로가 그것을 봤나</b>가 다르다 — 이쪽만 오르면 clip 명부의
+                // streamerId 표기가 이상한 것이고, 알림 쪽만 오르면 SQS 봉투 쪽이다.
+                // 합치면 그 구분이 사라진다(버린 편지 셋을 안 합친 것과 같은 이유).
+                .withDetail("reattachUnreadableStreamerIds", reattach.unreadableStreamerIds())
                 // <b>버린 편지 셋을 합치지 않는다.</b> 1번이 고칠 자리가 셋 다 다르다 —
                 // unreadableStreamerIds는 「식별자 체계가 바뀌었다」, unknownTypes는
                 // 「우리가 모르는 종류를 보낸다」, malformedEnvelopes는 「봉투의 칸이
@@ -189,6 +219,11 @@ public class CollectorHealth implements HealthIndicator {
         }
         if (letters.lastFailureReason() != null) {
             return "failing";
+        }
+        // <b>따로 이름을 준다.</b> 「받기는 되는데 못 지운다」는 알림이 가시성 시한마다
+        // 무한 재처리되는 상태라, 「큐에 못 닿는다」와 같은 낱말로 부르면 원인을 잘못 찾는다.
+        if (letters.lastDeleteFailureReason() != null) {
+            return "delete-failing";
         }
         if (stalled) {
             return "stalled";

@@ -3,6 +3,7 @@ package com.pokeclip.chat.collector;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.broadcast.BroadcastEventProcessor;
 import com.pokeclip.chat.collector.broadcast.BroadcastSessions;
+import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
 import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
 import com.pokeclip.chat.collector.broadcast.LifecycleEnvelope;
 import com.pokeclip.chat.collector.broadcast.ProcessResult;
@@ -10,6 +11,7 @@ import com.pokeclip.chat.collector.broadcast.StreamerId;
 import com.pokeclip.chat.collector.broadcast.intake.IntakeProperties;
 import com.pokeclip.chat.collector.broadcast.intake.IntakeStatus;
 import com.pokeclip.chat.collector.broadcast.intake.SqsIntakeRunner;
+import com.pokeclip.chat.collector.broadcast.reattach.ReattachStatus;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
@@ -26,6 +28,9 @@ import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.web.client.RestClient;
 import software.amazon.awssdk.services.sqs.SqsClient;
+import software.amazon.awssdk.services.sqs.model.DeleteMessageRequest;
+import software.amazon.awssdk.services.sqs.model.DeleteMessageResponse;
+import software.amazon.awssdk.services.sqs.model.Message;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageResponse;
 import software.amazon.awssdk.services.sqs.model.SqsException;
@@ -34,6 +39,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -69,6 +75,8 @@ class CollectorHealthTest extends IntegrationTestSupport {
     /** 옛 경로의 상태. 편지 경로를 쓰는 프로세스에서는 DISABLED로 남는다(같이 못 켠다). */
     private final CollectionStatus legacy = new CollectionStatus();
     private final IntakeStatus intake = new IntakeStatus(true);
+    /** 기본은 「켜졌고 아직 한 번도 안 돌았다」다 — 부팅 직후의 실제 상태다. */
+    private ReattachStatus reattach = new ReattachStatus(true);
     private final ToggleQueue queue = new ToggleQueue();
 
     private SessionRegistry registry;
@@ -150,6 +158,25 @@ class CollectorHealthTest extends IntegrationTestSupport {
     }
 
     /**
+     * 🔴 <b>재부착이 못 읽은 스트리머 수.</b> 1번이 식별자 체계를 바꾸면 알림 경로와
+     * 재부착이 <b>같이</b> 못 읽는다. 알림 쪽 카운터만 health에 실려 있으면, 재부착만
+     * 쓰는 배포(옛 방송을 줍는 중)에서 그 신호가 통째로 안 보인다(감사 라운드 3 H2).
+     *
+     * <p>문항 4 — 알림 쪽 항과 <b>같은 값으로 뭉뚱그린</b> 구현도 첫 단언은 통과한다.
+     * 둘이 갈리는지 같이 본다: 1번이 고칠 자리는 같아도 <b>어느 경로가 그것을 봤나</b>가
+     * 다르고, 재부착만 세는 것은 「알림 경로는 멀쩡한데 clip 명부만 이상하다」를 뜻한다.
+     */
+    @Test
+    void 재부착이_못_읽은_스트리머_수가_health에_보인다() {
+        given();
+        reattach.unreadableStreamerIds(4L);
+
+        assertThat(health().getDetails())
+                .containsEntry("reattachUnreadableStreamerIds", 4L)
+                .containsEntry("unreadableStreamerIds", 0L);
+    }
+
+    /**
      * <b>전체 DOWN은 여기 하나다.</b> 편지를 못 꺼내면 새 방송이 하나도 안 붙는다 —
      * 그런데 이미 붙어 있던 세션은 멀쩡히 채팅을 받으므로 세션 쪽 신호로는 안 드러난다.
      *
@@ -227,6 +254,53 @@ class CollectorHealthTest extends IntegrationTestSupport {
                 .isTrue();
     }
 
+    /**
+     * 🔴 <b>재부착이 clip에 계속 못 닿아도 지금까지는 초록이었다.</b> 이 카드가 만든 사각이다 —
+     * {@code Reattacher.sweep()}이 {@code @Scheduled}를 지키려고 어떤 실패든 삼키므로,
+     * 「재배포로 잃은 방송을 줍는」 장치가 통째로 죽어 있어도 밖에서는 차이가 없다.
+     *
+     * <p><b>전체는 UP이다.</b> 재부착이 멈춰도 새 방송은 알림으로 그대로 붙으므로
+     * 「새 방송을 하나도 못 받는 상태」(전체 DOWN의 정의)가 아니다. 여기서 DOWN을 주면
+     * clip 장애가 이 서버의 배포를 막는데 재시작으로는 안 풀린다.
+     *
+     * <p>문항 2: 「늘 {@code ok}」인 구현도 마지막 단언은 통과한다 — 그래서 <b>회복까지</b>
+     * 같은 검사에서 본다.
+     */
+    @Test
+    void 재부착이_clip에_못_닿으면_상세에_드러나고_전체는_UP이다() {
+        given();
+
+        reattach.sweepFailed();
+
+        Health health = health();
+        assertThat(health.getDetails()).containsEntry("reattach", "failing");
+        assertThat(health.getStatus())
+                .as("재부착은 복구 장치다 — 멈춰도 새 방송은 알림으로 붙는다")
+                .isEqualTo(Status.UP);
+
+        reattach.sweepSucceeded();
+        assertThat(health().getDetails())
+                .as("회복이 표시를 지워야 한다 — 안 지우면 한 번 못 닿은 뒤로 영영 아프다")
+                .containsEntry("reattach", "ok");
+    }
+
+    /**
+     * <b>「꺼짐」과 「켜졌는데 아직 한 번도 안 돌았다」를 가른다.</b> 뭉치면 처음부터 clip을
+     * 못 잡고 있는 프로세스가 「아직 안 돌았을 뿐」으로 읽힌다 — {@code letterIntake}의
+     * {@code disabled}/{@code starting}과 같은 이유로 가른 자리다.
+     */
+    @Test
+    void 재부착이_꺼진_것과_아직_안_돈_것을_가른다() {
+        given();
+
+        assertThat(health().getDetails())
+                .as("켜졌지만 첫 회차 전이다")
+                .containsEntry("reattach", "starting");
+
+        reattach = new ReattachStatus(false);
+        assertThat(health().getDetails()).containsEntry("reattach", "disabled");
+    }
+
     // ------------------------------------------------------------------
     // 도우미
     // ------------------------------------------------------------------
@@ -239,8 +313,13 @@ class CollectorHealthTest extends IntegrationTestSupport {
                 new ChatBuffer(1_000), TestPersistence.disabledPersister(), ChatArchive.NONE);
         // 판정기는 <b>진짜 표</b>를 쓴다. 여기서 보는 갈래 셋은 표에 닿기 전에 갈리지만,
         // 가짜로 바꾸면 「닿기 전에 갈린다」는 사실 자체가 검사에서 사라진다.
-        processor = new BroadcastEventProcessor(store, new RefusingSessions());
-        intakeRunner = new SqsIntakeRunner(queue, intakeProperties(), intake, processor, new ObjectMapper());
+        processor = new BroadcastEventProcessor(store, new RefusingSessions(),
+                (streamId, reason) -> {
+                    throw new AssertionError("못 쓸 편지가 포기 메모까지 갔다");
+                });
+        // 줄 상한을 넉넉히 준다 — 이 검사가 재는 것은 health이지 백프레셔가 아니다.
+        intakeRunner = new SqsIntakeRunner(queue, intakeProperties(), intake, processor,
+                new ObjectMapper(), new StreamerSerialExecutor(100));
     }
 
     private Health health() {
@@ -249,7 +328,51 @@ class CollectorHealthTest extends IntegrationTestSupport {
 
     /** 시계를 손에 쥐고 본다 — 「얼마나 오래 안 꺼냈나」를 재려면 필요하다. */
     private Health healthAt(Instant now) {
-        return new CollectorHealth(legacy, registry, intake, provider(processor), () -> now).health();
+        return new CollectorHealth(legacy, registry, intake, reattach, provider(processor), () -> now)
+                .health();
+    }
+
+    /**
+     * 🔴 <b>「받기는 되는데 못 지운다」는 따로 이름을 갖는다.</b> 그 상태에서는 모든 알림이
+     * 가시성 시한마다 무한 재처리되는데, 「큐에 못 닿는다」({@code failing})와 같은 낱말로
+     * 부르면 운영이 고칠 자리를 잘못 찾는다 — 앞은 연결·주소이고 이쪽은 대개
+     * {@code DeleteMessage} 권한이다. `services/README.md`가 밖에 그렇게 약속해 뒀다.
+     *
+     * <p><b>이 갈래를 재는 검사가 0개였다</b>(감사 라운드 3 H3, 주입 Y3이 초록이었다).
+     * {@code healthy()}가 false라 DOWN이 되는 것은 다른 검사가 재고 있었지만,
+     * <b>health 층의 낱말과 상세</b>는 그물 밖이었다 — 이 항을 통째로 지워도 아무도 안 깼다.
+     *
+     * <p>문항 2 — 「늘 delete-failing」인 구현도 첫 단언은 통과한다. 그래서 <b>회복까지</b>
+     * 같은 검사에서 본다: 삭제가 다시 되면 낱말도 상세도 지워져야 한다.
+     * 문항 4 — 낱말만 보면 <b>사유가 안 실려도</b> 통과한다. 운영은 그 사유로 권한 문제를
+     * 알아채므로 {@code letterDeleteFailure}까지 같이 본다.
+     */
+    @Test
+    void 편지를_못_지우면_큐에_못_닿는_것과_다른_이름으로_아프다고_말한다() {
+        given();
+        queue.deletable = false;
+        queue.다음_회차에_못_읽을_편지를_둔다();
+
+        assertThat(intakeRunner.pollOnce()).as("꺼내기 자체는 성공한다").isTrue();
+
+        Health sick = health();
+        assertThat(sick.getStatus()).isEqualTo(Status.DOWN);
+        assertThat(sick.getDetails())
+                .as("「못 닿는다」(failing)와 갈라야 운영이 고칠 자리를 찾는다")
+                .containsEntry("letterIntake", "delete-failing")
+                .containsEntry("letterDeleteFailure", "SqsException")
+                .containsEntry("letterFailure", "none");
+
+        // 회복 — 권한이 붙으면 낱말도 사유도 지워져야 한다.
+        queue.deletable = true;
+        queue.다음_회차에_못_읽을_편지를_둔다();
+        assertThat(intakeRunner.pollOnce()).isTrue();
+
+        Health well = health();
+        assertThat(well.getStatus()).isEqualTo(Status.UP);
+        assertThat(well.getDetails())
+                .containsEntry("letterIntake", "ok")
+                .containsEntry("letterDeleteFailure", "none");
     }
 
     /**
@@ -345,7 +468,7 @@ class CollectorHealthTest extends IntegrationTestSupport {
      */
     private static final class RefusingSessions implements BroadcastSessions {
         @Override
-        public ProcessResult start(LifecycleEnvelope envelope, StreamerId streamer) {
+        public ProcessResult start(String streamId, StreamerId streamer, Instant startedAt) {
             throw new AssertionError("못 쓸 편지가 세션 자리까지 갔다");
         }
 
@@ -362,13 +485,31 @@ class CollectorHealthTest extends IntegrationTestSupport {
     private static final class ToggleQueue implements SqsClient {
 
         volatile boolean reachable = true;
+        /** 지우려 들면 터진다. <b>받기는 되는데 못 지운다</b>를 만드는 유일한 손잡이다. */
+        volatile boolean deletable = true;
+        /** 다음 한 회차가 꺼낼 편지. 꺼내고 나면 빈다 — 안 비우면 회차마다 같은 편지가 또 온다. */
+        private final List<Message> pending = new CopyOnWriteArrayList<>();
+
+        void 다음_회차에_못_읽을_편지를_둔다() {
+            pending.add(Message.builder().messageId("m1").receiptHandle("r1").body("{").build());
+        }
 
         @Override
         public ReceiveMessageResponse receiveMessage(ReceiveMessageRequest request) {
             if (!reachable) {
                 throw SqsException.builder().message("unreachable").build();
             }
-            return ReceiveMessageResponse.builder().messages(List.of()).build();
+            List<Message> batch = List.copyOf(pending);
+            pending.clear();
+            return ReceiveMessageResponse.builder().messages(batch).build();
+        }
+
+        @Override
+        public DeleteMessageResponse deleteMessage(DeleteMessageRequest request) {
+            if (!deletable) {
+                throw SqsException.builder().message("no permission").build();
+            }
+            return DeleteMessageResponse.builder().build();
         }
 
         @Override

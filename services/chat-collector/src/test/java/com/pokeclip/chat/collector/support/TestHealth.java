@@ -6,6 +6,7 @@ import com.pokeclip.chat.collector.CollectorHealth;
 import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.broadcast.BroadcastEventProcessor;
 import com.pokeclip.chat.collector.broadcast.intake.IntakeStatus;
+import com.pokeclip.chat.collector.broadcast.reattach.ReattachStatus;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.client.RestClient;
@@ -26,7 +27,8 @@ public final class TestHealth {
     }
 
     public static CollectorHealth legacyOnly(CollectionStatus status) {
-        return new CollectorHealth(status, emptyRegistry(), new IntakeStatus(false), noProcessor());
+        return new CollectorHealth(status, emptyRegistry(), new IntakeStatus(false),
+                new ReattachStatus(false), noProcessor());
     }
 
     /**
