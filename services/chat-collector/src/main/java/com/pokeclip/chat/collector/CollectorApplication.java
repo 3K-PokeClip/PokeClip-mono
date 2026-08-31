@@ -4,6 +4,8 @@ import com.pokeclip.chat.collector.archive.ChatArchive;
 import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
 import com.pokeclip.chat.collector.broadcast.EndedStreamSweeper;
 import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
+import com.pokeclip.chat.collector.broadcast.reattach.ReattachProperties;
+import com.pokeclip.chat.collector.broadcast.reattach.ReattachStatus;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
@@ -107,10 +109,30 @@ public class CollectorApplication {
      * 느릴 때 메모리에만 쌓이고, 작게 잡으면 폴링이 자주 쉰다.
      * <b>auth 커넥션도 이 값이 정한다</b> — 붙이기 하나가 auth 왕복 하나를 쓰므로
      * 동시 50이 auth에 한꺼번에 나갈 수 있는 상한이다.
+     *
+     * <p>🔴 <b>DB 커넥션은 이 값보다 훨씬 적다 — Hikari 기본 풀이 10이다.</b> 재부착 경로의
+     * 붙이기 하나가 DB를 둘 친다({@code EndedStreamStore.find} · {@code GapMeasurer.measure}),
+     * 그리고 그 풀은 적재·아카이브와 <b>같은 것</b>이다. 방송 50개가 한꺼번에 재부착되면
+     * 뒤엣것은 풀에서 커넥션을 기다리고, <b>기다리는 동안 그 스트리머의 줄을 붙들고 있다</b> —
+     * 같은 스트리머의 알림도 그만큼 밀린다. Hikari {@code connection-timeout}을 넘기면 그
+     * 붙이기가 실패하는데 <b>알림을 안 지웠으므로 유실은 아니고</b>, 다음 회차가 같은 방송을
+     * 다시 줍는다. 여기를 키울 때는 {@code spring.datasource.hikari.maximum-pool-size}를
+     * 같이 본다.
      */
     @Bean
     StreamerSerialExecutor streamerSerialExecutor() {
         return new StreamerSerialExecutor(MAX_IN_FLIGHT_ATTACHES);
+    }
+
+    /**
+     * <b>재부착이 켜졌든 꺼졌든 항상 등록한다</b> — health가 「빈이 없음」과 「꺼져 있음」을
+     * 구분하려면 꺼졌다는 사실 자체를 알아야 한다({@code IntakeConfiguration.intakeStatus}와
+     * 같은 이유). {@code boolean}은 스프링이 못 만들어 {@code @Component}로는 안 되므로
+     * 실행기·스위퍼와 같은 자리에 둔다.
+     */
+    @Bean
+    ReattachStatus reattachStatus(ReattachProperties properties) {
+        return new ReattachStatus(properties.enabled());
     }
 
     @Bean

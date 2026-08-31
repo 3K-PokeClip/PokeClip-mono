@@ -304,6 +304,9 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 | `BROADCAST_ENDED_SWEEP_INTERVAL` | `PT1H` | — | 끝난 방송 메모를 치우는 주기 |
 | `BROADCAST_ENDED_RETENTION` | `PT24H` | — | 그 메모의 보관 기간(ADR-016의 TTL 24h) |
 | `AWS_REGION` | `ap-northeast-2` | ✅ | 큐·S3 공용 |
+| `CHAT_REATTACH_ENABLED` | `false` | ✅ | 켜면 `clip`에 「지금 방송 중인 목록」을 주기적으로 물어 **붙어 있어야 하는데 안 붙은 방송**에 붙는다(POK-219). 🔴 **`BROADCAST_INTAKE_ENABLED=false`인 채로 이것만 켜면 부팅이 죽는다** — 붙이는 문을 편지 경로가 만들고, 알림 경로가 꺼져 있으면 애초에 주울 것이 없다 |
+| `CLIP_BASE_URL` | `http://localhost:8081` | ✅ | 그 목록을 물을 clip 주소. 컨테이너 안에서는 서비스 이름이다 — **기본값을 그대로 두면 컨테이너 안에서 자기 자신을 가리킨다.** 재부착이 켜졌는데 비면 부팅이 죽는다 |
+| `CHAT_REATTACH_INTERVAL` | `PT1M` | — | 재부착 주기. **평소에 쓰는 값이 아니라 사고 뒤 복구 지연의 상한이다** — 한 회차가 통째로 실패해도 다음 회차가 같은 목록을 다시 받는다. 첫 회차는 부팅 직후 `PT5S`이고 이쪽은 환경변수가 없다(주기와 같아지면 배포마다 한 주기를 그냥 잃는다) |
 | `CHAT_SYNC_OFFSET_MS` | `3900` | — | 채팅 시각에서 빼는 보정값(ms). **2026-08-24 로컬 실측값이다**(표본 20개 중앙값 3,884ms를 반올림). **음수를 허용하고 크기는 ±600000(10분)까지다.** 운영에서는 다시 잰다 — 아래 참고 |
 
 **🔴 `CHAT_`\*는 「호스트 쪽 이름이 다르다」는 표시다.** 서버가 컨테이너 안에서 읽는 이름은
@@ -316,8 +319,9 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 "로컬에서 일부러 안 켬"과 "운영에서 설정을 깜빡함"이 똑같이 보인다. 자격증명은 환경변수에
 없다(SDK 표준 체인).
 
-**`CHAT_SYNC_OFFSET_MS`의 `CHAT_`은 위 표시와 무관하다** — 그쪽은 `compose` 칸에 붙어
-「`.env`에서 받는 이름만 다르다」는 뜻이고, 이쪽은 **서버가 읽는 이름 자체**가 그렇다.
+**`CHAT_SYNC_OFFSET_MS`·`CHAT_REATTACH_*`의 `CHAT_`은 위 표시와 무관하다** — 그쪽은
+`compose` 칸에 붙어 「`.env`에서 받는 이름만 다르다」는 뜻이고, 이쪽은 **서버가 읽는 이름
+자체**가 그렇다. 그래서 `.env`와 컨테이너 안 이름이 같다.
 
 **기본값 `3900`은 실측이다 — 2026-08-24, 표본 20개.** 화면에 20초마다 흰 번쩍임을 만들어
 같은 비트스트림을 치지직과 우리 미디어 서버에 동시 송출하고, 스트리머가 **치지직 방송 화면을
@@ -450,13 +454,26 @@ curl -s localhost:8083/actuator/health
 # {"collectorHealth":{"status":"UP","details":{
 #   "status":"disabled","activeSessions":2,"reconnectingSessions":0,
 #   "letterIntake":"ok","lastLetterPollAt":"2026-08-18T12:00:00Z","letterFailure":"none",
+#   "letterDeleteFailure":"none","reattach":"ok",
 #   "unreadableStreamerIds":0,"unknownTypes":0,"malformedEnvelopes":0}}}
 ```
 
 **방송 둘이 붙어 있는데 `"status":"disabled"`인 것이 정상이다 — 고장이 아니다.**
 그 칸은 **옛 경로(`CHZZK_ENABLED`) 전용**이라 편지 경로에서는 **언제나 `disabled`**다.
 편지로 연 세션은 방송마다 상태를 따로 들고, 그 수가 `activeSessions`·`reconnectingSessions`다.
-**편지 경로가 도는지는 `status`가 아니라 `letterIntake`로 본다**(`ok`·`starting`·`failing`·`disabled`).
+**편지 경로가 도는지는 `status`가 아니라 `letterIntake`로 본다**
+(`ok`·`starting`·`failing`·`delete-failing`·`disabled`).
+
+**`delete-failing`은 「받기는 되는데 못 지운다」다** — 대개 `DeleteMessage` 권한만 빠진
+IAM 정책이고, 그 상태에서는 모든 알림이 가시성 시한마다 무한 재처리된다. 「큐에 못 닿는다」
+(`failing`)와 갈라 둔 이유는 **운영에서 고칠 자리가 다르기 때문**이다(권한 대 연결).
+사유는 `letterFailure`·`letterDeleteFailure`에 **예외 타입 이름만** 실린다.
+
+**`reattach`는 재부착이 도는지다**(`ok`·`starting`·`failing`·`disabled`, POK-219).
+`letterIntake`와 다른 물음이다 — 저쪽은 「편지를 꺼낼 수 있나」이고 이쪽은 「clip에 물어볼 수
+있나」다. **이 값은 DOWN을 만들지 않는다**: 재부착이 멈춰도 새 방송은 알림으로 그대로 붙으므로
+「새 방송을 하나도 못 받는 상태」가 아니고, 여기서 DOWN을 주면 clip 장애가 이 서버의 배포를
+막는데 정작 재시작으로는 안 풀린다.
 
 **DOWN의 뜻이 POK-127에서 바뀌었다.**
 
@@ -1931,10 +1948,11 @@ clip이 「이 사람이 이 스트리머의 방송을 봐도 되나」를 물�
   **이 카드는 설정을 바꾸지 않았다** — 운영 노출 정책은 auth 전체와 다른 서버에 걸린 별도 결정이다.
   그때까지 같은 숫자를 보는 방법은 로그의 `auth.delegation.resolve_none` 줄을 세는 것이다(판정마다 한 줄)
 
-### chat-collector — 치지직 채팅 수신 (POK-85) · 자동 재연결 (POK-86) · 적재 (POK-84) · S3 원본 아카이브 (POK-116) · **자동 시작·다중 스트리머 (POK-127)** · **수집 상태 창구 (POK-128)** · **영상 위치 창구 (POK-92)**
+### chat-collector — 치지직 채팅 수신 (POK-85) · 자동 재연결 (POK-86) · 적재 (POK-84) · S3 원본 아카이브 (POK-116) · **자동 시작·다중 스트리머 (POK-127)** · **수집 상태 창구 (POK-128)** · **영상 위치 창구 (POK-92)** · **재부착 (POK-219)**
 
 **방송이 켜지면 저절로 붙어서 받아 세고, 끊기면 다시 붙고, 받은 채팅을 PG에 남기고,
 원본을 S3에 쌓고, 채팅 시각을 영상 안의 위치로 바꿔 주는 데까지** 한다.
+**재배포·재시작으로 놓친 방송은 `clip`에 물어 다시 줍는다**(POK-219, 아래 「재부착」).
 
 **POK-127로 바뀐 것 셋:**
 
@@ -2331,6 +2349,59 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 
 버킷은 먼저 만들어야 한다(`aws --endpoint-url=http://localhost:4566 s3 mb s3://pokeclip-chat`).
 Ctrl+C 뒤 판정 줄의 `uploaded=`와 버킷의 `chat/` 아래 파일 수가 같아야 한다.
+
+#### 재부착 — 놓친 방송을 다시 줍는다 (POK-219)
+
+**수집을 다시 시작하는 트리거가 지금까지 일회용 시작 알림뿐이었다.** 처리하면 지워지고
+복구 경로가 없어서, **재배포·재시작 뒤 그 방송은 끝날 때까지 안 걷혔다.** 채팅에는 백필이
+없으므로 그 시간이 곧 유실이다.
+
+`CHAT_REATTACH_ENABLED=true`면 **주기마다(`CHAT_REATTACH_INTERVAL`, 기본 1분)** clip의
+`GET /internal/broadcasts/live`에 「지금 방송 중인 목록」을 묻고, **붙어 있어야 하는데 안 붙은
+방송**에만 붙는다. 거르는 순서는 싼 것부터다 — 이미 붙어 있나(메모리) → 끝났거나 포기한
+메모가 있나(DB 한 번) → 스트리머 번호를 읽을 수 있나.
+
+**붙이기는 알림 경로와 같은 줄(스트리머별 직렬 실행기)에 들어간다.** 따로 두면 부팅 직후
+큐에 남은 시작 알림과 재부착이 **같은 방송에 동시에 붙으려** 한다. 줄 이름이 양쪽 다
+`LaneKey.of(streamerId)`라 같은 스트리머는 언제나 한 줄이고 그 안은 직렬이다.
+
+**재부착은 알림을 하나도 안 지운다.** 그래서 이 경로가 만들 수 있는 최악은 유실이 아니라
+지연이다 — 한 회차가 통째로 실패해도 다음 회차가 같은 목록을 다시 받는다.
+`chat.reattach.swept received= candidates= submitted= deferred=`가 매 회차를 남기고,
+붙은 뒤 **얼마나 못 걷었는지**를 `chat.reattach.gap_measured basis= since= gapMs=`가 남긴다
+(`basis`는 마지막 채팅 시각 `LAST_CHAT`, 없으면 방송 시작 `BROADCAST_START`).
+
+**돌고 있는지는 health의 `reattach`로 본다**(`ok`·`starting`·`failing`·`disabled`).
+
+**🔴 두 값을 같이 켜야 한다.** `BROADCAST_INTAKE_ENABLED=false`인 채로
+`CHAT_REATTACH_ENABLED=true`만 주면 **부팅이 거부된다.** 붙이는 문을 편지 경로가 만들고,
+무엇보다 재부착이 줍는 것이 「알림으로 붙었어야 하는데 못 붙은 방송」이라 **알림 경로가
+꺼져 있으면 애초에 주울 것이 없다.** 옛 경로 둘을 같이 켤 때 거부하는 것과 같은 이유다 —
+「설정은 켰는데 그 기능만 조용히 죽어 있고 health는 초록」을 만들지 않는다.
+
+##### 알려진 한계 — **끝난 방송을 다시 여는 창이 24시간 뒤에 열린다**
+
+우리는 끝나거나 포기한 방송을 `chat_ended_streams` 메모로 거른다. 그 메모의 보관 기간이
+`BROADCAST_ENDED_RETENTION`(기본 24시간)이다. **clip이 종료 알림을 놓쳐 어떤 방송을 영원히
+`live`로 남기면**(POK-218이 찾았고 **치우는 장치가 clip 쪽에 없다**), 24시간 뒤 우리 메모가
+사라지고 **재부착이 그 죽은 방송에 세션을 연다.** 그 스트리머의 치지직 자리 셋 중 하나를
+먹고, 수집 상태 창구는 그 방송에 `collecting`을 답한다.
+
+**「시작한 지 N시간 넘은 줄은 안 줍는다」 같은 컷오프를 두지 않았다.** 근거 넷이다.
+
+1. **PRD가 이미 정했다** — 비목표에 「clip의 영원히 `live`로 남은 방송 치우기는 clip 쪽 별도
+   카드다. 우리는 **종료 기록으로 거르는 것까지만** 한다」
+2. **N을 정하려면 방송 최대 길이를 알아야 하는데 모른다.** 짧게 잡으면 **진짜 긴 방송을 못
+   줍는다** — 이 카드가 막으려던 유실을 우리 손으로 만든다
+3. **되찾는 길이 있다** — 그 스트리머의 다음 진짜 방송 시작 알림이 `retargetOrSkip`으로
+   자리를 가져간다(더 늦게 시작한 방송만 이긴다)
+4. **대가가 자리 하나다**(계정당 셋 중)
+
+**나머지 둘도 그대로 적는다.** ① **재부착의 유일한 입력이 clip 명부다** — 명부가 방송을
+빼먹으면 우리는 그런 방송이 있었다는 것조차 모른다(반대 방향인 「명부가 상한 500에 닿았다」는
+`chat.reattach.live_list_truncated`가 남긴다). ② **clip이 계속 죽어 있으면 재부착이 통째로
+멈추는데**, 그것은 위 `reattach=failing`으로만 보이고 **전체 DOWN이 아니다**(새 방송은 알림으로
+그대로 붙는다).
 
 ### chat-detector — 채팅 급증 하이라이트 판별 (POK-120)
 

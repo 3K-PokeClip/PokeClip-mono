@@ -36,6 +36,7 @@ import software.amazon.awssdk.services.sqs.model.ReceiveMessageResponse;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
@@ -592,6 +593,11 @@ class BroadcastSessionWiringTest extends IntegrationTestSupport {
      * <p>{@code ChzzkLinkClientTest}의 {@code FakeAuth}와 <b>목적이 다르다</b> — 저쪽은 한 명에게
      * 상태·지연·본문을 자유롭게 먹이며 클라이언트 하나를 재고, 이쪽은 회원별 정상 응답을 준다.
      * 계약(항상 200, 거절은 {@code {valid:false,reason}})은 같으므로 <b>한쪽을 고치면 다른 쪽도 본다.</b>
+     *
+     * <p>🔴 <b>루프백에 바인딩한다</b>({@code new InetSocketAddress(0)}이 아니라). 와일드카드는
+     * 모든 인터페이스에 묶여 <b>남의 프로세스가 그 포트를 가로챈다</b> — 이 프로젝트에서 CI를
+     * 8회에 1번 깨던 결함이 정확히 그것이고, MCP 서버·IntelliJ 빌드 서버가 실제로 답한 것을
+     * 잡았다(POK-174 통제 측정 500/500 → 0/500).
      */
     static final class FakeAuth {
 
@@ -607,7 +613,8 @@ class BroadcastSessionWiringTest extends IntegrationTestSupport {
 
         static FakeAuth start() {
             try {
-                HttpServer server = HttpServer.create(new InetSocketAddress(0), 0);
+                HttpServer server = HttpServer.create(
+                        new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
                 server.setExecutor(Executors.newCachedThreadPool(runnable -> {
                     Thread thread = new Thread(runnable, "fake-auth-wiring");
                     thread.setDaemon(true);

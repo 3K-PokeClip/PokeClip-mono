@@ -89,15 +89,25 @@ public class Reattacher {
      * 한 바퀴. <b>던지지 않는다</b> — {@code @Scheduled}는 태스크가 한 번이라도 던지면 그 뒤
      * 주기가 안 돈다. 재부착이 영영 멈추는데 아무 신호도 없다({@code EndedStreamSweeper}와
      * 같은 이유이자 같은 폭).
+     *
+     * <p><b>대신 성패를 돌려준다.</b> 삼키기만 하면 clip에 몇 시간을 못 닿아도 밖에서는
+     * 아무 차이가 없다 — 이 카드가 새로 만든 사각이라 {@code ReattachScheduler}가 이 값을
+     * {@link ReattachStatus}에 옮기고 health가 그것을 드러낸다. <b>여기서 직접 안 쓰는 이유</b>는
+     * 이 부품이 「무엇을 줍나」만 알아야 해서다(검사 열셋이 이 생성자를 직접 부른다).
+     *
+     * @return 한 바퀴가 통째로 돌았으면 {@code true}. 개별 방송의 붙이기 실패는 여기 안 실린다 —
+     *         그것은 {@code chat.reattach.attach_failed}가 방송 번호와 함께 남긴다
      */
-    public void sweep() {
+    public boolean sweep() {
         try {
             sweepOnce();
+            return true;
         } catch (Throwable t) {
             // clip 주소·내부 토큰이 예외 메시지에 실릴 수 있다. 타입 이름만 남긴다.
             // <b>예외 객체를 인자로 넘기지 마라</b> — SLF4J가 throwable로 인식해 메시지와
             // 스택트레이스를 통째로 렌더한다(이 서버가 실제로 데인 자리, codex P2).
             log.warn("chat.reattach.failed causeType={}", t.getClass().getSimpleName());
+            return false;
         }
     }
 

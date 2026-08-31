@@ -11,6 +11,7 @@ import com.pokeclip.chat.collector.broadcast.StreamerId;
 import com.pokeclip.chat.collector.broadcast.intake.IntakeProperties;
 import com.pokeclip.chat.collector.broadcast.intake.IntakeStatus;
 import com.pokeclip.chat.collector.broadcast.intake.SqsIntakeRunner;
+import com.pokeclip.chat.collector.broadcast.reattach.ReattachStatus;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
@@ -70,6 +71,8 @@ class CollectorHealthTest extends IntegrationTestSupport {
     /** 옛 경로의 상태. 편지 경로를 쓰는 프로세스에서는 DISABLED로 남는다(같이 못 켠다). */
     private final CollectionStatus legacy = new CollectionStatus();
     private final IntakeStatus intake = new IntakeStatus(true);
+    /** 기본은 「켜졌고 아직 한 번도 안 돌았다」다 — 부팅 직후의 실제 상태다. */
+    private ReattachStatus reattach = new ReattachStatus(true);
     private final ToggleQueue queue = new ToggleQueue();
 
     private SessionRegistry registry;
@@ -228,6 +231,53 @@ class CollectorHealthTest extends IntegrationTestSupport {
                 .isTrue();
     }
 
+    /**
+     * 🔴 <b>재부착이 clip에 계속 못 닿아도 지금까지는 초록이었다.</b> 이 카드가 만든 사각이다 —
+     * {@code Reattacher.sweep()}이 {@code @Scheduled}를 지키려고 어떤 실패든 삼키므로,
+     * 「재배포로 잃은 방송을 줍는」 장치가 통째로 죽어 있어도 밖에서는 차이가 없다.
+     *
+     * <p><b>전체는 UP이다.</b> 재부착이 멈춰도 새 방송은 알림으로 그대로 붙으므로
+     * 「새 방송을 하나도 못 받는 상태」(전체 DOWN의 정의)가 아니다. 여기서 DOWN을 주면
+     * clip 장애가 이 서버의 배포를 막는데 재시작으로는 안 풀린다.
+     *
+     * <p>문항 2: 「늘 {@code ok}」인 구현도 마지막 단언은 통과한다 — 그래서 <b>회복까지</b>
+     * 같은 검사에서 본다.
+     */
+    @Test
+    void 재부착이_clip에_못_닿으면_상세에_드러나고_전체는_UP이다() {
+        given();
+
+        reattach.sweepFailed();
+
+        Health health = health();
+        assertThat(health.getDetails()).containsEntry("reattach", "failing");
+        assertThat(health.getStatus())
+                .as("재부착은 복구 장치다 — 멈춰도 새 방송은 알림으로 붙는다")
+                .isEqualTo(Status.UP);
+
+        reattach.sweepSucceeded();
+        assertThat(health().getDetails())
+                .as("회복이 표시를 지워야 한다 — 안 지우면 한 번 못 닿은 뒤로 영영 아프다")
+                .containsEntry("reattach", "ok");
+    }
+
+    /**
+     * <b>「꺼짐」과 「켜졌는데 아직 한 번도 안 돌았다」를 가른다.</b> 뭉치면 처음부터 clip을
+     * 못 잡고 있는 프로세스가 「아직 안 돌았을 뿐」으로 읽힌다 — {@code letterIntake}의
+     * {@code disabled}/{@code starting}과 같은 이유로 가른 자리다.
+     */
+    @Test
+    void 재부착이_꺼진_것과_아직_안_돈_것을_가른다() {
+        given();
+
+        assertThat(health().getDetails())
+                .as("켜졌지만 첫 회차 전이다")
+                .containsEntry("reattach", "starting");
+
+        reattach = new ReattachStatus(false);
+        assertThat(health().getDetails()).containsEntry("reattach", "disabled");
+    }
+
     // ------------------------------------------------------------------
     // 도우미
     // ------------------------------------------------------------------
@@ -252,7 +302,8 @@ class CollectorHealthTest extends IntegrationTestSupport {
 
     /** 시계를 손에 쥐고 본다 — 「얼마나 오래 안 꺼냈나」를 재려면 필요하다. */
     private Health healthAt(Instant now) {
-        return new CollectorHealth(legacy, registry, intake, provider(processor), () -> now).health();
+        return new CollectorHealth(legacy, registry, intake, reattach, provider(processor), () -> now)
+                .health();
     }
 
     /**

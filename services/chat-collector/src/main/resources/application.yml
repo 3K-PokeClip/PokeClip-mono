@@ -174,6 +174,28 @@ pokeclip:
       wait-time: ${BROADCAST_QUEUE_WAIT:20s}
       # SQS가 한 번에 주는 최대치가 10이다.
       max-messages: ${BROADCAST_QUEUE_MAX_MESSAGES:10}
+  reattach:
+    # 켜면 clip에 「지금 방송 중인 목록」을 물어 안 붙은 방송에 붙는다. 재배포·재시작으로
+    # 잃은 방송을 줍는 복구 장치다 — 시작 알림은 일회용이라 처리하면 지워진다.
+    #
+    # 기본이 꺼짐이다. 켜져 있으면 CI·팀원 로컬이 뜰 때마다 clip을 두드린다.
+    #
+    # 🔴 이것만 켜고 broadcast.intake.enabled를 끄면 부팅이 거부된다 — 붙이는 문
+    # (BroadcastSessions)을 편지 경로가 만들기 때문이고, 애초에 알림 경로가 꺼져 있으면
+    # 재부착이 주울 것이 없다. ReattachConfiguration 생성자가 이유를 적어 죽인다.
+    enabled: ${CHAT_REATTACH_ENABLED:false}
+    # clip의 내부 창구 주소(8081). 컨테이너 안에서는 호스트가 서비스 이름이다.
+    # 기본값을 빈 문자열이 아니라 로컬 주소로 둔 것은 link.auth-base-url과 같은 규칙이다 —
+    # 다만 켜져 있는데 이 값이 비면 LiveBroadcastClient 생성자가 부팅을 죽인다.
+    clip-base-url: ${CLIP_BASE_URL:http://localhost:8081}
+    # 주기. 붙기 실패는 다음 회차가 같은 목록을 다시 받으므로, 이 값이 곧 복구 지연의
+    # 상한이다 — 평소에 쓰는 값이 아니라 사고 뒤에만 뜻이 있다.
+    interval: ${CHAT_REATTACH_INTERVAL:PT1M}
+    # 첫 회차. 주기와 같은 값을 쓰면 부팅 직후 1분을 그냥 잃는다 — 배포로 채팅이 안 걷히는
+    # 시간이 정확히 이 값이다. 0으로 두면 컨텍스트가 다 뜨기 전에 clip을 두드린다.
+    # 환경변수를 안 뺀 이유: 운영자가 만질 값이 아니고, 만지면 위 둘의 관계가 깨진다.
+    # ReattachWiringTest.첫_회차가_주기보다_먼저_돈다가 이 줄과 @Scheduled를 같이 읽어 잰다.
+    initial-delay: PT5S
   link:
     # auth의 내부 API 주소(8082). 컨테이너 안에서는 호스트가 서비스 이름이다.
     auth-base-url: ${AUTH_BASE_URL:http://localhost:8082}
