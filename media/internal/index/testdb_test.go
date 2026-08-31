@@ -23,8 +23,11 @@ import (
 // 그 파일은 전용 DB 에만 붙고 풀 생성마다 TRUNCATE 하므로, 남는 행은 전용 DB 안에 있고
 // 다음 회차 TRUNCATE 가 덮는다 — 공용 DB 오염 경로가 0 이다.
 //
-// ddl.go 를 바꾸면 이 전용 DB 는 CREATE TABLE IF NOT EXISTS 때문에 옛 스키마를 유지한다.
-// DROP DATABASE pokeclip_uploadtest 후 재실행해야 한다.
+// ddl.go 를 바꾸면 이 전용 DB 는 CREATE TABLE IF NOT EXISTS 때문에 옛 스키마를 유지한다 —
+// 단 컬럼 추가와 "새 이름의 제약 추가"는 schemaDDL 의 ALTER … ADD COLUMN IF NOT EXISTS / DO 블록이
+// 기존 표에도 전파한다(둘 다 카탈로그 존재 여부만 보는 멱등 가드다, 2026-08-31). 컬럼 타입 변경이나
+// 기존 제약의 정의(조건)를 같은 이름으로 바꾸는 변경은 여전히 DROP DATABASE pokeclip_uploadtest
+// 후 재실행해야 한다 — 가드가 "이미 있다"로 판단해 새 정의를 적용하지 않기 때문이다.
 //
 // DB 이름은 PG_TEST_DB 로 바꿀 수 있다(기본 pokeclip_uploadtest).
 const defaultTestDB = "pokeclip_uploadtest" // 값은 기존 로컬 DB 를 그대로 재사용하려고 유지한다. 이름만 패키지 공용으로 넓혔다.
