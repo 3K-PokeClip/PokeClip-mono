@@ -62,4 +62,9 @@ const (
 type SeedResult struct {
 	Seeded  bool
 	Decline SeedDecline
+	// DiagErr 는 Decline **귀속 진단** 쿼리의 실패다 — 삽입·주조 결과와 무관하며 신호
+	// 정밀도만 낮아진다. Insert 의 에러로 전파하면 이미 커밋된 성공 삽입이 실패로
+	// 오보고돼 재시도 → 23505 → (지속 시) 크래시루프가 된다(cc 리뷰 차단 2).
+	// 호출자는 WARN 으로만 소비한다.
+	DiagErr error
 }

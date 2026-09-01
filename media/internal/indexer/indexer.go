@@ -363,9 +363,12 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 			"stream_id", seg.StreamID, "path", seg.Path)
 		return nil
 	}
-	// 순서 장벽(락 경합 후) — 이 스트림은 scanStream 의 오름차순 재처리가 풀 때까지
-	// 실시간 유입을 받지 않는다. 조기 반환은 nil 이다(조각은 파일로 남아 Scan 이 회수).
-	if ix.insertHold[seg.StreamID] {
+	// 순서 장벽(락 경합 후) — 이 스트림은 scanStream 의 오름차순 재처리가 **성공 완주**할
+	// 때까지 실시간 유입을 받지 않는다. 조기 반환은 nil 이다(조각은 파일로 남아 Scan 이 회수).
+	// 회수 경로 자체는 통과시킨다: ReasonScan(오름차순 재처리)과 ReasonRegrown(꼬리 교정 —
+	// INSERT 없음)은 장벽의 목적(seq 선점 차단)과 충돌하지 않는다.
+	if ix.insertHold[seg.StreamID] &&
+		seg.Reason != recording.ReasonScan && seg.Reason != recording.ReasonRegrown {
 		ix.log.Warn("insert_hold_active",
 			"stream_id", seg.StreamID, "path", seg.Path, "reason", seg.Reason,
 			"note", "락 경합 순서 장벽 — 다음 수집 주기의 오름차순 재처리를 기다린다")
@@ -625,6 +628,10 @@ func seedChannel(r recording.CompletionReason) index.SeedChannel {
 func (ix *Indexer) logSeed(seg recording.Segment, seq int64, res index.SeedResult) {
 	if !ix.opt.SeedEnabled {
 		return
+	}
+	if res.DiagErr != nil {
+		// 귀속 진단 실패 — 삽입·주조 결과와 무관, 신호 정밀도만 낮아진다(cc 리뷰 차단 2).
+		ix.log.Warn("seed_resolve_failed", "stream_id", seg.StreamID, "seq", seq, "err", res.DiagErr)
 	}
 	switch {
 	case res.Seeded:

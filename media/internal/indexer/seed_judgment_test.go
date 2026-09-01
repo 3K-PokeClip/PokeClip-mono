@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"testing"
 	"time"
 
@@ -122,5 +123,95 @@ func TestLockContentionOrderBarrier(t *testing.T) {
 	}
 	if f.ix.insertHold["s1"] {
 		t.Fatal("Scan 후에도 장벽이 남아 있다")
+	}
+}
+
+// cx 재검 차단 1 회귀 고정 — 장벽 해제는 성공 완주에서만: 재처리 중 일시 실패(stat 실패
+// 대역)가 나면 그 지점에서 주기를 중단하고(뒤 조각 미처리 = seq 선점 차단) 장벽을 유지한다.
+func TestOrderBarrierHeldOnTransientScanFailure(t *testing.T) {
+	f := newFixture(t, 4000, 4000, 4000)
+	f.opt.SeedEnabled = true
+	f.reload()
+
+	segA := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile)
+	segB := f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonNextFile)
+	_ = segB
+
+	f.store.insertErrs = []error{fmt.Errorf("%w: 대역", index.ErrLockContended)}
+	if err := f.handle(segA); err != nil {
+		t.Fatal(err)
+	}
+	if !f.ix.insertHold["s1"] {
+		t.Fatal("장벽이 서지 않았다")
+	}
+
+	// 재처리 Scan 에서 A 의 measure stat 이 일시 실패한다 — A 미기록이면 B 도 처리되면 안 된다.
+	realStat := f.ix.statFn
+	f.ix.statFn = func(p string) (os.FileInfo, error) {
+		if p == segA.Path {
+			return nil, os.ErrPermission // 일시 실패 대역(poison 아님·경합 아님)
+		}
+		return realStat(p)
+	}
+	if err := f.ix.Scan(context.Background(), f.root); err != nil {
+		t.Fatalf("장벽 재처리 실패 주기가 에러다: %v", err)
+	}
+	if got := len(f.store.records("s1")); got != 0 {
+		t.Fatalf("A 미기록 상태에서 %d행이 들어갔다 — seq 선점(cx 재검 차단 1)", got)
+	}
+	if !f.ix.insertHold["s1"] {
+		t.Fatal("일시 실패 주기가 장벽을 내렸다")
+	}
+	if n := f.logs.count(slog.LevelWarn, "insert_hold_scan_stalled"); n != 1 {
+		t.Fatalf("중단 신호가 %d건이다(1건 기대)", n)
+	}
+
+	// 실패 주입 해제 → 다음 주기가 오름차순 완주 → 장벽 해제.
+	f.ix.statFn = realStat
+	if err := f.ix.Scan(context.Background(), f.root); err != nil {
+		t.Fatal(err)
+	}
+	recs := f.store.records("s1")
+	if len(recs) != 2 || recs[0].LocalPath != segA.Path {
+		t.Fatalf("회복 주기 오름차순 회수 실패: %+v", recs)
+	}
+	if f.ix.insertHold["s1"] {
+		t.Fatal("완주 뒤에도 장벽이 남았다")
+	}
+}
+
+// cx 재검 차단 2 회귀 고정 — 수집 결과에 장벽 스트림이 없어도(절단 대역) 표적 재수집이
+// 그 스트림을 회수하고 장벽을 내린다(영구 장벽 차단).
+func TestOrderBarrierTargetedRecollect(t *testing.T) {
+	f := newFixture(t, 4000, 4000)
+	f.opt.SeedEnabled = true
+	f.reload()
+
+	segA := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile)
+	segB := f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonNextFile)
+
+	f.store.insertErrs = []error{fmt.Errorf("%w: 대역", index.ErrLockContended)}
+	if err := f.handle(segA); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.handle(segB); err != nil { // 장벽 보류
+		t.Fatal(err)
+	}
+
+	// 절단 대역: s1 이 통째로 빠진 수집 결과를 채택시킨다 → ④-b 표적 재수집이 돌아야 한다.
+	first, err := f.ix.ApplyCollect(context.Background(), f.root,
+		collectResult{byStream: map[string][]recording.Segment{}, truncated: true})
+	if err != nil {
+		t.Fatalf("ApplyCollect 실패: %v", err)
+	}
+	if first {
+		t.Fatal("절단 주기가 완주로 판정됐다")
+	}
+	recs := f.store.records("s1")
+	if len(recs) != 2 || recs[0].LocalPath != segA.Path || recs[1].LocalPath != segB.Path {
+		t.Fatalf("표적 재수집 회수 실패(영구 장벽 — cx 재검 차단 2): %+v", recs)
+	}
+	if f.ix.insertHold["s1"] {
+		t.Fatal("표적 재수집 완주 뒤에도 장벽이 남았다")
 	}
 }

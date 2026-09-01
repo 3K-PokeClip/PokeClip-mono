@@ -224,32 +224,36 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed) (InsertOu
 		return InsertInserted, SeedResult{}, fmt.Errorf("주조 트랜잭션 커밋 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
 	}
 
-	res, err := s.resolveSeed(ctx, r, seed, seeded)
-	return InsertInserted, res, err
+	// 여기서부터는 삽입이 **이미 커밋됐다** — 귀속 진단의 실패를 Insert 의 에러로 올리면
+	// 성공한 삽입이 실패로 오보고돼 재시도 → 23505 → (진단 실패 지속 시) 크래시루프가
+	// 된다(cc 리뷰 차단 2, 라이브 재현). 진단 실패는 SeedResult.DiagErr 로만 나른다.
+	return InsertInserted, s.resolveSeed(ctx, r, seed, seeded), nil
 }
 
-// resolveSeed 는 Decline 귀속(설계 6.5.5)이다. 커밋 뒤에만 부른다.
-func (s *pgStore) resolveSeed(ctx context.Context, r Record, seed Seed, seeded int) (SeedResult, error) {
+// resolveSeed 는 Decline 귀속(설계 6.5.5)이다. 커밋 뒤에만 부르며, 어떤 실패도
+// 에러로 반환하지 않는다 — 귀속은 관측 신호이지 결과가 아니다.
+func (s *pgStore) resolveSeed(ctx context.Context, r Record, seed Seed, seeded int) SeedResult {
 	if seeded == 1 {
-		return SeedResult{Seeded: true}, nil
+		return SeedResult{Seeded: true}
 	}
 	if !seed.Eligible {
-		return SeedResult{Decline: DeclineNoCorroboration}, nil
+		return SeedResult{Decline: DeclineNoCorroboration}
 	}
 	if r.SessionID == nil || r.PlaybackPDT == nil || r.PlaybackS3Key == nil {
-		return SeedResult{Decline: DeclineNotSettleable}, nil
+		return SeedResult{Decline: DeclineNotSettleable}
 	}
 	// 자격 전부 참인데 seeded=0 — 기존 컷오프 승계(정상)인지 시간 항 탈락인지 가른다.
 	var exists bool
 	if err := s.pool.QueryRow(ctx, cutoffExistsSQL, r.StreamID).Scan(&exists); err != nil {
-		// 귀속 실패는 주조 결과를 바꾸지 않는다 — 신호 정밀도만 낮아진다.
-		return SeedResult{Decline: DeclineStaleCorroboration},
-			fmt.Errorf("컷오프 존재 확인 실패 stream_id=%q: %w", r.StreamID, err)
+		return SeedResult{
+			Decline: DeclineStaleCorroboration,
+			DiagErr: fmt.Errorf("컷오프 존재 확인 실패 stream_id=%q: %w", r.StreamID, err),
+		}
 	}
 	if exists {
-		return SeedResult{Decline: DeclineSkipped}, nil
+		return SeedResult{Decline: DeclineSkipped}
 	}
-	return SeedResult{Decline: DeclineStaleCorroboration}, nil
+	return SeedResult{Decline: DeclineStaleCorroboration}
 }
 
 // seedArgs 는 비적격 seed 의 제로값을 드라이버에 흘리지 않는 보정이다.
