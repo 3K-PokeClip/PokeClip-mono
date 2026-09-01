@@ -71,7 +71,8 @@ func TestSeqConflictRetryKeepsBreakFlagAndConsumesOnce(t *testing.T) {
 	}
 }
 
-// T5 — poison 은 무장이 메모리에 잔존하는 **유일한** 경로다.
+// T5 — poison 은 무장이 메모리에 잔존하는 대표 경로다(잔존 경로 셋의 목록은
+// commit 의 poisoned 분기 주석 참조 — seq 충돌 재적재 뒤의 poison·H3 재검 물러남 포함).
 // 재시도 소진은 commit 이 err 를 반환해 프로세스가 끝나므로 메모리 무장도 함께 소멸한다.
 //
 // 목이 돌려주는 에러는 SQLSTATE class 22(데이터 예외)여야 한다 — class 23(제약 위반)은
