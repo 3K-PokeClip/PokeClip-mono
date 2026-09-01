@@ -1,0 +1,43 @@
+# m2 — 처리 FS 격리의 정본 규칙 (POK-168 r15a · ADR-063 결정 5)
+#
+#   "D10 루프 도달 경로에 naked FS 호출이 0건이다. 강제 범위 = indexer + fmp4meta.
+#    fsop 경유만 허용한다."
+#
+# 좌표 목록이 아니라 이 규칙이 정본이다 — 호출점 열거는 r15a 검증에서 두 번 깨졌다(1/3 · 4/14).
+# 강제 범위는 media-ci의 lint 스텝이 경로 인자로 규정한다(경로 인자가 규칙의 일부다):
+#   golangci-lint run ./internal/indexer/... ./internal/fmp4meta/...
+#
+# 예외는 둘뿐이며, 여기(규칙 본문)와 코드 옆 nolint 좌표에 함께 고정된다.
+# 예외를 이 목록 밖에 만들면 규칙과 구현이 어긋난다:
+#   예외 1 — internal/indexer/scan.go collectTree 의 filepath.WalkDir:
+#            수집 워커 자신이 격리 단위다. 개별 호출에 5초 상한을 씌우면
+#            45초 수집 예산 위에서 정상 수집이 매 주기 절단된다.
+#   예외 2 — internal/fmp4meta/probe.go 프로브 내부 FS 호출:
+#            ProbeT 워커 안에서만 실행된다(열고·읽고·닫기가 워커 안에서 통째로 끝난다).
+#
+# _test.go 는 D10 루프 도달 경로가 아니므로 제외한다.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - forbidigo
+  settings:
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^os\.(Stat|Lstat|Open|OpenFile|Create|ReadFile|WriteFile|ReadDir|Remove|RemoveAll|Rename|Mkdir|MkdirAll|Chtimes|Chmod|Truncate|Symlink|Link|Readlink)$
+          msg: naked FS 호출 금지(m2) — fsop 경유로 감싸라. 예외 2건은 이 파일 머리 주석과 nolint 좌표 참조.
+        - pattern: ^filepath\.(Walk|WalkDir|Glob)$
+          msg: naked FS 순회 금지(m2) — 예외 1(collectTree)만 nolint 로 허용된다.
+  exclusions:
+    rules:
+      - path: _test\.go$
+        linters:
+          - forbidigo
+
+# 기본값(같은 문구 3건·린터당 50건)이 진단을 잘라 "전부 몇 곳인가"를 가린다.
+# m2 는 0건 규칙이라 개수 자체가 증빙이다 — 상한을 해제한다.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
