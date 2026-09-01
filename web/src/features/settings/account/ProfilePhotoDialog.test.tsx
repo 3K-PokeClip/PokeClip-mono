@@ -315,6 +315,20 @@ describe('ProfilePhotoDialog', () => {
     expect(opened).toHaveBeenCalled();
   });
 
+  it('이미 디코드된 그림이면 load 이벤트 없이도 적용이 열린다 — 데이터 URL은 load가 이펙트보다 먼저 올 수 있다', async () => {
+    // 파일을 고른 경로에서 실제로 났던 일: load → ready 뒤에 리셋 이펙트가 loading으로 덮어
+    // 「적용」이 영영 잠겼다. 크롭에 들어올 때 이미 complete인 그림을 흉내 낸다.
+    vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(true);
+    vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(800);
+    vi.spyOn(HTMLImageElement.prototype, 'naturalHeight', 'get').mockReturnValue(600);
+    await open();
+
+    drop(dropzone(), fileOf('IMG_0001.jpg', 'image/jpeg', 1024 * 1024));
+
+    expect(dialog().getByText('2 / 3 · 크롭')).toBeInTheDocument();
+    expect(dialog().getByRole('button', { name: '적용' })).toBeEnabled();
+  });
+
   it('원본이 디코드되기 전에는 적용을 잠근다 — 잘리지 않은 원본이 올라가지 않게', async () => {
     const { user } = await open();
     await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));

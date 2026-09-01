@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -53,9 +54,21 @@ export function PhotoCropStage({
   // 디코드 대기 상태의 주인은 <img>를 든 이쪽이다. 다이얼로그가 imageSrc 변화로만
   // 리셋하면, 같은 그림으로 재진입할 때(토스트 「편집」·같은 프리셋) 직전 ready가 남아
   // 새 <img>가 읽히기도 전에 「적용」이 열린다.
-  useEffect(() => {
+  //
+  // 🔴 useEffect가 아니라 useLayoutEffect다. 데이터 URL 이미지는 삽입 직후 load가 뜬다 —
+  // 이 리셋이 그 뒤에 돌면 onLoad의 ready를 loading으로 덮어 「적용」이 영영 잠긴다.
+  // 파일을 고른 경로가 정확히 그랬다: FileReader 콜백에서 시작한 갱신은 이산 이벤트가
+  // 아니라 passive 이펙트가 뒤로 밀리고, 그 사이 load가 먼저 온다(기본 아바타는 클릭이라
+  // 이펙트가 커밋에 동기로 붙어 안 걸렸다). 커밋과 동기로 리셋하고, 그래도 이미 끝나
+  // 있으면(캐시·같은 그림) 여기서 바로 판정한다.
+  useLayoutEffect(() => {
     onStatusChange('loading');
-  }, [src, onStatusChange]);
+    const img = imgRef.current;
+    if (img !== null && img.complete && img.naturalWidth > 0) {
+      setNatural({ width: img.naturalWidth, height: img.naturalHeight });
+      onStatusChange('ready');
+    }
+  }, [src, onStatusChange, imgRef]);
 
   // ② 클램프는 commit 경로에만 걸려 있어 새는 자리가 둘 있다 — 디코드가 끝나 치수를
   // 처음 알게 될 때, 그리고 창이 줄어 마스크가 작아질 때. 둘 다 여기서 다시 자른다.
