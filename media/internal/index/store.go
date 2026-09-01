@@ -113,8 +113,10 @@ func (s *pgStore) ExistingPaths(ctx context.Context, streamID string) (map[strin
 const TxnDeadline = 10 * time.Second
 
 // ErrLockContended 는 55P03(락 대기 상한)이 즉시 1회 재시도 후에도 계속됨을 뜻한다(m1b).
-// 호출자(indexer)는 이것을 단일 쓰기자 전제 붕괴 신호로 보고 **프로세스를 끝낸다** —
-// 재기동의 초기 Scan 이 커서를 재적재하고 시각 오름차순으로 회수한다(유실 0의 구조적 이행).
+// 호출자(indexer)는 이것을 단일 쓰기자 전제(D10)가 흔들린다는 신호로 별도 기록하되,
+// 처분은 H9 의 일반 백오프 재시도에 맡긴다 — 단일 호출자가 이 조각을 물고 있는 동안은
+// 후속 조각이 seq 를 선점할 수 없고(순서 보전이 구조적으로 보장되는 유일한 구간),
+// 상한 소진 시의 종료·재기동(D8)은 기존 처분 그대로다.
 var ErrLockContended = errors.New("index: 컷오프 경합 락 대기 상한(55P03) — 즉시 재시도도 실패")
 
 // pgLockNotAvailable 은 lock_timeout 초과의 SQLSTATE 다.
@@ -162,7 +164,7 @@ func (s *pgStore) Insert(ctx context.Context, r Record, seed Seed) (InsertOutcom
 	out, res, err := s.insertOnce(ctx, r, seed)
 	if err != nil && isLockTimeout(err) {
 		// 55P03 → 즉시 1회 재시도(설계 6.5.5 · m1b). 재시도도 락이면 ErrLockContended 로
-		// 올린다 — 처분(프로세스 종료 → 재기동 Scan 회수)은 호출자 몫이다.
+		// 올린다 — 처분(일반 재시도 → 소진 시 D8)은 호출자 몫이다.
 		out, res, err = s.insertOnce(ctx, r, seed)
 		if err != nil && isLockTimeout(err) {
 			return out, res, fmt.Errorf("%w: stream_id=%q seq=%d", ErrLockContended, r.StreamID, r.Seq)
@@ -203,6 +205,7 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed) (InsertOu
 	// CHECK 에 닿을 행 자체가 없지만, 드라이버 층에서 놀랄 일을 만들지 않는다.
 	reason, channel, anchor, fresh := seedArgs(seed)
 
+	// inserted 는 CTE 결과 형상(두 열) 유지용이다 — 성공 경로에선 항상 1이라 소비하지 않는다.
 	var inserted, seeded int
 	err = tx.QueryRow(txctx, insertSeedSQL,
 		r.StreamID, r.Seq, r.StartPTSMS, r.StartWallUTC.UTC(), r.DurationMS, r.S3Key,

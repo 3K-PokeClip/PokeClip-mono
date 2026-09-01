@@ -77,20 +77,51 @@ func TestHandleCarriesSeedToStore(t *testing.T) {
 	}
 }
 
-// 락 상한 이중 초과(ErrLockContended) 처분 — 조각 건너뛰기·순서 장벽이 아니라
-// 프로세스 종료(에러 반환 → main exit → 재기동 Scan 오름차순 회수)다. 조각 단위 처분은
-// H3 순서 불변식과 충돌해 리뷰 3라운드에서 반복 반증됐다(설계 m1b의 구조적 이행).
-func TestLockContentionIsFatal(t *testing.T) {
+// 락 상한 이중 초과(ErrLockContended) 처분 ⑴ — 일과성 경합은 H9 백오프 재시도가
+// 그 자리에서 흡수한다. 단일 호출자(D10)가 조각을 물고 있는 동안은 후속 조각의 seq
+// 선점이 불가능하므로, 경합이 풀리면 유실도 순서 어긋남도 없다(리뷰 r4 처분).
+func TestLockContentionRetriesInPlace(t *testing.T) {
 	f := newFixture(t, 4000)
 	f.opt.SeedEnabled = true
 	f.reload()
 
 	segA := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile)
-	f.store.insertErrs = []error{fmt.Errorf("%w: 대역", index.ErrLockContended)}
+	contended := fmt.Errorf("%w: 대역", index.ErrLockContended)
+	f.store.insertErrs = []error{contended, contended} // 두 번 좌초 후 해소
+
+	if err := f.handle(segA); err != nil {
+		t.Fatalf("일과성 경합이 에러로 올라왔다 — 즉시 종료는 재기동 경쟁으로 유실을 만든다: %v", err)
+	}
+	if got := f.store.insertCallCount(); got != 3 {
+		t.Fatalf("재시도 횟수가 다르다: got %d, want 3(좌초 2 + 성공 1)", got)
+	}
+	if got := len(f.store.records("s1")); got != 1 {
+		t.Fatalf("경합 해소 후 조각이 기록되지 않았다: %d행", got)
+	}
+	if f.ix.cursors["s1"].NextSeq != 1 {
+		t.Fatalf("커서가 전진하지 않았다: %d", f.ix.cursors["s1"].NextSeq)
+	}
+}
+
+// 락 상한 이중 초과 처분 ⑵ — 지속 경합은 재시도 상한 소진으로 기존 D8 처분(에러 반환 →
+// main exit → 재기동)에 합류한다. 무기록·커서 불변이 그대로 유지되어야 재기동 Scan 이
+// 이 조각을 같은 seq 로 회수할 수 있다.
+func TestLockContentionExhaustionIsFatal(t *testing.T) {
+	f := newFixture(t, 4000)
+	f.opt.SeedEnabled = true
+	f.reload()
+
+	segA := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile)
+	contended := fmt.Errorf("%w: 대역", index.ErrLockContended)
+	errs := make([]error, f.opt.InsertRetryMax) // 상한만큼 전부 좌초
+	for i := range errs {
+		errs[i] = contended
+	}
+	f.store.insertErrs = errs
 
 	err := f.handle(segA)
 	if err == nil {
-		t.Fatal("이중 초과가 에러로 올라오지 않았다 — 재기동 회수 경로가 막힌다")
+		t.Fatal("지속 경합이 상한 소진 에러로 올라오지 않았다")
 	}
 	if !errors.Is(err, index.ErrLockContended) {
 		t.Fatalf("에러 연쇄에 ErrLockContended 가 없다: %v", err)
@@ -98,7 +129,6 @@ func TestLockContentionIsFatal(t *testing.T) {
 	if got := len(f.store.records("s1")); got != 0 {
 		t.Fatalf("좌초 국면에서 %d행이 들어갔다", got)
 	}
-	// 커서도 전진하지 않았다 — 재기동 후 초기 Scan 이 이 조각을 seq 그대로 회수한다.
 	if f.ix.cursors["s1"].NextSeq != 0 {
 		t.Fatalf("커서가 전진했다: %d", f.ix.cursors["s1"].NextSeq)
 	}
