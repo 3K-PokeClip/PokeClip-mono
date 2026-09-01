@@ -316,6 +316,40 @@ func TestCase14SeqConflictReloadsCursorAndSucceeds(t *testing.T) {
 	}
 }
 
+// 케이스14b — 재적재 결과 선점 행이 이 조각보다 **늦은** 벽시계면 재작성하지 않는다.
+// Handle 의 H3 는 낡은 커서로 판정했으므로 재적재 후 재검이 없으면 seq 순서와
+// 시간 순서가 어긋난 행이 태어난다(G8 — cx 리뷰 r5 차단). 처분 = H3 와 동일한 유실 기록.
+func TestCase14bSeqConflictReloadRechecksLateWall(t *testing.T) {
+	f := newFixture(t, 4000)
+	// 다른 쓰기자가 이 조각(baseWall+4s)보다 늦은 조각(baseWall+8s)으로 seq 0 을 선점했다.
+	f.store.seed(index.Record{
+		StreamID: "s1", Seq: 0, StartPTSMS: 0, StartWallUTC: baseWall.Add(8 * time.Second),
+		DurationMS: 4000, LocalPath: "/다른/쓰기자.mp4", UploadState: index.UploadStatePending, Bytes: 10,
+	})
+	// 커서는 낡아서 선점을 모른다(Tail 없음 — Handle 의 H3 는 통과한다).
+	f.ix.cursors["s1"] = &index.Cursor{NextSeq: 0}
+	f.ix.indexed["s1"] = map[string]struct{}{}
+
+	seg := f.segment("s1", segName(baseWall, 4*time.Second), 1000, recording.ReasonNextFile)
+	f.mustHandle(seg)
+
+	if n := len(f.store.records("s1")); n != 1 {
+		t.Fatalf("행 수 = %d, want 1 (과거 조각이 다음 seq 로 재작성되면 안 된다)", n)
+	}
+	if n := f.logs.count(slog.LevelError, "late_segment_skipped"); n != 1 {
+		t.Fatalf("late_segment_skipped = %d건, want 1", n)
+	}
+	if got := f.logs.attrs("late_segment_skipped")["site"]; got != "seq_conflict_reload" {
+		t.Fatalf("site = %v, want seq_conflict_reload", got)
+	}
+	if f.store.insertCalls != 1 {
+		t.Fatalf("Insert 호출 = %d, want 1 (재검이 두 번째 시도를 막아야 한다)", f.store.insertCalls)
+	}
+	if f.ix.cursors["s1"].NextSeq != 1 {
+		t.Fatalf("재적재 커서 NextSeq = %d, want 1", f.ix.cursors["s1"].NextSeq)
+	}
+}
+
 // 케이스15 — 재적재 후에도 seq 가 충돌하면 ERROR 후 에러를 올린다(프로세스 종료 경로).
 // 조용한 무한 재시도로 구현되면 G3 가 깨진다.
 func TestCase15SeqConflictTwiceReturnsFatalError(t *testing.T) {

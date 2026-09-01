@@ -88,6 +88,8 @@ type Options struct {
 	HoldStatBudget int
 	// InsertRetryBase 는 지수 백오프의 첫 간격이다.
 	// 기본 2s + InsertRetryMax 5회 = 시도 사이 간격 2+4+8+16 = 정확히 30s(설계 2.4절 "총 ~30s").
+	// 락 경합(ErrLockContended) 재시도는 여기에 시도당 락 대기(lock_timeout 5s × store 층
+	// 최대 2회)가 얹혀 최악 ~80s 까지 늘 수 있다 — 유계이며 ctx 취소가 뚫는다(cc 리뷰 r5).
 	InsertRetryBase time.Duration
 	// IdleTimeout 은 워처와 같은 값을 쓴다. H4(유휴 커밋 전 mtime 재검)와
 	// Scan(d)(최신 파일 분기)의 판정 기준이다.
@@ -111,7 +113,15 @@ type Options struct {
 	// ScanCollectBudget 은 전수 수집(collectTree)의 soft 예산이다. 넘기면 절단하고
 	// 걷은 데까지 처리한다 — 정지 판정(scan_collect_stalled)은 이 값 × k 로 holdTicks 가 한다.
 	ScanCollectBudget time.Duration
+	// SeedEnabled 는 ③ 체제 플래그다(계약 6항 2단계 — REWIND_SEED_ENABLED, 기본 꺼짐).
+	// 효력은 "컷오프 없는 스트림에 최초 컷오프를 만들 권한"뿐이다: 꺼져 있으면 주조를
+	// 시도하지 않고(구 동작 — c1) INSERT 는 그대로 돈다. 해제해도 이미 기록된 컷오프는
+	// 유효하다 — 4축 술어는 장부를 읽지 플래그를 읽지 않는다.
+	SeedEnabled bool
 }
+
+// liveFresh 는 ⓐ1(실시간 유입 방증)의 신선도 상한이다(설계 LIVE_FRESH — ADR-062).
+const liveFresh = 60 * time.Second
 
 // DefaultOptions 는 설계 2.4절의 기본값이다.
 func DefaultOptions() Options {
@@ -387,23 +397,8 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 	}
 
 	// H3. 늦은 세그먼트 검사(D12) — 지금 넣으면 seq 순서와 시간 순서가 어긋나 G8 이 깨진다.
-	if cur.Tail != nil && !seg.StartWall.After(cur.LastStartWall()) {
-		// 메모리 이력이 낡아서 오해한 것일 수 있으니 DB 에서 한 번 다시 읽어 확인한다.
-		fresh, reloadErr := ix.store.ExistingPaths(ctx, seg.StreamID)
-		if reloadErr != nil {
-			return reloadErr
-		}
-		ix.indexed[seg.StreamID] = fresh
-		if _, ok := fresh[seg.Path]; ok {
-			ix.log.Debug("duplicate_path_skipped", "stream_id", seg.StreamID, "path", seg.Path)
-			return nil
-		}
-		// 진짜 유실이다. 자동 복구는 없으므로(9절 L5) 사람이 보도록 크게 남긴다.
-		ix.log.Error("late_segment_skipped",
-			"stream_id", seg.StreamID, "path", seg.Path,
-			"seg_wall", seg.StartWall, "last_indexed_wall", cur.LastStartWall(),
-			"last_seq", cur.Tail.Seq)
-		return nil
+	if skip, h3Err := ix.lateOrDuplicate(ctx, cur, seg, "handle"); skip || h3Err != nil {
+		return h3Err
 	}
 
 	// H4. 유휴 커밋 전 mtime 재검(D13-예방) — 방금 전까지 쓰이고 있었다면 아직 녹화 중이다.
@@ -564,9 +559,96 @@ func (ix *Indexer) promote(ctx context.Context, seg recording.Segment, d, size i
 	return d, size
 }
 
+// buildSeed 는 이 조각의 주조 판정 입력(ⓐ 비시간 항)을 만든다 — ADR-062.
+//
+// ⓐ1(실시간 유입): Reason ∈ {NextFile, Idle, Hook} — 파일·훅이 "지금 방송이 흐른다"의
+// 방증이다. ReasonScan 은 ⓐ2(상태 방증 — mtxstate publishing)가 필요하며 M3 에서 배선된다:
+// 그때까지 스캔 유입은 비적격이다(과거 잔존물이 컷오프가 되는 것을 막는 안전 방향 — S2·S3).
+// ReasonRegrown 은 주조하지 않는다(s3_unknown_declines).
+func (ix *Indexer) buildSeed(seg recording.Segment) index.Seed {
+	s := index.Seed{
+		Reason:    index.SeedReasonLiveIngress,
+		Channel:   seedChannel(seg.Reason),
+		AnchorUTC: seg.StartWall.UTC(),
+		Freshness: liveFresh,
+	}
+	if !ix.opt.SeedEnabled {
+		return s
+	}
+	switch seg.Reason {
+	case recording.ReasonNextFile, recording.ReasonIdle, recording.ReasonHook:
+		s.Eligible = true
+	}
+	return s
+}
+
+// seedChannel 은 유입 사유를 stream_cutoffs.seed_channel 값으로 접는다.
+func seedChannel(r recording.CompletionReason) index.SeedChannel {
+	switch r {
+	case recording.ReasonHook:
+		return index.SeedChannelHook
+	case recording.ReasonScan:
+		return index.SeedChannelScan
+	default:
+		return index.SeedChannelWatcher
+	}
+}
+
+// logSeed 는 주조 결과 신호다. 플래그 OFF 면 아무것도 내지 않는다(구 동작 무소음 — c1).
+func (ix *Indexer) logSeed(seg recording.Segment, seq int64, res index.SeedResult) {
+	if !ix.opt.SeedEnabled {
+		return
+	}
+	if res.DiagErr != nil {
+		// 귀속 진단 실패 — 삽입·주조 결과와 무관, 신호 정밀도만 낮아진다(cc 리뷰 차단 2).
+		ix.log.Warn("seed_resolve_failed", "stream_id", seg.StreamID, "seq", seq, "err", res.DiagErr)
+	}
+	switch {
+	case res.Seeded:
+		ix.log.Info("cutoff_seeded",
+			"stream_id", seg.StreamID, "seq", seq,
+			"reason", string(index.SeedReasonLiveIngress), "channel", string(seedChannel(seg.Reason)))
+	case res.Decline == index.DeclineNotSettleable || res.Decline == index.DeclineStaleCorroboration:
+		// 미주조 열화 국면의 관측 신호(S4 — seed_declined).
+		ix.log.Info("seed_declined",
+			"stream_id", seg.StreamID, "seq", seq, "reason", string(res.Decline))
+	default:
+		// no_corroboration(비적격 유입)·existing_cutoff(승계)는 평시 상태라 Debug 로 낮춘다.
+		ix.log.Debug("seed_skipped",
+			"stream_id", seg.StreamID, "seq", seq, "reason", string(res.Decline))
+	}
+}
+
+// lateOrDuplicate 는 H3(늦은 세그먼트 검사 — D12)의 판정 본문이다. 꼬리보다 늦지 않은
+// 조각을 "경로 중복(정상 멱등)"과 "진짜 유실"로 가른다 — 메모리 이력이 낡아 오해했을 수
+// 있으니 DB 를 한 번 다시 읽어 확인한 뒤, 유실이면 크게 남긴다(9절 L5: 자동 복구 없음).
+// Handle 의 H3 와 seq 충돌 재적재 후 재검(commit)이 이 본문을 공유한다 — 두 곳이
+// 갈라지면 "재검 = H3 와 동일" 불변식이 조용히 깨진다(cc 리뷰 r6 권고로 추출).
+// skip=true 면 이 조각 처리를 여기서 끝낸다(로그는 이미 남겼다). site 는 로그 속성이다.
+func (ix *Indexer) lateOrDuplicate(ctx context.Context, cur *index.Cursor, seg recording.Segment, site string) (bool, error) {
+	if cur.Tail == nil || seg.StartWall.After(cur.LastStartWall()) {
+		return false, nil
+	}
+	fresh, reloadErr := ix.store.ExistingPaths(ctx, seg.StreamID)
+	if reloadErr != nil {
+		return false, reloadErr
+	}
+	ix.indexed[seg.StreamID] = fresh
+	if _, ok := fresh[seg.Path]; ok {
+		ix.log.Debug("duplicate_path_skipped", "stream_id", seg.StreamID, "path", seg.Path)
+		return true, nil
+	}
+	ix.log.Error("late_segment_skipped",
+		"stream_id", seg.StreamID, "path", seg.Path,
+		"seg_wall", seg.StartWall, "last_indexed_wall", cur.LastStartWall(),
+		"last_seq", cur.Tail.Seq, "site", site)
+	return true, nil
+}
+
 // commit 은 H8(PTS·discontinuity)와 H9(INSERT)를 수행한다.
 func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size int64) error {
 	cur := ix.cursors[seg.StreamID]
+	seed := ix.buildSeed(seg)
 
 	// 무장 조회는 여기서 딱 한 번이다. 해제는 INSERT 결과가 나온 뒤에 한다.
 	dec := ix.peekBreak(cur, seg)
@@ -580,15 +662,18 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 
 	rec := ix.buildRecord(cur, seg, d, size, dec.Apply)
 
-	outcome, poisoned, err := ix.insertWithRetry(ctx, rec)
+	outcome, seedRes, poisoned, err := ix.insertWithRetry(ctx, rec, seed)
 	if err != nil {
 		return err
 	}
 	if poisoned {
 		// 커서를 전진시키지 않는다. 이 세그먼트만 인덱스에 없는 채로 남는다.
 		//
-		// 무장도 해제하지 않는다 — 이것이 무장이 메모리에 잔존하는 **유일한** 경로다
-		// (재시도 소진은 err 반환 → 프로세스 종료 → 메모리 무장도 함께 소멸).
+		// 무장도 해제하지 않는다 — 무장이 메모리에 잔존하는 경로는 셋이다: 여기,
+		// seq 충돌 재적재 뒤의 재시도 poison(아래 — 같은 논리), 재적재 후 H3 재검의
+		// 물러남(재적재된 꼬리가 이미 경계를 지났으므로 다음 Handle 진입부의
+		// reconcileBreaks 가 회수한다). 재시도 소진은 err 반환 → 프로세스 종료 →
+		// 메모리 무장도 함께 소멸.
 		// 다음 INSERT 조각은 "무장 이후 처음 장부에 오르는 조각"이므로 표시가 정당하며,
 		// 아예 미표시보다 늦은 표시가 낫다(오탐 방향이 안전하다).
 		return nil
@@ -605,11 +690,21 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		ix.cursors[seg.StreamID] = &reloaded
 		ix.reconcileUploadState(seg.StreamID)
 		cur = &reloaded
+
+		// H3 재검(재적재 후) — 선점 행이 이 조각보다 늦은 벽시계면, 여기서 다음 seq 로
+		// 재작성하는 순간 seq 순서와 시간 순서가 어긋난다(G8 — cx 리뷰 r5 반증: Handle 의
+		// H3 는 낡은 커서로 판정했다). 이 국면은 다른 쓰기자의 실재(D10 위반)이므로
+		// 조각 하나보다 인덱스 순서 불변식이 우선이다.
+		if skip, h3Err := ix.lateOrDuplicate(ctx, cur, seg, "seq_conflict_reload"); skip || h3Err != nil {
+			return h3Err
+		}
+
 		// dec 는 다시 계산하지 않는다. 재적재로 Tail 이 바뀌어도 "어느 경계를 소비할지"는
 		// 이미 정해졌다 — 여기서 재계산하면 같은 세그먼트의 판정이 재시도 여부에 따라 달라진다.
+		// seed 도 같은 값을 재사용한다 — 시간 항은 SQL 이 매 시도 재검하므로 안전하다.
 		rec = ix.buildRecord(cur, seg, d, size, dec.Apply)
 
-		outcome, poisoned, err = ix.insertWithRetry(ctx, rec)
+		outcome, seedRes, poisoned, err = ix.insertWithRetry(ctx, rec, seed)
 		if err != nil {
 			return err
 		}
@@ -638,6 +733,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		ix.log.Debug("duplicate_path_skipped", "stream_id", seg.StreamID, "path", seg.Path)
 		return nil
 	case index.InsertInserted:
+		ix.logSeed(seg, rec.Seq, seedRes)
 		ix.advance(cur, seg, rec)
 		if dec.Index >= 0 {
 			ix.releaseBreak(seg.StreamID, dec)

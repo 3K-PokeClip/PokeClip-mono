@@ -211,6 +211,11 @@ func Load(env func(string) string) (Config, error) {
 	if idx.FSOpTimeout, err = duration(env, "FS_OP_TIMEOUT", idx.FSOpTimeout); err != nil {
 		return Config{}, err
 	}
+	// ③ 체제 플래그(POK-168 M2 — ADR-062 · 계약 6항 2단계). 기본 꺼짐이 팀 원칙이다:
+	// 켜기 전까지 주조가 없고, 켠 뒤 각 스트림의 첫 주조 자격 유입이 컷오프를 만든다.
+	if idx.SeedEnabled, err = boolean(env, "REWIND_SEED_ENABLED", false); err != nil {
+		return Config{}, err
+	}
 	if idx.ScanCollectBudget, err = duration(env, "SCAN_COLLECT_BUDGET", idx.ScanCollectBudget); err != nil {
 		return Config{}, err
 	}

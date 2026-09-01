@@ -161,7 +161,10 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 	if err := EnsureSchema(ctx, pool); err != nil {
 		t.Fatalf("EnsureSchema 실패: %v", err)
 	}
-	if _, err := pool.Exec(ctx, "TRUNCATE stream_segments"); err != nil {
+	// M2 신설 표까지 함께 비운다 — 네 표를 한 문장에 넣으면 상호 FK(segments→sessions)에
+	// CASCADE 없이도 통과한다.
+	if _, err := pool.Exec(ctx,
+		"TRUNCATE stream_segments, stream_cutoffs, stream_published_gaps, stream_sessions"); err != nil {
 		t.Fatalf("TRUNCATE 실패: %v", err)
 	}
 	return pool

@@ -33,6 +33,8 @@ type fakeStore struct {
 
 	insertCalls     int
 	loadCursorCalls int
+	// lastSeed 는 마지막 Insert 에 동봉된 주조 판정 입력이다(buildSeed 검증용).
+	lastSeed index.Seed
 }
 
 type updateTailCall struct {
@@ -40,6 +42,13 @@ type updateTailCall struct {
 	seq        int64
 	durationMS int32
 	bytes      int64
+}
+
+// insertCallCount 는 Insert 시도 횟수다(장벽 검증 — 시도 자체가 없어야 하는 국면용).
+func (s *fakeStore) insertCallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.insertCalls
 }
 
 func newFakeStore() *fakeStore {
@@ -90,35 +99,36 @@ func (s *fakeStore) ExistingPaths(_ context.Context, streamID string) (map[strin
 	return out, nil
 }
 
-func (s *fakeStore) Insert(_ context.Context, r index.Record) (index.InsertOutcome, error) {
+func (s *fakeStore) Insert(_ context.Context, r index.Record, seed index.Seed) (index.InsertOutcome, index.SeedResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.insertCalls++
+	s.lastSeed = seed
 
 	if len(s.insertErrs) > 0 {
 		err := s.insertErrs[0]
 		s.insertErrs = s.insertErrs[1:]
 		if err != nil {
-			return index.InsertInserted, err
+			return index.InsertInserted, index.SeedResult{}, err
 		}
 	}
 
 	if s.alwaysSeqConflict {
-		return index.InsertSeqConflict, nil
+		return index.InsertSeqConflict, index.SeedResult{}, nil
 	}
 
 	for _, existing := range s.rows[r.StreamID] {
 		if existing.LocalPath == r.LocalPath {
-			return index.InsertDuplicatePath, nil
+			return index.InsertDuplicatePath, index.SeedResult{}, nil
 		}
 	}
 	for _, existing := range s.rows[r.StreamID] {
 		if existing.Seq == r.Seq {
-			return index.InsertSeqConflict, nil
+			return index.InsertSeqConflict, index.SeedResult{}, nil
 		}
 	}
 	s.rows[r.StreamID] = append(s.rows[r.StreamID], r)
-	return index.InsertInserted, nil
+	return index.InsertInserted, index.SeedResult{Decline: index.DeclineNoCorroboration}, nil
 }
 
 func (s *fakeStore) UpdateTail(_ context.Context, streamID string, seq int64, durationMS int32, bytes int64) (bool, error) {

@@ -68,54 +68,70 @@ func sqlStateClass(code string) string {
 // 재시도 상한을 소진하면 에러를 올린다 -> main 이 exit 1 -> compose 재기동 -> Scan 복구(D8).
 //
 // poisoned 가 true 면 이 세그먼트 하나만 버리고 프로세스는 계속 간다.
-func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record) (outcome index.InsertOutcome, poisoned bool, err error) {
+// 에러·poison 반환의 outcome 값은 무의미한 채움이다 — 호출부는 err·poisoned 를 먼저 본다.
+func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record, seed index.Seed) (outcome index.InsertOutcome, seedRes index.SeedResult, poisoned bool, err error) {
 	var lastErr error
 	backoff := ix.opt.InsertRetryBase
 
 	for attempt := range ix.opt.InsertRetryMax {
-		result, insertErr := ix.store.Insert(ctx, rec)
+		result, res, insertErr := ix.store.Insert(ctx, rec, seed)
 		if insertErr == nil {
 			// 한 번이라도 통과했다면 전역 이상은 아니다. 산발적 poison 이 누적돼
 			// 언젠가 프로세스를 죽이는 일이 없도록 여기서 기록을 지운다.
 			ix.poisonStreak[rec.StreamID] = 0
-			return result, false, nil
+			return result, res, false, nil
 		}
 		lastErr = insertErr
 
-		switch classifyInsertError(insertErr) {
-		case fatePoison:
-			ix.poisonStreak[rec.StreamID]++
-			streak := ix.poisonStreak[rec.StreamID]
-			ix.log.Error("insert_poisoned",
-				"stream_id", rec.StreamID, "seq", rec.Seq, "path", rec.LocalPath,
-				"err", insertErr, "streak", streak,
-				"note", "재시도해도 같은 결과다. 이 세그먼트만 건너뛴다")
+		// 락 상한 이중 초과(55P03 — store 층 즉시 1회 재시도까지 실패)는 단일 쓰기자
+		// 전제(D10)가 흔들린다는 신호라 별도 이름으로 기록한다. 처분은 일반 재시도와
+		// 같다 — 이 고루틴이 이 조각을 물고 백오프하는 동안은 후속 조각이 seq 를 선점할
+		// 수 없다(D10 단일 호출자 = 순서 보전이 구조적으로 보장되는 유일한 구간). 여기서
+		// 즉시 프로세스를 끝내면 재기동 초기 수집(비동기 발사)과 실시간 유입이 같은
+		// select 에서 경합해 이 조각이 H3 로 영구 유실될 수 있다(리뷰 r4 반증 — D8
+		// 재기동은 회수 순서를 보장하지 않는다). 경합이 계속되면 아래 상한 소진 경로가
+		// 기존 처분(D8)대로 프로세스를 끝낸다 — 조각 단위 건너뛰기·보류가 H3 와 충돌해
+		// 반복 반증된 것(리뷰 r1~r3)과 달리, 이 경로는 기존 H9 정책의 재사용이다.
+		if errors.Is(insertErr, index.ErrLockContended) {
+			ix.log.Warn("insert_lock_contended", "stream_id", rec.StreamID, "seq", rec.Seq,
+				"attempt", attempt+1, "err", insertErr,
+				"note", "단일 쓰기자 전제 확인 필요. 백오프 후 재시도한다")
+		} else {
+			switch classifyInsertError(insertErr) {
+			case fatePoison:
+				ix.poisonStreak[rec.StreamID]++
+				streak := ix.poisonStreak[rec.StreamID]
+				ix.log.Error("insert_poisoned",
+					"stream_id", rec.StreamID, "seq", rec.Seq, "path", rec.LocalPath,
+					"err", insertErr, "streak", streak,
+					"note", "재시도해도 같은 결과다. 이 세그먼트만 건너뛴다")
 
-			if streak >= ix.opt.PoisonStreakMax {
-				// 연달아 난다는 것은 개별 행이 아니라 전역이 이상하다는 뜻이다.
-				// 시간축으로 두 문제를 갈라내는 지점이 여기다.
-				ix.log.Error("poison_streak_exceeded",
-					"stream_id", rec.StreamID, "streak", streak, "limit", ix.opt.PoisonStreakMax)
-				return index.InsertInserted, false, fmt.Errorf(
-					"연속 poison INSERT %d회 stream_id=%q: %w", streak, rec.StreamID, insertErr)
+				if streak >= ix.opt.PoisonStreakMax {
+					// 연달아 난다는 것은 개별 행이 아니라 전역이 이상하다는 뜻이다.
+					// 시간축으로 두 문제를 갈라내는 지점이 여기다.
+					ix.log.Error("poison_streak_exceeded",
+						"stream_id", rec.StreamID, "streak", streak, "limit", ix.opt.PoisonStreakMax)
+					return index.InsertInserted, index.SeedResult{}, false, fmt.Errorf(
+						"연속 poison INSERT %d회 stream_id=%q: %w", streak, rec.StreamID, insertErr)
+				}
+				return index.InsertInserted, index.SeedResult{}, true, nil
+			case fateFatal:
+				return index.InsertInserted, index.SeedResult{}, false, fmt.Errorf(
+					"복구 불가한 INSERT 오류 stream_id=%q seq=%d: %w", rec.StreamID, rec.Seq, insertErr)
 			}
-			return index.InsertInserted, true, nil
-		case fateFatal:
-			return index.InsertInserted, false, fmt.Errorf(
-				"복구 불가한 INSERT 오류 stream_id=%q seq=%d: %w", rec.StreamID, rec.Seq, insertErr)
-		}
 
-		ix.log.Warn("insert_retry", "stream_id", rec.StreamID, "seq", rec.Seq,
-			"attempt", attempt+1, "err", insertErr)
+			ix.log.Warn("insert_retry", "stream_id", rec.StreamID, "seq", rec.Seq,
+				"attempt", attempt+1, "err", insertErr)
+		}
 
 		if attempt == ix.opt.InsertRetryMax-1 {
 			break
 		}
 		if !sleepCtx(ctx, backoff) {
-			return index.InsertInserted, false, ctx.Err()
+			return index.InsertInserted, index.SeedResult{}, false, ctx.Err()
 		}
 		backoff *= 2
 	}
-	return index.InsertInserted, false, fmt.Errorf("INSERT 재시도 상한 소진 stream_id=%q seq=%d: %w",
+	return index.InsertInserted, index.SeedResult{}, false, fmt.Errorf("INSERT 재시도 상한 소진 stream_id=%q seq=%d: %w",
 		rec.StreamID, rec.Seq, lastErr)
 }

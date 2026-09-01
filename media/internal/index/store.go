@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -16,7 +17,10 @@ type Store interface {
 	LoadCursor(ctx context.Context, streamID string) (Cursor, error)
 	// ExistingPaths 는 이미 기록된 파일 경로 전부다. 매번 DB 에 묻지 않으려고 메모리에 올려 둔다.
 	ExistingPaths(ctx context.Context, streamID string) (map[string]struct{}, error)
-	Insert(ctx context.Context, r Record) (InsertOutcome, error)
+	// Insert 는 행 삽입과 컷오프 주조를 **한 문장(CTE)** 으로 수행한다(계약 6항 "행 생성과
+	// 같은 트랜잭션" — 게이트 b·d2). seed 는 주조 판정 입력이고, Eligible=false 면
+	// 순수 삽입과 동작이 같다(주조 WHERE 가 막는다 — 플래그 OFF 의 구 동작, c1).
+	Insert(ctx context.Context, r Record, seed Seed) (InsertOutcome, SeedResult, error)
 	// UpdateTail 은 duration_ms 와 bytes 를 사후 정정한다. 계약상 쓰기 주체가 1번이므로 허용된다.
 	// upload_state 는 건드리지 않는다.
 	UpdateTail(ctx context.Context, streamID string, seq int64, durationMS int32, bytes int64) (updated bool, err error)
@@ -102,29 +106,186 @@ func (s *pgStore) ExistingPaths(ctx context.Context, streamID string) (map[strin
 	return paths, nil
 }
 
-const insertSQL = `
-INSERT INTO stream_segments
-    (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key,
-     local_path, upload_state, bytes, is_discontinuity)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+// TxnDeadline 은 주조 트랜잭션의 클라이언트 상한이다(begin → commit — 설계 6.5.5).
+// statement_timeout 은 명령별이라 COMMIT 까지 묶지 못하므로 ctx 데드라인이 담당한다.
+// 공시(계약 6-3): 판정 창 90초 + 이 값 = 커밋 상한 100초. in-doubt 창(클라이언트 포기 후
+// 서버 커밋 완료)은 이 상한 밖이다.
+const TxnDeadline = 10 * time.Second
 
-func (s *pgStore) Insert(ctx context.Context, r Record) (InsertOutcome, error) {
-	_, err := s.pool.Exec(ctx, insertSQL,
+// ErrLockContended 는 55P03(락 대기 상한)이 즉시 1회 재시도 후에도 계속됨을 뜻한다(m1b).
+// 호출자(indexer)는 이것을 단일 쓰기자 전제(D10)가 흔들린다는 신호로 별도 기록하되,
+// 처분은 H9 의 일반 백오프 재시도에 맡긴다 — 단일 호출자가 이 조각을 물고 있는 동안은
+// 후속 조각이 seq 를 선점할 수 없고(순서 보전이 구조적으로 보장되는 유일한 구간),
+// 상한 소진 시의 종료·재기동(D8)은 기존 처분 그대로다.
+var ErrLockContended = errors.New("index: 컷오프 경합 락 대기 상한(55P03) — 즉시 재시도도 실패")
+
+// pgLockNotAvailable 은 lock_timeout 초과의 SQLSTATE 다.
+const pgLockNotAvailable = "55P03"
+
+// insertSeedSQL — 행 삽입과 컷오프 주조의 한 문장(설계 6.5.5 · ADR-062).
+//
+// 구조가 곧 단정이다:
+//   - cutoff_seq 자리에 바인드 파라미터가 없다(게이트 d2) — 값은 ins 의 RETURNING 에서만
+//     온다. 과대·과소 기록이 표현 불가능하다.
+//   - ⓒ(시작점 자격)는 SQL 이 방금 쓴 세 열을 직접 본다 — Go 주입이 아니다.
+//   - ⓐ 의 시간 항은 clock_timestamp() 로 락 대기 뒤에 재검한다(m1a).
+//   - 기존 컷오프는 ON CONFLICT DO NOTHING 으로 승계한다(기존 승리 — d5).
+//   - 세그먼트 INSERT 의 23505 는 예외 → 롤백 → 컷오프도 남지 않는다(d4).
+const insertSeedSQL = `
+WITH ins AS (
+    INSERT INTO stream_segments
+        (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key,
+         local_path, upload_state, bytes, is_discontinuity,
+         session_id, playback_pdt, playback_s3_key)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+    RETURNING stream_id, seq, session_id, playback_pdt, playback_s3_key
+), seed AS (
+    INSERT INTO stream_cutoffs (stream_id, cutoff_seq, seed_reason, seed_channel)
+    SELECT i.stream_id, i.seq, $14, $15
+      FROM ins i
+     WHERE $16::boolean
+       AND i.session_id      IS NOT NULL
+       AND i.playback_pdt    IS NOT NULL
+       AND i.playback_s3_key IS NOT NULL
+       AND clock_timestamp() - $17::timestamptz <= $18::interval
+    ON CONFLICT (stream_id) DO NOTHING
+    RETURNING 1
+)
+SELECT (SELECT count(*) FROM ins)  AS inserted,
+       (SELECT count(*) FROM seed) AS seeded`
+
+// setTxnLimitsSQL 은 트랜잭션 지역 상한이다. lock_timeout 5s 는 OBS_FRESH(30초)보다 충분히
+// 작아 공시가 성립하고, statement_timeout 10s 는 개별 문장 상한이다(COMMIT 은 TxnDeadline).
+const setTxnLimitsSQL = `SELECT set_config('lock_timeout','5s',true), set_config('statement_timeout','10s',true)`
+
+const cutoffExistsSQL = `SELECT EXISTS (SELECT 1 FROM stream_cutoffs WHERE stream_id = $1)`
+
+func (s *pgStore) Insert(ctx context.Context, r Record, seed Seed) (InsertOutcome, SeedResult, error) {
+	out, res, err := s.insertOnce(ctx, r, seed)
+	if err != nil && isLockTimeout(err) {
+		// 55P03 → 즉시 1회 재시도(설계 6.5.5 · m1b). 재시도도 락이면 ErrLockContended 로
+		// 올린다 — 처분(일반 재시도 → 소진 시 D8)은 호출자 몫이다.
+		out, res, err = s.insertOnce(ctx, r, seed)
+		if err != nil && isLockTimeout(err) {
+			return out, res, fmt.Errorf("%w: stream_id=%q seq=%d", ErrLockContended, r.StreamID, r.Seq)
+		}
+	}
+	return out, res, err
+}
+
+func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed) (InsertOutcome, SeedResult, error) {
+	txctx, cancel := context.WithTimeout(ctx, TxnDeadline)
+	defer cancel()
+
+	tx, err := s.pool.Begin(txctx)
+	if err != nil {
+		return InsertInserted, SeedResult{}, fmt.Errorf("주조 트랜잭션 시작 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+	}
+	// Commit 성공 후의 Rollback 은 무해한 no-op 이다.
+	defer func() { _ = tx.Rollback(txctx) }()
+
+	if _, err := tx.Exec(txctx, setTxnLimitsSQL); err != nil {
+		return InsertInserted, SeedResult{}, fmt.Errorf("트랜잭션 상한 설정 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+	}
+
+	// 주조 시도끼리는 스트림 스코프 advisory 락으로 **시간 판정보다 앞에서** 직렬화한다.
+	// CTE 의 clock_timestamp() 는 소스 행 생성 시점에 평가되므로, stream_cutoffs UNIQUE
+	// 검사에서 미커밋 경합을 만나면 그 대기는 시간 판정 **뒤**가 되어 — 경합이 롤백되면
+	// 낡은 방증으로 주조될 수 있다(cx 리뷰 차단 2). 대기를 여기(판정 앞)로 끌어오면
+	// "락 대기 뒤 재검"(m1a) 의미론이 복원된다. advisory 대기도 lock_timeout 을 따르므로
+	// 55P03 경로(m1b)와 일관된다. 비적격 INSERT 는 컷오프 경쟁이 없으므로 직렬화하지 않는다.
+	if seed.Eligible {
+		if _, err := tx.Exec(txctx,
+			`SELECT pg_advisory_xact_lock(hashtext('pc_cutoff_' || $1::text))`, r.StreamID); err != nil {
+			return InsertInserted, SeedResult{}, fmt.Errorf("주조 직렬화 락 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+		}
+	}
+
+	// ⓐ 가 거짓이어도 $14~$18 은 유효한 값으로 내려간다 — seed 의 WHERE 가 막으므로
+	// CHECK 에 닿을 행 자체가 없지만, 드라이버 층에서 놀랄 일을 만들지 않는다.
+	reason, channel, anchor, fresh := seedArgs(seed)
+
+	// inserted 는 CTE 결과 형상(두 열) 유지용이다 — 성공 경로에선 항상 1이라 소비하지 않는다.
+	var inserted, seeded int
+	err = tx.QueryRow(txctx, insertSeedSQL,
 		r.StreamID, r.Seq, r.StartPTSMS, r.StartWallUTC.UTC(), r.DurationMS, r.S3Key,
 		r.LocalPath, string(r.UploadState), r.Bytes, r.IsDiscontinuity,
-	)
-	if err == nil {
-		return InsertInserted, nil
+		r.SessionID, r.PlaybackPDT, r.PlaybackS3Key, // carrier — nil ⇒ NULL(5.4.2)
+		reason, channel, seed.Eligible, anchor, fresh,
+	).Scan(&inserted, &seeded)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+			// 롤백(defer)으로 컷오프도 남지 않는다(d4).
+			if pgErr.ConstraintName == localPathUniqueName {
+				return InsertDuplicatePath, SeedResult{}, nil
+			}
+			return InsertSeqConflict, SeedResult{}, nil
+		}
+		return InsertInserted, SeedResult{}, fmt.Errorf("행 삽입 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+	}
+	if err := tx.Commit(txctx); err != nil {
+		return InsertInserted, SeedResult{}, fmt.Errorf("주조 트랜잭션 커밋 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
 	}
 
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
-		if pgErr.ConstraintName == localPathUniqueName {
-			return InsertDuplicatePath, nil
-		}
-		return InsertSeqConflict, nil
+	// 여기서부터는 삽입이 **이미 커밋됐다** — 귀속 진단의 실패를 Insert 의 에러로 올리면
+	// 성공한 삽입이 실패로 오보고돼 재시도 → 23505 → (진단 실패 지속 시) 크래시루프가
+	// 된다(cc 리뷰 차단 2, 라이브 재현). 진단 실패는 SeedResult.DiagErr 로만 나른다.
+	return InsertInserted, s.resolveSeed(ctx, r, seed, seeded), nil
+}
+
+// resolveSeed 는 Decline 귀속(설계 6.5.5)이다. 커밋 뒤에만 부르며, 어떤 실패도
+// 에러로 반환하지 않는다 — 귀속은 관측 신호이지 결과가 아니다.
+func (s *pgStore) resolveSeed(ctx context.Context, r Record, seed Seed, seeded int) SeedResult {
+	if seeded == 1 {
+		return SeedResult{Seeded: true}
 	}
-	return InsertInserted, fmt.Errorf("행 삽입 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+	if !seed.Eligible {
+		return SeedResult{Decline: DeclineNoCorroboration}
+	}
+	if r.SessionID == nil || r.PlaybackPDT == nil || r.PlaybackS3Key == nil {
+		return SeedResult{Decline: DeclineNotSettleable}
+	}
+	// 자격 전부 참인데 seeded=0 — 기존 컷오프 승계(정상)인지 시간 항 탈락인지 가른다.
+	// 진단은 관측용이라 서비스 수명 ctx 로 매달리면 안 된다 — 짧은 상한을 준다.
+	dctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var exists bool
+	if err := s.pool.QueryRow(dctx, cutoffExistsSQL, r.StreamID).Scan(&exists); err != nil {
+		return SeedResult{
+			Decline: DeclineStaleCorroboration,
+			DiagErr: fmt.Errorf("컷오프 존재 확인 실패 stream_id=%q: %w", r.StreamID, err),
+		}
+	}
+	if exists {
+		return SeedResult{Decline: DeclineSkipped}
+	}
+	return SeedResult{Decline: DeclineStaleCorroboration}
+}
+
+// seedArgs 는 비적격 seed 의 제로값을 드라이버에 흘리지 않는 보정이다.
+func seedArgs(seed Seed) (SeedReason, SeedChannel, time.Time, time.Duration) {
+	reason, channel := seed.Reason, seed.Channel
+	if reason == "" {
+		reason = SeedReasonLiveIngress
+	}
+	if channel == "" {
+		channel = SeedChannelWatcher
+	}
+	anchor := seed.AnchorUTC
+	if anchor.IsZero() {
+		anchor = time.Now().UTC()
+	}
+	fresh := seed.Freshness
+	if fresh <= 0 {
+		fresh = time.Minute
+	}
+	return reason, channel, anchor, fresh
+}
+
+func isLockTimeout(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgLockNotAvailable
 }
 
 // updateTailSQL 의 가드 두 조건은 둘 다 필수다.
