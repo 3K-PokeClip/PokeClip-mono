@@ -168,6 +168,8 @@ func newLoopFixture(t *testing.T, withHook bool) *loopFixture {
 		watcherErr:  func() error { return nil },
 		completed:   f.completed,
 		rescans:     f.rescans,
+		armSweeper:  func() {}, // 완주 판정이 나도 이 파일의 관심사가 아니다 — no-op
+		stallFactor: collectStallFactor,
 	}
 	if withHook {
 		f.deps.hookEvents = f.hookEv

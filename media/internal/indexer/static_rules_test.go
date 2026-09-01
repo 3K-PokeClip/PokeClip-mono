@@ -59,3 +59,29 @@ func TestM2SettleOptionSingleSite(t *testing.T) {
 		t.Errorf("recording.SettleOptions 복합 리터럴이 %d곳이다 — 생성은 newSettleOptions 만 한다", literals)
 	}
 }
+
+// m3c — Adopt 호출이 소스에 정확히 3곳이고 전부 수신자(ix.adopt) 경유다.
+// 수신자 없는 패턴은 무관한 호출까지 세어 "정확히 3곳"이 흔들리므로(설계 0.5 ⅵ)
+// 패턴은 `.adopt.Adopt(` 로 고정한다 — 널 오브젝트 필드를 지나야 계수된다.
+func TestM3AdoptCallSitesExactlyThree(t *testing.T) {
+	adoptCallRe := regexp.MustCompile(`\.adopt\.Adopt\(`)
+	paths, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("소스 목록 수집 실패: %v", err)
+	}
+	calls := 0
+	for _, p := range paths {
+		if strings.HasSuffix(p, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("%s 읽기 실패: %v", p, err)
+		}
+		calls += len(adoptCallRe.FindAll(src, -1))
+	}
+	if calls != 3 {
+		t.Errorf("ix.adopt.Adopt 호출이 %d곳이다 — 정확히 3곳이어야 한다(H4·unsettled·Scan(d)). "+
+			"자리를 늘렸다면 설계 6.5.3 의 호출점 목록과 f6e 를 함께 갱신하라", calls)
+	}
+}

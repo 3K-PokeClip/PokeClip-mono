@@ -92,21 +92,30 @@ func run() error {
 	//   풀이 닫히기 전에 반환되어야 한다. 코드 배치가 그 순서를 보장한다(결정 17″).
 	defer up.Shutdown()
 
-	w, err := recording.NewWatcher(cfg.Watcher)
-	if err != nil {
-		return err
-	}
-	ix := indexer.New(store, fmp4meta.ProbeDurationMS, w, up, cfg.Indexer, log)
-
-	// --- 2. watch 등록 (동기) ---
+	// --- 2. 워처 조립·기동 — 실패는 강등이다 ---
 	//
-	// 주석 ⓐ: w.Start() 가 ix.Scan() 보다 먼저인 이유.
-	// Start 는 동기라서 반환 시점에는 감시 등록이 이미 끝나 있다. 순서를 뒤집어 Scan 을
-	// 먼저 하면 "훑기는 끝났는데 감시는 아직 안 켜진" 공백 구간이 생기고, 그 사이에
-	// 만들어진 파일은 훑기에도 안 잡히고 알림도 오지 않아 영구 미아가 된다(설계 3절 2번).
-	if err := w.Start(ctx); err != nil {
-		return err
+	// 주석 ⓐ: 워처 기동이 초기 수집 발사보다 먼저인 이유.
+	// Start 는 동기라서 반환 시점에는 감시 등록이 이미 끝나 있다. 순서를 뒤집으면
+	// "훑기는 끝났는데 감시는 아직 안 켜진" 공백 구간이 생기고, 그 사이에 만들어진
+	// 파일은 훑기에도 안 잡히고 알림도 오지 않아 영구 미아가 된다(설계 3절 2번).
+	//
+	// 실패 처분(ADR-063 결정 1): 조립·기동 단계 실패 = **강등**(프로세스 유지 + 주기
+	// 재시도). 재기동이 상태를 바꿀 수도 있으나 바뀌지 않는 경우가 실재하고, 그때
+	// 프로세스 종료는 다른 유입(훅·스캔)까지 죽인다 — 훅 판정(아래 2-1)의 일반화다.
+	// 기동 **후** 사망(Done 닫힘)은 반대로 종료다: loop 의 watcherDone case 가 그대로
+	// 담당하고 새 프로세스가 실제로 회복시킨다.
+	w, wErr := assembleWatcher(ctx, cfg.Watcher)
+	if wErr != nil {
+		log.Error("watcher_degraded", "value", 1, "err", wErr,
+			"note", "워처만 강등된다. 훅·스캔 유입은 계속되고 재장착은 재스캔 주기가 시도한다")
 	}
+	// 겹 1 — 호출부의 인터페이스 변수 선언. *recording.Watcher 타입 그대로 넘기면
+	// typed-nil 이 indexer.New 의 nil 가드(겹 2)를 통과한다.
+	var adopt indexer.Adopter
+	if w != nil {
+		adopt = w
+	}
+	ix := indexer.New(store, fmp4meta.ProbeDurationMS, adopt, up, cfg.Indexer, log)
 
 	// --- 2-1. 훅 어댑터 (선택) ---
 	//
@@ -168,20 +177,45 @@ func run() error {
 	//
 	// 결과를 즉시 return 하지 않는다. 정상·오류가 같은 출구로 나가야 defer 로 등록한
 	// 종료 절차가 어느 경로에서도 같은 순서로 돈다.
-	loopErr := loop(ctx, loopDeps{
+	deps := loopDeps{
 		ix: ix, root: cfg.SegmentRoot, rescanEvery: cfg.Watcher.RescanEvery, log: log,
-		watcherDone: w.Done(), watcherErr: w.Wait,
-		completed: w.Completed(), rescans: w.Rescans(),
 		hookEvents: hookEvents, hookDone: hookDone, hookErr: hookErr,
 		uploadResults: up.Results(), holdTicks: holdTicker.C,
 		armSweeper: up.ArmSweeper, stallFactor: collectStallFactor,
-	})
+		reattachWatcher: func() (*recording.Watcher, error) {
+			return assembleWatcher(ctx, cfg.Watcher)
+		},
+	}
+	if w != nil {
+		deps.watcherDone, deps.watcherErr = w.Done(), w.Wait
+		deps.completed, deps.rescans = w.Completed(), w.Rescans()
+	} else {
+		// 강등 국면 — 네 채널이 nil 로 남고 그 case 들은 영구 비활성이다(훅 채널과 같은
+		// 성질). 재장착은 loop 의 재스캔 주기가 시도한다.
+		deps.watcherDegraded = true
+	}
+	loopErr := loop(ctx, deps)
 	if loopErr != nil {
 		return loopErr
 	}
 	// 정상 종료도 흔적을 남긴다. 로그가 그냥 끊기면 죽은 것인지 끝난 것인지 구분할 수 없다.
 	log.Info("shutdown", "reason", "종료 신호를 받아 정상 종료한다")
 	return nil
+}
+
+// assembleWatcher 는 워처를 만들고 기동한다. 두 실패점(NewWatcher·Start)을 한 값으로
+// 합쳐 강등 판정에 쓴다. Start 실패 시 fsnotify 핸들을 닫는다(f6i) — 강등 상태의
+// 주기 재시도가 fd·inotify 인스턴스를 누수하면 재시도 자체가 자원 고갈이 된다.
+func assembleWatcher(ctx context.Context, opt recording.WatcherOptions) (*recording.Watcher, error) {
+	w, err := recording.NewWatcher(opt)
+	if err != nil {
+		return nil, fmt.Errorf("워처 조립 실패: %w", err)
+	}
+	if err := w.Start(ctx); err != nil {
+		_ = w.Close()
+		return nil, fmt.Errorf("워처 기동 실패: %w", err)
+	}
+	return w, nil
 }
 
 // newUploader 는 설정에 따라 업로더를 고른다. 분기는 셋이고 기동을 거부하는 것은 하나뿐이다.
@@ -249,6 +283,13 @@ type loopDeps struct {
 	armSweeper func()
 	// stallFactor 는 scan_collect_stalled 판정 계수 k 다(경과 > ScanCollectBudget × k).
 	stallFactor float64
+
+	// watcherDegraded 는 워처 부재 국면 표식이다. 참이면 재스캔 주기마다 재장착을
+	// 시도한다 — 유계 재시도(주기당 1회)가 회복을 담당한다(ADR-063 결정 1).
+	watcherDegraded bool
+	// reattachWatcher 는 재장착 손잡이다(assembleWatcher). 성공 시 loop 이 채널 넷을
+	// 갈아 끼우고 SetAdopter 를 함께 부른다 — H4·H5 되돌림이 실제 워처로 복귀한다(f6f).
+	reattachWatcher func() (*recording.Watcher, error)
 }
 
 // collectStallFactor 는 수집 정지 판정 계수다. soft 예산 45초 × 2 = 90초 —
@@ -312,6 +353,20 @@ func loop(ctx context.Context, d loopDeps) error {
 			d.hookDone = nil
 
 		case <-ticker.C:
+			// 워처 강등 국면이면 먼저 재장착을 시도한다(주기당 1회 = 유계 재시도).
+			if d.watcherDegraded && d.reattachWatcher != nil {
+				if w, err := d.reattachWatcher(); err == nil {
+					d.watcherDone, d.watcherErr = w.Done(), w.Wait
+					d.completed, d.rescans = w.Completed(), w.Rescans()
+					d.ix.SetAdopter(w)
+					d.watcherDegraded = false
+					d.log.Info("watcher_recovered", "note", "재장착 완료 — 되돌림(H4·H5)이 실제 워처로 복귀한다")
+					d.log.Info("watcher_degraded", "value", 0)
+				} else {
+					d.log.Warn("watcher_reattach_failed", "err", err,
+						"note", "다음 재스캔 주기에 다시 시도한다. 훅·스캔 유입은 계속된다")
+				}
+			}
 			// 아무 일이 없어도 주기마다 전수 점검을 발사한다. 놓친 게 있으면 여기서 복구된다.
 			// 발사만 하고 결과는 CollectDone case 가 받는다 — 수집이 루프를 세우지 않는다.
 			d.ix.StartCollect(ctx, d.root)

@@ -209,12 +209,37 @@ type Indexer struct {
 	breaks map[string][]sessionBreak
 }
 
+// noAdopter 는 워처 부재(강등) 국면의 널 오브젝트다(m3 — ADR-063 결정 2).
+// nil 대신 no-op 구현을 끼우면 호출점 개수와 무관하게 안전하다 — 호출점 열거는
+// r15a 검증에서 두 번 깨졌다(1/3 · 4/14). 되돌림 실패 = 그 파일을 미기록으로 남김 →
+// 다음 수집이 회수한다. 매 호출이 adopt_dropped_degraded 로 계수된다(f6e).
+type noAdopter struct{ log *slog.Logger }
+
+func (n noAdopter) Adopt(seg recording.Segment) {
+	n.log.Warn("adopt_dropped_degraded", "stream_id", seg.StreamID, "path", seg.Path,
+		"note", "워처 부재 — 미기록으로 남기고 다음 수집이 회수한다")
+}
+
+// SetAdopter 는 워처 복귀(재장착) 때 loop 이 부른다. nil 은 널 오브젝트로 편다(m3b —
+// plain nil 한정: typed-nil 은 호출부의 인터페이스 변수 선언(겹 1)과 이 가드(겹 2)가 막고,
+// setter 에서 일반적으로 잡으려면 리플렉션이 필요해 과설계다 — 닫지 않는다).
+func (ix *Indexer) SetAdopter(a Adopter) {
+	if a == nil {
+		a = noAdopter{log: ix.log}
+	}
+	ix.adopt = a
+}
+
 // New 는 인덱서를 만든다. w 에는 *recording.Watcher 를, up 에는 *upload.Uploader 를 넘긴다.
-// up 이 nil 이면 아무것도 요청하지 않는 기본값이 끼워진다 — 배선 전에도 인덱서는 그대로 돈다.
+// up 이 nil 이면 아무것도 요청하지 않는 기본값이, w 가 nil 이면(워처 강등) 널 오브젝트가
+// 끼워진다(m3a) — 배선 전에도 인덱서는 그대로 돈다.
 func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 	up UploadRequester, opt Options, log *slog.Logger) *Indexer {
 	if up == nil {
 		up = noUploader{}
+	}
+	if w == nil {
+		w = noAdopter{log: log}
 	}
 	if opt.FSOpTimeout <= 0 {
 		// 0 이면 모든 FS 워커가 즉시 타임아웃해 처리 전체가 조용히 멈춘다.
