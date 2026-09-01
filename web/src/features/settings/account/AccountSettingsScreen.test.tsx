@@ -327,8 +327,10 @@ describe('AccountSettingsScreen — 표시 이름 저장', () => {
 
     held.release(jsonResponse(200, { ...ME, name: '게임하는너구리2' }));
 
-    await screen.findByText('표시 이름을 변경했습니다');
-    expect(queryClient.getQueryData<Me>(ME_KEY)).toBeUndefined();
+    await waitFor(() => expect(queryClient.getQueryData<Me>(ME_KEY)).toBeUndefined());
+    // 토스트도 뜨지 않는다 — 뮤테이션 콜백은 화면이 사라져도 돌기 때문에, 막지 않으면 공용 PC의
+    // 로그인 화면에 「변경했습니다」가 떠 다음 사용자가 본다
+    expect(screen.queryByText('표시 이름을 변경했습니다')).toBeNull();
   });
 
   it('로그아웃 뒤 다른 계정이 로그인해 있으면, 늦게 온 응답이 그 계정 캐시를 덮지 않는다', async () => {
@@ -363,10 +365,41 @@ describe('AccountSettingsScreen — 표시 이름 저장', () => {
 
     held.release(jsonResponse(200, { ...ME, name: '게임하는너구리2' }));
 
-    await screen.findByText('표시 이름을 변경했습니다');
     // prev가 존재해도(B의 캐시) 회원 번호가 다르면 얹지 않는다 — A의 이름이 새지 않는다
+    await waitFor(() => expect(spy.mock.calls.some(([, i]) => i?.method === 'PATCH')).toBe(true));
     expect(queryClient.getQueryData<Me>(ME_KEY)).toEqual(other);
-    expect(spy).toHaveBeenCalled();
+    // B의 화면에 A의 저장 결과를 알리지도 않는다
+    expect(screen.queryByText('표시 이름을 변경했습니다')).toBeNull();
+  });
+
+  it('다른 탭이 계정을 바꾸면 입력하던 초안을 버린다 — 그 초안이 새 계정에 저장되면 안 된다', async () => {
+    // 계정 교체는 캐시만 비우고 이 화면을 언마운트하지 않는다(providers.tsx) — 초안이 남으면
+    // B의 이름과 달라 dirty가 서고, 저장을 누르면 B의 토큰으로 A의 초안이 저장된다.
+    const user = userEvent.setup();
+    const other: Me = {
+      id: 2,
+      email: 'other@example.test',
+      name: '다른사람',
+      profileImageUrl: null,
+    };
+    let signedIn: Me = ME;
+    stubFetch((url, init) => {
+      const method = init?.method ?? 'GET';
+      if (url === '/api/auth/me' && method === 'GET') return jsonResponse(200, signedIn);
+      return jsonResponse(404, { reason: 'UNEXPECTED_CALL' });
+    });
+    const { queryClient } = await renderScreen();
+
+    await user.type(screen.getByLabelText('표시 이름'), '고치던중');
+    expect(screen.getByRole('button', { name: '저장' })).toBeEnabled();
+
+    // 계정이 바뀌면 me 조회가 B를 답한다 — 화면이 보는 것은 그 사실 하나다
+    signedIn = other;
+    await queryClient.invalidateQueries({ queryKey: ME_KEY });
+
+    // 초안이 사라지고 새 계정의 이름이 그대로 보인다 — 저장할 것이 없다
+    await waitFor(() => expect(screen.getByLabelText('표시 이름')).toHaveValue('다른사람'));
+    expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
   });
 
   it('입력 탓이 아닌 실패는 토스트로 알리고 입력은 그대로 둔다', async () => {

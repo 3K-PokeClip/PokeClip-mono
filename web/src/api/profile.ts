@@ -89,11 +89,18 @@ export function profileFailureOf(e: unknown): ProfileFailure | null {
   return FAILURE_STATUS[failure] === e.status ? failure : null;
 }
 
+/**
+ * 길이 초과 문구. 화면이 먼저 거를 때와 서버가 `NAME_TOO_LONG`으로 거절할 때가 **입력 아래
+ * 같은 자리에 번갈아 그려지므로** 반드시 같은 문장이어야 한다 — 한쪽만 고치면 저장 전과 응답
+ * 후의 말이 달라져 「고쳤는데 또 거절됐다」로 읽힌다. 그래서 두 벌로 두지 않고 여기서 내보낸다.
+ */
+export const NAME_TOO_LONG_MESSAGE = `${NAME_MAX_CODE_POINTS}자 이내로 입력해 주세요`;
+
 // 이름 실패는 사용자가 입력을 고쳐 해결하는 것이라 입력 아래 한 줄로 그린다(폼 오류는 폼이 갖는다,
-// ADR-044). NAME_TOO_LONG은 화면이 먼저 거르지만 최종 판정은 서버라 문구를 같이 둔다.
+// ADR-044).
 const NAME_MESSAGE: Partial<Record<ProfileFailure, string>> = {
   NAME_BLANK: '이름을 입력해 주세요',
-  NAME_TOO_LONG: `${NAME_MAX_CODE_POINTS}자 이내로 입력해 주세요`,
+  NAME_TOO_LONG: NAME_TOO_LONG_MESSAGE,
   NAME_INVALID_CHARACTER: '이름에 쓸 수 없는 문자가 있어요',
 };
 

@@ -6,7 +6,7 @@ import { meQueryOptions, type Me } from '@/api/auth';
 import {
   displayNameFailureMessage,
   displayNameTooLong,
-  NAME_MAX_CODE_POINTS,
+  NAME_TOO_LONG_MESSAGE,
   normalizeDisplayName,
   updateDisplayName,
   uploadProfilePhoto,
@@ -21,8 +21,6 @@ import { useToast } from '@/ui';
 // 두 창구 모두 GET /api/auth/me와 같은 모양으로 답하므로 재조회 없이 me 캐시를 통째로 덮는다 —
 // 헤더·사이드바가 같은 캐시를 읽어 즉시 따라온다. setQueryData가 dataUpdatedAt을 지금으로 갱신해
 // staleTime 60초 안의 포커스 재조회에도 되감기지 않는다.
-
-const TOO_LONG_MESSAGE = `${NAME_MAX_CODE_POINTS}자 이내로 입력해 주세요`;
 
 /**
  * 업로드를 취소한 뒤 두 번째로 회원 정보를 읽기까지의 간격. 서버는 창고에 쓴 뒤(호출 상한 8초,
@@ -74,14 +72,27 @@ export function useAccountState(): AccountViewState {
     normalizedNameRef.current = normalizedName;
   }, [normalizedName]);
 
-  // 취소 뒤 예약한 지연 조회 — 화면이 사라지면 함께 걷는다.
+  /**
+   * 🔴 계정이 바뀌면 입력 중이던 것을 버린다.
+   *
+   * 다른 탭이 로그아웃 후 다른 계정으로 로그인하면 `providers.tsx`가 쿼리 캐시만 비우고
+   * **이 화면은 언마운트되지 않는다**(계정 교체는 refreshToken이 차 있어 AuthGuard도 안 걷어낸다).
+   * 그러면 `typed`가 A의 초안인 채 B의 me가 도착하고, B의 이름과 달라 dirty가 서서 저장을 누르면
+   * **B의 토큰으로 A의 초안이 저장된다** — 남의 계정을 고치는 길이다.
+   */
+  const ownerRef = useRef<number | undefined>(me?.id);
+  useEffect(() => {
+    if (me === undefined || ownerRef.current === me.id) return;
+    ownerRef.current = me.id;
+    setTyped(null);
+    setServerNameError(null);
+  }, [me]);
+
+  // 취소 뒤 예약한 지연 조회 — 타이머는 **걷지 않는다.** 콜백이 컴포넌트 상태가 아니라
+  // queryClient만 만지므로 화면이 사라져도 안전하고, 걷으면 존재 이유(첫 조회가 창고 커밋을
+  // 앞지른 창)를 그대로 버린다 — 취소 직후 9초 안에 다른 화면으로 옮기면 헤더·사이드바가
+  // 옛 아바타를 계속 붙든다. 한 번짜리 타이머라 새지도 않는다.
   const reconcileTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (reconcileTimer.current !== null) clearTimeout(reconcileTimer.current);
-    },
-    [],
-  );
 
   /**
    * me 캐시에 **이 창구가 소유한 필드만** 얹는다. 응답 전체로 덮지 않는 이유가 둘이다.
@@ -125,6 +136,10 @@ export function useAccountState(): AccountViewState {
     },
     onSuccess: async (next, submitted) => {
       await patchMeAfterCancel(next.id, { name: next.name });
+      // 뮤테이션 콜백은 화면이 사라져도 실행된다 — 저장 직후 로그아웃하면 캐시가 비어 아무것도
+      // 얹히지 않는데 토스트만 남아 **공용 PC의 로그인 화면에 「변경했습니다」가 뜬다.**
+      // 캐시에 실제로 반영됐을 때만(= 그 계정이 아직 이 브라우저의 주인일 때만) 알린다.
+      if (queryClient.getQueryData<Me>(meQueryOptions.queryKey)?.id !== next.id) return;
       // 왕복 중 더 친 입력은 살린다 — 제출한 값 그대로일 때만 me를 다시 따라가게 되돌린다.
       setTyped((cur) => (cur !== null && normalizeDisplayName(cur) === submitted ? null : cur));
       toast({ tone: 'success', title: '표시 이름을 변경했습니다' });
@@ -206,7 +221,7 @@ export function useAccountState(): AccountViewState {
     saving,
     // 상한 초과는 요청을 보내지 않고 화면이 먼저 말한다 — 서버가 같은 사유(NAME_TOO_LONG)로
     // 거절할 것이 확실한 유일한 규칙이라서다. 제어문자·보이지 않는 글자 판정은 서버에 맡긴다.
-    nameError: tooLong ? TOO_LONG_MESSAGE : serverNameError,
+    nameError: tooLong ? NAME_TOO_LONG_MESSAGE : serverNameError,
     setDraftName,
     saveName,
     uploadPhoto,

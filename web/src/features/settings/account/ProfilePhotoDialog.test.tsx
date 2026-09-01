@@ -238,7 +238,6 @@ describe('ProfilePhotoDialog', () => {
   it('업로드 중에는 크롭 조작이 잠긴다 — 미리보기가 이미 보낸 Blob과 갈리지 않게', async () => {
     const held = holdUpload();
     const { user } = await openCropReady();
-    const before = dialog().getByRole('slider', { name: '확대' }).getAttribute('aria-valuenow');
 
     await user.click(dialog().getByRole('button', { name: '적용' }));
 
@@ -252,9 +251,13 @@ describe('ProfilePhotoDialog', () => {
     expect(stage).toHaveAttribute('aria-disabled', 'true');
     expect(stage).toHaveAttribute('tabindex', '-1');
 
-    // 방향키도 먹지 않는다
+    // 방향키도 먹지 않는다. 🔴 슬라이더의 aria-valuenow로 재면 안 된다 — 방향키는 zoom이 아니라
+    // transform.x/y를 바꾸므로 그 값은 가드가 있든 없든 그대로다(가드를 지워도 통과하는 공허한
+    // 단언이었다). 실제로 움직이는 것, 즉 미리보기의 transform을 본다.
+    const img = document.querySelector('[role="dialog"] img') as HTMLImageElement;
+    const before = img.style.transform;
     fireEvent.keyDown(stage, { key: 'ArrowRight' });
-    expect(dialog().getByRole('slider', { name: '확대' })).toHaveAttribute('aria-valuenow', before);
+    expect(img.style.transform).toBe(before);
 
     held.resolve();
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -281,13 +284,24 @@ describe('ProfilePhotoDialog', () => {
   });
 
   it('업로드 실패로 크롭에 돌아오면 적용 버튼이 포커스를 되찾는다 — 키보드로 곧장 재시도한다', async () => {
-    upload.mockRejectedValueOnce(new ApiError(503, 'PHOTO_STORAGE_DISABLED'));
+    // 실패를 붙들어 둔다 — 즉시 거절하면 클릭이 끝나기 전에 복귀까지 다 돌아, 아래 blur가
+    // 「업로드 중」이 아니라 이미 끝난 화면에 걸린다.
+    const held = holdUpload();
     const { user } = await openCropReady();
-    const apply = dialog().getByRole('button', { name: '적용' });
 
-    await user.click(apply);
+    await user.click(dialog().getByRole('button', { name: '적용' }));
 
-    // loading이 disabled로 이어져 브라우저가 포커스를 body로 떨어뜨린 뒤다
+    // 🔴 포커스가 「적용」을 떠난 상태를 만들어야 이펙트가 하는 일이 보인다. 그대로 두면 클릭이
+    // 잡은 포커스가 끝까지 남아 **이펙트를 지워도 통과하는** 공허한 단언이 된다.
+    // 브라우저는 loading→disabled 순간 포커스를 body로 떨어뜨리지만, jsdom은 그 이동을 구현하지
+    // 않고(노드 제거 때만 옮긴다) 모달의 포커스 트랩이 blur를 곧바로 되돌린다 — 트랩이 허용하는
+    // 모달 안의 다른 버튼(취소)으로 옮겨 「적용이 아닌 곳」을 만든다.
+    const cancel = dialog().getByRole('button', { name: '취소' });
+    cancel.focus();
+    expect(document.activeElement).toBe(cancel);
+
+    held.reject(new ApiError(503, 'PHOTO_STORAGE_DISABLED'));
+
     await dialog().findByText('지금은 사진을 올릴 수 없어요 · 잠시 후 다시 시도해 주세요');
     await waitFor(() =>
       expect(document.activeElement).toBe(dialog().getByRole('button', { name: '적용' })),

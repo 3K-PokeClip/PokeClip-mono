@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SettingsPageHeader } from '../SettingsPageHeader';
 import { LoginCard } from './LoginCard';
 import { ProfileCard } from './ProfileCard';
@@ -27,6 +27,22 @@ export function AccountSettingsScreen() {
     onCanceled: account.refetchMe,
   });
   const [withdrawOpen, setWithdrawOpen] = useState(false);
+
+  // 🔴 다른 탭이 계정을 바꾸면 열려 있던 사진 모달을 접는다.
+  //
+  // 계정 교체는 쿼리 캐시만 비우고 이 화면을 언마운트하지 않는다(providers.tsx) — 그대로 두면
+  // 모달이 **A가 고른 그림**을 든 채 남고, 「적용」을 누르면 apiFetch가 **지금(B의) 토큰**으로
+  // 보내 A의 사진이 B의 아바타가 된다. close()가 진행 중이던 업로드도 함께 끊는다.
+  // 탈퇴 모달도 같이 닫는다 — A에게 하던 확인을 B의 이름으로 이어 가면 안 된다.
+  const owner = account.me?.id;
+  const closePhoto = photo.close;
+  const previousOwner = useRef(owner);
+  useEffect(() => {
+    if (owner === undefined || previousOwner.current === owner) return;
+    previousOwner.current = owner;
+    closePhoto();
+    setWithdrawOpen(false);
+  }, [owner, closePhoto]);
 
   const name = account.me?.name ?? '';
   const email = account.me?.email ?? '';
