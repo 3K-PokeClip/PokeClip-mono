@@ -18,7 +18,6 @@ package indexer
 
 import (
 	"context"
-	"os"
 	"sort"
 	"time"
 
@@ -178,6 +177,14 @@ func (ix *Indexer) releaseBreak(streamID string, dec breakDecision) {
 // 에러 계약은 Handle 과 같다: 반환 에러는 "프로세스를 끝내야 하는 상황"만 뜻하고,
 // 이벤트 1개를 버리는 판정은 로그를 남기고 nil 을 돌려준다.
 func (ix *Indexer) HandleHook(ctx context.Context, ev mtxhook.Event) error {
+	// 래치 확인(m2 ⓒ) — Handle 진입부와 같은 규약. 조기 반환은 nil 이다(에러면 프로세스 사망).
+	// 세션 경계 훅(offline·online)은 FS 를 건드리지 않지만, 트립 국면에서 세그먼트 훅이
+	// 워커를 남기는 것을 막는 쪽이 우선한다 — 경계 미탐은 벽시계 안전망이 받는다.
+	if ix.fsLatch.Tripped() {
+		ix.log.Warn("fs_latch_early_return", "site", "hook", "stream_id", ev.StreamID)
+		return nil
+	}
+
 	switch ev.Kind {
 	case mtxhook.KindOffline:
 		ix.markOffline(ev)
@@ -291,7 +298,7 @@ func (ix *Indexer) handleHookSegment(ctx context.Context, ev mtxhook.Event) erro
 	// 파일이 밖으로 나가지 않는다. 파일을 실제로 내보내는 업로더(POK-30, 병합됨)는 os.Root
 	// 핸들로만 여므로(upload/worker.go 의 Root.Open) 루트 밖으로 풀리는 심링크는 그쪽 열기
 	// 단계에서 거부된다 — 여기서 한 번 더 풀 실익이 없다.
-	if _, statErr := os.Stat(seg.Path); statErr != nil {
+	if _, statErr := ix.statT(seg.Path, "hook_exists"); statErr != nil {
 		ix.log.Warn("hook_segment_missing",
 			"stream_id", seg.StreamID, "path", seg.Path, "err", statErr,
 			"note", "훅이 알린 파일이 없다. 파일 감시·재스캔이 안전망으로 남는다")

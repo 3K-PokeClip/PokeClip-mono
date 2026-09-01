@@ -1,7 +1,6 @@
 package indexer
 
 import (
-	"os"
 	"slices"
 	"time"
 
@@ -179,7 +178,7 @@ func (ix *Indexer) releaseHeldTail(streamID string, h heldTail, now time.Time) {
 		return
 	}
 
-	fi, err := os.Stat(cur.Tail.LocalPath)
+	fi, err := ix.statT(cur.Tail.LocalPath, "hold_release")
 	if err != nil {
 		// 판정 재료가 없으면 판정하지 않는다. 다음 틱에 다시 본다.
 		h.nextTry = now.Add(ix.opt.TailHold)
@@ -239,7 +238,7 @@ func (ix *Indexer) reconcileUploadState(streamID string) {
 // tailGrew 는 "실제로 자랐는가"를 묻는 공통 게이트다.
 // 확인 2·확인 2.5·recoverTail 이 같은 질문을 하므로 한 곳에 둔다.
 func (ix *Indexer) tailGrew(tail *index.TailRow) (fileBytes int64, grew bool, statErr error) {
-	fi, err := os.Stat(tail.LocalPath)
+	fi, err := ix.statT(tail.LocalPath, "tail_grew")
 	if err != nil {
 		return 0, false, err
 	}

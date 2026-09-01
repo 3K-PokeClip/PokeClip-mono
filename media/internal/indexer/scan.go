@@ -21,7 +21,7 @@ import (
 // TODO(C2): 지금은 매번 전체 walk 다. 트리거는 "recordings 파일 수 1만 초과"이며,
 // 그때는 mtime 증분 walk 로 바꾼다.
 func (ix *Indexer) Scan(ctx context.Context, root string) error {
-	byStream, err := ix.collect(root)
+	byStream, err := ix.collectTree(root)
 	if err != nil {
 		return err
 	}
@@ -37,11 +37,11 @@ func (ix *Indexer) Scan(ctx context.Context, root string) error {
 	return nil
 }
 
-// collect 은 트리를 훑어 스트림별 세그먼트 목록을 만든다.
-func (ix *Indexer) collect(root string) (map[string][]recording.Segment, error) {
+// collectTree 는 트리를 훑어 스트림별 세그먼트 목록을 만든다.
+func (ix *Indexer) collectTree(root string) (map[string][]recording.Segment, error) {
 	byStream := map[string][]recording.Segment{}
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error { //nolint:forbidigo // 예외 1(m2) — 수집 워커 자신이 격리 단위다. 개별 호출에 5초 상한을 씌우면 45초 수집 예산 위에서 정상 수집이 매 주기 절단된다(.golangci.yml 머리 주석).
 		if err != nil {
 			// 훑는 도중 사라진 파일 때문에 전체 스캔을 포기하지는 않는다.
 			ix.log.Warn("walk_entry_failed", "path", path, "err", err)
@@ -140,7 +140,7 @@ func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs [
 
 	// (d) 최신 파일 판정(D11). 무조건 보류하면 "방송 종료 후 재기동" 파일이 영구 누락된다.
 	latest := pending[len(pending)-1]
-	fi, err := os.Stat(latest.Path)
+	fi, err := ix.statT(latest.Path, "scan_latest")
 	if err != nil {
 		ix.log.Warn("latest_stat_failed", "stream_id", streamID, "path", latest.Path, "err", err)
 		return nil
@@ -188,7 +188,7 @@ func (ix *Indexer) recoverTail(ctx context.Context, root, streamID string) error
 	// 상태 검사와 stat 의 순서를 바꿨다. 이제 uploaded·failed 꼬리의 성장도 correctTail 의
 	// 3분기로 판정된다(G12‴ 탐지 사슬). 대가는 비pending 꼬리에 stat 1회가 더 드는 것인데,
 	// 스트림당 5분에 한 번 도는 경로라 무시할 수 있다. 다만 "비용 0"은 아니다.
-	fi, err := os.Stat(cur.Tail.LocalPath)
+	fi, err := ix.statT(cur.Tail.LocalPath, "scan_tail")
 	pending := cur.Tail.UploadState == index.UploadStatePending
 	if os.IsNotExist(err) {
 		if !pending {

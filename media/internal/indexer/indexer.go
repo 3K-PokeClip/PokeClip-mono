@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fmp4meta"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fsop"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
@@ -104,6 +105,9 @@ type Options struct {
 	// 워처와 같은 값이어야 두 채널이 같은 local_path 문자열을 만든다(GH7).
 	// 기본값을 두지 않는다 — 워처 루트와 한 곳에서 맞추는 것이 config.Load 의 책임이다.
 	SegmentRoot string
+	// FSOpTimeout 은 개별 FS 호출(stat·프로브)의 워커 상한이다(m2 — 처리 FS 격리).
+	// 멈춘 파일시스템에서 D10 루프가 이 시간 이상 잡히지 않게 하는 값이다.
+	FSOpTimeout time.Duration
 }
 
 // DefaultOptions 는 설계 2.4절의 기본값이다.
@@ -126,6 +130,7 @@ func DefaultOptions() Options {
 		IdleTimeout:        10 * time.Second,
 		BreakGuard:         20 * time.Millisecond,
 		Settle:             recording.DefaultSettleOptions(),
+		FSOpTimeout:        fsop.DefaultOpTimeout,
 	}
 }
 
@@ -137,6 +142,12 @@ type Indexer struct {
 	upload UploadRequester
 	opt    Options
 	log    *slog.Logger
+
+	// fsLatch 는 FS 열화 래치다(m2). loop 단일 고루틴만 만진다 — D10 규약이 락을 대신한다.
+	fsLatch *fsop.Latch
+	// statFn·probeFn 은 fsop 워커 경유의 기본값을 담는 주입점이다. 교체는 테스트뿐이다.
+	statFn  func(string) (os.FileInfo, error)
+	probeFn func(string) (int64, error)
 
 	// 아래 상태는 전부 스트림별이다. 하나라도 전역으로 뭉개면 다중 스트림에서 조용히 틀린다.
 	cursors map[string]*index.Cursor
@@ -189,7 +200,12 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 	if up == nil {
 		up = noUploader{}
 	}
-	return &Indexer{
+	if opt.FSOpTimeout <= 0 {
+		// 0 이면 모든 FS 워커가 즉시 타임아웃해 처리 전체가 조용히 멈춘다.
+		// config 를 거치지 않는 호출자에게 그 조합은 자체 모순이다(TailGrace 와 같은 규칙).
+		opt.FSOpTimeout = fsop.DefaultOpTimeout
+	}
+	ix := &Indexer{
 		store:           store,
 		probe:           probe,
 		adopt:           w,
@@ -210,6 +226,52 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 		lastOnlineAt:    map[string]time.Time{},
 		breaks:          map[string][]sessionBreak{},
 	}
+	ix.fsLatch = fsop.NewLatch(log)
+	ix.statFn = func(p string) (os.FileInfo, error) { return fsop.StatT(p, ix.opt.FSOpTimeout) }
+	ix.probeFn = func(p string) (int64, error) { return fsop.ProbeT(p, ix.opt.FSOpTimeout, ix.probe) }
+	// Settle 옵션의 단일 생성점(m2-ⓑ)이다. 전 호출점이 이 주입을 자동으로 받고,
+	// 미래에 추가되는 호출점도 자동으로 덮인다 — static_rules_test 가 이 자리를 단언한다.
+	ix.opt.Settle = newSettleOptions(ix.opt.Settle, func(p string) (os.FileInfo, error) {
+		return ix.statT(p, "settle")
+	})
+	return ix
+}
+
+// newSettleOptions 는 fsop 주입 Settle 옵션의 단일 생성점이다(m2-ⓑ).
+// 다른 자리에서 recording.SettleOptions 를 만들면 static_rules_test 가 막는다.
+func newSettleOptions(base recording.SettleOptions, stat func(string) (os.FileInfo, error)) recording.SettleOptions {
+	base.Stat = stat
+	return base
+}
+
+// statT 는 stat 의 유일한 관문이다. 타임아웃(ErrStalled)을 정상 실패와 구분해
+// fs_op_stalled 신호와 래치 트립으로 잇는다(f6m ⓓ). 정상 os 에러는 그대로 통과시킨다.
+func (ix *Indexer) statT(path, site string) (os.FileInfo, error) {
+	fi, err := ix.statFn(path)
+	if errors.Is(err, fsop.ErrStalled) {
+		ix.log.Error("fs_op_stalled", "op", "stat", "site", site, "path", path)
+		ix.fsLatch.Trip(path, site)
+	}
+	return fi, err
+}
+
+// probeT 는 프로브의 유일한 관문이다. 열고·읽고·닫기 전체가 워커 안에서 끝난다(fsop 계약 2).
+func (ix *Indexer) probeT(path string) (int64, error) {
+	d, err := ix.probeFn(path)
+	if errors.Is(err, fsop.ErrStalled) {
+		ix.log.Error("fs_op_stalled", "op", "probe", "site", "probe", "path", path)
+		ix.fsLatch.Trip(path, "probe")
+	}
+	return d, err
+}
+
+// fileSizeT 는 크기만 필요한 호출자를 위한 statT 축약이다.
+func (ix *Indexer) fileSizeT(path, site string) (int64, error) {
+	fi, err := ix.statT(path, site)
+	if err != nil {
+		return 0, err
+	}
+	return fi.Size(), nil
 }
 
 // Handle 은 완성된 세그먼트 1개를 설계 3절 6번의 H0-H9 순서대로 처리한다.
@@ -218,6 +280,16 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 // 반환 에러는 "프로세스를 끝내야 하는 상황"만을 뜻한다(DB 재시도 소진, 복구 불가 seq 충돌).
 // 세그먼트 1개를 건너뛰는 판정은 로그를 남기고 nil 을 돌려준다.
 func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
+	// 래치 확인(m2 ⓒ) — 트립 상태에서는 이벤트마다 새 FS 워커를 남기지 않는다.
+	// 조기 반환은 반드시 nil 이다: loop 은 Handle 에러를 프로세스 종료로 번역하므로
+	// 여기서 에러를 돌려주면 hung FS 가 곧 프로세스 사망이 된다(격리 장치 ≠ 사망 장치).
+	// 이 조각은 미기록으로 남고 다음 수집이 회수한다.
+	if ix.fsLatch.Tripped() {
+		ix.log.Warn("fs_latch_early_return", "site", "handle",
+			"stream_id", seg.StreamID, "path", seg.Path)
+		return nil
+	}
+
 	// H0. 사유 검증 — zero value 가 정상 경로로 흘러드는 것을 원천 차단한다.
 	if seg.Reason == recording.ReasonUnknown {
 		ix.log.Error("unknown_completion_reason", "stream_id", seg.StreamID, "path", seg.Path)
@@ -244,7 +316,7 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 	// 정상 기록된 파일이 늦은 세그먼트로 오해받아 ERROR 가 쏟아진다(리뷰 지적 X1).
 	if _, ok := indexed[seg.Path]; ok {
 		if cur.Tail != nil && cur.Tail.LocalPath == seg.Path {
-			if fi, statErr := os.Stat(seg.Path); statErr == nil && fi.Size() > cur.Tail.Bytes {
+			if fi, statErr := ix.statT(seg.Path, "h2_regrow"); statErr == nil && fi.Size() > cur.Tail.Bytes {
 				// 중복이 아니라 재성장이다.
 				return ix.correctTail(ctx, seg)
 			}
@@ -275,7 +347,7 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 
 	// H4. 유휴 커밋 전 mtime 재검(D13-예방) — 방금 전까지 쓰이고 있었다면 아직 녹화 중이다.
 	if seg.Reason == recording.ReasonIdle {
-		if fi, statErr := os.Stat(seg.Path); statErr == nil && time.Since(fi.ModTime()) < ix.opt.IdleTimeout {
+		if fi, statErr := ix.statT(seg.Path, "h4_idle"); statErr == nil && time.Since(fi.ModTime()) < ix.opt.IdleTimeout {
 			// 무음으로 두면 "왜 이 파일이 안 들어오지"를 로그에서 추적할 수 없다.
 			ix.log.Debug("idle_readopted",
 				"stream_id", seg.StreamID, "path", seg.Path,
@@ -329,7 +401,7 @@ func (ix *Indexer) state(ctx context.Context, streamID string) (*index.Cursor, m
 // 발상: 대부분의 파일은 이미 다 써져 있다. 먼저 재 보고, 재는 동안 크기가 변했을 때만
 // 안정될 때까지 기다린다 -> 정상 상황에서는 대기 시간이 0이다.
 func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (durationMS int64, size int64, ok bool) {
-	size0, err := fileSize(seg.Path)
+	size0, err := ix.fileSizeT(seg.Path, "measure")
 	if err != nil {
 		ix.log.Error("stat_failed", "stream_id", seg.StreamID, "path", seg.Path, "err", err)
 		return 0, 0, false
@@ -337,7 +409,7 @@ func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (duration
 	ix.warnOnWallSkew(seg)
 
 	d := ix.probeOrZero(seg)
-	size1, err := fileSize(seg.Path)
+	size1, err := ix.fileSizeT(seg.Path, "measure")
 	if err != nil {
 		ix.log.Error("stat_failed", "stream_id", seg.StreamID, "path", seg.Path, "err", err)
 		return 0, 0, false
@@ -345,6 +417,12 @@ func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (duration
 
 	rounds := 0
 	for ; size1 != size0 && rounds < ix.opt.MaxSettleRounds; rounds++ {
+		// 남은 라운드 래치 확인(m2 ⓑ) — 앞 라운드에서 트립됐으면 더 반복하지 않는다.
+		if ix.fsLatch.Tripped() {
+			ix.log.Warn("fs_latch_early_return", "site", "measure",
+				"stream_id", seg.StreamID, "path", seg.Path)
+			return 0, 0, false
+		}
 		fi, settleErr := recording.Settle(ctx, seg.Path, ix.opt.Settle)
 		if settleErr != nil {
 			if errors.Is(settleErr, context.Canceled) || errors.Is(settleErr, context.DeadlineExceeded) {
@@ -354,7 +432,7 @@ func (ix *Indexer) measure(ctx context.Context, seg recording.Segment) (duration
 		}
 		size0 = fi.Size()
 		d = ix.probeOrZero(seg)
-		size1, err = fileSize(seg.Path)
+		size1, err = ix.fileSizeT(seg.Path, "measure")
 		if err != nil {
 			ix.log.Error("stat_failed", "stream_id", seg.StreamID, "path", seg.Path, "err", err)
 			return 0, 0, false
@@ -402,7 +480,7 @@ func (ix *Indexer) promote(ctx context.Context, seg recording.Segment, d, size i
 
 	// 재프로브 동안 파일이 더 써졌을 수 있으므로 성공·실패 어느 쪽이든 크기를 다시 읽는다.
 	// 낡은 크기를 기록하면 다음 Scan(a)가 그것을 재성장으로 오인해 쓸데없이 UpdateTail 한다.
-	if fi, err := os.Stat(seg.Path); err == nil {
+	if fi, err := ix.statT(seg.Path, "promote"); err == nil {
 		size = fi.Size()
 	}
 
@@ -743,7 +821,7 @@ func (ix *Indexer) correctTail(ctx context.Context, seg recording.Segment) error
 // 미완성 파일은 박스에 길이가 없어 에러가 나는데, 이는 H6 재프로브 승격과 H7 폭 검증이
 // 이미 다루는 상황이므로 별도 분기를 만들지 않는다.
 func (ix *Indexer) probeOrZero(seg recording.Segment) int64 {
-	d, err := ix.probe(seg.Path)
+	d, err := ix.probeT(seg.Path)
 	if err != nil {
 		ix.log.Warn("probe_failed", "stream_id", seg.StreamID, "path", seg.Path, "err", err)
 		return 0
@@ -754,7 +832,7 @@ func (ix *Indexer) probeOrZero(seg recording.Segment) int64 {
 // warnOnWallSkew 는 파일명 시각과 mtime 이 크게 어긋나면 경고한다(D6).
 // mtime 은 세그먼트의 끝 시각에 가까우므로 기대 길이만큼의 차이는 정상이다.
 func (ix *Indexer) warnOnWallSkew(seg recording.Segment) {
-	fi, err := os.Stat(seg.Path)
+	fi, err := ix.statT(seg.Path, "wall_skew")
 	if err != nil {
 		return
 	}
@@ -808,14 +886,6 @@ func (ix *Indexer) learn(streamID string, durationMS int64) {
 // ---------------------------------------------------------------------------
 // 작은 도우미
 // ---------------------------------------------------------------------------
-
-func fileSize(path string) (int64, error) {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return 0, err
-	}
-	return fi.Size(), nil
-}
 
 // sleepCtx 는 ctx 취소 시 false 를 돌려준다.
 func sleepCtx(ctx context.Context, d time.Duration) bool {
