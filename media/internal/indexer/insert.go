@@ -68,19 +68,29 @@ func sqlStateClass(code string) string {
 // 재시도 상한을 소진하면 에러를 올린다 -> main 이 exit 1 -> compose 재기동 -> Scan 복구(D8).
 //
 // poisoned 가 true 면 이 세그먼트 하나만 버리고 프로세스는 계속 간다.
-func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record) (outcome index.InsertOutcome, poisoned bool, err error) {
+func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record, seed index.Seed) (outcome index.InsertOutcome, seedRes index.SeedResult, poisoned bool, err error) {
 	var lastErr error
 	backoff := ix.opt.InsertRetryBase
 
 	for attempt := range ix.opt.InsertRetryMax {
-		result, insertErr := ix.store.Insert(ctx, rec)
+		result, res, insertErr := ix.store.Insert(ctx, rec, seed)
 		if insertErr == nil {
 			// 한 번이라도 통과했다면 전역 이상은 아니다. 산발적 poison 이 누적돼
 			// 언젠가 프로세스를 죽이는 일이 없도록 여기서 기록을 지운다.
 			ix.poisonStreak[rec.StreamID] = 0
-			return result, false, nil
+			return result, res, false, nil
 		}
 		lastErr = insertErr
+
+		// 컷오프 경합의 락 상한(55P03, 즉시 재시도 포함 — m1b)은 poison 도 fatal 도 아니다.
+		// 이 조각 하나만 건너뛴다 — 파일은 다음 Scan 이 회수한다(유실 0). 백오프로 붙잡으면
+		// D10 루프가 락 경합에 30초씩 볼모가 된다.
+		if errors.Is(insertErr, index.ErrLockContended) {
+			ix.log.Warn("insert_lock_contended",
+				"stream_id", rec.StreamID, "seq", rec.Seq, "path", rec.LocalPath,
+				"note", "락 경합으로 이 조각만 건너뛴다. 다음 Scan 이 회수한다")
+			return index.InsertInserted, index.SeedResult{}, true, nil
+		}
 
 		switch classifyInsertError(insertErr) {
 		case fatePoison:
@@ -96,12 +106,12 @@ func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record) (outco
 				// 시간축으로 두 문제를 갈라내는 지점이 여기다.
 				ix.log.Error("poison_streak_exceeded",
 					"stream_id", rec.StreamID, "streak", streak, "limit", ix.opt.PoisonStreakMax)
-				return index.InsertInserted, false, fmt.Errorf(
+				return index.InsertInserted, index.SeedResult{}, false, fmt.Errorf(
 					"연속 poison INSERT %d회 stream_id=%q: %w", streak, rec.StreamID, insertErr)
 			}
-			return index.InsertInserted, true, nil
+			return index.InsertInserted, index.SeedResult{}, true, nil
 		case fateFatal:
-			return index.InsertInserted, false, fmt.Errorf(
+			return index.InsertInserted, index.SeedResult{}, false, fmt.Errorf(
 				"복구 불가한 INSERT 오류 stream_id=%q seq=%d: %w", rec.StreamID, rec.Seq, insertErr)
 		}
 
@@ -112,10 +122,10 @@ func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record) (outco
 			break
 		}
 		if !sleepCtx(ctx, backoff) {
-			return index.InsertInserted, false, ctx.Err()
+			return index.InsertInserted, index.SeedResult{}, false, ctx.Err()
 		}
 		backoff *= 2
 	}
-	return index.InsertInserted, false, fmt.Errorf("INSERT 재시도 상한 소진 stream_id=%q seq=%d: %w",
+	return index.InsertInserted, index.SeedResult{}, false, fmt.Errorf("INSERT 재시도 상한 소진 stream_id=%q seq=%d: %w",
 		rec.StreamID, rec.Seq, lastErr)
 }

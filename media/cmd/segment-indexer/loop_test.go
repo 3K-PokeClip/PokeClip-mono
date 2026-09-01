@@ -36,12 +36,12 @@ func (s *fakeStore) ExistingPaths(context.Context, string) (map[string]struct{},
 	return map[string]struct{}{}, nil
 }
 
-func (s *fakeStore) Insert(_ context.Context, r index.Record) (index.InsertOutcome, error) {
+func (s *fakeStore) Insert(_ context.Context, r index.Record, _ index.Seed) (index.InsertOutcome, index.SeedResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.inserts++
 	s.rows = append(s.rows, r)
-	return index.InsertInserted, nil
+	return index.InsertInserted, index.SeedResult{}, nil
 }
 
 func (s *fakeStore) UpdateTail(context.Context, string, int64, int32, int64) (bool, error) {
