@@ -112,7 +112,9 @@ export function PhotoCropStage({
 
   function handlePointerMove(e: ReactPointerEvent<HTMLDivElement>) {
     const start = drag.current;
-    if (start === null) return;
+    // 잠금은 시작만 막아서는 부족하다 — 이미 포인터를 잡고 끌던 손가락이 있으면(터치에서 흔하다)
+    // 다른 손가락으로 「적용」을 눌러 업로드가 시작돼도 그 끌기가 계속 자리를 바꾼다.
+    if (disabled || start === null) return;
     commit({
       ...transform,
       x: start.x + (e.clientX - start.pointerX),

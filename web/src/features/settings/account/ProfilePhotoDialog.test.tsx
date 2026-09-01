@@ -260,6 +260,40 @@ describe('ProfilePhotoDialog', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
+  it('업로드 중 이미 시작된 드래그도 멈춘다 — 잠금이 시작만 막으면 미리보기가 전송본과 갈린다', async () => {
+    const held = holdUpload();
+    const { user } = await openCropReady();
+    const stage = dialog().getByRole('group', { name: /사진 위치 조정/ });
+    const img = document.querySelector('[role="dialog"] img') as HTMLImageElement;
+
+    // 손가락이 스테이지를 잡은 채로 시작한다
+    fireEvent.pointerDown(stage, { pointerId: 1, clientX: 100, clientY: 100 });
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+    const during = img.style.transform;
+
+    // 다른 손가락으로 「적용」을 누른 뒤에도 끌기가 이어지는 상황
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 160, clientY: 140 });
+
+    expect(img.style.transform).toBe(during);
+
+    held.resolve();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('업로드 실패로 크롭에 돌아오면 적용 버튼이 포커스를 되찾는다 — 키보드로 곧장 재시도한다', async () => {
+    upload.mockRejectedValueOnce(new ApiError(503, 'PHOTO_STORAGE_DISABLED'));
+    const { user } = await openCropReady();
+    const apply = dialog().getByRole('button', { name: '적용' });
+
+    await user.click(apply);
+
+    // loading이 disabled로 이어져 브라우저가 포커스를 body로 떨어뜨린 뒤다
+    await dialog().findByText('지금은 사진을 올릴 수 없어요 · 잠시 후 다시 시도해 주세요');
+    await waitFor(() =>
+      expect(document.activeElement).toBe(dialog().getByRole('button', { name: '적용' })),
+    );
+  });
+
   it('자르지 못하면 보내지 않고 그 자리에서 알린다 — 잘리지 않은 원본을 대신 올리지 않는다', async () => {
     // 실브라우저의 캔버스 한도·메모리 압박에서 getContext가 null을 준다. 예전에는 원본을
     // 폴백으로 돌려줘 잘리지 않은 최대 5MB가 그대로 올라갔다.

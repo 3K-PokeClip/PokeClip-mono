@@ -15,11 +15,14 @@ import styles from './AccountSettingsScreen.module.css';
 //
 // 업로드 중에도 크롭 화면을 그대로 둔다 — 로컬·CI는 사진 창고가 꺼져 있어(503) 「실패 → 다시
 // 적용」이 가장 흔한 동선인데, 전용 업로드 화면으로 갈아끼우면 복귀마다 원본을 다시 디코드해야
-// 하고 포커스가 적용 버튼에서 떨어진다. 머리의 「3 / 3 · 업로드」·진행 표시·취소는 살아 있다.
+// 하고 자르던 자리도 잃는다. 머리의 「3 / 3 · 업로드」·진행 표시·취소는 살아 있다.
+// 포커스는 화면을 유지하는 것만으로는 지켜지지 않는다(적용 버튼이 loading→disabled가 되면
+// 브라우저가 body로 떨어뜨린다) — 아래 이펙트가 실패 복귀에서 되돌린다.
 
 export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState; glyph: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const applyRef = useRef<HTMLButtonElement>(null);
   const [transform, setTransform] = useState<CropTransform>(INITIAL_CROP);
   // 크롭 스테이지가 재서 알려 주는 마스크의 실제 지름. 미리보기와 내보내기가 같은 값을
   // 써야 보이는 대로 잘린다 — 시안 기준값(176)은 재기 전까지의 대비값일 뿐이다.
@@ -45,6 +48,18 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
   useEffect(() => {
     setDragOver(false);
   }, [photo.step]);
+
+  // 업로드가 끝나 크롭으로 돌아오면 「적용」에 포커스를 되돌린다. `loading`은 DS Button에서
+  // disabled로 이어지고, 브라우저는 포커스된 요소가 disabled가 되면 포커스를 body로 떨어뜨린다 —
+  // 그대로 두면 Enter로 적용한 키보드 사용자가 실패(로컬·CI 기본인 503) 뒤 재시도하려면
+  // Tab으로 버튼을 다시 찾아야 한다. 실패가 흔한 경로라 그 왕복을 없앤다.
+  const wasUploading = useRef(false);
+  useEffect(() => {
+    if (wasUploading.current && !photo.uploading && photo.step === 'crop') {
+      applyRef.current?.focus();
+    }
+    wasUploading.current = photo.uploading;
+  }, [photo.uploading, photo.step]);
 
   function pick(files: FileList | null) {
     const file = files?.[0];
@@ -223,6 +238,7 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
                 취소
               </Button>
               <Button
+                ref={applyRef}
                 variant="solid"
                 size="sm"
                 disabled={cropStatus !== 'ready'}

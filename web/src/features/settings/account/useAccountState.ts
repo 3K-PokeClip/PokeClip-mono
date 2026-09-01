@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { meQueryOptions, type Me } from '@/api/auth';
 import {
@@ -23,6 +23,12 @@ import { useToast } from '@/ui';
 // staleTime 60초 안의 포커스 재조회에도 되감기지 않는다.
 
 const TOO_LONG_MESSAGE = `${NAME_MAX_CODE_POINTS}자 이내로 입력해 주세요`;
+
+/**
+ * 업로드를 취소한 뒤 두 번째로 회원 정보를 읽기까지의 간격. 서버는 창고에 쓴 뒤(호출 상한 8초,
+ * `services/README`) 표를 갱신하므로 첫 조회가 그 커밋을 앞지를 수 있다 — 그 창을 넘겨 잡았다.
+ */
+const RECONCILE_DELAY_MS = 9_000;
 
 export interface AccountViewState {
   me: Me | undefined;
@@ -61,25 +67,53 @@ export function useAccountState(): AccountViewState {
   const tooLong = displayNameTooLong(normalizedName);
   // 뮤테이션 콜백은 mutate() 시점의 옵션을 붙들고 돌아 클로저의 draftName이 낡는다 —
   // 응답이 왔을 때의 입력값을 봐야 하는 자리(onError)를 위해 최신 값을 ref로 든다.
+  // 렌더 본문이 아니라 이펙트에서 쓴다: 렌더 중 ref 쓰기는 React가 금지한다(버려지거나 순서가
+  // 바뀐 동시 렌더의 값이 남는다). 뮤테이션 콜백은 네트워크 응답 뒤라 커밋 이후로 충분하다.
   const normalizedNameRef = useRef(normalizedName);
-  normalizedNameRef.current = normalizedName;
+  useEffect(() => {
+    normalizedNameRef.current = normalizedName;
+  }, [normalizedName]);
+
+  // 취소 뒤 예약한 지연 조회 — 화면이 사라지면 함께 걷는다.
+  const reconcileTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (reconcileTimer.current !== null) clearTimeout(reconcileTimer.current);
+    },
+    [],
+  );
 
   /**
    * me 캐시에 **이 창구가 소유한 필드만** 얹는다. 응답 전체로 덮지 않는 이유가 둘이다.
    *
    * ① 이름·사진 요청이 겹치면 각 응답이 상대가 바꾸기 전의 스냅샷을 담고 있어, 나중에 도착한
    *    쪽이 상대의 변경을 캐시에서 되돌린다 — 서버에는 둘 다 반영돼 있는데도.
-   * ② `prev`가 없으면 아무것도 쓰지 않는다. `queryClient.clear()`(로그아웃·계정 교체)는 진행 중
-   *    뮤테이션을 끊지 않아 늦게 온 응답이 비운 캐시를 **되살린다** — 그 사이 다른 계정이
-   *    로그인했다면 그 화면에 이전 계정의 이름·사진이 신선한 값으로 걸린다.
+   * ② 🔴 **캐시의 주인이 응답의 주인과 같을 때만 쓴다.** `queryClient.clear()`(로그아웃)는 진행
+   *    중 뮤테이션을 끊지 않는다. 「비었으면 쓰지 않는다」만으로는 부족하다 — 그 사이 **다른
+   *    계정이 로그인해 캐시를 채워 두면** `prev`가 존재해 통과하고, A의 이름이 B의 캐시 위에
+   *    얹혀 **B의 헤더·사이드바에 A의 표시 이름**이 걸린다. 회원 번호를 맞춰 그 길을 닫는다.
    */
   const patchMe = useCallback(
-    (patch: Partial<Me>) => {
+    (owner: number, patch: Partial<Me>) => {
       queryClient.setQueryData<Me>(meQueryOptions.queryKey, (prev) =>
-        prev === undefined ? prev : { ...prev, ...patch },
+        prev === undefined || prev.id !== owner ? prev : { ...prev, ...patch },
       );
     },
     [queryClient],
+  );
+
+  /**
+   * 응답을 얹기 직전에 진행 중인 조회를 끊는다. `onMutate`의 `cancelQueries`는 요청 **전**의
+   * 조회만 잡는다 — 왕복 중(사진 업로드는 수 초다) 포커스 복귀로 시작된 GET이 응답보다 늦게
+   * 도착하면 캐시를 옛 값으로 되감으면서 `dataUpdatedAt`까지 갱신해, 60초 동안 헤더·사이드바가
+   * 옛 이름·아바타를 신선한 값으로 붙든다. 추가 요청 없이 그 창만 닫는다.
+   */
+  const patchMeAfterCancel = useCallback(
+    async (owner: number, patch: Partial<Me>) => {
+      await queryClient.cancelQueries({ queryKey: meQueryOptions.queryKey });
+      patchMe(owner, patch);
+    },
+    [queryClient, patchMe],
   );
 
   const save = useMutation({
@@ -89,8 +123,8 @@ export function useAccountState(): AccountViewState {
       // PATCH 전에 이미 날아가 있던 GET me가 뒤늦게 도착하면 옛 이름으로 캐시를 되돌린다 — 끊는다.
       await queryClient.cancelQueries({ queryKey: meQueryOptions.queryKey });
     },
-    onSuccess: (next, submitted) => {
-      patchMe({ name: next.name });
+    onSuccess: async (next, submitted) => {
+      await patchMeAfterCancel(next.id, { name: next.name });
       // 왕복 중 더 친 입력은 살린다 — 제출한 값 그대로일 때만 me를 다시 따라가게 되돌린다.
       setTyped((cur) => (cur !== null && normalizeDisplayName(cur) === submitted ? null : cur));
       toast({ tone: 'success', title: '표시 이름을 변경했습니다' });
@@ -135,26 +169,33 @@ export function useAccountState(): AccountViewState {
     async (blob: Blob, filename: string, signal: AbortSignal) => {
       await queryClient.cancelQueries({ queryKey: meQueryOptions.queryKey });
       const next = await uploadProfilePhoto(blob, filename, signal);
-      patchMe({ profileImageUrl: next.profileImageUrl });
+      await patchMeAfterCancel(next.id, { profileImageUrl: next.profileImageUrl });
     },
-    [queryClient, patchMe],
+    [queryClient, patchMeAfterCancel],
   );
 
   const refetchMe = useCallback(() => {
-    // 🔴 이 조회는 진실을 보장하지 못한다. 취소는 서버를 멈추지 못하고(창고 먼저·표 나중),
+    // 🔴 한 번 읽는 것으로는 진실을 못 맞춘다. 취소는 서버를 멈추지 못하고(창고 먼저·표 나중),
     // 우리가 응답을 버렸으므로 서버가 커밋했는지 알 길이 없다 — 이 GET이 커밋을 앞지르면
     // **옛 사진을 신선한 값으로** 붙들게 된다.
     //
-    // 그래서 읽은 뒤 곧바로 낡음 표시를 남긴다: 다음 포커스·마운트가 staleTime 60초를
-    // 기다리지 않고 한 번 더 확인한다. 여기서 보장하는 것은 「맞춘다」가 아니라
-    // 「틀린 값을 오래 붙들지 않는다」까지다. refetchType:'none'이라 이 표시가 다시
-    // 조회를 부르지 않는다 — 순환이 생기지 않는다.
-    void queryClient.invalidateQueries({ queryKey: meQueryOptions.queryKey }).then(() =>
-      queryClient.invalidateQueries({
-        queryKey: meQueryOptions.queryKey,
-        refetchType: 'none',
-      }),
-    );
+    // 낡음 표시만으로도 부족하다: 헤더·사이드바는 계속 마운트된 채라 새 관찰자가 안 생기고,
+    // 그 탭에 머무는 사용자에게는 포커스 전환도 없어 **아무도 다시 읽지 않는다.**
+    // 그래서 지연 조회를 한 번 예약한다 — 서버의 창고 호출 상한(8초, services/README)을
+    // 넘겨 잡았다. 한 번뿐이라 폴링으로 번지지 않고, 그마저 앞질렀을 때를 위해 마지막에
+    // 낡음 표시를 남겨 다음 포커스가 staleTime 60초를 기다리지 않게 한다.
+    const read = () => queryClient.invalidateQueries({ queryKey: meQueryOptions.queryKey });
+    void read();
+    if (reconcileTimer.current !== null) clearTimeout(reconcileTimer.current);
+    reconcileTimer.current = setTimeout(() => {
+      reconcileTimer.current = null;
+      void read().then(() =>
+        queryClient.invalidateQueries({
+          queryKey: meQueryOptions.queryKey,
+          refetchType: 'none',
+        }),
+      );
+    }, RECONCILE_DELAY_MS);
   }, [queryClient]);
 
   return {

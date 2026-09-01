@@ -270,22 +270,44 @@ describe('AccountSettingsScreen — 표시 이름 저장', () => {
     // 심판을 받지 않았으므로 옛 제출의 사유를 얹으면 멀쩡한 이름이 빨갛게 선다.
     const user = userEvent.setup();
     const held = heldResponse();
-    stubAccount(ME, () => held.promise);
+    const spy = stubAccount(ME, () => held.promise);
     await renderScreen();
 
-    await user.type(screen.getByLabelText('표시 이름'), '\t');
+    // 🔴 첫 입력은 반드시 dirty가 되는 값이어야 한다. 양끝이 잘리는 문자(탭·공백)를 쓰면
+    // 정규화 결과가 me.name과 같아져 저장이 잠기고 PATCH가 아예 안 나가, 아래 단언이 전부
+    // 「고친 뒤의 상태」만으로 통과한다 — 가드를 지워도 초록인 공허한 테스트가 된다.
+    await user.type(screen.getByLabelText('표시 이름'), '2');
     await user.click(screen.getByRole('button', { name: '저장' }));
-    await user.type(screen.getByLabelText('표시 이름'), '2'); // 응답 전에 고친다
+    await user.type(screen.getByLabelText('표시 이름'), '3'); // 응답 전에 고친다
+
+    // 요청이 실제로 나갔고, 서버가 심판한 값은 고치기 전의 것이다
+    const patches = spy.mock.calls.filter(([, init]) => init?.method === 'PATCH');
+    expect(patches).toHaveLength(1);
+    expect(bodyOf(patches[0]?.[1])).toEqual({ name: '게임하는너구리2' });
 
     held.release(jsonResponse(400, { reason: 'NAME_INVALID_CHARACTER' }));
 
     await waitFor(() =>
       expect(screen.getByRole('button', { name: '저장' })).not.toHaveAttribute('aria-busy'),
     );
+    // 지금 입력('…3')은 아직 심판받지 않았다 — 옛 제출의 사유를 얹지 않는다
+    expect(screen.getByLabelText('표시 이름')).toHaveValue('게임하는너구리23');
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByLabelText('표시 이름')).not.toHaveAttribute('aria-invalid');
     // 저장 버튼이 살아 있는 것이 「아직 저장 안 됨」의 신호다 — 다시 누르면 새 판정을 받는다
     expect(screen.getByRole('button', { name: '저장' })).toBeEnabled();
+  });
+
+  it('고치지 않고 그대로 두면 400 사유가 그 입력에 붙는다 — 위 가드가 정상 경로를 막지 않는다', async () => {
+    const user = userEvent.setup();
+    stubAccount(ME, () => jsonResponse(400, { reason: 'NAME_INVALID_CHARACTER' }));
+    await renderScreen();
+
+    await user.type(screen.getByLabelText('표시 이름'), '2');
+    await user.click(screen.getByRole('button', { name: '저장' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('이름에 쓸 수 없는 문자가 있어요');
+    expect(screen.getByLabelText('표시 이름')).toHaveAttribute('aria-invalid', 'true');
   });
 
   it('로그아웃으로 캐시를 비운 뒤 도착한 응답은 캐시를 되살리지 않는다', async () => {
@@ -307,6 +329,44 @@ describe('AccountSettingsScreen — 표시 이름 저장', () => {
 
     await screen.findByText('표시 이름을 변경했습니다');
     expect(queryClient.getQueryData<Me>(ME_KEY)).toBeUndefined();
+  });
+
+  it('로그아웃 뒤 다른 계정이 로그인해 있으면, 늦게 온 응답이 그 계정 캐시를 덮지 않는다', async () => {
+    // 「비었으면 안 쓴다」만으로는 부족하다 — B가 이미 캐시를 채워 뒀으면 prev가 존재해
+    // 통과하고 A의 이름이 B 위에 얹힌다. 회원 번호가 맞을 때만 쓴다.
+    const user = userEvent.setup();
+    const held = heldResponse();
+    const other: Me = {
+      id: 2,
+      email: 'other@example.test',
+      name: '다른사람',
+      profileImageUrl: null,
+    };
+    // 로그인한 계정을 도중에 바꾼다. 교체 뒤의 GET은 **붙들어 둔다**(null) — 늦게 도착한 조회가
+    // 캐시를 B로 되돌리면 「얹혔는지」를 구분할 수 없어 이 테스트가 공허해진다(실제로 그랬다).
+    let signedIn: Me | null = ME;
+    const spy = stubFetch((url, init) => {
+      const method = init?.method ?? 'GET';
+      if (url === '/api/auth/me' && method === 'GET')
+        return signedIn === null ? new Promise<Response>(() => {}) : jsonResponse(200, signedIn);
+      return held.promise;
+    });
+    const { queryClient } = await renderScreen();
+
+    await user.type(screen.getByLabelText('표시 이름'), '2');
+    await user.click(screen.getByRole('button', { name: '저장' }));
+
+    // 응답을 기다리는 사이 로그아웃 → 다른 계정(id 2)이 로그인해 캐시를 채운다
+    signedIn = null;
+    queryClient.clear();
+    queryClient.setQueryData<Me>(ME_KEY, other);
+
+    held.release(jsonResponse(200, { ...ME, name: '게임하는너구리2' }));
+
+    await screen.findByText('표시 이름을 변경했습니다');
+    // prev가 존재해도(B의 캐시) 회원 번호가 다르면 얹지 않는다 — A의 이름이 새지 않는다
+    expect(queryClient.getQueryData<Me>(ME_KEY)).toEqual(other);
+    expect(spy).toHaveBeenCalled();
   });
 
   it('입력 탓이 아닌 실패는 토스트로 알리고 입력은 그대로 둔다', async () => {
