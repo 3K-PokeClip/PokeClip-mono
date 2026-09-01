@@ -148,7 +148,12 @@ export function Side({ menu }: { menu: SideMenu }) {
       <div className={styles.userBlock}>
         {/* me 로딩 중엔 이름 없는 빈 아바타 — 이니셜이 나중에 채워져도 어긋날 것이 없다
             (GlobalHeader와 같은 처리) */}
-        <Avatar size="sm" src={me?.profileImageUrl} name={me?.name} className={styles.userAvatar} />
+        <Avatar
+          size="sm"
+          src={me?.profileImageUrl ?? undefined}
+          name={me?.name}
+          className={styles.userAvatar}
+        />
         <div className={styles.userText}>
           <div className={styles.userName}>{me?.name ?? ''}</div>
           {/* 등급·역할은 아직 목업 — 구독 API가 없다 (별도 티켓) */}

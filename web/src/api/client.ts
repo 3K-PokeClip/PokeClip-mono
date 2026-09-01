@@ -182,7 +182,11 @@ function send(path: string, init: RequestInit): Promise<Response> {
   const { accessToken } = useAuthStore.getState();
   const headers = new Headers(init.headers);
   if (accessToken !== null) headers.set('Authorization', `Bearer ${accessToken}`);
-  if (init.body !== undefined && !headers.has('Content-Type'))
+  // 문자열 본문일 때만 JSON으로 못박는다 — FormData·Blob은 브라우저가 형식과 multipart
+  // 경계(boundary)까지 스스로 정한다. 여기서 덮으면 경계가 사라져 서버가 파트를 하나도
+  // 못 찾는다 (프로필 사진 업로드, POK-208). 본문 종류를 늘어놓는 블랙리스트 대신
+  // 문자열만 화이트리스트로 둔다 — 현행 호출부는 전부 JSON.stringify 문자열이다.
+  if (typeof init.body === 'string' && !headers.has('Content-Type'))
     headers.set('Content-Type', 'application/json');
   return fetch(path, { ...init, headers });
 }
