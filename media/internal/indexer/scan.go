@@ -94,6 +94,12 @@ func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs [
 	ix.indexed[streamID] = indexed
 	// 커서가 통째로 바뀌었다 — 옛 seq 를 가리키는 보류·요청 상태를 새 커서에 맞춘다.
 	ix.reconcileUploadState(streamID)
+	// 락 경합 순서 장벽 해제 — 아래 (b)~(d)가 미기록분을 시각 오름차순으로 재처리하므로
+	// 건너뛴 조각이 원래 자리(seq)로 돌아온다. 이 자리가 장벽의 유일한 해제 지점이다.
+	if ix.insertHold[streamID] {
+		delete(ix.insertHold, streamID)
+		ix.log.Info("insert_hold_released", "stream_id", streamID)
+	}
 
 	// 스캔 요약은 **모든 종료 경로**에서 1회 나와야 한다. 조기 반환이 3곳이라 말미에 두면
 	// 평시 경로에서 아예 찍히지 않는다(그것이 r1 안이 부적합했던 이유다).

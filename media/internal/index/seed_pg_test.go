@@ -391,3 +391,73 @@ func TestSeedLockContention(t *testing.T) {
 		}
 	})
 }
+
+// cx 차단 2 회귀 고정 — 주조 직렬화(advisory xact lock)가 시간 판정보다 앞이라,
+// 경합 대기 뒤에 clock_timestamp() 재검이 실제로 다시 평가된다. blocker 가 직렬화
+// 지점을 잡고 있는 동안 방증이 낡으면 주조가 거절돼야 한다(대기 전 판정 재사용 금지).
+func TestSeedAdvisoryWaitReevaluatesTime(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	store := NewPGStore(pool)
+
+	holdAdvisory := func(t *testing.T, stream string, hold time.Duration) *sync.WaitGroup {
+		t.Helper()
+		var wg sync.WaitGroup
+		held := make(chan struct{})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				t.Errorf("blocker 시작 실패: %v", err)
+				close(held)
+				return
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			if _, err := tx.Exec(ctx,
+				`SELECT pg_advisory_xact_lock(hashtext('pc_cutoff_' || $1::text))`, stream); err != nil {
+				t.Errorf("blocker advisory 실패: %v", err)
+			}
+			close(held)
+			time.Sleep(hold)
+		}()
+		<-held
+		return &wg
+	}
+
+	t.Run("stale_after_wait_declines", func(t *testing.T) {
+		stream := seedStream("adv-stale")
+		sess := stream + "-s1"
+		openSession(t, pool, sess, stream)
+		wg := holdAdvisory(t, stream, 3200*time.Millisecond)
+		defer wg.Wait()
+
+		rec := qualified(sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), sess)
+		rec.StartWallUTC = time.Now().UTC()
+		_, res, err := store.Insert(ctx, rec, eligibleSeed(time.Now().UTC().Add(-58*time.Second)))
+		if err != nil {
+			t.Fatalf("INSERT 는 성공해야 한다(주조만 거절): %v", err)
+		}
+		if res.Seeded {
+			t.Fatal("직렬화 대기 뒤 낡은 방증이 주조됐다 — 시간 재검이 대기 앞에서 굳었다(cx 차단 2)")
+		}
+		if res.Decline != DeclineStaleCorroboration {
+			t.Fatalf("귀속이 stale_corroboration 이 아니다: %+v", res)
+		}
+	})
+
+	t.Run("fresh_after_wait_mints", func(t *testing.T) {
+		stream := seedStream("adv-fresh")
+		sess := stream + "-s1"
+		openSession(t, pool, sess, stream)
+		wg := holdAdvisory(t, stream, 1500*time.Millisecond)
+		defer wg.Wait()
+
+		rec := qualified(sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), sess)
+		rec.StartWallUTC = time.Now().UTC()
+		_, res, err := store.Insert(ctx, rec, eligibleSeed(time.Now().UTC()))
+		if err != nil || !res.Seeded {
+			t.Fatalf("신선 방증이 직렬화 뒤 주조되지 않았다(오발동): %+v %v", res, err)
+		}
+	})
+}

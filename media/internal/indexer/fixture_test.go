@@ -44,6 +44,13 @@ type updateTailCall struct {
 	bytes      int64
 }
 
+// insertCallCount 는 Insert 시도 횟수다(장벽 검증 — 시도 자체가 없어야 하는 국면용).
+func (s *fakeStore) insertCallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.insertCalls
+}
+
 func newFakeStore() *fakeStore {
 	return &fakeStore{rows: map[string][]index.Record{}}
 }

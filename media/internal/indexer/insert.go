@@ -83,12 +83,19 @@ func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record, seed i
 		lastErr = insertErr
 
 		// 컷오프 경합의 락 상한(55P03, 즉시 재시도 포함 — m1b)은 poison 도 fatal 도 아니다.
-		// 이 조각 하나만 건너뛴다 — 파일은 다음 Scan 이 회수한다(유실 0). 백오프로 붙잡으면
-		// D10 루프가 락 경합에 30초씩 볼모가 된다.
+		// 백오프로 붙잡으면 D10 루프가 락 경합에 30초씩 볼모가 된다.
+		//
+		// 건너뛰기만 하면 안 된다(cx 리뷰 차단 1): 커서가 그대로라 **다음 실시간 조각이 같은
+		// seq 를 차지**하고, 그러면 커서 wall 이 전진해 다음 Scan 의 H3 가 이 조각을
+		// late_segment 로 영구 거절한다 — "다음 Scan 회수"가 우연에만 성립했다. 그래서
+		// **스트림별 순서 장벽**을 세운다: 이 스트림의 실시간 유입을 보류하고, scanStream 이
+		// 미기록분을 시각 오름차순으로 재처리하며 장벽을 내린다(순서 보존 → 유실 0).
+		// 보류 상한 = 다음 수집 주기(RescanEvery).
 		if errors.Is(insertErr, index.ErrLockContended) {
+			ix.insertHold[rec.StreamID] = true
 			ix.log.Warn("insert_lock_contended",
 				"stream_id", rec.StreamID, "seq", rec.Seq, "path", rec.LocalPath,
-				"note", "락 경합으로 이 조각만 건너뛴다. 다음 Scan 이 회수한다")
+				"note", "락 경합 — 이 스트림 유입을 다음 수집 주기까지 보류한다(순서 장벽). 파일은 Scan 이 오름차순 회수한다")
 			return index.InsertInserted, index.SeedResult{}, true, nil
 		}
 

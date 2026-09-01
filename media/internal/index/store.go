@@ -185,6 +185,19 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed) (InsertOu
 		return InsertInserted, SeedResult{}, fmt.Errorf("트랜잭션 상한 설정 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
 	}
 
+	// 주조 시도끼리는 스트림 스코프 advisory 락으로 **시간 판정보다 앞에서** 직렬화한다.
+	// CTE 의 clock_timestamp() 는 소스 행 생성 시점에 평가되므로, stream_cutoffs UNIQUE
+	// 검사에서 미커밋 경합을 만나면 그 대기는 시간 판정 **뒤**가 되어 — 경합이 롤백되면
+	// 낡은 방증으로 주조될 수 있다(cx 리뷰 차단 2). 대기를 여기(판정 앞)로 끌어오면
+	// "락 대기 뒤 재검"(m1a) 의미론이 복원된다. advisory 대기도 lock_timeout 을 따르므로
+	// 55P03 경로(m1b)와 일관된다. 비적격 INSERT 는 컷오프 경쟁이 없으므로 직렬화하지 않는다.
+	if seed.Eligible {
+		if _, err := tx.Exec(txctx,
+			`SELECT pg_advisory_xact_lock(hashtext('pc_cutoff_' || $1::text))`, r.StreamID); err != nil {
+			return InsertInserted, SeedResult{}, fmt.Errorf("주조 직렬화 락 실패 stream_id=%q seq=%d: %w", r.StreamID, r.Seq, err)
+		}
+	}
+
 	// ⓐ 가 거짓이어도 $14~$18 은 유효한 값으로 내려간다 — seed 의 WHERE 가 막으므로
 	// CHECK 에 닿을 행 자체가 없지만, 드라이버 층에서 놀랄 일을 만들지 않는다.
 	reason, channel, anchor, fresh := seedArgs(seed)
