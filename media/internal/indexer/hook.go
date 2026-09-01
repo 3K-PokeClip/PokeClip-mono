@@ -177,22 +177,24 @@ func (ix *Indexer) releaseBreak(streamID string, dec breakDecision) {
 // 에러 계약은 Handle 과 같다: 반환 에러는 "프로세스를 끝내야 하는 상황"만 뜻하고,
 // 이벤트 1개를 버리는 판정은 로그를 남기고 nil 을 돌려준다.
 func (ix *Indexer) HandleHook(ctx context.Context, ev mtxhook.Event) error {
-	// 래치 확인(m2 ⓒ) — Handle 진입부와 같은 규약. 조기 반환은 nil 이다(에러면 프로세스 사망).
-	// 세션 경계 훅(offline·online)은 FS 를 건드리지 않지만, 트립 국면에서 세그먼트 훅이
-	// 워커를 남기는 것을 막는 쪽이 우선한다 — 경계 미탐은 벽시계 안전망이 받는다.
-	if ix.fsLatch.Tripped() {
-		ix.log.Warn("fs_latch_early_return", "site", "hook", "stream_id", ev.StreamID)
-		return nil
-	}
-
 	switch ev.Kind {
 	case mtxhook.KindOffline:
+		// 세션 경계 훅(offline·online)은 FS 를 건드리지 않으므로 래치와 무관하게 처리한다.
+		// 트립 국면이라고 버리면 재접속 경계 메타데이터가 **영구 소실**된다 — 파일 재스캔은
+		// 훅 경계를 복원하지 못하고, 0.9초급 재접속은 drift tolerance 이내라
+		// is_discontinuity 까지 조용히 누락된다(cx 리뷰 차단 2).
 		ix.markOffline(ev)
 		return nil
 	case mtxhook.KindOnline:
 		ix.markOnline(ev)
 		return nil
 	case mtxhook.KindSegmentComplete:
+		// 래치 확인(m2 ⓒ)은 FS 를 타는 세그먼트 갈래에만 건다. 조기 반환은 nil 이다
+		// (에러면 loop 이 프로세스를 죽인다). 이 조각은 다음 수집이 회수한다.
+		if ix.fsLatch.Tripped() {
+			ix.log.Warn("fs_latch_early_return", "site", "hook", "stream_id", ev.StreamID)
+			return nil
+		}
 		return ix.handleHookSegment(ctx, ev)
 	default:
 		// zero value 가 정상 경로로 흘러든 것이다. Handle 의 H0 와 같은 사고 신호다.

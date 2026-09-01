@@ -295,7 +295,14 @@ func newSettleOptions(base recording.SettleOptions, stat func(string) (os.FileIn
 
 // statT 는 stat 의 유일한 관문이다. 타임아웃(ErrStalled)을 정상 실패와 구분해
 // fs_op_stalled 신호와 래치 트립으로 잇는다(f6m ⓓ). 정상 os 에러는 그대로 통과시킨다.
+//
+// 관문 머리의 래치 확인이 "트립 후 새 FS 워커 0"의 구조 강제다 — 진입점(Handle 등)
+// 확인만으로는 같은 이벤트 처리 중간에 트립됐을 때 후속 호출(promote 재프로브 등)이
+// 워커를 계속 만든다(cx 리뷰 차단 3). 이미 트립이면 워커 없이 ErrStalled 로 즉답한다.
 func (ix *Indexer) statT(path, site string) (os.FileInfo, error) {
+	if ix.fsLatch.Tripped() {
+		return nil, fmt.Errorf("%w: op=stat site=%s (latched)", fsop.ErrStalled, site)
+	}
 	fi, err := ix.statFn(path)
 	if errors.Is(err, fsop.ErrStalled) {
 		ix.log.Error("fs_op_stalled", "op", "stat", "site", site, "path", path)
@@ -305,7 +312,11 @@ func (ix *Indexer) statT(path, site string) (os.FileInfo, error) {
 }
 
 // probeT 는 프로브의 유일한 관문이다. 열고·읽고·닫기 전체가 워커 안에서 끝난다(fsop 계약 2).
+// 래치 확인 규약은 statT 와 같다 — 트립 후에는 워커를 만들지 않는다.
 func (ix *Indexer) probeT(path string) (int64, error) {
+	if ix.fsLatch.Tripped() {
+		return 0, fmt.Errorf("%w: op=probe (latched)", fsop.ErrStalled)
+	}
 	d, err := ix.probeFn(path)
 	if errors.Is(err, fsop.ErrStalled) {
 		ix.log.Error("fs_op_stalled", "op", "probe", "site", "probe", "path", path)

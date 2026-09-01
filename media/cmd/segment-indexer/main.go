@@ -212,7 +212,10 @@ func assembleWatcher(ctx context.Context, opt recording.WatcherOptions) (*record
 		return nil, fmt.Errorf("워처 조립 실패: %w", err)
 	}
 	if err := w.Start(ctx); err != nil {
-		_ = w.Close()
+		if closeErr := w.Close(); closeErr != nil {
+			// 1차 에러(기동 실패)가 정본이고 이것은 정리 실패의 흔적이다 — 삼키지 않는다.
+			opt.Log.Warn("watcher_close_failed", "err", closeErr)
+		}
 		return nil, fmt.Errorf("워처 기동 실패: %w", err)
 	}
 	return w, nil
@@ -306,6 +309,16 @@ func loop(ctx context.Context, d loopDeps) error {
 	ticker := time.NewTicker(d.rescanEvery)
 	defer ticker.Stop()
 
+	// 재장착은 워커로 발사하고 결과만 select 로 받는다(단일 비행). 동기로 부르면
+	// assembleWatcher 의 Start→addWatchTree(무상한 FS walk)가 hung FS 에서 loop 자체를
+	// 세운다 — 격리 원칙의 자기위반이다(cx 리뷰 차단 1). hung 상태의 버려진 재장착
+	// 워커는 단일 비행이라 최대 1개다(fsnotify 핸들 점유도 1개로 유계).
+	type reattachResult struct {
+		w   *recording.Watcher
+		err error
+	}
+	var reattachPending chan reattachResult // nil = 비행 없음(그 case 는 영구 비활성)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -353,23 +366,33 @@ func loop(ctx context.Context, d loopDeps) error {
 			d.hookDone = nil
 
 		case <-ticker.C:
-			// 워처 강등 국면이면 먼저 재장착을 시도한다(주기당 1회 = 유계 재시도).
-			if d.watcherDegraded && d.reattachWatcher != nil {
-				if w, err := d.reattachWatcher(); err == nil {
-					d.watcherDone, d.watcherErr = w.Done(), w.Wait
-					d.completed, d.rescans = w.Completed(), w.Rescans()
-					d.ix.SetAdopter(w)
-					d.watcherDegraded = false
-					d.log.Info("watcher_recovered", "note", "재장착 완료 — 되돌림(H4·H5)이 실제 워처로 복귀한다")
-					d.log.Info("watcher_degraded", "value", 0)
-				} else {
-					d.log.Warn("watcher_reattach_failed", "err", err,
-						"note", "다음 재스캔 주기에 다시 시도한다. 훅·스캔 유입은 계속된다")
-				}
+			// 워처 강등 국면이면 재장착 워커를 발사한다(비행 중이면 건너뜀 = 유계).
+			if d.watcherDegraded && d.reattachWatcher != nil && reattachPending == nil {
+				ch := make(chan reattachResult, 1)
+				reattachPending = ch
+				go func() {
+					w, err := d.reattachWatcher()
+					ch <- reattachResult{w: w, err: err}
+				}()
 			}
 			// 아무 일이 없어도 주기마다 전수 점검을 발사한다. 놓친 게 있으면 여기서 복구된다.
 			// 발사만 하고 결과는 CollectDone case 가 받는다 — 수집이 루프를 세우지 않는다.
 			d.ix.StartCollect(ctx, d.root)
+
+		// 재장착 결과 — 성공이면 채널 넷을 갈아 끼우고 SetAdopter 를 함께 부른다(f6f).
+		case r := <-reattachPending:
+			reattachPending = nil
+			if r.err != nil {
+				d.log.Warn("watcher_reattach_failed", "err", r.err,
+					"note", "다음 재스캔 주기에 다시 시도한다. 훅·스캔 유입은 계속된다")
+				continue
+			}
+			d.watcherDone, d.watcherErr = r.w.Done(), r.w.Wait
+			d.completed, d.rescans = r.w.Completed(), r.w.Rescans()
+			d.ix.SetAdopter(r.w)
+			d.watcherDegraded = false
+			d.log.Info("watcher_recovered", "note", "재장착 완료 — 되돌림(H4·H5)이 실제 워처로 복귀한다")
+			d.log.Info("watcher_degraded", "value", 0)
 
 		// 수집 워커의 결과가 도착했다. 처리(스트림 루프)는 여기 — 즉 loop 고루틴에서 돈다(D10).
 		case res := <-d.ix.CollectDone():

@@ -106,7 +106,8 @@ func (ix *Indexer) ApplyCollect(ctx context.Context, root string, res collectRes
 		ix.warnRejectedStream(dir, cause)
 	}
 	if res.err != nil {
-		if !errors.Is(res.err, context.Canceled) {
+		// 부모 ctx 소멸(취소·데드라인)은 종료 국면의 정상 중단이라 ERROR 가 아니다.
+		if !errors.Is(res.err, context.Canceled) && !errors.Is(res.err, context.DeadlineExceeded) {
 			ix.log.Error("scan_collect_failed", "root", root, "err", res.err)
 		}
 		return false, nil

@@ -41,11 +41,24 @@ func TestLatchTrippedEntryReturnsNil(t *testing.T) {
 		t.Fatalf("site 라벨이 %v 다(handle 기대)", site)
 	}
 
-	if err := f.ix.HandleHook(t.Context(), mtxhook.Event{Kind: mtxhook.KindOnline, StreamID: "s1", At: baseWall}); err != nil {
+	// 세그먼트 훅(FS 를 탄다)만 조기 반환한다.
+	if err := f.ix.HandleHook(t.Context(), mtxhook.Event{
+		Kind: mtxhook.KindSegmentComplete, StreamID: "s1",
+		At: baseWall, SegmentPath: seg.Path,
+	}); err != nil {
 		t.Fatalf("HandleHook 트립 조기 반환이 에러다: %v", err)
 	}
 	if site := f.logs.attrs("fs_latch_early_return")["site"]; site != "hook" {
 		t.Fatalf("hook 진입의 site 라벨이 %v 다", site)
+	}
+
+	// 세션 경계 훅(offline·online)은 FS 무접촉이라 트립과 무관하게 처리된다 —
+	// 버리면 재접속 경계 메타데이터가 영구 소실된다(cx 리뷰 차단 2의 회귀 고정).
+	if err := f.ix.HandleHook(t.Context(), mtxhook.Event{Kind: mtxhook.KindOnline, StreamID: "s1", At: baseWall}); err != nil {
+		t.Fatalf("트립 국면 online 훅 처리가 에러다: %v", err)
+	}
+	if got := f.ix.lastOnlineAt["s1"]; !got.Equal(baseWall) {
+		t.Fatalf("트립 국면에서 online watermark 가 전진하지 않았다: %v", got)
 	}
 }
 
