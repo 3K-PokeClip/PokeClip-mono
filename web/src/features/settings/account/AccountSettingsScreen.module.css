@@ -484,6 +484,14 @@
   color: var(--pc-color-text-muted);
 }
 
+/* 되돌릴 수 없는 결과의 고지 — 드롭존·기본 아바타 아래 한 줄 (시안 1p에 없던 문장) */
+.photoNotice {
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  line-height: 1.5;
+  margin: calc(10 * var(--pc-u)) 0 0;
+}
+
 .presetSwatches {
   margin-left: auto;
   display: flex;
@@ -563,23 +571,13 @@
   line-height: 1.5;
 }
 
-/* ---------- ③ 업로드 ---------- */
+/* ---------- ③ 업로드 — 크롭 화면 위에 얹는다 (전용 화면으로 갈아끼우지 않는다) ---------- */
 
-.uploadZone {
-  height: calc(150 * var(--pc-u));
-  border: 1px solid var(--pc-color-border-subtle);
-  border-radius: calc(14 * var(--pc-u));
-  background: var(--pc-color-bg-inset);
+.uploadRow {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: calc(12 * var(--pc-u));
-}
-
-.uploadTitle {
-  font-size: calc(12 * var(--pc-u));
-  font-weight: 700;
+  gap: calc(10 * var(--pc-u));
+  margin-top: calc(12 * var(--pc-u));
 }
 
 .uploadBar {
@@ -590,13 +588,6 @@
 .uploadFile {
   font-size: calc(10.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
-}
-
-.uploadActions {
-  display: flex;
-  justify-content: flex-end;
-  gap: calc(8 * var(--pc-u));
-  margin-top: calc(13 * var(--pc-u));
 }
 
 /* ---------- ④ 크롭 ---------- */

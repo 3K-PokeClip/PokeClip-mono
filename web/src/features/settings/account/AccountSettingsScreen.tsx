@@ -6,20 +6,26 @@ import { LoginCard } from './LoginCard';
 import { ProfileCard } from './ProfileCard';
 import { ProfilePhotoDialog } from './ProfilePhotoDialog';
 import { useAccountMockState } from './useAccountMockState';
+import { useAccountState } from './useAccountState';
 import { firstGrapheme } from './profilePresets';
 import { useProfilePhotoState } from './useProfilePhotoState';
 import { WithdrawBlockedDialog } from './WithdrawBlockedDialog';
 import { WithdrawDialog } from './WithdrawDialog';
 import styles from './AccountSettingsScreen.module.css';
 
-// 디자인 1p 설정 · 계정 (POK-206). 조립만 한다 — 저장·탈퇴 판단은 useAccountMockState,
-// 사진 모달의 단계·타이머는 useProfilePhotoState가 갖는다.
+// 디자인 1p 설정 · 계정 (POK-206 → 실서버 배선 POK-208). 조립만 한다 — 이름·사진 저장은
+// useAccountState(실서버), 탈퇴는 useAccountMockState(아직 목업), 사진 모달의 단계·타이머는
+// useProfilePhotoState가 갖는다.
 //
-// ⚠ 프로필 수정·아바타 업로드·탈퇴 API가 아직 하나도 없다(POK-171 「할 일」). 이 화면은
-// 시안대로 전부 눌리지만 서버로 나가는 요청이 없고, 새로고침하면 원래대로 돌아온다.
+// ⚠ 탈퇴만 아직 서버로 가지 않는다 — 창구(DELETE /api/auth/me, POK-171)는 생겼지만 웹 배선은
+// 별도 티켓이다. 눌리지만 아무것도 지우지 않고 로컬 세션만 접는다.
 export function AccountSettingsScreen() {
-  const account = useAccountMockState();
-  const photo = useProfilePhotoState(account.applyPhoto);
+  const account = useAccountState();
+  const mock = useAccountMockState();
+  const photo = useProfilePhotoState({
+    upload: account.uploadPhoto,
+    onCanceled: account.refetchMe,
+  });
   const [withdrawOpen, setWithdrawOpen] = useState(false);
 
   const name = account.me?.name ?? '';
@@ -33,10 +39,12 @@ export function AccountSettingsScreen() {
       <ProfileCard
         name={name}
         email={email}
-        photoUrl={account.me?.profileImageUrl}
+        photoUrl={account.me?.profileImageUrl ?? undefined}
         draftName={account.draftName}
         dirty={account.dirty}
         editable={account.editable}
+        saving={account.saving}
+        nameError={account.nameError}
         onDraftNameChange={account.setDraftName}
         onSave={account.saveName}
         onEditPhoto={photo.open}
@@ -59,15 +67,15 @@ export function AccountSettingsScreen() {
 
       {/* 막힌 상태에서는 재확인 대신 이유를 보여 준다 — 두 모달이 동시에 뜨지 않는다 */}
       <WithdrawDialog
-        open={withdrawOpen && !account.blocked}
+        open={withdrawOpen && !mock.blocked}
         name={name}
-        facts={account.facts}
+        facts={mock.facts}
         onCancel={() => setWithdrawOpen(false)}
-        onConfirm={account.completeWithdraw}
+        onConfirm={mock.completeWithdraw}
       />
       <WithdrawBlockedDialog
-        open={withdrawOpen && account.blocked}
-        unpaidAmount={account.facts.unpaidAmount}
+        open={withdrawOpen && mock.blocked}
+        unpaidAmount={mock.facts.unpaidAmount}
         onClose={() => setWithdrawOpen(false)}
       />
 

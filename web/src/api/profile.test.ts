@@ -108,7 +108,9 @@ describe('displayNameFailureMessage', () => {
   });
 
   it('입력 탓이 아닌 실패는 null — 호출부가 토스트로 알린다', () => {
-    expect(displayNameFailureMessage(new ApiError(503, '서버와 연결이 원활하지 않아요'))).toBeNull();
+    expect(
+      displayNameFailureMessage(new ApiError(503, '서버와 연결이 원활하지 않아요')),
+    ).toBeNull();
     expect(displayNameFailureMessage(new ApiError(401, '세션이 만료됐어요'))).toBeNull();
     // 사진 사유가 이름 슬롯에 새지 않는다
     expect(displayNameFailureMessage(new ApiError(413, 'PHOTO_TOO_LARGE'))).toBeNull();
