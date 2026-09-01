@@ -15,7 +15,6 @@ package indexer
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
@@ -50,7 +49,7 @@ func (ix *Indexer) StartCollect(ctx context.Context, root string) bool {
 	ix.collectStalledWarned = false
 	go func() {
 		// 채널 버퍼가 1 이고 단일 비행이라 이 송신은 막히지 않는다 — 워커는 반드시 끝난다.
-		ix.collectDoneCh <- ix.collectTree(ctx, root, root)
+		ix.collectDoneCh <- ix.collectTree(ctx, root)
 	}()
 	return true
 }
@@ -123,21 +122,8 @@ func (ix *Indexer) ApplyCollect(ctx context.Context, root string, res collectRes
 	ix.fsLatch.Reset(root, ix.opt.FSOpTimeout)
 
 	// ④ 스트림 루프 — 매 스트림 ctx·래치 확인(f6g). 부분 결과(절단)도 처리된다.
-	// 순서 장벽(insertHold) 스트림을 먼저 돈다 — 장벽은 실시간 유입을 막고 있으므로
-	// 회수 우선권이 곧 가용성이다.
-	order := make([]string, 0, len(res.byStream))
-	for streamID := range res.byStream {
-		if ix.insertHold[streamID] {
-			order = append(order, streamID)
-		}
-	}
-	for streamID := range res.byStream {
-		if !ix.insertHold[streamID] {
-			order = append(order, streamID)
-		}
-	}
 	interrupted := false
-	for _, streamID := range order {
+	for streamID, segs := range res.byStream {
 		if ctx.Err() != nil {
 			interrupted = true
 			break
@@ -147,35 +133,8 @@ func (ix *Indexer) ApplyCollect(ctx context.Context, root string, res collectRes
 			ix.log.Warn("fs_latch_early_return", "site", "apply_collect", "stream_id", streamID)
 			break
 		}
-		if err := ix.scanStream(ctx, root, streamID, res.byStream[streamID]); err != nil {
+		if err := ix.scanStream(ctx, root, streamID, segs); err != nil {
 			return false, err
-		}
-	}
-
-	// ④-b 장벽 스트림이 이번 결과에 없다(절단·워커 미도달) — 표적 재수집으로 영구 장벽을
-	// 막는다(cx 재검 차단 2). 실패·절단이면 장벽을 유지한 채 다음 주기에 다시 시도한다.
-	// 디렉토리가 사라진 스트림은 빈 결과 → scanStream 의 빈 완주가 장벽을 내린다(잃을 것이 없다).
-	if !interrupted && ctx.Err() == nil {
-		var heldMissing []string
-		for streamID := range ix.insertHold {
-			if _, seen := res.byStream[streamID]; !seen {
-				heldMissing = append(heldMissing, streamID)
-			}
-		}
-		for _, streamID := range heldMissing {
-			if ctx.Err() != nil || ix.fsLatch.Tripped() {
-				interrupted = true
-				break
-			}
-			sub := ix.collectTree(ctx, filepath.Join(root, streamID), root)
-			if sub.err != nil || sub.truncated {
-				ix.log.Warn("insert_hold_recollect_failed", "stream_id", streamID,
-					"truncated", sub.truncated, "err", sub.err)
-				continue
-			}
-			if err := ix.scanStream(ctx, root, streamID, sub.byStream[streamID]); err != nil {
-				return false, err
-			}
 		}
 	}
 

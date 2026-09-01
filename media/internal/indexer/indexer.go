@@ -210,11 +210,6 @@ type Indexer struct {
 	// handleCount 는 Handle 호출 누계다(f6n — 주기당 호출 수로 국면을 가른다).
 	// 단일 고루틴(D10)이라 원자 연산이 필요 없다.
 	handleCount int64
-	// insertHold 는 락 경합(55P03) 후의 스트림별 순서 장벽이다. 참이면 그 스트림의
-	// 실시간 유입을 보류한다 — 후속 조각이 건너뛴 조각의 seq 를 차지해 H3 가 그 조각을
-	// 영구 거절하는 경로를 막는다(m1b "다음 Scan 회수 = 유실 0"의 성립 조건).
-	// scanStream 이 시각 오름차순 재처리에 들어가며 내린다.
-	insertHold map[string]bool
 
 	// pendingOffline 은 아직 짝지어지지 않은 offline 훅이다(스트림별 1건, 더 늦은 것만 유지).
 	pendingOffline map[string]sessionMark
@@ -287,7 +282,6 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 		lastOnlineAt:    map[string]time.Time{},
 		breaks:          map[string][]sessionBreak{},
 		collectDoneCh:   make(chan collectResult, 1),
-		insertHold:      map[string]bool{},
 	}
 	ix.fsLatch = fsop.NewLatch(log)
 	ix.statFn = func(p string) (os.FileInfo, error) { return fsop.StatT(p, ix.opt.FSOpTimeout) }
@@ -363,18 +357,7 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 			"stream_id", seg.StreamID, "path", seg.Path)
 		return nil
 	}
-	// 순서 장벽(락 경합 후) — 이 스트림은 scanStream 의 오름차순 재처리가 **성공 완주**할
-	// 때까지 실시간 유입을 받지 않는다. 조기 반환은 nil 이다(조각은 파일로 남아 Scan 이 회수).
-	// 회수 경로 자체는 통과시킨다: ReasonScan(오름차순 재처리)과 ReasonRegrown(꼬리 교정 —
-	// INSERT 없음)은 장벽의 목적(seq 선점 차단)과 충돌하지 않는다.
-	if ix.insertHold[seg.StreamID] &&
-		seg.Reason != recording.ReasonScan && seg.Reason != recording.ReasonRegrown {
-		ix.log.Warn("insert_hold_active",
-			"stream_id", seg.StreamID, "path", seg.Path, "reason", seg.Reason,
-			"note", "락 경합 순서 장벽 — 다음 수집 주기의 오름차순 재처리를 기다린다")
-		return nil
-	}
-	ix.handleCount++ // f6n 국면 판별 재료 — 래치·장벽 조기 반환은 처리가 아니므로 세지 않는다
+	ix.handleCount++ // f6n 국면 판별 재료 — 래치 조기 반환은 처리가 아니므로 세지 않는다
 
 	// H0. 사유 검증 — zero value 가 정상 경로로 흘러드는 것을 원천 차단한다.
 	if seg.Reason == recording.ReasonUnknown {

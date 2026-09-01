@@ -113,7 +113,8 @@ func (s *pgStore) ExistingPaths(ctx context.Context, streamID string) (map[strin
 const TxnDeadline = 10 * time.Second
 
 // ErrLockContended 는 55P03(락 대기 상한)이 즉시 1회 재시도 후에도 계속됨을 뜻한다(m1b).
-// 호출자(indexer)는 이 조각 하나만 건너뛴다 — 파일은 다음 Scan 이 회수한다(유실 0).
+// 호출자(indexer)는 이것을 단일 쓰기자 전제 붕괴 신호로 보고 **프로세스를 끝낸다** —
+// 재기동의 초기 Scan 이 커서를 재적재하고 시각 오름차순으로 회수한다(유실 0의 구조적 이행).
 var ErrLockContended = errors.New("index: 컷오프 경합 락 대기 상한(55P03) — 즉시 재시도도 실패")
 
 // pgLockNotAvailable 은 lock_timeout 초과의 SQLSTATE 다.
@@ -160,8 +161,8 @@ const cutoffExistsSQL = `SELECT EXISTS (SELECT 1 FROM stream_cutoffs WHERE strea
 func (s *pgStore) Insert(ctx context.Context, r Record, seed Seed) (InsertOutcome, SeedResult, error) {
 	out, res, err := s.insertOnce(ctx, r, seed)
 	if err != nil && isLockTimeout(err) {
-		// 55P03 → 즉시 1회 재시도(설계 6.5.5 · m1b). 재시도도 락이면 이 조각만 포기한다 —
-		// 백오프로 붙잡으면 D10 루프가 락 경합에 30초씩 볼모가 된다.
+		// 55P03 → 즉시 1회 재시도(설계 6.5.5 · m1b). 재시도도 락이면 ErrLockContended 로
+		// 올린다 — 처분(프로세스 종료 → 재기동 Scan 회수)은 호출자 몫이다.
 		out, res, err = s.insertOnce(ctx, r, seed)
 		if err != nil && isLockTimeout(err) {
 			return out, res, fmt.Errorf("%w: stream_id=%q seq=%d", ErrLockContended, r.StreamID, r.Seq)
@@ -243,8 +244,11 @@ func (s *pgStore) resolveSeed(ctx context.Context, r Record, seed Seed, seeded i
 		return SeedResult{Decline: DeclineNotSettleable}
 	}
 	// 자격 전부 참인데 seeded=0 — 기존 컷오프 승계(정상)인지 시간 항 탈락인지 가른다.
+	// 진단은 관측용이라 서비스 수명 ctx 로 매달리면 안 된다 — 짧은 상한을 준다.
+	dctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	var exists bool
-	if err := s.pool.QueryRow(ctx, cutoffExistsSQL, r.StreamID).Scan(&exists); err != nil {
+	if err := s.pool.QueryRow(dctx, cutoffExistsSQL, r.StreamID).Scan(&exists); err != nil {
 		return SeedResult{
 			Decline: DeclineStaleCorroboration,
 			DiagErr: fmt.Errorf("컷오프 존재 확인 실패 stream_id=%q: %w", r.StreamID, err),
