@@ -674,6 +674,29 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		ix.cursors[seg.StreamID] = &reloaded
 		ix.reconcileUploadState(seg.StreamID)
 		cur = &reloaded
+
+		// H3 재검(재적재 후) — 선점 행이 이 조각보다 늦은 벽시계면, 여기서 다음 seq 로
+		// 재작성하는 순간 seq 순서와 시간 순서가 어긋난다(G8 — cx 리뷰 r5 반증: Handle 의
+		// H3 는 낡은 커서로 판정했다). 처분은 H3 원문과 동일하다 — 경로 중복이면 정상
+		// 멱등, 아니면 크게 남기고 물러난다(9절 L5: 자동 복구 없음). 이 국면은 다른
+		// 쓰기자의 실재(D10 위반)이므로 조각 하나보다 인덱스 순서 불변식이 우선이다.
+		if cur.Tail != nil && !seg.StartWall.After(cur.LastStartWall()) {
+			fresh, freshErr := ix.store.ExistingPaths(ctx, seg.StreamID)
+			if freshErr != nil {
+				return freshErr
+			}
+			ix.indexed[seg.StreamID] = fresh
+			if _, ok := fresh[seg.Path]; ok {
+				ix.log.Debug("duplicate_path_skipped", "stream_id", seg.StreamID, "path", seg.Path)
+				return nil
+			}
+			ix.log.Error("late_segment_skipped",
+				"stream_id", seg.StreamID, "path", seg.Path,
+				"seg_wall", seg.StartWall, "last_indexed_wall", cur.LastStartWall(),
+				"last_seq", cur.Tail.Seq, "site", "seq_conflict_reload")
+			return nil
+		}
+
 		// dec 는 다시 계산하지 않는다. 재적재로 Tail 이 바뀌어도 "어느 경계를 소비할지"는
 		// 이미 정해졌다 — 여기서 재계산하면 같은 세그먼트의 판정이 재시도 여부에 따라 달라진다.
 		// seed 도 같은 값을 재사용한다 — 시간 항은 SQL 이 매 시도 재검하므로 안전하다.
