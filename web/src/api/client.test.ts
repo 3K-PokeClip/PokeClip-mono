@@ -392,4 +392,46 @@ describe('apiFetch', () => {
     expect((err as ApiError).message).toBe('발급 한도 초과');
     expect(spy.mock.calls.some(([url]) => url === '/api/auth/refresh')).toBe(false);
   });
+
+  it('문자열 본문에는 application/json을 기본으로 붙인다', async () => {
+    const spy = stubFetch(() => jsonResponse(200, { ok: true }));
+
+    await apiFetch('/api/auth/me', { method: 'PATCH', body: JSON.stringify({ name: '너구리' }) });
+
+    const init = spy.mock.calls[0]?.[1];
+    expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json');
+  });
+
+  it('FormData 본문에는 Content-Type을 붙이지 않는다 — multipart 경계는 브라우저가 정한다 (POK-208)', async () => {
+    const spy = stubFetch(() => jsonResponse(200, { ok: true }));
+    const form = new FormData();
+    form.append('file', new Blob(['png'], { type: 'image/png' }), 'avatar.png');
+
+    await apiFetch('/api/auth/me/photo', { method: 'PUT', body: form });
+
+    const init = spy.mock.calls[0]?.[1];
+    // 여기서 application/json을 덮으면 경계(boundary)가 사라져 서버가 파트를 하나도 못 찾는다
+    expect(new Headers(init?.headers).get('Content-Type')).toBeNull();
+    expect(init?.body).toBe(form);
+  });
+
+  it('401 재시도에도 같은 FormData 본문이 새 access로 다시 나간다 — 메모리 Blob이라 재추출된다', async () => {
+    const spy = stubFetch((url, init) => {
+      if (url === '/api/auth/refresh')
+        return jsonResponse(200, { accessToken: 'new-access', refreshToken: 'new-refresh' });
+      return bearerOf(init) === 'Bearer new-access'
+        ? jsonResponse(200, { ok: true })
+        : jsonResponse(401, { message: '인증 실패' });
+    });
+    const form = new FormData();
+    form.append('file', new Blob(['png'], { type: 'image/png' }), 'avatar.png');
+
+    const res = await apiFetch('/api/auth/me/photo', { method: 'PUT', body: form });
+
+    expect(res.status).toBe(200);
+    const uploads = spy.mock.calls.filter(([url]) => url === '/api/auth/me/photo');
+    expect(uploads).toHaveLength(2);
+    expect(uploads.every(([, init]) => init?.body === form)).toBe(true);
+    expect(bearerOf(uploads[1]?.[1])).toBe('Bearer new-access');
+  });
 });

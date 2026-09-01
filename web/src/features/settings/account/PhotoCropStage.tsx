@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -27,6 +28,7 @@ export function PhotoCropStage({
   maskPx,
   onMaskPxChange,
   onStatusChange,
+  disabled = false,
 }: {
   src: string;
   transform: CropTransform;
@@ -36,6 +38,13 @@ export function PhotoCropStage({
   maskPx: number;
   onMaskPxChange: (px: number) => void;
   onStatusChange: (status: CropStatus) => void;
+  /**
+   * 업로드가 나가 있는 동안 조작을 잠근다. 서버로 가는 것은 「적용」을 누른 시점의 Blob이라,
+   * 그 사이 위치·확대를 바꾸면 **미리보기와 저장 결과가 갈린다** — 성공 토스트가 「바로 반영」이라
+   * 말하는데 걸리는 아바타는 마지막으로 본 것과 다르고, 「편집」으로 돌아오면 저장된 그림과
+   * 어긋난 자리에서 시작한다.
+   */
+  disabled?: boolean;
 }) {
   const [natural, setNatural] = useState({ width: 0, height: 0 });
   const maskRef = useRef<HTMLSpanElement>(null);
@@ -53,9 +62,21 @@ export function PhotoCropStage({
   // 디코드 대기 상태의 주인은 <img>를 든 이쪽이다. 다이얼로그가 imageSrc 변화로만
   // 리셋하면, 같은 그림으로 재진입할 때(토스트 「편집」·같은 프리셋) 직전 ready가 남아
   // 새 <img>가 읽히기도 전에 「적용」이 열린다.
-  useEffect(() => {
+  //
+  // 🔴 useEffect가 아니라 useLayoutEffect다. 데이터 URL 이미지는 삽입 직후 load가 뜬다 —
+  // 이 리셋이 그 뒤에 돌면 onLoad의 ready를 loading으로 덮어 「적용」이 영영 잠긴다.
+  // 파일을 고른 경로가 정확히 그랬다: FileReader 콜백에서 시작한 갱신은 이산 이벤트가
+  // 아니라 passive 이펙트가 뒤로 밀리고, 그 사이 load가 먼저 온다(기본 아바타는 클릭이라
+  // 이펙트가 커밋에 동기로 붙어 안 걸렸다). 커밋과 동기로 리셋하고, 그래도 이미 끝나
+  // 있으면(캐시·같은 그림) 여기서 바로 판정한다.
+  useLayoutEffect(() => {
     onStatusChange('loading');
-  }, [src, onStatusChange]);
+    const img = imgRef.current;
+    if (img !== null && img.complete && img.naturalWidth > 0) {
+      setNatural({ width: img.naturalWidth, height: img.naturalHeight });
+      onStatusChange('ready');
+    }
+  }, [src, onStatusChange, imgRef]);
 
   // ② 클램프는 commit 경로에만 걸려 있어 새는 자리가 둘 있다 — 디코드가 끝나 치수를
   // 처음 알게 될 때, 그리고 창이 줄어 마스크가 작아질 때. 둘 다 여기서 다시 자른다.
@@ -84,13 +105,16 @@ export function PhotoCropStage({
   }, [onMaskPxChange]);
 
   function handlePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (disabled) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     drag.current = { pointerX: e.clientX, pointerY: e.clientY, x: transform.x, y: transform.y };
   }
 
   function handlePointerMove(e: ReactPointerEvent<HTMLDivElement>) {
     const start = drag.current;
-    if (start === null) return;
+    // 잠금은 시작만 막아서는 부족하다 — 이미 포인터를 잡고 끌던 손가락이 있으면(터치에서 흔하다)
+    // 다른 손가락으로 「적용」을 눌러 업로드가 시작돼도 그 끌기가 계속 자리를 바꾼다.
+    if (disabled || start === null) return;
     commit({
       ...transform,
       x: start.x + (e.clientX - start.pointerX),
@@ -106,6 +130,7 @@ export function PhotoCropStage({
 
   /** 방향키로도 옮긴다 — 포인터 전용이면 키보드 사용자는 중앙 고정 크롭밖에 못 만든다. */
   function handleKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    if (disabled) return;
     const step = e.shiftKey ? 16 : 4; // Shift로 크게 — 큰 사진을 끝까지 옮기려면 필요하다
     const move: Record<string, [number, number]> = {
       ArrowLeft: [-step, 0],
@@ -125,7 +150,10 @@ export function PhotoCropStage({
         className={styles.cropStage}
         role="group"
         aria-label="사진 위치 조정 — 방향키로 옮기고 Shift를 누르면 크게 움직여요"
-        tabIndex={0}
+        // 잠긴 동안에는 탭 순서에서 뺀다 — 포커스만 받고 아무 키도 안 먹는 자리를 만들지 않는다
+        tabIndex={disabled ? -1 : 0}
+        aria-disabled={disabled || undefined}
+        data-disabled={disabled || undefined}
         onKeyDown={handleKeyDown}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -162,6 +190,7 @@ export function PhotoCropStage({
           className={styles.cropSlider}
           label="확대"
           value={transform.zoom}
+          disabled={disabled}
           onValueChange={(zoom) => commit({ ...transform, zoom })}
         />
         <Plus aria-hidden className={styles.cropZoomIcon} />
@@ -169,6 +198,7 @@ export function PhotoCropStage({
         <IconButton
           variant="ghost"
           size="sm"
+          disabled={disabled}
           aria-label="왼쪽으로 90도 회전"
           onClick={() => commit({ ...transform, rotation: transform.rotation - 90 })}
         >

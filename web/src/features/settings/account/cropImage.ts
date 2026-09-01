@@ -44,24 +44,25 @@ export function baseScale(naturalShortSide: number, maskPx: number): number {
 /**
  * 마스크 안쪽만 정사각으로 잘라 data URL로 돌려준다.
  *
- * 캔버스를 얻지 못하거나 이미지 크기를 아직 모르면 `fallback`(원본)을 그대로 돌려준다 —
- * jsdom처럼 이미지를 실제로 디코드하지 않는 환경에서 화면이 비는 것을 막기 위한 것이지,
- * 실패를 감추는 자리가 아니다. 브라우저에서는 두 조건 모두 서지 않는다.
+ * 🔴 **자르지 못하면 `null`이다** — 원본을 폴백으로 돌려주지 않는다. 예전에는 원본을 그대로
+ * 돌려줬는데, 그 값은 정상 base64 data URL이라 호출부의 어떤 검사에도 걸리지 않고 그대로
+ * 업로드됐다: 캔버스를 못 잡은 브라우저에서 **잘리지 않은 원본(최대 5MB)이 조용히 아바타로
+ * 확정**되거나, 2MB를 넘어 「사진이 너무 커요」라는 엉뚱한 사유를 받았다. 자르지 못한 것과
+ * 잘라낸 것을 값의 모양으로 구분할 수 없었던 것이 원인이라 아예 형을 갈랐다.
  */
 export function cropToDataUrl(
   img: HTMLImageElement,
   transform: CropTransform,
-  fallback: string,
   /** 화면에 그려진 마스크 지름. 미리보기가 쓴 것과 같은 값이어야 한다. */
   maskPx: number,
-): string {
+): string | null {
   const shortSide = Math.min(img.naturalWidth, img.naturalHeight);
-  if (shortSide === 0) return fallback; // 아직 못 읽은 이미지 — 캔버스를 잡을 것도 없다
+  if (shortSide === 0) return null; // 아직 못 읽은 이미지 — 캔버스를 잡을 것도 없다
   const canvas = document.createElement('canvas');
   canvas.width = OUTPUT_PX;
   canvas.height = OUTPUT_PX;
   const ctx = canvas.getContext('2d');
-  if (ctx === null) return fallback;
+  if (ctx === null) return null;
 
   // 스테이지 px → 출력 px 배율. 마스크가 출력(512)으로 늘어난 만큼 이동량도 늘어난다
   const k = OUTPUT_PX / maskPx;

@@ -31,7 +31,7 @@ export function GlobalHeader() {
             <DropdownMenu.Trigger>
               {/* me 로딩 중엔 이름 없는 빈 아바타 — 이니셜이 나중에 채워져도 어긋날 것이 없다 */}
               <button type="button" className={styles.avatarButton} aria-label="계정 메뉴">
-                <Avatar size="sm" src={me?.profileImageUrl} name={me?.name} />
+                <Avatar size="sm" src={me?.profileImageUrl ?? undefined} name={me?.name} />
               </button>
             </DropdownMenu.Trigger>
             <DropdownMenu.Content align="end">

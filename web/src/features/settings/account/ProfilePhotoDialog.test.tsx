@@ -1,13 +1,14 @@
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '@/api/client';
 import { ProfilePhotoDialog } from '@/features/settings/account/ProfilePhotoDialog';
 import { useProfilePhotoState } from '@/features/settings/account/useProfilePhotoState';
 import { renderWithProviders } from '@/test/testProviders';
 
-// 모달의 3단계가 시안대로 갈리는지 본다. 시간에 걸린 복귀 규칙은 상태 기계 쪽
-// (useProfilePhotoState.test.ts)이 시계를 붙잡고 따로 검사한다.
+// 모달의 3단계(선택 → 크롭 → 업로드)가 갈리는지 본다. 시간에 걸린 복귀 규칙과 업로드 상태 기계의
+// 세부는 useProfilePhotoState.test.ts가 따로 검사한다 — 여기서는 화면에 무엇이 그려지는지만.
 
 const DATA_URL = 'data:image/png;base64,AAA';
 
@@ -26,10 +27,31 @@ function fileOf(name: string, type: string, size: number): File {
   return file;
 }
 
-const onApply = vi.fn();
+type Upload = (blob: Blob, filename: string, signal: AbortSignal) => Promise<void>;
+const upload = vi.fn<Upload>();
+const onCanceled = vi.fn();
+
+/** 업로드를 붙들어 둔다 — 「요청이 나가 있는 동안」의 화면을 본다. */
+function holdUpload() {
+  let resolve: (() => void) | null = null;
+  let reject: ((e: unknown) => void) | null = null;
+  const signals: AbortSignal[] = [];
+  upload.mockImplementation((_blob, _filename, signal) => {
+    signals.push(signal);
+    return new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+  });
+  return {
+    signals,
+    resolve: () => resolve?.(),
+    reject: (e: unknown) => reject?.(e),
+  };
+}
 
 function Harness() {
-  const photo = useProfilePhotoState(onApply);
+  const photo = useProfilePhotoState({ upload, onCanceled });
   return (
     <>
       <button type="button" onClick={photo.open}>
@@ -53,9 +75,12 @@ function drop(target: HTMLElement, file: File) {
 }
 
 beforeEach(() => {
-  onApply.mockReset();
+  upload.mockReset();
+  upload.mockResolvedValue(undefined);
+  onCanceled.mockReset();
   vi.stubGlobal('FileReader', SyncFileReader);
-  // jsdom에는 캔버스가 없다 — 기본 아바타를 만드는 자리만 통과시킨다
+  // jsdom에는 캔버스가 없다 — 기본 아바타를 만드는 자리만 통과시킨다. toDataURL이 돌려주는
+  // 'PRESET'은 base64 길이가 4k+2라 atob이 통과시켜 apply가 Blob을 만들 수 있다.
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
     fillRect: vi.fn(),
     fillText: vi.fn(),
@@ -67,6 +92,11 @@ beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(
     'data:image/png;base64,PRESET',
   );
+  // jsdom은 이미지를 디코드하지 않아 naturalWidth가 0이다 — 그대로 두면 cropToDataUrl이
+  // 「자르지 못했다(null)」로 판정해 업로드 경로가 통째로 죽는다. 치수만 흉내 낸다.
+  // `complete`는 건드리지 않는다: 디코드 대기(적용 잠금) 케이스가 그 기본값에 걸려 있다.
+  vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(800);
+  vi.spyOn(HTMLImageElement.prototype, 'naturalHeight', 'get').mockReturnValue(600);
 });
 
 afterEach(() => {
@@ -79,6 +109,14 @@ async function open() {
   const view = renderWithProviders(<Harness />);
   await user.click(screen.getByRole('button', { name: '사진 수정' }));
   return { user, ...view };
+}
+
+/** 기본 아바타를 골라 적용이 열리는 크롭 화면까지 간다. */
+async function openCropReady() {
+  const opened = await open();
+  await opened.user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+  markImageDecoded();
+  return opened;
 }
 
 describe('ProfilePhotoDialog', () => {
@@ -119,49 +157,52 @@ describe('ProfilePhotoDialog', () => {
     expect(zone).not.toHaveAttribute('data-dragover');
   });
 
-  it('드롭하면 강조를 걷는다 — 업로드 단계까지 강조가 따라가지 않는다', async () => {
+  it('드롭하면 강조를 걷는다 — 크롭 단계까지 강조가 따라가지 않는다', async () => {
     await open();
     const zone = dropzone();
 
     fireEvent.dragEnter(zone, { dataTransfer: { types: ['Files'] } });
     drop(zone, fileOf('face-cam-0812.png', 'image/png', Math.round(2.4 * 1024 * 1024)));
 
-    expect(dialog().getByText('2 / 3 · 업로드')).toBeInTheDocument();
+    expect(dialog().getByText('2 / 3 · 크롭')).toBeInTheDocument();
     expect(document.querySelector('[data-dragover]')).toBeNull();
   });
 
-  it('③ 정상 파일은 업로드 단계로 넘어가 파일과 진행률을 보여 준다', async () => {
+  it('③ 정상 파일은 읽자마자 크롭에 든다 — 업로드 화면을 거치지 않는다', async () => {
     await open();
 
     drop(dropzone(), fileOf('face-cam-0812.png', 'image/png', Math.round(2.4 * 1024 * 1024)));
 
-    expect(dialog().getByText('2 / 3 · 업로드')).toBeInTheDocument();
-    expect(dialog().getByText('사진을 올리는 중이에요')).toBeInTheDocument();
-    expect(dialog().getByText('face-cam-0812.png · 2.4MB')).toBeInTheDocument();
-    expect(dialog().getByRole('progressbar', { name: '업로드 진행률' })).toBeInTheDocument();
-    expect(dialog().getByRole('button', { name: '취소' })).toBeInTheDocument();
+    expect(dialog().getByText('2 / 3 · 크롭')).toBeInTheDocument();
+    expect(dialog().getByRole('slider', { name: '확대' })).toBeInTheDocument();
+    // 읽기는 브라우저 안의 일이다 — 서버로 간 것처럼 진행 막대를 그리지 않는다
+    expect(dialog().queryByRole('progressbar')).toBeNull();
+    expect(upload).not.toHaveBeenCalled();
   });
 
-  it('④ 기본 아바타는 업로드를 건너뛰고 곧장 크롭에 든다', async () => {
+  it('④ 기본 아바타도 곧장 크롭에 든다', async () => {
     const { user } = await open();
 
     await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
 
-    expect(dialog().getByText('3 / 3 · 크롭')).toBeInTheDocument();
+    expect(dialog().getByText('2 / 3 · 크롭')).toBeInTheDocument();
     expect(dialog().getByText('드래그해서 위치 조정')).toBeInTheDocument();
     expect(dialog().getByRole('slider', { name: '확대' })).toBeInTheDocument();
     expect(dialog().getByRole('button', { name: '왼쪽으로 90도 회전' })).toBeInTheDocument();
   });
 
-  it('⑤ 적용은 결과를 넘기고 모달을 닫은 뒤 토스트로 알린다', async () => {
-    const { user } = await open();
-    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
-    markImageDecoded();
+  it('⑤ 적용은 잘라낸 그림을 올리고, 성공하면 모달을 닫은 뒤 토스트로 알린다', async () => {
+    const { user } = await openCropReady();
 
     await user.click(dialog().getByRole('button', { name: '적용' }));
 
-    expect(onApply).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(upload).toHaveBeenCalledTimes(1);
+    const [blob, filename, signal] = upload.mock.calls[0] ?? [];
+    expect(blob).toBeInstanceOf(Blob);
+    expect(blob?.type).toBe('image/png');
+    expect(filename).toBe('avatar.png');
+    expect(signal).toBeInstanceOf(AbortSignal);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(await screen.findByText('프로필 사진을 변경했습니다')).toBeInTheDocument();
     expect(screen.getByText('헤더·사이드바에 바로 반영')).toBeInTheDocument();
     // 되돌릴 수 없는 일이 아니라 다시 손보는 일이다 — 되돌리기가 아니라 편집이 붙는다
@@ -169,23 +210,173 @@ describe('ProfilePhotoDialog', () => {
     expect(screen.queryByRole('button', { name: '되돌리기' })).not.toBeInTheDocument();
   });
 
+  it('업로드 중에는 3 / 3 라벨과 진행 표시가 뜨고 적용이 잠기며, Esc·백드롭·닫기로는 나갈 수 없다', async () => {
+    const held = holdUpload();
+    const { user } = await openCropReady();
+
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+
+    expect(dialog().getByText('3 / 3 · 업로드')).toBeInTheDocument();
+    // fetch는 업로드 진행 이벤트를 주지 않는다 — 부정형 막대(값 없음)와 파일 표기만
+    const bar = dialog().getByRole('progressbar', { name: '업로드 진행률' });
+    expect(bar).not.toHaveAttribute('aria-valuenow');
+    expect(dialog().getByText('기본 아바타')).toBeInTheDocument();
+    expect(dialog().getByRole('button', { name: /적용/ })).toHaveAttribute('aria-busy', 'true');
+    expect(dialog().getByRole('button', { name: '닫기' })).toBeDisabled();
+    // 크롭 스테이지는 그대로다 — 실패해도 원본을 다시 디코드하지 않는다
+    expect(dialog().getByRole('slider', { name: '확대' })).toBeInTheDocument();
+
+    fireEvent.pointerDown(document.body);
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(held.signals[0]?.aborted).toBe(false);
+
+    held.resolve();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('업로드 중에는 크롭 조작이 잠긴다 — 미리보기가 이미 보낸 Blob과 갈리지 않게', async () => {
+    const held = holdUpload();
+    const { user } = await openCropReady();
+
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+
+    // 서버로 가는 것은 클릭 시점의 Blob이다 — 그 사이 위치·확대를 바꾸면 저장 결과와 갈린다
+    // (DS Slider는 네이티브 input이 아니라 aria-disabled로 잠금을 알린다)
+    const slider = dialog().getByRole('slider', { name: '확대' });
+    expect(slider).toHaveAttribute('aria-disabled', 'true');
+    expect(slider).toHaveAttribute('tabindex', '-1');
+    expect(dialog().getByRole('button', { name: '왼쪽으로 90도 회전' })).toBeDisabled();
+    const stage = dialog().getByRole('group', { name: /사진 위치 조정/ });
+    expect(stage).toHaveAttribute('aria-disabled', 'true');
+    expect(stage).toHaveAttribute('tabindex', '-1');
+
+    // 방향키도 먹지 않는다. 🔴 슬라이더의 aria-valuenow로 재면 안 된다 — 방향키는 zoom이 아니라
+    // transform.x/y를 바꾸므로 그 값은 가드가 있든 없든 그대로다(가드를 지워도 통과하는 공허한
+    // 단언이었다). 실제로 움직이는 것, 즉 미리보기의 transform을 본다.
+    const img = document.querySelector('[role="dialog"] img') as HTMLImageElement;
+    const before = img.style.transform;
+    fireEvent.keyDown(stage, { key: 'ArrowRight' });
+    expect(img.style.transform).toBe(before);
+
+    held.resolve();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('업로드 중 이미 시작된 드래그도 멈춘다 — 잠금이 시작만 막으면 미리보기가 전송본과 갈린다', async () => {
+    const held = holdUpload();
+    const { user } = await openCropReady();
+    const stage = dialog().getByRole('group', { name: /사진 위치 조정/ });
+    const img = document.querySelector('[role="dialog"] img') as HTMLImageElement;
+
+    // 손가락이 스테이지를 잡은 채로 시작한다
+    fireEvent.pointerDown(stage, { pointerId: 1, clientX: 100, clientY: 100 });
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+    const during = img.style.transform;
+
+    // 다른 손가락으로 「적용」을 누른 뒤에도 끌기가 이어지는 상황
+    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 160, clientY: 140 });
+
+    expect(img.style.transform).toBe(during);
+
+    held.resolve();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('업로드 실패로 크롭에 돌아오면 적용 버튼이 포커스를 되찾는다 — 키보드로 곧장 재시도한다', async () => {
+    // 실패를 붙들어 둔다 — 즉시 거절하면 클릭이 끝나기 전에 복귀까지 다 돌아, 아래 blur가
+    // 「업로드 중」이 아니라 이미 끝난 화면에 걸린다.
+    const held = holdUpload();
+    const { user } = await openCropReady();
+
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+
+    // 🔴 포커스가 「적용」을 떠난 상태를 만들어야 이펙트가 하는 일이 보인다. 그대로 두면 클릭이
+    // 잡은 포커스가 끝까지 남아 **이펙트를 지워도 통과하는** 공허한 단언이 된다.
+    // 브라우저는 loading→disabled 순간 포커스를 body로 떨어뜨리지만, jsdom은 그 이동을 구현하지
+    // 않고(노드 제거 때만 옮긴다) 모달의 포커스 트랩이 blur를 곧바로 되돌린다 — 트랩이 허용하는
+    // 모달 안의 다른 버튼(취소)으로 옮겨 「적용이 아닌 곳」을 만든다.
+    const cancel = dialog().getByRole('button', { name: '취소' });
+    cancel.focus();
+    expect(document.activeElement).toBe(cancel);
+
+    held.reject(new ApiError(503, 'PHOTO_STORAGE_DISABLED'));
+
+    await dialog().findByText('지금은 사진을 올릴 수 없어요 · 잠시 후 다시 시도해 주세요');
+    await waitFor(() =>
+      expect(document.activeElement).toBe(dialog().getByRole('button', { name: '적용' })),
+    );
+  });
+
+  it('자르지 못하면 보내지 않고 그 자리에서 알린다 — 잘리지 않은 원본을 대신 올리지 않는다', async () => {
+    // 실브라우저의 캔버스 한도·메모리 압박에서 getContext가 null을 준다. 예전에는 원본을
+    // 폴백으로 돌려줘 잘리지 않은 최대 5MB가 그대로 올라갔다.
+    const { user } = await openCropReady();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(dialog().getByRole('alert')).toHaveTextContent('이 사진은 올릴 수 없어요');
+    expect(dialog().getByText('2 / 3 · 크롭')).toBeInTheDocument();
+  });
+
+  it('업로드 실패는 크롭 화면에 남아 사유를 알린다 — 자르던 자리가 그대로라 곧장 다시 적용할 수 있다', async () => {
+    upload.mockRejectedValueOnce(new ApiError(503, 'PHOTO_STORAGE_DISABLED'));
+    const { user } = await openCropReady();
+    // 「자르던 자리」를 만든다
+    const slider = dialog().getByRole('slider', { name: '확대' });
+    slider.focus();
+    await user.keyboard('{ArrowRight}{ArrowRight}');
+    const moved = slider.getAttribute('aria-valuenow');
+    expect(moved).not.toBe('42');
+
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+
+    expect(
+      await dialog().findByText('지금은 사진을 올릴 수 없어요 · 잠시 후 다시 시도해 주세요'),
+    ).toBeInTheDocument();
+    expect(dialog().getByRole('alert')).toBeInTheDocument();
+    expect(dialog().getByText('2 / 3 · 크롭')).toBeInTheDocument();
+    expect(dialog().getByRole('slider', { name: '확대' })).toHaveAttribute('aria-valuenow', moved);
+    // 원본 디코드가 유지돼 적용이 잠기지 않는다 — 여기서 다시 누르면 두 번째 요청이다
+    const apply = dialog().getByRole('button', { name: '적용' });
+    expect(apply).toBeEnabled();
+    await user.click(apply);
+    expect(upload).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('업로드 중 취소는 요청을 끊고 자르던 자리로 돌아온다 — 모달은 닫히지 않고 호출부가 me를 다시 읽는다', async () => {
+    const held = holdUpload();
+    const { user } = await openCropReady();
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+
+    await user.click(dialog().getByRole('button', { name: '취소' }));
+
+    expect(held.signals[0]?.aborted).toBe(true);
+    expect(dialog().getByText('2 / 3 · 크롭')).toBeInTheDocument();
+    expect(dialog().queryByRole('progressbar')).toBeNull();
+    expect(onCanceled).toHaveBeenCalledTimes(1);
+    // 끊긴 요청이 뒤늦게 끝나도 화면은 그대로다
+    held.reject(new DOMException('The operation was aborted.', 'AbortError'));
+    await waitFor(() => expect(dialog().getByText('2 / 3 · 크롭')).toBeInTheDocument());
+    expect(dialog().queryByRole('alert')).toBeNull();
+  });
+
   it('토스트의 편집은 크롭으로 되돌아간다', async () => {
-    const { user } = await open();
-    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
-    markImageDecoded();
+    const { user } = await openCropReady();
     await user.click(dialog().getByRole('button', { name: '적용' }));
 
     await user.click(await screen.findByRole('button', { name: '편집' }));
 
-    expect(dialog().getByText('3 / 3 · 크롭')).toBeInTheDocument();
+    expect(dialog().getByText('2 / 3 · 크롭')).toBeInTheDocument();
   });
 
   it('편집으로 돌아오면 자르던 자리를 잇고, 새로 고르면 처음부터 시작한다', async () => {
-    const { user } = await open();
-    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+    const { user } = await openCropReady();
 
     // 확대를 바꿔 「자르던 자리」를 만든다
-    markImageDecoded();
     const slider = dialog().getByRole('slider', { name: '확대' });
     slider.focus();
     await user.keyboard('{ArrowRight}{ArrowRight}');
@@ -215,7 +406,21 @@ describe('ProfilePhotoDialog', () => {
     expect(opened).toHaveBeenCalled();
   });
 
-  it('원본이 디코드되기 전에는 적용을 잠근다 — 잘리지 않은 원본이 저장되지 않게', async () => {
+  it('이미 디코드된 그림이면 load 이벤트 없이도 적용이 열린다 — 데이터 URL은 load가 이펙트보다 먼저 올 수 있다', async () => {
+    // 파일을 고른 경로에서 실제로 났던 일: load → ready 뒤에 리셋 이펙트가 loading으로 덮어
+    // 「적용」이 영영 잠겼다. 크롭에 들어올 때 이미 complete인 그림을 흉내 낸다.
+    vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(true);
+    vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(800);
+    vi.spyOn(HTMLImageElement.prototype, 'naturalHeight', 'get').mockReturnValue(600);
+    await open();
+
+    drop(dropzone(), fileOf('IMG_0001.jpg', 'image/jpeg', 1024 * 1024));
+
+    expect(dialog().getByText('2 / 3 · 크롭')).toBeInTheDocument();
+    expect(dialog().getByRole('button', { name: '적용' })).toBeEnabled();
+  });
+
+  it('원본이 디코드되기 전에는 적용을 잠근다 — 잘리지 않은 원본이 올라가지 않게', async () => {
     const { user } = await open();
     await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
 
@@ -233,13 +438,11 @@ describe('ProfilePhotoDialog', () => {
 
     expect(dialog().getByRole('alert')).toHaveTextContent('사진으로 읽을 수 없어요');
     expect(dialog().getByRole('button', { name: '적용' })).toBeDisabled();
-    expect(onApply).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
   });
 
   it('방향키로도 사진 위치를 옮긴다 — 포인터 전용이면 키보드로는 중앙 고정뿐이다', async () => {
-    const { user } = await open();
-    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
-    markImageDecoded();
+    const { user } = await openCropReady();
 
     const stage = dialog().getByRole('group', { name: /사진 위치 조정/ });
     expect(stage).toHaveAttribute('tabindex', '0');
@@ -254,16 +457,14 @@ describe('ProfilePhotoDialog', () => {
   });
 
   it('같은 그림으로 재진입해도 디코드를 다시 기다린다', async () => {
-    const { user } = await open();
-    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
-    markImageDecoded();
+    const { user } = await openCropReady();
     await user.click(dialog().getByRole('button', { name: '적용' }));
 
     // 토스트 「편집」으로 같은 그림에 재진입 — imageSrc는 그대로다
     await user.click(await screen.findByRole('button', { name: '편집' }));
 
     // 직전 ready가 남아 있으면 새 <img>가 읽히기도 전에 적용이 열려
-    // 잘리지 않은 원본이 저장된다
+    // 잘리지 않은 원본이 올라간다
     expect(dialog().getByRole('button', { name: '적용' })).toBeDisabled();
   });
 
@@ -273,11 +474,19 @@ describe('ProfilePhotoDialog', () => {
     await user.click(dialog().getByRole('button', { name: '닫기' }));
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(onApply).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
+    expect(onCanceled).not.toHaveBeenCalled();
   });
 
-  it('접근성 위반이 없다', async () => {
-    const { container } = await open();
+  it('접근성 위반이 없다 — 선택 화면과 실패 문구가 뜬 크롭 화면 모두', async () => {
+    upload.mockRejectedValueOnce(new ApiError(503, 'PHOTO_STORAGE_DISABLED'));
+    const { user, container } = await open();
     expect(await axe(container)).toHaveNoViolations();
+
+    await user.click(dialog().getByRole('button', { name: '기본 아바타 1' }));
+    markImageDecoded();
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+    await dialog().findByText('지금은 사진을 올릴 수 없어요 · 잠시 후 다시 시도해 주세요');
+    expect(await axe(document.body)).toHaveNoViolations();
   });
 });

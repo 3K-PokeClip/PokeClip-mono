@@ -563,23 +563,13 @@
   line-height: 1.5;
 }
 
-/* ---------- ③ 업로드 ---------- */
+/* ---------- ③ 업로드 — 크롭 화면 위에 얹는다 (전용 화면으로 갈아끼우지 않는다) ---------- */
 
-.uploadZone {
-  height: calc(150 * var(--pc-u));
-  border: 1px solid var(--pc-color-border-subtle);
-  border-radius: calc(14 * var(--pc-u));
-  background: var(--pc-color-bg-inset);
+.uploadRow {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: calc(12 * var(--pc-u));
-}
-
-.uploadTitle {
-  font-size: calc(12 * var(--pc-u));
-  font-weight: 700;
+  gap: calc(10 * var(--pc-u));
+  margin-top: calc(12 * var(--pc-u));
 }
 
 .uploadBar {
@@ -590,13 +580,6 @@
 .uploadFile {
   font-size: calc(10.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
-}
-
-.uploadActions {
-  display: flex;
-  justify-content: flex-end;
-  gap: calc(8 * var(--pc-u));
-  margin-top: calc(13 * var(--pc-u));
 }
 
 /* ---------- ④ 크롭 ---------- */
@@ -614,6 +597,11 @@
   background: #07080b;
   cursor: move;
   touch-action: none;
+}
+
+/* 업로드가 나가 있는 동안 — 끌 수 없다는 것을 커서로 먼저 말한다 */
+.cropStage[data-disabled] {
+  cursor: default;
 }
 
 .cropImage {
@@ -691,6 +679,16 @@
   justify-content: flex-end;
   gap: calc(8 * var(--pc-u));
   padding: calc(8 * var(--pc-u)) calc(18 * var(--pc-u)) calc(18 * var(--pc-u));
+}
+
+/* 업로드 실패 사유 — 버튼 줄의 왼쪽을 차지하고 버튼은 오른쪽에 그대로 붙는다 */
+.cropActionMessage {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: calc(11.5 * var(--pc-u));
+  line-height: 1.4;
+  color: var(--pc-color-danger);
 }
 
 /* ---------- 모션 (1p 「모션 · 복귀 규칙」) ---------- */

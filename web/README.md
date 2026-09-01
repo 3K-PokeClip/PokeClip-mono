@@ -69,31 +69,33 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 
 ### 라우트 맵
 
-| 경로                                                                                  | 내용                                                                   |
-| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `/`                                                                                   | `/home` 리다이렉트 — 세션 분기는 `(dock)`의 AuthGuard가 한다           |
-| `/login`                                                                              | 로그인 진입 (셸 없음) — 세션이 있으면 `/home`으로 역가드               |
-| `/auth/callback`                                                                      | 구글 OAuth 복귀 — code를 토큰으로 교환 (백엔드 redirect_uri)           |
-| `/oauth/chzzk/callback`                                                               | 치지직 동의 복귀 — code·state를 연동으로 교환 (아래 참조)              |
-| `/home` `/broadcast` `/clips` `/settings`                                             | 독 4개 — `(dock)` 그룹 공유 셸(AuthGuard + 하단 Dock)                  |
-| `/broadcast`                                                                          | `/broadcast/livenow` 리다이렉트 — 방송 그룹은 좌측 `Side`를 갖는다     |
-| `/broadcast/livenow`                                                                  | 라이브 대시보드                                                        |
-| `/broadcast/vod`                                                                      | 지난 방송 목록 목업 (시안 1f) — VOD 뷰어 진입 관문 · 60일 D-day        |
-| `/broadcast/vod/[streamId]`                                                           | VOD 뷰어 자리 — 빈 화면 (뷰어 본체는 시안 1c 별도 티켓)                |
-| `/clips/editor`                                                                       | 클립 편집기 진입 — 기본 모드로 리다이렉트 (간편/정밀 설정은 이후 티켓) |
-| `/clips/editor/studio`                                                                | 클립 편집기 스튜디오형 목업 (시안 1d-a) — `(fullscreen)` 그룹, 독 없음 |
-| `/settings`                                                                           | `/settings/plugin` 리다이렉트 — 설정 그룹도 좌측 `Side`를 갖는다       |
-| `/settings/channels` `/settings/plugin` `/settings/notifications` `/settings/account` | 채널 연동 · 플러그인 · 알림 설정 · 계정 (나머지 설정 화면은 별도 티켓) |
-| `/goodbye`                                                                            | 탈퇴 완료 안내 (셸 없음) — 토큰이 빈 직후라 `(dock)` 안에서는 못 뜬다  |
-| `/dev`                                                                                | 개발용 데모 (테마 전환 · Zustand 카운터 · TanStack Query 예시)         |
-| `/api/ping`                                                                           | 서버 핸들러 앵커                                                       |
-| 그 밖의 모든 주소                                                                     | 404 폴백 (`app/not-found.tsx`) — 아래 참조                             |
+| 경로                                                                                                      | 내용                                                                                  |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `/`                                                                                                       | `/home` 리다이렉트 — 세션 분기는 `(dock)`의 AuthGuard가 한다                          |
+| `/login`                                                                                                  | 로그인 진입 (셸 없음) — 세션이 있으면 `/home`으로 역가드                              |
+| `/auth/callback`                                                                                          | 구글 OAuth 복귀 — code를 토큰으로 교환 (백엔드 redirect_uri)                          |
+| `/oauth/chzzk/callback`                                                                                   | 치지직 동의 복귀 — code·state를 연동으로 교환 (아래 참조)                             |
+| `/home` `/broadcast` `/clips` `/settings`                                                                 | 독 4개 — `(dock)` 그룹 공유 셸(AuthGuard + 하단 Dock)                                 |
+| `/broadcast`                                                                                              | `/broadcast/livenow` 리다이렉트 — 방송 그룹은 좌측 `Side`를 갖는다                    |
+| `/broadcast/livenow`                                                                                      | 라이브 대시보드                                                                       |
+| `/broadcast/vod`                                                                                          | 지난 방송 목록 목업 (시안 1f) — VOD 뷰어 진입 관문 · 60일 D-day                       |
+| `/broadcast/vod/[streamId]`                                                                               | VOD 뷰어 자리 — 빈 화면 (뷰어 본체는 시안 1c 별도 티켓)                               |
+| `/clips/editor`                                                                                           | 클립 편집기 진입 — 기본 모드로 리다이렉트 (간편/정밀 설정은 이후 티켓)                |
+| `/clips/editor/studio`                                                                                    | 클립 편집기 스튜디오형 목업 (시안 1d-a) — `(fullscreen)` 그룹, 독 없음                |
+| `/settings`                                                                                               | `/settings/plugin` 리다이렉트 — 설정 그룹도 좌측 `Side`를 갖는다                      |
+| `/settings/channels` `/settings/editors` `/settings/plugin` `/settings/notifications` `/settings/account` | 채널 연동 · 편집자 관리 · 플러그인 · 알림 설정 · 계정 (구독·결제, 도움말은 별도 티켓) |
+| `/goodbye`                                                                                                | 탈퇴 완료 안내 (셸 없음) — 토큰이 빈 직후라 `(dock)` 안에서는 못 뜬다                 |
+| `/dev`                                                                                                    | 개발용 데모 (테마 전환 · Zustand 카운터 · TanStack Query 예시)                        |
+| `/api/ping`                                                                                               | 서버 핸들러 앵커                                                                      |
+| 그 밖의 모든 주소                                                                                         | 404 폴백 (`app/not-found.tsx`) — 아래 참조                                            |
 
 **치지직 콜백 계약.** `/oauth/chzzk/callback`은 `(dock)` **밖**이라 `AuthGuard`가 덮지 않는다 — 세션 판정은 화면이 직접 하고, 세션이 없으면 로그인으로 보낸 뒤 `/settings/channels`로 되돌아온다. 이 경로는 백엔드 `CHZZK_REDIRECT_URI`, 그리고 **치지직 개발자 센터에 등록된 redirect URI**와 **정확히 같아야 한다** — 개발자 센터는 앱당 하나만 등록하므로 환경마다 앱을 따로 판다. 프론트에 치지직용 env는 없다(동의 URL을 백엔드가 조립한다). 어긋나면 개발 빌드 콘솔에 경고가 뜬다(`chzzkOAuth.warnIfCallbackMismatch`) — 그게 없으면 증상이 "동의를 다 마친 뒤 낯선 주소에서 막힘"으로만 나타난다.
 
 **전체 화면 계약.** 클립 편집기는 `(dock)`이 아니라 `(fullscreen)` 그룹에 둔다 — 시안 1d는 하단 독 없이 타임라인이 화면 바닥에 붙는 작업 화면이다. 두 그룹의 차이는 Dock 하나뿐이라 로그인 가드는 `(fullscreen)/layout.tsx`가 똑같이 덮는다. 독이 없으니 **나가는 길은 화면이 직접 내야 한다** — 편집기 헤더의 「보관함으로」가 그 자리다. `/clips`는 `(dock)`에, `/clips/editor`는 `(fullscreen)`에 있지만 URL 경로가 겹치지 않아 충돌하지 않는다.
 
-**탈퇴 완료 계약.** `/goodbye`도 `(dock)` **밖**에 둔다 — `AuthGuard`는 refresh 토큰이 비는 순간 `/login`으로 보내므로, 탈퇴 직후 상태인 이 화면은 가드 안에서는 뜰 틈이 없다. 탈퇴 확정은 `markIntentionalLogout()`을 먼저 찍어 이 경로가 복원 경로로 남지 않게 한다 (POK-206). ⚠ 탈퇴 백엔드(POK-171)가 아직 없어 실제로 지워지는 것은 없다.
+**탈퇴 완료 계약.** `/goodbye`도 `(dock)` **밖**에 둔다 — `AuthGuard`는 refresh 토큰이 비는 순간 `/login`으로 보내므로, 탈퇴 직후 상태인 이 화면은 가드 안에서는 뜰 틈이 없다. 탈퇴 확정은 `markIntentionalLogout()`을 먼저 찍어 이 경로가 복원 경로로 남지 않게 한다 (POK-206). ⚠ 탈퇴 백엔드(`DELETE /api/auth/me`, POK-171)는 생겼지만 웹 배선은 아직이라(별도 티켓) 실제로 지워지는 것은 없다.
+
+**계정 화면 계약.** 표시 이름·프로필 사진은 auth 서버에 저장된다(`PATCH /api/auth/me` · `PUT /api/auth/me/photo`, POK-208 ← 서버 POK-207). 두 응답이 `GET /api/auth/me`와 같은 모양이라 `['auth','me']` 캐시를 통째로 덮는다 — 헤더·사이드바가 재조회 없이 따라온다. **로컬·CI에서 사진 업로드는 503(`PHOTO_STORAGE_DISABLED`)이 정상이다** — auth의 `PROFILE_PHOTO_*` env가 비면 사진 기능만 꺼진다(`services/README.md` 「사진 창고 다섯」). 배선 버그가 아니다. 사진 주소(`profileImageUrl`)는 서버가 준 것을 그대로 쓴다 — `token` 쿼리가 서명값이라 조립하지 않으며, `null`이면 이니셜을 그린다. 사진 모달의 단계는 시안 1p(선택→업로드→크롭)와 달리 **선택→크롭→업로드**다 — 서버가 잘라낸 최종 그림만 받는다.
 
 **404 계약.** `app/not-found.tsx` 하나가 두 경우를 다 받는다 — 어떤 경로에도 안 걸린 주소, 그리고 상세 화면이 `notFound()`를 던진 경우. **자원이 없으면(만료·삭제·권한 회수) 상세 화면은 `notFound()`를 던져 이 화면을 재사용한다** — 「없음」과 「만료」를 문구로 가르지 않는다 (POK-204 · ADR-045). 루트에 두는 게 조건이다: `(dock)` 안에 두면 `AuthGuard`가 먼저 걸려 비로그인 사용자에게 404 대신 `/login`이 뜬다.
 

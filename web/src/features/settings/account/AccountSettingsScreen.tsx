@@ -1,26 +1,48 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SettingsPageHeader } from '../SettingsPageHeader';
 import { LoginCard } from './LoginCard';
 import { ProfileCard } from './ProfileCard';
 import { ProfilePhotoDialog } from './ProfilePhotoDialog';
 import { useAccountMockState } from './useAccountMockState';
+import { useAccountState } from './useAccountState';
 import { firstGrapheme } from './profilePresets';
 import { useProfilePhotoState } from './useProfilePhotoState';
 import { WithdrawBlockedDialog } from './WithdrawBlockedDialog';
 import { WithdrawDialog } from './WithdrawDialog';
 import styles from './AccountSettingsScreen.module.css';
 
-// 디자인 1p 설정 · 계정 (POK-206). 조립만 한다 — 저장·탈퇴 판단은 useAccountMockState,
-// 사진 모달의 단계·타이머는 useProfilePhotoState가 갖는다.
+// 디자인 1p 설정 · 계정 (POK-206 → 실서버 배선 POK-208). 조립만 한다 — 이름·사진 저장은
+// useAccountState(실서버), 탈퇴는 useAccountMockState(아직 목업), 사진 모달의 단계·타이머는
+// useProfilePhotoState가 갖는다.
 //
-// ⚠ 프로필 수정·아바타 업로드·탈퇴 API가 아직 하나도 없다(POK-171 「할 일」). 이 화면은
-// 시안대로 전부 눌리지만 서버로 나가는 요청이 없고, 새로고침하면 원래대로 돌아온다.
+// ⚠ 탈퇴만 아직 서버로 가지 않는다 — 창구(DELETE /api/auth/me, POK-171)는 생겼지만 웹 배선은
+// 별도 티켓이다. 눌리지만 아무것도 지우지 않고 로컬 세션만 접는다.
 export function AccountSettingsScreen() {
-  const account = useAccountMockState();
-  const photo = useProfilePhotoState(account.applyPhoto);
+  const account = useAccountState();
+  const mock = useAccountMockState();
+  const photo = useProfilePhotoState({
+    upload: account.uploadPhoto,
+    onCanceled: account.refetchMe,
+  });
   const [withdrawOpen, setWithdrawOpen] = useState(false);
+
+  // 🔴 다른 탭이 계정을 바꾸면 열려 있던 사진 모달을 접는다.
+  //
+  // 계정 교체는 쿼리 캐시만 비우고 이 화면을 언마운트하지 않는다(providers.tsx) — 그대로 두면
+  // 모달이 **A가 고른 그림**을 든 채 남고, 「적용」을 누르면 apiFetch가 **지금(B의) 토큰**으로
+  // 보내 A의 사진이 B의 아바타가 된다. close()가 진행 중이던 업로드도 함께 끊는다.
+  // 탈퇴 모달도 같이 닫는다 — A에게 하던 확인을 B의 이름으로 이어 가면 안 된다.
+  const owner = account.me?.id;
+  const closePhoto = photo.close;
+  const previousOwner = useRef(owner);
+  useEffect(() => {
+    if (owner === undefined || previousOwner.current === owner) return;
+    previousOwner.current = owner;
+    closePhoto();
+    setWithdrawOpen(false);
+  }, [owner, closePhoto]);
 
   const name = account.me?.name ?? '';
   const email = account.me?.email ?? '';
@@ -33,10 +55,12 @@ export function AccountSettingsScreen() {
       <ProfileCard
         name={name}
         email={email}
-        photoUrl={account.me?.profileImageUrl}
+        photoUrl={account.me?.profileImageUrl ?? undefined}
         draftName={account.draftName}
         dirty={account.dirty}
         editable={account.editable}
+        saving={account.saving}
+        nameError={account.nameError}
         onDraftNameChange={account.setDraftName}
         onSave={account.saveName}
         onEditPhoto={photo.open}
@@ -59,15 +83,15 @@ export function AccountSettingsScreen() {
 
       {/* 막힌 상태에서는 재확인 대신 이유를 보여 준다 — 두 모달이 동시에 뜨지 않는다 */}
       <WithdrawDialog
-        open={withdrawOpen && !account.blocked}
+        open={withdrawOpen && !mock.blocked}
         name={name}
-        facts={account.facts}
+        facts={mock.facts}
         onCancel={() => setWithdrawOpen(false)}
-        onConfirm={account.completeWithdraw}
+        onConfirm={mock.completeWithdraw}
       />
       <WithdrawBlockedDialog
-        open={withdrawOpen && account.blocked}
-        unpaidAmount={account.facts.unpaidAmount}
+        open={withdrawOpen && mock.blocked}
+        unpaidAmount={mock.facts.unpaidAmount}
         onClose={() => setWithdrawOpen(false)}
       />
 

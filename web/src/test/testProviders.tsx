@@ -29,3 +29,18 @@ export function renderWithProviders(ui: ReactElement) {
 export function withToastProvider({ children }: { children: ReactNode }) {
   return <ToastProvider>{children}</ToastProvider>;
 }
+
+/**
+ * 쿼리까지 쓰는 훅용 래퍼를 만든다 — 화면을 렌더하지 않고 훅만 시계에 걸 때 쓴다.
+ * 클라이언트를 밖에서 만들어 넘기는 이유: 래퍼 본문에서 만들면 **렌더마다 새 클라이언트**가
+ * 생겨 캐시가 통째로 날아가고, 테스트가 클라이언트를 들여다볼 수도 없다.
+ */
+export function makeQueryWrapper(queryClient: QueryClient) {
+  return function QueryWrapper({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>{children}</ToastProvider>
+      </QueryClientProvider>
+    );
+  };
+}
