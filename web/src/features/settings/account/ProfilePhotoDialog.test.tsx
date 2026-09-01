@@ -115,7 +115,7 @@ async function openCropReady() {
 }
 
 describe('ProfilePhotoDialog', () => {
-  it('① 선택 — 드롭존 안내와 기본 아바타 6종, 되돌릴 수 없음 고지가 함께 뜬다', async () => {
+  it('① 선택 — 드롭존 안내와 기본 아바타 6종이 함께 뜬다', async () => {
     await open();
 
     expect(dialog().getByText('1 / 3 · 사진 선택')).toBeInTheDocument();
@@ -124,12 +124,6 @@ describe('ProfilePhotoDialog', () => {
     ).toBeInTheDocument();
     expect(dialog().getByText('사진 대신 기본 아바타')).toBeInTheDocument();
     expect(dialog().getAllByRole('button', { name: /^기본 아바타 \d$/ })).toHaveLength(6);
-    // 서버가 올리는 순간 구글 사진 주소를 지우고 되돌리는 창구가 없다 — 누르기 전에 말한다
-    expect(
-      dialog().getByText(
-        '올린 사진은 구글 계정 사진 대신 쓰여요 · 구글 사진으로 되돌릴 수는 없어요',
-      ),
-    ).toBeInTheDocument();
   });
 
   it('② 5MB를 넘기면 모달을 닫지 않고 그 자리에서 알린다', async () => {

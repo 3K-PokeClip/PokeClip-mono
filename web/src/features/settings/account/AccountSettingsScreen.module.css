@@ -484,14 +484,6 @@
   color: var(--pc-color-text-muted);
 }
 
-/* 되돌릴 수 없는 결과의 고지 — 드롭존·기본 아바타 아래 한 줄 (시안 1p에 없던 문장) */
-.photoNotice {
-  font-size: calc(10.5 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-  line-height: 1.5;
-  margin: calc(10 * var(--pc-u)) 0 0;
-}
-
 .presetSwatches {
   margin-left: auto;
   display: flex;

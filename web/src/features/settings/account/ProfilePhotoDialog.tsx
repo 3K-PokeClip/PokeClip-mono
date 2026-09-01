@@ -147,12 +147,6 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
               <span className={styles.presetLabel}>사진 대신 기본 아바타</span>
               {presets}
             </div>
-            {/* 시안 1p에는 없는 문장이다 — 서버가 올리는 순간 구글 사진 주소를 지우고 되돌리는
-                창구가 없어(POK-207), 기본 아바타를 고르는 것도 구글 사진을 영구히 대체한다.
-                결과가 되돌릴 수 없으면 누르기 전에 말한다(ADR-044의 정신). */}
-            <p className={styles.photoNotice}>
-              올린 사진은 구글 계정 사진 대신 쓰여요 · 구글 사진으로 되돌릴 수는 없어요
-            </p>
           </div>
         )}
 
