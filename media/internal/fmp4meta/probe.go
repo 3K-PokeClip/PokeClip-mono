@@ -28,7 +28,7 @@ type DurationProbe func(path string) (durationMS int64, err error)
 // 이는 실측 확인된 동작이다 — 쓰는 중에 복사한 파일은 duration=0, 세그먼트가 닫힌 뒤에는
 // 실제 값이 기록된다. "0을 길이로 채택"하는 것보다 실패를 명시하는 편이 안전하다.
 func ProbeDurationMS(path string) (int64, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:forbidigo // 예외 2(m2) — ProbeT 워커 안에서만 실행된다. 열고·읽고·닫기가 워커 안에서 통째로 끝난다(.golangci.yml 머리 주석).
 	if err != nil {
 		return 0, fmt.Errorf("세그먼트 파일 열기 실패 %q: %w", path, err)
 	}

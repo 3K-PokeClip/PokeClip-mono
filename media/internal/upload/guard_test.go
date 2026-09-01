@@ -382,6 +382,7 @@ func TestEnqueueRollsBackInflightOnQueueFull(t *testing.T) {
 		o.QueueLen = 1
 	})
 	u.Start(context.Background())
+	u.ArmSweeper()
 	defer func() { close(block); u.Shutdown() }()
 
 	// 포화 상태를 결정적으로 만든다: 워커가 1건을 **실제로 꺼낸 것을 확인한 뒤** 큐를 채운다.

@@ -25,6 +25,18 @@ type SettleOptions struct {
 	SettleWait time.Duration
 	// MaxSettle 을 넘기면 포기하고 ErrSettleTimeout 을 돌려준다.
 	MaxSettle time.Duration
+	// Stat 은 stat 주입점이다(POK-168 M1 — 처리 FS 격리). 비어 있으면 os.Stat 를 쓴다.
+	// 채우는 소유자는 indexer.New 의 단일 생성점(newSettleOptions)뿐이며,
+	// 워처 호출점은 이 필드를 쓰지 않는다 — 미지정 = 현행 그대로(무변경).
+	Stat func(string) (os.FileInfo, error)
+}
+
+// stat 은 주입점이 비었을 때 os.Stat 로 되돌리는 접근자다.
+func (o SettleOptions) stat(path string) (os.FileInfo, error) {
+	if o.Stat != nil {
+		return o.Stat(path)
+	}
+	return os.Stat(path)
 }
 
 // DefaultSettleOptions 는 설계 2.1절의 기본값이다.
@@ -44,7 +56,7 @@ func DefaultSettleOptions() SettleOptions {
 // 단 mtime 나이가 음수(파일 mtime 이 미래 — 시계 스큐)면 즉시 반환하지 않고 폴링 경로를 탄다.
 // 미래 시각이면 나이 계산 자체를 믿을 수 없으므로 안전한 폴링으로 되돌린다.
 func Settle(ctx context.Context, path string, opt SettleOptions) (os.FileInfo, error) {
-	first, err := os.Stat(path)
+	first, err := opt.stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("세그먼트 stat 실패 %q: %w", path, err)
 	}
@@ -67,7 +79,7 @@ func Settle(ctx context.Context, path string, opt SettleOptions) (os.FileInfo, e
 		case <-ticker.C:
 		}
 
-		fi, err := os.Stat(path)
+		fi, err := opt.stat(path)
 		if err != nil {
 			return last, fmt.Errorf("세그먼트 stat 실패 %q: %w", path, err)
 		}
@@ -92,7 +104,7 @@ func settledImmediately(path string, first os.FileInfo, opt SettleOptions) (os.F
 	if age < 0 || age < opt.SettleWait {
 		return nil, false
 	}
-	second, err := os.Stat(path)
+	second, err := opt.stat(path)
 	if err != nil || second.Size() != first.Size() {
 		return nil, false
 	}

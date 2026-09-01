@@ -18,7 +18,6 @@ package indexer
 
 import (
 	"context"
-	"os"
 	"sort"
 	"time"
 
@@ -180,12 +179,22 @@ func (ix *Indexer) releaseBreak(streamID string, dec breakDecision) {
 func (ix *Indexer) HandleHook(ctx context.Context, ev mtxhook.Event) error {
 	switch ev.Kind {
 	case mtxhook.KindOffline:
+		// 세션 경계 훅(offline·online)은 FS 를 건드리지 않으므로 래치와 무관하게 처리한다.
+		// 트립 국면이라고 버리면 재접속 경계 메타데이터가 **영구 소실**된다 — 파일 재스캔은
+		// 훅 경계를 복원하지 못하고, 0.9초급 재접속은 drift tolerance 이내라
+		// is_discontinuity 까지 조용히 누락된다(cx 리뷰 차단 2).
 		ix.markOffline(ev)
 		return nil
 	case mtxhook.KindOnline:
 		ix.markOnline(ev)
 		return nil
 	case mtxhook.KindSegmentComplete:
+		// 래치 확인(m2 ⓒ)은 FS 를 타는 세그먼트 갈래에만 건다. 조기 반환은 nil 이다
+		// (에러면 loop 이 프로세스를 죽인다). 이 조각은 다음 수집이 회수한다.
+		if ix.fsLatch.Tripped() {
+			ix.log.Warn("fs_latch_early_return", "site", "hook", "stream_id", ev.StreamID)
+			return nil
+		}
 		return ix.handleHookSegment(ctx, ev)
 	default:
 		// zero value 가 정상 경로로 흘러든 것이다. Handle 의 H0 와 같은 사고 신호다.
@@ -291,7 +300,7 @@ func (ix *Indexer) handleHookSegment(ctx context.Context, ev mtxhook.Event) erro
 	// 파일이 밖으로 나가지 않는다. 파일을 실제로 내보내는 업로더(POK-30, 병합됨)는 os.Root
 	// 핸들로만 여므로(upload/worker.go 의 Root.Open) 루트 밖으로 풀리는 심링크는 그쪽 열기
 	// 단계에서 거부된다 — 여기서 한 번 더 풀 실익이 없다.
-	if _, statErr := os.Stat(seg.Path); statErr != nil {
+	if _, statErr := ix.statT(seg.Path, "hook_exists"); statErr != nil {
 		ix.log.Warn("hook_segment_missing",
 			"stream_id", seg.StreamID, "path", seg.Path, "err", statErr,
 			"note", "훅이 알린 파일이 없다. 파일 감시·재스캔이 안전망으로 남는다")

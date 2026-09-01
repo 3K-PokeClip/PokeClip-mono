@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -131,6 +132,13 @@ type Uploader struct {
 	sweepDone   chan struct{}
 	workerDone  chan struct{}
 
+	// armCh 는 스위퍼 arm 신호다(POK-168 M1 — Uploader 수명 계약 3).
+	// 스위퍼 goroutine 자체는 Start 가 띄우되(그래야 미arm Shutdown 의 sweepDone join 이
+	// 산다) 실제 스위프는 이 채널이 닫힌 뒤에만 시작한다. arm 판정의 소유자는 main loop 다 —
+	// 첫 완주 수집(ApplyCollect firstComplete)이 ArmSweeper 를 부른다.
+	armCh   chan struct{}
+	armOnce sync.Once
+
 	// sweepRound 는 스위프 회차 ID 다(1부터 단조 증가, 리셋 없음).
 	// 쓰기는 스위퍼 고루틴만, 읽기는 enqueue 의 OriginSweep 경로만 한다 —
 	// enqueue 를 부르는 것이 스위퍼 고루틴이므로 둘은 같은 고루틴이고 경합이 없다(D-3).
@@ -169,6 +177,7 @@ func newWithClock(st index.UploadStore, put Putter, opt Options, log *slog.Logge
 		brk:      newBreaker(opt, log, now),
 		queue:    make(chan job, opt.QueueLen),
 		results:  make(chan Result, opt.ResultBufLen),
+		armCh:    make(chan struct{}),
 		statFile: (*os.File).Stat,
 	}
 }
@@ -201,6 +210,17 @@ func (u *Uploader) Start(ctx context.Context) {
 	go u.sweeper(sweepCtx)
 
 	u.state.Store(int32(lifecycleStarted))
+}
+
+// ArmSweeper 는 스위퍼의 스위프 시작을 허가한다. 멱등이며 고루틴 안전하다(F-42).
+//
+// 부르는 쪽은 main loop 하나다 — 첫 완주 수집이 끝나면 커서 선점 위험이 사라지므로
+// 그때 연다. 폴백(Options.ArmFallback)은 스위퍼 자신이 계산한다.
+func (u *Uploader) ArmSweeper() {
+	if u.off {
+		return
+	}
+	u.armOnce.Do(func() { close(u.armCh) })
 }
 
 // OpenCircuit 은 기동 시 자격증명을 얻지 못했을 때처럼 밖에서 전역 차단을 거는 경로다.

@@ -152,6 +152,15 @@ jobs:
             exit 1
           fi
 
+      # m2(naked FS 금지 — POK-168 r15a·ADR-063) 강제 배선. 규칙 정본 = media/.golangci.yml.
+      # 강제 범위는 설계대로 indexer + fmp4meta 두 패키지다 — 경로 인자가 규칙의 일부다.
+      # 버전 고정 v2.13.2(2026-09-01 확인, go1.26 빌드): 도구 갱신은 규칙 변경과 같은 급으로 다룬다.
+      # go install은 위 setup-go 모듈 캐시를 타므로 2회차부터는 수 초다.
+      - name: golangci-lint (m2 — naked FS 금지)
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+          "$(go env GOPATH)/bin/golangci-lint" run ./internal/indexer/... ./internal/fmp4meta/...
+
       # kty Q2-B 승인(2026-08-17) — 티켓 문언 밖 추가분.
       - run: go vet ./...
 
