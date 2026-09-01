@@ -199,6 +199,9 @@ type Indexer struct {
 	// firstCollectDone 은 첫 완주 여부다 — ApplyCollect 의 firstComplete 반환이 한 번만
 	// 참이 되게 한다(스위퍼 arm 은 한 번이면 된다).
 	firstCollectDone bool
+	// handleCount 는 Handle 호출 누계다(f6n — 주기당 호출 수로 국면을 가른다).
+	// 단일 고루틴(D10)이라 원자 연산이 필요 없다.
+	handleCount int64
 
 	// pendingOffline 은 아직 짝지어지지 않은 offline 훅이다(스트림별 1건, 더 늦은 것만 유지).
 	pendingOffline map[string]sessionMark
@@ -335,6 +338,7 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 			"stream_id", seg.StreamID, "path", seg.Path)
 		return nil
 	}
+	ix.handleCount++ // f6n 국면 판별 재료 — 래치 조기 반환은 처리가 아니므로 세지 않는다
 
 	// H0. 사유 검증 — zero value 가 정상 경로로 흘러드는 것을 원천 차단한다.
 	if seg.Reason == recording.ReasonUnknown {

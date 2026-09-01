@@ -20,6 +20,10 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
+// reentryBacklogThreshold 는 f6n 의 phase 구분 임계다(주기당 Handle 호출 수).
+// 단언에 쓰지 않는다 — apply_normal/apply_backlog 라벨을 가르는 기록용 눈금일 뿐이다.
+const reentryBacklogThreshold = 32
+
 // collectResult 는 수집 워커가 돌려주는 것 전부다. 워커는 ix 의 맵을 만지지 않는다(D10) —
 // 거부 디렉토리 경고 재료까지 결과에 실어 ApplyCollect(단일 고루틴)가 처리한다.
 type collectResult struct {
@@ -75,6 +79,27 @@ func (ix *Indexer) CollectOverdue(k float64) bool {
 // 것(DB 재시도 소진·복구 불가 seq 충돌·ctx 취소)만 그대로 올린다.
 func (ix *Indexer) ApplyCollect(ctx context.Context, root string, res collectResult) (bool, error) {
 	ix.collectInflight = false // ①
+
+	// f6n — 처리 점유 계측(기록 전용 · 단언 없음). 지표는 case 처리 시간이며 대기 시간을
+	// 포함하지 않는다. phase 는 이 주기에 Handle 이 불린 횟수로 가른다: idle=0 /
+	// apply_normal ≤ 임계 / apply_backlog > 임계. 임계는 기록만 한다 — 처리 점유는
+	// 0 이 아니라 백로그에 비례하고, 상한을 약속하지 않는다(설계 6.5.3 ⓕ-ⓒ).
+	applyStart := time.Now()
+	handleBefore := ix.handleCount
+	defer func() {
+		handled := ix.handleCount - handleBefore
+		phase := "idle"
+		switch {
+		case handled == 0:
+		case handled <= reentryBacklogThreshold:
+			phase = "apply_normal"
+		default:
+			phase = "apply_backlog"
+		}
+		ix.log.Debug("loop_select_reentry_seconds", "phase", phase,
+			"seconds", time.Since(applyStart).Seconds(),
+			"handled", handled, "threshold", reentryBacklogThreshold)
+	}()
 
 	// ② 결과 신호 — 거부 경고(워커가 못 만진 ix 맵)와 실패·절단.
 	for dir, cause := range res.rejected {
