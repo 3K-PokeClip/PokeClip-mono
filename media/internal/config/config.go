@@ -207,6 +207,18 @@ func Load(env func(string) string) (Config, error) {
 	// 다르면 두 채널이 같은 물리 파일에 서로 다른 local_path 를 만들어 행이 둘 생긴다.
 	idx.SegmentRoot = watch.Root
 
+	// 처리 FS 격리(POK-168 M1 — ADR-063). 개별 FS 호출 상한과 수집 soft 예산.
+	if idx.FSOpTimeout, err = duration(env, "FS_OP_TIMEOUT", idx.FSOpTimeout); err != nil {
+		return Config{}, err
+	}
+	if idx.ScanCollectBudget, err = duration(env, "SCAN_COLLECT_BUDGET", idx.ScanCollectBudget); err != nil {
+		return Config{}, err
+	}
+	// 스위퍼 arm 폴백의 정본 산식(설계 11.3): max(2×RescanEvery, 2×ScanCollectBudget).
+	// 하한이 필요한 이유 — RescanEvery 는 설정값이라 30초로 낮추면 폴백 60초가 정상 첫
+	// 수집(예산 45초)이 끝나기도 전에 무조건 arm 을 돌려 원 상태를 기본 경로에서 재현한다.
+	up.ArmFallback = max(2*watch.RescanEvery, 2*idx.ScanCollectBudget)
+
 	return Config{
 		PGDSN:            dsn(user, password, host, port, dbName, sslMode),
 		SegmentRoot:      watch.Root,

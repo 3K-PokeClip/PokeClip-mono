@@ -62,6 +62,10 @@ const (
 	// defaultShutdownMarkGrace 는 PUT 취소 후 마킹 완주를 봐주는 시간이다.
 	// 4s + 2s = 최악 6초로 docker compose stop 기본 10초 안에 든다.
 	defaultShutdownMarkGrace = 2 * time.Second
+	// defaultArmFallback 은 스위퍼 arm 폴백이다(POK-168 M1). 정본 산식은
+	// max(2×RescanEvery, 2×ScanCollectBudget)이고 config 가 계산해 덮어쓴다 —
+	// 기본값 조합(5분·45초)에서 그 식의 값이 10분이라 여기 상수도 10분이다.
+	defaultArmFallback = 10 * time.Minute
 )
 
 // Options 는 업로더의 판단 기준이다. 앞의 셋은 env 로 열려 있고 나머지는 상수다.
@@ -92,6 +96,9 @@ type Options struct {
 	MarkTimeout        time.Duration
 	ShutdownGrace      time.Duration
 	ShutdownMarkGrace  time.Duration
+	// ArmFallback 은 첫 완주 수집 신호(ArmSweeper) 없이도 스위퍼를 여는 상한이다.
+	// 0 이하면 폴백 없이 arm 신호·종료만 기다린다(테스트용).
+	ArmFallback time.Duration
 }
 
 // DefaultOptions 는 설계 8절의 기본값이다.
@@ -119,5 +126,6 @@ func DefaultOptions(root *os.Root, segmentRoot string) Options {
 		MarkTimeout:        defaultMarkTimeout,
 		ShutdownGrace:      defaultShutdownGrace,
 		ShutdownMarkGrace:  defaultShutdownMarkGrace,
+		ArmFallback:        defaultArmFallback,
 	}
 }

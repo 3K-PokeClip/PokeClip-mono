@@ -16,6 +16,13 @@ import (
 func (u *Uploader) sweeper(ctx context.Context) {
 	defer close(u.sweepDone)
 
+	// arm 대기(POK-168 M1) — 첫 완주 수집 전에 스위프가 돌면 인덱서가 곧 요청할 행을
+	// 먼저 집어 in-flight 로 막는다(구 main.go:152-153 이 막던 원 상태). 미arm 상태의
+	// Shutdown 은 sweepCancel 이 이 대기를 깨워 안전하다(F-42).
+	if !u.waitArm(ctx) {
+		return
+	}
+
 	resume := index.SweepCursor{}
 	stalled := 0
 	ticker := time.NewTicker(u.opt.SweepEvery)
@@ -28,6 +35,33 @@ func (u *Uploader) sweeper(ctx context.Context) {
 		case <-ticker.C:
 			resume, stalled = u.sweepOnce(ctx, resume, stalled)
 		}
+	}
+}
+
+// waitArm 은 arm 신호·폴백 경과·종료 중 먼저 오는 것을 기다린다.
+// 반환 false = 종료(스위프 없이 sweepDone 을 닫는다).
+//
+// 폴백 하한의 근거(설계 11.3): RescanEvery 는 설정값이라 낮추면 폴백이 정상 첫 수집보다
+// 먼저 와 원 상태가 재현된다 — 그래서 config 가 max(2×RescanEvery, 2×수집예산)로 계산해
+// 넣는다. 폴백 경과 arm 은 무조건 arm + sweeper_arm_fallback WARN 이다(f6p ⓔ) —
+// 10분 넘게 첫 완주가 없다면 이미 더 큰 문제(FS 정지)고 scan_collect_stalled 가
+// 90초부터 그것을 말하고 있다.
+func (u *Uploader) waitArm(ctx context.Context) bool {
+	var fallback <-chan time.Time
+	if u.opt.ArmFallback > 0 {
+		t := time.NewTimer(u.opt.ArmFallback)
+		defer t.Stop()
+		fallback = t.C
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-u.armCh:
+		return true
+	case <-fallback:
+		u.log.Warn("sweeper_arm_fallback", "after", u.opt.ArmFallback,
+			"note", "첫 완주 수집 없이 폴백으로 arm 한다. 커서 미완이면 스위퍼가 행을 선점할 수 있다(성숙 판정은 IsTail 재검·TailGrace 가 담당)")
+		return true
 	}
 }
 

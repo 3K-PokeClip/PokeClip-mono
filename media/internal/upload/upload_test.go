@@ -37,6 +37,7 @@ func TestRequestUploadFlowsThroughWorkerToResult(t *testing.T) {
 	path := writeSegment(t, dir, "demo", "seg.mp4", 128)
 
 	u.Start(context.Background())
+	u.ArmSweeper()
 	defer u.Shutdown()
 
 	target := newTarget("demo", 7, path, 128, false)
@@ -85,6 +86,7 @@ func TestDisabledUploaderDoesNothing(t *testing.T) {
 	}
 	// 미기동 상태이므로 Start·Shutdown 둘 다 안전해야 한다.
 	u.Start(context.Background())
+	u.ArmSweeper()
 	u.Shutdown()
 	u.Shutdown()
 	if n := cap.count("uploader_disabled"); n != 1 {
@@ -120,6 +122,7 @@ func TestShutdownDropsQueuedJobsWithWarning(t *testing.T) {
 	}}
 	u, cap, dir := newTestUploader(t, &fakeUploadStore{}, put, nil)
 	u.Start(context.Background())
+	u.ArmSweeper()
 
 	// 첫 건이 워커를 붙잡는 사이 나머지가 큐에 쌓인다.
 	for seq := int64(0); seq < 4; seq++ {
@@ -149,6 +152,7 @@ func TestShutdownCancelsInFlightPut(t *testing.T) {
 	path := writeSegment(t, dir, "demo", "seg.mp4", 16)
 
 	u.Start(context.Background())
+	u.ArmSweeper()
 	if !u.RequestUpload(newTarget("demo", 1, path, 16, false)) {
 		t.Fatal("접수 실패")
 	}
@@ -184,6 +188,7 @@ func TestShutdownWakesRetryBackoffWait(t *testing.T) {
 	path := writeSegment(t, dir, "demo", "seg.mp4", 16)
 
 	u.Start(context.Background())
+	u.ArmSweeper()
 	if !u.RequestUpload(newTarget("demo", 1, path, 16, false)) {
 		t.Fatal("접수 실패")
 	}
@@ -211,6 +216,7 @@ func TestNoResultWhenMarkIsCancelled(t *testing.T) {
 	path := writeSegment(t, dir, "demo", "seg.mp4", 16)
 
 	u.Start(context.Background())
+	u.ArmSweeper()
 	if !u.RequestUpload(newTarget("demo", 1, path, 16, false)) {
 		t.Fatal("접수 실패")
 	}
@@ -238,6 +244,7 @@ func TestSweepRoundSerializesAsJSONInteger(t *testing.T) {
 	path := writeSegment(t, dir, "demo", "seg.mp4", 16)
 
 	u.Start(context.Background())
+	u.ArmSweeper()
 	u.sweepRound = 3 // 스위퍼 고루틴이 쓰는 필드. 여기서는 테스트가 대신 세팅한다
 	if got := u.enqueue(newTarget("demo", 1, path, 16, false), OriginSweep); got != EnqueueAdmitted {
 		t.Fatalf("enqueue = %v, want Admitted", got)
@@ -264,6 +271,7 @@ func TestLiveOriginCarriesZeroSweepRound(t *testing.T) {
 	path := writeSegment(t, dir, "demo", "seg.mp4", 16)
 
 	u.Start(context.Background())
+	u.ArmSweeper()
 	u.sweepRound = 9
 	if !u.RequestUpload(newTarget("demo", 1, path, 16, false)) {
 		t.Fatal("접수 실패")
@@ -284,6 +292,7 @@ func TestRequestUploadIsRejectedAfterShutdown(t *testing.T) {
 	target := newTarget("demo", 1, path, 16, false)
 
 	u.Start(context.Background())
+	u.ArmSweeper()
 	if !u.RequestUpload(target) {
 		t.Fatal("기동 중 접수가 거부됐다")
 	}
@@ -314,6 +323,7 @@ func TestRequestUploadReturnsFalseWhenQueueIsFull(t *testing.T) {
 	}}
 	u, _, dir := newTestUploader(t, &fakeUploadStore{}, put, func(o *Options) { o.QueueLen = 1 })
 	u.Start(context.Background())
+	u.ArmSweeper()
 	defer func() { close(block); u.Shutdown() }()
 
 	// 워커가 1건을 실제로 꺼낸 뒤 큐를 정확히 가득 채운다.

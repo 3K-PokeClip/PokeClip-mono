@@ -644,6 +644,7 @@ func TestWorkerLogsAdmissionRoundNotEmissionRound(t *testing.T) {
 	u := New(st, &fakePutter{}, opt, jsonLogger(&buf))
 
 	u.Start(context.Background())
+	u.ArmSweeper()
 	waitFor(t, func() bool { return countJSONLogs(t, buf.String(), "upload_file_missing") == rows },
 		"워커가 8건을 모두 처리할 때까지")
 	u.Shutdown()

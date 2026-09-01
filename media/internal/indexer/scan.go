@@ -20,28 +20,37 @@ import (
 //
 // TODO(C2): 지금은 매번 전체 walk 다. 트리거는 "recordings 파일 수 1만 초과"이며,
 // 그때는 mtime 증분 walk 로 바꾼다.
+// Scan 은 수집과 처리를 동기로 잇는 편의 경로다 — 프로덕션 loop 은 이것 대신
+// StartCollect/ApplyCollect(collect.go)를 쓴다(수집 대기 점유 0). 여기 남긴 이유는
+// "수집→처리" 의 의미론을 한 이름으로 재는 테스트들 때문이며, 두 경로가 같은
+// collectTree·scanStream 을 지나므로 판정이 갈리지 않는다.
 func (ix *Indexer) Scan(ctx context.Context, root string) error {
-	byStream, err := ix.collectTree(root)
-	if err != nil {
-		return err
-	}
-
-	for streamID, segs := range byStream {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := ix.scanStream(ctx, root, streamID, segs); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := ix.ApplyCollect(ctx, root, ix.collectTree(ctx, root))
+	return err
 }
 
-// collectTree 는 트리를 훑어 스트림별 세그먼트 목록을 만든다.
-func (ix *Indexer) collectTree(root string) (map[string][]recording.Segment, error) {
-	byStream := map[string][]recording.Segment{}
+// collectTree 는 트리를 훑어 스트림별 세그먼트 목록을 만든다. **수집 워커 고루틴에서 돈다** —
+// ix 의 맵을 만지면 안 되고(D10), 고루틴 안전한 로그만 허용된다. 거부 디렉토리 경고
+// 재료는 결과에 실어 ApplyCollect(단일 고루틴)가 warnedRejected 맵으로 처리한다.
+//
+// 예산(ScanCollectBudget)은 soft 다: 넘기면 truncated 로 표시하고 걷은 데까지 돌려준다 —
+// 부분 결과는 처리되고 다음 주기가 재개한다(f6j).
+func (ix *Indexer) collectTree(ctx context.Context, root string) collectResult {
+	res := collectResult{
+		byStream: map[string][]recording.Segment{},
+		rejected: map[string]error{},
+	}
+	start := time.Now()
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error { //nolint:forbidigo // 예외 1(m2) — 수집 워커 자신이 격리 단위다. 개별 호출에 5초 상한을 씌우면 45초 수집 예산 위에서 정상 수집이 매 주기 절단된다(.golangci.yml 머리 주석).
+		if cerr := ctx.Err(); cerr != nil {
+			// SIGTERM 등 부모 취소는 절단이 아니라 중단이다(f6j 대조군).
+			return cerr
+		}
+		if time.Since(start) > ix.opt.ScanCollectBudget {
+			res.truncated = true
+			return fs.SkipAll
+		}
 		if err != nil {
 			// 훑는 도중 사라진 파일 때문에 전체 스캔을 포기하지는 않는다.
 			ix.log.Warn("walk_entry_failed", "path", path, "err", err)
@@ -54,21 +63,19 @@ func (ix *Indexer) collectTree(root string) (map[string][]recording.Segment, err
 		if parseErr != nil {
 			if errors.Is(parseErr, recording.ErrInvalidStreamID) {
 				// 세그먼트 파일 모양이지만 스트림 이름이 화이트리스트를 통과하지 못했다.
-				// 조용히 버리면 원인을 알 수 없고, 매 스캔마다 경고하면 로그가 쏟아진다.
-				ix.warnRejectedStream(filepath.Dir(path), parseErr)
+				res.rejected[filepath.Dir(path)] = parseErr
 				return nil
 			}
 			// 세그먼트 파일이 아니다. 녹화 폴더에는 다른 파일이 섞일 수 있다.
 			ix.log.Debug("non_segment_file_skipped", "path", path, "err", parseErr)
 			return nil
 		}
-		byStream[seg.StreamID] = append(byStream[seg.StreamID], seg)
+		res.byStream[seg.StreamID] = append(res.byStream[seg.StreamID], seg)
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return byStream, nil
+	res.elapsed = time.Since(start)
+	res.err = err
+	return res
 }
 
 func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs []recording.Segment) error {

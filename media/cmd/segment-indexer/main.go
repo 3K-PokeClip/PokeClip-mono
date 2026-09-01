@@ -141,17 +141,18 @@ func run() error {
 		log.Info("hook_reader_started", "spool", cfg.HookSpoolPath, "poll", cfg.HookPollInterval)
 	}
 
-	// --- 3. 초기 스캔: 꺼져 있는 동안 쌓인 파일을 따라잡는다 ---
+	// --- 3. 업로더 기동 + 초기 수집 발사 ---
 	//
-	// 2번과 3번 사이에 생성된 파일이 walk 와 워처 FIFO 양쪽에 잡힐 수 있다.
-	// 이는 설계상 허용이며 H2(경로 중복 확인)와 DB UNIQUE 가 흡수한다.
-	if err := ix.Scan(ctx, cfg.SegmentRoot); err != nil {
-		return err
-	}
-
-	// 워커·스위퍼는 초기 Scan 뒤에 띄운다. Scan 이 커서를 채우기 전에 스위퍼가 돌면
-	// 인덱서가 곧 요청할 행을 먼저 집어 in-flight 로 막는다.
+	// 부수 효과 있는 컴포넌트의 시작은 미루지 않는다(ADR-063 결정 6): 업로더는 boot 에서
+	// 켠다 — 초기 수집이 hung FS 에 잡혀도 훅 유입 조각의 업로드 접수가 살아 있어야
+	// 한다(f6p). 구 코드가 "초기 Scan 뒤 Start"로 막던 스위퍼 선점은 이제 arm 대기가
+	// 막는다: 스위퍼는 첫 완주 수집(loop 의 armSweeper 호출) 또는 폴백 경과까지 안 돈다.
 	up.Start(ctx)
+
+	// 초기 수집은 발사만 한다 — 결과는 loop 의 CollectDone case 가 받는다(수집 대기 점유 0).
+	// 2번과 이 발사 사이에 생성된 파일이 walk 와 워처 FIFO 양쪽에 잡힐 수 있다.
+	// 이는 설계상 허용이며 H2(경로 중복 확인)와 DB UNIQUE 가 흡수한다.
+	ix.StartCollect(ctx, cfg.SegmentRoot)
 
 	log.Info("watching", "root", cfg.SegmentRoot,
 		"idle_timeout", cfg.Watcher.IdleTimeout, "rescan_every", cfg.Watcher.RescanEvery,
@@ -173,6 +174,7 @@ func run() error {
 		completed: w.Completed(), rescans: w.Rescans(),
 		hookEvents: hookEvents, hookDone: hookDone, hookErr: hookErr,
 		uploadResults: up.Results(), holdTicks: holdTicker.C,
+		armSweeper: up.ArmSweeper, stallFactor: collectStallFactor,
 	})
 	if loopErr != nil {
 		return loopErr
@@ -241,7 +243,17 @@ type loopDeps struct {
 	uploadResults <-chan upload.Result
 	// holdTicks 는 보류 중인 꼬리를 살펴보는 주기다. 티커의 소유자는 run 이다.
 	holdTicks <-chan time.Time
+
+	// armSweeper 는 첫 완주 수집에서 스위퍼를 여는 손잡이다(up.ArmSweeper).
+	// arm 판정의 소유자가 loop 인 이유: Indexer 는 업로더 생애주기를 모른다(원칙 4).
+	armSweeper func()
+	// stallFactor 는 scan_collect_stalled 판정 계수 k 다(경과 > ScanCollectBudget × k).
+	stallFactor float64
 }
+
+// collectStallFactor 는 수집 정지 판정 계수다. soft 예산 45초 × 2 = 90초 —
+// 예산 초과(절단으로 회복)와 진짜 정지(결과 자체가 없음)를 가르는 여유다.
+const collectStallFactor = 2.0
 
 // loop 은 종료·워처사망·완성세그먼트·재스캔요청·훅이벤트·훅사망·업로드결과·보류틱을
 // 한 곳에서 받아 차례로 처리한다.
@@ -274,9 +286,7 @@ func loop(ctx context.Context, d loopDeps) error {
 			}
 
 		case <-d.rescans:
-			if err := d.ix.Scan(ctx, d.root); err != nil {
-				return err
-			}
+			d.ix.StartCollect(ctx, d.root)
 
 		case ev, ok := <-d.hookEvents:
 			if !ok {
@@ -302,9 +312,19 @@ func loop(ctx context.Context, d loopDeps) error {
 			d.hookDone = nil
 
 		case <-ticker.C:
-			// 아무 일이 없어도 주기마다 전수 점검한다. 놓친 게 있으면 여기서 복구된다.
-			if err := d.ix.Scan(ctx, d.root); err != nil {
+			// 아무 일이 없어도 주기마다 전수 점검을 발사한다. 놓친 게 있으면 여기서 복구된다.
+			// 발사만 하고 결과는 CollectDone case 가 받는다 — 수집이 루프를 세우지 않는다.
+			d.ix.StartCollect(ctx, d.root)
+
+		// 수집 워커의 결과가 도착했다. 처리(스트림 루프)는 여기 — 즉 loop 고루틴에서 돈다(D10).
+		case res := <-d.ix.CollectDone():
+			first, err := d.ix.ApplyCollect(ctx, d.root, res)
+			if err != nil {
 				return err
+			}
+			if first {
+				// 첫 완주 — 커서가 채워졌으므로 스위퍼를 열어도 선점이 없다.
+				d.armSweeper()
 			}
 
 		// 업로드 판정을 커서에 반영한다. 비활성 업로더의 Results() 는 nil 이라
@@ -313,7 +333,12 @@ func loop(ctx context.Context, d loopDeps) error {
 			d.ix.ApplyUploadResult(res.StreamID, res.Seq, res.State)
 
 		// 보류 중인 꼬리를 살펴본다. 예산 안에서만 stat 한다.
+		// 수집 정지 판정을 겸행한다 — 결과가 안 온 채 예산 × k 를 넘기면 한 시도에 한 번 ERROR.
 		case <-d.holdTicks:
+			if d.ix.CollectOverdue(d.stallFactor) {
+				d.log.Error("scan_collect_stalled", "root", d.root, "factor", d.stallFactor,
+					"note", "수집 결과가 오지 않고 있다. FS 정지 의심 — 프로세스는 계속 돈다")
+			}
 			d.ix.ReleaseHeldTails()
 		}
 	}

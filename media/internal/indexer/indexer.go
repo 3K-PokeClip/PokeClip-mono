@@ -108,6 +108,9 @@ type Options struct {
 	// FSOpTimeout 은 개별 FS 호출(stat·프로브)의 워커 상한이다(m2 — 처리 FS 격리).
 	// 멈춘 파일시스템에서 D10 루프가 이 시간 이상 잡히지 않게 하는 값이다.
 	FSOpTimeout time.Duration
+	// ScanCollectBudget 은 전수 수집(collectTree)의 soft 예산이다. 넘기면 절단하고
+	// 걷은 데까지 처리한다 — 정지 판정(scan_collect_stalled)은 이 값 × k 로 holdTicks 가 한다.
+	ScanCollectBudget time.Duration
 }
 
 // DefaultOptions 는 설계 2.4절의 기본값이다.
@@ -131,6 +134,7 @@ func DefaultOptions() Options {
 		BreakGuard:         20 * time.Millisecond,
 		Settle:             recording.DefaultSettleOptions(),
 		FSOpTimeout:        fsop.DefaultOpTimeout,
+		ScanCollectBudget:  45 * time.Second,
 	}
 }
 
@@ -184,6 +188,18 @@ type Indexer struct {
 	// %path 가 곧 스트림 디렉토리 1레벨이고, name.go 의 화이트리스트가 슬래시를 허용하지 않아
 	// 중첩 %path 는 애초에 인덱싱되지 않는다(= 새 실패 모드가 아니라 범위 밖).
 
+	// --- 전수 수집 상태(collect.go). 채널만 워커와 공유하고 나머지는 loop 전용이다. ---
+
+	collectDoneCh chan collectResult
+	// collectInflight 는 단일 비행 표식이다. ApplyCollect 만 내린다(세대 토큰 불요의 근거).
+	collectInflight bool
+	collectStart    time.Time
+	// collectStalledWarned 는 "한 시도에 stalled 한 번" 규칙이다. StartCollect 가 리셋한다.
+	collectStalledWarned bool
+	// firstCollectDone 은 첫 완주 여부다 — ApplyCollect 의 firstComplete 반환이 한 번만
+	// 참이 되게 한다(스위퍼 arm 은 한 번이면 된다).
+	firstCollectDone bool
+
 	// pendingOffline 은 아직 짝지어지지 않은 offline 훅이다(스트림별 1건, 더 늦은 것만 유지).
 	pendingOffline map[string]sessionMark
 	// lastOnlineAt 은 스트림별 online watermark 다 — 이보다 이른 offline 은 stale 로 버린다.
@@ -205,6 +221,10 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 		// config 를 거치지 않는 호출자에게 그 조합은 자체 모순이다(TailGrace 와 같은 규칙).
 		opt.FSOpTimeout = fsop.DefaultOpTimeout
 	}
+	if opt.ScanCollectBudget <= 0 {
+		// 0 이면 첫 항목에서 즉시 절단돼 수집이 영구 공전한다 — 같은 규칙으로 보정한다.
+		opt.ScanCollectBudget = 45 * time.Second
+	}
 	ix := &Indexer{
 		store:           store,
 		probe:           probe,
@@ -225,6 +245,7 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 		pendingOffline:  map[string]sessionMark{},
 		lastOnlineAt:    map[string]time.Time{},
 		breaks:          map[string][]sessionBreak{},
+		collectDoneCh:   make(chan collectResult, 1),
 	}
 	ix.fsLatch = fsop.NewLatch(log)
 	ix.statFn = func(p string) (os.FileInfo, error) { return fsop.StatT(p, ix.opt.FSOpTimeout) }
