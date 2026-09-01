@@ -88,6 +88,8 @@ type Options struct {
 	HoldStatBudget int
 	// InsertRetryBase 는 지수 백오프의 첫 간격이다.
 	// 기본 2s + InsertRetryMax 5회 = 시도 사이 간격 2+4+8+16 = 정확히 30s(설계 2.4절 "총 ~30s").
+	// 락 경합(ErrLockContended) 재시도는 여기에 시도당 락 대기(lock_timeout 5s × store 층
+	// 최대 2회)가 얹혀 최악 ~80s 까지 늘 수 있다 — 유계이며 ctx 취소가 뚫는다(cc 리뷰 r5).
 	InsertRetryBase time.Duration
 	// IdleTimeout 은 워처와 같은 값을 쓴다. H4(유휴 커밋 전 mtime 재검)와
 	// Scan(d)(최신 파일 분기)의 판정 기준이다.
@@ -395,23 +397,8 @@ func (ix *Indexer) Handle(ctx context.Context, seg recording.Segment) error {
 	}
 
 	// H3. 늦은 세그먼트 검사(D12) — 지금 넣으면 seq 순서와 시간 순서가 어긋나 G8 이 깨진다.
-	if cur.Tail != nil && !seg.StartWall.After(cur.LastStartWall()) {
-		// 메모리 이력이 낡아서 오해한 것일 수 있으니 DB 에서 한 번 다시 읽어 확인한다.
-		fresh, reloadErr := ix.store.ExistingPaths(ctx, seg.StreamID)
-		if reloadErr != nil {
-			return reloadErr
-		}
-		ix.indexed[seg.StreamID] = fresh
-		if _, ok := fresh[seg.Path]; ok {
-			ix.log.Debug("duplicate_path_skipped", "stream_id", seg.StreamID, "path", seg.Path)
-			return nil
-		}
-		// 진짜 유실이다. 자동 복구는 없으므로(9절 L5) 사람이 보도록 크게 남긴다.
-		ix.log.Error("late_segment_skipped",
-			"stream_id", seg.StreamID, "path", seg.Path,
-			"seg_wall", seg.StartWall, "last_indexed_wall", cur.LastStartWall(),
-			"last_seq", cur.Tail.Seq)
-		return nil
+	if skip, h3Err := ix.lateOrDuplicate(ctx, cur, seg, "handle"); skip || h3Err != nil {
+		return h3Err
 	}
 
 	// H4. 유휴 커밋 전 mtime 재검(D13-예방) — 방금 전까지 쓰이고 있었다면 아직 녹화 중이다.
@@ -632,6 +619,32 @@ func (ix *Indexer) logSeed(seg recording.Segment, seq int64, res index.SeedResul
 	}
 }
 
+// lateOrDuplicate 는 H3(늦은 세그먼트 검사 — D12)의 판정 본문이다. 꼬리보다 늦지 않은
+// 조각을 "경로 중복(정상 멱등)"과 "진짜 유실"로 가른다 — 메모리 이력이 낡아 오해했을 수
+// 있으니 DB 를 한 번 다시 읽어 확인한 뒤, 유실이면 크게 남긴다(9절 L5: 자동 복구 없음).
+// Handle 의 H3 와 seq 충돌 재적재 후 재검(commit)이 이 본문을 공유한다 — 두 곳이
+// 갈라지면 "재검 = H3 와 동일" 불변식이 조용히 깨진다(cc 리뷰 r6 권고로 추출).
+// skip=true 면 이 조각 처리를 여기서 끝낸다(로그는 이미 남겼다). site 는 로그 속성이다.
+func (ix *Indexer) lateOrDuplicate(ctx context.Context, cur *index.Cursor, seg recording.Segment, site string) (bool, error) {
+	if cur.Tail == nil || seg.StartWall.After(cur.LastStartWall()) {
+		return false, nil
+	}
+	fresh, reloadErr := ix.store.ExistingPaths(ctx, seg.StreamID)
+	if reloadErr != nil {
+		return false, reloadErr
+	}
+	ix.indexed[seg.StreamID] = fresh
+	if _, ok := fresh[seg.Path]; ok {
+		ix.log.Debug("duplicate_path_skipped", "stream_id", seg.StreamID, "path", seg.Path)
+		return true, nil
+	}
+	ix.log.Error("late_segment_skipped",
+		"stream_id", seg.StreamID, "path", seg.Path,
+		"seg_wall", seg.StartWall, "last_indexed_wall", cur.LastStartWall(),
+		"last_seq", cur.Tail.Seq, "site", site)
+	return true, nil
+}
+
 // commit 은 H8(PTS·discontinuity)와 H9(INSERT)를 수행한다.
 func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size int64) error {
 	cur := ix.cursors[seg.StreamID]
@@ -656,8 +669,10 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 	if poisoned {
 		// 커서를 전진시키지 않는다. 이 세그먼트만 인덱스에 없는 채로 남는다.
 		//
-		// 무장도 해제하지 않는다 — 이것이 무장이 메모리에 잔존하는 **유일한** 경로다
-		// (재시도 소진은 err 반환 → 프로세스 종료 → 메모리 무장도 함께 소멸).
+		// 무장도 해제하지 않는다 — 무장이 메모리에 잔존하는 경로는 여기와 seq 충돌
+		// 재적재 후 H3 재검의 물러남 둘뿐이다(후자는 재적재된 꼬리가 이미 경계를
+		// 지났으므로 다음 Handle 진입부의 reconcileBreaks 가 회수한다. 재시도 소진은
+		// err 반환 → 프로세스 종료 → 메모리 무장도 함께 소멸).
 		// 다음 INSERT 조각은 "무장 이후 처음 장부에 오르는 조각"이므로 표시가 정당하며,
 		// 아예 미표시보다 늦은 표시가 낫다(오탐 방향이 안전하다).
 		return nil
@@ -677,24 +692,10 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 
 		// H3 재검(재적재 후) — 선점 행이 이 조각보다 늦은 벽시계면, 여기서 다음 seq 로
 		// 재작성하는 순간 seq 순서와 시간 순서가 어긋난다(G8 — cx 리뷰 r5 반증: Handle 의
-		// H3 는 낡은 커서로 판정했다). 처분은 H3 원문과 동일하다 — 경로 중복이면 정상
-		// 멱등, 아니면 크게 남기고 물러난다(9절 L5: 자동 복구 없음). 이 국면은 다른
-		// 쓰기자의 실재(D10 위반)이므로 조각 하나보다 인덱스 순서 불변식이 우선이다.
-		if cur.Tail != nil && !seg.StartWall.After(cur.LastStartWall()) {
-			fresh, freshErr := ix.store.ExistingPaths(ctx, seg.StreamID)
-			if freshErr != nil {
-				return freshErr
-			}
-			ix.indexed[seg.StreamID] = fresh
-			if _, ok := fresh[seg.Path]; ok {
-				ix.log.Debug("duplicate_path_skipped", "stream_id", seg.StreamID, "path", seg.Path)
-				return nil
-			}
-			ix.log.Error("late_segment_skipped",
-				"stream_id", seg.StreamID, "path", seg.Path,
-				"seg_wall", seg.StartWall, "last_indexed_wall", cur.LastStartWall(),
-				"last_seq", cur.Tail.Seq, "site", "seq_conflict_reload")
-			return nil
+		// H3 는 낡은 커서로 판정했다). 이 국면은 다른 쓰기자의 실재(D10 위반)이므로
+		// 조각 하나보다 인덱스 순서 불변식이 우선이다.
+		if skip, h3Err := ix.lateOrDuplicate(ctx, cur, seg, "seq_conflict_reload"); skip || h3Err != nil {
+			return h3Err
 		}
 
 		// dec 는 다시 계산하지 않는다. 재적재로 Tail 이 바뀌어도 "어느 경계를 소비할지"는
