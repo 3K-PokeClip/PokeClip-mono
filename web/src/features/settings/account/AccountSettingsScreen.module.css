@@ -676,6 +676,16 @@
   padding: calc(8 * var(--pc-u)) calc(18 * var(--pc-u)) calc(18 * var(--pc-u));
 }
 
+/* 업로드 실패 사유 — 버튼 줄의 왼쪽을 차지하고 버튼은 오른쪽에 그대로 붙는다 */
+.cropActionMessage {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: calc(11.5 * var(--pc-u));
+  line-height: 1.4;
+  color: var(--pc-color-danger);
+}
+
 /* ---------- 모션 (1p 「모션 · 복귀 규칙」) ---------- */
 
 /* ±6 → ±4 → ±2. 진폭을 줄여 가며 잦아든다 */

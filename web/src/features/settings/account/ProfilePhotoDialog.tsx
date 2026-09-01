@@ -202,13 +202,14 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
                   <span className={styles.uploadFile}>{photo.fileLabel}</span>
                 </div>
               )}
+            </div>
+            <div className={styles.cropActions}>
+              {/* 업로드 실패 사유는 버튼과 같은 줄 왼쪽에 — 재시도 버튼 바로 옆에서 읽힌다 */}
               {photo.uploadError !== null && (
-                <p role="alert" className={styles.cropError}>
+                <p role="alert" className={styles.cropActionMessage}>
                   {photo.uploadError}
                 </p>
               )}
-            </div>
-            <div className={styles.cropActions}>
               {/* 업로드 중의 취소는 요청을 끊고 자르던 자리로 돌아온다 — 모달을 닫지 않는다 */}
               <Button
                 variant="outline"
