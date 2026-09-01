@@ -28,6 +28,7 @@ export function PhotoCropStage({
   maskPx,
   onMaskPxChange,
   onStatusChange,
+  disabled = false,
 }: {
   src: string;
   transform: CropTransform;
@@ -37,6 +38,13 @@ export function PhotoCropStage({
   maskPx: number;
   onMaskPxChange: (px: number) => void;
   onStatusChange: (status: CropStatus) => void;
+  /**
+   * 업로드가 나가 있는 동안 조작을 잠근다. 서버로 가는 것은 「적용」을 누른 시점의 Blob이라,
+   * 그 사이 위치·확대를 바꾸면 **미리보기와 저장 결과가 갈린다** — 성공 토스트가 「바로 반영」이라
+   * 말하는데 걸리는 아바타는 마지막으로 본 것과 다르고, 「편집」으로 돌아오면 저장된 그림과
+   * 어긋난 자리에서 시작한다.
+   */
+  disabled?: boolean;
 }) {
   const [natural, setNatural] = useState({ width: 0, height: 0 });
   const maskRef = useRef<HTMLSpanElement>(null);
@@ -97,6 +105,7 @@ export function PhotoCropStage({
   }, [onMaskPxChange]);
 
   function handlePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (disabled) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     drag.current = { pointerX: e.clientX, pointerY: e.clientY, x: transform.x, y: transform.y };
   }
@@ -119,6 +128,7 @@ export function PhotoCropStage({
 
   /** 방향키로도 옮긴다 — 포인터 전용이면 키보드 사용자는 중앙 고정 크롭밖에 못 만든다. */
   function handleKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    if (disabled) return;
     const step = e.shiftKey ? 16 : 4; // Shift로 크게 — 큰 사진을 끝까지 옮기려면 필요하다
     const move: Record<string, [number, number]> = {
       ArrowLeft: [-step, 0],
@@ -138,7 +148,10 @@ export function PhotoCropStage({
         className={styles.cropStage}
         role="group"
         aria-label="사진 위치 조정 — 방향키로 옮기고 Shift를 누르면 크게 움직여요"
-        tabIndex={0}
+        // 잠긴 동안에는 탭 순서에서 뺀다 — 포커스만 받고 아무 키도 안 먹는 자리를 만들지 않는다
+        tabIndex={disabled ? -1 : 0}
+        aria-disabled={disabled || undefined}
+        data-disabled={disabled || undefined}
         onKeyDown={handleKeyDown}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -175,6 +188,7 @@ export function PhotoCropStage({
           className={styles.cropSlider}
           label="확대"
           value={transform.zoom}
+          disabled={disabled}
           onValueChange={(zoom) => commit({ ...transform, zoom })}
         />
         <Plus aria-hidden className={styles.cropZoomIcon} />
@@ -182,6 +196,7 @@ export function PhotoCropStage({
         <IconButton
           variant="ghost"
           size="sm"
+          disabled={disabled}
           aria-label="왼쪽으로 90도 회전"
           onClick={() => commit({ ...transform, rotation: transform.rotation - 90 })}
         >

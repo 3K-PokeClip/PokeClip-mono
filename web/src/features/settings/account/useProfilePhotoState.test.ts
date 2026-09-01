@@ -427,11 +427,12 @@ describe('useProfilePhotoState', () => {
     expect(deferred.upload).toHaveBeenCalledTimes(1);
   });
 
-  it('Blob으로 못 만드는 결과는 보내지 않고 그 자리에서 알린다 — 캔버스 폴백으로 원본이 그대로 온 경우', () => {
+  it('화면이 자르지 못했다고(null) 알리면 보내지 않고 그 자리에서 사유를 그린다', () => {
     const { result, upload } = setup();
     act(() => result.current.selectImage(DATA_URL));
 
-    act(() => result.current.apply('data:original'));
+    // cropToDataUrl이 캔버스를 못 잡았을 때 넘어오는 값이다 — 원본을 대신 보내지 않는다
+    act(() => result.current.apply(null));
 
     expect(upload).not.toHaveBeenCalled();
     expect(result.current.step).toBe('crop');

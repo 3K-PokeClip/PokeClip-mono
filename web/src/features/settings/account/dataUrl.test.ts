@@ -29,7 +29,7 @@ describe('dataUrlToBlob', () => {
   });
 
   it('base64가 아니거나 비어 있으면 null이다 — atob이 던지지 않는다', () => {
-    expect(dataUrlToBlob('data:original')).toBeNull(); // cropImage 테스트가 쓰는 가짜 주소
+    expect(dataUrlToBlob('data:original')).toBeNull(); // 형식·payload가 없는 주소
     expect(dataUrlToBlob('data:image/png;base64,')).toBeNull();
     expect(dataUrlToBlob('data:image/png;base64,A')).toBeNull(); // 길이 4k+1
     expect(dataUrlToBlob('data:image/png,plain')).toBeNull();

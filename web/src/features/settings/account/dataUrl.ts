@@ -20,12 +20,13 @@ export interface DataUrlBlob {
 }
 
 /**
- * base64 data URL만 받는다. 형식(mime)은 주소에서 읽는다 — cropToDataUrl은 캔버스를 못 쓰면
- * 원본 data URL을 그대로 돌려주므로(fallback), PNG로 단정하면 JPEG 바이트에 PNG 이름표를
- * 붙여 보내게 된다. 서버는 앞머리 바이트로 판정하니 속지는 않지만 우리 이름표가 거짓이 된다.
+ * base64 data URL만 받는다. **형식(mime)은 주소에서 읽는다** — 크롭 결과가 언제나 PNG라고
+ * 단정하면 다른 형식이 흘러들 때 거짓 이름표를 붙여 보내게 된다(서버는 앞머리 바이트로
+ * 판정하니 속지는 않지만, 우리 요청 로그가 거짓말을 한다).
  *
  * 형식이 안 맞거나 비어 있으면 `null` — atob이 던지게 두지 않는다. 호출부는 「이 사진은
- * 올릴 수 없어요」로 끊는다.
+ * 올릴 수 없어요」로 끊는다. 자르지 못한 경우는 여기까지 오지 않는다 — `cropToDataUrl`이
+ * 그 자리에서 `null`을 준다.
  */
 export function dataUrlToBlob(dataUrl: string): DataUrlBlob | null {
   const match = DATA_URL.exec(dataUrl);

@@ -35,8 +35,18 @@ describe('cropImage 배율', () => {
 describe('cropToDataUrl', () => {
   const img = (w: number, h: number) => ({ naturalWidth: w, naturalHeight: h }) as HTMLImageElement;
 
-  it('이미지 크기를 모르면 원본을 그대로 돌려준다', () => {
-    expect(cropToDataUrl(img(0, 0), INITIAL_CROP, 'data:original', MASK_PX)).toBe('data:original');
+  it('이미지 크기를 모르면 null이다 — 원본을 대신 돌려주지 않는다', () => {
+    // 원본을 폴백으로 주면 그 값이 정상 data URL이라 호출부의 어떤 검사에도 안 걸리고
+    // 잘리지 않은 채 업로드된다. 자르지 못한 것은 형으로 갈라 알린다.
+    expect(cropToDataUrl(img(0, 0), INITIAL_CROP, MASK_PX)).toBeNull();
+  });
+
+  it('캔버스를 잡지 못해도 null이다 — 실브라우저의 캔버스 한도·메모리 압박에서 나는 길이다', () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+
+    expect(cropToDataUrl(img(400, 400), INITIAL_CROP, MASK_PX)).toBeNull();
+
+    vi.restoreAllMocks();
   });
 
   it('마스크 안쪽을 정사각 512로 그린다 — 이동량도 같은 배율로 늘어난다', () => {
@@ -54,7 +64,6 @@ describe('cropToDataUrl', () => {
     const out = cropToDataUrl(
       img(MASK_PX, MASK_PX),
       { x: 10, y: -20, zoom: 0, rotation: -90 },
-      'data:original',
       MASK_PX,
     );
 
@@ -85,7 +94,7 @@ describe('cropToDataUrl', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:cropped');
 
     const wideMask = 234;
-    cropToDataUrl(img(400, 400), { x: 10, y: -20, zoom: 0, rotation: 0 }, 'data:o', wideMask);
+    cropToDataUrl(img(400, 400), { x: 10, y: -20, zoom: 0, rotation: 0 }, wideMask);
 
     const k = OUTPUT_PX / wideMask; // 176을 쓰면 k가 1.33배 커져 이동이 과장된다
     expect(ctx.translate).toHaveBeenCalledWith(OUTPUT_PX / 2 + 10 * k, OUTPUT_PX / 2 - 20 * k);

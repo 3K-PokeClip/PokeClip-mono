@@ -39,7 +39,11 @@ const STEP_LABEL: Record<Exclude<PhotoStep, 'idle'>, string> = {
   uploading: '3 / 3 · 업로드',
 };
 
-/** 크롭 결과를 Blob으로 못 만들 때 — 캔버스 폴백으로 원본이 그대로 왔거나 data URL이 아니다. */
+/**
+ * 보낼 그림을 만들지 못했을 때 — 캔버스를 못 잡아 `cropToDataUrl`이 `null`을 줬거나(브라우저의
+ * 캔버스 한도·메모리 압박), 만들어진 주소가 base64 data URL이 아니다. 어느 쪽이든 **자르지 못한
+ * 것을 대신 보내지 않는다** — 잘리지 않은 원본이 아바타로 굳는 것보다 여기서 끊는 편이 낫다.
+ */
 const UNSENDABLE_MESSAGE = '이 사진은 올릴 수 없어요 · 다른 사진을 골라 주세요';
 
 function megabytes(bytes: number): string {
@@ -106,8 +110,12 @@ export interface ProfilePhotoState {
   selectImage: (dataUrl: string) => void;
   /** 진행 중인 업로드를 끊고 자르던 자리로 돌아간다. */
   cancelUpload: () => void;
-  /** 잘라낸 결과를 확정한다 — 여기서 서버로 올라간다. 저장 시점은 「적용」 1회로 고정(시안). */
-  apply: (dataUrl: string) => void;
+  /**
+   * 잘라낸 결과를 확정한다 — 여기서 서버로 올라간다. 저장 시점은 「적용」 1회로 고정(시안).
+   * 화면이 자르지 못했으면(`cropToDataUrl`이 `null`) 그대로 `null`을 넘긴다 — 보낼 수 없다는
+   * 사유를 이 훅이 같은 자리에 그린다.
+   */
+  apply: (dataUrl: string | null) => void;
 }
 
 export function useProfilePhotoState({
@@ -297,9 +305,9 @@ export function useProfilePhotoState({
   }, [abortUpload]);
 
   const apply = useCallback(
-    (dataUrl: string) => {
+    (dataUrl: string | null) => {
       if (inflight.current !== null) return; // 업로드 중 재호출 — 두 번째 요청을 만들지 않는다
-      const converted = dataUrlToBlob(dataUrl);
+      const converted = dataUrl === null ? null : dataUrlToBlob(dataUrl);
       if (converted === null) {
         setUploadError(UNSENDABLE_MESSAGE);
         return;

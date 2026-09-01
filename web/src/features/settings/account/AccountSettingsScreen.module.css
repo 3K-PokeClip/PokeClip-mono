@@ -599,6 +599,11 @@
   touch-action: none;
 }
 
+/* 업로드가 나가 있는 동안 — 끌 수 없다는 것을 커서로 먼저 말한다 */
+.cropStage[data-disabled] {
+  cursor: default;
+}
+
 .cropImage {
   position: absolute;
   left: 50%;

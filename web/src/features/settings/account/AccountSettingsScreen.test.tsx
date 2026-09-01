@@ -65,6 +65,10 @@ function stubCanvas() {
   vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(
     'data:image/png;base64,PRESET',
   );
+  // jsdom은 이미지를 디코드하지 않아 naturalWidth가 0이다 — 그대로 두면 cropToDataUrl이
+  // 「자르지 못했다(null)」로 판정해 업로드가 아예 나가지 않는다.
+  vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(800);
+  vi.spyOn(HTMLImageElement.prototype, 'naturalHeight', 'get').mockReturnValue(600);
 }
 
 beforeEach(() => {
@@ -261,6 +265,50 @@ describe('AccountSettingsScreen — 표시 이름 저장', () => {
     expect(screen.getByRole('button', { name: '저장' })).toBeEnabled();
   });
 
+  it('왕복 중 입력을 고쳐 놓았으면 400 사유를 그 입력에 붙이지 않는다', async () => {
+    // 입력은 저장 중에도 잠기지 않는다(잠기는 것은 버튼뿐) — 고쳐 놓은 새 값은 아직 서버의
+    // 심판을 받지 않았으므로 옛 제출의 사유를 얹으면 멀쩡한 이름이 빨갛게 선다.
+    const user = userEvent.setup();
+    const held = heldResponse();
+    stubAccount(ME, () => held.promise);
+    await renderScreen();
+
+    await user.type(screen.getByLabelText('표시 이름'), '\t');
+    await user.click(screen.getByRole('button', { name: '저장' }));
+    await user.type(screen.getByLabelText('표시 이름'), '2'); // 응답 전에 고친다
+
+    held.release(jsonResponse(400, { reason: 'NAME_INVALID_CHARACTER' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '저장' })).not.toHaveAttribute('aria-busy'),
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByLabelText('표시 이름')).not.toHaveAttribute('aria-invalid');
+    // 저장 버튼이 살아 있는 것이 「아직 저장 안 됨」의 신호다 — 다시 누르면 새 판정을 받는다
+    expect(screen.getByRole('button', { name: '저장' })).toBeEnabled();
+  });
+
+  it('로그아웃으로 캐시를 비운 뒤 도착한 응답은 캐시를 되살리지 않는다', async () => {
+    // queryClient.clear()는 진행 중 뮤테이션을 끊지 않는다 — 늦게 온 응답이 항목을 다시 만들면
+    // 그 사이 다른 계정이 로그인했을 때 이전 계정의 이름·사진이 신선한 값으로 걸린다.
+    const user = userEvent.setup();
+    const held = heldResponse();
+    stubAccount(ME, () => held.promise);
+    const { queryClient } = await renderScreen();
+
+    await user.type(screen.getByLabelText('표시 이름'), '2');
+    await user.click(screen.getByRole('button', { name: '저장' }));
+    // 응답을 기다리는 사이 로그아웃 — useLogout이 하는 그대로(토큰을 비우고 캐시를 지운다).
+    // 토큰까지 비워야 useMe가 멈춘다: 캐시만 지우면 살아 있는 관찰자가 곧바로 다시 조회한다.
+    useAuthStore.setState({ accessToken: null, refreshToken: null });
+    queryClient.clear();
+
+    held.release(jsonResponse(200, { ...ME, name: '게임하는너구리2' }));
+
+    await screen.findByText('표시 이름을 변경했습니다');
+    expect(queryClient.getQueryData<Me>(ME_KEY)).toBeUndefined();
+  });
+
   it('입력 탓이 아닌 실패는 토스트로 알리고 입력은 그대로 둔다', async () => {
     const user = userEvent.setup();
     stubAccount(ME, () => jsonResponse(503, { message: '점검 중' }));
@@ -327,6 +375,29 @@ describe('AccountSettingsScreen — 프로필 사진', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(queryClient.getQueryData<Me>(ME_KEY)?.profileImageUrl).toBe(ME.profileImageUrl);
     expect(screen.queryByText('프로필 사진을 변경했습니다')).toBeNull();
+  });
+
+  it('사진 응답은 사진 칸만 얹는다 — 그 사이 저장된 이름을 되돌리지 않는다', async () => {
+    // 두 창구 모두 전체 Me 스냅샷을 준다. 통째로 덮으면 나중에 도착한 쪽이 상대의 변경을
+    // 캐시에서 되돌린다 — 서버에는 둘 다 반영돼 있는데도.
+    stubCanvas();
+    const user = userEvent.setup();
+    stubAccount(ME, (url, init) =>
+      url === '/api/auth/me/photo' && init?.method === 'PUT'
+        ? // 사진 응답은 이름 저장 전의 스냅샷을 담고 있다
+          jsonResponse(200, { ...ME, name: '옛 이름', profileImageUrl: NEW_URL })
+        : jsonResponse(404),
+    );
+    const { queryClient } = await renderScreen();
+    queryClient.setQueryData<Me>(ME_KEY, { ...ME, name: '새로 저장한 이름' });
+
+    const dialog = await openPhotoCrop(user);
+    await user.click(dialog.getByRole('button', { name: '적용' }));
+
+    expect(await screen.findByText('프로필 사진을 변경했습니다')).toBeInTheDocument();
+    const cached = queryClient.getQueryData<Me>(ME_KEY);
+    expect(cached?.profileImageUrl).toBe(NEW_URL);
+    expect(cached?.name).toBe('새로 저장한 이름'); // 되돌아가지 않는다
   });
 
   it('업로드 중 취소하면 me를 다시 읽는다 — 서버는 창고에 먼저 쓰므로 이미 올라갔을 수 있다', async () => {

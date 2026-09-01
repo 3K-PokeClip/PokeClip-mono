@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { meQueryOptions, type Me } from '@/api/auth';
 import {
@@ -59,6 +59,28 @@ export function useAccountState(): AccountViewState {
   // 끝에 공백만 붙여도 저장이 풀리고, 눌러도 값은 그대로인데 「변경했습니다」가 뜬다.
   const normalizedName = normalizeDisplayName(draftName);
   const tooLong = displayNameTooLong(normalizedName);
+  // 뮤테이션 콜백은 mutate() 시점의 옵션을 붙들고 돌아 클로저의 draftName이 낡는다 —
+  // 응답이 왔을 때의 입력값을 봐야 하는 자리(onError)를 위해 최신 값을 ref로 든다.
+  const normalizedNameRef = useRef(normalizedName);
+  normalizedNameRef.current = normalizedName;
+
+  /**
+   * me 캐시에 **이 창구가 소유한 필드만** 얹는다. 응답 전체로 덮지 않는 이유가 둘이다.
+   *
+   * ① 이름·사진 요청이 겹치면 각 응답이 상대가 바꾸기 전의 스냅샷을 담고 있어, 나중에 도착한
+   *    쪽이 상대의 변경을 캐시에서 되돌린다 — 서버에는 둘 다 반영돼 있는데도.
+   * ② `prev`가 없으면 아무것도 쓰지 않는다. `queryClient.clear()`(로그아웃·계정 교체)는 진행 중
+   *    뮤테이션을 끊지 않아 늦게 온 응답이 비운 캐시를 **되살린다** — 그 사이 다른 계정이
+   *    로그인했다면 그 화면에 이전 계정의 이름·사진이 신선한 값으로 걸린다.
+   */
+  const patchMe = useCallback(
+    (patch: Partial<Me>) => {
+      queryClient.setQueryData<Me>(meQueryOptions.queryKey, (prev) =>
+        prev === undefined ? prev : { ...prev, ...patch },
+      );
+    },
+    [queryClient],
+  );
 
   const save = useMutation({
     mutationFn: updateDisplayName,
@@ -68,18 +90,24 @@ export function useAccountState(): AccountViewState {
       await queryClient.cancelQueries({ queryKey: meQueryOptions.queryKey });
     },
     onSuccess: (next, submitted) => {
-      queryClient.setQueryData<Me>(meQueryOptions.queryKey, next);
+      patchMe({ name: next.name });
       // 왕복 중 더 친 입력은 살린다 — 제출한 값 그대로일 때만 me를 다시 따라가게 되돌린다.
       setTyped((cur) => (cur !== null && normalizeDisplayName(cur) === submitted ? null : cur));
       toast({ tone: 'success', title: '표시 이름을 변경했습니다' });
     },
-    onError: (e) => {
+    onError: (e, submitted) => {
       // 입력을 고쳐 풀 수 있는 실패(400)는 입력 아래에 그린다 — 폼 오류는 폼이 갖는다(ADR-044).
       const message = displayNameFailureMessage(e);
       if (message !== null) {
-        setServerNameError(message);
+        // 🔴 제출한 값이 아직 입력에 그대로 있을 때만 붙인다. 입력은 왕복 중에도 잠기지 않으므로
+        // (잠기는 것은 버튼뿐) 사용자가 그 사이 고쳐 놓았을 수 있는데, 그 새 값은 아직 서버의
+        // 심판을 받지 않았다 — 거기에 옛 제출의 사유를 붙이면 멀쩡한 이름이 빨갛게 선다.
+        // onSuccess의 setTyped 가드와 같은 경쟁이다. 어긋나면 조용히 버린다: 저장 버튼이
+        // 살아 있는 것(dirty)이 「아직 저장 안 됨」의 신호라 다시 누르면 새 판정을 받는다.
+        if (normalizedNameRef.current === submitted) setServerNameError(message);
         return;
       }
+      // 입력 탓이 아닌 실패는 지금 입력이 무엇이든 「저장이 실패했다」가 참이라 그대로 알린다.
       toast({
         tone: 'error',
         title: '표시 이름을 저장하지 못했어요',
@@ -107,13 +135,26 @@ export function useAccountState(): AccountViewState {
     async (blob: Blob, filename: string, signal: AbortSignal) => {
       await queryClient.cancelQueries({ queryKey: meQueryOptions.queryKey });
       const next = await uploadProfilePhoto(blob, filename, signal);
-      queryClient.setQueryData<Me>(meQueryOptions.queryKey, next);
+      patchMe({ profileImageUrl: next.profileImageUrl });
     },
-    [queryClient],
+    [queryClient, patchMe],
   );
 
   const refetchMe = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: meQueryOptions.queryKey });
+    // 🔴 이 조회는 진실을 보장하지 못한다. 취소는 서버를 멈추지 못하고(창고 먼저·표 나중),
+    // 우리가 응답을 버렸으므로 서버가 커밋했는지 알 길이 없다 — 이 GET이 커밋을 앞지르면
+    // **옛 사진을 신선한 값으로** 붙들게 된다.
+    //
+    // 그래서 읽은 뒤 곧바로 낡음 표시를 남긴다: 다음 포커스·마운트가 staleTime 60초를
+    // 기다리지 않고 한 번 더 확인한다. 여기서 보장하는 것은 「맞춘다」가 아니라
+    // 「틀린 값을 오래 붙들지 않는다」까지다. refetchType:'none'이라 이 표시가 다시
+    // 조회를 부르지 않는다 — 순환이 생기지 않는다.
+    void queryClient.invalidateQueries({ queryKey: meQueryOptions.queryKey }).then(() =>
+      queryClient.invalidateQueries({
+        queryKey: meQueryOptions.queryKey,
+        refetchType: 'none',
+      }),
+    );
   }, [queryClient]);
 
   return {

@@ -92,6 +92,11 @@ beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue(
     'data:image/png;base64,PRESET',
   );
+  // jsdom은 이미지를 디코드하지 않아 naturalWidth가 0이다 — 그대로 두면 cropToDataUrl이
+  // 「자르지 못했다(null)」로 판정해 업로드 경로가 통째로 죽는다. 치수만 흉내 낸다.
+  // `complete`는 건드리지 않는다: 디코드 대기(적용 잠금) 케이스가 그 기본값에 걸려 있다.
+  vi.spyOn(HTMLImageElement.prototype, 'naturalWidth', 'get').mockReturnValue(800);
+  vi.spyOn(HTMLImageElement.prototype, 'naturalHeight', 'get').mockReturnValue(600);
 });
 
 afterEach(() => {
@@ -228,6 +233,44 @@ describe('ProfilePhotoDialog', () => {
 
     held.resolve();
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('업로드 중에는 크롭 조작이 잠긴다 — 미리보기가 이미 보낸 Blob과 갈리지 않게', async () => {
+    const held = holdUpload();
+    const { user } = await openCropReady();
+    const before = dialog().getByRole('slider', { name: '확대' }).getAttribute('aria-valuenow');
+
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+
+    // 서버로 가는 것은 클릭 시점의 Blob이다 — 그 사이 위치·확대를 바꾸면 저장 결과와 갈린다
+    // (DS Slider는 네이티브 input이 아니라 aria-disabled로 잠금을 알린다)
+    const slider = dialog().getByRole('slider', { name: '확대' });
+    expect(slider).toHaveAttribute('aria-disabled', 'true');
+    expect(slider).toHaveAttribute('tabindex', '-1');
+    expect(dialog().getByRole('button', { name: '왼쪽으로 90도 회전' })).toBeDisabled();
+    const stage = dialog().getByRole('group', { name: /사진 위치 조정/ });
+    expect(stage).toHaveAttribute('aria-disabled', 'true');
+    expect(stage).toHaveAttribute('tabindex', '-1');
+
+    // 방향키도 먹지 않는다
+    fireEvent.keyDown(stage, { key: 'ArrowRight' });
+    expect(dialog().getByRole('slider', { name: '확대' })).toHaveAttribute('aria-valuenow', before);
+
+    held.resolve();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('자르지 못하면 보내지 않고 그 자리에서 알린다 — 잘리지 않은 원본을 대신 올리지 않는다', async () => {
+    // 실브라우저의 캔버스 한도·메모리 압박에서 getContext가 null을 준다. 예전에는 원본을
+    // 폴백으로 돌려줘 잘리지 않은 최대 5MB가 그대로 올라갔다.
+    const { user } = await openCropReady();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+
+    await user.click(dialog().getByRole('button', { name: '적용' }));
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(dialog().getByRole('alert')).toHaveTextContent('이 사진은 올릴 수 없어요');
+    expect(dialog().getByText('2 / 3 · 크롭')).toBeInTheDocument();
   });
 
   it('업로드 실패는 크롭 화면에 남아 사유를 알린다 — 자르던 자리가 그대로라 곧장 다시 적용할 수 있다', async () => {

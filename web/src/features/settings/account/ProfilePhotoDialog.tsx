@@ -24,9 +24,9 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
   // 크롭 스테이지가 재서 알려 주는 마스크의 실제 지름. 미리보기와 내보내기가 같은 값을
   // 써야 보이는 대로 잘린다 — 시안 기준값(176)은 재기 전까지의 대비값일 뿐이다.
   const [maskPx, setMaskPx] = useState(MASK_PX);
-  // 원본이 디코드되기 전에는 잘라낼 수 없다 — 그 상태로 「적용」하면 cropImage가 원본을
-  // 그대로 돌려줘(잘리지 않은 사진) 올라가고, 디코드 자체가 안 되는 파일이면 아바타가
-  // 깨진 채 토스트만 「변경했습니다」라고 말한다.
+  // 원본이 디코드되기 전에는 잘라낼 수 없다 — 그 상태로 「적용」하면 cropImage가 치수를 몰라
+  // null을 주고, 사용자는 이유 없이 「올릴 수 없어요」만 본다. 디코드 자체가 안 되는 파일이면
+  // 그 사실을 error로 따로 알린다.
   const [cropStatus, setCropStatus] = useState<CropStatus>('loading');
   // 드래그 중에는 :hover가 서지 않는다 — 파일을 끌어오는 내내 브라우저가 hover를
   // 주지 않아 CSS만으로는 「여기 놓으면 된다」를 보여 줄 수 없다. 직접 든다.
@@ -81,9 +81,10 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
 
   function applyCrop() {
     const img = imgRef.current;
-    const source = photo.imageSrc;
-    if (photo.uploading || img === null || source === null || cropStatus !== 'ready') return;
-    photo.apply(cropToDataUrl(img, transform, source, maskPx));
+    if (photo.uploading || img === null || photo.imageSrc === null || cropStatus !== 'ready')
+      return;
+    // 자르지 못했으면 null이 그대로 넘어가 「올릴 수 없어요」로 끊긴다 — 원본을 대신 보내지 않는다
+    photo.apply(cropToDataUrl(img, transform, maskPx));
   }
 
   const presets = (
@@ -179,6 +180,8 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
         {(photo.step === 'crop' || photo.step === 'uploading') && photo.imageSrc !== null && (
           <>
             <div className={styles.cropBody}>
+              {/* 업로드 중에는 조작을 잠근다 — 서버로 가는 것은 「적용」을 누른 시점의 Blob이라,
+                  그 사이 위치·확대를 바꾸면 미리보기와 저장 결과가 갈린다 */}
               <PhotoCropStage
                 src={photo.imageSrc}
                 transform={transform}
@@ -187,6 +190,7 @@ export function ProfilePhotoDialog({ photo, glyph }: { photo: ProfilePhotoState;
                 maskPx={maskPx}
                 onMaskPxChange={setMaskPx}
                 onStatusChange={setCropStatus}
+                disabled={photo.uploading}
               />
               {cropStatus === 'error' && (
                 <p role="alert" className={styles.cropError}>
