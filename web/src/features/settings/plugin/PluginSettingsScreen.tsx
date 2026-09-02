@@ -20,7 +20,7 @@ export function PluginSettingsScreen() {
     useStreamKeyState();
 
   return (
-    <div className={styles.screen}>
+    <div>
       <SettingsPageHeader
         title="플러그인"
         description="OBS 플러그인이 방송 송출과 하이라이트 감지 신호를 PokeClip 서버로 보냅니다"

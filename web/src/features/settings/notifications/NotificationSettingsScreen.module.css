@@ -1,15 +1,14 @@
 /* 디자인 1n 설정 · 알림 — 카드 2개, 각 카드가 「이름 / 인앱 / 이메일」 3열 격자다. */
 
-.screen {
-  max-width: calc(860 * var(--pc-u));
-}
-
 /* 시안의 제목-카드 간격은 20u인데 SettingsPageHeader가 자체로 4u를 든다 */
 .header {
   margin-bottom: calc(16 * var(--pc-u));
 }
 
+/* 본문 폭은 가두지 않되(사이드바 화면 공통 규칙, docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」) 카드는
+   시안 폭을 지킨다 — 「1fr 84u 84u」 격자라 전폭으로 늘면 이름 열만 비고 스위치가 멀어진다 */
 .card {
+  max-width: calc(860 * var(--pc-u));
   border: 1px solid var(--pc-color-border-subtle);
   border-radius: calc(14 * var(--pc-u));
   background: var(--pc-color-bg-surface);

@@ -1,7 +1,8 @@
 /* 디자인 1f 방송 · 지난 방송 목록 */
 
 .container {
-  padding: calc(30 * var(--pc-u)) calc(32 * var(--pc-u)) calc(96 * var(--pc-u));
+  /* 본문 패딩은 사이드바 화면 공용 토큰 (app/shell.css) — 설정 그룹과 h1의 x 좌표가 같아야 한다 */
+  padding: var(--pc-shell-body-pad-top) var(--pc-shell-body-pad-x) var(--pc-shell-body-pad-bottom);
   display: flex;
   flex-direction: column;
 }

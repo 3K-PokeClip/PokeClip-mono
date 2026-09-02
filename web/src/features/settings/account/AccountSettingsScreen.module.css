@@ -1,9 +1,17 @@
 /* 디자인 1p 설정 · 계정 */
 
+/* 폭을 가두지 않는다 — 사이드바 화면 공통 규칙(docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」).
+   읽기 폭(1p의 720u)은 화면이 아니라 아래 카드·탈퇴 행이 갖는다. */
 .screen {
-  max-width: calc(720 * var(--pc-u));
   display: flex;
   flex-direction: column;
+}
+
+/* 2열 폼(.fieldGrid)이 전폭으로 늘면 입력 하나가 800u를 넘는다 — 카드 단위로 시안 폭을 지킨다.
+   탈퇴 행은 구분선(border-top)이 카드와 같은 오른쪽 끝에서 끝나야 해서 함께 묶는다. */
+.card,
+.withdrawRow {
+  max-width: calc(720 * var(--pc-u));
 }
 
 /* ---------- 카드 공통 (1p 프로필 · 로그인) ---------- */

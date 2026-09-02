@@ -1,6 +1,9 @@
 import { useEffect, type ReactNode } from 'react';
 import type { Decorator, Preview } from '@storybook/react-vite';
 import '../src/ui/styles/global.css';
+// 앱 셸 토큰(--pc-shell-u · --pc-shell-body-pad-*)은 DS 밖 app/shell.css에 있다 — 여기서 함께 싣지 않으면
+// 사이드바·독·사이드바 화면 스토리의 치수·패딩이 통째로 무효(0)가 된다.
+import '../src/app/shell.css';
 
 function ThemeApplier({ theme, children }: { theme: 'light' | 'dark'; children: ReactNode }) {
   useEffect(() => {

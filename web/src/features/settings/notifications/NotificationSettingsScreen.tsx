@@ -57,7 +57,7 @@ export function NotificationSettingsScreen() {
     setToggles((prev) => ({ ...prev, inapp: { ...prev.inapp, [key]: next } }));
 
   return (
-    <div className={styles.screen}>
+    <div>
       {/* 시안 1n의 제목-카드 간격 20u — 헤더가 자체로 4u를 갖는다 */}
       <div className={styles.header}>
         <SettingsPageHeader title="알림 설정" />

@@ -1,9 +1,8 @@
-.screen {
-  max-width: calc(860 * var(--pc-u));
-}
-
-/* 디자인 1m은 블록 사이 간격이 일정하다 — 각 블록에 margin을 두지 않고 여기서 한 번에 준다 */
+/* 디자인 1m은 블록 사이 간격이 일정하다 — 각 블록에 margin을 두지 않고 여기서 한 번에 준다.
+   본문 폭은 가두지 않되(사이드바 화면 공통 규칙, docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」) 설명문
+   위주 블록 셋이 같은 오른쪽 끝을 공유해야 하므로 시안 폭 860u는 개별 카드가 아니라 이 묶음이 갖는다 */
 .stack {
+  max-width: calc(860 * var(--pc-u));
   display: flex;
   flex-direction: column;
   gap: calc(12 * var(--pc-u));
