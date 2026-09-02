@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
@@ -56,11 +57,8 @@ func TestDecideSplitsWhenRoundedDurationExceedsTargetDuration(t *testing.T) {
 		Op:           OpenOrCurrent,
 	}
 
-	d, err := r.decide(live, in, wall.Add(time.Minute))
+	d := r.decide(live, in, wall.Add(time.Minute))
 
-	if err != nil {
-		t.Fatalf("결정 실패: %v", err)
-	}
 	if d.Outcome != OutcomeOpenFresh {
 		t.Errorf("갈래 = %v, 기대 = %v", d.Outcome, OutcomeOpenFresh)
 	}
@@ -83,11 +81,8 @@ func TestDecideAttributesToCurrentSessionWhenRoundedDurationFitsTargetDuration(t
 		Op:           OpenOrCurrent,
 	}
 
-	d, err := r.decide(live, in, wall.Add(time.Minute))
+	d := r.decide(live, in, wall.Add(time.Minute))
 
-	if err != nil {
-		t.Fatalf("결정 실패: %v", err)
-	}
 	if d.Outcome != OutcomeCurrent {
 		t.Errorf("갈래 = %v, 기대 = %v", d.Outcome, OutcomeCurrent)
 	}
@@ -120,11 +115,8 @@ func TestDecideRejectsAttributionBelowSessionFloor(t *testing.T) {
 				Op:           OpenOrCurrent,
 			}
 
-			d, err := r.decide(live, in, wall)
+			d := r.decide(live, in, wall)
 
-			if err != nil {
-				t.Fatalf("결정 실패: %v", err)
-			}
 			if d.Outcome != tc.want {
 				t.Errorf("갈래 = %v, 기대 = %v", d.Outcome, tc.want)
 			}
@@ -143,11 +135,8 @@ func TestDecideOpensWhenNoLiveSessionForOpenOrCurrent(t *testing.T) {
 	r, sig := newTestRegistry(time.Second, 30*time.Second)
 	in := Input{StreamID: "demo", Seq: 1, StartWallUTC: wall, DurationMS: 4000, Op: OpenOrCurrent}
 
-	d, err := r.decide(nil, in, wall)
+	d := r.decide(nil, in, wall)
 
-	if err != nil {
-		t.Fatalf("결정 실패: %v", err)
-	}
 	if d.Outcome != OutcomeOpen {
 		t.Errorf("갈래 = %v, 기대 = %v (live 부재면 TD 판정이 성립하지 않고 개시로 간다)", d.Outcome, OutcomeOpen)
 	}
@@ -161,11 +150,8 @@ func TestDecideLeavesSessionUnsetWhenCurrentOnlyAndNoLiveSession(t *testing.T) {
 	r, sig := newTestRegistry(time.Second, 30*time.Second)
 	in := Input{StreamID: "demo", Seq: 1, StartWallUTC: wall, DurationMS: 4000, Op: CurrentOnly}
 
-	d, err := r.decide(nil, in, wall)
+	d := r.decide(nil, in, wall)
 
-	if err != nil {
-		t.Fatalf("결정 실패: %v", err)
-	}
 	if d.Outcome != OutcomeNone {
 		t.Errorf("갈래 = %v, 기대 = %v", d.Outcome, OutcomeNone)
 	}
@@ -180,22 +166,22 @@ func TestDecideAttributesToCurrentSessionWhenCurrentOnlyAndLiveSessionExists(t *
 	live := &liveSession{id: "S-old", startedAt: wall, targetDuration: 6}
 	in := Input{StreamID: "demo", Seq: 9, StartWallUTC: wall.Add(time.Minute), DurationMS: 4000, Op: CurrentOnly}
 
-	d, err := r.decide(live, in, wall.Add(time.Minute))
+	d := r.decide(live, in, wall.Add(time.Minute))
 
-	if err != nil {
-		t.Fatalf("결정 실패: %v", err)
-	}
 	if d.Outcome != OutcomeCurrent || d.SessionID != "S-old" {
 		t.Errorf("갈래 = %v · 귀속 = %q, 기대 = %v · %q", d.Outcome, d.SessionID, OutcomeCurrent, "S-old")
 	}
 }
 
 // 연산은 영값을 갖지 않는다 — 안 채운 필드가 조용히 어느 갈래로 접히면 배선 누락이 새어 나간다.
+//
+// tx 에 nil 을 넘기는 것이 단언의 일부다: 거부가 **조회보다 앞**이라 SQL 이 한 번도 나가지
+// 않는다(배선 결함에 DB 왕복을 쓰지 않는다).
 func TestDecideRejectsUnspecifiedOp(t *testing.T) {
 	r, _ := newTestRegistry(time.Second, 30*time.Second)
 	in := Input{StreamID: "demo", Seq: 1, StartWallUTC: wall, DurationMS: 4000}
 
-	if _, err := r.decide(nil, in, wall); err == nil {
+	if _, err := r.Decide(context.Background(), nil, in, wall); err == nil {
 		t.Fatal("연산 영값인데 에러가 없다 — 누락이 조용히 새면 안 된다")
 	}
 }
@@ -222,13 +208,15 @@ func TestDecideOpensWhenCorroboratedAndNoLiveSession(t *testing.T) {
 		Obs:          corroborated(wall),
 	}
 
-	d, err := r.decide(nil, in, wall)
+	d := r.decide(nil, in, wall)
 
-	if err != nil {
-		t.Fatalf("결정 실패: %v", err)
-	}
 	if d.Outcome != OutcomeOpen {
 		t.Errorf("갈래 = %v, 기대 = %v (ⓐ2 자격 충족은 개시한다)", d.Outcome, OutcomeOpen)
+	}
+	// 갈래만 맞고 새 세션 행의 값이 안 실리면 Open 이 거부한다 —
+	// "연다"는 판정은 여기까지 봐야 한다(갈래만 보면 개시 불가를 개시로 읽는다).
+	if d.plan == nil {
+		t.Error("개시 결정에 새 세션 행의 값이 실리지 않았다 — Open 이 거부하므로 세션이 열리지 않는다")
 	}
 	if len(sig.warns) != 0 {
 		t.Errorf("신호 %v 가 떴다 — 정상 개시는 무징후다", sig.warns)
@@ -321,11 +309,8 @@ func TestDecideFoldsToCurrentOnlyWhenCorroborationFails(t *testing.T) {
 			}
 			tc.mutate(&in)
 
-			d, err := r.decide(nil, in, wall)
+			d := r.decide(nil, in, wall)
 
-			if err != nil {
-				t.Fatalf("결정 실패: %v", err)
-			}
 			if d.Outcome != tc.want {
 				t.Errorf("갈래 = %v, 기대 = %v", d.Outcome, tc.want)
 			}
@@ -366,11 +351,8 @@ func TestNewFallsBackToDefaultLoggerWhenNoneGiven(t *testing.T) {
 		DurationMS: 4000, Op: OpenOrCurrent,
 	}
 
-	d, err := r.decide(live, in, wall)
+	d := r.decide(live, in, wall)
 
-	if err != nil {
-		t.Fatalf("결정 실패: %v", err)
-	}
 	if d.Outcome != OutcomeNone {
 		t.Errorf("갈래 = %v, 기대 = %v", d.Outcome, OutcomeNone)
 	}
@@ -401,9 +383,9 @@ func TestOpenRejectsDecisionThatIsNotAnOpening(t *testing.T) {
 	r, _ := newTestRegistry(time.Second, 30*time.Second)
 	live := &liveSession{id: "S-old", startedAt: wall, targetDuration: 6}
 	in := Input{StreamID: "demo", Seq: 3, StartWallUTC: wall, DurationMS: 4000, Op: OpenOrCurrent}
-	d, err := r.decide(live, in, wall)
-	if err != nil || d.Outcome != OutcomeCurrent {
-		t.Fatalf("전제 실패: 갈래 = %v, err = %v", d.Outcome, err)
+	d := r.decide(live, in, wall)
+	if d.Outcome != OutcomeCurrent {
+		t.Fatalf("전제 실패: 갈래 = %v", d.Outcome)
 	}
 
 	if _, err := r.Open(context.Background(), nil, d, wall); err == nil {
@@ -411,13 +393,29 @@ func TestOpenRejectsDecisionThatIsNotAnOpening(t *testing.T) {
 	}
 }
 
+// 개시 갈래인데 재료가 없는 것은 **결정부 배선 결함**이다 — 갈래가 아니라는 말로 덮지 않는다
+// (덮으면 로그가 "개시 갈래가 아닌 결정(open)"이라는 자기모순을 찍고 원인을 가린다).
+func TestOpenNamesMissingOpenPlanAsWiringDefect(t *testing.T) {
+	r, _ := newTestRegistry(time.Second, 30*time.Second)
+
+	// 결정부가 plan 을 빠뜨린 상태를 그대로 만든다(C1 이 실제로 만들었던 값).
+	_, err := r.Open(context.Background(), nil, Decision{Outcome: OutcomeOpen}, wall)
+
+	if err == nil {
+		t.Fatal("재료 없는 개시 결정이 통과했다")
+	}
+	if strings.Contains(err.Error(), "개시 갈래가 아닌") {
+		t.Errorf("메시지가 자기모순이다(갈래는 open 인데 '개시 갈래가 아닌'이라 말한다): %v", err)
+	}
+}
+
 // first_pdt 는 개시 1회로 굳고 60일 잔존한다 — 영값이 장부에 박히면 소급 정정이 불가능하다.
 func TestOpenRejectsZeroFirstPDT(t *testing.T) {
 	r, _ := newTestRegistry(time.Second, 30*time.Second)
 	in := Input{StreamID: "demo", Seq: 3, StartWallUTC: wall, DurationMS: 4000, Op: OpenOrCurrent}
-	d, err := r.decide(nil, in, wall)
-	if err != nil || d.Outcome != OutcomeOpen {
-		t.Fatalf("전제 실패: 갈래 = %v, err = %v", d.Outcome, err)
+	d := r.decide(nil, in, wall)
+	if d.Outcome != OutcomeOpen {
+		t.Fatalf("전제 실패: 갈래 = %v", d.Outcome)
 	}
 
 	if _, err := r.Open(context.Background(), nil, d, time.Time{}); err == nil {

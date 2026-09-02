@@ -222,6 +222,66 @@ func TestOpenWritesSevenColumnsAndLeavesTheRestAtDDLDefaults(t *testing.T) {
 	assertOnlyExplicitColumnsWritten(t, pool, id)
 }
 
+// ⓐ2(상태 방증) 개시도 ⓐ1 개시와 **같은 값 규칙**으로 행을 만든다
+// (계획 3절 (가) "세 개시 연산이 새 세션 행에 쓰는 값은 공통 규칙 하나다").
+//
+// 갈래 판정만 맞고 새 세션 행의 재료가 빠지면 Open 이 거부해 **세션이 영영 열리지 않는다** —
+// 스캔·슬레이트 유입의 유일한 개시 경로가 막히는 국면이라 결정과 쓰기를 이어서 잰다.
+func TestOpenAfterCorroboratedDecisionWritesSameOpeningRow(t *testing.T) {
+	pool := newTestPool(t) // 현 live 세션 없음
+	r, _ := newTestRegistry(time.Second, 30*time.Second)
+	in := Input{
+		StreamID: "demo", Seq: 12, StartWallUTC: wall,
+		DurationMS: 6500, // max(6, round(6.5)) = 7
+		Op:         CurrentOrOpenIfCorroborated,
+		Obs:        corroborated(wall),
+	}
+	firstPDT := wall.Add(500 * time.Millisecond)
+
+	var id string
+	withTx(t, pool, func(tx pgx.Tx) {
+		ctx := context.Background()
+		d, err := r.Decide(ctx, tx, in, wall)
+		if err != nil {
+			t.Fatalf("결정 실패: %v", err)
+		}
+		if d.Outcome != OutcomeOpen {
+			t.Fatalf("갈래 = %v, 기대 = %v", d.Outcome, OutcomeOpen)
+		}
+		if id, err = r.Open(ctx, tx, d, firstPDT); err != nil {
+			t.Fatalf("ⓐ2 개시 실패: %v", err)
+		}
+	})
+
+	if want := sessionID("demo", wall, 12); id != want {
+		t.Errorf("session_id = %q, 기대 = %q", id, want)
+	}
+	var (
+		streamID, state       string
+		startedAt, gotFirstPD time.Time
+		targetDuration        int32
+		discBase              int64
+	)
+	err := pool.QueryRow(context.Background(), `
+		SELECT stream_id, started_at, state, first_pdt, target_duration, discontinuity_base
+		  FROM stream_sessions WHERE session_id = $1`, id).
+		Scan(&streamID, &startedAt, &state, &gotFirstPD, &targetDuration, &discBase)
+	if err != nil {
+		t.Fatalf("개시 행 조회 실패: %v", err)
+	}
+	if streamID != "demo" || state != "live" || !startedAt.Equal(wall) || !gotFirstPD.Equal(firstPDT) {
+		t.Errorf("개시 행 = (stream %q, state %q, started_at %v, first_pdt %v), 기대 = (demo, live, %v, %v)",
+			streamID, state, startedAt, gotFirstPD, wall, firstPDT)
+	}
+	if targetDuration != 7 {
+		t.Errorf("target_duration = %d, 기대 = 7 (max(6, round(6.5)))", targetDuration)
+	}
+	if discBase != 0 {
+		t.Errorf("discontinuity_base = %d, 기대 = 0 (비분할 개시는 승계하지 않는다)", discBase)
+	}
+	assertOnlyExplicitColumnsWritten(t, pool, id)
+}
+
 // 두 커넥션이 같은 스트림을 동시에 열면 stream_sessions_one_live_uq 가 둘째를 23505 로 막는다.
 //
 // 이 단계는 그 오류를 **그대로 올린다** — 삼키지도, 재시도하지도 않는다.
@@ -364,6 +424,54 @@ func TestOpenFreshEndsCurrentSessionThenOpensNextWithoutConflict(t *testing.T) {
 	}
 	if liveCount != 1 {
 		t.Errorf("live 세션 = %d 개, 기대 = 1", liveCount)
+	}
+}
+
+// 분할이 닫는 대상은 **아직 live 인 그 세션**이다 — 우리가 읽은 뒤 남이 먼저 닫았다면
+// 그 기록을 덮지 않는다.
+//
+// READ COMMITTED 에서 UPDATE 는 남의 커밋을 만나면 **최신 버전으로 WHERE 를 다시 본다**.
+// 술어가 session_id 뿐이면 그 재검을 그대로 통과해 남이 적은 종료 사유를 td_exceeded 로
+// 되돌린다. M3 에는 아직 state 를 쓰는 다른 문장이 없어 도달하지 않지만, 세션 종료 경로가
+// 들어오는 순간(M4) 도달하고 장부는 소급 정정이 불가능하다.
+func TestOpenFreshDoesNotOverwriteSessionClosedByAnotherWriter(t *testing.T) {
+	pool := newTestPool(t)
+	seedSession(t, pool, sessionRow{
+		id: "S-old", streamID: "demo", startedAt: wall.Add(-time.Hour), state: "live",
+		targetDuration: 6, discontinuityBase: 3,
+	})
+	r, _ := newTestRegistry(time.Second, 30*time.Second)
+	in := Input{StreamID: "demo", Seq: 77, StartWallUTC: wall, DurationMS: 6500, Op: CurrentOnly}
+	ctx := context.Background()
+
+	withTx(t, pool, func(tx pgx.Tx) {
+		d, err := r.Decide(ctx, tx, in, wall) // 이 시점엔 S-old 가 live 였다
+		if err != nil {
+			t.Fatalf("결정 실패: %v", err)
+		}
+		if d.Outcome != OutcomeOpenFresh {
+			t.Fatalf("갈래 = %v, 기대 = %v", d.Outcome, OutcomeOpenFresh)
+		}
+		// 그 사이 다른 커넥션이 세션을 닫고 커밋한다(M4 종료 경로가 할 일).
+		if _, err := pool.Exec(ctx, `
+			UPDATE stream_sessions SET state = 'ended', ended_at = now(), end_reason = 'offline'
+			 WHERE session_id = 'S-old'`); err != nil {
+			t.Fatalf("남의 종료 쓰기 실패: %v", err)
+		}
+		if _, err := r.Open(ctx, tx, d, wall.Add(time.Second)); err != nil {
+			t.Fatalf("분할 개시 실패: %v", err)
+		}
+	})
+
+	var state, endReason string
+	if err := pool.QueryRow(ctx,
+		`SELECT state, end_reason FROM stream_sessions WHERE session_id = 'S-old'`).
+		Scan(&state, &endReason); err != nil {
+		t.Fatalf("직전 세션 조회 실패: %v", err)
+	}
+	if state != "ended" || endReason != "offline" {
+		t.Errorf("직전 세션 = (state %q, end_reason %q), 기대 = (ended, offline — 남의 기록을 덮지 않는다)",
+			state, endReason)
 	}
 }
 

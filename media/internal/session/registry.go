@@ -46,6 +46,12 @@ const (
 	// CurrentOrOpenIfCorroborated 는 ⓐ2(상태 방증) 축이다 — 현 세션이 있으면 귀속하고,
 	// 없을 때는 **관측이 자격을 만족할 때만** 연다. 스캔·슬레이트 유입이 이것을 부른다:
 	// 유입 자체가 라이브의 증거가 아니므로(옛 잔존물일 수 있다) 관측이 대신 보증한다.
+	//
+	// **호출자와의 계약**: 호출자는 ⓐ2 자격(Publishing ∧ EpochKnown ∧ **백로그 하한
+	// `start_wall ≥ ObservedAt − OBS_BACKFILL`** ∧ 에폭 하한)이 성립할 때만 이 연산을
+	// 지정한다(계획 4.4 — 판정의 집은 indexer.buildSeed 다). 레지스트리는 그중
+	// **시간 가변 항(관측 신선도 — 시도별 재검)과 에폭 하한·모호 구간만 다시 잰다**:
+	// 백로그 하한의 두 피연산자는 호출당 고정이라 트랜잭션 안에서 답이 바뀌지 않는다.
 	CurrentOrOpenIfCorroborated
 	// CurrentOnly 는 열지 않는 축이다 — 현 세션이 있으면 귀속하고 없으면 비운다.
 	// "언제나 비운다"가 아니다: 세션 중간에 NULL 구멍이 나면 그 조각은 되감기에서 사라진다.
@@ -189,13 +195,21 @@ func New(opt Options) *Registry {
 // 스냅샷과 함께 시각까지 재사용해 "대기 중 낡은" 관측으로 세션이 열린다.
 // 호출자는 직렬화 락을 잡은 직후의 시각을 넣는다.
 func (r *Registry) Decide(ctx context.Context, tx pgx.Tx, in Input, now time.Time) (Decision, error) {
+	// 연산 검증이 **조회보다 앞**이다: 배선 결함은 DB 왕복 없이 즉시 드러나야 한다.
+	switch in.Op {
+	case OpenOrCurrent, CurrentOrOpenIfCorroborated, CurrentOnly:
+	default:
+		return Decision{}, fmt.Errorf("session: 세션 결정 연산이 지정되지 않았다(%d) stream_id=%q seq=%d",
+			in.Op, in.StreamID, in.Seq)
+	}
+
 	live, err := r.loadLive(ctx, tx, in.StreamID)
 	if err != nil {
 		return Decision{}, err
 	}
-	d, err := r.decide(live, in, now)
-	if err != nil || d.Outcome != OutcomeOpen {
-		return d, err
+	d := r.decide(live, in, now)
+	if d.Outcome != OutcomeOpen {
+		return d, nil
 	}
 	// 개시 갈래만 기저 세션을 **조회**한다. 계속·OpenFresh 는 손에 쥔 현 live 가 기저이고,
 	// 비귀속·비개시는 ⑷⑸ 를 건너뛰므로 기저가 필요 없다.
@@ -264,25 +278,21 @@ type liveSession struct {
 }
 
 // decide 는 DB 를 보지 않는 판정부다 — 현 live 세션(없으면 nil)과 입력만으로 갈래를 정한다.
+// 실패 갈래가 없다(정책 거부는 값이다) — 그래서 오류를 돌려주지 않는다.
+//
+// **전제**: 연산은 Decide 가 조회보다 앞에서 이미 검증했다. 유일한 호출자가 그 자리다.
 //
 // **순서가 계약이다**(설계 4.9.1 · 5.4.1):
 //  1. TD 판정이 먼저다. 유입·관측과 무관하게 "이 조각이 현 세션의 TD 를 넘는가"가 갈래를
 //     가른다 — 분할이면 새 세션이 이 조각에서 시작하므로 아래 하한은 자동으로 만족된다.
 //  2. 귀속 하한은 **항상** 건다(장부 축). 연산과 무관하다.
 //  3. 마지막에야 연산이 "현 세션이 없을 때 열 것인가"를 가른다.
-func (r *Registry) decide(live *liveSession, in Input, now time.Time) (Decision, error) {
-	switch in.Op {
-	case OpenOrCurrent, CurrentOrOpenIfCorroborated, CurrentOnly:
-	default:
-		return Decision{}, fmt.Errorf("session: 세션 결정 연산이 지정되지 않았다(%d) stream_id=%q seq=%d",
-			in.Op, in.StreamID, in.Seq)
-	}
-
+func (r *Registry) decide(live *liveSession, in Input, now time.Time) Decision {
 	// TD 판정은 현 live 행의 target_duration 을 피연산자로 쓴다 — 그래서 이 판정이
 	// 트랜잭션 밖이 아니라 여기 있다(밖에서 읽으면 낡은 세션 값으로 판정한다).
 	// 현 live 가 없으면 판정 자체가 성립하지 않고 개시 갈래로 간다.
 	if live != nil && exceedsTargetDuration(in.DurationMS, live.targetDuration) {
-		return openDecision(in, live), nil
+		return openDecision(in, live)
 	}
 	if live != nil {
 		// 귀속 하한(설계 5.4.1 ⑴) — 세션이 시작하기 한참 전의 조각은 그 세션의 것이 아니다.
@@ -292,19 +302,19 @@ func (r *Registry) decide(live *liveSession, in Input, now time.Time) (Decision,
 				"stream_id", in.StreamID, "seq", in.Seq,
 				"start_wall_utc", in.StartWallUTC, "session_id", live.id,
 				"started_at", live.startedAt, "slack", r.opt.FloorSlack)
-			return Decision{Outcome: OutcomeNone}, nil
+			return Decision{Outcome: OutcomeNone}
 		}
-		return Decision{Outcome: OutcomeCurrent, SessionID: live.id, BaseSessionID: live.id}, nil
+		return Decision{Outcome: OutcomeCurrent, SessionID: live.id, BaseSessionID: live.id}
 	}
 
 	// 여기부터는 현 live 세션이 없다 — 열 것인가를 연산이 가른다.
 	switch in.Op {
 	case OpenOrCurrent:
-		return openDecision(in, nil), nil
+		return openDecision(in, nil)
 	case CurrentOrOpenIfCorroborated:
-		return r.decideCorroborated(in, now), nil
+		return r.decideCorroborated(in, now)
 	}
-	return Decision{Outcome: OutcomeNone}, nil
+	return Decision{Outcome: OutcomeNone}
 }
 
 // decideCorroborated 는 ⓐ2 개시 자격이다(설계 6.5.2 · 5.4.1 ⑵⑶). 현 live 가 없을 때만 온다.
@@ -335,7 +345,10 @@ func (r *Registry) decideCorroborated(in Input, now time.Time) Decision {
 			"note", "에폭 경계가 흐려 세션을 열지 않는다. 다음 확실한 조각이 연다")
 		return Decision{Outcome: OutcomeNone}
 	}
-	return Decision{Outcome: OutcomeOpen}
+	// 비분할 개시다 — 새 세션 행에 쓰는 값은 ⓐ1 개시와 **같은 규칙**이므로 같은 자리에서 만든다
+	// (계획 3절 (가) "세 개시 연산 공통"). 갈래만 돌려주면 Open 이 재료 없는 결정을 거부해
+	// 스캔·슬레이트 유입의 유일한 개시 경로가 막힌다.
+	return openDecision(in, nil)
 }
 
 // openDecision 은 개시 갈래의 결정이다 — Open 이 쓸 값(계획 3절 (가))을 함께 싣는다.
@@ -368,10 +381,16 @@ func openDecision(in Input, split *liveSession) Decision {
 // (어휘를 새로 만들지 않는다). 장부가 "왜 끝났는가"를 잃지 않게 남긴다.
 // 이 UPDATE 가 새 세션 INSERT 보다 **먼저**여야 한다 — 순서가 뒤집히면 한 스트림에 live
 // 세션이 둘이 되려 하므로 stream_sessions_one_live_uq 가 막는다.
+//
+// state='live' 술어는 "우리가 읽은 그 세션이 아직 열려 있을 때만 닫는다"이다:
+// READ COMMITTED 의 UPDATE 는 남의 커밋을 만나면 **최신 버전으로 WHERE 를 다시 보므로**,
+// 술어가 session_id 뿐이면 그 사이 남이 적은 종료 사유를 td_exceeded 로 되돌린다.
+// 0 행이어도 오류로 만들지 않는다 — 이미 남이 닫았다는 뜻이고, 그래도 live 가 남아 있다면
+// 이어지는 INSERT 를 one_live_uq 가 가른다(판정 자리를 둘로 늘리지 않는다).
 const endSessionSQL = `
 UPDATE stream_sessions
    SET state = 'ending', ending_at = now(), end_reason = 'td_exceeded'
- WHERE session_id = $1`
+ WHERE session_id = $1 AND state = 'live'`
 
 // openSessionSQL 은 개시 트랜잭션의 유일한 세션 INSERT 다.
 //
@@ -393,6 +412,11 @@ VALUES ($1, $2, $3, 'live', $4, $5, $6)`
 // errors.As 로 제약 이름을 보고 처분한다.
 func (r *Registry) Open(ctx context.Context, tx pgx.Tx, d Decision, firstPDT time.Time) (string, error) {
 	if d.plan == nil {
+		// 두 국면을 갈라 말한다: 갈래가 개시인데 재료가 없으면 결정부의 배선 결함이고,
+		// 갈래 자체가 개시가 아니면 호출자가 부르지 말았어야 할 자리다.
+		if d.Outcome == OutcomeOpen || d.Outcome == OutcomeOpenFresh {
+			return "", fmt.Errorf("session: 개시 갈래(%s)인데 새 세션 행의 값이 없다 — 결정부가 값을 싣지 않았다(배선 결함)", d.Outcome)
+		}
 		return "", fmt.Errorf("session: 개시 갈래가 아닌 결정(%s)으로는 세션을 열 수 없다", d.Outcome)
 	}
 	if firstPDT.IsZero() {
@@ -417,8 +441,8 @@ func (r *Registry) Open(ctx context.Context, tx pgx.Tx, d Decision, firstPDT tim
 //
 // kty 확정(2026-09-02) — 계약3 최초 규정 `S-{YYYYMMDD}-{HHMMSS}-{streamID}-{seq}`(UTC).
 //
-// 설계 원문에 생성 규칙이 없고(골든 픽스처 리터럴 `S-20260831-0107` 뿐), 계약3 도 규정하지
-// 않는다. session_id 는 **전역 PK** 라 서로 다른 스트림이 같은 분에 시작하면 충돌하므로,
+// 설계 원문에 생성 규칙이 없었고(골든 픽스처 리터럴 `S-20260831-0107` 뿐) 계약3 에도 규정이
+// 없었기에 여기서 최초로 규정한다. session_id 는 **전역 PK** 라 서로 다른 스트림이 같은 분에 시작하면 충돌하므로,
 // 기존 결정적 파생 이디엄(index.S3Key)을 그대로 따르되 두 축을 넣는다:
 //
 //	스트림 축      — 스트림이 다르면 id 가 다르다(전역 PK 충돌 소멸)
