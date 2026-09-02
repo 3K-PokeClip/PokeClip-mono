@@ -89,7 +89,8 @@ services:
       # (사이드카만 재기동하면 되고 MediaMTX는 건드리지 않는다. 자세히는 media/README.md)
       HOOK_SPOOL_PATH: /hooks/events.jsonl
       # MediaMTX Control API 관측(POK-195). **빈 값이면 폴러를 아예 기동하지 않는다** = 즉시
-      # 롤백 스위치 — 관측이 사라지면 되감기 컷오프 주조만 멈추고 인덱싱·업로드는 그대로 돈다.
+      # 롤백 스위치 — 관측이 사라지면 스캔 유입(ⓐ2)의 되감기 컷오프 주조만 멈춘다. 워처·훅
+      # 유입(ⓐ1) 주조는 계속되며 그것은 REWIND_SEED_ENABLED 로만 멈춘다. 인덱싱·업로드는 그대로 돈다.
       # 9997은 호스트에 공개하지 않으므로 이 주소는 compose 내부망에서만 유효하다.
       MTX_API_URL: http://media:9997
 

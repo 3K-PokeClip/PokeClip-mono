@@ -690,7 +690,13 @@ func TestLoadRejectsPollIntervalNotBelowFresh(t *testing.T) {
 
 // URL 은 경계값이다. 오구성이면 폴러가 조용히 실패만 반복하므로 기동 때 문법을 본다.
 func TestLoadRejectsMalformedMTXAPIURL(t *testing.T) {
-	for _, bad := range []string{"media:9997", "ftp://media:9997", "http://", "http://user:pw@media:9997"} {
+	// 뒤 셋은 query·fragment 갈래다 — poller 가 베이스 URL 뒤에 "/v3/paths/list" 를
+	// 문자열로 붙이므로 `#typo` 는 경로를 "/" 로 잘라내고 `?x=1` 은 경로를 쿼리 안으로
+	// 밀어 넣는다. 둘 다 폴이 영구 실패하고 증상은 "되감기가 안 된다"뿐이다.
+	for _, bad := range []string{
+		"media:9997", "ftp://media:9997", "http://", "http://user:pw@media:9997",
+		"http://media:9997#typo", "http://media:9997?x=1", "http://media:9997/#typo",
+	} {
 		t.Run(bad, func(t *testing.T) {
 			env := minimalEnv()
 			env["MTX_API_URL"] = bad

@@ -36,7 +36,8 @@ type Options struct {
 	// APIURL 은 MediaMTX Control API 의 베이스 URL 이다(예: http://media:9997).
 	//
 	// **빈 값이면 폴러를 아예 만들지 않는다**(NewPoller 가 거부한다). 그것이 즉시 롤백
-	// 스위치다 — 관측이 사라지면 ⓐ2 가 fail-closed 되어 주조만 멈추고 인덱싱은 그대로다.
+	// 스위치다 — 관측이 사라지면 ⓐ2 가 fail-closed 되어 스캔 유입(ⓐ2) 주조만 멈추고
+	// 인덱싱은 그대로다.
 	// HOOK_SPOOL_PATH 와 같은 형태의 스위치이며, 그래서 config 도 기본값을 두지 않는다.
 	APIURL string
 	// PollInterval 은 폴 주기이자 **poll 1 회의 상한**이다(OBS_POLL).

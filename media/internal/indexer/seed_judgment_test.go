@@ -7,8 +7,11 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
@@ -430,5 +433,49 @@ func TestObservationSnapshotTakenOncePerSegment(t *testing.T) {
 	}
 	if got := f.observer.callCount(); got != 1 {
 		t.Fatalf("관측 채취가 %d회다(1회 기대) — 재시도마다 다시 읽으면 판정이 갈린다", got)
+	}
+}
+
+// 세션 개시 경합(ErrSessionContended)도 락 경합과 같은 처분이다 — H9 백오프 재시도.
+//
+// **이 케이스가 지키는 것은 배타성이다**: store 는 sentinel 과 23505 PgError 를 한
+// 연쇄에 함께 감싸므로(index/store.go sessionError), 한 오류가 "경합"과 "무결성 위반
+// (=fateFatal)" 두 갈래에 동시에 해당한다. 경합 갈래를 먼저 읽지 않으면 정상 동시성이
+// 즉시 종료로 처분돼 크래시루프가 된다.
+func TestSessionContentionRetriesUntilExhaustion(t *testing.T) {
+	f := newFixture(t, 4000)
+	f.opt.SeedEnabled = true
+	f.reload()
+
+	seg := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile)
+	// 실제 형상 그대로 — sentinel 로 감싼 바깥과 23505 PgError 인 안쪽 둘 다 있어야
+	// 두 갈래 동시 해당이 재현된다.
+	contended := fmt.Errorf("%w: stream_id=%q seq=%d: %w",
+		index.ErrSessionContended, "s1", int64(0),
+		&pgconn.PgError{Code: "23505", ConstraintName: "stream_sessions_one_live_uq"})
+	errs := make([]error, f.opt.InsertRetryMax) // 상한만큼 전부 좌초
+	for i := range errs {
+		errs[i] = contended
+	}
+	f.store.insertErrs = errs
+
+	err := f.handle(seg)
+
+	// ⑴ 경합 신호로 기록된다(일반 재시도·즉시 종료와 구분되는 자기 이름).
+	if n := f.logs.count(slog.LevelWarn, "session_open_contended"); n != f.opt.InsertRetryMax {
+		t.Fatalf("session_open_contended = %d건, want %d — 경합이 다른 갈래로 새 나갔다",
+			n, f.opt.InsertRetryMax)
+	}
+	// ⑵ 즉시 fatal 이 아니다. 23505 를 무결성 위반으로 읽으면 첫 시도에서 끝난다.
+	if got := f.store.insertCallCount(); got != f.opt.InsertRetryMax {
+		t.Fatalf("Insert 시도 = %d, want %d — 경합이 무결성 위반으로 처분됐다",
+			got, f.opt.InsertRetryMax)
+	}
+	// ⑶ 상한을 소진해야 비로소 에러가 올라간다(기존 D8 처분에 합류).
+	if err == nil {
+		t.Fatal("지속 경합이 상한 소진 에러로 올라오지 않았다")
+	}
+	if !errors.Is(err, index.ErrSessionContended) {
+		t.Fatalf("에러 연쇄에 ErrSessionContended 가 없다: %v", err)
 	}
 }

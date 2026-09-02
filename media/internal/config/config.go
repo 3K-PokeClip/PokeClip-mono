@@ -50,7 +50,7 @@ type Config struct {
 	// MTXState 는 MediaMTX Control API 관측 폴러의 설정이다(POK-195 M3).
 	//
 	// **APIURL 이 비면 폴러를 만들지 않는다** — 관측이 없으면 상태 방증 ⓐ2 가
-	// fail-closed 되어 되감기 컷오프 주조만 멈추고 인덱싱·업로드는 그대로 돈다.
+	// fail-closed 되어 스캔 유입(ⓐ2) 주조만 멈추고 인덱싱·업로드는 그대로 돈다.
 	// HOOK_SPOOL_PATH 와 같은 형태의 즉시 롤백 스위치다.
 	MTXState mtxstate.Options
 	// ObsFresh·ObsBackfill 은 상태 방증 ⓐ2 의 시간 항이다(설계 6.5.2):
@@ -341,6 +341,13 @@ func validateMTXAPIURL(raw string) error {
 	// 유출 경로가 된다 — 로컬 Control API 는 자격증명 없이 붙는 구성이다(compose 내부망 한정).
 	if u.User != nil {
 		return fmt.Errorf("MTX_API_URL 에 자격증명(user:pass@)을 넣을 수 없다 — 관측 API 는 자격증명 없이 붙는다")
+	}
+	// 폴러는 이 값 뒤에 경로를 문자열로 잇는다(mtxstate/poller.go). 그래서 `#` 은 뒤를
+	// 통째로 fragment 로 잘라 요청 경로를 "/" 로 만들고, `?` 는 경로를 쿼리 안으로 밀어 넣는다.
+	// 둘 다 폴이 매 주기 실패하기만 하는 상태라 문법 단계에서 끊는다.
+	// ForceQuery 는 "http://media:9997?" 처럼 값 없는 물음표만 붙은 형태다.
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return fmt.Errorf("MTX_API_URL(%q)에 query(?)·fragment(#)를 넣을 수 없다 — 베이스 URL 뒤에 /v3/paths/list 가 붙는다", raw)
 	}
 	return nil
 }

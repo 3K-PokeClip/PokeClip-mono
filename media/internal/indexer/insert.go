@@ -31,6 +31,13 @@ const (
 // 재시도해서 될 일과 안 될 일을 가르지 않으면, 잘못된 값 하나가 30초씩 파이프라인을
 // 붙잡고 끝내 프로세스를 죽인다. 그 사이 멀쩡한 세그먼트들도 함께 밀린다.
 func classifyInsertError(err error) insertFate {
+	// 경합은 SQLSTATE 보다 먼저 본다. 세션 경합은 sentinel 과 23505 PgError 를 한 연쇄에
+	// 함께 감싸고 오므로(index.sessionError), 클래스만 보면 무결성 위반=fateFatal 로 읽힌다.
+	// 배타성을 호출부의 if/else 순서가 아니라 이 함수의 성질로 못 박는다.
+	if _, _, ok := contentionSignal(err); ok {
+		return fateRetry
+	}
+
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {
 		// 네트워크 오류, 타임아웃 등 드라이버 계층 실패는 재시도 가치가 있다.
@@ -59,6 +66,7 @@ func classifyInsertError(err error) insertFate {
 
 // contentionSignal 은 **재시도가 스스로 푸는 경합** 두 갈래를 가려낸다.
 // isContention=false 면 경합이 아니라 일반 실패이고 classifyInsertError 가 처분한다.
+// (그 함수도 이 신호를 먼저 읽어 fateRetry 를 돌린다 — 처분이 호출 순서에 걸리지 않게.)
 //
 // 둘의 처분은 같다(H9 백오프)지만 신호 이름을 나누는 것은 원인이 다르기 때문이다:
 // 락 경합은 단일 쓰기자 전제(D10)가 흔들린다는 신호이고, 세션 경합은 같은 스트림의
