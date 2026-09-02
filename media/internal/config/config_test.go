@@ -650,7 +650,8 @@ func TestLoadReadsObservationOverrides(t *testing.T) {
 	}
 }
 
-// 0·음수·파싱 불가는 기동 거부다. 조용히 기본값으로 넘어가면 "주조가 왜 안 되지"로 나타난다.
+// 0·음수·파싱 불가는 기동 거부다. 조용히 기본값으로 넘어가면 "스캔 유입(ⓐ2)의 주조가 왜 안 되지"로
+// 나타난다(ⓐ1 워처·훅 유입은 OBS_* 와 무관 — config.go 의 같은 주석과 쌍).
 func TestObservationDurationsRejectZeroAndNegative(t *testing.T) {
 	for _, key := range []string{"OBS_POLL", "OBS_FRESH", "OBS_BACKFILL", "OBS_BOOT_WAIT", "SESSION_FLOOR_SLACK"} {
 		for _, bad := range []string{"0s", "-1s", "가끔"} {
