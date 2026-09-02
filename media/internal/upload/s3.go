@@ -111,7 +111,7 @@ func (p *s3Putter) Put(ctx context.Context, key string, body io.Reader, size int
 // 결정 8‴의 "무분류"와 모순되지 않는다 — 그 무분류는 **재시도 여부**에 대한 것이다.
 // 어떤 오류든 RetryMax 까지 똑같이 재시도한다. 이 함수는 재시도가 전부 끝난 뒤
 // "이 실패가 설정 문제인가"만 판정해 브레이커 streak 에 넣는다.
-// 목적도(재시도 vs 전역 차단) 시점도(매 시도 vs 행 종결) 다르다(CX-2 ⑤).
+// 목적도(재시도 vs 축 브레이커 차단) 시점도(매 시도 vs 행 종결) 다르다(CX-2 ⑤).
 type putErrClass int
 
 const (

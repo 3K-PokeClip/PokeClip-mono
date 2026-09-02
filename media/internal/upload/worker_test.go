@@ -738,7 +738,7 @@ func TestSendResultDropsWhenChannelFull(t *testing.T) {
 }
 
 // P1 — 재시도 소진 → hard 분류 → 브레이커 open 까지의 종단간 경로.
-// hard 를 soft 로 뭉개면 설정이 통째로 틀린 상황에서도 전역 차단이 걸리지 않아
+// hard 를 soft 로 뭉개면 설정이 통째로 틀린 상황에서도 그 축의 브레이커가 열리지 않아
 // 조각마다 RetryMax 회 PUT 을 계속 태운다.
 func TestHardFailureOpensCircuitEndToEnd(t *testing.T) {
 	st := &fakeUploadStore{}
