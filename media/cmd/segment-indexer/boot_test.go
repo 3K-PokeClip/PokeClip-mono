@@ -158,8 +158,9 @@ func TestStartObserverProceedsWhenFirstObservationTimesOut(t *testing.T) {
 }
 
 // MTX_API_URL 빈 값 = 즉시 롤백 스위치. 폴러를 아예 만들지 않고 널 오브젝트로 간다.
-// **신호를 남기는 것이 계약이다**: 이 상태에서는 주조가 조용히 멈추므로(설계 S4 무징후
-// 금지), 로그가 없으면 "되감기가 안 된다"가 원인 없는 증상으로 나타난다.
+// **신호를 남기는 것이 계약이다**: 이 상태에서는 ⓐ2(스캔 유입) 주조가 조용히 멈추므로
+// (ⓐ1 워처·훅 유입은 영향 없다 — 설계 S4 무징후 금지), 로그가 없으면 "되감기가 안 된다"가
+// 원인 없는 증상으로 나타난다.
 func TestStartObserverDisabledWhenAPIURLEmpty(t *testing.T) {
 	logs := &bootLogCapture{}
 	observer, stop := startObserver(context.Background(), mtxstate.Options{}, slog.New(logs))

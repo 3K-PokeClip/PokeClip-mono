@@ -63,7 +63,7 @@ func validateObservationWindow(obsFresh time.Duration) error {
 	}
 	return fmt.Errorf(
 		"OBS_FRESH(%v)는 주조 트랜잭션 상한(%v)보다 길어야 한다 — 같거나 짧으면 스캔 유입의 "+
-			"ⓐ2 상태 방증 앵커가 영구 불성립이라 스캔 유입의 되감기 컷오프가 조용히 주조되지 않는다"+
+			"ⓐ2 상태 방증 앵커가 영구 불성립이라 그 되감기 컷오프가 조용히 주조되지 않는다"+
 			"(워처·훅 유입 ⓐ1 은 영향 없다). "+
 			"기본값 30s 로 두거나, 최소 %v 보다 크게 잡아라",
 		obsFresh, index.TxnDeadline, index.TxnDeadline)

@@ -195,7 +195,7 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | `OBS_POLL` | `10s` | 관측 주기이자 **폴 1회의 상한**이다. 주기가 곧 재시도라 따로 재시도를 두지 않으며, 헤더조차 오지 않는 응답을 이 시간에 끊는다. `OBS_FRESH`보다 짧아야 기동한다 |
 | `OBS_FRESH` | `30s` | 관측이 이보다 낡으면 방증으로 쓰지 않는다. 주조 트랜잭션 상한(10s, `index.TxnDeadline`)보다 길어야 기동한다 — 같거나 짧으면 기동 거부 |
 | `OBS_BACKFILL` | `60s` | 관측 시점보다 이만큼 더 과거인 조각은 밀린 백로그의 머리로 보아 주조하지 않는다 |
-| `OBS_BOOT_WAIT` | `3s` | 기동 시 첫 관측을 기다리는 상한. 타임아웃이어도 **기동은 계속된다** — 관측 없이 뜨면 그동안 주조만 잠긴다 |
+| `OBS_BOOT_WAIT` | `3s` | 기동 시 첫 관측을 기다리는 상한. 타임아웃이어도 **기동은 계속된다** — 관측 없이 뜨면 그동안 **관측 기반 주조(스캔 유입 ⓐ2)만** 잠긴다(워처·훅 유입 ⓐ1 주조는 이 값과 무관하게 계속된다) |
 | `SESSION_FLOOR_SLACK` | `1s` | 세션 귀속 하한의 여유(시계 역행 방어). 세션 시작보다 이보다 더 과거인 조각은 그 세션에 귀속시키지 않는다 |
 
 > **팀 1회 조치** — `docker-compose.yml`과 `infra/compose/mediamtx.yml`이 함께 바뀌었다.
@@ -366,8 +366,10 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 스키마 그대로라 그 세 패키지만 "does not exist" 계열로 실패한다.
 
 ```bash
-for db in pokeclip_uploadtest pokeclip_uploadtest_session pokeclip_uploadtest_indexer pokeclip_uploadtest_cmd pokeclip_uploadtest_selftest; do
-  psql "$PG_DSN" -c "DROP DATABASE IF EXISTS $db"
+# PG_TEST_DB 를 바꿔 돌렸다면 그 이름이 밑이름이다 — 기본 이름만 지우면 실제 DB 는 남는다.
+base="${PG_TEST_DB:-pokeclip_uploadtest}"
+for suffix in "" _session _indexer _cmd _selftest; do
+  psql "$PG_DSN" -c "DROP DATABASE IF EXISTS ${base}${suffix}"
 done
 ```
 
