@@ -22,6 +22,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
@@ -96,7 +97,15 @@ func run() error {
 	//   풀이 닫히기 전에 반환되어야 한다. 코드 배치가 그 순서를 보장한다(결정 17″).
 	defer up.Shutdown()
 
-	// --- 2. 워처 조립·기동 — 실패는 강등이다 ---
+	// --- 2. 관측 폴러 — 설계 6.5.3 ⑶ 1~2단계 ---
+	//
+	// 워처보다 **먼저** 띄우는 이유: 첫 관측을 확보한 뒤에 초기 수집이 돌아야 그 주기의
+	// 스캔 유입이 ⓐ2 를 쓸 수 있다. 뒤로 미루면 재기동 직후 한 주기가 통째로
+	// 관측 이력 0(= EpochKnown=false) 위에서 돌아 아무것도 주조되지 않는다.
+	observer, stopObserver := startObserver(ctx, cfg.MTXState, log)
+	defer stopObserver()
+
+	// --- 3. 워처 조립·기동 — 실패는 강등이다 ---
 	//
 	// 주석 ⓐ: 워처 기동이 초기 수집 발사보다 먼저인 이유.
 	// Start 는 동기라서 반환 시점에는 감시 등록이 이미 끝나 있다. 순서를 뒤집으면
@@ -105,7 +114,7 @@ func run() error {
 	//
 	// 실패 처분(ADR-063 결정 1): 조립·기동 단계 실패 = **강등**(프로세스 유지 + 주기
 	// 재시도). 재기동이 상태를 바꿀 수도 있으나 바뀌지 않는 경우가 실재하고, 그때
-	// 프로세스 종료는 다른 유입(훅·스캔)까지 죽인다 — 훅 판정(아래 2-1)의 일반화다.
+	// 프로세스 종료는 다른 유입(훅·스캔)까지 죽인다 — 훅 판정(아래 3-1)의 일반화다.
 	// 기동 **후** 사망(Done 닫힘)은 반대로 종료다: loop 의 watcherDone case 가 그대로
 	// 담당하고 새 프로세스가 실제로 회복시킨다.
 	w, wErr := assembleWatcher(ctx, cfg.Watcher)
@@ -119,9 +128,9 @@ func run() error {
 	if w != nil {
 		adopt = w
 	}
-	ix := indexer.New(store, fmp4meta.ProbeDurationMS, adopt, up, nil, cfg.Indexer, log)
+	ix := indexer.New(store, fmp4meta.ProbeDurationMS, adopt, up, observer, cfg.Indexer, log)
 
-	// --- 2-1. 훅 어댑터 (선택) ---
+	// --- 3-1. 훅 어댑터 (선택) ---
 	//
 	// HOOK_SPOOL_PATH 가 비어 있으면 Reader 를 **아예 만들지 않는다**. 그러면 아래 두 채널이
 	// nil 로 남고 select 의 해당 case 는 영구 비활성이 된다 — 이것이 즉시 롤백 스위치다.
@@ -154,7 +163,7 @@ func run() error {
 		log.Info("hook_reader_started", "spool", cfg.HookSpoolPath, "poll", cfg.HookPollInterval)
 	}
 
-	// --- 3. 업로더 기동 + 초기 수집 발사 ---
+	// --- 4. 업로더 기동 + 초기 수집 발사 ---
 	//
 	// 부수 효과 있는 컴포넌트의 시작은 미루지 않는다(ADR-063 결정 6): 업로더는 boot 에서
 	// 켠다 — 초기 수집이 hung FS 에 잡혀도 훅 유입 조각의 업로드 접수가 살아 있어야
@@ -177,7 +186,7 @@ func run() error {
 	holdTicker := time.NewTicker(cfg.Indexer.HoldTick)
 	defer holdTicker.Stop()
 
-	// --- 4. 메인 루프 ---
+	// --- 5. 메인 루프 ---
 	//
 	// 결과를 즉시 return 하지 않는다. 정상·오류가 같은 출구로 나가야 defer 로 등록한
 	// 종료 절차가 어느 경로에서도 같은 순서로 돈다.
@@ -223,6 +232,48 @@ func assembleWatcher(ctx context.Context, opt recording.WatcherOptions) (*record
 		return nil, fmt.Errorf("워처 기동 실패: %w", err)
 	}
 	return w, nil
+}
+
+// startObserver 는 관측 폴러를 띄우고 첫 관측까지 기다린다(설계 6.5.3 ⑶ 1~2단계).
+//
+// 돌려주는 관측자가 nil 이면 인덱서가 널 오브젝트로 편다 — 그 상태의 관측은
+// EpochKnown=false 라 ⓐ2(상태 방증)만 닫히고 인덱싱·업로드는 그대로 돈다.
+//
+// **실패 처분이 워처·훅과 같다**: 조립 실패도 관측 실패도 강등이지 사망이 아니다.
+// 관측은 주조 자격의 보강재일 뿐이고, 없으면 방향은 언제나 비주조(안전)다(설계 S3).
+//
+// 두 번째 반환값은 폴 고루틴의 종료를 기다리는 함수다. 폴러의 소유자는 run() 이고,
+// **부모 ctx 취소에 기대지 않고 자기 ctx 를 직접 끊는다** — loop 이 에러로 빠져나오면
+// 부모는 아직 살아 있어서, 취소 없이 Done 만 기다리면 그 자리에서 영원히 멈춘다.
+func startObserver(ctx context.Context, opt mtxstate.Options, log *slog.Logger) (indexer.StateObserver, func()) {
+	noop := func() {}
+	if opt.APIURL == "" {
+		// 즉시 롤백 스위치(HOOK_SPOOL_PATH 와 같은 형태). 무징후로 두지 않는다 —
+		// 이 상태에서는 스캔 유입이 영영 주조되지 않는데 증상은 "되감기가 안 된다"뿐이다.
+		log.Info("mtxstate_disabled",
+			"note", "MTX_API_URL 이 비어 있다. ⓐ2(상태 방증)가 fail-closed 되고 스캔 유입은 주조하지 않는다")
+		return nil, noop
+	}
+	opt.Log = log
+	poller, err := mtxstate.NewPoller(opt)
+	if err != nil {
+		log.Error("mtxstate_setup_failed", "url", opt.APIURL, "err", err,
+			"note", "관측만 강등된다. 인덱싱은 계속되고 ⓐ2 는 fail-closed 다")
+		return nil, noop
+	}
+
+	pollCtx, cancelPoll := context.WithCancel(ctx)
+	poller.Start(pollCtx)
+	stop := func() {
+		cancelPoll()
+		<-poller.Done()
+	}
+	// 첫 관측을 BootWait 까지 기다린다. 못 얻어도 그대로 진행한다 — 그 창(최대 3초)에
+	// 만들어진 파일은 초기 수집이 회수한다(기존 규약).
+	observed := poller.WaitFirstObservation(ctx)
+	log.Info("mtxstate_started",
+		"url", opt.APIURL, "poll", opt.PollInterval, "first_observation", observed)
+	return poller, stop
 }
 
 // newUploader 는 설정에 따라 업로더를 고른다. 분기는 셋이고 기동을 거부하는 것은 하나뿐이다.
