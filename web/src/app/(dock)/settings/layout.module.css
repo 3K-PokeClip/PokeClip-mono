@@ -8,7 +8,9 @@
 .content {
   flex: 1;
   min-width: 0;
-  /* 사이드바와 같은 배율로 커진다 (app/shell.css). 하단 96 = fixed Dock 여백 */
-  padding: calc(30 * var(--pc-shell-u)) calc(36 * var(--pc-shell-u))
-    calc(96 * var(--pc-shell-u));
+  /* 본문 패딩은 사이드바 화면 공용 토큰이다 (app/shell.css --pc-shell-body-pad-*) — 방송 그룹
+     (LiveScreen·VodListScreen)과 같은 값·같은 단위(--pc-u)라 탭을 오가도 h1의 x 좌표가 같다.
+     본문 폭은 가두지 않는다 — 읽기 폭이 필요한 블록은 각 화면이 카드 단위로 막는다
+     (docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」). */
+  padding: var(--pc-shell-body-pad-top) var(--pc-shell-body-pad-x) var(--pc-shell-body-pad-bottom);
 }
