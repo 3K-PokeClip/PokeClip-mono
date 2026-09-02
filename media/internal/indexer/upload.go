@@ -68,7 +68,10 @@ func (ix *Indexer) requestUpload(streamID string, tail *index.TailRow, isTail bo
 		return false
 	}
 	accepted := ix.upload.RequestUpload(index.UploadTarget{
-		StreamID:  streamID,
+		StreamID: streamID,
+		// 실시간 유입은 ② 아카이브 축이다. 축을 비우면 영값(미판정)이라 업로더가 거부한다
+		// (③·init 축의 생산자는 M4 다 — POK-195 M3 설계 5.5.4 #4).
+		Axis:      index.AxisArchive,
 		Seq:       tail.Seq,
 		S3Key:     tail.S3Key,
 		LocalPath: tail.LocalPath,

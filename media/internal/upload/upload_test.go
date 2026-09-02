@@ -78,10 +78,11 @@ func TestDisabledUploaderDoesNothing(t *testing.T) {
 	if u.Results() != nil {
 		t.Error("Results() != nil — select 에서 선택될 수 있다")
 	}
-	if u.RequestUpload(index.UploadTarget{StreamID: "s", Seq: 1}) {
+	// 축을 채운 정상 대상이어야 한다 — 비우면 "축 미판정" 거부로 통과해 Disabled 를 재지 못한다.
+	if u.RequestUpload(index.UploadTarget{StreamID: "s", Axis: index.AxisArchive, Seq: 1}) {
 		t.Error("RequestUpload = true, want false")
 	}
-	if got := u.enqueue(index.UploadTarget{StreamID: "s", Seq: 1}, OriginSweep); got != EnqueueRejected {
+	if got := u.enqueue(index.UploadTarget{StreamID: "s", Axis: index.AxisArchive, Seq: 1}, OriginSweep); got != EnqueueRejected {
 		t.Errorf("enqueue = %v, want EnqueueRejected — 스위퍼 커서가 멈추면 안 된다", got)
 	}
 	// 미기동 상태이므로 Start·Shutdown 둘 다 안전해야 한다.

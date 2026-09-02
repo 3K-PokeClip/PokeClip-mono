@@ -37,6 +37,9 @@ func (s *stubStore) MarkFailed(_ context.Context, _ string, seq, _ int64) (bool,
 func (s *stubStore) PendingUploads(_ context.Context, _ float64, _ int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
 	return nil, after, nil
 }
+func (s *stubStore) MarkInitUploaded(context.Context, string, []byte) (bool, error) {
+	return true, nil
+}
 func (s *stubStore) CountBacklog(context.Context) (int64, int64, int64, error) { return 0, 0, 0, nil }
 
 func (s *stubStore) failedSeqs() []int64 {
@@ -90,7 +93,7 @@ func TestNewUploaderBranches(t *testing.T) {
 			t.Error("Results() != nil — 비활성인데 select 가 이 케이스를 고를 수 있다")
 		}
 		up.Start(context.Background())
-		if up.RequestUpload(index.UploadTarget{StreamID: "s", Seq: 1, Bytes: 1}) {
+		if up.RequestUpload(index.UploadTarget{StreamID: "s", Axis: index.AxisArchive, Seq: 1, Bytes: 1}) {
 			t.Error("비활성인데 접수됐다")
 		}
 		up.Shutdown() // 미기동 Shutdown 안전
@@ -183,7 +186,7 @@ func newLocalTarget(t *testing.T, dir, streamID string, seq int64) index.UploadT
 	t.Helper()
 	wall := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 	return index.UploadTarget{
-		StreamID: streamID, Seq: seq,
+		StreamID: streamID, Axis: index.AxisArchive, Seq: seq,
 		S3Key:     index.S3Key(streamID, seq, wall),
 		LocalPath: filepath.Join(dir, streamID, "seg.mp4"),
 		Bytes:     100,

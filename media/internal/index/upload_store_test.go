@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 )
 
 // 계획 4절 1단계의 PG 통합 8케이스다. PG_DSN 이 없으면 전부 skip 된다.
@@ -363,6 +365,194 @@ func TestCountBacklogThreeValues(t *testing.T) {
 	}
 	if pending != 2 || failed != 1 || bytesNull != 2 {
 		t.Errorf("(pending, failed, bytesNull) = (%d, %d, %d), want (2, 1, 2)", pending, failed, bytesNull)
+	}
+}
+
+// 케이스10 — 스위퍼가 집어 오는 대상은 ② 아카이브 축이다(설계 5.5.4 #4).
+//
+// 잡는 결함: 축을 안 찍으면 영값(미판정)으로 나가고 업로더가 fail-closed 로 전부 거부한다 —
+// 재개 경로가 통째로 죽는다. pendingUploadsSQL 은 ② 의 열(upload_state)만 보는 조회이므로
+// 이 조회의 산출은 정의상 아카이브 축이다(축별 조회는 M4).
+func TestPendingUploadsStampsArchiveAxis(t *testing.T) {
+	pool := newTestPool(t)
+	st := NewUploadStore(pool)
+
+	seed(t, pool, seedRow{"axis", 0, old(10), UploadStatePending, bytesOf(1000), false})
+
+	rows, _, err := st.PendingUploads(context.Background(), 120, 10, SweepCursor{})
+	if err != nil {
+		t.Fatalf("PendingUploads 실패: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("행 수 = %d, want 1", len(rows))
+	}
+	if rows[0].Axis != AxisArchive {
+		t.Errorf("Axis = %v, want %v — 축이 없으면 업로더가 거부한다", rows[0].Axis, AxisArchive)
+	}
+	if rows[0].SessionID != "" {
+		t.Errorf("SessionID = %q, want 빈 문자열 — ②·③ 의 대상 식별자는 seq 다", rows[0].SessionID)
+	}
+}
+
+// initSession 은 init 3열이 채워진 세션 행을 직접 넣는다.
+//
+// **생산자 없이 CAS 를 재는 방법이다**(계획 단계 6 · t3 전례): 세 열(init_s3_key·init_sha256·
+// init_bytes)의 유일한 생산자는 Producer.Init 이고 그것은 M4 다. 그래서 픽스처가 그 값을
+// 직접 채워 CAS 의 전제(init_sha256 이 이미 있다)를 성립시킨다.
+func initSession(t *testing.T, pool *pgxpool.Pool, sessionID, streamID string, s3Key string, sha []byte, bytes int64) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+INSERT INTO stream_sessions
+    (session_id, stream_id, started_at, state, init_s3_key, init_sha256, init_bytes)
+VALUES ($1, $2, now(), 'ended', $3, $4, $5)`,
+		sessionID, streamID, s3Key, sha, bytes)
+	if err != nil {
+		t.Fatalf("세션 픽스처 삽입 실패 %s: %v", sessionID, err)
+	}
+}
+
+// initUploadedAt 은 그 세션의 init 확정 시각이다(NULL 이면 false).
+func initUploadedAt(t *testing.T, pool *pgxpool.Pool, sessionID string) (time.Time, bool) {
+	t.Helper()
+	var at *time.Time
+	err := pool.QueryRow(context.Background(),
+		`SELECT init_uploaded_at FROM stream_sessions WHERE session_id=$1`, sessionID).Scan(&at)
+	if err != nil {
+		t.Fatalf("init_uploaded_at 조회 실패: %v", err)
+	}
+	if at == nil {
+		return time.Time{}, false
+	}
+	return *at, true
+}
+
+// T8 — init CAS 는 세 조건이 전부 맞을 때만 1행이다(설계 5.5.5 셋째 문장).
+//
+// 잡는 결함: 조건 하나라도 빠지면 **올라가지도 않은 init 이 확정**돼 발행 게이트
+// (init_uploaded_at IS NULL → ready:false)가 열린다 — 매니페스트가 없는 MAP 을 가리킨다.
+func TestMarkInitUploadedIsCompareAndSwap(t *testing.T) {
+	pool := newTestPool(t)
+	st := NewUploadStore(pool)
+	ctx := context.Background()
+	sha := []byte("0123456789abcdef0123456789abcdef")
+
+	initSession(t, pool, "S-cas", "casstream", "dvr/casstream/init/S-cas.mp4", sha, 720)
+
+	t.Run("sha256_이_다르면_거부", func(t *testing.T) {
+		marked, err := st.MarkInitUploaded(ctx, "S-cas", []byte("전혀 다른 바이트열입니다 ................"))
+		if err != nil {
+			t.Fatalf("MarkInitUploaded 실패: %v", err)
+		}
+		if marked {
+			t.Fatal("marked = true, want false — 바이트 동등성이 CAS 의 앵커다")
+		}
+		if _, ok := initUploadedAt(t, pool, "S-cas"); ok {
+			t.Error("init_uploaded_at 이 채워졌다 — 거부된 CAS 가 장부를 바꿨다")
+		}
+	})
+
+	t.Run("없는_세션은_거부", func(t *testing.T) {
+		marked, err := st.MarkInitUploaded(ctx, "S-없음", sha)
+		if err != nil {
+			t.Fatalf("MarkInitUploaded 실패: %v", err)
+		}
+		if marked {
+			t.Fatal("marked = true, want false")
+		}
+	})
+
+	t.Run("sha256_이_같으면_확정한다", func(t *testing.T) {
+		marked, err := st.MarkInitUploaded(ctx, "S-cas", sha)
+		if err != nil {
+			t.Fatalf("MarkInitUploaded 실패: %v", err)
+		}
+		if !marked {
+			t.Fatal("marked = false, want true")
+		}
+		if _, ok := initUploadedAt(t, pool, "S-cas"); !ok {
+			t.Error("init_uploaded_at 이 비었다 — 확정이 기록되지 않았다")
+		}
+	})
+
+	t.Run("이미_확정된_행은_다시_확정하지_않는다", func(t *testing.T) {
+		before, _ := initUploadedAt(t, pool, "S-cas")
+		marked, err := st.MarkInitUploaded(ctx, "S-cas", sha)
+		if err != nil {
+			t.Fatalf("MarkInitUploaded 실패: %v", err)
+		}
+		if marked {
+			t.Fatal("marked = true, want false — IS NULL 가드가 중복 확정을 막는다")
+		}
+		after, _ := initUploadedAt(t, pool, "S-cas")
+		if !after.Equal(before) {
+			t.Errorf("init_uploaded_at 이 %v → %v 로 바뀌었다 — 확정 시각은 1회로 굳는다", before, after)
+		}
+	})
+}
+
+// T10 — 세션 2개의 init 은 서로 다른 키·다른 바이트이고, CAS 도 서로를 확정하지 않는다.
+//
+// 잡는 결함 둘: ⑴ 키가 세션 축이 아니면(f(stream_id) 파생) 두 세션이 같은 객체를 덮어써
+// 옛 세션의 되감기가 새 MAP 으로 재생된다(ADR-044 금지 사항) ⑵ CAS 가 **행 자신의
+// sha256 을 읽어 되넘기면** 항진식이 되어 5.3ⓑ(바이트 동등성) 보증이 통째로 사라진다 —
+// 남의 해시로 부른 CAS 가 성공하면 그 구현이다.
+func TestTwoSessionsHaveIndependentInitKeysAndCAS(t *testing.T) {
+	pool := newTestPool(t)
+	st := NewUploadStore(pool)
+	ctx := context.Background()
+
+	const stream = "twosess"
+	shaA := []byte("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	shaB := []byte("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
+
+	keyA, err := playback.InitKey(stream, "S-twosess-1")
+	if err != nil {
+		t.Fatalf("InitKey 실패: %v", err)
+	}
+	keyB, err := playback.InitKey(stream, "S-twosess-2")
+	if err != nil {
+		t.Fatalf("InitKey 실패: %v", err)
+	}
+	if keyA == keyB {
+		t.Fatalf("두 세션의 init 키가 같다 (%q) — 키는 세션 축이다", keyA)
+	}
+	if keyA != "dvr/twosess/init/S-twosess-1.mp4" {
+		t.Errorf("키 = %q, want dvr/twosess/init/S-twosess-1.mp4 (설계 5.2 형상)", keyA)
+	}
+
+	initSession(t, pool, "S-twosess-1", stream, keyA, shaA, 700)
+	initSession(t, pool, "S-twosess-2", stream, keyB, shaB, 701)
+
+	// 자기 행 hash 재사용 금지 — 남의 해시로 부른 CAS 는 거부돼야 한다.
+	for _, c := range []struct{ session, other string }{
+		{"S-twosess-1", "S-twosess-2"},
+		{"S-twosess-2", "S-twosess-1"},
+	} {
+		wrong := shaB
+		if c.session == "S-twosess-2" {
+			wrong = shaA
+		}
+		marked, err := st.MarkInitUploaded(ctx, c.session, wrong)
+		if err != nil {
+			t.Fatalf("MarkInitUploaded 실패: %v", err)
+		}
+		if marked {
+			t.Fatalf("%s 를 %s 의 해시로 확정했다 — CAS 가 행 자신의 값을 되읽고 있다", c.session, c.other)
+		}
+	}
+
+	// 제 해시로는 둘 다 독립으로 확정된다.
+	for session, sha := range map[string][]byte{"S-twosess-1": shaA, "S-twosess-2": shaB} {
+		marked, err := st.MarkInitUploaded(ctx, session, sha)
+		if err != nil {
+			t.Fatalf("MarkInitUploaded 실패: %v", err)
+		}
+		if !marked {
+			t.Fatalf("%s 확정 실패 — 제 해시로는 통과해야 한다", session)
+		}
+		if _, ok := initUploadedAt(t, pool, session); !ok {
+			t.Errorf("%s 의 init_uploaded_at 이 비었다", session)
+		}
 	}
 }
 

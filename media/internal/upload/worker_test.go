@@ -123,7 +123,7 @@ func TestFileGrowthDuringPutSkipsMarkingAndDoesNotBackoff(t *testing.T) {
 	if rec.level != slog.LevelWarn {
 		t.Errorf("레벨 = %v, want WARN", rec.level)
 	}
-	if _, blocked := u.gate.backoffBlocked(targetKey{"demo", 7}); blocked {
+	if _, blocked := u.gate.backoffBlocked(archiveKey("demo", 7)); blocked {
 		t.Error("백오프가 등록됐다 — 이 분기는 미등록 고정이다")
 	}
 }
@@ -157,7 +157,7 @@ func TestNoResultOnCASRejectionOrDBError(t *testing.T) {
 			cap.one(t, c.log)
 			// 두 분기 모두 백오프에 등록한다(M-1) — 미등록이면 이미 성공한 PUT 을
 			// SweepEvery 마다 통째로 다시 올리는 핫루프가 된다.
-			if _, blocked := u.gate.backoffBlocked(targetKey{"demo", 7}); !blocked {
+			if _, blocked := u.gate.backoffBlocked(archiveKey("demo", 7)); !blocked {
 				t.Error("백오프가 등록되지 않았다")
 			}
 		})
@@ -247,7 +247,7 @@ func TestFileMissingQuarantinesOnlyAfterConfirmedMark(t *testing.T) {
 			if got != c.wantOutcome {
 				t.Errorf("outcome = %v, want %v", got, c.wantOutcome)
 			}
-			k := targetKey{"demo", 7}
+			k := archiveKey("demo", 7)
 			if u.gate.quarantined(k) != c.wantQuarantine {
 				t.Errorf("격리 = %v, want %v", u.gate.quarantined(k), c.wantQuarantine)
 			}
@@ -284,28 +284,28 @@ func TestTargetValidationRejectReasons(t *testing.T) {
 		reason string
 	}{
 		{"허용되지_않는_stream_id", index.UploadTarget{
-			StreamID: "demo/../etc", Seq: 7, S3Key: index.S3Key("demo", 7, fixtureWall),
+			StreamID: "demo/../etc", Axis: index.AxisArchive, Seq: 7, S3Key: index.S3Key("demo", 7, fixtureWall),
 			LocalPath: ok, Bytes: 64}, "bad_stream_id"},
 		{"키_문법_위반", index.UploadTarget{
-			StreamID: "demo", Seq: 7, S3Key: "streams/demo/seg_000007.m4s",
+			StreamID: "demo", Axis: index.AxisArchive, Seq: 7, S3Key: "streams/demo/seg_000007.m4s",
 			LocalPath: ok, Bytes: 64}, "bad_key"},
 		{"키의_stream_불일치", index.UploadTarget{
-			StreamID: "demo", Seq: 7, S3Key: index.S3Key("other", 7, fixtureWall),
+			StreamID: "demo", Axis: index.AxisArchive, Seq: 7, S3Key: index.S3Key("other", 7, fixtureWall),
 			LocalPath: ok, Bytes: 64}, "bad_key"},
 		{"키의_seq_불일치", index.UploadTarget{
-			StreamID: "demo", Seq: 8, S3Key: index.S3Key("demo", 7, fixtureWall),
+			StreamID: "demo", Axis: index.AxisArchive, Seq: 8, S3Key: index.S3Key("demo", 7, fixtureWall),
 			LocalPath: ok, Bytes: 64}, "seq_mismatch"},
 		{"절대경로_루트_이탈", index.UploadTarget{
-			StreamID: "evil", Seq: 0, S3Key: index.S3Key("evil", 0, fixtureWall),
+			StreamID: "evil", Axis: index.AxisArchive, Seq: 0, S3Key: index.S3Key("evil", 0, fixtureWall),
 			LocalPath: "/home/sidecar/.aws/credentials", Bytes: 64}, "root_escape"},
 		{"상대경로_상위_이탈", index.UploadTarget{
-			StreamID: "demo", Seq: 7, S3Key: index.S3Key("demo", 7, fixtureWall),
+			StreamID: "demo", Axis: index.AxisArchive, Seq: 7, S3Key: index.S3Key("demo", 7, fixtureWall),
 			LocalPath: filepath.Join(dir, "..", "outside.mp4"), Bytes: 64}, "root_escape"},
 		{"디렉토리_불일치", index.UploadTarget{
-			StreamID: "demo", Seq: 7, S3Key: index.S3Key("demo", 7, fixtureWall),
+			StreamID: "demo", Axis: index.AxisArchive, Seq: 7, S3Key: index.S3Key("demo", 7, fixtureWall),
 			LocalPath: filepath.Join(dir, "other", "seg.mp4"), Bytes: 64}, "dir_mismatch"},
 		{"bytes_0", index.UploadTarget{
-			StreamID: "demo", Seq: 7, S3Key: index.S3Key("demo", 7, fixtureWall),
+			StreamID: "demo", Axis: index.AxisArchive, Seq: 7, S3Key: index.S3Key("demo", 7, fixtureWall),
 			LocalPath: ok, Bytes: 0}, "bad_bytes"},
 	}
 
@@ -323,7 +323,7 @@ func TestTargetValidationRejectReasons(t *testing.T) {
 			if rec.attrs["reason"] != c.reason {
 				t.Errorf("reason = %v, want %q", rec.attrs["reason"], c.reason)
 			}
-			if !u.gate.quarantined(targetKey{c.target.StreamID, c.target.Seq}) {
+			if !u.gate.quarantined(archiveKey(c.target.StreamID, c.target.Seq)) {
 				t.Error("격리되지 않았다 — 검증 실패는 마킹이 없으므로 즉시 격리다")
 			}
 		})
@@ -350,10 +350,10 @@ func TestOpenErrorClassification(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			u, cap, _ := newWorkerUploader(t, &fakeUploadStore{}, &fakePutter{}, nil)
-			k := targetKey{"demo", 7}
+			k := archiveKey("demo", 7)
 			wrapped := &fs.PathError{Op: "open", Path: "demo/seg.mp4", Err: c.err}
 
-			got := u.classifyOpenError(wrapped, index.UploadTarget{StreamID: "demo", Seq: 7}, k, u.log)
+			got := u.classifyOpenError(wrapped, index.UploadTarget{StreamID: "demo", Axis: index.AxisArchive, Seq: 7}, k, u.log)
 
 			if got.kind != c.wantKind {
 				t.Errorf("kind = %v, want %v", got.kind, c.wantKind)
@@ -468,7 +468,7 @@ func TestTailRecheckAfterRetriesExhausted(t *testing.T) {
 		if len(fl) != 0 {
 			t.Errorf("MarkFailed %d건, want 0건 — 판정 재료가 없으면 판정하지 않는다", len(fl))
 		}
-		k := targetKey{"demo", 7}
+		k := archiveKey("demo", 7)
 		if u.gate.quarantined(k) {
 			t.Error("격리됐다 — 다음 회차가 되돌릴 수 있어야 한다")
 		}
@@ -508,7 +508,7 @@ func TestTailRecheckAfterRetriesExhausted(t *testing.T) {
 		if len(fl) != 0 {
 			t.Errorf("MarkFailed %d건, want 0건", len(fl))
 		}
-		k := targetKey{"demo", 7}
+		k := archiveKey("demo", 7)
 		if u.gate.failuresOf(k) != 0 {
 			t.Errorf("failures = %d, want 0 (불변)", u.gate.failuresOf(k))
 		}
@@ -559,7 +559,7 @@ func TestPostPutStatBranchesDoNotRegisterBackoff(t *testing.T) {
 
 	runTarget(t, u, newTarget("demo", 7, path, 128, false))
 
-	if _, blocked := u.gate.backoffBlocked(targetKey{"demo", 7}); blocked {
+	if _, blocked := u.gate.backoffBlocked(archiveKey("demo", 7)); blocked {
 		t.Error("백오프가 등록됐다 — [2](e) 두 분기는 미등록 고정이다(C10)")
 	}
 }
@@ -677,7 +677,7 @@ func TestStatFailureNeverMarksAndNeverPanics(t *testing.T) {
 				t.Errorf("Result 가 왔다: %+v", res)
 			default:
 			}
-			if _, blocked := u.gate.backoffBlocked(targetKey{"demo", 7}); blocked != c.wantBackoff {
+			if _, blocked := u.gate.backoffBlocked(archiveKey("demo", 7)); blocked != c.wantBackoff {
 				t.Errorf("백오프 등록 = %v, want %v", blocked, c.wantBackoff)
 			}
 		})
@@ -694,9 +694,9 @@ func TestInvalidTargetDoesNotConsumeHalfOpenProbe(t *testing.T) {
 	})
 	ok := writeSegment(t, dir, "demo", "seg.mp4", 64)
 
-	u.brk.record(outcomeHard, errors.New("boom"))
+	u.brk.of(index.AxisArchive).record(outcomeHard, errors.New("boom"))
 	time.Sleep(5 * time.Millisecond)
-	if got := u.brk.current(); got != circuitHalfOpen {
+	if got := u.brk.of(index.AxisArchive).current(); got != circuitHalfOpen {
 		t.Fatalf("준비 실패: state = %v, want HalfOpen", got)
 	}
 
@@ -706,10 +706,10 @@ func TestInvalidTargetDoesNotConsumeHalfOpenProbe(t *testing.T) {
 		t.Fatalf("outcome = %v, want neutral", got)
 	}
 
-	if u.brk.probeUsed {
+	if u.brk.of(index.AxisArchive).probeUsed {
 		t.Error("검증 실패 행이 probe 를 소비했다")
 	}
-	if !u.brk.allowWork(targetKey{"demo", 8}) {
+	if !u.brk.of(index.AxisArchive).allowWork(archiveKey("demo", 8)) {
 		t.Error("정상 행이 probe 를 쓰지 못한다 — 반열림 복구 판정이 미뤄진다")
 	}
 }
@@ -755,7 +755,7 @@ func TestHardFailureOpensCircuitEndToEnd(t *testing.T) {
 	if rec.attrs["err_class"] != "hard" {
 		t.Errorf("err_class = %v, want hard", rec.attrs["err_class"])
 	}
-	if got := u.brk.current(); got != circuitOpen {
+	if got := u.brk.of(index.AxisArchive).current(); got != circuitOpen {
 		t.Fatalf("브레이커 = %v, want Open — hard 종결이 streak 에 안 잡혔다", got)
 	}
 	cap.one(t, "circuit_open")
@@ -767,7 +767,7 @@ func TestHardFailureOpensCircuitEndToEnd(t *testing.T) {
 	u2, cap2, dir2 := newWorkerUploader(t, &fakeUploadStore{}, softPut, func(o *Options) { o.CircuitMax = 1 })
 	p2 := writeSegment(t, dir2, "demo", "seg.mp4", 128)
 	u2.runJob(job{target: newTarget("demo", 7, p2, 128, false), origin: OriginSweep, sweepRound: 1})
-	if got := u2.brk.current(); got != circuitClosed {
+	if got := u2.brk.of(index.AxisArchive).current(); got != circuitClosed {
 		t.Errorf("브레이커 = %v, want Closed — 미상 오류를 hard 로 오분류하면 정상 트래픽까지 막는다", got)
 	}
 	if n := cap2.count("circuit_open"); n != 0 {
@@ -783,13 +783,27 @@ func TestOpenCircuitRejectsEnqueue(t *testing.T) {
 
 	u.OpenCircuit("credentials_unavailable")
 
-	if got := u.brk.current(); got != circuitOpen {
+	if got := u.brk.of(index.AxisArchive).current(); got != circuitOpen {
 		t.Fatalf("브레이커 = %v, want Open", got)
 	}
 	if got := u.enqueue(newTarget("demo", 7, path, 128, false), OriginSweep); got != EnqueueRejected {
 		t.Errorf("enqueue = %v, want Rejected", got)
 	}
-	cap.one(t, "circuit_open")
+	// 브레이커는 축별 3개이고 OpenCircuit 은 셋을 전부 연다(설계 5.5.3 · 계획 4.5) —
+	// 자격증명 부재는 축과 무관한 사정이다. 로그도 축마다 하나씩, axis 라벨을 달고 나온다.
+	opened := cap.find("circuit_open")
+	if len(opened) != len(axisAll) {
+		t.Fatalf("circuit_open 로그 = %d건, want %d건 (축마다 1건)", len(opened), len(axisAll))
+	}
+	seen := map[any]bool{}
+	for _, rec := range opened {
+		seen[rec.attrs["axis"]] = true
+	}
+	for _, a := range axisAll {
+		if !seen[a.String()] {
+			t.Errorf("axis=%s 의 circuit_open 이 없다", a)
+		}
+	}
 
 	// 비활성 업로더에서는 아무 일도 일어나지 않는다.
 	Disabled(newLogCapture().logger()).OpenCircuit("credentials_unavailable")
@@ -830,7 +844,7 @@ func TestRetryBackoffWakesOnWorkerStopAlone(t *testing.T) {
 func TestSuccessfulUploadClearsBackoff(t *testing.T) {
 	u, _, dir := newWorkerUploader(t, &fakeUploadStore{}, &fakePutter{}, nil)
 	path := writeSegment(t, dir, "demo", "seg.mp4", 128)
-	k := targetKey{"demo", 7}
+	k := archiveKey("demo", 7)
 
 	u.gate.registerFailure(k)
 	if _, blocked := u.gate.backoffBlocked(k); !blocked {
@@ -854,7 +868,7 @@ func TestRejectingGatesDoNotHoldInflight(t *testing.T) {
 	path := writeSegment(t, dir, "demo", "seg.mp4", 128)
 
 	t.Run("백오프_거부", func(t *testing.T) {
-		k := targetKey{"demo", 1}
+		k := archiveKey("demo", 1)
 		u.gate.registerFailure(k)
 		if got := u.enqueue(newTarget("demo", 1, path, 128, false), OriginSweep); got != EnqueueRejected {
 			t.Fatalf("enqueue = %v, want Rejected", got)
@@ -865,7 +879,7 @@ func TestRejectingGatesDoNotHoldInflight(t *testing.T) {
 	})
 
 	t.Run("격리_거부", func(t *testing.T) {
-		k := targetKey{"demo", 2}
+		k := archiveKey("demo", 2)
 		u.gate.quarantine(k)
 		if got := u.enqueue(newTarget("demo", 2, path, 128, false), OriginSweep); got != EnqueueRejected {
 			t.Fatalf("enqueue = %v, want Rejected", got)

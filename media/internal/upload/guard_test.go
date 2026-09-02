@@ -32,7 +32,7 @@ func TestBackoffGrowsExponentiallyUpToMax(t *testing.T) {
 	clk := newFakeClock()
 	g := newTestGates(clk)
 	opt := testOptions()
-	k := targetKey{"s", 1}
+	k := archiveKey("s", 1)
 
 	want := []time.Duration{
 		2 * opt.SweepEvery,  // failures 1
@@ -72,7 +72,7 @@ func TestDeferredBackoffStaysAtOneRoundAndCountsStreak(t *testing.T) {
 	clk := newFakeClock()
 	g := newTestGates(clk)
 	opt := testOptions()
-	k := targetKey{"s", 1}
+	k := archiveKey("s", 1)
 
 	for i := 1; i <= 10; i++ {
 		base := clk.now()
@@ -98,7 +98,7 @@ func TestDeferredBackoffStaysAtOneRoundAndCountsStreak(t *testing.T) {
 func TestQuarantineIsSticky(t *testing.T) {
 	clk := newFakeClock()
 	g := newTestGates(clk)
-	k := targetKey{"s", 1}
+	k := archiveKey("s", 1)
 
 	if g.quarantined(k) {
 		t.Fatal("처음부터 격리돼 있다")
@@ -107,7 +107,7 @@ func TestQuarantineIsSticky(t *testing.T) {
 	if !g.quarantined(k) {
 		t.Fatal("격리가 등록되지 않았다")
 	}
-	if g.quarantined(targetKey{"s", 2}) {
+	if g.quarantined(archiveKey("s", 2)) {
 		t.Error("다른 행까지 격리됐다")
 	}
 }
@@ -116,7 +116,7 @@ func TestQuarantineIsSticky(t *testing.T) {
 func TestInflightIsExclusiveUntilReleased(t *testing.T) {
 	clk := newFakeClock()
 	g := newTestGates(clk)
-	k := targetKey{"s", 1}
+	k := archiveKey("s", 1)
 
 	if !g.acquireInflight(k) {
 		t.Fatal("첫 획득이 실패했다")
@@ -217,7 +217,7 @@ func TestBreakerTransitionTable(t *testing.T) {
 		if b.allowEnqueue() {
 			t.Error("6행: Open 인데 접수가 허용됐다")
 		}
-		if b.allowWork(targetKey{"s", 1}) {
+		if b.allowWork(archiveKey("s", 1)) {
 			t.Error("7행: Open 인데 작업이 허용됐다")
 		}
 		if n := cap.count("upload_skipped_circuit"); n != 1 {
@@ -276,10 +276,10 @@ func TestBreakerTransitionTable(t *testing.T) {
 		if !b.allowEnqueue() { // 10행
 			t.Error("10행: HalfOpen 인데 접수가 거부됐다")
 		}
-		if !b.allowWork(targetKey{"s", 1}) { // 11행
+		if !b.allowWork(archiveKey("s", 1)) { // 11행
 			t.Error("11행: 첫 probe 가 거부됐다")
 		}
-		if b.allowWork(targetKey{"s", 2}) { // 12행
+		if b.allowWork(archiveKey("s", 2)) { // 12행
 			t.Error("12행: 두 번째 작업이 probe 를 또 소비했다")
 		}
 	})
@@ -288,7 +288,7 @@ func TestBreakerTransitionTable(t *testing.T) {
 	t.Run("13_probe_성공은_Closed", func(t *testing.T) {
 		clk, cap := newFakeClock(), newLogCapture()
 		b := halfOpenBreaker(t, clk, cap)
-		b.allowWork(targetKey{"s", 1})
+		b.allowWork(archiveKey("s", 1))
 		b.record(outcomeSuccess, nil)
 		if got := b.current(); got != circuitClosed {
 			t.Fatalf("state = %v, want Closed", got)
@@ -306,7 +306,7 @@ func TestBreakerTransitionTable(t *testing.T) {
 		t.Run("14_probe_"+o.String()+"_는_다시_Open", func(t *testing.T) {
 			clk, cap := newFakeClock(), newLogCapture()
 			b := halfOpenBreaker(t, clk, cap)
-			b.allowWork(targetKey{"s", 1})
+			b.allowWork(archiveKey("s", 1))
 			openedBefore := b.openedAt
 			clk.advance(time.Minute)
 			b.record(o, errors.New("boom"))
@@ -324,14 +324,14 @@ func TestBreakerTransitionTable(t *testing.T) {
 		t.Run("15_probe_"+o.String()+"_는_HalfOpen_유지하고_probe_복귀", func(t *testing.T) {
 			clk, cap := newFakeClock(), newLogCapture()
 			b := halfOpenBreaker(t, clk, cap)
-			if !b.allowWork(targetKey{"s", 1}) {
+			if !b.allowWork(archiveKey("s", 1)) {
 				t.Fatal("첫 probe 가 거부됐다")
 			}
 			b.record(o, nil)
 			if got := b.current(); got != circuitHalfOpen {
 				t.Fatalf("state = %v, want HalfOpen", got)
 			}
-			if !b.allowWork(targetKey{"s", 2}) {
+			if !b.allowWork(archiveKey("s", 2)) {
 				t.Fatal("probeUsed 가 복귀하지 않았다 — 재판정 기회가 영영 없어 고착한다")
 			}
 		})
@@ -408,7 +408,7 @@ func TestEnqueueRollsBackInflightOnQueueFull(t *testing.T) {
 	if n := cap.count("upload_queue_full"); n != 1 {
 		t.Errorf("upload_queue_full = %d건, want 1", n)
 	}
-	if !u.gate.acquireInflight(targetKey{"demo", 9}) {
+	if !u.gate.acquireInflight(archiveKey("demo", 9)) {
 		t.Fatal("QueueFull 인데 in-flight 가 남아 있다 — 이 행은 영영 다시 접수되지 않는다")
 	}
 }
