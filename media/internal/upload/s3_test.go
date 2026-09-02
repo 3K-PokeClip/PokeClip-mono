@@ -31,7 +31,7 @@ func (e codeErr) Error() string     { return e.code }
 func (e codeErr) ErrorCode() string { return e.code }
 
 // ⑬ 전반부 — 분류의 기본값이 soft 인 것이 핵심이다.
-// 알 수 없는 오류를 hard 로 오분류하면 브레이커가 전역으로 열려 정상 트래픽까지 막는다(R2).
+// 알 수 없는 오류를 hard 로 오분류하면 브레이커가 그 축만 열려 그 축의 정상 트래픽까지 막는다(R2).
 func TestClassifyPutError(t *testing.T) {
 	cases := []struct {
 		name string
