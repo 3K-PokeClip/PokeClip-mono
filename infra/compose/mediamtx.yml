@@ -16,6 +16,10 @@ moq: no
 # Control API (POK-195) — 사이드카의 상태 관측(mtxstate 폴러)이 GET /v3/paths/list 를 읽는다.
 # **호스트에 포트를 공개하지 않는다**(docker-compose.yml 의 media 서비스 ports 에 9997 없음).
 # 도달 범위는 compose 브리지 네트워크 안뿐이다.
+#
+# **이 파일을 고친 뒤에는 `docker compose restart media` 를 해야 반영된다.** 바인드 마운트라
+# 내용이 바뀌어도 compose 가 보는 media 서비스 정의는 그대로여서(설정 해시 동일 — 실측)
+# `up -d` 는 "Running" 으로 넘어가고, MediaMTX 는 기동 때 읽은 옛 설정으로 계속 돈다.
 api: yes
 apiAddress: :9997
 
