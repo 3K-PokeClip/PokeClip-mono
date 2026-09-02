@@ -13,6 +13,62 @@ rtsp: no
 webrtc: no
 moq: no
 
+# Control API (POK-195) — 사이드카의 상태 관측(mtxstate 폴러)이 GET /v3/paths/list 를 읽는다.
+# **호스트에 포트를 공개하지 않는다**(docker-compose.yml 의 media 서비스 ports 에 9997 없음).
+# 도달 범위는 compose 브리지 네트워크 안뿐이다.
+api: yes
+apiAddress: :9997
+
+# 인증 — **이 키를 적는 순간 기본 사용자 목록이 통째로 대체된다**(전체 설정 대체 규약).
+# 그래서 아래 두 항목은 포크 태그(v1.20.1-pokeclip.1) 기본값 원문을 그대로 옮긴 것이다.
+# 첫 항목(익명 publish/read/playback)이 빠지면 SRT 송출과 LL-HLS 재생이 동시에 죽고,
+# 둘째 항목(localhost 관리자)을 지우면 되돌리기 축이 사라진다 — 둘 다 손대지 마라.
+# 셋째 항목만 우리가 더한 것이다.
+authInternalUsers:
+  # Default unprivileged user.
+  # Username. 'any' means any user, including anonymous ones.
+  - user: any
+    # Password. Not used in case of 'any' user.
+    pass:
+    # IPs or networks allowed to use this user. An empty list means any IP.
+    ips: []
+    # Permissions.
+    permissions:
+      # Available actions are: publish, read, playback, api, metrics, pprof.
+      - action: publish
+        # Paths can be set to further restrict access to a specific path.
+        # An empty path means any path.
+        # Regular expressions can be used by using a tilde as prefix.
+        path:
+      - action: read
+        path:
+      - action: playback
+        path:
+
+    # Default administrator.
+    # This allows to use API, metrics and PPROF without authentication,
+    # if the IP is localhost.
+  - user: any
+    pass:
+    ips: ["127.0.0.1", "::1"]
+    permissions:
+      - action: api
+      - action: metrics
+      - action: pprof
+
+  # ↑ 여기까지가 기본값 원문. ↓ 아래 한 항목만 PokeClip 이 더했다 (POK-195).
+  #
+  # 사이드카는 다른 컨테이너라 위 관리자 항목의 localhost 조건을 못 만족한다(실측: 401
+  # {"error":"authentication error"}). 그래서 api 권한만 여는 항목을 하나 더한다.
+  # **자격증명 성분(pass)을 두지 않는다** — 평문 커밋 금지 불변식(ADR-018)에 걸린다.
+  # **ips 대역도 지정하지 않는다** — compose 에 IPAM/subnet 선언이 없어 대역이 재생성마다
+  # 바뀔 수 있고, IPAM 신설은 인프라 축 확대라 별도 회부 사안이다. 대신 ⑴ compose 전용
+  # 브리지 네트워크 격리 ⑵ 9997 미공개 두 겹에 의존한다.
+  # 잔여 위험(같은 네트워크의 다른 우리 컨테이너도 API 를 부를 수 있다)은 M5 강화 축으로 이관.
+  - user: any
+    permissions:
+      - action: api
+
 # LL-HLS 재생 + DVR
 hls: yes
 hlsAddress: :8888
