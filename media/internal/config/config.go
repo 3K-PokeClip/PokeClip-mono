@@ -279,6 +279,11 @@ func Load(env func(string) string) (Config, error) {
 		return Config{}, err
 	}
 
+	// ⓐ2 판정은 indexer 가 한다(계획 3절) — 두 창을 그쪽 Options 로 옮겨 담는다.
+	// 값의 집은 여기 하나이고 저쪽은 받는 자리다(idx.TailGrace 와 같은 규칙).
+	idx.ObsFresh = obsFresh
+	idx.ObsBackfill = obsBackfill
+
 	// 교차 검증 4 — 폴 주기가 신선도 창 이상이면 다음 관측이 오기 전에 직전 관측이 만료돼
 	// 신선한 관측이 끊기지 않고 존재할 수 없다. 폴은 성공하고 주조만 안 되므로 로그에도
 	// 드러나지 않는다. **역은 성립하지 않는다** — 짧다고 신선이 보장되지는 않는다.

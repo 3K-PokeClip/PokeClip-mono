@@ -582,6 +582,26 @@ func TestLoadAppliesObservationDefaults(t *testing.T) {
 	}
 }
 
+// ⓐ2 의 두 시간 창은 판정하는 층(indexer)에도 같은 값으로 도달해야 한다.
+// 값의 집은 config 하나이고, 여기서 옮겨 담지 않으면 인덱서 쪽이 영값(=가장 엄격)으로
+// 판정해 스캔 유입이 영영 주조되지 않는다 — 로그에는 아무것도 안 남는 종류의 고장이다.
+func TestObservationWindowsReachTheIndexer(t *testing.T) {
+	env := minimalEnv()
+	env["OBS_FRESH"] = "45s"
+	env["OBS_BACKFILL"] = "90s"
+
+	cfg, err := Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.Indexer.ObsFresh != cfg.ObsFresh {
+		t.Errorf("Indexer.ObsFresh = %v, want %v", cfg.Indexer.ObsFresh, cfg.ObsFresh)
+	}
+	if cfg.Indexer.ObsBackfill != cfg.ObsBackfill {
+		t.Errorf("Indexer.ObsBackfill = %v, want %v", cfg.Indexer.ObsBackfill, cfg.ObsBackfill)
+	}
+}
+
 // MTX_API_URL="" 은 즉시 롤백 스위치다 — 관측이 사라지면 ⓐ2 만 fail-closed 되고
 // 인덱싱은 그대로 돈다. withDefault 를 쓰면 그 스위치가 고장난다.
 func TestEmptyMTXAPIURLStaysEmpty(t *testing.T) {
