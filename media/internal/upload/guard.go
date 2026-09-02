@@ -52,7 +52,8 @@ type backoffEntry struct {
 }
 
 // gates 는 접수 게이트 4종 중 상태를 가진 셋이다(격리·백오프·in-flight).
-// 나머지 하나인 브레이커는 전역 상태라 breaker 가 따로 소유한다.
+// 나머지 하나인 브레이커는 **축별**(archive·playback·init) 상태라 breakers 가 따로 소유한다 —
+// 한 축의 실패 누적은 그 축만 연다(설계 5.5.3). 세 축을 한꺼번에 여는 것은 openAll 뿐이다.
 //
 // 스위퍼 고루틴·메인 고루틴(RequestUpload)·워커 고루틴이 함께 만지므로 뮤텍스로 보호한다.
 type gates struct {

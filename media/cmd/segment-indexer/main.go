@@ -130,7 +130,8 @@ func run() error {
 	//
 	// 워처보다 **먼저** 띄우는 이유: 첫 관측을 확보한 뒤에 초기 수집이 돌아야 그 주기의
 	// 스캔 유입이 ⓐ2 를 쓸 수 있다. 뒤로 미루면 재기동 직후 한 주기가 통째로
-	// 관측 이력 0(= EpochKnown=false) 위에서 돌아 아무것도 주조되지 않는다.
+	// 관측 이력 0(= EpochKnown=false) 위에서 돌아 스캔 유입은 아무것도 주조하지 못한다
+	// (ⓐ1 워처·훅 유입은 관측과 무관하게 주조한다 — 관측이 가르는 것은 스캔 유입뿐이다).
 	observer, stopObserver := startObserver(ctx, cfg.MTXState, log)
 	defer stopObserver()
 

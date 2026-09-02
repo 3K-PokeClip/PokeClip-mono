@@ -210,8 +210,9 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 > **둘째 줄만으로는 부족하다.** `mediamtx.yml`은 바인드 마운트라 파일 내용이 바뀌어도
 > compose가 보는 `media` 서비스 정의는 그대로다(설정 해시 동일 — 실측). 그래서 `up -d`는
 > `media`를 "Running"으로 두고 넘어가고, MediaMTX는 기동 때 읽은 옛 설정으로 계속 돈다.
-> 재기동하지 않으면 Control API가 없는 상태라 사이드카 호출이 실패하고, 되감기 주조가
-> **아무 증상 없이** 멈춘다(사이드카 로그의 `mtxstate_poll_failed`만이 유일한 흔적이다).
+> 재기동하지 않으면 Control API가 없는 상태라 사이드카 호출이 실패하고, **관측 기반 주조(스캔
+> 유입 ⓐ2)만 아무 증상 없이 멈춘다**(워처·훅 유입 ⓐ1 주조는 `REWIND_SEED_ENABLED`가 켜진 한
+> 계속된다 — 위 정의와 같다). 사이드카 로그의 `mtxstate_poll_failed`만이 유일한 흔적이다.
 
 **S3 업로더(POK-30) — `S3_BUCKET`이 비어 있으면 업로더가 꺼지고 아래 값은 무시된다(단 `SEGMENT_UPLOAD_TAIL_HOLD`만 예외 — 표 안 설명 참조).**
 
@@ -329,18 +330,23 @@ v3의 `api` 권한은 조회 전용이 아니라 설정 변경·경로 추가·�
 cd media && go test ./...
 ```
 
-`internal/index`의 통합 테스트는 **실제 PostgreSQL이 필요**하다. `PG_DSN`이 없으면 해당 케이스는
-전부 `skip`되고 나머지는 그대로 돈다 — 즉 `PG_DSN` 없이 돌린 결과만으로는 DB 계층이 검증되지 않는다.
+`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`의 통합 테스트는
+**실제 PostgreSQL이 필요**하다. `PG_DSN`이 없으면 해당 케이스는 전부 `skip`되고 나머지는 그대로
+돈다 — 즉 `PG_DSN` 없이 돌린 결과만으로는 DB 계층이 검증되지 않는다.
 
 ```bash
 set -a; . ../.env; set +a
 export PG_DSN="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POSTGRES_DB"
-go test ./internal/index/ -v
+go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ -v
 ```
 
-`internal/index` 통합 테스트는 `PG_DSN`이 가리키는 DB에 **쓰지 않는다.** `PG_DSN`은 관리 접속으로만
+이 통합 테스트들은 `PG_DSN`이 가리키는 DB에 **쓰지 않는다.** `PG_DSN`은 관리 접속으로만
 쓰이고, 같은 서버에 전용 테스트 DB(`PG_TEST_DB`, 기본 `pokeclip_uploadtest`)를 만들어 그 안에서만
-돌며 테스트 함수마다 비운다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
+돌며 테스트 함수마다 비운다. **전용 DB는 패키지마다 하나씩이다**(`internal/pgtest`) —
+`go test ./...`는 패키지별 테스트 바이너리를 병렬로 띄우므로 한 DB를 나눠 쓰면 서로의 표를
+비운다. 실제 이름은 `PG_TEST_DB`에 패키지 접미를 붙인 것으로, `internal/index`만 무접미
+(`pokeclip_uploadtest`)이고 `internal/session`은 `_session`, `internal/indexer`는 `_indexer`,
+`cmd/segment-indexer`는 `_cmd`, `internal/pgtest` 자기 테스트는 `_selftest`다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
 롤에 `CREATEDB` 권한이 필요하고 — **로컬 compose와 CI(`media-ci`)의 postgres 서비스 컨테이너 둘 다 superuser라 이미 갖고 있다**, `PG_TEST_DB`를 개발 DB 이름과 같게
 주면 테스트가 기동 즉시 실패한다. `PG_DSN`에 DB 이름 자체를 안 적었을 때도 같은데, 단
 `PGDATABASE`가 설정된 환경에서는 그 값이 DB 이름으로 채워져 "이름이 비었다" 가드 대신 동일 이름
@@ -351,11 +357,19 @@ go test ./internal/index/ -v
 돌려야 한다**(한 번만 겪는 마이그레이션이고 실패 메시지가 그대로 안내한다).
 **`PG_DSN`에는 로컬 compose의 개발 DB만 준다 — 공유·원격·프로덕션 DSN을 주지 않는다.**
 **같은 `PG_TEST_DB`로 두 실행을 동시에 돌리면 서로의 데이터를 지운다 — CI나 병렬 실행에서는
-실행마다 고유한 `PG_TEST_DB`를 주고, 실행이 끝나면 그 DB를 `DROP DATABASE`로 정리한다**(정리 없이
-고유 이름만 늘리면 DB가 무한히 쌓인다). 이 규약은 **PG를 공유하는 실행이 있을 때** 적용된다 —
+실행마다 고유한 `PG_TEST_DB`를 주고, 실행이 끝나면 그 이름의 접미 DB 전부를 `DROP DATABASE`로
+정리한다**(정리 없이 고유 이름만 늘리면 DB가 무한히 쌓인다). 이 규약은 **PG를 공유하는 실행이 있을 때** 적용된다 —
 `media-ci`의 postgres는 잡마다 뜨고 함께 사라져 공유가 없다 — 규약을 완화한 것이 아니라 적용
 조건을 드러낸 것이다. `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지하므로
-(`CREATE TABLE IF NOT EXISTS`) `DROP DATABASE pokeclip_uploadtest` 후 다시 돌린다.
+(`CREATE TABLE IF NOT EXISTS`) **접미 DB 전부**를 지운 뒤 다시 돌린다 — `pokeclip_uploadtest`
+하나만 지우면 `internal/index`는 새 스키마로 통과하고 `_session`·`_indexer`·`_cmd`는 옛
+스키마 그대로라 그 세 패키지만 "does not exist" 계열로 실패한다.
+
+```bash
+for db in pokeclip_uploadtest pokeclip_uploadtest_session pokeclip_uploadtest_indexer pokeclip_uploadtest_cmd pokeclip_uploadtest_selftest; do
+  psql "$PG_DSN" -c "DROP DATABASE IF EXISTS $db"
+done
+```
 
 `internal/fmp4meta` 테스트는 `testdata/`의 커밋된 파일만 쓰므로 Docker가 꺼져 있어도 돈다.
 

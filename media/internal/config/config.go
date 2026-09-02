@@ -345,8 +345,10 @@ func validateMTXAPIURL(raw string) error {
 	// 폴러는 이 값 뒤에 경로를 문자열로 잇는다(mtxstate/poller.go). 그래서 `#` 은 뒤를
 	// 통째로 fragment 로 잘라 요청 경로를 "/" 로 만들고, `?` 는 경로를 쿼리 안으로 밀어 넣는다.
 	// 둘 다 폴이 매 주기 실패하기만 하는 상태라 문법 단계에서 끊는다.
-	// ForceQuery 는 "http://media:9997?" 처럼 값 없는 물음표만 붙은 형태다.
-	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+	// 파싱 결과가 아니라 **원문**을 본다 — "http://media:9997#" 처럼 값 없는 `#` 은
+	// url.Parse 가 Fragment="" 로 삼켜 파싱 결과로는 구분되지 않는다(`?` 의 ForceQuery 같은
+	// 표식이 fragment 에는 없다). 베이스 URL 원문에 두 글자 중 하나라도 있으면 그 자체가 오구성이다.
+	if strings.ContainsAny(raw, "?#") {
 		return fmt.Errorf("MTX_API_URL(%q)에 query(?)·fragment(#)를 넣을 수 없다 — 베이스 URL 뒤에 /v3/paths/list 가 붙는다", raw)
 	}
 	return nil

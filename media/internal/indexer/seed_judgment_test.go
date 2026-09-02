@@ -479,3 +479,22 @@ func TestSessionContentionRetriesUntilExhaustion(t *testing.T) {
 		t.Fatalf("에러 연쇄에 ErrSessionContended 가 없다: %v", err)
 	}
 }
+
+// classifyInsertError 의 성질 자체를 잰다. 호출부(insertWithRetry)는 contentionSignal 을
+// 먼저 걷어내므로 위 케이스는 함수 머리의 경합 선행 반환에 **도달하지 않는다**(r5 cc N-2:
+// 그 가드를 지운 뮤테이션이 등가 생존). 호출부 순서가 나중에 바뀌어도 "경합 = 재시도"가
+// 이 함수의 성질로 남게 여기서 못 박는다 — 23505 를 먼저 읽으면 fateFatal 로 새는 자리다.
+func TestClassifyInsertErrorReadsContentionBeforeSQLSTATE(t *testing.T) {
+	contended := fmt.Errorf("%w: stream_id=%q seq=%d: %w",
+		index.ErrSessionContended, "s1", int64(0),
+		&pgconn.PgError{Code: "23505", ConstraintName: "stream_sessions_one_live_uq"})
+	if got := classifyInsertError(contended); got != fateRetry {
+		t.Fatalf("classifyInsertError(세션 경합+23505) = %d, want fateRetry(%d) — 무결성 위반으로 읽혔다",
+			got, fateRetry)
+	}
+	locked := fmt.Errorf("%w: %w", index.ErrLockContended,
+		&pgconn.PgError{Code: "55P03"})
+	if got := classifyInsertError(locked); got != fateRetry {
+		t.Fatalf("classifyInsertError(락 경합+55P03) = %d, want fateRetry(%d)", got, fateRetry)
+	}
+}
