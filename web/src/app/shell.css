@@ -19,8 +19,8 @@
  * 카드나 재배치되지 않는 행 목록 화면에만 건다 (docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」).
  * 하단 96 = fixed Dock 여백.
  * 적용: 설정은 (dock)/settings/layout.module.css가, 방송은 각 화면(LiveScreen·VodListScreen)이 쓴다.
- * 이 파일은 app/layout.tsx가 전역으로 싣고 Storybook preview는 싣지 않는다 — 이 토큰을 쓰는 화면의
- * 스토리를 만들 때는 preview에서 함께 import해야 한다. */
+ * 이 파일은 app/layout.tsx와 .storybook/preview.tsx가 함께 싣는다 — 한쪽이 빠지면 이 토큰을 쓰는
+ * padding 단축 속성이 통째로 무효가 돼(상하좌우 0) 앱과 스토리 화면이 달라진다. */
 :root {
   --pc-shell-body-pad-top: calc(30 * var(--pc-u));
   --pc-shell-body-pad-x: calc(32 * var(--pc-u));
