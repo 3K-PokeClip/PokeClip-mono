@@ -330,14 +330,14 @@ v3의 `api` 권한은 조회 전용이 아니라 설정 변경·경로 추가·�
 cd media && go test ./...
 ```
 
-`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`의 통합 테스트는
-**실제 PostgreSQL이 필요**하다. `PG_DSN`이 없으면 해당 케이스는 전부 `skip`되고 나머지는 그대로
+`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`의 통합 테스트와
+`internal/pgtest`의 자기 테스트는 **실제 PostgreSQL이 필요**하다. `PG_DSN`이 없으면 해당 케이스는 전부 `skip`되고 나머지는 그대로
 돈다 — 즉 `PG_DSN` 없이 돌린 결과만으로는 DB 계층이 검증되지 않는다.
 
 ```bash
 set -a; . ../.env; set +a
 export PG_DSN="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POSTGRES_DB"
-go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ -v
+go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ ./internal/pgtest/ -v
 ```
 
 이 통합 테스트들은 `PG_DSN`이 가리키는 DB에 **쓰지 않는다.** `PG_DSN`은 관리 접속으로만
