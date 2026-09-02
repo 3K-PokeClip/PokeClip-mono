@@ -381,8 +381,11 @@ func TestHungResponseEndsWithinPollInterval(t *testing.T) {
 	p.pollOnce(context.Background())
 	elapsed := time.Since(start)
 
-	if elapsed > 4*interval {
-		t.Fatalf("정지 응답에서 poll 이 %v 걸렸다 — 상한 %v 안에 끝나야 한다", elapsed, interval)
+	// 허용폭은 상한 + 스케줄링 여유뿐이다. 4×interval 처럼 넓게 잡으면 상한 자체가
+	// 2 배로 늘어나는 회귀(컨텍스트를 2×PollInterval 로 거는 변경)를 그냥 통과시킨다.
+	const slack = 100 * time.Millisecond
+	if elapsed > interval+slack {
+		t.Fatalf("정지 응답에서 poll 이 %v 걸렸다 — 상한 %v(여유 %v) 안에 끝나야 한다", elapsed, interval, slack)
 	}
 	// 관측 이력 0 에서의 실패 → EpochKnown=false(정본 문장 ⑴).
 	if p.Latest(probeStream).EpochKnown {
@@ -449,6 +452,68 @@ func TestWaitFirstObservationTimesOutWithoutObservation(t *testing.T) {
 	}
 }
 
+// 정상 종료로 끊긴 요청은 고장이 아니다 — 신호를 남기면 내릴 때마다 WARN 이
+// 하나씩 쌓여 진짜 폴 실패와 구분이 사라진다(위양성).
+func TestCancelDuringRequestEmitsNoFailureSignal(t *testing.T) {
+	reached := make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(reached) })
+		<-r.Context().Done() // 헤더조차 보내지 않고 취소가 끊을 때까지 붙잡는다
+	}))
+	t.Cleanup(srv.Close)
+
+	// 폴 상한을 넘게 잡아 이 테스트가 재는 것이 상한 만료가 아닌 **취소**임을 보장한다.
+	p, logs := newPoller(t, srv.URL, 5*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	p.Start(ctx)
+
+	select {
+	case <-reached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("첫 폴 요청이 서버에 도달하지 않았다")
+	}
+	cancel()
+
+	select {
+	case <-p.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("ctx 취소 후에도 폴러가 끝나지 않는다")
+	}
+	if n := logs.count("mtxstate_poll_failed"); n != 0 {
+		t.Errorf("정상 종료인데 mtxstate_poll_failed 가 %d 건 떴다 — 취소는 고장이 아니다", n)
+	}
+}
+
+// run() 의 티커가 실제로 다음 폴을 돌리는지 본다.
+//
+// 첫 폴은 Start 가 티커 전에 직접 돌리므로 **첫 관측만 보는 테스트는 티커를 지워도
+// 통과한다.** 그렇게 되면 스냅샷이 첫 관측에 영구 고정되고, OBS_FRESH 가 지난 뒤
+// ⓐ2 가 아무 신호 없이 영구 fail-closed 된다(무징후 정지).
+func TestTickerAdvancesObservationPeriodically(t *testing.T) {
+	const interval = 50 * time.Millisecond
+	srv := serve(t, rawPublishing)
+	p, _ := newPoller(t, srv.URL, interval)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p.Start(ctx)
+
+	if !p.WaitFirstObservation(ctx) {
+		t.Fatal("첫 관측이 BootWait 안에 들어오지 않았다")
+	}
+	first := p.Latest(probeStream).ObservedAt
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !p.Latest(probeStream).ObservedAt.After(first) {
+		if time.Now().After(deadline) {
+			t.Fatalf("주기 폴이 돌지 않는다 — ObservedAt 이 첫 관측(%v)에 고정됐다", first)
+		}
+		time.Sleep(interval / 5)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 설정 경계
 // ---------------------------------------------------------------------------
@@ -469,5 +534,33 @@ func TestNewPollerAppliesDefaults(t *testing.T) {
 	}
 	if p.opt.BootWait != DefaultBootWait {
 		t.Errorf("BootWait = %v, want %v", p.opt.BootWait, DefaultBootWait)
+	}
+}
+
+// 베이스 URL 끝의 슬래시는 NewPoller 가 떼어 낸다.
+// 안 떼면 요청 경로가 //v3/paths/list 가 되어 서버가 404 로 튕기고, 남는 것은
+// 사유가 request_failed 인 신호뿐이라 인증 실패·오구성과 구분되지 않는다.
+func TestTrailingSlashInAPIURLIsNormalized(t *testing.T) {
+	var mu sync.Mutex
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotPath = r.URL.Path
+		mu.Unlock()
+		_, _ = w.Write([]byte(rawPublishing))
+	}))
+	t.Cleanup(srv.Close)
+
+	p, _ := newPoller(t, srv.URL+"/", time.Second)
+	p.pollOnce(context.Background())
+
+	mu.Lock()
+	got := gotPath
+	mu.Unlock()
+	if got != pathsListPath {
+		t.Errorf("요청 경로 = %q, want %q", got, pathsListPath)
+	}
+	if !p.Latest(probeStream).Publishing {
+		t.Error("슬래시만 붙은 URL 인데 관측이 성립하지 않았다")
 	}
 }

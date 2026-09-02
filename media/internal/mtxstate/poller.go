@@ -148,11 +148,17 @@ func (p *Poller) pollOnce(ctx context.Context) {
 	// 실제보다 신선해 보여 판정 창 공시(90초)와 어긋난다.
 	observedAt := time.Now().UTC()
 
-	ctx, cancel := context.WithTimeout(ctx, p.opt.PollInterval)
+	reqCtx, cancel := context.WithTimeout(ctx, p.opt.PollInterval)
 	defer cancel()
 
-	list, err := p.fetch(ctx)
+	list, err := p.fetch(reqCtx)
 	if err != nil {
+		// 정상 종료(부모 ctx 취소)로 끊긴 요청은 고장이 아니다 — 내릴 때마다 WARN 이
+		// 하나씩 쌓이면 진짜 폴 실패와 구분이 사라진다(위양성). 폴 상한 만료는 여기
+		// 해당하지 않는다: 부모는 살아 있고 reqCtx 만 끝났으므로 그대로 신호한다.
+		if ctx.Err() != nil {
+			return
+		}
 		p.pollFailed(reasonRequestFailed, err)
 		return
 	}
@@ -236,7 +242,8 @@ func truncate(s string, n int) string {
 
 // pathList 는 GET /v3/paths/list 응답이다(F-34 실측 스키마).
 type pathList struct {
-	ItemCount int       `json:"itemCount"`
+	// itemCount 는 읽지 않는다 — 수량 검사는 계획 3절 ⑴ 에서 철회했고(원자성 판정은
+	// pageCount 하나로 한다), 안 읽는 필드를 두면 "검사한다"는 오해만 남는다.
 	PageCount int       `json:"pageCount"`
 	Items     []apiPath `json:"items"`
 }

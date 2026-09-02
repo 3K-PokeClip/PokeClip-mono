@@ -415,7 +415,7 @@ func (r *Registry) Open(ctx context.Context, tx pgx.Tx, d Decision, firstPDT tim
 
 // sessionID 는 새 세션의 PK 를 만든다.
 //
-// ★ 회부 ① 권고안 — kty 확정 시 **이 함수만** 교체한다.
+// kty 확정(2026-09-02) — 계약3 최초 규정 `S-{YYYYMMDD}-{HHMMSS}-{streamID}-{seq}`(UTC).
 //
 // 설계 원문에 생성 규칙이 없고(골든 픽스처 리터럴 `S-20260831-0107` 뿐), 계약3 도 규정하지
 // 않는다. session_id 는 **전역 PK** 라 서로 다른 스트림이 같은 분에 시작하면 충돌하므로,
