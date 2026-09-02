@@ -272,8 +272,8 @@ func Load(env func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	// 관측이 꺼져 있어도(APIURL 빈 값) 값 검증은 건너뛰지 않는다 — SESSION_FLOOR_SLACK 은
-	// 관측과 무관하게 세션 귀속 판정이 늘 쓰고, 나머지도 오타를 켜는 날에야 알게 되면
-	// "주조가 왜 안 되지"라는 무징후 증상으로 나타난다.
+	// 관측과 무관하게 세션 귀속 판정이 늘 쓰고, 나머지(OBS_*)도 오타를 켜는 날에야 알게 되면
+	// "스캔 유입(ⓐ2)의 주조가 왜 안 되지"라는 무징후 증상으로 나타난다(ⓐ1 워처·훅 유입은 OBS_* 와 무관).
 	sessionFloorSlack, err := duration(env, "SESSION_FLOOR_SLACK", defaultSessionFloorSlack)
 	if err != nil {
 		return Config{}, err
