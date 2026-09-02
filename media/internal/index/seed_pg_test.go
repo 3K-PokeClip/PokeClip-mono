@@ -30,16 +30,6 @@ func openSession(t *testing.T, pool *pgxpool.Pool, sessionID, streamID string) {
 	}
 }
 
-// qualified 는 ⓒ(시작점 자격)를 충족하는 carrier 3종을 record 에 싣는다.
-func qualified(rec Record, sessionID string) Record {
-	pdt := rec.StartWallUTC
-	pkey := "playback/" + rec.S3Key
-	rec.SessionID = &sessionID
-	rec.PlaybackPDT = &pdt
-	rec.PlaybackS3Key = &pkey
-	return rec
-}
-
 func eligibleSeed(anchor time.Time) Seed {
 	return Seed{
 		Eligible:  true,
@@ -48,6 +38,38 @@ func eligibleSeed(anchor time.Time) Seed {
 		AnchorUTC: anchor,
 		Freshness: 60 * time.Second,
 	}
+}
+
+// holdAdvisory 는 별도 트랜잭션이 주조 직렬화 락을 hold 동안 잡았다 ROLLBACK 한다.
+//
+// 이 헬퍼는 두 국면이 함께 쓴다 — 대기가 **CTE 앞**에서 일어나는 유일한 형상이기 때문이다:
+// 시간 재검(여기 TestSeedAdvisoryWaitReevaluatesTime)과 세션 결정의 관측 신선도 재검
+// (session_tx_pg_test.go). 행 잠금(holdRow)은 대기가 CTE 문장 안이라 세션 결정 뒤이므로
+// 후자를 만들 수 없다.
+func holdAdvisory(t *testing.T, pool *pgxpool.Pool, stream string, hold time.Duration) *sync.WaitGroup {
+	t.Helper()
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	held := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Errorf("blocker 시작 실패: %v", err)
+			close(held)
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx,
+			`SELECT pg_advisory_xact_lock(hashtext('pc_cutoff_' || $1::text))`, stream); err != nil {
+			t.Errorf("blocker advisory 실패: %v", err)
+		}
+		close(held)
+		time.Sleep(hold)
+	}()
+	<-held
+	return &wg
 }
 
 func cutoffRow(t *testing.T, pool *pgxpool.Pool, streamID string) (seq int64, reason, channel string, ok bool) {
@@ -70,9 +92,11 @@ func TestCarrierNilInsertNullReadback(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
 	stream := seedStream("n1ab")
-	store := NewPGStore(pool)
+	// 결정자를 끼우지 않는다 — 이 케이스가 재는 것이 carrier 부재 자체라,
+	// 값을 채우는 협력자가 있으면 잴 대상이 사라진다(널 오브젝트 = M2 형상).
+	store := NewPGStore(pool, nil, nil)
 
-	out, res, err := store.Insert(ctx, sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), Seed{})
+	out, res, err := store.Insert(ctx, sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), Seed{}, SessionSource{})
 	if err != nil || out != InsertInserted {
 		t.Fatalf("nil carrier INSERT 실패: out=%v err=%v", out, err)
 	}
@@ -112,18 +136,18 @@ func TestSeedMintsOnNewRow(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
 	stream := seedStream("d1t1")
-	store := NewPGStore(pool)
+	store := newSessionStore(pool)
 	sess := stream + "-s1"
 	openSession(t, pool, sess, stream)
 
 	// 기존 행 — 비적격(과거 잔존물 재현).
-	if _, _, err := store.Insert(ctx, sampleRecord(stream, 90, "/recordings/"+stream+"/90.mp4"), Seed{}); err != nil {
+	if _, _, err := store.Insert(ctx, sampleRecord(stream, 90, "/recordings/"+stream+"/90.mp4"), Seed{}, liveIngress()); err != nil {
 		t.Fatal(err)
 	}
 
-	rec := qualified(sampleRecord(stream, 100, "/recordings/"+stream+"/100.mp4"), sess)
+	rec := sampleRecord(stream, 100, "/recordings/"+stream+"/100.mp4")
 	rec.StartWallUTC = time.Now().UTC()
-	_, res, err := store.Insert(ctx, rec, eligibleSeed(rec.StartWallUTC))
+	_, res, err := store.Insert(ctx, rec, eligibleSeed(rec.StartWallUTC), liveIngress())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,11 +175,12 @@ func TestSeedMintsOnNewRow(t *testing.T) {
 func TestSeedDeclinesNotSettleable(t *testing.T) {
 	pool := newTestPool(t)
 	stream := seedStream("t2")
-	store := NewPGStore(pool)
+	// 결정자 없음 = carrier 언제나 NULL(n1ab 와 같은 이유).
+	store := NewPGStore(pool, nil, nil)
 
 	rec := sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4")
 	rec.StartWallUTC = time.Now().UTC()
-	_, res, err := store.Insert(context.Background(), rec, eligibleSeed(rec.StartWallUTC))
+	_, res, err := store.Insert(context.Background(), rec, eligibleSeed(rec.StartWallUTC), SessionSource{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,19 +197,19 @@ func TestSeedExistingCutoffWins(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
 	stream := seedStream("d5")
-	store := NewPGStore(pool)
+	store := newSessionStore(pool)
 	sess := stream + "-s1"
 	openSession(t, pool, sess, stream)
 
-	first := qualified(sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), sess)
+	first := sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4")
 	first.StartWallUTC = time.Now().UTC()
-	if _, res, err := store.Insert(ctx, first, eligibleSeed(first.StartWallUTC)); err != nil || !res.Seeded {
+	if _, res, err := store.Insert(ctx, first, eligibleSeed(first.StartWallUTC), liveIngress()); err != nil || !res.Seeded {
 		t.Fatalf("선행 주조 실패: %+v %v", res, err)
 	}
 
-	second := qualified(sampleRecord(stream, 1, "/recordings/"+stream+"/1.mp4"), sess)
+	second := sampleRecord(stream, 1, "/recordings/"+stream+"/1.mp4")
 	second.StartWallUTC = time.Now().UTC()
-	_, res, err := store.Insert(ctx, second, eligibleSeed(second.StartWallUTC))
+	_, res, err := store.Insert(ctx, second, eligibleSeed(second.StartWallUTC), liveIngress())
 	if err != nil {
 		t.Fatalf("승계 경로가 에러다(예외가 아니어야 한다): %v", err)
 	}
@@ -201,16 +226,16 @@ func TestSeedRollsBackWithConflict(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
 	stream := seedStream("d4")
-	store := NewPGStore(pool)
+	store := newSessionStore(pool)
 	sess := stream + "-s1"
 	openSession(t, pool, sess, stream)
 
-	if _, _, err := store.Insert(ctx, sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), Seed{}); err != nil {
+	if _, _, err := store.Insert(ctx, sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), Seed{}, liveIngress()); err != nil {
 		t.Fatal(err)
 	}
-	dup := qualified(sampleRecord(stream, 0, "/recordings/"+stream+"/other.mp4"), sess)
+	dup := sampleRecord(stream, 0, "/recordings/"+stream+"/other.mp4")
 	dup.StartWallUTC = time.Now().UTC()
-	out, res, err := store.Insert(ctx, dup, eligibleSeed(dup.StartWallUTC))
+	out, res, err := store.Insert(ctx, dup, eligibleSeed(dup.StartWallUTC), liveIngress())
 	if err != nil || out != InsertSeqConflict {
 		t.Fatalf("PK 충돌 판정 실패: out=%v err=%v", out, err)
 	}
@@ -227,13 +252,13 @@ func TestSeedRollsBackWithConflict(t *testing.T) {
 func TestSeedStaleAnchorDeclines(t *testing.T) {
 	pool := newTestPool(t)
 	stream := seedStream("m1a-stale")
-	store := NewPGStore(pool)
+	store := newSessionStore(pool)
 	sess := stream + "-s1"
 	openSession(t, pool, sess, stream)
 
-	rec := qualified(sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), sess)
+	rec := sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4")
 	rec.StartWallUTC = time.Now().UTC()
-	_, res, err := store.Insert(context.Background(), rec, eligibleSeed(time.Now().UTC().Add(-2*time.Minute)))
+	_, res, err := store.Insert(context.Background(), rec, eligibleSeed(time.Now().UTC().Add(-2*time.Minute)), liveIngress())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,13 +271,13 @@ func TestSeedStaleAnchorDeclines(t *testing.T) {
 func TestSeedFlagOffOldBehavior(t *testing.T) {
 	pool := newTestPool(t)
 	stream := seedStream("c1")
-	store := NewPGStore(pool)
+	store := newSessionStore(pool)
 	sess := stream + "-s1"
 	openSession(t, pool, sess, stream)
 
-	rec := qualified(sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), sess)
+	rec := sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4")
 	rec.StartWallUTC = time.Now().UTC()
-	_, res, err := store.Insert(context.Background(), rec, Seed{Eligible: false})
+	_, res, err := store.Insert(context.Background(), rec, Seed{Eligible: false}, liveIngress())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,11 +294,12 @@ func TestImmutableAxesTrigger(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
 	stream := seedStream("immutable")
-	store := NewPGStore(pool)
+	// 결정자 없음 — session_id 가 NULL 로 들어가야 "NULL → 값 1회" 전이를 잴 수 있다.
+	store := NewPGStore(pool, nil, nil)
 	sess := stream + "-s1"
 	openSession(t, pool, sess, stream)
 
-	if _, _, err := store.Insert(ctx, sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), Seed{}); err != nil {
+	if _, _, err := store.Insert(ctx, sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), Seed{}, SessionSource{}); err != nil {
 		t.Fatal(err)
 	}
 	// NULL → 값 1회 채움은 허용.
@@ -301,7 +327,7 @@ func TestImmutableAxesTrigger(t *testing.T) {
 func TestSeedLockContention(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
-	store := NewPGStore(pool)
+	store := newSessionStore(pool)
 
 	// holdRow 는 별도 트랜잭션이 (stream, seq=0) PK 를 hold 동안 잡았다 ROLLBACK 한다.
 	holdRow := func(t *testing.T, stream string, hold time.Duration) *sync.WaitGroup {
@@ -339,9 +365,9 @@ func TestSeedLockContention(t *testing.T) {
 		wg := holdRow(t, stream, 1500*time.Millisecond)
 		defer wg.Wait()
 
-		rec := qualified(sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), sess)
+		rec := sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4")
 		rec.StartWallUTC = time.Now().UTC()
-		_, res, err := store.Insert(ctx, rec, eligibleSeed(time.Now().UTC()))
+		_, res, err := store.Insert(ctx, rec, eligibleSeed(time.Now().UTC()), liveIngress())
 		if err != nil {
 			t.Fatalf("신선 경합 경로가 에러다: %v", err)
 		}
@@ -359,9 +385,9 @@ func TestSeedLockContention(t *testing.T) {
 
 		// 발사 시점엔 신선(58초 경과 < 60초)이지만 3.2초 락 대기 뒤에는 낡는다 —
 		// clock_timestamp() 재검이 그 차이를 잡는다.
-		rec := qualified(sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), sess)
+		rec := sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4")
 		rec.StartWallUTC = time.Now().UTC()
-		_, res, err := store.Insert(ctx, rec, eligibleSeed(time.Now().UTC().Add(-58*time.Second)))
+		_, res, err := store.Insert(ctx, rec, eligibleSeed(time.Now().UTC().Add(-58*time.Second)), liveIngress())
 		if err != nil {
 			t.Fatalf("INSERT 는 성공해야 한다(주조만 거절): %v", err)
 		}
@@ -380,9 +406,9 @@ func TestSeedLockContention(t *testing.T) {
 		wg := holdRow(t, stream, 12*time.Second)
 		defer wg.Wait()
 
-		rec := qualified(sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), sess)
+		rec := sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4")
 		rec.StartWallUTC = time.Now().UTC()
-		_, _, err := store.Insert(ctx, rec, eligibleSeed(time.Now().UTC()))
+		_, _, err := store.Insert(ctx, rec, eligibleSeed(time.Now().UTC()), liveIngress())
 		if !errors.Is(err, ErrLockContended) {
 			t.Fatalf("55P03 이중 초과가 ErrLockContended 가 아니다: %v", err)
 		}
@@ -398,43 +424,18 @@ func TestSeedLockContention(t *testing.T) {
 func TestSeedAdvisoryWaitReevaluatesTime(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
-	store := NewPGStore(pool)
-
-	holdAdvisory := func(t *testing.T, stream string, hold time.Duration) *sync.WaitGroup {
-		t.Helper()
-		var wg sync.WaitGroup
-		held := make(chan struct{})
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			tx, err := pool.Begin(ctx)
-			if err != nil {
-				t.Errorf("blocker 시작 실패: %v", err)
-				close(held)
-				return
-			}
-			defer func() { _ = tx.Rollback(ctx) }()
-			if _, err := tx.Exec(ctx,
-				`SELECT pg_advisory_xact_lock(hashtext('pc_cutoff_' || $1::text))`, stream); err != nil {
-				t.Errorf("blocker advisory 실패: %v", err)
-			}
-			close(held)
-			time.Sleep(hold)
-		}()
-		<-held
-		return &wg
-	}
+	store := newSessionStore(pool)
 
 	t.Run("stale_after_wait_declines", func(t *testing.T) {
 		stream := seedStream("adv-stale")
 		sess := stream + "-s1"
 		openSession(t, pool, sess, stream)
-		wg := holdAdvisory(t, stream, 3200*time.Millisecond)
+		wg := holdAdvisory(t, pool, stream, 3200*time.Millisecond)
 		defer wg.Wait()
 
-		rec := qualified(sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), sess)
+		rec := sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4")
 		rec.StartWallUTC = time.Now().UTC()
-		_, res, err := store.Insert(ctx, rec, eligibleSeed(time.Now().UTC().Add(-58*time.Second)))
+		_, res, err := store.Insert(ctx, rec, eligibleSeed(time.Now().UTC().Add(-58*time.Second)), liveIngress())
 		if err != nil {
 			t.Fatalf("INSERT 는 성공해야 한다(주조만 거절): %v", err)
 		}
@@ -450,14 +451,66 @@ func TestSeedAdvisoryWaitReevaluatesTime(t *testing.T) {
 		stream := seedStream("adv-fresh")
 		sess := stream + "-s1"
 		openSession(t, pool, sess, stream)
-		wg := holdAdvisory(t, stream, 1500*time.Millisecond)
+		wg := holdAdvisory(t, pool, stream, 1500*time.Millisecond)
 		defer wg.Wait()
 
-		rec := qualified(sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4"), sess)
+		rec := sampleRecord(stream, 0, "/recordings/"+stream+"/0.mp4")
 		rec.StartWallUTC = time.Now().UTC()
-		_, res, err := store.Insert(ctx, rec, eligibleSeed(time.Now().UTC()))
+		_, res, err := store.Insert(ctx, rec, eligibleSeed(time.Now().UTC()), liveIngress())
 		if err != nil || !res.Seeded {
 			t.Fatalf("신선 방증이 직렬화 뒤 주조되지 않았다(오발동): %+v %v", res, err)
 		}
 	})
+}
+
+// G7 S7 — 벽시계가 역행해도 playback_pdt 는 seq 순서로 **엄격 단조**이고,
+// 누적항 하한(PDT[i+1] ≥ PDT[i] + dur[i])을 지킨다(설계 5.1.1 "단조 보증").
+//
+// 비정수 초 길이(6500ms)를 섞는 것이 핵심이다 — 정수 초 나눗셈이면 매 조각 500ms 를
+// 잃고 그 손실이 누적항에 이월돼 재귀식이 조용히 퇴화한다.
+func TestPlaybackPDTStaysMonotonicUnderWallClockRegression(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	store := newSessionStore(pool)
+	stream := seedStream("g7-s7")
+
+	const rows = 20
+	durations := make([]int32, rows)
+	walls := make([]time.Time, rows)
+	for i := range rows {
+		durations[i] = 4000
+		if i%5 == 1 {
+			durations[i] = 6500 // 비정수 초 — 반올림 7 이므로 첫 회에 TD 분할도 일으킨다
+		}
+		walls[i] = sessionBase.Add(time.Duration(i) * 4 * time.Second)
+		if i%4 == 3 {
+			// 역행 — NTP slew 급(0.5초)이라 귀속 하한(1초) 안이다.
+			walls[i] = walls[i].Add(-500 * time.Millisecond)
+		}
+	}
+	for i := range rows {
+		if _, _, err := store.Insert(ctx, segAt(stream, int64(i), walls[i], durations[i]),
+			Seed{}, liveIngress()); err != nil {
+			t.Fatalf("Insert 실패 seq=%d: %v", i, err)
+		}
+	}
+
+	pdts := make([]time.Time, rows)
+	for i := range rows {
+		c := carrierOf(t, pool, stream, int64(i))
+		if c.SessionID == nil || c.PDT == nil {
+			t.Fatalf("seq=%d 이 귀속되지 않았다(역행 폭이 하한 안인데): %+v", i, c)
+		}
+		pdts[i] = *c.PDT
+	}
+	for i := range rows - 1 {
+		if !pdts[i+1].After(pdts[i]) {
+			t.Fatalf("PDT 가 엄격 단조가 아니다: seq=%d %v → seq=%d %v", i, pdts[i], i+1, pdts[i+1])
+		}
+		floor := pdts[i].Add(time.Duration(durations[i])*time.Millisecond - time.Millisecond)
+		if pdts[i+1].Before(floor) {
+			t.Fatalf("누적항 하한 위반: seq=%d %v + %dms > seq=%d %v",
+				i, pdts[i], durations[i], i+1, pdts[i+1])
+		}
+	}
 }

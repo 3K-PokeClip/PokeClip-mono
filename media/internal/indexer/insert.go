@@ -57,6 +57,26 @@ func classifyInsertError(err error) insertFate {
 	}
 }
 
+// contentionSignal 은 **재시도가 스스로 푸는 경합** 두 갈래를 가려낸다.
+// isContention=false 면 경합이 아니라 일반 실패이고 classifyInsertError 가 처분한다.
+//
+// 둘의 처분은 같다(H9 백오프)지만 신호 이름을 나누는 것은 원인이 다르기 때문이다:
+// 락 경합은 단일 쓰기자 전제(D10)가 흔들린다는 신호이고, 세션 경합은 같은 스트림의
+// 세션을 두 시도가 동시에 열려 한 정상 동시성이다(재시도하면 귀속 갈래로 접힌다).
+//
+// **세션 id 파생 규칙의 결함(stream_sessions_pkey)은 여기 오지 않는다** — 그 갈래는
+// 재시도해도 같은 id 를 다시 만들어 크래시루프가 되므로 무결성 오류 경로로 가서
+// 프로세스를 끝내고 사람을 부른다(계획 4.3 ⒏).
+func contentionSignal(err error) (event, note string, isContention bool) {
+	switch {
+	case errors.Is(err, index.ErrLockContended):
+		return "insert_lock_contended", "단일 쓰기자 전제 확인 필요. 백오프 후 재시도한다", true
+	case errors.Is(err, index.ErrSessionContended):
+		return "session_open_contended", "다른 시도가 세션을 먼저 열었다. 백오프 후 재시도하면 귀속으로 접힌다", true
+	}
+	return "", "", false
+}
+
 func sqlStateClass(code string) string {
 	if len(code) < 2 {
 		return ""
@@ -69,12 +89,12 @@ func sqlStateClass(code string) string {
 //
 // poisoned 가 true 면 이 세그먼트 하나만 버리고 프로세스는 계속 간다.
 // 에러·poison 반환의 outcome 값은 무의미한 채움이다 — 호출부는 err·poisoned 를 먼저 본다.
-func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record, seed index.Seed) (outcome index.InsertOutcome, seedRes index.SeedResult, poisoned bool, err error) {
+func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record, seed index.Seed, src index.SessionSource) (outcome index.InsertOutcome, seedRes index.SeedResult, poisoned bool, err error) {
 	var lastErr error
 	backoff := ix.opt.InsertRetryBase
 
 	for attempt := range ix.opt.InsertRetryMax {
-		result, res, insertErr := ix.store.Insert(ctx, rec, seed)
+		result, res, insertErr := ix.store.Insert(ctx, rec, seed, src)
 		if insertErr == nil {
 			// 한 번이라도 통과했다면 전역 이상은 아니다. 산발적 poison 이 누적돼
 			// 언젠가 프로세스를 죽이는 일이 없도록 여기서 기록을 지운다.
@@ -92,10 +112,9 @@ func (ix *Indexer) insertWithRetry(ctx context.Context, rec index.Record, seed i
 		// 재기동은 회수 순서를 보장하지 않는다). 경합이 계속되면 아래 상한 소진 경로가
 		// 기존 처분(D8)대로 프로세스를 끝낸다 — 조각 단위 건너뛰기·보류가 H3 와 충돌해
 		// 반복 반증된 것(리뷰 r1~r3)과 달리, 이 경로는 기존 H9 정책의 재사용이다.
-		if errors.Is(insertErr, index.ErrLockContended) {
-			ix.log.Warn("insert_lock_contended", "stream_id", rec.StreamID, "seq", rec.Seq,
-				"attempt", attempt+1, "err", insertErr,
-				"note", "단일 쓰기자 전제 확인 필요. 백오프 후 재시도한다")
+		if event, note, isContention := contentionSignal(insertErr); isContention {
+			ix.log.Warn(event, "stream_id", rec.StreamID, "seq", rec.Seq,
+				"attempt", attempt+1, "err", insertErr, "note", note)
 		} else {
 			switch classifyInsertError(insertErr) {
 			case fatePoison:

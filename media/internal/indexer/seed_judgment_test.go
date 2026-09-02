@@ -133,3 +133,46 @@ func TestLockContentionExhaustionIsFatal(t *testing.T) {
 		t.Fatalf("커서가 전진했다: %d", f.ix.cursors["s1"].NextSeq)
 	}
 }
+
+// 유입 사유 → 세션 결정 연산(설계 3.3·5.4 유입 표 · 계획 4.4).
+// 채널 접기(buildSeed)와 나란히 두는 이유는 둘 다 "유입 사유를 무엇으로 접는가"이고,
+// 어긋나면 같은 조각이 주조 축과 세션 축에서 다른 유입으로 취급되기 때문이다.
+func TestSessionOpForIngressReason(t *testing.T) {
+	for _, c := range []struct {
+		reason recording.CompletionReason
+		want   index.SessionOp
+	}{
+		// 파일·훅 유입 자체가 라이브 방증이다 — 관측 없이도 연다.
+		{recording.ReasonNextFile, index.SessionOpenOrCurrent},
+		{recording.ReasonIdle, index.SessionOpenOrCurrent},
+		{recording.ReasonHook, index.SessionOpenOrCurrent},
+		// 스캔은 옛 잔존물일 수 있어 관측이 대신 보증할 때만 연다.
+		{recording.ReasonScan, index.SessionCurrentOrOpenIfCorroborated},
+		// 재성장·사유 미상은 열지 않는다 — 현 세션이 있으면 귀속만 한다(계획 9절).
+		{recording.ReasonRegrown, index.SessionCurrentOnly},
+		{recording.ReasonUnknown, index.SessionCurrentOnly},
+	} {
+		if got := sessionOp(c.reason); got != c.want {
+			t.Errorf("%v: 연산 = %d, want %d", c.reason, got, c.want)
+		}
+	}
+}
+
+// Handle 관통 — 판정한 연산이 그대로 store 에 도달한다(배선 검증).
+// 관측은 폴러 배선(단계 4) 전까지 널 오브젝트이며, 영값은 EpochKnown=false 라
+// ⓐ2 가 fail-closed 된다 — 스캔 유입이 세션을 여는 일이 아직 없다는 뜻이다.
+func TestHandleCarriesSessionOpToStore(t *testing.T) {
+	f := newFixture(t, 4000)
+
+	seg := f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile)
+	if err := f.handle(seg); err != nil {
+		t.Fatal(err)
+	}
+	got := f.store.lastSource
+	if got.Op != index.SessionOpenOrCurrent {
+		t.Fatalf("store 에 도달한 연산 = %d, want %d", got.Op, index.SessionOpenOrCurrent)
+	}
+	if got.Obs.EpochKnown {
+		t.Fatalf("관측이 배선되지 않았는데 EpochKnown 이 참이다: %+v", got.Obs)
+	}
+}

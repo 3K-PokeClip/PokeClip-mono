@@ -36,7 +36,7 @@ func (s *fakeStore) ExistingPaths(context.Context, string) (map[string]struct{},
 	return map[string]struct{}{}, nil
 }
 
-func (s *fakeStore) Insert(_ context.Context, r index.Record, _ index.Seed) (index.InsertOutcome, index.SeedResult, error) {
+func (s *fakeStore) Insert(_ context.Context, r index.Record, _ index.Seed, _ index.SessionSource) (index.InsertOutcome, index.SeedResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.inserts++

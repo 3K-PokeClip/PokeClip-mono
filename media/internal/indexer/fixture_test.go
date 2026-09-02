@@ -35,6 +35,8 @@ type fakeStore struct {
 	loadCursorCalls int
 	// lastSeed 는 마지막 Insert 에 동봉된 주조 판정 입력이다(buildSeed 검증용).
 	lastSeed index.Seed
+	// lastSource 는 마지막 Insert 에 동봉된 세션 결정 입력이다(sessionOp 배선 검증용).
+	lastSource index.SessionSource
 }
 
 type updateTailCall struct {
@@ -99,11 +101,12 @@ func (s *fakeStore) ExistingPaths(_ context.Context, streamID string) (map[strin
 	return out, nil
 }
 
-func (s *fakeStore) Insert(_ context.Context, r index.Record, seed index.Seed) (index.InsertOutcome, index.SeedResult, error) {
+func (s *fakeStore) Insert(_ context.Context, r index.Record, seed index.Seed, src index.SessionSource) (index.InsertOutcome, index.SeedResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.insertCalls++
 	s.lastSeed = seed
+	s.lastSource = src
 
 	if len(s.insertErrs) > 0 {
 		err := s.insertErrs[0]

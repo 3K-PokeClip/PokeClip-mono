@@ -582,6 +582,25 @@ func (ix *Indexer) buildSeed(seg recording.Segment) index.Seed {
 	return s
 }
 
+// sessionOp 은 유입 사유를 세션 결정 연산으로 접는다(설계 3.3·5.4 유입 표).
+//
+// buildSeed 와 나란히 두는 이유: 둘 다 "이 유입을 무엇으로 볼 것인가"이고, 갈라지면
+// 같은 조각이 주조 축과 세션 축에서 서로 다른 유입으로 취급된다.
+//
+// 재성장·사유 미상은 열지 않는 축이다 — 열지 않을 뿐 귀속은 한다(현 세션이 있으면
+// 그 세션의 조각이 맞다). 여기서 비귀속으로 접으면 세션 중간에 NULL 구멍이 생기고
+// 그 조각은 되감기 목록에서 사라진다.
+func sessionOp(r recording.CompletionReason) index.SessionOp {
+	switch r {
+	case recording.ReasonNextFile, recording.ReasonIdle, recording.ReasonHook:
+		return index.SessionOpenOrCurrent
+	case recording.ReasonScan:
+		return index.SessionCurrentOrOpenIfCorroborated
+	default:
+		return index.SessionCurrentOnly
+	}
+}
+
 // seedChannel 은 유입 사유를 stream_cutoffs.seed_channel 값으로 접는다.
 func seedChannel(r recording.CompletionReason) index.SeedChannel {
 	switch r {
@@ -649,6 +668,10 @@ func (ix *Indexer) lateOrDuplicate(ctx context.Context, cur *index.Cursor, seg r
 func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size int64) error {
 	cur := ix.cursors[seg.StreamID]
 	seed := ix.buildSeed(seg)
+	// 세션 결정 입력 — seed 와 같은 자리에서 한 번 만들고 재시도·재적재 경로에서 재사용한다
+	// (같은 세그먼트의 판정이 재시도 여부에 따라 달라지지 않게). 관측은 폴러 배선 전까지
+	// 널 오브젝트이고, 영값은 EpochKnown=false 라 ⓐ2 가 fail-closed 된다.
+	src := index.SessionSource{Op: sessionOp(seg.Reason)}
 
 	// 무장 조회는 여기서 딱 한 번이다. 해제는 INSERT 결과가 나온 뒤에 한다.
 	dec := ix.peekBreak(cur, seg)
@@ -662,7 +685,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 
 	rec := ix.buildRecord(cur, seg, d, size, dec.Apply)
 
-	outcome, seedRes, poisoned, err := ix.insertWithRetry(ctx, rec, seed)
+	outcome, seedRes, poisoned, err := ix.insertWithRetry(ctx, rec, seed, src)
 	if err != nil {
 		return err
 	}
@@ -704,7 +727,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		// seed 도 같은 값을 재사용한다 — 시간 항은 SQL 이 매 시도 재검하므로 안전하다.
 		rec = ix.buildRecord(cur, seg, d, size, dec.Apply)
 
-		outcome, seedRes, poisoned, err = ix.insertWithRetry(ctx, rec, seed)
+		outcome, seedRes, poisoned, err = ix.insertWithRetry(ctx, rec, seed, src)
 		if err != nil {
 			return err
 		}
