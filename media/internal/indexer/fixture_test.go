@@ -34,6 +34,9 @@ type fakeStore struct {
 
 	// seeds 는 "적격 seed 는 주조된다"를 흉내 낸다(실제 판정은 SQL 이 한다).
 	seeds bool
+	// declineAs 는 미주조일 때 돌려줄 귀속 어휘다. 영값이면 종전대로 no_corroboration 이다 —
+	// 귀속은 SQL 이 정하지만(store.go), 그 값이 신호로 어떻게 드러나는지는 여기서 잰다.
+	declineAs index.SeedDecline
 
 	insertCalls     int
 	loadCursorCalls int
@@ -138,7 +141,11 @@ func (s *fakeStore) Insert(_ context.Context, r index.Record, seed index.Seed, s
 	if s.seeds && seed.Eligible {
 		return index.InsertInserted, index.SeedResult{Seeded: true}, nil
 	}
-	return index.InsertInserted, index.SeedResult{Decline: index.DeclineNoCorroboration}, nil
+	decline := s.declineAs
+	if decline == index.DeclineNone {
+		decline = index.DeclineNoCorroboration
+	}
+	return index.InsertInserted, index.SeedResult{Decline: decline}, nil
 }
 
 func (s *fakeStore) UpdateTail(_ context.Context, streamID string, seq int64, durationMS int32, bytes int64) (bool, error) {

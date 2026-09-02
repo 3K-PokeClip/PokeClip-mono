@@ -69,6 +69,21 @@ func (c *logCapture) countReason(msg, reason string) int {
 	return n
 }
 
+// levels 는 그 신호가 실린 등급을 발화 순서대로 준다. 등급도 계약이라 따로 잰다
+// (s4_signal_grades): Info 로 내려가면 운영자가 보는 경보 축에서 통째로 사라지고,
+// Error 로 올라가면 자연 회복하는 순간 장애가 사람을 부른다.
+func (c *logCapture) levels(msg string) []slog.Level {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []slog.Level
+	for _, r := range c.records {
+		if r.Message == msg {
+			out = append(out, r.Level)
+		}
+	}
+	return out
+}
+
 func (c *logCapture) count(msg string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -352,6 +367,30 @@ func TestMalformedBodyIsRequestFailure(t *testing.T) {
 	}
 	if n := logs.countReason("mtxstate_poll_failed", "request_failed"); n != 1 {
 		t.Errorf("mtxstate_poll_failed{reason=request_failed} = %d 건, want 1", n)
+	}
+}
+
+// s4_signal_grades(M3 몫) — 두 사유 모두 **WARN** 이다.
+//
+// 등급의 근거는 상태다: 프로세스는 살아 있고, 방향은 비주조(안전)이며, 다음 주기가
+// 회복시킨다. 그래서 사람을 부르는 ERROR 도, 묻히는 INFO 도 아니다.
+// 위 사유별 케이스들은 건수·라벨만 보므로 등급이 바뀌어도 통과한다 — 그 구멍을 메운다.
+func TestPollFailureSignalsAreWarnGrade(t *testing.T) {
+	multi := `{"itemCount":2,"pageCount":2,"items":[]}`
+	for name, srv := range map[string]*httptest.Server{
+		"request_failed": serve(t, `{"itemCount":1,`), // 파싱 실패
+		"multi_page":     serve(t, multi),
+	} {
+		p, logs := newPoller(t, srv.URL, time.Second)
+		p.pollOnce(context.Background())
+
+		got := logs.levels("mtxstate_poll_failed")
+		if len(got) != 1 {
+			t.Fatalf("%s: mtxstate_poll_failed 가 %d건이다(1건 기대)", name, len(got))
+		}
+		if got[0] != slog.LevelWarn {
+			t.Errorf("%s: 등급 = %v, want WARN", name, got[0])
+		}
 	}
 }
 

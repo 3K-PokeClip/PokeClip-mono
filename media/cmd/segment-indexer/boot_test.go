@@ -55,6 +55,20 @@ func (c *bootLogCapture) has(msg string) bool {
 	return false
 }
 
+// levelOf 는 그 신호가 실린 등급들이다. 기동 신호의 등급도 계약이다 — Debug 로 내려가면
+// 기본 LOG_LEVEL(info)에서 통째로 사라져 "관측이 꺼졌다"가 다시 무징후가 된다.
+func (c *bootLogCapture) levelOf(msg string) []slog.Level {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []slog.Level
+	for i := range c.records {
+		if c.records[i].Message == msg {
+			out = append(out, c.records[i].Level)
+		}
+	}
+	return out
+}
+
 // attr 은 그 메시지의 마지막 기록에서 속성 하나를 뽑는다.
 func (c *bootLogCapture) attr(msg, key string) (any, bool) {
 	c.mu.Lock()
@@ -104,6 +118,9 @@ func TestStartObserverWaitsForFirstObservation(t *testing.T) {
 	if got, ok := logs.attr("mtxstate_started", "first_observation"); !ok || got != true {
 		t.Errorf("mtxstate_started 의 first_observation = %v(있음=%v), want true", got, ok)
 	}
+	if got := logs.levelOf("mtxstate_started"); len(got) != 1 || got[0] != slog.LevelInfo {
+		t.Errorf("mtxstate_started 등급 = %v, want [INFO] 1건", got)
+	}
 }
 
 // 관측을 못 얻어도 기동은 계속된다 — 관측 고장은 강등이지 사망이 아니다(설계 S3).
@@ -148,6 +165,9 @@ func TestStartObserverDisabledWhenAPIURLEmpty(t *testing.T) {
 	}
 	if !logs.has("mtxstate_disabled") {
 		t.Error("관측이 꺼진 상태가 무징후다 — mtxstate_disabled 신호가 없다")
+	}
+	if got := logs.levelOf("mtxstate_disabled"); len(got) != 1 || got[0] != slog.LevelInfo {
+		t.Errorf("mtxstate_disabled 등급 = %v, want [INFO] 1건", got)
 	}
 }
 

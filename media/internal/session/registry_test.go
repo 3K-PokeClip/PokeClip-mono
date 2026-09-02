@@ -11,27 +11,67 @@ import (
 // wall 은 픽스처의 기준 벽시계다. 값 자체에 의미는 없고 경계값 산술의 원점이다.
 var wall = time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
 
-// signalLog 는 신호(WARN) 발화를 잡아 두는 테스트용 슬로그 핸들러다.
+// signalLog 는 신호 발화를 잡아 두는 테스트용 슬로그 핸들러다.
 // 신호는 "무징후 금지"(설계 S4)의 실물이라 값 판정과 같은 급으로 단언한다.
-type signalLog struct{ warns []string }
+//
+// **등급도 함께 담는다**: fired 는 종전대로 WARN 만 참으로 치므로 등급이 내려가면 곧
+// 실패하고(암묵 단언), levelOf·attrs 는 그 계약을 눈에 보이게 만든다(s4_signal_grades).
+type signalLog struct{ records []slog.Record }
 
 func (s *signalLog) Enabled(context.Context, slog.Level) bool { return true }
 func (s *signalLog) Handle(_ context.Context, rec slog.Record) error {
-	if rec.Level == slog.LevelWarn {
-		s.warns = append(s.warns, rec.Message)
-	}
+	s.records = append(s.records, rec)
 	return nil
 }
 func (s *signalLog) WithAttrs([]slog.Attr) slog.Handler { return s }
 func (s *signalLog) WithGroup(string) slog.Handler      { return s }
 
+// fired 는 그 이름의 신호가 **WARN 으로** 떴는가다(신호의 정의 등급).
 func (s *signalLog) fired(name string) bool {
-	for _, w := range s.warns {
-		if w == name {
+	for _, r := range s.records {
+		if r.Message == name && r.Level == slog.LevelWarn {
 			return true
 		}
 	}
 	return false
+}
+
+// warnNames 는 지금까지 뜬 WARN 신호 이름들이다("무징후"의 단언 대상).
+func (s *signalLog) warnNames() []string {
+	var out []string
+	for _, r := range s.records {
+		if r.Level == slog.LevelWarn {
+			out = append(out, r.Message)
+		}
+	}
+	return out
+}
+
+// levelOf 는 그 신호가 실린 등급들이다(발화 순서).
+func (s *signalLog) levelOf(name string) []slog.Level {
+	var out []slog.Level
+	for _, r := range s.records {
+		if r.Message == name {
+			out = append(out, r.Level)
+		}
+	}
+	return out
+}
+
+// attrs 는 그 신호의 마지막 발화에 실린 속성이다.
+func (s *signalLog) attrs(name string) map[string]any {
+	out := map[string]any{}
+	for i := range s.records {
+		if s.records[i].Message != name {
+			continue
+		}
+		clear(out)
+		s.records[i].Attrs(func(a slog.Attr) bool {
+			out[a.Key] = a.Value.Any()
+			return true
+		})
+	}
+	return out
 }
 
 // newTestRegistry 는 신호를 잡는 레지스트리다. 슬랙 값은 케이스마다 다르므로 인자로 받는다.
@@ -140,8 +180,8 @@ func TestDecideOpensWhenNoLiveSessionForOpenOrCurrent(t *testing.T) {
 	if d.Outcome != OutcomeOpen {
 		t.Errorf("갈래 = %v, 기대 = %v (live 부재면 TD 판정이 성립하지 않고 개시로 간다)", d.Outcome, OutcomeOpen)
 	}
-	if len(sig.warns) != 0 {
-		t.Errorf("신호 %v 가 떴다 — 정상 개시는 무징후다", sig.warns)
+	if got := sig.warnNames(); len(got) != 0 {
+		t.Errorf("신호 %v 가 떴다 — 정상 개시는 무징후다", got)
 	}
 }
 
@@ -155,8 +195,8 @@ func TestDecideLeavesSessionUnsetWhenCurrentOnlyAndNoLiveSession(t *testing.T) {
 	if d.Outcome != OutcomeNone {
 		t.Errorf("갈래 = %v, 기대 = %v", d.Outcome, OutcomeNone)
 	}
-	if len(sig.warns) != 0 {
-		t.Errorf("신호 %v 가 떴다 — CurrentOnly 의 세션 부재는 거부가 아니라 평시 상태다", sig.warns)
+	if got := sig.warnNames(); len(got) != 0 {
+		t.Errorf("신호 %v 가 떴다 — CurrentOnly 의 세션 부재는 거부가 아니라 평시 상태다", got)
 	}
 }
 
@@ -218,8 +258,8 @@ func TestDecideOpensWhenCorroboratedAndNoLiveSession(t *testing.T) {
 	if d.plan == nil {
 		t.Error("개시 결정에 새 세션 행의 값이 실리지 않았다 — Open 이 거부하므로 세션이 열리지 않는다")
 	}
-	if len(sig.warns) != 0 {
-		t.Errorf("신호 %v 가 떴다 — 정상 개시는 무징후다", sig.warns)
+	if got := sig.warnNames(); len(got) != 0 {
+		t.Errorf("신호 %v 가 떴다 — 정상 개시는 무징후다", got)
 	}
 }
 
@@ -441,4 +481,65 @@ func TestOpenTargetDurationRoundsAndFloorsAtSix(t *testing.T) {
 			t.Errorf("openTargetDuration(%d) = %d, 기대 = %d", tc.durationMS, got, tc.want)
 		}
 	}
+}
+
+// s4_signal_grades·s4_signal_present(M3 몫) — 두 신호는 **WARN** 이고 조치에 필요한
+// 라벨을 달고 나온다.
+//
+// 위 갈래별 케이스들은 "떴는가"만 보므로 등급이 바뀌거나 라벨이 빠져도 통과한다.
+// 그 구멍을 메운다: 등급이 내려가면 운영자가 못 보고, stream_id·seq 가 없으면 신호를
+// 봐도 어느 방송의 어느 조각인지 몰라 조치가 안 된다(설계 S4 "무징후 금지"의 실질).
+func TestSessionSignalsCarryWarnGradeAndActionableLabels(t *testing.T) {
+	t.Run("session_floor_rejected", func(t *testing.T) {
+		r, sig := newTestRegistry(time.Second, 30*time.Second)
+		live := &liveSession{id: "S-floor", startedAt: wall, targetDuration: 6}
+		in := Input{
+			StreamID: "demo", Seq: 42,
+			StartWallUTC: wall.Add(-90 * time.Second), // 여유(1초) 밖
+			DurationMS:   4000, Op: OpenOrCurrent,
+		}
+
+		r.decide(live, in, wall)
+
+		if got := sig.levelOf("session_floor_rejected"); len(got) != 1 || got[0] != slog.LevelWarn {
+			t.Fatalf("등급 = %v, want [WARN] 1건", got)
+		}
+		attrs := sig.attrs("session_floor_rejected")
+		for key, want := range map[string]any{
+			"stream_id":  "demo",
+			"seq":        int64(42),
+			"session_id": "S-floor",
+		} {
+			if attrs[key] != want {
+				t.Errorf("%s 라벨 = %v(%T), want %v", key, attrs[key], attrs[key], want)
+			}
+		}
+	})
+
+	t.Run("session_epoch_ambiguous", func(t *testing.T) {
+		r, sig := newTestRegistry(time.Second, 30*time.Second)
+		obs := corroborated(wall)
+		obs.EpochSlack = 10 * time.Second
+		in := Input{
+			StreamID: "demo", Seq: 7,
+			StartWallUTC: obs.EpochStartedAt.Add(-5 * time.Second), // 모호 구간 안
+			DurationMS:   4000, Op: CurrentOrOpenIfCorroborated, Obs: obs,
+		}
+
+		r.decide(nil, in, wall)
+
+		if got := sig.levelOf("session_epoch_ambiguous"); len(got) != 1 || got[0] != slog.LevelWarn {
+			t.Fatalf("등급 = %v, want [WARN] 1건", got)
+		}
+		attrs := sig.attrs("session_epoch_ambiguous")
+		for key, want := range map[string]any{
+			"stream_id":   "demo",
+			"seq":         int64(7),
+			"epoch_slack": 10 * time.Second,
+		} {
+			if attrs[key] != want {
+				t.Errorf("%s 라벨 = %v(%T), want %v", key, attrs[key], attrs[key], want)
+			}
+		}
+	})
 }
