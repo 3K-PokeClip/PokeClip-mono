@@ -8,16 +8,20 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
 // 실측 응답 원문(F-34 · internal/mtxstate/state_test.go 와 같은 본문)에서 이 테스트가
@@ -256,4 +260,80 @@ func TestPollerStartedExactlyOnce(t *testing.T) {
 	if waits != 1 {
 		t.Errorf("WaitFirstObservation 호출이 %d곳이다 — 첫 관측 대기는 기동 1회뿐이다", waits)
 	}
+}
+
+// f6b_start_fail — 워처 **기동** 실패의 실제 경로를 조립부터 인덱서 주입까지 잇는다.
+//
+// **왜 여기인가**: 기동 실패는 `recording.Watcher` 안에서 일어나므로 indexer 패키지에서는
+// 재현할 수 없고, 프로덕션에 고장 주입 이음매를 새로 뚫는 것은 원칙 5 위반이다. 실패를
+// 실제로 만들 수 있는 자리는 조립부(cmd)뿐이라 그 결과 상태까지를 여기서 한 줄로 잇는다.
+//
+// 이 케이스가 세우는 사실 = **"Start 실패 → w=nil → 널 오브젝트 adopt"**.
+// 그 상태에서 훅·스캔 유입이 그대로 주조되는지(f6c·f6d)는 실 장부가 필요해
+// internal/indexer 의 TestPhaseF6DegradedWatcherStillSeeds 가 잇는다 — 두 테스트가
+// 같은 국면의 앞뒤 절반이며, 서로를 이름으로 가리킨다.
+func TestWatcherStartFailureFeedsNullObjectAdopter(t *testing.T) {
+	logs := &logCapture{}
+	log := slog.New(logs)
+
+	// 기동 실패 입력 — NewWatcher 는 통과하고 addWatch(root) 가 실패한다(루트 부재).
+	// 같은 입력의 "에러가 온다"까지는 TestAssembleWatcherFailurePoints 가 이미 잰다.
+	gone := recording.DefaultWatcherOptions(filepath.Join(t.TempDir(), "none"), log)
+	w, err := assembleWatcher(context.Background(), gone)
+	if err == nil {
+		t.Fatal("기동 실패가 에러로 오지 않았다 — 이 케이스의 전제가 깨졌다")
+	}
+	if w != nil {
+		t.Fatalf("기동 실패인데 워처가 %T 로 돌아왔다 — 강등 판정이 성립하지 않는다", w)
+	}
+
+	// main.go 와 **같은 형태**로 넘긴다(겹 1): *recording.Watcher 를 그대로 넘기면
+	// typed-nil 이 indexer.New 의 nil 가드(겹 2)를 통과해 Adopt 에서 죽는다.
+	var adopt indexer.Adopter
+	if w != nil {
+		adopt = w
+	}
+
+	root := t.TempDir()
+	store := &fakeStore{}
+	opt := indexer.DefaultOptions()
+	opt.SegmentRoot = root
+	ix := indexer.New(store, func(string) (int64, error) { return 4000, nil },
+		adopt, nil, nil, opt, log)
+
+	// 방금 쓰인(유휴가 아닌) 파일의 Idle 판정은 워처에게 되돌려야 하는 조각이다.
+	// 워처가 없으면 널 오브젝트가 받아 계수하고 버린다 — 프로세스는 죽지 않는다.
+	seg := justWrittenSegment(t, root, "f6bstream")
+	if err := ix.Handle(context.Background(), seg); err != nil {
+		t.Fatalf("강등 국면 되돌림이 에러다 — 널 오브젝트가 아니라 nil 이 끼워졌다: %v", err)
+	}
+
+	if n := logs.countLevel(slog.LevelWarn, "adopt_dropped_degraded"); n != 1 {
+		t.Errorf("adopt_dropped_degraded 가 %d건이다(1건 기대) — 되돌림이 널 오브젝트로 가지 않았다", n)
+	}
+	if n := store.insertCount(); n != 0 {
+		t.Errorf("되돌려야 할 조각이 %d행 기록됐다 — 성장 중일 수 있는 파일이다", n)
+	}
+}
+
+// justWrittenSegment 는 **방금 쓰인** 조각 파일을 만든다(mtime = 지금).
+// H4 의 유휴 재검이 "아직 쓰이는 중"으로 보고 되돌림 경로로 보내는 것이 목적이다.
+func justWrittenSegment(t *testing.T, root, streamID string) recording.Segment {
+	t.Helper()
+	dir := filepath.Join(root, streamID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("디렉토리 생성 실패: %v", err)
+	}
+	now := time.Now().UTC()
+	name := fmt.Sprintf("%s-%06d.mp4", now.Format("2006-01-02_15-04-05"), now.Nanosecond()/1000)
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, make([]byte, 1000), 0o600); err != nil {
+		t.Fatalf("파일 생성 실패: %v", err)
+	}
+	seg, err := recording.ParseSegmentPath(root, path)
+	if err != nil {
+		t.Fatalf("ParseSegmentPath 실패: %v", err)
+	}
+	seg.Reason = recording.ReasonIdle
+	return seg
 }

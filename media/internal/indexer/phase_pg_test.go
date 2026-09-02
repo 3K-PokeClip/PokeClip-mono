@@ -103,14 +103,23 @@ func (d phaseDecider) Open(ctx context.Context, tx pgx.Tx, dec index.SessionDeci
 // ---------------------------------------------------------------------------
 
 // phase 는 국면 하나의 주입 상태다 — "무엇이 죽어 있는가"를 값으로 적는다.
+//
+// **이 파일이 재는 것은 워처 실패의 *결과 상태*이지 실패 자체가 아니다.** 조립·기동
+// 실패는 recording.Watcher 안에서 일어나 이 패키지에서는 만들 수 없고, 만들려고
+// 프로덕션에 고장 주입 이음매를 뚫는 것은 원칙 5 위반이다. 실패를 실제로 일으켜
+// **w=nil → 널 오브젝트 adopt** 까지 잇는 것은 cmd 쪽 두 케이스다:
+//
+//	TestAssembleWatcherFailurePoints              — 조립(NewWatcher)·기동(Start) 실패가 에러로 합쳐진다
+//	TestWatcherStartFailureFeedsNullObjectAdopter — **실제 Start 실패**의 w=nil 이 indexer.New 에서 널 오브젝트가 된다
+//
+// 여기 아래 표는 **그 널 오브젝트 상태에서 훅·스캔 주조가 유지되는가**(f6c·f6d)를
+// 실 장부로 잇는 뒷절반이다. 두 절반이 합쳐져야 f6a·f6b 국면의 주조가 단언된다.
 type phase struct {
 	// watcher 가 거짓이면 워처 부재(강등)다 — 되돌림이 널 오브젝트로 간다.
 	watcher bool
-	// reattached 가 참이면 강등에 이르는 경로가 재장착 실패(SetAdopter(nil))다.
-	// main.go 는 조립 실패(NewWatcher)와 기동 실패(Start)를 한 값(w=nil)으로 합치므로
-	// **인덱서 층에서 두 국면은 같은 상태**이고, 그 접힘 자체는 cmd 쪽
-	// TestAssembleWatcherFailurePoints 가 잰다. 여기서 가르는 것은 널 오브젝트에
-	// 이르는 **두 가드 경로**(New 의 nil 가드 / SetAdopter 의 nil 가드)다.
+	// reattached 가 참이면 널 오브젝트에 **재장착 실패**(SetAdopter(nil)) 경로로 도달한다.
+	// 거짓이면 조립 시점 경로(New 의 nil 가드)다 — 인덱서 층에서 갈리는 것은 이 두 가드뿐이고,
+	// 어느 워처 실패점이 그 상태를 만들었는지는 위 cmd 케이스가 잰다.
 	reattached bool
 }
 
@@ -421,16 +430,20 @@ func TestPhaseF4AllLostDoesNotSeed(t *testing.T) {
 // f6c_hook_alive — 워처 부재 국면에서 훅만 살린다 → 훅이 ⓐ1 로 주조한다.
 // f6d_scan_only — 같은 국면에서 훅도 끈다 → 스캔이 ⓐ2 로 주조한다.
 //
-// **두 국면(f6a 조립 실패 · f6b 기동 실패)을 각각 재현한다**(설계 11.3 ⒡ "픽스처 2벌").
-// main.go 가 두 실패점을 한 값(w=nil)으로 합치므로 인덱서 층의 상태는 같고, 여기서
-// 가르는 것은 널 오브젝트에 이르는 두 가드 경로다.
+// **두 국면(f6a 조립 실패 · f6b 기동 실패)의 결과 상태를 각각 재현한다**(설계 11.3 ⒡
+// "픽스처 2벌"). 워처 실패 자체는 cmd 가 실물로 일으킨다 — 위 phase 타입 주석의 두
+// 케이스, 특히 f6b 는 TestWatcherStartFailureFeedsNullObjectAdopter 가
+// **실제 Start 실패 → w=nil → 널 오브젝트** 까지 잇고, 여기서는 그 상태의 주조를 잰다.
+// 하위 이름을 널 오브젝트 도달 경로로 적는 이유는 이 파일이 가르는 것이 그것뿐이기 때문이다.
 func TestPhaseF6DegradedWatcherStillSeeds(t *testing.T) {
 	phases := []struct {
 		name string
 		p    phase
 	}{
-		{"f6a_setup_fail", phase{watcher: false}},
-		{"f6b_start_fail", phase{watcher: false, reattached: true}},
+		// f6a 국면의 결과 상태 — 조립 실패로 처음부터 워처가 없다(New 의 nil 가드).
+		{"f6a_setup_fail_state", phase{watcher: false}},
+		// f6b 국면의 결과 상태 — 기동 실패 뒤 재장착도 실패했다(SetAdopter 의 nil 가드).
+		{"f6b_start_fail_state", phase{watcher: false, reattached: true}},
 	}
 	for _, ph := range phases {
 		t.Run(ph.name+"/f6c_hook_alive", func(t *testing.T) {
