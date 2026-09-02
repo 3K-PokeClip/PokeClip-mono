@@ -39,7 +39,7 @@ pnpm test          # 유닛/접근성 테스트
 
 ## 셸 · 본문 폭 (사이드바 화면)
 
-방송·설정처럼 좌측 사이드바(`Side`)를 두는 화면의 본문 규칙이다. 사이드바는 펼침 244 · 접힘 68(`--pc-shell-u`)로 폭이 바뀌고, 접힘 상태는 두 그룹이 하나(`stores/sidebar.ts`)를 공유한다.
+방송·설정처럼 좌측 사이드바(`Side`)를 두는 화면의 본문 규칙이다. 사이드바는 펼침 244 · 접힘 68(`--pc-shell-u`)로 폭이 바뀌고, 접힘 상태는 두 그룹이 하나(`src/stores/sidebar.ts`)를 공유한다.
 
 - **본문 폭은 가두지 않는다.** 사이드바를 접어 벌어진 176u는 본문이 그대로 쓴다. 화면 루트(`.screen`·`.container`)에 `max-width`를 두지 않는다 — 두면 접어서 번 폭이 오른쪽 빈 띠로만 남는다.
 - **본문 패딩은 공용 토큰이다** (`src/app/shell.css`): `--pc-shell-body-pad-top`(30u) · `--pc-shell-body-pad-x`(32u) · `--pc-shell-body-pad-bottom`(96u, fixed Dock 여백). 단위는 콘텐츠 유닛 `--pc-u`다 — 본문 안 글자·카드와 같은 배율을 타야 그룹을 오가도 h1의 x 좌표가 같다. 설정은 그룹 레이아웃이, 방송은 각 화면(`LiveScreen`·`VodListScreen`)이 토큰을 적용한다.

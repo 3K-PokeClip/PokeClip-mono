@@ -16,7 +16,7 @@
  * 단위가 셸 배율(--pc-shell-u)이 아니라 콘텐츠 유닛(--pc-u)인 이유: 패딩은 사이드바가 아니라 그 안의
  * 글자·카드와 같이 커져야 한다 (브라우저 글꼴을 키우면 --pc-u만 따라간다). 기본 글꼴에선 두 곡선이 같다.
  * 본문 폭은 가두지 않는다 — 사이드바를 접어 벌어진 폭은 본문이 그대로 쓰고, 읽기 폭 상한은 카드에만
- * 건다 (web/docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」). 하단 96 = fixed Dock 여백.
+ * 건다 (docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」). 하단 96 = fixed Dock 여백.
  * 적용: 설정은 (dock)/settings/layout.module.css가, 방송은 각 화면(LiveScreen·VodListScreen)이 쓴다.
  * 이 파일은 app/layout.tsx가 전역으로 싣고 Storybook preview는 싣지 않는다 — 이 토큰을 쓰는 화면의
  * 스토리를 만들 때는 preview에서 함께 import해야 한다. */
