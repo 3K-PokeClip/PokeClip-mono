@@ -23,12 +23,18 @@ type targetKey struct {
 
 // targetKeyOf 는 대상에서 작업 키를 만드는 **유일한 경로**다(설계 5.5.2 "생성 경로는 하나").
 //
-// sessionID 는 init 축에서만 키에 든다 — ②·③ 는 (streamID, axis, seq) 만으로 이미
-// 유일하므로, 대상이 세션을 함께 실어 오더라도 그 값으로 게이트가 갈리면 안 된다.
-// 갈리면 같은 행이 두 자리를 차지해 백오프·격리가 반쪽만 걸린다(회귀 T9).
+// **축마다 유일성을 주는 성분만 키에 남긴다**(회귀 T9):
+//
+//	②·③ — (streamID, axis, seq). 대상이 세션을 함께 실어 오더라도 그 값으로 갈리면 안 된다.
+//	init — (streamID, axis, sessionID). Seq 는 이 축에서 쓰지 않는 필드이므로(설계 5.5.2)
+//	       키에서도 지운다. 남겨 두면 같은 세션의 init 이 Seq 값만 달라도 다른 작업으로
+//	       인정돼 in-flight·백오프·격리를 통째로 우회하고 같은 객체가 중복 PUT 된다.
+//
+// 어느 쪽이든 같은 행이 두 자리를 차지하면 백오프·격리가 반쪽만 걸린다.
 func targetKeyOf(t index.UploadTarget) targetKey {
 	k := targetKey{streamID: t.StreamID, axis: t.Axis, seq: t.Seq}
 	if t.Axis == index.AxisInit {
+		k.seq = 0 // 정규화 — 이 축의 유일성 축은 sessionID 다
 		k.sessionID = t.SessionID
 	}
 	return k

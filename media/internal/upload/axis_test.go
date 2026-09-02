@@ -89,6 +89,19 @@ func TestJobKeyIsAxisScoped(t *testing.T) {
 		}
 	})
 
+	t.Run("init_키는_사용하지_않는_Seq_로_갈리지_않는다", func(t *testing.T) {
+		// 잡는 결함: init 축에서 Seq 는 쓰지 않는 필드인데(설계 5.5.2 · 계획 4.5) 키에 들면
+		// 같은 세션의 init 이 Seq 값만 달라도 다른 작업으로 인정된다 — in-flight·백오프·격리를
+		// 통째로 우회해 같은 init 객체가 중복 PUT 된다.
+		u := newGateUploader(t)
+		if got := u.enqueue(axisTarget(index.AxisInit, "demo", 0, "S-1"), OriginLive); got != EnqueueAdmitted {
+			t.Fatalf("Seq=0 접수 = %v, want admitted", got)
+		}
+		if got := u.enqueue(axisTarget(index.AxisInit, "demo", 1, "S-1"), OriginLive); got != EnqueueRejected {
+			t.Fatalf("Seq=1 접수 = %v, want rejected — 같은 세션이면 Seq 와 무관하게 같은 작업이다", got)
+		}
+	})
+
 	t.Run("아카이브_키는_sessionID_로_갈리지_않는다", func(t *testing.T) {
 		u := newGateUploader(t)
 		if got := u.enqueue(axisTarget(index.AxisArchive, "demo", 7, ""), OriginLive); got != EnqueueAdmitted {
@@ -424,6 +437,20 @@ func TestKeyGrammarIsPerAxis(t *testing.T) {
 		{"키의_stream_이_다르면_축과_무관하게_거부", index.UploadTarget{
 			StreamID: "demo", Axis: index.AxisInit, SessionID: session,
 			S3Key: initKeyOf(t, "other", session), LocalPath: local, Bytes: 64}, "bad_key"},
+
+		// 세션 성분은 생산자(playback.InitKey)가 낼 수 있는 집합만 받는다.
+		// `.`·`..` 는 경로 참조라 URL 을 깨고, 점을 품은 성분은 회부 ① 확정 문법
+		// (S-{YYYYMMDD}-{HHMMSS}-{streamID}-{seq}, streamID 는 [A-Za-z0-9_-]{1,64})에서
+		// 나올 수 없다 — 좁혀도 정상 대상이 격리되지 않는다.
+		{"init_세션_성분이_현재_경로_참조", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisInit, SessionID: ".",
+			S3Key: "dvr/demo/init/..mp4", LocalPath: local, Bytes: 64}, "bad_key"},
+		{"init_세션_성분이_상위_경로_참조", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisInit, SessionID: "..",
+			S3Key: "dvr/demo/init/...mp4", LocalPath: local, Bytes: 64}, "bad_key"},
+		{"init_세션_성분에_점", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisInit, SessionID: "a.b",
+			S3Key: "dvr/demo/init/a.b.mp4", LocalPath: local, Bytes: 64}, "bad_key"},
 
 		{"축_미판정은_거부", index.UploadTarget{
 			StreamID: "demo", Seq: 7,

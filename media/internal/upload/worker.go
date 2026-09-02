@@ -187,10 +187,14 @@ var s3KeyRe = regexp.MustCompile(`^streams/([A-Za-z0-9_-]{1,64})/\d{4}-\d{2}-\d{
 var playbackKeyRe = regexp.MustCompile(`^dvr/([A-Za-z0-9_-]{1,64})/seg/(\d{6,})\.m4s$`)
 
 // initKeyRe 는 init(MAP) 축 키의 문법이다 — 설계 5.2·5.3ⓐ(playback.InitKey).
-// **둘째 그룹이 seq 가 아니라 sessionID 인 것이 축의 차이다.** 성분 문자 집합은
-// playback.InitKey 가 허용하는 것과 같다 — 더 좁히면 세션 ID 규칙이 정해지는 날
-// 정상 대상이 통째로 영구 격리된다(worker.go:109).
-var initKeyRe = regexp.MustCompile(`^dvr/([A-Za-z0-9_-]{1,64})/init/([A-Za-z0-9._-]+)\.mp4$`)
+// **둘째 그룹이 seq 가 아니라 sessionID 인 것이 축의 차이다.**
+//
+// 세션 성분에 점을 받지 않는다: playback.InitKey 는 `.`·`..` 를 명시로 거부하고(key.go:22),
+// 세션 ID 문법은 S-{YYYYMMDD}-{HHMMSS}-{streamID}-{seq} 로 확정됐으며
+// (session/registry.go:460) streamID 화이트리스트가 [A-Za-z0-9_-]{1,64} 라 점 자체가
+// 나올 수 없다. 그래서 좁혀도 정상 대상이 영구 격리(worker.go:109)될 길이 없고,
+// 경로 참조가 키에 실리는 길만 닫힌다.
+var initKeyRe = regexp.MustCompile(`^dvr/([A-Za-z0-9_-]{1,64})/init/([A-Za-z0-9_-]+)\.mp4$`)
 
 // keyPatternFor 는 축의 키 문법이다(설계 5.5.4 #3 — 축별 3벌).
 // 미판정 축은 nil 이다 — 호출자가 그 자리에서 거부한다(fail-closed).
