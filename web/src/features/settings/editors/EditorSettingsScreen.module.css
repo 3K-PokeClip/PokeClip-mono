@@ -1,7 +1,8 @@
 /* 디자인 1l 설정 · 편집자 관리 */
 
+/* 폭을 가두지 않는다 — 사이드바 화면 공통 규칙(docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」).
+   행 카드는 전폭을 쓰고, 「편집자 초대」 버튼(.headerRow)도 그 행의 오른쪽 끝에 맞춘다. */
 .screen {
-  max-width: calc(860 * var(--pc-u));
   display: flex;
   flex-direction: column;
 }

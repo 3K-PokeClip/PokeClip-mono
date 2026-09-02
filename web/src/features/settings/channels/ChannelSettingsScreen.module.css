@@ -1,7 +1,8 @@
 /* 디자인 1k 설정 · 채널 연동 */
 
+/* 폭을 가두지 않는다 — 사이드바 화면 공통 규칙(docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」).
+   행 카드는 지난 방송 행처럼 전폭을 쓴다. */
 .screen {
-  max-width: calc(860 * var(--pc-u));
   display: flex;
   flex-direction: column;
 }
