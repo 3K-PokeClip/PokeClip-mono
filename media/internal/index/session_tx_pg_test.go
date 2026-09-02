@@ -25,8 +25,15 @@ import (
 //
 // 비테스트 코드의 index → session 임포트는 0 이다(계획 3절 경계) — 그래서 세션 결정자는
 // 이 패키지가 선언한 SessionDecider 로 주입된다. 아래 어댑터는 조립 지점
-// (cmd/segment-indexer/session_wire.go)의 어댑터와 같은 매핑을 테스트에서 재현한 것이며,
-// 그 쌍둥이가 어긋나지 않는지는 cmd 쪽 단위 테스트가 지킨다.
+// (cmd/segment-indexer/session_wire.go)의 어댑터와 같은 매핑을 테스트에서 재현한 것이다.
+//
+// **쌍둥이가 어긋나지 않는지는 이 파일이 아니라 cmd 쪽 테스트가 지킨다** — 여기 어댑터가
+// 맞아도 프로덕션 어댑터가 틀리면 이 패키지 테스트는 전부 통과한다(체크포인트 r2 H2):
+//
+//	TestSessionOpMapsOneToOne                       — 연산 매핑 1:1
+//	TestSessionDeciderCarriesBaseSessionAndPlanEndToEnd — 기저 세션·Plan 왕복(실 PG)
+//	TestSessionDeciderCopiesObservationFields       — 관측 5필드 복사(실 PG)
+//
 // 테스트 파일이 두 패키지를 다 봐도 순환은 없다 — 양쪽 비테스트 코드가 서로를 안 본다.
 type registryDecider struct{ reg *session.Registry }
 
@@ -642,5 +649,101 @@ func TestConcurrentSessionOpenSurfacesContendedSentinel(t *testing.T) {
 	}
 	if rows != 0 {
 		t.Fatalf("경합 실패 트랜잭션의 행이 남았다: %d", rows)
+	}
+}
+
+// failingDecider 는 DB 오류를 그대로 돌려주는 결정자다. Decide 와 Open 두 자리를 각각 잰다.
+type failingDecider struct {
+	err   error
+	opens bool
+}
+
+func (d failingDecider) Decide(context.Context, pgx.Tx, SessionInput, time.Time) (SessionDecision, error) {
+	if d.opens {
+		return SessionDecision{Opens: true}, nil
+	}
+	return SessionDecision{}, d.err
+}
+
+func (d failingDecider) Open(context.Context, pgx.Tx, SessionDecision, time.Time) (string, error) {
+	return "", d.err
+}
+
+// 계획 4.3 ⒉ — **세션 결정의 DB 오류는 Decline 으로 접히지 않는다.**
+// 접으면 "정책상 안 열었다"(다음 조각이 정상 처리)와 "DB 가 막았다"(재시도해야 한다)가
+// 같은 신호가 되어, 장부가 조용히 비어 가는 동안 아무도 재시도하지 않는다.
+func TestSessionDecisionDatabaseErrorPropagatesInsteadOfDeclining(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		opens bool
+	}{
+		{"Decide_오류", false},
+		{"Open_오류", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pool := newTestPool(t)
+			ctx := context.Background()
+			stream := sessionStream("decide-err-" + c.name)
+			boom := errors.New("세션 표 접근 실패(픽스처)")
+			store := NewPGStore(pool, failingDecider{err: boom, opens: c.opens}, playback.SegKey)
+
+			_, res, err := store.Insert(ctx, segAt(stream, 0, sessionBase, 4000),
+				eligibleSeed(time.Now().UTC()), liveIngress())
+			if !errors.Is(err, boom) {
+				t.Fatalf("DB 오류가 전파되지 않았다: %v", err)
+			}
+			if res.Seeded || res.Decline != DeclineNone {
+				t.Fatalf("오류가 귀속 어휘로 접혔다: %+v", res)
+			}
+			var rows int
+			if err := pool.QueryRow(ctx,
+				`SELECT count(*) FROM stream_segments WHERE stream_id = $1`, stream).Scan(&rows); err != nil {
+				t.Fatalf("행 수 조회 실패: %v", err)
+			}
+			if rows != 0 {
+				t.Fatalf("오류 트랜잭션의 행이 남았다: %d", rows)
+			}
+		})
+	}
+}
+
+// 계획 단계 3 ⑼ 대조군 — 현 live 세션이 있으면 **낡은 ⓐ2 스캔 조각도 귀속은 된다.**
+//
+// 접히는 것은 개시 권한뿐이고(CurrentOnly), carrier 3열은 채워지며 주조만 시간 재검에
+// 걸려 거부된다(stale_corroboration). "ⓐ 불성립이면 언제나 carrier NULL"이 아니라는 것이
+// 요점이다 — 그렇게 접으면 세션 중간에 NULL 구멍이 생겨 그 조각이 되감기 목록에서 사라진다
+// (설계 6.5.2 "ⓐ 불성립 → CurrentOnly").
+func TestStaleObservationStillAttributesToCurrentLiveSession(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	stream := sessionStream("stale-current")
+	sess := stream + "-s1"
+	putSession(t, pool, fixtureSession{id: sess, stream: stream, startedAt: sessionBase, firstPDT: sessionBase})
+
+	// OBS_FRESH(30초)를 막 넘긴 관측 — ⓐ2 자격을 잃었다.
+	stale := time.Now().UTC().Add(-31 * time.Second)
+	obs := SessionObservation{
+		Publishing: true, EpochKnown: true, ObservedAt: stale, EpochStartedAt: sessionBase,
+	}
+	// seed 도 ⓐ2 쌍이다 — 앵커가 ObservedAt, 신선도가 OBS_FRESH(설계 6.5.2).
+	seed := Seed{
+		Eligible: true, Reason: SeedReasonStateObs, Channel: SeedChannelScan,
+		AnchorUTC: stale, Freshness: 30 * time.Second,
+	}
+
+	_, res, err := newSessionStore(pool).Insert(ctx,
+		segAt(stream, 0, sessionBase.Add(4*time.Second), 4000), seed, scanIngress(obs))
+	if err != nil {
+		t.Fatalf("INSERT 는 성공해야 한다(주조만 거절): %v", err)
+	}
+	if res.Seeded || res.Decline != DeclineStaleCorroboration {
+		t.Fatalf("귀속이 stale_corroboration 이 아니다: %+v", res)
+	}
+	c := carrierOf(t, pool, stream, 0)
+	if c.SessionID == nil || *c.SessionID != sess || c.PDT == nil || c.Key == nil {
+		t.Fatalf("낡은 관측이 귀속까지 지웠다(세션 중간 NULL 구멍): %+v", c)
+	}
+	if _, _, _, ok := cutoffRow(t, pool, stream); ok {
+		t.Fatal("낡은 방증으로 주조됐다")
 	}
 }
