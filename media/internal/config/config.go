@@ -289,7 +289,7 @@ func Load(env func(string) string) (Config, error) {
 	// 조립 지점(cmd/segment-indexer/main.go 의 validateObservationWindow)이 그 검증을 진다.
 	//
 	// 교차 검증 4 — 폴 주기가 신선도 창 이상이면 다음 관측이 오기 전에 직전 관측이 만료돼
-	// 신선한 관측이 끊기지 않고 존재할 수 없다. 폴은 성공하고 주조만 안 되므로 로그에도
+	// 신선한 관측이 끊기지 않고 존재할 수 없다. 폴은 성공하고 스캔 유입(ⓐ2) 주조만 안 되므로 로그에도
 	// 드러나지 않는다. **역은 성립하지 않는다** — 짧다고 신선이 보장되지는 않는다.
 	if mtx.PollInterval >= obsFresh {
 		return Config{}, fmt.Errorf(
@@ -323,7 +323,7 @@ func Load(env func(string) string) (Config, error) {
 // 빈 값은 "관측 끔"이라 통과다.
 //
 // 여기서 안 잡으면 폴러가 매 주기 mtxstate_poll_failed 만 남기며 도는 상태가 되고,
-// 그 증상은 "되감기가 안 된다"로 한참 뒤에 나타난다.
+// 그 증상은 "스캔 유입(ⓐ2)의 되감기가 안 된다"(ⓐ1 워처·훅 유입은 계속된다)로 한참 뒤에 나타난다.
 func validateMTXAPIURL(raw string) error {
 	if raw == "" {
 		return nil
