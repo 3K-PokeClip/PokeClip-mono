@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
@@ -336,4 +337,39 @@ func justWrittenSegment(t *testing.T, root, streamID string) recording.Segment {
 	}
 	seg.Reason = recording.ReasonIdle
 	return seg
+}
+
+// ⓐ2 앵커 창 검증 — OBS_FRESH 가 트랜잭션 상한 이하면 **기동을 거부한다**.
+//
+// 왜 기동 거부인가: indexer 의 usableAnchor 는 `now−ObservedAt <= ObsFresh − TxnDeadline`
+// 으로 판정한다(트랜잭션이 상한까지 늘어져도 관측이 아직 신선하도록 미리 뺀다). 두 값이
+// 같거나 뒤집히면 우변이 0 이하가 되어 **어떤 관측도 앵커가 될 수 없고**, 스캔 유입 ⓐ2 가
+// 영구 봉인된다. 폴은 성공하고 로그도 깨끗한데 주조만 안 되는 무징후 고장이라
+// (config 의 교차 검증 4 와 같은 종류), 기동 때 값으로 잡는 것이 유일한 방어다.
+//
+// 현행 교차 검증(OBS_POLL < OBS_FRESH)은 이 조합을 통과시킨다 — 예: OBS_POLL=1s·OBS_FRESH=5s.
+func TestObservationWindowMustExceedTxnDeadline(t *testing.T) {
+	for name, c := range map[string]struct {
+		obsFresh time.Duration
+		wantErr  bool
+	}{
+		"상한 미만":      {index.TxnDeadline - time.Second, true},
+		"상한과 같음(경계)": {index.TxnDeadline, true},
+		"상한 초과(경계)":  {index.TxnDeadline + time.Millisecond, false},
+		"기본값 30초":    {30 * time.Second, false},
+	} {
+		err := validateObservationWindow(c.obsFresh)
+		if (err != nil) != c.wantErr {
+			t.Errorf("%s(%v): err = %v, 기동 거부 기대 = %v", name, c.obsFresh, err, c.wantErr)
+			continue
+		}
+		if !c.wantErr {
+			continue
+		}
+		// 오류 문구에 두 값이 함께 있어야 한다 — 하나만 있으면 무엇과 비교해 고칠지 모른다.
+		msg := err.Error()
+		if !strings.Contains(msg, c.obsFresh.String()) || !strings.Contains(msg, index.TxnDeadline.String()) {
+			t.Errorf("%s: 오류 문구에 두 값이 다 없다: %q", name, msg)
+		}
+	}
 }

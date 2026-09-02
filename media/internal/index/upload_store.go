@@ -60,9 +60,6 @@ type UploadStore interface {
 	// MarkFailed 도 같은 CAS 를 쓴다. 호출자는 반드시 err 를 먼저 보고, 그 다음 marked 를 본다 —
 	// (false, err) 를 CAS 거부로 오분류하면 DB 오류가 조용히 삼켜진다(CX-2 ⑥).
 	MarkFailed(ctx context.Context, streamID string, seq int64, expectBytes int64) (marked bool, err error)
-	// PendingUploads 는 after 다음 페이지를 집어 온다. 정렬 첫 키가 가변이므로 at-least-once 다.
-	// 둘째 반환값은 이 페이지의 마지막 행을 가리키는 커서이며, 행이 0건이면 after 를 그대로
-	// 돌려준다 — 되감김을 만들지 않기 위해서다.
 	// MarkInitUploaded 는 세션 init(MAP) 바이트의 성공 CAS 다(설계 5.5.5 셋째 문장).
 	//
 	// 세 조건이 전부 맞을 때만 1행이다: 그 세션이 있고, 아직 확정되지 않았고(init_uploaded_at
@@ -77,6 +74,9 @@ type UploadStore interface {
 	// **M3 의 호출자는 픽스처뿐이다**: 그 값을 만드는 유일한 생산자가 Producer.Init 인데
 	// 그것이 M4 라, 워커 호출부 배선도 M4 다.
 	MarkInitUploaded(ctx context.Context, sessionID string, sha256 []byte) (marked bool, err error)
+	// PendingUploads 는 after 다음 페이지를 집어 온다. 정렬 첫 키가 가변이므로 at-least-once 다.
+	// 둘째 반환값은 이 페이지의 마지막 행을 가리키는 커서이며, 행이 0건이면 after 를 그대로
+	// 돌려준다 — 되감김을 만들지 않기 위해서다.
 	PendingUploads(ctx context.Context, tailGraceSecs float64, limit int, after SweepCursor) ([]UploadTarget, SweepCursor, error)
 	// CountBacklog 의 세 값 관계: pending 과 failed 는 서로 배타이고,
 	// bytesNull 은 그 둘의 부분집합이다(= 처리 불가로 조회에서 제외된 개수). 중복 계수다.

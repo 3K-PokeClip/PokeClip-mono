@@ -284,6 +284,10 @@ func Load(env func(string) string) (Config, error) {
 	idx.ObsFresh = obsFresh
 	idx.ObsBackfill = obsBackfill
 
+	// 교차 검증 5 는 여기 없다 — OBS_FRESH 의 다른 하한(주조 트랜잭션 상한)은 index 패키지의
+	// 상수와 비교해야 하는데 이 층은 그 패키지를 보지 않는다. 상수 사본을 두면 두 곳이 갈리므로
+	// 조립 지점(cmd/segment-indexer/main.go 의 validateObservationWindow)이 그 검증을 진다.
+	//
 	// 교차 검증 4 — 폴 주기가 신선도 창 이상이면 다음 관측이 오기 전에 직전 관측이 만료돼
 	// 신선한 관측이 끊기지 않고 존재할 수 없다. 폴은 성공하고 주조만 안 되므로 로그에도
 	// 드러나지 않는다. **역은 성립하지 않는다** — 짧다고 신선이 보장되지는 않는다.

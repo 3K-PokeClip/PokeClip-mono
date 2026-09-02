@@ -42,9 +42,38 @@ func main() {
 	}
 }
 
+// validateObservationWindow 는 ⓐ2 앵커가 성립할 수 있는 창인지 본다.
+//
+// **왜 config 가 아니라 여기인가**: 비교 상대가 index.TxnDeadline(주조 트랜잭션의 클라이언트
+// 상한)인데 config 층은 그 패키지를 보지 않는다. 상수를 복사해 오면 두 곳이 갈리므로,
+// 두 값이 원본 그대로 함께 보이는 조립 지점에서 본다(config 의 교차 검증 4 옆 주석이 이리로 보낸다).
+//
+// **무엇을 막나**: indexer 의 usableAnchor 는 `now−ObservedAt <= ObsFresh − TxnDeadline` 으로
+// 판정한다 — 트랜잭션이 상한까지 늘어져도 관측이 그때까지 신선하도록 미리 빼는 것이다.
+// ObsFresh 가 상한 이하면 우변이 0 이하가 되어 **어떤 관측도 앵커가 될 수 없고** 스캔 유입
+// ⓐ2 가 영구 봉인된다. 폴은 성공하고 로그도 깨끗한데 주조만 안 되는 무징후 고장이라
+// (교차 검증 4 와 같은 종류) 기동 때 값으로 잡는 것이 유일한 방어다. 방향 자체는 비주조(안전)라
+// 프로세스를 죽일 일은 아니지만, 조용히 기능 하나가 없는 채로 도는 것이 더 나쁘다.
+//
+// 관측이 꺼져 있어도(MTX_API_URL 빈 값) 건너뛰지 않는다 — config 의 나머지 관측 값 검증과
+// 같은 규칙이다(오타를 켜는 날에야 알게 되면 그때도 무징후다).
+func validateObservationWindow(obsFresh time.Duration) error {
+	if obsFresh > index.TxnDeadline {
+		return nil
+	}
+	return fmt.Errorf(
+		"OBS_FRESH(%v)는 주조 트랜잭션 상한(%v)보다 길어야 한다 — 같거나 짧으면 스캔 유입의 "+
+			"ⓐ2 상태 방증 앵커가 영구 불성립이라 되감기 컷오프가 조용히 주조되지 않는다. "+
+			"기본값 30s 로 두거나, 최소 %v 보다 크게 잡아라",
+		obsFresh, index.TxnDeadline, index.TxnDeadline)
+}
+
 func run() error {
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
+		return err
+	}
+	if err := validateObservationWindow(cfg.ObsFresh); err != nil {
 		return err
 	}
 

@@ -137,6 +137,13 @@ func TestSessionDeciderCarriesBaseSessionAndPlanEndToEnd(t *testing.T) {
 	if id == "" {
 		t.Fatal("Open 이 빈 session_id 를 돌려줬다")
 	}
+	// Seq 복사 단언 — session_wire.go 의 Seq 가 유실되면 모든 세션이 S-…-0 이 되고,
+	// 같은 UTC 초에 다시 열리는 순간(TD 분할 직후) stream_sessions_pkey 충돌이다.
+	// 그 충돌은 재시도 대상이 아니라 fatal 이라 프로세스가 재기동 루프에 든다 —
+	// session_id 의 재사용 불가 성분이 seq 인 이유가 그것이다(registry.go sessionID).
+	if !strings.HasSuffix(id, "-7") {
+		t.Errorf("session_id = %q — 끝이 개시 행 seq(7)가 아니다. Seq 가 어댑터에서 유실됐다", id)
+	}
 
 	var startedAt, gotPDT time.Time
 	var td int32
