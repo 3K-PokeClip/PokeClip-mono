@@ -36,7 +36,7 @@ func newPageStore(n int, prefix string) *pageStore {
 		sid := fmt.Sprintf("%s-%d", prefix, i)
 		s.rows = append(s.rows, pageRow{
 			target: index.UploadTarget{
-				StreamID: sid, Seq: int64(i),
+				StreamID: sid, Axis: index.AxisArchive, Seq: int64(i),
 				S3Key:     index.S3Key(sid, int64(i), base),
 				LocalPath: "/recordings/" + sid + "/x.mp4",
 				Bytes:     100,
@@ -51,6 +51,9 @@ func (s *pageStore) MarkUploaded(context.Context, string, int64, int64) (bool, e
 	return true, nil
 }
 func (s *pageStore) MarkFailed(context.Context, string, int64, int64) (bool, error) {
+	return true, nil
+}
+func (s *pageStore) MarkInitUploaded(context.Context, string, []byte) (bool, error) {
 	return true, nil
 }
 func (s *pageStore) CountBacklog(context.Context) (int64, int64, int64, error) {
@@ -128,7 +131,7 @@ func TestSweepAdvancesOverRejectedRows(t *testing.T) {
 
 	// 전부 격리해 Rejected 만 나오게 만든다.
 	for _, r := range st.rows {
-		u.gate.quarantine(targetKey{r.target.StreamID, r.target.Seq})
+		u.gate.quarantine(archiveKey(r.target.StreamID, r.target.Seq))
 	}
 
 	resume, stalled := u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
@@ -274,7 +277,7 @@ func TestSweepDoesNotRewindCursorWhenStage2AbortsAtFirstRow(t *testing.T) {
 	// 차지하지 않도록 zero 페이지 행들을 격리한다. 그러면 2단계에 자리가 남는다.
 	u.drainQueue()
 	for i := 0; i < 4; i++ {
-		u.gate.quarantine(targetKey{st.rows[i].target.StreamID, st.rows[i].target.Seq})
+		u.gate.quarantine(archiveKey(st.rows[i].target.StreamID, st.rows[i].target.Seq))
 	}
 	next, stalled2 := u.sweepOnce(context.Background(), resume, stalled)
 	// tq-6 — 정상 회차는 카운터를 0 으로 되돌린다. 리셋이 없으면 한 번 막힌 뒤로
@@ -572,7 +575,7 @@ func TestSweepWrapsCursorAtEndOfTable(t *testing.T) {
 	st := newPageStore(3, "s") // SweepLimit(4)보다 작다 = 한 페이지에서 끝이 보인다
 	u, cap := newSweepUploader(t, st, nil)
 	for _, r := range st.rows {
-		u.gate.quarantine(targetKey{r.target.StreamID, r.target.Seq})
+		u.gate.quarantine(archiveKey(r.target.StreamID, r.target.Seq))
 	}
 
 	resume, stalled := u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
@@ -613,7 +616,7 @@ func TestWorkerLogsAdmissionRoundNotEmissionRound(t *testing.T) {
 	for i := 0; i < rows; i++ {
 		sid := fmt.Sprintf("ghost-%d", i)
 		targets = append(targets, index.UploadTarget{
-			StreamID: sid, Seq: int64(i),
+			StreamID: sid, Axis: index.AxisArchive, Seq: int64(i),
 			S3Key:     index.S3Key(sid, int64(i), base),
 			LocalPath: filepath.Join(dir, sid, "seg.mp4"),
 			Bytes:     100,

@@ -546,3 +546,170 @@ func TestLoadRejectsMalformedBucketAndEndpoint(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// 관측 축 env 6종 (POK-195 M3 — 설계 5.4.1·6.5.2)
+// ---------------------------------------------------------------------------
+
+func TestLoadAppliesObservationDefaults(t *testing.T) {
+	cfg, err := Load(envOf(minimalEnv()))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+
+	// API URL 에는 기본값이 없다. 미설정 = 관측 끔(ⓐ2 fail-closed)이 기본 상태다.
+	if cfg.MTXState.APIURL != "" {
+		t.Errorf("MTXState.APIURL = %q, want \"\"(미설정 = 관측 끔)", cfg.MTXState.APIURL)
+	}
+	if cfg.MTXState.PollInterval != 10*time.Second {
+		t.Errorf("OBS_POLL = %v, want 10s", cfg.MTXState.PollInterval)
+	}
+	if cfg.MTXState.BootWait != 3*time.Second {
+		t.Errorf("OBS_BOOT_WAIT = %v, want 3s", cfg.MTXState.BootWait)
+	}
+	if cfg.ObsFresh != 30*time.Second {
+		t.Errorf("OBS_FRESH = %v, want 30s", cfg.ObsFresh)
+	}
+	if cfg.ObsBackfill != 60*time.Second {
+		t.Errorf("OBS_BACKFILL = %v, want 60s", cfg.ObsBackfill)
+	}
+	if cfg.SessionFloorSlack != time.Second {
+		t.Errorf("SESSION_FLOOR_SLACK = %v, want 1s", cfg.SessionFloorSlack)
+	}
+	// 판정 창 공시(90초) = OBS_BACKFILL + OBS_FRESH. 기본값이 그 산식과 맞아야 한다.
+	if got := cfg.ObsBackfill + cfg.ObsFresh; got != 90*time.Second {
+		t.Errorf("OBS_BACKFILL+OBS_FRESH = %v, want 90s(판정 창 공시)", got)
+	}
+}
+
+// ⓐ2 의 두 시간 창은 판정하는 층(indexer)에도 같은 값으로 도달해야 한다.
+// 값의 집은 config 하나이고, 여기서 옮겨 담지 않으면 인덱서 쪽이 영값(=가장 엄격)으로
+// 판정해 스캔 유입이 영영 주조되지 않는다 — 로그에는 아무것도 안 남는 종류의 고장이다.
+func TestObservationWindowsReachTheIndexer(t *testing.T) {
+	env := minimalEnv()
+	env["OBS_FRESH"] = "45s"
+	env["OBS_BACKFILL"] = "90s"
+
+	cfg, err := Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.Indexer.ObsFresh != cfg.ObsFresh {
+		t.Errorf("Indexer.ObsFresh = %v, want %v", cfg.Indexer.ObsFresh, cfg.ObsFresh)
+	}
+	if cfg.Indexer.ObsBackfill != cfg.ObsBackfill {
+		t.Errorf("Indexer.ObsBackfill = %v, want %v", cfg.Indexer.ObsBackfill, cfg.ObsBackfill)
+	}
+}
+
+// MTX_API_URL="" 은 즉시 롤백 스위치다 — 관측이 사라지면 ⓐ2 만 fail-closed 되고
+// 인덱싱은 그대로 돈다. withDefault 를 쓰면 그 스위치가 고장난다.
+func TestEmptyMTXAPIURLStaysEmpty(t *testing.T) {
+	env := minimalEnv()
+	env["MTX_API_URL"] = ""
+
+	cfg, err := Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.MTXState.APIURL != "" {
+		t.Errorf("MTXState.APIURL = %q, want \"\" — 롤백 스위치가 fallback 에 덮였다", cfg.MTXState.APIURL)
+	}
+}
+
+func TestLoadReadsObservationOverrides(t *testing.T) {
+	env := minimalEnv()
+	env["MTX_API_URL"] = "http://media:9997"
+	env["OBS_POLL"] = "5s"
+	env["OBS_FRESH"] = "45s"
+	env["OBS_BACKFILL"] = "90s"
+	env["OBS_BOOT_WAIT"] = "1s"
+	env["SESSION_FLOOR_SLACK"] = "2s"
+
+	cfg, err := Load(envOf(env))
+	if err != nil {
+		t.Fatalf("예상 밖 에러: %v", err)
+	}
+	if cfg.MTXState.APIURL != "http://media:9997" {
+		t.Errorf("MTXState.APIURL = %q", cfg.MTXState.APIURL)
+	}
+	if cfg.MTXState.PollInterval != 5*time.Second {
+		t.Errorf("OBS_POLL = %v, want 5s", cfg.MTXState.PollInterval)
+	}
+	if cfg.ObsFresh != 45*time.Second {
+		t.Errorf("OBS_FRESH = %v, want 45s", cfg.ObsFresh)
+	}
+	if cfg.ObsBackfill != 90*time.Second {
+		t.Errorf("OBS_BACKFILL = %v, want 90s", cfg.ObsBackfill)
+	}
+	if cfg.MTXState.BootWait != time.Second {
+		t.Errorf("OBS_BOOT_WAIT = %v, want 1s", cfg.MTXState.BootWait)
+	}
+	if cfg.SessionFloorSlack != 2*time.Second {
+		t.Errorf("SESSION_FLOOR_SLACK = %v, want 2s", cfg.SessionFloorSlack)
+	}
+}
+
+// 0·음수·파싱 불가는 기동 거부다. 조용히 기본값으로 넘어가면 "스캔 유입(ⓐ2)의 주조가 왜 안 되지"로
+// 나타난다(ⓐ1 워처·훅 유입은 OBS_* 와 무관 — config.go 의 같은 주석과 쌍).
+func TestObservationDurationsRejectZeroAndNegative(t *testing.T) {
+	for _, key := range []string{"OBS_POLL", "OBS_FRESH", "OBS_BACKFILL", "OBS_BOOT_WAIT", "SESSION_FLOOR_SLACK"} {
+		for _, bad := range []string{"0s", "-1s", "가끔"} {
+			t.Run(key+"="+bad, func(t *testing.T) {
+				env := minimalEnv()
+				env[key] = bad
+
+				if _, err := Load(envOf(env)); err == nil {
+					t.Fatalf("%s=%q 를 받아들였다", key, bad)
+				} else if !strings.Contains(err.Error(), key) {
+					t.Errorf("에러에 키 이름이 없다: %v", err)
+				}
+			})
+		}
+	}
+}
+
+// 교차 검증 4 — 폴 주기가 신선도 창 이상이면 관측이 태어나자마자 낡아 ⓐ2 가 영구 불성립이다.
+// 그 상태는 로그로 드러나지 않는다(폴은 성공하고 주조만 안 된다) — 기동 때 잡는다.
+func TestLoadRejectsPollIntervalNotBelowFresh(t *testing.T) {
+	for _, poll := range []string{"30s", "45s"} {
+		t.Run("OBS_POLL="+poll, func(t *testing.T) {
+			env := minimalEnv()
+			env["OBS_POLL"] = poll
+			env["OBS_FRESH"] = "30s"
+
+			_, err := Load(envOf(env))
+			if err == nil {
+				t.Fatalf("OBS_POLL(%s) >= OBS_FRESH(30s) 를 받아들였다", poll)
+			}
+			if !strings.Contains(err.Error(), "OBS_POLL") || !strings.Contains(err.Error(), "OBS_FRESH") {
+				t.Errorf("에러에 두 키 이름이 다 있어야 한다: %v", err)
+			}
+		})
+	}
+}
+
+// URL 은 경계값이다. 오구성이면 폴러가 조용히 실패만 반복하므로 기동 때 문법을 본다.
+func TestLoadRejectsMalformedMTXAPIURL(t *testing.T) {
+	// 뒤 여섯은 query·fragment 갈래다 — poller 가 베이스 URL 뒤에 "/v3/paths/list" 를
+	// 문자열로 붙이므로 `#typo` 는 경로를 "/" 로 잘라내고 `?x=1` 은 경로를 쿼리 안으로
+	// 밀어 넣는다. 둘 다 폴이 영구 실패하고 증상은 "스캔 유입(ⓐ2)의 되감기가 안 된다"뿐이다.
+	// 값 없는 `#`·`?` 만 붙은 형태도 같은 고장이다 — 특히 빈 fragment 는 url.Parse 가
+	// Fragment="" 로 삼키므로 파싱 결과가 아니라 원문으로만 잡힌다(r5 cx 지적).
+	for _, bad := range []string{
+		"media:9997", "ftp://media:9997", "http://", "http://user:pw@media:9997",
+		"http://media:9997#typo", "http://media:9997?x=1", "http://media:9997/#typo",
+		"http://media:9997#", "http://media:9997/#", "http://media:9997?",
+	} {
+		t.Run(bad, func(t *testing.T) {
+			env := minimalEnv()
+			env["MTX_API_URL"] = bad
+
+			if _, err := Load(envOf(env)); err == nil {
+				t.Fatalf("MTX_API_URL=%q 를 받아들였다", bad)
+			} else if !strings.Contains(err.Error(), "MTX_API_URL") {
+				t.Errorf("에러에 키 이름이 없다: %v", err)
+			}
+		})
+	}
+}

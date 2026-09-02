@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
@@ -31,10 +32,18 @@ type fakeStore struct {
 	updateTailOK      *bool
 	updateTail        []updateTailCall
 
+	// seeds 는 "적격 seed 는 주조된다"를 흉내 낸다(실제 판정은 SQL 이 한다).
+	seeds bool
+	// declineAs 는 미주조일 때 돌려줄 귀속 어휘다. 영값이면 종전대로 no_corroboration 이다 —
+	// 귀속은 SQL 이 정하지만(store.go), 그 값이 신호로 어떻게 드러나는지는 여기서 잰다.
+	declineAs index.SeedDecline
+
 	insertCalls     int
 	loadCursorCalls int
 	// lastSeed 는 마지막 Insert 에 동봉된 주조 판정 입력이다(buildSeed 검증용).
 	lastSeed index.Seed
+	// lastSource 는 마지막 Insert 에 동봉된 세션 결정 입력이다(sessionOp 배선 검증용).
+	lastSource index.SessionSource
 }
 
 type updateTailCall struct {
@@ -99,11 +108,12 @@ func (s *fakeStore) ExistingPaths(_ context.Context, streamID string) (map[strin
 	return out, nil
 }
 
-func (s *fakeStore) Insert(_ context.Context, r index.Record, seed index.Seed) (index.InsertOutcome, index.SeedResult, error) {
+func (s *fakeStore) Insert(_ context.Context, r index.Record, seed index.Seed, src index.SessionSource) (index.InsertOutcome, index.SeedResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.insertCalls++
 	s.lastSeed = seed
+	s.lastSource = src
 
 	if len(s.insertErrs) > 0 {
 		err := s.insertErrs[0]
@@ -128,7 +138,14 @@ func (s *fakeStore) Insert(_ context.Context, r index.Record, seed index.Seed) (
 		}
 	}
 	s.rows[r.StreamID] = append(s.rows[r.StreamID], r)
-	return index.InsertInserted, index.SeedResult{Decline: index.DeclineNoCorroboration}, nil
+	if s.seeds && seed.Eligible {
+		return index.InsertInserted, index.SeedResult{Seeded: true}, nil
+	}
+	decline := s.declineAs
+	if decline == index.DeclineNone {
+		decline = index.DeclineNoCorroboration
+	}
+	return index.InsertInserted, index.SeedResult{Decline: decline}, nil
 }
 
 func (s *fakeStore) UpdateTail(_ context.Context, streamID string, seq int64, durationMS int32, bytes int64) (bool, error) {
@@ -188,6 +205,41 @@ func (p *probeStub) fn(path string) (int64, error) {
 	}
 	i := min(p.calls-1, len(p.vals)-1)
 	return p.vals[i], nil
+}
+
+// ---------------------------------------------------------------------------
+// fake observer — 폴러 대신 관측 스냅샷을 직접 주입한다(계획 단계 4 "스냅샷 직접 주입").
+// 호출 횟수를 세는 이유: 조각 하나에 채취가 정확히 1회여야 재시도 경로에서 판정이 갈리지
+// 않는다(Seed 재사용 규약과 같은 근거).
+// ---------------------------------------------------------------------------
+
+type fakeObserver struct {
+	mu    sync.Mutex
+	obs   map[string]mtxstate.Observation
+	calls int
+}
+
+func newObserver() *fakeObserver {
+	return &fakeObserver{obs: map[string]mtxstate.Observation{}}
+}
+
+func (o *fakeObserver) set(streamID string, obs mtxstate.Observation) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.obs[streamID] = obs
+}
+
+func (o *fakeObserver) Latest(streamID string) mtxstate.Observation {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.calls++
+	return o.obs[streamID]
+}
+
+func (o *fakeObserver) callCount() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.calls
 }
 
 // ---------------------------------------------------------------------------
@@ -283,15 +335,16 @@ func (c *logCapture) errorCount() int {
 // ---------------------------------------------------------------------------
 
 type fixture struct {
-	t       *testing.T
-	root    string
-	store   *fakeStore
-	probe   *probeStub
-	adopter *fakeAdopter
-	upload  *fakeUploadRequester
-	logs    *logCapture
-	ix      *Indexer
-	opt     Options
+	t        *testing.T
+	root     string
+	store    *fakeStore
+	probe    *probeStub
+	adopter  *fakeAdopter
+	upload   *fakeUploadRequester
+	observer *fakeObserver
+	logs     *logCapture
+	ix       *Indexer
+	opt      Options
 }
 
 // testOptions 는 기본값의 의미는 그대로 두고 시간 상수만 짧게 줄인다.
@@ -305,6 +358,10 @@ func testOptions() Options {
 		SettleWait:   10 * time.Millisecond,
 		MaxSettle:    60 * time.Millisecond,
 	}
+	// 관측 축의 두 창은 config 기본값 그대로다(OBS_FRESH 30초 · OBS_BACKFILL 60초) —
+	// 판정 경계를 재는 케이스가 프로덕션과 같은 수치 위에 서야 한다.
+	opt.ObsFresh = 30 * time.Second
+	opt.ObsBackfill = 60 * time.Second
 	// 보류 수명주기 테스트가 실제 시간을 기다려야 하므로 ms 급으로 줄인다.
 	// 여기서 줄이지 않으면 (c) 계열이 held 맵 직접 주입에 의존하게 되고,
 	// 그러면 ReleaseHeldTails 의 판정 자체가 검증되지 않는다.
@@ -315,22 +372,23 @@ func testOptions() Options {
 func newFixture(t *testing.T, probeVals ...int64) *fixture {
 	t.Helper()
 	f := &fixture{
-		t:       t,
-		root:    t.TempDir(),
-		store:   newFakeStore(),
-		probe:   newProbe(probeVals...),
-		adopter: &fakeAdopter{},
-		upload:  &fakeUploadRequester{accept: true},
-		logs:    &logCapture{},
-		opt:     testOptions(),
+		t:        t,
+		root:     t.TempDir(),
+		store:    newFakeStore(),
+		probe:    newProbe(probeVals...),
+		adopter:  &fakeAdopter{},
+		upload:   &fakeUploadRequester{accept: true},
+		observer: newObserver(),
+		logs:     &logCapture{},
+		opt:      testOptions(),
 	}
-	f.ix = New(f.store, f.probe.fn, f.adopter, f.upload, f.opt, slog.New(f.logs))
+	f.reload()
 	return f
 }
 
 // reload 는 Options 를 바꾼 뒤 인덱서를 다시 만든다.
 func (f *fixture) reload() {
-	f.ix = New(f.store, f.probe.fn, f.adopter, f.upload, f.opt, slog.New(f.logs))
+	f.ix = New(f.store, f.probe.fn, f.adopter, f.upload, f.observer, f.opt, slog.New(f.logs))
 }
 
 // makeFile 은 실제 파일을 만들고 mtime 을 충분히 과거로 돌린다.

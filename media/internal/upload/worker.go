@@ -85,11 +85,16 @@ func (u *Uploader) worker() {
 }
 
 // runJob 은 작업 1건의 수명을 감싼다. in-flight 해제와 브레이커 반영이 여기 한 곳이다.
+//
+// 브레이커는 그 작업의 축 것 하나만 만진다(설계 5.5.3). 축을 모르는 작업은 접수 게이트가
+// 이미 걸렀지만 여기서 한 번 더 본다 — 호출부 열거로 막지 않는 것이 이 패키지의 규율이다.
 func (u *Uploader) runJob(j job) {
 	defer u.gate.releaseInflight(j.key())
 	u.lastAttemptErr = nil
 	o := u.processTarget(j)
-	u.brk.record(o, u.lastAttemptErr)
+	if brk := u.brk.of(j.target.Axis); brk != nil {
+		brk.record(o, u.lastAttemptErr)
+	}
 }
 
 // processTarget 은 작업 1건 처리다(설계 3.3절).
@@ -100,6 +105,7 @@ func (u *Uploader) processTarget(j job) outcome {
 		"origin", j.origin.String(),
 		"sweep_round", j.sweepRound,
 		"stream_id", t.StreamID,
+		"axis", t.Axis.String(),
 		"seq", t.Seq,
 	)
 
@@ -110,8 +116,10 @@ func (u *Uploader) processTarget(j job) outcome {
 		return outcomeNeutral
 	}
 
-	// [1] 브레이커 lazy 평가.
-	if !u.brk.allowWork(k) {
+	// [1] 브레이커 lazy 평가. 축은 [0] 이 이미 판정했지만 nil 을 다시 본다 —
+	//     판정 순서가 바뀌는 날 조용히 nil 역참조가 되지 않게 한다.
+	brk := u.brk.of(t.Axis)
+	if brk == nil || !brk.allowWork(k) {
 		return outcomeNeutral
 	}
 
@@ -142,9 +150,85 @@ func (u *Uploader) processTarget(j job) outcome {
 	return u.finalizeFailure(j, rel, lg, lastErr)
 }
 
-// s3KeyRe 는 예약 키의 전체 문법이다. index.S3Key 로 재계산해 비교하지는 않는다 —
+// markPlan 은 이 축이 이번 마킹에서 무엇을 하는가다(계획 4.5 — 마킹 3지점 공용).
+type markPlan uint8
+
+const (
+	// markCAS — 장부 CAS 를 실행한다. M3 에서 이 갈래는 AxisArchive 하나다.
+	markCAS markPlan = iota
+	// markSkip — 이 축에는 이 상태를 적는 컬럼이 없다(init 실패 — 설계 5.5.5 는 init 에
+	// 성공 CAS 한 문장만 정의한다). 장부를 건드리지 않고 후처리만 이어간다.
+	markSkip
+	// markRefuse — 이 축의 마킹은 아직 없다. 흘려보내면 ③·init 결과가 ② 의 CAS 로 새어
+	// 아카이브 열을 바꾸므로 거부한다(fail-closed).
+	markRefuse
+)
+
+// planMark 는 축과 목표 상태로 마킹 갈래를 고른다.
+//
+// **기본 갈래가 markRefuse 인 것이 계약이다.** "init 이면 건너뛰고 아니면 마킹"으로 쓰면
+// M4 의 첫 ③ 작업이 ② 의 CAS(markUploadedSQL)로 흘러가 아카이브 열을 바꾼다(계획 4.5).
+func planMark(a index.Axis, target index.UploadState) markPlan {
+	switch {
+	case a == index.AxisArchive:
+		return markCAS
+	case a == index.AxisInit && target == index.UploadStateFailed:
+		return markSkip
+	default:
+		return markRefuse
+	}
+}
+
+// s3KeyRe 는 ② 아카이브 축 예약 키의 전체 문법이다. index.S3Key 로 재계산해 비교하지는 않는다 —
 // "예약 키 그대로 PUT"이 계약이라 재계산 비교는 키 포맷을 바꾸는 순간 옛 행을 전부 거부한다.
 var s3KeyRe = regexp.MustCompile(`^streams/([A-Za-z0-9_-]{1,64})/\d{4}-\d{2}-\d{2}/\d{2}/seg_(\d{6,})\.m4s$`)
+
+// playbackKeyRe 는 ③ 재생 축 키의 문법이다 — 설계 5.2 의 형상 그대로다(playback.SegKey).
+var playbackKeyRe = regexp.MustCompile(`^dvr/([A-Za-z0-9_-]{1,64})/seg/(\d{6,})\.m4s$`)
+
+// initKeyRe 는 init(MAP) 축 키의 문법이다 — 설계 5.2·5.3ⓐ(playback.InitKey).
+// **둘째 그룹이 seq 가 아니라 sessionID 인 것이 축의 차이다.**
+//
+// 세션 성분에 점을 받지 않는다: playback.InitKey 는 `.`·`..` 를 명시로 거부하고(key.go:22),
+// 세션 ID 문법은 S-{YYYYMMDD}-{HHMMSS}-{streamID}-{seq} 로 확정됐으며
+// (session/registry.go:460) streamID 화이트리스트가 [A-Za-z0-9_-]{1,64} 라 점 자체가
+// 나올 수 없다. 그래서 좁혀도 정상 대상이 영구 격리(processTarget 에서 validateTarget 실패 시
+// quarantine)될 길이 없고, 경로 참조가 키에 실리는 길만 닫힌다.
+var initKeyRe = regexp.MustCompile(`^dvr/([A-Za-z0-9_-]{1,64})/init/([A-Za-z0-9_-]+)\.mp4$`)
+
+// keyPatternFor 는 축의 키 문법이다(설계 5.5.4 #3 — 축별 3벌).
+// 미판정 축은 nil 이다 — 호출자가 그 자리에서 거부한다(fail-closed).
+func keyPatternFor(a index.Axis) *regexp.Regexp {
+	switch a {
+	case index.AxisArchive:
+		return s3KeyRe
+	case index.AxisPlayback:
+		return playbackKeyRe
+	case index.AxisInit:
+		return initKeyRe
+	default:
+		return nil
+	}
+}
+
+// keyIdentityMismatch 는 키의 둘째 성분이 대상의 식별자와 같은지 본다.
+// 어긋나면 거부 사유를, 맞으면 빈 문자열을 돌려준다.
+//
+// ②·③ 는 seq 이고 init 은 sessionID 다 — init 축에서 UploadTarget.Seq 는 쓰지 않으므로
+// seq 대조를 그대로 두면 언제나 0 과 비교하게 된다(계획 4.5).
+func keyIdentityMismatch(t index.UploadTarget, got string) string {
+	if t.Axis == index.AxisInit {
+		if got != t.SessionID {
+			return "session_mismatch"
+		}
+		return ""
+	}
+	seq, err := strconv.ParseInt(got, 10, 64)
+	if err != nil || seq != t.Seq {
+		return "seq_mismatch"
+	}
+	return ""
+}
 
 // validateTarget 은 [0] 대상 검증이다(G17′ · 결정 15″). rel 은 Root.Open 에 넘길
 // 루트 기준 상대 경로다.
@@ -163,13 +247,17 @@ func (u *Uploader) validateTarget(t index.UploadTarget, lg *slog.Logger) (string
 	if !recording.ValidStreamID(t.StreamID) {
 		return reject("bad_stream_id")
 	}
-	m := s3KeyRe.FindStringSubmatch(t.S3Key)
+	// 키 문법은 축이 고른다. 축을 모르면 어떤 문법으로 볼지도 정할 수 없으므로 거부한다.
+	re := keyPatternFor(t.Axis)
+	if re == nil {
+		return reject("bad_axis")
+	}
+	m := re.FindStringSubmatch(t.S3Key)
 	if m == nil || m[1] != t.StreamID {
 		return reject("bad_key")
 	}
-	seq, err := strconv.ParseInt(m[2], 10, 64)
-	if err != nil || seq != t.Seq {
-		return reject("seq_mismatch")
+	if reason := keyIdentityMismatch(t, m[2]); reason != "" {
+		return reject(reason)
 	}
 
 	rel, err := filepath.Rel(filepath.Clean(u.opt.SegmentRoot), filepath.Clean(t.LocalPath))
@@ -288,26 +376,79 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 		return attemptResult{outcome: outcomeNeutral}
 	}
 
-	// (f) 마킹 — err 를 먼저 본다. (false, err) 를 CAS 거부로 오분류하면 안 된다(CX-2 ⑥).
-	markCtx, markCancel := context.WithTimeout(u.markRoot, u.opt.MarkTimeout)
-	defer markCancel()
-	marked, err := u.st.MarkUploaded(markCtx, t.StreamID, t.Seq, t.Bytes)
-	switch {
-	case err != nil:
-		lg.Error("mark_error", "target_state", "uploaded", "err", err.Error())
-		u.gate.registerFailure(k)
-		return attemptResult{outcome: outcomeNeutral}
-	case !marked:
-		lg.Warn("upload_cas_rejected", "expect_bytes", t.Bytes, "target_state", "uploaded")
-		u.gate.registerFailure(k)
+	// (f) 마킹 — 축 분기는 markUploadedByAxis 가 진다.
+	if !u.markUploadedByAxis(j, lg) {
 		return attemptResult{outcome: outcomeNeutral}
 	}
 
 	lg.Info("segment_uploaded", "s3_key", t.S3Key, "bytes", size,
 		"elapsed_ms", elapsed.Milliseconds())
 	u.gate.clearBackoff(k)
-	u.sendResult(Result{StreamID: t.StreamID, Seq: t.Seq, State: index.UploadStateUploaded})
+	u.sendResult(j, index.UploadStateUploaded)
 	return attemptResult{outcome: outcomeSuccess}
+}
+
+// markUploadedByAxis 는 성공 마킹의 축 분기다. 돌려주는 값은 "후처리(백오프 해제·통지)를
+// 이어가도 되는가"이며, false 면 호출자는 outcomeNeutral 로 끝낸다.
+//
+// M3 에서 CAS 갈래는 ② 하나다 — ③·init 의 성공 CAS 는 M4 이고, 여기 흘려보내면 그 결과가
+// ② 의 열을 바꾼다. 바이트는 이미 올라갔지만 장부는 손대지 않는다.
+func (u *Uploader) markUploadedByAxis(j job, lg *slog.Logger) bool {
+	t := j.target
+	if planMark(t.Axis, index.UploadStateUploaded) != markCAS {
+		lg.Error("upload_mark_unsupported", "target_state", "uploaded", "s3_key", t.S3Key)
+		return false
+	}
+
+	// err 를 먼저 본다. (false, err) 를 CAS 거부로 오분류하면 안 된다(CX-2 ⑥).
+	markCtx, cancel := context.WithTimeout(u.markRoot, u.opt.MarkTimeout)
+	defer cancel()
+	marked, err := u.st.MarkUploaded(markCtx, t.StreamID, t.Seq, t.Bytes)
+	k := j.key()
+	switch {
+	case err != nil:
+		lg.Error("mark_error", "target_state", "uploaded", "err", err.Error())
+		u.gate.registerFailure(k)
+		return false
+	case !marked:
+		lg.Warn("upload_cas_rejected", "expect_bytes", t.Bytes, "target_state", "uploaded")
+		u.gate.registerFailure(k)
+		return false
+	}
+	return true
+}
+
+// markFailedByAxis 는 실패 마킹의 축 분기다. 돌려주는 값은 "후처리를 이어가도 되는가"이며,
+// false 면 호출자는 outcomeNeutral 로 끝낸다(판정 재료가 아니다).
+//
+//	markCAS    — CAS 를 실행하고 성공했을 때만 이어간다.
+//	markSkip   — 장부를 건드리지 않고 이어간다. init 실패에는 CAS 가 없다(설계 5.5.5).
+//	markRefuse — 이어가지 않는다. ③ 마킹은 M4 이고 ② 의 CAS 로 새면 안 된다.
+func (u *Uploader) markFailedByAxis(j job, lg *slog.Logger) bool {
+	t := j.target
+	switch planMark(t.Axis, index.UploadStateFailed) {
+	case markSkip:
+		return true
+	case markRefuse:
+		lg.Error("upload_mark_unsupported", "target_state", "failed", "s3_key", t.S3Key)
+		return false
+	}
+
+	markCtx, cancel := context.WithTimeout(u.markRoot, u.opt.MarkTimeout)
+	defer cancel()
+	marked, err := u.st.MarkFailed(markCtx, t.StreamID, t.Seq, t.Bytes)
+	k := j.key()
+	switch {
+	case err != nil:
+		lg.Error("mark_error", "target_state", "failed", "err", err.Error())
+		u.gate.registerFailure(k) // 격리하지 않는다 — 백오프가 재판정을 벌린다
+		return false
+	case !marked:
+		lg.Warn("upload_cas_rejected", "expect_bytes", t.Bytes, "target_state", "failed")
+		u.gate.registerFailure(k)
+		return false
+	}
+	return true
 }
 
 // handleFileMissing 은 ENOENT 후처리다(D-7 공식).
@@ -319,21 +460,11 @@ func (u *Uploader) handleFileMissing(j job, lg *slog.Logger) outcome {
 	k := j.key()
 	lg.Warn("upload_file_missing", "path", t.LocalPath)
 
-	markCtx, cancel := context.WithTimeout(u.markRoot, u.opt.MarkTimeout)
-	defer cancel()
-	marked, err := u.st.MarkFailed(markCtx, t.StreamID, t.Seq, t.Bytes)
-	switch {
-	case err != nil:
-		lg.Error("mark_error", "target_state", "failed", "err", err.Error())
-		u.gate.registerFailure(k) // 격리하지 않는다 — 백오프가 재판정을 벌린다
-		return outcomeNeutral
-	case !marked:
-		lg.Warn("upload_cas_rejected", "expect_bytes", t.Bytes, "target_state", "failed")
-		u.gate.registerFailure(k)
+	if !u.markFailedByAxis(j, lg) {
 		return outcomeNeutral
 	}
 	u.gate.quarantine(k)
-	u.sendResult(Result{StreamID: t.StreamID, Seq: t.Seq, State: index.UploadStateFailed})
+	u.sendResult(j, index.UploadStateFailed)
 	return outcomeSoft
 }
 
@@ -350,17 +481,7 @@ func (u *Uploader) finalizeFailure(j job, rel string, lg *slog.Logger, lastErr e
 		}
 	}
 
-	markCtx, cancel := context.WithTimeout(u.markRoot, u.opt.MarkTimeout)
-	defer cancel()
-	marked, err := u.st.MarkFailed(markCtx, t.StreamID, t.Seq, t.Bytes)
-	switch {
-	case err != nil:
-		lg.Error("mark_error", "target_state", "failed", "err", err.Error())
-		u.gate.registerFailure(k)
-		return outcomeNeutral
-	case !marked:
-		lg.Warn("upload_cas_rejected", "expect_bytes", t.Bytes, "target_state", "failed")
-		u.gate.registerFailure(k)
+	if !u.markFailedByAxis(j, lg) {
 		return outcomeNeutral
 	}
 
@@ -370,7 +491,7 @@ func (u *Uploader) finalizeFailure(j job, rel string, lg *slog.Logger, lastErr e
 	lg.Error("upload_failed", "s3_key", t.S3Key, "attempts", u.opt.RetryMax,
 		"err", errString(lastErr), "err_class", class.String(),
 		"next_attempt_at", nextAt.UTC().Format(time.RFC3339))
-	u.sendResult(Result{StreamID: t.StreamID, Seq: t.Seq, State: index.UploadStateFailed})
+	u.sendResult(j, index.UploadStateFailed)
 
 	if class == putErrHard {
 		return outcomeHard

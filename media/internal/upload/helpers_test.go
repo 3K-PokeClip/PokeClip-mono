@@ -148,6 +148,22 @@ type fakeUploadStore struct {
 
 	uploaded []markCall
 	failed   []markCall
+	// initMarked 는 MarkInitUploaded 를 받은 세션들이다. M3 의 워커는 이것을 한 번도
+	// 부르지 않아야 한다(호출부 배선은 M4) — 그래서 세지 않으면 관측할 방법이 없다.
+	initMarked []string
+}
+
+func (f *fakeUploadStore) MarkInitUploaded(_ context.Context, sessionID string, _ []byte) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.initMarked = append(f.initMarked, sessionID)
+	return true, nil
+}
+
+func (f *fakeUploadStore) initMarkedSessions() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.initMarked...)
 }
 
 func (f *fakeUploadStore) MarkUploaded(ctx context.Context, streamID string, seq, expectBytes int64) (bool, error) {
@@ -272,10 +288,18 @@ func writeSegment(t *testing.T, dir, streamID, name string, size int) string {
 
 var fixtureWall = time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 
+// archiveKey 는 ② 아카이브 축의 게이트 키다.
+// 축 파라미터화(POK-195 M3) 전의 targetKey{stream, seq} 자리를 그대로 잇는다 —
+// 축을 명시하지 않은 기존 케이스는 전부 ② 축을 재는 것이었다.
+func archiveKey(streamID string, seq int64) targetKey {
+	return targetKey{streamID: streamID, axis: index.AxisArchive, seq: seq}
+}
+
 // newTarget 은 [0] 대상 검증을 통과하는 정상 대상이다.
 func newTarget(streamID string, seq int64, path string, bytes int64, isTail bool) index.UploadTarget {
 	return index.UploadTarget{
 		StreamID:  streamID,
+		Axis:      index.AxisArchive,
 		Seq:       seq,
 		S3Key:     index.S3Key(streamID, seq, fixtureWall),
 		LocalPath: path,

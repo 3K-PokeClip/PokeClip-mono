@@ -111,7 +111,7 @@ func (p *s3Putter) Put(ctx context.Context, key string, body io.Reader, size int
 // 결정 8‴의 "무분류"와 모순되지 않는다 — 그 무분류는 **재시도 여부**에 대한 것이다.
 // 어떤 오류든 RetryMax 까지 똑같이 재시도한다. 이 함수는 재시도가 전부 끝난 뒤
 // "이 실패가 설정 문제인가"만 판정해 브레이커 streak 에 넣는다.
-// 목적도(재시도 vs 전역 차단) 시점도(매 시도 vs 행 종결) 다르다(CX-2 ⑤).
+// 목적도(재시도 vs 축 브레이커 차단) 시점도(매 시도 vs 행 종결) 다르다(CX-2 ⑤).
 type putErrClass int
 
 const (
@@ -144,7 +144,7 @@ var hardCodes = map[string]struct{}{
 // awshttp.ResponseError 의 상태 코드와 smithy.APIError 의 코드 문자열을 둘 다 본다 —
 // 엔드포인트 구현(MinIO 등)에 따라 한쪽만 채워질 수 있다. **둘 다 없으면 soft 다.**
 // soft 가 기본값인 것이 중요하다: 알 수 없는 오류를 hard 로 오분류하면 브레이커가
-// 전역으로 열려 정상 트래픽까지 막는다(R2).
+// 그 축만 열려 그 축의 정상 트래픽까지 막는다(R2).
 //
 // 두 SDK 타입을 명시로 받은 뒤 같은 모양의 구조적 인터페이스도 한 번 더 본다.
 // 후자는 SDK 를 임포트하지 않는 테스트 더블과 다른 엔드포인트 구현을 위한 것이다.

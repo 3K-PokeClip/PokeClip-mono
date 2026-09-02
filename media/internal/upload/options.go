@@ -18,7 +18,7 @@ const (
 	defaultRetryMax = 4
 	// defaultSweepEvery 는 재개 스위프 주기다.
 	defaultSweepEvery = 30 * time.Second
-	// defaultCircuitMax 는 하드 실패가 연속으로 몇 행 나면 전역 차단할지다. 0 = 브레이커 무효화.
+	// defaultCircuitMax 는 하드 실패가 연속으로 몇 행 나면 **그 축의** 브레이커를 열지다(축별 3개). 0 = 브레이커 무효화.
 	defaultCircuitMax = 3
 
 	// defaultRetryBase 는 재시도 지수 백오프의 첫 간격이다. 1s+2s+4s = 총 약 7초로,

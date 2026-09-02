@@ -20,6 +20,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fmp4meta"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/fsop"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
@@ -42,6 +43,24 @@ type Adopter interface {
 type UploadRequester interface {
 	RequestUpload(t index.UploadTarget) (accepted bool)
 }
+
+// StateObserver 는 인덱서가 "지금 이 스트림이 송출 중인가"를 읽는 유일한 통로다.
+//
+// 인터페이스를 쓰는 쪽인 여기에 둔 이유는 Adopter·UploadRequester 와 같다: 관측을
+// 어떻게 얻는지(폴 주기·API·페이지 규약)와 그 관측으로 무엇을 판정하는지는 바뀌는
+// 이유가 다르다. *mtxstate.Poller 가 그대로 만족한다.
+//
+// 반드시 논블로킹이어야 한다 — 여기서 막히면 D10 메인 루프가 통째로 선다.
+type StateObserver interface {
+	Latest(streamID string) mtxstate.Observation
+}
+
+// noObserver 는 폴러 미배선(MTX_API_URL 빈 값·조립 실패) 국면의 널 오브젝트다(m3 이디엄).
+// 영값 관측은 EpochKnown=false 라 ⓐ2 가 fail-closed 된다 — 배선을 빠뜨려도 방향은
+// 언제나 비주조다(설계 S3).
+type noObserver struct{}
+
+func (noObserver) Latest(string) mtxstate.Observation { return mtxstate.Observation{} }
 
 // Options 는 두뇌의 판단 기준이 되는 숫자들이다.
 type Options struct {
@@ -113,6 +132,14 @@ type Options struct {
 	// ScanCollectBudget 은 전수 수집(collectTree)의 soft 예산이다. 넘기면 절단하고
 	// 걷은 데까지 처리한다 — 정지 판정(scan_collect_stalled)은 이 값 × k 로 holdTicks 가 한다.
 	ScanCollectBudget time.Duration
+	// ObsFresh·ObsBackfill 은 ⓐ2(상태 방증)의 두 시간 창이다(설계 6.5.2 — OBS_FRESH·
+	// OBS_BACKFILL). 값의 집은 config 이고 여기는 옮겨 담는 자리다(TailGrace 와 같은 규칙).
+	//
+	// **영값에 기본값을 씌우지 않는다** — 0 이면 관측은 언제나 낡은 것으로, 백로그 하한은
+	// 가장 엄격하게 판정된다. 둘 다 안전 방향(ⓐ2 불성립 = 비주조·비개시)이라
+	// TailGrace 처럼 "자체 모순"이 아니다.
+	ObsFresh    time.Duration
+	ObsBackfill time.Duration
 	// SeedEnabled 는 ③ 체제 플래그다(계약 6항 2단계 — REWIND_SEED_ENABLED, 기본 꺼짐).
 	// 효력은 "컷오프 없는 스트림에 최초 컷오프를 만들 권한"뿐이다: 꺼져 있으면 주조를
 	// 시도하지 않고(구 동작 — c1) INSERT 는 그대로 돈다. 해제해도 이미 기록된 컷오프는
@@ -150,12 +177,13 @@ func DefaultOptions() Options {
 
 // Indexer 는 고루틴 안전하지 않다. D10 단일 호출자 규약이 락을 대신한다.
 type Indexer struct {
-	store  index.Store
-	probe  fmp4meta.DurationProbe
-	adopt  Adopter
-	upload UploadRequester
-	opt    Options
-	log    *slog.Logger
+	store    index.Store
+	probe    fmp4meta.DurationProbe
+	adopt    Adopter
+	upload   UploadRequester
+	observer StateObserver
+	opt      Options
+	log      *slog.Logger
 
 	// fsLatch 는 FS 열화 래치다(m2). loop 단일 고루틴만 만진다 — D10 규약이 락을 대신한다.
 	fsLatch *fsop.Latch
@@ -243,16 +271,20 @@ func (ix *Indexer) SetAdopter(a Adopter) {
 	ix.adopt = a
 }
 
-// New 는 인덱서를 만든다. w 에는 *recording.Watcher 를, up 에는 *upload.Uploader 를 넘긴다.
-// up 이 nil 이면 아무것도 요청하지 않는 기본값이, w 가 nil 이면(워처 강등) 널 오브젝트가
-// 끼워진다(m3a) — 배선 전에도 인덱서는 그대로 돈다.
+// New 는 인덱서를 만든다. w 에는 *recording.Watcher 를, up 에는 *upload.Uploader 를,
+// obs 에는 *mtxstate.Poller 를 넘긴다. up 이 nil 이면 아무것도 요청하지 않는 기본값이,
+// w 가 nil 이면(워처 강등) 널 오브젝트가, obs 가 nil 이면(관측 미배선) EpochKnown=false
+// 를 돌려주는 널 오브젝트가 끼워진다(m3a) — 배선 전에도 인덱서는 그대로 돈다.
 func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
-	up UploadRequester, opt Options, log *slog.Logger) *Indexer {
+	up UploadRequester, obs StateObserver, opt Options, log *slog.Logger) *Indexer {
 	if up == nil {
 		up = noUploader{}
 	}
 	if w == nil {
 		w = noAdopter{log: log}
+	}
+	if obs == nil {
+		obs = noObserver{}
 	}
 	if opt.FSOpTimeout <= 0 {
 		// 0 이면 모든 FS 워커가 즉시 타임아웃해 처리 전체가 조용히 멈춘다.
@@ -268,6 +300,7 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 		probe:           probe,
 		adopt:           w,
 		upload:          up,
+		observer:        obs,
 		opt:             opt,
 		log:             log,
 		cursors:         map[string]*index.Cursor{},
@@ -559,27 +592,137 @@ func (ix *Indexer) promote(ctx context.Context, seg recording.Segment, d, size i
 	return d, size
 }
 
-// buildSeed 는 이 조각의 주조 판정 입력(ⓐ 비시간 항)을 만든다 — ADR-062.
+// observation 은 폴러의 관측을 판정부가 쓰는 형태로 접는다(mtxstate → index).
 //
-// ⓐ1(실시간 유입): Reason ∈ {NextFile, Idle, Hook} — 파일·훅이 "지금 방송이 흐른다"의
-// 방증이다. ReasonScan 은 ⓐ2(상태 방증 — mtxstate publishing)가 필요하며 M3 에서 배선된다:
-// 그때까지 스캔 유입은 비적격이다(과거 잔존물이 컷오프가 되는 것을 막는 안전 방향 — S2·S3).
-// ReasonRegrown 은 주조하지 않는다(s3_unknown_declines).
-func (ix *Indexer) buildSeed(seg recording.Segment) index.Seed {
+// **등급(tier)을 여유(EPOCH_SLACK) 값으로 바꾸는 자리가 여기 하나다**(계획 3절):
+// 판정부(session.Registry)는 여유를 값으로만 받으므로 등급 체계가 늘어도 부등식은
+// 그대로다. 아는 등급이 아니면 EpochKnown 을 내려 fail-closed 한다 — 모르는 등급에
+// 여유를 지어내면 옛 방송의 잔존물이 새 세션을 열 수 있다.
+func (ix *Indexer) observation(streamID string) index.SessionObservation {
+	o := ix.observer.Latest(streamID)
+	obs := index.SessionObservation{
+		Publishing:     o.Publishing,
+		ObservedAt:     o.ObservedAt.UTC(),
+		EpochStartedAt: o.EpochStartedAt.UTC(),
+	}
+	// tier ⓘ(onlineTime 그대로) = 여유 0. M3 폴러가 산출하는 유일한 등급이다.
+	if o.EpochKnown && o.Tier == mtxstate.TierOnlineTime {
+		obs.EpochKnown = true
+		obs.EpochSlack = 0
+	}
+	return obs
+}
+
+// buildSeed 는 이 조각의 주조 판정 입력(ⓐ 비시간 항)과 **ⓐ2 자격**을 함께 만든다 — ADR-062.
+//
+//	ⓐ1(실시간 유입 방증): Reason ∈ {NextFile, Idle, Hook} — 파일·훅 유입 자체가 "지금
+//	    방송이 흐른다"의 방증이다. 앵커 쌍 = (start_wall_utc, LIVE_FRESH).
+//	ⓐ2(상태 방증): ⓐ1 이 불성립일 때(스캔 유입) 또는 ⓐ1 앵커가 늙어 갈 때 쓴다.
+//	    앵커 쌍 = (ObservedAt, OBS_FRESH).
+//	ReasonRegrown·ReasonUnknown: 어느 방증도 쓰지 않는다(s3_unknown_declines).
+//
+// **반환값이 둘인 것이 계약이다**(계획 4.4 — 이중 판정 금지): ⓐ2 자격은 주조 쌍 선택과
+// 세션 개시 권한 둘 다의 입력인데, 두 자리에서 따로 재면 같은 조각이 "주조는 ⓐ2 인데
+// 세션은 못 여는" 식으로 갈린다. 여기서 한 번 재서 호출자가 둘에 나눠 싣는다.
+//
+// **now 를 인자로 받는 이유**: 아래 두 로컬 예비판정이 시계를 본다. 인자로 두면
+// 경계값을 sleep 없이 잴 수 있고, 판정 시각의 출처가 호출자에게 드러난다.
+func (ix *Indexer) buildSeed(seg recording.Segment, obs index.SessionObservation, now time.Time) (index.Seed, bool) {
 	s := index.Seed{
 		Reason:    index.SeedReasonLiveIngress,
 		Channel:   seedChannel(seg.Reason),
 		AnchorUTC: seg.StartWall.UTC(),
 		Freshness: liveFresh,
 	}
-	if !ix.opt.SeedEnabled {
-		return s
-	}
+
+	liveIngress := false
 	switch seg.Reason {
 	case recording.ReasonNextFile, recording.ReasonIdle, recording.ReasonHook:
-		s.Eligible = true
+		liveIngress = true
+	case recording.ReasonScan:
+		// ⓐ1 불성립 — 관측만이 방증이다.
+	default:
+		// 재성장·사유 미상은 ⓐ2 도 시도하지 않는다: 주조도 세션 개시도 하지 않는다.
+		return s, false
 	}
+
+	corroborated := ix.corroborates(seg, obs)
+	// 쌍 선택에는 자격 위에 **로컬 신선도**를 하나 더 건다: SQL 이 문장 실행 시점에
+	// clock_timestamp() 로 재검하므로, 지금 이미 남은 창이 트랜잭션 상한보다 얇으면
+	// 그 쌍으로는 어차피 탈락한다. 자격 자체(세션 축)는 이 판정에 걸리지 않는다.
+	usableAnchor := corroborated && !obs.ObservedAt.IsZero() &&
+		now.Sub(obs.ObservedAt) <= ix.opt.ObsFresh-index.TxnDeadline
+
+	if liveIngress {
+		s.Eligible = ix.opt.SeedEnabled
+		// ⓐ1 앵커가 늙어 가는 국면(백로그 추격 등)에서만 갈아탄다.
+		// 불성립이면 ⓐ1 쌍 그대로 내려간다 — 현행과 같아 나빠지지 않는다.
+		if usableAnchor && now.Sub(seg.StartWall) >= liveFresh-index.TxnDeadline {
+			s = ix.withStateObs(s, obs)
+		}
+		return s, corroborated
+	}
+
+	// 스캔 유입 — ⓐ2 쌍을 못 고르면 방증이 없으므로 비적격이다(ⓐ1 쌍은 쓸 수 없다).
+	if !usableAnchor {
+		return s, corroborated
+	}
+	s = ix.withStateObs(s, obs)
+	s.Eligible = ix.opt.SeedEnabled
+	return s, corroborated
+}
+
+// corroborates 는 ⓐ2 자격의 **비시간 항 + 두 하한**이다(설계 6.5.2 ⓐ2 · 5.4.1 ⑵).
+//
+// 관측 신선도(시간 항)는 여기 없다 — 그것은 트랜잭션 안에서 시도마다 다시 재는 항이라
+// session.Registry 가 재고, 주조 축은 SQL 이 clock_timestamp() 로 재검한다.
+// 여기 있는 세 항은 호출당 피연산자가 고정이라 답이 바뀌지 않는다.
+func (ix *Indexer) corroborates(seg recording.Segment, obs index.SessionObservation) bool {
+	if !obs.Publishing || !obs.EpochKnown {
+		return false
+	}
+	wall := seg.StartWall.UTC()
+	// 백로그 하한 — 관측보다 한참 과거의 조각은 지금 방송의 증거가 될 수 없다(s2_4).
+	if wall.Before(obs.ObservedAt.Add(-ix.opt.ObsBackfill)) {
+		return false
+	}
+	// 에폭 하한 — 이번 송출이 시작되기 전의 조각은 옛 방송의 잔존물이다(s2_6c).
+	return !wall.Before(obs.EpochStartedAt.Add(-obs.EpochSlack))
+}
+
+// withStateObs 는 방증 쌍을 ⓐ2 로 바꾼다. **채널은 건드리지 않는다** —
+// seed_channel 은 언제나 유입 채널 그대로이고(계획 4.4), 방증 갈래는 seed_reason 이 진다.
+func (ix *Indexer) withStateObs(s index.Seed, obs index.SessionObservation) index.Seed {
+	s.Reason = index.SeedReasonStateObs
+	s.AnchorUTC = obs.ObservedAt
+	s.Freshness = ix.opt.ObsFresh
 	return s
+}
+
+// sessionOp 은 유입 사유와 ⓐ2 자격을 세션 결정 연산으로 접는다(설계 3.3·5.4 유입 표).
+//
+// buildSeed 와 나란히 두는 이유: 둘 다 "이 유입을 무엇으로 볼 것인가"이고, 갈라지면
+// 같은 조각이 주조 축과 세션 축에서 서로 다른 유입으로 취급된다.
+//
+// **CurrentOrOpenIfCorroborated 는 자격이 성립할 때만 지정한다**(session/registry.go 의
+// 호출자 계약): 레지스트리는 시간 가변 항만 다시 재고 백로그 하한은 다시 재지 않는다.
+// 자격 없이 지정하면 그 하한을 아무도 본 적 없는 채로 세션이 열려 교차 방송 오귀속이 된다.
+//
+// 재성장·사유 미상은 열지 않는 축이다 — 열지 않을 뿐 귀속은 한다(현 세션이 있으면
+// 그 세션의 조각이 맞다). 여기서 비귀속으로 접으면 세션 중간에 NULL 구멍이 생기고
+// 그 조각은 되감기 목록에서 사라진다.
+func sessionOp(r recording.CompletionReason, corroborated bool) index.SessionOp {
+	switch r {
+	case recording.ReasonNextFile, recording.ReasonIdle, recording.ReasonHook:
+		return index.SessionOpenOrCurrent
+	case recording.ReasonScan:
+		if corroborated {
+			return index.SessionCurrentOrOpenIfCorroborated
+		}
+		return index.SessionCurrentOnly
+	default:
+		return index.SessionCurrentOnly
+	}
 }
 
 // seedChannel 은 유입 사유를 stream_cutoffs.seed_channel 값으로 접는다.
@@ -595,7 +738,12 @@ func seedChannel(r recording.CompletionReason) index.SeedChannel {
 }
 
 // logSeed 는 주조 결과 신호다. 플래그 OFF 면 아무것도 내지 않는다(구 동작 무소음 — c1).
-func (ix *Indexer) logSeed(seg recording.Segment, seq int64, res index.SeedResult) {
+//
+// **seed 를 인자로 받는 이유**: 라벨은 장부에 실제로 실린 값과 같아야 한다. 유입 사유에서
+// 다시 파생하면 ⓐ1→ⓐ2 폴백이 일어난 조각의 로그가 장부와 갈린다(로그: live_ingress /
+// 장부: state_obs) — 설계 9.1 f0~f3 이 seed_reason 으로 국면을 가르므로 그 순간
+// 게이트가 재는 대상이 사라진다.
+func (ix *Indexer) logSeed(seg recording.Segment, seq int64, seed index.Seed, res index.SeedResult) {
 	if !ix.opt.SeedEnabled {
 		return
 	}
@@ -607,7 +755,7 @@ func (ix *Indexer) logSeed(seg recording.Segment, seq int64, res index.SeedResul
 	case res.Seeded:
 		ix.log.Info("cutoff_seeded",
 			"stream_id", seg.StreamID, "seq", seq,
-			"reason", string(index.SeedReasonLiveIngress), "channel", string(seedChannel(seg.Reason)))
+			"reason", string(seed.Reason), "channel", string(seed.Channel))
 	case res.Decline == index.DeclineNotSettleable || res.Decline == index.DeclineStaleCorroboration:
 		// 미주조 열화 국면의 관측 신호(S4 — seed_declined).
 		ix.log.Info("seed_declined",
@@ -648,7 +796,13 @@ func (ix *Indexer) lateOrDuplicate(ctx context.Context, cur *index.Cursor, seg r
 // commit 은 H8(PTS·discontinuity)와 H9(INSERT)를 수행한다.
 func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size int64) error {
 	cur := ix.cursors[seg.StreamID]
-	seed := ix.buildSeed(seg)
+	// 관측 스냅샷은 **여기서 한 번** 채취해 주조 판정과 세션 결정에 같은 값을 흘린다.
+	// 두 번 읽으면 같은 조각이 두 축에서 다른 관측으로 판정된다.
+	obs := ix.observation(seg.StreamID)
+	seed, corroborated := ix.buildSeed(seg, obs, time.Now().UTC())
+	// 세션 결정 입력 — seed 와 같은 자리에서 한 번 만들고 재시도·재적재 경로에서 재사용한다
+	// (같은 세그먼트의 판정이 재시도 여부에 따라 달라지지 않게).
+	src := index.SessionSource{Op: sessionOp(seg.Reason, corroborated), Obs: obs}
 
 	// 무장 조회는 여기서 딱 한 번이다. 해제는 INSERT 결과가 나온 뒤에 한다.
 	dec := ix.peekBreak(cur, seg)
@@ -662,7 +816,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 
 	rec := ix.buildRecord(cur, seg, d, size, dec.Apply)
 
-	outcome, seedRes, poisoned, err := ix.insertWithRetry(ctx, rec, seed)
+	outcome, seedRes, poisoned, err := ix.insertWithRetry(ctx, rec, seed, src)
 	if err != nil {
 		return err
 	}
@@ -704,7 +858,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		// seed 도 같은 값을 재사용한다 — 시간 항은 SQL 이 매 시도 재검하므로 안전하다.
 		rec = ix.buildRecord(cur, seg, d, size, dec.Apply)
 
-		outcome, seedRes, poisoned, err = ix.insertWithRetry(ctx, rec, seed)
+		outcome, seedRes, poisoned, err = ix.insertWithRetry(ctx, rec, seed, src)
 		if err != nil {
 			return err
 		}
@@ -733,7 +887,7 @@ func (ix *Indexer) commit(ctx context.Context, seg recording.Segment, d, size in
 		ix.log.Debug("duplicate_path_skipped", "stream_id", seg.StreamID, "path", seg.Path)
 		return nil
 	case index.InsertInserted:
-		ix.logSeed(seg, rec.Seq, seedRes)
+		ix.logSeed(seg, rec.Seq, seed, seedRes)
 		ix.advance(cur, seg, rec)
 		if dec.Index >= 0 {
 			ix.releaseBreak(seg.StreamID, dec)

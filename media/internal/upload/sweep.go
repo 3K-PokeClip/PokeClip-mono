@@ -93,7 +93,11 @@ func (s sweepStage) rejected() int { return s.examined - s.admitted }
 // sweepOnce 는 회차 1번이다. 회차 ID(sweepRound)를 올리는 유일한 지점이다.
 func (u *Uploader) sweepOnce(ctx context.Context, resume index.SweepCursor, stalled int) (index.SweepCursor, int) {
 	u.sweepRound++
-	lg := u.log.With("sweep_round", u.sweepRound, "origin", OriginSweep.String())
+	// axis 라벨은 회차 로그 전체에 실린다(설계 5.5.4 #8). **M3 의 스위퍼 조회는 ② 하나뿐이다** —
+	// 축별 조회(#2)와 축별 backlog 집계(#7)는 M4 라서, 이 회차가 말하는 잔량·커서·중단은
+	// 전부 아카이브 축의 것이다. 라벨이 없으면 그 수치가 세 축 전부인 것처럼 읽힌다.
+	lg := u.log.With("sweep_round", u.sweepRound, "origin", OriginSweep.String(),
+		"axis", index.AxisArchive.String())
 
 	s1 := u.sweepStage1(ctx, lg)
 	s2 := sweepStage{stage: 2}

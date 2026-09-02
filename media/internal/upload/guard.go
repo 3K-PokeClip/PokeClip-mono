@@ -5,12 +5,39 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 )
 
-// targetKey 는 행 하나를 가리키는 키다. 게이트 3종의 맵 키가 전부 이것이다.
+// targetKey 는 작업 하나를 가리키는 키다. 게이트 3종의 맵 키가 전부 이것이다.
+//
+// 축이 키에 든 이유(설계 5.5.2 · 5.5.4 #1): ②·③·init 은 같은 seq 를 서로 다른 목적으로
+// 올리므로, 축이 없으면 세 작업이 in-flight·백오프·격리에서 한 자리를 다툰다.
+// 격리는 프로세스 수명 동안 되돌릴 수 없어서 그 충돌은 관측조차 되지 않는다.
 type targetKey struct {
-	streamID string
-	seq      int64
+	streamID  string
+	axis      index.Axis
+	seq       int64
+	sessionID string
+}
+
+// targetKeyOf 는 대상에서 작업 키를 만드는 **유일한 경로**다(설계 5.5.2 "생성 경로는 하나").
+//
+// **축마다 유일성을 주는 성분만 키에 남긴다**(회귀 T9):
+//
+//	②·③ — (streamID, axis, seq). 대상이 세션을 함께 실어 오더라도 그 값으로 갈리면 안 된다.
+//	init — (streamID, axis, sessionID). Seq 는 이 축에서 쓰지 않는 필드이므로(설계 5.5.2)
+//	       키에서도 지운다. 남겨 두면 같은 세션의 init 이 Seq 값만 달라도 다른 작업으로
+//	       인정돼 in-flight·백오프·격리를 통째로 우회하고 같은 객체가 중복 PUT 된다.
+//
+// 어느 쪽이든 같은 행이 두 자리를 차지하면 백오프·격리가 반쪽만 걸린다.
+func targetKeyOf(t index.UploadTarget) targetKey {
+	k := targetKey{streamID: t.StreamID, axis: t.Axis, seq: t.Seq}
+	if t.Axis == index.AxisInit {
+		k.seq = 0 // 정규화 — 이 축의 유일성 축은 sessionID 다
+		k.sessionID = t.SessionID
+	}
+	return k
 }
 
 // backoffEntry 는 한 행의 재시도 간격 상태다.
@@ -25,7 +52,8 @@ type backoffEntry struct {
 }
 
 // gates 는 접수 게이트 4종 중 상태를 가진 셋이다(격리·백오프·in-flight).
-// 나머지 하나인 브레이커는 전역 상태라 breaker 가 따로 소유한다.
+// 나머지 하나인 브레이커는 **축별**(archive·playback·init) 상태라 breakers 가 따로 소유한다 —
+// 한 축의 실패 누적은 그 축만 연다(설계 5.5.3). 세 축을 한꺼번에 여는 것은 openAll 뿐이다.
 //
 // 스위퍼 고루틴·메인 고루틴(RequestUpload)·워커 고루틴이 함께 만지므로 뮤텍스로 보호한다.
 type gates struct {
@@ -174,7 +202,8 @@ func (s circuitState) String() string {
 	}
 }
 
-// breaker 는 "설정이 통째로 틀렸을 때 전역 차단"이다.
+// breaker 는 한 축의 실패 누적으로 **그 축만** 닫는 차단기다(축별 3개 — breakers 가 소유,
+// 설계 5.5.3). 설정이 통째로 틀렸을 때(자격증명 부재) 세 축을 함께 여는 것은 breakers.openAll 이다.
 //
 // 소유 규칙(설계 3.4절): 접수 게이트는 Open 이면 거부만 본다. 반열림 probe 판정은
 // 워커가 소유한다. 시간 전이는 lazy 평가다 — 요청이 없는 정적 구간에서는 Open 으로
@@ -344,4 +373,40 @@ func (b *breaker) openLocked(reason string) {
 	b.log.Error("circuit_open",
 		"streak", b.streak, "limit", b.max, "cooldown", b.cooldown.String(),
 		"last_err", b.lastErr, "reason", reason, "epoch", b.epoch)
+}
+
+// axisAll 은 브레이커를 세울 축 전부다. 5.5.3 "축별 3개"의 유일한 열거 자리다.
+var axisAll = [...]index.Axis{index.AxisArchive, index.AxisPlayback, index.AxisInit}
+
+// breakers 는 축별 브레이커 셋이다(설계 5.5.3 확정 — 축별 3개).
+//
+// 하나로 두면 ② 의 실패 폭풍이 되감기를 세우고 ③ 의 폭풍이 클립 소재 업로드를 세운다.
+// init 실패는 그 세션 전체가 재생 불가라는 뜻이라 성격이 또 달라 ③ 와도 공유하지 않는다.
+//
+// 만든 뒤에는 쓰지 않으므로(생성자에서 한 번 채운다) 맵 자체에 잠금이 필요 없다 —
+// 잠금은 각 breaker 가 자기 상태에 대해 이미 쥐고 있다.
+type breakers struct {
+	byAxis map[index.Axis]*breaker
+}
+
+// newBreakers 는 축마다 브레이커를 하나씩 세우고 **로거에 axis 라벨을 미리 묶는다**
+// (설계 5.5.4 #8) — 그래야 브레이커가 내는 모든 로그가 어느 축이 아픈지 말한다.
+func newBreakers(opt Options, log *slog.Logger, now func() time.Time) *breakers {
+	byAxis := make(map[index.Axis]*breaker, len(axisAll))
+	for _, a := range axisAll {
+		byAxis[a] = newBreaker(opt, log.With("axis", a.String()), now)
+	}
+	return &breakers{byAxis: byAxis}
+}
+
+// of 는 축의 브레이커다. **미판정 축은 nil 이다** — 호출자가 그 자리에서 거부한다.
+// 임의의 축에 기본 브레이커를 주면 모르는 축이 조용히 ② 의 판정에 섞인다.
+func (b *breakers) of(a index.Axis) *breaker { return b.byAxis[a] }
+
+// openAll 은 축과 무관한 사정(기동 시 자격증명 부재)으로 세 축을 전부 연다.
+// 축별 분리가 사는 자리는 실패 누적으로 여는 경로이지 밖에서 거는 전역 차단이 아니다.
+func (b *breakers) openAll(reason string) {
+	for _, brk := range b.byAxis {
+		brk.open(reason)
+	}
 }

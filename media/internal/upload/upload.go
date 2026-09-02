@@ -91,7 +91,7 @@ type job struct {
 	sweepRound uint64
 }
 
-func (j job) key() targetKey { return targetKey{j.target.StreamID, j.target.Seq} }
+func (j job) key() targetKey { return targetKeyOf(j.target) }
 
 // lifecycle 은 Shutdown 이 어떤 순서로 불려도 안전하게 만드는 상태다.
 type lifecycle int32
@@ -115,7 +115,7 @@ type Uploader struct {
 	now  func() time.Time
 	off  bool // Disabled 로 만들어졌는가
 	gate *gates
-	brk  *breaker
+	brk  *breakers
 
 	state     atomic.Int32 // lifecycle
 	accepting atomic.Bool
@@ -174,7 +174,7 @@ func newWithClock(st index.UploadStore, put Putter, opt Options, log *slog.Logge
 		log:      log,
 		now:      now,
 		gate:     newGates(opt, now),
-		brk:      newBreaker(opt, log, now),
+		brk:      newBreakers(opt, log, now),
 		queue:    make(chan job, opt.QueueLen),
 		results:  make(chan Result, opt.ResultBufLen),
 		armCh:    make(chan struct{}),
@@ -224,11 +224,14 @@ func (u *Uploader) ArmSweeper() {
 }
 
 // OpenCircuit 은 기동 시 자격증명을 얻지 못했을 때처럼 밖에서 전역 차단을 거는 경로다.
+//
+// **축 인자를 받지 않고 3축 전부를 연다**(계획 4.5): 자격증명 부재는 축과 무관한 사정이라
+// 축별로 나눠 열 이유가 없다. 축별 분리(5.5.3)가 사는 자리는 실패 누적으로 여는 경로다.
 func (u *Uploader) OpenCircuit(reason string) {
 	if u.off {
 		return
 	}
-	u.brk.open(reason)
+	u.brk.openAll(reason)
 }
 
 // Results 는 장부가 바뀌었다는 통지 채널이다. 비활성이면 nil 이라 select 에서 절대 선택되지 않는다.
@@ -254,10 +257,21 @@ func (u *Uploader) enqueue(t index.UploadTarget, o Origin) EnqueueOutcome {
 		return EnqueueRejected
 	}
 
-	k := targetKey{t.StreamID, t.Seq}
-	lg := u.log.With("stream_id", t.StreamID, "seq", t.Seq, "origin", o.String())
+	// 축을 모르면 브레이커도 게이트 키도 고를 수 없다 — 판정이 성립하지 않으므로 거부한다.
+	// Rejected 인 이유: 이 행에 우리가 할 일이 영영 없다는 결론이라 커서는 전진해야 한다.
+	brk := u.brk.of(t.Axis)
+	if brk == nil {
+		u.log.Error("upload_target_rejected", "reason", "bad_axis",
+			"stream_id", t.StreamID, "axis", t.Axis.String(),
+			"s3_key", t.S3Key, "origin", o.String())
+		return EnqueueRejected
+	}
 
-	if !u.brk.allowEnqueue() {
+	k := targetKeyOf(t)
+	lg := u.log.With("stream_id", t.StreamID, "axis", t.Axis.String(),
+		"seq", t.Seq, "origin", o.String())
+
+	if !brk.allowEnqueue() {
 		lg.Debug("upload_skipped_circuit")
 		return EnqueueRejected
 	}
@@ -369,10 +383,21 @@ func (u *Uploader) drainQueue() int {
 
 // sendResult 는 논블로킹 통지다. 채널이 가득 차면 판정을 버린다 —
 // 커서 동기화는 최선 노력이며 5분 주기 Scan 이 치유한다(L7).
-func (u *Uploader) sendResult(r Result) {
+//
+// **작업을 통째로 받는 것이 계약이다.** Result 는 세그먼트 커서의 통지이므로
+// ② 아카이브 축만 보낸다 — init 이 바꾸는 장부는 stream_sessions 이고, 그 결과를 통지하면
+// seq=0(모든 스트림의 첫 조각) 꼬리의 UploadState 가 뒤집혀 커서가 DB 와 갈린다.
+// 축을 인자에 실어 함수 머리에서 보는 것이 구조 강제다 — Result 에 축 필드를 더하는 안은
+// 영값이 AxisArchive 라 누락이 조용히 샌다(계획 4.5).
+func (u *Uploader) sendResult(j job, state index.UploadState) {
+	if j.target.Axis != index.AxisArchive {
+		return
+	}
+	r := Result{StreamID: j.target.StreamID, Seq: j.target.Seq, State: state}
 	select {
 	case u.results <- r:
 	default:
-		u.log.Debug("upload_mark_skipped", "stream_id", r.StreamID, "seq", r.Seq)
+		u.log.Debug("upload_mark_skipped", "stream_id", r.StreamID,
+			"axis", j.target.Axis.String(), "seq", r.Seq)
 	}
 }

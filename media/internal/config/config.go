@@ -16,6 +16,7 @@ import (
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/indexer"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxhook"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
@@ -45,7 +46,31 @@ type Config struct {
 	// HookPollInterval 은 스풀 tail 주기다.
 	HookPollInterval time.Duration
 	// 세션 경계 판정의 Guard 는 Indexer.BreakGuard 하나에만 둔다(값의 집이 둘이면 어긋난다).
+
+	// MTXState 는 MediaMTX Control API 관측 폴러의 설정이다(POK-195 M3).
+	//
+	// **APIURL 이 비면 폴러를 만들지 않는다** — 관측이 없으면 상태 방증 ⓐ2 가
+	// fail-closed 되어 스캔 유입(ⓐ2) 주조만 멈추고 인덱싱·업로드는 그대로 돈다.
+	// HOOK_SPOOL_PATH 와 같은 형태의 즉시 롤백 스위치다.
+	MTXState mtxstate.Options
+	// ObsFresh·ObsBackfill 은 상태 방증 ⓐ2 의 시간 항이다(설계 6.5.2):
+	// 관측이 이보다 낡으면 방증으로 쓰지 않고(ObsFresh), 관측 시점보다 이보다 더 과거인
+	// 조각은 백로그 머리로 보아 주조하지 않는다(ObsBackfill). 판정은 indexer 가 한다.
+	ObsFresh    time.Duration
+	ObsBackfill time.Duration
+	// SessionFloorSlack 은 세션 귀속 하한의 여유다(설계 5.4.1 ⑴ — 시계 역행 방어).
+	// 판정은 session 레지스트리가 한다.
+	SessionFloorSlack time.Duration
 }
+
+// 관측 축 기본값(설계 5.4.1·6.5.2). 판정 주체(indexer·session)는 이 값을 설정으로 받으며
+// 리터럴을 그쪽에 또 적지 않는다 — 값의 집이 둘이면 언젠가 어긋난다.
+// 폴러 자신의 두 값(OBS_POLL·OBS_BOOT_WAIT)은 mtxstate 가 집이라 여기서 다시 적지 않는다.
+const (
+	defaultObsFresh          = 30 * time.Second
+	defaultObsBackfill       = 60 * time.Second
+	defaultSessionFloorSlack = 1 * time.Second
+)
 
 // Load 는 환경변수를 읽어 설정을 만든다. env 는 os.Getenv 를 그대로 넘기면 된다.
 //
@@ -224,6 +249,57 @@ func Load(env func(string) string) (Config, error) {
 	// 수집(예산 45초)이 끝나기도 전에 무조건 arm 을 돌려 원 상태를 기본 경로에서 재현한다.
 	up.ArmFallback = max(2*watch.RescanEvery, 2*idx.ScanCollectBudget)
 
+	// --- 관측 축 (POK-195 M3 — 설계 5.4.1·6.5.2, env 6종) ---
+	//
+	// MTX_API_URL 은 **withDefault 를 쓰지 않는다**(위 필드 주석 참조). 빈 값이
+	// "관측 끔"이라는 뜻을 가진 값이므로 fallback 으로 채우면 그 스위치가 고장난다.
+	mtx := mtxstate.Options{APIURL: strings.TrimSpace(env("MTX_API_URL"))}
+	if err := validateMTXAPIURL(mtx.APIURL); err != nil {
+		return Config{}, err
+	}
+	if mtx.PollInterval, err = duration(env, "OBS_POLL", mtxstate.DefaultPollInterval); err != nil {
+		return Config{}, err
+	}
+	if mtx.BootWait, err = duration(env, "OBS_BOOT_WAIT", mtxstate.DefaultBootWait); err != nil {
+		return Config{}, err
+	}
+	obsFresh, err := duration(env, "OBS_FRESH", defaultObsFresh)
+	if err != nil {
+		return Config{}, err
+	}
+	obsBackfill, err := duration(env, "OBS_BACKFILL", defaultObsBackfill)
+	if err != nil {
+		return Config{}, err
+	}
+	// 관측이 꺼져 있어도(APIURL 빈 값) 값 검증은 건너뛰지 않는다 — SESSION_FLOOR_SLACK 은
+	// 관측과 무관하게 세션 귀속 판정이 늘 쓰고, 나머지(OBS_*)도 오타를 켜는 날에야 알게 되면
+	// "스캔 유입(ⓐ2)의 주조가 왜 안 되지"라는 무징후 증상으로 나타난다(ⓐ1 워처·훅 유입은 OBS_* 와 무관).
+	sessionFloorSlack, err := duration(env, "SESSION_FLOOR_SLACK", defaultSessionFloorSlack)
+	if err != nil {
+		return Config{}, err
+	}
+
+	// ⓐ2 판정은 indexer 가 한다(계획 3절) — 두 창을 그쪽 Options 로 옮겨 담는다.
+	// 값의 집은 여기 하나이고 저쪽은 받는 자리다(idx.TailGrace 와 같은 규칙).
+	idx.ObsFresh = obsFresh
+	idx.ObsBackfill = obsBackfill
+
+	// 교차 검증 5 는 여기 없다 — OBS_FRESH 의 다른 하한(주조 트랜잭션 상한)은 index 패키지의
+	// 상수와 비교해야 하는데 이 층은 그 패키지를 보지 않는다. 상수 사본을 두면 두 곳이 갈리므로
+	// 조립 지점(cmd/segment-indexer/main.go 의 validateObservationWindow)이 그 검증을 진다.
+	//
+	// 교차 검증 4 — 폴 주기가 신선도 창 이상이면 다음 관측이 오기 전에 직전 관측이 만료돼
+	// 신선한 관측이 끊기지 않고 존재할 수 없다. 폴은 성공하고 스캔 유입(ⓐ2) 주조만 안 되므로 로그에도
+	// 드러나지 않는다. **역은 성립하지 않는다** — 짧다고 신선이 보장되지는 않는다.
+	if mtx.PollInterval >= obsFresh {
+		return Config{}, fmt.Errorf(
+			"OBS_POLL(%v)은 OBS_FRESH(%v)보다 짧아야 한다 — 같거나 길면 다음 관측이 오기 전에 직전 "+
+				"관측이 만료돼 ⓐ2 가 사실상 영구 불성립이다. 보증은 '신선한 관측이 존재할 수 있다'까지다: "+
+				"짧아도 실패 폴 1 회가 상한을 소진하면 연속 성공 관측 간격이 최대 2×OBS_POLL 까지 벌어져 "+
+				"그 창에서는 간헐 탈락한다(방향은 비주조라 안전)",
+			mtx.PollInterval, obsFresh)
+	}
+
 	return Config{
 		PGDSN:            dsn(user, password, host, port, dbName, sslMode),
 		SegmentRoot:      watch.Root,
@@ -235,7 +311,47 @@ func Load(env func(string) string) (Config, error) {
 		Watcher:          watch,
 		HookSpoolPath:    hookSpoolPath,
 		HookPollInterval: hookPollInterval,
+
+		MTXState:          mtx,
+		ObsFresh:          obsFresh,
+		ObsBackfill:       obsBackfill,
+		SessionFloorSlack: sessionFloorSlack,
 	}, nil
+}
+
+// validateMTXAPIURL 은 관측 폴러의 베이스 URL 문법을 기동 때 본다.
+// 빈 값은 "관측 끔"이라 통과다.
+//
+// 여기서 안 잡으면 폴러가 매 주기 mtxstate_poll_failed 만 남기며 도는 상태가 되고,
+// 그 증상은 "스캔 유입(ⓐ2)의 되감기가 안 된다"(ⓐ1 워처·훅 유입은 계속된다)로 한참 뒤에 나타난다.
+func validateMTXAPIURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	// Hostname() 까지 본다 — "http://:9997" 은 Host 가 ":9997" 이라 비어 있지 않지만
+	// 호스트가 없다(S3_ENDPOINT 와 같은 함정).
+	if err != nil || u.Host == "" || u.Hostname() == "" {
+		return fmt.Errorf("MTX_API_URL(%q)은 scheme 과 호스트를 포함한 URL 이어야 한다", raw)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("MTX_API_URL(%q)의 scheme 은 http 또는 https 여야 한다", raw)
+	}
+	// URL 원문은 mtxstate_poll_failed 로그에 그대로 실린다. 자격증명을 넣으면 그 로그가
+	// 유출 경로가 된다 — 로컬 Control API 는 자격증명 없이 붙는 구성이다(compose 내부망 한정).
+	if u.User != nil {
+		return fmt.Errorf("MTX_API_URL 에 자격증명(user:pass@)을 넣을 수 없다 — 관측 API 는 자격증명 없이 붙는다")
+	}
+	// 폴러는 이 값 뒤에 경로를 문자열로 잇는다(mtxstate/poller.go). 그래서 `#` 은 뒤를
+	// 통째로 fragment 로 잘라 요청 경로를 "/" 로 만들고, `?` 는 경로를 쿼리 안으로 밀어 넣는다.
+	// 둘 다 폴이 매 주기 실패하기만 하는 상태라 문법 단계에서 끊는다.
+	// 파싱 결과가 아니라 **원문**을 본다 — "http://media:9997#" 처럼 값 없는 `#` 은
+	// url.Parse 가 Fragment="" 로 삼켜 파싱 결과로는 구분되지 않는다(`?` 의 ForceQuery 같은
+	// 표식이 fragment 에는 없다). 베이스 URL 원문에 두 글자 중 하나라도 있으면 그 자체가 오구성이다.
+	if strings.ContainsAny(raw, "?#") {
+		return fmt.Errorf("MTX_API_URL(%q)에 query(?)·fragment(#)를 넣을 수 없다 — 베이스 URL 뒤에 /v3/paths/list 가 붙는다", raw)
+	}
+	return nil
 }
 
 // dsn 은 사용자명과 비밀번호를 URL 인코딩해 넣는다. 특수문자가 든 비밀번호도 깨지지 않는다.

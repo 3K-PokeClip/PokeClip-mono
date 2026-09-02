@@ -177,6 +177,42 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 | `HOOK_SPOOL_PATH` | (빈 값) | MediaMTX 훅이 한 줄씩 덧붙이는 스풀 파일. **빈 값이면 훅 어댑터를 아예 기동하지 않는다** — 판정이 벽시계 드리프트만 쓰는 현행으로 돌아가는 즉시 롤백 스위치다(사이드카만 재기동하면 되고 MediaMTX는 건드리지 않는다). compose 기본값은 `/hooks/events.jsonl` |
 | `HOOK_POLL_INTERVAL` | `200ms` | 스풀을 다시 읽는 주기. 훅이 발화하고 판정에 닿기까지 더해지는 지연의 상한이다 |
 | `HOOK_BREAK_GUARD` | `20ms` | 새 세션 첫 조각 판정의 하한 여유. 파일명 시각 해상도와 훅 기록 시각의 미세 차이만 흡수하며 그 이상의 의미는 없다(실측 짝짓기 오차 ±2ms의 10배). 크게 잡으면 이전 세션의 마지막 조각이 새 세션의 표시를 가로챈다. 0·음수는 기동 거부 |
+| `FS_OP_TIMEOUT` | `5s` | 개별 파일시스템 호출(stat·프로브) 하나의 상한. 멈춘 파일시스템에서 메인 루프가 이 시간 이상 붙잡히지 않게 한다 — 넘긴 파일은 건너뛰고 다음 재스캔이 회수한다 |
+| `SCAN_COLLECT_BUDGET` | `45s` | 전수 수집(디렉토리 순회)의 soft 예산. 넘기면 걷은 데까지만 처리하고 절단한다. 정지 판정(`scan_collect_stalled`)은 이 값의 배수로 따로 본다 |
+| `REWIND_SEED_ENABLED` | `false` | 되감기 컷오프 **주조** 스위치(계약 6항 2단계). 꺼져 있으면 컷오프를 새로 만들지 않고, 켜면 각 스트림의 첫 자격 유입이 컷오프 하나를 만든다. 되돌려 꺼도 **이미 기록된 컷오프는 유효하다** — 판정은 이 플래그가 아니라 장부를 읽는다 |
+
+**되감기 상태 관측(POK-195) — MediaMTX Control API 폴링.**
+용어: **관측**은 "지금 이 스트림이 실제로 송출 중인가"를 Control API(MediaMTX가 자기 상태를
+알려주는 HTTP 창구)에서 주기적으로 읽어 오는 것이고, **주조**는 되감기 재생의 시작점(컷오프)을
+장부에 처음 기록하는 것이다. `MTX_API_URL`이 비면 폴러를 아예 기동하지 않는다 —
+관측이 없으면 **관측 기반 주조(스캔 유입 ⓐ2)만 멈춘다**(안전한 방향으로 잠긴다).
+워처·훅 유입(ⓐ1) 주조는 계속되며 그것은 `REWIND_SEED_ENABLED`로만 멈춘다.
+인덱싱·업로드는 그대로 돈다.
+
+| 이름 | 기본값 | 의미 |
+|---|---|---|
+| `MTX_API_URL` | (빈 값 = 관측 끔) | Control API 베이스 URL. compose 기본값은 `http://media:9997`. **9997은 호스트에 공개하지 않는다** — compose 내부망에서만 도달한다. scheme+호스트가 필요하고 자격증명(`user:pass@`)은 거부한다(그 원문이 실패 로그에 실리기 때문). query(`?`)·fragment(`#`)도 거부한다 — 이 값 뒤에 조회 경로가 이어 붙으므로 넣으면 폴이 영구 실패한다 |
+| `OBS_POLL` | `10s` | 관측 주기이자 **폴 1회의 상한**이다. 주기가 곧 재시도라 따로 재시도를 두지 않으며, 헤더조차 오지 않는 응답을 이 시간에 끊는다. `OBS_FRESH`보다 짧아야 기동한다 |
+| `OBS_FRESH` | `30s` | 관측이 이보다 낡으면 방증으로 쓰지 않는다. 주조 트랜잭션 상한(10s, `index.TxnDeadline`)보다 길어야 기동한다 — 같거나 짧으면 기동 거부 |
+| `OBS_BACKFILL` | `60s` | 관측 시점보다 이만큼 더 과거인 조각은 밀린 백로그의 머리로 보아 주조하지 않는다 |
+| `OBS_BOOT_WAIT` | `3s` | 기동 시 첫 관측을 기다리는 상한. 타임아웃이어도 **기동은 계속된다** — 관측 없이 뜨면 그동안 **관측 기반 주조(스캔 유입 ⓐ2)만** 잠긴다(워처·훅 유입 ⓐ1 주조는 이 값과 무관하게 계속된다) |
+| `SESSION_FLOOR_SLACK` | `1s` | 세션 귀속 하한의 여유(시계 역행 방어). 세션 시작보다 이보다 더 과거인 조각은 그 세션에 귀속시키지 않는다 |
+
+> **팀 1회 조치** — `docker-compose.yml`과 `infra/compose/mediamtx.yml`이 함께 바뀌었다.
+> 저장소 최상위에서:
+>
+> ```bash
+> git pull
+> docker compose up -d        # 사이드카를 새 설정(MTX_API_URL)으로 재생성한다
+> docker compose restart media  # MediaMTX가 바뀐 mediamtx.yml을 다시 읽게 한다
+> ```
+>
+> **둘째 줄만으로는 부족하다.** `mediamtx.yml`은 바인드 마운트라 파일 내용이 바뀌어도
+> compose가 보는 `media` 서비스 정의는 그대로다(설정 해시 동일 — 실측). 그래서 `up -d`는
+> `media`를 "Running"으로 두고 넘어가고, MediaMTX는 기동 때 읽은 옛 설정으로 계속 돈다.
+> 재기동하지 않으면 Control API가 없는 상태라 사이드카 호출이 실패하고, **관측 기반 주조(스캔
+> 유입 ⓐ2)만 아무 증상 없이 멈춘다**(워처·훅 유입 ⓐ1 주조는 `REWIND_SEED_ENABLED`가 켜진 한
+> 계속된다 — 위 정의와 같다). 사이드카 로그의 `mtxstate_poll_failed`만이 유일한 흔적이다.
 
 **S3 업로더(POK-30) — `S3_BUCKET`이 비어 있으면 업로더가 꺼지고 아래 값은 무시된다(단 `SEGMENT_UPLOAD_TAIL_HOLD`만 예외 — 표 안 설명 참조).**
 
@@ -197,9 +233,96 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 `AWS_PROFILE`은 `~/.aws` 마운트 폴백을 켤 때만 함께 넣는다 — 마운트 없이 넣으면
 SDK가 존재하지 않는 프로필을 요구해 기동이 죽는다(2026-08-04 실측).
 
-위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 32개). 잘못된 값(숫자 자리에 문자,
+위 표가 `internal/config/config.go`가 읽는 전부다(`TZ` 제외 41개). 잘못된 값(숫자 자리에 문자,
 음수, 파싱 불가한 기간)은 조용히 기본값으로 넘어가지 않고 기동에 실패한다.
 `SEGMENT_SUSPECT_BELOW_MS`가 `SEGMENT_EXPECTED_DURATION_MS`보다 크면 기동 단계에서 거부한다.
+
+## 되감기 M3 이관 기록 (POK-195)
+
+M3에서 **무엇이 들어왔고 무엇이 일부러 빠졌는지**를 적는다. 빠진 것은 미완이 아니라
+다음 마일스톤에 배치된 것이며, 그 근거를 함께 남긴다 — 다음 사람이 "왜 안 만들었나"를
+다시 묻지 않게 하는 것이 이 절의 목적이다.
+
+**용어(일상어와 뜻이 다른 것만)**
+
+| 말 | 뜻 |
+|---|---|
+| 되감기(DVR) | 방송 중에 뒤로 감아 보는 재생. 서버 몫은 "되감아 볼 수 있는 목록(매니페스트)과 그 재료"를 만드는 것이고, 플레이어 UI는 2번 몫이다(계약3) |
+| 세션(회차) | 한 번의 방송. 같은 스트림이 껐다 켜지면 새 회차이며 `stream_sessions` 한 줄이다 |
+| PDT | Program Date Time — 조각마다 "이 4초가 몇 시 몇 분의 화면인가"를 적은 값. 되감기 목록이 시간을 표시하는 근거다 |
+| 컷오프(주조) | 되감기 재생이 시작될 수 있는 첫 지점. 스트림당 한 번 장부에 적히며, 적는 행위를 **주조**라 부른다 |
+| init(MAP) | fMP4 재생의 머리 조각(`ftyp+moov`). 이것이 S3에 올라가 있어야 그 회차를 재생할 수 있다 |
+| carrier 3열 | 세그먼트 행의 `session_id`·`playback_pdt`·`playback_s3_key`. 되감기 목록을 만들 재료다 |
+
+### 지금 켜진 것과 아닌 것
+
+- **켜졌다**: 세션 행 생성, carrier 3열 채움, PDT 재귀식, MediaMTX Control API 상태 관측,
+  업로더의 축 구분(② 아카이브 / ③ 되감기 / init).
+- **아직 없다**: 되감기 매니페스트를 **발행**하는 코드 전체(M4). 그래서 M3만 배포해도
+  시청자에게 보이는 동작은 바뀌지 않는다.
+- **플래그와 무관하게 쓰이는 것이 있다**: `REWIND_SEED_ENABLED`(기본 `false`)가 가르는 것은
+  **컷오프 주조 권한 하나**다. 세션 행·carrier 3열·init 준비는 플래그가 꺼져 있어도 쓰인다
+  (설계대로이며, 계보에 구멍을 내지 않기 위해서다 — kty 확인 2026-09-02).
+- **관측 축 롤백 손잡이**: `MTX_API_URL`을 비우면 폴러를 아예 기동하지 않는다 → 관측 없음 →
+  스캔 유입은 세션을 열지 않는다(안전한 방향으로 잠긴다). 위 env 절의 **팀 1회 조치**도 함께 본다.
+
+### M4(발행 층)로 넘어간 것
+
+| 항목 | 왜 M3가 아닌가 |
+|---|---|
+| `playback.Producer`(③·init 바이트 생산자)와 그 호출 통로 | 생산자가 없으면 M3에 두는 호출부는 호출자 0인 코드가 된다. M3에는 순수 키 파생(`playback/key.go`)만 남겼다 |
+| `init_s3_key`·`init_sha256`·`init_bytes` 세 열의 **쓰기 경로**와 워커 배선 | 값의 유일한 생산자가 위 `Producer.Init`이다. M3는 확정 CAS 문장·계약과 픽스처까지 |
+| ③ 바이트 추출·③ 재수거·init 재수거 | 바이트가 없는 상태에서 수거를 켜면 없는 파일을 집어 영구 격리된다 |
+| 스위퍼의 init 조회 · backlog 축별 집계 | 회수기가 M4라 지표만 켜면 행동 없는 신호가 된다. **M3 동안 backlog 지표는 ② 축만 보여 준다**(③·init은 프로덕션 동작이 0건이라 숨는 장애가 없다) |
+| 발행 게이트 실물(`init_uploaded_at IS NULL` → `ready:false`)·G7 skew·`rewind_cutoff_absent` 알람·writer fence | 전부 발행 층 소유다. M3는 그 **장부 축**만 픽스처로 확인했다 |
+| 세션 종료 전이(`live` → `ending` → `ended`) | M4/M6. **그래서 M3에서는 같은 스트림의 연속 방송이 첫 회차에 계속 귀속된다** — 발행 층이 없어 무해하며, 테스트가 현 동작을 문서화한다 |
+| `REWIND_SEED_ENABLED` 기본값 `true` 전환 | 발행 층이 오는 PR에서 함께 켠다(kty 결정 2026-09-02). 스위치 자체는 롤백 손잡이로 남는다 |
+| `discontinuity_base` 증분 산식 | 렌더 축 값이라 소비자(M4)와 같은 커밋에서 정한다. M3는 명시적 기본값 `0`("승계 없음") |
+| 상태 관측 등급(tier) ⓘⓘ·ⓘⓘⓘ 상수 | 폴러가 실측상 ⓘ만 산출한다. 소비자가 생길 때 같이 넣는다 |
+| **부채** — `indexer.go`가 1228줄(M3 전 1074)이다. 판정 묶음(`observation`·`buildSeed`·`corroborates`·`withStateObs`·`sessionOp` = `:595`~`:726`, 약 130줄)을 `judgment.go`로 분리한다 | 응집이 하나(유입 → 방증 → 연산)라 지금 나눠도 읽기가 나아지지만, 그 묶음을 실제로 건드리는 것이 M4(발행 축 판정 편입)라 **그때 같은 커밋에서** 옮긴다. 지금 옮기면 M4 리뷰가 이동과 변경을 함께 읽어야 한다 |
+
+### M5(보안 강화)로 넘어간 것
+
+MediaMTX Control API의 `authInternalUsers` `api` 항목은 **자격증명도 IP 제한도 없다**.
+v3의 `api` 권한은 조회 전용이 아니라 설정 변경·경로 추가·강제 끊기·녹화 삭제까지 포함하므로,
+지금은 **⑴ compose 전용 브리지 네트워크 격리 ⑵ 9997 포트 미공개** 두 겹에만 의존한다.
+좁히기(IP 대역 또는 자격증명)는 IPAM 신설을 동반해 인프라 축이 넓어지므로 M5로 미뤘다.
+
+### 설계 문서 정정 후보 (코드 변경 아님)
+
+구현이 설계와 다른 것이 아니라, 설계 문서의 그림·문장이 자기 본문과 어긋나는 자리다.
+
+1. TD(목표 길이) 초과 판정의 위치 — 그림은 트랜잭션 밖, 본문은 안. 낡은 값으로 판정하지 않으려면 안이 맞다.
+2. PDT 재귀식의 "직전 조각" 정의 — 스트림 전체가 아니라 **세션 계보 안**에서 찾는다.
+3. 세션 개시 연산의 분해(결정 / 쓰기 2회 호출) — `first_pdt`를 앞에서 참조하는 원문 형상으로는 순서가 성립하지 않는다.
+4. "귀속 하한은 항상" vs "TD 분할이 먼저"의 순서 긴장.
+5. 관측 등급 잔여 항목은 실측(F-34)으로 닫혔다. 부수 관측: SRT 송출을 강제 종료하면 항목 소멸이 EOF까지 15~20초 늦다(F-34는 RTMP 정상 종료 측정).
+
+### 공시
+
+- 계약3 `session_id`의 **최초 규정**: `S-{YYYYMMDD}-{HHMMSS}-{streamID}-{seq}`(UTC 기준, kty 확정 2026-09-02).
+  계약3 원문은 되감기 URL 형상만 정하고 이 형식을 규정한 적이 없어, 이번이 개정이 아니라 신규 규정이다.
+  팀 위키 계약3 추기는 별건이며 3번 리뷰 대상이다.
+- 인덱스 도달 기록: 직전 세션 조회는 `stream_sessions_stream_idx` + Incremental Sort(정상 — 동률 타이브레이커가 인덱스에 없다),
+  현 live 조회는 소표라 Seq Scan이 뜬다(비용 판정이 아니라 도달 판정이다).
+- 환경 사실: Docker PG의 시계가 호스트보다 최대 +956ms 어긋나는 것을 실측했다 →
+  시간 픽스처는 **한 시계만** 쓴다(두 시계를 섞으면 판정이 뒤집힌다).
+
+### 미확인 (정직 서술)
+
+- Control API 기본 페이지 크기의 정확한 값(2 이상인 것만 실측 — 계약은 "1페이지인가 아닌가" 두 갈래라 영향 없다).
+- 세그먼트 벽시계가 역행하는 폭(F-39). 역행이 세션 경계보다 크면 "직전 세션" 선택이 흔들릴 수 있다.
+- 워처가 기동 후 죽는 국면의 **재기동 루프**는 CI에서 재현하지 못해 수동 검증으로 강등했다
+  (compose 재기동 실측: 관측 → 초기 수집 순서 확인, 재기동부터 주조까지 약 1.62초).
+- 스캔 유입 단독으로 주조되는 국면은 compose에서 실증할 수 없다(워처가 상시 살아 있다) — PG 통합 테스트까지가 한계다.
+- 포크 태그의 `api` 액션 범위는 상류 문서 기준이며 원문 대조는 하지 않았다.
+
+### 출처
+
+- 설계 정본: 팀 위키 `PokeClip-LLM-WIKI` — `contracts/계약-세그먼트인덱스.md`·`contracts/계약3-LLHLS-DVR재생규약.md`, ADR-020·ADR-044·ADR-063.
+- 이번 마일스톤 설계·계획: POK-195 작업 산출물(설계 r17 5.1.1·5.2·5.3·5.5·6.5, 계획 4.1·4.5·6절·8절·9절).
+- 실측: MediaMTX Control API 응답 실물(F-34), compose 기동·SRT 송출 실측(2026-09-02), Docker PG 시계 드리프트 실측.
+- 결정: kty 확정 4건(2026-09-02) — `session_id` 형식 · M3 단독 PR · 커버리지 게이트 확장 · 되감기 스위치 현행 유지.
 
 ## 테스트
 
@@ -207,18 +330,23 @@ SDK가 존재하지 않는 프로필을 요구해 기동이 죽는다(2026-08-04
 cd media && go test ./...
 ```
 
-`internal/index`의 통합 테스트는 **실제 PostgreSQL이 필요**하다. `PG_DSN`이 없으면 해당 케이스는
-전부 `skip`되고 나머지는 그대로 돈다 — 즉 `PG_DSN` 없이 돌린 결과만으로는 DB 계층이 검증되지 않는다.
+`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`의 통합 테스트와
+`internal/pgtest`의 자기 테스트는 **실제 PostgreSQL이 필요**하다. `PG_DSN`이 없으면 해당 케이스는 전부 `skip`되고 나머지는 그대로
+돈다 — 즉 `PG_DSN` 없이 돌린 결과만으로는 DB 계층이 검증되지 않는다.
 
 ```bash
 set -a; . ../.env; set +a
 export PG_DSN="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POSTGRES_DB"
-go test ./internal/index/ -v
+go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ ./internal/pgtest/ -v
 ```
 
-`internal/index` 통합 테스트는 `PG_DSN`이 가리키는 DB에 **쓰지 않는다.** `PG_DSN`은 관리 접속으로만
+이 통합 테스트들은 `PG_DSN`이 가리키는 DB에 **쓰지 않는다.** `PG_DSN`은 관리 접속으로만
 쓰이고, 같은 서버에 전용 테스트 DB(`PG_TEST_DB`, 기본 `pokeclip_uploadtest`)를 만들어 그 안에서만
-돌며 테스트 함수마다 비운다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
+돌며 테스트 함수마다 비운다. **전용 DB는 패키지마다 하나씩이다**(`internal/pgtest`) —
+`go test ./...`는 패키지별 테스트 바이너리를 병렬로 띄우므로 한 DB를 나눠 쓰면 서로의 표를
+비운다. 실제 이름은 `PG_TEST_DB`에 패키지 접미를 붙인 것으로, `internal/index`만 무접미
+(`pokeclip_uploadtest`)이고 `internal/session`은 `_session`, `internal/indexer`는 `_indexer`,
+`cmd/segment-indexer`는 `_cmd`, `internal/pgtest` 자기 테스트는 `_selftest`다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
 롤에 `CREATEDB` 권한이 필요하고 — **로컬 compose와 CI(`media-ci`)의 postgres 서비스 컨테이너 둘 다 superuser라 이미 갖고 있다**, `PG_TEST_DB`를 개발 DB 이름과 같게
 주면 테스트가 기동 즉시 실패한다. `PG_DSN`에 DB 이름 자체를 안 적었을 때도 같은데, 단
 `PGDATABASE`가 설정된 환경에서는 그 값이 DB 이름으로 채워져 "이름이 비었다" 가드 대신 동일 이름
@@ -229,11 +357,21 @@ go test ./internal/index/ -v
 돌려야 한다**(한 번만 겪는 마이그레이션이고 실패 메시지가 그대로 안내한다).
 **`PG_DSN`에는 로컬 compose의 개발 DB만 준다 — 공유·원격·프로덕션 DSN을 주지 않는다.**
 **같은 `PG_TEST_DB`로 두 실행을 동시에 돌리면 서로의 데이터를 지운다 — CI나 병렬 실행에서는
-실행마다 고유한 `PG_TEST_DB`를 주고, 실행이 끝나면 그 DB를 `DROP DATABASE`로 정리한다**(정리 없이
-고유 이름만 늘리면 DB가 무한히 쌓인다). 이 규약은 **PG를 공유하는 실행이 있을 때** 적용된다 —
+실행마다 고유한 `PG_TEST_DB`를 주고, 실행이 끝나면 그 이름의 접미 DB 전부를 `DROP DATABASE`로
+정리한다**(정리 없이 고유 이름만 늘리면 DB가 무한히 쌓인다). 이 규약은 **PG를 공유하는 실행이 있을 때** 적용된다 —
 `media-ci`의 postgres는 잡마다 뜨고 함께 사라져 공유가 없다 — 규약을 완화한 것이 아니라 적용
 조건을 드러낸 것이다. `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지하므로
-(`CREATE TABLE IF NOT EXISTS`) `DROP DATABASE pokeclip_uploadtest` 후 다시 돌린다.
+(`CREATE TABLE IF NOT EXISTS`) **접미 DB 전부**를 지운 뒤 다시 돌린다 — `pokeclip_uploadtest`
+하나만 지우면 `internal/index`는 새 스키마로 통과하고 `_session`·`_indexer`·`_cmd`는 옛
+스키마 그대로라 그 세 패키지만 "does not exist" 계열로 실패한다.
+
+```bash
+# PG_TEST_DB 를 바꿔 돌렸다면 그 이름이 밑이름이다 — 기본 이름만 지우면 실제 DB 는 남는다.
+base="${PG_TEST_DB:-pokeclip_uploadtest}"
+for suffix in "" _session _indexer _cmd _selftest; do
+  psql "$PG_DSN" -c "DROP DATABASE IF EXISTS ${base}${suffix}"
+done
+```
 
 `internal/fmp4meta` 테스트는 `testdata/`의 커밋된 파일만 쓰므로 Docker가 꺼져 있어도 돈다.
 
@@ -241,8 +379,9 @@ go test ./internal/index/ -v
 `go test`만 있으면 되고 Docker는 필요 없지만, 다른 테스트보다 몇 초 더 걸린다.
 
 CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리지를 함께 재고,
-`internal/index`·`internal/upload`·`internal/indexer` 세 패키지 중 **하나라도 80% 미만이면 잡을
-실패시킨다**. 나머지 패키지는 수치만 로그에 남고 게이트 대상이 아니다.
+`internal/index`·`internal/upload`·`internal/indexer`·`internal/session`·`internal/mtxstate`
+**다섯 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(뒤 둘은 POK-195 M3에서 추가 —
+되감기 판정 로직이 그 안에 있다). 나머지 패키지는 수치만 로그에 남고 게이트 대상이 아니다.
 
 ## MediaMTX 버전업 체크리스트
 

@@ -54,6 +54,28 @@ func TestAdvanceCarriesS3KeyIntoCursor(t *testing.T) {
 	}
 }
 
+// 실시간 유입이 만드는 대상은 ② 아카이브 축이다(POK-195 M3 · 설계 5.5.4 #4).
+//
+// 위 (h) 와 똑같은 부류의 결함이다 — 필드명 리터럴이라 빠뜨려도 컴파일이 통과하고
+// 영값(미판정)이 된다. 그 상태로 접수되면 업로더가 fail-closed 로 전부 거부해
+// 실시간 업로드가 통째로 멈춘다.
+func TestRequestedTargetCarriesArchiveAxis(t *testing.T) {
+	f := newFixture(t, 4000)
+	f.makeFile("s1", segName(baseWall, 0), 1000)
+	f.mustHandle(f.segment("s1", segName(baseWall, 0), 1000, recording.ReasonNextFile))
+
+	got := f.upload.targets()
+	if len(got) != 1 {
+		t.Fatalf("요청 대상 = %d건, want 1건", len(got))
+	}
+	if got[0].Axis != index.AxisArchive {
+		t.Errorf("Axis = %v, want %v — 축이 없으면 업로더가 거부한다", got[0].Axis, index.AxisArchive)
+	}
+	if got[0].SessionID != "" {
+		t.Errorf("SessionID = %q, want 빈 문자열 — ② 의 대상 식별자는 seq 다", got[0].SessionID)
+	}
+}
+
 // (b) — Idle 로 확정된 꼬리는 보류했다가, 다음 INSERT 로 꼬리가 아니게 되는 순간
 // IsTail=false 로 요청한다. 그 시점에는 파일이 더 자랄 수 없다.
 func TestIdleTailIsHeldThenPromotedByNextInsert(t *testing.T) {

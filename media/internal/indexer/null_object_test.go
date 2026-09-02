@@ -15,7 +15,7 @@ import (
 func degradedFixture(t *testing.T, probeVals ...int64) *fixture {
 	t.Helper()
 	f := newFixture(t, probeVals...)
-	f.ix = New(f.store, f.probe.fn, nil, nil, f.opt, slog.New(f.logs))
+	f.ix = New(f.store, f.probe.fn, nil, nil, nil, f.opt, slog.New(f.logs))
 	return f
 }
 

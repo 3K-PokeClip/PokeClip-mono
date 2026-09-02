@@ -34,10 +34,10 @@ func sampleRecord(streamID string, seq int64, path string) Record {
 // 인메모리 중복 방지는 크래시를 관통하지 못한다. DB UNIQUE 만이 재기동을 관통한다(G3, D5).
 func TestInsertSameLocalPathTwiceIsDuplicate(t *testing.T) {
 	ctx := context.Background()
-	store := NewPGStore(newTestPool(t))
+	store := NewPGStore(newTestPool(t), nil, nil)
 	streamID := uniqueStreamID(t)
 
-	first, _, err := store.Insert(ctx, sampleRecord(streamID, 0, "/recordings/a/1.mp4"), Seed{})
+	first, _, err := store.Insert(ctx, sampleRecord(streamID, 0, "/recordings/a/1.mp4"), Seed{}, SessionSource{})
 	if err != nil {
 		t.Fatalf("1회차 Insert 실패: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestInsertSameLocalPathTwiceIsDuplicate(t *testing.T) {
 	}
 
 	// seq 만 다르고 local_path 는 같다 → UNIQUE(stream_id, local_path) 위반
-	second, _, err := store.Insert(ctx, sampleRecord(streamID, 1, "/recordings/a/1.mp4"), Seed{})
+	second, _, err := store.Insert(ctx, sampleRecord(streamID, 1, "/recordings/a/1.mp4"), Seed{}, SessionSource{})
 	if err != nil {
 		t.Fatalf("2회차 Insert 실패: %v", err)
 	}
@@ -59,14 +59,14 @@ func TestInsertSameLocalPathTwiceIsDuplicate(t *testing.T) {
 // PK 위반과 UNIQUE 위반을 서로 다른 outcome 으로 갈라내는 것이 D5 의 핵심이다.
 func TestInsertSameSeqDifferentPathIsSeqConflict(t *testing.T) {
 	ctx := context.Background()
-	store := NewPGStore(newTestPool(t))
+	store := NewPGStore(newTestPool(t), nil, nil)
 	streamID := uniqueStreamID(t)
 
-	if _, _, err := store.Insert(ctx, sampleRecord(streamID, 0, "/recordings/a/1.mp4"), Seed{}); err != nil {
+	if _, _, err := store.Insert(ctx, sampleRecord(streamID, 0, "/recordings/a/1.mp4"), Seed{}, SessionSource{}); err != nil {
 		t.Fatalf("1회차 Insert 실패: %v", err)
 	}
 
-	got, _, err := store.Insert(ctx, sampleRecord(streamID, 0, "/recordings/a/2.mp4"), Seed{})
+	got, _, err := store.Insert(ctx, sampleRecord(streamID, 0, "/recordings/a/2.mp4"), Seed{}, SessionSource{})
 	if err != nil {
 		t.Fatalf("2회차 Insert 실패: %v", err)
 	}
@@ -78,10 +78,10 @@ func TestInsertSameSeqDifferentPathIsSeqConflict(t *testing.T) {
 // 케이스2 — UpdateTail 은 꼬리이고 pending 일 때 성공한다.
 func TestUpdateTailSucceedsOnPendingTail(t *testing.T) {
 	ctx := context.Background()
-	store := NewPGStore(newTestPool(t))
+	store := NewPGStore(newTestPool(t), nil, nil)
 	streamID := uniqueStreamID(t)
 
-	if _, _, err := store.Insert(ctx, sampleRecord(streamID, 0, "/recordings/a/1.mp4"), Seed{}); err != nil {
+	if _, _, err := store.Insert(ctx, sampleRecord(streamID, 0, "/recordings/a/1.mp4"), Seed{}, SessionSource{}); err != nil {
 		t.Fatalf("Insert 실패: %v", err)
 	}
 
@@ -106,11 +106,11 @@ func TestUpdateTailSucceedsOnPendingTail(t *testing.T) {
 // 꼬리가 아닌 행을 고치면 뒤 행들의 PTS 가 전부 어긋난다.
 func TestUpdateTailRejectedWhenNewerRowExists(t *testing.T) {
 	ctx := context.Background()
-	store := NewPGStore(newTestPool(t))
+	store := NewPGStore(newTestPool(t), nil, nil)
 	streamID := uniqueStreamID(t)
 
 	for seq, p := range []string{"/recordings/a/1.mp4", "/recordings/a/2.mp4"} {
-		if _, _, err := store.Insert(ctx, sampleRecord(streamID, int64(seq), p), Seed{}); err != nil {
+		if _, _, err := store.Insert(ctx, sampleRecord(streamID, int64(seq), p), Seed{}, SessionSource{}); err != nil {
 			t.Fatalf("Insert 실패: %v", err)
 		}
 	}
@@ -129,10 +129,10 @@ func TestUpdateTailRejectedWhenNewerRowExists(t *testing.T) {
 func TestUpdateTailRejectedWhenUploaded(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
-	store := NewPGStore(pool)
+	store := NewPGStore(pool, nil, nil)
 	streamID := uniqueStreamID(t)
 
-	if _, _, err := store.Insert(ctx, sampleRecord(streamID, 0, "/recordings/a/1.mp4"), Seed{}); err != nil {
+	if _, _, err := store.Insert(ctx, sampleRecord(streamID, 0, "/recordings/a/1.mp4"), Seed{}, SessionSource{}); err != nil {
 		t.Fatalf("Insert 실패: %v", err)
 	}
 	// 이번 범위에 uploaded 로 바꾸는 코드는 없다(G6). POK-30 상황을 테스트가 직접 만든다.
@@ -160,11 +160,11 @@ func TestUpdateTailRejectedWhenUploaded(t *testing.T) {
 // 값 대조만이 그 사고를 잡는다.
 func TestLoadCursorCarriesTailFields(t *testing.T) {
 	ctx := context.Background()
-	store := NewPGStore(newTestPool(t))
+	store := NewPGStore(newTestPool(t), nil, nil)
 	streamID := uniqueStreamID(t)
 
 	want := sampleRecord(streamID, 5, "/recordings/a/6.mp4")
-	if _, _, err := store.Insert(ctx, want, Seed{}); err != nil {
+	if _, _, err := store.Insert(ctx, want, Seed{}, SessionSource{}); err != nil {
 		t.Fatalf("Insert 실패: %v", err)
 	}
 
@@ -203,7 +203,7 @@ func TestLoadCursorCarriesTailFields(t *testing.T) {
 // 이것이 "첫 세그먼트다"의 판정 근거다(H8).
 func TestLoadCursorEmptyStream(t *testing.T) {
 	ctx := context.Background()
-	store := NewPGStore(newTestPool(t))
+	store := NewPGStore(newTestPool(t), nil, nil)
 
 	cur, err := store.LoadCursor(ctx, uniqueStreamID(t))
 	if err != nil {
@@ -220,16 +220,16 @@ func TestLoadCursorEmptyStream(t *testing.T) {
 // 케이스7 — ExistingPaths 는 해당 스트림의 경로 전부를 반환하고 다른 스트림 것은 섞지 않는다.
 func TestExistingPathsIsScopedToStream(t *testing.T) {
 	ctx := context.Background()
-	store := NewPGStore(newTestPool(t))
+	store := NewPGStore(newTestPool(t), nil, nil)
 	mine := uniqueStreamID(t) + "-mine"
 	other := uniqueStreamID(t) + "-other"
 
 	for seq, p := range []string{"/recordings/mine/1.mp4", "/recordings/mine/2.mp4"} {
-		if _, _, err := store.Insert(ctx, sampleRecord(mine, int64(seq), p), Seed{}); err != nil {
+		if _, _, err := store.Insert(ctx, sampleRecord(mine, int64(seq), p), Seed{}, SessionSource{}); err != nil {
 			t.Fatalf("Insert 실패: %v", err)
 		}
 	}
-	if _, _, err := store.Insert(ctx, sampleRecord(other, 0, "/recordings/other/1.mp4"), Seed{}); err != nil {
+	if _, _, err := store.Insert(ctx, sampleRecord(other, 0, "/recordings/other/1.mp4"), Seed{}, SessionSource{}); err != nil {
 		t.Fatalf("Insert 실패: %v", err)
 	}
 

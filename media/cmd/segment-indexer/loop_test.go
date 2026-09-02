@@ -36,7 +36,7 @@ func (s *fakeStore) ExistingPaths(context.Context, string) (map[string]struct{},
 	return map[string]struct{}{}, nil
 }
 
-func (s *fakeStore) Insert(_ context.Context, r index.Record, _ index.Seed) (index.InsertOutcome, index.SeedResult, error) {
+func (s *fakeStore) Insert(_ context.Context, r index.Record, _ index.Seed, _ index.SessionSource) (index.InsertOutcome, index.SeedResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.inserts++
@@ -157,7 +157,7 @@ func newLoopFixture(t *testing.T, withHook bool) *loopFixture {
 	opt.SegmentRoot = f.root
 	// up 은 nil 이다 — 이 파일이 보는 것은 루프의 신호 처리이지 업로드 정책이 아니다.
 	// nil 이면 아무것도 요청하지 않는 기본값이 끼워진다(indexer.New).
-	ix := indexer.New(f.store, func(string) (int64, error) { return 4000, nil }, noopAdopter{}, nil, opt, log)
+	ix := indexer.New(f.store, func(string) (int64, error) { return 4000, nil }, noopAdopter{}, nil, nil, opt, log)
 
 	f.deps = loopDeps{
 		ix:          ix,

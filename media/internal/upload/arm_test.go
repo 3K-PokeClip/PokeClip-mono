@@ -27,6 +27,7 @@ func (s *armStore) MarkUploaded(context.Context, string, int64, int64) (bool, er
 	return true, nil
 }
 func (s *armStore) MarkFailed(context.Context, string, int64, int64) (bool, error) { return true, nil }
+func (s *armStore) MarkInitUploaded(context.Context, string, []byte) (bool, error) { return true, nil }
 func (s *armStore) CountBacklog(context.Context) (int64, int64, int64, error)      { return 0, 0, 0, nil }
 
 func (s *armStore) count() int {
