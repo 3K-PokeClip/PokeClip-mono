@@ -21,8 +21,9 @@ import (
 
 // initKeyOf 는 설계 5.2 의 init 키를 생산자 쪽 함수로 만든다.
 // 검사기(initKeyRe)와 생산자(playback.InitKey)는 서로를 모르는 두 구현이라,
-// 둘이 같은 형상을 말하는지는 이렇게 맞대 봐야 드러난다(worker.go:145 "재계산 비교 금지"는
-// 런타임 경로의 규약이고, 테스트가 두 구현의 합치를 재는 것은 그 규약과 다른 축이다).
+// 둘이 같은 형상을 말하는지는 이렇게 맞대 봐야 드러난다(worker.go 의 s3KeyRe 주석
+// "재계산해 비교하지는 않는다"는 런타임 경로의 규약이고, 테스트가 두 구현의 합치를
+// 재는 것은 그 규약과 다른 축이다).
 func initKeyOf(t *testing.T, streamID, sessionID string) string {
 	t.Helper()
 	k, err := playback.InitKey(streamID, sessionID)
@@ -115,8 +116,9 @@ func TestJobKeyIsAxisScoped(t *testing.T) {
 
 // T2 — 격리는 축 안에서만 돈다.
 //
-// 잡는 결함: ② 의 영구 격리(worker.go:109)가 축을 안 가리면 같은 seq 의 ③·init 이
-// 프로세스 수명 동안 통째로 사라진다. 격리는 되돌릴 수 없어 관측조차 되지 않는다.
+// 잡는 결함: ② 의 영구 격리(worker.go 의 processTarget 에서 validateTarget 실패 시 quarantine)가
+// 축을 안 가리면 같은 seq 의 ③·init 이 프로세스 수명 동안 통째로 사라진다.
+// 격리는 되돌릴 수 없어 관측조차 되지 않는다.
 func TestQuarantineIsPerAxis(t *testing.T) {
 	u := newGateUploader(t)
 	u.gate.quarantine(targetKeyOf(axisTarget(index.AxisArchive, "demo", 7, "")))
@@ -397,7 +399,8 @@ func TestSweepRoundLogsCarryArchiveAxisLabel(t *testing.T) {
 // T5 — 축마다 키 문법이 다르다.
 //
 // 잡는 결함: 검사기가 ② 문법 하나뿐이면 ③·init 키가 `bad_key` 로 판정돼
-// worker.go:109 의 **되돌릴 수 없는 격리**에 걸린다(설계 5.5.4 #3 "왜 막히나").
+// worker.go 의 processTarget 이 validateTarget 실패 시 하는 **되돌릴 수 없는 격리**에
+// 걸린다(설계 5.5.4 #3 "왜 막히나").
 // 반대 방향도 함께 못 박는다 — 축을 바꿔 낸 키는 통과하면 안 된다.
 func TestKeyGrammarIsPerAxis(t *testing.T) {
 	u, cap, dir := newWorkerUploader(t, &fakeUploadStore{}, &fakePutter{}, nil)

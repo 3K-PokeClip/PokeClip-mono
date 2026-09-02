@@ -192,8 +192,8 @@ var playbackKeyRe = regexp.MustCompile(`^dvr/([A-Za-z0-9_-]{1,64})/seg/(\d{6,})\
 // 세션 성분에 점을 받지 않는다: playback.InitKey 는 `.`·`..` 를 명시로 거부하고(key.go:22),
 // 세션 ID 문법은 S-{YYYYMMDD}-{HHMMSS}-{streamID}-{seq} 로 확정됐으며
 // (session/registry.go:460) streamID 화이트리스트가 [A-Za-z0-9_-]{1,64} 라 점 자체가
-// 나올 수 없다. 그래서 좁혀도 정상 대상이 영구 격리(worker.go:109)될 길이 없고,
-// 경로 참조가 키에 실리는 길만 닫힌다.
+// 나올 수 없다. 그래서 좁혀도 정상 대상이 영구 격리(processTarget 에서 validateTarget 실패 시
+// quarantine)될 길이 없고, 경로 참조가 키에 실리는 길만 닫힌다.
 var initKeyRe = regexp.MustCompile(`^dvr/([A-Za-z0-9_-]{1,64})/init/([A-Za-z0-9_-]+)\.mp4$`)
 
 // keyPatternFor 는 축의 키 문법이다(설계 5.5.4 #3 — 축별 3벌).
