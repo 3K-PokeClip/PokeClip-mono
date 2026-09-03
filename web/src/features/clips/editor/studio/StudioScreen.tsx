@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
 import { TransportBar } from '../TransportBar';
@@ -8,7 +8,11 @@ import { MultitrackTimeline } from './MultitrackTimeline';
 import { ToolPanel } from './ToolPanel';
 import { ToolRail } from './ToolRail';
 import styles from './StudioScreen.module.css';
+import { EditorSourceGate } from './EditorSourceGate';
 import { editorIntentForKey, type EditorIntent } from '../editorKeys';
+import { editorSourceUrl, initialRangeForSource } from '../editorSource';
+import { useEditorHlsPlayback } from '../useEditorHlsPlayback';
+import { useEditorSource } from '../useEditorSource';
 import { useClipEditorMockState, type ClipEditorOptions } from '../useClipEditorMockState';
 
 // 시안 1d-a 클립 편집기(스튜디오형). 전폭 자체 헤더를 가지므로 ScreenContainer를 쓰지 않는다
@@ -63,7 +67,67 @@ function timelineHeadroom(previewColumn: HTMLElement | null): number {
   return spare - spilled;
 }
 
+/**
+ * 편집기 진입점. 로컬 소스 주소가 있으면 실재생, 없으면 목업이다.
+ *
+ * 컴포넌트를 가르는 이유는 훅 조건부 호출을 피하기 위해서다 — videoRef 와 hls 어댑터는
+ * 실재생일 때만 존재한다(GlassPlayer 가 라이브에서 쓰는 방식과 같다). 덤으로 상태 허브의
+ * `playback` 주입이 한 인스턴스 수명 동안 뒤집히지 않는 것도 여기서 보장된다.
+ */
 export function StudioScreen(options: ClipEditorOptions = {}) {
+  // 테스트가 소스·재생을 직접 주입하면 그것을 쓴다 — env 나 네트워크를 타지 않는다
+  const injected = options.playback !== undefined || options.source !== undefined;
+  // 소스를 못 읽어도 편집기를 열 수 있어야 한다 — 화면 작업이 미디어에 발목 잡히면 안 된다
+  const [skipped, setSkipped] = useState(false);
+  const url = injected || skipped ? null : editorSourceUrl();
+  const source = useEditorSource(url);
+
+  if (injected || source.status === 'off') return <StudioScreenBody options={options} />;
+  if (source.status === 'loading' || source.status === 'error') {
+    return <EditorSourceGate state={source} onSkip={() => setSkipped(true)} />;
+  }
+  return (
+    // key: 허브의 초기 구간이 useState 초기화라 소스가 바뀌면 다시 마운트해야 반영된다
+    <HlsStudioScreen
+      key={source.source.playlistUrl}
+      options={options}
+      source={source.source}
+      peaks={source.peaks}
+    />
+  );
+}
+
+function HlsStudioScreen({
+  options,
+  source,
+  peaks,
+}: {
+  options: ClipEditorOptions;
+  source: NonNullable<ClipEditorOptions['source']>;
+  peaks: NonNullable<ClipEditorOptions['peaks']>;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  // 허브가 잡을 구간과 같은 자리에서 시작한다 — 순수 함수라 양쪽이 같은 값을 얻는다.
+  // 0에서 시작하면 매니페스트가 붙는 순간 플레이헤드가 한 번 튄다.
+  const playback = useEditorHlsPlayback(videoRef, source.playlistUrl, {
+    durationSeconds: source.durationSeconds,
+    initialSeconds: initialRangeForSource(source.durationSeconds).startSeconds,
+  });
+  return (
+    <StudioScreenBody
+      options={{ ...options, playback, source, peaks }}
+      videoNode={<video ref={videoRef} playsInline preload="metadata" />}
+    />
+  );
+}
+
+function StudioScreenBody({
+  options,
+  videoNode = null,
+}: {
+  options: ClipEditorOptions;
+  videoNode?: ReactNode;
+}) {
   const state = useClipEditorMockState(options);
   const { togglePlay, seekBy, markIn, markOut, undo, redo } = state;
   const previewColumnRef = useRef<HTMLDivElement>(null);
@@ -171,7 +235,7 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
         />
         <ToolPanel state={state} />
         <div className={styles.previewColumn} ref={previewColumnRef}>
-          <PreviewCanvas state={state} />
+          <PreviewCanvas state={state} videoNode={videoNode} />
           <TransportBar state={state} showRangeLength />
         </div>
       </main>

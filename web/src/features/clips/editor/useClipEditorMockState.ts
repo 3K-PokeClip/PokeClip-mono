@@ -11,6 +11,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
 import type { EditorPlayback } from './editorPlayback';
+import {
+  initialRangeForSource,
+  type AudioPeaks,
+  type EditorMediaSource,
+  type FilmstripSheets,
+} from './editorSource';
 import { useEditorPlaybackSimulation } from './useEditorPlaybackSimulation';
 import {
   canRedo as historyCanRedo,
@@ -65,7 +71,15 @@ function readStoredPanelSide(): EditorPanelSide | null {
 export type EditorLayout = '9:16' | '1:1' | 'split';
 export type SubtitleMode = 'burn-cc' | 'burn' | 'cc';
 export type EditorTool = 'range' | 'subtitle' | 'audio' | 'bgm' | 'image';
-export type EditorTrackKind = 'video' | 'mic' | 'game' | 'bgm' | 'sfx' | 'image';
+export type EditorTrackKind =
+  | 'video'
+  /** 소스에서 온 합본 오디오 — ADR-017 trackId 0. 트랙 분리 전 로컬 소스가 이 한 줄로 온다 */
+  | 'mix'
+  | 'mic'
+  | 'game'
+  | 'bgm'
+  | 'sfx'
+  | 'image';
 
 export interface EditorTrackClip {
   id: string;
@@ -83,6 +97,10 @@ export interface EditorTrack {
   volume: number | null;
   muted: boolean;
   clips: EditorTrackClip[];
+  /** 영상 레인에 깔 스프라이트. 없으면 레인이 자리 표시자로 남는다 */
+  filmstrip?: (FilmstripSheets & { sheetUrls: readonly string[] }) | undefined;
+  /** 오디오 레인에 그릴 파형. 없으면 자리 표시자 */
+  peaks?: AudioPeaks | undefined;
 }
 
 export interface SubtitleItem {
@@ -107,6 +125,8 @@ export interface EditorSource {
   /** 아직 영상이 없을 때 자리에 적는 말 */
   placeholder: string;
   tone: 'accent' | 'point';
+  /** 실제 영상이 들어가는 칸. 로컬 파일이 하나뿐이라 한 칸에만 붙는다 */
+  media?: boolean;
 }
 
 export interface EditorImageItem {
@@ -247,15 +267,15 @@ export const TOOL_OPTIONS: readonly { value: EditorTool; label: string }[] = [
   { value: 'image', label: '이미지' },
 ];
 
-function initialRecipe(): EditorRecipe {
+function initialRecipe(range: ClipRange): EditorRecipe {
   return {
-    range: MOCK_SOURCE.range,
+    range,
     // 시안 1d-a는 상하분할이 켜진 상태를 보여준다
     layout: 'split',
     splitRatio: 1.5,
-    trackVolumes: Object.fromEntries(
-      MOCK_TRACKS.filter((t) => t.volume !== null).map((t) => [t.id, t.volume as number]),
-    ),
+    // 초기값은 비워 둔다 — 트랙마다의 기본 볼륨은 트랙 정의가 갖고 있고, 여기 복사해 두면
+    // 소스가 준 트랙(목업에 없는 id)의 볼륨이 빠진다
+    trackVolumes: {},
     trackMuted: {},
     subtitleMode: 'burn-cc',
     selectedTitleId: null,
@@ -276,6 +296,13 @@ export interface ClipEditorOptions {
    * 주인이 바뀌어 위치가 튄다. 화면 쪽에서 컴포넌트를 갈라 그것을 보장한다(StudioScreen).
    */
   playback?: EditorPlayback;
+  /**
+   * 재생할 실제 소스. 없으면 시안 1d-a 목업 값으로 화면을 채운다.
+   * 있으면 길이·라벨·구간·트랙(영상 + 오디오)이 여기서 나온다.
+   */
+  source?: EditorMediaSource | undefined;
+  /** trackId → 파형. 늦게 와도 되고, 없으면 레인이 자리 표시자로 남는다 */
+  peaks?: ReadonlyMap<number, AudioPeaks> | undefined;
 }
 
 export interface ClipEditorMockState {
@@ -405,19 +432,26 @@ export interface ClipEditorMockState {
 const SPEED_OPTIONS = [0.5, 1, 1.5, 2] as const;
 
 export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEditorMockState {
-  const { initialSubtitleStatus = 'ready' } = options;
+  const { initialSubtitleStatus = 'ready', source } = options;
   const { toast } = useToast();
 
+  // 소스가 있으면 그 길이 안에 구간을 잡는다. 목업 구간(1:22:08~)은 5043초짜리 가짜 방송의
+  // 좌표라 10분짜리 로컬 파일에 그대로 쓰면 핸들이 소스 밖에 놓인다.
+  const durationSeconds = source?.durationSeconds ?? MOCK_SOURCE.durationSeconds;
+  const [startRange] = useState<ClipRange>(() =>
+    source === undefined ? MOCK_SOURCE.range : initialRangeForSource(source.durationSeconds),
+  );
+
   const [history, setHistory] = useState<History<EditorRecipe>>(() =>
-    createHistory(initialRecipe()),
+    createHistory(initialRecipe(startRange)),
   );
   const recipe = history.present;
 
   // 재생은 어댑터가 맡는다. 주입이 없으면 목업 시뮬레이션 — 훅은 늘 호출하고(조건부 호출 금지)
   // 쓸 쪽만 고른다. 안 쓰이는 쪽은 playing=false 라 타이머도 걸지 않는다.
   const simulation = useEditorPlaybackSimulation({
-    durationSeconds: MOCK_SOURCE.durationSeconds,
-    initialSeconds: MOCK_SOURCE.playheadSeconds,
+    durationSeconds,
+    initialSeconds: source === undefined ? MOCK_SOURCE.playheadSeconds : startRange.startSeconds,
   });
   const playback = options.playback ?? simulation;
   const { playing, currentSeconds: playheadSeconds } = playback;
@@ -558,15 +592,45 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     return { status: 'idle', estimateLabel: '약 20초' };
   }, [subtitleStatus]);
 
+  // 목업 장식 트랙(BGM·효과음·이미지)의 클립은 가짜 방송 좌표에 찍혀 있다. 소스가 오면
+  // 구간이 옮겨간 만큼 함께 옮겨야 타임라인 창 안에 남는다 — 안 옮기면 클립이 전부 창 밖이다.
+  const clipShiftSeconds = source === undefined ? 0 : startRange.startSeconds - MOCK_SOURCE.range.startSeconds;
+
+  // 소스가 있으면 영상·오디오 줄은 소스가 정한다(E2 — 존재하는 트랙만 온다).
+  // BGM·효과음·이미지는 편집기가 얹는 자산이지 소스 트랙이 아니라 목업 그대로 남는다.
+  const baseTracks = useMemo<readonly EditorTrack[]>(() => {
+    if (source === undefined) return MOCK_TRACKS;
+    const decorations = MOCK_TRACKS.filter((track) =>
+      (['bgm', 'sfx', 'image'] as const).some((kind) => kind === track.kind),
+    );
+    return [
+      { ...MOCK_TRACKS[0], filmstrip: source.filmstrip } as EditorTrack,
+      ...source.audioTracks.map<EditorTrack>((track) => ({
+        id: `audio-${track.trackId}`,
+        kind: 'mix',
+        label: track.label,
+        volume: 100,
+        muted: false,
+        clips: [],
+        peaks: options.peaks?.get(track.trackId),
+      })),
+      ...decorations,
+    ];
+  }, [source, options.peaks]);
+
   const tracks = useMemo(
     () =>
-      MOCK_TRACKS.map((track) => ({
+      baseTracks.map((track) => ({
         ...track,
         volume: track.volume === null ? null : (recipe.trackVolumes[track.id] ?? track.volume),
         muted: recipe.trackMuted[track.id] ?? false,
-        clips: [...track.clips],
+        clips: track.clips.map((clip) => ({
+          ...clip,
+          startSeconds: clip.startSeconds + clipShiftSeconds,
+          endSeconds: clip.endSeconds + clipShiftSeconds,
+        })),
       })),
-    [recipe.trackVolumes, recipe.trackMuted],
+    [baseTracks, recipe.trackVolumes, recipe.trackMuted, clipShiftSeconds],
   );
 
   const liveView = useMemo(
@@ -590,7 +654,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
 
   return {
     clipTitle: MOCK_SOURCE.clipTitle,
-    sourceLabel: MOCK_SOURCE.sourceLabel,
+    sourceLabel: source?.label ?? MOCK_SOURCE.sourceLabel,
     autosaveLabel: MOCK_SOURCE.autosaveLabel,
     canUndo: historyCanUndo(history),
     canRedo: historyCanRedo(history),
@@ -671,10 +735,14 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     ),
     // 자리바꿈은 상하분할에서만 뜻이 있다 — 단일 소스 모드까지 새면
     // 9:16을 골랐을 때 게임 화면 대신 캠이 뜬다
-    sources:
-      recipe.layout === 'split' && recipe.sourcesSwapped
-        ? [...MOCK_SOURCES].reverse()
-        : MOCK_SOURCES,
+    // 자리바꿈은 상하분할에서만 뜻이 있다. media 표식이 pane 객체에 붙어 있어 영상도 함께 옮겨간다.
+    sources: useMemo(() => {
+      const panes =
+        source === undefined
+          ? MOCK_SOURCES
+          : MOCK_SOURCES.map((pane, index) => (index === 0 ? { ...pane, media: true } : pane));
+      return recipe.layout === 'split' && recipe.sourcesSwapped ? [...panes].reverse() : panes;
+    }, [source, recipe.layout, recipe.sourcesSwapped]),
     sourcesSwapped: recipe.sourcesSwapped,
     swapSources: useCallback(
       () => commit((current) => ({ ...current, sourcesSwapped: !current.sourcesSwapped })),

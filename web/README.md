@@ -84,7 +84,7 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `/clips/library`                                                                                          | 보관함 목업 (시안 1g) — 9:16 편집본 그리드 · 상세 패널 액션 7종 · 시점은 훅 값        |
 | `/clips/approvals`                                                                                        | 승인 대기함 자리 — 빈 화면 (심사 큐는 시안 1j 별도 티켓)                              |
 | `/clips/editor`                                                                                           | 클립 편집기 진입 — 기본 모드로 리다이렉트 (간편/정밀 설정은 이후 티켓)                |
-| `/clips/editor/studio`                                                                                    | 클립 편집기 스튜디오형 목업 (시안 1d-a) — `(fullscreen)` 그룹, 독 없음                |
+| `/clips/editor/studio`                                                                                    | 클립 편집기 스튜디오형 (시안 1d-a) — `(fullscreen)` 그룹, 독 없음. 소스 env가 있으면 실재생 |
 | `/settings`                                                                                               | `/settings/plugin` 리다이렉트 — 설정 그룹도 좌측 `Side`를 갖는다                      |
 | `/settings/channels` `/settings/editors` `/settings/plugin` `/settings/notifications` `/settings/account` | 채널 연동 · 편집자 관리 · 플러그인 · 알림 설정 · 계정 (구독·결제, 도움말은 별도 티켓) |
 | `/goodbye`                                                                                                | 탈퇴 완료 안내 (셸 없음) — 토큰이 빈 직후라 `(dock)` 안에서는 못 뜬다                 |
@@ -111,6 +111,7 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID`    | 구글 OAuth 클라이언트 ID | 로그인 동의 URL 조립 — 백엔드 `GOOGLE_CLIENT_ID`와 같은 값                      |
 | `NEXT_PUBLIC_MEDIA_STUB_URL`      | 스텁 m3u8 주소           | 플레이어 개발용 정적 세그먼트 ([`infra/compose/stub/`](../infra/compose/stub/)) |
 | `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL` | LL-HLS 베이스            | 진짜 미디어 서버 (`{base}/{streamId}/index.m3u8`)                               |
+| `NEXT_PUBLIC_EDITOR_SOURCE_URL`   | 편집기 소스 `source.json` | 클립 편집기 미리보기 실재생 — 비면 목업 (아래 「편집기 로컬 소스」)             |
 
 서버 주소는 **코드에 하드코딩하지 않는다** — env 참조만. env가 없으면 해당 rewrites가
 아예 걸리지 않으므로 백엔드 없이도 **기동·빌드는 된다**. 다만 env가 있는데 백엔드가 안
@@ -146,6 +147,30 @@ LL-HLS 플레이어는 **catch-up을 꺼야 한다.** 켜져 있으면 되감기
 자기 마음대로 라이브 끝으로 점프한다.
 
 재생 규약의 정본은 [`contracts/`](../contracts/) 계약3이다.
+
+## 편집기 로컬 소스
+
+서버가 아직 영상 바이트를 내려주지 않는다(POK-122 미착수). 그동안 클립 편집기는 **로컬에서 만든
+HLS 소스**로 실재생을 돌린다 — 목업 화면과 실연동 사이의 발판이다.
+
+```bash
+cd ../infra/compose/stub
+./gen-editor-source.sh ~/Downloads/녹화.mov --start 00:20:00 --duration 00:10:00
+docker compose -f ../../../docker-compose.yml up -d media-stub
+# web/.env.local 에 NEXT_PUBLIC_EDITOR_SOURCE_URL 을 채우고 dev 재시작
+```
+
+- **계약**: `source.json`(사이드카)이 재생목록·필름스트립 스프라이트·파형 피크의 자리를 알려 준다.
+  모든 경로는 **사이드카 자신을 기준으로 한 상대 경로**다 — 호스트가 바뀌어도 그대로 쓴다.
+  판(`schema`)이 다르면 화면은 거부한다. 모양은 `features/clips/editor/editorSource.ts`가 정본이다.
+- **시간축**: 로컬 소스의 편집기 시간축은 **파일 로컬 초**(0 ~ 길이)다. 계약6의 방송 절대축
+  (UTC epoch ms)은 `sourceStartAtMs`로 보관만 하고 아직 쓰지 않는다 — 레시피 조립 티켓 몫이다.
+- **갈아끼울 자리**: 서버 API가 열리면 `useEditorSource.ts`의 `fetch` 두 곳만 `api/` 쪽 함수로
+  바꾼다. 화면·상태 허브는 소스가 어디서 왔는지 모른다.
+- env가 비면 편집기는 지금처럼 목업으로 뜬다. 화면 작업에는 소스가 필요 없다.
+
+⚠️ 라이브 플레이어의 `HLS_DVR_CONFIG`를 편집기에 쓰지 마라 — `backBufferLength`가 3700초라
+10분(≈460MB) 소스에서 브라우저 버퍼 예산을 넘겨 재생이 튄다. 편집기용은 `editorHlsConfig.ts`다.
 
 ## 편집자가 하는 일의 본질
 

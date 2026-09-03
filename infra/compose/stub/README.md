@@ -39,6 +39,33 @@ docker run --rm -v "${PWD}/data/live/stub:/out" linuxserver/ffmpeg `
 
 (옵션은 `gen-segments.sh`와 동일 — 스크립트 수정 시 여기도 맞출 것)
 
+## 편집기용 로컬 소스 (클립 편집기 개발용)
+
+클립 편집기(시안 `1d-a`)의 미리보기를 실제 영상으로 돌리기 위한 소스다. 서버가 영상 바이트를
+내려주기 전(POK-122)까지 재생 배선을 먼저 끝내려고 둔다.
+
+```bash
+./gen-editor-source.sh ~/Downloads/녹화.mov --start 00:20:00 --duration 00:10:00
+docker compose restart media-stub   # nginx.conf 의 MIME 목록이 바뀌었을 때
+curl -s http://localhost:8080/live/editor-sample/source.json
+```
+
+- 재생 URL: `http://localhost:8080/live/editor-sample/index.m3u8`
+- 사이드카: 같은 폴더의 `source.json` — 재생목록·필름스트립·파형의 자리를 알려 준다.
+  `web/.env.local` 의 `NEXT_PUBLIC_EDITOR_SOURCE_URL` 에 이 주소를 넣는다.
+- 구조: **영상 렌디션 + 오디오 렌디션 + 마스터**(POK-168 확정 서빙 형태). 오디오 트랙을 골라
+  클립을 만들려면 합본이 아니라 분리여야 한다.
+- 파일명이 `chunks.m3u8` 이 아니라 `video.m3u8`·`audio0.m3u8` 인 이유: ffmpeg 의 `%v` 는
+  파일명이나 마지막 디렉터리명 중 한 곳에만 올 수 있고, 디렉터리에 두면 `-master_pl_name` 이
+  리터럴 `%v` 폴더로 떨어질 수 있다.
+- 실측(10분 1080p60): 약 3초 · 443MB · 파일 311개. 영상은 **무손실 복사**다 —
+  OBS 녹화의 키프레임 간격이 2초라 다시 인코딩할 이유가 없다. 안 맞으면 스크립트가 멈추고
+  `--reencode` 를 권한다.
+- **원본 영상을 리포 안으로 복사하지 마라.** gitignore 가 덮는 것은 `data/` 뿐이다.
+
+Windows 는 **WSL2** 에서 실행한다(`sudo apt install -y ffmpeg nodejs`). 이 스크립트는 임의 경로의
+로컬 파일을 입력으로 받고 ffmpeg 와 node 를 파이프로 잇기 때문에 컨테이너 1줄 명령으로 못 옮긴다.
+
 ## 한계 (정적이라서)
 
 - **라이브 long-poll·블로킹 리로드·`EXT-X-PART` 없음** — VOD형 플레이리스트다. 플레이어 뼈대·DVR 시킹 UI·트랙 구조 개발용.
