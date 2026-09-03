@@ -1,6 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
 import { TransportBar } from '../TransportBar';
@@ -117,6 +125,7 @@ function HlsStudioScreen({
     <StudioScreenBody
       options={{ ...options, playback, source, peaks }}
       videoNode={<video ref={videoRef} playsInline preload="metadata" />}
+      videoRef={videoRef}
     />
   );
 }
@@ -124,9 +133,12 @@ function HlsStudioScreen({
 function StudioScreenBody({
   options,
   videoNode = null,
+  videoRef,
 }: {
   options: ClipEditorOptions;
   videoNode?: ReactNode;
+  /** 결과 미리보기가 이 영상에서 잘라 그린다 */
+  videoRef?: RefObject<HTMLVideoElement | null>;
 }) {
   const state = useClipEditorMockState(options);
   const { togglePlay, seekBy, markIn, markOut, undo, redo } = state;
@@ -235,7 +247,7 @@ function StudioScreenBody({
         />
         <ToolPanel state={state} />
         <div className={styles.previewColumn} ref={previewColumnRef}>
-          <PreviewCanvas state={state} videoNode={videoNode} />
+          <PreviewCanvas state={state} videoNode={videoNode} videoRef={videoRef} />
           <TransportBar state={state} showRangeLength />
         </div>
       </main>

@@ -165,9 +165,9 @@ describe('StudioScreen', () => {
     const user = userEvent.setup();
     renderStudio();
 
-    expect(screen.getByText('미리보기 · 자막 번인+CC · 1× 배속')).toBeInTheDocument();
+    expect(screen.getByText('자막 번인+CC · 1× 배속')).toBeInTheDocument();
     await user.click(screen.getByRole('radio', { name: '2×' }));
-    expect(screen.getByText('미리보기 · 자막 번인+CC · 2× 배속')).toBeInTheDocument();
+    expect(screen.getByText('자막 번인+CC · 2× 배속')).toBeInTheDocument();
 
     await user.click(screen.getByRole('radio', { name: '9:16' }));
     expect(screen.getByRole('radio', { name: '9:16' })).toBeChecked();
@@ -429,52 +429,73 @@ describe('StudioScreen — 로컬 소스', () => {
   });
 });
 
-describe('StudioScreen — 크롭 위치 드래그 (E5)', () => {
-  it('영상 칸이 크롭 조작판이 되고 키보드로도 움직인다', async () => {
-    const user = userEvent.setup();
+describe('StudioScreen — 크롭 영역 (E5)', () => {
+  it('소스 위에 잡을 영역과 모서리 네 개가 선다', () => {
     renderWithSource();
 
-    const surface = screen.getByRole('slider', { name: /크롭 위치/ });
-    expect(surface).toHaveAttribute('aria-orientation', 'horizontal');
-    expect(surface).toHaveAttribute('aria-valuenow', '50');
-
-    surface.focus();
-    await user.keyboard('{ArrowRight}');
-
-    // 오른쪽으로 한 걸음 = 소스의 오른쪽을 더 본다
-    expect(Number(surface.getAttribute('aria-valuenow'))).toBeGreaterThan(50);
+    expect(screen.getByRole('region', { name: '클립 만들기' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '클립 미리보기' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /소스 1 · 게임 잡을 영역/ })).toBeInTheDocument();
+    for (const corner of ['왼쪽 위', '오른쪽 위', '왼쪽 아래', '오른쪽 아래']) {
+      expect(
+        screen.getByRole('button', { name: `소스 1 · 게임 ${corner} 모서리` }),
+      ).toBeInTheDocument();
+    }
   });
 
-  it('왼쪽 끝·오른쪽 끝을 넘어가지 않는다', async () => {
-    const user = userEvent.setup();
+  it('상하분할은 한 소스에 사각형 두 개를 얹는다', () => {
     renderWithSource();
-    const surface = screen.getByRole('slider', { name: /크롭 위치/ });
-    surface.focus();
 
-    for (let i = 0; i < 200; i += 1) await user.keyboard('{ArrowLeft}');
-    expect(surface).toHaveAttribute('aria-valuenow', '0');
-
-    for (let i = 0; i < 400; i += 1) await user.keyboard('{ArrowRight}');
-    expect(surface).toHaveAttribute('aria-valuenow', '100');
+    expect(screen.getByRole('button', { name: /소스 1 · 게임 잡을 영역/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /소스 2 · 캠 잡을 영역/ })).toBeInTheDocument();
   });
 
-  it('크롭을 옮긴 뒤 실행취소로 되돌린다', async () => {
+  it('사각형을 방향키로 옮긴다', async () => {
     const user = userEvent.setup();
     renderWithSource();
-    const surface = screen.getByRole('slider', { name: /크롭 위치/ });
-    surface.focus();
+    const body = screen.getByRole('button', { name: /소스 1 · 게임 잡을 영역/ });
+
+    const before = body.parentElement?.getAttribute('style');
+    body.focus();
     await user.keyboard('{ArrowRight}');
-    const moved = surface.getAttribute('aria-valuenow');
+
+    expect(body.parentElement?.getAttribute('style')).not.toBe(before);
+  });
+
+  it('모서리 방향키가 범위를 넓히고 좁힌다', async () => {
+    const user = userEvent.setup();
+    renderWithSource();
+    const handle = screen.getByRole('button', { name: '소스 1 · 게임 오른쪽 아래 모서리' });
+    const rect = () => handle.parentElement?.style.width ?? '';
+
+    handle.focus();
+    const before = rect();
+    await user.keyboard('{ArrowRight}');
+    const grown = rect();
+    expect(Number.parseFloat(grown)).toBeGreaterThan(Number.parseFloat(before));
+
+    await user.keyboard('{ArrowLeft}');
+    expect(Number.parseFloat(rect())).toBeLessThan(Number.parseFloat(grown));
+  });
+
+  it('옮긴 뒤 실행취소로 되돌린다', async () => {
+    const user = userEvent.setup();
+    renderWithSource();
+    const body = screen.getByRole('button', { name: /소스 1 · 게임 잡을 영역/ });
+    const rect = () => body.parentElement?.getAttribute('style');
+
+    const before = rect();
+    body.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(rect()).not.toBe(before);
 
     await user.click(screen.getByRole('button', { name: '작업 이전으로' }));
-
-    expect(surface.getAttribute('aria-valuenow')).not.toBe(moved);
-    expect(surface).toHaveAttribute('aria-valuenow', '50');
+    expect(rect()).toBe(before);
   });
 
-  it('소스가 없으면 조작판이 없다 — 잘라낼 그림이 없다', () => {
+  it('소스가 없으면 사각형이 없다 — 잘라낼 그림이 없다', () => {
     renderStudio();
-    expect(screen.queryByRole('slider', { name: /크롭 위치/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /잡을 영역/ })).not.toBeInTheDocument();
   });
 
   it('접근성 위반이 없다', async () => {

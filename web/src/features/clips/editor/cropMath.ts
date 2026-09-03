@@ -1,14 +1,14 @@
-// 미리보기 크롭 좌표의 계산 (POK-109).
+// 크롭 영역의 계산 (POK-109).
 //
-// 소스는 가로(16:9)인데 내보내는 것은 세로(9:16)나 정사각이다. 그래서 소스의 **어느 부분**을
-// 쓸지 골라야 하고, 그 선택이 계약6 `outputs[].crop` 으로 저장된다.
+// 편집자는 **소스 전체를 보면서 그 위의 사각형을 잡는다**. 사각형을 끌면 위치가, 모서리를 끌면
+// 범위가 바뀌고, 그 사각형이 곧 계약6 `outputs[].crop` 이다.
 //
 // 값의 정본은 계약6 2절이다:
 //  · 정규화 좌표 — x,y ∈ [0,1) · w,h ≥ 0.05 · x+w ≤ 1 · y+h ≤ 1
 //  · 종횡비 일치는 **픽셀 기준**이다: (w × srcW) / (h × srcH) 가 목표 비율과 ±1% 이내.
 //    정규화 값끼리의 비가 아니다 — 소스가 정사각이 아니면 둘이 다르다.
 //  · ±1% 잔차는 렌더가 중심 유지 축소로 흡수하지만, **흡수가 일어나지 않게 맞추는 것까지가 UI 몫**이다.
-//    그래서 여기서는 목표 비율을 정확히 만족하는 크기를 계산한다(오차 0).
+//    그래서 사각형은 늘 목표 비율에 묶여 있다 — 모서리를 끌어도 비율은 안 바뀌고 크기만 바뀐다.
 //
 // 컴포넌트에서 분리한 이유는 늘 같다 — jsdom 엔 레이아웃이 없어 드래그를 렌더 테스트로 못 재는데,
 // 환산과 경계는 표로 검증할 수 있다 (timelineMath·playerMath 와 같은 결).
@@ -23,24 +23,42 @@ export interface CropRect {
   h: number;
 }
 
-/**
- * 사용자가 드래그로 옮기는 값 — 크롭 창의 **중심**(0..1).
- *
- * 왼쪽 위 모서리가 아니라 중심을 저장하는 이유: 비율을 9:16 ↔ 1:1 로 바꾸면 창 크기가 달라지는데,
- * 모서리를 저장해 두면 넓은 쪽으로 바꿀 때 프레이밍이 한쪽으로 밀린다. 중심은 그대로 남는다.
- */
 export interface CropCenter {
   x: number;
   y: number;
 }
 
-export const DEFAULT_CROP_CENTER: CropCenter = { x: 0.5, y: 0.5 };
+/**
+ * 사용자가 잡는 값.
+ *
+ * 사각형을 `{x,y,w,h}` 로 바로 담지 않는 이유: 비율을 9:16 ↔ 1:1 로 바꾸면 같은 사각형이
+ * 비율 규칙을 어기게 된다. **중심과 확대율**로 담아 두면 비율이 바뀔 때 규칙에 맞는 사각형을
+ * 다시 만들 수 있고, 보고 있던 자리와 얼마나 당겨 봤는지는 그대로 남는다.
+ */
+export interface CropWindow {
+  center: CropCenter;
+  /** 그 비율로 잡을 수 있는 최대 사각형 대비 크기. 1 = 최대(가장 넓게), 작을수록 확대 */
+  zoom: number;
+}
 
 /** 계약6 2절 — 극소 crop 의 무의미한 확대를 막는 하한 */
 export const MIN_CROP_SIZE = 0.05;
 
-/** 키보드 한 걸음 — 소스 폭의 1% */
+/** 키보드 한 걸음 — 소스 기준 1% */
 export const CROP_KEY_STEP = 0.01;
+/** 모서리 키보드 한 걸음 — 확대율 5% */
+export const CROP_ZOOM_STEP = 0.05;
+
+export type CropCorner = 'nw' | 'ne' | 'sw' | 'se';
+export const CROP_CORNERS: readonly CropCorner[] = ['nw', 'ne', 'sw', 'se'];
+
+/** 모서리 이름 — 화면이 읽어 줄 말 */
+export const CROP_CORNER_LABELS: Readonly<Record<CropCorner, string>> = {
+  nw: '왼쪽 위',
+  ne: '오른쪽 위',
+  sw: '왼쪽 아래',
+  se: '오른쪽 아래',
+};
 
 function clamp(value: number, min: number, max: number): number {
   // min > max 인 경우(창이 소스보다 크다)는 min 을 준다 — 잘라낼 여유가 없다는 뜻이다
@@ -50,9 +68,8 @@ function clamp(value: number, min: number, max: number): number {
 /**
  * 미리보기 한 칸의 목표 비율(가로/세로).
  *
- * 프레임은 9:16(또는 1:1)이고, 상하분할이면 그 프레임을 splitRatio 로 나눠 가진다 —
- * 그래서 칸의 비율은 프레임 비율을 세로 지분으로 나눈 값이다.
- * (CSS 의 `.frame[data-layout]` 과 `flex` 지분이 정본이고, 여기는 그 사본이다.)
+ * 내보내는 화면은 9:16(또는 1:1)이고, 상하분할이면 그 화면을 splitRatio 로 나눠 가진다 —
+ * 그래서 칸의 비율은 화면 비율을 세로 지분으로 나눈 값이다.
  */
 export function paneAspect(layout: EditorLayout, splitRatio: number, paneIndex: number): number {
   if (layout === '1:1') return 1;
@@ -65,12 +82,12 @@ export function paneAspect(layout: EditorLayout, splitRatio: number, paneIndex: 
 }
 
 /**
- * 목표 비율을 소스에서 잘라낼 때의 창 크기(정규화).
+ * 그 비율로 소스에서 잘라낼 수 있는 **가장 큰** 사각형(정규화).
  *
  * 목표가 소스보다 홀쭉하면 세로를 다 쓰고 가로를 자른다(우리 화면 전부가 이 경우다).
  * 반대면 그 반대 — 나중에 가로 소스가 아닌 것이 와도 식이 성립한다.
  */
-export function cropSizeFor(
+export function maxCropSize(
   targetAspect: number,
   sourceWidth: number,
   sourceHeight: number,
@@ -78,77 +95,152 @@ export function cropSizeFor(
   if (!(targetAspect > 0) || !(sourceWidth > 0) || !(sourceHeight > 0)) return { w: 1, h: 1 };
   // h = 1 로 두고 픽셀 종횡비를 맞춘다: (w·W)/(1·H) = target
   const w = (targetAspect * sourceHeight) / sourceWidth;
-  if (w <= 1) return { w: Math.max(MIN_CROP_SIZE, w), h: 1 };
+  if (w <= 1) return { w, h: 1 };
   // 가로가 모자라면 가로를 다 쓰고 세로를 자른다
-  const h = sourceWidth / (targetAspect * sourceHeight);
-  return { w: 1, h: Math.max(MIN_CROP_SIZE, Math.min(1, h)) };
+  return { w: 1, h: sourceWidth / (targetAspect * sourceHeight) };
 }
 
-/** 중심 + 창 크기 → 계약6 crop. 소스 밖으로 나가지 않게 자른다 */
-export function cropRectOf(center: CropCenter, size: { w: number; h: number }): CropRect {
-  const { w, h } = size;
+/** 계약6 하한(0.05)을 지키는 최소 확대율. 최대 사각형이 작을수록 더 못 줄인다 */
+export function minZoomOf(maxSize: { w: number; h: number }): number {
+  const byWidth = maxSize.w > 0 ? MIN_CROP_SIZE / maxSize.w : 1;
+  const byHeight = maxSize.h > 0 ? MIN_CROP_SIZE / maxSize.h : 1;
+  return Math.min(1, Math.max(byWidth, byHeight));
+}
+
+/** 확대율을 적용한 사각형 크기 */
+export function cropSizeOf(maxSize: { w: number; h: number }, zoom: number): { w: number; h: number } {
+  const z = clamp(zoom, minZoomOf(maxSize), 1);
+  return { w: maxSize.w * z, h: maxSize.h * z };
+}
+
+/** 창 + 최대 크기 → 계약6 crop. 소스 밖으로 나가지 않게 자른다 */
+export function cropRectOf(window: CropWindow, maxSize: { w: number; h: number }): CropRect {
+  const { w, h } = cropSizeOf(maxSize, window.zoom);
   return {
-    x: clamp(center.x - w / 2, 0, 1 - w),
-    y: clamp(center.y - h / 2, 0, 1 - h),
+    x: clamp(window.center.x - w / 2, 0, 1 - w),
+    y: clamp(window.center.y - h / 2, 0, 1 - h),
     w,
     h,
   };
 }
 
 /**
- * 중심을 옮긴다. 창이 소스 밖으로 나가지 않는 범위로 중심 자체를 가둔다 —
+ * 사각형을 옮긴다. 소스 밖으로 나가지 않는 범위로 중심 자체를 가둔다 —
  * 사각형만 자르면 가장자리에서 계속 끌 때 중심이 저 멀리 쌓여, 되돌아올 때 그만큼 헛돈다.
  */
-export function moveCropCenter(
-  center: CropCenter,
+export function moveCropWindow(
+  window: CropWindow,
   delta: { x: number; y: number },
-  size: { w: number; h: number },
-): CropCenter {
+  maxSize: { w: number; h: number },
+): CropWindow {
+  const { w, h } = cropSizeOf(maxSize, window.zoom);
   return {
-    x: clamp(center.x + delta.x, size.w / 2, 1 - size.w / 2),
-    y: clamp(center.y + delta.y, size.h / 2, 1 - size.h / 2),
+    zoom: window.zoom,
+    center: {
+      x: clamp(window.center.x + delta.x, w / 2, 1 - w / 2),
+      y: clamp(window.center.y + delta.y, h / 2, 1 - h / 2),
+    },
+  };
+}
+
+/** 확대율만 바꾼다 — 중심은 그대로 두되 소스 밖으로 나가면 끌어들인다 */
+export function zoomCropWindow(
+  window: CropWindow,
+  nextZoom: number,
+  maxSize: { w: number; h: number },
+): CropWindow {
+  const zoom = clamp(nextZoom, minZoomOf(maxSize), 1);
+  return moveCropWindow({ center: window.center, zoom }, { x: 0, y: 0 }, maxSize);
+}
+
+/** 어느 모서리를 잡았을 때 고정되는 반대편 모서리의 좌표 */
+function anchorOf(rect: CropRect, corner: CropCorner): { x: number; y: number } {
+  return {
+    x: corner === 'nw' || corner === 'sw' ? rect.x + rect.w : rect.x,
+    y: corner === 'nw' || corner === 'ne' ? rect.y + rect.h : rect.y,
   };
 }
 
 /**
- * 포인터가 움직인 픽셀 → 중심이 움직일 정규화 값.
+ * 모서리를 끌어 범위를 바꾼다. **반대편 모서리를 못 박고** 비율은 유지한다 —
+ * 비율이 흔들리면 계약6의 종횡비 검증에 걸려 렌더가 거부한다.
  *
- * 부호가 뒤집힌다: 오른쪽으로 끌면 영상이 오른쪽으로 따라오고, 그것은 크롭 창이 **왼쪽**으로
- * 간다는 뜻이다. 칸의 폭이 소스의 `w` 만큼을 보여주므로 1px 은 `w/칸폭` 만큼의 소스다.
+ * `pointer` 는 소스 안의 정규화 좌표다(0..1). 두 축 중 더 많이 끈 쪽을 따라간다 —
+ * 비율이 묶여 있어 한 축만 봐도 되지만, 그러면 세로로 끄는 손짓에 반응하지 않는다.
  */
-export function cropCenterDelta(
-  pointerDelta: { x: number; y: number },
-  paneSize: { width: number; height: number },
-  size: { w: number; h: number },
+export function resizeCropWindow(
+  window: CropWindow,
+  corner: CropCorner,
+  pointer: { x: number; y: number },
+  maxSize: { w: number; h: number },
+): CropWindow {
+  const rect = cropRectOf(window, maxSize);
+  const anchor = anchorOf(rect, corner);
+  if (!(maxSize.w > 0) || !(maxSize.h > 0)) return window;
+
+  const west = corner === 'nw' || corner === 'sw';
+  const north = corner === 'nw' || corner === 'ne';
+  // **부호를 살려서** 잰다. 절댓값으로 재면 고정점을 지나쳐 끌었을 때 반대 방향 거리를 크기로
+  // 오해해서, 작게 만들려고 끌었는데 되레 커진다.
+  const reachX = west ? anchor.x - pointer.x : pointer.x - anchor.x;
+  const reachY = north ? anchor.y - pointer.y : pointer.y - anchor.y;
+  const wanted = Math.max(
+    Math.max(0, reachX) / maxSize.w,
+    Math.max(0, reachY) / maxSize.h,
+  );
+  // 고정한 모서리에서 소스 경계까지 남은 만큼이 상한이다 — 그래야 고정점이 안 움직인다
+  const availableX = west ? anchor.x : 1 - anchor.x;
+  const availableY = north ? anchor.y : 1 - anchor.y;
+  const ceiling = Math.min(1, availableX / maxSize.w, availableY / maxSize.h);
+  const floor = minZoomOf(maxSize);
+  const zoom = clamp(wanted, floor, Math.max(floor, ceiling));
+
+  const { w, h } = cropSizeOf(maxSize, zoom);
+  return {
+    zoom,
+    center: {
+      x: west ? anchor.x - w / 2 : anchor.x + w / 2,
+      y: north ? anchor.y - h / 2 : anchor.y + h / 2,
+    },
+  };
+}
+
+/** 소스 판 안의 픽셀 좌표 → 정규화 좌표 */
+export function normalizePointer(
+  clientPoint: { x: number; y: number },
+  panel: { left: number; top: number; width: number; height: number },
 ): { x: number; y: number } {
   return {
-    x: paneSize.width > 0 ? (-pointerDelta.x / paneSize.width) * size.w : 0,
-    y: paneSize.height > 0 ? (-pointerDelta.y / paneSize.height) * size.h : 0,
+    x: panel.width > 0 ? clamp((clientPoint.x - panel.left) / panel.width, 0, 1) : 0.5,
+    y: panel.height > 0 ? clamp((clientPoint.y - panel.top) / panel.height, 0, 1) : 0.5,
   };
 }
 
 /**
- * 크롭을 CSS `object-position` 으로. `object-fit: cover` 가 넘치게 그린 뒤 이 값이 어디를 보여줄지 정한다.
+ * 소스 판에서 끈 픽셀 → 정규화 이동량.
  *
- * 백분율의 뜻이 「넘친 양 중 얼마나 왼쪽을 자를까」라서, 남는 여유(1-w)에 대한 x 의 비율이 그대로 답이다.
- * 여유가 없으면(창이 소스 전체) 가운데로 둔다 — 0으로 나누지 않기 위해서이기도 하다.
+ * 소스를 통째로 보여주는 판이라 환산이 1:1이다 — 사각형이 손을 그대로 따라온다.
+ * (영상을 끄는 방식이었을 때는 부호가 뒤집히고 확대율이 끼었다.)
  */
-export function cropObjectPosition(rect: CropRect): { x: number; y: number } {
-  const freeX = 1 - rect.w;
-  const freeY = 1 - rect.h;
+export function pointerDeltaToCrop(
+  pointerDelta: { x: number; y: number },
+  panelSize: { width: number; height: number },
+): { x: number; y: number } {
   return {
-    x: freeX > 0 ? (rect.x / freeX) * 100 : 50,
-    y: freeY > 0 ? (rect.y / freeY) * 100 : 50,
+    x: panelSize.width > 0 ? pointerDelta.x / panelSize.width : 0,
+    y: panelSize.height > 0 ? pointerDelta.y / panelSize.height : 0,
   };
 }
 
-/** 이 칸에서 실제로 움직일 수 있는 축. 둘 다 여유가 없으면 null(조작할 것이 없다) */
-export function cropFreeAxis(size: { w: number; h: number }): 'x' | 'y' | null {
-  const freeX = 1 - size.w;
-  const freeY = 1 - size.h;
-  // 부동소수 잡음(0.9999…)을 여유로 오해하지 않도록 눈에 보일 만한 값부터 센다
-  const meaningful = 0.001;
-  if (freeX > meaningful && freeX >= freeY) return 'x';
-  if (freeY > meaningful) return 'y';
-  return null;
+/**
+ * 처음 열었을 때의 사각형.
+ *
+ * 상하분할은 위·아래 두 영역을 **같은 소스에서** 잡는다(게임 화면과 캠이 한 화면에 합성돼 온다).
+ * 그래서 기본값을 위·아래로 갈라 둔다 — 둘 다 한가운데면 완전히 겹쳐서 뭘 잡은 건지 안 보인다.
+ */
+export function defaultCropWindow(layout: EditorLayout, paneIndex: number): CropWindow {
+  if (layout !== 'split') return { center: { x: 0.5, y: 0.5 }, zoom: 1 };
+  return paneIndex === 0
+    ? { center: { x: 0.5, y: 0.25 }, zoom: 0.5 }
+    : { center: { x: 0.5, y: 0.75 }, zoom: 0.5 };
 }
