@@ -41,3 +41,4 @@ linters:
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
+# media-ci 실측 C5 임시 주석 — 확인 후 PR close·브랜치 삭제 (2026-09-04)
