@@ -2,7 +2,14 @@
 
 import clsx from 'clsx';
 import { Badge } from '@/ui';
-import { STATUS_BADGE, cardName, durationLabel, isCardDimmed, ownerInitial } from './libraryView';
+import {
+  STATUS_BADGE,
+  cardName,
+  displayTitle,
+  durationLabel,
+  isCardDimmed,
+  ownerInitial,
+} from './libraryView';
 import type { ClipStatus, LibraryClip } from './useLibraryMockState';
 import styles from './LibraryScreen.module.css';
 
@@ -54,7 +61,7 @@ export function ClipCard({
           {ownerInitial(clip.owner)}
         </span>
         <span className={styles.cardFoot} aria-hidden="true">
-          <span className={styles.cardTitle}>{clip.title.trim() || '제목 없는 편집본'}</span>
+          <span className={styles.cardTitle}>{displayTitle(clip)}</span>
           {duration ? <span className={styles.cardDuration}>{duration}</span> : null}
         </span>
       </button>

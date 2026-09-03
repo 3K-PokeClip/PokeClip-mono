@@ -341,6 +341,14 @@ export function retentionLabel(dday: VodDday): string {
   }
 }
 
+/**
+ * 화면에 그릴 제목. 빈 제목의 대체 문구를 한 곳에 둔다 — 카드가 그리는 글자와 접근 이름이
+ * 각자 적으면 문구를 고칠 때 보이는 이름과 읽히는 이름이 갈린다.
+ */
+export function displayTitle(clip: LibraryClip): string {
+  return clip.title.trim() || '제목 없는 편집본';
+}
+
 /** 카드 우상단 20u 원 안의 한 글자 — 내 것은 「나」, 남의 것은 이름 첫 글자 */
 export function ownerInitial(owner: LibraryClip['owner']): string {
   if (owner.me) return '나';
@@ -360,9 +368,16 @@ function localDayIndex(date: Date): number {
   return Math.floor((date.getTime() - date.getTimezoneOffset() * 60 * 1000) / DAY_MS);
 }
 
-/** 반려 시각 → 「오늘 14:20」 · 「어제 21:32」 · 「8월 28일 21:32」 */
+/**
+ * 반려 시각 → 「오늘 14:20」 · 「어제 21:32」 · 「8월 28일 21:32」.
+ *
+ * 읽을 수 없는 값은 `—`로 떨어뜨린다 — `Intl.DateTimeFormat.format`은 Invalid Date에
+ * RangeError를 던지므로, 걸러 두지 않으면 서버가 빈 문자열 하나만 보내도 그 카드를 여는 순간
+ * 보관함 전체가 에러 바운더리로 떨어진다(같은 파일 timeOf·remainingMs·durationLabel의 가드).
+ */
 export function dayTimeLabel(iso: string, now: Date): string {
   const at = new Date(iso);
+  if (!Number.isFinite(at.getTime())) return '—';
   const diff = localDayIndex(now) - localDayIndex(at);
   const time = TIME_FORMAT.format(at);
   if (diff === 0) return `오늘 ${time}`;
@@ -376,7 +391,7 @@ export function dayTimeLabel(iso: string, now: Date): string {
  * 이름 여덟 개가 되지 않게 상태와 길이까지 이름에 넣는다(VodRow 선례).
  */
 export function cardName(clip: LibraryClip, status: ClipStatus, duration: string | null): string {
-  const parts = [clip.title.trim() || '제목 없는 편집본', STATUS_BADGE[status].label];
+  const parts = [displayTitle(clip), STATUS_BADGE[status].label];
   if (duration) parts.push(`길이 ${duration}`);
   if (!clip.owner.me) parts.push(`편집자 ${clip.owner.name}`);
   return parts.join(' · ');

@@ -7,6 +7,7 @@ import {
   countByChip,
   dayTimeLabel,
   detailViewFor,
+  displayTitle,
   durationLabel,
   filterByChip,
   filterByQuery,
@@ -369,6 +370,18 @@ describe('libraryView — 표기', () => {
     expect(dayTimeLabel('2026-09-02T14:20:00+09:00', NOW)).toBe('오늘 14:20');
     expect(dayTimeLabel('2026-09-01T21:32:00+09:00', NOW)).toBe('어제 21:32');
     expect(dayTimeLabel('2026-08-28T09:05:00+09:00', NOW)).toBe('8월 28일 09:05');
+  });
+
+  it('읽을 수 없는 시각은 「—」로 떨어진다 — Intl이 RangeError를 던져 화면이 죽지 않게', () => {
+    expect(dayTimeLabel('', NOW)).toBe('—');
+    expect(dayTimeLabel('어제 21:32', NOW)).toBe('—');
+  });
+
+  it('빈 제목의 대체 문구는 한 곳에서 나온다 — 카드 글자와 접근 이름이 같다', () => {
+    const blank = clip({ id: 'a', title: '   ' });
+    expect(displayTitle(blank)).toBe('제목 없는 편집본');
+    expect(cardName(blank, 'ready', null)).toContain(displayTitle(blank));
+    expect(displayTitle(clip({ id: 'b', title: '  보스 막타  ' }))).toBe('보스 막타');
   });
 
   it('카드 이름은 제목 · 상태 · 길이 순이고, 남의 편집본이면 편집자 이름이 붙는다', () => {
