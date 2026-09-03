@@ -160,6 +160,70 @@ class ChatEventDecoderTest {
         assertThat(m.userRole()).isNull();
     }
 
+    /** 후원은 화면에서 하이라이트 신호로 쓰인다. raw는 채팅과 같은 규칙으로 원문 그대로다. */
+    @Test
+    void 후원_이벤트를_푼다() {
+        String inner = "{\"donationType\":\"CHAT\",\"channelId\":\"CH1\",\"donatorChannelId\":\"D1\","
+                + "\"donatorNickname\":\"도네초코\",\"payAmount\":\"5000\",\"donationText\":\"가즈아\"}";
+        DonationEvent d = ChatEventDecoder.decodeDonation("[\"DONATION\"," + quoteAsJson(inner) + "]");
+        assertThat(d.donatorNickname()).isEqualTo("도네초코");
+        assertThat(d.payAmount()).isEqualTo(5000L);
+        assertThat(d.raw()).isEqualTo(inner);
+        assertThat(d.channelId()).isEqualTo("CH1");
+        assertThat(d.donatorChannelId()).isEqualTo("D1");
+        assertThat(d.donationType()).isEqualTo("CHAT");
+        assertThat(d.donationText()).isEqualTo("가즈아");
+    }
+
+    /**
+     * 금액은 문서상 문자열("원")이라 표기가 바뀔 수 있다. 숫자로 못 바꾼다고 후원 자체를
+     * 버리면 <b>하이라이트 신호가 통째로 사라진다</b> — 금액만 null로 두고 이벤트는 살린다.
+     */
+    @Test
+    void 후원_금액이_숫자가_아니면_null이고_이벤트는_버리지_않는다() {
+        String inner = "{\"donationType\":\"VIDEO\",\"channelId\":\"CH1\",\"donatorChannelId\":\"D1\","
+                + "\"donatorNickname\":\"n\",\"payAmount\":\"오천\",\"donationText\":\"\"}";
+        DonationEvent d = ChatEventDecoder.decodeDonation("[\"DONATION\"," + quoteAsJson(inner) + "]");
+        assertThat(d).isNotNull();
+        assertThat(d.payAmount()).isNull();
+        assertThat(d.donationType()).isEqualTo("VIDEO");
+    }
+
+    /** 천 단위 쉼표와 숫자 노드 — 둘 다 실물에서 올 수 있는 모양이고 금액은 살아야 한다. */
+    @Test
+    void 금액이_쉼표나_숫자로_와도_읽는다() {
+        String comma = "{\"channelId\":\"CH1\",\"payAmount\":\"5,000\"}";
+        assertThat(ChatEventDecoder.decodeDonation("[\"DONATION\"," + quoteAsJson(comma) + "]").payAmount())
+                .isEqualTo(5000L);
+        String number = "{\"channelId\":\"CH1\",\"payAmount\":5000}";
+        assertThat(ChatEventDecoder.decodeDonation("[\"DONATION\"," + quoteAsJson(number) + "]").payAmount())
+                .isEqualTo(5000L);
+    }
+
+    /** 금액 칸이 아예 없는 것과 「못 읽었다」를 같게 다룬다 — 둘 다 null이다. */
+    @Test
+    void 금액_칸이_없으면_null이다() {
+        String inner = "{\"channelId\":\"CH1\",\"donatorNickname\":\"n\"}";
+        DonationEvent d = ChatEventDecoder.decodeDonation("[\"DONATION\"," + quoteAsJson(inner) + "]");
+        assertThat(d).isNotNull();
+        assertThat(d.payAmount()).isNull();
+    }
+
+    /** 이름을 안 보면 채팅을 후원으로 세면서 지표가 조용히 갈린다. */
+    @Test
+    void CHAT을_DONATION으로_풀면_null이다() {
+        assertThat(ChatEventDecoder.decodeDonation("[\"CHAT\",\"{}\"]")).isNull();
+    }
+
+    /** 깨진 본문·객체가 아닌 안쪽 — 채팅과 같은 자리에서 걸린다. */
+    @Test
+    void 깨진_후원_본문은_null이다() {
+        assertThat(ChatEventDecoder.decodeDonation("[\"DONATION\",\"{깨짐\"]")).isNull();
+        assertThat(ChatEventDecoder.decodeDonation("[\"DONATION\",\"null\"]")).isNull();
+        assertThat(ChatEventDecoder.decodeDonation("[\"DONATION\",\"[]\"]")).isNull();
+        assertThat(ChatEventDecoder.decodeDonation("완전히 아닌 것")).isNull();
+    }
+
     /** 문자열을 JSON 문자열 리터럴로 — 가짜 서버(FakeChzzkBehavior.escape)와 같은 일을 한다. */
     private static String quoteAsJson(String s) {
         return new tools.jackson.databind.ObjectMapper().writeValueAsString(s);

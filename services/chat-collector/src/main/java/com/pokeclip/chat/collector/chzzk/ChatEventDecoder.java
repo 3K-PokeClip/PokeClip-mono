@@ -50,6 +50,38 @@ public final class ChatEventDecoder {
                 inner.path("userRoleCode").isMissingNode() ? null : inner.path("userRoleCode").asString(null));
     }
 
+    /**
+     * 42["DONATION","{…}"] 를 푼다. 이름이 DONATION이 아니거나 안쪽이 객체가 아니면 null이다.
+     * 채팅과 달리 시각 칸이 없으므로 시각으로 거르는 갈래도 없다.
+     */
+    public static DonationEvent decodeDonation(String eventPayload) {
+        String innerText = innerText(eventPayload, "DONATION");
+        if (innerText == null) {
+            return null;
+        }
+        JsonNode inner = parseInner(innerText);
+        if (inner == null || !inner.isObject()) {
+            return null;
+        }
+        Long amount;
+        try {
+            String rawAmount = inner.path("payAmount").asString("");
+            amount = rawAmount.isEmpty() ? null : Long.parseLong(rawAmount.replace(",", ""));
+        } catch (NumberFormatException e) {
+            // 금액 표기가 바뀌어도 후원 자체는 버리지 않는다 — 버리면 하이라이트 신호가
+            // 통째로 사라지고, 그때 디코더는 실패라고 말하지도 않는다.
+            amount = null;
+        }
+        return new DonationEvent(
+                inner.path("channelId").asString(""),
+                inner.path("donatorChannelId").asString(""),
+                inner.path("donatorNickname").asString(""),
+                inner.path("donationType").asString(""),
+                amount,
+                inner.path("donationText").asString(""),
+                innerText);
+    }
+
     public static SystemEvent decodeSystem(String eventPayload) {
         String innerText = innerText(eventPayload, "SYSTEM");
         if (innerText == null) {
