@@ -67,7 +67,7 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
   const state = useClipEditorMockState(options);
   const { togglePlay, seekBy, markIn, markOut, undo, redo } = state;
   const previewColumnRef = useRef<HTMLDivElement>(null);
-  const { timelineHeight, setTimelineHeight } = state;
+  const { timelineHeight, timelineCollapsed, setTimelineHeight } = state;
 
   const headroom = useCallback(() => timelineHeadroom(previewColumnRef.current), []);
 
@@ -75,10 +75,14 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
   // 자동 높이(null)는 손대지 않는다: 그건 트랙 수가 정하는 값이라 여기서 px로 굳히면
   // 화면 배율이 바뀌어도 그대로 남는다. 그 극단은 .timeline의 z-index가 받는다.
   const fitTimeline = useCallback(() => {
-    if (timelineHeight === null) return;
+    // 접혀 있으면 맞출 레인이 없다. 이 조건을 여기서 읽어야 의존성에 들어가고, 그래야
+    // 펼치는 순간 아래 레이아웃 효과가 다시 돌아 페인트 전에 높이를 잡는다.
+    // 관찰만 믿으면 늦다 — RO 콜백은 페인트 직전에 도는데 거기서 잡은 rAF는 다음
+    // 프레임이라, 낡은 높이로 한 프레임이 그려진다 (리뷰 #166 2회차).
+    if (timelineHeight === null || timelineCollapsed) return;
     const spare = headroom();
     if (Number.isFinite(spare) && spare < 0) setTimelineHeight(timelineHeight + spare);
-  }, [timelineHeight, headroom, setTimelineHeight]);
+  }, [timelineHeight, timelineCollapsed, headroom, setTimelineHeight]);
 
   useLayoutEffect(fitTimeline, [fitTimeline]);
 
@@ -92,12 +96,12 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
   /*
    * 미리보기 칸의 크기를 바꾸는 모든 경로를 한 문으로 받는다.
    *
-   * window resize만 듣던 때는 두 갈래를 놓쳤다 (리뷰 #166):
-   *  - 접기 토글 — timelineCollapsed는 fitTimeline의 의존성이 아니라 위 레이아웃 효과가
-   *    다시 돌지 않는다. 접은 채 창을 줄이면(레인이 없어 여유가 넉넉해 보정도 no-op)
-   *    다시 펼쳤을 때 낡은 높이가 그대로 복원됐다.
-   *  - 내용 리플로우 — 트랜스포트는 flex-wrap이고 "/ 구간 …" 라벨이 구간 편집마다
-   *    길어진다. 줄바꿈이 나도 창 크기는 그대로라 resize 이벤트가 없었다.
+   * window resize만 듣던 때는 내용 리플로우를 놓쳤다 (리뷰 #166) — 트랜스포트는
+   * flex-wrap이고 "/ 구간 …" 라벨이 구간 편집마다 길어지는데, 줄바꿈이 나도 창 크기는
+   * 그대로라 resize 이벤트가 없었다.
+   *
+   * 접기 토글은 여기 말고 위 레이아웃 효과가 잡는다 — 관찰로 받으면 rAF 한 프레임이
+   * 늦어 낡은 높이가 한 번 그려진다. 이쪽은 그 뒤를 받치는 그물이다.
    *
    * 칸 자신과 자식을 함께 본다. 줄바꿈은 칸의 바깥 높이를 안 바꾸고 자식 높이만 바꾼다.
    */
