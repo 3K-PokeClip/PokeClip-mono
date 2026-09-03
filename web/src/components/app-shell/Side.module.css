@@ -202,6 +202,38 @@
   opacity: 0;
 }
 
+/* 항목 배지 — Dock의 .badge와 같은 모양(셸 배율). 접히면 라벨과 같은 방식으로 폭을 0으로
+   접는다 — display:none은 펼칠 때 글자가 튄다(userText 주석 참조) */
+.badge {
+  flex: none;
+  min-width: calc(17 * var(--u));
+  max-width: calc(40 * var(--u));
+  height: calc(17 * var(--u));
+  padding: 0 calc(5 * var(--u));
+  box-sizing: border-box;
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-point);
+  color: var(--pc-white);
+  font-size: calc(10.5 * var(--u));
+  font-weight: 700;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  opacity: 1;
+  transition:
+    max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.22s ease;
+}
+
+.sidebar[data-collapsed='true'] .badge {
+  min-width: 0;
+  max-width: 0;
+  padding: 0;
+  opacity: 0;
+}
+
 .divider {
   height: 1px;
   background: var(--pc-color-border-subtle);

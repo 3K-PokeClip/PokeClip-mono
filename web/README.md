@@ -80,6 +80,8 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `/broadcast/livenow`                                                                                      | 라이브 대시보드                                                                       |
 | `/broadcast/vod`                                                                                          | 지난 방송 목록 목업 (시안 1f) — VOD 뷰어 진입 관문 · 60일 D-day                       |
 | `/broadcast/vod/[streamId]`                                                                               | VOD 뷰어 자리 — 빈 화면 (뷰어 본체는 시안 1c 별도 티켓)                               |
+| `/clips`                                                                                                  | `/clips/library` 리다이렉트 — 클립 그룹도 좌측 `Side`를 갖는다 (편집기는 그 밖)       |
+| `/clips/library`                                                                                          | 보관함 목업 (시안 1g) — 9:16 편집본 그리드 · 상세 패널 액션 7종 · 시점은 훅 값        |
 | `/clips/editor`                                                                                           | 클립 편집기 진입 — 기본 모드로 리다이렉트 (간편/정밀 설정은 이후 티켓)                |
 | `/clips/editor/studio`                                                                                    | 클립 편집기 스튜디오형 목업 (시안 1d-a) — `(fullscreen)` 그룹, 독 없음                |
 | `/settings`                                                                                               | `/settings/plugin` 리다이렉트 — 설정 그룹도 좌측 `Side`를 갖는다                      |
