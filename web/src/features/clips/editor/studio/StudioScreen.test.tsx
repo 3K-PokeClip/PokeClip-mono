@@ -165,9 +165,9 @@ describe('StudioScreen', () => {
     const user = userEvent.setup();
     renderStudio();
 
-    expect(screen.getByText('미리보기 · 자막 번인+CC · 1× 배속')).toBeInTheDocument();
+    expect(screen.getByText('자막 번인+CC · 1× 배속')).toBeInTheDocument();
     await user.click(screen.getByRole('radio', { name: '2×' }));
-    expect(screen.getByText('미리보기 · 자막 번인+CC · 2× 배속')).toBeInTheDocument();
+    expect(screen.getByText('자막 번인+CC · 2× 배속')).toBeInTheDocument();
 
     await user.click(screen.getByRole('radio', { name: '9:16' }));
     expect(screen.getByRole('radio', { name: '9:16' })).toBeChecked();
@@ -421,6 +421,81 @@ describe('StudioScreen — 로컬 소스', () => {
 
     const end = screen.getByRole('slider', { name: '구간 끝점' });
     expect(Number(end.getAttribute('aria-valuemax'))).toBeLessThanOrEqual(600);
+  });
+
+  it('접근성 위반이 없다', async () => {
+    const { container } = renderWithSource();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe('StudioScreen — 크롭 영역 (E5)', () => {
+  it('소스 위에 잡을 영역과 모서리 네 개가 선다', () => {
+    renderWithSource();
+
+    expect(screen.getByRole('region', { name: '클립 만들기' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '클립 미리보기' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /소스 1 · 게임 잡을 영역/ })).toBeInTheDocument();
+    for (const corner of ['왼쪽 위', '오른쪽 위', '왼쪽 아래', '오른쪽 아래']) {
+      expect(
+        screen.getByRole('button', { name: `소스 1 · 게임 ${corner} 모서리` }),
+      ).toBeInTheDocument();
+    }
+  });
+
+  it('상하분할은 한 소스에 사각형 두 개를 얹는다', () => {
+    renderWithSource();
+
+    expect(screen.getByRole('button', { name: /소스 1 · 게임 잡을 영역/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /소스 2 · 캠 잡을 영역/ })).toBeInTheDocument();
+  });
+
+  it('사각형을 방향키로 옮긴다', async () => {
+    const user = userEvent.setup();
+    renderWithSource();
+    const body = screen.getByRole('button', { name: /소스 1 · 게임 잡을 영역/ });
+
+    const before = body.parentElement?.getAttribute('style');
+    body.focus();
+    await user.keyboard('{ArrowRight}');
+
+    expect(body.parentElement?.getAttribute('style')).not.toBe(before);
+  });
+
+  it('모서리 방향키가 범위를 넓히고 좁힌다', async () => {
+    const user = userEvent.setup();
+    renderWithSource();
+    const handle = screen.getByRole('button', { name: '소스 1 · 게임 오른쪽 아래 모서리' });
+    const rect = () => handle.parentElement?.style.width ?? '';
+
+    handle.focus();
+    const before = rect();
+    await user.keyboard('{ArrowRight}');
+    const grown = rect();
+    expect(Number.parseFloat(grown)).toBeGreaterThan(Number.parseFloat(before));
+
+    await user.keyboard('{ArrowLeft}');
+    expect(Number.parseFloat(rect())).toBeLessThan(Number.parseFloat(grown));
+  });
+
+  it('옮긴 뒤 실행취소로 되돌린다', async () => {
+    const user = userEvent.setup();
+    renderWithSource();
+    const body = screen.getByRole('button', { name: /소스 1 · 게임 잡을 영역/ });
+    const rect = () => body.parentElement?.getAttribute('style');
+
+    const before = rect();
+    body.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(rect()).not.toBe(before);
+
+    await user.click(screen.getByRole('button', { name: '작업 이전으로' }));
+    expect(rect()).toBe(before);
+  });
+
+  it('소스가 없으면 사각형이 없다 — 잘라낼 그림이 없다', () => {
+    renderStudio();
+    expect(screen.queryByRole('button', { name: /잡을 영역/ })).not.toBeInTheDocument();
   });
 
   it('접근성 위반이 없다', async () => {

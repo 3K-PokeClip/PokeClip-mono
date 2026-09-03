@@ -413,18 +413,19 @@ describe('useClipEditorMockState — 실소스 주입', () => {
     expect(bgm?.clips[0]?.startSeconds).toBeLessThan(600);
   });
 
-  it('미리보기 첫 칸에 영상 표식이 붙고 자리바꿈을 따라간다', () => {
+  it('상하분할은 한 소스에서 두 영역을 잡는다 — 칸마다 자기 사각형이 있다', () => {
     const { result } = renderEditor({ source: SOURCE });
 
-    expect(result.current.sources[0]?.media).toBe(true);
-    act(() => result.current.swapSources());
-    expect(result.current.sources[1]?.media).toBe(true);
+    expect(result.current.sources[0]?.crop).toBeDefined();
+    expect(result.current.sources[1]?.crop).toBeDefined();
+    // 기본값은 위·아래로 갈라 둔다 — 겹쳐 있으면 뭘 잡았는지 안 보인다
+    expect(result.current.sources[0]!.crop!.y).toBeLessThan(result.current.sources[1]!.crop!.y);
   });
 
   it('소스가 없으면 목업 트랙 6종 그대로다', () => {
     const { result } = renderEditor();
     expect(result.current.tracks).toHaveLength(6);
-    expect(result.current.sources[0]?.media).toBeUndefined();
+    expect(result.current.sources[0]?.crop).toBeUndefined();
   });
 });
 
@@ -482,5 +483,127 @@ describe('useClipEditorMockState — 재생 어댑터 주입', () => {
 
     expect(calls.bounds.length).toBeGreaterThan(before);
     expect(calls.bounds.at(-1)?.endSeconds).toBe(result.current.range.endSeconds);
+  });
+});
+
+describe('useClipEditorMockState — 크롭 영역 (E5)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** 계약6 픽셀 기준 종횡비 */
+  const pixelAspect = (crop: { w: number; h: number }) =>
+    (crop.w * SOURCE.width) / (crop.h * SOURCE.height);
+
+  it('처음에는 비율마다의 기본 자리를 계약6 모양으로 준다', () => {
+    const { result } = renderEditor({ source: SOURCE, initialLayout: '9:16' });
+    const crop = result.current.sources[0]?.crop;
+
+    expect(crop).toBeDefined();
+    expect(crop!.x).toBeGreaterThanOrEqual(0);
+    expect(crop!.x + crop!.w).toBeLessThanOrEqual(1 + 1e-12);
+    expect(pixelAspect(crop!)).toBeCloseTo(9 / 16, 8);
+    expect(result.current.sources[0]?.cropZoom).toBe(1);
+  });
+
+  it('끈 만큼 사각형이 손을 따라온다 — 부호가 같다', () => {
+    const { result } = renderEditor({ source: SOURCE, initialLayout: '9:16' });
+    const before = result.current.sources[0]!.crop!.x;
+
+    act(() => result.current.dragCrop('game', { x: 80, y: 0 }, { width: 800, height: 450 }));
+
+    expect(result.current.sources[0]!.crop!.x).toBeGreaterThan(before);
+  });
+
+  it('소스 밖으로는 안 나간다 — 계약6 x+w ≤ 1', () => {
+    const { result } = renderEditor({ source: SOURCE, initialLayout: '9:16' });
+
+    act(() => result.current.dragCrop('game', { x: 99999, y: 0 }, { width: 800, height: 450 }));
+
+    const crop = result.current.sources[0]!.crop!;
+    expect(crop.x + crop.w).toBeCloseTo(1, 10);
+  });
+
+  it('모서리를 끌면 범위가 바뀌고 비율은 그대로다', () => {
+    const { result } = renderEditor({ source: SOURCE, initialLayout: '9:16' });
+    act(() => result.current.zoomCrop('game', -0.4)); // 먼저 줄여 둔다
+    const before = result.current.sources[0]!.crop!;
+
+    act(() => result.current.resizeCrop('game', 'se', { x: 0.99, y: 0.99 }));
+
+    const after = result.current.sources[0]!.crop!;
+    expect(after.w).toBeGreaterThan(before.w);
+    expect(pixelAspect(after)).toBeCloseTo(9 / 16, 8);
+    // 반대편 모서리가 고정된다
+    expect(after.x).toBeCloseTo(before.x, 8);
+  });
+
+  it('계약6 하한(0.05)보다 작게는 못 줄인다', () => {
+    const { result } = renderEditor({ source: SOURCE, initialLayout: '9:16' });
+
+    act(() => result.current.zoomCrop('game', -5));
+
+    const crop = result.current.sources[0]!.crop!;
+    expect(Math.min(crop.w, crop.h)).toBeGreaterThanOrEqual(0.05 - 1e-12);
+  });
+
+  it('당겨 보면 세로로도 움직인다 — 여유가 생긴다', () => {
+    const { result } = renderEditor({ source: SOURCE, initialLayout: '9:16' });
+    act(() => result.current.zoomCrop('game', -0.5));
+    const before = result.current.sources[0]!.crop!.y;
+
+    act(() => result.current.nudgeCrop('game', { x: 0, y: 0.1 }));
+
+    expect(result.current.sources[0]!.crop!.y).toBeGreaterThan(before);
+  });
+
+  it('크롭은 실행취소 대상이다 — 레시피에 들어간다', () => {
+    const { result } = renderEditor({ source: SOURCE, initialLayout: '9:16' });
+    const before = result.current.sources[0]!.crop!.x;
+
+    act(() => result.current.nudgeCrop('game', { x: 0.05, y: 0 }));
+    expect(result.current.sources[0]!.crop!.x).not.toBeCloseTo(before, 10);
+
+    act(() => result.current.undo());
+    expect(result.current.sources[0]!.crop!.x).toBeCloseTo(before, 10);
+  });
+
+  it('가장자리에서 더 끌어도 히스토리가 늘지 않는다', () => {
+    const { result } = renderEditor({ source: SOURCE, initialLayout: '9:16' });
+    act(() => result.current.nudgeCrop('game', { x: 99, y: 0 }));
+    const atEdge = result.current.sources[0]!.crop!.x;
+
+    act(() => result.current.nudgeCrop('game', { x: 99, y: 0 }));
+    act(() => result.current.undo());
+
+    expect(result.current.sources[0]!.crop!.x).not.toBeCloseTo(atEdge, 10);
+  });
+
+  it('비율을 바꿔도 잡은 자리와 확대율이 남는다', () => {
+    const { result } = renderEditor({ source: SOURCE, initialLayout: '9:16' });
+    act(() => result.current.zoomCrop('game', -0.3));
+    act(() => result.current.nudgeCrop('game', { x: 0.08, y: 0 }));
+    const before = result.current.sources[0]!;
+    const center = before.crop!.x + before.crop!.w / 2;
+
+    act(() => result.current.setLayout('1:1'));
+
+    const after = result.current.sources[0]!;
+    expect(after.cropZoom).toBeCloseTo(before.cropZoom!, 10);
+    expect(after.crop!.x + after.crop!.w / 2).toBeCloseTo(center, 10);
+    // 비율은 새 화면을 따라간다
+    expect(pixelAspect(after.crop!)).toBeCloseTo(1, 8);
+  });
+
+  it('되돌리기로 기본 자리로 초기화한다', () => {
+    const { result } = renderEditor({ source: SOURCE, initialLayout: '9:16' });
+    const initial = result.current.sources[0]!.crop!.x;
+    act(() => result.current.nudgeCrop('game', { x: 0.08, y: 0 }));
+    act(() => result.current.resetCrop('game'));
+
+    expect(result.current.sources[0]!.crop!.x).toBeCloseTo(initial, 10);
   });
 });

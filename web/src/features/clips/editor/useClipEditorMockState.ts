@@ -10,6 +10,20 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
+import {
+  cropRectOf,
+  defaultCropWindow,
+  maxCropSize,
+  minZoomOf,
+  moveCropWindow,
+  paneAspect,
+  pointerDeltaToCrop,
+  resizeCropWindow,
+  zoomCropWindow,
+  type CropCorner,
+  type CropRect,
+  type CropWindow,
+} from './cropMath';
 import type { EditorPlayback } from './editorPlayback';
 import {
   initialRangeForSource,
@@ -125,8 +139,15 @@ export interface EditorSource {
   /** 아직 영상이 없을 때 자리에 적는 말 */
   placeholder: string;
   tone: 'accent' | 'point';
-  /** 실제 영상이 들어가는 칸. 로컬 파일이 하나뿐이라 한 칸에만 붙는다 */
-  media?: boolean;
+  /**
+   * 이 칸이 소스에서 잘라 쓰는 영역 — 계약6 `outputs[].crop` 과 같은 모양.
+   * 소스를 모르면(목업) 없다 — 잘라낼 그림도, 종횡비를 맞출 해상도도 없기 때문이다.
+   */
+  crop?: CropRect;
+  /** 사각형이 지금 얼마나 당겨져 있나 (1 = 가장 넓게). 더 줄일 수 있는지 화면이 판단한다 */
+  cropZoom?: number;
+  /** 계약6 하한(w·h ≥ 0.05)이 허용하는 최소 확대율 */
+  cropMinZoom?: number;
 }
 
 export interface EditorImageItem {
@@ -149,6 +170,11 @@ interface EditorRecipe {
   layout: EditorLayout;
   /** 상하분할 위쪽(게임) 비중 — 시안 1.5 : 1 */
   splitRatio: number;
+  /**
+   * 칸마다 소스에서 잡은 영역 — 중심과 확대율. 계약6이 요구하는 `{x,y,w,h}`는 여기에 비율·소스
+   * 해상도를 얹어 파생시킨다. 사각형을 그대로 담으면 비율을 바꿀 때 종횡비 규칙을 어기게 된다.
+   */
+  crops: Readonly<Record<string, CropWindow>>;
   trackVolumes: Readonly<Record<string, number>>;
   trackMuted: Readonly<Record<string, boolean>>;
   subtitleMode: SubtitleMode;
@@ -273,6 +299,8 @@ function initialRecipe(range: ClipRange): EditorRecipe {
     // 시안 1d-a는 상하분할이 켜진 상태를 보여준다
     layout: 'split',
     splitRatio: 1.5,
+    // 처음엔 비율마다의 기본 자리. 상하분할은 한 소스를 위·아래로 갈라 잡는다
+    crops: {},
     // 초기값은 비워 둔다 — 트랙마다의 기본 볼륨은 트랙 정의가 갖고 있고, 여기 복사해 두면
     // 소스가 준 트랙(목업에 없는 id)의 볼륨이 빠진다
     trackVolumes: {},
@@ -303,6 +331,11 @@ export interface ClipEditorOptions {
   source?: EditorMediaSource | undefined;
   /** trackId → 파형. 늦게 와도 되고, 없으면 레인이 자리 표시자로 남는다 */
   peaks?: ReadonlyMap<number, AudioPeaks> | undefined;
+  /**
+   * 시작 비율. 시안 1d-a는 상하분할을 보여주므로 기본값이 그것이다 —
+   * 단일 화면의 크롭 동작은 이 문으로 들어가 확인한다.
+   */
+  initialLayout?: EditorLayout;
 }
 
 export interface ClipEditorMockState {
@@ -374,6 +407,27 @@ export interface ClipEditorMockState {
   sources: readonly EditorSource[];
   sourcesSwapped: boolean;
   swapSources: () => void;
+  /**
+   * 소스 판에서 사각형을 끈 만큼 옮긴다 (E5). 픽셀 → 정규화 환산은 허브가 한다 —
+   * 화면은 몇 픽셀 움직였는지와 판이 얼마나 큰지만 알면 된다.
+   * 드래그 한 번을 실행취소 한 칸으로 묶으려면 beginGesture/endGesture 로 감싼다.
+   */
+  dragCrop: (
+    sourceId: string,
+    pointerDelta: { x: number; y: number },
+    panelSize: { width: number; height: number },
+  ) => void;
+  /** 키보드 한 걸음 — 소스 기준 정규화 값이다 */
+  nudgeCrop: (sourceId: string, delta: { x: number; y: number }) => void;
+  /**
+   * 모서리를 끌어 범위를 바꾼다. `pointer` 는 소스 안의 정규화 좌표(0..1) —
+   * 반대편 모서리를 못 박고 비율은 유지한다.
+   */
+  resizeCrop: (sourceId: string, corner: CropCorner, pointer: { x: number; y: number }) => void;
+  /** 확대율만 한 걸음 (모서리 키보드 조작) */
+  zoomCrop: (sourceId: string, delta: number) => void;
+  /** 사각형을 기본 자리로 되돌린다 */
+  resetCrop: (sourceId: string) => void;
 
   // 트랙 (E2)
   tracks: EditorTrack[];
@@ -406,6 +460,8 @@ export interface ClipEditorMockState {
 
   // 타임라인 (보는 방식 — 되돌리기 대상 아님)
   sourceDurationSeconds: number;
+  /** 소스의 가로/세로. 크롭 사각형이 영상 위에 정확히 겹치려면 판이 이 비율이어야 한다 */
+  sourceAspect: number | undefined;
   view: TimelineView;
   activeTool: EditorTool;
   toolOptions: readonly { value: EditorTool; label: string }[];
@@ -432,7 +488,7 @@ export interface ClipEditorMockState {
 const SPEED_OPTIONS = [0.5, 1, 1.5, 2] as const;
 
 export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEditorMockState {
-  const { initialSubtitleStatus = 'ready', source } = options;
+  const { initialSubtitleStatus = 'ready', initialLayout, source } = options;
   const { toast } = useToast();
 
   // 소스가 있으면 그 길이 안에 구간을 잡는다. 목업 구간(1:22:08~)은 5043초짜리 가짜 방송의
@@ -442,9 +498,12 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     source === undefined ? MOCK_SOURCE.range : initialRangeForSource(source.durationSeconds),
   );
 
-  const [history, setHistory] = useState<History<EditorRecipe>>(() =>
-    createHistory(initialRecipe(startRange)),
-  );
+  const [history, setHistory] = useState<History<EditorRecipe>>(() => {
+    const recipe = initialRecipe(startRange);
+    return createHistory(
+      initialLayout === undefined ? recipe : { ...recipe, layout: initialLayout },
+    );
+  });
   const recipe = history.present;
 
   // 재생은 어댑터가 맡는다. 주입이 없으면 목업 시뮬레이션 — 훅은 늘 호출하고(조건부 호출 금지)
@@ -531,6 +590,53 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       return replace ? replacePresent(current, next) : pushHistory(current, next);
     });
   }, []);
+
+  /**
+   * 지금 이 칸이 잡을 수 있는 최대 사각형과 확대율 하한.
+   * 자리바꿈으로 위·아래가 바뀌면 지분이 달라져 크기도 달라지므로, 화면에 그릴 때와 **같은 순서**로
+   * 자리를 찾아야 한다.
+   */
+  const cropBoundsOf = useCallback(
+    (sourceId: string) => {
+      if (source === undefined) return null;
+      const ordered =
+        recipe.layout === 'split' && recipe.sourcesSwapped
+          ? [...MOCK_SOURCES].reverse()
+          : MOCK_SOURCES;
+      const index = ordered.findIndex((pane) => pane.id === sourceId);
+      if (index === -1) return null;
+      const maxSize = maxCropSize(
+        paneAspect(recipe.layout, recipe.splitRatio, index),
+        source.width,
+        source.height,
+      );
+      return { maxSize, index };
+    },
+    [source, recipe.layout, recipe.splitRatio, recipe.sourcesSwapped],
+  );
+
+  /** 창을 바꾸는 모든 길이 여기로 모인다 — 같은 클램프·같은 히스토리 규칙을 쓰게 하려고 */
+  const updateCrop = useCallback(
+    (sourceId: string, update: (window: CropWindow, maxSize: { w: number; h: number }) => CropWindow) => {
+      const bounds = cropBoundsOf(sourceId);
+      if (bounds === null) return;
+      commit((current) => {
+        const window =
+          current.crops[sourceId] ?? defaultCropWindow(current.layout, bounds.index);
+        const next = update(window, bounds.maxSize);
+        // 가장자리에 붙어 더 못 가면 히스토리를 늘리지 않는다 — ↺가 아무 일도 안 하는 것처럼 보인다
+        if (
+          next.zoom === window.zoom &&
+          next.center.x === window.center.x &&
+          next.center.y === window.center.y
+        ) {
+          return current;
+        }
+        return { ...current, crops: { ...current.crops, [sourceId]: next } };
+      });
+    },
+    [commit, cropBoundsOf],
+  );
 
   // 드래그 중에는 타임라인 창을 붙잡는다. 창이 구간 중심을 따라 움직이면 포인터→초 환산
   // 기준이 이벤트마다 옮겨가, 눈금이 손 아래에서 미끄러지고 늘리기가 창 폭에서 멎는다.
@@ -737,15 +843,72 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     // 9:16을 골랐을 때 게임 화면 대신 캠이 뜬다
     // 자리바꿈은 상하분할에서만 뜻이 있다. media 표식이 pane 객체에 붙어 있어 영상도 함께 옮겨간다.
     sources: useMemo(() => {
-      const panes =
-        source === undefined
-          ? MOCK_SOURCES
-          : MOCK_SOURCES.map((pane, index) => (index === 0 ? { ...pane, media: true } : pane));
-      return recipe.layout === 'split' && recipe.sourcesSwapped ? [...panes].reverse() : panes;
-    }, [source, recipe.layout, recipe.sourcesSwapped]),
+      const ordered =
+        recipe.layout === 'split' && recipe.sourcesSwapped
+          ? [...MOCK_SOURCES].reverse()
+          : MOCK_SOURCES;
+      // 소스를 모르면 크롭도 없다 — 잘라낼 그림도 종횡비를 맞출 해상도도 없다
+      if (source === undefined) return ordered;
+      return ordered.map((pane, index) => {
+        // 사각형의 최대 크기는 **지금 이 칸이 놓인 자리**가 정한다. 자리를 바꾸면 상하분할의
+        // 위·아래 지분이 달라져 잘라 쓸 수 있는 넓이도 달라진다.
+        const maxSize = maxCropSize(
+          paneAspect(recipe.layout, recipe.splitRatio, index),
+          source.width,
+          source.height,
+        );
+        const window = recipe.crops[pane.id] ?? defaultCropWindow(recipe.layout, index);
+        return {
+          ...pane,
+          crop: cropRectOf(window, maxSize),
+          cropZoom: window.zoom,
+          cropMinZoom: minZoomOf(maxSize),
+        };
+      });
+    }, [source, recipe.layout, recipe.splitRatio, recipe.sourcesSwapped, recipe.crops]),
     sourcesSwapped: recipe.sourcesSwapped,
     swapSources: useCallback(
       () => commit((current) => ({ ...current, sourcesSwapped: !current.sourcesSwapped })),
+      [commit],
+    ),
+    dragCrop: useCallback(
+      (
+        sourceId: string,
+        pointerDelta: { x: number; y: number },
+        panelSize: { width: number; height: number },
+      ) =>
+        updateCrop(sourceId, (window, maxSize) =>
+          moveCropWindow(window, pointerDeltaToCrop(pointerDelta, panelSize), maxSize),
+        ),
+      [updateCrop],
+    ),
+    nudgeCrop: useCallback(
+      (sourceId: string, delta: { x: number; y: number }) =>
+        updateCrop(sourceId, (window, maxSize) => moveCropWindow(window, delta, maxSize)),
+      [updateCrop],
+    ),
+    resizeCrop: useCallback(
+      (sourceId: string, corner: CropCorner, pointer: { x: number; y: number }) =>
+        updateCrop(sourceId, (window, maxSize) =>
+          resizeCropWindow(window, corner, pointer, maxSize),
+        ),
+      [updateCrop],
+    ),
+    zoomCrop: useCallback(
+      (sourceId: string, delta: number) =>
+        updateCrop(sourceId, (window, maxSize) =>
+          zoomCropWindow(window, window.zoom + delta, maxSize),
+        ),
+      [updateCrop],
+    ),
+    resetCrop: useCallback(
+      (sourceId: string) =>
+        commit((current) => {
+          if (current.crops[sourceId] === undefined) return current;
+          const next = { ...current.crops };
+          delete next[sourceId];
+          return { ...current, crops: next };
+        }),
       [commit],
     ),
 
@@ -802,6 +965,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     images: MOCK_IMAGES,
 
     sourceDurationSeconds: playback.durationSeconds,
+    sourceAspect: source === undefined ? undefined : source.width / source.height,
     view,
     activeTool,
     toolOptions: TOOL_OPTIONS,
