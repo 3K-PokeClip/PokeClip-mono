@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { ExternalLink, Play, Trash2, X } from 'lucide-react';
 import { Badge, Button, IconButton, LinkButton, VisuallyHidden } from '@/ui';
@@ -11,6 +12,7 @@ import {
   durationLabel,
   noteText,
   retentionLabel,
+  safeExternalUrl,
   type DetailView,
 } from './libraryView';
 import type { ClipStatus, LibraryClip, LibraryRole } from './useLibraryMockState';
@@ -46,12 +48,31 @@ export function ClipDetailPanel({
   const duration = durationLabel(clip, status);
   const retention = ddayFor(clip.sourceExpiresAt, now);
 
+  // 업로드·렌더 재시도는 상태를 바꾸고, 그러면 주 동작이 button ↔ anchor로 갈리거나 비활성이
+  // 된다 — 누르고 있던 노드가 사라져 포커스가 body로 떨어진다. 전이를 일으킨 경우에만
+  // 새 주 동작(비활성이면 그다음 조작부)으로 포커스를 옮긴다.
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const refocusAfterTransition = useRef(false);
+  useEffect(() => {
+    if (!refocusAfterTransition.current) return;
+    refocusAfterTransition.current = false;
+    actionsRef.current?.querySelector<HTMLElement>('a[href], button:not([disabled])')?.focus();
+  });
+
+  const runTransition = (run: () => void) => {
+    refocusAfterTransition.current = true;
+    run();
+  };
+
   return (
     <>
       <div className={styles.panelHead}>
-        <Badge tone={view.badge.tone} variant="solid" size="sm">
-          {view.badge.label}
-        </Badge>
+        {/* 상태가 바뀌면 배지만 조용히 갈리므로 낭독으로도 알린다 (StreamInfoBar 선례) */}
+        <span role="status">
+          <Badge tone={view.badge.tone} variant="solid" size="sm">
+            {view.badge.label}
+          </Badge>
+        </span>
         <IconButton
           variant="ghost"
           size="sm"
@@ -78,12 +99,12 @@ export function ClipDetailPanel({
         </div>
       </div>
 
-      <div className={styles.actions}>
+      <div className={styles.actions} ref={actionsRef}>
         <PrimaryControl
           primary={view.primary}
           youtubeUrl={clip.youtubeUrl}
-          onUpload={onUpload}
-          onRetryRender={onRetryRender}
+          onUpload={() => runTransition(onUpload)}
+          onRetryRender={() => runTransition(onRetryRender)}
         />
         <div className={styles.actionRow}>
           {view.edit ? (
@@ -149,6 +170,7 @@ export function ClipDetailPanel({
  * 주 동작 한 줄. 갈 곳이 있으면 링크, 바꿀 것이 있으면 버튼이다. 「유튜브 보기」는 발행 주소가
  * 있을 때만 링크다 — 목업 업로드로 발행된 것은 주소가 없어 비활성 버튼으로 그린다
  * (href 없는 링크는 그리지 않는다 — LinkButton 규칙, 가짜 주소도 만들지 않는다 — ADR-044).
+ * 스킴이 http(s)가 아닌 주소도 같은 비활성 버튼으로 떨어진다 — safeExternalUrl 참고.
  */
 function PrimaryControl({
   primary,
@@ -168,10 +190,11 @@ function PrimaryControl({
           {primary.label}
         </LinkButton>
       );
-    case 'external':
-      return youtubeUrl ? (
+    case 'external': {
+      const href = safeExternalUrl(youtubeUrl);
+      return href ? (
         <LinkButton
-          href={youtubeUrl}
+          href={href}
           target="_blank"
           rel="noopener noreferrer"
           variant="solid"
@@ -187,6 +210,7 @@ function PrimaryControl({
           {primary.label}
         </Button>
       );
+    }
     case 'action':
       return (
         <Button

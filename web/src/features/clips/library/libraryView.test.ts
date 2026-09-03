@@ -10,8 +10,10 @@ import {
   durationLabel,
   filterByChip,
   filterByQuery,
+  isCardDimmed,
   noteText,
   retentionLabel,
+  safeExternalUrl,
   sortClips,
   statusFor,
 } from './libraryView';
@@ -290,11 +292,10 @@ describe('libraryView — detailViewFor', () => {
   });
 
   it('원본 만료는 가라앉고 안내가 붙는다 · 승인 대기는 안내만 · 반려됨은 사유를 연다', () => {
-    expect(detailViewFor('expired', 'streamer')).toMatchObject({ dimmed: true, note: 'expired' });
-    expect(detailViewFor('pending', 'editor')).toMatchObject({ dimmed: false, note: 'pending' });
+    expect(detailViewFor('expired', 'streamer')).toMatchObject({ note: 'expired' });
+    expect(detailViewFor('pending', 'editor')).toMatchObject({ note: 'pending' });
     expect(detailViewFor('rejected', 'streamer').showRejection).toBe(true);
     expect(detailViewFor('published', 'streamer')).toMatchObject({
-      dimmed: false,
       note: null,
       showRejection: false,
     });
@@ -315,6 +316,26 @@ describe('libraryView — detailViewFor', () => {
   });
 });
 
+describe('libraryView — isCardDimmed · safeExternalUrl', () => {
+  it('원본이 만료된 것만 카드를 가라앉힌다 — 카드와 표가 같은 값을 본다', () => {
+    expect(isCardDimmed('expired')).toBe(true);
+    for (const status of STATUSES.filter((s) => s !== 'expired')) {
+      expect(isCardDimmed(status)).toBe(false);
+    }
+  });
+
+  it('http(s)만 앵커에 실린다 — 나머지는 null로 떨어져 링크를 그리지 않는다', () => {
+    expect(safeExternalUrl('https://www.youtube.com/shorts/abc')).toBe(
+      'https://www.youtube.com/shorts/abc',
+    );
+    expect(safeExternalUrl('http://example.test/a')).toBe('http://example.test/a');
+    expect(safeExternalUrl('javascript:alert(1)')).toBeNull();
+    expect(safeExternalUrl('data:text/html,<script>')).toBeNull();
+    expect(safeExternalUrl('그냥 문자열')).toBeNull();
+    expect(safeExternalUrl(undefined)).toBeNull();
+  });
+});
+
 describe('libraryView — 표기', () => {
   it('안내문은 시점마다 다르다 — 승인 대기는 스트리머와 편집자가 할 수 있는 일이 다르다', () => {
     expect(noteText('expired', 'streamer')).toBe(
@@ -329,6 +350,13 @@ describe('libraryView — 표기', () => {
     expect(durationLabel(clip({ id: 'a', durationSec: 44 }), 'pending')).toBe('0:44');
     expect(durationLabel(clip({ id: 'a', durationSec: 82 }), 'failed')).toBeNull();
     expect(durationLabel(clip({ id: 'a', durationSec: null }), 'ready')).toBeNull();
+  });
+
+  it('길이가 유한하지 않으면 말하지 않는다 — 「NaN:NaN」을 찍느니 비운다', () => {
+    expect(durationLabel(clip({ id: 'a', durationSec: Number.NaN }), 'ready')).toBeNull();
+    expect(
+      durationLabel(clip({ id: 'a', durationSec: Number.POSITIVE_INFINITY }), 'ready'),
+    ).toBeNull();
   });
 
   it('원본 보존은 D-day·만료됨·미상으로 말한다', () => {

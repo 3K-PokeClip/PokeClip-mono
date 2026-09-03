@@ -17,7 +17,10 @@ describe('StudioScreen', () => {
 
     expect(screen.getByRole('heading', { name: '승급전 마지막 한타 역전' })).toBeInTheDocument();
     expect(screen.getByText('라이브 카드 1:24:03 · 방금 자동 저장됨')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '보관함으로' })).toHaveAttribute('href', '/clips');
+    expect(screen.getByRole('link', { name: '보관함으로' })).toHaveAttribute(
+      'href',
+      '/clips/library',
+    );
     expect(screen.getByRole('button', { name: '템플릿 저장' })).toBeEnabled();
     expect(screen.getByRole('button', { name: '업로드' })).toBeEnabled();
     // 아직 편집한 적이 없으니 되돌릴 곳도 없다
@@ -33,9 +36,7 @@ describe('StudioScreen', () => {
       expect(within(timeline).getByText(label)).toBeInTheDocument();
     }
     expect(within(timeline).getByText('80%')).toBeInTheDocument();
-    expect(
-      within(timeline).getByRole('button', { name: /Neon Drive\.mp3/ }),
-    ).toBeInTheDocument();
+    expect(within(timeline).getByRole('button', { name: /Neon Drive\.mp3/ })).toBeInTheDocument();
     expect(within(timeline).getByRole('button', { name: '띠용' })).toBeInTheDocument();
     expect(within(timeline).getByRole('button', { name: /로고\.png/ })).toBeInTheDocument();
   });
@@ -157,9 +158,7 @@ describe('StudioScreen', () => {
 
     expect(body).toHaveAttribute('data-panel-side', 'right');
     // 다시 누르면 돌아갈 수 있게 안내가 뒤집힌다
-    expect(
-      screen.getByRole('button', { name: '패널 위치 · 왼쪽으로 옮기기' }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '패널 위치 · 왼쪽으로 옮기기' })).toBeInTheDocument();
     // 옮겨도 도구·타임라인은 그대로 선다
     expect(screen.getByRole('region', { name: '자막' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: '타임라인' })).toBeInTheDocument();
@@ -239,8 +238,9 @@ describe('StudioScreen', () => {
     const end = screen.getByRole('slider', { name: '구간 끝점' });
     // 시작 핸들의 최소는 0이 아니라 「끝 − 3분」이다
     expect(Number(start.getAttribute('aria-valuemin'))).toBeGreaterThan(0);
-    expect(Number(end.getAttribute('aria-valuenow')) - Number(start.getAttribute('aria-valuemin')))
-      .toBeLessThanOrEqual(180);
+    expect(
+      Number(end.getAttribute('aria-valuenow')) - Number(start.getAttribute('aria-valuemin')),
+    ).toBeLessThanOrEqual(180);
   });
 
   it('볼륨 슬라이더가 포인터로 살아 있다 — 제스처 핸들러가 DS 핸들러를 덮지 않는다', () => {

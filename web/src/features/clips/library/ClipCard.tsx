@@ -2,7 +2,7 @@
 
 import clsx from 'clsx';
 import { Badge } from '@/ui';
-import { STATUS_BADGE, cardName, durationLabel, ownerInitial } from './libraryView';
+import { STATUS_BADGE, cardName, durationLabel, isCardDimmed, ownerInitial } from './libraryView';
 import type { ClipStatus, LibraryClip } from './useLibraryMockState';
 import styles from './LibraryScreen.module.css';
 
@@ -36,7 +36,7 @@ export function ClipCard({
       <button
         type="button"
         id={clipCardDomId(clip.id)}
-        className={clsx(styles.card, status === 'expired' && styles.cardDimmed)}
+        className={clsx(styles.card, isCardDimmed(status) && styles.cardDimmed)}
         aria-pressed={selected}
         aria-label={cardName(clip, status, duration)}
         onClick={() => onToggle(clip.id)}

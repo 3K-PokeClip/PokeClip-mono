@@ -379,6 +379,26 @@ describe('LibraryScreen — 목업 전이', () => {
     expect(inside.getByRole('link', { name: '새 버전으로 편집' })).toBeInTheDocument();
   });
 
+  it('업로드로 주 동작이 갈려도 포커스가 조작부에 남는다 — 버튼이 링크로 바뀌는 자리다', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<LibraryScreen role="editor" selectedId="lib2-2" />);
+
+    await user.click(within(panel()).getByRole('button', { name: '업로드 요청' }));
+
+    // ready → pending이라 button이 anchor로 교체된다. 포커스가 body로 떨어지면 안 된다.
+    const moved = within(panel()).getByRole('link', { name: '내 요청 보기' });
+    expect(moved).toHaveFocus();
+  });
+
+  it('상태 배지는 낭독 영역이라 바뀐 상태가 알려진다', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<LibraryScreen selectedId="lib2-8" />);
+
+    expect(within(panel()).getByRole('status')).toHaveTextContent('렌더 실패');
+    await user.click(within(panel()).getByRole('button', { name: '렌더 재시도' }));
+    expect(within(panel()).getByRole('status')).toHaveTextContent('업로드 대기');
+  });
+
   it('편집자가 업로드 요청을 누르면 승인 대기가 된다', async () => {
     const user = userEvent.setup();
     renderWithProviders(<LibraryScreen role="editor" selectedId="lib2-2" />);

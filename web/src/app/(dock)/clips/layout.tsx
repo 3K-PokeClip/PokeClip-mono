@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { ScreenTransition } from '@/components/app-shell/ScreenTransition';
 import { Side } from '@/components/app-shell/Side';
-import styles from './layout.module.css';
+import styles from '@/components/app-shell/dockShell.module.css';
 
 // 클립 하위 화면 공용 셸 — 좌측 사이드바 + 콘텐츠 (방송·설정 레이아웃과 같은 구조)
 //

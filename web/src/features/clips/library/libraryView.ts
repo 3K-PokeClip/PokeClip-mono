@@ -208,10 +208,33 @@ export interface DetailView {
   titleLocked: boolean;
   note: PanelNote | null;
   showRejection: boolean;
-  /** 원본 만료 카드는 70%로 가라앉는다 */
-  dimmed: boolean;
   /** 렌더 실패는 길이를 모른다 */
   showDuration: boolean;
+}
+
+/**
+ * 원본이 만료된 발행본은 카드가 70%로 가라앉는다(ADR-004). 흐림은 카드의 성질이라 상세 패널
+ * 표(DetailView)가 아니라 여기서 정한다 — 표에 두면 아무도 읽지 않는 칸이 되고, 카드가 같은
+ * 조건을 따로 적어 규칙이 두 곳으로 갈린다.
+ */
+export function isCardDimmed(status: ClipStatus): boolean {
+  return status === 'expired';
+}
+
+/**
+ * 앵커에 실어도 되는 주소만 통과시킨다. 서버가 준 문자열을 그대로 href에 넣으면 `javascript:`
+ * 스킴이 우리 오리진에서 실행된다 — 채널 연동이 동의 URL을 파싱해 검증하는 것과 같은 이유다
+ * (settings/channels/youtubeOAuth.ts `assertYoutubeConsentUrl`). 지금 목업 값은 안전하지만
+ * 이 훅은 내부만 서버 값으로 갈아끼우는 것이 전제라, 그 교체가 이 자리를 열어 준다.
+ */
+export function safeExternalUrl(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    const { protocol } = new URL(url);
+    return protocol === 'http:' || protocol === 'https:' ? url : null;
+  } catch {
+    return null;
+  }
 }
 
 const EDIT_CONTINUE = { label: '이어서 편집', href: '/clips/editor' } as const;
@@ -227,7 +250,6 @@ export function detailViewFor(status: ClipStatus, role: LibraryRole): DetailView
     titleLocked: false,
     note: null,
     showRejection: false,
-    dimmed: false,
     showDuration: true,
   } satisfies Omit<DetailView, 'primary'>;
   const editor = role === 'editor';
@@ -273,7 +295,6 @@ export function detailViewFor(status: ClipStatus, role: LibraryRole): DetailView
         ...base,
         primary: { kind: 'external', label: '유튜브 보기' },
         note: 'expired',
-        dimmed: true,
       };
     case 'failed':
       return {
@@ -300,7 +321,11 @@ export function noteText(note: PanelNote, role: LibraryRole): string {
 
 /** 카드·미리보기의 길이. 렌더 실패는 길이를 모르므로 null — 「0:00」으로 지어내지 않는다 */
 export function durationLabel(clip: LibraryClip, status: ClipStatus): string | null {
-  if (status === 'failed' || clip.durationSec === null) return null;
+  // 유한한 수만 넘긴다 — formatUptime의 Math.round는 NaN·Infinity를 그대로 통과시켜
+  // 「NaN:NaN」이 카드 이름에 찍힌다(vodListView.durationLabel과 같은 가드).
+  if (status === 'failed' || clip.durationSec === null || !Number.isFinite(clip.durationSec)) {
+    return null;
+  }
   return formatUptime(clip.durationSec);
 }
 
