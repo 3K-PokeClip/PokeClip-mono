@@ -33,9 +33,7 @@ describe('StudioScreen', () => {
       expect(within(timeline).getByText(label)).toBeInTheDocument();
     }
     expect(within(timeline).getByText('80%')).toBeInTheDocument();
-    expect(
-      within(timeline).getByRole('button', { name: /Neon Drive\.mp3/ }),
-    ).toBeInTheDocument();
+    expect(within(timeline).getByRole('button', { name: /Neon Drive\.mp3/ })).toBeInTheDocument();
     expect(within(timeline).getByRole('button', { name: '띠용' })).toBeInTheDocument();
     expect(within(timeline).getByRole('button', { name: /로고\.png/ })).toBeInTheDocument();
   });
@@ -122,6 +120,25 @@ describe('StudioScreen', () => {
     expect(undo).toBeDisabled();
   });
 
+  // jsdom엔 레이아웃이 없어 겹침 자체(POK-237)는 여기서 못 잰다 — headroom이 Infinity로
+  // 떨어지는 경로다. 여기서 지키는 건 손잡이가 높이 상태에 배선돼 있다는 것뿐이고,
+  // 실제 상한은 브라우저 실측으로 확인한다.
+  it('높이 조절 손잡이의 화살표 키가 레인 높이를 바꾼다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    const lane = document.querySelector<HTMLElement>('[data-timeline-lanes]');
+    // 기본(null)일 땐 인라인 높이가 없다 — 레인 높이는 트랙 수가 정한다
+    expect(lane).not.toBeNull();
+    expect(lane?.style.height).toBe('');
+
+    await user.click(screen.getByRole('button', { name: '타임라인 높이 조절' }));
+    await user.keyboard('{ArrowUp}');
+
+    // 한 걸음 올리면 레인 높이가 px로 굳는다
+    expect(lane?.style.height).toMatch(/^\d+px$/);
+  });
+
   it('타임라인을 접으면 선택 구간 요약만 남는다', async () => {
     const user = userEvent.setup();
     renderStudio();
@@ -157,9 +174,7 @@ describe('StudioScreen', () => {
 
     expect(body).toHaveAttribute('data-panel-side', 'right');
     // 다시 누르면 돌아갈 수 있게 안내가 뒤집힌다
-    expect(
-      screen.getByRole('button', { name: '패널 위치 · 왼쪽으로 옮기기' }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '패널 위치 · 왼쪽으로 옮기기' })).toBeInTheDocument();
     // 옮겨도 도구·타임라인은 그대로 선다
     expect(screen.getByRole('region', { name: '자막' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: '타임라인' })).toBeInTheDocument();
@@ -239,8 +254,9 @@ describe('StudioScreen', () => {
     const end = screen.getByRole('slider', { name: '구간 끝점' });
     // 시작 핸들의 최소는 0이 아니라 「끝 − 3분」이다
     expect(Number(start.getAttribute('aria-valuemin'))).toBeGreaterThan(0);
-    expect(Number(end.getAttribute('aria-valuenow')) - Number(start.getAttribute('aria-valuemin')))
-      .toBeLessThanOrEqual(180);
+    expect(
+      Number(end.getAttribute('aria-valuenow')) - Number(start.getAttribute('aria-valuemin')),
+    ).toBeLessThanOrEqual(180);
   });
 
   it('볼륨 슬라이더가 포인터로 살아 있다 — 제스처 핸들러가 DS 핸들러를 덮지 않는다', () => {

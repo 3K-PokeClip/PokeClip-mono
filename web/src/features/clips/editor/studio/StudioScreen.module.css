@@ -126,6 +126,13 @@
   border-top: 1px solid var(--pc-color-border-subtle);
   background: var(--pc-color-bg-surface);
   padding: calc(8 * var(--pc-u)) calc(20 * var(--pc-u)) calc(6 * var(--pc-u));
+  /* 안전망. 높이 상한이 넘침을 막지만(POK-237), 자동 높이나 아주 낮은 창에서는 미리보기가
+     최소 높이에 걸려 트랜스포트가 여기까지 내려올 수 있다. 그때 배치된 요소(구간 반복
+     스위치·.stage)가 static인 헤더 버튼 위에 그려져 확대(＋)를 덮고 클릭까지 가져간다.
+     타임라인을 배치해 항상 위에 둔다 — 1은 DS z 스케일 맨 아래(--pc-z-docked 10)보다
+     낮아 드롭다운·토스트를 막지 않는다. */
+  position: relative;
+  z-index: 1;
 }
 
 .resizeHandle {
@@ -142,8 +149,9 @@
   padding: 0;
 }
 
+/* 하드코딩한 흰색은 흰 배경에서 사라진다 — 라이트 모드에선 hover 피드백이 아예 없었다 */
 .resizeHandle:hover {
-  background: rgb(255 255 255 / 0.03);
+  background: var(--pc-color-bg-surface-hover);
 }
 
 .resizeHandle:focus-visible {
