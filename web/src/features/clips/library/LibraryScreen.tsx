@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FolderOpen } from 'lucide-react';
 import { EmptyState, Input, Select } from '@/ui';
 import { ClipCard, clipCardDomId } from './ClipCard';
@@ -54,18 +54,49 @@ export function LibraryScreen(options: LibraryOptions = {}) {
   const panelClip = selectedClip ?? lastClip;
 
   const [pendingDelete, setPendingDelete] = useState<LibraryClip | null>(null);
+  const gridRef = useRef<HTMLUListElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  /** 카드가 사라진 자리의 대체 포커스 — 목록의 첫 카드, 목록도 비면 늘 서 있는 검색창 */
+  const focusFallback = () => {
+    const firstCard = gridRef.current?.querySelector<HTMLButtonElement>('button');
+    (firstCard ?? searchRef.current)?.focus();
+  };
+
+  /**
+   * 닫은 카드로 포커스를 돌려준다. 칩·검색으로 그 카드가 목록에서 빠졌으면 자리가 없으므로
+   * (선택은 남는 것이 의도다) 대체 자리로 물러선다 — 안 그러면 포커스가 곧 inert가 되는
+   * 패널 안에 남아 브라우저가 body로 떨어뜨린다.
+   */
+  const focusCardOrFallback = (id: string | null) => {
+    const card = id ? document.getElementById(clipCardDomId(id)) : null;
+    if (card) card.focus();
+    else focusFallback();
+  };
 
   const closePanel = () => {
     const id = selectedId;
     deselect();
-    // 패널은 닫히며 inert가 된다 — 포커스를 그 안에 두면 사라진다. 닫은 카드로 돌려준다.
-    if (id) document.getElementById(clipCardDomId(id))?.focus();
+    focusCardOrFallback(id);
   };
 
   const confirmDelete = () => {
-    if (pendingDelete) remove(pendingDelete.id);
+    if (pendingDelete) {
+      remove(pendingDelete.id);
+      refocusAfterDelete.current = true;
+    }
     setPendingDelete(null);
   };
+
+  // 삭제를 확정하면 선택이 풀려 패널이 inert가 되는데, 대화상자의 FocusScope는 열기 전
+  // 포커스였던 패널 안 삭제 버튼으로 되돌린다 — 받을 수 없는 자리라 포커스가 body로 떨어진다.
+  // FocusScope의 복원은 언마운트 정리라 이 effect보다 먼저 돈다. 그 뒤에 다시 잡는다.
+  const refocusAfterDelete = useRef(false);
+  useEffect(() => {
+    if (!refocusAfterDelete.current) return;
+    refocusAfterDelete.current = false;
+    focusFallback();
+  });
 
   const pendingDeleteStatus = pendingDelete ? statusFor(pendingDelete, now) : null;
 
@@ -78,6 +109,7 @@ export function LibraryScreen(options: LibraryOptions = {}) {
             <Input
               type="search"
               size="sm"
+              ref={searchRef}
               className={styles.search}
               aria-label="편집본 검색"
               placeholder="검색"
@@ -125,7 +157,7 @@ export function LibraryScreen(options: LibraryOptions = {}) {
             조건에 맞는 편집본이 없어요.
           </p>
         ) : (
-          <ul className={styles.grid} aria-label="편집본 목록" data-panel-open={open}>
+          <ul ref={gridRef} className={styles.grid} aria-label="편집본 목록" data-panel-open={open}>
             {clips.map((clip) => (
               <ClipCard
                 key={clip.id}

@@ -278,13 +278,19 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
 
   // 받기를 실제로 시작하지 않는다 — 편집본 파일을 줄 문이 계약에 없다.
   // 받는 척하고 멈춰 있느니 준비 중이라고 말하는 편이 낫다(ADR-044의 「거짓말 금지」).
-  const download = useCallback(() => {
-    toast({
-      tone: 'info',
-      title: '준비 중인 기능이에요',
-      description: '편집본 내려받기는 아직 준비 중이에요. 준비되면 알려드릴게요.',
-    });
-  }, [toast]);
+  //
+  // id를 받고도 쓰지 않는 것은 일부러다 — 실연동 때 이 자리가 「어느 편집본을 받는가」를
+  // 채워야 할 곳임을 시그니처로 남긴다.
+  const download = useCallback(
+    (_id: string) => {
+      toast({
+        tone: 'info',
+        title: '준비 중인 기능이에요',
+        description: '편집본 내려받기는 아직 준비 중이에요. 준비되면 알려드릴게요.',
+      });
+    },
+    [toast],
+  );
 
   const remove = useCallback((id: string) => {
     setClips((prev) => prev.filter((clip) => clip.id !== id));

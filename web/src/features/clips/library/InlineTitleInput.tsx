@@ -12,9 +12,12 @@ import styles from './LibraryScreen.module.css';
 export function InlineTitleInput({
   value,
   onChange,
+  readOnly = false,
 }: {
   value: string;
   onChange: (title: string) => void;
+  /** 편집이 잠긴 상태(승인 대기) — 읽을 수는 있어야 하므로 감추지 않고 readOnly로 둔다 */
+  readOnly?: boolean;
 }) {
   return (
     <input
@@ -23,6 +26,7 @@ export function InlineTitleInput({
       aria-label="클립 제목"
       placeholder="제목 입력"
       spellCheck={false}
+      readOnly={readOnly}
       value={value}
       onChange={(event) => onChange(event.target.value)}
       onKeyDown={(event) => {

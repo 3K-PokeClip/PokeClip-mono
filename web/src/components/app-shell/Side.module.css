@@ -227,11 +227,25 @@
     opacity 0.22s ease;
 }
 
+/* 접히면 숫자를 접고 점만 남긴다(.bellDot과 같은 신호). 통째로 지우면 낭독에는 「승인
+   대기함 3」이 남는데 화면에는 아무 흔적이 없어, 보는 쪽만 정보를 잃는다.
+   font-size 0이 숫자를 접고 접근 트리에는 그대로 남긴다 — 자세한 수는 낭독이 맡는다. */
+.sidebar[data-collapsed='true'] .item {
+  position: relative;
+}
+
 .sidebar[data-collapsed='true'] .badge {
-  min-width: 0;
-  max-width: 0;
+  position: absolute;
+  top: calc(5 * var(--u));
+  right: calc(9 * var(--u));
+  min-width: calc(8 * var(--u));
+  max-width: calc(8 * var(--u));
+  height: calc(8 * var(--u));
   padding: 0;
-  opacity: 0;
+  margin: 0;
+  font-size: 0;
+  border: 2px solid var(--pc-color-bg-surface);
+  box-sizing: content-box;
 }
 
 .divider {

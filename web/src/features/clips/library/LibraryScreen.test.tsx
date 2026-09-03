@@ -152,6 +152,21 @@ describe('LibraryScreen — 선택·상세 패널', () => {
     expect(within(panel()).getByDisplayValue('보스 막타 · 역전 순간')).toBeInTheDocument();
   });
 
+  it('카드가 검색으로 빠진 뒤 닫으면 포커스가 목록 첫 카드로 물러선다', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<LibraryScreen selectedId="lib2-1" />);
+
+    // 선택은 남고(의도된 동작) 그 카드만 목록에서 빠진다 — 돌려줄 카드가 사라진 자리다
+    await user.type(screen.getByRole('searchbox', { name: '편집본 검색' }), '랭크');
+    expect(panel()).toHaveAttribute('data-open', 'true');
+    expect(screen.queryByRole('button', { name: /^보스 막타/ })).toBeNull();
+
+    await user.click(within(panel()).getByRole('button', { name: '선택 해제' }));
+
+    expect(panel()).toHaveAttribute('inert');
+    expect(cards()[0]).toHaveFocus();
+  });
+
   it('선택 해제 버튼이 패널을 닫고 카드로 포커스를 돌려준다', async () => {
     const user = userEvent.setup();
     renderWithProviders(<LibraryScreen />);
@@ -230,6 +245,24 @@ describe('LibraryScreen — 상태별 액션 7종', () => {
     expect(inside.queryByRole('link', { name: /편집/ })).toBeNull();
     expect(inside.getByText(/승인 · 반려는 승인 대기함에서 처리해요/)).toBeInTheDocument();
     expect(inside.getByRole('button', { name: '다운로드' })).toBeInTheDocument();
+  });
+
+  it('승인 대기는 제목도 잠근다 — 안내문이 편집이 잠겼다고 말한 것을 지킨다', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<LibraryScreen selectedId="lib2-3" />);
+    const input = within(panel()).getByRole('textbox', { name: '클립 제목' });
+
+    expect(input).toHaveAttribute('readonly');
+    await user.type(input, '바꿔보기');
+    expect(input).toHaveValue('시청자 도네 반응 모음');
+  });
+
+  it('승인 대기가 아니면 제목은 잠기지 않는다', () => {
+    renderWithProviders(<LibraryScreen selectedId="lib2-1" />);
+
+    expect(within(panel()).getByRole('textbox', { name: '클립 제목' })).not.toHaveAttribute(
+      'readonly',
+    );
   });
 
   it('반려됨 — 수정하기 링크 · 반려 사유 카드', () => {
@@ -389,6 +422,30 @@ describe('LibraryScreen — 목업 전이', () => {
     expect(screen.queryByRole('button', { name: /^채팅 폭발/ })).toBeNull();
     expect(cards()).toHaveLength(7);
     expect(panel()).toHaveAttribute('inert');
+  });
+
+  it('삭제를 확정하면 포커스가 목록으로 돌아온다 — 사라진 삭제 버튼에 남지 않는다', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<LibraryScreen selectedId="lib2-2" />);
+
+    await user.click(within(panel()).getByRole('button', { name: '삭제' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '삭제' }));
+
+    expect(cards()[0]).toHaveFocus();
+  });
+
+  it('마지막으로 남은 편집본을 지우면 포커스가 검색창으로 물러선다', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<LibraryScreen />);
+    const search = screen.getByRole('searchbox', { name: '편집본 검색' });
+
+    await user.type(search, '랭크');
+    await user.click(cards()[0]!);
+    await user.click(within(panel()).getByRole('button', { name: '삭제' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '삭제' }));
+
+    expect(screen.queryByRole('list', { name: '편집본 목록' })).toBeNull();
+    expect(search).toHaveFocus();
   });
 
   it('삭제를 취소하면 그대로다', async () => {

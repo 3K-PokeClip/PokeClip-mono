@@ -214,6 +214,14 @@ describe('libraryView — 정렬', () => {
     ]);
   });
 
+  it('오프셋 표기가 섞여도 실제 시각 순으로 정렬한다 — 사전순 비교면 뒤집힌다', () => {
+    const mixed = [
+      clip({ id: 'kst', editedAt: '2026-09-02T14:20:00+09:00' }), // = 05:20Z
+      clip({ id: 'utc', editedAt: '2026-09-02T06:00:00Z' }), // 40분 더 늦다
+    ];
+    expect(sortClips(mixed, 'edited', NOW).map((c) => c.id)).toEqual(['utc', 'kst']);
+  });
+
   it('원본을 바꾸지 않는다', () => {
     const before = list.map((c) => c.id);
     sortClips(list, 'expiry', NOW);
@@ -290,6 +298,15 @@ describe('libraryView — detailViewFor', () => {
       note: null,
       showRejection: false,
     });
+  });
+
+  it('승인 대기만 제목을 잠근다 — 안내문이 편집이 잠겼다고 말하는 유일한 상태다', () => {
+    for (const role of ROLES) {
+      expect(detailViewFor('pending', role).titleLocked).toBe(true);
+      for (const status of STATUSES.filter((s) => s !== 'pending')) {
+        expect(detailViewFor(status, role).titleLocked).toBe(false);
+      }
+    }
   });
 
   it('렌더 실패는 길이를 말하지 않는다', () => {

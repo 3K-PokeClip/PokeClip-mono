@@ -117,14 +117,31 @@ export function filterByChip(
 
 // ---------- 검색 · 정렬 ----------
 
-/** 제목 부분 일치 — 공백을 다듬고 대소문자를 가리지 않는다. 빈 검색어는 전체다 */
+/**
+ * 제목 부분 일치 — 공백을 다듬고 대소문자를 가리지 않는다. 빈 검색어는 전체다.
+ *
+ * 로캘 무관한 `toLowerCase`를 쓴다. `toLocaleLowerCase`는 터키어 로캘에서 `I`를 점 없는 `ı`로
+ * 내려 이미 소문자인 「title」을 「I」로 검색하면 못 찾는다 — 제목은 로캘이 아니라 글자 그대로
+ * 찾는 값이다.
+ */
 export function filterByQuery(clips: readonly LibraryClip[], query: string): LibraryClip[] {
-  const needle = query.trim().toLocaleLowerCase();
+  const needle = query.trim().toLowerCase();
   if (!needle) return [...clips];
-  return clips.filter((clip) => clip.title.toLocaleLowerCase().includes(needle));
+  return clips.filter((clip) => clip.title.toLowerCase().includes(needle));
 }
 
-const byIsoDesc = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0);
+/**
+ * ISO 시각을 파싱해 비교한다. 문자열을 사전순으로 견주면 오프셋 표기가 섞이는 순간 어긋난다 —
+ * `2026-09-02T14:20:00+09:00`(=05:20Z)이 `2026-09-02T06:00:00Z`보다 뒤로 읽힌다. 목업은 지금
+ * 전부 `+09:00`이지만 이 훅은 내부만 서버 값으로 갈아끼우는 것이 전제이고, 같은 파일의
+ * `remainingMs`·`ddayFor`도 이미 파싱해서 견준다 — 한 파일에 두 규칙을 두지 않는다.
+ */
+function timeOf(iso: string): number {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : 0;
+}
+
+const byTimeDesc = (a: string, b: string) => timeOf(b) - timeOf(a);
 
 /**
  * 정렬. 만료 임박순은 원본 보관이 남은 것을 D-day 오름차순으로 앞세우고, 이미 만료됐거나
@@ -139,14 +156,14 @@ export function sortClips(
   const list = [...clips];
   switch (sort) {
     case 'edited':
-      return list.sort((a, b) => byIsoDesc(a.editedAt, b.editedAt));
+      return list.sort((a, b) => byTimeDesc(a.editedAt, b.editedAt));
     case 'created':
-      return list.sort((a, b) => byIsoDesc(a.createdAt, b.createdAt));
+      return list.sort((a, b) => byTimeDesc(a.createdAt, b.createdAt));
     case 'expiry':
       return list.sort((a, b) => {
         const ra = remainingMs(a, now);
         const rb = remainingMs(b, now);
-        if (ra === null && rb === null) return byIsoDesc(a.editedAt, b.editedAt);
+        if (ra === null && rb === null) return byTimeDesc(a.editedAt, b.editedAt);
         if (ra === null) return 1;
         if (rb === null) return -1;
         return ra - rb;
@@ -183,6 +200,12 @@ export interface DetailView {
   edit: { label: '이어서 편집' | '새 버전으로 편집'; href: '/clips/editor' } | null;
   /** 렌더 실패는 받을 파일이 없다 */
   download: boolean;
+  /**
+   * 제목 편집 잠금. 승인 대기는 안내문으로 「미리보기와 다운로드만」·「편집이 잠겨요」라고
+   * 말하므로 제목도 잠근다 — 잠갔다고 말해 놓고 고쳐지면 화면이 거짓말을 한다(ADR-044).
+   * 원본 만료·반려됨은 재편집만 막힐 뿐 이름은 바꿀 수 있으니 잠그지 않는다.
+   */
+  titleLocked: boolean;
   note: PanelNote | null;
   showRejection: boolean;
   /** 원본 만료 카드는 70%로 가라앉는다 */
@@ -201,6 +224,7 @@ export function detailViewFor(status: ClipStatus, role: LibraryRole): DetailView
     badge,
     edit: null,
     download: true,
+    titleLocked: false,
     note: null,
     showRejection: false,
     dimmed: false,
@@ -229,6 +253,7 @@ export function detailViewFor(status: ClipStatus, role: LibraryRole): DetailView
           href: '/clips/approvals',
           variant: 'soft',
         },
+        titleLocked: true,
         note: 'pending',
       };
     case 'rejected':

@@ -400,6 +400,23 @@
   border-color: var(--pc-color-accent);
 }
 
+/* 승인 대기라 편집이 잠긴 제목. 읽고 고를 수는 있어야 하니 감추지 않되, 입력처럼 보이는
+   호버·포커스 신호는 거둔다 — 고칠 수 없는 칸이 고칠 수 있는 것처럼 보이면 안 된다.
+   포커스 표시는 남긴다(키보드로 여기 왔다는 것은 알려야 한다). */
+.titleInput:read-only {
+  cursor: default;
+}
+
+.titleInput:read-only:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+.titleInput:read-only:focus {
+  background: transparent;
+  border-color: var(--pc-color-border-subtle);
+}
+
 .previewWrap {
   display: flex;
   justify-content: center;

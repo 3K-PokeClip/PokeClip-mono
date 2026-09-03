@@ -29,8 +29,27 @@ import styles from './Side.module.css';
 // 독 그룹별 좌측 사이드바 (디자인 Side). 그룹이 달라도 껍데기는 같고 메뉴만 갈리므로
 // 컴포넌트 하나가 menu prop으로 메뉴를 고른다 — 그룹마다 복제하면 접기 동작·치수가 곧 어긋난다.
 
+/**
+ * 사이드바 항목 key. 유니온으로 두는 이유는 배지 prop의 키를 이 목록으로 좁히기 위해서다 —
+ * `string`이면 오타가 타입을 통과해 배지가 조용히 안 그려진다(Dock의 DockHref와 같은 방식).
+ */
+type SideItemKey =
+  | 'livenow'
+  | 'vod'
+  | 'library'
+  | 'template'
+  | 'upstatus'
+  | 'approvals'
+  | 'link'
+  | 'editors'
+  | 'plugin'
+  | 'noti'
+  | 'billing'
+  | 'account'
+  | 'help';
+
 interface Item {
-  key: string;
+  key: SideItemKey;
   label: string;
   Icon: LucideIcon;
   href?: string; // 없으면 비활성 — 각 하위 티켓에서 라우트가 생기면 href를 추가한다
@@ -49,7 +68,7 @@ export type SideMenu = 'broadcast' | 'clips' | 'settings';
  * 받아야 그룹 레이아웃이 훅 값을 흘려 넣을 수 있다. 승인 대기함 수는 그 화면 티켓(POK-236)이
  * 채운다 — 여기서는 자리만 연다.
  */
-export type SideBadges = Partial<Record<string, number>>;
+export type SideBadges = Partial<Record<SideItemKey, number>>;
 
 // IA v5.7. 라우팅된 화면만 href를 갖는다 — 나머지는 별도 티켓.
 const MENUS: Record<SideMenu, Group[]> = {

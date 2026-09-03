@@ -63,7 +63,7 @@ export function ClipDetailPanel({
         </IconButton>
       </div>
 
-      <InlineTitleInput value={clip.title} onChange={onTitleChange} />
+      <InlineTitleInput value={clip.title} onChange={onTitleChange} readOnly={view.titleLocked} />
 
       {/* 미리보기 — 재생은 아직 없다(렌더 결과 파일이 없다). 장식이라 통째로 숨긴다 */}
       <div className={styles.previewWrap}>
