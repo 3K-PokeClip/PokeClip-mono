@@ -12,6 +12,7 @@ export * from './Skeleton';
 export * from './Badge';
 export * from './Avatar';
 export * from './Card';
+export * from './EmptyState';
 // Form
 export * from './Button';
 export * from './LinkButton';

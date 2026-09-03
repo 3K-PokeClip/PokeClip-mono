@@ -1,7 +1,7 @@
 'use client';
 
 import { Video } from 'lucide-react';
-import { Badge } from '@/ui';
+import { Badge, EmptyState } from '@/ui';
 import { useVodListMockState, VOD_DOWNLOAD_IDLE, type VodListOptions } from './useVodListMockState';
 import { VodPeriodFilter } from './VodPeriodFilter';
 import { VodRow } from './VodRow';
@@ -51,16 +51,11 @@ export function VodListScreen(options: VodListOptions = {}) {
       </div>
 
       {totalCount === 0 ? (
-        <div className={styles.emptyCard}>
-          <span className={styles.emptyIcon}>
-            <Video size={21} aria-hidden="true" />
-          </span>
-          <p className={styles.emptyTitle}>아직 지난 방송이 없어요</p>
-          <p className={styles.emptyBody}>
-            방송을 켜면 종료 후 VOD가 여기에 쌓여요. VOD는 60일 동안 보관되고, 만료 전에 풀 영상을
-            내려받을 수 있어요.
-          </p>
-        </div>
+        <EmptyState
+          icon={<Video size={21} />}
+          title="아직 지난 방송이 없어요"
+          description="방송을 켜면 종료 후 VOD가 여기에 쌓여요. VOD는 60일 동안 보관되고, 만료 전에 풀 영상을 내려받을 수 있어요."
+        />
       ) : broadcasts.length === 0 ? (
         // 「아직 없다」와 「이 기간에 없다」는 다른 말이다 — 빈 상태 카드를 재사용하면 거짓이 된다.
         // 목록이 통째로 사라지는 자리라 role="status"로 낭독시킨다(StreamInfoBar 선례).
