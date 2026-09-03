@@ -4,13 +4,16 @@ import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.CollectionStatus;
 import com.pokeclip.chat.collector.StopReason;
 import com.pokeclip.chat.collector.archive.ChatArchive;
+import com.pokeclip.chat.collector.chzzk.DonationSubscription;
 import com.pokeclip.chat.collector.chzzk.SessionEstablishException;
+import com.pokeclip.chat.collector.status.DonationSubscriptions;
 import com.pokeclip.chat.collector.observe.CollectionMetrics;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -203,9 +206,17 @@ public class SessionRegistry {
     private final ChatBuffer buffer;
     private final ChatPersister persister;
     private final ChatArchive archive;
+    private final DonationSubscriptions donations;
 
     public SessionRegistry(ChzzkProperties properties, RestClient.Builder restClientBuilder,
                            ChatBuffer buffer, ChatPersister persister, ChatArchive archive) {
+        this(properties, restClientBuilder, buffer, persister, archive, new DonationSubscriptions());
+    }
+
+    @Autowired
+    public SessionRegistry(ChzzkProperties properties, RestClient.Builder restClientBuilder,
+                           ChatBuffer buffer, ChatPersister persister, ChatArchive archive,
+                           DonationSubscriptions donations) {
         this.properties = properties;
         // 빌더는 프로토타입 빈이다. 한 번만 build()해서 세션 전부가 나눠 쓴다.
         // <b>{@code RestClient.create()}로 만들지 마라</b> — 자동 설정을 우회해
@@ -214,6 +225,18 @@ public class SessionRegistry {
         this.buffer = buffer;
         this.persister = persister;
         this.archive = archive;
+        this.donations = donations;
+    }
+
+    /**
+     * 이 방송의 후원 구독 상태. 등록부에 없으면 {@link DonationSubscription#NONE}이다.
+     *
+     * <p><b>{@link #statusOf}와 한 스냅숏으로 묶지 않았다.</b> 그 둘을 이어 읽으면 사이에
+     * 상태가 바뀔 수 있는데, 후원 상태는 채팅 상태 기계의 전이와 무관해서 「reconnecting인데
+     * 끊긴 시각 없음」 같은 자기모순이 안 생긴다 — 묶어서 얻는 것이 없다.
+     */
+    public DonationSubscription donationStateOf(String streamId) {
+        return donations.of(streamId);
     }
 
     /**
@@ -263,6 +286,7 @@ public class SessionRegistry {
                 new ReconnectPolicy(properties.reconnectFirstDelay(), properties.reconnectMaxDelay()),
                 restClient, buffer, persister, archive,
                 reconnectors, stopSignal, intakeClosed, releasesInFlight, lastSessionNo,
+                donations,
                 reason -> stopOne(streamerId, self.get(), reason));
         self.set(session);
         Entry entry = new Entry(session, status, metrics, stopSignal);
@@ -771,6 +795,10 @@ public class SessionRegistry {
      *                 {@code stopSignal} 이후에 흘러든 채팅이 빠진다
      */
     private void closeEntry(String streamId, Entry entry, long detached) {
+        // <b>자리를 뺀 방송의 후원 상태를 지운다.</b> 안 지우면 끝난 방송의 값이 창구
+        // 메모리에 영영 남고, 프로세스가 오래 돌수록 방송 수만큼 쌓인다.
+        // 여기가 자리를 빼는 길 전부가 모이는 유일한 자리다(close·stopOne·closeAll).
+        donations.remove(streamId);
         entry.stopSignal().countDown();
         try {
             entry.session().close();

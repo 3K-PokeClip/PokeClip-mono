@@ -10,6 +10,7 @@ import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.session.SessionKey;
 import com.pokeclip.chat.collector.session.SessionRegistry;
+import com.pokeclip.chat.collector.status.DonationSubscriptions;
 import com.pokeclip.chat.collector.session.StreamSession;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -283,6 +284,9 @@ public class CollectorRunner implements ApplicationRunner {
                 new ReconnectPolicy(properties.reconnectFirstDelay(), properties.reconnectMaxDelay()),
                 restClient, buffer, persister, archive,
                 reconnector, stopSignal, intakeClosed, releasesInFlight, lastSessionNo,
+                // 옛 경로는 자기 것을 하나 갖는다. 이 경로의 방송 번호는 legacy() 하나뿐이고
+                // 창구는 등록부만 읽으므로, 여기 적힌 값을 읽는 사람이 없다.
+                new DonationSubscriptions(),
                 this::newSession, this::heartbeatListener, this::onPermanentStop);
     }
 

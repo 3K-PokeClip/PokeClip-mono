@@ -45,6 +45,16 @@ public class ChatSession implements AutoCloseable {
     /** 종료할 때 구독 반납에 쓴다. 수립이 끝나야 채워진다. */
     private final AtomicReference<String> currentSessionKey = new AtomicReference<>();
 
+    /**
+     * 이 세션의 후원 구독 결과. 수립 ⑥에서 정해지고 반납할 때 비워진다.
+     * <b>NONE이면 반납할 것이 없다</b> — 구독한 적 없는 키로 반납 REST를 한 번 더 쏘지 않는다.
+     */
+    private final AtomicReference<DonationSubscription> donation =
+            new AtomicReference<>(DonationSubscription.NONE);
+
+    /** 이 세션이 후원을 구독했나. 등록부가 창구에 실을 값으로 읽어 간다. */
+    public DonationSubscription donationSubscription() { return donation.get(); }
+
     /** 삼킨 싱크 예외의 수. 삼키기만 하고 안 세면 조용한 실패를 우리가 만드는 것이다. */
     public long sinkFailureCount() { return sinkFailures.get(); }
 
@@ -81,6 +91,14 @@ public class ChatSession implements AutoCloseable {
         if (key == null || key.isBlank()) {
             result = Release.SKIPPED;
         } else {
+            // <b>후원부터 반납한다.</b> 채팅 반납이 실패해도 후원 자리는 이미 돌려준 뒤가 되고,
+            // 그 자리도 계정당 연결 상한 안에 든다. 구독하지 않았으면(NONE·REFUSED·FAILED)
+            // 아무것도 안 쏜다 — 구독한 적 없는 키로 왕복을 하나 더 만들 이유가 없다.
+            if (donation.getAndSet(DonationSubscription.NONE) == DonationSubscription.SUBSCRIBED) {
+                client.unsubscribeDonationQuietly(key);
+            }
+            // 결말은 채팅 반납의 것이다 — 후원 반납의 성패로 이 값을 바꾸면 로그의
+            // subscription= 이 무엇의 결말인지가 갈린다.
             result = client.unsubscribeChatQuietly(key) ? Release.RETURNED : Release.FAILED;
         }
         close();
@@ -162,6 +180,25 @@ public class ChatSession implements AutoCloseable {
         currentSessionKey.set(sessionKey.get());
         client.subscribeChat(sessionKey.get());                     // ④ SUBSCRIBE
         await(subscribed, endAt, abort, EstablishStage.WAITING_SUBSCRIBED); // ⑤
+
+        // ⑥ 후원 구독. <b>예산·중단 신호 안에 둔다</b>(계획 검증 F9) — 밖에 두면 수립 최악이
+        // REST 시한(접속 2 + 읽기 5)만큼 더 늘고, 그 사이 releaseAndClose가 지나가면 방금 건
+        // 후원 구독을 아무도 반납하지 않는다.
+        //
+        // <b>거부돼도 수립은 성공이다.</b> subscribeDonation은 던지지 않는다 — 후원 권한만
+        // 없는 토큰이 채팅까지 못 걷게 되는 것을 막는 것이 이 카드의 축이다.
+        //
+        // <b>subscribed(DONATION) 프레임은 기다리지 않는다.</b> ⑤와 다른 선택이라 적어 둔다 —
+        // 채팅은 그 프레임이 안 오면 채팅이 한 건도 안 오는 것과 같아 기다릴 값이 있지만,
+        // 후원은 안 와도 채팅이 이미 걷고 있어 기다리는 동안 잃는 것(수립 지연)만 있다.
+        // REST 200이 곧 구독이고 프레임은 확인이다.
+        abortIfStopping(abort, EstablishStage.SUBSCRIBE);
+        if (System.nanoTime() < endAt) {
+            donation.set(client.subscribeDonation(sessionKey.get()));   // ⑥ DONATION
+        }
+        // 예산이 이미 다했으면 <b>건너뛴다(NONE)</b>. 던지지 않는 이유는 위와 같다 —
+        // 여기서 던지면 후원 때문에 채팅 수립이 실패하는 길이 다시 열린다.
+        // 건너뛴 세션은 다음 수립에서 다시 시도된다.
 
         return new Established(handshake.get(), socket);
     }

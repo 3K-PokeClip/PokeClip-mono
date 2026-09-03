@@ -170,6 +170,26 @@ public class FakeChzzkServer implements WebSocketConfigurer {
             }
             return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
         }
+
+        /**
+         * 후원 구독. <b>거부해도 채팅 세션은 그대로 살아 있어야 한다</b> —
+         * 그것이 POK-234 태스크 4가 지키는 것이고, 여기서 403을 주는 것이
+         * 그 자리를 만드는 유일한 손잡이다.
+         */
+        @PostMapping("/open/v1/sessions/events/subscribe/donation")
+        public ResponseEntity<String> subscribeDonation(@RequestParam String sessionKey,
+                                                        HttpServletRequest request) {
+            if (behavior.subscribeDonationStatus != 200) {
+                return ResponseEntity.status(behavior.subscribeDonationStatus)
+                        .body(errorBody(behavior.subscribeDonationStatus));
+            }
+            if (behavior.sendDonationSubscribed) {
+                behavior.emitSystemTo(bearerToken(request),
+                        "{\"type\":\"subscribed\",\"data\":"
+                        + "{\"eventType\":\"DONATION\",\"channelId\":\"FAKE-CHANNEL\"}}");
+            }
+            return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
+        }
     }
 
     /** 구독 반납. 안 오면 세션이 우리 손으로 안 닫히고 연결 상한을 먹는다. */
@@ -208,6 +228,16 @@ public class FakeChzzkServer implements WebSocketConfigurer {
             } finally {
                 behavior.endUnsubscribeCall();
             }
+        }
+
+        /**
+         * 후원 구독 반납. <b>채팅 반납과 따로 센다</b> — 묶으면 「반납이 둘 나갔다」와
+         * 「채팅 반납이 두 번 나갔다」가 같은 값이 되어 아무도 못 가른다.
+         */
+        @PostMapping("/open/v1/sessions/events/unsubscribe/donation")
+        public ResponseEntity<String> unsubscribeDonation(@RequestParam String sessionKey) {
+            behavior.countUnsubscribeDonationCall();
+            return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
         }
     }
 

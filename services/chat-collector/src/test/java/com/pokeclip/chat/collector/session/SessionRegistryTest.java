@@ -4,6 +4,7 @@ import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.CollectionStatus;
 import com.pokeclip.chat.collector.StopReason;
 import com.pokeclip.chat.collector.archive.ChatArchive;
+import com.pokeclip.chat.collector.chzzk.DonationSubscription;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
@@ -1106,6 +1107,83 @@ class SessionRegistryTest extends IntegrationTestSupport {
             return (Consumer<StopReason>) handle.get(session);
         }
         throw new AssertionError("자리에 " + streamId + " 세션이 없다");
+    }
+
+    // ------------------------------------------------------------------
+    // 후원 구독 (POK-234 태스크 4·4B)
+    // ------------------------------------------------------------------
+
+    /**
+     * 🔴 이 카드가 지키는 것. <b>후원 구독이 거부돼도 채팅 수집은 산다.</b>
+     *
+     * <p>문항 2: 「refused다」만 보면 <b>후원 구독을 아예 안 하는 구현</b>도 통과한다 —
+     * 그쪽은 NONE이라 실제로는 안 통과하지만, 더 중요한 것은 <b>채팅이 계속 걷는지</b>다.
+     * 그래서 상태·수신 둘을 같이 본다. 수신 1건이 「세션이 살아 있다」의 양성 대조다.
+     */
+    @Test
+    void 후원_구독이_403이어도_채팅_구독은_살고_상태는_refused다() throws Exception {
+        givenRegistry();
+        behavior.subscribeDonationStatus = 403;
+
+        assertThat(registry.open(key("s-don-403", 7L, "CH"), "tok-7"))
+                .as("후원 거부가 수립을 실패시키면 이 방송은 채팅도 못 걷는다")
+                .isTrue();
+        awaitUntil(AWAIT, () -> registry.statusOf("s-don-403") != null
+                && registry.statusOf("s-don-403").state() == CollectionStatus.State.COLLECTING);
+
+        assertThat(registry.donationStateOf("s-don-403")).isEqualTo(DonationSubscription.REFUSED);
+
+        behavior.emitChatTo("tok-7", "{\"channelId\":\"CH\",\"senderChannelId\":\"S\","
+                + "\"content\":\"a\",\"messageTime\":1754300000000}");
+        awaitUntil(AWAIT, () -> registry.receivedOf("s-don-403") == 1);
+        assertThat(registry.receivedOf("s-don-403"))
+                .as("후원이 거부된 방송의 채팅이 안 들어오면 이 카드가 막으려던 그것이다")
+                .isEqualTo(1);
+    }
+
+    /** 반납이 <b>둘</b> 나가야 한다. 후원 자리도 계정당 상한을 먹는다. */
+    @Test
+    void 후원_구독이_되면_subscribed이고_닫을_때_반납이_둘_나간다() throws Exception {
+        givenRegistry();
+
+        registry.open(key("s-don-ok", 8L, "CH"), "tok-8");
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-don-ok") == DonationSubscription.SUBSCRIBED);
+        assertThat(registry.donationStateOf("s-don-ok")).isEqualTo(DonationSubscription.SUBSCRIBED);
+
+        registry.close("s-don-ok");   // 공개 종료 경로 — stopOne은 private다(계획 검증 F8)
+
+        awaitUntil(AWAIT, () -> behavior.unsubscribeDonationCallCount() == 1);
+        assertThat(behavior.unsubscribeDonationCallCount())
+                .as("후원 반납이 안 나가면 그 자리가 계정 상한 안에 남는다")
+                .isEqualTo(1);
+        assertThat(behavior.unsubscribeCallCount())
+                .as("채팅 반납이 0이면 위 단언은 「반납이 둘」이 아니라 「후원만」을 잰 것이다")
+                .isGreaterThanOrEqualTo(1);
+    }
+
+    /**
+     * {@code subscribed(DONATION)} 프레임을 <b>안 기다린다</b>는 선택을 재는 갈래다.
+     * 안 적으면 다음 사람이 「⑤처럼 기다려야 하지 않나」로 되돌린다 —
+     * 되돌리면 이 검사가 수립 시한에서 빨간불이 된다.
+     */
+    @Test
+    void 후원_subscribed_프레임이_안_와도_수립은_성공한다() throws Exception {
+        givenRegistry();
+        behavior.sendDonationSubscribed = false;
+
+        assertThat(registry.open(key("s-don-noframe", 13L, "CH"), "tok-13")).isTrue();
+        awaitUntil(AWAIT, () -> registry.statusOf("s-don-noframe") != null
+                && registry.statusOf("s-don-noframe").state() == CollectionStatus.State.COLLECTING);
+        assertThat(registry.donationStateOf("s-don-noframe"))
+                .as("REST가 200이면 구독된 것이다 — 프레임은 확인이지 조건이 아니다")
+                .isEqualTo(DonationSubscription.SUBSCRIBED);
+    }
+
+    /** 등록부에 없는 방송은 NONE이다. clip 배선이 null을 안 보게 한다. */
+    @Test
+    void 모르는_방송의_후원_상태는_NONE이다() {
+        givenRegistry();
+        assertThat(registry.donationStateOf("never-heard")).isEqualTo(DonationSubscription.NONE);
     }
 
     // ------------------------------------------------------------------

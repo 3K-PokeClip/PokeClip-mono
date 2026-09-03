@@ -9,6 +9,8 @@ import com.pokeclip.chat.collector.chzzk.ChatEventDecoder;
 import com.pokeclip.chat.collector.chzzk.ChatMessage;
 import com.pokeclip.chat.collector.chzzk.ChatSession;
 import com.pokeclip.chat.collector.chzzk.ChzzkSessionClient;
+import com.pokeclip.chat.collector.chzzk.DonationSubscription;
+import com.pokeclip.chat.collector.status.DonationSubscriptions;
 import com.pokeclip.chat.collector.chzzk.SessionEstablishException;
 import com.pokeclip.chat.collector.chzzk.SystemEvent;
 import com.pokeclip.chat.collector.engineio.EngineIoFrame;
@@ -159,6 +161,9 @@ public class StreamSession {
      */
     private final Consumer<StopReason> onPermanentStop;
 
+    /** 이 방송의 후원 구독 상태를 적는 곳. 창구가 여기서 읽는다. */
+    private final DonationSubscriptions donations;
+
     /**
      * 등록부가 여는 세션({@code SessionRegistry}). <b>검사용 손잡이 둘을 안 받는다</b> —
      * 그 둘은 러너를 <i>상속해서</i> 갈아 끼우는 옛 검사 전용이고, 등록부 경로에는
@@ -171,11 +176,11 @@ public class StreamSession {
                          ChatBuffer buffer, ChatPersister persister, ChatArchive archive,
                          ExecutorService reconnector, CountDownLatch stopSignal,
                          AtomicBoolean intakeClosed, AtomicInteger releasesInFlight,
-                         AtomicLong lastSessionNo,
+                         AtomicLong lastSessionNo, DonationSubscriptions donations,
                          Consumer<StopReason> onPermanentStop) {
         this(key, accessToken, properties, status, metrics, policy, restClient,
                 buffer, persister, archive, reconnector, stopSignal, intakeClosed,
-                releasesInFlight, lastSessionNo, null, null, onPermanentStop);
+                releasesInFlight, lastSessionNo, donations, null, null, onPermanentStop);
     }
 
     /**
@@ -189,7 +194,7 @@ public class StreamSession {
                          ChatBuffer buffer, ChatPersister persister, ChatArchive archive,
                          ExecutorService reconnector, CountDownLatch stopSignal,
                          AtomicBoolean intakeClosed, AtomicInteger releasesInFlight,
-                         AtomicLong lastSessionNo,
+                         AtomicLong lastSessionNo, DonationSubscriptions donations,
                          Function<ChzzkSessionClient, ChatSession> sessionFactory,
                          LongFunction<HeartbeatListener> heartbeatListenerFactory,
                          Consumer<StopReason> onPermanentStop) {
@@ -208,6 +213,7 @@ public class StreamSession {
         this.intakeClosed = intakeClosed;
         this.releasesInFlight = releasesInFlight;
         this.lastSessionNo = lastSessionNo;
+        this.donations = donations;
         this.sessionFactory = sessionFactory != null ? sessionFactory : ChatSession::new;
         this.heartbeatListenerFactory = heartbeatListenerFactory != null
                 ? heartbeatListenerFactory : this::heartbeatListener;
@@ -250,6 +256,12 @@ public class StreamSession {
      * 영향이 없다 — 쓰이는 곳은 <b>닫을 때의 구독 반납</b>뿐이라 그때 옛 토큰이 맞다.
      */
     public long retarget(SessionKey newKey) {
+        // <b>후원 상태도 같이 옮긴다.</b> 소켓과 구독은 그대로이므로 값은 같지만
+        // 열쇠가 바뀐다 — 안 옮기면 새 방송이 「후원 상태 모름(none)」으로 보이고
+        // 끝난 방송 번호의 값이 창구 메모리에 영영 남는다.
+        DonationSubscription carried = donations.of(this.key.streamId());
+        donations.remove(this.key.streamId());
+        donations.set(newKey.streamId(), carried);
         this.key = newKey;
         // <b>방송 단위 지표를 새 경계에서 다시 센다.</b> 소켓과 세션은 그대로지만 방송이
         // 바뀌었으므로, 안 자르면 stream= 레이블만 새 방송이고 그 안의 숫자는 앞 방송
@@ -609,6 +621,10 @@ public class StreamSession {
             // 다시 붙었다. 끊겨 있던 구간을 여기서 닫는다 — 지우기만 하면 그 시간이
             // 어느 지표에도 안 남고, 수신 공백에 섞인 채로 "한산했을 뿐"과 같아 보인다.
             // 절단 시각도 같이 비운다. 안 비우면 다음 절단이 남의 시각을 물려받는다.
+            // 후원 구독 결과를 <b>수립이 성공으로 확정된 뒤에</b> 적는다. 앞에서 적으면
+            // 위 갈래들(!started)로 빠진 세션의 값이 창구에 남아, 걷지도 않는 방송이
+            // subscribed로 보인다. 재수립마다 덮어쓴다 — 권한이 회복되면 그때 올라온다.
+            donations.set(key.streamId(), opening.donationSubscription());
             Instant since = disconnectedAt.getAndSet(null);
             if (since != null) {
                 metrics.recordOutage(since, Instant.now());
