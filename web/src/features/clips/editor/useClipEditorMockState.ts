@@ -10,6 +10,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
+import type { EditorPlayback } from './editorPlayback';
+import { useEditorPlaybackSimulation } from './useEditorPlaybackSimulation';
 import {
   canRedo as historyCanRedo,
   canUndo as historyCanUndo,
@@ -267,6 +269,13 @@ export interface ClipEditorOptions {
    * 생성 전 → 후 전이는 idle로 마운트해 확인한다(테스트가 쓰는 문).
    */
   initialSubtitleStatus?: 'idle' | 'ready';
+  /**
+   * 재생을 맡을 어댑터. 안 주면 목업 시뮬레이션이다(미디어 없이 플레이헤드만 흐른다).
+   *
+   * **한 인스턴스가 사는 동안 있거나 없거나 둘 중 하나여야 한다** — 중간에 뒤집히면 재생 상태의
+   * 주인이 바뀌어 위치가 튄다. 화면 쪽에서 컴포넌트를 갈라 그것을 보장한다(StudioScreen).
+   */
+  playback?: EditorPlayback;
 }
 
 export interface ClipEditorMockState {
@@ -404,9 +413,14 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   );
   const recipe = history.present;
 
-  const [playing, setPlaying] = useState(false);
-  // as const가 붙은 목업이라 명시하지 않으면 리터럴 타입(4934)으로 굳는다
-  const [playheadSeconds, setPlayheadSeconds] = useState<number>(MOCK_SOURCE.playheadSeconds);
+  // 재생은 어댑터가 맡는다. 주입이 없으면 목업 시뮬레이션 — 훅은 늘 호출하고(조건부 호출 금지)
+  // 쓸 쪽만 고른다. 안 쓰이는 쪽은 playing=false 라 타이머도 걸지 않는다.
+  const simulation = useEditorPlaybackSimulation({
+    durationSeconds: MOCK_SOURCE.durationSeconds,
+    initialSeconds: MOCK_SOURCE.playheadSeconds,
+  });
+  const playback = options.playback ?? simulation;
+  const { playing, currentSeconds: playheadSeconds } = playback;
   const [speed, setSpeed] = useState<number>(1);
   const [loop, setLoop] = useState(true);
 
@@ -488,30 +502,18 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   // 기준이 이벤트마다 옮겨가, 눈금이 손 아래에서 미끄러지고 늘리기가 창 폭에서 멎는다.
   const [frozenView, setFrozenView] = useState<TimelineView | null>(null);
 
-  const clampPlayhead = useCallback(
-    (seconds: number) => Math.min(MOCK_SOURCE.durationSeconds, Math.max(0, seconds)),
-    [],
-  );
-
-  // 재생 시뮬레이션 — 구간 끝에서 반복이거나 멈춘다 (usePlayerSimulation의 tick 구조)
+  // 구간·배속을 어댑터에 알린다. 경계에서 멈추거나 되감는 판단은 어댑터의 재생 틱이 한다 —
+  // 여기(상태 갱신 뒤)서 하면 배속이 높을 때 눈에 띌 만큼 구간 밖을 지나치고,
+  // 정지 중에 핸들만 끌어도 재생 위치가 끌려간다.
+  //
+  // 객체가 아니라 함수에 의존한다 — 주입된 어댑터가 렌더마다 새 객체일 수 있다.
+  const { setBounds, setRate } = playback;
   useEffect(() => {
-    if (!playing) return undefined;
-    const timer = setInterval(() => {
-      setPlayheadSeconds((current) => {
-        // 구간 앞에서 재생을 시작했으면 반복은 구간 안으로 데려온다 —
-        // 끝 경계만 보면 「구간 반복」을 켜 둔 채로 클립 밖을 재생한다
-        if (loop && current < recipe.range.startSeconds) return recipe.range.startSeconds;
-        const next = current + 0.1 * speed;
-        if (next >= recipe.range.endSeconds) {
-          if (loop) return recipe.range.startSeconds;
-          setPlaying(false);
-          return recipe.range.endSeconds;
-        }
-        return next;
-      });
-    }, 100);
-    return () => clearInterval(timer);
-  }, [playing, speed, loop, recipe.range.startSeconds, recipe.range.endSeconds]);
+    setBounds({ ...recipe.range, loop });
+  }, [setBounds, recipe.range, loop]);
+  useEffect(() => {
+    setRate(speed);
+  }, [setRate, speed]);
 
   const setRangeEdge = useCallback(
     (edge: 'start' | 'end', seconds: number) => {
@@ -537,6 +539,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   // 전역 키 리스너가 해제·재등록을 반복한다.
   const playheadRef = useRef(playheadSeconds);
   playheadRef.current = playheadSeconds;
+
   const markIn = useCallback(() => setRangeEdge('start', playheadRef.current), [setRangeEdge]);
   const markOut = useCallback(() => setRangeEdge('end', playheadRef.current), [setRangeEdge]);
 
@@ -610,17 +613,11 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     ),
 
     playing,
-    togglePlay: useCallback(() => setPlaying((v) => !v), []),
+    togglePlay: playback.togglePlay,
     playheadSeconds,
     playheadLabel: formatTimecodeTenths(playheadSeconds),
-    seekBy: useCallback(
-      (delta: number) => setPlayheadSeconds((current) => clampPlayhead(current + delta)),
-      [clampPlayhead],
-    ),
-    seekTo: useCallback(
-      (seconds: number) => setPlayheadSeconds(clampPlayhead(seconds)),
-      [clampPlayhead],
-    ),
+    seekBy: playback.seekBy,
+    seekTo: playback.seekTo,
     speed,
     speedOptions: SPEED_OPTIONS,
     setSpeed,
@@ -736,7 +733,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     sfxPresets: MOCK_SFX_PRESETS,
     images: MOCK_IMAGES,
 
-    sourceDurationSeconds: MOCK_SOURCE.durationSeconds,
+    sourceDurationSeconds: playback.durationSeconds,
     view,
     activeTool,
     toolOptions: TOOL_OPTIONS,
