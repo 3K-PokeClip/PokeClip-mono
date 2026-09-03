@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { screen, within } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { describe, expect, it } from 'vitest';
@@ -291,6 +291,44 @@ describe('LibraryScreen — 제목 인라인 편집', () => {
     expect(
       screen.getByRole('button', { name: '보스 막타 · 편집 중 · 길이 1:22' }),
     ).toBeInTheDocument();
+  });
+
+  // 한글 입력기는 조합 중에도 Enter를 보낸다. 그때 blur를 걸면 브라우저가 조합을 강제로
+  // 끝내면서 마지막 글자가 한 번 더 들어간다 — jsdom에는 입력기가 없어 그 중복 자체는
+  // 재현되지 않으므로, 원인이 되는 자리(조합 중에 편집을 끝내지 않는다)를 고정한다.
+  it('조합 중 Enter는 편집을 끝내지 않는다 — 입력기가 글자를 확정하는 Enter다', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<LibraryScreen selectedId="lib2-1" />);
+
+    const input = within(panel()).getByRole('textbox', { name: '클립 제목' });
+    await user.click(input);
+    expect(input).toHaveFocus();
+
+    // 크롬·파이어폭스는 isComposing으로 조합 중임을 알린다
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    expect(input).toHaveFocus();
+
+    // isComposing이 비어 오는 브라우저는 keyCode 229로 같은 것을 알린다
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 });
+    expect(input).toHaveFocus();
+
+    // 조합 중 Escape는 조합을 취소하라는 뜻이라 역시 편집을 끝내지 않는다
+    fireEvent.keyDown(input, { key: 'Escape', isComposing: true });
+    expect(input).toHaveFocus();
+  });
+
+  it('조합이 끝난 Enter·Escape는 편집을 끝낸다', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<LibraryScreen selectedId="lib2-1" />);
+
+    const input = within(panel()).getByRole('textbox', { name: '클립 제목' });
+    await user.click(input);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(input).not.toHaveFocus();
+
+    await user.click(input);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(input).not.toHaveFocus();
   });
 });
 
