@@ -172,6 +172,11 @@ docker compose -f ../../../docker-compose.yml up -d media-stub
 ⚠️ 라이브 플레이어의 `HLS_DVR_CONFIG`를 편집기에 쓰지 마라 — `backBufferLength`가 3700초라
 10분(≈460MB) 소스에서 브라우저 버퍼 예산을 넘겨 재생이 튄다. 편집기용은 `editorHlsConfig.ts`다.
 
+**안 뜰 때 먼저 볼 것 — 탭이 배경에 있으면 영상이 영영 안 뜬다.** Chrome은 `document.hidden`인
+탭에서 MediaSource를 열지 않는다. 재생목록(`index.m3u8`·`video.m3u8`·`audio0.m3u8`)은 전부 200인데
+조각(`.m4s`) 요청이 0건이고 `readyState`가 0이면 이 경우다 — 에러도 콘솔 로그도 남지 않아
+코드 문제로 오해하기 쉽다. **탭을 앞으로 가져오면 그 자리에서 로드가 시작된다.**
+
 ## 편집자가 하는 일의 본질
 
 **화면에서 "여기부터 여기까지"를 고르면, 그 시각 두 개가 서버로 간다.**
