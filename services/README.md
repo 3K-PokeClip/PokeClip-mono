@@ -2287,8 +2287,15 @@ health는 프로세스를, 창구는 방송 하나를 말한다.
 
 ```json
 {"streamId":"live-A-001","state":"reconnecting","since":"2026-08-22T10:12:30Z",
- "attempt":3,"needsRelink":false,"observedAt":"2026-08-22T10:13:05Z"}
+ "attempt":3,"needsRelink":false,"donationState":"subscribed",
+ "observedAt":"2026-08-22T10:13:05Z"}
 ```
+
+🔴 **`donationState`는 `state`와 독립이다** (POK-234). 넷 중 하나다 —
+`none`(구독한 적 없음 · 등록부에 없는 방송) · `subscribed` · `refused`(401·403, 권한 없음) ·
+`failed`(그 밖의 실패. 다음 수립에서 다시 시도한다). **`state=collecting`인데 `donationState=refused`가
+정상 상태다** — 앱 동의에 후원 Scope가 빠진 토큰이 그 자리이고, 그때도 채팅은 그대로 걷힌다.
+**이 값으로 배너를 켜지 마라** — 채팅 수집은 멀쩡하다. **null은 안 나간다**(모르면 `none`).
 
 | `state` | 뜻 | `since` | 웹 배너 |
 |---|---|---|---|
