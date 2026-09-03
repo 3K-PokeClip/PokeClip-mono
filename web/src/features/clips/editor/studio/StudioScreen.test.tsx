@@ -428,3 +428,57 @@ describe('StudioScreen — 로컬 소스', () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 });
+
+describe('StudioScreen — 크롭 위치 드래그 (E5)', () => {
+  it('영상 칸이 크롭 조작판이 되고 키보드로도 움직인다', async () => {
+    const user = userEvent.setup();
+    renderWithSource();
+
+    const surface = screen.getByRole('slider', { name: /크롭 위치/ });
+    expect(surface).toHaveAttribute('aria-orientation', 'horizontal');
+    expect(surface).toHaveAttribute('aria-valuenow', '50');
+
+    surface.focus();
+    await user.keyboard('{ArrowRight}');
+
+    // 오른쪽으로 한 걸음 = 소스의 오른쪽을 더 본다
+    expect(Number(surface.getAttribute('aria-valuenow'))).toBeGreaterThan(50);
+  });
+
+  it('왼쪽 끝·오른쪽 끝을 넘어가지 않는다', async () => {
+    const user = userEvent.setup();
+    renderWithSource();
+    const surface = screen.getByRole('slider', { name: /크롭 위치/ });
+    surface.focus();
+
+    for (let i = 0; i < 200; i += 1) await user.keyboard('{ArrowLeft}');
+    expect(surface).toHaveAttribute('aria-valuenow', '0');
+
+    for (let i = 0; i < 400; i += 1) await user.keyboard('{ArrowRight}');
+    expect(surface).toHaveAttribute('aria-valuenow', '100');
+  });
+
+  it('크롭을 옮긴 뒤 실행취소로 되돌린다', async () => {
+    const user = userEvent.setup();
+    renderWithSource();
+    const surface = screen.getByRole('slider', { name: /크롭 위치/ });
+    surface.focus();
+    await user.keyboard('{ArrowRight}');
+    const moved = surface.getAttribute('aria-valuenow');
+
+    await user.click(screen.getByRole('button', { name: '작업 이전으로' }));
+
+    expect(surface.getAttribute('aria-valuenow')).not.toBe(moved);
+    expect(surface).toHaveAttribute('aria-valuenow', '50');
+  });
+
+  it('소스가 없으면 조작판이 없다 — 잘라낼 그림이 없다', () => {
+    renderStudio();
+    expect(screen.queryByRole('slider', { name: /크롭 위치/ })).not.toBeInTheDocument();
+  });
+
+  it('접근성 위반이 없다', async () => {
+    const { container } = renderWithSource();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
