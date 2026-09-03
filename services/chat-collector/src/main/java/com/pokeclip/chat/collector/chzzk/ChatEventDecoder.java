@@ -35,12 +35,19 @@ public final class ChatEventDecoder {
         if (messageTime <= 0) {
             return null;
         }
+        // 닉네임·역할은 「없으면 null」이다. isMissingNode로 먼저 거르는 이유는 Jackson의
+        // null 노드 처리에 기대지 않기 위해서다 — Jackson 2의 asText()는 문자열 "null"을
+        // 줬고 3의 asString(null)은 null을 준다(실행으로 확인). 그 차이가 또 바뀌어도
+        // 이 갈래는 안 흔들린다.
+        JsonNode profile = inner.path("profile");
         return new ChatMessage(
                 inner.path("channelId").asString(""),
                 inner.path("senderChannelId").asString(""),
                 inner.path("content").asString(""),
                 messageTime,
-                innerText);
+                innerText,
+                profile.path("nickname").isMissingNode() ? null : profile.path("nickname").asString(null),
+                inner.path("userRoleCode").isMissingNode() ? null : inner.path("userRoleCode").asString(null));
     }
 
     public static SystemEvent decodeSystem(String eventPayload) {

@@ -126,6 +126,40 @@ class ChatEventDecoderTest {
                 .isEqualTo(inner.getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * 닉네임은 화면에 「누가 말했나」를 띄우는 값이라 창구(POK-234)가 표에서 읽어 내보낸다.
+     * 없으면 빈 문자열이 아니라 null이어야 한다 — 빈 문자열은 「이름이 빈 사람」과 못 가른다.
+     */
+    @Test
+    void 닉네임과_역할을_뽑고_없으면_null이다() {
+        String inner = "{\"channelId\":\"CH1\",\"senderChannelId\":\"S1\",\"content\":\"x\","
+                + "\"messageTime\":1754300000000,\"profile\":{\"nickname\":\"겜돌이\"},"
+                + "\"userRoleCode\":\"streamer\"}";
+        ChatMessage m = ChatEventDecoder.decodeChat("[\"CHAT\"," + quoteAsJson(inner) + "]");
+        assertThat(m.nickname()).isEqualTo("겜돌이");
+        assertThat(m.userRole()).isEqualTo("streamer");
+
+        String bare = "{\"channelId\":\"CH1\",\"senderChannelId\":\"S1\",\"content\":\"x\",\"messageTime\":1754300000000}";
+        ChatMessage b = ChatEventDecoder.decodeChat("[\"CHAT\"," + quoteAsJson(bare) + "]");
+        assertThat(b.nickname()).isNull();
+        assertThat(b.userRole()).isNull();
+    }
+
+    /**
+     * JSON null과 「칸이 없음」을 같게 다룬다. Jackson 3의 asString(null)은 NullNode에
+     * null을 주지만(Jackson 2의 asText()는 문자열 "null"이었다) 그 차이에 기대지 않고
+     * isMissingNode 갈래로 먼저 거른다 — 그 동작이 바뀌어도 이 단언이 잡는다.
+     */
+    @Test
+    void 닉네임이_JSON_null이어도_null이다() {
+        String inner = "{\"channelId\":\"CH1\",\"senderChannelId\":\"S1\",\"content\":\"x\","
+                + "\"messageTime\":1754300000000,\"profile\":{\"nickname\":null},"
+                + "\"userRoleCode\":null}";
+        ChatMessage m = ChatEventDecoder.decodeChat("[\"CHAT\"," + quoteAsJson(inner) + "]");
+        assertThat(m.nickname()).isNull();
+        assertThat(m.userRole()).isNull();
+    }
+
     /** 문자열을 JSON 문자열 리터럴로 — 가짜 서버(FakeChzzkBehavior.escape)와 같은 일을 한다. */
     private static String quoteAsJson(String s) {
         return new tools.jackson.databind.ObjectMapper().writeValueAsString(s);

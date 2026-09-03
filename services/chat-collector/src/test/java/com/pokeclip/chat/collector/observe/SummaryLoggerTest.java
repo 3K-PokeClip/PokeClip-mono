@@ -32,7 +32,7 @@ class SummaryLoggerTest {
     @Test
     void 요약_한_줄에_판정에_필요한_항목이_전부_있다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}"), 1_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}", null, null), 1_100L);
 
         String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(),
                 0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE);
@@ -51,8 +51,8 @@ class SummaryLoggerTest {
     @Test
     void 요약이_박아둔_문자열이_아니라_실제_값을_싣는다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}"), 1_100L);
-        metrics.recordMessage(new ChatMessage("CH1", "S2", "ㅎㅎ", 3_000L, "{}"), 3_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}", null, null), 1_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S2", "ㅎㅎ", 3_000L, "{}", null, null), 3_100L);
         metrics.recordDecodeFailure();
         metrics.recordSystemEvent("connected");
 
@@ -70,7 +70,7 @@ class SummaryLoggerTest {
     @Test
     void 요약에_본문과_작성자_식별자가_없다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("CHANNEL-NEEDLE", "SENDER-NEEDLE", "CONTENT-NEEDLE", 1_000L, "{\"content\":\"CONTENT-NEEDLE\"}"), 1_100L);
+        metrics.recordMessage(new ChatMessage("CHANNEL-NEEDLE", "SENDER-NEEDLE", "CONTENT-NEEDLE", 1_000L, "{\"content\":\"CONTENT-NEEDLE\"}", "NICK-NEEDLE", "streamer"), 1_100L);
 
         String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(),
                 0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE);
@@ -83,14 +83,14 @@ class SummaryLoggerTest {
         // channelId는 개별 메시지 필드는 아니지만 요약에 실을 이유도 없다 —
         // persisted/conflicts/dropped 숫자만 싣는다는 정책을 여기서 못박는다.
         assertThat(line).doesNotContain("CONTENT-NEEDLE").doesNotContain("SENDER-NEEDLE")
-                .doesNotContain("CHANNEL-NEEDLE");
+                .doesNotContain("CHANNEL-NEEDLE").doesNotContain("NICK-NEEDLE");
     }
 
     /** 적재가 생겼는데 요약에 안 실리면 "저장이 도는지"를 아무도 못 본다. */
     @Test
     void 요약에_persisted_conflicts_poisoned_dropped가_실린다() {
         CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}"), 1_100L);
+        metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}", null, null), 1_100L);
 
         String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(),
                 0L, 5L, 2L, 3L, 1L, ArchiveCounters.NONE);

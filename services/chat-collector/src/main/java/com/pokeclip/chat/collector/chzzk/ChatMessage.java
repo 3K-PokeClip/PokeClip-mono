@@ -9,8 +9,15 @@ package com.pokeclip.chat.collector.chzzk;
  * 닉네임·이모티콘·배지처럼 여기서 안 뽑는 필드가 기준값 산출에 쓰인다.
  * <b>로그에 넘기지 마라</b> — content와 같은 규칙이다.
  *
- * <p>toString을 따로 두지 않는다. record 기본 toString이 content·raw를 통째로 찍는데,
- * 로그에 실수로 객체를 넘기면 그대로 평문이 나간다. ChatLogLeakTest가 못박는다.
+ * <p>toString을 따로 두지 않는다. record 기본 toString이 content·raw·nickname을 통째로
+ * 찍는데, 로그에 실수로 객체를 넘기면 그대로 평문이 나간다. ChatLogLeakTest가 못박는다.
+ * <b>닉네임도 개인식별값이라 content와 같은 규칙이다.</b>
+ *
+ * @param nickname 치지직 profile.nickname. <b>없으면 null</b> — 빈 문자열로 접으면
+ *                 「이름이 빈 사람」과 못 가른다
+ * @param userRole 치지직 userRoleCode(streamer·common_user·streaming_channel_manager·
+ *                 streaming_chat_manager). 없으면 null
  */
 public record ChatMessage(String channelId, String senderChannelId,
-                          String content, long messageTimeMillis, String raw) { }
+                          String content, long messageTimeMillis, String raw,
+                          String nickname, String userRole) { }
