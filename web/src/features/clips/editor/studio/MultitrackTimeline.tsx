@@ -28,11 +28,21 @@ import type { ClipEditorMockState } from '../useClipEditorMockState';
 /** 높이 조절 키보드 한 걸음 */
 const HEIGHT_STEP_PX = 24;
 
-export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
+export function MultitrackTimeline({
+  state,
+  headroom,
+}: {
+  state: ClipEditorMockState;
+  /**
+   * 지금 더 커질 수 있는 양(px)을 재 준다 — 화면만 레이아웃을 안다.
+   * 상수가 아닌 이유: 창 높이와 트랜스포트 줄바꿈에 따라 매번 달라진다 (POK-237).
+   */
+  headroom: () => number;
+}) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const draggingEdge = useRef<'start' | 'end' | null>(null);
   const laneAreaRef = useRef<HTMLDivElement>(null);
-  const heightDragOrigin = useRef<{ y: number; height: number } | null>(null);
+  const heightDragOrigin = useRef<{ y: number; height: number; ceiling: number } | null>(null);
 
   const startFraction = secondsToFraction(state.range.startSeconds, state.view);
   const endFraction = secondsToFraction(state.range.endSeconds, state.view);
@@ -91,25 +101,29 @@ export function MultitrackTimeline({ state }: { state: ClipEditorMockState }) {
     // 아직 끈 적이 없으면(기본 높이) 지금 그려진 높이에서 이어서 끈다
     const current =
       state.timelineHeight ?? (laneAreaRef.current?.getBoundingClientRect().height ?? 0);
-    heightDragOrigin.current = { y: event.clientY, height: current };
+    // 상한은 드래그 시작에 한 번만 잰다 — 끄는 도중에 재면 이미 줄어든 무대를 보고
+    // 여유가 0으로 수렴해, 손잡이가 커서를 못 따라오고 눌어붙는다.
+    heightDragOrigin.current = { y: event.clientY, height: current, ceiling: current + headroom() };
   };
 
   const onResizePointerMove = (event: PointerEvent<HTMLButtonElement>) => {
     const origin = heightDragOrigin.current;
     if (origin === null || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
     // 위로 끌면 타임라인이 커진다 — 손잡이가 위 모서리에 있다
-    state.setTimelineHeight(origin.height + (origin.y - event.clientY));
+    state.setTimelineHeight(origin.height + (origin.y - event.clientY), origin.ceiling);
   };
 
   const onResizeKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     const current =
       state.timelineHeight ?? (laneAreaRef.current?.getBoundingClientRect().height ?? 0);
+    // 키보드는 한 걸음마다 새로 잰다 — 드래그와 달리 걸음 사이에 레이아웃이 이미 정착했다
+    const ceiling = current + headroom();
     if (event.key === 'ArrowUp') {
       event.preventDefault();
-      state.setTimelineHeight(current + HEIGHT_STEP_PX);
+      state.setTimelineHeight(current + HEIGHT_STEP_PX, ceiling);
     } else if (event.key === 'ArrowDown') {
       event.preventDefault();
-      state.setTimelineHeight(current - HEIGHT_STEP_PX);
+      state.setTimelineHeight(current - HEIGHT_STEP_PX, ceiling);
     }
   };
 

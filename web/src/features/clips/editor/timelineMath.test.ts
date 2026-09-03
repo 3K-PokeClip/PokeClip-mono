@@ -164,4 +164,22 @@ describe('줌·높이', () => {
     expect(clampTimelineHeight(9999)).toBe(460);
     expect(clampTimelineHeight(Number.NaN)).toBe(190);
   });
+
+  it('화면이 잰 상한이 상수 상한보다 먼저 걸린다 — 미리보기를 밀어내지 않는다', () => {
+    expect(clampTimelineHeight(400, 300)).toBe(300);
+    expect(clampTimelineHeight(250, 300)).toBe(250);
+  });
+
+  it('상한이 상수 최대보다 커도 상수 최대를 넘지 않는다', () => {
+    expect(clampTimelineHeight(9999, 9999)).toBe(460);
+  });
+
+  it('상한이 최소 높이보다 낮아도 최소 높이는 지킨다 — 타임라인이 사라지지 않는다', () => {
+    expect(clampTimelineHeight(300, 40)).toBe(120);
+  });
+
+  it('상한을 재지 못하면(비유한값) 상수 상한만 쓴다', () => {
+    expect(clampTimelineHeight(9999, Number.POSITIVE_INFINITY)).toBe(460);
+    expect(clampTimelineHeight(9999, Number.NaN)).toBe(460);
+  });
 });

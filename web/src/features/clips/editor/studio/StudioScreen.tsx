@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
 import { TransportBar } from '../TransportBar';
@@ -43,9 +43,58 @@ const KEY_OWNERS: Partial<Record<EditorIntent['kind'], string>> = {
   seekBy: '[role="slider"], [role="radiogroup"], [role="tablist"]',
 };
 
+/**
+ * 타임라인이 **지금** 더 커질 수 있는 양(px). 음수면 이미 그만큼 넘쳤다는 뜻이다.
+ *
+ * 미리보기 칸에서 신축하는 건 무대(`.stage`) 하나뿐이라, 무대가 최소 높이까지 더 줄 수
+ * 있는 여유가 곧 타임라인의 여유다. 타임라인은 `flex: none`, 본문은 `flex: 1`이라 레인이
+ * 1px 커지면 무대가 정확히 1px 준다(1:1). 이미 넘친 만큼은 여유에서 뺀다 — 안 빼면
+ * 넘친 상태에서 상한이 제자리를 인정해 버린다.
+ *
+ * 레이아웃이 없는 환경(jsdom)이나 표식을 못 찾으면 `Infinity` — 상한 없음으로 둔다.
+ */
+function timelineHeadroom(previewColumn: HTMLElement | null): number {
+  if (previewColumn === null) return Number.POSITIVE_INFINITY;
+  const stage = previewColumn.querySelector<HTMLElement>('[data-preview-stage]');
+  if (stage === null) return Number.POSITIVE_INFINITY;
+  const stageMin = Number.parseFloat(getComputedStyle(stage).minHeight);
+  if (!Number.isFinite(stageMin)) return Number.POSITIVE_INFINITY;
+  const spare = stage.clientHeight - stageMin;
+  const spilled = previewColumn.scrollHeight - previewColumn.clientHeight;
+  return spare - spilled;
+}
+
 export function StudioScreen(options: ClipEditorOptions = {}) {
   const state = useClipEditorMockState(options);
   const { togglePlay, seekBy, markIn, markOut, undo, redo } = state;
+  const previewColumnRef = useRef<HTMLDivElement>(null);
+  const { timelineHeight, setTimelineHeight } = state;
+
+  const headroom = useCallback(() => timelineHeadroom(previewColumnRef.current), []);
+
+  // 창이 낮아지면 끌어둔 높이가 여유를 넘긴다 — 페인트 전에 되돌린다.
+  // 자동 높이(null)는 손대지 않는다: 그건 트랙 수가 정하는 값이라 여기서 px로 굳히면
+  // 화면 배율이 바뀌어도 그대로 남는다. 그 극단은 .timeline의 z-index가 받는다.
+  const fitTimeline = useCallback(() => {
+    if (timelineHeight === null) return;
+    const spare = headroom();
+    if (Number.isFinite(spare) && spare < 0) setTimelineHeight(timelineHeight + spare);
+  }, [timelineHeight, headroom, setTimelineHeight]);
+
+  useLayoutEffect(fitTimeline, [fitTimeline]);
+
+  useEffect(() => {
+    let raf = 0;
+    const onResize = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(fitTimeline);
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [fitTimeline]);
 
   useEffect(() => {
     function onKeyDown(event: globalThis.KeyboardEvent) {
@@ -95,12 +144,12 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
           onTogglePanelSide={state.togglePanelSide}
         />
         <ToolPanel state={state} />
-        <div className={styles.previewColumn}>
+        <div className={styles.previewColumn} ref={previewColumnRef}>
           <PreviewCanvas state={state} />
           <TransportBar state={state} showRangeLength />
         </div>
       </main>
-      <MultitrackTimeline state={state} />
+      <MultitrackTimeline state={state} headroom={headroom} />
     </div>
   );
 }
