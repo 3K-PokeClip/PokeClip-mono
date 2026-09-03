@@ -5,7 +5,8 @@
 # PR을 거치라는 것까지만 강제하고 어느 브랜치에서 온 PR이냐는 보지 않는다.
 # 그래서 필수 체크로 대신 만든다.
 #
-# media-ci와 달리 집계 잡(changes/check/gate 3층)이 필요 없다. 아래 branches: 필터는
+# 이 체크는 main 보호의 필수 체크라 `paths:`를 붙이면 안 된다(paths로 스킵된 워크플로는
+# 체크 런이 안 생겨 전 PR이 Pending으로 잠긴다). 아래 branches: 필터는
 # **base** 브랜치를 보므로 main 대상 PR에는 이 체크가 항상 생기고, develop 대상 PR에는
 # 아예 안 생기는데 develop 보호가 이 체크를 요구하지 않아 Pending으로 잠기지 않는다.
 # (필수 체크는 브랜치별 설정이다. 이 체크는 main 보호에만 등록한다.)
