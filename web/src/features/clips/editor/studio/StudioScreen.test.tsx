@@ -127,15 +127,15 @@ describe('StudioScreen', () => {
     const user = userEvent.setup();
     renderStudio();
 
-    const timeline = screen.getByRole('region', { name: '타임라인' });
-    // 기본(null)일 땐 px로 박힌 인라인 높이가 없다 — 트랙 행 높이는 디자인 단위(calc)다
-    expect(timeline.querySelector('[style*="px"]')).toBeNull();
+    const lane = document.querySelector<HTMLElement>('[data-timeline-lanes]');
+    // 기본(null)일 땐 인라인 높이가 없다 — 레인 높이는 트랙 수가 정한다
+    expect(lane).not.toBeNull();
+    expect(lane?.style.height).toBe('');
 
     await user.click(screen.getByRole('button', { name: '타임라인 높이 조절' }));
     await user.keyboard('{ArrowUp}');
 
     // 한 걸음 올리면 레인 높이가 px로 굳는다
-    const lane = timeline.querySelector<HTMLElement>('[style*="px"]');
     expect(lane?.style.height).toMatch(/^\d+px$/);
   });
 

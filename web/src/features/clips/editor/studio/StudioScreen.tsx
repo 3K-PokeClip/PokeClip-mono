@@ -37,8 +37,7 @@ const KEY_OWNERS: Partial<Record<EditorIntent['kind'], string>> = {
   // Space는 버튼·스위치를 누른다 — 가로채면 키보드로 아무것도 못 누른다.
   // 역할로 가른다: 구간 핸들은 <button role="slider">라 태그로 고르면 같이 걸려,
   // 슬라이더 위에서 Space가 죽는다.
-  togglePlay:
-    'button:not([role]), [role="button"], [role="switch"], [role="tab"], [role="radio"]',
+  togglePlay: 'button:not([role]), [role="button"], [role="switch"], [role="tab"], [role="radio"]',
   // 화살표는 슬라이더가 값을, roving 묶음이 선택을 옮긴다
   seekBy: '[role="slider"], [role="radiogroup"], [role="tablist"]',
 };
@@ -83,18 +82,41 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
 
   useLayoutEffect(fitTimeline, [fitTimeline]);
 
+  // 관찰 콜백이 늘 최신 fitTimeline을 보게 한다 — 아래 옵저버를 높이가 바뀔 때마다
+  // 다시 붙이지 않기 위해서다(붙였다 떼는 동안의 변화를 놓친다).
+  const fitRef = useRef(fitTimeline);
+  useLayoutEffect(() => {
+    fitRef.current = fitTimeline;
+  }, [fitTimeline]);
+
+  /*
+   * 미리보기 칸의 크기를 바꾸는 모든 경로를 한 문으로 받는다.
+   *
+   * window resize만 듣던 때는 두 갈래를 놓쳤다 (리뷰 #166):
+   *  - 접기 토글 — timelineCollapsed는 fitTimeline의 의존성이 아니라 위 레이아웃 효과가
+   *    다시 돌지 않는다. 접은 채 창을 줄이면(레인이 없어 여유가 넉넉해 보정도 no-op)
+   *    다시 펼쳤을 때 낡은 높이가 그대로 복원됐다.
+   *  - 내용 리플로우 — 트랜스포트는 flex-wrap이고 "/ 구간 …" 라벨이 구간 편집마다
+   *    길어진다. 줄바꿈이 나도 창 크기는 그대로라 resize 이벤트가 없었다.
+   *
+   * 칸 자신과 자식을 함께 본다. 줄바꿈은 칸의 바깥 높이를 안 바꾸고 자식 높이만 바꾼다.
+   */
   useEffect(() => {
+    const column = previewColumnRef.current;
+    if (column === null || typeof ResizeObserver === 'undefined') return;
     let raf = 0;
-    const onResize = () => {
+    const observer = new ResizeObserver(() => {
+      // 콜백 안에서 곧바로 상태를 바꾸면 같은 프레임에 다시 관찰돼 루프 경고가 난다.
       cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(fitTimeline);
-    };
-    window.addEventListener('resize', onResize);
+      raf = requestAnimationFrame(() => fitRef.current());
+    });
+    observer.observe(column);
+    for (const child of Array.from(column.children)) observer.observe(child);
     return () => {
       cancelAnimationFrame(raf);
-      window.removeEventListener('resize', onResize);
+      observer.disconnect();
     };
-  }, [fitTimeline]);
+  }, []);
 
   useEffect(() => {
     function onKeyDown(event: globalThis.KeyboardEvent) {

@@ -100,7 +100,7 @@ export function MultitrackTimeline({
     event.currentTarget.setPointerCapture(event.pointerId);
     // 아직 끈 적이 없으면(기본 높이) 지금 그려진 높이에서 이어서 끈다
     const current =
-      state.timelineHeight ?? (laneAreaRef.current?.getBoundingClientRect().height ?? 0);
+      state.timelineHeight ?? laneAreaRef.current?.getBoundingClientRect().height ?? 0;
     // 상한은 드래그 시작에 한 번만 잰다 — 끄는 도중에 재면 이미 줄어든 무대를 보고
     // 여유가 0으로 수렴해, 손잡이가 커서를 못 따라오고 눌어붙는다.
     heightDragOrigin.current = { y: event.clientY, height: current, ceiling: current + headroom() };
@@ -115,7 +115,7 @@ export function MultitrackTimeline({
 
   const onResizeKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     const current =
-      state.timelineHeight ?? (laneAreaRef.current?.getBoundingClientRect().height ?? 0);
+      state.timelineHeight ?? laneAreaRef.current?.getBoundingClientRect().height ?? 0;
     // 키보드는 한 걸음마다 새로 잰다 — 드래그와 달리 걸음 사이에 레이아웃이 이미 정착했다
     const ceiling = current + headroom();
     if (event.key === 'ArrowUp') {
@@ -192,6 +192,9 @@ export function MultitrackTimeline({
           <div
             className={styles.laneArea}
             ref={laneAreaRef}
+            // 높이가 걸리는 자리를 이름으로 집게 한다 — 인라인 스타일 모양으로 찾으면
+            // 다른 요소가 px를 쓰기 시작하는 순간 엉뚱한 것을 집는다 (data-preview-stage와 같은 결)
+            data-timeline-lanes
             // 기본(null)은 트랙 수에 맞춘다. 사용자가 정한 값은 height로 걸어야
             // 내용보다 크게도 늘릴 수 있다 — maxHeight만으로는 줄이기만 된다.
             style={
@@ -282,7 +285,6 @@ export function MultitrackTimeline({
               {MIN_RANGE_SECONDS}초 미만, {MAX_RANGE_TEXT} 초과로는 핸들이 움직이지 않아요
             </span>
           </div>
-
         </>
       ) : null}
     </section>
