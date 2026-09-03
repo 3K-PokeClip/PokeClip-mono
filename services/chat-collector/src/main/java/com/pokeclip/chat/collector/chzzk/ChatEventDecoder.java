@@ -35,10 +35,14 @@ public final class ChatEventDecoder {
         if (messageTime <= 0) {
             return null;
         }
-        // 닉네임·역할은 「없으면 null」이다. isMissingNode로 먼저 거르는 이유는 Jackson의
-        // null 노드 처리에 기대지 않기 위해서다 — Jackson 2의 asText()는 문자열 "null"을
-        // 줬고 3의 asString(null)은 null을 준다(실행으로 확인). 그 차이가 또 바뀌어도
-        // 이 갈래는 안 흔들린다.
+        // 닉네임·역할은 「없으면 null」이다. asString(null) 하나로 끝난다 —
+        // Jackson 3은 <b>칸이 없을 때(MissingNode)도 JSON null일 때(NullNode)도</b>
+        // 기본값을 그대로 돌려준다(Jackson 2의 asText()는 문자열 "null"이었다).
+        // isMissingNode 갈래를 앞에 뒀다가 지웠다 — 두 경로의 답이 같아 그 갈래를
+        // 재는 시험을 만들 수 없었고(감사 라운드 1 C3: 지워도 18건 전부 초록),
+        // 「방어는 있는데 그물이 없는」 코드가 된다. 라이브러리가 바뀌면
+        // ChatEventDecoderTest의 「닉네임과_역할을_뽑고_없으면_null이다」와
+        // 「닉네임이_JSON_null이어도_null이다」 둘이 잡는다 — 그것이 그물이다.
         JsonNode profile = inner.path("profile");
         return new ChatMessage(
                 inner.path("channelId").asString(""),
@@ -46,8 +50,8 @@ public final class ChatEventDecoder {
                 inner.path("content").asString(""),
                 messageTime,
                 innerText,
-                profile.path("nickname").isMissingNode() ? null : profile.path("nickname").asString(null),
-                inner.path("userRoleCode").isMissingNode() ? null : inner.path("userRoleCode").asString(null));
+                profile.path("nickname").asString(null),
+                inner.path("userRoleCode").asString(null));
     }
 
     /**

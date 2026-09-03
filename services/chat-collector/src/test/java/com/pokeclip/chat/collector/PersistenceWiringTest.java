@@ -100,6 +100,37 @@ class PersistenceWiringTest extends IntegrationTestSupport {
     }
 
     /**
+     * 감사 라운드 1 C1(중대). 수신 프레임의 닉네임·역할이 <b>표의 제 칸으로</b> 가는지를
+     * 관통해서 잰다. 이 그물이 없으면 {@code StreamSession}의
+     * {@code message.nickname(), message.userRole()} 두 인자를 <b>맞바꿔도</b>
+     * 모듈 전체가 초록이다(감사자 주입 D로 재현). {@code toRow} 쪽 순서는
+     * {@code ChatPersisterTest}가 막고 있었는데 <b>같은 뿌리의 이 한 자리</b>만 무방비였다.
+     *
+     * <p>두 값을 <b>서로 다르게</b> 주는 것이 요점이다. 같은 값이면 맞바꿔도 안 걸린다.
+     */
+    @Test
+    void 프레임의_닉네임과_역할이_표의_제_칸으로_간다() throws Exception {
+        start();
+
+        behavior.emitChat("{\"channelId\":\"wiring-nick\",\"senderChannelId\":\"s-n\","
+                + "\"content\":\"닉배선\",\"messageTime\":1723600600000,"
+                + "\"profile\":{\"nickname\":\"겜돌이-와이어링\"},"
+                + "\"userRoleCode\":\"streaming_chat_manager\"}");
+        awaitReceived(1);
+        awaitRows("wiring-nick", 1);
+
+        assertThat(countRows("wiring-nick"))
+                .as("행이 없으면 아래 두 단언은 아무것도 안 본다")
+                .isEqualTo(1);
+        java.util.Map<String, Object> row = jdbc.queryForMap(
+                "SELECT nickname, user_role FROM chat_messages WHERE channel_id = 'wiring-nick'");
+        assertThat(row)
+                .as("두 인자를 맞바꾸면 여기서만 잡힌다 — 컴파일러도 DB도 안 막는다")
+                .containsEntry("nickname", "겜돌이-와이어링")
+                .containsEntry("user_role", "streaming_chat_manager");
+    }
+
+    /**
      * <b>옛 경로의 채팅은 방송 번호가 비어 있다.</b> 편지 없이 {@code CHZZK_ENABLED}로
      * 붙으면 방송 번호를 알 방법이 없다 — 구독은 「토큰 주인의 채팅」이라 방송을 못 고른다.
      * NULL이 곧 「모른다」는 표시이고, 여기서 저장이 막히면 이 경로의 수집 자체가 죽는다.

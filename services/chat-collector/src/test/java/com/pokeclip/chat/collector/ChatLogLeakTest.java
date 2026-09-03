@@ -373,14 +373,17 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
             Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
             setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
             try {
+                // 감사 라운드 1 C2. 닉네임 바늘을 <b>실제로 태운다</b> — null을 넣으면
+                // 새 칸이 바인딩 로거를 지나간 적이 없어 아래 단언이 그 칸에 대해
+                // 자동으로 참이 된다(클래스 javadoc의 문장이 거짓이 된다).
                 buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
-                        1_754_300_000_010L, 1_754_300_000_185L, null, null));
+                        1_754_300_000_010L, 1_754_300_000_185L, NICKNAME, "streamer"));
                 assertThat(persister.flushOnce())
                         .as("표까지 안 갔다면 바인딩 로거가 바늘을 나른 적이 없다").isEqualTo(1);
             } finally {
                 setLevel(Logger.ROOT_LOGGER_NAME, rootBefore);
             }
-            assertNoSecretsIn(captor, List.of(CONTENT, SENDER));
+            assertNoSecretsIn(captor, List.of(CONTENT, SENDER, NICKNAME));
 
             // ② 양성 대조 — 로거마다 따로 TRACE로 밀고 따로 단언한다. 묶으면 한쪽이
             // 조용해져도(더 위험한 드라이버 쪽이 사라져도) 다른 쪽이 초록을 유지한다.
