@@ -962,7 +962,8 @@ public class StreamSession {
             // 채팅이 계속 들어오기 때문이다(StreamIdStampingTest).
             buffer.offer(new PersistableChat(key.streamId(), message.channelId(),
                     message.senderChannelId(), message.content(),
-                    message.messageTimeMillis(), receivedAt));
+                    message.messageTimeMillis(), receivedAt,
+                    message.nickname(), message.userRole()));
             // 원본도 넣기만 한다 — 인코드·창·업로드는 전부 아카이브 스레드 몫이다.
             archive.offer(new ArchivableChat(message.channelId(), receivedAt, message.raw()));
             return;

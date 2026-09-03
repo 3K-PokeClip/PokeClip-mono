@@ -16,6 +16,7 @@ import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -42,7 +43,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
 
     /** 방송 번호를 모르는 채로 들어온 채팅 — 옛 경로(CHZZK_ENABLED)와 같은 상태다. */
     private static PersistableChat chat(String sender, String content, long time) {
-        return new PersistableChat(null, "ch-1", sender, content, time, time + 175);
+        return new PersistableChat(null, "ch-1", sender, content, time, time + 175, null, null);
     }
 
     @Test
@@ -267,7 +268,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
      */
     @Test
     void NUL은_생성_지점에서_제거되고_해시와_저장이_같은_본문을_쓴다() {
-        PersistableChat chat = new PersistableChat(null, "ch", "s", "a\0b", 1L, 2L);
+        PersistableChat chat = new PersistableChat(null, "ch", "s", "a\0b", 1L, 2L, null, null);
 
         assertThat(chat.content())
                 .as("생성 지점에서 안 지우면 해시 본문과 저장 본문이 갈릴 수 있다")
@@ -458,7 +459,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
         ChatBuffer buffer = new ChatBuffer(100);
         ChatPersister persister = new ChatPersister(jdbc, buffer);
         buffer.offer(chat("s-1", "정상", 1723600000000L));
-        buffer.offer(new PersistableChat(null, "ch-1", "s-2", "시각오버플로", Long.MAX_VALUE, Long.MAX_VALUE));
+        buffer.offer(new PersistableChat(null, "ch-1", "s-2", "시각오버플로", Long.MAX_VALUE, Long.MAX_VALUE, null, null));
 
         int consumed = persister.flushOnce();
 
@@ -551,7 +552,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
     void 새로_들어온_채팅에_방송_번호가_채워진다() {
         ChatBuffer buffer = new ChatBuffer(100);
         buffer.offer(new PersistableChat("s1", "ch-1", "s-1", "안녕",
-                1723600000000L, 1723600000175L));
+                1723600000000L, 1723600000175L, null, null));
 
         new ChatPersister(jdbc, buffer).flushOnce();
 
@@ -571,7 +572,7 @@ class ChatPersisterTest extends IntegrationTestSupport {
     void 방송_번호를_몰라도_저장은_된다() {
         ChatBuffer buffer = new ChatBuffer(100);
         buffer.offer(new PersistableChat(null, "ch-1", "s-1", "안녕",
-                1723600000000L, 1723600000175L));
+                1723600000000L, 1723600000175L, null, null));
 
         new ChatPersister(jdbc, buffer).flushOnce();
 
@@ -593,9 +594,9 @@ class ChatPersisterTest extends IntegrationTestSupport {
     void 두_방송의_채팅이_안_섞인다() {
         ChatBuffer buffer = new ChatBuffer(100);
         buffer.offer(new PersistableChat("s1", "chA", "u1", "A방송",
-                1723600000000L, 1723600000175L));
+                1723600000000L, 1723600000175L, null, null));
         buffer.offer(new PersistableChat("s2", "chB", "u2", "B방송",
-                1723600000001L, 1723600000176L));
+                1723600000001L, 1723600000176L, null, null));
 
         new ChatPersister(jdbc, buffer).flushOnce();
 
@@ -613,15 +614,58 @@ class ChatPersisterTest extends IntegrationTestSupport {
     void 지문_제약은_방송_번호를_안_본다() {
         ChatBuffer buffer = new ChatBuffer(100);
         buffer.offer(new PersistableChat("s1", "ch-1", "u1", "같은말",
-                1723600000000L, 1723600000175L));
+                1723600000000L, 1723600000175L, null, null));
         buffer.offer(new PersistableChat("s2", "ch-1", "u1", "같은말",
-                1723600000000L, 1723600000176L));
+                1723600000000L, 1723600000176L, null, null));
 
         new ChatPersister(jdbc, buffer).flushOnce();
 
         assertThat(count())
                 .as("방송 번호가 지문에 들어가면 방송 경계에서 같은 채팅이 두 번 남는다")
                 .isEqualTo(1);
+    }
+
+    /**
+     * 닉네임·역할이 <b>같은 행에</b> 들어가는지 본다. 순서를 재는 것이 요점이다 —
+     * 칸 둘이 같은 타입이라 INSERT 파라미터를 맞바꿔도 컴파일러도 DB도 안 막는다.
+     */
+    @Test
+    void 닉네임과_역할이_같은_행에_저장된다() {
+        ChatBuffer buffer = new ChatBuffer(100);
+        buffer.offer(new PersistableChat("s-1", "CH", "S", "hi",
+                1_754_300_000_000L, 1_754_300_000_100L, "겜돌이", "common_user"));
+
+        new ChatPersister(jdbc, buffer).flushOnce();
+
+        Map<String, Object> row = jdbc.queryForMap(
+                "SELECT nickname, user_role FROM chat_messages WHERE stream_id='s-1' AND content='hi'");
+        assertThat(row).containsEntry("nickname", "겜돌이").containsEntry("user_role", "common_user");
+    }
+
+    /** 옛 행·옛 경로에는 이 값이 없다. 빈 문자열로 접으면 「이름이 빈 사람」과 못 가른다. */
+    @Test
+    void 닉네임이_없으면_칸이_NULL로_남는다() {
+        ChatBuffer buffer = new ChatBuffer(100);
+        buffer.offer(chat("s-none", "이름없음", 1_754_300_000_001L));
+
+        new ChatPersister(jdbc, buffer).flushOnce();
+
+        Map<String, Object> row = jdbc.queryForMap(
+                "SELECT nickname, user_role FROM chat_messages WHERE content='이름없음'");
+        assertThat(row.get("nickname")).isNull();
+        assertThat(row.get("user_role")).isNull();
+    }
+
+    /**
+     * 닉네임에도 NUL 제거를 건다 — 본문과 같은 이유(PG TEXT가 거부하는 것은 사실상 NUL뿐)이고,
+     * 안 걸면 닉네임 한 글자 때문에 그 배치가 포이즌 격리로 넘어간다.
+     */
+    @Test
+    void 닉네임의_NUL도_생성_지점에서_제거된다() {
+        PersistableChat chat =
+                new PersistableChat(null, "ch", "s", "본문", 1L, 2L, "겜\0돌이", "streamer");
+
+        assertThat(chat.nickname()).isEqualTo("겜돌이");
     }
 
     /** 그 방송 번호로 남은 본문들. 짝이 맞는지 보려면 <b>양쪽</b>을 이렇게 뽑아야 한다. */

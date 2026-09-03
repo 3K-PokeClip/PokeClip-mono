@@ -6,6 +6,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -29,6 +31,25 @@ class ChatSchemaTest extends IntegrationTestSupport {
                 "SELECT count(*) FROM flyway_schema_history_chat WHERE version = '301'",
                 Integer.class);
         assertThat(applied).isEqualTo(1);
+    }
+
+    /**
+     * 창구(POK-234)가 「누가 말했나」를 화면에 띄우려면 칸 둘이 표에 있어야 하고,
+     * 시각 범위 조회가 Seq Scan으로 떨어지지 않으려면 색인이 있어야 한다.
+     * 색인 조건이 message_time인 이유는 보정값의 기준이 치지직 시계이기 때문이다.
+     */
+    @Test
+    void 닉네임_역할_칸과_message_time_색인이_있다() {
+        List<String> cols = jdbc.queryForList("""
+            SELECT column_name FROM information_schema.columns
+             WHERE table_name='chat_messages' AND column_name IN ('nickname','user_role')""",
+                String.class);
+        assertThat(cols).containsExactlyInAnyOrder("nickname", "user_role");
+
+        String def = jdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE indexname='idx_chat_messages_stream_message_time'",
+                String.class);
+        assertThat(def).contains("(stream_id, message_time)").contains("WHERE (stream_id IS NOT NULL)");
     }
 
     @Test

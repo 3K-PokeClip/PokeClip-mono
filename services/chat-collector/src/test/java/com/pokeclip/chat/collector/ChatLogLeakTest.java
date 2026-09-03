@@ -49,6 +49,12 @@ import static org.assertj.core.api.Assertions.catchThrowable;
  * {@code status.ChatCollectionEndpointTest}가 <b>같은 탐지기</b>를 쓴다
  * (자기검사 셋은 여기 하나면 된다).
  * 그쪽을 여기서 떼어 낸 이유는 이 검사가 LocalStack에 매이지 않게 하려는 것이다.
+ *
+ * <p><b>닉네임 칸(POK-234, V306)이 생겨도 이 검사가 잰다.</b> 닉네임 바늘은 원래
+ * {@code raw}에 실려 지나가고 있었고, 이제 {@code ChatMessage.nickname} ·
+ * {@code PersistableChat.nickname} · {@code chat_messages.nickname}이라는 경로가
+ * 셋 더 생겼을 뿐 <b>탐지 창(root TRACE)과 바늘은 그대로다</b> — 새 칸이 로그로
+ * 새면 여기서 빨간불이 된다. 새 유출 검사를 따로 만들지 않은 이유가 이것이다.
  */
 @FakeChzzkTest
 public class ChatLogLeakTest extends IntegrationTestSupport {
@@ -282,7 +288,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
         try (LogCaptor captor = new LogCaptor()) {
             ChatBuffer buffer = new ChatBuffer(100);
             buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
-                    1_754_300_000_000L, 1_754_300_000_175L));
+                    1_754_300_000_000L, 1_754_300_000_175L, null, null));
             int saved = new ChatPersister(jdbc, buffer).flushOnce();
             // 양성 대조. 표까지 안 갔다면 적재 경로가 바늘을 나른 적이 없다.
             assertThat(saved).as("저장이 안 됐다면 성공 경로의 로그를 아무것도 안 본 것이다")
@@ -297,7 +303,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
                 }
             };
             buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
-                    1_754_300_000_001L, 1_754_300_000_176L));
+                    1_754_300_000_001L, 1_754_300_000_176L, null, null));
             assertThat(new ChatPersister(broken, buffer).flushOnce()).isZero();
             assertThat(renderAll(captor))
                     .as("실패 줄이 안 나갔다면 실패 경로의 로그를 아무것도 안 본 것이다")
@@ -312,7 +318,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
             ChatPersister isolating = new ChatPersister(
                     TestPersistence.rejecting22(jdbc.getDataSource(), CONTENT), buffer);
             buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
-                    1_754_300_000_002L, 1_754_300_000_177L));
+                    1_754_300_000_002L, 1_754_300_000_177L, null, null));
             isolating.flushOnce();
             assertThat(isolating.poisonedCount())
                     .as("격리를 안 탔다면 poisoned 줄의 로그를 아무것도 안 본 것이다")
@@ -368,7 +374,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
             setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
             try {
                 buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
-                        1_754_300_000_010L, 1_754_300_000_185L));
+                        1_754_300_000_010L, 1_754_300_000_185L, null, null));
                 assertThat(persister.flushOnce())
                         .as("표까지 안 갔다면 바인딩 로거가 바늘을 나른 적이 없다").isEqualTo(1);
             } finally {
@@ -383,7 +389,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
                 setLevel(pinned, Level.TRACE);
                 try {
                     buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
-                            1_754_300_000_011L, 1_754_300_000_186L));
+                            1_754_300_000_011L, 1_754_300_000_186L, null, null));
                     assertThat(persister.flushOnce()).isEqualTo(1);
                 } finally {
                     setLevel(pinned, before);
