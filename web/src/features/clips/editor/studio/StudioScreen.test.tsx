@@ -2,10 +2,18 @@ import { act } from 'react';
 import { fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
 import { StudioScreen } from './StudioScreen';
+import type { EditorPlayback } from '../editorPlayback';
+import type { EditorMediaSource } from '../editorSource';
 import type { ClipEditorOptions } from '../useClipEditorMockState';
+
+// 개발자 셸에 NEXT_PUBLIC_EDITOR_SOURCE_URL 이 export 돼 있으면 화면이 실재생 경로로 새어
+// 여기서 네트워크를 탄다. env 를 비워 목업 경로를 기본으로 못박는다 (LiveScreen.test 선례).
+beforeEach(() => {
+  vi.stubEnv('NEXT_PUBLIC_EDITOR_SOURCE_URL', '');
+});
 
 function renderStudio(options?: ClipEditorOptions) {
   return renderWithProviders(<StudioScreen {...options} />);
@@ -331,5 +339,92 @@ describe('StudioScreen', () => {
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
     });
+  });
+});
+
+// --- 실소스 경로 -------------------------------------------------------------
+// 소스·재생을 주입하면 env 와 네트워크를 타지 않는다. hls.js 자체는 jsdom 에 미디어 구현이
+// 없어 못 돌리므로, 화면이 소스를 어떻게 배치하는지만 본다.
+
+const SOURCE: EditorMediaSource = {
+  streamId: 'editor-sample',
+  label: '로컬 샘플 · 2026-08-31 방송',
+  sourceStartAtMs: 1788176806750,
+  durationSeconds: 600,
+  width: 1920,
+  height: 1080,
+  fps: 60,
+  playlistUrl: 'http://localhost:8080/live/editor-sample/index.m3u8',
+  filmstrip: {
+    sheets: ['thumbs_001.jpg'],
+    sheetUrls: ['http://localhost:8080/live/editor-sample/thumbs_001.jpg'],
+    columns: 10,
+    rows: 10,
+    tileWidth: 160,
+    tileHeight: 90,
+    intervalSeconds: 2,
+    count: 300,
+    lastSheetCount: 100,
+  },
+  audioTracks: [
+    {
+      trackId: 0,
+      kind: 'mix',
+      label: '오디오 · 최종 믹스',
+      channels: 2,
+      sampleRate: 48000,
+      peaksUrl: 'http://localhost:8080/live/editor-sample/peaks_0.json',
+    },
+  ],
+};
+
+const PLAYBACK: EditorPlayback = {
+  playing: false,
+  currentSeconds: 60,
+  durationSeconds: 600,
+  error: null,
+  togglePlay: () => undefined,
+  seekTo: () => undefined,
+  seekBy: () => undefined,
+  setRate: () => undefined,
+  setBounds: () => undefined,
+};
+
+function renderWithSource() {
+  return renderWithProviders(
+    <StudioScreen source={SOURCE} playback={PLAYBACK} peaks={new Map()} />,
+  );
+}
+
+describe('StudioScreen — 로컬 소스', () => {
+  it('헤더가 소스 라벨을 적고 트랜스포트가 소스 시간축을 읽는다', () => {
+    renderWithSource();
+
+    expect(screen.getByText(/로컬 샘플 · 2026-08-31 방송/)).toBeInTheDocument();
+    // 목업의 1:22:14 가 아니라 로컬 파일의 0:01:00
+    expect(screen.getByText('0:01:00.0')).toBeInTheDocument();
+  });
+
+  it('타임라인이 소스의 오디오 트랙을 그리고 목업 트랙 2종은 사라진다', () => {
+    renderWithSource();
+    const timeline = screen.getByRole('region', { name: '타임라인' });
+
+    expect(within(timeline).getByText('오디오 · 최종 믹스')).toBeInTheDocument();
+    expect(within(timeline).queryByText('마이크')).not.toBeInTheDocument();
+    expect(within(timeline).queryByText('게임 사운드')).not.toBeInTheDocument();
+    // 편집기가 얹는 자산은 그대로 남는다
+    expect(within(timeline).getByText('BGM')).toBeInTheDocument();
+  });
+
+  it('구간 핸들의 경계가 소스 길이를 넘지 않는다', () => {
+    renderWithSource();
+
+    const end = screen.getByRole('slider', { name: '구간 끝점' });
+    expect(Number(end.getAttribute('aria-valuemax'))).toBeLessThanOrEqual(600);
+  });
+
+  it('접근성 위반이 없다', async () => {
+    const { container } = renderWithSource();
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

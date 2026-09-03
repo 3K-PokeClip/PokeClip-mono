@@ -414,9 +414,12 @@ ERROR  Failed to proxy http://localhost:8082/api/auth/me AggregateError
 |---|---|
 | 정적 스텁 (뼈대·시킹 UI) | `http://localhost:8080/live/stub/index.m3u8` |
 | 진짜 LL-HLS (송출 필요) | `http://localhost:8888/{streamId}/index.m3u8` |
+| 편집기 로컬 소스 (VOD·렌디션 분리) | `http://localhost:8080/live/editor-sample/index.m3u8` |
+| └ 사이드카 (재생목록·필름스트립·파형 위치) | `http://localhost:8080/live/editor-sample/source.json` |
 
 - MediaMTX는 `index.m3u8` 요청에 **302 리다이렉트**(세션 파라미터 부여)를 줄 수 있음 — hls.js 기본 동작이 따라가므로 커스텀 fetch를 끼울 때만 주의.
 - 로컬은 인증·서명 쿠키 없음. 프로덕션 규약은 **PokeClip-architecture `contracts/계약3-LLHLS-DVR재생규약.md`**(정본)을 따를 것 — 특히 §4 catch-up 끄기.
+- 편집기 로컬 소스는 `infra/compose/stub/gen-editor-source.sh` 로 각자 1회 만든다(POK-238). **VOD라 `liveSyncPosition`이 없어 계약3 §4 catch-up 규칙의 대상이 아니고**, 라이브용 `HLS_DVR_CONFIG`(`backBufferLength` 3700초)를 그대로 쓰면 10분(≈460MB) 소스에서 브라우저 버퍼 예산을 넘겨 재생이 튄다 — 편집기용 설정은 `web/src/features/clips/editor/editorHlsConfig.ts` 에 따로 있다.
 
 ## 설계 근거 포인터
 

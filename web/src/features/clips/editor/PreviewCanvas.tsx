@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Image as ImageIcon } from 'lucide-react';
 import { Segmented } from './Segmented';
 import styles from './editorShared.module.css';
@@ -5,8 +6,18 @@ import type { ClipEditorMockState } from './useClipEditorMockState';
 
 // 시안 1d 가운데 — 레이아웃 세그먼트 + 9:16/1:1/상하분할 미리보기.
 // 크롭 위치 드래그·소스 교체는 목업이라 실제 픽셀을 옮기지 않는다.
+//
+// 소스가 있으면 media 표식이 붙은 칸에 실제 <video>가 들어간다. 표식이 pane 객체에 붙어 있어
+// 상하 자리바꿈을 하면 영상도 따라 옮겨간다. 크롭 좌표는 POK-109 몫이라 지금은 중앙 고정이다.
 
-export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
+export function PreviewCanvas({
+  state,
+  videoNode = null,
+}: {
+  state: ClipEditorMockState;
+  /** 실재생 <video>. 없으면 자리 표시자만 그린다 */
+  videoNode?: ReactNode;
+}) {
   const subtitleText =
     state.subtitle.status === 'ready'
       ? (state.subtitle.items.find((item) => item.id === state.selectedSubtitleId)?.text ?? null)
@@ -48,7 +59,15 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
                 // 눈에 보이는 변화 없이 실행취소 한 칸만 쌓인다
                 onDoubleClick={split ? state.swapSources : undefined}
               >
-                <span className={styles.sourcePlaceholder}>{source.placeholder}</span>
+                {source.media === true && videoNode !== null ? (
+                  // aria-hidden: 자막·컨트롤은 화면의 다른 곳이 담당하고, 이 요소는 그림이다.
+                  // 안 붙이면 axe 가 자막 트랙 없는 video 를 위반으로 잡는다.
+                  <div className={styles.sourceVideo} aria-hidden>
+                    {videoNode}
+                  </div>
+                ) : (
+                  <span className={styles.sourcePlaceholder}>{source.placeholder}</span>
+                )}
                 <span className={styles.sourceBadge} data-tone={source.tone}>
                   {source.badge}
                 </span>

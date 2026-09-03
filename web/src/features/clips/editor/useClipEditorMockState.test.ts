@@ -1,6 +1,8 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { withToastProvider } from '@/test/testProviders';
+import type { EditorPlayback, PlaybackBounds } from './editorPlayback';
+import type { AudioPeaks, EditorMediaSource } from './editorSource';
 import { MAX_RANGE_SECONDS } from './timelineMath';
 import { useClipEditorMockState, type ClipEditorOptions } from './useClipEditorMockState';
 
@@ -311,5 +313,174 @@ describe('useClipEditorMockState', () => {
     // null은 기본 높이(트랙 수에 맞춤)로 되돌린다 — 손잡이 더블클릭 경로
     act(() => result.current.setTimelineHeight(null));
     expect(result.current.timelineHeight).toBeNull();
+  });
+});
+
+// --- 실소스·실재생 주입 ------------------------------------------------------
+// 화면과 허브는 재생이 목업인지 hls.js 인지 모른다. 그 경계를 가짜 어댑터로 확인한다 —
+// jsdom 에는 미디어 구현이 없어 진짜 hls 경로는 여기서 못 돈다.
+
+const SOURCE: EditorMediaSource = {
+  streamId: 'editor-sample',
+  label: '로컬 샘플 · 2026-08-31 방송',
+  sourceStartAtMs: 1788176806750,
+  durationSeconds: 600,
+  width: 1920,
+  height: 1080,
+  fps: 60,
+  playlistUrl: 'http://localhost:8080/live/editor-sample/index.m3u8',
+  filmstrip: {
+    sheets: ['thumbs_001.jpg'],
+    sheetUrls: ['http://localhost:8080/live/editor-sample/thumbs_001.jpg'],
+    columns: 10,
+    rows: 10,
+    tileWidth: 160,
+    tileHeight: 90,
+    intervalSeconds: 2,
+    count: 300,
+    lastSheetCount: 100,
+  },
+  audioTracks: [
+    {
+      trackId: 0,
+      kind: 'mix',
+      label: '오디오 · 최종 믹스',
+      channels: 2,
+      sampleRate: 48000,
+      peaksUrl: 'http://localhost:8080/live/editor-sample/peaks_0.json',
+    },
+  ],
+};
+
+const PEAKS: AudioPeaks = { binMs: 100, count: 2, scale: 'abs16', maxPeak: 0.5, peaks: [0.2, 0.5] };
+
+function fakePlayback(overrides: Partial<EditorPlayback> = {}) {
+  const calls = { bounds: [] as PlaybackBounds[], rates: [] as number[], seeks: [] as number[] };
+  const playback: EditorPlayback = {
+    playing: false,
+    currentSeconds: 60,
+    durationSeconds: 600,
+    error: null,
+    togglePlay: vi.fn(),
+    seekTo: vi.fn((seconds: number) => calls.seeks.push(seconds)),
+    seekBy: vi.fn(),
+    setRate: (rate: number) => calls.rates.push(rate),
+    setBounds: (bounds: PlaybackBounds) => calls.bounds.push(bounds),
+    ...overrides,
+  };
+  return { playback, calls };
+}
+
+describe('useClipEditorMockState — 실소스 주입', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('길이·라벨·구간을 소스에서 가져온다', () => {
+    const { result } = renderEditor({ source: SOURCE });
+
+    expect(result.current.sourceDurationSeconds).toBe(600);
+    expect(result.current.sourceLabel).toBe('로컬 샘플 · 2026-08-31 방송');
+    // 600초의 10% = 60초에서 시안 길이(12.4초)만큼
+    expect(result.current.range.startSeconds).toBe(60);
+    expect(result.current.rangeLengthLabel).toBe('12.4초');
+    expect(result.current.rangeStartLabel).toBe('0:01:00.0');
+  });
+
+  it('타임라인 트랙이 소스의 오디오 + 편집기 자산으로 바뀐다', () => {
+    const { result } = renderEditor({ source: SOURCE, peaks: new Map([[0, PEAKS]]) });
+
+    expect(result.current.tracks.map((track) => track.label)).toEqual([
+      '영상',
+      '오디오 · 최종 믹스',
+      'BGM',
+      '효과음',
+      '이미지',
+    ]);
+    // 실데이터가 트랙에 실려야 레인이 자리 표시자 대신 그림을 그린다
+    expect(result.current.tracks[0]?.filmstrip?.count).toBe(300);
+    expect(result.current.tracks[1]?.peaks?.count).toBe(2);
+  });
+
+  it('목업 장식 클립이 새 구간을 따라 옮겨온다 — 창 밖에 남으면 안 된다', () => {
+    const { result } = renderEditor({ source: SOURCE });
+    const bgm = result.current.tracks.find((track) => track.kind === 'bgm');
+
+    expect(bgm?.clips[0]?.startSeconds).toBeGreaterThan(0);
+    expect(bgm?.clips[0]?.startSeconds).toBeLessThan(600);
+  });
+
+  it('미리보기 첫 칸에 영상 표식이 붙고 자리바꿈을 따라간다', () => {
+    const { result } = renderEditor({ source: SOURCE });
+
+    expect(result.current.sources[0]?.media).toBe(true);
+    act(() => result.current.swapSources());
+    expect(result.current.sources[1]?.media).toBe(true);
+  });
+
+  it('소스가 없으면 목업 트랙 6종 그대로다', () => {
+    const { result } = renderEditor();
+    expect(result.current.tracks).toHaveLength(6);
+    expect(result.current.sources[0]?.media).toBeUndefined();
+  });
+});
+
+describe('useClipEditorMockState — 재생 어댑터 주입', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('재생 상태와 액션을 어댑터에 넘긴다', () => {
+    const { playback } = fakePlayback({ playing: true, currentSeconds: 123.4 });
+    const { result } = renderEditor({ playback });
+
+    expect(result.current.playing).toBe(true);
+    expect(result.current.playheadSeconds).toBe(123.4);
+    expect(result.current.playheadLabel).toBe('0:02:03.4');
+
+    act(() => result.current.togglePlay());
+    expect(playback.togglePlay).toHaveBeenCalledOnce();
+    act(() => result.current.seekBy(-5));
+    expect(playback.seekBy).toHaveBeenCalledWith(-5);
+  });
+
+  it('마운트할 때 구간과 배속을 어댑터에 알린다', () => {
+    const { playback, calls } = fakePlayback();
+    const { result } = renderEditor({ playback });
+
+    expect(calls.bounds.at(-1)).toEqual({
+      startSeconds: result.current.range.startSeconds,
+      endSeconds: result.current.range.endSeconds,
+      loop: true,
+    });
+    expect(calls.rates.at(-1)).toBe(1);
+  });
+
+  it('구간 반복을 끄거나 배속을 바꾸면 어댑터가 다시 듣는다', () => {
+    const { playback, calls } = fakePlayback();
+    const { result } = renderEditor({ playback });
+
+    act(() => result.current.toggleLoop());
+    expect(calls.bounds.at(-1)?.loop).toBe(false);
+
+    act(() => result.current.setSpeed(2));
+    expect(calls.rates.at(-1)).toBe(2);
+  });
+
+  it('구간 핸들을 옮기면 새 구간이 어댑터로 간다', () => {
+    const { playback, calls } = fakePlayback();
+    const { result } = renderEditor({ playback });
+    const before = calls.bounds.length;
+
+    act(() => result.current.setRangeEdge('end', result.current.range.endSeconds + 3));
+
+    expect(calls.bounds.length).toBeGreaterThan(before);
+    expect(calls.bounds.at(-1)?.endSeconds).toBe(result.current.range.endSeconds);
   });
 });

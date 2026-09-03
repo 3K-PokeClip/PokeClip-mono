@@ -303,6 +303,40 @@
   );
 }
 
+/* 실데이터 필름스트립 — 스프라이트 시트 한 칸씩을 배경으로 꺼내 깐다 */
+/* 소스를 기다리거나 못 읽었을 때의 화면 — 편집기와 같은 자리를 채운다 */
+.gate {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(24 * var(--pc-u));
+  background: var(--pc-color-bg-canvas);
+}
+
+.laneTiles {
+  position: absolute;
+  inset: 0;
+}
+
+.laneTile {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background-repeat: no-repeat;
+  /* 칸 폭이 썸네일 비율과 달라도 잘리지 않게 채운다 — 눈금 정렬이 비율보다 중요하다 */
+  opacity: 0.85;
+}
+
+/* 실데이터 파형 — viewBox 0..1을 레인 크기로 늘린다(preserveAspectRatio="none") */
+.laneWaveSvg {
+  width: 100%;
+  height: 80%;
+  margin: auto 0;
+  display: block;
+  fill: rgb(140 160 230 / 0.72);
+}
+
 .laneMuted {
   opacity: 0.35;
 }
