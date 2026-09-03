@@ -459,6 +459,11 @@ public class FakeChzzkBehavior {
         send("42[\"CHAT\",\"" + escape(innerJson) + "\"]");
     }
 
+    /** 지금 붙어 있는 소켓 하나에 후원을 보낸다(옛 경로 검사용). */
+    public void emitDonation(String innerJson) {
+        send("42[\"DONATION\",\"" + escape(innerJson) + "\"]");
+    }
+
     public void emitSystem(String innerJson) {
         send("42[\"SYSTEM\",\"" + escape(innerJson) + "\"]");
     }

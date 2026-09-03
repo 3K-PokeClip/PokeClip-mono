@@ -54,7 +54,7 @@ public final class SummaryLogger implements AutoCloseable {
     public static SummaryLogger start(Supplier<String> stream, CollectionMetrics metrics,
                                       Heartbeat heartbeat, Duration period, LongSupplier sinkFailures,
                                       PersistCounters counters, LongSupplier dropped,
-                                      ArchiveCounters archive) {
+                                      ArchiveCounters archive, LongSupplier donationDropped) {
         SummaryLogger logger = new SummaryLogger();
         long periodMillis = period.toMillis();
         logger.scheduler.scheduleAtFixedRate(() -> {
@@ -62,7 +62,8 @@ public final class SummaryLogger implements AutoCloseable {
             try {
                 log.info("{}", render(stream.get(), metrics.snapshot(), heartbeat, sinkFailures.getAsLong(),
                         counters.persistedCount(), counters.conflictedCount(),
-                        counters.poisonedCount(), dropped.getAsLong(), archive));
+                        counters.poisonedCount(), dropped.getAsLong(), archive,
+                        donationDropped.getAsLong()));
             } catch (RuntimeException e) {
                 // 요약이 터져도 스케줄러는 계속 돈다. 여기서 예외가 밖으로 나가면
                 // scheduleAtFixedRate가 조용히 멈춰 요약이 영영 안 나가고,
@@ -76,7 +77,7 @@ public final class SummaryLogger implements AutoCloseable {
     /** 순수 함수라 스케줄러 없이도 검사할 수 있다. */
     public static String render(String stream, CollectionMetrics.Snapshot s, Heartbeat heartbeat,
                                 long sinkFailures, long persisted, long conflicted, long poisoned,
-                                long dropped, ArchiveCounters archive) {
+                                long dropped, ArchiveCounters archive, long donationDropped) {
         return "chat.summary"
                 // <b>첫 항이다.</b> 스트리머가 여럿이면 30초마다 이 줄이 세션 수만큼 나가는데,
                 // 이것이 없으면 <b>서로 구분되지 않는 줄 N개</b>가 된다 — 「일부만 안 걷힌다」를
@@ -120,7 +121,13 @@ public final class SummaryLogger implements AutoCloseable {
                 + " uploaded=" + archive.uploadedCount()
                 + " pending=" + archive.pendingCount()
                 + " droppedObjects=" + archive.droppedObjectsCount()
-                + " droppedMessages=" + archive.droppedMessagesCount();
+                + " droppedMessages=" + archive.droppedMessagesCount()
+                // 후원 관측 둘. <b>위 검산 등식 어디에도 안 든다</b> — received가 채팅만 세기
+                // 때문이다(계획 검증 F3). 따로 싣는 이유: 후원은 아카이브에 안 쌓으므로
+                // donationDropped가 오르면 그 후원은 표에도 원본에도 없고
+                // 범위 창구가 메워 줄 길이 없다 — 되찾을 수 없는 유일한 유실이다.
+                + " donations=" + s.donations()
+                + " donationDropped=" + donationDropped;
     }
 
     /**

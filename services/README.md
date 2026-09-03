@@ -2264,7 +2264,7 @@ clip이 「이 사람이 이 스트리머의 방송을 봐도 되나」를 물�
 | **절단 감지** | 신호 **셋** — WS 종료 콜백 · ping 송신 실패 · **pong이 임계를 넘도록 안 옴**(좀비) |
 | **재연결** | 세션 URL은 재사용이 안 되므로 **세션 발급부터 다시** 탄다. 두 배씩 늘려 상한에서 멈춘다 |
 | **아카이브** | 받은 채팅 원본(치지직 안쪽 JSON 그대로 + 받은 시각)을 1분 파일로 묶어 S3에 올린다. 창고가 죽어도 수신은 안 멈춘다 |
-| 관측 | 30초마다 `chat.summary` 한 줄 — 건수 · ping/pong 최대 공백 · 순서 위반 · 전달 지연 · 적재 카운터 넷(`persisted`/`conflicts`/`poisoned`/`dropped`) · 아카이브 카운터 여섯(`archived`/`archiveBufferDropped`/`uploaded`/`pending`/`droppedObjects`/`droppedMessages`). **`archiveRunId`는 요약 줄에 없다** — 시작 로그 `chat.archive.enabled runId=…`와 판정 줄에 실린다 |
+| 관측 | 30초마다 `chat.summary` 한 줄 — 건수 · ping/pong 최대 공백 · 순서 위반 · 전달 지연 · 적재 카운터 넷(`persisted`/`conflicts`/`poisoned`/`dropped`) · 아카이브 카운터 여섯(`archived`/`archiveBufferDropped`/`uploaded`/`pending`/`droppedObjects`/`droppedMessages`) · 후원 둘(`donations`/`donationDropped` — **검산 등식 밖이다**). **`archiveRunId`는 요약 줄에 없다** — 시작 로그 `chat.archive.enabled runId=…`와 판정 줄에 실린다 |
 | 종료 | 편지 그만 받기 → 새 세션 빗장 → **세션 전부를 나란히 닫기**(반납·소켓) → 수신 게이트 내림 → **마지막 배치 저장 ‖ 열린 창 마지막 업로드** → **프로세스 생애 판정 한 줄** |
 
 **수집 상태 창구 (POK-128).** 방송 하나가 지금 채팅을 받고 있는지를 밖에서 묻는 문이다.
@@ -2576,6 +2576,14 @@ TCP 중계기를 세워 잰다.
 `droppedMessages`(대기 줄 상한 초과 + 종료 시 못 올려 버린 파일·그 안의 채팅). 등식 둘로 검산한다:
 `received = archived + archiveBufferDropped`(채팅 단위) · `uploaded + pending + droppedObjects =
 닫힌 창 수`(파일 단위). 켜졌는데 못 올리는 것은 health가 아니라 이 카운터로 드러낸다.
+
+🔴 **후원(`chat_donations`)은 아카이브에 안 쌓는다** (POK-234). 위 첫째 등식의 `received`가
+**채팅만** 세는데 `archived`는 「퍼간 건수」를 그대로 세기 때문이다 — 후원을 넣으면 두 값이
+후원 수만큼 영구히 벌어져 **운영자가 그 등식으로 유실을 검산할 수 없게 된다.** 아카이브의
+목적은 판별 기준값 산출이고 판별기는 후원을 안 쓴다. 잃는 것은 후원 원문의 `emojis` 맵
+하나이고 나머지 칸은 전부 `chat_donations`에 남는다. **대신 후원 바구니의 상한 초과는 따로
+센다** — 요약 줄 `donationDropped`와 health 상세 `donationBufferDropped`. 후원은 원본이
+없으므로 그 수가 0이 아니면 **되찾을 길이 없는 유실**이다(채팅은 아카이브가 메운다).
 
 **등식 둘은 아카이브가 <u>켜져 있을 때</u>의 검산이다.** `S3_BUCKET`이 비면(기본값 — CI·팀원 로컬·
 버킷을 넣기 전 운영이 전부 여기다) 여섯 항이 계속 0이라 `received=348 archived=0`처럼 나가고

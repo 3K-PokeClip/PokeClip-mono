@@ -9,6 +9,7 @@ import com.pokeclip.chat.collector.chzzk.ChatEventDecoder;
 import com.pokeclip.chat.collector.chzzk.ChatMessage;
 import com.pokeclip.chat.collector.chzzk.ChatSession;
 import com.pokeclip.chat.collector.chzzk.ChzzkSessionClient;
+import com.pokeclip.chat.collector.chzzk.DonationEvent;
 import com.pokeclip.chat.collector.chzzk.DonationSubscription;
 import com.pokeclip.chat.collector.status.DonationSubscriptions;
 import com.pokeclip.chat.collector.chzzk.SessionEstablishException;
@@ -20,6 +21,8 @@ import com.pokeclip.chat.collector.observe.Heartbeat;
 import com.pokeclip.chat.collector.observe.HeartbeatListener;
 import com.pokeclip.chat.collector.observe.SummaryLogger;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
+import com.pokeclip.chat.collector.persist.PersistableDonation;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.persist.PersistableChat;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
@@ -164,6 +167,9 @@ public class StreamSession {
     /** 이 방송의 후원 구독 상태를 적는 곳. 창구가 여기서 읽는다. */
     private final DonationSubscriptions donations;
 
+    /** 후원 바구니. 채팅 바구니와 같은 규칙 — 수신 스레드는 offer만 부른다. */
+    private final DonationBuffer donationBuffer;
+
     /**
      * 등록부가 여는 세션({@code SessionRegistry}). <b>검사용 손잡이 둘을 안 받는다</b> —
      * 그 둘은 러너를 <i>상속해서</i> 갈아 끼우는 옛 검사 전용이고, 등록부 경로에는
@@ -177,10 +183,11 @@ public class StreamSession {
                          ExecutorService reconnector, CountDownLatch stopSignal,
                          AtomicBoolean intakeClosed, AtomicInteger releasesInFlight,
                          AtomicLong lastSessionNo, DonationSubscriptions donations,
+                         DonationBuffer donationBuffer,
                          Consumer<StopReason> onPermanentStop) {
         this(key, accessToken, properties, status, metrics, policy, restClient,
                 buffer, persister, archive, reconnector, stopSignal, intakeClosed,
-                releasesInFlight, lastSessionNo, donations, null, null, onPermanentStop);
+                releasesInFlight, lastSessionNo, donations, donationBuffer, null, null, onPermanentStop);
     }
 
     /**
@@ -195,6 +202,7 @@ public class StreamSession {
                          ExecutorService reconnector, CountDownLatch stopSignal,
                          AtomicBoolean intakeClosed, AtomicInteger releasesInFlight,
                          AtomicLong lastSessionNo, DonationSubscriptions donations,
+                         DonationBuffer donationBuffer,
                          Function<ChzzkSessionClient, ChatSession> sessionFactory,
                          LongFunction<HeartbeatListener> heartbeatListenerFactory,
                          Consumer<StopReason> onPermanentStop) {
@@ -214,6 +222,7 @@ public class StreamSession {
         this.releasesInFlight = releasesInFlight;
         this.lastSessionNo = lastSessionNo;
         this.donations = donations;
+        this.donationBuffer = donationBuffer;
         this.sessionFactory = sessionFactory != null ? sessionFactory : ChatSession::new;
         this.heartbeatListenerFactory = heartbeatListenerFactory != null
                 ? heartbeatListenerFactory : this::heartbeatListener;
@@ -566,7 +575,8 @@ public class StreamSession {
             // 소켓은 그대로 두고 번호만 갈아끼므로(retarget), 여기서 문자열을 붙들면
             // 그 뒤 30초 줄이 전부 <b>끝난 방송 번호</b>를 달고 나간다.
             SummaryLogger logger = SummaryLogger.start(this::stream, metrics, beat, SUMMARY_PERIOD,
-                    opening::sinkFailureCount, persister, buffer::droppedCount, archive.counters());
+                    opening::sinkFailureCount, persister, buffer::droppedCount, archive.counters(),
+                    donationBuffer::droppedCount);
 
             // <b>가드를 보는 것과 상태를 올리는 것이 한 덩어리여야 한다.</b> 위 이른
             // 검사만으로는 <b>스케줄러 둘을 세우는 동안이 통째로 창</b>이다 — 거기서
@@ -982,6 +992,37 @@ public class StreamSession {
                     message.nickname(), message.userRole()));
             // 원본도 넣기만 한다 — 인코드·창·업로드는 전부 아카이브 스레드 몫이다.
             archive.offer(new ArchivableChat(message.channelId(), receivedAt, message.raw()));
+            return;
+        }
+
+        DonationEvent donationEvent = ChatEventDecoder.decodeDonation(frame.payload());
+        if (donationEvent != null) {
+            if (intakeClosed.get()) {
+                // 채팅과 같은 규칙이다 — 종료의 마무리 flush가 시작된 뒤에는 세지도 담지도 않는다.
+                return;
+            }
+            // <b>방송 번호를 모르면 버린다.</b> 옛 경로(CHZZK_ENABLED)는 번호가 없는데
+            // chat_donations.stream_id는 NOT NULL이라, 담으면 INSERT가 영구히 실패하면서
+            // 되돌리기를 무한 반복하고 바구니가 차서 <b>멀쩡한 후원까지 밀려난다</b>.
+            // 채팅은 그 칸이 NULL 허용이라 「모른다」로 남길 수 있지만 여기는 그 길이 없다.
+            if (key.streamId() == null) {
+                return;
+            }
+            long receivedAt = System.currentTimeMillis();
+            metrics.recordDonation();
+            donationBuffer.offer(new PersistableDonation(key.streamId(), donationEvent.channelId(),
+                    donationEvent.donatorChannelId(), donationEvent.donatorNickname(),
+                    donationEvent.donationType(), donationEvent.payAmount(),
+                    donationEvent.donationText(), receivedAt));
+            // 🔴 <b>아카이브에 넣지 않는다</b>(계획 검증 F3). archived는 「퍼간 건수」를 그대로
+            // 세는데 received는 채팅만 센다 — 후원을 넣으면 판정·요약 줄의 검산 등식
+            // received = archived + archiveBufferDropped 가 후원 수만큼 영구히 벌어져
+            // 운영자가 그 등식으로 유실을 검산할 수 없게 된다(그 등식을 계산해 단언하는
+            // 시험이 0개라 아무도 안 잡는다). 아카이브의 목적은 판별 기준값 산출(POK-116)이고
+            // 판별기는 후원을 안 쓴다. 잃는 것은 후원 원문의 emojis 맵 하나뿐이고
+            // 나머지 칸은 chat_donations에 그대로 남는다.
+            // 같은 문장이 services/README.md 아카이브 절에도 있다 — 없는 코드에는 주석 자리가
+            // 없어 이 선택은 문서에도 적어 둔다.
             return;
         }
 

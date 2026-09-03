@@ -8,6 +8,9 @@ import com.pokeclip.chat.collector.chzzk.DonationSubscription;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
+import com.pokeclip.chat.collector.persist.DonationPersister;
+import com.pokeclip.chat.collector.status.DonationSubscriptions;
 import com.pokeclip.chat.collector.status.CollectionState;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.TestPersistence;
@@ -58,10 +61,13 @@ class SessionRegistryTest extends IntegrationTestSupport {
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
     @Autowired RestClient.Builder restClientBuilder;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     private SessionRegistry registry;
     /** 등록부 세션이 실제로 채팅을 흘려보내는 바구니. 세션 격리를 재려면 바늘이 흘러야 한다. */
     private ChatBuffer buffer;
+    /** 후원 바구니. 후원이 소켓에서 여기까지 오는 것을 재려면 세션과 같은 것을 들어야 한다. */
+    private DonationBuffer donationBuffer;
 
     @AfterEach
     void tearDown() {
@@ -1256,6 +1262,63 @@ class SessionRegistryTest extends IntegrationTestSupport {
         assertThat(after == null || after.state() == CollectionStatus.State.STOPPED).isTrue();
     }
 
+    /**
+     * 후원 프레임이 <b>표까지</b> 간다. 배선을 관통해서 재는 유일한 갈래다 —
+     * {@code DonationPersisterTest}는 바구니부터 보고, 여기는 소켓부터 본다.
+     *
+     * <p>문항 2: 행 수만 보면 <b>앞 검사가 남긴 행</b>일 수 있다 — 방송 번호 접두
+     * {@code rdon-}으로 자기 것만 세고, 시작 전에 지운다.
+     */
+    @Test
+    void 후원_프레임이_표에_남는다() throws Exception {
+        jdbc.update("DELETE FROM chat_donations WHERE stream_id LIKE 'rdon-%'");
+        givenRegistry();
+        DonationPersister persister = new DonationPersister(jdbc, donationBuffer);
+
+        registry.open(key("rdon-1", 9L, "CH"), "tok-9");
+        awaitUntil(AWAIT, () -> registry.statusOf("rdon-1") != null
+                && registry.statusOf("rdon-1").state() == CollectionStatus.State.COLLECTING);
+
+        behavior.emitDonationTo("tok-9", "{\"donationType\":\"CHAT\",\"channelId\":\"CH\","
+                + "\"donatorChannelId\":\"D\",\"donatorNickname\":\"n\","
+                + "\"payAmount\":\"1000\",\"donationText\":\"t\"}");
+
+        awaitUntil(AWAIT, () -> donationBuffer.size() == 1);
+        assertThat(donationBuffer.size())
+                .as("바구니에 안 들어왔으면 아래 표 검사는 배선이 아니라 저장을 보는 것이 된다")
+                .isEqualTo(1);
+
+        persister.flushBacklog();
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM chat_donations WHERE stream_id='rdon-1'", Long.class))
+                .isEqualTo(1L);
+        assertThat(jdbc.queryForObject(
+                "SELECT pay_amount FROM chat_donations WHERE stream_id='rdon-1'", Long.class))
+                .as("금액이 안 실리면 화면이 후원 크기를 못 쓴다")
+                .isEqualTo(1000L);
+    }
+
+    /** 후원은 <b>검산 등식 밖</b>이다 — received에 섞이면 등식이 후원 수만큼 벌어진다. */
+    @Test
+    void 후원은_received에_안_섞이고_따로_세진다() throws Exception {
+        givenRegistry();
+        registry.open(key("rdon-2", 10L, "CH"), "tok-10");
+        awaitUntil(AWAIT, () -> registry.statusOf("rdon-2") != null
+                && registry.statusOf("rdon-2").state() == CollectionStatus.State.COLLECTING);
+
+        behavior.emitDonationTo("tok-10", "{\"donationType\":\"CHAT\",\"channelId\":\"CH\","
+                + "\"donatorChannelId\":\"D\",\"donatorNickname\":\"n\","
+                + "\"payAmount\":\"1000\",\"donationText\":\"t\"}");
+        awaitUntil(AWAIT, () -> donationBuffer.size() >= 1);
+
+        assertThat(donationBuffer.size())
+                .as("후원이 아예 안 왔다면 아래 단언은 자동으로 참이다")
+                .isEqualTo(1);
+        assertThat(registry.receivedOf("rdon-2"))
+                .as("후원이 received를 올리면 검산 등식이 영구히 벌어진다")
+                .isZero();
+    }
+
     // ------------------------------------------------------------------
     // 도우미
     // ------------------------------------------------------------------
@@ -1270,6 +1333,7 @@ class SessionRegistryTest extends IntegrationTestSupport {
 
     private void givenRegistry(boolean enabled, Duration establishTimeout) {
         buffer = new ChatBuffer(1_000);
+        donationBuffer = new DonationBuffer(1_000);
         registry = new SessionRegistry(
                 // <b>설정 토큰은 안 쓰인다.</b> 세션마다 자기 토큰으로 붙는 것을
                 // 위 connectedTokens() 단언이 지킨다 — 여기에 진짜 같은 값을 두면
@@ -1278,7 +1342,7 @@ class SessionRegistryTest extends IntegrationTestSupport {
                         "http://localhost:" + port, establishTimeout, FIRST_DELAY, MAX_DELAY),
                 restClientBuilder,
                 buffer, TestPersistence.disabledPersister(),
-                ChatArchive.NONE);
+                ChatArchive.NONE, new DonationSubscriptions(), donationBuffer);
     }
 
     /**

@@ -7,6 +7,7 @@ import com.pokeclip.chat.collector.observe.CollectionMetrics;
 import com.pokeclip.chat.collector.observe.HeartbeatListener;
 import com.pokeclip.chat.collector.observe.SummaryLogger;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.session.SessionKey;
 import com.pokeclip.chat.collector.session.SessionRegistry;
@@ -287,6 +288,9 @@ public class CollectorRunner implements ApplicationRunner {
                 // 옛 경로는 자기 것을 하나 갖는다. 이 경로의 방송 번호는 legacy() 하나뿐이고
                 // 창구는 등록부만 읽으므로, 여기 적힌 값을 읽는 사람이 없다.
                 new DonationSubscriptions(),
+                // 옛 경로는 방송 번호가 없어 후원을 표에 넣을 수 없다(stream_id NOT NULL).
+                // handleFrame이 그 갈래에서 곧장 돌아오므로 이 바구니에는 아무것도 안 담긴다.
+                new DonationBuffer(),
                 this::newSession, this::heartbeatListener, this::onPermanentStop);
     }
 

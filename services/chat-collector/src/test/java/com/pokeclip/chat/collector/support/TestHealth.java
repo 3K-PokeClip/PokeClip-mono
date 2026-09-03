@@ -11,6 +11,8 @@ import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.client.RestClient;
 
+import com.pokeclip.chat.collector.persist.DonationBuffer;
+
 import java.time.Duration;
 
 /**
@@ -28,7 +30,7 @@ public final class TestHealth {
 
     public static CollectorHealth legacyOnly(CollectionStatus status) {
         return new CollectorHealth(status, emptyRegistry(), new IntakeStatus(false),
-                new ReattachStatus(false), noProcessor());
+                new ReattachStatus(false), noProcessor(), new DonationBuffer());
     }
 
     /**

@@ -229,7 +229,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
 
             try (SummaryLogger logger = SummaryLogger.start(() -> "none", runner.metrics(),
                     Heartbeat.idleForTest(), Duration.ofMillis(150),
-                    () -> 0L, TestPersistence.disabledPersister(), () -> 0L, ArchiveCounters.NONE)) {
+                    () -> 0L, TestPersistence.disabledPersister(), () -> 0L, ArchiveCounters.NONE, () -> 0L)) {
                 awaitSummaryLine(captor);
                 assertThat(logger.emitterThreadNames()).containsExactly("chzzk-summary");
             }

@@ -9,6 +9,7 @@ import com.pokeclip.chat.collector.chzzk.SessionEstablishException;
 import com.pokeclip.chat.collector.status.DonationSubscriptions;
 import com.pokeclip.chat.collector.observe.CollectionMetrics;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
 import org.slf4j.Logger;
@@ -207,16 +208,18 @@ public class SessionRegistry {
     private final ChatPersister persister;
     private final ChatArchive archive;
     private final DonationSubscriptions donations;
+    private final DonationBuffer donationBuffer;
 
     public SessionRegistry(ChzzkProperties properties, RestClient.Builder restClientBuilder,
                            ChatBuffer buffer, ChatPersister persister, ChatArchive archive) {
-        this(properties, restClientBuilder, buffer, persister, archive, new DonationSubscriptions());
+        this(properties, restClientBuilder, buffer, persister, archive,
+                new DonationSubscriptions(), new DonationBuffer());
     }
 
     @Autowired
     public SessionRegistry(ChzzkProperties properties, RestClient.Builder restClientBuilder,
                            ChatBuffer buffer, ChatPersister persister, ChatArchive archive,
-                           DonationSubscriptions donations) {
+                           DonationSubscriptions donations, DonationBuffer donationBuffer) {
         this.properties = properties;
         // 빌더는 프로토타입 빈이다. 한 번만 build()해서 세션 전부가 나눠 쓴다.
         // <b>{@code RestClient.create()}로 만들지 마라</b> — 자동 설정을 우회해
@@ -226,6 +229,7 @@ public class SessionRegistry {
         this.persister = persister;
         this.archive = archive;
         this.donations = donations;
+        this.donationBuffer = donationBuffer;
     }
 
     /**
@@ -286,7 +290,7 @@ public class SessionRegistry {
                 new ReconnectPolicy(properties.reconnectFirstDelay(), properties.reconnectMaxDelay()),
                 restClient, buffer, persister, archive,
                 reconnectors, stopSignal, intakeClosed, releasesInFlight, lastSessionNo,
-                donations,
+                donations, donationBuffer,
                 reason -> stopOne(streamerId, self.get(), reason));
         self.set(session);
         Entry entry = new Entry(session, status, metrics, stopSignal);

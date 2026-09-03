@@ -35,7 +35,7 @@ class SummaryLoggerTest {
         metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}", null, null), 1_100L);
 
         String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(),
-                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE);
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 0L);
 
         assertThat(line).startsWith("chat.summary ");
         for (String key : REQUIRED) {
@@ -57,7 +57,7 @@ class SummaryLoggerTest {
         metrics.recordSystemEvent("connected");
 
         String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(),
-                7L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE);
+                7L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 0L);
 
         assertThat(line).contains("received=2")
                 .contains("decodeFailures=1")
@@ -73,7 +73,7 @@ class SummaryLoggerTest {
         metrics.recordMessage(new ChatMessage("CHANNEL-NEEDLE", "SENDER-NEEDLE", "CONTENT-NEEDLE", 1_000L, "{\"content\":\"CONTENT-NEEDLE\"}", "NICK-NEEDLE", "streamer"), 1_100L);
 
         String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(),
-                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE);
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 0L);
 
         // 양성 대조가 먼저다. 수신 0건이면 바늘이 요약을 지나간 적이 없어
         // doesNotContain 둘이 자동으로 참이 된다 — 아무것도 검사하지 않은 초록불이다.
@@ -93,7 +93,7 @@ class SummaryLoggerTest {
         metrics.recordMessage(new ChatMessage("CH1", "S1", "ㅋㅋ", 1_000L, "{}", null, null), 1_100L);
 
         String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(),
-                0L, 5L, 2L, 3L, 1L, ArchiveCounters.NONE);
+                0L, 5L, 2L, 3L, 1L, ArchiveCounters.NONE, 0L);
 
         // 키만 박아 둔 상수 문자열이 통과하지 못하게 값까지 본다.
         assertThat(line).contains("persisted=5")
@@ -110,7 +110,7 @@ class SummaryLoggerTest {
     void 요약_줄에_아카이브_카운터_여섯이_값과_함께_실린다() {
         CollectionMetrics metrics = new CollectionMetrics();
         ArchiveCounters archive = counters(7, 1, 3, 2, 1, 4, "r1");
-        String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(), 0L, 0L, 0L, 0L, 0L, archive);
+        String line = SummaryLogger.render("s1", metrics.snapshot(), Heartbeat.idleForTest(), 0L, 0L, 0L, 0L, 0L, archive, 0L);
         assertThat(line).contains("archived=7").contains("archiveBufferDropped=1").contains("uploaded=3")
                 .contains("pending=2").contains("droppedObjects=1").contains("droppedMessages=4");
     }
@@ -149,7 +149,7 @@ class SummaryLoggerTest {
         CollectionMetrics metrics = new CollectionMetrics();
 
         String line = SummaryLogger.render("s-42", metrics.snapshot(), Heartbeat.idleForTest(),
-                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE);
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 0L);
 
         assertThat(line).startsWith("chat.summary stream=s-42 ");
     }
@@ -169,7 +169,7 @@ class SummaryLoggerTest {
         try (LogCaptor captor = new LogCaptor();
              SummaryLogger ignored = SummaryLogger.start(stream::get, metrics, Heartbeat.idleForTest(),
                      Duration.ofMillis(100), () -> 0L, TestPersistence.disabledPersister(),
-                     () -> 0L, ArchiveCounters.NONE)) {
+                     () -> 0L, ArchiveCounters.NONE, () -> 0L)) {
             awaitLine(captor, "chat.summary stream=s1 ");
             assertThat(captor.messages()).anyMatch(m -> m.startsWith("chat.summary stream=s1 "));
 
@@ -213,7 +213,7 @@ class SummaryLoggerTest {
 
         try (LogCaptor captor = new LogCaptor();
              SummaryLogger logger = SummaryLogger.start(() -> "s1", metrics, Heartbeat.idleForTest(),
-                     Duration.ofMillis(100), () -> 0L, TestPersistence.disabledPersister(), () -> 0L, ArchiveCounters.NONE)) {
+                     Duration.ofMillis(100), () -> 0L, TestPersistence.disabledPersister(), () -> 0L, ArchiveCounters.NONE, () -> 0L)) {
             Thread.sleep(400);
 
             assertThat(logger.emitterThreadNames())
