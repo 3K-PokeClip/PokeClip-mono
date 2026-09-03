@@ -389,7 +389,7 @@ CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리�
 빨간불이 되고, 그 실패 메시지가 이 절로 안내한다.** 상수는 셋이고 책임이 다르다 —
 `pinnedMediaMTXTag`(FROM 태그와 대조)·`pinnedMediaMTXDigest`(FROM digest와 대조)·
 **`upstreamBaseVersion`(아래 전제 9곳을 짊어지는 상수)**. **9곳 재확인의 서명은 마지막 하나이고**,
-그 값이 바뀌는 순간만 진짜 버전업이다(포크 태그의 `.1`→`.2`는 우리 수정만 바뀐 것이다).
+그 값이 바뀌는 순간만 진짜 버전업이다(포크 태그의 `.1`→`.2`는 보통 우리 수정만 바뀐 것이다 — 다만 상류 베이스 커밋이 함께 이동하면 준버전업이며 아래 "포크 태그와 상류 버전의 관계" 규약을 따른다).
 실패 메시지에 9개 목록이 그대로 들어 있다.
 
 버전 고정의 유일한 자리는 [`media/Dockerfile.mtxhook`](Dockerfile.mtxhook)의 `FROM`이다
@@ -406,7 +406,7 @@ CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리�
 | # | 자리 (닻) | 무엇이 참이라고 전제하는가 | 어떻게 재확인하는가 |
 |---|---|---|---|
 | 1 | `infra/compose/mediamtx.yml` — `pathDefaults` 블록<br>(닻: `all_others 에도 상속된다`) | 설정 로딩이 `pathDefaults`(모든 경로의 기본값 묶음)를 먼저 복사하므로, 훅 3종을 여기에만 적어도 `all_others`(설정에 이름을 안 적은 모든 경로)에 그대로 붙는다 | 새 이미지를 띄우고 아무 이름(예: `demo`)으로 15초 송출한 뒤 스풀 `/hooks/events.jsonl`에 줄이 쌓이는지 본다. **안 쌓이면 상속이 사라진 것** — 훅 3종을 `paths: all_others:` 아래로 내려 적는다 |
-| 2 | `infra/compose/mediamtx.yml` — 훅 명령 3줄<br>(닻: `이 세 줄에`) | 명령 문자열을 shell 규칙으로 **먼저 쪼갠 뒤** 조각별로 변수를 치환한다. 그래서 `$MTX_PATH`를 넣어도 인자 개수는 안 늘고, 대신 그 인자 하나의 내용이 송출자 제어가 된다 | 업스트림 `internal/externalcmd/cmd_os.go`에서 분해와 치환의 **순서**를 확인한다. 치환이 먼저로 뒤집혔다면 송출자가 경로 이름만으로 인자를 늘릴 수 있다 |
+| 2 | `infra/compose/mediamtx.yml` — 훅 명령 3줄<br>(닻: `이 세 줄에`) | 명령 문자열을 shell 규칙으로 **먼저 쪼갠 뒤** 조각별로 변수를 치환한다. 그래서 `$MTX_PATH`를 넣어도 인자 개수는 안 늘고, 대신 그 인자 하나의 내용이 송출자 제어가 된다 | 업스트림 `internal/externalcmd/cmd_os_other.go`(#6156에서 `cmd_os.go`를 개명)에서 분해와 치환의 **순서**를 확인한다. 치환이 먼저로 뒤집혔다면 송출자가 경로 이름만으로 인자를 늘릴 수 있다 |
 | 3 | `media/README.md` — 훅 채널 절<br>(닻: `구명칭 runOnReady`) | 구명칭 `runOnReady`는 `runOnAvailable`("읽기 가능" 축)로 매핑되며 세션(Online) 축이 아니다. 그래서 쓰지 않는다 | 3·4는 같은 사실이다. `docker compose logs media \| head -50`에서 deprecated/unknown 파라미터 WARN을 본다. 훅 3종 이름(`runOnOnline`·`runOnOffline`·`runOnRecordSegmentComplete`)이 WARN 없이 살아 있는지가 핵심 |
 | 4 | `media/internal/mtxhook/event.go` — `Kind` 주석<br>(닻: `runOnAvailable 로 매핑`) | 위와 같은 사실을 코드 쪽에 적어 둔 것 | 위 3번과 함께 한 번에 확인한다 |
 | 5 | `media/internal/fmp4meta/probe.go`<br>(닻: `트랙 중 최대 길이`) | `moov/mvhd`(파일 전체 길이가 적힌 상자)의 duration이 "트랙 중 최대 길이"와 일치한다. 이게 어긋나면 인덱스의 `duration_ms`가 조용히 틀린다 | 새 버전이 떨어뜨린 세그먼트를 `ffprobe`(이 코드와 무관한 독립 구현)로 재고, `ProbeDurationMS` 결과와 100ms 안에서 맞는지 대조한다 |
@@ -416,6 +416,8 @@ CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리�
 | 9 | HLS 서빙 경계<br>(닻: `302 cookieCheck`) | **HLS 첫 요청은 302 `cookieCheck` 리다이렉트를 돈다 — 1.19.3에도 있던 동작이며 이번(1.20.1 전환)에 처음 체크리스트화했다**(우리 2026-08-17 결정 문서·v1.19.3 원문 대조). **버전별 델타**: 1.20.1은 plain HTTP에서 일반 쿠키를 중단하고 **Partitioned 쿠키(HTTPS 전용)로 통합**, HTTP에선 쿠키 미회신 시 **`?session=` 쿼리로 폴백**(만료 시 401 — 실측)·iOS UA 400 분기 제거. CDN(Bearer) 경로는 302를 우회한다 | CDN·서명 쿠키·매니페스트 TTL 경계에서 실측 — 캐시가 302·Set-Cookie를 어떻게 다루는지, **HTTP 오리진에서 세션 쿼리가 캐시 키를 오염시키는지**. 이 행은 버전 특정이 아니라 **서빙 경계 상시 리스크**다 — 롤백해도 걷어내지 않고 델타 서술만 그 버전 값으로 갱신한다. ADR-050 선결 A |
 
 **1.19.3 → 1.20.1 재검증 기록 (2026-08-28)**: 기존 8곳 전항 확인 + 9번 신설(체크리스트화) — ①`all_others` 송출로 훅 3종 실발화(스풀 기록) ②`shellquote.Split` 후 `expandEnv` 순서 불변(`cmd_os.go:16→22`) ③④`runOnReady` deprecated 별칭 생존(`conf/path.go:354`)·기동 WARN 0 ⑤1.20.1 실산출물 mvhd 4.117s = 최대 트랙 길이 일치 ⑥박스 배치 동일(ftyp·moov·(moof·mdat)×N — 픽스처 유지) ⑦`recordPartDuration` 기본 1s 불변(`conf/path.go:376`) ⑧UID 10002로 녹화 기록·권한 오류 0(+상류 read-only FS 복원 커밋 `c9f003f`). 부수: 상류 `a56c635`가 우리가 겪은 설정 API 데드락을 해소.
+
+**준버전업 재확인 기록 (2026-09-03, `.1`→`.2`, 상류 베이스 e175003→f82bc23 13커밋)**: 이동 구간이 닿는 전제만 표적 재확인 — ②`shellquote.Split`(16행) 후 조각별 `expandEnv`(21~22행) 순서 불변, 파일은 #6156에서 `cmd_os.go`→`cmd_os_other.go`로 개명 ③④훅 이름 5종 존치·`runOnReady` 별칭 매핑 유지(`conf/path.go:351~364, 967~972`), 기동 WARN 0 ⑦`recordPartDuration` 기본값 1s(소스 `path.go:376` + 기동 후 `pathdefaults/get` 실측) ⑤⑥면제 — `internal/recorder` 이동 구간 diff 0(`record`·`formatprocessor` 경로는 존재하지 않음) ⑧`.2` compose 기동 로그에 권한 오류 0 · 추가로 `authInternalUsers` 기본 두 항목이 새 베이스 샘플과 동일(정규화 YAML 대조), playback 기본 비활성(`global/get` 실측). 스모크: 훅 3종 실발화(online 1·segcomplete 4·offline 1), #6155 신동작 확인(훅 비0 종료가 `runOnOnline command exited: command exited with code 1`로 보고), 익명 read 302 cookieCheck→200. 발행 이미지 격리 rig(GHCR digest 기준): 8축 전부 통과(유휴 무녹화·RTSP 송출 녹화 시작·동결·재개·정적 소스·오프라인 PATCH 동결·런타임 등록·SRT), 판정 대상 산출물 13개 전부 640x360(슬레이트 1920x1080 0건 — 일부러 슬레이트를 녹화하는 대조군 `pub1`은 지문 대상에서 제외), 기동 로그 `v1.20.1-pokeclip.2`. 포크 전량 테스트는 66패키지 중 63 통과, 3패키지(webrtc ICE 후보·mpegts/rtp 멀티캐스트 UDP)는 우리 커밋 없는 상류 원본 트리에서도 동일 실패 — 호스트 네트워크 환경 의존으로 제외.
 
 전제는 아니지만 **버전 문자열을 그대로 적어 둔 곳**이 더 있다. 함께 고친다 —
 [`docs/dev-environment.md`](../docs/dev-environment.md)의 서비스 표,
@@ -436,7 +438,7 @@ CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리�
 |---|---|---|
 | `FROM`이 우리 포크 빌드를 가리킨다<br>(닻: `pokeclip`) | 공식 이미지로 되돌리면 스위치가 사라져 **대기 화면이 다시 녹화되어 저장소로 올라간다 — 오류도 로그도 없이** | 기동 로그 첫 줄의 버전 문자열이 `v…-pokeclip.N`인지 본다(`docker compose logs media \| head -1`). 기계 방어는 `TestPinnedMediaMTXDigestMatchesDockerfile` |
 
-**핀은 태그와 digest를 함께 적는다.** 태그(`v1.20.1-pokeclip.1`)는 사람이 읽는 이름이고,
+**핀은 태그와 digest를 함께 적는다.** 태그(`v1.20.1-pokeclip.2`)는 사람이 읽는 이름이고,
 digest는 불변 좌표다 — 같은 태그를 다시 밀어도 가리키는 이미지가 바뀌지 않는다. 그래서
 버전 대조 테스트도 둘 다 본다(`pinnedMediaMTXTag`·`pinnedMediaMTXDigest`).
 
@@ -454,8 +456,15 @@ digest는 불변 좌표다 — 같은 태그를 다시 밀어도 가리키는 �
 
 **포크 태그와 상류 버전의 관계**: 태그는 `v<상류버전>-pokeclip.<N>` 형식이고, 테스트
 `TestPinnedTagCarriesUpstreamBaseVersion`이 그 대응을 지킨다. `.1`→`.2`처럼 뒤 숫자만 오르는
-것은 **우리 수정만 바뀐 것**이라 위 9곳 재확인 대상이 아니다. 앞의 상류 버전이 바뀌는 순간이
+것은 보통 **우리 수정만 바뀐 것**이라 위 9곳 재확인 대상이 아니다(아래 준버전업 예외 참조). 앞의 상류 버전이 바뀌는 순간이
 진짜 버전업이고, 그때 `upstreamBaseVersion`을 함께 고치며 9곳을 재확인한다.
+
+**준버전업 — 릴리스 문자열은 같은데 상류 베이스 커밋이 이동한 경우**: 태그의 `.N`만 오르지만 "우리 수정만 바뀐 것"이
+아니다. `upstreamBaseVersion`은 그대로 두되(9곳 전수 서명이 아니므로), 이동 구간 `git log <옛 베이스>..<새 베이스>`가
+닿는 전제만 **표적 재확인**하고 그 결과를 위 "재검증 기록"에 남긴다. Debian revision·Alpine `-rN`·RPM `Release`·
+Homebrew `revision`이 비슷한 구분이다 — 다만 그 관례들은 상류 소스가 그대로인 재패키징이고, 준버전업은 상류 트리가
+이동한 경우이므로 **표적 재확인이 필수**라는 점이 다르다. 아래 "절차"의 단계 2(`upstreamBaseVersion` 갱신)는 준버전업에는
+해당하지 않는다(상류 버전 문자열 불변).
 
 ### 절차
 

@@ -46,8 +46,10 @@ RUN mkdir -p /prep/recordings /prep/dvr /prep/hooks
 # 우리가 검증·보강해 리뷰를 냈지만 머지 시점은 상류에 달려 있다. 기다리는 동안 우리 라인이
 # 그 수정을 싣는다 — ADR-050 선결 B 결정(ⓑ 자체 빌드 선행).
 #
-# 무엇이 들어 있나: 상류 main(e175003) + PR #5767 리베이스 + 정적 소스 갭 2건 수정 + 회귀 테스트.
-# **베이스 MediaMTX 는 그대로 1.20.1** 이라 아래 "버전에 묶인 전제 9곳"은 전부 유지된다.
+# 무엇이 들어 있나: 상류 main(f82bc23, 2026-09-01) + PR #5767 리베이스 + 정적 소스 갭 2건 수정 + 회귀 테스트.
+# 베이스 이동으로 우리가 상류에 머지시킨 #6154(hlsSegmentCount 검증)·#6155(훅 종료 코드 보고)가 베이스에 들어 있다.
+# 상류 릴리스 문자열은 그대로 1.20.1 이지만 베이스 커밋은 이동했다(e175003 → f82bc23) — README 의
+# 준버전업 규약대로 이동 구간이 닿는 전제만 표적 재확인했다(기록은 README "재검증 기록").
 #
 # 어떻게 만들어지나: xodbs1021/mediamtx 의 `pokeclip` 라인에 `*-pokeclip.*` 태그를 밀면
 # 워크플로가 멀티아치 이미지를 GHCR 에 올리고 실행 요약에 digest 를 찍는다. 그 값을 여기 붙인다.
@@ -58,7 +60,7 @@ RUN mkdir -p /prep/recordings /prep/dvr /prep/hooks
 # 상류에 머지되면: 이 FROM 을 `bluenviron/mediamtx:<그 버전>` 으로 되돌리고
 # version_contract_test 의 **포크 전용 상수·테스트를 전부** 정리한다(목록은 그 파일의
 # forkPinGuide 에 번호로 적혀 있다). 경로 설정의 `alwaysAvailableRecorded` 는 그대로 둔다.
-FROM ghcr.io/xodbs1021/mediamtx:v1.20.1-pokeclip.1@sha256:8878310479bac1009bdc8b45f35a906b01b5a4fe2ec3fde52063071626903d17
+FROM ghcr.io/xodbs1021/mediamtx:v1.20.1-pokeclip.2@sha256:704e9e2c7c3248953294ae80e0b0e1382d168b7c26d7999d7560e2f77aac2556
 
 # /hooks-bin 은 바이너리 자리, /hooks 는 스풀 볼륨 자리다. 둘을 섞지 않는다 —
 # 같은 디렉토리에 두면 볼륨 마운트가 바이너리를 가린다.

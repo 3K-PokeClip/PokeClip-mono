@@ -25,7 +25,8 @@ import (
 // pinnedMediaMTXTag 는 media/Dockerfile.mtxhook 의 FROM 태그와 같아야 하는 값이다.
 // **이 값만 바뀌는 것(.1 → .2)은 우리 수정이 바뀐 것이지 버전업이 아니다** — 그래서 이
 // 값이 어긋났을 때의 안내는 forkPinGuide(이미지 발행 절차)이지 9개 전제 재확인이 아니다.
-const pinnedMediaMTXTag = "v1.20.1-pokeclip.1"
+// 단, 같은 릴리스 안에서 상류 베이스 커밋이 이동한 경우는 준버전업이며 README 규약의 표적 재확인을 따른다.
+const pinnedMediaMTXTag = "v1.20.1-pokeclip.2"
 
 // upstreamBaseVersion 은 우리 포크 빌드가 올라타 있는 상류 MediaMTX 버전이다.
 // **아래 9개 전제를 짊어지는 상수는 이것 하나다** — 이 값을 고치는 행위가 곧 "9개 전제를
@@ -39,7 +40,7 @@ const upstreamBaseVersion = "1.20.1"
 // 그 좌표가 조용히 사라지거나 다른 값으로 바뀌는 것 — 즉 "핀이 풀린 상태"의 발견이다.
 // 닻을 태그에서 digest 로 옮긴 근거는 ADR-050 선결 B. 이미지를 새로 발행했다면 워크플로
 // 실행 요약이 찍어 주는 값을 여기에 옮겨 적는다.
-const pinnedMediaMTXDigest = "sha256:8878310479bac1009bdc8b45f35a906b01b5a4fe2ec3fde52063071626903d17"
+const pinnedMediaMTXDigest = "sha256:704e9e2c7c3248953294ae80e0b0e1382d168b7c26d7999d7560e2f77aac2556"
 
 // mediaMTXImage 는 버전을 고정하는 베이스 이미지 이름이다. 같은 Dockerfile 에 빌드
 // 스테이지 FROM(golang:...)이 따로 있으므로 이 이름을 포함한 FROM 만 대상으로 삼는다.
@@ -69,7 +70,7 @@ const versionUpgradeGuide = `
  2. infra/compose/mediamtx.yml  (닻: "이 세 줄에 ` + "`$`" + ` 를 넣지 않는다")
     명령 문자열을 shell 규칙으로 먼저 쪼갠 뒤 조각별로 변수를 치환한다는 순서에 기댄
     안전성 근거다. 순서가 뒤집히면 송출자가 인자 개수를 늘릴 수 있다.
-    → 업스트림 internal/externalcmd/cmd_os.go 를 확인한다.
+    → 업스트림 internal/externalcmd/cmd_os_other.go(#6156 에서 cmd_os.go 를 개명) 를 확인한다.
  3. media/README.md  (닻: "구명칭 runOnReady")
  4. media/internal/mtxhook/event.go  (닻: Kind 주석의 "runOnAvailable 로 매핑")
     3·4 는 같은 사실이다 — runOnReady 는 세션 축이 아니라 runOnAvailable 로 매핑된다.
