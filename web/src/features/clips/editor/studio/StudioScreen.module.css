@@ -149,8 +149,9 @@
   padding: 0;
 }
 
+/* 하드코딩한 흰색은 흰 배경에서 사라진다 — 라이트 모드에선 hover 피드백이 아예 없었다 */
 .resizeHandle:hover {
-  background: rgb(255 255 255 / 0.03);
+  background: var(--pc-color-bg-surface-hover);
 }
 
 .resizeHandle:focus-visible {
