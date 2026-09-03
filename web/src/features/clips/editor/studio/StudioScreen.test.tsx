@@ -17,7 +17,10 @@ describe('StudioScreen', () => {
 
     expect(screen.getByRole('heading', { name: '승급전 마지막 한타 역전' })).toBeInTheDocument();
     expect(screen.getByText('라이브 카드 1:24:03 · 방금 자동 저장됨')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '보관함으로' })).toHaveAttribute('href', '/clips');
+    expect(screen.getByRole('link', { name: '보관함으로' })).toHaveAttribute(
+      'href',
+      '/clips/library',
+    );
     expect(screen.getByRole('button', { name: '템플릿 저장' })).toBeEnabled();
     expect(screen.getByRole('button', { name: '업로드' })).toBeEnabled();
     // 아직 편집한 적이 없으니 되돌릴 곳도 없다

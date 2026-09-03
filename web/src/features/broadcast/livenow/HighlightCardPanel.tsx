@@ -66,7 +66,8 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
             </button>
           ))}
           <span className={styles.cardPanelDivider} aria-hidden />
-          <Link className={styles.cardPanelLink} href="/clips">
+          {/* 보관함 화면을 바로 가리킨다 — /clips는 리다이렉트라 한 홉을 더 탄다(POK-235) */}
+          <Link className={styles.cardPanelLink} href="/clips/library">
             보관함
           </Link>
         </div>

@@ -1,0 +1,589 @@
+/* 디자인 1g 클립 · 보관함 */
+
+/* 본문과 우측 상세 패널이 나란히 선다 — 패널은 본문의 flex 형제라 열리면 그리드가 남은 폭을
+   다시 채운다(auto-fill 재배치). 레이아웃(clips/layout)이 패딩을 주지 않는 이유가 이것이다 */
+.screen {
+  display: flex;
+  align-items: stretch;
+  min-height: 100%;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  /* 본문 패딩은 사이드바 화면 공용 토큰 (app/shell.css) — 설정·방송 그룹과 h1의 x 좌표가 같아야
+     한다. 시안의 오른쪽 28은 토큰의 32를 따른다 */
+  padding: var(--pc-shell-body-pad-top) var(--pc-shell-body-pad-x) var(--pc-shell-body-pad-bottom);
+}
+
+/* ---------- 헤더 ---------- */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: calc(12 * var(--pc-u));
+  margin-bottom: calc(14 * var(--pc-u));
+  flex-wrap: wrap;
+}
+
+.title {
+  font-size: calc(21 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.tools {
+  margin-left: auto;
+  display: flex;
+  gap: calc(8 * var(--pc-u));
+}
+
+.search {
+  width: calc(160 * var(--pc-u));
+}
+
+.sort {
+  width: calc(130 * var(--pc-u));
+}
+
+/* ---------- 상태 칩 · 배너 ---------- */
+
+.chipRow {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  margin-bottom: calc(18 * var(--pc-u));
+  min-height: calc(26 * var(--pc-u));
+  flex-wrap: wrap;
+}
+
+.chipGroup {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--pc-u));
+  flex-wrap: wrap;
+}
+
+/* 시안은 DS Tag solid(눌림)/soft(나머지) 모양이다 — 색은 Tag의 토큰을 그대로 쓴다.
+   button이어야 해서(aria-pressed) Tag를 못 쓰고 모양만 옮겼다 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4 * var(--pc-u));
+  height: calc(26 * var(--pc-u));
+  padding: 0 calc(10 * var(--pc-u));
+  border: 1px solid transparent;
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-accent-subtle);
+  color: var(--pc-color-accent-text);
+  font-family: inherit;
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background var(--pc-duration-fast) var(--pc-ease-standard),
+    color var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+.chip:hover {
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.chip[aria-pressed='true'] {
+  background: var(--pc-color-accent);
+  color: var(--pc-color-text-on-accent);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.chipCount {
+  font-weight: 700;
+}
+
+/* 「승인 대기 N건 · 열기 →」 — 경고색 테두리 알약. 색만으로 말하지 않는다: 점·수·문장이 같이 선다 */
+.pendingBanner {
+  margin-left: auto;
+  height: calc(26 * var(--pc-u));
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  padding: 0 calc(10 * var(--pc-u));
+  border-radius: var(--pc-radius-pill);
+  border: 1px solid color-mix(in srgb, var(--pc-color-warning) 40%, transparent);
+  background: color-mix(in srgb, var(--pc-color-warning) 8%, transparent);
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 650;
+  color: var(--pc-color-text-primary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.pendingBanner:hover {
+  background: color-mix(in srgb, var(--pc-color-warning) 14%, transparent);
+}
+
+.pendingDot {
+  width: calc(6 * var(--pc-u));
+  height: calc(6 * var(--pc-u));
+  border-radius: var(--pc-radius-circle);
+  background: var(--pc-color-warning);
+  flex: none;
+}
+
+.pendingHint {
+  font-weight: 500;
+  color: var(--pc-color-text-muted);
+}
+
+/* ---------- 9:16 그리드 ---------- */
+
+/* 카드 최소폭을 전환 가능한 값으로 등록한다. 등록하지 않은 커스텀 속성은 애니메이션되지
+   않는데, 최소폭이 즉시 바뀌면 폭은 아직 그대로인 그리드가 auto-fill로 열을 다시 세면서
+   카드가 한 번에 확 줄었다가 되돌아온다 — 실측(1800px 창)에서 패널을 열 때 열 수가
+   5 → 7(0ms) → 6(8ms) → 5(80ms) → 4(284ms)로 네 번 튀었고, 첫 계단은 카드가 216u에서
+   151u로 즉시 줄어드는 반대 방향이었다. 지원하지 않는 브라우저에서는 전환만 빠지고
+   최종 모습은 같다. */
+@property --pc-library-card-min {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 200px;
+}
+
+/* 패널이 열리면 카드 최소폭 200→150, 간격 16→12로 촘촘해진다(시안 1g ②) */
+.grid {
+  --pc-library-card-min: calc(200 * var(--pc-u));
+
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: calc(16 * var(--pc-u));
+  grid-template-columns: repeat(auto-fill, minmax(var(--pc-library-card-min), 1fr));
+  /* 최소폭·간격이 패널 폭과 같은 곡선·같은 길이로 함께 움직여야 열 수가 한 번만, 그것도
+     전환 한가운데(200ms)에서 바뀐다. 셋 중 하나라도 즉시 바뀌면 그 프레임에 카드가 튄다. */
+  transition:
+    gap 0.38s cubic-bezier(0.22, 0.61, 0.36, 1),
+    --pc-library-card-min 0.38s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.grid[data-panel-open='true'] {
+  --pc-library-card-min: calc(150 * var(--pc-u));
+
+  gap: calc(12 * var(--pc-u));
+}
+
+.cardItem {
+  min-width: 0;
+}
+
+/* 카드 = 버튼 하나. 기본 / 호버 / 선택 3단계(시안 1g ①) */
+.card {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: calc(12 * var(--pc-u));
+  overflow: hidden;
+  background: var(--pc-color-bg-inset);
+  outline: 1px solid var(--pc-color-border-subtle);
+  outline-offset: -1px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--pc-duration-fast) var(--pc-ease-standard),
+    box-shadow var(--pc-duration-fast) var(--pc-ease-standard),
+    outline-color var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+.card:hover {
+  background: var(--pc-color-bg-surface-hover);
+  outline-color: var(--pc-color-border-default);
+  box-shadow: var(--pc-shadow-md);
+}
+
+.card[aria-pressed='true'] {
+  outline: 2px solid var(--pc-color-accent-text);
+  outline-offset: 2px;
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* 원본 만료 카드 — 70%로 가라앉는다(ADR-004). 배지는 「발행됨」 그대로, 만료는 패널이 말한다 */
+.cardDimmed {
+  opacity: 0.7;
+}
+
+.cardThumb {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.cardBadge {
+  position: absolute;
+  top: calc(7 * var(--pc-u));
+  left: calc(7 * var(--pc-u));
+  z-index: 2;
+}
+
+.cardOwner {
+  position: absolute;
+  top: calc(7 * var(--pc-u));
+  right: calc(7 * var(--pc-u));
+  z-index: 2;
+  width: calc(20 * var(--pc-u));
+  height: calc(20 * var(--pc-u));
+  border-radius: var(--pc-radius-circle);
+  background: rgb(0 0 0 / 0.55);
+  border: 1px solid rgb(255 255 255 / 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(9.5 * var(--pc-u));
+  font-weight: 700;
+  color: #fff;
+}
+
+.cardFoot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  padding: calc(30 * var(--pc-u)) calc(9 * var(--pc-u)) calc(9 * var(--pc-u));
+  background: linear-gradient(to top, rgb(0 0 0 / 0.78), transparent);
+  display: flex;
+  align-items: flex-end;
+  gap: calc(8 * var(--pc-u));
+}
+
+.cardTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: calc(13 * var(--pc-u));
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cardDuration {
+  flex: none;
+  font-family: var(--pc-font-mono);
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 600;
+  color: rgb(255 255 255 / 0.72);
+}
+
+/* ---------- 우측 상세 패널 ---------- */
+
+/* 폭 0 ↔ 344u. 시안의 .38s cubic-bezier(.22,.61,.36,1) — 모션 토큰에 380ms가 없어
+   Side처럼 하드코딩하고, 토큰이 아니므로 reduced-motion은 아래에서 직접 끈다.
+   sticky + 100dvh — 그리드가 문서 스크롤로 내려가도 패널은 붙어 있는다(Side와 같다) */
+.panel {
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  flex: none;
+  width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--pc-color-bg-surface);
+  border-left: 1px solid transparent;
+  transition:
+    width 0.38s cubic-bezier(0.22, 0.61, 0.36, 1),
+    border-color 0.38s ease;
+}
+
+.panel[data-open='true'] {
+  width: calc(344 * var(--pc-u));
+  border-left-color: var(--pc-color-border-subtle);
+}
+
+/* 내용은 40u 슬라이드 + 페이드(.26s). 폭이 고정이라 접히는 동안 글이 다시 흐르지 않는다 */
+.panelInner {
+  width: calc(344 * var(--pc-u));
+  height: 100%;
+  box-sizing: border-box;
+  padding: calc(22 * var(--pc-u)) calc(22 * var(--pc-u)) var(--pc-shell-body-pad-bottom);
+  display: flex;
+  flex-direction: column;
+  gap: calc(16 * var(--pc-u));
+  overflow-x: hidden;
+  overflow-y: auto;
+  transform: translateX(calc(40 * var(--pc-u)));
+  opacity: 0;
+  transition:
+    transform 0.38s cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 0.26s ease;
+}
+
+.panel[data-open='true'] .panelInner {
+  transform: none;
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .grid,
+  .panel,
+  .panelInner {
+    transition: none;
+  }
+}
+
+.panelHead {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+.panelClose {
+  margin-left: auto;
+}
+
+/* 제목 인라인 편집 3단계(시안 1g ③) — 기본은 제목처럼, 호버에 inset, 포커스에 accent */
+.titleInput {
+  width: calc(100% + 16 * var(--pc-u));
+  box-sizing: border-box;
+  margin: calc(-6 * var(--pc-u)) 0 0 calc(-8 * var(--pc-u));
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: calc(9 * var(--pc-u));
+  padding: calc(5 * var(--pc-u)) calc(8 * var(--pc-u));
+  font-family: inherit;
+  font-size: calc(19 * var(--pc-u));
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  color: var(--pc-color-text-primary);
+  outline: none;
+  cursor: text;
+  transition:
+    background var(--pc-duration-fast) var(--pc-ease-standard),
+    border-color var(--pc-duration-fast) var(--pc-ease-standard);
+}
+
+.titleInput::placeholder {
+  color: var(--pc-color-text-muted);
+  font-weight: 700;
+}
+
+.titleInput:hover {
+  background: var(--pc-color-bg-inset);
+  border-color: var(--pc-color-border-subtle);
+}
+
+.titleInput:focus {
+  background: var(--pc-color-bg-canvas);
+  border-color: var(--pc-color-accent);
+}
+
+/* 승인 대기라 편집이 잠긴 제목. 읽고 고를 수는 있어야 하니 감추지 않되, 입력처럼 보이는
+   호버·포커스 신호는 거둔다 — 고칠 수 없는 칸이 고칠 수 있는 것처럼 보이면 안 된다.
+   포커스 표시는 남긴다(키보드로 여기 왔다는 것은 알려야 한다). */
+.titleInput:read-only {
+  cursor: default;
+}
+
+.titleInput:read-only:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+.titleInput:read-only:focus {
+  background: transparent;
+  border-color: var(--pc-color-border-subtle);
+}
+
+.previewWrap {
+  display: flex;
+  justify-content: center;
+}
+
+.preview {
+  position: relative;
+  width: calc(204 * var(--pc-u));
+  aspect-ratio: 9 / 16;
+  border-radius: calc(16 * var(--pc-u));
+  overflow: hidden;
+  background: var(--pc-color-bg-inset);
+  border: 1px solid var(--pc-color-border-default);
+  box-shadow: var(--pc-shadow-md);
+}
+
+/* 재생 글리프(44u 원) 아래에 둔다 — 한가운데 겹치면 글자가 원에 가려진다 */
+.previewLabel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(50% + 34 * var(--pc-u));
+  padding: 0 calc(16 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+  text-align: center;
+}
+
+.previewPlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(44 * var(--pc-u));
+  height: calc(44 * var(--pc-u));
+  border-radius: var(--pc-radius-circle);
+  background: rgb(0 0 0 / 0.55);
+  border: 1px solid rgb(255 255 255 / 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+
+.previewDuration {
+  position: absolute;
+  bottom: calc(8 * var(--pc-u));
+  right: calc(8 * var(--pc-u));
+  padding: calc(1 * var(--pc-u)) calc(6 * var(--pc-u));
+  border-radius: calc(5 * var(--pc-u));
+  background: rgb(0 0 0 / 0.62);
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 600;
+  color: #fff;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6 * var(--pc-u));
+}
+
+.actionRow {
+  display: flex;
+  align-items: stretch;
+  gap: calc(6 * var(--pc-u));
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.note {
+  margin: 0;
+  padding: calc(8 * var(--pc-u)) calc(10 * var(--pc-u));
+  border-radius: calc(9 * var(--pc-u));
+  background: var(--pc-color-bg-inset);
+  font-size: calc(11 * var(--pc-u));
+  line-height: 1.55;
+  color: var(--pc-color-text-muted);
+}
+
+.divider {
+  border: 0;
+  height: 1px;
+  margin: 0;
+  background: var(--pc-color-border-subtle);
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: calc(7 * var(--pc-u)) calc(14 * var(--pc-u));
+  margin: 0;
+  font-size: calc(11.5 * var(--pc-u));
+  line-height: 1.4;
+}
+
+.meta dt {
+  color: var(--pc-color-text-muted);
+}
+
+.meta dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+/* 만료 임박(D-3 이하) — 글자색만 바뀌지만 D-day 숫자가 함께 말한다 */
+.meta dd[data-urgent='true'] {
+  color: var(--pc-color-danger);
+}
+
+.reject {
+  display: flex;
+  flex-direction: column;
+  gap: calc(9 * var(--pc-u));
+}
+
+.rejectHead {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+}
+
+.rejectTitle {
+  font-size: calc(11.5 * var(--pc-u));
+  font-weight: 700;
+  color: var(--pc-color-text-secondary);
+}
+
+.rejectTime {
+  margin-left: auto;
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+.rejectBody {
+  display: flex;
+  gap: calc(10 * var(--pc-u));
+}
+
+.rejectRule {
+  flex: none;
+  width: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--pc-color-danger) 55%, transparent);
+}
+
+.rejectReason {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: calc(12.5 * var(--pc-u));
+  font-weight: 600;
+  line-height: 1.55;
+  letter-spacing: -0.01em;
+}
+
+/* ---------- 빈 상태 ---------- */
+
+/* 「아직 없다」 카드는 DS EmptyState가 그린다. 조건을 좁혀 아무것도 안 남은 자리는 그 카드와
+   다른 말이라 다른 모양이다 */
+.filterEmpty {
+  margin: calc(6 * var(--pc-u)) 0 0;
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}

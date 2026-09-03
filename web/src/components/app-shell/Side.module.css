@@ -202,6 +202,52 @@
   opacity: 0;
 }
 
+/* 항목 배지 — Dock의 .badge와 같은 모양(셸 배율). 접히면 라벨과 같은 방식으로 폭을 0으로
+   접는다 — display:none은 펼칠 때 글자가 튄다(userText 주석 참조) */
+.badge {
+  flex: none;
+  min-width: calc(17 * var(--u));
+  max-width: calc(40 * var(--u));
+  height: calc(17 * var(--u));
+  padding: 0 calc(5 * var(--u));
+  box-sizing: border-box;
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-point);
+  color: var(--pc-white);
+  font-size: calc(10.5 * var(--u));
+  font-weight: 700;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  opacity: 1;
+  transition:
+    max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.22s ease;
+}
+
+/* 접히면 숫자를 접고 점만 남긴다(.bellDot과 같은 신호). 통째로 지우면 낭독에는 「승인
+   대기함 3」이 남는데 화면에는 아무 흔적이 없어, 보는 쪽만 정보를 잃는다.
+   font-size 0이 숫자를 접고 접근 트리에는 그대로 남긴다 — 자세한 수는 낭독이 맡는다. */
+.sidebar[data-collapsed='true'] .item {
+  position: relative;
+}
+
+.sidebar[data-collapsed='true'] .badge {
+  position: absolute;
+  top: calc(5 * var(--u));
+  right: calc(9 * var(--u));
+  min-width: calc(8 * var(--u));
+  max-width: calc(8 * var(--u));
+  height: calc(8 * var(--u));
+  padding: 0;
+  margin: 0;
+  font-size: 0;
+  border: 2px solid var(--pc-color-bg-surface);
+  box-sizing: content-box;
+}
+
 .divider {
   height: 1px;
   background: var(--pc-color-border-subtle);
