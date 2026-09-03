@@ -1,0 +1,39 @@
+/* 빈 상태 카드 (시안 1f · 1l ④) — VodListScreen.module.css · EditorSettingsScreen.module.css에서
+   승격해 왔다. 폭은 두지 않는다 — 부모(화면 본문·.screen)가 정한다. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: calc(10 * var(--pc-u));
+  padding: calc(30 * var(--pc-u)) calc(24 * var(--pc-u));
+  border-radius: calc(14 * var(--pc-u));
+  border: 1.5px dashed var(--pc-color-border-default);
+}
+
+.icon {
+  width: calc(46 * var(--pc-u));
+  height: calc(46 * var(--pc-u));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-muted);
+}
+
+.title {
+  margin: 0;
+  font-size: calc(13.5 * var(--pc-u));
+  font-weight: 750;
+}
+
+/* 1f는 1.6, 1l ④ 코드는 1.55였다 — 시안 값 1.6으로 통일 */
+.description {
+  margin: 0;
+  max-width: calc(300 * var(--pc-u));
+  font-size: calc(11.5 * var(--pc-u));
+  line-height: 1.6;
+  color: var(--pc-color-text-muted);
+}

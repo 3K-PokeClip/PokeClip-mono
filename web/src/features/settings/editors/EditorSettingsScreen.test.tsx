@@ -64,6 +64,14 @@ function stubEditors(override?: PartialHandler) {
   });
 }
 
+/** 편집자도 대기 초대도 없는 응답 — 빈 상태(1l ④) 케이스 공용. */
+function stubEmptyEditors() {
+  return stubFetch((url) => {
+    if (url === DELEGATIONS_URL || url === SENT_URL) return jsonResponse(200, []);
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+}
+
 /** 행 안으로 범위를 좁힌다 — 「회수」·「취소」 버튼이 행마다 있어 이름만으로는 구분되지 않는다. */
 const row = (name: string | RegExp) => within(screen.getByRole('group', { name }));
 
@@ -116,10 +124,7 @@ describe('EditorSettingsScreen — 목록', () => {
   });
 
   it('편집자도 대기 초대도 없으면 빈 상태가 선다 — 초대 진입점은 헤더 버튼 하나다 (1l ④)', async () => {
-    stubFetch((url) => {
-      if (url === DELEGATIONS_URL || url === SENT_URL) return jsonResponse(200, []);
-      throw new Error(`unexpected fetch: ${url}`);
-    });
+    stubEmptyEditors();
     const user = userEvent.setup();
     renderWithProviders(<EditorSettingsScreen />);
 
@@ -455,6 +460,14 @@ describe('EditorSettingsScreen — 접근성', () => {
     stubEditors();
     const { container } = renderWithProviders(<EditorSettingsScreen />);
     await screen.findByRole('group', { name: '박편집' });
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it('빈 상태에서 axe 위반이 없다', async () => {
+    stubEmptyEditors();
+    const { container } = renderWithProviders(<EditorSettingsScreen />);
+    await screen.findByText('아직 편집자가 없어요');
 
     expect(await axe(container)).toHaveNoViolations();
   });

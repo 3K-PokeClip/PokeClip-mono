@@ -108,41 +108,6 @@
   color: var(--pc-color-text-secondary);
 }
 
-/* 1l ④ 빈 상태 — 무엇을 맡길 수 있는지 설명하고 초대로 유도한다 */
-.emptyCard {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: calc(10 * var(--pc-u));
-  padding: calc(30 * var(--pc-u)) calc(24 * var(--pc-u));
-  border-radius: calc(14 * var(--pc-u));
-  border: 1.5px dashed var(--pc-color-border-default);
-}
-
-.emptyIcon {
-  width: calc(46 * var(--pc-u));
-  height: calc(46 * var(--pc-u));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--pc-color-bg-inset);
-  color: var(--pc-color-text-muted);
-}
-
-.emptyTitle {
-  font-size: calc(13.5 * var(--pc-u));
-  font-weight: 750;
-}
-
-.emptyBody {
-  font-size: calc(11.5 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-  line-height: 1.55;
-  max-width: calc(300 * var(--pc-u));
-}
-
 /* 1l 하단 안내 — 내보내기의 결과(승인 요청 무효)를 목록 곁에서 미리 말해 둔다.
    목록이 갖는 22px과 합쳐 시안의 목록↓22 + 안내↑4 간격이 된다 */
 .note {

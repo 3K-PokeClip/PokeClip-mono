@@ -1,7 +1,7 @@
 'use client';
 
 import { Info, UserPlus } from 'lucide-react';
-import { Button, Skeleton } from '@/ui';
+import { Button, EmptyState, Skeleton } from '@/ui';
 import { SettingsPageHeader } from '../SettingsPageHeader';
 import { EditorRow } from './EditorRow';
 import { InviteEditorDialog } from './InviteEditorDialog';
@@ -92,16 +92,11 @@ function listOf(state: EditorSettingsViewState) {
       if (state.empty) {
         // 1l ④에는 카드 안 초대 버튼이 없다 — 초대 진입점은 헤더 버튼 하나다.
         return (
-          <div className={styles.emptyCard}>
-            <span className={styles.emptyIcon} aria-hidden="true">
-              <UserPlus size={21} />
-            </span>
-            <span className={styles.emptyTitle}>아직 편집자가 없어요</span>
-            <span className={styles.emptyBody}>
-              편집자를 초대하면 하이라이트 검토와 클립 편집을 맡길 수 있어요. 업로드는
-              기본적으로 내 승인을 거칩니다.
-            </span>
-          </div>
+          <EmptyState
+            icon={<UserPlus size={21} />}
+            title="아직 편집자가 없어요"
+            description="편집자를 초대하면 하이라이트 검토와 클립 편집을 맡길 수 있어요. 업로드는 기본적으로 내 승인을 거칩니다."
+          />
         );
       }
       return (
