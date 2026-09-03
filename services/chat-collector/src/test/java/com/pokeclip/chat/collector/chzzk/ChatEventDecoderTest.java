@@ -224,6 +224,25 @@ class ChatEventDecoderTest {
         assertThat(ChatEventDecoder.decodeDonation("완전히 아닌 것")).isNull();
     }
 
+    /**
+     * 권한 회수는 종류별로 온다(CHAT·DONATION·SUBSCRIPTION). 그 칸을 안 읽으면
+     * <b>후원만 회수돼도 채팅 세션이 죽는다</b> — POK-234 태스크 4B의 축이다.
+     * 없으면 빈 문자열이다(옛 모양·connected·subscribed).
+     */
+    @Test
+    void revoked의_이벤트_종류를_읽고_없으면_빈_문자열이다() {
+        String withType = "{\"type\":\"revoked\",\"data\":{\"eventType\":\"DONATION\",\"channelId\":\"CH\"}}";
+        assertThat(ChatEventDecoder.decodeSystem("[\"SYSTEM\"," + quoteAsJson(withType) + "]").eventType())
+                .isEqualTo("DONATION");
+
+        String bare = "{\"type\":\"connected\",\"data\":{\"sessionKey\":\"K\"}}";
+        assertThat(ChatEventDecoder.decodeSystem("[\"SYSTEM\"," + quoteAsJson(bare) + "]").eventType()).isEmpty();
+
+        // data 자체가 없는 모양도 빈 문자열이다 — null을 주면 아래 equals 갈래가 NPE로 죽는다.
+        String noData = "{\"type\":\"revoked\"}";
+        assertThat(ChatEventDecoder.decodeSystem("[\"SYSTEM\"," + quoteAsJson(noData) + "]").eventType()).isEmpty();
+    }
+
     /** 문자열을 JSON 문자열 리터럴로 — 가짜 서버(FakeChzzkBehavior.escape)와 같은 일을 한다. */
     private static String quoteAsJson(String s) {
         return new tools.jackson.databind.ObjectMapper().writeValueAsString(s);

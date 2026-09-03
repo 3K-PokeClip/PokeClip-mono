@@ -989,6 +989,21 @@ public class StreamSession {
         if (event != null) {
             metrics.recordSystemEvent(event.type());
             if ("revoked".equals(event.type())) {
+                // 🔴 <b>종류를 먼저 가른다</b>(계획 검증 F2). 구독이 채팅 하나뿐일 때는
+                // 「revoked = 채팅 못 받음」이 참이었지만 후원 구독(태스크 4)이 그 전제를 깼다.
+                // 후원만 회수된 것으로 채팅 세션을 죽이면 영구 정지 → 판정 → exit 1로 가고,
+                // 그러면 <b>이 프로세스가 붙든 다른 방송 전부</b>가 같이 끊긴다. 게다가 포기
+                // 메모가 남아 24시간 재부착이 그 방송을 건너뛴다.
+                //
+                // <b>eventType이 비면(옛 모양) 지금대로 멈춘다.</b> 모르는 회수를 채팅 쪽으로
+                // 보는 것이 안전한 방향이다 — 반대로 두면 채팅 권한이 사라졌는데 health는
+                // UP인 채로 아무것도 안 걷는 상태가 남는다.
+                if ("DONATION".equals(event.eventType()) || "SUBSCRIPTION".equals(event.eventType())) {
+                    log.warn("chat.session.revoked_other stream={} eventType={}",
+                            stream(), event.eventType());
+                    donations.set(key.streamId(), DonationSubscription.REFUSED);
+                    return;
+                }
                 log.warn("chat.session.revoked stream={}", stream());
                 // <b>여기서 멈추지 않으면 COLLECTING(health UP)인 채로 채팅만 안 온다.</b>
                 // 구독이 서버 쪽에서 취소된 것이라 소켓은 멀쩡하고 onClose도 안 온다 —

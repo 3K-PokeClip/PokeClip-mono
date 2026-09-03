@@ -101,7 +101,9 @@ public final class ChatEventDecoder {
         if (type.isEmpty()) {
             return null;
         }
-        return new SystemEvent(type, inner.path("data").path("sessionKey").asString(""));
+        return new SystemEvent(type,
+                inner.path("data").path("sessionKey").asString(""),
+                inner.path("data").path("eventType").asString(""));
     }
 
     /** 바깥 배열을 풀어 이름이 맞으면 안쪽 문자열을 <b>파싱하지 않고</b> 돌려준다. */

@@ -1186,6 +1186,76 @@ class SessionRegistryTest extends IntegrationTestSupport {
         assertThat(registry.donationStateOf("never-heard")).isEqualTo(DonationSubscription.NONE);
     }
 
+    /**
+     * 🔴 태스크 4B의 축. <b>후원 권한만 회수돼도 채팅 세션은 안 죽는다.</b>
+     *
+     * <p>안 가르면 이 프로세스가 붙든 <b>다른 방송 전부</b>가 같이 끊긴다 —
+     * revoked는 영구 정지 → 판정 → {@code exit 1}로 가고, 포기 메모가 24시간
+     * 재부착까지 막는다(계획 검증 F2).
+     *
+     * <p>문항 2: 「refused다」만 보면 <b>세션이 죽은 뒤</b>에도 참일 수 있다.
+     * 그래서 상태가 COLLECTING인 것과 <b>채팅이 실제로 더 들어오는 것</b>을 같이 본다.
+     */
+    @Test
+    void 후원_권한만_회수되면_채팅은_계속_걷는다() throws Exception {
+        givenRegistry();
+        registry.open(key("s-rev-don", 11L, "CH"), "tok-11");
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-rev-don") == DonationSubscription.SUBSCRIBED);
+
+        behavior.emitRevokedTo("tok-11", "DONATION");
+
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-rev-don") == DonationSubscription.REFUSED);
+        assertThat(registry.donationStateOf("s-rev-don")).isEqualTo(DonationSubscription.REFUSED);
+        assertThat(registry.statusOf("s-rev-don"))
+                .as("세션이 통째로 사라졌다면 후원 회수가 채팅을 죽인 것이다")
+                .isNotNull();
+        assertThat(registry.statusOf("s-rev-don").state()).isEqualTo(CollectionStatus.State.COLLECTING);
+
+        behavior.emitChatTo("tok-11", "{\"channelId\":\"CH\",\"senderChannelId\":\"S\","
+                + "\"content\":\"a\",\"messageTime\":1754300000000}");
+        awaitUntil(AWAIT, () -> registry.receivedOf("s-rev-don") == 1);
+        assertThat(registry.receivedOf("s-rev-don"))
+                .as("상태만 COLLECTING이고 채팅이 안 오면 아무것도 안 걷는 것이다")
+                .isEqualTo(1);
+    }
+
+    /** 채팅 권한 회수는 <b>지금대로</b> 멈춘다. 이 갈래를 안 재면 위 시험이 전부를 끄는 구현도 통과한다. */
+    @Test
+    void 채팅_권한이_회수되면_지금대로_멈춘다() throws Exception {
+        givenRegistry();
+        registry.open(key("s-rev-chat", 12L, "CH"), "tok-12");
+        awaitUntil(AWAIT, () -> registry.statusOf("s-rev-chat") != null
+                && registry.statusOf("s-rev-chat").state() == CollectionStatus.State.COLLECTING);
+
+        behavior.emitRevokedTo("tok-12", "CHAT");
+
+        awaitUntil(AWAIT, () -> registry.statusOf("s-rev-chat") == null
+                || registry.statusOf("s-rev-chat").state() == CollectionStatus.State.STOPPED);
+        CollectionStatus.Snapshot after = registry.statusOf("s-rev-chat");
+        assertThat(after == null || after.state() == CollectionStatus.State.STOPPED)
+                .as("채팅 권한이 없어졌는데 계속 COLLECTING이면 health는 UP인 채로 아무것도 안 걷는다")
+                .isTrue();
+    }
+
+    /**
+     * <b>옛 모양(eventType 칸이 없다)은 지금대로 멈춘다.</b> 모르는 회수를 채팅 쪽으로
+     * 보는 것이 안전한 방향이다 — 반대로 두면 채팅 권한이 사라졌는데 계속 COLLECTING이다.
+     */
+    @Test
+    void 종류가_없는_옛_모양_회수는_멈춘다() throws Exception {
+        givenRegistry();
+        registry.open(key("s-rev-old", 14L, "CH"), "tok-14");
+        awaitUntil(AWAIT, () -> registry.statusOf("s-rev-old") != null
+                && registry.statusOf("s-rev-old").state() == CollectionStatus.State.COLLECTING);
+
+        behavior.emitRevokedTo("tok-14", null);
+
+        awaitUntil(AWAIT, () -> registry.statusOf("s-rev-old") == null
+                || registry.statusOf("s-rev-old").state() == CollectionStatus.State.STOPPED);
+        CollectionStatus.Snapshot after = registry.statusOf("s-rev-old");
+        assertThat(after == null || after.state() == CollectionStatus.State.STOPPED).isTrue();
+    }
+
     // ------------------------------------------------------------------
     // 도우미
     // ------------------------------------------------------------------
