@@ -143,20 +143,39 @@
 
 /* ---------- 9:16 그리드 ---------- */
 
+/* 카드 최소폭을 전환 가능한 값으로 등록한다. 등록하지 않은 커스텀 속성은 애니메이션되지
+   않는데, 최소폭이 즉시 바뀌면 폭은 아직 그대로인 그리드가 auto-fill로 열을 다시 세면서
+   카드가 한 번에 확 줄었다가 되돌아온다 — 실측(1800px 창)에서 패널을 열 때 열 수가
+   5 → 7(0ms) → 6(8ms) → 5(80ms) → 4(284ms)로 네 번 튀었고, 첫 계단은 카드가 216u에서
+   151u로 즉시 줄어드는 반대 방향이었다. 지원하지 않는 브라우저에서는 전환만 빠지고
+   최종 모습은 같다. */
+@property --pc-library-card-min {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 200px;
+}
+
 /* 패널이 열리면 카드 최소폭 200→150, 간격 16→12로 촘촘해진다(시안 1g ②) */
 .grid {
+  --pc-library-card-min: calc(200 * var(--pc-u));
+
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
   gap: calc(16 * var(--pc-u));
-  grid-template-columns: repeat(auto-fill, minmax(calc(200 * var(--pc-u)), 1fr));
-  transition: gap 0.38s cubic-bezier(0.22, 0.61, 0.36, 1);
+  grid-template-columns: repeat(auto-fill, minmax(var(--pc-library-card-min), 1fr));
+  /* 최소폭·간격이 패널 폭과 같은 곡선·같은 길이로 함께 움직여야 열 수가 한 번만, 그것도
+     전환 한가운데(200ms)에서 바뀐다. 셋 중 하나라도 즉시 바뀌면 그 프레임에 카드가 튄다. */
+  transition:
+    gap 0.38s cubic-bezier(0.22, 0.61, 0.36, 1),
+    --pc-library-card-min 0.38s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .grid[data-panel-open='true'] {
+  --pc-library-card-min: calc(150 * var(--pc-u));
+
   gap: calc(12 * var(--pc-u));
-  grid-template-columns: repeat(auto-fill, minmax(calc(150 * var(--pc-u)), 1fr));
 }
 
 .cardItem {
