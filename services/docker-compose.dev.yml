@@ -82,6 +82,9 @@ services:
       PROFILE_PHOTO_TOKEN_SECRET: ${PROFILE_PHOTO_TOKEN_SECRET:-}
       PROFILE_PHOTO_BASE_URL: ${PROFILE_PHOTO_BASE_URL:-}
       AWS_REGION: ${AWS_REGION:-ap-northeast-2}
+      # 프록시 헤더 신뢰(POK-91). dev는 앞단이 없어 none. 로드밸런서를 붙이는 날 native 로 바꾼다.
+      # 기본값이 있어 DeploymentEnvVarsTest의 정규식엔 안 걸리고 「기본값 있는 배포 변수」 명부가 잡는다.
+      FORWARD_HEADERS_STRATEGY: ${FORWARD_HEADERS_STRATEGY:-none}
       # t3.small 은 2GB다. 힙을 안 묶으면 JVM 이 물리 메모리의 1/4씩 잡아
       # 넷이 합쳐 한도를 넘고, 커널이 아무거나 하나를 죽인다.
       JAVA_TOOL_OPTIONS: -Xmx256m

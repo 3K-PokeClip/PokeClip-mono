@@ -194,6 +194,39 @@ class SchemaMigrationTest extends IntegrationTestSupport {
                 .contains("revoked_at IS NULL");
     }
 
+    /**
+     * 청소(POK-89)가 시각 단독 조건으로 지운다. 기존 인덱스는 전부 다른 칼럼이 앞이라 못 탄다 —
+     * refresh_tokens는 user_id뿐, 시도 기록은 (ip_hash, attempted_at), 코드는 (user_id, created_at).
+     * 부분 조건까지 못박는다 — refresh 둘은 서로 배타인 행만 담아야 크기가 절반이다.
+     */
+    @Test
+    void 청소가_탈_인덱스_넷이_있다() {
+        String revoked = jdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_refresh_tokens_revoked_at'", String.class);
+        String expiresAlive = jdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_refresh_tokens_expires_alive'", String.class);
+        String attempts = jdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_pairing_attempts_attempted_at'", String.class);
+        String codes = jdbc.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_pairing_codes_expires_at'", String.class);
+
+        assertThat(revoked).contains("revoked_at").contains("revoked_at IS NOT NULL");
+        assertThat(expiresAlive).contains("expires_at").contains("revoked_at IS NULL");
+        assertThat(attempts).contains("attempted_at").doesNotContain("WHERE");
+        assertThat(codes).contains("expires_at").doesNotContain("WHERE");
+    }
+
+    /** V105·V106의 표 주석이 「청소 작업 없음」이라 적혀 있었다. 청소가 생겼으니 그 문장이 거짓이다. */
+    @Test
+    void 페어링_표_주석이_청소를_말한다() {
+        String codes = jdbc.queryForObject("SELECT obj_description('pairing_codes'::regclass, 'pg_class')", String.class);
+        String attempts = jdbc.queryForObject(
+                "SELECT obj_description('pairing_exchange_attempts'::regclass, 'pg_class')", String.class);
+
+        assertThat(codes).doesNotContain("청소 작업 없음").contains("POK-89");
+        assertThat(attempts).doesNotContain("청소 작업 없음").contains("POK-89");
+    }
+
     /** 이메일로 계정을 정확히 하나 찾는다는 전제가 DB에 박혀 있어야 한다. */
     @Test
     void users_email에_유일_제약이_걸려_있다() {

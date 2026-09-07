@@ -37,6 +37,10 @@ public class TokenService {
      * 이 시간 안에 회전된 토큰이 다시 오면 중복 요청으로 본다. 탈취 재사용은
      * 이보다 훨씬 늦게 오므로, PRD가 요구하는 "재사용 시 전 세션 무효화"는
      * 그대로 지켜진다.
+     *
+     * <p>반대쪽 끝: 회수 행은 {@code pokeclip.retention.refresh-tokens-keep-for} 뒤 {@code RetentionCleaner}가 지우고,
+     * 그 뒤 재사용은 아래 「모르는 토큰」 갈래라 봉쇄가 없다(회수 안 된 만료 행도 같은 갈래로 간다: EXPIRED가 아니라
+     * UNKNOWN). 창의 크기·근거는 yml retention 주석(POK-89).
      */
     private static final Duration REUSE_GRACE = Duration.ofSeconds(10);
 

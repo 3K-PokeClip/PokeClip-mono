@@ -30,11 +30,11 @@ public abstract class IntegrationTestSupport {
      * <b>{@code FATAL: sorry, too many clients already}</b>로 컨텍스트 로딩이
      * 무너진다 — 30 × 컨텍스트 수가 100을 넘기 때문이다.
      *
-     * <p>600인 이유: 지금 컨텍스트가 <b>17개</b>이고 17 × 30 = 510이다 — 사진 검사 넷(POK-207)에
-     * 이어 탈퇴 검사 둘({@code WithdrawalCleanupBoundaryTest}·{@code WithdrawalCleanupDisabledTest},
-     * POK-171)이 각자 {@code @TestConfiguration}으로 컨텍스트를 하나씩 더 만들었다.
-     * <b>남은 여유는 셋이 아니라 「600 − 510 = 90」, 즉 컨텍스트 셋 몫이다</b>
-     * (실측: {@code grep -o "HikariPool-[0-9]*" | sort -u | wc -l} → 17. {@code maxParallelForks}가
+     * <p>600인 이유: 지금 컨텍스트가 <b>21개</b>다(POK-89 실측 — 17은 POK-171 시점 값이고 그 뒤 사진·유튜브 시험이 둘,
+     * 이 카드가 둘(청소기를 켠 컨텍스트 · {@code native} 프록시 헤더를 켠 실서버 컨텍스트)을 더했다). 풀 10 컨텍스트 둘을
+     * 빼면 21 × 30 − 2 × 20 = <b>590</b>, superuser 몫 3을 뺀 상한이 <b>597</b>이다 —
+     * <b>남은 여유는 커넥션 7개, 컨텍스트로는 0개다.</b> 🔴 <b>다음 카드가 컨텍스트를 하나라도 더하면 이 값을 먼저 750으로 올린다</b>
+     * (실측: {@code grep -oh "HikariPool-[0-9]*" build/test-results/test/*.xml | sort -u | wc -l}. {@code maxParallelForks}가
      * 없어 fork는 하나다).
      * <b>300으로는 실제로 넘쳤다</b> — POK-207 태스크 5에서 사진·유튜브 검사 13건이 이 메시지로
      * 한꺼번에 죽었다(사진과 무관한 유튜브 검사가 같이 죽는다는 것이 이 값의 성질이다).
