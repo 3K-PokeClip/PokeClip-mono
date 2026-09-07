@@ -15,7 +15,6 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * <p>🔴 <b>이 목록은 손으로 늘린다.</b> 빠뜨린 창구는 400이 <b>500으로</b> 나가고, 부르는 쪽은
  * 자기 입력 오류를 「수집 서버 장애」로 읽는다(계획 검증 F13).
  * <ul>
- *   <li>태스크 9의 {@code ChatChartController} — 같은 사유 낱말들을 쓴다</li>
  *   <li>태스크 10의 {@code liveinfo/BroadcastInfoController} — {@code since}를
  *       {@code WindowRequest} 계열로 검증하므로 <b>그 태스크에서 여기 더한다</b></li>
  * </ul>
@@ -23,7 +22,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * <p>본문은 <b>사유 낱말 하나</b>다. 받은 값을 되비추지 않는다 — 반사된 값이 그대로 로그와
  * 화면으로 흐른다(영상 위치 창구의 같은 결정).
  */
-@RestControllerAdvice(assignableTypes = {ChatWindowController.class})
+@RestControllerAdvice(assignableTypes = {ChatWindowController.class, ChatChartController.class})
 public class QueryErrors {
 
     @ExceptionHandler(InvalidWindowException.class)
