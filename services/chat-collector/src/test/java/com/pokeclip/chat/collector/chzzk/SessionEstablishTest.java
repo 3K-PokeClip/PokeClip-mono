@@ -11,6 +11,9 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
@@ -341,6 +344,61 @@ class SessionEstablishTest extends IntegrationTestSupport {
         assertThat(session.sinkFailureCount())
                 .as("삼켰으면 세야 한다. 안 세면 수신은 사는데 처리가 죽은 것을 못 본다")
                 .isEqualTo(seen.get());
+    }
+
+    /**
+     * 🔴 <b>⑤와 ⑥ 사이의 창을 결정적으로 연다</b>(POK-234 감사 라운드 3 D1).
+     *
+     * <p>내가 라운드 2에서 「그 창을 여는 방법이 없다」고 판단했던 자리다. 시도했던 셋은
+     * 전부 <b>중단 신호를 미리 켜는</b> 방향이라 언제나 ⑤(또는 그 앞)가 먼저 잡았다.
+     * 감사가 찾은 네 번째 길은 <b>경합을 이기지 않는다</b> — {@code abort}가 주입된
+     * {@link BooleanSupplier}라 <b>언제 참이 되는지가 검사의 것</b>이라는 점을 쓴다.
+     *
+     * <p>얼개는 이렇다. 가짜 서버의 {@code onSubscribeBeforeResponse}는 subscribed 프레임을
+     * 쏜 <b>뒤</b>, ④의 응답을 붙들고 있는 동안 돈다. 그 훅에서 <b>프레임이 클라이언트에
+     * 실제로 도착한 것</b>을 싱크로 확인하고 공급자를 무장시키면, ⑤의 래치는 이미 내려가
+     * 있어 <b>⑤의 루프가 정확히 한 바퀴만 돈다</b>. 그래서 무장 뒤의 호출 횟수가
+     * ⑤에서 1(거짓) · ⑥에서 2(참)로 <b>세어서 갈린다</b> — {@code sleep} 0이고 결정적이다.
+     *
+     * <p>지키는 것: 여기서 새면 후원 구독 REST가 <b>수립 예산 밖에서</b> 접속 2 + 읽기 5초를
+     * 쓰고, 그 사이 {@code releaseAndClose}가 지나가면 방금 선 구독을 아무도 안 반납한다.
+     */
+    @Test
+    void 구독_직후에_중단이_켜지면_후원_구독을_시작하지_않는다() {
+        session = newSession();
+
+        CountDownLatch subscribedSeen = new CountDownLatch(1);
+        session.onFrame(frame -> {
+            if (frame.payload() != null && frame.payload().contains("subscribed")) {
+                subscribedSeen.countDown();
+            }
+        });
+
+        AtomicBoolean armed = new AtomicBoolean();
+        AtomicInteger checksAfterArmed = new AtomicInteger();
+        behavior.onSubscribeBeforeResponse = () -> {
+            try {
+                if (!subscribedSeen.await(5, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("subscribed 프레임이 클라이언트에 안 왔다");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+            armed.set(true);
+        };
+        // ⑤의 검사=1(거짓) · ⑥의 검사=2(참). 무장 전에는 단락 평가로 세지 않는다.
+        BooleanSupplier abortAfterSubscribed =
+                () -> armed.get() && checksAfterArmed.incrementAndGet() >= 2;
+
+        assertThatThrownBy(() -> session.open(Duration.ofSeconds(5), abortAfterSubscribed))
+                .isInstanceOf(SessionEstablishException.class)
+                .extracting("stage")
+                .as("⑤가 잡았다면 WAITING_SUBSCRIBED다 — 그러면 ⑥의 가드를 안 지나갔다")
+                .isEqualTo(EstablishStage.SUBSCRIBE);
+        assertThat(session.donationSubscription())
+                .as("⑥이 돌았다면 SUBSCRIBED다")
+                .isEqualTo(DonationSubscription.NONE);
     }
 
     private ChatSession newSession() {

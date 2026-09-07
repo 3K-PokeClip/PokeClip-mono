@@ -164,6 +164,55 @@ class ChatWindowEndpointTest {
             assertThat(huge.body()).contains("\"text\":\"m2\"");
         }
 
+        /**
+         * 🔴 <b>잘라주기에 그물이 0이었다</b>(POK-234 감사 라운드 3 C-1). 위 검사는 3건을 심고
+         * {@code limit=9999}로 「m2가 있다」만 봐서 {@code Math.min(requested, pageMax())}를
+         * 지워도 참이었다 — 상한과 무관하게 통과하는 단언이다.
+         *
+         * <p><b>운영 상한을 그대로 쓴다.</b> 검사용으로 낮춘 컨텍스트를 만들면 재는 것이
+         * 사본이 되고, 그러면 {@code application.yml}의 500이 실제로 걸리는지는 여전히
+         * 아무도 안 본다. 그래서 상한보다 <b>한 건 더</b> 심어 깎이는 것을 센다.
+         */
+        @Test
+        void 상한을_넘겨_물으면_page_max까지만_준다() throws Exception {
+            int max = Integer.parseInt(environment.getProperty("pokeclip.query.page-max"));
+            for (int i = 0; i <= max; i++) {
+                insertChat(T0.plusSeconds(1).plusMillis(i), "m" + i);
+            }
+
+            HttpResponse<String> huge =
+                    물어본다("from=" + T0 + "&to=" + T0.plusSeconds(10) + "&limit=9999");
+            assertThat(huge.statusCode()).as(huge.body()).isEqualTo(200);
+            assertThat(huge.body().split("\\{\"kind\":", -1).length - 1)
+                    .as("상한이 안 걸리면 심은 " + (max + 1) + "건이 통째로 나간다")
+                    .isEqualTo(max);
+            assertThat(huge.body())
+                    .as("깎였으면 다음 장이 남는다 — 깎고 「끝」이라고 하면 한 건이 사라진다")
+                    .doesNotContain("\"nextCursor\":null");
+        }
+
+        /**
+         * 🔴 <b>응답 JSON 칸 이름은 clip·프론트와의 계약이다</b>(POK-234 감사 라운드 3 C-3).
+         * 여섯이 record 필드 이름 하나에만 걸려 있어서 이름을 바꿔도 아무도 안 잡았다.
+         * 여기서 <b>글자로</b> 못박는다 — 특히 {@code donationType}은 {@code type}으로
+         * 줄이자는 제안이 실제로 있었다.
+         */
+        @Test
+        void 응답_칸_이름_여섯은_글자로_못박는다() throws Exception {
+            insertChat(T0.plusSeconds(1), "채팅본문");
+            insertDonation(T0.plusSeconds(2), "후원본문");
+
+            String body = 물어본다("from=" + T0 + "&to=" + T0.plusSeconds(10)).body();
+
+            assertThat(body)
+                    .containsPattern("\"id\":\\d+")
+                    .contains("\"nickname\":\"후원자\"")
+                    .contains("\"senderChannelId\":\"api-win-donator\"")
+                    .contains("\"role\":\"common_user\"")
+                    .contains("\"donationType\":\"CHAT\"")
+                    .contains("\"amount\":1000");
+        }
+
         @Test
         void 모르는_kinds는_400이고_아는_것은_거른다() throws Exception {
             insertChat(T0.plusSeconds(1), "채팅");

@@ -453,6 +453,43 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
         }
     }
 
+    /**
+     * 🔴 <b>실패 갈래도 태운다</b>(POK-234 감사 라운드 3 C-2). 바로 위 검사는 성공 경로만
+     * 지나가서, {@code chat.donation.persist_failed} 줄에 닉네임을 넣는 주입이 <b>초록</b>이었다.
+     * 「그물이 이름보다 좁다」의 모양이다 — 지금 유출은 없고 <b>다음에 실패 로그를 늘리는
+     * 사람</b>을 못 잡는 것이 문제였다.
+     *
+     * <p>실패는 <b>진짜 드라이버가 거절하게</b> 만든다({@code stream_id}가 VARCHAR(128)이다).
+     * 스텁으로 던지면 바인딩 로거가 바늘을 나른 적이 없어 부정 단언이 자동으로 참이 된다 —
+     * 이 파일이 재려는 창(파라미터를 통째로 찍는 로거 둘)을 통째로 비켜 간다.
+     */
+    @Test
+    void 후원_저장이_실패해도_닉네임과_문구가_안_찍힌다() {
+        try (LogCaptor captor = new LogCaptor()) {
+            DonationBuffer buffer = new DonationBuffer(100);
+            DonationPersister persister = new DonationPersister(jdbc, buffer);
+            String tooLongStreamId = "leak-donation-fail-".repeat(20);   // 380자 > VARCHAR(128)
+
+            Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
+            setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
+            try {
+                buffer.offer(new PersistableDonation(tooLongStreamId, "leak-don-ch",
+                        SENDER, DONATOR_NICKNAME, "CHAT", 1000L, DONATION_TEXT,
+                        1_754_300_000_500L));
+                assertThat(persister.flushOnce())
+                        .as("표가 받아 줬다면 실패 갈래를 안 지나간 것이다")
+                        .isZero();
+            } finally {
+                setLevel(Logger.ROOT_LOGGER_NAME, rootBefore);
+            }
+
+            assertThat(renderAll(captor))
+                    .as("실패 로그 줄이 아예 안 나왔다면 아래 부정 단언이 아무것도 안 본 것이다")
+                    .contains("chat.donation.persist_failed");
+            assertNoSecretsIn(captor, List.of(DONATOR_NICKNAME, DONATION_TEXT, SENDER));
+        }
+    }
+
     // ── 탐지기 자기검사 셋. 이게 없으면 위 검사 전체가 초록불 장식이다 ────────
 
     @Test
