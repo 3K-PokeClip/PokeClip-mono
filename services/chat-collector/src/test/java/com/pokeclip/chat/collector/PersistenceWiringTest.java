@@ -5,6 +5,9 @@ import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
+import com.pokeclip.chat.collector.persist.DonationPersister;
+import com.pokeclip.chat.collector.persist.PersistableDonation;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterEach;
@@ -361,6 +364,58 @@ class PersistenceWiringTest extends IntegrationTestSupport {
                     .contains("persisted=1");
             assertThat(status.state()).isEqualTo(CollectionStatus.State.STOPPED);
         }
+    }
+
+    /**
+     * 🔴 <b>러너의 종료가 후원 저장기도 닫는가</b> (POK-234 감사 라운드 2 A1).
+     *
+     * <p><b>안 닫으면 스프링 {@code @PreDestroy}가 예산 밖에서 닫는다.</b> 빈 파괴는 한
+     * 스레드에서 차례로 돌므로(감사 탐침 1412ms) 그 시간이 종료 예산에 그대로 더해져 합이
+     * 22초가 되고 운영 유예 20초를 넘긴다 — 그때 잘리는 것은 <b>이미 지나간 세션 닫기가 못
+     * 끝낸 구독 반납</b>이라 계정 자리 3개가 마른다. {@code ShutdownBudgetTest}는 상수의 합만
+     * 보므로 <b>그 항이 감시망에 아예 없던 것</b>을 못 봤다.
+     *
+     * <p><b>재는 방법</b>: {@code start()}를 안 부른 후원 저장기를 준다. 그러면 1초 틱이 안 돌아
+     * 바구니를 비우는 유일한 길이 {@code close()}가 제출하는 마지막 flush뿐이다 — 표에 행이
+     * 생겼다는 것이 곧 「러너가 close를 불렀다」다.
+     */
+    // 문항 2: 「표에 있다」만 보면 <b>틱이 저장한 것</b>도 통과한다 — start()를 안 불러
+    //         그 길을 아예 막았다. 넣기 전 행 수가 0인 것도 같이 본다.
+    // 문항 8(운영 배선): 여기서 재는 것은 <b>러너의 배선</b>이다. 빈 배선(@Component +
+    //         @PostConstruct)은 DonationPersisterWiringTest가 컨텍스트 빈으로 따로 잰다.
+    @Test
+    void 종료가_후원_저장기의_마지막_플러시까지_돌린다() {
+        DonationBuffer donationBuffer = new DonationBuffer(1_000);
+        // start()를 부르지 않는다 — 1초 틱이 돌면 close를 안 불러도 저절로 저장돼
+        // 이 검사가 아무것도 안 재게 된다.
+        DonationPersister donationPersister = new DonationPersister(jdbc, donationBuffer);
+        buffer = new ChatBuffer(10_000);
+        persister = new ChatPersister(jdbc, buffer);
+        persister.start();
+        runner = new CollectorRunner(
+                new ChzzkProperties(true, "test-token", "http://localhost:" + port,
+                        Duration.ofSeconds(5), Duration.ofMillis(50), Duration.ofSeconds(1)),
+                new CollectionStatus(), restClientBuilder, buffer, persister, ChatArchive.NONE,
+                donationPersister, null, () -> { });
+        runner.run(null);
+        donationBuffer.offer(new PersistableDonation(
+                "close-wiring", "close-wiring-ch", "donator-1", "닉",
+                "CHAT", 1000L, "고마워요", 1_723_600_500_000L));
+        assertThat(countDonationRows("close-wiring-ch"))
+                .as("넣기 전에 이미 행이 있으면 아래 단언이 남의 행을 세는 것이다")
+                .isZero();
+
+        runner.stop();
+
+        assertThat(countDonationRows("close-wiring-ch"))
+                .as("러너가 후원 저장기를 안 닫으면 이 행은 @PreDestroy까지 — 즉 예산 밖까지 안 간다")
+                .isEqualTo(1);
+        assertThat(donationBuffer.size()).isZero();
+    }
+
+    private long countDonationRows(String channelId) {
+        return jdbc.queryForObject(
+                "SELECT count(*) FROM chat_donations WHERE channel_id = ?", Long.class, channelId);
     }
 
     private static long field(String verdict, String name) {

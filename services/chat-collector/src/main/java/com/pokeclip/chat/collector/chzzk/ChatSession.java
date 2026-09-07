@@ -80,8 +80,32 @@ public class ChatSession implements AutoCloseable {
     }
 
     /**
+     * 반납 REST 하나의 최악. {@code spring.http.clients}의 접속 2초 + 읽기 5초다.
+     *
+     * <p><b>관측이 아니라 시한이다</b> — 실측 왕복은 55~69ms라 평시엔 근처도 안 간다.
+     * {@code SessionRegistry.CLOSE_ALL_BUDGET}(8초 = 반납 7 + 소켓 닫기 1)의 「반납 7」이
+     * 이 값이고, <b>반납이 둘이 돼도 그 7이 그대로여야</b> 그 예산이 선다.
+     */
+    private static final Duration RELEASE_BUDGET = Duration.ofSeconds(7);
+
+    /**
      * 구독을 반납하고 소켓을 닫는다. 반납이 먼저다 — 소켓을 먼저 닫으면
      * 서버가 세션을 정리하는 중이라 반납이 무의미해질 수 있다.
+     *
+     * <p>🔴 <b>후원 반납과 채팅 반납을 나란히 보낸다</b>(POK-234 감사 라운드 2 A2).
+     * 직렬로 쏘면 최악이 7 + 7 = 14초라 {@code CLOSE_ALL_BUDGET} 8초를 넘고, 그때
+     * {@code awaitClosed}는 취소하지 않고 로그만 남기고 돌아가므로 <b>채팅 반납이 나가기
+     * 전에 프로세스가 종료 유예에 잘린다</b> — 그 예산이 막으려던 것(계정당 자리 3개)이
+     * 정확히 그 사고다. 나란히면 최악이 {@code max(7, 7)} = 7초로 예산 안이다.
+     * <b>겹치는 것을 실측했다</b>: 가짜 서버의 반납 둘을 1초씩 붙들면 직렬 2,006ms →
+     * 나란히 1,0xx ms({@code SessionShutdownTest.후원_반납과_채팅_반납이_나란히_나간다}).
+     *
+     * <p><b>후원 반납의 값은 확인하지 않았다.</b> 여기 한때 「그 자리도 계정당 연결 상한 안에
+     * 든다」고 적혀 있었는데 <b>거짓이다</b> — 공식 문서상 연결은 <b>계정당 3개</b>이고 이벤트
+     * 구독은 <b>세션당 30개</b>로 별개 한도이며, 우리는 세션당 둘만 쓴다. 즉 후원 반납이
+     * 연결 자리를 앞당기지 않는다. 그런데도 보내는 이유는 <b>세션 정리를 앞당기는 쪽이
+     * 안전하기 때문</b>이고, 그 효과를 재 본 적은 없다. 실측 근거가 있는 것은 채팅 반납뿐이다
+     * (안 보내면 자리가 10초~4분 42초 남는다).
      *
      * @return 반납의 결말. <b>어느 결말이든 소켓은 닫는다</b>
      */
@@ -91,18 +115,45 @@ public class ChatSession implements AutoCloseable {
         if (key == null || key.isBlank()) {
             result = Release.SKIPPED;
         } else {
-            // <b>후원부터 반납한다.</b> 채팅 반납이 실패해도 후원 자리는 이미 돌려준 뒤가 되고,
-            // 그 자리도 계정당 연결 상한 안에 든다. 구독하지 않았으면(NONE·REFUSED·FAILED)
-            // 아무것도 안 쏜다 — 구독한 적 없는 키로 왕복을 하나 더 만들 이유가 없다.
+            long endAt = System.nanoTime() + RELEASE_BUDGET.toNanos();
+            // 구독하지 않았으면(NONE·REFUSED·FAILED) 아무것도 안 쏜다 — 구독한 적 없는
+            // 키로 왕복을 하나 더 만들 이유가 없다. 그때는 스레드도 안 만든다.
+            Thread donationRelease = null;
             if (donation.getAndSet(DonationSubscription.NONE) == DonationSubscription.SUBSCRIBED) {
-                client.unsubscribeDonationQuietly(key);
+                // 가상 스레드다. 세션 닫기마다 하나씩 나고 REST 시한 안에 반드시 끝난다.
+                donationRelease = Thread.ofVirtual().name("chzzk-donation-release")
+                        .start(() -> client.unsubscribeDonationQuietly(key));
             }
             // 결말은 채팅 반납의 것이다 — 후원 반납의 성패로 이 값을 바꾸면 로그의
             // subscription= 이 무엇의 결말인지가 갈린다.
             result = client.unsubscribeChatQuietly(key) ? Release.RETURNED : Release.FAILED;
+            joinBeforeDeadline(donationRelease, endAt);
         }
         close();
         return result;
+    }
+
+    /**
+     * 후원 반납이 끝나기를 <b>예산이 남은 만큼만</b> 기다린다.
+     *
+     * <p><b>기다리는 이유</b>: 안 기다리고 아래 {@code close()}로 내려가면 소켓이 먼저 닫히고,
+     * 그러면 서버가 세션을 정리하는 중에 반납이 도착한다 — 반납을 소켓보다 앞에 두는
+     * 이 메서드의 규칙이 후원에만 안 걸리게 된다.
+     *
+     * <p><b>시한을 처음에 뜨는 이유</b>: 채팅 반납이 끝난 <b>뒤</b>부터 7초를 새로 재면 최악이
+     * 7 + 7로 되돌아간다. 둘은 같은 시점에 출발했으므로 남은 예산으로 기다리는 것이 맞다.
+     * 만료해도 인터럽트하지 않는다 — {@code SessionRegistry.awaitClosed}와 같은 이유로
+     * 나가 있는 반납을 끊으면 세션 키는 이미 소모돼 아무도 다시 못 보낸다.
+     */
+    private static void joinBeforeDeadline(Thread donationRelease, long endAt) {
+        if (donationRelease == null) {
+            return;
+        }
+        try {
+            donationRelease.join(Duration.ofNanos(Math.max(endAt - System.nanoTime(), 0)));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     public void onFrame(Consumer<EngineIoFrame> sink) { this.frameSink = sink; }

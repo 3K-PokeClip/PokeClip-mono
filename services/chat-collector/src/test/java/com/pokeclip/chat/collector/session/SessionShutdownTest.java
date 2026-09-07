@@ -396,6 +396,51 @@ class SessionShutdownTest extends IntegrationTestSupport {
                 .isFalse();
     }
 
+    /**
+     * 🔴 <b>반납 REST가 둘이 됐는데 예산은 하나 몫이다</b> (POK-234 감사 라운드 2 A2).
+     *
+     * <p>{@code CLOSE_ALL_BUDGET} 8초의 산수는 「반납 REST 접속 2 + 읽기 5 + 소켓 닫기 1」로
+     * <b>왕복 하나</b>를 전제한다. 후원 반납이 더해져 직렬로 나가면 최악이 7 + 7 + 1 = <b>15초</b>가
+     * 되어 예산을 넘고, 그때 {@code awaitClosed}는 취소하지 않고 로그만 남기고 돌아가므로
+     * <b>채팅 반납이 나가기 전에 프로세스가 유예에 잘린다</b> — 이 예산이 막으려던 그것
+     * (계정당 자리 3개)이다.
+     *
+     * <p><b>둘을 나란히 보내면 최악이 max(7, 7) + 1 = 8초로 예산 안이다.</b> 여기서 재는 것이
+     * 정확히 그 「나란히가 진짜 겹치는가」다. 둘 다 1초씩 붙들었을 때 직렬이면 약 2초,
+     * 겹치면 약 1초다.
+     *
+     * <p><b>실측(2026-09-07, 가짜 서버)</b>: 고치기 전 <b>2,0xx ms</b> → 고친 뒤 <b>1,0xx ms</b>.
+     * 가짜는 HTTP/1.1이라 커넥션을 나눠 써서 겹치고 치지직은 HTTP/2 스트림으로 겹친다 —
+     * <b>겹친다는 결론은 같고 이유가 다르다</b>({@code ReleaseConcurrencyProbeTest}의 경고와 같은 자리).
+     */
+    // 문항 2: 시간 단언만 두면 <b>반납을 아예 안 보내는</b> 구현이 0ms로 통과한다 —
+    //         채팅·후원 반납이 각각 한 건씩 실제로 도착했는지를 상대 쪽에서 같이 본다.
+    // 문항 9(값의 축이 둘): 반납도 축이 둘이다. 한 카운터로 묶으면 「둘이 나갔다」와
+    //         「채팅이 두 번 나갔다」가 같은 값이 된다 — 그래서 카운터를 따로 센다.
+    @Test
+    void 후원_반납과_채팅_반납이_나란히_나간다() {
+        givenRegistry();
+        assertThat(registry.open(key("s1", 1L, "chA"), "tokA")).isTrue();
+        behavior.unsubscribeDelay = Duration.ofSeconds(1);
+        behavior.unsubscribeDonationDelay = Duration.ofSeconds(1);
+        int chatBefore = behavior.unsubscribeCallCount();
+        int donationBefore = behavior.unsubscribeDonationCallCount();
+
+        long startedAt = System.nanoTime();
+        registry.closeAll();
+        Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
+
+        assertThat(behavior.unsubscribeDonationCallCount() - donationBefore)
+                .as("후원 반납이 안 나갔으면 아래 시간은 채팅 하나만 잰 것이다")
+                .isEqualTo(1);
+        assertThat(behavior.unsubscribeCallCount() - chatBefore)
+                .as("채팅 반납이 안 나갔으면 계정 자리가 그대로 남는다")
+                .isEqualTo(1);
+        assertThat(elapsed)
+                .as("직렬이면 1초 + 1초 = 2초다 — 그러면 예산 8초의 산수가 15초가 된다")
+                .isLessThan(Duration.ofMillis(1_700));
+    }
+
     // ------------------------------------------------------------------
     // 도우미
     // ------------------------------------------------------------------

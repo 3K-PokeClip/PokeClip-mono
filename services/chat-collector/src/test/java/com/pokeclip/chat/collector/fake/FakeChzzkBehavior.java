@@ -424,6 +424,15 @@ public class FakeChzzkBehavior {
 
     void countUnsubscribeDonationCall() { unsubscribeDonationCalls.incrementAndGet(); }
 
+    /**
+     * 후원 구독 반납 REST가 <b>도착을 센 뒤</b> 응답 전에 붙들고 있는 시간.
+     *
+     * <p><b>{@link #unsubscribeDelay}와 따로 두는 것이 요점이다.</b> 하나로 묶으면
+     * 「둘이 나란히 나갔다」와 「하나가 두 번 나갔다」가 같은 총소요로 보인다 —
+     * 둘 다 붙들어야 직렬(합)과 나란히(최대)가 갈린다.
+     */
+    public volatile Duration unsubscribeDonationDelay = Duration.ZERO;
+
     private final AtomicInteger unsubscribeDonationCalls = new AtomicInteger();
 
     /** 반납 요청들이 서버에 도착한 시각. 정렬돼 있지 않다 — 도착 순서 그대로다. */
@@ -641,6 +650,7 @@ public class FakeChzzkBehavior {
         subscribeDonationStatus = 200;
         sendDonationSubscribed = true;
         unsubscribeDonationCalls.set(0);
+        unsubscribeDonationDelay = Duration.ZERO;
     }
 
     /** 앞 세션이 닫히기를 기다리는 시한. 실측 최대 23ms에 200배 여유다. */

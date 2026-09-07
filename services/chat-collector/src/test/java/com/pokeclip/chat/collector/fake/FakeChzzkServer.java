@@ -235,8 +235,14 @@ public class FakeChzzkServer implements WebSocketConfigurer {
          * 「채팅 반납이 두 번 나갔다」가 같은 값이 되어 아무도 못 가른다.
          */
         @PostMapping("/open/v1/sessions/events/unsubscribe/donation")
-        public ResponseEntity<String> unsubscribeDonation(@RequestParam String sessionKey) {
+        public ResponseEntity<String> unsubscribeDonation(@RequestParam String sessionKey)
+                throws InterruptedException {
+            // 도착을 먼저 센다 — 채팅 반납과 같은 규칙이다. 붙들려 있는 동안에도
+            // "왔다"가 보여야 나란히 나갔는지를 상대 쪽에서 잴 수 있다.
             behavior.countUnsubscribeDonationCall();
+            if (!behavior.unsubscribeDonationDelay.isZero()) {
+                Thread.sleep(behavior.unsubscribeDonationDelay.toMillis());
+            }
             return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
         }
     }

@@ -115,10 +115,28 @@ public class DonationPersister {
     }
 
     /**
+     * 마지막 flush를 기다리는 시한. <b>{@link ChatPersister#close()}의 5초보다 짧다</b> —
+     * 후원은 방송당 수십 건이라 flush가 밀리초이고, 이 항이 종료 예산에 <b>그대로 더해지기</b>
+     * 때문이다({@code CollectorRunner.closeSinks}에서 채팅 flush 뒤에 차례로 돈다).
+     * 5초면 예산 합이 22초가 되어 운영 유예 20초를 넘긴다 — 그때 <b>세션 닫기가 잘려
+     * 구독이 반납 안 되고 계정 자리가 남는다</b>(POK-234 감사 라운드 2 A1).
+     * 이 값을 키우려면 {@code ShutdownBudgetTest}와 {@code services/README.md}를 같이 본다.
+     */
+    static final Duration CLOSE_WAIT = Duration.ofSeconds(2);
+
+    /**
      * 마지막 flush를 스케줄러 스레드에 제출하고 기다린다 — drain하는 스레드가 언제나
-     * 하나라는 불변식이 여기서도 유지된다. 예산 5초는 {@link ChatPersister#close()}와
-     * 같은 값이고, 그 둘은 <b>나란히가 아니라 차례로</b> 돈다
-     * ({@code CollectorRunner.closeSinks}) — 종료 예산 산수는 그쪽 주석에 있다.
+     * 하나라는 불변식이 여기서도 유지된다.
+     *
+     * <p>이 close와 {@link ChatPersister#close()}는 <b>나란히가 아니라 차례로</b> 돈다
+     * ({@code CollectorRunner.closeSinks}) — 종료 예산 <b>다섯 항 중 하나</b>이고 산수는
+     * 그쪽 주석과 {@code ShutdownBudgetTest}에 있다.
+     *
+     * <p>🔴 <b>이 문장이 한때 거짓이었다</b>(POK-234 감사 라운드 2 A1-b): 러너가 이 close를
+     * 아예 안 불러 스프링 {@code @PreDestroy}가 예산 <b>밖</b>에서 돌고 있었다.
+     * 러너가 부르게 고쳐 참으로 만들었다. {@code @PreDestroy}는 그대로 두되 멱등이라
+     * 둘째 호출은 즉시 돌아간다 — {@code System.exit(1)} 경로에는 러너의 {@code stop()}만
+     * 있는 것이 아니므로 그물을 둘 다 남긴다.
      */
     @PreDestroy
     public void close() {
@@ -128,7 +146,7 @@ public class DonationPersister {
         try {
             Future<?> lastFlush = scheduler.submit(this::flushBacklog);
             scheduler.shutdown();
-            lastFlush.get(5, TimeUnit.SECONDS);
+            lastFlush.get(CLOSE_WAIT.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn("chat.donation.close_interrupted");
