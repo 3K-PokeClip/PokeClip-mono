@@ -465,6 +465,32 @@ class SessionRegistryTest extends IntegrationTestSupport {
     }
 
     /**
+     * 🔴 <b>갈아끼울 때 후원 상태도 같이 옮기는가</b> (POK-234 감사 라운드 2 C5).
+     *
+     * <p>{@code retarget}의 이관 세 줄을 지워도 <b>모듈 전체가 초록</b>이었다. 지우면
+     * 갈아낀 새 방송이 창구에서 <b>「후원 상태 모름(none)」</b>으로 보이고 — 소켓과 구독은
+     * 그대로라 후원이 실제로는 들어오고 있는데도 — <b>끝난 방송 번호의 값이 창구 메모리에
+     * 영영 남는다</b>(아무도 지우지 않는다).
+     */
+    // 문항 2: 새 번호가 SUBSCRIBED인 것만 보면 <b>옛 번호를 안 지우는</b> 구현도 통과한다 —
+    //         옛 번호가 NONE으로 비는 것을 같이 본다(누수 쪽이 이 검사의 절반이다).
+    @Test
+    void 갈아끼우면_새_방송이_앞_방송의_후원_상태를_잇는다() throws Exception {
+        givenRegistry();
+        registry.open(key("s-don-1", 44L, "chA"), "tok44");
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-don-1") == DonationSubscription.SUBSCRIBED);
+
+        assertThat(registry.open(key("s-don-2", 44L, "chA"), "tok44")).isTrue();
+
+        assertThat(registry.donationStateOf("s-don-2"))
+                .as("안 옮기면 소켓·구독이 그대로인데 창구가 새 방송을 「모름」으로 답한다")
+                .isEqualTo(DonationSubscription.SUBSCRIBED);
+        assertThat(registry.donationStateOf("s-don-1"))
+                .as("옛 번호를 안 지우면 끝난 방송의 값이 창구 메모리에 영영 남는다")
+                .isEqualTo(DonationSubscription.NONE);
+    }
+
+    /**
      * 양성 대조. <b>「늘 하나만 연다」인 구현에서도 위 검사 둘은 초록이다.</b>
      */
     @Test

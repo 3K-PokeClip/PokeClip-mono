@@ -243,6 +243,21 @@ public class ChatSession implements AutoCloseable {
         // 채팅은 그 프레임이 안 오면 채팅이 한 건도 안 오는 것과 같아 기다릴 값이 있지만,
         // 후원은 안 와도 채팅이 이미 걷고 있어 기다리는 동안 잃는 것(수립 지연)만 있다.
         // REST 200이 곧 구독이고 프레임은 확인이다.
+        //
+        // 🔴 <b>이 두 줄에는 그물을 못 놓는다 — 못 놓은 것이 아니라 놓을 자리가 없다</b>
+        // (POK-234 감사 라운드 2 C4를 재현하고 반박한 결과). 감사는 「둘을 통째로 지워도
+        // 698건 초록」이라 그물이 없다고 봤는데, <b>지워도 관측이 안 바뀌는 것이 옳다.</b>
+        // 바로 위 ⑤의 await가 매 바퀴 <b>같은 둘</b>을 먼저 보기 때문이다 —
+        // {@code abort} → {@code remaining <= 0} → 그 다음에야 latch. 즉 ⑤가 돌아왔다는
+        // 것은 그 순간 abort가 false였고 예산이 남아 있었다는 뜻이라, 여기 도착했을 때
+        // 값이 뒤집히려면 그 사이(latch가 내려간 찰나)에 상태가 바뀌어야 한다.
+        // 검사로 그 창을 결정적으로 여는 방법을 못 찾았다 — <b>「없다」가 아니라
+        // 「찾아봤는데 못 찾았다」다.</b> 시도한 것: 종료 신호를 미리 켜면 ①이 먼저 걸리고,
+        // ④를 붙들어 그 사이에 켜면 ⑤가 먼저 걸리고, 예산을 얇게 잡으면 ⑤가 먼저 만료한다.
+        //
+        // <b>그래도 지우지 않는다.</b> ⑤의 latch 대기는 {@link #ABORT_CHECK_SLICE}(100ms)
+        // 단위라 그 조각 안에서 상태가 바뀔 수 있고, 여기서 새는 대가는 <b>REST 시한
+        // 7초(접속 2 + 읽기 5)를 수립 예산 밖에서 쓰는 것</b>이라 싸지 않다.
         abortIfStopping(abort, EstablishStage.SUBSCRIBE);
         if (System.nanoTime() < endAt) {
             donation.set(client.subscribeDonation(sessionKey.get()));   // ⑥ DONATION

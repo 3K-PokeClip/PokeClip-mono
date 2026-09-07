@@ -105,12 +105,6 @@ public class CollectorHealth implements HealthIndicator {
 
     CollectorHealth(CollectionStatus status, SessionRegistry registry, IntakeStatus intake,
                     ReattachStatus reattach, ObjectProvider<BroadcastEventProcessor> processor,
-                    Supplier<Instant> clock) {
-        this(status, registry, intake, reattach, processor, clock, new DonationBuffer());
-    }
-
-    CollectorHealth(CollectionStatus status, SessionRegistry registry, IntakeStatus intake,
-                    ReattachStatus reattach, ObjectProvider<BroadcastEventProcessor> processor,
                     Supplier<Instant> clock, DonationBuffer donationBuffer) {
         this.donationBuffer = donationBuffer;
         this.status = status;

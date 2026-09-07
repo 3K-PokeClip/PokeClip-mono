@@ -15,6 +15,8 @@ import com.pokeclip.chat.collector.broadcast.reattach.ReattachStatus;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
+import com.pokeclip.chat.collector.persist.PersistableDonation;
 import com.pokeclip.chat.collector.session.SessionKey;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
@@ -80,6 +82,9 @@ class CollectorHealthTest extends IntegrationTestSupport {
     private final ToggleQueue queue = new ToggleQueue();
 
     private SessionRegistry registry;
+
+    /** 🔴 검사가 <b>운영이 쓰는 그 바구니</b>를 쥔다 — 사본이면 상세가 언제나 0이다(C7). */
+    private DonationBuffer donationBuffer = new DonationBuffer();
     private BroadcastEventProcessor processor;
     private SqsIntakeRunner intakeRunner;
 
@@ -306,6 +311,7 @@ class CollectorHealthTest extends IntegrationTestSupport {
     // ------------------------------------------------------------------
 
     private void given() {
+        donationBuffer = new DonationBuffer();
         registry = new SessionRegistry(
                 new ChzzkProperties(true, "설정-토큰-쓰면-안-된다",
                         "http://localhost:" + port, Duration.ofSeconds(5), FIRST_DELAY, MAX_DELAY),
@@ -326,10 +332,49 @@ class CollectorHealthTest extends IntegrationTestSupport {
         return healthAt(Instant.now());
     }
 
-    /** 시계를 손에 쥐고 본다 — 「얼마나 오래 안 꺼냈나」를 재려면 필요하다. */
+    /**
+     * 시계를 손에 쥐고 본다 — 「얼마나 오래 안 꺼냈나」를 재려면 필요하다.
+     *
+     * <p>🔴 <b>후원 바구니도 검사가 쥔다</b>(POK-234 감사 라운드 2 C7). 그전에는 시계만
+     * 받는 생성자가 <b>자기 {@code new DonationBuffer()}</b>를 만들어, 상세의
+     * {@code donationBufferDropped}가 <b>무엇을 하든 언제나 0</b>이었다 — 검사가 재는
+     * 것이 운영이 쓰는 그 바구니가 아니라 사본이던 자리다(문항 8).
+     * 그 생성자를 지워 이 자리가 바구니를 명시적으로 주게 했다.
+     */
     private Health healthAt(Instant now) {
-        return new CollectorHealth(legacy, registry, intake, reattach, provider(processor), () -> now)
+        return new CollectorHealth(legacy, registry, intake, reattach, provider(processor),
+                () -> now, donationBuffer)
                 .health();
+    }
+
+    /**
+     * 🔴 <b>{@code donationBufferDropped} 상세를 재는 검사가 0건이었다</b>
+     * ({@code grep -rn donationBufferDropped src/test} → 0). 후원은 <b>아카이브가 없어
+     * 되찾을 길이 없는 유일한 유실</b>이라 이 값이 상세에 나가는데, 그것을 지켜보는 것이
+     * 아무것도 없었다.
+     */
+    // 문항 2: 「0이 실린다」만 보면 <b>언제나 0</b>인 구현도 통과한다 — 실제로 그랬다(C7).
+    //         그래서 넘치게 만들어 <b>값이 움직이는 것</b>을 본다.
+    @Test
+    void 후원_바구니가_버린_수가_상세에_실린다() {
+        given();
+        assertThat(health().getDetails())
+                .as("항이 아예 없으면 운영자가 되찾을 길 없는 유실을 영영 못 본다")
+                .containsEntry("donationBufferDropped", 0L);
+
+        // 상한 1짜리 바구니에 둘을 넣어 하나를 버리게 한다.
+        donationBuffer = new DonationBuffer(1);
+        donationBuffer.offer(donation("keep"));
+        donationBuffer.offer(donation("dropped"));
+
+        assertThat(health().getDetails())
+                .as("사본을 보고 있으면 무엇을 넣어도 0이다")
+                .containsEntry("donationBufferDropped", 1L);
+    }
+
+    private static PersistableDonation donation(String text) {
+        return new PersistableDonation("s-health", "ch-health", "d-1", "닉",
+                "CHAT", 1000L, text, 1_723_600_000_000L);
     }
 
     /**

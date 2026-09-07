@@ -11,7 +11,10 @@ import com.pokeclip.chat.collector.observe.Heartbeat;
 import com.pokeclip.chat.collector.observe.SummaryLogger;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
+import com.pokeclip.chat.collector.persist.DonationPersister;
 import com.pokeclip.chat.collector.persist.PersistableChat;
+import com.pokeclip.chat.collector.persist.PersistableDonation;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
@@ -65,6 +68,9 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
     private static final String SENDER = needle("sender-channel-id");
     private static final String NICKNAME = needle("nickname");
     private static final String TOKEN = needle("access-token");
+    /** 🔴 후원의 새 개인식별 칸 둘(POK-234 V307). 채팅 바늘과 따로 둔다 — 경로가 다르다. */
+    private static final String DONATOR_NICKNAME = needle("donator-nickname");
+    private static final String DONATION_TEXT = needle("donation-text");
 
     private static final List<String> SECRETS = List.of(CONTENT, SENDER, NICKNAME, TOKEN);
 
@@ -402,6 +408,48 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
                         .anyMatch(e -> e.getLoggerName().startsWith(pinned)
                                 && renderFully(e).contains(CONTENT));
             }
+        }
+    }
+
+    /**
+     * 🔴 <b>후원의 새 개인식별 칸을 이 검사가 안 태우고 있었다</b>
+     * (POK-234 감사 라운드 2 C8). 라운드 1 C2로 채팅 닉네임은 태우게 고쳤는데
+     * 후원({@code donator_nickname} · {@code donation_text})은 그 목록에 없었다.
+     *
+     * <p><b>유출은 없다 — 그물만 없었다.</b> {@code DonationPersister}가 실패 로그에
+     * 건수와 예외 타입만 싣는 것은 코드로 확인했다. 그런데 <b>클래스 javadoc은
+     * 「어느 경로에서도 안 남는다」고 주장</b>하고 있었으므로, 여기서 하는 일은
+     * <b>그 문장을 참으로 만드는 것</b>이다 — 다음에 후원 로그 줄을 늘리는 사람이
+     * 여기서 걸린다.
+     *
+     * <p>탐지 창과 기제는 위 채팅 갈래와 같다({@code root=TRACE}에서 스프링·드라이버
+     * 바인딩 로거 둘이 파라미터를 통째로 찍는다). 양성 대조도 그쪽이 이미 든다 —
+     * 여기서 다시 밀면 같은 로거를 두 번 재는 것이라 안 한다.
+     */
+    // 문항 2: 「안 샌다」는 <b>바늘이 코드 안을 지나간 적이 없으면</b> 자동으로 참이다 —
+    //         flushOnce가 1을 돌려주는 것(= 표까지 갔다)을 먼저 못박는다.
+    // 문항 8: 손으로 만든 record가 아니라 <b>운영 INSERT 경로</b>로 태운다.
+    //         DonationPersister.flushOnce가 운영과 같은 SQL·같은 파라미터 순서를 쓴다.
+    @Test
+    void 후원_닉네임과_문구도_root를_TRACE로_내려도_안_찍힌다() {
+        try (LogCaptor captor = new LogCaptor()) {
+            DonationBuffer buffer = new DonationBuffer(100);
+            DonationPersister persister = new DonationPersister(jdbc, buffer);
+
+            Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
+            setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
+            try {
+                buffer.offer(new PersistableDonation("leak-donation-stream", "leak-don-ch",
+                        SENDER, DONATOR_NICKNAME, "CHAT", 1000L, DONATION_TEXT,
+                        1_754_300_000_500L));
+                assertThat(persister.flushOnce())
+                        .as("표까지 안 갔다면 바인딩 로거가 후원 바늘을 나른 적이 없다")
+                        .isEqualTo(1);
+            } finally {
+                setLevel(Logger.ROOT_LOGGER_NAME, rootBefore);
+            }
+
+            assertNoSecretsIn(captor, List.of(DONATOR_NICKNAME, DONATION_TEXT, SENDER));
         }
     }
 
