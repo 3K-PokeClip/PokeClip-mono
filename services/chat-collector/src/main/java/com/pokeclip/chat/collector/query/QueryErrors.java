@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.query;
 
+import com.pokeclip.chat.collector.liveinfo.BroadcastInfoController;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -15,14 +16,16 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * <p>🔴 <b>이 목록은 손으로 늘린다.</b> 빠뜨린 창구는 400이 <b>500으로</b> 나가고, 부르는 쪽은
  * 자기 입력 오류를 「수집 서버 장애」로 읽는다(계획 검증 F13).
  * <ul>
- *   <li>태스크 10의 {@code liveinfo/BroadcastInfoController} — {@code since}를
- *       {@code WindowRequest} 계열로 검증하므로 <b>그 태스크에서 여기 더한다</b></li>
+ *   <li>{@code liveinfo.BroadcastInfoController} — {@code since}를 {@code WindowRequest}의
+ *       그물로 보므로 여기 들어 있다. 빼면 {@code since} 오타가 500으로 나가고
+ *       {@code BroadcastInfoEndpointTest.모르는_since는_400이지_500이_아니다}가 빨간불이다</li>
  * </ul>
  *
  * <p>본문은 <b>사유 낱말 하나</b>다. 받은 값을 되비추지 않는다 — 반사된 값이 그대로 로그와
  * 화면으로 흐른다(영상 위치 창구의 같은 결정).
  */
-@RestControllerAdvice(assignableTypes = {ChatWindowController.class, ChatChartController.class})
+@RestControllerAdvice(assignableTypes = {ChatWindowController.class, ChatChartController.class,
+        BroadcastInfoController.class})
 public class QueryErrors {
 
     @ExceptionHandler(InvalidWindowException.class)

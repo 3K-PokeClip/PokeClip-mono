@@ -42,6 +42,14 @@ public record WindowRequest(Instant from, Instant to) {
         return new WindowRequest(lo, hi);
     }
 
+    /**
+     * 시각 <b>하나</b>짜리 입력도 같은 그물을 쓴다({@code broadcast-info}의 {@code since}).
+     * 창구마다 다른 값을 받으면 부르는 쪽이 창구마다 다시 배운다 — 이 클래스가 옮겨 온 이유와 같다.
+     */
+    public static Instant parseAt(String raw) {
+        return parseOne(raw);
+    }
+
     private static Instant parseOne(String raw) {
         if (raw == null || raw.isBlank()) {
             throw new InvalidWindowException("missing");
