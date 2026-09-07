@@ -54,8 +54,13 @@ public class ChatWindowReader {
      * <b>WHERE에 시각 칸 둘을 다 건다.</b> {@code received_at}은 인덱스를 타기 위해 넉넉한
      * 범위로, {@code message_time}은 창 경계를 정확히 자르기 위해.
      *
-     * <p>{@code received_at}만 쓰면 전달 지연만큼 창이 밀리고, {@code message_time}만 쓰면
-     * 인덱스를 못 타 방송 전체를 훑는다.
+     * <p>{@code received_at}만 쓰면 전달 지연만큼 창이 밀린다. 반대쪽은 <b>사정이 바뀌었다</b> —
+     * 여기 한때 「{@code message_time}만 쓰면 인덱스를 못 타 방송 전체를 훑는다」고 적혀 있었는데
+     * <b>POK-234가 {@code V306}으로 {@code (stream_id, message_time)} 부분 색인을 만들면서
+     * 그 문장이 거짓이 됐다.</b> 지금은 이 조회가 <b>그 새 색인을 탄다</b>(POK-234 감사 라운드 1
+     * 실측: 버퍼 124 → 42, 결과 행은 같다). <b>두 칸을 다 거는 것은 그대로 옳다</b> — 창 경계는
+     * 여전히 {@code message_time}이 정하고, {@code received_at} 범위는 색인 선택과 무관하게
+     * 「우리에게 언제 왔나」를 좁혀 준다.
      *
      * <p>여유 {@code RECEIVED_SLACK}는 「채팅이 찍힌 뒤 우리에게 오기까지」의 상한을 넉넉히
      * 잡은 값이다. 재연결 중이면 전달 지연이 초 단위로 늘 수 있다.
@@ -244,9 +249,19 @@ public class ChatWindowReader {
      *
      * <h2>🔴 {@code received_at} 하한이 반드시 있어야 한다(봇 리뷰 1판, claude)</h2>
      *
-     * 상한만 걸면 {@code idx_chat_messages_stream_received} 를 <b>아예 안 탄다</b> —
-     * {@code received_at < ?} 하나로는 선택도가 나빠 플래너가 순차 훑기를 고른다.
-     * 6시간·초당 10건(216,000행)으로 실측한 차이:
+     * 🔴 <b>아래 표는 그때의 계획을 설명하지, 지금의 계획을 설명하지 않는다.</b> POK-234가
+     * {@code V306}으로 {@code (stream_id, message_time)} 부분 색인을 만들면서 이 조회는
+     * <b>그 색인으로 갈아탔다</b>(POK-234 감사 라운드 1 실측: 버퍼 122 → 36, 결과 행은 같다).
+     * 즉 지금은 하한이 없어도 순차 훑기가 아니다.
+     *
+     * <p><b>그래도 하한을 뺄 이유가 없다</b> — 아래 「폭은 {@code COUNT_WINDOWS}와 같다」가 남는다:
+     * 집계에 쓰인 채팅과 정확히 같은 범위라야 「집계엔 들었는데 여기선 빠진」 채팅이 안 생긴다.
+     * 그것은 성능이 아니라 <b>정확성</b>의 이유라 색인이 바뀌어도 그대로다.
+     *
+     * <p>아래는 {@code V306} 이전의 실측이다 — 상한만 걸면
+     * {@code idx_chat_messages_stream_received} 를 <b>아예 안 탔다</b>
+     * ({@code received_at < ?} 하나로는 선택도가 나빠 플래너가 순차 훑기를 골랐다).
+     * 6시간·초당 10건(216,000행):
      *
      * <table>
      *   <tr><th>하한</th><th>계획</th><th>시간</th><th>버퍼</th></tr>
@@ -254,9 +269,12 @@ public class ChatWindowReader {
      *   <tr><td>있음</td><td>Bitmap Index Scan</td><td><b>0.249 ms</b></td><td>55</td></tr>
      * </table>
      *
-     * <p><b>43배이고, 앞쪽만 방송 길이에 선형으로 커진다</b> — {@code chat_messages} 에는
-     * 삭제 경로가 없다. 이 조회는 <b>카드 한 장마다 발행 실행기</b>(core 2 · queue 100) 위에서
-     * 도는데, 급증이 몰리는 구간에서 큐가 차면 카드가 조용히 버려진다.
+     * <p><b>그때 43배였고, 앞쪽만 방송 길이에 선형으로 커졌다</b> — {@code chat_messages} 에는
+     * 삭제 경로가 없다. 🔴 <b>이 43배는 오늘의 위험이 아니다</b>(위 색인 교체). 남겨 두는 이유는
+     * 그 색인이 사라지는 날 이 조회가 어디로 떨어지는지를 이 표가 말해 주기 때문이다.
+     *
+     * <p>이 조회는 <b>카드 한 장마다 발행 실행기</b>(core 2 · queue 100) 위에서 도는데,
+     * 급증이 몰리는 구간에서 큐가 차면 카드가 조용히 버려진다.
      *
      * <p><b>폭은 {@code COUNT_WINDOWS} 와 같은 {@link #RECEIVED_SLACK} 이다.</b> 집계에 쓰인
      * 채팅과 정확히 같은 범위라야 「집계엔 들었는데 여기선 빠진」 채팅이 안 생긴다.
