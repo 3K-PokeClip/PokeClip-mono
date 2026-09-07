@@ -69,6 +69,30 @@ public class RetentionCleaner {
         return result(deleted);
     }
 
+    /**
+     * refresh 토큰(POK-223). 회수 뒤 {@code refreshTokensKeepFor}가 지난 행과, 회수 안 된 채 만료 뒤 같은 기간이
+     * 지난 행. 둘은 배타라 V112가 부분 인덱스 둘로 받친다. 둘째 갈래가 없으면 로그아웃 없이 방치된 토큰 행은
+     * {@code revoked_at}이 영영 NULL이라 첫 갈래로는 안 지워진다.
+     *
+     * <p>🔴 <b>회수 행을 지우는 순간 그 토큰의 재사용 감지가 끝난다</b>: {@code TokenService.rotate}는 해시로 행을
+     * 못 찾으면 UNKNOWN(401)로 끝내고 다른 세션을 안 끊는다. 둘째 갈래로 지워진 토큰도 같은 갈래라 사유가 EXPIRED에서
+     * UNKNOWN으로 옮겨간다(응답은 같은 401, 로그 집계만). 잠긴 행을 건너뛰는 이유는 클래스 주석.
+     * {@code RetentionCleanerRefreshTokensTest}가 보관 기한 하루 전·하루 뒤로 그 경계를 못박는다.
+     * 기간의 근거는 yml retention 주석·README 「운영 전 잔불 정리」 절.
+     */
+    @Transactional
+    public Result cleanRefreshTokens(Instant now) {
+        Timestamp cutoff = Timestamp.from(now.minus(properties.refreshTokensKeepFor()));
+        int deleted = jdbc.update("""
+                DELETE FROM refresh_tokens WHERE id IN (
+                    SELECT id FROM refresh_tokens
+                    WHERE revoked_at < ? OR (revoked_at IS NULL AND expires_at < ?)
+                    ORDER BY id LIMIT ?
+                    FOR UPDATE SKIP LOCKED)
+                """, cutoff, cutoff, properties.batchLimit());
+        return result(deleted);
+    }
+
     private Result result(int deleted) {
         return new Result(deleted, deleted == properties.batchLimit());
     }
