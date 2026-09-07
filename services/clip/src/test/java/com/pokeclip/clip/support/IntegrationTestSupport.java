@@ -40,11 +40,17 @@ public abstract class IntegrationTestSupport {
      * 클래스마다 서버를 띄우면 {@code base-url} 값이 달라져 캐시 키가 갈리고, 컨텍스트가
      * 열셋에서 서른 몇 개로 늘어 각자 Hikari 풀을 들고 {@code max_connections=300}을 향해 간다.
      *
-     * <p>대가는 <b>응답 상태가 JVM 전역</b>이라는 것이다. 그래서 {@link #가짜_auth를_초기화한다()}가
+     * <p>대가는 <b>응답 상태가 JVM 전역</b>이라는 것이다. 그래서 {@link #가짜_서버들을_초기화한다()}가
      * 매 시험 앞에서 되돌리고, 초기 상태는 <b>503</b>이다 — 답을 안 건 시험이 200을 받으면
      * 자격 판정을 통째로 안 재면서 초록이 된다.
      */
     protected static final FakeAuth AUTH = FakeAuth.start();
+
+    /**
+     * 가짜 수집기도 JVM에 <b>하나뿐</b>이다 — 이유·대가·초기 상태(503)가 {@link #AUTH}와 같다.
+     * 쌍둥이라 한쪽을 고치면 다른 쪽도 본다.
+     */
+    protected static final FakeCollector COLLECTOR = FakeCollector.start();
 
     static {
         POSTGRES.start();
@@ -57,8 +63,9 @@ public abstract class IntegrationTestSupport {
      * 이 초기화가 하위의 설정을 지웠을 것이다.
      */
     @BeforeEach
-    protected void 가짜_auth를_초기화한다() {
+    protected void 가짜_서버들을_초기화한다() {
         AUTH.reset();
+        COLLECTOR.reset();
     }
 
     /**
@@ -145,5 +152,7 @@ public abstract class IntegrationTestSupport {
     @DynamicPropertySource
     static void authClientProperties(DynamicPropertyRegistry registry) {
         registry.add("pokeclip.auth-client.base-url", AUTH::baseUrl);
+        // 같은 자리에 둔다 — 클래스마다 자기 @DynamicPropertySource를 달면 컨텍스트 캐시가 갈린다.
+        registry.add("pokeclip.collector-client.base-url", COLLECTOR::baseUrl);
     }
 }

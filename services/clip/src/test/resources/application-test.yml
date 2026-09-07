@@ -43,6 +43,15 @@ pokeclip:
     # 각자 가짜 서버를 세워 생성자에 직접 넣으므로 이 값과 무관하다.
     base-url: http://127.0.0.1:1
 
+  collector-client:
+    # 🔴 아무도 안 듣는 포트. 스프링 시험에서는 실제로 쓰이지 않는다 —
+    # IntegrationTestSupport가 @DynamicPropertySource로 가짜 수집기의 주소를 덮는다.
+    # 그래도 비워 두지 않는 이유는, 비면 CollectorClient가 「꺼짐」이 되어 문 셋이 전부
+    # 503으로 접히고 그 시험들이 무엇을 재는지 모르게 되기 때문이다.
+    base-url: http://127.0.0.1:1
+    connect-timeout: 2s
+    read-timeout: 3s
+
   jump-card:
     stream:
       # 시험은 한 사용자로 연결을 여러 번 열고 닫는다. 끊긴 자리는 즉시 반납되지 않아서
