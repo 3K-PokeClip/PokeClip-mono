@@ -1,5 +1,6 @@
 package com.pokeclip.clip.jumpcard.api;
 
+import com.pokeclip.clip.collector.CollectorErrors;
 import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.BroadcastNotFoundException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.ClaimedByOtherException;
@@ -158,6 +159,19 @@ public class JumpCardExceptionHandler {
     @ExceptionHandler(AccessErrors.AuthUnavailableException.class)
     ResponseEntity<Map<String, Object>> authUnavailable(AccessErrors.AuthUnavailableException e) {
         return json(HttpStatus.SERVICE_UNAVAILABLE, error("authorization_unavailable"));
+    }
+
+    /**
+     * 503. <b>{@code authorization_unavailable}과 낱말이 갈린다</b> — 둘 다 「잠시 뒤 다시」이지만
+     * 화면 안내가 다르다. 자격을 못 물으면 아무것도 못 보고, 수집기를 못 부르면 <b>채팅만</b>
+     * 안 보이고 카드 편집은 그대로 된다.
+     *
+     * <p><b>빈 목록으로 접지 않는다</b>(위 둘과 같은 이유) — 화면이 「그 구간에 채팅이 없었다」로
+     * 단정하면 수집기가 살아난 뒤에도 편집자는 다시 누르지 않는다.
+     */
+    @ExceptionHandler(CollectorErrors.CollectorUnavailableException.class)
+    ResponseEntity<Map<String, Object>> collectorUnavailable(CollectorErrors.CollectorUnavailableException e) {
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("collector_unavailable"));
     }
 
     /**
