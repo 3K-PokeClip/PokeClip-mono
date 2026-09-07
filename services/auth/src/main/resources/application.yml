@@ -118,6 +118,17 @@ logging:
 
 server:
   port: 8082
+  # 프록시가 붙여 주는 X-Forwarded-* 헤더를 믿을지. 기본 none = 안 믿는다. dev(EC2 compose, 플랫폼 감지 없음)에서는
+  # 전과 같은 동작이다. 🔴 운영 ECS에서는 다르다: 전략을 안 적으면 Boot 4.0+가 AWS_EXECUTION_ENV로 ECS를 감지해
+  # (CloudPlatform.AWS_ECS) 자동으로 native를 켰을 텐데, 이 명시 none이 그 유추를 끈다. 운영 태스크 정의에
+  # FORWARD_HEADERS_STRATEGY=native를 반드시 넣는다.
+  # 🔴 빈 문자열은 none이 아니라 「미설정」이라 Boot 유추로 간다(빈 값의 enum 변환이 null). compose의 :-none만 빈 값을 막는다.
+  # native면 톰캣 RemoteIpValve가 신뢰 대역(server.tomcat.remoteip.internal-proxies 기본값: 사설망·루프백)에서
+  # 온 요청의 X-Forwarded-For를 요청자 IP로 채택한다(교환 rate limit이 로드밸런서 뒤에서 전역 한도가 되는 것을
+  # 막는다, POK-91). 대역 밖 소켓이 보낸 헤더는 무시된다. 한정 조건·HSTS 등 운영 서술은 README 「프록시 뒤 실제 IP」 절.
+  # 🔴 native는 X-Forwarded-For만이 아니다: Proto·Host·Port까지 처리해 HSTS가 붙는 자리가 있다. 서술은 위 README 절.
+  # 그 절에 없는 실측 하나만 여기 남긴다: Valve가 request.setSecure(true)를 하고 HstsHeaderWriter가 isSecure()를 본다.
+  forward-headers-strategy: ${FORWARD_HEADERS_STRATEGY:none}
 
 management:
   endpoints:

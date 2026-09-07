@@ -93,3 +93,8 @@ pokeclip:
 #    루프백에 못박으면 커널이 그 번호를 예약해 가로챌 창이 없어진다.
 server:
   address: 127.0.0.1
+  # 셸에 FORWARD_HEADERS_STRATEGY가 export돼 있어도 시험은 기본값을 잰다 — 이 줄이 기본 yml의 placeholder 줄을 덮는다
+  # (환경변수는 placeholder를 채울 뿐 이 프로파일 yml보다 아래다). ForwardedHeadersNativeTest의
+  # @TestPropertySource(addFirst)는 이것보다 위라 그쪽은 계속 native다. 리뷰 라운드 1 재현: export한 채 돌리면
+  # ForwardedHeadersDisabledTest가 429 대신 404였다.
+  forward-headers-strategy: none

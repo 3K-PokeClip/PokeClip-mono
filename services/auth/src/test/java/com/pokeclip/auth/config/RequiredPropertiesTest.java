@@ -393,6 +393,29 @@ class RequiredPropertiesTest {
                         Duration.parse(properties.getProperty("pokeclip.jwt.refresh-token-ttl")));
     }
 
+    /**
+     * 프록시 헤더 전략의 <b>운영 기본값</b>도 다른 어떤 시험이 안 본다 — {@code application-test.yml}이 리터럴
+     * {@code none}으로 덮고({@code ForwardedHeadersDisabledTest}가 그것을 쓴다), {@code ForwardedHeadersNativeTest}는
+     * {@code @TestPropertySource}로 자기 값을 넣으며, {@code DeploymentEnvVarsTest}는 {@code ${FORWARD_HEADERS_STRATEGY:}}
+     * 까지만 보고 <b>기본값은 안 본다</b>. 그래서 기본을 {@code native}로 뒤집어도 752건이 전부 초록이었다
+     * (리뷰 라운드 2 재현 R1).
+     *
+     * <p>기본이 {@code native}가 되면 프록시가 없는 dev에서 <b>아무나 보낸 {@code X-Forwarded-For}를 믿는 길</b>이
+     * 열린다(교환 창구의 IP당 한도가 헤더 한 줄로 우회된다 — 소켓이 루프백이면 신뢰 대역 안이다).
+     * 위 사진 검사({@code PROFILE_PHOTO_S3_FORCE_PATH_STYLE})와 같은 모양으로 기본값까지 통째로 못박는다.
+     */
+    @Test
+    void 프록시_헤더_전략의_운영_기본값이_none이다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+
+        assertThat(properties.getProperty("server.forward-headers-strategy"))
+                .as("프록시 헤더를 믿는 것이 기본이 됐다 — 프록시가 없는 환경에서 IP당 한도가 헤더로 우회된다")
+                .isEqualTo("${FORWARD_HEADERS_STRATEGY:none}");
+    }
 
     /**
      * 유튜브 앱 설정 셋도 치지직과 같은 이유로 한 덩어리다 — 하나만 빠지면 나머지가 무의미하고,
