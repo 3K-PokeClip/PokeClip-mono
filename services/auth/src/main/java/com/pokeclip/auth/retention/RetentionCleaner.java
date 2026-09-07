@@ -93,6 +93,22 @@ public class RetentionCleaner {
         return result(deleted);
     }
 
+    /**
+     * 페어링 코드. 만료 뒤 {@code pairingCodesKeepFor}가 지나면 사용 여부와 무관하게 지운다.
+     * 교환은 {@code expires_at > now}인 행만 소비하고 발급 한도는 최근 1분의 {@code created_at}만 세므로 겹치지 않는다.
+     * 지운 뒤 그 코드는 「모르는 코드」(404)다 — 409·410 사유는 보관 기간 안에서만 산다.
+     */
+    @Transactional
+    public Result cleanPairingCodes(Instant now) {
+        Timestamp cutoff = Timestamp.from(now.minus(properties.pairingCodesKeepFor()));
+        int deleted = jdbc.update("""
+                DELETE FROM pairing_codes WHERE id IN (
+                    SELECT id FROM pairing_codes WHERE expires_at < ? ORDER BY id LIMIT ?
+                    FOR UPDATE SKIP LOCKED)
+                """, cutoff, properties.batchLimit());
+        return result(deleted);
+    }
+
     private Result result(int deleted) {
         return new Result(deleted, deleted == properties.batchLimit());
     }
