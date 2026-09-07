@@ -1225,6 +1225,43 @@ class SessionRegistryTest extends IntegrationTestSupport {
                 .isEqualTo(1);
     }
 
+    /**
+     * 🔴 <b>{@code SUBSCRIPTION} 회수 갈래에 그물이 0개였다</b> (POK-234 감사 라운드 2 C3).
+     *
+     * <p>{@code || "SUBSCRIPTION".equals(event.eventType())}를 지워도 <b>모듈 전체가 초록</b>이었다.
+     * 지워지면 <b>구독(멤버십) 권한 회수가 채팅 세션을 죽인다</b> — 영구 정지 → 판정 → exit 1로
+     * 가고, 그러면 <b>이 프로세스가 붙든 방송 전부</b>가 같이 끊긴다. 태스크 4B가 막으려던 그것과
+     * 결과가 같은데 {@code DONATION}만 재고 있었다.
+     *
+     * <p><b>실물 프레임의 모양은 못 봤다.</b> 대문자 {@code SUBSCRIPTION}은 치지직 공식 Session
+     * 문서의 「이벤트 권한 취소 메시지」 {@code eventType} 목록(CHAT·DONATION·SUBSCRIPTION)에서
+     * 확정했고, 실제로 그 프레임이 오는 것을 본 적은 없다. <b>대소문자가 다르면 그 갈래는
+     * 「모르는 회수」로 떨어져 멈추는 쪽</b>(= 안전한 방향)이 되므로 틀려도 조용히 나빠지지 않는다.
+     */
+    // 문항 2: 「statusOf가 null이 아니다」만 보면 <b>아무것도 안 하는</b> 구현도 통과한다 —
+    //         회수 뒤에 채팅이 실제로 한 건 더 들어오는 것을 같이 본다(DONATION 갈래와 같은 모양).
+    @Test
+    void 구독_권한만_회수되면_채팅은_계속_걷는다() throws Exception {
+        givenRegistry();
+        registry.open(key("s-rev-sub", 13L, "CH"), "tok-13");
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-rev-sub") == DonationSubscription.SUBSCRIBED);
+
+        behavior.emitRevokedTo("tok-13", "SUBSCRIPTION");
+
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-rev-sub") == DonationSubscription.REFUSED);
+        assertThat(registry.statusOf("s-rev-sub"))
+                .as("세션이 통째로 사라졌다면 구독 회수가 채팅을 죽인 것이다 — exit 1로 이 프로세스의 방송 전부가 끊긴다")
+                .isNotNull();
+        assertThat(registry.statusOf("s-rev-sub").state()).isEqualTo(CollectionStatus.State.COLLECTING);
+
+        behavior.emitChatTo("tok-13", "{\"channelId\":\"CH\",\"senderChannelId\":\"S\","
+                + "\"content\":\"a\",\"messageTime\":1754300000000}");
+        awaitUntil(AWAIT, () -> registry.receivedOf("s-rev-sub") == 1);
+        assertThat(registry.receivedOf("s-rev-sub"))
+                .as("상태만 COLLECTING이고 채팅이 안 오면 아무것도 안 걷는 것이다")
+                .isEqualTo(1);
+    }
+
     /** 채팅 권한 회수는 <b>지금대로</b> 멈춘다. 이 갈래를 안 재면 위 시험이 전부를 끄는 구현도 통과한다. */
     @Test
     void 채팅_권한이_회수되면_지금대로_멈춘다() throws Exception {

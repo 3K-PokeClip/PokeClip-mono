@@ -58,11 +58,17 @@ class SessionLifecycleTest extends IntegrationTestSupport {
                 .as("붙지도 않았다면 후원을 받을 길이 없다")
                 .isEqualTo(CollectionStatus.State.COLLECTING);
 
-        behavior.emitChat("{\"channelId\":\"legacy-don\",\"senderChannelId\":\"s\","
-                + "\"content\":\"x\",\"messageTime\":1754300000000}");
+        // 🔴 <b>후원을 먼저, 채팅을 나중에 쏜다</b>(감사 라운드 2 C1). 순서가 반대면 아래
+        // 기다림이 「후원이 처리됐다」를 보증하지 못한다 — 채팅 도착만 기다린 뒤 곧장
+        // donations()를 보므로, 부하가 있으면 후원 프레임이 아직 처리 전이라 0이 나온다.
+        // 그래서 가드를 지워도 <b>모듈 전체 실행에서는 초록</b>이었다(단독 실행은 빨강).
+        // WebSocket 프레임은 순서대로 오고 handleFrame은 수신 스레드 하나에서 도므로,
+        // <b>뒤에 쏜 채팅이 도착했다는 것이 곧 앞의 후원이 이미 처리됐다는 것</b>이다.
         behavior.emitDonation("{\"donationType\":\"CHAT\",\"channelId\":\"legacy-don\","
                 + "\"donatorChannelId\":\"D\",\"donatorNickname\":\"n\","
                 + "\"payAmount\":\"1000\",\"donationText\":\"t\"}");
+        behavior.emitChat("{\"channelId\":\"legacy-don\",\"senderChannelId\":\"s\","
+                + "\"content\":\"x\",\"messageTime\":1754300000000}");
 
         // 양성 대조 — 채팅이 도착한 것으로 「프레임이 실제로 지나갔다」를 못박는다.
         // 이것이 없으면 아래 isZero()는 소켓이 아무것도 안 나른 경우에도 참이다.
