@@ -206,10 +206,21 @@ export function zoomStep(zoom: number, direction: 'in' | 'out'): number {
   return next ?? zoom;
 }
 
-/** 타임라인 높이 드래그 — 접기는 별도 상태라 여기선 높이만 자른다 */
-export function clampTimelineHeight(px: number): number {
+/**
+ * 타임라인 높이 드래그 — 접기는 별도 상태라 여기선 높이만 자른다.
+ *
+ * `ceiling`은 화면이 잰 「지금 레이아웃에서 더 커질 수 있는 한계」다. 상수 상한만으로는
+ * 부족하다 — 낮은 창에서는 460까지 늘리기 전에 미리보기가 최소 높이에 닿고, 남는 만큼이
+ * 타임라인 위로 넘쳐 헤더 버튼을 덮는다 (POK-237). 레이아웃을 아는 쪽만 이 값을 알 수
+ * 있어 인자로 받는다 — 재지 못했으면(비유한값) 상수 상한만 쓴다.
+ */
+export function clampTimelineHeight(px: number, ceiling = MAX_TIMELINE_HEIGHT): number {
   if (!Number.isFinite(px)) return DEFAULT_TIMELINE_HEIGHT;
-  return Math.round(Math.min(MAX_TIMELINE_HEIGHT, Math.max(MIN_TIMELINE_HEIGHT, px)));
+  const top = Number.isFinite(ceiling)
+    ? Math.min(MAX_TIMELINE_HEIGHT, ceiling)
+    : MAX_TIMELINE_HEIGHT;
+  // 최소 높이가 상한을 이긴다 — 창이 아주 낮아도 타임라인이 사라지지는 않는다
+  return Math.round(Math.max(MIN_TIMELINE_HEIGHT, Math.min(top, px)));
 }
 
 /**

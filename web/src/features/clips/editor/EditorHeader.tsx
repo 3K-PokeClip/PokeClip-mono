@@ -16,7 +16,8 @@ export function EditorHeader({
 }) {
   return (
     <header className={styles.header}>
-      <Link href="/clips" className={styles.backLink} aria-label="보관함으로">
+      {/* 보관함 화면을 바로 가리킨다 — /clips는 리다이렉트라 한 홉을 더 탄다(POK-235) */}
+      <Link href="/clips/library" className={styles.backLink} aria-label="보관함으로">
         <ChevronLeft size={17} aria-hidden />
       </Link>
       <div className={styles.headerTitleBlock}>

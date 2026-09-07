@@ -294,4 +294,22 @@ describe('useClipEditorMockState', () => {
     act(() => result.current.zoomOut());
     expect(result.current.zoomLabel).toBe('25%');
   });
+
+  it('타임라인 높이는 화면이 준 상한을 넘지 않는다', () => {
+    const { result } = renderEditor();
+
+    expect(result.current.timelineHeight).toBeNull();
+
+    // 상한 없이 부르면 상수 범위 안에서만 잘린다
+    act(() => result.current.setTimelineHeight(200));
+    expect(result.current.timelineHeight).toBe(200);
+
+    // 화면이 「여기까지」라고 하면 그 값에서 멈춘다 — 미리보기를 밀어내지 않는다
+    act(() => result.current.setTimelineHeight(400, 300));
+    expect(result.current.timelineHeight).toBe(300);
+
+    // null은 기본 높이(트랙 수에 맞춤)로 되돌린다 — 손잡이 더블클릭 경로
+    act(() => result.current.setTimelineHeight(null));
+    expect(result.current.timelineHeight).toBeNull();
+  });
 });

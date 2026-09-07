@@ -382,7 +382,11 @@ export interface ClipEditorMockState {
   toggleTimeline: () => void;
   /** 사용자가 끌어 정한 높이(px). null이면 트랙 수에 맞춘 기본 높이다 */
   timelineHeight: number | null;
-  setTimelineHeight: (px: number | null) => void;
+  /**
+   * 높이를 정한다. `ceiling`은 화면이 잰 상한 — 훅은 레이아웃을 모르니 받아서 넘길 뿐이다.
+   * 안 주면 상수 상한만 쓴다.
+   */
+  setTimelineHeight: (px: number | null, ceiling?: number) => void;
   zoom: number;
   zoomLabel: string;
   zoomIn: () => void;
@@ -745,7 +749,8 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     toggleTimeline: useCallback(() => setTimelineCollapsed((v) => !v), []),
     timelineHeight,
     setTimelineHeight: useCallback(
-      (px: number | null) => setTimelineHeightState(px === null ? null : clampTimelineHeight(px)),
+      (px: number | null, ceiling?: number) =>
+        setTimelineHeightState(px === null ? null : clampTimelineHeight(px, ceiling)),
       [],
     ),
     zoom,

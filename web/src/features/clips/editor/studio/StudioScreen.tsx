@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
 import { TransportBar } from '../TransportBar';
@@ -37,15 +37,90 @@ const KEY_OWNERS: Partial<Record<EditorIntent['kind'], string>> = {
   // Space는 버튼·스위치를 누른다 — 가로채면 키보드로 아무것도 못 누른다.
   // 역할로 가른다: 구간 핸들은 <button role="slider">라 태그로 고르면 같이 걸려,
   // 슬라이더 위에서 Space가 죽는다.
-  togglePlay:
-    'button:not([role]), [role="button"], [role="switch"], [role="tab"], [role="radio"]',
+  togglePlay: 'button:not([role]), [role="button"], [role="switch"], [role="tab"], [role="radio"]',
   // 화살표는 슬라이더가 값을, roving 묶음이 선택을 옮긴다
   seekBy: '[role="slider"], [role="radiogroup"], [role="tablist"]',
 };
 
+/**
+ * 타임라인이 **지금** 더 커질 수 있는 양(px). 음수면 이미 그만큼 넘쳤다는 뜻이다.
+ *
+ * 미리보기 칸에서 신축하는 건 무대(`.stage`) 하나뿐이라, 무대가 최소 높이까지 더 줄 수
+ * 있는 여유가 곧 타임라인의 여유다. 타임라인은 `flex: none`, 본문은 `flex: 1`이라 레인이
+ * 1px 커지면 무대가 정확히 1px 준다(1:1). 이미 넘친 만큼은 여유에서 뺀다 — 안 빼면
+ * 넘친 상태에서 상한이 제자리를 인정해 버린다.
+ *
+ * 레이아웃이 없는 환경(jsdom)이나 표식을 못 찾으면 `Infinity` — 상한 없음으로 둔다.
+ */
+function timelineHeadroom(previewColumn: HTMLElement | null): number {
+  if (previewColumn === null) return Number.POSITIVE_INFINITY;
+  const stage = previewColumn.querySelector<HTMLElement>('[data-preview-stage]');
+  if (stage === null) return Number.POSITIVE_INFINITY;
+  const stageMin = Number.parseFloat(getComputedStyle(stage).minHeight);
+  if (!Number.isFinite(stageMin)) return Number.POSITIVE_INFINITY;
+  const spare = stage.clientHeight - stageMin;
+  const spilled = previewColumn.scrollHeight - previewColumn.clientHeight;
+  return spare - spilled;
+}
+
 export function StudioScreen(options: ClipEditorOptions = {}) {
   const state = useClipEditorMockState(options);
   const { togglePlay, seekBy, markIn, markOut, undo, redo } = state;
+  const previewColumnRef = useRef<HTMLDivElement>(null);
+  const { timelineHeight, timelineCollapsed, setTimelineHeight } = state;
+
+  const headroom = useCallback(() => timelineHeadroom(previewColumnRef.current), []);
+
+  // 창이 낮아지면 끌어둔 높이가 여유를 넘긴다 — 페인트 전에 되돌린다.
+  // 자동 높이(null)는 손대지 않는다: 그건 트랙 수가 정하는 값이라 여기서 px로 굳히면
+  // 화면 배율이 바뀌어도 그대로 남는다. 그 극단은 .timeline의 z-index가 받는다.
+  const fitTimeline = useCallback(() => {
+    // 접혀 있으면 맞출 레인이 없다. 이 조건을 여기서 읽어야 의존성에 들어가고, 그래야
+    // 펼치는 순간 아래 레이아웃 효과가 다시 돌아 페인트 전에 높이를 잡는다.
+    // 관찰만 믿으면 늦다 — RO 콜백은 페인트 직전에 도는데 거기서 잡은 rAF는 다음
+    // 프레임이라, 낡은 높이로 한 프레임이 그려진다 (리뷰 #166 2회차).
+    if (timelineHeight === null || timelineCollapsed) return;
+    const spare = headroom();
+    if (Number.isFinite(spare) && spare < 0) setTimelineHeight(timelineHeight + spare);
+  }, [timelineHeight, timelineCollapsed, headroom, setTimelineHeight]);
+
+  useLayoutEffect(fitTimeline, [fitTimeline]);
+
+  // 관찰 콜백이 늘 최신 fitTimeline을 보게 한다 — 아래 옵저버를 높이가 바뀔 때마다
+  // 다시 붙이지 않기 위해서다(붙였다 떼는 동안의 변화를 놓친다).
+  const fitRef = useRef(fitTimeline);
+  useLayoutEffect(() => {
+    fitRef.current = fitTimeline;
+  }, [fitTimeline]);
+
+  /*
+   * 미리보기 칸의 크기를 바꾸는 모든 경로를 한 문으로 받는다.
+   *
+   * window resize만 듣던 때는 내용 리플로우를 놓쳤다 (리뷰 #166) — 트랜스포트는
+   * flex-wrap이고 "/ 구간 …" 라벨이 구간 편집마다 길어지는데, 줄바꿈이 나도 창 크기는
+   * 그대로라 resize 이벤트가 없었다.
+   *
+   * 접기 토글은 여기 말고 위 레이아웃 효과가 잡는다 — 관찰로 받으면 rAF 한 프레임이
+   * 늦어 낡은 높이가 한 번 그려진다. 이쪽은 그 뒤를 받치는 그물이다.
+   *
+   * 칸 자신과 자식을 함께 본다. 줄바꿈은 칸의 바깥 높이를 안 바꾸고 자식 높이만 바꾼다.
+   */
+  useEffect(() => {
+    const column = previewColumnRef.current;
+    if (column === null || typeof ResizeObserver === 'undefined') return;
+    let raf = 0;
+    const observer = new ResizeObserver(() => {
+      // 콜백 안에서 곧바로 상태를 바꾸면 같은 프레임에 다시 관찰돼 루프 경고가 난다.
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => fitRef.current());
+    });
+    observer.observe(column);
+    for (const child of Array.from(column.children)) observer.observe(child);
+    return () => {
+      cancelAnimationFrame(raf);
+      observer.disconnect();
+    };
+  }, []);
 
   useEffect(() => {
     function onKeyDown(event: globalThis.KeyboardEvent) {
@@ -95,12 +170,12 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
           onTogglePanelSide={state.togglePanelSide}
         />
         <ToolPanel state={state} />
-        <div className={styles.previewColumn}>
+        <div className={styles.previewColumn} ref={previewColumnRef}>
           <PreviewCanvas state={state} />
           <TransportBar state={state} showRangeLength />
         </div>
       </main>
-      <MultitrackTimeline state={state} />
+      <MultitrackTimeline state={state} headroom={headroom} />
     </div>
   );
 }

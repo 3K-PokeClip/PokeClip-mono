@@ -31,7 +31,9 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
         <span className={styles.previewHint}>영역 드래그 = 크롭 위치 · 더블클릭 = 소스 교체</span>
       </div>
 
-      <div className={styles.stage}>
+      {/* data-preview-stage: 타임라인 높이 상한을 재는 표식. 미리보기 칸에서 신축하는 건
+          이 무대뿐이라, 여기 남은 여유가 곧 타임라인이 더 커질 수 있는 양이다 (POK-237). */}
+      <div className={styles.stage} data-preview-stage>
         <div className={styles.frame} data-layout={state.layout}>
           {panes.map((source, index) => {
             const isTop = split && index === 0;
