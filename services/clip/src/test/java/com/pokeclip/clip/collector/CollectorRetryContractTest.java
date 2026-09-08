@@ -141,6 +141,43 @@ class CollectorRetryContractTest extends IntegrationTestSupport {
     }
 
     /**
+     * 🔴 <b>위 시험의 자기검사다 — 가짜 출발지가 정말 리다이렉트를 만들고 있는가.</b>
+     *
+     * <p>도장 감사(2026-09-08)가 짚었다: {@link FakeCollector#redirectTo}가 {@code Location}을
+     * 아예 안 실어도 <b>위 다섯 갈래가 전부 초록</b>이다. 따라갈 것이 없으면 「안 따라갔다」는
+     * 저절로 참이 되고, {@code 출발지.callCount()==1} 그물은 <b>출발지 쪽만</b> 덮는다.
+     * <b>「그물이 이름보다 좁다」의 모양</b>이다.
+     *
+     * <p>그래서 <b>반대 방향</b>을 잰다 — 리다이렉트를 따라가는 스택({@code detect()}가 뽑는 HC5,
+     * 운영이 일부러 끈 바로 그 기본값)으로 같은 출발지를 쏘면 <b>도착지가 실제로 불린다.</b>
+     * 이 갈래가 초록인 동안에만 위 다섯의 「안 따라갔다」가 뜻을 갖는다.
+     *
+     * <p><b>쌍둥이 기록</b>: {@code AuthRetryContractTest}·{@code FakeAuth}가 같은 모양이고
+     * 저장소 전체에 {@code Location} 실림을 단언하는 시험이 <b>이것 말고 0개</b>다.
+     * 이 카드는 auth 쪽을 안 건드린다 — 남의 갈래를 이 PR에 태우지 않는다.
+     */
+    @Test
+    void 가짜_출발지는_정말_리다이렉트를_만든다() {
+        try (FakeCollector 도착지 = FakeCollector.start(); FakeCollector 출발지 = FakeCollector.start()) {
+            도착지.respondWith(200, "{\"items\":[]}");
+            출발지.redirectTo(302, 도착지.baseUrl() + 문);
+
+            CollectorClientProperties properties = new CollectorClientProperties(
+                    출발지.baseUrl(), Duration.ofSeconds(2), Duration.ofSeconds(3));
+            RestClient 따라가는_클라이언트 = RestClient.builder()
+                    .requestFactory(ClientHttpRequestFactoryBuilder.detect().build())
+                    .baseUrl(출발지.baseUrl())
+                    .build();
+            new CollectorClient(따라가는_클라이언트, properties,
+                    new InternalApiProperties(INTERNAL_TOKEN)).get(문, Map.of());
+
+            assertThat(도착지.callCount())
+                    .as("가짜 출발지가 Location을 안 실었다 — 위 다섯 갈래가 아무것도 안 재고 있다")
+                    .isEqualTo(1);
+        }
+    }
+
+    /**
      * 🔴 <b>운영 배선을 그대로 태운다.</b> {@link CollectorHttpConfig}의 빈 메서드를 직접 부르되
      * <b>주입받은 빌더 둘</b>을 넘긴다 — 여기서 {@code ClientHttpRequestFactoryBuilder.detect()}로
      * 손수 만들면 이 클래스가 <b>끄지 않아도 초록</b>이 된다(그것이 정확히 이 클래스가 잡으려는 실수다).
