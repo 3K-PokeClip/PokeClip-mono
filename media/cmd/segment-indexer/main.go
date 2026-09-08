@@ -478,7 +478,8 @@ func loop(ctx context.Context, d loopDeps) error {
 			d.ix.SetAdopter(r.w)
 			d.watcherDegraded = false
 			d.log.Info("watcher_recovered", "note", "재장착 완료 — 되돌림(H4·H5)이 실제 워처로 복귀한다")
-			d.log.Info("watcher_degraded", "value", 0)
+			// 게이지 clear 는 set(value=1, Error)과 같은 등급이어야 LOG_LEVEL 필터를 같이 넘는다.
+			d.log.Error("watcher_degraded", "value", 0)
 
 		// 수집 워커의 결과가 도착했다. 처리(스트림 루프)는 여기 — 즉 loop 고루틴에서 돈다(D10).
 		case res := <-d.ix.CollectDone():
