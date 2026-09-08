@@ -17,6 +17,9 @@ package com.pokeclip.chat.collector.chzzk;
  * {@code messageTime} · {@code eventSentAt}) <b>{@code userRoleCode}가 그 안에 없다.</b>
  * 반대로 {@code eventSentAt}은 문서 표에 없는데 온다.
  *
+ * <p>🔴 <b>표본의 한계를 같이 읽어라</b> — 그 70건을 친 사람은 <b>일반 시청자 하나와
+ * 스트리머 본인뿐</b>이다. 즉 <b>관리자 계정이 친 채팅은 표본에 아예 없다.</b>
+ * 확인된 것은 「이 두 종류에게는 그 칸이 안 온다」이고, <b>「어떤 역할에도 안 온다」는 안 쟀다.</b>
  * <p><b>코드는 옳다 — 고치지 마라.</b> 없으면 null로 두게 이미 짜여 있고 영향도 없다
  * (화면이 역할을 안 쓴다). <b>틀린 것은 전제였다.</b> 치지직이 나중에 보내기 시작하면
  * 이 칸은 <b>저절로</b> 채워진다 — 그때를 위해 뽑는 코드를 지우지 않는다.
@@ -37,7 +40,8 @@ package com.pokeclip.chat.collector.chzzk;
  * @param userRole 치지직 userRoleCode(streamer·common_user·streaming_channel_manager·
  *                 streaming_chat_manager). 없으면 null.
  *                 <b>🔴 공식 문서 표에는 있으나 2026-09-08 실측에서 실물 프레임에 없었다</b> —
- *                 위 클래스 주석 참고. 그래서 이 칸은 사실상 늘 null이다
+ *                 위 클래스 주석 참고(<b>표본에 관리자 계정이 없다</b>). 관측한 범위에서는
+ *                 늘 null이었다
  */
 public record ChatMessage(String channelId, String senderChannelId,
                           String content, long messageTimeMillis, String raw,
