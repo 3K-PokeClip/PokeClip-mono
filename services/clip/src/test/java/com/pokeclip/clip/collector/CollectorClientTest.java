@@ -8,6 +8,8 @@ import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
@@ -75,6 +77,43 @@ class CollectorClientTest {
         assertThat(사백.body())
                 .as("본문을 우리가 다시 쓰면 프론트가 읽는 사유 낱말이 사라진다")
                 .isEqualTo("{\"error\":\"inverted_window\"}");
+    }
+
+    /**
+     * 🔴 <b>통과하는 4xx는 400 하나다.</b> 나머지는 「수집기가 아프다」로 접는다 — 수집기가 실제로
+     * 내는 4xx가 셋인데({@code QueryErrors}의 400 · {@code InternalTokenFilter}의 401 ·
+     * <b>경로가 없을 때의 스프링 기본 404</b>) 뒤 둘은 clip의 계약에서 <b>다른 뜻</b>이다.
+     *
+     * <ul>
+     *   <li><b>401</b> — clip에서는 「사용자 토큰 만료」다({@code JumpCardExceptionHandler}).
+     *       수집기의 401은 <b>내부 토큰</b> 불일치·빈 토큰이라 사용자가 못 고치는데, 화면이
+     *       재로그인을 시키고 다시 401을 받는다
+     *   <li>🔴 <b>404</b> — clip에서는 「없는 방송·자격 없음」이다. 수집기의 404는
+     *       <b>롤링 배포에서 반드시 지나간다</b>(clip이 먼저 뜨고 수집기가 아직 옛 이미지인 구간).
+     *       그때 <b>실재하는 자기 방송</b>에 「없는 방송입니다」가 뜬다 — 유실보다 나쁘다,
+     *       화면이 그럴듯해서 아무도 안 본다
+     * </ul>
+     *
+     * <p>403·410·429는 <b>지금 수집기에 그 코드를 내는 자리가 없다</b>(전수: 403을 만드는 자리 0건,
+     * 창구가 GET 하나뿐이라 405도 없다). 그래도 같이 재는 것은 규칙이 「400 <b>말고는</b>」이기
+     * 때문이다 — 코드를 하나씩 열거하는 구현으로 좁혀지면 나중에 느는 코드가 조용히 통과한다.
+     *
+     * <p>본문에 {@code path}를 실어 두는 것은 스프링 기본 404 본문을 흉내 낸 것이다
+     * ({@code server.error.include-path} 기본값이 {@code ALWAYS}이고 수집기 yml에 재정의가 없다).
+     * 접는 처방이 <b>수집기 내부 경로가 브라우저로 나가는 것</b>도 같이 닫는다.
+     *
+     * <p>양성 대조는 {@link #이백과_사백은_그대로_돌려준다()}이다 — 없으면 「늘 unavailable」인
+     * 구현에도 이 갈래가 초록이다.
+     */
+    @ParameterizedTest(name = "수집기 상태={0}")
+    @ValueSource(ints = {401, 403, 404, 410, 429})
+    void 사백_말고는_전부_unavailable이다(int 상태) {
+        collector.respondWith(문, 상태,
+                "{\"timestamp\":\"…\",\"path\":\"/internal/streams/s-1/chat-messages\"}");
+
+        assertThatThrownBy(() -> client(collector.baseUrl()).get(문, Map.of()))
+                .as("수집기의 %d가 상태·본문 그대로 프론트까지 간다", 상태)
+                .isInstanceOf(CollectorErrors.CollectorUnavailableException.class);
     }
 
     @Test

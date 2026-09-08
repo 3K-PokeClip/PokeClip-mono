@@ -100,6 +100,48 @@ class BroadcastChatControllerTest extends IntegrationTestSupport {
     }
 
     /**
+     * 🔴 <b>통과하는 4xx는 400 하나다 — 나머지는 「수집기가 아프다」로 접는다.</b>
+     * 위 {@link #수집기의_사백은_사유까지_그대로다()}가 이 갈래의 양성 대조다: 400은 그대로
+     * 나가야 하고, 그것이 없으면 「전부 503」인 구현에도 이 시험이 초록이다.
+     *
+     * <p>수집기의 401·404가 clip의 <b>같은 코드를 다른 뜻으로</b> 쓰기 때문이다 —
+     * clip에서 401은 「사용자 토큰 만료」이고 404는 「없는 방송·자격 없음」이다.
+     *
+     * <ul>
+     *   <li><b>401</b>은 <b>내부 토큰</b> 불일치라 사용자가 못 고치는데 화면은 재로그인을
+     *       시키고, 다시 401을 받는다
+     *   <li>🔴 <b>404</b>는 <b>롤링 배포에서 반드시 지나간다</b>(clip이 먼저 뜨고 수집기가 아직
+     *       옛 이미지인 구간). 그때 <b>실재하는 자기 방송</b>에 「없는 방송입니다」가 뜬다 —
+     *       유실보다 나쁘다, 화면이 그럴듯해서 아무도 안 본다
+     * </ul>
+     *
+     * <p>본문의 {@code path}는 스프링 기본 404 본문을 흉내 낸 것이다
+     * ({@code server.error.include-path} 기본 {@code ALWAYS} · 수집기 yml에 재정의 0줄).
+     * 접는 처방이 <b>수집기 내부 경로가 브라우저로 나가는 것</b>도 같이 닫는다.
+     *
+     * <p>낱말이 {@code collector_unavailable}인지까지 재는 이유는
+     * {@link #auth가_죽으면_authorization_수집기가_죽으면_collector로_갈린다(String)}과 같다 —
+     * 503 둘을 뭉치면 화면 안내가 갈리지 않는다.
+     */
+    @ParameterizedTest(name = "수집기 상태={0}")
+    @ValueSource(ints = {401, 403, 404, 410, 429})
+    void 수집기의_사백_말고는_전부_collector_unavailable이다(int 수집기_상태) throws Exception {
+        볼_수_있다("OWNER");
+        COLLECTOR.respondWith("/internal/streams/" + 내_방송 + "/chat-messages", 수집기_상태,
+                "{\"timestamp\":\"…\",\"path\":\"/internal/streams/" + 내_방송 + "/chat-messages\"}");
+
+        HttpResponse<String> 응답 = 부른다(내_방송, "chat-messages");
+
+        assertThat(응답.statusCode())
+                .as("수집기의 %d가 그대로 브라우저까지 갔다 — 본문=%s", 수집기_상태, 응답.body())
+                .isEqualTo(503);
+        assertThat(응답.body()).contains("collector_unavailable");
+        assertThat(응답.body())
+                .as("수집기 본문이 그대로 나갔다 — 스프링 기본 404에는 내부 경로가 실린다")
+                .doesNotContain("path");
+    }
+
+    /**
      * 🔴 <b>이 카드가 막는 것: 로그인만 하면 남의 방송 채팅을 읽는 것.</b> 「자격 없음」과
      * 「없는 방송」의 본문이 갈리면 방송 번호를 넣어 보는 것만으로 실재를 알 수 있다.
      *
