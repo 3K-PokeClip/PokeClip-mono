@@ -43,6 +43,13 @@ public final class ChatEventDecoder {
         // 「방어는 있는데 그물이 없는」 코드가 된다. 라이브러리가 바뀌면
         // ChatEventDecoderTest의 「닉네임과_역할을_뽑고_없으면_null이다」와
         // 「닉네임이_JSON_null이어도_null이다」 둘이 잡는다 — 그것이 그물이다.
+        //
+        // 역할은 「없으면」이 아니라 「사실상 늘」 null이다:
+        // 치지직이 userRoleCode를 안 보낸다(2026-09-08 실기동 — 실방송 70건
+        // 전부 NULL이라 원문 프레임을 직접 받아 봤고, CHAT 봉투 칸 여덟에
+        // 그 이름이 없었다. 공식 문서 표에는 있다).
+        // 아래 userRoleCode 줄을 지우지 마라 — 치지직이 보내기 시작하면
+        // 저절로 채워지고, 지워 두면 그날 아무도 모른다. 사정 전문은 ChatMessage 주석.
         JsonNode profile = inner.path("profile");
         return new ChatMessage(
                 inner.path("channelId").asString(""),

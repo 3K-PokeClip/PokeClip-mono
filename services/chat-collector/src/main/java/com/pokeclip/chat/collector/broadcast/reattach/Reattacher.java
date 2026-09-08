@@ -80,6 +80,23 @@ import java.util.function.Supplier;
  * <b>큐를 두드리는 것 자체를 쉰다.</b> <b>알림은 큐에 그대로 남으므로 유실이 아니라 지연이다</b>
  * (그리고 그 지연은 health의 {@code letterStalled}가 2분 뒤 드러낸다).
  * 반대로 재부착이 밀리는 것은 {@code chat.reattach.deferred}가 남긴다.
+ *
+ * <h2>🔴 미해결 — 이미 켜진 방송에 뒤늦게 붙어도 채팅이 오는지 <b>안 쟀다</b></h2>
+ *
+ * 2026-09-08 실기동에서 <b>세션이 방송보다 먼저 붙으면 8분 동안 한 건도 안 왔다</b>
+ * (우리 쪽 지표는 전부 정상. 사정 전문과 재현 절차는 {@link
+ * com.pokeclip.chat.collector.session.StreamSession} 클래스 주석).
+ *
+ * <p><b>이 부품이 서는 자리가 정확히 그 반대편이다</b> — 재부착의 존재 이유는 <b>이미 켜진</b>
+ * 방송에 뒤늦게 붙는 것이다. 그런데 그 갈래를 <b>아직 한 번도 안 밟았다</b>: 실기동도
+ * 재부착으로 붙였지만 <b>그때는 방송 전이었다.</b> 즉 이 경로가 안전하다는 근거가 없고,
+ * <b>안전하지 않다는 근거도 없다.</b>
+ *
+ * <p><b>「없다」가 아니라 「안 쟀다」로 적는 이유</b>는 증상이 조용해서다 — 그 갈래가 열려 있어도
+ * <b>실패로 보이지 않는다</b>: {@code chat.reattach.attach_failed}가 안 나오고
+ * {@code chat.reattach.swept}의 {@code submitted}가 정상으로 오르며 세션도 살아 있는데
+ * 채팅만 0건이다. 목록·상태·health 어디에도 차이가 안 난다.
+ * <b>재는 방법은 그 클래스 주석의 「다시 재려면」에 적어 뒀다.</b>
  */
 public class Reattacher {
 
