@@ -106,3 +106,54 @@ describe('Side — 방송', () => {
     );
   });
 });
+
+describe('Side — 클립', () => {
+  it('보관함만 링크이고 /clips/library에서 활성이다 — 템플릿 관리·업로드 상태·승인 대기함은 비활성', () => {
+    nav.pathname = '/clips/library';
+    renderWithProviders(<Side menu="clips" />);
+
+    const links = screen.getAllByRole('link');
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute('href', '/clips/library');
+    expect(links[0]).toHaveAttribute('aria-current', 'page');
+
+    // 나머지 3개는 비활성 — 템플릿 관리(1h)·업로드 상태(1i)·승인 대기함(POK-236)
+    for (const label of ['템플릿 관리', '업로드 상태', '승인 대기함']) {
+      expect(screen.getByText(label).closest('[aria-disabled="true"]')).not.toBeNull();
+    }
+  });
+
+  it('두 그룹을 이름 붙은 nav로 낸다 — 하이라이트 · 클립 / 업로드 · 승인함', () => {
+    nav.pathname = '/clips/library';
+    renderWithProviders(<Side menu="clips" />);
+
+    expect(screen.getByRole('navigation', { name: '하이라이트 · 클립' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: '업로드 · 승인함' })).toBeInTheDocument();
+  });
+
+  it('접힘이 클립 그룹에도 이어진다 — 방송에서 접으면 클립에서도 접혀 있다', async () => {
+    const user = userEvent.setup();
+    nav.pathname = '/broadcast/livenow';
+    const broadcast = renderWithProviders(<Side menu="broadcast" />);
+    await user.click(screen.getByRole('button', { name: '사이드바 접기' }));
+    broadcast.unmount();
+
+    nav.pathname = '/clips/library';
+    renderWithProviders(<Side menu="clips" />);
+    expect(screen.getByRole('button', { name: '사이드바 펼치기' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+  });
+
+  it('badges로 준 수가 항목 옆에 붙는다 — 승인 대기함 수는 그 화면 티켓이 채울 자리', () => {
+    nav.pathname = '/clips/library';
+    renderWithProviders(<Side menu="clips" badges={{ approvals: 3 }} />);
+
+    const approvals = screen.getByText('승인 대기함').closest('[aria-disabled="true"]');
+    expect(approvals).not.toBeNull();
+    expect(approvals).toHaveTextContent('승인 대기함3');
+    // 값을 안 준 항목에는 배지가 없다
+    expect(screen.getByText('보관함').closest('a')).toHaveTextContent(/^보관함$/);
+  });
+});

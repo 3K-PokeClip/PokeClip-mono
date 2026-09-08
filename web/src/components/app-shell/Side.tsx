@@ -5,13 +5,17 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   Bell,
+  ClipboardCheck,
   CreditCard,
+  FolderOpen,
   HelpCircle,
   History,
+  LayoutTemplate,
   Link2,
   Menu,
   Plug,
   Radio,
+  Upload,
   User,
   Users,
   type LucideIcon,
@@ -25,8 +29,27 @@ import styles from './Side.module.css';
 // 독 그룹별 좌측 사이드바 (디자인 Side). 그룹이 달라도 껍데기는 같고 메뉴만 갈리므로
 // 컴포넌트 하나가 menu prop으로 메뉴를 고른다 — 그룹마다 복제하면 접기 동작·치수가 곧 어긋난다.
 
+/**
+ * 사이드바 항목 key. 유니온으로 두는 이유는 배지 prop의 키를 이 목록으로 좁히기 위해서다 —
+ * `string`이면 오타가 타입을 통과해 배지가 조용히 안 그려진다(Dock의 DockHref와 같은 방식).
+ */
+type SideItemKey =
+  | 'livenow'
+  | 'vod'
+  | 'library'
+  | 'template'
+  | 'upstatus'
+  | 'approvals'
+  | 'link'
+  | 'editors'
+  | 'plugin'
+  | 'noti'
+  | 'billing'
+  | 'account'
+  | 'help';
+
 interface Item {
-  key: string;
+  key: SideItemKey;
   label: string;
   Icon: LucideIcon;
   href?: string; // 없으면 비활성 — 각 하위 티켓에서 라우트가 생기면 href를 추가한다
@@ -37,8 +60,15 @@ interface Group {
   items: Item[];
 }
 
-/** 독 그룹 key. 라우트 세그먼트(`/broadcast`·`/settings`)와 같은 이름을 쓴다. */
-export type SideMenu = 'broadcast' | 'settings';
+/** 독 그룹 key. 라우트 세그먼트(`/broadcast`·`/clips`·`/settings`)와 같은 이름을 쓴다. */
+export type SideMenu = 'broadcast' | 'clips' | 'settings';
+
+/**
+ * 항목 key → 배지 수. Dock의 DockBadges와 같은 방식 — MENUS는 모듈 상수라 값을 prop으로
+ * 받아야 그룹 레이아웃이 훅 값을 흘려 넣을 수 있다. 승인 대기함 수는 그 화면 티켓(POK-236)이
+ * 채운다 — 여기서는 자리만 연다.
+ */
+export type SideBadges = Partial<Record<SideItemKey, number>>;
 
 // IA v5.7. 라우팅된 화면만 href를 갖는다 — 나머지는 별도 티켓.
 const MENUS: Record<SideMenu, Group[]> = {
@@ -50,6 +80,24 @@ const MENUS: Record<SideMenu, Group[]> = {
       items: [
         { key: 'livenow', label: '라이브 대시보드', Icon: Radio, href: '/broadcast/livenow' },
         { key: 'vod', label: '지난 방송', Icon: History, href: '/broadcast/vod' },
+      ],
+    },
+  ],
+  // 「클립」 그룹(POK-235). 보관함(1g)만 화면이 있다 — 템플릿 관리(1h)는 MVP 밖,
+  // 업로드 상태(1i)는 시안 미확정, 승인 대기함(1j)은 POK-236이 href·배지를 붙인다.
+  clips: [
+    {
+      title: '하이라이트 · 클립',
+      items: [
+        { key: 'library', label: '보관함', Icon: FolderOpen, href: '/clips/library' },
+        { key: 'template', label: '템플릿 관리', Icon: LayoutTemplate },
+      ],
+    },
+    {
+      title: '업로드 · 승인함',
+      items: [
+        { key: 'upstatus', label: '업로드 상태', Icon: Upload },
+        { key: 'approvals', label: '승인 대기함', Icon: ClipboardCheck },
       ],
     },
   ],
@@ -74,7 +122,7 @@ const MENUS: Record<SideMenu, Group[]> = {
   ],
 };
 
-export function Side({ menu }: { menu: SideMenu }) {
+export function Side({ menu, badges }: { menu: SideMenu; badges?: SideBadges }) {
   const pathname = usePathname();
   // 로그인한 사람을 그대로 보인다. 하드코딩이던 시절엔 계정 화면에서 사진·이름을 바꿔도
   // 바로 옆 사이드바만 남처럼 남아, 「헤더·사이드바에 바로 반영」이라는 토스트가 거짓이 됐다.
@@ -115,11 +163,13 @@ export function Side({ menu }: { menu: SideMenu }) {
           <div className={styles.groupTitle}>{group.title}</div>
           <nav className={styles.nav} aria-label={group.title}>
             {group.items.map(({ key, label, Icon, href }) => {
+              const badge = badges?.[key];
               const content = (
                 <>
                   {/* 크기는 CSS(.itemIcon)가 셸 배율로 정한다 — size prop은 덮어써져 무의미 */}
                   <Icon aria-hidden className={styles.itemIcon} />
                   <span className={styles.label}>{label}</span>
+                  {badge ? <span className={styles.badge}>{badge}</span> : null}
                 </>
               );
               if (!href) {

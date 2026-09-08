@@ -2,8 +2,8 @@
 
 **스트리머의 실시간 방송에서 하이라이트를 자동으로 찾아 클립으로 만들어 주는 SaaS.**
 
-PokeClip 팀 모노레포. 서버·플러그인·웹·워커가 한 저장소에 있고, CI는 바뀐 것만 검사한다(web은 워크플로 경로 필터, media는 잡 레벨 변경 감지).
-`main`과 `develop`은 `media-gate` 체크 하나를 필수로 요구한다 — media 검사가 빨간불이면 PR 머지와 직접 push가 막힌다(관리자 우회는 열려 있다).
+PokeClip 팀 모노레포. 서버·플러그인·웹·워커가 한 저장소에 있고, CI는 바뀐 것만 검사한다(web·media 모두 워크플로 경로 필터 — ADR-013 모노레포 원칙).
+`main`은 `main-source-gate` 체크 하나를 필수로 요구한다(main 대상 PR의 출처가 `develop`·`hotfix/*`인지만 본다). `develop`에는 필수 체크가 없다. media 검사는 필수 체크가 아니며 media 영역이 바뀐 PR에서만 돈다(ADR-0004).
 
 ---
 

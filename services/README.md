@@ -133,13 +133,26 @@ set -a && . ../.env && set +a
 | `chat-collector` | `./gradlew :chat-collector:bootRun` | http://localhost:8083/actuator/health |
 | `chat-detector` | `./gradlew :chat-detector:bootRun` | http://localhost:8084/actuator/health |
 
-**`auth`가 읽는 환경변수는 스물이고, 세 갈래로 나뉜다. 갈래마다 「없으면 어떻게 되나」가 다르다.**
+**`auth`가 부팅 검증·배포 명부로 보는 환경변수는 스물하나다.** 스물은 세 갈래로 나뉘고 갈래마다 「없으면 어떻게 되나」가 다르다.
+나머지 하나(`FORWARD_HEADERS_STRATEGY`)는 기본값이 있는 선택 변수라 표 아래에 따로 적는다.
+이 셈에 안 드는 셋이 더 있다: `DB_HOST`·`DB_PORT`(기본 `localhost`·`5432`, `.env`에 없어 기본값을 남겼다)·`AWS_REGION`(기본 `ap-northeast-2`).
+셋 다 없어도 뜨고 검사 대상도 아니라 세지 않는다.
+🔴 **`GOOGLE_REDIRECT_URI`도 안 든다.** yml에 기본값(`http://localhost:3000/auth/callback`)이 있어 부팅 검증에는 안 걸리는데,
+compose는 `${GOOGLE_REDIRECT_URI:?}`로 **없으면 컨테이너가 아예 안 뜨게** 걸어 뒀고 `.env.dev.example`에도 있다.
+즉 로컬 `bootRun`에는 없어도 되고 dev 배포에는 반드시 있어야 해서, 「앱 시크릿 열둘」에도 「안 드는 셋」에도 자리가 없다.
+**yml 실물은 스물다섯이다**(위 스물하나 + 안 드는 셋 + 이것).
 
 | 갈래 | 변수 | 없으면 | 어디서 얻나 |
 |---|---|---|---|
 | **앱 시크릿 열둘** | `JWT_SECRET` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` · `CORS_ALLOWED_ORIGINS` · `SECRET_STORE_KEY`(base64 32바이트) · `INTERNAL_API_TOKEN` · `CHZZK_CLIENT_ID` · `CHZZK_CLIENT_SECRET` · `CHZZK_REDIRECT_URI` · `YOUTUBE_CLIENT_ID` · `YOUTUBE_CLIENT_SECRET` · `YOUTUBE_REDIRECT_URI` | **부팅 실패** | **`.env.example`에 없다** — public 저장소라 예시 값도 두지 않는다. 각자 받아서 넣는다 |
 | **DB 접속값 셋** | `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | **부팅 실패**(DB가 접속을 거절한다) | `.env`에 있다. 위 실행 절차의 `set -a && . ../.env` 줄이 싣는다 |
 | **사진 창고 다섯**(POK-207) | `PROFILE_PHOTO_S3_BUCKET` · `PROFILE_PHOTO_TOKEN_SECRET` · `PROFILE_PHOTO_BASE_URL` · `PROFILE_PHOTO_S3_ENDPOINT` · `PROFILE_PHOTO_S3_FORCE_PATH_STYLE` | **그냥 뜬다. 사진 기능만 꺼진다** | 창고는 1번이 판다. 로컬은 가짜 저장소(LocalStack)를 띄워 쓴다 |
+
+**스물한 번째: `FORWARD_HEADERS_STRATEGY`(POK-89, 선택).** 없으면 `none`(프록시 헤더를 안 믿는다). `native`면
+사설망·루프백 소켓에서 온 요청의 `X-Forwarded-For`를 요청자 IP로 채택한다(아래 「운영 전 잔불 정리」 절).
+🔴 운영 ECS 태스크 정의에는 `native`를 반드시 넣는다(명시 `none`이 Boot의 ECS 자동 감지를 끈다). 비우지 않는다
+(빈 값은 `none`이 아니라 Boot 유추다). 둘 다 그 절에 있다.
+기본값이 있어 `DeploymentEnvVarsTest`의 「빈 기본값」 정규식엔 안 걸리고 **기본값 있는 변수 명부**가 잡는다.
 
 **🔴 셋째 갈래는 「조건부 필수」다.** 나머지 둘과 성격이 다르니 규칙을 정확히 적어 둔다.
 
@@ -157,8 +170,9 @@ set -a && . ../.env && set +a
 켜졌으면 `auth.profile.photo.enabled region=… endpointOverride=… forcePathStyle=…`.
 창고 이름과 서명키는 안 찍는다.
 
-🔴 **`PROFILE_PHOTO_S3_FORCE_PATH_STYLE`은 `DeploymentEnvVarsTest`가 못 잡는다.**
-기본값이 `${…:false}`라 「빈 기본값」 정규식에 안 걸린다. **손으로 챙긴다.**
+🔴 **`PROFILE_PHOTO_S3_FORCE_PATH_STYLE`은 「빈 기본값」 정규식에 안 걸린다.** 기본값이 `${…:false}`라서다.
+지금은 `DeploymentEnvVarsTest`의 **기본값 있는 변수 명부**가 잡는다(POK-89, `FORWARD_HEADERS_STRATEGY`와 같은 명부).
+**명부에서 이름을 빼면 초록이니 새 변수는 명부에 넣는다.**
 정규식을 넓히지 않는 이유는 `AWS_REGION`·`DB_HOST`처럼 일부러 기본값을 둔 것들이
 필수로 잡혀 예외 목록이 따라오기 때문이다.
 
@@ -594,7 +608,7 @@ terminationGracePeriodSeconds: 20 # k8s (infra/ 는 1번 폴더라 여기서 못
 
 **셋에는 기본값이 없다**(POK-161). 커밋되는 파일에 비밀번호 기본값을 두면 **public
 저장소에 공개된 값으로 DB에 붙는 창**이 열리기 때문이다. 실행에 필요한 것은 위
-「환경변수 스물」 표를 본다.
+「환경변수 스물하나」 표를 본다.
 
 **이 방식을 다른 시크릿에 확대하지 않는다.** 여기가 통하는 것은 서버가 실제로 접속을
 시도하는 값이라서다 — 값이 없으면 리터럴 `${POSTGRES_PASSWORD}`가 그대로 비밀번호가
@@ -624,7 +638,7 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 서버마다 자기 Flyway를 돌리고 **이력 테이블을 나눈다**(`flyway_schema_history_auth` ·
 `..._clip` · `..._chat` · `..._chat_detector`). 기본 이름을 쓰면 나중에 뜬 쪽이 남의 이력을 자기 것으로 읽고 부팅에 실패한다.
 마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat-collector · `V4xx` chat-detector.
-지금까지 나간 것은 auth의 `V101`~`V107` · clip의 `V201`(`broadcasts`·`broadcast_events`)과
+지금까지 나간 것은 auth의 `V101`~`V112`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
 **`V205`(방송 중 부분 색인, POK-218)** · chat-collector의 `V301`(`chat_messages`)~**`V308`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
@@ -684,6 +698,7 @@ chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 | 편집자 위임 | 이메일 초대 · 초대함 수락/거절 · 보낸 초대 취소 · 위임 조회 · 양방향 해제 (POK-57) |
 | 회원정보 수정 | 표시 이름(30자, 코드포인트로 센다) · 프로필 사진 업로드/내보내기 · 죽어 있던 `updated_at` 갱신 (POK-207) |
 | **회원 탈퇴** | **개인정보 익명화 · 발급물 여섯 회수(갱신 토큰·스트림키·페어링 코드·연동 둘·편집자 관계) · 사진 파일 삭제 · 남은 접근 표 전면 차단 (POK-171)** |
+| **운영 전 청소·프록시 IP** | **보관 기한이 지난 행을 10분마다 표 셋에서 지운다(갱신 토큰 회수 뒤 14일 · 교환 시도 기록 1시간 · 페어링 코드 만료 뒤 1시간) · 프록시 뒤에서만 `X-Forwarded-For`를 요청자 IP로 채택(기본은 안 믿음) (POK-89)** |
 | 운영 | 이벤트 로깅 · 요청 상관 ID · CORS(`GET`·`POST`·`PUT`·`PATCH`·`DELETE`) · 구글 호출 타임아웃 |
 
 표는 열이다 — `users`·`refresh_tokens`(V101·V102) ·
@@ -693,6 +708,7 @@ chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 **`V110`·`V111`은 표를 만들지 않는다** — `V110`이 `users`에 사진 칸 둘(`profile_photo_key`·
 `profile_photo_updated_at`)을, `V111`이 `deleted_at` 한 칸과 **그 사진 칸 둘이 반쪽만 차는 것을 막는
 CHECK 제약**을 더한다(POK-171).
+**`V112`도 표를 만들지 않는다.** 청소 조건이 탈 인덱스 넷 + 페어링 표 둘의 주석 갱신(POK-89).
 
 🔴 **`PATCH`·`PUT`은 POK-207이 CORS 허용 목록에 넣은 것이다.** 없으면 화면의 「저장」이
 preflight에서 막혀 **창구는 멀쩡한데 브라우저만 못 부른다.** 자리는 `web-support/CorsConfig` 하나다.
@@ -2246,8 +2262,9 @@ clip이 「이 사람이 이 스트리머의 방송을 봐도 되나」를 물�
 그 표에는 **회원을 가리키는 칸이 하나도 없고**, 교환 창구가 로그인을 요구하지 않아
 **행을 만든 쪽이 회원인지도 서버가 모른다.** 탈퇴가 「이 회원 몫」을 고를 열쇠 자체가 존재하지 않는다.
 그 값은 소금 없는 SHA-256이라 IPv4 주소는 전수 대입으로 되돌릴 수 있다.
-**이 자리는 탈퇴가 아니라 청소 작업과 서버 측 pepper로 갚는다 — 운영 전 필수다.**
-🔴 **탈퇴 기능이 생겼다고 그 항목이 닫힌 것이 아니다.**
+**청소가 1시간 뒤 지운다(POK-89, 아래 「운영 전 잔불 정리」 절).** pepper는 안 넣었다. 보관이 1시간이라
+복원 위험 창이 그만큼이다.
+🔴 **탈퇴 기능이 생겼다고 그 항목이 닫힌 것이 아니다.** 닫은 것은 청소다.
 
 **② 두 연동 표의 채널 이름·채널 번호는 남는다.** 탈퇴는 `chzzk_channel_links`·`youtube_channel_links`의
 행을 **닫기만** 하고(`revoked_at`·`revoke_reason`) `channel_name`·`channel_id`는 그대로 둔다(재현 확인).
@@ -2302,7 +2319,7 @@ clip이 「이 사람이 이 스트리머의 방송을 봐도 되나」를 물�
 **되돌리는 수단은 만들지 않았다** — 탈퇴 유예·복구·탈퇴 이력 표가 전부 비목표다.
 익명화된 회원 행 자체가 이력이고, 그 행은 영원히 남는다.
 
-**환경변수는 스물 그대로다** — 이 카드가 더하는 것이 없다. 새 표도 없다(`V111`은 칸 하나 + 제약 하나).
+**환경변수는 스물 그대로였다.** 이 카드가 더하는 것이 없다(지금은 POK-89가 하나 더해 스물하나). 새 표도 없다(`V111`은 칸 하나 + 제약 하나).
 `web-support/CorsConfig`도 안 고쳤다 — `DELETE`는 치지직 해제가 이미 열어 뒀다.
 
 #### 실기동 확인 (2026-08-31)
@@ -2321,6 +2338,136 @@ clip이 「이 사람이 이 스트리머의 방송을 봐도 되나」를 물�
   `Access-Control-Allow-Methods: GET,POST,PUT,PATCH,DELETE`
 - 못 잰 것 둘: **구글 재로그인**과 **refresh 원문 토큰** — 둘 다 실제 구글 왕복이 필요하다.
   대신 코드·DB로 확인했다(`google_sub`이 `withdrawn:N`으로 바뀌었고 `findOrCreate`는 그 값으로만 찾는다)
+
+### 운영 전 잔불 정리: 보관 기한 청소·프록시 IP (POK-89)
+
+**보관 기한이 지난 행을 10분마다 표 셋에서 상한을 두고 지우고, 프록시 뒤에서만 `X-Forwarded-For`를 요청자 IP로 채택한다.**
+이 카드 전에는 auth에 **시각(보관 기한)을 조건으로** 행을 지우는 코드가 없었고(사건 시점에 secrets 행 하나를 지우는
+`PostgresSecretStore.delete` 계열 여섯 자리는 있었다) 프록시 헤더를 읽는 코드도 없었다. 그래서 운영에 올리면 둘이
+터진다: 회수된 갱신 토큰·교환 시도 기록·페어링 코드가 무한히 쌓여 디스크를 채우고, 로드밸런서 뒤에서 모든 요청이
+한 IP로 보여 「IP당 분당 5회」가 전역 한도가 된다. 새 표는 없고 마이그레이션은 인덱스·주석용 `V112` 하나다.
+코드는 `auth/retention/` 패키지(자기 완결)와 yml 한 줄이다.
+
+#### 무엇을 언제 지우나
+
+| 표 | 조건 | 보관 | 근거 |
+|---|---|---|---|
+| `refresh_tokens` | `revoked_at < now − 14일`, 또는 `revoked_at IS NULL AND expires_at < now − 14일` | **회수 뒤 14일**(갱신 토큰 수명 `pokeclip.jwt.refresh-token-ttl` 이상이어야 하고 부팅이 검증한다). 회수 안 된 만료 행도 만료 뒤 14일 | 아래 🔴. 사용자 결정(2026-09-03) |
+| `pairing_exchange_attempts` | `attempted_at < now − 1시간` | **1시간** | 교환 한도는 최근 1분만 센다. IP 해시가 소금 없는 SHA-256이라 복원 가능한데 보관이 짧을수록 그 창이 준다. 사후 조사는 `pokeclip.pairing.exchange.rate_limited` 카운터가 대신한다. 이 표에는 회원 칸이 없어 탈퇴가 못 지운다. 청소가 유일한 삭제 경로다 |
+| `pairing_codes` | `expires_at < now − 1시간` | **만료 뒤 1시간**, 사용 여부 무관 | 발급 한도(계정당 분당 3회)는 최근 1분의 `created_at`만 세고 교환은 만료 전 행만 소비하므로 겹치지 않는다. 시도 기록과 같은 값이라 외울 것이 하나 준다 |
+
+🔴 **갱신 토큰의 보관 14일이 곧 도난 토큰 재사용 봉쇄의 창이다(전에는 무기한이었다).** 「이미 쓴 토큰이 또 왔다」는
+회수된 행이 표에 남아 있어야 잡히고, 잡히면 그 회원의 세션을 전부 끊는다. 청소 뒤 그 토큰은 「모르는 토큰」
+(401 `REFRESH_TOKEN_UNKNOWN`)이라 봉쇄가 없다. 그래서 **사용자가 14일 넘게 옛 토큰을 안 내면(그 기기를 2주 넘게
+안 켬) 도둑이 회전을 이어간 세션은 봉쇄 밖이다**: 도둑의 최신 토큰은 회전마다 갱신돼 만료가 안 온다. 그 뒤 사용자는
+어차피 재로그인하는데 재로그인은 다른 세션을 안 끊는다. 14일은 사용자 결정이고 늘리면 그만큼 표가 커진다.
+시험이 13일(봉쇄됨)·15일(봉쇄 없음) 양쪽 경계를 못박는다.
+
+**재사용 봉쇄가 방금 찍은 회수 행과 청소가 어긋날 수 있다.** 봉쇄는 그 회원의 살아있는 행 전부에 `revoked_at`을
+찍는데, 그중 「만료가 14일 넘은 것」은 같은 순간 청소될 수 있어 로그의 `revokedSessions` 수와 표에 남은 행 수가
+다를 수 있다. 조치는 안 바뀐다(`revokedSessions>0`이면 봉쇄가 일어난 것이다).
+
+#### 보관값의 하한: 부팅 검증은 양수와 수명 관계만 본다
+
+값은 `application.yml`의 `pokeclip.retention.*` 기본값이고 **환경변수로 빼지 않았다**(`${VAR:}` 모양이면 「없으면
+부팅 실패」가 되고 compose·`.env.dev.example`까지 셋을 같이 고쳐야 한다). 0·음수·상한 0이면 부팅이 거부된다
+(실기동 확인). 하한은 **하나만 부팅이 보고**(아래 첫 행, `RetentionKeepForCheck`) 나머지는 운영자가 지킨다.
+증상 상세는 yml `retention` 주석이 정본이다:
+
+| 값 | 기본 | 하한 | 아래로 내리면 |
+|---|---|---|---|
+| `refresh-tokens-keep-for` | `P14D` | **`pokeclip.jwt.refresh-token-ttl`(부팅 거부, 메시지에 두 값을 일수까지)** | 수명보다 짧으면 만료 전 옛 토큰의 재사용이 봉쇄(REUSED) 대신 UNKNOWN. 운영자 몫: **10초**(재회전 유예 창) 아래면 정상 재회전도 UNKNOWN |
+| `pairing-attempts-keep-for` | `PT1H` | **1분**(교환 한도 창, 운영자) | 6번째 교환이 429 대신 404(한도 무력화) |
+| `pairing-codes-keep-for` | `PT1H` | 없음 | 판정은 안 바뀐다. 잃는 것은 410·409 사유가 404가 되는 창뿐 |
+
+#### 주기·상한·로그
+
+- **10분마다, 한 바퀴 1,000행, 상한에 걸리면 같은 틱에서 최대 10바퀴.** 스케줄러 스레드가 하나라(치지직 갱신·유튜브
+  점검과 같은 스레드) 틱이 길면 다른 틱이 밀린다. 상한 × 바퀴가 그 예산이다: 실기동(바퀴 반복 전 코드)에서 한 틱
+  세 표(각 1,000행) **26ms**. 틱당 최대 10바퀴 = 표당 10분에 최대 1만 행, 하루 144만 행. 그 위로는 `rounds=10 capped=true`가
+  틱마다 이어지고 그때 `batch-limit`을 올린다. 바퀴를 두는 이유: 교환 창구는 로그인이 없고 429도 행을 남겨 한 IP가
+  초당 수백 행을 만들 수 있다(실측 0.31ms/건). 바퀴 없이 10분에 1,000행이면 폭주 중 표가 자란다
+- **바퀴마다** 자기 트랜잭션이다(한 표는 최대 10개 트랜잭션). 한 표의 삭제가 터져도 앞 바퀴의 삭제는 남고 다음 표는 계속 돈다(틱 자체에는 트랜잭션이 없다)
+- 로그는 둘이고 **0건이면 안 찍는다**(10분마다 빈 줄 셋을 안 남긴다)
+
+| 이벤트 | 레벨 | 뜻 |
+|---|---|---|
+| `auth.retention.cleaned table= deleted= rounds= capped=` | INFO | 표 하나를 한 틱에 지운 합계. `rounds`는 바퀴 수(최대 10). `capped=true`면 마지막 바퀴도 상한에 걸려 다음 틱이 이어서 지운다. 배포 직후 밀린 청소가 도는 동안 `rounds=10 capped=true`가 몇 틱 이어지다 `capped=false` 한 번으로 끝나는 것이 정상 모양이다. 남은 행이 정확히 한 틱 최대치(10 × 상한)의 배수면 `capped=true`로 끝나고 다음 틱은 로그가 없다: 그것도 정상 |
+| `auth.retention.failed table= deleted= rounds= causeType=` | **WARN** | 그 표의 삭제가 던졌다. 다른 표는 계속 돈다. 🔴 **`deleted`가 0이 아닐 수 있다**: 바퀴마다 자기 트랜잭션이라 던지기 전 바퀴의 삭제는 이미 커밋됐다. 이 줄 하나로 「청소가 통째로 안 돌았다」고 읽지 않는다 |
+
+값은 `table`·`deleted`·`rounds`·`capped`·`causeType`뿐이다. 회원 번호·해시·IP는 안 찍는다(실기동 grep 0건).
+
+🔴 **`auth.failed reason=REFRESH_TOKEN_UNKNOWN`에는 청소된 옛 토큰의 재사용이 섞인다.** 14일 넘은 재사용은 이
+사유로만 보이고 봉쇄가 없다. 위조 토큰과 갈라 볼 수 없다. 갈라 찍으려면 표를 안 지우고 표시만 남겨야 해서
+이 카드의 목적과 반대다. 회수 안 된 채 만료 뒤 14일이 지난 행도 지워지므로 그 토큰의 사유는 `REFRESH_TOKEN_EXPIRED`에서
+`REFRESH_TOKEN_UNKNOWN`으로 옮겨간다(응답은 같은 401이라 web 계약 영향 없음, 로그 집계만 바뀐다).
+
+- **끄기**: `pokeclip.retention.enabled=false`(기본 켜짐, 환경변수 없음). 끄면 빈 자체가 없어 로그가 0줄이다. **보관 ≥ 수명 부팅 검증도 같이 꺼진다**: 청소가 안 돌면 회수 행을 지우는 코드가 없어 그 검사가 막으려는 일이 안 생긴다. 켜 둔 채로만 검사가 살면 장애 때 끄고 재기동하는 길이 그 검사에 막힌다
+  (실기동 90초 확인). 테스트 프로파일은 끈다(컨텍스트마다 틱이 돌면 다른 시험이 심은 행을 지운다)
+- **지운 코드는 404다.** 409(이미 씀)·410(만료) 사유는 만료 뒤 1시간 안에서만 산다. 플러그인은 아직 그 사유를 안 쓴다
+- **다중 인스턴스에 분산 락은 없다.** 삭제는 두 대가 동시에 돌아도 결과가 같다(멱등). 삭제 셋 다 서브쿼리에 `FOR UPDATE SKIP LOCKED`가 붙어 **잠긴 행을 기다리지 않고 건너뛴다**(그 행은 다음 틱이 지운다). 그래서 두 대가 겹쳐도, 같은 행에 `revoked_at`을 찍는 재사용 봉쇄·탈퇴와 겹쳐도 서로 안 기다린다. 붙이기 전에는 그 겹침에서 데드락이 났다(리뷰 라운드 1 재현 60회 중 30회. 회전이 희생자로 뽑히면 봉쇄가 롤백돼 500이다. 같은 시드 pgbench 4클라이언트 15초: 원판 데드락 14회 → 0회). 빼면 되살아난다
+- **인덱스 넷(`V112`)이 청소 조건을 받친다.** 🔴 **대상 행이 표 전부일 때(배포 직후 밀린 청소)는 인덱스를
+  안 타는 것이 정상이다**: `ORDER BY id LIMIT 1000`이라 pkey 순서로 걷다 1,000개를 채우는 쪽이 더 싸다(실기동:
+  3,000행 전부 대상일 때 `Index Scan using *_pkey`, 22버퍼·0.4ms). 평상시 모양(살아있는 행이 많고 대상이 적음)에서
+  넷을 다 탄다(`pg_stat_user_indexes` 실측 `idx_scan` 22·17·4·4, 0.02ms 이하). 배포 직후에 `EXPLAIN`을 떠서
+  「인덱스를 안 탄다」로 읽지 마라
+- **HOT 갱신을 잃는다.** `revoked_at`이 V112 인덱스의 키·부분 술어에 들어가 회전의 UPDATE가 HOT 갱신에서 빠진다
+  (실측 87.6%→0%). 100명 규모에서 ms 단위라 감수한다. `(expires_at)` 하나로 바꾸면 HOT는 살지만 회수 행이 최대
+  28일 살아 표가 두 배다
+
+#### 프록시 뒤 실제 IP
+
+교환 창구의 IP당 한도(분당 5회)는 요청자 IP로 센다. 로드밸런서 뒤에서는 소켓 IP가 전부 로드밸런서라 한도가
+전역이 된다. **`FORWARD_HEADERS_STRATEGY`(선택, 기본 `none`) 하나로 정한다.** 코드 변경은 없다(yml 한 줄).
+
+| 값 | 무엇 |
+|---|---|
+| `none`(기본) | 헤더를 안 믿는다. `X-Forwarded-For`를 실어도 소켓 IP로 집계된다(실기동: 헤더가 달라도 6번째가 429, 여섯 행 전부 `sha256("127.0.0.1")`) |
+| `native` | 톰캣 `RemoteIpValve`. **소켓 IP가 신뢰 대역(`server.tomcat.remoteip.internal-proxies` 기본값: 사설망·루프백 등 Boot 기본 대역 아홉)일 때만** 헤더를 본다. 대역 밖 소켓이 보낸 헤더는 통째로 무시된다(위조 방어. 한정 조건은 아래 🔴). 값이 여럿이면 **오른쪽부터** 읽어 대역 안 값은 건너뛰고 처음 만나는 대역 밖 값이 요청자 IP다(실기동: 루프백 소켓에서 `9.9.9.9, 203.0.113.3`이 `203.0.113.3`으로 채택) |
+
+- dev는 프록시가 없어 `none`(compose·`.env.dev.example`)이고 전과 같은 동작이다. 🔴 **운영 ECS에서는 명시 `none`이
+  전보다 나쁘다**: 전략을 안 적으면 Boot 4.0+가 `AWS_EXECUTION_ENV`로 ECS를 감지해(`CloudPlatform.AWS_ECS`) 자동으로
+  `native`를 켰을 텐데, 이 PR의 명시 `none`이 그 유추를 끈다. **운영 태스크 정의에 `FORWARD_HEADERS_STRATEGY=native`를
+  반드시 넣는다.** 🔴 **비우지 마라**: 빈 문자열은 `none`이 아니라 「미설정」이라 Boot 유추로 간다(빈 값의 enum 변환이
+  null). compose의 `:-none`만 빈 값을 막는다
+- 🔴 **「대역 밖 소켓의 헤더는 무시」에는 한정 조건이 있다.** 요청자 자신이 신뢰 대역 안이면(사설망에서 ALB를 거쳐 오는
+  호출자) ALB가 오른쪽에 붙인 사설 IP를 Valve가 건너뛰어 **왼쪽 위조 값이 채택된다.** 사설망에서 교환 창구를 부르는
+  호출자를 만들면 안 되고(지금은 없다: clip·chat-collector는 `/internal/**`를 직접 부르고 헤더를 안 싣는다), 운영
+  대역이 정해지면 `internal-proxies`를 **로드밸런서 서브넷으로 좁힌다**(환경변수로 빼면서 좁히는 것이라 yml 한 줄이다). `RemoteIpValveTrustTest`의
+  `대역_안_소켓이_보낸_헤더의_오른쪽_값도_대역_안이면_왼쪽_값을_채택한다`가 이 갈래를 못박는다
+- 🔴 **`native`는 `X-Forwarded-Proto`·`Host`·`Port`도 같이 처리해 auth 전체의 요청 해석이 바뀐다.** 지금 요청에서
+  주소를 유추하는 코드는 없다(사진 `PROFILE_PHOTO_BASE_URL`은 명시 설정이다). **프레임워크가 읽는 자리는 하나다:
+  `X-Forwarded-Proto: https` 요청이면 Spring Security 기본 HSTS(`max-age=31536000; includeSubDomains`)가 응답에
+  붙는다**(실서버 실측). 브라우저는 그 호스트와 하위 도메인 전부를 1년간 https로만 부른다. 운영 호스트를 루트
+  도메인으로 잡으면 `dev.pokeclip.com:8082` 같은 하위 http 주소가 그 브라우저에서 막힌다. 끄지 않는다(운영은
+  https가 맞다)
+
+#### 시험 컨텍스트: 21, 여유 0
+
+이 카드가 둘(청소기를 켠 컨텍스트 · `native`를 켠 실서버 컨텍스트)을 더해 **컨텍스트 21**이다.
+21 × 30 − 2 × 20 = 590이고 상한이 597(`max_connections=600` − superuser 3)이라 **컨텍스트로는 여유 0**이다.
+🔴 **다음 auth 카드가 컨텍스트를 하나라도 더하면 `IntegrationTestSupport`의 `max_connections`를 먼저 올린다.**
+그래서 이 카드의 보관값 갈림 시험은 컨텍스트 대신 `RetentionCleaner`를 직접 만들어 잰다.
+
+#### 실기동 확인 (2026-09-03)
+
+전용 DB(postgres:17)에 심어 놓고 주기 10초로 돌렸다(공유 DB에는 아무것도 안 걸었다).
+
+- **청소 4틱**(바퀴 반복 전 코드의 실측, 틱당 한 바퀴): `refresh_tokens` 3,015→2,015→1,015→15→**10** · `pairing_exchange_attempts` 1,505→505→(교환 6회로
+  +6)→**6** · `pairing_codes` 1,210→210→**5**. 로그는 `capped=true`×5 뒤 `false`×3, 그 뒤 없음
+- **경계 안 행 무손실**: 살아있는 갱신 토큰 5 · 회수 13일 5 · 59분 시도 기록 5 · 59분 코드 5 · 살아있는 코드 5 전부 그대로
+- **한 틱 세 표(각 1,000행) 26ms**(반복 전, 한 바퀴)
+- **청소 도는 중 교환**: 모르는 코드 6번째 429, 새 6행은 다음 틱에 안 지워졌다
+- **`none`**: 헤더가 달라도 한도를 나눠 쓴다(6번째 429, 해시 전부 `127.0.0.1`) · **`native`**: `203.0.113.1` 6번째 429 ·
+  `203.0.113.2` 404 · `9.9.9.9, 203.0.113.3`이 `203.0.113.3`으로 채택. Valve 오류 0줄
+- **부팅 거부**: `batch-limit=0`·`interval=PT0S` 둘 다 `APPLICATION FAILED TO START`. `@Min` 경로(상한)는 Spring이
+  `Value: "0"`을 찍고 `Duration` 경로는 이름만 찍는다(시크릿이 아닌 정수라 유출 문제는 아니다)
+- **끄기**: `enabled=false` 90초 동안 `auth.retention.*` 0줄, 행 수 불변
+- 못 잰 것 하나: 「지운 코드 vs 안 지운 코드」(409·410 vs 404). 원문 코드가 없어 실기동 불가라
+  `RetentionCleanerPairingCodesTest`가 잰다
+
+**환경변수는 스물하나다.** `FORWARD_HEADERS_STRATEGY` 하나가 늘었다(선택, 기본 `none`). 새 표는 없다
+(`V112`는 인덱스 넷 + 페어링 표 둘의 주석).
 
 ### chat-collector — 치지직 채팅 수신 (POK-85) · 자동 재연결 (POK-86) · 적재 (POK-84) · S3 원본 아카이브 (POK-116) · **자동 시작·다중 스트리머 (POK-127)** · **수집 상태 창구 (POK-128)** · **영상 위치 창구 (POK-92)** · **재부착 (POK-219)**
 
@@ -3217,11 +3364,7 @@ clip에는 방송 행이 없다.** 워밍업(최소 2분)이 시간을 벌지만
 
 다음 작업 순서:
 
-1. **`pairing_exchange_attempts` 청소 작업을 넣는다.** 교환이 `permitAll`이라
-   미인증 트래픽이 행을 쌓는다 — 이게 없으면 운영에 올릴 수 없다
-2. `POST /api/stream-keys/pairing-codes/exchange`의 `X-Forwarded-For` 처리.
-   ALB 뒤로 가면 전 요청이 같은 IP로 보여 rate limit이 전역 한도가 된다
-3. SQS 대역(ElasticMQ)을 루트 compose에 추가한다 — `clip`이 렌더 잡을 발행하려면 필요하다.
+1. SQS 대역(ElasticMQ)을 루트 compose에 추가한다. `clip`이 렌더 잡을 발행하려면 필요하다.
    생명주기 수신은 실측을 LocalStack으로 했고, compose에는 아직 큐가 없다.
    **이제 그 편지를 받는 서버가 둘이다**(`clip` POK-82 · `chat-collector` POK-127) —
    팬아웃이라 **큐도 둘**이다

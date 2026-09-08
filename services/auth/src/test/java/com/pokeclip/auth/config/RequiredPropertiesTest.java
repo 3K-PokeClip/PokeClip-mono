@@ -18,6 +18,7 @@ import org.springframework.core.io.ClassPathResource;
 
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Properties;
@@ -122,6 +123,42 @@ class RequiredPropertiesTest {
                 .withPropertyValues(google("id", "secret"))
                 .withPropertyValues(cors("http://localhost:3000"))
                 .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    /**
+     * 수명 둘이 비면 <b>어느 프로퍼티인지와 함께</b> 거부해야 한다. 전에는 {@code refresh-token-ttl}이 없으면
+     * 바인딩이 조용히 null을 넣고 {@code RetentionKeepForCheck.check()}의 {@code keepFor.compareTo(null)}이 터져
+     * {@code BeanCreationException: NullPointerException}으로만 죽었다 — 메시지에 이름이 없어 운영자가 어디를
+     * 고칠지 모른다(리뷰 라운드 2). 이 저장소의 다른 필수 값은 전부 이름을 찍는다.
+     *
+     * <p>{@code access-token-ttl}도 같이 잰다 — 같은 record의 쌍둥이 칸이라 한쪽만 막으면 나머지가 남는다.
+     * 이쪽이 null이면 부팅이 아니라 <b>토큰 발급 때 500</b>으로 터진다(더 늦게 보인다).
+     * 시크릿과 달리 값을 리포트에 실어도 된다(수명은 비밀이 아니고, 빈 값이면 {@code rejected value [null]}이다).
+     *
+     * <p>이름은 yml 키(kebab)가 아니라 <b>record 칸 이름</b>으로 찍힌다({@code pokeclip.jwt.refreshTokenTtl}) —
+     * 바인딩 검증이 자바 필드 기준이라서다. 실측한 그대로 단언한다.
+     */
+    @Test
+    void JWT_수명이_비어_있으면_부팅이_실패하고_어느_값인지_알려준다() {
+        ApplicationContextRunner base = runner
+                .withPropertyValues("pokeclip.jwt.secret=test-only-secret-key-at-least-32-bytes-long!!")
+                .withPropertyValues(google("id", "secret"))
+                .withPropertyValues(cors("http://localhost:3000"));
+
+        base.withPropertyValues("pokeclip.jwt.access-token-ttl=PT30M")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(stackTraceOf(context.getStartupFailure()))
+                            .as("어느 값이 비었는지 메시지에 없다 — 이름 없는 NPE로 죽는다")
+                            .contains("pokeclip.jwt.refreshTokenTtl");
+                });
+        base.withPropertyValues("pokeclip.jwt.refresh-token-ttl=P14D")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(stackTraceOf(context.getStartupFailure()))
+                            .as("쌍둥이 칸이 안 막혀 있다")
+                            .contains("pokeclip.jwt.accessTokenTtl");
+                });
     }
 
     /**
@@ -316,6 +353,68 @@ class RequiredPropertiesTest {
         assertThat(properties.getProperty("pokeclip.profile-photo.force-path-style"))
                 .as("스위치라 기본값을 일부러 뒀다 — 넷과 같은 모양으로 바꾸면 값 없이 뜨는 길이 막힌다")
                 .isEqualTo("${PROFILE_PHOTO_S3_FORCE_PATH_STYLE:false}");
+    }
+
+    /**
+     * 청소 프로퍼티 여섯의 <b>운영 값</b>은 다른 어떤 시험도 안 읽는다 — {@code application-test.yml}이 여섯을
+     * 전부 덮고 {@code RetentionPropertiesTest}는 값을 직접 넣는다. 그래서 {@code refresh-tokens-keep-for: PT1H}
+     * 같은 양수 오타는 부팅 검증(양수만 본다)을 지나 <b>운영에서만</b> 재사용 봉쇄의 창이 준다.
+     * 사용자 결정값(2026-09-03)을 여기 못박는다. 바꾸려면 결정을 먼저 바꾼다.
+     *
+     * <p><b>반대쪽 값({@code pokeclip.jwt.refresh-token-ttl})과 둘의 관계도 여기서 본다.</b> {@code RetentionKeepForCheck}가
+     * 부팅에서 보는 것이 그 관계인데, 지금까지는 {@code refresh-token-ttl}만 {@code P30D}로 올려도 시험이 전부 초록이고
+     * <b>운영 인스턴스만 부팅을 거부했다</b>(리뷰 라운드 2 재현 R3 — 배포에서 재시작 루프로 처음 보인다).
+     * 관계를 직접 단언해야 어느 쪽을 고쳐도 잡힌다.
+     */
+    @Test
+    void 청소_프로퍼티의_운영_값이_결정대로_적혀_있다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+
+        assertThat(properties.getProperty("pokeclip.retention.enabled"))
+                .as("운영 기본은 켜짐이다 — 꺼짐은 테스트 프로파일만").isEqualTo("true");
+        assertThat(properties.getProperty("pokeclip.retention.interval")).isEqualTo("PT10M");
+        assertThat(properties.getProperty("pokeclip.retention.batch-limit")).isEqualTo("1000");
+        assertThat(properties.getProperty("pokeclip.retention.refresh-tokens-keep-for"))
+                .as("회수 행 보관 = 재사용 봉쇄의 창. 사용자 결정값이다(2026-09-03) — 바꾸려면 결정을 먼저 바꾼다")
+                .isEqualTo("P14D");
+        assertThat(properties.getProperty("pokeclip.retention.pairing-attempts-keep-for")).isEqualTo("PT1H");
+        assertThat(properties.getProperty("pokeclip.retention.pairing-codes-keep-for")).isEqualTo("PT1H");
+
+        assertThat(properties.getProperty("pokeclip.jwt.refresh-token-ttl"))
+                .as("보관의 하한이 되는 값이다 — 이쪽만 올리면 운영 부팅이 거부되는데 시험은 전부 초록이었다")
+                .isEqualTo("P14D");
+        assertThat(Duration.parse(properties.getProperty("pokeclip.retention.refresh-tokens-keep-for")))
+                .as("보관이 수명보다 짧다 — RetentionKeepForCheck가 운영 부팅을 거부한다(규칙은 「같다」가 아니라 「이상」이다)")
+                .isGreaterThanOrEqualTo(
+                        Duration.parse(properties.getProperty("pokeclip.jwt.refresh-token-ttl")));
+    }
+
+    /**
+     * 프록시 헤더 전략의 <b>운영 기본값</b>도 다른 어떤 시험이 안 본다 — {@code application-test.yml}이 리터럴
+     * {@code none}으로 덮고({@code ForwardedHeadersDisabledTest}가 그것을 쓴다), {@code ForwardedHeadersNativeTest}는
+     * {@code @TestPropertySource}로 자기 값을 넣으며, {@code DeploymentEnvVarsTest}는 {@code ${FORWARD_HEADERS_STRATEGY:}}
+     * 까지만 보고 <b>기본값은 안 본다</b>. 그래서 기본을 {@code native}로 뒤집어도 752건이 전부 초록이었다
+     * (리뷰 라운드 2 재현 R1).
+     *
+     * <p>기본이 {@code native}가 되면 프록시가 없는 dev에서 <b>아무나 보낸 {@code X-Forwarded-For}를 믿는 길</b>이
+     * 열린다(교환 창구의 IP당 한도가 헤더 한 줄로 우회된다 — 소켓이 루프백이면 신뢰 대역 안이다).
+     * 위 사진 검사({@code PROFILE_PHOTO_S3_FORCE_PATH_STYLE})와 같은 모양으로 기본값까지 통째로 못박는다.
+     */
+    @Test
+    void 프록시_헤더_전략의_운영_기본값이_none이다() {
+        YamlPropertiesFactoryBean yaml = new YamlPropertiesFactoryBean();
+        yaml.setResources(new ClassPathResource("application.yml"));
+        Properties properties = yaml.getObject();
+
+        assertThat(properties).as("application.yml을 읽지 못했다").isNotNull().isNotEmpty();
+
+        assertThat(properties.getProperty("server.forward-headers-strategy"))
+                .as("프록시 헤더를 믿는 것이 기본이 됐다 — 프록시가 없는 환경에서 IP당 한도가 헤더로 우회된다")
+                .isEqualTo("${FORWARD_HEADERS_STRATEGY:none}");
     }
 
     /**
