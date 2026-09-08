@@ -46,6 +46,9 @@ public final class FakeCollector implements AutoCloseable {
     private volatile Response fallback = 아무_경로도_안_정했을_때;
     private volatile Duration delay = Duration.ZERO;
 
+    /** {상태, Location}. {@link #redirectTo}가 걸면 경로를 안 가리고 이것으로만 답한다. */
+    private volatile String[] redirect;
+
     private FakeCollector(HttpServer server, ExecutorService threads) {
         this.server = server;
         this.threads = threads;
@@ -79,12 +82,26 @@ public final class FakeCollector implements AutoCloseable {
         byPath.put(path, new Response(status, body));
     }
 
+    /**
+     * 경로를 안 가리고 이 상태 코드와 {@code Location}으로만 답한다.
+     *
+     * <p><b>리다이렉트를 안 따라가는 것을 재려고 있다.</b> {@link FakeAuth#redirectTo(int, String)}의
+     * 쌍둥이인데 <b>노출이 더 넓다</b> — auth 호출은 POST라 {@code 301}·{@code 302}·{@code 303}이
+     * GET으로 격하된 <b>새 요청</b>이 되어 헤더·본문이 안 따라가고 {@code 307}·{@code 308}만
+     * 열쇠를 흘린다. <b>수집기 호출은 원래 GET</b>이라 다섯 상태 전부가 원 요청 그대로 재전송되고
+     * {@code X-Internal-Token}이 리다이렉트가 가리키는 아무 출처에나 도착한다.
+     */
+    public void redirectTo(int status, String location) {
+        this.redirect = new String[]{String.valueOf(status), location};
+    }
+
     public void holdFor(Duration delay) {
         this.delay = delay;
     }
 
     public void reset() {
         byPath.clear();
+        redirect = null;
         fallback = 아무_경로도_안_정했을_때;
         delay = Duration.ZERO;
         calls.set(0);
@@ -133,6 +150,12 @@ public final class FakeCollector implements AutoCloseable {
                 Thread.currentThread().interrupt();
                 return;
             }
+        }
+        if (redirect != null) {
+            exchange.getResponseHeaders().add("Location", redirect[1]);
+            exchange.sendResponseHeaders(Integer.parseInt(redirect[0]), -1);
+            exchange.close();
+            return;
         }
         Response response = byPath.getOrDefault(path, fallback);
         byte[] bytes = response.body().getBytes(StandardCharsets.UTF_8);

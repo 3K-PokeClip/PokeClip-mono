@@ -236,6 +236,35 @@ class BroadcastChatControllerTest extends IntegrationTestSupport {
     }
 
     /**
+     * 🔴 <b>같은 칸이 여러 번 오면 첫 값만 넘긴다.</b> 브라우저가 {@code ?limit=10&limit=99999}로
+     * 앞 값을 덮을 수 있고, 마지막 값을 쓰면 <b>어느 쪽이 쓰이는지가 프레임워크 구현에 달린다</b>.
+     *
+     * <p>이 규칙은 주석과 README에만 있었고 <b>그물이 0이었다</b> — 감사 라운드 4가 마지막 값을
+     * 쓰게 바꿔 보니 clip 515건이 전부 초록이었다(MY-2).
+     *
+     * <p><b>지금 피해가 작다는 것과 재지 않아도 된다는 것은 다르다.</b> {@code limit}은 수집기가
+     * 상한으로 잘라 주고 {@code from}·{@code to}·{@code cursor}는 두 값 다 수집기의 검증을 지난다.
+     * 재는 것은 <b>다음에 이 자리를 만지는 사람</b>이다 — 허용 목록에 「프론트가 정하면 안 되는 칸」이
+     * 하나라도 늘면 그때는 덮어쓰기가 곧 우회가 된다.
+     *
+     * <p>{@code doesNotContain("99999")}만으로는 부족하다 — 아무것도 안 넘기는 구현에도 참이다.
+     * 그래서 앞 값이 <b>실제로 갔는지</b>를 같이 본다.
+     */
+    @Test
+    void 같은_칸이_여러_번_오면_첫_값만_넘긴다() throws Exception {
+        볼_수_있다("OWNER");
+        COLLECTOR.respondWith("/internal/streams/" + 내_방송 + "/chat-messages", 200, "{}");
+
+        assertThat(부른다(내_방송, "chat-messages?limit=10&limit=99999").statusCode()).isEqualTo(200);
+
+        assertThat(COLLECTOR.lastQuery())
+                .as("뒤엣것이 앞 값을 덮었다 — 어느 쪽이 쓰이는지가 프레임워크에 달리게 된다")
+                .doesNotContain("99999")
+                .as("첫 값까지 사라졌다 — 이 단언이 없으면 아무것도 안 넘기는 구현도 초록이다")
+                .contains("limit=10");
+    }
+
+    /**
      * 503 둘의 이유가 본문에서 갈려야 한다 — 「자격을 못 물었다」는 잠시 뒤 다시,
      * 「수집기가 아프다」는 채팅만 안 보인다는 뜻이라 화면 안내가 다르다.
      */
