@@ -42,5 +42,8 @@ COMMENT ON COLUMN chat_donations.received_seq IS '이 프로세스가 받은 순
 COMMENT ON COLUMN chat_donations.received_at IS '우리가 받은 시각. chat_messages.message_time(치지직 시계)과 축이 다르다';
 COMMENT ON COLUMN chat_donations.pay_amount IS '원. 치지직이 문자열로 주며 숫자로 못 읽으면 NULL';
 
--- 범위 창구(POK-234)가 타는 색인. 후원의 시각 축은 received_at 하나뿐이다.
-CREATE INDEX idx_chat_donations_stream_received ON chat_donations (stream_id, received_at);
+-- 🔴 범위 창구가 타는 색인을 <b>따로 두지 않는다.</b> 위 UNIQUE 가 만드는 인덱스가
+-- (stream_id, received_at, received_seq) 라, btree 가 앞 칸부터 쓰므로
+-- WHERE stream_id = ? AND received_at >= ? AND received_at < ? 를 그대로 받는다.
+-- 따로 두면 같은 앞 칸을 가진 인덱스 둘을 유지하게 되고 INSERT 비용만 는다.
+-- (한때 UNIQUE 열쇠가 내용 해시라 앞 칸이 달랐고 그때는 이 색인이 필요했다.)

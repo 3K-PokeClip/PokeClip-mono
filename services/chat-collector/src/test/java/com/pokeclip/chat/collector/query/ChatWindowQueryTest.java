@@ -250,6 +250,42 @@ class ChatWindowQueryTest extends IntegrationTestSupport {
         }
     }
 
+    /**
+     * 🔴 <b>후원 조회는 UNIQUE 인덱스를 탄다 — 그래서 범위용 색인을 따로 안 둔다.</b>
+     *
+     * <p>중복 열쇠를 「받은 순번」으로 바꾸면서 UNIQUE 가
+     * {@code (stream_id, received_at, received_seq)}가 됐다. btree 는 앞 칸부터 쓰므로
+     * 이 인덱스가 {@code WHERE stream_id = ? AND received_at >= ? AND received_at < ?}를
+     * 그대로 받는다 — 별도 색인은 같은 앞 칸을 가진 인덱스를 하나 더 유지하는 것뿐이다.
+     *
+     * <p><b>지운 것의 근거를 여기서 세운다.</b> 안 재면 「지워도 된다」가 추론으로만 남고,
+     * 다음 사람이 열쇠를 다시 바꾸는 날 조회가 조용히 전체 훑기로 떨어진다.
+     */
+    @Test
+    void 후원_조회도_색인을_탄다() {
+        Instant base = Instant.parse("2026-09-03T00:00:00Z");
+        try {
+            for (int i = 0; i < 5_000; i++) {
+                insertDonation("win-don-idx", base.plusMillis(i * 10L), "d" + i);
+            }
+            jdbc.execute("ANALYZE chat_donations");
+
+            String plan = String.join("\n", jdbc.queryForList(
+                    "EXPLAIN " + ChatWindowQuery.DONATIONS, String.class,
+                    "win-don-idx",
+                    Timestamp.from(base.plusSeconds(10)), Timestamp.from(base.plusSeconds(20)),
+                    Timestamp.from(base.plusSeconds(10)), 0L, 201));
+
+            assertThat(plan)
+                    .as("UNIQUE 인덱스가 범위 조회를 안 받으면 색인을 따로 둬야 한다")
+                    .contains("uq_chat_donations_received");
+            assertThat(plan).doesNotContain("Seq Scan");
+        } finally {
+            jdbc.update("DELETE FROM chat_donations WHERE stream_id = ?", "win-don-idx");
+            jdbc.execute("ANALYZE chat_donations");
+        }
+    }
+
     private void insertChat(String streamId, Instant messageTime, String content) {
         int n = SEQ.incrementAndGet();
         jdbc.update("""
