@@ -179,6 +179,7 @@ public class FakeChzzkServer implements WebSocketConfigurer {
         @PostMapping("/open/v1/sessions/events/subscribe/donation")
         public ResponseEntity<String> subscribeDonation(@RequestParam String sessionKey,
                                                         HttpServletRequest request) {
+            behavior.countSubscribeDonationCall();
             if (behavior.subscribeDonationStatus != 200) {
                 return ResponseEntity.status(behavior.subscribeDonationStatus)
                         .body(errorBody(behavior.subscribeDonationStatus));

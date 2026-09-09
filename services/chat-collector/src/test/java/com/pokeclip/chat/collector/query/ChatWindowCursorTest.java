@@ -62,4 +62,31 @@ class ChatWindowCursorTest {
         assertThatThrownBy(() -> ChatWindowCursor.decodeOrFirstPage("!!!not-base64!!!"))
                 .isInstanceOf(InvalidCursorException.class);
     }
+
+    /**
+     * 🔴 <b>표에 안 들어가는 시각은 400이다</b>(봇 codex P2). {@code long}에는 들어가는데
+     * PostgreSQL {@code timestamptz}에는 안 들어가는 값을 그대로 넘기면 질의가 터져
+     * <b>500</b>이 나간다 — 이 창구에서 500은 「DB가 죽었다」로 계약된 신호라, 부르는 쪽
+     * 입력 오류를 거기 실으면 <b>없는 장애를 쫓게 만든다.</b>
+     *
+     * <p>범위는 {@code WindowRequest}와 <b>같은 값을 가져다 쓴다</b> — 같은 표의 같은 칸을
+     * 가리키는 값이 창구마다 다른 범위를 갖는 것이 이상하고, 복제하면 한쪽만 낡는다.
+     */
+    @Test
+    void 표에_안_들어가는_시각의_커서는_거절한다() {
+        String 너무_먼_미래 = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString("h:9000000000000000:c:1".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String 너무_이른_과거 = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString("h:-1:c:1".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        assertThatThrownBy(() -> ChatWindowCursor.decodeOrFirstPage(너무_먼_미래))
+                .isInstanceOf(InvalidCursorException.class);
+        assertThatThrownBy(() -> ChatWindowCursor.decodeOrFirstPage(너무_이른_과거))
+                .isInstanceOf(InvalidCursorException.class);
+
+        String 경계_안 = ChatWindowCursor.encode(
+                java.time.Instant.parse("2026-09-09T00:00:00Z").toEpochMilli(), "c", 1L);
+        assertThat(ChatWindowCursor.decodeOrFirstPage(경계_안))
+                .as("멀쩡한 커서까지 막으면 페이징이 통째로 멎는다").isNotNull();
+    }
 }

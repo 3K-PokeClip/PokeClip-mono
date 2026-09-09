@@ -111,11 +111,14 @@ class DonationPersisterTest extends IntegrationTestSupport {
      */
     @Test
     void 닉네임_문구_종류의_NUL은_생성_지점에서_제거된다() {
-        PersistableDonation d = new PersistableDonation("don-1", "CH", "D", "도\0네",
+        PersistableDonation d = new PersistableDonation("don-1", "C\0H", "D\0ONOR", "도\0네",
                 "CH\0AT", 1L, "가\0즈아", 1L);
         assertThat(d.donatorNickname()).isEqualTo("도네");
         assertThat(d.donationText()).isEqualTo("가즈아");
         assertThat(d.donationType()).isEqualTo("CHAT");
+        // 🔴 식별자 둘은 봇(codex P1)이 잡았다 — 앞의 셋만 고치고 여기를 빠뜨렸다.
+        assertThat(d.channelId()).as("표가 NOT NULL TEXT다").isEqualTo("CH");
+        assertThat(d.donatorChannelId()).isEqualTo("DONOR");
 
         PersistableDonation 빈값 = new PersistableDonation("don-1", "CH", "D", null,
                 null, 1L, null, 1L);
@@ -221,5 +224,26 @@ class DonationPersisterTest extends IntegrationTestSupport {
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM chat_donations WHERE donator_channel_id='LONG'", Long.class))
                 .as("긴 종류가 들어오면 그 방송의 후원 저장이 멎는다").isEqualTo(1L);
+    }
+
+    /**
+     * 🔴 <b>식별자에 NUL이 있어도 저장된다</b>(봇 codex P1). 실 PG가 NUL을 거부하고
+     * 후원 저장에는 격리가 없어 배치가 되돌려진 채 1초마다 영원히 재시도된다.
+     *
+     * <p>🔴 <b>대가가 「그 방송」이 아니라 「모든 방송」이다.</b> 바구니가 프로세스에 하나뿐이라
+     * 한 방송의 나쁜 후원 한 건이 <b>그 바구니를 함께 쓰는 다른 방송의 후원까지</b> 막는다.
+     */
+    @Test
+    void 식별자에_NUL이_있어도_저장된다() {
+        DonationBuffer buffer = new DonationBuffer(100);
+        buffer.offer(new PersistableDonation("don-1", "CH\0X", "NUL\0ID", "n",
+                "CHAT", 1L, "t", 1_754_300_000_000L));
+
+        new DonationPersister(jdbc, buffer).flushBacklog();
+
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM chat_donations WHERE donator_channel_id='NULID'", Long.class))
+                .as("식별자 NUL 하나가 모든 방송의 후원 저장을 멈춘다").isEqualTo(1L);
+        assertThat(buffer.size()).as("되돌아왔으면 영원히 재시도한다").isZero();
     }
 }

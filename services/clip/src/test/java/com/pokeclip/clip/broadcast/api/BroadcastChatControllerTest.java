@@ -85,18 +85,18 @@ class BroadcastChatControllerTest extends IntegrationTestSupport {
 
     /**
      * 400을 503으로 접으면 「내가 잘못 물었다」가 「서버가 아프다」로 둔갑해 화면이 같은 요청을
-     * 계속 다시 보낸다. 사유 낱말({@code inverted_window})은 수집기가 정본이다.
+     * 계속 다시 보낸다. 사유 낱말({@code inverted})은 수집기가 정본이다.
      */
     @Test
     void 수집기의_사백은_사유까지_그대로다() throws Exception {
         볼_수_있다("OWNER");
         COLLECTOR.respondWith("/internal/streams/" + 내_방송 + "/chat-chart", 400,
-                "{\"error\":\"inverted_window\"}");
+                "{\"error\":\"inverted\"}");
 
         HttpResponse<String> 응답 = 부른다(내_방송, "chat-chart?from=2026-09-01T01:00:00Z&to=2026-09-01T00:00:00Z");
 
         assertThat(응답.statusCode()).isEqualTo(400);
-        assertThat(응답.body()).isEqualTo("{\"error\":\"inverted_window\"}");
+        assertThat(응답.body()).isEqualTo("{\"error\":\"inverted\"}");
     }
 
     /**

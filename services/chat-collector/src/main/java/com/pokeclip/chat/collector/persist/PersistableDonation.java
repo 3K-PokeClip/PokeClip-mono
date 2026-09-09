@@ -37,5 +37,17 @@ public record PersistableDonation(
         // 지금 운영 경로에서는 디코더가 빈 문자열을 주므로 도달하지 않는다.
         // 그 보증이 디코더 한 줄에만 서 있어서 여기서도 막는다(문구와 같은 모양).
         donationType = donationType == null ? "" : donationType.replace("\0", "");
+        // 🔴 식별자 둘도 같이 지운다 — 봇(codex P1)이 잡았다. 앞의 셋만 고치고 여기를
+        // 빠뜨렸는데, 표가 이 둘도 NOT NULL TEXT라 결말이 정확히 같다.
+        //
+        // 🔴 <b>그리고 대가가 「그 방송」이 아니라 「모든 방송」이다.</b> 바구니가 프로세스에
+        // 하나뿐이라(services/chat-collector CLAUDE.md 「공유 바구니 셋」) 한 방송의 나쁜
+        // 후원 한 건이 배치를 물고 늘어지면 <b>그 바구니를 함께 쓰는 다른 방송의 후원까지</b>
+        // 저장이 멎는다. 위 문단이 「그 방송」이라 적은 것은 범위를 좁게 본 것이다.
+        //
+        // 🔴 <b>「같은 뿌리인데 한 자리만」이 이 저장소에서 반복해 난 실수다.</b> 다음에
+        // 이 생성자에 칸을 더하는 사람은 <b>표의 NOT NULL TEXT 칸 전부</b>를 세고 시작하라.
+        channelId = channelId == null ? "" : channelId.replace("\0", "");
+        donatorChannelId = donatorChannelId == null ? "" : donatorChannelId.replace("\0", "");
     }
 }

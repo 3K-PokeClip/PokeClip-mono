@@ -24,6 +24,15 @@ public record WindowRequest(Instant from, Instant to) {
     private static final Instant LATEST = Instant.parse("2200-01-01T00:00:00Z");
 
     /**
+     * 커서도 같은 범위를 쓴다({@link ChatWindowCursor}). <b>값을 복제하지 않고 여기서
+     * 가져간다</b> — 같은 표의 같은 칸을 가리키는 값이 창구마다 다른 범위를 갖는 것이
+     * 이상하고, 복제하면 한쪽만 고쳐져 낡는다.
+     */
+    static final long EARLIEST_MILLIS = EARLIEST.toEpochMilli();
+
+    static final long LATEST_MILLIS = LATEST.toEpochMilli();
+
+    /**
      * @param max 이 값을 넘는 범위는 {@code too_wide}다. 상한이 없으면 방송 8시간치 채팅이
      *            한 질의로 나가 창구가 통째로 멈춘다
      * @throws InvalidWindowException 사유는 {@code missing}·{@code unreadable}·

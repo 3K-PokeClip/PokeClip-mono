@@ -8,6 +8,7 @@ import com.pokeclip.chat.collector.engineio.Handshake;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -38,8 +39,47 @@ public class ChatSession implements AutoCloseable {
     /** 삼킨 싱크 예외의 수. 안 세면 수신은 사는데 처리가 통째로 죽은 것을 못 본다. */
     private final AtomicLong sinkFailures = new AtomicLong();
 
+    /**
+     * 🔴 <b>후원 구독이 일시 실패했을 때 다시 시도하는 주기</b>(봇 codex P1이 잡았다).
+     *
+     * <p>그 전에는 재시도가 <b>아예 없었다</b> — {@code subscribeDonation}이 429·5xx·시한
+     * 초과를 {@code FAILED}로 바꿔 값으로 돌려주고, 부르는 쪽은 그것을 상태로 적기만 했다.
+     * 유일한 호출이 수립 ⑥이라 <b>채팅 소켓이 건강한 동안에는 아무도 다시 시도하지 않는다.</b>
+     * 채팅 소켓은 방송 내내 멀쩡한 것이 정상이므로, 후원 구독이 한 번 미끄러지면
+     * <b>그 방송의 후원이 통째로 안 들어온다.</b> 후원은 아카이브가 없어 되찾을 길도 없다.
+     *
+     * <p>재부착 주기와 같은 1분이다. 더 짧게 잡을 이유가 없다 — 상대가 429를 준 상황이면
+     * 자주 두드리는 것이 오히려 나쁘고, 후원은 한 건이 늦는 것보다 <b>영영 안 오는 것</b>이
+     * 문제였다.
+     */
+    static final Duration DONATION_RETRY_PERIOD = Duration.ofMinutes(1);
+
+    /** 재시도 주기. 검사가 짧게 바꿔 잰다 — 1분을 기다리면 검사가 못 선다. */
+    private final Duration donationRetryPeriod;
+
+    /** 종료 신호. 재시도 스레드가 매 바퀴 본다. */
+    private final AtomicBoolean stopping = new AtomicBoolean();
+
+    private volatile Thread donationRetry;
+
+    /**
+     * 재시도 스레드가 살아 있나. <b>검사가 「멈췄다」를 이것으로만 잴 수 있다</b> —
+     * 구독 호출 수로 재면 {@code releaseAndClose} 경로에서 <b>자동으로 참이 된다</b>:
+     * 그 길은 세션 키를 비우고, 키가 비면 다음 바퀴가 스스로 돌아 나가기 때문이다.
+     * 즉 호출 수로 잰 검사는 {@code stopDonationRetry}를 지워도 초록이다(실측).
+     */
+    boolean donationRetryAlive() {
+        Thread retry = donationRetry;
+        return retry != null && retry.isAlive();
+    }
+
     public ChatSession(ChzzkSessionClient client) {
+        this(client, DONATION_RETRY_PERIOD);
+    }
+
+    ChatSession(ChzzkSessionClient client, Duration donationRetryPeriod) {
         this.client = client;
+        this.donationRetryPeriod = donationRetryPeriod;
     }
 
     /** 종료할 때 구독 반납에 쓴다. 수립이 끝나야 채워진다. */
@@ -110,6 +150,9 @@ public class ChatSession implements AutoCloseable {
      * @return 반납의 결말. <b>어느 결말이든 소켓은 닫는다</b>
      */
     public Release releaseAndClose() {
+        // 반납보다 먼저 멈춘다 — 키를 비운 뒤에 재시도가 한 바퀴 더 돌면 소모된 키로
+        // 구독을 쏜다. 기다리지는 않는다(종료 예산).
+        stopDonationRetry();
         String key = currentSessionKey.getAndSet(null);
         Release result;
         if (key == null || key.isBlank()) {
@@ -267,12 +310,65 @@ public class ChatSession implements AutoCloseable {
         abortIfStopping(abort, EstablishStage.SUBSCRIBE);
         if (System.nanoTime() < endAt) {
             donation.set(client.subscribeDonation(sessionKey.get()));   // ⑥ DONATION
+            startDonationRetryIfFailed();
         }
         // 예산이 이미 다했으면 <b>건너뛴다(NONE)</b>. 던지지 않는 이유는 위와 같다 —
         // 여기서 던지면 후원 때문에 채팅 수립이 실패하는 길이 다시 열린다.
         // 건너뛴 세션은 다음 수립에서 다시 시도된다.
 
         return new Established(handshake.get(), socket);
+    }
+
+    /**
+     * 🔴 <b>일시 실패일 때만 다시 시도한다.</b> {@code REFUSED}(401·403)는 권한이 없는
+     * 것이라 시간이 안 풀어 준다 — 두드리면 남의 서버에 부하만 준다. {@code SUBSCRIBED}는
+     * 할 일이 없고, {@code NONE}은 시도한 적이 없는 것(예산이 다해 건너뛴 경우)이라
+     * 이 세션에서 새로 열 것이 아니다.
+     *
+     * <p><b>가상 스레드 하나이고 종료를 안 기다린다.</b> 종료 예산 다섯 항의 합이 이미
+     * 19초라(운영 유예 20초) 항을 하나 더하면 넘친다 — 넘치면 세션 닫기가 잘려
+     * 구독이 반납 안 되고 계정 자리가 남는다. 대신 {@code stopping}을 매 바퀴 보고
+     * 인터럽트를 받으므로 종료가 이 스레드를 기다릴 이유가 없다.
+     *
+     * <p><b>결과를 {@code compareAndSet}으로 쓴다.</b> 그냥 쓰면 반납이 이미 비워 둔
+     * {@code NONE}을 이 스레드가 되살려, 닫힌 세션이 창구에 「구독 중」으로 보인다.
+     */
+    private void startDonationRetryIfFailed() {
+        if (donation.get() != DonationSubscription.FAILED) {
+            return;
+        }
+        donationRetry = Thread.ofVirtual().name("chzzk-donation-retry").start(() -> {
+            while (!stopping.get()) {
+                try {
+                    Thread.sleep(donationRetryPeriod);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                if (stopping.get()) {
+                    return;
+                }
+                // 반납이 지나갔으면 키가 비어 있다. 소모된 키로 구독을 쏘지 않는다.
+                String key = currentSessionKey.get();
+                if (key == null || key.isBlank()) {
+                    return;
+                }
+                DonationSubscription now = client.subscribeDonation(key);
+                if (now != DonationSubscription.FAILED) {
+                    donation.compareAndSet(DonationSubscription.FAILED, now);
+                    return;
+                }
+            }
+        });
+    }
+
+    /** 재시도를 멈춘다. <b>기다리지 않는다</b> — 위 javadoc의 예산 이유. */
+    private void stopDonationRetry() {
+        stopping.set(true);
+        Thread retry = donationRetry;
+        if (retry != null) {
+            retry.interrupt();
+        }
     }
 
     /**
@@ -417,6 +513,9 @@ public class ChatSession implements AutoCloseable {
 
     @Override
     public void close() {
+        // releaseAndClose 를 안 거치고 바로 닫는 경로도 있다(수립 실패·전송 절단).
+        // 그 길에서도 재시도가 남으면 죽은 세션이 계속 구독을 쏜다.
+        stopDonationRetry();
         EngineIoSocket socket = current.getAndSet(null);
         if (socket != null) socket.close();
     }

@@ -71,12 +71,12 @@ class CollectorClientTest {
         assertThat(client(collector.baseUrl()).get(문, Map.of()))
                 .isEqualTo(new CollectorResponse(200, "{\"items\":[]}"));
 
-        collector.respondWith(문, 400, "{\"error\":\"inverted_window\"}");
+        collector.respondWith(문, 400, "{\"error\":\"inverted\"}");
         CollectorResponse 사백 = client(collector.baseUrl()).get(문, Map.of());
         assertThat(사백.status()).isEqualTo(400);
         assertThat(사백.body())
                 .as("본문을 우리가 다시 쓰면 프론트가 읽는 사유 낱말이 사라진다")
-                .isEqualTo("{\"error\":\"inverted_window\"}");
+                .isEqualTo("{\"error\":\"inverted\"}");
     }
 
     /**

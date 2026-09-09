@@ -405,4 +405,115 @@ class SessionEstablishTest extends IntegrationTestSupport {
         String base = "http://localhost:" + port;
         return new ChatSession(new ChzzkSessionClient(RestClient.create(), base, "test-token"));
     }
+
+    /** 재시도 주기를 짧게 준다. 운영값 1분을 기다리면 검사가 못 선다. */
+    private ChatSession newSession(java.time.Duration donationRetryPeriod) {
+        String base = "http://localhost:" + port;
+        return new ChatSession(
+                new ChzzkSessionClient(RestClient.create(), base, "test-token"), donationRetryPeriod);
+    }
+
+    /**
+     * 🔴 <b>후원 구독이 일시 실패하면 다시 시도한다</b>(봇 codex P1).
+     *
+     * <p>그 전에는 재시도가 <b>아예 없었다</b> — 429·5xx·시한 초과가 {@code FAILED}로
+     * 기록되고 끝이었다. 유일한 호출이 수립 ⑥이라 <b>채팅 소켓이 건강한 동안에는 아무도
+     * 다시 시도하지 않는다.</b> 채팅 소켓이 방송 내내 멀쩡한 것이 정상이므로,
+     * 한 번 미끄러지면 그 방송의 후원이 통째로 안 들어온다.
+     *
+     * <p><b>「구독 호출이 두 번 이상 나갔다」로 잰다</b> — 상태만 보면 재시도가 아니라
+     * 수립 한 번으로도 참이 될 수 있다.
+     */
+    @Test
+    void 후원_구독이_일시_실패하면_다시_시도한다() throws Exception {
+        behavior.subscribeDonationStatus = 503;
+        ChatSession session = newSession(java.time.Duration.ofMillis(60));
+        try {
+            session.open(java.time.Duration.ofSeconds(5), () -> false);
+            assertThat(session.donationSubscription())
+                    .as("503은 권한 문제가 아니라 일시 실패다").isEqualTo(DonationSubscription.FAILED);
+
+            behavior.subscribeDonationStatus = 200;
+            long 시한 = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+            while (session.donationSubscription() != DonationSubscription.SUBSCRIBED
+                    && System.nanoTime() < 시한) {
+                Thread.sleep(20);
+            }
+
+            assertThat(session.donationSubscription())
+                    .as("상대가 나은 뒤에도 FAILED로 굳어 있다 — 재시도가 없다")
+                    .isEqualTo(DonationSubscription.SUBSCRIBED);
+            assertThat(behavior.subscribeDonationCallCount())
+                    .as("구독 호출이 한 번뿐이면 재시도가 안 나간 것이다").isGreaterThan(1);
+        } finally {
+            session.releaseAndClose();
+        }
+    }
+
+    /**
+     * <b>권한 거부는 다시 시도하지 않는다.</b> 401·403은 시간이 안 풀어 주므로 두드리면
+     * 남의 서버에 부하만 준다 — 위 검사의 <b>반대 방향</b>이라 둘을 같이 본다.
+     */
+    @Test
+    void 후원_권한_거부는_다시_시도하지_않는다() throws Exception {
+        behavior.subscribeDonationStatus = 403;
+        ChatSession session = newSession(java.time.Duration.ofMillis(60));
+        try {
+            session.open(java.time.Duration.ofSeconds(5), () -> false);
+            assertThat(session.donationSubscription()).isEqualTo(DonationSubscription.REFUSED);
+            int 수립직후 = behavior.subscribeDonationCallCount();
+
+            Thread.sleep(400);   // 재시도가 있다면 여섯 바퀴는 돌 시간
+
+            assertThat(behavior.subscribeDonationCallCount())
+                    .as("거부에도 재시도가 붙었다 — 시간이 안 풀어 주는 실패다")
+                    .isEqualTo(수립직후);
+        } finally {
+            session.releaseAndClose();
+        }
+    }
+
+    /**
+     * 🔴 <b>{@code close()}만 부르는 경로에서도 재시도가 멈춘다.</b> 수립 실패·전송 절단이
+     * 그 길이고, 거기서는 <b>세션 키가 안 비워진다</b> — 재시도 루프가 키를 보고 스스로
+     * 나가는 길이 없어 <b>영원히 돈다.</b>
+     *
+     * <p>🔴 <b>구독 호출 수로 재면 안 된다.</b> 처음에 그렇게 썼는데
+     * {@code releaseAndClose} 경로는 키를 비우므로 <b>중단 코드를 지워도 초록</b>이었다.
+     * 실제로 주입해 보니 검사는 초록인데 <b>그 판의 전체 실행이 48분</b>이 걸렸다 —
+     * 멈추지 않은 재시도가 60ms마다 가짜 서버를 두드리고 있었다.
+     * <b>초록이 「멈췄다」를 뜻하지 않은 자리다.</b> 스레드 생존으로 바꿔 잰다.
+     */
+    @Test
+    void close만_불러도_후원_재시도가_멈춘다() throws Exception {
+        behavior.subscribeDonationStatus = 503;
+        ChatSession session = newSession(java.time.Duration.ofMillis(60));
+        session.open(java.time.Duration.ofSeconds(5), () -> false);
+        assertThat(session.donationRetryAlive()).as("재시도가 시작조차 안 됐다").isTrue();
+
+        session.close();
+
+        long 시한 = System.nanoTime() + java.time.Duration.ofSeconds(3).toNanos();
+        while (session.donationRetryAlive() && System.nanoTime() < 시한) {
+            Thread.sleep(20);
+        }
+        assertThat(session.donationRetryAlive())
+                .as("close 만으로는 안 멈춘다 — 그 경로는 키를 안 비워 영원히 돈다").isFalse();
+    }
+
+    /** 반납 경로도 멈춘다. 위와 갈래가 달라 둘을 같이 본다. */
+    @Test
+    void 반납_경로에서도_후원_재시도가_멈춘다() throws Exception {
+        behavior.subscribeDonationStatus = 503;
+        ChatSession session = newSession(java.time.Duration.ofMillis(60));
+        session.open(java.time.Duration.ofSeconds(5), () -> false);
+
+        session.releaseAndClose();
+
+        long 시한 = System.nanoTime() + java.time.Duration.ofSeconds(3).toNanos();
+        while (session.donationRetryAlive() && System.nanoTime() < 시한) {
+            Thread.sleep(20);
+        }
+        assertThat(session.donationRetryAlive()).isFalse();
+    }
 }

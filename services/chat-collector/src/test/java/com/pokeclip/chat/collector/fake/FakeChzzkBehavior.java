@@ -422,6 +422,11 @@ public class FakeChzzkBehavior {
      */
     public int unsubscribeDonationCallCount() { return unsubscribeDonationCalls.get(); }
 
+    /** 후원 <b>구독</b> 호출 수. 재시도가 실제로 나가는지를 이 값으로만 잴 수 있다. */
+    public int subscribeDonationCallCount() { return subscribeDonationCalls.get(); }
+
+    void countSubscribeDonationCall() { subscribeDonationCalls.incrementAndGet(); }
+
     void countUnsubscribeDonationCall() { unsubscribeDonationCalls.incrementAndGet(); }
 
     /**
@@ -434,6 +439,8 @@ public class FakeChzzkBehavior {
     public volatile Duration unsubscribeDonationDelay = Duration.ZERO;
 
     private final AtomicInteger unsubscribeDonationCalls = new AtomicInteger();
+
+    private final AtomicInteger subscribeDonationCalls = new AtomicInteger();
 
     /** 반납 요청들이 서버에 도착한 시각. 정렬돼 있지 않다 — 도착 순서 그대로다. */
     public List<Long> unsubscribeArrivalNanos() { return List.copyOf(unsubscribeArrivalNanos); }
@@ -650,6 +657,7 @@ public class FakeChzzkBehavior {
         subscribeDonationStatus = 200;
         sendDonationSubscribed = true;
         unsubscribeDonationCalls.set(0);
+        subscribeDonationCalls.set(0);
         unsubscribeDonationDelay = Duration.ZERO;
     }
 
