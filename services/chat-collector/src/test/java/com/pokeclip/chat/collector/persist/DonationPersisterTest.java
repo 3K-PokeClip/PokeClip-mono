@@ -35,7 +35,7 @@ class DonationPersisterTest extends IntegrationTestSupport {
 
     private static PersistableDonation donation(String donatorChannelId, Long amount) {
         return new PersistableDonation("don-1", "CH", donatorChannelId, "도네초코",
-                "CHAT", amount, "가즈아", 1_754_300_000_000L);
+                "CHAT", amount, "가즈아", 1_754_300_000_000L, 1L);
     }
 
     /** 금액이 없어도 후원 자체는 남는다 — 디코더가 null을 준 갈래의 끝이다. */
@@ -44,7 +44,7 @@ class DonationPersisterTest extends IntegrationTestSupport {
         DonationBuffer buffer = new DonationBuffer(100);
         buffer.offer(donation("D1", 5000L));
         buffer.offer(new PersistableDonation("don-1", "CH", "D2", "n", "VIDEO", null, "",
-                1_754_300_001_000L));
+                1_754_300_001_000L, 2L));
 
         new DonationPersister(jdbc, buffer).flushBacklog();
 
@@ -112,7 +112,7 @@ class DonationPersisterTest extends IntegrationTestSupport {
     @Test
     void 닉네임_문구_종류의_NUL은_생성_지점에서_제거된다() {
         PersistableDonation d = new PersistableDonation("don-1", "C\0H", "D\0ONOR", "도\0네",
-                "CH\0AT", 1L, "가\0즈아", 1L);
+                "CH\0AT", 1L, "가\0즈아", 1L, 3L);
         assertThat(d.donatorNickname()).isEqualTo("도네");
         assertThat(d.donationText()).isEqualTo("가즈아");
         assertThat(d.donationType()).isEqualTo("CHAT");
@@ -121,7 +121,7 @@ class DonationPersisterTest extends IntegrationTestSupport {
         assertThat(d.donatorChannelId()).isEqualTo("DONOR");
 
         PersistableDonation 빈값 = new PersistableDonation("don-1", "CH", "D", null,
-                null, 1L, null, 1L);
+                null, 1L, null, 1L, 4L);
         assertThat(빈값.donationText()).as("표가 NOT NULL이다").isEmpty();
         assertThat(빈값.donationType()).as("종류도 같은 모양이어야 한다").isEmpty();
         assertThat(빈값.donatorNickname()).as("닉네임 칸만 NULL을 받는다").isNull();
@@ -138,11 +138,14 @@ class DonationPersisterTest extends IntegrationTestSupport {
     @Test
     void 같은_후원이_두_번_와도_한_번만_남는다() {
         DonationBuffer buffer = new DonationBuffer(100);
-        buffer.offer(donation("DUP", 5000L));
+        // 🔴 <b>같은 객체</b>를 다시 넣는다 — 그것이 저장 재시도의 모양이다.
+        // 순번이 수신 시점에 매겨지므로 재시도는 그 값을 그대로 들고 다시 들어온다.
+        PersistableDonation 같은_후원 = donation("DUP", 5000L);
+        buffer.offer(같은_후원);
         DonationPersister persister = new DonationPersister(jdbc, buffer);
         persister.flushBacklog();
 
-        buffer.offer(donation("DUP", 5000L));
+        buffer.offer(같은_후원);
         persister.flushBacklog();
 
         assertThat(jdbc.queryForObject(
@@ -160,43 +163,20 @@ class DonationPersisterTest extends IntegrationTestSupport {
     @Test
     void 같은_금액을_연달아_보내면_둘_다_남는다() {
         DonationBuffer buffer = new DonationBuffer(100);
+        // 🔴 <b>시각이 같다.</b> 우리가 System.currentTimeMillis() 로 찍으므로 연속 수신의
+        // 99%가 이 모양이다(실측 20,000회 중 19,999회) — 1밀리초를 벌려 두면
+        // 이 검사는 <b>열쇠에서 순번을 빼도 초록이다</b>(주입으로 확인했다).
+        // 가르는 것은 순번뿐이어야 한다.
         buffer.offer(new PersistableDonation("don-1", "CH", "SAME", "도네초코", "CHAT", 5000L,
-                "가즈아", 1_754_300_000_000L));
+                "가즈아", 1_754_300_000_000L, 5L));
         buffer.offer(new PersistableDonation("don-1", "CH", "SAME", "도네초코", "CHAT", 5000L,
-                "가즈아", 1_754_300_000_001L));   // 1밀리초 뒤
+                "가즈아", 1_754_300_000_000L, 6L));   // 같은 ms, 다른 순번
 
         new DonationPersister(jdbc, buffer).flushBacklog();
 
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM chat_donations WHERE donator_channel_id='SAME'", Long.class))
                 .as("같은 금액 연속 후원이 접혔다 — 실제 후원이 사라진다").isEqualTo(2L);
-    }
-
-    /**
-     * 🔴 <b>금액과 문구의 경계가 지문에 선다.</b> 재료를 이어 붙일 때 구분자가 없으면
-     * <b>경계가 다른데 이어 붙인 결과가 같은</b> 쌍이 한 지문이 되어 <b>진짜 후원 하나가
-     * 사라진다</b> — 아래 둘이 정확히 그 쌍이다: {@code 5원+"00"}과 {@code 50원+"0"}은
-     * 구분자를 빼면 둘 다 {@code CHAT500}이다(실측 재현).
-     *
-     * <p><b>이 검사는 앞서 한 번 헛돌았다</b>(POK-234 도장 감사). 처음 쓴 입력이
-     * 「금액 없음 + 문구 "null"」과 「금액 없음 + 빈 문구」였는데, 그 둘은 구분자를 지워도
-     * 이어 붙인 결과가 달라 <b>14건 전부 초록</b>이었다. <b>구분자가 막는 것은
-     * 「null 표기의 모호함」이 아니라 「경계의 모호함」이다</b> — 근거를 잘못 짚으면
-     * 그 근거에 맞춘 입력이 아무것도 안 잰다.
-     */
-    @Test
-    void 금액과_문구의_경계가_지문에_선다() {
-        DonationBuffer buffer = new DonationBuffer(100);
-        buffer.offer(new PersistableDonation("don-1", "CH", "AMB", "n", "CHAT", 5L,
-                "00", 1_754_300_000_000L));
-        buffer.offer(new PersistableDonation("don-1", "CH", "AMB", "n", "CHAT", 50L,
-                "0", 1_754_300_000_000L));
-
-        new DonationPersister(jdbc, buffer).flushBacklog();
-
-        assertThat(jdbc.queryForObject(
-                "SELECT count(*) FROM chat_donations WHERE donator_channel_id='AMB'", Long.class))
-                .as("경계가 안 서서 다른 후원 둘이 한 건으로 접혔다").isEqualTo(2L);
     }
 
     /**
@@ -211,9 +191,9 @@ class DonationPersisterTest extends IntegrationTestSupport {
     void 종류에_NUL이나_긴_값이_와도_저장된다() {
         DonationBuffer buffer = new DonationBuffer(100);
         buffer.offer(new PersistableDonation("don-1", "CH", "NUL", "n", "CH\0AT", 1L,
-                "t", 1_754_300_000_000L));
+                "t", 1_754_300_000_000L, 9L));
         buffer.offer(new PersistableDonation("don-1", "CH", "LONG", "n",
-                "0123456789ABCDEFG", 1L, "t", 1_754_300_001_000L));
+                "0123456789ABCDEFG", 1L, "t", 1_754_300_001_000L, 10L));
 
         new DonationPersister(jdbc, buffer).flushBacklog();
 
@@ -237,7 +217,7 @@ class DonationPersisterTest extends IntegrationTestSupport {
     void 식별자에_NUL이_있어도_저장된다() {
         DonationBuffer buffer = new DonationBuffer(100);
         buffer.offer(new PersistableDonation("don-1", "CH\0X", "NUL\0ID", "n",
-                "CHAT", 1L, "t", 1_754_300_000_000L));
+                "CHAT", 1L, "t", 1_754_300_000_000L, 11L));
 
         new DonationPersister(jdbc, buffer).flushBacklog();
 
@@ -245,5 +225,53 @@ class DonationPersisterTest extends IntegrationTestSupport {
                 "SELECT count(*) FROM chat_donations WHERE donator_channel_id='NULID'", Long.class))
                 .as("식별자 NUL 하나가 모든 방송의 후원 저장을 멈춘다").isEqualTo(1L);
         assertThat(buffer.size()).as("되돌아왔으면 영원히 재시도한다").isZero();
+    }
+
+    /**
+     * 🔴 <b>둘째 close 호출자가 첫 호출자의 flush를 기다린다</b>(봇 codex P2가 잡았다).
+     *
+     * <p>그 전에는 둘째가 <b>즉시 돌아갔다.</b> 영구 정지 스레드가 close를 도는 중에
+     * {@code CollectorRunner.stop()}이 또 부르면, 둘째가 바로 나가 컨텍스트 파괴가 이어지고
+     * <b>아직 flush 중인 데몬 스레드가 DataSource를 잃는다</b> — 그 바구니의 후원이 사라진다.
+     * {@code ChatPersister.close()}는 이 대기를 갖고 있는데 <b>여기만 없었다.</b>
+     *
+     * <p><b>「기다렸다」를 시간으로 잰다</b> — 첫 호출자를 느린 flush에 붙들어 두고,
+     * 둘째가 그보다 빨리 돌아오면 안 기다린 것이다.
+     */
+    @Test
+    void 둘째_close는_첫_close의_flush를_기다린다() throws Exception {
+        DonationBuffer buffer = new DonationBuffer(100);
+        buffer.offer(donation("CLOSE-WAIT", 100L));
+        java.util.concurrent.CountDownLatch flush시작 = new java.util.concurrent.CountDownLatch(1);
+        JdbcTemplate 느린 = new JdbcTemplate(jdbc.getDataSource()) {
+            @Override
+            public int[] batchUpdate(String sql, java.util.List<Object[]> args) {
+                flush시작.countDown();
+                try {
+                    Thread.sleep(400);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return super.batchUpdate(sql, args);
+            }
+        };
+        DonationPersister persister = new DonationPersister(느린, buffer);
+
+        Thread 첫째 = new Thread(persister::close);
+        첫째.start();
+        assertThat(flush시작.await(2, java.util.concurrent.TimeUnit.SECONDS))
+                .as("첫 close 가 flush 에 안 들어갔다 — 이 검사가 아무것도 안 잰다").isTrue();
+
+        long 시작 = System.nanoTime();
+        persister.close();   // 둘째
+        long 걸린ms = (System.nanoTime() - 시작) / 1_000_000;
+
+        첫째.join(3000);
+        assertThat(걸린ms)
+                .as("둘째가 바로 돌아왔다 — 컨텍스트 파괴가 flush 중인 스레드를 앞지른다")
+                .isGreaterThanOrEqualTo(150L);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM chat_donations WHERE donator_channel_id='CLOSE-WAIT'",
+                Long.class)).isEqualTo(1L);
     }
 }

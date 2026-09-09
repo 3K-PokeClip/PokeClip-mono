@@ -314,7 +314,7 @@ class CollectorHealthTest extends IntegrationTestSupport {
         donationBuffer = new DonationBuffer();
         registry = new SessionRegistry(
                 new ChzzkProperties(true, "설정-토큰-쓰면-안-된다",
-                        "http://localhost:" + port, Duration.ofSeconds(5), FIRST_DELAY, MAX_DELAY),
+                        "http://localhost:" + port, Duration.ofSeconds(5), FIRST_DELAY, MAX_DELAY, Duration.ofMillis(60)),
                 restClientBuilder,
                 new ChatBuffer(1_000), TestPersistence.disabledPersister(), ChatArchive.NONE);
         // 판정기는 <b>진짜 표</b>를 쓴다. 여기서 보는 갈래 셋은 표에 닿기 전에 갈리지만,
@@ -374,7 +374,7 @@ class CollectorHealthTest extends IntegrationTestSupport {
 
     private static PersistableDonation donation(String text) {
         return new PersistableDonation("s-health", "ch-health", "d-1", "닉",
-                "CHAT", 1000L, text, 1_723_600_000_000L);
+                "CHAT", 1000L, text, 1_723_600_000_000L, 1L);
     }
 
     /**

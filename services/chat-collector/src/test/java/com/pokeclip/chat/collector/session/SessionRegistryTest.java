@@ -1173,6 +1173,33 @@ class SessionRegistryTest extends IntegrationTestSupport {
                 .isEqualTo(1);
     }
 
+    /**
+     * 🔴 <b>재시도가 성공하면 창구도 그것을 본다</b>(봇 codex P2가 잡았다).
+     *
+     * <p>{@code StreamSession}은 {@code open()}이 돌아온 <b>뒤 한 번</b> 후원 상태를
+     * 등록부에 적는다. 재시도는 그 뒤에 값을 바꾸므로, 알림 배선이 없으면
+     * <b>재시도가 성공해도 창구는 방송이 끝날 때까지 「failed」로 보고한다</b> —
+     * 실제로는 후원이 잘 들어오는데 화면이 그럴듯하게 틀린다.
+     *
+     * <p>주기는 시험 프로필이 60ms로 줄여 둔다. 운영값 1분을 기다리는 검사는 못 선다.
+     */
+    @Test
+    void 후원_재시도가_성공하면_창구도_subscribed로_바뀐다() throws Exception {
+        givenRegistry();
+        behavior.subscribeDonationStatus = 503;
+
+        assertThat(registry.open(key("s-don-retry", 91L, "CH"), "tok-91")).isTrue();
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-don-retry") == DonationSubscription.FAILED);
+
+        behavior.subscribeDonationStatus = 200;
+
+        awaitUntil(AWAIT,
+                () -> registry.donationStateOf("s-don-retry") == DonationSubscription.SUBSCRIBED);
+        assertThat(registry.donationStateOf("s-don-retry"))
+                .as("재시도가 성공했는데 창구가 여전히 failed 다 — 화면이 그럴듯하게 틀린다")
+                .isEqualTo(DonationSubscription.SUBSCRIBED);
+    }
+
     /** 반납이 <b>둘</b> 나가야 한다. 후원 자리도 계정당 상한을 먹는다. */
     @Test
     void 후원_구독이_되면_subscribed이고_닫을_때_반납이_둘_나간다() throws Exception {
@@ -1402,7 +1429,7 @@ class SessionRegistryTest extends IntegrationTestSupport {
                 // 위 connectedTokens() 단언이 지킨다 — 여기에 진짜 같은 값을 두면
                 // 설정에서 읽는 회귀가 그 단언을 통과해 버린다.
                 new ChzzkProperties(enabled, "설정-토큰-쓰면-안-된다",
-                        "http://localhost:" + port, establishTimeout, FIRST_DELAY, MAX_DELAY),
+                        "http://localhost:" + port, establishTimeout, FIRST_DELAY, MAX_DELAY, Duration.ofMillis(60)),
                 restClientBuilder,
                 buffer, TestPersistence.disabledPersister(),
                 ChatArchive.NONE, new DonationSubscriptions(), donationBuffer);

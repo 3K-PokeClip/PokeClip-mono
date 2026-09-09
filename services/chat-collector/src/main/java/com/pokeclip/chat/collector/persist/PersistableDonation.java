@@ -18,7 +18,15 @@ public record PersistableDonation(
         String donationType,
         Long payAmount,
         String donationText,
-        long receivedAtMillis) {
+        long receivedAtMillis,
+        /**
+         * 🔴 이 프로세스가 받은 순번. <b>내용 해시가 아니라 순번인 이유</b>는
+         * 「같은 사람이 같은 금액·문구로 연달아 두 번」이 정당한 후원인데 해시로는
+         * 그것이 접히기 때문이다 — 시각을 우리가 찍으므로 <b>연속 수신의 99%가
+         * 같은 밀리초</b>다(실측). 순번은 수신 시점에 매겨져 재시도 때도 그대로
+         * 다시 들어가므로 재시도 중복만 접는다.
+         */
+        long receivedSeq) {
 
     public PersistableDonation {
         // PG TEXT가 거부하는 것은 사실상 NUL뿐이다. 채팅과 같은 자리(생성 지점)에서 지운다 —

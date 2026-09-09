@@ -49,9 +49,9 @@ public class DonationPersister {
     private static final String INSERT = """
             INSERT INTO chat_donations
               (stream_id, channel_id, donator_channel_id, donator_nickname,
-               donation_type, pay_amount, donation_text, received_at, donation_sha256)
+               donation_type, pay_amount, donation_text, received_at, received_seq)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT ON CONSTRAINT uq_chat_donations_fingerprint DO NOTHING
+            ON CONFLICT ON CONSTRAINT uq_chat_donations_received DO NOTHING
             """;
 
     private static final Logger log = LoggerFactory.getLogger(DonationPersister.class);
@@ -71,6 +71,17 @@ public class DonationPersister {
     /** 지문이 겹쳐 접힌 수. 저장 재시도가 만든 중복이고, 유실이 아니다. */
     private final AtomicLong conflicted = new AtomicLong();
     private final AtomicBoolean closed = new AtomicBoolean();
+
+    /**
+     * 🔴 <b>첫 호출자가 마지막 flush를 끝냈다는 신호</b>(봇 codex P2가 잡았다).
+     *
+     * <p>그 전에는 둘째 호출자가 <b>즉시 돌아갔다</b>. 영구 정지 스레드가 close를 도는 중에
+     * {@code CollectorRunner.stop()}이 또 부르면, 둘째가 바로 나가 컨텍스트 파괴가 이어지고
+     * <b>아직 flush 중인 데몬 스레드가 DataSource를 잃는다</b> — 그 바구니의 후원이 사라진다.
+     * {@code ChatPersister.close()}는 이 latch를 갖고 있는데 <b>여기만 없었다.</b>
+     */
+    private final java.util.concurrent.CountDownLatch closeDone =
+            new java.util.concurrent.CountDownLatch(1);
 
     public DonationPersister(JdbcTemplate jdbc, DonationBuffer buffer) {
         this.jdbc = jdbc;
@@ -192,6 +203,18 @@ public class DonationPersister {
     @PreDestroy
     public void close() {
         if (!closed.compareAndSet(false, true)) {
+            // 🔴 첫 호출자의 flush 를 기다린다 — 그냥 돌아가면 컨텍스트 파괴가 이어져
+            // 아직 flush 중인 스레드가 DataSource 를 잃는다(쌍둥이 ChatPersister 와 같다).
+            // 기다리는 시한은 첫 호출자의 예산(CLOSE_WAIT 2초)과 같다 — 더 길게 잡으면
+            // 종료 예산 다섯 항의 합이 운영 유예 20초를 넘긴다.
+            try {
+                if (!closeDone.await(CLOSE_WAIT.toMillis(), TimeUnit.MILLISECONDS)) {
+                    log.warn("chat.donation.close_wait_timeout");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("chat.donation.close_interrupted");
+            }
             return;
         }
         try {
@@ -203,6 +226,9 @@ public class DonationPersister {
             log.warn("chat.donation.close_interrupted");
         } catch (Exception e) {
             log.warn("chat.donation.close_timeout causeType={}", e.getClass().getSimpleName());
+        } finally {
+            // finally 다 — 위에서 던지거나 인터럽트로 빠져도 둘째 호출자가 영원히 안 매달린다.
+            closeDone.countDown();
         }
         if (buffer.size() > 0) {
             log.warn("chat.donation.shutdown_left size={}", buffer.size());
@@ -215,29 +241,8 @@ public class DonationPersister {
                 donation.donatorNickname(), donation.donationType(), donation.payAmount(),
                 donation.donationText(),
                 Timestamp.from(Instant.ofEpochMilli(donation.receivedAtMillis())),
-                fingerprint(donation)
+                donation.receivedSeq()
         };
     }
 
-    /**
-     * 지문 재료는 <b>종류·금액·문구</b> 셋이다. 누가·언제는 UNIQUE의 다른 칸이 든다
-     * (채팅이 {@code content_sha256} + 채널 + 보낸이 + 시각으로 나누는 것과 같은 모양).
-     *
-     * <p>🔴 <b>구분자가 막는 것은 「경계의 모호함」이다.</b> 안 넣으면 <b>경계가 다른데
-     * 이어 붙인 결과가 같은</b> 쌍이 한 지문이 되어 진짜 후원 하나가 사라진다 —
-     * {@code 5원+"00"}과 {@code 50원+"0"}이 둘 다 {@code CHAT500}이 된다(실측).
-     *
-     * <p><b>한때 이 자리에 「금액 {@code null}과 문자열 "null"을 가른다」고 적혀 있었는데
-     * 그 경우는 일어날 수 없다</b> — {@code payAmount}가 {@code Long}이라 문자열이
-     * {@code "null"}인데 값이 non-null일 수가 없다. <b>그 잘못된 근거에 맞춰 쓴 검사가
-     * 구분자를 지워도 초록이었다</b>(도장 감사가 잡았다).
-     *
-     * <p>재료에 NUL이 없다는 것은 {@link PersistableDonation}의 compact 생성자가 보증한다 —
-     * 종류·닉네임·문구 <b>셋 다</b> 거기서 지운다.
-     */
-    private static String fingerprint(PersistableDonation donation) {
-        return ChatPersister.sha256Hex(
-                donation.donationType() + "\u0000" + donation.payAmount() + "\u0000"
-                        + donation.donationText());
-    }
 }

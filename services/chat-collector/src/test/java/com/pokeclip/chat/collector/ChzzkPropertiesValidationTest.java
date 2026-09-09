@@ -27,7 +27,8 @@ class ChzzkPropertiesValidationTest {
             .withPropertyValues("pokeclip.chzzk.base-url=https://openapi.chzzk.naver.com")
             .withPropertyValues("pokeclip.chzzk.establish-timeout=15s")
             .withPropertyValues("pokeclip.chzzk.reconnect-first-delay=35s")
-            .withPropertyValues("pokeclip.chzzk.reconnect-max-delay=120s");
+            .withPropertyValues("pokeclip.chzzk.reconnect-max-delay=120s")
+            .withPropertyValues("pokeclip.chzzk.donation-retry-period=1m");
 
     /** PRD 상태표 첫 행이 성립하려면 이 상태로 떠 있어야 한다. */
     @Test

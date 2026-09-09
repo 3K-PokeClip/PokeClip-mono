@@ -5,6 +5,9 @@ import com.pokeclip.chat.collector.engineio.EngineIoFrame;
 import com.pokeclip.chat.collector.engineio.EngineIoSocket;
 import com.pokeclip.chat.collector.engineio.Handshake;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -29,6 +32,8 @@ public class ChatSession implements AutoCloseable {
     private static final Duration ABORT_CHECK_SLICE = Duration.ofMillis(100);
 
     public record Established(Handshake handshake, EngineIoSocket socket) { }
+
+    private static final Logger log = LoggerFactory.getLogger(ChatSession.class);
 
     private final ChzzkSessionClient client;
     private final AtomicReference<EngineIoSocket> current = new AtomicReference<>();
@@ -77,7 +82,7 @@ public class ChatSession implements AutoCloseable {
         this(client, DONATION_RETRY_PERIOD);
     }
 
-    ChatSession(ChzzkSessionClient client, Duration donationRetryPeriod) {
+    public ChatSession(ChzzkSessionClient client, Duration donationRetryPeriod) {
         this.client = client;
         this.donationRetryPeriod = donationRetryPeriod;
     }
@@ -94,6 +99,22 @@ public class ChatSession implements AutoCloseable {
 
     /** 이 세션이 후원을 구독했나. 등록부가 창구에 실을 값으로 읽어 간다. */
     public DonationSubscription donationSubscription() { return donation.get(); }
+
+    /**
+     * 🔴 <b>재시도가 상태를 바꾸면 알린다</b>(봇 codex P2가 잡았다).
+     *
+     * <p>부르는 쪽은 {@code open()}이 돌아온 <b>뒤 한 번</b> {@link #donationSubscription()}을
+     * 읽어 창구용 등록부에 적는다. 재시도는 그 뒤에 값을 바꾸므로, 알림이 없으면
+     * <b>재시도가 성공해도 창구는 방송이 끝날 때까지 「failed」로 보고한다</b> —
+     * 실제로는 후원이 잘 들어오고 있는데 화면이 그럴듯하게 틀린다.
+     *
+     * <p>기본값은 아무것도 안 한다 — 옛 경로({@code CollectorRunner})는 등록부가 없다.
+     */
+    private volatile Consumer<DonationSubscription> donationSink = state -> { };
+
+    public void onDonationSubscriptionChanged(Consumer<DonationSubscription> sink) {
+        this.donationSink = sink != null ? sink : state -> { };
+    }
 
     /** 삼킨 싱크 예외의 수. 삼키기만 하고 안 세면 조용한 실패를 우리가 만드는 것이다. */
     public long sinkFailureCount() { return sinkFailures.get(); }
@@ -355,11 +376,27 @@ public class ChatSession implements AutoCloseable {
                 }
                 DonationSubscription now = client.subscribeDonation(key);
                 if (now != DonationSubscription.FAILED) {
-                    donation.compareAndSet(DonationSubscription.FAILED, now);
+                    // CAS 가 이긴 경우에만 알린다 — 진 것은 반납이 이미 NONE 을 쓴 것이라
+                    // 그 값을 창구에 실으면 닫힌 세션이 「구독 중」으로 되살아난다.
+                    if (donation.compareAndSet(DonationSubscription.FAILED, now)) {
+                        notifyDonationChanged(now);
+                    }
                     return;
                 }
             }
         });
+    }
+
+    /**
+     * 알림이 던져도 재시도 스레드를 죽이지 않는다 — 등록부 갱신이 실패해도 구독 자체는
+     * 이미 섰고, 여기서 예외가 나가면 그 스레드가 조용히 사라져 다음 바퀴가 없다.
+     */
+    private void notifyDonationChanged(DonationSubscription state) {
+        try {
+            donationSink.accept(state);
+        } catch (RuntimeException e) {
+            log.warn("chat.donation.retry_notify_failed causeType={}", e.getClass().getSimpleName());
+        }
     }
 
     /** 재시도를 멈춘다. <b>기다리지 않는다</b> — 위 javadoc의 예산 이유. */

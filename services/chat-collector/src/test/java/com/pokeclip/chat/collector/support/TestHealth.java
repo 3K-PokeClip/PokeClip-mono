@@ -43,7 +43,7 @@ public final class TestHealth {
     private static SessionRegistry emptyRegistry() {
         return new SessionRegistry(
                 new ChzzkProperties(false, "쓰이지-않는다", "http://localhost:1",
-                        Duration.ofSeconds(5), Duration.ofMillis(200), Duration.ofSeconds(60)),
+                        Duration.ofSeconds(5), Duration.ofMillis(200), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 RestClient.builder(), TestPersistence.unusedBuffer(),
                 TestPersistence.disabledPersister(), ChatArchive.NONE);
     }

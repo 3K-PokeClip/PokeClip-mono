@@ -61,7 +61,7 @@ class ChatCollectionStatusResolverTest extends IntegrationTestSupport {
         donations = new DonationSubscriptions();
         registry = new SessionRegistry(
                 new ChzzkProperties(true, "설정-토큰-쓰면-안-된다", "http://localhost:" + port,
-                        Duration.ofSeconds(5), Duration.ofMillis(200), Duration.ofSeconds(60)),
+                        Duration.ofSeconds(5), Duration.ofMillis(200), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 restClientBuilder, new ChatBuffer(1_000),
                 TestPersistence.disabledPersister(), ChatArchive.NONE,
                 donations, new DonationBuffer());

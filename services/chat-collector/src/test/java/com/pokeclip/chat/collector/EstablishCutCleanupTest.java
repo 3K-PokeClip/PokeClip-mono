@@ -165,7 +165,7 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, establishTimeout,
-                Duration.ofMillis(50), Duration.ofSeconds(1)),
+                Duration.ofMillis(50), Duration.ofSeconds(1), Duration.ofMillis(60)),
                 status, restClientBuilder,
                         TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
 
@@ -208,7 +208,7 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
 
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 new CollectionStatus(), restClientBuilder,
                         TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
 
@@ -252,7 +252,7 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
         // 읽었는지 흐려진다.
         CutInsideWindowRunner created = new CutInsideWindowRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 status, restClientBuilder, behavior);
         runner = created;
 
@@ -347,7 +347,7 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
         try (LogCaptor captor = new LogCaptor()) {
             CutBeforeKeyRunner created = new CutBeforeKeyRunner(new ChzzkProperties(
                     true, "test-token", "http://localhost:" + port, Duration.ofSeconds(2),
-                    Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                    Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                     new CollectionStatus(), restClientBuilder, behavior, captor);
             runner = created;
 
@@ -441,7 +441,7 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 status, restClientBuilder,
                         TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
 
@@ -497,7 +497,7 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
             CollectionStatus status = new CollectionStatus();
             runner = new CollectorRunner(new ChzzkProperties(
                     true, "test-token", "http://localhost:" + port, establishTimeout,
-                    Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                    Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                     status, restClientBuilder,
                             TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
 
@@ -534,7 +534,7 @@ class EstablishCutCleanupTest extends IntegrationTestSupport {
     private CollectorRunner start(CollectionStatus status, Duration establishTimeout) {
         CollectorRunner created = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, establishTimeout,
-                Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 status, restClientBuilder,
                         TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         created.run(null);

@@ -449,7 +449,7 @@ class SessionShutdownTest extends IntegrationTestSupport {
         buffer = new ChatBuffer(1_000);
         registry = new SessionRegistry(
                 new ChzzkProperties(true, "설정-토큰-쓰면-안-된다",
-                        "http://localhost:" + port, Duration.ofSeconds(5), FIRST_DELAY, MAX_DELAY),
+                        "http://localhost:" + port, Duration.ofSeconds(5), FIRST_DELAY, MAX_DELAY, Duration.ofMillis(60)),
                 restClientBuilder,
                 buffer, TestPersistence.disabledPersister(),
                 ChatArchive.NONE);

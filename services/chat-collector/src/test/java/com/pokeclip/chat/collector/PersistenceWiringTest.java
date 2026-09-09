@@ -394,13 +394,13 @@ class PersistenceWiringTest extends IntegrationTestSupport {
         persister.start();
         runner = new CollectorRunner(
                 new ChzzkProperties(true, "test-token", "http://localhost:" + port,
-                        Duration.ofSeconds(5), Duration.ofMillis(50), Duration.ofSeconds(1)),
+                        Duration.ofSeconds(5), Duration.ofMillis(50), Duration.ofSeconds(1), Duration.ofMillis(60)),
                 new CollectionStatus(), restClientBuilder, buffer, persister, ChatArchive.NONE,
                 donationPersister, null, () -> { });
         runner.run(null);
         donationBuffer.offer(new PersistableDonation(
                 "close-wiring", "close-wiring-ch", "donator-1", "닉",
-                "CHAT", 1000L, "고마워요", 1_723_600_500_000L));
+                "CHAT", 1000L, "고마워요", 1_723_600_500_000L, 1L));
         assertThat(countDonationRows("close-wiring-ch"))
                 .as("넣기 전에 이미 행이 있으면 아래 단언이 남의 행을 세는 것이다")
                 .isZero();
@@ -441,7 +441,7 @@ class PersistenceWiringTest extends IntegrationTestSupport {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(
                 new ChzzkProperties(true, "test-token", "http://localhost:" + port,
-                        Duration.ofSeconds(5), Duration.ofMillis(50), Duration.ofSeconds(1)),
+                        Duration.ofSeconds(5), Duration.ofMillis(50), Duration.ofSeconds(1), Duration.ofMillis(60)),
                 status, restClientBuilder, buffer, persister, ChatArchive.NONE, exitAction);
         runner.run(null);
         assertThat(status.state())

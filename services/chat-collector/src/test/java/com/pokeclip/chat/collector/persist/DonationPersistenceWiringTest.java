@@ -51,7 +51,7 @@ class DonationPersistenceWiringTest extends IntegrationTestSupport {
 
         buffer.offer(new PersistableDonation(
                 "wiring-donation-stream", CHANNEL, "donator-w", "후원자",
-                "CHAT", 5000L, "고맙습니다", 1_723_600_900_000L));
+                "CHAT", 5000L, "고맙습니다", 1_723_600_900_000L, 1L));
 
         long deadline = System.nanoTime() + AWAIT.toNanos();
         while (rows() < 1 && System.nanoTime() < deadline) {

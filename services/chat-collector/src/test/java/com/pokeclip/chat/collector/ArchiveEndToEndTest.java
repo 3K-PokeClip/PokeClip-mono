@@ -159,7 +159,7 @@ class ArchiveEndToEndTest extends IntegrationTestSupport {
         DonationBuffer donationBuffer = new DonationBuffer(1_000);
         SessionRegistry registry = new SessionRegistry(
                 new ChzzkProperties(true, "설정-토큰-쓰면-안-된다", "http://localhost:" + port,
-                        Duration.ofSeconds(5), Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                        Duration.ofSeconds(5), Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 restClientBuilder, TestPersistence.unusedBuffer(),
                 TestPersistence.disabledPersister(), archive,
                 new DonationSubscriptions(), donationBuffer);
@@ -214,7 +214,7 @@ class ArchiveEndToEndTest extends IntegrationTestSupport {
         dbBuffer = TestPersistence.unusedBuffer();
         runner = new CollectorRunner(
                 new ChzzkProperties(true, "test-only-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                        Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                        Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 status, restClientBuilder, dbBuffer, TestPersistence.disabledPersister(), archive, () -> { });
         runner.run(null);
         return status;

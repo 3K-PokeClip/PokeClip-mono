@@ -34,7 +34,18 @@ public record ChzzkProperties(
         // 읽는 날 NPE로 죽는데, 그때 원인은 "설정에 값이 없다"가 아니라
         // "왜 여기서 NPE가 나지"로 보인다. 부팅에서 잡는다.
         @NotNull Duration reconnectFirstDelay,
-        @NotNull Duration reconnectMaxDelay
+        @NotNull Duration reconnectMaxDelay,
+        /**
+         * 🔴 후원 구독이 <b>일시 실패</b>했을 때 다시 시도하는 주기(POK-234, 봇 codex P1).
+         *
+         * <p>그 전에는 재시도가 아예 없어, 채팅 소켓이 건강한 동안 후원 구독이 한 번
+         * 미끄러지면 그 방송의 후원이 통째로 안 들어왔다. 후원은 아카이브가 없어
+         * 되찾을 길도 없다.
+         *
+         * <p><b>설정으로 뺀 이유는 검사 때문이다</b> — 1분을 기다리는 검사는 못 선다.
+         * 운영값을 만질 일은 거의 없다.
+         */
+        @NotNull Duration donationRetryPeriod
 ) {
 
     /**

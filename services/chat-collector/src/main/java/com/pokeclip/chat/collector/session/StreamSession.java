@@ -200,6 +200,14 @@ public class StreamSession {
     private final DonationBuffer donationBuffer;
 
     /**
+     * 받은 후원의 순번. <b>세션마다 따로다</b> — 표의 UNIQUE가 방송 번호를 함께 보므로
+     * 세션이 갈리면 순번이 겹쳐도 부딪히지 않는다. 프로세스가 재시작해 1부터 다시
+     * 시작해도 {@code received_at}이 달라 옛 행과 안 부딪힌다.
+     */
+    private final java.util.concurrent.atomic.AtomicLong donationSeq =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
      * 등록부가 여는 세션({@code SessionRegistry}). <b>검사용 손잡이 둘을 안 받는다</b> —
      * 그 둘은 러너를 <i>상속해서</i> 갈아 끼우는 옛 검사 전용이고, 등록부 경로에는
      * 상속할 러너가 없다. 자기 것으로 채운다.
@@ -252,7 +260,10 @@ public class StreamSession {
         this.lastSessionNo = lastSessionNo;
         this.donations = donations;
         this.donationBuffer = donationBuffer;
-        this.sessionFactory = sessionFactory != null ? sessionFactory : ChatSession::new;
+        // 기본 팩토리가 설정의 재시도 주기를 실어 준다 — 안 실으면 ChatSession 의
+        // 기본값(1분)이 쓰여 검사가 그 갈래를 못 잰다.
+        this.sessionFactory = sessionFactory != null ? sessionFactory
+                : client -> new ChatSession(client, properties.donationRetryPeriod());
         this.heartbeatListenerFactory = heartbeatListenerFactory != null
                 ? heartbeatListenerFactory : this::heartbeatListener;
         this.onPermanentStop = onPermanentStop;
@@ -664,6 +675,12 @@ public class StreamSession {
             // 위 갈래들(!started)로 빠진 세션의 값이 창구에 남아, 걷지도 않는 방송이
             // subscribed로 보인다. 재수립마다 덮어쓴다 — 권한이 회복되면 그때 올라온다.
             donations.set(key.streamId(), opening.donationSubscription());
+            // 🔴 재시도가 나중에 상태를 바꾸면 그것도 창구에 싣는다(봇 codex P2).
+            // 이 줄이 없으면 재시도가 성공해도 창구는 방송이 끝날 때까지 「failed」다 —
+            // 실제로는 후원이 잘 들어오는데 화면이 그럴듯하게 틀린다.
+            // 열쇠를 여기서 캡처하지 않고 매번 읽는다 — 갈아끼움이 지나갔으면
+            // 그 사이 방송 번호가 바뀌어 있고, 옛 번호에 적으면 아무도 안 읽는 자리가 된다.
+            opening.onDonationSubscriptionChanged(state -> donations.set(stream(), state));
             Instant since = disconnectedAt.getAndSet(null);
             if (since != null) {
                 metrics.recordOutage(since, Instant.now());
@@ -1039,10 +1056,13 @@ public class StreamSession {
             }
             long receivedAt = System.currentTimeMillis();
             metrics.recordDonation();
+            // 🔴 순번을 여기서 매긴다 — 재시도 때 같은 객체가 다시 들어가므로 그 값이 유지되고,
+            // 그래서 재시도 중복만 접히고 정당한 연속 후원은 안 접힌다(봇 codex P2).
+            // 시각만으로는 못 가른다: 연속 수신의 99%가 같은 밀리초다(실측).
             donationBuffer.offer(new PersistableDonation(key.streamId(), donationEvent.channelId(),
                     donationEvent.donatorChannelId(), donationEvent.donatorNickname(),
                     donationEvent.donationType(), donationEvent.payAmount(),
-                    donationEvent.donationText(), receivedAt));
+                    donationEvent.donationText(), receivedAt, donationSeq.incrementAndGet()));
             // 🔴 <b>아카이브에 넣지 않는다</b>(계획 검증 F3). archived는 「퍼간 건수」를 그대로
             // 세는데 received는 채팅만 센다 — 후원을 넣으면 판정·요약 줄의 검산 등식
             // received = archived + archiveBufferDropped 가 후원 수만큼 영구히 벌어져

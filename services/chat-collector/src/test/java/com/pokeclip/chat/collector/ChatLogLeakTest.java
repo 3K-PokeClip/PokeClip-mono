@@ -441,7 +441,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
             try {
                 buffer.offer(new PersistableDonation("leak-donation-stream", "leak-don-ch",
                         SENDER, DONATOR_NICKNAME, "CHAT", 1000L, DONATION_TEXT,
-                        1_754_300_000_500L));
+                        1_754_300_000_500L, 1L));
                 assertThat(persister.flushOnce())
                         .as("표까지 안 갔다면 바인딩 로거가 후원 바늘을 나른 적이 없다")
                         .isEqualTo(1);
@@ -475,7 +475,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
             try {
                 buffer.offer(new PersistableDonation(tooLongStreamId, "leak-don-ch",
                         SENDER, DONATOR_NICKNAME, "CHAT", 1000L, DONATION_TEXT,
-                        1_754_300_000_500L));
+                        1_754_300_000_500L, 2L));
                 assertThat(persister.flushOnce())
                         .as("표가 받아 줬다면 실패 갈래를 안 지나간 것이다")
                         .isZero();
@@ -560,7 +560,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(
                 new ChzzkProperties(true, TOKEN, "http://localhost:" + port, Duration.ofSeconds(5),
-                        Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                        Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 status, restClientBuilder,
                         TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         runner.run(null);

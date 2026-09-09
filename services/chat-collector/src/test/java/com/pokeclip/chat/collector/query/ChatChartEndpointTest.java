@@ -33,6 +33,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 class ChatChartEndpointTest extends IntegrationTestSupport {
 
+    /** 픽스처의 후원 순번. 표의 UNIQUE가 요구하는 유일값이면 되고,
+     * 이 픽스처가 재는 것은 창구 조회이지 중복 규칙이 아니다
+     * — 그쪽은 DonationPersisterTest가 잰다. */
+    private static final java.util.concurrent.atomic.AtomicLong DONATION_SEQ =
+            new java.util.concurrent.atomic.AtomicLong();
+
     private static final String STREAM = "api-chart-1";
     private static final Instant T0 = Instant.parse("2026-09-03T15:00:00Z");
 
@@ -158,13 +164,12 @@ class ChatChartEndpointTest extends IntegrationTestSupport {
         jdbc.update("""
                 INSERT INTO chat_donations
                   (stream_id, channel_id, donator_channel_id, donator_nickname,
-                   donation_type, pay_amount, donation_text, received_at, donation_sha256)
-                -- 지문은 매번 유일한 값이면 된다. 이 픽스처가 재는 것은 창구 조회이지
-                -- 지문 규칙이 아니다 — 그쪽은 DonationPersisterTest가 잰다. 운영 지문
-                -- 계산을 여기 베끼면 사본만 맞고 운영 계산은 아무도 안 보게 된다.
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, md5(random()::text))
+                   donation_type, pay_amount, donation_text, received_at, received_seq)
+                -- 순번은 매번 유일한 값이면 된다. 이 픽스처가 재는 것은 창구 조회이지
+                -- 중복 규칙이 아니다 — 그쪽은 DonationPersisterTest가 잰다.
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 STREAM, "api-chart-ch", "api-chart-donator", "후원자", "CHAT", 1000L, "가즈아",
-                Timestamp.from(receivedAt));
+                Timestamp.from(receivedAt), DONATION_SEQ.incrementAndGet());
     }
 }

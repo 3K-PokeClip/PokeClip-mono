@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DonationBufferTest {
 
     private static PersistableDonation donation(int i) {
-        return new PersistableDonation("s", "CH", "D" + i, "n", "CHAT", 1L, "t", 1000L + i);
+        return new PersistableDonation("s", "CH", "D" + i, "n", "CHAT", 1L, "t", 1000L + i, 1L);
     }
 
     @Test
