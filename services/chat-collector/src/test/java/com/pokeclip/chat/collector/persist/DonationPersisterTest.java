@@ -110,4 +110,65 @@ class DonationPersisterTest extends IntegrationTestSupport {
         assertThat(d.donatorNickname()).isEqualTo("도네");
         assertThat(d.donationText()).isEqualTo("가즈아");
     }
+
+    /**
+     * 🔴 <b>저장 재시도가 중복을 만들지 않는다.</b> 배치 저장이 중간에 끊기면 커밋된 앞 행이
+     * 되돌려져 다시 들어오는데, 후원에는 그것을 흡수할 장치가 없었다(로컬 리뷰 라운드 1).
+     *
+     * <p><b>같은 배치를 두 번 넣는 것</b>으로 그 재전송을 흉내 낸다 — 절단을 실제로 만들려면
+     * TCP 중계기가 필요하고(POK-84가 그렇게 쟀다), 이 검사가 재려는 것은 절단 자체가 아니라
+     * <b>같은 줄이 두 번 와도 표에 한 번만 남는가</b>이기 때문이다.
+     */
+    @Test
+    void 같은_후원이_두_번_와도_한_번만_남는다() {
+        DonationBuffer buffer = new DonationBuffer(100);
+        buffer.offer(donation("DUP", 5000L));
+        DonationPersister persister = new DonationPersister(jdbc, buffer);
+        persister.flushBacklog();
+
+        buffer.offer(donation("DUP", 5000L));
+        persister.flushBacklog();
+
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM chat_donations WHERE donator_channel_id='DUP'", Long.class))
+                .as("재시도가 중복을 만들었다").isEqualTo(1L);
+        assertThat(persister.persistedCount()).as("저장으로 센 것").isEqualTo(1L);
+        assertThat(persister.conflictedCount()).as("접힌 것 — 유실이 아니라 중복이다").isEqualTo(1L);
+    }
+
+    /**
+     * 🔴 <b>진짜 연속 후원은 접히지 않는다.</b> 같은 사람이 같은 금액을 연달아 보내는 것은
+     * 정상이고, 그것까지 한 건으로 접으면 <b>실제 후원이 사라진다</b> — 지문에 시각이 들어
+     * 있는 이유가 이것이다. 위 검사의 <b>반대 방향</b>이라 둘을 같이 본다.
+     */
+    @Test
+    void 같은_금액을_연달아_보내면_둘_다_남는다() {
+        DonationBuffer buffer = new DonationBuffer(100);
+        buffer.offer(new PersistableDonation("don-1", "CH", "SAME", "도네초코", "CHAT", 5000L,
+                "가즈아", 1_754_300_000_000L));
+        buffer.offer(new PersistableDonation("don-1", "CH", "SAME", "도네초코", "CHAT", 5000L,
+                "가즈아", 1_754_300_000_001L));   // 1밀리초 뒤
+
+        new DonationPersister(jdbc, buffer).flushBacklog();
+
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM chat_donations WHERE donator_channel_id='SAME'", Long.class))
+                .as("같은 금액 연속 후원이 접혔다 — 실제 후원이 사라진다").isEqualTo(2L);
+    }
+
+    /** 금액이 {@code null}인 것과 문구가 {@code \"null\"}인 것은 다른 지문이다. */
+    @Test
+    void 금액_없음과_문구_null은_다른_지문이다() {
+        DonationBuffer buffer = new DonationBuffer(100);
+        buffer.offer(new PersistableDonation("don-1", "CH", "AMB", "n", "CHAT", null,
+                "null", 1_754_300_000_000L));
+        buffer.offer(new PersistableDonation("don-1", "CH", "AMB", "n", "CHAT", null,
+                "", 1_754_300_000_000L));
+
+        new DonationPersister(jdbc, buffer).flushBacklog();
+
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM chat_donations WHERE donator_channel_id='AMB'", Long.class))
+                .isEqualTo(2L);
+    }
 }

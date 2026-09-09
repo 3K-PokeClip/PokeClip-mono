@@ -23,7 +23,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 class BroadcastInfoStoreTest extends IntegrationTestSupport {
 
-    private static final List<String> STREAMS = List.of("bi-1", "bi-cap", "bi-tags");
+    private static final List<String> STREAMS =
+            List.of("bi-1", "bi-cap", "bi-tags", "bi-null-tag", "bi-null-write");
     private static final Instant T = Instant.parse("2026-09-03T15:00:00Z");
 
     private final BroadcastInfoStore store;
@@ -90,6 +91,44 @@ class BroadcastInfoStoreTest extends IntegrationTestSupport {
         assertThat(store.series("bi-cap", T.minusSeconds(1), 2))
                 .extracting(BroadcastInfo::viewers)
                 .containsExactly(3, 4);
+    }
+
+    /**
+     * 🔴 <b>이미 들어간 NULL 원소를 읽어도 안 터진다.</b> PostgreSQL {@code TEXT[]}는
+     * 원소 NULL을 허용하는데 {@code List.of}는 그것에 NPE를 던진다 — 저장이 성공한 뒤
+     * <b>읽기만</b> 터지므로 그 행이 최신인 동안 그 방송의 창구가 <b>영구히 500</b>이 되고,
+     * clip이 5xx를 접어 화면에는 「수집 서버가 아프다」로 보인다.
+     *
+     * <p><b>SQL로 직접 심는 이유</b>는 아래 쌍둥이 검사가 쓰기 쪽을 막아 버려서
+     * {@code store.insert}로는 이 줄을 못 만들기 때문이다 — 그래도 <b>과거에 들어간 줄</b>은
+     * 실재할 수 있으므로 읽기 쪽 그물을 따로 둔다.
+     */
+    @Test
+    void 표에_들어간_NULL_태그를_읽어도_안_터진다() {
+        jdbc.update("INSERT INTO broadcast_info"
+                + " (stream_id, channel_id, observed_at, live_title, tags, category, concurrent_users)"
+                + " VALUES ('bi-null-tag','CH',?,'제목',ARRAY['롤',NULL]::text[],'LoL',7)",
+                java.sql.Timestamp.from(T));
+
+        assertThat(store.latest("bi-null-tag").orElseThrow().tags()).containsExactly("롤");
+        assertThat(store.series("bi-null-tag", T.minusSeconds(1), 720))
+                .singleElement()
+                .extracting(BroadcastInfo::viewers).isEqualTo(7);
+    }
+
+    /** 쓰는 쪽도 막는다 — 읽기만 고치면 NULL 원소가 표에 계속 쌓인다. */
+    @Test
+    void NULL_태그는_표에_안_들어간다() {
+        List<String> 널이_섞인_태그 = java.util.Arrays.asList("롤", null, "랭크");
+
+        store.insert(new BroadcastInfo("bi-null-write", "CH", T, "제목", 널이_섞인_태그, "LoL", 1));
+
+        assertThat(jdbc.queryForObject(
+                "SELECT array_position(tags, NULL) IS NOT NULL FROM broadcast_info"
+                        + " WHERE stream_id = 'bi-null-write'", Boolean.class))
+                .as("표에 NULL 원소가 들어갔다 — 읽는 쪽이 그 줄에서 500을 낸다").isFalse();
+        assertThat(store.latest("bi-null-write").orElseThrow().tags())
+                .containsExactly("롤", "랭크");
     }
 
     /** {@code since}보다 이른 줄은 추이에 안 든다 — 안 그러면 상한이 무엇을 자르는지 흐려진다. */

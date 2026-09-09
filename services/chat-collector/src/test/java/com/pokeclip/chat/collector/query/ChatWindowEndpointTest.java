@@ -323,8 +323,11 @@ class ChatWindowEndpointTest {
             jdbc.update("""
                     INSERT INTO chat_donations
                       (stream_id, channel_id, donator_channel_id, donator_nickname,
-                       donation_type, pay_amount, donation_text, received_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                       donation_type, pay_amount, donation_text, received_at, donation_sha256)
+                    -- 지문은 매번 유일한 값이면 된다. 이 픽스처가 재는 것은 창구 조회이지
+                    -- 지문 규칙이 아니다 — 그쪽은 DonationPersisterTest가 잰다. 운영 지문
+                    -- 계산을 여기 베끼면 사본만 맞고 운영 계산은 아무도 안 보게 된다.
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, md5(random()::text))
                     """,
                     STREAM, "api-win-ch", "api-win-donator", "후원자", "CHAT", 1000L, text,
                     Timestamp.from(receivedAt));
