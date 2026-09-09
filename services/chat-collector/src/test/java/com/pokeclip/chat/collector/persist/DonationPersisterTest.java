@@ -102,13 +102,26 @@ class DonationPersisterTest extends IntegrationTestSupport {
                 .isEqualTo(1L);
     }
 
-    /** NUL은 생성 지점에서 지운다 — 한 글자 때문에 배치 전체가 22021로 죽는다. */
+    /**
+     * NUL은 생성 지점에서 지운다 — 한 글자 때문에 배치 전체가 22021로 죽는다.
+     *
+     * <p><b>종류가 뒤늦게 들어왔다</b>(도장 감사) — 앞의 둘만 있고 종류는 안 걸러지고 있었다.
+     * {@code null}을 빈 문자열로 접는 것도 셋이 같다. 표가 셋 다 관련 칸을 NOT NULL로
+     * 두므로 여기서 안 접으면 저장 실패가 되고, 후원에는 격리가 없어 그 방송이 통째로 멎는다.
+     */
     @Test
-    void 닉네임과_문구의_NUL은_생성_지점에서_제거된다() {
+    void 닉네임_문구_종류의_NUL은_생성_지점에서_제거된다() {
         PersistableDonation d = new PersistableDonation("don-1", "CH", "D", "도\0네",
-                "CHAT", 1L, "가\0즈아", 1L);
+                "CH\0AT", 1L, "가\0즈아", 1L);
         assertThat(d.donatorNickname()).isEqualTo("도네");
         assertThat(d.donationText()).isEqualTo("가즈아");
+        assertThat(d.donationType()).isEqualTo("CHAT");
+
+        PersistableDonation 빈값 = new PersistableDonation("don-1", "CH", "D", null,
+                null, 1L, null, 1L);
+        assertThat(빈값.donationText()).as("표가 NOT NULL이다").isEmpty();
+        assertThat(빈값.donationType()).as("종류도 같은 모양이어야 한다").isEmpty();
+        assertThat(빈값.donatorNickname()).as("닉네임 칸만 NULL을 받는다").isNull();
     }
 
     /**
