@@ -68,6 +68,10 @@ public class BroadcastInfoStore {
      * {@code tags}가 {@code TEXT[]}라 {@link java.sql.Connection#createArrayOf}가 필요하고,
      * 그것을 얻으려고 {@code PreparedStatementCreator}를 쓴다 — 배열을 문자열로 만들어 넘기면
      * 태그에 쉼표·중괄호가 든 순간 조용히 갈라진다.
+     *
+     * <p>🔴 <b>{@code null} 원소를 걸러서 넣는다</b>({@link #nonNullTags}). PostgreSQL
+     * {@code TEXT[]}는 원소 NULL을 <b>허용</b>하므로 그대로 넣으면 저장은 성공하고
+     * <b>읽기가 터진다</b> — 아래 {@link #toInfo}의 대칭 처방과 같이 본다.
      */
     public void insert(BroadcastInfo info) {
         jdbc.update(connection -> {
@@ -76,8 +80,7 @@ public class BroadcastInfoStore {
             ps.setString(2, info.channelId());
             ps.setTimestamp(3, Timestamp.from(info.observedAt()));
             ps.setString(4, info.title());
-            ps.setArray(5, connection.createArrayOf("text",
-                    info.tags() == null ? new String[0] : info.tags().toArray(new String[0])));
+            ps.setArray(5, connection.createArrayOf("text", nonNullTags(info.tags())));
             ps.setString(6, info.category());
             if (info.viewers() == null) {
                 ps.setNull(7, java.sql.Types.INTEGER);
@@ -100,6 +103,28 @@ public class BroadcastInfoStore {
         return newestFirst;
     }
 
+    /**
+     * 🔴 <b>쓰는 쪽과 읽는 쪽을 나란히 고쳤다.</b> 한쪽만 막으면 반쪽이 남는다 —
+     * 읽기만 고치면 앞으로 들어올 NULL 원소가 표에 계속 쌓이고, 쓰기만 고치면
+     * <b>이미 들어간 행</b>이 영영 500을 낸다.
+     *
+     * <p>버리는 쪽으로 정한 이유: 이름 없는 태그는 화면에 그릴 것이 없다. 빈 문자열로
+     * 바꾸면 화면에 빈 딱지가 뜨는데 그것은 「태그가 있다」는 거짓 신호다.
+     */
+    private static String[] nonNullTags(List<String> tags) {
+        if (tags == null) {
+            return new String[0];
+        }
+        return tags.stream().filter(java.util.Objects::nonNull).toArray(String[]::new);
+    }
+
+    /**
+     * 🔴 <b>{@code List.of}를 쓰지 않는다 — 그것이 원소 {@code null}에 NPE를 던진다</b>
+     * (실 PG 재현: {@code ARRAY['a',NULL]::text[]} 한 줄이면 {@code latest}가 통째로 500).
+     * 저장이 성공한 뒤 읽기만 터지므로 <b>그 행이 최신인 동안 그 방송의 창구가 영구히 죽는다</b>,
+     * 그리고 clip이 5xx를 {@code collector_unavailable}로 접어 화면에는
+     * 「수집 서버가 아프다」로 보인다 — 실제로는 한 줄의 데이터 이상이다.
+     */
     private static BroadcastInfo toInfo(ResultSet rs, int rowNum) throws SQLException {
         Array tags = rs.getArray("tags");
         return new BroadcastInfo(
@@ -107,7 +132,8 @@ public class BroadcastInfoStore {
                 rs.getString("channel_id"),
                 rs.getTimestamp("observed_at").toInstant(),
                 rs.getString("live_title"),
-                tags == null ? List.of() : List.of((String[]) tags.getArray()),
+                tags == null ? List.of()
+                        : List.of(nonNullTags(java.util.Arrays.asList((String[]) tags.getArray()))),
                 rs.getString("category"),
                 rs.getObject("concurrent_users", Integer.class));
     }

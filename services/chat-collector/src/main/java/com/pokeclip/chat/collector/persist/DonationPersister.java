@@ -24,11 +24,17 @@ import java.util.concurrent.atomic.AtomicLong;
  * <b>{@link ChatPersister}의 축소판이다</b> — 전용 스레드 하나, 1초 flush, 실패하면
  * 앞으로 되돌리고 재시도.
  *
- * <p><b>없는 것 둘을 적어 둔다</b>(있는 것보다 없는 것이 헷갈린다):
+ * <p>🔴 <b>멱등의 마지막 방어선은 표의 UNIQUE 제약이다</b>(채팅과 같다).
+ * 저장이 중간에 끊기면 커밋된 앞 행이 되돌려져 다시 들어가는데, 그것을
+ * {@code ON CONFLICT DO NOTHING}이 조용히 버린다.
+ *
+ * <p><b>「같은 사람이 같은 금액을 두 번」이 접히지 않는다</b> — 지문에 <b>시각이 들어 있어서</b>다
+ * ({@code received_at}, 밀리초). 접히는 것은 「같은 사람이 <b>같은 밀리초에</b> 같은 내용으로」뿐이고,
+ * 후원은 결제 왕복을 거치므로 그것은 재시도 말고는 일어나지 않는다. 채팅의 지문이
+ * {@code message_time}을 품는 것과 같은 설계다.
+ *
+ * <p><b>없는 것 하나를 적어 둔다</b>(있는 것보다 없는 것이 헷갈린다):
  * <ul>
- *   <li><b>{@code ON CONFLICT}가 없다.</b> 후원에는 지문 UNIQUE가 없다 — 치지직 세션이
- *       같은 후원을 두 번 주지 않고(채팅과 달리 재연결 백필도 없다), 지문을 만들 재료
- *       (고유 ID·시각)도 없다. 넣으면 「같은 사람이 같은 금액을 두 번」이 한 건으로 접힌다</li>
  *   <li><b>포이즌 단건 격리가 없다.</b> 격리가 막는 것은 NUL 본문인데 그것은
  *       {@link PersistableDonation}의 compact 생성자가 생성 지점에서 지운다.
  *       그 밖의 영구 오류는 실측된 적이 없어 「모르면 보존」쪽에 둔다 — 되돌리고 재시도한다.
@@ -43,8 +49,9 @@ public class DonationPersister {
     private static final String INSERT = """
             INSERT INTO chat_donations
               (stream_id, channel_id, donator_channel_id, donator_nickname,
-               donation_type, pay_amount, donation_text, received_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               donation_type, pay_amount, donation_text, received_at, donation_sha256)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT ON CONSTRAINT uq_chat_donations_fingerprint DO NOTHING
             """;
 
     private static final Logger log = LoggerFactory.getLogger(DonationPersister.class);
@@ -61,6 +68,8 @@ public class DonationPersister {
     private final JdbcTemplate jdbc;
     private final DonationBuffer buffer;
     private final AtomicLong persisted = new AtomicLong();
+    /** 지문이 겹쳐 접힌 수. 저장 재시도가 만든 중복이고, 유실이 아니다. */
+    private final AtomicLong conflicted = new AtomicLong();
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public DonationPersister(JdbcTemplate jdbc, DonationBuffer buffer) {
@@ -98,8 +107,19 @@ public class DonationPersister {
             return 0;
         }
         try {
-            jdbc.batchUpdate(INSERT, batch.stream().map(DonationPersister::toRow).toList());
-            persisted.addAndGet(batch.size());
+            int[] results =
+                    jdbc.batchUpdate(INSERT, batch.stream().map(DonationPersister::toRow).toList());
+            int saved = savedRows(results);
+            persisted.addAndGet(saved);
+            if (saved < batch.size()) {
+                // 🔴 접힘은 후원에서 <b>비정상 신호</b>다 — 채팅과 다르다.
+                // 채팅의 접힘은 「같은 ms 연타 도배」라 평시에도 나고 등식으로 검산하지만,
+                // 후원은 결제 왕복을 거치므로 접힐 일이 저장 재시도 말고는 없다.
+                // 요약 줄에는 후원 저장 항이 없어(바구니 드롭만 있다) 이 줄이 유일한 창이다.
+                // 건수만 싣는다 — 닉네임·문구는 이 클래스의 어느 로그에도 안 나간다.
+                conflicted.addAndGet(batch.size() - saved);
+                log.info("chat.donation.conflicted size={} saved={}", batch.size(), saved);
+            }
             return batch.size();
         } catch (DataAccessException e) {
             // 본문·닉네임을 로그에 싣지 않는다. 건수와 타입만 — 채팅 쪽과 같은 규칙이다.
@@ -112,6 +132,32 @@ public class DonationPersister {
 
     public long persistedCount() {
         return persisted.get();
+    }
+
+    /**
+     * 지문이 겹쳐 접힌 수. <b>{@code persisted}에서 빠진 만큼이 여기 있다</b> —
+     * 둘을 더해야 「바구니에서 꺼낸 수」가 된다. 채팅의 {@code conflicts}와 같은 뜻이다.
+     */
+    public long conflictedCount() {
+        return conflicted.get();
+    }
+
+    /**
+     * 🔴 <b>{@code ChatPersister.savedRows}의 쌍둥이다.</b> 행별 결과가 없으면
+     * ({@code reWriteBatchedInserts}류 옵션) 저장과 접힘을 못 가른다 — 그 옵션은
+     * {@code RewriteBatchedInsertsGuard}가 부팅에서 막지만, 막혔다는 전제를 여기서
+     * 다시 확인한다. 조용히 0으로 세면 {@code persisted}가 통째로 거짓이 된다.
+     */
+    private static int savedRows(int[] results) {
+        int saved = 0;
+        for (int count : results) {
+            if (count < 0) {
+                throw new IllegalStateException("배치 결과에 행 수가 없다(" + count + ") — "
+                        + "행별 결과 없이는 persisted/conflicted를 계상할 수 없다.");
+            }
+            saved += count;
+        }
+        return saved;
     }
 
     /**
@@ -163,7 +209,21 @@ public class DonationPersister {
                 donation.streamId(), donation.channelId(), donation.donatorChannelId(),
                 donation.donatorNickname(), donation.donationType(), donation.payAmount(),
                 donation.donationText(),
-                Timestamp.from(Instant.ofEpochMilli(donation.receivedAtMillis()))
+                Timestamp.from(Instant.ofEpochMilli(donation.receivedAtMillis())),
+                fingerprint(donation)
         };
+    }
+
+    /**
+     * 지문 재료는 <b>종류·금액·문구</b> 셋이다. 누가·언제는 UNIQUE의 다른 칸이 든다
+     * (채팅이 {@code content_sha256} + 채널 + 보낸이 + 시각으로 나누는 것과 같은 모양).
+     *
+     * <p>금액이 {@code null}인 것과 문자열 {@code "null"}인 것을 가르려고 구분자를 넣는다 —
+     * 안 넣으면 {@code (null, "null")}과 {@code ("null", "")}이 같은 지문이 된다.
+     */
+    private static String fingerprint(PersistableDonation donation) {
+        return ChatPersister.sha256Hex(
+                donation.donationType() + "\u0000" + donation.payAmount() + "\u0000"
+                        + donation.donationText());
     }
 }

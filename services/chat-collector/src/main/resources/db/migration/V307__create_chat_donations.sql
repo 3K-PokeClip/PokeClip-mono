@@ -9,10 +9,27 @@ CREATE TABLE chat_donations (
     donation_type      VARCHAR(16) NOT NULL,
     pay_amount         BIGINT,
     donation_text      TEXT NOT NULL,
-    received_at        TIMESTAMPTZ NOT NULL
+    received_at        TIMESTAMPTZ NOT NULL,
+
+    -- 후원 내용 지문. 채팅의 content_sha256과 같은 이유로 원문 대신 해시다 —
+    -- btree 인덱스 행 크기 제한(~2704B) 때문에 긴 후원 문구가 들어오면 원문 UNIQUE는
+    -- 인덱스 삽입 자체가 실패한다. 재료는 종류·금액·문구 셋이다.
+    donation_sha256    VARCHAR(64) NOT NULL,
+
+    -- 🔴 저장 재시도가 중복을 만들지 않게 하는 마지막 방어선. 채팅과 같은 모양이고
+    -- **시각이 열쇠에 들어 있다** — 그래서 접히는 것은 「같은 사람이 같은 밀리초에
+    -- 같은 내용으로」뿐이다. 같은 사람이 같은 금액을 연달아 후원하는 것은 정상이고
+    -- 그 둘은 received_at이 달라 안 접힌다.
+    --
+    -- 없으면 무슨 일이 나나: 배치 저장이 중간에 끊기면(연결 절단) 커밋된 앞 행이
+    -- 되돌려져 다시 들어가 같은 후원이 두 번 보인다. 채팅은 이 제약이 흡수하는데
+    -- 후원에는 흡수 장치가 없었다(POK-234 로컬 리뷰 라운드 1).
+    CONSTRAINT uq_chat_donations_fingerprint
+        UNIQUE (stream_id, donator_channel_id, received_at, donation_sha256)
 );
 
-COMMENT ON TABLE chat_donations IS '치지직 후원 이벤트. 치지직이 시각을 안 주므로 received_at(우리 시각)만 있다. 지문 제약 없음 — 세션이 한 번만 준다';
+COMMENT ON TABLE chat_donations IS '치지직 후원 이벤트. 치지직이 시각을 안 주므로 received_at(우리 시각)만 있다. 지문은 저장 재시도의 중복을 막는다';
+COMMENT ON COLUMN chat_donations.donation_sha256 IS 'sha256(종류|금액|문구). 재시도 중복만 막고 진짜 연속 후원은 received_at이 갈라 준다';
 COMMENT ON COLUMN chat_donations.received_at IS '우리가 받은 시각. chat_messages.message_time(치지직 시계)과 축이 다르다';
 COMMENT ON COLUMN chat_donations.pay_amount IS '원. 치지직이 문자열로 주며 숫자로 못 읽으면 NULL';
 
