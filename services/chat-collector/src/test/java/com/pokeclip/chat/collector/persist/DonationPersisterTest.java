@@ -156,19 +156,57 @@ class DonationPersisterTest extends IntegrationTestSupport {
                 .as("같은 금액 연속 후원이 접혔다 — 실제 후원이 사라진다").isEqualTo(2L);
     }
 
-    /** 금액이 {@code null}인 것과 문구가 {@code \"null\"}인 것은 다른 지문이다. */
+    /**
+     * 🔴 <b>금액과 문구의 경계가 지문에 선다.</b> 재료를 이어 붙일 때 구분자가 없으면
+     * <b>경계가 다른데 이어 붙인 결과가 같은</b> 쌍이 한 지문이 되어 <b>진짜 후원 하나가
+     * 사라진다</b> — 아래 둘이 정확히 그 쌍이다: {@code 5원+"00"}과 {@code 50원+"0"}은
+     * 구분자를 빼면 둘 다 {@code CHAT500}이다(실측 재현).
+     *
+     * <p><b>이 검사는 앞서 한 번 헛돌았다</b>(POK-234 도장 감사). 처음 쓴 입력이
+     * 「금액 없음 + 문구 "null"」과 「금액 없음 + 빈 문구」였는데, 그 둘은 구분자를 지워도
+     * 이어 붙인 결과가 달라 <b>14건 전부 초록</b>이었다. <b>구분자가 막는 것은
+     * 「null 표기의 모호함」이 아니라 「경계의 모호함」이다</b> — 근거를 잘못 짚으면
+     * 그 근거에 맞춘 입력이 아무것도 안 잰다.
+     */
     @Test
-    void 금액_없음과_문구_null은_다른_지문이다() {
+    void 금액과_문구의_경계가_지문에_선다() {
         DonationBuffer buffer = new DonationBuffer(100);
-        buffer.offer(new PersistableDonation("don-1", "CH", "AMB", "n", "CHAT", null,
-                "null", 1_754_300_000_000L));
-        buffer.offer(new PersistableDonation("don-1", "CH", "AMB", "n", "CHAT", null,
-                "", 1_754_300_000_000L));
+        buffer.offer(new PersistableDonation("don-1", "CH", "AMB", "n", "CHAT", 5L,
+                "00", 1_754_300_000_000L));
+        buffer.offer(new PersistableDonation("don-1", "CH", "AMB", "n", "CHAT", 50L,
+                "0", 1_754_300_000_000L));
 
         new DonationPersister(jdbc, buffer).flushBacklog();
 
         assertThat(jdbc.queryForObject(
                 "SELECT count(*) FROM chat_donations WHERE donator_channel_id='AMB'", Long.class))
-                .isEqualTo(2L);
+                .as("경계가 안 서서 다른 후원 둘이 한 건으로 접혔다").isEqualTo(2L);
+    }
+
+    /**
+     * 종류에 NUL이 하나 들어와도 저장된다. <b>이 칸만 안 걸러지고 있었다</b>(도장 감사) —
+     * 실 PG가 {@code invalid byte sequence 0x00}으로 거부하는데 후원 저장에는 격리가 없어
+     * <b>그 방송의 후원이 1초마다 영원히 재시도되며 통째로 멎는다.</b> 채팅은 원본이 S3에
+     * 남지만 후원은 아카이브가 없어 되찾을 길이 없다.
+     *
+     * <p><b>길이도 같이 잰다.</b> 종류 칸이 한때 {@code VARCHAR(16)}이라 17자면 같은 결말이었다.
+     */
+    @Test
+    void 종류에_NUL이나_긴_값이_와도_저장된다() {
+        DonationBuffer buffer = new DonationBuffer(100);
+        buffer.offer(new PersistableDonation("don-1", "CH", "NUL", "n", "CH\0AT", 1L,
+                "t", 1_754_300_000_000L));
+        buffer.offer(new PersistableDonation("don-1", "CH", "LONG", "n",
+                "0123456789ABCDEFG", 1L, "t", 1_754_300_001_000L));
+
+        new DonationPersister(jdbc, buffer).flushBacklog();
+
+        assertThat(jdbc.queryForObject(
+                "SELECT donation_type FROM chat_donations WHERE donator_channel_id='NUL'",
+                String.class))
+                .as("NUL이 안 걸러져 배치가 통째로 죽는다").isEqualTo("CHAT");
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM chat_donations WHERE donator_channel_id='LONG'", Long.class))
+                .as("긴 종류가 들어오면 그 방송의 후원 저장이 멎는다").isEqualTo(1L);
     }
 }

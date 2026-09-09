@@ -147,6 +147,11 @@ public class DonationPersister {
      * ({@code reWriteBatchedInserts}류 옵션) 저장과 접힘을 못 가른다 — 그 옵션은
      * {@code RewriteBatchedInsertsGuard}가 부팅에서 막지만, 막혔다는 전제를 여기서
      * 다시 확인한다. 조용히 0으로 세면 {@code persisted}가 통째로 거짓이 된다.
+     *
+     * <p><b>여기서 던져도 후원은 안 사라진다</b> — 이 검사는 {@code batchUpdate}가
+     * <b>커밋된 뒤</b>에 돌므로 행은 이미 표에 있다. 잃는 것은 계수뿐이고, 그래서
+     * {@code buffer.restoreFront}가 안 불려도 유실이 아니다. <b>쌍둥이에는 이 문장이
+     * 있는데 여기만 없었다</b>(POK-234 도장 감사 2-5).
      */
     private static int savedRows(int[] results) {
         int saved = 0;
@@ -218,8 +223,17 @@ public class DonationPersister {
      * 지문 재료는 <b>종류·금액·문구</b> 셋이다. 누가·언제는 UNIQUE의 다른 칸이 든다
      * (채팅이 {@code content_sha256} + 채널 + 보낸이 + 시각으로 나누는 것과 같은 모양).
      *
-     * <p>금액이 {@code null}인 것과 문자열 {@code "null"}인 것을 가르려고 구분자를 넣는다 —
-     * 안 넣으면 {@code (null, "null")}과 {@code ("null", "")}이 같은 지문이 된다.
+     * <p>🔴 <b>구분자가 막는 것은 「경계의 모호함」이다.</b> 안 넣으면 <b>경계가 다른데
+     * 이어 붙인 결과가 같은</b> 쌍이 한 지문이 되어 진짜 후원 하나가 사라진다 —
+     * {@code 5원+"00"}과 {@code 50원+"0"}이 둘 다 {@code CHAT500}이 된다(실측).
+     *
+     * <p><b>한때 이 자리에 「금액 {@code null}과 문자열 "null"을 가른다」고 적혀 있었는데
+     * 그 경우는 일어날 수 없다</b> — {@code payAmount}가 {@code Long}이라 문자열이
+     * {@code "null"}인데 값이 non-null일 수가 없다. <b>그 잘못된 근거에 맞춰 쓴 검사가
+     * 구분자를 지워도 초록이었다</b>(도장 감사가 잡았다).
+     *
+     * <p>재료에 NUL이 없다는 것은 {@link PersistableDonation}의 compact 생성자가 보증한다 —
+     * 종류·닉네임·문구 <b>셋 다</b> 거기서 지운다.
      */
     private static String fingerprint(PersistableDonation donation) {
         return ChatPersister.sha256Hex(

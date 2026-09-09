@@ -26,5 +26,12 @@ public record PersistableDonation(
         // 한 글자 때문에 배치 전체가 22021로 죽는 것은 똑같다.
         donatorNickname = donatorNickname == null ? null : donatorNickname.replace("\0", "");
         donationText = donationText == null ? "" : donationText.replace("\0", "");
+        // 🔴 종류도 지운다 — 여기 빠져 있었다(POK-234 도장 감사, 실 PG 재현).
+        // 이 칸은 치지직 봉투의 donationType이 그대로 오는 자리이고, 이 클래스의 앞 두 줄과
+        // 달리 아무도 안 걸렀다. NUL이 하나 들어오면 실 PG가 invalid byte sequence 0x00 으로
+        // 거부하는데, DonationPersister에는 「나쁜 한 건만 버리는」 격리가 없어
+        // 배치가 되돌려지고 1초마다 영원히 재시도한다 — 그 방송의 후원 저장이 통째로 멎는다.
+        // 채팅은 원본이 S3에 남지만 후원은 아카이브가 없어 되찾을 길이 없다.
+        donationType = donationType == null ? null : donationType.replace("\0", "");
     }
 }

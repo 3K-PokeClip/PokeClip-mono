@@ -6,7 +6,11 @@ CREATE TABLE chat_donations (
     channel_id         TEXT NOT NULL,
     donator_channel_id TEXT NOT NULL,
     donator_nickname   TEXT,
-    donation_type      VARCHAR(16) NOT NULL,
+    -- 🔴 TEXT다. VARCHAR(16)이었는데 그 길이가 「치지직이 주는 종류는 짧다」는 가정에만
+    -- 서 있었고, 넘치면 실 PG가 value too long 으로 거부한다. 후원 저장에는 「나쁜 한 건만
+    -- 버리는」 격리가 없어 배치가 1초마다 영원히 재시도되고 그 방송의 후원이 통째로 멎는다.
+    -- 길이를 지켜 얻는 것이 없고(열거값이라 어차피 짧다) 잃는 것이 그것이라 제한을 뺐다.
+    donation_type      TEXT NOT NULL,
     pay_amount         BIGINT,
     donation_text      TEXT NOT NULL,
     received_at        TIMESTAMPTZ NOT NULL,
