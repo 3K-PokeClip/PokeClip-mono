@@ -331,8 +331,25 @@ public class ChatSession implements AutoCloseable {
         abortIfStopping(abort, EstablishStage.SUBSCRIBE);
         if (System.nanoTime() < endAt) {
             donation.set(client.subscribeDonation(sessionKey.get()));   // ⑥ DONATION
-            startDonationRetryIfFailed();
         }
+        // 🔴 <b>건너뛴 것도 재시도 대상이다</b>(봇 codex P1). 이 호출을 위 if 안에 두면
+        // 예산이 다해 ⑥을 건너뛴 세션은 NONE 인 채로 남고 재시도가 안 붙는다 —
+        // 그리고 이 파일에 「건너뛴 세션은 다음 수립에서 다시 시도된다」고 적혀 있었는데
+        // <b>그 문장이 거짓이다</b>: 채팅 소켓이 방송 내내 멀쩡한 것이 정상이라 다음 수립이
+        // 아예 없고, 그러면 그 방송의 후원이 통째로 안 들어온다.
+        //
+        // 🔴 <b>이 갈래(예산 초과로 건너뜀)에는 그물이 없다 — 「없다」가 아니라 「못 놓았다」다.</b>
+        // 재시도 자체는 FAILED 갈래로 재고 있고(후원_구독이_일시_실패하면_다시_시도한다),
+        // 여기서 못 잰 것은 <b>NONE 으로 남는 경로</b>다. 시도한 것과 막힌 자리:
+        //   1) ④ 응답을 늦춰 예산을 태운다 → ⑤(WAITING_SUBSCRIBED)가 <b>먼저</b> 시한에 걸려
+        //      open 이 던진다. ⑥까지 못 간다
+        //   2) subscribed 프레임을 받은 뒤 늦춘다 → 가짜 서버가 그 프레임을 응답 <b>안에서</b>
+        //      쏘므로 콜백이 자기 자신을 기다리는 꼴이 된다
+        //   3) 프레임만 늦추는 손잡이 → 가짜 서버에 없다. 만들 수는 있다
+        // ⑤ 통과와 이 검사 사이가 몇 나노초라, 그 사이에만 예산이 끝나게 만들려면
+        // <b>subscribed 프레임이 endAt 직전에 오도록</b> 가짜를 늘려야 한다.
+        // 다음 사람은 3)부터 보면 된다.
+        startDonationRetryIfNeeded();
         // 예산이 이미 다했으면 <b>건너뛴다(NONE)</b>. 던지지 않는 이유는 위와 같다 —
         // 여기서 던지면 후원 때문에 채팅 수립이 실패하는 길이 다시 열린다.
         // 건너뛴 세션은 다음 수립에서 다시 시도된다.
@@ -354,11 +371,17 @@ public class ChatSession implements AutoCloseable {
      * <p><b>결과를 {@code compareAndSet}으로 쓴다.</b> 그냥 쓰면 반납이 이미 비워 둔
      * {@code NONE}을 이 스레드가 되살려, 닫힌 세션이 창구에 「구독 중」으로 보인다.
      */
-    private void startDonationRetryIfFailed() {
-        if (donation.get() != DonationSubscription.FAILED) {
+    private void startDonationRetryIfNeeded() {
+        DonationSubscription now = donation.get();
+        // FAILED(일시 실패)와 NONE(예산이 다해 건너뜀) 둘 다 「다시 물어볼 값이 있는」 상태다.
+        // REFUSED(401·403)는 권한이 없는 것이라 시간이 안 풀어 주고, SUBSCRIBED 는 할 일이 없다.
+        if (now != DonationSubscription.FAILED && now != DonationSubscription.NONE) {
             return;
         }
         donationRetry = Thread.ofVirtual().name("chzzk-donation-retry").start(() -> {
+            // 첫 바퀴의 기대값은 출발 상태다(FAILED 또는 NONE). 한 바퀴 실패하면
+            // 그 뒤로는 FAILED 가 기대값이다 — 아래에서 갱신한다.
+            DonationSubscription expected = now;
             while (!stopping.get()) {
                 try {
                     Thread.sleep(donationRetryPeriod);
@@ -374,15 +397,19 @@ public class ChatSession implements AutoCloseable {
                 if (key == null || key.isBlank()) {
                     return;
                 }
-                DonationSubscription now = client.subscribeDonation(key);
-                if (now != DonationSubscription.FAILED) {
-                    // CAS 가 이긴 경우에만 알린다 — 진 것은 반납이 이미 NONE 을 쓴 것이라
-                    // 그 값을 창구에 실으면 닫힌 세션이 「구독 중」으로 되살아난다.
-                    if (donation.compareAndSet(DonationSubscription.FAILED, now)) {
-                        notifyDonationChanged(now);
+                DonationSubscription got = client.subscribeDonation(key);
+                if (got != DonationSubscription.FAILED) {
+                    // 🔴 <b>CAS 의 기대값이 「지금 값」이지 FAILED 고정이 아니다.</b>
+                    // 건너뛴 세션은 NONE 에서 출발하므로 FAILED 로 고정하면 영영 못 바꾼다.
+                    // 그리고 CAS 를 쓰는 이유는 그대로다 — 반납이 이미 NONE 을 쓴 뒤라면
+                    // 지면 되고, 이기면 그 값이 창구로 간다. 지는 쪽을 알리면 닫힌 세션이
+                    // 「구독 중」으로 되살아난다.
+                    if (donation.compareAndSet(expected, got)) {
+                        notifyDonationChanged(got);
                     }
                     return;
                 }
+                expected = DonationSubscription.FAILED;
             }
         });
     }

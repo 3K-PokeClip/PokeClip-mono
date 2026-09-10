@@ -49,6 +49,17 @@ public record ChzzkProperties(
 ) {
 
     /**
+     * 🔴 재시도 주기가 <b>0이나 음수면 폭주한다</b>(봇 codex P2). {@code Thread.sleep}이
+     * 즉시 돌아와, 503처럼 계속 이어지는 일시 실패에서 구독 창구를 쉬지 않고 두드린다 —
+     * CPU를 먹고 상대의 속도 제한을 부르는데 <b>서버는 건강해 보인다.</b>
+     * {@code @NotNull}은 그것을 못 막으므로 부팅에서 잡는다.
+     */
+    @AssertTrue(message = "pokeclip.chzzk.donation-retry-period 는 0보다 커야 한다")
+    public boolean isDonationRetryPeriodPositive() {
+        return donationRetryPeriod == null || !donationRetryPeriod.isZero() && !donationRetryPeriod.isNegative();
+    }
+
+    /**
      * 토큰 검증을 <b>켜져 있을 때만</b> 건다.
      *
      * <p>{@code @NotBlank}를 그냥 붙이면 {@code enabled=false}에서도 걸려

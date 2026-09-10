@@ -58,17 +58,33 @@ public class ChatChartQuery {
     /** @param bucketSeconds 창구가 이미 {5,10,30,60}으로 걸렀다. 점 수 상한도 창구가 본다 */
     public ChatChartPage count(String streamId, String channelId, WindowRequest window, int bucketSeconds) {
         long offset = sync.offsetFor(channelId);
-        Instant lo = align(window.from().plusMillis(offset));
-        // 🔴 끝도 자른다. 안 자르면 나노초가 실린 to가 마지막 구간 시작보다 「조금」 뒤라
-        // 데이터가 있을 수 없는 빈 구간이 하나 더 붙는다(실측: 20초 창에 구간 셋).
-        Instant hi = align(window.to().plusMillis(offset));
+        // 🔴 <b>조회 경계와 구간 격자를 가른다</b>(봇 codex P2).
+        //
+        // 한때 둘을 같은 값으로 두고 <b>양쪽 다 밀리초로 잘랐는데</b>, 그러면 마이크로초가
+        // 실린 요청에서 이 창구와 목록 창구가 <b>다른 답을 준다</b>:
+        //   from=.000500Z 이면 잘린 .000Z 부터 세어 <b>from 보다 이른 것이 들어오고</b>,
+        //   to  =.000500Z 이면 잘린 .000Z 에서 끊어 <b>to 보다 이른 .000Z 가 빠진다.</b>
+        // 목록 창구는 안 자르므로 같은 창을 물어도 숫자가 안 맞는다.
+        //
+        // 그래서 <b>세는 범위는 요청 그대로</b>, <b>격자만 밀리초로</b> 맞춘다.
+        // 격자를 자르는 이유는 그대로다 — date_bin 이 돌려주는 구간 시작과 우리가 미리
+        // 채운 열쇠가 어긋나면 안 되고, PostgreSQL 이 마이크로초까지만 저장한다.
+        Instant queryLo = window.from().plusMillis(offset);
+        Instant queryHi = window.to().plusMillis(offset);
+        Instant gridOrigin = align(queryLo);
+        // 🔴 <b>격자의 끝은 마이크로초로 자른다 — 조회 범위와 다른 값이다.</b>
+        // PostgreSQL 이 마이크로초까지만 저장하므로 그보다 잔 구간에는 <b>데이터가 있을 수 없다</b>.
+        // 안 자르면 나노초가 실린 to 에서 폭이 나노초인 빈 구간이 하나 더 붙는다.
+        // 반대로 <b>밀리초로 자르면 안 된다</b> — to=.000500Z 처럼 마이크로초가 실린 요청에서
+        // .000Z 구간이 통째로 빠져 목록 창구와 숫자가 갈린다(봇 codex P2).
+        Instant gridEnd = queryHi.truncatedTo(ChronoUnit.MICROS);
 
         Map<Instant, long[]> acc = new TreeMap<>();
-        for (Instant t = lo; t.isBefore(hi); t = t.plusSeconds(bucketSeconds)) {
+        for (Instant t = gridOrigin; t.isBefore(gridEnd); t = t.plusSeconds(bucketSeconds)) {
             acc.put(t, new long[2]);
         }
-        fill(CHATS, acc, 0, streamId, lo, hi, bucketSeconds);
-        fill(DONATIONS, acc, 1, streamId, lo, hi, bucketSeconds);
+        fill(CHATS, acc, 0, streamId, gridOrigin, queryLo, queryHi, bucketSeconds);
+        fill(DONATIONS, acc, 1, streamId, gridOrigin, queryLo, queryHi, bucketSeconds);
 
         List<ChartBucket> buckets = acc.entrySet().stream()
                 .map(e -> new ChartBucket(e.getKey(), e.getValue()[0], e.getValue()[1]))
@@ -82,12 +98,13 @@ public class ChatChartQuery {
      * 그래도 못 찾은 구간을 <b>버리지 않고 넣는다</b> — 세어진 채팅을 조용히 잃는 것보다
      * 구간이 하나 더 생기는 편이 정직하다.
      */
-    private void fill(String sql, Map<Instant, long[]> acc, int slot,
-                      String streamId, Instant lo, Instant hi, int bucketSeconds) {
+    private void fill(String sql, Map<Instant, long[]> acc, int slot, String streamId,
+                      Instant gridOrigin, Instant queryLo, Instant queryHi, int bucketSeconds) {
         jdbc.query(sql, rs -> {
             Instant start = align(rs.getTimestamp(1).toInstant());
             acc.computeIfAbsent(start, k -> new long[2])[slot] = rs.getLong(2);
-        }, bucketSeconds, Timestamp.from(lo), streamId, Timestamp.from(lo), Timestamp.from(hi));
+        }, bucketSeconds, Timestamp.from(gridOrigin), streamId,
+                Timestamp.from(queryLo), Timestamp.from(queryHi));
     }
 
     /**

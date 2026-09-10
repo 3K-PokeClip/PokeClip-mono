@@ -55,6 +55,12 @@ public record PersistableDonation(
         //
         // 🔴 <b>「같은 뿌리인데 한 자리만」이 이 저장소에서 반복해 난 실수다.</b> 다음에
         // 이 생성자에 칸을 더하는 사람은 <b>표의 NOT NULL TEXT 칸 전부</b>를 세고 시작하라.
+        // 🔴 <b>방송 번호도 지운다 — 이 자리가 세 번째다</b>(봇 codex P1).
+        // 처음엔 닉네임·문구만, 다음엔 종류, 그다음 식별자 둘을 고쳤는데 매번
+        // <b>같은 표의 나머지 칸을 세지 않았다.</b> 이 값은 방송 편지에서 오고 그쪽
+        // 검사는 「비었나·길이」만 보므로 NUL 이 그대로 통과한다.
+        // <b>다음에 이 생성자에 칸을 더하는 사람은 표의 NOT NULL TEXT 칸 전부를 세고 시작하라.</b>
+        streamId = streamId == null ? null : streamId.replace("\0", "");
         channelId = channelId == null ? "" : channelId.replace("\0", "");
         donatorChannelId = donatorChannelId == null ? "" : donatorChannelId.replace("\0", "");
     }

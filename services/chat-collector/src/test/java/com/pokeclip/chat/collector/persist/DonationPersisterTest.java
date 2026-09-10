@@ -111,7 +111,7 @@ class DonationPersisterTest extends IntegrationTestSupport {
      */
     @Test
     void 닉네임_문구_종류의_NUL은_생성_지점에서_제거된다() {
-        PersistableDonation d = new PersistableDonation("don-1", "C\0H", "D\0ONOR", "도\0네",
+        PersistableDonation d = new PersistableDonation("don\0-1", "C\0H", "D\0ONOR", "도\0네",
                 "CH\0AT", 1L, "가\0즈아", 1L, 3L);
         assertThat(d.donatorNickname()).isEqualTo("도네");
         assertThat(d.donationText()).isEqualTo("가즈아");
@@ -119,6 +119,8 @@ class DonationPersisterTest extends IntegrationTestSupport {
         // 🔴 식별자 둘은 봇(codex P1)이 잡았다 — 앞의 셋만 고치고 여기를 빠뜨렸다.
         assertThat(d.channelId()).as("표가 NOT NULL TEXT다").isEqualTo("CH");
         assertThat(d.donatorChannelId()).isEqualTo("DONOR");
+        // 🔴 방송 번호가 세 번째다 — 매번 같은 표의 나머지 칸을 안 세서 났다.
+        assertThat(d.streamId()).as("방송 편지 검사는 「비었나·길이」만 본다").isEqualTo("don-1");
 
         PersistableDonation 빈값 = new PersistableDonation("don-1", "CH", "D", null,
                 null, 1L, null, 1L, 4L);

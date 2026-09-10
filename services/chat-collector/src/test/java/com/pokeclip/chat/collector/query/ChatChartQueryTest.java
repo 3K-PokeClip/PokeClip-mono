@@ -126,6 +126,29 @@ class ChatChartQueryTest extends IntegrationTestSupport {
     }
 
     /**
+     * 🔴 <b>마이크로초가 실린 창에서 차트와 목록이 같은 답을 준다</b>(봇 codex P2).
+     *
+     * <p>한때 조회 경계를 <b>밀리초로 잘랐고</b>, 그래서 {@code to=.000500Z} 인 요청에서
+     * <b>{@code .000Z} 에 찍힌 채팅이 빠졌다</b> — PostgreSQL 은 마이크로초까지 저장하므로
+     * 그 채팅은 실재하고 목록 창구는 세는데 차트만 안 셌다. 같은 창을 물어도 숫자가 안 맞는다.
+     *
+     * <p>지금은 <b>세는 범위가 요청 그대로</b>이고 격자만 맞춘다.
+     */
+    @Test
+    void 마이크로초_경계에서_목록과_같은_수를_센다() {
+        Instant T = Instant.parse("2026-09-03T15:10:00Z");
+        insertChat("chart-micro", T, "경계");
+
+        // to 가 그 채팅보다 500마이크로초 뒤다 — [from, to) 에 든다.
+        ChatChartPage page = queryWith(0).count("chart-micro", null,
+                new WindowRequest(T.minusSeconds(10), T.plusNanos(500_000)), 10);
+
+        assertThat(page.buckets()).extracting(ChartBucket::chats)
+                .as("경계를 밀리초로 자르면 이 채팅이 통째로 빠진다 — 목록 창구와 숫자가 갈린다")
+                .containsExactly(0L, 1L);
+    }
+
+    /**
      * 목록 쪽과 같은 규칙이다(문항 8) — <b>운영 상수를 그대로 {@code EXPLAIN} 한다.</b>
      * 집계는 구간 안의 행을 전부 읽으므로 색인을 못 타면 방송 전체를 훑는다.
      *
