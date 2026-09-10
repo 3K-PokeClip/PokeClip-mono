@@ -349,6 +349,10 @@ public class ChatSession implements AutoCloseable {
         // ⑤ 통과와 이 검사 사이가 몇 나노초라, 그 사이에만 예산이 끝나게 만들려면
         // <b>subscribed 프레임이 endAt 직전에 오도록</b> 가짜를 늘려야 한다.
         // 다음 사람은 3)부터 보면 된다.
+        //
+        // 🔴 <b>그 공백이 실제로 값을 치렀다</b>(로컬 리뷰 라운드 7). 아래 재시도 루프의
+        // CAS 기대값 버그가 <b>NONE 출발에서만</b> 나는데, 그물이 없어 주입해도 초록이었다 —
+        // 리뷰가 코드를 읽어 찾았다. 이 갈래에 그물이 서면 그 부류를 기계가 잡는다.
         startDonationRetryIfNeeded();
         // 예산이 이미 다했으면 <b>건너뛴다(NONE)</b>. 던지지 않는 이유는 위와 같다 —
         // 여기서 던지면 후원 때문에 채팅 수립이 실패하는 길이 다시 열린다.
@@ -379,9 +383,6 @@ public class ChatSession implements AutoCloseable {
             return;
         }
         donationRetry = Thread.ofVirtual().name("chzzk-donation-retry").start(() -> {
-            // 첫 바퀴의 기대값은 출발 상태다(FAILED 또는 NONE). 한 바퀴 실패하면
-            // 그 뒤로는 FAILED 가 기대값이다 — 아래에서 갱신한다.
-            DonationSubscription expected = now;
             while (!stopping.get()) {
                 try {
                     Thread.sleep(donationRetryPeriod);
@@ -390,6 +391,17 @@ public class ChatSession implements AutoCloseable {
                     return;
                 }
                 if (stopping.get()) {
+                    return;
+                }
+                // 🔴 <b>기대값을 매 바퀴 다시 읽는다.</b> 밖에서 한 번 잡아 두고 실패할 때마다
+                // 그 지역변수만 FAILED 로 바꿨더니, <b>donation 에는 아무도 FAILED 를 안 써서</b>
+                // 기대값과 실제 값이 갈렸다 — 다음 성공의 CAS 가 반드시 지고 재시도가
+                // 둘째 바퀴부터 무력화됐다(로컬 리뷰 라운드 7). 이 값을 여기서 읽으면
+                // 그런 어긋남이 생길 자리가 없다.
+                DonationSubscription expected = donation.get();
+                if (expected != DonationSubscription.FAILED
+                        && expected != DonationSubscription.NONE) {
+                    // 반납이 NONE 을 쓰거나 다른 경로가 값을 정했다. 우리가 손댈 것이 없다.
                     return;
                 }
                 // 반납이 지나갔으면 키가 비어 있다. 소모된 키로 구독을 쏘지 않는다.
@@ -409,7 +421,6 @@ public class ChatSession implements AutoCloseable {
                     }
                     return;
                 }
-                expected = DonationSubscription.FAILED;
             }
         });
     }

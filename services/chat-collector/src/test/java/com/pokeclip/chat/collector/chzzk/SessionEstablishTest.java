@@ -451,6 +451,50 @@ class SessionEstablishTest extends IntegrationTestSupport {
     }
 
     /**
+     * <b>재시도가 한 바퀴로 끝나지 않는다</b> — 실패가 이어져도 계속 돈다.
+     * 기존 검사는 첫 바퀴에 성공해서 이 자리를 안 지나간다.
+     *
+     * <p>🔴 <b>이 검사가 못 재는 것</b>: 라운드 7이 잡은 CAS 버그(기대값을 루프 밖에서
+     * 잡아 실제 값과 갈리는 것)는 <b>{@code NONE} 에서 출발할 때만</b> 난다.
+     * {@code FAILED} 출발이면 기대값이 우연히 실제와 같아 주입해도 초록이다(확인함).
+     * 그리고 {@code NONE} 출발 갈래에는 그물이 없다 — 이유는
+     * {@code ChatSession.establish} 의 ⑥ 주석에 적어 뒀다.
+     * <b>이 검사 이름을 그 버그를 잡는 것으로 읽지 마라.</b>
+     */
+    @Test
+    void 재시도는_한_바퀴로_끝나지_않는다() throws Exception {
+        behavior.subscribeDonationStatus = 503;
+        ChatSession session = newSession(java.time.Duration.ofMillis(60));
+        try {
+            session.open(java.time.Duration.ofSeconds(5), () -> false);
+            assertThat(session.donationSubscription()).isEqualTo(DonationSubscription.FAILED);
+
+            int 수립직후 = behavior.subscribeDonationCallCount();
+            long 시한 = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+            while (behavior.subscribeDonationCallCount() < 수립직후 + 2
+                    && System.nanoTime() < 시한) {
+                Thread.sleep(20);
+            }
+            assertThat(behavior.subscribeDonationCallCount())
+                    .as("두 바퀴를 못 돌면 이 검사가 첫 바퀴만 재는 기존 검사와 같아진다")
+                    .isGreaterThanOrEqualTo(수립직후 + 2);
+
+            behavior.subscribeDonationStatus = 200;
+            시한 = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+            while (session.donationSubscription() != DonationSubscription.SUBSCRIBED
+                    && System.nanoTime() < 시한) {
+                Thread.sleep(20);
+            }
+
+            assertThat(session.donationSubscription())
+                    .as("여러 바퀴를 돈 뒤의 성공이 반영되지 않는다")
+                    .isEqualTo(DonationSubscription.SUBSCRIBED);
+        } finally {
+            session.releaseAndClose();
+        }
+    }
+
+    /**
      * <b>권한 거부는 다시 시도하지 않는다.</b> 401·403은 시간이 안 풀어 주므로 두드리면
      * 남의 서버에 부하만 준다 — 위 검사의 <b>반대 방향</b>이라 둘을 같이 본다.
      */
