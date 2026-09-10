@@ -66,13 +66,19 @@ public class ChatChartController {
     }
 
     /**
-     * <b>잘라 주지 않고 400이다.</b> 잘라 주면 프론트가 그린 그래프가 물어본 구간의 앞부분만
+     * 🔴 <b>세는 방법을 질의와 <u>공유한다</u></b>(봇 codex). 한때 여기서
+     * {@code toSeconds() / bucketSeconds} 로 따로 셌는데, <b>둘 다 내림</b>이라
+     * 질의가 실제로 만드는 격자보다 적게 나왔다 — {@code from} 에 마이크로초가 실리면
+     * 상한 720 을 통과하고 721점이 나간다. 같은 답을 두 곳에서 따로 구하면
+     * <b>한쪽만 고쳐져 낡는다.</b>
+     *
+     * <p><b>잘라 주지 않고 400이다.</b> 잘라 주면 프론트가 그린 그래프가 물어본 구간의 앞부분만
      * 담는데 화면에는 그렇게 안 보인다 — {@code limit} 상한과 방향이 반대인 이유는
      * 목록은 「이어서 더 받는 길(커서)」이 있고 차트는 없기 때문이다.
      */
     private void requirePointCount(WindowRequest window, int bucketSeconds) {
-        long points = Duration.between(window.from(), window.to()).toSeconds() / bucketSeconds;
-        if (points > properties.chartMaxBuckets()) {
+        if (ChatChartQuery.bucketCount(window.from(), window.to(), bucketSeconds)
+                > properties.chartMaxBuckets()) {
             throw new InvalidWindowException("too_many_buckets");
         }
     }

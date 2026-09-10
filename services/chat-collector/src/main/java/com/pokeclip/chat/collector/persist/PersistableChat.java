@@ -30,5 +30,11 @@ public record PersistableChat(
         // 닉네임에도 같은 제거를 건다 — 안 걸면 닉네임 한 글자 때문에 그 배치가
         // 통째로 포이즌 격리(SQLSTATE 22021)로 넘어간다.
         nickname = nickname == null ? null : nickname.replace("\0", "");
+        // 🔴 <b>역할도 지운다 — 이 부류가 네 번째다</b>(봇 claude). 후원 쪽에서 세 번
+        // (닉네임·문구 → 종류 → 식별자 둘 → 방송 번호) 같은 실수를 고치면서 <b>채팅의
+        // 이 칸을 안 봤다.</b> 디코더가 userRoleCode 를 검증 없이 그대로 넘긴다.
+        // 지금은 치지직이 이 값을 안 보내 실무 영향이 0이지만, 보내기 시작하는 순간
+        // NUL 한 글자가 22021 을 만들고 그 배치가 포이즌 격리로 넘어가 <b>채팅이 버려진다.</b>
+        userRole = userRole == null ? null : userRole.replace("\0", "");
     }
 }

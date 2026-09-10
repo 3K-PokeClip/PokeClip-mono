@@ -43,6 +43,28 @@ public class DonationSubscriptions {
         return byStream.getOrDefault(streamId, DonationSubscription.NONE);
     }
 
+    /**
+     * 🔴 <b>방송 번호를 바꾸며 값을 옮긴다 — 읽고·지우고·쓰는 셋을 따로 하지 않는다</b>(봇 codex).
+     *
+     * <p>따로 하면 그 사이에 낀 갱신이 사라진다: 갈아끼움이 {@code FAILED} 를 읽은 뒤
+     * 후원 재시도가 성공해 옛 열쇠에 {@code SUBSCRIBED} 를 쓰면, 이어지는 지우기가 그것을
+     * 없애고 <b>낡은 {@code FAILED} 를 새 방송에 설치한다.</b> 재시도 스레드는 성공하면
+     * 끝나므로 그 방송은 후원을 받고 있는데도 창구가 계속 「실패」라고 답한다.
+     *
+     * <p>{@code remove} 가 <b>그 순간의 값</b>을 돌려주므로 늦게 들어온 갱신도 같이 따라간다.
+     *
+     * <p><b>남는 창 하나</b>: 부르는 쪽이 방송 번호를 먼저 바꾸므로 콜백은 새 열쇠를 본다.
+     * 다만 콜백이 <b>바꾸기 직전에 옛 열쇠를 읽고</b> 이 메서드 뒤에 쓰면 그 값이 옛 자리에
+     * 남는다 — 아무도 안 읽는 자리이고, 그것까지 막으려면 락이 필요하다.
+     */
+    public void retarget(String from, String to) {
+        if (from == null || to == null || from.equals(to)) {
+            return;
+        }
+        DonationSubscription carried = byStream.remove(from);
+        byStream.put(to, carried == null ? DonationSubscription.NONE : carried);
+    }
+
     public void remove(String streamId) {
         if (streamId == null) {
             return;

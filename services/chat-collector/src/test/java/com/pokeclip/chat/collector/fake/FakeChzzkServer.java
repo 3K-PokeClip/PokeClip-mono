@@ -189,6 +189,7 @@ public class FakeChzzkServer implements WebSocketConfigurer {
                         "{\"type\":\"subscribed\",\"data\":"
                         + "{\"eventType\":\"DONATION\",\"channelId\":\"FAKE-CHANNEL\"}}");
             }
+            behavior.onSubscribeDonationBeforeResponse.run();
             return ResponseEntity.ok("{\"code\":200,\"message\":null,\"content\":null}");
         }
     }

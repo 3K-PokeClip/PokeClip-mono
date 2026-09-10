@@ -350,9 +350,16 @@ public class ChatSession implements AutoCloseable {
         // <b>subscribed 프레임이 endAt 직전에 오도록</b> 가짜를 늘려야 한다.
         // 다음 사람은 3)부터 보면 된다.
         //
-        // 🔴 <b>그 공백이 실제로 값을 치렀다</b>(로컬 리뷰 라운드 7). 아래 재시도 루프의
-        // CAS 기대값 버그가 <b>NONE 출발에서만</b> 나는데, 그물이 없어 주입해도 초록이었다 —
-        // 리뷰가 코드를 읽어 찾았다. 이 갈래에 그물이 서면 그 부류를 기계가 잡는다.
+        // 🔴 <b>그 공백이 값을 세 번 치렀다 — 이 자리는 그냥 「미측정」이 아니다.</b>
+        //   · 라운드 7: CAS 기대값이 실제와 갈리는 버그. NONE 출발에서만 나서 주입해도 초록
+        //   · 봇 4판(claude): 반납 뒤 CAS 가 NONE 을 되살리는 것. 역시 NONE 출발에서만
+        //   · 그 둘을 고친 뒤에도 <b>고침 자체를 재는 그물이 없다</b>(주입해도 초록)
+        // 셋 다 사람이 코드를 읽어 찾았고 기계는 하나도 못 잡았다.
+        // <b>이 갈래에 그물을 놓는 것이 다음에 이 파일을 여는 사람의 첫 일이다.</b>
+        // 가짜 서버에 「subscribed 프레임만 늦추는」 손잡이를 만드는 것이 출발점인데,
+        // ⑤의 대기 시한이 endAt 이라 <b>프레임이 endAt 직전에 오도록 맞춰야 하고</b>
+        // 그것은 타이밍 의존이다 — 결정적으로 만들려면 ⑥의 시계를 주입 가능하게
+        // 바꿔야 할 수도 있다.
         startDonationRetryIfNeeded();
         // 예산이 이미 다했으면 <b>건너뛴다(NONE)</b>. 던지지 않는 이유는 위와 같다 —
         // 여기서 던지면 후원 때문에 채팅 수립이 실패하는 길이 다시 열린다.
@@ -410,6 +417,15 @@ public class ChatSession implements AutoCloseable {
                     return;
                 }
                 DonationSubscription got = client.subscribeDonation(key);
+                // 🔴 <b>REST 를 도는 동안 반납이 지나갔을 수 있다</b>(봇 claude).
+                // CAS 만으로는 못 막는다 — releaseAndClose 가 donation 에 <b>NONE 을 쓰므로</b>,
+                // NONE 에서 출발한 재시도의 compareAndSet(NONE, got) 이 <b>성공해 버린다.</b>
+                // 그러면 등록부에서 이미 지워진 자리를 알림이 되살려, 닫힌 세션이
+                // 창구에 영구히 「구독 중」으로 남고 그 후원 구독은 아무도 반납하지 않는다.
+                // (아래 CAS 주석의 「지면 된다」는 FAILED 출발에만 성립한다.)
+                if (stopping.get()) {
+                    return;
+                }
                 if (got != DonationSubscription.FAILED) {
                     // 🔴 <b>CAS 의 기대값이 「지금 값」이지 FAILED 고정이 아니다.</b>
                     // 건너뛴 세션은 NONE 에서 출발하므로 FAILED 로 고정하면 영영 못 바꾼다.

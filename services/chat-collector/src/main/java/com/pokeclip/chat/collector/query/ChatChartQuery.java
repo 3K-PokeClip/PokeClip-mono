@@ -55,6 +55,26 @@ public class ChatChartQuery {
         this.sync = sync;
     }
 
+    /**
+     * 🔴 <b>격자가 실제로 몇 점인가 — 창구의 상한 검사가 이 값을 쓴다</b>(봇 codex).
+     * 창구가 따로 세면 둘이 어긋나 상한이 우회된다: 둘 다 내림이면
+     * {@code from} 에 마이크로초가 실릴 때 720을 통과하고 721점이 나간다.
+     *
+     * <p><b>{@link #count} 의 루프와 같은 규칙이어야 한다</b> — 시작은 밀리초로 자르고
+     * 끝은 마이크로초로 자른 뒤 그 사이를 {@code bucketSeconds} 로 나눈 올림이다.
+     * 보정값은 양쪽에 똑같이 더해지므로 개수에 영향이 없어 여기서는 안 받는다.
+     */
+    static long bucketCount(Instant from, Instant to, int bucketSeconds) {
+        Instant gridOrigin = align(from);
+        Instant gridEnd = to.truncatedTo(ChronoUnit.MICROS);
+        if (!gridEnd.isAfter(gridOrigin)) {
+            return 0;
+        }
+        long nanos = java.time.Duration.between(gridOrigin, gridEnd).toNanos();
+        long bucketNanos = bucketSeconds * 1_000_000_000L;
+        return (nanos + bucketNanos - 1) / bucketNanos;
+    }
+
     /** @param bucketSeconds 창구가 이미 {5,10,30,60}으로 걸렀다. 점 수 상한도 창구가 본다 */
     public ChatChartPage count(String streamId, String channelId, WindowRequest window, int bucketSeconds) {
         long offset = sync.offsetFor(channelId);

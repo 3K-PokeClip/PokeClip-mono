@@ -84,6 +84,13 @@ public class FakeChzzkBehavior {
      * (CP5가 같은 상황을 10회 중 3회만 재현했다).
      */
     public volatile Runnable onSubscribeBeforeResponse = () -> { };
+
+    /**
+     * 후원 구독 응답 <b>직전</b>에 부른다. 채팅 쪽({@link #onSubscribeBeforeResponse})과
+     * 따로 두는 것이 요점이다 — 하나로 묶으면 수립 ④까지 같이 붙들려 재시도만
+     * 매달아 두는 창을 못 만든다.
+     */
+    public volatile Runnable onSubscribeDonationBeforeResponse = () -> { };
     /**
      * 구독 반납 REST가 돌려줄 상태. 200이 아니면 반납이 실패한다.
      * <b>이 스위치가 없으면 반납 실패 갈래를 밟는 테스트가 0개다</b> —
@@ -652,6 +659,7 @@ public class FakeChzzkBehavior {
         authDelay = Duration.ZERO;
         closeAfterSubscribed = false;
         onSubscribeBeforeResponse = () -> { };
+        onSubscribeDonationBeforeResponse = () -> { };
         unsubscribeStatus = 200;
         unsubscribeDelay = Duration.ZERO;
         subscribeDonationStatus = 200;

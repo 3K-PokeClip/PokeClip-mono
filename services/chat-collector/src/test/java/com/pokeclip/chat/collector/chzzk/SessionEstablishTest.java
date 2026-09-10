@@ -451,6 +451,61 @@ class SessionEstablishTest extends IntegrationTestSupport {
     }
 
     /**
+     * 🔴 <b>반납이 지나간 뒤에는 재시도가 상태를 되살리지 않는다</b>(봇 claude).
+     *
+     * <p>CAS 만으로는 못 막는다 — {@code releaseAndClose} 가 {@code donation} 에
+     * <b>{@code NONE} 을 쓰므로</b>, {@code NONE} 에서 출발한 재시도의
+     * {@code compareAndSet(NONE, got)} 이 <b>성공해 버린다.</b> 그러면 등록부에서 이미
+     * 지워진 자리를 알림이 되살려, 닫힌 세션이 창구에 영구히 「구독 중」으로 남고
+     * 그 후원 구독은 아무도 반납하지 않는다.
+     *
+     * <p>구독 응답을 붙들어 둔 채 세션을 닫는다 — 응답이 돌아오는 시점에는
+     * 이미 반납이 지나간 뒤다.
+     *
+     * <p>🔴 <b>이 검사가 못 재는 것</b>: {@code stopping} 확인을 지워도 <b>초록</b>이다.
+     * 여기는 {@code FAILED} 에서 출발하므로 CAS 가 대신 막아 준다 —
+     * 기대값 {@code FAILED} 와 실제 값 {@code NONE} 이 갈려 CAS 가 지고, 알림도 안 간다.
+     * <b>봇이 짚은 시나리오는 {@code NONE} 출발이고 그때만 CAS 가 뚫린다</b>
+     * ({@code compareAndSet(NONE, got)} 이 성공해 버린다).
+     * 이 검사의 값은 「반납 뒤에는 알림이 안 간다」는 회귀를 막는 것이다.
+     */
+    @Test
+    void 반납이_지나간_뒤의_재시도는_상태를_되살리지_않는다() throws Exception {
+        behavior.subscribeDonationStatus = 503;
+        ChatSession session = newSession(java.time.Duration.ofMillis(60));
+        session.open(java.time.Duration.ofSeconds(5), () -> false);
+        assertThat(session.donationSubscription()).isEqualTo(DonationSubscription.FAILED);
+
+        java.util.List<DonationSubscription> 알림 =
+                java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        session.onDonationSubscriptionChanged(알림::add);
+
+        // 다음 재시도가 응답을 못 받고 매달리게 한다.
+        CountDownLatch 붙들림 = new CountDownLatch(1);
+        CountDownLatch 놓아줌 = new CountDownLatch(1);
+        behavior.subscribeDonationStatus = 200;
+        behavior.onSubscribeDonationBeforeResponse = () -> {
+            붙들림.countDown();
+            try {
+                놓아줌.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+
+        assertThat(붙들림.await(5, TimeUnit.SECONDS))
+                .as("재시도가 구독을 안 쐈다 — 이 검사가 아무것도 안 잰다").isTrue();
+        session.releaseAndClose();
+        놓아줌.countDown();
+        Thread.sleep(300);
+
+        assertThat(알림)
+                .as("닫힌 세션의 상태를 되살리면 창구가 영영 「구독 중」으로 답한다")
+                .isEmpty();
+        assertThat(session.donationSubscription()).isEqualTo(DonationSubscription.NONE);
+    }
+
+    /**
      * <b>재시도가 한 바퀴로 끝나지 않는다</b> — 실패가 이어져도 계속 돈다.
      * 기존 검사는 첫 바퀴에 성공해서 이 자리를 안 지나간다.
      *

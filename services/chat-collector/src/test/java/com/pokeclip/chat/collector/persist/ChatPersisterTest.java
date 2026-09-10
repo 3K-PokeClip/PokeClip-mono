@@ -268,11 +268,19 @@ class ChatPersisterTest extends IntegrationTestSupport {
      */
     @Test
     void NUL은_생성_지점에서_제거되고_해시와_저장이_같은_본문을_쓴다() {
-        PersistableChat chat = new PersistableChat(null, "ch", "s", "a\0b", 1L, 2L, null, null);
+        PersistableChat chat = new PersistableChat(null, "ch", "s", "a\0b", 1L, 2L,
+                "닉\0네임", "com\0mon_user");
 
         assertThat(chat.content())
                 .as("생성 지점에서 안 지우면 해시 본문과 저장 본문이 갈릴 수 있다")
                 .isEqualTo("ab");
+        assertThat(chat.nickname()).isEqualTo("닉네임");
+        // 🔴 <b>역할이 네 번째다</b>(봇 claude). 후원 쪽에서 세 번 같은 실수를 고치면서
+        // 채팅의 이 칸을 안 봤다. 지금은 치지직이 이 값을 안 보내 영향이 0이지만,
+        // 보내기 시작하면 NUL 한 글자가 그 배치를 포이즌 격리로 보내 채팅을 버린다.
+        assertThat(chat.userRole())
+                .as("디코더가 userRoleCode 를 검증 없이 그대로 넘긴다")
+                .isEqualTo("common_user");
     }
 
     /** ⑼의 결과 — NUL 채팅은 격리가 아니라 정상 저장이다(제거된 본문으로). */

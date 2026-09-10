@@ -308,10 +308,14 @@ public class StreamSession {
         // <b>후원 상태도 같이 옮긴다.</b> 소켓과 구독은 그대로이므로 값은 같지만
         // 열쇠가 바뀐다 — 안 옮기면 새 방송이 「후원 상태 모름(none)」으로 보이고
         // 끝난 방송 번호의 값이 창구 메모리에 영영 남는다.
-        DonationSubscription carried = donations.of(this.key.streamId());
-        donations.remove(this.key.streamId());
-        donations.set(newKey.streamId(), carried);
+        // 🔴 <b>방송 번호를 먼저 바꾸고 옮긴다</b>(봇 codex). 재시도 콜백은 stream() 을
+        // 매번 읽으므로, 번호를 먼저 바꿔 두면 그 뒤의 갱신이 <b>새 열쇠</b>로 간다.
+        // 그리고 옮기는 것 자체가 한 연산이라(DonationSubscriptions.retarget) 읽기와
+        // 지우기 사이에 낀 갱신이 사라지지 않는다 — 그 자리에서 재시도가 성공하면
+        // 낡은 FAILED 가 새 방송에 설치되고, 재시도 스레드는 이미 끝나 되돌릴 길이 없었다.
+        String previousStreamId = this.key.streamId();
         this.key = newKey;
+        donations.retarget(previousStreamId, newKey.streamId());
         // <b>방송 단위 지표를 새 경계에서 다시 센다.</b> 소켓과 세션은 그대로지만 방송이
         // 바뀌었으므로, 안 자르면 stream= 레이블만 새 방송이고 그 안의 숫자는 앞 방송
         // 것을 안고 간다. 돌려주는 값은 <b>부르는 쪽이 프로세스 누계로 옮긴다</b> —

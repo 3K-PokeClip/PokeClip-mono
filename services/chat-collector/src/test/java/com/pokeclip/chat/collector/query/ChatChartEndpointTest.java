@@ -137,6 +137,17 @@ class ChatChartEndpointTest extends IntegrationTestSupport {
                     get(port, p + T0.plusSeconds(3605) + "&bucket=5", TOKEN);
             assertThat(tooMany.statusCode()).isEqualTo(400);
             assertThat(tooMany.body()).contains("\"error\":\"too_many_buckets\"");
+
+            // 🔴 <b>마이크로초가 실린 from 으로 상한을 우회할 수 없다</b>(봇 codex).
+            // 창구가 toSeconds()/bucket 으로 따로 셀 때는 <b>둘 다 내림</b>이라 질의가
+            // 실제로 만드는 격자보다 적게 나왔다 — 아래가 720 으로 통과하고 721점이 나갔다.
+            Instant 마이크로초 = T0.plusNanos(500_000);
+            HttpResponse<String> 우회 = get(port,
+                    "/internal/streams/" + STREAM + "/chat-chart?from=" + 마이크로초
+                            + "&to=" + 마이크로초.plusSeconds(3600) + "&bucket=5", TOKEN);
+            assertThat(우회.statusCode())
+                    .as("창구가 질의와 다른 방법으로 세면 상한이 우회된다").isEqualTo(400);
+            assertThat(우회.body()).contains("\"error\":\"too_many_buckets\"");
         }
     }
 
