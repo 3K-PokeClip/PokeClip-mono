@@ -31,6 +31,10 @@ import { useSimulatedChat } from './useSimulatedChat';
 // 리퀴드 글래스 라이브 플레이어 (시안 "영상 플레이어 글래스").
 // src가 있으면 hls.js 실재생(useHlsPlayback), 없으면 목업(usePlayerSimulation) —
 // 훅 규칙상 조건부 호출이 안 되므로 컴포넌트 단위로 갈라 태운다. Body는 어느 쪽인지 모른다.
+//
+// 플레이어 안 채팅(오버레이·토글)은 전체 화면 전용이다 — 시안은 항상 그리지만 제품 결정으로
+// 다르게 간다(POK-239). 기본 상태에선 옆 채팅 패널이 채팅을 맡고, 전체 화면에선 그 패널이
+// 안 보이니 그때만 오버레이가 선다.
 /** 바깥에서 플레이어에 내리는 명령 — sim이 Body 안에서 생겨 상태로는 끌어올릴 수 없다 */
 export interface GlassPlayerController {
   /** 방송 경과 시각(초)으로 이동 — 되감기 창 밖은 가장 오래된 지점으로 클램프 */
@@ -47,12 +51,6 @@ export interface GlassPlayerProps {
   embed?: boolean;
   /** 테스트용 시뮬레이션 초기값 */
   simulationOptions?: PlayerSimulationOptions;
-  /**
-   * 바깥 채팅 패널(1b 대시보드)의 열림 상태 — 플레이어 안 채팅 오버레이(chatOn)와는 다른 것이다.
-   * 닫혀 있을 때만 상단 오버레이 우측에 여는 버튼이 선다(시안 영상 플레이어 글래스).
-   */
-  chatPanelOpen?: boolean;
-  onToggleChatPanel?: () => void;
   /** 카드 클릭 → 시점 이동 같은 바깥 명령의 통로 */
   controllerRef?: Ref<GlassPlayerController>;
   /**
@@ -97,14 +95,14 @@ function GlassPlayerBody({
   channelName,
   viewersNote,
   embed = false,
-  chatPanelOpen,
-  onToggleChatPanel,
   controllerRef,
   onUptimeChange,
   sim,
   videoNode,
 }: GlassPlayerBodyProps) {
+  // 오버레이는 전체 화면에서만 선다(파일 머리 주석). 켜짐 기본값은 유지 — 들어가면 바로 보인다.
   const [chatOn, setChatOn] = useState(true);
+  const [fullscreen, setFullscreen] = useState(false);
   // 설정 팝오버는 Portal로 플레이어 밖에 뜬다 — 포커스가 넘어가면 :has(:focus-visible)
   // 보호가 닿지 않으므로, 열림 상태를 여기서 알고 그동안 컨트롤 숨김을 유보한다.
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -112,9 +110,18 @@ function GlassPlayerBody({
   // 마우스 드래그는 :focus-visible이 아니라 CSS의 포커스 예외절도 안 걸린다 — 팝오버(settingsOpen)와
   // 같은 방식으로 드래그 동안 숨김을 유보한다.
   const [seeking, setSeeking] = useState(false);
-  const chat = useSimulatedChat(chatOn);
+  // 안 보일 땐 시뮬레이션 티커도 돌리지 않는다
+  const chat = useSimulatedChat(fullscreen && chatOn);
   const { toast } = useToast();
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // 전체 화면 여부는 요청이 아니라 결과로 안다 — ESC·브라우저 UI로 나가도 fullscreenchange가 온다.
+  // 이 플레이어가 전체 화면 요소일 때만 참이다(다른 요소의 전체 화면은 남의 일).
+  useEffect(() => {
+    const sync = () => setFullscreen(document.fullscreenElement === containerRef.current);
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, []);
 
   const controlsShown = sim.controlsVisible || !sim.playing || settingsOpen || seeking;
 
@@ -228,13 +235,8 @@ function GlassPlayerBody({
       <div className={styles.videoSlot} aria-hidden>
         {videoNode ?? <span className={styles.videoLabel}>라이브 방송 화면</span>}
       </div>
-      <PlayerTopOverlay
-        channelName={channelName}
-        viewersNote={viewersNote}
-        chatPanelOpen={chatPanelOpen}
-        onToggleChatPanel={onToggleChatPanel}
-      />
-      {chatOn ? <PlayerChatOverlay messages={chat} /> : null}
+      <PlayerTopOverlay channelName={channelName} viewersNote={viewersNote} />
+      {fullscreen && chatOn ? <PlayerChatOverlay messages={chat} /> : null}
       <div className={styles.controls}>
         <PlayerSeekBar
           behindSeconds={sim.behindSeconds}
@@ -247,8 +249,9 @@ function GlassPlayerBody({
         />
         <PlayerControls
           sim={sim}
-          chatOn={chatOn}
-          onToggleChat={() => setChatOn((on) => !on)}
+          chatToggle={
+            fullscreen ? { on: chatOn, onToggle: () => setChatOn((on) => !on) } : undefined
+          }
           onClip={handleClip}
           onPip={handlePip}
           onFullscreen={handleFullscreen}

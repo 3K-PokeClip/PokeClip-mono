@@ -16,19 +16,22 @@ import { formatBehind } from './playerMath';
 import { PlayerSettingsPopover } from './PlayerSettingsPopover';
 import type { PlayerSimulation } from './usePlayerSimulation';
 
-// 하단 버튼줄 — 재생·볼륨·LIVE 복귀(계약3 4절) / 클립·채팅·미니·설정·전체 화면.
+// 하단 버튼줄 — 재생·볼륨·LIVE 복귀(계약3 4절) / 클립·(채팅)·미니·설정·전체 화면.
 export function PlayerControls({
   sim,
-  chatOn,
-  onToggleChat,
+  chatToggle,
   onClip,
   onPip,
   onFullscreen,
   onSettingsOpenChange,
 }: {
   sim: PlayerSimulation;
-  chatOn: boolean;
-  onToggleChat: () => void;
+  /**
+   * 플레이어 안 채팅 오버레이 토글 — 없으면 버튼을 그리지 않는다.
+   * GlassPlayer는 전체 화면일 때만 넘긴다: 기본 상태에선 옆 채팅 패널이 채팅을 맡아 중복이고,
+   * 전체 화면에선 그 패널이 안 보여 오버레이가 유일한 채팅 창구다(POK-239, 시안과 다른 제품 결정).
+   */
+  chatToggle?: { on: boolean; onToggle: () => void };
   onClip: () => void;
   onPip: () => void;
   onFullscreen: () => void;
@@ -84,15 +87,17 @@ export function PlayerControls({
         <button type="button" className={styles.glassBtn} aria-label="클립 만들기" onClick={onClip}>
           <Scissors size={19} aria-hidden />
         </button>
-        <button
-          type="button"
-          className={clsx(styles.glassBtn, chatOn && styles.glassBtnActive)}
-          aria-label="채팅 오버레이"
-          aria-pressed={chatOn}
-          onClick={onToggleChat}
-        >
-          <MessageSquare size={19} aria-hidden />
-        </button>
+        {chatToggle ? (
+          <button
+            type="button"
+            className={clsx(styles.glassBtn, chatToggle.on && styles.glassBtnActive)}
+            aria-label="채팅 오버레이"
+            aria-pressed={chatToggle.on}
+            onClick={chatToggle.onToggle}
+          >
+            <MessageSquare size={19} aria-hidden />
+          </button>
+        ) : null}
         <button
           type="button"
           className={styles.glassBtn}

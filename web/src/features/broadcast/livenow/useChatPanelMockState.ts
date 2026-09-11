@@ -35,7 +35,11 @@ export type ChatPanelMessage =
 export interface ChatPanelMockState {
   surges: ChatSurge[];
   messages: ChatPanelMessage[];
+  /** 하단 상태줄의 「분당 N」 — 시안 값이고 통계의 「분당 평균 채팅」과 같은 숫자다 */
+  ratePerMinute: number;
 }
+
+const MOCK_RATE_PER_MINUTE = 402;
 
 const MOCK_SURGES: ChatSurge[] = [
   { keyword: 'ㅋㅋㅋㅋ', count: 214 },
@@ -91,5 +95,5 @@ export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
     return () => window.clearInterval(tick);
   }, [enabled]);
 
-  return { surges: MOCK_SURGES, messages };
+  return { surges: MOCK_SURGES, messages, ratePerMinute: MOCK_RATE_PER_MINUTE };
 }

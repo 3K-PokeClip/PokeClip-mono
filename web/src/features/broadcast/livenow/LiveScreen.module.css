@@ -1,5 +1,7 @@
 /* 디자인 1b 라이브 대시보드 — 페이지 헤더 없이 콘텐츠부터.
    세로로 길게 쌓아 문서 스크롤로 내려가는 화면이라 높이를 뷰포트에 맞추지 않는다.
+   예외는 채팅 하나다 — 시안 갱신(2026-09-11, POK-239)으로 채팅만 화면 높이에 sticky로 붙어
+   통계 위까지 따라오고, 접으면 세로 레일이 같은 자리에 남는다.
    마젠타·앰버 틴트는 상태색이라 시안 값을 그대로 쓴다. */
 
 /* ---------- 본문 ---------- */
@@ -20,18 +22,14 @@
   gap: calc(16 * var(--pc-u));
 }
 
-/* 좌: 영상·정보·카드 / 우: 채팅 패널. 채팅은 좌측 열 높이를 따라 늘어난다(자체 높이 고정 아님) */
+/* 좌: 영상·정보·카드 / 우: 채팅 칸(.chatCol — 패널 또는 레일). 둘째 트랙은 칸의 폭(펼침 332u ·
+   접힘 40u)을 따르므로 auto — 접어도 트랙이 비지 않아 오른쪽에 죽은 여백이 남지 않는다.
+   행 높이는 좌측 열이 정하고, 채팅은 칸 안에서 sticky로 화면 높이에 붙는다(.chatCol 주석). */
 .grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: calc(16 * var(--pc-u));
   align-items: stretch;
-}
-
-/* 채팅을 접으면 트랙 자체를 걷는다 — 빈 명시 트랙이라도 그 앞의 column-gap은 그려져,
-   두고 두면 본문 오른쪽에 16u짜리 죽은 여백이 상시 남는다 */
-.gridSolo {
-  grid-template-columns: minmax(0, 1fr);
 }
 
 .mainCol {
@@ -566,7 +564,7 @@
 
 .statsBody {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) calc(252 * var(--pc-u));
+  grid-template-columns: minmax(0, 1fr) calc(232 * var(--pc-u));
   border-top: 1px solid var(--pc-color-border-subtle);
 }
 
@@ -706,15 +704,88 @@
 
 /* ---------- 실시간 채팅 패널 ---------- */
 
+/* 시안: 「채팅은 통계 위까지 화면 높이에 고정」.
+   채팅은 그리드 칸(.chatCol) 안에서 sticky다. 칸은 행 높이(= 좌측 열)로 늘어나고(stretch),
+   채팅은 그 안에서 「행 높이」와 「화면 높이 − 40u(위·아래 20u, 시안 프레임의 −40px과 같은 셈)」
+   중 작은 쪽을 높이로 갖는다. 좌측 열이 화면보다 길면 화면 높이로 붙어 따라오다 행 끝(통계 위)에서
+   밀리고, 좌측 열이 화면보다 짧으면 그냥 열 높이에 맞춘다.
+   contain: size가 필요한 이유 — 없으면 채팅의 화면 높이가 행의 내용 높이로 잡혀 행이 채팅만큼
+   늘어나고, 좌측 열이 짧은 화면에서 카드 아래에 빈 자리가 생긴다(칸의 고유 크기를 0으로 만들어야
+   행 높이가 좌측 열만 따른다). 그래서 폭은 칸이 명시한다 — auto 트랙이 재는 것도 이 폭이다. */
+.chatCol {
+  position: relative;
+  align-self: stretch;
+  contain: size;
+  width: calc(332 * var(--pc-u));
+}
+
+.chatColCollapsed {
+  width: calc(40 * var(--pc-u));
+}
+
 .chatPanel {
   display: flex;
   flex-direction: column;
-  width: calc(332 * var(--pc-u));
+  width: 100%;
   min-height: 0;
   border: 1px solid var(--pc-color-border-subtle);
   border-radius: calc(14 * var(--pc-u));
   background: var(--pc-color-bg-surface);
   overflow: hidden;
+  position: sticky;
+  top: calc(20 * var(--pc-u));
+  height: min(100%, calc(100dvh - 40 * var(--pc-u)));
+}
+
+/* 접힌 채팅 — 패널이 서던 자리에 40u 세로 레일이 남아 펼치는 통로가 된다.
+   sticky 규칙은 패널과 같아야 스크롤 중에도 같은 자리에서 눌린다. */
+.chatRail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(10 * var(--pc-u));
+  width: 100%;
+  padding: calc(12 * var(--pc-u)) 0;
+  border: 1px solid var(--pc-color-border-subtle);
+  border-radius: calc(14 * var(--pc-u));
+  background: var(--pc-color-bg-surface);
+  color: var(--pc-color-text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  position: sticky;
+  top: calc(20 * var(--pc-u));
+  height: min(100%, calc(100dvh - 40 * var(--pc-u)));
+}
+
+.chatRail:hover {
+  color: var(--pc-color-text-primary);
+  background: var(--pc-color-bg-surface-hover);
+}
+
+.chatRailIcon {
+  flex: none;
+  width: calc(15 * var(--pc-u));
+  height: calc(15 * var(--pc-u));
+}
+
+.chatRailLabel {
+  font-size: calc(10.5 * var(--pc-u));
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  writing-mode: vertical-rl;
+}
+
+/* 수집 상태 점 — 레일과 하단 상태줄이 같은 점을 쓴다 */
+.chatDot {
+  flex: none;
+  width: calc(7 * var(--pc-u));
+  height: calc(7 * var(--pc-u));
+  border-radius: 99px;
+  background: var(--pc-color-success, #4cae7d);
+}
+
+.chatDotWarning {
+  background: var(--pc-color-warning, #e6a83c);
 }
 
 .chatHeader {
@@ -758,18 +829,48 @@
   flex: none;
 }
 
-/* 최근 줄이 아래에 쌓인다 — 넘치면 위쪽이 잘린다(시안과 같은 처리) */
+/* 최근 줄이 아래에 쌓이고, 넘치면 위로 스크롤해 올라간다(시안 column-reverse).
+   column-reverse는 DOM 순서를 시각적으로 뒤집으므로 ChatPanel이 최신 줄을 DOM 맨 앞에 둔다 —
+   그래야 스크롤 원점이 아래(최신)에 서고, 새 줄이 와도 보던 자리가 흔들리지 않는다. */
 .chatList {
   list-style: none;
   margin: 0;
   flex: 1;
   min-height: 0;
   display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
+  flex-direction: column-reverse;
   gap: calc(9 * var(--pc-u));
   padding: calc(12 * var(--pc-u)) calc(14 * var(--pc-u));
-  overflow: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* 하단 상태줄 — 따라가는 중인지 · 분당 몇 건인지, 우측에 키워드 설정 자리 */
+.chatFooter {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--pc-u));
+  padding: calc(9 * var(--pc-u)) calc(14 * var(--pc-u));
+  border-top: 1px solid var(--pc-color-border-subtle);
+  font-size: calc(10.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
+/* 글자 링크 모양의 버튼 — 키워드 설정 화면이 서기 전까지 비활성 자리 표시 */
+.chatFooterLink {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-weight: 650;
+  color: var(--pc-color-accent-text);
+  cursor: pointer;
+}
+
+.chatFooterLink:disabled {
+  color: var(--pc-color-text-muted);
+  cursor: default;
 }
 
 .chatLine {
@@ -891,9 +992,36 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* 1단이 되면 채팅은 카드 아래로 내려온다 — 고정 폭을 놓아야 본문 폭을 채운다 */
-  .chatPanel {
+  /* 1단이 되면 채팅은 카드 아래 제 행으로 내려온다 — 칸의 크기 봉쇄를 풀어야 행이 0이 되지 않고,
+     고정 폭을 놓아야 본문 폭을 채운다. sticky·화면 높이도 푼다(두면 카드 아래에 뷰포트 높이짜리
+     패널이 서서 통계를 밀어낸다). 높이는 시안 패널의 대략적 비례(360u)로 잡아 목록이 스크롤을
+     유지하게 한다. */
+  .chatCol {
+    contain: none;
     width: auto;
+    height: calc(360 * var(--pc-u));
+  }
+
+  .chatColCollapsed {
+    height: auto;
+  }
+
+  .chatPanel {
+    position: static;
+    height: 100%;
+  }
+
+  /* 레일도 가로 띠로 — 세로쓰기와 화면 높이를 풀고 본문 폭을 채운다 */
+  .chatRail {
+    height: auto;
+    position: static;
+    flex-direction: row;
+    justify-content: center;
+    padding: calc(10 * var(--pc-u));
+  }
+
+  .chatRailLabel {
+    writing-mode: horizontal-tb;
   }
 
   /* 지표 열도 아래로 — 좁은 폭에서 252u를 떼어 주면 차트가 읽을 수 없게 눌린다 */

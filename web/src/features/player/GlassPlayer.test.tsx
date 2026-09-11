@@ -6,10 +6,16 @@ import { ToastProvider } from '@/ui';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import type { PlayerSimulationOptions } from '@/features/player/usePlayerSimulation';
 
-type PanelProps = Pick<
-  ComponentProps<typeof GlassPlayer>,
-  'chatPanelOpen' | 'onToggleChatPanel' | 'controllerRef'
->;
+type PanelProps = Pick<ComponentProps<typeof GlassPlayer>, 'controllerRef'>;
+
+/**
+ * jsdom엔 requestFullscreen이 없다 — 전체 화면 「결과」를 흉내 낸다: fullscreenElement를 꽂고
+ * fullscreenchange를 쏜다. 플레이어가 요청이 아니라 결과를 듣는지가 이 흉내로 검증된다.
+ */
+function setFullscreenElement(el: Element | null) {
+  Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => el });
+  fireEvent(document, new Event('fullscreenchange'));
+}
 
 function renderPlayer(simulationOptions?: PlayerSimulationOptions, panelProps?: PanelProps) {
   return render(
@@ -215,24 +221,47 @@ describe('GlassPlayer', () => {
     }
   });
 
-  it('바깥 채팅 패널 콜백이 없으면 채팅 열기 버튼도 없다', () => {
-    // 플레이어를 단독으로 쓰는 화면(VOD 등)에 없는 패널의 버튼이 생기면 안 된다
-    renderPlayer();
+  it('기본 상태엔 플레이어 안에 채팅 버튼도 오버레이도 없다 — 옆 채팅 패널이 맡는다', () => {
+    const { container } = renderPlayer();
+    expect(screen.queryByRole('button', { name: '채팅 오버레이' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '채팅 열기' })).not.toBeInTheDocument();
+    expect(container.querySelector('[class*="chatOverlay"]')).toBeNull();
   });
 
-  it('채팅 패널이 열려 있으면 여는 버튼은 뜨지 않는다', () => {
-    renderPlayer(undefined, { chatPanelOpen: true, onToggleChatPanel: vi.fn() });
-    expect(screen.queryByRole('button', { name: '채팅 열기' })).not.toBeInTheDocument();
-  });
-
-  it('채팅 패널이 접혀 있으면 상단에 여는 버튼이 서고, 클릭이 콜백으로 간다', async () => {
+  it('전체 화면에 들어가면 채팅 오버레이 토글이 서고, 나오면(ESC 포함) 사라진다', async () => {
     const user = userEvent.setup();
-    const onToggleChatPanel = vi.fn();
-    renderPlayer(undefined, { chatPanelOpen: false, onToggleChatPanel });
+    const { container } = renderPlayer();
+    const player = container.querySelector('[data-controls]');
+    expect(player).not.toBeNull();
 
-    await user.click(screen.getByRole('button', { name: '채팅 열기' }));
-    expect(onToggleChatPanel).toHaveBeenCalledOnce();
+    try {
+      setFullscreenElement(player);
+      const toggle = screen.getByRole('button', { name: '채팅 오버레이' });
+      // 들어가면 바로 켜진 채 시작한다 — 전체 화면에선 이 오버레이가 유일한 채팅 창구다
+      expect(toggle).toHaveAttribute('aria-pressed', 'true');
+      expect(container.querySelector('[class*="chatOverlay"]')).not.toBeNull();
+
+      await user.click(toggle);
+      expect(toggle).toHaveAttribute('aria-pressed', 'false');
+      expect(container.querySelector('[class*="chatOverlay"]')).toBeNull();
+
+      // ESC·브라우저 UI로 나가도 같은 이벤트가 온다 — 요청이 아니라 결과를 듣는다
+      setFullscreenElement(null);
+      expect(screen.queryByRole('button', { name: '채팅 오버레이' })).not.toBeInTheDocument();
+    } finally {
+      setFullscreenElement(null);
+    }
+  });
+
+  it('다른 요소의 전체 화면은 남의 일이다 — 채팅 버튼이 서지 않는다', () => {
+    renderPlayer();
+    const other = document.createElement('div');
+    try {
+      setFullscreenElement(other);
+      expect(screen.queryByRole('button', { name: '채팅 오버레이' })).not.toBeInTheDocument();
+    } finally {
+      setFullscreenElement(null);
+    }
   });
 
   it('방송 경과 시간을 플레이어에 두지 않는다 — 영상 아래 방송 정보 바가 말한다', () => {
