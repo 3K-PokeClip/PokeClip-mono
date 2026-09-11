@@ -65,4 +65,32 @@ class DonationSubscriptionsTest {
                 .as("옛 자리는 비워야 한다 — 끝난 방송 번호가 창구 메모리에 남는다")
                 .isEqualTo(DonationSubscription.NONE);
     }
+
+    /**
+     * 🔴 <b>새 열쇠에 이미 들어온 값은 안 덮는다</b>(로컬 리뷰 라운드 8).
+     *
+     * <p>부르는 쪽이 <b>방송 번호를 먼저 바꾸고</b> 옮기므로, 그 사이에 재시도 콜백이
+     * <b>새 열쇠로</b> 성공을 쓸 수 있다. 옮기기가 그 자리를 덮으면 옛 열쇠에서 들고 온
+     * 낡은 {@code FAILED} 가 최신 값을 지운다 — 위 검사가 막은 손실이 <b>반대편에서</b>
+     * 그대로 재현된다. 앞의 것과 짝이라 둘을 나란히 둔다.
+     *
+     * <p>🔴 <b>이 검사가 못 재는 것</b>: 위와 같다. 순차라 경합 자체는 안 열리고,
+     * 「새 자리에 값이 있으면 그것이 이긴다」는 계약만 잰다.
+     */
+    @Test
+    void 옮길_때_새_자리에_이미_있는_값이_이긴다() {
+        DonationSubscriptions subs = new DonationSubscriptions();
+        subs.set("old", DonationSubscription.FAILED);
+
+        // 번호가 바뀐 뒤 옮기기 전 — 콜백이 새 열쇠로 성공을 썼다.
+        subs.set("new", DonationSubscription.SUBSCRIBED);
+        subs.retarget("old", "new");
+
+        assertThat(subs.of("new"))
+                .as("옮기기가 새 자리를 덮으면 후원을 받는 방송이 영영 failed 로 보인다")
+                .isEqualTo(DonationSubscription.SUBSCRIBED);
+        assertThat(subs.of("old"))
+                .as("옛 자리는 그래도 비워야 한다")
+                .isEqualTo(DonationSubscription.NONE);
+    }
 }

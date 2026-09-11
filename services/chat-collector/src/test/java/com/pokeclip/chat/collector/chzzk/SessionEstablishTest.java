@@ -462,12 +462,23 @@ class SessionEstablishTest extends IntegrationTestSupport {
      * <p>구독 응답을 붙들어 둔 채 세션을 닫는다 — 응답이 돌아오는 시점에는
      * 이미 반납이 지나간 뒤다.
      *
-     * <p>🔴 <b>이 검사가 못 재는 것</b>: {@code stopping} 확인을 지워도 <b>초록</b>이다.
-     * 여기는 {@code FAILED} 에서 출발하므로 CAS 가 대신 막아 준다 —
-     * 기대값 {@code FAILED} 와 실제 값 {@code NONE} 이 갈려 CAS 가 지고, 알림도 안 간다.
-     * <b>봇이 짚은 시나리오는 {@code NONE} 출발이고 그때만 CAS 가 뚫린다</b>
-     * ({@code compareAndSet(NONE, got)} 이 성공해 버린다).
-     * 이 검사의 값은 「반납 뒤에는 알림이 안 간다」는 회귀를 막는 것이다.
+     * <p>🔴 <b>이 검사가 못 재는 것</b>: {@code stopping} 확인을 지워도 알림 단언은
+     * <b>초록</b>이다. <b>이유가 처음 적은 것과 달랐다</b> — 「{@code FAILED} 출발이라 CAS 가
+     * 막는다」고 적었는데, 실측해 보니 <b>CAS 까지 가지도 않는다.</b> 종료가 이 스레드를
+     * 인터럽트해 왕복이 깨지고 {@code got} 이 {@code FAILED} 로 와서 알림 구간 자체를
+     * 안 지나간다(찍어서 확인: {@code got=FAILED stopping=true interrupted=true}).
+     * <b>봇이 짚은 시나리오는 {@code NONE} 출발이고 그때만 CAS 가 뚫리는데</b>
+     * ({@code compareAndSet(NONE, got)} 이 성공해 버린다) 그 갈래에는 여전히 그물이 없다.
+     *
+     * <p>🔴 <b>반납 쪽은 이 검사가 결정적으로 잰다</b>(로컬 리뷰 라운드 8).
+     * 이 시나리오에서 {@code releaseAndClose} 는 그 순간의 값이 {@code FAILED} 라
+     * 후원 반납을 <b>안 쏘고 지나간다</b> — 그 뒤에 선 구독을 재시도가 스스로 거두지
+     * 않으면 <b>어느 경로로도 반납되지 않는다.</b> 그 갈래를 지우면 아래 마지막 단언이
+     * 빨간불이다(주입으로 확인함).
+     *
+     * <p><b>그리고 이 검사가 「불명은 쏜다」를 잰다</b> — 위에 적은 대로 여기서 {@code got} 은
+     * 인터럽트 때문에 {@code FAILED} 로 오지만 <b>서버에는 구독이 섰다.</b> 조건을
+     * {@code SUBSCRIBED} 로 좁히면 이 단언이 빨간불이다(그렇게 써 봤다가 잡혔다).
      */
     @Test
     void 반납이_지나간_뒤의_재시도는_상태를_되살리지_않는다() throws Exception {
@@ -503,6 +514,10 @@ class SessionEstablishTest extends IntegrationTestSupport {
                 .as("닫힌 세션의 상태를 되살리면 창구가 영영 「구독 중」으로 답한다")
                 .isEmpty();
         assertThat(session.donationSubscription()).isEqualTo(DonationSubscription.NONE);
+        assertThat(behavior.unsubscribeDonationCallCount())
+                .as("반납이 지나간 뒤에 선 구독은 재시도가 스스로 거둬야 한다 — "
+                        + "releaseAndClose 는 그때 FAILED 를 보고 이미 안 쏘고 갔다")
+                .isEqualTo(1);
     }
 
     /**

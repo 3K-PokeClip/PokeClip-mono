@@ -53,16 +53,22 @@ public class DonationSubscriptions {
      *
      * <p>{@code remove} 가 <b>그 순간의 값</b>을 돌려주므로 늦게 들어온 갱신도 같이 따라간다.
      *
-     * <p><b>남는 창 하나</b>: 부르는 쪽이 방송 번호를 먼저 바꾸므로 콜백은 새 열쇠를 본다.
-     * 다만 콜백이 <b>바꾸기 직전에 옛 열쇠를 읽고</b> 이 메서드 뒤에 쓰면 그 값이 옛 자리에
-     * 남는다 — 아무도 안 읽는 자리이고, 그것까지 막으려면 락이 필요하다.
+     * <p>🔴 <b>새 열쇠에는 {@code putIfAbsent} 다 — 덮어쓰면 같은 손실이 반대편에서 난다</b>
+     * (로컬 리뷰 라운드 8). 부르는 쪽이 <b>방송 번호를 먼저 바꾸므로</b> 이 메서드가 돌기
+     * 직전에 콜백이 <b>새 열쇠로</b> 성공을 쓸 수 있다. 거기를 {@code put} 으로 덮으면
+     * 옛 열쇠에서 들고 온 낡은 {@code FAILED} 가 그 최신 값을 지운다 — <b>위 문단이
+     * 막으려던 증상 그대로</b>가 새 방송 쪽에서 재현된다. 새 열쇠에 값이 있다는 것은
+     * 그것이 더 새롭다는 뜻이다(방송 번호는 재사용되지 않는다).
+     *
+     * <p><b>남는 창 하나</b>: 콜백이 <b>바꾸기 직전에 옛 열쇠를 읽고</b> 이 메서드 뒤에 쓰면
+     * 그 값이 옛 자리에 남는다 — 아무도 안 읽는 자리이고, 그것까지 막으려면 락이 필요하다.
      */
     public void retarget(String from, String to) {
         if (from == null || to == null || from.equals(to)) {
             return;
         }
         DonationSubscription carried = byStream.remove(from);
-        byStream.put(to, carried == null ? DonationSubscription.NONE : carried);
+        byStream.putIfAbsent(to, carried == null ? DonationSubscription.NONE : carried);
     }
 
     public void remove(String streamId) {
