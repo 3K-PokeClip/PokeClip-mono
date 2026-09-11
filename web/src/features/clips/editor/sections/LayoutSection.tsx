@@ -1,3 +1,4 @@
+import type { CSSProperties, ReactNode } from 'react';
 import { Slider, Switch } from '@/ui';
 import { RovingProvider, useRovingItem } from '@/ui/primitives';
 import styles from './sections.module.css';
@@ -55,6 +56,48 @@ function LayoutCard({
   );
 }
 
+/**
+ * 라디오 묶음의 항목 하나. 화살표로 옮겨 다닐 수 있어야 한다 — 화면의 전역 키 리스너가
+ * `[role="radiogroup"]` 안의 ←→를 묶음에 양보하므로, 묶음이 안 받으면 화살표가 아무 일도 안 한다.
+ *
+ * 포커스만으로는 고르지 않는다(onFocus 를 안 잇는다) — 스와치는 「직접」 색일 때 선택된 항목이 없어
+ * 첫 항목이 탭 정지가 되는데, 거기 Tab 으로 들어왔다고 색이 바뀌면 안 된다.
+ */
+function RovingRadio({
+  value,
+  checked,
+  className,
+  onSelect,
+  children,
+  ...rest
+}: {
+  value: string;
+  checked: boolean;
+  className: string | undefined;
+  onSelect: () => void;
+  children?: ReactNode;
+  'aria-label'?: string;
+  title?: string;
+  style?: CSSProperties;
+}) {
+  const roving = useRovingItem(value);
+  return (
+    <button
+      ref={roving.ref}
+      type="button"
+      role="radio"
+      aria-checked={checked}
+      tabIndex={roving.tabIndex}
+      onKeyDown={roving.onKeyDown}
+      className={className}
+      onClick={onSelect}
+      {...rest}
+    >
+      {children}
+    </button>
+  );
+}
+
 /** 칩 한 줄 — 시안의 chip(). 분할 비율 · 여백 채우기 · 테두리 굵기가 같은 모양이다 */
 function ChipGroup<T extends string | number>({
   label,
@@ -68,20 +111,27 @@ function ChipGroup<T extends string | number>({
   onChange: (value: T) => void;
 }) {
   return (
-    <div className={styles.ratioRow} role="radiogroup" aria-label={label}>
-      {options.map((option) => (
-        <button
-          key={String(option.value)}
-          type="button"
-          role="radio"
-          aria-checked={option.value === value}
-          className={styles.ratioChip}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
+    <RovingProvider
+      activeValue={String(value)}
+      onActiveChange={(next) => {
+        const option = options.find((item) => String(item.value) === next);
+        if (option !== undefined) onChange(option.value);
+      }}
+    >
+      <div className={styles.ratioRow} role="radiogroup" aria-label={label}>
+        {options.map((option) => (
+          <RovingRadio
+            key={String(option.value)}
+            value={String(option.value)}
+            checked={option.value === value}
+            className={styles.ratioChip}
+            onSelect={() => onChange(option.value)}
+          >
+            {option.label}
+          </RovingRadio>
+        ))}
+      </div>
+    </RovingProvider>
   );
 }
 
@@ -98,23 +148,28 @@ function SwatchPicker({
   onChange: (color: string) => void;
 }) {
   const current = value.toLowerCase();
+  // 「직접」 색이면 맞는 스와치가 없다 — 그래도 Tab 으로 들어올 자리는 있어야 하니 첫 스와치를 정지로
+  const active = presets.some((preset) => preset.value === current)
+    ? current
+    : (presets[0]?.value ?? null);
   return (
     <div className={styles.swatchRow}>
-      <div className={styles.swatchGroup} role="radiogroup" aria-label={label}>
-        {presets.map((preset) => (
-          <button
-            key={preset.value}
-            type="button"
-            role="radio"
-            aria-checked={current === preset.value}
-            aria-label={preset.label}
-            title={preset.label}
-            className={styles.swatch}
-            style={{ background: preset.value }}
-            onClick={() => onChange(preset.value)}
-          />
-        ))}
-      </div>
+      <RovingProvider activeValue={active} onActiveChange={onChange}>
+        <div className={styles.swatchGroup} role="radiogroup" aria-label={label}>
+          {presets.map((preset) => (
+            <RovingRadio
+              key={preset.value}
+              value={preset.value}
+              checked={current === preset.value}
+              aria-label={preset.label}
+              title={preset.label}
+              className={styles.swatch}
+              style={{ background: preset.value }}
+              onSelect={() => onChange(preset.value)}
+            />
+          ))}
+        </div>
+      </RovingProvider>
       <label className={styles.swatchCustom}>
         <span className={styles.hint}>직접</span>
         <input

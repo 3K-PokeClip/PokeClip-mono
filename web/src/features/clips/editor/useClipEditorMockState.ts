@@ -609,31 +609,34 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   // 드래그 한 번을 실행취소 한 칸으로 묶는다. 첫 변경만 쌓고 나머지는 현재 상태를 갈아끼운다 —
   // 포인터가 움직일 때마다 쌓으면 제스처 하나가 상한을 넘겨 이전 편집을 밀어낸다.
   const gesturing = useRef(false);
-  const gestureOpened = useRef(false);
+  // 제스처가 시작될 때의 레시피. 이것이 past 맨 끝에 있으면 이 제스처의 첫 변경이 이미 쌓인 것이다.
+  // 「첫 커밋」 표식을 따로 켜는 방식은 안 된다 — 가장자리에 붙어 무변경인 첫 이벤트가 표식만 켜서
+  // 다음 실제 변경이 갈아끼우기로 들어가고, 드래그 직전 상태가 히스토리에서 사라진다.
+  const gestureBase = useRef<EditorRecipe | null>(null);
+  const presentRef = useRef(recipe);
+  presentRef.current = recipe;
 
   const beginGesture = useCallback(() => {
     gesturing.current = true;
-    gestureOpened.current = false;
+    gestureBase.current = presentRef.current;
     setFrozenView(liveViewRef.current);
   }, []);
 
   const endGesture = useCallback(() => {
     gesturing.current = false;
-    gestureOpened.current = false;
+    gestureBase.current = null;
     setFrozenView(null);
   }, []);
 
   const commit = useCallback((update: (recipe: EditorRecipe) => EditorRecipe) => {
-    // 제스처 첫 커밋인지를 업데이터 밖에서 정한다. 안에서 ref를 건드리면 업데이터가
-    // 불순해져, StrictMode의 이중 호출에서 첫 호출이 표식을 켜고 실제로 반영되는
-    // 두 번째 호출이 pushHistory 대신 replacePresent를 탄다 — 드래그 직전 상태가 사라진다.
-    const replace = gesturing.current && gestureOpened.current;
-    if (gesturing.current) gestureOpened.current = true;
     setHistory((current) => {
       const next = update(current.present);
       // 같은 값을 다시 고르면 히스토리를 늘리지 않는다 — ↺가 아무 일도 안 하는 것처럼 보인다
       if (next === current.present) return current;
-      return replace ? replacePresent(current, next) : pushHistory(current, next);
+      // 업데이터는 ref를 읽기만 한다 — StrictMode 이중 호출에서도 같은 답이 나온다
+      const opened =
+        gesturing.current && current.past[current.past.length - 1] === gestureBase.current;
+      return opened ? replacePresent(current, next) : pushHistory(current, next);
     });
   }, []);
 
@@ -846,9 +849,6 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
         commit((current) => (current.layout === layout ? current : { ...current, layout })),
       [commit],
     ),
-    // 자리바꿈은 상하분할에서만 뜻이 있다 — 단일 소스 모드까지 새면
-    // 9:16을 골랐을 때 게임 화면 대신 캠이 뜬다
-    // 자리바꿈은 상하분할에서만 뜻이 있다. media 표식이 pane 객체에 붙어 있어 영상도 함께 옮겨간다.
     regions: useMemo(() => {
       // 작은 화면 비율은 결과의 자리 모양에서 온다 — 소스에서 잘라낼 프레임과 결과 배치에 같이 걸린다
       const pipRatio = pipAspectOf(recipe.pip, resultAspect(recipe.layout));
@@ -944,7 +944,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     resetPip: useCallback(
       () =>
         commit((current) =>
-          current.pip === DEFAULT_PIP ? current : { ...current, pip: DEFAULT_PIP },
+          samePip(current.pip, DEFAULT_PIP) ? current : { ...current, pip: DEFAULT_PIP },
         ),
       [commit],
     ),

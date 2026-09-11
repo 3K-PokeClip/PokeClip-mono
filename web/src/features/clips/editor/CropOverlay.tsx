@@ -23,6 +23,21 @@ import type { ClipEditorMockState, EditorRegion } from './useClipEditorMockState
 // 구간 핸들이 쓰는 규약과 같다. jsdom 엔 레이아웃이 없어 포인터 경로는 렌더 테스트로 못 재지만,
 // 키보드 경로가 같은 액션으로 들어가므로 화면에서도 경계 동작을 확인할 수 있다.
 
+/**
+ * 포인터를 정규화할 기준 상자 — 테두리 안쪽(padding box)이다.
+ * 절대 배치된 사각형의 %는 테두리 안쪽을 기준으로 놓이는데 `getBoundingClientRect()`는 테두리를
+ * 포함하므로, 그대로 쓰면 핸들이 커서보다 테두리 두께만큼 어긋나 따라온다.
+ */
+function paddingBox(el: HTMLElement) {
+  const rect = el.getBoundingClientRect();
+  return {
+    left: rect.left + el.clientLeft,
+    top: rect.top + el.clientTop,
+    width: el.clientWidth,
+    height: el.clientHeight,
+  };
+}
+
 function percentStyle(rect: CropRect) {
   return {
     left: `${rect.x * 100}%`,
@@ -66,8 +81,9 @@ function PipTarget({
   const move = (event: PointerEvent<HTMLElement>) => {
     const last = lastPointer.current;
     if (last === null || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    const box = frameRef.current?.getBoundingClientRect();
-    if (box === undefined) return;
+    const frame = frameRef.current;
+    if (frame === null) return;
+    const box = paddingBox(frame);
     const corner = draggingCorner.current;
     if (corner === null) {
       state.dragPip(
@@ -188,8 +204,9 @@ export function CropOverlay({
   const onMove = (event: PointerEvent<HTMLElement>) => {
     const last = lastPointer.current;
     if (last === null || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
-    const box = panelRef.current?.getBoundingClientRect();
-    if (box === undefined) return;
+    const panel = panelRef.current;
+    if (panel === null) return;
+    const box = paddingBox(panel);
     const corner = draggingCorner.current;
     if (corner === null) {
       // 직전 위치와의 차이를 넘긴다 — 시작점 기준으로 보내면 사각형이 가장자리에서 잘린 뒤
@@ -223,6 +240,8 @@ export function CropOverlay({
     const delta = MOVE_KEYS[event.key];
     if (delta === undefined) return;
     event.preventDefault();
+    // 화면의 전역 키 리스너까지 가면 ←→가 시킹까지 일으킨다 — 여기서 끝낸다
+    event.stopPropagation();
     state.nudgeCrop(region.id, delta);
   };
 
@@ -233,6 +252,7 @@ export function CropOverlay({
     const shrink = event.key === 'ArrowLeft' || event.key === 'ArrowUp';
     if (!grow && !shrink) return;
     event.preventDefault();
+    event.stopPropagation();
     state.zoomCrop(region.id, grow ? CROP_ZOOM_STEP : -CROP_ZOOM_STEP);
   };
 

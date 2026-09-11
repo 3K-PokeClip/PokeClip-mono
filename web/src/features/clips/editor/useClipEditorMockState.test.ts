@@ -413,6 +413,29 @@ describe('useClipEditorMockState — 크롭 영역 (E5)', () => {
     expect(result.current.regions[0]!.crop!.y).toBeLessThan(result.current.regions[1]!.crop!.y);
   });
 
+  it('제스처 첫 이벤트가 무변경이어도 드래그 직전 상태가 히스토리에 남는다', () => {
+    const { result } = renderEditor();
+    // 레이아웃 변경 한 칸을 먼저 쌓아 둔다 — 드래그 되돌리기가 이것까지 삼키면 안 된다
+    act(() => result.current.setLayout('vert'));
+    const beforeDrag = result.current.regions[0]!.crop;
+
+    act(() => result.current.beginGesture());
+    // 세로(zoom 1)는 높이가 꽉 차 세로 이동 여지가 0 — 첫 이벤트가 무변경이다
+    act(() => result.current.dragCrop('main', { x: 0, y: 30 }, { width: 800, height: 450 }));
+    expect(result.current.regions[0]!.crop).toEqual(beforeDrag);
+    act(() => result.current.dragCrop('main', { x: 80, y: 0 }, { width: 800, height: 450 }));
+    act(() => result.current.dragCrop('main', { x: 80, y: 0 }, { width: 800, height: 450 }));
+    act(() => result.current.endGesture());
+    expect(result.current.regions[0]!.crop).not.toEqual(beforeDrag);
+
+    // 한 번 되돌리면 드래그 직전으로, 두 번이면 레이아웃 이전으로
+    act(() => result.current.undo());
+    expect(result.current.regions[0]!.crop).toEqual(beforeDrag);
+    expect(result.current.layout).toBe('vert');
+    act(() => result.current.undo());
+    expect(result.current.layout).toBe('split');
+  });
+
   it('처음에는 비율마다의 기본 자리를 계약6 모양으로 준다', () => {
     const { result } = renderEditor({ initialLayout: 'vert' });
     const crop = result.current.regions[0]?.crop;
@@ -618,6 +641,20 @@ describe('useClipEditorMockState — 크롭 모드의 작은 화면 자리', () 
     act(() => result.current.dragPip({ x: 0.2, y: 0 }, { width: 1, height: 1 }));
     act(() => result.current.resetPip());
     expect(result.current.pipPlacement!.x).toBeCloseTo(0.18, 10);
+  });
+
+  it('끌었다가 정확히 기본 자리로 돌아온 뒤 초기화하면 히스토리가 늘지 않는다', () => {
+    const { result } = renderEditor({ initialLayout: 'crop' });
+    // 0.125 는 이진수로 정확해 더했다 빼면 0.18 이 그대로 돌아온다
+    act(() => result.current.dragPip({ x: 0.125, y: 0 }, { width: 1, height: 1 }));
+    act(() => result.current.dragPip({ x: -0.125, y: 0 }, { width: 1, height: 1 }));
+    expect(result.current.pipPlacement!.x).toBe(0.18);
+
+    act(() => result.current.resetPip());
+    // 값이 같으면 참조가 달라도 한 칸을 쌓지 않는다 — ↺ 두 번이면 드래그 둘이 전부 풀린다
+    act(() => result.current.undo());
+    act(() => result.current.undo());
+    expect(result.current.canUndo).toBe(false);
   });
 
   it('원본의 작은 화면 프레임은 자리가 정한 비율에 묶인 채 크기만 바뀐다', () => {

@@ -218,6 +218,35 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('button', { name: '재생' })).toBeInTheDocument();
   });
 
+  it('분할 비율 칩 묶음도 화살표로 옮긴다 — 화살표가 헛돌지 않는다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    const ratios = screen.getByRole('radiogroup', { name: '분할 비율' });
+    within(ratios).getByRole('radio', { name: '50 : 50' }).focus();
+    await user.keyboard('{ArrowRight}');
+    expect(within(ratios).getByRole('radio', { name: '60 : 40' })).toBeChecked();
+    // 시킹으로 새지 않았다
+    expect(screen.getByText('1:22:14.0')).toBeInTheDocument();
+  });
+
+  it('크롭 사각형 위의 화살표는 사각형만 옮기고 플레이헤드는 건드리지 않는다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    const body = screen.getByRole('button', { name: /상단 영역/ });
+    const before = body.parentElement?.getAttribute('style');
+
+    body.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(body.parentElement?.getAttribute('style')).not.toBe(before);
+    expect(screen.getByText('1:22:14.0')).toBeInTheDocument();
+
+    // 모서리도 같다 — 넓히기가 시킹으로 새지 않는다
+    screen.getByRole('button', { name: '상단 오른쪽 아래 모서리' }).focus();
+    await user.keyboard('{ArrowRight}');
+    expect(screen.getByText('1:22:14.0')).toBeInTheDocument();
+  });
+
   it('레이아웃 묶음을 화살표로 옮길 수 있다', async () => {
     const user = userEvent.setup();
     renderStudio();
