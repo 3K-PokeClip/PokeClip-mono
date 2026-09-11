@@ -1,6 +1,6 @@
 'use client';
 
-import { memo } from 'react';
+import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { MessageSquare, PanelRightClose } from 'lucide-react';
 import { Badge, IconButton, Tag } from '@/ui';
@@ -15,6 +15,9 @@ import type { ChatPanelMessage, ChatSurge } from './useChatPanelMockState';
 // 수집 상태는 이 헤더의 배지가 말한다(옛 본문 경고 배너에서 옮겨 왔다) — 티켓이 정한 자리이고,
 // 채팅이 흐르는 곳 바로 위라 "지금 안 들어오고 있다"가 눈에 들어온다.
 // ADR-048에 따라 「다시 하면 복구」 같은 문구는 두지 않는다 — 실연동 뒤 거짓이 된다.
+
+/** 바닥에서 이만큼 안이면 「끝에 있다」로 본다 — 서브픽셀 스크롤·줌 잔차 흡수 */
+const FOLLOW_SLACK_PX = 8;
 
 function ChatLine({ message }: { message: ChatPanelMessage }) {
   if (message.kind === 'donation') {
@@ -48,16 +51,32 @@ export const ChatPanel = memo(function ChatPanel({
   onCollapse,
 }: {
   surges: ChatSurge[];
-  /** 오래된 → 최신 순. 그리기는 뒤집는다(아래 주석) — 데이터 순서는 실연동 계약 몫이라 여기서 안 건드린다 */
+  /** 오래된 → 최신 순. DOM도 이 순서다 — 스크린 리더가 화면과 같은 흐름으로 읽는다 */
   messages: ChatPanelMessage[];
   ratePerMinute: number;
   /** 수집이 끊겼는가 — 동결 계약의 chatWarning을 그대로 받는다 */
   collectionWarning: boolean;
   onCollapse: () => void;
 }) {
-  // 목록은 column-reverse다(시안) — 시각 순서가 DOM의 역순이라 최신을 DOM 맨 앞에 둬야
-  // 화면 아래에 선다. 스크롤 원점도 그쪽이라 새 줄이 와도 보던 자리가 흔들리지 않는다.
-  const newestFirst = messages.slice().reverse();
+  // 시안은 column-reverse였지만 그러면 DOM이 시간 역순이 돼 스크린 리더가 대화를 거꾸로 읽는다.
+  // DOM은 시간순으로 두고 바닥 고정은 여기서 한다: 끝에 있을 때만 새 줄이 오면 따라 내려가고,
+  // 위로 올라가 옛 줄을 읽는 동안엔 자리를 지킨다 — 하단 상태줄의 「따라가는 중」도 이 값이 말한다.
+  const listRef = useRef<HTMLUListElement>(null);
+  const [following, setFollowing] = useState(true);
+
+  const handleScroll = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_SLACK_PX);
+  }, []);
+
+  // 그리기 전에 붙여야 한 프레임 위에 섰다 내려오는 깜빡임이 없다
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (el && following) el.scrollTop = el.scrollHeight;
+  }, [messages, following]);
+
+  const rateLabel = `분당 ${ratePerMinute.toLocaleString('ko-KR')}`;
 
   return (
     <aside className={styles.chatPanel} aria-label="실시간 채팅">
@@ -96,8 +115,16 @@ export const ChatPanel = memo(function ChatPanel({
           </Tag>
         ))}
       </div>
-      <ul className={styles.chatList}>
-        {newestFirst.map((message) => (
+      {/* 스크롤 영역은 키보드로도 훑을 수 있어야 한다 (axe scrollable-region-focusable) —
+          카드 레일(HighlightCardPanel)과 같은 처리 */}
+      <ul
+        ref={listRef}
+        className={styles.chatList}
+        tabIndex={0}
+        aria-label="채팅 메시지"
+        onScroll={handleScroll}
+      >
+        {messages.map((message) => (
           <ChatLine key={message.id} message={message} />
         ))}
       </ul>
@@ -110,7 +137,7 @@ export const ChatPanel = memo(function ChatPanel({
         <span>
           {collectionWarning
             ? '수집 끊김 · 새 메시지 없음'
-            : `최신 메시지 따라가는 중 · 분당 ${ratePerMinute}`}
+            : `${following ? '최신 메시지 따라가는 중' : '지난 메시지 보는 중'} · ${rateLabel}`}
         </span>
         {/* 키워드 설정 화면은 라우트가 없다 — 「제목 수정」(StreamInfoBar)처럼 자리만 지킨다 */}
         <button type="button" className={styles.chatFooterLink} disabled>

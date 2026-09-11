@@ -274,12 +274,17 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     expect(screen.getByRole('complementary', { name: '실시간 채팅' })).toBeInTheDocument();
   });
 
-  it('최신 줄이 DOM 맨 앞에 선다 — column-reverse라 그래야 화면 아래에 온다', () => {
+  it('목록은 DOM도 시간순이다 — 스크린 리더가 화면과 같은 흐름으로 읽는다', () => {
     renderLive();
 
-    const panel = screen.getByRole('complementary', { name: '실시간 채팅' });
-    const [first] = within(panel).getAllByRole('listitem');
-    expect(first).toHaveTextContent('하이라이트 감지 · 1:24:03 구간이 카드로 만들어졌어요');
+    const list = screen.getByRole('list', { name: '채팅 메시지' });
+    const items = within(list).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('새벽에 이걸 보고 있네 ㅋㅋ');
+    expect(items[items.length - 1]).toHaveTextContent(
+      '하이라이트 감지 · 1:24:03 구간이 카드로 만들어졌어요',
+    );
+    // 스크롤 영역은 키보드로 들어갈 수 있어야 한다 (axe scrollable-region-focusable)
+    expect(list).toHaveAttribute('tabindex', '0');
   });
 
   it('하단 상태줄이 분당 건수를 말하고, 키워드 설정은 라우트가 설 때까지 잠겨 있다', () => {

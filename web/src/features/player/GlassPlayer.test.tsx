@@ -1,7 +1,7 @@
 import { act, createRef, type ComponentProps } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import type { PlayerSimulationOptions } from '@/features/player/usePlayerSimulation';
@@ -19,6 +19,11 @@ function setFullscreenElement(el: Element | null) {
   Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => el });
   fireEvent(document, new Event('fullscreenchange'));
 }
+
+// jsdom엔 fullscreenElement가 원래 없다 — 꽂아 둔 게터를 지워 다음 테스트가 깨끗한 document를 본다
+afterEach(() => {
+  Reflect.deleteProperty(document, 'fullscreenElement');
+});
 
 function renderPlayer(simulationOptions?: PlayerSimulationOptions, panelProps?: PanelProps) {
   return render(
@@ -266,10 +271,40 @@ describe('GlassPlayer', () => {
       await user.click(toggle);
       expect(toggle).toHaveAttribute('aria-pressed', 'false');
       expect(container.querySelector('[class*="chatOverlay"]')).toBeNull();
+      expect(toggle).toHaveFocus();
 
       // ESC·브라우저 UI로 나가도 같은 이벤트가 온다 — 요청이 아니라 결과를 듣는다
       setFullscreenElement(null);
       expect(screen.queryByRole('button', { name: '채팅 오버레이' })).not.toBeInTheDocument();
+      // 토글이 사라지며 잃은 포커스는 컨테이너로 돌아온다 — 화살표 시킹(POK-32)이 계속 먹는다
+      expect(player).toHaveFocus();
+    } finally {
+      setFullscreenElement(null);
+    }
+  });
+
+  it('마운트 시점에 이미 전체 화면이면 이벤트 없이도 그 상태로 시작한다', () => {
+    // 리스너가 없던 사이(Suspense 재서스펜드 등)의 변화는 이벤트로 안 온다 — 붙을 때 한 번 읽어야 한다.
+    // 게터가 문서에서 플레이어를 찾는다 — 효과는 마운트 뒤에 돌므로 첫 sync()에서 이미 잡힌다.
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      get: () => document.querySelector('[data-controls]'),
+    });
+    renderPlayer();
+    expect(screen.getByRole('button', { name: '채팅 오버레이' })).toBeInTheDocument();
+  });
+
+  it('패널을 접은 채 전체 화면에 들어가면 「채팅 열기」가 서지 않는다 — 바깥 패널이 안 보인다', () => {
+    const { container } = renderPlayer(undefined, {
+      chatPanelOpen: false,
+      onToggleChatPanel: vi.fn(),
+    });
+    expect(screen.getByRole('button', { name: '채팅 열기' })).toBeInTheDocument();
+    try {
+      setFullscreenElement(container.querySelector('[data-controls]'));
+      expect(screen.queryByRole('button', { name: '채팅 열기' })).not.toBeInTheDocument();
+      setFullscreenElement(null);
+      expect(screen.getByRole('button', { name: '채팅 열기' })).toBeInTheDocument();
     } finally {
       setFullscreenElement(null);
     }

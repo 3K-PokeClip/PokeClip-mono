@@ -128,9 +128,21 @@ function GlassPlayerBody({
   // 이 플레이어가 전체 화면 요소일 때만 참이다(다른 요소의 전체 화면은 남의 일).
   useEffect(() => {
     const sync = () => setFullscreen(document.fullscreenElement === containerRef.current);
+    // 리스너가 없던 사이(예: Suspense 재서스펜드)에 바뀐 것은 이벤트로 안 온다 — 붙을 때 한 번 읽는다
+    sync();
     document.addEventListener('fullscreenchange', sync);
     return () => document.removeEventListener('fullscreenchange', sync);
   }, []);
+
+  // 전체 화면을 나가면 채팅 토글이 사라진다 — 거기 있던 포커스가 body로 떨어지면 컨테이너 안
+  // 포커스를 전제로 하는 화살표 시킹(POK-32)이 죽으므로 컨테이너로 되돌린다.
+  const wasFullscreenRef = useRef(false);
+  useEffect(() => {
+    if (wasFullscreenRef.current && !fullscreen && document.activeElement === document.body) {
+      containerRef.current?.focus({ preventScroll: true });
+    }
+    wasFullscreenRef.current = fullscreen;
+  }, [fullscreen]);
 
   const controlsShown = sim.controlsVisible || !sim.playing || settingsOpen || seeking;
 
@@ -244,11 +256,12 @@ function GlassPlayerBody({
       <div className={styles.videoSlot} aria-hidden>
         {videoNode ?? <span className={styles.videoLabel}>라이브 방송 화면</span>}
       </div>
+      {/* 전체 화면에선 바깥 패널이 안 보인다 — 여는 버튼을 눌러도 아무 변화가 없으니 그때는 뺀다 */}
       <PlayerTopOverlay
         channelName={channelName}
         viewersNote={viewersNote}
         chatPanelOpen={chatPanelOpen}
-        onToggleChatPanel={onToggleChatPanel}
+        onToggleChatPanel={fullscreen ? undefined : onToggleChatPanel}
       />
       {fullscreen && chatOn ? <PlayerChatOverlay messages={chat} /> : null}
       <div className={styles.controls}>

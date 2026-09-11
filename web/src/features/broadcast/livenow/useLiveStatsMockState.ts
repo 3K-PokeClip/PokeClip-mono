@@ -10,6 +10,7 @@
 // 하이라이트 개수 지표는 여기 두지 않는다 — 화면이 카드 목록에서 세야 필터 표기와 어긋나지 않는다.
 
 import type { Point } from './statsTimeline';
+import { MOCK_CHAT_RATE_PER_MINUTE } from './useChatPanelMockState';
 
 export interface CategorySegment {
   label: string;
@@ -61,7 +62,8 @@ const MOCK_METRICS: LiveMetric[] = [
   { label: '최고 시청자', value: '2,310' },
   { label: '평균 시청자', value: '1,626' },
   { label: '총 채팅', value: '12,480' },
-  { label: '분당 평균 채팅', value: '402' },
+  // 채팅 패널 하단 상태줄과 같은 원천 — 한 화면에 두 「분당」 값이 갈리지 않게
+  { label: '분당 평균 채팅', value: MOCK_CHAT_RATE_PER_MINUTE.toLocaleString('ko-KR') },
 ];
 
 export function useLiveStatsMockState(): LiveStatsMockState {
