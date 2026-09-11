@@ -62,8 +62,20 @@ public class ChatSession implements AutoCloseable {
     /** 재시도 주기. 검사가 짧게 바꿔 잰다 — 1분을 기다리면 검사가 못 선다. */
     private final Duration donationRetryPeriod;
 
-    /** 종료 신호. 재시도 스레드가 매 바퀴 본다. */
-    private final AtomicBoolean stopping = new AtomicBoolean();
+    /**
+     * 종료 신호. 재시도 스레드가 매 바퀴 본다.
+     *
+     * <p>🔴 <b>수립마다 새로 만든다 — 한 번 켜지면 다시는 안 꺼지기 때문이다</b>(봇 codex).
+     * 이 객체는 <b>강제 절단 뒤 통째로 다시 열린다</b>(클래스 javadoc). 그런데 이 표시를
+     * 끄는 곳이 어디에도 없어서, 한 번 닫힌 객체를 다시 열면 <b>후원 재시도 스레드가
+     * 만들어지자마자 첫 조건에서 죽는다</b> — 소켓은 멀쩡히 채팅을 걷는데 그 방송의 후원만
+     * 영영 안 들어온다. 재시도를 넣은 이유가 통째로 무효가 되는 자리다.
+     *
+     * <p><b>끄지 않고 갈아 끼우는 이유</b>: 앞 수립의 재시도 스레드는 종료를 안 기다리므로
+     * 아직 돌고 있을 수 있다. 같은 객체를 끄면 <b>그 스레드가 되살아나</b> 이미 반납된
+     * 키로 구독을 쏜다. 새 객체로 갈면 그 스레드는 <b>옛 객체를 계속 보므로</b> 멈춘 채 끝난다.
+     */
+    private volatile AtomicBoolean stopping = new AtomicBoolean();
 
     private volatile Thread donationRetry;
 
@@ -230,6 +242,8 @@ public class ChatSession implements AutoCloseable {
      */
     public Established open(Duration deadline, BooleanSupplier abort) {
         long endAt = System.nanoTime() + deadline.toNanos();
+        // 앞 수립이 켜 둔 종료 표시를 이 수립까지 물려받지 않는다. 이유는 그 필드 javadoc.
+        stopping = new AtomicBoolean();
 
         abortIfStopping(abort, EstablishStage.AUTH);
         String url = client.createSession();                        // ① AUTH
@@ -395,15 +409,18 @@ public class ChatSession implements AutoCloseable {
         if (now != DonationSubscription.FAILED && now != DonationSubscription.NONE) {
             return;
         }
+        // <b>이 수립의 종료 표시를 붙잡아 둔다.</b> 필드를 매 바퀴 읽으면 다음 수립이 갈아
+        // 끼운 새 표시를 보게 되어, 이미 반납된 키로 구독을 쏘는 스레드가 되살아난다.
+        AtomicBoolean myStopping = stopping;
         donationRetry = Thread.ofVirtual().name("chzzk-donation-retry").start(() -> {
-            while (!stopping.get()) {
+            while (!myStopping.get()) {
                 try {
                     Thread.sleep(donationRetryPeriod);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     return;
                 }
-                if (stopping.get()) {
+                if (myStopping.get()) {
                     return;
                 }
                 // 🔴 <b>기대값을 매 바퀴 다시 읽는다.</b> 밖에서 한 번 잡아 두고 실패할 때마다
@@ -446,11 +463,8 @@ public class ChatSession implements AutoCloseable {
                 // <b>인터럽트 표시를 먼저 지운다.</b> 안 지우면 이 반납 요청도 같은 이유로 즉사한다.
                 // 지운 뒤 곧바로 돌아서므로 이 스레드가 그 표시를 다시 쓸 일은 없다.
                 // quietly 라 던지지 않고, 종료는 이 스레드를 안 기다리므로 예산에도 안 든다.
-                if (stopping.get()) {
-                    if (got != DonationSubscription.REFUSED) {
-                        Thread.interrupted();
-                        client.unsubscribeDonationQuietly(key);
-                    }
+                if (myStopping.get()) {
+                    releaseDonationQuietly(key, got);
                     return;
                 }
                 if (got != DonationSubscription.FAILED) {
@@ -461,11 +475,36 @@ public class ChatSession implements AutoCloseable {
                     // 「구독 중」으로 되살아난다.
                     if (donation.compareAndSet(expected, got)) {
                         notifyDonationChanged(got);
+                    } else if (myStopping.get()) {
+                        // 🔴 <b>위 검사와 이 CAS 사이에도 반납이 지나갈 수 있다</b>(봇 codex).
+                        // 그때 반납은 그 순간 값이 FAILED·NONE 이라 <b>안 쏘고 갔고</b>, 여기서는
+                        // CAS 가 져서 그냥 돌아선다 — 방금 선 구독을 또 아무도 거두지 않는다.
+                        // 위 갈래와 같은 규칙으로 거둔다(불명이면 쏜다).
+                        releaseDonationQuietly(key, got);
                     }
                     return;
                 }
             }
         });
+    }
+
+    /**
+     * <b>반납이 지나간 뒤에 선 구독을 재시도가 스스로 거둔다.</b> 부르는 자리가 둘이라
+     * 여기에 모았다 — 한쪽만 고쳐져 낡는 것을 막는다.
+     *
+     * <p>{@code REFUSED}(401·403)만 뺀다. 그것만이 <b>확실히 안 선 것</b>이고,
+     * {@code FAILED} 는 「안 섰다」가 아니라 <b>「결과를 못 봤다」</b>다 — 종료가 이 스레드를
+     * 인터럽트해 왕복이 깨져도 서버는 그 요청을 이미 처리했을 수 있다(실측).
+     *
+     * <p><b>인터럽트 표시를 먼저 지운다.</b> 안 지우면 이 반납 요청도 같은 이유로 즉사한다.
+     * 지운 뒤 곧바로 돌아서므로 이 스레드가 그 표시를 다시 쓸 일은 없다.
+     */
+    private void releaseDonationQuietly(String key, DonationSubscription got) {
+        if (got == DonationSubscription.REFUSED) {
+            return;
+        }
+        Thread.interrupted();
+        client.unsubscribeDonationQuietly(key);
     }
 
     /**

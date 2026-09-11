@@ -196,6 +196,14 @@ public class StreamSession {
     /** 이 방송의 후원 구독 상태를 적는 곳. 창구가 여기서 읽는다. */
     private final DonationSubscriptions donations;
 
+    /**
+     * 후원 상태의 <b>방송 번호를 읽는 것과 그 자리에 쓰는 것</b>을 묶는 자물쇠.
+     * 갈아끼움({@link #retarget})과 재시도 콜백이 이 둘을 각각 따로 하면, 콜백이 옛 번호를
+     * 읽고 멈춘 사이 갈아끼움이 지나가 <b>이미 비워진 자리</b>에 쓰게 된다(봇 codex).
+     * 안에서 하는 일은 맵 쓰기뿐이라 I/O 를 붙잡지 않는다.
+     */
+    private final Object donationStatusLock = new Object();
+
     /** 후원 바구니. 채팅 바구니와 같은 규칙 — 수신 스레드는 offer만 부른다. */
     private final DonationBuffer donationBuffer;
 
@@ -313,9 +321,19 @@ public class StreamSession {
         // 그리고 옮기는 것 자체가 한 연산이라(DonationSubscriptions.retarget) 읽기와
         // 지우기 사이에 낀 갱신이 사라지지 않는다 — 그 자리에서 재시도가 성공하면
         // 낡은 FAILED 가 새 방송에 설치되고, 재시도 스레드는 이미 끝나 되돌릴 길이 없었다.
-        String previousStreamId = this.key.streamId();
-        this.key = newKey;
-        donations.retarget(previousStreamId, newKey.streamId());
+        // 🔴 <b>번호 바꾸기와 옮기기를 한 자물쇠 안에 둔다</b>(봇 codex, 두 번째 지적).
+        // 앞 판에서 옮기기 자체는 한 연산으로 만들었는데 <b>창이 하나 남아 있었다</b>:
+        // 재시도 콜백이 stream() 으로 <b>옛</b> 번호를 읽고 멈춘 사이 여기가 지나가면,
+        // 그 콜백은 깨어나 <b>이미 비워진 옛 자리</b>에 성공을 쓴다. 새 방송에는 낡은
+        // FAILED 가 남고 재시도 스레드는 성공하면 끝나므로, 후원이 잘 들어오는데도
+        // 창구가 방송 내내 「실패」라고 답한다.
+        // 자물쇠 안에서 하는 일은 맵 쓰기 둘뿐이라(I/O 없음) 붙잡는 시간이 없다.
+        String previousStreamId;
+        synchronized (donationStatusLock) {
+            previousStreamId = this.key.streamId();
+            this.key = newKey;
+            donations.retarget(previousStreamId, newKey.streamId());
+        }
         // <b>방송 단위 지표를 새 경계에서 다시 센다.</b> 소켓과 세션은 그대로지만 방송이
         // 바뀌었으므로, 안 자르면 stream= 레이블만 새 방송이고 그 안의 숫자는 앞 방송
         // 것을 안고 간다. 돌려주는 값은 <b>부르는 쪽이 프로세스 누계로 옮긴다</b> —
@@ -684,7 +702,13 @@ public class StreamSession {
             // 실제로는 후원이 잘 들어오는데 화면이 그럴듯하게 틀린다.
             // 열쇠를 여기서 캡처하지 않고 매번 읽는다 — 갈아끼움이 지나갔으면
             // 그 사이 방송 번호가 바뀌어 있고, 옛 번호에 적으면 아무도 안 읽는 자리가 된다.
-            opening.onDonationSubscriptionChanged(state -> donations.set(stream(), state));
+            // 🔴 <b>읽기와 쓰기를 갈아끼움과 같은 자물쇠로 묶는다</b>(봇 codex) — 번호를
+            // 읽고 멈춘 사이에 갈아끼움이 지나가면 이미 비워진 옛 자리에 쓰게 된다.
+            opening.onDonationSubscriptionChanged(state -> {
+                synchronized (donationStatusLock) {
+                    donations.set(stream(), state);
+                }
+            });
             Instant since = disconnectedAt.getAndSet(null);
             if (since != null) {
                 metrics.recordOutage(since, Instant.now());

@@ -508,16 +508,73 @@ class SessionEstablishTest extends IntegrationTestSupport {
                 .as("재시도가 구독을 안 쐈다 — 이 검사가 아무것도 안 잰다").isTrue();
         session.releaseAndClose();
         놓아줌.countDown();
-        Thread.sleep(300);
 
-        assertThat(알림)
-                .as("닫힌 세션의 상태를 되살리면 창구가 영영 「구독 중」으로 답한다")
-                .isEmpty();
-        assertThat(session.donationSubscription()).isEqualTo(DonationSubscription.NONE);
+        // 🔴 <b>고정 대기로 재지 않는다.</b> 처음에 300ms 를 기다렸더니 5회 반복 중
+        // 1회가 빨간불이었다 — 붙들려 있던 왕복이 풀린 뒤 반납 왕복이 하나 더 있어
+        // 그 안에 끝난다는 보장이 없다. <b>반납을 기다리는 것이 곧 재시도 스레드가
+        // 그 갈래를 지나갔다는 신호</b>라, 폴링으로 바꾸면 아래 둘도 같이 확정된다:
+        // 그 갈래는 반납을 쏜 뒤 곧바로 돌아서므로 <b>알림이 갈 자리가 없다.</b>
+        long 시한 = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+        while (behavior.unsubscribeDonationCallCount() == 0 && System.nanoTime() < 시한) {
+            Thread.sleep(20);
+        }
+
         assertThat(behavior.unsubscribeDonationCallCount())
                 .as("반납이 지나간 뒤에 선 구독은 재시도가 스스로 거둬야 한다 — "
                         + "releaseAndClose 는 그때 FAILED 를 보고 이미 안 쏘고 갔다")
                 .isEqualTo(1);
+        assertThat(알림)
+                .as("닫힌 세션의 상태를 되살리면 창구가 영영 「구독 중」으로 답한다")
+                .isEmpty();
+        assertThat(session.donationSubscription()).isEqualTo(DonationSubscription.NONE);
+    }
+
+    /**
+     * 🔴 <b>같은 객체를 다시 열면 후원 재시도도 다시 산다</b>(봇 codex).
+     *
+     * <p>이 객체는 <b>강제 절단 뒤 통째로 다시 열린다</b>(클래스 javadoc, POK-86).
+     * 그런데 종료 표시를 끄는 곳이 어디에도 없어서, 한 번 닫힌 객체를 다시 열면
+     * 재시도 스레드가 <b>만들어지자마자 첫 조건에서 죽었다</b> — 소켓은 멀쩡히 채팅을
+     * 걷는데 그 방송의 후원만 영영 안 들어온다. <b>재시도를 넣은 이유가 통째로
+     * 무효가 되는 자리</b>라 결말이 이 PR 이 고치려던 것과 똑같다.
+     *
+     * <p>세는 것은 <b>재수립 뒤에 구독 호출이 늘어나는가</b>다. 상태만 보면 재시도가
+     * 죽어도 수립 ⑥이 이미 SUBSCRIBED 를 넣어 <b>저절로 참이 된다.</b>
+     *
+     * <p>🔴 <b>이 검사가 못 재는 것</b>: 고침의 <b>나머지 절반</b>이다. 종료 표시를 끄지 않고
+     * <b>갈아 끼우는</b> 이유는 앞 수립의 재시도 스레드가 되살아나지 않게 하려는 것인데,
+     * 그 스레드를 붙잡아 두는 캡처({@code myStopping})를 지우고 필드를 매 바퀴 읽게 바꿔도
+     * <b>초록이다</b>(주입으로 확인함). 앞 스레드가 아직 살아 있는 채로 재수립이 지나가야
+     * 열리는 창이고, 이 검사는 앞 세션을 먼저 반납해 그 창을 닫아 둔다.
+     */
+    @Test
+    void 다시_열면_후원_재시도도_다시_산다() throws Exception {
+        behavior.subscribeDonationStatus = 503;
+        ChatSession session = newSession(java.time.Duration.ofMillis(60));
+        try {
+            session.open(java.time.Duration.ofSeconds(5), () -> false);
+            assertThat(session.donationSubscription()).isEqualTo(DonationSubscription.FAILED);
+            session.releaseAndClose();
+
+            // 같은 객체로 다시 연다. 후원은 여전히 실패라 재시도가 서야 한다.
+            session.open(java.time.Duration.ofSeconds(5), () -> false);
+            assertThat(session.donationSubscription()).isEqualTo(DonationSubscription.FAILED);
+            int 재수립직후 = behavior.subscribeDonationCallCount();
+
+            behavior.subscribeDonationStatus = 200;
+            long 시한 = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+            while (behavior.subscribeDonationCallCount() == 재수립직후
+                    && System.nanoTime() < 시한) {
+                Thread.sleep(20);
+            }
+            assertThat(behavior.subscribeDonationCallCount())
+                    .as("다시 연 세션의 재시도가 한 바퀴도 안 돌았다 — 그 방송의 후원이 영영 안 들어온다")
+                    .isGreaterThan(재수립직후);
+            Thread.sleep(200);
+            assertThat(session.donationSubscription()).isEqualTo(DonationSubscription.SUBSCRIBED);
+        } finally {
+            session.releaseAndClose();
+        }
     }
 
     /**
