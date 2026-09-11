@@ -358,6 +358,17 @@ describe('useClipEditorMockState — 재생 어댑터 주입', () => {
     expect(playback.seekBy).toHaveBeenCalledWith(-5);
   });
 
+  it('소스 길이의 정본은 하나다 — 어댑터 길이가 달라도 화면·핸들·창이 같은 값을 본다', () => {
+    const { playback } = fakePlayback({ durationSeconds: 600 });
+    const { result } = renderEditor({ playback });
+
+    // 목업 구간(1:22:08~)은 5043초 방송의 좌표라, 길이도 그 소스의 것이어야 핸들이 움직인다
+    expect(result.current.sourceDurationSeconds).toBe(5043);
+    act(() => result.current.setRangeEdge('end', 4950));
+    expect(result.current.range.endSeconds).toBe(4950);
+    expect(result.current.view.endSeconds).toBeLessThanOrEqual(5043);
+  });
+
   it('마운트할 때 구간과 배속을 어댑터에 알린다', () => {
     const { playback, calls } = fakePlayback();
     const { result } = renderEditor({ playback });

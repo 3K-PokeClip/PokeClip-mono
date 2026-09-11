@@ -38,6 +38,34 @@ function paddingBox(el: HTMLElement) {
   };
 }
 
+/** 방향키 한 걸음 — 영역 프레임과 배치 타깃이 같은 걸음으로 움직인다 */
+const MOVE_KEYS: Readonly<Record<string, { x: number; y: number }>> = {
+  ArrowLeft: { x: -CROP_KEY_STEP, y: 0 },
+  ArrowRight: { x: CROP_KEY_STEP, y: 0 },
+  ArrowUp: { x: 0, y: -CROP_KEY_STEP },
+  ArrowDown: { x: 0, y: CROP_KEY_STEP },
+};
+
+/**
+ * 사각형 위의 Space 는 재생 토글이다. 이 버튼들은 role 이 없어 화면의 전역 키 리스너가 Space 를
+ * 「버튼이 누르는 키」로 양보하는데, 누를 동작(onClick)이 없어 그냥 죽는다 — 여기서 받아 넘긴다.
+ */
+function spaceTogglesPlay(event: KeyboardEvent<HTMLElement>, state: ClipEditorMockState): boolean {
+  if (event.key !== ' ') return false;
+  event.preventDefault();
+  event.stopPropagation();
+  if (!event.repeat) state.togglePlay();
+  return true;
+}
+
+/** 사각형의 한 꼭짓점 좌표 */
+function cornerPoint(rect: CropRect, corner: CropCorner): { x: number; y: number } {
+  return {
+    x: corner === 'nw' || corner === 'sw' ? rect.x : rect.x + rect.w,
+    y: corner === 'nw' || corner === 'ne' ? rect.y : rect.y + rect.h,
+  };
+}
+
 function percentStyle(rect: CropRect) {
   return {
     left: `${rect.x * 100}%`,
@@ -70,6 +98,8 @@ function PipTarget({
     event.currentTarget.setPointerCapture(event.pointerId);
     lastPointer.current = { x: event.clientX, y: event.clientY };
     draggingCorner.current = corner;
+    // 타깃은 메인 프레임의 자식이라 메인이 비선택이면 같이 흐려진다 — 잡는 순간 메인을 선택한다
+    state.selectRegion('main');
     state.beginGesture();
   };
   const end = () => {
@@ -96,19 +126,26 @@ function PipTarget({
     lastPointer.current = { x: event.clientX, y: event.clientY };
   };
   const onBodyKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (spaceTogglesPlay(event, state)) return;
     if (event.repeat) return;
-    const step: Record<string, { x: number; y: number }> = {
-      ArrowLeft: { x: -0.02, y: 0 },
-      ArrowRight: { x: 0.02, y: 0 },
-      ArrowUp: { x: 0, y: -0.02 },
-      ArrowDown: { x: 0, y: 0.02 },
-    };
-    const delta = step[event.key];
+    const delta = MOVE_KEYS[event.key];
     if (delta === undefined) return;
     event.preventDefault();
     event.stopPropagation();
     // 정규화 이동량을 그대로 넘긴다 — 픽셀 환산이 필요 없게 프레임 크기를 1로 준다
     state.dragPip(delta, { width: 1, height: 1 });
+  };
+
+  // 모서리의 방향키는 그 꼭짓점을 한 걸음 옮긴다 — 마우스로 끄는 것과 같은 문(resizePip)이다
+  const onCornerKeyDown = (corner: CropCorner) => (event: KeyboardEvent<HTMLElement>) => {
+    if (spaceTogglesPlay(event, state)) return;
+    if (event.repeat || pip === null) return;
+    const delta = MOVE_KEYS[event.key];
+    if (delta === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const point = cornerPoint(pip, corner);
+    state.resizePip(corner, { x: point.x + delta.x, y: point.y + delta.y });
   };
 
   if (pip === null) return null;
@@ -156,6 +193,7 @@ function PipTarget({
           onPointerUp={end}
           onPointerCancel={end}
           onLostPointerCapture={end}
+          onKeyDown={onCornerKeyDown(corner)}
         />
       ))}
     </div>
@@ -227,14 +265,8 @@ export function CropOverlay({
     lastPointer.current = { x: event.clientX, y: event.clientY };
   };
 
-  const MOVE_KEYS: Readonly<Record<string, { x: number; y: number }>> = {
-    ArrowLeft: { x: -CROP_KEY_STEP, y: 0 },
-    ArrowRight: { x: CROP_KEY_STEP, y: 0 },
-    ArrowUp: { x: 0, y: -CROP_KEY_STEP },
-    ArrowDown: { x: 0, y: CROP_KEY_STEP },
-  };
-
   const onBodyKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (spaceTogglesPlay(event, state)) return;
     // 자동반복은 버린다 — 누르고 있으면 히스토리 상한을 넘겨 이전 편집이 밀린다
     if (event.repeat) return;
     const delta = MOVE_KEYS[event.key];
@@ -246,6 +278,7 @@ export function CropOverlay({
   };
 
   const onCornerKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (spaceTogglesPlay(event, state)) return;
     if (event.repeat) return;
     // 모서리에서 방향키의 뜻은 「넓히기/좁히기」다
     const grow = event.key === 'ArrowRight' || event.key === 'ArrowDown';

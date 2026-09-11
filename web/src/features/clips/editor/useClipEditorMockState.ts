@@ -161,10 +161,8 @@ export interface EditorRegion {
    * 소스를 모르면(목업) 없다 — 잘라낼 그림도, 종횡비를 맞출 해상도도 없기 때문이다.
    */
   crop?: CropRect;
-  /** 사각형이 지금 얼마나 당겨져 있나 (1 = 가장 넓게) */
+  /** 사각형이 지금 얼마나 당겨져 있나 (1 = 가장 넓게). 그려지는 크기와 같은 값 — 하한으로 클램프한 뒤다 */
   cropZoom?: number;
-  /** 계약6 하한(w·h ≥ 0.05)이 허용하는 최소 확대율 */
-  cropMinZoom?: number;
 }
 
 export interface EditorImageItem {
@@ -641,8 +639,8 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   }, []);
 
   /**
-   * 지금 이 칸이 잡을 수 있는 최대 사각형과 확대율 하한.
-   * 자리바꿈으로 위·아래가 바뀌면 지분이 달라져 크기도 달라지므로, 화면에 그릴 때와 **같은 순서**로
+   * 지금 이 칸이 잡을 수 있는 최대 사각형.
+   * 자리 모양(분할 지분·작은 화면 비율)이 바뀌면 크기도 달라지므로, 화면에 그릴 때와 **같은 계산**으로
    * 자리를 찾아야 한다.
    */
   const cropBoundsOf = useCallback(
@@ -774,6 +772,13 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   const length = rangeLengthSeconds(recipe.range);
   const titlesLocked = subtitleStatus !== 'ready';
 
+  // 레이아웃을 바꾸면 영역 id 가 통째로 달라진다 — 없는 id 를 고른 채로 두면 아무것도 선택되지
+  // 않은 것처럼 보이므로 첫 영역으로 돌린다
+  const regionIds = useMemo(
+    () => layoutRegions(recipe.layout, recipe.splitRatio).map((region) => region.id),
+    [recipe.layout, recipe.splitRatio],
+  );
+
   return {
     clipTitle: MOCK_SOURCE.clipTitle,
     sourceLabel: MOCK_SOURCE.sourceLabel,
@@ -879,11 +884,12 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       return regions.map((region, index) => {
         const maxSize = maxCropSize(region.aspect, MOCK_SOURCE.width, MOCK_SOURCE.height);
         const window = recipe.crops[region.id] ?? defaultRegionWindow(recipe.layout, region.id);
+        // 판독은 그려지는 값과 같아야 한다 — 자리 모양이 바뀌어 하한이 오르면 저장된 zoom 은 그 아래일 수 있다
+        const zoom = Math.max(window.zoom, minZoomOf(maxSize));
         return {
           ...base[index]!,
           crop: cropRectOf(window, maxSize),
-          cropZoom: window.zoom,
-          cropMinZoom: minZoomOf(maxSize),
+          cropZoom: zoom,
         };
       });
     }, [
@@ -896,13 +902,9 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     ]),
     resultAspect: resultAspect(recipe.layout),
     layoutLabel: LAYOUT_OPTIONS.find((option) => option.value === recipe.layout)?.label ?? '',
-    // 레이아웃을 바꾸면 영역 id 가 통째로 달라진다 — 없는 id 를 고른 채로 두면 아무것도 선택되지
-    // 않은 것처럼 보이므로 첫 영역으로 돌린다
-    selectedRegionId: layoutRegions(recipe.layout, recipe.splitRatio).some(
-      (region) => region.id === selectedRegionId,
-    )
+    selectedRegionId: regionIds.includes(selectedRegionId)
       ? selectedRegionId
-      : (layoutRegions(recipe.layout, recipe.splitRatio)[0]?.id ?? 'main'),
+      : (regionIds[0] ?? 'main'),
     selectRegion: setSelectedRegionId,
     splitRatio: recipe.splitRatio,
     splitRatioOptions: SPLIT_RATIOS,
@@ -1082,7 +1084,9 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     sfxPresets: MOCK_SFX_PRESETS,
     images: MOCK_IMAGES,
 
-    sourceDurationSeconds: playback.durationSeconds,
+    // 소스 길이의 정본은 목업 소스 하나다 — 구간 핸들 경계·타임라인 창도 같은 값을 본다.
+    // 어댑터의 durationSeconds 는 어댑터 자신의 클램프용이라, 실제 소스가 오기 전엔 여기로 안 끌어온다
+    sourceDurationSeconds: MOCK_SOURCE.durationSeconds,
     sourceAspect: MOCK_SOURCE.width / MOCK_SOURCE.height,
     view,
     activeTool,

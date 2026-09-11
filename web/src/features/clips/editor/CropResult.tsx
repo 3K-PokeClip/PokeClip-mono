@@ -46,7 +46,8 @@ export function CropResult({
       <div
         className={styles.resultPane}
         data-placement="contain"
-        // 단색이면 바닥색으로, 블러면 강도를 CSS 변수로 넘긴다
+        // 단색이면 바닥색으로, 블러면 강도를 CSS 변수로 넘긴다. 지금은 흐릴 그림이 없어 이 변수를
+        // 읽는 CSS 가 없다 — 실재생이 오면 뒤에 까는 배경 캔버스가 이 값으로 blur() 를 건다
         style={
           fill.kind === 'color'
             ? { ...style, background: fill.color }

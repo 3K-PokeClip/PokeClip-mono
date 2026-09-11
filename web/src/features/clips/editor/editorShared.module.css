@@ -72,24 +72,6 @@
   padding: calc(14 * var(--pc-u)) calc(20 * var(--pc-u));
 }
 
-.previewToolbar {
-  display: flex;
-  align-items: center;
-  gap: calc(10 * var(--pc-u));
-  margin-bottom: calc(11 * var(--pc-u));
-}
-
-.previewToolbarLabel {
-  font-size: calc(12 * var(--pc-u));
-  font-weight: 700;
-  color: var(--pc-color-text-secondary);
-}
-
-.previewHint {
-  margin-left: auto;
-  font-size: calc(11 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-}
 /* 소스 판과 결과 판이 나란히 선다 — 무엇을 잘라 무엇이 나오는지가 한 화면에 있다 */
 .stage {
   flex: 1;

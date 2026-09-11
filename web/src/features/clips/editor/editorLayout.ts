@@ -265,11 +265,12 @@ export function layoutRegions(
           tone: 'point',
           resizable: true,
           scrim: false,
+          // 자리의 정본은 레시피의 pip 다 — 허브가 늘 그 값으로 덮어쓰므로 여기는 기본값을 그대로 잇는다
           placement: {
             kind: 'overlay',
-            left: 0.18,
-            top: 0.5,
-            width: 0.64,
+            left: DEFAULT_PIP.x,
+            top: DEFAULT_PIP.y,
+            width: DEFAULT_PIP.w,
             aspect: pipAspect,
             border: DEFAULT_PIP_BORDER,
           },

@@ -141,11 +141,14 @@ function SwatchPicker({
   presets,
   value,
   onChange,
+  gesture,
 }: {
   label: string;
   presets: readonly { value: string; label: string }[];
   value: string;
   onChange: (color: string) => void;
+  /** 「직접」 색 선택기 한 번을 실행취소 한 칸으로 묶는다 */
+  gesture: { begin: () => void; end: () => void };
 }) {
   const current = value.toLowerCase();
   // 「직접」 색이면 맞는 스와치가 없다 — 그래도 Tab 으로 들어올 자리는 있어야 하니 첫 스와치를 정지로
@@ -176,6 +179,11 @@ function SwatchPicker({
           type="color"
           aria-label={`${label} 직접 고르기`}
           value={value}
+          // 네이티브 선택기는 색 영역을 끄는 동안 input 이벤트를 수십 번 보낸다 — 값마다 쌓으면
+          // 히스토리 상한(50)이 차서 그 전 편집이 밀려난다. 포커스가 있는 동안을 한 제스처로 본다
+          // (Slider 의 gestureHandlers 와 같은 규약)
+          onFocus={gesture.begin}
+          onBlur={gesture.end}
           onChange={(event) => onChange(event.target.value)}
         />
       </label>
@@ -258,6 +266,7 @@ export function LayoutSection({ state }: { state: ClipEditorMockState }) {
               presets={state.centerColorPresets}
               value={centerFill.color}
               onChange={(color) => state.setCenterFill({ kind: 'color', color })}
+              gesture={{ begin: state.beginGesture, end: state.endGesture }}
             />
           )}
         </>
@@ -298,6 +307,7 @@ export function LayoutSection({ state }: { state: ClipEditorMockState }) {
                 presets={state.pipBorderPresets}
                 value={pipBorder.color}
                 onChange={(color) => state.setPipBorder({ ...pipBorder, color })}
+                gesture={{ begin: state.beginGesture, end: state.endGesture }}
               />
             </>
           ) : null}

@@ -247,6 +247,56 @@ describe('StudioScreen', () => {
     expect(screen.getByText('1:22:14.0')).toBeInTheDocument();
   });
 
+  it('크롭 사각형 위의 Space는 재생을 토글한다 — 버튼이 삼키지 않는다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    screen.getByRole('button', { name: /상단 영역/ }).focus();
+    await user.keyboard(' ');
+    expect(screen.getByRole('button', { name: '일시정지' })).toBeInTheDocument();
+    await user.keyboard(' ');
+    expect(screen.getByRole('button', { name: '재생' })).toBeInTheDocument();
+  });
+
+  it('배치 타깃의 모서리도 방향키로 모양을 바꾼다 — 시킹으로 새지 않는다', async () => {
+    const user = userEvent.setup();
+    const { container } = renderStudio();
+    await user.click(screen.getByRole('radio', { name: /크롭/ }));
+
+    const overlay = () => container.querySelector('[data-placement="overlay"]') as HTMLElement;
+    const before = overlay().style.width;
+    screen.getByRole('button', { name: '작은 화면 자리 오른쪽 아래 모서리' }).focus();
+    await user.keyboard('{ArrowRight}');
+
+    expect(overlay().style.width).not.toBe(before);
+    expect(screen.getByText('1:22:14.0')).toBeInTheDocument();
+  });
+
+  it('「직접」 색 선택기 한 번은 실행취소 한 칸이다 — 값마다 쌓이지 않는다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    await user.click(screen.getByRole('radio', { name: /중앙/ }));
+    await user.click(screen.getByRole('radio', { name: '단색' }));
+    const undo = screen.getByRole('button', { name: '작업 이전으로' });
+    const undoCountBefore = (() => {
+      // 지금까지 쌓인 칸 수를 세는 대신, 되돌리기 전 색을 기억해 둔다
+      return screen.getByLabelText<HTMLInputElement>('배경 색 직접 고르기').value;
+    })();
+
+    const input = screen.getByLabelText<HTMLInputElement>('배경 색 직접 고르기');
+    input.focus();
+    // 네이티브 선택기가 색 영역을 끄는 동안 보내는 input 이벤트 흉내
+    for (const color of ['#101010', '#202020', '#303030']) {
+      fireEvent.change(input, { target: { value: color } });
+    }
+    input.blur();
+    expect(input.value).toBe('#303030');
+
+    // 한 번 되돌리면 선택기 열기 전 색으로 돌아간다 — 중간 색을 되짚지 않는다
+    await user.click(undo);
+    expect(input.value).toBe(undoCountBefore);
+  });
+
   it('레이아웃 묶음을 화살표로 옮길 수 있다', async () => {
     const user = userEvent.setup();
     renderStudio();
