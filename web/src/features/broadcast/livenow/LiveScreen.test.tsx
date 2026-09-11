@@ -258,20 +258,19 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     expect(screen.queryByText('방금 그거 다시 보여주세요')).not.toBeInTheDocument();
   });
 
-  it('접으면 패널 자리에 세로 레일이 남고, 레일을 누르면 되살아난다', async () => {
+  it('접으면 패널이 사라지고, 플레이어 상단의 여는 버튼으로 되살아난다', async () => {
     const user = userEvent.setup();
     renderLive();
 
     expect(screen.getByRole('complementary', { name: '실시간 채팅' })).toBeInTheDocument();
-    // 열려 있는 동안엔 레일이 자리를 차지하지 않는다
-    expect(screen.queryByRole('button', { name: '채팅 펼치기' })).not.toBeInTheDocument();
+    // 열려 있는 동안엔 여는 버튼이 자리를 차지하지 않는다
+    expect(screen.queryByRole('button', { name: '채팅 열기' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
     expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).not.toBeInTheDocument();
-    // 플레이어 안에는 여는 버튼이 없다(전체 화면 전용) — 복귀 통로는 레일뿐이다
-    expect(screen.queryByRole('button', { name: '채팅 열기' })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: '채팅 펼치기' }));
+    // 패널이 사라져도 복귀 통로는 플레이어 안에 남는다
+    await user.click(screen.getByRole('button', { name: '채팅 열기' }));
     expect(screen.getByRole('complementary', { name: '실시간 채팅' })).toBeInTheDocument();
   });
 

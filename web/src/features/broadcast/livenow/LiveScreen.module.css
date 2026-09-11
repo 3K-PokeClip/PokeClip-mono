@@ -1,7 +1,8 @@
 /* 디자인 1b 라이브 대시보드 — 페이지 헤더 없이 콘텐츠부터.
    세로로 길게 쌓아 문서 스크롤로 내려가는 화면이라 높이를 뷰포트에 맞추지 않는다.
    예외는 채팅 하나다 — 시안 갱신(2026-09-11, POK-239)으로 채팅만 화면 높이에 sticky로 붙어
-   통계 위까지 따라오고, 접으면 세로 레일이 같은 자리에 남는다.
+   통계 위까지 따라온다. 접으면 칸째 사라지고 플레이어 상단의 여는 버튼이 되살린다(시안의
+   세로 레일은 사용자 결정으로 쓰지 않는다).
    마젠타·앰버 틴트는 상태색이라 시안 값을 그대로 쓴다. */
 
 /* ---------- 본문 ---------- */
@@ -22,14 +23,19 @@
   gap: calc(16 * var(--pc-u));
 }
 
-/* 좌: 영상·정보·카드 / 우: 채팅 칸(.chatCol — 패널 또는 레일). 둘째 트랙은 칸의 폭(펼침 332u ·
-   접힘 40u)을 따르므로 auto — 접어도 트랙이 비지 않아 오른쪽에 죽은 여백이 남지 않는다.
+/* 좌: 영상·정보·카드 / 우: 채팅 칸(.chatCol). 둘째 트랙은 칸의 폭(332u)을 따르므로 auto.
    행 높이는 좌측 열이 정하고, 채팅은 칸 안에서 sticky로 화면 높이에 붙는다(.chatCol 주석). */
 .grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: calc(16 * var(--pc-u));
   align-items: stretch;
+}
+
+/* 채팅을 접으면 트랙 자체를 걷는다 — 빈 명시 트랙이라도 그 앞의 column-gap은 그려져,
+   두고 두면 본문 오른쪽에 16u짜리 죽은 여백이 상시 남는다 */
+.gridSolo {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .mainCol {
@@ -719,10 +725,6 @@
   width: calc(332 * var(--pc-u));
 }
 
-.chatColCollapsed {
-  width: calc(40 * var(--pc-u));
-}
-
 .chatPanel {
   display: flex;
   flex-direction: column;
@@ -737,45 +739,7 @@
   height: min(100%, calc(100dvh - 40 * var(--pc-u)));
 }
 
-/* 접힌 채팅 — 패널이 서던 자리에 40u 세로 레일이 남아 펼치는 통로가 된다.
-   sticky 규칙은 패널과 같아야 스크롤 중에도 같은 자리에서 눌린다. */
-.chatRail {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: calc(10 * var(--pc-u));
-  width: 100%;
-  padding: calc(12 * var(--pc-u)) 0;
-  border: 1px solid var(--pc-color-border-subtle);
-  border-radius: calc(14 * var(--pc-u));
-  background: var(--pc-color-bg-surface);
-  color: var(--pc-color-text-muted);
-  cursor: pointer;
-  font-family: inherit;
-  position: sticky;
-  top: calc(20 * var(--pc-u));
-  height: min(100%, calc(100dvh - 40 * var(--pc-u)));
-}
-
-.chatRail:hover {
-  color: var(--pc-color-text-primary);
-  background: var(--pc-color-bg-surface-hover);
-}
-
-.chatRailIcon {
-  flex: none;
-  width: calc(15 * var(--pc-u));
-  height: calc(15 * var(--pc-u));
-}
-
-.chatRailLabel {
-  font-size: calc(10.5 * var(--pc-u));
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  writing-mode: vertical-rl;
-}
-
-/* 수집 상태 점 — 레일과 하단 상태줄이 같은 점을 쓴다 */
+/* 수집 상태 점 — 하단 상태줄의 점 */
 .chatDot {
   flex: none;
   width: calc(7 * var(--pc-u));
@@ -1002,22 +966,9 @@
     height: calc(360 * var(--pc-u));
   }
 
-  .chatColCollapsed {
-    height: auto;
-  }
-
   .chatPanel {
     position: static;
     height: 100%;
-  }
-
-  /* 레일도 가로 띠로 — 세로쓰기와 화면 높이를 풀고 본문 폭을 채운다 */
-  .chatRail {
-    height: auto;
-    position: static;
-    flex-direction: row;
-    justify-content: center;
-    padding: calc(10 * var(--pc-u));
   }
 
   .chatRailLabel {

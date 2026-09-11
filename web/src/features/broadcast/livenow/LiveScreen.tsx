@@ -6,7 +6,7 @@ import styles from './LiveScreen.module.css';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import { useMediaSource } from '@/features/player/mediaSource';
 import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
-import { ChatPanel, ChatRail } from './ChatPanel';
+import { ChatPanel } from './ChatPanel';
 import { HighlightCardPanel } from './HighlightCardPanel';
 import { LiveStatsPanel } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
@@ -30,10 +30,14 @@ import { useManualMarking } from './useManualMarking';
 function LivePlayer({
   stream,
   controllerRef,
+  chatPanelOpen,
+  onToggleChatPanel,
   onUptimeChange,
 }: {
   stream: LiveStream;
   controllerRef: Ref<GlassPlayerController>;
+  chatPanelOpen: boolean;
+  onToggleChatPanel: () => void;
   onUptimeChange: (uptimeSeconds: number) => void;
 }) {
   // env 미설정이면 null → GlassPlayer가 시뮬레이션으로 폴백 (테스트 포함)
@@ -46,6 +50,8 @@ function LivePlayer({
       embed
       simulationOptions={{ initialUptimeSeconds: stream.uptimeSeconds }}
       controllerRef={controllerRef}
+      chatPanelOpen={chatPanelOpen}
+      onToggleChatPanel={onToggleChatPanel}
       onUptimeChange={onUptimeChange}
     />
   );
@@ -66,7 +72,7 @@ export function LiveScreen() {
   }, []);
   const readMarkTimestamp = useCallback(() => formatUptime(uptimeRef.current), []);
   const marking = useManualMarking(readMarkTimestamp);
-  // 접으면 패널 자리에 세로 레일이 남는다 — 되살릴 통로는 그 레일이다(플레이어 안엔 없다)
+  // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
   // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
@@ -100,7 +106,7 @@ export function LiveScreen() {
 
   return (
     <main className={styles.container}>
-      <div className={styles.grid}>
+      <div className={clsx(styles.grid, !chatPanelOpen && styles.gridSolo)}>
         <div className={styles.mainCol}>
           <div className={styles.playerFrame}>
             {/* 폴백은 플레이어와 같은 16:9 빈 블록 — 서스펜드 중에도 레이아웃이 흔들리지 않는다 */}
@@ -108,6 +114,8 @@ export function LiveScreen() {
               <LivePlayer
                 stream={stream}
                 controllerRef={playerRef}
+                chatPanelOpen={chatPanelOpen}
+                onToggleChatPanel={toggleChatPanel}
                 onUptimeChange={handleUptimeChange}
               />
             </Suspense>
@@ -128,9 +136,10 @@ export function LiveScreen() {
             onSeek={handleSeek}
           />
         </div>
-        {/* 칸이 행 높이를 받고 그 안에서 채팅이 sticky로 붙는다 — 칸의 역할은 CSS .chatCol 주석 */}
-        <div className={clsx(styles.chatCol, !chatPanelOpen && styles.chatColCollapsed)}>
-          {chatPanelOpen ? (
+        {/* 칸이 행 높이를 받고 그 안에서 채팅이 sticky로 붙는다 — 칸의 역할은 CSS .chatCol 주석.
+            접으면 칸째 빠진다(.gridSolo가 트랙도 걷는다). */}
+        {chatPanelOpen ? (
+          <div className={styles.chatCol}>
             <ChatPanel
               surges={chat.surges}
               messages={chat.messages}
@@ -138,10 +147,8 @@ export function LiveScreen() {
               collectionWarning={chatWarning}
               onCollapse={toggleChatPanel}
             />
-          ) : (
-            <ChatRail collectionWarning={chatWarning} onExpand={toggleChatPanel} />
-          )}
-        </div>
+          </div>
+        ) : null}
       </div>
       {/* 전폭 — 스크롤로 내려와 만나는 자리다 */}
       <LiveStatsPanel

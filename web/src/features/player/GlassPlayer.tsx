@@ -34,7 +34,8 @@ import { useSimulatedChat } from './useSimulatedChat';
 //
 // 플레이어 안 채팅(오버레이·토글)은 전체 화면 전용이다 — 시안은 항상 그리지만 제품 결정으로
 // 다르게 간다(POK-239). 기본 상태에선 옆 채팅 패널이 채팅을 맡고, 전체 화면에선 그 패널이
-// 안 보이니 그때만 오버레이가 선다.
+// 안 보이니 그때만 오버레이가 선다. 바깥 패널을 다시 여는 버튼(상단 오버레이 우측)은 별개다 —
+// 패널이 접혀 있는 동안 플레이어 안에 남는 유일한 복귀 통로다.
 /** 바깥에서 플레이어에 내리는 명령 — sim이 Body 안에서 생겨 상태로는 끌어올릴 수 없다 */
 export interface GlassPlayerController {
   /** 방송 경과 시각(초)으로 이동 — 되감기 창 밖은 가장 오래된 지점으로 클램프 */
@@ -51,6 +52,12 @@ export interface GlassPlayerProps {
   embed?: boolean;
   /** 테스트용 시뮬레이션 초기값 */
   simulationOptions?: PlayerSimulationOptions;
+  /**
+   * 바깥 채팅 패널(1b 대시보드)의 열림 상태 — 플레이어 안 채팅 오버레이(chatOn)와는 다른 것이다.
+   * 닫혀 있을 때만 상단 오버레이 우측에 여는 버튼이 선다(시안 영상 플레이어 글래스).
+   */
+  chatPanelOpen?: boolean;
+  onToggleChatPanel?: () => void;
   /** 카드 클릭 → 시점 이동 같은 바깥 명령의 통로 */
   controllerRef?: Ref<GlassPlayerController>;
   /**
@@ -95,6 +102,8 @@ function GlassPlayerBody({
   channelName,
   viewersNote,
   embed = false,
+  chatPanelOpen,
+  onToggleChatPanel,
   controllerRef,
   onUptimeChange,
   sim,
@@ -235,7 +244,12 @@ function GlassPlayerBody({
       <div className={styles.videoSlot} aria-hidden>
         {videoNode ?? <span className={styles.videoLabel}>라이브 방송 화면</span>}
       </div>
-      <PlayerTopOverlay channelName={channelName} viewersNote={viewersNote} />
+      <PlayerTopOverlay
+        channelName={channelName}
+        viewersNote={viewersNote}
+        chatPanelOpen={chatPanelOpen}
+        onToggleChatPanel={onToggleChatPanel}
+      />
       {fullscreen && chatOn ? <PlayerChatOverlay messages={chat} /> : null}
       <div className={styles.controls}>
         <PlayerSeekBar
