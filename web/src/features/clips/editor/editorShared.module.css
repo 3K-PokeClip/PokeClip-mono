@@ -90,139 +90,328 @@
   font-size: calc(11 * var(--pc-u));
   color: var(--pc-color-text-muted);
 }
-
+/* 소스 판과 결과 판이 나란히 선다 — 무엇을 잘라 무엇이 나오는지가 한 화면에 있다 */
 .stage {
   flex: 1;
   min-height: calc(220 * var(--pc-u));
+  display: flex;
+  gap: calc(20 * var(--pc-u));
+  align-items: stretch;
+  justify-content: center;
+  padding: calc(10 * var(--pc-u)) 0;
+  min-width: 0;
+}
+
+.sourceSide,
+.resultSide,
+.resultOnly {
+  /* 판은 **두 축 모두**에 갇혀야 한다 — 높이에만 맞추면 16:9 원본이 무대 폭을 넘어 결과를 덮고,
+     폭에만 맞추면 무대보다 길어져 타임라인을 덮는다. 컨테이너 질의로 둘 다 재서 작은 쪽을 쓴다. */
   position: relative;
-  border-radius: calc(14 * var(--pc-u));
+  container-type: size;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(5 * var(--pc-u));
+}
+
+.sourceSide {
+  /* 소스가 주인공이다 — 16:9 라 결과(9:16)보다 훨씬 넓게 잡는다 */
+  flex: 3;
+}
+
+.resultSide {
+  flex: 1;
+}
+
+/* 다른 도구일 때 — 결과 하나가 가운데를 차지한다 */
+.resultOnly {
+  flex: 1;
+}
+
+.sideLabel {
+  font-size: calc(10 * var(--pc-u));
+  font-weight: 600;
+  color: var(--pc-color-fg-muted);
+  white-space: nowrap;
+}
+
+/* 라벨과 안내 사이에 흐름으로 놓인다. 높이는 「남은 세로」와 「폭이 허락하는 세로」 중 작은 쪽 —
+   한쪽만 보면 원본이 무대 폭을 넘어 결과를 덮거나, 무대보다 길어져 타임라인을 덮는다. */
+.sourcePanel,
+.resultFrame {
+  position: relative;
+  flex: none;
+  aspect-ratio: var(--pc-ar);
+  height: min(calc(100cqh - 34 * var(--pc-u)), calc(100cqw / var(--pc-ar)));
+}
+
+/* 결과만 있을 때는 위 라벨이 없다 — 그만큼 더 쓴다 */
+.resultOnly .resultFrame {
+  height: min(calc(100cqh - 18 * var(--pc-u)), calc(100cqw / var(--pc-ar)));
+}
+
+/* 클립 만들기 — 소스를 통째로 보여주고 그 위에 사각형을 얹는다 */
+.sourcePanel {
+  border-radius: calc(10 * var(--pc-u));
+  overflow: hidden;
+  border: 1px solid var(--pc-color-border-default);
   background: var(--pc-color-bg-inset);
   display: flex;
   align-items: center;
   justify-content: center;
+  touch-action: none; /* 사각형 드래그를 브라우저 스크롤에 뺏기지 않는다 */
+}
+
+.sourcePlaceholder {
+  font-size: calc(12 * var(--pc-u));
+  color: var(--pc-color-fg-subtle);
+}
+
+/* --- 크롭 사각형 ------------------------------------------------------- */
+/* 시안 규약: 선택 = 2px solid, 비선택 = 2px dashed + 흐리게. 색은 주 영역 accent / 보조 point */
+.cropRect {
+  position: absolute;
+  border: calc(2 * var(--pc-u)) dashed var(--pc-color-accent);
+  border-radius: calc(6 * var(--pc-u));
+  opacity: 0.6;
+}
+
+.cropRect[data-tone='point'] {
+  border-color: var(--pc-color-point);
+}
+
+.cropRect[data-selected='on'] {
+  border-style: solid;
+  opacity: 1;
+}
+
+/* 선택된 프레임만 바깥을 덮는다 — 시안의 box-shadow 0 0 0 9999px */
+.cropRect[data-scrim='on'] {
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / 0.5);
+}
+
+/* 사각형 안 */
+.cropBody {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: move;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: calc(2 * var(--pc-u));
   overflow: hidden;
 }
 
-.frame {
+.cropBody:focus-visible {
+  outline: calc(2 * var(--pc-u)) dashed var(--pc-color-fg-default);
+  outline-offset: calc(-4 * var(--pc-u));
+}
+
+.cropBadge,
+.cropReading {
+  font-size: calc(9 * var(--pc-u));
+  font-weight: 700;
+  padding: calc(2 * var(--pc-u)) calc(5 * var(--pc-u));
+  border-radius: calc(4 * var(--pc-u));
+  background: rgb(0 0 0 / 0.55);
+  color: var(--pc-color-fg-default);
+  white-space: nowrap;
+}
+
+.cropReading {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.cropRect:hover .cropReading,
+.cropBody:focus-visible .cropReading,
+.cropRect:focus-within .cropReading {
+  opacity: 1;
+}
+
+/* 크롭 모드 — 메인 프레임 안에서 작은 화면이 놓일 자리를 잡는 타깃 (시안 cropPipTarget) */
+.pipTarget {
   position: absolute;
-  top: 4%;
-  bottom: 4%;
-  left: 50%;
-  transform: translateX(-50%);
+  z-index: 4;
+  border: calc(2 * var(--pc-u)) solid var(--pc-color-point);
+  border-radius: calc(4 * var(--pc-u));
+  background: rgb(212 70 151 / 0.28);
+}
+
+.pipBody {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: move;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
+.pipBody:focus-visible {
+  outline: calc(2 * var(--pc-u)) dashed var(--pc-color-fg-default);
+  outline-offset: calc(-4 * var(--pc-u));
+}
+
+.cropBadge[data-tone='point'] {
+  background: var(--pc-color-point);
+}
+
+.cropHandle[data-tone='point'] {
+  background: var(--pc-color-point);
+}
+
+.cropHandle {
+  position: absolute;
+  width: calc(9 * var(--pc-u));
+  height: calc(9 * var(--pc-u));
+  padding: 0;
+  border: 1px solid var(--pc-color-bg-canvas);
+  border-radius: 99px;
+  background: var(--pc-color-accent);
+  z-index: 1;
+}
+
+.cropRect[data-tone='point'] .cropHandle {
+  background: var(--pc-color-point);
+}
+
+.cropHandle[data-corner='nw'] {
+  left: calc(-5 * var(--pc-u));
+  top: calc(-5 * var(--pc-u));
+  cursor: nwse-resize;
+}
+
+.cropHandle[data-corner='ne'] {
+  right: calc(-5 * var(--pc-u));
+  top: calc(-5 * var(--pc-u));
+  cursor: nesw-resize;
+}
+
+.cropHandle[data-corner='sw'] {
+  left: calc(-5 * var(--pc-u));
+  bottom: calc(-5 * var(--pc-u));
+  cursor: nesw-resize;
+}
+
+.cropHandle[data-corner='se'] {
+  right: calc(-5 * var(--pc-u));
+  bottom: calc(-5 * var(--pc-u));
+  cursor: nwse-resize;
+}
+
+/* --- 클립 미리보기 ----------------------------------------------------- */
+.resultFrame {
   display: flex;
   flex-direction: column;
   border-radius: calc(12 * var(--pc-u));
   overflow: hidden;
   border: 1px solid var(--pc-color-border-default);
   box-shadow: var(--pc-shadow-lg);
-  background: var(--pc-color-bg-surface);
+  background: #000;
 }
 
-.frame[data-layout='9:16'],
-.frame[data-layout='split'] {
+.resultFrame[data-layout='9:16'],
+.resultFrame[data-layout='split'] {
   aspect-ratio: 9 / 16;
 }
 
-.frame[data-layout='1:1'] {
+.resultFrame[data-layout='1:1'] {
   aspect-ratio: 1 / 1;
 }
 
-.sourcePane {
+.resultPane {
   position: relative;
   min-height: 0;
-  background: var(--pc-color-bg-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* 크롭 모드의 작은 화면 — 메인 위에 얹힌다 */
+.resultPane[data-placement='overlay'] {
+  border-radius: calc(4 * var(--pc-u));
+  border: 1px solid rgb(255 255 255 / 0.25);
+  box-shadow: var(--pc-shadow-md);
+}
+
+/* 중앙 모드 — 시안: 블러 배경 / 원본 16:9 그대로 / 블러 배경. 영상 칸은 비율을 지켜 가운데 선다 */
+.resultPane[data-placement='contain'] {
+  flex: 1;
+  width: 100%;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-/* 상하분할 위쪽만 경계선을 갖는다 — 시안의 2px 액센트 구분선 */
-.sourcePane[data-position='top'] {
-  border-bottom: calc(2 * var(--pc-u)) solid var(--pc-color-accent);
-}
-
-.sourcePlaceholder {
-  font-size: calc(11 * var(--pc-u));
-  color: var(--pc-color-text-muted);
-}
-
-.sourceBadge {
-  position: absolute;
-  top: calc(9 * var(--pc-u));
-  left: calc(9 * var(--pc-u));
-  z-index: 2;
-  font-size: calc(10 * var(--pc-u));
-  font-weight: 700;
-  padding: calc(2 * var(--pc-u)) calc(8 * var(--pc-u));
-  border-radius: var(--pc-radius-pill);
-  background: var(--pc-color-accent);
-  color: var(--pc-color-text-on-accent);
-}
-
-.sourceBadge[data-tone='point'] {
-  background: var(--pc-color-point);
-  color: #fff;
-}
-
-.overlayChip {
-  position: absolute;
-  top: calc(9 * var(--pc-u));
-  right: calc(9 * var(--pc-u));
-  z-index: 2;
+.resultContain {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  overflow: hidden;
   display: flex;
   align-items: center;
-  gap: calc(4 * var(--pc-u));
-  font-size: calc(9.5 * var(--pc-u));
-  font-weight: 650;
-  padding: calc(3 * var(--pc-u)) calc(7 * var(--pc-u));
-  border-radius: calc(7 * var(--pc-u));
-  border: 1px dashed rgb(255 255 255 / 0.55);
-  background: rgb(0 0 0 / 0.35);
-  color: rgb(255 255 255 / 0.9);
+  justify-content: center;
 }
 
+/* 분할 경계선 — 시안의 「두 영역 사이 2px 라인」 */
+.resultFrame[data-border='on'] .resultPane[data-placement='stack'] + .resultPane {
+  border-top: calc(2 * var(--pc-u)) solid var(--pc-color-accent);
+}
+
+/* 번인 자막 미리보기 — 결과 화면 아래쪽에 얹힌다 (시안 1d) */
 .burnedSubtitle {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(12 * var(--pc-u));
-  z-index: 2;
+  left: calc(8 * var(--pc-u));
+  right: calc(8 * var(--pc-u));
+  bottom: calc(10 * var(--pc-u));
+  z-index: 3;
   text-align: center;
-  font-size: calc(12 * var(--pc-u));
+  font-size: calc(11 * var(--pc-u));
   font-weight: 800;
+  line-height: 1.25;
   color: #fff;
-  text-shadow: 0 1px calc(4 * var(--pc-u)) rgb(0 0 0 / 0.8);
-  padding: 0 calc(10 * var(--pc-u));
+  text-shadow: 0 1px calc(3 * var(--pc-u)) rgb(0 0 0 / 0.9);
+  pointer-events: none;
+  /* 긴 자막이 결과 화면을 넘지 않게 — 넘치면 잘라 보여준다 */
+  max-height: 40%;
+  overflow: hidden;
 }
 
-.splitHandle {
-  position: absolute;
-  left: 50%;
-  z-index: 3;
-  transform: translate(-50%, -50%);
-  width: calc(36 * var(--pc-u));
-  height: calc(16 * var(--pc-u));
-  border-radius: var(--pc-radius-pill);
-  background: var(--pc-color-bg-surface);
-  border: 1px solid var(--pc-color-border-default);
-  color: var(--pc-color-text-muted);
-  font-size: calc(9 * var(--pc-u));
-  line-height: 1;
-  cursor: ns-resize;
-  padding: 0;
+/* 자막 위치 — 시안이 자막 패널로 옮긴 상단 / 경계 / 하단 */
+.burnedSubtitle[data-position='top'] {
+  top: calc(10 * var(--pc-u));
+  bottom: auto;
 }
 
-.splitHandle:focus-visible {
-  outline: 2px solid var(--pc-color-focus-ring);
-  outline-offset: 2px;
+.burnedSubtitle[data-position='edge'] {
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
 }
 
+/* 결과 판 바로 아래 한 줄 — 지금 무엇이 나오는지 요약한다 */
 .stageNote {
-  position: absolute;
-  bottom: calc(12 * var(--pc-u));
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 3;
+  white-space: nowrap;
   font-size: calc(10.5 * var(--pc-u));
   padding: calc(3 * var(--pc-u)) calc(11 * var(--pc-u));
   border-radius: var(--pc-radius-pill);

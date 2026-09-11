@@ -10,6 +10,44 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
+import {
+  cropRectOf,
+  maxCropSize,
+  minZoomOf,
+  moveCropWindow,
+  pointerDeltaToCrop,
+  resizeCropWindow,
+  zoomCropWindow,
+  type CropCorner,
+  type CropRect,
+  type CropWindow,
+} from './cropMath';
+import {
+  CAPTION_POSITIONS,
+  CENTER_COLOR_PRESETS,
+  DEFAULT_CENTER_FILL,
+  DEFAULT_PIP,
+  DEFAULT_PIP_BORDER,
+  DEFAULT_SPLIT_RATIO,
+  LAYOUT_OPTIONS,
+  PIP_BORDER_PRESETS,
+  PIP_BORDER_WIDTHS,
+  SPLIT_RATIOS,
+  defaultRegionWindow,
+  layoutRegions,
+  movePip,
+  pipAspectOf,
+  pipRectOf,
+  resizePip,
+  resultAspect,
+  type CaptionPosition,
+  type CenterFill,
+  type EditorLayout,
+  type LayoutOption,
+  type LayoutRegion,
+  type PipBorder,
+  type PipBox,
+} from './editorLayout';
 import type { EditorPlayback } from './editorPlayback';
 import { useEditorPlaybackSimulation } from './useEditorPlaybackSimulation';
 import {
@@ -42,6 +80,11 @@ import {
  */
 const MOCK_SUBTITLE_DELAY_MS = 1500;
 
+/** 가장자리에 붙어 더 못 가면 히스토리를 늘리지 않는다 — ↺가 아무 일도 안 하는 것처럼 보인다 */
+function samePip(a: PipBox, b: PipBox): boolean {
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+}
+
 /**
  * 도구 레일 + 패널이 붙는 쪽. 시안은 계정 설정에서 온다고 적는다 —
  * 설정 API가 서기 전까지는 브라우저에 적어 두어 "저장된다"는 약속만 지킨다.
@@ -62,9 +105,9 @@ function readStoredPanelSide(): EditorPanelSide | null {
   }
 }
 
-export type EditorLayout = '9:16' | '1:1' | 'split';
+export type { EditorLayout } from './editorLayout';
 export type SubtitleMode = 'burn-cc' | 'burn' | 'cc';
-export type EditorTool = 'range' | 'subtitle' | 'audio' | 'bgm' | 'image';
+export type EditorTool = 'layout' | 'range' | 'subtitle' | 'audio' | 'bgm' | 'image';
 export type EditorTrackKind = 'video' | 'mic' | 'game' | 'bgm' | 'sfx' | 'image';
 
 export interface EditorTrackClip {
@@ -99,14 +142,29 @@ export interface TitleSuggestion {
   text: string;
 }
 
-/** 미리보기에 깔리는 원본 화면. 상하분할이면 둘, 아니면 첫 칸만 쓴다 */
-export interface EditorSource {
+/**
+ * 소스에서 잡는 영역 하나. 시안 갱신분에서 「소스 1·2」가 사라지고 레이아웃이 정하는
+ * 영역(상단/하단, 메인/작은 화면)이 됐다 — 영상 트랙은 원래부터 하나였다.
+ */
+export interface EditorRegion {
   id: string;
-  /** 화면 위 배지 — 「소스 1 · 게임」 */
-  badge: string;
-  /** 아직 영상이 없을 때 자리에 적는 말 */
-  placeholder: string;
+  /** 프레임 안 배지 — 상단 / 하단 / 메인 화면 / 작은 화면 */
+  label: string;
   tone: 'accent' | 'point';
+  resizable: boolean;
+  /** 선택 시 바깥을 어둡게 덮는가 */
+  scrim: boolean;
+  /** 결과 화면에서 놓이는 방식 */
+  placement: LayoutRegion['placement'];
+  /**
+   * 소스에서 잘라 쓰는 영역 — 계약6 `outputs[].crop` 과 같은 모양.
+   * 소스를 모르면(목업) 없다 — 잘라낼 그림도, 종횡비를 맞출 해상도도 없기 때문이다.
+   */
+  crop?: CropRect;
+  /** 사각형이 지금 얼마나 당겨져 있나 (1 = 가장 넓게) */
+  cropZoom?: number;
+  /** 계약6 하한(w·h ≥ 0.05)이 허용하는 최소 확대율 */
+  cropMinZoom?: number;
 }
 
 export interface EditorImageItem {
@@ -127,14 +185,27 @@ export type SubtitleState =
 interface EditorRecipe {
   range: ClipRange;
   layout: EditorLayout;
-  /** 상하분할 위쪽(게임) 비중 — 시안 1.5 : 1 */
+  /** 분할 상단 지분(%) — 시안 칩 50 / 60 / 70 */
   splitRatio: number;
+  /** 분할 두 영역 사이 2px 라인 */
+  splitBorder: boolean;
+  /** 자막이 놓이는 자리 — 시안에서 자막 패널로 옮겨졌다 */
+  captionPosition: CaptionPosition;
+  /** 크롭 모드의 작은 화면이 결과 안에서 놓이는 자리 (메인 화면 기준 정규화) */
+  pip: PipBox;
+  /** 크롭 모드에서 결과의 작은 화면 둘레 — 라인·그림자·라운드 */
+  pipBorder: PipBorder;
+  /** 중앙 모드에서 영상 바깥 띠를 채우는 방식 */
+  centerFill: CenterFill;
+  /**
+   * 칸마다 소스에서 잡은 영역 — 중심과 확대율. 계약6이 요구하는 `{x,y,w,h}`는 여기에 비율·소스
+   * 해상도를 얹어 파생시킨다. 사각형을 그대로 담으면 비율을 바꿀 때 종횡비 규칙을 어기게 된다.
+   */
+  crops: Readonly<Record<string, CropWindow>>;
   trackVolumes: Readonly<Record<string, number>>;
   trackMuted: Readonly<Record<string, boolean>>;
   subtitleMode: SubtitleMode;
   selectedTitleId: string | null;
-  /** 소스 1·2 자리바꿈 — 상하분할에서만 의미가 있다 */
-  sourcesSwapped: boolean;
 }
 
 const MOCK_SOURCE = {
@@ -144,6 +215,9 @@ const MOCK_SOURCE = {
   subtitleFontLabel: 'Pretendard ExtraBold',
   /** 1:24:03 방송 */
   durationSeconds: 5043,
+  /** 가짜 방송의 해상도 — 크롭 사각형의 경계·종횡비를 재는 데 쓴다 (계약6은 픽셀 기준) */
+  width: 1920,
+  height: 1080,
   /** 1:22:14 — 시안 트랜스포트 표기 */
   playheadSeconds: 4934,
   /** 1:22:08.4 – 1:22:20.8 = 12.4초 */
@@ -207,12 +281,6 @@ const MOCK_TITLE_SUGGESTIONS: readonly TitleSuggestion[] = [
   { id: 'title-3', text: '이걸 쫓아온다고? 결말 실화' },
 ];
 
-/** 시안 1d-a 상하분할의 두 소스 — 배선 티켓에서 클립이 실제로 가진 소스로 바뀐다 */
-const MOCK_SOURCES: readonly EditorSource[] = [
-  { id: 'game', badge: '소스 1 · 게임', placeholder: '게임 화면', tone: 'accent' },
-  { id: 'cam', badge: '소스 2 · 캠', placeholder: '페이스캠', tone: 'point' },
-];
-
 const MOCK_IMAGES: readonly EditorImageItem[] = [
   { id: 'img-1', name: '채널 로고.png', placement: '우측 상단 · 크기 12%' },
 ];
@@ -226,12 +294,6 @@ const MOCK_BGM_LABEL = 'Neon Drive.mp3';
  * 고를 수 있는 값의 목록도 데이터다 — 화면에 배열을 박아두면
  * 자막 모드가 늘어날 때 화면을 고쳐야 한다(레시피 항목이라 서버가 알게 될 값이다).
  */
-export const LAYOUT_OPTIONS: readonly { value: EditorLayout; label: string }[] = [
-  { value: '9:16', label: '9:16' },
-  { value: '1:1', label: '1:1' },
-  { value: 'split', label: '상하분할' },
-];
-
 export const SUBTITLE_MODE_OPTIONS: readonly { value: SubtitleMode; label: string }[] = [
   { value: 'burn-cc', label: '번인+CC' },
   { value: 'burn', label: '번인' },
@@ -240,6 +302,8 @@ export const SUBTITLE_MODE_OPTIONS: readonly { value: SubtitleMode; label: strin
 
 /** 시안 좌측 도구 레일 — 순서가 곧 화면 순서다 */
 export const TOOL_OPTIONS: readonly { value: EditorTool; label: string }[] = [
+  // 시안 갱신분: 레일 맨 위에 레이아웃이 왔다. 이 도구일 때만 가운데가 원본·결과 2판이 된다.
+  { value: 'layout', label: '레이아웃' },
   { value: 'range', label: '구간' },
   { value: 'subtitle', label: '자막' },
   { value: 'audio', label: '오디오' },
@@ -247,19 +311,25 @@ export const TOOL_OPTIONS: readonly { value: EditorTool; label: string }[] = [
   { value: 'image', label: '이미지' },
 ];
 
-function initialRecipe(): EditorRecipe {
+function initialRecipe(range: ClipRange): EditorRecipe {
   return {
-    range: MOCK_SOURCE.range,
-    // 시안 1d-a는 상하분할이 켜진 상태를 보여준다
+    range,
+    // 시안 갱신분의 기본값은 분할이다 (splitVals: sm ?? 'split')
     layout: 'split',
-    splitRatio: 1.5,
-    trackVolumes: Object.fromEntries(
-      MOCK_TRACKS.filter((t) => t.volume !== null).map((t) => [t.id, t.volume as number]),
-    ),
+    splitRatio: DEFAULT_SPLIT_RATIO,
+    splitBorder: true,
+    captionPosition: 'bottom',
+    pip: DEFAULT_PIP,
+    pipBorder: DEFAULT_PIP_BORDER,
+    centerFill: DEFAULT_CENTER_FILL,
+    // 처음엔 비율마다의 기본 자리. 상하분할은 한 소스를 위·아래로 갈라 잡는다
+    crops: {},
+    // 초기값은 비워 둔다 — 트랙마다의 기본 볼륨은 트랙 정의가 갖고 있고, 여기 복사해 두면
+    // 소스가 준 트랙(목업에 없는 id)의 볼륨이 빠진다
+    trackVolumes: {},
     trackMuted: {},
     subtitleMode: 'burn-cc',
     selectedTitleId: null,
-    sourcesSwapped: false,
   };
 }
 
@@ -276,6 +346,11 @@ export interface ClipEditorOptions {
    * 주인이 바뀌어 위치가 튄다. 화면 쪽에서 컴포넌트를 갈라 그것을 보장한다(StudioScreen).
    */
   playback?: EditorPlayback;
+  /**
+   * 시작 비율. 시안 1d-a는 상하분할을 보여주므로 기본값이 그것이다 —
+   * 단일 화면의 크롭 동작은 이 문으로 들어가 확인한다.
+   */
+  initialLayout?: EditorLayout;
 }
 
 export interface ClipEditorMockState {
@@ -339,14 +414,71 @@ export interface ClipEditorMockState {
 
   // 레이아웃 (E5)
   layout: EditorLayout;
-  layoutOptions: readonly { value: EditorLayout; label: string }[];
+  layoutOptions: readonly LayoutOption[];
   setLayout: (layout: EditorLayout) => void;
+  /** 지금 레이아웃이 정하는 영역들 — 시안의 프레임 하나가 여기 한 항목이다 */
+  regions: readonly EditorRegion[];
+  /** 결과 화면의 비율(가로/세로). 가로 모드만 16:9 다 */
+  resultAspect: number;
+  /** 지금 고른 레이아웃의 이름 — 「미리보기 · 분할」처럼 배지에 쓴다 */
+  layoutLabel: string;
+  /** 지금 손대고 있는 영역. 선택된 것만 테두리가 진하고 바깥이 어두워진다 */
+  selectedRegionId: string;
+  selectRegion: (regionId: string) => void;
   splitRatio: number;
-  setSplitRatio: (ratio: number) => void;
-  /** 자리바꿈이 이미 반영된 순서로 온다 — 화면은 순서를 따지지 않는다 */
-  sources: readonly EditorSource[];
-  sourcesSwapped: boolean;
-  swapSources: () => void;
+  splitRatioOptions: readonly number[];
+  setSplitRatio: (percent: number) => void;
+  splitBorder: boolean;
+  toggleSplitBorder: () => void;
+  captionPosition: CaptionPosition;
+  captionPositionOptions: readonly { value: CaptionPosition; label: string }[];
+  setCaptionPosition: (position: CaptionPosition) => void;
+  /**
+   * 크롭 모드의 작은 화면이 결과 안에서 차지하는 자리 — 메인 화면 기준 정규화 사각형.
+   * 다른 모드에서는 null. 원본 판의 「메인 화면」 프레임 안에 타깃으로 그려 잡는다(시안 cropPipTarget).
+   */
+  pipPlacement: { x: number; y: number; w: number; h: number } | null;
+  /** 타깃을 끈 만큼 옮긴다. 픽셀 → 정규화 환산에 메인 프레임의 화면 크기가 필요하다 */
+  dragPip: (
+    pointerDelta: { x: number; y: number },
+    framePx: { width: number; height: number },
+  ) => void;
+  /**
+   * 타깃 모서리를 끈다 — 비율을 묶지 않는다. 잡은 모양이 곧 작은 화면의 비율이고, 원본의
+   * 「작은 화면」 프레임은 그 비율에 묶인 채 크기만 바뀐다. `pointer` 는 메인 프레임 안의 정규화 좌표
+   */
+  resizePip: (corner: CropCorner, pointer: { x: number; y: number }) => void;
+  resetPip: () => void;
+  /** 크롭 모드 — 결과의 작은 화면 둘레(라인 · 그림자 · 라운드). 시안은 늘 그리지만 설정으로 뺐다 */
+  pipBorder: PipBorder;
+  pipBorderWidths: readonly number[];
+  pipBorderPresets: readonly { value: string; label: string }[];
+  setPipBorder: (border: PipBorder) => void;
+  /** 중앙 모드 — 영상 바깥 띠를 블러로 채울지 색으로 채울지 */
+  centerFill: CenterFill;
+  centerColorPresets: readonly { value: string; label: string }[];
+  setCenterFill: (fill: CenterFill) => void;
+  /**
+   * 소스 판에서 사각형을 끈 만큼 옮긴다 (E5). 픽셀 → 정규화 환산은 허브가 한다 —
+   * 화면은 몇 픽셀 움직였는지와 판이 얼마나 큰지만 알면 된다.
+   * 드래그 한 번을 실행취소 한 칸으로 묶으려면 beginGesture/endGesture 로 감싼다.
+   */
+  dragCrop: (
+    sourceId: string,
+    pointerDelta: { x: number; y: number },
+    panelSize: { width: number; height: number },
+  ) => void;
+  /** 키보드 한 걸음 — 소스 기준 정규화 값이다 */
+  nudgeCrop: (sourceId: string, delta: { x: number; y: number }) => void;
+  /**
+   * 모서리를 끌어 범위를 바꾼다. `pointer` 는 소스 안의 정규화 좌표(0..1) —
+   * 반대편 모서리를 못 박고 비율은 유지한다.
+   */
+  resizeCrop: (sourceId: string, corner: CropCorner, pointer: { x: number; y: number }) => void;
+  /** 확대율만 한 걸음 (모서리 키보드 조작) */
+  zoomCrop: (sourceId: string, delta: number) => void;
+  /** 사각형을 기본 자리로 되돌린다 */
+  resetCrop: (sourceId: string) => void;
 
   // 트랙 (E2)
   tracks: EditorTrack[];
@@ -379,6 +511,8 @@ export interface ClipEditorMockState {
 
   // 타임라인 (보는 방식 — 되돌리기 대상 아님)
   sourceDurationSeconds: number;
+  /** 소스의 가로/세로. 크롭 사각형이 영상 위에 정확히 겹치려면 판이 이 비율이어야 한다 */
+  sourceAspect: number;
   view: TimelineView;
   activeTool: EditorTool;
   toolOptions: readonly { value: EditorTool; label: string }[];
@@ -405,12 +539,15 @@ export interface ClipEditorMockState {
 const SPEED_OPTIONS = [0.5, 1, 1.5, 2] as const;
 
 export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEditorMockState {
-  const { initialSubtitleStatus = 'ready' } = options;
+  const { initialSubtitleStatus = 'ready', initialLayout } = options;
   const { toast } = useToast();
 
-  const [history, setHistory] = useState<History<EditorRecipe>>(() =>
-    createHistory(initialRecipe()),
-  );
+  const [history, setHistory] = useState<History<EditorRecipe>>(() => {
+    const recipe = initialRecipe(MOCK_SOURCE.range);
+    return createHistory(
+      initialLayout === undefined ? recipe : { ...recipe, layout: initialLayout },
+    );
+  });
   const recipe = history.present;
 
   // 재생은 어댑터가 맡는다. 주입이 없으면 목업 시뮬레이션 — 훅은 늘 호출하고(조건부 호출 금지)
@@ -432,7 +569,9 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   );
 
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
-  const [activeTool, setActiveTool] = useState<EditorTool>('subtitle');
+  const [selectedRegionId, setSelectedRegionId] = useState('top');
+  // 시안 갱신분의 기본 도구는 레이아웃이다 (splitVals: tool ?? 'layout')
+  const [activeTool, setActiveTool] = useState<EditorTool>('layout');
   const [timelineCollapsed, setTimelineCollapsed] = useState(false);
   // 기본은 내용에 맞춘다 — 화면 배율(--pc-u)이 rem을 따라 커지면 레인도 함께 커지는데
   // 여기에 고정 픽셀 상한을 걸면 배율이 큰 화면에서 마지막 트랙이 잘린다.
@@ -497,6 +636,50 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       return replace ? replacePresent(current, next) : pushHistory(current, next);
     });
   }, []);
+
+  /**
+   * 지금 이 칸이 잡을 수 있는 최대 사각형과 확대율 하한.
+   * 자리바꿈으로 위·아래가 바뀌면 지분이 달라져 크기도 달라지므로, 화면에 그릴 때와 **같은 순서**로
+   * 자리를 찾아야 한다.
+   */
+  const cropBoundsOf = useCallback(
+    (regionId: string) => {
+      // 작은 화면의 비율은 결과의 자리 모양에서 온다 — 화면에 그릴 때와 같은 비율로 재야 한다
+      const region = layoutRegions(
+        recipe.layout,
+        recipe.splitRatio,
+        pipAspectOf(recipe.pip, resultAspect(recipe.layout)),
+      ).find((item) => item.id === regionId);
+      if (region === undefined) return null;
+      return { maxSize: maxCropSize(region.aspect, MOCK_SOURCE.width, MOCK_SOURCE.height) };
+    },
+    [recipe.layout, recipe.splitRatio, recipe.pip],
+  );
+
+  /** 창을 바꾸는 모든 길이 여기로 모인다 — 같은 클램프·같은 히스토리 규칙을 쓰게 하려고 */
+  const updateCrop = useCallback(
+    (
+      sourceId: string,
+      update: (window: CropWindow, maxSize: { w: number; h: number }) => CropWindow,
+    ) => {
+      const bounds = cropBoundsOf(sourceId);
+      if (bounds === null) return;
+      commit((current) => {
+        const window = current.crops[sourceId] ?? defaultRegionWindow(current.layout, sourceId);
+        const next = update(window, bounds.maxSize);
+        // 가장자리에 붙어 더 못 가면 히스토리를 늘리지 않는다 — ↺가 아무 일도 안 하는 것처럼 보인다
+        if (
+          next.zoom === window.zoom &&
+          next.center.x === window.center.x &&
+          next.center.y === window.center.y
+        ) {
+          return current;
+        }
+        return { ...current, crops: { ...current.crops, [sourceId]: next } };
+      });
+    },
+    [commit, cropBoundsOf],
+  );
 
   // 드래그 중에는 타임라인 창을 붙잡는다. 창이 구간 중심을 따라 움직이면 포인터→초 환산
   // 기준이 이벤트마다 옮겨가, 눈금이 손 아래에서 미끄러지고 늘리기가 창 폭에서 멎는다.
@@ -663,21 +846,187 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
         commit((current) => (current.layout === layout ? current : { ...current, layout })),
       [commit],
     ),
-    splitRatio: recipe.splitRatio,
-    setSplitRatio: useCallback(
-      (ratio: number) =>
-        commit((current) => ({ ...current, splitRatio: Math.min(3, Math.max(0.4, ratio)) })),
-      [commit],
-    ),
     // 자리바꿈은 상하분할에서만 뜻이 있다 — 단일 소스 모드까지 새면
     // 9:16을 골랐을 때 게임 화면 대신 캠이 뜬다
-    sources:
-      recipe.layout === 'split' && recipe.sourcesSwapped
-        ? [...MOCK_SOURCES].reverse()
-        : MOCK_SOURCES,
-    sourcesSwapped: recipe.sourcesSwapped,
-    swapSources: useCallback(
-      () => commit((current) => ({ ...current, sourcesSwapped: !current.sourcesSwapped })),
+    // 자리바꿈은 상하분할에서만 뜻이 있다. media 표식이 pane 객체에 붙어 있어 영상도 함께 옮겨간다.
+    regions: useMemo(() => {
+      // 작은 화면 비율은 결과의 자리 모양에서 온다 — 소스에서 잘라낼 프레임과 결과 배치에 같이 걸린다
+      const pipRatio = pipAspectOf(recipe.pip, resultAspect(recipe.layout));
+      const regions = layoutRegions(recipe.layout, recipe.splitRatio, pipRatio);
+      // 작은 화면의 결과 배치는 사용자가 잡은 값이 정본이다 — 레이아웃 정의의 기본값을 덮는다
+      const pipRect = pipRectOf(recipe.pip);
+      const base = regions.map((region) => ({
+        id: region.id,
+        label: region.label,
+        tone: region.tone,
+        resizable: region.resizable,
+        scrim: region.scrim,
+        placement:
+          region.placement.kind === 'overlay'
+            ? {
+                kind: 'overlay' as const,
+                left: pipRect.x,
+                top: pipRect.y,
+                width: pipRect.w,
+                aspect: pipRatio,
+                border: recipe.pipBorder,
+              }
+            : region.placement.kind === 'contain'
+              ? { ...region.placement, fill: recipe.centerFill }
+              : region.placement,
+      }));
+      // 크롭 경계는 소스 해상도로 잰다 — 계약6이 종횡비를 픽셀 기준으로 검증하기 때문이다
+      return regions.map((region, index) => {
+        const maxSize = maxCropSize(region.aspect, MOCK_SOURCE.width, MOCK_SOURCE.height);
+        const window = recipe.crops[region.id] ?? defaultRegionWindow(recipe.layout, region.id);
+        return {
+          ...base[index]!,
+          crop: cropRectOf(window, maxSize),
+          cropZoom: window.zoom,
+          cropMinZoom: minZoomOf(maxSize),
+        };
+      });
+    }, [
+      recipe.layout,
+      recipe.splitRatio,
+      recipe.crops,
+      recipe.pip,
+      recipe.pipBorder,
+      recipe.centerFill,
+    ]),
+    resultAspect: resultAspect(recipe.layout),
+    layoutLabel: LAYOUT_OPTIONS.find((option) => option.value === recipe.layout)?.label ?? '',
+    // 레이아웃을 바꾸면 영역 id 가 통째로 달라진다 — 없는 id 를 고른 채로 두면 아무것도 선택되지
+    // 않은 것처럼 보이므로 첫 영역으로 돌린다
+    selectedRegionId: layoutRegions(recipe.layout, recipe.splitRatio).some(
+      (region) => region.id === selectedRegionId,
+    )
+      ? selectedRegionId
+      : (layoutRegions(recipe.layout, recipe.splitRatio)[0]?.id ?? 'main'),
+    selectRegion: setSelectedRegionId,
+    splitRatio: recipe.splitRatio,
+    splitRatioOptions: SPLIT_RATIOS,
+    setSplitRatio: useCallback(
+      (percent: number) =>
+        commit((current) =>
+          current.splitRatio === percent ? current : { ...current, splitRatio: percent },
+        ),
+      [commit],
+    ),
+    splitBorder: recipe.splitBorder,
+    toggleSplitBorder: useCallback(
+      () => commit((current) => ({ ...current, splitBorder: !current.splitBorder })),
+      [commit],
+    ),
+    pipPlacement: recipe.layout === 'crop' ? pipRectOf(recipe.pip) : null,
+    dragPip: useCallback(
+      (pointerDelta: { x: number; y: number }, framePx: { width: number; height: number }) =>
+        commit((current) => {
+          if (framePx.width <= 0 || framePx.height <= 0) return current;
+          const next = movePip(current.pip, {
+            x: pointerDelta.x / framePx.width,
+            y: pointerDelta.y / framePx.height,
+          });
+          if (samePip(next, current.pip)) return current;
+          return { ...current, pip: next };
+        }),
+      [commit],
+    ),
+    resizePip: useCallback(
+      (corner: CropCorner, pointer: { x: number; y: number }) =>
+        commit((current) => {
+          const next = resizePip(current.pip, corner, pointer);
+          if (samePip(next, current.pip)) return current;
+          return { ...current, pip: next };
+        }),
+      [commit],
+    ),
+    resetPip: useCallback(
+      () =>
+        commit((current) =>
+          current.pip === DEFAULT_PIP ? current : { ...current, pip: DEFAULT_PIP },
+        ),
+      [commit],
+    ),
+    pipBorder: recipe.pipBorder,
+    pipBorderWidths: PIP_BORDER_WIDTHS,
+    pipBorderPresets: PIP_BORDER_PRESETS,
+    setPipBorder: useCallback(
+      (border: PipBorder) =>
+        commit((current) => {
+          const same =
+            current.pipBorder.on === border.on &&
+            current.pipBorder.width === border.width &&
+            current.pipBorder.color === border.color;
+          return same ? current : { ...current, pipBorder: border };
+        }),
+      [commit],
+    ),
+    centerFill: recipe.centerFill,
+    centerColorPresets: CENTER_COLOR_PRESETS,
+    setCenterFill: useCallback(
+      (fill: CenterFill) =>
+        commit((current) => {
+          const before = current.centerFill;
+          const same =
+            fill.kind === 'blur'
+              ? before.kind === 'blur' && before.strength === fill.strength
+              : before.kind === 'color' && before.color === fill.color;
+          return same ? current : { ...current, centerFill: fill };
+        }),
+      [commit],
+    ),
+    captionPosition: recipe.captionPosition,
+    captionPositionOptions: CAPTION_POSITIONS,
+    setCaptionPosition: useCallback(
+      (position: CaptionPosition) =>
+        commit((current) =>
+          current.captionPosition === position
+            ? current
+            : { ...current, captionPosition: position },
+        ),
+      [commit],
+    ),
+    dragCrop: useCallback(
+      (
+        sourceId: string,
+        pointerDelta: { x: number; y: number },
+        panelSize: { width: number; height: number },
+      ) =>
+        updateCrop(sourceId, (window, maxSize) =>
+          moveCropWindow(window, pointerDeltaToCrop(pointerDelta, panelSize), maxSize),
+        ),
+      [updateCrop],
+    ),
+    nudgeCrop: useCallback(
+      (sourceId: string, delta: { x: number; y: number }) =>
+        updateCrop(sourceId, (window, maxSize) => moveCropWindow(window, delta, maxSize)),
+      [updateCrop],
+    ),
+    // 원본 프레임은 어느 모드든 비율에 묶여 크기만 바뀐다 — 크롭 모드의 작은 화면도 결과의 자리가
+    // 정한 비율을 따른다. 비율을 바꾸려면 자리(배치 타깃)의 꼭짓점을 잡는다.
+    resizeCrop: useCallback(
+      (sourceId: string, corner: CropCorner, pointer: { x: number; y: number }) =>
+        updateCrop(sourceId, (window, maxSize) =>
+          resizeCropWindow(window, corner, pointer, maxSize),
+        ),
+      [updateCrop],
+    ),
+    zoomCrop: useCallback(
+      (sourceId: string, delta: number) =>
+        updateCrop(sourceId, (window, maxSize) =>
+          zoomCropWindow(window, window.zoom + delta, maxSize),
+        ),
+      [updateCrop],
+    ),
+    resetCrop: useCallback(
+      (sourceId: string) =>
+        commit((current) => {
+          if (current.crops[sourceId] === undefined) return current;
+          const next = { ...current.crops };
+          delete next[sourceId];
+          return { ...current, crops: next };
+        }),
       [commit],
     ),
 
@@ -734,6 +1083,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     images: MOCK_IMAGES,
 
     sourceDurationSeconds: playback.durationSeconds,
+    sourceAspect: MOCK_SOURCE.width / MOCK_SOURCE.height,
     view,
     activeTool,
     toolOptions: TOOL_OPTIONS,

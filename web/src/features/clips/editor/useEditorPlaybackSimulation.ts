@@ -1,8 +1,8 @@
 'use client';
 
-// 미디어가 없을 때의 편집기 재생 — 플레이헤드만 흐르는 목업 (POK-238에서 상태 허브에서 떼어냄).
+// 미디어가 없을 때의 편집기 재생 — 플레이헤드만 흐르는 목업 (상태 허브에서 떼어냄).
 //
-// 실재생(useEditorHlsPlayback)과 같은 EditorPlayback 계약을 돌려주므로 상태 허브는 둘을 구분하지
+// 실재생 어댑터가 오면 같은 EditorPlayback 계약을 구현해 허브에 주입한다 — 허브는 둘을 구분하지
 // 않는다. 라이브 화면의 usePlayerSimulation ↔ useHlsPlayback 짝과 같은 구조다.
 //
 // 틱을 rAF 가 아니라 setInterval 로 둔 것은 의도다 — 가짜 타이머로 재생 동작을 검증할 수 있어야

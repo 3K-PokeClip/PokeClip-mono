@@ -45,7 +45,9 @@ describe('StudioScreen', () => {
     const user = userEvent.setup();
     renderStudio();
 
-    // 시안 기본은 자막 도구
+    // 시안 갱신분의 기본은 레이아웃 도구다
+    expect(screen.getByRole('region', { name: '레이아웃' })).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: '자막' }));
     expect(screen.getByRole('region', { name: '자막' })).toBeInTheDocument();
 
     await user.click(screen.getByRole('tab', { name: '이미지' }));
@@ -58,6 +60,7 @@ describe('StudioScreen', () => {
   it('자막을 만들기 전에는 제목 추천이 잠겨 있고, 만들면 열린다', async () => {
     const user = userEvent.setup();
     renderStudio({ initialSubtitleStatus: 'idle' });
+    await user.click(screen.getByRole('tab', { name: '자막' }));
 
     const locked = screen.getByRole('region', { name: 'AI 제목 추천' });
     expect(within(locked).getByText('잠김')).toBeInTheDocument();
@@ -157,18 +160,19 @@ describe('StudioScreen', () => {
     const user = userEvent.setup();
     renderStudio();
 
-    expect(screen.getByText('미리보기 · 자막 번인+CC · 1× 배속')).toBeInTheDocument();
+    expect(screen.getByText(/자막 번인\+CC · 1× 배속/)).toBeInTheDocument();
     await user.click(screen.getByRole('radio', { name: '2×' }));
-    expect(screen.getByText('미리보기 · 자막 번인+CC · 2× 배속')).toBeInTheDocument();
+    expect(screen.getByText(/자막 번인\+CC · 2× 배속/)).toBeInTheDocument();
 
-    await user.click(screen.getByRole('radio', { name: '9:16' }));
-    expect(screen.getByRole('radio', { name: '9:16' })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: /세로/ }));
+    expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
   });
 
   it('패널 위치 버튼이 레일과 패널을 좌우로 옮긴다 — 미리보기·타임라인은 그대로', async () => {
     const user = userEvent.setup();
     renderStudio();
 
+    await user.click(screen.getByRole('tab', { name: '자막' }));
     const body = screen.getByRole('main');
     expect(body).toHaveAttribute('data-panel-side', 'left');
 
@@ -187,26 +191,26 @@ describe('StudioScreen', () => {
     renderStudio();
 
     const tabs = screen.getAllByRole('tab').map((t) => t.textContent);
-    expect(tabs).toEqual(['구간', '자막', '오디오', 'BGM·효과', '이미지']);
+    expect(tabs).toEqual(['레이아웃', '구간', '자막', '오디오', 'BGM·효과', '이미지']);
   });
 
   it('버튼을 누른 뒤에도 ⌘Z가 먹는다 — 포커스가 버튼에 남는 것이 정상 흐름이다', async () => {
     const user = userEvent.setup();
     renderStudio();
 
-    await user.click(screen.getByRole('radio', { name: '9:16' }));
-    expect(screen.getByRole('radio', { name: '9:16' })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: /세로/ }));
+    expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
 
     // 클릭한 버튼에 포커스가 남은 채로 되돌린다
     await user.keyboard('{Meta>}z{/Meta}');
-    expect(screen.getByRole('radio', { name: '상하분할' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /분할/ })).toBeChecked();
   });
 
   it('버튼 위에서 Space는 여전히 버튼을 누른다 — 재생을 가로채지 않는다', async () => {
     const user = userEvent.setup();
     renderStudio();
 
-    const oneToOne = screen.getByRole('radio', { name: '1:1' });
+    const oneToOne = screen.getByRole('radio', { name: /중앙/ });
     oneToOne.focus();
     await user.keyboard(' ');
 
@@ -218,10 +222,13 @@ describe('StudioScreen', () => {
     const user = userEvent.setup();
     renderStudio();
 
-    screen.getByRole('radio', { name: '상하분할' }).focus();
-    await user.keyboard('{ArrowLeft}');
+    // 시안 순서: 세로 · 분할 · 중앙 · 크롭 · 가로 — 세로 목록이라 위아래 화살표다
+    screen.getByRole('radio', { name: /분할/ }).focus();
+    await user.keyboard('{ArrowUp}');
+    expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
 
-    expect(screen.getByRole('radio', { name: '1:1' })).toBeChecked();
+    await user.keyboard('{ArrowDown}{ArrowDown}');
+    expect(screen.getByRole('radio', { name: /중앙/ })).toBeChecked();
   });
 
   it('구간 핸들이 각자 자기 경계 위치를 읽어 준다', () => {
@@ -331,5 +338,177 @@ describe('StudioScreen', () => {
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
     });
+  });
+});
+
+// --- 크롭·레이아웃 -------------------------------------------------------------
+// 원본 판은 아직 자리 표시자다. 사각형은 목업 해상도(1920×1080) 기준으로 잡히므로
+// 영상 없이도 좌표·경계·실행취소를 그대로 확인할 수 있다.
+
+describe('StudioScreen — 크롭 영역 (E5)', () => {
+  it('소스 위에 잡을 영역과 모서리 네 개가 선다', () => {
+    renderStudio();
+
+    expect(screen.getByRole('region', { name: '원본' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '결과' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /상단 영역/ })).toBeInTheDocument();
+    for (const corner of ['왼쪽 위', '오른쪽 위', '왼쪽 아래', '오른쪽 아래']) {
+      expect(screen.getByRole('button', { name: `상단 ${corner} 모서리` })).toBeInTheDocument();
+    }
+  });
+
+  it('상하분할은 한 소스에 사각형 두 개를 얹는다', () => {
+    renderStudio();
+
+    expect(screen.getByRole('button', { name: /상단 영역/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /하단 영역/ })).toBeInTheDocument();
+  });
+
+  it('사각형을 방향키로 옮긴다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    const body = screen.getByRole('button', { name: /상단 영역/ });
+
+    const before = body.parentElement?.getAttribute('style');
+    body.focus();
+    await user.keyboard('{ArrowRight}');
+
+    expect(body.parentElement?.getAttribute('style')).not.toBe(before);
+  });
+
+  it('모서리 방향키가 범위를 넓히고 좁힌다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    const handle = screen.getByRole('button', { name: '상단 오른쪽 아래 모서리' });
+    const rect = () => handle.parentElement?.style.width ?? '';
+
+    handle.focus();
+    const before = rect();
+    await user.keyboard('{ArrowRight}');
+    const grown = rect();
+    expect(Number.parseFloat(grown)).toBeGreaterThan(Number.parseFloat(before));
+
+    await user.keyboard('{ArrowLeft}');
+    expect(Number.parseFloat(rect())).toBeLessThan(Number.parseFloat(grown));
+  });
+
+  it('옮긴 뒤 실행취소로 되돌린다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    const body = screen.getByRole('button', { name: /상단 영역/ });
+    const rect = () => body.parentElement?.getAttribute('style');
+
+    const before = rect();
+    body.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(rect()).not.toBe(before);
+
+    await user.click(screen.getByRole('button', { name: '작업 이전으로' }));
+    expect(rect()).toBe(before);
+  });
+
+  it('접근성 위반이 없다', async () => {
+    const { container } = renderStudio();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe('StudioScreen — 중앙 모드 여백 채우기', () => {
+  it('중앙을 고를 때만 보이고, 블러면 강도 슬라이더가, 단색이면 스와치가 열린다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    expect(screen.queryByRole('radiogroup', { name: '여백 채우기' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('radio', { name: /중앙/ }));
+    expect(screen.getByRole('radio', { name: '블러' })).toBeChecked();
+    // 시안 기본 60
+    expect(screen.getByRole('slider', { name: '블러 강도' })).toHaveAttribute(
+      'aria-valuenow',
+      '60',
+    );
+    expect(screen.queryByRole('radiogroup', { name: '배경 색' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('radio', { name: '단색' }));
+    expect(screen.queryByRole('slider', { name: '블러 강도' })).not.toBeInTheDocument();
+    const swatches = screen.getByRole('radiogroup', { name: '배경 색' });
+    expect(within(swatches).getByRole('radio', { name: '검정' })).toBeChecked();
+
+    await user.click(within(swatches).getByRole('radio', { name: '흰색' }));
+    expect(within(swatches).getByRole('radio', { name: '흰색' })).toBeChecked();
+    expect(screen.getByLabelText('배경 색 직접 고르기')).toHaveValue('#ffffff');
+  });
+
+  it('블러 강도 슬라이더가 결과의 블러 변수를 움직인다', async () => {
+    const user = userEvent.setup();
+    const { container } = renderStudio();
+    await user.click(screen.getByRole('radio', { name: /중앙/ }));
+    const pane = container.querySelector('[data-placement="contain"]') as HTMLElement;
+    expect(pane.style.getPropertyValue('--pc-blur')).toBe('0.6');
+
+    const slider = screen.getByRole('slider', { name: '블러 강도' });
+    slider.focus();
+    await user.keyboard('{ArrowLeft}');
+
+    expect(slider).toHaveAttribute('aria-valuenow', '59');
+    expect(pane.style.getPropertyValue('--pc-blur')).toBe('0.59');
+  });
+
+  it('접근성 위반이 없다 — 단색 스와치까지', async () => {
+    const user = userEvent.setup();
+    const { container } = renderStudio();
+    await user.click(screen.getByRole('radio', { name: /중앙/ }));
+    await user.click(screen.getByRole('radio', { name: '단색' }));
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+describe('StudioScreen — 크롭 모드 작은 화면', () => {
+  it('작은 화면 자리·비율은 패널 설정 없이 원본의 프레임과 자리, 두 사각형의 꼭짓점으로 잡는다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    await user.click(screen.getByRole('radio', { name: /크롭/ }));
+
+    // 따로 고르는 비율·크기 설정은 없다 — 사각형이 곧 설정이다
+    expect(screen.queryByRole('radiogroup', { name: '작은 화면 비율' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('slider', { name: '작은 화면 크기' })).not.toBeInTheDocument();
+
+    for (const corner of ['왼쪽 위', '오른쪽 위', '왼쪽 아래', '오른쪽 아래']) {
+      expect(screen.getByRole('button', { name: `작은 화면 ${corner} 모서리` })).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: `작은 화면 자리 ${corner} 모서리` }),
+      ).toBeInTheDocument();
+    }
+  });
+
+  it('테두리는 켜진 채 시작하고, 끄면 굵기·색 고르기가 접히며 결과의 라인이 사라진다', async () => {
+    const user = userEvent.setup();
+    const { container } = renderStudio();
+    await user.click(screen.getByRole('radio', { name: /크롭/ }));
+
+    const toggle = screen.getByRole('switch', { name: '테두리 표시' });
+    expect(toggle).toBeChecked();
+    const widths = screen.getByRole('radiogroup', { name: '테두리 굵기' });
+    expect(within(widths).getByRole('radio', { name: '1px' })).toBeChecked();
+    const colors = screen.getByRole('radiogroup', { name: '테두리 색' });
+    expect(within(colors).getByRole('radio', { name: '흰색' })).toBeChecked();
+
+    const overlay = () => container.querySelector('[data-placement="overlay"]') as HTMLElement;
+    expect(overlay().style.borderRadius).not.toBe('');
+
+    await user.click(within(widths).getByRole('radio', { name: '3px' }));
+    expect(overlay().style.border).toContain('3');
+
+    await user.click(toggle);
+    expect(toggle).not.toBeChecked();
+    expect(screen.queryByRole('radiogroup', { name: '테두리 굵기' })).not.toBeInTheDocument();
+    expect(overlay().style.borderRadius).toBe('');
+  });
+
+  it('접근성 위반이 없다 — 테두리 설정까지', async () => {
+    const user = userEvent.setup();
+    const { container } = renderStudio();
+    await user.click(screen.getByRole('radio', { name: /크롭/ }));
+    expect(await axe(container)).toHaveNoViolations();
   });
 });
