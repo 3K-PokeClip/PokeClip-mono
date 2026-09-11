@@ -16,6 +16,8 @@ export interface LayoutOption {
   label: string;
   /** 시안의 smHint — 무엇이 되는지 한 줄로 */
   hint: string;
+  /** 목록에는 보이되 고를 수 없다 — 카드가 비활성 버튼이 되고 화살표 이동에서도 빠진다 */
+  disabled?: boolean;
 }
 
 export const LAYOUT_OPTIONS: readonly LayoutOption[] = [
@@ -23,7 +25,8 @@ export const LAYOUT_OPTIONS: readonly LayoutOption[] = [
   { value: 'split', label: '분할', hint: '상단 · 하단 2영역' },
   { value: 'center', label: '중앙', hint: '원본 비율 유지' },
   { value: 'crop', label: '크롭', hint: '메인 + 작은 화면' },
-  { value: 'horiz', label: '가로', hint: '16:9 원본' },
+  // 가로는 아직 열지 않는다 — 자리는 시안대로 두되 고를 수는 없다
+  { value: 'horiz', label: '가로', hint: '16:9 원본', disabled: true },
 ];
 
 /** 분할 상단 지분(%) — 시안의 칩 3종 */

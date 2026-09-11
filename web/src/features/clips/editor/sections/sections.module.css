@@ -369,6 +369,12 @@
   cursor: pointer;
 }
 
+/* DS Button 의 비활성 규약과 같다 */
+.layoutRow:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .layoutRow[aria-checked='true'] {
   border-color: var(--pc-color-accent);
   background: var(--pc-color-accent-subtle);

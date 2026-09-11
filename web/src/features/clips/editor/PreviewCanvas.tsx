@@ -48,7 +48,11 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
     <div className={styles.preview}>
       {/* data-preview-stage: 타임라인 높이 상한을 재는 표식. 미리보기 칸에서 신축하는 건
           이 무대뿐이라, 여기 남은 여유가 곧 타임라인이 더 커질 수 있는 양이다 (POK-237). */}
-      <div className={styles.stage} data-preview-stage data-mode={editingLayout ? 'both' : 'result'}>
+      <div
+        className={styles.stage}
+        data-preview-stage
+        data-mode={editingLayout ? 'both' : 'result'}
+      >
         {editingLayout ? (
           <section className={styles.sourceSide} aria-label="원본">
             <span className={styles.sideLabel}>원본</span>
@@ -72,7 +76,10 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
           </section>
         ) : null}
 
-        <section className={editingLayout ? styles.resultSide : styles.resultOnly} aria-label="결과">
+        <section
+          className={editingLayout ? styles.resultSide : styles.resultOnly}
+          aria-label="결과"
+        >
           {editingLayout ? <span className={styles.sideLabel}>결과</span> : null}
           {result}
           <span className={styles.stageNote}>

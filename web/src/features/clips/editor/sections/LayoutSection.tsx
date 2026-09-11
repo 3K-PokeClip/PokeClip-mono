@@ -15,12 +15,14 @@ function LayoutCard({
   label,
   hint,
   selected,
+  disabled = false,
   onSelect,
 }: {
   value: EditorLayout;
   label: string;
   hint: string;
   selected: boolean;
+  disabled?: boolean;
   onSelect: () => void;
 }) {
   const roving = useRovingItem(value);
@@ -30,6 +32,8 @@ function LayoutCard({
       type="button"
       role="radio"
       aria-checked={selected}
+      // 로빙 묶음은 disabled 인 항목을 화살표 이동에서 건너뛴다
+      disabled={disabled}
       tabIndex={roving.tabIndex}
       onKeyDown={roving.onKeyDown}
       onFocus={roving.onFocus}
@@ -146,6 +150,7 @@ export function LayoutSection({ state }: { state: ClipEditorMockState }) {
               label={option.label}
               hint={option.hint}
               selected={option.value === state.layout}
+              disabled={option.disabled}
               onSelect={() => state.setLayout(option.value)}
             />
           ))}

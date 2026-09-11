@@ -231,6 +231,23 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('radio', { name: /중앙/ })).toBeChecked();
   });
 
+  it('가로는 목록에 보이되 고를 수 없다 — 누르거나 화살표로 닿아도 선택이 안 바뀐다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+
+    const horiz = screen.getByRole('radio', { name: /가로/ });
+    expect(horiz).toBeDisabled();
+
+    await user.click(horiz);
+    expect(screen.getByRole('radio', { name: /분할/ })).toBeChecked();
+
+    // 크롭에서 아래로 내려가도 가로에 서지 않는다
+    await user.click(screen.getByRole('radio', { name: /크롭/ }));
+    await user.keyboard('{ArrowDown}');
+    expect(horiz).not.toBeChecked();
+    expect(horiz).not.toHaveFocus();
+  });
+
   it('구간 핸들이 각자 자기 경계 위치를 읽어 준다', () => {
     renderStudio();
 
@@ -474,7 +491,9 @@ describe('StudioScreen — 크롭 모드 작은 화면', () => {
     expect(screen.queryByRole('slider', { name: '작은 화면 크기' })).not.toBeInTheDocument();
 
     for (const corner of ['왼쪽 위', '오른쪽 위', '왼쪽 아래', '오른쪽 아래']) {
-      expect(screen.getByRole('button', { name: `작은 화면 ${corner} 모서리` })).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: `작은 화면 ${corner} 모서리` }),
+      ).toBeInTheDocument();
       expect(
         screen.getByRole('button', { name: `작은 화면 자리 ${corner} 모서리` }),
       ).toBeInTheDocument();
