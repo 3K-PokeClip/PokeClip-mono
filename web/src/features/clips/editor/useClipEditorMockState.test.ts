@@ -3,10 +3,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { withToastProvider } from '@/test/testProviders';
 import type { EditorPlayback, PlaybackBounds } from './editorPlayback';
 import { MAX_RANGE_SECONDS } from './timelineMath';
-import { useClipEditorMockState, type ClipEditorOptions } from './useClipEditorMockState';
+import {
+  useClipEditorMockState,
+  type ClipEditorMockState,
+  type ClipEditorOptions,
+} from './useClipEditorMockState';
 
 function renderEditor(options?: ClipEditorOptions) {
   return renderHook(() => useClipEditorMockState(options), { wrapper: withToastProvider });
+}
+
+/** se 모서리를 끌어 확대율을 zoom 으로 맞춘다 — 확대율 전용 문이 없어 테스트는 이렇게 크기를 잡는다 */
+function shrinkTo(result: { current: ClipEditorMockState }, id: string, zoom: number) {
+  const region = result.current.regions.find((item) => item.id === id)!;
+  const crop = region.crop!;
+  const ratio = zoom / region.cropZoom!;
+  act(() =>
+    result.current.resizeCrop(id, 'se', {
+      x: crop.x + crop.w * ratio,
+      y: crop.y + crop.h * ratio,
+    }),
+  );
 }
 
 describe('useClipEditorMockState', () => {
@@ -424,6 +441,69 @@ describe('useClipEditorMockState — 크롭 영역 (E5)', () => {
     expect(result.current.regions[0]!.crop!.y).toBeLessThan(result.current.regions[1]!.crop!.y);
   });
 
+  it('먼저 연 제스처의 끝 신호는 나중에 연 제스처를 닫지 않는다 — blur 가 슬라이더 드래그를 죽이지 않게', () => {
+    const { result } = renderEditor();
+    let first = 0;
+    act(() => {
+      first = result.current.beginGesture();
+    });
+    act(() => {
+      result.current.beginGesture();
+    });
+    const frozen = result.current.view;
+
+    act(() => result.current.endGesture(first));
+    act(() => result.current.setRangeEdge('end', 4970));
+    // 아직 제스처 중이다 — 창이 고정된 채다
+    expect(result.current.view).toEqual(frozen);
+
+    act(() => result.current.endGesture());
+    expect(result.current.view).not.toEqual(frozen);
+  });
+
+  it('모서리를 수평으로만 끌어도 진동하지 않는다 — 축 선택은 제스처 시작 사각형 기준', () => {
+    const { result } = renderEditor();
+    const top = () => result.current.regions[0]!;
+    shrinkTo(result, 'top', 0.5);
+    const start = top().crop!;
+
+    act(() => result.current.beginGesture());
+    const zooms: number[] = [];
+    for (const step of [0.02, 0.04, 0.06, 0.08]) {
+      act(() =>
+        result.current.resizeCrop('top', 'se', {
+          x: start.x + start.w + step,
+          y: start.y + start.h,
+        }),
+      );
+      zooms.push(top().cropZoom!);
+    }
+    act(() => result.current.endGesture());
+
+    for (let i = 1; i < zooms.length; i += 1) expect(zooms[i]).toBeGreaterThan(zooms[i - 1]!);
+  });
+
+  it('사각형이 기본 자리로 돌아온 뒤 초기화하면 히스토리가 늘지 않는다', () => {
+    const { result } = renderEditor({ initialLayout: 'vert' });
+    act(() => result.current.nudgeCrop('main', { x: 0.125, y: 0 }));
+    act(() => result.current.nudgeCrop('main', { x: -0.125, y: 0 }));
+    act(() => result.current.resetCrop('main'));
+
+    act(() => result.current.undo());
+    act(() => result.current.undo());
+    expect(result.current.canUndo).toBe(false);
+  });
+
+  it('자리 모양이 바뀌어 저장된 중심이 범위 밖이어도 첫 입력부터 움직인다', () => {
+    const { result } = renderEditor();
+    act(() => result.current.nudgeCrop('bottom', { x: 5, y: 0 })); // 오른쪽 끝까지
+    act(() => result.current.setSplitRatio(70));
+    const before = result.current.regions[1]!.crop!.x;
+
+    act(() => result.current.nudgeCrop('bottom', { x: -0.01, y: 0 }));
+    expect(result.current.regions[1]!.crop!.x).toBeLessThan(before);
+  });
+
   it('제스처 첫 이벤트가 무변경이어도 드래그 직전 상태가 히스토리에 남는다', () => {
     const { result } = renderEditor();
     // 레이아웃 변경 한 칸을 먼저 쌓아 둔다 — 드래그 되돌리기가 이것까지 삼키면 안 된다
@@ -478,7 +558,7 @@ describe('useClipEditorMockState — 크롭 영역 (E5)', () => {
 
   it('모서리를 끌면 범위가 바뀌고 비율은 그대로다', () => {
     const { result } = renderEditor({ initialLayout: 'vert' });
-    act(() => result.current.zoomCrop('main', -0.4)); // 먼저 줄여 둔다
+    shrinkTo(result, 'main', 0.6); // 먼저 줄여 둔다
     const before = result.current.regions[0]!.crop!;
 
     act(() => result.current.resizeCrop('main', 'se', { x: 0.99, y: 0.99 }));
@@ -493,7 +573,7 @@ describe('useClipEditorMockState — 크롭 영역 (E5)', () => {
   it('계약6 하한(0.05)보다 작게는 못 줄인다', () => {
     const { result } = renderEditor({ initialLayout: 'vert' });
 
-    act(() => result.current.zoomCrop('main', -5));
+    shrinkTo(result, 'main', 0);
 
     const crop = result.current.regions[0]!.crop!;
     expect(Math.min(crop.w, crop.h)).toBeGreaterThanOrEqual(0.05 - 1e-12);
@@ -501,7 +581,7 @@ describe('useClipEditorMockState — 크롭 영역 (E5)', () => {
 
   it('당겨 보면 세로로도 움직인다 — 여유가 생긴다', () => {
     const { result } = renderEditor({ initialLayout: 'vert' });
-    act(() => result.current.zoomCrop('main', -0.5));
+    shrinkTo(result, 'main', 0.5);
     const before = result.current.regions[0]!.crop!.y;
 
     act(() => result.current.nudgeCrop('main', { x: 0, y: 0.1 }));
@@ -533,7 +613,7 @@ describe('useClipEditorMockState — 크롭 영역 (E5)', () => {
 
   it('비율을 바꿔도 잡은 자리와 확대율이 남는다', () => {
     const { result } = renderEditor({ initialLayout: 'vert' });
-    act(() => result.current.zoomCrop('main', -0.3));
+    shrinkTo(result, 'main', 0.7);
     act(() => result.current.nudgeCrop('main', { x: 0.08, y: 0 }));
     const before = result.current.regions[0]!;
     const center = before.crop!.x + before.crop!.w / 2;
@@ -700,7 +780,7 @@ describe('useClipEditorMockState — 크롭 모드의 작은 화면 자리', () 
     const aspect = (shaped.w * 1920) / (shaped.h * 1080);
 
     act(() => result.current.nudgeCrop('pip', { x: -0.1, y: 0 }));
-    act(() => result.current.zoomCrop('pip', -0.1));
+    shrinkTo(result, 'pip', regionOf().cropZoom! - 0.1);
 
     const moved = regionOf().crop!;
     expect((moved.w * 1920) / (moved.h * 1080)).toBeCloseTo(aspect, 8);

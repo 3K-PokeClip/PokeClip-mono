@@ -292,9 +292,11 @@ export function CropOverlay({
   if (crop === undefined) return null;
 
   const zoomPercent = Math.round((region.cropZoom ?? 1) * 100);
-  // 뒤 영역이 위에 쌓이고 선택하면 그 위로 올라온다. 크롭 모드의 작은 화면 프레임은 늘 맨 위다 —
-  // 메인 프레임 안에 겹쳐 있을 때 메인이 선택돼 위에 쌓이면 작은 화면의 꼭짓점을 잡을 길이 없다.
-  const layer = region.placement.kind === 'overlay' ? 5 : selected ? 4 : 2 + index;
+  // 선택한 프레임이 맨 위다. 크롭 모드의 작은 화면 프레임은 메인 프레임 안에 겹칠 수 있는데,
+  // 항상 위에 두면 그 아래 깔린 배치 타깃(메인의 스택 컨텍스트 안)을 포인터로 못 잡고, 항상 아래 두면
+  // 작은 화면의 꼭짓점을 못 잡는다 — 고른 쪽이 위로 오게 해 둘 다 닿을 길을 남긴다.
+  // 아무것도 안 골랐을 때는 작은 화면 프레임이 위다(더 작아서 아래 깔리면 못 찾는다).
+  const layer = selected ? 5 : region.placement.kind === 'overlay' ? 4 : 2 + index;
 
   return (
     // 시안 규약: 선택 = 2px solid + 바깥 그늘, 비선택 = 2px dashed + 흐리게.

@@ -17,7 +17,6 @@ import {
   moveCropWindow,
   pointerDeltaToCrop,
   resizeCropWindow,
-  zoomCropWindow,
   type CropCorner,
   type CropRect,
   type CropWindow,
@@ -97,9 +96,10 @@ function cropBoundsFor(recipe: EditorRecipe, regionId: string): { w: number; h: 
 }
 
 /** 가장자리에 붙어 더 못 가면 히스토리를 늘리지 않는다 — ↺가 아무 일도 안 하는 것처럼 보인다 */
-function samePip(a: PipBox, b: PipBox): boolean {
+function sameRect(a: CropRect, b: CropRect): boolean {
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
+const samePip = sameRect;
 
 /**
  * 도구 레일 + 패널이 붙는 쪽. 시안은 계정 설정에서 온다고 적는다 —
@@ -357,7 +357,8 @@ export interface ClipEditorOptions {
    * 재생을 맡을 어댑터. 안 주면 목업 시뮬레이션이다(미디어 없이 플레이헤드만 흐른다).
    *
    * **한 인스턴스가 사는 동안 있거나 없거나 둘 중 하나여야 한다** — 중간에 뒤집히면 재생 상태의
-   * 주인이 바뀌어 위치가 튄다. 화면 쪽에서 컴포넌트를 갈라 그것을 보장한다(StudioScreen).
+   * 주인이 바뀌어 위치가 튄다. 실재생을 이을 때 화면 쪽에서 어댑터가 준비된 뒤에만 이 훅을 마운트하는
+   * 식으로(예: 컴포넌트를 갈라서) 보장해야 한다 — 지금 StudioScreen 은 옵션을 그대로 넘길 뿐 그 분기가 없다.
    */
   playback?: EditorPlayback;
   /**
@@ -402,9 +403,13 @@ export interface ClipEditorMockState {
   rangeGaugeLabel: string;
   rangeGaugeFraction: number;
   setRangeEdge: (edge: 'start' | 'end', seconds: number) => void;
-  /** 드래그 시작·끝 — 그 사이의 변경은 실행취소 한 칸으로 묶이고 타임라인 창이 고정된다 */
-  beginGesture: () => void;
-  endGesture: () => void;
+  /**
+   * 드래그 시작·끝 — 그 사이의 변경은 실행취소 한 칸으로 묶이고 타임라인 창이 고정된다.
+   * 시작은 토큰을 돌려준다. 끝에 토큰을 주면 **그 제스처가 아직 최신일 때만** 닫는다 — blur 처럼 늦게
+   * 오는 신호가 다른 위젯이 방금 연 제스처를 죽이지 않게. 토큰 없이 부르면 무조건 닫는다.
+   */
+  beginGesture: () => number;
+  endGesture: (token?: number) => void;
   /**
    * 볼륨 슬라이더처럼 이어지는 조작에 그대로 펼쳐 붙이는 포인터 핸들러.
    * DS Slider는 pointermove마다 onValueChange를 부르므로 묶지 않으면
@@ -489,8 +494,6 @@ export interface ClipEditorMockState {
    * 반대편 모서리를 못 박고 비율은 유지한다.
    */
   resizeCrop: (sourceId: string, corner: CropCorner, pointer: { x: number; y: number }) => void;
-  /** 확대율만 한 걸음 (모서리 키보드 조작) */
-  zoomCrop: (sourceId: string, delta: number) => void;
   /** 사각형을 기본 자리로 되돌린다 */
   resetCrop: (sourceId: string) => void;
 
@@ -627,16 +630,21 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   // 「첫 커밋」 표식을 따로 켜는 방식은 안 된다 — 가장자리에 붙어 무변경인 첫 이벤트가 표식만 켜서
   // 다음 실제 변경이 갈아끼우기로 들어가고, 드래그 직전 상태가 히스토리에서 사라진다.
   const gestureBase = useRef<EditorRecipe | null>(null);
+  const gestureToken = useRef(0);
   const presentRef = useRef(recipe);
   presentRef.current = recipe;
 
   const beginGesture = useCallback(() => {
+    gestureToken.current += 1;
     gesturing.current = true;
     gestureBase.current = presentRef.current;
     setFrozenView(liveViewRef.current);
+    return gestureToken.current;
   }, []);
 
-  const endGesture = useCallback(() => {
+  const endGesture = useCallback((token?: number) => {
+    // 낡은 토큰은 무시한다 — 그 제스처는 이미 다음 제스처로 대체됐다
+    if (token !== undefined && token !== gestureToken.current) return;
     gesturing.current = false;
     gestureBase.current = null;
     setFrozenView(null);
@@ -658,24 +666,29 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   const updateCrop = useCallback(
     (
       sourceId: string,
-      update: (window: CropWindow, maxSize: { w: number; h: number }) => CropWindow,
+      update: (
+        window: CropWindow,
+        maxSize: { w: number; h: number },
+        /** 제스처가 시작될 때의 창 — 제스처 밖이면 지금 창 */
+        reference: CropWindow,
+      ) => CropWindow,
     ) => {
       commit((current) => {
         const maxSize = cropBoundsFor(current, sourceId);
         if (maxSize === null) return current;
-        const window = current.crops[sourceId] ?? defaultRegionWindow(current.layout, sourceId);
-        const next = update(window, maxSize);
+        const stored = current.crops[sourceId] ?? defaultRegionWindow(current.layout, sourceId);
+        // 자리 모양이 바뀐 뒤면 저장된 중심이 새 범위 밖일 수 있다 — 화면은 가둬서 그리는데 계산이
+        // 밖에서 시작하면 첫 입력이 범위 안으로 들어오는 데 다 쓰여 화면은 안 움직인다. 먼저 가둔다
+        const window = moveCropWindow(stored, { x: 0, y: 0 }, maxSize);
+        const base = gestureBase.current;
+        const reference =
+          base === null
+            ? window
+            : (base.crops[sourceId] ?? defaultRegionWindow(base.layout, sourceId));
+        const next = update(window, maxSize, reference);
         // 가장자리에 붙어 더 못 가면 히스토리를 늘리지 않는다 — ↺가 아무 일도 안 하는 것처럼 보인다.
-        // zoom 은 그려지는 값(하한 적용 뒤)으로 비교한다 — 저장값이 하한 아래면 화면은 하한으로
-        // 그리는데, 클램프된 결과를 「변경」으로 치면 화면 변화 없이 한 칸이 쌓인다
-        const floor = minZoomOf(maxSize);
-        if (
-          Math.max(next.zoom, floor) === Math.max(window.zoom, floor) &&
-          next.center.x === window.center.x &&
-          next.center.y === window.center.y
-        ) {
-          return current;
-        }
+        // 그려지는 사각형으로 비교한다 — 저장값(하한 아래 zoom, 범위 밖 중심)이 아니라
+        if (sameRect(cropRectOf(next, maxSize), cropRectOf(window, maxSize))) return current;
         return { ...current, crops: { ...current.crops, [sourceId]: next } };
       });
     },
@@ -827,12 +840,14 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     endGesture,
     gestureHandlers: useMemo(
       () => ({
-        onPointerDownCapture: beginGesture,
+        onPointerDownCapture: () => {
+          beginGesture();
+        },
         // 취소·캡처 상실도 끝으로 친다 — 안 그러면 창이 고정된 채 남고
-        // 이후 편집이 계속 같은 히스토리 항목을 덮어쓴다
-        onPointerUp: endGesture,
-        onPointerCancel: endGesture,
-        onLostPointerCapture: endGesture,
+        // 이후 편집이 계속 같은 히스토리 항목을 덮어쓴다. (이벤트 객체가 토큰 자리로 들어가지 않게 감싼다)
+        onPointerUp: () => endGesture(),
+        onPointerCancel: () => endGesture(),
+        onLostPointerCapture: () => endGesture(),
         // 눌러둔 화살표가 초당 수십 번 값을 바꾸면 상한(50)을 넘겨 이전 편집이 밀려난다.
         // editorKeys·구간 핸들이 같은 이유로 막는 그 실패 모드다.
         //
@@ -1009,22 +1024,27 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     // 정한 비율을 따른다. 비율을 바꾸려면 자리(배치 타깃)의 꼭짓점을 잡는다.
     resizeCrop: useCallback(
       (sourceId: string, corner: CropCorner, pointer: { x: number; y: number }) =>
-        updateCrop(sourceId, (window, maxSize) =>
-          resizeCropWindow(window, corner, pointer, maxSize),
-        ),
-      [updateCrop],
-    ),
-    zoomCrop: useCallback(
-      (sourceId: string, delta: number) =>
-        updateCrop(sourceId, (window, maxSize) =>
-          zoomCropWindow(window, window.zoom + delta, maxSize),
+        updateCrop(sourceId, (window, maxSize, reference) =>
+          resizeCropWindow(window, corner, pointer, maxSize, reference),
         ),
       [updateCrop],
     ),
     resetCrop: useCallback(
       (sourceId: string) =>
         commit((current) => {
-          if (current.crops[sourceId] === undefined) return current;
+          const stored = current.crops[sourceId];
+          if (stored === undefined) return current;
+          // 값이 이미 기본 자리면 키만 지우는 것은 화면 변화 없는 히스토리 한 칸이다
+          const maxSize = cropBoundsFor(current, sourceId);
+          if (
+            maxSize !== null &&
+            sameRect(
+              cropRectOf(stored, maxSize),
+              cropRectOf(defaultRegionWindow(current.layout, sourceId), maxSize),
+            )
+          ) {
+            return current;
+          }
           const next = { ...current.crops };
           delete next[sourceId];
           return { ...current, crops: next };

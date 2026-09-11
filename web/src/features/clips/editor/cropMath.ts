@@ -44,8 +44,6 @@ export const MIN_CROP_SIZE = 0.05;
 
 /** 키보드 한 걸음 — 소스 기준 1% */
 export const CROP_KEY_STEP = 0.01;
-/** 모서리 키보드 한 걸음 — 확대율 5% */
-export const CROP_ZOOM_STEP = 0.05;
 
 export type CropCorner = 'nw' | 'ne' | 'sw' | 'se';
 export const CROP_CORNERS: readonly CropCorner[] = ['nw', 'ne', 'sw', 'se'];
@@ -58,7 +56,7 @@ export const CROP_CORNER_LABELS: Readonly<Record<CropCorner, string>> = {
   se: '오른쪽 아래',
 };
 
-function clamp(value: number, min: number, max: number): number {
+export function clamp(value: number, min: number, max: number): number {
   // min > max 인 경우(창이 소스보다 크다)는 min 을 준다 — 잘라낼 여유가 없다는 뜻이다
   return Math.min(Math.max(value, min), Math.max(min, max));
 }
@@ -128,16 +126,6 @@ export function moveCropWindow(
   };
 }
 
-/** 확대율만 바꾼다 — 중심은 그대로 두되 소스 밖으로 나가면 끌어들인다 */
-export function zoomCropWindow(
-  window: CropWindow,
-  nextZoom: number,
-  maxSize: { w: number; h: number },
-): CropWindow {
-  const zoom = clamp(nextZoom, minZoomOf(maxSize), 1);
-  return moveCropWindow({ center: window.center, zoom }, { x: 0, y: 0 }, maxSize);
-}
-
 /** 어느 모서리를 잡았을 때 고정되는 반대편 모서리의 좌표 */
 function anchorOf(rect: CropRect, corner: CropCorner): { x: number; y: number } {
   return {
@@ -153,12 +141,16 @@ function anchorOf(rect: CropRect, corner: CropCorner): { x: number; y: number } 
  * `pointer` 는 소스 안의 정규화 좌표다(0..1). 두 축 중 **잡은 꼭짓점에서 손이 더 멀리 간 쪽**을
  * 따라간다 — 비율이 묶여 있어 한 축만 봐도 되지만 그러면 세로로 끄는 손짓에 반응하지 않고, 두 축의
  * 최댓값을 취하면 한 축으로만 안쪽으로 끄는 손짓(축소)에 반응하지 않는다.
+ *
+ * 「잡은 꼭짓점」은 `reference`(제스처가 시작될 때의 창)에서 잰다. 직전 결과에서 재면 되먹임이 생긴다 —
+ * 비율 고정이라 리사이즈 뒤 꼭짓점이 커서에서 밀려나고, 다음 이벤트가 반대 축을 골라 크기가 진동한다.
  */
 export function resizeCropWindow(
   window: CropWindow,
   corner: CropCorner,
   pointer: { x: number; y: number },
   maxSize: { w: number; h: number },
+  reference: CropWindow = window,
 ): CropWindow {
   const rect = cropRectOf(window, maxSize);
   const anchor = anchorOf(rect, corner);
@@ -173,8 +165,9 @@ export function resizeCropWindow(
   const reachZoomX = Math.max(0, reachX) / maxSize.w;
   const reachZoomY = Math.max(0, reachY) / maxSize.h;
   // 잡은 꼭짓점에서 손이 더 멀리 간 축이 손짓의 뜻이다 — 커지는 쪽이든 작아지는 쪽이든 같은 규칙.
-  // (두 축의 최댓값을 취하면 한 축으로만 안쪽으로 끄는 축소에 반응하지 않는다)
-  const grabbed = { x: west ? rect.x : rect.x + rect.w, y: north ? rect.y : rect.y + rect.h };
+  // 꼭짓점은 제스처 시작 사각형의 것이다 — 제스처 동안 고정이라 되먹임이 없다.
+  const start = cropRectOf(reference, maxSize);
+  const grabbed = { x: west ? start.x : start.x + start.w, y: north ? start.y : start.y + start.h };
   const wanted =
     Math.abs(pointer.x - grabbed.x) >= Math.abs(pointer.y - grabbed.y) ? reachZoomX : reachZoomY;
   // 고정한 모서리에서 소스 경계까지 남은 만큼이 상한이다 — 그래야 고정점이 안 움직인다

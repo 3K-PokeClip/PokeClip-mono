@@ -10,7 +10,6 @@ import {
   normalizePointer,
   pointerDeltaToCrop,
   resizeCropWindow,
-  zoomCropWindow,
   type CropWindow,
 } from './cropMath';
 
@@ -137,29 +136,6 @@ describe('moveCropWindow', () => {
   });
 });
 
-describe('zoomCropWindow', () => {
-  const max = maxCropSize(9 / 16, SRC.width, SRC.height);
-
-  it('확대율을 바꾸고 중심은 그대로 둔다', () => {
-    const zoomed = zoomCropWindow(FULL, 0.5, max);
-    expect(zoomed.zoom).toBe(0.5);
-    expect(zoomed.center.x).toBeCloseTo(0.5, 10);
-  });
-
-  it('넓히다 소스 밖으로 나가면 사각형을 끌어들인다', () => {
-    // 오른쪽 끝에 붙여 두고 확대율을 최대로 올리면 중심이 안으로 들어와야 한다
-    const atEdge = moveCropWindow({ center: { x: 0.5, y: 0.5 }, zoom: 0.2 }, { x: 99, y: 0 }, max);
-    const widened = zoomCropWindow(atEdge, 1, max);
-    const rect = cropRectOf(widened, max);
-    expect(rect.x + rect.w).toBeLessThanOrEqual(1 + 1e-12);
-  });
-
-  it('경계를 벗어난 확대율은 잘린다', () => {
-    expect(zoomCropWindow(FULL, 5, max).zoom).toBe(1);
-    expect(zoomCropWindow(FULL, -1, max).zoom).toBeCloseTo(minZoomOf(max), 10);
-  });
-});
-
 describe('resizeCropWindow', () => {
   const max = maxCropSize(9 / 16, SRC.width, SRC.height);
   const start: CropWindow = { center: { x: 0.5, y: 0.5 }, zoom: 0.5 };
@@ -195,6 +171,26 @@ describe('resizeCropWindow', () => {
       max,
     );
     expect(next.zoom).toBeCloseTo(0.5, 8);
+  });
+
+  it('축 선택은 제스처 시작 사각형 기준이라 수평으로만 끌어도 진동하지 않는다', () => {
+    const half: CropWindow = { center: { x: 0.5, y: 0.5 }, zoom: 0.5 };
+    const start = cropRectOf(half, max);
+    const cornerY = start.y + start.h;
+    let window = half;
+    const zooms: number[] = [];
+    for (const step of [0.02, 0.04, 0.06, 0.08]) {
+      // 직전 결과를 되먹이되(실제 드래그가 그렇다) 기준은 시작 창이다
+      window = resizeCropWindow(
+        window,
+        'se',
+        { x: start.x + start.w + step, y: cornerY },
+        max,
+        half,
+      );
+      zooms.push(window.zoom);
+    }
+    for (let i = 1; i < zooms.length; i += 1) expect(zooms[i]).toBeGreaterThan(zooms[i - 1]!);
   });
 
   it('고정한 모서리 쪽으로 끌면 작아진다 — 하한까지', () => {

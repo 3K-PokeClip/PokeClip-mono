@@ -314,6 +314,27 @@ describe('StudioScreen', () => {
     expect(burned!.style.getPropertyValue('--pc-edge')).toBe('70%');
   });
 
+  it('레이아웃 카드에 포커스만 옮겨서는 레이아웃이 바뀌지 않는다 — 창 복귀 재포커스가 편집을 되살리면 안 된다', () => {
+    renderStudio();
+    screen.getByRole('radio', { name: /세로/ }).focus();
+    expect(screen.getByRole('radio', { name: /분할/ })).toBeChecked();
+  });
+
+  it('겹친 두 프레임은 고른 쪽이 위로 온다 — 메인을 고르면 그 안의 배치 타깃도 잡힌다', async () => {
+    const user = userEvent.setup();
+    renderStudio();
+    await user.click(screen.getByRole('radio', { name: /크롭/ }));
+    const main = screen.getByRole('button', { name: /메인 화면 영역/ });
+    const pip = screen.getByRole('button', { name: /작은 화면 영역/ });
+
+    // 포커스가 곧 선택이다 (fireEvent 가 act 로 감싼다)
+    fireEvent.focus(pip);
+    expect(pip.parentElement?.style.zIndex).toBe('5');
+    fireEvent.focus(main);
+    expect(main.parentElement?.style.zIndex).toBe('5');
+    expect(Number(pip.parentElement?.style.zIndex)).toBeLessThan(5);
+  });
+
   it('레이아웃 묶음을 화살표로 옮길 수 있다', async () => {
     const user = userEvent.setup();
     renderStudio();

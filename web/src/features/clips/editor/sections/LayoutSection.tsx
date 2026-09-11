@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useRef, type CSSProperties, type ReactNode } from 'react';
 import { Slider, Switch } from '@/ui';
 import { RovingProvider, useRovingItem } from '@/ui/primitives';
 import styles from './sections.module.css';
@@ -37,7 +37,8 @@ function LayoutCard({
       disabled={disabled}
       tabIndex={roving.tabIndex}
       onKeyDown={roving.onKeyDown}
-      onFocus={roving.onFocus}
+      // 포커스만으로는 고르지 않는다 — 창을 떠났다 돌아올 때 브라우저가 활성 요소에 focus 를 다시
+      // 쏘는데, 그때 ⌘Z 로 되돌린 레이아웃이 조용히 다시 커밋되면 안 된다 (칩·스와치와 같은 규약)
       className={styles.layoutRow}
       onClick={onSelect}
     >
@@ -148,9 +149,12 @@ function SwatchPicker({
   value: string;
   onChange: (color: string) => void;
   /** 「직접」 색 선택기 한 번을 실행취소 한 칸으로 묶는다 */
-  gesture: { begin: () => void; end: () => void };
+  gesture: { begin: () => number; end: (token: number) => void };
 }) {
   const current = value.toLowerCase();
+  // 이 입력이 연 제스처의 토큰. blur 는 다른 위젯의 pointerdown 뒤에 오므로(포커스 이동이 기본 동작),
+  // 토큰 없이 닫으면 그쪽이 방금 연 제스처를 죽인다
+  const gestureToken = useRef<number | null>(null);
   // 「직접」 색이면 맞는 스와치가 없다 — 그래도 Tab 으로 들어올 자리는 있어야 하니 첫 스와치를 정지로
   const active = presets.some((preset) => preset.value === current)
     ? current
@@ -182,8 +186,13 @@ function SwatchPicker({
           // 네이티브 선택기는 색 영역을 끄는 동안 input 이벤트를 수십 번 보낸다 — 값마다 쌓으면
           // 히스토리 상한(50)이 차서 그 전 편집이 밀려난다. 포커스가 있는 동안을 한 제스처로 본다
           // (Slider 의 gestureHandlers 와 같은 규약)
-          onFocus={gesture.begin}
-          onBlur={gesture.end}
+          onFocus={() => {
+            gestureToken.current = gesture.begin();
+          }}
+          onBlur={() => {
+            if (gestureToken.current !== null) gesture.end(gestureToken.current);
+            gestureToken.current = null;
+          }}
           onChange={(event) => onChange(event.target.value)}
         />
       </label>

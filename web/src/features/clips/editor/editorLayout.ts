@@ -8,6 +8,8 @@
 // 제외돼 있다(rev1, 2026-08-24). 시안이 그보다 앞서 나갔으므로 **화면은 시안을 따르되**
 // 레시피로 나갈 수 있는 것은 아직 세로뿐이다 — 나머지는 계약6 v2 논의가 선행해야 한다.
 
+import { clamp, type CropRect } from './cropMath';
+
 /** 시안의 모드 id 를 그대로 쓴다 */
 export type EditorLayout = 'vert' | 'split' | 'center' | 'crop' | 'horiz';
 
@@ -122,12 +124,7 @@ const HORIZ_ASPECT = 16 / 9;
  * 묶인 채 크기만 바뀐다.
  * 시안의 cropPipTarget: left:18% top:50% width:64%, 4:3.
  */
-export interface PipBox {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
+export type PipBox = CropRect;
 
 /** 시안 기본값 — 폭 64% 에 4:3. 결과가 9:16 이라 정규화 높이는 0.64 × 3/4 × 9/16 = 0.27 */
 export const DEFAULT_PIP: PipBox = { x: 0.18, y: 0.5, w: 0.64, h: 0.27 };
@@ -138,9 +135,8 @@ export const PIP_MAX_SIZE = 0.9;
 /** 시안 기본 비율(4:3) — 레이아웃 정의가 비율을 따로 받지 않을 때 쓴다 */
 export const PIP_ASPECT = 4 / 3;
 
-function clamp01(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), Math.max(min, max));
-}
+// 크롭 사각형과 같은 규약(min > max 면 min) — 경계 처리가 갈라지지 않게 한 구현을 쓴다
+const clamp01 = clamp;
 
 /** 작은 화면의 결과 안 사각형 — 크기를 허용 범위에, 자리를 메인 안에 가둔다 */
 export function pipRectOf(pip: PipBox): PipBox {
