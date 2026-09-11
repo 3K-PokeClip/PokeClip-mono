@@ -1,6 +1,7 @@
 import { AudioSection } from '../sections/AudioSection';
 import { BgmSfxSection } from '../sections/BgmSfxSection';
 import { ImageSection } from '../sections/ImageSection';
+import { LayoutSection } from '../sections/LayoutSection';
 import { RangeSection } from '../sections/RangeSection';
 import { SubtitleSection } from '../sections/SubtitleSection';
 import styles from './StudioScreen.module.css';
@@ -17,6 +18,7 @@ export function ToolPanel({ state }: { state: ClipEditorMockState }) {
       aria-labelledby={`editor-tool-${state.activeTool}`}
       tabIndex={-1}
     >
+      {state.activeTool === 'layout' ? <LayoutSection state={state} /> : null}
       {state.activeTool === 'range' ? <RangeSection state={state} /> : null}
       {state.activeTool === 'subtitle' ? <SubtitleSection state={state} /> : null}
       {state.activeTool === 'audio' ? (
