@@ -185,6 +185,18 @@ describe('resizeCropWindow', () => {
     expect(after.y + after.h).toBeCloseTo(before.y + before.h, 8);
   });
 
+  it('한 축으로만 안쪽으로 끌어도 작아진다 — 두 축이 함께 와야만 반응하면 축소가 한 방향에서만 먹는다', () => {
+    const rect = cropRectOf(FULL, max);
+    // se 모서리를 왼쪽으로만 — 세로 좌표는 그대로
+    const next = resizeCropWindow(
+      FULL,
+      'se',
+      { x: rect.x + rect.w * 0.5, y: rect.y + rect.h },
+      max,
+    );
+    expect(next.zoom).toBeCloseTo(0.5, 8);
+  });
+
   it('고정한 모서리 쪽으로 끌면 작아진다 — 하한까지', () => {
     const next = resizeCropWindow(start, 'se', { x: 0.5, y: 0.5 }, max);
     expect(next.zoom).toBeLessThan(start.zoom);

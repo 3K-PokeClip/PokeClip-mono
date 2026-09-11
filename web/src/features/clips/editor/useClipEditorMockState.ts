@@ -80,6 +80,22 @@ import {
  */
 const MOCK_SUBTITLE_DELAY_MS = 1500;
 
+/**
+ * 지금 이 칸이 잡을 수 있는 최대 사각형. 레시피만 보고 계산한다 — 커밋 업데이터 안에서 `current` 로
+ * 잰다. 렌더 시점 레시피로 재면 같은 배치에서 setLayout 뒤에 오는 크롭 갱신이 옛 레이아웃 경계로 클램프된다.
+ * 자리 모양(분할 지분·작은 화면 비율)이 크기를 정하므로 화면에 그릴 때와 **같은 계산**이어야 한다.
+ */
+function cropBoundsFor(recipe: EditorRecipe, regionId: string): { w: number; h: number } | null {
+  // 작은 화면의 비율은 결과의 자리 모양에서 온다 — 화면에 그릴 때와 같은 비율로 재야 한다
+  const region = layoutRegions(
+    recipe.layout,
+    recipe.splitRatio,
+    pipAspectOf(recipe.pip, resultAspect(recipe.layout)),
+  ).find((item) => item.id === regionId);
+  if (region === undefined) return null;
+  return maxCropSize(region.aspect, MOCK_SOURCE.width, MOCK_SOURCE.height);
+}
+
 /** 가장자리에 붙어 더 못 가면 히스토리를 늘리지 않는다 — ↺가 아무 일도 안 하는 것처럼 보인다 */
 function samePip(a: PipBox, b: PipBox): boolean {
   return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
@@ -309,9 +325,9 @@ export const TOOL_OPTIONS: readonly { value: EditorTool; label: string }[] = [
   { value: 'image', label: '이미지' },
 ];
 
-function initialRecipe(range: ClipRange): EditorRecipe {
+function initialRecipe(): EditorRecipe {
   return {
-    range,
+    range: MOCK_SOURCE.range,
     // 시안 갱신분의 기본값은 분할이다 (splitVals: sm ?? 'split')
     layout: 'split',
     splitRatio: DEFAULT_SPLIT_RATIO,
@@ -541,7 +557,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
   const { toast } = useToast();
 
   const [history, setHistory] = useState<History<EditorRecipe>>(() => {
-    const recipe = initialRecipe(MOCK_SOURCE.range);
+    const recipe = initialRecipe();
     return createHistory(
       initialLayout === undefined ? recipe : { ...recipe, layout: initialLayout },
     );
@@ -638,39 +654,23 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
     });
   }, []);
 
-  /**
-   * 지금 이 칸이 잡을 수 있는 최대 사각형.
-   * 자리 모양(분할 지분·작은 화면 비율)이 바뀌면 크기도 달라지므로, 화면에 그릴 때와 **같은 계산**으로
-   * 자리를 찾아야 한다.
-   */
-  const cropBoundsOf = useCallback(
-    (regionId: string) => {
-      // 작은 화면의 비율은 결과의 자리 모양에서 온다 — 화면에 그릴 때와 같은 비율로 재야 한다
-      const region = layoutRegions(
-        recipe.layout,
-        recipe.splitRatio,
-        pipAspectOf(recipe.pip, resultAspect(recipe.layout)),
-      ).find((item) => item.id === regionId);
-      if (region === undefined) return null;
-      return { maxSize: maxCropSize(region.aspect, MOCK_SOURCE.width, MOCK_SOURCE.height) };
-    },
-    [recipe.layout, recipe.splitRatio, recipe.pip],
-  );
-
   /** 창을 바꾸는 모든 길이 여기로 모인다 — 같은 클램프·같은 히스토리 규칙을 쓰게 하려고 */
   const updateCrop = useCallback(
     (
       sourceId: string,
       update: (window: CropWindow, maxSize: { w: number; h: number }) => CropWindow,
     ) => {
-      const bounds = cropBoundsOf(sourceId);
-      if (bounds === null) return;
       commit((current) => {
+        const maxSize = cropBoundsFor(current, sourceId);
+        if (maxSize === null) return current;
         const window = current.crops[sourceId] ?? defaultRegionWindow(current.layout, sourceId);
-        const next = update(window, bounds.maxSize);
-        // 가장자리에 붙어 더 못 가면 히스토리를 늘리지 않는다 — ↺가 아무 일도 안 하는 것처럼 보인다
+        const next = update(window, maxSize);
+        // 가장자리에 붙어 더 못 가면 히스토리를 늘리지 않는다 — ↺가 아무 일도 안 하는 것처럼 보인다.
+        // zoom 은 그려지는 값(하한 적용 뒤)으로 비교한다 — 저장값이 하한 아래면 화면은 하한으로
+        // 그리는데, 클램프된 결과를 「변경」으로 치면 화면 변화 없이 한 칸이 쌓인다
+        const floor = minZoomOf(maxSize);
         if (
-          next.zoom === window.zoom &&
+          Math.max(next.zoom, floor) === Math.max(window.zoom, floor) &&
           next.center.x === window.center.x &&
           next.center.y === window.center.y
         ) {
@@ -679,7 +679,7 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
         return { ...current, crops: { ...current.crops, [sourceId]: next } };
       });
     },
-    [commit, cropBoundsOf],
+    [commit],
   );
 
   // 드래그 중에는 타임라인 창을 붙잡는다. 창이 구간 중심을 따라 움직이면 포인터→초 환산

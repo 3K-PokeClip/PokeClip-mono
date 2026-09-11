@@ -5,7 +5,6 @@ import {
   CROP_CORNERS,
   CROP_CORNER_LABELS,
   CROP_KEY_STEP,
-  CROP_ZOOM_STEP,
   normalizePointer,
   type CropCorner,
   type CropRect,
@@ -19,7 +18,7 @@ import type { ClipEditorMockState, EditorRegion } from './useClipEditorMockState
 // 바뀐다. 비율은 내보내는 화면이 정하므로 모서리를 끌어도 안 바뀐다(계약6 종횡비 검증에서
 // 흔들리면 렌더가 거부한다).
 //
-// 마우스와 키보드가 같은 문(state.dragCrop / nudgeCrop / resizeCrop / zoomCrop)으로 들어간다 —
+// 마우스와 키보드가 같은 문(state.dragCrop / nudgeCrop / resizeCrop)으로 들어간다 —
 // 구간 핸들이 쓰는 규약과 같다. jsdom 엔 레이아웃이 없어 포인터 경로는 렌더 테스트로 못 재지만,
 // 키보드 경로가 같은 액션으로 들어가므로 화면에서도 경계 동작을 확인할 수 있다.
 
@@ -277,16 +276,17 @@ export function CropOverlay({
     state.nudgeCrop(region.id, delta);
   };
 
-  const onCornerKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+  // 모서리의 방향키는 그 꼭짓점을 한 걸음 옮긴다 — 마우스로 끄는 것과 같은 문(resizeCrop)이라
+  // 반대편이 고정된다. 중심 고정 확대로 하면 잡은 꼭짓점이 바깥으로 달아난다.
+  const onCornerKeyDown = (corner: CropCorner) => (event: KeyboardEvent<HTMLElement>) => {
     if (spaceTogglesPlay(event, state)) return;
-    if (event.repeat) return;
-    // 모서리에서 방향키의 뜻은 「넓히기/좁히기」다
-    const grow = event.key === 'ArrowRight' || event.key === 'ArrowDown';
-    const shrink = event.key === 'ArrowLeft' || event.key === 'ArrowUp';
-    if (!grow && !shrink) return;
+    if (event.repeat || crop === undefined) return;
+    const delta = MOVE_KEYS[event.key];
+    if (delta === undefined) return;
     event.preventDefault();
     event.stopPropagation();
-    state.zoomCrop(region.id, grow ? CROP_ZOOM_STEP : -CROP_ZOOM_STEP);
+    const point = cornerPoint(crop, corner);
+    state.resizeCrop(region.id, corner, { x: point.x + delta.x, y: point.y + delta.y });
   };
 
   if (crop === undefined) return null;
@@ -348,7 +348,7 @@ export function CropOverlay({
               onPointerUp={endPointer}
               onPointerCancel={endPointer}
               onLostPointerCapture={endPointer}
-              onKeyDown={onCornerKeyDown}
+              onKeyDown={onCornerKeyDown(corner)}
             />
           ))
         : null}

@@ -150,8 +150,9 @@ function anchorOf(rect: CropRect, corner: CropCorner): { x: number; y: number } 
  * 모서리를 끌어 범위를 바꾼다. **반대편 모서리를 못 박고** 비율은 유지한다 —
  * 비율이 흔들리면 계약6의 종횡비 검증에 걸려 렌더가 거부한다.
  *
- * `pointer` 는 소스 안의 정규화 좌표다(0..1). 두 축 중 더 많이 끈 쪽을 따라간다 —
- * 비율이 묶여 있어 한 축만 봐도 되지만, 그러면 세로로 끄는 손짓에 반응하지 않는다.
+ * `pointer` 는 소스 안의 정규화 좌표다(0..1). 두 축 중 **잡은 꼭짓점에서 손이 더 멀리 간 쪽**을
+ * 따라간다 — 비율이 묶여 있어 한 축만 봐도 되지만 그러면 세로로 끄는 손짓에 반응하지 않고, 두 축의
+ * 최댓값을 취하면 한 축으로만 안쪽으로 끄는 손짓(축소)에 반응하지 않는다.
  */
 export function resizeCropWindow(
   window: CropWindow,
@@ -169,7 +170,13 @@ export function resizeCropWindow(
   // 오해해서, 작게 만들려고 끌었는데 되레 커진다.
   const reachX = west ? anchor.x - pointer.x : pointer.x - anchor.x;
   const reachY = north ? anchor.y - pointer.y : pointer.y - anchor.y;
-  const wanted = Math.max(Math.max(0, reachX) / maxSize.w, Math.max(0, reachY) / maxSize.h);
+  const reachZoomX = Math.max(0, reachX) / maxSize.w;
+  const reachZoomY = Math.max(0, reachY) / maxSize.h;
+  // 잡은 꼭짓점에서 손이 더 멀리 간 축이 손짓의 뜻이다 — 커지는 쪽이든 작아지는 쪽이든 같은 규칙.
+  // (두 축의 최댓값을 취하면 한 축으로만 안쪽으로 끄는 축소에 반응하지 않는다)
+  const grabbed = { x: west ? rect.x : rect.x + rect.w, y: north ? rect.y : rect.y + rect.h };
+  const wanted =
+    Math.abs(pointer.x - grabbed.x) >= Math.abs(pointer.y - grabbed.y) ? reachZoomX : reachZoomY;
   // 고정한 모서리에서 소스 경계까지 남은 만큼이 상한이다 — 그래야 고정점이 안 움직인다
   const availableX = west ? anchor.x : 1 - anchor.x;
   const availableY = north ? anchor.y : 1 - anchor.y;

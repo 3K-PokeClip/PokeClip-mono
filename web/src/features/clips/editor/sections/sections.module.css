@@ -364,7 +364,7 @@
   border-radius: calc(10 * var(--pc-u));
   border: 1px solid transparent;
   background: transparent;
-  color: var(--pc-color-fg-muted);
+  color: var(--pc-color-text-secondary);
   text-align: left;
   cursor: pointer;
 }
@@ -378,7 +378,7 @@
 .layoutRow[aria-checked='true'] {
   border-color: var(--pc-color-accent);
   background: var(--pc-color-accent-subtle);
-  color: var(--pc-color-accent-text, var(--pc-color-fg-default));
+  color: var(--pc-color-accent-text, var(--pc-color-text-primary));
 }
 
 .layoutIcon {
@@ -512,14 +512,14 @@
   border: 1px solid var(--pc-color-border-default);
   border-radius: calc(6 * var(--pc-u));
   background: var(--pc-color-bg-surface);
-  color: var(--pc-color-fg-muted);
+  color: var(--pc-color-text-secondary);
   cursor: pointer;
 }
 
 .ratioChip[aria-checked='true'] {
   border-color: var(--pc-color-accent);
   background: var(--pc-color-accent-subtle);
-  color: var(--pc-color-fg-default);
+  color: var(--pc-color-text-primary);
 }
 
 /* --- 라벨 + 힌트 왼쪽, 조작 오른쪽 한 줄 (시안 「블러 강도」·「경계선 표시」 행) ------------ */

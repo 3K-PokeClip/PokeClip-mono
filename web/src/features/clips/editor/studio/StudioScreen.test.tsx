@@ -297,6 +297,23 @@ describe('StudioScreen', () => {
     expect(input.value).toBe(undoCountBefore);
   });
 
+  it('자막 위치 「경계」는 분할 지분을 따른다 — 50:50 이 아니면 한가운데가 아니다', async () => {
+    const user = userEvent.setup();
+    const { container } = renderStudio();
+    await user.click(screen.getByRole('radio', { name: '70 : 30' }));
+    await user.click(screen.getByRole('tab', { name: '자막' }));
+    await user.click(
+      within(screen.getByRole('radiogroup', { name: '자막 위치' })).getByRole('radio', {
+        name: '경계',
+      }),
+    );
+
+    // 같은 문장이 자막 목록에도 있다 — 결과 위에 얹힌 번인 자막만 본다
+    const burned = container.querySelector<HTMLElement>('[data-position="edge"]');
+    expect(burned).not.toBeNull();
+    expect(burned!.style.getPropertyValue('--pc-edge')).toBe('70%');
+  });
+
   it('레이아웃 묶음을 화살표로 옮길 수 있다', async () => {
     const user = userEvent.setup();
     renderStudio();

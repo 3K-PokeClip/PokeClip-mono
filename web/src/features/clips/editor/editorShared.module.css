@@ -117,7 +117,7 @@
 .sideLabel {
   font-size: calc(10 * var(--pc-u));
   font-weight: 600;
-  color: var(--pc-color-fg-muted);
+  color: var(--pc-color-text-secondary);
   white-space: nowrap;
 }
 
@@ -128,12 +128,23 @@
   position: relative;
   flex: none;
   aspect-ratio: var(--pc-ar);
-  height: min(calc(100cqh - 34 * var(--pc-u)), calc(100cqw / var(--pc-ar)));
+  /* 판 위아래에 흐름으로 놓이는 것들(라벨·안내 줄)의 몫을 뺀다 — 칸마다 다르다 */
+  height: min(calc(100cqh - var(--pc-reserve)), calc(100cqw / var(--pc-ar)));
 }
 
-/* 결과만 있을 때는 위 라벨이 없다 — 그만큼 더 쓴다 */
-.resultOnly .resultFrame {
-  height: min(calc(100cqh - 18 * var(--pc-u)), calc(100cqw / var(--pc-ar)));
+/* 소스 칸: 위 라벨 한 줄(≈13u) + 간격 */
+.sourceSide {
+  --pc-reserve: calc(20 * var(--pc-u));
+}
+
+/* 결과 칸: 위 라벨 + 아래 안내 줄(폰트 10.5u + 패딩 3u×2) + 간격 둘 */
+.resultSide {
+  --pc-reserve: calc(44 * var(--pc-u));
+}
+
+/* 결과만 있을 때는 위 라벨이 없다 — 안내 줄과 간격만 */
+.resultOnly {
+  --pc-reserve: calc(26 * var(--pc-u));
 }
 
 /* 클립 만들기 — 소스를 통째로 보여주고 그 위에 사각형을 얹는다 */
@@ -150,7 +161,7 @@
 
 .sourcePlaceholder {
   font-size: calc(12 * var(--pc-u));
-  color: var(--pc-color-fg-subtle);
+  color: var(--pc-color-text-muted);
 }
 
 /* --- 크롭 사각형 ------------------------------------------------------- */
@@ -195,7 +206,7 @@
 }
 
 .cropBody:focus-visible {
-  outline: calc(2 * var(--pc-u)) dashed var(--pc-color-fg-default);
+  outline: calc(2 * var(--pc-u)) dashed var(--pc-color-text-primary);
   outline-offset: calc(-4 * var(--pc-u));
 }
 
@@ -206,7 +217,7 @@
   padding: calc(2 * var(--pc-u)) calc(5 * var(--pc-u));
   border-radius: calc(4 * var(--pc-u));
   background: rgb(0 0 0 / 0.55);
-  color: var(--pc-color-fg-default);
+  color: var(--pc-color-text-primary);
   white-space: nowrap;
 }
 
@@ -248,7 +259,7 @@
 }
 
 .pipBody:focus-visible {
-  outline: calc(2 * var(--pc-u)) dashed var(--pc-color-fg-default);
+  outline: calc(2 * var(--pc-u)) dashed var(--pc-color-text-primary);
   outline-offset: calc(-4 * var(--pc-u));
 }
 
@@ -372,21 +383,25 @@
   bottom: auto;
 }
 
+/* 「경계」는 두 영역 사이다 — 분할 지분이 정한다 (PreviewCanvas 가 --pc-edge 로 넘긴다) */
 .burnedSubtitle[data-position='edge'] {
-  top: 50%;
+  top: var(--pc-edge, 50%);
   bottom: auto;
   transform: translateY(-50%);
 }
 
 /* 결과 판 바로 아래 한 줄 — 지금 무엇이 나오는지 요약한다 */
 .stageNote {
+  /* 결과 칸은 무대 폭의 1/4 뿐이라 한 줄이 칸보다 넓어질 수 있다 — 넘쳐서 원본 판을 덮지 않게 줄인다 */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   font-size: calc(10.5 * var(--pc-u));
   padding: calc(3 * var(--pc-u)) calc(11 * var(--pc-u));
   border-radius: var(--pc-radius-pill);
   background: rgb(0 0 0 / 0.55);
   color: rgb(255 255 255 / 0.85);
-  white-space: nowrap;
 }
 
 /* ---------- 세그먼트 컨트롤 (레이아웃·배속 공용) ---------- */

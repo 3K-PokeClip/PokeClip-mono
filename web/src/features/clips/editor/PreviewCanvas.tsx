@@ -37,7 +37,12 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
         <CropResult key={region.id} label={region.label} placement={region.placement} />
       ))}
       {subtitleText !== null ? (
-        <span className={styles.burnedSubtitle} data-position={state.captionPosition}>
+        <span
+          className={styles.burnedSubtitle}
+          data-position={state.captionPosition}
+          // 「경계」는 분할 지분 자리다 — 50:50 이 아니면 한가운데가 아니다
+          style={{ ['--pc-edge' as string]: `${state.splitRatio}%` }}
+        >
           “{subtitleText}”
         </span>
       ) : null}
@@ -48,11 +53,7 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
     <div className={styles.preview}>
       {/* data-preview-stage: 타임라인 높이 상한을 재는 표식. 미리보기 칸에서 신축하는 건
           이 무대뿐이라, 여기 남은 여유가 곧 타임라인이 더 커질 수 있는 양이다 (POK-237). */}
-      <div
-        className={styles.stage}
-        data-preview-stage
-        data-mode={editingLayout ? 'both' : 'result'}
-      >
+      <div className={styles.stage} data-preview-stage>
         {editingLayout ? (
           <section className={styles.sourceSide} aria-label="원본">
             <span className={styles.sideLabel}>원본</span>
