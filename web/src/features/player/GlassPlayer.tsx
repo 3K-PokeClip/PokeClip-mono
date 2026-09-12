@@ -133,7 +133,10 @@ function GlassPlayerBody({
   // 이 플레이어가 전체 화면 요소일 때만 참이다(다른 요소의 전체 화면은 남의 일).
   useEffect(() => {
     const sync = () => {
-      const next = document.fullscreenElement === containerRef.current;
+      const el = containerRef.current;
+      // el을 먼저 따지는 이유 — 언마운트 때 ref 분리가 이 리스너 해제보다 먼저다. 그 사이에 이벤트가
+      // 오면 fullscreenElement도 null이라, 그냥 비교하면 null === null로 「전체 화면」이 돼 버린다.
+      const next = el !== null && document.fullscreenElement === el;
       // 나가는 이 순간이 마지막 기회다 — 리렌더 전이라 사라질 토글이 아직 포커스를 들고 있다
       if (!next) chatToggleHadFocusRef.current = document.activeElement === chatToggleRef.current;
       setFullscreen(next);
@@ -150,11 +153,15 @@ function GlassPlayerBody({
   // handleKeyDown이 button을 일부러 예외에서 뺐다). 토글에 포커스가 없었다면 손대지 않는다:
   // 그때 가져오면 남의 포커스를 뺏어 Tab 순서가 페이지 처음이 아니라 플레이어 다음부터 흐른다.
   useEffect(() => {
-    if (!fullscreen && chatToggleHadFocusRef.current) {
-      fullscreenButtonRef.current?.focus({ preventScroll: true });
-    }
+    const hadFocus = chatToggleHadFocusRef.current;
     chatToggleHadFocusRef.current = false;
-  }, [fullscreen]);
+    if (fullscreen || !hadFocus) return;
+    fullscreenButtonRef.current?.focus({ preventScroll: true });
+    // 재생 중이면 컨트롤이 이미 숨어 있을 수 있다(opacity 0 · pointer-events none). 프로그램적
+    // 포커스는 :focus-visible을 얻지 못해 CSS의 유보 절도 안 걸리므로, 보이지 않는 버튼 위에
+    // 포커스가 놓이지 않게 컨트롤을 깨워 둔다.
+    sim.wake();
+  }, [fullscreen, sim]);
 
   const controlsShown = sim.controlsVisible || !sim.playing || settingsOpen || seeking;
 

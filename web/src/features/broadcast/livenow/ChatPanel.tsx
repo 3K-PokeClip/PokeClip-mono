@@ -77,15 +77,21 @@ export const ChatPanel = memo(function ChatPanel({
   }, [messages, following]);
 
   // 「끝에 있는가」는 스크롤 말고 크기로도 바뀐다 — 창 높이 변화(패널이 100dvh를 탄다), 2단↔1단 전환.
-  // 그때는 scroll 이벤트가 안 오므로 여기서 다시 잰다. 없으면 넘치지 않게 된 목록이 「지난 메시지
-  // 보는 중」에 갇힌다: 스크롤할 것이 없으니 사용자가 되돌릴 방법도 없다.
+  // 그때 할 일은 방향에 따라 갈린다. 한쪽으로만 하면 반대쪽이 깨진다:
+  //   따라가던 중이면 다시 바닥에 붙인다. 브라우저는 컨테이너가 낮아져도 scrollTop을 그대로 두므로
+  //   여기서 다시 재면 줄어든 높이만큼 거리가 벌어져, 손 하나 안 댄 사용자가 바닥에서 이탈한다.
+  //   따라가지 않던 중이면 다시 잰다. 안 넘치게 된 목록이 「지난 메시지 보는 중」에 갇히면
+  //   스크롤할 것이 없어 사용자가 되돌릴 방법도 없다.
   useEffect(() => {
     const el = listRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(handleScroll);
+    const observer = new ResizeObserver(() => {
+      if (following) el.scrollTop = el.scrollHeight;
+      else handleScroll();
+    });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [handleScroll]);
+  }, [following, handleScroll]);
 
   const rateLabel = `분당 ${ratePerMinute.toLocaleString('ko-KR')}`;
 

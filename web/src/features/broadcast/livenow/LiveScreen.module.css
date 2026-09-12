@@ -821,6 +821,10 @@
   border-top: 1px solid var(--pc-color-border-subtle);
   font-size: calc(10.5 * var(--pc-u));
   color: var(--pc-color-text-muted);
+  /* 이 줄의 문구는 상태에 따라 길이가 달라진다. flex: 1인 목록과 같은 칸에 있으므로 여기가 늘면
+     목록이 줄고, 목록은 ResizeObserver가 보고 있다 — 줄바꿈이 상태를 바꾸고 그 상태가 다시
+     줄바꿈을 바꾸는 고리가 열린다. 높이를 내용에 고정해 그 고리를 끊는다. */
+  flex: none;
 }
 
 /* 글자 링크 모양의 버튼 — 키워드 설정 화면이 서기 전까지 비활성 자리 표시 */

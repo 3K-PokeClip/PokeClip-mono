@@ -53,7 +53,7 @@ const MOCK_SURGES: ChatSurge[] = [
 // 자체 스크롤과 「지난 메시지 보는 중」 분기를 실제 화면에서 볼 수 있다(이 목업은 수집 끊김 상태라
 // 새 메시지가 오지 않아, 여기 든 줄이 화면에 서는 전부다).
 // id는 순서와 무관한 렌더 키일 뿐이라 시안 줄의 번호를 건드리지 않으려고 12부터 붙였다 —
-// 새 메시지는 INITIAL.length(=31) 다음부터 세므로 겹치지 않는다.
+// 새 메시지 id는 아래 counter가 이 배열의 id 최댓값 다음부터 센다.
 const INITIAL: ChatPanelMessage[] = [
   { id: 12, kind: 'chat', name: '밤샘각', text: '오늘도 새벽 랭크인가요', colorIndex: 0 },
   { id: 13, kind: 'chat', name: '라면먹자', text: '어제 그 판 진짜 레전드였음', colorIndex: 3 },
@@ -104,7 +104,9 @@ const POOL: ReadonlyArray<Omit<Extract<ChatPanelMessage, { kind: 'chat' }>, 'id'
 
 export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
   const [messages, setMessages] = useState<ChatPanelMessage[]>(INITIAL);
-  const counter = useRef(INITIAL.length);
+  // 길이가 아니라 최댓값에서 출발한다 — 배열 순서와 id 순서가 달라(12..31 다음 1..11) 둘이
+  // 지금은 우연히 같을 뿐이고, 픽스처에서 한 줄만 빼도 새 id가 기존 id와 겹쳐 React 키가 충돌한다.
+  const counter = useRef(Math.max(...INITIAL.map((message) => message.id)));
 
   useEffect(() => {
     if (!enabled) return;

@@ -1,5 +1,6 @@
+import { act } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatPanel } from '@/features/broadcast/livenow/ChatPanel';
 import type { ChatPanelMessage } from '@/features/broadcast/livenow/useChatPanelMockState';
 
@@ -57,6 +58,42 @@ function fakeScrollMetrics(
   return setScrollTop;
 }
 
+/**
+ * jsdom엔 ResizeObserver가 없어 크기 변화 경로가 가드에 걸려 통째로 건너뛴다 — 스텁으로 콜백을
+ * 잡아 두고 손으로 발화시킨다. 없으면 그 effect를 지워도 테스트가 전부 초록이다.
+ */
+function stubResizeObserver() {
+  // 해제까지 흉내 낸다 — following이 바뀌면 effect가 관찰자를 다시 만들므로, 끊긴 콜백을 남겨 두면
+  // 옛 following을 품은 클로저가 함께 발화해 테스트가 실제와 다른 것을 본다.
+  const callbacks = new Set<() => void>();
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      callback: () => void;
+      constructor(callback: () => void) {
+        this.callback = callback;
+        callbacks.add(callback);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {
+        callbacks.delete(this.callback);
+      }
+    },
+  );
+  // 브라우저 관찰자와 달리 손으로 발화시키므로 act로 감싼다 — 아니면 상태 갱신이 단언 전에 안 흐른다
+  return {
+    resize: () =>
+      act(() => {
+        callbacks.forEach((callback) => callback());
+      }),
+  };
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 function chatList() {
   return screen.getByRole('list', { name: '채팅 메시지' });
 }
@@ -90,19 +127,26 @@ describe('ChatPanel — 하단 상태줄', () => {
 });
 
 describe('ChatPanel — 바닥 고정', () => {
-  it('끝에 있으면 새 줄이 올 때 바닥까지 따라 내려간다', () => {
+  it('끝으로 돌아온 뒤 새 줄이 오면 바닥까지 따라 내려간다', () => {
     const { update } = renderPanel();
-    // 1000 − 700 − 300 = 0 ≤ 8 → 끝에 있다
+    // 초기값이 이미 「따라가는 중」이라, 한 번 떨어뜨렸다 되돌려야 onScroll 연결이 실제로 검증된다
+    fakeScrollMetrics(chatList(), { scrollHeight: 1000, clientHeight: 300, scrollTop: 200 });
+    fireEvent.scroll(chatList());
+    expect(screen.getByText(/지난 메시지 보는 중/)).toBeInTheDocument();
+
     const setScrollTop = fakeScrollMetrics(chatList(), {
       scrollHeight: 1000,
       clientHeight: 300,
       scrollTop: 700,
     });
     fireEvent.scroll(chatList());
+    expect(screen.getByText(/최신 메시지 따라가는 중/)).toBeInTheDocument();
     setScrollTop.mockClear();
 
     update({ messages: [...MESSAGES, NEXT_MESSAGE] });
-    expect(setScrollTop).toHaveBeenCalledWith(1000);
+    // 실제 브라우저는 scrollHeight − clientHeight로 클램프한다 — 정확한 값이 아니라 「바닥 이상」을 본다
+    expect(setScrollTop).toHaveBeenCalled();
+    expect(setScrollTop.mock.calls.at(-1)?.[0]).toBeGreaterThanOrEqual(700);
   });
 
   it('위로 올라가 있으면 새 줄이 와도 보던 자리를 지킨다', () => {
@@ -117,6 +161,39 @@ describe('ChatPanel — 바닥 고정', () => {
 
     update({ messages: [...MESSAGES, NEXT_MESSAGE] });
     expect(setScrollTop).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatPanel — 크기 변화', () => {
+  it('따라가던 중 목록이 줄어들면 다시 재지 않고 바닥에 붙인다', () => {
+    // 회귀: 크기 변화에서 무조건 다시 재면, 창을 줄인 것만으로 바닥을 따라가던 사용자가 이탈했다.
+    // 브라우저는 컨테이너가 낮아져도 scrollTop을 그대로 두므로 거리가 줄어든 높이만큼 벌어진다.
+    const observer = stubResizeObserver();
+    renderPanel();
+
+    const setScrollTop = fakeScrollMetrics(chatList(), {
+      scrollHeight: 1000,
+      clientHeight: 200,
+      scrollTop: 700,
+    });
+    observer.resize();
+
+    expect(setScrollTop).toHaveBeenCalled();
+    expect(screen.getByText(/최신 메시지 따라가는 중/)).toBeInTheDocument();
+  });
+
+  it('따라가지 않던 중에는 다시 재어 갇히지 않게 한다', () => {
+    const observer = stubResizeObserver();
+    renderPanel();
+
+    fakeScrollMetrics(chatList(), { scrollHeight: 1000, clientHeight: 300, scrollTop: 200 });
+    fireEvent.scroll(chatList());
+    expect(screen.getByText(/지난 메시지 보는 중/)).toBeInTheDocument();
+
+    // 창이 커져 더는 넘치지 않는다 — 스크롤할 것이 없으니 다시 재지 않으면 영영 갇힌다
+    fakeScrollMetrics(chatList(), { scrollHeight: 1000, clientHeight: 1000, scrollTop: 0 });
+    observer.resize();
+    expect(screen.getByText(/최신 메시지 따라가는 중/)).toBeInTheDocument();
   });
 });
 

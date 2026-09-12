@@ -311,6 +311,25 @@ describe('GlassPlayer', () => {
     }
   });
 
+  it('토글에 포커스가 없었으면 전체 화면을 나가도 남의 포커스를 뺏지 않는다', () => {
+    // 이 가드가 없으면 전체 화면을 나갈 때마다 플레이어가 포커스를 가져가, 이어서 Tab을 누른
+    // 사용자가 페이지 처음이 아니라 플레이어 다음부터 훑게 된다.
+    const { container } = renderPlayer();
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    try {
+      setFullscreenElement(container.querySelector('[data-controls]'));
+      outside.focus();
+      expect(outside).toHaveFocus();
+
+      setFullscreenElement(null);
+      expect(outside).toHaveFocus();
+    } finally {
+      outside.remove();
+      setFullscreenElement(null);
+    }
+  });
+
   it('다른 요소의 전체 화면은 남의 일이다 — 채팅 버튼이 서지 않는다', () => {
     renderPlayer();
     const other = document.createElement('div');
