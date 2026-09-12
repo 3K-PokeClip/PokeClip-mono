@@ -197,10 +197,33 @@ public class StreamSession {
     private final DonationSubscriptions donations;
 
     /**
+     * 🔴 <b>후원 상태를 쓰는 자리는 여기 하나다</b>(봇 codex, 세 번째 지적).
+     *
+     * <p>앞 판에서 재시도 콜백만 자물쇠로 묶었더니 <b>회수 프레임이 그대로 남았다</b> —
+     * 같은 뿌리인데 한 자리만 고친 것이고, 그 자리에서 회수가 갈아끼움과 겹치면
+     * <b>새 방송이 앞 방송의 「구독 중」을 그대로 안고 간다.</b> 회수는 재시도를 깨우지
+     * 않으므로 그 방송은 <b>끝날 때까지</b> 틀린 값을 창구에 준다.
+     *
+     * <p>그래서 자물쇠를 부르는 쪽마다 거는 대신 <b>쓰는 길 자체를 하나로 줄였다.</b>
+     * 자리를 셋 두고 「전부 묶었나」를 사람이 세는 것은 이 세션에서 이미 네 번 틀렸다.
+     *
+     * <p>🔴 <b>{@code stream()} 이 아니라 {@code key.streamId()} 다.</b> 앞엣것은 방송 번호가
+     * 없을 때(옛 경로 {@code SessionKey.legacy()}) <b>{@code "none"} 이라는 글자를 돌려준다</b> —
+     * 로그에 쓰라고 만든 값이다. 그것을 열쇠로 쓰면 등록부에 아무도 안 읽는 자리가 쌓인다.
+     * 번호가 없을 때는 {@code null} 그대로 넘겨 <b>등록부가 조용히 무시하게</b> 두는 것이
+     * 원래 동작이고, 그 동작을 재는 검사가 있다. 이 메서드로 모으면서 한 번 갈아탈 뻔했다.
+     */
+    private void setDonationStatus(DonationSubscription state) {
+        synchronized (donationStatusLock) {
+            donations.set(key.streamId(), state);
+        }
+    }
+
+    /**
      * 후원 상태의 <b>방송 번호를 읽는 것과 그 자리에 쓰는 것</b>을 묶는 자물쇠.
-     * 갈아끼움({@link #retarget})과 재시도 콜백이 이 둘을 각각 따로 하면, 콜백이 옛 번호를
-     * 읽고 멈춘 사이 갈아끼움이 지나가 <b>이미 비워진 자리</b>에 쓰게 된다(봇 codex).
-     * 안에서 하는 일은 맵 쓰기뿐이라 I/O 를 붙잡지 않는다.
+     * 갈아끼움({@link #retarget})과 상태 쓰기({@link #setDonationStatus})가 이 둘을 각각
+     * 따로 하면, 쓰는 쪽이 옛 번호를 읽고 멈춘 사이 갈아끼움이 지나가 <b>이미 비워진
+     * 자리</b>에 쓰게 된다(봇 codex). 안에서 하는 일은 맵 쓰기뿐이라 I/O 를 붙잡지 않는다.
      */
     private final Object donationStatusLock = new Object();
 
@@ -696,19 +719,11 @@ public class StreamSession {
             // 후원 구독 결과를 <b>수립이 성공으로 확정된 뒤에</b> 적는다. 앞에서 적으면
             // 위 갈래들(!started)로 빠진 세션의 값이 창구에 남아, 걷지도 않는 방송이
             // subscribed로 보인다. 재수립마다 덮어쓴다 — 권한이 회복되면 그때 올라온다.
-            donations.set(key.streamId(), opening.donationSubscription());
+            setDonationStatus(opening.donationSubscription());
             // 🔴 재시도가 나중에 상태를 바꾸면 그것도 창구에 싣는다(봇 codex P2).
             // 이 줄이 없으면 재시도가 성공해도 창구는 방송이 끝날 때까지 「failed」다 —
             // 실제로는 후원이 잘 들어오는데 화면이 그럴듯하게 틀린다.
-            // 열쇠를 여기서 캡처하지 않고 매번 읽는다 — 갈아끼움이 지나갔으면
-            // 그 사이 방송 번호가 바뀌어 있고, 옛 번호에 적으면 아무도 안 읽는 자리가 된다.
-            // 🔴 <b>읽기와 쓰기를 갈아끼움과 같은 자물쇠로 묶는다</b>(봇 codex) — 번호를
-            // 읽고 멈춘 사이에 갈아끼움이 지나가면 이미 비워진 옛 자리에 쓰게 된다.
-            opening.onDonationSubscriptionChanged(state -> {
-                synchronized (donationStatusLock) {
-                    donations.set(stream(), state);
-                }
-            });
+            opening.onDonationSubscriptionChanged(this::setDonationStatus);
             Instant since = disconnectedAt.getAndSet(null);
             if (since != null) {
                 metrics.recordOutage(since, Instant.now());
@@ -1119,7 +1134,7 @@ public class StreamSession {
                 if ("DONATION".equals(event.eventType()) || "SUBSCRIPTION".equals(event.eventType())) {
                     log.warn("chat.session.revoked_other stream={} eventType={}",
                             stream(), event.eventType());
-                    donations.set(key.streamId(), DonationSubscription.REFUSED);
+                    setDonationStatus(DonationSubscription.REFUSED);
                     return;
                 }
                 log.warn("chat.session.revoked stream={}", stream());

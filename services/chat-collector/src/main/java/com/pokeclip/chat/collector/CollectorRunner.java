@@ -494,7 +494,8 @@ public class CollectorRunner implements ApplicationRunner {
         // 경로에서는 0이다</b> — 세션별 값은 chat.session.ended 줄이 낸다(ping·pong).
         // 조용히 틀린 숫자를 싣느니 안 싣는다. 세션별 관측은 태스크 13이 맡는다.
         SummaryLogger.logFinalVerdict(lastSessionNo.get(), registrySessions(), metrics.verdict(), reason,
-                registryReceived(), persister, buffer.droppedCount(), archive.counters());
+                registryReceived(), persister, buffer.droppedCount(), archive.counters(),
+                registryDonationDropped());
     }
 
     /**
@@ -566,6 +567,18 @@ public class CollectorRunner implements ApplicationRunner {
      */
     private long registrySessions() {
         return registry == null ? 0L : registry.sessionsOpened();
+    }
+
+    /**
+     * 버려진 후원의 누계. <b>판정 줄이 이 값을 싣는다</b>(봇 codex) — 후원은 아카이브에
+     * 안 쌓으므로 버려진 것은 표에도 원본에도 없고, 30초 요약은 창 값이라 짧은 방송은
+     * 생애가 통째로 사라진다.
+     *
+     * <p><b>{@code registry}는 없을 수 있다.</b> 위 둘과 같은 이유로 같은 모양이다 —
+     * 처음에 그냥 불렀다가 <b>67건이 빨간불</b>이었다. 옛 경로의 러너는 등록부 없이 선다.
+     */
+    private long registryDonationDropped() {
+        return registry == null ? 0L : registry.donationDroppedCount();
     }
 
     @PreDestroy

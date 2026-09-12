@@ -147,6 +147,7 @@ public final class SummaryLogger implements AutoCloseable {
      *       {@code persisted}·{@code conflicts}·{@code poisoned}·{@code dropped}·
      *       {@code archived}·{@code archiveBufferDropped}·{@code uploaded}·{@code pending}·
      *       {@code droppedObjects}·{@code droppedMessages}·
+     *       {@code donations}·{@code donationDropped}·
      *       {@code reconnects}·{@code outage}
      *   <li>{@code archiveRunId}는 누계가 아니라 이 프로세스의 표식이다 — S3 키의
      *       {@code -{runId}.jsonl}과 같은 값이라 이걸로 이 프로세스가 올린 파일을 찾는다
@@ -190,10 +191,10 @@ public final class SummaryLogger implements AutoCloseable {
                                        CollectionMetrics.Verdict verdict,
                                        Object stopReason, long otherSessionsReceived,
                                        PersistCounters counters, long dropped,
-                                       ArchiveCounters archive) {
+                                       ArchiveCounters archive, long donationDropped) {
         log.info("{}", renderVerdict(session, registrySessions, verdict, stopReason, otherSessionsReceived,
                 counters.persistedCount(), counters.conflictedCount(), counters.poisonedCount(),
-                dropped, archive));
+                dropped, archive, donationDropped));
     }
 
     /**
@@ -213,7 +214,7 @@ public final class SummaryLogger implements AutoCloseable {
                                        CollectionMetrics.Verdict v,
                                        Object stopReason, long otherSessionsReceived,
                                        long persisted, long conflicted, long poisoned, long dropped,
-                                       ArchiveCounters archive) {
+                                       ArchiveCounters archive, long donationDropped) {
         return "chat.session.verdict"
                 // 첫 항이다. 줄을 세션 단위로 고르는 사람도 도구도 여기서 갈린다.
                 // <b>편지 경로에서는 이 러너가 연 세션이 없어 0이다</b> — 세션 번호는
@@ -263,6 +264,14 @@ public final class SummaryLogger implements AutoCloseable {
                 + " pending=" + archive.pendingCount()
                 + " droppedObjects=" + archive.droppedObjectsCount()
                 + " droppedMessages=" + archive.droppedMessagesCount()
+                // 🔴 <b>후원 관측 둘. 이 줄에 없으면 어디에도 안 남는다</b>(봇 codex).
+                // 30초 요약은 <b>창 값</b>이라 세션이 다음 틱 전에 끝나면 마지막 창이 통째로
+                // 사라지고, <b>짧은 방송은 생애가 전부 사라진다.</b> 게다가 후원은 아카이브에
+                // 안 쌓으므로 donationDropped 가 오른 그 후원은 표에도 원본에도 없다 —
+                // <b>되찾을 수 없는 유일한 유실</b>인데 판정 줄이 그것을 안 실었다.
+                // 위 검산 등식 어디에도 안 든다(received 는 채팅만 센다).
+                + " donations=" + v.donations()
+                + " donationDropped=" + donationDropped
                 // 이 runId로 S3에서 이 프로세스의 파일을 찾는다 — 키의 "-{runId}.jsonl" 부분이다.
                 // 재시작이 잦으면 같은 분에 파일이 여럿인데, 어느 것이 이 프로세스 것인지는 이 값뿐이다.
                 + " archiveRunId=" + archive.runId()

@@ -119,9 +119,37 @@ class SummaryLoggerTest {
     void 판정_줄에는_archiveRunId까지_실린다() {
         // stopReason null = 정상 종료(SHUTDOWN) — StopReason에는 SHUTDOWN 상수가 없다.
         String line = SummaryLogger.renderVerdict(1L, 0L, new CollectionMetrics().verdict(), null,
-                0L, 0L, 0L, 0L, 0L, counters(0, 0, 0, 0, 0, 0, "k7x2m9pq"));
+                0L, 0L, 0L, 0L, 0L, counters(0, 0, 0, 0, 0, 0, "k7x2m9pq"), 0L);
         for (String key : REQUIRED_ARCHIVE) assertThat(line).contains(key);
         assertThat(line).contains("archiveRunId=k7x2m9pq");
+    }
+
+    /**
+     * 🔴 <b>판정 줄이 후원 둘을 싣는다</b>(봇 codex).
+     *
+     * <p>30초 요약은 <b>창 값</b>이라 세션이 다음 틱 전에 끝나면 마지막 창이 통째로 사라지고,
+     * <b>짧은 방송은 생애가 전부 사라진다.</b> 후원은 아카이브에 안 쌓으므로 버려진 것은
+     * 표에도 원본에도 없다 — <b>되찾을 수 없는 유일한 유실</b>인데 판정 줄이 그것을
+     * 안 실었다. 이 줄이 없으면 그 숫자는 프로세스가 죽는 순간 사라진다.
+     *
+     * <p><b>값을 본다.</b> {@code contains("donationDropped=")} 만 보면 0을 박아 둔 구현도
+     * 통과한다 — 넘긴 값이 그대로 나오는지 못박는다.
+     */
+    @Test
+    void 판정_줄이_후원_받은_수와_버린_수를_싣는다() {
+        CollectionMetrics metrics = new CollectionMetrics();
+        metrics.recordDonation();
+        metrics.recordDonation();
+
+        String line = SummaryLogger.renderVerdict(1L, 0L, metrics.verdict(), null,
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 5L);
+
+        assertThat(line)
+                .as("받은 후원 수가 판정 줄에 없으면 짧은 방송은 관측에서 통째로 사라진다")
+                .contains("donations=2");
+        assertThat(line)
+                .as("버린 후원은 표에도 원본에도 없다 — 이 줄에 없으면 어디에도 안 남는다")
+                .contains("donationDropped=5");
     }
 
     /** 값만 돌려주는 카운터 묶음. */
@@ -193,7 +221,7 @@ class SummaryLoggerTest {
     @Test
     void 판정_줄이_편지로_연_세션_수를_싣는다() {
         String line = SummaryLogger.renderVerdict(0L, 3L, new CollectionMetrics().verdict(), null,
-                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE);
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 0L);
 
         assertThat(line).startsWith("chat.session.verdict session=0 registrySessions=3 ");
     }

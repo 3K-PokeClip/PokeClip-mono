@@ -210,6 +210,16 @@ public class SessionRegistry {
     private final DonationSubscriptions donations;
     private final DonationBuffer donationBuffer;
 
+    /**
+     * 후원 바구니가 버린 수. <b>판정 줄이 이 값을 싣는다</b>(봇 codex).
+     *
+     * <p>러너 생성자에 바구니를 더하지 않고 여기로 낸다 — 그 생성자는 부르는 곳이 29군데다.
+     * 값이 사는 곳을 안 옮기고 <b>보는 길만</b> 하나 낸다.
+     */
+    public long donationDroppedCount() {
+        return donationBuffer.droppedCount();
+    }
+
     public SessionRegistry(ChzzkProperties properties, RestClient.Builder restClientBuilder,
                            ChatBuffer buffer, ChatPersister persister, ChatArchive archive) {
         this(properties, restClientBuilder, buffer, persister, archive,
