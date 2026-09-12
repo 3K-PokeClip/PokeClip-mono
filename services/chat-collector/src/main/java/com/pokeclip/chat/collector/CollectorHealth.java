@@ -4,6 +4,7 @@ import com.pokeclip.chat.collector.broadcast.BroadcastCounters;
 import com.pokeclip.chat.collector.broadcast.BroadcastEventProcessor;
 import com.pokeclip.chat.collector.broadcast.intake.IntakeStatus;
 import com.pokeclip.chat.collector.broadcast.reattach.ReattachStatus;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -88,6 +89,8 @@ public class CollectorHealth implements HealthIndicator {
      * 못 잡은 프로세스가 영영 UP이다(창을 아예 안 재면).
      */
     private final Instant createdAt;
+    /** 후원 바구니. 버린 수만 읽는다 — 되찾을 길이 없는 유일한 유실이라 상세에 낸다. */
+    private final DonationBuffer donationBuffer;
 
     /**
      * <b>{@code @Autowired}가 필요하다.</b> 생성자가 둘이면 스프링은 어느 것으로 만들지
@@ -95,13 +98,15 @@ public class CollectorHealth implements HealthIndicator {
      */
     @Autowired
     public CollectorHealth(CollectionStatus status, SessionRegistry registry, IntakeStatus intake,
-                           ReattachStatus reattach, ObjectProvider<BroadcastEventProcessor> processor) {
-        this(status, registry, intake, reattach, processor, Instant::now);
+                           ReattachStatus reattach, ObjectProvider<BroadcastEventProcessor> processor,
+                           DonationBuffer donationBuffer) {
+        this(status, registry, intake, reattach, processor, Instant::now, donationBuffer);
     }
 
     CollectorHealth(CollectionStatus status, SessionRegistry registry, IntakeStatus intake,
                     ReattachStatus reattach, ObjectProvider<BroadcastEventProcessor> processor,
-                    Supplier<Instant> clock) {
+                    Supplier<Instant> clock, DonationBuffer donationBuffer) {
+        this.donationBuffer = donationBuffer;
         this.status = status;
         this.registry = registry;
         this.intake = intake;
@@ -156,6 +161,11 @@ public class CollectorHealth implements HealthIndicator {
                 // 붙는다 — 즉 「새 방송을 하나도 못 받는 상태」가 아니다(전체 DOWN의 정의).
                 // 여기서 DOWN을 주면 clip 장애가 수집 서버의 배포를 막는데, 정작 재시작으로는
                 // 안 풀린다. 위 버린-편지 셋과 같은 판단이다.
+                // <b>후원 상한 초과.</b> 0이 아니면 그 후원은 표에도 원본에도 없다 —
+                // 후원은 아카이브에 안 쌓기 때문이다(StreamSession의 F3 주석).
+                // <b>이 값은 DOWN을 만들지 않는다</b> — 채팅 수집은 멀쩡한 상태이고,
+                // 재시작으로 안 풀린다(위 reattach와 같은 판단이다).
+                .withDetail("donationBufferDropped", donationBuffer.droppedCount())
                 .withDetail("reattach", reattach.state().label())
                 // <b>알림 경로의 unreadableStreamerIds와 갈라 둔다.</b> 1번이 고칠 자리는
                 // 같지만 <b>어느 경로가 그것을 봤나</b>가 다르다 — 이쪽만 오르면 clip 명부의

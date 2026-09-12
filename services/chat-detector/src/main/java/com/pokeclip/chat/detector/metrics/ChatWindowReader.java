@@ -54,8 +54,42 @@ public class ChatWindowReader {
      * <b>WHERE에 시각 칸 둘을 다 건다.</b> {@code received_at}은 인덱스를 타기 위해 넉넉한
      * 범위로, {@code message_time}은 창 경계를 정확히 자르기 위해.
      *
-     * <p>{@code received_at}만 쓰면 전달 지연만큼 창이 밀리고, {@code message_time}만 쓰면
-     * 인덱스를 못 타 방송 전체를 훑는다.
+     * <p>{@code received_at}만 쓰면 전달 지연만큼 창이 밀린다. 반대쪽은 <b>사정이 바뀌었다</b> —
+     * 여기 한때 「{@code message_time}만 쓰면 인덱스를 못 타 방송 전체를 훑는다」고 적혀 있었는데
+     * <b>POK-234가 {@code V306}으로 {@code (stream_id, message_time)} 부분 색인을 만들면서
+     * 그 문장이 거짓이 됐다.</b>
+     *
+     * <h2>🔴 그렇다고 「새 색인을 탄다」로 단정하지 마라 — 그 단정이 여기 적혀 있었고 틀렸다</h2>
+     *
+     * 말할 수 있는 것은 <b>「탈 수 있다」</b>까지다. <b>두 조건에서 갈렸고 무엇을 고르는지는
+     * 데이터 모양에 달렸다</b> — 같은 SQL에 <b>같은 운영 상수</b>를 넣었는데 플래너가 다르게 골랐다.
+     *
+     * <table>
+     *   <caption>{@code COUNT_WINDOWS}가 실제로 탄 색인 — 관측 둘</caption>
+     *   <tr><th>언제</th><th>데이터</th><th>탄 색인</th><th>버퍼</th></tr>
+     *   <tr><td>2026-09-03 감사 라운드 1</td>
+     *       <td>방송 3개 288,000행 + 옛 행 50,000행</td>
+     *       <td>{@code idx_chat_messages_stream_message_time}(V306, 새 색인)</td>
+     *       <td>42</td></tr>
+     *   <tr><td><b>2026-09-08 실기동</b></td>
+     *       <td>방송 1개 100,000행</td>
+     *       <td><b>{@code idx_chat_messages_received}(옛 색인)</b></td>
+     *       <td>297</td></tr>
+     * </table>
+     *
+     * <p><b>둘 다 맞는 관측이다.</b> 한쪽이 틀린 것이 아니라, 방송이 몇 개이고 행이 어떻게
+     * 흩어져 있는지에 따라 플래너의 선택이 바뀐다. <b>그러니 이 조회의 성능을 V306 하나에
+     * 걸어 두고 안심하지 마라</b> — 어느 쪽으로 떨어져도 견디는지가 실제 조건이다.
+     *
+     * <p>🔴 <b>이 단정이 안 잡힌 이유는 바로 다음 줄에 이미 적혀 있었다</b> —
+     * <b>이 서버에는 {@code EXPLAIN} 검사가 0개</b>라 계획이 바뀌어도 시험이 안 잡는다
+     * (수집기 쪽은 {@code ChatWindowQueryTest}가 운영 상수를 직접 EXPLAIN 한다).
+     * 그 한계를 적어 두고도 <b>단정하는 문장을 같은 자리에 남겼다.</b>
+     * 재는 장치가 없으면 문장도 단정하지 않는다.
+     *
+     * <p><b>두 칸을 다 거는 것은 그대로 옳다</b> — 창 경계는
+     * 여전히 {@code message_time}이 정하고, {@code received_at} 범위는 색인 선택과 무관하게
+     * 「우리에게 언제 왔나」를 좁혀 준다.
      *
      * <p>여유 {@code RECEIVED_SLACK}는 「채팅이 찍힌 뒤 우리에게 오기까지」의 상한을 넉넉히
      * 잡은 값이다. 재연결 중이면 전달 지연이 초 단위로 늘 수 있다.
@@ -244,9 +278,43 @@ public class ChatWindowReader {
      *
      * <h2>🔴 {@code received_at} 하한이 반드시 있어야 한다(봇 리뷰 1판, claude)</h2>
      *
-     * 상한만 걸면 {@code idx_chat_messages_stream_received} 를 <b>아예 안 탄다</b> —
-     * {@code received_at < ?} 하나로는 선택도가 나빠 플래너가 순차 훑기를 고른다.
-     * 6시간·초당 10건(216,000행)으로 실측한 차이:
+     * 🔴 <b>아래 표는 그때의 계획을 설명하지, 지금의 계획을 설명하지 않는다.</b> POK-234가
+     * {@code V306}으로 {@code (stream_id, message_time)} 부분 색인을 만들면서
+     * <b>이 조회가 그 색인을 탈 수 있게 됐다.</b>
+     *
+     * <p>🔴 <b>「갈아탔다」로 단정하지 마라 — 그 단정이 여기 적혀 있었고 틀렸다.</b>
+     * 위 {@code COUNT_WINDOWS}와 <b>같은 자리에서 같은 모양으로</b> 갈렸다. <b>쌍둥이 SQL이라
+     * 한쪽만 고치면 다른 쪽이 낡는다</b> — 갈림의 이유(데이터 모양)는 그쪽 javadoc에 적었다.
+     *
+     * <table>
+     *   <caption>{@code LAST_RECEIVED}가 실제로 탄 색인 — 관측 둘</caption>
+     *   <tr><th>언제</th><th>데이터</th><th>탄 색인</th><th>버퍼</th></tr>
+     *   <tr><td>2026-09-03 감사 라운드 1</td>
+     *       <td>방송 3개 288,000행 + 옛 행 50,000행</td>
+     *       <td>{@code idx_chat_messages_stream_message_time}(V306, 새 색인)</td>
+     *       <td>36</td></tr>
+     *   <tr><td><b>2026-09-08 실기동</b></td>
+     *       <td>방송 1개 100,000행</td>
+     *       <td><b>{@code idx_chat_messages_received}(옛 색인)</b></td>
+     *       <td>4</td></tr>
+     * </table>
+     *
+     * <p><b>둘 다 맞는 관측이다.</b> 그러니 <b>「지금은 하한이 없어도 순차 훑기가 아니다」도
+     * 조건부다</b> — 어느 색인으로 떨어지느냐에 달렸고, 옛 색인 쪽으로 떨어진 날에 하한을
+     * 빼 두면 아래 표의 43배가 그대로 살아난다.
+     *
+     * <p><b>이 서버에는 {@code EXPLAIN} 검사가 0개</b>라 계획이 바뀌어도 시험이 안 잡는다
+     * (수집기 쪽은 {@code ChatWindowQueryTest}가 운영 상수를 직접 EXPLAIN 한다).
+     * <b>그 한계가 이 두 단정을 다섯 날 동안 살려 뒀다.</b>
+     *
+     * <p><b>그래도 하한을 뺄 이유가 없다</b> — 아래 「폭은 {@code COUNT_WINDOWS}와 같다」가 남는다:
+     * 집계에 쓰인 채팅과 정확히 같은 범위라야 「집계엔 들었는데 여기선 빠진」 채팅이 안 생긴다.
+     * 그것은 성능이 아니라 <b>정확성</b>의 이유라 색인이 바뀌어도 그대로다.
+     *
+     * <p>아래는 {@code V306} 이전의 실측이다 — 상한만 걸면
+     * {@code idx_chat_messages_stream_received} 를 <b>아예 안 탔다</b>
+     * ({@code received_at < ?} 하나로는 선택도가 나빠 플래너가 순차 훑기를 골랐다).
+     * 6시간·초당 10건(216,000행):
      *
      * <table>
      *   <tr><th>하한</th><th>계획</th><th>시간</th><th>버퍼</th></tr>
@@ -254,9 +322,13 @@ public class ChatWindowReader {
      *   <tr><td>있음</td><td>Bitmap Index Scan</td><td><b>0.249 ms</b></td><td>55</td></tr>
      * </table>
      *
-     * <p><b>43배이고, 앞쪽만 방송 길이에 선형으로 커진다</b> — {@code chat_messages} 에는
-     * 삭제 경로가 없다. 이 조회는 <b>카드 한 장마다 발행 실행기</b>(core 2 · queue 100) 위에서
-     * 도는데, 급증이 몰리는 구간에서 큐가 차면 카드가 조용히 버려진다.
+     * <p><b>그때 43배였고, 앞쪽만 방송 길이에 선형으로 커졌다</b> — {@code chat_messages} 에는
+     * 삭제 경로가 없다. <b>남겨 두는 이유는 그 43배가 여전히 이 조회의 바닥이기 때문이다</b> —
+     * V306이 그것을 막아 주는 것은 <b>플래너가 V306을 고른 날에 한해서</b>이고,
+     * 위 표가 보여주듯 그건 데이터 모양이 정한다.
+     *
+     * <p>이 조회는 <b>카드 한 장마다 발행 실행기</b>(core 2 · queue 100) 위에서 도는데,
+     * 급증이 몰리는 구간에서 큐가 차면 카드가 조용히 버려진다.
      *
      * <p><b>폭은 {@code COUNT_WINDOWS} 와 같은 {@link #RECEIVED_SLACK} 이다.</b> 집계에 쓰인
      * 채팅과 정확히 같은 범위라야 「집계엔 들었는데 여기선 빠진」 채팅이 안 생긴다.

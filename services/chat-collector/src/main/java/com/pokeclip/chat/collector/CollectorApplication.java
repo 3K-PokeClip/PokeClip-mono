@@ -8,6 +8,7 @@ import com.pokeclip.chat.collector.broadcast.reattach.ReattachProperties;
 import com.pokeclip.chat.collector.broadcast.reattach.ReattachStatus;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
+import com.pokeclip.chat.collector.persist.DonationPersister;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.flywaydb.core.Flyway;
@@ -80,9 +81,10 @@ public class CollectorApplication {
     CollectorRunner collectorRunner(ChzzkProperties properties, CollectionStatus status,
                                     RestClient.Builder restClientBuilder,
                                     ChatBuffer buffer, ChatPersister persister,
-                                    ChatArchive archive, SessionRegistry registry) {
+                                    ChatArchive archive, DonationPersister donationPersister,
+                                    SessionRegistry registry) {
         return new CollectorRunner(properties, status, restClientBuilder, buffer, persister, archive,
-                registry, () -> System.exit(1));
+                donationPersister, registry, () -> System.exit(1));
     }
 
     /**

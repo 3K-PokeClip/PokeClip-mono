@@ -68,6 +68,10 @@ class ChatCollectionEndpointTest {
                     .contains("\"since\":null")
                     .contains("\"attempt\":null")
                     .contains("\"needsRelink\":false")
+                    // 이 창구의 응답 모양을 지키는 그물이 여기 하나뿐이다 —
+                    // ChatCollectionStatus는 시험 호출부가 0개라 <b>칸을 늘려도 컴파일이 안 깨진다</b>
+                    // (계획 검증). 새 칸을 여기서 안 잡으면 clip 배선이 조용히 갈린다.
+                    .contains("\"donationState\":\"none\"")
                     .contains("\"observedAt\":\"");
         }
 

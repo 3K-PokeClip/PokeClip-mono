@@ -6,7 +6,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * 「이 회원이 이 방송을 볼 수 있나」를 판정하는 <b>유일한 자리</b>. 사람 문 다섯이 나눠 쓴다.
+ * 「이 회원이 이 방송을 볼 수 있나」를 판정하는 <b>유일한 자리</b>. 사람 문 아홉이 나눠 쓴다
+ * (POK-234에서 채팅 문 셋이 늘었다).
  *
  * <p><b>판정 순서가 계약이다</b> — 방송이 있나 → 번호를 숫자로 바꿀 수 있나 → auth에 묻는다.
  * 바꾸면 없는 방송에도 auth를 두드리게 되고, 그것은 auth의 {@code NONE} 카운터를 오염시킨다

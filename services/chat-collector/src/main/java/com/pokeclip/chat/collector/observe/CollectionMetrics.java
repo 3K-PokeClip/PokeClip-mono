@@ -34,7 +34,9 @@ public final class CollectionMetrics {
             Duration delayMedian,
             Duration delayMax,
             Map<String, Long> systemEvents,
-            long decodeFailures
+            long decodeFailures,
+            /** 이 창에서 받은 후원 수. <b>received에 안 든다</b> — 검산 등식이 채팅 것이다. */
+            long donations
     ) { }
 
     /**
@@ -66,6 +68,8 @@ public final class CollectionMetrics {
             long delaySamples,
             Map<String, Long> systemEvents,
             long decodeFailures,
+            /** 세션 전체에서 받은 후원 수. <b>totalReceived에 안 든다.</b> */
+            long donations,
             // --- 아래 여섯은 세션이 끝날 때 걷어 올린 값이다. 위와 경계가 같다 ---
             Duration totalCollectedFor,
             Duration maxPingGap,
@@ -94,6 +98,8 @@ public final class CollectionMetrics {
     private long maxReceiveGapMillis;
     private long orderViolations;
     private long decodeFailures;
+    /** 이 창의 후원 수. received와 따로 센다 — 검산 등식이 채팅 것이다. */
+    private long donations;
 
     // 누적 — snapshot()이 안 건드린다
     private long totalReceived;
@@ -107,6 +113,7 @@ public final class CollectionMetrics {
     private long totalMaxReceiveGapMillis;
     private long totalOrderViolations;
     private long totalDecodeFailures;
+    private long totalDonations;
 
     // 세션이 끝날 때 걷어 올린다. Heartbeat는 소켓마다 새로 만들어져 저절로
     // 리셋되므로, 안 걷으면 판정 줄에 마지막 세션 값만 남는다.
@@ -194,6 +201,7 @@ public final class CollectionMetrics {
             maxReceiveGapMillis = 0;
             orderViolations = 0;
             decodeFailures = 0;
+            donations = 0;
             systemEvents.clear();
             lastReceivedAtMillis = 0;
             previousReceivedAtMillis = 0;
@@ -271,6 +279,19 @@ public final class CollectionMetrics {
         }
     }
 
+    /**
+     * 후원 한 건. <b>{@code received}를 올리지 않는다</b> — 그 값은 검산 등식
+     * {@code received = persisted + conflicts + poisoned + dropped}의 왼쪽이고
+     * 그 오른쪽은 전부 <b>채팅</b> 표의 카운터다. 후원을 섞으면 등식이 영구히 벌어져
+     * 운영자가 유실을 검산할 수 없게 된다(계획 검증 F3).
+     */
+    public void recordDonation() {
+        synchronized (lock) {
+            donations++;
+            totalDonations++;
+        }
+    }
+
     public void recordDecodeFailure() {
         synchronized (lock) {
             decodeFailures++;
@@ -295,6 +316,7 @@ public final class CollectionMetrics {
                     sorted.size(),
                     Map.copyOf(systemEvents),
                     totalDecodeFailures,
+                    totalDonations,
                     Duration.ofMillis(totalCollectedMillis),
                     Duration.ofMillis(totalMaxPingGapMillis),
                     Duration.ofMillis(totalMaxPongGapMillis),
@@ -311,6 +333,12 @@ public final class CollectionMetrics {
     public void recordSystemEvent(String type) {
         synchronized (lock) {
             systemEvents.merge(type, 1L, Long::sum);
+        }
+    }
+
+    public long totalDonations() {
+        synchronized (lock) {
+            return totalDonations;
         }
     }
 
@@ -335,13 +363,15 @@ public final class CollectionMetrics {
                     at(sorted, sorted.size() / 2),
                     at(sorted, sorted.size() - 1),
                     Map.copyOf(systemEvents),
-                    decodeFailures);
+                    decodeFailures,
+                    donations);
 
             delaysMillis.clear();
             received = 0;
             maxReceiveGapMillis = 0;
             orderViolations = 0;
             decodeFailures = 0;
+            donations = 0;
             // previousReceivedAtMillis는 안 지운다. 지우면 창 경계를 넘는 공백이
             // 통째로 사라져, 30초 동안 한 건도 안 온 구간이 어느 요약에도 안 남는다.
             return snapshot;

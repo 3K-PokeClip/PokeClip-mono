@@ -211,7 +211,7 @@ class ReconnectTest extends IntegrationTestSupport {
         status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port,
-                Duration.ofMillis(500), Duration.ofMillis(50), Duration.ofSeconds(1)),
+                Duration.ofMillis(500), Duration.ofMillis(50), Duration.ofSeconds(1), Duration.ofMillis(60)),
                 status, restClientBuilder,
                         TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
 
@@ -463,7 +463,7 @@ class ReconnectTest extends IntegrationTestSupport {
         status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port,
-                Duration.ofSeconds(5), Duration.ofMillis(300), Duration.ofSeconds(1)),
+                Duration.ofSeconds(5), Duration.ofMillis(300), Duration.ofSeconds(1), Duration.ofMillis(60)),
                 status, restClientBuilder,
                         TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
 
@@ -771,7 +771,7 @@ class ReconnectTest extends IntegrationTestSupport {
         status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port,
-                Duration.ofSeconds(5), firstDelay, maxDelay),
+                Duration.ofSeconds(5), firstDelay, maxDelay, Duration.ofMillis(60)),
                 status, restClientBuilder,
                         TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         runner.run(null);

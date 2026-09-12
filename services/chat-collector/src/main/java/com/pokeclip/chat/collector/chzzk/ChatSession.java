@@ -5,9 +5,13 @@ import com.pokeclip.chat.collector.engineio.EngineIoFrame;
 import com.pokeclip.chat.collector.engineio.EngineIoSocket;
 import com.pokeclip.chat.collector.engineio.Handshake;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -29,6 +33,8 @@ public class ChatSession implements AutoCloseable {
 
     public record Established(Handshake handshake, EngineIoSocket socket) { }
 
+    private static final Logger log = LoggerFactory.getLogger(ChatSession.class);
+
     private final ChzzkSessionClient client;
     private final AtomicReference<EngineIoSocket> current = new AtomicReference<>();
 
@@ -38,12 +44,89 @@ public class ChatSession implements AutoCloseable {
     /** 삼킨 싱크 예외의 수. 안 세면 수신은 사는데 처리가 통째로 죽은 것을 못 본다. */
     private final AtomicLong sinkFailures = new AtomicLong();
 
+    /**
+     * 🔴 <b>후원 구독이 일시 실패했을 때 다시 시도하는 주기</b>(봇 codex P1이 잡았다).
+     *
+     * <p>그 전에는 재시도가 <b>아예 없었다</b> — {@code subscribeDonation}이 429·5xx·시한
+     * 초과를 {@code FAILED}로 바꿔 값으로 돌려주고, 부르는 쪽은 그것을 상태로 적기만 했다.
+     * 유일한 호출이 수립 ⑥이라 <b>채팅 소켓이 건강한 동안에는 아무도 다시 시도하지 않는다.</b>
+     * 채팅 소켓은 방송 내내 멀쩡한 것이 정상이므로, 후원 구독이 한 번 미끄러지면
+     * <b>그 방송의 후원이 통째로 안 들어온다.</b> 후원은 아카이브가 없어 되찾을 길도 없다.
+     *
+     * <p>재부착 주기와 같은 1분이다. 더 짧게 잡을 이유가 없다 — 상대가 429를 준 상황이면
+     * 자주 두드리는 것이 오히려 나쁘고, 후원은 한 건이 늦는 것보다 <b>영영 안 오는 것</b>이
+     * 문제였다.
+     */
+    static final Duration DONATION_RETRY_PERIOD = Duration.ofMinutes(1);
+
+    /** 재시도 주기. 검사가 짧게 바꿔 잰다 — 1분을 기다리면 검사가 못 선다. */
+    private final Duration donationRetryPeriod;
+
+    /**
+     * 종료 신호. 재시도 스레드가 매 바퀴 본다.
+     *
+     * <p>🔴 <b>수립마다 새로 만든다 — 한 번 켜지면 다시는 안 꺼지기 때문이다</b>(봇 codex).
+     * 이 객체는 <b>강제 절단 뒤 통째로 다시 열린다</b>(클래스 javadoc). 그런데 이 표시를
+     * 끄는 곳이 어디에도 없어서, 한 번 닫힌 객체를 다시 열면 <b>후원 재시도 스레드가
+     * 만들어지자마자 첫 조건에서 죽는다</b> — 소켓은 멀쩡히 채팅을 걷는데 그 방송의 후원만
+     * 영영 안 들어온다. 재시도를 넣은 이유가 통째로 무효가 되는 자리다.
+     *
+     * <p><b>끄지 않고 갈아 끼우는 이유</b>: 앞 수립의 재시도 스레드는 종료를 안 기다리므로
+     * 아직 돌고 있을 수 있다. 같은 객체를 끄면 <b>그 스레드가 되살아나</b> 이미 반납된
+     * 키로 구독을 쏜다. 새 객체로 갈면 그 스레드는 <b>옛 객체를 계속 보므로</b> 멈춘 채 끝난다.
+     */
+    private volatile AtomicBoolean stopping = new AtomicBoolean();
+
+    private volatile Thread donationRetry;
+
+    /**
+     * 재시도 스레드가 살아 있나. <b>검사가 「멈췄다」를 이것으로만 잴 수 있다</b> —
+     * 구독 호출 수로 재면 {@code releaseAndClose} 경로에서 <b>자동으로 참이 된다</b>:
+     * 그 길은 세션 키를 비우고, 키가 비면 다음 바퀴가 스스로 돌아 나가기 때문이다.
+     * 즉 호출 수로 잰 검사는 {@code stopDonationRetry}를 지워도 초록이다(실측).
+     */
+    boolean donationRetryAlive() {
+        Thread retry = donationRetry;
+        return retry != null && retry.isAlive();
+    }
+
     public ChatSession(ChzzkSessionClient client) {
+        this(client, DONATION_RETRY_PERIOD);
+    }
+
+    public ChatSession(ChzzkSessionClient client, Duration donationRetryPeriod) {
         this.client = client;
+        this.donationRetryPeriod = donationRetryPeriod;
     }
 
     /** 종료할 때 구독 반납에 쓴다. 수립이 끝나야 채워진다. */
     private final AtomicReference<String> currentSessionKey = new AtomicReference<>();
+
+    /**
+     * 이 세션의 후원 구독 결과. 수립 ⑥에서 정해지고 반납할 때 비워진다.
+     * <b>NONE이면 반납할 것이 없다</b> — 구독한 적 없는 키로 반납 REST를 한 번 더 쏘지 않는다.
+     */
+    private final AtomicReference<DonationSubscription> donation =
+            new AtomicReference<>(DonationSubscription.NONE);
+
+    /** 이 세션이 후원을 구독했나. 등록부가 창구에 실을 값으로 읽어 간다. */
+    public DonationSubscription donationSubscription() { return donation.get(); }
+
+    /**
+     * 🔴 <b>재시도가 상태를 바꾸면 알린다</b>(봇 codex P2가 잡았다).
+     *
+     * <p>부르는 쪽은 {@code open()}이 돌아온 <b>뒤 한 번</b> {@link #donationSubscription()}을
+     * 읽어 창구용 등록부에 적는다. 재시도는 그 뒤에 값을 바꾸므로, 알림이 없으면
+     * <b>재시도가 성공해도 창구는 방송이 끝날 때까지 「failed」로 보고한다</b> —
+     * 실제로는 후원이 잘 들어오고 있는데 화면이 그럴듯하게 틀린다.
+     *
+     * <p>기본값은 아무것도 안 한다 — 옛 경로({@code CollectorRunner})는 등록부가 없다.
+     */
+    private volatile Consumer<DonationSubscription> donationSink = state -> { };
+
+    public void onDonationSubscriptionChanged(Consumer<DonationSubscription> sink) {
+        this.donationSink = sink != null ? sink : state -> { };
+    }
 
     /** 삼킨 싱크 예외의 수. 삼키기만 하고 안 세면 조용한 실패를 우리가 만드는 것이다. */
     public long sinkFailureCount() { return sinkFailures.get(); }
@@ -70,21 +153,83 @@ public class ChatSession implements AutoCloseable {
     }
 
     /**
+     * 반납 REST 하나의 최악. {@code spring.http.clients}의 접속 2초 + 읽기 5초다.
+     *
+     * <p><b>관측이 아니라 시한이다</b> — 실측 왕복은 55~69ms라 평시엔 근처도 안 간다.
+     * {@code SessionRegistry.CLOSE_ALL_BUDGET}(8초 = 반납 7 + 소켓 닫기 1)의 「반납 7」이
+     * 이 값이고, <b>반납이 둘이 돼도 그 7이 그대로여야</b> 그 예산이 선다.
+     */
+    private static final Duration RELEASE_BUDGET = Duration.ofSeconds(7);
+
+    /**
      * 구독을 반납하고 소켓을 닫는다. 반납이 먼저다 — 소켓을 먼저 닫으면
      * 서버가 세션을 정리하는 중이라 반납이 무의미해질 수 있다.
+     *
+     * <p>🔴 <b>후원 반납과 채팅 반납을 나란히 보낸다</b>(POK-234 감사 라운드 2 A2).
+     * 직렬로 쏘면 최악이 7 + 7 = 14초라 {@code CLOSE_ALL_BUDGET} 8초를 넘고, 그때
+     * {@code awaitClosed}는 취소하지 않고 로그만 남기고 돌아가므로 <b>채팅 반납이 나가기
+     * 전에 프로세스가 종료 유예에 잘린다</b> — 그 예산이 막으려던 것(계정당 자리 3개)이
+     * 정확히 그 사고다. 나란히면 최악이 {@code max(7, 7)} = 7초로 예산 안이다.
+     * <b>겹치는 것을 실측했다</b>: 가짜 서버의 반납 둘을 1초씩 붙들면 직렬 2,006ms →
+     * 나란히 1,0xx ms({@code SessionShutdownTest.후원_반납과_채팅_반납이_나란히_나간다}).
+     *
+     * <p><b>후원 반납의 값은 확인하지 않았다.</b> 여기 한때 「그 자리도 계정당 연결 상한 안에
+     * 든다」고 적혀 있었는데 <b>거짓이다</b> — 공식 문서상 연결은 <b>계정당 3개</b>이고 이벤트
+     * 구독은 <b>세션당 30개</b>로 별개 한도이며, 우리는 세션당 둘만 쓴다. 즉 후원 반납이
+     * 연결 자리를 앞당기지 않는다. 그런데도 보내는 이유는 <b>세션 정리를 앞당기는 쪽이
+     * 안전하기 때문</b>이고, 그 효과를 재 본 적은 없다. 실측 근거가 있는 것은 채팅 반납뿐이다
+     * (안 보내면 자리가 10초~4분 42초 남는다).
      *
      * @return 반납의 결말. <b>어느 결말이든 소켓은 닫는다</b>
      */
     public Release releaseAndClose() {
+        // 반납보다 먼저 멈춘다 — 키를 비운 뒤에 재시도가 한 바퀴 더 돌면 소모된 키로
+        // 구독을 쏜다. 기다리지는 않는다(종료 예산).
+        stopDonationRetry();
         String key = currentSessionKey.getAndSet(null);
         Release result;
         if (key == null || key.isBlank()) {
             result = Release.SKIPPED;
         } else {
+            long endAt = System.nanoTime() + RELEASE_BUDGET.toNanos();
+            // 구독하지 않았으면(NONE·REFUSED·FAILED) 아무것도 안 쏜다 — 구독한 적 없는
+            // 키로 왕복을 하나 더 만들 이유가 없다. 그때는 스레드도 안 만든다.
+            Thread donationRelease = null;
+            if (donation.getAndSet(DonationSubscription.NONE) == DonationSubscription.SUBSCRIBED) {
+                // 가상 스레드다. 세션 닫기마다 하나씩 나고 REST 시한 안에 반드시 끝난다.
+                donationRelease = Thread.ofVirtual().name("chzzk-donation-release")
+                        .start(() -> client.unsubscribeDonationQuietly(key));
+            }
+            // 결말은 채팅 반납의 것이다 — 후원 반납의 성패로 이 값을 바꾸면 로그의
+            // subscription= 이 무엇의 결말인지가 갈린다.
             result = client.unsubscribeChatQuietly(key) ? Release.RETURNED : Release.FAILED;
+            joinBeforeDeadline(donationRelease, endAt);
         }
         close();
         return result;
+    }
+
+    /**
+     * 후원 반납이 끝나기를 <b>예산이 남은 만큼만</b> 기다린다.
+     *
+     * <p><b>기다리는 이유</b>: 안 기다리고 아래 {@code close()}로 내려가면 소켓이 먼저 닫히고,
+     * 그러면 서버가 세션을 정리하는 중에 반납이 도착한다 — 반납을 소켓보다 앞에 두는
+     * 이 메서드의 규칙이 후원에만 안 걸리게 된다.
+     *
+     * <p><b>시한을 처음에 뜨는 이유</b>: 채팅 반납이 끝난 <b>뒤</b>부터 7초를 새로 재면 최악이
+     * 7 + 7로 되돌아간다. 둘은 같은 시점에 출발했으므로 남은 예산으로 기다리는 것이 맞다.
+     * 만료해도 인터럽트하지 않는다 — {@code SessionRegistry.awaitClosed}와 같은 이유로
+     * 나가 있는 반납을 끊으면 세션 키는 이미 소모돼 아무도 다시 못 보낸다.
+     */
+    private static void joinBeforeDeadline(Thread donationRelease, long endAt) {
+        if (donationRelease == null) {
+            return;
+        }
+        try {
+            donationRelease.join(Duration.ofNanos(Math.max(endAt - System.nanoTime(), 0)));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     public void onFrame(Consumer<EngineIoFrame> sink) { this.frameSink = sink; }
@@ -97,6 +242,8 @@ public class ChatSession implements AutoCloseable {
      */
     public Established open(Duration deadline, BooleanSupplier abort) {
         long endAt = System.nanoTime() + deadline.toNanos();
+        // 앞 수립이 켜 둔 종료 표시를 이 수립까지 물려받지 않는다. 이유는 그 필드 javadoc.
+        stopping = new AtomicBoolean();
 
         abortIfStopping(abort, EstablishStage.AUTH);
         String url = client.createSession();                        // ① AUTH
@@ -163,7 +310,222 @@ public class ChatSession implements AutoCloseable {
         client.subscribeChat(sessionKey.get());                     // ④ SUBSCRIBE
         await(subscribed, endAt, abort, EstablishStage.WAITING_SUBSCRIBED); // ⑤
 
+        // ⑥ 후원 구독. <b>예산·중단 신호 안에 둔다</b>(계획 검증 F9) — 밖에 두면 수립 최악이
+        // REST 시한(접속 2 + 읽기 5)만큼 더 늘고, 그 사이 releaseAndClose가 지나가면 방금 건
+        // 후원 구독을 아무도 반납하지 않는다.
+        //
+        // <b>거부돼도 수립은 성공이다.</b> subscribeDonation은 던지지 않는다 — 후원 권한만
+        // 없는 토큰이 채팅까지 못 걷게 되는 것을 막는 것이 이 카드의 축이다.
+        //
+        // <b>subscribed(DONATION) 프레임은 기다리지 않는다.</b> ⑤와 다른 선택이라 적어 둔다 —
+        // 채팅은 그 프레임이 안 오면 채팅이 한 건도 안 오는 것과 같아 기다릴 값이 있지만,
+        // 후원은 안 와도 채팅이 이미 걷고 있어 기다리는 동안 잃는 것(수립 지연)만 있다.
+        // REST 200이 곧 구독이고 프레임은 확인이다.
+        //
+        // 🔴 <b>이 두 줄에는 그물이 놓여 있다</b> —
+        // {@code SessionEstablishTest.구독_직후에_중단이_켜지면_후원_구독을_시작하지_않는다}.
+        // 둘을 지우면 빨간불이다(POK-234 감사 라운드 3 D1).
+        //
+        // <b>평시에 지워도 관측이 안 바뀌는 것은 맞다.</b> 바로 위 ⑤의 await가 매 바퀴
+        // <b>같은 둘</b>을 먼저 보기 때문이다 — {@code abort} → {@code remaining <= 0} →
+        // 그 다음에야 latch. 즉 ⑤가 돌아왔다는 것은 그 순간 abort가 false였고 예산이
+        // 남아 있었다는 뜻이라, 여기 도착했을 때 값이 뒤집히려면 그 사이(latch가 내려간
+        // 찰나)에 상태가 바뀌어야 한다.
+        //
+        // <b>그 창을 여는 열쇠는 경합을 이기는 것이 아니라 {@code abort}가 주입된
+        // {@link BooleanSupplier}라는 것이다.</b> 라운드 2에 시도한 셋은 전부 중단을
+        // <b>미리 켜는</b> 방향이라 언제나 ①이나 ⑤가 먼저 잡았고(종료 신호를 미리 켜면 ①,
+        // ④를 붙들어 그 사이에 켜면 ⑤, 예산을 얇게 잡으면 ⑤가 먼저 만료한다) — <b>그 셋이
+        // 막힌다는 관측은 지금도 유효하지만 그것이 전부가 아니었다.</b> 넷째 길은
+        // 「⑤를 통과한 뒤부터 참이 되는」 공급자를 주는 것이고, 그러면 ⑤의 루프가 한
+        // 바퀴만 돌아 창이 <b>정의상</b> 열린다. 검사가 그렇게 잰다.
+        //
+        // 여기서 새는 대가는 <b>REST 시한 7초(접속 2 + 읽기 5)를 수립 예산 밖에서 쓰는
+        // 것</b>이라 싸지 않다.
+        abortIfStopping(abort, EstablishStage.SUBSCRIBE);
+        if (System.nanoTime() < endAt) {
+            donation.set(client.subscribeDonation(sessionKey.get()));   // ⑥ DONATION
+        }
+        // 🔴 <b>건너뛴 것도 재시도 대상이다</b>(봇 codex P1). 이 호출을 위 if 안에 두면
+        // 예산이 다해 ⑥을 건너뛴 세션은 NONE 인 채로 남고 재시도가 안 붙는다 —
+        // 그리고 이 파일에 「건너뛴 세션은 다음 수립에서 다시 시도된다」고 적혀 있었는데
+        // <b>그 문장이 거짓이다</b>: 채팅 소켓이 방송 내내 멀쩡한 것이 정상이라 다음 수립이
+        // 아예 없고, 그러면 그 방송의 후원이 통째로 안 들어온다.
+        //
+        // 🔴 <b>이 갈래(예산 초과로 건너뜀)에는 그물이 없다 — 「없다」가 아니라 「못 놓았다」다.</b>
+        // 재시도 자체는 FAILED 갈래로 재고 있고(후원_구독이_일시_실패하면_다시_시도한다),
+        // 여기서 못 잰 것은 <b>NONE 으로 남는 경로</b>다. 시도한 것과 막힌 자리:
+        //   1) ④ 응답을 늦춰 예산을 태운다 → ⑤(WAITING_SUBSCRIBED)가 <b>먼저</b> 시한에 걸려
+        //      open 이 던진다. ⑥까지 못 간다
+        //   2) subscribed 프레임을 받은 뒤 늦춘다 → 가짜 서버가 그 프레임을 응답 <b>안에서</b>
+        //      쏘므로 콜백이 자기 자신을 기다리는 꼴이 된다
+        //   3) 프레임만 늦추는 손잡이 → 가짜 서버에 없다. 만들 수는 있다
+        // ⑤ 통과와 이 검사 사이가 몇 나노초라, 그 사이에만 예산이 끝나게 만들려면
+        // <b>subscribed 프레임이 endAt 직전에 오도록</b> 가짜를 늘려야 한다.
+        // 다음 사람은 3)부터 보면 된다.
+        //
+        // 🔴 <b>그 공백이 값을 세 번 치렀다 — 이 자리는 그냥 「미측정」이 아니다.</b>
+        //   · 라운드 7: CAS 기대값이 실제와 갈리는 버그. NONE 출발에서만 나서 주입해도 초록
+        //   · 봇 4판(claude): 반납 뒤 CAS 가 NONE 을 되살리는 것. 역시 NONE 출발에서만
+        //   · 라운드 8: 반납이 지나간 뒤에 선 구독을 <b>아무도 거두지 않는 것</b>
+        // 셋 다 사람이 코드를 읽어 찾았고 기계는 하나도 못 잡았다.
+        //
+        // <b>셋째 것은 이제 그물이 있다</b>(반납이_지나간_뒤의_재시도는_상태를_되살리지_않는다).
+        // 그 검사가 되는 이유는 <b>가짜 서버의 응답을 붙들어 창을 결정적으로 열 수 있기
+        // 때문</b>이고, 그 손잡이(onSubscribeDonationBeforeResponse)는 여기에도 쓸 수 있다.
+        // 남은 것은 <b>상태 되살리기 쪽</b>이다 — 아래 갈래가 NONE 에서 출발해야 CAS 가 뚫리는데,
+        // 그러려면 ⑤의 예산을 먼저 말려야 해서 같은 검사 안에서 둘을 같이 못 만든다.
+        // <b>이 갈래에 그물을 놓는 것이 다음에 이 파일을 여는 사람의 첫 일이다.</b>
+        // 가짜 서버에 「subscribed 프레임만 늦추는」 손잡이를 만드는 것이 출발점인데,
+        // ⑤의 대기 시한이 endAt 이라 <b>프레임이 endAt 직전에 오도록 맞춰야 하고</b>
+        // 그것은 타이밍 의존이다 — 결정적으로 만들려면 ⑥의 시계를 주입 가능하게
+        // 바꿔야 할 수도 있다.
+        startDonationRetryIfNeeded();
+        // 예산이 이미 다했으면 <b>건너뛴다(NONE)</b>. 던지지 않는 이유는 위와 같다 —
+        // 여기서 던지면 후원 때문에 채팅 수립이 실패하는 길이 다시 열린다.
+        // 건너뛴 세션은 다음 수립에서 다시 시도된다.
+
         return new Established(handshake.get(), socket);
+    }
+
+    /**
+     * 🔴 <b>일시 실패일 때만 다시 시도한다.</b> {@code REFUSED}(401·403)는 권한이 없는
+     * 것이라 시간이 안 풀어 준다 — 두드리면 남의 서버에 부하만 준다. {@code SUBSCRIBED}는
+     * 할 일이 없고, {@code NONE}은 시도한 적이 없는 것(예산이 다해 건너뛴 경우)이라
+     * 이 세션에서 새로 열 것이 아니다.
+     *
+     * <p><b>가상 스레드 하나이고 종료를 안 기다린다.</b> 종료 예산 다섯 항의 합이 이미
+     * 19초라(운영 유예 20초) 항을 하나 더하면 넘친다 — 넘치면 세션 닫기가 잘려
+     * 구독이 반납 안 되고 계정 자리가 남는다. 대신 {@code stopping}을 매 바퀴 보고
+     * 인터럽트를 받으므로 종료가 이 스레드를 기다릴 이유가 없다.
+     *
+     * <p><b>결과를 {@code compareAndSet}으로 쓴다.</b> 그냥 쓰면 반납이 이미 비워 둔
+     * {@code NONE}을 이 스레드가 되살려, 닫힌 세션이 창구에 「구독 중」으로 보인다.
+     */
+    private void startDonationRetryIfNeeded() {
+        DonationSubscription now = donation.get();
+        // FAILED(일시 실패)와 NONE(예산이 다해 건너뜀) 둘 다 「다시 물어볼 값이 있는」 상태다.
+        // REFUSED(401·403)는 권한이 없는 것이라 시간이 안 풀어 주고, SUBSCRIBED 는 할 일이 없다.
+        if (now != DonationSubscription.FAILED && now != DonationSubscription.NONE) {
+            return;
+        }
+        // <b>이 수립의 종료 표시를 붙잡아 둔다.</b> 필드를 매 바퀴 읽으면 다음 수립이 갈아
+        // 끼운 새 표시를 보게 되어, 이미 반납된 키로 구독을 쏘는 스레드가 되살아난다.
+        AtomicBoolean myStopping = stopping;
+        donationRetry = Thread.ofVirtual().name("chzzk-donation-retry").start(() -> {
+            while (!myStopping.get()) {
+                try {
+                    Thread.sleep(donationRetryPeriod);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                if (myStopping.get()) {
+                    return;
+                }
+                // 🔴 <b>기대값을 매 바퀴 다시 읽는다.</b> 밖에서 한 번 잡아 두고 실패할 때마다
+                // 그 지역변수만 FAILED 로 바꿨더니, <b>donation 에는 아무도 FAILED 를 안 써서</b>
+                // 기대값과 실제 값이 갈렸다 — 다음 성공의 CAS 가 반드시 지고 재시도가
+                // 둘째 바퀴부터 무력화됐다(로컬 리뷰 라운드 7). 이 값을 여기서 읽으면
+                // 그런 어긋남이 생길 자리가 없다.
+                DonationSubscription expected = donation.get();
+                if (expected != DonationSubscription.FAILED
+                        && expected != DonationSubscription.NONE) {
+                    // 반납이 NONE 을 쓰거나 다른 경로가 값을 정했다. 우리가 손댈 것이 없다.
+                    return;
+                }
+                // 반납이 지나갔으면 키가 비어 있다. 소모된 키로 구독을 쏘지 않는다.
+                String key = currentSessionKey.get();
+                if (key == null || key.isBlank()) {
+                    return;
+                }
+                DonationSubscription got = client.subscribeDonation(key);
+                // 🔴 <b>REST 를 도는 동안 반납이 지나갔을 수 있다</b>(봇 claude).
+                // CAS 만으로는 못 막는다 — releaseAndClose 가 donation 에 <b>NONE 을 쓰므로</b>,
+                // NONE 에서 출발한 재시도의 compareAndSet(NONE, got) 이 <b>성공해 버린다.</b>
+                // 그러면 등록부에서 이미 지워진 자리를 알림이 되살려, 닫힌 세션이
+                // 창구에 영구히 「구독 중」으로 남고 그 후원 구독은 아무도 반납하지 않는다.
+                // (아래 CAS 주석의 「지면 된다」는 FAILED 출발에만 성립한다.)
+                //
+                // 🔴 <b>그냥 돌아서면 방금 선 구독을 아무도 반납하지 않는다</b>(로컬 리뷰 라운드 8).
+                // releaseAndClose 는 그 순간의 값이 SUBSCRIBED 일 때만 반납을 쏘는데, 이 갈래에서는
+                // 아직 FAILED·NONE 이라 <b>안 쏘고 지나갔다.</b> 여기서 쏘지 않으면 그 구독은
+                // 어느 경로로도 반납되지 않는다 — 반납이 필요하다는 것은 이 코드의 전제이고
+                // (releaseAndClose 가 일부러 쏜다) 한쪽만 그 전제를 안 지키면 둘이 어긋난다.
+                //
+                // 🔴 <b>SUBSCRIBED 만 보면 못 잡는다 — 실측으로 갈렸다.</b> stopDonationRetry 가
+                // 이 스레드를 <b>인터럽트</b>하므로, 왕복 중이던 요청이 깨져 got 이 <b>FAILED</b> 로
+                // 온다. 그런데 <b>서버는 그 요청을 이미 처리했다</b> — 구독은 섰는데 우리만 실패로
+                // 읽는다. 즉 FAILED 는 「안 섰다」가 아니라 <b>「결과를 못 봤다」</b>다.
+                // 확실히 안 선 것은 401·403(REFUSED)뿐이라 그것만 뺀다. 결과가 불명이면 쏘는 쪽이
+                // 싸다 — 안 쏘면 계정 자리가 영구히 남고, 헛되이 쏘면 왕복 하나로 끝난다.
+                //
+                // <b>인터럽트 표시를 먼저 지운다.</b> 안 지우면 이 반납 요청도 같은 이유로 즉사한다.
+                // 지운 뒤 곧바로 돌아서므로 이 스레드가 그 표시를 다시 쓸 일은 없다.
+                // quietly 라 던지지 않고, 종료는 이 스레드를 안 기다리므로 예산에도 안 든다.
+                if (myStopping.get()) {
+                    releaseDonationQuietly(key, got);
+                    return;
+                }
+                if (got != DonationSubscription.FAILED) {
+                    // 🔴 <b>CAS 의 기대값이 「지금 값」이지 FAILED 고정이 아니다.</b>
+                    // 건너뛴 세션은 NONE 에서 출발하므로 FAILED 로 고정하면 영영 못 바꾼다.
+                    // 그리고 CAS 를 쓰는 이유는 그대로다 — 반납이 이미 NONE 을 쓴 뒤라면
+                    // 지면 되고, 이기면 그 값이 창구로 간다. 지는 쪽을 알리면 닫힌 세션이
+                    // 「구독 중」으로 되살아난다.
+                    if (donation.compareAndSet(expected, got)) {
+                        notifyDonationChanged(got);
+                    } else if (myStopping.get()) {
+                        // 🔴 <b>위 검사와 이 CAS 사이에도 반납이 지나갈 수 있다</b>(봇 codex).
+                        // 그때 반납은 그 순간 값이 FAILED·NONE 이라 <b>안 쏘고 갔고</b>, 여기서는
+                        // CAS 가 져서 그냥 돌아선다 — 방금 선 구독을 또 아무도 거두지 않는다.
+                        // 위 갈래와 같은 규칙으로 거둔다(불명이면 쏜다).
+                        releaseDonationQuietly(key, got);
+                    }
+                    return;
+                }
+            }
+        });
+    }
+
+    /**
+     * <b>반납이 지나간 뒤에 선 구독을 재시도가 스스로 거둔다.</b> 부르는 자리가 둘이라
+     * 여기에 모았다 — 한쪽만 고쳐져 낡는 것을 막는다.
+     *
+     * <p>{@code REFUSED}(401·403)만 뺀다. 그것만이 <b>확실히 안 선 것</b>이고,
+     * {@code FAILED} 는 「안 섰다」가 아니라 <b>「결과를 못 봤다」</b>다 — 종료가 이 스레드를
+     * 인터럽트해 왕복이 깨져도 서버는 그 요청을 이미 처리했을 수 있다(실측).
+     *
+     * <p><b>인터럽트 표시를 먼저 지운다.</b> 안 지우면 이 반납 요청도 같은 이유로 즉사한다.
+     * 지운 뒤 곧바로 돌아서므로 이 스레드가 그 표시를 다시 쓸 일은 없다.
+     */
+    private void releaseDonationQuietly(String key, DonationSubscription got) {
+        if (got == DonationSubscription.REFUSED) {
+            return;
+        }
+        Thread.interrupted();
+        client.unsubscribeDonationQuietly(key);
+    }
+
+    /**
+     * 알림이 던져도 재시도 스레드를 죽이지 않는다 — 등록부 갱신이 실패해도 구독 자체는
+     * 이미 섰고, 여기서 예외가 나가면 그 스레드가 조용히 사라져 다음 바퀴가 없다.
+     */
+    private void notifyDonationChanged(DonationSubscription state) {
+        try {
+            donationSink.accept(state);
+        } catch (RuntimeException e) {
+            log.warn("chat.donation.retry_notify_failed causeType={}", e.getClass().getSimpleName());
+        }
+    }
+
+    /** 재시도를 멈춘다. <b>기다리지 않는다</b> — 위 javadoc의 예산 이유. */
+    private void stopDonationRetry() {
+        stopping.set(true);
+        Thread retry = donationRetry;
+        if (retry != null) {
+            retry.interrupt();
+        }
     }
 
     /**
@@ -308,6 +670,9 @@ public class ChatSession implements AutoCloseable {
 
     @Override
     public void close() {
+        // releaseAndClose 를 안 거치고 바로 닫는 경로도 있다(수립 실패·전송 절단).
+        // 그 길에서도 재시도가 남으면 죽은 세션이 계속 구독을 쏜다.
+        stopDonationRetry();
         EngineIoSocket socket = current.getAndSet(null);
         if (socket != null) socket.close();
     }

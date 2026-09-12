@@ -7,6 +7,8 @@ import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
+import com.pokeclip.chat.collector.chzzk.DonationSubscription;
 import com.pokeclip.chat.collector.session.SessionKey;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
@@ -48,16 +50,22 @@ class ChatCollectionStatusResolverTest extends IntegrationTestSupport {
 
     private SessionRegistry registry;
     private ChatCollectionStatusResolver resolver;
+    private DonationSubscriptions donations;
 
     @BeforeEach
     void setUp() throws Exception {
         jdbc.update("DELETE FROM chat_ended_streams");
+        // <b>등록부와 창구가 같은 인스턴스를 봐야 한다.</b> 따로 만들면 이 검사는 초록인데
+        // 운영에서는 창구가 세션이 적은 값을 못 읽는 상태가 된다 — 검사가 「운영이 쓰는 그것」이
+        // 아니라 사본을 재는 모양이다(chat-window-test-reality 문항 8).
+        donations = new DonationSubscriptions();
         registry = new SessionRegistry(
                 new ChzzkProperties(true, "설정-토큰-쓰면-안-된다", "http://localhost:" + port,
-                        Duration.ofSeconds(5), Duration.ofMillis(200), Duration.ofSeconds(60)),
+                        Duration.ofSeconds(5), Duration.ofMillis(200), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 restClientBuilder, new ChatBuffer(1_000),
-                TestPersistence.disabledPersister(), ChatArchive.NONE);
-        resolver = new ChatCollectionStatusResolver(registry, store, () -> 지금);
+                TestPersistence.disabledPersister(), ChatArchive.NONE,
+                donations, new DonationBuffer());
+        resolver = new ChatCollectionStatusResolver(registry, store, donations, () -> 지금);
     }
 
     @AfterEach
@@ -69,6 +77,44 @@ class ChatCollectionStatusResolverTest extends IntegrationTestSupport {
     // 문항 2: since()·attempt()가 null이라는 단언은 <b>늘 null인 구현</b>에도 참이다 —
     //         그 방향은 아래 두 검사(reconnecting의 since 있음 · stopped의 since 있음)가 맡는다.
     //         여기서는 observedAt이 시계에서 온다는 것을 같이 봐서 답이 통째로 빈손이 아님을 잡는다.
+    /**
+     * 창구가 후원 구독 상태를 싣는가. <b>값을 손으로 넣지 않고 실제 수립 경로로 만든다</b> —
+     * 손으로 넣으면 등록부와 창구가 <b>다른 인스턴스</b>여도 초록이고, 그러면 운영에서
+     * 창구가 세션이 적은 값을 영영 못 읽는 상태를 못 잡는다(문항 8).
+     */
+    @Test
+    void 후원_구독_상태가_실린다() throws Exception {
+        registry.open(key("s-don-ok", 21L, "tokDonOk"), "tokDonOk");
+        awaitUntil(AWAIT, () -> "subscribed".equals(resolver.resolve("s-don-ok").donationState()));
+
+        assertThat(resolver.resolve("s-don-ok").donationState())
+                .as("세션이 적은 값을 창구가 못 읽으면 둘이 다른 인스턴스를 보고 있는 것이다")
+                .isEqualTo("subscribed");
+        assertThat(resolver.resolve("s-don-ok").state())
+                .as("후원 상태만 보고 채팅 상태를 안 보면 엉뚱한 갈래를 재고 있을 수 있다")
+                .isEqualTo("collecting");
+    }
+
+    /** 후원만 거부된 방송 — <b>collecting인데 refused</b>가 정상 상태다. */
+    @Test
+    void 후원이_거부되면_collecting인데_refused다() throws Exception {
+        behavior.subscribeDonationStatus = 403;
+        registry.open(key("s-don-no", 22L, "tokDonNo"), "tokDonNo");
+        awaitUntil(AWAIT, () -> "refused".equals(resolver.resolve("s-don-no").donationState()));
+
+        ChatCollectionStatus status = resolver.resolve("s-don-no");
+        assertThat(status.donationState()).isEqualTo("refused");
+        assertThat(status.state())
+                .as("후원 거부가 채팅 상태를 바꾸면 이 카드가 막으려던 그것이다")
+                .isEqualTo("collecting");
+    }
+
+    /** 등록부에 없는 방송은 {@code none}이다 — null을 실으면 clip 배선이 갈린다. */
+    @Test
+    void 모르는_방송의_후원_상태는_none이다() {
+        assertThat(resolver.resolve("모르는-방송").donationState()).isEqualTo("none");
+    }
+
     @Test
     void 붙어_있으면_collecting이고_since는_null이다() throws Exception {
         registry.open(key("s1", 1L, "tokA"), "tokA");
@@ -154,14 +200,14 @@ class ChatCollectionStatusResolverTest extends IntegrationTestSupport {
     @Test
     void 모르는_방송은_unknown이고_129자_번호는_DB를_묻지_않는다() throws Exception {
         java.util.concurrent.atomic.AtomicInteger lookups = new java.util.concurrent.atomic.AtomicInteger();
-        ChatCollectionStatusResolver counting = new ChatCollectionStatusResolver(registry,
+        ChatCollectionStatusResolver counting = new ChatCollectionStatusResolver(registry, 
                 new EndedStreamStore(jdbc) {
                     @Override
                     public Optional<EndedStream> find(String streamId) {
                         lookups.incrementAndGet();
                         return super.find(streamId);
                     }
-                }, () -> 지금);
+                }, donations, () -> 지금);
 
         assertThat(counting.resolve("never-heard").state()).isEqualTo("unknown");
         assertThat(lookups.get()).as("모르는 번호는 표를 한 번 묻는다 — 아래 단언의 양성 대조").isEqualTo(1);
@@ -195,14 +241,14 @@ class ChatCollectionStatusResolverTest extends IntegrationTestSupport {
         java.util.function.Supplier<Instant> 흐르는_시계 = () -> 지금.plusSeconds(시계_호출.incrementAndGet());
         java.util.concurrent.atomic.AtomicReference<Instant> 조회_중 =
                 new java.util.concurrent.atomic.AtomicReference<>();
-        ChatCollectionStatusResolver 느린_표를_문_창구 = new ChatCollectionStatusResolver(registry,
+        ChatCollectionStatusResolver 느린_표를_문_창구 = new ChatCollectionStatusResolver(registry, 
                 new EndedStreamStore(jdbc) {
                     @Override
                     public Optional<EndedStream> find(String streamId) {
                         조회_중.set(흐르는_시계.get());   // 조회가 도는 「그 순간」의 시각
                         return super.find(streamId);
                     }
-                }, 흐르는_시계);
+                }, donations, 흐르는_시계);
 
         store.remember("s9", 4, Instant.parse("2026-08-22T11:30:00Z"));
         int 메모_전 = 시계_호출.get();

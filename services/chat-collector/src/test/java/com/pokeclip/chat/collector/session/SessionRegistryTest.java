@@ -4,9 +4,13 @@ import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.CollectionStatus;
 import com.pokeclip.chat.collector.StopReason;
 import com.pokeclip.chat.collector.archive.ChatArchive;
+import com.pokeclip.chat.collector.chzzk.DonationSubscription;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
+import com.pokeclip.chat.collector.persist.DonationPersister;
+import com.pokeclip.chat.collector.status.DonationSubscriptions;
 import com.pokeclip.chat.collector.status.CollectionState;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.TestPersistence;
@@ -57,10 +61,13 @@ class SessionRegistryTest extends IntegrationTestSupport {
     @LocalServerPort int port;
     @Autowired FakeChzzkBehavior behavior;
     @Autowired RestClient.Builder restClientBuilder;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     private SessionRegistry registry;
     /** 등록부 세션이 실제로 채팅을 흘려보내는 바구니. 세션 격리를 재려면 바늘이 흘러야 한다. */
     private ChatBuffer buffer;
+    /** 후원 바구니. 후원이 소켓에서 여기까지 오는 것을 재려면 세션과 같은 것을 들어야 한다. */
+    private DonationBuffer donationBuffer;
 
     @AfterEach
     void tearDown() {
@@ -455,6 +462,32 @@ class SessionRegistryTest extends IntegrationTestSupport {
         assertThat(registry.currentStreamIdOf(42L)).isEqualTo("s2");
         assertThat(registry.activeStreamIds()).containsExactly("s2");
         assertThat(registry.statusOf("s1")).as("옛 번호로는 더 이상 안 찾혀야 한다").isNull();
+    }
+
+    /**
+     * 🔴 <b>갈아끼울 때 후원 상태도 같이 옮기는가</b> (POK-234 감사 라운드 2 C5).
+     *
+     * <p>{@code retarget}의 이관 세 줄을 지워도 <b>모듈 전체가 초록</b>이었다. 지우면
+     * 갈아낀 새 방송이 창구에서 <b>「후원 상태 모름(none)」</b>으로 보이고 — 소켓과 구독은
+     * 그대로라 후원이 실제로는 들어오고 있는데도 — <b>끝난 방송 번호의 값이 창구 메모리에
+     * 영영 남는다</b>(아무도 지우지 않는다).
+     */
+    // 문항 2: 새 번호가 SUBSCRIBED인 것만 보면 <b>옛 번호를 안 지우는</b> 구현도 통과한다 —
+    //         옛 번호가 NONE으로 비는 것을 같이 본다(누수 쪽이 이 검사의 절반이다).
+    @Test
+    void 갈아끼우면_새_방송이_앞_방송의_후원_상태를_잇는다() throws Exception {
+        givenRegistry();
+        registry.open(key("s-don-1", 44L, "chA"), "tok44");
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-don-1") == DonationSubscription.SUBSCRIBED);
+
+        assertThat(registry.open(key("s-don-2", 44L, "chA"), "tok44")).isTrue();
+
+        assertThat(registry.donationStateOf("s-don-2"))
+                .as("안 옮기면 소켓·구독이 그대로인데 창구가 새 방송을 「모름」으로 답한다")
+                .isEqualTo(DonationSubscription.SUBSCRIBED);
+        assertThat(registry.donationStateOf("s-don-1"))
+                .as("옛 번호를 안 지우면 끝난 방송의 값이 창구 메모리에 영영 남는다")
+                .isEqualTo(DonationSubscription.NONE);
     }
 
     /**
@@ -1109,6 +1142,274 @@ class SessionRegistryTest extends IntegrationTestSupport {
     }
 
     // ------------------------------------------------------------------
+    // 후원 구독 (POK-234 태스크 4·4B)
+    // ------------------------------------------------------------------
+
+    /**
+     * 🔴 이 카드가 지키는 것. <b>후원 구독이 거부돼도 채팅 수집은 산다.</b>
+     *
+     * <p>문항 2: 「refused다」만 보면 <b>후원 구독을 아예 안 하는 구현</b>도 통과한다 —
+     * 그쪽은 NONE이라 실제로는 안 통과하지만, 더 중요한 것은 <b>채팅이 계속 걷는지</b>다.
+     * 그래서 상태·수신 둘을 같이 본다. 수신 1건이 「세션이 살아 있다」의 양성 대조다.
+     */
+    @Test
+    void 후원_구독이_403이어도_채팅_구독은_살고_상태는_refused다() throws Exception {
+        givenRegistry();
+        behavior.subscribeDonationStatus = 403;
+
+        assertThat(registry.open(key("s-don-403", 7L, "CH"), "tok-7"))
+                .as("후원 거부가 수립을 실패시키면 이 방송은 채팅도 못 걷는다")
+                .isTrue();
+        awaitUntil(AWAIT, () -> registry.statusOf("s-don-403") != null
+                && registry.statusOf("s-don-403").state() == CollectionStatus.State.COLLECTING);
+
+        assertThat(registry.donationStateOf("s-don-403")).isEqualTo(DonationSubscription.REFUSED);
+
+        behavior.emitChatTo("tok-7", "{\"channelId\":\"CH\",\"senderChannelId\":\"S\","
+                + "\"content\":\"a\",\"messageTime\":1754300000000}");
+        awaitUntil(AWAIT, () -> registry.receivedOf("s-don-403") == 1);
+        assertThat(registry.receivedOf("s-don-403"))
+                .as("후원이 거부된 방송의 채팅이 안 들어오면 이 카드가 막으려던 그것이다")
+                .isEqualTo(1);
+    }
+
+    /**
+     * 🔴 <b>재시도가 성공하면 창구도 그것을 본다</b>(봇 codex P2가 잡았다).
+     *
+     * <p>{@code StreamSession}은 {@code open()}이 돌아온 <b>뒤 한 번</b> 후원 상태를
+     * 등록부에 적는다. 재시도는 그 뒤에 값을 바꾸므로, 알림 배선이 없으면
+     * <b>재시도가 성공해도 창구는 방송이 끝날 때까지 「failed」로 보고한다</b> —
+     * 실제로는 후원이 잘 들어오는데 화면이 그럴듯하게 틀린다.
+     *
+     * <p>주기는 시험 프로필이 60ms로 줄여 둔다. 운영값 1분을 기다리는 검사는 못 선다.
+     */
+    @Test
+    void 후원_재시도가_성공하면_창구도_subscribed로_바뀐다() throws Exception {
+        givenRegistry();
+        behavior.subscribeDonationStatus = 503;
+
+        assertThat(registry.open(key("s-don-retry", 91L, "CH"), "tok-91")).isTrue();
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-don-retry") == DonationSubscription.FAILED);
+
+        behavior.subscribeDonationStatus = 200;
+
+        awaitUntil(AWAIT,
+                () -> registry.donationStateOf("s-don-retry") == DonationSubscription.SUBSCRIBED);
+        assertThat(registry.donationStateOf("s-don-retry"))
+                .as("재시도가 성공했는데 창구가 여전히 failed 다 — 화면이 그럴듯하게 틀린다")
+                .isEqualTo(DonationSubscription.SUBSCRIBED);
+    }
+
+    /** 반납이 <b>둘</b> 나가야 한다. 후원 자리도 계정당 상한을 먹는다. */
+    @Test
+    void 후원_구독이_되면_subscribed이고_닫을_때_반납이_둘_나간다() throws Exception {
+        givenRegistry();
+
+        registry.open(key("s-don-ok", 8L, "CH"), "tok-8");
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-don-ok") == DonationSubscription.SUBSCRIBED);
+        assertThat(registry.donationStateOf("s-don-ok")).isEqualTo(DonationSubscription.SUBSCRIBED);
+
+        registry.close("s-don-ok");   // 공개 종료 경로 — stopOne은 private다(계획 검증 F8)
+
+        awaitUntil(AWAIT, () -> behavior.unsubscribeDonationCallCount() == 1);
+        assertThat(behavior.unsubscribeDonationCallCount())
+                .as("후원 반납이 안 나가면 그 자리가 계정 상한 안에 남는다")
+                .isEqualTo(1);
+        assertThat(behavior.unsubscribeCallCount())
+                .as("채팅 반납이 0이면 위 단언은 「반납이 둘」이 아니라 「후원만」을 잰 것이다")
+                .isGreaterThanOrEqualTo(1);
+    }
+
+    /**
+     * {@code subscribed(DONATION)} 프레임을 <b>안 기다린다</b>는 선택을 재는 갈래다.
+     * 안 적으면 다음 사람이 「⑤처럼 기다려야 하지 않나」로 되돌린다 —
+     * 되돌리면 이 검사가 수립 시한에서 빨간불이 된다.
+     */
+    @Test
+    void 후원_subscribed_프레임이_안_와도_수립은_성공한다() throws Exception {
+        givenRegistry();
+        behavior.sendDonationSubscribed = false;
+
+        assertThat(registry.open(key("s-don-noframe", 13L, "CH"), "tok-13")).isTrue();
+        awaitUntil(AWAIT, () -> registry.statusOf("s-don-noframe") != null
+                && registry.statusOf("s-don-noframe").state() == CollectionStatus.State.COLLECTING);
+        assertThat(registry.donationStateOf("s-don-noframe"))
+                .as("REST가 200이면 구독된 것이다 — 프레임은 확인이지 조건이 아니다")
+                .isEqualTo(DonationSubscription.SUBSCRIBED);
+    }
+
+    /** 등록부에 없는 방송은 NONE이다. clip 배선이 null을 안 보게 한다. */
+    @Test
+    void 모르는_방송의_후원_상태는_NONE이다() {
+        givenRegistry();
+        assertThat(registry.donationStateOf("never-heard")).isEqualTo(DonationSubscription.NONE);
+    }
+
+    /**
+     * 🔴 태스크 4B의 축. <b>후원 권한만 회수돼도 채팅 세션은 안 죽는다.</b>
+     *
+     * <p>안 가르면 이 프로세스가 붙든 <b>다른 방송 전부</b>가 같이 끊긴다 —
+     * revoked는 영구 정지 → 판정 → {@code exit 1}로 가고, 포기 메모가 24시간
+     * 재부착까지 막는다(계획 검증 F2).
+     *
+     * <p>문항 2: 「refused다」만 보면 <b>세션이 죽은 뒤</b>에도 참일 수 있다.
+     * 그래서 상태가 COLLECTING인 것과 <b>채팅이 실제로 더 들어오는 것</b>을 같이 본다.
+     */
+    @Test
+    void 후원_권한만_회수되면_채팅은_계속_걷는다() throws Exception {
+        givenRegistry();
+        registry.open(key("s-rev-don", 11L, "CH"), "tok-11");
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-rev-don") == DonationSubscription.SUBSCRIBED);
+
+        behavior.emitRevokedTo("tok-11", "DONATION");
+
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-rev-don") == DonationSubscription.REFUSED);
+        assertThat(registry.donationStateOf("s-rev-don")).isEqualTo(DonationSubscription.REFUSED);
+        assertThat(registry.statusOf("s-rev-don"))
+                .as("세션이 통째로 사라졌다면 후원 회수가 채팅을 죽인 것이다")
+                .isNotNull();
+        assertThat(registry.statusOf("s-rev-don").state()).isEqualTo(CollectionStatus.State.COLLECTING);
+
+        behavior.emitChatTo("tok-11", "{\"channelId\":\"CH\",\"senderChannelId\":\"S\","
+                + "\"content\":\"a\",\"messageTime\":1754300000000}");
+        awaitUntil(AWAIT, () -> registry.receivedOf("s-rev-don") == 1);
+        assertThat(registry.receivedOf("s-rev-don"))
+                .as("상태만 COLLECTING이고 채팅이 안 오면 아무것도 안 걷는 것이다")
+                .isEqualTo(1);
+    }
+
+    /**
+     * 🔴 <b>{@code SUBSCRIPTION} 회수 갈래에 그물이 0개였다</b> (POK-234 감사 라운드 2 C3).
+     *
+     * <p>{@code || "SUBSCRIPTION".equals(event.eventType())}를 지워도 <b>모듈 전체가 초록</b>이었다.
+     * 지워지면 <b>구독(멤버십) 권한 회수가 채팅 세션을 죽인다</b> — 영구 정지 → 판정 → exit 1로
+     * 가고, 그러면 <b>이 프로세스가 붙든 방송 전부</b>가 같이 끊긴다. 태스크 4B가 막으려던 그것과
+     * 결과가 같은데 {@code DONATION}만 재고 있었다.
+     *
+     * <p><b>실물 프레임의 모양은 못 봤다.</b> 대문자 {@code SUBSCRIPTION}은 치지직 공식 Session
+     * 문서의 「이벤트 권한 취소 메시지」 {@code eventType} 목록(CHAT·DONATION·SUBSCRIPTION)에서
+     * 확정했고, 실제로 그 프레임이 오는 것을 본 적은 없다. <b>대소문자가 다르면 그 갈래는
+     * 「모르는 회수」로 떨어져 멈추는 쪽</b>(= 안전한 방향)이 되므로 틀려도 조용히 나빠지지 않는다.
+     */
+    // 문항 2: 「statusOf가 null이 아니다」만 보면 <b>아무것도 안 하는</b> 구현도 통과한다 —
+    //         회수 뒤에 채팅이 실제로 한 건 더 들어오는 것을 같이 본다(DONATION 갈래와 같은 모양).
+    @Test
+    void 구독_권한만_회수되면_채팅은_계속_걷는다() throws Exception {
+        givenRegistry();
+        registry.open(key("s-rev-sub", 13L, "CH"), "tok-13");
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-rev-sub") == DonationSubscription.SUBSCRIBED);
+
+        behavior.emitRevokedTo("tok-13", "SUBSCRIPTION");
+
+        awaitUntil(AWAIT, () -> registry.donationStateOf("s-rev-sub") == DonationSubscription.REFUSED);
+        assertThat(registry.statusOf("s-rev-sub"))
+                .as("세션이 통째로 사라졌다면 구독 회수가 채팅을 죽인 것이다 — exit 1로 이 프로세스의 방송 전부가 끊긴다")
+                .isNotNull();
+        assertThat(registry.statusOf("s-rev-sub").state()).isEqualTo(CollectionStatus.State.COLLECTING);
+
+        behavior.emitChatTo("tok-13", "{\"channelId\":\"CH\",\"senderChannelId\":\"S\","
+                + "\"content\":\"a\",\"messageTime\":1754300000000}");
+        awaitUntil(AWAIT, () -> registry.receivedOf("s-rev-sub") == 1);
+        assertThat(registry.receivedOf("s-rev-sub"))
+                .as("상태만 COLLECTING이고 채팅이 안 오면 아무것도 안 걷는 것이다")
+                .isEqualTo(1);
+    }
+
+    /** 채팅 권한 회수는 <b>지금대로</b> 멈춘다. 이 갈래를 안 재면 위 시험이 전부를 끄는 구현도 통과한다. */
+    @Test
+    void 채팅_권한이_회수되면_지금대로_멈춘다() throws Exception {
+        givenRegistry();
+        registry.open(key("s-rev-chat", 12L, "CH"), "tok-12");
+        awaitUntil(AWAIT, () -> registry.statusOf("s-rev-chat") != null
+                && registry.statusOf("s-rev-chat").state() == CollectionStatus.State.COLLECTING);
+
+        behavior.emitRevokedTo("tok-12", "CHAT");
+
+        awaitUntil(AWAIT, () -> registry.statusOf("s-rev-chat") == null
+                || registry.statusOf("s-rev-chat").state() == CollectionStatus.State.STOPPED);
+        CollectionStatus.Snapshot after = registry.statusOf("s-rev-chat");
+        assertThat(after == null || after.state() == CollectionStatus.State.STOPPED)
+                .as("채팅 권한이 없어졌는데 계속 COLLECTING이면 health는 UP인 채로 아무것도 안 걷는다")
+                .isTrue();
+    }
+
+    /**
+     * <b>옛 모양(eventType 칸이 없다)은 지금대로 멈춘다.</b> 모르는 회수를 채팅 쪽으로
+     * 보는 것이 안전한 방향이다 — 반대로 두면 채팅 권한이 사라졌는데 계속 COLLECTING이다.
+     */
+    @Test
+    void 종류가_없는_옛_모양_회수는_멈춘다() throws Exception {
+        givenRegistry();
+        registry.open(key("s-rev-old", 14L, "CH"), "tok-14");
+        awaitUntil(AWAIT, () -> registry.statusOf("s-rev-old") != null
+                && registry.statusOf("s-rev-old").state() == CollectionStatus.State.COLLECTING);
+
+        behavior.emitRevokedTo("tok-14", null);
+
+        awaitUntil(AWAIT, () -> registry.statusOf("s-rev-old") == null
+                || registry.statusOf("s-rev-old").state() == CollectionStatus.State.STOPPED);
+        CollectionStatus.Snapshot after = registry.statusOf("s-rev-old");
+        assertThat(after == null || after.state() == CollectionStatus.State.STOPPED).isTrue();
+    }
+
+    /**
+     * 후원 프레임이 <b>표까지</b> 간다. 배선을 관통해서 재는 유일한 갈래다 —
+     * {@code DonationPersisterTest}는 바구니부터 보고, 여기는 소켓부터 본다.
+     *
+     * <p>문항 2: 행 수만 보면 <b>앞 검사가 남긴 행</b>일 수 있다 — 방송 번호 접두
+     * {@code rdon-}으로 자기 것만 세고, 시작 전에 지운다.
+     */
+    @Test
+    void 후원_프레임이_표에_남는다() throws Exception {
+        jdbc.update("DELETE FROM chat_donations WHERE stream_id LIKE 'rdon-%'");
+        givenRegistry();
+        DonationPersister persister = new DonationPersister(jdbc, donationBuffer);
+
+        registry.open(key("rdon-1", 9L, "CH"), "tok-9");
+        awaitUntil(AWAIT, () -> registry.statusOf("rdon-1") != null
+                && registry.statusOf("rdon-1").state() == CollectionStatus.State.COLLECTING);
+
+        behavior.emitDonationTo("tok-9", "{\"donationType\":\"CHAT\",\"channelId\":\"CH\","
+                + "\"donatorChannelId\":\"D\",\"donatorNickname\":\"n\","
+                + "\"payAmount\":\"1000\",\"donationText\":\"t\"}");
+
+        awaitUntil(AWAIT, () -> donationBuffer.size() == 1);
+        assertThat(donationBuffer.size())
+                .as("바구니에 안 들어왔으면 아래 표 검사는 배선이 아니라 저장을 보는 것이 된다")
+                .isEqualTo(1);
+
+        persister.flushBacklog();
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM chat_donations WHERE stream_id='rdon-1'", Long.class))
+                .isEqualTo(1L);
+        assertThat(jdbc.queryForObject(
+                "SELECT pay_amount FROM chat_donations WHERE stream_id='rdon-1'", Long.class))
+                .as("금액이 안 실리면 화면이 후원 크기를 못 쓴다")
+                .isEqualTo(1000L);
+    }
+
+    /** 후원은 <b>검산 등식 밖</b>이다 — received에 섞이면 등식이 후원 수만큼 벌어진다. */
+    @Test
+    void 후원은_received에_안_섞이고_따로_세진다() throws Exception {
+        givenRegistry();
+        registry.open(key("rdon-2", 10L, "CH"), "tok-10");
+        awaitUntil(AWAIT, () -> registry.statusOf("rdon-2") != null
+                && registry.statusOf("rdon-2").state() == CollectionStatus.State.COLLECTING);
+
+        behavior.emitDonationTo("tok-10", "{\"donationType\":\"CHAT\",\"channelId\":\"CH\","
+                + "\"donatorChannelId\":\"D\",\"donatorNickname\":\"n\","
+                + "\"payAmount\":\"1000\",\"donationText\":\"t\"}");
+        awaitUntil(AWAIT, () -> donationBuffer.size() >= 1);
+
+        assertThat(donationBuffer.size())
+                .as("후원이 아예 안 왔다면 아래 단언은 자동으로 참이다")
+                .isEqualTo(1);
+        assertThat(registry.receivedOf("rdon-2"))
+                .as("후원이 received를 올리면 검산 등식이 영구히 벌어진다")
+                .isZero();
+    }
+
+    // ------------------------------------------------------------------
     // 도우미
     // ------------------------------------------------------------------
 
@@ -1122,15 +1423,16 @@ class SessionRegistryTest extends IntegrationTestSupport {
 
     private void givenRegistry(boolean enabled, Duration establishTimeout) {
         buffer = new ChatBuffer(1_000);
+        donationBuffer = new DonationBuffer(1_000);
         registry = new SessionRegistry(
                 // <b>설정 토큰은 안 쓰인다.</b> 세션마다 자기 토큰으로 붙는 것을
                 // 위 connectedTokens() 단언이 지킨다 — 여기에 진짜 같은 값을 두면
                 // 설정에서 읽는 회귀가 그 단언을 통과해 버린다.
                 new ChzzkProperties(enabled, "설정-토큰-쓰면-안-된다",
-                        "http://localhost:" + port, establishTimeout, FIRST_DELAY, MAX_DELAY),
+                        "http://localhost:" + port, establishTimeout, FIRST_DELAY, MAX_DELAY, Duration.ofMillis(60)),
                 restClientBuilder,
                 buffer, TestPersistence.disabledPersister(),
-                ChatArchive.NONE);
+                ChatArchive.NONE, new DonationSubscriptions(), donationBuffer);
     }
 
     /**

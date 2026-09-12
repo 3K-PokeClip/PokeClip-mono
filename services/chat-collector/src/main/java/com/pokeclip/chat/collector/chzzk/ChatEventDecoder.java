@@ -35,11 +35,71 @@ public final class ChatEventDecoder {
         if (messageTime <= 0) {
             return null;
         }
+        // 닉네임·역할은 「없으면 null」이다. asString(null) 하나로 끝난다 —
+        // Jackson 3은 <b>칸이 없을 때(MissingNode)도 JSON null일 때(NullNode)도</b>
+        // 기본값을 그대로 돌려준다(Jackson 2의 asText()는 문자열 "null"이었다).
+        // isMissingNode 갈래를 앞에 뒀다가 지웠다 — 두 경로의 답이 같아 그 갈래를
+        // 재는 시험을 만들 수 없었고(감사 라운드 1 C3: 지워도 18건 전부 초록),
+        // 「방어는 있는데 그물이 없는」 코드가 된다. 라이브러리가 바뀌면
+        // ChatEventDecoderTest의 「닉네임과_역할을_뽑고_없으면_null이다」와
+        // 「닉네임이_JSON_null이어도_null이다」 둘이 잡는다 — 그것이 그물이다.
+        //
+        // 역할은 「없으면」이 아니라 「사실상 늘」 null이다:
+        // 치지직이 userRoleCode를 안 보낸다(2026-09-08 실기동 — 실방송 70건
+        // 전부 NULL이라 원문 프레임을 직접 받아 봤고, CHAT 봉투 칸 여덟에
+        // 그 이름이 없었다. 공식 문서 표에는 있다).
+        // 아래 userRoleCode 줄을 지우지 마라 — 치지직이 보내기 시작하면
+        // 저절로 채워지고, 지워 두면 그날 아무도 모른다. 사정 전문은 ChatMessage 주석.
+        //
+        // 🔴 <b>이 칸을 profile 안에서 읽으라는 지적이 있었다(봇 codex). 기각했다.</b>
+        // 근거 둘이 반대를 가리킨다:
+        //   · 공식 문서(Session > CHAT Message Body)에서 profile 아래 들여쓴 것은
+        //     nickname·badges 뿐이고 userRoleCode 는 <b>들여쓰기가 없다</b>(= 봉투 최상위)
+        //   · 실측 원문에서 profile 안은 {nickname, verifiedMark, badges} <b>셋뿐</b>이었다
+        // <b>다만 이 판정에는 약점이 있다</b> — 같은 문서가 verifiedMark 를 senderChannelId
+        // 아래로 들여썼는데 <b>실물은 profile 안</b>이다. 그 표의 들여쓰기가 이미 한 번
+        // 틀렸으므로, 치지직이 보내기 시작했는데도 여기가 계속 null 이면
+        // <b>제일 먼저 profile 안을 의심하라.</b>
+        JsonNode profile = inner.path("profile");
         return new ChatMessage(
                 inner.path("channelId").asString(""),
                 inner.path("senderChannelId").asString(""),
                 inner.path("content").asString(""),
                 messageTime,
+                innerText,
+                profile.path("nickname").asString(null),
+                inner.path("userRoleCode").asString(null));
+    }
+
+    /**
+     * 42["DONATION","{…}"] 를 푼다. 이름이 DONATION이 아니거나 안쪽이 객체가 아니면 null이다.
+     * 채팅과 달리 시각 칸이 없으므로 시각으로 거르는 갈래도 없다.
+     */
+    public static DonationEvent decodeDonation(String eventPayload) {
+        String innerText = innerText(eventPayload, "DONATION");
+        if (innerText == null) {
+            return null;
+        }
+        JsonNode inner = parseInner(innerText);
+        if (inner == null || !inner.isObject()) {
+            return null;
+        }
+        Long amount;
+        try {
+            String rawAmount = inner.path("payAmount").asString("");
+            amount = rawAmount.isEmpty() ? null : Long.parseLong(rawAmount.replace(",", ""));
+        } catch (NumberFormatException e) {
+            // 금액 표기가 바뀌어도 후원 자체는 버리지 않는다 — 버리면 하이라이트 신호가
+            // 통째로 사라지고, 그때 디코더는 실패라고 말하지도 않는다.
+            amount = null;
+        }
+        return new DonationEvent(
+                inner.path("channelId").asString(""),
+                inner.path("donatorChannelId").asString(""),
+                inner.path("donatorNickname").asString(""),
+                inner.path("donationType").asString(""),
+                amount,
+                inner.path("donationText").asString(""),
                 innerText);
     }
 
@@ -58,7 +118,9 @@ public final class ChatEventDecoder {
         if (type.isEmpty()) {
             return null;
         }
-        return new SystemEvent(type, inner.path("data").path("sessionKey").asString(""));
+        return new SystemEvent(type,
+                inner.path("data").path("sessionKey").asString(""),
+                inner.path("data").path("eventType").asString(""));
     }
 
     /** 바깥 배열을 풀어 이름이 맞으면 안쪽 문자열을 <b>파싱하지 않고</b> 돌려준다. */

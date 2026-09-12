@@ -126,6 +126,123 @@ class ChatEventDecoderTest {
                 .isEqualTo(inner.getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * 닉네임은 화면에 「누가 말했나」를 띄우는 값이라 창구(POK-234)가 표에서 읽어 내보낸다.
+     * 없으면 빈 문자열이 아니라 null이어야 한다 — 빈 문자열은 「이름이 빈 사람」과 못 가른다.
+     */
+    @Test
+    void 닉네임과_역할을_뽑고_없으면_null이다() {
+        String inner = "{\"channelId\":\"CH1\",\"senderChannelId\":\"S1\",\"content\":\"x\","
+                + "\"messageTime\":1754300000000,\"profile\":{\"nickname\":\"겜돌이\"},"
+                + "\"userRoleCode\":\"streamer\"}";
+        ChatMessage m = ChatEventDecoder.decodeChat("[\"CHAT\"," + quoteAsJson(inner) + "]");
+        assertThat(m.nickname()).isEqualTo("겜돌이");
+        assertThat(m.userRole()).isEqualTo("streamer");
+
+        String bare = "{\"channelId\":\"CH1\",\"senderChannelId\":\"S1\",\"content\":\"x\",\"messageTime\":1754300000000}";
+        ChatMessage b = ChatEventDecoder.decodeChat("[\"CHAT\"," + quoteAsJson(bare) + "]");
+        assertThat(b.nickname()).isNull();
+        assertThat(b.userRole()).isNull();
+    }
+
+    /**
+     * JSON null과 「칸이 없음」을 같게 다룬다. Jackson 3의 asString(null)은 NullNode에
+     * null을 주지만(Jackson 2의 asText()는 문자열 "null"이었다) 그 차이에 기대지 않고
+     * isMissingNode 갈래로 먼저 거른다 — 그 동작이 바뀌어도 이 단언이 잡는다.
+     */
+    @Test
+    void 닉네임이_JSON_null이어도_null이다() {
+        String inner = "{\"channelId\":\"CH1\",\"senderChannelId\":\"S1\",\"content\":\"x\","
+                + "\"messageTime\":1754300000000,\"profile\":{\"nickname\":null},"
+                + "\"userRoleCode\":null}";
+        ChatMessage m = ChatEventDecoder.decodeChat("[\"CHAT\"," + quoteAsJson(inner) + "]");
+        assertThat(m.nickname()).isNull();
+        assertThat(m.userRole()).isNull();
+    }
+
+    /** 후원은 화면에서 하이라이트 신호로 쓰인다. raw는 채팅과 같은 규칙으로 원문 그대로다. */
+    @Test
+    void 후원_이벤트를_푼다() {
+        String inner = "{\"donationType\":\"CHAT\",\"channelId\":\"CH1\",\"donatorChannelId\":\"D1\","
+                + "\"donatorNickname\":\"도네초코\",\"payAmount\":\"5000\",\"donationText\":\"가즈아\"}";
+        DonationEvent d = ChatEventDecoder.decodeDonation("[\"DONATION\"," + quoteAsJson(inner) + "]");
+        assertThat(d.donatorNickname()).isEqualTo("도네초코");
+        assertThat(d.payAmount()).isEqualTo(5000L);
+        assertThat(d.raw()).isEqualTo(inner);
+        assertThat(d.channelId()).isEqualTo("CH1");
+        assertThat(d.donatorChannelId()).isEqualTo("D1");
+        assertThat(d.donationType()).isEqualTo("CHAT");
+        assertThat(d.donationText()).isEqualTo("가즈아");
+    }
+
+    /**
+     * 금액은 문서상 문자열("원")이라 표기가 바뀔 수 있다. 숫자로 못 바꾼다고 후원 자체를
+     * 버리면 <b>하이라이트 신호가 통째로 사라진다</b> — 금액만 null로 두고 이벤트는 살린다.
+     */
+    @Test
+    void 후원_금액이_숫자가_아니면_null이고_이벤트는_버리지_않는다() {
+        String inner = "{\"donationType\":\"VIDEO\",\"channelId\":\"CH1\",\"donatorChannelId\":\"D1\","
+                + "\"donatorNickname\":\"n\",\"payAmount\":\"오천\",\"donationText\":\"\"}";
+        DonationEvent d = ChatEventDecoder.decodeDonation("[\"DONATION\"," + quoteAsJson(inner) + "]");
+        assertThat(d).isNotNull();
+        assertThat(d.payAmount()).isNull();
+        assertThat(d.donationType()).isEqualTo("VIDEO");
+    }
+
+    /** 천 단위 쉼표와 숫자 노드 — 둘 다 실물에서 올 수 있는 모양이고 금액은 살아야 한다. */
+    @Test
+    void 금액이_쉼표나_숫자로_와도_읽는다() {
+        String comma = "{\"channelId\":\"CH1\",\"payAmount\":\"5,000\"}";
+        assertThat(ChatEventDecoder.decodeDonation("[\"DONATION\"," + quoteAsJson(comma) + "]").payAmount())
+                .isEqualTo(5000L);
+        String number = "{\"channelId\":\"CH1\",\"payAmount\":5000}";
+        assertThat(ChatEventDecoder.decodeDonation("[\"DONATION\"," + quoteAsJson(number) + "]").payAmount())
+                .isEqualTo(5000L);
+    }
+
+    /** 금액 칸이 아예 없는 것과 「못 읽었다」를 같게 다룬다 — 둘 다 null이다. */
+    @Test
+    void 금액_칸이_없으면_null이다() {
+        String inner = "{\"channelId\":\"CH1\",\"donatorNickname\":\"n\"}";
+        DonationEvent d = ChatEventDecoder.decodeDonation("[\"DONATION\"," + quoteAsJson(inner) + "]");
+        assertThat(d).isNotNull();
+        assertThat(d.payAmount()).isNull();
+    }
+
+    /** 이름을 안 보면 채팅을 후원으로 세면서 지표가 조용히 갈린다. */
+    @Test
+    void CHAT을_DONATION으로_풀면_null이다() {
+        assertThat(ChatEventDecoder.decodeDonation("[\"CHAT\",\"{}\"]")).isNull();
+    }
+
+    /** 깨진 본문·객체가 아닌 안쪽 — 채팅과 같은 자리에서 걸린다. */
+    @Test
+    void 깨진_후원_본문은_null이다() {
+        assertThat(ChatEventDecoder.decodeDonation("[\"DONATION\",\"{깨짐\"]")).isNull();
+        assertThat(ChatEventDecoder.decodeDonation("[\"DONATION\",\"null\"]")).isNull();
+        assertThat(ChatEventDecoder.decodeDonation("[\"DONATION\",\"[]\"]")).isNull();
+        assertThat(ChatEventDecoder.decodeDonation("완전히 아닌 것")).isNull();
+    }
+
+    /**
+     * 권한 회수는 종류별로 온다(CHAT·DONATION·SUBSCRIPTION). 그 칸을 안 읽으면
+     * <b>후원만 회수돼도 채팅 세션이 죽는다</b> — POK-234 태스크 4B의 축이다.
+     * 없으면 빈 문자열이다(옛 모양·connected·subscribed).
+     */
+    @Test
+    void revoked의_이벤트_종류를_읽고_없으면_빈_문자열이다() {
+        String withType = "{\"type\":\"revoked\",\"data\":{\"eventType\":\"DONATION\",\"channelId\":\"CH\"}}";
+        assertThat(ChatEventDecoder.decodeSystem("[\"SYSTEM\"," + quoteAsJson(withType) + "]").eventType())
+                .isEqualTo("DONATION");
+
+        String bare = "{\"type\":\"connected\",\"data\":{\"sessionKey\":\"K\"}}";
+        assertThat(ChatEventDecoder.decodeSystem("[\"SYSTEM\"," + quoteAsJson(bare) + "]").eventType()).isEmpty();
+
+        // data 자체가 없는 모양도 빈 문자열이다 — null을 주면 아래 equals 갈래가 NPE로 죽는다.
+        String noData = "{\"type\":\"revoked\"}";
+        assertThat(ChatEventDecoder.decodeSystem("[\"SYSTEM\"," + quoteAsJson(noData) + "]").eventType()).isEmpty();
+    }
+
     /** 문자열을 JSON 문자열 리터럴로 — 가짜 서버(FakeChzzkBehavior.escape)와 같은 일을 한다. */
     private static String quoteAsJson(String s) {
         return new tools.jackson.databind.ObjectMapper().writeValueAsString(s);

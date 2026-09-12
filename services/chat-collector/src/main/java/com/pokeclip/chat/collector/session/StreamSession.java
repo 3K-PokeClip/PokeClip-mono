@@ -9,6 +9,9 @@ import com.pokeclip.chat.collector.chzzk.ChatEventDecoder;
 import com.pokeclip.chat.collector.chzzk.ChatMessage;
 import com.pokeclip.chat.collector.chzzk.ChatSession;
 import com.pokeclip.chat.collector.chzzk.ChzzkSessionClient;
+import com.pokeclip.chat.collector.chzzk.DonationEvent;
+import com.pokeclip.chat.collector.chzzk.DonationSubscription;
+import com.pokeclip.chat.collector.status.DonationSubscriptions;
 import com.pokeclip.chat.collector.chzzk.SessionEstablishException;
 import com.pokeclip.chat.collector.chzzk.SystemEvent;
 import com.pokeclip.chat.collector.engineio.EngineIoFrame;
@@ -18,6 +21,8 @@ import com.pokeclip.chat.collector.observe.Heartbeat;
 import com.pokeclip.chat.collector.observe.HeartbeatListener;
 import com.pokeclip.chat.collector.observe.SummaryLogger;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
+import com.pokeclip.chat.collector.persist.PersistableDonation;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.persist.PersistableChat;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
@@ -52,6 +57,35 @@ import java.util.function.LongFunction;
  * 것이 그것을 구조적으로 막는 유일한 방법이다. <b>다시 들이지 마라.</b>
  * (그 콜백의 구현은 넣는 쪽이 정한다. {@code SessionRegistry}는 「그 세션만 닫고 등록부에서
  * 지운다」이고, 옛 경로의 {@code CollectorRunner}는 세션이 하나뿐이라 여전히 프로세스를 내린다.)
+ *
+ * <h2>🔴 방송이 켜져 있는데 8분 동안 채팅이 0건이었다 — 원인 미상 (2026-09-08 관측)</h2>
+ *
+ * <b>「수집이 죽었다」로 읽고 이 파일을 파헤치기 전에 먼저 읽어라.</b> 실기동에서
+ * <b>8분 동안 {@code received=0}</b>이었는데 <b>우리 쪽은 전부 정상이었다</b> —
+ * 세션 수립 · 구독({@code subscribed=2}) · 하트비트 · 절단 0 · {@code decodeFailures=0}.
+ * 수집기를 재기동해 다시 붙자 <b>즉시 흐르기 시작했다</b>(15:02 붙음 → 8분간 0건,
+ * 15:10 다시 붙음 → 즉시 4건. 방송은 15:00 시작).
+ *
+ * <p>🔴 <b>원인을 못 가렸다. 「붙은 순서」가 아니다</b> — 두 시점이 <b>둘 다 방송 시작 뒤</b>라
+ * 순서로는 차이가 설명되지 않는다. 그리고 <b>더 단순한 설명이 배제되지 않았다</b>:
+ * 같은 실기동의 다른 관측에서 그 구간의 <b>시청자가 0명</b>이었다. 즉 「우리가 못 받았다」와
+ * 「칠 사람이 없었다」가 안 갈린다. 로그를 안 남겨 재현도 못 한다.
+ * <b>그래서 이 카드는 아무것도 고치지 않는다 — 고칠 자리를 못 찾았다.</b>
+ *
+ * <p><b>그럼에도 적어 두는 이유</b>는 이 파일이 이미 말하는 것과 짝이어서다. 세션은 방송이
+ * 아니라 <b>계정</b>에 붙으므로 방송을 꺼도 세션은 살아 있고 채팅만 안 온다(361초 확인).
+ * <b>세션이 살아 있는 것과 채팅이 오는 것은 별개고, 지표 어디에도 차이가 안 난다.</b>
+ * 같은 증상을 다시 만나는 사람이 이 관측을 몰라 이 파일부터 파는 것을 막는다.
+ *
+ * <p>🔴 <b>이것과 별개로 안 잰 조건 하나 — 재부착(POK-219)이 이미 켜진 방송에 붙을 때.</b>
+ * 위 원인이 무엇이든 이 문장은 사실이다. 이번 실기동도 재부착으로 붙였지만
+ * <b>그때는 방송 전이었다</b> — 재부착 경로 자체는 지나갔어도
+ * <b>「이미 켜진 방송에 뒤늦게 붙는」 갈래는 한 번도 안 밟았다.</b>
+ * 재부착의 존재 이유가 정확히 그 갈래(재배포·재시작 뒤 이미 켜진 방송)다.
+ *
+ * <p><b>다시 재려면</b>: 방송을 먼저 켜고 <b>시청자가 실제로 채팅을 치는 것을 확인한 뒤</b>
+ * 프로세스를 죽였다 살려서 재부착으로 붙이고, {@code received}가 오르는지 본다.
+ * <b>시청자 0명이면 아무것도 안 갈린다</b> — 위 관측이 그 함정에 빠진 자리다.
  *
  * <p><b>여기 붙은 주석은 이 파일에서 가장 비싼 자산이다</b> — 락 경계 · 순서 뒤집기 금지 ·
  * 「떼도 초록이다」 실측 기록. 지우기 전에 반드시 읽어라.
@@ -159,6 +193,51 @@ public class StreamSession {
      */
     private final Consumer<StopReason> onPermanentStop;
 
+    /** 이 방송의 후원 구독 상태를 적는 곳. 창구가 여기서 읽는다. */
+    private final DonationSubscriptions donations;
+
+    /**
+     * 🔴 <b>후원 상태를 쓰는 자리는 여기 하나다</b>(봇 codex, 세 번째 지적).
+     *
+     * <p>앞 판에서 재시도 콜백만 자물쇠로 묶었더니 <b>회수 프레임이 그대로 남았다</b> —
+     * 같은 뿌리인데 한 자리만 고친 것이고, 그 자리에서 회수가 갈아끼움과 겹치면
+     * <b>새 방송이 앞 방송의 「구독 중」을 그대로 안고 간다.</b> 회수는 재시도를 깨우지
+     * 않으므로 그 방송은 <b>끝날 때까지</b> 틀린 값을 창구에 준다.
+     *
+     * <p>그래서 자물쇠를 부르는 쪽마다 거는 대신 <b>쓰는 길 자체를 하나로 줄였다.</b>
+     * 자리를 셋 두고 「전부 묶었나」를 사람이 세는 것은 이 세션에서 이미 네 번 틀렸다.
+     *
+     * <p>🔴 <b>{@code stream()} 이 아니라 {@code key.streamId()} 다.</b> 앞엣것은 방송 번호가
+     * 없을 때(옛 경로 {@code SessionKey.legacy()}) <b>{@code "none"} 이라는 글자를 돌려준다</b> —
+     * 로그에 쓰라고 만든 값이다. 그것을 열쇠로 쓰면 등록부에 아무도 안 읽는 자리가 쌓인다.
+     * 번호가 없을 때는 {@code null} 그대로 넘겨 <b>등록부가 조용히 무시하게</b> 두는 것이
+     * 원래 동작이고, 그 동작을 재는 검사가 있다. 이 메서드로 모으면서 한 번 갈아탈 뻔했다.
+     */
+    private void setDonationStatus(DonationSubscription state) {
+        synchronized (donationStatusLock) {
+            donations.set(key.streamId(), state);
+        }
+    }
+
+    /**
+     * 후원 상태의 <b>방송 번호를 읽는 것과 그 자리에 쓰는 것</b>을 묶는 자물쇠.
+     * 갈아끼움({@link #retarget})과 상태 쓰기({@link #setDonationStatus})가 이 둘을 각각
+     * 따로 하면, 쓰는 쪽이 옛 번호를 읽고 멈춘 사이 갈아끼움이 지나가 <b>이미 비워진
+     * 자리</b>에 쓰게 된다(봇 codex). 안에서 하는 일은 맵 쓰기뿐이라 I/O 를 붙잡지 않는다.
+     */
+    private final Object donationStatusLock = new Object();
+
+    /** 후원 바구니. 채팅 바구니와 같은 규칙 — 수신 스레드는 offer만 부른다. */
+    private final DonationBuffer donationBuffer;
+
+    /**
+     * 받은 후원의 순번. <b>세션마다 따로다</b> — 표의 UNIQUE가 방송 번호를 함께 보므로
+     * 세션이 갈리면 순번이 겹쳐도 부딪히지 않는다. 프로세스가 재시작해 1부터 다시
+     * 시작해도 {@code received_at}이 달라 옛 행과 안 부딪힌다.
+     */
+    private final java.util.concurrent.atomic.AtomicLong donationSeq =
+            new java.util.concurrent.atomic.AtomicLong();
+
     /**
      * 등록부가 여는 세션({@code SessionRegistry}). <b>검사용 손잡이 둘을 안 받는다</b> —
      * 그 둘은 러너를 <i>상속해서</i> 갈아 끼우는 옛 검사 전용이고, 등록부 경로에는
@@ -171,11 +250,12 @@ public class StreamSession {
                          ChatBuffer buffer, ChatPersister persister, ChatArchive archive,
                          ExecutorService reconnector, CountDownLatch stopSignal,
                          AtomicBoolean intakeClosed, AtomicInteger releasesInFlight,
-                         AtomicLong lastSessionNo,
+                         AtomicLong lastSessionNo, DonationSubscriptions donations,
+                         DonationBuffer donationBuffer,
                          Consumer<StopReason> onPermanentStop) {
         this(key, accessToken, properties, status, metrics, policy, restClient,
                 buffer, persister, archive, reconnector, stopSignal, intakeClosed,
-                releasesInFlight, lastSessionNo, null, null, onPermanentStop);
+                releasesInFlight, lastSessionNo, donations, donationBuffer, null, null, onPermanentStop);
     }
 
     /**
@@ -189,7 +269,8 @@ public class StreamSession {
                          ChatBuffer buffer, ChatPersister persister, ChatArchive archive,
                          ExecutorService reconnector, CountDownLatch stopSignal,
                          AtomicBoolean intakeClosed, AtomicInteger releasesInFlight,
-                         AtomicLong lastSessionNo,
+                         AtomicLong lastSessionNo, DonationSubscriptions donations,
+                         DonationBuffer donationBuffer,
                          Function<ChzzkSessionClient, ChatSession> sessionFactory,
                          LongFunction<HeartbeatListener> heartbeatListenerFactory,
                          Consumer<StopReason> onPermanentStop) {
@@ -208,7 +289,12 @@ public class StreamSession {
         this.intakeClosed = intakeClosed;
         this.releasesInFlight = releasesInFlight;
         this.lastSessionNo = lastSessionNo;
-        this.sessionFactory = sessionFactory != null ? sessionFactory : ChatSession::new;
+        this.donations = donations;
+        this.donationBuffer = donationBuffer;
+        // 기본 팩토리가 설정의 재시도 주기를 실어 준다 — 안 실으면 ChatSession 의
+        // 기본값(1분)이 쓰여 검사가 그 갈래를 못 잰다.
+        this.sessionFactory = sessionFactory != null ? sessionFactory
+                : client -> new ChatSession(client, properties.donationRetryPeriod());
         this.heartbeatListenerFactory = heartbeatListenerFactory != null
                 ? heartbeatListenerFactory : this::heartbeatListener;
         this.onPermanentStop = onPermanentStop;
@@ -250,7 +336,27 @@ public class StreamSession {
      * 영향이 없다 — 쓰이는 곳은 <b>닫을 때의 구독 반납</b>뿐이라 그때 옛 토큰이 맞다.
      */
     public long retarget(SessionKey newKey) {
-        this.key = newKey;
+        // <b>후원 상태도 같이 옮긴다.</b> 소켓과 구독은 그대로이므로 값은 같지만
+        // 열쇠가 바뀐다 — 안 옮기면 새 방송이 「후원 상태 모름(none)」으로 보이고
+        // 끝난 방송 번호의 값이 창구 메모리에 영영 남는다.
+        // 🔴 <b>방송 번호를 먼저 바꾸고 옮긴다</b>(봇 codex). 재시도 콜백은 stream() 을
+        // 매번 읽으므로, 번호를 먼저 바꿔 두면 그 뒤의 갱신이 <b>새 열쇠</b>로 간다.
+        // 그리고 옮기는 것 자체가 한 연산이라(DonationSubscriptions.retarget) 읽기와
+        // 지우기 사이에 낀 갱신이 사라지지 않는다 — 그 자리에서 재시도가 성공하면
+        // 낡은 FAILED 가 새 방송에 설치되고, 재시도 스레드는 이미 끝나 되돌릴 길이 없었다.
+        // 🔴 <b>번호 바꾸기와 옮기기를 한 자물쇠 안에 둔다</b>(봇 codex, 두 번째 지적).
+        // 앞 판에서 옮기기 자체는 한 연산으로 만들었는데 <b>창이 하나 남아 있었다</b>:
+        // 재시도 콜백이 stream() 으로 <b>옛</b> 번호를 읽고 멈춘 사이 여기가 지나가면,
+        // 그 콜백은 깨어나 <b>이미 비워진 옛 자리</b>에 성공을 쓴다. 새 방송에는 낡은
+        // FAILED 가 남고 재시도 스레드는 성공하면 끝나므로, 후원이 잘 들어오는데도
+        // 창구가 방송 내내 「실패」라고 답한다.
+        // 자물쇠 안에서 하는 일은 맵 쓰기 둘뿐이라(I/O 없음) 붙잡는 시간이 없다.
+        String previousStreamId;
+        synchronized (donationStatusLock) {
+            previousStreamId = this.key.streamId();
+            this.key = newKey;
+            donations.retarget(previousStreamId, newKey.streamId());
+        }
         // <b>방송 단위 지표를 새 경계에서 다시 센다.</b> 소켓과 세션은 그대로지만 방송이
         // 바뀌었으므로, 안 자르면 stream= 레이블만 새 방송이고 그 안의 숫자는 앞 방송
         // 것을 안고 간다. 돌려주는 값은 <b>부르는 쪽이 프로세스 누계로 옮긴다</b> —
@@ -554,7 +660,8 @@ public class StreamSession {
             // 소켓은 그대로 두고 번호만 갈아끼므로(retarget), 여기서 문자열을 붙들면
             // 그 뒤 30초 줄이 전부 <b>끝난 방송 번호</b>를 달고 나간다.
             SummaryLogger logger = SummaryLogger.start(this::stream, metrics, beat, SUMMARY_PERIOD,
-                    opening::sinkFailureCount, persister, buffer::droppedCount, archive.counters());
+                    opening::sinkFailureCount, persister, buffer::droppedCount, archive.counters(),
+                    donationBuffer::droppedCount);
 
             // <b>가드를 보는 것과 상태를 올리는 것이 한 덩어리여야 한다.</b> 위 이른
             // 검사만으로는 <b>스케줄러 둘을 세우는 동안이 통째로 창</b>이다 — 거기서
@@ -609,6 +716,14 @@ public class StreamSession {
             // 다시 붙었다. 끊겨 있던 구간을 여기서 닫는다 — 지우기만 하면 그 시간이
             // 어느 지표에도 안 남고, 수신 공백에 섞인 채로 "한산했을 뿐"과 같아 보인다.
             // 절단 시각도 같이 비운다. 안 비우면 다음 절단이 남의 시각을 물려받는다.
+            // 후원 구독 결과를 <b>수립이 성공으로 확정된 뒤에</b> 적는다. 앞에서 적으면
+            // 위 갈래들(!started)로 빠진 세션의 값이 창구에 남아, 걷지도 않는 방송이
+            // subscribed로 보인다. 재수립마다 덮어쓴다 — 권한이 회복되면 그때 올라온다.
+            setDonationStatus(opening.donationSubscription());
+            // 🔴 재시도가 나중에 상태를 바꾸면 그것도 창구에 싣는다(봇 codex P2).
+            // 이 줄이 없으면 재시도가 성공해도 창구는 방송이 끝날 때까지 「failed」다 —
+            // 실제로는 후원이 잘 들어오는데 화면이 그럴듯하게 틀린다.
+            opening.onDonationSubscriptionChanged(this::setDonationStatus);
             Instant since = disconnectedAt.getAndSet(null);
             if (since != null) {
                 metrics.recordOutage(since, Instant.now());
@@ -962,9 +1077,44 @@ public class StreamSession {
             // 채팅이 계속 들어오기 때문이다(StreamIdStampingTest).
             buffer.offer(new PersistableChat(key.streamId(), message.channelId(),
                     message.senderChannelId(), message.content(),
-                    message.messageTimeMillis(), receivedAt));
+                    message.messageTimeMillis(), receivedAt,
+                    message.nickname(), message.userRole()));
             // 원본도 넣기만 한다 — 인코드·창·업로드는 전부 아카이브 스레드 몫이다.
             archive.offer(new ArchivableChat(message.channelId(), receivedAt, message.raw()));
+            return;
+        }
+
+        DonationEvent donationEvent = ChatEventDecoder.decodeDonation(frame.payload());
+        if (donationEvent != null) {
+            if (intakeClosed.get()) {
+                // 채팅과 같은 규칙이다 — 종료의 마무리 flush가 시작된 뒤에는 세지도 담지도 않는다.
+                return;
+            }
+            // <b>방송 번호를 모르면 버린다.</b> 옛 경로(CHZZK_ENABLED)는 번호가 없는데
+            // chat_donations.stream_id는 NOT NULL이라, 담으면 INSERT가 영구히 실패하면서
+            // 되돌리기를 무한 반복하고 바구니가 차서 <b>멀쩡한 후원까지 밀려난다</b>.
+            // 채팅은 그 칸이 NULL 허용이라 「모른다」로 남길 수 있지만 여기는 그 길이 없다.
+            if (key.streamId() == null) {
+                return;
+            }
+            long receivedAt = System.currentTimeMillis();
+            metrics.recordDonation();
+            // 🔴 순번을 여기서 매긴다 — 재시도 때 같은 객체가 다시 들어가므로 그 값이 유지되고,
+            // 그래서 재시도 중복만 접히고 정당한 연속 후원은 안 접힌다(봇 codex P2).
+            // 시각만으로는 못 가른다: 연속 수신의 99%가 같은 밀리초다(실측).
+            donationBuffer.offer(new PersistableDonation(key.streamId(), donationEvent.channelId(),
+                    donationEvent.donatorChannelId(), donationEvent.donatorNickname(),
+                    donationEvent.donationType(), donationEvent.payAmount(),
+                    donationEvent.donationText(), receivedAt, donationSeq.incrementAndGet()));
+            // 🔴 <b>아카이브에 넣지 않는다</b>(계획 검증 F3). archived는 「퍼간 건수」를 그대로
+            // 세는데 received는 채팅만 센다 — 후원을 넣으면 판정·요약 줄의 검산 등식
+            // received = archived + archiveBufferDropped 가 후원 수만큼 영구히 벌어져
+            // 운영자가 그 등식으로 유실을 검산할 수 없게 된다(그 등식을 계산해 단언하는
+            // 시험이 0개라 아무도 안 잡는다). 아카이브의 목적은 판별 기준값 산출(POK-116)이고
+            // 판별기는 후원을 안 쓴다. 잃는 것은 후원 원문의 emojis 맵 하나뿐이고
+            // 나머지 칸은 chat_donations에 그대로 남는다.
+            // 같은 문장이 services/README.md 아카이브 절에도 있다 — 없는 코드에는 주석 자리가
+            // 없어 이 선택은 문서에도 적어 둔다.
             return;
         }
 
@@ -972,6 +1122,21 @@ public class StreamSession {
         if (event != null) {
             metrics.recordSystemEvent(event.type());
             if ("revoked".equals(event.type())) {
+                // 🔴 <b>종류를 먼저 가른다</b>(계획 검증 F2). 구독이 채팅 하나뿐일 때는
+                // 「revoked = 채팅 못 받음」이 참이었지만 후원 구독(태스크 4)이 그 전제를 깼다.
+                // 후원만 회수된 것으로 채팅 세션을 죽이면 영구 정지 → 판정 → exit 1로 가고,
+                // 그러면 <b>이 프로세스가 붙든 다른 방송 전부</b>가 같이 끊긴다. 게다가 포기
+                // 메모가 남아 24시간 재부착이 그 방송을 건너뛴다.
+                //
+                // <b>eventType이 비면(옛 모양) 지금대로 멈춘다.</b> 모르는 회수를 채팅 쪽으로
+                // 보는 것이 안전한 방향이다 — 반대로 두면 채팅 권한이 사라졌는데 health는
+                // UP인 채로 아무것도 안 걷는 상태가 남는다.
+                if ("DONATION".equals(event.eventType()) || "SUBSCRIPTION".equals(event.eventType())) {
+                    log.warn("chat.session.revoked_other stream={} eventType={}",
+                            stream(), event.eventType());
+                    setDonationStatus(DonationSubscription.REFUSED);
+                    return;
+                }
                 log.warn("chat.session.revoked stream={}", stream());
                 // <b>여기서 멈추지 않으면 COLLECTING(health UP)인 채로 채팅만 안 온다.</b>
                 // 구독이 서버 쪽에서 취소된 것이라 소켓은 멀쩡하고 onClose도 안 온다 —
