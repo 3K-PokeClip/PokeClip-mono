@@ -31,6 +31,11 @@ import { useSimulatedChat } from './useSimulatedChat';
 // 리퀴드 글래스 라이브 플레이어 (시안 "영상 플레이어 글래스").
 // src가 있으면 hls.js 실재생(useHlsPlayback), 없으면 목업(usePlayerSimulation) —
 // 훅 규칙상 조건부 호출이 안 되므로 컴포넌트 단위로 갈라 태운다. Body는 어느 쪽인지 모른다.
+//
+// 플레이어 안 채팅(오버레이·토글)은 전체 화면 전용이다 — 시안은 항상 그리지만 제품 결정으로
+// 다르게 간다(POK-239). 기본 상태에선 옆 채팅 패널이 채팅을 맡고, 전체 화면에선 그 패널이
+// 안 보이니 그때만 오버레이가 선다. 바깥 패널을 다시 여는 버튼(상단 오버레이 우측)은 별개다 —
+// 패널이 접혀 있는 동안 플레이어 안에 남는 유일한 복귀 통로다.
 /** 바깥에서 플레이어에 내리는 명령 — sim이 Body 안에서 생겨 상태로는 끌어올릴 수 없다 */
 export interface GlassPlayerController {
   /** 방송 경과 시각(초)으로 이동 — 되감기 창 밖은 가장 오래된 지점으로 클램프 */
@@ -104,7 +109,10 @@ function GlassPlayerBody({
   sim,
   videoNode,
 }: GlassPlayerBodyProps) {
+  // 오버레이는 전체 화면에서만 선다(파일 머리 주석). 첫 진입은 켜진 채 시작하고, 사용자가 끄면
+  // 그 선택이 다음 전체 화면까지 남는다 — 플레이어 토글의 통상 동작이다.
   const [chatOn, setChatOn] = useState(true);
+  const [fullscreen, setFullscreen] = useState(false);
   // 설정 팝오버는 Portal로 플레이어 밖에 뜬다 — 포커스가 넘어가면 :has(:focus-visible)
   // 보호가 닿지 않으므로, 열림 상태를 여기서 알고 그동안 컨트롤 숨김을 유보한다.
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -112,9 +120,48 @@ function GlassPlayerBody({
   // 마우스 드래그는 :focus-visible이 아니라 CSS의 포커스 예외절도 안 걸린다 — 팝오버(settingsOpen)와
   // 같은 방식으로 드래그 동안 숨김을 유보한다.
   const [seeking, setSeeking] = useState(false);
-  const chat = useSimulatedChat(chatOn);
+  // 안 보일 땐 시뮬레이션 티커도 돌리지 않는다
+  const chat = useSimulatedChat(fullscreen && chatOn);
   const { toast } = useToast();
   const containerRef = useRef<HTMLDivElement>(null);
+  const chatToggleRef = useRef<HTMLButtonElement>(null);
+  const fullscreenButtonRef = useRef<HTMLButtonElement>(null);
+  /** 전체 화면을 나가는 순간, 곧 사라질 채팅 토글이 포커스를 들고 있었나 */
+  const chatToggleHadFocusRef = useRef(false);
+
+  // 전체 화면 여부는 요청이 아니라 결과로 안다 — ESC·브라우저 UI로 나가도 fullscreenchange가 온다.
+  // 이 플레이어가 전체 화면 요소일 때만 참이다(다른 요소의 전체 화면은 남의 일).
+  useEffect(() => {
+    const sync = () => {
+      const el = containerRef.current;
+      // el을 먼저 따지는 이유 — 언마운트 때 ref 분리가 이 리스너 해제보다 먼저다. 그 사이에 이벤트가
+      // 오면 fullscreenElement도 null이라, 그냥 비교하면 null === null로 「전체 화면」이 돼 버린다.
+      const next = el !== null && document.fullscreenElement === el;
+      // 나가는 이 순간이 마지막 기회다 — 리렌더 전이라 사라질 토글이 아직 포커스를 들고 있다
+      if (!next) chatToggleHadFocusRef.current = document.activeElement === chatToggleRef.current;
+      setFullscreen(next);
+    };
+    // 리스너가 없던 사이(예: Suspense 재서스펜드)에 바뀐 것은 이벤트로 안 온다 — 붙을 때 한 번 읽는다
+    sync();
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, []);
+
+  // 전체 화면을 나가며 채팅 토글이 사라지면 그 포커스가 갈 곳이 없다 — 컨테이너 안 포커스를 전제로
+  // 하는 화살표 시킹(POK-32)이 죽는다. 이름 없는 컨테이너(tabIndex −1)로 옮기면 낭독이 끊기므로
+  // 바로 옆에 남아 있는 「전체 화면」 버튼으로 되돌린다(버튼 위에서도 화살표 시킹은 먹는다 —
+  // handleKeyDown이 button을 일부러 예외에서 뺐다). 토글에 포커스가 없었다면 손대지 않는다:
+  // 그때 가져오면 남의 포커스를 뺏어 Tab 순서가 페이지 처음이 아니라 플레이어 다음부터 흐른다.
+  useEffect(() => {
+    const hadFocus = chatToggleHadFocusRef.current;
+    chatToggleHadFocusRef.current = false;
+    if (fullscreen || !hadFocus) return;
+    fullscreenButtonRef.current?.focus({ preventScroll: true });
+    // 재생 중이면 컨트롤이 이미 숨어 있을 수 있다(opacity 0 · pointer-events none). 프로그램적
+    // 포커스는 :focus-visible을 얻지 못해 CSS의 유보 절도 안 걸리므로, 보이지 않는 버튼 위에
+    // 포커스가 놓이지 않게 컨트롤을 깨워 둔다.
+    sim.wake();
+  }, [fullscreen, sim]);
 
   const controlsShown = sim.controlsVisible || !sim.playing || settingsOpen || seeking;
 
@@ -228,13 +275,14 @@ function GlassPlayerBody({
       <div className={styles.videoSlot} aria-hidden>
         {videoNode ?? <span className={styles.videoLabel}>라이브 방송 화면</span>}
       </div>
+      {/* 전체 화면에선 바깥 패널이 안 보인다 — 여는 버튼을 눌러도 아무 변화가 없으니 그때는 뺀다 */}
       <PlayerTopOverlay
         channelName={channelName}
         viewersNote={viewersNote}
         chatPanelOpen={chatPanelOpen}
-        onToggleChatPanel={onToggleChatPanel}
+        onToggleChatPanel={fullscreen ? undefined : onToggleChatPanel}
       />
-      {chatOn ? <PlayerChatOverlay messages={chat} /> : null}
+      {fullscreen && chatOn ? <PlayerChatOverlay messages={chat} /> : null}
       <div className={styles.controls}>
         <PlayerSeekBar
           behindSeconds={sim.behindSeconds}
@@ -247,8 +295,12 @@ function GlassPlayerBody({
         />
         <PlayerControls
           sim={sim}
-          chatOn={chatOn}
-          onToggleChat={() => setChatOn((on) => !on)}
+          chatToggle={
+            fullscreen
+              ? { on: chatOn, onToggle: () => setChatOn((on) => !on), ref: chatToggleRef }
+              : undefined
+          }
+          fullscreenButtonRef={fullscreenButtonRef}
           onClip={handleClip}
           onPip={handlePip}
           onFullscreen={handleFullscreen}

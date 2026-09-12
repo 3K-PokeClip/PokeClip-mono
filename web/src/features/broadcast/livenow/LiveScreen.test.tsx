@@ -273,6 +273,28 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     await user.click(screen.getByRole('button', { name: '채팅 열기' }));
     expect(screen.getByRole('complementary', { name: '실시간 채팅' })).toBeInTheDocument();
   });
+
+  it('목록은 DOM도 시간순이다 — 스크린 리더가 화면과 같은 흐름으로 읽는다', () => {
+    renderLive();
+
+    const list = screen.getByRole('list', { name: '채팅 메시지' });
+    const items = within(list).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('오늘도 새벽 랭크인가요');
+    expect(items[items.length - 1]).toHaveTextContent(
+      '하이라이트 감지 · 1:24:03 구간이 카드로 만들어졌어요',
+    );
+    // 스크롤 영역은 키보드로 들어갈 수 있어야 한다 (axe scrollable-region-focusable)
+    expect(list).toHaveAttribute('tabindex', '0');
+  });
+
+  it('하단 상태줄이 분당 건수를 말하고, 키워드 설정은 라우트가 설 때까지 잠겨 있다', () => {
+    renderLive();
+
+    // 이 목업은 수집 끊김 상태라 「따라가는 중」이라 말하지 않는다 — 헤더 배지와 한목소리
+    expect(screen.getByText('수집 끊김 · 새 메시지 없음')).toBeInTheDocument();
+    expect(screen.queryByText(/최신 메시지 따라가는 중/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '키워드 설정' })).toBeDisabled();
+  });
 });
 
 describe('LiveScreen — 실시간 통계', () => {

@@ -18,7 +18,7 @@ import { useManualMarking } from './useManualMarking';
 
 // 디자인 1b — 라이브 대시보드. 시안은 페이지 헤더 없이 콘텐츠부터 시작하고,
 // 방송 정보를 영상 아래 줄에 둔다. 세로로 길게 쌓아 문서 스크롤로 내려가는 화면이라
-// 높이를 뷰포트에 맞추지 않는다.
+// 높이를 뷰포트에 맞추지 않는다 — 채팅만 예외로 화면 높이에 sticky(시안 갱신, POK-239).
 
 // useSearchParams(?stream=)는 프리렌더에서 가장 가까운 Suspense 경계까지 CSR로 전환한다 —
 // 화면 전체가 아니라 플레이어만 빠지도록 여기서 분리하고 경계는 playerFrame 안에 둔다.
@@ -72,7 +72,7 @@ export function LiveScreen() {
   }, []);
   const readMarkTimestamp = useCallback(() => formatUptime(uptimeRef.current), []);
   const marking = useManualMarking(readMarkTimestamp);
-  // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 컨트롤의 토글 버튼이다
+  // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
   // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
@@ -136,13 +136,18 @@ export function LiveScreen() {
             onSeek={handleSeek}
           />
         </div>
+        {/* 칸이 행 높이를 받고 그 안에서 채팅이 sticky로 붙는다 — 칸의 역할은 CSS .chatCol 주석.
+            접으면 칸째 빠진다(.gridSolo가 트랙도 걷는다). */}
         {chatPanelOpen ? (
-          <ChatPanel
-            surges={chat.surges}
-            messages={chat.messages}
-            collectionWarning={chatWarning}
-            onCollapse={toggleChatPanel}
-          />
+          <div className={styles.chatCol}>
+            <ChatPanel
+              surges={chat.surges}
+              messages={chat.messages}
+              ratePerMinute={chat.ratePerMinute}
+              collectionWarning={chatWarning}
+              onCollapse={toggleChatPanel}
+            />
+          </div>
         ) : null}
       </div>
       {/* 전폭 — 스크롤로 내려와 만나는 자리다 */}

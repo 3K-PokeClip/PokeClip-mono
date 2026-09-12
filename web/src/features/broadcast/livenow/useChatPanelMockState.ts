@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { MOCK_CHAT_RATE_PER_MINUTE } from './liveMockValues';
 
 // 실시간 채팅 패널(시안 1b)의 목업.
 //
@@ -12,7 +13,9 @@ import { useEffect, useRef, useState } from 'react';
 // 목업으로 남는다. 수집이 살아 있는지(끊김 배지)는 동결 계약의 chatWarning이 답한다.
 
 export const CHAT_PANEL_INTERVAL_MS = 3500;
-const KEEP_LAST = 12;
+// 초기 픽스처(INITIAL)보다 넉넉해야 한다 — 작으면 첫 새 메시지가 오는 순간 옛 줄이 잘려
+// 2단 레이아웃에서 목록이 다시 안 넘치고, 스크롤·「지난 메시지 보는 중」을 눈으로 볼 수 없게 된다.
+const KEEP_LAST = 40;
 
 export interface ChatSurge {
   keyword: string;
@@ -35,6 +38,8 @@ export type ChatPanelMessage =
 export interface ChatPanelMockState {
   surges: ChatSurge[];
   messages: ChatPanelMessage[];
+  /** 하단 상태줄의 「분당 N」 — 통계의 「분당 평균 채팅」과 같은 원천(MOCK_CHAT_RATE_PER_MINUTE) */
+  ratePerMinute: number;
 }
 
 const MOCK_SURGES: ChatSurge[] = [
@@ -43,8 +48,33 @@ const MOCK_SURGES: ChatSurge[] = [
   { keyword: '클러치', count: 41 },
 ];
 
-// 시안 1b 채팅 패널에 그려진 줄 그대로 — 테스트가 이 문구를 단언한다
+// 뒤쪽 11줄은 시안 1b 채팅 패널에 그려진 줄 그대로다 — 테스트가 이 문구를 단언한다.
+// 앞쪽 20줄은 그보다 오래된 채팅이다: 2단(데스크톱) 레이아웃의 화면 높이 패널에서도 목록이 넘쳐야
+// 자체 스크롤과 「지난 메시지 보는 중」 분기를 실제 화면에서 볼 수 있다(이 목업은 수집 끊김 상태라
+// 새 메시지가 오지 않아, 여기 든 줄이 화면에 서는 전부다).
+// id는 순서와 무관한 렌더 키일 뿐이라 시안 줄의 번호를 건드리지 않으려고 12부터 붙였다 —
+// 새 메시지 id는 아래 counter가 이 배열의 id 최댓값 다음부터 센다.
 const INITIAL: ChatPanelMessage[] = [
+  { id: 12, kind: 'chat', name: '밤샘각', text: '오늘도 새벽 랭크인가요', colorIndex: 0 },
+  { id: 13, kind: 'chat', name: '라면먹자', text: '어제 그 판 진짜 레전드였음', colorIndex: 3 },
+  { id: 14, kind: 'chat', name: '겜돌이', text: 'ㅇㅇ 그거 보고 입덕함', colorIndex: 1 },
+  { id: 15, kind: 'chat', name: '포키좋아', text: '지금 몇 승 몇 패예요?', colorIndex: 2 },
+  { id: 16, kind: 'chat', name: '별사탕', text: '2연승 중이십니다', colorIndex: 2 },
+  { id: 17, kind: 'chat', name: '야옹이22', text: '오늘 안에 승급 가나요', colorIndex: 3 },
+  { id: 18, kind: 'chat', name: '초코송이', text: '폼 보면 가능하죠', colorIndex: 4 },
+  { id: 19, kind: 'chat', name: '수면부족', text: '저 내일 출근인데 왜 보고 있지', colorIndex: 0 },
+  { id: 20, kind: 'chat', name: '다이아가자', text: '같이 망하실래요', colorIndex: 5 },
+  { id: 21, kind: 'chat', name: '라면먹자', text: 'ㅋㅋㅋㅋ 인정', colorIndex: 3 },
+  { id: 22, kind: 'chat', name: '겜돌이', text: '픽 뭐 하실 거예요', colorIndex: 1 },
+  { id: 23, kind: 'chat', name: '별사탕', text: '정글 고정이시죠', colorIndex: 2 },
+  { id: 24, kind: 'chat', name: '밤샘각', text: '상대 미드 잘한다던데', colorIndex: 0 },
+  { id: 25, kind: 'chat', name: '포키좋아', text: '그래도 이깁니다', colorIndex: 2 },
+  { id: 26, kind: 'chat', name: '야옹이22', text: '와 저 궁 타이밍', colorIndex: 3 },
+  { id: 27, kind: 'chat', name: '초코송이', text: '와 진짜 미쳤네', colorIndex: 4 },
+  { id: 28, kind: 'chat', name: '다이아가자', text: '이거 클립 따야 되는 거 아님?', colorIndex: 5 },
+  { id: 29, kind: 'chat', name: '수면부족', text: '그 장면 한 번만 더요', colorIndex: 0 },
+  { id: 30, kind: 'chat', name: '겜돌이', text: '한타 열립니다', colorIndex: 1 },
+  { id: 31, kind: 'chat', name: '별사탕', text: '집중집중', colorIndex: 2 },
   { id: 1, kind: 'chat', name: '수면부족', text: '새벽에 이걸 보고 있네 ㅋㅋ', colorIndex: 0 },
   { id: 2, kind: 'chat', name: '겜돌이', text: '상대 정글 울겠다', colorIndex: 1 },
   { id: 3, kind: 'chat', name: '별사탕', text: '승급전 마지막판 가보자', colorIndex: 2 },
@@ -74,7 +104,9 @@ const POOL: ReadonlyArray<Omit<Extract<ChatPanelMessage, { kind: 'chat' }>, 'id'
 
 export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
   const [messages, setMessages] = useState<ChatPanelMessage[]>(INITIAL);
-  const counter = useRef(INITIAL.length);
+  // 길이가 아니라 최댓값에서 출발한다 — 배열 순서와 id 순서가 달라(12..31 다음 1..11) 둘이
+  // 지금은 우연히 같을 뿐이고, 픽스처에서 한 줄만 빼도 새 id가 기존 id와 겹쳐 React 키가 충돌한다.
+  const counter = useRef(Math.max(...INITIAL.map((message) => message.id)));
 
   useEffect(() => {
     if (!enabled) return;
@@ -91,5 +123,5 @@ export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
     return () => window.clearInterval(tick);
   }, [enabled]);
 
-  return { surges: MOCK_SURGES, messages };
+  return { surges: MOCK_SURGES, messages, ratePerMinute: MOCK_CHAT_RATE_PER_MINUTE };
 }
