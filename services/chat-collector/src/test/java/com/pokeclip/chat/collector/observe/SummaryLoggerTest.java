@@ -125,7 +125,7 @@ class SummaryLoggerTest {
     }
 
     /**
-     * 🔴 <b>판정 줄이 후원 둘을 싣는다</b>(봇 codex).
+     * 🔴 <b>판정 줄이 버린 후원 수를 싣는다</b>(봇 codex).
      *
      * <p>30초 요약은 <b>창 값</b>이라 세션이 다음 틱 전에 끝나면 마지막 창이 통째로 사라지고,
      * <b>짧은 방송은 생애가 전부 사라진다.</b> 후원은 아카이브에 안 쌓으므로 버려진 것은
@@ -134,22 +134,23 @@ class SummaryLoggerTest {
      *
      * <p><b>값을 본다.</b> {@code contains("donationDropped=")} 만 보면 0을 박아 둔 구현도
      * 통과한다 — 넘긴 값이 그대로 나오는지 못박는다.
+     *
+     * <p>🔴 <b>「받은 후원 수」는 여기서 안 잰다 — 그 항을 뺐기 때문이다</b>(봇 codex, 두 번째).
+     * 처음엔 {@code donations=} 도 실었는데 <b>편지 경로에서 늘 0</b>이었다. 더 나쁜 것은
+     * <b>이 검사가 그것을 못 잡았다는 점</b>이다 — 지표를 직접 넘겨 재므로 운영 경로를
+     * 지나가지 않는다. <b>시험이 통과한다는 것과 시험이 잰다는 것은 다르다.</b>
      */
     @Test
-    void 판정_줄이_후원_받은_수와_버린_수를_싣는다() {
-        CollectionMetrics metrics = new CollectionMetrics();
-        metrics.recordDonation();
-        metrics.recordDonation();
-
-        String line = SummaryLogger.renderVerdict(1L, 0L, metrics.verdict(), null,
+    void 판정_줄이_버린_후원_수를_싣는다() {
+        String line = SummaryLogger.renderVerdict(1L, 0L, new CollectionMetrics().verdict(), null,
                 0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 5L);
 
         assertThat(line)
-                .as("받은 후원 수가 판정 줄에 없으면 짧은 방송은 관측에서 통째로 사라진다")
-                .contains("donations=2");
-        assertThat(line)
                 .as("버린 후원은 표에도 원본에도 없다 — 이 줄에 없으면 어디에도 안 남는다")
                 .contains("donationDropped=5");
+        assertThat(line)
+                .as("받은 수는 편지 경로에서 늘 0이라 뺐다 — 되살리려면 등록부 합산이 먼저다")
+                .doesNotContain("donations=");
     }
 
     /** 값만 돌려주는 카운터 묶음. */

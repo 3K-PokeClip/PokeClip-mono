@@ -50,6 +50,16 @@ public final class ChatEventDecoder {
         // 그 이름이 없었다. 공식 문서 표에는 있다).
         // 아래 userRoleCode 줄을 지우지 마라 — 치지직이 보내기 시작하면
         // 저절로 채워지고, 지워 두면 그날 아무도 모른다. 사정 전문은 ChatMessage 주석.
+        //
+        // 🔴 <b>이 칸을 profile 안에서 읽으라는 지적이 있었다(봇 codex). 기각했다.</b>
+        // 근거 둘이 반대를 가리킨다:
+        //   · 공식 문서(Session > CHAT Message Body)에서 profile 아래 들여쓴 것은
+        //     nickname·badges 뿐이고 userRoleCode 는 <b>들여쓰기가 없다</b>(= 봉투 최상위)
+        //   · 실측 원문에서 profile 안은 {nickname, verifiedMark, badges} <b>셋뿐</b>이었다
+        // <b>다만 이 판정에는 약점이 있다</b> — 같은 문서가 verifiedMark 를 senderChannelId
+        // 아래로 들여썼는데 <b>실물은 profile 안</b>이다. 그 표의 들여쓰기가 이미 한 번
+        // 틀렸으므로, 치지직이 보내기 시작했는데도 여기가 계속 null 이면
+        // <b>제일 먼저 profile 안을 의심하라.</b>
         JsonNode profile = inner.path("profile");
         return new ChatMessage(
                 inner.path("channelId").asString(""),
