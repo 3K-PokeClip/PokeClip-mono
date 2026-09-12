@@ -279,7 +279,7 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
 
     const list = screen.getByRole('list', { name: '채팅 메시지' });
     const items = within(list).getAllByRole('listitem');
-    expect(items[0]).toHaveTextContent('새벽에 이걸 보고 있네 ㅋㅋ');
+    expect(items[0]).toHaveTextContent('오늘도 새벽 랭크인가요');
     expect(items[items.length - 1]).toHaveTextContent(
       '하이라이트 감지 · 1:24:03 구간이 카드로 만들어졌어요',
     );

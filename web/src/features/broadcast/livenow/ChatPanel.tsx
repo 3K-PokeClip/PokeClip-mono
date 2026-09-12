@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { MessageSquare, PanelRightClose } from 'lucide-react';
 import { Badge, IconButton, Tag } from '@/ui';
@@ -75,6 +75,17 @@ export const ChatPanel = memo(function ChatPanel({
     const el = listRef.current;
     if (el && following) el.scrollTop = el.scrollHeight;
   }, [messages, following]);
+
+  // 「끝에 있는가」는 스크롤 말고 크기로도 바뀐다 — 창 높이 변화(패널이 100dvh를 탄다), 2단↔1단 전환.
+  // 그때는 scroll 이벤트가 안 오므로 여기서 다시 잰다. 없으면 넘치지 않게 된 목록이 「지난 메시지
+  // 보는 중」에 갇힌다: 스크롤할 것이 없으니 사용자가 되돌릴 방법도 없다.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(handleScroll);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [handleScroll]);
 
   const rateLabel = `분당 ${ratePerMinute.toLocaleString('ko-KR')}`;
 

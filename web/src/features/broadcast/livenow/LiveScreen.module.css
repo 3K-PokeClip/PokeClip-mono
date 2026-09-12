@@ -719,8 +719,6 @@
    늘어나고, 좌측 열이 짧은 화면에서 카드 아래에 빈 자리가 생긴다(칸의 고유 크기를 0으로 만들어야
    행 높이가 좌측 열만 따른다). 그래서 폭은 칸이 명시한다 — auto 트랙이 재는 것도 이 폭이다. */
 .chatCol {
-  position: relative;
-  align-self: stretch;
   contain: size;
   width: calc(332 * var(--pc-u));
 }

@@ -109,7 +109,8 @@ function GlassPlayerBody({
   sim,
   videoNode,
 }: GlassPlayerBodyProps) {
-  // 오버레이는 전체 화면에서만 선다(파일 머리 주석). 켜짐 기본값은 유지 — 들어가면 바로 보인다.
+  // 오버레이는 전체 화면에서만 선다(파일 머리 주석). 첫 진입은 켜진 채 시작하고, 사용자가 끄면
+  // 그 선택이 다음 전체 화면까지 남는다 — 플레이어 토글의 통상 동작이다.
   const [chatOn, setChatOn] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   // 설정 팝오버는 Portal로 플레이어 밖에 뜬다 — 포커스가 넘어가면 :has(:focus-visible)
@@ -123,25 +124,36 @@ function GlassPlayerBody({
   const chat = useSimulatedChat(fullscreen && chatOn);
   const { toast } = useToast();
   const containerRef = useRef<HTMLDivElement>(null);
+  const chatToggleRef = useRef<HTMLButtonElement>(null);
+  const fullscreenButtonRef = useRef<HTMLButtonElement>(null);
+  /** 전체 화면을 나가는 순간, 곧 사라질 채팅 토글이 포커스를 들고 있었나 */
+  const chatToggleHadFocusRef = useRef(false);
 
   // 전체 화면 여부는 요청이 아니라 결과로 안다 — ESC·브라우저 UI로 나가도 fullscreenchange가 온다.
   // 이 플레이어가 전체 화면 요소일 때만 참이다(다른 요소의 전체 화면은 남의 일).
   useEffect(() => {
-    const sync = () => setFullscreen(document.fullscreenElement === containerRef.current);
+    const sync = () => {
+      const next = document.fullscreenElement === containerRef.current;
+      // 나가는 이 순간이 마지막 기회다 — 리렌더 전이라 사라질 토글이 아직 포커스를 들고 있다
+      if (!next) chatToggleHadFocusRef.current = document.activeElement === chatToggleRef.current;
+      setFullscreen(next);
+    };
     // 리스너가 없던 사이(예: Suspense 재서스펜드)에 바뀐 것은 이벤트로 안 온다 — 붙을 때 한 번 읽는다
     sync();
     document.addEventListener('fullscreenchange', sync);
     return () => document.removeEventListener('fullscreenchange', sync);
   }, []);
 
-  // 전체 화면을 나가면 채팅 토글이 사라진다 — 거기 있던 포커스가 body로 떨어지면 컨테이너 안
-  // 포커스를 전제로 하는 화살표 시킹(POK-32)이 죽으므로 컨테이너로 되돌린다.
-  const wasFullscreenRef = useRef(false);
+  // 전체 화면을 나가며 채팅 토글이 사라지면 그 포커스가 갈 곳이 없다 — 컨테이너 안 포커스를 전제로
+  // 하는 화살표 시킹(POK-32)이 죽는다. 이름 없는 컨테이너(tabIndex −1)로 옮기면 낭독이 끊기므로
+  // 바로 옆에 남아 있는 「전체 화면」 버튼으로 되돌린다(버튼 위에서도 화살표 시킹은 먹는다 —
+  // handleKeyDown이 button을 일부러 예외에서 뺐다). 토글에 포커스가 없었다면 손대지 않는다:
+  // 그때 가져오면 남의 포커스를 뺏어 Tab 순서가 페이지 처음이 아니라 플레이어 다음부터 흐른다.
   useEffect(() => {
-    if (wasFullscreenRef.current && !fullscreen && document.activeElement === document.body) {
-      containerRef.current?.focus({ preventScroll: true });
+    if (!fullscreen && chatToggleHadFocusRef.current) {
+      fullscreenButtonRef.current?.focus({ preventScroll: true });
     }
-    wasFullscreenRef.current = fullscreen;
+    chatToggleHadFocusRef.current = false;
   }, [fullscreen]);
 
   const controlsShown = sim.controlsVisible || !sim.playing || settingsOpen || seeking;
@@ -277,8 +289,11 @@ function GlassPlayerBody({
         <PlayerControls
           sim={sim}
           chatToggle={
-            fullscreen ? { on: chatOn, onToggle: () => setChatOn((on) => !on) } : undefined
+            fullscreen
+              ? { on: chatOn, onToggle: () => setChatOn((on) => !on), ref: chatToggleRef }
+              : undefined
           }
+          fullscreenButtonRef={fullscreenButtonRef}
           onClip={handleClip}
           onPip={handlePip}
           onFullscreen={handleFullscreen}

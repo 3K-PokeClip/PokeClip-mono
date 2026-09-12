@@ -10,7 +10,7 @@
 // 하이라이트 개수 지표는 여기 두지 않는다 — 화면이 카드 목록에서 세야 필터 표기와 어긋나지 않는다.
 
 import type { Point } from './statsTimeline';
-import { MOCK_CHAT_RATE_PER_MINUTE } from './useChatPanelMockState';
+import { MOCK_CHAT_RATE_PER_MINUTE } from './liveMockValues';
 
 export interface CategorySegment {
   label: string;

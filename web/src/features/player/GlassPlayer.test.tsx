@@ -276,8 +276,9 @@ describe('GlassPlayer', () => {
       // ESC·브라우저 UI로 나가도 같은 이벤트가 온다 — 요청이 아니라 결과를 듣는다
       setFullscreenElement(null);
       expect(screen.queryByRole('button', { name: '채팅 오버레이' })).not.toBeInTheDocument();
-      // 토글이 사라지며 잃은 포커스는 컨테이너로 돌아온다 — 화살표 시킹(POK-32)이 계속 먹는다
-      expect(player).toHaveFocus();
+      // 토글이 사라지며 잃은 포커스는 바로 옆 「전체 화면」 버튼으로 간다 — 이름 없는 컨테이너로
+      // 옮기면 낭독이 끊긴다. 화살표 시킹(POK-32)은 버튼 위에서도 그대로 먹는다.
+      expect(screen.getByRole('button', { name: '전체 화면' })).toHaveFocus();
     } finally {
       setFullscreenElement(null);
     }
