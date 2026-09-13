@@ -14,7 +14,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -106,6 +108,30 @@ public class CardStreamRegistry implements EndedListener {
             });
 
     private final CardStreamExecutor executor;
+
+    /**
+     * 🔴 <b>채팅 전용 전송 줄</b>(POK-234 main 결정 F4). 카드와 같은 큐를 쓰면 안 읽는 구독자 하나가 자기 스트라이프를
+     * 막을 때 채팅(초당 수십 건)이 큐를 금방 채워, <b>같은 스트라이프의 멀쩡한 연결이 카드를 잃는다</b> — 카드가
+     * 제품의 핵심이다. 줄을 갈라 막힌 연결의 피해를 「그 스트라이프의 채팅」으로 가둔다.
+     *
+     * <p><b>남는 한계</b>: 안 읽는 구독자와 같은 <b>채팅</b> 스트라이프의 연결은 채팅을 잃을 수 있다(카드는 안 잃는다).
+     * 같은 연결에 카드와 채팅이 동시에 가면 emitter 쓰기 자물쇠를 나눠 기다린다 — 그 연결 자체가 막힌 경우라 전과 같다.
+     * 연결마다 줄을 두는 안(A)은 {@link CardStreamExecutor} 주석이 「상한 500에 스레드 500」으로 이미 기각했다.
+     *
+     * <p>스트라이프 수·큐 크기는 카드와 같은 설정값이다. 스레드는 카드 4 + 채팅 4 = 8.
+     */
+    private final CardStreamExecutor chatExecutor;
+
+    /** 채팅 큐 거부로 연결에 못 넣은 이벤트 수(누적). 연결마다 센다 — 두 연결에서 거부되면 두 번이다. */
+    private final AtomicLong chatDropped = new AtomicLong();
+
+    /** 채팅 거부 경고를 모아 찍는 간격. 거부마다 찍으면 막힌 연결 하나가 초당 수십 줄을 만든다. */
+    private static final Duration CHAT_DROP_LOG_EVERY = Duration.ofSeconds(10);
+    private final AtomicLong nextChatDropLogNanos = new AtomicLong(Long.MIN_VALUE);
+    private final AtomicLong chatDroppedSinceLog = new AtomicLong();
+
+    /** B에서 아는 종류. 모르는 것은 묶음째 거부하지 않고 건너뛰고 센다(F8) — PR-C가 {@code broadcast-info}를 더한다. */
+    static final java.util.Set<String> CHAT_KINDS = java.util.Set.of("chat", "donation");
     private final StreamProperties properties;
     private final ObjectMapper mapper;
     private final Function<Duration, SseEmitter> emitterFactory;
@@ -125,6 +151,14 @@ public class CardStreamRegistry implements EndedListener {
 
     CardStreamRegistry(CardStreamExecutor executor, StreamProperties properties, ObjectMapper mapper,
                        Function<Duration, SseEmitter> emitterFactory) {
+        this(executor, new CardStreamExecutor("chat-stream-", properties.stripes(), properties.queueCapacity(), false),
+                properties, mapper, emitterFactory);
+    }
+
+    /** 채팅 줄을 검사가 작게(스트라이프 1·큐 1) 넣는 모양. 운영은 위 생성자가 카드와 같은 설정값으로 만든다. */
+    CardStreamRegistry(CardStreamExecutor executor, CardStreamExecutor chatExecutor, StreamProperties properties,
+                       ObjectMapper mapper, Function<Duration, SseEmitter> emitterFactory) {
+        this.chatExecutor = chatExecutor;
         this.executor = executor;
         this.properties = properties;
         this.mapper = mapper;
@@ -535,8 +569,86 @@ public class CardStreamRegistry implements EndedListener {
                 .data(mapper.writeValueAsString(card), MediaType.APPLICATION_JSON);
     }
 
+    /**
+     * 수집기가 민 채팅·후원 묶음을 그 방송 연결에 뿌린다(POK-234 PR-B).
+     *
+     * <p>🔴 <b>요청 하나 = 연결당 job 하나</b>(F4). 이벤트마다 job을 넣으면 한 요청(최대 500건)이 큐를 통째로 먹는다.
+     * JSON은 <b>이벤트당 한 번</b> 만들어 연결들이 나눠 쓴다(F16) — SSE 빌더는 {@code build()}마다 줄바꿈을
+     * 덧붙이는 상태가 있어 공유하지 않고, 문자열만 공유한다.
+     *
+     * <p>{@code publish}와 같은 자물쇠 안에서만 {@code conns}를 훑는다. {@code isStale}·{@code lastPublishedSeq}는
+     * 카드 전용이라 안 건드린다 — 채팅은 워터마크가 없다(순서는 스트라이프가 지키고 빈틈은 화면이 {@code seq}로 본다).
+     *
+     * <p>거부되면 그 연결에 넣으려던 이벤트 수만큼 {@link #chatDroppedCount()}에 더한다. 채팅은 「사건의 나열」이라
+     * 버린 수가 곧 그 연결의 유실 수다. 메우는 것은 수집기 범위 창구다.
+     */
+    public synchronized ChatPublishResult publishChatEvents(String streamId, List<ChatEvent> events) {
+        List<String[]> prepared = new ArrayList<>(events.size());
+        int unknown = 0;
+        for (ChatEvent event : events) {
+            if (!CHAT_KINDS.contains(event.kind())) {
+                unknown++;
+                continue;
+            }
+            prepared.add(new String[]{Long.toString(event.seq()), event.kind(), mapper.writeValueAsString(event.raw())});
+        }
+        if (!prepared.isEmpty()) {
+            for (Conn conn : conns.values()) {
+                if (!conn.streamId().equals(streamId)) {
+                    continue;
+                }
+                boolean queued = chatExecutor.submit(conn.stripe(), conn.emitter(), () -> {
+                    for (String[] e : prepared) {
+                        conn.emitter().send(SseEmitter.event().id(e[0]).name(e[1]).data(e[2], MediaType.APPLICATION_JSON));
+                    }
+                });
+                if (!queued) {
+                    chatDropped.addAndGet(prepared.size());
+                    logChatDropThrottled(streamId, prepared.size());
+                }
+            }
+        }
+        return new ChatPublishResult(prepared.size(), unknown);
+    }
+
+    /**
+     * @param accepted 연결에 뿌리려고 넣은 이벤트 수(아는 kind)
+     * @param dropped  모르는 kind라 건너뛴 수. 큐 거부는 여기 없다 — 연결마다 달라 {@link #chatDroppedCount()}가 센다
+     */
+    public record ChatPublishResult(int accepted, int dropped) {
+    }
+
+    private void logChatDropThrottled(String streamId, int events) {
+        chatDroppedSinceLog.addAndGet(events);
+        long now = System.nanoTime();
+        long next = nextChatDropLogNanos.get();
+        if (next != Long.MIN_VALUE && now < next) {
+            return;
+        }
+        if (nextChatDropLogNanos.compareAndSet(next, now + CHAT_DROP_LOG_EVERY.toNanos())) {
+            log.warn("jumpcard.stream.chat_dropped streamId={} events={} total={}",
+                    streamId, chatDroppedSinceLog.getAndSet(0), chatDropped.get());
+        }
+    }
+
+    /** 채팅 큐 거부로 연결에 못 넣은 이벤트 누계. */
+    public long chatDroppedCount() {
+        return chatDropped.get();
+    }
+
+    /** 이 방송에 열린 연결이 하나라도 있나. 접수 문이 DB를 치기 전에 묻는다(F11). */
+    public boolean hasConnections(String streamId) {
+        for (Conn conn : conns.values()) {
+            if (conn.streamId().equals(streamId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @PreDestroy
     void stop() {
         heartbeat.shutdownNow();
+        chatExecutor.shutdown();
     }
 }

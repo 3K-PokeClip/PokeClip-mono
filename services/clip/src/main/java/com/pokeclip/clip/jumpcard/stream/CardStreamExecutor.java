@@ -50,13 +50,25 @@ public class CardStreamExecutor {
     }
 
     CardStreamExecutor(int stripeCount, int capacity) {
+        this("jumpcard-stream-", stripeCount, capacity, true);
+    }
+
+    /**
+     * <b>같은 클래스의 두 번째 인스턴스를 채팅 전용 줄로 쓴다</b>(POK-234 main 결정 F4) — 새 클래스를 복붙하지 않는다.
+     *
+     * @param threadPrefix  스레드 이름 앞머리. 카드 {@code jumpcard-stream-} · 채팅 {@code chat-stream-}
+     * @param warnOnReject  거부마다 WARN을 찍을지. 🔴 <b>채팅은 끈다</b> — 채팅 job은 초당 수십 개라 막힌 연결 하나가
+     *                      초당 수십 줄을 만든다. 채팅 거부는 부르는 쪽이 이벤트 수만큼 세고 모아서 한 줄로 낸다
+     *                      ({@link CardStreamRegistry#publishChatEvents})
+     */
+    CardStreamExecutor(String threadPrefix, int stripeCount, int capacity, boolean warnOnReject) {
         this.stripes = new ThreadPoolExecutor[stripeCount];
         for (int i = 0; i < stripeCount; i++) {
             int n = i;
             stripes[i] = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
                     new LinkedBlockingQueue<>(capacity),
                     r -> {
-                        Thread t = new Thread(r, "jumpcard-stream-" + n);
+                        Thread t = new Thread(r, threadPrefix + n);
                         // 종료 유예 동안 대기 중 전송을 끝내려면 데몬이 아니어야 한다.
                         t.setDaemon(false);
                         return t;
@@ -91,8 +103,10 @@ public class CardStreamExecutor {
                         // 그 연결의 스트라이프에 제출하는 방법(대안 나)은 쓸 수 없다 — 지금 그 큐가
                         // 가득 차서 거부된 참이라 다시 거부된다. 자리 회수는 다음 send 실패가 한다
                         // (`끊고_다시_열_수_있다`가 재는 경로다).
-                        log.warn("jumpcard.stream.rejected stripe={} reason={}", n,
-                                executor.isShutdown() ? "shutdown" : "queue_full");
+                        if (warnOnReject) {
+                            log.warn("jumpcard.stream.rejected stripe={} reason={}", n,
+                                    executor.isShutdown() ? "shutdown" : "queue_full");
+                        }
                     });
         }
     }
