@@ -1,6 +1,7 @@
 package com.pokeclip.chat.detector.publish;
 
 import com.pokeclip.chat.detector.config.DetectionProperties;
+import com.pokeclip.chat.detector.detect.SpikeEpisodes;
 import com.pokeclip.chat.detector.detect.SpikeVerdict;
 import com.pokeclip.chat.detector.metrics.ChatWindowReader;
 import org.slf4j.Logger;
@@ -8,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.function.Supplier;
 
 /**
@@ -68,8 +70,28 @@ public class HighlightPublisher {
      *                     <b>보내기 전</b> 시각을 넘기게 되고 우리 왕복이 통째로 빠진다(실기동에서 잡혔다)
      * @return 이 창을 다시 집어야 하는지까지 알려 준다. {@link Outcome} 참고
      */
+    /** 창 하나짜리 사건. 검사와 옛 호출부의 편의용이고 규칙은 {@link #publish(SpikeEpisodes.Episode, Supplier)}와 같다 */
     public Outcome publish(String streamId, long metricId, long windowStartMs,
                            SpikeVerdict verdict, Instant countedUntil, Supplier<Instant> clock) {
+        return publish(new SpikeEpisodes.Episode(streamId, List.of(
+                new SpikeEpisodes.Window(metricId, windowStartMs, verdict.windowSizeMs(), verdict, countedUntil))),
+                clock);
+    }
+
+    /**
+     * 사건 하나를 카드 하나로 낸다.
+     *
+     * <p>카드 구간 = 첫 튄 창 시작 − lead ~ 마지막 튄 창 끝 + tail. 지점(streamTimestampMs)은
+     * 구간 시작이다 — 편집자가 카드를 누르면 장면 앞에서 재생이 시작돼야 한다.
+     * 카드 번호는 첫 창의 발행권 번호라 같은 사건이 두 번 나가지 않는다.
+     */
+    public Outcome publish(SpikeEpisodes.Episode episode, Supplier<Instant> clock) {
+        String streamId = episode.streamId();
+        long metricId = episode.first().metricId();
+        long windowStartMs = episode.startMs();
+        SpikeEpisodes.Window lastWindow = episode.last();
+        SpikeVerdict verdict = lastWindow.verdict();
+        Instant countedUntil = lastWindow.countedUntil();
         long windowSizeMs = verdict.windowSizeMs();
 
         // 창 시작 시각 하나로만 부른다. 양 끝은 보정값이 같다고 보고 산수로 낸다.
@@ -108,9 +130,20 @@ public class HighlightPublisher {
                     : Outcome.GIVE_UP;
         }
 
-        long start = position.positionMs();
+        // 첫 튄 창의 영상 위치 하나로 구간을 산수로 낸다(창 간 보정값이 같다고 본다).
+        long firstWindowPos = position.positionMs();
+        if (firstWindowPos < 0) {
+            // 앞당김을 0에서 자르기 전에 본다 — 자르면 「녹화 전 화면에 반응한 채팅」이
+            // 0초짜리 카드로 둔갑한다. 다시 물어도 같은 답이라 포기한다.
+            log.info("detect.card_skipped streamId={} windowStartMs={} reason=invalid_window positionMs={}",
+                    streamId, windowStartMs, firstWindowPos);
+            return Outcome.GIVE_UP;
+        }
+        long cardStart = Math.max(0, firstWindowPos - props.episodeLead().toMillis());
+        long cardEnd = firstWindowPos + episode.spanMs() + props.episodeTail().toMillis();
         HighlightCard card = new HighlightCard(streamId, "detect-" + metricId,
-                start + windowSizeMs / 2, start, start + windowSizeMs, verdict.evidenceJson(props));
+                cardStart, cardStart, cardEnd, evidenceJson(episode, verdict));
+        long start = firstWindowPos;
 
         // clip은 음수를 @PositiveOrZero로 400 낸다. 400은 재시도로 안 풀리므로 여기서 막는다.
         if (!card.valid()) {
@@ -141,9 +174,27 @@ public class HighlightPublisher {
         // 섞인다. 실패는 detect.publish_rejected · publish_failed · publish_broadcast_missing 이
         // 이미 각각 남긴다.
         if (outcome == Outcome.SENT) {
-            logLatency(streamId, card, windowStartMs, windowSizeMs, position, verdict, result, countedUntil, sentAt);
+            // 지연은 마지막 창 기준이다 — 카드는 마지막 창이 닫혀야 나갈 수 있었다.
+            logLatency(streamId, card, lastWindow.windowStartMs(), windowSizeMs, position, verdict,
+                    result, countedUntil, sentAt, episode.windows().size());
         }
         return outcome;
+    }
+
+    /** 사건 전체의 근거. 창 하나면 옛 모양과 값이 같다(ratio·messageCount·chatterCount). */
+    private String evidenceJson(SpikeEpisodes.Episode episode, SpikeVerdict lastVerdict) {
+        return "{\"windows\":" + episode.windows().size()
+                + ",\"spanMs\":" + episode.spanMs()
+                + ",\"windowSizeMs\":" + lastVerdict.windowSizeMs()
+                + ",\"messageCount\":" + episode.totalMessages()
+                + ",\"chatterCount\":" + episode.maxChatters()
+                + ",\"baselineMedian\":" + episode.first().verdict().baselineMedian()
+                + ",\"ratio\":" + episode.maxRatio()
+                + ",\"thresholdRatio\":" + props.spikeRatio()
+                + ",\"thresholdMinCount\":" + props.minCount()
+                + ",\"leadMs\":" + props.episodeLead().toMillis()
+                + ",\"tailMs\":" + props.episodeTail().toMillis()
+                + ",\"metric\":\"" + props.metric() + "\"}";
     }
 
     /**
@@ -197,7 +248,8 @@ public class HighlightPublisher {
      */
     private void logLatency(String streamId, HighlightCard card, long windowStartMs, long windowSizeMs,
                             VideoPosition position, SpikeVerdict verdict,
-                            ClipHighlightClient.PublishResult result, Instant countedUntil, Instant sentAt) {
+                            ClipHighlightClient.PublishResult result, Instant countedUntil, Instant sentAt,
+                            int windows) {
         long windowClosedMs = windowStartMs + windowSizeMs;
         // 🔴 빈손이면 눈금으로 되돌아가지 않는다. 그러면 전달 지연을 0으로 본 값이 나오는데
         // 그건 「지연이 없었다」는 거짓이고, 목표치를 정할 때 그 거짓이 표본에 섞인다.
@@ -233,8 +285,8 @@ public class HighlightPublisher {
             case CHATTER -> verdict.chatterCount();
         };
         log.info("detect.card_published streamId={} eventId={} result={} metric={} ratio={} count={} "
-                        + "ourLatencyMs={} totalLatencyMs={}",
+                        + "windows={} ourLatencyMs={} totalLatencyMs={}",
                 streamId, card.eventId(), result, props.metric(), verdict.ratio(), count,
-                our, total);
+                windows, our, total);
     }
 }

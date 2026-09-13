@@ -25,7 +25,10 @@ import static org.assertj.core.api.Assertions.assertThat;
         "pokeclip.detection.window-sizes-ms=5000",
         "pokeclip.detection.publish-window-ms=5000",
         "pokeclip.detection.warmup-windows=2",
-        "pokeclip.detection.window-grace=0s"
+        "pokeclip.detection.window-grace=0s",
+        // 옛 검사들은 「급증 창이 그 바퀴에 바로 나간다」를 전제한다. 사건 묶기의 간격을 0으로
+        // 두면 창 하나가 곧 사건 하나라 그 전제가 그대로 선다. 묶기 자체는 아래 사건 검사들이 잰다.
+        "pokeclip.detection.episode-gap=0s"
 })
 class DetectionCycleTest extends IntegrationTestSupport {
 
@@ -373,10 +376,9 @@ class DetectionCycleTest extends IntegrationTestSupport {
         java.util.List<java.time.Instant> 넘어간_상한 = new java.util.ArrayList<>();
         HighlightPublisher 기록기 = new HighlightPublisher(null, null, reader, props) {
             @Override
-            public Outcome publish(String streamId, long metricId, long windowStartMs,
-                                   SpikeVerdict verdict, java.time.Instant countedUntil,
+            public Outcome publish(com.pokeclip.chat.detector.detect.SpikeEpisodes.Episode episode,
                                    java.util.function.Supplier<java.time.Instant> clock) {
-                넘어간_상한.add(countedUntil);
+                넘어간_상한.add(episode.last().countedUntil());
                 return Outcome.SENT;
             }
         };
@@ -412,10 +414,9 @@ class DetectionCycleTest extends IntegrationTestSupport {
                         HighlightPublisher.Outcome.SENT).iterator();
         HighlightPublisher 기록기 = new HighlightPublisher(null, null, reader, props) {
             @Override
-            public Outcome publish(String streamId, long metricId, long windowStartMs,
-                                   SpikeVerdict verdict, java.time.Instant countedUntil,
+            public Outcome publish(com.pokeclip.chat.detector.detect.SpikeEpisodes.Episode episode,
                                    java.util.function.Supplier<java.time.Instant> clock) {
-                넘어간_상한.add(countedUntil);
+                넘어간_상한.add(episode.last().countedUntil());
                 return 답.next();
             }
         };
@@ -448,8 +449,7 @@ class DetectionCycleTest extends IntegrationTestSupport {
         java.util.List<java.time.Instant> 넘어간_끝점 = new java.util.ArrayList<>();
         HighlightPublisher 기록기 = new HighlightPublisher(null, null, reader, props) {
             @Override
-            public Outcome publish(String streamId, long metricId, long windowStartMs,
-                                   SpikeVerdict verdict, java.time.Instant countedUntil,
+            public Outcome publish(com.pokeclip.chat.detector.detect.SpikeEpisodes.Episode episode,
                                    java.util.function.Supplier<java.time.Instant> clock) {
                 넘어간_끝점.add(clock.get());
                 return Outcome.SENT;
@@ -481,8 +481,7 @@ class DetectionCycleTest extends IntegrationTestSupport {
 
         HighlightPublisher 터지는_발행기 = new HighlightPublisher(null, null, reader, props) {
             @Override
-            public Outcome publish(String streamId, long metricId, long windowStartMs,
-                                   SpikeVerdict verdict, java.time.Instant countedUntil,
+            public Outcome publish(com.pokeclip.chat.detector.detect.SpikeEpisodes.Episode episode,
                                    java.util.function.Supplier<java.time.Instant> clock) {
                 throw new IllegalStateException("주입된 실패");
             }
@@ -614,8 +613,7 @@ class DetectionCycleTest extends IntegrationTestSupport {
     private void 바퀴를_돌린다(HighlightPublisher.Outcome 답) {
         HighlightPublisher 정해진_답 = new HighlightPublisher(null, null, reader, props) {
             @Override
-            public Outcome publish(String streamId, long metricId, long windowStartMs,
-                                   SpikeVerdict verdict, java.time.Instant countedUntil,
+            public Outcome publish(com.pokeclip.chat.detector.detect.SpikeEpisodes.Episode episode,
                                    java.util.function.Supplier<java.time.Instant> clock) {
                 return 답;
             }
@@ -660,10 +658,9 @@ class DetectionCycleTest extends IntegrationTestSupport {
         java.util.List<String> 발행됨 = new java.util.ArrayList<>();
         HighlightPublisher 기록하는_발행기 = new HighlightPublisher(null, null, reader, props) {
             @Override
-            public Outcome publish(String streamId, long metricId, long windowStartMs,
-                                   SpikeVerdict verdict, java.time.Instant countedUntil,
+            public Outcome publish(com.pokeclip.chat.detector.detect.SpikeEpisodes.Episode episode,
                                    java.util.function.Supplier<java.time.Instant> clock) {
-                발행됨.add(streamId);
+                발행됨.add(episode.streamId());
                 return Outcome.SENT;
             }
         };
@@ -716,6 +713,116 @@ class DetectionCycleTest extends IntegrationTestSupport {
             잡아둠.countDown();
             executor.shutdown();
         }
+    }
+
+    // ── 사건 묶기 ──────────────────────────────────────────────────────────
+
+    private DetectionProperties 간격이_있는_설정(java.time.Duration gap) {
+        return new DetectionProperties(props.cycleInterval(), props.windowSizesMs(), props.publishWindowMs(),
+                props.windowGrace(), props.lateReportInterval(), props.activeStreamWindow(),
+                props.collectLookback(), props.baselineWindow(), props.warmupWindows(), props.spikeRatio(),
+                props.minCount(), props.metric(), props.retention(),
+                gap, java.time.Duration.ofSeconds(90), java.time.Duration.ofSeconds(15), java.time.Duration.ofSeconds(5));
+    }
+
+    /**
+     * 평소 창 열 + 이어지는 급증 창 셋(T0, T0+5s, T0+10s).
+     * 조용한 창이 둘뿐이면 앞의 튄 창 둘이 기준선 중앙값을 끌어올려 셋째 창이 급증이 아니게 된다 —
+     * 실제 기준선은 15분(창 180개)이라 튄 창 몇 개가 중앙값을 못 움직인다. 그 모양을 흉내 낸다.
+     */
+    private void 급증_세_창을_심는다() {
+        채팅("s1", "u1", T0);
+        조용한_창_열을_심는다();
+        jdbc.update("""
+                INSERT INTO chat_metrics (stream_id, window_size_ms, window_start_ms, message_count, chatter_count)
+                VALUES ('s1', 5000, ?, 40, 25), ('s1', 5000, ?, 30, 20), ('s1', 5000, ?, 20, 15)
+                """, T0.toEpochMilli(), T0.plusSeconds(5).toEpochMilli(), T0.plusSeconds(10).toEpochMilli());
+    }
+
+    @Test
+    void 이어지는_급증_창_셋이_카드_하나로_나간다() {
+        급증_세_창을_심는다();
+        java.util.List<com.pokeclip.chat.detector.detect.SpikeEpisodes.Episode> 나간_사건 = new java.util.ArrayList<>();
+        HighlightPublisher 기록기 = new HighlightPublisher(null, null, reader, props) {
+            @Override
+            public Outcome publish(com.pokeclip.chat.detector.detect.SpikeEpisodes.Episode episode,
+                                   java.util.function.Supplier<java.time.Instant> clock) {
+                나간_사건.add(episode);
+                return Outcome.SENT;
+            }
+        };
+        DetectionCycle 바퀴 = new DetectionCycle(reader, metricsStore, detector, 기록기,
+                간격이_있는_설정(java.time.Duration.ofSeconds(10)), Runnable::run);
+
+        바퀴.runOnce(T0.plusSeconds(20));   // 마지막 창 끝(T0+15s) + 간격 10s = T0+25s > 지평 → 아직 열려 있다
+        assertThat(나간_사건).as("튐이 이어지는 동안은 카드를 내지 않는다").isEmpty();
+
+        바퀴.runOnce(T0.plusSeconds(30));   // 지평이 T0+25s를 넘었다 → 닫힌다
+        assertThat(나간_사건).singleElement().satisfies(episode -> {
+            assertThat(episode.windows()).as("창 셋이 사건 하나다").hasSize(3);
+            assertThat(episode.startMs()).isEqualTo(T0.toEpochMilli());
+            assertThat(episode.endMs()).isEqualTo(T0.plusSeconds(15).toEpochMilli());
+            assertThat(episode.totalMessages()).isEqualTo(90);
+        });
+
+        Integer 안_집힌_창 = jdbc.queryForObject(
+                "SELECT count(*) FROM chat_metrics WHERE stream_id = 's1' AND published_at IS NULL", Integer.class);
+        assertThat(안_집힌_창).as("사건에 든 창은 전부 발행권이 잡혀 있다 — 두 번 안 나간다").isZero();
+    }
+
+    private void 조용한_창_열을_심는다() {
+        for (int i = 1; i <= 10; i++) {
+            jdbc.update("""
+                    INSERT INTO chat_metrics (stream_id, window_size_ms, window_start_ms, message_count, chatter_count, published_at)
+                    VALUES ('s1', 5000, ?, 1, 1, now())
+                    """, T0.minusSeconds(5L * i).toEpochMilli());
+        }
+    }
+
+    @Test
+    void 간격을_넘긴_급증은_다른_사건이다() {
+        채팅("s1", "u1", T0);
+        조용한_창_열을_심는다();
+        jdbc.update("""
+                INSERT INTO chat_metrics (stream_id, window_size_ms, window_start_ms, message_count, chatter_count)
+                VALUES ('s1', 5000, ?, 40, 25), ('s1', 5000, ?, 40, 25)
+                """, T0.toEpochMilli(), T0.plusSeconds(30).toEpochMilli());   // 25초 비었다 > 간격 10초
+        java.util.List<com.pokeclip.chat.detector.detect.SpikeEpisodes.Episode> 나간_사건 = new java.util.ArrayList<>();
+        HighlightPublisher 기록기 = new HighlightPublisher(null, null, reader, props) {
+            @Override
+            public Outcome publish(com.pokeclip.chat.detector.detect.SpikeEpisodes.Episode episode,
+                                   java.util.function.Supplier<java.time.Instant> clock) {
+                나간_사건.add(episode);
+                return Outcome.SENT;
+            }
+        };
+        DetectionCycle 바퀴 = new DetectionCycle(reader, metricsStore, detector, 기록기,
+                간격이_있는_설정(java.time.Duration.ofSeconds(10)), Runnable::run);
+
+        바퀴.runOnce(T0.plusSeconds(60));
+
+        assertThat(나간_사건).as("둘째 창이 첫 사건을 닫고, 둘째 사건도 지평 안이라 닫힌다").hasSize(2);
+        assertThat(나간_사건.get(0).windows()).hasSize(1);
+        assertThat(나간_사건.get(1).startMs()).isEqualTo(T0.plusSeconds(30).toEpochMilli());
+    }
+
+    @Test
+    void 조각이_없어_되돌리면_사건의_창_전부가_다시_집힌다() {
+        급증_세_창을_심는다();
+        HighlightPublisher 되돌리는_발행기 = new HighlightPublisher(null, null, reader, props) {
+            @Override
+            public Outcome publish(com.pokeclip.chat.detector.detect.SpikeEpisodes.Episode episode,
+                                   java.util.function.Supplier<java.time.Instant> clock) {
+                return Outcome.RETRY_LATER;
+            }
+        };
+        new DetectionCycle(reader, metricsStore, detector, 되돌리는_발행기,
+                간격이_있는_설정(java.time.Duration.ofSeconds(10)), Runnable::run)
+                .runOnce(T0.plusSeconds(30));
+
+        Integer 안_집힌_창 = jdbc.queryForObject(
+                "SELECT count(*) FROM chat_metrics WHERE stream_id = 's1' AND published_at IS NULL", Integer.class);
+        assertThat(안_집힌_창).as("한 창만 되돌리면 나머지 둘은 영영 사라진다").isEqualTo(3);
     }
 
     private com.pokeclip.chat.detector.metrics.ChatMetricsStore store() {

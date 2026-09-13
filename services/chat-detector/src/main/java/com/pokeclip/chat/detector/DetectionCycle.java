@@ -2,6 +2,7 @@ package com.pokeclip.chat.detector;
 
 import com.pokeclip.chat.detector.config.DetectionProperties;
 import com.pokeclip.chat.detector.detect.SpikeDetector;
+import com.pokeclip.chat.detector.detect.SpikeEpisodes;
 import com.pokeclip.chat.detector.detect.SpikeVerdict;
 import com.pokeclip.chat.detector.metrics.ChatMetricsStore;
 import com.pokeclip.chat.detector.metrics.ChatWindowReader;
@@ -38,6 +39,8 @@ public class DetectionCycle {
     private final HighlightPublisher publisher;
     private final DetectionProperties props;
     private final TaskExecutor publishExecutor;
+    // 튄 창을 사건으로 묶는 장부. 메모리에만 있다 — SpikeEpisodes javadoc의 대가 참고.
+    private final SpikeEpisodes episodes;
 
     public DetectionCycle(ChatWindowReader reader, ChatMetricsStore store, SpikeDetector detector,
                           HighlightPublisher publisher, DetectionProperties props,
@@ -48,6 +51,7 @@ public class DetectionCycle {
         this.publisher = publisher;
         this.props = props;
         this.publishExecutor = publishExecutor;
+        this.episodes = new SpikeEpisodes(props.episodeGap().toMillis(), props.episodeMaxSpan().toMillis());
     }
 
     /**
@@ -100,6 +104,11 @@ public class DetectionCycle {
             }
         }
         reportActiveButEmpty(activeButEmpty);
+        // 튐이 멈추고 간격이 지난 사건을 닫아 카드로 낸다. 방송별 루프 밖에서 하는 이유는
+        // 채팅이 끊긴 방송이 활성 목록에서 빠져도 그 사건은 닫혀야 하기 때문이다.
+        for (SpikeEpisodes.Episode episode : episodes.drainExpired(until.toEpochMilli())) {
+            submit(episode);
+        }
     }
 
     /**
@@ -209,34 +218,36 @@ public class DetectionCycle {
             // 되돌렸다 다시 집는 창에서 now 를 쓰면 상한이 재시도마다 뒤로 밀리고,
             // 판정에 쓰이지도 않은 늦은 채팅이 우리 구간을 실제보다 짧게 만든다.
             Instant countedUntil = claim.get().firstClaimedAt();
-            long windowStartMs = row.windowStartMs();
-            publishExecutor.execute(() -> {
-                // 🔴 던지면 카드가 사라지는데 발행권은 이미 잡혀 재시도가 없다. 실행기 스레드의
-                // 기본 처리는 stderr 스택 한 덩어리라 구조화된 로그로 안 남는다(감사 2회차 R-5).
-                //
-                // 지금 여기서 새는 경로는 못 찾았다 — VideoPositionClient·ClipHighlightClient가
-                // 둘 다 Exception을 다 잡고 그 사이는 문자열 조립과 산수뿐이다. 그래도 두는 이유는
-                // 그 사이 코드가 앞으로 바뀌기 때문이고, 그때 조용히 사라지는 것이 이 기능에서
-                // 가장 나쁜 실패이기 때문이다.
-                try {
-                    // countedUntil = 이 창을 처음 집은 시각(집계에 쓰인 채팅의 상한).
-                    // 끝점은 값이 아니라 시계를 넘긴다 — 발행이 끝난 뒤에 찍혀야 우리 왕복이
-                    // 우리 구간에 들어간다. 여기서 Instant.now()를 찍어 넘기면 보내기 전 시각이다.
-                    HighlightPublisher.Outcome outcome =
-                            publisher.publish(streamId, id, windowStartMs, verdict, countedUntil, Instant::now);
-                    // 🔴 계약이 「재시도할 자리」로 명시한 것만 되돌린다(라운드 2에서 넣고
-                    // 라운드 3에서 폭을 좁혔다). 조각이 아직 장부에 안 온 것은 몇 초 뒤면
-                    // 풀리는데, 발행권이 잡힌 채로 두면 그 창은 영영 다시 안 집히고
-                    // 하이라이트가 사라진다 — 채팅에는 백필이 없어 되찾을 방법도 없다.
-                    // 「창구를 못 물었다」를 여기 넣으면 안 되는 이유는 HighlightPublisher에.
-                    if (outcome == HighlightPublisher.Outcome.RETRY_LATER) {
+            // 바로 내지 않는다. 이어지는 튄 창들을 사건 하나로 묶어 카드 하나로 낸다 —
+            // 닫히는 시점은 runOnce 끝(간격 경과)이거나, 못 붙는 창이 왔을 때(여기)다.
+            episodes.add(streamId, new SpikeEpisodes.Window(id, row.windowStartMs(), windowSizeMs, verdict, countedUntil))
+                    .ifPresent(this::submit);
+        }
+    }
+
+    private void submit(SpikeEpisodes.Episode episode) {
+        String streamId = episode.streamId();
+        publishExecutor.execute(() -> {
+            // 🔴 던지면 카드가 사라지는데 발행권은 이미 잡혀 재시도가 없다. 실행기 스레드의
+            // 기본 처리는 stderr 스택 한 덩어리라 구조화된 로그로 안 남는다(감사 2회차 R-5).
+            try {
+                // 끝점은 값이 아니라 시계를 넘긴다 — 발행이 끝난 뒤에 찍혀야 우리 왕복이
+                // 우리 구간에 들어간다. 여기서 Instant.now()를 찍어 넘기면 보내기 전 시각이다.
+                HighlightPublisher.Outcome outcome = publisher.publish(episode, Instant::now);
+                // 🔴 계약이 「재시도할 자리」로 명시한 것만 되돌린다. 조각이 아직 장부에 안 온 것은
+                // 몇 초 뒤면 풀리는데, 발행권이 잡힌 채로 두면 그 창들은 영영 다시 안 집히고
+                // 하이라이트가 사라진다 — 채팅에는 백필이 없어 되찾을 방법도 없다.
+                // 사건의 창 전부를 되돌린다. 다음 바퀴가 다시 집어 같은 사건으로 다시 묶는다.
+                if (outcome == HighlightPublisher.Outcome.RETRY_LATER) {
+                    for (long id : episode.metricIds()) {
                         store.releaseClaim(id);
                     }
-                } catch (Throwable t) {
-                    log.warn("detect.publish_threw streamId={} metricId={} causeType={}",
-                            streamId, id, t.getClass().getSimpleName());
                 }
-            });
-        }
+            } catch (Throwable t) {
+                log.warn("detect.publish_threw streamId={} metricId={} windows={} causeType={}",
+                        streamId, episode.first().metricId(), episode.windows().size(),
+                        t.getClass().getSimpleName());
+            }
+        });
     }
 }

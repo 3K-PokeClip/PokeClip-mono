@@ -29,7 +29,8 @@ class DetectionPropertiesTest {
         return new DetectionProperties(Duration.ofSeconds(1), windowSizesMs, publishWindowMs,
                 Duration.ofSeconds(2), Duration.ofMinutes(10), Duration.ofSeconds(60),
                 Duration.ofMinutes(1), Duration.ofMinutes(15), 24, 3.0, 10,
-                DetectionProperties.Metric.MESSAGE, Duration.ofHours(24));
+                DetectionProperties.Metric.MESSAGE, Duration.ofHours(24),
+                Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15), Duration.ofSeconds(5));
     }
 
     @Test
@@ -100,7 +101,8 @@ class DetectionPropertiesTest {
         }
         return new DetectionProperties(cycle, List.of(3_000L, 5_000L, 10_000L), 5_000L,
                 grace, late, active, lookback, baseline, 24, 3.0, 10,
-                DetectionProperties.Metric.MESSAGE, retention);
+                DetectionProperties.Metric.MESSAGE, retention,
+                Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15), Duration.ofSeconds(5));
     }
 
     /**
@@ -155,7 +157,8 @@ class DetectionPropertiesTest {
                                                 Duration lookback, Duration retention) {
         return new DetectionProperties(Duration.ofSeconds(1), List.of(3_000L, 5_000L, 10_000L), 5_000L,
                 grace, Duration.ofMinutes(10), active, lookback, baseline, warmup, 3.0, 10,
-                DetectionProperties.Metric.MESSAGE, retention);
+                DetectionProperties.Metric.MESSAGE, retention,
+                Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15), Duration.ofSeconds(5));
     }
 
     private static DetectionProperties 기본_관계() {

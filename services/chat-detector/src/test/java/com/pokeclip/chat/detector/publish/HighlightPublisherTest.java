@@ -21,7 +21,8 @@ class HighlightPublisherTest {
             Duration.ofSeconds(1), List.of(5_000L), 5_000L,
             Duration.ofSeconds(2), Duration.ofMinutes(10),
             Duration.ofSeconds(60), Duration.ofMinutes(1), Duration.ofMinutes(15),
-            5, 3.0, 10, Metric.MESSAGE, Duration.ofHours(24));
+            5, 3.0, 10, Metric.MESSAGE, Duration.ofHours(24),
+                Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15), Duration.ofSeconds(5));
 
     private static final SpikeVerdict SPIKE =
             new SpikeVerdict(true, "spike", 4.0, 10.0, 5_000L, 40, 25);
@@ -56,7 +57,8 @@ class HighlightPublisherTest {
                 Duration.ofSeconds(1), List.of(5_000L), 5_000L,
                 Duration.ofSeconds(2), Duration.ofMinutes(10),
                 Duration.ofSeconds(60), Duration.ofMinutes(1), Duration.ofMinutes(15),
-                5, 3.0, 10, metric, Duration.ofHours(24));
+                5, 3.0, 10, metric, Duration.ofHours(24),
+                Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15), Duration.ofSeconds(5));
     }
 
     private DetectionProperties props = PROPS;
@@ -114,9 +116,10 @@ class HighlightPublisherTest {
         publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, CLAIMED_AT, Instant::now);
 
         assertThat(published).singleElement().satisfies(card -> {
-            assertThat(card.windowStartMs()).isEqualTo(30_000L);
-            assertThat(card.windowEndMs()).isEqualTo(35_000L);
-            assertThat(card.streamTimestampMs()).isEqualTo(32_500L);
+            // 첫 창 위치 30,000 − 앞당김 15,000 = 15,000 · 창 끝 35,000 + 덧붙임 5,000 = 40,000
+            assertThat(card.windowStartMs()).isEqualTo(15_000L);
+            assertThat(card.windowEndMs()).isEqualTo(40_000L);
+            assertThat(card.streamTimestampMs()).as("지점은 구간 시작이다 — 장면 앞에서 재생이 시작돼야 한다").isEqualTo(15_000L);
             assertThat(card.eventId()).isEqualTo("detect-7");
         });
     }
@@ -461,5 +464,39 @@ class HighlightPublisherTest {
                     .singleElement().satisfies(line -> assertThat(line)
                             .contains("count=40").contains("metric=MESSAGE"));
         }
+    }
+
+    @Test
+    void 사건의_구간은_첫_창_앞당김부터_마지막_창_덧붙임까지다() {
+        var w1 = new com.pokeclip.chat.detector.detect.SpikeEpisodes.Window(7L, WINDOW_START_MS, 5_000L, SPIKE, CLAIMED_AT);
+        var w2 = new com.pokeclip.chat.detector.detect.SpikeEpisodes.Window(8L, WINDOW_START_MS + 5_000, 5_000L,
+                new SpikeVerdict(true, "spike", 6.0, 10.0, 5_000L, 60, 30), CLAIMED_AT.plusSeconds(5));
+        var w3 = new com.pokeclip.chat.detector.detect.SpikeEpisodes.Window(9L, WINDOW_START_MS + 10_000, 5_000L, SPIKE, CLAIMED_AT.plusSeconds(10));
+        var episode = new com.pokeclip.chat.detector.detect.SpikeEpisodes.Episode("s1", List.of(w1, w2, w3));
+
+        publisher().publish(episode, Instant::now);
+
+        assertThat(located).as("변환은 첫 창 시각 한 번만").containsExactly(new Call("s1", WINDOW_START_MS));
+        assertThat(published).singleElement().satisfies(card -> {
+            assertThat(card.eventId()).as("번호는 첫 창의 것").isEqualTo("detect-7");
+            assertThat(card.windowStartMs()).isEqualTo(15_000L);               // 30,000 − 15,000
+            assertThat(card.windowEndMs()).isEqualTo(30_000L + 15_000L + 5_000L); // 첫 창 위치 + 사건 길이 15초 + 덧붙임
+            assertThat(card.evidenceJson())
+                    .contains("\"windows\":3")
+                    .contains("\"messageCount\":140")
+                    .contains("\"ratio\":6.0")
+                    .contains("\"spanMs\":15000");
+        });
+    }
+
+    @Test
+    void 앞당김이_방송_시작을_넘으면_0에서_자른다() {
+        position = new VideoPosition(State.CONVERTED, 4_000L, 3_900L);   // 첫 창이 방송 4초 지점
+        publisher().publish("s1", 7L, WINDOW_START_MS, SPIKE, CLAIMED_AT, Instant::now);
+
+        assertThat(published).singleElement().satisfies(card -> {
+            assertThat(card.windowStartMs()).isZero();
+            assertThat(card.valid()).isTrue();
+        });
     }
 }

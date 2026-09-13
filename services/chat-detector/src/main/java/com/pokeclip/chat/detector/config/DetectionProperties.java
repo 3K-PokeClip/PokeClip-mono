@@ -39,7 +39,12 @@ public record DetectionProperties(@NotNull Duration cycleInterval,
                                   @Positive double spikeRatio,
                                   @Min(1) int minCount,
                                   @NotNull Metric metric,
-                                  @NotNull Duration retention) {
+                                  @NotNull Duration retention,
+                                  /* 튄 창을 사건 하나로 묶는 규칙 — SpikeEpisodes */
+                                  @NotNull Duration episodeGap,
+                                  @NotNull Duration episodeMaxSpan,
+                                  @NotNull Duration episodeLead,
+                                  @NotNull Duration episodeTail) {
 
     public enum Metric { MESSAGE, CHATTER }
 
@@ -114,6 +119,19 @@ public record DetectionProperties(@NotNull Duration cycleInterval,
                             + "ms)보다 짧다 — 닫힌 창이 안 나와 집계가 0줄이 된다");
         }
 
+        // ── 사건 묶기 ────────────────────────────────────────────────
+        // 간격·앞당김·덧붙임은 0이 뜻이 선다(안 묶음·안 앞당김). 상한만 0이면 어떤 창도 못 들어가
+        // 사건이 매 창마다 닫혀 「묶기」가 조용히 꺼진다.
+        requireNonNegative("episode-gap", episodeGap);
+        requireNonNegative("episode-lead", episodeLead);
+        requireNonNegative("episode-tail", episodeTail);
+        requirePositive("episode-max-span", episodeMaxSpan);
+        if (episodeMaxSpan.toMillis() < publishWindowMs) {
+            throw new IllegalArgumentException(
+                    "episode-max-span(" + episodeMaxSpan + ")이 publish-window-ms(" + publishWindowMs
+                            + ")보다 짧다 — 창 하나도 사건에 못 들어간다");
+        }
+
         // ④ 보관 기간이 기준선 기간보다 짧으면 치우기가 기준선을 지운다.
         if (retention.compareTo(baselineWindow) < 0) {
             throw new IllegalArgumentException(
@@ -123,6 +141,12 @@ public record DetectionProperties(@NotNull Duration cycleInterval,
     }
 
     /** 0도 음수도 막는다. 어느 칸인지 이름을 실어야 부팅 실패에서 바로 찾는다. */
+    private static void requireNonNegative(String name, Duration value) {
+        if (value.isNegative()) {
+            throw new IllegalArgumentException(name + "은(는) 음수일 수 없다: " + value);
+        }
+    }
+
     private static void requirePositive(String name, Duration value) {
         if (value.isZero() || value.isNegative()) {
             throw new IllegalArgumentException(name + "은(는) 0보다 커야 한다: " + value);

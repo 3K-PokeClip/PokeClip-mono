@@ -3279,6 +3279,10 @@ NPE를 던진다**(빈 Set도 그렇다 — 실측).
 | `DETECTION_METRIC` | `MESSAGE` | — | `MESSAGE` 또는 `CHATTER`. 사람 수는 지금 집계만 하고 판정엔 안 쓴다 |
 | `DETECTION_RETENTION` | `24h` | — | 집계 줄 보관 기간 |
 | `DETECTION_SWEEP_INTERVAL` | `10m` | — | 보관 기간이 지난 줄을 치우는 주기 |
+| `DETECTION_EPISODE_GAP` | `10s` | — | 튄 창들을 **사건 하나로 묶는** 간격. 앞 창 끝에서 이만큼 안에 다음 튄 창이 오면 같은 카드다. 튐이 멈추고 이 시간이 지나야 카드가 나간다 |
+| `DETECTION_EPISODE_MAX_SPAN` | `90s` | — | 사건 길이 상한. 넘으면 끊고 다음 사건 |
+| `DETECTION_EPISODE_LEAD` | `15s` | — | 카드 구간을 첫 튄 창보다 이만큼 앞에서 시작(채팅은 장면보다 늦다) |
+| `DETECTION_EPISODE_TAIL` | `5s` | — | 카드 구간을 마지막 튄 창 뒤로 이만큼 연장 |
 
 **임계값 셋(`SPIKE_RATIO`·`MIN_COUNT`·`WARMUP_WINDOWS`)은 확정값이 아니다.** 멘토 협업이
 미결이라 설정으로 빼 뒀다 — 실측 뒤에 다시 정한다.
