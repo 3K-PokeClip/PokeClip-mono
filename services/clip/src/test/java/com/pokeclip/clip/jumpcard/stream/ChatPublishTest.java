@@ -154,11 +154,16 @@ class ChatPublishTest {
     }
 
     /**
-     * 🔴 F4 — 채팅 큐가 차면 <b>거부된 이벤트 수만큼</b> 세고, job마다 WARN을 찍지 않으며, <b>같은 연결의 카드는
-     * 여전히 간다</b>(카드 줄이 따로라서). 양성 대조: 채팅 거부가 실제로 났다({@code chatDroppedCount() > 0}).
+     * 🔴 F4 — 채팅 큐가 차면 <b>거부된 이벤트 수만큼</b> 세고, job마다 WARN을 찍지 않는다.
+     * 양성 대조: 채팅 거부가 실제로 났다({@code chatDroppedCount() > 0}).
+     *
+     * <p>🔴 <b>같은 연결의 카드는 가지 않는다 — 건너뛰고 센다</b>(태스크 19에서 바뀌었다). 전에는 이 시험이 「채팅 줄이
+     * 막혀도 같은 연결에 카드가 간다」를 단언했는데 {@link Recording}에는 emitter 쓰기 자물쇠가 없어서 참이었을 뿐이다.
+     * 진짜 emitter는 채팅이 쥔 자물쇠를 카드 스레드가 기다리고, 같은 카드 스트라이프가 통째로 막힌다(실 HTTP 약 65초).
+     * 그래서 카드 job은 1초까지만 기다리고 건너뛴다 — 여기서는 「카드 스레드가 붙들리지 않고 풀려났다」를 잰다.
      */
     @Test
-    void 채팅_큐가_차도_거부를_이벤트_수만큼_세고_카드는_간다() {
+    void 채팅_큐가_차도_거부를_이벤트_수만큼_세고_막힌_연결의_카드는_기다리다_건너뛴다() {
         CardStreamRegistry registry = registry(1, 1);
         Recording slow = (Recording) registry.open("s-1", "u-1", Duration.ofMinutes(1));
         CountDownLatch gate = slow.blockChatSends();
@@ -175,9 +180,14 @@ class ChatPublishTest {
                     .noneMatch(m -> m.startsWith("jumpcard.stream.rejected"));
         }
 
+        long publishedAt = System.nanoTime();
         registry.publish(card("s-1"));
-        awaitUntil(() -> slow.events().stream().anyMatch(e -> "card".equals(e.name())));
-        assertThat(slow.threadOf("card")).as("채팅 줄이 막혀도 카드는 카드 줄로 간다").startsWith("jumpcard-stream-");
+        awaitUntil(() -> registry.stuckSkippedCount() == 1);
+        long waitedMs = (System.nanoTime() - publishedAt) / 1_000_000;
+        assertThat(waitedMs).as("쓰기 문을 1초(STUCK_THRESHOLD)까지는 기다린다 — 곧바로 버리면 멀쩡한 연결도 잃는다")
+                .isGreaterThanOrEqualTo(CardStreamRegistry.STUCK_THRESHOLD.toMillis() - 50);
+        assertThat(slow.events()).as("막힌 채팅 쓰기가 끝나기 전에는 카드가 안 섞인다")
+                .noneMatch(e -> "card".equals(e.name()));
     }
 
     @Test

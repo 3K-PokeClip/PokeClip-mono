@@ -25,6 +25,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -41,9 +42,79 @@ public class CardStreamRegistry implements EndedListener {
     private static final Logger log = LoggerFactory.getLogger(CardStreamRegistry.class);
 
     /** 연결 하나. {@code seq}가 스트라이프를 정해 같은 연결의 이벤트 순서가 지켜진다. */
-    private record Conn(long seq, String streamId, String userId, SseEmitter emitter) {
+    private record Conn(long seq, String streamId, String userId, SseEmitter emitter, WriteGate gate) {
         int stripe() {
             return (int) (seq % Integer.MAX_VALUE);
+        }
+    }
+
+    /**
+     * 🔴 <b>쓰기가 이만큼 넘게 안 끝난 연결은 막힌 것으로 보고 건너뛴다</b>(POK-234 main 결정).
+     *
+     * <p><b>왜 필요한가 — 채팅 줄을 갈라도 카드 줄이 막혔다.</b> 줄(스레드)은 갈랐지만 <b>소켓과 emitter 쓰기 자물쇠는
+     * 연결당 하나</b>다. 안 읽는 구독자 A에게 채팅이 TCP 버퍼를 채우면 채팅 스레드가 A의 자물쇠를 쥔 채 멈추고,
+     * 카드 발행 때 A 몫 카드 job이 <b>카드 스레드</b>에서 그 자물쇠를 기다린다. 같은 카드 스트라이프의 멀쩡한 B는
+     * 그 뒤에 선다 — 실측 <b>65,403 · 65,087 · 65,089 · 65,020ms</b>(2026-09-13, 스트라이프 1·큐 5, 하트비트를 1시간으로
+     * 없애도 같았다). 그 60여 초는 톰캣 커넥터 {@code connectionTimeout}(기본 60초 —
+     * {@code AbstractHttp11Protocol}이 {@code Constants.DEFAULT_CONNECTION_TIMEOUT}으로 두고
+     * {@code NioEndpoint.setSocketOptions}가 그 값을 소켓 write timeout으로 건다. 우리는
+     * {@code server.tomcat.connection-timeout}을 안 준다)이 막힌 쓰기를 {@code IOException}으로 풀 때까지다.
+     * 나머지 약 5초는 채팅이 버퍼를 채운 시간과 톰캣 감시 주기로 보이는데 <b>항을 나눠 재지 않았다</b>.
+     *
+     * <p><b>왜 1초인가.</b> 정상 쓰기는 ms 미만이다 — 같은 날 실측으로 연결 100·초당 50건×5초(표본 25,000)에서
+     * 보낸 뒤 받기까지 p50 7ms · p95 16ms · 최대 27ms였고 그것도 HTTP 왕복을 포함한 값이다. 1초면 수십 배 여유다.
+     * 설정값으로 빼지 않는다 — 운영자가 조정할 이유가 생긴 적이 없다.
+     *
+     * <p>🔴 <b>「쓰는 중이면 건너뜀」만으로는 안 된다.</b> 채팅이 초당 수백 건이면 <b>멀쩡한 연결</b>에서도 카드 job 순간에
+     * 채팅 쓰기가 겹친다 — 그 카드를 잃는다({@code ChatStreamEndToEndTest.멀쩡한_연결은…}이 잰다).
+     */
+    static final Duration STUCK_THRESHOLD = Duration.ofSeconds(1);
+
+    /**
+     * 연결 하나의 쓰기 문. <b>emitter에 쓰는 길은 {@link #send} 하나뿐이다</b>({@code SseSendSiteTest}가 소스에서 센다).
+     *
+     * <p>🔴 <b>main 결정에서 한 가지를 더했다 — 우리 자물쇠를 {@link #STUCK_THRESHOLD}까지만 기다린다.</b>
+     * 「1초 넘게 쓰는 중이면 건너뜀」만 두면 <b>막히기 시작하고 1초가 안 된 사이</b>에 온 job(카드·ping)이 판정을 통과해
+     * emitter 자물쇠에서 60초를 기다리고, 같은 스트라이프가 그대로 막힌다. 안 읽는 연결에 채팅이 막 막힌 순간 카드가
+     * 발행되는 것이 바로 그 경우다 — 우리 자물쇠를 빼고 1초 판정만 남기는 주입에서
+     * {@code ChatStreamBackpressureTest.채팅이_큐를_채워도_같은_스트라이프_카드는_간다}가 3회 중 3회 빨간불이었다(건너뜀 0). 그래서 쓰기 전에 우리 자물쇠를
+     * 먼저 잡고, 1초 안에 못 잡으면 건너뛴다. emitter 자물쇠를 직접 기다리지 않는다.
+     *
+     * <p><b>공정 자물쇠로 둔다.</b> 채팅 스레드는 이벤트마다 풀고 곧바로 다시 잡는다. 비공정이면 그 틈을 채팅이 계속
+     * 새치기해 카드 스레드가 1초를 굶고 <b>멀쩡한 연결에서 카드를 건너뛸 수 있다</b>. 🔴 <b>재현하지 못했다</b> — 비공정으로
+     * 바꾸는 주입이 폭주 시험(초당 1만 건대)에서 초록이었다. 채팅 job 사이에 HTTP 왕복만큼 틈이 있어 새치기가 1초를
+     * 못 이어 간 것으로 보인다. 공정의 대가는 자물쇠를 넘겨줄 때의 깨우기 비용뿐이라 그대로 둔다. 시한 있는
+     * {@code tryLock}은 공정성을 지키고 시한 없는 {@code tryLock()}은 공정 자물쇠에서도 새치기한다(JDK 문서).
+     *
+     * <p><b>남는 한계 둘</b>(README clip 절에도 적는다) —
+     * ① A의 버퍼가 <b>이미 찼는데</b> 채팅이 잠잠한 틈에 카드·ping이 먼저 자물쇠를 잡고 쓰기를 시작하면 그 job 자체가
+     * 소켓에서 막힌다. 건너뛸 판정은 쓰기 <b>전</b>에만 하므로 같은 카드 스트라이프가 write timeout(약 60초)만큼 늦는다.
+     * ② 판정을 통과한 직후에 막히기 시작하는 쓰기도 같다. 둘 다 「첫 번째로 막힌 쓰기」는 못 건너뛴다는 한 가지다.
+     */
+    static final class WriteGate {
+
+        private final ReentrantLock lock = new ReentrantLock(true);
+
+        /** 자물쇠를 쥔 쪽이 {@code send} 바로 앞에서 세우고 끝나면 0. 0은 「쓰는 중 아님」이다. */
+        private volatile long writeStartedNanos;
+
+        /** @return 보냈으면 {@code true}, 막힌 연결이라 건너뛰었으면 {@code false} */
+        boolean send(SseEmitter emitter, SseEmitter.SseEventBuilder event) throws Exception {
+            long started = writeStartedNanos;
+            if (started != 0 && System.nanoTime() - started > STUCK_THRESHOLD.toNanos()) {
+                return false;   // 이미 1초 넘게 막혔다 — 기다리지도 않는다(막힌 연결 몫 job이 쌓여도 줄이 안 밀린다)
+            }
+            if (!lock.tryLock(STUCK_THRESHOLD.toNanos(), TimeUnit.NANOSECONDS)) {
+                return false;
+            }
+            try {
+                writeStartedNanos = System.nanoTime() | 1;   // 0은 「쓰는 중 아님」 표식이라 피한다
+                emitter.send(event);
+                return true;
+            } finally {
+                writeStartedNanos = 0;
+                lock.unlock();
+            }
         }
     }
 
@@ -114,8 +185,12 @@ public class CardStreamRegistry implements EndedListener {
      * 막을 때 채팅(초당 수십 건)이 큐를 금방 채워, <b>같은 스트라이프의 멀쩡한 연결이 카드를 잃는다</b> — 카드가
      * 제품의 핵심이다. 줄을 갈라 막힌 연결의 피해를 「그 스트라이프의 채팅」으로 가둔다.
      *
-     * <p><b>남는 한계</b>: 안 읽는 구독자와 같은 <b>채팅</b> 스트라이프의 연결은 채팅을 잃을 수 있다(카드는 안 잃는다).
-     * 같은 연결에 카드와 채팅이 동시에 가면 emitter 쓰기 자물쇠를 나눠 기다린다 — 그 연결 자체가 막힌 경우라 전과 같다.
+     * <p>🔴 <b>줄을 가르는 것만으로는 카드 줄이 안 지켜졌다</b>(태스크 19 실측). 소켓과 emitter 쓰기 자물쇠는 연결당 하나라,
+     * 채팅이 A의 쓰기를 막으면 A 몫 카드 job이 카드 스레드에서 그 자물쇠를 기다리고 같은 카드 스트라이프의 B가 약 65초 늦었다.
+     * 그것을 막는 것은 줄 분리가 아니라 {@link WriteGate}다 — 막힌 연결의 쓰기를 건너뛴다.
+     *
+     * <p><b>남는 한계</b>: 안 읽는 구독자와 같은 <b>채팅</b> 스트라이프의 연결은 채팅을 잃을 수 있다.
+     * 카드 스트라이프는 {@link WriteGate}의 한계 둘(첫 번째로 막힌 쓰기가 카드·ping 자신인 경우)만큼 늦을 수 있다.
      * 연결마다 줄을 두는 안(A)은 {@link CardStreamExecutor} 주석이 「상한 500에 스레드 500」으로 이미 기각했다.
      *
      * <p>스트라이프 수·큐 크기는 카드와 같은 설정값이다. 스레드는 카드 4 + 채팅 4 = 8.
@@ -129,6 +204,11 @@ public class CardStreamRegistry implements EndedListener {
     private static final Duration CHAT_DROP_LOG_EVERY = Duration.ofSeconds(10);
     private final AtomicLong nextChatDropLogNanos = new AtomicLong(Long.MIN_VALUE);
     private final AtomicLong chatDroppedSinceLog = new AtomicLong();
+
+    /** 막힌 연결이라 건너뛴 쓰기 수(누적) — 카드·ping·채팅·종료 알림 모두. 연결마다 센다. */
+    private final AtomicLong stuckSkipped = new AtomicLong();
+    private final AtomicLong nextStuckSkipLogNanos = new AtomicLong(Long.MIN_VALUE);
+    private final AtomicLong stuckSkippedSinceLog = new AtomicLong();
 
     /** B에서 아는 종류. 모르는 것은 묶음째 거부하지 않고 건너뛰고 센다(F8) — PR-C가 {@code broadcast-info}를 더한다. */
     static final java.util.Set<String> CHAT_KINDS = java.util.Set.of("chat", "donation");
@@ -210,7 +290,7 @@ public class CardStreamRegistry implements EndedListener {
         checkLimits(streamId, userId);
 
         SseEmitter emitter = emitterFactory.apply(timeout);
-        conns.put(emitter, new Conn(seq.getAndIncrement(), streamId, userId, emitter));
+        conns.put(emitter, new Conn(seq.getAndIncrement(), streamId, userId, emitter, new WriteGate()));
 
         Runnable remove = () -> conns.remove(emitter);
         emitter.onCompletion(remove);
@@ -337,9 +417,8 @@ public class CardStreamRegistry implements EndedListener {
         // (broadcastEnded와 달리 클라이언트가 아직 아무것도 못 받은 상태다).
         executor.submit(conn.stripe(), emitter, () -> {
             // 주석이 첫 쓰기여야 헤더가 바로 나간다(위 문단).
-            emitter.send(SseEmitter.event().comment("ok"));
-            if (ended) {
-                emitter.send(endedEvent());
+            send(conn, SseEmitter.event().comment("ok"));
+            if (ended && send(conn, endedEvent())) {
                 emitter.complete();
             }
         });
@@ -370,7 +449,8 @@ public class CardStreamRegistry implements EndedListener {
             // 🔴 <b>유실 크기는 안 쟀다</b> — 큐(운영 1000)를 채워 실제로 몇 장이 사라지는지
             // 재현한 적이 없다. 「버려도 된다」는 처방 비교의 결론이지 유실 확률의 판정이 아니다.
             if (conn.streamId().equals(card.streamId())) {
-                executor.submit(conn.stripe(), conn.emitter(), () -> conn.emitter().send(cardEvent(card)));
+                // 막힌 연결이면 건너뛴다({@link WriteGate}). 그 카드도 위와 같이 카드 목록 문이 메운다.
+                executor.submit(conn.stripe(), conn.emitter(), () -> send(conn, cardEvent(card)));
             }
         }
     }
@@ -437,8 +517,11 @@ public class CardStreamRegistry implements EndedListener {
         for (Conn conn : conns.values()) {
             if (conn.streamId().equals(streamId)) {
                 boolean queued = executor.submit(conn.stripe(), conn.emitter(), () -> {
-                    conn.emitter().send(endedEvent());
-                    conn.emitter().complete();
+                    // 건너뛰었으면 complete()도 안 부른다 — 그것도 막힌 쓰기가 쥔 emitter 자물쇠를 기다린다.
+                    // 그 연결은 막힌 쓰기가 write timeout으로 실패할 때 Job의 completeWithError로 명부에서 빠진다.
+                    if (send(conn, endedEvent())) {
+                        conn.emitter().complete();
+                    }
                 });
                 if (!queued) {
                     dropRejectedEnded(conn, streamId);
@@ -492,7 +575,7 @@ public class CardStreamRegistry implements EndedListener {
             for (Conn conn : conns.values()) {
                 // 반환값을 안 본다 — 하트비트는 다음 주기가 다시 온다.
                 executor.submit(conn.stripe(), conn.emitter(),
-                        () -> conn.emitter().send(SseEmitter.event().comment("ping")));
+                        () -> send(conn, SseEmitter.event().comment("ping")));
             }
             // 하트비트가 이 클래스의 <b>유일한 주기 훅</b>이라 순번 표 청소를 여기 얹는다.
             // 🔴 <b>전송보다 뒤다.</b> 앞에 두면 이 메서드가 <b>자물쇠를 기다리게</b> 되어
@@ -598,8 +681,10 @@ public class CardStreamRegistry implements EndedListener {
                     continue;
                 }
                 boolean queued = chatExecutor.submit(conn.stripe(), conn.emitter(), () -> {
+                    // 이벤트마다 문을 지난다 — job 하나(최대 500건)를 통째로 한 번 잡으면 멀쩡한 연결에서도
+                    // 쓰기가 1초를 넘겨 그 사이 카드 job이 「막혔다」로 건너뛴다.
                     for (String[] e : prepared) {
-                        conn.emitter().send(SseEmitter.event().id(e[0]).name(e[1]).data(e[2], MediaType.APPLICATION_JSON));
+                        send(conn, SseEmitter.event().id(e[0]).name(e[1]).data(e[2], MediaType.APPLICATION_JSON));
                     }
                 });
                 if (!queued) {
@@ -629,6 +714,34 @@ public class CardStreamRegistry implements EndedListener {
             log.warn("jumpcard.stream.chat_dropped streamId={} events={} total={}",
                     streamId, chatDroppedSinceLog.getAndSet(0), chatDropped.get());
         }
+    }
+
+    /**
+     * <b>emitter에 쓰는 유일한 길.</b> 막힌 연결이면 건너뛰고 센다({@link WriteGate}).
+     *
+     * <p>건너뛴 카드는 <b>카드 목록 문</b>이 메운다(기존 계약 — 큐 거부로 버린 카드와 같다). 건너뛴 채팅은 화면이
+     * {@code seq} 빈틈으로 알고 범위 창구로 메운다. 로그는 모아서 연결 번호와 건수만 싣는다 — 막힌 연결 하나가
+     * 초당 수십 번 건너뛴다.
+     */
+    private boolean send(Conn conn, SseEmitter.SseEventBuilder event) throws Exception {
+        if (conn.gate().send(conn.emitter(), event)) {
+            return true;
+        }
+        stuckSkipped.incrementAndGet();
+        stuckSkippedSinceLog.incrementAndGet();
+        long now = System.nanoTime();
+        long next = nextStuckSkipLogNanos.get();
+        if ((next == Long.MIN_VALUE || now >= next)
+                && nextStuckSkipLogNanos.compareAndSet(next, now + CHAT_DROP_LOG_EVERY.toNanos())) {
+            log.warn("jumpcard.stream.stuck_skipped conn={} skipped={} total={}",
+                    conn.seq(), stuckSkippedSinceLog.getAndSet(0), stuckSkipped.get());
+        }
+        return false;
+    }
+
+    /** 막힌 연결이라 건너뛴 쓰기 누계. */
+    public long stuckSkippedCount() {
+        return stuckSkipped.get();
     }
 
     /** 채팅 큐 거부로 연결에 못 넣은 이벤트 누계. */
