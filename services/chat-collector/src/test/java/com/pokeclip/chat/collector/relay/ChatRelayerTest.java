@@ -213,6 +213,40 @@ class ChatRelayerTest {
                 .isEqualTo(relayer.relayed() + relayer.relayDropped() + relayer.bufferDropped() + buffer.size());
     }
 
+    /**
+     * 감사 L21 — 중계 스레드가 {@code Error}로 죽어도 <b>나가 있던 묶음이 버린 수로 들어가</b> 등식이 닫힌다.
+     * {@code send}는 {@code RuntimeException}만 받으므로 전에는 그 묶음이 어느 셈에도 안 들어갔고,
+     * {@code awaitClosed}는 죽은 스레드를 보고 곧장 돌아가 확정도 없었다.
+     */
+    @Test
+    void 중계_스레드가_Error로_죽어도_나가_있던_묶음이_등식에_들어간다() throws Exception {
+        relayer.beginClose();
+        relayer.awaitClosed(AWAIT);
+        buffer = new RelayBuffer(10_000);
+        ClipRelayClient dying = new ClipRelayClient(RestClient.builder(), properties(), ClipRelayClientTest.link()) {
+            @Override
+            public Outcome send(String streamId, List<RelayEvent> events) {
+                throw new LinkageError("주입 — RuntimeException이 아닌 것");
+            }
+        };
+        buffer.offer("s-a", chat("1"));
+        buffer.offer("s-a", chat("2"));
+        buffer.offer("s-b", chat("3"));   // 방송 둘 — 첫 방송에서 죽으면 둘째 방송 몫도 나가 있던 채다
+        relayer = new ChatRelayer(buffer, dying, properties());
+        relayer.start();
+
+        await(() -> relayer.relayDropped() == 3);
+        await(() -> !relayer.isRunning());
+        assertThat(relayer.isRunning()).as("양성 대조 — 스레드가 정말 죽었다").isFalse();
+        relayer.beginClose();
+        relayer.awaitClosed(AWAIT);
+
+        assertThat(relayer.relayOffered()).isEqualTo(3);
+        assertThat(relayer.relayDropped()).as("나가 있던 셋이 버린 수로 들어간다").isEqualTo(3);
+        assertThat(relayer.relayOffered())
+                .isEqualTo(relayer.relayed() + relayer.relayDropped() + relayer.bufferDropped() + buffer.size());
+    }
+
     // ------------------------------------------------------------------
 
     private ClipRelayClient client() {

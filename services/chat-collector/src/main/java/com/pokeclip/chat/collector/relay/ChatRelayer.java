@@ -75,7 +75,29 @@ public class ChatRelayer implements RelayCounters, RelayLifecycle {
         thread.start();
     }
 
+    /**
+     * 🔴 <b>{@code Error}로 죽어도 나가 있던 묶음을 버린 수로 센다</b>(감사 L21). {@code send}는 {@code RuntimeException}만
+     * 받으므로 {@code Error}(OOM·링크 오류)는 스레드를 끝낸다. 그때 {@code inFlight}가 어느 셈에도 안 옮겨지면
+     * {@link #awaitClosed}는 죽은 스레드를 보고 곧장 돌아가 판정 줄의 등식
+     * {@code relayOffered = relayed + relayDropped + bufferDropped}가 조용히 깨진다. 삼키지 않고 다시 던진다 —
+     * 스레드가 살아 있는 척하면 바구니만 차고 아무도 모른다. 되살리지는 않는다(뒤 채팅은 바구니 넘침으로 세어진다).
+     */
     private void loop() {
+        try {
+            runLoop();
+        } catch (Throwable t) {
+            long dropped;
+            synchronized (this) {
+                dropped = abandoned ? 0 : inFlight;   // 확정이 이미 셌으면 또 세지 않는다
+                inFlight -= dropped;
+                relayDropped += dropped;
+            }
+            log.warn("chat.relay.thread_died causeType={} dropped={}", t.getClass().getSimpleName(), dropped);
+            throw t;
+        }
+    }
+
+    private void runLoop() {
         while (!abandoned) {
             // 🔴 닫힘 표시를 drain <b>앞에서</b> 읽는다. 뒤에서 읽으면 「빈 drain → 그 사이 offer → 닫힘 표시」
             // 순서에서 담긴 한 건을 남긴 채 끝난다. 표시는 바구니를 닫은 뒤에 켜지므로 앞에서 켜진 것을 봤다면

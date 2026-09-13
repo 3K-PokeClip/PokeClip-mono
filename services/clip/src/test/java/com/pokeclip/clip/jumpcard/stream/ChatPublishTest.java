@@ -190,6 +190,39 @@ class ChatPublishTest {
                 .noneMatch(e -> "card".equals(e.name()));
     }
 
+    /**
+     * 감사 L20 — 10초 창 안에서 모으기만 한 몫은 <b>종료 때 찍힌다</b>. 모음 로그는 다음 버림이 올 때 찍으므로 마지막 창의
+     * 몫은 그 뒤 버림이 없으면 영영 안 나갔다. 양성 대조: 창 안 둘째 버림은 그 자리에서 안 찍혔다.
+     */
+    @Test
+    void 모아_두고_안_찍은_버림과_건너뜀은_종료_때_찍힌다() {
+        CardStreamRegistry registry = registry(1, 1);
+        Recording slow = (Recording) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+        gates.add(slow.blockChatSends());
+
+        registry.publishChatEvents("s-1", events("{\"events\":[{\"seq\":1,\"kind\":\"chat\"}]}"));
+        awaitUntil(slow::isBlocked);
+        registry.publishChatEvents("s-1", events("{\"events\":[{\"seq\":2,\"kind\":\"chat\"}]}"));   // 큐 한 칸
+        try (LogCaptor captor = new LogCaptor()) {
+            registry.publishChatEvents("s-1", events("{\"events\":[{\"seq\":3,\"kind\":\"chat\"}]}"));   // 창 첫 줄
+            registry.publishChatEvents("s-1", events("{\"events\":[{\"seq\":4,\"kind\":\"chat\"}]}"));   // 창 안, 모음
+            registry.publish(card("s-1"));
+            awaitUntil(() -> registry.stuckSkippedCount() == 1);             // 창 첫 줄(1초 기다린 뒤)
+            registry.publish(new JumpCardSnapshot(8L, "s-1", JumpCardSource.AUTO, 1_500L,
+                    new JumpCardSnapshot.Window(1_000L, 2_000L), 97, null, null, null, null,
+                    false, null, 8L, Instant.parse("2026-08-23T00:00:00Z")));
+            awaitUntil(() -> registry.stuckSkippedCount() == 2);             // 이미 1초 넘게 막힘 — 창 안, 모음
+            assertThat(captor.messages()).as("양성 대조 — 창 안 둘째 몫은 그 자리에서 안 찍혔다")
+                    .filteredOn(m -> m.contains("reason=flush")).isEmpty();
+
+            registry.stop();
+
+            assertThat(captor.messages()).as("종료 때 모은 몫이 안 나가면 마지막 단서가 사라진다")
+                    .anyMatch(m -> m.equals("jumpcard.stream.chat_dropped events=1 total=2 reason=flush"))
+                    .anyMatch(m -> m.equals("jumpcard.stream.stuck_skipped skipped=1 total=2 reason=flush"));
+        }
+    }
+
     @Test
     void 연결이_없는_방송인지_묻는다() {
         CardStreamRegistry registry = registry(4, 1000);

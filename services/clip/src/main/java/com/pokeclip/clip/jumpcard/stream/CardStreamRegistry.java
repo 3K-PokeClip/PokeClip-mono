@@ -846,5 +846,22 @@ public class CardStreamRegistry implements EndedListener {
     void stop() {
         heartbeat.shutdownNow();
         chatExecutor.shutdown();
+        flushThrottledCounts();
+    }
+
+    /**
+     * 10초 창 안에서 모으기만 하고 아직 안 찍은 몫을 찍는다(감사 L20). 모음 로그는 <b>다음 버림이 올 때</b> 찍으므로,
+     * 마지막 창의 몫은 그 뒤 버림이 없으면 영영 안 나간다 — 종료 직전 몫이 로그에서 사라지면 「왜 카드가 안 왔나」의
+     * 마지막 단서가 없다. 셈을 health로 내보내지는 않는다(main 결정).
+     */
+    void flushThrottledCounts() {
+        long chat = chatDroppedSinceLog.getAndSet(0);
+        if (chat > 0) {
+            log.warn("jumpcard.stream.chat_dropped events={} total={} reason=flush", chat, chatDropped.get());
+        }
+        long stuck = stuckSkippedSinceLog.getAndSet(0);
+        if (stuck > 0) {
+            log.warn("jumpcard.stream.stuck_skipped skipped={} total={} reason=flush", stuck, stuckSkipped.get());
+        }
     }
 }
