@@ -178,7 +178,7 @@ class FinalVerdictTest extends IntegrationTestSupport {
             CollectionStatus status = new CollectionStatus();
             runner = new CollectorRunner(new ChzzkProperties(
                     false, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                    Duration.ofMillis(50), Duration.ofSeconds(1)), status, restClientBuilder,
+                    Duration.ofMillis(50), Duration.ofSeconds(1), Duration.ofMillis(60)), status, restClientBuilder,
                             TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
             runner.start();
             runner.stop();
@@ -203,7 +203,7 @@ class FinalVerdictTest extends IntegrationTestSupport {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port, Duration.ofSeconds(5),
-                reconnectFirstDelay, Duration.ofSeconds(60)), status, restClientBuilder,
+                reconnectFirstDelay, Duration.ofSeconds(60), Duration.ofMillis(60)), status, restClientBuilder,
                         TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         runner.run(null);
         return status;

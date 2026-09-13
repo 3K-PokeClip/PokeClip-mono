@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector.status;
 
 import com.pokeclip.chat.collector.CollectionStatus;
 import com.pokeclip.chat.collector.broadcast.EndedStream;
+import com.pokeclip.chat.collector.chzzk.DonationSubscription;
 import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,15 +37,23 @@ public class ChatCollectionStatusResolver {
     private final SessionRegistry registry;
     private final EndedStreamStore store;
     private final Supplier<Instant> clock;
+    /**
+     * 세션이 적는 곳. <b>등록부와 같은 인스턴스여야 한다</b> — 따로 만들면 창구가
+     * 세션이 적은 값을 영영 못 읽는다. 운영에서는 둘 다 같은 빈을 받는다.
+     */
+    private final DonationSubscriptions donations;
 
     @Autowired
-    public ChatCollectionStatusResolver(SessionRegistry registry, EndedStreamStore store) {
-        this(registry, store, Instant::now);
+    public ChatCollectionStatusResolver(SessionRegistry registry, EndedStreamStore store,
+                                        DonationSubscriptions donations) {
+        this(registry, store, donations, Instant::now);
     }
 
-    ChatCollectionStatusResolver(SessionRegistry registry, EndedStreamStore store, Supplier<Instant> clock) {
+    ChatCollectionStatusResolver(SessionRegistry registry, EndedStreamStore store,
+                                 DonationSubscriptions donations, Supplier<Instant> clock) {
         this.registry = registry;
         this.store = store;
+        this.donations = donations;
         this.clock = clock;
     }
 
@@ -78,32 +87,44 @@ public class ChatCollectionStatusResolver {
         return memo.map(m -> fromMemo(streamId, m, now)).orElseGet(() -> unknown(streamId, now));
     }
 
-    private static ChatCollectionStatus fromLive(String streamId, CollectionStatus.Snapshot live, Instant now) {
+    /**
+     * <b>{@code static}이 아니다</b>(계획 검증 F7). 후원 상태를 읽어야 하는데 그것은
+     * 인스턴스가 든다. 나머지 갈래 둘은 여전히 static이다 — 그쪽은 상수 {@code "none"}이다.
+     */
+    private ChatCollectionStatus fromLive(String streamId, CollectionStatus.Snapshot live, Instant now) {
         CollectionState state = CollectionState.of(live);
+        // 살아 있는 방송만 실제 값을 읽는다. 스냅숏과 한 참조로 안 묶은 이유는
+        // SessionRegistry.donationStateOf의 javadoc에 있다.
+        String donationState = donations.of(streamId).wireName();
         return switch (state) {
             case RECONNECTING -> new ChatCollectionStatus(streamId, state.wireName(),
-                    live.disconnectedAt(), live.attempt(), false, now);
+                    live.disconnectedAt(), live.attempt(), false, donationState, now);
             // 등록부가 지우기 직전의 찰나다. <b>포기 시각은 스냅숏에 없으므로 since를 비운다.</b>
             // 여기 now를 실었더니 메모가 남기 전까지(반개방이면 최악 10초) 부를 때마다 since가 그 호출
             // 시각으로 갱신됐다 — clip이 observedAt - since로 「얼마나 오래 멈췄나」를 재면 그 구간 내내
             // 0이다가 메모가 저장된 뒤 첫 호출에서 갑자기 그만큼 뛴다. 모르는 값을 그럴듯하게 지어내지
             // 않는다(attempt도 이 상태에선 null이다). 진짜 값은 메모가 남는 순간 created_at으로 온다.
             case STOPPED -> new ChatCollectionStatus(streamId, state.wireName(),
-                    null, null, CollectionState.needsRelink(live.reason()), now);
-            default -> new ChatCollectionStatus(streamId, state.wireName(), null, null, false, now);
+                    null, null, CollectionState.needsRelink(live.reason()), donationState, now);
+            default -> new ChatCollectionStatus(streamId, state.wireName(), null, null, false,
+                    donationState, now);
         };
     }
 
     private static ChatCollectionStatus fromMemo(String streamId, EndedStream memo, Instant now) {
         if (memo.stopped()) {
+            // 등록부에 없으면 세션도 없다 — 후원 상태를 알 길이 없으므로 상수 none이다.
+            // 지어내지 않는다(since를 안 지어내는 것과 같은 규칙).
             return new ChatCollectionStatus(streamId, CollectionState.STOPPED.wireName(),
-                    memo.createdAt(), null, CollectionState.needsRelink(memo.stopReason()), now);
+                    memo.createdAt(), null, CollectionState.needsRelink(memo.stopReason()),
+                    DonationSubscription.NONE.wireName(), now);
         }
         return new ChatCollectionStatus(streamId, CollectionState.ENDED.wireName(),
-                memo.endedAt(), null, false, now);
+                memo.endedAt(), null, false, DonationSubscription.NONE.wireName(), now);
     }
 
     private static ChatCollectionStatus unknown(String streamId, Instant now) {
-        return new ChatCollectionStatus(streamId, CollectionState.UNKNOWN.wireName(), null, null, false, now);
+        return new ChatCollectionStatus(streamId, CollectionState.UNKNOWN.wireName(), null, null,
+                false, DonationSubscription.NONE.wireName(), now);
     }
 }

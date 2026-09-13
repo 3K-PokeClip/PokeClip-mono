@@ -73,6 +73,52 @@ public class ChzzkSessionClient {
         }
     }
 
+    /**
+     * 후원 구독. <b>던지지 않는다</b> — 채팅 구독과 운명을 갈라야 하기 때문이다.
+     *
+     * <p>{@link #subscribeChat}은 401/403에서 던져 수립을 영구 실패로 끝낸다. 후원에 같은
+     * 규칙을 걸면 <b>후원 권한만 없는 토큰이 채팅까지 못 걷는다</b> — 앱 동의에 후원 Scope가
+     * 빠진 경우가 실제로 그 자리다. 결과를 값으로 돌려주고 부르는 쪽이 기록만 한다.
+     *
+     * @return 401·403이면 REFUSED, 그 밖의 실패면 FAILED, 200이면 SUBSCRIBED
+     */
+    public DonationSubscription subscribeDonation(String sessionKey) {
+        try {
+            restClient.post()
+                    .uri(baseUrl + "/open/v1/sessions/events/subscribe/donation?sessionKey=" + sessionKey)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .toBodilessEntity();
+            return DonationSubscription.SUBSCRIBED;
+        } catch (RestClientResponseException e) {
+            // 응답 본문을 안 본다 — 토큰이 되비쳐 나올 수 있다(createSession과 같은 규칙).
+            int status = e.getStatusCode().value();
+            return (status == 401 || status == 403)
+                    ? DonationSubscription.REFUSED : DonationSubscription.FAILED;
+        } catch (Exception e) {
+            return DonationSubscription.FAILED;
+        }
+    }
+
+    /**
+     * 후원 구독을 반납한다. {@link #unsubscribeChatQuietly}와 같은 규칙으로 던지지 않는다 —
+     * 종료 경로에서 예외가 나가면 뒤따르는 채팅 반납과 소켓 정리가 통째로 건너뛰어진다.
+     *
+     * @return 반납 요청이 200으로 끝났으면 true
+     */
+    public boolean unsubscribeDonationQuietly(String sessionKey) {
+        try {
+            restClient.post()
+                    .uri(baseUrl + "/open/v1/sessions/events/unsubscribe/donation?sessionKey=" + sessionKey)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .toBodilessEntity();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** sessionKey는 POST여도 쿼리 파라미터다. Body JSON은 미지원. */
     public void subscribeChat(String sessionKey) {
         try {

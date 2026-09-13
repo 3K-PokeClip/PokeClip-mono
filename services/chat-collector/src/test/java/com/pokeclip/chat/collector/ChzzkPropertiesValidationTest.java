@@ -27,7 +27,8 @@ class ChzzkPropertiesValidationTest {
             .withPropertyValues("pokeclip.chzzk.base-url=https://openapi.chzzk.naver.com")
             .withPropertyValues("pokeclip.chzzk.establish-timeout=15s")
             .withPropertyValues("pokeclip.chzzk.reconnect-first-delay=35s")
-            .withPropertyValues("pokeclip.chzzk.reconnect-max-delay=120s");
+            .withPropertyValues("pokeclip.chzzk.reconnect-max-delay=120s")
+            .withPropertyValues("pokeclip.chzzk.donation-retry-period=1m");
 
     /** PRD 상태표 첫 행이 성립하려면 이 상태로 떠 있어야 한다. */
     @Test
@@ -137,4 +138,26 @@ class ChzzkPropertiesValidationTest {
 
     @EnableConfigurationProperties(ChzzkProperties.class)
     static class BoundProperties { }
+
+    /**
+     * 🔴 <b>재시도 주기가 0이나 음수면 부팅을 막는다</b>(봇 codex P2).
+     *
+     * <p>{@code @NotNull}은 그것을 못 막는데, {@code Thread.sleep}이 즉시 돌아와
+     * 503처럼 계속 이어지는 일시 실패에서 <b>구독 창구를 쉬지 않고 두드린다</b> —
+     * CPU를 먹고 상대의 속도 제한을 부르는데 서버는 건강해 보인다.
+     */
+    @Test
+    void 재시도_주기가_0이거나_음수면_부팅하지_않는다() {
+        runner.withPropertyValues("pokeclip.chzzk.enabled=false")
+                .withPropertyValues("pokeclip.chzzk.access-token=")
+                .withPropertyValues("pokeclip.chzzk.donation-retry-period=0s")
+                .run(context -> assertThat(context)
+                        .as("0이면 재시도가 쉬지 않고 돈다").hasFailed());
+
+        runner.withPropertyValues("pokeclip.chzzk.enabled=false")
+                .withPropertyValues("pokeclip.chzzk.access-token=")
+                .withPropertyValues("pokeclip.chzzk.donation-retry-period=-1s")
+                .run(context -> assertThat(context)
+                        .as("음수도 같다").hasFailed());
+    }
 }

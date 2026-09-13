@@ -54,7 +54,7 @@ public final class SummaryLogger implements AutoCloseable {
     public static SummaryLogger start(Supplier<String> stream, CollectionMetrics metrics,
                                       Heartbeat heartbeat, Duration period, LongSupplier sinkFailures,
                                       PersistCounters counters, LongSupplier dropped,
-                                      ArchiveCounters archive) {
+                                      ArchiveCounters archive, LongSupplier donationDropped) {
         SummaryLogger logger = new SummaryLogger();
         long periodMillis = period.toMillis();
         logger.scheduler.scheduleAtFixedRate(() -> {
@@ -62,7 +62,8 @@ public final class SummaryLogger implements AutoCloseable {
             try {
                 log.info("{}", render(stream.get(), metrics.snapshot(), heartbeat, sinkFailures.getAsLong(),
                         counters.persistedCount(), counters.conflictedCount(),
-                        counters.poisonedCount(), dropped.getAsLong(), archive));
+                        counters.poisonedCount(), dropped.getAsLong(), archive,
+                        donationDropped.getAsLong()));
             } catch (RuntimeException e) {
                 // 요약이 터져도 스케줄러는 계속 돈다. 여기서 예외가 밖으로 나가면
                 // scheduleAtFixedRate가 조용히 멈춰 요약이 영영 안 나가고,
@@ -76,7 +77,7 @@ public final class SummaryLogger implements AutoCloseable {
     /** 순수 함수라 스케줄러 없이도 검사할 수 있다. */
     public static String render(String stream, CollectionMetrics.Snapshot s, Heartbeat heartbeat,
                                 long sinkFailures, long persisted, long conflicted, long poisoned,
-                                long dropped, ArchiveCounters archive) {
+                                long dropped, ArchiveCounters archive, long donationDropped) {
         return "chat.summary"
                 // <b>첫 항이다.</b> 스트리머가 여럿이면 30초마다 이 줄이 세션 수만큼 나가는데,
                 // 이것이 없으면 <b>서로 구분되지 않는 줄 N개</b>가 된다 — 「일부만 안 걷힌다」를
@@ -120,7 +121,13 @@ public final class SummaryLogger implements AutoCloseable {
                 + " uploaded=" + archive.uploadedCount()
                 + " pending=" + archive.pendingCount()
                 + " droppedObjects=" + archive.droppedObjectsCount()
-                + " droppedMessages=" + archive.droppedMessagesCount();
+                + " droppedMessages=" + archive.droppedMessagesCount()
+                // 후원 관측 둘. <b>위 검산 등식 어디에도 안 든다</b> — received가 채팅만 세기
+                // 때문이다(계획 검증 F3). 따로 싣는 이유: 후원은 아카이브에 안 쌓으므로
+                // donationDropped가 오르면 그 후원은 표에도 원본에도 없고
+                // 범위 창구가 메워 줄 길이 없다 — 되찾을 수 없는 유일한 유실이다.
+                + " donations=" + s.donations()
+                + " donationDropped=" + donationDropped;
     }
 
     /**
@@ -140,6 +147,7 @@ public final class SummaryLogger implements AutoCloseable {
      *       {@code persisted}·{@code conflicts}·{@code poisoned}·{@code dropped}·
      *       {@code archived}·{@code archiveBufferDropped}·{@code uploaded}·{@code pending}·
      *       {@code droppedObjects}·{@code droppedMessages}·
+     *       {@code donationDropped}·
      *       {@code reconnects}·{@code outage}
      *   <li>{@code archiveRunId}는 누계가 아니라 이 프로세스의 표식이다 — S3 키의
      *       {@code -{runId}.jsonl}과 같은 값이라 이걸로 이 프로세스가 올린 파일을 찾는다
@@ -183,10 +191,10 @@ public final class SummaryLogger implements AutoCloseable {
                                        CollectionMetrics.Verdict verdict,
                                        Object stopReason, long otherSessionsReceived,
                                        PersistCounters counters, long dropped,
-                                       ArchiveCounters archive) {
+                                       ArchiveCounters archive, long donationDropped) {
         log.info("{}", renderVerdict(session, registrySessions, verdict, stopReason, otherSessionsReceived,
                 counters.persistedCount(), counters.conflictedCount(), counters.poisonedCount(),
-                dropped, archive));
+                dropped, archive, donationDropped));
     }
 
     /**
@@ -206,7 +214,7 @@ public final class SummaryLogger implements AutoCloseable {
                                        CollectionMetrics.Verdict v,
                                        Object stopReason, long otherSessionsReceived,
                                        long persisted, long conflicted, long poisoned, long dropped,
-                                       ArchiveCounters archive) {
+                                       ArchiveCounters archive, long donationDropped) {
         return "chat.session.verdict"
                 // 첫 항이다. 줄을 세션 단위로 고르는 사람도 도구도 여기서 갈린다.
                 // <b>편지 경로에서는 이 러너가 연 세션이 없어 0이다</b> — 세션 번호는
@@ -256,6 +264,21 @@ public final class SummaryLogger implements AutoCloseable {
                 + " pending=" + archive.pendingCount()
                 + " droppedObjects=" + archive.droppedObjectsCount()
                 + " droppedMessages=" + archive.droppedMessagesCount()
+                // 🔴 <b>버린 후원 수. 이 줄에 없으면 어디에도 안 남는다</b>(봇 codex).
+                // 30초 요약은 <b>창 값</b>이라 세션이 다음 틱 전에 끝나면 마지막 창이 통째로
+                // 사라지고, <b>짧은 방송은 생애가 전부 사라진다.</b> 게다가 후원은 아카이브에
+                // 안 쌓으므로 버려진 그 후원은 표에도 원본에도 없다 —
+                // <b>되찾을 수 없는 유일한 유실</b>인데 판정 줄이 그것을 안 실었다.
+                // 위 검산 등식 어디에도 안 든다(received 는 채팅만 센다).
+                //
+                // 🔴 <b>「받은 후원 수」는 일부러 안 싣는다</b>(봇 codex, 두 번째 지적).
+                // 처음에 {@code v.donations()} 를 실었는데 <b>편지 경로에서 늘 0이다</b> —
+                // 그 지표는 러너 자신의 세션 것이고 운영에서 러너는 세션을 하나도 안 연다.
+                // 등록부는 세션마다 지표를 따로 두고 해체할 때 <b>채팅 수만</b> 옮긴다.
+                // 제대로 실으려면 방송 경계마다 후원 몫을 이관하는 배선이 필요한데,
+                // <b>받은 수는 chat_donations 표를 세면 나온다</b> — 표에 없는 것은 버린 수뿐이다.
+                // 위 registrySessions 주석과 같은 규칙이다: <b>조용히 틀린 숫자를 싣느니 안 싣는다.</b>
+                + " donationDropped=" + donationDropped
                 // 이 runId로 S3에서 이 프로세스의 파일을 찾는다 — 키의 "-{runId}.jsonl" 부분이다.
                 // 재시작이 잦으면 같은 분에 파일이 여럿인데, 어느 것이 이 프로세스 것인지는 이 값뿐이다.
                 + " archiveRunId=" + archive.runId()

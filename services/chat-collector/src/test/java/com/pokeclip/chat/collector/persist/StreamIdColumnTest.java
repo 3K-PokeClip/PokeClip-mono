@@ -58,7 +58,7 @@ class StreamIdColumnTest extends IntegrationTestSupport {
         String streamId = "s".repeat(128);
         ChatBuffer buffer = new ChatBuffer(10);
         buffer.offer(new PersistableChat(streamId, "ch-128", "u-128", "긴번호",
-                1723600500000L, 1723600500175L));
+                1723600500000L, 1723600500175L, null, null));
         ChatPersister persister = new ChatPersister(jdbc, buffer);
 
         persister.flushOnce();

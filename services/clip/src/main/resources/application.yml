@@ -131,6 +131,16 @@ pokeclip:
     # chat-collector는 localhost 기본값을 주는데 그쪽은 조건부(편지 경로)라 처지가 다르다.
     base-url: ${AUTH_BASE_URL:}
 
+  collector-client:
+    # 수집기(chat-collector, 8083) 내부 창구 주소. 🔴 비어도 부팅은 산다 — auth-client와
+    # 다른 이유는, 자격 판정이 없으면 사람 문 전부가 무방비지만 수집기가 없으면 채팅 문 셋만
+    # 503이고 카드 편집·목록·통로는 그대로 돌기 때문이다. 그 셋까지 같이 죽이는 것이 더 나쁘다.
+    base-url: ${COLLECTOR_BASE_URL:}
+    # 전역 spring.http.clients.*(2s+5s)와 따로 둔다. 채팅 문은 그 앞에 auth 자격 판정을
+    # 태우고 그 왕복만 최악 7초라, 같은 값을 얹으면 사람이 최악 14초를 기다린다.
+    connect-timeout: 2s
+    read-timeout: 3s
+
   jump-card:
     # 집은 카드를 놓지 않아도 이 시간이 지나면 누구나 다시 집는다. 만료를 치우는 배경
     # 작업이 없고 집을 때 판정한다. 측정값이 아니라 추정이다 — 편집자가 한 카드를 붙들고
