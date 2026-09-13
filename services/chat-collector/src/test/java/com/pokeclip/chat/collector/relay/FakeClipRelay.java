@@ -41,6 +41,7 @@ final class FakeClipRelay implements AutoCloseable {
     private final AtomicReference<Instant> firstRequestAt = new AtomicReference<>();
 
     private volatile int status = 200;
+    private volatile String responseBody = "{\"accepted\":0,\"dropped\":0}";
     private volatile Duration delay = Duration.ZERO;
     /** null이 아니면 <b>첫 요청만</b> 이 빗장이 풀릴 때까지 응답을 붙든다(F13 묶음 시험의 손잡이). */
     private volatile CountDownLatch firstRequestGate;
@@ -76,6 +77,10 @@ final class FakeClipRelay implements AutoCloseable {
 
     void respondWith(int status) {
         this.status = status;
+    }
+
+    void respondBody(String body) {
+        this.responseBody = body;
     }
 
     void holdFor(Duration delay) {
@@ -127,7 +132,7 @@ final class FakeClipRelay implements AutoCloseable {
             return;
         }
         exchange.getResponseHeaders().add("Content-Type", "application/json");
-        byte[] out = "{\"accepted\":0,\"dropped\":0}".getBytes(StandardCharsets.UTF_8);
+        byte[] out = responseBody.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(status, out.length);
         try (var stream = exchange.getResponseBody()) {
             stream.write(out);

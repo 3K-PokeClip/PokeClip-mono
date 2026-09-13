@@ -87,9 +87,18 @@ public class ChatRelayer implements RelayCounters, RelayLifecycle {
             runLoop();
         } catch (Throwable t) {
             long dropped;
+            // 🔴 바구니도 닫고 남은 것까지 버린 수로 센다(PR #181 codex) — 나가 있던 묶음만 세면 MAX_BATCH를 넘게 쌓였던
+            // 몫과 죽은 뒤 들어오는 몫이 바구니에 남아 등식이 틀리고 프로세스 끝까지 쥐고 있다. 닫힌 바구니는 더 안 받는다.
+            buffer.close();
             synchronized (this) {
                 dropped = abandoned ? 0 : inFlight;   // 확정이 이미 셌으면 또 세지 않는다
                 inFlight -= dropped;
+                if (!abandoned) {
+                    List<RelayEvent> rest;
+                    while (!(rest = buffer.drain(MAX_BATCH)).isEmpty()) {
+                        dropped += rest.size();
+                    }
+                }
                 relayDropped += dropped;
             }
             log.warn("chat.relay.thread_died causeType={} dropped={}", t.getClass().getSimpleName(), dropped);
@@ -150,7 +159,9 @@ public class ChatRelayer implements RelayCounters, RelayLifecycle {
                 }
                 inFlight -= size;
                 if (outcome == ClipRelayClient.Outcome.SENT) {
-                    relayed += size;
+                    long partial = Math.min(size, client.takePartialDropped());
+                    relayed += size - partial;
+                    relayDropped += partial;
                 } else {
                     relayDropped += size;
                 }

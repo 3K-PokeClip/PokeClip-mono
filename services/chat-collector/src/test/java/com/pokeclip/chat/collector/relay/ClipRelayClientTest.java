@@ -56,6 +56,23 @@ class ClipRelayClientTest {
         assertThat(clip.callCount()).isEqualTo(2);
     }
 
+    /** PR #181 codex — 2xx라도 clip이 모르는 종류로 건너뛴 수(dropped)를 거둘 수 있다. 한 번 거두면 0이다. */
+    @Test
+    void 이백번대의_건너뜀_수를_거둔다() {
+        clip.respondWith(200);
+        clip.respondBody("{\"accepted\":1,\"dropped\":2}");
+        ClipRelayClient client = client();
+
+        assertThat(client.send("s-1", List.of(chatEvent("s-1", 1)))).isEqualTo(ClipRelayClient.Outcome.SENT);
+        assertThat(client.takePartialDropped()).isEqualTo(2);
+        assertThat(client.takePartialDropped()).isZero();
+
+        clip.respondWith(202);
+        clip.respondBody("");
+        assertThat(client.send("s-1", List.of(chatEvent("s-1", 2)))).isEqualTo(ClipRelayClient.Outcome.SENT);
+        assertThat(client.takePartialDropped()).as("본문이 없으면 0").isZero();
+    }
+
     /** 방송이 clip 명부에 없다. 재시도해도 안 바뀌므로 FAILED와 가른다(셈이 다르게 읽힌다). */
     @Test
     void 사백사는_UNKNOWN_BROADCAST() {

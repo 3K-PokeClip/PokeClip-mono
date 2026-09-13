@@ -54,6 +54,13 @@ public class ClipRelayClient {
     private final String baseUrl;
     private final String internalToken;
 
+    /**
+     * 직전 {@link #send}가 2xx였는데 clip이 <b>일부를 모르는 종류로 건너뛰었다</b>고 답한 수(응답 {@code dropped}).
+     * 수집기를 clip보다 먼저 배포하는 날 새 종류가 여기로 온다 — 안 세면 전부 {@code relayed}로 들어가 유실이
+     * 어디에도 안 남는다(PR #181 codex). 중계 스레드 하나만 부르므로 {@link #takePartialDropped}로 곧바로 거둔다.
+     */
+    private final AtomicLong partialDropped = new AtomicLong();
+
     private final AtomicLong nextWarnNanos = new AtomicLong(Long.MIN_VALUE);
     private final AtomicLong suppressedWarns = new AtomicLong();
 
@@ -81,7 +88,13 @@ public class ClipRelayClient {
                     .header(INTERNAL_TOKEN_HEADER, internalToken)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body)
-                    .exchange((request, response) -> response.getStatusCode().value());
+                    .exchange((request, response) -> {
+                        int code = response.getStatusCode().value();
+                        if (code >= 200 && code < 300) {
+                            partialDropped.set(readDropped(response.getBody()));
+                        }
+                        return code;
+                    });
             outcome = status >= 200 && status < 300 ? Outcome.SENT
                     : status == 404 ? Outcome.UNKNOWN_BROADCAST
                     : Outcome.FAILED;
@@ -95,6 +108,20 @@ public class ClipRelayClient {
             warnThrottled(streamId, outcome, status, causeType, events.size());
         }
         return outcome;
+    }
+
+    /** 직전 성공 응답이 건너뛰었다고 한 수를 거두고 0으로 되돌린다. 대역 클라이언트는 늘 0이다. */
+    public long takePartialDropped() {
+        return partialDropped.getAndSet(0);
+    }
+
+    /** 본문이 없거나 모양이 달라도 0 — 옛 clip·202 빈 본문. 셈을 위해 요청을 실패로 돌리지 않는다. */
+    private static long readDropped(java.io.InputStream body) {
+        try {
+            return Math.max(0, MAPPER.readTree(body).path("dropped").asLong(0));
+        } catch (RuntimeException e) {
+            return 0;
+        }
     }
 
     private void warnThrottled(String streamId, Outcome outcome, int status, String causeType, int events) {
