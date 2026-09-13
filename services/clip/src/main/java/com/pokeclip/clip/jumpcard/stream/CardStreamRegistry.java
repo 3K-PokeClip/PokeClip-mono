@@ -86,6 +86,23 @@ public class CardStreamRegistry implements EndedListener {
      * 못 이어 간 것으로 보인다. 공정의 대가는 자물쇠를 넘겨줄 때의 깨우기 비용뿐이라 그대로 둔다. 시한 있는
      * {@code tryLock}은 공정성을 지키고 시한 없는 {@code tryLock()}은 공정 자물쇠에서도 새치기한다(JDK 문서).
      *
+     * <p>🔴 <b>건너뜀이 한 번이라도 난 연결은 닫는다</b>(감사 라운드 2 M1). 건너뛰기만 하면 <b>잠깐 막혔다가 다시 읽는
+     * 연결</b>이 막힌 사이의 카드·종료 알림을 영영 못 받는다 — 연결이 안 끊기니 재연결이 없고, 그래서 「카드 목록 문이
+     * 메운다」·「스냅샷이 ended를 준다」가 발동하지 않는다. 카드 id는 전역 순번이라 화면에 빈틈 신호도 없다(재현 3/3,
+     * 문 없는 대조에서는 늦게라도 갔다). 그래서 문을 쥔 쓰기가 돌아오는 {@code finally} — <b>우리 문은 아직 쥐고 있고
+     * emitter 자물쇠는 방금 풀린 자리</b> — 에서 표시를 보고 명부에서 빼고({@code dropRejectedEnded}와 같은 계약)
+     * {@code complete()}로 닫는다. EventSource가 다시 붙으면 목록 문·ended 스냅샷·채팅 창구가 각각 메운다.
+     *
+     * <p><b>표시가 늦게 서는 창</b> — 건너뛴 쪽이 표시를 세우기 직전에 쓰기가 돌아와 {@code finally}가 표시를 못 보는
+     * 순서가 있다. 그래서 건너뛴 쪽도 표시를 세운 뒤 문을 <b>기다리지 않고</b>({@code tryLock()}) 잡아 보고, 잡히면
+     * 스스로 닫는다. 그마저 엇갈리면(그 순간 다른 쓰기가 문을 쥐었다) 그 쓰기의 {@code finally}가 닫는다 —
+     * 늦어도 다음 쓰기(ping 주기 이내)다.
+     *
+     * <p><b>쓰기가 실패한 연결(진짜 죽은 연결)</b>은 {@code Job}의 {@code completeWithError}와 컨테이너 완료 콜백이
+     * 명부에서 뺀다 — 막힌 채 클라이언트가 떠나는 시험에서 이 문의 닫기를 <b>꺼도</b> 약 1초 안에 빠졌다(주입 초록,
+     * {@code ChatStreamBackpressureTest.막힌_채로_끊긴_연결은_명부에서_빠진다}). 그래서 그 갈래에 따로 손을 대지 않는다.
+     * 닫힌 문은 뒤따르는 job을 셈 없이 돌려보낸다.
+     *
      * <p><b>남는 한계 둘</b>(README clip 절에도 적는다) —
      * ① A의 버퍼가 <b>이미 찼는데</b> 채팅이 잠잠한 틈에 카드·ping이 먼저 자물쇠를 잡고 쓰기를 시작하면 그 job 자체가
      * 소켓에서 막힌다. 건너뛸 판정은 쓰기 <b>전</b>에만 하므로 같은 카드 스트라이프가 write timeout(약 60초)만큼 늦는다.
@@ -93,28 +110,86 @@ public class CardStreamRegistry implements EndedListener {
      */
     static final class WriteGate {
 
+        enum Result { SENT, SKIPPED, CLOSED }
+
         private final ReentrantLock lock = new ReentrantLock(true);
+        private final SseEmitter emitter;
+        /** 명부에서 뺀다. 컨테이너 완료 콜백을 기다리지 않는다. */
+        private final Runnable evict;
 
         /** 자물쇠를 쥔 쪽이 {@code send} 바로 앞에서 세우고 끝나면 0. 0은 「쓰는 중 아님」이다. */
         private volatile long writeStartedNanos;
+        /** 이 연결에서 건너뜀이 한 번이라도 났다. */
+        private volatile boolean skipped;
+        /** 닫았다. 문 자물쇠 안에서만 켠다. */
+        private volatile boolean closed;
 
-        /** @return 보냈으면 {@code true}, 막힌 연결이라 건너뛰었으면 {@code false} */
-        boolean send(SseEmitter emitter, SseEmitter.SseEventBuilder event) throws Exception {
+        WriteGate(SseEmitter emitter, Runnable evict) {
+            this.emitter = emitter;
+            this.evict = evict;
+        }
+
+        /**
+         * @param completeAfter 보낸 뒤 <b>문을 쥔 채</b> {@code complete()}까지 한다(종료 알림). 문 밖에서 부르면 그 사이
+         *                      채팅이 막힐 쓰기를 시작해 {@code complete()}가 emitter 자물쇠에서 약 60초를 기다린다(감사 L13)
+         */
+        Result send(SseEmitter.SseEventBuilder event, boolean completeAfter) throws Exception {
+            if (closed) {
+                return Result.CLOSED;
+            }
             long started = writeStartedNanos;
-            if (started != 0 && System.nanoTime() - started > STUCK_THRESHOLD.toNanos()) {
-                return false;   // 이미 1초 넘게 막혔다 — 기다리지도 않는다(막힌 연결 몫 job이 쌓여도 줄이 안 밀린다)
+            boolean stuck = started != 0 && System.nanoTime() - started > STUCK_THRESHOLD.toNanos();
+            // 이미 1초 넘게 막혔으면 기다리지도 않는다(막힌 연결 몫 job이 쌓여도 줄이 안 밀린다)
+            if (stuck || !lock.tryLock(STUCK_THRESHOLD.toNanos(), TimeUnit.NANOSECONDS)) {
+                skipped = true;
+                if (lock.tryLock()) {   // 쓰기가 방금 돌아왔다면 그쪽 finally가 표시를 못 봤을 수 있다
+                    try {
+                        closeIfNeeded(true);
+                    } finally {
+                        lock.unlock();
+                    }
+                }
+                return Result.SKIPPED;   // 이 이벤트는 못 갔다 — 스스로 닫았어도 건너뜀으로 센다
             }
-            if (!lock.tryLock(STUCK_THRESHOLD.toNanos(), TimeUnit.NANOSECONDS)) {
-                return false;
-            }
+            boolean writable = false;
             try {
+                if (closed) {
+                    return Result.CLOSED;
+                }
                 writeStartedNanos = System.nanoTime() | 1;   // 0은 「쓰는 중 아님」 표식이라 피한다
                 emitter.send(event);
-                return true;
+                writable = true;
+                if (completeAfter) {
+                    writable = false;   // 우리가 닫았다 — 아래에서 또 닫지 않는다
+                    closed = true;
+                    emitter.complete();
+                }
+                return Result.SENT;
             } finally {
                 writeStartedNanos = 0;
-                lock.unlock();
+                try {
+                    closeIfNeeded(writable);
+                } finally {
+                    lock.unlock();
+                }
             }
+        }
+
+        /** 문 자물쇠를 쥔 채 부른다. */
+        private void closeIfNeeded(boolean writable) {
+            if (!skipped || closed) {
+                return;
+            }
+            closed = true;
+            evict.run();
+            if (writable) {
+                try {
+                    emitter.complete();
+                } catch (RuntimeException alreadyDone) {
+                    // 앞 쓰기가 실패해 Job이 이미 completeWithError로 닫았다 — 명부에서 뺀 것으로 충분하다
+                }
+            }
+            log.info("jumpcard.stream.stuck_closed detail=건너뜀이 난 연결을 닫았다. 재연결이 목록 문으로 메운다");
         }
     }
 
@@ -290,7 +365,8 @@ public class CardStreamRegistry implements EndedListener {
         checkLimits(streamId, userId);
 
         SseEmitter emitter = emitterFactory.apply(timeout);
-        conns.put(emitter, new Conn(seq.getAndIncrement(), streamId, userId, emitter, new WriteGate()));
+        conns.put(emitter, new Conn(seq.getAndIncrement(), streamId, userId, emitter,
+                new WriteGate(emitter, () -> conns.remove(emitter))));
 
         Runnable remove = () -> conns.remove(emitter);
         emitter.onCompletion(remove);
@@ -418,8 +494,8 @@ public class CardStreamRegistry implements EndedListener {
         executor.submit(conn.stripe(), emitter, () -> {
             // 주석이 첫 쓰기여야 헤더가 바로 나간다(위 문단).
             send(conn, SseEmitter.event().comment("ok"));
-            if (ended && send(conn, endedEvent())) {
-                emitter.complete();
+            if (ended) {
+                send(conn, endedEvent(), true);
             }
         });
     }
@@ -449,7 +525,7 @@ public class CardStreamRegistry implements EndedListener {
             // 🔴 <b>유실 크기는 안 쟀다</b> — 큐(운영 1000)를 채워 실제로 몇 장이 사라지는지
             // 재현한 적이 없다. 「버려도 된다」는 처방 비교의 결론이지 유실 확률의 판정이 아니다.
             if (conn.streamId().equals(card.streamId())) {
-                // 막힌 연결이면 건너뛴다({@link WriteGate}). 그 카드도 위와 같이 카드 목록 문이 메운다.
+                // 막힌 연결이면 건너뛰고 그 연결을 닫는다({@link WriteGate}) — 재연결한 화면이 카드 목록 문으로 메운다.
                 executor.submit(conn.stripe(), conn.emitter(), () -> send(conn, cardEvent(card)));
             }
         }
@@ -517,11 +593,9 @@ public class CardStreamRegistry implements EndedListener {
         for (Conn conn : conns.values()) {
             if (conn.streamId().equals(streamId)) {
                 boolean queued = executor.submit(conn.stripe(), conn.emitter(), () -> {
-                    // 건너뛰었으면 complete()도 안 부른다 — 그것도 막힌 쓰기가 쥔 emitter 자물쇠를 기다린다.
-                    // 그 연결은 막힌 쓰기가 write timeout으로 실패할 때 Job의 completeWithError로 명부에서 빠진다.
-                    if (send(conn, endedEvent())) {
-                        conn.emitter().complete();
-                    }
+                    // 보내고 닫기를 문 안에서 한다. 건너뛰었으면 그 연결은 WriteGate가 막힌 쓰기가 돌아오는
+                    // 자리에서 닫고 명부에서 뺀다 — 재연결이 스냅샷으로 ended를 받는다.
+                    send(conn, endedEvent(), true);
                 });
                 if (!queued) {
                     dropRejectedEnded(conn, streamId);
@@ -719,13 +793,22 @@ public class CardStreamRegistry implements EndedListener {
     /**
      * <b>emitter에 쓰는 유일한 길.</b> 막힌 연결이면 건너뛰고 센다({@link WriteGate}).
      *
-     * <p>건너뛴 카드는 <b>카드 목록 문</b>이 메운다(기존 계약 — 큐 거부로 버린 카드와 같다). 건너뛴 채팅은 화면이
-     * {@code seq} 빈틈으로 알고 범위 창구로 메운다. 로그는 모아서 연결 번호와 건수만 싣는다 — 막힌 연결 하나가
+     * <p>건너뛴 카드·종료 알림은 <b>그 연결을 닫아</b> 메운다 — 재연결한 화면이 카드 목록 문과 ended 스냅샷을 받는다
+     * ({@link WriteGate}, 감사 라운드 2 M1). 연결이 살아 있는 채로 건너뛰기만 하면 화면이 목록을 다시 부를 계기가 없다.
+     * 건너뛴 채팅은 재연결 뒤 범위 창구로 메운다. 로그는 모아서 연결 번호와 건수만 싣는다 — 막힌 연결 하나가
      * 초당 수십 번 건너뛴다.
      */
     private boolean send(Conn conn, SseEmitter.SseEventBuilder event) throws Exception {
-        if (conn.gate().send(conn.emitter(), event)) {
+        return send(conn, event, false);
+    }
+
+    private boolean send(Conn conn, SseEmitter.SseEventBuilder event, boolean completeAfter) throws Exception {
+        WriteGate.Result result = conn.gate().send(event, completeAfter);
+        if (result == WriteGate.Result.SENT) {
             return true;
+        }
+        if (result == WriteGate.Result.CLOSED) {
+            return false;   // 이미 닫은 연결 — 건너뜀으로 세지 않는다
         }
         stuckSkipped.incrementAndGet();
         stuckSkippedSinceLog.incrementAndGet();
