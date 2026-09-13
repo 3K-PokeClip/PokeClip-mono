@@ -2,7 +2,10 @@ package com.pokeclip.chat.collector.relay;
 
 import com.pokeclip.chat.collector.ChatLogLeakTest;
 import com.pokeclip.chat.collector.ChzzkProperties;
+import com.pokeclip.chat.collector.archive.ArchivableChat;
+import com.pokeclip.chat.collector.archive.ArchiveCounters;
 import com.pokeclip.chat.collector.archive.ChatArchive;
+import com.pokeclip.chat.collector.chzzk.DonationSubscription;
 import com.pokeclip.chat.collector.fake.FakeChzzkBehavior;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
@@ -21,6 +24,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
@@ -33,6 +37,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -58,6 +66,7 @@ class RelayRegistryPathTest extends IntegrationTestSupport {
     @Autowired JdbcTemplate jdbc;
 
     private final RelayConfiguration.Enabled config = new RelayConfiguration.Enabled();
+    private final List<Runnable> cleanups = new ArrayList<>();
     private SessionRegistry registry;
     private ChatRelayer relayer;
     private ChatPersister persister;
@@ -72,6 +81,7 @@ class RelayRegistryPathTest extends IntegrationTestSupport {
 
     @AfterEach
     void tearDown() {
+        cleanups.forEach(Runnable::run);
         if (registry != null) registry.closeAll();
         if (relayer != null) {
             relayer.beginClose();
@@ -265,6 +275,169 @@ class RelayRegistryPathTest extends IntegrationTestSupport {
         }
     }
 
+
+    /**
+     * 🔴 L12(감사 A1) — <b>clip이 시한 없이 매달려도</b> 수신·저장이 안 밀린다. 닫힌 포트(즉시 거절)로는
+     * 동기 전송 회귀가 들어와도 저장이 안 밀려 판별력이 없다 — 하이라이트 순간의 위험은 거절이 아니라 매달림이다.
+     */
+    @Test
+    void clip이_매달려도_수신과_저장은_안_밀리고_등식이_닫힌다() throws Exception {
+        BlockingClient blocking = new BlockingClient();
+        cleanups.add(blocking::release);
+        RelayProperties props = new RelayProperties(true, 50, Duration.ofMillis(100), "http://127.0.0.1:9");
+        RelayBuffer buffer = config.relayBuffer(props);
+        relayer = config.chatRelayer(buffer, blocking, props);
+        ChatBuffer chatBuffer = givenRegistry(buffer, ChatArchive.NONE, true);
+        registry.open(key("relay-hang", 77L), "tok-77");
+        awaitCollecting("relay-hang");
+
+        int n = 200;
+        behavior.emitChatTo("tok-77", chatJson("매달림0", 1_723_660_000_000L));
+        awaitUntil(AWAIT, () -> blocking.entered() == 1);
+        assertThat(blocking.entered()).as("중계 스레드가 첫 요청 안에서 매달린 뒤에 넣어야 한다").isEqualTo(1);
+        for (int i = 1; i < n; i++) {
+            behavior.emitChatTo("tok-77", chatJson("매달림" + i, 1_723_660_000_000L + i));
+        }
+        awaitUntil(AWAIT, () -> persister.persistedCount() == n);
+
+        assertThat(blocking.isReleased()).as("저장이 끝날 때까지 중계는 여전히 매달려 있다").isFalse();
+        assertThat(blocking.entered()).isEqualTo(1);
+        assertThat(persister.persistedCount()).isEqualTo(n);
+        assertThat(registry.receivedTotal())
+                .isEqualTo(persister.persistedCount() + persister.conflictedCount()
+                        + persister.poisonedCount() + chatBuffer.droppedCount());
+        assertThat(relayer.bufferDropped()).as("1건은 매달린 요청 안, 50건은 바구니, 나머지는 버림").isEqualTo(n - 1 - 50);
+
+        blocking.release();
+        awaitUntil(AWAIT, () -> relayer.relayed() + relayer.relayDropped() + relayer.bufferDropped() == n);
+        assertThat(relayer.relayed() + relayer.relayDropped() + relayer.bufferDropped()).isEqualTo(n);
+        assertThat(blocking.threads()).isNotEmpty().allMatch("chzzk-relay"::equals);
+    }
+
+    /**
+     * 🔴 L1(F7) — 저장과 중계가 <b>같은 한 번 읽기</b>의 방송 번호를 쓴다. 손잡이: 채팅 갈래의 {@code archive.offer}가
+     * 번호 읽기와 중계 사이에 있다. 거기서 수신 스레드를 붙든 채 갈아끼우고 놓는다.
+     */
+    @Test
+    void 저장과_중계가_같은_방송_번호를_쓴다() throws Exception {
+        RecordingClient recording = recordingClient();
+        RelayBuffer buffer = startRelay(recording);
+        LatchArchive archive = new LatchArchive();
+        cleanups.add(archive::release);
+        givenRegistry(buffer, archive, true);
+        registry.open(key("relay-f7-old", 78L), "tok-78");
+        awaitCollecting("relay-f7-old");
+
+        behavior.emitChatTo("tok-78", chatJson("번호한번", 1_723_670_000_000L));
+        awaitUntil(AWAIT, () -> archive.entered.getCount() == 0);
+        assertThat(archive.entered.getCount()).as("수신 스레드가 두 읽기 사이(아카이브 offer)에 멈췄다").isZero();
+        assertThat(registry.open(key("relay-f7-new", 78L), "tok-78")).as("갈아끼움").isTrue();
+        archive.release();
+        awaitUntil(AWAIT, () -> recording.events().size() == 1 && rowsLike("relay-f7-%") == 1);
+
+        String inTable = jdbc.queryForObject(
+                "SELECT stream_id FROM chat_messages WHERE stream_id LIKE 'relay-f7-%'", String.class);
+        assertThat(inTable).as("저장은 붙들리기 전에 읽은 옛 번호다").isEqualTo("relay-f7-old");
+        assertThat(recording.events().getFirst().streamId()).isEqualTo(inTable);
+    }
+
+    /**
+     * 🔴 L2(F6 순서) — 닫는 중(반납 REST가 붙들린 사이)에 온 프레임이 카운터를 되살려도 <b>닫은 뒤</b> 잊으므로
+     * 안 남는다. 손잡이: {@code unsubscribeDelay} + 반납 도착을 먼저 센다.
+     */
+    @Test
+    void 닫는_중에_온_프레임도_카운터를_남기지_않는다() throws Exception {
+        RecordingClient recording = recordingClient();
+        RelayBuffer buffer = startRelay(recording);
+        givenRegistry(buffer);
+        registry.open(key("relay-f6", 79L), "tok-79");
+        awaitCollecting("relay-f6");
+        behavior.emitChatTo("tok-79", chatJson("닫기전", 1_723_680_000_001L));
+        awaitUntil(AWAIT, () -> recording.events().size() == 1);
+
+        int before = behavior.unsubscribeCallCount();
+        behavior.unsubscribeDelay = Duration.ofSeconds(2);
+        Thread closer = new Thread(() -> registry.close("relay-f6"), "relay-test-closer");
+        closer.start();
+        awaitUntil(AWAIT, () -> behavior.unsubscribeCallCount() > before);
+        behavior.emitChatTo("tok-79", chatJson("닫는중", 1_723_680_000_002L));
+        awaitUntil(AWAIT, () -> recording.events().size() == 2);
+        boolean closerAliveWhenArrived = closer.isAlive();
+        closer.join(15_000);
+
+        assertThat(recording.events()).as("양성 대조 — 닫는 중 프레임이 중계에 닿았다").hasSize(2);
+        assertThat(closerAliveWhenArrived).as("그 프레임은 close가 끝나기 전에 처리됐다").isTrue();
+        assertThat(closer.isAlive()).isFalse();
+        assertThat(buffer.trackedStreamCount()).isZero();
+    }
+
+    /**
+     * 🔴 L3 — 세션의 {@code intakeClosed} 게이트가 중계에도 걸린다. {@code SessionRegistry.shutdown()}은 그 게이트를
+     * {@code closeAll()} <b>뒤</b>에 세우므로 바구니 닫기(태스크 17)와 사이에 창이 남는다 — 게이트가 중계 앞이어야
+     * 표에 없는 채팅이 SSE로 안 간다.
+     *
+     * <p>고정 대기 대신 <b>장벽 프레임</b>을 쓴다: 한 소켓의 프레임은 수신 스레드 하나가 차례로 처리하고,
+     * 후원 회수 프레임은 게이트를 안 보고 후원 상태를 {@code REFUSED}로 바꾼다 — 그것이 보이면 앞선 두 프레임은
+     * 이미 게이트에 막혔다. 게이트는 등록부 내부 필드라 리플렉션으로 세운다(운영에서 세우는 곳은 {@code shutdown} 하나).
+     */
+    @Test
+    void 수신_게이트가_서면_중계에도_안_담긴다() throws Exception {
+        RecordingClient recording = recordingClient();
+        RelayBuffer buffer = startRelay(recording);
+        givenRegistry(buffer);
+        registry.open(key("relay-gate", 80L), "tok-80");
+        awaitCollecting("relay-gate");
+        assertThat(registry.donationStateOf("relay-gate")).as("장벽이 뜻을 가지려면 아직 REFUSED가 아니어야 한다")
+                .isNotEqualTo(DonationSubscription.REFUSED);
+        AtomicBoolean gate = (AtomicBoolean) ReflectionTestUtils.getField(registry, "intakeClosed");
+
+        gate.set(true);
+        behavior.emitChatTo("tok-80", chatJson("막힌채팅", 1_723_690_000_001L));
+        behavior.emitDonationTo("tok-80", donationJson("막힌후원"));
+        behavior.emitRevokedTo("tok-80", "DONATION");
+        awaitUntil(AWAIT, () -> registry.donationStateOf("relay-gate") == DonationSubscription.REFUSED);
+        assertThat(registry.donationStateOf("relay-gate")).as("장벽 프레임까지 처리됐다").isEqualTo(DonationSubscription.REFUSED);
+        gate.set(false);
+        behavior.emitChatTo("tok-80", chatJson("표지", 1_723_690_000_002L));
+        awaitUntil(AWAIT, () -> !recording.events().isEmpty());
+
+        assertThat(recording.events()).extracting(e -> ((RelayPayload.Chat) e.payload()).text()).containsExactly("표지");
+        assertThat(recording.events().getFirst().seq()).as("막힌 것은 번호도 안 받는다").isEqualTo(1);
+    }
+
+    /**
+     * 🔴 L4 — 후원 중계 시각이 표 {@code received_at}과 <b>같은 한 번 읽기</b>다. 손잡이: {@code DonationBuffer.offer}가
+     * {@code synchronized}라 시험 스레드가 모니터를 쥐면 수신 스레드가 두 읽기 사이에서 멈춘다. 멈춘 것을
+     * 스레드 상태로 확인하고 시계가 넘어간 뒤 놓는다(고정 대기 없음).
+     */
+    @Test
+    void 후원_중계_시각은_표와_같은_한_번_읽기다() throws Exception {
+        RecordingClient recording = recordingClient();
+        RelayBuffer buffer = startRelay(recording);
+        ChatBuffer chatBuffer = new ChatBuffer(1_000);
+        DonationBuffer donationBuffer = new DonationBuffer(1_000);
+        persister = new ChatPersister(jdbc, chatBuffer);
+        donationPersister = new DonationPersister(jdbc, donationBuffer);
+        donationPersister.start();
+        registry = new SessionRegistry(chzzkProperties(), restClientBuilder, chatBuffer, persister, ChatArchive.NONE,
+                new DonationSubscriptions(), donationBuffer, buffer);
+        registry.open(key("relay-dtime", 81L), "tok-81");
+        awaitCollecting("relay-dtime");
+
+        synchronized (donationBuffer) {
+            behavior.emitDonationTo("tok-81", donationJson("시각한번"));
+            awaitUntil(AWAIT, RelayRegistryPathTest::someoneBlockedOnDonationOffer);
+            assertThat(someoneBlockedOnDonationOffer()).as("수신 스레드가 후원 바구니 모니터에서 멈췄다").isTrue();
+            long observed = System.currentTimeMillis();
+            awaitUntil(AWAIT, () -> System.currentTimeMillis() >= observed + 5);
+        }
+        awaitUntil(AWAIT, () -> recording.events().size() == 1 && rows("chat_donations", "relay-dtime") == 1);
+
+        Instant inTable = jdbc.queryForObject(
+                "SELECT received_at FROM chat_donations WHERE stream_id = 'relay-dtime'", Timestamp.class).toInstant();
+        assertThat(recording.events().getFirst().payload().time()).isEqualTo(inTable);
+    }
+
     // ------------------------------------------------------------------
 
     private RelayBuffer startRelay(ClipRelayClient client) {
@@ -279,6 +452,10 @@ class RelayRegistryPathTest extends IntegrationTestSupport {
     }
 
     private ChatBuffer givenRegistry(RelaySink sink, boolean persist) {
+        return givenRegistry(sink, ChatArchive.NONE, persist);
+    }
+
+    private ChatBuffer givenRegistry(RelaySink sink, ChatArchive archive, boolean persist) {
         ChatBuffer buffer = new ChatBuffer(1_000);
         DonationBuffer donationBuffer = new DonationBuffer(1_000);
         persister = new ChatPersister(jdbc, buffer);
@@ -287,13 +464,27 @@ class RelayRegistryPathTest extends IntegrationTestSupport {
             persister.start();
             donationPersister.start();
         }
-        registry = new SessionRegistry(
-                new ChzzkProperties(true, "설정-토큰-쓰면-안-된다",
-                        "http://localhost:" + port, Duration.ofSeconds(5),
-                        Duration.ofMillis(200), Duration.ofSeconds(60), Duration.ofMillis(60)),
-                restClientBuilder, buffer, persister, ChatArchive.NONE,
+        registry = new SessionRegistry(chzzkProperties(), restClientBuilder, buffer, persister, archive,
                 new DonationSubscriptions(), donationBuffer, sink);
         return buffer;
+    }
+
+    private ChzzkProperties chzzkProperties() {
+        return new ChzzkProperties(true, "설정-토큰-쓰면-안-된다",
+                "http://localhost:" + port, Duration.ofSeconds(5),
+                Duration.ofMillis(200), Duration.ofSeconds(60), Duration.ofMillis(60));
+    }
+
+    private long rowsLike(String pattern) {
+        return jdbc.queryForObject("SELECT count(*) FROM chat_messages WHERE stream_id LIKE ?", Long.class, pattern);
+    }
+
+    /** 누군가 {@code DonationBuffer.offer}의 모니터를 기다리며 BLOCKED인가. */
+    private static boolean someoneBlockedOnDonationOffer() {
+        return Thread.getAllStackTraces().entrySet().stream().anyMatch(e ->
+                e.getKey().getState() == Thread.State.BLOCKED && e.getValue().length > 0
+                        && e.getValue()[0].getClassName().equals(DonationBuffer.class.getName())
+                        && e.getValue()[0].getMethodName().equals("offer"));
     }
 
     private void awaitCollecting(String streamId) throws InterruptedException {
@@ -329,6 +520,59 @@ class RelayRegistryPathTest extends IntegrationTestSupport {
 
     private static RecordingClient recordingClient() {
         return new RecordingClient();
+    }
+
+    /** 첫 호출부터 풀릴 때까지 무기한 붙든다 — 시한 없는 매달림(감사 A1). */
+    static final class BlockingClient extends ClipRelayClient {
+        private final CountDownLatch gate = new CountDownLatch(1);
+        private final AtomicInteger entered = new AtomicInteger();
+        private final List<String> threads = new CopyOnWriteArrayList<>();
+
+        BlockingClient() {
+            super(RestClient.builder(), new RelayProperties(true, 10_000, Duration.ofMillis(100), "http://127.0.0.1:9"),
+                    ClipRelayClientTest.link());
+        }
+
+        @Override
+        public Outcome send(String streamId, List<RelayEvent> events) {
+            threads.add(Thread.currentThread().getName());
+            entered.incrementAndGet();
+            try {
+                gate.await(60, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return Outcome.SENT;
+        }
+
+        void release() { gate.countDown(); }
+        boolean isReleased() { return gate.getCount() == 0; }
+        int entered() { return entered.get(); }
+        List<String> threads() { return new ArrayList<>(threads); }
+    }
+
+    /** 첫 offer만 붙든다 — 채팅 갈래의 두 읽기(번호 → 중계) 사이를 벌리는 손잡이(감사 F7). */
+    static final class LatchArchive implements ChatArchive {
+        final CountDownLatch entered = new CountDownLatch(1);
+        private final CountDownLatch gate = new CountDownLatch(1);
+        private final AtomicBoolean first = new AtomicBoolean(true);
+
+        @Override
+        public void offer(ArchivableChat chat) {
+            if (first.compareAndSet(true, false)) {
+                entered.countDown();
+                try {
+                    gate.await(30, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+
+        void release() { gate.countDown(); }
+        @Override public void beginClose() { }
+        @Override public void awaitClosed(Duration budget) { }
+        @Override public ArchiveCounters counters() { return ArchiveCounters.NONE; }
     }
 
     /**
