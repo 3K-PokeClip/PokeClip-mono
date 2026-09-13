@@ -316,6 +316,11 @@ public class StreamSession {
         return key;
     }
 
+    /** 방송 설정 조회(POK-234 PR-C)가 이 세션의 토큰으로 묻는다. 로그에 싣지 마라. */
+    String accessToken() {
+        return accessToken;
+    }
+
     /**
      * 로그에 실을 방송 번호. <b>세션이 여럿이면 이것이 없는 줄은 아무에게도 안 쓸모없다</b> —
      * 30초마다 구분 불가능한 줄이 세션 수만큼 나가고, 「일부만 안 걷힌다」를 로그로 못 가른다.

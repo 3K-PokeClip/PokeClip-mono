@@ -87,7 +87,7 @@ class ChatEventsIntakeControllerTest extends IntegrationTestSupport {
                         .header("X-Internal-Token", INTERNAL).contentType(APPLICATION_JSON)
                         .content("""
                                 {"events":[{"seq":1,"kind":"chat","text":"a"},
-                                           {"seq":2,"kind":"broadcast-info","title":"x"},
+                                           {"seq":2,"kind":"future-kind","title":"x"},
                                            {"seq":3,"kind":"donation","text":"b"}]}"""))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.accepted").value(2))

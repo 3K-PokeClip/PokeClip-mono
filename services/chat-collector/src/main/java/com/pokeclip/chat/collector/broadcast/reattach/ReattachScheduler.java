@@ -41,7 +41,8 @@ import org.springframework.scheduling.annotation.Scheduled;
  *
  * <p><b>결론은 그대로다</b>: 주기가 1분·1시간이라 최악에도 한쪽이 다음 주기를 한 번 밀 뿐이고,
  * 재부착은 상태가 없어서 밀린 회차를 잃어도 다음 회차가 같은 목록을 다시 받는다.
- * <b>세 번째 {@code @Scheduled}를 더하는 날 이 값을 다시 본다.</b>
+ * 🔴 <b>POK-234 PR-C가 세 번째 {@code @Scheduled}(방송 정보, 목록을 수백 페이지 훑을 수 있다)를 더해
+ * 풀을 3으로 올렸다</b>({@code application.yml}) — 이제 셋이 서로를 밀지 않는다.
  * (붙이기 자체는 여기서 안 돈다 — 줄 실행기의 가상 스레드가 받는다.)
  */
 public class ReattachScheduler {

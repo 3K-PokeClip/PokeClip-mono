@@ -643,6 +643,32 @@ public class SessionRegistry {
     }
 
     /**
+     * 소켓이 붙어 있거나 다시 붙는 중인 세션(POK-234 PR-C 방송 정보 수집). 수립 중·정지는 뺀다 —
+     * 방송 정보는 채팅을 걷고 있는 방송에만 남긴다. 옛 경로 세션(방송 번호 없음)도 뺀다.
+     *
+     * @param accessToken 로그에 싣지 마라
+     */
+    public List<ActiveSession> activeSessions() {
+        List<ActiveSession> out = new ArrayList<>();
+        for (Entry entry : sessions.values()) {
+            CollectionStatus.State state = entry.status().state();
+            SessionKey key = entry.session().key();
+            if ((state == CollectionStatus.State.COLLECTING || state == CollectionStatus.State.RECONNECTING)
+                    && key.streamId() != null && key.channelId() != null) {
+                out.add(new ActiveSession(key.streamId(), key.channelId(), entry.session().accessToken()));
+            }
+        }
+        return out;
+    }
+
+    public record ActiveSession(String streamId, String channelId, String accessToken) {
+        @Override
+        public String toString() {
+            return "ActiveSession[streamId=" + streamId + ", channelId=" + channelId + "]";
+        }
+    }
+
+    /**
      * 그 스트리머가 <b>지금</b> 하고 있는 방송의 번호. 안 걷고 있으면 null이다.
      *
      * <p>세션에게 묻는다 — 등록부가 따로 들면 갈아끼울 때 어긋나고, <b>어긋난 쪽을 태스크

@@ -201,6 +201,11 @@ services:
       # 묶음마다 실패 경고(10초 한 줄)가 난다. 표에는 영향이 없다.
       CHAT_RELAY_ENABLED: ${CHAT_RELAY_ENABLED:-false}
       CHAT_RELAY_BUFFER_MAX: ${CHAT_RELAY_BUFFER_MAX:-10000}
+      BROADCAST_INFO_ENABLED: ${BROADCAST_INFO_ENABLED:-false}
+      BROADCAST_INFO_INTERVAL: ${BROADCAST_INFO_INTERVAL:-PT1M}
+      # 🔴 비밀. auth와 같은 치지직 앱 값. 방송 정보가 꺼져 있으면 비어도 된다.
+      CHZZK_CLIENT_ID: ${CHZZK_CLIENT_ID:-}
+      CHZZK_CLIENT_SECRET: ${CHZZK_CLIENT_SECRET:-}
       # 채팅 버퍼를 1만 건까지 들고 있어 넷 중 가장 많이 쓴다.
       JAVA_TOOL_OPTIONS: -Xmx320m
 

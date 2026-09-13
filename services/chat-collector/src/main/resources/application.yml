@@ -1,4 +1,10 @@
 spring:
+  task:
+    scheduling:
+      pool:
+        # @Scheduled가 셋이다(끝난 방송 치우기 · 재부착 · 방송 정보). 기본 1이면 방송 정보가 목록을 훑는 동안
+        # 재부착이 밀린다(ReattachScheduler 주석이 예고한 자리).
+        size: 3
   application:
     name: pokeclip-chat-collector
   datasource:
@@ -213,6 +219,17 @@ pokeclip:
     # 재부착과 같은 clip 주소를 받되 값은 따로 든다 — 재부착이 꺼진 배포에서도 중계는 켤 수 있다.
     # 켜져 있는데 비면 ClipRelayClient 생성자가 부팅을 죽인다.
     clip-base-url: ${CLIP_BASE_URL:http://localhost:8081}
+  liveinfo:
+    # 켜면 걷고 있는 방송마다 1분에 한 번 제목·태그·카테고리·시청자 수를 broadcast_info에 남기고
+    # (중계가 켜져 있으면) 화면에 broadcast-info로 민다(POK-234 PR-C). 기본 꺼짐.
+    enabled: ${BROADCAST_INFO_ENABLED:false}
+    interval: ${BROADCAST_INFO_INTERVAL:PT1M}
+    initial-delay: PT30S
+    # 🔴 비밀. 전체 라이브 목록이 앱 인증이라 필요하다(시청자 수). 켜져 있는데 비면 부팅이 죽는다.
+    client-id: ${CHZZK_CLIENT_ID:}
+    client-secret: ${CHZZK_CLIENT_SECRET:}
+    # 목록 한 바퀴 페이지 상한(한 장 20개). 목록은 시청자 수 내림차순이라 작은 방송은 뒤에 있다.
+    max-pages: 500
   link:
     # auth의 내부 API 주소(8082). 컨테이너 안에서는 호스트가 서비스 이름이다.
     auth-base-url: ${AUTH_BASE_URL:http://localhost:8082}
