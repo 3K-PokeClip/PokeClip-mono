@@ -22,7 +22,7 @@ import java.time.Instant;
  * <p><b>방송 정보(broadcast-info)는 여기 없다</b>(F8) — PR-C가 더한다. 그때 직렬화의
  * {@code switch}가 컴파일에서 멈춰 짚어 준다.
  */
-public sealed interface RelayPayload permits RelayPayload.Chat, RelayPayload.Donation {
+public sealed interface RelayPayload permits RelayPayload.Chat, RelayPayload.Donation, RelayPayload.Info {
 
     /** SSE 이벤트 이름이자 창구 {@code kind}. */
     String kind();
@@ -77,6 +77,32 @@ public sealed interface RelayPayload permits RelayPayload.Chat, RelayPayload.Don
         @Override
         public String timeBasis() {
             return "received";
+        }
+    }
+
+    /**
+     * 방송 정보 한 시점(POK-234 PR-C). 시각은 <b>우리가 물어본 시각</b>이다 — 치지직이 관측 시각을 안 준다.
+     * 창구 칸(nickname 등)은 비고 {@code title}·{@code tags}·{@code category}·{@code viewers}가 찬다.
+     * {@code viewers}의 {@code null}은 「목록에서 못 찾았다」이지 0명이 아니다({@code BroadcastInfo} 주석).
+     */
+    record Info(Instant time, String title, java.util.List<String> tags, String category, Integer viewers)
+            implements RelayPayload {
+
+        public Info {
+            title = stripNul(title);
+            category = stripNul(category);
+            tags = tags == null ? java.util.List.of()
+                    : tags.stream().filter(java.util.Objects::nonNull).map(RelayPayload::stripNul).toList();
+        }
+
+        @Override
+        public String kind() {
+            return "broadcast-info";
+        }
+
+        @Override
+        public String timeBasis() {
+            return "observed";
         }
     }
 

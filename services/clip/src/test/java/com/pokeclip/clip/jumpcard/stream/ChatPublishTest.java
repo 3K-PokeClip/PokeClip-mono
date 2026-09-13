@@ -100,7 +100,7 @@ class ChatPublishTest {
 
     /**
      * F8 — <b>모르는 kind는 묶음째 거부하지 않는다.</b> 그 이벤트만 건너뛰고 셈한다. 400으로 묶음을 거부하면
-     * 수집기가 clip보다 먼저 배포되는 날(PR-C의 broadcast-info) 같은 묶음의 채팅이 전부 죽는다.
+     * 수집기가 clip보다 먼저 배포되는 날(새 종류가 생길 때) 같은 묶음의 채팅이 전부 죽는다.
      */
     @Test
     void 모르는_kind는_건너뛰고_dropped로_세고_아는_것은_간다() {
@@ -108,12 +108,27 @@ class ChatPublishTest {
         Recording conn = (Recording) registry.open("s-1", "u-1", Duration.ofMinutes(1));
 
         CardStreamRegistry.ChatPublishResult result = registry.publishChatEvents("s-1", events("""
-                {"events":[{"seq":1,"kind":"broadcast-info","title":"x"},{"seq":2,"kind":"chat","text":"a"}]}"""));
+                {"events":[{"seq":1,"kind":"future-kind","title":"x"},{"seq":2,"kind":"chat","text":"a"}]}"""));
 
         assertThat(result.accepted()).isEqualTo(1);
         assertThat(result.dropped()).isEqualTo(1);
         awaitUntil(() -> conn.events().size() == 1);
         assertThat(conn.events()).extracting(Recording.Event::name).containsExactly("chat");
+    }
+
+    /** POK-234 PR-C — 방송 정보는 아는 종류다. 이름 그대로 SSE 이벤트가 된다. */
+    @Test
+    void 방송_정보는_broadcast_info_이벤트로_간다() {
+        CardStreamRegistry registry = registry(4, 1000);
+        Recording conn = (Recording) registry.open("s-1", "u-1", Duration.ofMinutes(1));
+
+        CardStreamRegistry.ChatPublishResult result = registry.publishChatEvents("s-1", events("""
+                {"events":[{"seq":1,"kind":"broadcast-info","title":"x","viewers":12}]}"""));
+
+        assertThat(result.accepted()).isEqualTo(1);
+        assertThat(result.dropped()).isZero();
+        awaitUntil(() -> conn.events().size() == 1);
+        assertThat(conn.events()).extracting(Recording.Event::name).containsExactly("broadcast-info");
     }
 
     /** F4 — 채팅은 전용 줄({@code chat-stream-N})에서 돌고 카드는 카드 줄에서 돈다. */

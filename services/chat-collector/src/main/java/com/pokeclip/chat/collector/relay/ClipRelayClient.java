@@ -171,6 +171,12 @@ public class ClipRelayClient {
                     item.put("amount", donation.amount());
                     item.put("donationType", donation.donationType());
                 }
+                case RelayPayload.Info info -> {
+                    item.put("title", info.title());
+                    item.put("tags", info.tags());
+                    item.put("category", info.category());
+                    item.put("viewers", info.viewers());
+                }
             }
             out.add(item);
         }

@@ -285,8 +285,8 @@ public class CardStreamRegistry implements EndedListener {
     private final AtomicLong nextStuckSkipLogNanos = new AtomicLong(Long.MIN_VALUE);
     private final AtomicLong stuckSkippedSinceLog = new AtomicLong();
 
-    /** B에서 아는 종류. 모르는 것은 묶음째 거부하지 않고 건너뛰고 센다(F8) — PR-C가 {@code broadcast-info}를 더한다. */
-    static final java.util.Set<String> CHAT_KINDS = java.util.Set.of("chat", "donation");
+    /** 아는 종류. 모르는 것은 묶음째 거부하지 않고 건너뛰고 센다(F8) — 수집기가 새 종류를 먼저 배포해도 채팅이 산다. */
+    static final java.util.Set<String> CHAT_KINDS = java.util.Set.of("chat", "donation", "broadcast-info");
     private final StreamProperties properties;
     private final ObjectMapper mapper;
     private final Function<Duration, SseEmitter> emitterFactory;
