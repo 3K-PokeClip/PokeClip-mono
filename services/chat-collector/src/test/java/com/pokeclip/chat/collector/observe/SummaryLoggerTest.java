@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.observe;
 
+import com.pokeclip.chat.collector.relay.RelayCounters;
 import com.pokeclip.chat.collector.archive.ArchiveCounters;
 import com.pokeclip.chat.collector.chzzk.ChatMessage;
 import com.pokeclip.chat.collector.support.TestPersistence;
@@ -119,7 +120,7 @@ class SummaryLoggerTest {
     void 판정_줄에는_archiveRunId까지_실린다() {
         // stopReason null = 정상 종료(SHUTDOWN) — StopReason에는 SHUTDOWN 상수가 없다.
         String line = SummaryLogger.renderVerdict(1L, 0L, new CollectionMetrics().verdict(), null,
-                0L, 0L, 0L, 0L, 0L, counters(0, 0, 0, 0, 0, 0, "k7x2m9pq"), 0L);
+                0L, 0L, 0L, 0L, 0L, counters(0, 0, 0, 0, 0, 0, "k7x2m9pq"), 0L, RelayCounters.NONE);
         for (String key : REQUIRED_ARCHIVE) assertThat(line).contains(key);
         assertThat(line).contains("archiveRunId=k7x2m9pq");
     }
@@ -143,7 +144,7 @@ class SummaryLoggerTest {
     @Test
     void 판정_줄이_버린_후원_수를_싣는다() {
         String line = SummaryLogger.renderVerdict(1L, 0L, new CollectionMetrics().verdict(), null,
-                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 5L);
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 5L, RelayCounters.NONE);
 
         assertThat(line)
                 .as("버린 후원은 표에도 원본에도 없다 — 이 줄에 없으면 어디에도 안 남는다")
@@ -222,7 +223,7 @@ class SummaryLoggerTest {
     @Test
     void 판정_줄이_편지로_연_세션_수를_싣는다() {
         String line = SummaryLogger.renderVerdict(0L, 3L, new CollectionMetrics().verdict(), null,
-                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 0L);
+                0L, 0L, 0L, 0L, 0L, ArchiveCounters.NONE, 0L, RelayCounters.NONE);
 
         assertThat(line).startsWith("chat.session.verdict session=0 registrySessions=3 ");
     }

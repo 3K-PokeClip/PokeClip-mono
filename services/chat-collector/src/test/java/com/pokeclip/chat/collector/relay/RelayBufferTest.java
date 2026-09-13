@@ -50,6 +50,24 @@ class RelayBufferTest {
         assertThat(buffer.drain(10)).extracting(RelayEvent::seq).containsExactly(2L, 3L);
     }
 
+    /**
+     * L6 — <b>번호를 붙인 수</b>가 중계 등식의 좌변이다: {@code offered = relayed + relayDropped + bufferDropped + 남은 수}.
+     * 닫힘·번호 없음은 번호를 안 받으므로 세지 않는다(의도한 손실, 등식 밖).
+     */
+    @Test
+    void 번호를_붙인_수만_offered로_센다() {
+        RelayBuffer buffer = new RelayBuffer(2);
+        buffer.offer("s", chat("1"));
+        buffer.offer("s", chat("2"));
+        buffer.offer("s", chat("3"));   // 상한 초과로 1이 버려진다 — 그래도 번호는 받았다
+        buffer.offer(null, chat("legacy"));
+        buffer.close();
+        buffer.offer("s", chat("after-close"));
+
+        assertThat(buffer.offeredCount()).isEqualTo(3);
+        assertThat(buffer.offeredCount()).isEqualTo(buffer.droppedCount() + buffer.size());
+    }
+
     @Test
     void drain은_최대치만큼만_앞에서부터_꺼낸다() {
         RelayBuffer buffer = new RelayBuffer(100);

@@ -35,6 +35,8 @@ public final class RelayBuffer implements RelaySink {
     /** 마지막으로 내준 {@code seqEpoch}. 같은 ms에 카운터가 다시 서도 값이 겹치지 않게 이보다 크게 준다. */
     private long lastEpoch = Long.MIN_VALUE;
     private long dropped;
+    /** 번호를 붙인 수. 중계 등식의 좌변이다(감사 L6). */
+    private long offered;
     private boolean closed;
 
     public RelayBuffer(int capacity) {
@@ -57,6 +59,7 @@ public final class RelayBuffer implements RelaySink {
         }
         Counter counter = counters.computeIfAbsent(streamId, ignored -> new Counter(nextEpoch()));
         counter.seq++;
+        offered++;
         queue.addLast(new RelayEvent(streamId, counter.seq, counter.epoch, payload));
         while (queue.size() > capacity) {
             queue.pollFirst();
@@ -90,6 +93,14 @@ public final class RelayBuffer implements RelaySink {
     /** 상한 초과로 버린 수. 닫힘·번호 없음은 세지 않는다(의도한 손실이라 섞으면 이 값이 거짓이 된다). */
     public synchronized long droppedCount() {
         return dropped;
+    }
+
+    /**
+     * 번호를 붙여 담은 수. 🔴 {@code offered = relayed + relayDropped + bufferDropped + size()}가 닫힘 뒤에 닫힌다
+     * (나가 있는 묶음은 어느 항에도 없으므로 도는 중에는 그만큼 모자란다). 닫힘·번호 없음은 번호를 안 받아 세지 않는다.
+     */
+    public synchronized long offeredCount() {
+        return offered;
     }
 
     public synchronized int size() {

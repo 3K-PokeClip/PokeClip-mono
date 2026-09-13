@@ -59,7 +59,7 @@ public class RelayConfiguration {
 
         /**
          * 만들면서 스레드를 띄운다({@code ArchiveConfiguration}과 같다). {@code destroyMethod}를 끈다 —
-         * 닫기는 러너의 종료가 저장·아카이브와 <b>나란히</b> 공유 기한 안에서 한다(태스크 17, F1).
+         * 닫기는 러너의 종료({@code CollectorRunner.closeSinks})가 저장·아카이브와 <b>나란히</b> 공유 기한 안에서 한다(F1).
          * 스프링 파괴 순서에 맡기면 아무도 이 빈에 의존하지 않을 때 러너보다 먼저 파괴될 수 있다.
          */
         @Bean(destroyMethod = "")

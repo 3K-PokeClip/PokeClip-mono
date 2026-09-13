@@ -144,10 +144,11 @@ services:
       context: .
       dockerfile: chat-collector/Dockerfile
     restart: unless-stopped
-    # 🔴 compose 기본은 10초인데 이 서버의 종료 예산은 17초다(README 「종료 유예를 20초 준다」).
+    # 🔴 compose 기본은 10초인데 이 서버의 종료 예산은 19초다(README 「종료 유예를 20초 준다」).
     # 잘리면 세션 닫기(구독 반납 REST 8초)가 중간에 끊겨 세션 키가 소모된 채 남고,
     # 스트리머당 3개뿐인 자리가 하나씩 마른다 — 유예를 15에서 20으로 올린 바로 그 이유다.
-    # 예산 17 + 여유 3 = 20. 예산을 키우면 ShutdownBudgetTest 가 깨지고 이 값도 같이 본다.
+    # 예산 19 + 여유 1 = 20(POK-234 후원 flush 2초가 들어와 17→19). 예산을 키우면 ShutdownBudgetTest 가 깨지고
+    # 이 값도 같이 본다. 채팅 중계(PR-B)는 새 항이 아니라 마지막 flush 대기 5초를 나눠 쓴다.
     stop_grace_period: 20s
     depends_on:
       postgres:
@@ -195,6 +196,11 @@ services:
       # compose 네트워크 안에서는 서비스 이름이 곧 호스트 이름이다(AUTH_BASE_URL 과 같은 결).
       # 기본값 http://localhost:8081 을 그대로 두면 컨테이너 안에서 자기 자신을 가리킨다.
       CLIP_BASE_URL: ${CLIP_BASE_URL:-http://clip:8081}
+      # 채팅 중계(POK-234 PR-B). 켜면 받은 채팅·후원을 저장과 따로 clip 에 바로 민다(라이브 화면 SSE).
+      # 위 CLIP_BASE_URL·INTERNAL_API_TOKEN 을 같이 쓴다. 기본 꺼짐 — 켜져 있으면 clip 이 없는 로컬에서
+      # 묶음마다 실패 경고(10초 한 줄)가 난다. 표에는 영향이 없다.
+      CHAT_RELAY_ENABLED: ${CHAT_RELAY_ENABLED:-false}
+      CHAT_RELAY_BUFFER_MAX: ${CHAT_RELAY_BUFFER_MAX:-10000}
       # 채팅 버퍼를 1만 건까지 들고 있어 넷 중 가장 많이 쓴다.
       JAVA_TOOL_OPTIONS: -Xmx320m
 

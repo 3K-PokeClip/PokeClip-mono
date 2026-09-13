@@ -22,6 +22,7 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.web.client.RestClient;
 
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
+import com.pokeclip.chat.collector.relay.RelayLifecycle;
 import com.pokeclip.chat.collector.relay.RelaySink;
 
 import java.time.Duration;
@@ -118,6 +119,13 @@ public class CollectorRunner implements ApplicationRunner {
     private final DonationPersister donationPersister;
     /** 수신 스레드가 offer만 하는 원본 아카이브. 꺼져 있으면 {@link ChatArchive#NONE} — 러너는 모른다. */
     private final ChatArchive archive;
+
+    /**
+     * clip 중계의 닫기 손잡이와 셈(POK-234 PR-B). 꺼져 있으면 {@link RelayLifecycle#NONE}.
+     * <b>러너가 명시적으로 닫는다</b> — 스프링 파괴 순서에 맡기면 아무도 중계기에 의존하지 않을 때 러너보다 먼저
+     * 파괴되거나 예산 밖에서 돌 수 있다(후원 저장기가 22초를 만든 것과 같은 자리, 계획 검증 F1).
+     */
+    private final RelayLifecycle relay;
 
     /**
      * 이 러너가 여는 세션. <b>하나뿐이다 — 옛 경로(설정으로 한 채널만 붙이는 길)의 것이다.</b>
@@ -279,11 +287,22 @@ public class CollectorRunner implements ApplicationRunner {
                 new DonationBuffer());
     }
 
+    /** 중계 없이 쓰는 모양. 러너를 직접 만드는 검사가 이 모양을 부른다 — 새 인자를 거기까지 퍼뜨리지 않는다. */
     public CollectorRunner(ChzzkProperties properties, CollectionStatus status,
                            RestClient.Builder restClientBuilder,
                            ChatBuffer buffer, ChatPersister persister,
                            ChatArchive archive, DonationPersister donationPersister,
                            SessionRegistry registry, Runnable exitAction) {
+        this(properties, status, restClientBuilder, buffer, persister, archive, donationPersister,
+                registry, exitAction, RelayLifecycle.NONE);
+    }
+
+    public CollectorRunner(ChzzkProperties properties, CollectionStatus status,
+                           RestClient.Builder restClientBuilder,
+                           ChatBuffer buffer, ChatPersister persister,
+                           ChatArchive archive, DonationPersister donationPersister,
+                           SessionRegistry registry, Runnable exitAction, RelayLifecycle relay) {
+        this.relay = relay;
         this.properties = properties;
         this.status = status;
         // 빌더는 프로토타입 빈이다. 한 번만 build()해서 들고 있는다.
@@ -498,7 +517,7 @@ public class CollectorRunner implements ApplicationRunner {
         // 조용히 틀린 숫자를 싣느니 안 싣는다. 세션별 관측은 태스크 13이 맡는다.
         SummaryLogger.logFinalVerdict(lastSessionNo.get(), registrySessions(), metrics.verdict(), reason,
                 registryReceived(), persister, buffer.droppedCount(), archive.counters(),
-                registryDonationDropped());
+                registryDonationDropped(), relay.counters());
     }
 
     /**
@@ -525,6 +544,10 @@ public class CollectorRunner implements ApplicationRunner {
     private void closeSinks() {
         sinksCloseDeadlineNanos.compareAndSet(0, System.nanoTime() + ARCHIVE_CLOSE_WAIT.toNanos());
         archive.beginClose();
+        // 🔴 <b>중계도 같은 기한을 나눠 쓴다 — 예산 항을 새로 만들지 않는다</b>(계획 검증 F1). 합이 이미 19초이고
+        // 여유 1초를 ShutdownBudgetTest가 못박는다. 아카이브와 같은 모양으로 새로 받기를 막고 깨우기만 하고
+        // 돌아온다 — 저장기가 5초를 기다리는 동안 중계 스레드도 남은 것을 보낸다.
+        relay.beginClose();
         // persister.close()는 모든 갈래를 잡게 짜여 있지만 그 계약이 강제되진 않는다 — 여기서 새면
         // 아래 대기를 통째로 건너뛰어 마지막 flush를 아무도 안 기다리고, 잃은 파일의 단서(close_timeout)도
         // 안 남는다. finally로 묶어 그 갈림을 없앤다.
@@ -540,6 +563,11 @@ public class CollectorRunner implements ApplicationRunner {
             // 같은 시한을 본다(위 주석).
             Duration remaining = Duration.ofNanos(sinksCloseDeadlineNanos.get() - System.nanoTime());
             archive.awaitClosed(remaining.isNegative() ? Duration.ZERO : remaining);
+            // 아카이브가 쓴 만큼 줄어든 나머지다 — 새 항이 아니다. 넘기면 중계기가 나가 있는 것과 잔량을 버린 수로
+            // 확정하고 돌아오므로 바로 뒤 판정 줄의 중계 셈이 그 뒤로 안 바뀐다(감사 L5). 🔴 clip이 느린 날에는
+            // DB·S3가 기한을 먼저 다 써 중계가 0초를 받을 수 있다 — 그때 못 보낸 것은 버린 수로 판정 줄에 남는다.
+            Duration relayRemaining = Duration.ofNanos(sinksCloseDeadlineNanos.get() - System.nanoTime());
+            relay.awaitClosed(relayRemaining.isNegative() ? Duration.ZERO : relayRemaining);
         }
     }
 

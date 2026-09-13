@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector.observe;
 
 import com.pokeclip.chat.collector.archive.ArchiveCounters;
 import com.pokeclip.chat.collector.persist.PersistCounters;
+import com.pokeclip.chat.collector.relay.RelayCounters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -191,10 +192,10 @@ public final class SummaryLogger implements AutoCloseable {
                                        CollectionMetrics.Verdict verdict,
                                        Object stopReason, long otherSessionsReceived,
                                        PersistCounters counters, long dropped,
-                                       ArchiveCounters archive, long donationDropped) {
+                                       ArchiveCounters archive, long donationDropped, RelayCounters relay) {
         log.info("{}", renderVerdict(session, registrySessions, verdict, stopReason, otherSessionsReceived,
                 counters.persistedCount(), counters.conflictedCount(), counters.poisonedCount(),
-                dropped, archive, donationDropped));
+                dropped, archive, donationDropped, relay));
     }
 
     /**
@@ -214,7 +215,7 @@ public final class SummaryLogger implements AutoCloseable {
                                        CollectionMetrics.Verdict v,
                                        Object stopReason, long otherSessionsReceived,
                                        long persisted, long conflicted, long poisoned, long dropped,
-                                       ArchiveCounters archive, long donationDropped) {
+                                       ArchiveCounters archive, long donationDropped, RelayCounters relay) {
         return "chat.session.verdict"
                 // 첫 항이다. 줄을 세션 단위로 고르는 사람도 도구도 여기서 갈린다.
                 // <b>편지 경로에서는 이 러너가 연 세션이 없어 0이다</b> — 세션 번호는
@@ -279,6 +280,14 @@ public final class SummaryLogger implements AutoCloseable {
                 // <b>받은 수는 chat_donations 표를 세면 나온다</b> — 표에 없는 것은 버린 수뿐이다.
                 // 위 registrySessions 주석과 같은 규칙이다: <b>조용히 틀린 숫자를 싣느니 안 싣는다.</b>
                 + " donationDropped=" + donationDropped
+                // 중계 셈 넷(프로세스 누계, 감사 L6). 러너가 판정 직전에 중계를 닫아(기한을 넘기면 나가 있는 것과
+                // 잔량을 버린 수로 확정) 등식 relayOffered = relayed + relayDropped + relayBufferDropped 로 검산한다.
+                // 🔴 relayed 는 「clip 이 받았다」이지 「브라우저에 갔다」가 아니다 — clip 쪽 버림은 clip 의 셈이다.
+                // 꺼져 있으면 넷 다 0이다(RelayCounters.NONE).
+                + " relayOffered=" + relay.relayOffered()
+                + " relayed=" + relay.relayed()
+                + " relayDropped=" + relay.relayDropped()
+                + " relayBufferDropped=" + relay.bufferDropped()
                 // 이 runId로 S3에서 이 프로세스의 파일을 찾는다 — 키의 "-{runId}.jsonl" 부분이다.
                 // 재시작이 잦으면 같은 분에 파일이 여럿인데, 어느 것이 이 프로세스 것인지는 이 값뿐이다.
                 + " archiveRunId=" + archive.runId()

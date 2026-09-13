@@ -8,7 +8,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
 /**
@@ -42,12 +41,23 @@ public class ChatRelayer implements RelayCounters, RelayLifecycle {
     private final long idleNanos;
     private final Thread thread;
 
-    private final AtomicLong relayed = new AtomicLong();
-    private final AtomicLong relayDropped = new AtomicLong();
+    /**
+     * 셈 셋은 <b>이 객체의 자물쇠</b> 아래에 있다. 기한을 넘긴 닫기({@link #awaitClosed})가 「나가 있는 묶음 +
+     * 바구니 잔량」을 버린 수로 <b>확정</b>하는 순간과, 중계 스레드가 늦게 돌아와 그 묶음의 결과를 세려는 순간이
+     * 겹치므로 한 자물쇠로 한쪽만 이기게 한다(감사 L5).
+     */
+    private long relayed;
+    private long relayDropped;
+    /** drain했지만 아직 결과를 안 센 건수. 확정할 때 버린 수로 옮긴다. */
+    private long inFlight;
 
     /** {@link #beginClose()}가 켠다. 켜기 <b>전에</b> 바구니를 닫으므로, 켜진 것을 본 뒤의 빈 drain은 진짜 끝이다. */
     private volatile boolean closing;
-    /** 닫기 기한을 넘겼다. 지금 보내는 묶음이 끝나면 남은 것을 버린 수로 세고 끝낸다. */
+    /**
+     * 닫기 기한을 넘겨 셈을 확정했다. 그 뒤로 중계 스레드는 <b>더 보내지 않고</b>(남은 방송 포함) 결과도 안 센다 —
+     * 확정 때 이미 버린 수로 셌다. 🔴 나가 있던 요청이 실제로는 clip에 닿았을 수 있다: 결과를 모르는 채
+     * 버린 수로 세는 쪽을 골랐다 — 판정 줄이 닫기 직후 읽는 값이 나중에 바뀌면 그 줄의 등식이 거짓이 된다.
+     */
     private volatile boolean abandoned;
 
     public ChatRelayer(RelayBuffer buffer, ClipRelayClient client, RelayProperties relay) {
@@ -66,16 +76,20 @@ public class ChatRelayer implements RelayCounters, RelayLifecycle {
     }
 
     private void loop() {
-        while (true) {
-            if (abandoned) {
-                dropRemaining();
-                return;
-            }
+        while (!abandoned) {
             // 🔴 닫힘 표시를 drain <b>앞에서</b> 읽는다. 뒤에서 읽으면 「빈 drain → 그 사이 offer → 닫힘 표시」
             // 순서에서 담긴 한 건을 남긴 채 끝난다. 표시는 바구니를 닫은 뒤에 켜지므로 앞에서 켜진 것을 봤다면
             // 이 drain 뒤로는 들어올 것이 없다.
             boolean closingNow = closing;
-            List<RelayEvent> batch = buffer.drain(MAX_BATCH);
+            List<RelayEvent> batch;
+            synchronized (this) {
+                // 확정과 drain이 겹치면 꺼낸 것이 어느 셈에도 안 들어간다 — 같은 자물쇠 안에서 꺼내고 센다.
+                if (abandoned) {
+                    return;
+                }
+                batch = buffer.drain(MAX_BATCH);
+                inFlight += batch.size();
+            }
             if (batch.isEmpty()) {
                 if (closingNow) {
                     return;
@@ -93,6 +107,11 @@ public class ChatRelayer implements RelayCounters, RelayLifecycle {
             byStream.computeIfAbsent(event.streamId(), ignored -> new java.util.ArrayList<>()).add(event);
         }
         for (Map.Entry<String, List<RelayEvent>> entry : byStream.entrySet()) {
+            // 🔴 방송마다 본다(L5). 루프 머리에서만 보면 한 묶음의 남은 방송에 기한 뒤에도 계속 보낸다 —
+            // 방송 수 × 전용 시한(최대 1.5초)만큼 종료 뒤에 요청이 더 나간다. 남은 몫은 확정이 이미 셌다.
+            if (abandoned) {
+                return;
+            }
             int size = entry.getValue().size();
             ClipRelayClient.Outcome outcome;
             try {
@@ -103,22 +122,18 @@ public class ChatRelayer implements RelayCounters, RelayLifecycle {
                         entry.getKey(), e.getClass().getSimpleName(), size);
                 outcome = ClipRelayClient.Outcome.FAILED;
             }
-            if (outcome == ClipRelayClient.Outcome.SENT) {
-                relayed.addAndGet(size);
-            } else {
-                relayDropped.addAndGet(size);
+            synchronized (this) {
+                if (abandoned) {
+                    return;   // 확정이 이 묶음을 이미 버린 수로 셌다
+                }
+                inFlight -= size;
+                if (outcome == ClipRelayClient.Outcome.SENT) {
+                    relayed += size;
+                } else {
+                    relayDropped += size;
+                }
             }
         }
-    }
-
-    private void dropRemaining() {
-        long dropped = 0;
-        List<RelayEvent> rest;
-        while (!(rest = buffer.drain(MAX_BATCH)).isEmpty()) {
-            dropped += rest.size();
-        }
-        relayDropped.addAndGet(dropped);
-        log.warn("chat.relay.close_abandoned dropped={}", dropped);
     }
 
     @Override
@@ -128,19 +143,38 @@ public class ChatRelayer implements RelayCounters, RelayLifecycle {
         LockSupport.unpark(thread);
     }
 
+    /**
+     * 기한 안에 스레드가 끝나면 그대로 돌아온다. 넘기면 <b>나가 있는 묶음과 바구니 잔량을 버린 수로 확정하고</b>
+     * 돌아온다 — 돌아온 뒤 셈은 안 바뀐다(판정 줄이 곧바로 읽는다). 기다리지 않는다: 나가 있는 요청은 전용 시한
+     * (최대 약 1.5초) 안에 끝나고 스레드는 데몬이다. 두 번 불러도 같다(러너가 닫기를 두 번 지난다).
+     */
     @Override
     public void awaitClosed(Duration budget) {
         if (thread.getState() == Thread.State.NEW) {
             return;
         }
         try {
-            thread.join(Math.max(1, TimeUnit.NANOSECONDS.toMillis(budget.toNanos())));
+            thread.join(Math.max(1, TimeUnit.NANOSECONDS.toMillis(Math.max(0, budget.toNanos()))));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        if (thread.isAlive()) {
+        if (!thread.isAlive()) {
+            return;
+        }
+        long dropped;
+        synchronized (this) {
             abandoned = true;
-            // 기다리지 않는다 — 지금 나가 있는 요청은 전용 시한(최대 약 1.5초) 안에 끝나고 스레드는 데몬이다.
+            dropped = inFlight;
+            inFlight = 0;
+            List<RelayEvent> rest;
+            while (!(rest = buffer.drain(MAX_BATCH)).isEmpty()) {
+                dropped += rest.size();
+            }
+            relayDropped += dropped;
+        }
+        LockSupport.unpark(thread);
+        if (dropped > 0) {
+            log.warn("chat.relay.close_abandoned dropped={}", dropped);
         }
     }
 
@@ -150,13 +184,23 @@ public class ChatRelayer implements RelayCounters, RelayLifecycle {
     }
 
     @Override
-    public long relayed() {
-        return relayed.get();
+    public RelayCounters counters() {
+        return this;
     }
 
     @Override
-    public long relayDropped() {
-        return relayDropped.get();
+    public synchronized long relayed() {
+        return relayed;
+    }
+
+    @Override
+    public synchronized long relayDropped() {
+        return relayDropped;
+    }
+
+    @Override
+    public long relayOffered() {
+        return buffer.offeredCount();
     }
 
     @Override

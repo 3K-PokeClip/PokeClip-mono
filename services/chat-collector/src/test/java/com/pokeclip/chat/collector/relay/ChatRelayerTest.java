@@ -155,28 +155,62 @@ class ChatRelayerTest {
     }
 
     /**
-     * 기한을 넘기면 기다리지 않고 돌아오고, <b>못 보낸 것을 버린 수로 센다</b> — 안 세면 종료 때 잃은
-     * 채팅이 셈 어디에도 없다(relay-loss-coverage 기준 A 「종료 중 바구니에 남은 것」).
+     * 기한을 넘기면 기다리지 않고 돌아오고, <b>돌아오는 순간 셈이 이미 확정</b>이다 — 판정 줄은
+     * {@code awaitClosed} 바로 뒤에 셈을 읽는다(태스크 17). 🔴 L5: 한 묶음에 방송이 여럿이면 기한 뒤에도
+     * 남은 방송에 계속 보내고 셈이 스레드가 끝날 때(최대 방송 수 × 1.5초 뒤)에야 닫혔다. 방송 하나로는
+     * 그 결함이 안 보여 셋으로 잰다.
      */
     @Test
-    void 닫기_기한을_넘기면_돌아오고_못_보낸_것을_버린_수로_센다() throws Exception {
-        clip.holdFirstRequest();   // 읽기 시한(1초)이 먼저 끊는다 → 첫 묶음은 FAILED
-        buffer.offer("s-slow", chat("1"));
+    void 닫기_기한을_넘기면_돌아올_때_셈이_확정이고_남은_방송에_더_안_보낸다() throws Exception {
+        relayer.beginClose();
+        relayer.awaitClosed(AWAIT);
+        buffer = new RelayBuffer(10_000);
+        relayer = new ChatRelayer(buffer, client(), properties());
+        buffer.offer("s-a", chat("a"));
+        buffer.offer("s-b", chat("b"));
+        buffer.offer("s-c", chat("c"));
+        clip.holdFirstRequest();   // 읽기 시한(1초)이 끊을 때까지 첫 방송 요청이 매달린다
+        relayer.start();
         await(() -> clip.callCount() == 1);
-        buffer.offer("s-slow", chat("2"));
-        buffer.offer("s-slow", chat("3"));
+        assertThat(clip.callCount()).as("한 묶음(방송 셋)의 첫 요청이 나가 매달린 뒤에 닫는다").isEqualTo(1);
 
         relayer.beginClose();
         long started = System.nanoTime();
         relayer.awaitClosed(Duration.ofMillis(100));
-        assertThat(Duration.ofNanos(System.nanoTime() - started))
-                .as("기한만큼만 기다리고 돌아와야 종료 예산을 안 넘는다")
-                .isLessThan(Duration.ofMillis(900));
+        Duration waited = Duration.ofNanos(System.nanoTime() - started);
+
+        assertThat(waited).as("기한만큼만 기다리고 돌아와야 종료 예산을 안 넘는다").isLessThan(Duration.ofMillis(900));
+        assertThat(relayer.relayDropped()).as("돌아온 순간 셋 다 버린 수로 확정").isEqualTo(3);
+        assertThat(relayer.relayed()).isZero();
 
         await(() -> !relayer.isRunning());
         assertThat(relayer.isRunning()).isFalse();
-        assertThat(relayer.relayDropped()).as("첫 묶음 실패 1 + 못 보낸 2").isEqualTo(3);
-        assertThat(clip.callCount()).as("기한을 넘긴 뒤에는 더 보내지 않는다").isEqualTo(1);
+        assertThat(clip.callCount()).as("기한을 넘긴 뒤에는 남은 방송에 더 보내지 않는다").isEqualTo(1);
+        assertThat(relayer.relayDropped()).as("나중에 끝난 요청이 셈을 다시 바꾸지 않는다").isEqualTo(3);
+        assertThat(relayer.relayed()).isZero();
+        assertThat(relayer.relayOffered())
+                .isEqualTo(relayer.relayed() + relayer.relayDropped() + relayer.bufferDropped() + buffer.size());
+    }
+
+    /** L6 — 닫힌 뒤 중계 등식이 닫힌다: 넣은 수 = 보냄 + 버림(clip) + 버림(바구니) + 남은 수. */
+    @Test
+    void 닫힌_뒤_중계_등식이_닫힌다() throws Exception {
+        clip.holdFirstRequest();
+        buffer.offer("s-eq", chat("1"));
+        await(() -> clip.callCount() == 1);
+        clip.respondWith(500);   // 붙든 첫 요청은 풀리면 500, 뒤도 500
+        buffer.offer("s-eq", chat("2"));
+        clip.releaseFirstRequest();
+        clip.respondWith(200);
+        await(() -> relayer.relayed() + relayer.relayDropped() == 2);
+        buffer.offer("s-eq2", chat("3"));
+
+        relayer.beginClose();
+        relayer.awaitClosed(AWAIT);
+
+        assertThat(relayer.relayOffered()).as("양성 대조 — 넣은 것이 셋").isEqualTo(3);
+        assertThat(relayer.relayOffered())
+                .isEqualTo(relayer.relayed() + relayer.relayDropped() + relayer.bufferDropped() + buffer.size());
     }
 
     // ------------------------------------------------------------------

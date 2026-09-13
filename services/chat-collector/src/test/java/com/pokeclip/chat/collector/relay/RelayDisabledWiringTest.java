@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.relay;
 
+import com.pokeclip.chat.collector.CollectorHealth;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
@@ -28,5 +29,7 @@ class RelayDisabledWiringTest extends IntegrationTestSupport {
         assertThat(context.getBeansOfType(ChatRelayer.class)).isEmpty();
         assertThat(ReflectionTestUtils.getField(context.getBean(SessionRegistry.class), "relay"))
                 .isSameAs(RelaySink.NONE);
+        assertThat(context.getBean(CollectorHealth.class).health().getDetails().get("relay"))
+                .as("「꺼져서 0」과 「켜졌는데 0」을 가른다").isEqualTo("disabled");
     }
 }
