@@ -255,6 +255,33 @@ class ChatRelayerTest {
                 ClientHttpRequestFactoryBuilder.jdk(), properties(), ClipRelayClientTest.link());
     }
 
+    /** PR #181 codex — 한 묶음(MAX_BATCH)을 넘게 쌓인 채 죽어도 바구니 잔량까지 버린 수로 들어가고, 죽은 뒤엔 안 받는다. */
+    @Test
+    void 중계_스레드가_죽으면_바구니_잔량까지_세고_더_안_받는다() throws Exception {
+        relayer.beginClose();
+        relayer.awaitClosed(AWAIT);
+        buffer = new RelayBuffer(10_000);
+        ClipRelayClient dying = new ClipRelayClient(RestClient.builder(), properties(), ClipRelayClientTest.link()) {
+            @Override
+            public Outcome send(String streamId, List<RelayEvent> events) {
+                throw new LinkageError("주입");
+            }
+        };
+        int total = ChatRelayer.MAX_BATCH + 7;
+        for (int i = 0; i < total; i++) {
+            buffer.offer("s-a", chat("m" + i));
+        }
+        relayer = new ChatRelayer(buffer, dying, properties());
+        relayer.start();
+
+        await(() -> !relayer.isRunning());
+        buffer.offer("s-a", chat("죽은 뒤"));
+
+        assertThat(relayer.relayDropped()).as("나가 있던 500 + 남은 7").isEqualTo(total);
+        assertThat(buffer.size()).isZero();
+        assertThat(relayer.relayOffered()).as("죽은 뒤 것은 안 받는다").isEqualTo(total);
+    }
+
     private RelayProperties properties() {
         return new RelayProperties(true, 10_000, Duration.ofMillis(100), clip.baseUrl());
     }
