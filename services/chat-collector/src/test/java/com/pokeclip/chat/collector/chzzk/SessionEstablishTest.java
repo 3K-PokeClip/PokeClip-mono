@@ -530,6 +530,55 @@ class SessionEstablishTest extends IntegrationTestSupport {
     }
 
     /**
+     * 🔴 <b>수립 중 후원 구독 왕복에 세션 닫기가 겹쳐도 그 구독을 거둔다</b>(봇 codex).
+     *
+     * <p>닫기는 그 순간 값이 NONE 이라 후원 반납을 <b>안 쏘고</b> 키까지 비운다. 그 뒤 ⑥ 이
+     * SUBSCRIBED 를 그냥 쓰면 닫힌 세션이 「구독 중」이 되고, 뒤늦은 반납도 키가 없어
+     * 건너뛰므로 <b>아무도 그 구독을 거두지 않는다.</b> 재시도 루프에서 고친 것과 같은
+     * 뿌리이고 이번엔 수립 경로다.
+     *
+     * <p>⑥ 의 응답을 붙들어 둔 채 닫는다 — 결정적으로 그 창이 열린다.
+     */
+    @Test
+    void 수립_중_후원_구독에_닫기가_겹쳐도_그_구독을_거둔다() throws Exception {
+        CountDownLatch 붙들림 = new CountDownLatch(1);
+        CountDownLatch 놓아줌 = new CountDownLatch(1);
+        behavior.onSubscribeDonationBeforeResponse = () -> {
+            붙들림.countDown();
+            try {
+                놓아줌.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
+        ChatSession session = newSession(java.time.Duration.ofMinutes(1));
+        Thread 수립 = Thread.ofVirtual().start(() -> {
+            try {
+                session.open(java.time.Duration.ofSeconds(5), () -> false);
+            } catch (RuntimeException ignored) {
+                // 닫힌 뒤라 수립이 어떻게 끝나든 이 검사가 재는 것과 무관하다.
+            }
+        });
+
+        assertThat(붙들림.await(5, TimeUnit.SECONDS))
+                .as("⑥ 이 구독을 안 쐈다 — 이 검사가 아무것도 안 잰다").isTrue();
+        session.releaseAndClose();
+        놓아줌.countDown();
+        수립.join(java.time.Duration.ofSeconds(5));
+
+        long 시한 = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+        while (behavior.unsubscribeDonationCallCount() == 0 && System.nanoTime() < 시한) {
+            Thread.sleep(20);
+        }
+        assertThat(behavior.unsubscribeDonationCallCount())
+                .as("닫기가 NONE 을 보고 안 쏘고 간 뒤에 선 구독은 수립이 스스로 거둬야 한다")
+                .isEqualTo(1);
+        assertThat(session.donationSubscription())
+                .as("닫힌 세션이 「구독 중」으로 남으면 창구가 영영 subscribed 로 답한다")
+                .isEqualTo(DonationSubscription.NONE);
+    }
+
+    /**
      * 🔴 <b>같은 객체를 다시 열면 후원 재시도도 다시 산다</b>(봇 codex).
      *
      * <p>이 객체는 <b>강제 절단 뒤 통째로 다시 열린다</b>(클래스 javadoc, POK-86).

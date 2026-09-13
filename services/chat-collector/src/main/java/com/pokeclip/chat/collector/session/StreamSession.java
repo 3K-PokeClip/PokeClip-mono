@@ -213,9 +213,11 @@ public class StreamSession {
      * 번호가 없을 때는 {@code null} 그대로 넘겨 <b>등록부가 조용히 무시하게</b> 두는 것이
      * 원래 동작이고, 그 동작을 재는 검사가 있다. 이 메서드로 모으면서 한 번 갈아탈 뻔했다.
      */
-    private void setDonationStatus(DonationSubscription state) {
+    private void setDonationStatus(java.util.function.Supplier<DonationSubscription> state) {
+        // <b>값을 자물쇠 안에서 읽는다</b> — 공급자로 받는 이유다. 밖에서 읽어 넘기면 읽기와
+        // 쓰기 사이에 재시도 알림이 끼어 낡은 값이 새 값을 덮는다(수립 직후 스냅숏 자리).
         synchronized (donationStatusLock) {
-            donations.set(key.streamId(), state);
+            donations.set(key.streamId(), state.get());
         }
     }
 
@@ -719,11 +721,18 @@ public class StreamSession {
             // 후원 구독 결과를 <b>수립이 성공으로 확정된 뒤에</b> 적는다. 앞에서 적으면
             // 위 갈래들(!started)로 빠진 세션의 값이 창구에 남아, 걷지도 않는 방송이
             // subscribed로 보인다. 재수립마다 덮어쓴다 — 권한이 회복되면 그때 올라온다.
-            setDonationStatus(opening.donationSubscription());
             // 🔴 재시도가 나중에 상태를 바꾸면 그것도 창구에 싣는다(봇 codex P2).
             // 이 줄이 없으면 재시도가 성공해도 창구는 방송이 끝날 때까지 「failed」다 —
             // 실제로는 후원이 잘 들어오는데 화면이 그럴듯하게 틀린다.
-            opening.onDonationSubscriptionChanged(this::setDonationStatus);
+            //
+            // 🔴 <b>알림 받는 곳을 먼저 달고 지금 값을 나중에 읽는다</b>(봇 codex). 재시도 스레드는
+            // open() 안에서 이미 섰으므로, 거꾸로 하면 「값을 읽은 뒤·받는 곳을 달기 전」에 온
+            // 성공이 <b>빈 받는 곳으로 가서 사라진다.</b> 순서를 바꾸면 그 사이 성공은 뒤따르는
+            // 읽기가 줍고, 읽기와 쓰기가 알림과 같은 자물쇠 안이라 <b>낡은 값이 새 값을 덮는
+            // 순서도 없다</b> — 읽기가 FAILED 를 본 직후 성공 알림이 오면 그 알림은 자물쇠를
+            // 기다렸다가 뒤에 쓴다.
+            opening.onDonationSubscriptionChanged(state -> setDonationStatus(() -> state));
+            setDonationStatus(opening::donationSubscription);
             Instant since = disconnectedAt.getAndSet(null);
             if (since != null) {
                 metrics.recordOutage(since, Instant.now());
@@ -1134,7 +1143,7 @@ public class StreamSession {
                 if ("DONATION".equals(event.eventType()) || "SUBSCRIPTION".equals(event.eventType())) {
                     log.warn("chat.session.revoked_other stream={} eventType={}",
                             stream(), event.eventType());
-                    setDonationStatus(DonationSubscription.REFUSED);
+                    setDonationStatus(() -> DonationSubscription.REFUSED);
                     return;
                 }
                 log.warn("chat.session.revoked stream={}", stream());

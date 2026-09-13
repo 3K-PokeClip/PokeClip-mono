@@ -344,7 +344,23 @@ public class ChatSession implements AutoCloseable {
         // 것</b>이라 싸지 않다.
         abortIfStopping(abort, EstablishStage.SUBSCRIBE);
         if (System.nanoTime() < endAt) {
-            donation.set(client.subscribeDonation(sessionKey.get()));   // ⑥ DONATION
+            String key = sessionKey.get();
+            DonationSubscription got = client.subscribeDonation(key);   // ⑥ DONATION
+            // 🔴 <b>이 왕복 동안 세션 닫기가 지나갈 수 있다</b>(봇 codex). 그때 닫기는 그 순간
+            // 값이 NONE 이라 후원 반납을 <b>안 쏘고</b> 키까지 비우고 간다 — 그 뒤 여기서
+            // SUBSCRIBED 를 그냥 쓰면 닫힌 세션이 「구독 중」이 되고, 뒤늦은 반납(releaseLate)도
+            // 키가 없어 SKIPPED 라 <b>아무도 그 구독을 거두지 않는다.</b> 재시도 루프에서 고친 것과
+            // 같은 뿌리이고 이번엔 수립 경로다.
+            //
+            // <b>쓰고 나서 종료 표시를 본다.</b> 닫기는 종료 표시를 <b>먼저</b> 켜고 값을 나중에
+            // 비우므로, 표시가 켜져 있으면 되돌리기(got→NONE)를 CAS 로 시도한다. 닫기의
+            // getAndSet(NONE) 과 이 CAS 중 <b>하나만</b> 이긴다 — 닫기가 이기면 닫기가 SUBSCRIBED 를
+            // 보고 반납하고, 여기가 이기면 닫기는 NONE 을 보고 건너뛰어 여기가 반납한다.
+            // 반납이 두 번 나가거나 0번 나가는 순서가 없다.
+            donation.set(got);
+            if (stopping.get() && donation.compareAndSet(got, DonationSubscription.NONE)) {
+                releaseDonationQuietly(key, got);
+            }
         }
         // 🔴 <b>건너뛴 것도 재시도 대상이다</b>(봇 codex P1). 이 호출을 위 if 안에 두면
         // 예산이 다해 ⑥을 건너뛴 세션은 NONE 인 채로 남고 재시도가 안 붙는다 —
@@ -496,15 +512,23 @@ public class ChatSession implements AutoCloseable {
      * {@code FAILED} 는 「안 섰다」가 아니라 <b>「결과를 못 봤다」</b>다 — 종료가 이 스레드를
      * 인터럽트해 왕복이 깨져도 서버는 그 요청을 이미 처리했을 수 있다(실측).
      *
-     * <p><b>인터럽트 표시를 먼저 지운다.</b> 안 지우면 이 반납 요청도 같은 이유로 즉사한다.
-     * 지운 뒤 곧바로 돌아서므로 이 스레드가 그 표시를 다시 쓸 일은 없다.
+     * <p><b>인터럽트 표시를 잠시 지웠다가 되돌린다.</b> 안 지우면 이 반납 요청도 같은 이유로
+     * 즉사한다. <b>되돌리는 이유</b>: 수립 스레드도 여기를 부르게 됐는데(⑥), 그 스레드의
+     * 인터럽트는 종료가 보낸 신호라 삼키면 뒤따르는 단계가 멈추라는 말을 못 듣는다.
+     * 재시도 스레드는 곧바로 끝나므로 되돌려도 해가 없다.
      */
     private void releaseDonationQuietly(String key, DonationSubscription got) {
         if (got == DonationSubscription.REFUSED) {
             return;
         }
-        Thread.interrupted();
-        client.unsubscribeDonationQuietly(key);
+        boolean interrupted = Thread.interrupted();
+        try {
+            client.unsubscribeDonationQuietly(key);
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /**
