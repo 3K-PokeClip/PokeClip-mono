@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <title>PokeClip 독 미리보기 (개발 전용)</title>
+    <style>
+      body { margin: 0; padding: 16px; background: #0b0c10; color: #aaa; font: 12px system-ui; }
+      .grid { display: flex; flex-wrap: wrap; gap: 16px; }
+      figure { margin: 0; }
+      figcaption { margin-bottom: 6px; }
+      iframe { width: 300px; height: 560px; border: 1px solid #333; border-radius: 6px; background: #000; }
+    </style>
+  </head>
+  <body>
+    <!-- pnpm dev 후 http://127.0.0.1:5178/dev/preview.html — 목 브리지 시나리오를 독 폭(300px)으로 나란히 본다 -->
+    <div class="grid" id="grid"></div>
+    <script>
+      const scenarios = ['unpaired', 'idle', 'live', 'reconnecting', 'error', 'encoder', 'no_key', 'live&theme=light', 'unpaired&theme=light'];
+      const grid = document.getElementById('grid');
+      for (const s of scenarios) {
+        const fig = document.createElement('figure');
+        fig.innerHTML = `<figcaption>${s}</figcaption><iframe src="/?mock=${s}"></iframe>`;
+        grid.appendChild(fig);
+      }
+    </script>
+  </body>
+</html>
