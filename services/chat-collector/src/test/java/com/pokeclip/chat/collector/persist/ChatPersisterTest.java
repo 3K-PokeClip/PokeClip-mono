@@ -676,6 +676,43 @@ class ChatPersisterTest extends IntegrationTestSupport {
         assertThat(chat.nickname()).isEqualTo("겜돌이");
     }
 
+    /**
+     * 🔴 <b>문자열 칸 여섯 전부</b>(감사 L10). 본문·닉네임·역할만 지우고 <b>채널 번호 둘과 방송 번호를 안 지웠다</b> —
+     * 쌍둥이 {@code PersistableDonation}은 여섯 칸을 다 지우는데 채팅만 갈려 있었다(같은 뿌리 한 자리 더).
+     * 표가 {@code channel_id}·{@code sender_channel_id}를 {@code TEXT NOT NULL}, {@code stream_id}를
+     * {@code VARCHAR(128)}로 받으므로 NUL 한 글자면 그 채팅이 포이즌 격리로 버려진다(감사 실측 poisoned=1).
+     * 칸마다 단언을 따로 둔다 — 한 칸의 제거만 빠져도 여기서 빨간불이다.
+     */
+    @Test
+    void 채팅의_문자열_칸_여섯_전부_NUL을_생성_지점에서_지운다() {
+        PersistableChat chat = new PersistableChat("stre\0am", "c\0h", "sen\0der", "본\0문", 1L, 2L,
+                "닉\0", "ro\0le");
+
+        assertThat(chat.streamId()).as("stream_id").isEqualTo("stream");
+        assertThat(chat.channelId()).as("channel_id").isEqualTo("ch");
+        assertThat(chat.senderChannelId()).as("sender_channel_id").isEqualTo("sender");
+        assertThat(chat.content()).as("content").isEqualTo("본문");
+        assertThat(chat.nickname()).as("nickname").isEqualTo("닉");
+        assertThat(chat.userRole()).as("user_role").isEqualTo("role");
+    }
+
+    /** L10의 결과 — 식별자에 NUL이 있어도 격리가 아니라 정상 저장이다. */
+    @Test
+    void 채널_번호와_방송_번호에_NUL이_있어도_저장된다() {
+        ChatBuffer buffer = new ChatBuffer(100);
+        ChatPersister persister = new ChatPersister(jdbc, buffer);
+        buffer.offer(new PersistableChat("nul\0-stream", "c\0h-1", "s\0-1", "본문", 1723600000000L,
+                1723600000175L, null, null));
+
+        persister.flushOnce();
+
+        assertThat(persister.poisonedCount()).as("NUL이 격리로 갔다면 채팅이 버려진 것이다").isZero();
+        assertThat(persister.persistedCount()).isEqualTo(1);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM chat_messages WHERE stream_id = 'nul-stream' AND channel_id = 'ch-1'"
+                        + " AND sender_channel_id = 's-1'", Long.class)).isEqualTo(1L);
+    }
+
     /** 그 방송 번호로 남은 본문들. 짝이 맞는지 보려면 <b>양쪽</b>을 이렇게 뽑아야 한다. */
     private List<String> contentsOf(String streamId) {
         return jdbc.queryForList(

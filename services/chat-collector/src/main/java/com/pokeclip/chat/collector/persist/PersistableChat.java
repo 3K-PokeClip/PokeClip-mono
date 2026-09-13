@@ -36,5 +36,14 @@ public record PersistableChat(
         // 지금은 치지직이 이 값을 안 보내 실무 영향이 0이지만, 보내기 시작하는 순간
         // NUL 한 글자가 22021 을 만들고 그 배치가 포이즌 격리로 넘어가 <b>채팅이 버려진다.</b>
         userRole = userRole == null ? null : userRole.replace("\0", "");
+        // 🔴 <b>채널 번호 둘과 방송 번호도 지운다 — 이 부류가 다섯 번째다</b>(감사 L10). 쌍둥이
+        // PersistableDonation은 여섯 칸을 다 지우는데 여기는 셋만 지웠다. 표가 channel_id·sender_channel_id를
+        // TEXT NOT NULL, stream_id를 VARCHAR로 받아 NUL 한 글자면 22021로 그 채팅이 격리로 버려진다(poisoned=1 실측).
+        // 이 둘은 지문 UNIQUE 칸이기도 하다 — 해시·저장이 같은 값을 쓰도록 본문과 같은 자리(생성 지점)에서 지운다.
+        // null은 그대로 둔다(방송 번호 null은 「모른다」는 뜻이고, 채널 번호는 디코더가 늘 문자열을 준다).
+        // <b>칸을 더하는 사람은 표의 문자열 칸 전부를 세고 시작하라</b> — 이 생성자의 모든 문자열 칸이 여기서 지워진다.
+        streamId = streamId == null ? null : streamId.replace("\0", "");
+        channelId = channelId == null ? null : channelId.replace("\0", "");
+        senderChannelId = senderChannelId == null ? null : senderChannelId.replace("\0", "");
     }
 }
