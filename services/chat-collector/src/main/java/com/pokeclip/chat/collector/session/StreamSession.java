@@ -26,6 +26,8 @@ import com.pokeclip.chat.collector.persist.PersistableDonation;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.persist.PersistableChat;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
+import com.pokeclip.chat.collector.relay.RelayPayload;
+import com.pokeclip.chat.collector.relay.RelaySink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.client.RestClient;
@@ -233,6 +235,12 @@ public class StreamSession {
     private final DonationBuffer donationBuffer;
 
     /**
+     * clip 중계 입구(POK-234 PR-B). <b>넣기만 한다</b> — 보내는 것은 {@code chzzk-relay} 스레드다.
+     * 꺼져 있거나 옛 경로면 {@link RelaySink#NONE}. 번호·닫힘·null 방송 규칙은 전부 바구니 안에 있다(F7).
+     */
+    private final RelaySink relay;
+
+    /**
      * 받은 후원의 순번. <b>세션마다 따로다</b> — 표의 UNIQUE가 방송 번호를 함께 보므로
      * 세션이 갈리면 순번이 겹쳐도 부딪히지 않는다. 프로세스가 재시작해 1부터 다시
      * 시작해도 {@code received_at}이 달라 옛 행과 안 부딪힌다.
@@ -253,11 +261,11 @@ public class StreamSession {
                          ExecutorService reconnector, CountDownLatch stopSignal,
                          AtomicBoolean intakeClosed, AtomicInteger releasesInFlight,
                          AtomicLong lastSessionNo, DonationSubscriptions donations,
-                         DonationBuffer donationBuffer,
+                         DonationBuffer donationBuffer, RelaySink relay,
                          Consumer<StopReason> onPermanentStop) {
         this(key, accessToken, properties, status, metrics, policy, restClient,
                 buffer, persister, archive, reconnector, stopSignal, intakeClosed,
-                releasesInFlight, lastSessionNo, donations, donationBuffer, null, null, onPermanentStop);
+                releasesInFlight, lastSessionNo, donations, donationBuffer, relay, null, null, onPermanentStop);
     }
 
     /**
@@ -272,7 +280,7 @@ public class StreamSession {
                          ExecutorService reconnector, CountDownLatch stopSignal,
                          AtomicBoolean intakeClosed, AtomicInteger releasesInFlight,
                          AtomicLong lastSessionNo, DonationSubscriptions donations,
-                         DonationBuffer donationBuffer,
+                         DonationBuffer donationBuffer, RelaySink relay,
                          Function<ChzzkSessionClient, ChatSession> sessionFactory,
                          LongFunction<HeartbeatListener> heartbeatListenerFactory,
                          Consumer<StopReason> onPermanentStop) {
@@ -293,6 +301,7 @@ public class StreamSession {
         this.lastSessionNo = lastSessionNo;
         this.donations = donations;
         this.donationBuffer = donationBuffer;
+        this.relay = relay;
         // 기본 팩토리가 설정의 재시도 주기를 실어 준다 — 안 실으면 ChatSession 의
         // 기본값(1분)이 쓰여 검사가 그 갈래를 못 잰다.
         this.sessionFactory = sessionFactory != null ? sessionFactory
@@ -1084,12 +1093,20 @@ public class StreamSession {
             // 번호를 <b>받는 이 시점에</b> 읽는다. 어딘가에 붙들어 두면 retarget으로
             // 갈아낀 뒤의 채팅이 끝난 방송 번호로 남는다 — 소켓은 그대로인 채 새 방송의
             // 채팅이 계속 들어오기 때문이다(StreamIdStampingTest).
-            buffer.offer(new PersistableChat(key.streamId(), message.channelId(),
+            // 🔴 <b>한 번만 읽어 저장과 중계에 같이 쓴다</b>(F7). key는 volatile이라 두 번 읽으면
+            // 그 사이 갈아끼움이 끼어 저장은 옛 방송, 중계는 새 방송으로 갈린다.
+            String streamId = key.streamId();
+            buffer.offer(new PersistableChat(streamId, message.channelId(),
                     message.senderChannelId(), message.content(),
                     message.messageTimeMillis(), receivedAt,
                     message.nickname(), message.userRole()));
             // 원본도 넣기만 한다 — 인코드·창·업로드는 전부 아카이브 스레드 몫이다.
             archive.offer(new ArchivableChat(message.channelId(), receivedAt, message.raw()));
+            // 중계도 넣기만 한다. 🔴 시각은 <b>표에 저장하는 값</b>(message_time)이다 — 수신 시각이 아니다.
+            // 프론트가 창구 결과와 겹침을 (kind, time, senderChannelId, text)로 거르고 메울 때
+            // from = time − appliedOffsetMs로 부르므로, 축이 갈리면 두 번 뜨거나 구간을 건너뛴다(F3).
+            relay.offer(streamId, new RelayPayload.Chat(Instant.ofEpochMilli(message.messageTimeMillis()),
+                    message.nickname(), message.senderChannelId(), message.userRole(), message.content()));
             return;
         }
 
@@ -1103,7 +1120,9 @@ public class StreamSession {
             // chat_donations.stream_id는 NOT NULL이라, 담으면 INSERT가 영구히 실패하면서
             // 되돌리기를 무한 반복하고 바구니가 차서 <b>멀쩡한 후원까지 밀려난다</b>.
             // 채팅은 그 칸이 NULL 허용이라 「모른다」로 남길 수 있지만 여기는 그 길이 없다.
-            if (key.streamId() == null) {
+            // 한 번만 읽는다 — 채팅 갈래와 같은 이유(F7).
+            String streamId = key.streamId();
+            if (streamId == null) {
                 return;
             }
             long receivedAt = System.currentTimeMillis();
@@ -1111,10 +1130,14 @@ public class StreamSession {
             // 🔴 순번을 여기서 매긴다 — 재시도 때 같은 객체가 다시 들어가므로 그 값이 유지되고,
             // 그래서 재시도 중복만 접히고 정당한 연속 후원은 안 접힌다(봇 codex P2).
             // 시각만으로는 못 가른다: 연속 수신의 99%가 같은 밀리초다(실측).
-            donationBuffer.offer(new PersistableDonation(key.streamId(), donationEvent.channelId(),
+            donationBuffer.offer(new PersistableDonation(streamId, donationEvent.channelId(),
                     donationEvent.donatorChannelId(), donationEvent.donatorNickname(),
                     donationEvent.donationType(), donationEvent.payAmount(),
                     donationEvent.donationText(), receivedAt, donationSeq.incrementAndGet()));
+            // 중계 시각은 표와 같은 received_at이다 — 치지직이 후원에 시각을 안 준다(timeBasis=received).
+            relay.offer(streamId, new RelayPayload.Donation(Instant.ofEpochMilli(receivedAt),
+                    donationEvent.donatorNickname(), donationEvent.donatorChannelId(),
+                    donationEvent.payAmount(), donationEvent.donationType(), donationEvent.donationText()));
             // 🔴 <b>아카이브에 넣지 않는다</b>(계획 검증 F3). archived는 「퍼간 건수」를 그대로
             // 세는데 received는 채팅만 센다 — 후원을 넣으면 판정·요약 줄의 검산 등식
             // received = archived + archiveBufferDropped 가 후원 수만큼 영구히 벌어져

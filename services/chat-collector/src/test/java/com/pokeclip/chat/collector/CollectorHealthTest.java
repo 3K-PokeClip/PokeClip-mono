@@ -17,6 +17,9 @@ import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.DonationBuffer;
 import com.pokeclip.chat.collector.persist.PersistableDonation;
+import com.pokeclip.chat.collector.relay.RelayBuffer;
+import com.pokeclip.chat.collector.relay.RelayCounters;
+import com.pokeclip.chat.collector.relay.RelayPayload;
 import com.pokeclip.chat.collector.session.SessionKey;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
@@ -370,6 +373,35 @@ class CollectorHealthTest extends IntegrationTestSupport {
         assertThat(health().getDetails())
                 .as("사본을 보고 있으면 무엇을 넣어도 0이다")
                 .containsEntry("donationBufferDropped", 1L);
+    }
+
+    /**
+     * 감사 L18 — {@code relay=dropping}은 clip 쪽 버림만이 아니라 <b>중계 바구니 넘침</b>으로도 켜진다. 그 갈래를 재는
+     * 검사가 없어 손실 합에서 {@code bufferDropped}를 빼도 초록이었다(감사 주입 I6). clip이 멀쩡해도 수신이 중계보다
+     * 빨라 바구니가 넘치면 화면은 빈틈을 겪는다 — 운영자가 그것을 못 보면 clip만 의심한다.
+     */
+    @Test
+    void 중계_바구니_넘침만으로도_relay가_dropping이다() {
+        given();
+        RelayBuffer tiny = new RelayBuffer(1);
+        RelayCounters counters = new RelayCounters() {
+            @Override public long relayOffered() { return tiny.offeredCount(); }
+            @Override public long relayed() { return 0; }
+            @Override public long relayDropped() { return 0; }
+            @Override public long bufferDropped() { return tiny.droppedCount(); }
+        };
+        CollectorHealth health = new CollectorHealth(legacy, registry, intake, reattach, provider(processor),
+                Instant::now, donationBuffer, counters);
+        assertThat(health.health().getDetails()).containsEntry("relay", "ok");
+
+        tiny.offer("s-relay", new RelayPayload.Chat(Instant.EPOCH, "n", "s", null, "keep"));
+        tiny.offer("s-relay", new RelayPayload.Chat(Instant.EPOCH, "n", "s", null, "dropped"));
+        assertThat(counters.relayDropped()).as("양성 대조 — clip 쪽 버림은 0이다, 켜진다면 바구니 갈래 때문이다").isZero();
+        assertThat(counters.bufferDropped()).isEqualTo(1);
+
+        assertThat(health.health().getDetails())
+                .containsEntry("relay", "dropping")
+                .containsEntry("relayBufferDropped", 1L);
     }
 
     private static PersistableDonation donation(String text) {

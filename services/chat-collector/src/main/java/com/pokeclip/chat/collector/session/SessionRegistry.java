@@ -12,6 +12,7 @@ import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.DonationBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
+import com.pokeclip.chat.collector.relay.RelaySink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -209,6 +210,8 @@ public class SessionRegistry {
     private final ChatArchive archive;
     private final DonationSubscriptions donations;
     private final DonationBuffer donationBuffer;
+    /** clip 중계 입구. 꺼져 있으면 {@link RelaySink#NONE}(RelayConfiguration). 세션에 넘기고 닫힐 때 번호를 잊힌다. */
+    private final RelaySink relay;
 
     /**
      * 후원 바구니가 버린 수. <b>판정 줄이 이 값을 싣는다</b>(봇 codex).
@@ -226,10 +229,18 @@ public class SessionRegistry {
                 new DonationSubscriptions(), new DonationBuffer());
     }
 
-    @Autowired
+    /** 중계 없이 쓰는 검사용 — 시험 여러 곳이 이 모양을 부른다. 새 인자를 거기까지 퍼뜨리지 않는다. */
     public SessionRegistry(ChzzkProperties properties, RestClient.Builder restClientBuilder,
                            ChatBuffer buffer, ChatPersister persister, ChatArchive archive,
                            DonationSubscriptions donations, DonationBuffer donationBuffer) {
+        this(properties, restClientBuilder, buffer, persister, archive, donations, donationBuffer, RelaySink.NONE);
+    }
+
+    @Autowired
+    public SessionRegistry(ChzzkProperties properties, RestClient.Builder restClientBuilder,
+                           ChatBuffer buffer, ChatPersister persister, ChatArchive archive,
+                           DonationSubscriptions donations, DonationBuffer donationBuffer,
+                           RelaySink relay) {
         this.properties = properties;
         // 빌더는 프로토타입 빈이다. 한 번만 build()해서 세션 전부가 나눠 쓴다.
         // <b>{@code RestClient.create()}로 만들지 마라</b> — 자동 설정을 우회해
@@ -240,6 +251,7 @@ public class SessionRegistry {
         this.archive = archive;
         this.donations = donations;
         this.donationBuffer = donationBuffer;
+        this.relay = relay;
     }
 
     /**
@@ -300,7 +312,7 @@ public class SessionRegistry {
                 new ReconnectPolicy(properties.reconnectFirstDelay(), properties.reconnectMaxDelay()),
                 restClient, buffer, persister, archive,
                 reconnectors, stopSignal, intakeClosed, releasesInFlight, lastSessionNo,
-                donations, donationBuffer,
+                donations, donationBuffer, relay,
                 reason -> stopOne(streamerId, self.get(), reason));
         self.set(session);
         Entry entry = new Entry(session, status, metrics, stopSignal);
@@ -466,6 +478,9 @@ public class SessionRegistry {
         // 지표는 새 경계에서 0부터 다시 세므로, 안 옮기면 그만큼 총량이 줄어
         // 판정 줄이 유실로 읽는다.
         closedReceived.addAndGet(seated.session().retarget(key));
+        // 끝난 방송의 중계 번호를 잊는다(F6). 갈아낀 뒤라 그 번호로 새로 들어올 프레임이 없다 —
+        // 옛 번호를 이미 읽고 멈춰 있던 수신 스레드 한 건만 되살릴 수 있고 방송당 long 하나라 둔다.
+        relay.forget(current.streamId());
         // <b>바꾼 뒤 자리를 다시 본다.</b> 위 조회와 여기 사이에 그 세션이 영구 정지로
         // 자리를 잃었을 수 있고, 그러면 방금 이름을 바꾼 것은 <b>이미 닫힌 세션</b>이다.
         // 그때 true를 돌려주면 편지가 지워지는데 등록부에는 이 방송이 없다 — 영구 유실이다
@@ -817,6 +832,9 @@ public class SessionRegistry {
         try {
             entry.session().close();
         } finally {
+            // 🔴 <b>닫은 뒤에</b> 잊는다(F6). 위 후원 상태처럼 닫기 전에 지우면, 닫히는 사이 온 프레임이
+            // 번호 카운터를 1부터 되살려 영영 남는다.
+            relay.forget(streamId);
             closedReceived.addAndGet(entry.metrics().totalReceived() - detached);
             log.info("chat.registry.closed stream={} active={}", streamId, sessions.size());
         }

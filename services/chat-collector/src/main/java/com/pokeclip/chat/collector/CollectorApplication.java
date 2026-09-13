@@ -1,6 +1,7 @@
 package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.archive.ChatArchive;
+import com.pokeclip.chat.collector.relay.RelayLifecycle;
 import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
 import com.pokeclip.chat.collector.broadcast.EndedStreamSweeper;
 import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
@@ -82,9 +83,10 @@ public class CollectorApplication {
                                     RestClient.Builder restClientBuilder,
                                     ChatBuffer buffer, ChatPersister persister,
                                     ChatArchive archive, DonationPersister donationPersister,
-                                    SessionRegistry registry) {
+                                    SessionRegistry registry, RelayLifecycle relay) {
+        // 중계 닫기 손잡이는 켜짐/꺼짐 둘 다 빈이 있다(RelayConfiguration) — 꺼지면 NONE.
         return new CollectorRunner(properties, status, restClientBuilder, buffer, persister, archive,
-                donationPersister, registry, () -> System.exit(1));
+                donationPersister, registry, () -> System.exit(1), relay);
     }
 
     /**

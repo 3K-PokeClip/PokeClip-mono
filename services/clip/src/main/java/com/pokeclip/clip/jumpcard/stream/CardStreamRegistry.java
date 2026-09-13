@@ -14,7 +14,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -23,6 +25,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -39,9 +42,154 @@ public class CardStreamRegistry implements EndedListener {
     private static final Logger log = LoggerFactory.getLogger(CardStreamRegistry.class);
 
     /** 연결 하나. {@code seq}가 스트라이프를 정해 같은 연결의 이벤트 순서가 지켜진다. */
-    private record Conn(long seq, String streamId, String userId, SseEmitter emitter) {
+    private record Conn(long seq, String streamId, String userId, SseEmitter emitter, WriteGate gate) {
         int stripe() {
             return (int) (seq % Integer.MAX_VALUE);
+        }
+    }
+
+    /**
+     * 🔴 <b>쓰기가 이만큼 넘게 안 끝난 연결은 막힌 것으로 보고 건너뛴다</b>(POK-234 main 결정).
+     *
+     * <p><b>왜 필요한가 — 채팅 줄을 갈라도 카드 줄이 막혔다.</b> 줄(스레드)은 갈랐지만 <b>소켓과 emitter 쓰기 자물쇠는
+     * 연결당 하나</b>다. 안 읽는 구독자 A에게 채팅이 TCP 버퍼를 채우면 채팅 스레드가 A의 자물쇠를 쥔 채 멈추고,
+     * 카드 발행 때 A 몫 카드 job이 <b>카드 스레드</b>에서 그 자물쇠를 기다린다. 같은 카드 스트라이프의 멀쩡한 B는
+     * 그 뒤에 선다 — 실측 <b>65,403 · 65,087 · 65,089 · 65,020ms</b>(2026-09-13, 스트라이프 1·큐 5, 하트비트를 1시간으로
+     * 없애도 같았다). 그 60여 초는 톰캣 커넥터 {@code connectionTimeout}(기본 60초 —
+     * {@code AbstractHttp11Protocol}이 {@code Constants.DEFAULT_CONNECTION_TIMEOUT}으로 두고
+     * {@code NioEndpoint.setSocketOptions}가 그 값을 소켓 write timeout으로 건다. 우리는
+     * {@code server.tomcat.connection-timeout}을 안 준다)이 막힌 쓰기를 {@code IOException}으로 풀 때까지다.
+     * 나머지 약 5초는 채팅이 버퍼를 채운 시간과 톰캣 감시 주기로 보이는데 <b>항을 나눠 재지 않았다</b>.
+     *
+     * <p><b>왜 1초인가.</b> 정상 쓰기는 ms 미만이다 — 같은 날 실측으로 연결 100·초당 50건×5초(표본 25,000)에서
+     * 보낸 뒤 받기까지 p50 7ms · p95 16ms · 최대 27ms였고 그것도 HTTP 왕복을 포함한 값이다. 1초면 수십 배 여유다.
+     * 설정값으로 빼지 않는다 — 운영자가 조정할 이유가 생긴 적이 없다.
+     *
+     * <p>🔴 <b>「쓰는 중이면 건너뜀」만으로는 안 된다.</b> 채팅이 초당 수백 건이면 <b>멀쩡한 연결</b>에서도 카드 job 순간에
+     * 채팅 쓰기가 겹친다 — 그 카드를 잃는다({@code ChatStreamEndToEndTest.멀쩡한_연결은…}이 잰다).
+     */
+    static final Duration STUCK_THRESHOLD = Duration.ofSeconds(1);
+
+    /**
+     * 연결 하나의 쓰기 문. <b>emitter에 쓰는 길은 {@link #send} 하나뿐이다</b>({@code SseSendSiteTest}가 소스에서 센다).
+     *
+     * <p>🔴 <b>main 결정에서 한 가지를 더했다 — 우리 자물쇠를 {@link #STUCK_THRESHOLD}까지만 기다린다.</b>
+     * 「1초 넘게 쓰는 중이면 건너뜀」만 두면 <b>막히기 시작하고 1초가 안 된 사이</b>에 온 job(카드·ping)이 판정을 통과해
+     * emitter 자물쇠에서 60초를 기다리고, 같은 스트라이프가 그대로 막힌다. 안 읽는 연결에 채팅이 막 막힌 순간 카드가
+     * 발행되는 것이 바로 그 경우다 — 우리 자물쇠를 빼고 1초 판정만 남기는 주입에서
+     * {@code ChatStreamBackpressureTest.채팅이_큐를_채워도_같은_스트라이프_카드는_간다}가 3회 중 3회 빨간불이었다(건너뜀 0). 그래서 쓰기 전에 우리 자물쇠를
+     * 먼저 잡고, 1초 안에 못 잡으면 건너뛴다. emitter 자물쇠를 직접 기다리지 않는다.
+     *
+     * <p><b>공정 자물쇠로 둔다.</b> 채팅 스레드는 이벤트마다 풀고 곧바로 다시 잡는다. 비공정이면 그 틈을 채팅이 계속
+     * 새치기해 카드 스레드가 1초를 굶고 <b>멀쩡한 연결에서 카드를 건너뛸 수 있다</b>. 🔴 <b>재현하지 못했다</b> — 비공정으로
+     * 바꾸는 주입이 폭주 시험(초당 1만 건대)에서 초록이었다. 채팅 job 사이에 HTTP 왕복만큼 틈이 있어 새치기가 1초를
+     * 못 이어 간 것으로 보인다. 공정의 대가는 자물쇠를 넘겨줄 때의 깨우기 비용뿐이라 그대로 둔다. 시한 있는
+     * {@code tryLock}은 공정성을 지키고 시한 없는 {@code tryLock()}은 공정 자물쇠에서도 새치기한다(JDK 문서).
+     *
+     * <p>🔴 <b>건너뜀이 한 번이라도 난 연결은 닫는다</b>(감사 라운드 2 M1). 건너뛰기만 하면 <b>잠깐 막혔다가 다시 읽는
+     * 연결</b>이 막힌 사이의 카드·종료 알림을 영영 못 받는다 — 연결이 안 끊기니 재연결이 없고, 그래서 「카드 목록 문이
+     * 메운다」·「스냅샷이 ended를 준다」가 발동하지 않는다. 카드 id는 전역 순번이라 화면에 빈틈 신호도 없다(재현 3/3,
+     * 문 없는 대조에서는 늦게라도 갔다). 그래서 문을 쥔 쓰기가 돌아오는 {@code finally} — <b>우리 문은 아직 쥐고 있고
+     * emitter 자물쇠는 방금 풀린 자리</b> — 에서 표시를 보고 명부에서 빼고({@code dropRejectedEnded}와 같은 계약)
+     * {@code complete()}로 닫는다. EventSource가 다시 붙으면 목록 문·ended 스냅샷·채팅 창구가 각각 메운다.
+     *
+     * <p><b>표시가 늦게 서는 창</b> — 건너뛴 쪽이 표시를 세우기 직전에 쓰기가 돌아와 {@code finally}가 표시를 못 보는
+     * 순서가 있다. 그래서 건너뛴 쪽도 표시를 세운 뒤 문을 <b>기다리지 않고</b>({@code tryLock()}) 잡아 보고, 잡히면
+     * 스스로 닫는다. 그마저 엇갈리면(그 순간 다른 쓰기가 문을 쥐었다) 그 쓰기의 {@code finally}가 닫는다 —
+     * 늦어도 다음 쓰기(ping 주기 이내)다.
+     *
+     * <p><b>쓰기가 실패한 연결(진짜 죽은 연결)</b>은 {@code Job}의 {@code completeWithError}와 컨테이너 완료 콜백이
+     * 명부에서 뺀다 — 막힌 채 클라이언트가 떠나는 시험에서 이 문의 닫기를 <b>꺼도</b> 약 1초 안에 빠졌다(주입 초록,
+     * {@code ChatStreamBackpressureTest.막힌_채로_끊긴_연결은_명부에서_빠진다}). 그래서 그 갈래에 따로 손을 대지 않는다.
+     * 닫힌 문은 뒤따르는 job을 셈 없이 돌려보낸다.
+     *
+     * <p><b>남는 한계 둘</b>(README clip 절에도 적는다) —
+     * ① A의 버퍼가 <b>이미 찼는데</b> 채팅이 잠잠한 틈에 카드·ping이 먼저 자물쇠를 잡고 쓰기를 시작하면 그 job 자체가
+     * 소켓에서 막힌다. 건너뛸 판정은 쓰기 <b>전</b>에만 하므로 같은 카드 스트라이프가 write timeout(약 60초)만큼 늦는다.
+     * ② 판정을 통과한 직후에 막히기 시작하는 쓰기도 같다. 둘 다 「첫 번째로 막힌 쓰기」는 못 건너뛴다는 한 가지다.
+     */
+    static final class WriteGate {
+
+        enum Result { SENT, SKIPPED, CLOSED }
+
+        private final ReentrantLock lock = new ReentrantLock(true);
+        private final SseEmitter emitter;
+        /** 명부에서 뺀다. 컨테이너 완료 콜백을 기다리지 않는다. */
+        private final Runnable evict;
+
+        /** 자물쇠를 쥔 쪽이 {@code send} 바로 앞에서 세우고 끝나면 0. 0은 「쓰는 중 아님」이다. */
+        private volatile long writeStartedNanos;
+        /** 이 연결에서 건너뜀이 한 번이라도 났다. */
+        private volatile boolean skipped;
+        /** 닫았다. 문 자물쇠 안에서만 켠다. */
+        private volatile boolean closed;
+
+        WriteGate(SseEmitter emitter, Runnable evict) {
+            this.emitter = emitter;
+            this.evict = evict;
+        }
+
+        /**
+         * @param completeAfter 보낸 뒤 <b>문을 쥔 채</b> {@code complete()}까지 한다(종료 알림). 문 밖에서 부르면 그 사이
+         *                      채팅이 막힐 쓰기를 시작해 {@code complete()}가 emitter 자물쇠에서 약 60초를 기다린다(감사 L13)
+         */
+        Result send(SseEmitter.SseEventBuilder event, boolean completeAfter) throws Exception {
+            if (closed) {
+                return Result.CLOSED;
+            }
+            long started = writeStartedNanos;
+            boolean stuck = started != 0 && System.nanoTime() - started > STUCK_THRESHOLD.toNanos();
+            // 이미 1초 넘게 막혔으면 기다리지도 않는다(막힌 연결 몫 job이 쌓여도 줄이 안 밀린다)
+            if (stuck || !lock.tryLock(STUCK_THRESHOLD.toNanos(), TimeUnit.NANOSECONDS)) {
+                skipped = true;
+                if (lock.tryLock()) {   // 쓰기가 방금 돌아왔다면 그쪽 finally가 표시를 못 봤을 수 있다
+                    try {
+                        closeIfNeeded(true);
+                    } finally {
+                        lock.unlock();
+                    }
+                }
+                return Result.SKIPPED;   // 이 이벤트는 못 갔다 — 스스로 닫았어도 건너뜀으로 센다
+            }
+            boolean writable = false;
+            try {
+                if (closed) {
+                    return Result.CLOSED;
+                }
+                writeStartedNanos = System.nanoTime() | 1;   // 0은 「쓰는 중 아님」 표식이라 피한다
+                emitter.send(event);
+                writable = true;
+                if (completeAfter) {
+                    writable = false;   // 우리가 닫았다 — 아래에서 또 닫지 않는다
+                    closed = true;
+                    emitter.complete();
+                }
+                return Result.SENT;
+            } finally {
+                writeStartedNanos = 0;
+                try {
+                    closeIfNeeded(writable);
+                } finally {
+                    lock.unlock();
+                }
+            }
+        }
+
+        /** 문 자물쇠를 쥔 채 부른다. */
+        private void closeIfNeeded(boolean writable) {
+            if (!skipped || closed) {
+                return;
+            }
+            closed = true;
+            evict.run();
+            if (writable) {
+                try {
+                    emitter.complete();
+                } catch (RuntimeException alreadyDone) {
+                    // 앞 쓰기가 실패해 Job이 이미 completeWithError로 닫았다 — 명부에서 뺀 것으로 충분하다
+                }
+            }
+            log.info("jumpcard.stream.stuck_closed detail=건너뜀이 난 연결을 닫았다. 재연결이 목록 문으로 메운다");
         }
     }
 
@@ -106,6 +254,39 @@ public class CardStreamRegistry implements EndedListener {
             });
 
     private final CardStreamExecutor executor;
+
+    /**
+     * 🔴 <b>채팅 전용 전송 줄</b>(POK-234 main 결정 F4). 카드와 같은 큐를 쓰면 안 읽는 구독자 하나가 자기 스트라이프를
+     * 막을 때 채팅(초당 수십 건)이 큐를 금방 채워, <b>같은 스트라이프의 멀쩡한 연결이 카드를 잃는다</b> — 카드가
+     * 제품의 핵심이다. 줄을 갈라 막힌 연결의 피해를 「그 스트라이프의 채팅」으로 가둔다.
+     *
+     * <p>🔴 <b>줄을 가르는 것만으로는 카드 줄이 안 지켜졌다</b>(태스크 19 실측). 소켓과 emitter 쓰기 자물쇠는 연결당 하나라,
+     * 채팅이 A의 쓰기를 막으면 A 몫 카드 job이 카드 스레드에서 그 자물쇠를 기다리고 같은 카드 스트라이프의 B가 약 65초 늦었다.
+     * 그것을 막는 것은 줄 분리가 아니라 {@link WriteGate}다 — 막힌 연결의 쓰기를 건너뛴다.
+     *
+     * <p><b>남는 한계</b>: 안 읽는 구독자와 같은 <b>채팅</b> 스트라이프의 연결은 채팅을 잃을 수 있다.
+     * 카드 스트라이프는 {@link WriteGate}의 한계 둘(첫 번째로 막힌 쓰기가 카드·ping 자신인 경우)만큼 늦을 수 있다.
+     * 연결마다 줄을 두는 안(A)은 {@link CardStreamExecutor} 주석이 「상한 500에 스레드 500」으로 이미 기각했다.
+     *
+     * <p>스트라이프 수·큐 크기는 카드와 같은 설정값이다. 스레드는 카드 4 + 채팅 4 = 8.
+     */
+    private final CardStreamExecutor chatExecutor;
+
+    /** 채팅 큐 거부로 연결에 못 넣은 이벤트 수(누적). 연결마다 센다 — 두 연결에서 거부되면 두 번이다. */
+    private final AtomicLong chatDropped = new AtomicLong();
+
+    /** 채팅 거부 경고를 모아 찍는 간격. 거부마다 찍으면 막힌 연결 하나가 초당 수십 줄을 만든다. */
+    private static final Duration CHAT_DROP_LOG_EVERY = Duration.ofSeconds(10);
+    private final AtomicLong nextChatDropLogNanos = new AtomicLong(Long.MIN_VALUE);
+    private final AtomicLong chatDroppedSinceLog = new AtomicLong();
+
+    /** 막힌 연결이라 건너뛴 쓰기 수(누적) — 카드·ping·채팅·종료 알림 모두. 연결마다 센다. */
+    private final AtomicLong stuckSkipped = new AtomicLong();
+    private final AtomicLong nextStuckSkipLogNanos = new AtomicLong(Long.MIN_VALUE);
+    private final AtomicLong stuckSkippedSinceLog = new AtomicLong();
+
+    /** B에서 아는 종류. 모르는 것은 묶음째 거부하지 않고 건너뛰고 센다(F8) — PR-C가 {@code broadcast-info}를 더한다. */
+    static final java.util.Set<String> CHAT_KINDS = java.util.Set.of("chat", "donation");
     private final StreamProperties properties;
     private final ObjectMapper mapper;
     private final Function<Duration, SseEmitter> emitterFactory;
@@ -125,6 +306,14 @@ public class CardStreamRegistry implements EndedListener {
 
     CardStreamRegistry(CardStreamExecutor executor, StreamProperties properties, ObjectMapper mapper,
                        Function<Duration, SseEmitter> emitterFactory) {
+        this(executor, new CardStreamExecutor("chat-stream-", properties.stripes(), properties.queueCapacity(), false),
+                properties, mapper, emitterFactory);
+    }
+
+    /** 채팅 줄을 검사가 작게(스트라이프 1·큐 1) 넣는 모양. 운영은 위 생성자가 카드와 같은 설정값으로 만든다. */
+    CardStreamRegistry(CardStreamExecutor executor, CardStreamExecutor chatExecutor, StreamProperties properties,
+                       ObjectMapper mapper, Function<Duration, SseEmitter> emitterFactory) {
+        this.chatExecutor = chatExecutor;
         this.executor = executor;
         this.properties = properties;
         this.mapper = mapper;
@@ -176,7 +365,8 @@ public class CardStreamRegistry implements EndedListener {
         checkLimits(streamId, userId);
 
         SseEmitter emitter = emitterFactory.apply(timeout);
-        conns.put(emitter, new Conn(seq.getAndIncrement(), streamId, userId, emitter));
+        conns.put(emitter, new Conn(seq.getAndIncrement(), streamId, userId, emitter,
+                new WriteGate(emitter, () -> conns.remove(emitter))));
 
         Runnable remove = () -> conns.remove(emitter);
         emitter.onCompletion(remove);
@@ -303,10 +493,9 @@ public class CardStreamRegistry implements EndedListener {
         // (broadcastEnded와 달리 클라이언트가 아직 아무것도 못 받은 상태다).
         executor.submit(conn.stripe(), emitter, () -> {
             // 주석이 첫 쓰기여야 헤더가 바로 나간다(위 문단).
-            emitter.send(SseEmitter.event().comment("ok"));
+            send(conn, SseEmitter.event().comment("ok"));
             if (ended) {
-                emitter.send(endedEvent());
-                emitter.complete();
+                send(conn, endedEvent(), true);
             }
         });
     }
@@ -336,7 +525,8 @@ public class CardStreamRegistry implements EndedListener {
             // 🔴 <b>유실 크기는 안 쟀다</b> — 큐(운영 1000)를 채워 실제로 몇 장이 사라지는지
             // 재현한 적이 없다. 「버려도 된다」는 처방 비교의 결론이지 유실 확률의 판정이 아니다.
             if (conn.streamId().equals(card.streamId())) {
-                executor.submit(conn.stripe(), conn.emitter(), () -> conn.emitter().send(cardEvent(card)));
+                // 막힌 연결이면 건너뛰고 그 연결을 닫는다({@link WriteGate}) — 재연결한 화면이 카드 목록 문으로 메운다.
+                executor.submit(conn.stripe(), conn.emitter(), () -> send(conn, cardEvent(card)));
             }
         }
     }
@@ -403,8 +593,9 @@ public class CardStreamRegistry implements EndedListener {
         for (Conn conn : conns.values()) {
             if (conn.streamId().equals(streamId)) {
                 boolean queued = executor.submit(conn.stripe(), conn.emitter(), () -> {
-                    conn.emitter().send(endedEvent());
-                    conn.emitter().complete();
+                    // 보내고 닫기를 문 안에서 한다. 건너뛰었으면 그 연결은 WriteGate가 막힌 쓰기가 돌아오는
+                    // 자리에서 닫고 명부에서 뺀다 — 재연결이 스냅샷으로 ended를 받는다.
+                    send(conn, endedEvent(), true);
                 });
                 if (!queued) {
                     dropRejectedEnded(conn, streamId);
@@ -458,7 +649,7 @@ public class CardStreamRegistry implements EndedListener {
             for (Conn conn : conns.values()) {
                 // 반환값을 안 본다 — 하트비트는 다음 주기가 다시 온다.
                 executor.submit(conn.stripe(), conn.emitter(),
-                        () -> conn.emitter().send(SseEmitter.event().comment("ping")));
+                        () -> send(conn, SseEmitter.event().comment("ping")));
             }
             // 하트비트가 이 클래스의 <b>유일한 주기 훅</b>이라 순번 표 청소를 여기 얹는다.
             // 🔴 <b>전송보다 뒤다.</b> 앞에 두면 이 메서드가 <b>자물쇠를 기다리게</b> 되어
@@ -535,8 +726,142 @@ public class CardStreamRegistry implements EndedListener {
                 .data(mapper.writeValueAsString(card), MediaType.APPLICATION_JSON);
     }
 
+    /**
+     * 수집기가 민 채팅·후원 묶음을 그 방송 연결에 뿌린다(POK-234 PR-B).
+     *
+     * <p>🔴 <b>요청 하나 = 연결당 job 하나</b>(F4). 이벤트마다 job을 넣으면 한 요청(최대 500건)이 큐를 통째로 먹는다.
+     * JSON은 <b>이벤트당 한 번</b> 만들어 연결들이 나눠 쓴다(F16) — SSE 빌더는 {@code build()}마다 줄바꿈을
+     * 덧붙이는 상태가 있어 공유하지 않고, 문자열만 공유한다.
+     *
+     * <p>{@code publish}와 같은 자물쇠 안에서만 {@code conns}를 훑는다. {@code isStale}·{@code lastPublishedSeq}는
+     * 카드 전용이라 안 건드린다 — 채팅은 워터마크가 없다(순서는 스트라이프가 지키고 빈틈은 화면이 {@code seq}로 본다).
+     *
+     * <p>거부되면 그 연결에 넣으려던 이벤트 수만큼 {@link #chatDroppedCount()}에 더한다. 채팅은 「사건의 나열」이라
+     * 버린 수가 곧 그 연결의 유실 수다. 메우는 것은 수집기 범위 창구다.
+     */
+    public synchronized ChatPublishResult publishChatEvents(String streamId, List<ChatEvent> events) {
+        List<String[]> prepared = new ArrayList<>(events.size());
+        int unknown = 0;
+        for (ChatEvent event : events) {
+            if (!CHAT_KINDS.contains(event.kind())) {
+                unknown++;
+                continue;
+            }
+            prepared.add(new String[]{Long.toString(event.seq()), event.kind(), mapper.writeValueAsString(event.raw())});
+        }
+        if (!prepared.isEmpty()) {
+            for (Conn conn : conns.values()) {
+                if (!conn.streamId().equals(streamId)) {
+                    continue;
+                }
+                boolean queued = chatExecutor.submit(conn.stripe(), conn.emitter(), () -> {
+                    // 이벤트마다 문을 지난다 — job 하나(최대 500건)를 통째로 한 번 잡으면 멀쩡한 연결에서도
+                    // 쓰기가 1초를 넘겨 그 사이 카드 job이 「막혔다」로 건너뛴다.
+                    for (String[] e : prepared) {
+                        send(conn, SseEmitter.event().id(e[0]).name(e[1]).data(e[2], MediaType.APPLICATION_JSON));
+                    }
+                });
+                if (!queued) {
+                    chatDropped.addAndGet(prepared.size());
+                    logChatDropThrottled(streamId, prepared.size());
+                }
+            }
+        }
+        return new ChatPublishResult(prepared.size(), unknown);
+    }
+
+    /**
+     * @param accepted 연결에 뿌리려고 넣은 이벤트 수(아는 kind)
+     * @param dropped  모르는 kind라 건너뛴 수. 큐 거부는 여기 없다 — 연결마다 달라 {@link #chatDroppedCount()}가 센다
+     */
+    public record ChatPublishResult(int accepted, int dropped) {
+    }
+
+    private void logChatDropThrottled(String streamId, int events) {
+        chatDroppedSinceLog.addAndGet(events);
+        long now = System.nanoTime();
+        long next = nextChatDropLogNanos.get();
+        if (next != Long.MIN_VALUE && now < next) {
+            return;
+        }
+        if (nextChatDropLogNanos.compareAndSet(next, now + CHAT_DROP_LOG_EVERY.toNanos())) {
+            log.warn("jumpcard.stream.chat_dropped streamId={} events={} total={}",
+                    streamId, chatDroppedSinceLog.getAndSet(0), chatDropped.get());
+        }
+    }
+
+    /**
+     * <b>emitter에 쓰는 유일한 길.</b> 막힌 연결이면 건너뛰고 센다({@link WriteGate}).
+     *
+     * <p>건너뛴 카드·종료 알림은 <b>그 연결을 닫아</b> 메운다 — 재연결한 화면이 카드 목록 문과 ended 스냅샷을 받는다
+     * ({@link WriteGate}, 감사 라운드 2 M1). 연결이 살아 있는 채로 건너뛰기만 하면 화면이 목록을 다시 부를 계기가 없다.
+     * 건너뛴 채팅은 재연결 뒤 범위 창구로 메운다. 로그는 모아서 연결 번호와 건수만 싣는다 — 막힌 연결 하나가
+     * 초당 수십 번 건너뛴다.
+     */
+    private boolean send(Conn conn, SseEmitter.SseEventBuilder event) throws Exception {
+        return send(conn, event, false);
+    }
+
+    private boolean send(Conn conn, SseEmitter.SseEventBuilder event, boolean completeAfter) throws Exception {
+        WriteGate.Result result = conn.gate().send(event, completeAfter);
+        if (result == WriteGate.Result.SENT) {
+            return true;
+        }
+        if (result == WriteGate.Result.CLOSED) {
+            return false;   // 이미 닫은 연결 — 건너뜀으로 세지 않는다
+        }
+        stuckSkipped.incrementAndGet();
+        stuckSkippedSinceLog.incrementAndGet();
+        long now = System.nanoTime();
+        long next = nextStuckSkipLogNanos.get();
+        if ((next == Long.MIN_VALUE || now >= next)
+                && nextStuckSkipLogNanos.compareAndSet(next, now + CHAT_DROP_LOG_EVERY.toNanos())) {
+            log.warn("jumpcard.stream.stuck_skipped conn={} skipped={} total={}",
+                    conn.seq(), stuckSkippedSinceLog.getAndSet(0), stuckSkipped.get());
+        }
+        return false;
+    }
+
+    /** 막힌 연결이라 건너뛴 쓰기 누계. */
+    public long stuckSkippedCount() {
+        return stuckSkipped.get();
+    }
+
+    /** 채팅 큐 거부로 연결에 못 넣은 이벤트 누계. */
+    public long chatDroppedCount() {
+        return chatDropped.get();
+    }
+
+    /** 이 방송에 열린 연결이 하나라도 있나. 접수 문이 DB를 치기 전에 묻는다(F11). */
+    public boolean hasConnections(String streamId) {
+        for (Conn conn : conns.values()) {
+            if (conn.streamId().equals(streamId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @PreDestroy
     void stop() {
         heartbeat.shutdownNow();
+        chatExecutor.shutdown();
+        flushThrottledCounts();
+    }
+
+    /**
+     * 10초 창 안에서 모으기만 하고 아직 안 찍은 몫을 찍는다(감사 L20). 모음 로그는 <b>다음 버림이 올 때</b> 찍으므로,
+     * 마지막 창의 몫은 그 뒤 버림이 없으면 영영 안 나간다 — 종료 직전 몫이 로그에서 사라지면 「왜 카드가 안 왔나」의
+     * 마지막 단서가 없다. 셈을 health로 내보내지는 않는다(main 결정).
+     */
+    void flushThrottledCounts() {
+        long chat = chatDroppedSinceLog.getAndSet(0);
+        if (chat > 0) {
+            log.warn("jumpcard.stream.chat_dropped events={} total={} reason=flush", chat, chatDropped.get());
+        }
+        long stuck = stuckSkippedSinceLog.getAndSet(0);
+        if (stuck > 0) {
+            log.warn("jumpcard.stream.stuck_skipped skipped={} total={} reason=flush", stuck, stuckSkipped.get());
+        }
     }
 }
