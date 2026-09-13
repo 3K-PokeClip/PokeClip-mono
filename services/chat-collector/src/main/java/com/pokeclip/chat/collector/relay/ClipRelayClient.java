@@ -113,7 +113,8 @@ public class ClipRelayClient {
     }
 
     /**
-     * 칸 열 개를 <b>늘 싣는다</b>(없는 칸은 null) — 창구({@code ChatWindowItem})가 그렇게 준다.
+     * 창구({@code ChatWindowItem})의 칸 아홉(id 뺌) + {@code seq}·{@code seqEpoch}를 <b>늘 싣는다</b>(없는 칸은 null) —
+     * 창구가 그렇게 준다.
      * 🔴 {@code id} 칸은 없다: 창구의 id는 표 PK라 같은 이름에 다른 값을 실으면 프론트가 짝짓는다.
      * 시각은 {@code Instant} 그대로 넘겨 창구와 같은 ISO-8601 문자열이 된다.
      */
@@ -122,6 +123,7 @@ public class ClipRelayClient {
         for (RelayEvent event : events) {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("seq", event.seq());
+            item.put("seqEpoch", event.seqEpoch());
             item.put("kind", event.payload().kind());
             item.put("time", event.payload().time());
             item.put("timeBasis", event.payload().timeBasis());

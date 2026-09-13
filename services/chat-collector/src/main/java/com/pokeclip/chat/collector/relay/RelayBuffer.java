@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.LongSupplier;
 
 /**
  * 수신 스레드 → 중계 스레드 바구니. <b>중계 규칙 넷이 전부 여기 한 곳에 있다</b>(계획 검증 F7) —
@@ -28,12 +29,21 @@ import java.util.Map;
 public final class RelayBuffer implements RelaySink {
 
     private final ArrayDeque<RelayEvent> queue = new ArrayDeque<>();
-    private final Map<String, Long> lastSeq = new HashMap<>();
+    private final Map<String, Counter> counters = new HashMap<>();
     private final int capacity;
+    private final LongSupplier clock;
+    /** 마지막으로 내준 {@code seqEpoch}. 같은 ms에 카운터가 다시 서도 값이 겹치지 않게 이보다 크게 준다. */
+    private long lastEpoch = Long.MIN_VALUE;
     private long dropped;
     private boolean closed;
 
     public RelayBuffer(int capacity) {
+        this(capacity, System::currentTimeMillis);
+    }
+
+    /** 시계를 고정하는 검사용. 「같은 ms에 카운터가 다시 서도 epoch가 다르다」는 실제 시계로는 결정적으로 못 잰다. */
+    RelayBuffer(int capacity, LongSupplier clock) {
+        this.clock = clock;
         if (capacity < 1) {
             throw new IllegalArgumentException("capacity는 1 이상이어야 한다: " + capacity);
         }
@@ -45,8 +55,9 @@ public final class RelayBuffer implements RelaySink {
         if (streamId == null || closed) {
             return;
         }
-        long seq = lastSeq.merge(streamId, 1L, Long::sum);
-        queue.addLast(new RelayEvent(streamId, seq, payload));
+        Counter counter = counters.computeIfAbsent(streamId, ignored -> new Counter(nextEpoch()));
+        counter.seq++;
+        queue.addLast(new RelayEvent(streamId, counter.seq, counter.epoch, payload));
         while (queue.size() > capacity) {
             queue.pollFirst();
             dropped++;
@@ -68,7 +79,7 @@ public final class RelayBuffer implements RelaySink {
      */
     @Override
     public synchronized void forget(String streamId) {
-        lastSeq.remove(streamId);
+        counters.remove(streamId);
     }
 
     /** 이후 {@link #offer}를 무시한다. 이미 담긴 것은 {@link #drain}으로 꺼낼 수 있다. */
@@ -90,6 +101,21 @@ public final class RelayBuffer implements RelaySink {
      * 안 불려도 동작은 같고 메모리만 새므로 행동으로는 안 보인다. 운영 코드는 안 부른다.
      */
     synchronized int trackedStreamCount() {
-        return lastSeq.size();
+        return counters.size();
+    }
+
+    /** 시계 값이되 직전에 내준 것보다 늘 크다 — 한 프로세스 안의 재생성끼리는 절대 안 겹친다. */
+    private long nextEpoch() {
+        lastEpoch = Math.max(clock.getAsLong(), lastEpoch + 1);
+        return lastEpoch;
+    }
+
+    private static final class Counter {
+        private final long epoch;
+        private long seq;
+
+        private Counter(long epoch) {
+            this.epoch = epoch;
+        }
     }
 }

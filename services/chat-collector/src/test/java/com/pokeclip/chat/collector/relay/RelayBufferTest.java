@@ -121,6 +121,44 @@ class RelayBufferTest {
     }
 
     /**
+     * 🔴 L8 — <b>{@code seqEpoch}는 그 방송의 번호 카운터가 만들어진 시각이다.</b> 번호가 1로 돌아가는 길이
+     * 둘(프로세스 재시작 · 같은 프로세스 안의 forget 뒤 재생성)인데, 「{@code seq ≤ 직전}이면 메운다」만으로는
+     * 새 번호 1..k가 전부 사라진 뒤 k+1이 우연히 직전+1이면 못 알아챈다. 카운터가 새로 서면 이 값이 바뀐다.
+     *
+     * <p>시계를 고정해 <b>같은 ms에 다시 만들어져도</b> 달라지는지 잰다 — 시계만 쓰면 여기서 같아진다.
+     */
+    @Test
+    void 카운터가_새로_서면_seqEpoch가_바뀌고_같은_카운터_안에서는_그대로다() {
+        RelayBuffer buffer = new RelayBuffer(100, () -> 1_000L);
+
+        buffer.offer("s", chat("1"));
+        buffer.offer("s", chat("2"));
+        buffer.offer("other", chat("o"));
+        buffer.forget("s");
+        buffer.offer("s", chat("3"));
+
+        List<RelayEvent> events = buffer.drain(10);
+        assertThat(events).extracting(RelayEvent::seq).containsExactly(1L, 2L, 1L, 1L);
+        assertThat(events.get(0).seqEpoch()).as("같은 카운터 안에서는 그대로다").isEqualTo(events.get(1).seqEpoch());
+        assertThat(events.get(0).seqEpoch()).as("처음 선 카운터는 시계 값이다").isEqualTo(1_000L);
+        assertThat(events.get(3).seqEpoch())
+                .as("forget 뒤 다시 선 카운터는 같은 ms여도 달라야 한다")
+                .isNotEqualTo(events.get(0).seqEpoch())
+                .isGreaterThan(events.get(0).seqEpoch());
+        assertThat(events.get(2).seqEpoch()).as("다른 방송도 서로 겹치지 않게 늘어난다").isNotEqualTo(events.get(0).seqEpoch());
+    }
+
+    @Test
+    void seqEpoch는_실제_시계를_따른다() {
+        long before = System.currentTimeMillis();
+        RelayBuffer buffer = new RelayBuffer(100);
+        buffer.offer("s", chat("1"));
+        long after = System.currentTimeMillis();
+
+        assertThat(buffer.drain(1).getFirst().seqEpoch()).isBetween(before, after);
+    }
+
+    /**
      * 🔴 <b>번호 붙이기와 담기가 한 자물쇠 안이어야 한다.</b> 같은 방송에 소켓 둘이 겹쳐
      * 넣을 때(갈아끼움 직후 등) 둘이 갈리면 <b>줄 순서와 번호 순서가 어긋나</b> 화면이
      * 뒤로 가는 번호를 「수집기 재시작」으로 읽고 기준을 버린다(F3 계약 문장 둘째).

@@ -87,8 +87,8 @@ class ClipRelayClientTest {
         Instant chatTime = Instant.parse("2026-09-03T15:00:01.123Z");
         Instant donationTime = Instant.parse("2026-09-03T15:00:02Z");
         List<RelayEvent> events = List.of(
-                new RelayEvent("live/A 1", 1, new RelayPayload.Chat(chatTime, "닉", "sender-1", "streamer", "ㅋㅋ")),
-                new RelayEvent("live/A 1", 2, new RelayPayload.Donation(donationTime, "후원자", "donator-1",
+                new RelayEvent("live/A 1", 1, 1_757_000_000_000L, new RelayPayload.Chat(chatTime, "닉", "sender-1", "streamer", "ㅋㅋ")),
+                new RelayEvent("live/A 1", 2, 1_757_000_000_000L, new RelayPayload.Donation(donationTime, "후원자", "donator-1",
                         1000L, "CHAT", "응원")));
 
         assertThat(client().send("live/A 1", events)).isEqualTo(ClipRelayClient.Outcome.SENT);
@@ -103,9 +103,10 @@ class ClipRelayClientTest {
         JsonNode list = received.body().get("events");
         assertThat(list.size()).isEqualTo(2);
         JsonNode chat = list.get(0);
-        assertThat(fieldNames(chat)).containsExactly("seq", "kind", "time", "timeBasis", "nickname",
+        assertThat(fieldNames(chat)).containsExactly("seq", "seqEpoch", "kind", "time", "timeBasis", "nickname",
                 "senderChannelId", "role", "text", "amount", "donationType");
         assertThat(chat.get("seq").asLong()).isEqualTo(1);
+        assertThat(chat.get("seqEpoch").asLong()).isEqualTo(1_757_000_000_000L);
         assertThat(chat.get("kind").asString()).isEqualTo("chat");
         assertThat(chat.get("time").asString()).isEqualTo("2026-09-03T15:00:01.123Z");
         assertThat(chat.get("timeBasis").asString()).isEqualTo("message");
@@ -117,7 +118,7 @@ class ClipRelayClientTest {
         assertThat(chat.get("donationType").isNull()).isTrue();
 
         JsonNode donation = list.get(1);
-        assertThat(fieldNames(donation)).containsExactly("seq", "kind", "time", "timeBasis", "nickname",
+        assertThat(fieldNames(donation)).containsExactly("seq", "seqEpoch", "kind", "time", "timeBasis", "nickname",
                 "senderChannelId", "role", "text", "amount", "donationType");
         assertThat(donation.get("seq").asLong()).isEqualTo(2);
         assertThat(donation.get("kind").asString()).isEqualTo("donation");
@@ -144,7 +145,7 @@ class ClipRelayClientTest {
         String nickname = "relay-nick-" + System.nanoTime();
         String sender = "relay-sender-" + System.nanoTime();
         try (LogCaptor captor = new LogCaptor()) {
-            client().send("s-leak", List.of(new RelayEvent("s-leak", 1,
+            client().send("s-leak", List.of(new RelayEvent("s-leak", 1, 1L,
                     new RelayPayload.Chat(Instant.EPOCH, nickname, sender, null, text))));
 
             // 양성 대조 — 경고가 한 줄도 없으면 아래 단언은 아무것도 안 본다.
@@ -228,7 +229,7 @@ class ClipRelayClientTest {
     }
 
     private static RelayEvent chatEvent(String streamId, long seq) {
-        return new RelayEvent(streamId, seq, new RelayPayload.Chat(Instant.EPOCH, "n", "s", null, "t"));
+        return new RelayEvent(streamId, seq, 1L, new RelayPayload.Chat(Instant.EPOCH, "n", "s", null, "t"));
     }
 
     private static List<String> fieldNames(JsonNode node) {
