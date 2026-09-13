@@ -331,6 +331,8 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 | `CHAT_REATTACH_ENABLED` | `false` | ✅ | 켜면 `clip`에 「지금 방송 중인 목록」을 주기적으로 물어 **붙어 있어야 하는데 안 붙은 방송**에 붙는다(POK-219). 🔴 **`BROADCAST_INTAKE_ENABLED=false`인 채로 이것만 켜면 부팅이 죽는다** — 붙이는 문을 편지 경로가 만들고, 알림 경로가 꺼져 있으면 애초에 주울 것이 없다 |
 | `CLIP_BASE_URL` | `http://localhost:8081` | ✅ | 그 목록을 물을 clip 주소. 컨테이너 안에서는 서비스 이름이다 — **기본값을 그대로 두면 컨테이너 안에서 자기 자신을 가리킨다.** 재부착이 켜졌는데 비면 부팅이 죽는다 |
 | `CHAT_REATTACH_INTERVAL` | `PT1M` | — | 재부착 주기. **평소에 쓰는 값이 아니라 사고 뒤 복구 지연의 상한이다** — 한 회차가 통째로 실패해도 다음 회차가 같은 목록을 다시 받는다. 첫 회차는 부팅 직후 `PT5S`이고 이쪽은 환경변수가 없다(주기와 같아지면 배포마다 한 주기를 그냥 잃는다) |
+| `CHAT_RELAY_ENABLED` | `false` | ✅ | 켜면 받은 채팅·후원을 **저장과 따로** clip의 `POST /internal/broadcasts/{streamId}/chat-events`로 바로 민다(POK-234 PR-B, 라이브 화면 SSE). clip이 죽어도 표 적재는 그대로이고 중계는 재시도 없이 버리고 센다. 주소는 위 `CLIP_BASE_URL`, 토큰은 `INTERNAL_API_TOKEN`을 같이 쓴다 — **켜졌는데 둘 중 하나가 비면 부팅이 죽는다** |
+| `CHAT_RELAY_BUFFER_MAX` | `10000` | — | 수신 → 중계 바구니 상한(건). 넘치면 오래된 것부터 버리고 센다 |
 | `CHAT_SYNC_OFFSET_MS` | `3900` | — | 채팅 시각에서 빼는 보정값(ms). **2026-08-24 로컬 실측값이다**(표본 20개 중앙값 3,884ms를 반올림). **음수를 허용하고 크기는 ±600000(10분)까지다.** 운영에서는 다시 잰다 — 아래 참고 |
 
 **🔴 `CHAT_`\*는 「호스트 쪽 이름이 다르다」는 표시다.** 서버가 컨테이너 안에서 읽는 이름은

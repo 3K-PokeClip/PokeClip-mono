@@ -200,6 +200,19 @@ pokeclip:
     # 환경변수를 안 뺀 이유: 운영자가 만질 값이 아니고, 만지면 위 둘의 관계가 깨진다.
     # ReattachWiringTest.첫_회차가_주기보다_먼저_돈다가 이 줄과 @Scheduled를 같이 읽어 잰다.
     initial-delay: PT5S
+  relay:
+    # 켜면 받은 채팅·후원을 저장과 따로 clip에 바로 민다(POK-234 PR-B). clip이 SSE로 화면에 뿌린다.
+    # 저장과 독립이다 — clip이 죽어도 표 적재는 그대로이고, 중계는 재시도 없이 버리고 센다.
+    # 기본이 꺼짐이다. 켜져 있으면 CI·팀원 로컬이 뜰 때마다 clip을 두드린다.
+    enabled: ${CHAT_RELAY_ENABLED:false}
+    # 수신 → 중계 바구니 상한(건). 넘치면 오래된 것부터 버리고 센다(번호를 받은 뒤라 화면이 빈틈으로 안다).
+    buffer-capacity: ${CHAT_RELAY_BUFFER_MAX:10000}
+    # 바구니가 비었을 때 다시 볼 주기 = 한가할 때 더해지는 최대 지연. 환경변수를 안 뺐다(계획 검증 F13) —
+    # 보내는 동안 쌓인 것은 저절로 한 묶음이 되므로 묶음 창이 아니고 운영자가 만질 값이 아니다.
+    flush-max-delay: PT0.1S
+    # 재부착과 같은 clip 주소를 받되 값은 따로 든다 — 재부착이 꺼진 배포에서도 중계는 켤 수 있다.
+    # 켜져 있는데 비면 ClipRelayClient 생성자가 부팅을 죽인다.
+    clip-base-url: ${CLIP_BASE_URL:http://localhost:8081}
   link:
     # auth의 내부 API 주소(8082). 컨테이너 안에서는 호스트가 서비스 이름이다.
     auth-base-url: ${AUTH_BASE_URL:http://localhost:8082}
