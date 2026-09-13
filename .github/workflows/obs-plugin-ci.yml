@@ -1,0 +1,128 @@
+# obs-plugin/ 전용 CI — media-ci와 같은 원칙: 워크플로 레벨 경로 필터, 브랜치 보호 필수 체크가 아니다.
+# obs-plugin을 안 건드린 PR에는 체크 런이 생기지 않는다.
+#
+# 잡:
+#  - unit-tests  OBS 없이 도는 C++ 테스트 (페어링 코드·keyint 옵션·streamid·브리지 보안 규칙·SSE)
+#  - dock-ui     브라우저 독 페이지 테스트·타입체크·빌드 → 산출물(data/ui)을 다음 잡에 넘긴다
+#  - windows / macos  obs-plugintemplate 경로로 실제 플러그인 빌드 → 설치용 아티팩트 (미서명)
+#
+# push에도 돈다 — Windows 실기 검증용 zip을 PR 없이 받기 위해서다 (로컬에 Windows 툴체인이 없다).
+name: obs-plugin-ci
+
+on:
+  pull_request:
+    paths:
+      - 'obs-plugin/**'
+      - 'web/src/ui/styles/**' # 독 페이지가 web 디자인 토큰을 그대로 import 한다
+      - 'web/src/ui/assets/fonts/**'
+      - '.github/workflows/obs-plugin-ci.yml'
+  push:
+    branches-ignore:
+      - main
+      - develop
+    paths:
+      - 'obs-plugin/**'
+      - '.github/workflows/obs-plugin-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure·build·test
+        run: |
+          cmake -S obs-plugin/tests -B obs-plugin/build_tests
+          cmake --build obs-plugin/build_tests --parallel
+          ctest --test-dir obs-plugin/build_tests --output-on-failure
+
+  dock-ui:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: obs-plugin/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: obs-plugin/ui/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: obs-plugin/ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build # tsc --noEmit + vite build → ../data/ui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dock-ui
+          path: obs-plugin/data/ui
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    runs-on: windows-2022
+    needs: [unit-tests, dock-ui]
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: obs-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dock-ui
+          path: obs-plugin/data/ui
+      - uses: actions/cache@v4
+        with:
+          path: obs-plugin/.deps
+          key: windows-deps-${{ hashFiles('obs-plugin/buildspec.json') }}
+      - name: Build
+        run: .github/scripts/Build-Windows.ps1 -Target x64 -Configuration RelWithDebInfo
+      - name: Package (zip — obs-plugins/64bit + data/obs-plugins/pokeclip-obs)
+        run: .github/scripts/Package-Windows.ps1 -Target x64 -Configuration RelWithDebInfo
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pokeclip-obs-windows-x64-${{ github.sha }}
+          path: obs-plugin/release/pokeclip-obs-*-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  macos:
+    runs-on: macos-26
+    needs: [unit-tests, dock-ui]
+    defaults:
+      run:
+        shell: zsh --no-rcs --errexit --pipefail {0}
+        working-directory: obs-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dock-ui
+          path: obs-plugin/data/ui
+      - name: Select Xcode
+        run: sudo xcode-select --switch /Applications/Xcode_26.5.app/Contents/Developer
+      - uses: actions/cache@v4
+        with:
+          path: obs-plugin/.deps
+          key: macos-deps-${{ hashFiles('obs-plugin/buildspec.json') }}
+      - name: Build (unsigned)
+        env:
+          CODESIGN_IDENT: '-'
+        run: .github/scripts/build-macos --config RelWithDebInfo
+      - name: Package
+        run: .github/scripts/package-macos --config RelWithDebInfo
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pokeclip-obs-macos-universal-${{ github.sha }}
+          path: obs-plugin/release/pokeclip-obs-*-macos-universal.*
+          if-no-files-found: error
+          retention-days: 14
