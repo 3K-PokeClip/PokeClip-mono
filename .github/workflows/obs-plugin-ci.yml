@@ -109,7 +109,12 @@ jobs:
           name: dock-ui
           path: obs-plugin/data/ui
       - name: Select Xcode
-        run: sudo xcode-select --switch /Applications/Xcode_26.5.app/Contents/Developer
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.5.app/Contents/Developer
+          # macos-ci 프리셋이 Xcode 컴파일 캐시(CAS)를 켠다 — 경로를 안 주면 읽기 전용 기본 위치를 잡아 컴파일이 전부 죽는다.
+          cas="${HOME}/Library/Developer/Xcode/DerivedData/CompilationCache.noindex"
+          mkdir -p "${cas}"
+          print "XCODE_CAS_PATH=${cas}" >> $GITHUB_ENV
       - uses: actions/cache@v4
         with:
           path: obs-plugin/.deps
