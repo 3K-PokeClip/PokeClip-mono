@@ -22,6 +22,7 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.web.client.RestClient;
 
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
+import com.pokeclip.chat.collector.relay.RelaySink;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -314,6 +315,8 @@ public class CollectorRunner implements ApplicationRunner {
                 // 옛 경로는 방송 번호가 없어 후원을 표에 넣을 수 없다(stream_id NOT NULL).
                 // handleFrame이 그 갈래에서 곧장 돌아오므로 이 바구니에는 아무것도 안 담긴다.
                 new DonationBuffer(),
+                // 옛 경로는 방송 번호가 없어 보낼 곳이 없다 — 바구니도 null 번호를 버린다(F7).
+                RelaySink.NONE,
                 this::newSession, this::heartbeatListener, this::onPermanentStop);
     }
 

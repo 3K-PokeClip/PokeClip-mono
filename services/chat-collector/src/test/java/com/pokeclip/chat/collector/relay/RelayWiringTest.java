@@ -3,6 +3,7 @@ package com.pokeclip.chat.collector.relay;
 import com.pokeclip.chat.collector.fake.FakeChzzkTest;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import org.junit.jupiter.api.Test;
+import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.http.client.JdkClientHttpRequestFactoryBuilder;
@@ -45,5 +46,23 @@ class RelayWiringTest extends IntegrationTestSupport {
         Object restClient = ReflectionTestUtils.getField(context.getBean(ClipRelayClient.class), "restClient");
         assertThat(ReflectionTestUtils.getField(restClient, "clientRequestFactory"))
                 .isInstanceOf(JdkClientHttpRequestFactory.class);
+    }
+
+    /**
+     * 켜면 등록부가 <b>그 바구니</b>에 넣고, 중계기가 <b>그 바구니</b>를 비운다. 셋 중 하나라도 딴 인스턴스면
+     * 수신은 넣는데 아무도 안 비우거나(바구니만 차고 조용하다) 등록부가 {@code NONE}에 넣는다.
+     * 등록부 생성자가 여럿이라 {@code @Autowired}가 옛 생성자에 붙어 있으면 여기서 갈린다.
+     */
+    @Test
+    void 켜면_등록부와_중계기가_같은_바구니를_물고_중계_스레드가_돈다() {
+        RelayBuffer buffer = context.getBean(RelayBuffer.class);
+        ChatRelayer relayer = context.getBean(ChatRelayer.class);
+
+        assertThat(context.getBean(RelaySink.class)).isSameAs(buffer);
+        assertThat(ReflectionTestUtils.getField(context.getBean(SessionRegistry.class), "relay")).isSameAs(buffer);
+        assertThat(ReflectionTestUtils.getField(relayer, "buffer")).isSameAs(buffer);
+        assertThat(context.getBean(RelayCounters.class)).isSameAs(relayer);
+        assertThat(context.getBean(RelayLifecycle.class)).isSameAs(relayer);
+        assertThat(relayer.isRunning()).as("빈으로 만들고 시작을 안 하면 바구니만 찬다").isTrue();
     }
 }

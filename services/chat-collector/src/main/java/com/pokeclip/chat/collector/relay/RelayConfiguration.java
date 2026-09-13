@@ -12,7 +12,9 @@ import org.springframework.web.client.RestClient;
 import java.time.Duration;
 
 /**
- * 채팅 중계 부품. {@code pokeclip.relay.enabled}로 갈린다.
+ * 채팅 중계 부품. {@code pokeclip.relay.enabled}로 갈린다 — 켜지면 바구니·clip 클라이언트·중계기, 꺼지면
+ * {@code NONE} 셋. <b>꺼져도 빈을 만드는 이유</b>는 등록부·health·종료가 켜짐/꺼짐을 모르고 타입 하나만
+ * 받게 하려는 것이다({@code ArchiveConfiguration}이 {@code ChatArchive.NONE}을 주는 것과 같다).
  */
 @Configuration
 // 운영 컨텍스트는 @ConfigurationPropertiesScan이 이미 잡는다. 이 설정만 떼어 띄우는 검사를 위해 둔다
@@ -47,6 +49,44 @@ public class RelayConfiguration {
             return new ClipRelayClient(builder.requestFactory(factoryBuilder.build(
                     HttpClientSettings.defaults().withTimeouts(CONNECT_TIMEOUT, READ_TIMEOUT))),
                     relay, link);
+        }
+
+        /** 등록부가 {@link RelaySink}로, 중계기가 이 타입으로 <b>같은 인스턴스</b>를 받는다. */
+        @Bean
+        public RelayBuffer relayBuffer(RelayProperties relay) {
+            return new RelayBuffer(relay.bufferCapacity());
+        }
+
+        /**
+         * 만들면서 스레드를 띄운다({@code ArchiveConfiguration}과 같다). {@code destroyMethod}를 끈다 —
+         * 닫기는 러너의 종료가 저장·아카이브와 <b>나란히</b> 공유 기한 안에서 한다(태스크 17, F1).
+         * 스프링 파괴 순서에 맡기면 아무도 이 빈에 의존하지 않을 때 러너보다 먼저 파괴될 수 있다.
+         */
+        @Bean(destroyMethod = "")
+        public ChatRelayer chatRelayer(RelayBuffer buffer, ClipRelayClient client, RelayProperties relay) {
+            ChatRelayer relayer = new ChatRelayer(buffer, client, relay);
+            relayer.start();
+            return relayer;
+        }
+    }
+
+    @Configuration
+    @ConditionalOnProperty(prefix = "pokeclip.relay", name = "enabled", havingValue = "false", matchIfMissing = true)
+    public static class Disabled {
+
+        @Bean
+        public RelaySink relaySink() {
+            return RelaySink.NONE;
+        }
+
+        @Bean
+        public RelayCounters relayCounters() {
+            return RelayCounters.NONE;
+        }
+
+        @Bean
+        public RelayLifecycle relayLifecycle() {
+            return RelayLifecycle.NONE;
         }
     }
 }
