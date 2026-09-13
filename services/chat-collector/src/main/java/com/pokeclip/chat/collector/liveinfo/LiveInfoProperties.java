@@ -20,6 +20,10 @@ public record LiveInfoProperties(boolean enabled, Duration interval, Duration in
             throw new IllegalStateException(
                     "pokeclip.liveinfo가 켜졌는데 CHZZK_CLIENT_ID·CHZZK_CLIENT_SECRET이 비어 있다.");
         }
+        // 0이면 @Scheduled(fixedDelay)가 끝나자마자 다시 돌아 목록 500장을 쉬지 않고 훑는다(PR #180 codex).
+        if (interval == null || interval.isNegative() || interval.isZero()) {
+            throw new IllegalStateException("pokeclip.liveinfo.interval은 0보다 커야 한다: " + interval);
+        }
         if (maxPages < 1) {
             throw new IllegalStateException("pokeclip.liveinfo.max-pages는 1 이상이어야 한다.");
         }

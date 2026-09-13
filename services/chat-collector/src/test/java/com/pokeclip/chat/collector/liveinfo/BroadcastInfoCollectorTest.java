@@ -47,8 +47,10 @@ class BroadcastInfoCollectorTest {
     void setUp() {
         client = new FakeClient();
         when(registry.activeSessions()).thenReturn(List.of(
-                new ActiveSession("s-a", "c-a", "tok-a"),
-                new ActiveSession("s-b", "c-b", "tok-b")));
+                new ActiveSession("s-a", 1L, "c-a", "tok-a"),
+                new ActiveSession("s-b", 2L, "c-b", "tok-b")));
+        when(registry.currentStreamIdOf(1L)).thenReturn("s-a");
+        when(registry.currentStreamIdOf(2L)).thenReturn("s-b");
     }
 
     private BroadcastInfoCollector collector() {
@@ -138,6 +140,31 @@ class BroadcastInfoCollectorTest {
         collector.tick();
 
         assertThat(kept).extracting(BroadcastInfo::streamId).containsExactly("s-b");
+        assertThat(relayed).as("저장이 실패해도 화면에는 민다(PR #180 codex)")
+                .containsExactly("s-a:broadcast-info", "s-b:broadcast-info");
+    }
+
+    /** PR #180 codex — 묻는 사이 방송이 바뀌었거나 닫혔으면 끝난 방송에 안 민다(카운터를 되살리지 않는다). 저장은 한다. */
+    @Test
+    void 묻는_사이_방송이_바뀌거나_닫히면_중계하지_않는다() {
+        client.pages = List.of(new LivePage(List.of(), null));
+        client.settings.put("tok-a", new SettingResult(new LiveSetting("A", List.of(), null), 200));
+        client.settings.put("tok-b", new SettingResult(new LiveSetting("B", List.of(), null), 200));
+        when(registry.currentStreamIdOf(1L)).thenReturn("s-a-next");
+        when(registry.currentStreamIdOf(2L)).thenReturn(null);
+
+        collector().tick();
+
+        assertThat(stored).hasSize(2);
+        assertThat(relayed).isEmpty();
+    }
+
+    @Test
+    void 주기가_0이면_부팅을_거부한다() {
+        LiveInfoProperties zero = new LiveInfoProperties(true, Duration.ZERO, Duration.ofSeconds(30), "id", "secret", 10);
+        org.assertj.core.api.Assertions.assertThatThrownBy(zero::validate)
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("interval");
+        PROPS.validate();
     }
 
     @Test

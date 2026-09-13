@@ -95,12 +95,23 @@ public class BroadcastInfoCollector {
                     refused++;
                 }
                 BroadcastInfo info = merge(session, result, found.get(session.channelId()), clock.instant());
-                store.insert(info);
-                relay.offer(info.streamId(), new RelayPayload.Info(info.observedAt(), info.title(), info.tags(),
-                        info.category(), info.viewers()));
+                // 🔴 저장과 중계를 따로 시도한다(PR #180 codex) — 채팅 중계와 같은 원칙이다. DB가 아프다고
+                // 화면이 방송 정보를 못 받으면 안 된다.
+                try {
+                    store.insert(info);
+                } catch (RuntimeException e) {
+                    log.warn("liveinfo.record_failed stream={} causeType={}", session.streamId(),
+                            e.getClass().getSimpleName());
+                }
+                // 🔴 목록·설정을 묻는 사이 세션이 닫히거나 방송이 바뀌었으면 민다(PR #180 codex) — 닫힐 때 등록부가
+                // 잊은 번호 카운터를 되살려 끝난 방송에 이벤트가 가고 카운터가 샌다. 확인과 넣기 사이의 좁은 창은 남는다.
+                if (session.streamId().equals(registry.currentStreamIdOf(session.streamerId()))) {
+                    relay.offer(info.streamId(), new RelayPayload.Info(info.observedAt(), info.title(), info.tags(),
+                            info.category(), info.viewers()));
+                }
             } catch (RuntimeException e) {
                 // 한 방송의 실패가 뒤 방송을 막지 않는다.
-                log.warn("liveinfo.record_failed stream={} causeType={}", session.streamId(),
+                log.warn("liveinfo.session_failed stream={} causeType={}", session.streamId(),
                         e.getClass().getSimpleName());
             }
         }

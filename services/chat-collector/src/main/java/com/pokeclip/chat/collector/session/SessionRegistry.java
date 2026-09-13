@@ -655,16 +655,17 @@ public class SessionRegistry {
             SessionKey key = entry.session().key();
             if ((state == CollectionStatus.State.COLLECTING || state == CollectionStatus.State.RECONNECTING)
                     && key.streamId() != null && key.channelId() != null) {
-                out.add(new ActiveSession(key.streamId(), key.channelId(), entry.session().accessToken()));
+                out.add(new ActiveSession(key.streamId(), key.streamerId(), key.channelId(),
+                        entry.session().accessToken()));
             }
         }
         return out;
     }
 
-    public record ActiveSession(String streamId, String channelId, String accessToken) {
+    public record ActiveSession(String streamId, long streamerId, String channelId, String accessToken) {
         @Override
         public String toString() {
-            return "ActiveSession[streamId=" + streamId + ", channelId=" + channelId + "]";
+            return "ActiveSession[streamId=" + streamId + ", streamerId=" + streamerId + ", channelId=" + channelId + "]";
         }
     }
 
