@@ -185,7 +185,24 @@ pokeclip:
       wait-time: 20s
       max-messages: 10
 
+  playback:
+    # 영상 출입증(POK-122). 셋(key-pair-id · private-key-pem · resource-base-url)이 다 비면 「꺼짐」이고
+    # 부팅은 산다 — 로컬에는 CloudFront가 없다. 꺼진 채로 문을 부르면 503 playback_signing_unavailable.
+    # 일부만 채우면 부팅을 거부한다(실수). 비밀키는 PKCS#8 PEM 본문이고 리터럴 \n을 개행으로 읽는다.
+    key-pair-id: ${CLOUDFRONT_KEY_PAIR_ID:}
+    private-key-pem: ${CLOUDFRONT_PRIVATE_KEY_PEM:}
+    # 영상이 나가는 CDN 도메인. 정책 범위가 {이 값}/*/{streamId}/* 다(계약3 7-1의 /live·/dvr·/vod를 다 덮는다).
+    resource-base-url: ${MEDIA_BASE_URL:}
+    # 쿠키 Domain. 운영은 .pokeclip.com(앱·미디어·clip이 전부 그 아래여야 한다). 비면 호스트 전용.
+    cookie-domain: ${PLAYBACK_COOKIE_DOMAIN:}
+    # 출입증 수명. 지나면 CDN이 403을 주고 웹이 같은 문을 다시 부른다.
+    ttl: ${PLAYBACK_ACCESS_TTL:PT60M}
+
   cors:
+    # 🔴 clip만 켠다(auth는 기본 false). 출입증 문이 Set-Cookie로 답하는데, 앱이 다른 오리진에서
+    # credentials: 'include'로 불러야 브라우저가 그 쿠키를 받는다 — 서버가 이 값을 안 켜면
+    # 브라우저가 응답을 통째로 버리고 화면에는 CORS 오류만 뜬다.
+    allow-credentials: true
     # 비면 부팅이 실패한다(CorsProperties). 기본값으로 localhost를 주지 않는 이유는
     # 그러면 운영 배포에 localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데
     # 로그는 조용하기 때문이다.

@@ -12,6 +12,7 @@ import com.pokeclip.clip.jumpcard.JumpCardErrors.TokenAlreadyExpiredException;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.paging.InvalidCursorException;
 import com.pokeclip.clip.paging.InvalidListParamException;
+import com.pokeclip.clip.playback.PlaybackErrors;
 import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -172,6 +173,17 @@ public class JumpCardExceptionHandler {
     @ExceptionHandler(CollectorErrors.CollectorUnavailableException.class)
     ResponseEntity<Map<String, Object>> collectorUnavailable(CollectorErrors.CollectorUnavailableException e) {
         return json(HttpStatus.SERVICE_UNAVAILABLE, error("collector_unavailable"));
+    }
+
+    /**
+     * 503. 출입증 문(POK-122) 하나만 쓴다 — 서명 재료가 비었거나(로컬·설정 누락) 방송 번호가
+     * 정책에 못 들어가는 모양이다. <b>404로 접지 않는다</b>: 자격은 이미 통과한 뒤라 「없는 방송」이
+     * 아니고, 화면이 그렇게 단정하면 설정을 채운 뒤에도 다시 안 누른다.
+     * {@code authorization_unavailable}과 낱말을 가르는 이유는 위 둘과 같다 — 안내가 다르다.
+     */
+    @ExceptionHandler(PlaybackErrors.SigningUnavailableException.class)
+    ResponseEntity<Map<String, Object>> playbackSigningUnavailable(PlaybackErrors.SigningUnavailableException e) {
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("playback_signing_unavailable"));
     }
 
     /**

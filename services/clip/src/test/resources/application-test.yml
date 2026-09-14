@@ -19,6 +19,11 @@ spring:
 pokeclip:
   cors:
     allowed-origins: http://localhost:3000
+    allow-credentials: true
+
+  # playback.*는 일부러 비워 둔다(꺼짐). 출입증 시험(PlaybackAccessControllerTest)이 자기
+  # @DynamicPropertySource로 넷을 채워 컨텍스트 하나를 더 쓴다 — 나머지 컨텍스트가 「꺼짐」이라
+  # 503 갈래는 그쪽에서 잰다. 셋 중 일부만 채우면 부팅이 거부되므로 여기 하나만 두면 안 된다.
 
   jwt:
     # TestTokens.SECRET과 같은 문자열이어야 한다. 갈리면 인증 시험이 통째로 401이 된다.
