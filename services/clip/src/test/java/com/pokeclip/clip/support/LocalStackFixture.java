@@ -64,6 +64,43 @@ public final class LocalStackFixture {
         return LOCALSTACK.getEndpoint().toString();
     }
 
+    /** 표준 큐 + 전용 실패 큐(POK-125 렌더 주문줄 모양). {@code maxReceiveCount}를 넘으면 실패 큐로 옮긴다. */
+    public record QueuePair(String queueUrl, String dlqUrl) {
+    }
+
+    public static QueuePair createStandardQueueWithDlq(String name, int maxReceiveCount) {
+        String dlqUrl = SQS.createQueue(CreateQueueRequest.builder().queueName(name + "-dlq").build()).queueUrl();
+        String dlqArn = SQS.getQueueAttributes(GetQueueAttributesRequest.builder()
+                        .queueUrl(dlqUrl).attributeNames(QueueAttributeName.QUEUE_ARN).build())
+                .attributes().get(QueueAttributeName.QUEUE_ARN);
+        String queueUrl = SQS.createQueue(CreateQueueRequest.builder()
+                .queueName(name)
+                .attributes(Map.of(
+                        QueueAttributeName.VISIBILITY_TIMEOUT, "2",
+                        QueueAttributeName.REDRIVE_POLICY,
+                        "{\"deadLetterTargetArn\":\"" + dlqArn + "\",\"maxReceiveCount\":\"" + maxReceiveCount + "\"}"))
+                .build()).queueUrl();
+        return new QueuePair(queueUrl, dlqUrl);
+    }
+
+    /** 표준 큐에 본문 그대로. 그룹·중복제거 ID가 없다(표준 큐는 거부한다). */
+    public static void sendPlain(String queueUrl, String body) {
+        SQS.sendMessage(SendMessageRequest.builder().queueUrl(queueUrl).messageBody(body).build());
+    }
+
+    /** 한 통 꺼내 본문을 돌려주고 <b>지운다</b>. 비어 있으면 {@code null}. 롱폴링 2초 — 방금 실은 것을 기다리는 데 충분하다. */
+    public static String receiveAndDelete(String queueUrl) {
+        List<software.amazon.awssdk.services.sqs.model.Message> messages = SQS.receiveMessage(
+                software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest.builder()
+                        .queueUrl(queueUrl).maxNumberOfMessages(1).waitTimeSeconds(2).build()).messages();
+        if (messages.isEmpty()) {
+            return null;
+        }
+        SQS.deleteMessage(software.amazon.awssdk.services.sqs.model.DeleteMessageRequest.builder()
+                .queueUrl(queueUrl).receiptHandle(messages.getFirst().receiptHandle()).build());
+        return messages.getFirst().body();
+    }
+
     /** 이름이 .fifo로 끝나야 한다 — 아니면 InvalidParameterValue로 거부된다. */
     public static String createFifoQueue(String name) {
         return SQS.createQueue(CreateQueueRequest.builder()

@@ -14,6 +14,7 @@ import com.pokeclip.clip.paging.InvalidCursorException;
 import com.pokeclip.clip.paging.InvalidListParamException;
 import com.pokeclip.clip.playback.PlaybackErrors;
 import com.pokeclip.clip.recipe.RecipeErrors;
+import com.pokeclip.clip.render.RenderErrors;
 import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -205,6 +206,51 @@ public class JumpCardExceptionHandler {
     /** 400. 계약6 모양이 아니다. {@code field}는 칸 경로 또는 덩어리 이름이고 값은 안 싣는다. */
     @ExceptionHandler(RecipeErrors.InvalidRecipeException.class)
     ResponseEntity<Map<String, Object>> invalidRecipe(RecipeErrors.InvalidRecipeException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    // ── POK-125: 영상 만들기 주문·보고 문이 쓰는 갈래 ──────────
+
+    /** 404. 그 방송에 그 번호의 영상이 없다. 바닥은 위 404들과 같이 탄다. */
+    @ExceptionHandler(RenderErrors.ClipNotFoundException.class)
+    ResponseEntity<Map<String, Object>> clipNotFound(RenderErrors.ClipNotFoundException e, HttpServletRequest request) {
+        NotFoundFloor.awaitFloorIfMarked(request);
+        return json(HttpStatus.NOT_FOUND, error("clip_not_found"));
+    }
+
+    /** 503. 주문줄이 꺼져 있다 — 404로 접지 않는다(설정을 채운 뒤 다시 누르게). {@code playback_signing_unavailable}과 같은 자세. */
+    @ExceptionHandler(RenderErrors.RenderUnavailableException.class)
+    ResponseEntity<Map<String, Object>> renderUnavailable(RenderErrors.RenderUnavailableException e) {
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("render_unavailable"));
+    }
+
+    /** 400. 구간이 없는 템플릿은 주문할 수 없다 — {@code field:"cut"}. */
+    @ExceptionHandler(RenderErrors.RecipeNotRenderableException.class)
+    ResponseEntity<Map<String, Object>> recipeNotRenderable(RenderErrors.RecipeNotRenderableException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    /** 409. 조각이 아직 다 안 올라왔다. 잠시 뒤 다시 — 잘라서 주문하지 않는다. */
+    @ExceptionHandler(RenderErrors.SourceNotReadyException.class)
+    ResponseEntity<Map<String, Object>> sourceNotReady(RenderErrors.SourceNotReadyException e) {
+        return json(HttpStatus.CONFLICT, error("source_not_ready"));
+    }
+
+    /** 422. 주문서가 큐 상한을 넘는다(계약1 2절 {@code MESSAGE_TOO_LARGE} — 발행 API 축의 코드). */
+    @ExceptionHandler(RenderErrors.MessageTooLargeException.class)
+    ResponseEntity<Map<String, Object>> messageTooLarge(RenderErrors.MessageTooLargeException e) {
+        return json(HttpStatus.UNPROCESSABLE_CONTENT, error("message_too_large"));
+    }
+
+    /** 404(내부 문). 모르는 잡. 바닥을 안 탄다 — 서버 간 토큰이라 감출 존재가 없다({@code broadcastNotFound}와 같은 이유). */
+    @ExceptionHandler(RenderErrors.JobNotFoundException.class)
+    ResponseEntity<Map<String, Object>> jobNotFound(RenderErrors.JobNotFoundException e) {
+        return json(HttpStatus.NOT_FOUND, error("job_not_found"));
+    }
+
+    /** 400(내부 문). 보고 본문이 계약 모양이 아니다. */
+    @ExceptionHandler(RenderErrors.InvalidJobEventException.class)
+    ResponseEntity<Map<String, Object>> invalidJobEvent(RenderErrors.InvalidJobEventException e) {
         return json(HttpStatus.BAD_REQUEST, field(e.field()));
     }
 

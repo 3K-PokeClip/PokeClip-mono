@@ -32,7 +32,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 | | 소유 |
 |---|---|
 | `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
-| `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `broadcasts.vod_expires_at` (V203, POK-117) · **`recipes` (V206, POK-124)** |
+| `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `broadcasts.vod_expires_at` (V203, POK-117) · `recipes` (V206, POK-124) · **`clips` · `render_jobs` · `render_job_events` (V207, POK-125)** |
 | chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302 · **닉네임·역할 칸은 V306**) · `chat_ended_streams` (V303) · **`chat_donations` (V307)** · **`broadcast_info` (V308)** — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
 | `chat-detector` | `chat_metrics` (V401, POK-120) — **판별 서버 단독 소유다.** 위 `chat_messages`와 달리 공동 소유가 아니라 이 서버만 읽고 쓴다 |
 
@@ -269,6 +269,13 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 | `CLOUDFRONT_PRIVATE_KEY_PEM` | 빈 값 | 그 공개키의 짝인 **PKCS#8 PEM 본문**(`BEGIN PRIVATE KEY`). 한 줄로 넣으면 리터럴 `\n`을 개행으로 읽는다. `BEGIN RSA PRIVATE KEY`(PKCS#1)는 부팅에서 변환 명령과 함께 거부한다 |
 | `MEDIA_BASE_URL` | 빈 값 | 영상이 나가는 CDN 주소(예 `https://media.pokeclip.com`, 끝 `/` 없음). 정책 범위가 종류마다 `{이 값}/{kind}/{streamId}/*`다 |
 | `PLAYBACK_COOKIE_DOMAIN` | 빈 값 | 출입증 쿠키의 `Domain`. 운영은 `.pokeclip.com`. 비면 호스트 전용(로컬) |
+| `RENDER_ENABLED` | `false` | 영상 만들기 주문(POK-125). 켜면 아래 넷이 필수고 하나라도 비면 부팅이 거부된다. 꺼져 있으면 주문 문만 503 `render_unavailable` |
+| `RENDER_QUEUE_URL` | 빈 값 | 주문줄(표준 SQS). 실물 `pokeclip-jobs-render`(2026-09-15) |
+| `RENDER_DLQ_URL` | 빈 값 | 실패 큐. 정리기가 1분마다 읽어 `SWEPT`로 닫는다. 실물 `pokeclip-jobs-render-dlq` |
+| `CLIPS_BUCKET` | 빈 값 | 완성 영상 창고. 주문서 `outputPrefix` = `s3://{이 값}/clips/{clipId}`. 실물 `pokeclip-clips-2557`(60일 만료) |
+| `SEGMENT_BUCKET` | 빈 값 | 조각 창고(1번 장부 `s3_key`의 버킷). 주문서 `sourceKeys[].bucket` |
+| `RENDER_QUEUE_ENDPOINT` | 빈 값 | 비면 진짜 AWS. 로컬 실측 때만 LocalStack 주소 |
+| `RENDER_RECONCILE_INTERVAL` | `PT1M` | 실패 큐를 훑는 주기 |
 | `PLAYBACK_ACCESS_TTL` | `PT60M` | 출입증 수명. 0 이하면 부팅 거부 |
 
 **출입증 셋(`CLOUDFRONT_KEY_PAIR_ID`·`CLOUDFRONT_PRIVATE_KEY_PEM`·`MEDIA_BASE_URL`)은 다 비면 「꺼짐」이고
@@ -659,7 +666,7 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat-collector · `V4xx` chat-detector.
 지금까지 나간 것은 auth의 `V101`~`V112`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
-**`V205`(방송 중 부분 색인, POK-218)** · **`V206`(`recipes`, POK-124)** · chat-collector의 `V301`(`chat_messages`)~**`V308`** ·
+**`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · **`V207`(`clips`·`render_jobs`·`render_job_events`, POK-125)** · chat-collector의 `V301`(`chat_messages`)~**`V308`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **chat-collector 대역 여덟:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
@@ -1290,7 +1297,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 **카드 목록은 방송 시간 오름차순이다** — 순번(`event_seq`)이 아니다. 그 값은 카드를 숨기면
 트리거가 올려서 자리가 바뀌고, 트랜잭션 밖에서 증가해 커밋 순서와도 다를 수 있다.
 
-#### 자격 판정 — 문 열여섯이 무엇을 보나
+#### 자격 판정 — 문 열여덟이 무엇을 보나
 
 | 문 | 무엇으로 판정하나 | 자격이 없으면 |
 |---|---|---|
@@ -1310,9 +1317,11 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 | `GET …/{streamId}/recipes` (POK-124) | 같음 | 같음 |
 | `GET …/{streamId}/recipes/{id}` (POK-124) | 같음 → 그 방송의 레시피인가 | 같음 · 방송은 보이는데 번호가 없으면 **404** `recipe_not_found` |
 | `PUT …/{streamId}/recipes/{id}` (POK-124) | 같음 | 같음 |
+| `POST …/{streamId}/recipes/{id}/renders` (POK-125) | 같음 → 편집본이 그 방송 것인가 | 같음 · **404** `recipe_not_found` |
+| `GET …/{streamId}/clips/{clipId}` (POK-125) | 같음 → 영상이 그 방송 것인가 | 같음 · **404** `clip_not_found` |
 
-**자격 판정이 없는 문은 둘이다 — 열일곱 번째 `POST /internal/broadcasts/{streamId}/highlights`와
-열여덟 번째 `GET /internal/broadcasts/live`**(POK-218, 아래 절). 둘 다 서버 간 토큰
+**자격 판정이 없는 문은 셋이다 — 열아홉 번째 `POST /internal/broadcasts/{streamId}/highlights`·
+스무 번째 `GET /internal/broadcasts/live`·스물한 번째 `POST /internal/jobs/{jobId}/events`(POK-125, 일꾼의 보고)**(POK-218, 아래 절). 둘 다 서버 간 토큰
 (`X-Internal-Token`)으로 들어오고 감출 상대가 없다. 판별기는 404를 재시도 상한으로
 세므로 앞엣것은 아래 25ms 바닥도 안 문다.
 
@@ -1968,6 +1977,85 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 - **목록에 상한이 없다** — 레시피는 사람이 손으로 만드는 것이라 방송 하나에 수십 벌이다. 수천 벌이 생기는 날 이어받기를 붙인다
 - **누가 마지막에 고쳤는지는 안 남는다** — `creatorId`는 처음 저장한 사람뿐이다. 편집 이력이 필요하면 새 카드
 - 새 환경변수 **0** · 시큐리티 변경 **0**(`anyRequest().authenticated()`에 올라탔다)
+
+### clip — 영상 만들기 주문·진행 따라가기 (POK-125)
+
+**편집자가 편집본에서 「영상 만들어 줘」를 누르면 서버가 주문서를 써서 주문줄(SQS)에 넣고, 렌더 일꾼이 보내는
+「시작했다 → 40% → 끝났다/실패했다」를 받아 완성 영상의 상태를 바꾼다.** 표 셋(`V207`) — 완성 영상 `clips` ·
+주문 기록 `render_jobs` · 받은 보고 장부 `render_job_events`. 편집 기록(`recipes`)과 다른 표다: 그쪽은 사람이 고치고
+이쪽은 서버가 고친다. 주문서·보고 규칙은 [계약1](https://github.com/3K-PokeClip/PokeClip-LLM-WIKI/blob/main/contracts/%EA%B3%84%EC%95%BD1-%EC%9E%A1%EC%88%98%EB%AA%85%EC%A3%BC%EA%B8%B0.md)(rev9)
+그대로다. **렌더 일꾼 본체는 다음 카드**(`workers/render/`, 아직 0줄)이고, 여기는 주문하고 받아 적는 쪽이다.
+
+| 문 | 인증 | 응답 |
+|---|---|---|
+| `POST /api/clip/broadcasts/{streamId}/recipes/{id}/renders` | Bearer JWT | **201** 봉투(새 주문) · **200** 봉투(같은 편집본 같은 판이 이미 진행 중 — 그것을 돌려준다) · 400 `{"error":"invalid_request","field":"cut"}`(템플릿) · 404 `broadcast_not_found`/`recipe_not_found` · **409** `{"error":"source_not_ready"}` · **422** `{"error":"message_too_large"}` · 401 · 503 `authorization_unavailable`/**`render_unavailable`** |
+| `GET /api/clip/broadcasts/{streamId}/clips/{clipId}` | Bearer JWT | **200** 봉투 · 404 `broadcast_not_found`/`clip_not_found` · 401 · 503 |
+| `POST /internal/jobs/{jobId}/events` (계약1 4절) | `X-Internal-Token` | **200** 전이 응답 · **400** `{"reason":"INVALID_EVENT"\|"INVALID_RESULT"}` 또는 `{"error":"invalid_request","field":…}` · **404** `{"error":"job_not_found"}` · **409** `{"reason":"SUPERSEDED"\|"TERMINAL"}` · 401 |
+
+**봉투** — `{"id","streamId","recipeId","recipeVersion","requestedBy","status","progress":{"percent","stage","attempt","jobId"},"outputs","error":{"code","message"},"createdAt","updatedAt"}`.
+`status`는 **`queued`(주문됨) → `rendering`(만드는 중) → `rendered`(완성) | `failed`(실패)** 넷 — 2번 화면의 거르기 값이라 이름을 바꾸지 않는다.
+업로드 상태는 POK-220이 더한다. `outputs`는 완성했을 때 일꾼이 보고한 산출물 목록(`outputId`·`kind`·`s3Key`) 그대로인데
+**화면이 그 키로 영상을 직접 받을 수는 없다**(창고는 비공개) — 내려받기 문은 POK-243 이후다.
+
+**주문의 순서가 계약이다 — 자격 → 편집본 → 조각 준비 → 선점(표) → 발행(큐).**
+- **조각이 컷을 「연속 uploaded」로 다 덮어야 주문한다.** 하나라도 빠지면 409 `source_not_ready`이고 표에도 큐에도 아무것도
+  안 남는다. 잘라서 주문하지 않는다 — 짧아진 영상이 조용히 나가는 것이 안 나가는 것보다 나쁘다(계약1 `SOURCE_RANGE`의 「클램프 금지」).
+  판정은 POK-117의 조립기 그대로이고 **축만 재생 축**이다(아래).
+- **선점은 표가 한다** — `clips`의 부분 UNIQUE(`recipe_id, recipe_version` where 진행 중) + `ON CONFLICT DO NOTHING`.
+  더블클릭의 두 번째는 200으로 첫 번째 영상을 돌려주고 큐에는 한 통뿐이다. 끝난(완성·실패) 영상은 자리를 비워 다시 주문할 수
+  있다(재요청 = 새 영상 줄, 계약1 「종결 시 선점 해제」).
+- **선기록·후발행(outbox).** 주문 줄과 주문서를 한 트랜잭션으로 적고 커밋 뒤에 큐에 싣는다. 못 실으면 201은 그대로 나가고
+  30초마다 도는 회차가 `published_at`이 빈 줄을 다시 보낸다 — 같은 jobId·같은 본문으로. 큐가 받고 응답만 못 받은 경우 같은
+  주문서가 두 통 실릴 수 있는데, 그것은 SQS의 at-least-once와 같은 모양이라 일꾼의 STARTED 판정(아래 토큰)이 거른다.
+
+**🔴 조각은 재생 축(`playback_pdt`, 없으면 `start_wall_utc`)으로 찾는다.** 편집기가 보는 시각이 재생 축이고 레시피의 `cut`도
+그 축이다(계약6 0절). 미리보기 문(POK-117)은 파일 안 위치(`start_pts_ms`)로 찾는다 — **같은 조각 표에 시각 축이 둘**이고
+소비자마다 다른 축을 본다. `playback_pdt`·`session_id`는 계약-세그먼트인덱스 6-1(2026-09-01 승인)의 칸이라 **그 전 DDL로
+만든 표에서는 이 조회가 죽는다**(로컬 DB에는 손으로 더했다).
+
+**🔴 주문서의 `sourceKeys`는 계약1 3절 초안과 다르다 — 조각 파일 목록을 그대로 싣는다.** 초안은 1번이 만들 「중간본 파일」
+(video 1 + audio N)을 전제했는데 그 파일은 아직 없고 렌더 일꾼도 우리 것이 됐다(2026-09-14). 조각 하나가 영상+소리 트랙
+전부를 담은 **완전한 fMP4**라(실측 2026-09-15: 실물 조각 둘 다 `ftyp+moov+moof…`, h264 720p + aac) 일꾼이 이어붙이면 된다.
+트랙 번호 ↔ 소리 스트림 대응은 방송의 `trackManifest`를 같이 실어 일꾼이 푼다. 주문서 모양:
+
+```json
+{"schemaVersion":1,"jobId":"<uuid>","jobType":"RENDER","clipId":"12","correlationId":"12","idempotencyKey":"12:RENDER:1",
+ "requestedAt":"…","streamId":"…","recipeVersion":1,"outputPrefix":"s3://{CLIPS_BUCKET}/clips/12",
+ "sourceKeys":[{"role":"segment","bucket":"{SEGMENT_BUCKET}","s3Key":"streams/…/seg_000031.m4s","seq":31,"sourceStartAtMs":…,"durationMs":4000},…],
+ "trackManifest":{…},"recipe":{계약6 JSON}}
+```
+
+**보고(계약1 4절 상태머신)는 `JobEventService` 한 곳에 표로 있다.** 처리 우선순위 — ① 모르는 잡 404 ② 같은 `(jobId,eventId)`는
+**그때 준 응답 그대로**(`render_job_events`에 상태 코드·본문을 적어 둔다; STARTED replay만 토큰이 아직 유효한지 다시 봐서
+갈렸으면 `proceed:false`) ③ 전이 판정.
+
+| 보고 | 지금 상태 | 응답·처리 |
+|---|---|---|
+| `STARTED` | 주문됨·시작됨 | 200 `{proceed:true, executionToken(새 UUID), attemptOrdinal(+1), isFinalAttempt(≥3)}` — 옛 토큰은 이 순간부터 죽는다, 진행률 0, 영상 `rendering` |
+| `STARTED` | 끝남 | 200 `{proceed:false}` — 일꾼은 메시지를 지운다 |
+| `PROGRESS`·`RETRY_SCHEDULED` | 시작됨 + 토큰 일치 | 200 `{}` — 진행률은 같은 토큰 안에서 단조(뒤로 가는 값 무시) |
+| `SUCCEEDED` | 시작됨 + 토큰 일치 | **산출물 검증이 전이보다 먼저** — 실패면 400 `INVALID_RESULT`(상태 불변) · 통과면 `rendered`, `outputs` 저장 |
+| `TERMINAL_FAILED` | 시작됨 + 토큰 일치 · **주문됨 + 무토큰**(preflight) | 200 — `failed`, `error.code`·`message` 저장 |
+| 토큰 불일치 | 시작됨 | **409 `SUPERSEDED`** — 일꾼은 중단만, 메시지는 안 건드린다 |
+| 아무 보고 | 끝남 | **409 `TERMINAL`** |
+| 시작 전 `PROGRESS` 등 | 주문됨 | 400 `INVALID_EVENT` |
+
+산출물 검증 = `outputId` 집합이 주문서의 `recipe.outputs`와 정확히 같고 · 각 output에 `video` 정확히 1 · 모든 `s3Key`가
+`clips/{clipId}/{활성 토큰}/` 아래 · `kind`는 `video|srt`. srt 개수 규칙(mode·컷 안 자막)은 일꾼 카드에서 함께 잰다.
+**`error.code` 닫힌 목록은 검사하지 않는다** — 모르는 코드도 그대로 적는다. 거절하면 실패가 「실패했다는 사실」조차 못 남긴다.
+
+**실패 큐 정리기(`DlqReconciler`, POK-147)** — 1분마다 실패 큐를 열 통까지 읽어 **열린** 주문만 `failed`/`SWEPT`로 닫는다(CAS).
+이미 끝난 주문의 쪽지는 상태를 안 바꾸고 지운다(성공이 「실패, 재요청」으로 덮이면 안 된다). 못 읽는 쪽지도 지운다. 재시도 경로 =
+편집자가 다시 「만들어 줘」(새 영상 줄).
+
+**같은 판정기·같은 404·같은 25ms 바닥.** `clip_not_found`도 바닥을 탄다.
+
+**알려진 한계**
+- **취소가 없다.** 계약1은 취소를 종결의 한 형태로 두는데 이 카드 범위 밖이다 — 끝날 때까지 기다리거나 실패하게 둔다
+- **고착 감시가 없다** — STARTED 뒤 30분 무보고 알람(계약1)은 관측 장치가 생기면 붙인다. 지금 안전망은 SQS 재전달·실패 큐뿐이다
+- **주문 목록 문이 없다**(POK-243) · 완성 영상 내려받기 문이 없다(창고가 비공개) · 60일 뒤 창고 삭제는 창고의 수명 정책이 하고 표의 줄은 남는다
+- `sourceKeys`에 조각의 `width`·`height`가 없다(계약1 초안의 video 항목 필수) — 조각 장부에 그 값이 없다. 일꾼이 ffprobe로 실측한다
+- 큐가 실제로 있어야 한다: 로컬은 LocalStack, dev는 2026-09-15에 만든 실물 큐 둘·창고 하나(README 환경변수 표)
 
 ### 치지직 채널 연동 (POK-93)
 

@@ -32,6 +32,24 @@ public class StreamSegmentReader {
                AND start_pts_ms + duration_ms > ?
              ORDER BY seq""";
 
+    /**
+     * 재생 축으로 겹침을 찾는다(POK-125 렌더 주문). {@code playback_pdt}가 채워진 줄은 그것으로, 아직 빈 줄
+     * (6-1 전 데이터·미확정)은 {@code start_wall_utc}로 잰다 — 두 값 다 timestamptz라 한 식에 든다.
+     * 겹침 조건은 위 {@link #OVERLAPPING}과 같은 반개 구간이고 축만 다르다.
+     *
+     * <p>{@code playback_pdt}·{@code session_id}는 계약-세그먼트인덱스 6-1(3번 승인 2026-09-01)의 칸이다 — 그 전
+     * DDL로 만든 표에는 없어 이 조회가 죽는다. 시험 시드가 그 칸을 같이 심는 이유다.
+     */
+    private static final String OVERLAPPING_BY_PLAYBACK_TIME = """
+            SELECT seq,
+                   (EXTRACT(EPOCH FROM COALESCE(playback_pdt, start_wall_utc)) * 1000)::bigint AS start_at_ms,
+                   duration_ms, s3_key, upload_state
+              FROM stream_segments
+             WHERE stream_id = ?
+               AND COALESCE(playback_pdt, start_wall_utc) < to_timestamp(? / 1000.0)
+               AND COALESCE(playback_pdt, start_wall_utc) + make_interval(secs => duration_ms / 1000.0) > to_timestamp(? / 1000.0)
+             ORDER BY seq""";
+
     private final JdbcTemplate jdbc;
 
     StreamSegmentReader(JdbcTemplate jdbc) {
@@ -56,5 +74,22 @@ public class StreamSegmentReader {
                         rs.getString("upload_state"),
                         rs.getBoolean("is_discontinuity")),
                 streamId, endMs, startMs);
+    }
+
+    /**
+     * 재생 축 {@code [inAtMs, outAtMs)}(UTC epoch ms)와 겹치는 조각을 {@code seq} 오름차순으로. 상태로 거르지 않는 것은
+     * {@link #findOverlapping}과 같다 — 무엇을 쓸 수 있는지는 조립기가 정한다.
+     *
+     * <p>인자 순서: {@code streamId} → {@code outAtMs} → {@code inAtMs}.
+     */
+    public List<SegmentSource> findOverlappingByPlaybackTime(String streamId, long inAtMs, long outAtMs) {
+        return jdbc.query(OVERLAPPING_BY_PLAYBACK_TIME,
+                (rs, rowNum) -> new SegmentSource(
+                        rs.getLong("seq"),
+                        rs.getLong("start_at_ms"),
+                        rs.getInt("duration_ms"),
+                        rs.getString("s3_key"),
+                        rs.getString("upload_state")),
+                streamId, outAtMs, inAtMs);
     }
 }

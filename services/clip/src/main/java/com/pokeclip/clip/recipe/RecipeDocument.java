@@ -1,5 +1,7 @@
 package com.pokeclip.clip.recipe;
 
+import tools.jackson.databind.ObjectMapper;
+
 import java.util.List;
 
 /**
@@ -43,5 +45,15 @@ public record RecipeDocument(Integer schemaVersion,
 
     /** 구간 의미는 {@code [startAtMs, endAtMs)}, 방송 절대축. */
     public record Segment(Long startAtMs, Long endAtMs, String text) {
+    }
+
+    /** 표의 칸을 계약6 모양으로 되돌린다 — 편집기 응답({@code RecipeService})과 렌더 주문서가 같은 복원을 쓴다. */
+    public static RecipeDocument fromStored(ObjectMapper mapper, Recipe recipe) {
+        Cut cut = recipe.getCutInAtMs() == null ? null : new Cut(recipe.getCutInAtMs(), recipe.getCutOutAtMs());
+        List<Output> outputs = mapper.readValue(recipe.getOutputs(),
+                mapper.getTypeFactory().constructCollectionType(List.class, Output.class));
+        Audio audio = mapper.readValue(recipe.getAudio(), Audio.class);
+        Subtitles subtitles = recipe.getSubtitles() == null ? null : mapper.readValue(recipe.getSubtitles(), Subtitles.class);
+        return new RecipeDocument(recipe.getSchemaVersion(), recipe.getStreamId(), cut, outputs, audio, subtitles);
     }
 }

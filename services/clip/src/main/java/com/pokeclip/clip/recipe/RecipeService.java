@@ -1,10 +1,7 @@
 package com.pokeclip.clip.recipe;
 
 import com.pokeclip.clip.delegation.BroadcastAccessGuard;
-import com.pokeclip.clip.recipe.RecipeDocument.Audio;
 import com.pokeclip.clip.recipe.RecipeDocument.Cut;
-import com.pokeclip.clip.recipe.RecipeDocument.Output;
-import com.pokeclip.clip.recipe.RecipeDocument.Subtitles;
 import com.pokeclip.clip.recipe.RecipeErrors.RecipeNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -104,16 +101,10 @@ public class RecipeService {
         return value == null ? null : mapper.writeValueAsString(value);
     }
 
-    /** 표의 칸을 계약6 모양으로 되돌린다 — 편집기는 보낸 것과 같은 모양을 받는다. */
+    /** 표의 칸을 계약6 모양으로 되돌린다 — 편집기는 보낸 것과 같은 모양을 받는다. 복원은 {@link RecipeDocument#fromStored}. */
     private RecipeSnapshot snapshot(Recipe recipe) {
-        Cut cut = recipe.getCutInAtMs() == null ? null : new Cut(recipe.getCutInAtMs(), recipe.getCutOutAtMs());
-        List<Output> outputs = mapper.readValue(recipe.getOutputs(),
-                mapper.getTypeFactory().constructCollectionType(List.class, Output.class));
-        Audio audio = mapper.readValue(recipe.getAudio(), Audio.class);
-        Subtitles subtitles = recipe.getSubtitles() == null ? null : mapper.readValue(recipe.getSubtitles(), Subtitles.class);
-        RecipeDocument document = new RecipeDocument(recipe.getSchemaVersion(), recipe.getStreamId(),
-                cut, outputs, audio, subtitles);
         return new RecipeSnapshot(recipe.getId(), recipe.getStreamId(), recipe.getCreatorId(),
-                recipe.getRecipeVersion(), document, recipe.getCreatedAt(), recipe.getUpdatedAt());
+                recipe.getRecipeVersion(), RecipeDocument.fromStored(mapper, recipe), recipe.getCreatedAt(),
+                recipe.getUpdatedAt());
     }
 }

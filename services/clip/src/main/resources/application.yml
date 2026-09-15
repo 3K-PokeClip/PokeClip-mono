@@ -195,6 +195,29 @@ pokeclip:
       # 🔴 켜져 있는데 stream_segments 표(1번 장부)가 없으면 부팅이 거부된다 — media 없는 배포에서 켜지 마라.
       grace: ${BROADCAST_REAPER_GRACE:PT30M}
 
+  render:
+    # 영상 만들기 주문(POK-125). 기본이 꺼짐이다 — 켜져 있으면 CI·남의 로컬이 뜰 때마다 없는 큐에 붙으려 한다.
+    # 꺼진 채로 주문 문을 부르면 503 render_unavailable. 보고 문(/internal/jobs)과 조회 문은 꺼져 있어도 돈다.
+    enabled: ${RENDER_ENABLED:false}
+    # 켜져 있을 때만 필수 넷(RenderProperties가 검사한다). 큐 둘은 계약1 1절 jobs-render + 전용 DLQ.
+    queue-url: ${RENDER_QUEUE_URL:}
+    dlq-url: ${RENDER_DLQ_URL:}
+    region: ${AWS_REGION:ap-northeast-2}
+    # 비면 진짜 AWS. 로컬 실측 때만 LocalStack 주소를 준다.
+    endpoint: ${RENDER_QUEUE_ENDPOINT:}
+    # 완성 영상이 놓일 창고. 주문서의 outputPrefix = s3://{이 값}/clips/{clipId}.
+    output-bucket: ${CLIPS_BUCKET:}
+    # 조각(1번 장부 s3_key)이 있는 창고. 주문서의 sourceKeys[].bucket.
+    segment-bucket: ${SEGMENT_BUCKET:}
+    # 못 실은 주문을 다시 보내는 주기(outbox). 이보다 오래된 미발행 주문만 다시 보낸다.
+    outbox-retry-interval: PT30S
+    # 실패 큐를 훑는 주기. 재시도를 다 쓴 주문을 SWEPT로 닫는다.
+    reconcile-interval: ${RENDER_RECONCILE_INTERVAL:PT1M}
+    # 한 주문의 실행(STARTED) 상한. 이 번째가 마지막 시도다(계약1 attemptOrdinal 한도 3).
+    max-attempts: 3
+    # 주문서 크기 상한(계약1 2절 200KB).
+    max-message-bytes: 204800
+
   playback:
     # 영상 출입증(POK-122). 셋(key-pair-id · private-key-pem · resource-base-url)이 다 비면 「꺼짐」이고
     # 부팅은 산다 — 로컬에는 CloudFront가 없다. 꺼진 채로 문을 부르면 503 playback_signing_unavailable.
