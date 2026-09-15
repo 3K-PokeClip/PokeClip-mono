@@ -96,6 +96,12 @@ public class JobEventService {
         if (job.getStatus().terminal()) {
             return ok(Map.of("proceed", false));
         }
+        // 마지막 시도가 이미 나갔다 — 중복 배달된 STARTED가 그 실행을 무효로 하면 상한이 뜻을 잃는다(1판 codex).
+        // 새 토큰 없이 「하지 마」. 마지막 일꾼이 죽었다면 큐가 실패 큐로 보내고 정리기가 SWEPT로 닫는다.
+        if (job.getAttemptOrdinal() >= properties.maxAttempts()) {
+            log.warn("clip.render.attempts_exhausted jobId={} attempts={}", job.getId(), job.getAttemptOrdinal());
+            return ok(Map.of("proceed", false));
+        }
         UUID token = job.start(at);
         clips.findByIdForUpdate(job.getClipId()).ifPresent(Clip::rendering);
         Map<String, Object> body = new HashMap<>();

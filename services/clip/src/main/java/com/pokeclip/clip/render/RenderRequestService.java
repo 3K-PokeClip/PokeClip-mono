@@ -43,6 +43,13 @@ public class RenderRequestService {
 
     private static final Logger log = LoggerFactory.getLogger(RenderRequestService.class);
 
+    /**
+     * 이웃 조각 사이에 허용하는 재생 시각 구멍. 조립기는 <b>번호 연속</b>만 보는데, 송출이 끊겼다 이어지면 번호는 이어져도
+     * 재생 시각이 건너뛴다 — 그대로 주문하면 일꾼이 가운데가 빈 영상을 조용히 만든다(PR #188 1판 codex P1). 정상 조각도
+     * 시각이 딱 맞지는 않는다(실측 2026-09-13 방송: 4,000ms 조각의 시작 간격 4,110ms) — 그 흔들림은 통과시키고 1초 넘는 구멍만 거절한다.
+     */
+    static final long MAX_PLAYBACK_GAP_MS = 1_000;
+
     private final ObjectProvider<RenderQueueClient> queue;
     private final RenderProperties properties;
     private final BroadcastAccessGuard guard;
@@ -109,6 +116,9 @@ public class RenderRequestService {
         }
         List<SegmentSource> taken = overlapping.stream()
                 .filter(s -> window.segments().stream().anyMatch(r -> r.seq() == s.seq())).toList();
+        if (hasPlaybackGap(taken)) {
+            throw new SourceNotReadyException();
+        }
 
         RecipeDocument document = RecipeDocument.fromStored(mapper, recipe);
         String trackManifest = broadcasts.findByStreamId(streamId).map(b -> b.getTrackManifest()).orElse(null);
@@ -142,6 +152,18 @@ public class RenderRequestService {
             publisher.publishNow(requested.clip().id());
         }
         return requested;
+    }
+
+    /** 이웃 조각의 재생 시각이 {@link #MAX_PLAYBACK_GAP_MS}보다 벌어진 자리가 있으면 true. 번호가 이어져도 시각이 건너뛴 방송이다. */
+    static boolean hasPlaybackGap(List<SegmentSource> taken) {
+        for (int i = 1; i < taken.size(); i++) {
+            SegmentSource prev = taken.get(i - 1);
+            long expectedStart = prev.startAtMs() + prev.durationMs();
+            if (taken.get(i).startAtMs() - expectedStart > MAX_PLAYBACK_GAP_MS) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** @throws ClipNotFoundException 그 방송에 그 번호의 영상이 없다 (404) */

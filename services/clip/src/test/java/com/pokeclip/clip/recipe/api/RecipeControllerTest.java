@@ -360,6 +360,9 @@ class RecipeControllerTest extends IntegrationTestSupport {
                 위반("cut 4.999초", r -> 컷(r).put("outAtMs", 1_000_000L + 4_999), "cut"),
                 위반("cut 180.001초", r -> 컷(r).put("outAtMs", 1_000_000L + 180_001), "cut"),
                 위반("cut 한 칸만", r -> 컷(r).remove("outAtMs"), "cut"),
+                // 3000년 뒤 시각 — 조각 조회의 to_timestamp가 못 받아 500이 나던 값(PR #188 1판 codex)
+                위반("cut 3000년 뒤", r -> { 컷(r).put("inAtMs", 32_503_680_000_000L); 컷(r).put("outAtMs", 32_503_680_010_000L); }, "cut"),
+                위반("자막 3000년 뒤", r -> { 구간(r, 1).put("startAtMs", 32_503_680_000_000L); 구간(r, 1).put("endAtMs", 32_503_680_001_000L); }, "subtitles"),
                 // outputs
                 위반("outputs 빈 배열", r -> ((ArrayNode) r.get("outputs")).removeAll(), "outputs"),
                 위반("outputs 없음", r -> r.remove("outputs"), "outputs"),

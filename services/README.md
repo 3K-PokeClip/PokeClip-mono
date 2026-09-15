@@ -1942,7 +1942,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 `creatorId`는 처음 저장한 사람의 회원 번호이고 고쳐도 안 바뀐다. **부분 수정 문은 없다** — 편집기는 늘 전체를 보내고,
 `PUT`은 통째로 갈아 끼우며 판을 하나 올린다.
 
-**저장 검증(계약6 2층)이 하나씩 실제로 거절되는 것을 시험이 잰다**(`RecipeControllerTest`, 위반 39종을 정상 본문에서
+**저장 검증(계약6 2층)이 하나씩 실제로 거절되는 것을 시험이 잰다**(`RecipeControllerTest`, 위반 41종을 정상 본문에서
 그 하나만 바꿔 400과 `field`를 확인). 400의 `field`는 파서 거절이면 칸 경로(`outputs[0].scale`), 규칙 거절이면
 덩어리 이름(`cut`·`outputs`·`audio`·`subtitles`·`schemaVersion`·`streamId`), JSON이 아니면 `body`다.
 

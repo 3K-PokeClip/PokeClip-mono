@@ -70,10 +70,10 @@ public class Clip {
         this.updatedAt = Instant.now();
     }
 
-    /** 메시지는 512자로 자른다 — 일꾼이 보낸 자유 문자열이라 길이가 우리 손에 없다. */
+    /** 코드 32자·메시지 512자로 자른다 — 일꾼이 보낸 자유 문자열이라 길이가 우리 손에 없다. 안 자르면 칸 길이에서 500이 나고 실패 사실이 안 남는다(1판 codex). */
     void failed(String code, String message) {
         this.status = ClipStatus.FAILED;
-        this.errorCode = code;
+        this.errorCode = code == null ? null : code.substring(0, Math.min(code.length(), 32));
         this.errorMessage = message == null ? null : message.substring(0, Math.min(message.length(), 512));
         this.updatedAt = Instant.now();
     }

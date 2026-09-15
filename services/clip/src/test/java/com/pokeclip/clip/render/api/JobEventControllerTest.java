@@ -102,13 +102,32 @@ class JobEventControllerTest extends IntegrationTestSupport {
         assertThat(jdbc.queryForObject("SELECT progress_percent FROM render_jobs WHERE id = ?", Integer.class, 잡)).isZero();
     }
 
+    /** 셋째가 마지막이고, 넷째(중복 배달)는 새 토큰 없이 「하지 마」다 — 마지막 일꾼을 무효로 하면 상한이 뜻을 잃는다(1판 codex). */
     @Test
-    void 세_번째_STARTED가_마지막_시도다() throws Exception {
+    void 세_번째_STARTED가_마지막_시도이고_네_번째는_거절된다() throws Exception {
         시작();
         시작();
-        보고(잡, 이벤트("STARTED", null, null)).andExpect(status().isOk())
+        String 마지막 = MAPPER.readTree(본문(보고(잡, 이벤트("STARTED", null, null)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.attemptOrdinal").value(3))
-                .andExpect(jsonPath("$.isFinalAttempt").value(true));
+                .andExpect(jsonPath("$.isFinalAttempt").value(true)))).get("executionToken").asString();
+
+        보고(잡, 이벤트("STARTED", null, null)).andExpect(status().isOk()).andExpect(jsonPath("$.proceed").value(false));
+
+        assertThat(jdbc.queryForObject("SELECT attempt_ordinal || ':' || execution_token::text FROM render_jobs WHERE id = ?",
+                String.class, 잡)).isEqualTo("3:" + 마지막);
+        보고(잡, 이벤트("PROGRESS", 마지막, "\"progress\":{\"percent\":5}")).andExpect(status().isOk());
+    }
+
+    /** 코드가 칸(32자)보다 길어도 실패 사실은 남는다 — 안 자르면 칸 길이 오류로 500이 나고 아무것도 안 남는다(1판 codex). */
+    @Test
+    void 긴_실패_코드도_잘려서_남는다() throws Exception {
+        String 토큰 = 시작();
+        String 긴코드 = "X".repeat(40);
+
+        보고(잡, 이벤트("TERMINAL_FAILED", 토큰, "\"error\":{\"code\":\"" + 긴코드 + "\",\"message\":\"m\"}")).andExpect(status().isOk());
+
+        assertThat(jdbc.queryForObject("SELECT status || ':' || error_code FROM clips WHERE id = ?", String.class, 영상))
+                .isEqualTo("failed:" + "X".repeat(32));
     }
 
     @Test

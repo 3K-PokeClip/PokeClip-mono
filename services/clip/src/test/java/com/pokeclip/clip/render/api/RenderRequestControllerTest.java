@@ -184,6 +184,21 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
         assertThat(LocalStackFixture.receiveAndDelete(큐.queueUrl())).isNull();
     }
 
+    /**
+     * 송출이 끊겼다 이어지면 번호는 이어지는데 재생 시각이 건너뛴다. 조립기(번호 연속)만 믿으면 201이 나가고 일꾼이 가운데가
+     * 빈 영상을 만든다 — 1판 codex P1. 조각 6과 7 사이를 10초 벌린다(번호는 그대로).
+     */
+    @Test
+    void 번호는_이어져도_재생_시각에_구멍이_있으면_409다() throws Exception {
+        볼_수_있다("OWNER");
+        RenderFixtures.조각을_넣는다(jdbc, 내_방송, 0);
+        jdbc.update("UPDATE stream_segments SET playback_pdt = playback_pdt + interval '10 seconds' WHERE stream_id = ? AND seq >= 7", 내_방송);
+
+        주문(내_방송, 편집본).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("source_not_ready"));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM clips", Integer.class)).isZero();
+    }
+
     @Test
     void 템플릿은_주문할_수_없다() throws Exception {
         볼_수_있다("OWNER");
