@@ -32,7 +32,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 | | 소유 |
 |---|---|
 | `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
-| `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `broadcasts.vod_expires_at` (V203, POK-117) |
+| `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `broadcasts.vod_expires_at` (V203, POK-117) · **`recipes` (V206, POK-124)** |
 | chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302 · **닉네임·역할 칸은 V306**) · `chat_ended_streams` (V303) · **`chat_donations` (V307)** · **`broadcast_info` (V308)** — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
 | `chat-detector` | `chat_metrics` (V401, POK-120) — **판별 서버 단독 소유다.** 위 `chat_messages`와 달리 공동 소유가 아니라 이 서버만 읽고 쓴다 |
 
@@ -659,7 +659,7 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat-collector · `V4xx` chat-detector.
 지금까지 나간 것은 auth의 `V101`~`V112`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
-**`V205`(방송 중 부분 색인, POK-218)** · chat-collector의 `V301`(`chat_messages`)~**`V308`** ·
+**`V205`(방송 중 부분 색인, POK-218)** · **`V206`(`recipes`, POK-124)** · chat-collector의 `V301`(`chat_messages`)~**`V308`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **chat-collector 대역 여덟:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
@@ -1290,7 +1290,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 **카드 목록은 방송 시간 오름차순이다** — 순번(`event_seq`)이 아니다. 그 값은 카드를 숨기면
 트리거가 올려서 자리가 바뀌고, 트랜잭션 밖에서 증가해 커밋 순서와도 다를 수 있다.
 
-#### 자격 판정 — 문 열하나가 무엇을 보나
+#### 자격 판정 — 문 열여섯이 무엇을 보나
 
 | 문 | 무엇으로 판정하나 | 자격이 없으면 |
 |---|---|---|
@@ -1305,9 +1305,14 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 | `GET …/{streamId}/chat-messages` (POK-234) | `BroadcastAccessGuard` — 통로와 같은 판정 | **404** `broadcast_not_found` |
 | `GET …/{streamId}/chat-chart` (POK-234) | 같음 | 같음 |
 | `GET …/{streamId}/broadcast-info` (POK-234) | 같음 | 같음 |
+| `POST …/{streamId}/playback-access` (POK-122) | 같음 | 같음 |
+| `POST …/{streamId}/recipes` (POK-124) | `BroadcastAccessGuard` — **본문 규칙 검사보다 먼저**(아래 절) | **404** `broadcast_not_found` |
+| `GET …/{streamId}/recipes` (POK-124) | 같음 | 같음 |
+| `GET …/{streamId}/recipes/{id}` (POK-124) | 같음 → 그 방송의 레시피인가 | 같음 · 방송은 보이는데 번호가 없으면 **404** `recipe_not_found` |
+| `PUT …/{streamId}/recipes/{id}` (POK-124) | 같음 | 같음 |
 
-**자격 판정이 없는 문은 둘이다 — 열두 번째 `POST /internal/broadcasts/{streamId}/highlights`와
-열세 번째 `GET /internal/broadcasts/live`**(POK-218, 아래 절). 둘 다 서버 간 토큰
+**자격 판정이 없는 문은 둘이다 — 열일곱 번째 `POST /internal/broadcasts/{streamId}/highlights`와
+열여덟 번째 `GET /internal/broadcasts/live`**(POK-218, 아래 절). 둘 다 서버 간 토큰
 (`X-Internal-Token`)으로 들어오고 감출 상대가 없다. 판별기는 404를 재시도 상한으로
 세므로 앞엣것은 아래 25ms 바닥도 안 문다.
 
@@ -1839,7 +1844,7 @@ health `relay`와 종료 판정 줄에 실린다. 🔴 **health UP/DOWN에는 �
 ### clip — 영상 출입증 (POK-122)
 
 **카드를 누른 사람이 그 방송 영상을 CDN에서 받을 수 있게, clip이 CloudFront 서명 쿠키 셋을 브라우저에
-붙여 준다.** 영상 바이트는 clip을 안 지난다(계약3). 자격 판정은 다른 사람 문 열하나와 **같은 판정기**
+붙여 준다.** 영상 바이트는 clip을 안 지난다(계약3). 자격 판정은 다른 사람 문과 **같은 판정기**
 (`BroadcastAccessGuard`)이고 404도 같은 본문·같은 25ms 바닥이다.
 
 | 문 | 인증 | 응답 |
@@ -1907,6 +1912,62 @@ health `relay`와 종료 판정 줄에 실린다. 🔴 **health UP/DOWN에는 �
   동시에 열어 둔 방송 스무 개까지는 문제없고, 오래된 것은 `Max-Age`로 사라진다). 웹은 여전히 **방송 화면을 열 때마다
   이 문을 부르고 CDN 403이면 다시 부른다**(위 「지킬 것」 3).
 - 정책에 IP 제한을 안 건다(모바일·이동 중 IP가 바뀐다).
+
+### clip — 편집 저장 (POK-124)
+
+**편집자가 「여기서 여기까지, 이 비율로, 이 소리만 켜고, 자막은 이렇게」라고 정한 것을 그대로 담아 두고
+다시 꺼내 준다.** 표는 `recipes` 하나(`V206`). 완성 영상은 60일 뒤 지워지지만 **이 기록은 영영 남는다** —
+지우는 문이 없다. 본문은 [계약6](https://github.com/3K-PokeClip/PokeClip-LLM-WIKI/blob/main/contracts/%EA%B3%84%EC%95%BD6-%EB%A0%88%EC%8B%9C%ED%94%BC%EC%8A%A4%ED%82%A4%EB%A7%88.md)(rev7)
+JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가 계약6 모양의 record(`RecipeDocument`)를 그대로
+읽고 쓰고 표의 jsonb 칸에도 그 조각을 그대로 넣는다.
+
+| 문 | 인증 | 응답 |
+|---|---|---|
+| `POST /api/clip/broadcasts/{streamId}/recipes` | Bearer JWT | **201** 아래 봉투 · **400** `{"error":"invalid_request","field":…}` · 404 `{"error":"broadcast_not_found"}` · 401 · 415(JSON이 아닌 Content-Type) · 503 `{"error":"authorization_unavailable"}` |
+| `GET /api/clip/broadcasts/{streamId}/recipes` | Bearer JWT | **200** `{"recipes":[…]}` 만든 순서 · 404 · 401 · 503 |
+| `GET /api/clip/broadcasts/{streamId}/recipes/{id}` | Bearer JWT | **200** 봉투 · 404 `{"error":"broadcast_not_found"}` 또는 **`{"error":"recipe_not_found"}`** · 401 · 503 |
+| `PUT /api/clip/broadcasts/{streamId}/recipes/{id}` | Bearer JWT | **200** 봉투(`recipeVersion` +1) · 400 · 404(둘 중 하나) · 401 · 415 · 503 |
+
+**봉투** — `{"id":…,"streamId":…,"creatorId":…,"recipeVersion":…,"recipe":{계약6 JSON},"createdAt":…,"updatedAt":…}`.
+`recipe` 안이 계약6이고 그 밖은 이 서버가 붙인 좌표다(`recipeVersion`은 계약6 2절이 「3번의 버저닝 좌표」로 둔 것).
+`creatorId`는 처음 저장한 사람의 회원 번호이고 고쳐도 안 바뀐다. **부분 수정 문은 없다** — 편집기는 늘 전체를 보내고,
+`PUT`은 통째로 갈아 끼우며 판을 하나 올린다.
+
+**저장 검증(계약6 2층)이 하나씩 실제로 거절되는 것을 시험이 잰다**(`RecipeControllerTest`, 위반 39종을 정상 본문에서
+그 하나만 바꿔 400과 `field`를 확인). 400의 `field`는 파서 거절이면 칸 경로(`outputs[0].scale`), 규칙 거절이면
+덩어리 이름(`cut`·`outputs`·`audio`·`subtitles`·`schemaVersion`·`streamId`), JSON이 아니면 `body`다.
+
+| 덩어리 | 규칙 |
+|---|---|
+| 본문 전체 | **모르는 칸은 400**(계약6 0절 fail-closed) · `"1"`을 1로, 1.5를 1로 접지 않는다 · 빈 본문·`null` 낱말·문서 뒤에 값이 더 붙음·**256KB 초과(다 받기 전에 끊는다)** 전부 400 `body` |
+| `schemaVersion` | 1만 |
+| `streamId` | 경로와 같아야 한다 |
+| `cut` | `null`이면 템플릿 · 있으면 둘 다 있고 `inAtMs < outAtMs`, 길이 **5초 이상 180초 이하** |
+| `outputs` | 1개 이상 · `outputId` `[a-z0-9-]{1,32}` 유일 · `aspect` `VERT_9_16`·`SQUARE_1_1`만, 같은 값 중복 금지 · `crop` `x,y ∈ [0,1)` · `w,h ≥ 0.05` · `x+w ≤ 1` · `y+h ≤ 1` |
+| `audio.tracks` | 1개 이상 · `trackId` 0~5 정수, 중복 금지, **0과 1~5 동시 금지** · `gain` 0.0~2.0 |
+| `subtitles` | `null`이면 자막 없음 · 있으면 `mode` 3종 · `segments` 배열(빈 배열 허용) · 각 `startAtMs < endAtMs` · 오름차순 · 겹침 금지 · **컷 밖은 거부하지 않는다** |
+
+**🔴 순서가 계약이다 — 자격 판정 → 본문 규칙 검사 → 저장.** 규칙 검사를 앞에 두면 없는 방송에 대고 본문을 고쳐 가며
+400과 404를 갈라 볼 수 있어 「없는 방송과 자격 없음이 같다」가 깨진다. 그래서 잘못된 본문을 자격 없는 사람이 보내면
+**404**다(시험 `규칙_위반_본문도_자격이_없으면_404다`). JSON 파싱만은 그 앞에서 400이 나간다 — 방송과 무관해 감출 것이 없다.
+
+**모르는 칸 거부는 이 문만의 매퍼로 한다.** Jackson 3 기본은 모르는 칸을 **무시**하고, 전역 매퍼에서 켜면 채팅 이벤트 통과
+문과 방송 편지 봉투(일부러 관용)까지 바뀐다. 그래서 컨트롤러가 본문을 **문자열로** 받아 `RecipeParser`의 엄격 매퍼로 읽는다 —
+파싱 실패도 이 문 안에서 같은 400 봉투로 끝나고 전역 조언에는 갈래를 안 더했다.
+
+**동시에 고치면 줄을 선다.** 같은 레시피를 두 편집자가 함께 고치면 뒤에 커밋한 쪽이 이기되 **판 번호는 겹치지 않는다**
+(`SELECT … FOR UPDATE`, 시험이 스무 요청을 같이 출발시켜 판 2~21이 전부 다른 것을 확인 — 락을 빼면 판 셋으로 뭉친다).
+렌더 주문(POK-125)이 판 번호로 레시피를 가리키므로 번호가 겹치면 다른 내용이 같은 좌표를 갖는다.
+
+**같은 판정기·같은 404·같은 25ms 바닥.** `recipe_not_found`도 바닥을 탄다 — 「내 방송에 없는 번호」와 「남의 방송에 있는
+번호」가 시간으로 갈리면 안 된다. 다른 방송의 번호를 내 방송 경로에 넣으면 조회도 고치기도 `recipe_not_found`이고
+**고쳐지지 않는다**(리포지터리가 방송 번호를 같이 건다).
+
+**알려진 한계**
+- **종횡비 ±1% 픽셀식은 못 잰다** — 원본 해상도가 렌더 주문 때야 생긴다(계약6 3절, 3층 전용). 여기서는 정규화 기하까지다
+- **목록에 상한이 없다** — 레시피는 사람이 손으로 만드는 것이라 방송 하나에 수십 벌이다. 수천 벌이 생기는 날 이어받기를 붙인다
+- **누가 마지막에 고쳤는지는 안 남는다** — `creatorId`는 처음 저장한 사람뿐이다. 편집 이력이 필요하면 새 카드
+- 새 환경변수 **0** · 시큐리티 변경 **0**(`anyRequest().authenticated()`에 올라탔다)
 
 ### 치지직 채널 연동 (POK-93)
 

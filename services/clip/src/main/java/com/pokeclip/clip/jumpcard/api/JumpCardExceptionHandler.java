@@ -13,6 +13,7 @@ import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.paging.InvalidCursorException;
 import com.pokeclip.clip.paging.InvalidListParamException;
 import com.pokeclip.clip.playback.PlaybackErrors;
+import com.pokeclip.clip.recipe.RecipeErrors;
 import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -184,6 +185,27 @@ public class JumpCardExceptionHandler {
     @ExceptionHandler(PlaybackErrors.SigningUnavailableException.class)
     ResponseEntity<Map<String, Object>> playbackSigningUnavailable(PlaybackErrors.SigningUnavailableException e) {
         return json(HttpStatus.SERVICE_UNAVAILABLE, error("playback_signing_unavailable"));
+    }
+
+    // ── POK-124: 레시피 문 넷이 쓰는 갈래 ──────────
+
+    /**
+     * 404. <b>레시피 번호는 자격 판정 뒤에만 찾는다</b>(서비스 순서)이라 여기 오는 요청은 이미 그 방송을 볼 수
+     * 있는 사람이다 — 그래서 {@code broadcast_not_found}와 낱말을 가른다. 다른 방송의 번호를 넣어도 이것이
+     * 나가므로(리포지터리가 방송 번호를 같이 건다) 번호를 훑어 남의 방송 레시피 수를 셀 수는 없다.
+     * 바닥은 위 404들과 같이 탄다 — 「내 방송에 없는 번호」와 「남의 방송에 있는 번호」가 시간으로 갈리면 안 된다.
+     */
+    @ExceptionHandler(RecipeErrors.RecipeNotFoundException.class)
+    ResponseEntity<Map<String, Object>> recipeNotFound(RecipeErrors.RecipeNotFoundException e,
+                                                       HttpServletRequest request) {
+        NotFoundFloor.awaitFloorIfMarked(request);
+        return json(HttpStatus.NOT_FOUND, error("recipe_not_found"));
+    }
+
+    /** 400. 계약6 모양이 아니다. {@code field}는 칸 경로 또는 덩어리 이름이고 값은 안 싣는다. */
+    @ExceptionHandler(RecipeErrors.InvalidRecipeException.class)
+    ResponseEntity<Map<String, Object>> invalidRecipe(RecipeErrors.InvalidRecipeException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
     }
 
     /**
