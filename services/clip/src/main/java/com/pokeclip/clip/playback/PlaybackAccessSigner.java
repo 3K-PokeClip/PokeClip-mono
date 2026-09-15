@@ -19,10 +19,16 @@ import java.util.regex.Pattern;
  * CloudFront 서명 쿠키를 만드는 유일한 자리. 자격 판정은 여기 없다 — 부르는 문이
  * {@code BroadcastAccessGuard}를 먼저 지난다.
  *
- * <p><b>범위는 그 스트리머의 영상 전부다</b>: {@code {base}/*&#47;{streamId}/*}. 계약3 7-1의
- * 경로 셋({@code /live} · {@code /dvr} · {@code /vod})이 전부 {@code /{종류}/{streamId}/…} 모양이라
- * 앞 자리를 와일드카드로 두면 하나로 덮인다. 카드 하나 구간만 열면 카드를 넘길 때마다 새로
- * 받아야 하고, 그 왕복마다 auth를 두드린다.
+ * <p><b>범위는 그 스트리머의 영상 전부다</b> — 계약3 7-1의 경로 종류({@code /live} · {@code /dvr} ·
+ * {@code /vod})마다 정책 {@code {base}/{kind}/{streamId}/*} 하나, 쿠키 셋 하나. 카드 하나 구간만 열면
+ * 카드를 넘길 때마다 새로 받아야 하고, 그 왕복마다 auth를 두드린다.
+ *
+ * <p>🔴 <b>종류를 앞 와일드카드 하나({@code {base}/*&#47;{streamId}/*})로 덮지 않는다</b>(봇 리뷰 2판).
+ * CloudFront는 정책 {@code Resource}를 요청 URL 전체(쿼리스트링 포함)에 대한 문자열 와일드카드로 맞추고
+ * 경로 구분자를 안 보므로, {@code {base}/live/{남의방송}/index.m3u8?x=/{내방송}/}이 그 범위에 맞는다 —
+ * 방송 하나의 자격으로 모든 스트리머의 영상이 열린다. 정책이 셋이면 CloudFront 고정 쿠키 이름 셋을 세 번
+ * 써야 하므로 쿠키 {@code Path}를 {@code /{kind}/{streamId}}로 갈라 브라우저가 경로에 맞는 셋만 보내게 한다
+ * ({@link PlaybackAccess.Scope}).
  *
  * <p>🔴 <b>{@code streamId}는 명부 값이지만 정책 문자열에 그대로 들어간다.</b> 큐로 받은 값에
  * {@code *}·{@code /}가 섞여 있으면 정책 범위가 남의 방송까지 넓어진다. 그래서 명부 통과 뒤에도

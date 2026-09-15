@@ -191,7 +191,8 @@ pokeclip:
     # 일부만 채우면 부팅을 거부한다(실수). 비밀키는 PKCS#8 PEM 본문이고 리터럴 \n을 개행으로 읽는다.
     key-pair-id: ${CLOUDFRONT_KEY_PAIR_ID:}
     private-key-pem: ${CLOUDFRONT_PRIVATE_KEY_PEM:}
-    # 영상이 나가는 CDN 도메인. 정책 범위가 {이 값}/*/{streamId}/* 다(계약3 7-1의 /live·/dvr·/vod를 다 덮는다).
+    # 영상이 나가는 CDN 도메인(끝 / 없음). 정책 범위는 종류마다 {이 값}/{kind}/{streamId}/* 다 — 앞 와일드카드
+    # {이 값}/*/{streamId}/* 는 쿼리스트링 트릭으로 남의 방송을 열어 금지(봇 리뷰 2판). 경로가 있으면 쿠키 Path도 거기서 시작.
     resource-base-url: ${MEDIA_BASE_URL:}
     # 쿠키 Domain. 운영은 .pokeclip.com(앱·미디어·clip이 전부 그 아래여야 한다). 비면 호스트 전용.
     cookie-domain: ${PLAYBACK_COOKIE_DOMAIN:}
