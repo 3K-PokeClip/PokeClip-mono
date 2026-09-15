@@ -206,6 +206,13 @@ pokeclip:
     # 환경변수를 안 뺀 이유: 운영자가 만질 값이 아니고, 만지면 위 둘의 관계가 깨진다.
     # ReattachWiringTest.첫_회차가_주기보다_먼저_돈다가 이 줄과 @Scheduled를 같이 읽어 잰다.
     initial-delay: PT5S
+    # 떼기(POK-244). 켜면 같은 회차에서 「내가 붙어 있는데 clip 명부에 없는 방송」의 세션을 반납한다 —
+    # clip이 종료 편지를 놓친 방송을 치우면(BROADCAST_REAPER_*) 그 다음 회차(1분)에 자리가 돌아온다.
+    # 명부가 상한(500)에 잘린 회차에는 절대 안 뗀다(살아있는 방송이 「사라진 것」으로 보인다).
+    # 기본 꺼짐 — 켜는 것은 clip 쪽 치우개와 같은 결정이다.
+    detach-enabled: ${CHAT_DETACH_ENABLED:false}
+    # 방송 시작 뒤 이만큼은 명부에 없어도 안 뗀다. 같은 편지를 clip과 각자 받아 우리가 먼저 붙는 순간이 있다.
+    detach-grace: ${CHAT_DETACH_GRACE:PT10M}
   relay:
     # 켜면 받은 채팅·후원을 저장과 따로 clip에 바로 민다(POK-234 PR-B). clip이 SSE로 화면에 뿌린다.
     # 저장과 독립이다 — clip이 죽어도 표 적재는 그대로이고, 중계는 재시도 없이 버리고 센다.

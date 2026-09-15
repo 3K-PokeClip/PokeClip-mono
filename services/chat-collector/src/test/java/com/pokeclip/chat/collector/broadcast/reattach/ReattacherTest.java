@@ -707,10 +707,88 @@ class ReattacherTest extends IntegrationTestSupport {
         }
     }
 
+    // ── 떼기 (POK-244) ────────────────────────────────────────────────────
+
+    /**
+     * 🔴 <b>반대 방향.</b> clip이 놓친 방송을 치우면 명부에서 사라진다 — 내가 붙어 있으면 반납한다.
+     * 실물 등록부에 세션을 세워 두고 명부를 비워 보낸다. 반납이 등록부에서 실제로 사라지는 것까지 잰다
+     * (「stop을 불렀다」만 재면 등록부가 그 번호를 모를 때도 초록이다).
+     */
+    @Test
+    @Timeout(30)
+    void 명부에_없는_붙은_방송은_유예를_넘겼으면_반납한다() {
+        열어둔다(A001, 7L, 시작);                       // 시작 = 지금 − 10분
+        returns();                                    // 명부 비었고 잘리지 않았다
+
+        try (LogCaptor captor = new LogCaptor()) {
+            newReattacher(lanes, Duration.ofMinutes(5)).sweep();
+
+            assertThat(registry.activeStreamIds()).as("반납됐다").doesNotContain(A001);
+            assertThat(captor.messages()).anyMatch(line -> line.startsWith("chat.reattach.detached")
+                    && line.contains("stream=" + A001));
+        }
+    }
+
+    /** 유예 안(시작 10분 전인데 유예 30분)이면 아직 clip이 안 적었을 수 있다 — 안 뗀다. */
+    @Test
+    @Timeout(30)
+    void 시작한_지_유예가_안_지난_방송은_명부에_없어도_안_뗀다() {
+        열어둔다(A001, 7L, 시작);
+        returns();
+
+        newReattacher(lanes, Duration.ofMinutes(30)).sweep();
+
+        assertThat(registry.activeStreamIds()).contains(A001);
+    }
+
+    /** 🔴 명부가 상한에 잘렸으면 살아있는 방송이 「사라진 것」으로 보인다 — 그 회차는 통째로 건너뛴다. */
+    @Test
+    @Timeout(30)
+    void 명부가_잘렸으면_안_뗀다() {
+        열어둔다(A001, 7L, 시작);
+        given(client.list()).willReturn(new LiveBroadcasts(List.of(), true));
+
+        try (LogCaptor captor = new LogCaptor()) {
+            newReattacher(lanes, Duration.ofMinutes(5)).sweep();
+
+            assertThat(registry.activeStreamIds()).contains(A001);
+            assertThat(captor.messages()).anyMatch(line -> line.startsWith("chat.reattach.detach_skipped")
+                    && line.contains("reason=TRUNCATED"));
+        }
+    }
+
+    /** 명부에 있으면 당연히 안 뗀다 — 떼기가 「명부와 다른 것」만 보는지 잰다. */
+    @Test
+    @Timeout(30)
+    void 명부에_있는_방송은_안_뗀다() {
+        열어둔다(A001, 7L, 시작);
+        returns(live(A001, "7", 시작));
+
+        newReattacher(lanes, Duration.ofMinutes(5)).sweep();
+
+        assertThat(registry.activeStreamIds()).contains(A001);
+    }
+
+    /** 꺼져 있으면(유예 null) POK-219 그대로다 — 기존 생성자를 쓰는 모든 시험이 이 갈래다. */
+    @Test
+    @Timeout(30)
+    void 떼기가_꺼져_있으면_명부에_없어도_안_뗀다() {
+        열어둔다(A001, 7L, 시작);
+        returns();
+
+        newReattacher(lanes).sweep();
+
+        assertThat(registry.activeStreamIds()).contains(A001);
+    }
+
     // ── 조립 ─────────────────────────────────────────────────────────────
 
     private Reattacher newReattacher(StreamerSerialExecutor executor) {
         return new Reattacher(client, registry, store, measurer, executor, sessions, () -> 지금);
+    }
+
+    private Reattacher newReattacher(StreamerSerialExecutor executor, Duration detachGrace) {
+        return new Reattacher(client, registry, store, measurer, executor, sessions, () -> 지금, detachGrace);
     }
 
     private void returns(LiveBroadcasts.Item... items) {

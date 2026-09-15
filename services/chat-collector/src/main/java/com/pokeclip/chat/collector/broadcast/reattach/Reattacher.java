@@ -10,9 +10,12 @@ import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -108,6 +111,8 @@ public class Reattacher {
     private final StreamerSerialExecutor lanes;
     private final BroadcastSessions sessions;
     private final Supplier<Instant> clock;
+    /** 떼기 유예(POK-244). null이면 떼지 않는다 — 옛 생성자와 같은 뜻이다. */
+    private final Duration detachGrace;
 
     /**
      * 숫자로 못 읽은 스트리머 식별자의 수. <b>1번이 식별자 체계를 바꾸면 모든 방송이 이 길이다</b> —
@@ -118,6 +123,13 @@ public class Reattacher {
     public Reattacher(LiveBroadcastClient client, SessionRegistry registry, EndedStreamStore store,
                       GapMeasurer measurer, StreamerSerialExecutor lanes,
                       BroadcastSessions sessions, Supplier<Instant> clock) {
+        this(client, registry, store, measurer, lanes, sessions, clock, null);
+    }
+
+    /** @param detachGrace 떼기 유예. null이면 명부에 없는 세션을 떼지 않는다(POK-219 그대로) */
+    public Reattacher(LiveBroadcastClient client, SessionRegistry registry, EndedStreamStore store,
+                      GapMeasurer measurer, StreamerSerialExecutor lanes,
+                      BroadcastSessions sessions, Supplier<Instant> clock, Duration detachGrace) {
         this.client = client;
         this.registry = registry;
         this.store = store;
@@ -125,6 +137,7 @@ public class Reattacher {
         this.lanes = lanes;
         this.sessions = sessions;
         this.clock = clock;
+        this.detachGrace = detachGrace;
     }
 
     /**
@@ -213,6 +226,7 @@ public class Reattacher {
         List<LiveBroadcasts.Item> candidates = readable.stream()
                 .filter(item -> !attached.contains(item.streamId()))
                 .toList();
+        detachMissing(live, readable);
         // 메모 조회는 한 번이다 — 낱개로 물으면 방송 수만큼 왕복한다.
         Set<String> remembered = store.findAllIds(
                 candidates.stream().map(LiveBroadcasts.Item::streamId).toList());
@@ -254,6 +268,60 @@ public class Reattacher {
         }
         log.info("chat.reattach.swept received={} candidates={} submitted={} deferred={}",
                 live.broadcasts().size(), candidates.size(), submitted, deferred);
+    }
+
+    /**
+     * 반대 방향(POK-244) — <b>내가 붙어 있는데 clip 명부에 없는 방송</b>의 세션을 반납한다.
+     * clip이 종료 편지를 놓친 방송을 치우면(치우개) 그 다음 회차에 여기서 자리가 돌아온다.
+     * 두 서버가 각자 시각을 재지 않는다 — 판정은 clip 하나이고 우리는 명부를 따른다.
+     *
+     * <p><b>안 떼는 조건 셋</b>이 이 갈래의 전부다.
+     * <ol>
+     *   <li>명부가 상한에 잘렸다({@code truncated}) — 살아있는 방송이 「사라진 것」으로 보인다.
+     *       그 회차는 통째로 건너뛴다.</li>
+     *   <li>방송 시작 뒤 유예 안이다 — 같은 편지를 clip과 각자 받으므로 우리가 먼저 붙고 clip이
+     *       아직 안 적은 순간이 있다.</li>
+     *   <li>꺼져 있다(유예 null).</li>
+     * </ol>
+     *
+     * <p>반납은 기존 종료 경로({@code BroadcastSessions.stop} → 등록부 {@code close})를 그대로 부른다 —
+     * 새 종료 경로를 만들지 않는다. <b>메모({@code chat_ended_streams})는 남기지 않는다</b> — 메모의
+     * 열쇠는 편지의 순서 번호이고 여기엔 편지가 없다. 재전송된 시작 편지가 그 사이 세션을 다시 열면
+     * 다음 회차가 다시 뗀다(1분). 한 방송의 반납 실패는 세고 넘어간다 — 나머지 방송을 막지 않는다.
+     */
+    private void detachMissing(LiveBroadcasts live, List<LiveBroadcasts.Item> readable) {
+        if (detachGrace == null) {
+            return;
+        }
+        if (live.truncated()) {
+            log.warn("chat.reattach.detach_skipped reason=TRUNCATED");
+            return;
+        }
+        Set<String> listed = new HashSet<>();
+        for (LiveBroadcasts.Item item : readable) {
+            listed.add(item.streamId());
+        }
+        Instant cutoff = clock.get().minus(detachGrace);
+        int detached = 0;
+        int failed = 0;
+        for (Map.Entry<String, Instant> mine : registry.activeStreamStarts().entrySet()) {
+            String streamId = mine.getKey();
+            if (listed.contains(streamId) || mine.getValue().isAfter(cutoff)) {
+                continue;
+            }
+            try {
+                if (sessions.stop(streamId)) {
+                    detached++;
+                    log.info("chat.reattach.detached stream={} startedAt={}", streamId, mine.getValue());
+                }
+            } catch (RuntimeException e) {
+                failed++;
+                log.warn("chat.reattach.detach_failed stream={} causeType={}", streamId, e.getClass().getSimpleName());
+            }
+        }
+        if (detached > 0 || failed > 0) {
+            log.info("chat.reattach.detach_swept detached={} failed={}", detached, failed);
+        }
     }
 
     /**
