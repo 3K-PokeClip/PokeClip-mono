@@ -26,13 +26,34 @@ import java.time.Duration;
  */
 @ConfigurationProperties(prefix = "pokeclip.reattach")
 public record ReattachProperties(String clipBaseUrl, boolean enabled,
-                                 Duration interval, Duration initialDelay) {
+                                 Duration interval, Duration initialDelay,
+                                 /**
+                                  * 떼기(POK-244). 켜면 같은 회차에서 <b>내가 붙어 있는데 clip 명부에 없는 방송</b>의
+                                  * 세션을 반납한다 — clip이 놓친 방송을 닫으면 그 다음 회차에 자리가 돌아온다.
+                                  */
+                                 boolean detachEnabled,
+                                 /**
+                                  * 방송 시작 뒤 이만큼은 명부에 없어도 안 뗀다. 같은 편지를 clip과 각자 받으므로
+                                  * 우리가 먼저 붙고 clip이 아직 안 적은 순간이 있다 — 그 창에서 떼면 방금 붙은
+                                  * 세션을 우리 손으로 끊는다.
+                                  */
+                                 Duration detachGrace) {
 
-    /** @throws IllegalStateException clip 주소가 비어 있으면 */
+    /** @throws IllegalStateException clip 주소가 비어 있으면 · 떼기가 켜졌는데 유예가 없거나 0 이하면 */
     public void validate() {
         if (clipBaseUrl == null || clipBaseUrl.isBlank()) {
             throw new IllegalStateException(
                     "pokeclip.reattach.clip-base-url이(가) 비어 있다. CLIP_BASE_URL 환경변수를 준다.");
         }
+        if (detachEnabled && (detachGrace == null || detachGrace.isZero() || detachGrace.isNegative())) {
+            throw new IllegalStateException(
+                    "pokeclip.reattach.detach-enabled=true인데 detach-grace가 양수가 아니다(" + detachGrace
+                    + "). 0이면 clip이 아직 안 적은 방금 붙은 세션까지 뗀다. CHAT_DETACH_GRACE를 준다.");
+        }
+    }
+
+    /** 떼기 유예. 꺼져 있으면 null — {@code Reattacher}가 null을 「떼지 않는다」로 읽는다. */
+    public Duration detachGraceOrNull() {
+        return detachEnabled ? detachGrace : null;
     }
 }

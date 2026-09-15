@@ -76,8 +76,11 @@ public class ReattachConfiguration {
     @Bean
     public Reattacher reattacher(LiveBroadcastClient client, SessionRegistry registry,
                                  EndedStreamStore store, GapMeasurer measurer,
-                                 StreamerSerialExecutor lanes, BroadcastSessions sessions) {
-        return new Reattacher(client, registry, store, measurer, lanes, sessions, Instant::now);
+                                 StreamerSerialExecutor lanes, BroadcastSessions sessions,
+                                 ReattachProperties reattach) {
+        // 떼기(POK-244)는 켜졌을 때만 유예를 넘긴다 — null이면 Reattacher가 떼지 않는다.
+        return new Reattacher(client, registry, store, measurer, lanes, sessions, Instant::now,
+                reattach.detachGraceOrNull());
     }
 
     @Bean
