@@ -1,5 +1,6 @@
 package com.pokeclip.clip.recipe.api;
 
+import com.pokeclip.clip.recipe.RecipeParser;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.NotFoundFloor;
 import com.pokeclip.clip.support.TestIds;
@@ -390,15 +391,33 @@ class RecipeControllerTest extends IntegrationTestSupport {
                 위반("segment text 없음", r -> 구간(r, 0).remove("text"), "subtitles"));
     }
 
-    @Test
-    void 본문이_JSON이_아니면_400이고_칸은_body다() throws Exception {
+    /**
+     * 본문 자체가 문서가 아닌 갈래 다섯 — 전부 같은 봉투 {@code field:"body"}다. <b>스프링 기본 400 봉투가 새는 자리</b>
+     * (빈 본문)와 <b>500이 새는 자리</b>({@code null} 낱말)와 <b>조용히 반만 저장되는 자리</b>(뒤에 값이 더 붙음)를
+     * 1판 codex가 짚었다. 큰 본문은 상한 + 1바이트를 <b>자막 한 줄</b>에 넣어 만든다 — 다른 규칙에 먼저 걸리지 않게.
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("문서가_아닌_본문들")
+    void 본문이_문서가_아니면_400이고_칸은_body다(String 설명, String 본문) throws Exception {
         볼_수_있다("OWNER");
         mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/recipes")
                         .header("Authorization", "Bearer " + TestTokens.access(요청자))
-                        .contentType(MediaType.APPLICATION_JSON).content("{이건 JSON이 아니다"))
+                        .contentType(MediaType.APPLICATION_JSON).content(본문))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("invalid_request"))
                 .andExpect(jsonPath("$.field").value("body"));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM recipes", Integer.class)).isZero();
+    }
+
+    static Stream<Arguments> 문서가_아닌_본문들() {
+        ObjectNode 큰것 = 정상_레시피();
+        구간(큰것, 0).put("text", "가".repeat(RecipeParser.MAX_BODY_BYTES / 3 + 1));
+        return Stream.of(
+                Arguments.of("JSON 아님", "{이건 JSON이 아니다"),
+                Arguments.of("빈 본문", ""),
+                Arguments.of("null 낱말", "null"),
+                Arguments.of("문서 뒤에 값이 더 붙음", 정상_레시피().toString() + " {}"),
+                Arguments.of("상한 초과", 큰것.toString()));
     }
 
     /** 고치기도 같은 규칙을 탄다. 하나만 재고 나머지는 같은 검증기다 — 거절되면 판도 안 오른다. */
