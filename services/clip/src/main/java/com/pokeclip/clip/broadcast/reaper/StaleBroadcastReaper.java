@@ -71,6 +71,10 @@ public class StaleBroadcastReaper {
                                   ORDER BY seq DESC LIMIT 1) s ON true
              WHERE b.status = 'live'""";
 
+    /** 락을 잡은 뒤 다시 읽는 한 줄 — 후보를 고른 뒤 락을 잡기 전에 들어온 조각을 본다. */
+    static final String LAST_SEGMENT_OF = """
+            SELECT start_wall_utc FROM stream_segments WHERE stream_id = ? ORDER BY seq DESC LIMIT 1""";
+
     private final JdbcTemplate jdbc;
     private final BroadcastRepository broadcasts;
     private final TransactionTemplate tx;
@@ -121,34 +125,54 @@ public class StaleBroadcastReaper {
         int ended = 0;
         for (Candidate candidate : stale) {
             // 방송마다 트랜잭션을 따로 연다 — 하나가 실패해도 나머지는 닫힌다.
-            Boolean closed;
+            Candidate closed;
             try {
-                closed = tx.execute(status -> broadcasts.findByStreamIdForUpdate(candidate.streamId())
-                        .filter(b -> b.getStatus() == BroadcastStatus.LIVE)
-                        .map(b -> {
-                            b.endBySilence(candidate.lastSignalAt());
-                            return true;
-                        })
-                        .orElse(false));
+                closed = tx.execute(status -> endIfStillStale(candidate.streamId(), deadline));
             } catch (RuntimeException e) {
                 log.warn("broadcast.reaper.end_failed streamId={} causeType={}",
                         candidate.streamId(), e.getClass().getSimpleName());
                 continue;
             }
-            if (!Boolean.TRUE.equals(closed)) {
-                continue;   // 후보를 고른 뒤 편지가 먼저 닫았다 — 그쪽이 정본이다
+            if (closed == null) {
+                continue;   // 후보를 고른 뒤 편지가 먼저 닫았거나 새 조각이 들어왔다 — 그쪽이 정본이다
             }
             ended++;
             log.info("broadcast.reaper.ended streamId={} lastSignalAt={} basis={} silence={}",
-                    candidate.streamId(), candidate.lastSignalAt(),
-                    candidate.fromSegment() ? "SEGMENT" : "BROADCAST_START",
-                    Duration.between(candidate.lastSignalAt(), now));
-            notifyEnded(candidate.streamId());
+                    closed.streamId(), closed.lastSignalAt(),
+                    closed.fromSegment() ? "SEGMENT" : "BROADCAST_START",
+                    Duration.between(closed.lastSignalAt(), now));
+            notifyEnded(closed.streamId());
         }
         if (ended > 0) {
             log.info("broadcast.reaper.swept live={} ended={}", stale.size(), ended);
         }
         return ended;
+    }
+
+    /**
+     * 🔴 <b>락을 잡은 뒤 신호를 다시 읽는다</b>(봇 리뷰 1판 codex P1). 후보 목록은 락 밖에서 만든 스냅샷이라,
+     * 그 뒤 락을 잡기 전에 새 조각이 들어오면 스냅샷은 낡았는데 줄은 아직 {@code live}다 — 스냅샷대로 닫으면
+     * <b>살아있는 방송을 닫는다.</b> 앞 후보의 락 대기가 길수록 그 창이 넓다. 다시 읽은 신호가 유예 안이면 안 닫고,
+     * 닫을 때의 {@code ended_at}도 다시 읽은 값이다.
+     *
+     * @return 닫았으면 닫은 근거(다시 읽은 신호), 아니면 null
+     */
+    private Candidate endIfStillStale(String streamId, Instant deadline) {
+        Broadcast broadcast = broadcasts.findByStreamIdForUpdate(streamId).orElse(null);
+        if (broadcast == null || broadcast.getStatus() != BroadcastStatus.LIVE) {
+            return null;
+        }
+        Instant lastSegment = jdbc.query(LAST_SEGMENT_OF, rs -> rs.next() ? rs.getTimestamp(1).toInstant() : null, streamId);
+        Instant signal = latest(lastSegment, broadcast.getStartedAt());
+        if (signal == null) {
+            signal = broadcast.getCreatedAt();
+        }
+        if (signal.isAfter(deadline)) {
+            log.info("broadcast.reaper.revived streamId={} lastSignalAt={}", streamId, signal);
+            return null;
+        }
+        broadcast.endBySilence(signal);
+        return new Candidate(streamId, signal, lastSegment != null);
     }
 
     /** 통보 실패가 다음 방송의 굳히기를 막으면 안 된다 — 편지 러너의 {@code notifyEnded}와 같은 폭. */
@@ -173,6 +197,13 @@ public class StaleBroadcastReaper {
             }
         }
         return best;
+    }
+
+    private static Instant latest(Instant a, Instant b) {
+        if (a == null) {
+            return b;
+        }
+        return b == null || a.isAfter(b) ? a : b;
     }
 
     private record Candidate(String streamId, Instant lastSignalAt, boolean fromSegment) {

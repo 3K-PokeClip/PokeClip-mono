@@ -8,7 +8,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** 유예 하한(15분)은 계약9의 정산 창이다 — 그보다 짧으면 정상 편지와 경주한다. */
+/** 유예 하한(20분) = 계약9 정산 창 15분 + 전달 여유 5분 — 정산 창과 같은 값이면 정상 편지와 늘 경주한다. */
 class ReaperPropertiesTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
@@ -21,9 +21,11 @@ class ReaperPropertiesTest {
     }
 
     @Test
-    void 유예가_15분_미만이면_켜짐과_무관하게_부팅이_실패한다() {
-        runner.withPropertyValues(values("PT1M", "PT14M")).run(context -> assertThat(context).hasFailed());
-        runner.withPropertyValues(values("PT1M", "PT15M")).run(context -> assertThat(context).hasNotFailed());
+    void 유예가_20분_미만이면_켜짐과_무관하게_부팅이_실패한다() {
+        // 정산 창과 같은 값 — 편지와 경주한다
+        runner.withPropertyValues(values("PT1M", "PT15M")).run(context -> assertThat(context).hasFailed());
+        runner.withPropertyValues(values("PT1M", "PT19M59S")).run(context -> assertThat(context).hasFailed());
+        runner.withPropertyValues(values("PT1M", "PT20M")).run(context -> assertThat(context).hasNotFailed());
     }
 
     @Test

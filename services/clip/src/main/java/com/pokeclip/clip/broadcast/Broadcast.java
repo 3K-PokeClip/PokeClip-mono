@@ -191,4 +191,9 @@ public class Broadcast {
     public Long getLastSequence() {
         return lastSequence;
     }
+
+    /** 「우리가 처음 안 시각」. 살아있는 신호가 아니다 — 치우개가 시작·조각이 둘 다 없을 때만 바닥값으로 쓴다. */
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
 }

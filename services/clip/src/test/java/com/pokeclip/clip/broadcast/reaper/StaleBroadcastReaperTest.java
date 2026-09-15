@@ -17,6 +17,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -144,6 +149,50 @@ class StaleBroadcastReaperTest extends IntegrationTestSupport {
         assertThat(reaper().reapOnce()).isZero();
         assertThat(상태("s-ended")).isEqualTo("ended");
         assertThat(상태("s-other")).isEqualTo("live");
+        assertThat(notified).isEmpty();
+    }
+
+    /**
+     * 🔴 <b>후보를 고른 뒤 락을 잡기 전에 새 조각이 들어오면 안 닫는다</b>(봇 리뷰 1판 codex P1).
+     * 후보 목록은 락 밖 스냅샷이다. 다른 트랜잭션이 이 방송 행을 잠근 채 두면 치우개는 락에서 기다리고,
+     * 그동안 새 조각을 넣고 락을 풀면 — 스냅샷대로 닫는 구현은 살아있는 방송을 닫는다.
+     * 결정적이다: 락을 실제로 잡은 뒤에 치우개를 부르고, 치우개가 대기에 들어간 뒤 조각을 넣는다.
+     */
+    @Test
+    void 후보를_고른_뒤_락을_잡기_전에_새_조각이_들어오면_안_닫는다() throws Exception {
+        processor.process(Envelopes.started("e1", "s-race", 1L));
+        조각("s-race", 1, now.minus(Duration.ofHours(1)));
+        CountDownLatch 잠갔다 = new CountDownLatch(1);
+        CountDownLatch 풀어라 = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> holder = pool.submit(() -> tx.executeWithoutResult(status -> {
+                broadcasts.findByStreamIdForUpdate("s-race").orElseThrow();
+                잠갔다.countDown();
+                try {
+                    if (!풀어라.await(30, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("풀라는 신호가 안 왔다");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+            }));
+            assertThat(잠갔다.await(10, TimeUnit.SECONDS)).isTrue();
+
+            Future<Integer> reap = pool.submit(() -> reaper().reapOnce());   // 후보는 골랐고 락에서 기다린다
+            Thread.sleep(300);
+            assertThat(reap.isDone()).as("락에서 기다려야 한다 — 바로 끝났으면 이 시험이 경합을 못 만든 것이다").isFalse();
+            조각("s-race", 2, now.minus(Duration.ofMinutes(1)));               // 살아났다
+            풀어라.countDown();
+            holder.get(30, TimeUnit.SECONDS);
+
+            assertThat(reap.get(30, TimeUnit.SECONDS)).isZero();
+        } finally {
+            풀어라.countDown();
+            pool.shutdownNow();
+        }
+        assertThat(상태("s-race")).isEqualTo("live");
         assertThat(notified).isEmpty();
     }
 

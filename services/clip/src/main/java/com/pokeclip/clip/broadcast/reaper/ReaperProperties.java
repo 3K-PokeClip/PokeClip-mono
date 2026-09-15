@@ -15,9 +15,10 @@ import java.time.Duration;
  *
  * <p><b>유예의 하한이 왜 있나.</b> 1번 Media는 송출이 끊겨도 슬레이트를 300초 이어 조각을 계속
  * 만들고(계약-세그먼트인덱스 6-5), 종료 편지는 그 뒤 정산 창 15분이 지나서야 발행한다(계약9 게이트 ④).
- * 즉 마지막 조각 뒤 <b>15분 안에는 정상 편지가 아직 오는 중</b>이다. 유예가 그보다 짧으면 이 장치가
- * 편지보다 먼저 닫아 편지가 정상인데도 매 방송 두 번 닫힌다(두 번째는 순서 규칙으로 무해하지만
- * ended_at이 이 장치의 추정값으로 먼저 찍혀 화면이 일찍 「끝남」을 본다).
+ * 즉 마지막 조각 뒤 <b>15분 안에는 정상 편지가 아직 오는 중</b>이고 그 뒤에도 발행·전달·처리가 남는다.
+ * 유예가 그보다 짧거나 같으면 이 장치가 편지보다 먼저 닫아 편지가 정상인데도 매 방송 두 번 닫힌다
+ * (두 번째는 순서 규칙으로 무해하지만 ended_at이 이 장치의 추정값으로 먼저 찍혀 화면이 일찍 「끝남」을 본다).
+ * 그래서 하한은 15분이 아니라 <b>20분</b>이다.
  */
 @ConfigurationProperties(prefix = "pokeclip.broadcast.reaper")
 @Validated
@@ -29,8 +30,11 @@ public record ReaperProperties(
         @NotNull Duration grace
 ) {
 
-    /** 계약9의 종료 정산 창. 유예는 이보다 길어야 정상 편지와 경주하지 않는다. */
-    static final Duration MIN_GRACE = Duration.ofMinutes(15);
+    /**
+     * 계약9의 종료 정산 창 15분 + 발행·SQS 전달·처리 여유 5분. 정산 창과 <b>같은</b> 값을 허용하면 편지가
+     * 만들어질 수 있는 바로 그 순간에 치우개도 자격을 얻어 정상 편지와 늘 경주한다(봇 리뷰 1판 codex).
+     */
+    static final Duration MIN_GRACE = Duration.ofMinutes(20);
 
     @PostConstruct
     void validate() {
@@ -41,8 +45,8 @@ public record ReaperProperties(
         if (grace.compareTo(MIN_GRACE) < 0) {
             throw new IllegalStateException(
                     "pokeclip.broadcast.reaper.grace는 " + MIN_GRACE.toMinutes() + "분 이상이어야 한다 — "
-                    + "종료 편지는 마지막 조각 뒤 정산 창 15분이 지나야 오므로(계약9), 그보다 짧으면 "
-                    + "편지가 정상인 방송까지 이 장치가 먼저 닫는다. 지금 값: " + grace);
+                    + "종료 편지는 마지막 조각 뒤 정산 창 15분이 지나야 만들어지고 전달·처리에 시간이 더 드므로(계약9), "
+                    + "그보다 짧으면 편지가 정상인 방송까지 이 장치가 먼저 닫는다. 지금 값: " + grace);
         }
         if (interval.compareTo(grace) >= 0) {
             throw new IllegalStateException(

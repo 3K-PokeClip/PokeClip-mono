@@ -28,10 +28,27 @@ public class ReaperConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(ReaperConfiguration.class);
 
+    /**
+     * 🔴 <b>켜져 있는데 1번 장부 표가 없으면 부팅을 거부한다</b>(봇 리뷰 1판 codex P2). 장부는 clip의 Flyway가
+     * 만들지 않는다 — media의 인덱서가 만든다(ADR-030). dev 배포처럼 media 없이 clip만 뜨는 자리에서 이 스위치를
+     * 켜면 매 회차 질의가 표 없음으로 터지고, 회차는 {@code Throwable}을 삼키므로 <b>clip은 초록인데 치우개는 영영
+     * 안 돈다</b> — 이 서버가 반복해서 데인 「설정은 켰는데 그 기능만 조용히 죽어 있다」의 모양이다.
+     * 기본이 꺼짐이라 media 없는 배포의 부팅은 안 바뀐다.
+     */
+    static void requireSegmentLedger(JdbcTemplate jdbc) {
+        String found = jdbc.queryForObject("SELECT to_regclass('stream_segments')::text", String.class);
+        if (found == null) {
+            throw new IllegalStateException(
+                    "pokeclip.broadcast.reaper.enabled=true인데 stream_segments 표가 없다. 치우개는 1번 장부의 마지막 조각을 "
+                    + "읽는데 그 표는 media 인덱서가 만든다 — media를 먼저 세우거나 BROADCAST_REAPER_ENABLED=false로 꺼라.");
+        }
+    }
+
     @Bean
     public StaleBroadcastReaper staleBroadcastReaper(JdbcTemplate jdbc, BroadcastRepository broadcasts,
                                                      TransactionTemplate tx, ReaperProperties properties,
                                                      ObjectProvider<EndedListener> endedListener) {
+        requireSegmentLedger(jdbc);
         log.info("broadcast.reaper.enabled interval={} grace={}", properties.interval(), properties.grace());
         return new StaleBroadcastReaper(jdbc, broadcasts, tx, endedListener.getIfAvailable(),
                 properties.grace(), Instant::now);
