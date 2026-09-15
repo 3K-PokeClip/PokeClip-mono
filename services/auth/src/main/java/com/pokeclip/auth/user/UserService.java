@@ -141,8 +141,11 @@ public class UserService {
      *
      * <p><b>자르는 것은 앞뒤뿐이다.</b> 가운데까지 접으면 "김 태현"이 "김태현"이 되고,
      * 이모지를 잇는 ZWJ(U+200D)가 사라져 이모지 이름이 깨진다.
+     *
+     * <p>public인 이유: 오디오 트랙 이름(POK-240)이 같은 판정을 쓴다. 두 자리가 다른 공백 판정을 하면
+     * 화면이 같은 입력에 다른 답을 받는다 — 복제하지 않고 여기를 부른다.
      */
-    private static String stripEdgeBlanks(String raw) {
+    public static String stripEdgeBlanks(String raw) {
         if (raw == null) {
             return "";
         }
@@ -201,8 +204,12 @@ public class UserService {
      * <p>개행·탭도 함께 막는다. 저장은 되지만 <b>목록 화면이 깨진다</b> — 이름은 한 줄이다.
      *
      * <p><b>형식 문자(ZWJ 등)는 막지 않는다</b> — 이모지를 잇는 데 쓰이고 가운데 있는 것이 정상이다.
+     *
+     * <p>public인 이유는 {@link #stripEdgeBlanks}와 같다 — 오디오 트랙 이름(POK-240)이 같은 표 종류(text)에
+     * 같은 종류의 사용자 입력을 저장하므로 <b>같은 판정</b>이어야 한다. 두 자리가 다른 문자를 막으면
+     * 화면이 같은 입력에 다른 답을 받고, 한쪽만 500을 낸다(PR #184 codex가 트랙 이름에서 그 자리를 짚었다).
      */
-    private static boolean hasControlCharacter(String name) {
+    public static boolean hasControlCharacter(String name) {
         return name.codePoints().anyMatch(cp -> Character.getType(cp) == Character.CONTROL);
     }
 }

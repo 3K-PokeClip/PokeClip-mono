@@ -184,6 +184,16 @@ pokeclip:
       # SQS 롱폴링 최대값. 짧게 잡으면 빈 응답만 반복해 요청 수가 는다.
       wait-time: 20s
       max-messages: 10
+    reaper:
+      # 놓친 방송 치우기(POK-244). 종료 편지를 못 받은 방송이 영원히 live로 남지 않게, 마지막 조각(1번 장부)
+      # 뒤로 grace만큼 조용하면 ended로 굳힌다. 편지가 정상이면 한 번도 안 돈다.
+      # 기본이 꺼짐이다 — 켜는 것은 운영자의 결정이다(유예가 짧으면 살아있는 방송을 닫는다).
+      enabled: ${BROADCAST_REAPER_ENABLED:false}
+      interval: ${BROADCAST_REAPER_INTERVAL:PT1M}
+      # 🔴 20분 미만은 부팅이 거부한다 — 편지는 마지막 조각 뒤 정산 창 15분이 지나야 만들어지고 전달·처리가
+      # 더 걸린다(계약9 게이트 ④·계약-세그먼트인덱스 6-5). 정산 창과 같은 값이면 늘 경주한다. 30분 = 여유 15분.
+      # 🔴 켜져 있는데 stream_segments 표(1번 장부)가 없으면 부팅이 거부된다 — media 없는 배포에서 켜지 마라.
+      grace: ${BROADCAST_REAPER_GRACE:PT30M}
 
   playback:
     # 영상 출입증(POK-122). 셋(key-pair-id · private-key-pem · resource-base-url)이 다 비면 「꺼짐」이고

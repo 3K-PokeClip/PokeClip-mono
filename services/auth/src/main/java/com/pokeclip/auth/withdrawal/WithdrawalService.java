@@ -1,6 +1,7 @@
 package com.pokeclip.auth.withdrawal;
 
 import com.pokeclip.auth.AuthFailure;
+import com.pokeclip.auth.audiotrack.AudioTrackLabelRepository;
 import com.pokeclip.auth.DataInconsistencyException;
 import com.pokeclip.auth.chzzk.ChzzkLinkWriter;
 import com.pokeclip.auth.delegation.EditorDelegationRepository;
@@ -50,6 +51,7 @@ public class WithdrawalService {
     private final YoutubeLinkWriter youtubeLinkWriter;
     private final EditorDelegationRepository delegationRepository;
     private final EditorInvitationRepository invitationRepository;
+    private final AudioTrackLabelRepository audioTrackLabelRepository;
     private final SecretStore secretStore;
     private final PhotoStorage photoStorage;
     private final WithdrawalCleanupExecutor cleanup;
@@ -144,6 +146,12 @@ public class WithdrawalService {
         // InvitationService.accept 한 곳뿐이다). 초대 없이 위임을 만드는 경로가 생기면 다시 계산해야 한다.
         invitationRepository.cancelAllOfUser(userId, now);
         delegationRepository.revokeAllOfUser(userId, now);
+
+        // 🔴 오디오 트랙 이름(POK-240)은 발급물이 아니라 「그 사람이 적은 글자」다. 표의 CASCADE는 회원 행이
+        // 지워질 때만 도는데 탈퇴는 행을 익명화하고 남기므로 여기서 직접 지운다(PR #184 codex P1).
+        // 「마이크」·「게임」이 대개지만 자유 입력이라 개인정보가 안 들어온다고 보장할 수 없다.
+        // JDBC라 영속성 컨텍스트를 안 건드린다 — 아래 재조회 규칙과 무관하다.
+        audioTrackLabelRepository.deleteAllOfUser(userId);
 
         // 🔴 표 밖에 남는 것 둘 — 스트림키 비밀값과 사진 파일. 여기서 지우지 않고 자리만 읽어 둔다.
         //

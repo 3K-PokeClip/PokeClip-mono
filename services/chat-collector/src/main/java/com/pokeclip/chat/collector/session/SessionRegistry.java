@@ -23,6 +23,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -660,6 +661,28 @@ public class SessionRegistry {
             }
         }
         return out;
+    }
+
+    /**
+     * 걷고 있는 방송의 번호·스트리머·시작 시각(편지의 {@code occurredAt}, 재부착이면 clip 명부의 값).
+     * 떼기(POK-244)가 「명부에 없는데 붙어 있는 방송」을 고를 때 쓴다 — {@link #activeSessions()}와 같은
+     * 상태(수집 중·재연결 중)만 담고, 옛 경로 세션(방송 번호 없음)은 뺀다.
+     */
+    public List<ActiveStart> activeStreamStarts() {
+        List<ActiveStart> out = new ArrayList<>();
+        for (Entry entry : sessions.values()) {
+            CollectionStatus.State state = entry.status().state();
+            SessionKey key = entry.session().key();
+            if ((state == CollectionStatus.State.COLLECTING || state == CollectionStatus.State.RECONNECTING)
+                    && key.streamId() != null) {
+                out.add(new ActiveStart(key.streamId(), key.streamerId(), key.startedAt()));
+            }
+        }
+        return out;
+    }
+
+    /** 떼기가 보는 최소 정보 — 방송 번호·스트리머·시작 시각. 토큰은 일부러 없다. */
+    public record ActiveStart(String streamId, long streamerId, Instant startedAt) {
     }
 
     public record ActiveSession(String streamId, long streamerId, String channelId, String accessToken) {

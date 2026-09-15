@@ -8,6 +8,7 @@ import com.pokeclip.auth.profile.api.ProfilePhotoController;
 import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.UserRepository;
 import com.pokeclip.auth.user.UserService;
+import com.pokeclip.auth.audiotrack.api.AudioTrackLabelController;
 import com.pokeclip.auth.withdrawal.api.WithdrawalController;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -45,15 +46,18 @@ class TokenSubjectRejectionTest extends PhotoTestSupport {
     private final ProfilePhotoController photoController;
     private final AuthController authController;
     private final WithdrawalController withdrawalController;
+    private final AudioTrackLabelController audioTrackController;
 
     TokenSubjectRejectionTest(MockMvc mockMvc, UserRepository userRepository, UserService userService,
                               TokenService tokenService, JdbcTemplate jdbc,
                               ProfilePhotoController photoController, AuthController authController,
-                              WithdrawalController withdrawalController) {
+                              WithdrawalController withdrawalController,
+                              AudioTrackLabelController audioTrackController) {
         super(mockMvc, userRepository, userService, tokenService, jdbc);
         this.photoController = photoController;
         this.authController = authController;
         this.withdrawalController = withdrawalController;
+        this.audioTrackController = audioTrackController;
     }
 
     private static Jwt subjectOf(String sub) {
@@ -87,6 +91,15 @@ class TokenSubjectRejectionTest extends PhotoTestSupport {
      * 탈퇴 창구도 같아야 한다. <b>여기가 갈리면 대가가 가장 크다</b> — 지우는 창구가 500을 내면
      * 화면은 「무슨 일이 났는지 모르겠다」만 보고 사용자는 계정이 지워졌는지 아닌지를 알 수 없다.
      */
+    /** 트랙 이름 창구 셋(POK-240)도 같은 감싸기를 쓴다 — 하나만 재도 셋이 한 메서드를 지난다. */
+    @Test
+    void 트랙_이름_창구도_같은_사유로_거절한다() {
+        assertThatThrownBy(() -> audioTrackController.mine(subjectOf("숫자가-아니다")))
+                .isInstanceOf(AuthException.class)
+                .extracting(e -> ((AuthException) e).failure())
+                .isEqualTo(AuthFailure.ACCESS_TOKEN_SUBJECT_INVALID);
+    }
+
     @Test
     void 탈퇴_창구도_같은_사유로_거절한다() {
         assertThatThrownBy(() -> withdrawalController.withdraw(subjectOf("숫자가-아니다")))

@@ -71,3 +71,8 @@ pokeclip:
       region: ap-northeast-2
       wait-time: 20s
       max-messages: 10
+    reaper:
+      # 시험은 스케줄러를 안 켠다 — 치우개는 StaleBroadcastReaperTest가 손으로 만들어 한 회차씩 돌린다.
+      enabled: false
+      interval: PT1M
+      grace: PT30M
