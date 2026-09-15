@@ -6,6 +6,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -71,24 +72,34 @@ class CorsTest extends IntegrationTestSupport {
     }
 
     /**
-     * 와일드카드를 부팅에서 막는 근거가 "allowCredentials=false라 명세상 *가 허용된다"는 것이다.
-     * 그 전제가 조용히 뒤집히면 근거가 무너지므로 못박는다. 켜지는 순간 쿠키가 실려 오고,
-     * CSRF를 끈 근거("쿠키를 안 쓴다")도 같이 무너진다.
+     * 🔴 <b>clip은 자격증명을 허용한다 — 영상 출입증(POK-122)이 CloudFront 서명 쿠키를 {@code Set-Cookie}로
+     * 주고, 앱이 다른 오리진에서 {@code credentials: 'include'}로 불러야 브라우저가 그 쿠키를 받기
+     * 때문이다.</b> 전에는 「허용하지 않는다」를 못박았고 그 근거가 「쿠키를 안 쓴다 = CSRF를 꺼도 된다」였다.
      *
-     * <p>clip의 {@code RequiredPropertiesTest} javadoc이 이 전제를 <b>문장으로만</b> 들고 있었다.
+     * <p>그 근거는 <b>여전히 참</b>이다 — 쿠키를 <i>내보내기만</i> 하고 <i>받아서 판정하지는</i> 않는다.
+     * 그래서 이 시험이 재는 것은 둘이다: ① CORS가 돌았고 자격증명이 켜졌다 ② <b>쿠키만 싣고
+     * Authorization이 없는 요청은 401</b>이다. ②가 무너지는 날이 CSRF를 다시 켜야 하는 날이다.
      *
-     * <p><b>앞의 두 단언이 없으면 이 시험은 아무것도 안 잰다.</b> CORS 배선을 통째로 지우면
-     * 어떤 CORS 헤더도 안 나가므로 {@code doesNotExist}가 저절로 참이 된다 — 실제로 배선을
-     * 지웠을 때 이 갈래만 초록으로 남았다. 그래서 "CORS가 돌았고, 그런데도 자격증명은
-     * 안 붙었다"를 재도록 좁혔다(async-test-reality 문항 2).
+     * <p>와일드카드 출처를 부팅에서 막는 근거는 이제 더 강해졌다 — 자격증명이 켜지면 명세가
+     * {@code *}를 금지하므로 {@code CorsProperties} 생성자의 그 검사가 있어야 부팅 뒤 브라우저에서
+     * 조용히 막히는 일이 없다.
+     *
+     * <p><b>①의 앞 두 단언이 없으면 이 시험은 아무것도 안 잰다</b> — CORS 배선을 통째로 지우면
+     * 어떤 CORS 헤더도 안 나가 뒤 단언만 남는다(async-test-reality 문항 2).
      */
     @Test
-    void 자격증명은_허용하지_않는다() throws Exception {
-        mockMvc.perform(options("/api/clip/jump-cards/1/claim")
+    void 자격증명을_허용하되_쿠키는_인증_재료가_아니다() throws Exception {
+        mockMvc.perform(options("/api/clip/broadcasts/s-1/playback-access")
                         .header("Origin", ALLOWED)
                         .header("Access-Control-Request-Method", "POST"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Access-Control-Allow-Origin", ALLOWED))
-                .andExpect(header().doesNotExist("Access-Control-Allow-Credentials"));
+                .andExpect(header().string("Access-Control-Allow-Credentials", "true"));
+
+        // 쿠키만 실린 요청 — 출입증 쿠키든 아무 쿠키든 clip은 그것으로 사람을 판정하지 않는다.
+        mockMvc.perform(get("/api/clip/broadcasts").param("state", "live")
+                        .header("Origin", ALLOWED)
+                        .header("Cookie", "CloudFront-Key-Pair-Id=K1; CloudFront-Signature=x; CloudFront-Policy=y"))
+                .andExpect(status().isUnauthorized());
     }
 }

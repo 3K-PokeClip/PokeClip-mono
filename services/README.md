@@ -264,7 +264,16 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 | `COLLECTOR_BASE_URL` | 빈 값 | 수집기(8083) 내부 창구 주소. **비면 부팅은 살고 채팅 문 셋만 503**(POK-234) |
 | `BROADCAST_REAPER_ENABLED` | `false` | 켜면 종료 편지를 놓친 방송을 유예 뒤 `ended`로 굳힌다(POK-244). 편지가 정상이면 한 번도 안 돈다 |
 | `BROADCAST_REAPER_INTERVAL` | `PT1M` | 치우개 회차 주기. 유예보다 짧아야 한다(부팅 검증) |
-| `BROADCAST_REAPER_GRACE` | `PT30M` | 마지막 조각 뒤 이만큼 조용하면 닫는다. **15분 미만은 부팅 거부**(계약9 정산 창) |
+| `BROADCAST_REAPER_GRACE` | `PT30M` | 마지막 조각 뒤 이만큼 조용하면 닫는다. **20분 미만은 부팅 거부**(계약9 정산 창 15분 + 전달 여유) |
+| `CLOUDFRONT_KEY_PAIR_ID` | 빈 값 | 영상 출입증(POK-122) 서명 키 번호. CloudFront 공개키를 등록하면 받는 `K…` 값 |
+| `CLOUDFRONT_PRIVATE_KEY_PEM` | 빈 값 | 그 공개키의 짝인 **PKCS#8 PEM 본문**(`BEGIN PRIVATE KEY`). 한 줄로 넣으면 리터럴 `\n`을 개행으로 읽는다. `BEGIN RSA PRIVATE KEY`(PKCS#1)는 부팅에서 변환 명령과 함께 거부한다 |
+| `MEDIA_BASE_URL` | 빈 값 | 영상이 나가는 CDN 주소(예 `https://media.pokeclip.com`, 끝 `/` 없음). 정책 범위가 종류마다 `{이 값}/{kind}/{streamId}/*`다 |
+| `PLAYBACK_COOKIE_DOMAIN` | 빈 값 | 출입증 쿠키의 `Domain`. 운영은 `.pokeclip.com`. 비면 호스트 전용(로컬) |
+| `PLAYBACK_ACCESS_TTL` | `PT60M` | 출입증 수명. 0 이하면 부팅 거부 |
+
+**출입증 셋(`CLOUDFRONT_KEY_PAIR_ID`·`CLOUDFRONT_PRIVATE_KEY_PEM`·`MEDIA_BASE_URL`)은 다 비면 「꺼짐」이고
+부팅은 산다** — 로컬에는 CloudFront가 없다. 꺼진 채로 출입증 문을 부르면 `503 playback_signing_unavailable`이다.
+**일부만 채우면 부팅을 거부한다**(「일부러 안 켬」과 「깜빡함」이 같아 보이면 안 된다 — `BROADCAST_INTAKE_ENABLED`와 같은 규칙).
 
 **`COLLECTOR_BASE_URL`은 서버끼리 붙는 주소다**(compose 안에서는 `http://chat-collector:8083`) —
 `AUTH_BASE_URL`과 같은 성격이고 `PROFILE_PHOTO_BASE_URL`(브라우저가 붙는 주소)과는 반대다.
@@ -1826,6 +1835,78 @@ health `relay`와 종료 판정 줄에 실린다. 🔴 **health UP/DOWN에는 �
 - 안 읽는 구독자와 **같은 채팅 스트라이프**의 연결은 최대 약 61초 채팅이 끊긴다(카드는 쓰기 문 덕에 약 1초)
 - 방송이 끝나기 직전에 놓친 채팅은 뒤따르는 번호가 없어 구멍으로 안 보인다 — 끝난 방송은 범위 창구로 본다
 - 🔴 **clip은 한 대여야 한다**(위 절 그대로) — 채팅도 같은 메모리 명부를 탄다
+
+### clip — 영상 출입증 (POK-122)
+
+**카드를 누른 사람이 그 방송 영상을 CDN에서 받을 수 있게, clip이 CloudFront 서명 쿠키 셋을 브라우저에
+붙여 준다.** 영상 바이트는 clip을 안 지난다(계약3). 자격 판정은 다른 사람 문 열하나와 **같은 판정기**
+(`BroadcastAccessGuard`)이고 404도 같은 본문·같은 25ms 바닥이다.
+
+| 문 | 인증 | 응답 |
+|---|---|---|
+| `POST /api/clip/broadcasts/{streamId}/playback-access` | Bearer JWT | **200** `{"streamId":…,"expiresAt":…,"resources":[…3…]}` + `Set-Cookie` **아홉**(종류 셋 × 쿠키 셋) · 404 `{"error":"broadcast_not_found"}` · 401 · 503 `{"error":"authorization_unavailable"}` · **503 `{"error":"playback_signing_unavailable"}`**(아래) |
+
+**쿠키 셋은 CloudFront가 정한 이름이다** — `CloudFront-Policy` · `CloudFront-Signature` · `CloudFront-Key-Pair-Id`.
+**경로 종류(`live`·`dvr`·`vod`)마다 한 셋, 아홉 장**이다. 속성은 `Path=/{kind}/{streamId}` · `Secure` · `HttpOnly` ·
+`SameSite=Lax` · `Max-Age=수명` · `Domain=PLAYBACK_COOKIE_DOMAIN`(비면 없음). 브라우저는 요청 경로에 맞는 셋만 보낸다.
+
+🔴 **왜 `Path=/` 한 셋이 아닌가 — 봇 리뷰 2판(claude)이 찾은 구멍.** 첫 판은 정책 `Resource`를
+`{MEDIA_BASE_URL}/*/{streamId}/*` 하나로 두고 `Path=/`로 덮었다. CloudFront의 `Resource`는 **요청 URL 전체
+(쿼리스트링 포함)에 대한 문자열 와일드카드 매칭이고 경로 구분자를 안 본다.** 그래서
+`{base}/live/{남의방송}/index.m3u8?x=/{내방송}/`이 통과한다 — 앞 `*`가 `live/{남의방송}/index.m3u8?x=`를 먹는다.
+방송 하나의 정당한 자격으로 수명 동안 **모든 스트리머의 영상**이 열렸다. 시험이 AWS 규칙대로 매처를 옮겨
+옛 범위가 뚫리고 새 범위 셋은 안 뚫리는 것을 잰다.
+
+**범위는 그 스트리머의 영상 전부다** — 정책 `Resource`가 종류마다 `{MEDIA_BASE_URL}/{kind}/{streamId}/*`
+(앞 와일드카드 없음). 카드 하나 구간만 열면 카드를 넘길 때마다 새로 받아야 하고 그 왕복마다 auth를 두드린다.
+`{streamId}`는 방송 명부의 `stream_id`(지금은 인제스트 경로 = 계약3 7-1의 `{streamId}` 자리와 같은 값).
+🔴 **POK-233 뒤에 명부 값이 회차 번호로 바뀌면 이 자리는 인제스트 경로 칸을 써야 한다** — 그때 이 문도 같이 고친다.
+`MEDIA_BASE_URL`에 경로가 있으면(`https://cdn.example/media`) 쿠키 `Path`도 거기서 시작한다.
+
+**거절은 404 하나다.** 「자격 없음」과 「없는 방송」을 가르지 않는다(다른 문과 같은 이유 — 갈리면 번호를 넣어
+보는 것만으로 실재를 안다). 계약3 7-4의 **403(쿠키 만료)·404(콘텐츠 없음)는 CDN이 내는 것**이라 이 문의
+404와 층이 다르다 — 그 둘은 그대로 갈려 있다.
+
+**`503 playback_signing_unavailable`은 둘이다** — 서명 재료(`CLOUDFRONT_*`·`MEDIA_BASE_URL`)가 비어 있거나
+(로컬·설정 누락), 명부의 방송 번호에 `*`·`/` 같은 글자가 섞여 정책에 넣을 수 없을 때. 뒤엣것은 명부 값이라도
+그대로 넣지 않는 방어다 — 넣으면 정책 범위가 남의 방송까지 넓어진다. 로그는 `clip.playback.stream_id_unsafe`에
+**값이 아니라 길이**만 남긴다. 어느 쪽이든 **자격 판정은 그보다 먼저**라 남남은 503이 아니라 404를 받는다.
+
+**로그에 정책·서명 값은 안 찍는다** — 그 값이 곧 출입증이다. 발급 INFO(`clip.playback.issued`)에는 방송 번호·회원
+번호·만료만 있다.
+
+#### 웹(2번)이 지킬 것 넷
+
+1. **플레이어를 열기 전에 한 번 부른다.** 요청에 `credentials: 'include'`가 있어야 브라우저가 쿠키를 받는다 —
+   그래서 **clip만 CORS `allow-credentials`를 켠다**(auth는 그대로 꺼짐).
+2. **쿠키를 읽거나 헤더로 옮기지 않는다.** `HttpOnly`라 읽을 수도 없다. hls.js에 `xhrSetup`/`fetchSetup`으로
+   `withCredentials`/`credentials: 'include'`만 켠다(계약3 1절).
+3. **CDN이 403을 주면 같은 문을 다시 부르고 재시도한다.** `expiresAt` 몇 분 전에 미리 불러도 된다 — 같은 방송의
+   새 쿠키는 같은 이름·같은 `Path`라 옛것을 덮는다. 다른 방송의 쿠키는 `Path`가 달라 나란히 산다.
+4. **503 둘을 가른다.** `authorization_unavailable`은 「잠시 뒤 다시」, `playback_signing_unavailable`은
+   「영상만 안 됨, 카드·채팅은 그대로」.
+
+#### 1번이 할 것
+
+- CloudFront에 **공개키·키 그룹** 등록(짝 비밀키가 `CLOUDFRONT_PRIVATE_KEY_PEM`). `/live`·`/dvr`·`/vod` 비헤이비어에
+  **서명 쿠키 필수**, 제어면 `/api/streams/*/rewind`는 공개(계약3 7-4).
+- **앱·clip API·미디어가 전부 `.pokeclip.com` 아래**여야 `Domain=.pokeclip.com` 쿠키가 붙는다(계약3 1절 전제).
+- CDN CORS: 앱 오리진 허용 + `Access-Control-Allow-Credentials: true`.
+- 🔴 **오리진이 `..`를 정규화하지 않아야 한다.** 정책은 `{base}/live/{내}/*`라 `/live/{내}/../{남}/x` 같은 요청도
+  문자열로는 통과한다. S3는 키를 글자 그대로 봐 없는 키(404)이고, 라이브 오리진(MediaMTX)이 경로를 정리해
+  **다른 방송으로 301을 주면** 브라우저가 따라가되 그 경로엔 맞는 쿠키가 없어 CDN이 403을 준다 — 그래도 오리진 쪽
+  정규화가 없는 편이 안전하다. 확인은 1번 몫이다.
+
+#### 알려진 한계
+
+- **로컬에 CloudFront가 없다.** 서명이 맞는지는 시험이 공개키로 검증하는 것까지이고, 실제 통과는 1번이 CDN을
+  세운 뒤 본다.
+- **즉시 회수가 없다.** 편집자 관계가 끊겨도 이미 받은 출입증은 수명(60분)까지 산다. 수명이 곧 회수 창이다.
+- ~~🔴 **한 번에 한 방송만 열린다.**~~ 2판에서 `Path`를 종류·방송으로 좁히면서 **사라졌다** — 다른 방송의 쿠키는
+  `Path`가 달라 나란히 산다. 대가는 방송 하나에 쿠키 아홉 장이다(브라우저 도메인당 상한은 보통 180장 안팎이라
+  동시에 열어 둔 방송 스무 개까지는 문제없고, 오래된 것은 `Max-Age`로 사라진다). 웹은 여전히 **방송 화면을 열 때마다
+  이 문을 부르고 CDN 403이면 다시 부른다**(위 「지킬 것」 3).
+- 정책에 IP 제한을 안 건다(모바일·이동 중 IP가 바뀐다).
 
 ### 치지직 채널 연동 (POK-93)
 
