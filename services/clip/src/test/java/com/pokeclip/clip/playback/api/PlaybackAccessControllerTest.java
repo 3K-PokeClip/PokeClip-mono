@@ -26,6 +26,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +50,7 @@ class PlaybackAccessControllerTest extends IntegrationTestSupport {
     private static final String RESOLVE = "/internal/editor-delegations/resolve";
     private static final String 요청자 = "4182";
     private static final String 내_방송 = "s-play";
+    private static final String 남의_방송 = "s-victim";
     private static final String 없는_방송 = "s-play-없음";
     private static final String BASE = "https://media.test";
     private static final String DOMAIN = "media.test";
@@ -92,40 +94,87 @@ class PlaybackAccessControllerTest extends IntegrationTestSupport {
         assertThat(응답.statusCode()).as("본문=%s", 응답.body()).isEqualTo(200);
         JsonNode 본문 = MAPPER.readTree(응답.body());
         assertThat(본문.get("streamId").asString()).isEqualTo(내_방송);
-        assertThat(본문.get("resource").asString()).isEqualTo(BASE + "/*/" + 내_방송 + "/*");
+        List<String> 자원 = new ArrayList<>();
+        본문.get("resources").forEach(n -> 자원.add(n.asString()));
+        assertThat(자원).containsExactly(
+                BASE + "/live/" + 내_방송 + "/*", BASE + "/dvr/" + 내_방송 + "/*", BASE + "/vod/" + 내_방송 + "/*");
         Instant 만료 = Instant.parse(본문.get("expiresAt").asString());
         assertThat(만료).isBetween(부르기_전.plus(TTL).minusSeconds(5), Instant.now().plus(TTL).plusSeconds(5));
 
-        Map<String, String> 쿠키 = 쿠키_값(응답);
-        assertThat(쿠키.keySet()).containsExactlyInAnyOrder("CloudFront-Policy", "CloudFront-Signature", "CloudFront-Key-Pair-Id");
-        assertThat(쿠키.get("CloudFront-Key-Pair-Id")).isEqualTo(TestPlaybackKeys.KEY_PAIR_ID);
+        Map<String, Map<String, String>> 경로별 = 경로별_쿠키(응답);
+        assertThat(경로별.keySet()).as("종류마다 Path가 갈린 셋")
+                .containsExactlyInAnyOrder("/live/" + 내_방송, "/dvr/" + 내_방송, "/vod/" + 내_방송);
+        for (Map.Entry<String, Map<String, String>> e : 경로별.entrySet()) {
+            Map<String, String> 쿠키 = e.getValue();
+            assertThat(쿠키.keySet()).containsExactlyInAnyOrder("CloudFront-Policy", "CloudFront-Signature", "CloudFront-Key-Pair-Id");
+            assertThat(쿠키.get("CloudFront-Key-Pair-Id")).isEqualTo(TestPlaybackKeys.KEY_PAIR_ID);
 
-        JsonNode 정책 = MAPPER.readTree(new String(TestPlaybackKeys.decodeCloudFront(쿠키.get("CloudFront-Policy")), StandardCharsets.UTF_8));
-        JsonNode 조항 = 정책.get("Statement").get(0);
-        assertThat(조항.get("Resource").asString())
-                .as("범위가 이 스트리머 경로가 아니다 — 넓으면 남의 방송이 열리고 좁으면 카드마다 다시 받는다")
-                .isEqualTo(BASE + "/*/" + 내_방송 + "/*");
-        assertThat(조항.get("Condition").get("DateLessThan").get("AWS:EpochTime").asLong())
-                .as("정책의 만료와 본문의 만료가 다르면 웹이 갱신 시점을 틀리게 잡는다")
-                .isEqualTo(만료.getEpochSecond());
-        assertThat(TestPlaybackKeys.verifies(쿠키.get("CloudFront-Policy"), 쿠키.get("CloudFront-Signature")))
-                .as("서명이 우리 공개키로 안 풀린다 — CloudFront가 403을 준다").isTrue();
+            JsonNode 정책 = MAPPER.readTree(new String(TestPlaybackKeys.decodeCloudFront(쿠키.get("CloudFront-Policy")), StandardCharsets.UTF_8));
+            JsonNode 조항 = 정책.get("Statement").get(0);
+            assertThat(조항.get("Resource").asString())
+                    .as("정책 뿌리가 쿠키 Path와 같아야 한다 — 갈리면 쿠키는 가는데 정책이 안 맞는다. 앞 와일드카드는 남의 방송을 연다")
+                    .isEqualTo(BASE + e.getKey() + "/*");
+            assertThat(조항.get("Condition").get("DateLessThan").get("AWS:EpochTime").asLong())
+                    .as("정책의 만료와 본문의 만료가 다르면 웹이 갱신 시점을 틀리게 잡는다")
+                    .isEqualTo(만료.getEpochSecond());
+            assertThat(TestPlaybackKeys.verifies(쿠키.get("CloudFront-Policy"), 쿠키.get("CloudFront-Signature")))
+                    .as("서명이 우리 공개키로 안 풀린다 — CloudFront가 403을 준다").isTrue();
+        }
     }
 
     /**
-     * 속성이 하나라도 빠지면 증상이 다르다 — {@code Path}가 좁으면 {@code /dvr}만 열리고,
+     * 🔴 <b>봇 리뷰 2판(claude)이 찾은 구멍의 재현.</b> CloudFront 정책의 {@code Resource}는 요청 URL 전체
+     * (쿼리스트링 포함)에 대한 문자열 와일드카드 매칭이고 경로 구분자를 안 본다. 옛 범위
+     * {@code {base}/*&#47;{내}/*}는 {@code {base}/live/{남}/index.m3u8?x=/{내}/}에 맞았다 — 앞 {@code *}가
+     * {@code live/{남}/index.m3u8?x=}를 먹는다. 새 범위 셋은 어느 것도 안 맞는다.
+     *
+     * <p>매처는 AWS 문서의 규칙({@code *} = 0자 이상 아무 글자, {@code ?} = 한 글자)을 그대로 옮긴 것이다 —
+     * CloudFront가 로컬에 없으니 규칙을 코드로 옮겨 잰다. 양성 대조로 옛 범위가 실제로 뚫리는 것도 같이 잰다.
+     */
+    @Test
+    void 남의_방송_경로에_내_방송_번호를_쿼리로_붙여도_어느_정책에도_안_맞는다() throws Exception {
+        볼_수_있다("EDITOR");
+        HttpResponse<String> 응답 = 부른다(내_방송);
+        List<String> 자원 = new ArrayList<>();
+        MAPPER.readTree(응답.body()).get("resources").forEach(n -> 자원.add(n.asString()));
+
+        String 공격 = BASE + "/live/" + 남의_방송 + "/index.m3u8?x=/" + 내_방송 + "/";
+        String 정당 = BASE + "/live/" + 내_방송 + "/index.m3u8?_HLS_msn=3";
+
+        assertThat(자원).as("새 범위 셋 어느 것에도 안 맞는다").noneMatch(r -> cloudFrontMatches(r, 공격));
+        assertThat(자원).as("정당한 요청은 맞는다").anyMatch(r -> cloudFrontMatches(r, 정당));
+        assertThat(cloudFrontMatches(BASE + "/*/" + 내_방송 + "/*", 공격))
+                .as("양성 대조 — 옛 범위는 실제로 뚫린다. 이것이 거짓이면 매처가 규칙을 안 옮긴 것이다").isTrue();
+    }
+
+    /** CloudFront 커스텀 정책 Resource 매칭 — {@code *}는 0자 이상, {@code ?}는 한 글자, 나머지는 글자 그대로. */
+    private static boolean cloudFrontMatches(String resource, String url) {
+        StringBuilder regex = new StringBuilder();
+        for (char c : resource.toCharArray()) {
+            switch (c) {
+                case '*' -> regex.append(".*");
+                case '?' -> regex.append('.');
+                default -> regex.append(java.util.regex.Pattern.quote(String.valueOf(c)));
+            }
+        }
+        return url.matches(regex.toString());
+    }
+
+    /**
+     * 속성이 하나라도 빠지면 증상이 다르다 — {@code Path}가 종류·방송으로 안 좁혀지면 셋이 서로 덮어 하나만 남고,
      * {@code Domain}이 없으면 미디어 도메인에 안 붙고, {@code Max-Age}가 없으면 탭을 닫을 때 사라진다.
      */
     @Test
-    void 쿠키_속성이_미디어_도메인_전체_경로_수명을_덮는다() throws Exception {
+    void 쿠키_속성이_종류별_경로와_미디어_도메인_수명을_갖는다() throws Exception {
         볼_수_있다("OWNER");
 
         HttpResponse<String> 응답 = 부른다(내_방송);
 
         List<String> 줄들 = 응답.headers().allValues("set-cookie");
-        assertThat(줄들).hasSize(3);
+        assertThat(줄들).as("종류 셋 × 쿠키 셋").hasSize(9);
         for (String 줄 : 줄들) {
-            assertThat(줄).contains("Path=/").contains("Secure").contains("HttpOnly")
+            assertThat(줄).matches(".*Path=/(live|dvr|vod)/" + java.util.regex.Pattern.quote(내_방송) + ";.*")
+                    .contains("Secure").contains("HttpOnly")
                     .contains("SameSite=Lax").contains("Domain=" + DOMAIN)
                     .contains("Max-Age=" + TTL.toSeconds());
         }
@@ -221,11 +270,12 @@ class PlaybackAccessControllerTest extends IntegrationTestSupport {
 
         try (LogCaptor logs = new LogCaptor()) {
             HttpResponse<String> 응답 = 부른다(내_방송);
-            Map<String, String> 쿠키 = 쿠키_값(응답);
 
             assertThat(logs.messages()).anyMatch(m -> m.contains("clip.playback.issued") && m.contains(내_방송));
             String 전부 = String.join("\n", logs.messages());
-            assertThat(전부).doesNotContain(쿠키.get("CloudFront-Signature")).doesNotContain(쿠키.get("CloudFront-Policy"));
+            for (Map<String, String> 쿠키 : 경로별_쿠키(응답).values()) {
+                assertThat(전부).doesNotContain(쿠키.get("CloudFront-Signature")).doesNotContain(쿠키.get("CloudFront-Policy"));
+            }
         }
     }
 
@@ -262,13 +312,20 @@ class PlaybackAccessControllerTest extends IntegrationTestSupport {
         }
     }
 
-    /** {@code Set-Cookie} 줄에서 이름=값만. 속성은 {@link #쿠키_속성이_미디어_도메인_전체_경로_수명을_덮는다()}가 본다. */
-    private static Map<String, String> 쿠키_값(HttpResponse<String> 응답) {
-        Map<String, String> out = new LinkedHashMap<>();
+    /** {@code Set-Cookie} 줄을 {@code Path}별로 묶어 이름=값만. 나머지 속성은 {@link #쿠키_속성이_종류별_경로와_미디어_도메인_수명을_갖는다()}가 본다. */
+    private static Map<String, Map<String, String>> 경로별_쿠키(HttpResponse<String> 응답) {
+        Map<String, Map<String, String>> out = new LinkedHashMap<>();
         for (String 줄 : 응답.headers().allValues("set-cookie")) {
-            String 첫_조각 = 줄.split(";", 2)[0];
-            int eq = 첫_조각.indexOf('=');
-            out.put(첫_조각.substring(0, eq), 첫_조각.substring(eq + 1));
+            String[] 조각 = 줄.split(";");
+            int eq = 조각[0].indexOf('=');
+            String path = null;
+            for (String 속성 : 조각) {
+                if (속성.trim().startsWith("Path=")) {
+                    path = 속성.trim().substring("Path=".length());
+                }
+            }
+            out.computeIfAbsent(path, k -> new LinkedHashMap<>())
+                    .put(조각[0].substring(0, eq), 조각[0].substring(eq + 1));
         }
         return out;
     }

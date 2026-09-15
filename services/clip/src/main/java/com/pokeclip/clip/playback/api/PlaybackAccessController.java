@@ -19,7 +19,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -33,7 +35,8 @@ import java.util.Map;
  * <p><b>POST인 이유</b>: 응답이 브라우저 상태(쿠키)를 바꾼다. 갱신도 같은 문을 다시 부른다 —
  * 새 쿠키가 옛 쿠키를 덮는다(이름이 같다).
  *
- * <p><b>쿠키 속성</b>: {@code Path=/}(경로 셋 {@code /live}·{@code /dvr}·{@code /vod}를 다 덮는다) ·
+ * <p><b>쿠키 속성</b>: {@code Path=/{kind}/{streamId}}(종류마다 셋 — 아홉 장. 브라우저가 요청 경로에 맞는 셋만 보낸다.
+ * {@code Path=/} 하나로 덮으면 정책에 앞 와일드카드가 필요하고 그것이 남의 방송을 열었다, 봇 리뷰 2판) ·
  * {@code Secure} · {@code HttpOnly}(hls.js는 쿠키를 읽지 않는다, 브라우저가 붙인다) ·
  * {@code SameSite=Lax}(앱과 미디어가 같은 사이트 {@code pokeclip.com} 아래다) ·
  * {@code Max-Age}=수명 · {@code Domain}은 설정값(비면 호스트 전용).
@@ -65,21 +68,26 @@ public class PlaybackAccessController {
         PlaybackAccess access = signer.issue(streamId, Instant.now());
 
         HttpHeaders headers = new HttpHeaders();
-        access.cookies().forEach((name, value) -> headers.add(HttpHeaders.SET_COOKIE, cookie(name, value)));
+        List<String> resources = new ArrayList<>(access.scopes().size());
+        for (PlaybackAccess.Scope scope : access.scopes()) {
+            scope.cookies().forEach((name, value) ->
+                    headers.add(HttpHeaders.SET_COOKIE, cookie(name, value, scope.cookiePath())));
+            resources.add(scope.resource());
+        }
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("streamId", access.streamId());
         body.put("expiresAt", access.expiresAt().toString());
-        body.put("resource", access.resource());
+        body.put("resources", resources);
 
         // 서명·정책 값은 안 찍는다 — 그 값이 곧 출입증이다.
         log.info("clip.playback.issued streamId={} userId={} expiresAt={}", streamId, jwt.getSubject(), access.expiresAt());
         return ResponseEntity.ok().headers(headers).contentType(MediaType.APPLICATION_JSON).body(body);
     }
 
-    private String cookie(String name, String value) {
+    private String cookie(String name, String value, String path) {
         ResponseCookie.ResponseCookieBuilder builder = ResponseCookie.from(name, value)
-                .path("/")
+                .path(path)
                 .secure(true)
                 .httpOnly(true)
                 .sameSite("Lax")

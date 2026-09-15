@@ -7,7 +7,10 @@ import software.amazon.awssdk.services.cloudfront.CloudFrontUtilities;
 import software.amazon.awssdk.services.cloudfront.cookie.CookiesForCustomPolicy;
 import software.amazon.awssdk.services.cloudfront.model.CustomSignerRequest;
 
+import java.net.URI;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -35,6 +38,9 @@ public class PlaybackAccessSigner {
 
     /** 계약9 좌표(스트림키·회차 번호)가 쓰는 문자만. 와일드카드·구분자·공백은 전부 밖이다. */
     static final Pattern SAFE_STREAM_ID = Pattern.compile("[A-Za-z0-9._-]{1,128}");
+
+    /** 계약3 7-1의 경로 종류. 순서가 곧 응답 순서다. 새 종류가 생기면 여기 한 줄이고, 쿠키는 셋씩 는다. */
+    static final List<String> KINDS = List.of("live", "dvr", "vod");
 
     private final PlaybackProperties properties;
     private final CloudFrontUtilities cloudFront = CloudFrontUtilities.create();
@@ -68,21 +74,35 @@ public class PlaybackAccessSigner {
             log.error("clip.playback.stream_id_unsafe length={}", streamId.length());
             throw new PlaybackErrors.SigningUnavailableException("stream_id_unsafe");
         }
-        String resource = properties.resourceBaseUrl() + "/*/" + streamId + "/*";
         Instant expiresAt = now.plus(properties.ttl());
+        String basePath = basePath(properties.resourceBaseUrl());
+        List<PlaybackAccess.Scope> scopes = new ArrayList<>(KINDS.size());
+        for (String kind : KINDS) {
+            // 🔴 앞 와일드카드 금지. `{base}/*/{id}/*`는 CloudFront가 경로 구분자를 안 보고 문자열로 맞춰
+            // `{base}/live/남의방송/x?q=/{id}/`가 통과했다(봇 리뷰 2판). 종류를 고정하면 뿌리가 곧 방송이다.
+            String resource = properties.resourceBaseUrl() + "/" + kind + "/" + streamId + "/*";
+            CookiesForCustomPolicy signed = cloudFront.getCookiesForCustomPolicy(CustomSignerRequest.builder()
+                    .resourceUrl(resource)
+                    .privateKey(properties.privateKey())
+                    .keyPairId(properties.keyPairId())
+                    .expirationDate(expiresAt)
+                    .build());
+            Map<String, String> cookies = new LinkedHashMap<>();
+            put(cookies, signed.policyHeaderValue());
+            put(cookies, signed.signatureHeaderValue());
+            put(cookies, signed.keyPairIdHeaderValue());
+            scopes.add(new PlaybackAccess.Scope(kind, basePath + "/" + kind + "/" + streamId, resource, cookies));
+        }
+        return new PlaybackAccess(streamId, expiresAt, List.copyOf(scopes));
+    }
 
-        CookiesForCustomPolicy signed = cloudFront.getCookiesForCustomPolicy(CustomSignerRequest.builder()
-                .resourceUrl(resource)
-                .privateKey(properties.privateKey())
-                .keyPairId(properties.keyPairId())
-                .expirationDate(expiresAt)
-                .build());
-
-        Map<String, String> cookies = new LinkedHashMap<>();
-        put(cookies, signed.policyHeaderValue());
-        put(cookies, signed.signatureHeaderValue());
-        put(cookies, signed.keyPairIdHeaderValue());
-        return new PlaybackAccess(streamId, expiresAt, resource, cookies);
+    /**
+     * 쿠키 {@code Path}의 뿌리 = 미디어 주소의 경로 부분. 보통 비어 있다({@code https://media.pokeclip.com}).
+     * 주소에 경로가 있으면({@code https://cdn.example/media}) 쿠키 경로도 거기서 시작해야 브라우저가 붙인다.
+     */
+    static String basePath(String resourceBaseUrl) {
+        String path = URI.create(resourceBaseUrl).getPath();
+        return path == null ? "" : path;
     }
 
     /** SDK는 {@code "CloudFront-Policy=<값>"} 한 줄로 준다. 첫 {@code =}에서 가른다 — 값에도 {@code =}는 없다(CloudFront base64는 {@code _}로 바꾼다). */
