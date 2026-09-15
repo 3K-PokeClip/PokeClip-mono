@@ -722,6 +722,7 @@ class ReattacherTest extends IntegrationTestSupport {
 
         try (LogCaptor captor = new LogCaptor()) {
             newReattacher(lanes, Duration.ofMinutes(5)).sweep();
+            assertThat(lanes.awaitIdle(IDLE_BUDGET)).as("반납은 그 스트리머의 줄에서 돈다").isTrue();
 
             assertThat(registry.activeStreamIds()).as("반납됐다").doesNotContain(A001);
             assertThat(captor.messages()).anyMatch(line -> line.startsWith("chat.reattach.detached")
@@ -754,6 +755,45 @@ class ReattacherTest extends IntegrationTestSupport {
             assertThat(registry.activeStreamIds()).contains(A001);
             assertThat(captor.messages()).anyMatch(line -> line.startsWith("chat.reattach.detach_skipped")
                     && line.contains("reason=TRUNCATED"));
+        }
+    }
+
+    /**
+     * 🔴 <b>같은 스트리머의 새 방송이 명부에 있으면 옛 방송을 안 뗀다</b>(codex P1) — 종료를 놓친 채 다음 방송이
+     * 시작된 경우다. 붙이기 갈래의 갈아끼움이 소켓을 새 방송으로 옮기므로(인증·구독 재수행 없음) 여기서 옛 것을
+     * 먼저 닫으면 새 방송이 처음부터 다시 붙어야 하고 그 사이 채팅을 잃는다.
+     */
+    @Test
+    @Timeout(30)
+    void 같은_스트리머의_새_방송이_명부에_있으면_옛_방송을_안_뗀다() {
+        열어둔다(A001, 7L, 시작);
+        returns(live(A999, "7", 시작.plusSeconds(60)));   // 같은 스트리머 7의 새 방송
+
+        try (LogCaptor captor = new LogCaptor()) {
+            newReattacher(lanes, Duration.ofMinutes(5)).sweep();
+            assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+
+            // 「자리가 비지 않았다」로는 못 잰다 — 닫고 새로 붙여도 자리는 찬다. 떼기가 옛 방송을 건드리지 않았는지를 본다.
+            assertThat(captor.messages()).as("옛 방송을 떼기가 닫으면 안 된다 — 갈아끼움의 몫이다")
+                    .noneMatch(line -> line.startsWith("chat.reattach.detached") && line.contains("stream=" + A001));
+        }
+        assertThat(registry.currentStreamIdOf(7L)).as("스트리머 7의 자리").isNotNull();
+    }
+
+    /** 🔴 명부에 읽을 수 없는 줄이 하나라도 있으면 그 줄이 내 방송일 수 있다 — 붙이기는 하되 떼기는 건너뛴다(codex P2). */
+    @Test
+    @Timeout(30)
+    void 명부에_읽을_수_없는_줄이_있으면_안_뗀다() {
+        열어둔다(A001, 7L, 시작);
+        returnsIncludingNullRow((LiveBroadcasts.Item) null);
+
+        try (LogCaptor captor = new LogCaptor()) {
+            newReattacher(lanes, Duration.ofMinutes(5)).sweep();
+            assertThat(lanes.awaitIdle(IDLE_BUDGET)).isTrue();
+
+            assertThat(registry.activeStreamIds()).contains(A001);
+            assertThat(captor.messages()).anyMatch(line -> line.startsWith("chat.reattach.detach_skipped")
+                    && line.contains("reason=UNREADABLE_ROWS"));
         }
     }
 

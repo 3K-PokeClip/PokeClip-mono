@@ -15,7 +15,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -226,7 +225,7 @@ public class Reattacher {
         List<LiveBroadcasts.Item> candidates = readable.stream()
                 .filter(item -> !attached.contains(item.streamId()))
                 .toList();
-        detachMissing(live, readable);
+        detachMissing(live, readable, nullRows + missingStreamIds);
         // 메모 조회는 한 번이다 — 낱개로 물으면 방송 수만큼 왕복한다.
         Set<String> remembered = store.findAllIds(
                 candidates.stream().map(LiveBroadcasts.Item::streamId).toList());
@@ -275,21 +274,27 @@ public class Reattacher {
      * clip이 종료 편지를 놓친 방송을 치우면(치우개) 그 다음 회차에 여기서 자리가 돌아온다.
      * 두 서버가 각자 시각을 재지 않는다 — 판정은 clip 하나이고 우리는 명부를 따른다.
      *
-     * <p><b>안 떼는 조건 셋</b>이 이 갈래의 전부다.
+     * <p><b>안 떼는 조건 다섯</b>이 이 갈래의 전부다.
      * <ol>
-     *   <li>명부가 상한에 잘렸다({@code truncated}) — 살아있는 방송이 「사라진 것」으로 보인다.
-     *       그 회차는 통째로 건너뛴다.</li>
-     *   <li>방송 시작 뒤 유예 안이다 — 같은 편지를 clip과 각자 받으므로 우리가 먼저 붙고 clip이
-     *       아직 안 적은 순간이 있다.</li>
      *   <li>꺼져 있다(유예 null).</li>
+     *   <li>명부가 상한에 잘렸다({@code truncated}) — 살아있는 방송이 「사라진 것」으로 보인다. 그 회차는 통째로 건너뛴다.</li>
+     *   <li>명부에 읽을 수 없는 줄이 하나라도 있다(원소 {@code null}·번호 없음) — 그 줄이 내가 걷는 방송일 수
+     *       있으므로 <b>붙이기는 하되 떼기는 건너뛴다</b>(봇 리뷰 1판 codex P2). 위 거름망은 「붙이기」를 위한
+     *       것이고, 떼기는 명부가 온전할 때만 믿는다.</li>
+     *   <li>방송 시작 뒤 유예 안이다 — 같은 편지를 clip과 각자 받으므로 우리가 먼저 붙고 clip이 아직 안 적은 순간이 있다.</li>
+     *   <li>🔴 <b>같은 스트리머의 다른 방송이 명부에 있다</b>(codex P1) — 옛 방송 A를 걷는데 명부에 새 방송 B가 있으면
+     *       그것은 종료를 놓친 채 다음 방송이 시작된 경우이고, 붙이기 갈래의 <b>갈아끼움</b>이 소켓을 B로 옮긴다
+     *       (인증·구독을 다시 안 하고 채팅 공백이 없다). 여기서 A를 먼저 닫으면 B가 처음부터 다시 붙어야 하고
+     *       그 사이 채팅은 되찾을 수 없다. 스트리머 단위로 판정하는 이유가 그것이다.</li>
      * </ol>
      *
-     * <p>반납은 기존 종료 경로({@code BroadcastSessions.stop} → 등록부 {@code close})를 그대로 부른다 —
-     * 새 종료 경로를 만들지 않는다. <b>메모({@code chat_ended_streams})는 남기지 않는다</b> — 메모의
-     * 열쇠는 편지의 순서 번호이고 여기엔 편지가 없다. 재전송된 시작 편지가 그 사이 세션을 다시 열면
-     * 다음 회차가 다시 뗀다(1분). 한 방송의 반납 실패는 세고 넘어간다 — 나머지 방송을 막지 않는다.
+     * <p>반납은 기존 종료 경로({@code BroadcastSessions.stop} → 등록부 {@code close})를 그대로 부르되
+     * <b>그 스트리머의 줄에 넣는다</b> — 같은 스트리머의 알림 처리·붙이기와 순서가 섞이지 않는다(codex P1).
+     * 새 종료 경로를 만들지 않는다. <b>메모({@code chat_ended_streams})는 남기지 않는다</b> — 메모의 열쇠는
+     * 편지의 순서 번호이고 여기엔 편지가 없다. 재전송된 시작 편지가 그 사이 세션을 다시 열면 다음 회차가 다시 뗀다(1분).
+     * 줄이 가득 차면 미룬다 — 다음 회차가 같은 명부를 다시 본다.
      */
-    private void detachMissing(LiveBroadcasts live, List<LiveBroadcasts.Item> readable) {
+    private void detachMissing(LiveBroadcasts live, List<LiveBroadcasts.Item> readable, int unreadableRows) {
         if (detachGrace == null) {
             return;
         }
@@ -297,30 +302,46 @@ public class Reattacher {
             log.warn("chat.reattach.detach_skipped reason=TRUNCATED");
             return;
         }
-        Set<String> listed = new HashSet<>();
+        if (unreadableRows > 0) {
+            log.warn("chat.reattach.detach_skipped reason=UNREADABLE_ROWS count={}", unreadableRows);
+            return;
+        }
+        Set<String> listedStreams = new HashSet<>();
+        Set<String> listedStreamers = new HashSet<>();
         for (LiveBroadcasts.Item item : readable) {
-            listed.add(item.streamId());
+            listedStreams.add(item.streamId());
+            if (item.streamerId() != null) {
+                listedStreamers.add(LaneKey.of(item.streamerId()));
+            }
         }
         Instant cutoff = clock.get().minus(detachGrace);
-        int detached = 0;
-        int failed = 0;
-        for (Map.Entry<String, Instant> mine : registry.activeStreamStarts().entrySet()) {
-            String streamId = mine.getKey();
-            if (listed.contains(streamId) || mine.getValue().isAfter(cutoff)) {
+        int submitted = 0;
+        int deferred = 0;
+        for (SessionRegistry.ActiveStart mine : registry.activeStreamStarts()) {
+            String lane = LaneKey.of(Long.toString(mine.streamerId()));
+            if (listedStreams.contains(mine.streamId()) || listedStreamers.contains(lane)
+                    || mine.startedAt().isAfter(cutoff)) {
                 continue;
             }
-            try {
-                if (sessions.stop(streamId)) {
-                    detached++;
-                    log.info("chat.reattach.detached stream={} startedAt={}", streamId, mine.getValue());
-                }
-            } catch (RuntimeException e) {
-                failed++;
-                log.warn("chat.reattach.detach_failed stream={} causeType={}", streamId, e.getClass().getSimpleName());
+            if (lanes.submit(lane, () -> detachOne(mine))) {
+                submitted++;
+            } else {
+                deferred++;
             }
         }
-        if (detached > 0 || failed > 0) {
-            log.info("chat.reattach.detach_swept detached={} failed={}", detached, failed);
+        if (submitted > 0 || deferred > 0) {
+            log.info("chat.reattach.detach_swept submitted={} deferred={}", submitted, deferred);
+        }
+    }
+
+    /** 줄 안에서 도는 반납. 실패는 세고 넘어간다 — 다음 회차가 다시 본다. */
+    private void detachOne(SessionRegistry.ActiveStart mine) {
+        try {
+            if (sessions.stop(mine.streamId())) {
+                log.info("chat.reattach.detached stream={} startedAt={}", mine.streamId(), mine.startedAt());
+            }
+        } catch (RuntimeException e) {
+            log.warn("chat.reattach.detach_failed stream={} causeType={}", mine.streamId(), e.getClass().getSimpleName());
         }
     }
 
