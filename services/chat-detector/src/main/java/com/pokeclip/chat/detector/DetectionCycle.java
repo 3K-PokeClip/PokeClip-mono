@@ -220,8 +220,9 @@ public class DetectionCycle {
             Instant countedUntil = claim.get().firstClaimedAt();
             // 바로 내지 않는다. 이어지는 튄 창들을 사건 하나로 묶어 카드 하나로 낸다 —
             // 닫히는 시점은 runOnce 끝(간격 경과)이거나, 못 붙는 창이 왔을 때(여기)다.
+            // 되돌아온 창이 들어오면 앞에 있던 사건 여럿이 한꺼번에 닫힐 수 있어 목록이다.
             episodes.add(streamId, new SpikeEpisodes.Window(id, row.windowStartMs(), windowSizeMs, verdict, countedUntil))
-                    .ifPresent(this::submit);
+                    .forEach(this::submit);
         }
     }
 

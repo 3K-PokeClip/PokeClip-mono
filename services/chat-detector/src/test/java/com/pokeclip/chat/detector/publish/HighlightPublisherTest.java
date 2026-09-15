@@ -20,7 +20,7 @@ class HighlightPublisherTest {
     private static final DetectionProperties PROPS = new DetectionProperties(
             Duration.ofSeconds(1), List.of(5_000L), 5_000L,
             Duration.ofSeconds(2), Duration.ofMinutes(10),
-            Duration.ofSeconds(60), Duration.ofMinutes(1), Duration.ofMinutes(15),
+            Duration.ofSeconds(60), Duration.ofMinutes(2), Duration.ofMinutes(15),
             5, 3.0, 10, Metric.MESSAGE, Duration.ofHours(24),
                 Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15), Duration.ofSeconds(5));
 
@@ -56,7 +56,7 @@ class HighlightPublisherTest {
         return new DetectionProperties(
                 Duration.ofSeconds(1), List.of(5_000L), 5_000L,
                 Duration.ofSeconds(2), Duration.ofMinutes(10),
-                Duration.ofSeconds(60), Duration.ofMinutes(1), Duration.ofMinutes(15),
+                Duration.ofSeconds(60), Duration.ofMinutes(2), Duration.ofMinutes(15),
                 5, 3.0, 10, metric, Duration.ofHours(24),
                 Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15), Duration.ofSeconds(5));
     }
@@ -474,7 +474,13 @@ class HighlightPublisherTest {
         var w3 = new com.pokeclip.chat.detector.detect.SpikeEpisodes.Window(9L, WINDOW_START_MS + 10_000, 5_000L, SPIKE, CLAIMED_AT.plusSeconds(10));
         var episode = new com.pokeclip.chat.detector.detect.SpikeEpisodes.Episode("s1", List.of(w1, w2, w3));
 
-        publisher().publish(episode, Instant::now);
+        String 로그;
+        try (LogCaptor captor = new LogCaptor()) {
+            publisher().publish(episode, Instant::now);
+            로그 = captor.messages().stream().filter(m -> m.startsWith("detect.card_published")).findFirst().orElse("");
+        }
+        // 🔴 로그의 ratio·count 는 카드 근거(evidenceJson)와 같은 사건 집계다 — 마지막 창(ratio 4.0·count 40)이 아니다(봇 리뷰 1판).
+        assertThat(로그).contains("ratio=6.0").contains("count=140").contains("windows=3");
 
         assertThat(located).as("변환은 첫 창 시각 한 번만").containsExactly(new Call("s1", WINDOW_START_MS));
         assertThat(published).singleElement().satisfies(card -> {

@@ -28,7 +28,9 @@ import static org.assertj.core.api.Assertions.assertThat;
         "pokeclip.detection.window-grace=0s",
         // 옛 검사들은 「급증 창이 그 바퀴에 바로 나간다」를 전제한다. 사건 묶기의 간격을 0으로
         // 두면 창 하나가 곧 사건 하나라 그 전제가 그대로 선다. 묶기 자체는 아래 사건 검사들이 잰다.
-        "pokeclip.detection.episode-gap=0s"
+        "pokeclip.detection.episode-gap=0s",
+        // 간격 0이면 부팅 검증 ⑥(앞당김 ≤ 간격 + 창)이 기본 앞당김 15초를 거부한다. 이 검사는 구간을 안 재므로 0으로.
+        "pokeclip.detection.episode-lead=0s"
 })
 class DetectionCycleTest extends IntegrationTestSupport {
 

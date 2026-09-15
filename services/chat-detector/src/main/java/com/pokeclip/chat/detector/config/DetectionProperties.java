@@ -131,6 +131,24 @@ public record DetectionProperties(@NotNull Duration cycleInterval,
                     "episode-max-span(" + episodeMaxSpan + ")이 publish-window-ms(" + publishWindowMs
                             + ")보다 짧다 — 창 하나도 사건에 못 들어간다");
         }
+        // ⑤ 발행이 RETRY_LATER 로 사건의 창 전부를 되돌리면 다음 바퀴가 되돌아보기 폭 안에서 다시 읽는다.
+        //    폭이 「사건 상한 + 간격 + 창 하나」보다 짧으면 사건 앞부분이 목록에서 빠져 잘린 카드가
+        //    다른 번호로 나간다(봇 리뷰 1판, codex P1). 재시도가 사건 전체를 다시 묶을 수 있어야 한다.
+        long 재시도가_다시_읽어야_하는_폭 = episodeMaxSpan.toMillis() + episodeGap.toMillis() + publishWindowMs;
+        if (collectLookback.toMillis() < 재시도가_다시_읽어야_하는_폭) {
+            throw new IllegalArgumentException(
+                    "collect-lookback(" + collectLookback + ")이 episode-max-span + episode-gap + publish-window-ms("
+                            + 재시도가_다시_읽어야_하는_폭 + "ms)보다 짧다 — 되돌린 사건의 앞부분을 다음 바퀴가 못 읽어 카드가 잘린다");
+        }
+        // ⑥ 앞당김이 「간격 + 창 하나」보다 크면 방송 초반의 서로 다른 두 사건이 둘 다 0초로 잘려 clip 의
+        //    중복 열쇠(stream_id, source, window_start_ms)에서 하나로 접힌다(봇 리뷰 1판, codex P2).
+        //    둘째 사건은 첫 사건 끝에서 간격만큼 뒤에 시작하므로 앞당김이 그 이하면 0초로 안 잘린다.
+        long 두_사건이_겹치지_않는_앞당김 = episodeGap.toMillis() + publishWindowMs;
+        if (episodeLead.toMillis() > 두_사건이_겹치지_않는_앞당김) {
+            throw new IllegalArgumentException(
+                    "episode-lead(" + episodeLead + ")가 episode-gap + publish-window-ms(" + 두_사건이_겹치지_않는_앞당김
+                            + "ms)보다 길다 — 방송 초반의 두 사건이 같은 시작점으로 잘려 카드 하나로 접힌다");
+        }
 
         // ④ 보관 기간이 기준선 기간보다 짧으면 치우기가 기준선을 지운다.
         if (retention.compareTo(baselineWindow) < 0) {

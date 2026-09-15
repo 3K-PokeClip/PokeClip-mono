@@ -175,8 +175,8 @@ public class HighlightPublisher {
         // 이미 각각 남긴다.
         if (outcome == Outcome.SENT) {
             // 지연은 마지막 창 기준이다 — 카드는 마지막 창이 닫혀야 나갈 수 있었다.
-            logLatency(streamId, card, lastWindow.windowStartMs(), windowSizeMs, position, verdict,
-                    result, countedUntil, sentAt, episode.windows().size());
+            logLatency(streamId, card, lastWindow.windowStartMs(), windowSizeMs, position, episode,
+                    result, countedUntil, sentAt);
         }
         return outcome;
     }
@@ -247,9 +247,9 @@ public class HighlightPublisher {
      * {@code sentAt})라 어긋나도 차가 안 변한다. <b>목표 3초를 거기에만 건 이유가 이것이다.</b>
      */
     private void logLatency(String streamId, HighlightCard card, long windowStartMs, long windowSizeMs,
-                            VideoPosition position, SpikeVerdict verdict,
-                            ClipHighlightClient.PublishResult result, Instant countedUntil, Instant sentAt,
-                            int windows) {
+                            VideoPosition position, SpikeEpisodes.Episode episode,
+                            ClipHighlightClient.PublishResult result, Instant countedUntil, Instant sentAt) {
+        int windows = episode.windows().size();
         long windowClosedMs = windowStartMs + windowSizeMs;
         // 🔴 빈손이면 눈금으로 되돌아가지 않는다. 그러면 전달 지연을 0으로 본 값이 나오는데
         // 그건 「지연이 없었다」는 거짓이고, 목표치를 정할 때 그 거짓이 표본에 섞인다.
@@ -280,13 +280,15 @@ public class HighlightPublisher {
         // 찍으면 metric=CHATTER 일 때 ratio 와 count 가 서로 안 맞고, 이 카드가 준비해 둔
         // MESSAGE 대 CHATTER A/B 분석이 오염된다. 어느 지표로 잰 값인지도 같이 적는다 —
         // 로그 한 줄만 보는 사람은 설정을 모른다.
+        // 🔴 값은 마지막 창이 아니라 <b>사건 집계</b>다(봇 리뷰 1판, claude) — 카드의 evidenceJson 과 같은 값이어야
+        // 로그로 세는 쪽과 카드 근거가 어긋나지 않는다. 마지막 창은 급증이 꺾이는 창이라 늘 작게 찍혔다.
         int count = switch (props.metric()) {
-            case MESSAGE -> verdict.messageCount();
-            case CHATTER -> verdict.chatterCount();
+            case MESSAGE -> episode.totalMessages();
+            case CHATTER -> episode.maxChatters();
         };
         log.info("detect.card_published streamId={} eventId={} result={} metric={} ratio={} count={} "
                         + "windows={} ourLatencyMs={} totalLatencyMs={}",
-                streamId, card.eventId(), result, props.metric(), verdict.ratio(), count,
+                streamId, card.eventId(), result, props.metric(), episode.maxRatio(), count,
                 windows, our, total);
     }
 }

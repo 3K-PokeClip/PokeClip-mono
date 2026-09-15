@@ -28,9 +28,41 @@ class DetectionPropertiesTest {
     private static DetectionProperties 설정(List<Long> windowSizesMs, long publishWindowMs) {
         return new DetectionProperties(Duration.ofSeconds(1), windowSizesMs, publishWindowMs,
                 Duration.ofSeconds(2), Duration.ofMinutes(10), Duration.ofSeconds(60),
-                Duration.ofMinutes(1), Duration.ofMinutes(15), 24, 3.0, 10,
+                Duration.ofMinutes(2), Duration.ofMinutes(15), 24, 3.0, 10,
                 DetectionProperties.Metric.MESSAGE, Duration.ofHours(24),
                 Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15), Duration.ofSeconds(5));
+    }
+
+    /** 검증 대상이 사건 칸일 때 — 되돌아보기·간격·상한·앞당김만 받고 나머지는 운영 기본값이다. */
+    private static DetectionProperties 사건_설정(Duration lookback, Duration gap, Duration maxSpan, Duration lead) {
+        return new DetectionProperties(Duration.ofSeconds(1), List.of(3_000L, 5_000L, 10_000L), 5_000L,
+                Duration.ofSeconds(2), Duration.ofMinutes(10), Duration.ofSeconds(60),
+                lookback, Duration.ofMinutes(15), 24, 3.0, 10,
+                DetectionProperties.Metric.MESSAGE, Duration.ofHours(24),
+                gap, maxSpan, lead, Duration.ofSeconds(5));
+    }
+
+    /**
+     * 🔴 되돌아보기가 「사건 상한 + 간격 + 창」보다 짧으면 RETRY_LATER 로 되돌린 사건의 앞 창들이 다음 바퀴
+     * 목록에서 빠져 잘린 카드가 다른 번호로 나간다(봇 리뷰 1판, codex P1). 옛 기본값 1분이 정확히 그 자리였다.
+     */
+    @Test
+    void 되돌아보기가_사건_상한과_간격과_창_하나보다_짧으면_부팅을_막는다() {
+        assertThatThrownBy(() -> 사건_설정(Duration.ofMinutes(1), Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("collect-lookback(PT1M)").hasMessageContaining("105000ms");
+        assertThatCode(() -> 사건_설정(Duration.ofSeconds(105), Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15)))
+                .as("딱 같으면 통과 — 경계가 부등호 한 칸 틀리면 운영 기본값이 막힌다").doesNotThrowAnyException();
+    }
+
+    /** 앞당김이 「간격 + 창」보다 길면 방송 초반 두 사건이 같은 0초로 잘려 clip 중복 열쇠에서 접힌다(codex P2). */
+    @Test
+    void 앞당김이_간격과_창_하나보다_길면_부팅을_막는다() {
+        assertThatThrownBy(() -> 사건_설정(Duration.ofMinutes(2), Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(16)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("episode-lead(PT16S)").hasMessageContaining("15000ms");
+        assertThatCode(() -> 사건_설정(Duration.ofMinutes(2), Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15)))
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -87,7 +119,7 @@ class DetectionPropertiesTest {
     private static DetectionProperties 시간칸을_바꾼_설정(String name, Duration value) {
         Duration cycle = Duration.ofSeconds(1), grace = Duration.ofSeconds(2),
                 late = Duration.ofMinutes(10), active = Duration.ofSeconds(60),
-                lookback = Duration.ofMinutes(1), baseline = Duration.ofMinutes(15),
+                lookback = Duration.ofMinutes(2), baseline = Duration.ofMinutes(15),
                 retention = Duration.ofHours(24);
         switch (name) {
             case "cycle-interval" -> cycle = value;
@@ -163,7 +195,7 @@ class DetectionPropertiesTest {
 
     private static DetectionProperties 기본_관계() {
         return 관계를_바꾼_설정(Duration.ofMinutes(15), 24, Duration.ofSeconds(60),
-                Duration.ofSeconds(2), Duration.ofMinutes(1), Duration.ofHours(24));
+                Duration.ofSeconds(2), Duration.ofMinutes(2), Duration.ofHours(24));
     }
 
     @Test
@@ -181,7 +213,7 @@ class DetectionPropertiesTest {
     @Test
     void 워밍업이_기준선_기간에_안_들어가면_부팅을_막는다() {
         assertThatThrownBy(() -> 관계를_바꾼_설정(Duration.ofMinutes(1), 24, Duration.ofSeconds(60),
-                Duration.ofSeconds(2), Duration.ofMinutes(1), Duration.ofHours(24)))
+                Duration.ofSeconds(2), Duration.ofMinutes(2), Duration.ofHours(24)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("warmup-windows(24)")
                 .hasMessageContaining("영영 워밍업");
@@ -191,7 +223,7 @@ class DetectionPropertiesTest {
     @Test
     void 워밍업이_기준선_기간에_딱_들어가면_통과한다() {
         assertThatCode(() -> 관계를_바꾼_설정(Duration.ofMinutes(1), 12, Duration.ofSeconds(60),
-                Duration.ofSeconds(2), Duration.ofMinutes(1), Duration.ofHours(24)))
+                Duration.ofSeconds(2), Duration.ofMinutes(2), Duration.ofHours(24)))
                 .doesNotThrowAnyException();
     }
 
@@ -206,7 +238,7 @@ class DetectionPropertiesTest {
     @Test
     void 활성_창이_집계_지연보다_짧으면_부팅을_막는다() {
         assertThatThrownBy(() -> 관계를_바꾼_설정(Duration.ofMinutes(15), 24, Duration.ofSeconds(60),
-                Duration.ofSeconds(60), Duration.ofMinutes(1), Duration.ofHours(24)))
+                Duration.ofSeconds(60), Duration.ofMinutes(2), Duration.ofHours(24)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("active-stream-window")
                 .hasMessageContaining("유실");
@@ -232,7 +264,7 @@ class DetectionPropertiesTest {
     @Test
     void 보관_기간이_기준선_기간보다_짧으면_부팅을_막는다() {
         assertThatThrownBy(() -> 관계를_바꾼_설정(Duration.ofMinutes(15), 24, Duration.ofSeconds(60),
-                Duration.ofSeconds(2), Duration.ofMinutes(1), Duration.ofMinutes(10)))
+                Duration.ofSeconds(2), Duration.ofMinutes(2), Duration.ofMinutes(10)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("retention")
                 .hasMessageContaining("기준선을 지운다");
