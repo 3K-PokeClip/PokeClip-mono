@@ -44,6 +44,11 @@ public class PlaybackAccessSigner {
         if (!properties.enabled()) {
             log.warn("clip.playback.disabled — 출입증 재료(pokeclip.playback.*)가 비어 있어 "
                     + "POST …/playback-access는 503을 준다. 로컬은 정상, 운영이면 설정 누락이다");
+        } else if (properties.cookieDomain() == null) {
+            // 부팅 거부는 안 한다 — 로컬(clip·미디어가 같은 호스트)은 비는 것이 정상이다. 대신 한 줄 남긴다:
+            // 운영에서 비면 쿠키가 호스트 전용이 되어 미디어 도메인에 안 붙고, 서버 쪽은 200만 찍힌다(봇 리뷰 1판).
+            log.warn("clip.playback.cookie_domain_empty — 켜졌는데 pokeclip.playback.cookie-domain이 비어 "
+                    + "쿠키가 호스트 전용이다. clip API와 미디어가 다른 호스트면 CDN이 403을 준다. 운영은 .pokeclip.com");
         }
     }
 

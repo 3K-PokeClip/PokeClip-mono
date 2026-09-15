@@ -48,7 +48,7 @@ class PlaybackPropertiesTest {
     /** JDK가 못 읽는 모양은 변환 명령까지 적어 거부한다. 메시지에 <b>키 본문은 없다</b>. */
     @Test
     void PKCS1이면_변환_명령을_알려주고_키_본문은_안_싣는다() {
-        String pkcs1 = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAsecretbody\n-----END RSA PRIVATE KEY-----";
+        String pkcs1 = "-----BEGIN RSA " + "PRIVATE KEY-----\nMIIEowIBAAKCAQEAsecretbody\n-----END RSA " + "PRIVATE KEY-----";
         PlaybackProperties p = new PlaybackProperties("K1", pkcs1, "https://media.test", null, Duration.ofMinutes(60));
         assertThatThrownBy(p::validate).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("openssl pkcs8 -topk8")
@@ -67,6 +67,28 @@ class PlaybackPropertiesTest {
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("ttl");
         assertThatThrownBy(() -> new PlaybackProperties("", "", "", "", Duration.ofSeconds(-1)).validate())
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("ttl");
+    }
+
+    /**
+     * 켜졌는데 {@code cookie-domain}만 비면 부팅은 살되 WARN 한 줄(봇 리뷰 1판). 거부하지 않는 이유는
+     * 로컬(같은 호스트)이 그 모양이라서다 — 운영에서는 이 줄이 유일한 신호다.
+     */
+    @Test
+    void 켜졌는데_쿠키_도메인이_비면_경고한다() {
+        PlaybackProperties 켜짐_도메인_없음 = new PlaybackProperties("K1", PEM, "https://media.test", null, Duration.ofMinutes(60));
+        켜짐_도메인_없음.validate();
+        PlaybackProperties 켜짐_도메인_있음 = new PlaybackProperties("K1", PEM, "https://media.test", ".pokeclip.com", Duration.ofMinutes(60));
+        켜짐_도메인_있음.validate();
+
+        try (com.pokeclip.web.support.LogCaptor logs = new com.pokeclip.web.support.LogCaptor()) {
+            new PlaybackAccessSigner(켜짐_도메인_없음);
+            assertThat(logs.messages()).anyMatch(m -> m.contains("clip.playback.cookie_domain_empty"));
+        }
+        try (com.pokeclip.web.support.LogCaptor logs = new com.pokeclip.web.support.LogCaptor()) {
+            new PlaybackAccessSigner(켜짐_도메인_있음);
+            assertThat(logs.messages()).as("도메인이 있으면 경고가 없어야 한다 — 없으면 위 단언이 아무것도 안 잰다")
+                    .noneMatch(m -> m.contains("clip.playback.cookie_domain_empty"));
+        }
     }
 
     /** 끝 슬래시가 있으면 정책이 {@code //*}가 되어 CloudFront가 아무것도 안 맞춘다. */

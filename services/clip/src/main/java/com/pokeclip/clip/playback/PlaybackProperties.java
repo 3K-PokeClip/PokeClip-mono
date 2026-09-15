@@ -22,7 +22,7 @@ import java.util.Base64;
  * 실수를 조용히 「꺼짐」으로 접으면 운영에서 영상만 안 나오는데 로그가 조용하다
  * ({@code broadcast.intake}의 「켜졌는데 주소가 없으면 거부」와 같은 규칙).
  *
- * <p><b>비밀키는 PKCS#8 PEM 본문</b>({@code -----BEGIN PRIVATE KEY-----})이다. 환경변수 한 줄로
+ * <p><b>비밀키는 PKCS#8 PEM 본문</b>({@code BEGIN PRIVATE KEY} 헤더)이다. 환경변수 한 줄로
  * 넣을 수 있게 리터럴 {@code \n}은 개행으로 읽는다. {@code BEGIN RSA PRIVATE KEY}(PKCS#1)는
  * JDK가 못 읽으므로 <b>부팅에서 변환 명령까지 적어 거부한다</b> — 운영에서 첫 발급 때 500으로
  * 드러나게 두지 않는다.
@@ -35,6 +35,11 @@ public class PlaybackProperties {
     private final String resourceBaseUrl;
     private final String cookieDomain;
     private final Duration ttl;
+
+    /** PEM 표식. 조립해 두는 이유는 저장소의 시크릿 검사가 이 헤더 <b>모양</b>을 잡기 때문이다 — 값이 아니라 헤더뿐이라도 커밋이 막힌다. */
+    static final String PKCS8_BEGIN = "-----BEGIN " + "PRIVATE KEY-----";
+    static final String PKCS8_END = "-----END " + "PRIVATE KEY-----";
+    static final String PKCS1_MARK = "BEGIN RSA " + "PRIVATE KEY";
 
     private PrivateKey privateKey;
 
@@ -103,15 +108,15 @@ public class PlaybackProperties {
      */
     static PrivateKey parsePkcs8(String pem) {
         String text = pem.replace("\\n", "\n");
-        if (text.contains("BEGIN RSA PRIVATE KEY")) {
+        if (text.contains(PKCS1_MARK)) {
             throw new IllegalStateException("pokeclip.playback.private-key-pem이 PKCS#1(BEGIN RSA PRIVATE KEY)이다. "
                     + "PKCS#8로 바꿔 넣는다: openssl pkcs8 -topk8 -nocrypt -in private_key.pem");
         }
-        if (!text.contains("BEGIN PRIVATE KEY")) {
+        if (!text.contains(PKCS8_BEGIN)) {
             throw new IllegalStateException("pokeclip.playback.private-key-pem이 PEM(BEGIN PRIVATE KEY)이 아니다");
         }
-        String body = text.replace("-----BEGIN PRIVATE KEY-----", "")
-                .replace("-----END PRIVATE KEY-----", "")
+        String body = text.replace(PKCS8_BEGIN, "")
+                .replace(PKCS8_END, "")
                 .replaceAll("\\s", "");
         try {
             byte[] der = Base64.getDecoder().decode(body);

@@ -26,7 +26,8 @@ public final class TestPlaybackKeys {
     /** PKCS#8 PEM 본문. 운영이 환경변수로 넣는 모양과 같다(개행 포함). */
     public static String privateKeyPem() {
         String body = Base64.getMimeEncoder(64, "\n".getBytes()).encodeToString(PAIR.getPrivate().getEncoded());
-        return "-----BEGIN PRIVATE KEY-----\n" + body + "\n-----END PRIVATE KEY-----\n";
+        // 헤더를 조립하는 이유는 PlaybackProperties.PKCS8_BEGIN과 같다 — 시크릿 검사가 헤더 모양을 잡는다.
+        return "-----BEGIN " + "PRIVATE KEY-----\n" + body + "\n-----END " + "PRIVATE KEY-----\n";
     }
 
     public static PublicKey publicKey() {

@@ -131,6 +131,15 @@ services:
       BROADCAST_INTAKE_ENABLED: ${BROADCAST_INTAKE_ENABLED:-false}
       BROADCAST_QUEUE_URL: ${BROADCAST_QUEUE_URL:-}
       AWS_REGION: ${AWS_REGION:-ap-northeast-2}
+      # 영상 출입증(POK-122). 셋(키 번호·PKCS#8 비밀키·미디어 주소)이 다 비면 그 문만 503 이고
+      # 나머지는 그대로 돈다(로컬엔 CloudFront 가 없다). 일부만 채우면 clip 이 부팅을 거부한다.
+      # 🔴 여기 안 넘기면 호스트 .env 에 적어도 컨테이너 안에서는 늘 빈 값이다 — 표에만 적혀 있고
+      # compose 가 안 넘겨 그 기능만 조용히 죽는 것이 이 파일이 이미 한 번 낸 사고다(PR #183 봇 지적).
+      CLOUDFRONT_KEY_PAIR_ID: ${CLOUDFRONT_KEY_PAIR_ID:-}
+      CLOUDFRONT_PRIVATE_KEY_PEM: ${CLOUDFRONT_PRIVATE_KEY_PEM:-}
+      MEDIA_BASE_URL: ${MEDIA_BASE_URL:-}
+      PLAYBACK_COOKIE_DOMAIN: ${PLAYBACK_COOKIE_DOMAIN:-}
+      PLAYBACK_ACCESS_TTL: ${PLAYBACK_ACCESS_TTL:-PT60M}
       # 채팅 되감기 문 셋이 물어보는 수집기 주소(POK-234). 위 AUTH_BASE_URL 과 달리
       # 비어도 부팅은 산다 — 그 셋만 503 이고 카드 편집·목록·통로는 그대로 돈다.
       # 그래도 여기 넣는 이유는 「표에만 적혀 있고 compose 가 안 넘겨」 그 기능만 조용히
