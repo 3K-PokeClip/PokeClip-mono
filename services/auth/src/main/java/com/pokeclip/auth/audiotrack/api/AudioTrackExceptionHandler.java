@@ -35,7 +35,7 @@ public class AudioTrackExceptionHandler {
 
     private static HttpStatus statusOf(AudioTrackFailure failure) {
         return switch (failure) {
-            case LABELS_SIZE, LABEL_TOO_LONG -> HttpStatus.BAD_REQUEST;
+            case LABELS_SIZE, LABEL_TOO_LONG, LABEL_INVALID -> HttpStatus.BAD_REQUEST;
             case STREAMER_NOT_FOUND -> HttpStatus.NOT_FOUND;
         };
     }

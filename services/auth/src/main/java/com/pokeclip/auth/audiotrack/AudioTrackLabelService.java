@@ -20,7 +20,8 @@ import java.util.List;
  * 표에 있다. clip은 방송 단위라 여기 두면 방송마다 다시 적어야 한다.
  *
  * <p><b>이름 규칙은 표시 이름과 같다</b>({@link UserService#stripEdgeBlanks} — 전각 공백·NBSP·ZWSP를 공백으로
- * 본다) — 길이만 32자다. 두 자리가 다른 공백 판정을 하면 화면이 같은 입력에 다른 답을 받는다.
+ * 본다 · {@link UserService#hasControlCharacter} — 가운데 제어문자 거절) — 길이만 32자다.
+ * 두 자리가 다른 판정을 하면 화면이 같은 입력에 다른 답을 받는다.
  */
 @Service
 public class AudioTrackLabelService {
@@ -85,6 +86,10 @@ public class AudioTrackLabelService {
             }
             if (trimmed.codePointCount(0, trimmed.length()) > LABEL_MAX_CODE_POINTS) {
                 throw new AudioTrackException(AudioTrackFailure.LABEL_TOO_LONG, "이름이 너무 길다");
+            }
+            // 🔴 가운데 NUL은 트림·길이 검사를 다 지나 저장에서 터진다(500). 표시 이름이 겪은 자리다.
+            if (UserService.hasControlCharacter(trimmed)) {
+                throw new AudioTrackException(AudioTrackFailure.LABEL_INVALID, "이름에 제어문자가 있다");
             }
             cleaned.add(trimmed);
         }

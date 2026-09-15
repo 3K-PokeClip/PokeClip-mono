@@ -40,9 +40,17 @@ public class AudioTrackLabelRepository {
      * 여섯 칸을 통째로 갈아 끼운다. 같은 회원의 두 요청이 겹치면 <b>뒤에 커밋한 쪽이 이긴다</b> —
      * 설정 화면 하나에서 저장을 누르는 일이라 그것이 맞는 답이다. 부르는 쪽이 트랜잭션을 연다.
      *
+     * <p>🔴 <b>먼저 회원 단위 어드바이저리 락을 잡는다.</b> 「지우고 넣는다」만으로는 겹침이 직렬화되지 않는다 —
+     * 첫 저장 둘이 겹치면 DELETE가 둘 다 0행이라 서로를 안 막고, 같은 트랙을 넣으면 한쪽이 PK 위반(500),
+     * 다른 트랙을 넣으면 <b>둘의 칸이 섞인 채</b> 커밋된다(PR #184 codex). 락은 잡을 행이 아직 없을 때
+     * 쓰는 도구고({@code PairingAttemptRecorder}가 선례), 트랜잭션이 끝나면 저절로 풀린다.
+     * 회원 행 락({@code findByIdForUpdate})을 안 쓰는 이유는 그 락을 토큰 회전·키 재발급·연동·탈퇴가 공유해
+     * 잠금 순서가 생기기 때문이다 — 이 키는 이 표만 쓴다.
+     *
      * @param labels 길이 6. {@code null}이면 그 칸을 지운다
      */
     public void replace(long userId, List<String> labels, Instant now) {
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtext(?))", rs -> null, "audio_track_labels:" + userId);
         jdbc.update("DELETE FROM audio_track_labels WHERE user_id = ?", userId);
         for (int i = 0; i < TRACK_COUNT; i++) {
             String label = labels.get(i);
@@ -51,5 +59,13 @@ public class AudioTrackLabelRepository {
                         userId, i + 1, label, Timestamp.from(now));
             }
         }
+    }
+
+    /**
+     * 탈퇴 회수용. 회원 행은 익명화만 되고 남으므로 표의 {@code ON DELETE CASCADE}는 영영 안 돈다 —
+     * 여기서 지워야 탈퇴한 사람이 적은 글자가 안 남는다. 부르는 쪽(탈퇴 트랜잭션)이 회원 행 락을 쥔 채 부른다.
+     */
+    public int deleteAllOfUser(long userId) {
+        return jdbc.update("DELETE FROM audio_track_labels WHERE user_id = ?", userId);
     }
 }
