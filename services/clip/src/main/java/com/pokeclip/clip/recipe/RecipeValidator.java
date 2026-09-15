@@ -75,6 +75,11 @@ public class RecipeValidator {
         if (cut.inAtMs() == null || cut.outAtMs() == null || cut.inAtMs() < 0) {
             throw invalid("cut");
         }
+        // 🔴 순서를 뺄셈 전에 따로 본다. 길이만 재면 뺄셈이 넘치는 값(in=Long.MAX, out=Long.MIN+4999)이
+        // 정확히 5,000으로 접혀 통과하고, DB CHECK(in < out)에서 500이 난다(PR #187 1판 claude).
+        if (cut.outAtMs() <= cut.inAtMs()) {
+            throw invalid("cut");
+        }
         long length = cut.outAtMs() - cut.inAtMs();
         if (length < MIN_CUT_MS || length > MAX_CUT_MS) {
             throw invalid("cut");

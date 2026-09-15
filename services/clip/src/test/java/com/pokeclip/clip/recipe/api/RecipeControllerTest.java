@@ -354,6 +354,8 @@ class RecipeControllerTest extends IntegrationTestSupport {
                 위반("streamId 없음", r -> r.remove("streamId"), "streamId"),
                 // cut
                 위반("cut 뒤집힘", r -> 컷(r).put("outAtMs", 0), "cut"),
+                // 뺄셈이 넘쳐 길이가 정확히 5,000으로 접히는 값 — 순서 검사가 없으면 통과해 DB CHECK에서 500이다(1판 claude).
+                위반("cut 뺄셈 넘침", r -> { 컷(r).put("inAtMs", Long.MAX_VALUE); 컷(r).put("outAtMs", Long.MIN_VALUE + 4_999); }, "cut"),
                 위반("cut 4.999초", r -> 컷(r).put("outAtMs", 1_000_000L + 4_999), "cut"),
                 위반("cut 180.001초", r -> 컷(r).put("outAtMs", 1_000_000L + 180_001), "cut"),
                 위반("cut 한 칸만", r -> 컷(r).remove("outAtMs"), "cut"),
