@@ -115,7 +115,7 @@ public abstract class IntegrationTestSupport {
     }
 
     /**
-     * 표 넷을 <b>자식부터</b> 비운다 — {@code stream_segments} · {@code jump_cards} ·
+     * 표 다섯을 <b>자식부터</b> 비운다 — {@code stream_segments} · {@code recipes} · {@code jump_cards} ·
      * {@code broadcast_events} · {@code broadcasts}. {@code jump_cards}가
      * {@code broadcasts}의 자식이라 카드를 먼저 안 지우면 방송 삭제가 FK로 죽는데,
      * <b>단독 실행에서는 안 보이고 모듈 전체에서만 터진다</b>(POK-118에서 실제로 밟았다 —
@@ -132,6 +132,7 @@ public abstract class IntegrationTestSupport {
      */
     protected static void 방송과_카드를_비운다(JdbcTemplate jdbc) {
         jdbc.update("DELETE FROM stream_segments");
+        jdbc.update("DELETE FROM recipes");
         jdbc.update("DELETE FROM jump_cards");
         jdbc.update("DELETE FROM broadcast_events");
         jdbc.update("DELETE FROM broadcasts");
