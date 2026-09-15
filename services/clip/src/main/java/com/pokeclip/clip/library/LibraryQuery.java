@@ -29,6 +29,11 @@ class LibraryQuery {
      * 상태 규칙. 지금 판({@code recipe_version})의 영상이 없으면 편집 중이다 — 영상을 만든 뒤 편집본을 또 고쳤으면
      * 옛 영상이 있어도 편집 중이다(그 영상은 {@code latestClip}으로 같이 나가니 화면이 내려받기는 보여줄 수 있다).
      * 주문됨·만드는 중은 화면에서 한 칸이라 {@code rendering}으로 접는다.
+     *
+     * <p>{@code c}는 <b>지금 판의 가장 최근 영상</b>이고, 지금 판 것이 없을 때만 옛 판의 가장 최근 영상이다(아래 LATERAL의
+     * 정렬). 🔴 「번호가 가장 큰 영상」이 아니다 — 주문은 편집본을 읽고 나서 트랜잭션을 열므로 v1 주문이 v2 주문보다
+     * <b>뒤에</b> 끼어들 수 있고, 그러면 번호가 큰 쪽이 옛 판이다(PR #189 codex). 그것을 고르면 v2 영상이 만드는 중인데
+     * 편집 중으로 나간다.
      */
     private static final String STATUS_CASE = """
             CASE WHEN c.id IS NULL OR c.recipe_version <> r.recipe_version THEN 'editing'
@@ -42,7 +47,8 @@ class LibraryQuery {
               FROM recipes r
               JOIN broadcasts b ON b.stream_id = r.stream_id
               LEFT JOIN LATERAL (SELECT id, recipe_version, status FROM clips
-                                  WHERE recipe_id = r.id ORDER BY id DESC LIMIT 1) c ON TRUE
+                                  WHERE recipe_id = r.id
+                                  ORDER BY (recipe_version = r.recipe_version) DESC, id DESC LIMIT 1) c ON TRUE
             """;
 
     private static final RowMapper<LibraryRow> ROW = (rs, i) -> new LibraryRow(

@@ -20,6 +20,7 @@ import com.pokeclip.clip.render.RenderRequestService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 
@@ -38,8 +39,10 @@ import java.util.stream.Collectors;
  * 거절이면 <b>{@code recipe_not_found}로 접는다</b> — {@code broadcast_not_found}로 나가면 「그 번호의 편집본이 있다」가 새고,
  * 카드 문이 같은 이유로 {@code jump_card_not_found}로 접는다({@code JumpCardService.requireViewableCard}).
  *
- * <p>auth 왕복은 트랜잭션 밖이고 표 조립만 읽기 트랜잭션이다({@code RecipeService}와 같은 모양). 조립을 한 트랜잭션에 두는
- * 이유 — 상태를 판 질의와 영상을 읽는 질의 사이에 일꾼의 보고가 들어오면 {@code status}와 {@code latestClip.status}가 갈린다.
+ * <p>auth 왕복은 트랜잭션 밖이고 표 조립만 읽기 트랜잭션이다({@code RecipeService}와 같은 모양). 🔴 <b>그 트랜잭션은
+ * {@code REPEATABLE READ}다.</b> 상태를 판 질의와 영상·편집본을 다시 읽는 질의가 둘인데, 기본(READ COMMITTED)은 문장마다
+ * 새 스냅샷이라 그 사이에 일꾼의 보고나 편집이 끼면 {@code status=rendering}인데 {@code latestClip.status=rendered}가
+ * 나간다(PR #189 codex). 트랜잭션 하나로 묶는 것만으로는 안 막힌다 — 스냅샷 하나여야 한다.
  */
 @Service
 public class LibraryService {
@@ -57,6 +60,7 @@ public class LibraryService {
     private final RenderRequestService render;
     private final DelegationResolveClient delegation;
     private final BroadcastAccessGuard guard;
+    /** 읽기 전용 + REPEATABLE READ — 이유는 클래스 주석. 주입받은 템플릿(READ COMMITTED)을 그대로 쓰면 안 된다. */
     private final TransactionTemplate transactions;
     private final ObjectMapper mapper;
 
@@ -70,7 +74,9 @@ public class LibraryService {
         this.render = render;
         this.delegation = delegation;
         this.guard = guard;
-        this.transactions = transactions;
+        this.transactions = new TransactionTemplate(transactions.getTransactionManager());
+        this.transactions.setReadOnly(true);
+        this.transactions.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
         this.mapper = mapper;
     }
 

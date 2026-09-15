@@ -148,6 +148,26 @@ class LibraryControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.items[0].latestClip.status").value("rendered"));
     }
 
+    /**
+     * v1 주문이 v2 주문보다 <b>뒤에</b> 끼어들어 번호가 큰 영상이 옛 판인 경우 — 주문은 편집본을 읽고 나서 트랜잭션을
+     * 열므로 실제로 난다. 「번호가 가장 큰 영상」을 고르면 v2가 만드는 중인데 편집 중으로 나간다(PR #189 codex).
+     */
+    @Test
+    void 번호가_큰_옛_판_영상이_있어도_지금_판_영상이_상태를_정한다() throws Exception {
+        long 편집본 = 편집본(내_방송);
+        jdbc.update("UPDATE recipes SET recipe_version = 2 WHERE id = ?", 편집본);
+        long v2 = 영상_판(내_방송, 편집본, 2, "rendering");
+        long 늦은_v1 = 영상_판(내_방송, 편집본, 1, "rendered");
+        assertThat(늦은_v1).isGreaterThan(v2);
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+
+        목록("")
+                .andExpect(jsonPath("$.items[0].status").value("rendering"))
+                .andExpect(jsonPath("$.items[0].latestClip.id").value(v2))
+                .andExpect(jsonPath("$.items[0].latestClip.recipeVersion").value(2));
+        목록("?status=rendering").andExpect(jsonPath("$.items.length()").value(1));
+    }
+
     @Test
     void 상태로_거른다() throws Exception {
         편집본(내_방송);
@@ -284,9 +304,15 @@ class LibraryControllerTest extends IntegrationTestSupport {
 
     /** 주문 한 벌(영상 + 주문 기록)을 심고 영상 상태만 바꾼다. */
     private void 영상(String streamId, long recipeId, String clipStatus) {
+        영상_판(streamId, recipeId, 1, clipStatus);
+    }
+
+    /** @return 영상 번호 */
+    private long 영상_판(String streamId, long recipeId, int recipeVersion, String clipStatus) {
         long[] clipId = new long[1];
         RenderFixtures.주문을_넣는다(jdbc, streamId, recipeId, clipId);
-        jdbc.update("UPDATE clips SET status = ? WHERE id = ?", clipStatus, clipId[0]);
+        jdbc.update("UPDATE clips SET status = ?, recipe_version = ? WHERE id = ?", clipStatus, recipeVersion, clipId[0]);
+        return clipId[0];
     }
 
     private static String 상태(JsonNode items, long recipeId) {

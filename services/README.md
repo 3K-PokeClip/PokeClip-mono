@@ -2077,8 +2077,10 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 
 **줄 한 개** — `{"recipeId","streamId","creatorId","recipeVersion","cut":{"inAtMs","outAtMs"}|null,"status",
 "broadcast":{"status","startedAt","endedAt","vodExpiresAt"},"latestClip":<주문 문의 봉투 그대로>|null,"createdAt","updatedAt"}`.
-`latestClip`은 그 편집본으로 만든 영상 중 **가장 최근 것**(주문·완성·실패 가리지 않고)이고, 한 번도 안 만들었으면 `null`이다.
-🔴 **`latestClip.recipeVersion`이 줄의 `recipeVersion`과 다를 수 있다** — 영상을 만든 뒤 편집본을 또 고친 것이다(아래 상태 규칙).
+`latestClip`은 **지금 판으로 만든 영상 중 가장 최근 것**(주문·완성·실패 가리지 않고)이고, 지금 판 것이 없으면 옛 판의 가장 최근 것, 한 번도
+안 만들었으면 `null`이다. 🔴 **「번호가 가장 큰 영상」이 아니다** — 주문은 편집본을 읽고 나서 트랜잭션을 열므로 v1 주문이 v2 주문 뒤에
+끼어들 수 있고, 그때 번호가 큰 쪽이 옛 판이다(PR #189 codex). 🔴 **`latestClip.recipeVersion`이 줄의 `recipeVersion`과 다를 수 있다** —
+영상을 만든 뒤 편집본을 또 고친 것이다(아래 상태 규칙).
 
 **`status`는 어느 표의 칸도 아니다 — 편집본과 최신 영상에서 파생한 값이고, 규칙은 `LibraryQuery`의 SQL 한 곳에 있다.**
 거르기와 응답이 같은 식을 지나야 「거른 값과 보이는 값이 다른」 줄이 안 생긴다.
@@ -2102,7 +2104,8 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 편집본은 **안 나온다**(200, 자격 판정 표). 상세는 편집본의 방송으로 `BroadcastAccessGuard`에 묻고 거절이면
 **`recipe_not_found`로 접는다** — `broadcast_not_found`로 나가면 「그 번호의 편집본이 있다」가 새기 때문이고, 카드 문이
 `jump_card_not_found`로 접는 것과 같은 이유다. 판정 불가(503)는 접지 않는다. auth 왕복은 트랜잭션 밖이고 표 조립만 읽기
-트랜잭션 하나다 — 상태를 판 질의와 영상을 읽는 질의 사이에 일꾼의 보고가 끼면 `status`와 `latestClip.status`가 갈린다.
+트랜잭션 하나인데 **그 트랜잭션은 `REPEATABLE READ`다** — 기본(READ COMMITTED)은 문장마다 새 스냅샷이라 상태를 판 질의와 영상을
+읽는 질의 사이에 일꾼의 보고가 끼면 `status=rendering`인데 `latestClip.status=rendered`가 나간다(PR #189 codex). 스냅샷 하나여야 한다.
 
 **알려진 한계**
 - **제목이 없다.** 편집본(계약6)에 제목 칸이 없다 — 제목은 업로드 메타(POK-220)다. 화면은 그때까지 구간·방송 시각으로 보여준다
