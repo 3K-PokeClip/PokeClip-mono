@@ -64,6 +64,16 @@ pokeclip:
       # 상한 자체를 재는 시험은 자기 @TestPropertySource로 4를 다시 건다.
       max-per-user: 50
 
+  render:
+    # 시험은 기본 꺼짐. 주문 문 시험(RenderRequestControllerTest)이 자기 @DynamicPropertySource로 LocalStack 큐를
+    # 채워 컨텍스트 하나를 더 쓴다(출입증 시험과 같은 모양). 보고 문·정리기 시험은 큐 없이 표만 쓴다.
+    enabled: false
+    region: ap-northeast-2
+    outbox-retry-interval: PT30S
+    reconcile-interval: PT1M
+    max-attempts: 3
+    max-message-bytes: 204800
+
   broadcast:
     intake:
       # 테스트는 큐에 안 붙는다. 진짜 왕복은 SqsIntakeEndToEndTest가 LocalStack으로 잰다.

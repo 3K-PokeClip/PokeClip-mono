@@ -33,6 +33,12 @@ public class RecipeValidator {
     static final long MIN_CUT_MS = 5_000;
     static final long MAX_CUT_MS = 180_000;
 
+    /**
+     * 절대 시각 상한 — 3000-01-01 UTC. 계약6은 상한을 안 정하지만 PostgreSQL {@code to_timestamp}가 받는 범위가 {@code long}보다
+     * 훨씬 좁아, 그 밖의 값은 조각 조회에서 500이 난다(PR #188 1판 codex). 컷과 자막 시각에 같이 건다.
+     */
+    static final long MAX_EPOCH_MS = 32_503_680_000_000L;
+
     /** 계약6 1절 — {@code outputId} 형식. */
     private static final Pattern OUTPUT_ID = Pattern.compile("[a-z0-9-]{1,32}");
 
@@ -72,7 +78,7 @@ public class RecipeValidator {
         if (cut == null) {
             return;
         }
-        if (cut.inAtMs() == null || cut.outAtMs() == null || cut.inAtMs() < 0) {
+        if (cut.inAtMs() == null || cut.outAtMs() == null || cut.inAtMs() < 0 || cut.outAtMs() > MAX_EPOCH_MS) {
             throw invalid("cut");
         }
         // 🔴 순서를 뺄셈 전에 따로 본다. 길이만 재면 뺄셈이 넘치는 값(in=Long.MAX, out=Long.MIN+4999)이
@@ -159,7 +165,8 @@ public class RecipeValidator {
         long previousEnd = Long.MIN_VALUE;
         for (Segment segment : subtitles.segments()) {
             if (segment == null || segment.startAtMs() == null || segment.endAtMs() == null || segment.text() == null
-                    || segment.startAtMs() < 0 || segment.startAtMs() >= segment.endAtMs()) {
+                    || segment.startAtMs() < 0 || segment.startAtMs() >= segment.endAtMs()
+                    || segment.endAtMs() > MAX_EPOCH_MS) {
                 throw invalid("subtitles");
             }
             // 앞 구간의 끝과 같은 시각에서 시작하는 것은 겹침이 아니다 — 구간은 [start, end)다.

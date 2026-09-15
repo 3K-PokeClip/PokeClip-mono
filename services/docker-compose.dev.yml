@@ -140,6 +140,12 @@ services:
       MEDIA_BASE_URL: ${MEDIA_BASE_URL:-}
       PLAYBACK_COOKIE_DOMAIN: ${PLAYBACK_COOKIE_DOMAIN:-}
       PLAYBACK_ACCESS_TTL: ${PLAYBACK_ACCESS_TTL:-PT60M}
+      # 영상 만들기 주문(POK-125). 켜면 큐 둘·창고 둘이 필수다. 자격증명은 EC2 역할(인라인 정책 pokeclip-render-queue-and-clips).
+      RENDER_ENABLED: ${RENDER_ENABLED:-false}
+      RENDER_QUEUE_URL: ${RENDER_QUEUE_URL:-}
+      RENDER_DLQ_URL: ${RENDER_DLQ_URL:-}
+      CLIPS_BUCKET: ${CLIPS_BUCKET:-}
+      SEGMENT_BUCKET: ${SEGMENT_BUCKET:-}
       # 채팅 되감기 문 셋이 물어보는 수집기 주소(POK-234). 위 AUTH_BASE_URL 과 달리
       # 비어도 부팅은 산다 — 그 셋만 503 이고 카드 편집·목록·통로는 그대로 돈다.
       # 그래도 여기 넣는 이유는 「표에만 적혀 있고 compose 가 안 넘겨」 그 기능만 조용히

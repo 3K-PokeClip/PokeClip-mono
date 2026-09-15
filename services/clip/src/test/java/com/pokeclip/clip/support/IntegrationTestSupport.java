@@ -107,6 +107,9 @@ public abstract class IntegrationTestSupport {
                         uploaded_at      timestamptz,
                         bytes            bigint,
                         is_discontinuity boolean     NOT NULL DEFAULT false,
+                        -- 계약-세그먼트인덱스 6-1(3번 승인 2026-09-01) 칸 둘. 렌더 주문(POK-125)이 playback_pdt로 조각을 찾는다.
+                        session_id       text,
+                        playback_pdt     timestamptz,
                         PRIMARY KEY (stream_id, seq)
                     )""");
         } catch (java.sql.SQLException e) {
@@ -115,7 +118,7 @@ public abstract class IntegrationTestSupport {
     }
 
     /**
-     * 표 다섯을 <b>자식부터</b> 비운다 — {@code stream_segments} · {@code recipes} · {@code jump_cards} ·
+     * 표 여덟을 <b>자식부터</b> 비운다 — {@code stream_segments} · 렌더 셋({@code render_job_events}·{@code render_jobs}·{@code clips}) · {@code recipes} · {@code jump_cards} ·
      * {@code broadcast_events} · {@code broadcasts}. {@code jump_cards}가
      * {@code broadcasts}의 자식이라 카드를 먼저 안 지우면 방송 삭제가 FK로 죽는데,
      * <b>단독 실행에서는 안 보이고 모듈 전체에서만 터진다</b>(POK-118에서 실제로 밟았다 —
@@ -132,6 +135,9 @@ public abstract class IntegrationTestSupport {
      */
     protected static void 방송과_카드를_비운다(JdbcTemplate jdbc) {
         jdbc.update("DELETE FROM stream_segments");
+        jdbc.update("DELETE FROM render_job_events");
+        jdbc.update("DELETE FROM render_jobs");
+        jdbc.update("DELETE FROM clips");
         jdbc.update("DELETE FROM recipes");
         jdbc.update("DELETE FROM jump_cards");
         jdbc.update("DELETE FROM broadcast_events");
