@@ -32,7 +32,7 @@ Java 21 · Spring Boot 4.1 · Gradle 멀티모듈 · PostgreSQL · Redis
 | | 소유 |
 |---|---|
 | `auth` | `users` · `refresh_tokens` · `secrets` · `stream_keys` · `pairing_codes` · `pairing_exchange_attempts` |
-| `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `broadcasts.vod_expires_at` (V203, POK-117) · `recipes` (V206, POK-124) · **`clips` · `render_jobs` · `render_job_events` (V207, POK-125)** |
+| `clip` | `broadcasts` · `broadcast_events` (V201) · `jump_cards` (V202) · `broadcasts.vod_expires_at` (V203, POK-117) · `recipes` (V206, POK-124) · `clips` · `render_jobs` · `render_job_events` (V207, POK-125) · **`clips` 색인 `idx_clips_recipe` (V208, POK-243)** |
 | chat 계열 | `chat_messages` (V301 · `stream_id` 칸은 V302 · **닉네임·역할 칸은 V306**) · `chat_ended_streams` (V303) · **`chat_donations` (V307)** · **`broadcast_info` (V308)** — **collector가 쓰고 detector가 읽는다.** 같은 담당(3번)·같은 V3xx 대역의 공동 소유라, 아래 "서로의 표를 직접 읽지 않는다"의 예외가 아니라 한 소유자의 두 프로세스다 |
 | `chat-detector` | `chat_metrics` (V401, POK-120) — **판별 서버 단독 소유다.** 위 `chat_messages`와 달리 공동 소유가 아니라 이 서버만 읽고 쓴다 |
 
@@ -666,7 +666,7 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat-collector · `V4xx` chat-detector.
 지금까지 나간 것은 auth의 `V101`~`V112`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
-**`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · **`V207`(`clips`·`render_jobs`·`render_job_events`, POK-125)** · chat-collector의 `V301`(`chat_messages`)~**`V308`** ·
+**`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · `V207`(`clips`·`render_jobs`·`render_job_events`, POK-125) · **`V208`(`clips (recipe_id, id DESC)` 색인 하나, POK-243)** · chat-collector의 `V301`(`chat_messages`)~**`V308`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **chat-collector 대역 여덟:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
@@ -1297,7 +1297,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 **카드 목록은 방송 시간 오름차순이다** — 순번(`event_seq`)이 아니다. 그 값은 카드를 숨기면
 트리거가 올려서 자리가 바뀌고, 트랜잭션 밖에서 증가해 커밋 순서와도 다를 수 있다.
 
-#### 자격 판정 — 문 열여덟이 무엇을 보나
+#### 자격 판정 — 문 스물이 무엇을 보나
 
 | 문 | 무엇으로 판정하나 | 자격이 없으면 |
 |---|---|---|
@@ -1319,9 +1319,11 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 | `PUT …/{streamId}/recipes/{id}` (POK-124) | 같음 | 같음 |
 | `POST …/{streamId}/recipes/{id}/renders` (POK-125) | 같음 → 편집본이 그 방송 것인가 | 같음 · **404** `recipe_not_found` |
 | `GET …/{streamId}/clips/{clipId}` (POK-125) | 같음 → 영상이 그 방송 것인가 | 같음 · **404** `clip_not_found` |
+| `GET /api/clip/library` (POK-243) | auth `accessible` — **방송 목록과 같은 판정**(볼 수 있는 스트리머 번호로만 조회) | 그 줄이 목록에 **안 나온다**(200) |
+| `GET /api/clip/library/{recipeId}` (POK-243) | 편집본 → 그 편집본의 방송 → `BroadcastAccessGuard` | **404** `recipe_not_found` — `broadcast_not_found`로 안 나간다(그 번호의 편집본이 있다는 것이 샌다) |
 
-**자격 판정이 없는 문은 셋이다 — 열아홉 번째 `POST /internal/broadcasts/{streamId}/highlights`·
-스무 번째 `GET /internal/broadcasts/live`·스물한 번째 `POST /internal/jobs/{jobId}/events`(POK-125, 일꾼의 보고)**(POK-218, 아래 절). 둘 다 서버 간 토큰
+**자격 판정이 없는 문은 셋이다 — 스물한 번째 `POST /internal/broadcasts/{streamId}/highlights`·
+스물두 번째 `GET /internal/broadcasts/live`·스물세 번째 `POST /internal/jobs/{jobId}/events`(POK-125, 일꾼의 보고)**(POK-218, 아래 절). 둘 다 서버 간 토큰
 (`X-Internal-Token`)으로 들어오고 감출 상대가 없다. 판별기는 404를 재시도 상한으로
 세므로 앞엣것은 아래 25ms 바닥도 안 문다.
 
@@ -1678,10 +1680,10 @@ auth 왕복을 타서 시간이 갈리기 때문이다**(세그먼트 문 실측
 코드 쪽은 메서드 수준 매핑 애노테이션, 문서 쪽은 clip 절에 적힌 「메서드 + 경로」다.**
 
 ```bash
-# 코드 — 13
+# 코드 — 24
 grep -rc '@GetMapping\|@PostMapping\|@DeleteMapping\|@PutMapping\|@PatchMapping' \
   services/clip/src/main/java --include='*.java' | awk -F: '{s+=$2} END {print s}'
-# 문서 — 13 (clip이 *부르는* auth 창구는 뺀다. 🔴 수집기 창구는 clip이 *부르는* 남의 문이라
+# 문서 — 24 (clip이 *부르는* auth 창구는 뺀다. 🔴 수집기 창구는 clip이 *부르는* 남의 문이라
 #            같은 이유로 빠진다 — 위 표의 「넘어가는 곳」 칸이 그것이고, 이름이 틀려도 초록이다)
 sed -n '/^### clip — 방송 생명주기 수신/,/^### 치지직 채널 연동/p' services/README.md \
   | grep -o '\(GET\|POST\|DELETE\|PUT\|PATCH\) /\(api\|internal\)[A-Za-z0-9/{}_-]*' \
@@ -1995,7 +1997,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 **봉투** — `{"id","streamId","recipeId","recipeVersion","requestedBy","status","progress":{"percent","stage","attempt","jobId"},"outputs","error":{"code","message"},"createdAt","updatedAt"}`.
 `status`는 **`queued`(주문됨) → `rendering`(만드는 중) → `rendered`(완성) | `failed`(실패)** 넷 — 2번 화면의 거르기 값이라 이름을 바꾸지 않는다.
 업로드 상태는 POK-220이 더한다. `outputs`는 완성했을 때 일꾼이 보고한 산출물 목록(`outputId`·`kind`·`s3Key`) 그대로인데
-**화면이 그 키로 영상을 직접 받을 수는 없다**(창고는 비공개) — 내려받기 문은 POK-243 이후다.
+**화면이 그 키로 영상을 직접 받을 수는 없다**(창고는 비공개) — 내려받기 문은 아직 없다(보관함 POK-243은 목록·상세만이다).
 
 **주문의 순서가 계약이다 — 자격 → 편집본 → 조각 준비 → 선점(표) → 발행(큐).**
 - **조각이 컷을 「연속 uploaded」로 다 덮어야 주문한다.** 하나라도 빠지면 409 `source_not_ready`이고 표에도 큐에도 아무것도
@@ -2053,9 +2055,61 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 **알려진 한계**
 - **취소가 없다.** 계약1은 취소를 종결의 한 형태로 두는데 이 카드 범위 밖이다 — 끝날 때까지 기다리거나 실패하게 둔다
 - **고착 감시가 없다** — STARTED 뒤 30분 무보고 알람(계약1)은 관측 장치가 생기면 붙인다. 지금 안전망은 SQS 재전달·실패 큐뿐이다
-- **주문 목록 문이 없다**(POK-243) · 완성 영상 내려받기 문이 없다(창고가 비공개) · 60일 뒤 창고 삭제는 창고의 수명 정책이 하고 표의 줄은 남는다
+- 완성 영상 내려받기 문이 없다(창고가 비공개) — 목록·상세는 보관함(POK-243, 아래 절)이 준다 · 60일 뒤 창고 삭제는 창고의 수명 정책이 하고 표의 줄은 남는다
 - `sourceKeys`에 조각의 `width`·`height`가 없다(계약1 초안의 video 항목 필수) — 조각 장부에 그 값이 없다. 일꾼이 ffprobe로 실측한다
 - 큐가 실제로 있어야 한다: 로컬은 LocalStack, dev는 2026-09-15에 만든 실물 큐 둘·창고 하나(README 환경변수 표)
+
+### clip — 보관함 목록·상세 (POK-243)
+
+**편집자가 보관함 화면을 열면 「내가 볼 수 있는 방송들의 편집본 전부」가 상태별로 나오고, 하나를 누르면 편집 기록과
+가장 최근 영상이 같이 온다.** 새 표는 없다 — 편집 기록(`recipes`)·원본 방송(`broadcasts`)·완성 영상(`clips`)을 한 질의로
+합친 **읽기 문 둘**이고, `V208`은 그 질의가 편집본마다 최신 영상을 찾을 색인 하나다.
+**방송 경로 아래가 아니다**(`/api/clip/broadcasts/{streamId}/…`가 아니라 `/api/clip/library`) — 보관함 화면은 방송을 고르지
+않고 내 편집본 전부를 보므로, 목록의 자격 판정은 방송 목록과 같은 모양(auth `accessible`)이다.
+
+| 문 | 인증 | 응답 |
+|---|---|---|
+| `GET /api/clip/library?status=&limit=&cursor=` | Bearer JWT | **200** `{"items":[…],"nextCursor":…}` 최근 만든 순 · 400 `{"error":"invalid_request","field":"status\|limit\|cursor"}` · 401 · 404 `{"error":"broadcast_not_found"}`(토큰의 `sub`가 숫자가 아닐 때뿐 — 방송 목록과 같은 한계) · **503** `{"error":"authorization_unavailable"}` |
+| `GET /api/clip/library/{recipeId}` | Bearer JWT | **200** 위 줄의 칸 전부 + `recipe`(계약6 JSON 그대로) · **404** `{"error":"recipe_not_found"}`(없다·남의 것이 **같은 본문·같은 25ms 바닥**) · 401 · 503 |
+
+**`status`는 선택이고 소문자다.** 안 주거나 비우면 전부. `limit`은 방송 목록과 같다 — **20/100**, 0 이하는 400.
+`cursor`는 불투명한 이어받기 표시(방송·카드 목록의 표시를 넣으면 400 — 종류 태그가 다르다).
+
+**줄 한 개** — `{"recipeId","streamId","creatorId","recipeVersion","cut":{"inAtMs","outAtMs"}|null,"status",
+"broadcast":{"status","startedAt","endedAt","vodExpiresAt"},"latestClip":<주문 문의 봉투 그대로>|null,"createdAt","updatedAt"}`.
+`latestClip`은 그 편집본으로 만든 영상 중 **가장 최근 것**(주문·완성·실패 가리지 않고)이고, 한 번도 안 만들었으면 `null`이다.
+🔴 **`latestClip.recipeVersion`이 줄의 `recipeVersion`과 다를 수 있다** — 영상을 만든 뒤 편집본을 또 고친 것이다(아래 상태 규칙).
+
+**`status`는 어느 표의 칸도 아니다 — 편집본과 최신 영상에서 파생한 값이고, 규칙은 `LibraryQuery`의 SQL 한 곳에 있다.**
+거르기와 응답이 같은 식을 지나야 「거른 값과 보이는 값이 다른」 줄이 안 생긴다.
+
+| `status` | 언제 | 화면 |
+|---|---|---|
+| `editing` | 지금 판(`recipeVersion`)으로 만든 영상이 없다 — 한 번도 안 만들었거나, **만든 뒤 편집본을 또 고쳤다** | 편집 중 |
+| `rendering` | 지금 판의 영상이 `queued`·`rendering` | 렌더 중 |
+| `rendered` | 지금 판의 영상이 완성됐다 | 업로드 대기 |
+| `failed` | 지금 판의 마지막 시도가 실패했다(다시 주문해 완성되면 `rendered`로 돌아온다) | 렌더 실패 |
+
+**업로드 상태(올리는 중·올림·실패 사유·유튜브 주소)는 POK-220이 더한다** — 그때까지 `status=uploading` 같은 값은 400이다.
+**승인 상태 칸은 만들지 않는다**(2026-08-30 결정: 승인 게이트 없음 — 편집자·스트리머 둘 다 업로드한다). 화면 시안의
+「승인 대기」·「반려됨」 배지는 이 결정 전에 그려진 것이고 2번에게 전했다.
+
+**정렬·이어받기가 둘 다 편집본 번호다**(만든 순의 역순) — 방송 목록과 같은 이유. 「최근 편집순」은 고칠 때마다 자리가
+바뀌어 이어받기 기준으로 쓰면 중복·누락이 나므로 화면이 한 장 안에서 다시 정렬한다. 거르기(`status`)와 이어받기는 같이
+걸린다 — 거른 줄은 세지 않는다.
+
+**자격 판정이 목록과 상세에서 다르다.** 목록은 auth에 「볼 수 있는 스트리머」를 먼저 받아 그 번호로만 조회하므로 남의
+편집본은 **안 나온다**(200, 자격 판정 표). 상세는 편집본의 방송으로 `BroadcastAccessGuard`에 묻고 거절이면
+**`recipe_not_found`로 접는다** — `broadcast_not_found`로 나가면 「그 번호의 편집본이 있다」가 새기 때문이고, 카드 문이
+`jump_card_not_found`로 접는 것과 같은 이유다. 판정 불가(503)는 접지 않는다. auth 왕복은 트랜잭션 밖이고 표 조립만 읽기
+트랜잭션 하나다 — 상태를 판 질의와 영상을 읽는 질의 사이에 일꾼의 보고가 끼면 `status`와 `latestClip.status`가 갈린다.
+
+**알려진 한계**
+- **제목이 없다.** 편집본(계약6)에 제목 칸이 없다 — 제목은 업로드 메타(POK-220)다. 화면은 그때까지 구간·방송 시각으로 보여준다
+- **만든 사람의 이름이 없다** — `creatorId`(회원 번호)뿐이다. clip은 회원 표를 안 읽는다(ADR-022). 화면이 auth에 묻거나, 목록에 이름을 싣는 창구가 따로 필요하다
+- **완성 영상 내려받기 문이 없다** — `latestClip.outputs.s3Key`로 화면이 직접 못 받는다(창고 비공개)
+- **원본 방송의 `vodExpiresAt`은 방송이 끝나야 채워진다**(POK-117) — 방송 중인 편집본은 `null`이다
+- 목록이 `recipes` 전체에서 스트리머로 거른 뒤 최신 영상을 붙인다 — 편집본이 방송당 수십 벌인 규모 전제다(README 편집 저장 절)
 
 ### 치지직 채널 연동 (POK-93)
 

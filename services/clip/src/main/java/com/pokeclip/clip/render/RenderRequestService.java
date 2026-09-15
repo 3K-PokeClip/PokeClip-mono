@@ -173,7 +173,14 @@ public class RenderRequestService {
     }
 
     ClipSnapshot snapshot(Clip clip) {
-        Optional<RenderJob> job = jobs.findByClipId(clip.getId());
+        return snapshot(clip, jobs.findByClipId(clip.getId()));
+    }
+
+    /**
+     * 영상 한 벌을 응답 모양으로. <b>보관함(POK-243)도 이것을 쓴다</b> — 같은 영상이 주문 문과 보관함에서 다른 모양으로
+     * 나가면 화면이 두 벌로 처리한다. 주문은 목록이 한 번에 읽어 넘긴다(줄마다 묻지 않으려고).
+     */
+    public ClipSnapshot snapshot(Clip clip, Optional<RenderJob> job) {
         ClipSnapshot.Progress progress = job.map(j -> new ClipSnapshot.Progress(
                 j.getProgressPercent(), j.getProgressStage(), j.getAttemptOrdinal(), j.getId())).orElse(null);
         return new ClipSnapshot(clip.getId(), clip.getStreamId(), clip.getRecipeId(), clip.getRecipeVersion(),
