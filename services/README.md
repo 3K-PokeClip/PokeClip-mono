@@ -778,6 +778,9 @@ preflight에서 막혀 **창구는 멀쩡한데 브라우저만 못 부른다.**
 | `PUT /api/auth/me/photo` | 웹 | 사용자 JWT (**multipart/form-data**) |
 | `GET /api/profile-photos/{userId}?token=…` | **웹의 그림 태그** | **사진 표**(세 번째 `permitAll`) |
 | **`DELETE /api/auth/me`** — 탈퇴 | 웹 | 사용자 JWT |
+| `GET /api/auth/me/audio-tracks` — 오디오 트랙 이름(POK-240) | 웹 | 사용자 JWT |
+| `PUT /api/auth/me/audio-tracks` | 웹 | 사용자 JWT |
+| `GET /api/streamers/{streamerUserId}/audio-tracks` | 웹(편집자) | 사용자 JWT — 본인 또는 위임 편집자만, 아니면 404 |
 
 **표시 이름 규칙 셋** — 웹이 같은 판정을 화면에서 먼저 해야 왕복이 준다.
 
@@ -2429,6 +2432,38 @@ clip이 「이 사람이 이 스트리머의 방송을 봐도 되나」를 물�
   `Access-Control-Allow-Methods: GET,POST,PUT,PATCH,DELETE`
 - 못 잰 것 둘: **구글 재로그인**과 **refresh 원문 토큰** — 둘 다 실제 구글 왕복이 필요하다.
   대신 코드·DB로 확인했다(`google_sub`이 `withdrawn:N`으로 바뀌었고 `findOrCreate`는 그 값으로만 찾는다)
+
+### 오디오 트랙 이름 (POK-240)
+
+**스트리머가 설정에서 트랙 1~6의 이름을 한 번 적어 두면, 편집 화면 오디오 탭에 「트랙 3」 대신 「디스코드」가 뜬다.**
+OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9에서 라벨 전달을 폐기했다 — 방송 중 소스를 켜고 끄면
+라벨이 안 맞는다). BGM 트랙을 끄고 내보내는 것이 이 제품의 저작권 핵심인데 어느 줄이 BGM인지 알아야 끌 수 있다.
+파형·무음 자동 판정(POK-123)은 이것으로 대체돼 폐기됐다 — 필요해지면 그때 새 카드.
+
+표 하나 `audio_track_labels`(`V113`, 회원당 0~6행 — **이름을 안 적은 트랙은 행이 없다**). 환경변수 없음.
+
+| 문 | 인증 | 응답 |
+|---|---|---|
+| `GET /api/auth/me/audio-tracks` | Bearer JWT | **200** `{"labels":[…6칸…]}` — 빈 칸은 `null` · 401 |
+| `PUT /api/auth/me/audio-tracks` `{"labels":[…6칸…]}` | Bearer JWT | **200** 저장된 모양 그대로 · 400 `{"reason":"LABELS_SIZE"}`(여섯 칸이 아니다·본문이 배열이 아니다) · 400 `{"reason":"LABEL_TOO_LONG"}` · 401(탈퇴한 회원 포함) |
+| `GET /api/streamers/{streamerUserId}/audio-tracks` | Bearer JWT | **200** 같은 모양 · **404** `{"reason":"STREAMER_NOT_FOUND"}` — 본인도 위임 편집자도 아니거나 그런 회원이 없다(**둘을 가르지 않는다**) · 401 |
+
+**이름 규칙은 표시 이름과 같은 판정이다**(`UserService.stripEdgeBlanks` 재사용) — 앞뒤 공백을 자르고
+전각 공백·NBSP·ZWSP도 공백으로 본다. 잘라서 비면 **이름 없음(`null`)**이지 오류가 아니다. 길이는
+**코드 포인트 32자**(JS `[...s].length`). 칸은 **여섯 고정** — 화면이 다섯이나 일곱을 보내면 400이다.
+
+**PUT은 여섯 칸을 통째로 덮는다.** 한 칸만 바꾸려 해도 여섯을 다 보낸다(받은 것을 고쳐 그대로 돌려보내면 된다).
+같은 회원의 저장이 겹치면 뒤에 커밋한 쪽이 이긴다 — 설정 화면 하나에서 누르는 일이라 그것이 맞다.
+
+**읽는 자격은 위임 표 그대로다**(`DelegationService.relationOf` — clip의 방송 문이 `resolve`로 묻는 것과 같은 판정).
+편집자는 자기가 위임받은 스트리머 것만 읽고, **쓰지는 못한다**(쓰는 문이 `/me`뿐이다).
+
+**탈퇴한 회원의 쓰기는 두 겹으로 막힌다** — 입구 필터(401)와 쓰기 직전 `ActiveUserGuard`(POK-171 규칙:
+회원에게 무언가를 새로 만들어 주는 경로). **탈퇴가 이 표를 지우지는 않는다** — 「마이크」·「게임」은 개인정보가
+아니고, 익명화된 회원 번호 아래 남아 있어도 아무도 못 읽는다(자격 판정이 위임을 보는데 탈퇴가 위임을 전부 끊는다).
+
+**2번이 알아야 할 것**: 편집기 오디오 탭은 방송의 스트리머 번호로 `GET /api/streamers/{id}/audio-tracks`를 한 번
+부르고, 빈 칸(`null`)은 「트랙 n」으로 보인다. 설정 화면은 `GET /me/audio-tracks`로 채우고 `PUT`으로 여섯을 통째로 보낸다.
 
 ### 운영 전 잔불 정리: 보관 기한 청소·프록시 IP (POK-89)
 

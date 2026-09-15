@@ -141,8 +141,11 @@ public class UserService {
      *
      * <p><b>자르는 것은 앞뒤뿐이다.</b> 가운데까지 접으면 "김 태현"이 "김태현"이 되고,
      * 이모지를 잇는 ZWJ(U+200D)가 사라져 이모지 이름이 깨진다.
+     *
+     * <p>public인 이유: 오디오 트랙 이름(POK-240)이 같은 판정을 쓴다. 두 자리가 다른 공백 판정을 하면
+     * 화면이 같은 입력에 다른 답을 받는다 — 복제하지 않고 여기를 부른다.
      */
-    private static String stripEdgeBlanks(String raw) {
+    public static String stripEdgeBlanks(String raw) {
         if (raw == null) {
             return "";
         }
