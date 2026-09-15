@@ -22,8 +22,9 @@ class SpikeDetectorTest {
         return new DetectionProperties(
                 Duration.ofSeconds(1), List.of(5_000L), 5_000L,
                 Duration.ofSeconds(2), Duration.ofMinutes(10),
-                Duration.ofSeconds(60), Duration.ofMinutes(1), Duration.ofMinutes(15),
-                5, 3.0, 10, metric, Duration.ofHours(24));
+                Duration.ofSeconds(60), Duration.ofMinutes(2), Duration.ofMinutes(15),
+                5, 3.0, 10, metric, Duration.ofHours(24),
+                Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15), Duration.ofSeconds(5));
     }
 
     private static final DetectionProperties PROPS = props(Metric.MESSAGE);

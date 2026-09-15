@@ -3398,7 +3398,7 @@ NPE를 던진다**(빈 Set도 그렇다 — 실측).
 | `DETECTION_WINDOW_GRACE` | `2s` | — | 창이 지나고 더 기다리는 시간. **우리 구간 지연에 그대로 더해진다** |
 | `DETECTION_LATE_REPORT_INTERVAL` | `10m` | — | 늦게 온 채팅을 세어 찍는 간격. 위 유예값을 조정할 근거를 모은다 |
 | `DETECTION_ACTIVE_STREAM_WINDOW` | `60s` | — | 이 시간 안에 채팅이 온 방송만 센다 |
-| `DETECTION_COLLECT_LOOKBACK` | `1m` | — | 한 바퀴가 되돌아보며 다시 집계하는 기간. **아래 베이스라인 기간과 다른 값이다** — 15분으로 두면 100 방송에서 1초 주기를 못 지킨다 |
+| `DETECTION_COLLECT_LOOKBACK` | `2m` | — | 한 바퀴가 되돌아보며 다시 집계하는 기간. **아래 베이스라인 기간과 다른 값이다** — 15분으로 두면 100 방송에서 1초 주기를 못 지킨다. 🔴 **`DETECTION_EPISODE_MAX_SPAN + GAP + 발행 창`(기본 105초)보다 짧으면 부팅 거부** — 되돌린 사건을 다음 바퀴가 통째로 다시 읽어야 한다(1m→2m, PR #182 봇 지적) |
 | `DETECTION_BASELINE_WINDOW` | `15m` | — | "평소"를 보는 기간 |
 | `DETECTION_WARMUP_WINDOWS` | `24` | — | 이만큼 안 쌓이면 카드를 안 낸다. 켜자마자는 아무 채팅이나 무한대 배율이다 |
 | `DETECTION_SPIKE_RATIO` | `3.0` | — | 배율 임계(ADR-011). **바꿀 때는 높은 쪽이 안전하다** — 가짜 카드가 놓친 것보다 비싸다 |
@@ -3406,6 +3406,10 @@ NPE를 던진다**(빈 Set도 그렇다 — 실측).
 | `DETECTION_METRIC` | `MESSAGE` | — | `MESSAGE` 또는 `CHATTER`. 사람 수는 지금 집계만 하고 판정엔 안 쓴다 |
 | `DETECTION_RETENTION` | `24h` | — | 집계 줄 보관 기간 |
 | `DETECTION_SWEEP_INTERVAL` | `10m` | — | 보관 기간이 지난 줄을 치우는 주기 |
+| `DETECTION_EPISODE_GAP` | `10s` | — | 튄 창들을 **사건 하나로 묶는** 간격. 앞 창 끝에서 이만큼 안에 다음 튄 창이 오면 같은 카드다. 튐이 멈추고 이 시간이 지나야 카드가 나간다 |
+| `DETECTION_EPISODE_MAX_SPAN` | `90s` | — | 사건 길이 상한. 넘으면 끊고 다음 사건 |
+| `DETECTION_EPISODE_LEAD` | `15s` | — | 카드 구간을 첫 튄 창보다 이만큼 앞에서 시작(채팅은 장면보다 늦다). **`GAP + 발행 창`(15초)보다 길면 부팅 거부** — 방송 초반의 두 사건이 같은 0초로 잘려 한 카드로 접힌다 |
+| `DETECTION_EPISODE_TAIL` | `5s` | — | 카드 구간을 마지막 튄 창 뒤로 이만큼 연장 |
 
 **임계값 셋(`SPIKE_RATIO`·`MIN_COUNT`·`WARMUP_WINDOWS`)은 확정값이 아니다.** 멘토 협업이
 미결이라 설정으로 빼 뒀다 — 실측 뒤에 다시 정한다.
