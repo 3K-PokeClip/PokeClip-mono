@@ -35,9 +35,11 @@ import org.springframework.stereotype.Component;
  * 탈퇴 트랜잭션이 <b>커밋한 뒤에</b> 도착한 요청을 막는다 — 커밋 <b>전</b>(회수는 끝났고 아직 안 열린 창)에
  * 읽으면 살아있는 것으로 보인다. 그 창의 폭은 탈퇴 트랜잭션의 길이(수십 ms)다.
  * <b>완전히 닫으려면 {@link #requireAliveWithLock}을 써야 하고, 그것은 락을 이미 잡는 경로에서만 공짜다</b> —
- * 안 잡던 경로에 얹으면 잠금 순서가 새로 생긴다(페어링 교환은 실제로 그러면 안 된다:
- * 교환은 {@code pairing_codes} 행을 먼저 잠그는데 탈퇴는 회원 행을 먼저 잠근다 — 순서가 반대라
- * 사이클이 되고, 한쪽이 {@code REQUIRES_NEW}라 <b>PostgreSQL의 데드락 검출기가 그 사이클을 못 본다</b>).
+ * 안 잡던 경로에 얹으면 잠금 순서가 새로 생긴다. 탈퇴는 <b>회원 행을 먼저</b> 잠그고 자식 표를 뒤에 잠그므로,
+ * 얹는 자리도 회원 행을 먼저 잡아야 한다 — 반대 순서면 사이클이 되고, 한쪽이 {@code REQUIRES_NEW}면
+ * <b>PostgreSQL의 데드락 검출기가 그 사이클을 못 본다</b>(앱 안의 대기는 wait graph에 안 보인다).
+ * 페어링 교환이 그 예다: 전에는 {@code pairing_codes} 행을 먼저 잠가 이 락을 못 얹었고,
+ * POK-245에서 코드 소비를 회원 행 락 <b>뒤로</b> 옮긴 다음에야 락과 함께 보게 됐다.
  *
  * <p>🔴 <b>남은 창은 자리마다 대가가 다르다 — 거절만으로 안 끝나는 자리가 하나 있다.</b>
  * 대개는 거절이 곧 회수다(안 만들어졌으니 지울 것도 없다). 그런데 사진은 <b>거절 시점에 이미
@@ -49,7 +51,7 @@ import org.springframework.stereotype.Component;
  * <p><b>{@code site}는 상수만 넘긴다.</b> 로그로 나가는 값이라 이메일·이름·채널 이름이 들어가면 안 된다
  * ({@code SecretLeakTest}가 본다).
  *
- * <h2>🔴 전수 명부 — 막는 자리 9자리 · 8파일 · 가드 밖 회원 행 락 6자리</h2>
+ * <h2>🔴 전수 명부 — 막는 자리 10자리 · 8파일 · 가드 밖 회원 행 락 6자리</h2>
  *
  * <p>🔴 <b>숫자는 바로 위 한 줄에만 있다 — 아래 표에는 세어 둔 수를 안 적는다.</b>
  * 두 군데 적으면 한쪽만 고치는 날이 오고, <b>이 세션에서만 그 일이 세 번</b> 났다
@@ -68,8 +70,12 @@ import org.springframework.stereotype.Component;
  * <table border="1">
  * <caption>탈퇴 확인이 있는 쓰기 경로</caption>
  * <tr><th>자리</th><th>무엇을 막나</th><th>경합 창</th></tr>
- * <tr><td>{@code StreamKeyService.ensureKey}</td><td>스트림키 신규 발급 · 페어링 코드 발급 · 교환</td>
+ * <tr><td>{@code StreamKeyService.ensureKey}</td><td>스트림키 신규 발급 · 페어링 코드 발급</td>
  *     <td><b>남는다</b>(락 없음)</td></tr>
+ * <tr><td>🔴 {@code StreamKeyService.reissueForPairing}</td><td>페어링 <b>교환</b>의 키 교체·신규 발급(POK-245) —
+ *     로그인이 없어 입구 필터가 원리상 못 막는 경로다</td>
+ *     <td>없다(락과 함께 — 락 → 코드 소비 → 확인 순이라 {@link #requireAliveWithLock} 대신
+ *     손에 든 회원으로 본다)</td></tr>
  * <tr><td>{@code PhotoAttacher.currentVersion}</td><td>창고에 올라가는 사진 <b>파일</b></td>
  *     <td><b>남는다</b>(락 없음)</td></tr>
  * <tr><td>{@code PhotoAttacher.attach}</td><td>{@code users}의 사진 칸 둘</td>
@@ -107,7 +113,9 @@ import org.springframework.stereotype.Component;
  * <tr><td>{@code YoutubeLinkWriter.revoke}</td><td>위와 같다(쌍둥이)</td></tr>
  * <tr><td>{@code ChzzkTokenRefresher}</td><td>탈퇴가 연동을 닫아 살아있는 링크가 없다 → 아무 일도 안 한다</td></tr>
  * <tr><td>{@code YoutubeTokenRefresher}</td><td>위와 같다(쌍둥이)</td></tr>
- * <tr><td>{@code StreamKeyService.rotate}</td><td>탈퇴가 살아있는 키를 폐기해 {@code findAlive}가 빈손 → 404</td></tr>
+ * <tr><td>{@code StreamKeyService.lockUser}</td><td>{@code rotate}: 탈퇴가 살아있는 키를 폐기해 {@code findAlive}가
+ *     빈손 → 404. {@code reissueForPairing}: 면제가 아니다 — 이 락 뒤에 코드를 소비하고 나서
+ *     위 표의 가드를 지난다(확인이 소비보다 뒤여야 해서 락과 확인이 한 호출로 안 묶인다)</td></tr>
  * </table>
  *
  * <p>🔴 <b>로그아웃({@code TokenService.logout})에는 일부러 안 넣었다.</b> <b>끊는 동작</b>이라

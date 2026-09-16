@@ -4,6 +4,7 @@ import com.pokeclip.auth.streamkey.secret.SecretStore;
 import com.pokeclip.auth.support.CrockfordBase32;
 import com.pokeclip.auth.support.Sha256;
 import com.pokeclip.auth.user.ActiveUserGuard;
+import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -62,8 +63,7 @@ public class StreamKeyService {
     }
 
     private StreamKeyMaterial createOrRead(Long userId) {
-        StreamKeyMaterial material = new StreamKeyMaterial(
-                CrockfordBase32.random(random, TOKEN_LENGTH), randomPassphrase());
+        StreamKeyMaterial material = newMaterial();
         String ref = "streamkey:" + UUID.randomUUID();
 
         try {
@@ -138,30 +138,88 @@ public class StreamKeyService {
      */
     @Transactional
     public Instant rotate(Long userId) {
-        // 같은 사용자의 재발급을 직렬화한다. 이 락이 없으면 읽기(previous)·폐기
-        // (revokeAlive)·삭제(staleRef)가 서로 다른 키를 가리킬 수 있다 — PostgreSQL
-        // READ COMMITTED에서 UPDATE는 문장 시작 시점의 스냅샷을 쓰므로, 경합 상대가
-        // 그 사이에 커밋한 새 키를 대상으로 잡는다. 그러면 남의 키를 폐기해 놓고
-        // 삭제는 아까 읽은 previous의 ref로 나가 secret이 고아로 남는다.
-        // 잠글 스트림키 행이 바뀌는 중이므로 사용자 행을 잠근다 —
-        // TokenService.rotate가 같은 이유로 같은 락을 쓴다.
-        userRepository.findByIdForUpdate(userId)
-                .orElseThrow(() -> new StreamKeyException(
-                        StreamKeyFailure.STREAM_KEY_NOT_FOUND, "사용자가 없다"));
+        lockUser(userId);
 
         StreamKey previous = findAlive(userId)
                 .orElseThrow(() -> new StreamKeyException(
                         StreamKeyFailure.STREAM_KEY_NOT_FOUND, "폐기할 스트림키가 없다"));
 
         Instant now = Instant.now();
+        replaceAlive(userId, previous, now, "auth.streamkey.rotated");
+        return now;
+    }
+
+    /**
+     * 페어링 코드 교환 전용 재발급(POK-245). <b>교환할 때마다 키를 바꾼다</b> — 마지막으로
+     * 연결한 PC만 송출할 수 있게. 옛 PC 설정 파일에 남은 키는 이 커밋으로 죽는다.
+     *
+     * <p>{@link #rotate}와 달리 키가 없어도 실패하지 않고 새로 만든다. 교환의 목적은
+     * "무효화"가 아니라 "이 PC에 줄 자격증명"이기 때문이다.
+     *
+     * <p>바깥 교환 트랜잭션에 참여한다. 코드 소비와 키 교체가 한 원자 단위라,
+     * 어느 쪽이 실패해도 코드는 다시 쓸 수 있고 옛 키도 살아 있다.
+     *
+     * <p>🔴 <b>순서가 계약이다 — 회원 행 락 → 코드 소비 → 탈퇴 확인 → 키 교체.</b>
+     * <ul>
+     *   <li><b>락이 코드 소비보다 먼저다.</b> 탈퇴가 회원 행 → {@code pairing_codes} 순으로 잠그므로
+     *       같은 순서여야 사이클이 안 생긴다({@link ActiveUserGuard} 「못 닫는 것」).
+     *       그래서 코드 소비를 여기로 넘겨받는다.</li>
+     *   <li><b>탈퇴 확인이 코드 소비보다 뒤다.</b> 탈퇴는 살아있는 코드를 함께 소비하므로, 탈퇴가 이미
+     *       커밋됐으면 소비가 먼저 409({@code ALREADY_USED})를 낸다 — 로그인 없는 창구가 「그 계정은
+     *       탈퇴했다」를 알려 주지 않는다({@code WithdrawalStreamKeyTest}). 확인은 탈퇴 표시만 있고
+     *       코드가 살아 있는 어긋난 표에서만 걸린다({@code WithdrawnWriteGuardStreamKeyTest}).</li>
+     *   <li>락을 쥔 채 확인하므로 {@link #ensureKey}와 달리 탈퇴와 겹치는 창이 없다.</li>
+     * </ul>
+     *
+     * @param consumeCode 회원 행 락을 잡은 뒤 부른다. 코드를 못 쓰면 예외를 던진다.
+     */
+    @Transactional
+    public StreamKeyMaterial reissueForPairing(Long userId, Runnable consumeCode) {
+        User owner = lockUser(userId);
+        consumeCode.run();
+        activeUserGuard.requireAlive(owner, "streamkey.reissue_for_pairing");
+
+        Instant now = Instant.now();
+        Optional<StreamKey> previous = findAlive(userId);
+        if (previous.isPresent()) {
+            return replaceAlive(userId, previous.get(), now, "auth.streamkey.reissued_for_pairing");
+        }
+
+        // 키가 없다(발급 입구 ensureKey를 안 거친 계정). 같은 락 안이므로 경합 재조회가 필요 없다.
+        // REQUIRES_NEW인 create를 쓰면 안 된다 — 그 키가 따로 커밋돼, 교환이 뒤에서 롤백돼도
+        // 코드는 살아나고 키는 남는다. 코드 소비와 한 원자 단위여야 한다.
+        StreamKeyMaterial material = newMaterial();
+        StreamKey created = streamKeyCreator.createInCurrentTransaction(
+                userId, "streamkey:" + UUID.randomUUID(), material);
+        Long createdId = created.getId();
+        afterCommit(() -> log.info("auth.streamkey.issued userId={} streamKeyId={} via=pairing", userId, createdId));
+        return material;
+    }
+
+    /**
+     * 같은 사용자의 키 교체를 직렬화한다. 이 락이 없으면 읽기(previous)·폐기
+     * (revokeAlive)·삭제(staleRef)가 서로 다른 키를 가리킬 수 있다 — PostgreSQL
+     * READ COMMITTED에서 UPDATE는 문장 시작 시점의 스냅샷을 쓰므로, 경합 상대가
+     * 그 사이에 커밋한 새 키를 대상으로 잡는다. 그러면 남의 키를 폐기해 놓고
+     * 삭제는 아까 읽은 previous의 ref로 나가 secret이 고아로 남는다.
+     * 잠글 스트림키 행이 바뀌는 중이므로 사용자 행을 잠근다 —
+     * TokenService.rotate가 같은 이유로 같은 락을 쓴다.
+     */
+    private User lockUser(Long userId) {
+        return userRepository.findByIdForUpdate(userId)
+                .orElseThrow(() -> new StreamKeyException(
+                        StreamKeyFailure.STREAM_KEY_NOT_FOUND, "사용자가 없다"));
+    }
+
+    /** 사용자 행 락을 잡은 뒤에만 부른다. 옛 키를 폐기하고 새 키를 같은 트랜잭션에 넣는다. */
+    private StreamKeyMaterial replaceAlive(Long userId, StreamKey previous, Instant now, String logEvent) {
         if (streamKeyRepository.revokeAlive(userId, now) == 0) {
-            // 동시 재발급에 졌다. "내가 폐기한 키는 없다"가 참이므로 위와 같게 다룬다.
+            // 동시 재발급에 졌다. "내가 폐기한 키는 없다"가 참이므로 키 없음과 같게 다룬다.
             throw new StreamKeyException(
                     StreamKeyFailure.STREAM_KEY_NOT_FOUND, "폐기할 스트림키가 없다");
         }
 
-        StreamKeyMaterial material = new StreamKeyMaterial(
-                CrockfordBase32.random(random, TOKEN_LENGTH), randomPassphrase());
+        StreamKeyMaterial material = newMaterial();
         // create가 아니다. REQUIRES_NEW로 부르면 새 트랜잭션이 위의 revokeAlive를
         // 못 봐 부분 유니크 인덱스에 걸린다.
         streamKeyCreator.createInCurrentTransaction(
@@ -177,10 +235,9 @@ public class StreamKeyService {
         String staleRef = previous.getPassphraseRef();
         afterCommit(() -> {
             secretStore.delete(staleRef);
-            log.info("auth.streamkey.rotated userId={}", userId);
+            log.info("{} userId={}", logEvent, userId);
         });
-
-        return now;
+        return material;
     }
 
     private void afterCommit(Runnable action) {
@@ -190,6 +247,10 @@ public class StreamKeyService {
                 action.run();
             }
         });
+    }
+
+    private StreamKeyMaterial newMaterial() {
+        return new StreamKeyMaterial(CrockfordBase32.random(random, TOKEN_LENGTH), randomPassphrase());
     }
 
     private String randomPassphrase() {

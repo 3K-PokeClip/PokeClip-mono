@@ -3,7 +3,10 @@ package com.pokeclip.auth.streamkey.api;
 import com.jayway.jsonpath.JsonPath;
 import com.pokeclip.auth.streamkey.StreamKeyMaterial;
 import com.pokeclip.auth.streamkey.StreamKeyService;
+import com.pokeclip.auth.streamkey.secret.SecretStore;
+import com.pokeclip.auth.support.CrockfordBase32;
 import com.pokeclip.auth.support.IntegrationTestSupport;
+import com.pokeclip.auth.support.Sha256;
 import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
@@ -15,9 +18,18 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
+import java.security.SecureRandom;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Timestamp;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -25,6 +37,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,11 +57,12 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
     private final TokenService tokenService;
     private final MeterRegistry meterRegistry;
     private final JdbcTemplate jdbc;
+    private final SecretStore secretStore;
 
     PairingCodeExchangeTest(MockMvc mockMvc, StreamKeyService streamKeyService,
                             UserService userService, UserRepository userRepository,
                             TokenService tokenService, MeterRegistry meterRegistry,
-                            JdbcTemplate jdbc) {
+                            JdbcTemplate jdbc, SecretStore secretStore) {
         this.mockMvc = mockMvc;
         this.streamKeyService = streamKeyService;
         this.userService = userService;
@@ -56,6 +70,7 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
         this.tokenService = tokenService;
         this.meterRegistry = meterRegistry;
         this.jdbc = jdbc;
+        this.secretStore = secretStore;
     }
 
     @BeforeEach
@@ -79,30 +94,140 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM secrets");
     }
 
+    /**
+     * 응답은 <b>교환 뒤</b> 살아있는 키다. 교환 전 키와 비교하면 안 된다 — 교환이 그 키를 죽인다(POK-245).
+     */
     @Test
-    void 코드를_주면_streamid와_passphrase를_내려준다() throws Exception {
+    void 코드를_주면_새로_발급한_streamid와_passphrase를_내려준다() throws Exception {
         User user = newUser();
         String code = issueCode(user);
-        StreamKeyMaterial material = streamKeyService.findMaterial(user.getId()).orElseThrow();
+        StreamKeyMaterial before = streamKeyService.findMaterial(user.getId()).orElseThrow();
 
-        exchange(code, "10.0.0.1")
+        String body = exchange(code, "10.0.0.1")
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.streamid").value(material.streamId().toSrtFormat()))
-                .andExpect(jsonPath("$.passphrase").value(material.passphrase()));
+                .andReturn().getResponse().getContentAsString();
+
+        StreamKeyMaterial after = streamKeyService.findMaterial(user.getId()).orElseThrow();
+        assertThat(streamIdOf(body)).isEqualTo(after.streamId().toSrtFormat());
+        assertThat(passphraseOf(body)).isEqualTo(after.passphrase());
+        assertThat(streamIdOf(body))
+                .as("교환 전 키를 그대로 돌려줬다 — 교환이 키를 안 바꿨다")
+                .isNotEqualTo(before.streamId().toSrtFormat());
+        assertThat(passphraseOf(body)).isNotEqualTo(before.passphrase());
     }
 
-    /** POK-72: 계정에 키가 이미 있으면 같은 것을 준다. 새로 만들지 않는다. */
+    /**
+     * POK-245: 교환할 때마다 새 키다. 마지막으로 연결한 PC만 송출한다 — POK-72의 「같은 키를 준다」를 대체한다.
+     *
+     * <p>「다르다」만 재면 옛 키가 살아 있어도 초록이다. <b>옛 키가 {@code REVOKED}이고 그 비밀값이
+     * 지워졌다</b>까지 재야 「옛 PC가 더는 못 쏜다」가 선다.
+     */
     @Test
-    void 코드를_두_번_발급해_교환해도_같은_키가_나온다() throws Exception {
+    void 교환할_때마다_새_키가_나오고_옛_키는_죽는다() throws Exception {
         User user = newUser();
         String first = issueCode(user);
         String second = issueCode(user);
 
-        String a = exchange(first, "10.0.0.1").andReturn().getResponse().getContentAsString();
-        String b = exchange(second, "10.0.0.2").andReturn().getResponse().getContentAsString();
+        String a = exchange(first, "10.0.0.1").andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String oldRef = streamKeyService.findAlive(user.getId()).orElseThrow().getPassphraseRef();
+        String b = exchange(second, "10.0.0.2").andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
 
-        assertThat(JsonPath.read(a, "$.passphrase").toString())
-                .isEqualTo(JsonPath.read(b, "$.passphrase").toString());
+        assertThat(streamIdOf(b)).isNotEqualTo(streamIdOf(a));
+        assertThat(passphraseOf(b)).isNotEqualTo(passphraseOf(a));
+        assertThat(streamKeyService.resolve(streamIdOf(a)).reason())
+                .as("🔴 먼저 연결한 PC의 키가 아직 산다 — 두 PC가 같은 계정으로 쏠 수 있다")
+                .isEqualTo("REVOKED");
+        assertThat(streamKeyService.resolve(streamIdOf(b)).valid()).isTrue();
+        assertThat(secretStore.get(oldRef))
+                .as("옛 passphrase가 보관소에 남아 있다")
+                .isEmpty();
+        assertThat(aliveKeys(user)).isEqualTo(1);
+    }
+
+    /**
+     * 발급 창구를 안 거친 계정(키가 없는 계정)도 교환은 된다. {@code rotate}처럼 404를 내면
+     * 「폐기할 키가 없다」가 교환을 막는다 — 교환의 목적은 무효화가 아니라 이 PC에 줄 자격증명이다.
+     */
+    @Test
+    void 키가_없는_계정도_교환하면_키를_받는다() throws Exception {
+        User user = newUser();
+        String code = 살아있는_코드를_심는다(user, Instant.now().plus(Duration.ofMinutes(10)));
+
+        String body = exchange(code, "10.0.0.1").andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(aliveKeys(user)).isEqualTo(1);
+        assertThat(streamKeyService.findMaterial(user.getId()).orElseThrow().passphrase())
+                .isEqualTo(passphraseOf(body));
+    }
+
+    /**
+     * 같은 회원의 코드 여럿을 동시에 교환하면 <b>회원 행 락이 줄을 세운다</b> — 뒤에 선 쪽이 앞 쪽이 만든
+     * 키를 폐기하고 새로 만든다. 그래서 전부 200이고 살아있는 키는 하나, 그것은 응답 중 하나다.
+     *
+     * <p>락이 없으면 둘이 같은 옛 키를 폐기하려 들어 한쪽이 404를 받거나
+     * {@code uq_stream_keys_alive_user}에 걸린다. 발급 한도(분당 3회)가 코드 수의 상한이다.
+     */
+    @Test
+    void 같은_회원의_코드를_동시에_교환해도_살아있는_키는_하나다() throws Exception {
+        User user = newUser();
+        List<String> codes = List.of(issueCode(user), issueCode(user), issueCode(user));
+        CountDownLatch start = new CountDownLatch(1);
+
+        try (ExecutorService pool = Executors.newFixedThreadPool(codes.size())) {
+            List<Future<MockHttpServletResponse>> futures = IntStream.range(0, codes.size())
+                    .mapToObj(i -> pool.submit(() -> {
+                        start.await();
+                        return exchange(codes.get(i), "10.0.2." + i).andReturn().getResponse();
+                    }))
+                    .toList();
+            start.countDown();
+
+            List<MockHttpServletResponse> responses = new ArrayList<>();
+            for (Future<MockHttpServletResponse> future : futures) {
+                responses.add(future.get(30, TimeUnit.SECONDS));
+            }
+
+            assertThat(responses).extracting(MockHttpServletResponse::getStatus)
+                    .as("같은 회원의 교환끼리 부딪혀 실패했다 — 회원 행 락이 줄을 못 세웠다")
+                    .containsOnly(200);
+            assertThat(aliveKeys(user)).isEqualTo(1);
+            StreamKeyMaterial alive = streamKeyService.findMaterial(user.getId()).orElseThrow();
+            List<String> passphrases = new ArrayList<>();
+            for (MockHttpServletResponse response : responses) {
+                passphrases.add(passphraseOf(response.getContentAsString()));
+            }
+            assertThat(passphrases)
+                    .as("살아있는 키가 어느 응답에도 없다 — 아무 PC도 못 쏜다")
+                    .contains(alive.passphrase());
+            assertThat(revokedKeySecrets(user))
+                    .as("폐기된 키의 비밀값이 남았다 — 폐기한 키와 지운 ref가 서로 다르다")
+                    .isZero();
+        }
+    }
+
+    /**
+     * 🔴 <b>만료 판정 시각은 회원 행 락을 얻은 뒤에 잡는다.</b> 요청 시작 시각을 쓰면 락을 기다리는 사이
+     * 만료된 코드가 「아직 살아있다」로 소비된다(탈퇴의 락 대기 시험과 같은 결함).
+     *
+     * <p>락을 1.5초 쥐고 코드를 0.6초 뒤에 만료시킨다 — 시각을 락 앞에서 잡으면 결정적으로 200,
+     * 락 뒤에서 잡으면 결정적으로 410이다.
+     */
+    @Test
+    void 회원_행_락을_기다리는_사이_만료된_코드는_410이다() throws Exception {
+        User user = newUser();
+        String code = 살아있는_코드를_심는다(user, Instant.now().plusMillis(600));
+
+        회원_행을_잠근_채(user.getId(), Duration.ofMillis(1500), () ->
+                exchange(code, "10.0.3.1")
+                        .andExpect(status().isGone())
+                        .andExpect(jsonPath("$.reason").value("PAIRING_CODE_EXPIRED")));
+
+        assertThat(aliveKeys(user))
+                .as("만료로 거절했는데 키가 생겼다")
+                .isZero();
     }
 
     @Test
@@ -324,5 +449,79 @@ class PairingCodeExchangeTest extends IntegrationTestSupport {
     private User newUser() {
         return userService.findOrCreate(
                 "sub-" + UUID.randomUUID(), "a@example.com", "김태현", null);
+    }
+
+    private static String streamIdOf(String body) {
+        return JsonPath.read(body, "$.streamid");
+    }
+
+    private static String passphraseOf(String body) {
+        return JsonPath.read(body, "$.passphrase");
+    }
+
+    /** 리포지토리로 세지 않는다 — 영속성 컨텍스트가 메모리의 객체를 돌려줄 수 있다. */
+    private int aliveKeys(User user) {
+        return jdbc.queryForObject(
+                "SELECT count(*) FROM stream_keys WHERE user_id = ? AND revoked_at IS NULL",
+                Integer.class, user.getId());
+    }
+
+    /** 폐기된 키가 아직 가리키는 비밀값 수. 교체가 옛 비밀값을 지웠으면 0이다. */
+    private int revokedKeySecrets(User user) {
+        return jdbc.queryForObject(
+                "SELECT count(*) FROM secrets s "
+                        + "JOIN stream_keys k ON k.passphrase_ref = s.ref "
+                        + "WHERE k.user_id = ? AND k.revoked_at IS NOT NULL",
+                Integer.class, user.getId());
+    }
+
+    /** 발급 창구를 안 쓴다 — 그 창구는 키를 함께 만들어 「키가 없는 계정」을 못 만든다. */
+    private String 살아있는_코드를_심는다(User user, Instant expiresAt) {
+        String code = CrockfordBase32.random(new SecureRandom(), 8);
+        jdbc.update("INSERT INTO pairing_codes (user_id, code_hash, expires_at, created_at) "
+                        + "VALUES (?, ?, ?, ?)",
+                user.getId(), Sha256.hex(code), Timestamp.from(expiresAt), Timestamp.from(Instant.now()));
+        return code.substring(0, 4) + "-" + code.substring(4);
+    }
+
+    @FunctionalInterface
+    private interface 시험_동작 {
+        void run() throws Exception;
+    }
+
+    /**
+     * 다른 커넥션이 회원 행 락을 {@code hold}만큼 쥐는 동안 {@code 그동안}을 부른다.
+     * {@code WithdrawalTestSupport}의 같은 이름 도구와 같다 — 이 클래스는 그 계층 밖이라 따로 둔다.
+     */
+    private void 회원_행을_잠근_채(Long userId, Duration hold, 시험_동작 그동안) throws Exception {
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        CountDownLatch 잡았다 = new CountDownLatch(1);
+        try {
+            Future<?> holder = pool.submit(() -> {
+                try (Connection connection = jdbc.getDataSource().getConnection()) {
+                    connection.setAutoCommit(false);
+                    try (PreparedStatement select =
+                                 connection.prepareStatement("SELECT id FROM users WHERE id = ? FOR UPDATE")) {
+                        select.setLong(1, userId);
+                        try (ResultSet found = select.executeQuery()) {
+                            if (!found.next()) {
+                                throw new IllegalStateException("잠글 회원 행이 없다 userId=" + userId);
+                            }
+                        }
+                    }
+                    잡았다.countDown();
+                    Thread.sleep(hold.toMillis());
+                    connection.commit();
+                }
+                return null;
+            });
+            assertThat(잡았다.await(10, TimeUnit.SECONDS))
+                    .as("다른 트랜잭션이 회원 행 락을 못 잡았다 — 아래 대기가 안 생기므로 시험이 아무것도 안 잰다")
+                    .isTrue();
+            그동안.run();
+            holder.get(30, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
     }
 }

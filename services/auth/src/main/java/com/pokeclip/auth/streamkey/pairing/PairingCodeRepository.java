@@ -38,7 +38,7 @@ public interface PairingCodeRepository extends JpaRepository<PairingCode, Long> 
      *
      * <p>🔴 <b>이것이 없으면 탈퇴가 스트림키를 폐기해도 자격이 안 회수된다</b> — 교환 경로는
      * 로그인이 없어(코드 자체가 자격증명이다) 전면 차단 필터가 못 막고,
-     * {@code StreamKeyService.ensureKey}는 살아있는 키가 없으면 <b>새로 만든다.</b>
+     * 교환이 부르는 {@code StreamKeyService.reissueForPairing}은 살아있는 키가 없으면 <b>새로 만든다.</b>
      * 즉 살아있는 코드 하나가 탈퇴자 명의의 새 송출 자격이 된다.
      * {@code WithdrawalStreamKeyTest.탈퇴_뒤_살아있던_코드로_교환하면_거절되고_새_키도_안_생긴다}가 그 자리다.
      *

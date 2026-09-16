@@ -12,10 +12,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -23,6 +26,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -36,17 +40,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>🔴 <b>이 카드에서 가장 위험한 자리다.</b> 페어링 교환은 로그인이 필요 없어서
  * (코드 자체가 자격증명이다) 전면 차단 필터가 <b>못 막는다.</b> 그리고
- * {@code PairingCodeService.exchange}가 {@code StreamKeyService.ensureKey}를 부르는데
- * <b>{@code ensureKey}는 살아있는 키가 없으면 새로 만든다.</b>
+ * {@code PairingCodeService.exchange}가 부르는 {@code StreamKeyService.reissueForPairing}은
+ * <b>살아있는 키가 없으면 새로 만든다</b>(POK-245 전에는 {@code ensureKey}가 같은 일을 했다).
  *
  * <pre>
- * 탈퇴 → 키 폐기됨 → 살아있던 코드로 교환 → ensureKey가 「키가 없네」로 읽고 새 키 발급
+ * 탈퇴 → 키 폐기됨 → 살아있던 코드로 교환 → 「키가 없네」로 읽고 새 키 발급
  *      → 탈퇴자 명의로 다시 송출 가능
  * </pre>
  *
  * <p>🔴 <b>그래서 「교환이 거절된다」로 끝내면 안 된다.</b> 거절만 재면 위 경로를 <b>한 번도 안 밟고</b>
- * 초록이 난다 — 키 폐기가 없으면 교환이 그냥 옛 키를 돌려주기 때문이다. <b>「살아있는 키가 0건」</b>까지
- * 세어야 {@code ensureKey} 갈래가 잡힌다.
+ * 초록이 날 수 있다. <b>「살아있는 키가 0건」</b>까지 세어야 교환이 키를 새로 만드는 갈래가 잡힌다.
  *
  * <p><b>표를 셀 때 {@code JdbcTemplate}을 쓴다</b> — {@code WithdrawalTest}와 같은 이유다.
  * 리포지토리로 읽으면 영속성 컨텍스트가 메모리에 있는 객체를 돌려줄 수 있다.
@@ -100,9 +103,11 @@ class WithdrawalStreamKeyTest extends WithdrawalTestSupport {
     /**
      * 🔴 <b>이 시험이 이 태스크의 이유다.</b> 교환 경로에는 로그인이 없어 전면 차단이 못 막는다.
      *
-     * <p>단언이 <b>둘</b>인 이유: 거절(409)만 재면 <b>키 폐기가 빠져도 초록</b>이고(옛 키를 그대로
-     * 돌려주므로 교환이 성공하지 않는 것처럼 보이지 않는다), 살아있는 키 0건만 재면 <b>코드 회수가
-     * 빠져도 초록</b>일 수 있다. 둘을 같이 재야 {@code ensureKey}가 새 키를 만드는 갈래가 잡힌다.
+     * <p>단언이 <b>둘</b>인 이유: 거절(409)만 재면 <b>키 폐기가 빠져도 초록</b>일 수 있고, 살아있는 키
+     * 0건만 재면 <b>코드 회수가 빠져도 초록</b>일 수 있다. 둘을 같이 재야 교환이 새 키를 만드는 갈래가 잡힌다.
+     *
+     * <p>🔴 <b>401이 아니라 409인 것도 계약이다</b>(POK-245). 교환은 회원 행 락 → 코드 소비 → 탈퇴 확인 순이라,
+     * 탈퇴가 코드를 이미 닫았으면 확인에 닿기 전에 409가 난다 — 로그인 없는 창구가 「탈퇴했다」를 안 알린다.
      *
      * <p>409({@code ALREADY_USED})지 404가 아닌 것도 요지다 — <b>지우지 않고 쓴 것으로 표시</b>하므로
      * 시도한 쪽이 받는 답이 사실에 가깝고, rate limit 기록과도 어긋나지 않는다.
@@ -126,7 +131,7 @@ class WithdrawalStreamKeyTest extends WithdrawalTestSupport {
                 .andExpect(jsonPath("$.reason").value("PAIRING_CODE_ALREADY_USED"));
 
         assertThat(aliveKeys(user))
-                .as("🔴 교환은 거절됐는데 살아있는 키가 생겼다 — ensureKey가 「키가 없네」로 읽고 새로 발급했다")
+                .as("🔴 교환은 거절됐는데 살아있는 키가 생겼다 — 교환이 「키가 없네」로 읽고 새로 발급했다")
                 .isZero();
     }
 
@@ -223,6 +228,106 @@ class WithdrawalStreamKeyTest extends WithdrawalTestSupport {
                 .isNull();
         // 표만 보면 「안 건드렸다」와 「원래 그렇다」가 안 갈린다. 실제로 교환이 되는지까지 본다.
         exchange(bystanderCode).andExpect(status().isOk());
+    }
+
+    /**
+     * 🔴 <b>교환은 탈퇴와 같은 순서로 잠근다 — 회원 행 먼저, 코드 행 나중</b>(POK-245). 경합에 기대지 않고 재는 판이다.
+     *
+     * <p>이 커넥션이 탈퇴의 두 걸음을 그대로 밟는다: 회원 행을 잠그고 → <b>교환이 그 락을 기다리는 것을 확인한 뒤</b> →
+     * 살아있는 코드를 닫는다. 교환이 코드 행을 먼저 쥐었으면 둘째 걸음이 그 행을 기다려 사이클이 되고,
+     * PostgreSQL이 한쪽을 죽인다(이 커넥션의 UPDATE가 실패하거나 교환이 500). 순서가 맞으면 교환은 아무것도
+     * 안 쥔 채 기다리므로 UPDATE가 곧바로 지나고, 깨어난 교환은 닫힌 코드를 보고 409다.
+     *
+     * <p>{@code lock_timeout}은 사이클을 못 보는 갈래({@code REQUIRES_NEW} 커넥션이 기다리는 경우)에서
+     * 시험이 멈추지 않고 실패하게 한다.
+     */
+    @Test
+    void 교환은_회원_행을_코드_행보다_먼저_잠근다() throws Exception {
+        User user = newUser();
+        String code = issueCode(user);
+
+        try (ExecutorService pool = Executors.newSingleThreadExecutor();
+             Connection withdrawal = jdbc.getDataSource().getConnection()) {
+            withdrawal.setAutoCommit(false);
+            try (PreparedStatement timeout = withdrawal.prepareStatement("SET LOCAL lock_timeout = '5s'");
+                 PreparedStatement lock = withdrawal.prepareStatement(
+                         "SELECT id FROM users WHERE id = ? FOR NO KEY UPDATE")) {
+                timeout.execute();
+                lock.setLong(1, user.getId());
+                lock.executeQuery().close();
+            }
+
+            Future<Integer> exchanged = pool.submit(() -> exchange(code).andReturn().getResponse().getStatus());
+            assertThat(회원_행_락을_기다리는_요청이_생길_때까지(Duration.ofSeconds(10)))
+                    .as("교환이 회원 행 락을 안 기다린다 — 락을 안 잡거나, 이 시험의 대기 판정이 낡았다")
+                    .isTrue();
+
+            try (PreparedStatement consume = withdrawal.prepareStatement(
+                    "UPDATE pairing_codes SET used_at = now() WHERE user_id = ? AND used_at IS NULL")) {
+                consume.setLong(1, user.getId());
+                assertThat(consume.executeUpdate())
+                        .as("탈퇴의 코드 회수가 닫을 코드를 못 찾았다 — 교환이 락 앞에서 코드를 소비했다")
+                        .isEqualTo(1);
+            }
+            withdrawal.commit();
+
+            assertThat(exchanged.get(30, TimeUnit.SECONDS))
+                    .as("🔴 탈퇴가 코드를 닫은 뒤 깨어난 교환은 409여야 한다 — 코드 행을 먼저 쥐고 있었다")
+                    .isEqualTo(409);
+        }
+    }
+
+    /**
+     * 🔴 <b>탈퇴와 교환은 같은 순서로 잠근다 — 회원 행 먼저</b>(POK-245).
+     *
+     * <p>교환이 코드 행을 먼저 잠그고 회원 행을 뒤에 기다리면, 회원 행을 쥔 탈퇴가 코드 회수
+     * ({@code consumeAliveOfUser})에서 그 코드 행을 기다려 <b>사이클</b>이 된다. PostgreSQL이 잡아 한쪽을
+     * 죽이면 500이고, 한쪽 대기가 {@code REQUIRES_NEW} 커넥션에 있으면 <b>아예 못 잡아 무한 대기</b>다.
+     *
+     * <p>그래서 재는 것이 셋이다: 전부 <b>시한 안에 끝난다</b>(대기 사이클 없음), 탈퇴는 204이고 교환은
+     * 200(탈퇴보다 먼저)이나 409(탈퇴가 코드를 닫은 뒤)뿐이다(500 없음), 끝나면 <b>살아있는 키가 0건</b>이다
+     * (탈퇴보다 먼저 끝난 교환의 키도 탈퇴가 폐기한다).
+     *
+     * <p>순서 자체는 {@link #교환은_회원_행을_코드_행보다_먼저_잠근다}가 결정적으로 잰다. 이 판은 실제 창구 둘을
+     * 겹쳐 <b>끝 상태</b>를 본다 — 순서를 뒤집어도 겹침이 안 생기면 초록일 수 있다(주입 실측: 두 번 중 한 번).
+     *
+     * <p>코드는 발급 한도(분당 3회)만큼 셋이다. 교환마다 IP를 달리해 교환 한도가 끼지 않게 한다.
+     */
+    @Test
+    void 탈퇴와_교환이_동시에_와도_서로를_기다리며_멈추지_않고_살아있는_키가_안_남는다() throws Exception {
+        User user = newUser();
+        List<String> codes = List.of(issueCode(user), issueCode(user), issueCode(user));
+        String bearer = bearer(user);
+        CountDownLatch start = new CountDownLatch(1);
+
+        try (ExecutorService pool = Executors.newFixedThreadPool(codes.size() + 1)) {
+            Future<Integer> withdrawal = pool.submit(() -> {
+                start.await();
+                return mockMvc.perform(delete("/api/auth/me").header("Authorization", bearer))
+                        .andReturn().getResponse().getStatus();
+            });
+            List<Future<Integer>> exchanges = codes.stream()
+                    .map(code -> pool.submit(() -> {
+                        start.await();
+                        return exchange(code).andReturn().getResponse().getStatus();
+                    }))
+                    .toList();
+            start.countDown();
+
+            assertThat(withdrawal.get(30, TimeUnit.SECONDS))
+                    .as("탈퇴가 실패했다 — 교환과 부딪혀 죽었으면 잠금 순서가 어긋난 것이다")
+                    .isEqualTo(204);
+            List<Integer> statuses = new ArrayList<>();
+            for (Future<Integer> future : exchanges) {
+                statuses.add(future.get(30, TimeUnit.SECONDS));
+            }
+            assertThat(statuses)
+                    .as("🔴 교환이 200·409 말고 다른 답을 냈다 — 탈퇴와 서로 기다리다 한쪽이 죽었다")
+                    .isSubsetOf(200, 409);
+            assertThat(aliveKeys(user))
+                    .as("🔴 탈퇴한 계정에 살아있는 키가 남았다 — 교환이 탈퇴의 폐기를 넘어 키를 만들었다")
+                    .isZero();
+        }
     }
 
     /** 발급물이 하나도 없는 회원이 대부분이다. 회수가 그 갈래에서 터지면 탈퇴 자체가 막힌다. */
@@ -348,6 +453,29 @@ class WithdrawalStreamKeyTest extends WithdrawalTestSupport {
                 WHERE s.ref LIKE 'streamkey:%'
                   AND NOT EXISTS (SELECT 1 FROM stream_keys k WHERE k.passphrase_ref = s.ref)
                 """, Integer.class);
+    }
+
+    /**
+     * 다른 커넥션이 회원 행 락을 기다리는 중인지 본다. Hibernate가 {@code PESSIMISTIC_WRITE}를
+     * {@code FOR NO KEY UPDATE}로 내므로 그 문장을 찾는다.
+     */
+    private boolean 회원_행_락을_기다리는_요청이_생길_때까지(Duration limit) throws InterruptedException {
+        Instant deadline = Instant.now().plus(limit);
+        while (Instant.now().isBefore(deadline)) {
+            Integer waiting = jdbc.queryForObject("""
+                    SELECT count(*) FROM pg_stat_activity
+                    WHERE datname = current_database()
+                      AND pid <> pg_backend_pid()
+                      AND wait_event_type = 'Lock'
+                      AND query ILIKE '%users%'
+                      AND query ILIKE '%for no key update%'
+                    """, Integer.class);
+            if (waiting != null && waiting > 0) {
+                return true;
+            }
+            Thread.sleep(20);
+        }
+        return false;
     }
 
     private Timestamp usedAtOf(long codeId) {

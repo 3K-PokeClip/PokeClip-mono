@@ -48,7 +48,8 @@ public class PairingCodeService {
                     "페어링 코드 발급이 분당 한도를 넘었다");
         }
 
-        // 내려줄 키가 있어야 한다. 발급의 유일한 입구가 ensureKey다.
+        // 발급의 유일한 입구가 ensureKey다 — 탈퇴 확인이 여기서 돌고, 웹의 「키 있음」 표시도 여기서 생긴다.
+        // 교환이 어차피 새 키로 바꾸므로(POK-245) 여기서 처음 만든 키는 첫 교환 전까지만 산다.
         streamKeyService.ensureKey(userId);
 
         String code = CrockfordBase32.random(random, CODE_LENGTH);
@@ -62,6 +63,12 @@ public class PairingCodeService {
     /**
      * 코드를 자격증명으로 바꾼다. 이 경로는 로그인 없이 열려 있다 —
      * 플러그인은 OAuth를 구현하지 않는다(ADR-019).
+     *
+     * <p>매번 새 키를 준다(POK-245). 응답이 네트워크에서 사라지면 그 PC는 키를 못 받았고
+     * 옛 키는 이미 죽었으므로, 새 코드를 발급받아 다시 교환해야 한다.
+     *
+     * <p>코드가 없으면 락 없이 곧바로 404다. 있으면 회원 행 락을 먼저 잡고 그 안에서 소비한다 —
+     * 만료·이미 사용의 판정은 락 뒤의 {@link #consume}이 한다.
      */
     @Transactional
     public StreamKeyMaterial exchange(String rawCode, String clientIp) {
@@ -77,17 +84,34 @@ public class PairingCodeService {
                     "코드 형식이 아니다");
         }
 
-        // 소비와 경합 판정을 한 문장으로 끝낸다. 진 쪽은 0행이다.
-        if (pairingCodeRepository.markUsed(codeHash, now) == 0) {
-            throw rejectionOf(codeHash, now);
-        }
+        // 코드의 주인은 바뀌지 않으므로 락 없이 읽어도 된다. 주인을 알아야 회원 행을 먼저 잠근다.
+        Long userId = pairingCodeRepository.findByCodeHash(codeHash)
+                .map(PairingCode::getUserId)
+                .orElseThrow(() -> new StreamKeyException(StreamKeyFailure.PAIRING_CODE_NOT_FOUND,
+                        "모르는 코드다"));
 
-        Long userId = pairingCodeRepository.findByCodeHash(codeHash).orElseThrow().getUserId();
-        // POK-72: 키가 이미 있으면 같은 것을 준다. ensureKey가 그것을 보장한다.
-        StreamKeyMaterial material = streamKeyService.ensureKey(userId);
+        // POK-245: 교환할 때마다 키를 바꾼다 — 마지막으로 연결한 PC만 송출한다.
+        // (POK-72의 "키가 있으면 같은 것을 준다"를 대체한다. ADR-073)
+        // 코드 소비는 회원 행 락 뒤에 돈다(순서는 reissueForPairing javadoc). 같은 트랜잭션이라
+        // 키 교체가 실패하면 코드 소비도 함께 롤백된다.
+        StreamKeyMaterial material = streamKeyService.reissueForPairing(userId, () -> consume(codeHash));
 
         log.info("auth.pairing.code_exchanged userId={}", userId);
         return material;
+    }
+
+    /**
+     * 소비와 경합 판정을 한 문장으로 끝낸다. 진 쪽은 0행이다.
+     *
+     * <p>🔴 <b>시각은 회원 행 락을 얻은 뒤에 잡는다.</b> 요청 시작 시각을 쓰면 락을 기다리는 사이
+     * 만료된 코드가 「아직 살아있다」로 걸려 소비된다 — 탈퇴의 {@code consumeAliveOfUser}가
+     * 같은 이유로 락 뒤에서 시각을 잡는다({@code WithdrawalStreamKeyTest}의 락 대기 시험).
+     */
+    private void consume(String codeHash) {
+        Instant now = Instant.now();
+        if (pairingCodeRepository.markUsed(codeHash, now) == 0) {
+            throw rejectionOf(codeHash, now);
+        }
     }
 
     /**

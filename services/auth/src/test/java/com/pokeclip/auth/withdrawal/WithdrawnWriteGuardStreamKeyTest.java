@@ -101,7 +101,11 @@ class WithdrawnWriteGuardStreamKeyTest extends WithdrawalTestSupport {
      * 기계가 바쁠 때 조용히 안 재게 된다.
      *
      * <p>교환은 <b>로그인이 없어</b> 여기서 필터가 못 막는다. 그래서 이 갈래가 이 카드에서
-     * 가장 값비싼 자리다 — 막는 것이 {@code ensureKey}의 조건 한 줄뿐이다.
+     * 가장 값비싼 자리다 — 막는 것이 {@code reissueForPairing}의 조건 한 줄뿐이다.
+     *
+     * <p>코드가 <b>안 소비된 채</b> 남는 것도 잰다(POK-245) — 소비는 확인보다 앞에 돌지만 같은 트랜잭션이라
+     * 거절과 함께 롤백돼야 한다. 소비가 남으면 교환이 트랜잭션 두 개로 쪼개진 것이고, 그러면 키 교체가
+     * 실패한 정상 회원도 코드만 날린다.
      */
     @Test
     void 탈퇴_뒤에도_살아있는_코드로는_새_송출_자격을_못_받는다() throws Exception {
@@ -119,8 +123,11 @@ class WithdrawnWriteGuardStreamKeyTest extends WithdrawalTestSupport {
                 .andExpect(status().isUnauthorized());
 
         assertThat(aliveKeys(user))
-                .as("🔴 탈퇴한 계정이 새 송출 자격을 받았다 — 교환이 부른 ensureKey가 탈퇴 표시를 안 봤다")
+                .as("🔴 탈퇴한 계정이 새 송출 자격을 받았다 — 교환이 부른 reissueForPairing이 탈퇴 표시를 안 봤다")
                 .isZero();
+        assertThat(aliveCodes(user))
+                .as("거절됐는데 코드 소비가 커밋됐다 — 코드 소비와 키 교체가 한 트랜잭션이 아니다")
+                .isEqualTo(1);
     }
 
     // ── 도구 ────────────────────────────────────────────────────────────
