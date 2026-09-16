@@ -6,6 +6,7 @@ import styles from './PluginSettingsScreen.module.css';
 // 디자인 1m 연동 코드 카드. 발급됨/미발급 두 상태를 갖는다.
 // 코드 원문은 여기 없다 — 발급 직후 모달(IssuedCodeDialog)에서만 1회 노출된다 (ADR-019).
 // 발급과 재발급은 같은 동작이다(rotate 없음 — 새 코드만 발급) — 라벨만 상태에 맞게 다르다.
+// 키를 바꾸는 것은 코드 발급이 아니라 플러그인의 코드 교환이다(POK-245 — 교환할 때마다 새 키).
 export function PairingCodeCard({
   code,
   loading,
@@ -55,10 +56,11 @@ export function PairingCodeCard({
             <div className={styles.codeBody}>
               {/* 디자인 개정: 날짜가 힌트 줄로 내려가고 보안 문구·하단 경고줄은 삭제 —
                   재발급이 키를 건드리지 않게 되면서(rotate 미사용) 경고할 것도 없어졌다.
-                  라벨은 "최초 발급일" — 서버가 주는 시각이 키 생성일(=첫 코드 발급일)뿐이라,
-                  "발행일"이라 쓰면 재발급 후 과거 날짜가 거짓말이 된다. (리뷰 #74) */}
+                  라벨은 "키 발급일" — 서버가 주는 시각은 지금 살아있는 키의 생성일이다.
+                  코드 재발급으로는 안 바뀌고(리뷰 #74), 플러그인이 코드를 교환하면 그 시각으로 바뀐다
+                  (POK-245 — 교환할 때마다 새 키). 그래서 "최초"도 "코드 발행일"도 아니다. */}
               <div className={styles.codeTitle}>코드가 발급되어 있어요</div>
-              <div className={styles.codeHint}>최초 발급일 {code.issuedAt}</div>
+              <div className={styles.codeHint}>키 발급일 {code.issuedAt}</div>
             </div>
             {/* 디자인 ②-1: 요청 중엔 인라인 스피너만 — 라벨은 자리만 지켜 폭이 튀지 않게
                 시각만 숨긴다(.busyButton). 접근 이름은 aria-label이 대신한다 */}

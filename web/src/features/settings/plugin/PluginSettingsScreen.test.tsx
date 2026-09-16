@@ -69,9 +69,10 @@ describe('PluginSettingsScreen', () => {
     expect(screen.getByRole('region', { name: '플러그인 연결 상태' })).toHaveTextContent('연결됨');
     expect(screen.getByRole('heading', { name: '연동 코드' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '플러그인 다운로드' })).toBeInTheDocument();
-    // 라벨은 "최초 발급일" — 서버가 주는 시각이 키 생성일뿐이라 재발급 후에도 참말이다 (리뷰 #74)
+    // 라벨은 "키 발급일" — 서버가 주는 시각은 살아있는 키의 생성일이다. 코드 재발급으로는 안 바뀌고
+    // 플러그인의 교환이 바꾸므로(POK-245) "최초"가 아니다 (리뷰 #74)
     expect(
-      await screen.findByText(new RegExp(`최초 발급일 ${CREATED_AT_LABEL.replace(/\./g, '\\.')}`)),
+      await screen.findByText(new RegExp(`키 발급일 ${CREATED_AT_LABEL.replace(/\./g, '\\.')}`)),
     ).toBeInTheDocument();
   });
 
@@ -100,10 +101,10 @@ describe('PluginSettingsScreen', () => {
     // 경고(확인) 모달도 없다 — 키가 안 죽으니 경고할 위험 자체가 없다
     expect(screen.queryByText(/기존 스트림 키가 즉시 만료됩니다/)).not.toBeInTheDocument();
 
-    // 재발급해도 최초 발급일은 그대로다 — 오늘로 튀었다가 재조회에 과거로 돌아오면 안 된다 (리뷰 #74)
+    // 코드를 재발급해도 키 발급일은 그대로다 — 오늘로 튀었다가 재조회에 과거로 돌아오면 안 된다 (리뷰 #74)
     fireEvent.click(screen.getByRole('button', { name: '확인했어요' }));
     expect(
-      await screen.findByText(new RegExp(`최초 발급일 ${CREATED_AT_LABEL.replace(/\./g, '\\.')}`)),
+      await screen.findByText(new RegExp(`키 발급일 ${CREATED_AT_LABEL.replace(/\./g, '\\.')}`)),
     ).toBeInTheDocument();
   });
 

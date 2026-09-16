@@ -17,11 +17,13 @@ import { useToast } from '@/ui';
 // 페어링 코드 발급(POST pairing-codes)의 합성이다. 발급·재발급은 같은 동작 —
 // 새 일회용 코드를 찍는 1콜이고(키가 없으면 서버 ensureKey가 만든다), 키 회전(rotate)은
 // 프론트 흐름에서 쓰지 않으므로 재발급이 방송 키를 건드리지 않는다.
+// 키를 바꾸는 것은 플러그인의 코드 교환이다(POK-245 — 교환할 때마다 새 키, 마지막 PC만 송출).
 
 export interface PairingCodeStatus {
   issued: boolean;
   /**
-   * 최초 발급일(서버 키 createdAt) — 재발급해도 바뀌지 않는다. 이미 포맷된 표시용
+   * 키 발급일(서버 키 createdAt) — 코드 재발급으로는 안 바뀌고, 플러그인이 코드를 교환하면
+   * 그 시각으로 바뀐다(POK-245). 이미 포맷된 표시용
    * 날짜로, 서버 ISO를 클라 수신 후에만 변환한다(SSR 시 쿼리 데이터가 없어 하이드레이션 안전).
    */
   issuedAt?: string;
@@ -70,7 +72,7 @@ export function useStreamKeyState(): StreamKeyState {
       setJustIssued({ code: issued.code, deadline: Date.now() + PAIRING_CODE_TTL_MS });
       // 발급 성공 = 키 존재 확정(서버 ensureKey). 재조회가 끝나기 전이나 실패한 채로
       // 모달을 닫아도(justIssued가 비워져도) 카드가 "미발급"으로 되돌아가지 않게
-      // 캐시를 먼저 낙관 갱신한다. 키가 이미 있었으면 createdAt(최초 발급일)은 그대로
+      // 캐시를 먼저 낙관 갱신한다. 키가 이미 있었으면 createdAt(키 발급일)은 그대로
       // 둔다 — 재발급이 날짜를 오늘로 튀게 하면 재조회가 과거로 되돌릴 때 어긋난다. (리뷰 #74)
       queryClient.setQueryData<StreamKeyStatus>(streamKeyStatusQueryOptions.queryKey, (prev) => ({
         issued: true,
@@ -108,7 +110,7 @@ export function useStreamKeyState(): StreamKeyState {
     void refetch();
   }, [refetch]);
 
-  // 카드의 날짜는 서버 createdAt(최초 발급일) 하나만 쓴다 — 발급 직후엔 위 낙관 갱신이
+  // 카드의 날짜는 서버 createdAt(키 발급일) 하나만 쓴다 — 발급 직후엔 위 낙관 갱신이
   // 값을 보장한다. justIssued로 "오늘"을 따로 만들면 재발급 시 재조회가 과거 날짜로
   // 되돌리면서 화면이 튄다. (리뷰 #74)
   const createdAt = status.data?.createdAt;

@@ -5,6 +5,7 @@ import { apiFetch } from './client';
 // 스트림키·페어링 코드 호출 (POK-102) — auth 서버가 /api/stream-keys/*를 소유한다.
 // 키 원문은 어떤 응답에도 실리지 않는다(ADR-019) — 웹은 유무·시각·페어링 코드만 다룬다.
 // 키 회전(rotate)은 프론트 흐름에서 쓰지 않는다 — 재발급도 같은 키의 새 코드 발급이다.
+// 키는 플러그인이 코드를 교환할 때 서버가 바꾼다(POK-245 — 교환할 때마다 새 키).
 
 export interface StreamKeyStatus {
   issued: boolean;
