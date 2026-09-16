@@ -1,4 +1,4 @@
-/* web ui/components Button·Badge 규칙을 독 크기에 맞춰 옮긴 것 */
+/* web ui/components Button 규칙을 독 크기에 맞춰 옮긴 것 */
 .button {
   display: inline-flex;
   align-items: center;
@@ -68,62 +68,5 @@
 @keyframes spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 20px;
-  padding-inline: 8px;
-  border-radius: var(--pc-radius-pill);
-  font-size: var(--pc-font-size-2xs);
-  font-weight: var(--pc-weight-semibold);
-  line-height: 1;
-  white-space: nowrap;
-  color: var(--_c);
-  background: var(--_bg);
-}
-.badge[data-tone='neutral'] {
-  --_c: var(--pc-color-text-secondary);
-  --_bg: var(--pc-color-bg-surface-hover);
-}
-.badge[data-tone='accent'] {
-  --_c: var(--pc-color-accent-text);
-  --_bg: var(--pc-color-accent-subtle);
-}
-.badge[data-tone='point'] {
-  --_c: var(--pc-color-point-text);
-  --_bg: var(--pc-color-point-subtle);
-}
-.badge[data-tone='success'] {
-  --_c: var(--pc-color-success);
-  --_bg: var(--pc-color-success-subtle);
-}
-.badge[data-tone='warning'] {
-  --_c: var(--pc-color-warning);
-  --_bg: var(--pc-color-warning-subtle);
-}
-.badge[data-tone='danger'] {
-  --_c: var(--pc-color-danger);
-  --_bg: var(--pc-color-danger-subtle);
-}
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.dot[data-pulse] {
-  animation: pulse 1.4s var(--pc-ease-standard) infinite;
-}
-@keyframes pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 0%, transparent);
   }
 }

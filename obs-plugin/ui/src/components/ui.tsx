@@ -1,4 +1,4 @@
-import type { ComponentChildren, JSX } from 'preact';
+import type { JSX } from 'preact';
 import styles from './ui.module.css';
 
 type ButtonProps = JSX.HTMLAttributes<HTMLButtonElement> & {
@@ -10,6 +10,7 @@ type ButtonProps = JSX.HTMLAttributes<HTMLButtonElement> & {
   type?: 'button' | 'submit';
 };
 
+// web ui/components/Button 규칙을 독 크기(md 36px · sm 30px)로 옮긴 것
 export function Button({ variant = 'solid', size = 'md', block, loading, disabled, children, type = 'button', ...rest }: ButtonProps) {
   return (
     <button
@@ -22,19 +23,8 @@ export function Button({ variant = 'solid', size = 'md', block, loading, disable
       disabled={disabled || loading}
       aria-busy={loading ? 'true' : undefined}
     >
-      {loading ? <span class={styles.spinner} aria-hidden /> : null}
+      {loading ? <span class={styles.spinner} aria-hidden="true" /> : null}
       {children}
     </button>
-  );
-}
-
-export type Tone = 'neutral' | 'accent' | 'point' | 'success' | 'warning' | 'danger';
-
-export function Badge({ tone = 'neutral', dot, pulse, children }: { tone?: Tone; dot?: boolean; pulse?: boolean; children: ComponentChildren }) {
-  return (
-    <span class={styles.badge} data-tone={tone}>
-      {dot ? <span class={styles.dot} data-pulse={pulse ? '' : undefined} aria-hidden /> : null}
-      {children}
-    </span>
   );
 }

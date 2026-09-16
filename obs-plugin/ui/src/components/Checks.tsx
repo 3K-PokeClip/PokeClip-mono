@@ -47,7 +47,9 @@ export function Checks({ state }: { state: BridgeState }) {
   return (
     <section class={styles.section} aria-labelledby="checks-title">
       <h3 id="checks-title" class={styles.sectionTitle}>
-        송출 점검 {state.obsStreaming ? '' : '· 방송 시작 시 확인'}
+        {state.phase === 'live' || state.phase === 'reconnecting' || (state.phase === 'error' && state.errorCode)
+          ? '송출 점검'
+          : '송출 점검 · 방송 시작 시 확인'}
       </h3>
       <ul class={styles.checks}>
         {rows.map((r) => (

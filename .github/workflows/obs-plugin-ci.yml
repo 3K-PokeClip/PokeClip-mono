@@ -15,6 +15,7 @@ on:
       - 'obs-plugin/**'
       - 'web/src/ui/styles/**' # 독 페이지가 web 디자인 토큰을 그대로 import 한다
       - 'web/src/ui/assets/fonts/**'
+      - 'web/public/brand/pokeclip-symbol.svg' # 독 머리의 브랜드 심볼
       - '.github/workflows/obs-plugin-ci.yml'
   push:
     branches-ignore:

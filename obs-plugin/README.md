@@ -12,7 +12,7 @@
 | 인코더 공유 | 본방 출력의 비디오·오디오 인코더를 그대로 붙인다 — **추가 인코딩 0** |
 | GOP 2s 강제 | 시작 직전 방송 비디오 인코더 `keyint_sec`를 2로 바꾸고 `x264opts`/`opts`의 keyint 계열 토큰을 걷는다 (ADR-020) |
 | 페어링 | 독에 8자리 코드 → `POST /api/stream-keys/pairing-codes/exchange` → streamid·passphrase 저장 (ADR-019) |
-| 브라우저 독 | obs-browser(CEF) 패널에 `ui/` 페이지. 상태·전송 시간·비트레이트·송출 점검·고급 설정. web 디자인 토큰을 그대로 쓴다 |
+| 브라우저 독 | obs-browser(CEF) 패널에 `ui/` 페이지. 상태·전송 시간·비트레이트·송출 점검·연결 해제 확인·고급 설정. 화면은 claude.ai/design 시안 「PokeClip Plugin UI」 기준이고, web 디자인 토큰·브랜드 심볼을 그대로 쓴다 |
 | Qt 폴백 | obs-browser가 없거나(일부 Linux·Wayland) 페이지가 붙지 않으면 최소 Qt 패널 — 기능은 같다 |
 | 재연결 표시 | 중간 단절은 libobs 기본 재연결(20회·2초)에 맡기고 독에 「재연결 중」을 띄운다 |
 
@@ -109,7 +109,7 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 | `force_fallback` | `false` | 브라우저 독 대신 Qt 폴백 패널 |
 | `dock_intro_shown` | `false` | 첫 실행 독 펼치기 여부 (내부용) |
 
-독 「고급 설정」에서 streamid·passphrase를 뺀 값을 바꿀 수 있다 (송출 중에는 잠김).
+독 「고급 설정」에서는 수신 호스트·포트·SRT 지연과 스위치 셋(본방 동기·암호 사용·기본 패널)만 바꾼다 (송출 중에는 잠김). `api_base`는 스트리머가 바꿀 값이 아니라 화면에 없다 — 개발 중에는 설정 파일이나 `PUT /api/config`로 바꾼다.
 
 ## 브리지 프로토콜 (독 페이지 ↔ 플러그인)
 

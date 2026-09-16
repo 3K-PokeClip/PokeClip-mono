@@ -1,4 +1,3 @@
-import { KeyRound } from 'lucide-preact';
 import { useRef, useState } from 'preact/hooks';
 import { reasonText } from '../lib/copy';
 import { formatPairingInput, isCompletePairingCode } from '../lib/format';
@@ -6,7 +5,7 @@ import type { ActionResult } from '../lib/types';
 import styles from './dock.module.css';
 import { Button } from './ui';
 
-export function PairCard({ onPair, notice }: { onPair: (code: string) => Promise<ActionResult>; notice?: string }) {
+export function PairCard({ onPair }: { onPair: (code: string) => Promise<ActionResult> }) {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -30,23 +29,12 @@ export function PairCard({ onPair, notice }: { onPair: (code: string) => Promise
 
   return (
     <section class={styles.card} aria-labelledby="pair-title">
-      <div class={styles.cardHead}>
-        <div class={styles.icon} data-tone="accent">
-          <KeyRound size={17} strokeWidth={2} aria-hidden />
-        </div>
-        <div>
-          <h2 id="pair-title" class={styles.cardTitle}>
-            PokeClip 연결
-          </h2>
-          <p class={styles.cardDesc}>PokeClip 설정 › 플러그인에서 받은 8자리 코드를 입력하세요.</p>
-        </div>
+      <div>
+        <h2 id="pair-title" class={styles.cardTitle}>
+          PokeClip 연결
+        </h2>
+        <p class={styles.cardDesc}>PokeClip 설정 › 플러그인에서 받은 8자리 코드를 입력하세요.</p>
       </div>
-
-      {notice ? (
-        <p class={styles.inlineError} role="status">
-          {notice}
-        </p>
-      ) : null}
 
       <form class={styles.codeForm} onSubmit={submit}>
         <input
