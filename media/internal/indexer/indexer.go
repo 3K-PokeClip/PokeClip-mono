@@ -994,10 +994,12 @@ func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.R
 	now := time.Now()
 	// 보류 중이던 직전 꼬리를 승격한다. 더 이상 꼬리가 아니므로 IsTail=false 다 —
 	// 워커의 크기 재확인이 이 값으로 갈린다(결정 4⁵).
+	//
+	// 거부돼도 다시 붙들지 않는다 — held 는 스트림당 한 칸이고 바로 아래 새 꼬리 처리가
+	// 그 칸을 덮으며, releaseHeldTail 도 꼬리가 아닌 보류는 stale 로 버린다. 즉 prev 의
+	// 즉시 재시도 경로는 애초에 없고, 회수는 스위퍼(SweepEvery) 몫이다(PR #31 [cx M-4]).
 	if h, ok := ix.held[seg.StreamID]; ok && prev != nil && h.seq == prev.Seq {
-		if !ix.requestUpload(seg.StreamID, prev, false) {
-			ix.holdAfterRejection(seg.StreamID, prev, now)
-		}
+		ix.requestUpload(seg.StreamID, prev, false)
 	}
 
 	// 새 꼬리의 처우. 더 자라지 않는다고 확증된 사유는 즉시 올린다.

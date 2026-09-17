@@ -117,7 +117,9 @@ func (l *Latch) Reset(root string, timeout time.Duration) bool {
 		l.log.Error("fs_op_stalled", "op", "stat", "site", "latch_reset_probe", "path", root)
 		return false
 	}
-	l.log.Info("fs_degraded", "value", 0, "path", l.path, "site", l.site)
+	// 해제도 Trip 과 같은 Error 등급이다 — 게이지의 set/clear 가 다른 등급이면 LOG_LEVEL=warn
+	// 이상에서 clear 만 걸러져 게이지가 복구 뒤에도 1 로 고정돼 보인다.
+	l.log.Error("fs_degraded", "value", 0, "path", l.path, "site", l.site)
 	l.tripped, l.path, l.site = false, "", ""
 	return true
 }
