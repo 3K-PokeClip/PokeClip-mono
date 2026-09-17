@@ -1,0 +1,68 @@
+/* 디자인 1b 오프라인 프레임. 시안은 1440×700 아트보드지만 실제 화면은 뷰포트 높이를 채우고
+   그 한가운데에 선다 — 대시보드와 달리 스크롤로 내려갈 내용이 없다.
+   사이드바·Dock은 방송 레이아웃이 그리므로 여기는 본문 자리만 채운다. */
+.screen {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  overflow: hidden;
+}
+
+/* 상단 220px 그라데이션. 시안의 rgb(88 111 196 / .08)은 --pc-color-accent와 같은 색이라
+   404(NotFoundScreen)처럼 토큰에서 투명도를 뽑는다 — 테마가 바뀌면 같이 바뀐다. */
+.wash {
+  position: absolute;
+  inset: 0 0 auto;
+  height: calc(220 * var(--pc-u));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--pc-color-accent) 8%, transparent),
+    transparent
+  );
+  pointer-events: none;
+}
+
+/* 아래 40u는 시안 값이다 — 가운데 정렬을 살짝 위로 올려 fixed Dock과 거리를 둔다. */
+.content {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 calc(40 * var(--pc-u)) calc(40 * var(--pc-u));
+  text-align: center;
+}
+
+/* next/image의 width·height 속성은 px 고정이라 CSS로 유닛에 태운다.
+   원본 여백을 자르지 않아야 시안의 225px 구도가 그대로 산다. */
+.poki {
+  display: block;
+  width: calc(225 * var(--pc-u));
+  max-width: 100%;
+  height: auto;
+  margin-bottom: calc(6 * var(--pc-u));
+}
+
+.title {
+  font-size: calc(25 * var(--pc-u));
+  font-weight: 800;
+  line-height: 1.3;
+  letter-spacing: -0.025em;
+}
+
+.description {
+  margin-top: calc(8 * var(--pc-u));
+  font-size: calc(13 * var(--pc-u));
+  line-height: 1.65;
+  color: var(--pc-color-text-secondary);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: calc(8 * var(--pc-u));
+  margin-top: calc(24 * var(--pc-u));
+}
