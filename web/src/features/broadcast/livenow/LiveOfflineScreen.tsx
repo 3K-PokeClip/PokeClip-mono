@@ -1,6 +1,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
-import { CHANNEL_SETTINGS_PATH } from '@/features/settings/channels/chzzkOAuth';
+// 경로는 리터럴이다(Side·온보딩 투어와 같다). chzzkOAuth의 CHANNEL_SETTINGS_PATH는 'use client' 모듈이라
+// 이 골격을 서버 컴포넌트로 올리는 날 문자열이 아니라 클라이언트 참조로 들어온다.
 import { LinkButton } from '@/ui/components/LinkButton';
 import styles from './LiveOfflineScreen.module.css';
 
@@ -23,7 +24,7 @@ export function LiveOfflineScreen() {
           alt="라이브 신호가 꺼진 포키 캐릭터"
           width={608}
           height={608}
-          priority
+          preload
           className={styles.poki}
         />
         <h1 className={styles.title}>지금은 방송 중이 아니에요</h1>
@@ -36,7 +37,7 @@ export function LiveOfflineScreen() {
           <LinkButton as={Link} href="/broadcast/vod" variant="solid" size="md">
             지난 방송 보기
           </LinkButton>
-          <LinkButton as={Link} href={CHANNEL_SETTINGS_PATH} variant="ghost" size="md">
+          <LinkButton as={Link} href="/settings/channels" variant="ghost" size="md">
             연동 상태 확인
           </LinkButton>
         </div>

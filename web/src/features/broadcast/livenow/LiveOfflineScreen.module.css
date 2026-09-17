@@ -23,7 +23,11 @@
   pointer-events: none;
 }
 
-/* 아래 40u는 시안 값이다 — 가운데 정렬을 살짝 위로 올려 fixed Dock과 거리를 둔다. */
+/* 세로 여백은 두 가지를 함께 지킨다.
+   - 가운데 정렬의 치우침: 시안은 위 0 · 아래 40u라 내용이 (40 − 0) / 2 = 20u 위로 뜬다.
+   - 넘칠 때의 끝 여백: 낮은 뷰포트(노트북 + 확대)에서 문서가 스크롤되면 버튼 줄이 fixed Dock에
+     깔리지 않게 셸 공용 Dock 여백(--pc-shell-body-pad-bottom)을 비운다.
+   그래서 아래는 Dock 여백, 위는 그보다 40u 작게 둔다 — (아래 − 위) / 2가 여전히 20u라 평소 위치는 시안 그대로다. */
 .content {
   position: relative;
   flex: 1;
@@ -31,7 +35,8 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 0 calc(40 * var(--pc-u)) calc(40 * var(--pc-u));
+  padding: calc(var(--pc-shell-body-pad-bottom) - 40 * var(--pc-u)) calc(40 * var(--pc-u))
+    var(--pc-shell-body-pad-bottom);
   text-align: center;
 }
 
