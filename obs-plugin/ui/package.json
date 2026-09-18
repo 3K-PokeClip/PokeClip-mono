@@ -1,0 +1,28 @@
+{
+  "name": "pokeclip-obs-dock",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "PokeClip for OBS — 브라우저 독 페이지 (obs-plugin 브리지에 붙는다)",
+  "packageManager": "pnpm@11.12.0",
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-preact": "^1.45.0",
+    "preact": "^10.29.8"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21",
+    "vitest": "^2.1.9"
+  }
+}
