@@ -49,7 +49,7 @@ export function createMockBridge(scenario: string): Bridge {
 
   return {
     async hello() {
-      return { plugin: 'pokeclip-obs', pluginVersion: '0.1.0', obsVersion: '32.2.2', state };
+      return { plugin: 'pokeclip-obs', pluginVersion: '0.2.0', obsVersion: '32.2.2', state };
     },
     subscribe(onState, onConnection) {
       listeners.add(onState);

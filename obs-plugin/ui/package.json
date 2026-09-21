@@ -1,7 +1,7 @@
 {
   "name": "pokeclip-obs-dock",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "PokeClip for OBS — 브라우저 독 페이지 (obs-plugin 브리지에 붙는다)",
   "packageManager": "pnpm@11.12.0",

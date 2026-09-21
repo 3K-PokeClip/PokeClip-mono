@@ -60,8 +60,8 @@ pnpm build       # tsc + vite build → ../data/ui
 
 | 잡 | 산출물 |
 |---|---|
-| `windows` | `pokeclip-obs-0.1.0-windows-x64.zip` — `obs-plugins/64bit/pokeclip-obs.dll` + `data/obs-plugins/pokeclip-obs/{locale,ui}` |
-| `macos` | `pokeclip-obs-0.1.0-macos-universal.*` (미서명) |
+| `windows` | `pokeclip-obs-0.2.0-windows-x64.zip` — `obs-plugins/64bit/pokeclip-obs.dll` + `data/obs-plugins/pokeclip-obs/{locale,ui}` |
+| `macos` | `pokeclip-obs-0.2.0-macos-universal.*` (미서명) |
 
 로컬에서 템플릿 경로를 쓰려면 Windows는 Visual Studio 2022 + `cmake --preset windows-x64`, macOS는 **Xcode 16+** + `cmake --preset macos`다 (buildspec.json이 OBS 32.2.1 소스·obs-deps·Qt6를 `.deps/`에 받는다).
 
