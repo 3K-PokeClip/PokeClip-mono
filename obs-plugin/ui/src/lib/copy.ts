@@ -11,7 +11,7 @@ export const REASON: Record<string, string> = {
   bad_response: '서버 응답이 예상과 달라요.',
   save_failed: '설정을 저장하지 못했어요.',
   no_key: '연결되지 않아 이 방송은 PokeClip으로 전송되지 않아요.',
-  encoder_active: '녹화가 방송 인코더를 쓰고 있어요. 녹화를 멈추거나 녹화 인코더를 분리하세요.',
+  encoder_active: '방송 인코더가 이미 동작 중이라 키프레임 2초를 적용하지 못했어요. 녹화를 멈추거나, 본 방송을 다시 시작하세요.',
   multitrack_video: '멀티트랙 비디오는 지원하지 않아요. 설정 › 방송에서 끄세요.',
   no_stream_output: 'OBS 방송 출력이 준비되지 않았어요.',
   no_video_encoder: '방송 비디오 인코더가 없어요.',

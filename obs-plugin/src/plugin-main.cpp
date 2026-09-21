@@ -129,6 +129,8 @@ bool IsSafeHost(const std::string &host)
 	return true;
 }
 
+void OnStreamingStarting();
+
 BridgeCallbacks::Reply PutConfig(const std::string &body)
 {
 	if (StreamTarget::Instance().IsActive() || AppState::Instance().Snapshot().phase == StreamPhase::Starting)
@@ -139,6 +141,7 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		return {400, JsonReason(false, "invalid_json")};
 
 	PluginConfig next = ConfigStore::Instance().Get();
+	bool syncWasOn = next.syncStart;
 	auto str = [&](const char *key, std::string &out) {
 		if (obs_data_has_user_value(d, key))
 			out = obs_data_get_string(d, key);
@@ -181,6 +184,14 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		return {500, JsonReason(false, "save_failed")};
 
 	SyncStateFromConfig();
+
+	// 동기화를 본방 송출 중에 켰다 — 「본방이 보내면 우리도 보낸다」를 지키려면 다음 방송을 기다리지 않고
+	// 지금 시작한다. 시작 경로는 본방 STARTING과 같다(키·GOP 검사 포함). 브리지 워커 스레드라 UI 스레드로 넘긴다.
+	// 🔴 이미 돌던 인코더는 keyint를 못 바꾸므로(x264) 그때는 encoder_active로 거절된다 — 본방을 다시 켜야 한다.
+	if (next.syncStart && !syncWasOn && obs_frontend_streaming_active() && !StreamTarget::Instance().IsActive()) {
+		obs_log(LOG_INFO, "sync switched on while main stream is live — starting SRT output now");
+		RunInUiThread([]() { OnStreamingStarting(); });
+	}
 	return {200, ConfigJson()};
 }
 
@@ -312,6 +323,9 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 		}
 		break;
 	}
+	// 동기화 규칙(설정 sync_start): 본방의 시작·정지만 따라간다. 본방이 잠시 끊겨 재연결 중일 때는
+	// 프론트엔드 이벤트가 없고 obs_frontend_streaming_active()도 참으로 남으므로 우리 송출을 건드리지 않는다 —
+	// 그 사이 PokeClip 녹화에 구멍이 나지 않는다. 재연결이 소진돼 본방이 실제로 멈추면 STOPPED가 와서 같이 멈춘다.
 	case OBS_FRONTEND_EVENT_STREAMING_STARTING:
 		OnStreamingStarting();
 		break;

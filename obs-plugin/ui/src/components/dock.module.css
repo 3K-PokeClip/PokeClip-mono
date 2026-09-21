@@ -518,6 +518,17 @@
   gap: var(--pc-space-2);
   font-size: var(--pc-font-size-xs);
 }
+.toggleText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.toggleHint {
+  font-size: var(--pc-font-size-2xs);
+  color: var(--pc-color-text-muted);
+  line-height: 1.4;
+}
 /* web ui/components/Switch 의 sm 크기 */
 .switch {
   position: relative;

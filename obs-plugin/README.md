@@ -105,7 +105,7 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 | `streamid` · `passphrase` | — | 페어링이 채운다. **passphrase는 로그·브리지 응답에 싣지 않는다** |
 | `send_passphrase` | `true` | 로컬 compose MediaMTX는 passphrase 미설정이라 `false`여야 붙는다 (보내면 `REJ_BADSECRET`) |
 | `latency_ms` | `1000` | SRT latency. URL에는 마이크로초로 들어간다 |
-| `sync_start` | `true` | 본방 시작 시 함께 전송 |
+| `sync_start` | `true` | **본 방송과 송출 동기화** — 본방 시작·정지에 맞춰 함께 전송·정지한다. 본방이 잠시 끊겨 재연결 중일 땐 우리 송출을 유지한다(녹화 구멍 방지). 본방 송출 중에 켜면 그 자리에서 시작한다(이미 돌던 인코더는 keyint를 못 바꿔 `encoder_active`로 거절 — 본방을 다시 켠다) |
 | `force_fallback` | `false` | 브라우저 독 대신 Qt 폴백 패널 |
 | `dock_intro_shown` | `false` | 첫 실행 독 펼치기 여부 (내부용) |
 
@@ -147,7 +147,7 @@ OBS 본방  → rtmp://127.0.0.1:1935  key=main          (compose MediaMTX RTMP 
 | 코드 | 뜻 · 조치 |
 |---|---|
 | `no_key` | 페어링 안 됨 — 본방만 나간다 |
-| `encoder_active` | 녹화가 방송 인코더를 이미 쓰는 중 — x264는 실행 중 GOP를 못 바꾼다. 녹화를 멈추거나 녹화 인코더 분리 |
+| `encoder_active` | 방송 인코더가 이미 돌고 있어 GOP를 못 바꿈(x264는 실행 중 변경 불가) — 녹화가 방송 인코더를 공유하거나, 본방 송출 중에 동기화를 켠 경우. 녹화를 멈추거나 본방을 다시 켠다 |
 | `multitrack_video` | 설정 › 방송의 멀티트랙 비디오를 끈다 |
 | `bad_path` | 수신 서버가 passphrase(또는 주소)를 거절 — 로컬 compose면 `send_passphrase=false` |
 | `connect_failed` · `timeout` | 서버 거절 · 무응답 — 호스트·포트·방화벽(UDP) |

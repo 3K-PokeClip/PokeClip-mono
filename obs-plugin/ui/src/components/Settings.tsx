@@ -6,16 +6,36 @@ import type { PluginSettings } from '../lib/types';
 import styles from './dock.module.css';
 import { Button } from './ui';
 
-function Toggle({ id, label, checked, onChange }: { id: string; label: string; checked: boolean; onChange: (v: boolean) => void }) {
+function Toggle({
+  id,
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
   return (
     <div class={styles.toggleRow}>
-      <span id={`${id}-label`}>{label}</span>
+      <span class={styles.toggleText}>
+        <span id={`${id}-label`}>{label}</span>
+        {hint ? (
+          <span id={`${id}-hint`} class={styles.toggleHint}>
+            {hint}
+          </span>
+        ) : null}
+      </span>
       <button
         id={id}
         type="button"
         role="switch"
         aria-checked={checked}
         aria-labelledby={`${id}-label`}
+        aria-describedby={hint ? `${id}-hint` : undefined}
         class={styles.switch}
         onClick={() => onChange(!checked)}
       />
@@ -112,7 +132,15 @@ export function Settings({ bridge, locked }: { bridge: Bridge; locked: boolean }
                 onInput={(e) => set('latency_ms', Number((e.currentTarget as HTMLInputElement).value))}
               />
             </label>
-            <Toggle id="setting-sync-start" label="본방 시작 시 함께 전송" checked={draft.sync_start} onChange={(v) => set('sync_start', v)} />
+            {/* 동기화 = 본방의 시작·정지만 따라간다. 본방이 잠시 끊겨 재연결 중일 땐 우리 송출을 유지한다(녹화 구멍 방지).
+                본방 송출 중에 켜면 그 자리에서 시작한다. */}
+            <Toggle
+              id="setting-sync-start"
+              label="본 방송과 송출 동기화"
+              hint="본 방송이 시작·정지할 때 함께 전송하고 멈춰요. 잠시 끊겨 재연결 중일 땐 유지돼요."
+              checked={draft.sync_start}
+              onChange={(v) => set('sync_start', v)}
+            />
             <Toggle id="setting-passphrase" label="SRT 암호 사용" checked={draft.send_passphrase} onChange={(v) => set('send_passphrase', v)} />
             <Toggle
               id="setting-fallback"
