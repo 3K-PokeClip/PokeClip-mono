@@ -377,7 +377,7 @@ func (f *fixture) holdNow(t *testing.T, streamID string, size int) string {
 		Seq: 0, StartWallUTC: wall, Bytes: int64(size), LocalPath: path,
 		S3Key: index.S3Key(streamID, 0, wall), UploadState: index.UploadStatePending,
 	}}
-	f.ix.holdTail(streamID, f.ix.cursors[streamID].Tail, time.Now())
+	f.ix.holdTail(streamID, f.ix.cursors[streamID].Tail, nil, time.Now())
 	return path
 }
 

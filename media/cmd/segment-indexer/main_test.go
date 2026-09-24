@@ -34,13 +34,23 @@ func (s *stubStore) MarkFailed(_ context.Context, _ string, seq, _ int64) (bool,
 	s.failed = append(s.failed, seq)
 	return true, nil
 }
-func (s *stubStore) PendingUploads(_ context.Context, _ float64, _ int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+func (s *stubStore) PendingUploads(_ context.Context, _ index.Axis, _ float64, _ int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
 	return nil, after, nil
 }
-func (s *stubStore) MarkInitUploaded(context.Context, string, []byte) (bool, error) {
+func (s *stubStore) MarkPlaybackUploaded(context.Context, string, int64, int64) (bool, error) {
 	return true, nil
 }
-func (s *stubStore) CountBacklog(context.Context) (int64, int64, int64, error) { return 0, 0, 0, nil }
+
+func (s *stubStore) MarkPlaybackFailed(context.Context, string, int64, string, string) (bool, error) {
+	return true, nil
+}
+
+func (s *stubStore) MarkInitUploaded(context.Context, string, []byte, string, int64, bool) (index.InitMark, error) {
+	return index.InitMarkSuccess, nil
+}
+func (s *stubStore) CountBacklog(context.Context, index.Axis) (int64, int64, int64, error) {
+	return 0, 0, 0, nil
+}
 
 func (s *stubStore) failedSeqs() []int64 {
 	s.mu.Lock()

@@ -6,7 +6,7 @@
 //  1. 취소를 받지 않는 개별 FS 호출을 짧은 워커로 감싸 상한을 준다.
 //     상한 = FS_OP_TIMEOUT(권고 5초). 상한 초과 시 워커는 버려지고 늦은 결과는 폐기된다 —
 //     버려진 워커의 종료 시각은 무보장이며(F-38), 상한은 비율 상한이지 총량 상한이 아니다.
-//  2. 자원 핸들을 시간 경계 너머로 돌려주지 않는다 — 파일을 여는 작업(ProbeT)은
+//  2. 자원 핸들을 시간 경계 너머로 돌려주지 않는다 — 파일을 여는 작업(ProbeT·ReadT)은
 //     열고·읽고·닫기를 워커 안에서 통째로 끝낸다. 늦은 성공의 FD 는 워커 자신이 닫는다.
 //  3. 타임아웃은 정상 실패와 구분돼 호출자에게 도달한다: errors.Is(err, ErrStalled).
 //     호출자(indexer)가 그 구분으로 fs_op_stalled 신호와 Latch.Trip 을 잇는다(수용 기준 f6m ⓓ).
@@ -16,6 +16,7 @@ package fsop
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"time"
@@ -73,6 +74,46 @@ func ProbeT(path string, timeout time.Duration, probe func(string) (int64, error
 	case <-t.C:
 		return 0, fmt.Errorf("%w: op=probe path=%q timeout=%s", ErrStalled, path, timeout)
 	}
+}
+
+// ReadT 는 "열고·읽고·닫는" 판독 전체를 워커로 감싼다(계약 2항 — ProbeT 와 같은 형상).
+//
+// 파일을 여닫는 것은 이 함수이고 read 는 열린 리더만 받는다 — 그래서 호출자 소스에 파일을
+// 여는 코드가 생기지 않는다(m2, .golangci.yml). 타임아웃이면 (영값, ErrStalled 래핑)을 돌려주고
+// 워커는 버려진다. 버려진 워커는 read 가 끝난 뒤 스스로 파일을 닫는다 — read 는 받은 리더를
+// 반환 뒤에 붙잡아 쓰면 안 된다.
+func ReadT[T any](path string, timeout time.Duration, read func(io.ReadSeeker) (T, error)) (T, error) {
+	type result struct {
+		v   T
+		err error
+	}
+	// 버퍼 1 이라 버려진 워커의 늦은 송신이 막히지 않는다 — 워커는 반드시 끝까지 가서 파일을 닫는다.
+	ch := make(chan result, 1)
+	go func() {
+		v, err := openAndRead(path, read)
+		ch <- result{v, err}
+	}()
+
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case r := <-ch:
+		return r.v, r.err
+	case <-t.C:
+		var zero T
+		return zero, fmt.Errorf("%w: op=read path=%q timeout=%s", ErrStalled, path, timeout)
+	}
+}
+
+// openAndRead 는 ReadT 워커의 본문이다 — 열기·판독·닫기가 여기서 통째로 끝난다.
+func openAndRead[T any](path string, read func(io.ReadSeeker) (T, error)) (T, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	defer f.Close() // 읽기 전용 파일이라 닫기 실패가 판독 결과를 바꾸지 않는다
+	return read(f)
 }
 
 // Latch 는 FS 열화 래치다(계약 4항). loop 단일 goroutine 만 만진다.

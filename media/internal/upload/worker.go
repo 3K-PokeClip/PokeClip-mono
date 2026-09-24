@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -58,8 +59,10 @@ const (
 	// attemptFileMissing — 파일이 없다. 다음 시도에서 결과가 달라지지 않으므로
 	// 재시도하지 않고 곧바로 후처리로 간다(M-3).
 	attemptFileMissing
-	// attemptPutFailed — PUT 이 실패했다. 이 하나만 재시도 루프를 지속시킨다.
-	attemptPutFailed
+	// attemptRetryable — PUT 이나 ③·init 산출(재포장·mtxi 판독)이 실패했다. 이 하나만 재시도
+	// 루프를 지속시킨다 — 산출 실패도 PUT 실패와 같은 사다리를 탄다(계획 2.1 · A6). 단 같은 입력이면
+	// 늘 같은 산출 실패는 여기 오지 않고 첫 시도에서 끝난다(axis_body.go sameInputFailsAgain).
+	attemptRetryable
 )
 
 // attemptResult 는 시도 1회의 결과다.
@@ -88,7 +91,11 @@ func (u *Uploader) worker() {
 //
 // 브레이커는 그 작업의 축 것 하나만 만진다(설계 5.5.3). 축을 모르는 작업은 접수 게이트가
 // 이미 걸렀지만 여기서 한 번 더 본다 — 호출부 열거로 막지 않는 것이 이 패키지의 규율이다.
+//
+// 끝나면(in-flight 를 푼 뒤) 보류 목록에 남은 재요청을 다시 넣어 본다 — 큐 포화로 들지 못한
+// 작업이 다음 완료를 기다린다(계획 2.1 「다음 워커 완료/tick 에 다시 drain」).
 func (u *Uploader) runJob(j job) {
+	defer u.drainHeld()
 	defer u.gate.releaseInflight(j.key())
 	u.lastAttemptErr = nil
 	o := u.processTarget(j)
@@ -99,6 +106,7 @@ func (u *Uploader) runJob(j job) {
 
 // processTarget 은 작업 1건 처리다(설계 3.3절).
 func (u *Uploader) processTarget(j job) outcome {
+	j.target = withInitKey(j.target)
 	t := j.target
 	k := j.key()
 	lg := u.log.With(
@@ -123,7 +131,7 @@ func (u *Uploader) processTarget(j job) outcome {
 		return outcomeNeutral
 	}
 
-	// [2] 재시도 루프. putFailed 만 루프를 지속시킨다(D-7).
+	// [2] 재시도 루프. retryable 만 루프를 지속시킨다(D-7).
 	var lastErr error
 	for attempt := 0; attempt < u.opt.RetryMax; attempt++ {
 		alg := lg.With("attempt", attempt+1)
@@ -131,7 +139,7 @@ func (u *Uploader) processTarget(j job) outcome {
 		if r.kind == attemptFileMissing {
 			return u.handleFileMissing(j, alg)
 		}
-		if r.kind != attemptPutFailed {
+		if r.kind != attemptRetryable {
 			return r.outcome
 		}
 		lastErr = r.err
@@ -154,23 +162,25 @@ func (u *Uploader) processTarget(j job) outcome {
 type markPlan uint8
 
 const (
-	// markCAS — 장부 CAS 를 실행한다. M3 에서 이 갈래는 AxisArchive 하나다.
+	// markCAS — 그 축의 장부 CAS 를 실행한다(설계 5.5.5 — ② · ③ · init 성공).
 	markCAS markPlan = iota
 	// markSkip — 이 축에는 이 상태를 적는 컬럼이 없다(init 실패 — 설계 5.5.5 는 init 에
 	// 성공 CAS 한 문장만 정의한다). 장부를 건드리지 않고 후처리만 이어간다.
 	markSkip
-	// markRefuse — 이 축의 마킹은 아직 없다. 흘려보내면 ③·init 결과가 ② 의 CAS 로 새어
-	// 아카이브 열을 바꾸므로 거부한다(fail-closed).
+	// markRefuse — 모르는 축이다. 흘려보내면 그 결과가 다른 축의 CAS 로 새어 엉뚱한 열을
+	// 바꾸므로 거부한다(fail-closed).
 	markRefuse
 )
 
 // planMark 는 축과 목표 상태로 마킹 갈래를 고른다.
 //
-// **기본 갈래가 markRefuse 인 것이 계약이다.** "init 이면 건너뛰고 아니면 마킹"으로 쓰면
-// M4 의 첫 ③ 작업이 ② 의 CAS(markUploadedSQL)로 흘러가 아카이브 열을 바꾼다(계획 4.5).
+// **기본 갈래가 markRefuse 인 것이 계약이다.** 축을 열거해 CAS 를 고르고 나머지는 거부한다 —
+// "init 이면 건너뛰고 아니면 마킹"으로 쓰면 모르는 축의 결과가 ② 의 CAS 로 흘러간다(계획 4.5).
 func planMark(a index.Axis, target index.UploadState) markPlan {
 	switch {
-	case a == index.AxisArchive:
+	case a == index.AxisArchive, a == index.AxisPlayback:
+		return markCAS
+	case a == index.AxisInit && target == index.UploadStateUploaded:
 		return markCAS
 	case a == index.AxisInit && target == index.UploadStateFailed:
 		return markSkip
@@ -272,6 +282,11 @@ func (u *Uploader) validateTarget(t index.UploadTarget, lg *slog.Logger) (string
 		// 영원히 실패해 조회 창만 낭비한다(결정 14).
 		return reject("bad_bytes")
 	}
+	if t.Axis == index.AxisPlayback && t.SessionID == "" {
+		// ③ 은 세션 없이는 기대 init 도 보정값 표도 찾을 수 없고, 불일치를 세션에 결속할 수도
+		// 없다. 세션 없는 조각의 ③ 은 애초에 만들지 않으므로(계획 2.1) 여기 온 것은 호출자 결함이다.
+		return reject("no_session")
+	}
 	return rel, true
 }
 
@@ -324,76 +339,107 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 	}
 	defer f.Close()
 
-	// (b) 크기 — 오류를 버리지 않는다. fi 를 무조건 역참조하면 nil panic 이다.
-	fi, err := u.statFile(f)
-	if err != nil {
-		lg.Warn("upload_stat_failed", "stage", "pre", "err", err.Error())
-		return attemptResult{outcome: outcomeNeutral}
-	}
-	if !fi.Mode().IsRegular() {
-		lg.Error("upload_target_rejected", "reason", "not_regular",
-			"path", t.LocalPath, "s3_key", t.S3Key)
-		u.gate.quarantine(k)
-		return attemptResult{outcome: outcomeNeutral}
-	}
-	size := fi.Size()
-
-	// (c) 크기 재확인은 경로가 아니라 **대상의 속성**이다(결정 4⁵).
-	if size != t.Bytes {
-		if t.IsTail {
-			// 꼬리는 아직 자라는 중일 수 있다. 여기서 올리면 잘린 실물이 굳는다(G12‴).
-			u.logTailGrowing(j, lg, t.Bytes, size)
-			return attemptResult{outcome: outcomeNeutral}
-		}
-		// 비꼬리는 correctTail 이 애초에 못 고치므로 막아서 얻을 것이 없고,
-		// 막으면 그 조각이 영원히 안 올라간다. 올리되 장부 어긋남을 남긴다(L14).
-		lg.Warn("upload_size_mismatch", "db_bytes", t.Bytes, "put_bytes", size)
+	// (b)·(c) 입력 크기
+	size, r, ok := u.measureInput(j, f, lg)
+	if !ok {
+		return r
 	}
 
-	// (d) PUT — ContentLength 의 출처는 위 실측값이다.
+	// (c′) 본문 — ② 는 파일 그대로, ③·init 은 그 파일을 재포장한 메모리 산출이다.
+	p, r, ok := u.payloadFor(j, f, size, lg)
+	if !ok {
+		return r
+	}
+
+	// (d) PUT — ContentLength 의 출처는 본문의 실측 길이다.
 	putCtx, cancel := context.WithTimeout(u.putCtx, u.opt.PutTimeout)
 	defer cancel()
 	start := u.now()
-	if err := u.put.Put(putCtx, t.S3Key, f, size); err != nil {
+	if err := u.put.Put(putCtx, t.S3Key, p.body, p.size); err != nil {
 		if u.putCtx.Err() != nil {
 			lg.Debug("upload_aborted_shutdown")
 			return attemptResult{outcome: outcomeShutdown}
 		}
-		return attemptResult{kind: attemptPutFailed, err: err}
+		return attemptResult{kind: attemptRetryable, err: err}
 	}
 	elapsed := u.now().Sub(start)
 
-	// (e) 같은 fd 로 다시 잰다. 경로가 아니라 열린 inode 를 재므로 경로 경합이 없다.
-	//     이 두 분기는 백오프에 등록하지 않는다 — "파일이 방금 바뀌었다"는 양의 증거를
-	//     본 경우이고, M-1 표에 없는 분기다(C10).
+	// (e) 같은 fd 로 **입력 파일**을 다시 잰다. 경로가 아니라 열린 inode 를 재므로 경로 경합이
+	//     없다. ③ 도 입력을 잰다 — 산출 길이는 입력이 같으면 늘 같아 잴 뜻이 없다(계획 2.1
+	//     「③ 축 크기 계약」). init 은 재도 멈추지 않는다 — 올린 머리말 바이트는 입력의 꼬리와
+	//     무관하다(measureInput). 이 두 분기는 백오프에 등록하지 않는다 — "파일이 방금 바뀌었다"는
+	//     양의 증거를 본 경우이고, M-1 표에 없는 분기다(C10).
 	fi2, err := u.statFile(f)
 	if err != nil {
 		lg.Warn("upload_stat_failed", "stage", "post", "err", err.Error())
 		return attemptResult{outcome: outcomeNeutral}
 	}
-	if fi2.Size() != size {
+	if fi2.Size() != size && t.Axis != index.AxisInit {
 		lg.Warn("file_changed_during_put", "put_size", size, "after_size", fi2.Size())
 		return attemptResult{outcome: outcomeNeutral}
 	}
 
 	// (f) 마킹 — 축 분기는 markUploadedByAxis 가 진다.
-	if !u.markUploadedByAxis(j, lg) {
+	if !u.markUploadedByAxis(j, p, lg) {
 		return attemptResult{outcome: outcomeNeutral}
 	}
 
-	lg.Info("segment_uploaded", "s3_key", t.S3Key, "bytes", size,
+	lg.Info("segment_uploaded", "s3_key", t.S3Key, "bytes", p.size,
 		"elapsed_ms", elapsed.Milliseconds())
 	u.gate.clearBackoff(k)
-	u.sendResult(j, index.UploadStateUploaded)
+	u.afterUploaded(j, p)
 	return attemptResult{outcome: outcomeSuccess}
+}
+
+// measureInput 은 (b) 입력 파일의 크기를 재고 (c) 장부 크기와 대조한다. ok 가 false 면
+// 이번 시도는 r 로 끝난다.
+func (u *Uploader) measureInput(j job, f *os.File, lg *slog.Logger) (size int64, r attemptResult, ok bool) {
+	t := j.target
+
+	// (b) 크기 — 오류를 버리지 않는다. fi 를 무조건 역참조하면 nil panic 이다.
+	fi, err := u.statFile(f)
+	if err != nil {
+		lg.Warn("upload_stat_failed", "stage", "pre", "err", err.Error())
+		return 0, attemptResult{outcome: outcomeNeutral}, false
+	}
+	if !fi.Mode().IsRegular() {
+		lg.Error("upload_target_rejected", "reason", "not_regular",
+			"path", t.LocalPath, "s3_key", t.S3Key)
+		u.gate.quarantine(j.key())
+		return 0, attemptResult{outcome: outcomeNeutral}, false
+	}
+	size = fi.Size()
+
+	// (c) 크기 재확인은 경로가 아니라 **대상의 속성**이다(결정 4⁵).
+	if size != t.Bytes {
+		if t.IsTail && t.Axis != index.AxisInit {
+			// 꼬리는 아직 자라는 중일 수 있다. 여기서 올리면(③ 이면 재포장하면) 잘린 실물이
+			// 굳는다(G12‴ · 계획 2.1 「③ 축 크기 계약」).
+			u.logTailGrowing(j, lg, t.Bytes, size)
+			return 0, attemptResult{outcome: outcomeNeutral}, false
+		}
+		// 비꼬리는 correctTail 이 애초에 못 고치므로 막아서 얻을 것이 없고,
+		// 막으면 그 조각이 영원히 안 올라간다. 올리되 장부 어긋남을 남긴다(L14).
+		// init 은 꼬리여도 여기로 온다 — init 산출은 머리말(ftyp+moov)만의 순수 함수라 파일이 꼬리에서
+		// 더 자라도 바이트가 같다(잘린 실물이 없다). 막으면 재기동 뒤 이어지는 회차의 sessionInit 이
+		// 되살아나지 않는다 — 스위퍼 init 벌은 이미 확정된 회차를 집지 않는다(cc r3 ⑦-1 선택 개선).
+		// 크기 키는 뜻을 축마다 고정한다: ② 는 파일을 그대로 올려 입력 크기가 곧 PUT 크기이고,
+		// ③·init 은 재포장 산출을 올리므로 이 값은 입력 크기일 뿐이다(PUT 크기가 아니다).
+		sizeKey := "put_bytes"
+		if t.Axis != index.AxisArchive {
+			sizeKey = "input_bytes"
+		}
+		lg.Warn("upload_size_mismatch", "db_bytes", t.Bytes, sizeKey, size)
+	}
+	return size, attemptResult{}, true
 }
 
 // markUploadedByAxis 는 성공 마킹의 축 분기다. 돌려주는 값은 "후처리(백오프 해제·통지)를
 // 이어가도 되는가"이며, false 면 호출자는 outcomeNeutral 로 끝낸다.
 //
-// M3 에서 CAS 갈래는 ② 하나다 — ③·init 의 성공 CAS 는 M4 이고, 여기 흘려보내면 그 결과가
-// ② 의 열을 바꾼다. 바이트는 이미 올라갔지만 장부는 손대지 않는다.
-func (u *Uploader) markUploadedByAxis(j job, lg *slog.Logger) bool {
+// 축마다 CAS 가 다르다(설계 5.5.5): ② 는 장부 크기가 앵커이고, ③ 은 산출 길이를 SET 하며,
+// init 은 산출 바이트의 해시로 첫 확정을 가른다.
+func (u *Uploader) markUploadedByAxis(j job, p payload, lg *slog.Logger) bool {
 	t := j.target
 	if planMark(t.Axis, index.UploadStateUploaded) != markCAS {
 		lg.Error("upload_mark_unsupported", "target_state", "uploaded", "s3_key", t.S3Key)
@@ -403,7 +449,18 @@ func (u *Uploader) markUploadedByAxis(j job, lg *slog.Logger) bool {
 	// err 를 먼저 본다. (false, err) 를 CAS 거부로 오분류하면 안 된다(CX-2 ⑥).
 	markCtx, cancel := context.WithTimeout(u.markRoot, u.opt.MarkTimeout)
 	defer cancel()
-	marked, err := u.st.MarkUploaded(markCtx, t.StreamID, t.Seq, t.Bytes)
+	if t.Axis == index.AxisInit {
+		return u.markInitUploaded(markCtx, j, p, lg)
+	}
+	var (
+		marked bool
+		err    error
+	)
+	if t.Axis == index.AxisPlayback {
+		marked, err = u.st.MarkPlaybackUploaded(markCtx, t.StreamID, t.Seq, p.size)
+	} else {
+		marked, err = u.st.MarkUploaded(markCtx, t.StreamID, t.Seq, t.Bytes)
+	}
 	k := j.key()
 	switch {
 	case err != nil:
@@ -421,10 +478,11 @@ func (u *Uploader) markUploadedByAxis(j job, lg *slog.Logger) bool {
 // markFailedByAxis 는 실패 마킹의 축 분기다. 돌려주는 값은 "후처리를 이어가도 되는가"이며,
 // false 면 호출자는 outcomeNeutral 로 끝낸다(판정 재료가 아니다).
 //
-//	markCAS    — CAS 를 실행하고 성공했을 때만 이어간다.
+//	markCAS    — CAS 를 실행하고 성공했을 때만 이어간다. ③ 은 reason 을 싣는다 —
+//	             index.ReasonInitMismatch 면 그 조각의 세션까지 한 문장으로 끝낸다(설계 5.3ⓒ).
 //	markSkip   — 장부를 건드리지 않고 이어간다. init 실패에는 CAS 가 없다(설계 5.5.5).
-//	markRefuse — 이어가지 않는다. ③ 마킹은 M4 이고 ② 의 CAS 로 새면 안 된다.
-func (u *Uploader) markFailedByAxis(j job, lg *slog.Logger) bool {
+//	markRefuse — 이어가지 않는다. 모르는 축의 결과가 다른 축의 CAS 로 새면 안 된다.
+func (u *Uploader) markFailedByAxis(j job, reason string, lg *slog.Logger) bool {
 	t := j.target
 	switch planMark(t.Axis, index.UploadStateFailed) {
 	case markSkip:
@@ -436,7 +494,15 @@ func (u *Uploader) markFailedByAxis(j job, lg *slog.Logger) bool {
 
 	markCtx, cancel := context.WithTimeout(u.markRoot, u.opt.MarkTimeout)
 	defer cancel()
-	marked, err := u.st.MarkFailed(markCtx, t.StreamID, t.Seq, t.Bytes)
+	var (
+		marked bool
+		err    error
+	)
+	if t.Axis == index.AxisPlayback {
+		marked, err = u.st.MarkPlaybackFailed(markCtx, t.StreamID, t.Seq, t.SessionID, reason)
+	} else {
+		marked, err = u.st.MarkFailed(markCtx, t.StreamID, t.Seq, t.Bytes)
+	}
 	k := j.key()
 	switch {
 	case err != nil:
@@ -460,7 +526,7 @@ func (u *Uploader) handleFileMissing(j job, lg *slog.Logger) outcome {
 	k := j.key()
 	lg.Warn("upload_file_missing", "path", t.LocalPath)
 
-	if !u.markFailedByAxis(j, lg) {
+	if !u.markFailedByAxis(j, playbackReasonFileMissing, lg) {
 		return outcomeNeutral
 	}
 	u.gate.quarantine(k)
@@ -481,7 +547,7 @@ func (u *Uploader) finalizeFailure(j job, rel string, lg *slog.Logger, lastErr e
 		}
 	}
 
-	if !u.markFailedByAxis(j, lg) {
+	if !u.markFailedByAxis(j, playbackReasonUploadFailed, lg) {
 		return outcomeNeutral
 	}
 

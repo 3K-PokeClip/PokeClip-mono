@@ -17,7 +17,7 @@ type armStore struct {
 	queries int
 }
 
-func (s *armStore) PendingUploads(context.Context, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+func (s *armStore) PendingUploads(context.Context, index.Axis, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.queries++
@@ -27,8 +27,18 @@ func (s *armStore) MarkUploaded(context.Context, string, int64, int64) (bool, er
 	return true, nil
 }
 func (s *armStore) MarkFailed(context.Context, string, int64, int64) (bool, error) { return true, nil }
-func (s *armStore) MarkInitUploaded(context.Context, string, []byte) (bool, error) { return true, nil }
-func (s *armStore) CountBacklog(context.Context) (int64, int64, int64, error)      { return 0, 0, 0, nil }
+func (s *armStore) MarkPlaybackUploaded(context.Context, string, int64, int64) (bool, error) {
+	return true, nil
+}
+func (s *armStore) MarkPlaybackFailed(context.Context, string, int64, string, string) (bool, error) {
+	return true, nil
+}
+func (s *armStore) MarkInitUploaded(context.Context, string, []byte, string, int64, bool) (index.InitMark, error) {
+	return index.InitMarkSuccess, nil
+}
+func (s *armStore) CountBacklog(context.Context, index.Axis) (int64, int64, int64, error) {
+	return 0, 0, 0, nil
+}
 
 func (s *armStore) count() int {
 	s.mu.Lock()

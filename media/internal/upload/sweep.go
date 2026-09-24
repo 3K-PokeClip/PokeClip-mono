@@ -11,7 +11,7 @@ import (
 
 // sweeper 는 재개 경로다. failed·pending 은 종국 상태가 아니며(G11′) 이 고루틴이 다시 집는다.
 //
-// resumeCursor 와 stalledRounds 는 회차 사이에 살아남는 고루틴 로컬이다.
+// 축별 진행(재개 커서·연속 정체 회차 수)은 회차 사이에 살아남는 고루틴 로컬이다.
 // 커서는 **단조 전진이거나 불변**이며, 뒤로 가는 경우는 끝에 도달했을 때의 순환 하나뿐이다.
 func (u *Uploader) sweeper(ctx context.Context) {
 	defer close(u.sweepDone)
@@ -23,8 +23,7 @@ func (u *Uploader) sweeper(ctx context.Context) {
 		return
 	}
 
-	resume := index.SweepCursor{}
-	stalled := 0
+	var progress map[index.Axis]axisProgress
 	ticker := time.NewTicker(u.opt.SweepEvery)
 	defer ticker.Stop()
 
@@ -33,7 +32,8 @@ func (u *Uploader) sweeper(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			resume, stalled = u.sweepOnce(ctx, resume, stalled)
+			u.tidySessions()
+			progress = u.sweepOnce(ctx, progress)
 		}
 	}
 }
@@ -65,6 +65,25 @@ func (u *Uploader) waitArm(ctx context.Context) bool {
 	}
 }
 
+// sweepAxes 는 스위퍼 회차가 도는 축과 그 순서다(설계 5.5.4 #2·#7). 축마다 장부의 자격 술어가
+// 달라 조회도 잔량 집계도 축별 한 벌씩이다 — ③ 은 컷오프-인지이고 init 은 조각이 아니라 세션을
+// 센다(index 의 축별 문장).
+//
+// ② 가 맨 앞인 이유: 세 축이 큐 하나를 나눠 쓰고 앞 축이 먼저 자리를 잡는다. ② 를 앞에 두어 M3
+// 가 재던 ② 회차 계약(G16⁗ — 회차 시작 때 큐가 비어 있으면 1·2단계를 다 접수한다)을 그대로 둔다.
+// 뒤 축은 남은 자리를 쓰고, 큐가 차서 못 든 행은 그 축 커서가 멈춰 다음 회차에 다시 본다.
+var sweepAxes = [...]index.Axis{index.AxisArchive, index.AxisPlayback, index.AxisInit}
+
+// axisProgress 는 한 축이 회차 사이에 들고 가는 두 값이다 — 재개 커서와 연속 정체 회차 수.
+//
+// 축마다 따로 드는 이유: 커서의 마지막 정렬 키부터 축마다 다르고(index.SweepCursor — init 은
+// SessionID 로 끝난다) 한 축의 커서를 다른 축 조회에 넘기면 엉뚱한 자리부터 훑는다. 정체도 그 축
+// 커서의 사정이라, 한 축의 큐 포화가 다른 축의 정체 이력을 지우거나 부풀리면 안 된다.
+type axisProgress struct {
+	resume  index.SweepCursor
+	stalled int
+}
+
 // sweepStage 는 한 단계가 무엇을 했는지다. 회차 말미 요약이 이 값을 그대로 싣는다.
 type sweepStage struct {
 	stage    int
@@ -91,15 +110,27 @@ type sweepStage struct {
 func (s sweepStage) rejected() int { return s.examined - s.admitted }
 
 // sweepOnce 는 회차 1번이다. 회차 ID(sweepRound)를 올리는 유일한 지점이다.
-func (u *Uploader) sweepOnce(ctx context.Context, resume index.SweepCursor, stalled int) (index.SweepCursor, int) {
+//
+// 한 회차가 sweepAxes 의 축을 순서대로 한 번씩 돈다. 회차 ID 는 그 축들이 함께 쓴다 — 회차는 tick
+// 하나다. 넘겨받은 진행은 고치지 않고 새 맵으로 돌려준다(nil 이면 모든 축이 처음부터다).
+func (u *Uploader) sweepOnce(ctx context.Context, progress map[index.Axis]axisProgress) map[index.Axis]axisProgress {
 	u.sweepRound++
-	// axis 라벨은 회차 로그 전체에 실린다(설계 5.5.4 #8). **M3 의 스위퍼 조회는 ② 하나뿐이다** —
-	// 축별 조회(#2)와 축별 backlog 집계(#7)는 M4 라서, 이 회차가 말하는 잔량·커서·중단은
-	// 전부 아카이브 축의 것이다. 라벨이 없으면 그 수치가 세 축 전부인 것처럼 읽힌다.
-	lg := u.log.With("sweep_round", u.sweepRound, "origin", OriginSweep.String(),
-		"axis", index.AxisArchive.String())
+	next := make(map[index.Axis]axisProgress, len(sweepAxes))
+	for _, a := range sweepAxes {
+		next[a] = u.sweepAxis(ctx, a, progress[a])
+	}
+	return next
+}
 
-	s1 := u.sweepStage1(ctx, lg)
+// sweepAxis 는 한 축의 회차다. 단계·커서·정체 규칙은 축과 무관하게 같고, 축은 조회·잔량 집계의
+// 문장(index 의 축별 벌)과 로그 라벨을 고른다(설계 5.5.4 #2·#7·#8).
+func (u *Uploader) sweepAxis(ctx context.Context, a index.Axis, p axisProgress) axisProgress {
+	// axis 라벨은 그 축 회차 로그 전체에 실린다(설계 5.5.4 #8). 라벨과 조회를 같은 a 로 고르는
+	// 것이 계약이다 — 둘이 갈리면 ③ 의 잔량·커서·중단이 다른 축의 수치로 읽힌다(#7).
+	lg := u.log.With("sweep_round", u.sweepRound, "origin", OriginSweep.String(),
+		"axis", a.String())
+
+	s1 := u.sweepStage1(ctx, lg, a)
 	s2 := sweepStage{stage: 2}
 	// 1단계가 조회에 실패했으면 2단계도 돌리지 않는다. 승계할 페이지가 없는데 진행하면
 	// 빈 결과가 "끝 도달 = 순환"으로 흘러가 아무것도 훑지 않은 회차가
@@ -108,12 +139,13 @@ func (u *Uploader) sweepOnce(ctx context.Context, resume index.SweepCursor, stal
 		// 2단계는 1단계의 접수 성공 여부와 무관하게 반드시 진행한다 — 신규 세그먼트가
 		// 계속 유입되면 1단계가 매 회차 성공하는데, 거기서 끝내면 resumeCursor 가
 		// 영원히 전진하지 않는다(결정 5⁵).
-		s2 = u.sweepStage2(ctx, lg, resume, s1)
+		s2 = u.sweepStage2(ctx, lg, a, p.resume, s1)
 	}
 
 	// 회차 말미 집계는 **중단 회차에서도 반드시 실행된다**(M-2).
 	// 중단은 조기 return 이 아니라 페이지 루프 탈출이다 — 만성 포화일수록 이 관측이 필요한데
 	// 즉시 반환으로 구현하면 경고가 전멸해 CX6-3 처방이 무효가 된다.
+	stalled := p.stalled
 	switch {
 	case s1.aborted || s2.aborted:
 		stalled++
@@ -122,23 +154,23 @@ func (u *Uploader) sweepOnce(ctx context.Context, resume index.SweepCursor, stal
 	default:
 		stalled = 0
 	}
-	u.sweepSummary(ctx, lg, []sweepStage{s1, s2}, stalled)
+	u.sweepSummary(ctx, lg, a, []sweepStage{s1, s2}, stalled)
 
 	if s2.advanced {
-		return s2.cursor, stalled
+		return axisProgress{resume: s2.cursor, stalled: stalled}
 	}
 	// 전진분이 없으면 커서를 손대지 않는다. 되감기지도, 앞서가지도 않는다.
-	return resume, stalled
+	return axisProgress{resume: p.resume, stalled: stalled}
 }
 
 // sweepStage1 은 zero 커서 1페이지다. 최신 pending 을 무조건 먼저 확보한다.
 //
 // 이 단계의 결과 커서를 resumeCursor 에 흘려 넣으면 안 된다 — zero 커서에서 출발하므로
 // 그 값은 정렬 맨 앞이고, 대입하면 커서가 되감긴다(H-1). 2단계가 승계할 때만 쓴다.
-func (u *Uploader) sweepStage1(ctx context.Context, lg *slog.Logger) sweepStage {
+func (u *Uploader) sweepStage1(ctx context.Context, lg *slog.Logger, a index.Axis) sweepStage {
 	s := sweepStage{stage: 1, ran: true, pages: 1}
 
-	rows, next, err := u.st.PendingUploads(ctx, u.opt.TailGrace.Seconds(), u.opt.SweepLimit, index.SweepCursor{})
+	rows, next, err := u.st.PendingUploads(ctx, a, u.opt.TailGrace.Seconds(), u.opt.SweepLimit, index.SweepCursor{})
 	if err != nil {
 		logSweepQueryFailure(lg, 1, err)
 		s.ran, s.failed = false, true
@@ -175,7 +207,7 @@ func (u *Uploader) sweepStage1(ctx context.Context, lg *slog.Logger) sweepStage 
 // lastExamined 는 이 단계 전용이며 **진입 초기값이 계약이다** — 단계 공유 변수로 두면
 // 2단계 첫 행이 QueueFull 일 때 커서가 1단계 위치(정렬 맨 앞)로 되감겨 옛 행 기아가
 // 세 번째 문으로 재발한다(H-1).
-func (u *Uploader) sweepStage2(ctx context.Context, lg *slog.Logger, resume index.SweepCursor, s1 sweepStage) sweepStage {
+func (u *Uploader) sweepStage2(ctx context.Context, lg *slog.Logger, a index.Axis, resume index.SweepCursor, s1 sweepStage) sweepStage {
 	s := sweepStage{stage: 2, ran: true}
 
 	// 1단계 결과를 승계할 것인가. 재조회만 생략하며 enqueue 를 다시 부르지 않는다(R3) —
@@ -204,7 +236,7 @@ func (u *Uploader) sweepStage2(ctx context.Context, lg *slog.Logger, resume inde
 			}
 		} else {
 			var err error
-			rows, next, err = u.st.PendingUploads(ctx, u.opt.TailGrace.Seconds(), u.opt.SweepLimit, cur)
+			rows, next, err = u.st.PendingUploads(ctx, a, u.opt.TailGrace.Seconds(), u.opt.SweepLimit, cur)
 			if err != nil {
 				logSweepQueryFailure(lg, 2, err)
 				s.failed = true
@@ -259,8 +291,9 @@ func (u *Uploader) sweepStage2(ctx context.Context, lg *slog.Logger, resume inde
 	return s
 }
 
-// sweepSummary 는 회차 말미 집계다. 실행된 단계만 요약을 낸다(N-6).
-func (u *Uploader) sweepSummary(ctx context.Context, lg *slog.Logger, stages []sweepStage, stalled int) {
+// sweepSummary 는 한 축 회차의 말미 집계다. 실행된 단계만 요약을 낸다(N-6). 잔량은 그 축의 것만
+// 센다 — 축 라벨은 수치와 함께 갈려야 한다(설계 5.5.4 #7).
+func (u *Uploader) sweepSummary(ctx context.Context, lg *slog.Logger, a index.Axis, stages []sweepStage, stalled int) {
 	for _, s := range stages {
 		if !s.ran {
 			continue
@@ -271,7 +304,7 @@ func (u *Uploader) sweepSummary(ctx context.Context, lg *slog.Logger, stages []s
 			"cursor_wrapped", s.wrapped, "stage", s.stage)
 	}
 
-	pending, failed, bytesNull, err := u.st.CountBacklog(ctx)
+	pending, failed, bytesNull, err := u.st.CountBacklog(ctx, a)
 	if err != nil {
 		logSweepQueryFailure(lg, 0, err)
 		return

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"os"
 	"testing"
 	"time"
@@ -247,61 +248,82 @@ func initJobTarget(t *testing.T, dir, streamID, sessionID, file string, bytes in
 	}
 }
 
-// init 축의 성공 마킹은 M3 에 없다 — CAS 문장은 index 층에 착지했지만 워커 호출부 배선은 M4 다.
-// 기본 갈래로 흘려보내면 init 결과가 ② 의 CAS(markUploadedSQL)로 새어 아카이브 열을 바꾼다.
-func TestInitSuccessDoesNotTouchArchiveLedger(t *testing.T) {
+// init 축의 성공 마킹은 세션 장부의 첫 init CAS 다(설계 5.5.5 셋째 문장 · 계획 2.1 planMark).
+// 잡는 결함 둘: ⑴ init 결과가 ② 의 CAS(markUploadedSQL)로 새어 아카이브 열을 바꾼다
+// ⑵ 산출 init 이 아닌 값(입력 파일 바이트)의 해시가 기록돼 5.3ⓑ 동일성 축이 항진식이 된다.
+func TestInitSuccessMarksSessionLedgerNotArchive(t *testing.T) {
 	st := &fakeUploadStore{}
 	put := &fakePutter{}
-	u, cap, dir := newWorkerUploader(t, st, put, nil)
+	prod := &fakeProducer{}
+	u, cap, dir, _ := newPlaybackUploader(t, st, put, prod, nil)
+	target := initJobTarget(t, dir, "demo", "S-20260901-0001", "init.mp4", 64)
 
-	got := runTarget(t, u, initJobTarget(t, dir, "demo", "S-20260901-0001", "init.mp4", 64))
+	if got := runTarget(t, u, target); got != outcomeSuccess {
+		t.Fatalf("outcome = %v, want success (%s)", got, cap.dump())
+	}
 
-	if got != outcomeNeutral {
-		t.Errorf("outcome = %v, want neutral — 판정 재료가 아니다", got)
+	calls := put.putCalls()
+	if len(calls) != 1 || calls[0].key != target.S3Key || string(calls[0].body) != string(fakeInit) {
+		t.Fatalf("PUT = %+v, want 1회 key %q · 산출 init 바이트", calls, target.S3Key)
 	}
-	if len(put.putCalls()) != 1 {
-		t.Errorf("PUT = %d회, want 1회 — 바이트는 올라가되 장부만 손대지 않는다", len(put.putCalls()))
+	want := initMarkCall{sessionID: "S-20260901-0001", sha256: fakeInitSHA(), s3Key: target.S3Key, bytes: int64(len(fakeInit))}
+	if got := st.initCalls(); len(got) != 1 || !sameInitCall(got[0], want) {
+		t.Fatalf("MarkInitUploaded = %+v, want 1회 %+v", got, want)
 	}
-	uploaded, failed := st.markCalls()
-	if len(uploaded) != 0 || len(failed) != 0 {
+	if uploaded, failed := st.markCalls(); len(uploaded) != 0 || len(failed) != 0 {
 		t.Errorf("② 마킹 = uploaded %d·failed %d회, want 0회 — init 은 세그먼트 열을 바꾸지 않는다",
 			len(uploaded), len(failed))
 	}
-	// init CAS 의 문장·계약은 index 층에 착지했지만 워커 호출부 배선은 M4 다 —
-	// sha256 을 만드는 생산자(Producer.Init)가 M3 에 없어 여기서 부를 값이 없다.
-	if got := st.initMarkedSessions(); len(got) != 0 {
-		t.Errorf("MarkInitUploaded 호출 = %v, want 0회 — 워커 호출부 배선은 M4 다", got)
-	}
 	if len(u.results) != 0 {
-		t.Errorf("Result = %d건, want 0건", len(u.results))
-	}
-	rec := cap.one(t, "upload_mark_unsupported")
-	if rec.attrs["axis"] != index.AxisInit.String() {
-		t.Errorf("axis = %v, want %q", rec.attrs["axis"], index.AxisInit.String())
+		t.Errorf("Result = %d건, want 0건 — Result 는 ② 전용이다", len(u.results))
 	}
 }
 
-// ③ 축의 마킹은 통째로 M4 다(설계 5.5.5 첫·둘째 문장). M3 에서는 큐에 들 수도 없지만,
-// 기본 갈래를 AxisArchive 한정으로 못 박아 두지 않으면 M4 의 첫 ③ 작업이 ② 의 CAS 로 흐른다.
-func TestPlaybackMarkingIsRefused(t *testing.T) {
+// ③ 축의 성공 마킹은 ③ CAS 다(설계 5.5.5 첫 문장). 잡는 결함: 기본 갈래가 ② 로 열려 있으면
+// ③ 결과가 ② 의 CAS 로 흘러 아카이브 열을 바꾼다 — ③ 의 바이트 수(산출 길이)는 ② 의
+// 크기 앵커와도 달라 그 CAS 는 영원히 0행이다.
+func TestPlaybackSuccessMarksPlaybackLedgerNotArchive(t *testing.T) {
 	st := &fakeUploadStore{}
-	u, cap, dir := newWorkerUploader(t, st, &fakePutter{}, nil)
-	target := index.UploadTarget{
-		StreamID: "demo", Axis: index.AxisPlayback, Seq: 7,
-		S3Key:     segKeyOf(t, "demo", 7),
-		LocalPath: writeSegment(t, dir, "demo", "seg.mp4", 64),
-		Bytes:     64,
-	}
+	u, cap, dir, _ := newPlaybackUploader(t, st, &fakePutter{}, &fakeProducer{}, nil)
+	target := playbackTarget(t, "demo", 7, "S-1", writeSegment(t, dir, "demo", "seg.mp4", 64), 64)
+	target.ExpectedInitSHA = fakeInitSHA()
 
-	if got := runTarget(t, u, target); got != outcomeNeutral {
-		t.Errorf("outcome = %v, want neutral", got)
+	if got := runLive(u, target); got != outcomeSuccess {
+		t.Fatalf("outcome = %v, want success (%s)", got, cap.dump())
+	}
+	marked, failed := st.playbackCalls()
+	if len(marked) != 1 || marked[0] != (playbackMarkCall{"demo", 7, int64(len(fakeSeg))}) || len(failed) != 0 {
+		t.Errorf("③ 마킹 = uploaded %+v · failed %+v, want uploaded 1회 {demo 7 %d}", marked, failed, len(fakeSeg))
 	}
 	if uploaded, failed := st.markCalls(); len(uploaded) != 0 || len(failed) != 0 {
 		t.Errorf("② 마킹 = uploaded %d·failed %d회, want 0회", len(uploaded), len(failed))
 	}
-	rec := cap.one(t, "upload_mark_unsupported")
-	if rec.attrs["axis"] != index.AxisPlayback.String() {
-		t.Errorf("axis = %v, want %q", rec.attrs["axis"], index.AxisPlayback.String())
+	if len(u.results) != 0 {
+		t.Errorf("Result = %d건, want 0건 — Result 는 ② 전용이다", len(u.results))
+	}
+}
+
+// 마킹의 기본 갈래는 거부다(planMark — 계획 4.5). 모르는 축의 결과는 어느 장부 CAS 로도 흘려보내지
+// 않는다. [0] 과 접수 게이트가 먼저 거르지만 마킹 자리도 스스로 막는다 — 잡는 결함: 기본 갈래가
+// ② 로 열리면 판정 순서가 바뀌는 날 모르는 축의 결과가 아카이브 열을 바꾼다.
+func TestMarkingRefusesUnknownAxis(t *testing.T) {
+	st := &fakeUploadStore{}
+	u, cap, _ := newWorkerUploader(t, st, &fakePutter{}, nil)
+	j := job{target: index.UploadTarget{StreamID: "demo", Seq: 7, SessionID: "S-1", Bytes: 64}}
+
+	if u.markUploadedByAxis(j, payload{size: 64}, u.log) {
+		t.Error("성공 마킹이 이어갔다 — 모르는 축은 거부한다")
+	}
+	if u.markFailedByAxis(j, playbackReasonUploadFailed, u.log) {
+		t.Error("실패 마킹이 이어갔다 — 모르는 축은 거부한다")
+	}
+	uploaded, failed := st.markCalls()
+	pMarked, pFailed := st.playbackCalls()
+	if n := len(uploaded) + len(failed) + len(pMarked) + len(pFailed) + len(st.initCalls()); n != 0 {
+		t.Errorf("장부 CAS = %d회, want 0회", n)
+	}
+	if n := cap.count("upload_mark_unsupported"); n != 2 {
+		t.Errorf("upload_mark_unsupported = %d건, want 2건", n)
 	}
 }
 
@@ -372,25 +394,51 @@ func TestArchivePathIsUnchangedByAxisParameterization(t *testing.T) {
 	}
 }
 
-// 스위퍼 회차 로그는 axis 라벨을 단다(설계 5.5.4 #8).
+// 스위퍼 회차 로그는 축마다 그 축의 라벨과 그 축의 수치를 함께 싣는다(설계 5.5.4 #7·#8).
 //
-// 잡는 결함: M3 의 스위퍼 조회는 ② 축 하나뿐인데(축별 조회·축별 backlog 집계는 M4)
-// 라벨이 없으면 그 잔량 수치가 세 축 전부를 말하는 것처럼 읽힌다.
-// 라벨이 있어야 "M3 의 backlog 는 archive 축만 나타낸다"는 공시가 로그에서 확인된다.
-func TestSweepRoundLogsCarryArchiveAxisLabel(t *testing.T) {
-	st := newPageStore(2, "s")
+// 잡는 결함 둘: ⑴ 라벨과 잔량 집계가 서로 다른 축을 가리키면 ③ 의 잔량이 ② 의 것으로 읽혀 어느
+// 축이 막혔는지 모른다(#7 「축 라벨은 수치와 함께 갈려야 한다」) ⑵ 회차 ID 를 축마다 올리면 한
+// tick 이 세 회차로 세어져 ② 의 회차 계수(AC4 r1−r0)가 부푼다.
+func TestSweepRoundLogsCarryEachAxisLabelWithItsOwnCounts(t *testing.T) {
+	counts := map[index.Axis][3]int64{ // 축마다 다른 (pending, failed, bytes_null)
+		index.AxisArchive:  {31, 1, 0},
+		index.AxisPlayback: {40, 2, 3},
+		index.AxisInit:     {5, 0, 1},
+	}
+	st := &fakeUploadStore{onBacklog: func(_ context.Context, a index.Axis) (int64, int64, int64, error) {
+		c := counts[a]
+		return c[0], c[1], c[2], nil
+	}}
+	// 임계를 음수로 두어 잔량이 얼마든 upload_backlog 가 나오게 한다 — 수치를 읽기 위해서다.
 	u, cap := newSweepUploader(t, st, func(o *Options) { o.BacklogWarn = -1 })
 
-	u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+	u.sweepOnce(context.Background(), nil)
 
-	for _, msg := range []string{"upload_sweep", "upload_backlog"} {
-		recs := cap.find(msg)
-		if len(recs) == 0 {
-			t.Fatalf("%s 로그가 없다 (%s)", msg, cap.dump())
-		}
-		for _, rec := range recs {
-			if rec.attrs["axis"] != index.AxisArchive.String() {
-				t.Errorf("%s 의 axis = %v, want %q", msg, rec.attrs["axis"], index.AxisArchive.String())
+	backlog := cap.find("upload_backlog")
+	got := map[any][3]int64{}
+	for _, rec := range backlog {
+		got[rec.attrs["axis"]] = [3]int64{rec.attrs["pending"].(int64), rec.attrs["failed"].(int64), rec.attrs["bytes_null"].(int64)}
+	}
+	want := map[any][3]int64{"archive": {31, 1, 0}, "playback": {40, 2, 3}, "init": {5, 0, 1}}
+	if len(backlog) != 3 || !maps.Equal(got, want) {
+		t.Errorf("upload_backlog %d건 · 라벨별 (pending, failed, bytes_null) = %v, want 3건 %v", len(backlog), got, want)
+	}
+
+	summaries := map[any]int{}
+	for _, rec := range cap.find("upload_sweep") {
+		summaries[rec.attrs["axis"]]++
+	}
+	if want := (map[any]int{"archive": 2, "playback": 2, "init": 2}); !maps.Equal(summaries, want) {
+		t.Errorf("upload_sweep 라벨별 건수 = %v, want %v — 축마다 1·2단계 요약", summaries, want)
+	}
+
+	if u.sweepRound != 1 {
+		t.Errorf("sweepRound = %d, want 1 — 한 회차의 세 축은 회차 ID 하나를 함께 쓴다", u.sweepRound)
+	}
+	for _, name := range []string{"upload_sweep", "upload_backlog"} {
+		for _, rec := range cap.find(name) {
+			if rec.attrs["sweep_round"] != uint64(1) {
+				t.Errorf("%s(axis=%v) sweep_round = %v, want 1", name, rec.attrs["axis"], rec.attrs["sweep_round"])
 			}
 		}
 	}
@@ -416,7 +464,7 @@ func TestKeyGrammarIsPerAxis(t *testing.T) {
 			StreamID: "demo", Axis: index.AxisArchive, Seq: 7,
 			S3Key: index.S3Key("demo", 7, fixtureWall), LocalPath: local, Bytes: 64}, ""},
 		{"재생_축은_dvr_seg_문법", index.UploadTarget{
-			StreamID: "demo", Axis: index.AxisPlayback, Seq: 7,
+			StreamID: "demo", Axis: index.AxisPlayback, Seq: 7, SessionID: session,
 			S3Key: segKeyOf(t, "demo", 7), LocalPath: local, Bytes: 64}, ""},
 		{"init_축은_dvr_init_문법", index.UploadTarget{
 			StreamID: "demo", Axis: index.AxisInit, SessionID: session,
@@ -454,6 +502,13 @@ func TestKeyGrammarIsPerAxis(t *testing.T) {
 		{"init_세션_성분에_점", index.UploadTarget{
 			StreamID: "demo", Axis: index.AxisInit, SessionID: "a.b",
 			S3Key: "dvr/demo/init/a.b.mp4", LocalPath: local, Bytes: 64}, "bad_key"},
+
+		// ③ 은 세션 없이는 기대 init 도 보정값 표도 찾을 수 없고 불일치를 세션에 결속할 수도 없다.
+		// 세션 없는 조각의 ③ 은 애초에 만들지 않으므로(계획 2.1) 여기 온 것은 호출자 결함이다 —
+		// 보류 목록에서 조용히 썩게 두지 않고 드러낸다.
+		{"재생_축은_세션이_있어야_한다", index.UploadTarget{
+			StreamID: "demo", Axis: index.AxisPlayback, Seq: 7,
+			S3Key: segKeyOf(t, "demo", 7), LocalPath: local, Bytes: 64}, "no_session"},
 
 		{"축_미판정은_거부", index.UploadTarget{
 			StreamID: "demo", Seq: 7,

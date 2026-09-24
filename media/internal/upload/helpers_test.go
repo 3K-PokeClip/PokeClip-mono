@@ -138,32 +138,91 @@ type markCall struct {
 	expectBytes int64
 }
 
+// playbackMarkCall 은 ③ 성공 CAS 한 번이다 — bytes 는 산출 길이(SET)다.
+type playbackMarkCall struct {
+	streamID string
+	seq      int64
+	bytes    int64
+}
+
+// playbackFailCall 은 ③ 실패 CAS 한 번이다 — 사유가 index.ReasonInitMismatch 면 세션 결속 갈래다.
+type playbackFailCall struct {
+	streamID  string
+	seq       int64
+	sessionID string
+	reason    string
+}
+
+// initMarkCall 은 첫 init CAS 한 번의 인자 전부다.
+type initMarkCall struct {
+	sessionID    string
+	sha256       []byte
+	s3Key        string
+	bytes        int64
+	incompatible bool
+}
+
 type fakeUploadStore struct {
 	mu sync.Mutex
 
 	onMarkUploaded func(ctx context.Context, streamID string, seq, expectBytes int64) (bool, error)
 	onMarkFailed   func(ctx context.Context, streamID string, seq, expectBytes int64) (bool, error)
-	onPending      func(ctx context.Context, tailGraceSecs float64, limit int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error)
-	onBacklog      func(ctx context.Context) (int64, int64, int64, error)
+	// onPending·onBacklog 는 축을 함께 받는다 — 스위퍼 회차가 축마다 한 번씩 부른다.
+	onPending func(ctx context.Context, axis index.Axis, tailGraceSecs float64, limit int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error)
+	onBacklog func(ctx context.Context, axis index.Axis) (int64, int64, int64, error)
+	// onInitMark 가 nil 이면 첫 init CAS 는 언제나 InitMarkSuccess 다.
+	onInitMark func(sessionID string, sha256 []byte) (index.InitMark, error)
+	// onPlaybackFailed 가 nil 이면 ③ 실패 CAS 는 언제나 1행을 바꾼다.
+	onPlaybackFailed func(streamID string, seq int64, reason string) (bool, error)
 
-	uploaded []markCall
-	failed   []markCall
-	// initMarked 는 MarkInitUploaded 를 받은 세션들이다. M3 의 워커는 이것을 한 번도
-	// 부르지 않아야 한다(호출부 배선은 M4) — 그래서 세지 않으면 관측할 방법이 없다.
-	initMarked []string
+	uploaded       []markCall
+	failed         []markCall
+	playbackMarked []playbackMarkCall
+	playbackFailed []playbackFailCall
+	initMarks      []initMarkCall
 }
 
-func (f *fakeUploadStore) MarkInitUploaded(_ context.Context, sessionID string, _ []byte) (bool, error) {
+func (f *fakeUploadStore) MarkInitUploaded(_ context.Context, sessionID string, sha256 []byte, s3Key string, bytes int64, incompatible bool) (index.InitMark, error) {
+	f.mu.Lock()
+	f.initMarks = append(f.initMarks, initMarkCall{sessionID, append([]byte(nil), sha256...), s3Key, bytes, incompatible})
+	hook := f.onInitMark
+	f.mu.Unlock()
+	if hook != nil {
+		return hook(sessionID, sha256)
+	}
+	return index.InitMarkSuccess, nil
+}
+
+func (f *fakeUploadStore) MarkPlaybackUploaded(_ context.Context, streamID string, seq, bytes int64) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.initMarked = append(f.initMarked, sessionID)
+	f.playbackMarked = append(f.playbackMarked, playbackMarkCall{streamID, seq, bytes})
 	return true, nil
 }
 
-func (f *fakeUploadStore) initMarkedSessions() []string {
+func (f *fakeUploadStore) MarkPlaybackFailed(_ context.Context, streamID string, seq int64, sessionID, reason string) (bool, error) {
+	f.mu.Lock()
+	f.playbackFailed = append(f.playbackFailed, playbackFailCall{streamID, seq, sessionID, reason})
+	hook := f.onPlaybackFailed
+	f.mu.Unlock()
+	if hook != nil {
+		return hook(streamID, seq, reason)
+	}
+	return true, nil
+}
+
+// playbackCalls 는 ③ CAS 호출 기록이다.
+func (f *fakeUploadStore) playbackCalls() (marked []playbackMarkCall, failed []playbackFailCall) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]string(nil), f.initMarked...)
+	return append([]playbackMarkCall(nil), f.playbackMarked...), append([]playbackFailCall(nil), f.playbackFailed...)
+}
+
+// initCalls 는 첫 init CAS 호출 기록이다.
+func (f *fakeUploadStore) initCalls() []initMarkCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]initMarkCall(nil), f.initMarks...)
 }
 
 func (f *fakeUploadStore) MarkUploaded(ctx context.Context, streamID string, seq, expectBytes int64) (bool, error) {
@@ -188,22 +247,22 @@ func (f *fakeUploadStore) MarkFailed(ctx context.Context, streamID string, seq, 
 	return true, nil
 }
 
-func (f *fakeUploadStore) PendingUploads(ctx context.Context, tailGraceSecs float64, limit int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+func (f *fakeUploadStore) PendingUploads(ctx context.Context, axis index.Axis, tailGraceSecs float64, limit int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
 	f.mu.Lock()
 	hook := f.onPending
 	f.mu.Unlock()
 	if hook != nil {
-		return hook(ctx, tailGraceSecs, limit, after)
+		return hook(ctx, axis, tailGraceSecs, limit, after)
 	}
 	return nil, after, nil
 }
 
-func (f *fakeUploadStore) CountBacklog(ctx context.Context) (int64, int64, int64, error) {
+func (f *fakeUploadStore) CountBacklog(ctx context.Context, axis index.Axis) (int64, int64, int64, error) {
 	f.mu.Lock()
 	hook := f.onBacklog
 	f.mu.Unlock()
 	if hook != nil {
-		return hook(ctx)
+		return hook(ctx, axis)
 	}
 	return 0, 0, 0, nil
 }

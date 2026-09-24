@@ -254,7 +254,8 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 	}
 
 	// ⑵~⑹ 세션 결정 → 기저 행 → PDT → 세션 쓰기 → 키. carrier 3열이 여기서 정해진다.
-	r, err = s.settleCarrier(txctx, tx, r, src, now.UTC())
+	var opening sessionOpening
+	r, opening, err = s.settleCarrier(txctx, tx, r, src, now.UTC())
 	if err != nil {
 		return InsertInserted, SeedResult{}, err
 	}
@@ -288,7 +289,28 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 	// 여기서부터는 삽입이 **이미 커밋됐다** — 귀속 진단의 실패를 Insert 의 에러로 올리면
 	// 성공한 삽입이 실패로 오보고돼 재시도 → 23505 → (진단 실패 지속 시) 크래시루프가
 	// 된다(cc 리뷰 차단 2, 라이브 재현). 진단 실패는 SeedResult.DiagErr 로만 나른다.
-	return InsertInserted, s.resolveSeed(ctx, r, seed, seeded), nil
+	return InsertInserted, withCommitted(s.resolveSeed(ctx, r, seed, seeded), r, opening), nil
+}
+
+// withCommitted 는 커밋된 carrier 와 세션 개시 결과를 주조 결과에 얹는다.
+//
+// 커밋 뒤 이 한 자리에서만 부른다 — 롤백된 트랜잭션의 개시가 결과로 새어 나가지 않게
+// 하는 구조가 이것이다(앞선 반환은 전부 영값 SeedResult 다).
+func withCommitted(res SeedResult, r Record, o sessionOpening) SeedResult {
+	res.SessionOpened = o.opened
+	res.DiscontinuityBase = o.discontinuityBase
+	res.InheritsSession = o.inheritsSession
+	res.DurationMS = r.DurationMS
+	if r.SessionID != nil {
+		res.SessionID = *r.SessionID
+	}
+	if r.PlaybackPDT != nil {
+		res.PlaybackPDT = *r.PlaybackPDT
+	}
+	if r.PlaybackS3Key != nil {
+		res.PlaybackS3Key = *r.PlaybackS3Key
+	}
+	return res
 }
 
 // ErrSessionContended 는 세션 개시가 one_live_uq 경합으로 밀렸음을 뜻한다.
@@ -311,7 +333,9 @@ var ErrSessionContended = errors.New("index: 세션 개시 경합(one_live_uq) �
 //
 // 비귀속·비개시(정책 거부 또는 CurrentOnly 인데 현 세션 부재)면 ⑷⑸ 를 건너뛰고 셋 다
 // nil 로 남는다 — ⓒ 가 주조를 막아 not_settleable 로 귀속된다(설계 6.5.2 · M2 와 결과 동일).
-func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src SessionSource, now time.Time) (Record, error) {
+//
+// 개시 갈래면 둘째 반환값이 새 세션 행에 쓰인 값을 싣는다(SeedResult 의 개시 통로).
+func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src SessionSource, now time.Time) (Record, sessionOpening, error) {
 	r.SessionID, r.PlaybackPDT, r.PlaybackS3Key = nil, nil, nil
 
 	// ⑵⑶ 갈래와 기저 세션. DB 오류는 삼키지 않는다 — "정책상 안 열었다"와 구분되지 않으면
@@ -321,23 +345,27 @@ func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src Se
 		DurationMS: r.DurationMS, SessionSource: src,
 	}, now)
 	if err != nil {
-		return r, sessionError("세션 결정 실패", err, r)
+		return r, sessionOpening{}, sessionError("세션 결정 실패", err, r)
 	}
 	if !dec.Opens && dec.SessionID == "" {
-		return r, nil
+		return r, sessionOpening{}, nil
 	}
 
 	// ⑷ 기저 행 1행 → PDT. 개시 갈래는 이 값이 곧 새 세션의 first_pdt 라 ⑸ 보다 앞이다.
 	pdt, err := s.playbackPDT(ctx, tx, r, dec.BaseSessionID)
 	if err != nil {
-		return r, err
+		return r, sessionOpening{}, err
 	}
 
 	// ⑸ 개시 갈래만 세션 표를 쓴다(계속 갈래는 세션 표를 건드리지 않는다).
 	sessionID := dec.SessionID
+	var opening sessionOpening
 	if dec.Opens {
 		if sessionID, err = s.decider.Open(ctx, tx, dec, pdt); err != nil {
-			return r, sessionError("세션 개시 실패", err, r)
+			return r, sessionOpening{}, sessionError("세션 개시 실패", err, r)
+		}
+		if opening, err = readOpening(ctx, tx, sessionID); err != nil {
+			return r, sessionOpening{}, err
 		}
 	}
 	r.SessionID, r.PlaybackPDT = &sessionID, &pdt
@@ -348,7 +376,34 @@ func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src Se
 	if key, keyErr := s.playbackKey(r.StreamID, r.Seq); keyErr == nil {
 		r.PlaybackS3Key = &key
 	}
-	return r, nil
+	return r, opening, nil
+}
+
+// sessionOpening 은 이 트랜잭션이 연 세션 행에 쓰인 값이다. 개시가 아니면 영값이다.
+type sessionOpening struct {
+	opened            bool
+	discontinuityBase int64
+	inheritsSession   string
+}
+
+// openedSessionSQL 은 방금 연 세션 행에서 개시가 정한 두 열을 되읽는다.
+//
+// 되읽는 이유: 새 세션 행에 무엇을 쓸지는 결정자의 계획(SessionPlan)이 정하고, index 는
+// 그 계획을 열지 않는다(session.go 경계). 그래서 쓰인 값을 아는 길은 행 자신뿐이다.
+// 같은 트랜잭션이라 커밋될 값 그대로이며, 개시 때만 돌므로 조각마다 왕복이 늘지 않는다.
+const openedSessionSQL = `
+SELECT discontinuity_base, inherits_session FROM stream_sessions WHERE session_id = $1`
+
+func readOpening(ctx context.Context, tx pgx.Tx, sessionID string) (sessionOpening, error) {
+	o := sessionOpening{opened: true}
+	var inherits *string
+	if err := tx.QueryRow(ctx, openedSessionSQL, sessionID).Scan(&o.discontinuityBase, &inherits); err != nil {
+		return sessionOpening{}, fmt.Errorf("개시한 세션 되읽기 실패 session_id=%q: %w", sessionID, err)
+	}
+	if inherits != nil {
+		o.inheritsSession = *inherits
+	}
+	return o, nil
 }
 
 // sessionError 는 세션 결정·개시의 실패를 호출자가 처분할 수 있는 형태로 바꾼다.

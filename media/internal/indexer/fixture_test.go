@@ -13,6 +13,7 @@ import (
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
 )
 
@@ -44,6 +45,15 @@ type fakeStore struct {
 	lastSeed index.Seed
 	// lastSource 는 마지막 Insert 에 동봉된 세션 결정 입력이다(sessionOp 배선 검증용).
 	lastSource index.SessionSource
+
+	// sessions 는 들어간 행마다 앞에서 하나씩 꺼내 쓰는 귀속 세션 대본이다. 세션 결정은 SQL
+	// (session.Registry)이 하지만, 그 결과가 SeedResult 로 루프에 어떻게 닿는지는 여기서 잰다.
+	// "" 는 비귀속(NULL) 행이다. 대본이 비었으면 세션 필드를 채우지 않는다(종전 동작).
+	sessions []string
+	// lastSession·lastPDT·lastDurMS 는 대본으로 귀속한 스트림별 마지막 행이다(개시·PDT 흉내).
+	lastSession map[string]string
+	lastPDT     map[string]time.Time
+	lastDurMS   map[string]int32
 }
 
 type updateTailCall struct {
@@ -61,7 +71,50 @@ func (s *fakeStore) insertCallCount() int {
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{rows: map[string][]index.Record{}}
+	return &fakeStore{
+		rows:        map[string][]index.Record{},
+		lastSession: map[string]string{},
+		lastPDT:     map[string]time.Time{},
+		lastDurMS:   map[string]int32{},
+	}
+}
+
+// scriptSessions 는 다음에 들어갈 행들의 귀속 세션을 차례로 정한다("" = 비귀속).
+func (s *fakeStore) scriptSessions(ids ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions = append(s.sessions, ids...)
+}
+
+// attribute 는 대본의 다음 세션으로 SeedResult 의 개시 통로 8필드를 채운다 — store.go
+// withCommitted 와 같은 뜻이다: 개시 = 직전 귀속 세션과 다른 세션, PDT = 개시면 벽시계·
+// 아니면 max(직전 PDT + 직전 길이, 벽시계)(설계 5.1.1 재귀식), 키 = playback.SegKey(실패면 NULL).
+// base·계승·직전 첫 조각은 ⓐ 의 개시 값(0 · "" · "")이다. s.mu 를 쥔 채로 부른다.
+func (s *fakeStore) attribute(r index.Record, res index.SeedResult) index.SeedResult {
+	res.DurationMS = r.DurationMS
+	if len(s.sessions) == 0 {
+		return res
+	}
+	sid := s.sessions[0]
+	s.sessions = s.sessions[1:]
+	if sid == "" {
+		return res
+	}
+	res.SessionID = sid
+	res.SessionOpened = s.lastSession[r.StreamID] != sid
+	pdt := r.StartWallUTC.UTC()
+	if !res.SessionOpened {
+		carried := s.lastPDT[r.StreamID].Add(time.Duration(s.lastDurMS[r.StreamID]) * time.Millisecond)
+		if carried.After(pdt) {
+			pdt = carried
+		}
+	}
+	res.PlaybackPDT = pdt
+	if key, err := playback.SegKey(r.StreamID, r.Seq); err == nil {
+		res.PlaybackS3Key = key
+	}
+	s.lastSession[r.StreamID], s.lastPDT[r.StreamID], s.lastDurMS[r.StreamID] = sid, pdt, r.DurationMS
+	return res
 }
 
 func (s *fakeStore) seed(recs ...index.Record) {
@@ -139,13 +192,13 @@ func (s *fakeStore) Insert(_ context.Context, r index.Record, seed index.Seed, s
 	}
 	s.rows[r.StreamID] = append(s.rows[r.StreamID], r)
 	if s.seeds && seed.Eligible {
-		return index.InsertInserted, index.SeedResult{Seeded: true}, nil
+		return index.InsertInserted, s.attribute(r, index.SeedResult{Seeded: true}), nil
 	}
 	decline := s.declineAs
 	if decline == index.DeclineNone {
 		decline = index.DeclineNoCorroboration
 	}
-	return index.InsertInserted, index.SeedResult{Decline: decline}, nil
+	return index.InsertInserted, s.attribute(r, index.SeedResult{Decline: decline}), nil
 }
 
 func (s *fakeStore) UpdateTail(_ context.Context, streamID string, seq int64, durationMS int32, bytes int64) (bool, error) {
@@ -318,6 +371,25 @@ func (c *logCapture) attrs(msg string) map[string]any {
 	return out
 }
 
+// attrsAll 은 그 메시지의 기록 전부에서 속성을 뽑는다(기록 순서대로).
+func (c *logCapture) attrsAll(msg string) []map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []map[string]any
+	for i := range c.records {
+		if c.records[i].Message != msg {
+			continue
+		}
+		m := map[string]any{}
+		c.records[i].Attrs(func(a slog.Attr) bool {
+			m[a.Key] = a.Value.Any()
+			return true
+		})
+		out = append(out, m)
+	}
+	return out
+}
+
 func (c *logCapture) errorCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -471,4 +543,17 @@ func (f *fakeUploadRequester) targets() []index.UploadTarget {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]index.UploadTarget(nil), f.got...)
+}
+
+// targetsOf 는 그 축의 요청만 요청 순서대로 돌려준다(거부된 요청 포함).
+func (f *fakeUploadRequester) targetsOf(axis index.Axis) []index.UploadTarget {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []index.UploadTarget
+	for _, t := range f.got {
+		if t.Axis == axis {
+			out = append(out, t)
+		}
+	}
+	return out
 }
