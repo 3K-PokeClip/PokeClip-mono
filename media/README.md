@@ -408,8 +408,8 @@ MediaMTX 녹화 파일(영상 1 + 소리 6)
   `TestRemuxMediacommonVersionMatchesRecorderPin` 이 `media/go.mod` 의 핀을 지키고,
   `TestRemuxOutputBytesGolden` 이 산출 바이트를 고정한다.
 - **파트를 다시 자르지 않는다.** 입력 파트 수 = 산출 파트 수이고 `mfra` 도 붙이지 않는다.
-- **init 과 조각을 한 번에 낸다.** init 은 트랙 파라미터만의 순수 함수라, 같은 송출 설정이면
-  같은 회차의 어느 조각에서 만들어도 바이트가 같다(실측: 150조각·연결 3회 교체에 해시 1종).
+- **init 과 조각을 한 번에 낸다.** init 은 트랙 파라미터만의 순수 함수라, 같은 송출 설정·같은
+  재포장 산출(골든)이면 같은 회차의 어느 조각에서 만들어도 바이트가 같다(실측: 150조각·연결 3회 교체에 해시 1종).
 
 #### 시간 도장 — mtxi 에 보정값을 더한다
 
@@ -679,7 +679,7 @@ kty 결정(2026-09-19): *"사이드카가 재기동 되는 경우는 고려하�
 - 운영 장비의 재포장 소요·메모리는 모른다. 호스트·dev 컨테이너 실측값만 있다.
 - 워커가 여럿일 때의 보류 목록 경합은 실측할 수 없다(워커가 하나다). 잠금 설계와 `-race`
   테스트로만 확인했다.
-- 슬레이트가 켜진 dev 경로(`pokeclip-m4-test`)에서는 송출자가 재접속해도 mtxi 누적값이 0 으로
+- 슬레이트가 켜진 dev 경로(`pokeclip-m4-test` — 이 PR 이 아니라 별도 dev 소PR 이 넣는 경로)에서는 송출자가 재접속해도 mtxi 누적값이 0 으로
   돌아가지 않았다(서버가 슬레이트를 내보내는 동안 녹화기 시간축이 계속 흐른다). 이 문서의
   「연결이 바뀌면 0 으로 돌아간다」는 슬레이트 없는 경로의 실측이다. 사이드카가 살아 있으면 같은
   녹화기 안 구멍 규칙이 이음을 맡으므로 결과는 같다.
@@ -758,9 +758,9 @@ done
 `go test`만 있으면 되고 Docker는 필요 없지만, 다른 테스트보다 몇 초 더 걸린다.
 
 CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리지를 함께 재고,
-`internal/index`·`internal/upload`·`internal/indexer`·`internal/session`·`internal/mtxstate`
-**다섯 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(뒤 둘은 POK-195 M3에서 추가 —
-되감기 판정 로직이 그 안에 있다). 나머지 패키지는 수치만 로그에 남고 게이트 대상이 아니다.
+`internal/index`·`internal/upload`·`internal/indexer`·`internal/session`·`internal/mtxstate`·`internal/playback`
+**여섯 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(`session`·`mtxstate` 는 POK-195 M3에서,
+`playback` 은 M4 ⓐ 에서 추가 — 되감기 판정 로직과 ③ 바이트를 만드는 층이 그 안에 있다). 나머지 패키지는 수치만 로그에 남고 게이트 대상이 아니다.
 
 ## MediaMTX 버전업 체크리스트
 
