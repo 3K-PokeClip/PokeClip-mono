@@ -269,7 +269,7 @@ class LiveBroadcastClientTest {
     @Test
     void clip_주소가_비면_이_클라이언트를_만들_때_부팅이_죽는다() {
         ReattachProperties blankUrl = new ReattachProperties(
-                "", true, Duration.ofMinutes(1), Duration.ofSeconds(5));
+                "", true, Duration.ofMinutes(1), Duration.ofSeconds(5), false, null);
 
         assertThatThrownBy(() -> new LiveBroadcastClient(
                 RestClient.builder(), blankUrl, linkProperties()))
@@ -337,7 +337,7 @@ class LiveBroadcastClientTest {
     }
 
     private ReattachProperties reattachProperties() {
-        return new ReattachProperties(clip.baseUrl(), true, Duration.ofMinutes(1), Duration.ofSeconds(5));
+        return new ReattachProperties(clip.baseUrl(), true, Duration.ofMinutes(1), Duration.ofSeconds(5), false, null);
     }
 
     private LinkProperties linkProperties() {

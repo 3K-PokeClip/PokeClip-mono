@@ -4,13 +4,18 @@ import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.CollectionStatus;
 import com.pokeclip.chat.collector.StopReason;
 import com.pokeclip.chat.collector.archive.ChatArchive;
+import com.pokeclip.chat.collector.chzzk.DonationSubscription;
 import com.pokeclip.chat.collector.chzzk.SessionEstablishException;
+import com.pokeclip.chat.collector.status.DonationSubscriptions;
 import com.pokeclip.chat.collector.observe.CollectionMetrics;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
+import com.pokeclip.chat.collector.relay.RelaySink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -18,6 +23,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -203,9 +209,39 @@ public class SessionRegistry {
     private final ChatBuffer buffer;
     private final ChatPersister persister;
     private final ChatArchive archive;
+    private final DonationSubscriptions donations;
+    private final DonationBuffer donationBuffer;
+    /** clip 중계 입구. 꺼져 있으면 {@link RelaySink#NONE}(RelayConfiguration). 세션에 넘기고 닫힐 때 번호를 잊힌다. */
+    private final RelaySink relay;
+
+    /**
+     * 후원 바구니가 버린 수. <b>판정 줄이 이 값을 싣는다</b>(봇 codex).
+     *
+     * <p>러너 생성자에 바구니를 더하지 않고 여기로 낸다 — 그 생성자는 부르는 곳이 29군데다.
+     * 값이 사는 곳을 안 옮기고 <b>보는 길만</b> 하나 낸다.
+     */
+    public long donationDroppedCount() {
+        return donationBuffer.droppedCount();
+    }
 
     public SessionRegistry(ChzzkProperties properties, RestClient.Builder restClientBuilder,
                            ChatBuffer buffer, ChatPersister persister, ChatArchive archive) {
+        this(properties, restClientBuilder, buffer, persister, archive,
+                new DonationSubscriptions(), new DonationBuffer());
+    }
+
+    /** 중계 없이 쓰는 검사용 — 시험 여러 곳이 이 모양을 부른다. 새 인자를 거기까지 퍼뜨리지 않는다. */
+    public SessionRegistry(ChzzkProperties properties, RestClient.Builder restClientBuilder,
+                           ChatBuffer buffer, ChatPersister persister, ChatArchive archive,
+                           DonationSubscriptions donations, DonationBuffer donationBuffer) {
+        this(properties, restClientBuilder, buffer, persister, archive, donations, donationBuffer, RelaySink.NONE);
+    }
+
+    @Autowired
+    public SessionRegistry(ChzzkProperties properties, RestClient.Builder restClientBuilder,
+                           ChatBuffer buffer, ChatPersister persister, ChatArchive archive,
+                           DonationSubscriptions donations, DonationBuffer donationBuffer,
+                           RelaySink relay) {
         this.properties = properties;
         // 빌더는 프로토타입 빈이다. 한 번만 build()해서 세션 전부가 나눠 쓴다.
         // <b>{@code RestClient.create()}로 만들지 마라</b> — 자동 설정을 우회해
@@ -214,6 +250,20 @@ public class SessionRegistry {
         this.buffer = buffer;
         this.persister = persister;
         this.archive = archive;
+        this.donations = donations;
+        this.donationBuffer = donationBuffer;
+        this.relay = relay;
+    }
+
+    /**
+     * 이 방송의 후원 구독 상태. 등록부에 없으면 {@link DonationSubscription#NONE}이다.
+     *
+     * <p><b>{@link #statusOf}와 한 스냅숏으로 묶지 않았다.</b> 그 둘을 이어 읽으면 사이에
+     * 상태가 바뀔 수 있는데, 후원 상태는 채팅 상태 기계의 전이와 무관해서 「reconnecting인데
+     * 끊긴 시각 없음」 같은 자기모순이 안 생긴다 — 묶어서 얻는 것이 없다.
+     */
+    public DonationSubscription donationStateOf(String streamId) {
+        return donations.of(streamId);
     }
 
     /**
@@ -263,6 +313,7 @@ public class SessionRegistry {
                 new ReconnectPolicy(properties.reconnectFirstDelay(), properties.reconnectMaxDelay()),
                 restClient, buffer, persister, archive,
                 reconnectors, stopSignal, intakeClosed, releasesInFlight, lastSessionNo,
+                donations, donationBuffer, relay,
                 reason -> stopOne(streamerId, self.get(), reason));
         self.set(session);
         Entry entry = new Entry(session, status, metrics, stopSignal);
@@ -428,6 +479,9 @@ public class SessionRegistry {
         // 지표는 새 경계에서 0부터 다시 세므로, 안 옮기면 그만큼 총량이 줄어
         // 판정 줄이 유실로 읽는다.
         closedReceived.addAndGet(seated.session().retarget(key));
+        // 끝난 방송의 중계 번호를 잊는다(F6). 갈아낀 뒤라 그 번호로 새로 들어올 프레임이 없다 —
+        // 옛 번호를 이미 읽고 멈춰 있던 수신 스레드 한 건만 되살릴 수 있고 방송당 long 하나라 둔다.
+        relay.forget(current.streamId());
         // <b>바꾼 뒤 자리를 다시 본다.</b> 위 조회와 여기 사이에 그 세션이 영구 정지로
         // 자리를 잃었을 수 있고, 그러면 방금 이름을 바꾼 것은 <b>이미 닫힌 세션</b>이다.
         // 그때 true를 돌려주면 편지가 지워지는데 등록부에는 이 방송이 없다 — 영구 유실이다
@@ -587,6 +641,55 @@ public class SessionRegistry {
         return sessions.values().stream()
                 .map(e -> e.session().key().streamId())
                 .toList();
+    }
+
+    /**
+     * 소켓이 붙어 있거나 다시 붙는 중인 세션(POK-234 PR-C 방송 정보 수집). 수립 중·정지는 뺀다 —
+     * 방송 정보는 채팅을 걷고 있는 방송에만 남긴다. 옛 경로 세션(방송 번호 없음)도 뺀다.
+     *
+     * @param accessToken 로그에 싣지 마라
+     */
+    public List<ActiveSession> activeSessions() {
+        List<ActiveSession> out = new ArrayList<>();
+        for (Entry entry : sessions.values()) {
+            CollectionStatus.State state = entry.status().state();
+            SessionKey key = entry.session().key();
+            if ((state == CollectionStatus.State.COLLECTING || state == CollectionStatus.State.RECONNECTING)
+                    && key.streamId() != null && key.channelId() != null) {
+                out.add(new ActiveSession(key.streamId(), key.streamerId(), key.channelId(),
+                        entry.session().accessToken()));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 걷고 있는 방송의 번호·스트리머·시작 시각(편지의 {@code occurredAt}, 재부착이면 clip 명부의 값).
+     * 떼기(POK-244)가 「명부에 없는데 붙어 있는 방송」을 고를 때 쓴다 — {@link #activeSessions()}와 같은
+     * 상태(수집 중·재연결 중)만 담고, 옛 경로 세션(방송 번호 없음)은 뺀다.
+     */
+    public List<ActiveStart> activeStreamStarts() {
+        List<ActiveStart> out = new ArrayList<>();
+        for (Entry entry : sessions.values()) {
+            CollectionStatus.State state = entry.status().state();
+            SessionKey key = entry.session().key();
+            if ((state == CollectionStatus.State.COLLECTING || state == CollectionStatus.State.RECONNECTING)
+                    && key.streamId() != null) {
+                out.add(new ActiveStart(key.streamId(), key.streamerId(), key.startedAt()));
+            }
+        }
+        return out;
+    }
+
+    /** 떼기가 보는 최소 정보 — 방송 번호·스트리머·시작 시각. 토큰은 일부러 없다. */
+    public record ActiveStart(String streamId, long streamerId, Instant startedAt) {
+    }
+
+    public record ActiveSession(String streamId, long streamerId, String channelId, String accessToken) {
+        @Override
+        public String toString() {
+            return "ActiveSession[streamId=" + streamId + ", streamerId=" + streamerId + ", channelId=" + channelId + "]";
+        }
     }
 
     /**
@@ -771,10 +874,17 @@ public class SessionRegistry {
      *                 {@code stopSignal} 이후에 흘러든 채팅이 빠진다
      */
     private void closeEntry(String streamId, Entry entry, long detached) {
+        // <b>자리를 뺀 방송의 후원 상태를 지운다.</b> 안 지우면 끝난 방송의 값이 창구
+        // 메모리에 영영 남고, 프로세스가 오래 돌수록 방송 수만큼 쌓인다.
+        // 여기가 자리를 빼는 길 전부가 모이는 유일한 자리다(close·stopOne·closeAll).
+        donations.remove(streamId);
         entry.stopSignal().countDown();
         try {
             entry.session().close();
         } finally {
+            // 🔴 <b>닫은 뒤에</b> 잊는다(F6). 위 후원 상태처럼 닫기 전에 지우면, 닫히는 사이 온 프레임이
+            // 번호 카운터를 1부터 되살려 영영 남는다.
+            relay.forget(streamId);
             closedReceived.addAndGet(entry.metrics().totalReceived() - detached);
             log.info("chat.registry.closed stream={} active={}", streamId, sessions.size());
         }

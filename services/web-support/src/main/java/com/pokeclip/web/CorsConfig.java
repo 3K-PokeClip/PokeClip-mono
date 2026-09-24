@@ -30,8 +30,10 @@ public class CorsConfig {
         // "누군가 쓰고 있다"는 뜻으로 읽히므로 실제 창구가 생길 때 같이 넣는다.
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE"));
         config.setAllowedHeaders(List.of("Authorization", "Content-Type"));
-        // 쿠키를 안 쓴다. 토큰은 Authorization 헤더로 온다.
-        config.setAllowCredentials(false);
+        // 토큰은 Authorization 헤더로 오므로 기본은 쿠키를 안 받는다(false). clip만 켠다 —
+        // 영상 출입증(POK-122)이 CloudFront 서명 쿠키를 Set-Cookie로 주고, 앱이 다른 오리진에서
+        // credentials: 'include'로 불러야 브라우저가 그 쿠키를 받는다. auth는 그대로 false다.
+        config.setAllowCredentials(properties.allowCredentials());
         config.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

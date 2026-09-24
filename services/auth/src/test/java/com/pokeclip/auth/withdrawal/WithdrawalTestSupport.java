@@ -61,7 +61,8 @@ public abstract class WithdrawalTestSupport extends IntegrationTestSupport {
      * <p>자식을 먼저 지운다 — {@code refresh_tokens}({@link #bearer}가 만든다) ·
      * {@code pairing_codes}·{@code stream_keys}(스트림키 갈래가 만든다) ·
      * {@code chzzk_channel_links}·{@code youtube_channel_links}(연동 갈래가 만든다) ·
-     * {@code editor_delegations}·{@code editor_invitations}(편집자 관계 갈래가 만든다).
+     * {@code editor_delegations}·{@code editor_invitations}(편집자 관계 갈래가 만든다) ·
+     * {@code audio_track_labels}(트랙 이름 갈래가 만든다).
      * <b>이 목록은 이 계층이 실제로 만드는 것까지다</b> — 새 표를 심는 시험을 더하는 태스크는
      * 자기 표를 여기 같이 더한다. 안 더하면 다음 클래스의 부모 정리가 외래키로 막힌다.
      *
@@ -94,6 +95,8 @@ public abstract class WithdrawalTestSupport extends IntegrationTestSupport {
             jdbc.update("DELETE FROM editor_delegations WHERE streamer_id = ? OR editor_id = ?", id, id);
             jdbc.update("DELETE FROM editor_invitations WHERE streamer_id = ? OR invitee_id = ?", id, id);
             jdbc.update("DELETE FROM refresh_tokens WHERE user_id = ?", id);
+            // CASCADE라 users 삭제에 딸려가지만, 목록이 곧 「이 계층이 심는 표」의 명부라 적어 둔다.
+            jdbc.update("DELETE FROM audio_track_labels WHERE user_id = ?", id);
             jdbc.update("DELETE FROM users WHERE id = ?", id);
         }
         심은_회원.clear();

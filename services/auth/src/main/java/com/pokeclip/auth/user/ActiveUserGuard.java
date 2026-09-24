@@ -49,7 +49,7 @@ import org.springframework.stereotype.Component;
  * <p><b>{@code site}는 상수만 넘긴다.</b> 로그로 나가는 값이라 이메일·이름·채널 이름이 들어가면 안 된다
  * ({@code SecretLeakTest}가 본다).
  *
- * <h2>🔴 전수 명부 — 막는 자리 8자리 · 7파일 · 가드 밖 회원 행 락 6자리</h2>
+ * <h2>🔴 전수 명부 — 막는 자리 9자리 · 8파일 · 가드 밖 회원 행 락 6자리</h2>
  *
  * <p>🔴 <b>숫자는 바로 위 한 줄에만 있다 — 아래 표에는 세어 둔 수를 안 적는다.</b>
  * 두 군데 적으면 한쪽만 고치는 날이 오고, <b>이 세션에서만 그 일이 세 번</b> 났다
@@ -82,6 +82,8 @@ import org.springframework.stereotype.Component;
  *     <td><b>남는다</b>(락 없음)</td></tr>
  * <tr><td>🔴 {@code TokenService.rotate}</td><td>일괄 폐기를 <b>넘어 살아남은 갱신 표</b>의 회전</td>
  *     <td>없다(락과 함께)</td></tr>
+ * <tr><td>{@code AudioTrackLabelService.update}</td><td>오디오 트랙 이름 행(POK-240) — 탈퇴자에게 새 설정을 만들어 주는 쓰기</td>
+ *     <td>필터 통과 → 탈퇴 커밋 → 저장. 거절 뒤 밖에 남는 것 없음(표 하나뿐)</td></tr>
  * </table>
  *
  * <p>🔴 <b>{@code TokenService.rotate}가 이 표에서 가장 늦게 들어왔다</b>(사용자 결정 2026-08-31).

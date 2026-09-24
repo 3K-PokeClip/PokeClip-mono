@@ -20,7 +20,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @SpringBootApplication
 @ConfigurationPropertiesScan({"com.pokeclip.auth", "com.pokeclip.web"})
 @Import({CorsConfig.class, WebConfig.class})
-// 치지직 토큰 갱신 스케줄러(ChzzkTokenRefreshScheduler). 테스트 프로파일은 그 빈 자체를 끈다.
+// 스케줄러 셋 — 치지직 토큰 갱신·유튜브 철회 점검·보관 기한 청소(retention). 테스트 프로파일은 그 빈들을 끈다.
 @EnableScheduling
 public class AuthApplication {
 

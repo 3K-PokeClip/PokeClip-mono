@@ -129,7 +129,7 @@ class StreamIdStampingTest extends IntegrationTestSupport {
                 // 설정 토큰은 안 쓰인다 — 세션마다 자기 토큰으로 붙는다(SessionRegistryTest).
                 new ChzzkProperties(true, "설정-토큰-쓰면-안-된다",
                         "http://localhost:" + port, Duration.ofSeconds(5),
-                        Duration.ofMillis(200), Duration.ofSeconds(60)),
+                        Duration.ofMillis(200), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 restClientBuilder, buffer, persister, ChatArchive.NONE);
     }
 

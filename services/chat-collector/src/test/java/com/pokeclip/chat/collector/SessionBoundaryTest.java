@@ -62,7 +62,7 @@ class SessionBoundaryTest extends IntegrationTestSupport {
         status = new CollectionStatus();
         runner = new CollectorRunner(new ChzzkProperties(
                 true, "test-token", "http://localhost:" + port,
-                Duration.ofSeconds(5), Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                Duration.ofSeconds(5), Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 status, restClientBuilder,
                         TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         runner.start();

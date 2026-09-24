@@ -1,4 +1,11 @@
-import { Captions, Image as ImageIcon, Music, Scissors, SlidersHorizontal } from 'lucide-react';
+import {
+  Captions,
+  Image as ImageIcon,
+  LayoutTemplate,
+  Music,
+  Scissors,
+  SlidersHorizontal,
+} from 'lucide-react';
 import type { ComponentType } from 'react';
 import { RovingProvider, useRovingItem } from '@/ui/primitives';
 import { PanelSideIcon } from './PanelSideIcon';
@@ -9,6 +16,7 @@ import type { EditorPanelSide, EditorTool } from '../useClipEditorMockState';
 // 탭 시맨틱(tablist/tab)에 roving tabindex를 얹어 화살표로 도구를 옮길 수 있게 한다.
 
 const TOOL_ICONS: Record<EditorTool, ComponentType<{ size?: number }>> = {
+  layout: LayoutTemplate,
   range: Scissors,
   subtitle: Captions,
   audio: SlidersHorizontal,

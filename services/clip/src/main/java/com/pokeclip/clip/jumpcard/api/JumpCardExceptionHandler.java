@@ -1,5 +1,6 @@
 package com.pokeclip.clip.jumpcard.api;
 
+import com.pokeclip.clip.collector.CollectorErrors;
 import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.BroadcastNotFoundException;
 import com.pokeclip.clip.jumpcard.JumpCardErrors.ClaimedByOtherException;
@@ -11,6 +12,9 @@ import com.pokeclip.clip.jumpcard.JumpCardErrors.TokenAlreadyExpiredException;
 import com.pokeclip.clip.jumpcard.JumpCardSnapshot;
 import com.pokeclip.clip.paging.InvalidCursorException;
 import com.pokeclip.clip.paging.InvalidListParamException;
+import com.pokeclip.clip.playback.PlaybackErrors;
+import com.pokeclip.clip.recipe.RecipeErrors;
+import com.pokeclip.clip.render.RenderErrors;
 import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -158,6 +162,96 @@ public class JumpCardExceptionHandler {
     @ExceptionHandler(AccessErrors.AuthUnavailableException.class)
     ResponseEntity<Map<String, Object>> authUnavailable(AccessErrors.AuthUnavailableException e) {
         return json(HttpStatus.SERVICE_UNAVAILABLE, error("authorization_unavailable"));
+    }
+
+    /**
+     * 503. <b>{@code authorization_unavailable}과 낱말이 갈린다</b> — 둘 다 「잠시 뒤 다시」이지만
+     * 화면 안내가 다르다. 자격을 못 물으면 아무것도 못 보고, 수집기를 못 부르면 <b>채팅만</b>
+     * 안 보이고 카드 편집은 그대로 된다.
+     *
+     * <p><b>빈 목록으로 접지 않는다</b>(위 둘과 같은 이유) — 화면이 「그 구간에 채팅이 없었다」로
+     * 단정하면 수집기가 살아난 뒤에도 편집자는 다시 누르지 않는다.
+     */
+    @ExceptionHandler(CollectorErrors.CollectorUnavailableException.class)
+    ResponseEntity<Map<String, Object>> collectorUnavailable(CollectorErrors.CollectorUnavailableException e) {
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("collector_unavailable"));
+    }
+
+    /**
+     * 503. 출입증 문(POK-122) 하나만 쓴다 — 서명 재료가 비었거나(로컬·설정 누락) 방송 번호가
+     * 정책에 못 들어가는 모양이다. <b>404로 접지 않는다</b>: 자격은 이미 통과한 뒤라 「없는 방송」이
+     * 아니고, 화면이 그렇게 단정하면 설정을 채운 뒤에도 다시 안 누른다.
+     * {@code authorization_unavailable}과 낱말을 가르는 이유는 위 둘과 같다 — 안내가 다르다.
+     */
+    @ExceptionHandler(PlaybackErrors.SigningUnavailableException.class)
+    ResponseEntity<Map<String, Object>> playbackSigningUnavailable(PlaybackErrors.SigningUnavailableException e) {
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("playback_signing_unavailable"));
+    }
+
+    // ── POK-124: 레시피 문 넷이 쓰는 갈래 ──────────
+
+    /**
+     * 404. <b>레시피 번호는 자격 판정 뒤에만 찾는다</b>(서비스 순서)이라 여기 오는 요청은 이미 그 방송을 볼 수
+     * 있는 사람이다 — 그래서 {@code broadcast_not_found}와 낱말을 가른다. 다른 방송의 번호를 넣어도 이것이
+     * 나가므로(리포지터리가 방송 번호를 같이 건다) 번호를 훑어 남의 방송 레시피 수를 셀 수는 없다.
+     * 바닥은 위 404들과 같이 탄다 — 「내 방송에 없는 번호」와 「남의 방송에 있는 번호」가 시간으로 갈리면 안 된다.
+     */
+    @ExceptionHandler(RecipeErrors.RecipeNotFoundException.class)
+    ResponseEntity<Map<String, Object>> recipeNotFound(RecipeErrors.RecipeNotFoundException e,
+                                                       HttpServletRequest request) {
+        NotFoundFloor.awaitFloorIfMarked(request);
+        return json(HttpStatus.NOT_FOUND, error("recipe_not_found"));
+    }
+
+    /** 400. 계약6 모양이 아니다. {@code field}는 칸 경로 또는 덩어리 이름이고 값은 안 싣는다. */
+    @ExceptionHandler(RecipeErrors.InvalidRecipeException.class)
+    ResponseEntity<Map<String, Object>> invalidRecipe(RecipeErrors.InvalidRecipeException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    // ── POK-125: 영상 만들기 주문·보고 문이 쓰는 갈래 ──────────
+
+    /** 404. 그 방송에 그 번호의 영상이 없다. 바닥은 위 404들과 같이 탄다. */
+    @ExceptionHandler(RenderErrors.ClipNotFoundException.class)
+    ResponseEntity<Map<String, Object>> clipNotFound(RenderErrors.ClipNotFoundException e, HttpServletRequest request) {
+        NotFoundFloor.awaitFloorIfMarked(request);
+        return json(HttpStatus.NOT_FOUND, error("clip_not_found"));
+    }
+
+    /** 503. 주문줄이 꺼져 있다 — 404로 접지 않는다(설정을 채운 뒤 다시 누르게). {@code playback_signing_unavailable}과 같은 자세. */
+    @ExceptionHandler(RenderErrors.RenderUnavailableException.class)
+    ResponseEntity<Map<String, Object>> renderUnavailable(RenderErrors.RenderUnavailableException e) {
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("render_unavailable"));
+    }
+
+    /** 400. 구간이 없는 템플릿은 주문할 수 없다 — {@code field:"cut"}. */
+    @ExceptionHandler(RenderErrors.RecipeNotRenderableException.class)
+    ResponseEntity<Map<String, Object>> recipeNotRenderable(RenderErrors.RecipeNotRenderableException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    /** 409. 조각이 아직 다 안 올라왔다. 잠시 뒤 다시 — 잘라서 주문하지 않는다. */
+    @ExceptionHandler(RenderErrors.SourceNotReadyException.class)
+    ResponseEntity<Map<String, Object>> sourceNotReady(RenderErrors.SourceNotReadyException e) {
+        return json(HttpStatus.CONFLICT, error("source_not_ready"));
+    }
+
+    /** 422. 주문서가 큐 상한을 넘는다(계약1 2절 {@code MESSAGE_TOO_LARGE} — 발행 API 축의 코드). */
+    @ExceptionHandler(RenderErrors.MessageTooLargeException.class)
+    ResponseEntity<Map<String, Object>> messageTooLarge(RenderErrors.MessageTooLargeException e) {
+        return json(HttpStatus.UNPROCESSABLE_CONTENT, error("message_too_large"));
+    }
+
+    /** 404(내부 문). 모르는 잡. 바닥을 안 탄다 — 서버 간 토큰이라 감출 존재가 없다({@code broadcastNotFound}와 같은 이유). */
+    @ExceptionHandler(RenderErrors.JobNotFoundException.class)
+    ResponseEntity<Map<String, Object>> jobNotFound(RenderErrors.JobNotFoundException e) {
+        return json(HttpStatus.NOT_FOUND, error("job_not_found"));
+    }
+
+    /** 400(내부 문). 보고 본문이 계약 모양이 아니다. */
+    @ExceptionHandler(RenderErrors.InvalidJobEventException.class)
+    ResponseEntity<Map<String, Object>> invalidJobEvent(RenderErrors.InvalidJobEventException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
     }
 
     /**

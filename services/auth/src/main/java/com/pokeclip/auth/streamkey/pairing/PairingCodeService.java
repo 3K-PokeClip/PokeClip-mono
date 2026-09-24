@@ -101,8 +101,9 @@ public class PairingCodeService {
      * 통째로 죽는 것이고, 그것을 전제로 한 "사유 구분" 결정까지 같이 무너진다.
      * PairingAttemptRecorder가 그래서 있다.
      *
-     * <p>거부당한 시도도 행을 만든다. 그래야 rate limit이 작동하는데,
-     * <b>청소 작업이 없어 이것이 디스크가 차는 경로다</b>(알려진 구멍 1번).
+     * <p>거부당한 시도도 행을 만든다. 그래야 rate limit이 작동한다. 행은 보관 기간(1시간,
+     * {@code pokeclip.retention.pairing-attempts-keep-for}) 뒤에 청소가 지운다(POK-90) — 이 표에는
+     * 회원 칸이 없어 탈퇴가 못 지우고, 청소가 유일한 삭제 경로다.
      */
     private void recordAttemptAndCheckRate(String clientIp, Instant now) {
         long recentAttempts = attemptRecorder.recordAndCount(

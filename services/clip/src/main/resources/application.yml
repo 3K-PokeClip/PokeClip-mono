@@ -131,6 +131,16 @@ pokeclip:
     # chat-collector는 localhost 기본값을 주는데 그쪽은 조건부(편지 경로)라 처지가 다르다.
     base-url: ${AUTH_BASE_URL:}
 
+  collector-client:
+    # 수집기(chat-collector, 8083) 내부 창구 주소. 🔴 비어도 부팅은 산다 — auth-client와
+    # 다른 이유는, 자격 판정이 없으면 사람 문 전부가 무방비지만 수집기가 없으면 채팅 문 셋만
+    # 503이고 카드 편집·목록·통로는 그대로 돌기 때문이다. 그 셋까지 같이 죽이는 것이 더 나쁘다.
+    base-url: ${COLLECTOR_BASE_URL:}
+    # 전역 spring.http.clients.*(2s+5s)와 따로 둔다. 채팅 문은 그 앞에 auth 자격 판정을
+    # 태우고 그 왕복만 최악 7초라, 같은 값을 얹으면 사람이 최악 14초를 기다린다.
+    connect-timeout: 2s
+    read-timeout: 3s
+
   jump-card:
     # 집은 카드를 놓지 않아도 이 시간이 지나면 누구나 다시 집는다. 만료를 치우는 배경
     # 작업이 없고 집을 때 판정한다. 측정값이 아니라 추정이다 — 편집자가 한 카드를 붙들고
@@ -174,8 +184,59 @@ pokeclip:
       # SQS 롱폴링 최대값. 짧게 잡으면 빈 응답만 반복해 요청 수가 는다.
       wait-time: 20s
       max-messages: 10
+    reaper:
+      # 놓친 방송 치우기(POK-244). 종료 편지를 못 받은 방송이 영원히 live로 남지 않게, 마지막 조각(1번 장부)
+      # 뒤로 grace만큼 조용하면 ended로 굳힌다. 편지가 정상이면 한 번도 안 돈다.
+      # 기본이 꺼짐이다 — 켜는 것은 운영자의 결정이다(유예가 짧으면 살아있는 방송을 닫는다).
+      enabled: ${BROADCAST_REAPER_ENABLED:false}
+      interval: ${BROADCAST_REAPER_INTERVAL:PT1M}
+      # 🔴 20분 미만은 부팅이 거부한다 — 편지는 마지막 조각 뒤 정산 창 15분이 지나야 만들어지고 전달·처리가
+      # 더 걸린다(계약9 게이트 ④·계약-세그먼트인덱스 6-5). 정산 창과 같은 값이면 늘 경주한다. 30분 = 여유 15분.
+      # 🔴 켜져 있는데 stream_segments 표(1번 장부)가 없으면 부팅이 거부된다 — media 없는 배포에서 켜지 마라.
+      grace: ${BROADCAST_REAPER_GRACE:PT30M}
+
+  render:
+    # 영상 만들기 주문(POK-125). 기본이 꺼짐이다 — 켜져 있으면 CI·남의 로컬이 뜰 때마다 없는 큐에 붙으려 한다.
+    # 꺼진 채로 주문 문을 부르면 503 render_unavailable. 보고 문(/internal/jobs)과 조회 문은 꺼져 있어도 돈다.
+    enabled: ${RENDER_ENABLED:false}
+    # 켜져 있을 때만 필수 넷(RenderProperties가 검사한다). 큐 둘은 계약1 1절 jobs-render + 전용 DLQ.
+    queue-url: ${RENDER_QUEUE_URL:}
+    dlq-url: ${RENDER_DLQ_URL:}
+    region: ${AWS_REGION:ap-northeast-2}
+    # 비면 진짜 AWS. 로컬 실측 때만 LocalStack 주소를 준다.
+    endpoint: ${RENDER_QUEUE_ENDPOINT:}
+    # 완성 영상이 놓일 창고. 주문서의 outputPrefix = s3://{이 값}/clips/{clipId}.
+    output-bucket: ${CLIPS_BUCKET:}
+    # 조각(1번 장부 s3_key)이 있는 창고. 주문서의 sourceKeys[].bucket.
+    segment-bucket: ${SEGMENT_BUCKET:}
+    # 못 실은 주문을 다시 보내는 주기(outbox). 이보다 오래된 미발행 주문만 다시 보낸다.
+    outbox-retry-interval: PT30S
+    # 실패 큐를 훑는 주기. 재시도를 다 쓴 주문을 SWEPT로 닫는다.
+    reconcile-interval: ${RENDER_RECONCILE_INTERVAL:PT1M}
+    # 한 주문의 실행(STARTED) 상한. 이 번째가 마지막 시도다(계약1 attemptOrdinal 한도 3).
+    max-attempts: 3
+    # 주문서 크기 상한(계약1 2절 200KB).
+    max-message-bytes: 204800
+
+  playback:
+    # 영상 출입증(POK-122). 셋(key-pair-id · private-key-pem · resource-base-url)이 다 비면 「꺼짐」이고
+    # 부팅은 산다 — 로컬에는 CloudFront가 없다. 꺼진 채로 문을 부르면 503 playback_signing_unavailable.
+    # 일부만 채우면 부팅을 거부한다(실수). 비밀키는 PKCS#8 PEM 본문이고 리터럴 \n을 개행으로 읽는다.
+    key-pair-id: ${CLOUDFRONT_KEY_PAIR_ID:}
+    private-key-pem: ${CLOUDFRONT_PRIVATE_KEY_PEM:}
+    # 영상이 나가는 CDN 도메인(끝 / 없음). 정책 범위는 종류마다 {이 값}/{kind}/{streamId}/* 다 — 앞 와일드카드
+    # {이 값}/*/{streamId}/* 는 쿼리스트링 트릭으로 남의 방송을 열어 금지(봇 리뷰 2판). 경로가 있으면 쿠키 Path도 거기서 시작.
+    resource-base-url: ${MEDIA_BASE_URL:}
+    # 쿠키 Domain. 운영은 .pokeclip.com(앱·미디어·clip이 전부 그 아래여야 한다). 비면 호스트 전용.
+    cookie-domain: ${PLAYBACK_COOKIE_DOMAIN:}
+    # 출입증 수명. 지나면 CDN이 403을 주고 웹이 같은 문을 다시 부른다.
+    ttl: ${PLAYBACK_ACCESS_TTL:PT60M}
 
   cors:
+    # 🔴 clip만 켠다(auth는 기본 false). 출입증 문이 Set-Cookie로 답하는데, 앱이 다른 오리진에서
+    # credentials: 'include'로 불러야 브라우저가 그 쿠키를 받는다 — 서버가 이 값을 안 켜면
+    # 브라우저가 응답을 통째로 버리고 화면에는 CORS 오류만 뜬다.
+    allow-credentials: true
     # 비면 부팅이 실패한다(CorsProperties). 기본값으로 localhost를 주지 않는 이유는
     # 그러면 운영 배포에 localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데
     # 로그는 조용하기 때문이다.

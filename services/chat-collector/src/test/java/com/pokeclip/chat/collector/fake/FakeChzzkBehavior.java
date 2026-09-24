@@ -84,6 +84,13 @@ public class FakeChzzkBehavior {
      * (CP5가 같은 상황을 10회 중 3회만 재현했다).
      */
     public volatile Runnable onSubscribeBeforeResponse = () -> { };
+
+    /**
+     * 후원 구독 응답 <b>직전</b>에 부른다. 채팅 쪽({@link #onSubscribeBeforeResponse})과
+     * 따로 두는 것이 요점이다 — 하나로 묶으면 수립 ④까지 같이 붙들려 재시도만
+     * 매달아 두는 창을 못 만든다.
+     */
+    public volatile Runnable onSubscribeDonationBeforeResponse = () -> { };
     /**
      * 구독 반납 REST가 돌려줄 상태. 200이 아니면 반납이 실패한다.
      * <b>이 스위치가 없으면 반납 실패 갈래를 밟는 테스트가 0개다</b> —
@@ -103,6 +110,21 @@ public class FakeChzzkBehavior {
      * 곧 <b>뒷정리 스레드가 왕복에 갇힌 시점</b>이다 — 테스트가 그 시점을 노린다.
      */
     public volatile Duration unsubscribeDelay = Duration.ZERO;
+    /**
+     * 후원 구독 REST가 돌려줄 상태. 403이면 <b>채팅은 되는데 후원만 거부</b>다.
+     *
+     * <p>{@code subscribeStatus}로는 그 자리를 못 만든다 — 그것은 채팅 구독까지 같이
+     * 거부해 수립 자체가 실패한다. 「후원 권한만 없는 토큰」은 실제로 흔한 상태다
+     * (앱 동의에 후원 Scope가 빠진 경우).
+     */
+    public volatile int subscribeDonationStatus = 200;
+    /**
+     * false면 후원 구독 REST가 200을 주고도 {@code subscribed(DONATION)}을 안 쏜다.
+     *
+     * <p>우리는 그 프레임을 <b>기다리지 않으므로</b> 이 스위치를 꺼도 수립이 성공해야 한다 —
+     * 그것이 이 스위치의 존재 이유다(안 기다린다는 선택을 재는 손잡이).
+     */
+    public volatile boolean sendDonationSubscribed = true;
 
     private final List<String> received = new CopyOnWriteArrayList<>();
     private final AtomicReference<String> handshakeQuery = new AtomicReference<>("");
@@ -207,6 +229,26 @@ public class FakeChzzkBehavior {
     /** 이 스트리머에게만 채팅을 보낸다. */
     public void emitChatTo(String accessToken, String innerJson) {
         sendTo(accessToken, "42[\"CHAT\",\"" + escape(innerJson) + "\"]");
+    }
+
+    /** 이 스트리머에게만 후원을 보낸다. */
+    public void emitDonationTo(String accessToken, String innerJson) {
+        sendTo(accessToken, "42[\"DONATION\",\"" + escape(innerJson) + "\"]");
+    }
+
+    /**
+     * 이 스트리머에게 권한 회수를 보낸다. {@code eventType}이 CHAT·DONATION·SUBSCRIPTION 중
+     * 무엇인가로 <b>채팅을 끊을지 말지가 갈린다</b>(POK-234 태스크 4B).
+     *
+     * <p>{@code eventType}에 null을 주면 <b>그 칸이 없는 옛 모양</b>을 쏜다 —
+     * 그때는 지금대로 멈추는 것이 안전한 방향이라 그 갈래도 재야 한다.
+     */
+    public void emitRevokedTo(String accessToken, String eventType) {
+        String inner = eventType == null
+                ? "{\"type\":\"revoked\",\"data\":{\"channelId\":\"FAKE-CHANNEL\"}}"
+                : "{\"type\":\"revoked\",\"data\":{\"eventType\":\"" + eventType
+                        + "\",\"channelId\":\"FAKE-CHANNEL\"}}";
+        emitSystemTo(accessToken, inner);
     }
 
     /**
@@ -381,6 +423,32 @@ public class FakeChzzkBehavior {
     /** 종료 시 구독 반납이 실제로 왔는지. 안 오면 세션을 우리 손으로 안 닫은 것이다. */
     public int unsubscribeCallCount() { return unsubscribeCalls.get(); }
 
+    /**
+     * 후원 구독 반납이 왔는지. <b>채팅 반납과 따로 센다</b> — 한 카운터로 묶으면
+     * 「반납이 둘 나갔다」와 「채팅 반납이 두 번 나갔다」가 같은 값이 된다.
+     */
+    public int unsubscribeDonationCallCount() { return unsubscribeDonationCalls.get(); }
+
+    /** 후원 <b>구독</b> 호출 수. 재시도가 실제로 나가는지를 이 값으로만 잴 수 있다. */
+    public int subscribeDonationCallCount() { return subscribeDonationCalls.get(); }
+
+    void countSubscribeDonationCall() { subscribeDonationCalls.incrementAndGet(); }
+
+    void countUnsubscribeDonationCall() { unsubscribeDonationCalls.incrementAndGet(); }
+
+    /**
+     * 후원 구독 반납 REST가 <b>도착을 센 뒤</b> 응답 전에 붙들고 있는 시간.
+     *
+     * <p><b>{@link #unsubscribeDelay}와 따로 두는 것이 요점이다.</b> 하나로 묶으면
+     * 「둘이 나란히 나갔다」와 「하나가 두 번 나갔다」가 같은 총소요로 보인다 —
+     * 둘 다 붙들어야 직렬(합)과 나란히(최대)가 갈린다.
+     */
+    public volatile Duration unsubscribeDonationDelay = Duration.ZERO;
+
+    private final AtomicInteger unsubscribeDonationCalls = new AtomicInteger();
+
+    private final AtomicInteger subscribeDonationCalls = new AtomicInteger();
+
     /** 반납 요청들이 서버에 도착한 시각. 정렬돼 있지 않다 — 도착 순서 그대로다. */
     public List<Long> unsubscribeArrivalNanos() { return List.copyOf(unsubscribeArrivalNanos); }
 
@@ -412,6 +480,11 @@ public class FakeChzzkBehavior {
     /** 테스트가 채팅을 쏟는 입구. 이중 인코딩된 채로 나간다. */
     public void emitChat(String innerJson) {
         send("42[\"CHAT\",\"" + escape(innerJson) + "\"]");
+    }
+
+    /** 지금 붙어 있는 소켓 하나에 후원을 보낸다(옛 경로 검사용). */
+    public void emitDonation(String innerJson) {
+        send("42[\"DONATION\",\"" + escape(innerJson) + "\"]");
     }
 
     public void emitSystem(String innerJson) {
@@ -586,8 +659,14 @@ public class FakeChzzkBehavior {
         authDelay = Duration.ZERO;
         closeAfterSubscribed = false;
         onSubscribeBeforeResponse = () -> { };
+        onSubscribeDonationBeforeResponse = () -> { };
         unsubscribeStatus = 200;
         unsubscribeDelay = Duration.ZERO;
+        subscribeDonationStatus = 200;
+        sendDonationSubscribed = true;
+        unsubscribeDonationCalls.set(0);
+        subscribeDonationCalls.set(0);
+        unsubscribeDonationDelay = Duration.ZERO;
     }
 
     /** 앞 세션이 닫히기를 기다리는 시한. 실측 최대 23ms에 200배 여유다. */

@@ -70,6 +70,20 @@ export function SubtitleSection({ state }: { state: ClipEditorMockState }) {
           onChange={state.setSubtitleMode}
         />
 
+        {/* 자막 위치는 시안 갱신분에서 레이아웃 패널이 아니라 여기로 왔다 */}
+        <div>
+          <div className={styles.fieldLabel} id="subtitle-position-label">
+            자막 위치
+          </div>
+          <Segmented
+            label="자막 위치"
+            size="sm"
+            options={state.captionPositionOptions}
+            value={state.captionPosition}
+            onChange={state.setCaptionPosition}
+          />
+        </div>
+
         <div>
           <div className={styles.fieldLabel} id="subtitle-font-label">
             폰트

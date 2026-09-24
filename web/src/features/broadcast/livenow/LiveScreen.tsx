@@ -8,20 +8,24 @@ import { useMediaSource } from '@/features/player/mediaSource';
 import { formatUptime, parseClockLabel } from '@/features/player/playerMath';
 import { ChatPanel } from './ChatPanel';
 import { HighlightCardPanel } from './HighlightCardPanel';
+import { LiveOfflineScreen } from './LiveOfflineScreen';
 import { LiveStatsPanel } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
 import { useChatPanelMockState } from './useChatPanelMockState';
 import { useLiveDetailsMockState } from './useLiveDetailsMockState';
 import { useLiveMockState, type LiveStream } from './useLiveMockState';
 import { useLiveStatsMockState } from './useLiveStatsMockState';
+import { useLiveStatusMockState } from './useLiveStatusMockState';
 import { useManualMarking } from './useManualMarking';
 
 // 디자인 1b — 라이브 대시보드. 시안은 페이지 헤더 없이 콘텐츠부터 시작하고,
 // 방송 정보를 영상 아래 줄에 둔다. 세로로 길게 쌓아 문서 스크롤로 내려가는 화면이라
-// 높이를 뷰포트에 맞추지 않는다.
+// 높이를 뷰포트에 맞추지 않는다 — 채팅만 예외로 화면 높이에 sticky(시안 갱신, POK-239).
 
 // useSearchParams(?stream=)는 프리렌더에서 가장 가까운 Suspense 경계까지 CSR로 전환한다 —
 // 화면 전체가 아니라 플레이어만 빠지도록 여기서 분리하고 경계는 playerFrame 안에 둔다.
+// 단, 오프라인 목업 토글(?mock=offline)이 화면 맨 위에서 같은 훅을 읽는 동안에는 page.tsx의
+// 경계까지 화면 전체가 빠진다 — 토글이 실제 방송 상태 조회로 바뀌면 이 경계가 다시 뜻을 갖는다.
 //
 // 다만 지금 이 라우트의 프리렌더 HTML은 어차피 비어 있다 — AuthGuard가 hydrate 전에
 // (dock) 서브트리를 통째로 null로 만들기 때문이다(.next/server/app/broadcast/livenow.html로 확인).
@@ -57,7 +61,14 @@ function LivePlayer({
   );
 }
 
+// 방송 상태로 먼저 가른다 — 오프라인에서는 대시보드 훅(F8 수동 마킹 리스너·채팅 타이머)이
+// 아예 돌지 않아야 하므로, 분기를 그 훅들보다 위인 컴포넌트 경계에서 한다.
 export function LiveScreen() {
+  const { status } = useLiveStatusMockState();
+  return status === 'offline' ? <LiveOfflineScreen /> : <LiveDashboard />;
+}
+
+function LiveDashboard() {
   const { stream, highlights, chatVolume, chatWarning } = useLiveMockState();
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const playerRef = useRef<GlassPlayerController>(null);
@@ -72,7 +83,7 @@ export function LiveScreen() {
   }, []);
   const readMarkTimestamp = useCallback(() => formatUptime(uptimeRef.current), []);
   const marking = useManualMarking(readMarkTimestamp);
-  // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 컨트롤의 토글 버튼이다
+  // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
   // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
@@ -136,13 +147,18 @@ export function LiveScreen() {
             onSeek={handleSeek}
           />
         </div>
+        {/* 칸이 행 높이를 받고 그 안에서 채팅이 sticky로 붙는다 — 칸의 역할은 CSS .chatCol 주석.
+            접으면 칸째 빠진다(.gridSolo가 트랙도 걷는다). */}
         {chatPanelOpen ? (
-          <ChatPanel
-            surges={chat.surges}
-            messages={chat.messages}
-            collectionWarning={chatWarning}
-            onCollapse={toggleChatPanel}
-          />
+          <div className={styles.chatCol}>
+            <ChatPanel
+              surges={chat.surges}
+              messages={chat.messages}
+              ratePerMinute={chat.ratePerMinute}
+              collectionWarning={chatWarning}
+              onCollapse={toggleChatPanel}
+            />
+          </div>
         ) : null}
       </div>
       {/* 전폭 — 스크롤로 내려와 만나는 자리다 */}

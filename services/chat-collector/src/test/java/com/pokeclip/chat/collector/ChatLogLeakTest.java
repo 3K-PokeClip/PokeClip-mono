@@ -11,7 +11,10 @@ import com.pokeclip.chat.collector.observe.Heartbeat;
 import com.pokeclip.chat.collector.observe.SummaryLogger;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
+import com.pokeclip.chat.collector.persist.DonationPersister;
 import com.pokeclip.chat.collector.persist.PersistableChat;
+import com.pokeclip.chat.collector.persist.PersistableDonation;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.TestPersistence;
 import com.pokeclip.web.support.LogCaptor;
@@ -49,6 +52,12 @@ import static org.assertj.core.api.Assertions.catchThrowable;
  * {@code status.ChatCollectionEndpointTest}가 <b>같은 탐지기</b>를 쓴다
  * (자기검사 셋은 여기 하나면 된다).
  * 그쪽을 여기서 떼어 낸 이유는 이 검사가 LocalStack에 매이지 않게 하려는 것이다.
+ *
+ * <p><b>닉네임 칸(POK-234, V306)이 생겨도 이 검사가 잰다.</b> 닉네임 바늘은 원래
+ * {@code raw}에 실려 지나가고 있었고, 이제 {@code ChatMessage.nickname} ·
+ * {@code PersistableChat.nickname} · {@code chat_messages.nickname}이라는 경로가
+ * 셋 더 생겼을 뿐 <b>탐지 창(root TRACE)과 바늘은 그대로다</b> — 새 칸이 로그로
+ * 새면 여기서 빨간불이 된다. 새 유출 검사를 따로 만들지 않은 이유가 이것이다.
  */
 @FakeChzzkTest
 public class ChatLogLeakTest extends IntegrationTestSupport {
@@ -59,6 +68,9 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
     private static final String SENDER = needle("sender-channel-id");
     private static final String NICKNAME = needle("nickname");
     private static final String TOKEN = needle("access-token");
+    /** 🔴 후원의 새 개인식별 칸 둘(POK-234 V307). 채팅 바늘과 따로 둔다 — 경로가 다르다. */
+    private static final String DONATOR_NICKNAME = needle("donator-nickname");
+    private static final String DONATION_TEXT = needle("donation-text");
 
     private static final List<String> SECRETS = List.of(CONTENT, SENDER, NICKNAME, TOKEN);
 
@@ -223,7 +235,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
 
             try (SummaryLogger logger = SummaryLogger.start(() -> "none", runner.metrics(),
                     Heartbeat.idleForTest(), Duration.ofMillis(150),
-                    () -> 0L, TestPersistence.disabledPersister(), () -> 0L, ArchiveCounters.NONE)) {
+                    () -> 0L, TestPersistence.disabledPersister(), () -> 0L, ArchiveCounters.NONE, () -> 0L)) {
                 awaitSummaryLine(captor);
                 assertThat(logger.emitterThreadNames()).containsExactly("chzzk-summary");
             }
@@ -282,7 +294,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
         try (LogCaptor captor = new LogCaptor()) {
             ChatBuffer buffer = new ChatBuffer(100);
             buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
-                    1_754_300_000_000L, 1_754_300_000_175L));
+                    1_754_300_000_000L, 1_754_300_000_175L, null, null));
             int saved = new ChatPersister(jdbc, buffer).flushOnce();
             // 양성 대조. 표까지 안 갔다면 적재 경로가 바늘을 나른 적이 없다.
             assertThat(saved).as("저장이 안 됐다면 성공 경로의 로그를 아무것도 안 본 것이다")
@@ -297,7 +309,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
                 }
             };
             buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
-                    1_754_300_000_001L, 1_754_300_000_176L));
+                    1_754_300_000_001L, 1_754_300_000_176L, null, null));
             assertThat(new ChatPersister(broken, buffer).flushOnce()).isZero();
             assertThat(renderAll(captor))
                     .as("실패 줄이 안 나갔다면 실패 경로의 로그를 아무것도 안 본 것이다")
@@ -312,7 +324,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
             ChatPersister isolating = new ChatPersister(
                     TestPersistence.rejecting22(jdbc.getDataSource(), CONTENT), buffer);
             buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
-                    1_754_300_000_002L, 1_754_300_000_177L));
+                    1_754_300_000_002L, 1_754_300_000_177L, null, null));
             isolating.flushOnce();
             assertThat(isolating.poisonedCount())
                     .as("격리를 안 탔다면 poisoned 줄의 로그를 아무것도 안 본 것이다")
@@ -367,14 +379,17 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
             Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
             setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
             try {
+                // 감사 라운드 1 C2. 닉네임 바늘을 <b>실제로 태운다</b> — null을 넣으면
+                // 새 칸이 바인딩 로거를 지나간 적이 없어 아래 단언이 그 칸에 대해
+                // 자동으로 참이 된다(클래스 javadoc의 문장이 거짓이 된다).
                 buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
-                        1_754_300_000_010L, 1_754_300_000_185L));
+                        1_754_300_000_010L, 1_754_300_000_185L, NICKNAME, "streamer"));
                 assertThat(persister.flushOnce())
                         .as("표까지 안 갔다면 바인딩 로거가 바늘을 나른 적이 없다").isEqualTo(1);
             } finally {
                 setLevel(Logger.ROOT_LOGGER_NAME, rootBefore);
             }
-            assertNoSecretsIn(captor, List.of(CONTENT, SENDER));
+            assertNoSecretsIn(captor, List.of(CONTENT, SENDER, NICKNAME));
 
             // ② 양성 대조 — 로거마다 따로 TRACE로 밀고 따로 단언한다. 묶으면 한쪽이
             // 조용해져도(더 위험한 드라이버 쪽이 사라져도) 다른 쪽이 초록을 유지한다.
@@ -383,7 +398,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
                 setLevel(pinned, Level.TRACE);
                 try {
                     buffer.offer(new PersistableChat(null, "leak-ch", SENDER, CONTENT,
-                            1_754_300_000_011L, 1_754_300_000_186L));
+                            1_754_300_000_011L, 1_754_300_000_186L, null, null));
                     assertThat(persister.flushOnce()).isEqualTo(1);
                 } finally {
                     setLevel(pinned, before);
@@ -393,6 +408,85 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
                         .anyMatch(e -> e.getLoggerName().startsWith(pinned)
                                 && renderFully(e).contains(CONTENT));
             }
+        }
+    }
+
+    /**
+     * 🔴 <b>후원의 새 개인식별 칸을 이 검사가 안 태우고 있었다</b>
+     * (POK-234 감사 라운드 2 C8). 라운드 1 C2로 채팅 닉네임은 태우게 고쳤는데
+     * 후원({@code donator_nickname} · {@code donation_text})은 그 목록에 없었다.
+     *
+     * <p><b>유출은 없다 — 그물만 없었다.</b> {@code DonationPersister}가 실패 로그에
+     * 건수와 예외 타입만 싣는 것은 코드로 확인했다. 그런데 <b>클래스 javadoc은
+     * 「어느 경로에서도 안 남는다」고 주장</b>하고 있었으므로, 여기서 하는 일은
+     * <b>그 문장을 참으로 만드는 것</b>이다 — 다음에 후원 로그 줄을 늘리는 사람이
+     * 여기서 걸린다.
+     *
+     * <p>탐지 창과 기제는 위 채팅 갈래와 같다({@code root=TRACE}에서 스프링·드라이버
+     * 바인딩 로거 둘이 파라미터를 통째로 찍는다). 양성 대조도 그쪽이 이미 든다 —
+     * 여기서 다시 밀면 같은 로거를 두 번 재는 것이라 안 한다.
+     */
+    // 문항 2: 「안 샌다」는 <b>바늘이 코드 안을 지나간 적이 없으면</b> 자동으로 참이다 —
+    //         flushOnce가 1을 돌려주는 것(= 표까지 갔다)을 먼저 못박는다.
+    // 문항 8: 손으로 만든 record가 아니라 <b>운영 INSERT 경로</b>로 태운다.
+    //         DonationPersister.flushOnce가 운영과 같은 SQL·같은 파라미터 순서를 쓴다.
+    @Test
+    void 후원_닉네임과_문구도_root를_TRACE로_내려도_안_찍힌다() {
+        try (LogCaptor captor = new LogCaptor()) {
+            DonationBuffer buffer = new DonationBuffer(100);
+            DonationPersister persister = new DonationPersister(jdbc, buffer);
+
+            Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
+            setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
+            try {
+                buffer.offer(new PersistableDonation("leak-donation-stream", "leak-don-ch",
+                        SENDER, DONATOR_NICKNAME, "CHAT", 1000L, DONATION_TEXT,
+                        1_754_300_000_500L, 1L));
+                assertThat(persister.flushOnce())
+                        .as("표까지 안 갔다면 바인딩 로거가 후원 바늘을 나른 적이 없다")
+                        .isEqualTo(1);
+            } finally {
+                setLevel(Logger.ROOT_LOGGER_NAME, rootBefore);
+            }
+
+            assertNoSecretsIn(captor, List.of(DONATOR_NICKNAME, DONATION_TEXT, SENDER));
+        }
+    }
+
+    /**
+     * 🔴 <b>실패 갈래도 태운다</b>(POK-234 감사 라운드 3 C-2). 바로 위 검사는 성공 경로만
+     * 지나가서, {@code chat.donation.persist_failed} 줄에 닉네임을 넣는 주입이 <b>초록</b>이었다.
+     * 「그물이 이름보다 좁다」의 모양이다 — 지금 유출은 없고 <b>다음에 실패 로그를 늘리는
+     * 사람</b>을 못 잡는 것이 문제였다.
+     *
+     * <p>실패는 <b>진짜 드라이버가 거절하게</b> 만든다({@code stream_id}가 VARCHAR(128)이다).
+     * 스텁으로 던지면 바인딩 로거가 바늘을 나른 적이 없어 부정 단언이 자동으로 참이 된다 —
+     * 이 파일이 재려는 창(파라미터를 통째로 찍는 로거 둘)을 통째로 비켜 간다.
+     */
+    @Test
+    void 후원_저장이_실패해도_닉네임과_문구가_안_찍힌다() {
+        try (LogCaptor captor = new LogCaptor()) {
+            DonationBuffer buffer = new DonationBuffer(100);
+            DonationPersister persister = new DonationPersister(jdbc, buffer);
+            String tooLongStreamId = "leak-donation-fail-".repeat(20);   // 380자 > VARCHAR(128)
+
+            Level rootBefore = levelOf(Logger.ROOT_LOGGER_NAME);
+            setLevel(Logger.ROOT_LOGGER_NAME, Level.TRACE);
+            try {
+                buffer.offer(new PersistableDonation(tooLongStreamId, "leak-don-ch",
+                        SENDER, DONATOR_NICKNAME, "CHAT", 1000L, DONATION_TEXT,
+                        1_754_300_000_500L, 2L));
+                assertThat(persister.flushOnce())
+                        .as("표가 받아 줬다면 실패 갈래를 안 지나간 것이다")
+                        .isZero();
+            } finally {
+                setLevel(Logger.ROOT_LOGGER_NAME, rootBefore);
+            }
+
+            assertThat(renderAll(captor))
+                    .as("실패 로그 줄이 아예 안 나왔다면 아래 부정 단언이 아무것도 안 본 것이다")
+                    .contains("chat.donation.persist_failed");
+            assertNoSecretsIn(captor, List.of(DONATOR_NICKNAME, DONATION_TEXT, SENDER));
         }
     }
 
@@ -466,7 +560,7 @@ public class ChatLogLeakTest extends IntegrationTestSupport {
         CollectionStatus status = new CollectionStatus();
         runner = new CollectorRunner(
                 new ChzzkProperties(true, TOKEN, "http://localhost:" + port, Duration.ofSeconds(5),
-                        Duration.ofSeconds(30), Duration.ofSeconds(60)),
+                        Duration.ofSeconds(30), Duration.ofSeconds(60), Duration.ofMillis(60)),
                 status, restClientBuilder,
                         TestPersistence.unusedBuffer(), TestPersistence.disabledPersister());
         runner.run(null);

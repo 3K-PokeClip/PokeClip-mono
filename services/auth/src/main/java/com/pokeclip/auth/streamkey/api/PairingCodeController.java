@@ -33,8 +33,10 @@ public class PairingCodeController {
     /**
      * 플러그인이 부른다. 로그인 상태가 아니다 — 코드 자체가 자격증명이다(ADR-019).
      *
-     * <p>IP는 getRemoteAddr()로 읽는다. ALB 뒤로 가면 전부 같은 값이 되므로
-     * X-Forwarded-For 처리가 필요해진다(알려진 구멍).
+     * <p>IP는 getRemoteAddr()로 읽는다. 프록시 뒤에서는 그 값이 프록시 IP가 되므로
+     * {@code server.forward-headers-strategy=native}(환경변수 FORWARD_HEADERS_STRATEGY)로 톰캣이
+     * X-Forwarded-For를 여기 채워 넣게 한다(POK-91). 코드는 안 바뀐다 — 채택 규칙은 Valve 몫이고
+     * {@code config/ForwardedHeaders*Test}·{@code RemoteIpValveTrustTest}가 잰다.
      */
     @PostMapping("/exchange")
     public ExchangeResponse exchange(@Valid @RequestBody ExchangeRequest request,

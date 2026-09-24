@@ -50,8 +50,8 @@ public class ChatPersister implements PersistCounters {
     private static final String INSERT = """
             INSERT INTO chat_messages
               (stream_id, channel_id, sender_channel_id, content, message_time, received_at,
-               content_sha256)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+               content_sha256, nickname, user_role)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT ON CONSTRAINT uq_chat_messages_fingerprint DO NOTHING
             """;
 
@@ -382,7 +382,7 @@ public class ChatPersister implements PersistCounters {
                 chat.streamId(), chat.channelId(), chat.senderChannelId(), chat.content(),
                 Timestamp.from(Instant.ofEpochMilli(chat.messageTimeMillis())),
                 Timestamp.from(Instant.ofEpochMilli(chat.receivedAtMillis())),
-                sha256Hex(chat.content())
+                sha256Hex(chat.content()), chat.nickname(), chat.userRole()
         };
     }
 

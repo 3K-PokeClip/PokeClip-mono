@@ -2,21 +2,29 @@ import { act } from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
 import { CARD_CREATE_MS } from '@/features/broadcast/livenow/useManualMarking';
 
-// useMediaSource가 쓰는 useSearchParams 대체 — 아래 env 고정과 함께 소스를 null로 만들어
-// 플레이어가 시뮬레이션 경로로 결정적으로 돌게 한다.
+const nav = vi.hoisted(() => ({ search: '' }));
+
+// useSearchParams 대체 — 이 화면은 쿼리를 둘 읽는다. ?stream=(useMediaSource)은 비워 두고
+// 아래 env 고정과 함께 소스를 null로 만들어 플레이어가 시뮬레이션 경로로 결정적으로 돌게 한다.
+// ?mock=(오프라인 목업 토글)은 케이스가 nav.search로 정한다.
 vi.mock('next/navigation', () => ({
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(nav.search),
 }));
 
-// env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도
-// 시뮬레이션 경로가 유지되도록 빈 값으로 고정한다 (빈 문자열 → useMediaSource가 null 반환).
-vi.stubEnv('NEXT_PUBLIC_MEDIA_STUB_URL', '');
-vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', '');
+beforeEach(() => {
+  nav.search = '';
+  // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도
+  // 시뮬레이션 경로가 유지되도록 빈 값으로 고정한다 (빈 문자열 → useMediaSource가 null 반환).
+  // 파일 머리가 아니라 여기서 거는 이유: 토글 케이스의 NODE_ENV 스텁을 걷는 unstubAllEnvs가
+  // 이 둘까지 같이 걷는다.
+  vi.stubEnv('NEXT_PUBLIC_MEDIA_STUB_URL', '');
+  vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', '');
+});
 
 // GlassPlayer가 useToast를 쓰므로 ToastProvider로 감싼다 (앱에선 providers.tsx가 담당).
 function renderLive() {
@@ -29,6 +37,54 @@ function renderLive() {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs(); // NODE_ENV 스텁이 다음 테스트로 새면 ?mock=offline 분기가 죽는다
+  vi.restoreAllMocks(); // document.addEventListener 스파이 — 단언이 먼저 실패해도 걷힌다
+});
+
+describe('LiveScreen — 오프라인 목업 토글', () => {
+  it('쿼리가 없으면 방송 중 대시보드를 그린다', () => {
+    const addListener = vi.spyOn(document, 'addEventListener');
+    renderLive();
+
+    expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: '지금은 방송 중이 아니에요' }),
+    ).not.toBeInTheDocument();
+    // 아래 오프라인 케이스의 대조군 — 이 스파이가 F8 리스너를 실제로 잡아낸다
+    expect(addListener).toHaveBeenCalledWith('keydown', expect.any(Function));
+  });
+
+  it('?mock=offline이면 대시보드 대신 오프라인 안내를 그린다', () => {
+    nav.search = 'mock=offline';
+    renderLive();
+
+    expect(
+      screen.getByRole('heading', { level: 1, name: '지금은 방송 중이 아니에요' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '지난 방송 보기' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /수동 마킹/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('실시간 채팅')).not.toBeInTheDocument();
+  });
+
+  it('오프라인에서는 대시보드 훅이 돌지 않아 F8 리스너가 붙지 않는다', () => {
+    // 분기가 훅보다 위에 있어야 한다 — 화면만 숨기면 문서 리스너가 살아 보이지 않는 마킹을 찍는다
+    const addListener = vi.spyOn(document, 'addEventListener');
+    nav.search = 'mock=offline';
+    renderLive();
+
+    expect(addListener).not.toHaveBeenCalledWith('keydown', expect.any(Function));
+  });
+
+  it('프로덕션에서는 목업 토글이 죽어 방송 중 화면이 사라지지 않는다', () => {
+    nav.search = 'mock=offline';
+    vi.stubEnv('NODE_ENV', 'production');
+    renderLive();
+
+    expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: '지금은 방송 중이 아니에요' }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe('LiveScreen — 방송 정보 바', () => {
@@ -272,6 +328,28 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     // 패널이 사라져도 복귀 통로는 플레이어 안에 남는다
     await user.click(screen.getByRole('button', { name: '채팅 열기' }));
     expect(screen.getByRole('complementary', { name: '실시간 채팅' })).toBeInTheDocument();
+  });
+
+  it('목록은 DOM도 시간순이다 — 스크린 리더가 화면과 같은 흐름으로 읽는다', () => {
+    renderLive();
+
+    const list = screen.getByRole('list', { name: '채팅 메시지' });
+    const items = within(list).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('오늘도 새벽 랭크인가요');
+    expect(items[items.length - 1]).toHaveTextContent(
+      '하이라이트 감지 · 1:24:03 구간이 카드로 만들어졌어요',
+    );
+    // 스크롤 영역은 키보드로 들어갈 수 있어야 한다 (axe scrollable-region-focusable)
+    expect(list).toHaveAttribute('tabindex', '0');
+  });
+
+  it('하단 상태줄이 분당 건수를 말하고, 키워드 설정은 라우트가 설 때까지 잠겨 있다', () => {
+    renderLive();
+
+    // 이 목업은 수집 끊김 상태라 「따라가는 중」이라 말하지 않는다 — 헤더 배지와 한목소리
+    expect(screen.getByText('수집 끊김 · 새 메시지 없음')).toBeInTheDocument();
+    expect(screen.queryByText(/최신 메시지 따라가는 중/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '키워드 설정' })).toBeDisabled();
   });
 });
 

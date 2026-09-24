@@ -1,6 +1,7 @@
 package com.pokeclip.chat.collector;
 
 import com.pokeclip.chat.collector.archive.ChatArchive;
+import com.pokeclip.chat.collector.relay.RelayLifecycle;
 import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
 import com.pokeclip.chat.collector.broadcast.EndedStreamSweeper;
 import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
@@ -8,6 +9,7 @@ import com.pokeclip.chat.collector.broadcast.reattach.ReattachProperties;
 import com.pokeclip.chat.collector.broadcast.reattach.ReattachStatus;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
 import com.pokeclip.chat.collector.persist.ChatPersister;
+import com.pokeclip.chat.collector.persist.DonationPersister;
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.flywaydb.core.Flyway;
@@ -80,9 +82,11 @@ public class CollectorApplication {
     CollectorRunner collectorRunner(ChzzkProperties properties, CollectionStatus status,
                                     RestClient.Builder restClientBuilder,
                                     ChatBuffer buffer, ChatPersister persister,
-                                    ChatArchive archive, SessionRegistry registry) {
+                                    ChatArchive archive, DonationPersister donationPersister,
+                                    SessionRegistry registry, RelayLifecycle relay) {
+        // 중계 닫기 손잡이는 켜짐/꺼짐 둘 다 빈이 있다(RelayConfiguration) — 꺼지면 NONE.
         return new CollectorRunner(properties, status, restClientBuilder, buffer, persister, archive,
-                registry, () -> System.exit(1));
+                donationPersister, registry, () -> System.exit(1), relay);
     }
 
     /**

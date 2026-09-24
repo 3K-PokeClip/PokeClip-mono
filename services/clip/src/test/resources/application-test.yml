@@ -19,6 +19,11 @@ spring:
 pokeclip:
   cors:
     allowed-origins: http://localhost:3000
+    allow-credentials: true
+
+  # playback.*는 일부러 비워 둔다(꺼짐). 출입증 시험(PlaybackAccessControllerTest)이 자기
+  # @DynamicPropertySource로 넷을 채워 컨텍스트 하나를 더 쓴다 — 나머지 컨텍스트가 「꺼짐」이라
+  # 503 갈래는 그쪽에서 잰다. 셋 중 일부만 채우면 부팅이 거부되므로 여기 하나만 두면 안 된다.
 
   jwt:
     # TestTokens.SECRET과 같은 문자열이어야 한다. 갈리면 인증 시험이 통째로 401이 된다.
@@ -43,12 +48,31 @@ pokeclip:
     # 각자 가짜 서버를 세워 생성자에 직접 넣으므로 이 값과 무관하다.
     base-url: http://127.0.0.1:1
 
+  collector-client:
+    # 🔴 아무도 안 듣는 포트. 스프링 시험에서는 실제로 쓰이지 않는다 —
+    # IntegrationTestSupport가 @DynamicPropertySource로 가짜 수집기의 주소를 덮는다.
+    # 그래도 비워 두지 않는 이유는, 비면 CollectorClient가 「꺼짐」이 되어 문 셋이 전부
+    # 503으로 접히고 그 시험들이 무엇을 재는지 모르게 되기 때문이다.
+    base-url: http://127.0.0.1:1
+    connect-timeout: 2s
+    read-timeout: 3s
+
   jump-card:
     stream:
       # 시험은 한 사용자로 연결을 여러 번 열고 닫는다. 끊긴 자리는 즉시 반납되지 않아서
       # (서버는 다음 쓰기가 실패해야 안다) 운영 기본값 4로는 뒤 시험이 503으로 오염된다.
       # 상한 자체를 재는 시험은 자기 @TestPropertySource로 4를 다시 건다.
       max-per-user: 50
+
+  render:
+    # 시험은 기본 꺼짐. 주문 문 시험(RenderRequestControllerTest)이 자기 @DynamicPropertySource로 LocalStack 큐를
+    # 채워 컨텍스트 하나를 더 쓴다(출입증 시험과 같은 모양). 보고 문·정리기 시험은 큐 없이 표만 쓴다.
+    enabled: false
+    region: ap-northeast-2
+    outbox-retry-interval: PT30S
+    reconcile-interval: PT1M
+    max-attempts: 3
+    max-message-bytes: 204800
 
   broadcast:
     intake:
@@ -57,3 +81,8 @@ pokeclip:
       region: ap-northeast-2
       wait-time: 20s
       max-messages: 10
+    reaper:
+      # 시험은 스케줄러를 안 켠다 — 치우개는 StaleBroadcastReaperTest가 손으로 만들어 한 회차씩 돌린다.
+      enabled: false
+      interval: PT1M
+      grace: PT30M

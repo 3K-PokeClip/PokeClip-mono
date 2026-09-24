@@ -83,7 +83,7 @@ public class ProfilePhotoController {
      *
      * <h4>전수 명부 — auth에서 {@code Long.valueOf(jwt.getSubject())}를 하는 자리</h4>
      *
-     * <p><b>전수 11자리 · 10파일 · 감싼 것 4 · 안 감싼 것 7</b> (2026-08-31, POK-171 기준).
+     * <p><b>전수 12자리 · 11파일 · 감싼 것 5 · 안 감싼 것 7</b> (2026-09-15, POK-240 기준).
      * 이 줄은 {@code TokenSubjectRegistryTest}가 기계로 대조한다 — <b>자리가 늘거나 줄면 빨간불</b>이다.
      *
      * <p>🔴 <b>숫자는 이 한 줄에만 둔다.</b> 아래 목록도, 다른 파일의 설명도 세어 둔 수를 다시 적지 않는다 —
@@ -93,7 +93,7 @@ public class ProfilePhotoController {
      * <p><b>감싼 자리 — 그런데 모양이 둘로 갈린다.</b>
      * <ul>
      *   <li><b>던져서 401</b>: {@code AuthController:66} · {@code ProfilePhotoController:99}(여기) ·
-     *       {@code WithdrawalController:58}</li>
+     *       {@code WithdrawalController:58} · {@code AudioTrackLabelController}(POK-240)</li>
      *   <li><b>{@code null}을 돌려 통과</b>: {@code WithdrawnAccountFilter:106} — 창구가 아니라
      *       필터라서 반대다. 여기서 401을 내면 「그 sub을 어떻게 다루나」가 각 창구의 판단이 아니라
      *       필터의 판단으로 덮인다. <b>같은 명부에 있지만 같은 모양이 아니다.</b></li>

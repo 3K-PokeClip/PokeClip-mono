@@ -130,6 +130,20 @@ public class Broadcast {
         return true;
     }
 
+    /**
+     * 종료 편지 없이 닫는다(POK-244 놓친 방송 치우기). <b>{@code lastSequence}를 건드리지 않는다</b> —
+     * 그래야 뒤늦게 온 진짜 {@code ended}(더 높은 순서)가 {@link #applyEnded}로 정상 통과해 시각을 정정하고,
+     * 낮은 순서의 편지는 여전히 낡은 것으로 걸러진다. 부르는 쪽이 「아직 LIVE인가」를 락 안에서 본다.
+     *
+     * @param at 마지막 살아있는 신호 시각. 지금 시각이 아니다 — 방송은 그 근처에서 끝났다
+     */
+    public void endBySilence(Instant at) {
+        this.status = BroadcastStatus.ENDED;
+        this.endedAt = at;
+        this.vodExpiresAt = at.plus(VOD_RETENTION);
+        this.updatedAt = Instant.now();
+    }
+
     boolean applyEnded(long sequence, Instant at) {
         if (sequence <= this.lastSequence) {
             return false;
@@ -176,5 +190,10 @@ public class Broadcast {
 
     public Long getLastSequence() {
         return lastSequence;
+    }
+
+    /** 「우리가 처음 안 시각」. 살아있는 신호가 아니다 — 치우개가 시작·조각이 둘 다 없을 때만 바닥값으로 쓴다. */
+    public Instant getCreatedAt() {
+        return createdAt;
     }
 }

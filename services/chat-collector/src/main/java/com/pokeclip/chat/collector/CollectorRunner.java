@@ -7,9 +7,12 @@ import com.pokeclip.chat.collector.observe.CollectionMetrics;
 import com.pokeclip.chat.collector.observe.HeartbeatListener;
 import com.pokeclip.chat.collector.observe.SummaryLogger;
 import com.pokeclip.chat.collector.persist.ChatBuffer;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
+import com.pokeclip.chat.collector.persist.DonationPersister;
 import com.pokeclip.chat.collector.persist.ChatPersister;
 import com.pokeclip.chat.collector.session.SessionKey;
 import com.pokeclip.chat.collector.session.SessionRegistry;
+import com.pokeclip.chat.collector.status.DonationSubscriptions;
 import com.pokeclip.chat.collector.session.StreamSession;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -19,6 +22,8 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.web.client.RestClient;
 
 import com.pokeclip.chat.collector.reconnect.ReconnectPolicy;
+import com.pokeclip.chat.collector.relay.RelayLifecycle;
+import com.pokeclip.chat.collector.relay.RelaySink;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -105,8 +110,22 @@ public class CollectorRunner implements ApplicationRunner {
     private final ChatBuffer buffer;
     /** 요약에 persisted·conflicts를 싣기 위해서만 든다 — 저장 지시는 하지 않는다. */
     private final ChatPersister persister;
+
+    /**
+     * 후원 저장기. <b>러너가 명시적으로 닫는다</b>(POK-234 감사 라운드 2 A1) — 스프링
+     * {@code @PreDestroy}에만 맡기면 그 close가 종료 예산 <b>밖</b>에서 돌아 합이 22초가
+     * 되고 운영 유예 20초를 넘긴다(파괴는 한 스레드에서 차례로 돈다, 감사 탐침 1412ms).
+     */
+    private final DonationPersister donationPersister;
     /** 수신 스레드가 offer만 하는 원본 아카이브. 꺼져 있으면 {@link ChatArchive#NONE} — 러너는 모른다. */
     private final ChatArchive archive;
+
+    /**
+     * clip 중계의 닫기 손잡이와 셈(POK-234 PR-B). 꺼져 있으면 {@link RelayLifecycle#NONE}.
+     * <b>러너가 명시적으로 닫는다</b> — 스프링 파괴 순서에 맡기면 아무도 중계기에 의존하지 않을 때 러너보다 먼저
+     * 파괴되거나 예산 밖에서 돌 수 있다(후원 저장기가 22초를 만든 것과 같은 자리, 계획 검증 F1).
+     */
+    private final RelayLifecycle relay;
 
     /**
      * 이 러너가 여는 세션. <b>하나뿐이다 — 옛 경로(설정으로 한 채널만 붙이는 길)의 것이다.</b>
@@ -239,8 +258,10 @@ public class CollectorRunner implements ApplicationRunner {
     CollectorRunner(ChzzkProperties properties, CollectionStatus status,
                     RestClient.Builder restClientBuilder,
                     ChatBuffer buffer, ChatPersister persister) {
+        // 후원 저장기는 <b>더미</b>다. start()를 안 불렀으니 flush가 안 돌고, 이 생성자를
+        // 쓰는 검사는 후원 저장 경로를 재지 않는다 — 재는 검사는 아래 생성자로 실물을 준다.
         this(properties, status, restClientBuilder, buffer, persister, ChatArchive.NONE,
-                null, () -> { });
+                disabledDonationPersister(), null, () -> { });
     }
 
     /**
@@ -252,13 +273,36 @@ public class CollectorRunner implements ApplicationRunner {
                     RestClient.Builder restClientBuilder,
                     ChatBuffer buffer, ChatPersister persister,
                     ChatArchive archive, Runnable exitAction) {
-        this(properties, status, restClientBuilder, buffer, persister, archive, null, exitAction);
+        this(properties, status, restClientBuilder, buffer, persister, archive,
+                disabledDonationPersister(), null, exitAction);
+    }
+
+    /**
+     * 후원 저장 경로를 안 재는 검사가 쓰는 더미. {@code start()}를 안 부르므로 flush가 돌지
+     * 않고, {@code close()}는 제출한 마지막 flush가 빈 바구니를 보고 즉시 끝나 예산을 안 먹는다.
+     * <b>운영 배선은 아래 공개 생성자로 빈을 명시적으로 받는다.</b>
+     */
+    private static DonationPersister disabledDonationPersister() {
+        return new DonationPersister(new org.springframework.jdbc.core.JdbcTemplate(),
+                new DonationBuffer());
+    }
+
+    /** 중계 없이 쓰는 모양. 러너를 직접 만드는 검사가 이 모양을 부른다 — 새 인자를 거기까지 퍼뜨리지 않는다. */
+    public CollectorRunner(ChzzkProperties properties, CollectionStatus status,
+                           RestClient.Builder restClientBuilder,
+                           ChatBuffer buffer, ChatPersister persister,
+                           ChatArchive archive, DonationPersister donationPersister,
+                           SessionRegistry registry, Runnable exitAction) {
+        this(properties, status, restClientBuilder, buffer, persister, archive, donationPersister,
+                registry, exitAction, RelayLifecycle.NONE);
     }
 
     public CollectorRunner(ChzzkProperties properties, CollectionStatus status,
                            RestClient.Builder restClientBuilder,
                            ChatBuffer buffer, ChatPersister persister,
-                           ChatArchive archive, SessionRegistry registry, Runnable exitAction) {
+                           ChatArchive archive, DonationPersister donationPersister,
+                           SessionRegistry registry, Runnable exitAction, RelayLifecycle relay) {
+        this.relay = relay;
         this.properties = properties;
         this.status = status;
         // 빌더는 프로토타입 빈이다. 한 번만 build()해서 들고 있는다.
@@ -266,6 +310,7 @@ public class CollectorRunner implements ApplicationRunner {
         this.buffer = buffer;
         this.persister = persister;
         this.archive = archive;
+        this.donationPersister = donationPersister;
         this.registry = registry;
         this.exitAction = exitAction;
         // <b>세션은 여기서 하나만 만든다.</b> 스트리머별로 여러 개를 여는 것은
@@ -283,6 +328,14 @@ public class CollectorRunner implements ApplicationRunner {
                 new ReconnectPolicy(properties.reconnectFirstDelay(), properties.reconnectMaxDelay()),
                 restClient, buffer, persister, archive,
                 reconnector, stopSignal, intakeClosed, releasesInFlight, lastSessionNo,
+                // 옛 경로는 자기 것을 하나 갖는다. 이 경로의 방송 번호는 legacy() 하나뿐이고
+                // 창구는 등록부만 읽으므로, 여기 적힌 값을 읽는 사람이 없다.
+                new DonationSubscriptions(),
+                // 옛 경로는 방송 번호가 없어 후원을 표에 넣을 수 없다(stream_id NOT NULL).
+                // handleFrame이 그 갈래에서 곧장 돌아오므로 이 바구니에는 아무것도 안 담긴다.
+                new DonationBuffer(),
+                // 옛 경로는 방송 번호가 없어 보낼 곳이 없다 — 바구니도 null 번호를 버린다(F7).
+                RelaySink.NONE,
                 this::newSession, this::heartbeatListener, this::onPermanentStop);
     }
 
@@ -463,7 +516,8 @@ public class CollectorRunner implements ApplicationRunner {
         // 경로에서는 0이다</b> — 세션별 값은 chat.session.ended 줄이 낸다(ping·pong).
         // 조용히 틀린 숫자를 싣느니 안 싣는다. 세션별 관측은 태스크 13이 맡는다.
         SummaryLogger.logFinalVerdict(lastSessionNo.get(), registrySessions(), metrics.verdict(), reason,
-                registryReceived(), persister, buffer.droppedCount(), archive.counters());
+                registryReceived(), persister, buffer.droppedCount(), archive.counters(),
+                registryDonationDropped(), relay.counters());
     }
 
     /**
@@ -471,6 +525,16 @@ public class CollectorRunner implements ApplicationRunner {
      * 하고(beginClose) 돌아오므로, persister.close()가 5초를 기다리는 동안 저쪽도 돈다. 그 뒤
      * awaitClosed는 대개 즉시 풀린다. 직렬로 두면 종료 예산이 5초 늘어 유예 20초를 넘긴다
      * (stop 9 + close 5 + 반납 7 = 21). 두 close 모두 완료-대기 멱등이라 두 자리에서 불려도 안전하다.
+     *
+     * <p>🔴 <b>후원 저장기도 여기서 닫는다</b>(POK-234 감사 라운드 2 A1). 안 부르면 스프링
+     * {@code @PreDestroy}가 그 close를 <b>예산 밖에서</b> 돌린다 — 파괴는 한 스레드에서 차례로
+     * 도므로 시간이 그대로 더해져 합이 22초가 되고 운영 유예 20초를 넘긴다. 그때 잘리는 것은
+     * 뒤에 오는 것이 아니라 <b>이미 지나간 세션 닫기가 못 끝낸 반납</b>이라, 이 카드가 세션
+     * 닫기 예산을 지킨 의미가 통째로 사라진다.
+     *
+     * <p><b>여기는 나란히가 아니라 차례로다.</b> 후원 flush는 방송당 수십 건이라 밀리초이고,
+     * 시한도 {@code DonationPersister.CLOSE_WAIT}(2초)로 짧게 잡아 합이 19초로 유예 안에 든다 —
+     * 스레드를 하나 더 만들 값이 없다. 시한을 키우면 {@code ShutdownBudgetTest}가 깨진다.
      *
      * <p><b>예산의 시한은 첫 호출이 정하고({@code sinksCloseDeadlineNanos}) 둘째는 남은 만큼만 기다린다</b> —
      * stop()은 closeSinks를 두 번 지나는데(stop 본문 · 판정 직전), 호출마다 5초를 새로 주면 첫 대기가 시한까지
@@ -480,17 +544,30 @@ public class CollectorRunner implements ApplicationRunner {
     private void closeSinks() {
         sinksCloseDeadlineNanos.compareAndSet(0, System.nanoTime() + ARCHIVE_CLOSE_WAIT.toNanos());
         archive.beginClose();
+        // 🔴 <b>중계도 같은 기한을 나눠 쓴다 — 예산 항을 새로 만들지 않는다</b>(계획 검증 F1). 합이 이미 19초이고
+        // 여유 1초를 ShutdownBudgetTest가 못박는다. 아카이브와 같은 모양으로 새로 받기를 막고 깨우기만 하고
+        // 돌아온다 — 저장기가 5초를 기다리는 동안 중계 스레드도 남은 것을 보낸다.
+        relay.beginClose();
         // persister.close()는 모든 갈래를 잡게 짜여 있지만 그 계약이 강제되진 않는다 — 여기서 새면
         // 아래 대기를 통째로 건너뛰어 마지막 flush를 아무도 안 기다리고, 잃은 파일의 단서(close_timeout)도
         // 안 남는다. finally로 묶어 그 갈림을 없앤다.
         try {
             persister.close();
         } finally {
+            // <b>finally 안이다.</b> 위가 계약을 깨고 던지면 여기가 try 안에 있을 때 통째로
+            // 건너뛰어져 후원 잔량이 유실된다 — 아카이브 대기를 finally로 묶은 것과 같은 이유다.
+            // 자기 예외는 스스로 삼키므로(위 close의 catch) 아래 대기를 가리지 않는다.
+            donationPersister.close();
             // 시한까지 남은 만큼만 기다린다 — persister가 5초를 다 썼으면 아카이브 대기는 0에 가깝다(둘 다 시한을
             // 채우는 DB 반개방 + S3 사망 겹침에서 직렬 10초가 되던 것을 막는다, plan-critic 사소-3). 둘째 호출도
             // 같은 시한을 본다(위 주석).
             Duration remaining = Duration.ofNanos(sinksCloseDeadlineNanos.get() - System.nanoTime());
             archive.awaitClosed(remaining.isNegative() ? Duration.ZERO : remaining);
+            // 아카이브가 쓴 만큼 줄어든 나머지다 — 새 항이 아니다. 넘기면 중계기가 나가 있는 것과 잔량을 버린 수로
+            // 확정하고 돌아오므로 바로 뒤 판정 줄의 중계 셈이 그 뒤로 안 바뀐다(감사 L5). 🔴 clip이 느린 날에는
+            // DB·S3가 기한을 먼저 다 써 중계가 0초를 받을 수 있다 — 그때 못 보낸 것은 버린 수로 판정 줄에 남는다.
+            Duration relayRemaining = Duration.ofNanos(sinksCloseDeadlineNanos.get() - System.nanoTime());
+            relay.awaitClosed(relayRemaining.isNegative() ? Duration.ZERO : relayRemaining);
         }
     }
 
@@ -521,6 +598,18 @@ public class CollectorRunner implements ApplicationRunner {
      */
     private long registrySessions() {
         return registry == null ? 0L : registry.sessionsOpened();
+    }
+
+    /**
+     * 버려진 후원의 누계. <b>판정 줄이 이 값을 싣는다</b>(봇 codex) — 후원은 아카이브에
+     * 안 쌓으므로 버려진 것은 표에도 원본에도 없고, 30초 요약은 창 값이라 짧은 방송은
+     * 생애가 통째로 사라진다.
+     *
+     * <p><b>{@code registry}는 없을 수 있다.</b> 위 둘과 같은 이유로 같은 모양이다 —
+     * 처음에 그냥 불렀다가 <b>67건이 빨간불</b>이었다. 옛 경로의 러너는 등록부 없이 선다.
+     */
+    private long registryDonationDropped() {
+        return registry == null ? 0L : registry.donationDroppedCount();
     }
 
     @PreDestroy

@@ -4,6 +4,8 @@ import com.pokeclip.chat.collector.broadcast.BroadcastCounters;
 import com.pokeclip.chat.collector.broadcast.BroadcastEventProcessor;
 import com.pokeclip.chat.collector.broadcast.intake.IntakeStatus;
 import com.pokeclip.chat.collector.broadcast.reattach.ReattachStatus;
+import com.pokeclip.chat.collector.persist.DonationBuffer;
+import com.pokeclip.chat.collector.relay.RelayCounters;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,6 +15,7 @@ import org.springframework.stereotype.Component;
 import java.util.function.Supplier;
 import java.time.Instant;
 import java.time.Duration;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 수집이 멈춘 것을 헬스체크에 드러낸다.
@@ -88,6 +91,25 @@ public class CollectorHealth implements HealthIndicator {
      * 못 잡은 프로세스가 영영 UP이다(창을 아예 안 재면).
      */
     private final Instant createdAt;
+    /** 후원 바구니. 버린 수만 읽는다 — 되찾을 길이 없는 유일한 유실이라 상세에 낸다. */
+    private final DonationBuffer donationBuffer;
+
+    /** clip 중계 셈(POK-234 PR-B). 꺼져 있으면 {@link RelayCounters#NONE}. */
+    private final RelayCounters relay;
+
+    /**
+     * 직전 health 호출 때의 「중계에서 버린 수」(clip 쪽 + 바구니 쪽). {@code relay=dropping}을 <b>누적이 아니라
+     * 직전 호출 대비</b>로 가르는 기준이다 — 누적으로 가르면 한 번 버린 뒤로 영원히 dropping이라 아무것도 안
+     * 알려 준다(계획 검증 F12).
+     */
+    private final AtomicLong lastRelayLoss = new AtomicLong();
+
+    /** 중계 없이 쓰는 검사용 — 이 모양을 부르는 검사가 여럿이다. 새 인자를 거기까지 퍼뜨리지 않는다. */
+    public CollectorHealth(CollectionStatus status, SessionRegistry registry, IntakeStatus intake,
+                           ReattachStatus reattach, ObjectProvider<BroadcastEventProcessor> processor,
+                           DonationBuffer donationBuffer) {
+        this(status, registry, intake, reattach, processor, Instant::now, donationBuffer, RelayCounters.NONE);
+    }
 
     /**
      * <b>{@code @Autowired}가 필요하다.</b> 생성자가 둘이면 스프링은 어느 것으로 만들지
@@ -95,13 +117,22 @@ public class CollectorHealth implements HealthIndicator {
      */
     @Autowired
     public CollectorHealth(CollectionStatus status, SessionRegistry registry, IntakeStatus intake,
-                           ReattachStatus reattach, ObjectProvider<BroadcastEventProcessor> processor) {
-        this(status, registry, intake, reattach, processor, Instant::now);
+                           ReattachStatus reattach, ObjectProvider<BroadcastEventProcessor> processor,
+                           DonationBuffer donationBuffer, RelayCounters relay) {
+        this(status, registry, intake, reattach, processor, Instant::now, donationBuffer, relay);
     }
 
     CollectorHealth(CollectionStatus status, SessionRegistry registry, IntakeStatus intake,
                     ReattachStatus reattach, ObjectProvider<BroadcastEventProcessor> processor,
-                    Supplier<Instant> clock) {
+                    Supplier<Instant> clock, DonationBuffer donationBuffer) {
+        this(status, registry, intake, reattach, processor, clock, donationBuffer, RelayCounters.NONE);
+    }
+
+    CollectorHealth(CollectionStatus status, SessionRegistry registry, IntakeStatus intake,
+                    ReattachStatus reattach, ObjectProvider<BroadcastEventProcessor> processor,
+                    Supplier<Instant> clock, DonationBuffer donationBuffer, RelayCounters relay) {
+        this.relay = relay;
+        this.donationBuffer = donationBuffer;
         this.status = status;
         this.registry = registry;
         this.intake = intake;
@@ -156,6 +187,19 @@ public class CollectorHealth implements HealthIndicator {
                 // 붙는다 — 즉 「새 방송을 하나도 못 받는 상태」가 아니다(전체 DOWN의 정의).
                 // 여기서 DOWN을 주면 clip 장애가 수집 서버의 배포를 막는데, 정작 재시작으로는
                 // 안 풀린다. 위 버린-편지 셋과 같은 판단이다.
+                // <b>후원 상한 초과.</b> 0이 아니면 그 후원은 표에도 원본에도 없다 —
+                // 후원은 아카이브에 안 쌓기 때문이다(StreamSession의 F3 주석).
+                // <b>이 값은 DOWN을 만들지 않는다</b> — 채팅 수집은 멀쩡한 상태이고,
+                // 재시작으로 안 풀린다(위 reattach와 같은 판단이다).
+                .withDetail("donationBufferDropped", donationBuffer.droppedCount())
+                // <b>clip 중계</b>(POK-234 PR-B). 🔴 <b>이 값들은 DOWN을 만들지 않는다</b> — clip 장애가 ECS
+                // 헬스체크로 수집기를 죽이면 <b>저장까지</b> 멈춘다. 중계는 저장과 독립이고 놓친 구간은
+                // 프론트가 범위 창구로 메운다. 판단은 이 값을 보는 쪽이 한다(위 donationBufferDropped와 같다).
+                .withDetail("relay", relayState())
+                .withDetail("relayOffered", relay.relayOffered())
+                .withDetail("relayed", relay.relayed())
+                .withDetail("relayDropped", relay.relayDropped())
+                .withDetail("relayBufferDropped", relay.bufferDropped())
                 .withDetail("reattach", reattach.state().label())
                 // <b>알림 경로의 unreadableStreamerIds와 갈라 둔다.</b> 1번이 고칠 자리는
                 // 같지만 <b>어느 경로가 그것을 봤나</b>가 다르다 — 이쪽만 오르면 clip 명부의
@@ -174,6 +218,18 @@ public class CollectorHealth implements HealthIndicator {
                 .withDetail("unknownTypes", dropped.unknownTypes())
                 .withDetail("malformedEnvelopes", dropped.malformedEnvelopes())
                 .build();
+    }
+
+    /**
+     * {@code disabled} · {@code ok} · {@code dropping}. dropping은 <b>직전 호출 이후</b> 버린 것이 늘었을 때만이다.
+     * 여러 스레드가 health를 동시에 부르면 한쪽만 dropping을 볼 수 있다 — 기준을 호출끼리 나눠 쓰는 값이라 그렇다.
+     */
+    private String relayState() {
+        if (!relay.enabled()) {
+            return "disabled";
+        }
+        long loss = relay.relayDropped() + relay.bufferDropped();
+        return lastRelayLoss.getAndSet(loss) < loss ? "dropping" : "ok";
     }
 
     /**

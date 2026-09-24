@@ -1,4 +1,10 @@
 spring:
+  task:
+    scheduling:
+      pool:
+        # @Scheduled가 셋이다(끝난 방송 치우기 · 재부착 · 방송 정보). 기본 1이면 방송 정보가 목록을 훑는 동안
+        # 재부착이 밀린다(ReattachScheduler 주석이 예고한 자리).
+        size: 3
   application:
     name: pokeclip-chat-collector
   datasource:
@@ -122,6 +128,10 @@ pokeclip:
     base-url: https://openapi.chzzk.naver.com
     # 세션 URL 30초 만료의 절반. 만료 탓인지 우리가 느린 건지가 구분된다.
     establish-timeout: 15s
+    # 후원 구독이 일시 실패(429·5xx·시한)했을 때 다시 시도하는 주기. 재부착과 같은 1분이다 —
+    # 더 짧게 잡을 이유가 없다(상대가 429를 준 상황이면 자주 두드리는 것이 오히려 나쁘다).
+    # 401·403 은 재시도하지 않는다. 시간이 안 풀어 주는 실패라 부하만 준다.
+    donation-retry-period: 1m
     # 재시도 간격. 둘 다 2026-08-08 실서버 실측으로 정했다.
     #
     # 첫 간격이 1초인 근거: 발급만 하고 안 붙은 세션은 연결 자리를 안 먹는다.
@@ -196,6 +206,39 @@ pokeclip:
     # 환경변수를 안 뺀 이유: 운영자가 만질 값이 아니고, 만지면 위 둘의 관계가 깨진다.
     # ReattachWiringTest.첫_회차가_주기보다_먼저_돈다가 이 줄과 @Scheduled를 같이 읽어 잰다.
     initial-delay: PT5S
+    # 떼기(POK-244). 켜면 같은 회차에서 「내가 붙어 있는데 clip 명부에 없는 방송」의 세션을 반납한다 —
+    # clip이 종료 편지를 놓친 방송을 치우면(BROADCAST_REAPER_*) 그 다음 회차(1분)에 자리가 돌아온다.
+    # 안 떼는 회차: 명부가 상한(500)에 잘렸거나 읽을 수 없는 줄이 하나라도 있을 때(살아있는 방송이 「사라진 것」으로 보인다).
+    # 같은 스트리머의 다른 방송이 명부에 있으면 옛 방송은 갈아끼움의 몫이라 안 뗀다.
+    # 🔴 재부착(enabled)이 꺼진 채 이것만 켜면 부팅이 거부된다(DetachSwitchGuard) — 이 갈래는 재부착 회차 안에서 돈다.
+    # 기본 꺼짐 — 켜는 것은 clip 쪽 치우개와 같은 결정이다.
+    detach-enabled: ${CHAT_DETACH_ENABLED:false}
+    # 방송 시작 뒤 이만큼은 명부에 없어도 안 뗀다. 같은 편지를 clip과 각자 받아 우리가 먼저 붙는 순간이 있다.
+    detach-grace: ${CHAT_DETACH_GRACE:PT10M}
+  relay:
+    # 켜면 받은 채팅·후원을 저장과 따로 clip에 바로 민다(POK-234 PR-B). clip이 SSE로 화면에 뿌린다.
+    # 저장과 독립이다 — clip이 죽어도 표 적재는 그대로이고, 중계는 재시도 없이 버리고 센다.
+    # 기본이 꺼짐이다. 켜져 있으면 CI·팀원 로컬이 뜰 때마다 clip을 두드린다.
+    enabled: ${CHAT_RELAY_ENABLED:false}
+    # 수신 → 중계 바구니 상한(건). 넘치면 오래된 것부터 버리고 센다(번호를 받은 뒤라 화면이 빈틈으로 안다).
+    buffer-capacity: ${CHAT_RELAY_BUFFER_MAX:10000}
+    # 바구니가 비었을 때 다시 볼 주기 = 한가할 때 더해지는 최대 지연. 환경변수를 안 뺐다(계획 검증 F13) —
+    # 보내는 동안 쌓인 것은 저절로 한 묶음이 되므로 묶음 창이 아니고 운영자가 만질 값이 아니다.
+    flush-max-delay: PT0.1S
+    # 재부착과 같은 clip 주소를 받되 값은 따로 든다 — 재부착이 꺼진 배포에서도 중계는 켤 수 있다.
+    # 켜져 있는데 비면 ClipRelayClient 생성자가 부팅을 죽인다.
+    clip-base-url: ${CLIP_BASE_URL:http://localhost:8081}
+  liveinfo:
+    # 켜면 걷고 있는 방송마다 1분에 한 번 제목·태그·카테고리·시청자 수를 broadcast_info에 남기고
+    # (중계가 켜져 있으면) 화면에 broadcast-info로 민다(POK-234 PR-C). 기본 꺼짐.
+    enabled: ${BROADCAST_INFO_ENABLED:false}
+    interval: ${BROADCAST_INFO_INTERVAL:PT1M}
+    initial-delay: PT30S
+    # 🔴 비밀. 전체 라이브 목록이 앱 인증이라 필요하다(시청자 수). 켜져 있는데 비면 부팅이 죽는다.
+    client-id: ${CHZZK_CLIENT_ID:}
+    client-secret: ${CHZZK_CLIENT_SECRET:}
+    # 목록 한 바퀴 페이지 상한(한 장 20개). 목록은 시청자 수 내림차순이라 작은 방송은 뒤에 있다.
+    max-pages: 500
   link:
     # auth의 내부 API 주소(8082). 컨테이너 안에서는 호스트가 서비스 이름이다.
     auth-base-url: ${AUTH_BASE_URL:http://localhost:8082}
@@ -203,6 +246,23 @@ pokeclip:
     # ChzzkLinkClient 생성자에서 잡는다 — 안 주면 리터럴 "${INTERNAL_API_TOKEN}"이 바인딩돼
     # 서버는 뜨고 열쇠 조회만 전부 401이 되며, 401은 재시도 갈래라 편지가 큐에서 영원히 돈다.
     internal-token: ${INTERNAL_API_TOKEN:}
+  query:
+    # 범위 창구 둘(목록·차트)의 상한이다. 환경변수를 안 뺐다 — 운영자가 만질 값이 아니라
+    # clip·프론트와의 계약값이고, 늘리면 한 번에 받아야 하는 양이 같이 늘어난다.
+    #
+    # window-max 1시간: 되감기 화면이 한 번에 보여 주는 구간이 분 단위라 시간 단위면 넉넉하다.
+    # 넘으면 400 too_wide다 — 잘라 주지 않는다. 잘라 주면 부르는 쪽이 「덜 받은 것」을 모른다.
+    #
+    # page-max 500을 넘겨 달라고 하면 400이 아니라 잘라 준다(page-max까지). 많이 달라는 것은
+    # 오류가 아니고, 400으로 만들면 부르는 쪽이 상한을 알아야만 창구를 쓸 수 있다.
+    # 반대로 limit=0 이하는 400이다 — 「0건을 달라」는 요청은 실수 말고는 뜻이 없다.
+    #
+    # chart-max-buckets 720: 1시간을 5초로 자르면 720점이다. 즉 window-max와 최소 bucket의
+    # 곱이 정확히 이 값이라, 셋 중 하나를 바꾸면 나머지 둘을 같이 본다.
+    window-max: PT1H
+    page-default: 200
+    page-max: 500
+    chart-max-buckets: 720
   sync:
     # 채팅 시각에서 빼는 보정값(ms)이다. 한 항이 아니라 합이다 —
     # (방송 지연 + 시청자 반응 지연 + 전달 지연) − 우리 인제스트 지연.
