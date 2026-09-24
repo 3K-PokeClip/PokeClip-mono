@@ -110,4 +110,34 @@ pathDefaults:
 
 # 경로 허용 — 이 절이 없으면 모든 스트림이 "path not configured"로 거부된다 (전체 설정 대체 시 필수)
 paths:
+  # 슬레이트(무송출 구간에 대체 영상을 계속 내보내는 기능) 실측 전용 경로 (POK-195 M4).
+  #
+  # **왜 이름을 박은 경로여야 하나:** alwaysAvailable 은 정규식 경로와 all_others 에는 붙지
+  # 않는다(포크 conf/path.go:833-836 — 상류 원래 규칙). 임의 스트림 ID 마다 이 형상을 주는
+  # 운영 프로비저닝(스트림 시작 시 Control API 로 경로 생성)은 별도 마일스톤 몫이고, 여기서는
+  # 슬레이트가 켜졌을 때의 관측 형상을 재보기 위한 dev 경로 **하나**만 둔다.
+  #
+  # **왜 트랙을 다 적어야 하나:** alwaysAvailable 경로는 대체 영상을 미리 만들어 두어야 하므로
+  # 트랙 구성을 설정에서 완성형으로 받는다. 그래서 송출자의 트랙 서술이 이 목록과 개수·코덱·
+  # 파라미터까지 정확히 일치해야 publish 가 수락된다. 아래 값은 dev 표준 송출
+  # (docs/dev-environment.md:64-66 의 인코더 플래그 전량 + 오디오 44100Hz/1ch)의 실측값이다.
+  # 송출 명령은 경로 이름만 바꿔 쓴다:
+  #   ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 \
+  #     -f lavfi -i sine=frequency=440:sample_rate=44100 \
+  #     -c:v libx264 -preset veryfast -g 60 -keyint_min 60 -sc_threshold 0 -pix_fmt yuv420p \
+  #     -c:a aac -ar 44100 -ac 1 -f flv rtmp://localhost:1935/pokeclip-m4-test
+  # OBS 플러그인 실물(영상 1 + 오디오 6트랙·48kHz)은 이 목록과 달라 이 경로에 붙지 않는다.
+  #
+  # **왜 녹화를 끄나:** 슬레이트는 송출자가 없는 동안 서버가 스스로 만드는 영상이라, 녹화하면
+  # 실제 방송이 아닌 조각이 파일로 쌓여 인덱서가 그것을 방송 조각으로 읽는다.
+  # (pathDefaults 의 record: yes 는 그대로 상속되므로 여기서만 무녹화로 덮는다.)
+  pokeclip-m4-test:
+    alwaysAvailable: yes
+    alwaysAvailableTracks:
+      - codec: H264
+      - codec: MPEG4Audio
+        sampleRate: 44100
+        channelCount: 1
+    alwaysAvailableRecorded: no
+
   all_others:
