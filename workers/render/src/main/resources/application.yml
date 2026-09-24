@@ -1,0 +1,33 @@
+spring:
+  application:
+    name: render-worker
+  main:
+    # 사람이 부르는 문이 없다. 줄에서 꺼내 일하고 clip에 보고만 한다.
+    web-application-type: none
+
+pokeclip:
+  render:
+    queue-url: ${RENDER_QUEUE_URL:}
+    queue-endpoint: ${RENDER_QUEUE_ENDPOINT:}
+    s3-endpoint: ${S3_ENDPOINT:}
+    s3-path-style: ${S3_PATH_STYLE:false}
+    region: ${AWS_REGION:ap-northeast-2}
+    clip-base-url: ${CLIP_BASE_URL:http://localhost:8081}
+    # clip /internal/** 의 열쇠. auth·clip·chat-collector와 같은 값이다. 비면 clip이 401을 준다.
+    internal-token: ${INTERNAL_API_TOKEN:}
+    work-dir: ${RENDER_WORK_DIR:/tmp/pokeclip-render}
+    ffmpeg: ${FFMPEG_PATH:ffmpeg}
+    ffprobe: ${FFPROBE_PATH:ffprobe}
+    # 3분 클립 두 벌이 보통 1~2분이다. 넘기면 ffmpeg를 끊고 다시 해 볼 실패로 다룬다.
+    job-timeout: ${RENDER_JOB_TIMEOUT:15m}
+    # 큐 설정(계약1 1절 600초)과 같아야 한다. 이 값에서 2분 전부터 숨김 시간을 늘린다.
+    visibility-timeout: ${RENDER_VISIBILITY_TIMEOUT:600s}
+    poll-wait: 20s
+    report-retry-delays: 5s,15s,45s
+    fonts-dir: ${RENDER_FONTS_DIR:}
+
+logging:
+  level:
+    # 나가는 요청 헤더에 X-Internal-Token이 실린다. 어떤 스택이 뽑혀도 헤더를 찍지 않게 막는다(clip 실측).
+    org.apache.hc.client5.http: info
+    software.amazon.awssdk.request: info
