@@ -1986,7 +1986,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 「시작했다 → 40% → 끝났다/실패했다」를 받아 완성 영상의 상태를 바꾼다.** 표 셋(`V207`) — 완성 영상 `clips` ·
 주문 기록 `render_jobs` · 받은 보고 장부 `render_job_events`. 편집 기록(`recipes`)과 다른 표다: 그쪽은 사람이 고치고
 이쪽은 서버가 고친다. 주문서·보고 규칙은 [계약1](https://github.com/3K-PokeClip/PokeClip-LLM-WIKI/blob/main/contracts/%EA%B3%84%EC%95%BD1-%EC%9E%A1%EC%88%98%EB%AA%85%EC%A3%BC%EA%B8%B0.md)(rev9)
-그대로다. **렌더 일꾼 본체는 다음 카드**(`workers/render/`, 아직 0줄)이고, 여기는 주문하고 받아 적는 쪽이다.
+그대로다. 여기는 주문하고 받아 적는 쪽이고, **주문을 꺼내 mp4를 만드는 쪽은 렌더 일꾼**([`workers/render/`](../workers/render/README.md), POK-246)이다.
 
 | 문 | 인증 | 응답 |
 |---|---|---|
@@ -2018,7 +2018,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 **🔴 주문서의 `sourceKeys`는 계약1 3절 초안과 다르다 — 조각 파일 목록을 그대로 싣는다.** 초안은 1번이 만들 「중간본 파일」
 (video 1 + audio N)을 전제했는데 그 파일은 아직 없고 렌더 일꾼도 우리 것이 됐다(2026-09-14). 조각 하나가 영상+소리 트랙
 전부를 담은 **완전한 fMP4**라(실측 2026-09-15: 실물 조각 둘 다 `ftyp+moov+moof…`, h264 720p + aac) 일꾼이 이어붙이면 된다.
-트랙 번호 ↔ 소리 스트림 대응은 방송의 `trackManifest`를 같이 실어 일꾼이 푼다. 주문서 모양:
+트랙 번호 ↔ 소리 스트림 대응은 고정이다(계약9 2026-09-03: 트랙 N = N번째 소리 스트림). `trackManifest` 칸은 실리지만 null로 온다. 주문서 모양:
 
 ```json
 {"schemaVersion":1,"jobId":"<uuid>","jobType":"RENDER","clipId":"12","correlationId":"12","idempotencyKey":"12:RENDER:1",
@@ -2043,7 +2043,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 | 시작 전 `PROGRESS` 등 | 주문됨 | 400 `INVALID_EVENT` |
 
 산출물 검증 = `outputId` 집합이 주문서의 `recipe.outputs`와 정확히 같고 · 각 output에 `video` 정확히 1 · 모든 `s3Key`가
-`clips/{clipId}/{활성 토큰}/` 아래 · `kind`는 `video|srt`. srt 개수 규칙(mode·컷 안 자막)은 일꾼 카드에서 함께 잰다.
+`clips/{clipId}/{활성 토큰}/` 아래 · `kind`는 `video|srt`. srt 개수 규칙(mode가 CC를 포함하고 컷 안 자막이 1개 이상일 때만 output마다 1개)은 일꾼이 지킨다(POK-246).
 **`error.code` 닫힌 목록은 검사하지 않는다** — 모르는 코드도 그대로 적는다. 거절하면 실패가 「실패했다는 사실」조차 못 남긴다.
 
 **실패 큐 정리기(`DlqReconciler`, POK-147)** — 1분마다 실패 큐를 열 통까지 읽어 **열린** 주문만 `failed`/`SWEPT`로 닫는다(CAS).
