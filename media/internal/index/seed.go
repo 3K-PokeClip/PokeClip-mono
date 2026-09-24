@@ -58,7 +58,14 @@ const (
 	DeclineSkipped SeedDecline = "existing_cutoff"
 )
 
-// SeedResult 는 주조 시도의 결과다.
+// SeedResult 는 개시 트랜잭션의 산출 carrier 다(주조 + 세션 개시).
+//
+// 주조 결과에 더해 이 트랜잭션이 **커밋한** 세션·carrier 값을 싣는다 — 루프가 DB 를 다시
+// 묻지 않고 방금 쓴 행과 새로 연 세션을 아는 통로가 이것 하나다(계획 3절 형상 결정 2).
+// 이름이 주조 시절 그대로인 것은 알려진 부채다(계획 부기 16 — 개명은 M5 축).
+//
+// 행이 들어가지 않은 호출(오류·중복·seq 충돌)의 결과는 영값이다. 그 트랜잭션은 롤백됐으므로
+// 세션을 열었어도 개시로 보고하지 않는다.
 type SeedResult struct {
 	Seeded  bool
 	Decline SeedDecline
@@ -67,4 +74,25 @@ type SeedResult struct {
 	// 오보고돼 재시도 → 23505 → (지속 시) 크래시루프가 된다(cc 리뷰 차단 2).
 	// 호출자는 WARN 으로만 소비한다.
 	DiagErr error
+
+	// SessionOpened 는 이 조각이 새 세션을 열었는가다(비분할 개시·TD 분할 공통).
+	// 아래 세 필드는 이것이 참일 때만 뜻이 있다.
+	SessionOpened bool
+	// DiscontinuityBase 는 새 세션 행에 쓰인 discontinuity_base 다(TD 분할이면 승계한 값).
+	DiscontinuityBase int64
+	// InheritsSession 은 새 세션 행의 inherits_session 이다. "" 면 NULL 이다.
+	InheritsSession string
+	// PrevFirstLocalPath 는 계승 후보 개시에서 직전 세션 첫 조각의 local_path 다
+	// (ADR-044 호환 게이트의 입력). "" 면 계승 후보가 아니므로 게이트를 적용하지 않는다.
+	// 채우는 쪽은 재접속 계승 갈래(M4 PR ⓒ)이고, 그 전에는 언제나 "" 다.
+	PrevFirstLocalPath string
+
+	// SessionID 는 이 조각이 귀속된 세션이다. "" 면 NULL(비귀속)이다.
+	SessionID string
+	// PlaybackPDT 는 이 행의 playback_pdt 다. 영값이면 NULL 이다.
+	PlaybackPDT time.Time
+	// PlaybackS3Key 는 이 행의 playback_s3_key 다. "" 면 NULL 이다(키 파생 실패 포함).
+	PlaybackS3Key string
+	// DurationMS 는 INSERT 때의 duration_ms 다. 꼬리 교정은 그 뒤 UpdateTail 이 따로 한다.
+	DurationMS int32
 }

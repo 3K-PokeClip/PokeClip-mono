@@ -220,7 +220,7 @@ func TestPendingUploadsOrdersPendingBeforeFailed(t *testing.T) {
 		seedRow{"s-pending", 0, old(10), UploadStatePending, bytesOf(1000), false},
 	)
 
-	rows, _, err := st.PendingUploads(context.Background(), 120, 10, SweepCursor{})
+	rows, _, err := st.PendingUploads(context.Background(), AxisArchive, 120, 10, SweepCursor{})
 	if err != nil {
 		t.Fatalf("PendingUploads 실패: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestPendingUploadsTailDetectionAndGrace(t *testing.T) {
 		seedRow{"ended", 7, old(30), UploadStatePending, bytesOf(1002), false},
 	)
 
-	rows, _, err := st.PendingUploads(ctx, 120, 10, SweepCursor{})
+	rows, _, err := st.PendingUploads(ctx, AxisArchive, 120, 10, SweepCursor{})
 	if err != nil {
 		t.Fatalf("PendingUploads 실패: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestPendingUploadsKeysetPagingHasNoGapOrDuplicate(t *testing.T) {
 	cursor := SweepCursor{}
 	pages := 0
 	for {
-		page, next, err := st.PendingUploads(ctx, 120, 2, cursor)
+		page, next, err := st.PendingUploads(ctx, AxisArchive, 120, 2, cursor)
 		if err != nil {
 			t.Fatalf("PendingUploads 실패: %v", err)
 		}
@@ -335,7 +335,7 @@ func TestPendingUploadsExcludesNullBytesAndNullPath(t *testing.T) {
 		seedRow{"ok", 0, old(10), UploadStatePending, bytesOf(1000), false},
 	)
 
-	rows, _, err := st.PendingUploads(context.Background(), 120, 10, SweepCursor{})
+	rows, _, err := st.PendingUploads(context.Background(), AxisArchive, 120, 10, SweepCursor{})
 	if err != nil {
 		t.Fatalf("PendingUploads 실패: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestCountBacklogThreeValues(t *testing.T) {
 		seedRow{"cb", 4, old(10), UploadStatePending, bytesOf(1000), true},
 	)
 
-	pending, failed, bytesNull, err := st.CountBacklog(context.Background())
+	pending, failed, bytesNull, err := st.CountBacklog(context.Background(), AxisArchive)
 	if err != nil {
 		t.Fatalf("CountBacklog 실패: %v", err)
 	}
@@ -368,18 +368,18 @@ func TestCountBacklogThreeValues(t *testing.T) {
 	}
 }
 
-// 케이스10 — 스위퍼가 집어 오는 대상은 ② 아카이브 축이다(설계 5.5.4 #4).
+// 케이스10 — ② 축 조회가 집어 온 대상에는 ② 아카이브 축이 찍힌다(설계 5.5.4 #4).
 //
 // 잡는 결함: 축을 안 찍으면 영값(미판정)으로 나가고 업로더가 fail-closed 로 전부 거부한다 —
-// 재개 경로가 통째로 죽는다. pendingUploadsSQL 은 ② 의 열(upload_state)만 보는 조회이므로
-// 이 조회의 산출은 정의상 아카이브 축이다(축별 조회는 M4).
+// 재개 경로가 통째로 죽는다. pendingArchiveUploadsSQL 은 ② 의 열(upload_state)만 보는
+// 조회라 그 산출은 정의상 아카이브 축이다(③·init 축 조회는 pending_axis_pg_test.go 가 잰다).
 func TestPendingUploadsStampsArchiveAxis(t *testing.T) {
 	pool := newTestPool(t)
 	st := NewUploadStore(pool)
 
 	seed(t, pool, seedRow{"axis", 0, old(10), UploadStatePending, bytesOf(1000), false})
 
-	rows, _, err := st.PendingUploads(context.Background(), 120, 10, SweepCursor{})
+	rows, _, err := st.PendingUploads(context.Background(), AxisArchive, 120, 10, SweepCursor{})
 	if err != nil {
 		t.Fatalf("PendingUploads 실패: %v", err)
 	}
@@ -394,11 +394,12 @@ func TestPendingUploadsStampsArchiveAxis(t *testing.T) {
 	}
 }
 
-// initSession 은 init 3열이 채워진 세션 행을 직접 넣는다.
+// initSession 은 init 3열(init_s3_key·init_sha256·init_bytes)이 미리 채워진 미확정 세션 행을
+// 직접 넣는다.
 //
-// **생산자 없이 CAS 를 재는 방법이다**(계획 단계 6 · t3 전례): 세 열(init_s3_key·init_sha256·
-// init_bytes)의 유일한 생산자는 Producer.Init 이고 그것은 M4 다. 그래서 픽스처가 그 값을
-// 직접 채워 CAS 의 전제(init_sha256 이 이미 있다)를 성립시킨다.
+// 정상 경로가 아니다: 개시 시점의 세 열은 NULL 이 정상이고, 그 값을 쓰는 것은 첫 init CAS
+// 자신이다(정상 경로는 init_cas_pg_test.go 가 잰다). 이 픽스처는 장부에 해시가 먼저 적힌
+// 국면을 만들어, CAS 가 그 해시를 앵커로 대조하는가(다르면 거부·같으면 확정)를 잰다.
 func initSession(t *testing.T, pool *pgxpool.Pool, sessionID, streamID string, s3Key string, sha []byte, bytes int64) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
@@ -439,12 +440,13 @@ func TestMarkInitUploadedIsCompareAndSwap(t *testing.T) {
 	initSession(t, pool, "S-cas", "casstream", "dvr/casstream/init/S-cas.mp4", sha, 720)
 
 	t.Run("sha256_이_다르면_거부", func(t *testing.T) {
-		marked, err := st.MarkInitUploaded(ctx, "S-cas", []byte("전혀 다른 바이트열입니다 ................"))
+		mark, err := st.MarkInitUploaded(ctx, "S-cas",
+			[]byte("전혀 다른 바이트열입니다 ................"), "k", 720, false)
 		if err != nil {
 			t.Fatalf("MarkInitUploaded 실패: %v", err)
 		}
-		if marked {
-			t.Fatal("marked = true, want false — 바이트 동등성이 CAS 의 앵커다")
+		if mark != InitMarkMismatch {
+			t.Fatalf("mark = %v, want %v — 바이트 동등성이 CAS 의 앵커다", mark, InitMarkMismatch)
 		}
 		if _, ok := initUploadedAt(t, pool, "S-cas"); ok {
 			t.Error("init_uploaded_at 이 채워졌다 — 거부된 CAS 가 장부를 바꿨다")
@@ -452,22 +454,22 @@ func TestMarkInitUploadedIsCompareAndSwap(t *testing.T) {
 	})
 
 	t.Run("없는_세션은_거부", func(t *testing.T) {
-		marked, err := st.MarkInitUploaded(ctx, "S-없음", sha)
+		mark, err := st.MarkInitUploaded(ctx, "S-없음", sha, "k", 720, false)
 		if err != nil {
 			t.Fatalf("MarkInitUploaded 실패: %v", err)
 		}
-		if marked {
-			t.Fatal("marked = true, want false")
+		if mark != InitMarkMissing {
+			t.Fatalf("mark = %v, want %v", mark, InitMarkMissing)
 		}
 	})
 
 	t.Run("sha256_이_같으면_확정한다", func(t *testing.T) {
-		marked, err := st.MarkInitUploaded(ctx, "S-cas", sha)
+		mark, err := st.MarkInitUploaded(ctx, "S-cas", sha, "k", 720, false)
 		if err != nil {
 			t.Fatalf("MarkInitUploaded 실패: %v", err)
 		}
-		if !marked {
-			t.Fatal("marked = false, want true")
+		if mark != InitMarkSuccess {
+			t.Fatalf("mark = %v, want %v", mark, InitMarkSuccess)
 		}
 		if _, ok := initUploadedAt(t, pool, "S-cas"); !ok {
 			t.Error("init_uploaded_at 이 비었다 — 확정이 기록되지 않았다")
@@ -476,12 +478,12 @@ func TestMarkInitUploadedIsCompareAndSwap(t *testing.T) {
 
 	t.Run("이미_확정된_행은_다시_확정하지_않는다", func(t *testing.T) {
 		before, _ := initUploadedAt(t, pool, "S-cas")
-		marked, err := st.MarkInitUploaded(ctx, "S-cas", sha)
+		mark, err := st.MarkInitUploaded(ctx, "S-cas", sha, "k", 720, false)
 		if err != nil {
 			t.Fatalf("MarkInitUploaded 실패: %v", err)
 		}
-		if marked {
-			t.Fatal("marked = true, want false — IS NULL 가드가 중복 확정을 막는다")
+		if mark != InitMarkAlreadySame {
+			t.Fatalf("mark = %v, want %v — IS NULL 가드가 중복 확정을 막는다", mark, InitMarkAlreadySame)
 		}
 		after, _ := initUploadedAt(t, pool, "S-cas")
 		if !after.Equal(before) {
@@ -532,23 +534,23 @@ func TestTwoSessionsHaveIndependentInitKeysAndCAS(t *testing.T) {
 		if c.session == "S-twosess-2" {
 			wrong = shaA
 		}
-		marked, err := st.MarkInitUploaded(ctx, c.session, wrong)
+		mark, err := st.MarkInitUploaded(ctx, c.session, wrong, "k", 700, false)
 		if err != nil {
 			t.Fatalf("MarkInitUploaded 실패: %v", err)
 		}
-		if marked {
+		if mark == InitMarkSuccess {
 			t.Fatalf("%s 를 %s 의 해시로 확정했다 — CAS 가 행 자신의 값을 되읽고 있다", c.session, c.other)
 		}
 	}
 
 	// 제 해시로는 둘 다 독립으로 확정된다.
 	for session, sha := range map[string][]byte{"S-twosess-1": shaA, "S-twosess-2": shaB} {
-		marked, err := st.MarkInitUploaded(ctx, session, sha)
+		mark, err := st.MarkInitUploaded(ctx, session, sha, "k", 700, false)
 		if err != nil {
 			t.Fatalf("MarkInitUploaded 실패: %v", err)
 		}
-		if !marked {
-			t.Fatalf("%s 확정 실패 — 제 해시로는 통과해야 한다", session)
+		if mark != InitMarkSuccess {
+			t.Fatalf("%s 확정 실패(%v) — 제 해시로는 통과해야 한다", session, mark)
 		}
 		if _, ok := initUploadedAt(t, pool, session); !ok {
 			t.Errorf("%s 의 init_uploaded_at 이 비었다", session)
@@ -566,9 +568,43 @@ func TestSweepCursorIsZero(t *testing.T) {
 		"StartWall": {StartWall: time.Unix(0, 1).UTC()},
 		"StreamID":  {StreamID: "s"},
 		"Seq":       {Seq: 1},
+		"SessionID": {SessionID: "S-1"}, // init 축 커서의 마지막 정렬 키(설계 5.5.2)
 	} {
 		if c.IsZero() {
 			t.Errorf("%s 가 채워졌는데 IsZero=true", name)
 		}
+	}
+}
+
+// 미판정 축(영값)은 문장을 고르는 자리에서 오류다 — 풀에 닿기 전이다(설계 5.5.4 #2·#7).
+//
+// 잡는 결함: 축 분기의 기본 갈래가 ② 문장을 돌려주면 축을 빠뜨린 호출이 조용히 ② 로 접힌다 —
+// ③ 스위퍼가 아카이브 열의 대상을 집고, ③ 잔량이 ② 수치로 보고된다. 풀을 nil 로 두는 것이
+// 판정 장치다: 거부가 문장 선택보다 늦으면 호출이 nil 풀에 닿는다. PG 없이 돈다.
+func TestUndecidedAxisIsRejectedBeforeReachingPool(t *testing.T) {
+	st := NewUploadStore(nil)
+	ctx := context.Background()
+	var undecided Axis
+
+	t.Run("PendingUploads", func(t *testing.T) {
+		defer failIfPoolReached(t)
+		if _, _, err := st.PendingUploads(ctx, undecided, 120, 10, SweepCursor{}); err == nil {
+			t.Error("err = nil, want 오류 — 미판정 축이 조회로 접혔다")
+		}
+	})
+	t.Run("CountBacklog", func(t *testing.T) {
+		defer failIfPoolReached(t)
+		if _, _, _, err := st.CountBacklog(ctx, undecided); err == nil {
+			t.Error("err = nil, want 오류 — 미판정 축이 집계로 접혔다")
+		}
+	})
+}
+
+// failIfPoolReached 는 nil 풀에 닿아 난 패닉을 그 서브테스트의 실패로 바꾼다. 그대로 두면
+// 패닉이 이 패키지의 나머지 테스트까지 끊는다. t.Helper 를 부르지 않는 이유: 패닉 복구 중의
+// 호출자는 런타임이라 실패 위치가 panic.go 로 찍힌다.
+func failIfPoolReached(t *testing.T) {
+	if r := recover(); r != nil {
+		t.Fatalf("미판정 축의 호출이 풀에 닿았다(%v) — 축 판정이 문장 선택보다 늦다", r)
 	}
 }

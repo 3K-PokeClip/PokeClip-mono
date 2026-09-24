@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 )
 
 // Origin 은 이 작업이 어느 경로에서 왔는가다. 업로더가 내는 모든 로그에 실린다.
@@ -156,6 +157,14 @@ type Uploader struct {
 	// 인터페이스로 번지지 않는다.
 	// ★ 교체는 Start 전에만 한다. 기동 뒤에 바꾸면 워커 고루틴과 레이스다.
 	statFile func(*os.File) (fs.FileInfo, error)
+
+	// sessions 는 회차별 메모리다(보정값 표·sessionInit·보류 목록). Disabled 업로더에는 없다(nil).
+	sessions *sessionMemory
+
+	// dirty 는 ③·init 결과 이벤트 집합이다. 소비자(되감기 발행 루프)가 붙기 전에는 nil 이라
+	// 표시가 no-op 이다 — 아무도 비우지 않는 원소를 쌓지 않는다(계획 6.4 「ⓐ 단독 국면 메모리 0」).
+	// 사실은 이미 장부에 있어 소비자가 붙을 때 부팅 재구성이 복원한다.
+	dirty *Dirty
 }
 
 // New 는 업로더를 만든다. 고루틴은 아직 뜨지 않는다.
@@ -167,6 +176,10 @@ func New(st index.UploadStore, put Putter, opt Options, log *slog.Logger) *Uploa
 // 브레이커의 lazy 전이와 백오프는 전부 시각 비교라, 실제 시간을 기다리는 테스트는
 // 느리고 흔들린다. 공개 시그니처는 그대로 둔 채 이음매를 여기 하나만 낸다.
 func newWithClock(st index.UploadStore, put Putter, opt Options, log *slog.Logger, now func() time.Time) *Uploader {
+	if opt.Producer == nil {
+		// 배선이 빠졌으면 만들지 않고 실패하는 쪽으로 기운다 — nil 을 부르면 워커가 죽는다.
+		opt.Producer = playback.NoProducer{}
+	}
 	return &Uploader{
 		st:       st,
 		put:      put,
@@ -179,6 +192,7 @@ func newWithClock(st index.UploadStore, put Putter, opt Options, log *slog.Logge
 		results:  make(chan Result, opt.ResultBufLen),
 		armCh:    make(chan struct{}),
 		statFile: (*os.File).Stat,
+		sessions: newSessionMemory(opt),
 	}
 }
 
@@ -242,18 +256,62 @@ func (u *Uploader) Results() <-chan Result {
 	return u.results
 }
 
+// Dirty 는 ③·init 결과 이벤트 집합이다(Peek·Ack 은 되감기 루프가 부른다). 소비자가 없는 국면과
+// Disabled 업로더에서는 nil 이다 — nil 집합의 메서드는 아무것도 하지 않는다(Results 와 같은 이디엄).
+func (u *Uploader) Dirty() *Dirty { return u.dirty }
+
+// ForgetSession 은 끝난 회차의 sessionInit·보류 목록을 지운다. 고루틴 안전하다. 부를 자리는 루프가
+// 세션 종료(분리·TD 분할·오프라인)를 관측하는 곳이지만 그 배선은 ⓑ/ⓒ 몫이다 — ⓐ 에는 호출자가 없고,
+// 그동안은 수명(Options.SessionTTL)이 같은 것을 치운다.
+//
+// 보정값 표는 남긴다: 정산 창(ending)의 스위퍼 재시도가 같은 보정값을 써야 한다(계획 4.2-R R3).
+// 표는 수명(Options.SessionTTL)이 치운다.
+func (u *Uploader) ForgetSession(sessionID string) {
+	if u.off {
+		return
+	}
+	u.sessions.forget(sessionID)
+}
+
+// tidySessions 는 회차별 메모리의 수명 청소와 남은 보류 재요청이다. 자리는 스위퍼 tick 이다
+// (새 select case 없이 기존 주기를 쓴다 — 계획 2.1).
+func (u *Uploader) tidySessions() {
+	u.sessions.evict(u.now())
+	u.drainHeld()
+}
+
 // RequestUpload 는 실시간 경로(인덱서)의 유일한 진입점이다. 논블로킹이며 고루틴 안전하다.
 //
 // 반환이 bool 인 이유: 인덱서가 알아야 할 것은 "큐에 들어갔는가" 하나뿐이며,
 // Rejected 와 QueueFull 의 구분은 스위퍼의 커서 계산에만 쓸모가 있다.
 // false 는 "아무 일도 없었다"이며 호출자는 어떤 상태도 기록하면 안 된다.
+// 단 ③ 표 기록은 접수 결과와 무관하다 — 거부돼도 그 조각의 보정값 줄은 남는다(계획 4.2-R R3).
+//
+// ③ 요청을 회차의 보정값 표에 적는 자리는 **여기 하나뿐이다**. 스위퍼 작업과 보류 재요청은
+// enqueue 를 바로 불러 이 기록을 지나지 않는다 — 공용 입구에서 적으면 스위퍼 작업의 영값
+// 보정값이 줄을 만들고 재수집마다 표 수명이 늘어난다(계획 뮤테이션 64).
 func (u *Uploader) RequestUpload(t index.UploadTarget) bool {
+	if t.Axis == index.AxisPlayback && u.admitting() {
+		u.sessions.recordLive(t, u.now())
+	}
 	return u.enqueue(t, OriginLive) == EnqueueAdmitted
 }
 
-// enqueue 는 비공개 공용 입구다. 게이트 순서는 결정 6‴ 표 그대로다.
+// admitting 은 지금 접수를 받는가다 — 비활성·미기동·종료 중이면 거짓이다.
+func (u *Uploader) admitting() bool {
+	return !u.off && u.state.Load() == int32(lifecycleStarted) && u.accepting.Load()
+}
+
+// enqueue 는 비공개 공용 입구다. 게이트 순서는 결정 6‴ 표 그대로다. 큐 포화는 요청 1건마다 WARN
+// 한 줄이다 — 스위퍼는 첫 포화에서 회차를 끊는다.
 func (u *Uploader) enqueue(t index.UploadTarget, o Origin) EnqueueOutcome {
-	if u.off || u.state.Load() != int32(lifecycleStarted) || !u.accepting.Load() {
+	return u.enqueueAt(t, o, slog.LevelWarn)
+}
+
+// enqueueAt 은 enqueue 의 본체다. 큐 포화 로그(upload_queue_full)의 수준과 그 줄에 덧붙일 속성만
+// 부르는 쪽이 정한다 — 보류 재요청은 drain 한 번의 포화를 Debug 요약 한 줄로 남긴다(requeueHeld).
+func (u *Uploader) enqueueAt(t index.UploadTarget, o Origin, fullLevel slog.Level, fullAttrs ...any) EnqueueOutcome {
+	if !u.admitting() {
 		return EnqueueRejected
 	}
 
@@ -307,7 +365,8 @@ func (u *Uploader) enqueue(t index.UploadTarget, o Origin) EnqueueOutcome {
 		admitted = true
 		return EnqueueAdmitted
 	default:
-		lg.Warn("upload_queue_full", "queue_len", len(u.queue), "sweep_round", j.sweepRound)
+		lg.With(fullAttrs...).Log(context.Background(), fullLevel, "upload_queue_full",
+			"queue_len", len(u.queue), "sweep_round", j.sweepRound)
 		return EnqueueQueueFull
 	}
 }
@@ -388,7 +447,8 @@ func (u *Uploader) drainQueue() int {
 // ② 아카이브 축만 보낸다 — init 이 바꾸는 장부는 stream_sessions 이고, 그 결과를 통지하면
 // seq=0(모든 스트림의 첫 조각) 꼬리의 UploadState 가 뒤집혀 커서가 DB 와 갈린다.
 // 축을 인자에 실어 함수 머리에서 보는 것이 구조 강제다 — Result 에 축 필드를 더하는 안은
-// 영값이 AxisArchive 라 누락이 조용히 샌다(계획 4.5).
+// 받는 쪽마다 축을 거르는 규율을 새로 지운다(필드를 빠뜨린 통지는 영값 = 미판정 축으로 온다 —
+// index.Axis). ③·init 통지는 이벤트 집합(Dirty)이 맡는다(계획 4.5 · 부기 11·18).
 func (u *Uploader) sendResult(j job, state index.UploadState) {
 	if j.target.Axis != index.AxisArchive {
 		return

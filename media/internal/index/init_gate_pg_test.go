@@ -14,9 +14,11 @@ package index
 // 문장을 두 각도에서 보는 것이라 한쪽이 통과해도 다른 쪽이 깨질 수 있다 — 예컨대 CAS 가
 // init_uploaded_at 이 아닌 다른 열을 갱신하면 T8 의 marked 는 참인데 게이트는 영영 닫힌다.
 //
-// **M3 에서 이 경로는 픽스처로만 실행된다**: 세 열(init_s3_key·init_sha256·init_bytes)의
-// 유일한 생산자가 Producer.Init 이고 그것이 M4 다(계획 D5). 그래서 "G5 통과 = 프로덕션
-// init 업로드가 돈다"로 읽으면 안 된다 — 통과한 것은 장부 축 하나다.
+// **M4 가 이 경로의 전제를 뒤집었다**: M3 에서는 세 열(init_s3_key·init_sha256·init_bytes)을
+// 쓰는 쪽이 없어 픽스처로만 돌았지만, 지금은 개시 시점의 세 열이 NULL 이고 첫 init CAS 가 그
+// 값을 쓴다(아래 TestInitCASRefusesEmptyHashArgument 주석과 같은 사실). 그래도 "G5 통과 =
+// 프로덕션 init 업로드가 돈다"로 읽으면 안 된다 — 통과한 것은 장부 축 하나이고, 워커가 CAS 를
+// 부르는 경로는 여기서 재지 않는다.
 
 import (
 	"context"
@@ -58,24 +60,26 @@ func TestInitGateStaysClosedUntilInitUploadIsConfirmed(t *testing.T) {
 	}
 
 	// ⑵ 거부된 CAS 는 게이트를 열지 않는다(실패가 조용히 통과로 접히지 않는다).
-	marked, err := st.MarkInitUploaded(ctx, session, []byte("남의 바이트열 ......................"))
+	mark, err := st.MarkInitUploaded(ctx, session, []byte("남의 바이트열 ......................"),
+		"dvr/gatestream/init/"+session+".mp4", 704, false)
 	if err != nil {
 		t.Fatalf("MarkInitUploaded 실패: %v", err)
 	}
-	if marked {
-		t.Fatal("marked = true — 다른 해시로 확정됐다")
+	if mark != InitMarkMismatch {
+		t.Fatalf("mark = %v, want %v — 다른 해시로 확정됐다", mark, InitMarkMismatch)
 	}
 	if initGateReady(t, pool, session) {
 		t.Fatal("거부된 CAS 뒤에 발행 술어가 참이 됐다")
 	}
 
 	// ⑶ 제 해시로 확정하면, 그리고 그때에만 게이트가 열린다.
-	marked, err = st.MarkInitUploaded(ctx, session, sha)
+	mark, err = st.MarkInitUploaded(ctx, session, sha,
+		"dvr/gatestream/init/"+session+".mp4", 704, false)
 	if err != nil {
 		t.Fatalf("MarkInitUploaded 실패: %v", err)
 	}
-	if !marked {
-		t.Fatal("marked = false — 제 해시로는 확정돼야 한다")
+	if mark != InitMarkSuccess {
+		t.Fatalf("mark = %v, want %v — 제 해시로는 확정돼야 한다", mark, InitMarkSuccess)
 	}
 	if !initGateReady(t, pool, session) {
 		t.Fatal("CAS 성공 뒤에도 발행 술어가 거짓이다 — CAS 가 게이트 열을 갱신하지 않았다")
@@ -101,12 +105,13 @@ func TestInitGateIsPerSessionNotPerStream(t *testing.T) {
 	initSession(t, pool, first, stream, "dvr/"+stream+"/init/"+first+".mp4", sameSHA, 700)
 	initSession(t, pool, second, stream, "dvr/"+stream+"/init/"+second+".mp4", sameSHA, 700)
 
-	marked, err := st.MarkInitUploaded(ctx, first, sameSHA)
+	mark, err := st.MarkInitUploaded(ctx, first, sameSHA,
+		"dvr/"+stream+"/init/"+first+".mp4", 700, false)
 	if err != nil {
 		t.Fatalf("MarkInitUploaded 실패: %v", err)
 	}
-	if !marked {
-		t.Fatal("첫 세션 확정 실패 — CAS 가 세션 하나를 정확히 겨누지 않았다")
+	if mark != InitMarkSuccess {
+		t.Fatalf("mark = %v — CAS 가 세션 하나를 정확히 겨누지 않았다", mark)
 	}
 
 	if !initGateReady(t, pool, first) {
@@ -117,12 +122,14 @@ func TestInitGateIsPerSessionNotPerStream(t *testing.T) {
 	}
 }
 
-// G5 — 장부에 해시가 없는 세션은 **어떤 값으로도** 확정되지 않는다(fail-closed).
+// G5 — **빈 해시로는 어떤 세션도 확정되지 않는다**(fail-closed).
 //
-// 잡는 결함: CAS 의 해시 비교를 `IS NOT DISTINCT FROM` 류로 쓰면 init_sha256 이 NULL 인
-// 세션이 NULL 인자로 확정된다 — 바이트를 한 번도 만들지 않은 세션의 게이트가 열린다.
-// M3 에서 이것은 가상의 국면이 아니다: 세 열의 생산자가 M4 라 **모든 세션이 이 상태**다.
-func TestInitGateStaysClosedWhenLedgerHasNoInitHash(t *testing.T) {
+// M3 의 이 테스트는 "장부에 해시가 없는 세션은 확정 대상이 아니다" 였다. M4 가 그 전제를
+// 뒤집는다 — 개시 시점 init_sha256 은 NULL 이고 첫 업로드 CAS 가 그 값을 만드는 생산자다.
+// 그래서 판정 축을 옮긴다: 장부 쪽 NULL 은 정상 개시 상태이고, **인자 쪽 빈 값**이
+// 거부돼야 할 것이다. NULL 을 그대로 써 넣으면 이후 모든 대조의 앵커가 사라져
+// 바이트를 한 번도 만들지 않은 세션의 발행 게이트가 열린다.
+func TestInitCASRefusesEmptyHashArgument(t *testing.T) {
 	pool := newTestPool(t)
 	st := NewUploadStore(pool)
 	ctx := context.Background()
@@ -133,14 +140,15 @@ func TestInitGateStaysClosedWhenLedgerHasNoInitHash(t *testing.T) {
 	for name, sha := range map[string][]byte{
 		"NULL 인자": nil,
 		"빈 바이트열":  {},
-		"임의의 해시":  []byte("무엇이든 ..............................."),
 	} {
-		marked, err := st.MarkInitUploaded(ctx, session, sha)
-		if err != nil {
-			t.Fatalf("MarkInitUploaded(%s) 실패: %v", name, err)
+		mark, err := st.MarkInitUploaded(ctx, session, sha, "k", 10, false)
+		if err == nil {
+			t.Errorf("%s 가 통과했다 — 앵커 없는 확정은 5.3ⓑ 보증을 통째로 없앤다", name)
 		}
-		if marked {
-			t.Errorf("%s 로 확정됐다 — 장부에 해시가 없는 세션은 확정 대상이 아니다", name)
+		// 오류와 함께 판정이 나가면 err 를 늦게 보는 호출자가 그 판정대로 움직인다.
+		switch mark {
+		case InitMarkSuccess, InitMarkAlreadySame, InitMarkMismatch, InitMarkMissing:
+			t.Errorf("%s: MarkInitUploaded 판정 = %v, want 판정 없음(영값) — 오류와 판정이 함께 나갔다", name, mark)
 		}
 	}
 	if initGateReady(t, pool, session) {

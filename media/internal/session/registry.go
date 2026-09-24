@@ -375,22 +375,30 @@ func openDecision(in Input, split *liveSession) Decision {
 	return Decision{Outcome: OutcomeOpenFresh, BaseSessionID: split.id, plan: p}
 }
 
-// endSessionSQL 은 TD 분할에서 직전 세션을 닫는 문장이다.
+// endSessionSQL 은 live 세션을 ending 으로 보내는 문장이다($1 session_id · $2 end_reason).
 //
-// end_reason 의 'td_exceeded' 는 설계 4.9.1 이 OpenFresh 의 사유 인자로 쓴 문자열 그대로다
-// (어휘를 새로 만들지 않는다). 장부가 "왜 끝났는가"를 잃지 않게 남긴다.
-// 이 UPDATE 가 새 세션 INSERT 보다 **먼저**여야 한다 — 순서가 뒤집히면 한 스트림에 live
-// 세션이 둘이 되려 하므로 stream_sessions_one_live_uq 가 막는다.
+// 사유가 인자인 이유: 세션을 끝내는 까닭은 여럿이고(TD 분할 'td_exceeded' — 이 패키지의
+// Open, 오프라인 'offline' — M4 PR ⓒ) 문장의 형상은 하나다. 장부가 "왜 끝났는가"를 잃지
+// 않게 남긴다. 'td_exceeded' 는 설계 4.9.1 이 OpenFresh 의 사유 인자로 쓴 문자열 그대로다.
+// TD 분할에서는 이 UPDATE 가 새 세션 INSERT 보다 **먼저**여야 한다 — 순서가 뒤집히면 한
+// 스트림에 live 세션이 둘이 되려 하므로 stream_sessions_one_live_uq 가 막는다.
 //
 // state='live' 술어는 "우리가 읽은 그 세션이 아직 열려 있을 때만 닫는다"이다:
 // READ COMMITTED 의 UPDATE 는 남의 커밋을 만나면 **최신 버전으로 WHERE 를 다시 보므로**,
-// 술어가 session_id 뿐이면 그 사이 남이 적은 종료 사유를 td_exceeded 로 되돌린다.
+// 술어가 session_id 뿐이면 그 사이 남이 적은 종료 사유를 되돌려 쓴다.
 // 0 행이어도 오류로 만들지 않는다 — 이미 남이 닫았다는 뜻이고, 그래도 live 가 남아 있다면
 // 이어지는 INSERT 를 one_live_uq 가 가른다(판정 자리를 둘로 늘리지 않는다).
+//
+// **같은 형상의 종료 절이 index 에도 있다**(init 불일치 결속 CTE — index 는 session 을
+// 임포트하지 않아 이 문장을 쓸 수 없다). 술어·SET 목록을 바꾸면 그쪽도 함께 바꾼다 —
+// 두 문장은 end_session_pg_test.go 가 대조한다(계획 부기 21).
 const endSessionSQL = `
 UPDATE stream_sessions
-   SET state = 'ending', ending_at = now(), end_reason = 'td_exceeded'
+   SET state = 'ending', ending_at = now(), end_reason = $2
  WHERE session_id = $1 AND state = 'live'`
+
+// endReasonTDExceeded 는 TD 분할이 직전 세션을 끝내는 사유다(설계 4.9.1).
+const endReasonTDExceeded = "td_exceeded"
 
 // openSessionSQL 은 개시 트랜잭션의 유일한 세션 INSERT 다.
 //
@@ -425,7 +433,7 @@ func (r *Registry) Open(ctx context.Context, tx pgx.Tx, d Decision, firstPDT tim
 	}
 	p := d.plan
 	if p.endingSessionID != "" {
-		if _, err := tx.Exec(ctx, endSessionSQL, p.endingSessionID); err != nil {
+		if _, err := tx.Exec(ctx, endSessionSQL, p.endingSessionID, endReasonTDExceeded); err != nil {
 			return "", fmt.Errorf("직전 세션 종료 표시 실패 session_id=%q: %w", p.endingSessionID, err)
 		}
 	}

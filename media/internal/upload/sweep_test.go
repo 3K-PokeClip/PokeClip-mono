@@ -20,8 +20,14 @@ import (
 type pageStore struct {
 	mu   sync.Mutex
 	rows []pageRow
-	// queries 는 호출된 커서를 순서대로 기록한다 — 재조회 생략(R3)을 관측하는 유일한 방법이다.
-	queries []index.SweepCursor
+	// queries 는 호출된 (축, 커서)를 순서대로 기록한다 — 재조회 생략(R3)을 관측하는 유일한 방법이다.
+	queries []pageQuery
+}
+
+// pageQuery 는 PendingUploads 호출 1번이다. 회차가 축마다 조회하므로 축을 함께 적는다.
+type pageQuery struct {
+	axis  index.Axis
+	after index.SweepCursor
 }
 
 type pageRow struct {
@@ -53,23 +59,40 @@ func (s *pageStore) MarkUploaded(context.Context, string, int64, int64) (bool, e
 func (s *pageStore) MarkFailed(context.Context, string, int64, int64) (bool, error) {
 	return true, nil
 }
-func (s *pageStore) MarkInitUploaded(context.Context, string, []byte) (bool, error) {
+func (s *pageStore) MarkInitUploaded(context.Context, string, []byte, string, int64, bool) (index.InitMark, error) {
+	return index.InitMarkSuccess, nil
+}
+func (s *pageStore) MarkPlaybackUploaded(context.Context, string, int64, int64) (bool, error) {
 	return true, nil
 }
-func (s *pageStore) CountBacklog(context.Context) (int64, int64, int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return int64(len(s.rows)), 0, 0, nil
+func (s *pageStore) MarkPlaybackFailed(context.Context, string, int64, string, string) (bool, error) {
+	return true, nil
 }
 
-func (s *pageStore) PendingUploads(_ context.Context, _ float64, limit int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+// CountBacklog 은 그 축의 행만 센다 — 실제 집계도 축마다 따로다(설계 5.5.4 #7).
+func (s *pageStore) CountBacklog(_ context.Context, axis index.Axis) (int64, int64, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.queries = append(s.queries, after)
+	var n int64
+	for _, r := range s.rows {
+		if r.target.Axis == axis {
+			n++
+		}
+	}
+	return n, 0, 0, nil
+}
+
+func (s *pageStore) PendingUploads(_ context.Context, axis index.Axis, _ float64, limit int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queries = append(s.queries, pageQuery{axis: axis, after: after})
 
 	var out []index.UploadTarget
 	next := after
 	for _, r := range s.rows {
+		if r.target.Axis != axis {
+			continue // 다른 축의 행은 이 조회의 대상이 아니다 — 축마다 자격 술어가 다르다
+		}
 		if !after.IsZero() && !cursorLess(after, r.cursor) {
 			continue
 		}
@@ -95,10 +118,53 @@ func cursorLess(a, b index.SweepCursor) bool {
 	return a.Seq < b.Seq
 }
 
-func (s *pageStore) queryCursors() []index.SweepCursor {
+// queryCursors 는 그 축 조회에 넘어온 커서들이다(호출 순서).
+func (s *pageStore) queryCursors(axis index.Axis) []index.SweepCursor {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]index.SweepCursor(nil), s.queries...)
+	var out []index.SweepCursor
+	for _, q := range s.queries {
+		if q.axis == axis {
+			out = append(out, q.after)
+		}
+	}
+	return out
+}
+
+// sweepArchive 는 회차 1번을 돌리고 ② 축의 진행만 돌려준다 — ② 회차 계약(커서·정체·요약)을
+// 재는 테스트의 이음매다. 이 파일의 가짜들은 ③·init 축에 행을 주지 않아 두 축은 매 회차 빈
+// 페이지를 돈다.
+func sweepArchive(u *Uploader, resume index.SweepCursor, stalled int) (index.SweepCursor, int) {
+	next := u.sweepOnce(context.Background(), map[index.Axis]axisProgress{
+		index.AxisArchive: {resume: resume, stalled: stalled},
+	})
+	p := next[index.AxisArchive]
+	return p.resume, p.stalled
+}
+
+// ofAxis 는 그 축 회차의 로그만 고른다 — 한 회차가 세 축을 돌아 같은 이름의 요약이 축마다 나온다.
+func ofAxis(recs []logRecord, a index.Axis) []logRecord {
+	var out []logRecord
+	for _, r := range recs {
+		if r.attrs["axis"] == a.String() {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// pageFunc 는 ② 축 한 페이지를 내는 조회 훅이다(축 인자 없음 — archiveOnly 가 감싼다).
+type pageFunc func(ctx context.Context, tailGraceSecs float64, limit int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error)
+
+// archiveOnly 는 ② 축 조회에만 hook 을 부르고 ③·init 축에는 빈 페이지(행 0 · 커서 그대로)를
+// 준다 — ② 회차 계약을 재는 테스트가 같은 회차의 나머지 두 축에 흔들리지 않게 한다.
+func archiveOnly(hook pageFunc) func(context.Context, index.Axis, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+	return func(ctx context.Context, a index.Axis, grace float64, limit int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+		if a != index.AxisArchive {
+			return nil, after, nil
+		}
+		return hook(ctx, grace, limit, after)
+	}
 }
 
 // newSweepUploader 는 스위퍼만 돌리기 위한 업로더다. 워커는 큐를 비우지 않는다 —
@@ -134,7 +200,7 @@ func TestSweepAdvancesOverRejectedRows(t *testing.T) {
 		u.gate.quarantine(archiveKey(r.target.StreamID, r.target.Seq))
 	}
 
-	resume, stalled := u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+	resume, stalled := sweepArchive(u, index.SweepCursor{}, 0)
 	if stalled != 0 {
 		t.Errorf("stalled = %d, want 0 — QueueFull 이 없었다", stalled)
 	}
@@ -154,13 +220,13 @@ func TestSweepRunsStage2EvenWhenStage1Admitted(t *testing.T) {
 
 	// 비-zero 커서에서 시작해 1단계 재사용 분기를 피한다.
 	start := st.rows[3].cursor
-	resume, _ := u.sweepOnce(context.Background(), start, 0)
+	resume, _ := sweepArchive(u, start, 0)
 
 	if !cursorLess(start, resume) {
 		t.Errorf("커서 = %+v, want %+v 보다 뒤 — 2단계가 돌지 않았다", resume, start)
 	}
 	stages := map[int64]int{}
-	for _, r := range cap.find("upload_sweep") {
+	for _, r := range ofAxis(cap.find("upload_sweep"), index.AxisArchive) {
 		stages[r.attrs["stage"].(int64)]++
 	}
 	if stages[1] != 1 || stages[2] != 1 {
@@ -175,9 +241,9 @@ func TestSweepReusesStage1PageWithoutReEnqueue(t *testing.T) {
 	st := newPageStore(4, "s") // SweepLimit(4)보다 크지 않아 1페이지로 끝난다
 	u, cap := newSweepUploader(t, st, nil)
 
-	resume, _ := u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+	resume, _ := sweepArchive(u, index.SweepCursor{}, 0)
 
-	if got := len(st.queryCursors()); got != 1 {
+	if got := len(st.queryCursors(index.AxisArchive)); got != 1 {
 		t.Errorf("PendingUploads 호출 = %d회, want 1회 (재조회 생략)", got)
 	}
 	if n := len(u.queue); n != 4 {
@@ -189,9 +255,10 @@ func TestSweepReusesStage1PageWithoutReEnqueue(t *testing.T) {
 		t.Error("승계가 되지 않아 커서가 전진하지 않았다")
 	}
 	var stage2 *logRecord
-	for i, r := range cap.find("upload_sweep") {
+	summaries := ofAxis(cap.find("upload_sweep"), index.AxisArchive)
+	for i, r := range summaries {
 		if r.attrs["stage"].(int64) == 2 {
-			stage2 = &cap.find("upload_sweep")[i]
+			stage2 = &summaries[i]
 		}
 	}
 	if stage2 == nil {
@@ -211,7 +278,7 @@ func TestSweepAbortedRoundStillReportsAndCountsStall(t *testing.T) {
 	stalled := 0
 	var resume index.SweepCursor
 	for i := 0; i < 5; i++ {
-		resume, stalled = u.sweepOnce(context.Background(), resume, stalled)
+		resume, stalled = sweepArchive(u, resume, stalled)
 	}
 
 	if stalled != 5 {
@@ -219,7 +286,7 @@ func TestSweepAbortedRoundStillReportsAndCountsStall(t *testing.T) {
 	}
 	// 1단계에서 막혔으므로 stage=1 만 나오고 stage=2 는 아예 없다(N-6).
 	stages := map[int64]int{}
-	for _, r := range cap.find("upload_sweep") {
+	for _, r := range ofAxis(cap.find("upload_sweep"), index.AxisArchive) {
 		stages[r.attrs["stage"].(int64)]++
 	}
 	if stages[2] != 0 {
@@ -259,7 +326,7 @@ func TestSweepDoesNotRewindCursorWhenStage2AbortsAtFirstRow(t *testing.T) {
 	u, cap := newSweepUploader(t, st, func(o *Options) { o.QueueLen = 4 })
 
 	start := st.rows[7].cursor // 정렬 뒤쪽 — 되감기면 앞쪽(rows[0..3])으로 간다
-	resume, stalled := u.sweepOnce(context.Background(), start, 0)
+	resume, stalled := sweepArchive(u, start, 0)
 
 	if resume != start {
 		t.Fatalf("resumeCursor = %+v, want %+v (불변) — 되감기면 옛 행 기아가 재발한다", resume, start)
@@ -279,7 +346,7 @@ func TestSweepDoesNotRewindCursorWhenStage2AbortsAtFirstRow(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		u.gate.quarantine(archiveKey(st.rows[i].target.StreamID, st.rows[i].target.Seq))
 	}
-	next, stalled2 := u.sweepOnce(context.Background(), resume, stalled)
+	next, stalled2 := sweepArchive(u, resume, stalled)
 	// tq-6 — 정상 회차는 카운터를 0 으로 되돌린다. 리셋이 없으면 한 번 막힌 뒤로
 	// sweep_cursor_stalled 가 영구 발화해 경보가 의미를 잃는다.
 	if stalled2 != 0 {
@@ -310,7 +377,7 @@ func TestSweepReachesLastRowWithinBoundedRounds(t *testing.T) {
 	admittedRound := map[string]uint64{}
 
 	for round := 0; round < 40; round++ {
-		resume, stalled = u.sweepOnce(context.Background(), resume, stalled)
+		resume, stalled = sweepArchive(u, resume, stalled)
 		// 이번 회차에 접수된 행을 큐에서 꺼내 회차 ID 를 기록한다.
 		for {
 			select {
@@ -366,7 +433,7 @@ func newErrSweepUploader(t *testing.T, st index.UploadStore) (*Uploader, *logCap
 }
 
 // onePage 는 정상 1페이지를 돌려주는 훅이다. 페이지가 limit 보다 짧으므로 순환으로 끝난다.
-func onePage(rows []pageRow) func(context.Context, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+func onePage(rows []pageRow) pageFunc {
 	return func(_ context.Context, _ float64, _ int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
 		out := make([]index.UploadTarget, 0, len(rows))
 		next := after
@@ -388,12 +455,12 @@ func TestSweepQueryFailureKeepsCursorAndReportsOnce(t *testing.T) {
 	start := index.SweepCursor{StartWall: time.Date(2026, 8, 1, 0, 0, 5, 0, time.UTC), StreamID: "anchor", Seq: 5}
 
 	t.Run("1단계_조회_실패", func(t *testing.T) {
-		st := &fakeUploadStore{onPending: func(context.Context, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+		st := &fakeUploadStore{onPending: archiveOnly(func(context.Context, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
 			return nil, index.SweepCursor{}, errors.New("연결 끊김")
-		}}
+		})}
 		u, cap := newErrSweepUploader(t, st)
 
-		resume, stalled := u.sweepOnce(context.Background(), start, 3)
+		resume, stalled := sweepArchive(u, start, 3)
 
 		if resume != start {
 			t.Errorf("커서 = %+v, want %+v (불변)", resume, start)
@@ -408,7 +475,7 @@ func TestSweepQueryFailureKeepsCursorAndReportsOnce(t *testing.T) {
 		if rec.attrs["stage"] != int64(1) {
 			t.Errorf("stage = %v, want 1", rec.attrs["stage"])
 		}
-		for _, r := range cap.find("upload_sweep") {
+		for _, r := range ofAxis(cap.find("upload_sweep"), index.AxisArchive) {
 			if r.attrs["stage"] == int64(2) {
 				t.Errorf("1단계가 실패했는데 2단계 요약이 나왔다: %v", r.attrs)
 			}
@@ -416,10 +483,10 @@ func TestSweepQueryFailureKeepsCursorAndReportsOnce(t *testing.T) {
 
 		// 다음 회차는 정상 진행한다.
 		st.mu.Lock()
-		st.onPending = onePage(rows)
+		st.onPending = archiveOnly(onePage(rows))
 		st.mu.Unlock()
 		cap.reset()
-		next, _ := u.sweepOnce(context.Background(), resume, stalled)
+		next, _ := sweepArchive(u, resume, stalled)
 		if next != rows[len(rows)-1].cursor && !next.IsZero() {
 			t.Errorf("다음 회차 커서 = %+v — 회차가 정상 진행하지 않았다", next)
 		}
@@ -431,17 +498,17 @@ func TestSweepQueryFailureKeepsCursorAndReportsOnce(t *testing.T) {
 	t.Run("1단계_실패_회차는_순환으로_관측되지_않는다", func(t *testing.T) {
 		// resume 가 IsZero 인 회차가 L-4 의 무대다. 1단계 결과를 승계하는 분기라
 		// 빈 결과가 그대로 "끝 도달 = 순환"으로 흘러갔다.
-		st := &fakeUploadStore{onPending: func(context.Context, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+		st := &fakeUploadStore{onPending: archiveOnly(func(context.Context, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
 			return nil, index.SweepCursor{}, errors.New("연결 끊김")
-		}}
+		})}
 		u, cap := newErrSweepUploader(t, st)
 
-		resume, _ := u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+		resume, _ := sweepArchive(u, index.SweepCursor{}, 0)
 
 		if !resume.IsZero() {
 			t.Errorf("커서 = %+v, want zero (불변)", resume)
 		}
-		for _, r := range cap.find("upload_sweep") {
+		for _, r := range ofAxis(cap.find("upload_sweep"), index.AxisArchive) {
 			if r.attrs["cursor_wrapped"] == true {
 				t.Errorf("아무것도 훑지 않았는데 cursor_wrapped=true 로 관측됐다: %v", r.attrs)
 			}
@@ -451,7 +518,7 @@ func TestSweepQueryFailureKeepsCursorAndReportsOnce(t *testing.T) {
 	t.Run("2단계_조회_실패", func(t *testing.T) {
 		var calls int
 		st := &fakeUploadStore{}
-		st.onPending = func(ctx context.Context, g float64, l int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+		st.onPending = archiveOnly(func(ctx context.Context, g float64, l int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
 			st.mu.Lock()
 			calls++
 			n := calls
@@ -460,10 +527,10 @@ func TestSweepQueryFailureKeepsCursorAndReportsOnce(t *testing.T) {
 				return onePage(rows)(ctx, g, l, after)
 			}
 			return nil, index.SweepCursor{}, errors.New("연결 끊김")
-		}
+		})
 		u, cap := newErrSweepUploader(t, st)
 
-		resume, stalled := u.sweepOnce(context.Background(), start, 2)
+		resume, stalled := sweepArchive(u, start, 2)
 
 		if resume != start {
 			t.Errorf("커서 = %+v, want %+v (불변)", resume, start)
@@ -475,7 +542,7 @@ func TestSweepQueryFailureKeepsCursorAndReportsOnce(t *testing.T) {
 		if rec.attrs["stage"] != int64(2) {
 			t.Errorf("stage = %v, want 2", rec.attrs["stage"])
 		}
-		for _, r := range cap.find("upload_sweep") {
+		for _, r := range ofAxis(cap.find("upload_sweep"), index.AxisArchive) {
 			if r.attrs["stage"] == int64(2) && r.attrs["cursor_wrapped"] == true {
 				t.Errorf("조회에 실패했는데 순환으로 관측됐다: %v", r.attrs)
 			}
@@ -484,14 +551,18 @@ func TestSweepQueryFailureKeepsCursorAndReportsOnce(t *testing.T) {
 
 	t.Run("CountBacklog_실패", func(t *testing.T) {
 		st := &fakeUploadStore{
-			onPending: onePage(rows),
-			onBacklog: func(context.Context) (int64, int64, int64, error) {
+			onPending: archiveOnly(onePage(rows)),
+			// ② 축 집계만 실패한다 — 한 축의 집계 실패가 그 축에서만 보고되는지를 본다.
+			onBacklog: func(_ context.Context, a index.Axis) (int64, int64, int64, error) {
+				if a != index.AxisArchive {
+					return 0, 0, 0, nil
+				}
 				return 0, 0, 0, errors.New("연결 끊김")
 			},
 		}
 		u, cap := newErrSweepUploader(t, st)
 
-		_, stalled := u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+		_, stalled := sweepArchive(u, index.SweepCursor{}, 0)
 
 		rec := cap.one(t, "upload_sweep_failed")
 		if rec.attrs["stage"] != int64(0) {
@@ -508,7 +579,7 @@ func TestSweepQueryFailureKeepsCursorAndReportsOnce(t *testing.T) {
 		st.onBacklog = nil
 		st.mu.Unlock()
 		cap.reset()
-		u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+		sweepArchive(u, index.SweepCursor{}, 0)
 		if n := cap.count("upload_sweep_failed"); n != 0 {
 			t.Errorf("정상 회차에 upload_sweep_failed 가 %d건", n)
 		}
@@ -529,24 +600,24 @@ func TestSweepCancellationIsNotAnError(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Run("조회", func(t *testing.T) {
-				st := &fakeUploadStore{onPending: func(context.Context, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+				st := &fakeUploadStore{onPending: func(context.Context, index.Axis, float64, int, index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
 					return nil, index.SweepCursor{}, fmt.Errorf("업로드 대상 조회 실패: %w", c.err)
 				}}
 				u, cap := newErrSweepUploader(t, st)
 
-				u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+				sweepArchive(u, index.SweepCursor{}, 0)
 
 				assertNoUploaderErrorOrWarn(t, cap)
 			})
 			t.Run("집계", func(t *testing.T) {
 				st := &fakeUploadStore{
-					onBacklog: func(context.Context) (int64, int64, int64, error) {
+					onBacklog: func(context.Context, index.Axis) (int64, int64, int64, error) {
 						return 0, 0, 0, fmt.Errorf("업로드 잔량 집계 실패: %w", c.err)
 					},
 				}
 				u, cap := newErrSweepUploader(t, st)
 
-				u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+				sweepArchive(u, index.SweepCursor{}, 0)
 
 				assertNoUploaderErrorOrWarn(t, cap)
 			})
@@ -578,7 +649,7 @@ func TestSweepWrapsCursorAtEndOfTable(t *testing.T) {
 		u.gate.quarantine(archiveKey(r.target.StreamID, r.target.Seq))
 	}
 
-	resume, stalled := u.sweepOnce(context.Background(), index.SweepCursor{}, 0)
+	resume, stalled := sweepArchive(u, index.SweepCursor{}, 0)
 
 	if !resume.IsZero() {
 		t.Errorf("커서 = %+v, want zero — 끝에 닿으면 처음으로 돌아가야 한다", resume)
@@ -587,7 +658,7 @@ func TestSweepWrapsCursorAtEndOfTable(t *testing.T) {
 		t.Errorf("stalled = %d, want 0", stalled)
 	}
 	var wrapped bool
-	for _, r := range cap.find("upload_sweep") {
+	for _, r := range ofAxis(cap.find("upload_sweep"), index.AxisArchive) {
 		if r.attrs["stage"] == int64(2) && r.attrs["cursor_wrapped"] == true {
 			wrapped = true
 		}
@@ -625,7 +696,7 @@ func TestWorkerLogsAdmissionRoundNotEmissionRound(t *testing.T) {
 
 	var served bool
 	st := &fakeUploadStore{}
-	st.onPending = func(_ context.Context, _ float64, _ int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
+	st.onPending = archiveOnly(func(_ context.Context, _ float64, _ int, after index.SweepCursor) ([]index.UploadTarget, index.SweepCursor, error) {
 		st.mu.Lock()
 		defer st.mu.Unlock()
 		if served || !after.IsZero() {
@@ -633,7 +704,7 @@ func TestWorkerLogsAdmissionRoundNotEmissionRound(t *testing.T) {
 		}
 		served = true
 		return targets, index.SweepCursor{StartWall: base, StreamID: "ghost-7", Seq: 7}, nil
-	}
+	})
 	// 마킹을 느리게 만들어 워커가 여러 회차에 걸쳐 처리하게 한다.
 	st.onMarkFailed = func(context.Context, string, int64, int64) (bool, error) {
 		time.Sleep(20 * time.Millisecond)

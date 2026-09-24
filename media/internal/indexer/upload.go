@@ -18,9 +18,14 @@ type heldTail struct {
 	// nextTry 는 접수가 거부됐을 때의 다음 시도 시각이다. 매 틱 stat 을 막는다.
 	nextTry time.Time
 	// eligibleAt = cur.Tail.StartWallUTC + TailGrace.
-	// pendingUploadsSQL 의 꼬리 예외와 같은 식이다 — 다만 시계가 다르다(결정 4⁵).
-	// 이 시각을 넘기면 인덱서는 손을 떼고 스위퍼에 넘긴다.
+	// 스위퍼 조회(pendingArchiveUploadsSQL·pendingPlaybackUploadsSQL)의 꼬리 예외와 같은 식이다
+	// — 다만 시계가 다르다(결정 4⁵). 이 시각을 넘기면 인덱서는 손을 떼고 스위퍼에 넘긴다.
 	eligibleAt time.Time
+	// playbackTarget 은 이 꼬리의 ③ 작업이다(계획 4.2-R 규칙 ①). 비성장확정 꼬리(Idle·Scan)는 ③ 도
+	// ② 와 같은 시점(보류 해제·다음 INSERT 승격·포기)에 한 번만 요청한다 — 유휴 추정 직후에 뽑으면
+	// 뒤늦게 써진 마지막 part 가 빠진 채 굳는다(설계 3.1-2). 요청하면 비운다. nil 이면 없다.
+	// 보류가 그 밖의 길(재조정·낡음)로 지워질 때도 지우기 전에 요청한다 — releaseHeldPlayback.
+	playbackTarget *index.UploadTarget
 }
 
 // growthConfirmed 는 "이 사유로 확정된 조각은 더 이상 자라지 않는가"를 묻는다.
@@ -55,7 +60,49 @@ type noUploader struct{}
 
 func (noUploader) RequestUpload(index.UploadTarget) bool { return false }
 
-// requestUpload 는 업로더에게 일을 넘기는 유일한 지점이다.
+// requestRowUploads 는 INSERT 한 행 뒤의 업로드 요청을 낸다. ②·③·init 은 형제 분기다 — 한 축의
+// 거부가 다른 축을 세우지 않는다(설계 3.3·5.5.3). 보류 중이던 직전 꼬리의 승격이 새 행보다 먼저라
+// ③ 요청(업로더의 보정값 표 기록)이 seq 순을 지킨다(계획 4.2-R 규칙 ①). init 은 새 행의 ③ 보다
+// 먼저 넣는다 — 워커가 하나라 init 확정이 앞서면 그 회차의 ③ 이 대조 보류를 거치지 않는다.
+func (ix *Indexer) requestRowUploads(seg recording.Segment, prev, tail *index.TailRow, res index.SeedResult, playbackTarget *index.UploadTarget) {
+	now := time.Now()
+	// 보류 중이던 직전 꼬리를 승격한다. 더 이상 꼬리가 아니므로 IsTail=false 다 —
+	// 워커의 크기 재확인이 이 값으로 갈린다(결정 4⁵).
+	if h, ok := ix.held[seg.StreamID]; ok && prev != nil && h.seq == prev.Seq {
+		ix.releaseHeldPlayback(seg.StreamID, false)
+		if !ix.requestUpload(seg.StreamID, prev, false) {
+			ix.holdAfterRejection(seg.StreamID, prev, now)
+		}
+	}
+
+	// init 은 회차마다 이 프로세스에서 한 번 접수되면 된다 — 그 회차의 첫 행에서 요청하고, 접수가
+	// 거부되면(브레이커·큐 포화·백오프) 그 회차의 다음 행에서 다시 요청한다. 개시 행(SessionOpened)이
+	// 첫 행이고, 재기동 뒤 이어지는 회차는 개시 행을 옛 프로세스가 처리했으므로 이 프로세스가 처음
+	// 보는 행이 첫 행이다 — 장부에 이미 확정된 init 이면 같은 송출 설정·같은 재포장 산출일 때(바뀌었으면
+	// Mismatch — README 알려진 한계 표) CAS 가 AlreadySame 으로 업로더의 sessionInit 을
+	// 되살린다(없으면 그 회차의 실시간 ③ 이 전부 대조 보류로 새고, 스위퍼 init 벌은 이미 확정된 회차를
+	// 집지 않는다).
+	if res.SessionID != "" && ix.initAdmitted[seg.StreamID] != res.SessionID {
+		if ix.requestInit(seg.StreamID, res.SessionID, tail) {
+			ix.initAdmitted[seg.StreamID] = res.SessionID
+		}
+	}
+
+	// 새 꼬리의 처우. 더 자라지 않는다고 확증된 사유는 즉시 올린다.
+	if growthConfirmed(seg.Reason) {
+		if !ix.requestUpload(seg.StreamID, tail, true) {
+			ix.holdAfterRejection(seg.StreamID, tail, now)
+		}
+		ix.requestPlayback(playbackTarget, true)
+		return
+	}
+	// Idle·Scan 으로 확정된 꼬리는 아직 자랄 수 있다. 붙들었다가 다음 INSERT 나
+	// TailHold 경과 + 크기 일치에서 올린다. ③ 도 같은 시점까지 붙든다(계획 4.2-R 규칙 ①).
+	ix.holdTail(seg.StreamID, tail, playbackTarget, now)
+}
+
+// requestUpload 는 ② 아카이브 축의 일을 업로더에게 넘기는 유일한 지점이다(③·init 은 형제 함수
+// requestPlayback·requestInit 이 넘긴다).
 //
 // accepted 가 false 면 "아무 일도 없었다"이며 어떤 상태도 기록하지 않는다(결정 6‴).
 // Disabled·격리·백오프·브레이커·큐 포화가 전부 이 값으로 온다 — 인덱서에게는 구분이
@@ -69,8 +116,8 @@ func (ix *Indexer) requestUpload(streamID string, tail *index.TailRow, isTail bo
 	}
 	accepted := ix.upload.RequestUpload(index.UploadTarget{
 		StreamID: streamID,
-		// 실시간 유입은 ② 아카이브 축이다. 축을 비우면 영값(미판정)이라 업로더가 거부한다
-		// (③·init 축의 생산자는 M4 다 — POK-195 M3 설계 5.5.4 #4).
+		// 이 요청은 ② 아카이브 축이다. 축을 비우면 영값(미판정)이라 업로더가 거부한다
+		// (설계 5.5.4 #4).
 		Axis:      index.AxisArchive,
 		Seq:       tail.Seq,
 		S3Key:     tail.S3Key,
@@ -85,17 +132,58 @@ func (ix *Indexer) requestUpload(streamID string, tail *index.TailRow, isTail bo
 	return accepted
 }
 
+// requestPlayback 은 ③ 작업을 요청한다. nil 이면 이 행에는 ③ 요청이 없다.
+//
+// 접수 결과는 보지 않는다 — 사슬은 이미 전진했고(계획 4.2-R 규칙 ①) requested 는 ② 전용 부기다.
+// 거부된 ③ 은 스위퍼가 회차 보정값 표로 다시 만든다.
+func (ix *Indexer) requestPlayback(t *index.UploadTarget, isTail bool) {
+	if t == nil {
+		return
+	}
+	req := *t
+	req.IsTail = isTail
+	ix.upload.RequestUpload(req)
+}
+
+// requestInit 은 회차의 init(MAP) 작업을 요청한다 — 이 프로세스가 본 그 회차의 첫 행(방금 들어간
+// 꼬리 — 개시 행이거나 재기동 뒤 첫 행)의 조각이 원천이다. 재포장 init 은 같은 송출 설정이면 회차 안 어느 조각에서
+// 만들어도 같은 바이트다. S3Key 는 비워 보낸다: init 키는 예약값이 아니라 playback.InitKey 파생이며
+// 업로더가 스위퍼 init 행과 같은 자리에서 파생한다(계획 2.1 upload.go 행). Seq 는 init 축에서 쓰지 않는다.
+// 돌려주는 값은 접수됐는가다 — 거부면 부르는 쪽이 그 회차의 다음 행에서 다시 요청한다.
+func (ix *Indexer) requestInit(streamID, sessionID string, tail *index.TailRow) bool {
+	return ix.upload.RequestUpload(index.UploadTarget{
+		StreamID: streamID, Axis: index.AxisInit, SessionID: sessionID,
+		LocalPath: tail.LocalPath, Bytes: tail.Bytes, IsTail: true,
+	})
+}
+
 // holdTail 은 꼬리를 붙들어 둔다. ReasonIdle·ReasonScan 으로 확정된 꼬리는 아직 자랄 수
-// 있으므로 바로 올리지 않는다(결정 4⁵ · kty 확정 5).
-func (ix *Indexer) holdTail(streamID string, tail *index.TailRow, now time.Time) {
+// 있으므로 바로 올리지 않는다(결정 4⁵ · kty 확정 5). 그 행의 ③ 작업(nil 이면 없음)도 함께 붙든다.
+func (ix *Indexer) holdTail(streamID string, tail *index.TailRow, playbackTarget *index.UploadTarget, now time.Time) {
 	ix.held[streamID] = heldTail{
-		seq:        tail.Seq,
-		since:      now,
-		nextTry:    now,
-		eligibleAt: tail.StartWallUTC.Add(ix.opt.TailGrace),
+		seq:            tail.Seq,
+		since:          now,
+		nextTry:        now,
+		eligibleAt:     tail.StartWallUTC.Add(ix.opt.TailGrace),
+		playbackTarget: playbackTarget,
 	}
 	ix.log.Debug("tail_upload_held", "stream_id", streamID, "seq", tail.Seq,
 		"eligible_at", tail.StartWallUTC.Add(ix.opt.TailGrace))
+}
+
+// releaseHeldPlayback 은 보류 중인 꼬리의 ③ 작업을 한 번 요청하고 보관을 비운다 — 비우지 않으면
+// ② 재시도가 같은 ③ 을 다시 보낸다. **② 요청보다 먼저 부른다**: ② 가 접수되면 requestUpload 가
+// 보류를 통째로 지워 ③ 이 함께 사라진다. 보류를 지우는 자리(재조정·낡음)도 같은 이유로 먼저 부른다 —
+// 그 행이 회차 첫 조각이면 이 요청이 업로더의 보정값 표를 여는 유일한 자리다(없으면 스위퍼도 거부).
+func (ix *Indexer) releaseHeldPlayback(streamID string, isTail bool) {
+	h, ok := ix.held[streamID]
+	if !ok || h.playbackTarget == nil {
+		return
+	}
+	t := h.playbackTarget
+	h.playbackTarget = nil
+	ix.held[streamID] = h
+	ix.requestPlayback(t, isTail)
 }
 
 // holdAfterRejection 은 접수가 거부된 꼬리를 붙들어 둔다.
@@ -164,15 +252,18 @@ func compareString(a, b string) int {
 func (ix *Indexer) releaseHeldTail(streamID string, h heldTail, now time.Time) {
 	cur := ix.cursors[streamID]
 	if cur == nil || cur.Tail == nil || cur.Tail.Seq != h.seq {
-		// 커서가 앞서갔다 = 이 보류는 이미 의미가 없다.
+		// 커서가 앞서갔다 = 이 보류는 이미 의미가 없다. 그 행은 닫혔으니 붙든 ③ 은 비꼬리로 보낸다.
 		ix.log.Debug("held_tail_stale", "stream_id", streamID, "held_seq", h.seq)
+		ix.releaseHeldPlayback(streamID, false)
 		delete(ix.held, streamID)
 		return
 	}
 	// 포기 조건은 시각 하나다. 이 시각을 넘기면 스위퍼의 꼬리 예외가 그 행을 집는다.
+	// ③ 은 여기서 한 번 요청한다 — 실시간 요청이 있어야 업로더가 그 행을 회차 보정값 표에 적는다.
 	if !now.Before(h.eligibleAt) {
 		ix.log.Debug("tail_upload_hold_abandoned",
 			"stream_id", streamID, "seq", h.seq, "eligible_at", h.eligibleAt)
+		ix.releaseHeldPlayback(streamID, true)
 		delete(ix.held, streamID)
 		return
 	}
@@ -197,6 +288,7 @@ func (ix *Indexer) releaseHeldTail(streamID string, h heldTail, now time.Time) {
 		return
 	}
 
+	ix.releaseHeldPlayback(streamID, true)
 	if ix.requestUpload(streamID, cur.Tail, true) {
 		ix.log.Debug("tail_upload_released", "stream_id", streamID, "seq", h.seq,
 			"waited", now.Sub(h.since))
@@ -221,16 +313,20 @@ func (ix *Indexer) ApplyUploadResult(streamID string, seq int64, state index.Upl
 // reconcileUploadState 는 커서를 재적재한 뒤 메모리 상태를 새 커서에 맞춘다.
 //
 // 커서가 바뀌면 옛 seq 를 가리키는 requested·held 는 전부 의미를 잃는다. 남겨 두면
-// D13 교정(확인 2.5)과 보류 판정이 엉뚱한 행을 근거로 돌아간다.
+// D13 교정(확인 2.5)과 보류 판정이 엉뚱한 행을 근거로 돌아간다. 보류에 붙든 ③ 작업은 지우기 전에
+// 요청한다(규칙 ① — 한 행의 ③ 요청은 보류가 어느 길로 사라지든 1회). 그 행은 ② 가 이미 확정됐거나
+// 커서가 떠났으니 닫혔다(IsTail=false).
 func (ix *Indexer) reconcileUploadState(streamID string) {
 	cur := ix.cursors[streamID]
 	if cur == nil || cur.Tail == nil || cur.Tail.UploadState != index.UploadStatePending {
 		// 꼬리가 없거나 이미 확정된 행이면 인덱서가 할 일이 없다.
+		ix.releaseHeldPlayback(streamID, false)
 		delete(ix.held, streamID)
 		delete(ix.requested, streamID)
 		return
 	}
 	if h, ok := ix.held[streamID]; ok && h.seq != cur.Tail.Seq {
+		ix.releaseHeldPlayback(streamID, false)
 		delete(ix.held, streamID)
 	}
 	if seq, ok := ix.requested[streamID]; ok && seq != cur.Tail.Seq {

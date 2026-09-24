@@ -21,7 +21,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 )
 
-// ★ session·playback 임포트는 **이 테스트 파일 한정**이다.
+// ★ session·playback 임포트는 **테스트 파일 한정**이다.
 //
 // 비테스트 코드의 index → session 임포트는 0 이다(계획 3절 경계) — 그래서 세션 결정자는
 // 이 패키지가 선언한 SessionDecider 로 주입된다. 아래 어댑터는 조립 지점
