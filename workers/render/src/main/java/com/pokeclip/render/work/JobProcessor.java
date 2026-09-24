@@ -114,7 +114,8 @@ public class JobProcessor {
             for (ClipRenderer.Produced p : produced) {
                 String name = p.file().getFileName().toString();
                 String key = job.outputKey(token, name);
-                store.upload(job.outputBucket(), key, p.file(), "video".equals(p.kind()) ? "video/mp4" : "application/x-subrip");
+                store.upload(job.outputBucket(), key, p.file(),
+                        "video".equals(p.kind()) ? "video/mp4" : "application/x-subrip", deadline);
                 result.add(new ResultItem(p.outputId(), p.kind(), key));
             }
             gate.report(95, "upload");

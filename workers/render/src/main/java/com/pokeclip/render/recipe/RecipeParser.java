@@ -181,7 +181,13 @@ public final class RecipeParser {
             object(item, "subtitles.segments[]", SEGMENT);
             long start = longValue(item.get("startAtMs"), "subtitles.segments[].startAtMs");
             long end = longValue(item.get("endAtMs"), "subtitles.segments[].endAtMs");
-            String text = text(item.get("text"), "subtitles.segments[].text");
+            // 빈 글자는 clip 저장 검증이 받는다(null만 거부). 여기서 거부하면 저장된 편집본이 영상을 못 만든다(PR #194 codex).
+            // 받아 두고 렌더에서 뺀다(SrtWriter).
+            JsonNode textNode = item.get("text");
+            if (textNode == null || !textNode.isString()) {
+                throw invalid("subtitles.segments[].text가 문자열이 아니다");
+            }
+            String text = textNode.asString();
             if (start >= end) {
                 throw invalid("subtitles.segments[]: startAtMs < endAtMs 여야 한다");
             }

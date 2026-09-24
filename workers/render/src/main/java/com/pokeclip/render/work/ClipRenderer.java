@@ -76,7 +76,7 @@ public class ClipRenderer {
         for (int i = 0; i < sources.size(); i++) {
             SourceSegment s = sources.get(i);
             String name = String.format("seg_%06d.m4s", i);
-            store.download(s.bucket(), s.s3Key(), dir.resolve(name));
+            store.download(s.bucket(), s.s3Key(), dir.resolve(name), deadline);
             names.add(name);
         }
         progress.report(10, "download");
@@ -154,6 +154,7 @@ public class ClipRenderer {
     private List<MediaInfo> checkSources(List<SourceSegment> sources, List<String> names, Path dir, Instant deadline,
                                    List<AudioTrack> tracks) {
         List<MediaInfo> infos = new ArrayList<>();
+        int needed = tracks.stream().mapToInt(AudioTrack::trackId).max().orElse(0) + 1;
         MediaInfo first = null;
         for (int i = 0; i < sources.size(); i++) {
             MediaInfo info = probe.probe(dir.resolve(names.get(i)), dir, deadline);
@@ -162,6 +163,12 @@ public class ClipRenderer {
                 log.warn("render.source_mismatch seq={} expectedMs={} probedMs={}", sources.get(i).seq(),
                         sources.get(i).durationMs(), info.videoDurationMs());
                 throw RenderFailure.permanent(ErrorCode.SOURCE_MISMATCH, "영상 조각 길이가 기록과 다르다");
+            }
+            // 조각마다 본다. 방송 중 재접속으로 트랙 구성이 바뀌면 앞 조각에만 있는 트랙이 생긴다. 첫 조각만 보면
+            // 뒤에서 소리가 빠진 클립이 나오거나 ffmpeg가 죽어 영구 문제가 「다시 해 볼 실패」로 세 번 돈다(PR #194 codex).
+            if (info.audioStreams() < needed) {
+                throw RenderFailure.permanent(ErrorCode.SOURCE_MISSING,
+                        "고른 오디오 트랙이 방송에 없다(방송 소리 트랙 " + info.audioStreams() + "개)");
             }
             if (first == null) {
                 first = info;
@@ -172,17 +179,19 @@ public class ClipRenderer {
         if (first.width() <= 0 || first.height() <= 0) {
             throw RenderFailure.permanent(ErrorCode.SOURCE_MISMATCH, "영상 조각에 화면이 없다");
         }
-        int needed = tracks.stream().mapToInt(AudioTrack::trackId).max().orElse(0) + 1;
-        if (first.audioStreams() < needed) {
-            throw RenderFailure.permanent(ErrorCode.SOURCE_MISSING,
-                    "고른 오디오 트랙이 방송에 없다(방송 소리 트랙 " + first.audioStreams() + "개)");
-        }
         return infos;
     }
 
     /**
      * 조각을 잇는 간격. 앞 조각의 소리가 끝나는 자리에 다음 조각의 소리 시작을 맞춘다({@link RenderCommands#concatList}).
      * 간격 = 앞 조각 소리 끝 − 다음 조각 소리 시작(둘 다 각 파일 첫 시각 기준).
+     *
+     * <p><b>장부의 조각 시작 시각(sourceStartAtMs) 차이는 쓰지 않는다.</b> 회차 안의 {@code playback_pdt}는 조각 길이를 그대로
+     * 더해 가는 값이라 빈틈이 0이고(실측 2026-09-24: +3999ms 뒤 정확히 다음 조각), 그 길이는 영상 마지막 프레임이 부푼 값이라
+     * 실제보다 수십 ms 길다. 장부로 자리를 잡으면 경계마다 그만큼 빈틈이 쌓인다. 예전 {@code start_wall_utc}(파일 생성 벽시계)는
+     * 조각마다 100ms 안팎 흔들렸는데(clip이 4,000ms 조각의 시작 간격 4,110ms를 정상으로 받는 이유), 그것을 영상에 끼우면
+     * 3분 클립에 가짜 공백이 수 초 생긴다. 진짜 끊김은 {@link #checkRange}가 거른다. 자르기는 첫 조각 안에서만 장부 시각을 쓰므로
+     * 시작점은 장부 축 그대로 정확하다.
      */
     static List<Long> spacing(List<MediaInfo> infos) {
         List<Long> spacing = new ArrayList<>();

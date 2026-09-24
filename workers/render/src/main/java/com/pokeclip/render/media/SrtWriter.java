@@ -12,6 +12,7 @@ import java.util.List;
  * <ul>
  *   <li>컷 밖 자막은 무시한다(거부 아님). 컷을 넓히면 자연히 돌아온다.</li>
  *   <li>컷 경계에 걸치면 경계에서 자른다. 자른 결과가 0ms 이하면 뺀다.</li>
+ *   <li>글자가 비었거나 공백뿐인 자막은 뺀다(clip이 저장은 받는다). 빈 줄을 번인하거나 srt에 넣지 않는다.</li>
  *   <li>남는 것이 없으면 빈 문자열. srt 파일을 만들지 않는다(빈 파일 금지, 계약1 3절).</li>
  * </ul>
  */
@@ -25,7 +26,7 @@ public final class SrtWriter {
         for (SubtitleSegment s : segments) {
             long start = Math.max(s.startAtMs(), cut.inAtMs()) - cut.inAtMs();
             long end = Math.min(s.endAtMs(), cut.outAtMs()) - cut.inAtMs();
-            if (end > start) {
+            if (end > start && !s.text().isBlank()) {
                 inside.add(new SubtitleSegment(start, end, s.text()));
             }
         }

@@ -114,6 +114,19 @@ class ClipRendererTest {
     }
 
     @Test
+    void 뒤_조각에_고른_트랙이_없어도_SOURCE_MISSING() {
+        // 방송 중 재접속으로 트랙 구성이 바뀐 경우: 둘째 조각만 소리 두 줄로 다시 싼다.
+        ObjectNode recipe = Fixtures.recipe("s1");
+        recipe.putNull("subtitles");
+        ClipRenderer renderer = renderer(i -> i == 1 ? twoTrackCopy() : Path.of("src/test/resources/segments/seg_" + i + ".m4s"));
+        assertThatThrownBy(() -> renderer.render(job(recipe), dir, Instant.now().plusSeconds(60), (p, s) -> { }))
+                .isInstanceOfSatisfying(RenderFailure.class, f -> {
+                    assertThat(f.code()).isEqualTo(ErrorCode.SOURCE_MISSING);
+                    assertThat(f.retryable()).isFalse();
+                });
+    }
+
+    @Test
     void 조각이_없으면_SOURCE_MISSING() {
         ObjectNode envelope = Fixtures.envelope(UUID.randomUUID(), Fixtures.recipe("s1"));
         envelope.putArray("sourceKeys");
@@ -137,20 +150,41 @@ class ClipRendererTest {
     }
 
     static ClipRenderer renderer() {
+        return renderer(i -> Path.of("src/test/resources/segments/seg_" + i + ".m4s"));
+    }
+
+    static ClipRenderer renderer(java.util.function.IntFunction<Path> source) {
         S3Store store = mock(S3Store.class);
         doAnswer(inv -> {
             String key = inv.getArgument(1);
             int i = Integer.parseInt(key.substring(key.length() - 5, key.length() - 4));
             try {
-                Files.copy(Path.of("src/test/resources/segments/seg_" + i + ".m4s"), (Path) inv.getArgument(2));
+                Files.copy(source.apply(i), (Path) inv.getArgument(2));
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
             return null;
-        }).when(store).download(anyString(), anyString(), any(Path.class));
+        }).when(store).download(anyString(), anyString(), any(Path.class), any(Instant.class));
         ProcessRunner runner = new ProcessRunner();
         return new ClipRenderer(store, new MediaProbe(runner, Fixtures.MAPPER, "ffprobe"), runner, Fixtures.MAPPER,
                 "ffmpeg", null);
+    }
+
+    /** 둘째 조각을 소리 두 줄(트랙 0·1)만 남겨 다시 싼 사본. */
+    private Path twoTrackCopy() {
+        Path out = dir.resolveSibling(dir.getFileName() + "-two-track.mp4");
+        try {
+            Process p = new ProcessBuilder("ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i",
+                    "src/test/resources/segments/seg_1.m4s", "-map", "0:v", "-map", "0:a:0", "-map", "0:a:1",
+                    "-c", "copy", out.toString()).inheritIO().start();
+            assertThat(p.waitFor()).isZero();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
+        return out;
     }
 
     private static JsonNode probe(Path file) {

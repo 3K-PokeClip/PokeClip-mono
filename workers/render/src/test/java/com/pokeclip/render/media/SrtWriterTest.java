@@ -27,6 +27,12 @@ class SrtWriterTest {
     }
 
     @Test
+    void 빈_글자_자막은_뺀다() {
+        assertThat(SrtWriter.clipped(List.of(new SubtitleSegment(11_000, 12_000, "  "),
+                new SubtitleSegment(12_000, 13_000, "")), cut)).isEmpty();
+    }
+
+    @Test
     void srt_형식() {
         String srt = SrtWriter.render(List.of(new SubtitleSegment(0, 1_500, "첫\n\n줄"),
                 new SubtitleSegment(3_723_004, 3_724_000, "둘")));

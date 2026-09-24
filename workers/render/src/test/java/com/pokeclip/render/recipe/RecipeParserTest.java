@@ -67,6 +67,15 @@ class RecipeParserTest {
     }
 
     @Test
+    void 빈_자막_글자는_clip처럼_받는다() {
+        ObjectNode r = Fixtures.recipe("s1");
+        ((ObjectNode) r.get("subtitles").get("segments").get(0)).put("text", "");
+        assertThat(RecipeParser.parse(r).subtitles().segments().getFirst().text()).isEmpty();
+        rejects(x -> ((ObjectNode) x.get("subtitles").get("segments").get(0)).put("text", 3));
+        rejects(x -> ((ObjectNode) x.get("subtitles").get("segments").get(0)).putNull("text"));
+    }
+
+    @Test
     void 자막_규칙() {
         rejects(r -> ((ObjectNode) r.get("subtitles")).put("mode", "KARAOKE"));
         rejects(r -> ((ObjectNode) r.get("subtitles").get("segments").get(1)).put("startAtMs", Fixtures.BASE + 2_000));

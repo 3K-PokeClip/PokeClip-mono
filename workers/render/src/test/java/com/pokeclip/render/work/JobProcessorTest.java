@@ -73,7 +73,7 @@ class JobProcessorTest {
         assertThat(d).isEqualTo(Disposition.DELETE);
         assertThat(clip.types()).containsExactly("STARTED", "PROGRESS", "SUCCEEDED");
         String key = "clips/42/" + FakeClip.TOKEN + "/o1.mp4";
-        verify(store).upload(eq("clips"), eq(key), any(), eq("video/mp4"));
+        verify(store).upload(eq("clips"), eq(key), any(), eq("video/mp4"), any());
         FakeClip.Received done = clip.last("SUCCEEDED");
         assertThat(done.body().path("executionToken").asString()).isEqualTo(FakeClip.TOKEN);
         assertThat(done.body().path("result").get(0).path("s3Key").asString()).isEqualTo(key);
@@ -121,7 +121,7 @@ class JobProcessorTest {
 
     @Test
     void 일시_실패는_RETRY_SCHEDULED와_60에서_120초_뒤_다시() {
-        doThrow(RenderFailure.transientFailure("S3 500", null)).when(store).upload(anyString(), anyString(), any(), anyString());
+        doThrow(RenderFailure.transientFailure("S3 500", null)).when(store).upload(anyString(), anyString(), any(), anyString(), any());
         Disposition d = processor.process(body());
         assertThat(d.kind()).isEqualTo(Disposition.Kind.DELAY);
         assertThat(d.delay()).isBetween(Duration.ofSeconds(60), Duration.ofSeconds(120));
@@ -132,7 +132,7 @@ class JobProcessorTest {
     @Test
     void 마지막_시도의_일시_실패는_종결한다() {
         clip.finalAttempt();
-        doThrow(RenderFailure.transientFailure("S3 500", null)).when(store).upload(anyString(), anyString(), any(), anyString());
+        doThrow(RenderFailure.transientFailure("S3 500", null)).when(store).upload(anyString(), anyString(), any(), anyString(), any());
         assertThat(processor.process(body())).isEqualTo(Disposition.DELETE);
         assertThat(clip.types()).doesNotContain("RETRY_SCHEDULED").contains("TERMINAL_FAILED");
     }
