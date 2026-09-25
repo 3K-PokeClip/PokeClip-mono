@@ -299,6 +299,7 @@ func (s *pgStore) insertOnce(ctx context.Context, r Record, seed Seed, src Sessi
 func withCommitted(res SeedResult, r Record, o sessionOpening) SeedResult {
 	res.SessionOpened = o.opened
 	res.DiscontinuityBase = o.discontinuityBase
+	res.TargetDuration = o.targetDuration
 	res.InheritsSession = o.inheritsSession
 	res.DurationMS = r.DurationMS
 	if r.SessionID != nil {
@@ -383,21 +384,22 @@ func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src Se
 type sessionOpening struct {
 	opened            bool
 	discontinuityBase int64
+	targetDuration    int32
 	inheritsSession   string
 }
 
-// openedSessionSQL 은 방금 연 세션 행에서 개시가 정한 두 열을 되읽는다.
+// openedSessionSQL 은 방금 연 세션 행에서 개시가 정한 세 열을 되읽는다.
 //
 // 되읽는 이유: 새 세션 행에 무엇을 쓸지는 결정자의 계획(SessionPlan)이 정하고, index 는
 // 그 계획을 열지 않는다(session.go 경계). 그래서 쓰인 값을 아는 길은 행 자신뿐이다.
 // 같은 트랜잭션이라 커밋될 값 그대로이며, 개시 때만 돌므로 조각마다 왕복이 늘지 않는다.
 const openedSessionSQL = `
-SELECT discontinuity_base, inherits_session FROM stream_sessions WHERE session_id = $1`
+SELECT discontinuity_base, target_duration, inherits_session FROM stream_sessions WHERE session_id = $1`
 
 func readOpening(ctx context.Context, tx pgx.Tx, sessionID string) (sessionOpening, error) {
 	o := sessionOpening{opened: true}
 	var inherits *string
-	if err := tx.QueryRow(ctx, openedSessionSQL, sessionID).Scan(&o.discontinuityBase, &inherits); err != nil {
+	if err := tx.QueryRow(ctx, openedSessionSQL, sessionID).Scan(&o.discontinuityBase, &o.targetDuration, &inherits); err != nil {
 		return sessionOpening{}, fmt.Errorf("개시한 세션 되읽기 실패 session_id=%q: %w", sessionID, err)
 	}
 	if inherits != nil {

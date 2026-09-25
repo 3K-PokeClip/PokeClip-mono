@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -86,9 +87,10 @@ func (s *fakeStore) scriptSessions(ids ...string) {
 	s.sessions = append(s.sessions, ids...)
 }
 
-// attribute 는 대본의 다음 세션으로 SeedResult 의 개시 통로 8필드를 채운다 — store.go
+// attribute 는 대본의 다음 세션으로 SeedResult 의 개시 통로 9필드를 채운다 — store.go
 // withCommitted 와 같은 뜻이다: 개시 = 직전 귀속 세션과 다른 세션, PDT = 개시면 벽시계·
-// 아니면 max(직전 PDT + 직전 길이, 벽시계)(설계 5.1.1 재귀식), 키 = playback.SegKey(실패면 NULL).
+// 아니면 max(직전 PDT + 직전 길이, 벽시계)(설계 5.1.1 재귀식), 키 = playback.SegKey(실패면 NULL),
+// 개시 TD = max(6, 첫 조각 반올림 초)(session.openTargetDuration 과 같은 규칙 — TD 운반, 커밋 ④).
 // base·계승·직전 첫 조각은 ⓐ 의 개시 값(0 · "" · "")이다. s.mu 를 쥔 채로 부른다.
 func (s *fakeStore) attribute(r index.Record, res index.SeedResult) index.SeedResult {
 	res.DurationMS = r.DurationMS
@@ -102,6 +104,9 @@ func (s *fakeStore) attribute(r index.Record, res index.SeedResult) index.SeedRe
 	}
 	res.SessionID = sid
 	res.SessionOpened = s.lastSession[r.StreamID] != sid
+	if res.SessionOpened {
+		res.TargetDuration = max(6, int32(math.Round(float64(r.DurationMS)/1000)))
+	}
 	pdt := r.StartWallUTC.UTC()
 	if !res.SessionOpened {
 		carried := s.lastPDT[r.StreamID].Add(time.Duration(s.lastDurMS[r.StreamID]) * time.Millisecond)
