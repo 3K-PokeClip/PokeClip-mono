@@ -141,6 +141,14 @@ export function Settings({ bridge, locked }: { bridge: Bridge; locked: boolean }
               checked={draft.sync_start}
               onChange={(v) => set('sync_start', v)}
             />
+            {/* A2 — 트랙 2~6을 소스별 스템으로 나눈다. 끄면 OBS 고급 오디오 설정의 트랙 체크를 그대로 보낸다. */}
+            <Toggle
+              id="setting-audio-auto"
+              label="오디오 트랙 자동 배정"
+              hint="소리 나는 소스를 트랙 2~6에 하나씩 나눠 실어요. 끄면 OBS 고급 오디오 설정 그대로 보내요. 녹화 트랙도 같은 배정을 써요."
+              checked={draft.audio_auto_assign}
+              onChange={(v) => set('audio_auto_assign', v)}
+            />
             <Toggle id="setting-passphrase" label="SRT 암호 사용" checked={draft.send_passphrase} onChange={(v) => set('send_passphrase', v)} />
             <Toggle
               id="setting-fallback"

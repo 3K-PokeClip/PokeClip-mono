@@ -1,3 +1,5 @@
+import type { AudioKind } from './types';
+
 // 사용자 문구 — 플러그인 data/locale/ko-KR.ini 의 Reason.* 과 같은 뜻을 유지한다.
 export const REASON: Record<string, string> = {
   invalid_format: '8자리 코드(XXXX-XXXX)를 입력하세요.',
@@ -36,6 +38,19 @@ export const REASON: Record<string, string> = {
   invalid_ingest_port: '포트는 1–65535 사이여야 해요.',
   invalid_latency: '지연은 20–8000ms 사이여야 해요.',
   unauthorized: '독 페이지 인증이 만료됐어요. OBS를 다시 시작하세요.',
+  output_no_multitrack: 'OBS 출력이 다중 오디오 트랙을 받지 않아요.',
+  audio_encoder_failed: '오디오 트랙 인코더를 만들지 못했어요.',
+  audio_track_attach_failed: '오디오 트랙을 출력에 붙이지 못했어요.',
+};
+
+// 오디오 트랙 목록의 소스 종류 표기 (src/audio-assign.cpp AudioKindName 과 같은 키).
+export const AUDIO_KIND_LABEL: Record<AudioKind, string> = {
+  mic: '마이크',
+  desktop: '데스크탑',
+  app: '앱',
+  media: '미디어',
+  browser: '브라우저',
+  other: '기타',
 };
 
 export function reasonText(code: string): string {

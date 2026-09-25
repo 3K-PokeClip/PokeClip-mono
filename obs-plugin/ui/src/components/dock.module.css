@@ -448,6 +448,62 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- 오디오 트랙 (A2) ---------- */
+.trackNo {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--pc-radius-sm);
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-secondary);
+  font-size: var(--pc-font-size-2xs);
+  font-weight: var(--pc-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.trackNo[data-filled='true'] {
+  color: var(--pc-color-point-text);
+  background: var(--pc-color-point-subtle);
+}
+.trackSources {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trackSources[data-empty='true'] {
+  color: var(--pc-color-text-disabled);
+}
+.audioNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: var(--pc-space-2) 0 0;
+  font-size: var(--pc-font-size-2xs);
+  line-height: 1.45;
+  color: var(--pc-color-text-muted);
+}
+.audioNote[data-tone='warn'] {
+  color: var(--pc-color-warning);
+}
+.audioNote svg {
+  flex: none;
+  margin-top: 2px;
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ---------- 고급 설정 ---------- */
 .settings {
   border-radius: var(--pc-radius-lg);

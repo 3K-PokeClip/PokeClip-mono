@@ -15,7 +15,7 @@
     <!-- pnpm dev 후 http://127.0.0.1:5178/dev/preview.html — 목 브리지 시나리오를 독 폭(300px)으로 나란히 본다 -->
     <div class="grid" id="grid"></div>
     <script>
-      const scenarios = ['unpaired', 'idle', 'live', 'reconnecting', 'error', 'encoder', 'no_key', 'live&theme=light', 'unpaired&theme=light'];
+      const scenarios = ['unpaired', 'idle', 'live', 'reconnecting', 'error', 'encoder', 'no_key', 'audio_overflow', 'audio_manual', 'live&theme=light', 'unpaired&theme=light'];
       const grid = document.getElementById('grid');
       for (const s of scenarios) {
         const fig = document.createElement('figure');
