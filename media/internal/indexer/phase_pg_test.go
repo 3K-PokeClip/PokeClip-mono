@@ -6,6 +6,8 @@ package indexer
 // 실제로 컷오프가 생기는가(또는 생기지 않는가). 판정 단위 검증은 seed_judgment_test.go 가,
 // 트랜잭션 형상은 index/session_tx_pg_test.go 가 각자 맡는다 — 이 파일은 **인덱서부터
 // 장부까지 관통**해야만 드러나는 것(배선·유입 채널·실관측)을 잰다.
+// ⒡-S3 의 t3 는 M4 PR ⓑ 몫이다 — 같은 관통 경로로 주조한 컷오프가 ③ 확정 뒤
+// 되감기 창에 드는지 잰다.
 //
 // PG_DSN 미설정이면 전량 skip 된다(REQUIRE_PG=1 인 CI 가 실주행 게이트다).
 
@@ -26,6 +28,8 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/pgtest"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/boundary"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/cache"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/session"
 )
 
@@ -320,6 +324,23 @@ func (f *phaseFixture) mustNotSeed(why string) {
 	if seq, reason, channel, ok := f.cutoff(); ok {
 		f.t.Fatalf("%s — 그런데 컷오프가 생겼다(seq=%d reason=%q channel=%q)", why, seq, reason, channel)
 	}
+}
+
+// rewindWindow 는 장부를 부팅 재구성으로 다시 읽어 센 되감기 창이다(index.LoadRewindLedger
+// → cache.Reload → boundary.Compute, 직전 꼬리 없음). 컷오프가 없으면 멈춘다.
+func (f *phaseFixture) rewindWindow() boundary.Window {
+	f.t.Helper()
+	l, err := index.LoadRewindLedger(context.Background(), f.pool, f.stream)
+	if err != nil {
+		f.t.Fatalf("LoadRewindLedger 실패: %v", err)
+	}
+	c := &cache.Cache{}
+	c.Reload(f.stream, l)
+	w, ok := boundary.Compute(c.Snapshot(f.stream), 0)
+	if !ok {
+		f.t.Fatal("컷오프가 없어 되감기 창을 셀 수 없다")
+	}
+	return w
 }
 
 // ---------------------------------------------------------------------------
@@ -664,4 +685,38 @@ func TestPhaseS3UnknownAndRegrownDecline(t *testing.T) {
 			t.Errorf("세션이 열렸다(session_id=%q) — fail-closed 여야 한다", *sid)
 		}
 	})
+}
+
+// t3_cutoff_settles_after_uploaded — 주조 직후 컷오프 행의 ③ 은 아직 pending 이라 되감기
+// 창이 빈 것(머리 = 컷오프 − 1)이 정상이다. ③ 업로드 확인 CAS(설계 5.5.5 첫 문장)가 그
+// 행을 uploaded 로 바꾸면 창 머리가 컷오프에 닿는다(설계 6.5.6 ⒡-S3). minio 없이 픽스처가
+// 그 CAS 문장을 직접 실행한다.
+//
+// 주조는 실제 경로다 — 인덱서 → 장부 INSERT + 주조 CTE(주조 허용 = REWIND_SEED_ENABLED
+// 상당). 창은 부팅 재구성 위에서 센다(rewindWindow — 설계의 boundary.Head 는
+// boundary.Compute 의 HeadSeq 다).
+func TestPhaseT3CutoffSettlesAfterUploaded(t *testing.T) {
+	f := newPhaseFixture(t, "t3", phase{watcher: true})
+	f.publishing(2*time.Second, 10*time.Minute)
+	f.ingest(recording.ReasonNextFile, 4*time.Second)
+	cutoff, _, _, ok := f.cutoff()
+	if !ok {
+		t.Fatalf("정상 국면인데 컷오프가 주조되지 않았다(행 %d개)", f.rowCount())
+	}
+
+	if w := f.rewindWindow(); w.HeadSeq != cutoff-1 {
+		t.Fatalf("주조 직후 창 머리 = %d, want %d(컷오프 − 1 — 컷오프 행의 ③ 이 pending 이라 빈 창이 정상)", w.HeadSeq, cutoff-1)
+	}
+	tag, err := f.pool.Exec(context.Background(), `
+		UPDATE stream_segments
+		   SET playback_upload_state='uploaded', playback_uploaded_at=now(), playback_bytes=$3
+		 WHERE stream_id=$1 AND seq=$2 AND playback_upload_state IN ('pending','failed')`,
+		f.stream, cutoff, 900)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("③ 업로드 확인 CAS = (%v, %v), want 1행 — 컷오프 행이 pending 이어야 한다", tag, err)
+	}
+
+	if w := f.rewindWindow(); w.HeadSeq < cutoff {
+		t.Errorf("③ uploaded 뒤 창 머리 = %d, want 컷오프 %d 이상", w.HeadSeq, cutoff)
+	}
 }

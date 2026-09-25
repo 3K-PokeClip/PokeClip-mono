@@ -23,6 +23,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/cache"
 )
 
 // Adopter 는 인덱서가 워처에게 파일을 되돌려 줄 때 쓰는 유일한 통로다.
@@ -222,6 +223,10 @@ type Indexer struct {
 	// initAdmitted 는 이 프로세스에서 init 요청이 업로더에 접수된 스트림별 마지막 회차다 — init 은
 	// 회차마다 접수될 때까지 그 회차의 행에서 요청한다(upload.go requestRowUploads).
 	initAdmitted map[string]string
+	// rewind 는 되감기 캐시다(rewind/cache). 장부에 커밋된 행(advance)과 꼬리 교정(correctTail)을
+	// 커밋 직후 그대로 넘긴다 — 캐시가 평시 DB 를 묻지 않고 목록을 만들 수 있는 통로가 이 둘이다(프로필
+	// 4절 「합성은 평시 DB 조회 0」). nil 이면 넘기지 않는다(캐시의 nil 규약 — 조립은 M4 PR ⓒ).
+	rewind *cache.Cache
 
 	// --- 훅 세션 경계 상태(ADR-027). 전부 프로세스 메모리에만 있다. ---
 	//
@@ -1001,6 +1006,8 @@ func (ix *Indexer) advance(cur *index.Cursor, seg recording.Segment, rec index.R
 		ix.indexed[seg.StreamID] = map[string]struct{}{}
 	}
 	ix.indexed[seg.StreamID][rec.LocalPath] = struct{}{}
+	// 장부에 커밋된 행은 되감기 캐시에도 들어간다 — 커밋 값(res)만 넘긴다(INSERT push).
+	ix.rewind.ApplyInsert(seg.StreamID, rec.Seq, res)
 
 	if seg.Reason == recording.ReasonNextFile {
 		ix.learn(seg.StreamID, int64(rec.DurationMS))
@@ -1120,6 +1127,8 @@ func (ix *Indexer) correctTail(ctx context.Context, seg recording.Segment) error
 	cur.Tail.DurationMS = int32(d)
 	cur.Tail.Bytes = fi.Size()
 	// 이것으로 파생 NextPTSMS / ExpectedNextWall 이 자동 교정된다.
+	// 되감기 캐시도 장부가 받은 길이를 따른다(교정 push) — 거절된 교정은 여기 닿지 않는다.
+	ix.rewind.ApplyTailCorrection(seg.StreamID, cur.Tail.Seq, cur.Tail.DurationMS)
 
 	// 교정이 보류 시계를 리셋한다 — 방금 자란 것을 확인했으므로 TailHold 를 다시 센다.
 	// eligibleAt 은 start_wall_utc 기반이라 불변이며, 그래야 스위퍼 자격 시점과 계속 맞물린다(R9).

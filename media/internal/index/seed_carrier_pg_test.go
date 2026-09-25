@@ -122,6 +122,44 @@ func TestInsertReportsInheritedBaseWhenTDSplitOpensSession(t *testing.T) {
 	}
 }
 
+// TD 운반(계획 「④ 캐시 착수 메모」 r2 cc M1) — 개시 되읽기가 새 회차의 target_duration 을 결과에
+// 싣는다. 결과에 없으면 되감기 캐시의 회차 TD 가 0 이 되고, 목록 머리가 #EXT-X-TARGETDURATION:0
+// (RFC 8216bis-22 4.4.3.1 「MUST be at least 1」 위반)이라 발행 전 검사 S5 가 모든 발행을 멈춘다.
+// 렌더 때 장부를 다시 묻는 우회는 프로필 4절 「합성은 평시 DB 조회 0」에 걸리므로 통로가 이것뿐이다.
+//
+// 값은 DDL 기본값 6 과 겹치지 않게 골랐다 — 첫 조각 7.6초는 반올림 8, 이어지는 8.6초는 반올림 9 > 8
+// 이라 TD 분할로 새 회차(TD 9)를 연다. 분할 개시도 옛 회차가 아니라 새 회차의 값을 실어야 한다.
+func TestInsertReportsTargetDurationWrittenAtOpening(t *testing.T) {
+	pool := newTestPool(t)
+	stream := sessionStream("carrier-td-value")
+	st := newSessionStore(pool)
+	ctx := context.Background()
+
+	_, opened, err := st.Insert(ctx, segAt(stream, 0, sessionBase, 7600), Seed{}, liveIngress())
+	if err != nil {
+		t.Fatalf("첫 Insert 실패: %v", err)
+	}
+	_, split, err := st.Insert(ctx, segAt(stream, 1, sessionBase.Add(7600*time.Millisecond), 8600), Seed{}, liveIngress())
+	if err != nil {
+		t.Fatalf("분할 Insert 실패: %v", err)
+	}
+
+	if !opened.SessionOpened || opened.TargetDuration != 8 {
+		t.Errorf("개시 (SessionOpened, TargetDuration) = (%v, %d), want (true, 8)", opened.SessionOpened, opened.TargetDuration)
+	}
+	if !split.SessionOpened || split.SessionID == opened.SessionID || split.TargetDuration != 9 {
+		t.Errorf("분할 개시 (SessionOpened, 새 회차, TargetDuration) = (%v, %v, %d), want (true, true, 9)",
+			split.SessionOpened, split.SessionID != opened.SessionID, split.TargetDuration)
+	}
+	for _, s := range sessionsOf(t, pool, stream) {
+		for _, res := range []SeedResult{opened, split} {
+			if s.ID == res.SessionID && s.TargetDuration != res.TargetDuration {
+				t.Errorf("장부의 회차 %s TD = %d, 결과 = %d — 결과가 장부와 다르다", s.ID, s.TargetDuration, res.TargetDuration)
+			}
+		}
+	}
+}
+
 // inheritingDecider 는 개시 때 inherits_session 까지 쓰는 결정자다 — 재접속 계승 갈래(M4 PR ⓒ)가
 // 새 세션 행에 쓸 값을 흉내 낸다. index 는 그 값을 결정자의 계획에서 읽지 않고 행에서 되읽으므로,
 // 누가 쓰든 결과에 실린다는 것을 잰다.

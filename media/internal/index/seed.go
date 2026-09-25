@@ -76,10 +76,14 @@ type SeedResult struct {
 	DiagErr error
 
 	// SessionOpened 는 이 조각이 새 세션을 열었는가다(비분할 개시·TD 분할 공통).
-	// 아래 세 필드는 이것이 참일 때만 뜻이 있다.
+	// 아래 네 필드는 이것이 참일 때만 뜻이 있다.
 	SessionOpened bool
 	// DiscontinuityBase 는 새 세션 행에 쓰인 discontinuity_base 다(TD 분할이면 승계한 값).
 	DiscontinuityBase int64
+	// TargetDuration 은 새 세션 행에 쓰인 target_duration(초)이다 — 그 회차 되감기 목록의
+	// EXT-X-TARGETDURATION 이 이 값이다. 개시 때 정해져 수명 동안 바뀌지 않으므로 캐시가 렌더 때
+	// 장부를 다시 묻지 않고 이 값을 든다(프로필 4절 「합성은 평시 DB 조회 0」).
+	TargetDuration int32
 	// InheritsSession 은 새 세션 행의 inherits_session 이다. "" 면 NULL 이다.
 	InheritsSession string
 	// PrevFirstLocalPath 는 계승 후보 개시에서 직전 세션 첫 조각의 local_path 다
