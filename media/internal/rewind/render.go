@@ -39,6 +39,9 @@ type Session struct {
 	// stream_sessions.first_seq 컬럼이 아니다(세션 개시 문장이 그 컬럼을 채우지 않는다). 컷오프
 	// 아래 행을 알고 있으면 그 seq 여도 된다 — 술어가 컷오프로 자른다(HasDiscontinuityTag).
 	MinSeq int64
+	// InitUploaded 는 init_uploaded_at 이 있는가다 — 이 회차의 MAP 이 가리키는 init 객체가 올라가
+	// 있다. 렌더는 읽지 않고 발행 전 검사가 읽는다(S4 계승 접두의 init · S5 MAP 도달 가능).
+	InitUploaded bool
 }
 
 // Playlist 는 되감기 목록 하나를 값으로 적은 것이다 — Render 의 입력이다.
