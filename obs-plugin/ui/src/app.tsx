@@ -1,5 +1,6 @@
 import { CircleCheck, CircleDashed, CircleX, type LucideIcon, Radio, RefreshCw, WifiOff } from 'lucide-preact';
 import { useCallback, useEffect, useState } from 'preact/hooks';
+import { AudioTracks } from './components/AudioTracks';
 import { Checks } from './components/Checks';
 import styles from './components/dock.module.css';
 import { Logo } from './components/Logo';
@@ -115,6 +116,8 @@ export function App({ bridge }: { bridge: Bridge }) {
       )}
 
       {state.paired ? <Checks state={state} /> : null}
+
+      {state.paired ? <AudioTracks state={state} /> : null}
 
       <Settings bridge={bridge} locked={locked} />
 

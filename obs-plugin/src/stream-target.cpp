@@ -13,12 +13,20 @@ Copyright (C) SoraYuki, licensed under GPL-2.0.
 #include <obs-module.h>
 #include <plugin-support.h>
 
+#include <array>
+#include <cstring>
+
 namespace pokeclip {
 
 namespace {
 constexpr const char *kOutputId = "ffmpeg_mpegts_muxer";
 constexpr const char *kServiceId = "rtmp_custom";
 constexpr int kOutputTimedOut = -10; // obs-ffmpeg-mpegts.c의 OBS_OUTPUT_TIMEDOUT (libobs 코드 아님)
+
+bool IsAac(const char *codec)
+{
+	return codec && std::strcmp(codec, "aac") == 0;
+}
 } // namespace
 
 const char *StopCodeName(int code)
@@ -106,7 +114,15 @@ bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 	// OBS 32의 setter는 스스로 참조를 잡고 obs_output_destroy가 놓는다 (obs-output.c set_video_encoder2·destroy).
 	// obs-multi-rtmp처럼 obs_encoder_get_ref를 한 번 더 넘기면, 출력이 아직 active일 때 해제하는 경로에서 새다.
 	obs_output_set_video_encoder(output_, venc);
-	obs_output_set_audio_encoder(output_, aenc, 0);
+	bool audioOk = AttachAudioEncoders(aenc, errorCode);
+	AppState::Instance().Mutate([&](StateSnapshot &s) {
+		s.checks.audioTracks = audioOk;
+		s.checks.audioTrackCount = audioOk ? kAudioTrackCount : 0;
+	});
+	if (!audioOk) {
+		Release(); // 반쯤 붙은 채로 보내지 않는다 — 트랙이 모자라면 서버의 트랙 번호가 어긋난다
+		return false;
+	}
 	obs_output_set_reconnect_settings(output_, kReconnectRetries, kReconnectDelaySec);
 
 	AppState::Instance().Mutate([](StateSnapshot &s) {
@@ -155,20 +171,109 @@ void StreamTarget::ForceStop()
 
 void StreamTarget::Release()
 {
-	if (!output_)
-		return;
-	DisconnectSignals();
-	if (obs_output_active(output_))
-		obs_output_force_stop(output_); // mpegts stop은 비동기 — 아래 destroy가 stopping_event를 기다린다
+	if (output_) {
+		DisconnectSignals();
+		if (obs_output_active(output_))
+			obs_output_force_stop(output_); // mpegts stop은 비동기 — 아래 destroy가 stopping_event를 기다린다
 
-	// 서비스는 우리가 만든 참조다. obs_output_set_service(nullptr)는 NULL을 거절해 떼어지지 않으므로,
-	// 출력을 먼저 해제(destroy가 service->output을 끊음)한 뒤 서비스를 놓는다. 서비스가 active면 libobs가 파괴를 미룬다.
-	obs_service_t *service = obs_output_get_service(output_);
-	obs_output_release(output_); // 인코더 참조는 destroy가 놓는다
-	output_ = nullptr;
-	if (service)
-		obs_service_release(service);
+		// 서비스는 우리가 만든 참조다. obs_output_set_service(nullptr)는 NULL을 거절해 떼어지지 않으므로,
+		// 출력을 먼저 해제(destroy가 service->output을 끊음)한 뒤 서비스를 놓는다. 서비스가 active면 libobs가 파괴를 미룬다.
+		obs_service_t *service = obs_output_get_service(output_);
+		obs_output_release(output_); // 붙인 인코더의 출력 쪽 참조는 destroy가 놓는다
+		output_ = nullptr;
+		if (service)
+			obs_service_release(service);
+	}
+	// 우리가 만든 오디오 인코더 — 출력이 제 참조를 놓은 뒤라 이 참조가 마지막이고, 여기서 파괴된다.
+	// 출력보다 먼저 놓으면 출력이 아직 쥔 채라 파괴되지 않고, 출력 없이 실패한 시작에서는 여기가 유일한 정리다.
+	ReleaseOwnedEncoders();
 	signalContext_.reset(); // DisconnectSignals가 진행 중 콜백을 기다린 뒤라 안전하다
+}
+
+bool StreamTarget::AttachAudioEncoders(obs_encoder_t *streamAudio, std::string &errorCode)
+{
+	// 트랙 2~6(idx 1~5)은 MULTI_TRACK_AUDIO 출력만 받는다. 아니면 obs_output_set_audio_encoder가 조용히 무시한다.
+	if ((obs_output_get_flags(output_) & OBS_OUTPUT_MULTI_TRACK_AUDIO) == 0) {
+		errorCode = "output_no_multitrack";
+		obs_log(LOG_WARNING, "%s does not accept multiple audio tracks", kOutputId);
+		return false;
+	}
+
+	// 트랙 1은 본방 오디오 인코더를 그대로 쓴다 — 시청용 믹스가 본방과 같은 바이트다(ADR-017).
+	// 본방이 트랙 1이 아니거나(고급 출력에서 방송 트랙을 바꾼 경우) AAC가 아니면(Opus 등) 믹서 0 AAC를 우리가 만든다 —
+	// 계약의 「전 트랙 AAC」와 「트랙 1 = 최종 믹스」를 지킨다.
+	const bool streamIsAac = IsAac(obs_encoder_get_codec(streamAudio));
+	const size_t streamMixer = obs_encoder_get_mixer_index(streamAudio);
+	const bool shareTrack1 = streamIsAac && streamMixer == 0;
+	const std::string encoderId = streamIsAac ? obs_encoder_get_id(streamAudio) : kFallbackAacEncoderId;
+	if (!IsAac(obs_get_encoder_codec(encoderId.c_str()))) {
+		errorCode = "audio_encoder_failed";
+		obs_log(LOG_WARNING, "AAC encoder '%s' is not available", encoderId.c_str());
+		return false;
+	}
+
+	int track1Bitrate = kFallbackTrack0BitrateKbps;
+	if (!shareTrack1) {
+		obs_data_t *streamSettings = obs_encoder_get_settings(streamAudio);
+		int bitrate = static_cast<int>(obs_data_get_int(streamSettings, "bitrate"));
+		obs_data_release(streamSettings);
+		if (bitrate > 0)
+			track1Bitrate = bitrate;
+	}
+
+	// 설정은 시작 전에 확정한다 — 방송 중 인코더 설정을 바꾸면 수신 쪽 초기화 조각이 바뀐다(ADR-020).
+	std::array<obs_encoder_t *, kAudioTrackCount> encoders{};
+	if (shareTrack1)
+		encoders[0] = streamAudio;
+	for (size_t mixer = shareTrack1 ? 1 : 0; mixer < encoders.size(); mixer++) {
+		obs_data_t *settings = obs_data_create();
+		obs_data_set_int(settings, "bitrate", mixer == 0 ? track1Bitrate : kStemAudioBitrateKbps);
+		std::string name = std::string(kAudioEncoderNamePrefix) + std::to_string(mixer + 1);
+		obs_encoder_t *encoder =
+			obs_audio_encoder_create(encoderId.c_str(), name.c_str(), settings, mixer, nullptr);
+		obs_data_release(settings);
+		if (!encoder) {
+			errorCode = "audio_encoder_failed";
+			obs_log(LOG_WARNING, "could not create audio encoder '%s' (%s, mixer %zu)", name.c_str(),
+				encoderId.c_str(), mixer);
+			return false; // 앞서 만든 것은 호출부의 Release()가 놓는다
+		}
+		obs_encoder_set_audio(encoder, obs_get_audio());
+		ownedAudioEncoders_.push_back(encoder);
+		encoders[mixer] = encoder;
+	}
+
+	// 붙이는 순서가 곧 MPEG-TS 오디오 순서다 — 트랙 1(최종 믹스)이 첫 오디오여야 서버의 재생 렌디션이
+	// 믹스를 고른다(ADR-057 -map 0:a:0). 붙은 결과를 되읽어 확인한다 — 조용히 무시되는 경로가 있다.
+	for (size_t i = 0; i < encoders.size(); i++)
+		obs_output_set_audio_encoder(output_, encoders[i], i);
+	for (size_t i = 0; i < encoders.size(); i++) {
+		if (obs_output_get_audio_encoder(output_, i) != encoders[i]) {
+			errorCode = "audio_track_attach_failed";
+			obs_log(LOG_WARNING, "audio track %zu did not attach", i + 1);
+			return false;
+		}
+	}
+
+	if (shareTrack1)
+		obs_log(LOG_INFO, "audio tracks: T1 shared '%s' (%s) + %d x %s @%d kbps (%s2..%d)",
+			obs_encoder_get_name(streamAudio), encoderId.c_str(), kAudioTrackCount - 1, encoderId.c_str(),
+			kStemAudioBitrateKbps, kAudioEncoderNamePrefix, kAudioTrackCount);
+	else
+		obs_log(LOG_INFO,
+			"audio tracks: %d x %s — T1 own @%d kbps (stream audio is %s on track %zu), T2..T%d @%d kbps",
+			kAudioTrackCount, encoderId.c_str(), track1Bitrate, obs_encoder_get_codec(streamAudio),
+			streamMixer + 1, kAudioTrackCount, kStemAudioBitrateKbps);
+	return true;
+}
+
+void StreamTarget::ReleaseOwnedEncoders()
+{
+	for (obs_encoder_t *encoder : ownedAudioEncoders_)
+		obs_encoder_release(encoder);
+	if (!ownedAudioEncoders_.empty())
+		obs_log(LOG_INFO, "released %zu audio encoder(s)", ownedAudioEncoders_.size());
+	ownedAudioEncoders_.clear();
 }
 
 void StreamTarget::PollStats()
@@ -269,9 +374,25 @@ void StreamTarget::OnStop(void *data, calldata_t *params)
 		s.stats.bitrateKbps = 0;
 	});
 
-	RunInUiThread([self, generation]() {
-		if (self->generation_ == generation && !self->IsActive())
-			self->Release();
+	RunInUiThread([self, generation]() { self->ReleaseWhenStopped(generation, kReleasePollAttempts); });
+}
+
+void StreamTarget::ReleaseWhenStopped(uint64_t generation, int attemptsLeft)
+{
+	if (generation_ != generation || !output_)
+		return;
+	if (!obs_output_active(output_)) {
+		Release(); // 우리가 만든 오디오 인코더 5개도 여기서 풀린다
+		return;
+	}
+	if (attemptsLeft <= 0) {
+		// 다음 Start()나 ForceStop()이 어차피 해제한다 — 새지는 않는다.
+		obs_log(LOG_WARNING, "SRT output still active %d ms after stop — releasing on next start",
+			kReleasePollMs * kReleasePollAttempts);
+		return;
+	}
+	RunInUiThreadAfter(kReleasePollMs, [this, generation, attemptsLeft]() {
+		ReleaseWhenStopped(generation, attemptsLeft - 1);
 	});
 }
 

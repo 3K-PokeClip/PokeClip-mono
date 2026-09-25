@@ -23,6 +23,7 @@ private:
 
 	QLabel *status_ = nullptr;
 	QLabel *checks_ = nullptr;
+	QLabel *audio_ = nullptr;
 	QLabel *message_ = nullptr;
 	QLineEdit *code_ = nullptr;
 	QPushButton *pair_ = nullptr;
