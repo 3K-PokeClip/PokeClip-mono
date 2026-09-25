@@ -6,8 +6,9 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 )
 
-// 끊김 표시 술어(계획 4.2-R RF)의 단위 검증 — 렌더와 커밋 ⑤ 축출 증분이 이 함수 하나를 부르므로
-// 술어의 항을 여기서 하나씩 가른다. 회차 S 는 P 를 계승했고 장부에서 가장 작은 seq 가 13 이다.
+// 끊김 표시 술어(계획 4.2-R RF)의 단위 검증 — 렌더와 축출 증분(EvictedDiscontinuityTags)이 이
+// 함수 하나를 부르므로 술어의 항을 여기서 하나씩 가른다. 회차 S 는 P 를 계승했고 장부에서
+// 가장 작은 seq 가 13 이다.
 //
 //	DISCONTINUITY(k) ⟺ k = 자기 회차의 첫 조각 ∧ 그 회차의 inherits_session ≠ NULL
 //	회차 첫 조각 = max(회차 최소 seq, cutoff)

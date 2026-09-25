@@ -268,7 +268,7 @@ M3에서 **무엇이 들어왔고 무엇이 일부러 빠졌는지**를 적는�
 
 ### M4(발행 층)로 넘어간 것
 
-셋째 칸은 PR ⓐ(생산 층)가 들어온 뒤의 반영 상태다. 자세한 것은 아래 「되감기 M4 ⓐ 이관 기록」 절에 있다.
+셋째 칸은 PR ⓐ(생산 층)·ⓑ(렌더·경계)가 들어온 뒤의 반영 상태다. 자세한 것은 아래 「되감기 M4 ⓐ 이관 기록」·「되감기 M4 ⓑ 이관 기록」 절에 있다.
 
 | 항목 | 왜 M3가 아닌가 | M4 반영 |
 |---|---|---|
@@ -276,10 +276,10 @@ M3에서 **무엇이 들어왔고 무엇이 일부러 빠졌는지**를 적는�
 | `init_s3_key`·`init_sha256`·`init_bytes` 세 열의 **쓰기 경로**와 워커 배선 | 값의 유일한 생산자가 위 `Producer.Init`이다. M3는 확정 CAS 문장·계약과 픽스처까지 | **완료(PR ⓐ)** — 첫 init CAS(`internal/index/upload_store.go` `MarkInitUploaded`)가 세 열과 `init_uploaded_at` 을 한 문장으로 쓴다. 워커 배선은 `axis_body.go` `markInitUploaded` |
 | ③ 바이트 추출·③ 재수거·init 재수거 | 바이트가 없는 상태에서 수거를 켜면 없는 파일을 집어 영구 격리된다 | **완료(PR ⓐ)** — 추출은 `axis_body.go` `playbackPayload`, 재수거는 `internal/upload/sweep.go` `sweepAxes`(② → ③ → init) |
 | 스위퍼의 init 조회 · backlog 축별 집계 | 회수기가 M4라 지표만 켜면 행동 없는 신호가 된다. **M3 동안 backlog 지표는 ② 축만 보여 준다**(③·init은 프로덕션 동작이 0건이라 숨는 장애가 없다) | **완료(PR ⓐ)** — init 조회 `pendingInitUploadsSQL`, 잔량 3벌(`countArchiveBacklogSQL`·`countPlaybackBacklogSQL`·`countInitBacklogSQL`). `upload_backlog` 가 축 라벨을 단다 |
-| 발행 게이트 실물(`init_uploaded_at IS NULL` → `ready:false`)·G7 skew·`rewind_cutoff_absent` 알람·writer fence | 전부 발행 층 소유다. M3는 그 **장부 축**만 픽스처로 확인했다 | **일부(PR ⓐ)** — G7 skew 기록만 들어왔다(`internal/indexer/chain.go` `recordSkew`, Debug). 완결 판정은 ⓑ, 발행 게이트·알람·fence 는 ⓒ |
+| 발행 게이트 실물(`init_uploaded_at IS NULL` → `ready:false`)·G7 skew·`rewind_cutoff_absent` 알람·writer fence | 전부 발행 층 소유다. M3는 그 **장부 축**만 픽스처로 확인했다 | **일부(PR ⓐ·ⓑ)** — G7 완결: ⓐ 의 skew 기록(`internal/indexer/chain.go` `recordSkew`, Debug)에 ⓑ 의 S7 PDT 엄격 증가 검사(`internal/rewind/validate.go` `checkPDT`)가 더해졌다. 발행 게이트·알람·fence 는 ⓒ |
 | 세션 종료 전이(`live` → `ending` → `ended`) | M4/M6. **그래서 M3에서는 같은 스트림의 연속 방송이 첫 회차에 계속 귀속된다** — 발행 층이 없어 무해하며, 테스트가 현 동작을 문서화한다 | **일부(PR ⓐ)** — init 불일치에 의한 `live → ending(init_mismatch)` 만 들어왔다(`upload_store.go` `MarkPlaybackFailed` 결속 갈래). 송출 종료 전이는 ⓒ, `ended` 는 M6 — 그래서 연속 방송이 첫 회차에 귀속되는 동작은 ⓒ 까지 그대로다 |
 | `REWIND_SEED_ENABLED` 기본값 `true` 전환 | 발행 층이 오는 PR에서 함께 켠다(kty 결정 2026-09-02). 스위치 자체는 롤백 손잡이로 남는다 | 대기 — ⓒ |
-| `discontinuity_base` 증분 산식 | 렌더 축 값이라 소비자(M4)와 같은 커밋에서 정한다. M3는 명시적 기본값 `0`("승계 없음") | 대기 — ⓑ |
+| `discontinuity_base` 증분 산식 | 렌더 축 값이라 소비자(M4)와 같은 커밋에서 정한다. M3는 명시적 기본값 `0`("승계 없음") | **완료(PR ⓑ)** — `rewind.EvictedDiscontinuityTags`(순수 함수 — 목록 앞에서 빠지는 끊김 표시 수 = base 에 더할 증분). 배선(발행 예약 문장 P0 에 동봉)은 ⓒ |
 | 상태 관측 등급(tier) ⓘⓘ·ⓘⓘⓘ 상수 | 폴러가 실측상 ⓘ만 산출한다. 소비자가 생길 때 같이 넣는다 | 대기 — 슬레이트 유입이 착지하는 마일스톤(계획 8절) |
 | **부채** — `indexer.go`가 1228줄(M3 전 1074)이다. 판정 묶음(`observation`·`buildSeed`·`corroborates`·`withStateObs`·`sessionOp` = `:595`~`:726`, 약 130줄)을 `judgment.go`로 분리한다 | 응집이 하나(유입 → 방증 → 연산)라 지금 나눠도 읽기가 나아지지만, 그 묶음을 실제로 건드리는 것이 M4(발행 축 판정 편입)라 **그때 같은 커밋에서** 옮긴다. 지금 옮기면 M4 리뷰가 이동과 변경을 함께 읽어야 한다 | 대기 — ⓒ |
 
@@ -375,6 +375,9 @@ M4(되감기 발행 층)는 PR 셋으로 나눠 들어온다 — ⓐ 생산 층 
 > **판단 대기** — 이 동작이 계약-세그먼트인덱스 5-5 6항("③ 추출도 같은 플래그로 컷오프
 > 행부터")과 어긋나는지는 **kty·3번 판단 대기다(계획 부기 31 후보).** 결정이 나기 전까지
 > 코드는 위 동작 그대로다.
+> 〔추기 2026-09-25 — 닫혔다: 2026-09-24 kty 결정 (나)는 현 동작 유지다 — ③·init 실시간 추출은
+> 플래그·컷오프와 무관하다. 계약 6항 문언을 이 동작에 맞게 고쳤고(팀 위키 PR #144 머지, main `7d12e55`)
+> 3번에 통지했다(POK-195 코멘트 #10332). 편차가 사라져 계획 부기 31 은 결번이다.〕
 
 **반면 재수거와 잔량 지표는 컷오프를 따른다.** ③ 스위퍼 조회와 ③ 잔량은 컷오프가 기록된
 스트림의 컷오프 이후 조각만 본다(계약 5-5 6항 — `internal/index/upload_store.go`
@@ -624,7 +627,7 @@ kty 결정(2026-09-19): *"사이드카가 재기동 되는 경우는 고려하�
 | **재기동만 일어난 회차** — 재기동 전 조각의 업로드 실패분과 재기동 뒤 첫 행의 판독 실패는 표 줄이 없어 GAP 이 된다(도장 역행은 없다) | 그 조각들만 GAP. 실시간 경로는 영향이 없다. 컷오프가 있는 스트림이면 스위퍼가 파일이 지워질 때까지 그 행을 다시 집고 거부한다(잔량 잡음) | 표 영속화(재기동 복구 — kty 결정 B′ 로 범위 밖, 다음 버전) |
 | **모호한 커밋** — INSERT 는 커밋됐는데 드라이버 오류로 실패처럼 보여 재시도하면 `InsertDuplicatePath` 로 끝나고 사슬 전진(`advance`)이 불리지 않는다. 다음 행이 seq 충돌 재적재를 거치면 사슬이 빠진 행을 비귀속 행처럼 보고 압축한다 | 빠진 행을 스위퍼가 표 줄(보정값 0)로 재생성하면 두 조각이 그 길이만큼 겹친다(회차 안·표시 없음). 창은 극히 좁다 | `TailRow` 에 회차 정보가 없어 구분할 수 없다 — 「빠진 행」 판정을 넣으려면 장부 재조회가 필요하다(다음 버전) |
 | 재기동 뒤 이어지는 회차에서 **접수된 init 작업이 확정 없이 끝나면**(CAS DB 오류·`Missing`·산출 실패(사다리 소진·즉시 실패 3종)·PUT 사다리 소진·브레이커 거부·EMFILE·stat 실패·S3 일시 장애 등) 그 프로세스의 `sessionInit` 은 되살아나지 않는다. 루프는 접수 여부만 알고, 장부에 init 이 이미 확정된 회차는 스위퍼 init 조회도 집지 않는다 | 그 회차 실시간 ③ 은 대조 보류(회차당 64개) 뒤 스위퍼 몫이다. ⓐ 단독 국면(컷오프 없음)에서는 올라가지 않고, ⓒ 가 스위치를 켠 뒤로는 스위퍼(30초 주기)가 회차 기대값을 실어 올린다 | 워커→루프 결과 통로(`Dirty`)로 미복원을 감지해 재요청한다 — ⓒ 착지 뒤 검토 |
-| **init 잔량이 M4 동안 영구히 남을 수 있다.** M4 에는 `ended` 전이가 없어 「`ended` 제외」가 실제로 거르는 것이 없고, init 조회·잔량 조건이 `init_uploaded_at IS NULL AND state <> 'ended'` 뿐이다(보존 창·컷오프 한정 없음). M3 로 운영된 DB 의 회차(init NULL), 원본이 1일 보존을 넘긴 회차, 확정 못 한 회차가 여기 쌓인다 | 데이터·재생 영향은 없고 경보 소음이다(M6 까지). 원본이 없는 회차는 프로세스가 뜰 때마다 `upload_file_missing` WARN + 격리되고, 30건을 넘으면 스위퍼 회차(30초)마다 `upload_backlog axis=init` WARN 이 난다 | **kty 회부**(계획 부기 31 후보와 같은 축): init 조회·잔량을 원본 보존 창(`start_wall_utc > now() − SessionTTL`)으로 한정하거나, 설계 5.5.4 #2 「컷오프-인지」를 init 에도 적용 |
+| **init 잔량이 M4 동안 영구히 남을 수 있다.** M4 에는 `ended` 전이가 없어 「`ended` 제외」가 실제로 거르는 것이 없고, init 조회·잔량 조건이 `init_uploaded_at IS NULL AND state <> 'ended'` 뿐이다(보존 창·컷오프 한정 없음). M3 로 운영된 DB 의 회차(init NULL), 원본이 1일 보존을 넘긴 회차, 확정 못 한 회차가 여기 쌓인다 | 데이터·재생 영향은 없고 경보 소음이다(M6 까지). 원본이 없는 회차는 프로세스가 뜰 때마다 `upload_file_missing` WARN + 격리되고, 30건을 넘으면 스위퍼 회차(30초)마다 `upload_backlog axis=init` WARN 이 난다 | **kty 회부**(계획 부기 31 후보와 같은 축): init 조회·잔량을 원본 보존 창(`start_wall_utc > now() − SessionTTL`)으로 한정하거나, 설계 5.5.4 #2 「컷오프-인지」를 init 에도 적용 〔추기 2026-09-25 — 부기 31 은 닫혔다(위 「M4 ⓐ 로 켜진 것과 아직 없는 것」의 추기). 이 회부는 그와 별개라 아직 판단 대기다.〕 |
 | **init CAS `Mismatch` 는 S3 객체 보호가 아니다** — PUT 이 CAS 보다 먼저라, 다른 본문이 같은 키에 올라간 뒤에야 장부가 기존 해시를 지킨다 | 같은 송출 설정·같은 재포장 산출(골든)이면 오지 않는다. 다만 ⓐ 에서 회차는 방송을 넘어 이어진다(`session/registry.go` — live 회차가 있으면 TD(목표 길이) 초과가 아닌 한 계속 붙는다). 그래서 사이드카 재기동 뒤 그 회차에 처음 들어온 조각이 해상도 등 송출 설정을 바꾼(A → B) 방송의 것이면, 재기동 뒤 첫 행의 init 재요청이 이 분기에 닿는다 — B 의 init 을 먼저 PUT 하고 CAS 가 `Mismatch` 라, ERROR 1줄이 남고 그 회차 init 객체는 B 로 덮이며 그 회차 실시간 ③ 은 전부 대조 보류된다. 재포장 산출을 바꾸는 배포(골든 갱신 — 위 「포크 태그를 올릴 때」)로 재기동했으면 이어지는 모든 회차가 같은 경로에 닿는다. 송출 설정 변경 쪽은 ⓒ 의 송출 종료 전이가 회차를 끊어 원인째 닫고, 배포 쪽은 회차가 배포를 넘어 이어져 ⓒ 로도 닫히지 않으므로 오른쪽 수리안이 닫는다 | 조건부 PUT(`If-None-Match`)·내용 주소 게시 — ⓒ `publish.Store` 의 조건부 PUT 축과 함께 검토 |
 | **ⓐ 단독 국면에서 방송 사이 휴지가 24시간을 넘으면 다음 방송의 실시간 ③ 이 보류에 묶인다.** 회차가 방송을 넘어 이어지는 동안 `sessionInit`(과 보정값 표)은 수명(`SessionTTL` 24시간)으로 지워지는데, 인덱서의 `initAdmitted`(이 프로세스에서 init 요청이 접수된 회차)는 프로세스 수명 동안 남아 init 재요청이 나가지 않는다. 그래서 다음 방송의 실시간 ③ 이 전부 `init_pending` 보류로 남고 drain 으로도 풀리지 않는다(검수 탐침 2026-09-24: 25시간 휴지 뒤 둘째 방송의 ③ 마킹 0건). 실시간 경로는 재기동해야 init 재요청이 `AlreadySame` 으로 `sessionInit` 을 되살린다(휴지 중 송출 설정이 바뀌었거나 재포장 산출이 바뀐 배포로 재기동했으면 위 `Mismatch` 행 경로) | 시청자 영향 0 — ⓐ 단독 국면에는 ③ 소비자가 없고, 그 행들은 ⓒ 가 켠 컷오프보다 앞이라 등재 대상이 아니다. 컷오프가 있는 스트림이면 보류분도 보류 상한 초과분도 스위퍼가 장부 기대값으로 집어 올린다(검수 탐침: 보류 1 → 스위퍼 성공 → 보류 0) — 남는 것은 스위퍼 주기만큼의 지연과 중복 작업(실시간 시도가 보류에서 멈춘 조각을 스위퍼가 다시 처리)이다. ⓒ 에서는 송출 종료 전이가 회차를 끊어 닫는다 | 기록용(코드 무변경) |
 | **보류 재요청의 거울상 경합** — tick 이 ③ 작업을 꺼낸 뒤 재요청하기 전에 같은 조각의 스위퍼 사본이 먼저 확정되면(그 조각의 in-flight 가 이미 풀려 있다) tick 의 재요청이 그대로 접수돼, 같은 바이트를 한 번 더 PUT 하고 `upload_cas_rejected` WARN 1줄이 난다(µs 창 — ⓒ 처럼 컷오프가 있어 스위퍼가 ③ 을 집을 때만). 장부는 CAS 가 지킨다. 확정 표시(tombstone)는 반대 순서(재요청이 거부된 뒤 `claimReady` → `giveBack` 사이에 확정되는 경우)만 막는다 | 재PUT 1회·WARN 1줄, 데이터 영향 0. 확정 표시 메모리는 보류를 한 번이라도 겪은 회차에서 24시간 동안 최악 약 21,600개·약 538 KiB(검수 탐침)이고, 24시간 뒤 비운다 | 워커 PUT 직전 확정 표시 검사(다음 버전) · 기록용 |
@@ -640,13 +643,18 @@ kty 결정(2026-09-19): *"사이드카가 재기동 되는 경우는 고려하�
 
 ### M4 ⓐ 설계와 다르게 한 것
 
-계획 부기 27–30 이다. 부기의 나머지 행(ⓑ·ⓒ 몫 포함)은 ⓒ 의 M4 종합 이관 기록이 싣는다.
+계획 부기 27–30 이다. 부기의 나머지 행 가운데 ⓑ 몫은 아래 「되감기 M4 ⓑ 이관 기록」 절이 싣고, 그 밖의 행(ⓒ 몫
+포함)은 ⓒ 의 M4 종합 이관 기록이 싣는다.
 
 1. **시간 도장의 원점(부기 27 — kty 결정 B′, 설계 5.1 갱신 후보).** 설계 5.1·5.1.1 은 전역
    0점을 논리 세션 첫 조각의 첫 샘플로, 앵커를 장부 `playback_pdt` 재귀식으로 정했다. 구현은
    도장 = 조각 자기 mtxi + 보정값이다. 회차 첫 조각을 0 으로 빼지 않으므로, TD 분할로 연결
    도중 열린 회차는 첫 도장이 0 이 아니다 — 회차 경계에는 늘 DISCONTINUITY+MAP 이 있어 재생에
    무해하다. PDT 축은 설계 그대로다.
+   〔추기 2026-09-25 — 「회차 경계에는 늘 DISCONTINUITY+MAP」은 ⓑ 가 넣은 표시 규칙과 다르다. TD 분할로
+   연 회차는 계승하지 않아(`inherits_session` NULL) 첫 조각에 끊김 표시가 없고, 그 회차 목록은 앞 회차 조각
+   없이 자기 조각과 MAP 으로 시작한다(목록 안에 회차 경계가 없다). 계획 부기 27 은 이 구절을 뺐다 — 아래
+   ⓑ 절 「바꾸기 전에 이유를 볼 규칙」.〕
 2. **③ 생산 수단(부기 28 — kty 결정 E, ADR-057 문언 갱신 필요).** ADR-057 결정 1 과 clarifier
    Q2 는 `ffmpeg -map 0:v:0 -map 0:a:0 -c copy` 였다. 착수 실측에서 ffmpeg 산출은 조각마다 init 이
    달랐고(비트레이트 칸 12바이트) 파트를 다시 잘랐다. Go 재포장에는 두 문제가 원인째 없다.
@@ -657,6 +665,9 @@ kty 결정(2026-09-19): *"사이드카가 재기동 되는 경우는 고려하�
    겹침(최대 0.22초)은 규격 문언상 표시가 필요하지만, 실측(hls.js 1.5.15·1.7.3·Safari)을 근거로
    의도적으로 벗어난다. 설계·계약 2종 갱신과 3번 통지가 ⓑ 머지 전에 필요하다. 렌더 코드는 ⓑ
    에서 들어오고, ⓐ 는 그 전제인 이어 붙이기를 만든다.
+   〔추기 2026-09-25 — ⓑ 머지 전 관문은 충족됐다: 팀 위키 PR #143 머지(main `a5faeef`, 2026-09-24 —
+   계약3·계약-세그먼트인덱스의 결정 F 문언과 ADR-073) · 볼트 설계 r17 4.3 대체 표식(`3dc1ebc`) · 3번·2번
+   통지(POK-195 코멘트 #10329·#10330, 2026-09-23). 렌더 코드도 들어왔다 — 아래 「되감기 M4 ⓑ 이관 기록」 절.〕
 4. **G7 skew 산식(부기 30 — 설계 갱신 후보).** 설계는 「조각 간 증분 비교」로만 적었다. 구현은
    위 「G7 skew 기록」의 식이고, 같은 회차의 인접 쌍 중 보정값이 같은 쌍만 잰다. 기록 자리는
    사슬 전진 직후(PDT 와 도장을 둘 다 아는 유일한 자리)이고, PDT 원천은 INSERT 가 돌려주는
@@ -688,8 +699,11 @@ kty 결정(2026-09-19): *"사이드카가 재기동 되는 경우는 고려하�
 
 - ③·init 의 플래그 무관 동작이 계약 5-5 6항과 어긋나는지(위 「M4 ⓐ 로 켜진 것과 아직 없는
   것」, 계획 부기 31 후보) — kty·3번.
+  〔추기 2026-09-25 — 닫혔다: kty 결정 (나) · 계약 6항 개정(팀 위키 PR #144, main `7d12e55`). 위 인용 블록의
+  추기와 같다.〕
 - init 잔량 영구 잔존의 보정(알려진 한계 여섯째 행 — 보존 창 한정 또는 컷오프-인지) — kty,
   부기 31 과 같은 축.
+  〔추기 2026-09-25 — 부기 31 은 닫혔지만 이 항은 별개라 아직 판단 대기다.〕
 
 ### M4 ⓐ 출처
 
@@ -703,20 +717,452 @@ kty 결정(2026-09-19): *"사이드카가 재기동 되는 경우는 고려하�
   2026-09-19), 재개 실측(꼬리 조각·입력 상한·회차 안 구멍 재생·Safari·hls.js 1.7.3, 2026-09-23).
 - 코드: 이 절이 인용한 파일·함수(PR ⓐ 커밋 2–6·r4-fix·r5-fix 개발 산출 보고와 대조).
 
+## 되감기 M4 ⓑ 이관 기록 (POK-195)
+
+M4 의 둘째 PR(ⓑ 렌더·경계)이 **무엇을 넣었고, 무엇을 일부러 ⓒ 로 넘겼고, 설계와 어디가 다른지**를
+적는다. 다음 사람이 「왜 이렇게 했나 · 무엇이 일부러 빠졌나」를 다시 묻지 않게 하는 것이 목적이다.
+ⓑ 는 되감기 목록을 **만들고 검사하는 순수 코드**이고, 그 코드를 부르는 발행 루프는 ⓒ 가 만든다.
+그래서 ⓑ 만 배포해도 시청자 화면·비용·장부는 바뀌지 않는다.
+
+### M4 ⓑ 용어
+
+위 M3·ⓐ 절에서 푼 말(세션·PDT·컷오프·init·③·GAP·CAS)은 다시 풀지 않는다.
+
+| 말 | 뜻 |
+|---|---|
+| 되감기 목록 | 한 회차의 되감기 URL(`/dvr/{stream}/{session}/index.m3u8`)이 내주는 HLS 미디어 재생목록 — 조각마다 PDT·길이·URI 를 한 줄씩 적은 텍스트 |
+| 렌더 | 장부 행을 목록 본문 바이트로 옮기는 것 |
+| settled | 조각이 목록에 실릴 수 있는 상태. 컷오프 이상이고 회차·PDT·③ 키가 있으며, ③ 이 올라갔거나(`uploaded`) GAP 원장(빈칸으로 싣기로 확정한 조각의 기록 `stream_published_gaps`)에 있다(설계 4.1) |
+| 창 | 목록에 싣는 seq 구간 [꼬리, 머리]. 머리 = 컷오프부터 끊김 없이 이어진 settled 행의 끝. 꼬리 = 머리에서 거꾸로 길이를 더해 1시간이 차는 가장 늦은 행이고, 1시간이 안 되면 컷오프다(설계 4.2) |
+| 끊김 표시 | 목록의 `#EXT-X-DISCONTINUITY` 줄. 플레이어에게 "여기서 디코더를 다시 맞춰라"라고 알린다 |
+| MSN | 목록 머리의 `#EXT-X-MEDIA-SEQUENCE` — 첫 줄 조각의 seq |
+| DISC-SEQ · base | 목록 머리의 `#EXT-X-DISCONTINUITY-SEQUENCE` — 목록 앞에서 빠져나간 끊김 표시의 누계다. 회차 행의 `discontinuity_base`(줄여서 base)를 그대로 적는다 |
+| 축출 증분 | 창이 앞으로 가 목록 앞에서 끊김 표시가 빠질 때 base 에 더할 수 |
+| 계승 회차 | 직전 회차를 잇는 회차(`inherits_session` 이 NULL 이 아님). 목록 앞에 직전 회차의 조각(접두)이 실린다 |
+| TD | target duration — 목록이 약속하는 조각 길이 상한(초, `#EXT-X-TARGETDURATION`). 회차 개시 때 정해진다 |
+| 발행 전 검사 S1–S7 | 목록을 올리기 직전의 일곱 검사(설계 4.5.5). 걸리면 그 발행을 내지 않거나(발행 중단) 접두를 뺀다(계승 취소) |
+| 봉인 | 목록 끝에 `#EXT-X-ENDLIST` 한 줄을 붙여 더는 자라지 않는다고 알리는 것 |
+| 읽기 뷰(캐시) | 장부·GAP 원장·컷오프를 메모리에 든 사본. 평시에 목록을 만들 때 DB·S3 를 묻지 않게 한다 |
+| 부팅 재구성 | 프로세스가 뜰 때 한 스트림의 뷰를 장부에서 통째로 다시 읽어 채우는 것 |
+| 골든 | 기대 출력 바이트를 통째로 적어 둔 파일 — 여기서는 `internal/rewind/testdata/g6_f2.m3u8` |
+| 뮤턴트 | 테스트의 판별력을 재려고 코드에 일부러 심는 작은 결함. 테스트가 실패하면 「죽었다」, 통과하면 「산다」(판별 공백) |
+
+### M4 ⓑ 로 켜진 것과 아직 없는 것
+
+- **운영 동작 변화 0.** ⓑ 의 새 코드는 부르는 곳이 없다. 인덱서에 캐시 push 두 줄을 넣었지만
+  (`internal/indexer/indexer.go` `advance`·`correctTail`), 캐시를 만드는 조립 코드가 없어 캐시는 늘 nil
+  이고 nil 캐시는 아무것도 하지 않는다(`upload.Dirty` 와 같은 nil 규약). `media/cmd` 는 건드리지 않았다.
+  호출자 없이 먼저 들어오는 형식은 M3 의 `InitKey`(`internal/playback/key.go`) 전례와 같다 — M3 에서는 부르는
+  곳이 없었고 ⓐ 가 호출자를 붙였다. 소비자 ⓒ 도 같은 마일스톤 안에서 온다(계획 4절 PR ⓑ 「시청자·비용 영향」).
+- **운영 경로에서 달라진 것은 한 문장이다.** 회차 개시 때 새 회차 행을 되읽는 문장(`internal/index/store.go`
+  `openedSessionSQL`)이 `target_duration` 한 열을 더 읽는다. 같은 트랜잭션·같은 왕복이고 개시 때만 돈다.
+  읽은 값(`SeedResult.TargetDuration`)을 쓰는 곳은 캐시뿐이라 지금은 쓰이지 않는다.
+- **설정·스키마**: 새 env 0 · DDL 0 · 장부 쓰기 0 · 새 로그·메트릭 0. 새 인터페이스는 `boundary.Snapshot`
+  하나다(설계 3.2 가 이름을 준 것). 새 숫자 상수는 셋이다 — `boundary.WindowMS`(1시간) · S5 본문 상한
+  512KiB · S7 PDT 여유 1ms. 셋 다 설계 4.2·4.5.5 가 값까지 정했고 kty 가 허용했다(2026-09-24).
+- **아직 없다(ⓒ)**: 목록 발행(S3 조건부 PUT · 세대 규약 P0–P4 — 두 발행자가 서로를 덮지 못하게 하는 발행
+  절차) · HTTP · 감시 tick · 캐시 조립과 부팅 Reload · ③ 확정·GAP 원장 push · 축출 증분 배선 · 봉인 호출 ·
+  송출 종료 전이. 이유는 아래 「M4 ⓑ 에서 ⓒ 로 넘긴 것」에 있다.
+- **게이트(계획 4절 PR ⓑ)**: G6(렌더·경계 단위 게이트 — 아래 테스트 지도) · G7(PDT 와 미디어 시계의 어긋남 —
+  ⓐ 의 skew 기록에 S7 엄격 단조 검사가 더해져 완결) · G9 leaf `t3_cutoff_settles_after_uploaded`(설계 6.5.6
+  계약 회귀 단언 67개 가운데 ⓑ 몫 하나). 같은 G9 의 `c2_no_flag_read`(발행 경로 `rewind/`·`publish/` 에 컷오프
+  플래그 읽기 0건 — 정적 단언)는 `publish/` 가 생기는 ⓒ 에서 완결된다.
+
+### M4 ⓑ 가 넣은 것
+
+패키지 셋과 장부 읽기 하나, 운반 통로 둘이다. 패키지 셋은 DB·S3·HTTP·파일 시스템에 닿지 않고 로그를 남기지
+않는다 — `boundary`·`rewind` 는 같은 입력이면 같은 출력을 내는 순수 계층이고, `cache` 는 메모리 상태만 든다.
+
+| 자리 | 무엇 | 공개 API |
+|---|---|---|
+| `internal/rewind/boundary`(신설) | 어느 조각부터 어느 조각까지 실을 수 있나 — settled 판정의 유일한 자리와 창 산식(설계 4.1·4.2) | `Settled` · `Compute`(→ `Window{ScanFrom, HeadSeq, TailSeq}`) · 입력 `Snapshot` · 값 `Row` · `WindowMS` |
+| `internal/rewind`(신설) | 목록의 문법 — 렌더 · 발행 전 검사 · 봉인 · 끊김 표시 술어 · 축출 증분 | `Render` · `Validate`(처치 `ErrHaltPublication`·`ErrRevokeInheritance`, 위반 `*Violation`) · `SealEndlist`(`ErrAlreadySealed`) · `HasDiscontinuityTag` · `EvictedDiscontinuityTags` · 값 `Playlist`·`Session`·`Published` |
+| `internal/rewind/cache`(신설) | 목록의 입력 — 장부·GAP 원장·컷오프의 읽기 뷰. 인덱서 루프 goroutine 하나가 소유하고 락이 없다. push 넷 가운데 ③ 확정·GAP 원장 둘은 ⓒ 가 부른다 | `Cache` — 부팅 재구성 `Reload` · push `ApplyInsert`·`ApplyTailCorrection`·`ApplyPlaybackUploaded`·`ApplyPublishedGap` · 읽기 `Snapshot`·`Session`(→ 값 `Session`)·`Playlist`(세션 필터) |
+| `internal/index/rewind_read.go`(신설) | 부팅 재구성 읽기 두 단 — ⑴ 컷오프 이후 조각 전량(③ 상태·GAP 원장 소속 포함) ⑵ 그 조각들이 참조하는 회차의 8열. 읽기 전용이고 settled 판정은 하지 않는다 | `LoadRewindLedger`(→ `RewindLedger` · `RewindRow` · `RewindSession`) |
+| `internal/index/seed.go`·`store.go` | 회차 TD 운반 — 개시 되읽기가 `target_duration` 을 함께 읽어 INSERT 결과에 싣는다 | `SeedResult.TargetDuration`(+1 필드) |
+| `internal/indexer/indexer.go` | 캐시 push 배선 — 장부 커밋 직후(`advance`)와 꼬리 교정 직후(`correctTail`) | 없음(비공개 필드 `Indexer.rewind` — 채우는 조립은 ⓒ) |
+| `.github/workflows/media-ci.yml` | 커버리지 게이트에 `rewind/boundary`·`rewind`·`rewind/cache` 셋(아래 「테스트」 절) | — |
+
+**바꾸기 전에 이유를 볼 규칙**
+
+- **머리는 끊김 없는 settled 접두의 끝이다.** settled 행의 최댓값으로 읽으면 홀(아직 안 올라간 조각) 뒤
+  조각이 실려 404 가 난다(계약-세그먼트인덱스 불변식 1). 홀 뒤 조각은 홀이 메워지거나 GAP 원장에 오르기
+  전에는 싣지 않는다.
+- **꼬리는 최솟값이 아니라 최댓값이다** — 머리에서 거꾸로 1시간이 차는 자리 가운데 **가장 늦은** 행이다.
+  최솟값이면 늘 컷오프라 창이 끝없이 자란다(설계 r4 가 실제로 틀렸던 자리 — 계획 리스크 B1). 빈 창은
+  `HeadSeq = ScanFrom − 1` 이다.
+- **MSN 은 첫 줄 조각의 seq, DISC-SEQ 는 소유 회차 base 그대로다.** 렌더는 아무것도 더하지 않는다 — 더하는
+  일은 축출 증분의 몫이다. 목록 첫 줄이 계승 접두여도 머리의 TD·DISC-SEQ 는 소유 회차(목록 URL 의 회차)
+  값이다. 목록 안 seq 는 1씩 이어져야 하고(빈칸은 GAP 줄이 메운다) 아니면 렌더 오류다.
+- **끊김 표시는 행 하나만 보고 정한다**(`HasDiscontinuityTag`). 그 행이 자기 회차의 첫 조각(= max(회차 최소
+  seq, 컷오프))이고 그 회차가 계승 회차일 때만 단다. 목록 문맥을 보지 않으므로 같은 행은 어느 목록에서
+  빠지든 base 에 같은 값을 더한다 — 그래서 렌더와 축출 증분이 이 함수 하나를 부른다. 연쇄 계승(O←P←S)에서
+  P 의 첫 조각이 창 안이면 S 목록에는 표시가 둘 선다. 장부 `is_discontinuity` 는 근거가 아니고 캐시 행에
+  싣지도 않는다(아래 부기 29).
+- **계승 접두는 계승 회차에만, 직전 회차 하나만 싣는다**(캐시 `Playlist` 의 세션 필터). TD 분할 회차(계승
+  없이 base 만 복사)나 비계승 회차에 앞 회차 조각을 실으면 MAP 만 바뀌고 표시가 빠진다.
+- **조각 URI 는 장부 `playback_s3_key` 그대로다** — 회차·티어 축이 없는 영구 URL 이다(ADR-020 「세그먼트당
+  정규 URL 단일 고정」). 본문은 순수 HLS 다 — `#PC-` 같은 우리 용도의 줄·주석·빈 줄이 없고, 세대 정보는 본문
+  밖 메타데이터로 간다(ⓒ). `#EXT-X-VERSION` 은 6 이다(아래 부기 32).
+- **검사 처치는 둘이다.** S4(계승 접두 범위) 위반은 계승 취소 — 접두를 빼고 다시 렌더한다. 나머지 여섯은
+  발행 중단이다. 처음 걸린 검사 하나만 돌려주고, 부르는 쪽은 `errors.Is` 로 가른다.
+- **봉인은 특권 경로다.** `SealEndlist` 는 렌더·검사를 타지 않고 발행된 본문 끝에 `#EXT-X-ENDLIST` 한 줄만
+  붙인다(RFC 8216bis-22 6.2.1 이 허용한 변경). 이미 닫힌 본문이면 `ErrAlreadySealed` 다.
+- **캐시가 장부와 어긋나면 되돌림은 `Reload` 하나다.** push 가 seq 를 건너뛰면 그 스트림 뷰는 거기서
+  멈춘다 — 빈자리를 두고 이어 붙이면 경계가 빈자리를 모르고 넘어간다.
+- **부르는 쪽(ⓒ)의 규칙**: `Snapshot` 은 뷰를 복사 없이 내주므로 캐시를 소유한 goroutine 안에서만 쓴다
+  (발행 워커에는 `Playlist` 가 만든 새 값만 넘긴다). `Settled(r, cutoff)` 는 「컷오프 없음」을 나타내지
+  못하므로 `Cutoff()` 의 ok 확인은 부르는 쪽 몫이다.
+
+### M4 ⓑ 운영 영향 없음 · 되돌리기
+
+- **운영 영향 없음** — 위 「켜진 것」 그대로다. 운영 경로의 변화는 개시 되읽기 한 열뿐이고,
+  실 PG 테스트(`TestInsertReportsTargetDurationWrittenAtOpening`)가 그 열을 잰다. 그래서 compose 실측은 하지
+  않았다 — 종단 확인은 ⓒ 몫이다(계획 4절 PR ⓑ 검증 표).
+- **되돌리기** — `git revert -m 1 <ⓑ 머지 커밋>` 한 번이다. 장부 쓰기가 0 이라 되돌려도 남는 데이터가 없다.
+  ⓒ 가 이미 머지됐으면 ⓒ 를 먼저 되돌린다(역순 — 위 ⓐ 절 「되돌리기와 긴급 정지」). 반영은
+  `docker compose build segment-indexer && docker compose up -d segment-indexer` 다.
+
+### M4 ⓑ 설계와 다르게 한 것
+
+계획 부기(「이 계획이 설계와 다르게 적은 것」 표) 가운데 ⓑ 몫 다섯 행이다. 각 항의 자리 · 설계 문언 · 이 계획 ·
+성격 네 줄은 계획 부기 표의 문언 그대로이고, 「ⓑ 기록」 줄은 이 기록이 덧붙인 현재 상태다. ⓑ 몫은 행의
+「자리」를 ⓑ 커밋과 대조해 골랐다. 부기 29 는 위 ⓐ 절 3항과 나눠 싣는다(ⓐ = 도장 이어 붙이기 · ⓑ = 렌더).
+
+1. **부기 15**
+   - 자리: 설계 4.8.1 f2 · 4.9.1
+   - 설계 문언: f2 B 세션 DISC-SEQ 3(계승 300초) · 승계는 TD 분할 갈래만 명시
+   - 이 계획: **kty 확정으로 침묵 해소**: 300초 안 재접속 개시는 TD 분할과 같은 규칙으로 승계 — ⓒ 계승 갈래
+   - 성격: 설계 갱신 후보(4.9.1 에 재접속 갈래 추기)
+   - ⓑ 기록: ⓑ 몫은 f2 골든의 DISC-SEQ 3 이다 — 렌더는 소유 회차 B 의 base 3 을 그대로 적는다. B 가 A 의 base 를 옮겨 받는 300초 재접속 개시는 ⓒ 가 만든다.
+2. **부기 16**
+   - 자리: 제0원칙 2(이름 = 계약)
+   - 설계 문언: —
+   - 이 계획: `SeedResult` 가 주조 + 세션 개시를 함께 나른다(이름 부채, 파급 최소 근거) — 개명은 M5 축
+   - 성격: 이름 부채 기록(cc r3 보완)
+   - ⓑ 기록: ⓑ 커밋 ④ 가 개시 쪽에 `TargetDuration` 한 필드를 더 얹었다(회차 TD 운반 — 계획 「④ 캐시 착수 메모」). 부채가 한 필드만큼 커졌고, 개명은 여전히 M5 축이다.
+3. **부기 25**
+   - 자리: 설계 4.1:431
+   - 설계 문언: 부팅 재구성 SELECT = 조각 3열
+   - 이 계획: 세션 행 7열 적재를 2단으로 추가(캐시 전용 세션 축의 유일한 재기동 복원 경로)
+   - 성격: 확인 패스 cc#1·cc 부수 7
+   - ⓑ 기록: ⓑ 커밋 ④ 에서 `target_duration` 을 더해 지금은 8열이다(`index.RewindSession` — 계획 「④ 캐시 착수 메모」). 조각 축은 설계대로 `seq ≥ 컷오프` 전량이다.
+4. **부기 29**
+   - 자리: 설계 4.3 · 계약3 7절(:109) · 계약-세그먼트인덱스 :28
+   - 설계 문언: `DISCONTINUITY(k) ⟺ is_discontinuity(k) ∨ 회차 경계 첫 조각` · "`is_discontinuity` → 매니페스트에 `EXT-X-DISCONTINUITY`"
+   - 이 계획: **회차 경계 첫 조각에만** 단다. 회차 안 `is_discontinuity` 는 표시 근거가 아니다(장부 컬럼·대입·DDL 은 불변). 재접속 이음매의 영상 도장 겹침(≤0.22초)이 규격 문언상 "시간 도장 순서 변경"(표시 필수)에 해당하므로 실측 근거로 의도적으로 벗어난다(규격 예외)
+   - 성격: **편차 있음**(kty 결정 F 2026-09-19) — 설계 4.3·계약 2종 갱신 + 3번 통지가 ⓑ 머지 전에 필요 〔r18: 술어는 행 단독 — 자기 회차 첫 조각 ∧ `inherits_session ≠ NULL`(RF)〕
+   - ⓑ 기록: ⓑ 몫은 렌더 쪽이다 — 술어 `HasDiscontinuityTag` 를 렌더와 축출 증분이 함께 부른다(위 「바꾸기 전에 이유를 볼 규칙」). 「ⓑ 머지 전에 필요」한 설계·계약 갱신과 통지는 충족됐다(위 ⓐ 절 3항의 추기).
+5. **부기 32**
+   - 자리: 설계 4.8.2 실물(:801)
+   - 설계 문언: `#EXT-X-VERSION:9`
+   - 이 계획: **`#EXT-X-VERSION:6`** — kty 결정 2026-09-24(qa #39). RFC 8216bis-22 6.2.1 「필요 이상 높은 버전 SHOULD NOT」 · 8절 요구 최솟값 6(비 I-frame 목록의 EXT-X-MAP) · 9 = EXT-X-SKIP(델타 갱신) 전용이고 계약3 7-5 는 되감기 목록에 델타 갱신을 광고하지 않는다 · 발행 목록은 수명 중 VERSION 을 바꿀 수 없다(6.2.1 허용 변경 목록 밖) · 8절 「미지원 버전 재생 금지」 — 버전 6–8 전용 플레이어 위험 제거. hls.js 1.5.15/1.6.0/1.7.3 는 9 도 파싱했다(`126_`) — 6 은 b2-fix3 뒤 재실측
+   - 성격: 편차 있음(규격 정합 방향) — 볼트 설계 4.8.2 머리에 대체 표식
+   - ⓑ 기록: 설계 쪽 「:801」은 대체 표식 한 줄이 들어가기 전 줄 번호다 — 지금 VERSION 줄은 :802 다. 「b2-fix3 뒤 재실측」(VERSION 을 6 으로 바꾼 수정 뒤의 재실측)은 했다 — VERSION 6 골든도 세 판 모두 구문 오류 0 · 해석 수치 동일이다(2026-09-24). `126_` 은 작업 산출물 `126_hlsjs_parse_g6_f2.md`(저장소 밖)다.
+
+### M4 ⓑ 에서 ⓒ 로 넘긴 것
+
+ⓑ 가 일부러 남긴 것만 적는다. 계획 자리는 전부 계획 「ⓒ 착수 메모」 절이고, 칸에는 그 항의 개정 표식을
+적는다.
+
+| # | 넘긴 것 | 한 줄 요지 | 계획 자리 |
+|---|---|---|---|
+| 1 | 축출 증분 배선 · prev 계약 · 재기동 변형 | `EvictedDiscontinuityTags(prev, nextMSN)` 의 prev 는 「소유 회차의 지금 base 를 DISC-SEQ 로 적어 렌더한 직전 목록」(발행에 실패한 시도 포함)이다. 「마지막으로 발행된 목록」으로 잡으면 PUT 실패 뒤 같은 표시를 두 번 센다. 발행 예약(P0) 커밋 뒤 PUT 전에 죽으면 그 증분의 기준 창이 어디에도 남지 않는다 — ⓒ 복구 설계의 입력 | r32 |
+| 2 | 재기동 뒤 `rewind.Published` | 직전 발행의 MSN·조각 수는 메모리에만 있다. 영값으로 넘기면 S1(줄 수)·S2(MSN 역행) 검사가 자명하게 통과한다 — 본문 GET 이나 재구성으로 채운다 | r29 |
+| 3 | 유입 정지 판정의 입력 | 오프라인 전이의 입력은 캐시가 아니라 인덱서 커서다 — 캐시는 컷오프 전 행·컷오프 없는 스트림의 행과 `start_wall_utc` 를 들지 않는다 | r31 |
+| 4 | DISC-SEQ 단조 그물 · 끊김 표시 줄 검사 · 모르는 태그 검사 | 셋 다 S1–S7 에 없다. 끊김 표시 줄 검사·모르는 태그 검사는 목록 본문을 쓰는 코드가 `Render`·`SealEndlist` 둘뿐이라 ⓑ 가 만들지 않았다(커밋 ⑥ 재판정). DISC-SEQ 단조 그물은 처음부터 ⓒ 몫이다 — DISC-SEQ 가 뒤로 가면 RFC 8216bis-22 6.2.2 MUST 위반이라, ⓒ 가 계승 취소를 영속하는 형상과 함께 정하고 앞의 둘도 그때 함께 판정한다 | r29 추기 · r33 |
+| 5 | TD 초과 접두·꼬리 교정의 S5 정지(숨은 가정 11) | TD 분할 회차를 300초 안에 계승하면 접두 조각이 새 회차 TD 를 넘고, 꼬리 교정은 TD 를 다시 재지 않는다 — 두 길 모두 목록이 S5(본문 형식·TD 검사)로 최대 1시간 멈춘다(`TestValidateInheritedTDSplitPrefixHaltsOnS5` 가 지금 동작을 고정). 처방 후보 (A) 계승 개시 TD = max(직전 TD, 첫 조각 반올림) · (B) S4 에 TD 조항 · (C) 꼬리 교정 때 TD 재판정을 kty 에 회부한다. 판별 공백 VB-LASTROW(S5 TD 조항이 마지막 줄 회차의 TD 를 읽는 뮤턴트)도 그 결론과 함께 정한다 | r29 · r32 추기 |
+| 6 | 발행 모형과 BASE 계열 뮤턴트 | 끝난 회차 목록을 창을 따라 계속 갱신할지 봉인할지(발행 모형)가 정해지지 않아, 접두 회차와 소유 회차의 base 가 갈리는 픽스처를 세울 수 없다. 그래서 머리 대조가 첫 줄·마지막 줄 회차의 base 를 읽는 뮤턴트(VH-FIRSTROW-BASE·VH-LASTROW-BASE)가 산다 — 그동안 DISC-SEQ 비기본값 대조는 f2 골든이 맡는다. 뒤 회차 행이 창 꼬리를 밀 때 앞 회차 목록이 S3(범위 검사)로 멈추는 국면도 같은 동결 순서 문제다 | r33 · r30 |
+| 7 | S4 계승 취소의 영속 | ⓑ 의 S4 는 렌더 시점 판정이라 영속하지 않는다. 다음 tick 에 접두를 다시 실으면 MSN 이 뒤로 가 S2(MSN 역행 검사)가 발행을 멈춘다 — ⓒ 가 목록 수명 동안 붙든다. 접두 회차의 계승 취소가 계승 회차 목록 발행 뒤에 오는 국면(미확인)도 같은 축이다 | r29 · r32 |
+| 8 | 소유 회차 줄의 절대 URI | S1–S7 어디에도 없다(S4 는 접두만 본다). `REWIND_PUBLIC_BASE_URL` 적재 검증이 유일한 방어다 | r29 |
+| 9 | 빈 창 판정 | 세션 필터 뒤 행이 0개면 「아직 낼 것 없음」으로 먼저 거른다 — `Render` 는 빈 목록을 오류로 낸다 | r28 |
+| 10 | 캐시 조립과 채우는 순서 | 부팅 때 어느 스트림을 Reload 할지 · `LoadRewindLedger`(워커)와 `Reload`(루프)를 다른 차례로 나누면 그 사이 push 가 버려져 뷰가 멈춘다 · 부팅 때 컷오프가 없던 스트림에서 부팅 전 회차의 행이 뒤늦게 주조하면 그 회차의 `Playlist` 가 거짓 · M6 만료 뒤 재주조(미확인) | r30 · r31 |
+| 11 | 캐시가 아직 모르는 사실 | TD 분할이 끝낸 옛 회차의 state(캐시는 live 로 든다) · init 확정·분리를 반영할 메서드 · settled 범위형 SQL(정합성 감시 (a)) | r30 |
+| 12 | 캐시 메모리 | 뷰는 컷오프 뒤 행을 스트림 수명 동안 든다(시간당 900행, 잘라 내기 없음). 창 꼬리 앞 행을 버릴지는 VOD 동결이 무엇을 읽느냐에 달렸다 | r30 |
+
+### M4 ⓑ 알려진 한계와 판단 대기 (정직 서술)
+
+알려진 한계 — 코드는 지금 동작 그대로다.
+
+- **계승은 1단계만이다.** 계승 회차 목록에는 직전 회차 하나의 접두만 싣는다 — A←B←C 에서 C 의 목록에 A 는
+  없다. 사슬과 1시간 상계는 M5/M6 회부다(계획 2.3 ⑸ⓕ). S4 의 「계승 접두 1시간 상한」은 1단계에서는 창
+  자체(1시간)로 채워진다.
+- **S7 의 1ms 여유는 규격보다 엄격하다.** RFC 8216bis-22 6.2.1 은 인코더 시계 드리프트를 흡수하는 1초 미만
+  PDT 겹침을 허용하지만(MAY), S7 은 1ms 를 넘는 겹침이면 발행을 멈춘다(설계 4.5.5 `PDT_SLACK`). 장부 PDT 는
+  재귀식이라(직전 PDT + 직전 길이가 하한) 겹침을 만들지 않으므로 의도한 선택이다(계획 「⑥ 착수 메모」 r29
+  관찰 8).
+- **f2 A 회차의 형상은 기록만 한다.** 골든 f2 의 A 회차(비계승 · base 3 · TD 6)는 문자 그대로는 개시 규칙과
+  어긋난다 — 비계승 개시는 base 0 이고, TD 분할이면 TD 가 7 이상이다. kty 확정 형상이고, 렌더는 소유 회차
+  B 의 값만 머리에 적어 출력과 무관하므로 바꾸지 않았다(계획 「⑥ 착수 메모」·「⑦ 착수 메모」 r33).
+- **렌더와 검사가 같은 서식을 따로 적는다(교차 확인).** init URL · EXTINF 서식 · 조각 URI 조합 · 머리 줄
+  서식이 `render.go` 와 `validate.go` 두 자리에 있다. 한쪽만 바뀌면 모든 발행이 멈추므로 조용히 지나가지 않는다 —
+  EXTINF·조각 URI·머리 줄은 S5 의 「본문 = 목록 값」 대조(`checkBodyMatchesRows`)가 잡고, init URL 은 S5 의 MAP
+  도달 검사(`checkBody` → `mapProblem`)가 잡는다. 계승 접두가 실린 목록이면 init URL 은 S4(계승 접두 범위)가 먼저
+  잡는다. 두 자리를 함께 재는 테스트가 없던 「회차 첫 조각」 정의만 한 자리(비공개 메서드 `firstSeq`)로
+  합쳤다(커밋 ⑥ — 동작 불변 리팩터).
+- **본문 상한 512KiB 는 1KB = 1,024B 로 읽은 값이다**(설계 4.5.5 는 「512KB」만 적었다). 1시간 창을 4초 조각으로
+  채운 본문은 약 104KiB(g6_f2 106,499B)라 다섯 배쯤 여유가 있고, 0.79초 조각으로 1시간을 채우면 닿는다.
+
+판단 대기 — 위 「ⓒ 로 넘긴 것」 5번(TD 초과 접두·꼬리 교정의 처방)을 ⓒ 착수 때 kty 에 회부한다.
+VB-LASTROW 판별 테스트는 그 결론을 따른다.
+
+미확인:
+
+- S4 「1시간 상한」의 본뜻 — 창의 성질(이 구현)인지 계승 사슬의 상계(M5/M6)인지 설계가 한 문장으로 말하지
+  않는다. 1단계 계승에서는 둘이 같다.
+- 실재생과 다른 플레이어 — hls.js 세 판에 **파싱**만 시켰다(아래 출처의 실측). 바이트 실재생·ExoPlayer 는
+  ⓒ 이후다.
+- 접두 회차의 계승 취소가 계승 회차 목록 발행 뒤에 오는 국면과 M6 만료 뒤 재주조(위 표 7·10)는 코드로
+  재현하지 않았다.
+
+### M4 ⓑ 테스트 지도
+
+#### G6 대조표 — 설계가 이름을 준 11개 · 되살린 다섯 · 비운 셋
+
+G6(설계 9절의 렌더·경계 단위 게이트)은 번호 붙은 픽스처 f1–f19 로 선다. 계획 4절의 정직 고지 그대로 적는다 —
+설계 r17 이 이름을 준 것은 11개(f2 · f6·f7 · f9–f12 · f15 · f17–f19)이고, 나머지 여덟은 r17 원문에 없다.
+없는 번호는 지어내지 않고 비우되, 채우면 근거와 함께 이 기록에 남긴다. 테스트 주석은 G9 leaf 이름(`f0_…`
+같은 계약 회귀 단언)과 헷갈리지 않게 `g6_` 접두를 붙인다(예: `// g6_f8 — …`).
+
+| 번호 | 출처 | 테스트 | 무엇을 단언하나 |
+|---|---|---|---|
+| f1 | r7–r14 「단일 세션 11조각」(골든) | — 비움 | 단일 세션 11조각의 골든이 없다 |
+| f2 | r17 4.8.1·4.8.2 | `TestG6F2RenderMatchesGolden` · `TestG6F2RenderMatchesDesignFigures` · `TestG6F2BoundaryMatchesDesignFigures` · `TestValidateG6F2Passes` · `TestSealEndlistAppendsOneEndlistLine` | 골든과 바이트 동일 · MSN 398 · DISC-SEQ 3 · 900조각 · 3,600.000초 · 꼬리 398 · GAP 하나(seq 1297) · MAP 둘(398·1031) · 끊김 표시 하나(1031) · `#PC-` 줄 0 · URI 에 회차 축 없음 · S1–S7 통과 · 봉인은 ENDLIST 한 줄만 |
+| f3 | r7–r14 「GAP 1」(골든) | — 비움 | GAP 한 줄 목록의 골든이 없다(GAP 줄 자체는 `TestRenderGapLineKeepsPDTAndURI` 와 f2 골든이 재지만 판정 형태가 달라 번호를 붙이지 않았다) |
+| f4 | r7–r14 「GAP 3연속」(골든) | — 비움 | 대응 테스트가 없다(`TestValidateBodySizeLimitIs512KiB` 의 GAP 세 줄은 크기 판정의 재료다) |
+| f5 | r7–r14 「축출 후 MSN·DISC-SEQ 증가」 | `TestEvictionKeepsDiscontinuitySequenceNumbers` — DISC-SEQ 절만 | 새 base = 직전 base + 축출 증분으로 렌더한 두 본문에서 공통 조각의 Discontinuity Sequence Number(DISC-SEQ + 그 조각 앞 표시 수)가 그대로다 |
+| f6 | r17(r7 재정의부터 「입력 PDT 역행」) | `TestValidateG6F6PDTRecursionSurvivesWallClockStepBack` | 재귀식 PDT 는 통과 · 벽시계 그대로의 PDT 는 S7 |
+| f7 | r17(r7 재정의부터 「입력 PDT 중복」) | `TestValidateG6F7OverlappingPDTHalts` | 중복·2.5초 겹침 → S7 |
+| f8 | r7–r14 「EXTINF 6.6초 → S5」 | `TestValidateTargetDurationRoundsLikeTheTDSplit/TD_6_회차의_6500ms` | TD 6 회차의 6,500ms 조각(반올림 7) → S5 |
+| f9 | r17 | `TestG6F9UnderAnHourTailIsCutoff` | 1시간이 안 되면 꼬리 = 컷오프 |
+| f10 | r17 | `TestG6F10TailIsMaxSeqReachingAnHour` | 꼬리 = 1시간에 닿는 seq 의 최댓값 |
+| f11 | r17 | `TestG6F11WindowWithinHourPlusMaxDuration` | 창 길이 ∈ [1시간, 1시간 + 최대 조각 길이) |
+| f12 | r17 | `TestG6F12VariableDurations` | 비정수 초 길이가 섞여도 산식이 선다 |
+| f13 | r7–r14 「백필 미정착 → S4 + 계승 취소」 | `TestValidateInheritedPrefix/접두_행_미settled` | S4 · `errors.Is(err, ErrRevokeInheritance)` |
+| f14 | r7–r14 「terminal 뒤 비terminal → S6」 | `TestValidateTerminalOnlyGoesFalseToTrue/닫힌_목록_뒤_열린_목록` | S6 |
+| f15 | r17 | `TestG6F15EmptyWindowHeadIsScanFromMinusOne` | 빈 창의 머리 = ScanFrom − 1 |
+| f16 | r7–r14 「playback_pdt NULL 섞임 → S3」 | `TestValidateRangeRequiresSettledRows/playback_pdt_NULL` | S3(settled 아님) |
+| f17 | r17 | `TestG6F17BelowCutoffIsOutOfRangeNotHole` | 컷오프 미만은 홀이 아니라 범위 밖 |
+| f18 | r17 | `TestG6F18HoleStopsHeadAcrossComputations` | 홀 앞에서 머리가 멈춘다 · GAP 원장에 있으면 통과(음성 대조) |
+| f19 | r17 | `TestG6F19NullSessionIsNotSettled` | 회차 없는 행은 settled 아님 · 미등재 |
+
+#### G6 복원 기록 — 비어 있던 번호를 어디서 찾았나
+
+- **왜 비어 있었나.** 설계 r7–r14 의 9절 G6 블록은 비운·되살린 여덟을 모두 정의했다(f19 는 r10 신설). r15 에서 그 블록이 빠지고 게이트
+  표의 요약 한 줄만 남았다(`24_design_r15.md`:1934 · `26_design_r17.md`:1772). 그래서 계획은 r17 기준으로
+  여덟을 「원문 침묵」으로 분류했다 — r17 기준으로는 맞다.
+- **계보 좌표** — 볼트 `Projects/PokeClip/specs/POK-168-r15a-되감기경로-2026-08-30/50_r4산출_2026-09-01/` 의
+  판마다 같은 블록이 있다: r7 `16_design_r7.md`:1978-1998 · r8 `17_design_r8.md`:1704-1716 · r9
+  `18_design_r9.md`:1516-1528 · r10 `19_design_r10.md`:1621-1634 · r11 `20_design_r11.md`:1840-1853 · r12
+  `21_design_r12.md`:1899-1911 · r13 `22_design_r13.md`:2045-2058 · r14 `23_design_r14.md`:1973-1986(픽스처
+  목록 :1973-1977 · 공통 단언 :1978 · f5 :1982 · f8 :1984 · f13·f14 :1985 · f16·f19 :1986).
+- **되살린 다섯(f5·f8·f13·f14·f16)** — 판정이 같은 기존 테스트에 번호 주석만 붙였다. 새 테스트는 없다.
+  - f5 는 DISC-SEQ 절만 직접 잰다. MSN 절(「MSN 증가량 = 축출 개수」)은 MSN = 첫 줄 seq · 목록 안 seq 연속이라는
+    `Render` 계약으로 선다(f2 의 MSN 398 · `TestRenderRejectsUnrenderableInput` 의 seq 건너뜀·역행 거부).
+  - f8 은 설계의 6.6초 대신 반올림 경계 6.5초로 잰다 — 6,499ms 는 통과, 6,500ms 는 S5 다(반올림이 TD 분할
+    판정처럼 가운데를 올린다).
+- **비운 셋(f1·f3·f4)** — 설계 계보에서 골든 바이트 픽스처였는데 대응하는 골든이 없다. 비운 번호는 다른 것에
+  다시 쓰지 않는다.
+- 설계 계보의 공통 단언 「∀f Render == 골든 바이트 일치」는 f2 만 잰다. 되살린 다섯은 번호별 단언(검사 판정 ·
+  DSN 불변)과 같은 테스트다.
+
+#### G9 leaf t3 — ⓑ 몫 계약 회귀 단언
+
+`t3_cutoff_settles_after_uploaded`(설계 6.5.6 ⒡-S3) = `TestPhaseT3CutoffSettlesAfterUploaded`
+(`internal/indexer/phase_pg_test.go`, PG 필요). 실제 주조 경로(인덱서 → 장부 INSERT + 주조)로 컷오프를
+만들고, 부팅 재구성(`LoadRewindLedger` → `Reload` → `Compute`) 위에서 창 머리가 먼저 `컷오프 − 1` 인지 본다 —
+컷오프 행의 ③ 이 아직 pending 이라 빈 창이 정상이다. 그다음 ③ 업로드 확인 CAS 를 실행하고 머리가 컷오프
+이상인지 본다. 설계가 부른 `boundary.Head` 는 코드의 `boundary.Compute(…).HeadSeq` 다.
+
+- **t3 의 CAS 문장은 운영 문장의 사본이다.** 테스트가 SQL 텍스트로 직접 실행하는 문장은 운영
+  `markPlaybackUploadedSQL`(`internal/index/upload_store.go`)과 공백만 다르다. 운영 문장이 바뀌어도 t3 은 모른다
+  — 운영 문장의 변경은 `internal/index/playback_cas_pg_test.go` 가 잰다.
+
+#### 판별이 한 테스트에 모인 자리 셋
+
+아래 셋은 그 판별을 하는 테스트가 **하나뿐**이다. 줄이거나 지우면 판별이 조용히 사라진다 — 다른 테스트는
+그대로 통과한다.
+
+| 판별 | 유일한 테스트 | 왜 하나뿐인가 |
+|---|---|---|
+| 캐시가 0 이 아닌 base 를 옮기는가(개시 push · 재구성 · 목록의 회차 값) | `TestCacheReceivesInheritsOnOpen`(`internal/rewind/cache/playlist_test.go`) | 장부 규칙상 base 가 0 을 벗어나려면 한 시간 넘는 이력이 필요하다. 캐시 패키지에서 그 이력(901조각 · base 1)을 둔 픽스처가 이것 하나다 |
+| 재구성 SQL 이 base 열을 읽는가 | `TestLoadRewindLedgerReadsRaisedDiscontinuityBase`(`internal/index/rewind_read_pg_test.go`, PG 필요) | 같은 까닭이다 — 한 시간 이력을 한 문장(`generate_series`)으로 심은 곳이 여기 하나다 |
+| 발행 전 검사의 머리 대조가 DISC-SEQ 를 기본값 0 이 아닌 값으로 견주는가 | `TestValidateG6F2Passes`(f2 골든 — DISC-SEQ 3) | 통과를 기대하는 검사 픽스처 가운데 base 가 0 이 아닌 것은 f2 뿐이다. base 10 인 크기 경계 경우는 S5 위반을 기대하므로 머리 대조가 틀려도 같은 S5 로 끝나 가르지 못한다 |
+
+#### 「N1」 이름의 두 뜻
+
+검수 기록에서 「N1」이 서로 다른 두 항목을 가리킨다.
+
+- **ⓑ 수정분 확인 패스의 N1**(작업 산출물 `phase3-cc-confirm-bfix.md`) — 렌더 머리 테스트
+  `TestRenderHeaderComesFromOwnerSession` 의 픽스처를 개시 규칙과 맞추라는 지적이다. 커밋 ⑥ 에서 고쳤다(계획
+  「⑥ 착수 메모」 첫 항).
+- **r3 확인 패스의 cc N1**(작업 산출물 `phase3-cc-confirm-b3fix.md`) — 검사가 본문의 TD·MAP 태그를 렌더가
+  쓰는 자리 한 곳에서만 읽고 개수·위치는 보지 않던 문제다. `TestValidateBodyHeaderAndMapLines` 주석의 「r3
+  확인 패스 cc N1」이 이것이다.
+
+### g6_f2 골든 생성·대조 스크립트
+
+g6_f2 골든(`internal/rewind/testdata/g6_f2.m3u8` — 2,709줄 · 106,499B · sha256 `f6eb71a6…c9095`)은 렌더 코드가
+아니라 아래 두 파이썬 스크립트가 만들고 대조했다. 생성기는 설계 4.8.1 표의 수치만 읽는다. 대조기는 설계 r17
+4.8.2 실물 발췌의 세 덩어리와 축자로, 생략된 두 구간(631·264조각)과 줄 수로 견준다. VERSION 줄만 부기 32 에
+따라 6 으로 바꿔 견주며, 설계 쪽에 대체 표식이 있을 때만 바꾼다.
+
+저장소에는 스크립트 파일을 두지 않는다. 저장소에 추적되는 `.py` 가 없어, 새 언어를 들이지 않으려고 여기에
+전문을 싣는다(계획 재량 14 · r28 처분). 다시 돌리려면 먼저 `T="$(mktemp -d)"` 로 **저장소 밖** 임시 디렉터리를
+만들고 아래 두 파이썬 블록을 `"$T/gen_g6_f2.py"` · `"$T/check_g6_f2.py"` 로 저장한다 — 저장소 안에 두면
+`git add -A` 가 `.py` 를 함께 싣는다. 그다음 `T` 가 남아 있는 같은 셸의 `media/` 에서 아래처럼 실행한다.
+대조기는 설계 r17 원본이 있어야 도는데, 지금은 kty 볼트에만 있고 팀 위키에는 없다.
+
+```bash
+DESIGN=/path/to/26_design_r17.md   # 설계 r17 원본 경로로 바꾼다
+python3 "$T/gen_g6_f2.py" "$T/g6_f2.m3u8" && cmp "$T/g6_f2.m3u8" internal/rewind/testdata/g6_f2.m3u8
+python3 "$T/check_g6_f2.py" "$DESIGN" internal/rewind/testdata/g6_f2.m3u8
+# OK 청크 3개 축자 일치(VERSION 줄 = 부기 32 대체) · 생략 [631, 264] · 줄 2709 · URI 900
+```
+
+2026-09-25 재실행: 생성 결과가 골든과 바이트 동일(`cmp` 무출력)했고, 대조기는 위 OK 줄을 냈다.
+
+<details>
+<summary>생성기 <code>gen_g6_f2.py</code> — 인자 = 출력 경로</summary>
+
+```python
+#!/usr/bin/env python3
+"""g6_f2 골든 생성기 — 설계 r17 4.8.1 표의 수치만으로 900조각 전문을 적는다.
+
+Go 렌더 코드와 무관한 독립 경로다(언어·서식 함수가 다르다). 규칙은 설계 4.8.2 실물의
+줄 순서 그대로이고, 4.8.2 의 `# --` 설명 줄·`... 생략 ...` 줄·빈 줄은 싣지 않는다.
+단 VERSION 줄은 kty 결정(2026-09-24)으로 6 이다 — 설계 4.8.2 의 9 에 대체 표식 · 계획 부기 32.
+"""
+import sys
+from datetime import datetime, timedelta, timezone
+
+BASE = "https://media.pokeclip.com"          # 4.8.1 조각 URI 행
+STREAM = "str_7a"                             # 4.8.1 스트림
+A_ID, B_ID = "S-20260831-0107", "S-20260831-0152"   # 4.8.1 세션 A·B
+A_FIRST, A_LAST = 398, 1030                   # 633조각
+B_FIRST, B_LAST = 1031, 1297                  # 267조각
+A_PDT = datetime(2026, 8, 31, 1, 7, 59, tzinfo=timezone.utc)   # A 첫 PDT
+B_PDT = datetime(2026, 8, 31, 1, 52, 11, tzinfo=timezone.utc)  # B 첫 PDT(120초 순단 뒤)
+GAP_SEQ = 1297                                # upload_stall GAP 1개
+TD, MSN, DISC_SEQ = 6, 398, 3                 # 4.8.2 머리 · 4.8.1 MSN·DISC-SEQ
+
+out = [
+    "#EXTM3U",
+    "#EXT-X-VERSION:6",                       # 부기 32 — 설계 4.8.2 의 9 대체
+    f"#EXT-X-TARGETDURATION:{TD}",
+    f"#EXT-X-MEDIA-SEQUENCE:{MSN}",
+    f"#EXT-X-DISCONTINUITY-SEQUENCE:{DISC_SEQ}",
+]
+for seq in range(A_FIRST, B_LAST + 1):
+    if seq == A_FIRST:
+        out.append(f'#EXT-X-MAP:URI="{BASE}/dvr/{STREAM}/init/{A_ID}.mp4"')
+    if seq == B_FIRST:
+        out.append("#EXT-X-DISCONTINUITY")
+        out.append(f'#EXT-X-MAP:URI="{BASE}/dvr/{STREAM}/init/{B_ID}.mp4"')
+    if seq == GAP_SEQ:
+        out.append("#EXT-X-GAP")
+    if seq <= A_LAST:
+        pdt = A_PDT + timedelta(seconds=4 * (seq - A_FIRST))
+    else:
+        pdt = B_PDT + timedelta(seconds=4 * (seq - B_FIRST))
+    out.append("#EXT-X-PROGRAM-DATE-TIME:" + pdt.strftime("%Y-%m-%dT%H:%M:%S") + ".000Z")
+    out.append("#EXTINF:4.000,")
+    out.append(f"{BASE}/dvr/{STREAM}/seg/{seq:06d}.m4s")
+
+with open(sys.argv[1], "w", encoding="ascii", newline="\n") as f:
+    f.write("\n".join(out) + "\n")
+```
+
+</details>
+
+<details>
+<summary>대조기 <code>check_g6_f2.py</code> — 인자 = 설계 파일 · 골든 파일</summary>
+
+```python
+#!/usr/bin/env python3
+"""g6_f2 골든을 설계 r17 4.8.2 실물(발췌)과 4.8.1 수치에 대조한다 — Go 코드와 무관."""
+import re
+import sys
+
+design, golden_path = sys.argv[1], sys.argv[2]
+text = open(design, encoding="utf-8").read()
+# 제목과 코드 블록 사이에 대체 표식(인용 줄)이 올 수 있다 — 제목 뒤 첫 코드 블록을 잡는다.
+m = re.search(r"#### 4\.8\.2\. 실물 \(발췌\)\n(?:[^\n]*\n)*?```\n(.*?)\n```", text, re.S)
+assert m, "4.8.2 블록을 못 찾음"
+# 부기 32(kty 결정 2026-09-24): 발췌 둘째 줄 VERSION 9 → 6. 설계에 대체 표식이 있을 때만 치환한다.
+MARK = "`#EXT-X-VERSION:9` 는 **6** 으로 대체"
+assert MARK in text[m.start():m.start(1)], "4.8.2 대체 표식(VERSION 9 → 6)이 없다"
+chunks, cur = [], []
+for line in m.group(1).split("\n"):
+    if "생략" in line:            # "... 생략: seq a ~ b (n조각) ..." — 청크 경계
+        chunks.append(cur); cur = []
+        continue
+    if line.strip() == "" or line.startswith("# --"):
+        continue                  # 설명 줄·빈 줄은 본문이 아니다
+    cur.append(line)
+chunks.append(cur)
+assert chunks[0][1] == "#EXT-X-VERSION:9", chunks[0][1]   # 설계 발췌 원문
+chunks[0][1] = "#EXT-X-VERSION:6"                          # 부기 32 대체
+omitted = [int(x) for x in re.findall(r"\((\d+)조각\)", m.group(1))]
+assert omitted == [631, 264], omitted
+
+g = open(golden_path, encoding="ascii").read()
+assert g.endswith("\n") and not g.endswith("\n\n")
+lines = g[:-1].split("\n")
+pos = 0
+for i, ch in enumerate(chunks):
+    assert lines[pos:pos + len(ch)] == ch, f"청크 {i} 불일치 @ {pos}"
+    pos += len(ch)
+    if i < len(omitted):
+        pos += omitted[i] * 3     # 생략 조각 × (PDT·EXTINF·URI)
+assert pos == len(lines), (pos, len(lines))
+
+uris = [l for l in lines if not l.startswith("#")]
+assert len(uris) == 900
+assert sum(l.startswith("#EXT-X-PROGRAM-DATE-TIME:") for l in lines) == 900
+assert sum(l == "#EXTINF:4.000," for l in lines) == 900     # 900 × 4.000 = 3,600.000초
+assert sum(l == "#EXT-X-DISCONTINUITY" for l in lines) == 1
+assert sum(l.startswith("#EXT-X-MAP:") for l in lines) == 2
+assert sum(l == "#EXT-X-GAP" for l in lines) == 1
+assert not any(l.startswith("#PC-") for l in lines)
+assert not any(l == "" for l in lines)
+assert all(re.fullmatch(r"https://media\.pokeclip\.com/dvr/str_7a/seg/\d{6}\.m4s", u) for u in uris)
+assert [int(u[-10:-4]) for u in uris] == list(range(398, 1298))
+print(f"OK 청크 {len(chunks)}개 축자 일치(VERSION 줄 = 부기 32 대체) · 생략 {omitted} · 줄 {len(lines)} · URI {len(uris)}")
+```
+
+</details>
+
+### M4 ⓑ 출처
+
+- 설계: 볼트 설계 r17(`Projects/PokeClip/specs/POK-168-r15a-되감기경로-2026-08-30/50_r4산출_2026-09-01/26_design_r17.md`
+  — 3.2·4.1·4.2·4.3·4.5.5·4.8·6.5.6·9절)과 r7–r14(G6 계보 — 위 복원 기록).
+- 계약·ADR: 팀 위키 `PokeClip-LLM-WIKI` — `contracts/계약-세그먼트인덱스.md`(불변식 1 · `is_discontinuity` 행) ·
+  `contracts/계약3-LLHLS-DVR재생규약.md` 7절 · ADR-020 · ADR-073(위키 PR #143, main `a5faeef`).
+- 규격: draft-pantos-hls-rfc8216bis-22 — 4.4.3.1(TARGETDURATION) · 4.4.3.4(ENDLIST) · 6.2.1(허용 변경 · PDT 1초
+  미만 겹침) · 6.2.2(끊김 표시를 빼면 DISC-SEQ 를 올린다 · 줄이지 않는다) · 8절(버전 호환).
+- 계획: POK-195 M4 작업 산출물 — 계획(개정 r33 까지)의 4절 PR ⓑ · 2.3 ⑸ⓕ · 6.2 · 부기 15·16·25·29·32 · 착수
+  메모 넷(「④ 캐시」·「⑥ G6 픽스처·뮤테이션」·「⑦ 이관 기록」·「ⓒ」).
+- 결정: kty 결정 F(2026-09-19 — 끊김 표시는 계승 경계에만) · VERSION 6 · ⓑ 숫자 상수 셋(2026-09-24) · 부기 15
+  (300초 안 재접속도 base 승계) · f2 형상.
+- 실측: hls.js 1.5.15·1.6.0·1.7.3 파서에 g6_f2 골든을 넣어 구문 오류 0, 해석 수치가 설계 4.8.1 과 같았다
+  (VERSION 9·6 두 번, 2026-09-24 — 작업 산출물 `126_hlsjs_parse_g6_f2.md`). 바이트 실재생·compose 실측은 ⓒ 몫이다.
+- 코드: 이 절이 인용한 파일·함수·테스트(PR ⓑ 커밋 ①–⑥ 개발 보고 · 리뷰 통합 r1–r6 과 대조).
+
 ## 테스트
 
 ```bash
 cd media && go test ./...
 ```
 
-`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`의 통합 테스트와
+`internal/index`·`internal/session`·`internal/indexer`·`cmd/segment-indexer`·`internal/upload`·`internal/rewind/cache`의 통합 테스트와
 `internal/pgtest`의 자기 테스트는 **실제 PostgreSQL이 필요**하다. `PG_DSN`이 없으면 해당 케이스는 전부 `skip`되고 나머지는 그대로
 돈다 — 즉 `PG_DSN` 없이 돌린 결과만으로는 DB 계층이 검증되지 않는다.
 
 ```bash
 set -a; . ../.env; set +a
 export PG_DSN="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POSTGRES_DB"
-go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ ./internal/pgtest/ -v
+go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-indexer/ ./internal/upload/ ./internal/rewind/cache/ ./internal/pgtest/ -v
 ```
 
 이 통합 테스트들은 `PG_DSN`이 가리키는 DB에 **쓰지 않는다.** `PG_DSN`은 관리 접속으로만
@@ -725,7 +1171,7 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 `go test ./...`는 패키지별 테스트 바이너리를 병렬로 띄우므로 한 DB를 나눠 쓰면 서로의 표를
 비운다. 실제 이름은 `PG_TEST_DB`에 패키지 접미를 붙인 것으로, `internal/index`만 무접미
 (`pokeclip_uploadtest`)이고 `internal/session`은 `_session`, `internal/indexer`는 `_indexer`,
-`cmd/segment-indexer`는 `_cmd`, `internal/pgtest` 자기 테스트는 `_selftest`다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
+`cmd/segment-indexer`는 `_cmd`, `internal/upload`는 `_upload`, `internal/rewind/cache`는 `_rewindcache`, `internal/pgtest` 자기 테스트는 `_selftest`다. 그래서 개발 DB의 `stream_segments`는 오염되지 않는다(대신 `PG_DSN`
 롤에 `CREATEDB` 권한이 필요하고 — **로컬 compose와 CI(`media-ci`)의 postgres 서비스 컨테이너 둘 다 superuser라 이미 갖고 있다**, `PG_TEST_DB`를 개발 DB 이름과 같게
 주면 테스트가 기동 즉시 실패한다. `PG_DSN`에 DB 이름 자체를 안 적었을 때도 같은데, 단
 `PGDATABASE`가 설정된 환경에서는 그 값이 DB 이름으로 채워져 "이름이 비었다" 가드 대신 동일 이름
@@ -733,7 +1179,8 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 **이미 있는 DB는 이 테스트가 심어 둔 소유 표식(빈 표 `pokeclip_testdb_marker`)이 있을 때만
 채택한다 — 없으면 남의 DB일 수 있으므로 아무것도 건드리지 않고 실패한다.** 표식은 테스트가 DB를
 새로 만들 때만 심으므로, **표식 도입 전에 만들어 둔 기존 전용 DB는 한 번 `DROP DATABASE` 후 다시
-돌려야 한다**(한 번만 겪는 마이그레이션이고 실패 메시지가 그대로 안내한다).
+돌려야 한다**(한 번만 겪는 마이그레이션이고 실패 메시지가 그대로 안내한다). 다만 표식이 없는 까닭은 남의 DB나
+중단된 부트스트랩 잔재일 수도 있으므로, 지우기 전에 그 DB가 전용 테스트 DB가 맞는지 직접 확인한다.
 **`PG_DSN`에는 로컬 compose의 개발 DB만 준다 — 공유·원격·프로덕션 DSN을 주지 않는다.**
 **같은 `PG_TEST_DB`로 두 실행을 동시에 돌리면 서로의 데이터를 지운다 — CI나 병렬 실행에서는
 실행마다 고유한 `PG_TEST_DB`를 주고, 실행이 끝나면 그 이름의 접미 DB 전부를 `DROP DATABASE`로
@@ -741,13 +1188,16 @@ go test ./internal/index/ ./internal/session/ ./internal/indexer/ ./cmd/segment-
 `media-ci`의 postgres는 잡마다 뜨고 함께 사라져 공유가 없다 — 규약을 완화한 것이 아니라 적용
 조건을 드러낸 것이다. `ddl.go`를 바꾼 뒤에는 전용 DB가 옛 스키마를 유지하므로
 (`CREATE TABLE IF NOT EXISTS`) **접미 DB 전부**를 지운 뒤 다시 돌린다 — `pokeclip_uploadtest`
-하나만 지우면 `internal/index`는 새 스키마로 통과하고 `_session`·`_indexer`·`_cmd`는 옛
-스키마 그대로라 그 세 패키지만 "does not exist" 계열로 실패한다.
+하나만 지우면 `internal/index`는 새 스키마로 통과하고 `_session`·`_indexer`·`_cmd`·`_upload`·`_rewindcache`는 옛
+스키마 그대로라 그 다섯 패키지만 "does not exist" 계열로 실패한다.
+
+**아래 루프는 소유 표식을 확인하지 않고 이름만 보고 지운다** — 밑이름이 기본 이름이거나 테스트가 새로 만든
+고유 이름일 때만 쓰고, 표식이 없어 실패한 DB는 실패 메시지대로 전용 테스트 DB가 맞는지 직접 확인한 뒤 하나씩 지운다.
 
 ```bash
 # PG_TEST_DB 를 바꿔 돌렸다면 그 이름이 밑이름이다 — 기본 이름만 지우면 실제 DB 는 남는다.
 base="${PG_TEST_DB:-pokeclip_uploadtest}"
-for suffix in "" _session _indexer _cmd _selftest; do
+for suffix in "" _session _indexer _cmd _upload _rewindcache _selftest; do
   psql "$PG_DSN" -c "DROP DATABASE IF EXISTS ${base}${suffix}"
 done
 ```
@@ -758,9 +1208,11 @@ done
 `go test`만 있으면 되고 Docker는 필요 없지만, 다른 테스트보다 몇 초 더 걸린다.
 
 CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리지를 함께 재고,
-`internal/index`·`internal/upload`·`internal/indexer`·`internal/session`·`internal/mtxstate`·`internal/playback`
-**여섯 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(`session`·`mtxstate` 는 POK-195 M3에서,
-`playback` 은 M4 ⓐ 에서 추가 — 되감기 판정 로직과 ③ 바이트를 만드는 층이 그 안에 있다). 나머지 패키지는 수치만 로그에 남고 게이트 대상이 아니다.
+`internal/index`·`internal/upload`·`internal/indexer`·`internal/session`·`internal/mtxstate`·`internal/playback`·`internal/rewind/boundary`·`internal/rewind`·`internal/rewind/cache`
+**아홉 패키지 중 하나라도 80% 미만이면 잡을 실패시킨다**(`session`·`mtxstate` 는 POK-195 M3에서,
+`playback` 은 M4 ⓐ 에서, `rewind/boundary`·`rewind`·`rewind/cache` 는 M4 ⓑ 에서 추가 — 되감기 판정 로직과
+③ 바이트를 만드는 층, 되감기 목록의 경계·본문·입력을 정하는 층이 그 안에 있다. 발행된 목록 줄은 고칠 수 없어
+여기서 틀린 것은 그 목록이 사는 동안 남는다). 나머지 패키지는 수치만 로그에 남고 게이트 대상이 아니다.
 
 ## MediaMTX 버전업 체크리스트
 
