@@ -103,6 +103,56 @@ static void SetOptionalBool(obs_data_t *data, const char *key, const std::option
 		obs_data_set_string(data, key, "unknown");
 }
 
+// obs_data 배열은 객체만 담는다 — 이름 목록도 [{name}]로 싣는다.
+static obs_data_array_t *NameArray(const std::vector<std::string> &names)
+{
+	obs_data_array_t *array = obs_data_array_create();
+	for (const std::string &name : names) {
+		obs_data_t *item = obs_data_create();
+		obs_data_set_string(item, "name", name.c_str());
+		obs_data_array_push_back(array, item);
+		obs_data_release(item);
+	}
+	return array;
+}
+
+static obs_data_t *AudioToData(const AudioRoutingView &v)
+{
+	obs_data_t *audio = obs_data_create();
+	obs_data_set_bool(audio, "known", v.known);
+	obs_data_set_bool(audio, "autoAssign", v.autoAssign);
+	obs_data_set_bool(audio, "applied", v.applied);
+	obs_data_set_int(audio, "overflow", v.overflow);
+
+	obs_data_array_t *tracks = obs_data_array_create();
+	for (const AudioTrackView &t : v.tracks) {
+		obs_data_t *track = obs_data_create();
+		obs_data_set_int(track, "track", t.track);
+		obs_data_array_t *sources = obs_data_array_create();
+		for (const AudioSourceView &src : t.sources) {
+			obs_data_t *item = obs_data_create();
+			obs_data_set_string(item, "name", src.name.c_str());
+			obs_data_set_string(item, "kind", AudioKindName(src.kind));
+			obs_data_array_push_back(sources, item);
+			obs_data_release(item);
+		}
+		obs_data_set_array(track, "sources", sources);
+		obs_data_array_release(sources);
+		obs_data_array_push_back(tracks, track);
+		obs_data_release(track);
+	}
+	obs_data_set_array(audio, "tracks", tracks);
+	obs_data_array_release(tracks);
+
+	obs_data_array_t *mixOnly = NameArray(v.mixOnly);
+	obs_data_set_array(audio, "mixOnly", mixOnly);
+	obs_data_array_release(mixOnly);
+	obs_data_array_t *monitorOnly = NameArray(v.monitorOnly);
+	obs_data_set_array(audio, "monitorOnly", monitorOnly);
+	obs_data_array_release(monitorOnly);
+	return audio;
+}
+
 std::string AppState::ToJson(const StateSnapshot &s)
 {
 	obs_data_t *root = obs_data_create();
@@ -133,8 +183,14 @@ std::string AppState::ToJson(const StateSnapshot &s)
 	obs_data_set_int(checks, "width", s.checks.width);
 	obs_data_set_int(checks, "height", s.checks.height);
 	obs_data_set_double(checks, "fps", s.checks.fps);
+	SetOptionalBool(checks, "audioTracks", s.checks.audioTracks);
+	obs_data_set_int(checks, "audioTrackCount", s.checks.audioTrackCount);
 	obs_data_set_obj(root, "checks", checks);
 	obs_data_release(checks);
+
+	obs_data_t *audio = AudioToData(s.audio);
+	obs_data_set_obj(root, "audio", audio);
+	obs_data_release(audio);
 
 	std::string json = obs_data_get_json(root);
 	obs_data_release(root);

@@ -11,6 +11,7 @@
 #include <QLineEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QStringList>
 #include <QVBoxLayout>
 
 #include <thread>
@@ -46,6 +47,8 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	status_->setWordWrap(true);
 	checks_ = new QLabel(this);
 	checks_->setWordWrap(true);
+	audio_ = new QLabel(this);
+	audio_->setWordWrap(true);
 	message_ = new QLabel(this);
 	message_->setWordWrap(true);
 
@@ -67,6 +70,7 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	layout->addWidget(title);
 	layout->addWidget(status_);
 	layout->addWidget(checks_);
+	layout->addWidget(audio_);
 	layout->addLayout(row);
 	layout->addWidget(unpair_);
 	layout->addWidget(message_);
@@ -103,9 +107,29 @@ void FallbackPanel::Render(const StateSnapshot &s)
 	status_->setText(line);
 
 	auto mark = [](const std::optional<bool> &v) { return !v.has_value() ? QString("–") : (*v ? "✓" : "✗"); };
-	checks_->setText(QString("GOP 2s %1   1080p %2   %3 %4")
+	checks_->setText(QString("GOP 2s %1   1080p %2   %3 %4   %5 %6")
 				 .arg(mark(s.checks.gop2s), mark(s.checks.res1080p), Text("Check.SharedEncoder"),
-				      mark(s.checks.sharedEncoder)));
+				      mark(s.checks.sharedEncoder), Text("Check.AudioTracks"), mark(s.checks.audioTracks)));
+
+	// 트랙 1은 늘 최종 믹스라 트랙 2~6만 적는다. 실제 트랙 비트 기준이라 수동 모드에서도 진실을 보여준다.
+	if (s.paired && s.audio.known) {
+		QStringList parts;
+		for (const AudioTrackView &t : s.audio.tracks) {
+			QStringList names;
+			for (const AudioSourceView &src : t.sources)
+				names << QString::fromStdString(src.name);
+			parts << QString("T%1 %2").arg(t.track).arg(names.isEmpty() ? QString("–") : names.join(", "));
+		}
+		QString line = Text("Audio.Title") + ": " + parts.join(" · ");
+		if (!s.audio.mixOnly.empty())
+			line += " · " + Text("Audio.MixOnly").arg(static_cast<int>(s.audio.mixOnly.size()));
+		if (!s.audio.autoAssign)
+			line += " " + Text("Audio.Manual");
+		audio_->setText(line);
+		audio_->setVisible(true);
+	} else {
+		audio_->setVisible(false);
+	}
 
 	message_->setText(LocalizedReason(s.errorCode));
 	code_->setVisible(!s.paired);

@@ -6,7 +6,9 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
+struct obs_encoder;
 struct obs_output;
 struct calldata;
 
@@ -31,6 +33,11 @@ private:
 
 	void ConnectSignals();
 	void DisconnectSignals();
+	// A2: 트랙 1은 본방 오디오 인코더를 공유하고(AAC·믹서 0일 때), 트랙 2~6은 우리가 AAC 인코더를 만든다.
+	bool AttachAudioEncoders(struct obs_encoder *streamAudio, std::string &errorCode);
+	// "stop" 신호 뒤 출력이 실제로 멈추면 해제한다. 세대가 바뀌었으면(새 출력) 아무것도 안 한다.
+	void ReleaseWhenStopped(uint64_t generation, int attemptsLeft);
+	void ReleaseOwnedEncoders();
 
 	static void OnStarting(void *data, struct calldata *params);
 	static void OnStart(void *data, struct calldata *params);
@@ -46,6 +53,8 @@ private:
 	};
 
 	struct obs_output *output_ = nullptr;
+	// 우리가 만든 오디오 인코더만(생성 참조를 우리가 쥔다). 출력이 제 참조를 놓은 뒤 Release()에서 놓는다.
+	std::vector<struct obs_encoder *> ownedAudioEncoders_;
 	std::unique_ptr<SignalContext> signalContext_;
 	uint64_t generation_ = 0;
 	std::chrono::steady_clock::time_point startedAt_{};

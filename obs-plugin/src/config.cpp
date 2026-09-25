@@ -82,6 +82,24 @@ void ConfigStore::Load()
 	config_.syncStart = GetBoolOr(data, "sync_start", d.syncStart);
 	config_.forceFallback = GetBoolOr(data, "force_fallback", d.forceFallback);
 	config_.dockIntroShown = GetBoolOr(data, "dock_intro_shown", d.dockIntroShown);
+	config_.audioAutoAssign = GetBoolOr(data, "audio_auto_assign", d.audioAutoAssign);
+	config_.audioTrackMap.clear();
+	if (obs_data_array_t *map = obs_data_get_array(data, "audio_track_map")) {
+		// 손상 항목(자리 범위 밖·빈 열쇠)은 배정 계산이 걸러 낸다(ComputeAssignment 1단계).
+		size_t count = obs_data_array_count(map);
+		for (size_t i = 0; i < count && i < kTrackMapCap * 2; i++) {
+			obs_data_t *item = obs_data_array_item(map, i);
+			AudioTrackMapEntry e;
+			e.key = obs_data_get_string(item, "key");
+			e.slot = (int)obs_data_get_int(item, "slot");
+			e.name = obs_data_get_string(item, "name");
+			e.assignedAt = obs_data_get_int(item, "assigned_at");
+			e.lastSeen = obs_data_get_int(item, "last_seen");
+			obs_data_release(item);
+			config_.audioTrackMap.push_back(std::move(e));
+		}
+		obs_data_array_release(map);
+	}
 	obs_data_release(data);
 
 	obs_log(LOG_INFO, "config loaded (paired=%s, ingest=%s:%d)", config_.HasKey() ? "yes" : "no",
@@ -117,6 +135,20 @@ bool ConfigStore::SaveLocked()
 	obs_data_set_bool(data, "sync_start", config_.syncStart);
 	obs_data_set_bool(data, "force_fallback", config_.forceFallback);
 	obs_data_set_bool(data, "dock_intro_shown", config_.dockIntroShown);
+	obs_data_set_bool(data, "audio_auto_assign", config_.audioAutoAssign);
+	obs_data_array_t *map = obs_data_array_create();
+	for (const AudioTrackMapEntry &e : config_.audioTrackMap) {
+		obs_data_t *item = obs_data_create();
+		obs_data_set_string(item, "key", e.key.c_str());
+		obs_data_set_int(item, "slot", e.slot);
+		obs_data_set_string(item, "name", e.name.c_str());
+		obs_data_set_int(item, "assigned_at", e.assignedAt);
+		obs_data_set_int(item, "last_seen", e.lastSeen);
+		obs_data_array_push_back(map, item);
+		obs_data_release(item);
+	}
+	obs_data_set_array(data, "audio_track_map", map);
+	obs_data_array_release(map);
 
 	bool ok = obs_data_save_json_pretty_safe(data, path_.c_str(), "tmp", "bak");
 	obs_data_release(data);

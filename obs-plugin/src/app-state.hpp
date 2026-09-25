@@ -1,5 +1,7 @@
 #pragma once
 
+#include "audio-assign.hpp"
+
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -19,6 +21,8 @@ struct EncoderChecks {
 	std::optional<bool> gop2s;
 	std::optional<bool> res1080p;
 	std::optional<bool> sharedEncoder;
+	std::optional<bool> audioTracks; // A2: 6트랙이 출력에 붙었다
+	int audioTrackCount = 0;
 	int keyintSec = -1;
 	int width = 0;
 	int height = 0;
@@ -46,6 +50,7 @@ struct StateSnapshot {
 	bool darkTheme = true;
 	StreamStats stats;
 	EncoderChecks checks;
+	AudioRoutingView audio; // A2: 트랙 2~6에 어느 소스가 실리는지 (실제 트랙 비트 기준)
 };
 
 class AppState {

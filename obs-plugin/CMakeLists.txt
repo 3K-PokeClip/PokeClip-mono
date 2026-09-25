@@ -30,6 +30,10 @@ target_sources(
     src/plugin-main.cpp
     src/app-state.cpp
     src/app-state.hpp
+    src/audio-assign.cpp
+    src/audio-assign.hpp
+    src/audio-router.cpp
+    src/audio-router.hpp
     src/bridge-server.cpp
     src/bridge-server.hpp
     src/config.cpp
