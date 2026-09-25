@@ -342,7 +342,8 @@ func checkMediaSequence(p Playlist, prev *Published) error {
 // 설계의 「또는 세션 전체」는 첫 행 기준으로 읽는다. 창이 1시간에 못 미치는 목록은 둘뿐이다 — 컷오프
 // 뒤로 1시간이 아직 안 쌓였거나(창 꼬리 = 컷오프), 목록의 첫 회차(계승이면 접두 회차)가 1시간 안쪽에서
 // 시작했다. 둘 다 목록이 그 회차의 첫 조각부터다. 회차 첫 조각을 컷오프로 자르는 것은 끊김 표시
-// 술어(HasDiscontinuityTag)와 같다 — 컷오프 아래 행은 목록에 실릴 수 없다(설계 4.2 ⓐ).
+// 술어(HasDiscontinuityTag)와 같다 — 둘이 정의 하나(firstSeq)를 쓴다. 컷오프 아래 행은 목록에
+// 실릴 수 없다(설계 4.2 ⓐ).
 func checkRange(p Playlist) error {
 	for _, r := range p.Rows {
 		if !boundary.Settled(r, p.Cutoff) {
@@ -352,7 +353,7 @@ func checkRange(p Playlist) error {
 	if total := totalMS(p.Rows); total < boundary.WindowMS {
 		// 첫 행 회차를 못 찾으면 영값(MinSeq 0)이라 첫 조각은 컷오프가 된다 — 렌더가 먼저 거르는 입력이다.
 		first, _ := p.session(p.Rows[0].SessionID)
-		if want := max(first.MinSeq, p.Cutoff); p.Rows[0].Seq != want {
+		if want := first.firstSeq(p.Cutoff); p.Rows[0].Seq != want {
 			return violation("S3", "목록이 %dms 로 1시간이 안 되는데 회차 %q 의 첫 조각 seq %d 가 아니라 seq %d 부터다",
 				total, first.ID, want, p.Rows[0].Seq)
 		}

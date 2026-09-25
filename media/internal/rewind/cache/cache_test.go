@@ -4,9 +4,11 @@ package cache_test
 // 커밋 ④. 채우는 길 둘(push 와 Reload)이 장부와 같은 값을 드는지, 경계 입력(boundary.Snapshot)으로
 // 무엇을 내주는지를 잰다. 목록 고르기(세션 필터)는 playlist_test.go 가 잰다.
 //
-// 픽스처는 장부 쓰기 규칙과 맞춘다: 비계승 개시 = base 0 · 계승과 TD 분할 = 직전 회차 base 복사 ·
-// TD = max(6, 첫 조각 반올림 초) · 회차 첫 행의 PDT = first_pdt · 컷오프 = 주조한 행의 seq. 기대값은
-// 손으로 적은 리터럴이고, 기본값(TD 6 · base 0 · f2 base 3)과 겹치는 값에 판정을 걸지 않는다.
+// 픽스처는 장부 쓰기 규칙과 맞춘다: 비계승 개시 = base 0 · 계승과 TD 분할 = 직전 회차 base 복사 · base 는
+// 컷오프 뒤 발행된 목록에서 끊김 표시가 빠질 때만 오른다 · TD = max(6, 첫 조각 반올림 초) · 회차 첫 행의
+// PDT = first_pdt · 컷오프 = 주조한 행의 seq. 기대값은 손으로 적은 리터럴이고, 기본값(TD 6 · base 0 · f2
+// base 3)과 겹치는 값에 판정을 걸지 않는다 — 단 이 파일에는 끊김 표시가 창에서 빠진 이력이 없어 base 가
+// 규칙상 0 이라, 0 이 아닌 base 의 운반은 playlist_test.go 의 TestCacheReceivesInheritsOnOpen 이 가른다.
 //
 // 외부 테스트 패키지로 두는 이유: 소비자(인덱서 push · ⓒ 발행 루프)가 쓰는 공개 계약만으로 성립하는지가
 // 곧 캐시의 계약 검증이다.
@@ -132,8 +134,8 @@ func window(t *testing.T, c *cache.Cache) boundary.Window {
 	return w
 }
 
-// 회차 O(비계승 개시) — seq 40 이 7.6초 조각으로 열어 TD 8 이다. 40·41 은 주조가 미뤄졌고(방증
-// 낡음) 42 가 컷오프를 주조했다.
+// 회차 O(비계승 개시) — seq 40 이 7.6초 조각으로 열어 TD 8 이다. 컷오프를 주조한 행은 테스트마다
+// 다르다 — 개시 행 40 이 주조하거나, 방증이 낡아 주조가 미뤄지면 42 가 주조한다.
 var sessionO = index.RewindSession{SessionID: "O", State: "live", FirstPDT: at(0), TargetDuration: 8}
 
 // cache_receives_every_insert(캐시 몫) — 장부에 커밋된 행은 push 로 캐시에 그대로 들어간다. 컷오프 전
@@ -177,15 +179,16 @@ func TestApplyInsertRecordsOpenedSessionAxis(t *testing.T) {
 }
 
 // 계승 개시와 TD 분할 개시가 싣는 base·계승·TD 도 그대로 든다. 재구성(부팅)으로 연 스트림에 이어지는
-// push 가 운영의 모양이다 — 직전 회차 P 는 장부에서 읽었고(base 5 = 앞선 계승·축출이 쌓인 값), S 는
-// 120초 순단 뒤 P 를 계승해 P 의 base 를 옮겨 받았다(첫 조각 6.6초 → TD 7).
+// push 가 운영의 모양이다 — 직전 회차 P 는 장부에서 읽었고(컷오프 행 60 에서 비계승으로 열려 base 0 —
+// 계승 회차가 아니라 끊김 표시가 없어 축출로 오를 것도 없다), S 는 120초 순단 뒤 P 를 계승해 P 의 base 를
+// 옮겨 받았다(첫 조각 6.6초 → TD 7).
 func TestApplyInsertRecordsInheritedOpening(t *testing.T) {
 	c := &cache.Cache{}
 	sessionP := index.RewindSession{SessionID: "P", State: "ending", EndReason: "offline", InitUploaded: true,
-		DiscontinuityBase: 5, FirstPDT: at(0), TargetDuration: 6}
+		FirstPDT: at(0), TargetDuration: 6}
 	c.Reload(stream, index.RewindLedger{CutoffSeq: 60, HasCutoff: true,
 		Rows: ledgerRun("P", 60, 62, at(0)), Sessions: []index.RewindSession{sessionP}})
-	sessionS := index.RewindSession{SessionID: "S", State: "live", DiscontinuityBase: 5,
+	sessionS := index.RewindSession{SessionID: "S", State: "live",
 		FirstPDT: at(132 * time.Second), InheritsSession: "P", TargetDuration: 7}
 
 	c.ApplyInsert(stream, 63, openingOf(sessionS, 63, 6600))
@@ -360,9 +363,9 @@ func TestReloadReplacesTheStreamView(t *testing.T) {
 	c := &cache.Cache{}
 	c.ApplyInsert(stream, 0, seeded(openingOf(index.RewindSession{SessionID: "OLD", State: "live", FirstPDT: at(0), TargetDuration: 6}, 0, 4000)))
 	sessionB := index.RewindSession{SessionID: "B", State: "ended", EndReason: "td_exceeded", InitUploaded: true,
-		DiscontinuityBase: 5, FirstPDT: at(128 * time.Second), InheritsSession: "A", TargetDuration: 6}
+		FirstPDT: at(128 * time.Second), InheritsSession: "A", TargetDuration: 6}
 	sessionC := index.RewindSession{SessionID: "C", State: "ending", EndReason: "offline",
-		DiscontinuityBase: 5, FirstPDT: at(140 * time.Second), TargetDuration: 8}
+		FirstPDT: at(140 * time.Second), TargetDuration: 8}
 	rows := ledgerRun("B", 12, 14, at(128*time.Second))
 	rows[2].PlaybackUploaded, rows[2].IsGap = false, true
 	rows = append(rows,

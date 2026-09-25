@@ -20,23 +20,24 @@ const chainCutoff = 10
 
 // 연쇄 계승 픽스처의 회차들 — 개시 때 장부에 쓰인 값이다. 장부 쓰기 규칙과 맞춘다: TD = max(6, 첫 조각
 // 반올림 초) · 계승 개시(300초 안 재접속)는 직전 회차의 그때 base 를 복사 · TD 분할도 base 를 복사하되
-// 계승하지 않는다. MinSeq 는 그 회차에 귀속된 행의 가장 작은 seq 다.
+// 계승하지 않는다 · base 가 오르는 길은 컷오프 뒤 발행된 목록에서 끊김 표시가 빠질 때(축출 증분)뿐이다.
+// MinSeq 는 그 회차에 귀속된 행의 가장 작은 seq 다.
 //
-//	O  seq  8..13  N 을 계승(N 은 컷오프 아래라 어느 목록에도 없다) · base 5(N 에서 복사)
+//	O  seq  8..13  N 을 계승(N 은 컷오프 아래라 어느 목록에도 실린 적이 없다) · base 0(N 에서 복사)
 //	               첫 조각 seq 8 = 7.6초 → TD 8 · seq 8·9 는 컷오프 아래라 목록 첫 조각은 컷오프 행 10
-//	P  seq 14..19  O 가 끝나고 120초 뒤 재접속 — O 를 계승 · base 5 · 첫 조각 6.6초 → TD 7
-//	S  seq 20..27  P 가 끝나고 120초 뒤 재접속 — P 를 계승 · base 5 · 첫 조각 6.6초 → TD 7
+//	P  seq 14..19  O 가 끝나고 120초 뒤 재접속 — O 를 계승 · base 0 · 첫 조각 6.6초 → TD 7
+//	S  seq 20..27  P 가 끝나고 120초 뒤 재접속 — P 를 계승 · base 0 · 첫 조각 6.6초 → TD 7
 //	               seq 24 앞에서 벽시계가 120초 뛰었다(장부라면 is_discontinuity 가 서는 자리)
-//	Q  seq 28..30  seq 28 이 7.6초라 S 의 TD 7 을 넘어 분할 — 계승 없음 · TD 8 · base 7(S 의 그때 값)
+//	Q  seq 28..30  seq 28 이 7.6초라 S 의 TD 7 을 넘어 분할 — 계승 없음 · TD 8 · base 2(S 의 그때 값)
 //
-// P·S 의 base 5 는 O·P 목록이 아직 표시를 내보내기 전에 복사한 값이다 — 이 파일의 O·P 목록은 다음 회차가
+// P·S 는 O·P 목록이 아직 표시를 내보내기 전에 열려 base 0 을 복사했다 — 이 파일의 O·P 목록은 다음 회차가
 // 열린 뒤에야(창이 다음 회차 쪽으로 자란 뒤에야) 표시를 내보낸다. Q 가 열릴 때 S 는 자기 목록에서 표시 둘
-// (P·S 의 첫 조각 14·20)을 내보내 base 가 7 이었다.
+// (P·S 의 첫 조각 14·20)을 내보내 base 가 2 였다.
 var (
-	chainO = rewind.Session{ID: "O", InheritsSession: "N", DiscontinuityBase: 5, TargetDuration: 8, MinSeq: 8, InitUploaded: true}
-	chainP = rewind.Session{ID: "P", InheritsSession: "O", DiscontinuityBase: 5, TargetDuration: 7, MinSeq: 14, InitUploaded: true}
-	chainS = rewind.Session{ID: "S", InheritsSession: "P", DiscontinuityBase: 5, TargetDuration: 7, MinSeq: 20, InitUploaded: true}
-	chainQ = rewind.Session{ID: "Q", DiscontinuityBase: 7, TargetDuration: 8, MinSeq: 28, InitUploaded: true}
+	chainO = rewind.Session{ID: "O", InheritsSession: "N", TargetDuration: 8, MinSeq: 8, InitUploaded: true}
+	chainP = rewind.Session{ID: "P", InheritsSession: "O", TargetDuration: 7, MinSeq: 14, InitUploaded: true}
+	chainS = rewind.Session{ID: "S", InheritsSession: "P", TargetDuration: 7, MinSeq: 20, InitUploaded: true}
+	chainQ = rewind.Session{ID: "Q", DiscontinuityBase: 2, TargetDuration: 8, MinSeq: 28, InitUploaded: true}
 )
 
 // chainRows 는 연쇄 계승 픽스처의 장부 행 가운데 목록에 실릴 수 있는 것(컷오프 이상 seq 10..30, 전부
@@ -209,6 +210,10 @@ func discontinuitySequenceNumbers(t *testing.T, body string) map[int64]int64 {
 // 그래서 렌더(표시를 다는 자리 · DISC-SEQ = base 그대로)와 축출 증분이 같은 술어를 쓴다는 계약이 발행
 // 바이트로 묶인다 — 어느 한쪽이 다른 근거로 세면(렌더가 DISC-SEQ 에 목록 안 표시 수를 더함 · 증분이 목록
 // 문맥이나 PDT 점프로 셈) 남은 조각의 번호가 움직인다.
+//
+// g6_f5 — 설계 r7–r14 의 「축출 후: MSN 증가량 = 축출 개수 · DISC-SEQ 증가량 = 축출 구간 표시 수」 가운데
+// DISC-SEQ 절을 여기서 잰다. MSN 절은 MSN = 첫 줄 seq · 목록 안 seq 연속이라는 Render 계약(g6_f2 ·
+// TestRenderRejectsUnrenderableInput)으로 선다.
 //
 // 목록은 연속 발행의 모양이다 — 앞에서 빠지고(MSN 이 는다) 뒤에 붙는다(끝 seq 가 는다). 창 길이는 이
 // 불변식의 입력이 아니어서 1시간 창의 900조각 대신 몇 조각짜리 창으로 같은 관계를 만든다. wantTotal 은

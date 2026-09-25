@@ -18,10 +18,11 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/cache"
 )
 
-// sessionP 는 부팅 재구성으로 읽어 온 회차다 — 컷오프 아래의 회차 O 를 계승해 열렸고(base 5 는 앞선
-// 계승·축출이 쌓인 값을 옮겨 받은 것), seq 60 이 컷오프를 주조했다. 오프라인으로 ending 이 됐다.
+// sessionP 는 부팅 재구성으로 읽어 온 회차다 — 컷오프 아래의 회차 O 를 계승해 열렸고(base 0 — O 는 컷오프
+// 아래라 어느 목록에도 실린 적이 없어 옮겨 받을 증분이 없다), seq 60 이 컷오프를 주조했다. 오프라인으로
+// ending 이 됐다.
 var sessionP = index.RewindSession{SessionID: "P", State: "ending", EndReason: "offline", InitUploaded: true,
-	DiscontinuityBase: 5, FirstPDT: at(0), InheritsSession: "O", TargetDuration: 6}
+	FirstPDT: at(0), InheritsSession: "O", TargetDuration: 6}
 
 // liveP 는 아직 송출 중인 P 다 — TD 분할은 live 회차에서만 일어난다.
 func liveP() index.RewindSession {
@@ -65,29 +66,46 @@ func sessionIDs(pl rewind.Playlist) []string {
 
 // cache_receives_inherits_on_open(계획 6.3 #36) — 재기동 없이 300초 안에 다시 열린 계승 회차 S 는 개시
 // push 로 계승(inherits_session = P)을 세우고, 그 목록 첫머리에 P 의 접두가 실린다. 계승이 개시 때 실리지
-// 않으면 DISC-SEQ(= S 의 base 5)만 승계되고 접두가 빠진 목록이 나간다(계획 2.3 ⑸ — cc 입력 B).
+// 않으면 DISC-SEQ(= S 의 base)만 승계되고 접두가 빠진 목록이 나간다(계획 2.3 ⑸ — cc 입력 B).
 //
 // 목록에 싣는 회차 값은 렌더·발행 전 검사가 읽는 여섯 칸을 그대로 옮긴 것이어야 한다. 그 가운데 TD 는 머리
 // 한 줄로만, init 게이트는 발행 전 검사로만 드러난다(렌더는 init 게이트를 읽지 않는다). TD 가 0 이면 모든
 // 목록 머리가 TARGETDURATION:0 이 되어 발행 전 검사 S5 가 모든 발행을 막고, init 게이트가 늘 참이면 G5
 // 그물(validate.go mapProblem)이 init 을 올리지 않은 회차를 통과시킨다(ⓑ r4 cc #1).
+//
+// base 는 장부 쓰기 규칙으로 0 이 아닌 값에 닿는 이력으로 둔다 — base 는 컷오프 뒤 발행된 목록에서 끊김
+// 표시가 빠질 때만 오르고, 조각이 목록에서 빠지려면 그 뒤로 한 시간이 쌓여야 한다. P 는 컷오프 아래 회차
+// O 를 계승해 컷오프 행 60 에서 열렸고(base 0) 60..960(4초 901조각)을 쓰는 사이 창 꼬리가 61 로 넘어가
+// 목록에서 첫 조각 60 의 표시가 빠졌다(base 1). S 는 P 가 끝나고 120초 뒤 P 를 계승해 그 1 을 옮겨
+// 받았다(첫 조각 6.6초 → TD 7). 이 패키지의 다른 회차는 규칙상 base 0 이라 base 칸의 운반은 여기서 가른다.
 func TestCacheReceivesInheritsOnOpen(t *testing.T) {
-	c := reloadP(sessionP)
-	sessionS := index.RewindSession{SessionID: "S", State: "live", DiscontinuityBase: 5,
-		FirstPDT: at(132 * time.Second), InheritsSession: "P", TargetDuration: 7}
-	openAfterP(c, sessionS, 6600)
+	hourP := sessionP
+	hourP.DiscontinuityBase = 1
+	c := &cache.Cache{}
+	c.Reload(stream, index.RewindLedger{CutoffSeq: 60, HasCutoff: true,
+		Rows: ledgerRun("P", 60, 960, at(0)), Sessions: []index.RewindSession{hourP}})
+	if w := window(t, c); w.TailSeq != 61 || w.HeadSeq != 960 {
+		t.Fatalf("픽스처 전제: P 의 창 = [%d, %d], want [61, 960] — 첫 조각 60 이 창 밖이어야 base 1 이 성립한다", w.TailSeq, w.HeadSeq)
+	}
+	sessionS := index.RewindSession{SessionID: "S", State: "live", DiscontinuityBase: 1,
+		FirstPDT: at(3724 * time.Second), InheritsSession: "P", TargetDuration: 7}
+	c.ApplyInsert(stream, 961, openingOf(sessionS, 961, 6600))
+	pushRun(c, "S", 962, 963, sessionS.FirstPDT.Add(6600*time.Millisecond))
+	uploadRun(c, 961, 963)
 
 	pl, ok := c.Playlist(stream, "S", window(t, c))
 
 	if !ok {
 		t.Fatal("Playlist(S) 가 목록을 만들지 못했다")
 	}
-	if got, want := playlistRows(pl), []string{"P:60", "P:61", "P:62", "S:63", "S:64", "S:65"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("행 = %v, want %v — 계승 접두가 빠졌다", got, want)
+	// 창은 [64, 963] 이다 — S 의 세 조각(14.6초)에 P 의 897조각을 더해야 한 시간이 찬다.
+	if got := playlistRows(pl); len(got) != 900 || got[0] != "P:64" || !reflect.DeepEqual(got[896:], []string{"P:960", "S:961", "S:962", "S:963"}) {
+		t.Errorf("행 %d개 = %v … %v, want 900개 = [P:64 …] … [P:960 S:961 S:962 S:963] — 계승 접두가 빠졌다",
+			len(got), got[:min(2, len(got))], got[max(0, len(got)-4):])
 	}
 	wantSessions := []rewind.Session{
-		{ID: "P", InheritsSession: "O", DiscontinuityBase: 5, TargetDuration: 6, MinSeq: 60, InitUploaded: true},
-		{ID: "S", InheritsSession: "P", DiscontinuityBase: 5, TargetDuration: 7, MinSeq: 63}, // init 미확정(개시 push)
+		{ID: "P", InheritsSession: "O", DiscontinuityBase: 1, TargetDuration: 6, MinSeq: 60, InitUploaded: true},
+		{ID: "S", InheritsSession: "P", DiscontinuityBase: 1, TargetDuration: 7, MinSeq: 961}, // init 미확정(개시 push)
 	}
 	if !reflect.DeepEqual(pl.Sessions, wantSessions) {
 		t.Errorf("회차 =\n%+v\nwant\n%+v", pl.Sessions, wantSessions)
@@ -99,15 +117,15 @@ func TestCacheReceivesInheritsOnOpen(t *testing.T) {
 	if !strings.Contains(body, "\n#EXT-X-TARGETDURATION:7\n") {
 		t.Errorf("본문 머리 TD 가 소유 회차 S 의 7 이 아니다:\n%s", body)
 	}
-	if !strings.Contains(body, "#EXT-X-DISCONTINUITY-SEQUENCE:5\n") || !strings.Contains(body, "\n#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI=\""+baseURL+"/dvr/str/init/S.mp4\"\n") {
-		t.Errorf("본문이 S 의 DISC-SEQ 5 와 S 첫 조각 앞 끊김 표시를 싣지 않았다:\n%s", body)
+	if !strings.Contains(body, "#EXT-X-DISCONTINUITY-SEQUENCE:1\n") || !strings.Contains(body, "\n#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI=\""+baseURL+"/dvr/str/init/S.mp4\"\n") {
+		t.Errorf("본문이 S 의 DISC-SEQ 1 과 S 첫 조각 앞 끊김 표시를 싣지 않았다:\n%s", body)
 	}
 }
 
 // TD 분할 회차와 비계승 인접 회차의 목록에는 앞 회차의 행을 싣지 않는다(④ 착수 메모 「비계승 인접 회차를
 // 한 목록에 싣는 형상 금지」). 창에는 P 의 행이 있어도 목록은 소유 회차의 행뿐이다.
 //
-//	TD 분할   송출 중인 P 에 seq 63 의 7.6초 조각이 들어와 P 의 TD 6 을 넘었다 — 새 회차 Q(base 5 복사 ·
+//	TD 분할   송출 중인 P 에 seq 63 의 7.6초 조각이 들어와 P 의 TD 6 을 넘었다 — 새 회차 Q(base 0 복사 ·
 //	         계승 없음 · TD 8)가 열리고 P 는 ending(td_exceeded)이 됐다
 //	비계승    P 가 오프라인으로 끝나고 400초 뒤 새 방송 D 가 열렸다 — base 0 · 계승 없음 · 첫 조각 7.6초라 TD 8
 func TestPlaylistOfNonInheritingSessionCarriesNoPrefix(t *testing.T) {
@@ -116,7 +134,7 @@ func TestPlaylistOfNonInheritingSessionCarriesNoPrefix(t *testing.T) {
 		p    index.RewindSession
 		next index.RewindSession
 	}{
-		{"TD_분할", liveP(), index.RewindSession{SessionID: "Q", State: "live", DiscontinuityBase: 5, FirstPDT: at(12 * time.Second), TargetDuration: 8}},
+		{"TD_분할", liveP(), index.RewindSession{SessionID: "Q", State: "live", FirstPDT: at(12 * time.Second), TargetDuration: 8}},
 		{"비계승_인접", sessionP, index.RewindSession{SessionID: "D", State: "live", FirstPDT: at(412 * time.Second), TargetDuration: 8}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -141,9 +159,9 @@ func TestPlaylistOfNonInheritingSessionCarriesNoPrefix(t *testing.T) {
 func TestPlaylistPrefixIsOneStepOfTheInheritanceChain(t *testing.T) {
 	c := &cache.Cache{}
 	sessions := []index.RewindSession{
-		{SessionID: "O", State: "ended", EndReason: "offline", InitUploaded: true, DiscontinuityBase: 5, FirstPDT: at(0), InheritsSession: "N", TargetDuration: 6},
-		{SessionID: "P", State: "ended", EndReason: "offline", InitUploaded: true, DiscontinuityBase: 5, FirstPDT: at(72 * time.Second), InheritsSession: "O", TargetDuration: 6},
-		{SessionID: "S", State: "live", InitUploaded: true, DiscontinuityBase: 5, FirstPDT: at(144 * time.Second), InheritsSession: "P", TargetDuration: 6},
+		{SessionID: "O", State: "ended", EndReason: "offline", InitUploaded: true, FirstPDT: at(0), InheritsSession: "N", TargetDuration: 6},
+		{SessionID: "P", State: "ended", EndReason: "offline", InitUploaded: true, FirstPDT: at(72 * time.Second), InheritsSession: "O", TargetDuration: 6},
+		{SessionID: "S", State: "live", InitUploaded: true, FirstPDT: at(144 * time.Second), InheritsSession: "P", TargetDuration: 6},
 	}
 	rows := append(append(ledgerRun("O", 50, 52, at(0)), ledgerRun("P", 53, 55, at(72*time.Second))...), ledgerRun("S", 56, 58, at(144*time.Second))...)
 	c.Reload(stream, index.RewindLedger{CutoffSeq: 50, HasCutoff: true, Rows: rows, Sessions: sessions})
@@ -168,7 +186,7 @@ func TestPlaylistPrefixIsOneStepOfTheInheritanceChain(t *testing.T) {
 // (③ 의 「접두만_실린_목록」). 소유 회차는 행이 없어도 회차 목록에 있다(머리의 TD·DISC-SEQ 가 그 값).
 func TestPlaylistOfSessionWithoutSettledRowsCarriesOnlyThePrefix(t *testing.T) {
 	c := reloadP(sessionP)
-	c.ApplyInsert(stream, 63, openingOf(index.RewindSession{SessionID: "S", State: "live", DiscontinuityBase: 5,
+	c.ApplyInsert(stream, 63, openingOf(index.RewindSession{SessionID: "S", State: "live",
 		FirstPDT: at(132 * time.Second), InheritsSession: "P", TargetDuration: 7}, 63, 6600))
 
 	pl, ok := c.Playlist(stream, "S", window(t, c))
@@ -190,7 +208,7 @@ func TestPlaylistNeedsTheSessionAxisOfEveryRow(t *testing.T) {
 	c.Reload(stream, index.RewindLedger{})
 	c.ApplyInsert(stream, 70, seeded(seedOf("P", 70, at(0), 4000)))
 	pushRun(c, "P", 71, 72, at(4*time.Second))
-	c.ApplyInsert(stream, 73, openingOf(index.RewindSession{SessionID: "S", State: "live", DiscontinuityBase: 5,
+	c.ApplyInsert(stream, 73, openingOf(index.RewindSession{SessionID: "S", State: "live",
 		FirstPDT: at(132 * time.Second), InheritsSession: "P", TargetDuration: 6}, 73, 4000))
 	uploadRun(c, 70, 73)
 	w := window(t, c)
@@ -255,8 +273,9 @@ func TestPlaylistDoesNotShareRowsWithTheCache(t *testing.T) {
 // push 는 S 의 MinSeq 를 10 으로, 재구성은 적재 행의 최솟값 12 로 든다. 끊김 표시의 「회차 첫 조각」은
 // 컷오프로 잘라 둘 다 12 이고, 표시는 목록 첫 조각 앞에 선다. 컷오프 아래 행으로 판정하면 재기동 전에는
 // 표시가 없다가 재기동 뒤 이미 나간 목록 머리에 표시가 새로 선다(DISC-SEQ 도 어긋난다).
+// S 의 base 는 0 이다 — 계승한 P 는 컷오프 아래라 어느 목록에도 실린 적이 없어 옮겨 받을 증분이 없다.
 func TestRenderTagSameBeforeAndAfterReload(t *testing.T) {
-	sessionS := index.RewindSession{SessionID: "S", State: "live", InitUploaded: true, DiscontinuityBase: 5,
+	sessionS := index.RewindSession{SessionID: "S", State: "live", InitUploaded: true,
 		FirstPDT: at(0), InheritsSession: "P", TargetDuration: 7}
 
 	live := &cache.Cache{}
@@ -275,7 +294,7 @@ func TestRenderTagSameBeforeAndAfterReload(t *testing.T) {
 	if before != after {
 		t.Errorf("재기동 전후 목록이 다르다\n재기동 전:\n%s\n재기동 뒤:\n%s", before, after)
 	}
-	if want := "#EXT-X-DISCONTINUITY-SEQUENCE:5\n#EXT-X-DISCONTINUITY\n#EXT-X-MAP:"; !strings.Contains(before, want) {
+	if want := "#EXT-X-DISCONTINUITY-SEQUENCE:0\n#EXT-X-DISCONTINUITY\n#EXT-X-MAP:"; !strings.Contains(before, want) {
 		t.Errorf("재기동 전 목록 첫 조각(seq 12 = 계승 회차 S 의 첫 조각) 앞에 끊김 표시가 없다:\n%s", before)
 	}
 }

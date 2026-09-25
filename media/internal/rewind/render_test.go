@@ -8,7 +8,9 @@ package rewind_test
 // 구간(631·264조각)과는 줄 수로 대조했다. 단 VERSION 줄만 kty 결정으로 6 이다(설계 4.8.2 의 9 에
 // 대체 표식 · 계획 부기 32). 나머지 기대값은 손으로 적은 리터럴이다.
 // 픽스처 번호는 설계가 이름을 준 G6 목록이다. G9 leaf 이름(f0_…·f6c_…)과 헷갈리지 않게 주석에
-// g6_ 접두를 붙인다.
+// g6_ 접두를 붙인다. 설계 r17 이 침묵한 번호는 설계 r7–r14 9절 G6 이 정의했던 것 가운데 판정이 같은
+// 기존 테스트가 있는 f5·f8·f13·f14·f16 만 그 자리에 붙였다. f1·f3·f4(단일 세션 11조각 · GAP 1 · GAP
+// 3연속의 골든 바이트)는 대응 테스트가 없어 비워 둔다.
 //
 // 외부 테스트 패키지로 두는 이유: 소비자(ⓒ 발행 · 커밋 ⑤ 축출 증분)가 쓰는 공개 계약만으로
 // 성립하는지가 곧 렌더의 계약 검증이다.
@@ -396,12 +398,14 @@ func TestRenderTagOnlyAtSessionBoundary(t *testing.T) {
 // 계승 O←P←S 이고 P 의 첫 조각이 창 안에 있다 — 그래서 S 목록에는 표시가 둘(P·S 의 첫 조각) 선다.
 // 술어에 목록 소유 회차를 넘기면 S 목록의 seq 10 표시가 빠지고, 커밋 ⑤ 축출 증분(행의 회차로 센다)이
 // 나간 표시 없이 DISC-SEQ 를 올린다.
-// P·S 의 base 가 같은 것은 실입력 그대로다 — 계승 개시는 직전 회차의 현재 base 를 복사하고(계획 PR ⓑ
-// `discontinuity_base` 정의) P 의 표시 조각이 아직 창 안이라 그 뒤 축출된 표시가 없다. 그래서 두 머리의
+// P·S 의 base 가 같은 0 인 것은 실입력 그대로다 — 계승 개시는 직전 회차의 현재 base 를 복사하고
+// (계획 PR ⓑ `discontinuity_base` 정의) base 는 컷오프 뒤 발행된 목록에서 표시가 빠질 때만 오른다.
+// O 의 base 는 0 이다(컷오프 0 뒤 seq 10 앞까지는 한 시간이 안 돼 어느 목록에서도 표시가 빠진 적이
+// 없다). P 의 표시 조각은 아직 창 안이라 S 가 열린 뒤에도 빠진 표시가 없다. 그래서 두 머리의
 // DISC-SEQ 도 같은 값이고, 머리가 소유 회차 값을 읽는지는 TestRenderHeaderComesFromOwnerSession 이 가른다.
 func TestRenderTagIsRowLocal(t *testing.T) {
-	p := rewind.Session{ID: "P", InheritsSession: "O", DiscontinuityBase: 4, TargetDuration: 6, MinSeq: 10}
-	s := rewind.Session{ID: "S", InheritsSession: "P", DiscontinuityBase: 4, TargetDuration: 6, MinSeq: 13}
+	p := rewind.Session{ID: "P", InheritsSession: "O", TargetDuration: 6, MinSeq: 10}
+	s := rewind.Session{ID: "S", InheritsSession: "P", TargetDuration: 6, MinSeq: 13}
 	prefix := run("P", 10, 12, day)
 
 	pHead, pSegs := mustParse(t, mustRender(t, playlist("P", []rewind.Session{p}, prefix)))
@@ -432,10 +436,10 @@ func TestRenderTagIsRowLocal(t *testing.T) {
 	if !slices.Equal(maps, wantMaps) || len(sSegs[0].tag("#EXT-X-MAP:")) != 1 || len(sSegs[3].tag("#EXT-X-MAP:")) != 1 {
 		t.Errorf("S 목록 MAP = %q, want seq 10 · 13 앞에 %q", maps, wantMaps)
 	}
-	if got, want := headLine(pHead, "#EXT-X-DISCONTINUITY-SEQUENCE:"), "#EXT-X-DISCONTINUITY-SEQUENCE:4"; got != want {
+	if got, want := headLine(pHead, "#EXT-X-DISCONTINUITY-SEQUENCE:"), "#EXT-X-DISCONTINUITY-SEQUENCE:0"; got != want {
 		t.Errorf("P 목록 머리 %q, want %q(소유 회차 P 의 base)", got, want)
 	}
-	if got, want := headLine(sHead, "#EXT-X-DISCONTINUITY-SEQUENCE:"), "#EXT-X-DISCONTINUITY-SEQUENCE:4"; got != want {
+	if got, want := headLine(sHead, "#EXT-X-DISCONTINUITY-SEQUENCE:"), "#EXT-X-DISCONTINUITY-SEQUENCE:0"; got != want {
 		t.Errorf("S 목록 머리 %q, want %q(소유 회차 S 의 base)", got, want)
 	}
 }
@@ -443,26 +447,34 @@ func TestRenderTagIsRowLocal(t *testing.T) {
 // 목록 머리의 TD·DISC-SEQ 는 목록 소유 회차(되감기 URL 의 그 회차)의 값이다 — 목록 첫 줄이 계승 백필로
 // 직전 회차 조각이어도 그렇다(계획 PR ⓑ in: cc r3 #3). DISC-SEQ 는 base 그대로이고 렌더는 아무것도
 // 더하지 않는다. MSN 은 목록 첫 줄 조각의 seq 다(설계 4.8).
-// 직전 회차 P 는 base 2 · TD 6, 소유 회차 S 는 base 5 · TD 8 이다 — 어느 쪽 값을 읽었는지가 갈리고,
-// 소유 회차 값이 DDL 기본 TD 6 · f2 base 3 과 겹치지 않아 상수로 박은 머리도 드러난다. 둘째 경우는
+// 픽스처는 장부 쓰기 규칙대로다. 직전 회차 P 는 seq 49 의 8초 조각이 TD 분할로 연 회차다(계승 없음 ·
+// TD 8 · base 는 직전 회차 값 복사). 방증이 낡아 미뤄진 컷오프는 seq 50 이 주조했다 — 49 는 컷오프
+// 아래라 목록에 없고, 컷오프 전에는 목록이 없어 base 가 오른 적이 없다(P 는 0 을 복사했다). 소유 회차
+// S 는 P 가 끝나고 48초 뒤 P 를 계승해 열렸다(P 의 base 0 복사 · 첫 조각 7초 → TD 7).
+// 직전 회차 TD 8 이 소유 회차 TD 7 보다 커서, 첫 줄 회차의 값이나 회차 목록 전체의 최댓값으로 적은
+// 머리가 드러난다 — 그런 머리는 접두가 창에서 빠질 때 TD 가 바뀐다(목록 수명 중 TD 불변 —
+// Session.TargetDuration). 소유 회차 TD 7 은 DDL 기본 6 과도 겹치지 않는다. 두 회차의 base 가 같은
+// 것은 실입력 그대로다 — P 는 계승 회차가 아니라 표시가 없고 S 의 표시 조각 53 은 아직 목록에 있다.
+// base 를 기본값 0 이 아닌 값으로 읽는지는 g6_f2(DISC-SEQ 3)가 가른다. 둘째 경우는
 // 소유 회차의 첫 조각이 아직 settled 가 아니어서 P 접두만 실린 목록이다 — 목록의 마지막 행도 P 다.
 func TestRenderHeaderComesFromOwnerSession(t *testing.T) {
-	p := rewind.Session{ID: "P", DiscontinuityBase: 2, TargetDuration: 6, MinSeq: 50}
-	s := rewind.Session{ID: "S", InheritsSession: "P", DiscontinuityBase: 5, TargetDuration: 8, MinSeq: 53}
+	p := rewind.Session{ID: "P", TargetDuration: 8, MinSeq: 49}
+	s := rewind.Session{ID: "S", InheritsSession: "P", TargetDuration: 7, MinSeq: 53}
+	sRows := slices.Concat([]boundary.Row{row("S", 53, day.Add(time.Minute), 7000)}, run("S", 54, 55, day.Add(67*time.Second)))
 	tests := []struct {
 		name string
 		rows [][]boundary.Row
 	}{
-		{"계승_접두_뒤_소유_회차_행", [][]boundary.Row{run("P", 50, 52, day), run("S", 53, 55, day.Add(time.Minute))}},
+		{"계승_접두_뒤_소유_회차_행", [][]boundary.Row{run("P", 50, 52, day), sRows}},
 		{"소유_회차_행_없이_접두만", [][]boundary.Row{run("P", 50, 52, day)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			head, _ := mustParse(t, mustRender(t, playlist("S", []rewind.Session{p, s}, tt.rows...)))
+			head, _ := mustParse(t, mustRender(t, withCutoff(playlist("S", []rewind.Session{p, s}, tt.rows...), 50)))
 
 			want := []string{
-				"#EXTM3U", "#EXT-X-VERSION:6", "#EXT-X-TARGETDURATION:8",
-				"#EXT-X-MEDIA-SEQUENCE:50", "#EXT-X-DISCONTINUITY-SEQUENCE:5",
+				"#EXTM3U", "#EXT-X-VERSION:6", "#EXT-X-TARGETDURATION:7",
+				"#EXT-X-MEDIA-SEQUENCE:50", "#EXT-X-DISCONTINUITY-SEQUENCE:0",
 			}
 			if !slices.Equal(head, want) {
 				t.Errorf("Render(owner=S) 머리 = %q, want %q", head, want)
@@ -512,16 +524,18 @@ func TestRenderGapLineKeepsPDTAndURI(t *testing.T) {
 // EXTINF 는 duration_ms 를 초로 적되 소수 셋째 자리까지 그대로 싣는다 — 반올림·절삭 없이 ms 가 곧
 // 자릿수다. 4012·2042 는 playback 실물 조각(segment_4s·segment_tail_2s) 길이다. PDT 도 ms 까지
 // 싣는다(RFC 8216bis-22 4.4.4.6 "to at least millisecond accuracy").
+// 회차 N 은 seq 1 의 10,001ms 조각이 연 회차라 TD 10(= max(6, round(10.001)))이고, 뒤 조각은
+// 반올림 길이가 모두 10 이하라 TD 분할이 없다(장부 개시·분할 규칙).
 func TestRenderExtinfIsMillisecondsToThreeDecimals(t *testing.T) {
 	n := rewind.Session{ID: "N", TargetDuration: 10, MinSeq: 1}
-	durations := []int32{4012, 2042, 4000, 999, 10001}
-	wantExtinf := []string{"#EXTINF:4.012,", "#EXTINF:2.042,", "#EXTINF:4.000,", "#EXTINF:0.999,", "#EXTINF:10.001,"}
+	durations := []int32{10001, 4012, 2042, 4000, 999}
+	wantExtinf := []string{"#EXTINF:10.001,", "#EXTINF:4.012,", "#EXTINF:2.042,", "#EXTINF:4.000,", "#EXTINF:0.999,"}
 	wantPDT := []string{
 		"#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:00.000Z",
-		"#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:04.012Z",
-		"#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:06.054Z",
-		"#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:10.054Z",
-		"#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:11.053Z",
+		"#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:10.001Z",
+		"#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:14.013Z",
+		"#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:16.055Z",
+		"#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:20.055Z",
 	}
 	var rows []boundary.Row
 	pdt := day

@@ -1,6 +1,7 @@
 package rewind_test
 
 // 발행 전 검사(설계 4.5.5 S1–S7)의 단위 검증 — POK-195 M4 PR ⓑ 커밋 ③.
+// S5(본문 형식·상한)의 경우는 검사 축으로 나눈 validate_body_test.go 에 있다.
 //
 // 목록은 렌더한 본문과 한 쌍으로 검사한다(validate 도우미 — 본문은 Render 가 낸 그대로다). 본문 형식
 // 검사(S5)와 계승 접두 검사(S4)의 몇 경우만 렌더 본문을 손으로 고쳐 넣는다. Render 는 그런 본문을
@@ -11,7 +12,10 @@ package rewind_test
 // 않는다) · TD 분할(반올림 길이가 회차 TD 를 넘는 새 조각은 새 회차를 연다)(session.openDecision ·
 // decide · 계획 PR ⓑ discontinuity_base 정의). 실입력으로 성립하지 않는 조합은 쓰지 않는다. 재귀식을
 // 거치지 않은 PDT(g6_f7 · S7 경계)는 검사 그물을 재려는 입력이라 그렇다고 주석에 적는다.
-// G6 픽스처는 설계가 이름을 준 f6·f7 을 채운다(주석에 g6_ 접두 — 번호 정책은 render_test.go 머리).
+// base 는 컷오프 뒤 발행된 목록에서 끊김 표시가 빠질 때(축출 증분)만 오르므로, 그 이력이 없는 회차의
+// base 는 0 이다.
+// G6 픽스처는 설계가 이름을 준 f6·f7 을 채우고, 설계 r7–r14 9절 G6 이 정의한 f8·f13·f14·f16 을 판정이
+// 같은 경우에 붙였다(주석에 g6_ 접두 — 번호 정책은 render_test.go 머리).
 
 import (
 	"errors"
@@ -235,6 +239,7 @@ func TestValidateRangeRequiresSettledRows(t *testing.T) {
 		{"모두_settled", 0, func(*boundary.Row) {}, ""},
 		{"③_미업로드", 0, func(r *boundary.Row) { r.PlaybackUploaded = false }, "S3"},
 		{"③_미업로드_GAP_원장", 0, func(r *boundary.Row) { r.PlaybackUploaded, r.IsGap = false, true }, ""},
+		// g6_f16 — 설계 r7–r14 의 「playback_pdt NULL 섞임 → S3(settled 아님)」.
 		{"playback_pdt_NULL", 0, func(r *boundary.Row) { r.PlaybackPDT = time.Time{} }, "S3"},
 		{"playback_s3_key_NULL", 0, func(r *boundary.Row) { r.PlaybackS3Key = "" }, "S3"},
 		// 컷오프 501 아래의 seq 500 은 홀이 아니라 범위 밖이다(설계 4.2 ⓐ) — 목록에 실릴 수 없다.
@@ -387,6 +392,7 @@ func TestValidateTerminalOnlyGoesFalseToTrue(t *testing.T) {
 	}{
 		{"열린_목록_뒤_닫힌_목록", sealed, openPrev, ""},
 		{"닫힌_목록_뒤_닫힌_목록", sealed, sealedPrev, ""},
+		// g6_f14 — 설계 r7–r14 의 「terminal 뒤 비terminal → S6」.
 		{"닫힌_목록_뒤_열린_목록", open, sealedPrev, "S6"},
 	}
 	for _, tt := range tests {
@@ -396,260 +402,10 @@ func TestValidateTerminalOnlyGoesFalseToTrue(t *testing.T) {
 	}
 }
 
-// S5 의 TARGETDURATION 조항 — 반올림한 EXTINF 가 TD 를 넘지 않는다(RFC 8216bis-22 4.4.3.1). 반올림은
-// TD 분할 판정(session.roundedSeconds)과 같이 딱 가운데를 올린다: 6,499ms → 6 · 6,500ms → 7.
-//
-//	회차 N(seq 700 에서 개시 · TD 6): 700..702 4초 + 703 이 6,499ms → 통과 / 6,500ms → 위반.
-//	6,500ms 조각이 TD 6 회차에 남는 길은 꼬리 교정이다 — INSERT 때 4초였던 꼬리가 자라 UpdateTail 이
-//	길이를 고치는데, 교정 경로는 TD 를 다시 판정하지 않는다(indexer correctTail).
-//	회차 P8(TD 8): seq 300 의 7,600ms 조각이 TD 분할로 연 회차다(round 8 > 직전 TD 6 → 새 회차
-//	TD max(6, 8) = 8, base 5 는 직전 회차에서 복사). 300..303 → round 8 ≤ 8 로 통과한다.
-func TestValidateTargetDurationRoundsLikeTheTDSplit(t *testing.T) {
-	n := rewind.Session{ID: "N", TargetDuration: 6, MinSeq: 700, InitUploaded: true}
-	p8 := rewind.Session{ID: "P8", DiscontinuityBase: 5, TargetDuration: 8, MinSeq: 300, InitUploaded: true}
-	tailOf := func(d int32) []boundary.Row {
-		return slices.Concat(run("N", 700, 702, day), []boundary.Row{row("N", 703, day.Add(12*time.Second), d)})
-	}
-	tests := []struct {
-		name string
-		p    rewind.Playlist
-		want string
-	}{
-		{"TD_6_회차의_6499ms", playlist("N", []rewind.Session{n}, tailOf(6499)), ""},
-		{"TD_6_회차의_6500ms", playlist("N", []rewind.Session{n}, tailOf(6500)), "S5"},
-		{"TD_8_회차의_7600ms", playlist("P8", []rewind.Session{p8},
-			[]boundary.Row{row("P8", 300, day, 7600)}, run("P8", 301, 303, day.Add(7600*time.Millisecond))), ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			wantVerdict(t, validate(t, tt.p, 1, nil), tt.want)
-		})
-	}
-}
-
-// 설계 공백(착수 점검 숨은 가정 11) — 현재 동작을 고정한다. TD 분할 회차 P8(TD 8)을 300초 안에 다시
-// 연 회차 S 가 계승하면, S 의 TD 는 개시 규칙대로 max(6, round(첫 조각 4초)) = 6 인데 접두에는 P8 의
-// 7,600ms 조각이 실린다. S4(계승 접두 범위)에는 TD 조항이 없어 계승은 취소되지 않고, S5 가 발행을
-// 멈춘다 — P8 의 긴 조각이 창에서 빠질 때까지(최대 1시간) S 의 목록은 나가지 않는다. 설계에 없는
-// 조항은 더하지 않았다. 처방 후보(ⓒ 착수 때 kty 회부): (A) 계승 개시 TD = max(직전 회차 TD,
-// round(첫 조각)) · (B) S4 에 TD 호환 조항.
-// S 의 base 5 는 P8 에서 복사한 값이다. P8 은 seq 300..303(7.6초 + 4초 × 3 = 19.6초), S 는 P8 이
-// 끝나고 40.4초 뒤 seq 304 부터다.
-func TestValidateInheritedTDSplitPrefixHaltsOnS5(t *testing.T) {
-	p8 := rewind.Session{ID: "P8", DiscontinuityBase: 5, TargetDuration: 8, MinSeq: 300, InitUploaded: true}
-	s := rewind.Session{ID: "S", InheritsSession: "P8", DiscontinuityBase: 5, TargetDuration: 6, MinSeq: 304, InitUploaded: true}
-	p := playlist("S", []rewind.Session{p8, s},
-		[]boundary.Row{row("P8", 300, day, 7600)},
-		run("P8", 301, 303, day.Add(7600*time.Millisecond)),
-		run("S", 304, 306, day.Add(time.Minute)),
-	)
-
-	err := validate(t, p, 1, nil)
-
-	wantVerdict(t, err, "S5")
-}
-
-// S5 본문 형식 — 렌더 본문을 한 곳만 고쳐 넣는다. 조항이 두 무리다.
-//
-//	본문 = 목록 값  본문이 목록 행을 그대로 적었다 — 조각 수 · 머리 넷 · 조각마다 URI · PDT · EXTINF ·
-//	               GAP 줄. 다른 검사는 행 값으로 판정하므로 본문이 행과 다르면 발행되는 바이트는 판정을
-//	               받지 않은 것이 된다(r3 cx #1 — EXTINF 만 7.000 인 본문이 TD 6 목록으로 나간다).
-//	               TARGETDURATION 줄이 없거나 정수가 아닌 본문도 머리 넷 조항(소유 회차 TD 한 줄)이 잡는다
-//	형식           첫 줄 #EXTM3U(RFC 8216bis-22 4.4.1.1) · 우리 용도의 #PC- 줄 0개(설계 4.4.2 — 세대 정보는
-//	               메타데이터로). 빈 줄은 해석에서 건너뛴다(4.1)
-//
-// 목록은 회차 N(seq 700 에서 개시 · TD 6)의 700..703 이고 seq 702 는 GAP 원장에 있다(③ 미업로드).
-func TestValidateBodyFormat(t *testing.T) {
-	n := rewind.Session{ID: "N", TargetDuration: 6, MinSeq: 700, InitUploaded: true}
-	rows := run("N", 700, 703, day)
-	rows[2].PlaybackUploaded, rows[2].IsGap = false, true
-	p := playlist("N", []rewind.Session{n}, rows)
-	body := mustRender(t, p)
-	shorter := mustRender(t, playlist("N", []rewind.Session{n}, rows[:3]))
-	pdt701 := "#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:04.000Z"
-	tests := []struct {
-		name string
-		body string
-		want string
-	}{
-		{"렌더_그대로", body, ""},
-		{"빈_줄은_건너뜀", strings.Replace(body, "#EXTM3U\n", "#EXTM3U\n\n", 1), ""},
-		{"조각_수가_행_수와_다름", shorter, "S5"},
-		{"MSN_줄이_첫_행과_다름", strings.Replace(body, "#EXT-X-MEDIA-SEQUENCE:700\n", "#EXT-X-MEDIA-SEQUENCE:701\n", 1), "S5"},
-		{"EXTINF_만_7초", strings.Replace(body, "#EXTINF:4.000,", "#EXTINF:7.000,", 1), "S5"},
-		{"PDT_가_행과_다름", strings.Replace(body, pdt701, "#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:05.000Z", 1), "S5"},
-		{"URI_가_장부_키와_다름", strings.Replace(body, "/seg/000701.m4s", "/seg/000799.m4s", 1), "S5"},
-		{"GAP_줄_빠짐", strings.Replace(body, "#EXT-X-GAP\n", "", 1), "S5"},
-		{"GAP_줄_덧붙음", strings.Replace(body, pdt701, "#EXT-X-GAP\n"+pdt701, 1), "S5"},
-		{"#EXTM3U_없음", strings.TrimPrefix(body, "#EXTM3U\n"), "S5"},
-		{"#PC-_줄", strings.Replace(body, "#EXTM3U\n", "#EXTM3U\n#PC-GEN:42\n", 1), "S5"},
-		{"TARGETDURATION_줄_없음", strings.Replace(body, "#EXT-X-TARGETDURATION:6\n", "", 1), "S5"},
-		{"TARGETDURATION_이_정수가_아님", strings.Replace(body, "#EXT-X-TARGETDURATION:6\n", "#EXT-X-TARGETDURATION:6.5\n", 1), "S5"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			wantVerdict(t, rewind.Validate(p, []byte(tt.body), 1, nil), tt.want)
-		})
-	}
-}
-
-// headed 는 머리 값이 기본값(TD 6 · base 0 · f2 base 3)과 겹치지 않는 목록이다 — 회차 H 는 seq 300 의
-// 7,600ms 조각이 TD 분할로 연 회차(TD max(6, 8) = 8 · base 5 는 직전 회차에서 복사 · 비계승)이고
-// 300..303 이 실렸다. 머리 넷은 VERSION:6 · TARGETDURATION:8 · MEDIA-SEQUENCE:300 · DISCONTINUITY-SEQUENCE:5 다.
-func headed() rewind.Playlist {
-	h := rewind.Session{ID: "H", DiscontinuityBase: 5, TargetDuration: 8, MinSeq: 300, InitUploaded: true}
-	return playlist("H", []rewind.Session{h},
-		[]boundary.Row{row("H", 300, day, 7600)}, run("H", 301, 303, day.Add(7600*time.Millisecond)))
-}
-
-// S5 「본문 = 목록 값」의 머리 줄과 MAP 줄 — 개수·위치·값(r3 확인 패스 cc N1).
-//
-//	머리 태그 넷  VERSION · TARGETDURATION · MEDIA-SEQUENCE · DISCONTINUITY-SEQUENCE 가 본문에 정확히 한
-//	             줄씩 첫 조각 앞에 있고 값은 VERSION 6 · 소유 회차 TD · 첫 행 seq · 소유 회차 base 다(RFC
-//	             8216bis-22 4.4.1.2 VERSION 「하나만」 · 4.4.3 나머지 셋 「종류마다 하나」 · 4.4.3.2·4.4.3.3
-//	             MSN·DISC-SEQ 「첫 조각 앞」 — VERSION·TD 의 「첫 조각 앞」은 렌더 자리 기준). TD 가 줄이 둘이면 뒤
-//	             줄로 덮어쓰는 파서에게 TD 가 3 이 되고, 틀린 TD 가 나가면 목록 수명 중 TD 가 바뀐다
-//	MAP 줄       개수·위치만 — 회차가 이어지는 조각 앞 0줄, 바뀌는 조각(첫 조각 포함) 앞 1줄 이하. MAP 이
-//	             있는지·값이 맞는지는 이 조항이 아니라 S4·S5 가 본다(여기 넣으면 접두 MAP 문제가 계승 취소에서
-//	             발행 중단으로 뒤집힌다 — TestValidateInheritedPrefix · TestValidateMapReachable)
-//
-// 목록은 headed(seq 302 의 PDT 00:00:11.600) 와 계승 목록 prefixed(seq 41 의 PDT 00:00:04.000)다.
-func TestValidateBodyHeaderAndMapLines(t *testing.T) {
-	h := mustRender(t, headed())
-	pre := mustRender(t, prefixed())
-	hMap := `#EXT-X-MAP:URI="https://media.pokeclip.com/dvr/str/init/H.mp4"` + "\n"
-	pdt302 := "#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:11.600Z"
-	pdt41 := "#EXT-X-PROGRAM-DATE-TIME:2026-09-24T00:00:04.000Z"
-	uri300 := "https://media.pokeclip.com/dvr/str/seg/000300.m4s\n"
-	afterFirstURI := func(line string) string {
-		return strings.Replace(strings.Replace(h, line, "", 1), uri300, uri300+line, 1)
-	}
-	tests := []struct {
-		name string
-		p    rewind.Playlist
-		body string
-		want string
-	}{
-		{"렌더_그대로", headed(), h, ""},
-		{"VERSION_줄이_6_이_아님", headed(), strings.Replace(h, "#EXT-X-VERSION:6\n", "#EXT-X-VERSION:7\n", 1), "S5"},
-		// TD 9 는 조각 반올림 8 보다 커서 TD 상한 조항은 통과한다 — 값 대조만 잡는다.
-		{"TD_줄_값이_소유_회차와_다름", headed(), strings.Replace(h, "#EXT-X-TARGETDURATION:8\n", "#EXT-X-TARGETDURATION:9\n", 1), "S5"},
-		{"DISC-SEQ_줄_값이_소유_회차_base_와_다름", headed(), strings.Replace(h, "#EXT-X-DISCONTINUITY-SEQUENCE:5\n", "#EXT-X-DISCONTINUITY-SEQUENCE:4\n", 1), "S5"},
-		{"TD_줄_중복", headed(), strings.Replace(h, "#EXT-X-TARGETDURATION:8\n", "#EXT-X-TARGETDURATION:8\n#EXT-X-TARGETDURATION:3\n", 1), "S5"},
-		{"MSN_줄이_첫_조각_뒤", headed(), afterFirstURI("#EXT-X-MEDIA-SEQUENCE:300\n"), "S5"},
-		{"TD_줄이_첫_조각_뒤", headed(), afterFirstURI("#EXT-X-TARGETDURATION:8\n"), "S5"},
-		{"MAP_중복", headed(), strings.Replace(h, hMap, hMap+hMap, 1), "S5"},
-		{"회차가_이어지는_조각_앞_MAP", headed(), strings.Replace(h, pdt302, `#EXT-X-MAP:URI="https://media.pokeclip.com/dvr/str/init/X.mp4"`+"\n"+pdt302, 1), "S5"},
-		{"접두_중간_상대_MAP", prefixed(), strings.Replace(pre, pdt41, `#EXT-X-MAP:URI="init/P.mp4"`+"\n"+pdt41, 1), "S5"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			wantVerdict(t, rewind.Validate(tt.p, []byte(tt.body), 1, nil), tt.want)
-		})
-	}
-}
-
-// S5 크기 상한 — 본문은 512KiB(524,288바이트) 이하다(설계의 ≤512KB 를 1KB = 1,024B 로 읽었다).
-// 조각이 0.79초로 짧아 1시간 창에 4,557조각이 든 목록으로 경계에 선다. 스트림 str · 회차
-// S-20260924-000000-str-100000(seq 100000 에서 개시 — session_id 규칙 그대로) · 머리 바로 앞 조각들이
-// GAP 원장에 있다(upload_stall).
-//
-//	새로 연 회차(base 0 · TD 6), GAP 3줄: 머리 110 + MAP 90 + 4,557조각 × 115 + GAP 3 × 11
-//	                                     = 524,288바이트 → 통과
-//	TD 분할로 연 회차 — 첫 조각 6,500ms 가 TD max(6, 7) = 7 을 정했고 base 10 은 직전 회차에서 복사했다.
-//	EXTINF:6.500 · TARGETDURATION:7 은 너비가 같고 DISCONTINUITY-SEQUENCE:10 만 한 자리 길다
-//	                                     = 524,289바이트 → 위반(상한 + 1)
-//	새로 연 회차, GAP 4줄                 = 524,299바이트 → 위반
-//
-// 머리 110 = #EXTM3U 8 + VERSION 17 + TARGETDURATION 24 + MEDIA-SEQUENCE:100000 29 +
-// DISCONTINUITY-SEQUENCE:0 32 · 조각 115 = PDT 50 + EXTINF:0.790 15 + URI 50. 길이 합은 3,600,030ms ·
-// 3,605,740ms 이고 둘 다 첫 조각을 빼면 3,599,240ms 라 창 꼬리 산식과 맞다.
-func TestValidateBodySizeLimitIs512KiB(t *testing.T) {
-	const id = "S-20260924-000000-str-100000"
-	tests := []struct {
-		name    string
-		base    int64
-		td      int32
-		firstMS int32
-		gaps    int
-		wantLen int
-		want    string
-	}{
-		{"정확히_512KiB", 0, 6, 790, 3, 524288, ""},
-		{"512KiB_넘음_1바이트", 10, 7, 6500, 3, 524289, "S5"},
-		{"512KiB_넘음_GAP_한_줄_더", 0, 6, 790, 4, 524299, "S5"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			n := rewind.Session{ID: id, DiscontinuityBase: tt.base, TargetDuration: tt.td, MinSeq: 100000, InitUploaded: true}
-			var rows []boundary.Row
-			pdt := day
-			for i := range 4557 {
-				d := int32(790)
-				if i == 0 {
-					d = tt.firstMS
-				}
-				r := row(id, 100000+int64(i), pdt, d)
-				if i >= 4556-tt.gaps && i < 4556 {
-					r.PlaybackUploaded, r.IsGap = false, true
-				}
-				rows = append(rows, r)
-				pdt = pdt.Add(time.Duration(d) * time.Millisecond)
-			}
-			p := playlist(id, []rewind.Session{n}, rows)
-			body := mustRender(t, p)
-			if len(body) != tt.wantLen {
-				t.Fatalf("픽스처 본문 = %d바이트, want %d — 렌더 형식이 바뀌었으면 셈을 다시 한다", len(body), tt.wantLen)
-			}
-
-			wantVerdict(t, rewind.Validate(p, []byte(body), 1, nil), tt.want)
-		})
-	}
-}
-
-// S5 「MAP 도달 가능」 — 회차가 바뀌는 조각(목록 첫 조각 포함)마다 그 회차 init 을 가리키는 EXT-X-MAP
-// 이 앞에 있고, 그 init 이 올라가 있다(init_uploaded_at). MAP 은 다음 MAP 까지 이어 적용되므로(RFC
-// 8216bis-22 4.4.4.5) 회차 첫 조각에 제 MAP 이 없으면 그 회차 조각이 다른 회차 init 으로 풀린다.
-// 소유 회차의 init 이 안 올라간 목록을 막는 것이 설계 G5(init 전 발행 금지)의 발행 직전 그물이다.
-// 계승 접두 회차의 MAP·init 은 S4 가 먼저 본다(TestValidateInheritedPrefix).
-func TestValidateMapReachable(t *testing.T) {
-	n := rewind.Session{ID: "N", TargetDuration: 6, MinSeq: 700, InitUploaded: true}
-	fresh := playlist("N", []rewind.Session{n}, run("N", 700, 703, day))
-	freshBody := mustRender(t, fresh)
-	pInit := `#EXT-X-MAP:URI="https://media.pokeclip.com/dvr/str/init/P.mp4"`
-	sInit := `#EXT-X-MAP:URI="https://media.pokeclip.com/dvr/str/init/S.mp4"`
-	nInit := `#EXT-X-MAP:URI="https://media.pokeclip.com/dvr/str/init/N.mp4"`
-	inheritedBody := mustRender(t, prefixed())
-	tests := []struct {
-		name string
-		p    rewind.Playlist
-		body string
-		want string
-	}{
-		{"소유_회차_init_미업로드", withInitUploaded(fresh, 0, false), freshBody, "S5"},
-		{"소유_회차_MAP_없음", fresh, strings.Replace(freshBody, nInit+"\n", "", 1), "S5"},
-		// init 키를 만들 수 없는 스트림 ID(URL 에 실을 수 없다) — 렌더는 이런 목록을 내지 않는다.
-		{"MAP_키_파생_실패", withStream(fresh, "a/b"), freshBody, "S5"},
-		{"계승_목록_소유_회차_MAP_없음", prefixed(), strings.Replace(inheritedBody, sInit+"\n", "", 1), "S5"},
-		{"계승_목록_소유_회차_MAP_이_접두_회차_init", prefixed(), strings.Replace(inheritedBody, sInit, pInit, 1), "S5"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			wantVerdict(t, rewind.Validate(tt.p, []byte(tt.body), 1, nil), tt.want)
-		})
-	}
-}
-
 // withInitUploaded 는 p 의 i 번째 회차 init 업로드 여부를 바꾼 목록이다(회차 목록은 새로 만든다).
 func withInitUploaded(p rewind.Playlist, i int, uploaded bool) rewind.Playlist {
 	p.Sessions = slices.Clone(p.Sessions)
 	p.Sessions[i].InitUploaded = uploaded
-	return p
-}
-
-// withStream 은 p 의 스트림 ID 를 바꾼 목록이다.
-func withStream(p rewind.Playlist, streamID string) rewind.Playlist {
-	p.StreamID = streamID
 	return p
 }
 
@@ -680,6 +436,7 @@ func TestValidateInheritedPrefix(t *testing.T) {
 			p.Rows[2].SessionID = "Y"
 		}, nil, "S4"},
 		{"직전_회차_init_미업로드", func(p *rewind.Playlist) { p.Sessions[0].InitUploaded = false }, nil, "S4"},
+		// g6_f13 — 설계 r7–r14 의 「백필 미정착 → S4 + 처치 계승 취소」.
 		{"접두_행_미settled", func(p *rewind.Playlist) { p.Rows[1].PlaybackUploaded = false }, nil, "S4"},
 		// 컷오프 41 아래의 seq 40 — 컷오프 아래 행은 목록에 실릴 수 없다(접두 settled 판정의 컷오프 인자).
 		{"접두_행이_컷오프_아래", func(p *rewind.Playlist) { p.Cutoff = 41 }, nil, "S4"},

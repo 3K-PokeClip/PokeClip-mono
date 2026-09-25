@@ -85,16 +85,18 @@ func putPublishedGap(t *testing.T, pool *pgxpool.Pool, stream string, seq int64,
 
 // rewindLedgerFixture 는 한 스트림의 장부 이력을 심고 그 이름을 돌려준다. 장부 쓰기 규칙과 맞춘 이력이다.
 //
-//	seq 10·11  회차 A — seq 10 의 7.6초 조각이 직전 회차의 TD 6 을 넘어 TD 분할로 열렸다(base 5 복사 ·
+//	seq 10·11  회차 A — seq 10 의 7.6초 조각이 직전 회차의 TD 6 을 넘어 TD 분할로 열렸다(base 0 복사 ·
 //	           계승 없음 · TD 8). 컷오프 전이다(주조가 방증 낡음으로 미뤄졌다)
-//	seq 12–14  회차 B — 약 2분 순단 뒤 A 를 계승해 열렸다(base 는 A 의 5 를 그대로 옮김 · TD 6).
+//	seq 12–14  회차 B — 약 2분 순단 뒤 A 를 계승해 열렸다(base 는 A 의 0 을 그대로 옮김 · TD 6).
 //	           seq 12 가 컷오프를 주조했고, 14 는 ③ 가 안 올라가 GAP 원장(upload_stall)에 있다
-//	seq 15·16  회차 C — seq 15 의 7.6초 조각이 B 의 TD 6 을 넘어 TD 분할로 열렸다(base 5 복사 · 계승
+//	seq 15·16  회차 C — seq 15 의 7.6초 조각이 B 의 TD 6 을 넘어 TD 분할로 열렸다(base 0 복사 · 계승
 //	           없음 · TD 8). B 는 그때 ending(td_exceeded)이 됐고 나중에 ended 로 정산됐다
 //	seq 17     회차 없음 — C 가 오프라인으로 ending 이 된 뒤 스캔으로 들어와 현 회차가 없었다(carrier NULL)
 //	seq 18     회차 D — 400초 뒤 새 방송(비계승 · base 0 · TD 6 · live · init 미확정)
 //
-// A·B 는 init 이 올라갔고 C·D 는 아직이다. A 가 옮겨 받은 base 5 는 그 앞 회차들의 계승·축출이 쌓인 값이다.
+// A·B 는 init 이 올라갔고 C·D 는 아직이다. base 는 모두 0 이다 — 컷오프 전에는 목록이 없어 A 와 그 앞
+// 회차의 base 가 오른 적이 없고, B 의 목록(12..14)은 한 시간이 안 돼 끊김 표시를 내보낸 적이 없다(0 이
+// 아닌 base 는 TestLoadRewindLedgerReadsRaisedDiscontinuityBase 가 잰다).
 // 다른 스트림 하나(컷오프·행·회차)를 함께 심어 스트림 필터를 잰다.
 func rewindLedgerFixture(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
@@ -102,11 +104,11 @@ func rewindLedgerFixture(t *testing.T, pool *pgxpool.Pool) string {
 	at := func(d time.Duration) time.Time { return rewindT0.Add(d) }
 	for _, s := range []rewindSessionRow{
 		{RewindSession{SessionID: "rw-A", State: "ended", EndReason: "offline", InitUploaded: true,
-			DiscontinuityBase: 5, FirstPDT: at(0), TargetDuration: 8}, stream, at(0)},
+			FirstPDT: at(0), TargetDuration: 8}, stream, at(0)},
 		{RewindSession{SessionID: "rw-B", State: "ended", EndReason: "td_exceeded", InitUploaded: true,
-			DiscontinuityBase: 5, FirstPDT: at(128 * time.Second), InheritsSession: "rw-A", TargetDuration: 6}, stream, at(128 * time.Second)},
+			FirstPDT: at(128 * time.Second), InheritsSession: "rw-A", TargetDuration: 6}, stream, at(128 * time.Second)},
 		{RewindSession{SessionID: "rw-C", State: "ending", EndReason: "offline",
-			DiscontinuityBase: 5, FirstPDT: at(140 * time.Second), TargetDuration: 8}, stream, at(140 * time.Second)},
+			FirstPDT: at(140 * time.Second), TargetDuration: 8}, stream, at(140 * time.Second)},
 		{RewindSession{SessionID: "rw-D", State: "live",
 			FirstPDT: at(551600 * time.Millisecond), TargetDuration: 6}, stream, at(551600 * time.Millisecond)},
 		{RewindSession{SessionID: "rw-other", State: "live", FirstPDT: at(0), TargetDuration: 6}, "rwtest-other", at(0)},
@@ -174,7 +176,8 @@ func TestLoadRewindLedgerReadsSegmentAxisFromCutoff(t *testing.T) {
 
 // 세션 축 — 적재한 조각이 참조하는 회차만, 여덟 열을 그대로 읽는다(창 경계가 아니라 조각 기준). 참조가
 // 컷오프 아래 행뿐인 A 는 B 가 계승한 회차여도 싣지 않는다 — inherits_session 은 참조가 아니다. 다른
-// 스트림의 회차도 없다. 순서는 개시 순이다.
+// 스트림의 회차도 없다. 순서는 개시 순이다. 이 이력의 base 는 규칙상 모두 0 이라 base 칸은
+// TestLoadRewindLedgerReadsRaisedDiscontinuityBase 가 가른다.
 func TestLoadRewindLedgerReadsSessionAxisOfLoadedSegments(t *testing.T) {
 	pool := newTestPool(t)
 	stream := rewindLedgerFixture(t, pool)
@@ -186,10 +189,72 @@ func TestLoadRewindLedgerReadsSessionAxisOfLoadedSegments(t *testing.T) {
 
 	want := []RewindSession{
 		{SessionID: "rw-B", State: "ended", EndReason: "td_exceeded", InitUploaded: true,
-			DiscontinuityBase: 5, FirstPDT: rewindT0.Add(128 * time.Second), InheritsSession: "rw-A", TargetDuration: 6},
+			FirstPDT: rewindT0.Add(128 * time.Second), InheritsSession: "rw-A", TargetDuration: 6},
 		{SessionID: "rw-C", State: "ending", EndReason: "offline",
-			DiscontinuityBase: 5, FirstPDT: rewindT0.Add(140 * time.Second), TargetDuration: 8},
+			FirstPDT: rewindT0.Add(140 * time.Second), TargetDuration: 8},
 		{SessionID: "rw-D", State: "live", FirstPDT: rewindT0.Add(551600 * time.Millisecond), TargetDuration: 6},
+	}
+	if !reflect.DeepEqual(got.Sessions, want) {
+		t.Errorf("세션 축 =\n%+v\nwant\n%+v", got.Sessions, want)
+	}
+}
+
+// 0 이 아닌 base 도 장부 값 그대로 읽는다. base 는 컷오프 뒤 발행된 목록에서 끊김 표시(계승 회차의 첫
+// 조각)가 빠질 때만 오르고, 조각이 목록에서 빠지려면 그 뒤로 한 시간이 쌓여야 한다 — 그래서 한 시간 넘는
+// 이력을 한 문장(generate_series)으로 심는다.
+//
+//	회차 O      컷오프 아래 회차(오프라인으로 끝남 · 컷오프 전에는 목록이 없어 base 0) — 행은 심지 않는다
+//	seq 60–960  회차 P — O 가 끝나고 120초 뒤 O 를 계승해 열렸다(O 의 base 0 복사 · TD 6). seq 60 이
+//	            컷오프를 주조했고 첫 조각 60 에 끊김 표시가 선다. 4초 901조각을 쓰는 사이 머리 960 에서
+//	            창 꼬리가 61 로 넘어가(61..960 = 900 × 4초 = 한 시간) 목록에서 60 의 표시가 빠졌다 →
+//	            base 1. 그 뒤 오프라인으로 끝났다
+//	seq 961     회차 S — P 가 끝나고 120초 뒤 P 를 계승해 열렸다(base 1 복사 · TD 6 · init 미확정)
+//
+// 같은 이야기를 캐시 쪽 TestCacheReceivesInheritsOnOpen 이 창 계산으로 확인한다.
+func TestLoadRewindLedgerReadsRaisedDiscontinuityBase(t *testing.T) {
+	pool := newTestPool(t)
+	const stream = "rwtest-hour"
+	at := func(d time.Duration) time.Time { return rewindT0.Add(d) }
+	for _, s := range []rewindSessionRow{
+		{RewindSession{SessionID: "rw-O", State: "ended", EndReason: "offline",
+			FirstPDT: at(-6 * time.Minute), TargetDuration: 6}, stream, at(-6 * time.Minute)},
+		{RewindSession{SessionID: "rw-P", State: "ended", EndReason: "offline", InitUploaded: true,
+			DiscontinuityBase: 1, FirstPDT: at(0), InheritsSession: "rw-O", TargetDuration: 6}, stream, at(0)},
+		{RewindSession{SessionID: "rw-S", State: "live",
+			DiscontinuityBase: 1, FirstPDT: at(3724 * time.Second), InheritsSession: "rw-P", TargetDuration: 6}, stream, at(3724 * time.Second)},
+	} {
+		putRewindSession(t, pool, s)
+	}
+	// P 의 60..960 — putRewindRow 와 같은 모양(벽시계 = PDT · ③ 확정 · carrier 셋) · 4초 간격.
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO stream_segments
+			(stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, local_path, upload_state, bytes,
+			 session_id, playback_pdt, playback_s3_key, playback_upload_state, playback_uploaded_at, playback_bytes)
+		SELECT stream, seq, seq * 4000, wall, 4000,
+		       format('streams/%s/%s/seg_%s.m4s', stream, to_char(wall AT TIME ZONE 'UTC', 'YYYY-MM-DD/HH24'), seq6),
+		       format('/recordings/%s/raw-%s.mp4', stream, seq), 'pending', 1000,
+		       sid, wall, format('dvr/%s/seg/%s.m4s', stream, seq6), 'uploaded', now(), 900
+		  FROM (SELECT $1::text AS stream, $2::text AS sid, g::bigint AS seq, lpad(g::text, 6, '0') AS seq6,
+		               $3::timestamptz + (g - 60) * interval '4 seconds' AS wall
+		          FROM generate_series(60, 960) AS g) AS r`, stream, "rw-P", rewindT0); err != nil {
+		t.Fatalf("P 의 한 시간 이력 픽스처 실패: %v", err)
+	}
+	putRewindRow(t, pool, stream, 961, at(3724*time.Second), 4000, "rw-S", false)
+	cutoffAt(t, pool, stream, 60)
+
+	got, err := LoadRewindLedger(context.Background(), pool, stream)
+	if err != nil {
+		t.Fatalf("LoadRewindLedger 실패: %v", err)
+	}
+
+	if n := len(got.Rows); n != 902 || got.Rows[0].Seq != 60 || got.Rows[n-1].Seq != 961 {
+		t.Fatalf("픽스처 전제: 조각 축 %d행, want 902행(seq 60..961) — P 의 901조각이 있어야 base 1 이 성립한다", n)
+	}
+	want := []RewindSession{
+		{SessionID: "rw-P", State: "ended", EndReason: "offline", InitUploaded: true,
+			DiscontinuityBase: 1, FirstPDT: rewindT0, InheritsSession: "rw-O", TargetDuration: 6},
+		{SessionID: "rw-S", State: "live",
+			DiscontinuityBase: 1, FirstPDT: rewindT0.Add(3724 * time.Second), InheritsSession: "rw-P", TargetDuration: 6},
 	}
 	if !reflect.DeepEqual(got.Sessions, want) {
 		t.Errorf("세션 축 =\n%+v\nwant\n%+v", got.Sessions, want)

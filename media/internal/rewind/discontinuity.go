@@ -17,12 +17,19 @@ import "fmt"
 //
 // 목록 문맥 없이 행과 그 회차만 보고 정하는 것이 계약이다. 같은 행이 직전 회차의 목록과 계승
 // 회차의 목록 양쪽에 실리는데, 어느 목록에서 축출되든 discontinuity_base 에 같은 값이 더해져야
-// 하기 때문이다. 그래서 렌더와 축출 증분(EvictedDiscontinuityTags)이 이 함수 하나를 부른다 — 둘이 갈리면 축출 뒤
-// DISCONTINUITY-SEQUENCE 가 실제 표시 수와 어긋난다. 회차 첫 조각을 컷오프로 자르는 것도 같은
-// 이유다: 부팅 재구성은 seq ≥ cutoff 인 행만 다시 싣는다. 컷오프 아래 행으로 판정하면 재기동
-// 전후로 같은 행의 판정이 갈려, 이미 나간 목록 머리 앞에 표시가 새로 선다.
+// 하기 때문이다. 그래서 렌더와 축출 증분(EvictedDiscontinuityTags)이 이 함수 하나를 부른다 —
+// 둘이 갈리면 축출 뒤 DISCONTINUITY-SEQUENCE 가 실제 표시 수와 어긋난다. 회차 첫 조각을 컷오프로
+// 자르는 것도 같은 이유다: 부팅 재구성은 seq ≥ cutoff 인 행만 다시 싣는다. 컷오프 아래 행으로
+// 판정하면 재기동 전후로 같은 행의 판정이 갈려, 이미 나간 목록 머리 앞에 표시가 새로 선다.
 func HasDiscontinuityTag(seq int64, s Session, cutoff int64) bool {
-	return s.InheritsSession != "" && seq == max(s.MinSeq, cutoff)
+	return s.InheritsSession != "" && seq == s.firstSeq(cutoff)
+}
+
+// firstSeq 는 회차 첫 조각의 seq 다 — 회차 최소 seq 와 컷오프 가운데 큰 쪽이다(컷오프로 자르는
+// 까닭은 HasDiscontinuityTag). 끊김 표시와 발행 전 검사 S3(checkRange)가 이 정의 하나를 쓴다 —
+// 따로 적으면 둘을 함께 묶는 테스트가 없어 한쪽만 바뀌어도 조용히 갈린다.
+func (s Session) firstSeq(cutoff int64) int64 {
+	return max(s.MinSeq, cutoff)
 }
 
 // EvictedDiscontinuityTags 는 직전 목록 prev 가 첫 조각이 nextMSN 인 다음 목록으로 넘어갈 때 목록 앞에서

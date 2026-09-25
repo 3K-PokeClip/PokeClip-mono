@@ -55,19 +55,21 @@ func exec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
 // 계승 · first_pdt · MinSeq. 세션 축을 싣지 않으면 발행 층이 init 게이트를 캐시에서만 읽으므로(조회 0)
 // 미확정으로 두면 재발행이 멈추고 확정으로 두면 G5 가 근거 없이 통과한다(계획 2.3 ⑸ⓕ⑵).
 //
-// 장부 이력: 회차 O 는 seq 19 의 7.6초 조각으로 TD 분할이 열었다(base 5 복사 · TD 8). O 가 끝나고 2분 안에
-// P 가 O 를 계승해 seq 20 에서 열려 컷오프를 주조했고(base 5 를 옮겨 받음) 20..22 를 쓴 뒤 오프라인으로
+// 장부 이력: 회차 O 는 seq 19 의 7.6초 조각으로 TD 분할이 열었다(base 는 직전 회차 복사 · TD 8). O 가
+// 끝나고 2분 안에 P 가 O 를 계승해 seq 20 에서 열려 컷오프를 주조했고 20..22 를 쓴 뒤 오프라인으로
 // 끝났다. 120초 뒤 S 가 P 를 계승해 23 에서 열렸다(첫 조각 6.6초 → TD 7). O 의 행은 컷오프 아래라 O 는
-// 싣지 않는다 — 계승(inherits_session)은 참조가 아니다.
+// 싣지 않는다 — 계승(inherits_session)은 참조가 아니다. base 는 셋 다 0 이다 — 컷오프 전에는 목록이
+// 없어 O 와 그 앞 회차의 base 가 오른 적이 없고, P 의 목록은 S 가 열릴 때까지 표시를 내보낸 적이 없다.
+// 그래서 이 테스트는 base 칸을 가르지 않는다(0 이 아닌 base 는 TestCacheReceivesInheritsOnOpen 이 잰다).
 func TestCacheReloadRestoresSessionAxis(t *testing.T) {
 	pool := newReloadPool(t)
 	const sessionSQL = `
 		INSERT INTO stream_sessions (session_id, stream_id, started_at, state, end_reason, init_uploaded_at,
 		                             discontinuity_base, first_pdt, inherits_session, target_duration)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $3, $8, $9)`
-	exec(t, pool, sessionSQL, "O", stream, at(-2*time.Minute), "ended", "offline", at(-2*time.Minute), 5, nil, 8)
-	exec(t, pool, sessionSQL, "P", stream, at(0), "ended", "offline", at(time.Second), 5, "O", 6)
-	exec(t, pool, sessionSQL, "S", stream, at(132*time.Second), "live", nil, nil, 5, "P", 7)
+	exec(t, pool, sessionSQL, "O", stream, at(-2*time.Minute), "ended", "offline", at(-2*time.Minute), 0, nil, 8)
+	exec(t, pool, sessionSQL, "P", stream, at(0), "ended", "offline", at(time.Second), 0, "O", 6)
+	exec(t, pool, sessionSQL, "S", stream, at(132*time.Second), "live", nil, nil, 0, "P", 7)
 	for _, r := range []struct {
 		seq     int64
 		wall    time.Duration
@@ -97,9 +99,9 @@ func TestCacheReloadRestoresSessionAxis(t *testing.T) {
 
 	for _, want := range []cache.Session{
 		{MinSeq: 20, RewindSession: index.RewindSession{SessionID: "P", State: "ended", EndReason: "offline", InitUploaded: true,
-			DiscontinuityBase: 5, FirstPDT: at(0), InheritsSession: "O", TargetDuration: 6}},
+			FirstPDT: at(0), InheritsSession: "O", TargetDuration: 6}},
 		{MinSeq: 23, RewindSession: index.RewindSession{SessionID: "S", State: "live",
-			DiscontinuityBase: 5, FirstPDT: at(132 * time.Second), InheritsSession: "P", TargetDuration: 7}},
+			FirstPDT: at(132 * time.Second), InheritsSession: "P", TargetDuration: 7}},
 	} {
 		if got, ok := c.Session(stream, want.SessionID); !ok || !reflect.DeepEqual(got, want) {
 			t.Errorf("Session(%s) = (%+v, %v), want (%+v, true)", want.SessionID, got, ok, want)
