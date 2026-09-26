@@ -5,7 +5,8 @@ import { Button, Dialog } from '@/ui';
 import type { WITHDRAW_FACTS } from './useAccountMockState';
 import styles from './AccountSettingsScreen.module.css';
 
-// 회원 탈퇴 재확인 (디자인 1p ②, ADR-044) — 파괴적 동작은 모달로 확인받는다.
+// 회원 탈퇴 재확인 (디자인 1p ②, ADR-044) — 파괴적 동작은 모달로 확인받는다. 확정은 실제 DELETE 다.
+// 보관함·구독 수치는 백엔드가 없어 숫자 대신 「준비 중」이 선다.
 // 오류는 그리지 않는다. 결과는 토스트나 완료 화면이 맡는다.
 //
 // UnlinkChzzkDialog가 적어 둔 승격 트리거(두 번째 파괴적 확인)가 여기서 발화하지만
@@ -32,12 +33,15 @@ export function WithdrawDialog({
   open,
   name,
   facts,
+  busy = false,
   onCancel,
   onConfirm,
 }: {
   open: boolean;
   name: string;
   facts: typeof WITHDRAW_FACTS;
+  /** 탈퇴 왕복 중 — 확정을 두 번 못 누르게 잠근다 */
+  busy?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -64,12 +68,12 @@ export function WithdrawDialog({
           <div className={styles.factBox}>
             <div className={styles.factRow}>
               <span className={styles.factLabel}>저장된 방송</span>
-              <span className={styles.factValue}>{facts.savedBroadcasts}개</span>
+              <span className={styles.factValue}>{facts.savedBroadcasts}</span>
             </div>
             <div className={styles.factDivider} />
             <div className={styles.factRow}>
               <span className={styles.factLabel}>보관함 클립</span>
-              <span className={styles.factValue}>{facts.archivedClips}개</span>
+              <span className={styles.factValue}>{facts.archivedClips}</span>
             </div>
           </div>
 
@@ -82,7 +86,7 @@ export function WithdrawDialog({
           <div className={`${styles.factBox} ${styles.factBoxSingle}`}>
             <div className={styles.factRow}>
               <span className={styles.factLabel}>남은 구독 기간</span>
-              <span className={styles.factValue}>{facts.remainingDays}일</span>
+              <span className={styles.factValue}>{facts.remainingDays}</span>
             </div>
           </div>
 
@@ -106,8 +110,8 @@ export function WithdrawDialog({
           <Button variant="outline" size="md" fullWidth onClick={onCancel}>
             취소
           </Button>
-          <Button variant="solid" size="md" fullWidth onClick={onConfirm}>
-            탈퇴하기
+          <Button variant="solid" size="md" fullWidth disabled={busy} onClick={onConfirm}>
+            {busy ? '탈퇴 처리 중…' : '탈퇴하기'}
           </Button>
         </div>
       </Dialog.Content>

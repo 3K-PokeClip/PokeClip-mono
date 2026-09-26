@@ -9,6 +9,7 @@ import { PendingInvitationRow } from './PendingInvitationRow';
 import { PermissionComparisonPopover } from './PermissionComparisonPopover';
 import { RevokeEditorDialog } from './RevokeEditorDialog';
 import { useEditorSettingsState, type EditorSettingsViewState } from './useEditorSettingsState';
+import { EditorInboxSection } from './EditorInboxSection';
 import styles from './EditorSettingsScreen.module.css';
 
 // 디자인 1l 설정 · 편집자 관리 (POK-208). 조립만 한다 — 상태 판단은
@@ -38,6 +39,9 @@ export function EditorSettingsScreen() {
       </div>
 
       <div className={styles.rows}>{listOf(state)}</div>
+
+      {/* 편집자 시점 — 받은 초대·내가 편집자인 채널. 없으면 아무것도 안 그린다 */}
+      <EditorInboxSection />
 
       {/* 편집자 0명이어도 항상 그린다 — 안내와 「권한 2단계 비교」가 목록 유무와 무관한
           화면 상수다 (2026-08-25 확인). 조회가 서기 전(loading·unavailable)에만 숨긴다. */}
