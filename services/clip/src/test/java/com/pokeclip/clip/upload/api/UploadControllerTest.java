@@ -255,6 +255,56 @@ class UploadControllerTest extends IntegrationTestSupport {
         일꾼(id, "session", 주소_본문(주소2)).andExpect(status().isConflict());
     }
 
+    /**
+     * 🔴 주소가 적힌 뒤에는 「실패」로 닫지 않는다(PR #198 codex P1). 같은 주소로 두 일꾼이 올리는 중 하나가 실패를 보고해 자리가 비면,
+     * 그 사이 다시 주문한 업로드와 늦게 끝난 쪽의 영상이 둘 뜬다. 그래서 실패 보고는 확인 중이 되고, 늦게 온 올림 보고는 확인 중을 이긴다.
+     * 자리는 끝내 안 빈다.
+     */
+    @Test
+    void 주소가_적힌_뒤의_실패_보고는_확인_중이고_늦은_올림이_이긴다() throws Exception {
+        볼_수_있다();
+        long id = 주문한_업로드();
+        long clipId = jdbc.queryForObject("SELECT clip_id FROM clip_uploads WHERE id = ?", Long.class, id);
+        일꾼(id, "start", "{}");
+        일꾼(id, "session", 주소_본문(주소1));
+
+        일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"YOUTUBE_REJECTED\"}").andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("checking"));
+        주문(내_방송, clipId, 제목("다시")).andExpect(status().isOk()).andExpect(jsonPath("$.id").value(id));
+
+        일꾼(id, "result", "{\"outcome\":\"UPLOADED\",\"videoId\":\"abcDEF12345\"}").andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("uploaded"));
+        일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"X\"}").andExpect(status().isConflict());
+        assertThat(상태(id)).isEqualTo("uploaded:null");
+    }
+
+    /** 주소를 받기 전의 실패는 그대로 실패다: 바이트가 갈 곳이 없었으니 영상이 생길 수 없다. 자리가 비어 다시 올릴 수 있다. */
+    @Test
+    void 주소를_받기_전의_실패는_실패다() throws Exception {
+        볼_수_있다();
+        long id = 주문한_업로드();
+        일꾼(id, "start", "{}");
+        일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"QUOTA_EXCEEDED\"}").andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("failed"));
+    }
+
+    /** 🔴 일꾼의 오류 문장에 이어 올리기 주소가 섞여도 화면에는 안 나간다(PR #198 codex P1). 주소 모양 글자를 지워 저장한다. */
+    @Test
+    void 오류_문장_속_주소는_지워서_저장한다() throws Exception {
+        볼_수_있다();
+        long id = 주문한_업로드();
+        long clipId = jdbc.queryForObject("SELECT clip_id FROM clip_uploads WHERE id = ?", Long.class, id);
+        일꾼(id, "start", "{}");
+        일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"X\",\"errorMessage\":\"끊겼다 " + 주소1 + " 에서\"}");
+
+        String 조회 = 본문문자(mvc.perform(get("/api/clip/broadcasts/" + 내_방송 + "/clips/" + clipId).header("Authorization", 토큰()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.upload.error.message").value("끊겼다 [주소 지움] 에서")));
+        assertThat(조회).doesNotContain("upload_id=");
+        assertThat(jdbc.queryForObject("SELECT error_message FROM clip_uploads WHERE id = ?", String.class, id))
+                .doesNotContain("googleapis");
+    }
+
     @Test
     void 잡기_전의_보고와_모양이_틀린_보고는_거절한다() throws Exception {
         볼_수_있다();

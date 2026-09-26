@@ -18,6 +18,10 @@ import java.util.regex.Pattern;
  * 만든다. 일꾼 둘이 같은 주문을 동시에 잡아 각자 주소를 받아도 {@link #session}이 먼저 적힌 하나만 남기고 둘 다 그것을 쓰게
  * 하므로 영상은 많아야 하나다. 응답을 못 받았거나 일꾼이 죽었다 다시 돌면 새 주소를 만들지 않고 이 주소에 「어디까지 받았나」를 묻는다.
  *
+ * <p>🔴 <b>주소가 적힌 뒤에는 「실패」로 닫지 않는다</b>(PR #198 codex P1). 같은 주소로 두 일꾼이 올리는 중 하나가 실패를 보고해
+ * 자리가 비면, 그 사이 다시 주문한 업로드와 늦게 끝난 쪽의 영상이 둘 뜬다. 그래서 그 실패 보고는 {@code checking}으로 받고, 늦게 온
+ * 올림 보고는 {@code checking}을 이긴다(정보가 더 많다). 자리는 끝내 안 빈다. 주소를 받기 전의 실패만 실패다.
+ *
  * <p>문 셋: {@code start}(잡기) → {@code session}(주소 기록) → {@code result}(끝). 전부 줄을 잠그고 판정한다.
  */
 @Service
@@ -30,6 +34,7 @@ public class UploadReportService {
     static final Pattern ERROR_CODE = Pattern.compile("[A-Z0-9_]{1,32}");
     static final int MAX_SESSION_URI = 2048;
     static final int MAX_ERROR_MESSAGE = 512;
+    private static final Pattern URL = Pattern.compile("(?i)\\b(?:https?|ftp)://\\S+");
 
     private final ClipUploadRepository uploads;
     private final TransactionTemplate transactions;
@@ -105,12 +110,17 @@ public class UploadReportService {
         if (target != UploadStatus.UPLOADED && (errorCode == null || !ERROR_CODE.matcher(errorCode).matches())) {
             throw new InvalidUploadRequestException("errorCode");
         }
-        String message = errorMessage == null ? null
-                : errorMessage.substring(0, Math.min(errorMessage.length(), MAX_ERROR_MESSAGE));
+        String message = redact(errorMessage);
 
         return transactions.execute(tx -> {
             ClipUpload upload = uploads.findByIdForUpdate(uploadId).orElseThrow(() -> new UploadNotFoundException(uploadId));
             UploadStatus current = upload.getStatus();
+            if (current == UploadStatus.CHECKING && target == UploadStatus.UPLOADED) {
+                // 확인 중이던 것에 늦은 올림 보고가 왔다: 채널에 영상이 있다는 확정이다.
+                upload.uploaded(videoId);
+                log.info("clip.upload.checking_resolved uploadId={}", uploadId);
+                return ok(upload);
+            }
             if (current.settled()) {
                 boolean same = current == target
                         && (target != UploadStatus.UPLOADED || videoId.equals(upload.getYoutubeVideoId()));
@@ -123,16 +133,27 @@ public class UploadReportService {
                 case UPLOADED -> upload.uploaded(videoId);
                 case FAILED -> {
                     if (upload.getSessionUri() != null) {
-                        // 일꾼이 「주소는 있었지만 끝나지 않은 것을 확인했다」고 판단한 경우다. 드러나게 남긴다.
-                        log.warn("clip.upload.failed_with_session uploadId={} code={}", uploadId, errorCode);
+                        // 주소가 있으면 다른 일꾼이 같은 주소로 아직 올리는 중일 수 있다. 자리를 비우지 않는다(클래스 주석).
+                        log.warn("clip.upload.failed_with_session_held uploadId={} code={}", uploadId, errorCode);
+                        upload.checking(errorCode, message);
+                    } else {
+                        upload.failed(errorCode, message);
                     }
-                    upload.failed(errorCode, message);
                 }
                 default -> upload.checking(errorCode, message);
             }
             log.info("clip.upload.settled uploadId={} status={} code={}", uploadId, target.dbValue(), errorCode);
             return ok(upload);
         });
+    }
+
+    /** 이어 올리기 주소는 그 자체가 올리기 권한이다. 오류 문장에 섞여 와도 화면으로 안 나가게 주소 모양 글자를 지운다. */
+    static String redact(String errorMessage) {
+        if (errorMessage == null) {
+            return null;
+        }
+        String cleaned = URL.matcher(errorMessage).replaceAll("[주소 지움]");
+        return cleaned.substring(0, Math.min(cleaned.length(), MAX_ERROR_MESSAGE));
     }
 
     private static Reply ok(ClipUpload upload) {

@@ -276,7 +276,7 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 | `SEGMENT_BUCKET` | 빈 값 | 조각 창고(1번 장부 `s3_key`의 버킷). 주문서 `sourceKeys[].bucket` |
 | `RENDER_QUEUE_ENDPOINT` | 빈 값 | 비면 진짜 AWS. 로컬 실측 때만 LocalStack 주소 |
 | `RENDER_RECONCILE_INTERVAL` | `PT1M` | 실패 큐를 훑는 주기 |
-| `UPLOAD_ENABLED` | `false` | 유튜브 업로드 주문(POK-220). 켜면 아래 둘이 필수고 비면 부팅이 거부된다. 꺼져 있으면 주문 문만 503 `upload_unavailable`. 올릴 파일의 창고는 `CLIPS_BUCKET`, 줄 주소 덮기는 `RENDER_QUEUE_ENDPOINT`를 같이 쓴다 |
+| `UPLOAD_ENABLED` | `false` | 유튜브 업로드 주문(POK-220). 켜면 아래 둘과 `CLIPS_BUCKET`이 필수고 비면 부팅이 거부된다(렌더를 꺼도 창고 이름은 본다). 꺼져 있으면 주문 문만 503 `upload_unavailable`. 올릴 파일의 창고는 `CLIPS_BUCKET`, 줄 주소 덮기는 `RENDER_QUEUE_ENDPOINT`를 같이 쓴다 |
 | `UPLOAD_QUEUE_URL` | 빈 값 | 업로드 주문줄(표준 SQS). 실물 `pokeclip-jobs-upload`(2026-09-26, 숨김 900초) |
 | `UPLOAD_DLQ_URL` | 빈 값 | 실패 큐. 정리기가 1분마다 읽는다. 실물 `pokeclip-jobs-upload-dlq` |
 | `UPLOAD_RECONCILE_INTERVAL` | `PT1M` | 업로드 실패 큐를 훑는 주기 |
@@ -2097,7 +2097,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 | `POST /api/clip/broadcasts/{streamId}/clips/{clipId}/uploads` `{title, description?, outputId?}` | Bearer JWT | **201** 봉투(새 주문) · **200** 봉투(같은 영상 같은 벌의 살아 있는 업로드가 있다, 그것을 돌려준다) · 400 `{"error":"invalid_request","field":"title\|description\|outputId"}` · 404 `broadcast_not_found`/`clip_not_found` · **409** `clip_not_rendered` · 401 · 503 `authorization_unavailable`/**`upload_unavailable`** |
 | `POST /internal/uploads/{id}/start` | `X-Internal-Token` | 200 `{"proceed":true,"status","attempt","sessionUri"\|null}` 또는 `{"proceed":false,"status"}`(끝난 주문) · 404 `upload_not_found` |
 | `POST /internal/uploads/{id}/session` `{sessionUri}` | `X-Internal-Token` | 200 `{"sessionUri"}` = **먼저 적힌 주소**(일꾼은 자기 주소를 버리고 이것을 쓴다) · 409 `{"reason":"NOT_STARTED"\|"TERMINAL"}` · 400 |
-| `POST /internal/uploads/{id}/result` `{outcome, videoId?, errorCode?, errorMessage?}` | `X-Internal-Token` | 200 `{"status"}`(같은 끝 보고가 다시 와도 200) · 409 `TERMINAL`(다른 끝으로 덮기)·`NOT_STARTED` · 400 |
+| `POST /internal/uploads/{id}/result` `{outcome, videoId?, errorCode?, errorMessage?}` | `X-Internal-Token` | 200 `{"status"}`(같은 끝 보고가 다시 와도 200. 주소가 적힌 줄의 `FAILED`는 `checking`으로 받는다) · 409 `TERMINAL`(다른 끝으로 덮기. `checking`→`UPLOADED`만 허용)·`NOT_STARTED` · 400 |
 
 **봉투**: `{"id","clipId","outputId","title","status","videoId","error":{"code","message"},"requestedBy","createdAt","updatedAt"}`.
 `status`는 `queued` → `uploading` → `uploaded` | `failed` | `checking`. 🔴 **이어 올리기 주소(`session_uri`)는 봉투에 없다** :
@@ -2110,8 +2110,13 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
   주소만 남기고** 늦게 온 일꾼에게도 그것을 돌려준다. 쪽지가 다시 오거나 일꾼이 죽었다 돌면 `start`가 그 주소를 주므로 일꾼은 새로
   만들지 않고 그 주소에 「어디까지 받았나」를 묻는다(완료면 영상 번호가 돌아온다).
 
-**`failed`와 `checking`의 차이가 이 카드의 핵심이다.** `failed`는 유튜브에 영상이 **없는 것이 확실**할 때만이다(주소를 받기 전 실패,
-또는 주소에 물어 끝나지 않은 것을 확인). 모르면 `checking`이고 사람이 채널에서 확인한다(9_기능명세 F7 「자동 재시도하지 않는다」).
+**`failed`와 `checking`의 차이가 이 카드의 핵심이다.** `failed`는 유튜브에 영상이 **없는 것이 확실**할 때만이다. 모르면 `checking`이고
+사람이 채널에서 확인한다(9_기능명세 F7 「자동 재시도하지 않는다」).
+- 🔴 **주소가 한 번 적힌 줄은 `failed`로 닫지 않는다**(PR #198 codex P1). 같은 주소로 두 일꾼이 올리는 중 하나가 실패를 보고해 자리가 비면,
+  그 사이 다시 주문한 업로드와 늦게 끝난 쪽의 영상이 둘 뜬다. 그래서 그런 실패 보고는 clip이 `checking`으로 받는다. **주소를 받기 전의
+  실패만 `failed`다**(바이트가 갈 곳이 없었다).
+- **늦게 온 올림 보고는 `checking`을 이긴다**: 채널에 영상이 있다는 확정이다. 거꾸로 `uploaded`를 다른 끝으로 덮지는 못한다(409 `TERMINAL`).
+- **오류 문장 속 주소는 지워서 저장한다**(`[주소 지움]`). 일꾼이 실수로 주소를 실어 보내도 화면으로 안 나간다.
 **실패 큐 정리기도 같은 규칙이다**: 주소가 적힌 적 없으면 `failed`(`SWEPT`), 있으면 `checking`(`SWEPT_AFTER_SESSION`).
 렌더 정리기처럼 무조건 실패로 닫으면 자리가 비어 다시 올리고 채널에 같은 영상이 둘 뜬다.
 
