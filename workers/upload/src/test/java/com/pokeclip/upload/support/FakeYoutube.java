@@ -17,7 +17,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 유튜브 이어 올리기를 규칙대로 흉내 내는 가짜. <b>한 주소가 바이트를 다 받았을 때만 영상을 만들고 그 수를 센다</b> —
+ * 유튜브 이어 올리기를 규칙대로 흉내 내는 가짜. <b>한 주소가 바이트를 다 받았을 때만 영상을 만들고 그 수를 센다</b> :
  * 시험이 재는 것은 결국 {@link #videosCreated()}가 1인가다.
  *
  * <p>손잡이: 시작에서 쿼터 거절 · 마지막 조각의 응답 버리기(영상은 만들고 연결만 끊는다 = 「성공했는데 응답만 못 받음」) ·
@@ -37,6 +37,8 @@ public class FakeYoutube implements AutoCloseable {
     public volatile boolean quotaOnStart;
     /** 채널 업로드 한도. 유튜브는 이것을 403이 아니라 400으로 준다(PR #199 codex). */
     public volatile boolean uploadLimitOnStart;
+    /** 속도 제한(403 rateLimitExceeded). 시간이 지나면 풀린다. */
+    public volatile boolean rateLimitOnStart;
     public volatile boolean dropFinalResponseOnce;
     public volatile int chunkServerErrors;
     public volatile boolean rejectChunks;
@@ -92,6 +94,10 @@ public class FakeYoutube implements AutoCloseable {
         String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
         if (!("Bearer " + GOOD_TOKEN).equals(auth)) {
             reply(ex, 401, "{}");
+            return;
+        }
+        if (rateLimitOnStart) {
+            reply(ex, 403, "{\"error\":{\"code\":403,\"errors\":[{\"reason\":\"rateLimitExceeded\"}]}}");
             return;
         }
         if (uploadLimitOnStart) {

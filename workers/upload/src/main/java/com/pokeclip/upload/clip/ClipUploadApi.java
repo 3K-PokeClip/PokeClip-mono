@@ -9,7 +9,7 @@ import java.util.Map;
 /**
  * clip의 일꾼 문 셋({@code /internal/uploads/{id}/start|session|result}). 판정은 clip이 하고 여기는 옮기기만 한다.
  *
- * <p>🔴 {@link #session}이 돌려주는 주소가 <b>먼저 적힌 주소</b>다. 일꾼은 자기가 받은 주소가 아니라 이것으로 바이트를 보낸다 —
+ * <p>🔴 {@link #session}이 돌려주는 주소가 <b>먼저 적힌 주소</b>다. 일꾼은 자기가 받은 주소가 아니라 이것으로 바이트를 보낸다 :
  * 그래야 일꾼 둘이 겹쳐도 영상이 하나다.
  */
 public class ClipUploadApi {

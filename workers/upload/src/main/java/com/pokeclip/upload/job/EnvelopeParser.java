@@ -3,7 +3,7 @@ package com.pokeclip.upload.job;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
-/** 주문서 해석. 모양이 틀리면 {@link Unreadable} — 다시 받아도 같으니 일꾼은 지운다. */
+/** 주문서 해석. 모양이 틀리면 {@link Unreadable}: 다시 받아도 같으니 일꾼은 지운다. */
 public class EnvelopeParser {
 
     private final ObjectMapper mapper;

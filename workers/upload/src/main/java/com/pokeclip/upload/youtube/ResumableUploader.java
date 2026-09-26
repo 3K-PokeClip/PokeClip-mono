@@ -19,7 +19,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 유튜브 이어 올리기(resumable upload) 규약 셋 — 시작 · 「어디까지 받았나」 · 조각 보내기. 응답을 결과 종류로 나눠 돌려주고
+ * 유튜브 이어 올리기(resumable upload) 규약 셋: 시작 · 「어디까지 받았나」 · 조각 보내기. 응답을 결과 종류로 나눠 돌려주고
  * 무엇을 할지는 부른 쪽({@code UploadProcessor})이 정한다.
  *
  * <p><b>유튜브는 한 주소가 바이트를 다 받았을 때만 영상을 만든다.</b> 그래서 「주소에 물어 덜 받았다(308)」는 영상이 없다는
@@ -31,6 +31,8 @@ public class ResumableUploader {
 
     /** 하루 올리기 한도·쿼터에 걸렸다는 유튜브 사유들. 다시 해도 오늘은 안 된다. */
     static final Set<String> QUOTA_REASONS = Set.of("quotaExceeded", "uploadLimitExceeded", "dailyLimitExceeded");
+    /** 시간이 지나면 풀리는 속도 제한 사유들(403으로 온다). auth {@code YoutubeOAuthClient}도 같은 사유를 일시 오류로 본다. */
+    static final Set<String> RATE_REASONS = Set.of("rateLimitExceeded", "userRateLimitExceeded", "servingLimitExceeded");
     private static final Pattern RANGE = Pattern.compile("bytes=0-(\\d+)");
 
     private final HttpClient http;
@@ -81,7 +83,7 @@ public class ResumableUploader {
         /** 바이트를 거절했다(4xx). 끝났는지는 주소에 다시 물어야 안다. */
         record Rejected(int status, String reason) implements Progress { }
 
-        /** 5xx·끊김. 응답을 못 받았다 — 끝났는지 모른다. 주소에 다시 물어야 한다. */
+        /** 5xx·끊김. 응답을 못 받았다: 끝났는지 모른다. 주소에 다시 물어야 한다. */
         record Transient(String what) implements Progress { }
     }
 
@@ -118,8 +120,9 @@ public class ResumableUploader {
             if (QUOTA_REASONS.contains(reason)) {
                 return new Start.Quota(reason);
             }
-            if (code == 429 || code / 100 == 5) {
-                return new Start.Transient("HTTP " + code);
+            // 속도 제한은 거절이 아니다. 닫으면 사람이 다시 눌러야 한다(PR #199 codex 2판).
+            if (code == 429 || code / 100 == 5 || RATE_REASONS.contains(reason)) {
+                return new Start.Transient("HTTP " + code + " " + reason);
             }
             return new Start.Rejected(code, reason);
         } catch (IOException e) {
@@ -190,7 +193,7 @@ public class ResumableUploader {
             Thread.currentThread().interrupt();
             return new Progress.Transient("interrupted");
         } catch (RuntimeException e) {
-            // 200인데 본문이 JSON이 아니다 — 응답을 못 받은 것과 같게 다룬다(주소에 다시 묻는다).
+            // 200인데 본문이 JSON이 아니다: 응답을 못 받은 것과 같게 다룬다(주소에 다시 묻는다).
             return new Progress.Transient(e.getClass().getSimpleName());
         }
     }

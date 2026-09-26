@@ -25,7 +25,7 @@ import java.util.Random;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 업로드 처리기(POK-220). <b>재는 것의 중심은 「가짜 유튜브가 만든 영상 수가 1」이다</b> — 응답이 사라져도, 쪽지가 두 번 와도,
+ * 업로드 처리기(POK-220). <b>재는 것의 중심은 「가짜 유튜브가 만든 영상 수가 1」이다</b>: 응답이 사라져도, 쪽지가 두 번 와도,
  * 일꾼이 도중에 멈췄다 다시 와도, 다른 일꾼이 주소를 먼저 적어 두었어도. 그리고 「실패」는 영상이 없다는 것을 확인했을 때만 나간다.
  *
  * <p>가짜 유튜브는 이어 올리기 규칙대로 돈다(바이트를 다 받은 주소만 영상을 만든다). clip·auth도 가짜지만 clip 판정 규칙은 진짜와 같다.
@@ -121,7 +121,7 @@ class UploadProcessorTest {
 
     /**
      * 🔴 다른 일꾼이 같은 주문을 겹쳐 잡아 주소를 먼저 적었다. 이 일꾼은 자기 주소를 받았지만 clip이 돌려준 <b>먼저 적힌 주소</b>로
-     * 보낸다 — 자기 주소는 바이트를 안 받아 영상이 안 생긴다.
+     * 보낸다: 자기 주소는 바이트를 안 받아 영상이 안 생긴다.
      */
     @Test
     void 다른_일꾼이_먼저_적은_주소가_있으면_그리로_보낸다() {
@@ -160,7 +160,7 @@ class UploadProcessorTest {
     }
 
     /**
-     * 🔴 이 일꾼이 시작을 청하는 사이 다른 일꾼이 주소를 적어 두었다. 이 일꾼은 한도에 걸렸지만 실패를 보내면 안 된다 — 그 주소로 이어
+     * 🔴 이 일꾼이 시작을 청하는 사이 다른 일꾼이 주소를 적어 두었다. 이 일꾼은 한도에 걸렸지만 실패를 보내면 안 된다: 그 주소로 이어
      * 갈 길이 막힌다(PR #199 codex). 실패 전에 clip에 다시 물어 적힌 주소가 있으면 그 주소로 잇는다.
      */
     @Test
@@ -174,6 +174,29 @@ class UploadProcessorTest {
         assertThat(internal.results).containsExactly("UPLOADED:vid1");
         assertThat(youtube.session(다른_일꾼).bytes.toByteArray()).isEqualTo(video);
         assertThat(youtube.videosCreated()).isEqualTo(1);
+    }
+
+    /** 유튜브 속도 제한(403 rateLimitExceeded)은 시간이 지나면 풀린다. 거절로 닫지 않고 잠시 뒤 다시 한다(PR #199 codex 2판). */
+    @Test
+    void 속도_제한은_실패가_아니라_잠시_뒤_다시다() {
+        youtube.rateLimitOnStart = true;
+
+        assertThat(processor().process(주문서()).kind()).isEqualTo(Disposition.Kind.DELAY);
+        assertThat(internal.results).isEmpty();
+    }
+
+    /**
+     * 🔴 연동이 끊겨 실패를 보내려는데, 그사이 겹친 일꾼이 주소를 적어 두었다. 실패를 보내면 clip이 확인 중으로 닫고 쪽지가 지워져 그 주소로
+     * 이어 갈 길이 막힌다(PR #199 codex 2판). 실패를 보내지 않고 쪽지를 남긴다.
+     */
+    @Test
+    void 연동이_끊겨도_그사이_적힌_주소가_있으면_실패를_안_보낸다() {
+        internal.accessToken = null;
+        internal.refusal = "BROKEN";
+        internal.lateSession = youtube.openSession(SIZE);
+
+        assertThat(processor().process(주문서()).kind()).isEqualTo(Disposition.Kind.DELAY);
+        assertThat(internal.results).isEmpty();
     }
 
     /** 연동이 끊긴 채널: 주소가 없으면 영상도 없으니 실패. 잠깐의 갱신 실패는 다시 온다(아무것도 보고 안 한다). */
