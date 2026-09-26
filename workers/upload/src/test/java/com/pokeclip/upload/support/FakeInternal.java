@@ -31,6 +31,8 @@ public class FakeInternal implements AutoCloseable {
     public volatile int clipDown;
     /** 설정하면 session 문이 이 주소를 먼저 적힌 것으로 둔다(겹친 일꾼 흉내). */
     public volatile String preRecordOnSession;
+    /** 설정하면 두 번째 start부터 이 주소가 적혀 있다(이 일꾼이 시작하는 사이 다른 일꾼이 적었다). */
+    public volatile String lateSession;
     public final List<String> results = new ArrayList<>();
 
     public FakeInternal() throws IOException {
@@ -64,6 +66,9 @@ public class FakeInternal implements AutoCloseable {
                     return;
                 }
                 status = "uploading";
+                if (starts >= 1 && lateSession != null && sessionUri == null) {
+                    sessionUri = lateSession;
+                }
                 starts++;
                 reply(ex, 200, "{\"proceed\":true,\"status\":\"uploading\",\"attempt\":" + starts + ",\"sessionUri\":"
                         + (sessionUri == null ? "null" : "\"" + sessionUri + "\"") + "}");

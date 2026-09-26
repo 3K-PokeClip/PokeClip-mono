@@ -128,12 +128,12 @@ public class UploadProcessor {
                     }
                 }
                 case Start.Quota q -> {
-                    clip.failed(id, "QUOTA_EXCEEDED", "유튜브 하루 올리기 한도에 걸렸다(" + q.reason() + "). 내일 다시 올린다");
-                    return Disposition.DELETE;
+                    return failUnlessAdopted(id, token.accessToken(), file, size, "QUOTA_EXCEEDED",
+                            "유튜브 하루 올리기 한도에 걸렸다(" + q.reason() + "). 내일 다시 올린다");
                 }
                 case Start.Rejected r -> {
-                    clip.failed(id, "YOUTUBE_REJECTED", "유튜브가 올리기를 거절했다: HTTP " + r.status() + " " + r.reason());
-                    return Disposition.DELETE;
+                    return failUnlessAdopted(id, token.accessToken(), file, size, "YOUTUBE_REJECTED",
+                            "유튜브가 올리기를 거절했다: HTTP " + r.status() + " " + r.reason());
                 }
                 case Start.Unauthorized u -> {
                     log.warn("upload.start_unauthorized uploadId={}", id);
@@ -195,6 +195,23 @@ public class UploadProcessor {
                 }
             }
         }
+    }
+
+    /**
+     * 시작이 거절됐다. 🔴 실패를 보내기 전에 clip에 다시 묻는다 — 이 일꾼이 시작을 청하는 사이 겹친 일꾼이 주소를 적어 두었으면
+     * 실패 보고는 그 주소로 이어 갈 길을 막는다(clip이 확인 중으로 닫고 쪽지가 지워진다, PR #199 codex). 적힌 주소가 있으면 그리로 잇는다.
+     */
+    private Disposition failUnlessAdopted(long id, String token, Path file, long size, String code, String message) {
+        ClipUploadApi.Start again = clip.start(id);
+        if (!again.found() || !again.proceed()) {
+            return Disposition.DELETE;
+        }
+        if (again.sessionUri() != null) {
+            log.info("upload.adopt_session uploadId={} after={}", id, code);
+            return drive(id, again.sessionUri(), token, file, size);
+        }
+        clip.failed(id, code, message);
+        return Disposition.DELETE;
     }
 
     /**

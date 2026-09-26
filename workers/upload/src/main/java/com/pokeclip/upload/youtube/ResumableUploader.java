@@ -114,7 +114,8 @@ public class ResumableUploader {
                 return new Start.Unauthorized();
             }
             String reason = reason(response.body());
-            if (code == 403 && QUOTA_REASONS.contains(reason)) {
+            // 사유로 가른다. 채널 업로드 한도(uploadLimitExceeded)는 403이 아니라 400으로 온다(PR #199 codex).
+            if (QUOTA_REASONS.contains(reason)) {
                 return new Start.Quota(reason);
             }
             if (code == 429 || code / 100 == 5) {

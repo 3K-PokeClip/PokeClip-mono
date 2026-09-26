@@ -36,8 +36,9 @@ clip(`services/README.md` 「유튜브 업로드 주문」 절)이다.
 | 상황 | 보고 | 쪽지 |
 |---|---|---|
 | 다 올렸다(또는 물어 보니 이미 다 받았다) | `UPLOADED` + 영상 번호 | 지운다 |
-| 시작에서 하루 한도(`quotaExceeded`·`uploadLimitExceeded`·`dailyLimitExceeded`) | `FAILED QUOTA_EXCEEDED` | 지운다 |
+| 시작에서 하루 한도(`quotaExceeded`·`dailyLimitExceeded`는 403, 채널 한도 `uploadLimitExceeded`는 **400**. 사유 이름으로 가른다) | `FAILED QUOTA_EXCEEDED` | 지운다 |
 | 시작에서 유튜브가 거절(4xx) | `FAILED YOUTUBE_REJECTED` | 지운다 |
+| 위 둘인데, 그사이 겹친 일꾼이 clip에 주소를 적어 두었다(실패 보내기 전에 다시 묻는다) | 그 주소로 잇는다 | 결과대로 |
 | 연동 없음·해제·끊김(auth `NOT_LINKED`·`UNLINKED`·`BROKEN`), 주소 없음 | `FAILED YOUTUBE_{사유}` | 지운다 |
 | 같은 경우인데 주소가 있다 | 주소에 물어 다 받았으면 `UPLOADED`, 아니면 `CHECKING` | 지운다(물음 자체가 끊기면 다시) |
 | 바이트 거절(4xx) | 주소에 물어 위와 같이 가른다 | 지운다 |

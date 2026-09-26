@@ -149,6 +149,33 @@ class UploadProcessorTest {
         assertThat(youtube.videosCreated()).isZero();
     }
 
+    /** 채널 업로드 한도(`uploadLimitExceeded`)는 유튜브가 400으로 준다. 그것도 한도로 드러나야 한다(PR #199 codex). */
+    @Test
+    void 채널_업로드_한도는_400이어도_QUOTA_EXCEEDED다() {
+        youtube.uploadLimitOnStart = true;
+
+        processor().process(주문서());
+
+        assertThat(internal.results).containsExactly("FAILED:QUOTA_EXCEEDED");
+    }
+
+    /**
+     * 🔴 이 일꾼이 시작을 청하는 사이 다른 일꾼이 주소를 적어 두었다. 이 일꾼은 한도에 걸렸지만 실패를 보내면 안 된다 — 그 주소로 이어
+     * 갈 길이 막힌다(PR #199 codex). 실패 전에 clip에 다시 물어 적힌 주소가 있으면 그 주소로 잇는다.
+     */
+    @Test
+    void 한도에_걸려도_그사이_다른_일꾼이_적은_주소가_있으면_그리로_잇는다() {
+        String 다른_일꾼 = youtube.openSession(SIZE);
+        internal.lateSession = 다른_일꾼;
+        youtube.quotaOnStart = true;
+
+        processor().process(주문서());
+
+        assertThat(internal.results).containsExactly("UPLOADED:vid1");
+        assertThat(youtube.session(다른_일꾼).bytes.toByteArray()).isEqualTo(video);
+        assertThat(youtube.videosCreated()).isEqualTo(1);
+    }
+
     /** 연동이 끊긴 채널: 주소가 없으면 영상도 없으니 실패. 잠깐의 갱신 실패는 다시 온다(아무것도 보고 안 한다). */
     @Test
     void 연동이_끊겼으면_실패_잠깐의_갱신_실패면_다시_온다() {

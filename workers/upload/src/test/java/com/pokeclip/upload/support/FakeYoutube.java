@@ -35,6 +35,8 @@ public class FakeYoutube implements AutoCloseable {
     private final List<String> seenAuth = new ArrayList<>();
 
     public volatile boolean quotaOnStart;
+    /** 채널 업로드 한도. 유튜브는 이것을 403이 아니라 400으로 준다(PR #199 codex). */
+    public volatile boolean uploadLimitOnStart;
     public volatile boolean dropFinalResponseOnce;
     public volatile int chunkServerErrors;
     public volatile boolean rejectChunks;
@@ -90,6 +92,10 @@ public class FakeYoutube implements AutoCloseable {
         String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
         if (!("Bearer " + GOOD_TOKEN).equals(auth)) {
             reply(ex, 401, "{}");
+            return;
+        }
+        if (uploadLimitOnStart) {
+            reply(ex, 400, "{\"error\":{\"code\":400,\"errors\":[{\"reason\":\"uploadLimitExceeded\"}]}}");
             return;
         }
         if (quotaOnStart) {
