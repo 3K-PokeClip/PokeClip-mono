@@ -15,6 +15,8 @@ import com.pokeclip.clip.segment.SegmentSource;
 import com.pokeclip.clip.segment.SegmentWindow;
 import com.pokeclip.clip.segment.SegmentWindowAssembler;
 import com.pokeclip.clip.segment.StreamSegmentReader;
+import com.pokeclip.clip.upload.ClipUploadRepository;
+import com.pokeclip.clip.upload.UploadSnapshot;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -60,14 +62,15 @@ public class RenderRequestService {
     private final ClipRepository clips;
     private final RenderJobRepository jobs;
     private final RenderPublisher publisher;
+    private final ClipUploadRepository uploads;
     private final TransactionTemplate transactions;
     private final ObjectMapper mapper;
 
     RenderRequestService(ObjectProvider<RenderQueueClient> queue, RenderProperties properties,
                          BroadcastAccessGuard guard, BroadcastRepository broadcasts, RecipeRepository recipes,
                          StreamSegmentReader segments, ClipInserter inserter, ClipRepository clips,
-                         RenderJobRepository jobs, RenderPublisher publisher, TransactionTemplate transactions,
-                         ObjectMapper mapper) {
+                         RenderJobRepository jobs, RenderPublisher publisher, ClipUploadRepository uploads,
+                         TransactionTemplate transactions, ObjectMapper mapper) {
         this.queue = queue;
         this.properties = properties;
         this.guard = guard;
@@ -78,6 +81,7 @@ public class RenderRequestService {
         this.clips = clips;
         this.jobs = jobs;
         this.publisher = publisher;
+        this.uploads = uploads;
         this.transactions = transactions;
         this.mapper = mapper;
     }
@@ -173,20 +177,21 @@ public class RenderRequestService {
     }
 
     ClipSnapshot snapshot(Clip clip) {
-        return snapshot(clip, jobs.findByClipId(clip.getId()));
+        return snapshot(clip, jobs.findByClipId(clip.getId()),
+                uploads.findFirstByClipIdOrderByIdDesc(clip.getId()).map(UploadSnapshot::of));
     }
 
     /**
      * 영상 한 벌을 응답 모양으로. <b>보관함(POK-243)도 이것을 쓴다</b> — 같은 영상이 주문 문과 보관함에서 다른 모양으로
      * 나가면 화면이 두 벌로 처리한다. 주문은 목록이 한 번에 읽어 넘긴다(줄마다 묻지 않으려고).
      */
-    public ClipSnapshot snapshot(Clip clip, Optional<RenderJob> job) {
+    public ClipSnapshot snapshot(Clip clip, Optional<RenderJob> job, Optional<UploadSnapshot> upload) {
         ClipSnapshot.Progress progress = job.map(j -> new ClipSnapshot.Progress(
                 j.getProgressPercent(), j.getProgressStage(), j.getAttemptOrdinal(), j.getId())).orElse(null);
         return new ClipSnapshot(clip.getId(), clip.getStreamId(), clip.getRecipeId(), clip.getRecipeVersion(),
                 clip.getRequestedBy(), clip.getStatus().dbValue(), progress,
                 clip.getOutputs() == null ? null : mapper.readTree(clip.getOutputs()),
                 clip.getErrorCode() == null ? null : new ClipSnapshot.Error(clip.getErrorCode(), clip.getErrorMessage()),
-                clip.getCreatedAt(), clip.getUpdatedAt());
+                clip.getCreatedAt(), clip.getUpdatedAt(), upload.orElse(null));
     }
 }

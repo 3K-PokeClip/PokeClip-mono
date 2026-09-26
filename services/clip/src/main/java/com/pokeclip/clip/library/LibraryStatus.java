@@ -11,12 +11,16 @@ import com.pokeclip.clip.paging.InvalidListParamException;
  *   <li>{@code rendering} — 지금 판의 영상이 주문됐거나 만드는 중이다</li>
  *   <li>{@code rendered} — 지금 판의 영상이 완성됐다(화면의 「업로드 대기」)</li>
  *   <li>{@code failed} — 지금 판의 마지막 시도가 실패했다</li>
+ *   <li>{@code uploading}: 완성 영상을 유튜브에 올리는 중이다(POK-220)</li>
+ *   <li>{@code checking}: 올라갔는지 모른다. 사람이 채널에서 확인해야 한다(자동으로 다시 올리지 않는다)</li>
+ *   <li>{@code uploaded}: 유튜브에 올렸다</li>
  * </ul>
  *
- * <p>업로드 상태(올리는 중·올림)는 POK-220이 더한다 — 그때까지 그 값은 400이다.
+ * <p>업로드가 실패하면(영상이 채널에 없는 것이 확실) {@code rendered}(업로드 대기)로 돌아간다: 다시 올릴 수 있다.
  */
 public enum LibraryStatus {
-    EDITING("editing"), RENDERING("rendering"), RENDERED("rendered"), FAILED("failed");
+    EDITING("editing"), RENDERING("rendering"), RENDERED("rendered"), FAILED("failed"),
+    UPLOADING("uploading"), CHECKING("checking"), UPLOADED("uploaded");
 
     private final String param;
 

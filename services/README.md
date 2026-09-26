@@ -276,6 +276,10 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 | `SEGMENT_BUCKET` | 빈 값 | 조각 창고(1번 장부 `s3_key`의 버킷). 주문서 `sourceKeys[].bucket` |
 | `RENDER_QUEUE_ENDPOINT` | 빈 값 | 비면 진짜 AWS. 로컬 실측 때만 LocalStack 주소 |
 | `RENDER_RECONCILE_INTERVAL` | `PT1M` | 실패 큐를 훑는 주기 |
+| `UPLOAD_ENABLED` | `false` | 유튜브 업로드 주문(POK-220). 켜면 아래 둘이 필수고 비면 부팅이 거부된다. 꺼져 있으면 주문 문만 503 `upload_unavailable`. 올릴 파일의 창고는 `CLIPS_BUCKET`, 줄 주소 덮기는 `RENDER_QUEUE_ENDPOINT`를 같이 쓴다 |
+| `UPLOAD_QUEUE_URL` | 빈 값 | 업로드 주문줄(표준 SQS). 실물 `pokeclip-jobs-upload`(2026-09-26, 숨김 900초) |
+| `UPLOAD_DLQ_URL` | 빈 값 | 실패 큐. 정리기가 1분마다 읽는다. 실물 `pokeclip-jobs-upload-dlq` |
+| `UPLOAD_RECONCILE_INTERVAL` | `PT1M` | 업로드 실패 큐를 훑는 주기 |
 | `PLAYBACK_ACCESS_TTL` | `PT60M` | 출입증 수명. 0 이하면 부팅 거부 |
 
 **출입증 셋(`CLOUDFRONT_KEY_PAIR_ID`·`CLOUDFRONT_PRIVATE_KEY_PEM`·`MEDIA_BASE_URL`)은 다 비면 「꺼짐」이고
@@ -1320,6 +1324,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 | `POST …/{streamId}/recipes/{id}/renders` (POK-125) | 같음 → 편집본이 그 방송 것인가 | 같음 · **404** `recipe_not_found` |
 | `GET …/{streamId}/clips/{clipId}` (POK-125) | 같음 → 영상이 그 방송 것인가 | 같음 · **404** `clip_not_found` |
 | `POST …/{streamId}/clips/{clipId}/file-access` (POK-247) | 같음 | 같음 |
+| `POST …/{streamId}/clips/{clipId}/uploads` (POK-220) | 같음 | 같음 |
 | `GET /api/clip/library` (POK-243) | auth `accessible` — **방송 목록과 같은 판정**(볼 수 있는 스트리머 번호로만 조회) | 그 줄이 목록에 **안 나온다**(200) |
 | `GET /api/clip/library/{recipeId}` (POK-243) | 편집본 → 그 편집본의 방송 → `BroadcastAccessGuard` | **404** `recipe_not_found` — `broadcast_not_found`로 안 나간다(그 번호의 편집본이 있다는 것이 샌다) |
 
@@ -1995,7 +2000,8 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 | `GET /api/clip/broadcasts/{streamId}/clips/{clipId}` | Bearer JWT | **200** 봉투 · 404 `broadcast_not_found`/`clip_not_found` · 401 · 503 |
 | `POST /internal/jobs/{jobId}/events` (계약1 4절) | `X-Internal-Token` | **200** 전이 응답 · **400** `{"reason":"INVALID_EVENT"\|"INVALID_RESULT"}` 또는 `{"error":"invalid_request","field":…}` · **404** `{"error":"job_not_found"}` · **409** `{"reason":"SUPERSEDED"\|"TERMINAL"}` · 401 |
 
-**봉투** — `{"id","streamId","recipeId","recipeVersion","requestedBy","status","progress":{"percent","stage","attempt","jobId"},"outputs","error":{"code","message"},"createdAt","updatedAt"}`.
+**봉투**: `{"id","streamId","recipeId","recipeVersion","requestedBy","status","progress":{"percent","stage","attempt","jobId"},"outputs","error":{"code","message"},"createdAt","updatedAt","upload"}`.
+`upload`는 가장 최근 유튜브 업로드(아래 「유튜브 업로드 주문」 절의 봉투)이고 한 번도 안 올렸으면 `null`이다(POK-220).
 `status`는 **`queued`(주문됨) → `rendering`(만드는 중) → `rendered`(완성) | `failed`(실패)** 넷 — 2번 화면의 거르기 값이라 이름을 바꾸지 않는다.
 업로드 상태는 POK-220이 더한다. `outputs`는 완성했을 때 일꾼이 보고한 산출물 목록(`outputId`·`kind`·`s3Key`) 그대로인데
 **화면이 그 키로 영상을 직접 받을 수는 없다**(창고는 비공개): 보고 받을 주소는 아래 「완성 영상 주소」 문(POK-247)이 준다.
@@ -2081,6 +2087,47 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 - 수명은 `pokeclip.render.file-url-ttl`(기본 `PT60M`, 0초 초과 7일 이하. 밖이면 부팅을 거부한다: S3 미리서명 한도). 지나면 문을 다시 부른다. **한계**: EC2 역할의 임시 자격증명으로 서명하므로
   그 자격증명이 먼저 끝나면 주소도 60분 전에 끊긴다(S3 규칙). 화면은 403을 받으면 문을 다시 부르면 된다.
 
+### clip: 유튜브 업로드 주문 (POK-220)
+
+**완성 영상을 스트리머 채널에 비공개로 올리는 주문을 받아 줄(SQS `jobs-upload`)에 넣고, 업로드 일꾼의 보고로 상태를 바꾼다.**
+표 `clip_uploads`(`V209`). 일꾼은 `workers/upload/`(POK-220 PR-B)다. 승인 게이트는 없다(2026-08-30 결정): 편집자·스트리머 둘 다 자격만 있으면 올린다.
+
+| 문 | 인증 | 응답 |
+|---|---|---|
+| `POST /api/clip/broadcasts/{streamId}/clips/{clipId}/uploads` `{title, description?, outputId?}` | Bearer JWT | **201** 봉투(새 주문) · **200** 봉투(같은 영상 같은 벌의 살아 있는 업로드가 있다, 그것을 돌려준다) · 400 `{"error":"invalid_request","field":"title\|description\|outputId"}` · 404 `broadcast_not_found`/`clip_not_found` · **409** `clip_not_rendered` · 401 · 503 `authorization_unavailable`/**`upload_unavailable`** |
+| `POST /internal/uploads/{id}/start` | `X-Internal-Token` | 200 `{"proceed":true,"status","attempt","sessionUri"\|null}` 또는 `{"proceed":false,"status"}`(끝난 주문) · 404 `upload_not_found` |
+| `POST /internal/uploads/{id}/session` `{sessionUri}` | `X-Internal-Token` | 200 `{"sessionUri"}` = **먼저 적힌 주소**(일꾼은 자기 주소를 버리고 이것을 쓴다) · 409 `{"reason":"NOT_STARTED"\|"TERMINAL"}` · 400 |
+| `POST /internal/uploads/{id}/result` `{outcome, videoId?, errorCode?, errorMessage?}` | `X-Internal-Token` | 200 `{"status"}`(같은 끝 보고가 다시 와도 200) · 409 `TERMINAL`(다른 끝으로 덮기)·`NOT_STARTED` · 400 |
+
+**봉투**: `{"id","clipId","outputId","title","status","videoId","error":{"code","message"},"requestedBy","createdAt","updatedAt"}`.
+`status`는 `queued` → `uploading` → `uploaded` | `failed` | `checking`. 🔴 **이어 올리기 주소(`session_uri`)는 봉투에 없다** :
+그 주소 자체가 올리기 권한이다. 로그에도 안 찍는다. 일꾼 문만 돌려준다.
+
+**🔴 「영상은 하나」를 지키는 길은 둘이고 둘 다 막았다.**
+- **새 업로드 줄이 생기는 길**: 부분 UNIQUE `(clip_id, output_id) WHERE status <> 'failed'` + `ON CONFLICT DO NOTHING`. 더블클릭·다시 누름의
+  두 번째는 200으로 첫 줄을 돌려받는다. **실패만 자리를 비운다**: 올렸거나(`uploaded`) 결과 불명(`checking`)이면 다시 주문해도 새로 안 만든다.
+- **한 줄이 바이트를 두 주소로 보내는 길**: 유튜브는 이어 올리기 주소 하나가 바이트를 다 받았을 때만 영상을 만든다. `session`은 **처음 적힌
+  주소만 남기고** 늦게 온 일꾼에게도 그것을 돌려준다. 쪽지가 다시 오거나 일꾼이 죽었다 돌면 `start`가 그 주소를 주므로 일꾼은 새로
+  만들지 않고 그 주소에 「어디까지 받았나」를 묻는다(완료면 영상 번호가 돌아온다).
+
+**`failed`와 `checking`의 차이가 이 카드의 핵심이다.** `failed`는 유튜브에 영상이 **없는 것이 확실**할 때만이다(주소를 받기 전 실패,
+또는 주소에 물어 끝나지 않은 것을 확인). 모르면 `checking`이고 사람이 채널에서 확인한다(9_기능명세 F7 「자동 재시도하지 않는다」).
+**실패 큐 정리기도 같은 규칙이다**: 주소가 적힌 적 없으면 `failed`(`SWEPT`), 있으면 `checking`(`SWEPT_AFTER_SESSION`).
+렌더 정리기처럼 무조건 실패로 닫으면 자리가 비어 다시 올리고 채널에 같은 영상이 둘 뜬다.
+
+- **채널 = 방송의 스트리머**(`broadcasts.streamer_id`, ADR-010 Path A). 주문한 사람(편집자일 수 있다)의 채널이 아니다.
+- **토큰은 주문서에 없다.** 일꾼이 올리기 직전에 auth `POST /internal/youtube-link/resolve {userId}`에 묻는다: 주문서는 로그·실패 큐에 남는다.
+- **비공개로 올린다**(ADR-010). 주문서 `video.privacyStatus = "private"`. 공개 전환은 스트리머가 스튜디오에서 한다.
+- **제목·설명은 유튜브 규칙을 먼저 본다**: 제목 1~100자(코드포인트, 앞뒤 공백 걷음), 설명 5000바이트, 둘 다 `<`·`>` 금지.
+  줄에 실린 뒤 유튜브가 거절하면 늦다. 제목은 이 줄에 남는다(편집본(계약6)에는 제목 칸이 없다).
+- **벌 고르기**: 영상 파일이 하나면 그것, 여럿이면 `outputId` 필수(무엇을 올릴지 우리가 정하지 않는다). 지금 편집 화면은 편집본마다 한 벌만 만든다.
+- **주문서**: `{"schemaVersion":1,"jobType":"UPLOAD","uploadId","clipId","streamId","channelOwnerUserId","source":{"bucket","s3Key","outputId"},"video":{"title","description","privacyStatus"},"requestedAt"}`.
+  선기록·후발행(outbox)은 렌더와 같다. 같은 주문서가 두 통 실려도 영상은 하나다(위 두 번째 길).
+
+**알려진 한계**
+- **`checking`을 푸는 문이 없다**: 사람이 채널을 보고 「올라갔다(영상 번호)」·「안 올라갔다」를 적는 문은 업로드 상태 화면(F7) 카드에서 판다.
+- 하루 올릴 수 있는 개수(약 5개, 유튜브 쿼터)에 걸리면 일꾼이 `failed` + `QUOTA_EXCEEDED`로 보고한다(PR-B).
+
 ### clip — 보관함 목록·상세 (POK-243)
 
 **편집자가 보관함 화면을 열면 「내가 볼 수 있는 방송들의 편집본 전부」가 상태별로 나오고, 하나를 누르면 편집 기록과
@@ -2113,8 +2160,11 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 | `rendering` | 지금 판의 영상이 `queued`·`rendering` | 렌더 중 |
 | `rendered` | 지금 판의 영상이 완성됐다 | 업로드 대기 |
 | `failed` | 지금 판의 마지막 시도가 실패했다(다시 주문해 완성되면 `rendered`로 돌아온다) | 렌더 실패 |
+| `uploading` | 지금 판의 완성 영상을 유튜브에 올리는 중(업로드 `queued`·`uploading`, POK-220) | 올리는 중 |
+| `checking` | 올라갔는지 모른다. **자동으로 다시 올리지 않는다**: 사람이 채널에서 확인한다 | 확인 중 |
+| `uploaded` | 유튜브에 올렸다. `latestClip.upload.videoId`로 `https://youtu.be/{videoId}` | 발행됨 |
 
-**업로드 상태(올리는 중·올림·실패 사유·유튜브 주소)는 POK-220이 더한다** — 그때까지 `status=uploading` 같은 값은 400이다.
+업로드가 실패하면(유튜브에 영상이 없는 것이 확실) `rendered`(업로드 대기)로 돌아간다. 사유는 `latestClip.upload.error`.
 **승인 상태 칸은 만들지 않는다**(2026-08-30 결정: 승인 게이트 없음 — 편집자·스트리머 둘 다 업로드한다). 화면 시안의
 「승인 대기」·「반려됨」 배지는 이 결정 전에 그려진 것이고 2번에게 전했다.
 

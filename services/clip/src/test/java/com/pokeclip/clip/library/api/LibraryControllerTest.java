@@ -68,6 +68,7 @@ class LibraryControllerTest extends IntegrationTestSupport {
     void 내_흔적을_지운다() {
         jdbc.update("DELETE FROM render_job_events");
         jdbc.update("DELETE FROM render_jobs");
+        jdbc.update("DELETE FROM clip_uploads");
         jdbc.update("DELETE FROM clips");
         jdbc.update("DELETE FROM recipes");
     }
@@ -190,7 +191,7 @@ class LibraryControllerTest extends IntegrationTestSupport {
     /** 업로드 상태는 POK-220 뒤의 값이다 — 지금은 모르는 값이라 400이고, 대문자도 400이다. 형식 오류에 auth 왕복을 안 태운다. */
     @Test
     void 모르는_상태는_400이다() throws Exception {
-        목록("?status=uploaded").andExpect(status().isBadRequest())
+        목록("?status=published").andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("invalid_request"))
                 .andExpect(jsonPath("$.field").value("status"));
         목록("?status=RENDERED").andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("status"));
