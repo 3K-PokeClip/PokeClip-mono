@@ -269,7 +269,7 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 | `CLOUDFRONT_PRIVATE_KEY_PEM` | 빈 값 | 그 공개키의 짝인 **PKCS#8 PEM 본문**(`BEGIN PRIVATE KEY`). 한 줄로 넣으면 리터럴 `\n`을 개행으로 읽는다. `BEGIN RSA PRIVATE KEY`(PKCS#1)는 부팅에서 변환 명령과 함께 거부한다 |
 | `MEDIA_BASE_URL` | 빈 값 | 영상이 나가는 CDN 주소(예 `https://media.pokeclip.com`, 끝 `/` 없음). 정책 범위가 종류마다 `{이 값}/{kind}/{streamId}/*`다 |
 | `PLAYBACK_COOKIE_DOMAIN` | 빈 값 | 출입증 쿠키의 `Domain`. 운영은 `.pokeclip.com`. 비면 호스트 전용(로컬) |
-| `RENDER_ENABLED` | `false` | 영상 만들기 주문(POK-125). 켜면 아래 넷이 필수고 하나라도 비면 부팅이 거부된다. 꺼져 있으면 주문 문만 503 `render_unavailable` |
+| `RENDER_ENABLED` | `false` | 영상 만들기 주문(POK-125). 켜면 아래 넷이 필수고 하나라도 비면 부팅이 거부된다. 꺼져 있으면 주문 문과 완성 영상 주소 문(POK-247)이 503 `render_unavailable` |
 | `RENDER_QUEUE_URL` | 빈 값 | 주문줄(표준 SQS). 실물 `pokeclip-jobs-render`(2026-09-15) |
 | `RENDER_DLQ_URL` | 빈 값 | 실패 큐. 정리기가 1분마다 읽어 `SWEPT`로 닫는다. 실물 `pokeclip-jobs-render-dlq` |
 | `CLIPS_BUCKET` | 빈 값 | 완성 영상 창고. 주문서 `outputPrefix` = `s3://{이 값}/clips/{clipId}`. 실물 `pokeclip-clips-2557`(60일 만료) |
@@ -1319,6 +1319,7 @@ JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리�
 | `PUT …/{streamId}/recipes/{id}` (POK-124) | 같음 | 같음 |
 | `POST …/{streamId}/recipes/{id}/renders` (POK-125) | 같음 → 편집본이 그 방송 것인가 | 같음 · **404** `recipe_not_found` |
 | `GET …/{streamId}/clips/{clipId}` (POK-125) | 같음 → 영상이 그 방송 것인가 | 같음 · **404** `clip_not_found` |
+| `POST …/{streamId}/clips/{clipId}/file-access` (POK-247) | 같음 | 같음 |
 | `GET /api/clip/library` (POK-243) | auth `accessible` — **방송 목록과 같은 판정**(볼 수 있는 스트리머 번호로만 조회) | 그 줄이 목록에 **안 나온다**(200) |
 | `GET /api/clip/library/{recipeId}` (POK-243) | 편집본 → 그 편집본의 방송 → `BroadcastAccessGuard` | **404** `recipe_not_found` — `broadcast_not_found`로 안 나간다(그 번호의 편집본이 있다는 것이 샌다) |
 
@@ -1997,7 +1998,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 **봉투** — `{"id","streamId","recipeId","recipeVersion","requestedBy","status","progress":{"percent","stage","attempt","jobId"},"outputs","error":{"code","message"},"createdAt","updatedAt"}`.
 `status`는 **`queued`(주문됨) → `rendering`(만드는 중) → `rendered`(완성) | `failed`(실패)** 넷 — 2번 화면의 거르기 값이라 이름을 바꾸지 않는다.
 업로드 상태는 POK-220이 더한다. `outputs`는 완성했을 때 일꾼이 보고한 산출물 목록(`outputId`·`kind`·`s3Key`) 그대로인데
-**화면이 그 키로 영상을 직접 받을 수는 없다**(창고는 비공개) — 내려받기 문은 아직 없다(보관함 POK-243은 목록·상세만이다).
+**화면이 그 키로 영상을 직접 받을 수는 없다**(창고는 비공개): 보고 받을 주소는 아래 「완성 영상 주소」 문(POK-247)이 준다.
 
 **주문의 순서가 계약이다 — 자격 → 편집본 → 조각 준비 → 선점(표) → 발행(큐).**
 - **조각이 컷을 「연속 uploaded」로 다 덮어야 주문한다.** 하나라도 빠지면 409 `source_not_ready`이고 표에도 큐에도 아무것도
@@ -2059,6 +2060,27 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 - `sourceKeys`에 조각의 `width`·`height`가 없다(계약1 초안의 video 항목 필수) — 조각 장부에 그 값이 없다. 일꾼이 ffprobe로 실측한다
 - 큐가 실제로 있어야 한다: 로컬은 LocalStack, dev는 2026-09-15에 만든 실물 큐 둘·창고 하나(README 환경변수 표)
 
+### clip: 완성 영상 주소 (POK-247)
+
+**완성된 영상의 파일마다(영상·자막) 60분짜리 S3 미리서명 주소를 준다.** 창고는 비공개라 화면이 `s3Key`로는 못 받는다.
+같은 주소 하나로 `<video src>` 재생과 내려받기가 다 된다: 주소가 받을 이름(`Content-Disposition: attachment`)을 창고에
+실어 보내는데, 브라우저는 재생 요청에는 그것을 안 본다.
+
+| 문 | 인증 | 응답 |
+|---|---|---|
+| `POST /api/clip/broadcasts/{streamId}/clips/{clipId}/file-access` | Bearer JWT | **200** `{"clipId","expiresAt","files":[{"outputId","kind","fileName","url"}]}` · 404 `broadcast_not_found`/`clip_not_found` · **409** `{"error":"clip_not_rendered"}` · 401 · 503 `authorization_unavailable`/`render_unavailable` |
+
+- **순서: 자격 → 영상 → 켜짐 → 완성.** 하나 보기 문과 같은 판정이라 자격 없음과 없는 방송이 같은 404·같은 바닥이다.
+- **완성 전이면 409다.** 빈 `files` 200으로 접지 않는다: 화면이 「파일 없는 영상」으로 읽는다.
+- **`fileName`은 `pokeclip-{clipId}-{outputId}.mp4|.srt`.** 부품이 숫자와 `[a-z0-9-]`(계약6 outputId)뿐이라 따옴표가 못 끼어든다.
+- **CloudFront가 아니라 S3 직결이다.** 재생 출입증(POK-122)의 CloudFront는 영상 원본(live·dvr·vod) 도메인 전용이고
+  완성 영상 창고 앞에는 CDN이 없다. 완성 영상은 한 사람이 한두 번 받는 파일이라 캐시로 얻을 것도 없다.
+- **POST다**: 부를 때마다 새 출입증을 만든다. 주소는 로그에 안 찍는다(한 줄 새면 그 영상이 60분 열린다).
+- **서명은 네트워크를 안 탄다.** clip의 자격증명(SDK 표준 체인)으로 계산만 한다: 운영 역할에 완성 영상 창고 `s3:GetObject`가 있어야
+  주소가 창고에서 통한다. 주소를 덮으면(`RENDER_QUEUE_ENDPOINT`, LocalStack) 경로 방식 주소가 나온다.
+- 수명은 `pokeclip.render.file-url-ttl`(기본 `PT60M`, 0초 초과 7일 이하. 밖이면 부팅을 거부한다: S3 미리서명 한도). 지나면 문을 다시 부른다. **한계**: EC2 역할의 임시 자격증명으로 서명하므로
+  그 자격증명이 먼저 끝나면 주소도 60분 전에 끊긴다(S3 규칙). 화면은 403을 받으면 문을 다시 부르면 된다.
+
 ### clip — 보관함 목록·상세 (POK-243)
 
 **편집자가 보관함 화면을 열면 「내가 볼 수 있는 방송들의 편집본 전부」가 상태별로 나오고, 하나를 누르면 편집 기록과
@@ -2110,7 +2132,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 **알려진 한계**
 - **제목이 없다.** 편집본(계약6)에 제목 칸이 없다 — 제목은 업로드 메타(POK-220)다. 화면은 그때까지 구간·방송 시각으로 보여준다
 - **만든 사람의 이름이 없다** — `creatorId`(회원 번호)뿐이다. clip은 회원 표를 안 읽는다(ADR-022). 화면이 auth에 묻거나, 목록에 이름을 싣는 창구가 따로 필요하다
-- **완성 영상 내려받기 문이 없다** — `latestClip.outputs.s3Key`로 화면이 직접 못 받는다(창고 비공개)
+- 완성 영상은 `latestClip.outputs.s3Key`로 직접 못 받는다(창고 비공개): 「완성 영상 주소」 문(POK-247)으로 받는다
 - **원본 방송의 `vodExpiresAt`은 방송이 끝나야 채워진다**(POK-117) — 방송 중인 편집본은 `null`이다
 - 목록이 `recipes` 전체에서 스트리머로 거른 뒤 최신 영상을 붙인다 — 편집본이 방송당 수십 벌인 규모 전제다(README 편집 저장 절)
 

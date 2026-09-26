@@ -215,6 +215,8 @@ pokeclip:
     reconcile-interval: ${RENDER_RECONCILE_INTERVAL:PT1M}
     # 한 주문의 실행(STARTED) 상한. 이 번째가 마지막 시도다(계약1 attemptOrdinal 한도 3).
     max-attempts: 3
+    # 완성 영상 주소(POK-247)의 수명. 그 사이 영상 재생·내려받기가 된다. 지나면 문을 다시 부른다.
+    file-url-ttl: PT60M
     # 주문서 크기 상한(계약1 2절 200KB).
     max-message-bytes: 204800
 

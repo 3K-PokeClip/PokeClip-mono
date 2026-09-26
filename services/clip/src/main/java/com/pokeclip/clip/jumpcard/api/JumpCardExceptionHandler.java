@@ -236,6 +236,12 @@ public class JumpCardExceptionHandler {
         return json(HttpStatus.CONFLICT, error("source_not_ready"));
     }
 
+    /** 409. 완성 전 영상의 주소를 달라고 했다(POK-247). 빈 목록 200으로 접지 않는다: 화면이 「파일 없는 영상」으로 읽는다. */
+    @ExceptionHandler(RenderErrors.ClipNotRenderedException.class)
+    ResponseEntity<Map<String, Object>> clipNotRendered(RenderErrors.ClipNotRenderedException e) {
+        return json(HttpStatus.CONFLICT, error("clip_not_rendered"));
+    }
+
     /** 422. 주문서가 큐 상한을 넘는다(계약1 2절 {@code MESSAGE_TOO_LARGE} — 발행 API 축의 코드). */
     @ExceptionHandler(RenderErrors.MessageTooLargeException.class)
     ResponseEntity<Map<String, Object>> messageTooLarge(RenderErrors.MessageTooLargeException e) {

@@ -32,6 +32,8 @@ dependencies {
     implementation 'software.amazon.awssdk:sqs'
     // 영상 출입증(POK-122) — CloudFront 서명 쿠키. 클라이언트는 안 만들고 CloudFrontUtilities만 쓴다.
     implementation 'software.amazon.awssdk:cloudfront'
+    // 완성 영상 주소(POK-247): S3 미리서명. S3Presigner는 서명만 하고 HTTP를 안 보내므로 클라이언트 스택과 무관하다.
+    implementation 'software.amazon.awssdk:s3'
     // sqs가 apache5-client를 runtime으로 이미 딸려온다 — 이 줄이 그것을 막는 것은
     // 아니다. 둘 다 SPI(META-INF/services/…SdkHttpService)에 등록되므로 어느 쪽이
     // 쓰일지가 클래스패스 순서에 달리고, Apache가 걸리면 그쪽 wire 로거가 상위

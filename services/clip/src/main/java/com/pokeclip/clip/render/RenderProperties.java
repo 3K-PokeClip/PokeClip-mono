@@ -41,11 +41,21 @@ public record RenderProperties(
         /** 한 주문에 허용하는 실행(STARTED) 횟수. 이 번째가 마지막 시도다(계약1 attemptOrdinal 한도). */
         @Min(1) @Max(10) int maxAttempts,
         /** 주문서 크기 상한(UTF-8 바이트). 계약1 2절 200KB. */
-        @Min(1024) int maxMessageBytes
+        @Min(1024) int maxMessageBytes,
+        /** 완성 영상 주소(POK-247)의 수명. 재생 출입증과 같은 60분: 한 편을 보다가 끊기지 않을 만큼. */
+        @NotNull Duration fileUrlTtl
 ) {
+
+    /** S3 미리서명이 받는 가장 긴 수명. 넘기면 SDK가 서명 때 거절한다. */
+    static final Duration MAX_FILE_URL_TTL = Duration.ofDays(7);
 
     @PostConstruct
     void validateWhenEnabled() {
+        // 켜짐과 무관하게 본다: 범위 밖이면 부팅은 살고 주소를 줄 때마다 500이 난다(PR #197 codex). 켜는 날 드러나면 늦다.
+        if (fileUrlTtl.isZero() || fileUrlTtl.isNegative() || fileUrlTtl.compareTo(MAX_FILE_URL_TTL) > 0) {
+            throw new IllegalStateException("pokeclip.render.file-url-ttl은 0초보다 크고 7일 이하여야 한다(S3 미리서명 한도): "
+                    + fileUrlTtl);
+        }
         if (!enabled) {
             return;
         }
