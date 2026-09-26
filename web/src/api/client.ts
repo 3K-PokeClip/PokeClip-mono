@@ -10,25 +10,39 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    /** 기계가 가르는 사유 코드 — clip은 {error, field}로 준다(예: 409 source_not_ready). 없으면 null */
+    public readonly code: string | null = null,
+    public readonly field: string | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
   }
 }
 
-/** 오류 바디에서 사람이 읽을 문구를 꺼낸다 — auth는 {message}, stream-keys는 {reason}. */
-async function errorMessage(res: Response): Promise<string> {
+/**
+ * 오류 바디를 ApiError로 옮긴다 — 문구는 auth의 {message}, stream-keys의 {reason},
+ * 사유 코드는 clip의 {error, field}. 문구가 없으면 코드로 문구를 만든다.
+ */
+async function errorFrom(res: Response): Promise<ApiError> {
+  let message: string | null = null;
+  let code: string | null = null;
+  let field: string | null = null;
   try {
     const body: unknown = await res.json();
     if (typeof body === 'object' && body !== null) {
-      const { message, reason } = body as Record<string, unknown>;
-      if (typeof message === 'string' && message) return message;
-      if (typeof reason === 'string' && reason) return reason;
+      const b = body as Record<string, unknown>;
+      if (typeof b.message === 'string' && b.message) message = b.message;
+      else if (typeof b.reason === 'string' && b.reason) message = b.reason;
+      if (typeof b.error === 'string' && b.error) code = b.error;
+      if (typeof b.field === 'string' && b.field) field = b.field;
     }
   } catch {
     /* 바디 없음·JSON 아님 — 상태 코드만으로 처리 */
   }
-  return `요청이 실패했다 (${res.status})`;
+  const fallback = code
+    ? `${res.status} ${code}${field ? ` (${field})` : ''}`
+    : `요청이 실패했다 (${res.status})`;
+  return new ApiError(res.status, message ?? fallback, code, field);
 }
 
 /**
@@ -198,14 +212,14 @@ function send(path: string, init: RequestInit): Promise<Response> {
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const res = await send(path, init);
   if (res.status !== 401) {
-    if (!res.ok) throw new ApiError(res.status, await errorMessage(res));
+    if (!res.ok) throw await errorFrom(res);
     return res;
   }
   const refreshed = await refreshSession();
   if (refreshed === 'rotated') {
     const retry = await send(path, init);
     if (retry.status !== 401) {
-      if (!retry.ok) throw new ApiError(retry.status, await errorMessage(retry));
+      if (!retry.ok) throw await errorFrom(retry);
       return retry;
     }
     // 회전 직후에도 401 — 정상 경로가 아니다(서버 측 세션 폐기 등). 세션을 접는다.
