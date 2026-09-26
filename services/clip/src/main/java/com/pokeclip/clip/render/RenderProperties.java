@@ -46,8 +46,16 @@ public record RenderProperties(
         @NotNull Duration fileUrlTtl
 ) {
 
+    /** S3 미리서명이 받는 가장 긴 수명. 넘기면 SDK가 서명 때 거절한다. */
+    static final Duration MAX_FILE_URL_TTL = Duration.ofDays(7);
+
     @PostConstruct
     void validateWhenEnabled() {
+        // 켜짐과 무관하게 본다: 범위 밖이면 부팅은 살고 주소를 줄 때마다 500이 난다(PR #197 codex). 켜는 날 드러나면 늦다.
+        if (fileUrlTtl.isZero() || fileUrlTtl.isNegative() || fileUrlTtl.compareTo(MAX_FILE_URL_TTL) > 0) {
+            throw new IllegalStateException("pokeclip.render.file-url-ttl은 0초보다 크고 7일 이하여야 한다(S3 미리서명 한도): "
+                    + fileUrlTtl);
+        }
         if (!enabled) {
             return;
         }
