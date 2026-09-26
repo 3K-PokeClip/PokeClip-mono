@@ -15,6 +15,7 @@ import com.pokeclip.clip.paging.InvalidListParamException;
 import com.pokeclip.clip.playback.PlaybackErrors;
 import com.pokeclip.clip.recipe.RecipeErrors;
 import com.pokeclip.clip.render.RenderErrors;
+import com.pokeclip.clip.upload.UploadErrors;
 import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -240,6 +241,26 @@ public class JumpCardExceptionHandler {
     @ExceptionHandler(RenderErrors.ClipNotRenderedException.class)
     ResponseEntity<Map<String, Object>> clipNotRendered(RenderErrors.ClipNotRenderedException e) {
         return json(HttpStatus.CONFLICT, error("clip_not_rendered"));
+    }
+
+    // ── POK-220: 유튜브 업로드 주문·일꾼 보고 문이 쓰는 갈래 ──────────
+
+    /** 503. 업로드 주문줄이 꺼져 있다. */
+    @ExceptionHandler(UploadErrors.UploadUnavailableException.class)
+    ResponseEntity<Map<String, Object>> uploadUnavailable(UploadErrors.UploadUnavailableException e) {
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("upload_unavailable"));
+    }
+
+    /** 400. 제목·설명·벌 번호(사람 문) 또는 보고 모양(일꾼 문)이 규칙에 안 맞는다. 값은 안 싣는다. */
+    @ExceptionHandler(UploadErrors.InvalidUploadRequestException.class)
+    ResponseEntity<Map<String, Object>> invalidUpload(UploadErrors.InvalidUploadRequestException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    /** 404(일꾼 문). 모르는 업로드 번호. 바닥을 안 탄다: 서버 간 토큰이다. */
+    @ExceptionHandler(UploadErrors.UploadNotFoundException.class)
+    ResponseEntity<Map<String, Object>> uploadNotFound(UploadErrors.UploadNotFoundException e) {
+        return json(HttpStatus.NOT_FOUND, error("upload_not_found"));
     }
 
     /** 422. 주문서가 큐 상한을 넘는다(계약1 2절 {@code MESSAGE_TOO_LARGE} — 발행 API 축의 코드). */

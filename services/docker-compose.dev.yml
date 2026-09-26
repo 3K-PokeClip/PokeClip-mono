@@ -146,6 +146,11 @@ services:
       RENDER_DLQ_URL: ${RENDER_DLQ_URL:-}
       CLIPS_BUCKET: ${CLIPS_BUCKET:-}
       SEGMENT_BUCKET: ${SEGMENT_BUCKET:-}
+      # 유튜브 업로드 주문(POK-220). 켜면 줄 둘과 위 CLIPS_BUCKET 이 필수다(비면 부팅 거부). 자격증명은 같은 EC2 역할.
+      UPLOAD_ENABLED: ${UPLOAD_ENABLED:-false}
+      UPLOAD_QUEUE_URL: ${UPLOAD_QUEUE_URL:-}
+      UPLOAD_DLQ_URL: ${UPLOAD_DLQ_URL:-}
+      UPLOAD_RECONCILE_INTERVAL: ${UPLOAD_RECONCILE_INTERVAL:-PT1M}
       # 채팅 되감기 문 셋이 물어보는 수집기 주소(POK-234). 위 AUTH_BASE_URL 과 달리
       # 비어도 부팅은 산다 — 그 셋만 503 이고 카드 편집·목록·통로는 그대로 돈다.
       # 그래도 여기 넣는 이유는 「표에만 적혀 있고 compose 가 안 넘겨」 그 기능만 조용히

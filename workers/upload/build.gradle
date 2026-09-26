@@ -1,0 +1,43 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '4.1.0'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.pokeclip'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencyManagement {
+    // Boot BOM은 AWS SDK를 관리하지 않는다. services/clip·렌더 일꾼과 같은 판을 박는다.
+    imports { mavenBom 'software.amazon.awssdk:bom:2.46.7' }
+}
+
+dependencies {
+    // 웹 서버가 없는 일꾼이다. 줄에서 꺼내 유튜브에 올리고 clip에 보고만 한다.
+    implementation 'org.springframework.boot:spring-boot-starter'
+    implementation 'org.springframework.boot:spring-boot-starter-jackson'
+
+    implementation 'software.amazon.awssdk:sqs'
+    implementation 'software.amazon.awssdk:s3'
+    // SDK가 apache5를 runtime으로 딸려와 SPI 후보가 둘이 된다. 클라이언트를 만드는 자리마다 이쪽을 명시한다.
+    implementation 'software.amazon.awssdk:url-connection-client'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.testcontainers:testcontainers-localstack'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}

@@ -17,6 +17,8 @@ import com.pokeclip.clip.render.ClipSnapshot;
 import com.pokeclip.clip.render.RenderJob;
 import com.pokeclip.clip.render.RenderJobRepository;
 import com.pokeclip.clip.render.RenderRequestService;
+import com.pokeclip.clip.upload.UploadRequestService;
+import com.pokeclip.clip.upload.UploadSnapshot;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -58,6 +60,7 @@ public class LibraryService {
     private final ClipRepository clips;
     private final RenderJobRepository jobs;
     private final RenderRequestService render;
+    private final UploadRequestService uploads;
     private final DelegationResolveClient delegation;
     private final BroadcastAccessGuard guard;
     /** 읽기 전용 + REPEATABLE READ — 이유는 클래스 주석. 주입받은 템플릿(READ COMMITTED)을 그대로 쓰면 안 된다. */
@@ -65,13 +68,15 @@ public class LibraryService {
     private final ObjectMapper mapper;
 
     LibraryService(LibraryQuery query, RecipeRepository recipes, ClipRepository clips, RenderJobRepository jobs,
-                   RenderRequestService render, DelegationResolveClient delegation, BroadcastAccessGuard guard,
+                   RenderRequestService render, UploadRequestService uploads, DelegationResolveClient delegation,
+                   BroadcastAccessGuard guard,
                    TransactionTemplate transactions, ObjectMapper mapper) {
         this.query = query;
         this.recipes = recipes;
         this.clips = clips;
         this.jobs = jobs;
         this.render = render;
+        this.uploads = uploads;
         this.delegation = delegation;
         this.guard = guard;
         this.transactions = new TransactionTemplate(transactions.getTransactionManager());
@@ -152,13 +157,16 @@ public class LibraryService {
                 .collect(Collectors.toMap(Clip::getId, Function.identity()));
         Map<Long, RenderJob> jobByClipId = clipIds.isEmpty() ? Map.of() : jobs.findByClipIdIn(clipIds).stream()
                 .collect(Collectors.toMap(RenderJob::getClipId, Function.identity()));
+        Map<Long, UploadSnapshot> uploadByClipId = uploads.latestFor(clipIds).stream()
+                .collect(Collectors.toMap(UploadSnapshot::clipId, Function.identity()));
 
         List<LibraryEntry> entries = new ArrayList<>(rows.size());
         for (LibraryRow row : rows) {
             // 질의가 준 번호는 같은 트랜잭션 안에서 읽었으니 반드시 있다 — 없으면 우리 버그라 500이 맞다.
             Recipe recipe = recipeById.get(row.recipeId());
             ClipSnapshot latest = row.clipId() == null ? null
-                    : render.snapshot(clipById.get(row.clipId()), Optional.ofNullable(jobByClipId.get(row.clipId())));
+                    : render.snapshot(clipById.get(row.clipId()), Optional.ofNullable(jobByClipId.get(row.clipId())),
+                            Optional.ofNullable(uploadByClipId.get(row.clipId())));
             RecipeDocument.Cut cut = recipe.getCutInAtMs() == null ? null
                     : new RecipeDocument.Cut(recipe.getCutInAtMs(), recipe.getCutOutAtMs());
             entries.add(new LibraryEntry(recipe.getId(), recipe.getStreamId(), recipe.getCreatorId(),

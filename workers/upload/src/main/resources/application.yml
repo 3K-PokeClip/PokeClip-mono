@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: upload-worker
+  main:
+    # 사람이 부르는 문이 없다. 줄에서 꺼내 유튜브에 올리고 clip에 보고만 한다.
+    web-application-type: none
+
+pokeclip:
+  upload:
+    queue-url: ${UPLOAD_QUEUE_URL:}
+    queue-endpoint: ${UPLOAD_QUEUE_ENDPOINT:}
+    s3-endpoint: ${S3_ENDPOINT:}
+    s3-path-style: ${S3_PATH_STYLE:false}
+    region: ${AWS_REGION:ap-northeast-2}
+    clip-base-url: ${CLIP_BASE_URL:http://localhost:8081}
+    auth-base-url: ${AUTH_BASE_URL:http://localhost:8082}
+    # clip·auth /internal/** 의 열쇠. 서버 넷과 같은 값이다.
+    internal-token: ${INTERNAL_API_TOKEN:}
+    # 유튜브 이어 올리기 시작 주소. 시험만 가짜 서버로 바꾼다.
+    youtube-upload-url: ${YOUTUBE_UPLOAD_URL:https://www.googleapis.com/upload/youtube/v3/videos}
+    work-dir: ${UPLOAD_WORK_DIR:/tmp/pokeclip-upload}
+    # 한 번에 보내는 조각. 유튜브는 256KiB의 배수를 요구한다(마지막 조각만 예외).
+    chunk-size: 8MB
+    # 큐 설정(900초)과 같아야 한다. 이 값에서 2분 전부터 숨김 시간을 늘린다.
+    visibility-timeout: ${UPLOAD_VISIBILITY_TIMEOUT:900s}
+    poll-wait: 20s
+    # clip 보고와 유튜브 조각 전송이 5xx·끊김일 때 다시 해 보는 간격.
+    retry-delays: 2s,5s,15s
+
+logging:
+  level:
+    # 나가는 요청 헤더에 X-Internal-Token·유튜브 토큰이 실린다. 어떤 스택이 뽑혀도 헤더를 찍지 않게 막는다.
+    org.apache.hc.client5.http: info
+    software.amazon.awssdk.request: info
+    jdk.internal.httpclient: info

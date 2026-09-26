@@ -220,6 +220,20 @@ pokeclip:
     # 주문서 크기 상한(계약1 2절 200KB).
     max-message-bytes: 204800
 
+  upload:
+    # 유튜브 업로드 주문(POK-220). 기본이 꺼짐이다(렌더와 같은 이유). 꺼진 채로 주문 문을 부르면 503 upload_unavailable.
+    # 일꾼 문(/internal/uploads)과 조회는 꺼져 있어도 돈다. 올릴 파일의 창고는 render.output-bucket이다.
+    enabled: ${UPLOAD_ENABLED:false}
+    # 켜져 있을 때만 필수 둘(UploadProperties가 검사한다). jobs-upload + 전용 DLQ.
+    queue-url: ${UPLOAD_QUEUE_URL:}
+    dlq-url: ${UPLOAD_DLQ_URL:}
+    region: ${AWS_REGION:ap-northeast-2}
+    # 렌더 줄과 같은 AWS다. 로컬은 LocalStack 주소.
+    endpoint: ${RENDER_QUEUE_ENDPOINT:}
+    outbox-retry-interval: PT30S
+    # 실패 큐를 훑는 주기. 올리기 주소가 적힌 적 있으면 failed가 아니라 checking으로 닫는다.
+    reconcile-interval: ${UPLOAD_RECONCILE_INTERVAL:PT1M}
+
   playback:
     # 영상 출입증(POK-122). 셋(key-pair-id · private-key-pem · resource-base-url)이 다 비면 「꺼짐」이고
     # 부팅은 산다 — 로컬에는 CloudFront가 없다. 꺼진 채로 문을 부르면 503 playback_signing_unavailable.

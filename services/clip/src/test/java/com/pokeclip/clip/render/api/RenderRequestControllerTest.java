@@ -97,6 +97,7 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
     void 내_흔적을_지운다() {
         jdbc.update("DELETE FROM render_job_events");
         jdbc.update("DELETE FROM render_jobs");
+        jdbc.update("DELETE FROM clip_uploads");
         jdbc.update("DELETE FROM clips");
         jdbc.update("DELETE FROM recipes");
         jdbc.update("DELETE FROM stream_segments");
