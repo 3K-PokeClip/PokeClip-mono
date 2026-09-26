@@ -1,10 +1,14 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { withToastProvider } from '@/test/testProviders';
+import { LIBRARY_FIXTURE } from './libraryFixture';
 import { useLibraryMockState, type LibraryOptions } from './useLibraryMockState';
 
+// 시안 1g 목업 8건과 얼린 시각을 주입한다 — 주입하지 않으면 훅이 clip 보관함 문을 부른다
 function renderLibrary(options?: LibraryOptions) {
-  return renderHook(() => useLibraryMockState(options), { wrapper: withToastProvider });
+  return renderHook(() => useLibraryMockState({ ...LIBRARY_FIXTURE, ...options }), {
+    wrapper: withToastProvider,
+  });
 }
 
 function ids(result: ReturnType<typeof renderLibrary>['result']) {

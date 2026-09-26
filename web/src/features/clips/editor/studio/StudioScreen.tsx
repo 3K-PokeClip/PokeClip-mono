@@ -1,6 +1,28 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ChevronLeft, Scissors } from 'lucide-react';
+import { EmptyState, useToast } from '@/ui';
+import {
+  ClipApiError,
+  createRecipe,
+  defaultRecipe,
+  fetchBroadcast,
+  fetchClip,
+  fetchJumpCard,
+  fetchLibraryDetail,
+  fetchMeLoose,
+  requestRender,
+  updateRecipe,
+  CUT_MAX_MS,
+  CUT_MIN_MS,
+  type BroadcastRow,
+  type ClipSnapshot,
+  type JumpCard,
+  type RecipeDocument,
+} from '@/api/clipEditor';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
 import { TransportBar } from '../TransportBar';
@@ -8,11 +30,33 @@ import { MultitrackTimeline } from './MultitrackTimeline';
 import { ToolPanel } from './ToolPanel';
 import { ToolRail } from './ToolRail';
 import styles from './StudioScreen.module.css';
+import shared from '../editorShared.module.css';
 import { editorIntentForKey, type EditorIntent } from '../editorKeys';
-import { useClipEditorMockState, type ClipEditorOptions } from '../useClipEditorMockState';
+import {
+  useClipEditorMockState,
+  type ClipEditorOptions,
+  type EditorRecipe,
+  type EditorSource,
+  type EditorTrack,
+} from '../useClipEditorMockState';
+import {
+  TRACK_COUNT,
+  fetchStreamerTrackLabels,
+  trackDisplayName,
+  type TrackLabels,
+} from '@/api/audioTracks';
+import { fetchDelegationsAsEditor } from '@/api/editors';
+import { fetchRecordingSpans, type RecordingSpan } from '@/api/mediaPlayback';
+import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
 
 // 시안 1d-a 클립 편집기(스튜디오형). 전폭 자체 헤더를 가지므로 ScreenContainer를 쓰지 않는다
 // (라이브 대시보드 선례). 데이터·동작은 전부 useClipEditorMockState 뒤에 있다.
+//
+// clip 창구 배선(POK-251): 디자인은 그대로고 목업 값만 실제 값으로 바뀐다 —
+//   ?stream=&card=   점프카드 하나를 열어 그 창을 구간으로(처음 만드는 편집본)
+//   ?recipe=         보관함의 저장된 편집본을 다시 연다(GET /api/clip/library/{id})
+// 「편집본 저장」= POST/PUT recipes(계약6, 구간은 타임라인의 핸들 값) · 「영상 만들기」= POST renders.
+// 파형·트랙·AI 자막·이미지·BGM은 백엔드가 없어 빈 채로 둔다(가짜 값을 심지 않는다).
 
 /**
  * 글자를 받는 곳 — 어떤 편집 단축키도 여기서는 비켜선다.
@@ -25,32 +69,18 @@ const TEXT_ENTRY =
   'input:not([type="checkbox"]):not([type="radio"]), textarea, select, [contenteditable]';
 
 /**
- * 어떤 위젯이 어떤 키를 제 것으로 쓰는가.
- *
- * 위젯 단위로 뭉뚱그리면 안 쓰는 키까지 양보한다 — 버튼은 화살표를 안 쓰고
- * 슬라이더는 Space를 안 쓴다. 뭉뚱그린 탓에 「버튼 누른 뒤 시킹이 죽고,
- * 슬라이더 위에서 재생이 안 되는」 상태가 났다. 키마다 주인을 적는다.
- *
- * 여기 없는 키(⌘Z·I·O)는 어떤 위젯도 제 것으로 쓰지 않으므로 늘 통과한다.
+ * 어떤 위젯이 어떤 키를 제 것으로 쓰는가. 키마다 주인을 적는다 — 위젯 단위로 뭉뚱그리면
+ * 안 쓰는 키까지 양보한다(버튼은 화살표를 안 쓰고 슬라이더는 Space를 안 쓴다).
  */
 const KEY_OWNERS: Partial<Record<EditorIntent['kind'], string>> = {
-  // Space는 버튼·스위치를 누른다 — 가로채면 키보드로 아무것도 못 누른다.
-  // 역할로 가른다: 구간 핸들은 <button role="slider">라 태그로 고르면 같이 걸려,
-  // 슬라이더 위에서 Space가 죽는다.
   togglePlay: 'button:not([role]), [role="button"], [role="switch"], [role="tab"], [role="radio"]',
-  // 화살표는 슬라이더가 값을, roving 묶음이 선택을 옮긴다
   seekBy: '[role="slider"], [role="radiogroup"], [role="tablist"]',
 };
 
 /**
  * 타임라인이 **지금** 더 커질 수 있는 양(px). 음수면 이미 그만큼 넘쳤다는 뜻이다.
- *
  * 미리보기 칸에서 신축하는 건 무대(`.stage`) 하나뿐이라, 무대가 최소 높이까지 더 줄 수
- * 있는 여유가 곧 타임라인의 여유다. 타임라인은 `flex: none`, 본문은 `flex: 1`이라 레인이
- * 1px 커지면 무대가 정확히 1px 준다(1:1). 이미 넘친 만큼은 여유에서 뺀다 — 안 빼면
- * 넘친 상태에서 상한이 제자리를 인정해 버린다.
- *
- * 레이아웃이 없는 환경(jsdom)이나 표식을 못 찾으면 `Infinity` — 상한 없음으로 둔다.
+ * 있는 여유가 곧 타임라인의 여유다.
  */
 function timelineHeadroom(previewColumn: HTMLElement | null): number {
   if (previewColumn === null) return Number.POSITIVE_INFINITY;
@@ -63,7 +93,8 @@ function timelineHeadroom(previewColumn: HTMLElement | null): number {
   return spare - spilled;
 }
 
-export function StudioScreen(options: ClipEditorOptions = {}) {
+/** 시안 그대로의 편집기 본체. 옵션(소스·동작)은 마운트 값이다 — 컨테이너가 key로 갈아 끼운다. */
+export function StudioEditor(options: ClipEditorOptions = {}) {
   const state = useClipEditorMockState(options);
   const { togglePlay, seekBy, markIn, markOut, undo, redo } = state;
   const previewColumnRef = useRef<HTMLDivElement>(null);
@@ -71,14 +102,7 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
 
   const headroom = useCallback(() => timelineHeadroom(previewColumnRef.current), []);
 
-  // 창이 낮아지면 끌어둔 높이가 여유를 넘긴다 — 페인트 전에 되돌린다.
-  // 자동 높이(null)는 손대지 않는다: 그건 트랙 수가 정하는 값이라 여기서 px로 굳히면
-  // 화면 배율이 바뀌어도 그대로 남는다. 그 극단은 .timeline의 z-index가 받는다.
   const fitTimeline = useCallback(() => {
-    // 접혀 있으면 맞출 레인이 없다. 이 조건을 여기서 읽어야 의존성에 들어가고, 그래야
-    // 펼치는 순간 아래 레이아웃 효과가 다시 돌아 페인트 전에 높이를 잡는다.
-    // 관찰만 믿으면 늦다 — RO 콜백은 페인트 직전에 도는데 거기서 잡은 rAF는 다음
-    // 프레임이라, 낡은 높이로 한 프레임이 그려진다 (리뷰 #166 2회차).
     if (timelineHeight === null || timelineCollapsed) return;
     const spare = headroom();
     if (Number.isFinite(spare) && spare < 0) setTimelineHeight(timelineHeight + spare);
@@ -86,31 +110,16 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
 
   useLayoutEffect(fitTimeline, [fitTimeline]);
 
-  // 관찰 콜백이 늘 최신 fitTimeline을 보게 한다 — 아래 옵저버를 높이가 바뀔 때마다
-  // 다시 붙이지 않기 위해서다(붙였다 떼는 동안의 변화를 놓친다).
   const fitRef = useRef(fitTimeline);
   useLayoutEffect(() => {
     fitRef.current = fitTimeline;
   }, [fitTimeline]);
 
-  /*
-   * 미리보기 칸의 크기를 바꾸는 모든 경로를 한 문으로 받는다.
-   *
-   * window resize만 듣던 때는 내용 리플로우를 놓쳤다 (리뷰 #166) — 트랜스포트는
-   * flex-wrap이고 "/ 구간 …" 라벨이 구간 편집마다 길어지는데, 줄바꿈이 나도 창 크기는
-   * 그대로라 resize 이벤트가 없었다.
-   *
-   * 접기 토글은 여기 말고 위 레이아웃 효과가 잡는다 — 관찰로 받으면 rAF 한 프레임이
-   * 늦어 낡은 높이가 한 번 그려진다. 이쪽은 그 뒤를 받치는 그물이다.
-   *
-   * 칸 자신과 자식을 함께 본다. 줄바꿈은 칸의 바깥 높이를 안 바꾸고 자식 높이만 바꾼다.
-   */
   useEffect(() => {
     const column = previewColumnRef.current;
     if (column === null || typeof ResizeObserver === 'undefined') return;
     let raf = 0;
     const observer = new ResizeObserver(() => {
-      // 콜백 안에서 곧바로 상태를 바꾸면 같은 프레임에 다시 관찰돼 루프 경고가 난다.
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => fitRef.current());
     });
@@ -128,7 +137,6 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
       if (target?.closest(TEXT_ENTRY) != null) return;
       const intent = editorIntentForKey(event);
       if (intent === null) return;
-      // 이 키의 주인이 포커스 안에 있으면 그쪽에 넘긴다
       const owner = KEY_OWNERS[intent.kind];
       if (owner !== undefined && target?.closest(owner) != null) return;
       event.preventDefault();
@@ -177,5 +185,446 @@ export function StudioScreen(options: ClipEditorOptions = {}) {
       </main>
       <MultitrackTimeline state={state} headroom={headroom} />
     </div>
+  );
+}
+
+// ── 배선: 주소 → 실제 값 → 편집기 ──
+
+/** ms → h:mm:ss 또는 m:ss */
+function formatClock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+  return `${h > 0 ? `${h}:` : ''}${mm}:${String(s).padStart(2, '0')}`;
+}
+
+function dateLabel(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : `${d.getMonth() + 1}월 ${d.getDate()}일`;
+}
+
+interface Loaded {
+  streamId: string;
+  card: JumpCard | null;
+  broadcast: BroadcastRow;
+  /** 방송 시작 기준 창(ms) */
+  window: { startMs: number; endMs: number };
+  saved: { id: number; version: number; document: RecipeDocument } | null;
+  latestClip: ClipSnapshot | null;
+  /** 스트리머가 적어 둔 트랙 이름(POK-240). 못 읽으면 null — 그때는 「트랙 n」으로 보인다 */
+  trackLabels: TrackLabels | null;
+  /** 녹화(재생 서버). 있으면 미리보기에 실제 영상이 나오고, 시각의 기준점도 여기다 */
+  recording: RecordingSpan | null;
+}
+
+/** 녹화 첫 구간 — 방송 기준 0초의 절대 시각. 재생 서버가 없으면 null(그때는 방송 시작 시각이 기준) */
+async function loadRecording(streamId: string): Promise<RecordingSpan | null> {
+  return (await fetchRecordingSpans(streamId))[0] ?? null;
+}
+
+/**
+ * 그 방송 스트리머의 트랙 이름. 방송 줄에 스트리머 번호가 없어 관계로 고른다 — 내 방송이면 나, 편집자면 내가 위임받은
+ * 스트리머(여럿이면 첫 번째: 방송 줄에 번호가 실리기 전까지의 한계).
+ */
+async function loadTrackLabels(broadcast: BroadcastRow): Promise<TrackLabels | null> {
+  try {
+    const streamerId =
+      broadcast.relation === 'OWNER'
+        ? (await fetchMeLoose())?.id
+        : (await fetchDelegationsAsEditor())[0]?.streamerId;
+    return streamerId === undefined ? null : await fetchStreamerTrackLabels(streamerId);
+  } catch {
+    return null;
+  }
+}
+
+const trackId = (index: number) => `track-${index}`;
+
+type Status =
+  | { kind: 'no-card' }
+  | { kind: 'loading' }
+  | { kind: 'error'; message: string }
+  | { kind: 'loaded'; data: Loaded };
+
+function messageOf(e: unknown): string {
+  if (e instanceof ClipApiError) {
+    if (e.status === 409 && e.code === 'source_not_ready')
+      return '영상 조각이 아직 다 안 올라왔어요 — 잠시 뒤 다시';
+    if (e.status === 503 && e.code === 'render_unavailable')
+      return '영상 만들기가 잠시 멈춰 있어요 — 잠시 뒤 다시 해 주세요';
+    if (e.status === 400 && e.field) return `저장할 수 없는 값이 있어요 (${e.field})`;
+  }
+  return e instanceof Error ? e.message : String(e);
+}
+
+async function loadFromCard(streamId: string, cardId: string): Promise<Status> {
+  const [card, broadcast] = await Promise.all([
+    fetchJumpCard(streamId, cardId),
+    fetchBroadcast(streamId),
+  ]);
+  if (card === null)
+    return { kind: 'error', message: `카드 ${cardId}를 방송 ${streamId}에서 찾지 못했어요` };
+  if (broadcast === null || broadcast.startedAt === null) {
+    return { kind: 'error', message: '방송 시작 시각이 없어 구간을 절대 시각으로 못 옮겨요' };
+  }
+  const [trackLabels, recording] = await Promise.all([
+    loadTrackLabels(broadcast),
+    loadRecording(streamId),
+  ]);
+  return {
+    kind: 'loaded',
+    data: {
+      streamId,
+      card,
+      broadcast,
+      window: card.window,
+      saved: null,
+      latestClip: null,
+      trackLabels,
+      recording,
+    },
+  };
+}
+
+async function loadFromRecipe(recipeId: number): Promise<Status> {
+  const detail = await fetchLibraryDetail(recipeId);
+  const broadcast = await fetchBroadcast(detail.streamId);
+  const cut = detail.recipe.cut;
+  if (cut === null)
+    return {
+      kind: 'error',
+      message: `편집본 #${recipeId}은 구간이 없는 템플릿이라 편집기에서 못 열어요`,
+    };
+  if (broadcast === null || broadcast.startedAt === null) {
+    return {
+      kind: 'error',
+      message: '방송 시작 시각이 없어 편집본의 구간을 화면 축으로 못 옮겨요',
+    };
+  }
+  const recording = await loadRecording(detail.streamId);
+  // 🔴 컷(절대 시각)을 화면 축으로 되돌리는 기준점은 녹화 시작이다 — 저장할 때와 같은 기준이어야 제자리로 온다.
+  const base = recording?.startMs ?? Date.parse(broadcast.startedAt);
+  return {
+    kind: 'loaded',
+    data: {
+      streamId: detail.streamId,
+      card: null,
+      broadcast,
+      window: { startMs: cut.inAtMs - base, endMs: cut.outAtMs - base },
+      saved: { id: detail.recipeId, version: detail.recipeVersion, document: detail.recipe },
+      latestClip: detail.latestClip,
+      trackLabels: await loadTrackLabels(broadcast),
+      recording,
+    },
+  };
+}
+
+export function StudioScreen() {
+  const params = useSearchParams();
+  const streamId = params.get('stream');
+  const cardId = params.get('card');
+  const recipeParam = params.get('recipe');
+  const recipeId = recipeParam !== null && /^\d+$/.test(recipeParam) ? Number(recipeParam) : null;
+  const [status, setStatus] = useState<Status>(() =>
+    (streamId && cardId) || recipeId !== null ? { kind: 'loading' } : { kind: 'no-card' },
+  );
+
+  useEffect(() => {
+    if (!(streamId && cardId) && recipeId === null) {
+      setStatus({ kind: 'no-card' });
+      return undefined;
+    }
+    let alive = true;
+    setStatus({ kind: 'loading' });
+    const load = recipeId !== null ? loadFromRecipe(recipeId) : loadFromCard(streamId!, cardId!);
+    load
+      .then((next) => {
+        if (alive) setStatus(next);
+      })
+      .catch((e: unknown) => {
+        if (alive) setStatus({ kind: 'error', message: messageOf(e) });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [streamId, cardId, recipeId]);
+
+  if (status.kind === 'loaded') {
+    // 소스가 바뀌면(다른 카드·편집본) 훅을 새로 마운트한다 — 구간·히스토리는 마운트 값이다.
+    const key = status.data.card
+      ? `card:${status.data.streamId}:${status.data.card.id}`
+      : `recipe:${status.data.saved?.id}`;
+    return <WiredStudio key={key} data={status.data} />;
+  }
+
+  return (
+    <div className={styles.screen}>
+      <header className={shared.header}>
+        <Link href="/clips/library" className={shared.backLink} aria-label="보관함으로">
+          <ChevronLeft size={17} aria-hidden />
+        </Link>
+        <div className={shared.headerTitleBlock}>
+          <h1 className={shared.headerTitle}>클립 편집</h1>
+          <div className={shared.headerMeta}>
+            {status.kind === 'loading'
+              ? '불러오는 중…'
+              : status.kind === 'error'
+                ? '못 열었어요'
+                : '열 편집본이 없어요'}
+          </div>
+        </div>
+      </header>
+      <main className={styles.body}>
+        <div style={{ padding: '2rem', width: '100%' }}>
+          {status.kind === 'no-card' ? (
+            <EmptyState
+              icon={<Scissors size={21} />}
+              title="카드에서 「편집」을 누르거나 보관함에서 편집본을 여세요"
+              description="라이브 대시보드의 하이라이트 카드나 보관함의 편집본에서 편집을 시작해요."
+            />
+          ) : status.kind === 'error' ? (
+            <p role="alert">불러오지 못했어요: {status.message}</p>
+          ) : (
+            <p role="status">카드·방송을 불러오는 중…</p>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+/** 저장·주문 좌표. 서버가 준 판 번호·영상 상태를 헤더 문구로 보여 준다. */
+interface SaveState {
+  recipeId: number | null;
+  version: number | null;
+  busy: 'save' | 'render' | null;
+  clip: ClipSnapshot | null;
+  label: string;
+}
+
+function clipLabel(clip: ClipSnapshot): string {
+  switch (clip.status) {
+    case 'queued':
+      return `영상 #${clip.id} 주문됨`;
+    case 'rendering':
+      return `영상 #${clip.id} 만드는 중 ${clip.progress?.percent ?? 0}%`;
+    case 'rendered':
+      return `영상 #${clip.id} 완성`;
+    case 'failed':
+      return `영상 #${clip.id} 실패(${clip.error?.code ?? '?'})`;
+  }
+}
+
+function WiredStudio({ data }: { data: Loaded }) {
+  const { toast } = useToast();
+  const { streamId, card, broadcast, window, saved, latestClip, trackLabels, recording } = data;
+  const startedAt = broadcast.startedAt!;
+  // 카드·조각의 위치는 녹화 첫 조각 기준이다(조각 장부의 축) — 방송 시작 편지 시각과 수십 초 어긋날 수 있다.
+  const base = recording?.startMs ?? Date.parse(startedAt);
+
+  const initialRange = useMemo(
+    () => ({ startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 }),
+    [window],
+  );
+  // 실재생 — 녹화가 있을 때만 어댑터를 넘긴다(한 마운트 동안 있거나 없거나 고정: 훅의 규칙).
+  const video = useEditorVideoPlayback({
+    streamId,
+    recordingStartMs: recording?.startMs ?? 0,
+    recordingSeconds: recording?.durationSeconds ?? 0,
+    initialRange,
+  });
+
+  const [save, setSave] = useState<SaveState>(() => ({
+    recipeId: saved?.id ?? null,
+    version: saved?.version ?? null,
+    busy: null,
+    clip: latestClip,
+    label: saved ? `v${saved.version} 저장됨` : '저장 안 됨',
+  }));
+  const saveRef = useRef(save);
+  saveRef.current = save;
+
+  const source = useMemo<EditorSource>(() => {
+    const endedMs = broadcast.endedAt ? Date.parse(broadcast.endedAt) - base : null;
+    // 방송 길이 — 녹화가 있으면 녹화 길이, 끝났으면 실제 길이, 아니면 창 끝에 1분 여유
+    const totalSeconds = Math.max(
+      recording?.durationSeconds ?? (endedMs ?? window.endMs + 60_000) / 1000,
+      window.endMs / 1000,
+    );
+    // 🔴 구간은 **그 하이라이트 안에서만** 잡는다(사용자 확정 2026-09-17) — 카드가 잡아 준 시작~끝이 곧 양쪽 한계이고,
+    //    편집자는 그 안에서 줄이기만 한다. 방송의 다른 장면으로는 핸들이 나가지 않는다.
+    //    저장된 편집본을 다시 열 때는 카드가 없어 저장된 구간이 한계가 된다(다시 넓히려면 카드에서 새로 연다).
+    const minSeconds = window.startMs / 1000;
+    const durationSeconds = Math.min(totalSeconds, window.endMs / 1000);
+    return {
+      clipTitle: card ? `점프카드 #${card.id}` : `편집본 #${saved?.id}`,
+      sourceLabel: `${dateLabel(startedAt)} 방송 · ${card ? `카드 ${formatClock(card.streamTimestampMs)}` : `구간 ${formatClock(window.startMs)}`}`,
+      durationSeconds,
+      minSeconds,
+      range: { startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 },
+    };
+  }, [broadcast.endedAt, base, window, card, saved, startedAt, recording]);
+
+  /** 타임라인의 구간(방송 시작 기준 초) → 계약6 컷(절대 ms). 5초~3분 밖이면 저장 문이 거절하므로 여기서 맞춘다. */
+  const documentFor = useCallback(
+    (recipe: EditorRecipe): RecipeDocument => {
+      const inAtMs = base + Math.round(recipe.range.startSeconds * 1000);
+      const rawLength = Math.round((recipe.range.endSeconds - recipe.range.startSeconds) * 1000);
+      const length = Math.min(CUT_MAX_MS, Math.max(CUT_MIN_MS, rawLength));
+      const cut = { inAtMs, outAtMs: inAtMs + length };
+      // 켜 둔 트랙만 믹스된다(계약6). 0(최종 믹스)과 1~5는 같이 못 넣는다 — 소스 트랙을 하나라도 켰으면 0을 뺀다.
+      let selected = Array.from({ length: TRACK_COUNT }, (_, i) => i)
+        .filter((i) => !(recipe.trackMuted[trackId(i)] ?? i !== 0))
+        .map((i) => ({
+          trackId: i,
+          gain: Math.min(2, Math.max(0, (recipe.trackVolumes[trackId(i)] ?? 100) / 100)),
+        }));
+      if (selected.some((t) => t.trackId !== 0)) selected = selected.filter((t) => t.trackId !== 0);
+      if (selected.length === 0) selected = [{ trackId: 0, gain: 1 }];
+      const base0 = saved ? { ...saved.document, cut } : defaultRecipe(streamId, cut);
+      return { ...base0, audio: { tracks: selected } };
+    },
+    [base, saved, streamId],
+  );
+
+  const saveDraft = useCallback(
+    (recipe: EditorRecipe) => {
+      const current = saveRef.current;
+      if (current.busy !== null) return;
+      const doc = documentFor(recipe);
+      setSave((s) => ({ ...s, busy: 'save', label: '저장하는 중…' }));
+      (current.recipeId === null
+        ? createRecipe(streamId, doc)
+        : updateRecipe(streamId, current.recipeId, doc)
+      )
+        .then((snap) => {
+          setSave((s) => ({
+            ...s,
+            busy: null,
+            recipeId: snap.id,
+            version: snap.recipeVersion,
+            label: `편집본 #${snap.id} v${snap.recipeVersion} 저장됨`,
+          }));
+          toast({ tone: 'success', title: `편집본 #${snap.id} 저장됨 (v${snap.recipeVersion})` });
+        })
+        .catch((e: unknown) => {
+          const message = messageOf(e);
+          setSave((s) => ({ ...s, busy: null, label: `저장 실패 · ${message}` }));
+          toast({ tone: 'error', title: '저장 실패', description: message });
+        });
+    },
+    [documentFor, streamId, toast],
+  );
+
+  const requestUpload = useCallback(() => {
+    const current = saveRef.current;
+    if (current.busy !== null) return;
+    if (current.recipeId === null) {
+      toast({
+        tone: 'warning',
+        title: '먼저 편집본을 저장해요',
+        description: '영상은 저장된 편집본으로 만들어요.',
+      });
+      return;
+    }
+    setSave((s) => ({ ...s, busy: 'render', label: '영상 주문하는 중…' }));
+    requestRender(streamId, current.recipeId)
+      .then((clip) => {
+        setSave((s) => ({
+          ...s,
+          busy: null,
+          clip,
+          label: `편집본 #${s.recipeId} v${s.version} · ${clipLabel(clip)}`,
+        }));
+        toast({
+          tone: 'success',
+          title: `${clipLabel(clip)} — 다 만들어지면 보관함에서 완성으로 바뀌어요`,
+        });
+      })
+      .catch((e: unknown) => {
+        const message = messageOf(e);
+        setSave((s) => ({ ...s, busy: null, label: `주문 실패 · ${message}` }));
+        toast({ tone: 'error', title: '영상 만들기 실패', description: message });
+      });
+  }, [streamId, toast]);
+
+  // 주문한 영상이 끝날 때까지 5초마다 상태를 다시 읽는다 — 일꾼의 보고가 clips 표를 바꾼다.
+  const clipId = save.clip?.id ?? null;
+  const clipDone =
+    save.clip === null || save.clip.status === 'rendered' || save.clip.status === 'failed';
+  useEffect(() => {
+    if (clipId === null || clipDone) return undefined;
+    const t = globalThis.setInterval(() => {
+      fetchClip(streamId, clipId)
+        .then((clip) =>
+          setSave((s) => ({
+            ...s,
+            clip,
+            label: `편집본 #${s.recipeId} v${s.version} · ${clipLabel(clip)}`,
+          })),
+        )
+        .catch(() => {
+          /* 다음 틱에 다시 */
+        });
+    }, 5_000);
+    return () => globalThis.clearInterval(t);
+  }, [streamId, clipId, clipDone]);
+
+  // 오디오 탭의 트랙 여섯 — 이름은 스트리머 설정에서, 켜짐·볼륨은 저장된 편집본에서(없으면 최종 믹스만 켬).
+  const trackSetup = useMemo(() => {
+    const savedTracks = new Map(
+      (saved?.document.audio.tracks ?? [{ trackId: 0, gain: 1 }]).map((t) => [t.trackId, t.gain]),
+    );
+    const tracks: EditorTrack[] = [];
+    const muted: Record<string, boolean> = {};
+    const volumes: Record<string, number> = {};
+    for (let i = 0; i < TRACK_COUNT; i += 1) {
+      const gain = savedTracks.get(i);
+      muted[trackId(i)] = gain === undefined;
+      volumes[trackId(i)] = Math.round(Math.min(1, gain ?? 1) * 100);
+      tracks.push({
+        id: trackId(i),
+        kind: 'mic',
+        label: trackDisplayName(i, trackLabels?.[i]),
+        volume: 100,
+        muted: false,
+        clips: [],
+      });
+    }
+    return { tracks, muted, volumes };
+  }, [saved, trackLabels]);
+
+  const actions = useMemo(() => ({ saveDraft, requestUpload }), [saveDraft, requestUpload]);
+  const label =
+    save.clip && save.busy === null && !save.label.includes('영상 #')
+      ? `${save.label} · ${clipLabel(save.clip)}`
+      : save.label;
+
+  return (
+    <>
+      {recording ? (
+        // 보이지 않는 영상 노드 하나 — 프레임은 미리보기 칸의 캔버스들이 옮겨 그린다(VideoSurface).
+        <video
+          ref={video.videoRef}
+          src={video.src || undefined}
+          playsInline
+          preload="auto"
+          style={{ position: 'fixed', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
+        />
+      ) : null}
+      <StudioEditor
+        playback={recording ? video.playback : undefined}
+        previewVideo={recording ? video.video : null}
+        source={source}
+        actions={actions}
+        autosaveLabel={label}
+        uploadLabel="영상 만들기"
+        tracks={trackSetup.tracks}
+        initialTrackMuted={trackSetup.muted}
+        initialTrackVolumes={trackSetup.volumes}
+      />
+    </>
   );
 }

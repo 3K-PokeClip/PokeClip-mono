@@ -8,7 +8,8 @@ const STATUS_BADGE: Record<PublishStatus, { label: string; tone: BadgeTone }> = 
   published: { label: '발행됨', tone: 'success' },
 };
 
-// 디자인 1a 우측 — 발행 현황 카드. "라이브러리"(1g 보관함)는 M2라 링크 자리만.
+// 디자인 1a 우측 — 발행 현황 카드. 업로드·발행 백엔드가 없어 rows는 늘 비어 있고
+// 「준비 중」을 그린다. 행 렌더는 백엔드가 생기면 그대로 쓴다.
 export function PublishStatusCard({ rows }: { rows: PublishRow[] }) {
   return (
     <Card variant="outline" padding={0}>
@@ -18,28 +19,32 @@ export function PublishStatusCard({ rows }: { rows: PublishRow[] }) {
           라이브러리
         </span>
       </div>
-      <ul className={styles.asideRows}>
-        {rows.map((row) => {
-          const badge = STATUS_BADGE[row.status];
-          return (
-            <li key={row.id} className={styles.asideRow}>
-              <span className={styles.asideRowTitle}>{row.title}</span>
-              {row.status === 'uploading' && row.progress != null ? (
-                <Progress
-                  value={row.progress}
-                  size="sm"
-                  label="업로드 진행률"
-                  className={styles.rowProgress}
-                />
-              ) : null}
-              {row.note ? <span className={styles.asideRowNote}>{row.note}</span> : null}
-              <Badge tone={badge.tone} variant="soft" size="sm">
-                {badge.label}
-              </Badge>
-            </li>
-          );
-        })}
-      </ul>
+      {rows.length === 0 ? (
+        <p className={styles.emptyState}>준비 중</p>
+      ) : (
+        <ul className={styles.asideRows}>
+          {rows.map((row) => {
+            const badge = STATUS_BADGE[row.status];
+            return (
+              <li key={row.id} className={styles.asideRow}>
+                <span className={styles.asideRowTitle}>{row.title}</span>
+                {row.status === 'uploading' && row.progress != null ? (
+                  <Progress
+                    value={row.progress}
+                    size="sm"
+                    label="업로드 진행률"
+                    className={styles.rowProgress}
+                  />
+                ) : null}
+                {row.note ? <span className={styles.asideRowNote}>{row.note}</span> : null}
+                <Badge tone={badge.tone} variant="soft" size="sm">
+                  {badge.label}
+                </Badge>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </Card>
   );
 }

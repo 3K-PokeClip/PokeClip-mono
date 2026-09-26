@@ -7,7 +7,9 @@ import type { LiveNow } from './useHomeMockState';
 
 // 디자인 1a ② — 방송 중일 때만 노출되는 라이브 밴드.
 // 두 액션 모두 라이브 대시보드(1b)로 간다 — "카드 검토"는 우측 카드 목록이 목적지다.
+// 시청자 수·클립 완료 수는 줄 창구가 없어 「준비 중」으로 적는다.
 export function LiveNowBand({ live }: { live: LiveNow }) {
+  const dashboardHref = `/broadcast/livenow?stream=${encodeURIComponent(live.streamId)}`;
   return (
     <section aria-label="라이브" className={styles.liveSection} data-tour-id={TOUR_TARGET.liveBand}>
       <h2 className={styles.sectionLabel}>
@@ -17,7 +19,9 @@ export function LiveNowBand({ live }: { live: LiveNow }) {
       <div className={styles.liveBand}>
         <Thumb label="라이브 방송 화면" className={styles.liveThumb}>
           <span className={styles.livePill}>LIVE {live.uptimeLabel}</span>
-          <span className={styles.viewerPill}>시청자 {live.viewers}</span>
+          <span className={styles.viewerPill}>
+            {live.viewers === null ? '시청자 준비 중' : `시청자 ${live.viewers}`}
+          </span>
         </Thumb>
         <div className={styles.liveBody}>
           <div className={styles.liveMetaRow}>
@@ -28,13 +32,18 @@ export function LiveNowBand({ live }: { live: LiveNow }) {
           </div>
           <div className={styles.liveTitle}>{live.title}</div>
           <div className={styles.liveStats}>
-            감지된 카드 <b>{live.detectedCards}</b> · 클립 완료 <b>{live.completedClips}</b>
+            감지된 카드 <b>{live.detectedCards}</b> · 클립 완료{' '}
+            {live.completedClips === null ? (
+              <span className={styles.emptyInline}>준비 중</span>
+            ) : (
+              <b>{live.completedClips}</b>
+            )}
           </div>
           <div className={styles.liveActions}>
-            <Link href="/broadcast/livenow" className={styles.solidLink}>
+            <Link href={dashboardHref} className={styles.solidLink}>
               대시보드 열기
             </Link>
-            <Link href="/broadcast/livenow" className={styles.ghostLink}>
+            <Link href={dashboardHref} className={styles.ghostLink}>
               카드 검토
             </Link>
           </div>

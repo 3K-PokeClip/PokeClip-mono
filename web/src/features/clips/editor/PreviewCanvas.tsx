@@ -3,6 +3,7 @@
 import { useRef } from 'react';
 import { CropOverlay } from './CropOverlay';
 import { CropResult } from './CropResult';
+import { VideoSurface } from './VideoSurface';
 import styles from './editorShared.module.css';
 import type { ClipEditorMockState } from './useClipEditorMockState';
 
@@ -34,7 +35,13 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
       data-border={state.layout === 'split' && state.splitBorder ? 'on' : undefined}
     >
       {state.regions.map((region) => (
-        <CropResult key={region.id} label={region.label} placement={region.placement} />
+        <CropResult
+          key={region.id}
+          label={region.label}
+          placement={region.placement}
+          video={state.previewVideo}
+          crop={region.crop ?? null}
+        />
       ))}
       {subtitleText !== null ? (
         <span
@@ -63,7 +70,11 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
               // 프레임은 판 기준 %로 놓인다 — 판이 소스와 다른 비율이면 영상 위에서 어긋난다
               style={{ ['--pc-ar' as string]: String(state.sourceAspect) }}
             >
-              <span className={styles.sourcePlaceholder}>원본 방송 화면 16:9</span>
+              {state.previewVideo ? (
+                <VideoSurface video={state.previewVideo} />
+              ) : (
+                <span className={styles.sourcePlaceholder}>원본 방송 화면 16:9</span>
+              )}
               {state.regions.map((region, index) => (
                 <CropOverlay
                   key={region.id}

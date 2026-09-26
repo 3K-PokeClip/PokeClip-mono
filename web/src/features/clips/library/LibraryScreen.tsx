@@ -24,6 +24,8 @@ import styles from './LibraryScreen.module.css';
 export function LibraryScreen(options: LibraryOptions = {}) {
   const {
     now,
+    loading,
+    error,
     role,
     clips,
     totalCount,
@@ -144,7 +146,15 @@ export function LibraryScreen(options: LibraryOptions = {}) {
           </div>
         ) : null}
 
-        {totalCount === 0 ? (
+        {error !== null ? (
+          <p className={styles.filterEmpty} role="alert">
+            편집본 목록을 못 읽었어요: {error}
+          </p>
+        ) : loading ? (
+          <p className={styles.filterEmpty} role="status">
+            편집본을 불러오는 중…
+          </p>
+        ) : totalCount === 0 ? (
           <EmptyState
             icon={<FolderOpen size={21} />}
             title="아직 보관한 편집본이 없어요"

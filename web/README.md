@@ -100,17 +100,33 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 
 **계정 화면 계약.** 표시 이름·프로필 사진은 auth 서버에 저장된다(`PATCH /api/auth/me` · `PUT /api/auth/me/photo`, POK-208 ← 서버 POK-207). 두 응답이 `GET /api/auth/me`와 같은 모양이라 `['auth','me']` 캐시를 통째로 덮는다 — 헤더·사이드바가 재조회 없이 따라온다. **로컬·CI에서 사진 업로드는 503(`PHOTO_STORAGE_DISABLED`)이 정상이다** — auth의 `PROFILE_PHOTO_*` env가 비면 사진 기능만 꺼진다(`services/README.md` 「사진 창고 다섯」). 배선 버그가 아니다. 사진 주소(`profileImageUrl`)는 서버가 준 것을 그대로 쓴다 — `token` 쿼리가 서명값이라 조립하지 않으며, `null`이면 이니셜을 그린다. 사진 모달의 단계는 시안 1p(선택→업로드→크롭)와 달리 **선택→크롭→업로드**다 — 서버가 잘라낸 최종 그림만 받는다.
 
+**clip 서버 연결 (POK-251).** 홈·라이브·지난 방송·편집기·보관함은 clip 창구에서 실제 값을 받는다. 요청은 전부
+로그인 세션의 `apiFetch`를 거친다(Bearer·401 회전) — clip 거절 사유(`{error, field}`)는 `ApiError.code`·`field`로 오고,
+`src/api/clipEditor.ts`가 `ClipApiError`로 옮긴다(예: 409 `source_not_ready`). 규칙 넷:
+
+- **목업은 기본값이 아니라 주입값이다.** 편집기·지난 방송·보관함 훅은 시안 목업을 시험·스토리북용 고정 데이터로 옮겼다
+  (`vodListFixture.ts`·`libraryFixture.ts`, 편집기는 `source`를 안 주면 목업). 실제 화면은 서버 값만 그리고, 줄 백엔드가
+  없는 칸(AI 자막·제목 추천·이미지·BGM·발행 현황)은 **「준비 중」**이라고만 말한다. 가짜 값을 지어내지 않는다.
+- **방송이 없으면 꺼짐 화면이다.** 라이브 화면은 10초마다 「방송 중」 목록을 다시 물어(`useLiveStreamSelection`)
+  없으면 `LiveOfflineScreen`을, 생기면 새로 고침 없이 대시보드를 그린다. `?mock=offline`은 개발 전용 시안 토글로 남았다.
+- **영상이 없으면 흉내 내지 않는다.** 플레이어는 소스가 없으면 「영상 신호 없음」 자리를 그린다. 재생 흉내·가짜 채팅
+  오버레이는 `simulate`를 켤 때만(스토리북·시험) 돈다.
+- 🔴 **편집 구간의 시각 기준점.** 카드·조각의 ms는 방송 시작 편지가 아니라 **녹화 첫 조각** 기준이다. 편집기는 기준점을
+  녹화 재생 서버의 첫 구간에서 잡고, 재생 서버가 없으면 방송 시작 시각으로 대신한다(수십 초 어긋날 수 있다). clip이 기준점을
+  응답에 실어 주는 것이 남은 숙제다.
+
 **404 계약.** `app/not-found.tsx` 하나가 두 경우를 다 받는다 — 어떤 경로에도 안 걸린 주소, 그리고 상세 화면이 `notFound()`를 던진 경우. **자원이 없으면(만료·삭제·권한 회수) 상세 화면은 `notFound()`를 던져 이 화면을 재사용한다** — 「없음」과 「만료」를 문구로 가르지 않는다 (POK-204 · ADR-045). 루트에 두는 게 조건이다: `(dock)` 안에 두면 `AuthGuard`가 먼저 걸려 비로그인 사용자에게 404 대신 `/login`이 뜬다.
 
 ### 환경변수 (`.env.example` → `.env.local`)
 
-| 변수                              | 값(로컬)                 | 용도                                                                            |
-| --------------------------------- | ------------------------ | ------------------------------------------------------------------------------- |
-| `AUTH_API_URL`                    | `http://localhost:8082`  | auth 서버 — `/api/auth/*` rewrites 프록시 대상                                  |
-| `CLIP_API_URL`                    | `http://localhost:8081`  | clip 서버 — `/api/clip/*` rewrites 프록시 대상                                  |
-| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`    | 구글 OAuth 클라이언트 ID | 로그인 동의 URL 조립 — 백엔드 `GOOGLE_CLIENT_ID`와 같은 값                      |
-| `NEXT_PUBLIC_MEDIA_STUB_URL`      | 스텁 m3u8 주소           | 플레이어 개발용 정적 세그먼트 ([`infra/compose/stub/`](../infra/compose/stub/)) |
-| `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL` | LL-HLS 베이스            | 진짜 미디어 서버 (`{base}/{streamId}/index.m3u8`)                               |
+| 변수                                  | 값(로컬)                   | 용도                                                                            |
+| ------------------------------------- | -------------------------- | ------------------------------------------------------------------------------- |
+| `AUTH_API_URL`                        | `http://localhost:8082`    | auth 서버 — `/api/auth/*` rewrites 프록시 대상                                  |
+| `CLIP_API_URL`                        | `http://localhost:8081`    | clip 서버 — `/api/clip/*` rewrites 프록시 대상                                  |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`        | 구글 OAuth 클라이언트 ID   | 로그인 동의 URL 조립 — 백엔드 `GOOGLE_CLIENT_ID`와 같은 값                      |
+| `NEXT_PUBLIC_MEDIA_STUB_URL`          | 스텁 m3u8 주소             | 플레이어 개발용 정적 세그먼트 ([`infra/compose/stub/`](../infra/compose/stub/)) |
+| `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | LL-HLS 베이스              | 진짜 미디어 서버 (`{base}/{streamId}/index.m3u8`)                               |
+| `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | 녹화 재생 서버 (비워도 됨) | 끝난 방송 다시보기·편집기 미리보기 (`{base}/list`·`{base}/get`, POK-251)        |
 
 서버 주소는 **코드에 하드코딩하지 않는다** — env 참조만. env가 없으면 해당 rewrites가
 아예 걸리지 않으므로 백엔드 없이도 **기동·빌드는 된다**. 다만 env가 있는데 백엔드가 안
