@@ -43,7 +43,13 @@ const STATE_BY_STATUS: Record<
   { state: CardViewState; tone: BadgeTone; label: string; dimmed: boolean; showActions: boolean }
 > = {
   scored: { state: 'ready', tone: 'point', label: '검토 대기', dimmed: false, showActions: true },
-  manual: { state: 'manual', tone: 'neutral', label: '수동 마킹', dimmed: false, showActions: true },
+  manual: {
+    state: 'manual',
+    tone: 'neutral',
+    label: '수동 마킹',
+    dimmed: false,
+    showActions: true,
+  },
   editing: {
     state: 'processing',
     tone: 'accent',
@@ -51,7 +57,13 @@ const STATE_BY_STATUS: Record<
     dimmed: false,
     showActions: false,
   },
-  clipped: { state: 'ready', tone: 'success', label: '클립 완료', dimmed: false, showActions: true },
+  clipped: {
+    state: 'ready',
+    tone: 'success',
+    label: '클립 완료',
+    dimmed: false,
+    showActions: true,
+  },
   unprocessed: {
     state: 'ready',
     tone: 'neutral',
@@ -63,6 +75,17 @@ const STATE_BY_STATUS: Record<
 };
 
 export function cardViewFor(highlight: LiveHighlight): HighlightCardView {
+  // 내가 집은 카드는 「편집 중」이어도 잠그지 않는다 — 잠그면 편집기에서 나온 뒤 다시 못 들어간다
+  // (2026-09-17 실방송 시험). 남이 집은 카드만 시안대로 단추를 감춘다.
+  if (highlight.status === 'editing' && highlight.claimedByMe) {
+    return {
+      state: 'ready',
+      badgeTone: 'accent',
+      badgeLabel: '내가 편집 중',
+      dimmed: false,
+      showActions: true,
+    };
+  }
   const base = STATE_BY_STATUS[highlight.status];
   return {
     state: base.state,

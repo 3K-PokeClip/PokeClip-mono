@@ -1,14 +1,14 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { apiFetch } from '@/api/client';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useToast } from '@/ui';
+import { playbackConfigured } from '@/api/mediaPlayback';
 import { excludeLive, filterByPeriod } from './vodListView';
 
-// 시안 1f 지난 방송 목록의 목업 상태.
-//
-// 목록 문(`GET /api/clip/broadcasts?state=past` — POK-174·ADR-055)은 이미 있지만 VOD 준비
-// 상태를 줄 백엔드(B5)가 아직 없어 전부 목업이다. 연동 티켓에서 이 훅 내부만 useQuery로
-// 갈아끼우면 화면은 그대로 쓴다(useLiveMockState가 라이브 화면에 쓴 방식과 같다).
+// 시안 1f 지난 방송 목록의 상태. 목록은 clip `GET /api/clip/broadcasts`(POK-174·ADR-055)에서 온다(POK-251).
+// VOD 준비 상태를 줄 백엔드(B5)가 아직 없어, 녹화 재생 서버가 설정된 곳에서만 끝난 방송을 「다시 보기 가능」으로 본다.
+// 방송 제목도 명부에 칸이 없어 아직 방송 번호로 보인다.
 //
 // ⚠ VodBroadcast는 계약 미러다 — services/clip `BroadcastListResponse.Item`과 칸 이름·값이
 // 같다. 실연동 때 화면을 안 고치려면 이 모양을 지켜야 한다. 계약에 없는 표기값은 아래
@@ -73,6 +73,8 @@ export interface VodListOptions {
   broadcasts?: VodBroadcast[];
   visuals?: Record<string, VodRowVisual>;
   downloads?: Record<string, VodDownloadState>;
+  /** D-day·기간 계산의 기준 시각 — 시험이 얼린다. 없으면 지금 */
+  now?: Date;
 }
 
 export interface VodListMockState {
@@ -98,157 +100,115 @@ export interface VodListMockState {
 // 「지금」을 고정한다. 클라이언트 시계로 계산하면 하이드레이션이 어긋나고(MOCK_GREETING 선례),
 // 목업 날짜와 함께 얼면 D-day가 결정적이라 테스트가 시계를 조작할 필요도 없다.
 // 연동 때는 서버 응답이 CSR로 오므로 이 상수가 `new Date()`가 된다 — 훅 내부만 바뀐다.
-const MOCK_NOW = new Date('2026-08-24T21:00:00+09:00');
-
-const HOUR_MS = 60 * 60 * 1000;
-const DAY_MS = 24 * HOUR_MS;
-const VOD_RETENTION_DAYS = 60;
 
 /**
  * MOCK_NOW에서 거슬러 올라간 시각. setHours 같은 지역 시간 계산을 안 쓰는 이유는 D-day가
  * 실행 환경의 시간대에 따라 하루씩 흔들리지 않게 하려는 것이다 — 「지금」을 얼렸으면
  * 배지도 얼어야 한다. 하루 안쪽으로 시간을 물리면 보관 만료가 `D-(60 - days)`로 떨어진다.
  */
-function ago(days: number, hours: number): string {
-  return new Date(MOCK_NOW.getTime() - days * DAY_MS - hours * HOUR_MS).toISOString();
-}
 
 /** 보관 만료는 종료 시각 + 60일이다(ADR-004) — D-day가 저절로 행마다 달라진다 */
-function expiresFrom(endedAt: string): string {
-  return new Date(new Date(endedAt).getTime() + VOD_RETENTION_DAYS * DAY_MS).toISOString();
-}
-
-interface MockRow {
-  streamId: string;
-  endedAt: string | null;
-  startedAt?: string | null;
-  status?: VodBroadcastStatus;
-  /** 만료 임박 행처럼 종료+60일과 다른 만료 시각을 줄 때만 */
-  vodExpiresAt?: string | null;
-  visual: VodRowVisual;
-}
 
 // 시안 1f의 네 상태를 모두 담고, 기간 칩을 눌렀을 때 목록이 눈에 띄게 달라지도록 종료일을
 // 흩어 뒀다 — 7일 이내 4개 · 30일 이내 9개 · 전체 12개.
-const MOCK_ROWS: MockRow[] = [
-  {
-    streamId: 'stream-2608',
-    status: 'ended',
-    startedAt: ago(0, 3.5),
-    endedAt: ago(0, 0.4),
-    // 준비 중 — VOD가 아직 없어 보관 기한도 안 정해졌다
-    vodExpiresAt: null,
-    visual: { title: '새벽 랭크 — 마스터 승급전', durationSec: null, cardCount: 3 },
-  },
-  {
-    streamId: 'stream-2607',
-    endedAt: ago(1, 2),
-    visual: { title: '고민상담 라디오', durationSec: 11144, cardCount: 6 },
-  },
-  {
-    streamId: 'stream-2606',
-    endedAt: ago(3, 1),
-    visual: { title: '합방 특집 — 4인 내전', durationSec: 15128, cardCount: 11 },
-  },
-  {
-    streamId: 'stream-2605',
-    endedAt: ago(6, 3),
-    visual: { title: '시청자 참여 — 밸런스 게임', durationSec: 9668, cardCount: 4 },
-  },
-  {
-    streamId: 'stream-2604',
-    endedAt: ago(9, 2),
-    visual: { title: '스크림 — 대회 연습', durationSec: 19330, cardCount: 9 },
-  },
-  {
-    streamId: 'stream-2603',
-    endedAt: ago(13, 4),
-    visual: { title: '신작 첫인상 리뷰', durationSec: 8102, cardCount: 5 },
-  },
-  {
-    streamId: 'stream-2602',
-    endedAt: ago(17, 1),
-    visual: { title: '구독자 감사 이벤트', durationSec: 12240, cardCount: 7 },
-  },
-  {
-    streamId: 'stream-2601',
-    endedAt: ago(21, 3),
-    visual: { title: '랭크 복습 — 리플레이 정주행', durationSec: 10380, cardCount: 3 },
-  },
-  {
-    streamId: 'stream-2600',
-    endedAt: ago(26, 2),
-    visual: { title: '심야 수다 — 아무 말 대잔치', durationSec: 7460, cardCount: 2 },
-  },
-  {
-    streamId: 'stream-2599',
-    endedAt: ago(34, 5),
-    visual: { title: '팬아트 리액션', durationSec: 6320, cardCount: 4 },
-  },
-  {
-    streamId: 'stream-2598',
-    // 시작 알림의 발생 시각이 비어 온 방송 — 계약이 허용하는 null을 화면이 견디는지 본다
-    startedAt: null,
-    endedAt: ago(41, 1),
-    visual: { title: '레트로 게임 마라톤', durationSec: 17880, cardCount: 6 },
-  },
-  {
-    streamId: 'stream-2597',
-    endedAt: ago(57, 2),
-    // 만료 임박 — 종료 + 60일이라 자연히 D-3이다
-    visual: {
-      title: '6월 랭크 마라톤',
-      durationSec: 21690,
-      cardCount: 9,
-      unsavedCardCount: 9,
-    },
-  },
-];
-
-const MOCK_BROADCASTS: VodBroadcast[] = MOCK_ROWS.map((row) => ({
-  streamId: row.streamId,
-  status: row.status ?? 'vod_ready',
-  relation: 'OWNER',
-  startedAt: row.startedAt !== undefined ? row.startedAt : row.endedAt,
-  endedAt: row.endedAt,
-  vodExpiresAt:
-    row.vodExpiresAt !== undefined
-      ? row.vodExpiresAt
-      : row.endedAt
-        ? expiresFrom(row.endedAt)
-        : null,
-}));
-
-const MOCK_VISUALS: Record<string, VodRowVisual> = Object.fromEntries(
-  MOCK_ROWS.map((row) => [row.streamId, row.visual]),
-);
 
 const EMPTY_RANGE: VodCustomRange = { from: null, to: null };
 
-// 시안이 그리는 세 상태를 한 화면에서 다 볼 수 있게 둘을 심어 둔다 — 받기를 눌러도
-// 지금은 「준비 중」만 뜨므로, 심지 않으면 받는 중·받기 완료 자리를 아무도 못 본다.
-const MOCK_DOWNLOADS: Record<string, VodDownloadState> = {
-  'stream-2607': { kind: 'downloading', progress: 46 },
-  'stream-2604': { kind: 'done' },
-};
+// ── clip 창구 배선(POK-251): `GET /api/clip/broadcasts?state=past|live` + 방송마다 카드 수 ──
+
+interface WireBroadcast {
+  streamId: string;
+  status: string;
+  relation: string;
+  startedAt: string | null;
+  endedAt: string | null;
+  vodExpiresAt: string | null;
+}
+interface WireList {
+  broadcasts: WireBroadcast[];
+  nextCursor: string | null;
+}
 
 export function useVodListMockState(options: VodListOptions = {}): VodListMockState {
   const { toast } = useToast();
   const [filter, setFilter] = useState<VodPeriodFilter>('all');
   const [customRange, setCustomRange] = useState<VodCustomRange>(EMPTY_RANGE);
   const [downloads, setDownloads] = useState<Record<string, VodDownloadState>>(
-    () => options.downloads ?? MOCK_DOWNLOADS,
+    () => options.downloads ?? {},
   );
+  const [fetched, setFetched] = useState<VodBroadcast[]>([]);
+  const [fetchedVisuals, setFetchedVisuals] = useState<Record<string, VodRowVisual>>({});
+  const [now, setNow] = useState(() => new Date());
 
-  const source = options.broadcasts ?? MOCK_BROADCASTS;
-  const visuals = options.visuals ?? MOCK_VISUALS;
+  useEffect(() => {
+    if (options.broadcasts) return;
+    let stopped = false;
+    const load = async () => {
+      try {
+        const all: WireBroadcast[] = [];
+        for (const state of ['past']) {
+          try {
+            const r = await apiFetch(`/api/clip/broadcasts?state=${state}&limit=50`);
+            all.push(...((await r.json()) as WireList).broadcasts);
+          } catch {
+            /* 이 갈래만 건너뛴다 */
+          }
+        }
+        if (stopped) return;
+        const rows: VodBroadcast[] = all.map((b) => ({
+          streamId: b.streamId,
+          // 녹화 재생 서버가 있으면 끝난 방송은 곧바로 다시 볼 수 있다 — 「VOD 준비 중」은 1번의 다시보기 목록이
+          // 설 때까지 기다리는 표시인데, 로컬은 녹화 파일에서 바로 튼다.
+          status:
+            b.status === 'ended' && playbackConfigured()
+              ? 'vod_ready'
+              : ((b.status as VodBroadcastStatus) ?? 'ended'),
+          relation: b.relation === 'EDITOR' ? 'EDITOR' : 'OWNER',
+          startedAt: b.startedAt,
+          endedAt: b.endedAt,
+          vodExpiresAt: b.vodExpiresAt,
+        }));
+        const visuals: Record<string, VodRowVisual> = {};
+        await Promise.all(
+          rows.map(async (b) => {
+            let cardCount = 0;
+            try {
+              const r = await apiFetch(
+                `/api/clip/broadcasts/${encodeURIComponent(b.streamId)}/jump-cards`,
+              );
+              cardCount = ((await r.json()) as { cards: unknown[] }).cards.length;
+            } catch {
+              /* 0으로 둔다 */
+            }
+            const dur =
+              b.startedAt && b.endedAt
+                ? Math.max(0, Math.round((Date.parse(b.endedAt) - Date.parse(b.startedAt)) / 1000))
+                : null;
+            visuals[b.streamId] = { title: b.streamId, durationSec: dur, cardCount };
+          }),
+        );
+        if (stopped) return;
+        setFetched(rows);
+        setFetchedVisuals(visuals);
+        setNow(new Date());
+      } catch {
+        /* 다음 주기에 다시 */
+      }
+    };
+    void load();
+    const t = window.setInterval(load, 10_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(t);
+    };
+  }, [options.broadcasts]);
+
+  const source = options.broadcasts ?? fetched;
+  const visuals = options.visuals ?? fetchedVisuals;
 
   const setDownload = useCallback((streamId: string, state: VodDownloadState) => {
     setDownloads((prev) => ({ ...prev, [streamId]: state }));
   }, []);
-
-  // 받기를 실제로 시작하지 않는다 — 다운로드 백엔드가 기능명세·계약에 아직 없다.
-  // 진행 중인 척하고 멈춰 있느니 준비 중이라고 말하는 편이 낫다(ADR-044의 「거짓말 금지」).
   const requestDownload = useCallback(() => {
     toast({
       tone: 'info',
@@ -256,7 +216,6 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
       description: '풀 VOD 내려받기는 아직 준비 중이에요. 준비되면 알려드릴게요.',
     });
   }, [toast]);
-
   const cancelDownload = useCallback(
     (streamId: string) => setDownload(streamId, VOD_DOWNLOAD_IDLE),
     [setDownload],
@@ -266,16 +225,15 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     [setDownload],
   );
 
-  // 필터링은 순수 함수에 맡긴다 — 연동 때 이 계산이 서버 질의 조건으로 옮겨가더라도
-  // 화면은 클라에서 걸렀는지 서버가 걸러 줬는지 몰라야 한다.
   const past = useMemo(() => excludeLive(source), [source]);
+  const baseNow = options.now ?? now;
   const broadcasts = useMemo(
-    () => filterByPeriod(past, filter, customRange, MOCK_NOW),
-    [past, filter, customRange],
+    () => filterByPeriod(past, filter, customRange, baseNow),
+    [past, filter, customRange, baseNow],
   );
 
   return {
-    now: MOCK_NOW,
+    now: baseNow,
     broadcasts,
     totalCount: past.length,
     visuals,

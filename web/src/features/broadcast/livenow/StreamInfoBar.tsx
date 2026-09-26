@@ -13,14 +13,20 @@ import type { LiveStream } from './useLiveMockState';
 export function StreamInfoBar({
   stream,
   meta,
+  viewersLabel,
   uptimeLabel,
+  uptimeNote,
   pendingLabel,
   onMark,
 }: {
   stream: LiveStream;
   meta: StreamMeta;
-  /** 흐르는 경과 표기 — 시계의 주인은 플레이어라 화면이 받아 내려준다 */
-  uptimeLabel: string;
+  /** 시청자 줄 — 「1,842명 시청 중」 또는 수집 전 안내 */
+  viewersLabel: string;
+  /** 흐르는 경과 표기 — clip의 startedAt에서 센다. null이면 방송 중이 아니다 */
+  uptimeLabel: string | null;
+  /** 경과 뒤에 붙는 말. 라이브 「스트리밍 중」, 지난 방송 「방송함」 */
+  uptimeNote?: string;
   /** 만드는 중인 카드의 시각 — 있으면 버튼 아래 피드백이 선다 */
   pendingLabel: string | null;
   onMark: () => void;
@@ -40,22 +46,33 @@ export function StreamInfoBar({
           </IconButton>
         </div>
         <div className={styles.infoTagRow}>
-          <span className={styles.infoCategory}>{meta.category}</span>
-          {meta.tags.map((tag) => (
-            <Tag key={tag} variant="soft" size="sm">
-              {tag}
-            </Tag>
-          ))}
+          {meta.collected ? (
+            <>
+              {meta.category ? <span className={styles.infoCategory}>{meta.category}</span> : null}
+              {meta.tags.map((tag) => (
+                <Tag key={tag} variant="soft" size="sm">
+                  {tag}
+                </Tag>
+              ))}
+            </>
+          ) : (
+            // 수집기 PR-C가 아직 없다 — 칩을 지어내지 않고 사실만 적는다
+            <span className={styles.infoNote}>방송 정보 수집 전</span>
+          )}
         </div>
       </div>
       <div className={styles.infoStats}>
-        <span className={styles.infoViewers}>
-          <b>{stream.viewers}명</b> 시청 중
-        </span>
+        <span className={styles.infoViewers}>{viewersLabel}</span>
         <span className={styles.infoDivider} aria-hidden />
         <span className={styles.infoUptime}>
-          <span className={styles.infoUptimeValue}>{uptimeLabel}</span>
-          <span>스트리밍 중</span>
+          {uptimeLabel !== null ? (
+            <>
+              <span className={styles.infoUptimeValue}>{uptimeLabel}</span>
+              <span>{uptimeNote ?? '스트리밍 중'}</span>
+            </>
+          ) : (
+            <span>방송 중이 아니에요</span>
+          )}
         </span>
       </div>
       <span className={styles.infoRule} aria-hidden />

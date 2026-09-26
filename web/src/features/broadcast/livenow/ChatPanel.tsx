@@ -47,6 +47,7 @@ export const ChatPanel = memo(function ChatPanel({
   surges,
   messages,
   ratePerMinute,
+  mode,
   collectionWarning,
   onCollapse,
 }: {
@@ -54,6 +55,8 @@ export const ChatPanel = memo(function ChatPanel({
   /** 오래된 → 최신 순. DOM도 이 순서다 — 스크린 리더가 화면과 같은 흐름으로 읽는다 */
   messages: ChatPanelMessage[];
   ratePerMinute: number;
+  /** 방송 상태 — 배지 문구가 여기서 갈린다. 안 주면 수집 중 */
+  mode?: 'live' | 'ended' | 'offline' | 'unknown';
   /** 수집이 끊겼는가 — 동결 계약의 chatWarning을 그대로 받는다 */
   collectionWarning: boolean;
   onCollapse: () => void;
@@ -107,6 +110,18 @@ export const ChatPanel = memo(function ChatPanel({
           {collectionWarning ? (
             <Badge tone="warning" variant="soft" size="sm">
               수집 끊김
+            </Badge>
+          ) : mode === 'ended' ? (
+            <Badge tone="neutral" variant="soft" size="sm">
+              지난 채팅
+            </Badge>
+          ) : mode === 'offline' ? (
+            <Badge tone="neutral" variant="soft" size="sm">
+              방송 대기
+            </Badge>
+          ) : mode === 'unknown' ? (
+            <Badge tone="neutral" variant="soft" size="sm">
+              확인 중
             </Badge>
           ) : (
             <Badge tone="success" variant="soft" size="sm">

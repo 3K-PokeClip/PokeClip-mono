@@ -32,6 +32,7 @@ function renderPlayer(simulationOptions?: PlayerSimulationOptions, panelProps?: 
         channelName="게임하는너구리"
         viewersNote="1,842명 시청 중"
         embed
+        simulate
         simulationOptions={simulationOptions}
         {...panelProps}
       />

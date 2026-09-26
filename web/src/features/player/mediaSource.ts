@@ -26,10 +26,14 @@ export function buildMediaSourceUrl(
   return env.stubUrl || null;
 }
 
-export function useMediaSource(): string | null {
+/**
+ * @param fallbackStreamId 주소에 ?stream= 이 없을 때 쓸 방송 번호 — 라이브 화면은 clip의 「방송 중」 명부에서
+ *   고른 방송을 넘긴다. 없으면 기존대로 스텁/빈 값이다.
+ */
+export function useMediaSource(fallbackStreamId?: string | null): string | null {
   const params = useSearchParams();
   // process.env는 리터럴 접근만 빌드 타임에 인라이닝된다 (googleOAuth.ts 선례)
-  return buildMediaSourceUrl(params.get('stream'), {
+  return buildMediaSourceUrl(params.get('stream') ?? (fallbackStreamId || null), {
     stubUrl: process.env.NEXT_PUBLIC_MEDIA_STUB_URL,
     liveBaseUrl: process.env.NEXT_PUBLIC_MEDIA_LIVE_BASE_URL,
   });
