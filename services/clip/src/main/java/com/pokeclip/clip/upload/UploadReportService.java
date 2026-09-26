@@ -115,34 +115,34 @@ public class UploadReportService {
         return transactions.execute(tx -> {
             ClipUpload upload = uploads.findByIdForUpdate(uploadId).orElseThrow(() -> new UploadNotFoundException(uploadId));
             UploadStatus current = upload.getStatus();
-            if (current == UploadStatus.CHECKING && target == UploadStatus.UPLOADED) {
+            // 주소가 있으면 실패 보고는 확인 중으로 받는다(클래스 주석). 판정 전에 바꿔야 같은 보고의 재전송이 200이다(PR #198 codex 2판).
+            UploadStatus effective = target == UploadStatus.FAILED && upload.getSessionUri() != null
+                    ? UploadStatus.CHECKING : target;
+            if (current == UploadStatus.CHECKING && effective == UploadStatus.UPLOADED) {
                 // 확인 중이던 것에 늦은 올림 보고가 왔다: 채널에 영상이 있다는 확정이다.
                 upload.uploaded(videoId);
                 log.info("clip.upload.checking_resolved uploadId={}", uploadId);
                 return ok(upload);
             }
             if (current.settled()) {
-                boolean same = current == target
-                        && (target != UploadStatus.UPLOADED || videoId.equals(upload.getYoutubeVideoId()));
+                boolean same = current == effective
+                        && (effective != UploadStatus.UPLOADED || videoId.equals(upload.getYoutubeVideoId()));
                 return same ? ok(upload) : conflict("TERMINAL");
             }
             if (current != UploadStatus.UPLOADING) {
                 return conflict("NOT_STARTED");
             }
-            switch (target) {
+            if (effective != target) {
+                // 다른 일꾼이 같은 주소로 아직 올리는 중일 수 있다. 자리를 비우지 않는다.
+                log.warn("clip.upload.failed_with_session_held uploadId={} code={}", uploadId, errorCode);
+            }
+            switch (effective) {
                 case UPLOADED -> upload.uploaded(videoId);
-                case FAILED -> {
-                    if (upload.getSessionUri() != null) {
-                        // 주소가 있으면 다른 일꾼이 같은 주소로 아직 올리는 중일 수 있다. 자리를 비우지 않는다(클래스 주석).
-                        log.warn("clip.upload.failed_with_session_held uploadId={} code={}", uploadId, errorCode);
-                        upload.checking(errorCode, message);
-                    } else {
-                        upload.failed(errorCode, message);
-                    }
-                }
+                case FAILED -> upload.failed(errorCode, message);
                 default -> upload.checking(errorCode, message);
             }
-            log.info("clip.upload.settled uploadId={} status={} code={}", uploadId, target.dbValue(), errorCode);
+            // 요청이 아니라 실제로 저장된 상태를 찍는다. 확인 중을 실패로 세면 사람이 볼 건을 놓친다(PR #198 codex 2판).
+            log.info("clip.upload.settled uploadId={} status={} code={}", uploadId, upload.getStatus().dbValue(), errorCode);
             return ok(upload);
         });
     }

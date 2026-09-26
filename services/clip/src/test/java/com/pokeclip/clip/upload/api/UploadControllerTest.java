@@ -270,6 +270,9 @@ class UploadControllerTest extends IntegrationTestSupport {
 
         일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"YOUTUBE_REJECTED\"}").andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("checking"));
+        // 그 200이 유실돼 같은 보고가 다시 와도 200이다(멱등, PR #198 codex 2판).
+        일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"YOUTUBE_REJECTED\"}").andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("checking"));
         주문(내_방송, clipId, 제목("다시")).andExpect(status().isOk()).andExpect(jsonPath("$.id").value(id));
 
         일꾼(id, "result", "{\"outcome\":\"UPLOADED\",\"videoId\":\"abcDEF12345\"}").andExpect(status().isOk())
