@@ -41,7 +41,9 @@ public record RenderProperties(
         /** 한 주문에 허용하는 실행(STARTED) 횟수. 이 번째가 마지막 시도다(계약1 attemptOrdinal 한도). */
         @Min(1) @Max(10) int maxAttempts,
         /** 주문서 크기 상한(UTF-8 바이트). 계약1 2절 200KB. */
-        @Min(1024) int maxMessageBytes
+        @Min(1024) int maxMessageBytes,
+        /** 완성 영상 주소(POK-247)의 수명. 재생 출입증과 같은 60분: 한 편을 보다가 끊기지 않을 만큼. */
+        @NotNull Duration fileUrlTtl
 ) {
 
     @PostConstruct

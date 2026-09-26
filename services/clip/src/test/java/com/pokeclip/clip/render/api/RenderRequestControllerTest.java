@@ -19,6 +19,12 @@ import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -257,6 +263,73 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
         assertThat(최소).isGreaterThanOrEqualTo(바닥_ms);
     }
 
+    // ── 완성 영상 주소(POK-247) ──────────────────────────────────
+
+    /**
+     * 완성 영상은 파일마다(영상·자막) 미리서명 주소를 받고, <b>그 주소로 창고에서 진짜 받아진다</b>: 서명이 틀리면 LocalStack이
+     * 403을 준다. 받을 때 이름(Content-Disposition)도 우리가 정한 것이다. 주소 모양만 보면 서명 없는 평문 주소도 통과한다.
+     */
+    @Test
+    void 완성_영상은_파일마다_주소를_주고_그_주소로_진짜_받아진다() throws Exception {
+        볼_수_있다("OWNER");
+        long clipId = 완성된_영상();
+        byte[] 영상 = "가짜 mp4 바이트".getBytes(StandardCharsets.UTF_8);
+        byte[] 자막 = "1\n00:00:00,000 --> 00:00:01,000\n안녕\n".getBytes(StandardCharsets.UTF_8);
+        LocalStackFixture.putObject("clips-test", "clips/" + clipId + "/t1/o1.mp4", 영상, "video/mp4");
+        LocalStackFixture.putObject("clips-test", "clips/" + clipId + "/t1/o1.srt", 자막, "application/x-subrip");
+
+        Instant 전 = Instant.now();
+        JsonNode 응답 = MAPPER.readTree(본문(주소(내_방송, clipId).andExpect(status().isOk())));
+
+        assertThat(응답.get("clipId").asLong()).isEqualTo(clipId);
+        Instant 만료 = Instant.parse(응답.get("expiresAt").asString());
+        assertThat(만료).isBetween(전.plus(Duration.ofMinutes(59)), 전.plus(Duration.ofMinutes(61)));
+        JsonNode files = 응답.get("files");
+        assertThat(files.size()).isEqualTo(2);
+        assertThat(files.get(0).get("outputId").asString()).isEqualTo("o1");
+        assertThat(files.get(0).get("kind").asString()).isEqualTo("video");
+        assertThat(files.get(0).get("fileName").asString()).isEqualTo("pokeclip-" + clipId + "-o1.mp4");
+        assertThat(files.get(1).get("kind").asString()).isEqualTo("srt");
+        assertThat(files.get(1).get("fileName").asString()).isEqualTo("pokeclip-" + clipId + "-o1.srt");
+        assertThat(응답.toString()).as("창고 좌표는 화면에 줄 필요가 없다").doesNotContain("s3Key");
+
+        HttpResponse<byte[]> 받음 = 받는다(files.get(0).get("url").asString());
+        assertThat(받음.statusCode()).isEqualTo(200);
+        assertThat(받음.body()).isEqualTo(영상);
+        assertThat(받음.headers().firstValue("Content-Disposition")).hasValue(
+                "attachment; filename=\"pokeclip-" + clipId + "-o1.mp4\"");
+        assertThat(받는다(files.get(1).get("url").asString()).body()).isEqualTo(자막);
+
+        // 서명을 한 글자 바꾸면 창고가 거절한다: 주소가 출입증이라는 것을 잰다.
+        String 원래 = files.get(0).get("url").asString();
+        String 위조 = 원래.replaceFirst("X-Amz-Signature=.", "X-Amz-Signature=" + (원래.contains("X-Amz-Signature=0") ? "1" : "0"));
+        assertThat(받는다(위조).statusCode()).isEqualTo(403);
+    }
+
+    /** 아직 만드는 중이면 줄 파일이 없다: 409. 빈 목록 200으로 접으면 화면이 「파일이 없는 영상」으로 읽는다. */
+    @Test
+    void 완성_전이면_409다() throws Exception {
+        볼_수_있다("OWNER");
+        long[] clipId = new long[1];
+        RenderFixtures.주문을_넣는다(jdbc, 내_방송, 편집본, clipId);
+
+        주소(내_방송, clipId[0]).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("clip_not_rendered"));
+    }
+
+    /** 다른 방송 번호로 부르면 없는 영상이고, 자격이 없으면 방송이 없는 것과 같다: 하나 보기 문과 같은 판정이다. */
+    @Test
+    void 다른_방송_번호와_자격_없음은_404다() throws Exception {
+        볼_수_있다("OWNER");
+        long clipId = 완성된_영상();
+        주소(다른_방송, clipId).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("clip_not_found"));
+
+        볼_수_없다();
+        주소(내_방송, clipId).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("broadcast_not_found"));
+    }
+
     // ── outbox · 실패 큐 ──────────────────────────────────────────
 
     /**
@@ -328,6 +401,28 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
     private ResultActions 하나(String streamId, long clipId) throws Exception {
         return mvc.perform(get("/api/clip/broadcasts/" + streamId + "/clips/" + clipId)
                 .header("Authorization", "Bearer " + TestTokens.access(요청자)));
+    }
+
+    private ResultActions 주소(String streamId, long clipId) throws Exception {
+        return mvc.perform(post("/api/clip/broadcasts/" + streamId + "/clips/" + clipId + "/file-access")
+                .header("Authorization", "Bearer " + TestTokens.access(요청자)));
+    }
+
+    /** 일꾼이 완성을 보고한 모양 그대로: 산출물 두 개(영상·자막). */
+    private long 완성된_영상() {
+        long[] clipId = new long[1];
+        RenderFixtures.주문을_넣는다(jdbc, 내_방송, 편집본, clipId);
+        String outputs = """
+                [{"outputId":"o1","kind":"video","s3Key":"clips/%1$d/t1/o1.mp4"},
+                 {"outputId":"o1","kind":"srt","s3Key":"clips/%1$d/t1/o1.srt"}]""".formatted(clipId[0]);
+        jdbc.update("UPDATE clips SET status = 'rendered', outputs = ?::jsonb WHERE id = ?", outputs, clipId[0]);
+        return clipId[0];
+    }
+
+    private static HttpResponse<byte[]> 받는다(String url) throws Exception {
+        try (HttpClient client = HttpClient.newHttpClient()) {
+            return client.send(HttpRequest.newBuilder(URI.create(url)).GET().build(), HttpResponse.BodyHandlers.ofByteArray());
+        }
     }
 
     private static String 본문(ResultActions actions) throws Exception {
