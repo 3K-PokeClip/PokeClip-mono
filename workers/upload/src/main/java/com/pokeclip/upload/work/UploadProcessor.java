@@ -94,21 +94,13 @@ public class UploadProcessor {
         String session = started.sessionUri();
 
         Token token = auth.resolve(job.channelOwnerUserId());
-        long size;
-        try {
-            Files.createDirectories(workDir);
-            size = storage.download(job.bucket(), job.s3Key(), file);
-        } catch (Exception e) {
-            throw new Unavailable("S3 " + e.getClass().getSimpleName(), e);
-        }
-        log.info("upload.begin uploadId={} bytes={} resuming={} tokenValid={}", id, size, session != null, token.valid());
-
+        String code = "YOUTUBE_" + token.reason();
+        String message = "유튜브 연동이 없거나 끊겼다. 스트리머가 다시 연동해야 한다";
+        // 영상 바이트가 필요 없는 갈래는 창고에서 받기 전에 끝낸다. 재배달마다 수십 MB를 헛받지 않게(PR #199 codex 3판).
         if (!token.valid()) {
             if (token.transientRefusal()) {
                 return retryLater();
             }
-            String code = "YOUTUBE_" + token.reason();
-            String message = "유튜브 연동이 없거나 끊겼다. 스트리머가 다시 연동해야 한다";
             if (session == null) {
                 // 🔴 실패 전에 다시 묻는다. 그사이 겹친 일꾼이 주소를 적었으면 실패가 그 주소로 이어 갈 길을 막는다(PR #199 codex 2판).
                 // 이 일꾼은 토큰이 없어 이을 수 없으니 쪽지를 남긴다. 그 일꾼이 끝내면 끝난 주문이 되고, 멈췄으면 다음 배달이 주소에 묻는다.
@@ -123,6 +115,18 @@ public class UploadProcessor {
                 clip.failed(id, code, message);
                 return Disposition.DELETE;
             }
+        }
+
+        long size;
+        try {
+            Files.createDirectories(workDir);
+            size = storage.download(job.bucket(), job.s3Key(), file);
+        } catch (Exception e) {
+            throw new Unavailable("S3 " + e.getClass().getSimpleName(), e);
+        }
+        log.info("upload.begin uploadId={} bytes={} resuming={} tokenValid={}", id, size, session != null, token.valid());
+
+        if (!token.valid()) {
             // 주소는 있는데 토큰이 없다: 이어 갈 수는 없지만 끝났는지는 물어 볼 수 있다.
             return settleWithoutContinuing(id, session, null, size, code, message);
         }

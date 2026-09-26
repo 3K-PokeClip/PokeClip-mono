@@ -39,6 +39,8 @@ public class FakeYoutube implements AutoCloseable {
     public volatile boolean uploadLimitOnStart;
     /** 속도 제한(403 rateLimitExceeded). 시간이 지나면 풀린다. */
     public volatile boolean rateLimitOnStart;
+    /** 조각 전송에 403 속도 제한을 줄 횟수. */
+    public volatile int rateLimitOnChunk;
     public volatile boolean dropFinalResponseOnce;
     public volatile int chunkServerErrors;
     public volatile boolean rejectChunks;
@@ -135,6 +137,11 @@ public class FakeYoutube implements AutoCloseable {
         if (chunkServerErrors > 0) {
             chunkServerErrors--;
             reply(ex, 503, "{}");
+            return;
+        }
+        if (rateLimitOnChunk > 0) {
+            rateLimitOnChunk--;
+            reply(ex, 403, "{\"error\":{\"code\":403,\"errors\":[{\"reason\":\"userRateLimitExceeded\"}]}}");
             return;
         }
         if (rejectChunks) {

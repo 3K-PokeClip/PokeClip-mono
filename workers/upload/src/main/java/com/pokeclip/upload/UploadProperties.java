@@ -30,5 +30,10 @@ public record UploadProperties(String queueUrl, String queueEndpoint, String s3E
             throw new IllegalStateException("pokeclip.upload.chunk-size는 256KB의 배수여야 한다(유튜브 이어 올리기 규칙): " + chunkSize);
         }
         retryDelays = retryDelays == null ? List.of() : List.copyOf(retryDelays);
+        // 줄을 보는데 열쇠가 없으면 clip이 401을 주고, 쪽지가 세 번 돈 뒤 정리기가 주문을 실패로 닫는다. 설정 실수 하나가
+        // 사용자 업로드를 소진하므로 부팅에서 막는다(PR #199 codex 3판).
+        if (queueUrl != null && !queueUrl.isBlank() && (internalToken == null || internalToken.isBlank())) {
+            throw new IllegalStateException("pokeclip.upload.queue-url이 있는데 internal-token이 비어 있다. INTERNAL_API_TOKEN을 준다");
+        }
     }
 }

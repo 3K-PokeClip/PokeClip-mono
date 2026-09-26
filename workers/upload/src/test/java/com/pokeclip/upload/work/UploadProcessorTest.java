@@ -42,6 +42,7 @@ class UploadProcessorTest {
     private FakeYoutube youtube;
     private FakeInternal internal;
     private byte[] video;
+    private int downloads;
 
     @BeforeEach
     void 준비() throws Exception {
@@ -176,6 +177,17 @@ class UploadProcessorTest {
         assertThat(youtube.videosCreated()).isEqualTo(1);
     }
 
+    /** 조각 전송 중 403 속도 제한도 거절이 아니다. 주소에 다시 물어 받은 데부터 잇는다(PR #199 codex 3판). */
+    @Test
+    void 조각_전송의_속도_제한도_이어서_끝낸다() {
+        youtube.rateLimitOnChunk = 1;
+
+        processor().process(주문서());
+
+        assertThat(internal.results).containsExactly("UPLOADED:vid1");
+        assertThat(youtube.videosCreated()).isEqualTo(1);
+    }
+
     /** 유튜브 속도 제한(403 rateLimitExceeded)은 시간이 지나면 풀린다. 거절로 닫지 않고 잠시 뒤 다시 한다(PR #199 codex 2판). */
     @Test
     void 속도_제한은_실패가_아니라_잠시_뒤_다시다() {
@@ -211,6 +223,8 @@ class UploadProcessorTest {
         processor().process(주문서());
         assertThat(internal.results).containsExactly("FAILED:YOUTUBE_BROKEN");
         assertThat(youtube.sessionsStarted()).isZero();
+        // 주소가 없고 연동도 없으면 영상 바이트가 필요 없다. 창고에서 받지 않는다(PR #199 codex 3판).
+        assertThat(downloads).isZero();
     }
 
     /**
@@ -271,6 +285,7 @@ class UploadProcessorTest {
         S3Download storage = new S3Download(null) {
             @Override
             public long download(String bucket, String key, Path target) {
+                downloads++;
                 try {
                     Files.write(target, video);
                 } catch (java.io.IOException e) {

@@ -183,10 +183,12 @@ public class ResumableUploader {
             if (code == 401) {
                 return new Progress.Unauthorized();
             }
-            if (code == 429 || code / 100 == 5) {
-                return new Progress.Transient("HTTP " + code);
+            String reason = reason(response.body());
+            // 조각 전송·주소 물음의 속도 제한도 거절이 아니다. 주소에 다시 물어 잇는다(PR #199 codex 3판).
+            if (code == 429 || code / 100 == 5 || RATE_REASONS.contains(reason)) {
+                return new Progress.Transient("HTTP " + code + " " + reason);
             }
-            return new Progress.Rejected(code, reason(response.body()));
+            return new Progress.Rejected(code, reason);
         } catch (IOException e) {
             return new Progress.Transient(e.getClass().getSimpleName());
         } catch (InterruptedException e) {

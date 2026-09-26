@@ -26,7 +26,7 @@ clip(`services/README.md` 「유튜브 업로드 주문」 절)이다.
 
 1. 쪽지를 꺼낸다(한 통씩, 숨김 900초, 남은 시간이 2분 아래면 1분마다 2분으로 늘린다).
 2. clip `start`: 끝난 주문이면(`proceed:false`) 지운다. 이미 적힌 주소가 있으면 받는다.
-3. auth에 스트리머 토큰을 묻는다. 창고에서 mp4를 임시 파일로 받는다(크기를 알아야 시작할 수 있다).
+3. auth에 스트리머 토큰을 묻는다. 주소도 토큰도 없으면 여기서 끝낸다(영상을 안 받는다). 아니면 창고에서 mp4를 임시 파일로 받는다(크기를 알아야 시작할 수 있다).
 4. 주소가 없으면 유튜브에 시작을 청해 주소를 받고 clip `session`에 적는다.
 5. 주소에 「어디까지」를 묻고, 덜 받았으면 그 자리부터 8MB 조각으로 보낸다. 끊기면(5xx·시한·연결) 다시 묻고 잇는다.
 6. 다 받았으면 clip `result UPLOADED {videoId}`. 임시 파일은 지운다.
@@ -45,6 +45,7 @@ clip(`services/README.md` 「유튜브 업로드 주문」 절)이다.
 | 주소가 사라졌다(404·410) | `CHECKING SESSION_GONE` | 지운다 |
 | 연동이 끊겼는데 다시 물으니 그사이 겹친 일꾼이 주소를 적어 두었다 | 없음(실패를 보내면 그 주소로 이어 갈 길이 막힌다) | 60~120초 뒤 다시 |
 | 시작에서 속도 제한(403 `rateLimitExceeded`·`userRateLimitExceeded`·`servingLimitExceeded`) | 없음 | 60~120초 뒤 다시 |
+| 조각 전송·주소 물음에서 같은 속도 제한 | 없음(주소에 다시 물어 잇는다) | 재시도를 넘기면 60~120초 뒤 다시 |
 | auth 즉석 갱신 실패(`REFRESH_UNAVAILABLE`)·유튜브 401·5xx·끊김이 재시도보다 길다·clip·S3 무응답 | 없음 | 60~120초 뒤 다시 |
 
 **쿼터**: `videos.insert` 한 번이 1,600유닛이고 하루 기본 10,000유닛이라 하루 약 6개다(ADR-010). 한도는 시작 요청에서
@@ -64,7 +65,7 @@ clip(`services/README.md` 「유튜브 업로드 주문」 절)이다.
 | `S3_ENDPOINT` · `S3_PATH_STYLE` | 빈 값 · `false` | 가짜 S3 주소. LocalStack은 `true` |
 | `AWS_REGION` | `ap-northeast-2` | |
 | `CLIP_BASE_URL` · `AUTH_BASE_URL` | `http://localhost:8081` · `:8082` | |
-| `INTERNAL_API_TOKEN` | 빈 값 | clip·auth `/internal/**` 열쇠(서버 넷과 같은 값) |
+| `INTERNAL_API_TOKEN` | 빈 값 | clip·auth `/internal/**` 열쇠(서버 넷과 같은 값). **줄을 보는데 비면 부팅을 거부한다**(비어도 뜨면 401 → 쪽지 세 번 → 주문이 실패로 닫힌다) |
 | `YOUTUBE_UPLOAD_URL` | 유튜브 실주소 | 시험만 바꾼다 |
 | `UPLOAD_WORK_DIR` | `/tmp/pokeclip-upload` | 받은 mp4를 잠깐 두는 곳 |
 | `UPLOAD_VISIBILITY_TIMEOUT` | `900s` | 큐 설정과 같아야 한다 |
