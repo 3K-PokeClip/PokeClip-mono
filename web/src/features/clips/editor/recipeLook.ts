@@ -161,6 +161,22 @@ export function outputFromLook(look: EditorLook): RecipeOutputV2 {
   }
 }
 
+/**
+ * 저장할 출력 전부. 세로 한 벌은 화면 그대로 만들고, 편집기가 그리지 않는 다른 비율(정사각 등)은 저장된 것을 그대로 둔다 —
+ * 편집기에 그 칸이 없다고 다시 저장할 때 버리면 이미 있던 영상 한 벌이 조용히 사라진다. 옛 v1 출력은 v2 모양(꽉 채우는
+ * 층 하나)으로 옮긴다. 세로 출력의 이름(outputId)도 저장된 것을 잇는다 — 완성 영상 파일 이름이 이 값이다.
+ */
+export function outputsFor(look: EditorLook, saved: RecipeDocument | null): RecipeOutputV2[] {
+  const savedOutputs: RecipeOutputV2[] = (saved?.outputs ?? []).map((o) =>
+    'crop' in o
+      ? { outputId: o.outputId, aspect: o.aspect, layers: [{ crop: o.crop, box: FULL }] }
+      : o,
+  );
+  const vert = savedOutputs.find((o) => o.aspect === 'VERT_9_16');
+  const main = { ...outputFromLook(look), ...(vert ? { outputId: vert.outputId } : {}) };
+  return [main, ...savedOutputs.filter((o) => o.aspect !== 'VERT_9_16')];
+}
+
 const MODE_TO_CONTRACT: Readonly<Record<SubtitleMode, RecipeSubtitles['mode']>> = {
   'burn-cc': 'BURN_AND_CC',
   burn: 'BURN_ONLY',
@@ -237,7 +253,7 @@ const MODE_FROM_CONTRACT: Readonly<Record<RecipeSubtitles['mode'], SubtitleMode>
   CC_ONLY: 'cc',
 };
 
-function captionOf(subtitles: RecipeSubtitles | undefined): CaptionPosition | undefined {
+function captionOf(subtitles: RecipeSubtitles | null | undefined): CaptionPosition | undefined {
   switch (subtitles?.position?.anchor) {
     case 'TOP':
       return 'top';
@@ -260,10 +276,12 @@ export function lookFromDocument(doc: RecipeDocument): Partial<EditorLook> {
     ...(subtitles ? { subtitleMode: MODE_FROM_CONTRACT[subtitles.mode] } : {}),
     ...(captionOf(subtitles) ? { captionPosition: captionOf(subtitles) } : {}),
   };
-  const first = doc.outputs[0];
+  // 편집기가 그리는 것은 세로 한 벌이다 — 첫 출력이 아니라 세로 출력을 읽는다
+  const first = (doc.outputs as { aspect: string }[]).find((o) => o.aspect === 'VERT_9_16') as
+    { crop?: CropRect } | undefined;
   if (first === undefined) return common;
   if (doc.schemaVersion === 1) {
-    const crop = (first as { crop: CropRect }).crop;
+    const crop = first.crop!;
     return { ...common, layout: 'vert', crops: cropsFor('vert', 50, DEFAULT_PIP_FOR_READ, [crop]) };
   }
   const output = first as RecipeOutputV2;
@@ -324,14 +342,18 @@ export function lookFromDocument(doc: RecipeDocument): Partial<EditorLook> {
  * 두 본문이 같은 영상을 만드는가. 숫자는 1e-9 까지 같게 본다 — 저장된 자르는 자리를 화면 값(중심·확대율)으로
  * 되돌렸다가 다시 사각형으로 만들면 끝자리가 흔들린다. 문자열로 비교하면 고치지 않은 편집본도 「바뀌었다」가 되어
  * 영상 만들기 때마다 판이 오른다. 모양이 다르면(v1 ↔ v2) 다르다 — v1 편집본은 처음 한 번 v2로 다시 저장된다.
+ * 값이 null 인 칸과 없는 칸은 같다.
  */
 export function sameRecipe(a: unknown, b: unknown): boolean {
   if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) < 1e-9;
   if (Array.isArray(a) && Array.isArray(b))
     return a.length === b.length && a.every((item, i) => sameRecipe(item, b[i]));
   if (a !== null && b !== null && typeof a === 'object' && typeof b === 'object') {
-    const ka = Object.keys(a).filter((k) => (a as Record<string, unknown>)[k] !== undefined);
-    const kb = Object.keys(b).filter((k) => (b as Record<string, unknown>)[k] !== undefined);
+    // 빈 칸은 없는 칸이다 — clip은 자막 없는 편집본을 `"subtitles": null`로 주고 편집기는 칸을 뺀다
+    const present = (o: object) =>
+      Object.keys(o).filter((k) => (o as Record<string, unknown>)[k] != null);
+    const ka = present(a);
+    const kb = present(b);
     return (
       ka.length === kb.length &&
       ka.every((k) =>

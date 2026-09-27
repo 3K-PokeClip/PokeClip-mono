@@ -214,8 +214,8 @@ export interface RecipeSubtitles {
 export interface RecipeDocumentV1 extends RecipeCommon {
   schemaVersion: 1;
   outputs: { outputId: string; aspect: RecipeAspect; crop: RecipeRect }[];
-  /** 생략 = 자막 없음(계약6). null 로 보내지 않고 칸을 뺀다 */
-  subtitles?: Omit<RecipeSubtitles, 'position'>;
+  /** 생략 = 자막 없음(계약6). 보낼 때는 칸을 빼고, clip 응답에는 null 로 온다 */
+  subtitles?: Omit<RecipeSubtitles, 'position'> | null;
 }
 
 export type RecipeBackground =
@@ -238,7 +238,8 @@ export interface RecipeOutputV2 {
 export interface RecipeDocumentV2 extends RecipeCommon {
   schemaVersion: 2;
   outputs: RecipeOutputV2[];
-  subtitles?: RecipeSubtitles;
+  /** 보낼 때는 칸을 빼고, clip 응답에는 자막이 없으면 null 로 온다 */
+  subtitles?: RecipeSubtitles | null;
 }
 
 export interface RecipeSnapshot {

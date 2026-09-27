@@ -415,6 +415,8 @@ export interface ClipEditorOptions {
    * 마지막으로 켜진 트랙은 끌 수 없다. 저장할 때 조용히 바꾸면 화면과 다른 소리가 렌더된다(PR #200 codex P1)
    */
   mixTrackId?: string;
+  /** 저장된 편집본의 자막 줄(실제 모드). 마운트 값 — 있으면 자막 도구가 「생성됨」으로 열린다 */
+  initialSubtitles?: readonly SubtitleItem[];
   /** 저장된 편집본의 모양(레이아웃·자르는 자리·자막 방식과 자리). 마운트 값 — 없는 칸은 편집기 기본값이다 */
   initialLook?: Partial<EditorLook>;
   /** 처음 꺼 둘 트랙·볼륨 — 저장된 편집본의 값. 마운트 값 */
@@ -636,13 +638,19 @@ const SPEED_OPTIONS = [0.5, 1, 1.5, 2] as const;
 
 export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEditorMockState {
   const real = options.source !== undefined;
-  // 실제 모드의 자막은 「생성 전」에서 시작한다 — 만들어 줄 백엔드가 아직 없다
-  const { initialSubtitleStatus = real ? 'idle' : 'ready', initialLayout, actions } = options;
+  // 실제 모드의 자막은 「생성 전」에서 시작한다 — 만들어 줄 백엔드가 아직 없다. 저장된 편집본에 자막 줄이 있으면
+  // 그 줄로 연다(영상에는 타는데 화면이 「미생성」이면 화면과 영상이 다르다)
+  const savedSubtitles = options.initialSubtitles ?? NO_SUBTITLES;
+  const {
+    initialSubtitleStatus = real && savedSubtitles.length === 0 ? 'idle' : 'ready',
+    initialLayout,
+    actions,
+  } = options;
   const { toast } = useToast();
   // 소스 좌표는 마운트 값이다(재생 어댑터와 같은 규칙) — 컨테이너가 데이터를 다 읽은 뒤에만 이 훅을 마운트한다
   const source: EditorSource = options.source ?? MOCK_SOURCE;
   // 실제 모드에서는 목업 콘텐츠(자막·추천·이미지·BGM·효과음)를 비운다
-  const subtitles = real ? NO_SUBTITLES : MOCK_SUBTITLES;
+  const subtitles = real ? savedSubtitles : MOCK_SUBTITLES;
 
   const [history, setHistory] = useState<History<EditorRecipe>>(() => {
     const recipe = initialRecipe(

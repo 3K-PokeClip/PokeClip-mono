@@ -47,7 +47,7 @@ import {
 import { fetchDelegationsAsEditor } from '@/api/editors';
 import { fetchRecordingSpans, type RecordingSpan } from '@/api/mediaPlayback';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
-import { lookFromDocument, outputFromLook, sameRecipe, subtitlesFor } from '../recipeLook';
+import { lookFromDocument, outputsFor, sameRecipe, subtitlesFor } from '../recipeLook';
 
 // 시안 1d-a 클립 편집기(스튜디오형). 전폭 자체 헤더를 가지므로 ScreenContainer를 쓰지 않는다
 // (라이브 대시보드 선례). 데이터·동작은 전부 useClipEditorMockState 뒤에 있다.
@@ -497,7 +497,7 @@ function WiredStudio({ data }: { data: Loaded }) {
         schemaVersion: 2,
         streamId,
         cut,
-        outputs: [outputFromLook(recipe)],
+        outputs: outputsFor(recipe, saved?.document ?? null),
         audio: { tracks: selected },
         ...(subtitles ? { subtitles } : {}),
       };
@@ -644,6 +644,21 @@ function WiredStudio({ data }: { data: Loaded }) {
     () => (saved ? lookFromDocument(saved.document) : undefined),
     [saved],
   );
+  // 저장된 자막 줄 — 영상에 타는 줄을 화면에도 보여 준다. 표기는 구간 시작 기준 초(시안 「02.1」)
+  const initialSubtitles = useMemo(() => {
+    const cut = saved?.document.cut;
+    const segments = saved?.document.subtitles?.segments ?? [];
+    if (!cut) return undefined;
+    return segments
+      .filter(
+        (seg) => seg.endAtMs > cut.inAtMs && seg.startAtMs < cut.outAtMs && seg.text.trim() !== '',
+      )
+      .map((seg, i) => ({
+        id: `saved-${i}`,
+        timecode: (Math.max(0, seg.startAtMs - cut.inAtMs) / 1000).toFixed(1).padStart(4, '0'),
+        text: seg.text,
+      }));
+  }, [saved]);
   const label =
     save.clip && save.busy === null && !save.label.includes('영상 #')
       ? `${save.label} · ${clipLabel(save.clip)}`
@@ -673,6 +688,7 @@ function WiredStudio({ data }: { data: Loaded }) {
         initialTrackMuted={trackSetup.muted}
         initialTrackVolumes={trackSetup.volumes}
         initialLook={initialLook}
+        initialSubtitles={initialSubtitles}
       />
     </>
   );

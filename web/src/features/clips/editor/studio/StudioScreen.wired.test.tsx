@@ -23,6 +23,10 @@ const server = vi.hoisted(() => ({
   savedSchema: 2 as 1 | 2,
   /** 저장된 v2 출력. 없으면 세로 한 장 */
   savedOutput: null as unknown,
+  /** 저장된 v1 출력에 덧붙는 정사각 한 벌 */
+  savedSquare: false,
+  /** 저장된 자막. clip은 자막이 없으면 칸을 빼지 않고 null 로 준다 */
+  savedSubtitles: null as unknown,
   relation: 'OWNER',
   delegations: [] as {
     id: number;
@@ -102,8 +106,17 @@ function handle(url: string, init?: RequestInit) {
         streamId: STREAM_ID,
         cut: { inAtMs: STARTED_AT + 120_000, outAtMs: STARTED_AT + 150_000 },
         outputs: [
+          ...(server.savedSquare
+            ? [
+                {
+                  outputId: 'square',
+                  aspect: 'SQUARE_1_1',
+                  crop: { x: 0.21875, y: 0, w: 0.5625, h: 1 },
+                },
+              ]
+            : []),
           server.savedSchema === 1
-            ? { outputId: 'o1', aspect: 'VERT_9_16', crop: SAVED_CROP }
+            ? { outputId: 'vert', aspect: 'VERT_9_16', crop: SAVED_CROP }
             : (server.savedOutput ?? {
                 outputId: 'o1',
                 aspect: 'VERT_9_16',
@@ -111,6 +124,7 @@ function handle(url: string, init?: RequestInit) {
               }),
         ],
         audio: { tracks: server.savedTracks },
+        subtitles: server.savedSubtitles,
       },
     });
   }
@@ -151,6 +165,8 @@ beforeEach(() => {
   server.savedTracks = [{ trackId: 0, gain: 1 }];
   server.savedSchema = 2;
   server.savedOutput = null;
+  server.savedSquare = false;
+  server.savedSubtitles = null;
   server.relation = 'OWNER';
   server.delegations = [];
   fetchSpy = stubFetch(handle);
@@ -552,6 +568,60 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
     expect(screen.getByRole('radio', { name: '60 : 40' })).toBeChecked();
     expect(screen.getByRole('switch', { name: '경계선 표시' })).not.toBeChecked();
 
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await waitFor(() =>
+      expect(
+        fetchSpy.mock.calls.some(
+          ([url, init]) =>
+            url === `/api/clip/broadcasts/${STREAM_ID}/recipes/31/renders` &&
+            init?.method === 'POST',
+        ),
+      ).toBe(true),
+    );
+    expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(0);
+  });
+
+  it('옛 편집본(v1)의 정사각 출력은 다시 저장해도 남고, 세로 출력의 이름을 잇는다', async () => {
+    server.savedSchema = 1;
+    server.savedSquare = true;
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    // 첫 출력이 정사각이어도 화면은 세로 출력으로 연다
+    expect(screen.getByRole('radio', { name: /세로/ })).toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: '편집본 저장' }));
+    await waitFor(() =>
+      expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1),
+    );
+    const outputs = bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)[0]
+      ?.outputs as Output[] & { outputId: string; aspect: string }[];
+    expect(outputs.map((o) => [o.outputId, o.aspect])).toEqual([
+      ['vert', 'VERT_9_16'],
+      ['square', 'SQUARE_1_1'],
+    ]);
+    expect(outputs[1]!.layers).toEqual([
+      { crop: { x: 0.21875, y: 0, w: 0.5625, h: 1 }, box: { x: 0, y: 0, w: 1, h: 1 } },
+    ]);
+  });
+
+  it('저장된 자막 줄은 편집기에도 보인다 — 영상에 타는 줄을 화면이 「미생성」이라 하지 않는다', async () => {
+    server.savedSubtitles = {
+      mode: 'BURN_ONLY',
+      segments: [
+        { startAtMs: STARTED_AT + 121_500, endAtMs: STARTED_AT + 123_000, text: '저장된 첫 자막' },
+        { startAtMs: STARTED_AT + 200_000, endAtMs: STARTED_AT + 201_000, text: '구간 밖 자막' },
+      ],
+      position: { anchor: 'TOP', y: (10 / 240) * (9 / 16) },
+    };
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    await user.click(screen.getByRole('tab', { name: '자막' }));
+
+    expect(screen.getByText('저장된 첫 자막')).toBeInTheDocument();
+    expect(screen.queryByText('구간 밖 자막')).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '상단' })).toBeChecked();
+
+    // 고치지 않았으면 다시 저장하지 않는다 — 자막 방식·자리도 제자리로 돌아왔다
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
     await waitFor(() =>
       expect(
