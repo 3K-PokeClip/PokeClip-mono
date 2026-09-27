@@ -1,5 +1,6 @@
 package com.pokeclip.clip.recipe;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
@@ -26,7 +27,36 @@ public record RecipeDocument(Integer schemaVersion,
     public record Cut(Long inAtMs, Long outAtMs) {
     }
 
-    public record Output(String outputId, String aspect, Crop crop) {
+    /**
+     * v1은 {@code crop} 하나, v2는 {@code layers}(+ {@code background}·{@code dividers})다(계약6 7절). 두 판의 칸을 한 record에 두고
+     * 어느 판의 칸이 왔는지는 {@link RecipeValidator}가 가른다. <b>빈 칸은 안 싣는다</b> — 싣으면 v1 출력이 {@code "layers": null}을
+     * 달고 나가 fail-closed인 렌더가 모르는 칸으로 거부한다.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record Output(String outputId, String aspect, Crop crop, Background background, List<Layer> layers,
+                         List<Divider> dividers) {
+    }
+
+    /** v2 층 — 원본의 {@code crop}을 결과의 {@code box}에 놓는다. {@code frame}이 없으면 꾸밈 없음. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record Layer(Crop crop, Box box, Frame frame) {
+    }
+
+    /** 결과 안 자리. 결과의 정규화 좌표. */
+    public record Box(Double x, Double y, Double w, Double h) {
+    }
+
+    /** 층 둘레. 길이는 결과 폭에 대한 비, 색은 {@code #RRGGBB}. */
+    public record Frame(Double width, String color, Double radius, Boolean shadow) {
+    }
+
+    /** {@code kind} = BLUR({@code strength} 0~100) | COLOR({@code color}). */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record Background(String kind, Integer strength, String color) {
+    }
+
+    /** 가로 구분선. {@code y}는 결과 높이 비, {@code thickness}는 결과 폭 비. */
+    public record Divider(Double y, Double thickness, String color) {
     }
 
     /** 정규화 좌표. 표시 평면 좌상단 원점(계약6 rev7). */
@@ -40,7 +70,13 @@ public record RecipeDocument(Integer schemaVersion,
     public record Track(Integer trackId, Double gain) {
     }
 
-    public record Subtitles(String mode, List<Segment> segments) {
+    /** {@code position}은 v2에만 있다(없으면 아래 가운데). */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record Subtitles(String mode, List<Segment> segments, Position position) {
+    }
+
+    /** 번인 자막 자리 — {@code anchor}(TOP·MIDDLE·BOTTOM) 쪽 가장자리가 결과 높이의 {@code y}에 온다. */
+    public record Position(String anchor, Double y) {
     }
 
     /** 구간 의미는 {@code [startAtMs, endAtMs)}, 방송 절대축. */
