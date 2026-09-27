@@ -35,10 +35,19 @@ public final class CropGeometry {
      * @param target 잘라 놓을 자리의 픽셀 비율(가로/세로). v1은 출력 비율, v2는 층이 놓일 {@code box}의 비율이다(계약6 7절)
      */
     public static Pixels toPixels(Crop crop, double target, int srcW, int srcH) {
+        return toPixels(crop, target, target, srcW, srcH);
+    }
+
+    /**
+     * 검사하는 비율과 맞출 비율이 다를 때. 층이 놓일 자리는 짝수 픽셀로 반올림되는데, 작은 칸이면 반올림이 비율을 1% 넘게
+     * 바꾼다(1080×1920에서 0.05×0.0506 칸 = 54×96px, 1.2%). 레시피는 반올림 전 비율({@code declared})로 검사하고, 자르기는
+     * 반올림된 칸의 비율({@code fit})에 맞춰 <b>가운데를 지키며 줄여</b> 늘려 그리지 않는다(PR #201 codex).
+     */
+    public static Pixels toPixels(Crop crop, double declared, double target, int srcW, int srcH) {
         double w = crop.w() * srcW;
         double h = crop.h() * srcH;
         double ratio = w / h;
-        if (Math.abs(ratio / target - 1) > TOLERANCE) {
+        if (Math.abs(ratio / declared - 1) > TOLERANCE) {
             throw RenderFailure.permanent(ErrorCode.VALIDATION,
                     "crop 비율이 놓일 자리와 1% 넘게 다르다(영상이 찌그러진다)");
         }

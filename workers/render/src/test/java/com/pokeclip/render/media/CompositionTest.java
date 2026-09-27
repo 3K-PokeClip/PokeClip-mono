@@ -128,4 +128,21 @@ class CompositionTest {
         assertThat(image.getRGB(22, 20) >>> 24).isPositive();
         assertThat(image.getRGB(0, 0) >>> 24).isZero();
     }
+
+    @Test
+    void 작은_칸은_반올림된_칸_비율로_잘라_늘리지_않는다() {
+        // 0.05 x 0.0506 = 54 x 97.152px(비율 0.5558) → 짝수로 54 x 96(0.5625): 반올림이 비율을 1.2% 바꾼다
+        Box small = new Box(0.5, 0.5, 0.05, 0.0506);
+        double declared = (0.05 * 1080) / (0.0506 * 1920);
+        Crop crop = new Crop(0.3, 0.2, declared * 0.5 * 360 / 640, 0.5);
+        Output output = new Output("o1", Aspect.VERT_9_16, null,
+                List.of(new Layer(VERT, Box.FULL, null), new Layer(crop, small, null)), List.of());
+        String graph = Composition.plan(output, 640, 360, "p").graph();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\[s1\\]crop=(\\d+):(\\d+):").matcher(graph);
+        assertThat(m.find()).isTrue();
+        double cropRatio = Double.parseDouble(m.group(1)) / Double.parseDouble(m.group(2));
+        assertThat(graph).contains("scale=54:96:");
+        // 레시피 비율(0.5558)이 아니라 놓일 칸(54x96 = 0.5625) 쪽으로 잘랐다 — 옛 계산은 0.5556이라 1.2% 늘려 그렸다
+        assertThat(cropRatio).isGreaterThan(54.0 / 96 * 0.995);
+    }
 }

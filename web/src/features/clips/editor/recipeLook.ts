@@ -309,7 +309,15 @@ export function lookFromDocument(doc: RecipeDocument): Partial<EditorLook> {
       crops: cropsFor('vert', 50, DEFAULT_PIP_FOR_READ, [a.crop]),
     };
   }
-  if (output.layers.length === 1 && near(a.box.w, 1)) {
+  // 중앙: 원본 비율(16:9) 칸이 폭 전부로 세로 가운데에 선다 — 폭만 보고 고르면 다른 모양을 중앙으로 되살려 덮어쓴다
+  const centerH = resultAspect('center') / (16 / 9);
+  if (
+    output.layers.length === 1 &&
+    near(a.box.x, 0) &&
+    near(a.box.w, 1) &&
+    near(a.box.h, centerH) &&
+    near(a.box.y, (1 - centerH) / 2)
+  ) {
     const bg = output.background;
     return {
       ...common,

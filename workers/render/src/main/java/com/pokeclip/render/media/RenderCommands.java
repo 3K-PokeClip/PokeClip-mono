@@ -2,7 +2,6 @@ package com.pokeclip.render.media;
 
 import com.pokeclip.render.recipe.Recipe.Aspect;
 import com.pokeclip.render.recipe.Recipe.AudioTrack;
-import com.pokeclip.render.recipe.Recipe.SubtitlePosition;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -27,17 +26,8 @@ public final class RenderCommands {
     public static final String CONCAT_LIST = "concat.txt";
     public static final String BURN_SRT = "burn.srt";
 
-    /** 번인 글꼴. 크기·여백은 libass의 기준 높이(288) 단위라 출력 해상도를 따라 커진다. v1(자리 없음) 자막의 모양이다. */
+    /** 번인 글꼴. 크기·여백은 libass의 기준 높이(288) 단위라 출력 해상도를 따라 커진다. 자리가 없는 v1 자막(SRT)의 모양이다. */
     static final String BURN_STYLE = "FontName=Noto Sans CJK KR,FontSize=13,Outline=1,Shadow=0,MarginV=60";
-
-    /**
-     * v2 번인 자막 — 편집기 미리보기의 글자(시안 11px·굵게, 좌우 8px 여백)를 결과 칸 기준 폭 240px로 옮긴 값({@link Composition}의
-     * 그림자와 같은 기준). SRT를 태우면 libass 좌표가 384×288이라 세로 값은 ×288/높이, 가로 값은 ×384/폭으로 옮긴다.
-     * <b>ASS 글꼴 크기는 CSS의 em이 아니라 줄 높이(ascent+descent)다</b> — Noto Sans CJK는 그 둘의 비가 1.448이라 곱한다.
-     */
-    static final double BURN_FONT_EM = 11.0 / 240;
-    static final double BURN_SIDE = 8.0 / 240;
-    static final double NOTO_CJK_LINE = 1.448;
 
     private RenderCommands() {
     }
@@ -83,16 +73,17 @@ public final class RenderCommands {
     /**
      * @param video        {@link Composition#plan}의 결과. 그림은 부르는 쪽이 작업 폴더에 먼저 써 둔다
      * @param loudnessFix  {@link Loudness#correctFilter}의 결과. null이면 평준화 없음(무음)
-     * @param burnStyle    번인 자막 모양({@link #burnStyle}). null이면 번인하지 않는다
+     * @param burnFile     번인할 자막 파일. {@link #BURN_SRT}면 예전 모양({@link #BURN_STYLE})을 입히고, ASS({@link AssWriter})는
+     *                     파일이 모양을 다 갖고 있다. null이면 번인하지 않는다
      */
     public static List<String> render(String ffmpeg, long offsetMs, long durationMs, Composition.Plan video,
-                                      List<AudioTrack> tracks, String loudnessFix, String burnStyle,
+                                      List<AudioTrack> tracks, String loudnessFix, String burnFile,
                                       String fontsDir, String outputFile) {
         String chain = video.graph();
-        if (burnStyle != null) {
-            chain += ",subtitles=" + BURN_SRT
+        if (burnFile != null) {
+            chain += ",subtitles=" + burnFile
                     + (fontsDir == null || fontsDir.isBlank() ? "" : ":fontsdir=" + fontsDir)
-                    + ":force_style='" + burnStyle + "'";
+                    + (burnFile.equals(BURN_SRT) ? ":force_style='" + BURN_STYLE + "'" : "");
         }
         String graph = chain + "[vout];" + audioGraph(tracks, loudnessFix);
         // 꾸밈 그림은 원본 뒤 입력으로 넣고 영상 내내 되풀이한다. 길이(-t)는 그 뒤에 둬야 출력 쪽 옵션이 된다 —
@@ -108,48 +99,6 @@ public final class RenderCommands {
                 "-c:a", "aac", "-b:a", "160k",
                 "-movflags", "+faststart", "-y", outputFile));
         return cmd;
-    }
-
-    /**
-     * 번인 자막의 {@code force_style}. 자리가 없으면(v1) 예전 모양 그대로다.
-     *
-     * <p>가운데 붙임(MIDDLE)은 ASS에서 세로 여백이 먹지 않아 <b>아래 붙임으로 바꿔</b> 한 줄 높이의 절반만큼 올린다 — 한 줄 자막이면
-     * 가운데가 정확히 {@code y}에 온다(미리보기의 「경계」 자리가 이렇게 그린다).
-     */
-    public static String burnStyle(SubtitlePosition position, Aspect aspect) {
-        if (position == null) {
-            return BURN_STYLE;
-        }
-        int w = aspect.width();
-        int h = aspect.height();
-        double fontPx = BURN_FONT_EM * w;
-        double fontSize = fontPx * NOTO_CJK_LINE * 288 / h;
-        int side = (int) Math.round(BURN_SIDE * 384);
-        int alignment;
-        double marginV;
-        switch (position.anchor()) {
-            case TOP -> {
-                // force_style의 정렬 번호는 옛 SSA 방식이다(아래 1·2·3, 위 5·6·7, 가운데 9·10·11). 요즘 ASS의 숫자판 배치로
-                // 위 가운데인 8을 주면 왼쪽 가운데에 뜬다(2026-09-27 실측)
-                alignment = 6;
-                marginV = position.y() * 288;
-            }
-            case BOTTOM -> {
-                alignment = 2;
-                marginV = (1 - position.y()) * 288;
-            }
-            default -> {
-                alignment = 2;
-                marginV = (1 - position.y()) * 288 - fontSize / 2;
-            }
-        }
-        return "FontName=Noto Sans CJK KR,FontSize=" + decimal1(fontSize) + ",Bold=1,Outline=1,Shadow=0"
-                + ",Alignment=" + alignment + ",MarginL=" + side + ",MarginR=" + side
-                + ",MarginV=" + Math.max(0, Math.round(marginV));
-    }
-
-    private static String decimal1(double value) {
-        return String.format(Locale.ROOT, "%.1f", value);
     }
 
     /**

@@ -4,6 +4,7 @@ import com.pokeclip.render.job.ErrorCode;
 import com.pokeclip.render.job.JobEnvelope;
 import com.pokeclip.render.job.RenderFailure;
 import com.pokeclip.render.job.SourceSegment;
+import com.pokeclip.render.media.AssWriter;
 import com.pokeclip.render.media.Composition;
 import com.pokeclip.render.media.Loudness;
 import com.pokeclip.render.media.MediaInfo;
@@ -104,7 +105,7 @@ public class ClipRenderer {
         boolean burn = recipe.subtitles() != null && recipe.subtitles().mode().burns() && !subtitles.isEmpty();
         boolean cc = recipe.subtitles() != null && recipe.subtitles().mode().cc() && !subtitles.isEmpty();
         String srt = SrtWriter.render(subtitles);
-        if (burn) {
+        if (burn && recipe.subtitles().position() == null) {
             write(dir.resolve(RenderCommands.BURN_SRT), srt);
         }
 
@@ -116,10 +117,17 @@ public class ClipRenderer {
             for (Composition.Image image : video.images()) {
                 writeImage(dir.resolve(image.name()), image.image());
             }
-            String burnStyle = burn ? RenderCommands.burnStyle(recipe.subtitles().position(), output.aspect()) : null;
+            // 자리가 있는 자막(v2)은 출력 해상도에 맞춘 ASS로 태운다 — 출력마다 해상도가 달라 파일도 출력마다다
+            String burnFile = null;
+            if (burn && recipe.subtitles().position() != null) {
+                burnFile = output.outputId() + ".ass";
+                write(dir.resolve(burnFile), AssWriter.render(subtitles, recipe.subtitles().position(), output.aspect()));
+            } else if (burn) {
+                burnFile = RenderCommands.BURN_SRT;
+            }
             String file = output.outputId() + ".mp4";
             runner.run(RenderCommands.render(ffmpeg, offsetMs, durationMs, video, recipe.tracks(), loudnessFix,
-                    burnStyle, fontsDir, file), dir, deadline);
+                    burnFile, fontsDir, file), dir, deadline);
             produced.add(new Produced(output.outputId(), "video", dir.resolve(file)));
             if (cc) {
                 String srtFile = output.outputId() + ".srt";

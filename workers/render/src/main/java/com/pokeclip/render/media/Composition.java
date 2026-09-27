@@ -88,8 +88,9 @@ public final class Composition {
             Layer layer = layers.get(i);
             Box box = layer.box();
             Rect at = rect(box, outW, outH);
-            double ratio = (box.w() * outW) / (box.h() * outH);
-            CropGeometry.Pixels crop = CropGeometry.toPixels(layer.crop(), ratio, srcW, srcH);
+            // 검사는 레시피가 말한 비율로, 자르기는 짝수로 반올림된 칸의 비율로 — 늘려 그리면 찌그러진다
+            double declared = (box.w() * outW) / (box.h() * outH);
+            CropGeometry.Pixels crop = CropGeometry.toPixels(layer.crop(), declared, (double) at.w / at.h, srcW, srcH);
             graph.append(";[s").append(i).append(']').append(crop.filter())
                     .append(",scale=").append(at.w).append(':').append(at.h).append(":flags=lanczos,setsar=1");
 

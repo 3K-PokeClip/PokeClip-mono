@@ -172,6 +172,25 @@ describe('레시피 → 화면', () => {
     expect(look.crops?.main?.zoom).toBeCloseTo(1, 9);
   });
 
+  it('폭만 꽉 찬 한 장은 중앙이 아니다 — 자리까지 중앙 모양일 때만 중앙으로 연다', () => {
+    const doc = (box: { x: number; y: number; w: number; h: number }): RecipeDocument => ({
+      schemaVersion: 2,
+      streamId: 's',
+      cut: null,
+      outputs: [
+        {
+          outputId: 'o1',
+          aspect: 'VERT_9_16',
+          layers: [{ crop: { x: 0, y: 0, w: 1, h: 0.5 }, box }],
+        },
+      ],
+      audio: { tracks: [] },
+    });
+    expect(lookFromDocument(doc({ x: 0, y: 0.1, w: 1, h: 0.5 })).layout).toBeUndefined();
+    const h = (9 / 16) * (9 / 16);
+    expect(lookFromDocument(doc({ x: 0, y: (1 - h) / 2, w: 1, h })).layout).toBe('center');
+  });
+
   it('편집기가 만들지 않는 모양이면 모양 칸을 비운다(편집기 기본값으로 연다)', () => {
     const look = lookFromDocument({
       schemaVersion: 2,

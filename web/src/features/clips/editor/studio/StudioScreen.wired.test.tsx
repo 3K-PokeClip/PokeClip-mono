@@ -635,4 +635,16 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
     );
     expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(0);
   });
+
+  it('CC만 고른 자막은 영상에 타지 않으니 미리보기에도 안 그린다', async () => {
+    server.savedSubtitles = {
+      mode: 'CC_ONLY',
+      segments: [
+        { startAtMs: STARTED_AT + 121_500, endAtMs: STARTED_AT + 123_000, text: '자막 파일에만' },
+      ],
+    };
+    await openFrom('recipe=31');
+    // 자막 도구 목록에는 있지만 결과 화면에 얹힌 번인 글자는 없다
+    expect(screen.queryByText('“자막 파일에만”')).not.toBeInTheDocument();
+  });
 });
