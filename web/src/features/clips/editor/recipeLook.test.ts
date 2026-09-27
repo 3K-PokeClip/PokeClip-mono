@@ -4,6 +4,7 @@ import { DEFAULT_CENTER_FILL, DEFAULT_PIP, DEFAULT_PIP_BORDER } from './editorLa
 import {
   lookFromDocument,
   outputFromLook,
+  outputsFor,
   regionCropsOf,
   sameRecipe,
   subtitlePositionOf,
@@ -189,6 +190,36 @@ describe('레시피 → 화면', () => {
       audio: { tracks: [] },
     });
     expect(look).toEqual({});
+  });
+});
+
+describe('outputsFor', () => {
+  const v2 = (outputs: unknown[]): RecipeDocument =>
+    ({
+      schemaVersion: 2,
+      streamId: 's',
+      cut: null,
+      outputs,
+      audio: { tracks: [] },
+    }) as RecipeDocument;
+  const square = {
+    outputId: 'o1',
+    aspect: 'SQUARE_1_1' as const,
+    layers: [{ crop: { x: 0.2, y: 0, w: 0.5625, h: 1 }, box: { x: 0, y: 0, w: 1, h: 1 } }],
+  };
+
+  it('세로는 저장된 자리에서 갈아 끼운다 — 순서를 안 바꾼다', () => {
+    const vert = { ...outputFromLook(BASE), outputId: 'v' };
+    const out = outputsFor(BASE, v2([square, vert]));
+    expect(out.map((o) => [o.outputId, o.aspect])).toEqual([
+      ['o1', 'SQUARE_1_1'],
+      ['v', 'VERT_9_16'],
+    ]);
+  });
+
+  it('세로가 없던 편집본이면 겹치지 않는 이름으로 붙인다', () => {
+    const out = outputsFor(BASE, v2([square]));
+    expect(out.map((o) => o.outputId)).toEqual(['o1', 'o2']);
   });
 });
 

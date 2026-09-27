@@ -581,7 +581,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
     expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(0);
   });
 
-  it('옛 편집본(v1)의 정사각 출력은 다시 저장해도 남고, 세로 출력의 이름을 잇는다', async () => {
+  it('옛 편집본(v1)의 정사각 출력은 다시 저장해도 남고, 세로 출력의 이름·자리를 잇는다', async () => {
     server.savedSchema = 1;
     server.savedSquare = true;
     const user = userEvent.setup();
@@ -594,12 +594,13 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
       expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1),
     );
     const outputs = bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)[0]
-      ?.outputs as Output[] & { outputId: string; aspect: string }[];
+      ?.outputs as (Output & { outputId: string; aspect: string })[];
+    // 저장된 순서 그대로 — 세로 자리에서 갈아 끼운다
     expect(outputs.map((o) => [o.outputId, o.aspect])).toEqual([
-      ['vert', 'VERT_9_16'],
       ['square', 'SQUARE_1_1'],
+      ['vert', 'VERT_9_16'],
     ]);
-    expect(outputs[1]!.layers).toEqual([
+    expect(outputs[0]!.layers).toEqual([
       { crop: { x: 0.21875, y: 0, w: 0.5625, h: 1 }, box: { x: 0, y: 0, w: 1, h: 1 } },
     ]);
   });

@@ -172,9 +172,17 @@ export function outputsFor(look: EditorLook, saved: RecipeDocument | null): Reci
       ? { outputId: o.outputId, aspect: o.aspect, layers: [{ crop: o.crop, box: FULL }] }
       : o,
   );
-  const vert = savedOutputs.find((o) => o.aspect === 'VERT_9_16');
-  const main = { ...outputFromLook(look), ...(vert ? { outputId: vert.outputId } : {}) };
-  return [main, ...savedOutputs.filter((o) => o.aspect !== 'VERT_9_16')];
+  const main = outputFromLook(look);
+  // 세로 출력은 저장된 자리에서 갈아 끼운다 — 순서가 바뀌면 고치지 않은 편집본도 「바뀌었다」가 된다
+  if (savedOutputs.some((o) => o.aspect === 'VERT_9_16'))
+    return savedOutputs.map((o) =>
+      o.aspect === 'VERT_9_16' ? { ...main, outputId: o.outputId } : o,
+    );
+  // 세로가 없던 편집본 — 이름이 겹치면 저장 문이 거절하므로 안 쓰인 이름을 고른다
+  const taken = new Set(savedOutputs.map((o) => o.outputId));
+  let id = main.outputId;
+  for (let n = 2; taken.has(id); n += 1) id = `o${n}`;
+  return [...savedOutputs, { ...main, outputId: id }];
 }
 
 const MODE_TO_CONTRACT: Readonly<Record<SubtitleMode, RecipeSubtitles['mode']>> = {
@@ -272,9 +280,13 @@ function captionOf(subtitles: RecipeSubtitles | null | undefined): CaptionPositi
  */
 export function lookFromDocument(doc: RecipeDocument): Partial<EditorLook> {
   const subtitles = doc.subtitles;
+  const position = subtitles && 'position' in subtitles ? subtitles.position : undefined;
+  const middle = position?.anchor === 'MIDDLE' ? position : undefined;
   const common: Partial<EditorLook> = {
     ...(subtitles ? { subtitleMode: MODE_FROM_CONTRACT[subtitles.mode] } : {}),
     ...(captionOf(subtitles) ? { captionPosition: captionOf(subtitles) } : {}),
+    // 「경계」 자막의 자리는 분할 지분이다 — 분할이 아닌 레이아웃에서도 저장한 자리로 돌아오게 되살린다(분할이면 아래가 덮는다)
+    ...(middle ? { splitRatio: Math.round(middle.y * 100) } : {}),
   };
   // 편집기가 그리는 것은 세로 한 벌이다 — 첫 출력이 아니라 세로 출력을 읽는다
   const first = (doc.outputs as { aspect: string }[]).find((o) => o.aspect === 'VERT_9_16') as
