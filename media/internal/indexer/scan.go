@@ -52,8 +52,10 @@ func (ix *Indexer) collectTree(ctx context.Context, root string) collectResult {
 			return fs.SkipAll
 		}
 		if err != nil {
-			// 훑는 도중 사라진 파일 때문에 전체 스캔을 포기하지는 않는다.
+			// 훑는 도중 사라진 파일 때문에 전체 스캔을 포기하지는 않는다. 경로는 결과에 실어
+			// ApplyCollect 가 4.1 점검 결손으로 옮긴다(워커는 ix 맵을 만지지 않는다).
 			ix.log.Warn("walk_entry_failed", "path", path, "err", err)
+			res.walkErrs = append(res.walkErrs, path)
 			return nil
 		}
 		if d.IsDir() {
@@ -113,6 +115,15 @@ func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs [
 			"stream_id", streamID, "files", len(segs), "indexed", indexedAtStart,
 			"pending", pendingCount, "holes", holes)
 	}()
+	// 결손 ⅱ(4.1 ③(b)) — 이 수집을 처리한 뒤 커서 마지막 시작보다 늦은 미기록 파일이 남으면 그
+	// 스트림의 점검 결손이다. scan_summary 와 같은 이유로 모든 종료 경로에서 한 번 잰다. 원인(최신
+	// 파일 확인 실패 · 워처 인계 · 측정 실패 · 길이 0 · poison)을 갈래마다 표시하지 않고 결과로
+	// 판정하므로, 갈래가 늘어도 이 자리는 그대로다.
+	defer func() {
+		if ix.lateUnrecorded(streamID, segs) {
+			ix.markCheckGap(streamID)
+		}
+	}()
 
 	// (a) 꼬리 재성장 복구 — 재기동으로 잃은 교정 창을 되살린다.
 	if err := ix.recoverTail(ctx, root, streamID); err != nil {
@@ -159,6 +170,23 @@ func (ix *Indexer) scanStream(ctx context.Context, root, streamID string, segs [
 	// 아직 최근에 쓰인 흔적이 있으면 녹화 중일 수 있으니 감시자에게 넘겨 계속 지켜보게 한다.
 	ix.adopt.Adopt(latest)
 	return nil
+}
+
+// lateUnrecorded 는 segs 가운데 커서 마지막 시작보다 늦은 미기록 파일이 있는가다 — 그런 파일은
+// 나중 수집이 장부에 넣을 수 있다. 마지막 시작 이하의 미기록 파일(구멍)은 H3 가 영구히 거르므로
+// 세지 않는다. 커서와 이력 맵은 처리 중에 교체될 수 있어(seq 충돌 재적재 · H3 재적재) 지금 값을
+// 읽는다.
+func (ix *Indexer) lateUnrecorded(streamID string, segs []recording.Segment) bool {
+	last := ix.cursors[streamID].LastStartWall()
+	for _, seg := range segs {
+		if _, ok := ix.indexed[streamID][seg.Path]; ok {
+			continue
+		}
+		if seg.StartWall.After(last) {
+			return true
+		}
+	}
+	return false
 }
 
 // reportHoles 는 인덱스 구멍의 **위치와 시각**을 남긴다. 개수만으로는 무엇을 잃었는지
