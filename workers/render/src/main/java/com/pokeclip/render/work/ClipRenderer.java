@@ -4,7 +4,7 @@ import com.pokeclip.render.job.ErrorCode;
 import com.pokeclip.render.job.JobEnvelope;
 import com.pokeclip.render.job.RenderFailure;
 import com.pokeclip.render.job.SourceSegment;
-import com.pokeclip.render.media.CropGeometry;
+import com.pokeclip.render.media.Composition;
 import com.pokeclip.render.media.Loudness;
 import com.pokeclip.render.media.MediaInfo;
 import com.pokeclip.render.media.MediaProbe;
@@ -20,6 +20,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.ObjectMapper;
 
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -28,6 +29,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import javax.imageio.ImageIO;
 
 /**
  * 주문서 하나로 산출물 파일을 만든다. 받기 → 소스 검사 → 잇기 → 소리 재기 → output마다 렌더.
@@ -110,11 +112,14 @@ public class ClipRenderer {
         List<Output> outputs = recipe.outputs();
         for (int i = 0; i < outputs.size(); i++) {
             Output output = outputs.get(i);
-            CropGeometry.Pixels crop = CropGeometry.toPixels(output.crop(), output.aspect(), info.width(),
-                    info.height());
+            Composition.Plan video = Composition.plan(output, info.width(), info.height(), output.outputId() + "_");
+            for (Composition.Image image : video.images()) {
+                writeImage(dir.resolve(image.name()), image.image());
+            }
+            String burnStyle = burn ? RenderCommands.burnStyle(recipe.subtitles().position(), output.aspect()) : null;
             String file = output.outputId() + ".mp4";
-            runner.run(RenderCommands.render(ffmpeg, offsetMs, durationMs, crop, output.aspect(), recipe.tracks(),
-                    loudnessFix, burn, fontsDir, file), dir, deadline);
+            runner.run(RenderCommands.render(ffmpeg, offsetMs, durationMs, video, recipe.tracks(), loudnessFix,
+                    burnStyle, fontsDir, file), dir, deadline);
             produced.add(new Produced(output.outputId(), "video", dir.resolve(file)));
             if (cc) {
                 String srtFile = output.outputId() + ".srt";
@@ -199,6 +204,14 @@ public class ClipRenderer {
             spacing.add(infos.get(i).audioEndUs() - infos.get(i + 1).audioLeadUs());
         }
         return spacing;
+    }
+
+    private static void writeImage(Path file, BufferedImage image) {
+        try {
+            ImageIO.write(image, "png", file.toFile());
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     private static void write(Path file, String text) {

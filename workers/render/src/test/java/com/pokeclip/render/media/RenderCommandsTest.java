@@ -1,8 +1,14 @@
 package com.pokeclip.render.media;
 
+import com.pokeclip.render.recipe.Recipe.Anchor;
+import com.pokeclip.render.recipe.Recipe.Aspect;
 import com.pokeclip.render.recipe.Recipe.AudioTrack;
+import com.pokeclip.render.recipe.Recipe.Crop;
+import com.pokeclip.render.recipe.Recipe.Output;
+import com.pokeclip.render.recipe.Recipe.SubtitlePosition;
 import org.junit.jupiter.api.Test;
 
+import java.awt.image.BufferedImage;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -33,12 +39,42 @@ class RenderCommandsTest {
     @Test
     void 자르기는_입력_쪽_seek이다() {
         List<String> cmd = RenderCommands.render("ffmpeg", 1_234, 10_000,
-                new CropGeometry.Pixels(0, 0, 606, 1080), com.pokeclip.render.recipe.Recipe.Aspect.VERT_9_16,
-                List.of(new AudioTrack(0, 1.0)), null, true, null, "o1.mp4");
+                Composition.plan(Output.single("o1", Aspect.VERT_9_16, new Crop(0, 0, 0.31640625, 1)), 1920, 1080, "o1_"),
+                List.of(new AudioTrack(0, 1.0)), null, RenderCommands.BURN_STYLE, null, "o1.mp4");
         assertThat(cmd.subList(0, 9)).containsExactly("ffmpeg", "-hide_banner", "-nostdin", "-ss", "1.234", "-i",
                 "source.mp4", "-t", "10.000");
         assertThat(cmd.get(cmd.indexOf("-filter_complex") + 1))
-                .startsWith("[0:v:0]setsar=1,crop=606:1080:0:0,scale=1080:1920:flags=lanczos,setsar=1,subtitles=burn.srt:")
+                .startsWith("[0:v:0]setsar=1,crop=606:1080:1:0,scale=1080:1920:flags=lanczos,setsar=1,subtitles=burn.srt:")
                 .contains("[vout];");
+    }
+
+    @Test
+    void 꾸밈_그림은_원본_뒤_입력이고_길이는_그_뒤에_둔다() {
+        Composition.Plan plan = new Composition.Plan("[0:v:0]null", List.of(
+                new Composition.Image("a.png", new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB)),
+                new Composition.Image("b.png", new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB))));
+        List<String> cmd = RenderCommands.render("ffmpeg", 0, 5_000, plan, List.of(new AudioTrack(0, 1.0)), null, null,
+                null, "o1.mp4");
+        assertThat(cmd.subList(0, 17)).containsExactly("ffmpeg", "-hide_banner", "-nostdin", "-ss", "0.000", "-i",
+                "source.mp4", "-loop", "1", "-i", "a.png", "-loop", "1", "-i", "b.png", "-t", "5.000");
+        assertThat(cmd.get(cmd.indexOf("-filter_complex") + 1)).startsWith("[0:v:0]null[vout];");
+    }
+
+    @Test
+    void 자막_자리가_없으면_예전_모양이다() {
+        assertThat(RenderCommands.burnStyle(null, Aspect.VERT_9_16)).isEqualTo(RenderCommands.BURN_STYLE);
+    }
+
+    @Test
+    void 자막_자리를_libass_여백으로_옮긴다() {
+        // 글꼴: 11/240 × 1080 = 49.5px, 줄 높이로 ×1.448, 288/1920로 옮기면 10.75
+        assertThat(RenderCommands.burnStyle(new SubtitlePosition(Anchor.BOTTOM, 0.9), Aspect.VERT_9_16))
+                .isEqualTo("FontName=Noto Sans CJK KR,FontSize=10.8,Bold=1,Outline=1,Shadow=0,Alignment=2,"
+                        + "MarginL=13,MarginR=13,MarginV=29");
+        assertThat(RenderCommands.burnStyle(new SubtitlePosition(Anchor.TOP, 0.05), Aspect.VERT_9_16))
+                .contains("Alignment=6").endsWith("MarginV=14");
+        // 가운데 붙임은 아래 붙임에서 글꼴 절반(5.4)만큼 올린다: (1 − 0.5) × 288 − 5.4 = 138.6
+        assertThat(RenderCommands.burnStyle(new SubtitlePosition(Anchor.MIDDLE, 0.5), Aspect.VERT_9_16))
+                .contains("Alignment=2").endsWith("MarginV=139");
     }
 }

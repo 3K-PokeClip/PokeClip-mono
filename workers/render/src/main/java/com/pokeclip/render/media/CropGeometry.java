@@ -28,19 +28,26 @@ public final class CropGeometry {
     }
 
     public static Pixels toPixels(Crop crop, Aspect aspect, int srcW, int srcH) {
+        return toPixels(crop, aspect.ratio(), srcW, srcH);
+    }
+
+    /**
+     * @param target 잘라 놓을 자리의 픽셀 비율(가로/세로). v1은 출력 비율, v2는 층이 놓일 {@code box}의 비율이다(계약6 7절)
+     */
+    public static Pixels toPixels(Crop crop, double target, int srcW, int srcH) {
         double w = crop.w() * srcW;
         double h = crop.h() * srcH;
         double ratio = w / h;
-        if (Math.abs(ratio / aspect.ratio() - 1) > TOLERANCE) {
+        if (Math.abs(ratio / target - 1) > TOLERANCE) {
             throw RenderFailure.permanent(ErrorCode.VALIDATION,
-                    "crop 비율이 " + aspect + "와 1% 넘게 다르다(영상이 찌그러진다)");
+                    "crop 비율이 놓일 자리와 1% 넘게 다르다(영상이 찌그러진다)");
         }
         double cx = crop.x() * srcW + w / 2;
         double cy = crop.y() * srcH + h / 2;
-        if (ratio > aspect.ratio()) {
-            w = h * aspect.ratio();
+        if (ratio > target) {
+            w = h * target;
         } else {
-            h = w / aspect.ratio();
+            h = w / target;
         }
         int width = even(w);
         int height = even(h);
