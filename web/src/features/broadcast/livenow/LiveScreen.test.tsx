@@ -154,17 +154,18 @@ const INFO = {
   ],
 };
 
-const server = vi.hoisted(() => ({ live: true }));
+const server = vi.hoisted(() => ({ live: true, failLive: false, relation: 'OWNER' }));
 
 function handle(url: string) {
   const u = new URL(url, 'http://localhost');
   const path = u.pathname;
   if (path === '/api/clip/broadcasts') {
+    if (server.failLive) return jsonResponse(503, { error: 'unavailable' });
     const live = u.searchParams.get('state') === 'live' && server.live;
     const row = {
       streamId: STREAM_ID,
       status: 'live',
-      relation: 'OWNER',
+      relation: server.relation,
       startedAt: new Date(STARTED_AT).toISOString(),
       endedAt: null,
       vodExpiresAt: null,
@@ -203,6 +204,8 @@ let fetchSpy: ReturnType<typeof stubFetch>;
 beforeEach(() => {
   nav.search = '';
   server.live = true;
+  server.failLive = false;
+  server.relation = 'OWNER';
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.
   vi.stubEnv('NEXT_PUBLIC_MEDIA_STUB_URL', '');
   vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', '');
@@ -272,6 +275,21 @@ describe('LiveScreen — 방송 꺼짐', () => {
     expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeInTheDocument();
   });
 
+  it('방송 목록을 잠깐 못 읽어도 꺼짐 화면으로 바꾸지 않는다 — 모르는 것은 「없다」가 아니다', async () => {
+    await renderLive();
+    expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeInTheDocument();
+
+    server.failLive = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await settle();
+    expect(screen.getByRole('button', { name: /수동 마킹/ })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: '지금은 방송 중이 아니에요' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('?mock=offline이면 대시보드 대신 오프라인 안내를 그린다', async () => {
     nav.search = 'mock=offline';
     await renderLive();
@@ -320,9 +338,15 @@ describe('LiveScreen — 방송 정보 바', () => {
     expect(screen.getByRole('main')).toBeInTheDocument();
   });
 
-  it('채널 이름은 치지직 연동에서 온다', async () => {
+  it('내 방송이면 채널 이름은 내 치지직 연동에서 온다', async () => {
     await renderLive();
     expect(screen.getByText('게임하는너구리')).toBeInTheDocument();
+  });
+
+  it('위임받은 방송에는 내 채널 이름을 붙이지 않는다', async () => {
+    server.relation = 'EDITOR';
+    await renderLive();
+    expect(screen.queryByText('게임하는너구리')).not.toBeInTheDocument();
   });
 
   it('페이지 헤더가 없다 — 시안 1b는 콘텐츠부터 시작한다', async () => {

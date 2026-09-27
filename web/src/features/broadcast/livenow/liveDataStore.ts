@@ -29,6 +29,8 @@ export interface LiveData {
   endedAt: number | null; // epoch ms (지난 방송만)
   /** 카드를 눌러 옮긴 재생 위치(방송 시작 기준 ms). 영상이 없어도 채팅은 그 시점을 보여준다 */
   playheadMs: number | null;
+  /** 이 방송과 나의 관계 — OWNER(내 방송) · EDITOR(위임받은 방송). 모르면 null */
+  relation: string | null;
 }
 
 const INITIAL: LiveData = {
@@ -40,6 +42,7 @@ const INITIAL: LiveData = {
   startedAt: null,
   endedAt: null,
   playheadMs: null,
+  relation: null,
 };
 let state: LiveData = INITIAL;
 const listeners = new Set<() => void>();

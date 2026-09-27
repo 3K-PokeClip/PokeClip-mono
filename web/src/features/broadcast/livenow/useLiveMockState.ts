@@ -486,7 +486,9 @@ export function useLiveMockState(): LiveMockState {
 
   const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
   const { data: me } = useMe();
-  const channelName = chzzk?.channelName ?? '';
+  // 채널 이름은 내 방송일 때만 내 치지직 연동에서 읽는다. 위임받은 방송(EDITOR)은 방송 줄에 스트리머 채널이
+  // 실려 오지 않아 비운다 — 내 채널 이름을 남의 방송에 붙이면 거짓이다(POK-251 리뷰)
+  const channelName = live.relation === 'OWNER' ? (chzzk?.channelName ?? '') : '';
   const myName = me?.name ?? '';
   const stream = useMemo<LiveStream>(
     () => ({

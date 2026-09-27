@@ -4,7 +4,7 @@
 // 라이브면 시작 시각부터 매초 센다. 지난 방송이면 시작~종료 길이를 고정으로 준다.
 // 방송 번호가 없으면 오프라인이다. 결과는 liveDataStore에도 흘려 채팅·통계가 같은 기준을 쓴다.
 import { useEffect, useState } from 'react';
-import { apiFetch } from '@/api/client';
+import { fetchBroadcast } from '@/api/clipEditor';
 import { publishLiveData } from './liveDataStore';
 
 export type BroadcastStatus = 'live' | 'ended' | 'offline' | 'unknown';
@@ -17,24 +17,7 @@ export interface BroadcastClock {
   endedAt: number | null;
 }
 
-interface BroadcastRow {
-  streamId: string;
-  status: string;
-  startedAt: string | null;
-  endedAt: string | null;
-}
-
 const POLL_MS = 30_000;
-
-async function findRow(streamId: string): Promise<BroadcastRow | null> {
-  for (const state of ['live', 'past']) {
-    const r = await apiFetch(`/api/clip/broadcasts?state=${state}&limit=50`);
-    const j = (await r.json()) as { broadcasts: BroadcastRow[] };
-    const hit = j.broadcasts.find((b) => b.streamId === streamId);
-    if (hit) return hit;
-  }
-  return null;
-}
 
 function ms(iso: string | null): number | null {
   if (!iso) return null;
@@ -61,11 +44,12 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
     let alive = true;
     const load = async () => {
       try {
-        const row = await findRow(streamId);
+        // 목록을 끝까지 넘기며 찾는다 — 한 쪽만 보면 오래된 지난 방송이 「없다」가 된다
+        const row = await fetchBroadcast(streamId);
         if (!alive) return;
         if (!row) {
           setStatus('offline');
-          publishLiveData({ status: 'offline', startedAt: null, endedAt: null });
+          publishLiveData({ status: 'offline', startedAt: null, endedAt: null, relation: null });
           return;
         }
         const s = ms(row.startedAt);
@@ -75,7 +59,7 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
         setStartedAt(s);
         setEndedAt(e);
         setNow(Date.now());
-        publishLiveData({ status: st, startedAt: s, endedAt: e });
+        publishLiveData({ status: st, startedAt: s, endedAt: e, relation: row.relation });
       } catch {
         /* 다음 주기에 다시 */
       }

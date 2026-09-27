@@ -36,7 +36,8 @@ export function useLiveStreamSelection(): LiveStreamSelection {
     let alive = true;
     const resolve = (fresh: boolean) =>
       void resolveLiveStreamId(fresh).then((id) => {
-        if (!alive) return;
+        // 모르면(오류) 지금 보던 것을 그대로 둔다 — 꺼짐으로 바꾸지 않는다
+        if (!alive || id === null) return;
         setSelection((prev) =>
           prev.resolved && prev.streamId === id ? prev : { streamId: id, resolved: true },
         );
@@ -56,9 +57,10 @@ export function useLiveStreamSelection(): LiveStreamSelection {
 
   useEffect(() => {
     if (status !== 'ended' || pinnedByAddress()) return;
-    void resolveLiveStreamId(true).then((id) =>
-      setSelection((prev) => (prev.streamId === id ? prev : { streamId: id, resolved: true })),
-    );
+    void resolveLiveStreamId(true).then((id) => {
+      if (id === null) return;
+      setSelection((prev) => (prev.streamId === id ? prev : { streamId: id, resolved: true }));
+    });
   }, [status]);
 
   useEffect(() => {

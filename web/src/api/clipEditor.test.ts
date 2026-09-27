@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ClipApiError, requestRender } from '@/api/clipEditor';
+import { ClipApiError, fetchAllBroadcasts, fetchBroadcast, requestRender } from '@/api/clipEditor';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 
 // clip 창구 호출은 로그인 세션의 apiFetch를 거친다(POK-251). 실패는 ClipApiError로 옮겨 사유 코드를 지킨다.
@@ -29,5 +29,63 @@ describe('clip 창구 호출', () => {
     const [url, init] = spy.mock.calls[0] ?? [];
     expect(url).toBe('/api/clip/broadcasts/s%201/recipes/7/renders');
     expect(init?.method).toBe('POST');
+  });
+});
+
+function row(streamId: string) {
+  return {
+    streamId,
+    status: 'ended',
+    relation: 'OWNER',
+    startedAt: '2026-09-01T10:00:00Z',
+    endedAt: null,
+    vodExpiresAt: null,
+  };
+}
+
+describe('방송 목록 쪽 넘기기', () => {
+  // 목록 기본 쪽 크기가 20이라 한 쪽만 보면 오래된 방송이 「없다」가 된다(POK-251 리뷰)
+  it('찾는 방송이 뒤쪽에 있으면 커서를 따라가 찾는다', async () => {
+    const spy = stubFetch((url) => {
+      const u = new URL(url, 'http://localhost');
+      if (u.searchParams.get('state') === 'live')
+        return jsonResponse(200, { broadcasts: [], nextCursor: null });
+      return u.searchParams.get('cursor') === 'p2'
+        ? jsonResponse(200, { broadcasts: [row('old-1')], nextCursor: null })
+        : jsonResponse(200, { broadcasts: [row('new-1')], nextCursor: 'p2' });
+    });
+
+    expect(await fetchBroadcast('old-1')).toMatchObject({ streamId: 'old-1' });
+    const pastCalls = spy.mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.includes('state=past'));
+    expect(pastCalls).toHaveLength(2);
+    expect(pastCalls[0]).toContain('limit=100');
+    expect(pastCalls[1]).toContain('cursor=p2');
+  });
+
+  it('찾으면 그 쪽에서 멈춘다 — 뒤쪽을 더 읽지 않는다', async () => {
+    const spy = stubFetch((url) =>
+      url.includes('state=live')
+        ? jsonResponse(200, { broadcasts: [row('live-1')], nextCursor: 'more' })
+        : jsonResponse(404, { error: 'unexpected' }),
+    );
+
+    expect(await fetchBroadcast('live-1')).toMatchObject({ streamId: 'live-1' });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('끝까지 없으면 null이다', async () => {
+    stubFetch(() => jsonResponse(200, { broadcasts: [row('x')], nextCursor: null }));
+    expect(await fetchBroadcast('nope')).toBeNull();
+  });
+
+  it('전부 읽기는 마지막 쪽까지 모은다', async () => {
+    stubFetch((url) =>
+      url.includes('cursor=p2')
+        ? jsonResponse(200, { broadcasts: [row('b')], nextCursor: null })
+        : jsonResponse(200, { broadcasts: [row('a')], nextCursor: 'p2' }),
+    );
+    expect((await fetchAllBroadcasts('past')).map((b) => b.streamId)).toEqual(['a', 'b']);
   });
 });

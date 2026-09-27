@@ -61,14 +61,46 @@ export async function fetchJumpCard(streamId: string, cardId: string): Promise<J
   return body.cards.find((card) => String(card.id) === cardId) ?? null;
 }
 
-/** 방송 한 줄 — 라이브 목록에서 먼저 찾고 없으면 지난 방송 목록을 본다. */
+/** 방송 목록 한 쪽의 최대 크기 — clip BroadcastListService.MAX_LIMIT */
+const BROADCAST_PAGE = 100;
+
+/**
+ * 방송 목록을 쪽마다 넘기며 읽는다. `stop`이 참을 돌려주면 거기서 멈춘다(찾던 줄을 만났을 때).
+ * 한 쪽만 읽으면 오래된 방송이 「없다」로 보인다 — 기본 쪽 크기가 20이다(POK-251 리뷰).
+ */
+async function walkBroadcasts(
+  state: 'live' | 'past',
+  stop: (rows: BroadcastRow[]) => boolean = () => false,
+): Promise<BroadcastRow[]> {
+  const all: BroadcastRow[] = [];
+  let cursor: string | null = null;
+  do {
+    const qs = new URLSearchParams({ state, limit: String(BROADCAST_PAGE) });
+    if (cursor) qs.set('cursor', cursor);
+    const page: { broadcasts: BroadcastRow[]; nextCursor: string | null } = await getJson(
+      `/api/clip/broadcasts?${qs}`,
+    );
+    all.push(...page.broadcasts);
+    if (stop(page.broadcasts)) break;
+    cursor = page.nextCursor;
+  } while (cursor !== null);
+  return all;
+}
+
+/** 그 상태의 방송 전부 — 사람 규모라 몇 쪽이다 */
+export function fetchAllBroadcasts(state: 'live' | 'past'): Promise<BroadcastRow[]> {
+  return walkBroadcasts(state);
+}
+
+/** 방송 한 줄 — 라이브 목록에서 먼저 찾고 없으면 지난 방송 목록을 끝까지 본다. */
 export async function fetchBroadcast(streamId: string): Promise<BroadcastRow | null> {
   for (const state of ['live', 'past'] as const) {
-    const body = await getJson<{ broadcasts: BroadcastRow[] }>(
-      `/api/clip/broadcasts?state=${state}`,
-    );
-    const row = body.broadcasts.find((b) => b.streamId === streamId);
-    if (row !== undefined) return row;
+    let found: BroadcastRow | undefined;
+    await walkBroadcasts(state, (rows) => {
+      found = rows.find((b) => b.streamId === streamId);
+      return found !== undefined;
+    });
+    if (found !== undefined) return found;
   }
   return null;
 }

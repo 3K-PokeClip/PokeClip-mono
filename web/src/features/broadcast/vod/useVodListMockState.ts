@@ -1,6 +1,7 @@
 'use client';
 
 import { apiFetch } from '@/api/client';
+import { fetchAllBroadcasts } from '@/api/clipEditor';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useToast } from '@/ui';
 import { playbackConfigured } from '@/api/mediaPlayback';
@@ -124,10 +125,6 @@ interface WireBroadcast {
   endedAt: string | null;
   vodExpiresAt: string | null;
 }
-interface WireList {
-  broadcasts: WireBroadcast[];
-  nextCursor: string | null;
-}
 
 export function useVodListMockState(options: VodListOptions = {}): VodListMockState {
   const { toast } = useToast();
@@ -145,15 +142,9 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     let stopped = false;
     const load = async () => {
       try {
-        const all: WireBroadcast[] = [];
-        for (const state of ['past']) {
-          try {
-            const r = await apiFetch(`/api/clip/broadcasts?state=${state}&limit=50`);
-            all.push(...((await r.json()) as WireList).broadcasts);
-          } catch {
-            /* 이 갈래만 건너뛴다 */
-          }
-        }
+        // 목록을 끝까지 넘긴다 — 한 쪽만 읽으면 51번째부터 조용히 사라진다(POK-251 리뷰).
+        // 실패하면 바깥 catch가 받아 지금 목록을 그대로 두고 다음 주기에 다시 한다
+        const all: WireBroadcast[] = await fetchAllBroadcasts('past');
         if (stopped) return;
         const rows: VodBroadcast[] = all.map((b) => ({
           streamId: b.streamId,
