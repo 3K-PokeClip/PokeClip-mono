@@ -1,10 +1,12 @@
 'use client';
 
-import { apiFetch } from '@/api/client';
-import { fetchAllBroadcasts } from '@/api/clipEditor';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { fetchAllBroadcasts, fetchAllJumpCards } from '@/api/clipEditor';
+
+/** 지난 방송 목록을 다시 읽는 간격 — 끝난 방송이라 자주 볼 까닭이 없다 */
+const LIST_POLL_MS = 60_000;
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
-import { playbackConfigured } from '@/api/mediaPlayback';
+import { fetchRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import { excludeLive, filterByPeriod } from './vodListView';
 
 // 시안 1f 지난 방송 목록의 상태. 목록은 clip `GET /api/clip/broadcasts`(POK-174·ADR-055)에서 온다(POK-251).
@@ -136,6 +138,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
   const [fetched, setFetched] = useState<VodBroadcast[]>([]);
   const [fetchedVisuals, setFetchedVisuals] = useState<Record<string, VodRowVisual>>({});
   const [now, setNow] = useState(() => new Date());
+  const rowCache = useRef(new Map<string, { cardCount: number; recorded: boolean }>());
 
   useEffect(() => {
     if (options.broadcasts) return;
@@ -146,12 +149,30 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         // 실패하면 바깥 catch가 받아 지금 목록을 그대로 두고 다음 주기에 다시 한다
         const all: WireBroadcast[] = await fetchAllBroadcasts('past');
         if (stopped) return;
+        // 방송마다 카드 수·녹화 여부는 한 번만 재서 기억한다 — 끝난 방송은 바뀌지 않는데, 주기마다 전체 이력에
+        // 카드 목록을 부르면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex)
+        const cache = rowCache.current;
+        await Promise.all(
+          all
+            .filter((b) => !cache.has(b.streamId))
+            .map(async (b) => {
+              const [cards, spans] = await Promise.all([
+                fetchAllJumpCards(b.streamId).catch(() => null),
+                // 녹화 재생 서버가 있으면 그 방송의 녹화가 실제로 있는지 본다 — 없으면 열어도 「영상 신호 없음」뿐이다
+                b.status === 'ended' && playbackConfigured()
+                  ? fetchRecordingSpans(b.streamId)
+                  : Promise.resolve([]),
+              ]);
+              // 카드 수를 못 읽었으면 기억하지 않는다 — 다음 주기에 다시 잰다
+              if (cards !== null)
+                cache.set(b.streamId, { cardCount: cards.length, recorded: spans.length > 0 });
+            }),
+        );
         const rows: VodBroadcast[] = all.map((b) => ({
           streamId: b.streamId,
-          // 녹화 재생 서버가 있으면 끝난 방송은 곧바로 다시 볼 수 있다 — 「VOD 준비 중」은 1번의 다시보기 목록이
-          // 설 때까지 기다리는 표시인데, 로컬은 녹화 파일에서 바로 튼다.
+          // 서버 상태가 정본이다. 녹화 재생 서버가 있고 그 방송의 녹화가 실제로 있을 때만 「다시 보기 가능」으로 올린다
           status:
-            b.status === 'ended' && playbackConfigured()
+            b.status === 'ended' && cache.get(b.streamId)?.recorded
               ? 'vod_ready'
               : ((b.status as VodBroadcastStatus) ?? 'ended'),
           relation: b.relation === 'EDITOR' ? 'EDITOR' : 'OWNER',
@@ -160,24 +181,17 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
           vodExpiresAt: b.vodExpiresAt,
         }));
         const visuals: Record<string, VodRowVisual> = {};
-        await Promise.all(
-          rows.map(async (b) => {
-            let cardCount = 0;
-            try {
-              const r = await apiFetch(
-                `/api/clip/broadcasts/${encodeURIComponent(b.streamId)}/jump-cards`,
-              );
-              cardCount = ((await r.json()) as { cards: unknown[] }).cards.length;
-            } catch {
-              /* 0으로 둔다 */
-            }
-            const dur =
-              b.startedAt && b.endedAt
-                ? Math.max(0, Math.round((Date.parse(b.endedAt) - Date.parse(b.startedAt)) / 1000))
-                : null;
-            visuals[b.streamId] = { title: b.streamId, durationSec: dur, cardCount };
-          }),
-        );
+        for (const b of rows) {
+          const dur =
+            b.startedAt && b.endedAt
+              ? Math.max(0, Math.round((Date.parse(b.endedAt) - Date.parse(b.startedAt)) / 1000))
+              : null;
+          visuals[b.streamId] = {
+            title: b.streamId,
+            durationSec: dur,
+            cardCount: cache.get(b.streamId)?.cardCount ?? 0,
+          };
+        }
         if (stopped) return;
         setFetched(rows);
         setFetchedVisuals(visuals);
@@ -187,7 +201,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
       }
     };
     void load();
-    const t = window.setInterval(load, 10_000);
+    const t = window.setInterval(load, LIST_POLL_MS);
     return () => {
       stopped = true;
       window.clearInterval(t);

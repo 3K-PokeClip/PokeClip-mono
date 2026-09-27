@@ -2,7 +2,8 @@ import { act } from 'react';
 import { fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { VodListScreen } from './VodListScreen';
 import { VOD_LIST_FIXTURE } from './vodListFixture';
@@ -282,5 +283,47 @@ describe('VodListScreen — 접근성', () => {
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
     });
+  });
+});
+
+describe('VodListScreen — 서버 목록', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('방송마다 카드 수는 한 번만 센다 — 다시 읽을 때 전체 이력의 카드를 또 부르지 않는다', async () => {
+    // 주기마다 방송마다 카드 목록을 부르면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex)
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const row = (streamId: string) => ({
+      streamId,
+      status: 'ended',
+      relation: 'OWNER',
+      startedAt: '2026-09-20T10:00:00Z',
+      endedAt: '2026-09-20T12:00:00Z',
+      vodExpiresAt: null,
+    });
+    const spy = stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?')
+        ? jsonResponse(200, { broadcasts: [row('a'), row('b')], nextCursor: null })
+        : jsonResponse(200, { cards: [{ id: 1 }], nextCursor: null }),
+    );
+    const cardCalls = () =>
+      spy.mock.calls.filter(([url]) => String(url).includes('/jump-cards')).length;
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(cardCalls()).toBe(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    // 목록은 다시 읽었지만 카드 수는 기억한 값을 쓴다
+    expect(
+      spy.mock.calls.filter(([url]) => String(url).startsWith('/api/clip/broadcasts?')).length,
+    ).toBeGreaterThan(1);
+    expect(cardCalls()).toBe(2);
   });
 });

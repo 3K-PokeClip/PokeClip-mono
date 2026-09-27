@@ -191,14 +191,19 @@ interface Loaded {
   recentCards: RecentCard[];
 }
 
-async function loadHome(now: number): Promise<Loaded> {
+/**
+ * 홈 한 벌. 방송 목록을 못 읽으면 null — 부른 쪽이 지난 화면을 그대로 둔다.
+ * 빈 값으로 덮으면 clip이 잠깐 재시작해도 라이브 띠와 지난 방송이 사라진다(PR #200 codex).
+ */
+async function loadHome(now: number): Promise<Loaded | null> {
   const [me, liveList, pastAll] = await Promise.all([
     getJson<WireMe>('/api/auth/me'),
     getJson<WireList>('/api/clip/broadcasts?state=live&limit=1'),
     // 지난 방송은 끝까지 읽는다 — 곧 만료될 방송은 가장 오래된 것이라 목록 끝에 있다(POK-251 리뷰 2라운드).
     // 한 쪽만 읽으면 방송이 많은 채널일수록 「만료 임박」이 비어 보인다
-    fetchAllBroadcasts('past').catch((): WireList['broadcasts'] => []),
+    fetchAllBroadcasts('past').catch(() => null),
   ]);
+  if (liveList === null || pastAll === null) return null;
 
   const liveBroadcast = liveList?.broadcasts[0] ?? null;
   const past = pastAll.slice(0, PAST_LIMIT);
@@ -245,7 +250,7 @@ async function loadHome(now: number): Promise<Loaded> {
     ];
     let badge: VodBadge | undefined;
     if (b.status === 'ended') badge = { kind: 'preparing' };
-    else if (b.vodExpiresAt) {
+    else if (b.vodExpiresAt && Date.parse(b.vodExpiresAt) > now) {
       const d = daysLeft(b.vodExpiresAt, now);
       if (d <= EXPIRING_WINDOW_DAYS) {
         badge = { kind: 'dday', label: `D-${d}` };
@@ -266,8 +271,13 @@ async function loadHome(now: number): Promise<Loaded> {
     };
   });
 
+  // 이미 만료된 방송은 뺀다 — 기한이 지난 방송도 목록에 남으므로 빼지 않으면 D-0으로 영영 쌓인다(PR #200 claude)
   const expiringVods: ExpiringVod[] = pastAll
-    .flatMap((b) => (b.vodExpiresAt ? [{ b, d: daysLeft(b.vodExpiresAt, now) }] : []))
+    .flatMap((b) =>
+      b.vodExpiresAt && Date.parse(b.vodExpiresAt) > now
+        ? [{ b, d: daysLeft(b.vodExpiresAt, now) }]
+        : [],
+    )
     .filter(({ d }) => d <= EXPIRING_WINDOW_DAYS)
     .sort((x, y) => x.d - y.d)
     .map(({ b, d }) => {
@@ -354,6 +364,8 @@ export function useHomeMockState(): HomeMockState {
     const tick = async () => {
       const loaded = await loadHome(Date.now());
       if (stopped) return;
+      // 못 읽었으면 지난 화면을 그대로 둔다. 첫 읽기부터 실패면 다음 주기까지 「불러오는 중」
+      if (loaded === null) return;
       setData(loaded);
       setLoading(false);
     };

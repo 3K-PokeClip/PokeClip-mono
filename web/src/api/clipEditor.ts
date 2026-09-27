@@ -54,11 +54,36 @@ export interface ChatMessage {
   amount: number | null;
 }
 
+/** 카드 목록 한 쪽의 최대 크기 — clip JumpCardService.MAX_LIST_LIMIT */
+const CARD_PAGE = 200;
+
+/**
+ * 방송의 카드를 쪽마다 끝까지 읽는다. 한 쪽만 읽으면 51번째 카드부터 없는 것이 된다(기본 쪽 크기 50,
+ * 오래된 것부터 온다 — PR #200 codex). `includeHidden`이면 숨긴 카드도 받는다(숨김 반영·편집기 열기).
+ */
+export async function fetchAllJumpCards<T = JumpCard>(
+  streamId: string,
+  { includeHidden = false }: { includeHidden?: boolean } = {},
+): Promise<T[]> {
+  const all: T[] = [];
+  let cursor: string | null = null;
+  do {
+    const qs = new URLSearchParams({ limit: String(CARD_PAGE) });
+    if (includeHidden) qs.set('includeHidden', 'true');
+    if (cursor) qs.set('cursor', cursor);
+    const page: { cards: T[]; nextCursor?: string | null } = await getJson(
+      `/api/clip/broadcasts/${encodeURIComponent(streamId)}/jump-cards?${qs}`,
+    );
+    all.push(...page.cards);
+    cursor = page.nextCursor ?? null;
+  } while (cursor !== null);
+  return all;
+}
+
 export async function fetchJumpCard(streamId: string, cardId: string): Promise<JumpCard | null> {
-  const body = await getJson<{ cards: JumpCard[] }>(
-    `/api/clip/broadcasts/${encodeURIComponent(streamId)}/jump-cards`,
-  );
-  return body.cards.find((card) => String(card.id) === cardId) ?? null;
+  // 숨긴 카드도 편집기로는 열 수 있다 — 숨김은 목록에서 빼는 것이지 지우는 것이 아니다
+  const cards = await fetchAllJumpCards(streamId, { includeHidden: true });
+  return cards.find((card) => String(card.id) === cardId) ?? null;
 }
 
 /** 방송 목록 한 쪽의 최대 크기 — clip BroadcastListService.MAX_LIMIT */

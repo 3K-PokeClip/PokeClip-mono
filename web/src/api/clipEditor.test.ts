@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ClipApiError, fetchAllBroadcasts, fetchBroadcast, requestRender } from '@/api/clipEditor';
+import {
+  ClipApiError,
+  fetchAllBroadcasts,
+  fetchBroadcast,
+  fetchJumpCard,
+  requestRender,
+} from '@/api/clipEditor';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 
 // clip 창구 호출은 로그인 세션의 apiFetch를 거친다(POK-251). 실패는 ClipApiError로 옮겨 사유 코드를 지킨다.
@@ -87,5 +93,22 @@ describe('방송 목록 쪽 넘기기', () => {
         : jsonResponse(200, { broadcasts: [row('a')], nextCursor: 'p2' }),
     );
     expect((await fetchAllBroadcasts('past')).map((b) => b.streamId)).toEqual(['a', 'b']);
+  });
+});
+
+describe('카드 목록 쪽 넘기기', () => {
+  // 카드 목록 기본 쪽 크기가 50이고 오래된 것부터 온다 — 한 쪽만 보면 51번째 카드를 편집기가 못 연다(PR #200 codex)
+  it('찾는 카드가 뒤쪽에 있으면 커서를 따라가 찾고, 숨긴 카드도 찾는다', async () => {
+    const spy = stubFetch((url) =>
+      url.includes('cursor=c2')
+        ? jsonResponse(200, { cards: [{ id: 77, hidden: true }], nextCursor: null })
+        : jsonResponse(200, { cards: [{ id: 1, hidden: false }], nextCursor: 'c2' }),
+    );
+
+    expect(await fetchJumpCard('s1', '77')).toMatchObject({ id: 77 });
+    const urls = spy.mock.calls.map(([url]) => String(url));
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toContain('includeHidden=true');
+    expect(urls[0]).toContain('limit=200');
   });
 });

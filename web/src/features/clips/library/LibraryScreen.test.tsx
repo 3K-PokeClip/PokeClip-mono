@@ -2,7 +2,8 @@ import { act } from 'react';
 import { fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { LibraryScreen } from './LibraryScreen';
 import { LIBRARY_FIXTURE } from './libraryFixture';
@@ -582,5 +583,41 @@ describe('LibraryScreen — 접근성', () => {
     await act(async () => {
       expect(await axe(baseElement)).toHaveNoViolations();
     });
+  });
+});
+
+describe('LibraryScreen — 서버 편집본', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('서버 편집본은 지우는 창구가 없어 삭제를 잠근다 — 지운 척하지 않는다', async () => {
+    // 화면에서만 빼면 다음 읽기에 되살아나 「지웠다」가 거짓이 된다(PR #200 codex)
+    stubFetch((url) =>
+      url.startsWith('/api/clip/library')
+        ? jsonResponse(200, {
+            items: [
+              {
+                recipeId: 12,
+                streamId: 's1',
+                creatorId: '9',
+                recipeVersion: 1,
+                cut: { inAtMs: 0, outAtMs: 30_000 },
+                status: 'rendered',
+                broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+                latestClip: null,
+                createdAt: '2026-09-20T11:00:00Z',
+                updatedAt: '2026-09-20T12:00:00Z',
+              },
+            ],
+            nextCursor: null,
+          })
+        : jsonResponse(200, { id: 9, email: 'me@example.com' }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<LibraryScreen />);
+
+    await user.click(await screen.findByRole('button', { name: /^편집본 #12/ }));
+    expect(within(panel()).getByRole('button', { name: '삭제' })).toBeDisabled();
   });
 });

@@ -134,6 +134,79 @@ describe('HomeScreen', () => {
     expect(screen.getAllByText('D-2').length).toBeGreaterThan(0);
   });
 
+  it('이미 만료된 방송은 만료 임박에 넣지 않는다 — D-0으로 쌓이지 않는다', async () => {
+    const past = (days: number) => new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    const row = (streamId: string, vodExpiresAt: string) => ({
+      streamId,
+      status: 'vod_ready',
+      relation: 'OWNER',
+      startedAt: '2026-07-01T10:00:00Z',
+      endedAt: '2026-07-01T12:00:00Z',
+      vodExpiresAt,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('state=past')) {
+          const body = {
+            broadcasts: [row('gone', past(-3)), row('soon', past(2))],
+            nextCursor: null,
+          };
+          return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+        }
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+
+    expect(await screen.findByText('soon · 카드 0개')).toBeInTheDocument();
+    expect(screen.queryByText('gone · 카드 0개')).not.toBeInTheDocument();
+    expect(screen.queryByText('D-0')).not.toBeInTheDocument();
+  });
+
+  it('방송 목록을 잠깐 못 읽어도 지난 화면을 지우지 않는다 — 라이브 띠가 그대로다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let failing = false;
+    const liveRow = {
+      streamId: 'live-1',
+      status: 'live',
+      relation: 'OWNER',
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      endedAt: null,
+      vodExpiresAt: null,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/clip/broadcasts?') && failing) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: 'unavailable' }), { status: 503 }),
+          );
+        }
+        if (url.includes('state=live')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ broadcasts: [liveRow], nextCursor: null }), {
+              status: 200,
+            }),
+          );
+        }
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+    expect(await screen.findByRole('link', { name: '대시보드 열기' })).toBeInTheDocument();
+
+    failing = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(screen.getByRole('link', { name: '대시보드 열기' })).toBeInTheDocument();
+    expect(screen.queryByText('지금 방송 중인 채널이 없어요.')).not.toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
   it('접근성 위반이 없다', async () => {
     const { container } = render(<HomeScreen />);
     // axe 실행 중 Next Link의 비동기 상태 갱신이 발화한다 — act로 감싸 경고 없이 흡수

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '@/api/client';
 import { subscribeRelay, useLiveData, type RelayEvent } from './liveDataStore';
+import { chartWindows } from './useLiveMockState';
 
 // 실시간 채팅 패널(시안 1b). clip 창구에 붙어 있다(POK-251).
 // 라이브: 카드 통로(SSE)의 chat·donation 중계가 주 경로이고 chat-messages 폴링이 메우기·폴백이다.
@@ -54,7 +55,10 @@ interface WirePage {
   appliedOffsetMs: number;
 }
 
-const POLL_MS = 5000; // SSE 중계가 주 경로, 폴링은 메우기·폴백
+const POLL_MS = 5000;
+
+/** 지난 방송 채팅을 읽을 때 쪽 수 상한(쪽당 200건) — 긴 방송이 끝없이 불러오지 않게 */
+const VOD_CHAT_PAGE_BUDGET = 30; // SSE 중계가 주 경로, 폴링은 메우기·폴백
 
 /**
  * 채팅 시각(표 축)이 화면(영상) 시각보다 앞서는 폭 — 시차 보정 실측 중앙값 3,884ms(POK-92)를 올려 잡았다.
@@ -122,33 +126,39 @@ export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
   const streamId = live.streamId;
   const isVod = live.status === 'ended' && live.startedAt !== null && live.endedAt !== null;
 
-  // 지난 방송: 시작~종료 전체를 커서로 한 번에 받는다(최대 10장 = 2,000건). 폴링 없음
+  // 지난 방송: 시작~종료 전체를 받는다. 수집기는 한 번에 1시간까지만 받으므로(넘으면 400 too_wide)
+  // 1시간 창마다 커서로 넘긴다(PR #200 codex). 한 방송에 최대 30장(6,000건)까지. 폴링 없음
   useEffect(() => {
     if (!enabled || !streamId || !isVod || live.startedAt === null || live.endedAt === null) return;
     setRaw({});
     let stopped = false;
+    const windows = chartWindows(live.startedAt, live.endedAt);
     (async () => {
       const acc: Record<string, WireItem> = {};
-      let cursor: string | null = null;
-      for (let page = 0; page < 10; page += 1) {
-        const qs = new URLSearchParams({
-          from: new Date(live.startedAt as number).toISOString(),
-          to: new Date(live.endedAt as number).toISOString(),
-          limit: '200',
-        });
-        if (cursor) qs.set('cursor', cursor);
-        try {
-          const r = await apiFetch(
-            `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-messages?${qs}`,
-          );
-          if (stopped) return;
-          const pg = (await r.json()) as WirePage;
-          for (const it of pg.items) acc[fingerprint(it)] = it;
-          cursor = pg.nextCursor;
-          if (!cursor) break;
-        } catch {
-          break;
-        }
+      let budget = VOD_CHAT_PAGE_BUDGET;
+      for (const [from, to] of windows) {
+        let cursor: string | null = null;
+        do {
+          if (budget-- <= 0) break;
+          const qs = new URLSearchParams({
+            from: new Date(from).toISOString(),
+            to: new Date(to).toISOString(),
+            limit: '200',
+          });
+          if (cursor) qs.set('cursor', cursor);
+          try {
+            const r = await apiFetch(
+              `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-messages?${qs}`,
+            );
+            if (stopped) return;
+            const pg = (await r.json()) as WirePage;
+            for (const it of pg.items) acc[fingerprint(it)] = it;
+            cursor = pg.nextCursor;
+          } catch {
+            // 이 창만 건너뛴다 — 한 창의 실패로 방송 전체 채팅을 비우지 않는다
+            cursor = null;
+          }
+        } while (cursor !== null);
       }
       if (!stopped) setRaw(acc);
     })();

@@ -315,20 +315,15 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     [toast],
   );
 
-  // 편집본은 영구 보존이라 지우는 문이 없다(POK-124). 화면에서만 감추고, 서버 줄이면 그렇다고 말한다.
+  // 편집본은 영구 보존이라 지우는 문이 없다(POK-124). 서버 줄은 지우지 않는다 — 화면에서만 빼면 다음 읽기에
+  // 되살아나 「지웠다」가 거짓이 된다(PR #200 codex). 상세 패널이 삭제 단추를 잠근다. 목업 줄만 흉내 낸다
   const remove = useCallback(
     (id: string) => {
-      const fromServer = clips.find((c) => c.id === id)?.entry !== undefined;
+      if (clips.find((c) => c.id === id)?.entry !== undefined) return;
       setClips((prev) => prev.filter((clip) => clip.id !== id));
       setSelectedId((prev) => (prev === id ? null : prev));
-      if (fromServer)
-        toast({
-          tone: 'info',
-          title: '목록에서 감췄어요',
-          description: '편집본은 지워지지 않고 보관돼요.',
-        });
     },
-    [clips, toast],
+    [clips],
   );
 
   const counts = useMemo(() => countByChip(clips, role, now), [clips, role, now]);

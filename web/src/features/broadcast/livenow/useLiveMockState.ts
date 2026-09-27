@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, apiFetch } from '@/api/client';
 import { chzzkLinkQueryOptions } from '@/api/chzzkLink';
+import { fetchAllJumpCards } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
 import { useAuthStore } from '@/stores/auth';
 import { emitRelay, publishLiveData, useLiveData, type RelayEvent } from './liveDataStore';
@@ -132,6 +133,17 @@ export function hideCard(cardId: string) {
   return cardCall('POST', `${cardPath(cardId)}/hide`);
 }
 
+/** 수집기가 한 번에 받는 가장 긴 창 — chat-collector pokeclip.query.window-max */
+export const COLLECTOR_WINDOW_MS = 60 * 60_000;
+
+/** [from, to)를 수집기 한 번에 받을 수 있는 1시간 창들로 자른다 */
+export function chartWindows(from: number, to: number): [number, number][] {
+  const windows: [number, number][] = [];
+  for (let a = from; a < to; a += COLLECTOR_WINDOW_MS)
+    windows.push([a, Math.min(to, a + COLLECTOR_WINDOW_MS)]);
+  return windows;
+}
+
 /** 응답을 JSON으로 받는다. 실패는 null — 폴링은 다음 주기에 다시 한다 */
 async function getJsonOrNull<T>(path: string): Promise<T | null> {
   try {
@@ -235,11 +247,11 @@ export function useLiveMockState(): LiveMockState {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
-  // 방송 상태(라이브→종료, 시작·종료 시각 도착)가 바뀌면 차트 범위가 바뀐다 — 차트만 다시 읽는다.
+  // 방송 상태(라이브→종료, 시작·종료 시각 도착)가 바뀌면 차트 범위와 시청자 기록의 시작이 바뀐다 — 그 둘만 다시 읽는다.
   // 🔴 아래 큰 효과(카드·통로·방송 정보)를 다시 돌리면 카드가 비고 통로가 끊겨 그 사이 중계 채팅을 잃는다(POK-251 리뷰 2라운드)
-  const loadChartRef = useRef<(() => Promise<void>) | null>(null);
+  const reloadRangeRef = useRef<(() => void) | null>(null);
   useEffect(() => {
-    void loadChartRef.current?.();
+    reloadRangeRef.current?.();
   }, [live.status, live.startedAt, live.endedAt]);
 
   useEffect(() => {
@@ -260,24 +272,50 @@ export function useLiveMockState(): LiveMockState {
     };
 
     const loadList = async () => {
-      const j = await getJsonOrNull<{ cards: Snapshot[] }>(
-        `/api/clip/broadcasts/${encodeURIComponent(streamId)}/jump-cards`,
-      );
-      if (j) merge(j.cards ?? []);
+      try {
+        // 끝까지 넘기고 숨긴 카드도 받는다 — 숨김이 목록에 반영돼야 한다(통로가 끊겨 폴링이 대신할 때도).
+        // 한 쪽만 읽으면 51번째 카드부터 빠진다(PR #200 codex)
+        merge(await fetchAllJumpCards<Snapshot>(streamId, { includeHidden: true }));
+      } catch {
+        /* 다음 주기에 다시 */
+      }
     };
     const loadChart = async () => {
       try {
         const rg = rangeRef.current;
-        let to = new Date();
-        let from = new Date(to.getTime() - CHART_MINUTES * 60_000);
-        let bucket = CHART_BUCKET;
-        // 지난 방송은 시작~종료 전체를 본다. 구간 수 상한(720)에 맞춰 버킷을 고른다
+        const to = new Date();
+        const from = new Date(to.getTime() - CHART_MINUTES * 60_000);
+        const bucket = CHART_BUCKET;
+        // 지난 방송은 시작~종료 전체를 본다. 수집기는 한 번에 1시간까지만 받으므로(window-max PT1H,
+        // 넘으면 400 too_wide) 1시간씩 나눠 읽어 이어 붙인다(PR #200 codex). 버킷은 길이에 맞춰 고른다
         if (rg.status === 'ended' && rg.startedAt !== null && rg.endedAt !== null) {
-          from = new Date(rg.startedAt);
-          to = new Date(rg.endedAt);
           const dur = rg.endedAt - rg.startedAt;
-          bucket = dur <= 60 * 60_000 ? 10 : dur <= 6 * 60 * 60_000 ? 30 : 60;
-          if (dur > 12 * 60 * 60_000) from = new Date(rg.endedAt - 12 * 60 * 60_000);
+          const vodBucket = dur <= 60 * 60_000 ? 10 : dur <= 6 * 60 * 60_000 ? 30 : 60;
+          const start = dur > 12 * 60 * 60_000 ? rg.endedAt - 12 * 60 * 60_000 : rg.startedAt;
+          const pages = await Promise.all(
+            chartWindows(start, rg.endedAt).map(([a, b]) =>
+              getJsonOrNull<ChartPage>(
+                `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-chart?${new URLSearchParams(
+                  {
+                    from: new Date(a).toISOString(),
+                    to: new Date(b).toISOString(),
+                    bucket: String(vodBucket),
+                  },
+                )}`,
+              ),
+            ),
+          );
+          const first = pages[0];
+          // 한 조각이라도 못 받으면 구멍 난 차트를 그리지 않는다 — 다음 주기에 다시
+          if (first && pages.every((pg) => pg !== null)) {
+            const joined: ChartPage = {
+              ...first,
+              buckets: pages.flatMap((pg) => (pg as ChartPage).buckets),
+            };
+            setChart(joined);
+            publishLiveData({ chart: joined });
+          }
+          return;
         } else if (rg.status === 'offline') {
           setChart(null);
           publishLiveData({ chart: null });
@@ -301,8 +339,14 @@ export function useLiveMockState(): LiveMockState {
     };
 
     const loadInfo = async () => {
+      // 지난 방송은 시작부터의 시청자 기록을 달라고 한다 — 안 주면 서버가 최근 1시간만 준다(PR #200 codex)
+      const rg = rangeRef.current;
+      const since =
+        rg.status === 'ended' && rg.startedAt !== null
+          ? `?${new URLSearchParams({ since: new Date(rg.startedAt).toISOString() })}`
+          : '';
       const page = await getJsonOrNull<BroadcastInfoResponse>(
-        `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info`,
+        `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info${since}`,
       );
       if (page) {
         setInfo(page);
@@ -402,7 +446,11 @@ export function useLiveMockState(): LiveMockState {
       }
     };
 
-    loadChartRef.current = loadChart;
+    const reloadRange = () => {
+      void loadChart();
+      void loadInfo();
+    };
+    reloadRangeRef.current = reloadRange;
     void loadList();
     void loadChart();
     void loadInfo();
@@ -416,7 +464,7 @@ export function useLiveMockState(): LiveMockState {
       clearInterval(t1);
       clearInterval(t2);
       clearInterval(t3);
-      if (loadChartRef.current === loadChart) loadChartRef.current = null;
+      if (reloadRangeRef.current === reloadRange) reloadRangeRef.current = null;
     };
   }, [streamId]);
 

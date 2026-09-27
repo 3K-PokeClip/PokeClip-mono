@@ -154,7 +154,17 @@ const INFO = {
   ],
 };
 
-const server = vi.hoisted(() => ({ live: true, failLive: false, relation: 'OWNER' }));
+const server = vi.hoisted(() => ({
+  live: true,
+  failLive: false,
+  relation: 'OWNER',
+  hidden: new Set<number>(),
+}));
+
+/** 지난 방송(2시간 반) — 수집기 1시간 창을 넘는다 */
+const VOD_ID = 'vod-1';
+const VOD_STARTED = NOW - 10 * 3_600_000;
+const VOD_ENDED = VOD_STARTED + 2.5 * 3_600_000;
 
 function handle(url: string) {
   const u = new URL(url, 'http://localhost');
@@ -170,9 +180,24 @@ function handle(url: string) {
       endedAt: null,
       vodExpiresAt: null,
     };
+    const vod = {
+      streamId: VOD_ID,
+      status: 'ended',
+      relation: 'OWNER',
+      startedAt: new Date(VOD_STARTED).toISOString(),
+      endedAt: new Date(VOD_ENDED).toISOString(),
+      vodExpiresAt: null,
+    };
+    if (u.searchParams.get('state') === 'past')
+      return jsonResponse(200, { broadcasts: [vod], nextCursor: null });
     return jsonResponse(200, { broadcasts: live ? [row] : [], nextCursor: null });
   }
-  if (path.endsWith('/jump-cards')) return jsonResponse(200, { cards: CARDS });
+  if (path.endsWith('/jump-cards')) {
+    // 숨긴 카드는 includeHidden일 때만 hidden:true로 온다(서버 기본은 뺀다)
+    const withHidden = u.searchParams.get('includeHidden') === 'true';
+    const cards = CARDS.map((c) => ({ ...c, hidden: server.hidden.has(c.id) }));
+    return jsonResponse(200, { cards: withHidden ? cards : cards.filter((c) => !c.hidden) });
+  }
   if (path.endsWith('/chat-chart')) return jsonResponse(200, CHART);
   if (path.endsWith('/broadcast-info')) return jsonResponse(200, INFO);
   if (path.endsWith('/chat-messages'))
@@ -189,7 +214,11 @@ function handle(url: string) {
       name: '박편집',
       profileImageUrl: null,
     });
-  if (path.endsWith('/claim') || path.endsWith('/hide')) return new Response(null, { status: 204 });
+  if (path.endsWith('/hide')) {
+    server.hidden.add(Number(path.split('/')[4]));
+    return new Response(null, { status: 204 });
+  }
+  if (path.endsWith('/claim')) return new Response(null, { status: 204 });
   return jsonResponse(404, { error: 'unexpected_call' });
 }
 
@@ -206,6 +235,7 @@ beforeEach(() => {
   server.live = true;
   server.failLive = false;
   server.relation = 'OWNER';
+  server.hidden = new Set();
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.
   vi.stubEnv('NEXT_PUBLIC_MEDIA_STUB_URL', '');
   vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', '');
@@ -442,6 +472,33 @@ describe('LiveScreen — 하이라이트 카드', () => {
     ).toBeInTheDocument();
   });
 
+  it('숨긴 카드는 통로가 없어도 다음 폴링에서 목록에서 빠진다', async () => {
+    // 통로(SSE)는 이 시험에서 503이다 — 폴링이 숨김을 반영해야 한다(PR #200 codex)
+    await renderLive();
+    expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: '이 카드 숨기기' })[0] as HTMLElement);
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    await settle();
+    expect(screen.queryByText('채팅이 튄 순간 #8')).not.toBeInTheDocument();
+  });
+
+  it('이 화면에서 찍은 수동 마킹 카드는 서버에 없어 편집을 잠근다', async () => {
+    await renderLive();
+    fireEvent.keyDown(document, { key: 'F8' });
+    act(() => {
+      vi.advanceTimersByTime(CARD_CREATE_MS);
+    });
+    const card = screen.getByRole('heading', { name: '1:24:03 수동 마킹' }).closest('article');
+    expect(card).not.toBeNull();
+    // 링크가 아니라 잠긴 단추다 — 편집기는 marked-… 카드를 찾을 수 없다(PR #200 codex)
+    expect(within(card as HTMLElement).queryByRole('link', { name: '편집' })).toBeNull();
+    expect(within(card as HTMLElement).getByRole('button', { name: '편집' })).toBeDisabled();
+  });
+
   it('숨기기를 누르면 clip에 숨김을 보낸다', async () => {
     await renderLive();
 
@@ -651,5 +708,38 @@ describe('LiveScreen — 접근성', () => {
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
     });
+  });
+});
+
+describe('LiveScreen — 긴 지난 방송', () => {
+  afterEach(() => {
+    window.history.pushState({}, '', '/');
+  });
+
+  it('1시간 넘는 방송의 채팅·차트를 1시간 창으로 나눠 읽고, 시청자 기록은 시작 시각부터 달라고 한다', async () => {
+    // 수집기는 한 번에 1시간까지만 받는다 — 넘으면 400 too_wide로 채팅·차트가 통째로 빈다(PR #200 codex)
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    const spans = (part: string) =>
+      fetchSpy.mock.calls
+        .map(([url]) => new URL(String(url), 'http://localhost'))
+        .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/${part}`)
+        .map(
+          (u) =>
+            Date.parse(u.searchParams.get('to') ?? '') -
+            Date.parse(u.searchParams.get('from') ?? ''),
+        );
+    for (const part of ['chat-chart', 'chat-messages']) {
+      const got = spans(part);
+      expect(got.length).toBeGreaterThanOrEqual(3);
+      for (const ms of got) expect(ms).toBeLessThanOrEqual(3_600_000);
+    }
+    const info = fetchSpy.mock.calls
+      .map(([url]) => new URL(String(url), 'http://localhost'))
+      .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/broadcast-info`);
+    expect(
+      info.some((u) => u.searchParams.get('since') === new Date(VOD_STARTED).toISOString()),
+    ).toBe(true);
   });
 });

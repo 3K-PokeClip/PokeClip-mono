@@ -128,7 +128,15 @@ export function ClipDetailPanel({
               </Button>
             </div>
           ) : null}
-          <IconButton variant="ghost" size="sm" aria-label="삭제" onClick={onDelete}>
+          {/* 서버 편집본은 지우는 창구가 없다(편집본 영구 보존, POK-124) — 지운 척하지 않게 잠근다(PR #200 codex) */}
+          <IconButton
+            variant="ghost"
+            size="sm"
+            aria-label="삭제"
+            disabled={clip.entry !== undefined}
+            title={clip.entry !== undefined ? '편집본은 지우지 않고 보관돼요' : undefined}
+            onClick={onDelete}
+          >
             <Trash2 size={14} aria-hidden />
           </IconButton>
         </div>

@@ -56,6 +56,8 @@ export function HighlightCard({
   const processing = view.state === 'processing';
   // 편집기는 방송 번호와 카드 번호(`card-23` → 23)로 클립을 연다
   const { streamId } = useLiveData();
+  // 서버 카드(card-N)만 편집기가 찾을 수 있다
+  const fromServer = highlight.id.startsWith('card-');
   const editorHref = `/clips/editor?stream=${encodeURIComponent(streamId)}&card=${highlight.id.replace(/^card-/, '')}`;
 
   return (
@@ -143,17 +145,24 @@ export function HighlightCard({
           <div className={styles.cardActions}>
             {/* 「편집」을 누르는 것이 곧 「이 카드는 내가 집었다」다(clip claim) — 다른 편집자 화면에 「○○ 편집 중」이 뜬다.
                 이미 남이 집은 카드면 서버가 거절하지만 들어가 보는 것까지 막지는 않는다. */}
-            <LinkButton
-              as={Link}
-              href={editorHref}
-              variant="soft"
-              size="sm"
-              onClick={() => {
-                if (highlight.id.startsWith('card-')) void claimCard(highlight.id);
-              }}
-            >
-              편집
-            </LinkButton>
+            {fromServer ? (
+              <LinkButton
+                as={Link}
+                href={editorHref}
+                variant="soft"
+                size="sm"
+                onClick={() => {
+                  void claimCard(highlight.id);
+                }}
+              >
+                편집
+              </LinkButton>
+            ) : (
+              // 이 화면에서 찍은 수동 마킹은 아직 서버에 없는 카드다(marked-…) — 편집기가 찾을 수 없어 잠근다(PR #200 codex)
+              <Button variant="soft" size="sm" disabled>
+                편집
+              </Button>
+            )}
             <Button variant="solid" size="sm" disabled>
               원클릭 업로드
             </Button>

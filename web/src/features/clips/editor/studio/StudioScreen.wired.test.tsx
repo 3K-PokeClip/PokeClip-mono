@@ -19,13 +19,20 @@ const STARTED_AT = Date.parse('2026-09-20T10:00:00Z');
 const server = vi.hoisted(() => ({
   cardWindow: { startMs: 60_000, endMs: 72_400 },
   savedTracks: [{ trackId: 0, gain: 1 }] as { trackId: number; gain: number }[],
+  relation: 'OWNER',
+  delegations: [] as {
+    id: number;
+    counterpartId: number;
+    counterpartName: string;
+    grantedAt: string;
+  }[],
 }));
 
 function broadcastRow() {
   return {
     streamId: STREAM_ID,
     status: 'ended',
-    relation: 'OWNER',
+    relation: server.relation,
     startedAt: new Date(STARTED_AT).toISOString(),
     endedAt: new Date(STARTED_AT + 3_600_000).toISOString(),
     vodExpiresAt: null,
@@ -116,6 +123,9 @@ function handle(url: string, init?: RequestInit) {
   if (path === '/api/auth/me')
     return jsonResponse(200, { id: 9, email: 'me@example.com', name: '나' });
   if (path === '/api/streamers/9/audio-tracks') return jsonResponse(200, { labels: {} });
+  if (path.startsWith('/api/streamers/'))
+    return jsonResponse(200, { labels: ['남의 트랙', null, null, null, null, null] });
+  if (path === '/api/editor-delegations/as-editor') return jsonResponse(200, server.delegations);
   return jsonResponse(404, { error: 'unexpected_call' });
 }
 
@@ -124,6 +134,8 @@ let fetchSpy: ReturnType<typeof stubFetch>;
 beforeEach(() => {
   server.cardWindow = { startMs: 60_000, endMs: 72_400 };
   server.savedTracks = [{ trackId: 0, gain: 1 }];
+  server.relation = 'OWNER';
+  server.delegations = [];
   fetchSpy = stubFetch(handle);
 });
 
@@ -246,6 +258,50 @@ describe('StudioScreen — 편집본으로 다시 연 실제 편집기', () => {
       w: 0.32,
       h: 1,
     });
+  });
+
+  it('100%를 넘는 저장된 볼륨은 손대지 않으면 그대로 다시 저장된다', async () => {
+    // 계약은 0~200%다 — 다시 열 때 100%로 깎으면 1.5가 1.0으로 바뀌어 믹스가 달라진다(PR #200 codex)
+    server.savedTracks = [{ trackId: 2, gain: 1.5 }];
+    const user = userEvent.setup();
+    const save = await openFrom('recipe=31');
+
+    await user.click(save);
+
+    await waitFor(() =>
+      expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1),
+    );
+    expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)[0]?.audio).toEqual({
+      tracks: [{ trackId: 2, gain: 1.5 }],
+    });
+  });
+
+  it('위임이 여럿인 편집자에게는 어느 스트리머 것인지 몰라 트랙 이름을 붙이지 않는다', async () => {
+    server.relation = 'EDITOR';
+    server.delegations = [
+      { id: 1, counterpartId: 101, counterpartName: 'A', grantedAt: '2026-09-01T00:00:00Z' },
+      { id: 2, counterpartId: 102, counterpartName: 'B', grantedAt: '2026-09-01T00:00:00Z' },
+    ];
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await user.click(screen.getByRole('tab', { name: '오디오' }));
+    expect(screen.queryByText('남의 트랙')).not.toBeInTheDocument();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/streamers/'))).toBe(
+      false,
+    );
+  });
+
+  it('위임이 하나뿐이면 그 스트리머의 트랙 이름을 쓴다', async () => {
+    server.relation = 'EDITOR';
+    server.delegations = [
+      { id: 1, counterpartId: 101, counterpartName: 'A', grantedAt: '2026-09-01T00:00:00Z' },
+    ];
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await user.click(screen.getByRole('tab', { name: '오디오' }));
+    expect(await screen.findAllByText('남의 트랙')).not.toHaveLength(0);
   });
 
   it('주소에 열 것이 없으면 시작하는 곳을 안내한다', async () => {

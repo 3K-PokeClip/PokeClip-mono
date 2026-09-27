@@ -226,15 +226,19 @@ async function loadRecording(streamId: string): Promise<RecordingSpan | null> {
 
 /**
  * 그 방송 스트리머의 트랙 이름. 방송 줄에 스트리머 번호가 없어 관계로 고른다 — 내 방송이면 나, 편집자면 내가 위임받은
- * 스트리머(여럿이면 첫 번째: 방송 줄에 번호가 실리기 전까지의 한계).
+ * 스트리머(위임이 하나일 때만. 방송 줄에 번호가 실리기 전까지의 한계).
  */
 async function loadTrackLabels(broadcast: BroadcastRow): Promise<TrackLabels | null> {
   try {
-    const streamerId =
-      broadcast.relation === 'OWNER'
-        ? (await fetchMeLoose())?.id
-        : (await fetchDelegationsAsEditor())[0]?.streamerId;
-    return streamerId === undefined ? null : await fetchStreamerTrackLabels(streamerId);
+    if (broadcast.relation === 'OWNER') {
+      const me = await fetchMeLoose();
+      return me === null ? null : await fetchStreamerTrackLabels(me.id);
+    }
+    // 방송 줄에 스트리머 번호가 없다 — 위임이 하나뿐일 때만 그 스트리머로 안다. 여럿이면 남의 트랙 이름을 붙여
+    // 엉뚱한 트랙을 끄게 되므로 「트랙 n」으로 둔다(PR #200 codex)
+    const delegations = await fetchDelegationsAsEditor();
+    const only = delegations.length === 1 ? delegations[0] : undefined;
+    return only === undefined ? null : await fetchStreamerTrackLabels(only.streamerId);
   } catch {
     return null;
   }
@@ -583,7 +587,8 @@ function WiredStudio({ data }: { data: Loaded }) {
     for (let i = 0; i < TRACK_COUNT; i += 1) {
       const gain = savedTracks.get(i);
       muted[trackId(i)] = gain === undefined;
-      volumes[trackId(i)] = Math.round(Math.min(1, gain ?? 1) * 100);
+      // 계약은 0~200%다 — 100%로 깎으면 손대지 않은 트랙도 다시 저장할 때 1.5가 1.0으로 바뀐다(PR #200 codex)
+      volumes[trackId(i)] = Math.round(Math.min(2, gain ?? 1) * 100);
       tracks.push({
         id: trackId(i),
         kind: 'mic',

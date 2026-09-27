@@ -38,6 +38,11 @@ export function useRecordedPlayback(
   const offsetRef = useRef(0);
   offsetRef.current = offset;
   const seekTimer = useRef<number | null>(null);
+  /**
+   * 사용자가 재생을 원하는 상태인가. 이동은 주소를 갈아 끼우는 것이라 새 줄기를 틀지 말지를 이것으로 정한다 —
+   * 무조건 틀면 멈춰 둔 영상이 시크바·카드·화살표 한 번에 다시 재생된다(PR #200 codex). 처음 열 때는 튼다.
+   */
+  const wantPlayRef = useRef(true);
 
   const src = useMemo(
     () =>
@@ -54,12 +59,20 @@ export function useRecordedPlayback(
     if (video === null) return undefined;
     video.src = src;
     video.muted = muted;
-    void video.play().catch(() => {
-      /* 자동재생 거부 — 재생 버튼이 남는다 */
-    });
+    if (wantPlayRef.current) {
+      void video.play().catch(() => {
+        /* 자동재생 거부 — 재생 버튼이 남는다 */
+      });
+    }
     const onTime = () => setPosition(offsetRef.current + video.currentTime);
-    const onPlay = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
+    const onPlay = () => {
+      wantPlayRef.current = true;
+      setPlaying(true);
+    };
+    const onPause = () => {
+      wantPlayRef.current = false;
+      setPlaying(false);
+    };
     video.addEventListener('timeupdate', onTime);
     video.addEventListener('play', onPlay);
     video.addEventListener('pause', onPause);
