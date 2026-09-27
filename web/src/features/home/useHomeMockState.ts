@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/api/client';
-import { fetchLibraryAll } from '@/api/clipEditor';
+import { fetchAllBroadcasts, fetchLibraryAll } from '@/api/clipEditor';
 
 // 홈 대시보드 상태 — clip·auth 창구 배선(POK-251).
 // 목업 값은 전부 걷어냈다. 백엔드가 있는 것만 실값으로 채우고, 없는 칸은 null/빈 배열로
@@ -192,14 +192,15 @@ interface Loaded {
 }
 
 async function loadHome(now: number): Promise<Loaded> {
-  const [me, liveList, pastList] = await Promise.all([
+  const [me, liveList, pastAll] = await Promise.all([
     getJson<WireMe>('/api/auth/me'),
-    getJson<WireList>('/api/clip/broadcasts?state=live&limit=50'),
-    getJson<WireList>('/api/clip/broadcasts?state=past&limit=50'),
+    getJson<WireList>('/api/clip/broadcasts?state=live&limit=1'),
+    // 지난 방송은 끝까지 읽는다 — 곧 만료될 방송은 가장 오래된 것이라 목록 끝에 있다(POK-251 리뷰 2라운드).
+    // 한 쪽만 읽으면 방송이 많은 채널일수록 「만료 임박」이 비어 보인다
+    fetchAllBroadcasts('past').catch((): WireList['broadcasts'] => []),
   ]);
 
   const liveBroadcast = liveList?.broadcasts[0] ?? null;
-  const pastAll = pastList?.broadcasts ?? [];
   const past = pastAll.slice(0, PAST_LIMIT);
 
   // 카드는 방송마다 한 번씩 — 라이브 + 지난 방송 상위 N개

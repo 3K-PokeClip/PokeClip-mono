@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { withToastProvider } from '@/test/testProviders';
 import { LIBRARY_FIXTURE } from './libraryFixture';
 import { useLibraryMockState, type LibraryOptions } from './useLibraryMockState';
@@ -169,5 +170,42 @@ describe('useLibraryMockState', () => {
     expect(result.current.totalCount).toBe(0);
     expect(result.current.clips).toEqual([]);
     expect(result.current.pendingCount).toBe(0);
+  });
+});
+
+describe('useLibraryMockState — 서버 줄', () => {
+  it('유튜브에 올리는 중인 편집본이 있으면 저절로 다시 읽어 올림으로 바뀐다', async () => {
+    vi.useFakeTimers();
+    let status = 'uploading';
+    const entry = () => ({
+      recipeId: 12,
+      streamId: 's1',
+      creatorId: '9',
+      recipeVersion: 2,
+      cut: { inAtMs: 0, outAtMs: 30_000 },
+      status,
+      broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+      latestClip: null,
+      createdAt: '2026-09-20T11:00:00Z',
+      updatedAt: '2026-09-20T12:00:00Z',
+    });
+    stubFetch((url) =>
+      url.startsWith('/api/clip/library')
+        ? jsonResponse(200, { items: [entry()], nextCursor: null })
+        : jsonResponse(200, { id: 9, email: 'me@example.com' }),
+    );
+    const { result } = renderHook(() => useLibraryMockState(), { wrapper: withToastProvider });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.clips[0]?.subtitleLabel).toBe('유튜브에 올리는 중');
+
+    status = 'uploaded';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(result.current.clips[0]?.status).toBe('published');
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 });

@@ -235,10 +235,11 @@ export function useLiveMockState(): LiveMockState {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
-  // 방송 상태(라이브→종료, 시작·종료 시각 도착)가 바뀌면 차트 범위가 바뀐다
-  const [chartTick, setChartTick] = useState(0);
+  // 방송 상태(라이브→종료, 시작·종료 시각 도착)가 바뀌면 차트 범위가 바뀐다 — 차트만 다시 읽는다.
+  // 🔴 아래 큰 효과(카드·통로·방송 정보)를 다시 돌리면 카드가 비고 통로가 끊겨 그 사이 중계 채팅을 잃는다(POK-251 리뷰 2라운드)
+  const loadChartRef = useRef<(() => Promise<void>) | null>(null);
   useEffect(() => {
-    setChartTick((n) => n + 1);
+    void loadChartRef.current?.();
   }, [live.status, live.startedAt, live.endedAt]);
 
   useEffect(() => {
@@ -401,6 +402,7 @@ export function useLiveMockState(): LiveMockState {
       }
     };
 
+    loadChartRef.current = loadChart;
     void loadList();
     void loadChart();
     void loadInfo();
@@ -414,8 +416,9 @@ export function useLiveMockState(): LiveMockState {
       clearInterval(t1);
       clearInterval(t2);
       clearInterval(t3);
+      if (loadChartRef.current === loadChart) loadChartRef.current = null;
     };
-  }, [streamId, chartTick]);
+  }, [streamId]);
 
   useEffect(() => {
     publishLiveData({

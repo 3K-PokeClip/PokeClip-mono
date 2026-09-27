@@ -103,6 +103,37 @@ describe('HomeScreen', () => {
     expect(screen.queryByLabelText('이어서 편집')).not.toBeInTheDocument();
   });
 
+  it('곧 만료될 방송이 지난 방송 목록의 둘째 쪽에 있어도 만료 임박에 뜬다', async () => {
+    // 곧 만료될 방송은 가장 오래된 것이라 목록 끝에 있다 — 한 쪽만 읽으면 빠진다(POK-251 리뷰 2라운드)
+    const inTwoDays = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000 - 60 * 60 * 1000).toISOString();
+    const row = (streamId: string, vodExpiresAt: string | null) => ({
+      streamId,
+      status: 'vod_ready',
+      relation: 'OWNER',
+      startedAt: '2026-08-01T10:00:00Z',
+      endedAt: '2026-08-01T12:00:00Z',
+      vodExpiresAt,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('state=past')) {
+          const body = url.includes('cursor=p2')
+            ? { broadcasts: [row('old-expiring', inTwoDays)], nextCursor: null }
+            : { broadcasts: [row('recent', null)], nextCursor: 'p2' };
+          return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+        }
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+
+    // 만료 임박 줄은 「방송 · 카드 n개」로 선다(지난 방송 격자에도 D-2 배지가 같이 선다)
+    expect(await screen.findByText('old-expiring · 카드 0개')).toBeInTheDocument();
+    expect(screen.getAllByText('D-2').length).toBeGreaterThan(0);
+  });
+
   it('접근성 위반이 없다', async () => {
     const { container } = render(<HomeScreen />);
     // axe 실행 중 Next Link의 비동기 상태 갱신이 발화한다 — act로 감싸 경고 없이 흡수

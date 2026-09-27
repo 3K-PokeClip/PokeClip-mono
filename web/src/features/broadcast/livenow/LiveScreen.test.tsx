@@ -323,6 +323,17 @@ describe('LiveScreen — 방송 꺼짐', () => {
   });
 });
 
+describe('LiveScreen — 실시간 통로', () => {
+  it('방송 상태가 정해져도 통로를 다시 열지 않는다 — 다시 열면 그 사이 중계 채팅을 잃는다', async () => {
+    await renderLive();
+    // 방송 시계가 「확인 중 → 방송 중」과 시작 시각을 알린 뒤다. 차트만 다시 읽고 통로는 처음 한 번뿐이어야 한다
+    const events = fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/events'));
+    expect(events).toHaveLength(1);
+    const charts = fetchSpy.mock.calls.filter(([url]) => String(url).includes('/chat-chart'));
+    expect(charts.length).toBeGreaterThan(1);
+  });
+});
+
 describe('LiveScreen — 방송 정보 바', () => {
   it('영상 아래 줄에 제목·태그·시청자·경과 시간을 세운다', async () => {
     await renderLive();

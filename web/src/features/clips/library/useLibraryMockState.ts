@@ -230,8 +230,11 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     };
   }, [options.clips, tick]);
 
-  // 만드는 중인 영상이 있으면 10초마다 다시 읽는다 — 일꾼의 보고가 상태를 바꾼다.
-  const anyInProgress = clips.some((clip) => clip.entry?.status === 'rendering');
+  // 만드는 중·올리는 중인 편집본이 있으면 10초마다 다시 읽는다 — 일꾼의 보고가 상태를 바꾼다.
+  // 확인 중(checking)은 사람이 채널을 봐야 풀리므로 기다리지 않는다
+  const anyInProgress = clips.some(
+    (clip) => clip.entry?.status === 'rendering' || clip.entry?.status === 'uploading',
+  );
   useEffect(() => {
     if (!anyInProgress) return undefined;
     const t = window.setInterval(refresh, 10_000);
