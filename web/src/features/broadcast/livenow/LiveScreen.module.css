@@ -116,6 +116,12 @@
   flex-wrap: wrap;
 }
 
+/* 방송 정보 수집 전 — 칩 대신 서는 낮은 톤의 한 줄 */
+.infoNote {
+  font-size: calc(11 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
 .infoCategory {
   font-size: calc(12 * var(--pc-u));
   font-weight: 700;

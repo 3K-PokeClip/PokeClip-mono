@@ -101,6 +101,7 @@ export function ClipDetailPanel({
 
       <div className={styles.actions} ref={actionsRef}>
         <PrimaryControl
+          editHref={clip.editHref ?? '/clips/editor'}
           primary={view.primary}
           youtubeUrl={clip.youtubeUrl}
           onUpload={() => runTransition(onUpload)}
@@ -109,7 +110,13 @@ export function ClipDetailPanel({
         <div className={styles.actionRow}>
           {view.edit ? (
             <div className={styles.grow}>
-              <LinkButton as={Link} href={view.edit.href} variant="soft" size="sm" fullWidth>
+              <LinkButton
+                as={Link}
+                href={clip.editHref ?? view.edit.href}
+                variant="soft"
+                size="sm"
+                fullWidth
+              >
                 {view.edit.label}
               </LinkButton>
             </div>
@@ -121,7 +128,15 @@ export function ClipDetailPanel({
               </Button>
             </div>
           ) : null}
-          <IconButton variant="ghost" size="sm" aria-label="삭제" onClick={onDelete}>
+          {/* 서버 편집본은 지우는 창구가 없다(편집본 영구 보존, POK-124) — 지운 척하지 않게 잠근다(PR #200 codex) */}
+          <IconButton
+            variant="ghost"
+            size="sm"
+            aria-label="삭제"
+            disabled={clip.entry !== undefined}
+            title={clip.entry !== undefined ? '편집본은 지우지 않고 보관돼요' : undefined}
+            onClick={onDelete}
+          >
             <Trash2 size={14} aria-hidden />
           </IconButton>
         </div>
@@ -174,11 +189,13 @@ export function ClipDetailPanel({
  */
 function PrimaryControl({
   primary,
+  editHref,
   youtubeUrl,
   onUpload,
   onRetryRender,
 }: {
   primary: DetailView['primary'];
+  editHref: string;
   youtubeUrl: string | undefined;
   onUpload: () => void;
   onRetryRender: () => void;
@@ -186,7 +203,13 @@ function PrimaryControl({
   switch (primary.kind) {
     case 'link':
       return (
-        <LinkButton as={Link} href={primary.href} variant={primary.variant} size="md" fullWidth>
+        <LinkButton
+          as={Link}
+          href={primary.href === '/clips/editor' ? editHref : primary.href}
+          variant={primary.variant}
+          size="md"
+          fullWidth
+        >
           {primary.label}
         </LinkButton>
       );

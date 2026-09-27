@@ -22,10 +22,17 @@ const proxies = [
   // /api/youtube-link/start를 함께 덮는다 — dev 서버에 실측했다(둘 다 백엔드까지 도달해
   // 401, 매칭 안 되는 주소는 404).
   { source: '/api/youtube-link/:path*', target: process.env.AUTH_API_URL },
+  // 오디오 트랙 이름(POK-240) 중 편집자가 읽는 문과 프로필 사진도 auth 서버 소유다(POK-251).
+  // 🔴 이 줄이 없으면 편집기 오디오 탭이 404를 받아 트랙 이름이 「트랙 n」으로만 보인다(2026-09-17 실측).
+  { source: '/api/streamers/:path*', target: process.env.AUTH_API_URL },
+  { source: '/api/profile-photos/:path*', target: process.env.AUTH_API_URL },
   { source: '/api/clip/:path*', target: process.env.CLIP_API_URL },
 ];
 
 const nextConfig: NextConfig = {
+  // 라이브 카드 통로(SSE, text/event-stream)를 이 서버의 rewrite 프록시가 gzip으로 묶으면 조각이 버퍼에
+  // 갇혀 브라우저에 한 바이트도 안 온다(2026-09-17 실측: 2초 동안 gzip 헤더 10바이트). 압축을 끈다(POK-251).
+  compress: false,
   async rewrites() {
     return (
       proxies

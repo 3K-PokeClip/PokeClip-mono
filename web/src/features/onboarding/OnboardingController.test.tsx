@@ -1,9 +1,10 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { axe } from 'jest-axe';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HomeScreen } from '@/features/home/HomeScreen';
 import { OnboardingController } from '@/features/onboarding/OnboardingController';
 import { useOnboardingStore } from '@/stores/onboarding';
+import { jsonResponse, stubFetch } from '@/test/mockFetch';
 
 const push = vi.fn();
 vi.mock('next/navigation', () => ({
@@ -26,6 +27,29 @@ function resetStore() {
   });
 }
 
+// 홈은 마운트 뒤 clip·auth를 부른다. 투어 6단계는 「이어서 편집」 배너를 가리키므로 편집 중인 편집본을
+// 하나 둔다 — 배너는 그런 편집본이 있을 때만 선다(POK-251).
+const EDITING_ENTRY = {
+  recipeId: 12,
+  streamId: 'stream-1',
+  creatorId: '1',
+  recipeVersion: 3,
+  cut: null,
+  status: 'editing',
+  broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+  latestClip: null,
+  createdAt: '2026-09-26T10:00:00Z',
+  updatedAt: '2026-09-26T11:00:00Z',
+};
+
+function homeServer(url: string) {
+  if (url.startsWith('/api/clip/library'))
+    return jsonResponse(200, { items: [EDITING_ENTRY], nextCursor: null });
+  if (url.startsWith('/api/clip/broadcasts'))
+    return jsonResponse(200, { broadcasts: [], nextCursor: null });
+  return jsonResponse(200, { id: 1, email: 'me@example.com', name: null, profileImageUrl: null });
+}
+
 /** 홈과 함께 렌더 — 스포트라이트 타깃(data-tour-id)이 실제로 존재하는 환경. */
 function renderWithHome() {
   return render(
@@ -41,6 +65,11 @@ describe('OnboardingController', () => {
     window.localStorage.clear();
     push.mockClear();
     resetStore();
+    stubFetch(homeServer);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('신규 계정 첫 진입 — 웰컴 다이얼로그가 뜬다', async () => {

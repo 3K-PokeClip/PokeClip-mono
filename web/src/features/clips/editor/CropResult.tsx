@@ -1,4 +1,6 @@
+import type { CropRect } from './cropMath';
 import type { RegionPlacement } from './editorLayout';
+import { VideoSurface } from './VideoSurface';
 import styles from './editorShared.module.css';
 
 // 잡은 영역이 결과 화면의 어디에 어떤 모양으로 놓이는지 보여주는 칸 (POK-109).
@@ -9,8 +11,13 @@ import styles from './editorShared.module.css';
 export function CropResult({
   label,
   placement,
+  video = null,
+  crop = null,
 }: {
   label: string;
+  /** 실제 영상(있으면 라벨 대신 잡은 영역을 잘라 그린다) */
+  video?: HTMLVideoElement | null;
+  crop?: CropRect | null;
   /** 결과 화면에서 이 영역이 놓이는 방식 — 레이아웃이 정한다 */
   placement: RegionPlacement;
 }) {
@@ -55,7 +62,11 @@ export function CropResult({
         }
       >
         <div className={styles.resultContain} style={{ aspectRatio: placement.aspect }}>
-          <span className={styles.sourcePlaceholder}>{label}</span>
+          {video ? (
+            <VideoSurface video={video} crop={crop} />
+          ) : (
+            <span className={styles.sourcePlaceholder}>{label}</span>
+          )}
         </div>
       </div>
     );
@@ -63,7 +74,11 @@ export function CropResult({
 
   return (
     <div className={styles.resultPane} data-placement={placement.kind} style={style}>
-      <span className={styles.sourcePlaceholder}>{label}</span>
+      {video ? (
+        <VideoSurface video={video} crop={crop} />
+      ) : (
+        <span className={styles.sourcePlaceholder}>{label}</span>
+      )}
     </div>
   );
 }

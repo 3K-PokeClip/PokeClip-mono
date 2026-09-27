@@ -14,11 +14,8 @@ import { WithdrawDialog } from './WithdrawDialog';
 import styles from './AccountSettingsScreen.module.css';
 
 // 디자인 1p 설정 · 계정 (POK-206 → 실서버 배선 POK-208). 조립만 한다 — 이름·사진 저장은
-// useAccountState(실서버), 탈퇴는 useAccountMockState(아직 목업), 사진 모달의 단계·타이머는
-// useProfilePhotoState가 갖는다.
-//
-// ⚠ 탈퇴만 아직 서버로 가지 않는다 — 창구(DELETE /api/auth/me, POK-171)는 생겼지만 웹 배선은
-// 별도 티켓이다. 눌리지만 아무것도 지우지 않고 로컬 세션만 접는다.
+// useAccountState(실서버), 탈퇴는 useAccountMockState(DELETE /api/auth/me 실제 호출, 수치만 준비 중),
+// 사진 모달의 단계·타이머는 useProfilePhotoState가 갖는다.
 export function AccountSettingsScreen() {
   const account = useAccountState();
   const mock = useAccountMockState();
@@ -86,6 +83,7 @@ export function AccountSettingsScreen() {
         open={withdrawOpen && !mock.blocked}
         name={name}
         facts={mock.facts}
+        busy={mock.withdrawing}
         onCancel={() => setWithdrawOpen(false)}
         onConfirm={mock.completeWithdraw}
       />

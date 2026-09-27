@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useMemo, useRef, useState, type Ref } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type Ref } from 'react';
 import clsx from 'clsx';
 import styles from './LiveScreen.module.css';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
@@ -11,16 +11,27 @@ import { HighlightCardPanel } from './HighlightCardPanel';
 import { LiveOfflineScreen } from './LiveOfflineScreen';
 import { LiveStatsPanel } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
+import { notFound } from 'next/navigation';
+import { requestPlaybackAccess } from '@/api/clipEditor';
+import { vodStreamIdFromPath } from '@/features/broadcast/streamSelection';
+import { fetchRecordingSpans } from '@/api/mediaPlayback';
+import type { RecordedSource } from '@/features/player/useRecordedPlayback';
+import { publishLiveData, useLiveData } from './liveDataStore';
+import { useBroadcastClock, type BroadcastStatus } from './useBroadcastClock';
 import { useChatPanelMockState } from './useChatPanelMockState';
 import { useLiveDetailsMockState } from './useLiveDetailsMockState';
 import { useLiveMockState, type LiveStream } from './useLiveMockState';
 import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
+import { useLiveStreamSelection } from './useLiveStreamSelection';
 import { useManualMarking } from './useManualMarking';
 
 // 디자인 1b — 라이브 대시보드. 시안은 페이지 헤더 없이 콘텐츠부터 시작하고,
 // 방송 정보를 영상 아래 줄에 둔다. 세로로 길게 쌓아 문서 스크롤로 내려가는 화면이라
 // 높이를 뷰포트에 맞추지 않는다 — 채팅만 예외로 화면 높이에 sticky(시안 갱신, POK-239).
+//
+// 시계의 주인은 플레이어가 아니라 clip의 방송 명부다(useBroadcastClock, POK-251). 영상이 없어도
+// 경과·마킹 시각이 흘러야 해서, 경과는 방송 시작 시각(startedAt)에서 센다.
 
 // useSearchParams(?stream=)는 프리렌더에서 가장 가까운 Suspense 경계까지 CSR로 전환한다 —
 // 화면 전체가 아니라 플레이어만 빠지도록 여기서 분리하고 경계는 playerFrame 안에 둔다.
@@ -31,56 +42,134 @@ import { useManualMarking } from './useManualMarking';
 // (dock) 서브트리를 통째로 null로 만들기 때문이다(.next/server/app/broadcast/livenow.html로 확인).
 // 경계를 좁힌 이득은 AuthGuard가 서버에서도 그릴 수 있게 되는 시점에 생긴다.
 // 이 주석을 LCP·SEO 근거로 쓰지 말 것.
+/** 출입증을 만료 몇 분 전에 다시 받을지 */
+const PLAYBACK_ACCESS_MARGIN_MS = 5 * 60_000;
+/** 출입증 실패 뒤 다시 받기까지 */
+const PLAYBACK_ACCESS_RETRY_MS = 60_000;
+/** 만료 시각을 모를 때 다시 받는 간격 — 운영 쿠키 수명 60분보다 짧게 */
+const PLAYBACK_ACCESS_DEFAULT_RENEW_MS = 50 * 60_000;
+
 function LivePlayer({
   stream,
+  viewersNote,
+  broadcastStatus,
+  uptimeSeconds,
   controllerRef,
   chatPanelOpen,
   onToggleChatPanel,
-  onUptimeChange,
 }: {
   stream: LiveStream;
+  viewersNote: string;
+  broadcastStatus: BroadcastStatus;
+  uptimeSeconds: number | null;
   controllerRef: Ref<GlassPlayerController>;
   chatPanelOpen: boolean;
   onToggleChatPanel: () => void;
-  onUptimeChange: (uptimeSeconds: number) => void;
 }) {
-  // env 미설정이면 null → GlassPlayer가 시뮬레이션으로 폴백 (테스트 포함)
-  const src = useMediaSource();
+  // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
+  // 주소에 ?stream= 이 없으면 clip 명부에서 고른 방송(liveDataStore)의 영상을 튼다.
+  const { streamId: liveStreamId } = useLiveData();
+  const src = useMediaSource(liveStreamId);
+  // 끝난 방송은 LL-HLS 주소가 닫힌다 — 녹화 재생 서버에서 다시보기를 튼다(있을 때만).
+  const [recorded, setRecorded] = useState<RecordedSource | null>(null);
+  useEffect(() => {
+    setRecorded(null);
+    publishLiveData({ timeBaseMs: null });
+    if (broadcastStatus !== 'ended' || !liveStreamId) return undefined;
+    let alive = true;
+    void fetchRecordingSpans(liveStreamId).then((spans) => {
+      const first = spans[0];
+      if (alive && first) {
+        setRecorded({ streamId: liveStreamId, ...first });
+        // 영상의 0초가 곧 카드 시점의 0초다 — 채팅도 이 기준으로 시점을 잡게 알린다
+        publishLiveData({ timeBaseMs: first.startMs });
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [broadcastStatus, liveStreamId]);
+  // 영상 출입증(POK-122) — 방송을 열 때 받고, 만료 5분 전에 다시 받는다. 쿠키 수명(운영 60분)이 지나면 새 조각이
+  // 403이 되어 재생이 멈춘다(PR #200 codex P1). 실패하면 1분 뒤 다시 받는다. 서명 재료가 없는 서버(503)는
+  // 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다. 실패해도 재생은 시도한다(로컬 media는 쿠키를 안 본다).
+  useEffect(() => {
+    if (!liveStreamId) return undefined;
+    let alive = true;
+    let timer: number | undefined;
+    const ask = () => {
+      void requestPlaybackAccess(liveStreamId).then((result) => {
+        if (!alive || result.kind === 'not_needed') return;
+        const wait =
+          result.kind === 'failed'
+            ? PLAYBACK_ACCESS_RETRY_MS
+            : result.expiresAtMs === null
+              ? PLAYBACK_ACCESS_DEFAULT_RENEW_MS
+              : Math.max(
+                  PLAYBACK_ACCESS_RETRY_MS,
+                  result.expiresAtMs - Date.now() - PLAYBACK_ACCESS_MARGIN_MS,
+                );
+        timer = window.setTimeout(ask, wait);
+      });
+    };
+    ask();
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [liveStreamId]);
   return (
     <GlassPlayer
+      // 실재생 훅은 경과 시드를 마운트 때 한 번만 읽는다 — startedAt이 도착하면 한 번 다시 세운다
+      key={uptimeSeconds === null ? 'clock-pending' : 'clock-known'}
       channelName={stream.channelName}
-      viewersNote={`${stream.viewers}명 시청 중`}
-      src={src}
+      viewersNote={viewersNote}
+      broadcastStatus={broadcastStatus}
+      // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
+      // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다
+      src={broadcastStatus === 'live' ? src : null}
+      recorded={recorded}
       embed
-      simulationOptions={{ initialUptimeSeconds: stream.uptimeSeconds }}
+      simulationOptions={{ initialUptimeSeconds: uptimeSeconds ?? 0 }}
       controllerRef={controllerRef}
       chatPanelOpen={chatPanelOpen}
       onToggleChatPanel={onToggleChatPanel}
-      onUptimeChange={onUptimeChange}
     />
   );
 }
 
 // 방송 상태로 먼저 가른다 — 오프라인에서는 대시보드 훅(F8 수동 마킹 리스너·채팅 타이머)이
 // 아예 돌지 않아야 하므로, 분기를 그 훅들보다 위인 컴포넌트 경계에서 한다.
+// 꺼짐은 둘이다: 시안 확인용 토글(?mock=offline, 개발 전용)과 실제로 방송 중인 것이 없을 때.
 export function LiveScreen() {
   const { status } = useLiveStatusMockState();
-  return status === 'offline' ? <LiveOfflineScreen /> : <LiveDashboard />;
+  const selection = useLiveStreamSelection();
+  const offline = status === 'offline' || (selection.resolved && selection.streamId === '');
+  return offline ? <LiveOfflineScreen /> : <LiveDashboard />;
 }
 
 function LiveDashboard() {
   const { stream, highlights, chatVolume, chatWarning } = useLiveMockState();
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
+  const { streamId, info } = useLiveData();
+  const clock = useBroadcastClock(streamId);
+  // 지난 방송 상세 주소로 들어왔는데 그 방송이 명부에 없으면(없는 번호·권한 회수) 404 화면으로 보낸다 —
+  // 빈 대시보드를 보여 주지 않는다(PR #200 codex, 404 계약: README 「404 계약」)
+  if (
+    clock.missingStreamId !== null &&
+    clock.missingStreamId === streamId &&
+    vodStreamIdFromPath() === streamId
+  )
+    notFound();
   const playerRef = useRef<GlassPlayerController>(null);
 
-  // 시계의 주인은 플레이어다. 표기는 매초 다시 그려야 하니 상태로, 「지금 몇 시인가」를 묻는
-  // 마킹은 다시 그릴 이유가 없으니 ref로 받는다 — 둘을 한 값에서 끌어 써야 어긋나지 않는다.
-  const [uptimeLabel, setUptimeLabel] = useState(stream.uptimeLabel);
-  const uptimeRef = useRef(stream.uptimeSeconds);
-  const handleUptimeChange = useCallback((seconds: number) => {
-    uptimeRef.current = seconds;
-    setUptimeLabel(formatUptime(seconds));
-  }, []);
+  // 표기는 매초 다시 그려지고(clock이 상태), 「지금 몇 시인가」를 묻는 마킹은 ref로 읽는다 —
+  // 둘 다 같은 시계에서 나와야 어긋나지 않는다.
+  const uptimeSeconds = clock.uptimeSeconds;
+  const uptimeLabel = uptimeSeconds === null ? null : formatUptime(uptimeSeconds);
+  const uptimeRef = useRef(0);
+  useEffect(() => {
+    uptimeRef.current = uptimeSeconds ?? 0;
+  }, [uptimeSeconds]);
   const readMarkTimestamp = useCallback(() => formatUptime(uptimeRef.current), []);
   const marking = useManualMarking(readMarkTimestamp);
   // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
@@ -90,6 +179,19 @@ function LiveDashboard() {
   // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다).
   const chat = useChatPanelMockState(chatPanelOpen && !chatWarning);
   const stats = useLiveStatsMockState();
+
+  // 시청자 수는 broadcast-info의 series 마지막 값 — 수집기 PR-C 전에는 없다
+  const viewersLabel = useMemo(() => {
+    const last = info?.series?.length ? info.series[info.series.length - 1] : null;
+    const v = last?.viewers ?? null;
+    return v === null ? '시청자 수 수집 전' : `${v.toLocaleString()}명 시청 중`;
+  }, [info]);
+
+  // 카드의 타임라인 위치(posPercent)는 방송 경과 대비다 — 실경과를 넣어야 눈금이 맞는다
+  const streamForCards = useMemo<LiveStream>(
+    () => ({ ...stream, uptimeSeconds: uptimeSeconds ?? 0 }),
+    [stream, uptimeSeconds],
+  );
 
   // 찍어 만든 카드가 앞, 그다음이 감지된 카드 — 필터 개수도 통계의 하이라이트 줄도
   // 이 합친 목록에서 센다. 어느 한쪽을 따로 세면 두 표기가 언젠가 어긋난다.
@@ -112,6 +214,8 @@ function LiveDashboard() {
   const handleSeek = useCallback((timestamp: string) => {
     const seconds = parseClockLabel(timestamp);
     if (seconds === null) return;
+    // 영상이 없어도 채팅 패널이 그 시점을 보여준다(지난 방송)
+    publishLiveData({ playheadMs: seconds * 1000 });
     playerRef.current?.seekToUptime(seconds);
   }, []);
 
@@ -124,23 +228,27 @@ function LiveDashboard() {
             <Suspense fallback={<div className={styles.playerFallback} aria-hidden />}>
               <LivePlayer
                 stream={stream}
+                viewersNote={viewersLabel}
+                broadcastStatus={clock.status}
+                uptimeSeconds={uptimeSeconds}
                 controllerRef={playerRef}
                 chatPanelOpen={chatPanelOpen}
                 onToggleChatPanel={toggleChatPanel}
-                onUptimeChange={handleUptimeChange}
               />
             </Suspense>
           </div>
           <StreamInfoBar
             stream={stream}
             meta={streamMeta}
+            viewersLabel={viewersLabel}
             uptimeLabel={uptimeLabel}
+            uptimeNote={clock.status === 'ended' ? '방송함' : '스트리밍 중'}
             pendingLabel={marking.pendingLabel}
             onMark={marking.mark}
           />
           <HighlightCardPanel
             highlights={cards}
-            stream={stream}
+            stream={streamForCards}
             visuals={cardVisuals}
             pendingLabel={marking.pendingLabel}
             detectionPaused={chatWarning}
@@ -155,6 +263,7 @@ function LiveDashboard() {
               surges={chat.surges}
               messages={chat.messages}
               ratePerMinute={chat.ratePerMinute}
+              mode={clock.status}
               collectionWarning={chatWarning}
               onCollapse={toggleChatPanel}
             />

@@ -538,17 +538,18 @@ describe('AccountSettingsScreen — 탈퇴', () => {
     // 지워지는 것 — 복구할 수 없음이 문장에 있다
     expect(
       dialog.getByText(
-        /보관함의 클립·하이라이트 카드·자동 처리 설정이 모두 삭제되며 복구할 수 없습니다/,
+        // 실제 탈퇴는 clip 기록을 지우지 않는다 — 「모두 삭제」라고 말하지 않는다(PR #200 codex P1)
+        /클립·하이라이트 카드 기록은 탈퇴와 함께 지워지지 않고 남습니다/,
       ),
     ).toBeInTheDocument();
+    expect(dialog.queryByText(/모두 삭제/)).toBeNull();
     // 안 지워지는 것
     expect(
       dialog.getByText(/이미 게시된 영상은 삭제되지 않으며, 해당 채널에서 직접 관리해야 합니다/),
     ).toBeInTheDocument();
 
-    expect(dialog.getByText('42개')).toBeInTheDocument();
-    expect(dialog.getByText('128개')).toBeInTheDocument();
-    expect(dialog.getByText('23일')).toBeInTheDocument();
+    // 보관함·구독 수치는 백엔드가 없다 — 숫자 대신 안내가 선다
+    expect(dialog.getAllByText('준비 중')).toHaveLength(3);
   });
 
   it('취소는 아무 일 없이 이탈한다', async () => {
@@ -575,14 +576,20 @@ describe('AccountSettingsScreen — 탈퇴', () => {
     expect(useAuthStore.getState().refreshToken).toBe('refresh-1');
   });
 
-  it('확정하면 세션은 그대로 둔 채 탈퇴 완료 화면으로 보낸다', async () => {
+  it('확정하면 DELETE /api/auth/me 를 부르고, 세션은 그대로 둔 채 탈퇴 완료 화면으로 보낸다', async () => {
     const user = userEvent.setup();
+    const spy = stubAccount(ME, (url, init) =>
+      url === '/api/auth/me' && init?.method === 'DELETE'
+        ? jsonResponse(204)
+        : jsonResponse(404, { reason: 'UNEXPECTED_CALL' }),
+    );
     await renderScreen();
 
     await user.click(screen.getByRole('button', { name: '탈퇴하기' }));
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '탈퇴하기' }));
 
-    expect(nav.replace).toHaveBeenCalledWith('/goodbye');
+    await waitFor(() => expect(nav.replace).toHaveBeenCalledWith('/goodbye'));
+    expect(spy.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true);
     // 여기서 토큰을 지우면 그 리렌더로 깨어난 AuthGuard가 /login으로 보내 이동을 채간다.
     // 세션 정리는 가드 밖인 /goodbye가 맡는다 — 표식만 남기고 나간다.
     expect(useAuthStore.getState().refreshToken).toBe('refresh-1');

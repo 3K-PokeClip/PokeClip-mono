@@ -4,11 +4,11 @@ import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { describe, expect, it } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
-import { StudioScreen } from './StudioScreen';
+import { StudioEditor } from './StudioScreen';
 import type { ClipEditorOptions } from '../useClipEditorMockState';
 
 function renderStudio(options?: ClipEditorOptions) {
-  return renderWithProviders(<StudioScreen {...options} />);
+  return renderWithProviders(<StudioEditor {...options} />);
 }
 
 describe('StudioScreen', () => {

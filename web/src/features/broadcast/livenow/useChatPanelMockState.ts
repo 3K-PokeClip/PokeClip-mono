@@ -1,21 +1,18 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { MOCK_CHAT_RATE_PER_MINUTE } from './liveMockValues';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { apiFetch } from '@/api/client';
+import { subscribeRelay, useLiveData, type RelayEvent } from './liveDataStore';
+import { chartWindows } from './useLiveMockState';
 
-// 실시간 채팅 패널(시안 1b)의 목업.
-//
-// 플레이어 안 오버레이(useSimulatedChat)와 따로 두는 이유는 담는 것이 다르기 때문이다 —
-// 저쪽은 닉네임·본문뿐이고, 이쪽은 후원과 시스템 알림(하이라이트 감지)을 함께 세운다.
-//
-// 교체 시점도 다르다: 이 패널은 POK-180(카드 SSE)의 범위가 아니다. 채팅 원문을 화면에
-// 흘려보내는 창구가 아직 어느 계약에도 없어(status.md 열린 미결) 실연동 티켓이 생길 때까지
-// 목업으로 남는다. 수집이 살아 있는지(끊김 배지)는 동결 계약의 chatWarning이 답한다.
+// 실시간 채팅 패널(시안 1b). clip 창구에 붙어 있다(POK-251).
+// 라이브: 카드 통로(SSE)의 chat·donation 중계가 주 경로이고 chat-messages 폴링이 메우기·폴백이다.
+// 지난 방송: 시작~종료 전체를 chat-messages로 한 번에 받는다.
+// 방송 번호는 라이브 훅이 정한 것(liveDataStore)을 같이 쓴다 — 방송이 바뀌면 함께 바뀐다.
 
 export const CHAT_PANEL_INTERVAL_MS = 3500;
 // 초기 픽스처(INITIAL)보다 넉넉해야 한다 — 작으면 첫 새 메시지가 오는 순간 옛 줄이 잘려
 // 2단 레이아웃에서 목록이 다시 안 넘치고, 스크롤·「지난 메시지 보는 중」을 눈으로 볼 수 없게 된다.
-const KEEP_LAST = 40;
 
 export interface ChatSurge {
   keyword: string;
@@ -38,90 +35,344 @@ export type ChatPanelMessage =
 export interface ChatPanelMockState {
   surges: ChatSurge[];
   messages: ChatPanelMessage[];
-  /** 하단 상태줄의 「분당 N」 — 통계의 「분당 평균 채팅」과 같은 원천(MOCK_CHAT_RATE_PER_MINUTE) */
+  /** 하단 상태줄의 「분당 N」 — 최근 1분 채팅 수(지난 방송은 전체 평균) */
   ratePerMinute: number;
 }
 
-const MOCK_SURGES: ChatSurge[] = [
-  { keyword: 'ㅋㅋㅋㅋ', count: 214 },
-  { keyword: '미쳤다', count: 86 },
-  { keyword: '클러치', count: 41 },
-];
+// ── clip 창구 배선: chat-messages(메우기·지난 방송) + 카드 통로 중계(라이브) ──
+interface WireItem {
+  kind: 'chat' | 'donation';
+  id: number;
+  time: string;
+  nickname: string | null;
+  senderChannelId: string;
+  text: string | null;
+  amount: number | null;
+}
+interface WirePage {
+  items: WireItem[];
+  nextCursor: string | null;
+  appliedOffsetMs: number;
+}
 
-// 뒤쪽 11줄은 시안 1b 채팅 패널에 그려진 줄 그대로다 — 테스트가 이 문구를 단언한다.
-// 앞쪽 20줄은 그보다 오래된 채팅이다: 2단(데스크톱) 레이아웃의 화면 높이 패널에서도 목록이 넘쳐야
-// 자체 스크롤과 「지난 메시지 보는 중」 분기를 실제 화면에서 볼 수 있다(이 목업은 수집 끊김 상태라
-// 새 메시지가 오지 않아, 여기 든 줄이 화면에 서는 전부다).
-// id는 순서와 무관한 렌더 키일 뿐이라 시안 줄의 번호를 건드리지 않으려고 12부터 붙였다 —
-// 새 메시지 id는 아래 counter가 이 배열의 id 최댓값 다음부터 센다.
-const INITIAL: ChatPanelMessage[] = [
-  { id: 12, kind: 'chat', name: '밤샘각', text: '오늘도 새벽 랭크인가요', colorIndex: 0 },
-  { id: 13, kind: 'chat', name: '라면먹자', text: '어제 그 판 진짜 레전드였음', colorIndex: 3 },
-  { id: 14, kind: 'chat', name: '겜돌이', text: 'ㅇㅇ 그거 보고 입덕함', colorIndex: 1 },
-  { id: 15, kind: 'chat', name: '포키좋아', text: '지금 몇 승 몇 패예요?', colorIndex: 2 },
-  { id: 16, kind: 'chat', name: '별사탕', text: '2연승 중이십니다', colorIndex: 2 },
-  { id: 17, kind: 'chat', name: '야옹이22', text: '오늘 안에 승급 가나요', colorIndex: 3 },
-  { id: 18, kind: 'chat', name: '초코송이', text: '폼 보면 가능하죠', colorIndex: 4 },
-  { id: 19, kind: 'chat', name: '수면부족', text: '저 내일 출근인데 왜 보고 있지', colorIndex: 0 },
-  { id: 20, kind: 'chat', name: '다이아가자', text: '같이 망하실래요', colorIndex: 5 },
-  { id: 21, kind: 'chat', name: '라면먹자', text: 'ㅋㅋㅋㅋ 인정', colorIndex: 3 },
-  { id: 22, kind: 'chat', name: '겜돌이', text: '픽 뭐 하실 거예요', colorIndex: 1 },
-  { id: 23, kind: 'chat', name: '별사탕', text: '정글 고정이시죠', colorIndex: 2 },
-  { id: 24, kind: 'chat', name: '밤샘각', text: '상대 미드 잘한다던데', colorIndex: 0 },
-  { id: 25, kind: 'chat', name: '포키좋아', text: '그래도 이깁니다', colorIndex: 2 },
-  { id: 26, kind: 'chat', name: '야옹이22', text: '와 저 궁 타이밍', colorIndex: 3 },
-  { id: 27, kind: 'chat', name: '초코송이', text: '와 진짜 미쳤네', colorIndex: 4 },
-  { id: 28, kind: 'chat', name: '다이아가자', text: '이거 클립 따야 되는 거 아님?', colorIndex: 5 },
-  { id: 29, kind: 'chat', name: '수면부족', text: '그 장면 한 번만 더요', colorIndex: 0 },
-  { id: 30, kind: 'chat', name: '겜돌이', text: '한타 열립니다', colorIndex: 1 },
-  { id: 31, kind: 'chat', name: '별사탕', text: '집중집중', colorIndex: 2 },
-  { id: 1, kind: 'chat', name: '수면부족', text: '새벽에 이걸 보고 있네 ㅋㅋ', colorIndex: 0 },
-  { id: 2, kind: 'chat', name: '겜돌이', text: '상대 정글 울겠다', colorIndex: 1 },
-  { id: 3, kind: 'chat', name: '별사탕', text: '승급전 마지막판 가보자', colorIndex: 2 },
-  { id: 4, kind: 'chat', name: '야옹이22', text: '방금 궁 타이밍 뭐임 ㄷㄷ', colorIndex: 3 },
-  { id: 5, kind: 'chat', name: '초코송이', text: '클립각 클립각', colorIndex: 4 },
-  {
-    id: 6,
-    kind: 'donation',
-    name: '도네초코',
-    amountLabel: '치즈 5,000',
-    text: '승급 기원!! 가즈아',
-  },
-  { id: 7, kind: 'chat', name: '겜돌이', text: '한타 각 나온다 집중', colorIndex: 1 },
-  { id: 8, kind: 'chat', name: '별사탕', text: '1v3 클러치 실화냐', colorIndex: 2 },
-  { id: 9, kind: 'chat', name: '초코송이', text: 'ㅋㅋㅋㅋㅋㅋㅋ 개쩐다', colorIndex: 4 },
-  { id: 10, kind: 'chat', name: '다이아가자', text: '미쳤다미쳤다미쳤다', colorIndex: 5 },
-  { id: 11, kind: 'system', text: '하이라이트 감지 · 1:24:03 구간이 카드로 만들어졌어요' },
-];
+const POLL_MS = 5000;
 
-const POOL: ReadonlyArray<Omit<Extract<ChatPanelMessage, { kind: 'chat' }>, 'id'>> = [
-  { kind: 'chat', name: '하늘바람', text: '방금 그거 다시 보여주세요', colorIndex: 0 },
-  { kind: 'chat', name: '클립장인', text: '지금 클립 각이다', colorIndex: 3 },
-  { kind: 'chat', name: 'bbibu', text: 'ㅋㅋㅋㅋㅋㅋ', colorIndex: 1 },
-  { kind: 'chat', name: '밤도둑', text: '오늘 폼 미쳤네', colorIndex: 2 },
-  { kind: 'chat', name: '빙수가게', text: '승급 각 보인다', colorIndex: 4 },
-];
+/** 라이브 폴링 한 번에 따라가는 쪽 수 상한(쪽당 200건) — 화면은 최근 300건만 남긴다 */
+const LIVE_POLL_PAGE_BUDGET = 10;
+
+/**
+ * 지난 방송 채팅을 처음 읽을 때 1시간 창마다의 쪽 수 상한(쪽당 200건). 창마다 따로 둔다 — 방송 전체에 하나를 두면
+ * 서버가 오래된 것부터 주므로 앞부분에서 다 써 버려 후반이 통째로 빈다(PR #200 codex P1). 모자란 시점은
+ * 카드를 누를 때 그 앞뒤를 따로 끝까지 읽는다(VOD_FOCUS_PAGE_BUDGET)
+ */
+const VOD_CHAT_PAGES_PER_WINDOW = 5;
+/** 카드를 누른 시점 앞뒤 60초를 읽을 때 쪽 수 상한 */
+const VOD_FOCUS_PAGE_BUDGET = 10; // SSE 중계가 주 경로, 폴링은 메우기·폴백
+
+/**
+ * 채팅 시각(표 축)이 화면(영상) 시각보다 앞서는 폭 — 시차 보정 실측 중앙값 3,884ms(POK-92)를 올려 잡았다.
+ * 「최근 1분」「시점 앞뒤 60초」 창을 채팅 축으로 옮길 때 더한다.
+ */
+const CHAT_LEAD_MS = 3900;
+
+const KEEP_REAL = 300;
+function trim(map: Record<string, WireItem>): Record<string, WireItem> {
+  const keys = Object.keys(map);
+  if (keys.length <= KEEP_REAL) return map;
+  const sorted = keys.sort(
+    (a, b) => Date.parse((map[a] as WireItem).time) - Date.parse((map[b] as WireItem).time),
+  );
+  const next: Record<string, WireItem> = {};
+  for (const k of sorted.slice(-KEEP_REAL)) next[k] = map[k] as WireItem;
+  return next;
+}
+
+/** 겹친 구간 중복 제거 열쇠 — 채팅 표 지문 UNIQUE와 같다(README 「웹이 지켜야 하는 것 넷」 3) */
+function fingerprint(it: {
+  kind: string;
+  time: string;
+  senderChannelId: string;
+  text: string | null;
+}): string {
+  return `${it.kind}|${it.time}|${it.senderChannelId}|${it.text ?? ''}`;
+}
+
+function colorOf(senderChannelId: string): number {
+  let h = 0;
+  for (let i = 0; i < senderChannelId.length; i += 1)
+    h = (h * 31 + senderChannelId.charCodeAt(i)) | 0;
+  return Math.abs(h) % 6;
+}
+
+function toPanel(it: WireItem): ChatPanelMessage {
+  const name = it.nickname ?? it.senderChannelId.slice(0, 8);
+  if (it.kind === 'donation') {
+    return {
+      id: it.id,
+      kind: 'donation',
+      name,
+      amountLabel: `치즈 ${(it.amount ?? 0).toLocaleString()}`,
+      text: it.text ?? '',
+    };
+  }
+  return {
+    id: it.id,
+    kind: 'chat',
+    name,
+    text: it.text ?? '',
+    colorIndex: colorOf(it.senderChannelId),
+  };
+}
 
 export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
-  const [messages, setMessages] = useState<ChatPanelMessage[]>(INITIAL);
-  // 길이가 아니라 최댓값에서 출발한다 — 배열 순서와 id 순서가 달라(12..31 다음 1..11) 둘이
-  // 지금은 우연히 같을 뿐이고, 픽스처에서 한 줄만 빼도 새 id가 기존 id와 겹쳐 React 키가 충돌한다.
-  const counter = useRef(Math.max(...INITIAL.map((message) => message.id)));
+  const [raw, setRaw] = useState<Record<string, WireItem>>({});
+  const lastTime = useRef<number>(0);
+  const nextId = useRef<number>(1);
+  const lastSeq = useRef<{ seq: number; epoch: number } | null>(null);
+  const refillTimer = useRef<number | null>(null);
+  const pollRef = useRef<(() => Promise<void>) | null>(null);
+  const live = useLiveData();
+  const streamId = live.streamId;
+  const isVod = live.status === 'ended' && live.startedAt !== null && live.endedAt !== null;
+
+  // 지난 방송: 시작~종료 전체를 받는다. 수집기는 한 번에 1시간까지만 받으므로(넘으면 400 too_wide)
+  // 1시간 창마다 커서로 넘긴다(PR #200 codex). 창마다 최대 5장(1,000건). 폴링 없음
+  useEffect(() => {
+    if (!enabled || !streamId || !isVod || live.startedAt === null || live.endedAt === null) return;
+    setRaw({});
+    let stopped = false;
+    const windows = chartWindows(live.startedAt, live.endedAt);
+    (async () => {
+      const acc: Record<string, WireItem> = {};
+      for (const [from, to] of windows) {
+        let cursor: string | null = null;
+        let budget = VOD_CHAT_PAGES_PER_WINDOW;
+        do {
+          if (budget-- <= 0) break;
+          const qs = new URLSearchParams({
+            from: new Date(from).toISOString(),
+            to: new Date(to).toISOString(),
+            limit: '200',
+          });
+          if (cursor) qs.set('cursor', cursor);
+          try {
+            const r = await apiFetch(
+              `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-messages?${qs}`,
+            );
+            if (stopped) return;
+            const pg = (await r.json()) as WirePage;
+            for (const it of pg.items) acc[fingerprint(it)] = it;
+            cursor = pg.nextCursor;
+          } catch {
+            // 이 창만 건너뛴다 — 한 창의 실패로 방송 전체 채팅을 비우지 않는다
+            cursor = null;
+          }
+        } while (cursor !== null);
+      }
+      if (!stopped) setRaw(acc);
+    })();
+    return () => {
+      stopped = true;
+    };
+  }, [enabled, streamId, isVod, live.startedAt, live.endedAt]);
+
+  // 실시간 중계 수신(카드 통로의 chat·donation). 구멍·세대 변화면 2초 뒤 범위 창구로 메운다
+  useEffect(() => {
+    if (!enabled || !streamId || isVod || live.status === 'offline') return;
+    lastSeq.current = null;
+    return subscribeRelay((ev: RelayEvent) => {
+      const item: WireItem = {
+        kind: ev.kind,
+        id: 0,
+        time: ev.time,
+        nickname: ev.nickname,
+        senderChannelId: ev.senderChannelId,
+        text: ev.text,
+        amount: ev.amount,
+      };
+      setRaw((prev) => {
+        const k = fingerprint(item);
+        if (prev[k]) return prev;
+        const withId = { ...item, id: nextId.current++ };
+        return trim({ ...prev, [k]: withId });
+      });
+      const prevSeq = lastSeq.current;
+      const gap = prevSeq !== null && (ev.seqEpoch !== prevSeq.epoch || ev.seq > prevSeq.seq + 1);
+      if (!prevSeq || ev.seqEpoch !== prevSeq.epoch || ev.seq > prevSeq.seq)
+        lastSeq.current = { seq: ev.seq, epoch: ev.seqEpoch };
+      if (gap && refillTimer.current === null) {
+        // 놓친 채팅은 표에 최대 1초 뒤 들어간다 — 바로 부르면 빈손이다(README 규칙 2)
+        refillTimer.current = window.setTimeout(() => {
+          refillTimer.current = null;
+          pollRef.current?.();
+        }, 2000);
+      }
+    });
+  }, [enabled, streamId, isVod, live.status]);
 
   useEffect(() => {
-    if (!enabled) return;
-    // 무작위 대신 순번으로 고른다 — 목업이라도 렌더가 결정적이어야 테스트가 흔들리지 않는다
-    const tick = window.setInterval(() => {
-      const pick = POOL[counter.current % POOL.length];
-      if (!pick) return;
-      counter.current += 1;
-      // id를 갱신 함수 밖에서 굳힌다 — 안에서 ref를 읽으면 React가 갱신을 다시 돌릴 때
-      // 같은 번호가 두 번 붙어 키가 겹친다(useSimulatedChat과 같은 모양).
-      const next: ChatPanelMessage = { ...pick, id: counter.current };
-      setMessages((prev) => [...prev.slice(-(KEEP_LAST - 1)), next]);
-    }, CHAT_PANEL_INTERVAL_MS);
-    return () => window.clearInterval(tick);
-  }, [enabled]);
+    if (!enabled || !streamId || isVod || live.status === 'offline') return;
+    setRaw({});
+    lastTime.current = 0;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const toMs = Date.now();
+        // 화면 축으로 묻는다(서버가 +보정). 처음엔 10분 전부터, 그 뒤엔 마지막으로 본 시각 −10초부터.
+        const fromMs = lastTime.current > 0 ? lastTime.current - 10_000 : toMs - 10 * 60_000;
+        // 한 번에 200건을 넘으면 서버는 오래된 쪽부터 주고 다음 커서를 단다 — 커서를 끝까지 따라가야
+        // 최신 채팅까지 닿는다. 첫 장만 읽으면 창이 실시간을 영영 못 따라잡는다(PR #200 codex P1)
+        const items: WireItem[] = [];
+        let appliedOffsetMs = 0;
+        let cursor: string | null = null;
+        let pages = 0;
+        do {
+          const qs = new URLSearchParams({
+            from: new Date(fromMs).toISOString(),
+            to: new Date(toMs).toISOString(),
+            limit: '200',
+          });
+          if (cursor) qs.set('cursor', cursor);
+          const r = await apiFetch(
+            `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-messages?${qs}`,
+          );
+          if (stopped) return;
+          const pg = (await r.json()) as WirePage;
+          items.push(...pg.items);
+          appliedOffsetMs = pg.appliedOffsetMs;
+          cursor = pg.nextCursor;
+          pages += 1;
+        } while (cursor !== null && pages < LIVE_POLL_PAGE_BUDGET);
+        if (items.length === 0) return;
+        const page = { items, appliedOffsetMs };
+        setRaw((prev) => {
+          const next = { ...prev };
+          for (const it of page.items) {
+            const k = fingerprint(it);
+            if (!next[k]) next[k] = it;
+          }
+          return trim(next);
+        });
+        // 응답 시각은 표 축이라 화면 축으로 되돌려 둔다(다음 from에 쓴다)
+        const newest = Math.max(...page.items.map((it) => Date.parse(it.time)));
+        lastTime.current = Math.max(lastTime.current, newest - page.appliedOffsetMs);
+      } catch {
+        /* 다음 주기에 다시 */
+      }
+    };
+    pollRef.current = poll;
+    void poll();
+    const t = window.setInterval(poll, POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(t);
+    };
+  }, [enabled, streamId, isVod, live.status]);
 
-  return { surges: MOCK_SURGES, messages, ratePerMinute: MOCK_CHAT_RATE_PER_MINUTE };
+  // 지난 방송에서 카드를 누르면 그 시점 앞뒤 60초를 끝까지 따로 읽는다 — 처음 읽기는 창마다 상한이 있어
+  // 채팅이 많은 시간대는 비어 있을 수 있다(PR #200 codex P1)
+  const vodBase = live.timeBaseMs ?? live.startedAt;
+  useEffect(() => {
+    if (!enabled || !streamId || !isVod || live.playheadMs === null || vodBase === null) return;
+    const center = vodBase + live.playheadMs;
+    const from = center - 60_000 + CHAT_LEAD_MS;
+    const to = center + 60_000 + CHAT_LEAD_MS;
+    let stopped = false;
+    (async () => {
+      const got: WireItem[] = [];
+      let cursor: string | null = null;
+      let budget = VOD_FOCUS_PAGE_BUDGET;
+      do {
+        if (budget-- <= 0) break;
+        const qs = new URLSearchParams({
+          from: new Date(from).toISOString(),
+          to: new Date(to).toISOString(),
+          limit: '200',
+        });
+        if (cursor) qs.set('cursor', cursor);
+        try {
+          const r = await apiFetch(
+            `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-messages?${qs}`,
+          );
+          if (stopped) return;
+          const pg = (await r.json()) as WirePage;
+          got.push(...pg.items);
+          cursor = pg.nextCursor;
+        } catch {
+          cursor = null;
+        }
+      } while (cursor !== null);
+      if (stopped || got.length === 0) return;
+      setRaw((prev) => {
+        const next = { ...prev };
+        for (const it of got) {
+          const k = fingerprint(it);
+          if (!next[k]) next[k] = it;
+        }
+        return next;
+      });
+    })();
+    return () => {
+      stopped = true;
+    };
+  }, [enabled, streamId, isVod, live.playheadMs, vodBase]);
+
+  const items = useMemo(
+    () => Object.values(raw).sort((a, b) => Date.parse(a.time) - Date.parse(b.time) || a.id - b.id),
+    [raw],
+  );
+  // 지난 방송에서 카드를 눌렀으면 그 시점 앞뒤 60초만 보여준다(영상 대신 채팅이 그 시점을 말한다)
+  const messages = useMemo(() => {
+    // 시점의 0초는 영상과 같은 기준점이다(녹화 첫 조각) — 방송 시작 시각에 더하면 그 차이만큼 영상과 어긋난다(PR #200 codex)
+    if (isVod && live.playheadMs !== null && vodBase !== null) {
+      const center = vodBase + live.playheadMs;
+      const lo = center - 60_000 + CHAT_LEAD_MS;
+      const hi = center + 60_000 + CHAT_LEAD_MS;
+      const inWin = items.filter((it) => {
+        const t = Date.parse(it.time);
+        return t >= lo && t <= hi;
+      });
+      const sec = Math.floor(live.playheadMs / 1000);
+      const h = Math.floor(sec / 3600),
+        m = Math.floor((sec % 3600) / 60),
+        sc = sec % 60;
+      const label = `${h}:${String(m).padStart(2, '0')}:${String(sc).padStart(2, '0')}`;
+      return [
+        { id: -1, kind: 'system' as const, text: `${label} 시점 앞뒤 60초 채팅 ${inWin.length}건` },
+        ...inWin.map(toPanel),
+      ];
+    }
+    return items.map(toPanel);
+  }, [items, isVod, live.playheadMs, vodBase]);
+
+  const ratePerMinute = useMemo(() => {
+    if (isVod && live.startedAt !== null && live.endedAt !== null) {
+      const minutes = Math.max(1, (live.endedAt - live.startedAt) / 60_000);
+      // 받아 둔 채팅은 창마다 상한이 있어 일부일 수 있다 — 차트가 센 전체 수를 쓴다. 차트가 없을 때만 받은 수로 대신한다
+      const total = live.chart ? live.chart.buckets.reduce((a, b) => a + b.chats, 0) : items.length;
+      return Math.round(total / minutes);
+    }
+    const cut = Date.now() - 60_000 + CHAT_LEAD_MS;
+    return items.filter((it) => Date.parse(it.time) >= cut).length;
+  }, [items, isVod, live.startedAt, live.endedAt, live.chart]);
+
+  const surges = useMemo<ChatSurge[]>(() => {
+    const cut = Date.now() - 2 * 60_000 + CHAT_LEAD_MS;
+    const freq = new Map<string, number>();
+    for (const it of items) {
+      if (it.kind !== 'chat' || Date.parse(it.time) < cut) continue;
+      for (const w of (it.text ?? '').split(/\s+/)) {
+        const k = w.trim();
+        if (k.length < 2) continue;
+        freq.set(k, (freq.get(k) ?? 0) + 1);
+      }
+    }
+    return [...freq.entries()]
+      .filter(([, c]) => c >= 2)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([keyword, count]) => ({ keyword, count }));
+  }, [items]);
+
+  return { surges, messages, ratePerMinute };
 }

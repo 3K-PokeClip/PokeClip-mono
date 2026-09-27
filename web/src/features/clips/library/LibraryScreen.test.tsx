@@ -2,9 +2,11 @@ import { act } from 'react';
 import { fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { LibraryScreen } from './LibraryScreen';
+import { LIBRARY_FIXTURE } from './libraryFixture';
 
 function cards() {
   return within(screen.getByRole('list', { name: '편집본 목록' })).getAllByRole('button');
@@ -21,7 +23,7 @@ function chipGroup() {
 
 describe('LibraryScreen — 헤더·칩', () => {
   it('제목·검색·정렬(최근 편집순 기본)을 보여준다', () => {
-    renderWithProviders(<LibraryScreen />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
     expect(screen.getByRole('heading', { name: '보관함' })).toBeInTheDocument();
     expect(screen.getByRole('searchbox', { name: '편집본 검색' })).toBeInTheDocument();
@@ -29,7 +31,7 @@ describe('LibraryScreen — 헤더·칩', () => {
   });
 
   it('스트리머 칩 4개가 수를 달고 있다 — 전체 8 · 작업 중 4 · 업로드 대기 2 · 발행됨 2', () => {
-    renderWithProviders(<LibraryScreen />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
     const chips = chipGroup().getAllByRole('button');
     expect(chips.map((chip) => chip.textContent)).toEqual([
@@ -43,7 +45,7 @@ describe('LibraryScreen — 헤더·칩', () => {
   });
 
   it('스트리머에겐 승인 대기 배너가 승인 대기함으로 간다', () => {
-    renderWithProviders(<LibraryScreen />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
     const banner = screen.getByRole('link', { name: /승인 대기 1건/ });
     expect(banner).toHaveAttribute('href', '/clips/approvals');
@@ -52,7 +54,7 @@ describe('LibraryScreen — 헤더·칩', () => {
 
   it('칩을 누르면 목록이 좁혀지고 눌림이 옮겨 간다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
     await user.click(chipGroup().getByRole('button', { name: '업로드 대기 2' }));
     expect(cards()).toHaveLength(2);
@@ -70,7 +72,7 @@ describe('LibraryScreen — 헤더·칩', () => {
 describe('LibraryScreen — 검색', () => {
   it('검색어가 목록을 좁힌다 — 「랭크」는 1장', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
     await user.type(screen.getByRole('searchbox', { name: '편집본 검색' }), '랭크');
     expect(cards()).toHaveLength(1);
@@ -79,7 +81,7 @@ describe('LibraryScreen — 검색', () => {
 
   it('조건에 없으면 문장으로 말한다 — 빈 상태 카드가 아니다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
     await user.type(screen.getByRole('searchbox', { name: '편집본 검색' }), '없는 제목');
     expect(screen.getByRole('status')).toHaveTextContent('조건에 맞는 편집본이 없어요.');
@@ -90,7 +92,7 @@ describe('LibraryScreen — 검색', () => {
 
 describe('LibraryScreen — 카드', () => {
   it('카드 이름에 제목·상태·길이가 있다', () => {
-    renderWithProviders(<LibraryScreen />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
     expect(cards()).toHaveLength(8);
     expect(
@@ -104,7 +106,7 @@ describe('LibraryScreen — 카드', () => {
   });
 
   it('렌더 실패 카드는 길이를 말하지 않는다', () => {
-    renderWithProviders(<LibraryScreen />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
     expect(
       screen.getByRole('button', { name: '팀원 미스 · 웃참 실패 · 렌더 실패' }),
@@ -115,7 +117,7 @@ describe('LibraryScreen — 카드', () => {
 describe('LibraryScreen — 선택·상세 패널', () => {
   it('카드를 누르면 패널이 열리고 그리드가 촘촘해진다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
     expect(panel()).toHaveAttribute('inert');
     expect(panel()).toHaveAttribute('data-open', 'false');
@@ -137,7 +139,7 @@ describe('LibraryScreen — 선택·상세 패널', () => {
 
   it('같은 카드를 다시 누르면 닫히고 마지막 편집본은 남는다 — 빈 패널이 미끄러지지 않게', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
     const card = screen.getByRole('button', { name: /^보스 막타 · 역전 순간/ });
     await user.click(card);
@@ -154,7 +156,7 @@ describe('LibraryScreen — 선택·상세 패널', () => {
 
   it('카드가 검색으로 빠진 뒤 닫으면 포커스가 목록 첫 카드로 물러선다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-1" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
 
     // 선택은 남고(의도된 동작) 그 카드만 목록에서 빠진다 — 돌려줄 카드가 사라진 자리다
     await user.type(screen.getByRole('searchbox', { name: '편집본 검색' }), '랭크');
@@ -169,7 +171,7 @@ describe('LibraryScreen — 선택·상세 패널', () => {
 
   it('선택 해제 버튼이 패널을 닫고 카드로 포커스를 돌려준다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
     const card = screen.getByRole('button', { name: /^보스 막타 · 역전 순간/ });
     await user.click(card);
@@ -181,7 +183,7 @@ describe('LibraryScreen — 선택·상세 패널', () => {
 
   it('다른 카드를 누르면 패널 내용이 바뀐다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-1" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
 
     await user.click(screen.getByRole('button', { name: /^채팅 폭발/ }));
     expect(within(panel()).getByRole('textbox', { name: '클립 제목' })).toHaveValue(
@@ -194,7 +196,7 @@ describe('LibraryScreen — 선택·상세 패널', () => {
   });
 
   it('메타에 원본 방송·원본 보존·템플릿·자막·비율이 선다', () => {
-    renderWithProviders(<LibraryScreen selectedId="lib2-1" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
     const inside = within(panel());
 
     expect(inside.getByText('원본 방송').nextElementSibling).toHaveTextContent('8월 31일 라이브');
@@ -209,7 +211,7 @@ describe('LibraryScreen — 선택·상세 패널', () => {
 
 describe('LibraryScreen — 상태별 액션 7종', () => {
   it('편집 중 — 이어서 편집 링크 · 보조는 다운로드·삭제뿐', () => {
-    renderWithProviders(<LibraryScreen selectedId="lib2-1" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
     const inside = within(panel());
 
     expect(inside.getByText('편집 중')).toBeInTheDocument();
@@ -223,7 +225,7 @@ describe('LibraryScreen — 상태별 액션 7종', () => {
   });
 
   it('업로드 대기 — 업로드 버튼 · 이어서 편집·다운로드·삭제', () => {
-    renderWithProviders(<LibraryScreen selectedId="lib2-2" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-2" />);
     const inside = within(panel());
 
     expect(inside.getByRole('button', { name: '업로드' })).toBeInTheDocument();
@@ -235,7 +237,7 @@ describe('LibraryScreen — 상태별 액션 7종', () => {
   });
 
   it('승인 대기 — 승인 대기함으로 가는 링크만 · 편집 잠금 · 안내문', () => {
-    renderWithProviders(<LibraryScreen selectedId="lib2-3" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-3" />);
     const inside = within(panel());
 
     expect(inside.getByRole('link', { name: '승인 대기함에서 검토' })).toHaveAttribute(
@@ -249,7 +251,7 @@ describe('LibraryScreen — 상태별 액션 7종', () => {
 
   it('승인 대기는 제목도 잠근다 — 안내문이 편집이 잠겼다고 말한 것을 지킨다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-3" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-3" />);
     const input = within(panel()).getByRole('textbox', { name: '클립 제목' });
 
     expect(input).toHaveAttribute('readonly');
@@ -258,7 +260,7 @@ describe('LibraryScreen — 상태별 액션 7종', () => {
   });
 
   it('승인 대기가 아니면 제목은 잠기지 않는다', () => {
-    renderWithProviders(<LibraryScreen selectedId="lib2-1" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
 
     expect(within(panel()).getByRole('textbox', { name: '클립 제목' })).not.toHaveAttribute(
       'readonly',
@@ -266,7 +268,7 @@ describe('LibraryScreen — 상태별 액션 7종', () => {
   });
 
   it('반려됨 — 수정하기 링크 · 반려 사유 카드', () => {
-    renderWithProviders(<LibraryScreen selectedId="lib2-5" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-5" />);
     const inside = within(panel());
 
     expect(inside.getByRole('link', { name: '수정하기' })).toHaveAttribute('href', '/clips/editor');
@@ -277,7 +279,7 @@ describe('LibraryScreen — 상태별 액션 7종', () => {
   });
 
   it('발행됨 — 유튜브 보기(새 창) · 새 버전으로 편집', () => {
-    renderWithProviders(<LibraryScreen selectedId="lib2-4" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-4" />);
     const inside = within(panel());
 
     const youtube = inside.getByRole('link', { name: /유튜브 보기/ });
@@ -290,7 +292,7 @@ describe('LibraryScreen — 상태별 액션 7종', () => {
   });
 
   it('발행됨 · 원본 만료 — 재편집이 숨고 만료 안내가 선다', () => {
-    renderWithProviders(<LibraryScreen selectedId="lib2-6" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-6" />);
     const inside = within(panel());
 
     expect(inside.getByRole('link', { name: /유튜브 보기/ })).toBeInTheDocument();
@@ -301,7 +303,7 @@ describe('LibraryScreen — 상태별 액션 7종', () => {
   });
 
   it('렌더 실패 — 렌더 재시도 버튼 · 다운로드 없음 · 길이 없음', () => {
-    renderWithProviders(<LibraryScreen selectedId="lib2-8" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-8" />);
     const inside = within(panel());
 
     expect(inside.getByRole('button', { name: '렌더 재시도' })).toBeInTheDocument();
@@ -314,7 +316,7 @@ describe('LibraryScreen — 상태별 액션 7종', () => {
 describe('LibraryScreen — 제목 인라인 편집', () => {
   it('입력하면 즉시 카드 제목과 이름이 바뀐다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-1" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
 
     const input = within(panel()).getByRole('textbox', { name: '클립 제목' });
     await user.clear(input);
@@ -331,7 +333,7 @@ describe('LibraryScreen — 제목 인라인 편집', () => {
   // 재현되지 않으므로, 원인이 되는 자리(조합 중에 편집을 끝내지 않는다)를 고정한다.
   it('조합 중 Enter는 편집을 끝내지 않는다 — 입력기가 글자를 확정하는 Enter다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-1" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
 
     const input = within(panel()).getByRole('textbox', { name: '클립 제목' });
     await user.click(input);
@@ -352,7 +354,7 @@ describe('LibraryScreen — 제목 인라인 편집', () => {
 
   it('조합이 끝난 Enter·Escape는 편집을 끝낸다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-1" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
 
     const input = within(panel()).getByRole('textbox', { name: '클립 제목' });
     await user.click(input);
@@ -368,7 +370,7 @@ describe('LibraryScreen — 제목 인라인 편집', () => {
 describe('LibraryScreen — 목업 전이', () => {
   it('업로드를 누르면 발행됨이 되고, 유튜브 보기는 갈 곳이 없어 비활성이다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-2" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-2" />);
     const inside = within(panel());
 
     await user.click(inside.getByRole('button', { name: '업로드' }));
@@ -381,7 +383,7 @@ describe('LibraryScreen — 목업 전이', () => {
 
   it('업로드로 주 동작이 갈려도 포커스가 조작부에 남는다 — 버튼이 링크로 바뀌는 자리다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen role="editor" selectedId="lib2-2" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-2" />);
 
     await user.click(within(panel()).getByRole('button', { name: '업로드 요청' }));
 
@@ -392,7 +394,7 @@ describe('LibraryScreen — 목업 전이', () => {
 
   it('상태 배지는 낭독 영역이라 바뀐 상태가 알려진다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-8" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-8" />);
 
     expect(within(panel()).getByRole('status')).toHaveTextContent('렌더 실패');
     await user.click(within(panel()).getByRole('button', { name: '렌더 재시도' }));
@@ -401,7 +403,7 @@ describe('LibraryScreen — 목업 전이', () => {
 
   it('편집자가 업로드 요청을 누르면 승인 대기가 된다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen role="editor" selectedId="lib2-2" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-2" />);
     const inside = within(panel());
 
     await user.click(inside.getByRole('button', { name: '업로드 요청' }));
@@ -416,7 +418,7 @@ describe('LibraryScreen — 목업 전이', () => {
 
   it('렌더 재시도는 업로드 대기로 돌린다 — 길이는 여전히 모른다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-8" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-8" />);
     const inside = within(panel());
 
     await user.click(inside.getByRole('button', { name: '렌더 재시도' }));
@@ -430,7 +432,7 @@ describe('LibraryScreen — 목업 전이', () => {
 
   it('삭제는 확인을 거쳐 카드를 없애고 패널을 닫는다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-2" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-2" />);
 
     await user.click(within(panel()).getByRole('button', { name: '삭제' }));
     const dialog = within(screen.getByRole('dialog', { name: '이 편집본을 삭제할까요?' }));
@@ -446,7 +448,7 @@ describe('LibraryScreen — 목업 전이', () => {
 
   it('삭제를 확정하면 포커스가 목록으로 돌아온다 — 사라진 삭제 버튼에 남지 않는다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-2" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-2" />);
 
     await user.click(within(panel()).getByRole('button', { name: '삭제' }));
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '삭제' }));
@@ -456,7 +458,7 @@ describe('LibraryScreen — 목업 전이', () => {
 
   it('마지막으로 남은 편집본을 지우면 포커스가 검색창으로 물러선다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
     const search = screen.getByRole('searchbox', { name: '편집본 검색' });
 
     await user.type(search, '랭크');
@@ -470,7 +472,7 @@ describe('LibraryScreen — 목업 전이', () => {
 
   it('삭제를 취소하면 그대로다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-2" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-2" />);
 
     await user.click(within(panel()).getByRole('button', { name: '삭제' }));
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '취소' }));
@@ -482,7 +484,7 @@ describe('LibraryScreen — 목업 전이', () => {
 
   it('발행된 편집본을 지울 때는 유튜브 영상이 남는다고 말한다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-4" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-4" />);
 
     await user.click(within(panel()).getByRole('button', { name: '삭제' }));
     expect(
@@ -492,7 +494,7 @@ describe('LibraryScreen — 목업 전이', () => {
 
   it('다운로드는 준비 중이라고만 알린다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen selectedId="lib2-1" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
 
     await user.click(within(panel()).getByRole('button', { name: '다운로드' }));
 
@@ -503,7 +505,7 @@ describe('LibraryScreen — 목업 전이', () => {
 
 describe('LibraryScreen — 편집자 시점', () => {
   it('칩이 5개다 — 작업 중 3 · 반려됨 1 — 그리고 배너가 없다', () => {
-    renderWithProviders(<LibraryScreen role="editor" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" />);
 
     expect(
       chipGroup()
@@ -514,11 +516,13 @@ describe('LibraryScreen — 편집자 시점', () => {
   });
 
   it('업로드 대기의 주 동작이 「업로드 요청」이고 승인 대기는 「내 요청 보기」다', () => {
-    const ready = renderWithProviders(<LibraryScreen role="editor" selectedId="lib2-2" />);
+    const ready = renderWithProviders(
+      <LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-2" />,
+    );
     expect(within(panel()).getByRole('button', { name: '업로드 요청' })).toBeInTheDocument();
     ready.unmount();
 
-    renderWithProviders(<LibraryScreen role="editor" selectedId="lib2-3" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-3" />);
     expect(within(panel()).getByRole('link', { name: '내 요청 보기' })).toHaveAttribute(
       'href',
       '/clips/approvals',
@@ -529,7 +533,7 @@ describe('LibraryScreen — 편집자 시점', () => {
 
 describe('LibraryScreen — 빈 상태', () => {
   it('편집본이 하나도 없으면 빈 상태 카드를 보이고 칩·검색 결과 문장은 없다', () => {
-    renderWithProviders(<LibraryScreen clips={[]} />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} clips={[]} />);
 
     expect(screen.getByText('아직 보관한 편집본이 없어요')).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: '상태 필터' })).toBeNull();
@@ -541,28 +545,30 @@ describe('LibraryScreen — 빈 상태', () => {
 describe('LibraryScreen — 접근성', () => {
   // axe 실행 중 Next Link의 비동기 상태 갱신이 발화한다 — act로 감싸 경고 없이 흡수
   it('기본(스트리머 · 미선택)에 위반이 없다', async () => {
-    const { container } = renderWithProviders(<LibraryScreen />);
+    const { container } = renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
     });
   });
 
   it('편집자 시점에도 위반이 없다', async () => {
-    const { container } = renderWithProviders(<LibraryScreen role="editor" />);
+    const { container } = renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" />);
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
     });
   });
 
   it('빈 상태에도 위반이 없다', async () => {
-    const { container } = renderWithProviders(<LibraryScreen clips={[]} />);
+    const { container } = renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} clips={[]} />);
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
     });
   });
 
   it('패널이 열린 상태(반려 카드)에도 위반이 없다', async () => {
-    const { container } = renderWithProviders(<LibraryScreen selectedId="lib2-5" />);
+    const { container } = renderWithProviders(
+      <LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-5" />,
+    );
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
     });
@@ -570,10 +576,48 @@ describe('LibraryScreen — 접근성', () => {
 
   it('삭제 확인이 열린 상태에도 위반이 없다', async () => {
     const user = userEvent.setup();
-    const { baseElement } = renderWithProviders(<LibraryScreen selectedId="lib2-2" />);
+    const { baseElement } = renderWithProviders(
+      <LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-2" />,
+    );
     await user.click(within(panel()).getByRole('button', { name: '삭제' }));
     await act(async () => {
       expect(await axe(baseElement)).toHaveNoViolations();
     });
+  });
+});
+
+describe('LibraryScreen — 서버 편집본', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('서버 편집본은 지우는 창구가 없어 삭제를 잠근다 — 지운 척하지 않는다', async () => {
+    // 화면에서만 빼면 다음 읽기에 되살아나 「지웠다」가 거짓이 된다(PR #200 codex)
+    stubFetch((url) =>
+      url.startsWith('/api/clip/library')
+        ? jsonResponse(200, {
+            items: [
+              {
+                recipeId: 12,
+                streamId: 's1',
+                creatorId: '9',
+                recipeVersion: 1,
+                cut: { inAtMs: 0, outAtMs: 30_000 },
+                status: 'rendered',
+                broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+                latestClip: null,
+                createdAt: '2026-09-20T11:00:00Z',
+                updatedAt: '2026-09-20T12:00:00Z',
+              },
+            ],
+            nextCursor: null,
+          })
+        : jsonResponse(200, { id: 9, email: 'me@example.com' }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<LibraryScreen />);
+
+    await user.click(await screen.findByRole('button', { name: /^편집본 #12/ }));
+    expect(within(panel()).getByRole('button', { name: '삭제' })).toBeDisabled();
   });
 });
