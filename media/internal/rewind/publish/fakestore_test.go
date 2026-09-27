@@ -40,11 +40,18 @@ type fakeStore struct {
 	objects map[string]fakeObject
 	// onPut 이 nil 이 아니면 적용 직전에 부른다. nil 이 아닌 오류를 돌려주면 Put 은 그 오류로 끝나고 판은
 	// 그대로다(409 · 네트워크 오류). 적용된 뒤 응답만 잃은 경우(결과 모름)는 훅이 applyPut 을 먼저 부르고
-	// 오류를 돌려준다.
+	// 오류를 돌려준다. Put 이 다른 고루틴에서 도는 동안 바꿀 때는 setOnPut 을 쓴다.
 	onPut func(putCall) error
 	puts  []putCall
-	heads []string
+	heads []headCall
 	gets  []string
+}
+
+// headCall 은 Head 호출 하나다. deadline 은 호출 ctx 의 마감이고 마감이 없으면 영값이다 — R1 Head 에
+// 마감 있는 ctx 를 넘기는지(커밋 2 리뷰 인계 · 판단 J8)를 테스트가 읽는 자리다.
+type headCall struct {
+	key      string
+	deadline time.Time
 }
 
 // fakeObject 는 저장된 판 하나다.
@@ -115,9 +122,13 @@ func (f *fakeStore) applyPut(call putCall) (string, error) {
 
 // Head 는 Store.Head 다. 본문 읽기 기록(gets)에 남지 않는다.
 func (f *fakeStore) Head(ctx context.Context, key string) (Stat, error) {
+	call := headCall{key: key}
+	if d, ok := ctx.Deadline(); ok {
+		call.deadline = d
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.heads = append(f.heads, key)
+	f.heads = append(f.heads, call)
 	if err := ctx.Err(); err != nil {
 		return Stat{}, err
 	}
@@ -209,8 +220,27 @@ func (f *fakeStore) putCalls() []putCall {
 	return slices.Clone(f.puts)
 }
 
+// setOnPut 은 onPut 을 잠금 아래에서 갈아 끼운다 — Put 이 다른 고루틴에서 도는 동안에도 경합이 없다(동시
+// writer 픽스처 — 커밋 2 리뷰 인계).
+func (f *fakeStore) setOnPut(hook func(putCall) error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onPut = hook
+}
+
 // headKeys 는 Head 호출 기록(키)이다.
 func (f *fakeStore) headKeys() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	keys := make([]string, len(f.heads))
+	for i, h := range f.heads {
+		keys[i] = h.key
+	}
+	return keys
+}
+
+// headCalls 는 Head 호출 기록(키 · 마감)이다.
+func (f *fakeStore) headCalls() []headCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.heads)

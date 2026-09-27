@@ -2,6 +2,7 @@ package rewind
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -39,6 +40,11 @@ var ErrHaltPublication = errors.New("rewind: 발행 중단")
 // 소유 회차의 목록은 낼 수 있으므로 발행을 멈추지 않는다.
 var ErrRevokeInheritance = errors.New("rewind: 계승 취소")
 
+// ErrDiscontinuitySequenceDecreased 는 S2 의 DISC-SEQ 조항 위반이다 — 발행 중단의 한 갈래라
+// errors.Is(err, ErrHaltPublication) 도 참이다. 발행 층이 이 갈래를 MSN 후퇴와 가려 로그 사유를 따로
+// 적는다(계획 4.5 A2 결정 4).
+var ErrDiscontinuitySequenceDecreased = fmt.Errorf("%w: DISC-SEQ 감소", ErrHaltPublication)
+
 // Violation 은 발행 전 검사 하나에 걸린 것이다. 처치는 검사가 정하고(설계 4.5.5 표의 처치 열)
 // 호출자는 errors.Is 로 가른다 — S4 는 ErrRevokeInheritance, 나머지 여섯은 ErrHaltPublication 이다.
 type Violation struct {
@@ -46,6 +52,9 @@ type Violation struct {
 	Check string
 	// Reason 은 무엇이 어긋났는지다 — 사람이 읽는 진단이다.
 	Reason string
+	// cause 는 처치를 한 갈래로 좁힌 센티널이다. 비면 검사 이름이 처치를 정한다(S2 의 DISC-SEQ 조항만
+	// ErrDiscontinuitySequenceDecreased 를 싣는다).
+	cause error
 }
 
 // Error 는 처치 · 검사 · 까닭을 한 줄로 적는다(예: "rewind: 발행 중단: S7 — …").
@@ -53,9 +62,13 @@ func (v *Violation) Error() string {
 	return fmt.Sprintf("%v: %s — %s", v.Unwrap(), v.Check, v.Reason)
 }
 
-// Unwrap 은 처치를 돌려준다 — errors.Is(err, ErrRevokeInheritance) 가 S4 위반에서만 참이 되게.
+// Unwrap 은 처치를 돌려준다 — errors.Is(err, ErrRevokeInheritance) 가 S4 위반에서만 참이 되게. 좁힌
+// 갈래(cause)가 있으면 그것을 돌려준다 — 그 센티널이 처치(ErrHaltPublication)를 감싸고 있다.
 func (v *Violation) Unwrap() error {
-	if v.Check == "S4" {
+	switch {
+	case v.cause != nil:
+		return v.cause
+	case v.Check == "S4":
 		return ErrRevokeInheritance
 	}
 	return ErrHaltPublication
@@ -68,9 +81,11 @@ func violation(check, format string, args ...any) error {
 
 // Published 는 한 목록 URL 에 이미 발행한 목록의 자기기술이다 — 설계 4.5.5 가 Prev 라 부르는 것.
 //
-// Gen · PublishedSeq · Terminal 은 발행 세대 규약이 본문 밖 메타데이터로 싣는 값(설계 4.4.2
-// pc-gen · pc-pub-seq · pc-terminal)이고, MediaSequence · SegmentCount 는 줄 수 검사(S1)와
-// MSN 검사(S2)가 읽는다.
+// 필드는 전부 발행 세대 규약이 본문 밖 메타데이터로 싣는 값이다(설계 4.4.2 넷 pc-gen · pc-pub-seq ·
+// pc-terminal · pc-session 에 계획 4.5 A1 결정 5 가 넷 pc-msn · pc-seg-count · pc-disc-seq ·
+// pc-body-sha256 을 더했다 — pc-session 은 목록 URL 이 이미 가리키므로 여기 싣지 않는다). 그래서 재기동
+// 뒤에도 본문을 읽지 않고 Head 한 번으로 되살린다. MediaSequence · SegmentCount 는 줄 수 검사(S1)와 MSN
+// 검사(S2)가, DiscontinuitySequence 는 S2 의 DISC-SEQ 조항이 읽는다.
 type Published struct {
 	// Gen 은 그 발행의 세대(manifest_gen)다.
 	Gen int64
@@ -82,6 +97,12 @@ type Published struct {
 	SegmentCount int
 	// Terminal 은 그 목록이 EXT-X-ENDLIST 로 닫혔는가다.
 	Terminal bool
+	// DiscontinuitySequence 는 그 목록의 EXT-X-DISCONTINUITY-SEQUENCE 다 — 다음 목록의 DISC-SEQ 를 세는
+	// 기준이다(계획 4.5 A1 결정 1 의 D_P).
+	DiscontinuitySequence int64
+	// BodySHA256 은 그 목록 본문의 sha256 이다 — 다시 렌더한 본문이 같으면 올리지 않는 판정의 근거다(계획
+	// 4.5 A1 결정 7).
+	BodySHA256 [sha256.Size]byte
 }
 
 // Validate 는 렌더한 목록을 발행해도 되는지 가른다 — 설계 4.5.5 발행 전 검사 S1–S7 이다. 목록을
@@ -324,9 +345,24 @@ func checkLineCount(p Playlist, prev *Published) error {
 // checkMediaSequence 는 S2 first-MSN 단조다 — MSN(첫 줄 조각의 seq)은 뒤로 가지 않는다(RFC
 // 8216bis-22 6.2.2 「MUST NOT decrease」). 뒤로 가면 플레이어가 이미 받은 MSN 에 다른 URI 를 보고
 // 재생을 멈춘다(6.3.4 — 설계 RC-9-e).
+//
+// DISC-SEQ(소유 회차 base)도 직전 발행보다 작지 않아야 한다(계획 4.5 A2 결정 4). 줄면 남은 조각의
+// Discontinuity Sequence Number 가 바뀐다(6.2.2). 이 갈래는 ErrDiscontinuitySequenceDecreased 로 푼다 —
+// 발행 층이 MSN 후퇴와 가려 적는다. 둘 다 어긋나면 MSN 쪽을 돌려준다. 소유 회차를 못 찾으면 영값이라 base
+// 0 과 견준다(렌더가 먼저 거르는 입력이다).
 func checkMediaSequence(p Playlist, prev *Published) error {
-	if prev != nil && p.Rows[0].Seq < prev.MediaSequence {
+	if prev == nil {
+		return nil
+	}
+	if p.Rows[0].Seq < prev.MediaSequence {
 		return violation("S2", "MSN %d 이 직전 발행의 %d 보다 뒤로 갔다", p.Rows[0].Seq, prev.MediaSequence)
+	}
+	if owner, _ := p.session(p.Owner); owner.DiscontinuityBase < prev.DiscontinuitySequence {
+		return &Violation{
+			Check:  "S2",
+			Reason: fmt.Sprintf("DISC-SEQ %d 이 직전 발행의 %d 보다 작다", owner.DiscontinuityBase, prev.DiscontinuitySequence),
+			cause:  ErrDiscontinuitySequenceDecreased,
+		}
 	}
 	return nil
 }

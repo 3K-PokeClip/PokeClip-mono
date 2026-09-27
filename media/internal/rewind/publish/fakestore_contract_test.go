@@ -292,6 +292,56 @@ func TestFakeStoreRecordsPutCallsWithDeadline(t *testing.T) {
 	}
 }
 
+// Head 도 호출마다 ctx 의 마감을 남긴다 — R1 Head 에 마감 있는 ctx 를 넘기는지(커밋 2 리뷰 인계 · 판단 J8 —
+// T_pub)를 테스트가 이 기록으로 잰다. 마감이 없으면 영값이다.
+func TestFakeStoreRecordsHeadCallsWithDeadline(t *testing.T) {
+	f := newFakeStore(t)
+	deadline := time.Now().Add(time.Hour)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+
+	if _, err := f.Head(ctx, testKey); err != nil {
+		t.Fatalf("Head 실패: %v", err)
+	}
+	if _, err := f.Head(context.Background(), testKey); err != nil {
+		t.Fatalf("Head 실패: %v", err)
+	}
+
+	calls := f.headCalls()
+	if len(calls) != 2 {
+		t.Fatalf("Head 기록 %d건, want 2", len(calls))
+	}
+	if calls[0].key != testKey || !calls[0].deadline.Equal(deadline) {
+		t.Errorf("첫 Head 기록 = %+v, want key=%s · 마감 %v", calls[0], testKey, deadline)
+	}
+	if !calls[1].deadline.IsZero() {
+		t.Errorf("마감 없는 Head 의 기록 마감 = %v, want 영값", calls[1].deadline)
+	}
+}
+
+// onPut 은 잠금 setter 로 바꾼다 — 동시 writer 픽스처가 Put 이 도는 동안 훅을 갈아 끼워도 경합이 없다(-race 가
+// 잰다). 갈아 끼운 뒤의 Put 은 새 훅을 부른다.
+func TestFakeStoreSetOnPutIsSafeWhilePutsRun(t *testing.T) {
+	f := newFakeStore(t)
+	mustPut(t, f, IfAbsent(), bodyA, nil)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// 결과는 보지 않는다 — 훅 교체와 Put 이 겹치는 것만 만든다.
+			_, _ = f.Put(context.Background(), testKey, IfMatch(`"stale"`), bodyB, nil)
+		}()
+	}
+	f.setOnPut(func(putCall) error { return ErrConflict })
+	wg.Wait()
+
+	if _, err := f.Put(context.Background(), testKey, IfMatch(bodyETag(bodyA)), bodyB, nil); !errors.Is(err, ErrConflict) {
+		t.Errorf("훅 교체 뒤 Put 오류 = %v, want 새 훅의 ErrConflict", err)
+	}
+}
+
 // 이미 끝난 ctx 로는 저장소에 닿지 않는다 — SDK 가 요청을 보내지 않는 것과 같다. 호출은 기록되지만 판은
 // 바뀌지 않는다.
 func TestFakeStoreHonorsDoneContext(t *testing.T) {
