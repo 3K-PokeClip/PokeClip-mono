@@ -10,6 +10,12 @@
 
 import { clamp, type CropRect } from './cropMath';
 
+/**
+ * 원본 방송 화면의 해상도 — 크롭 사각형의 경계·종횡비(계약6은 픽셀 기준)를 이 값으로 잰다. 방송은 16:9 라
+ * 실제 해상도(720p·1080p)가 달라도 정규화 좌표는 같다. 렌더가 실제 해상도로 ±1% 를 다시 잰다.
+ */
+export const SOURCE_SIZE = { width: 1920, height: 1080 } as const;
+
 /** 시안의 모드 id 를 그대로 쓴다 */
 export type EditorLayout = 'vert' | 'split' | 'center' | 'crop' | 'horiz';
 

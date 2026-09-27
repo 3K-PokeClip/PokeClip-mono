@@ -18,7 +18,6 @@ import { useToast } from '@/ui';
 import {
   cropRectOf,
   maxCropSize,
-  minZoomOf,
   moveCropWindow,
   pointerDeltaToCrop,
   resizeCropWindow,
@@ -36,6 +35,7 @@ import {
   LAYOUT_OPTIONS,
   PIP_BORDER_PRESETS,
   PIP_BORDER_WIDTHS,
+  SOURCE_SIZE,
   SPLIT_RATIOS,
   defaultRegionWindow,
   layoutRegions,
@@ -53,6 +53,7 @@ import {
   type PipBox,
 } from './editorLayout';
 import type { EditorPlayback } from './editorPlayback';
+import { regionCropsOf, type EditorLook } from './recipeLook';
 import { useEditorPlaybackSimulation } from './useEditorPlaybackSimulation';
 import {
   canRedo as historyCanRedo,
@@ -252,9 +253,9 @@ const MOCK_SOURCE = {
   subtitleFontLabel: 'Pretendard ExtraBold',
   /** 1:24:03 방송 */
   durationSeconds: 5043,
-  /** 가짜 방송의 해상도 — 크롭 사각형의 경계·종횡비를 재는 데 쓴다 (계약6은 픽셀 기준) */
-  width: 1920,
-  height: 1080,
+  /** 방송의 해상도 — 크롭 사각형의 경계·종횡비를 재는 데 쓴다 (계약6은 픽셀 기준) */
+  width: SOURCE_SIZE.width,
+  height: SOURCE_SIZE.height,
   /** 1:22:14 — 시안 트랜스포트 표기 */
   playheadSeconds: 4934,
   /** 1:22:08.4 – 1:22:20.8 = 12.4초 */
@@ -414,6 +415,8 @@ export interface ClipEditorOptions {
    * 마지막으로 켜진 트랙은 끌 수 없다. 저장할 때 조용히 바꾸면 화면과 다른 소리가 렌더된다(PR #200 codex P1)
    */
   mixTrackId?: string;
+  /** 저장된 편집본의 모양(레이아웃·자르는 자리·자막 방식과 자리). 마운트 값 — 없는 칸은 편집기 기본값이다 */
+  initialLook?: Partial<EditorLook>;
   /** 처음 꺼 둘 트랙·볼륨 — 저장된 편집본의 값. 마운트 값 */
   initialTrackMuted?: Readonly<Record<string, boolean>>;
   initialTrackVolumes?: Readonly<Record<string, number>>;
@@ -647,8 +650,9 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       options.initialTrackMuted,
       options.initialTrackVolumes,
     );
+    const withLook = { ...recipe, ...options.initialLook };
     return createHistory(
-      initialLayout === undefined ? recipe : { ...recipe, layout: initialLayout },
+      initialLayout === undefined ? withLook : { ...withLook, layout: initialLayout },
     );
   });
   const recipe = history.present;
@@ -1010,18 +1014,18 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
               ? { ...region.placement, fill: recipe.centerFill }
               : region.placement,
       }));
-      // 크롭 경계는 소스 해상도로 잰다 — 계약6이 종횡비를 픽셀 기준으로 검증하기 때문이다
-      return regions.map((region, index) => {
-        const maxSize = maxCropSize(region.aspect, MOCK_SOURCE.width, MOCK_SOURCE.height);
-        const window = recipe.crops[region.id] ?? defaultRegionWindow(recipe.layout, region.id);
-        // 판독은 그려지는 값과 같아야 한다 — 자리 모양이 바뀌어 하한이 오르면 저장된 zoom 은 그 아래일 수 있다
-        const zoom = Math.max(window.zoom, minZoomOf(maxSize));
-        return {
-          ...base[index]!,
-          crop: cropRectOf(window, maxSize),
-          cropZoom: zoom,
-        };
+      // 크롭 자리는 저장(recipeLook)과 같은 계산이다 — 화면에서 본 자리가 그대로 레시피에 실린다
+      const crops = regionCropsOf({
+        layout: recipe.layout,
+        splitRatio: recipe.splitRatio,
+        pip: recipe.pip,
+        crops: recipe.crops,
       });
+      return regions.map((_, index) => ({
+        ...base[index]!,
+        crop: crops[index]!.crop,
+        cropZoom: crops[index]!.zoom,
+      }));
     }, [
       recipe.layout,
       recipe.splitRatio,

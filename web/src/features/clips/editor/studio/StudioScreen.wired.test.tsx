@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
@@ -19,6 +19,10 @@ const STARTED_AT = Date.parse('2026-09-20T10:00:00Z');
 const server = vi.hoisted(() => ({
   cardWindow: { startMs: 60_000, endMs: 72_400 },
   savedTracks: [{ trackId: 0, gain: 1 }] as { trackId: number; gain: number }[],
+  /** 저장된 편집본의 판 — 1이면 옛 모양(crop 하나), 2면 편집기가 지금 저장하는 모양 */
+  savedSchema: 2 as 1 | 2,
+  /** 저장된 v2 출력. 없으면 세로 한 장 */
+  savedOutput: null as unknown,
   relation: 'OWNER',
   delegations: [] as {
     id: number;
@@ -27,6 +31,9 @@ const server = vi.hoisted(() => ({
     grantedAt: string;
   }[],
 }));
+
+/** 원본(16:9)에서 9:16 을 오른쪽으로 치우쳐 잡은 자리 — 편집기 계산과 같은 정확한 비율 */
+const SAVED_CROP = { x: 0.5, y: 0, w: 0.31640625, h: 1 };
 
 function broadcastRow() {
   return {
@@ -91,10 +98,18 @@ function handle(url: string, init?: RequestInit) {
       createdAt: '2026-09-20T11:00:00Z',
       updatedAt: '2026-09-20T11:00:00Z',
       recipe: {
-        schemaVersion: 1,
+        schemaVersion: server.savedSchema,
         streamId: STREAM_ID,
         cut: { inAtMs: STARTED_AT + 120_000, outAtMs: STARTED_AT + 150_000 },
-        outputs: [{ outputId: 'o1', aspect: 'VERT_9_16', crop: { x: 0.34, y: 0, w: 0.32, h: 1 } }],
+        outputs: [
+          server.savedSchema === 1
+            ? { outputId: 'o1', aspect: 'VERT_9_16', crop: SAVED_CROP }
+            : (server.savedOutput ?? {
+                outputId: 'o1',
+                aspect: 'VERT_9_16',
+                layers: [{ crop: SAVED_CROP, box: { x: 0, y: 0, w: 1, h: 1 } }],
+              }),
+        ],
         audio: { tracks: server.savedTracks },
       },
     });
@@ -134,6 +149,8 @@ let fetchSpy: ReturnType<typeof stubFetch>;
 beforeEach(() => {
   server.cardWindow = { startMs: 60_000, endMs: 72_400 };
   server.savedTracks = [{ trackId: 0, gain: 1 }];
+  server.savedSchema = 2;
+  server.savedOutput = null;
   server.relation = 'OWNER';
   server.delegations = [];
   fetchSpy = stubFetch(handle);
@@ -167,13 +184,24 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     );
     const [doc] = bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`);
     expect(doc).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       streamId: STREAM_ID,
       cut: { inAtMs: STARTED_AT + 60_000, outAtMs: STARTED_AT + 72_400 },
       // 트랙을 따로 켜지 않았으면 최종 믹스(0) 하나다 — 0과 1~5를 같이 보내면 저장 문이 거절한다
       audio: { tracks: [{ trackId: 0, gain: 1 }] },
     });
-    expect((doc?.outputs as { aspect: string }[])[0]?.aspect).toBe('VERT_9_16');
+    // 편집기의 처음 레이아웃(분할 50:50, 경계선 켬) 그대로다
+    expect(doc?.outputs).toEqual([
+      expect.objectContaining({
+        aspect: 'VERT_9_16',
+        layers: [
+          expect.objectContaining({ box: { x: 0, y: 0, w: 1, h: 0.5 } }),
+          expect.objectContaining({ box: { x: 0, y: 0.5, w: 1, h: 0.5 } }),
+        ],
+        dividers: [{ y: 0.5, thickness: 2 / 240, color: '#586fc4' }],
+      }),
+    ]);
+    expect(doc).not.toHaveProperty('subtitles');
     expect(await screen.findByText(/편집본 #31 v1 저장됨/)).toBeInTheDocument();
   });
 
@@ -282,6 +310,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
 describe('StudioScreen — 편집본으로 다시 연 실제 편집기', () => {
   it('저장된 컷이 그대로 돌아와 같은 편집본에 새 판으로 저장된다 — 기준점이 저장 때와 같다', async () => {
     server.savedTracks = [{ trackId: 1, gain: 0.5 }];
+    server.savedSchema = 1;
     const user = userEvent.setup();
     const save = await openFrom('recipe=31');
 
@@ -294,13 +323,27 @@ describe('StudioScreen — 편집본으로 다시 연 실제 편집기', () => {
     expect(doc?.cut).toEqual({ inAtMs: STARTED_AT + 120_000, outAtMs: STARTED_AT + 150_000 });
     // 저장된 트랙 선택(1번, 50%)이 되살아나 그대로 나간다
     expect(doc?.audio).toEqual({ tracks: [{ trackId: 1, gain: 0.5 }] });
-    // 저장된 자르는 자리도 잃지 않는다
-    expect((doc?.outputs as { crop: unknown }[])[0]?.crop).toEqual({
-      x: 0.34,
-      y: 0,
-      w: 0.32,
-      h: 1,
-    });
+    // 옛 편집본(v1)의 자르는 자리를 세로 한 장으로 되살려 v2로 싣는다 — 잃지 않는다
+    expect(doc?.schemaVersion).toBe(2);
+    const [output] = doc?.outputs as { layers: { crop: typeof SAVED_CROP; box: unknown }[] }[];
+    expect(output?.layers).toHaveLength(1);
+    expect(output?.layers[0]?.box).toEqual({ x: 0, y: 0, w: 1, h: 1 });
+    expectRectClose(output!.layers[0]!.crop, SAVED_CROP);
+  });
+
+  it('옛 편집본(v1)은 영상 만들기 때 한 번 v2로 다시 저장한다 — 모양이 달라 옛 판으로는 화면과 같은 영상을 못 만든다', async () => {
+    server.savedSchema = 1;
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+
+    await waitFor(() =>
+      expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1),
+    );
+    expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)[0]?.schemaVersion).toBe(
+      2,
+    );
   });
 
   it('저장된 편집본을 고치지 않고 영상 만들기를 누르면 다시 저장하지 않고 그 판으로 주문한다', async () => {
@@ -371,5 +414,154 @@ describe('StudioScreen — 편집본으로 다시 연 실제 편집기', () => {
     expect(
       await screen.findByText('카드에서 「편집」을 누르거나 보관함에서 편집본을 여세요'),
     ).toBeInTheDocument();
+  });
+});
+
+function expectRectClose(
+  actual: { x: number; y: number; w: number; h: number },
+  expected: typeof actual,
+) {
+  for (const key of ['x', 'y', 'w', 'h'] as const)
+    expect(actual[key]).toBeCloseTo(expected[key], 9);
+}
+
+type Output = {
+  background?: unknown;
+  layers: { crop: { x: number; y: number; w: number; h: number }; box: unknown; frame?: unknown }[];
+  dividers?: unknown;
+};
+
+async function saveAndReadOutput(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: '편집본 저장' }));
+  await waitFor(() =>
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
+  );
+  return (
+    bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.outputs as Output[]
+  )[0]!;
+}
+
+describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대로 실린다(POK-252)', () => {
+  it('세로: 자르는 틀을 옮긴 자리가 그대로 실린다', async () => {
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await user.click(screen.getByRole('radio', { name: /세로/ }));
+    const frame = screen.getByRole('button', { name: /세로 9:16 영역/ });
+    frame.focus();
+    await user.keyboard('{ArrowRight}{ArrowRight}');
+
+    const output = await saveAndReadOutput(user);
+    expect(output.layers).toHaveLength(1);
+    expect(output.layers[0]!.box).toEqual({ x: 0, y: 0, w: 1, h: 1 });
+    // 가운데(0.341796875)에서 1%씩 두 번
+    expectRectClose(output.layers[0]!.crop, { x: 0.361796875, y: 0, w: 0.31640625, h: 1 });
+    expect(output).not.toHaveProperty('background');
+    expect(output).not.toHaveProperty('dividers');
+  });
+
+  it('분할 70:30에 경계선을 끄면 두 칸이 70·30으로 쌓이고 선이 없다', async () => {
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await user.click(screen.getByRole('radio', { name: '70 : 30' }));
+    await user.click(screen.getByRole('switch', { name: '경계선 표시' }));
+
+    const output = await saveAndReadOutput(user);
+    expect(output.layers.map((l) => l.box)).toEqual([
+      { x: 0, y: 0, w: 1, h: 0.7 },
+      { x: 0, y: 0.7, w: 1, h: 1 - 0.7 },
+    ]);
+    expect(output).not.toHaveProperty('dividers');
+    // 칸 모양대로 잘라야 찌그러지지 않는다: 위 칸 1080×1344 → 원본 픽셀 비율 0.8036
+    const top = output.layers[0]!.crop;
+    expect((top.w * 1920) / (top.h * 1080)).toBeCloseTo(1080 / (0.7 * 1920), 6);
+  });
+
+  it('중앙에 단색 흰 바탕이면 원본 비율 칸이 가운데 놓이고 바탕이 흰색이다', async () => {
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await user.click(screen.getByRole('radio', { name: /중앙/ }));
+    await user.click(screen.getByRole('radio', { name: '단색' }));
+    await user.click(
+      within(screen.getByRole('radiogroup', { name: '배경 색' })).getByRole('radio', {
+        name: '흰색',
+      }),
+    );
+
+    const output = await saveAndReadOutput(user);
+    expect(output.background).toEqual({ kind: 'COLOR', color: '#ffffff' });
+    const h = (9 / 16) * (9 / 16);
+    expect(output.layers).toEqual([
+      expect.objectContaining({ box: { x: 0, y: (1 - h) / 2, w: 1, h } }),
+    ]);
+  });
+
+  it('중앙의 흐린 바탕은 세기를 싣는다', async () => {
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await user.click(screen.getByRole('radio', { name: /중앙/ }));
+    const slider = screen.getByRole('slider', { name: '블러 강도' });
+    slider.focus();
+    await user.keyboard('{ArrowLeft}');
+
+    expect((await saveAndReadOutput(user)).background).toEqual({ kind: 'BLUR', strength: 59 });
+  });
+
+  it('크롭: 작은 화면 자리와 테두리(굵기 3px)가 실린다, 끄면 테두리가 없다', async () => {
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await user.click(screen.getByRole('radio', { name: /크롭/ }));
+    await user.click(screen.getByRole('radio', { name: '3px' }));
+
+    const output = await saveAndReadOutput(user);
+    expect(output.layers).toHaveLength(2);
+    expect(output.layers[0]!.box).toEqual({ x: 0, y: 0, w: 1, h: 1 });
+    expect(output.layers[1]).toMatchObject({
+      box: { x: 0.18, y: 0.5, w: 0.64, h: 0.27 },
+      frame: { width: 3 / 240, color: '#ffffff', radius: 4 / 240, shadow: true },
+    });
+
+    await user.click(screen.getByRole('switch', { name: '테두리 표시' }));
+    await user.click(screen.getByRole('button', { name: '편집본 저장' }));
+    await waitFor(() =>
+      expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1),
+    );
+    const [again] = bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)[0]
+      ?.outputs as Output[];
+    expect(again!.layers[1]).not.toHaveProperty('frame');
+  });
+
+  it('저장된 분할 편집본을 열면 그 모양으로 열리고, 고치지 않으면 다시 저장하지 않는다', async () => {
+    server.savedOutput = {
+      outputId: 'o1',
+      aspect: 'VERT_9_16',
+      layers: [
+        {
+          crop: { x: 0.2, y: 0, w: 1080 / (0.6 * 1920) / (16 / 9), h: 1 },
+          box: { x: 0, y: 0, w: 1, h: 0.6 },
+        },
+        {
+          crop: { x: 0.1, y: 0.4, w: (1080 / (0.4 * 1920) / (16 / 9)) * 0.5, h: 0.5 },
+          box: { x: 0, y: 0.6, w: 1, h: 0.4 },
+        },
+      ],
+    };
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+
+    expect(screen.getByRole('radio', { name: /분할/ })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '60 : 40' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: '경계선 표시' })).not.toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await waitFor(() =>
+      expect(
+        fetchSpy.mock.calls.some(
+          ([url, init]) =>
+            url === `/api/clip/broadcasts/${STREAM_ID}/recipes/31/renders` &&
+            init?.method === 'POST',
+        ),
+      ).toBe(true),
+    );
+    expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(0);
   });
 });

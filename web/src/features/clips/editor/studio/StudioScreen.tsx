@@ -8,7 +8,6 @@ import { EmptyState, useToast } from '@/ui';
 import {
   ClipApiError,
   createRecipe,
-  defaultRecipe,
   fetchBroadcast,
   fetchClip,
   fetchJumpCard,
@@ -48,6 +47,7 @@ import {
 import { fetchDelegationsAsEditor } from '@/api/editors';
 import { fetchRecordingSpans, type RecordingSpan } from '@/api/mediaPlayback';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
+import { lookFromDocument, outputFromLook, sameRecipe, subtitlesFor } from '../recipeLook';
 
 // 시안 1d-a 클립 편집기(스튜디오형). 전폭 자체 헤더를 가지므로 ScreenContainer를 쓰지 않는다
 // (라이브 대시보드 선례). 데이터·동작은 전부 useClipEditorMockState 뒤에 있다.
@@ -406,8 +406,8 @@ interface SaveState {
   busy: 'save' | 'render' | null;
   clip: ClipSnapshot | null;
   label: string;
-  /** 마지막으로 서버에 저장한 본문(JSON) — 지금 화면과 다르면 영상 만들기 전에 먼저 저장한다 */
-  savedJson: string | null;
+  /** 마지막으로 서버에 저장한 본문 — 지금 화면과 다르면 영상 만들기 전에 먼저 저장한다 */
+  savedDoc: RecipeDocument | null;
 }
 
 function clipLabel(clip: ClipSnapshot): string {
@@ -448,7 +448,7 @@ function WiredStudio({ data }: { data: Loaded }) {
     busy: null,
     clip: latestClip,
     label: saved ? `v${saved.version} 저장됨` : '저장 안 됨',
-    savedJson: saved ? JSON.stringify(saved.document) : null,
+    savedDoc: saved ? saved.document : null,
   }));
   const saveRef = useRef(save);
   saveRef.current = save;
@@ -490,8 +490,17 @@ function WiredStudio({ data }: { data: Loaded }) {
         }));
       if (selected.some((t) => t.trackId !== 0)) selected = selected.filter((t) => t.trackId !== 0);
       if (selected.length === 0) selected = [{ trackId: 0, gain: 1 }];
-      const base0 = saved ? { ...saved.document, cut } : defaultRecipe(streamId, cut);
-      return { ...base0, audio: { tracks: selected } };
+      // 모양은 화면 그대로 v2로 싣는다(POK-252) — 저장된 편집본의 옛 출력을 두면 화면과 다른 영상이 나온다.
+      // 자막 줄은 편집기가 만들지 않으므로 저장된 것을 그대로 두고, 방식·자리만 화면 값으로 바꾼다.
+      const subtitles = subtitlesFor(recipe, saved?.document.subtitles?.segments ?? null);
+      return {
+        schemaVersion: 2,
+        streamId,
+        cut,
+        outputs: [outputFromLook(recipe)],
+        audio: { tracks: selected },
+        ...(subtitles ? { subtitles } : {}),
+      };
     },
     [base, saved, streamId],
   );
@@ -506,7 +515,7 @@ function WiredStudio({ data }: { data: Loaded }) {
         ...s,
         recipeId: snap.id,
         version: snap.recipeVersion,
-        savedJson: JSON.stringify(doc),
+        savedDoc: doc,
       }));
       return snap;
     },
@@ -547,7 +556,10 @@ function WiredStudio({ data }: { data: Loaded }) {
       const current = saveRef.current;
       if (current.busy !== null) return;
       const doc = documentFor(recipe);
-      const dirty = current.recipeId === null || current.savedJson !== JSON.stringify(doc);
+      const dirty =
+        current.recipeId === null ||
+        current.savedDoc === null ||
+        !sameRecipe(current.savedDoc, doc);
       setSave((s) => ({
         ...s,
         busy: 'render',
@@ -627,6 +639,11 @@ function WiredStudio({ data }: { data: Loaded }) {
   }, [saved, trackLabels]);
 
   const actions = useMemo(() => ({ saveDraft, requestUpload }), [saveDraft, requestUpload]);
+  // 저장된 편집본을 열면 그 모양(레이아웃·자르는 자리·자막 방식)으로 연다 — 다시 저장해도 제자리다
+  const initialLook = useMemo(
+    () => (saved ? lookFromDocument(saved.document) : undefined),
+    [saved],
+  );
   const label =
     save.clip && save.busy === null && !save.label.includes('영상 #')
       ? `${save.label} · ${clipLabel(save.clip)}`
@@ -655,6 +672,7 @@ function WiredStudio({ data }: { data: Loaded }) {
         tracks={trackSetup.tracks}
         initialTrackMuted={trackSetup.muted}
         initialTrackVolumes={trackSetup.volumes}
+        initialLook={initialLook}
       />
     </>
   );
