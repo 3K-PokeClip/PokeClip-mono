@@ -395,7 +395,10 @@ class RecipeControllerTest extends IntegrationTestSupport {
                 // v1에 v2 칸 — 저장은 되는데 렌더가 모르는 칸으로 거부하는 편집본이 된다
                 위반("v1에 layers", r -> 출력(r, 0).putArray("layers"), "outputs"),
                 위반("v1에 background", r -> 출력(r, 0).putObject("background").put("kind", "BLUR").put("strength", 1), "outputs"),
-                위반("v1에 자막 자리", r -> 자막(r).putObject("position").put("anchor", "TOP").put("y", 0.1), "subtitles"));
+                위반("v1에 자막 자리", r -> 자막(r).putObject("position").put("anchor", "TOP").put("y", 0.1), "subtitles"),
+                // 값이 null이어도 칸 이름이 있으면 섞인 것이다 — 렌더는 이름만으로 거부한다(PR #201 codex)
+                위반("v1에 layers null", r -> 출력(r, 0).putNull("layers"), "outputs"),
+                위반("v1에 자막 자리 null", r -> 자막(r).putNull("position"), "subtitles"));
     }
 
     // ── 계약6 v2(7절): 층·바탕·구분선·자막 자리 ──────────────────────
@@ -448,6 +451,7 @@ class RecipeControllerTest extends IntegrationTestSupport {
 
     static Stream<Arguments> v2_규칙_위반들() {
         return Stream.of(
+                위반("v2에 crop null", r -> 출력(r, 0).putNull("crop"), "outputs"),
                 위반("v2에 crop", r -> 출력(r, 0).putObject("crop").put("x", 0.0).put("y", 0.0).put("w", 0.5).put("h", 1.0), "outputs"),
                 위반("layers 없음", r -> 출력(r, 0).remove("layers"), "outputs"),
                 위반("layers 빈 배열", r -> 출력(r, 0).putArray("layers"), "outputs"),

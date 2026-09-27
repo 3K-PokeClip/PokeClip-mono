@@ -191,6 +191,46 @@ describe('레시피 → 화면', () => {
     expect(lookFromDocument(doc({ x: 0, y: (1 - h) / 2, w: 1, h })).layout).toBe('center');
   });
 
+  it('폭이 안 찬 두 칸은 분할이 아니다 — 폭·자리·높이 합까지 분할 모양일 때만', () => {
+    const doc = (boxes: { x: number; y: number; w: number; h: number }[]): RecipeDocument => ({
+      schemaVersion: 2,
+      streamId: 's',
+      cut: null,
+      outputs: [
+        {
+          outputId: 'o1',
+          aspect: 'VERT_9_16',
+          layers: boxes.map((box) => ({ crop: { x: 0, y: 0, w: 0.5, h: 0.5 }, box })),
+        },
+      ],
+      audio: { tracks: [] },
+    });
+    expect(
+      lookFromDocument(
+        doc([
+          { x: 0.25, y: 0, w: 0.5, h: 0.5 },
+          { x: 0.25, y: 0.5, w: 0.5, h: 0.5 },
+        ]),
+      ).layout,
+    ).toBeUndefined();
+    expect(
+      lookFromDocument(
+        doc([
+          { x: 0, y: 0, w: 1, h: 0.4 },
+          { x: 0, y: 0.4, w: 1, h: 0.5 },
+        ]),
+      ).layout,
+    ).toBeUndefined();
+    expect(
+      lookFromDocument(
+        doc([
+          { x: 0, y: 0, w: 1, h: 0.6 },
+          { x: 0, y: 0.6, w: 1, h: 0.4 },
+        ]),
+      ).layout,
+    ).toBe('split');
+  });
+
   it('편집기가 만들지 않는 모양이면 모양 칸을 비운다(편집기 기본값으로 연다)', () => {
     const look = lookFromDocument({
       schemaVersion: 2,

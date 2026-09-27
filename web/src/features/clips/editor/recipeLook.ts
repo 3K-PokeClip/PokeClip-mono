@@ -329,7 +329,20 @@ export function lookFromDocument(doc: RecipeDocument): Partial<EditorLook> {
       crops: cropsFor('center', 50, DEFAULT_PIP_FOR_READ, [a.crop]),
     };
   }
-  if (b !== undefined && output.layers.length === 2 && near(a.box.y, 0) && near(b.box.y, a.box.h)) {
+  // 분할: 폭 전부인 두 칸이 위아래로 이어 결과를 다 채운다 — 세로 자리만 보면 다른 모양을 분할로 되살려 덮어쓴다
+  if (
+    b !== undefined &&
+    output.layers.length === 2 &&
+    near(a.box.x, 0) &&
+    near(a.box.w, 1) &&
+    near(b.box.x, 0) &&
+    near(b.box.w, 1) &&
+    near(a.box.y, 0) &&
+    near(b.box.y, a.box.h) &&
+    near(a.box.h + b.box.h, 1) &&
+    a.frame === undefined &&
+    b.frame === undefined
+  ) {
     const splitRatio = Math.round(a.box.h * 100);
     return {
       ...common,
