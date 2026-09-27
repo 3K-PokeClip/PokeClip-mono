@@ -18,10 +18,10 @@ import (
 // headerLine 은 목록 본문의 첫 줄이다(RFC 8216bis-22 4.4.1.1).
 const headerLine = "#EXTM3U\n"
 
-// maxBodyBytes 는 목록 본문의 크기 상한이다 — 설계 4.5.5 S5 의 ≤512KB 를 1KB = 1,024B 로 읽었다.
+// MaxBodyBytes 는 목록 본문의 크기 상한이다 — 설계 4.5.5 S5 의 ≤512KB 를 1KB = 1,024B 로 읽었다.
 // 1시간 창을 4초 조각으로 채운 본문이 약 104KiB(g6_f2 106,499B)라 다섯 배쯤 여유가 있다. 조각이
 // 아주 짧아 줄이 많아지면 넘는다 — 0.79초 조각으로 1시간을 채우면 이 크기에 닿는다.
-const maxBodyBytes = 512 << 10
+const MaxBodyBytes = 512 << 10
 
 // pdtSlack 은 PDT 엄격 단조 검사(S7)가 이웃한 두 조각의 겹침으로 봐주는 폭이다 — 설계 4.5.5 S7 의
 // PDT_SLACK(1ms). S7 은 발행되는 PDT 줄(ms)로 재므로 이 폭은 발행 해상도의 한 칸이다.
@@ -372,7 +372,7 @@ func totalMS(rows []boundary.Row) int64 {
 
 // checkBody 는 S5 본문 형식·상한이다 — 이 바이트를 그대로 올려도 되는가.
 //
-//	첫 줄 #EXTM3U(RFC 8216bis-22 4.4.1.1) · 크기 ≤ maxBodyBytes · #PC- 로 시작하는 줄 0개(우리 용도의
+//	첫 줄 #EXTM3U(RFC 8216bis-22 4.4.1.1) · 크기 ≤ MaxBodyBytes · #PC- 로 시작하는 줄 0개(우리 용도의
 //	줄 — 세대 정보는 본문 밖 메타데이터로 간다, 설계 4.4.2)
 //	TARGETDURATION ≥ 모든 조각의 반올림 길이(4.4.3.1) — TD 는 소유 회차 값, 조각 길이는 행의 duration_ms
 //	다. 본문의 TD 줄이 그 값 한 줄뿐이고 EXTINF 줄이 그 길이라는 것은 checkBodyMatchesRows 가 확인했다
@@ -386,8 +386,8 @@ func checkBody(p Playlist, body []byte, lines []string, segs []segmentLines) err
 	switch {
 	case !bytes.HasPrefix(body, []byte(headerLine)):
 		return violation("S5", "첫 줄이 #EXTM3U 가 아니다")
-	case len(body) > maxBodyBytes:
-		return violation("S5", "본문 %d바이트가 상한 %d바이트를 넘는다", len(body), maxBodyBytes)
+	case len(body) > MaxBodyBytes:
+		return violation("S5", "본문 %d바이트가 상한 %d바이트를 넘는다", len(body), MaxBodyBytes)
 	}
 	for _, line := range lines {
 		if strings.HasPrefix(line, "#PC-") {
