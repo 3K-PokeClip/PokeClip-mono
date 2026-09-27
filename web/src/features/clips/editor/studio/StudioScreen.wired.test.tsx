@@ -210,29 +210,72 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     expect(cut.outAtMs - cut.inAtMs).toBe(5_000);
   });
 
-  it('저장하기 전에는 영상을 주문하지 않고, 저장한 뒤에는 그 편집본으로 주문한다', async () => {
+  const renders = () =>
+    fetchSpy.mock.calls.filter(
+      ([url, init]) =>
+        url === `/api/clip/broadcasts/${STREAM_ID}/recipes/31/renders` && init?.method === 'POST',
+    ).length;
+
+  it('저장하지 않고 영상 만들기를 누르면 먼저 저장하고 그 판으로 주문한다', async () => {
     const user = userEvent.setup();
-    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+    await openFrom(`stream=${STREAM_ID}&card=5`);
 
     await user.click(screen.getByRole('button', { name: '영상 만들기' }));
-    expect(await screen.findByText('먼저 편집본을 저장해요')).toBeInTheDocument();
-    expect(fetchSpy.mock.calls.some(([url]) => String(url).endsWith('/renders'))).toBe(false);
 
-    await user.click(save);
-    await screen.findByText(/편집본 #31 v1 저장됨/);
-    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
-
-    await waitFor(() =>
-      expect(
-        fetchSpy.mock.calls.some(
-          ([url, init]) =>
-            url === `/api/clip/broadcasts/${STREAM_ID}/recipes/31/renders` &&
-            init?.method === 'POST',
-        ),
-      ).toBe(true),
+    await waitFor(() => expect(renders()).toBe(1));
+    // 저장이 주문보다 먼저다 — 저장하지 않은 화면으로는 주문할 판이 없다
+    const order = fetchSpy.mock.calls.map(
+      ([url, init]) => `${init?.method ?? 'GET'} ${String(url)}`,
     );
+    const saveAt = order.indexOf(`POST /api/clip/broadcasts/${STREAM_ID}/recipes`);
+    const renderAt = order.indexOf(`POST /api/clip/broadcasts/${STREAM_ID}/recipes/31/renders`);
+    expect(saveAt).toBeGreaterThanOrEqual(0);
+    expect(saveAt).toBeLessThan(renderAt);
     // 헤더 상태 문구와 토스트 둘 다 말한다
     expect((await screen.findAllByText(/영상 #77 주문됨/)).length).toBeGreaterThan(0);
+  });
+
+  it('저장 뒤 또 고치면 새 판으로 저장하고 주문한다 — 고치지 않았으면 다시 저장하지 않는다', async () => {
+    // 저장 뒤 고친 것을 무시하고 옛 판을 렌더하면 화면과 다른 영상이 나온다(PR #200 codex P1)
+    const user = userEvent.setup();
+    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+    await user.click(save);
+    await screen.findByText(/편집본 #31 v1 저장됨/);
+
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await waitFor(() => expect(renders()).toBe(1));
+    expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(0);
+
+    await user.click(screen.getByRole('tab', { name: '오디오' }));
+    await user.click(screen.getByRole('switch', { name: '트랙 2 사용' }));
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await waitFor(() => expect(renders()).toBe(2));
+    expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)[0]?.audio).toEqual({
+      tracks: [{ trackId: 1, gain: 1 }],
+    });
+  });
+
+  it('오디오 스위치가 계약을 지킨다 — 최종 믹스와 방송 트랙은 하나만, 마지막 트랙은 못 끈다', async () => {
+    // 저장할 때 조용히 바꾸면 화면과 다른 소리가 렌더된다(PR #200 codex P1)
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await user.click(screen.getByRole('tab', { name: '오디오' }));
+    const mix = () => screen.getByRole('switch', { name: '최종 믹스(트랙 1) 사용' });
+    const track2 = () => screen.getByRole('switch', { name: '트랙 2 사용' });
+    expect(mix()).toBeChecked();
+
+    await user.click(track2());
+    expect(track2()).toBeChecked();
+    expect(mix()).not.toBeChecked();
+
+    // 마지막으로 켜진 트랙은 끄지 않고 이유를 말한다
+    await user.click(track2());
+    expect(track2()).toBeChecked();
+    expect(await screen.findByText('트랙을 하나는 켜 둬야 해요')).toBeInTheDocument();
+
+    await user.click(mix());
+    expect(mix()).toBeChecked();
+    expect(track2()).not.toBeChecked();
   });
 });
 
@@ -258,6 +301,24 @@ describe('StudioScreen — 편집본으로 다시 연 실제 편집기', () => {
       w: 0.32,
       h: 1,
     });
+  });
+
+  it('저장된 편집본을 고치지 않고 영상 만들기를 누르면 다시 저장하지 않고 그 판으로 주문한다', async () => {
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+
+    await waitFor(() =>
+      expect(
+        fetchSpy.mock.calls.some(
+          ([url, init]) =>
+            url === `/api/clip/broadcasts/${STREAM_ID}/recipes/31/renders` &&
+            init?.method === 'POST',
+        ),
+      ).toBe(true),
+    );
+    expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(0);
   });
 
   it('100%를 넘는 저장된 볼륨은 손대지 않으면 그대로 다시 저장된다', async () => {

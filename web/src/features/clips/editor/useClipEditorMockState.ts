@@ -409,6 +409,11 @@ export interface ClipEditorOptions {
   previewVideo?: HTMLVideoElement | null;
   /** 오디오 트랙(스트리머가 적어 둔 트랙 이름, POK-240). 없으면 목업 트랙(실제 모드면 빈 목록) */
   tracks?: readonly EditorTrack[];
+  /**
+   * 「최종 믹스」 트랙 id — 주면 스위치가 계약6 규칙을 지킨다: 최종 믹스와 나머지 트랙은 함께 켤 수 없고,
+   * 마지막으로 켜진 트랙은 끌 수 없다. 저장할 때 조용히 바꾸면 화면과 다른 소리가 렌더된다(PR #200 codex P1)
+   */
+  mixTrackId?: string;
   /** 처음 꺼 둘 트랙·볼륨 — 저장된 편집본의 값. 마운트 값 */
   initialTrackMuted?: Readonly<Record<string, boolean>>;
   initialTrackVolumes?: Readonly<Record<string, number>>;
@@ -1172,12 +1177,24 @@ export function useClipEditorMockState(options: ClipEditorOptions = {}): ClipEdi
       [commit],
     ),
     toggleTrackMute: useCallback(
-      (trackId: string) =>
-        commit((current) => ({
-          ...current,
-          trackMuted: { ...current.trackMuted, [trackId]: !current.trackMuted[trackId] },
-        })),
-      [commit],
+      (trackId: string) => {
+        const mix = options.mixTrackId;
+        const current = presentRef.current;
+        const turningOn = current.trackMuted[trackId] ?? false;
+        const muted = { ...current.trackMuted, [trackId]: !turningOn };
+        if (mix !== undefined) {
+          const ids = (options.tracks ?? []).map((t) => t.id);
+          if (turningOn && trackId === mix) for (const id of ids) muted[id] = id !== mix;
+          else if (turningOn) muted[mix] = true;
+          else if (ids.every((id) => muted[id] ?? false)) {
+            // 소리가 하나도 없는 영상은 렌더가 거절한다 — 끄지 않고 이유를 말한다
+            toast({ tone: 'info', title: '트랙을 하나는 켜 둬야 해요' });
+            return;
+          }
+        }
+        commit((cur) => ({ ...cur, trackMuted: muted }));
+      },
+      [commit, options.mixTrackId, options.tracks, toast],
     ),
     selectedClipId,
     selectClip: setSelectedClipId,

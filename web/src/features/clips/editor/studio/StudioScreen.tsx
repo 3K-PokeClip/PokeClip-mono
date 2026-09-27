@@ -406,6 +406,8 @@ interface SaveState {
   busy: 'save' | 'render' | null;
   clip: ClipSnapshot | null;
   label: string;
+  /** 마지막으로 서버에 저장한 본문(JSON) — 지금 화면과 다르면 영상 만들기 전에 먼저 저장한다 */
+  savedJson: string | null;
 }
 
 function clipLabel(clip: ClipSnapshot): string {
@@ -446,6 +448,7 @@ function WiredStudio({ data }: { data: Loaded }) {
     busy: null,
     clip: latestClip,
     label: saved ? `v${saved.version} 저장됨` : '저장 안 됨',
+    savedJson: saved ? JSON.stringify(saved.document) : null,
   }));
   const saveRef = useRef(save);
   saveRef.current = save;
@@ -493,22 +496,34 @@ function WiredStudio({ data }: { data: Loaded }) {
     [base, saved, streamId],
   );
 
+  /** 새로 만들거나 고쳐 저장하고, 저장한 판을 상태에 적는다 */
+  const persist = useCallback(
+    async (recipeId: number | null, doc: RecipeDocument) => {
+      const snap = await (recipeId === null
+        ? createRecipe(streamId, doc)
+        : updateRecipe(streamId, recipeId, doc));
+      setSave((s) => ({
+        ...s,
+        recipeId: snap.id,
+        version: snap.recipeVersion,
+        savedJson: JSON.stringify(doc),
+      }));
+      return snap;
+    },
+    [streamId],
+  );
+
   const saveDraft = useCallback(
     (recipe: EditorRecipe) => {
       const current = saveRef.current;
       if (current.busy !== null) return;
       const doc = documentFor(recipe);
       setSave((s) => ({ ...s, busy: 'save', label: '저장하는 중…' }));
-      (current.recipeId === null
-        ? createRecipe(streamId, doc)
-        : updateRecipe(streamId, current.recipeId, doc)
-      )
+      persist(current.recipeId, doc)
         .then((snap) => {
           setSave((s) => ({
             ...s,
             busy: null,
-            recipeId: snap.id,
-            version: snap.recipeVersion,
             label: `편집본 #${snap.id} v${snap.recipeVersion} 저장됨`,
           }));
           toast({ tone: 'success', title: `편집본 #${snap.id} 저장됨 (v${snap.recipeVersion})` });
@@ -519,40 +534,50 @@ function WiredStudio({ data }: { data: Loaded }) {
           toast({ tone: 'error', title: '저장 실패', description: message });
         });
     },
-    [documentFor, streamId, toast],
+    [documentFor, persist, toast],
   );
 
-  const requestUpload = useCallback(() => {
-    const current = saveRef.current;
-    if (current.busy !== null) return;
-    if (current.recipeId === null) {
-      toast({
-        tone: 'warning',
-        title: '먼저 편집본을 저장해요',
-        description: '영상은 저장된 편집본으로 만들어요.',
-      });
-      return;
-    }
-    setSave((s) => ({ ...s, busy: 'render', label: '영상 주문하는 중…' }));
-    requestRender(streamId, current.recipeId)
-      .then((clip) => {
-        setSave((s) => ({
-          ...s,
-          busy: null,
-          clip,
-          label: `편집본 #${s.recipeId} v${s.version} · ${clipLabel(clip)}`,
-        }));
-        toast({
-          tone: 'success',
-          title: `${clipLabel(clip)} — 다 만들어지면 보관함에서 완성으로 바뀌어요`,
+  /**
+   * 영상은 저장된 판으로 만든다. 화면이 마지막 저장과 다르면(한 번도 안 저장했거나, 저장 뒤 또 고쳤으면) 먼저
+   * 저장해 새 판을 만들고 그 판으로 주문한다 — 저장 뒤 고친 것을 무시하고 옛 판을 렌더하면 화면과 다른 영상이
+   * 나온다(PR #200 codex P1). 같으면 저장하지 않고 바로 주문한다(판 번호를 헛되이 늘리지 않게)
+   */
+  const requestUpload = useCallback(
+    (recipe: EditorRecipe) => {
+      const current = saveRef.current;
+      if (current.busy !== null) return;
+      const doc = documentFor(recipe);
+      const dirty = current.recipeId === null || current.savedJson !== JSON.stringify(doc);
+      setSave((s) => ({
+        ...s,
+        busy: 'render',
+        label: dirty ? '저장하고 영상 주문하는 중…' : '영상 주문하는 중…',
+      }));
+      (dirty
+        ? persist(current.recipeId, doc).then((snap) => snap.id)
+        : Promise.resolve(current.recipeId as number)
+      )
+        .then((recipeId) => requestRender(streamId, recipeId))
+        .then((clip) => {
+          setSave((s) => ({
+            ...s,
+            busy: null,
+            clip,
+            label: `편집본 #${s.recipeId} v${s.version} · ${clipLabel(clip)}`,
+          }));
+          toast({
+            tone: 'success',
+            title: `${clipLabel(clip)} — 다 만들어지면 보관함에서 완성으로 바뀌어요`,
+          });
+        })
+        .catch((e: unknown) => {
+          const message = messageOf(e);
+          setSave((s) => ({ ...s, busy: null, label: `주문 실패 · ${message}` }));
+          toast({ tone: 'error', title: '영상 만들기 실패', description: message });
         });
-      })
-      .catch((e: unknown) => {
-        const message = messageOf(e);
-        setSave((s) => ({ ...s, busy: null, label: `주문 실패 · ${message}` }));
-        toast({ tone: 'error', title: '영상 만들기 실패', description: message });
-      });
-  }, [streamId, toast]);
+    },
+    [documentFor, persist, streamId, toast],
+  );
 
   // 주문한 영상이 끝날 때까지 5초마다 상태를 다시 읽는다 — 일꾼의 보고가 clips 표를 바꾼다.
   const clipId = save.clip?.id ?? null;
@@ -626,6 +651,7 @@ function WiredStudio({ data }: { data: Loaded }) {
         actions={actions}
         autosaveLabel={label}
         uploadLabel="영상 만들기"
+        mixTrackId={trackId(0)}
         tracks={trackSetup.tracks}
         initialTrackMuted={trackSetup.muted}
         initialTrackVolumes={trackSetup.volumes}
