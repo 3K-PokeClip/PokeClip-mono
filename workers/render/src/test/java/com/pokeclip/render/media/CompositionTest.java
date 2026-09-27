@@ -65,8 +65,10 @@ class CompositionTest {
     @Test
     void 세기_0이면_흐리지_않고_단색은_그_색이다() {
         Layer full = new Layer(VERT, Box.FULL, new Frame(0, "#ffffff", 0, false));
+        // 세기 0은 줄였다 키우지 않는다 — 뭉개진 바탕이 된다
         assertThat(Composition.plan(new Output("o1", Aspect.VERT_9_16, new Background.Blur(0), List.of(full), List.of()),
-                640, 360, "p").graph()).doesNotContain("gblur");
+                640, 360, "p").graph()).doesNotContain("gblur").doesNotContain("270:480")
+                .contains("[s1]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[bg]");
         assertThat(Composition.plan(new Output("o1", Aspect.VERT_9_16, new Background.Color("#1c2440"), List.of(full),
                 List.of()), 640, 360, "p").graph()).contains("color=0x1C2440:t=fill[bg]");
     }

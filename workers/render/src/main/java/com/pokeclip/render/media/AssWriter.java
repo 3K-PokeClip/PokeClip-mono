@@ -70,7 +70,10 @@ public final class AssWriter {
                 .append(side).append(',').append(marginV).append(",1\n\n")
                 .append("[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
         for (SubtitleSegment s : clipped) {
-            out.append("Dialogue: 0,").append(time(s.startAtMs())).append(',').append(time(s.endAtMs()))
+            // 시작은 내리고 끝은 올린다 — 둘 다 내리면 10ms 미만 자막은 시작=끝이 되어 안 보이고 끝이 최대 9ms 짧아진다
+            long start = s.startAtMs() / 10 * 10;
+            long end = Math.max(start + 10, (s.endAtMs() + 9) / 10 * 10);
+            out.append("Dialogue: 0,").append(time(start)).append(',').append(time(end))
                     .append(",Default,,0,0,0,,").append(tag).append(text(s.text())).append('\n');
         }
         return out.toString();

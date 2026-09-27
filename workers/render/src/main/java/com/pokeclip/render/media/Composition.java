@@ -131,6 +131,11 @@ public final class Composition {
 
     /** 원본을 결과 크기로 흐리게 깔거나, 원본 프레임을 따라가는 단색 판을 만든다. */
     private static String background(Background background, String input, int outW, int outH) {
+        if (background instanceof Background.Blur blur && blur.strength() == 0) {
+            // 세기 0은 흐리지 않은 원본을 꽉 차게 깐다 — 1/4로 줄였다 키우면 미리보기와 달리 뭉개진다(PR #201 codex)
+            return input + "scale=" + outW + ":" + outH + ":force_original_aspect_ratio=increase,crop=" + outW + ":"
+                    + outH + ",setsar=1";
+        }
         if (background instanceof Background.Blur blur) {
             int w = even(outW / BLUR_DOWNSCALE);
             int h = even(outH / BLUR_DOWNSCALE);

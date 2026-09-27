@@ -231,6 +231,32 @@ describe('레시피 → 화면', () => {
     ).toBe('split');
   });
 
+  it('꾸밈이 있는 꽉 찬 한 장은 세로로 열지 않는다', () => {
+    const full = { crop: { x: 0.34, y: 0, w: 0.3164, h: 1 }, box: { x: 0, y: 0, w: 1, h: 1 } };
+    const doc = (extra: object): RecipeDocument =>
+      ({
+        schemaVersion: 2,
+        streamId: 's',
+        cut: null,
+        outputs: [{ outputId: 'o1', aspect: 'VERT_9_16', layers: [full], ...extra }],
+        audio: { tracks: [] },
+      }) as RecipeDocument;
+    expect(lookFromDocument(doc({})).layout).toBe('vert');
+    expect(
+      lookFromDocument(doc({ dividers: [{ y: 0.5, thickness: 0.01, color: '#ffffff' }] })).layout,
+    ).toBeUndefined();
+    expect(
+      lookFromDocument(doc({ background: { kind: 'BLUR', strength: 10 } })).layout,
+    ).toBeUndefined();
+    expect(
+      lookFromDocument(
+        doc({
+          layers: [{ ...full, frame: { width: 0.01, color: '#ffffff', radius: 0, shadow: false } }],
+        }),
+      ).layout,
+    ).toBeUndefined();
+  });
+
   it('바탕을 뺀 중앙 문서는 검정 바탕으로 연다', () => {
     const h = (9 / 16) * (9 / 16);
     const look = lookFromDocument({

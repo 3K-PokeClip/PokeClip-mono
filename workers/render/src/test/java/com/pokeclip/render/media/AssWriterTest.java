@@ -46,4 +46,11 @@ class AssWriterTest {
     void 시각은_100분의_1초다() {
         assertThat(AssWriter.time(3_723_456)).isEqualTo("1:02:03.45");
     }
+
+    @Test
+    void 끝은_올려서_10ms_미만_자막도_보인다() {
+        String ass = AssWriter.render(List.of(new SubtitleSegment(1_003, 1_008, "짧음"), new SubtitleSegment(2_000, 2_991, "끝")),
+                new SubtitlePosition(Anchor.BOTTOM, 0.9), Aspect.VERT_9_16);
+        assertThat(ass).contains("Dialogue: 0,0:00:01.00,0:00:01.01,").contains("Dialogue: 0,0:00:02.00,0:00:03.00,");
+    }
 }

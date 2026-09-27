@@ -303,7 +303,14 @@ export function lookFromDocument(doc: RecipeDocument): Partial<EditorLook> {
   const isFull = (box: CropRect) =>
     near(box.x, 0) && near(box.y, 0) && near(box.w, 1) && near(box.h, 1);
 
-  if (output.layers.length === 1 && isFull(a.box)) {
+  // 세로: 꾸밈 없는 한 장이 결과를 꽉 채운다 — 테두리·구분선·바탕이 있으면 편집기가 못 그려 덮어쓰게 된다
+  if (
+    output.layers.length === 1 &&
+    isFull(a.box) &&
+    a.frame === undefined &&
+    (output.dividers?.length ?? 0) === 0 &&
+    output.background === undefined
+  ) {
     return {
       ...common,
       layout: 'vert',
