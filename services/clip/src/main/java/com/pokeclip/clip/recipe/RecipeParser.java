@@ -4,6 +4,7 @@ import com.pokeclip.clip.recipe.RecipeErrors.InvalidRecipeException;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.MapperFeature;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -12,6 +13,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 본문 문자열을 계약6 모양({@link RecipeDocument})으로 읽는다. <b>모르는 칸은 거부한다</b>(계약6 0절
@@ -89,7 +92,72 @@ public class RecipeParser {
         if (document == null) {
             throw new InvalidRecipeException("body");
         }
-        return document;
+        return markForeignFields(body, document);
+    }
+
+    /**
+     * 다른 판의 칸은 <b>값이 null이어도 이름만 있으면</b> 섞인 것이다(계약6 7절). 공용 record라 파서가 칸 이름을 알고, 값이 null이면
+     * 검증기에는 「없음」과 같아 보여 지나간다. 그러면 NON_NULL 응답에서 조용히 사라져 보낸 모양이 안 지켜지고, 렌더는 칸 이름만으로
+     * 거부해 두 층이 어긋난다(PR #201 codex). 그래서 그런 칸을 <b>빈 값이지만 있는 것</b>(빈 객체·빈 목록)으로 바꿔 넘기고
+     * 거절은 {@link RecipeValidator}의 「다른 판 칸이 있으면 400」이 한다 — 여기서 던지면 자격 판정보다 먼저 400이 나가
+     * 「자격 판정 → 규칙 검사」 순서가 깨진다. 판을 모르면 검증기가 {@code schemaVersion}으로 거절하므로 그대로 둔다.
+     */
+    private RecipeDocument markForeignFields(String body, RecipeDocument document) {
+        Integer version = document.schemaVersion();
+        if (version == null || (version != 1 && version != 2) || document.outputs() == null) {
+            return document;
+        }
+        JsonNode root = strict.readTree(body);
+        JsonNode outputsNode = root.get("outputs");
+        List<RecipeDocument.Output> outputs = new ArrayList<>();
+        for (int i = 0; i < document.outputs().size(); i++) {
+            RecipeDocument.Output o = document.outputs().get(i);
+            JsonNode node = outputsNode.get(i);
+            if (o != null && node != null && node.isObject()) {
+                if (version == 1) {
+                    o = new RecipeDocument.Output(o.outputId(), o.aspect(), o.crop(),
+                            present(node, "background") && o.background() == null
+                                    ? new RecipeDocument.Background(null, null, null) : o.background(),
+                            present(node, "layers") && o.layers() == null ? List.of() : o.layers(),
+                            present(node, "dividers") && o.dividers() == null ? List.of() : o.dividers());
+                } else {
+                    RecipeDocument.Crop crop = present(node, "crop") && o.crop() == null
+                            ? new RecipeDocument.Crop(null, null, null, null) : o.crop();
+                    o = new RecipeDocument.Output(o.outputId(), o.aspect(), crop,
+                            markBackground(node.get("background"), o.background()), o.layers(), o.dividers());
+                }
+            }
+            outputs.add(o);
+        }
+        RecipeDocument.Subtitles subtitles = document.subtitles();
+        JsonNode subtitlesNode = root.get("subtitles");
+        if (version == 1 && subtitles != null && subtitles.position() == null && subtitlesNode != null
+                && present(subtitlesNode, "position")) {
+            subtitles = new RecipeDocument.Subtitles(subtitles.mode(), subtitles.segments(),
+                    new RecipeDocument.Position(null, null));
+        }
+        return new RecipeDocument(document.schemaVersion(), document.streamId(), document.cut(), outputs,
+                document.audio(), subtitles);
+    }
+
+    /**
+     * 바탕도 종류마다 받는 칸이 다르다(BLUR = 세기, COLOR = 색). 다른 종류의 칸이 null로 와도 있음으로 표시한다 — 흐림에
+     * {@code "color": null}이 오면 검증기에는 없는 칸과 같아 지나가는데 렌더는 이름만으로 거부한다(PR #201 codex 3판).
+     * 표시 값(빈 색·세기 -1)은 검증기가 「그 종류에 없어야 할 칸이 있다」로 거절한다.
+     */
+    private static RecipeDocument.Background markBackground(JsonNode node, RecipeDocument.Background background) {
+        if (background == null || node == null || !node.isObject()) {
+            return background;
+        }
+        String color = present(node, "color") && background.color() == null ? "" : background.color();
+        // Integer.valueOf: int와 섞으면 삼항이 언박싱해 세기가 null일 때 NPE다
+        Integer strength = present(node, "strength") && background.strength() == null ? Integer.valueOf(-1)
+                : background.strength();
+        return new RecipeDocument.Background(background.kind(), strength, color);
+    }
+
+    private static boolean present(JsonNode node, String name) {
+        return node.isObject() && node.has(name);
     }
 
     /** 경로가 이보다 길면 자른다 — 모르는 칸의 이름은 편집기가 보낸 문자열이라 길이가 우리 손에 없다. */

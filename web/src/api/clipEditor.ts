@@ -184,22 +184,62 @@ async function sendJson<T>(method: 'POST' | 'PUT', path: string, body?: unknown)
   return res.json() as Promise<T>;
 }
 
-/** 계약6 rev7 본문 — 칸 이름을 한 글자도 바꾸지 않는다. */
-export interface RecipeDocument {
-  schemaVersion: 1;
+/** 계약6 본문 — 칸 이름을 한 글자도 바꾸지 않는다. v1(출력마다 crop 하나)과 v2(층·바탕·구분선, 7절)가 있다. */
+export type RecipeDocument = RecipeDocumentV1 | RecipeDocumentV2;
+
+interface RecipeCommon {
   streamId: string;
   cut: { inAtMs: number; outAtMs: number } | null;
-  outputs: {
-    outputId: string;
-    aspect: 'VERT_9_16' | 'SQUARE_1_1';
-    crop: { x: number; y: number; w: number; h: number };
-  }[];
   audio: { tracks: { trackId: number; gain: number }[] };
-  /** 생략 = 자막 없음(계약6). null 로 보내지 않고 칸을 뺀다 */
-  subtitles?: {
-    mode: 'BURN_AND_CC' | 'BURN_ONLY' | 'CC_ONLY';
-    segments: { startAtMs: number; endAtMs: number; text: string }[];
-  };
+}
+
+/** 정규화 사각형 — 원본에서 자를 자리(crop)이자 결과에 놓을 자리(box) */
+export interface RecipeRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+type RecipeAspect = 'VERT_9_16' | 'SQUARE_1_1';
+
+export interface RecipeSubtitles {
+  mode: 'BURN_AND_CC' | 'BURN_ONLY' | 'CC_ONLY';
+  segments: { startAtMs: number; endAtMs: number; text: string }[];
+  /** v2만. anchor 쪽 가장자리가 결과 높이의 y에 온다 */
+  position?: { anchor: 'TOP' | 'MIDDLE' | 'BOTTOM'; y: number };
+}
+
+/** 이미 저장된 편집본 — 편집기는 이제 v2로만 저장한다 */
+export interface RecipeDocumentV1 extends RecipeCommon {
+  schemaVersion: 1;
+  outputs: { outputId: string; aspect: RecipeAspect; crop: RecipeRect }[];
+  /** 생략 = 자막 없음(계약6). 보낼 때는 칸을 빼고, clip 응답에는 null 로 온다 */
+  subtitles?: Omit<RecipeSubtitles, 'position'> | null;
+}
+
+export type RecipeBackground =
+  { kind: 'BLUR'; strength: number } | { kind: 'COLOR'; color: string };
+
+/** 계약6 7절 — 결과를 바탕 위에 층을 차례로 얹고 구분선을 그어 만든다. 길이는 결과 폭 비, 색은 #RRGGBB */
+export interface RecipeOutputV2 {
+  outputId: string;
+  aspect: RecipeAspect;
+  /** 생략 = 검정 */
+  background?: RecipeBackground;
+  layers: {
+    crop: RecipeRect;
+    box: RecipeRect;
+    frame?: { width: number; color: string; radius: number; shadow: boolean };
+  }[];
+  dividers?: { y: number; thickness: number; color: string }[];
+}
+
+export interface RecipeDocumentV2 extends RecipeCommon {
+  schemaVersion: 2;
+  outputs: RecipeOutputV2[];
+  /** 보낼 때는 칸을 빼고, clip 응답에는 자막이 없으면 null 로 온다 */
+  subtitles?: RecipeSubtitles | null;
 }
 
 export interface RecipeSnapshot {
@@ -355,24 +395,6 @@ export function cutFromWindow(
   const inAtMs = base + Math.max(0, startMs);
   const length = Math.min(CUT_MAX_MS, Math.max(CUT_MIN_MS, endMs - startMs));
   return { inAtMs, outAtMs: inAtMs + length };
-}
-
-/**
- * 세로 쇼츠 한 벌 + 최종 믹스(track 0) — 편집기 UI가 레이아웃·트랙을 실제로 고르기 전의 기본 조립.
- * crop 은 16:9 소스의 가운데 9:16 창(w = 9/16 ÷ 16/9). 종횡비 픽셀식(±1%)은 3층(렌더)이 판정한다.
- */
-export function defaultRecipe(
-  streamId: string,
-  cut: { inAtMs: number; outAtMs: number } | null,
-): RecipeDocument {
-  const w = 9 / 16 / (16 / 9);
-  return {
-    schemaVersion: 1,
-    streamId,
-    cut,
-    outputs: [{ outputId: 'o1', aspect: 'VERT_9_16', crop: { x: (1 - w) / 2, y: 0, w, h: 1 } }],
-    audio: { tracks: [{ trackId: 0, gain: 1.0 }] },
-  };
 }
 
 /**

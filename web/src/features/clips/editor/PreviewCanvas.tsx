@@ -23,8 +23,9 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
   const panelRef = useRef<HTMLDivElement>(null);
   const editingLayout = state.activeTool === 'layout';
 
+  // CC만 고르면 영상에 글자가 타지 않는다 — 번인 미리보기도 그리지 않는다(렌더와 같다)
   const subtitleText =
-    state.subtitle.status === 'ready'
+    state.subtitle.status === 'ready' && state.subtitleMode !== 'cc'
       ? (state.subtitle.items.find((item) => item.id === state.selectedSubtitleId)?.text ?? null)
       : null;
 
