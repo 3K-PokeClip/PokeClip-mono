@@ -3,7 +3,7 @@ import { fireEvent, screen, within } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
-import { resetLiveData } from '@/features/broadcast/livenow/liveDataStore';
+import { publishLiveData, resetLiveData } from '@/features/broadcast/livenow/liveDataStore';
 import { CARD_CREATE_MS } from '@/features/broadcast/livenow/useManualMarking';
 import { forgetLiveStreamId } from '@/features/broadcast/streamSelection';
 import { useAuthStore } from '@/stores/auth';
@@ -170,6 +170,7 @@ const server = vi.hoisted(() => ({
   relation: 'OWNER',
   hidden: new Set<number>(),
   chatPaged: false,
+  vodChatEndless: false,
 }));
 
 /** 지난 방송(2시간 반) — 수집기 1시간 창을 넘는다 */
@@ -212,6 +213,9 @@ function handle(url: string) {
   if (path.endsWith('/chat-chart')) return jsonResponse(200, CHART);
   if (path.endsWith('/broadcast-info')) return jsonResponse(200, INFO);
   if (path.endsWith('/chat-messages')) {
+    // 채팅이 아주 많은 지난 방송 — 어느 창이든 쪽이 끝나지 않는다
+    if (server.vodChatEndless && path.includes(`/${VOD_ID}/`))
+      return jsonResponse(200, { items: [], nextCursor: 'more', appliedOffsetMs: 0 });
     // 200건이 넘으면 서버는 오래된 쪽부터 주고 커서를 단다 — chatPaged면 두 쪽으로 나눠 준다
     if (server.chatPaged && u.searchParams.get('cursor') === null)
       return jsonResponse(200, { items: CHAT.slice(0, 3), nextCursor: 'p2', appliedOffsetMs: 0 });
@@ -254,6 +258,7 @@ beforeEach(() => {
   server.relation = 'OWNER';
   server.hidden = new Set();
   server.chatPaged = false;
+  server.vodChatEndless = false;
   notFound.mockClear();
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.
   vi.stubEnv('NEXT_PUBLIC_MEDIA_STUB_URL', '');
@@ -787,5 +792,39 @@ describe('LiveScreen — 지난 방송 상세', () => {
     await renderLive();
     expect(screen.getByText('지난 방송 영상')).toBeInTheDocument();
     expect(notFound).not.toHaveBeenCalled();
+  });
+
+  it('채팅이 아주 많은 지난 방송도 모든 시간대를 읽는다 — 앞 시간대가 상한을 다 쓰지 않는다', async () => {
+    // 서버가 오래된 것부터 주므로 방송 전체에 상한 하나를 두면 후반이 통째로 빈다(PR #200 codex P1)
+    server.vodChatEndless = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    const froms = new Set(
+      fetchSpy.mock.calls
+        .map(([url]) => new URL(String(url), 'http://localhost'))
+        .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
+        .map((u) => u.searchParams.get('from')),
+    );
+    for (const at of [VOD_STARTED, VOD_STARTED + 3_600_000, VOD_STARTED + 7_200_000])
+      expect(froms.has(new Date(at).toISOString())).toBe(true);
+  });
+
+  it('카드를 누르면 그 시점 앞뒤 60초를 영상과 같은 기준점(녹화 시작)으로 따로 읽는다', async () => {
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    // 녹화 첫 조각이 방송 시작보다 30초 늦게 시작했다 — 카드 시점은 그 축이다
+    const base = VOD_STARTED + 30_000;
+    act(() => publishLiveData({ timeBaseMs: base }));
+
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
+
+    const expectedFrom = new Date(base + 2_842_000 - 60_000 + 3_900).toISOString();
+    const froms = fetchSpy.mock.calls
+      .map(([url]) => new URL(String(url), 'http://localhost'))
+      .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
+      .map((u) => u.searchParams.get('from'));
+    expect(froms).toContain(expectedFrom);
   });
 });

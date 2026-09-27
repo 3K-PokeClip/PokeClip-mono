@@ -31,6 +31,11 @@ export interface LiveData {
   playheadMs: number | null;
   /** 이 방송과 나의 관계 — OWNER(내 방송) · EDITOR(위임받은 방송). 모르면 null */
   relation: string | null;
+  /**
+   * 방송 기준 0초의 절대 시각(epoch ms) — 녹화 첫 조각의 시작. 카드·플레이어의 시점(playheadMs)이 이 축이다.
+   * 녹화를 알면 플레이어가 채우고, 모르면 null(그때는 방송 시작 시각으로 대신한다 — README 「시각 기준점」)
+   */
+  timeBaseMs: number | null;
 }
 
 const INITIAL: LiveData = {
@@ -43,6 +48,7 @@ const INITIAL: LiveData = {
   endedAt: null,
   playheadMs: null,
   relation: null,
+  timeBaseMs: null,
 };
 let state: LiveData = INITIAL;
 const listeners = new Set<() => void>();

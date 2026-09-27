@@ -67,11 +67,16 @@ function LivePlayer({
   const [recorded, setRecorded] = useState<RecordedSource | null>(null);
   useEffect(() => {
     setRecorded(null);
+    publishLiveData({ timeBaseMs: null });
     if (broadcastStatus !== 'ended' || !liveStreamId) return undefined;
     let alive = true;
     void fetchRecordingSpans(liveStreamId).then((spans) => {
       const first = spans[0];
-      if (alive && first) setRecorded({ streamId: liveStreamId, ...first });
+      if (alive && first) {
+        setRecorded({ streamId: liveStreamId, ...first });
+        // 영상의 0초가 곧 카드 시점의 0초다 — 채팅도 이 기준으로 시점을 잡게 알린다
+        publishLiveData({ timeBaseMs: first.startMs });
+      }
     });
     return () => {
       alive = false;
