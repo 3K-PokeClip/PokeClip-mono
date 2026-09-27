@@ -52,6 +52,21 @@ export function EditorInboxSection() {
       }),
   });
 
+  // 못 읽은 것을 「초대 없음」으로 숨기지 않는다 — 기한 있는 초대를 놓친다(PR #200 codex).
+  // 편집자 목록과 같은 실패 카드(행 개수를 모르니 한 덩어리)에 다시 시도를 둔다
+  if (received.isError || asEditor.isError) {
+    const retrying = received.isFetching || asEditor.isFetching;
+    return (
+      <section aria-label="내가 편집자인 채널" className={styles.rows}>
+        <div className={styles.fallbackCard}>
+          <span className={styles.fallbackText}>받은 초대를 불러오지 못했어요</span>
+          <Button variant="soft" size="sm" loading={retrying} onClick={refresh}>
+            다시 시도
+          </Button>
+        </div>
+      </section>
+    );
+  }
   const invitations = received.data ?? [];
   const channels = asEditor.data ?? [];
   if (invitations.length === 0 && channels.length === 0) return null;

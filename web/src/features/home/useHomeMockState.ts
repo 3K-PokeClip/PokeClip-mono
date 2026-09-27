@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/api/client';
-import { fetchAllBroadcasts, fetchLibraryAll } from '@/api/clipEditor';
+import { fetchAllBroadcasts, fetchAllJumpCards, fetchLibraryAll } from '@/api/clipEditor';
 
 // 홈 대시보드 상태 — clip·auth 창구 배선(POK-251).
 // 목업 값은 전부 걷어냈다. 백엔드가 있는 것만 실값으로 채우고, 없는 칸은 null/빈 배열로
@@ -126,7 +126,12 @@ interface WireCard {
   createdAt: string;
 }
 interface WireInfo {
-  latest: { title: string | null; tags: string[]; category: string | null } | null;
+  latest: {
+    title: string | null;
+    tags: string[];
+    category: string | null;
+    viewers?: number | null;
+  } | null;
   series: unknown[];
 }
 interface WireMe {
@@ -213,12 +218,12 @@ async function loadHome(now: number): Promise<Loaded | null> {
   const cardsByStream = new Map<string, WireCard[]>();
   await Promise.all(
     targets.map(async (b) => {
-      const j = await getJson<{ cards: WireCard[] }>(
-        `/api/clip/broadcasts/${encodeURIComponent(b.streamId)}/jump-cards`,
-      );
+      // 끝까지 넘긴다 — 기본 50장이고 오래된 것부터 와서, 첫 장만 읽으면 카드 수가 50에서 잘리고
+      // 최근 카드가 통째로 빠진다(PR #200 codex)
+      const cards = await fetchAllJumpCards<WireCard>(b.streamId).catch(() => [] as WireCard[]);
       cardsByStream.set(
         b.streamId,
-        (j?.cards ?? []).filter((c) => !c.hidden),
+        cards.filter((c) => !c.hidden),
       );
     }),
   );
@@ -236,7 +241,11 @@ async function loadHome(now: number): Promise<Loaded | null> {
       platform: '치지직',
       startedNote: startedAt ? `${clockLabel(startedAt)} 시작` : '시작 시각 정보 없음',
       uptimeLabel: startedAt ? msToClock(now - Date.parse(startedAt)) : '--:--:--',
-      viewers: null,
+      // 수집기가 1분마다 채우는 시청자 수. 아직 없으면 null(「준비 중」)
+      viewers:
+        typeof info?.latest?.viewers === 'number'
+          ? info.latest.viewers.toLocaleString('ko-KR')
+          : null,
       detectedCards: cardsByStream.get(liveBroadcast.streamId)?.length ?? 0,
       completedClips: null,
     };

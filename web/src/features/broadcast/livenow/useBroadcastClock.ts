@@ -15,6 +15,11 @@ export interface BroadcastClock {
   uptimeSeconds: number | null;
   startedAt: number | null;
   endedAt: number | null;
+  /**
+   * 명부에서 찾지 못한 방송 번호 — 그 방송에 대한 답일 때만 값이 있다. 「꺼짐」 상태만 보면 번호가 막 바뀐
+   * 순간 앞 번호의 답을 새 번호의 답으로 읽는다(404 판단이 그 틈에 멀쩡한 방송을 없는 것으로 본다).
+   */
+  missingStreamId: string | null;
 }
 
 const POLL_MS = 30_000;
@@ -29,6 +34,7 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [endedAt, setEndedAt] = useState<number | null>(null);
   const [status, setStatus] = useState<BroadcastStatus>('unknown');
+  const [missingStreamId, setMissingStreamId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -48,10 +54,12 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
         const row = await fetchBroadcast(streamId);
         if (!alive) return;
         if (!row) {
+          setMissingStreamId(streamId);
           setStatus('offline');
           publishLiveData({ status: 'offline', startedAt: null, endedAt: null, relation: null });
           return;
         }
+        setMissingStreamId(null);
         const s = ms(row.startedAt);
         const e = row.status === 'live' ? null : ms(row.endedAt);
         const st: BroadcastStatus = row.status === 'live' ? 'live' : 'ended';
@@ -83,5 +91,5 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
     const end = endedAt ?? now;
     uptimeSeconds = Math.max(0, Math.floor((end - startedAt) / 1000));
   }
-  return { status, uptimeSeconds, startedAt, endedAt };
+  return { status, uptimeSeconds, startedAt, endedAt, missingStreamId };
 }

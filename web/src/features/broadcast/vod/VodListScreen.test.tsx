@@ -326,4 +326,49 @@ describe('VodListScreen — 서버 목록', () => {
     ).toBeGreaterThan(1);
     expect(cardCalls()).toBe(2);
   });
+
+  it('녹화 없음은 굳히지 않는다 — 방송 직후 늦게 생긴 녹화를 다음 주기에 알아본다', async () => {
+    // 한 번 없던 녹화를 영구히 기억하면 녹화가 생겨도 이 탭은 계속 준비 중이다(PR #200 codex)
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'http://pb.test');
+    vi.resetModules();
+    const { VodListScreen: Fresh } = await import('./VodListScreen');
+    const { renderWithProviders: renderFresh } = await import('@/test/testProviders');
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let recorded = false;
+    stubFetch((url) => {
+      if (url.startsWith('http://pb.test/list'))
+        return jsonResponse(
+          200,
+          recorded ? [{ start: '2026-09-20T10:00:00Z', duration: 3600 }] : [],
+        );
+      if (url.startsWith('/api/clip/broadcasts?'))
+        return jsonResponse(200, {
+          broadcasts: [
+            {
+              streamId: 'rec-stream',
+              status: 'ended',
+              relation: 'OWNER',
+              startedAt: '2026-09-20T10:00:00Z',
+              endedAt: '2026-09-20T11:00:00Z',
+              vodExpiresAt: null,
+            },
+          ],
+          nextCursor: null,
+        });
+      return jsonResponse(200, { cards: [], nextCursor: null });
+    });
+
+    renderFresh(<Fresh />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(screen.queryByRole('link', { name: /rec-stream/ })).toBeNull();
+
+    recorded = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(screen.getByRole('link', { name: /rec-stream/ })).toBeInTheDocument();
+    vi.unstubAllEnvs();
+  });
 });

@@ -144,6 +144,18 @@ export function chartWindows(from: number, to: number): [number, number][] {
   return windows;
 }
 
+/**
+ * 카드가 가리키는 방송 시점의 절대 시각. 카드를 만든 시각(createdAt)은 감지가 늦거나 다시 처리되면 급증보다
+ * 뒤에 찍혀 마커가 엇나간다(PR #200 codex). 방송 시작 시각을 모르면 만든 시각으로 대신한다.
+ * 기준점은 방송 시작 편지 시각이라 녹화 첫 조각과 수십 초 어긋날 수 있다(README 「시각 기준점」).
+ */
+function cardAt(
+  c: { streamTimestampMs: number; createdAt: string },
+  startedAt: number | null,
+): number {
+  return startedAt !== null ? startedAt + c.streamTimestampMs : Date.parse(c.createdAt);
+}
+
 /** 응답을 JSON으로 받는다. 실패는 null — 폴링은 다음 주기에 다시 한다 */
 async function getJsonOrNull<T>(path: string): Promise<T | null> {
   try {
@@ -472,9 +484,9 @@ export function useLiveMockState(): LiveMockState {
     publishLiveData({
       cardTimes: Object.values(cards)
         .filter((c) => !c.hidden)
-        .map((c) => Date.parse(c.createdAt)),
+        .map((c) => cardAt(c, live.startedAt)),
     });
-  }, [cards]);
+  }, [cards, live.startedAt]);
 
   const highlights = useMemo(() => {
     const list = Object.values(cards)
@@ -516,7 +528,7 @@ export function useLiveMockState(): LiveMockState {
     const markers = Object.values(cards)
       .filter((c) => !c.hidden)
       .map((c) => {
-        const t = Date.parse(c.createdAt);
+        const t = cardAt(c, live.startedAt);
         if (t < t0 || t > t1) return null;
         const i = Math.min(n - 1, Math.floor(((t - t0) / (t1 - t0)) * n));
         const bk = b[i];
@@ -533,7 +545,7 @@ export function useLiveMockState(): LiveMockState {
       markers,
       timeLabels: [lab(t0), lab(t0 + (t1 - t0) / 3), lab(t0 + ((t1 - t0) * 2) / 3), '지금'],
     };
-  }, [chart, cards]);
+  }, [chart, cards, live.startedAt]);
 
   const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
   const { data: me } = useMe();

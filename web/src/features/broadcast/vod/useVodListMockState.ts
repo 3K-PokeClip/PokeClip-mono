@@ -152,20 +152,31 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         // 방송마다 카드 수·녹화 여부는 한 번만 재서 기억한다 — 끝난 방송은 바뀌지 않는데, 주기마다 전체 이력에
         // 카드 목록을 부르면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex)
         const cache = rowCache.current;
+        const checkRecording = (b: WireBroadcast) =>
+          b.status === 'ended' && playbackConfigured() && cache.get(b.streamId)?.recorded !== true;
         await Promise.all(
           all
-            .filter((b) => !cache.has(b.streamId))
+            .filter((b) => !cache.has(b.streamId) || checkRecording(b))
             .map(async (b) => {
-              const [cards, spans] = await Promise.all([
-                fetchAllJumpCards(b.streamId).catch(() => null),
+              const known = cache.get(b.streamId);
+              const [cardCount, spans] = await Promise.all([
+                known !== undefined
+                  ? Promise.resolve(known.cardCount)
+                  : fetchAllJumpCards(b.streamId).then(
+                      (cards) => cards.length,
+                      () => null,
+                    ),
                 // 녹화 재생 서버가 있으면 그 방송의 녹화가 실제로 있는지 본다 — 없으면 열어도 「영상 신호 없음」뿐이다
-                b.status === 'ended' && playbackConfigured()
-                  ? fetchRecordingSpans(b.streamId)
-                  : Promise.resolve([]),
+                checkRecording(b) ? fetchRecordingSpans(b.streamId) : Promise.resolve([]),
               ]);
-              // 카드 수를 못 읽었으면 기억하지 않는다 — 다음 주기에 다시 잰다
-              if (cards !== null)
-                cache.set(b.streamId, { cardCount: cards.length, recorded: spans.length > 0 });
+              // 카드 수를 못 읽었으면 기억하지 않는다 — 다음 주기에 다시 잰다.
+              // 「녹화 있음」만 굳힌다: 방송 직후엔 녹화가 늦게 생기고 재생 서버가 잠깐 실패해도 빈 목록이 온다.
+              // 「없음」을 굳히면 녹화가 생겨도 이 탭은 영영 준비 중으로 남는다(PR #200 codex)
+              if (cardCount !== null)
+                cache.set(b.streamId, {
+                  cardCount,
+                  recorded: known?.recorded === true || spans.length > 0,
+                });
             }),
         );
         const rows: VodBroadcast[] = all.map((b) => ({

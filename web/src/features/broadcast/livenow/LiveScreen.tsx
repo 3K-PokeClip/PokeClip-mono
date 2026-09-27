@@ -11,7 +11,9 @@ import { HighlightCardPanel } from './HighlightCardPanel';
 import { LiveOfflineScreen } from './LiveOfflineScreen';
 import { LiveStatsPanel } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
+import { notFound } from 'next/navigation';
 import { requestPlaybackAccess } from '@/api/clipEditor';
+import { vodStreamIdFromPath } from '@/features/broadcast/streamSelection';
 import { fetchRecordingSpans } from '@/api/mediaPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
 import { publishLiveData, useLiveData } from './liveDataStore';
@@ -86,7 +88,9 @@ function LivePlayer({
       channelName={stream.channelName}
       viewersNote={viewersNote}
       broadcastStatus={broadcastStatus}
-      src={src}
+      // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
+      // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다
+      src={broadcastStatus === 'live' ? src : null}
       recorded={recorded}
       embed
       simulationOptions={{ initialUptimeSeconds: uptimeSeconds ?? 0 }}
@@ -112,6 +116,14 @@ function LiveDashboard() {
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const { streamId, info } = useLiveData();
   const clock = useBroadcastClock(streamId);
+  // 지난 방송 상세 주소로 들어왔는데 그 방송이 명부에 없으면(없는 번호·권한 회수) 404 화면으로 보낸다 —
+  // 빈 대시보드를 보여 주지 않는다(PR #200 codex, 404 계약: README 「404 계약」)
+  if (
+    clock.missingStreamId !== null &&
+    clock.missingStreamId === streamId &&
+    vodStreamIdFromPath() === streamId
+  )
+    notFound();
   const playerRef = useRef<GlassPlayerController>(null);
 
   // 표기는 매초 다시 그려지고(clock이 상태), 「지금 몇 시인가」를 묻는 마킹은 ref로 읽는다 —

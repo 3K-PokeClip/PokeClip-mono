@@ -538,9 +538,11 @@ describe('AccountSettingsScreen — 탈퇴', () => {
     // 지워지는 것 — 복구할 수 없음이 문장에 있다
     expect(
       dialog.getByText(
-        /보관함의 클립·하이라이트 카드·자동 처리 설정이 모두 삭제되며 복구할 수 없습니다/,
+        // 실제 탈퇴는 clip 기록을 지우지 않는다 — 「모두 삭제」라고 말하지 않는다(PR #200 codex P1)
+        /클립·하이라이트 카드 기록은 탈퇴와 함께 지워지지 않고 남습니다/,
       ),
     ).toBeInTheDocument();
+    expect(dialog.queryByText(/모두 삭제/)).toBeNull();
     // 안 지워지는 것
     expect(
       dialog.getByText(/이미 게시된 영상은 삭제되지 않으며, 해당 채널에서 직접 관리해야 합니다/),

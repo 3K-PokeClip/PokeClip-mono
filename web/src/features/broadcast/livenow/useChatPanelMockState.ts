@@ -57,6 +57,9 @@ interface WirePage {
 
 const POLL_MS = 5000;
 
+/** 라이브 폴링 한 번에 따라가는 쪽 수 상한(쪽당 200건) — 화면은 최근 300건만 남긴다 */
+const LIVE_POLL_PAGE_BUDGET = 10;
+
 /** 지난 방송 채팅을 읽을 때 쪽 수 상한(쪽당 200건) — 긴 방송이 끝없이 불러오지 않게 */
 const VOD_CHAT_PAGE_BUDGET = 30; // SSE 중계가 주 경로, 폴링은 메우기·폴백
 
@@ -211,17 +214,31 @@ export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
         const toMs = Date.now();
         // 화면 축으로 묻는다(서버가 +보정). 처음엔 10분 전부터, 그 뒤엔 마지막으로 본 시각 −10초부터.
         const fromMs = lastTime.current > 0 ? lastTime.current - 10_000 : toMs - 10 * 60_000;
-        const qs = new URLSearchParams({
-          from: new Date(fromMs).toISOString(),
-          to: new Date(toMs).toISOString(),
-          limit: '200',
-        });
-        const r = await apiFetch(
-          `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-messages?${qs}`,
-        );
-        if (stopped) return;
-        const page = (await r.json()) as WirePage;
-        if (page.items.length === 0) return;
+        // 한 번에 200건을 넘으면 서버는 오래된 쪽부터 주고 다음 커서를 단다 — 커서를 끝까지 따라가야
+        // 최신 채팅까지 닿는다. 첫 장만 읽으면 창이 실시간을 영영 못 따라잡는다(PR #200 codex P1)
+        const items: WireItem[] = [];
+        let appliedOffsetMs = 0;
+        let cursor: string | null = null;
+        let pages = 0;
+        do {
+          const qs = new URLSearchParams({
+            from: new Date(fromMs).toISOString(),
+            to: new Date(toMs).toISOString(),
+            limit: '200',
+          });
+          if (cursor) qs.set('cursor', cursor);
+          const r = await apiFetch(
+            `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-messages?${qs}`,
+          );
+          if (stopped) return;
+          const pg = (await r.json()) as WirePage;
+          items.push(...pg.items);
+          appliedOffsetMs = pg.appliedOffsetMs;
+          cursor = pg.nextCursor;
+          pages += 1;
+        } while (cursor !== null && pages < LIVE_POLL_PAGE_BUDGET);
+        if (items.length === 0) return;
+        const page = { items, appliedOffsetMs };
         setRaw((prev) => {
           const next = { ...prev };
           for (const it of page.items) {

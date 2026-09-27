@@ -207,6 +207,51 @@ describe('HomeScreen', () => {
     vi.useRealTimers();
   });
 
+  it('라이브 띠는 카드를 둘째 쪽까지 세고, 수집된 시청자 수를 보인다', async () => {
+    // 카드 목록은 50장씩 오래된 것부터 온다 — 첫 쪽만 세면 50에서 잘린다(PR #200 codex)
+    const liveRow = {
+      streamId: 'live-1',
+      status: 'live',
+      relation: 'OWNER',
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      endedAt: null,
+      vodExpiresAt: null,
+    };
+    const cardOf = (id: number) => ({
+      id,
+      source: 'chat-surge',
+      streamTimestampMs: id * 1000,
+      score: 80,
+      hidden: false,
+      createdAt: new Date().toISOString(),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        const ok = (body: unknown) =>
+          Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+        if (url.includes('state=live')) return ok({ broadcasts: [liveRow], nextCursor: null });
+        if (url.includes('/live-1/jump-cards'))
+          return ok(
+            url.includes('cursor=c2')
+              ? { cards: [cardOf(2), cardOf(3)], nextCursor: null }
+              : { cards: [cardOf(1)], nextCursor: 'c2' },
+          );
+        if (url.includes('/live-1/broadcast-info'))
+          return ok({
+            latest: { title: '방송', tags: [], category: null, viewers: 1842 },
+            series: [],
+          });
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+
+    expect(await screen.findByText('시청자 1,842')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+  });
+
   it('접근성 위반이 없다', async () => {
     const { container } = render(<HomeScreen />);
     // axe 실행 중 Next Link의 비동기 상태 갱신이 발화한다 — act로 감싸 경고 없이 흡수

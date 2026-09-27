@@ -17,8 +17,10 @@ const nav = vi.hoisted(() => ({ search: '' }));
 
 // useSearchParams 대체 — ?stream=(useMediaSource)은 비워 두고 아래 env 고정과 함께 소스를 null로 만들어
 // 플레이어가 「영상 신호 없음」 자리로 결정적으로 선다. ?mock=(오프라인 목업 토글)은 케이스가 nav.search로 정한다.
+const notFound = vi.hoisted(() => vi.fn());
 vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
+  notFound,
 }));
 
 const STREAM_ID = 'live-1';
@@ -53,8 +55,9 @@ function card(id: number, over: Partial<Card>): Card {
     claimedBy: null,
     hidden: false,
     eventSeq: id,
-    // 앞 넷은 최근 10분 차트 안, 뒤 넷은 그보다 오래됐다
-    createdAt: new Date(NOW - (id <= 4 ? id * 60_000 : 30 * 60_000 + id * 60_000)).toISOString(),
+    // 만든 시각은 전부 차트(최근 10분) 밖이다 — 마커는 만든 시각이 아니라 카드가 가리키는 방송 시점에
+    // 찍혀야 하므로(PR #200 codex), 만든 시각 기준이면 「하이라이트 4곳」 시험이 깨진다
+    createdAt: new Date(NOW - 30 * 60_000 - id * 60_000).toISOString(),
     ...over,
   };
 }
@@ -62,9 +65,16 @@ function card(id: number, over: Partial<Card>): Card {
 // 자동 6 · 수동 2. eventSeq가 큰 것이 앞에 선다.
 const CARDS: Card[] = [
   card(8, { score: 97, streamTimestampMs: 5_000_000, eventSeq: 80 }),
-  card(7, { source: 'hotkey', score: null, evidence: null, eventSeq: 70 }),
-  card(6, { claimedBy: '5', eventSeq: 60 }),
-  card(5, { claimedBy: ME, eventSeq: 50 }),
+  // 차트(최근 10분)에 마커가 서는 넷: 8·7·6·5 — 마커는 카드가 가리키는 방송 시점에 찍힌다
+  card(7, {
+    source: 'hotkey',
+    score: null,
+    evidence: null,
+    eventSeq: 70,
+    streamTimestampMs: 4_900_000,
+  }),
+  card(6, { claimedBy: '5', eventSeq: 60, streamTimestampMs: 4_800_000 }),
+  card(5, { claimedBy: ME, eventSeq: 50, streamTimestampMs: 4_700_000 }),
   card(4, { streamTimestampMs: 2_842_000, eventSeq: 40 }),
   card(3, { source: 'hotkey', score: null, evidence: null, eventSeq: 30 }),
   card(2, { eventSeq: 20 }),
@@ -159,6 +169,7 @@ const server = vi.hoisted(() => ({
   failLive: false,
   relation: 'OWNER',
   hidden: new Set<number>(),
+  chatPaged: false,
 }));
 
 /** 지난 방송(2시간 반) — 수집기 1시간 창을 넘는다 */
@@ -200,8 +211,14 @@ function handle(url: string) {
   }
   if (path.endsWith('/chat-chart')) return jsonResponse(200, CHART);
   if (path.endsWith('/broadcast-info')) return jsonResponse(200, INFO);
-  if (path.endsWith('/chat-messages'))
+  if (path.endsWith('/chat-messages')) {
+    // 200건이 넘으면 서버는 오래된 쪽부터 주고 커서를 단다 — chatPaged면 두 쪽으로 나눠 준다
+    if (server.chatPaged && u.searchParams.get('cursor') === null)
+      return jsonResponse(200, { items: CHAT.slice(0, 3), nextCursor: 'p2', appliedOffsetMs: 0 });
+    if (server.chatPaged)
+      return jsonResponse(200, { items: CHAT.slice(3), nextCursor: null, appliedOffsetMs: 0 });
     return jsonResponse(200, { items: CHAT, nextCursor: null, appliedOffsetMs: 0 });
+  }
   // 통로는 용량 초과로 답한다 — 폴링이 카드를 채운다(통로 자체는 useLiveMockState의 몫)
   if (path.endsWith('/events')) return jsonResponse(503, { error: 'sse_capacity' });
   if (path.endsWith('/playback-access')) return jsonResponse(503, { error: 'signing_unavailable' });
@@ -236,6 +253,8 @@ beforeEach(() => {
   server.failLive = false;
   server.relation = 'OWNER';
   server.hidden = new Set();
+  server.chatPaged = false;
+  notFound.mockClear();
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.
   vi.stubEnv('NEXT_PUBLIC_MEDIA_STUB_URL', '');
   vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', '');
@@ -650,6 +669,13 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     expect(list).toHaveAttribute('tabindex', '0');
   });
 
+  it('채팅이 한 쪽을 넘으면 커서를 따라가 최신 채팅까지 읽는다', async () => {
+    // 첫 쪽만 읽으면 폴링 창이 실시간을 영영 못 따라잡는다(PR #200 codex P1)
+    server.chatPaged = true;
+    await renderLive();
+    expect(screen.getByText('방금 그거 다시 보여주세요')).toBeInTheDocument();
+  });
+
   it('키워드 설정은 라우트가 설 때까지 잠겨 있다', async () => {
     await renderLive();
     expect(screen.getByRole('button', { name: '키워드 설정' })).toBeDisabled();
@@ -741,5 +767,25 @@ describe('LiveScreen — 긴 지난 방송', () => {
     expect(
       info.some((u) => u.searchParams.get('since') === new Date(VOD_STARTED).toISOString()),
     ).toBe(true);
+  });
+});
+
+describe('LiveScreen — 지난 방송 상세', () => {
+  afterEach(() => {
+    window.history.pushState({}, '', '/');
+  });
+
+  it('명부에 없는 방송이면 404 화면으로 보낸다 — 빈 대시보드를 보이지 않는다', async () => {
+    window.history.pushState({}, '', '/broadcast/vod/nope');
+    await renderLive();
+    expect(notFound).toHaveBeenCalled();
+  });
+
+  it('끝난 방송에는 닫힌 라이브 영상 주소를 넘기지 않는다 — 녹화가 없으면 지난 방송 자리를 그린다', async () => {
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://live.test');
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(screen.getByText('지난 방송 영상')).toBeInTheDocument();
+    expect(notFound).not.toHaveBeenCalled();
   });
 });
