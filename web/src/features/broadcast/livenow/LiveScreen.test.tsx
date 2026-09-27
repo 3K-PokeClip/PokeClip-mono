@@ -171,6 +171,8 @@ const server = vi.hoisted(() => ({
   hidden: new Set<number>(),
   chatPaged: false,
   vodChatEndless: false,
+  /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
+  playback: 'off' as 'off' | 'grant' | 'fail',
 }));
 
 /** 지난 방송(2시간 반) — 수집기 1시간 창을 넘는다 */
@@ -225,7 +227,15 @@ function handle(url: string) {
   }
   // 통로는 용량 초과로 답한다 — 폴링이 카드를 채운다(통로 자체는 useLiveMockState의 몫)
   if (path.endsWith('/events')) return jsonResponse(503, { error: 'sse_capacity' });
-  if (path.endsWith('/playback-access')) return jsonResponse(503, { error: 'signing_unavailable' });
+  if (path.endsWith('/playback-access')) {
+    if (server.playback === 'grant')
+      return jsonResponse(200, {
+        streamId: STREAM_ID,
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      });
+    if (server.playback === 'fail') return jsonResponse(500, { error: 'boom' });
+    return jsonResponse(503, { error: 'signing_unavailable' });
+  }
   if (path === '/api/chzzk-link')
     return jsonResponse(200, { linked: true, channelName: '게임하는너구리', status: 'ACTIVE' });
   if (path === '/api/auth/me')
@@ -259,6 +269,7 @@ beforeEach(() => {
   server.hidden = new Set();
   server.chatPaged = false;
   server.vodChatEndless = false;
+  server.playback = 'off';
   notFound.mockClear();
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.
   vi.stubEnv('NEXT_PUBLIC_MEDIA_STUB_URL', '');
@@ -385,6 +396,45 @@ describe('LiveScreen — 실시간 통로', () => {
     expect(events).toHaveLength(1);
     const charts = fetchSpy.mock.calls.filter(([url]) => String(url).includes('/chat-chart'));
     expect(charts.length).toBeGreaterThan(1);
+  });
+});
+
+describe('LiveScreen — 영상 출입증', () => {
+  const accessCalls = () =>
+    fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/playback-access')).length;
+
+  it('출입증은 만료 5분 전에 다시 받는다 — 한 번만 받으면 한 시간 뒤 재생이 멈춘다', async () => {
+    // 쿠키가 끝나면 새 영상 조각이 403이 된다(PR #200 codex P1)
+    server.playback = 'grant';
+    await renderLive();
+    expect(accessCalls()).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+    });
+    expect(accessCalls()).toBe(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+    });
+    expect(accessCalls()).toBe(2);
+  });
+
+  it('출입증을 못 받으면 1분 뒤 다시 받는다', async () => {
+    server.playback = 'fail';
+    await renderLive();
+    expect(accessCalls()).toBe(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(accessCalls()).toBe(2);
+  });
+
+  it('서명 재료가 없는 서버(503)에는 다시 묻지 않는다 — 출입증이 필요 없는 곳이다', async () => {
+    await renderLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+    });
+    expect(accessCalls()).toBe(1);
   });
 });
 

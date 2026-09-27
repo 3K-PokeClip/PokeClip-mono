@@ -379,14 +379,30 @@ export function defaultRecipe(
  * 영상 출입증(POK-122) — CloudFront 서명 쿠키를 받아 둔다. 로컬 media는 쿠키를 안 보지만 CDN 뒤에서는 이것이 없으면
  * 조각을 못 받는다. 서명 재료가 없는 서버는 503이고 그때는 그냥 넘어간다(로컬·dev).
  */
-export async function requestPlaybackAccess(streamId: string): Promise<boolean> {
+/** 출입증 결과 — 받았으면 만료 시각(모르면 null), 서명 재료가 없는 서버(503)면 필요 없음, 그 밖은 실패 */
+export type PlaybackAccessResult =
+  { kind: 'granted'; expiresAtMs: number | null } | { kind: 'not_needed' } | { kind: 'failed' };
+
+export async function requestPlaybackAccess(streamId: string): Promise<PlaybackAccessResult> {
   try {
-    await apiFetch(`/api/clip/broadcasts/${encodeURIComponent(streamId)}/playback-access`, {
-      method: 'POST',
-      credentials: 'include',
-    });
-    return true;
-  } catch {
-    return false;
+    const res = await apiFetch(
+      `/api/clip/broadcasts/${encodeURIComponent(streamId)}/playback-access`,
+      {
+        method: 'POST',
+        credentials: 'include',
+      },
+    );
+    let expiresAtMs: number | null = null;
+    try {
+      const body = (await res.json()) as { expiresAt?: unknown };
+      if (typeof body.expiresAt === 'string' && Number.isFinite(Date.parse(body.expiresAt)))
+        expiresAtMs = Date.parse(body.expiresAt);
+    } catch {
+      /* 본문이 없으면 만료를 모른다 — 부른 쪽이 기본 간격으로 다시 받는다 */
+    }
+    return { kind: 'granted', expiresAtMs };
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 503) return { kind: 'not_needed' };
+    return { kind: 'failed' };
   }
 }

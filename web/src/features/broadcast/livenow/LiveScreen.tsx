@@ -42,6 +42,13 @@ import { useManualMarking } from './useManualMarking';
 // (dock) 서브트리를 통째로 null로 만들기 때문이다(.next/server/app/broadcast/livenow.html로 확인).
 // 경계를 좁힌 이득은 AuthGuard가 서버에서도 그릴 수 있게 되는 시점에 생긴다.
 // 이 주석을 LCP·SEO 근거로 쓰지 말 것.
+/** 출입증을 만료 몇 분 전에 다시 받을지 */
+const PLAYBACK_ACCESS_MARGIN_MS = 5 * 60_000;
+/** 출입증 실패 뒤 다시 받기까지 */
+const PLAYBACK_ACCESS_RETRY_MS = 60_000;
+/** 만료 시각을 모를 때 다시 받는 간격 — 운영 쿠키 수명 60분보다 짧게 */
+const PLAYBACK_ACCESS_DEFAULT_RENEW_MS = 50 * 60_000;
+
 function LivePlayer({
   stream,
   viewersNote,
@@ -82,9 +89,33 @@ function LivePlayer({
       alive = false;
     };
   }, [broadcastStatus, liveStreamId]);
-  // 영상 출입증(POK-122) — 방송을 열 때 한 번 받아 둔다. 실패해도 재생은 시도한다(로컬 media는 쿠키를 안 본다).
+  // 영상 출입증(POK-122) — 방송을 열 때 받고, 만료 5분 전에 다시 받는다. 쿠키 수명(운영 60분)이 지나면 새 조각이
+  // 403이 되어 재생이 멈춘다(PR #200 codex P1). 실패하면 1분 뒤 다시 받는다. 서명 재료가 없는 서버(503)는
+  // 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다. 실패해도 재생은 시도한다(로컬 media는 쿠키를 안 본다).
   useEffect(() => {
-    if (liveStreamId) void requestPlaybackAccess(liveStreamId);
+    if (!liveStreamId) return undefined;
+    let alive = true;
+    let timer: number | undefined;
+    const ask = () => {
+      void requestPlaybackAccess(liveStreamId).then((result) => {
+        if (!alive || result.kind === 'not_needed') return;
+        const wait =
+          result.kind === 'failed'
+            ? PLAYBACK_ACCESS_RETRY_MS
+            : result.expiresAtMs === null
+              ? PLAYBACK_ACCESS_DEFAULT_RENEW_MS
+              : Math.max(
+                  PLAYBACK_ACCESS_RETRY_MS,
+                  result.expiresAtMs - Date.now() - PLAYBACK_ACCESS_MARGIN_MS,
+                );
+        timer = window.setTimeout(ask, wait);
+      });
+    };
+    ask();
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
   }, [liveStreamId]);
   return (
     <GlassPlayer
