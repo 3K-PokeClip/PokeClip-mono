@@ -231,6 +231,60 @@ describe('레시피 → 화면', () => {
     ).toBe('split');
   });
 
+  it('바탕을 뺀 중앙 문서는 검정 바탕으로 연다', () => {
+    const h = (9 / 16) * (9 / 16);
+    const look = lookFromDocument({
+      schemaVersion: 2,
+      streamId: 's',
+      cut: null,
+      outputs: [
+        {
+          outputId: 'o1',
+          aspect: 'VERT_9_16',
+          layers: [{ crop: { x: 0, y: 0, w: 1, h: 1 }, box: { x: 0, y: (1 - h) / 2, w: 1, h } }],
+        },
+      ],
+      audio: { tracks: [] },
+    });
+    expect(look).toMatchObject({
+      layout: 'center',
+      centerFill: { kind: 'color', color: '#000000' },
+    });
+  });
+
+  it('편집기가 못 그리는 작은 화면 테두리(모서리·그림자·굵기)면 크롭으로 열지 않는다', () => {
+    const doc = (frame: {
+      width: number;
+      color: string;
+      radius: number;
+      shadow: boolean;
+    }): RecipeDocument => ({
+      schemaVersion: 2,
+      streamId: 's',
+      cut: null,
+      outputs: [
+        {
+          outputId: 'o1',
+          aspect: 'VERT_9_16',
+          layers: [
+            { crop: { x: 0, y: 0, w: 0.3, h: 1 }, box: { x: 0, y: 0, w: 1, h: 1 } },
+            {
+              crop: { x: 0, y: 0, w: 0.3, h: 0.3 },
+              box: { x: 0.18, y: 0.5, w: 0.64, h: 0.27 },
+              frame,
+            },
+          ],
+        },
+      ],
+      audio: { tracks: [] },
+    });
+    const ok = { width: 2 / 240, color: '#ffffff', radius: 4 / 240, shadow: true };
+    expect(lookFromDocument(doc(ok)).layout).toBe('crop');
+    expect(lookFromDocument(doc({ ...ok, radius: 0 })).layout).toBeUndefined();
+    expect(lookFromDocument(doc({ ...ok, shadow: false })).layout).toBeUndefined();
+    expect(lookFromDocument(doc({ ...ok, width: 5 / 240 })).layout).toBeUndefined();
+  });
+
   it('편집기가 만들지 않는 모양이면 모양 칸을 비운다(편집기 기본값으로 연다)', () => {
     const look = lookFromDocument({
       schemaVersion: 2,

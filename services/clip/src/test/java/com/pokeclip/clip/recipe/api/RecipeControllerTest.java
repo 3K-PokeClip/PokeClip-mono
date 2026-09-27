@@ -467,6 +467,9 @@ class RecipeControllerTest extends IntegrationTestSupport {
                 위반("테두리 그림자 없음", r -> 층(r, 1).withObject("frame").remove("shadow"), "outputs"),
                 위반("흐림 세기 101", r -> 출력(r, 0).withObject("background").put("strength", 101), "outputs"),
                 위반("흐림에 색", r -> 출력(r, 0).withObject("background").put("color", "#000000"), "outputs"),
+                // 종류에 없는 칸은 null이어도 있는 것이다 — 렌더는 이름만으로 거부한다(PR #201 codex 3판)
+                위반("흐림에 색 null", r -> 출력(r, 0).withObject("background").putNull("color"), "outputs"),
+                위반("단색에 세기 null", r -> 출력(r, 0).putObject("background").put("kind", "COLOR").put("color", "#000000").putNull("strength"), "outputs"),
                 위반("단색에 색 없음", r -> 출력(r, 0).putObject("background").put("kind", "COLOR"), "outputs"),
                 위반("바탕 모름", r -> 출력(r, 0).withObject("background").put("kind", "GRADIENT"), "outputs"),
                 위반("구분선 y=1", r -> 구분선(r).put("y", 1.0), "outputs"),

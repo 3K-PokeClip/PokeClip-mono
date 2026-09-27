@@ -120,9 +120,11 @@ public class RecipeParser {
                                     ? new RecipeDocument.Background(null, null, null) : o.background(),
                             present(node, "layers") && o.layers() == null ? List.of() : o.layers(),
                             present(node, "dividers") && o.dividers() == null ? List.of() : o.dividers());
-                } else if (present(node, "crop") && o.crop() == null) {
-                    o = new RecipeDocument.Output(o.outputId(), o.aspect(), new RecipeDocument.Crop(null, null, null, null),
-                            o.background(), o.layers(), o.dividers());
+                } else {
+                    RecipeDocument.Crop crop = present(node, "crop") && o.crop() == null
+                            ? new RecipeDocument.Crop(null, null, null, null) : o.crop();
+                    o = new RecipeDocument.Output(o.outputId(), o.aspect(), crop,
+                            markBackground(node.get("background"), o.background()), o.layers(), o.dividers());
                 }
             }
             outputs.add(o);
@@ -136,6 +138,22 @@ public class RecipeParser {
         }
         return new RecipeDocument(document.schemaVersion(), document.streamId(), document.cut(), outputs,
                 document.audio(), subtitles);
+    }
+
+    /**
+     * 바탕도 종류마다 받는 칸이 다르다(BLUR = 세기, COLOR = 색). 다른 종류의 칸이 null로 와도 있음으로 표시한다 — 흐림에
+     * {@code "color": null}이 오면 검증기에는 없는 칸과 같아 지나가는데 렌더는 이름만으로 거부한다(PR #201 codex 3판).
+     * 표시 값(빈 색·세기 -1)은 검증기가 「그 종류에 없어야 할 칸이 있다」로 거절한다.
+     */
+    private static RecipeDocument.Background markBackground(JsonNode node, RecipeDocument.Background background) {
+        if (background == null || node == null || !node.isObject()) {
+            return background;
+        }
+        String color = present(node, "color") && background.color() == null ? "" : background.color();
+        // Integer.valueOf: int와 섞으면 삼항이 언박싱해 세기가 null일 때 NPE다
+        Integer strength = present(node, "strength") && background.strength() == null ? Integer.valueOf(-1)
+                : background.strength();
+        return new RecipeDocument.Background(background.kind(), strength, color);
     }
 
     private static boolean present(JsonNode node, String name) {

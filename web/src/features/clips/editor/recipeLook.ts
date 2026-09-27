@@ -16,6 +16,7 @@ import type {
 import { cropRectOf, maxCropSize, minZoomOf, type CropRect, type CropWindow } from './cropMath';
 import {
   DEFAULT_PIP_BORDER,
+  PIP_BORDER_WIDTHS,
   SOURCE_SIZE,
   defaultRegionWindow,
   layoutRegions,
@@ -323,9 +324,10 @@ export function lookFromDocument(doc: RecipeDocument): Partial<EditorLook> {
       ...common,
       layout: 'center',
       centerFill:
-        bg?.kind === 'COLOR'
-          ? { kind: 'color', color: bg.color }
-          : { kind: 'blur', strength: bg?.kind === 'BLUR' ? bg.strength : 0 },
+        // 바탕을 뺀 문서는 검정이다(계약6 7절) — 흐림 0으로 읽으면 원본이 비쳐 보이고 다시 저장하면 영상이 바뀐다
+        bg?.kind === 'BLUR'
+          ? { kind: 'blur', strength: bg.strength }
+          : { kind: 'color', color: bg?.kind === 'COLOR' ? bg.color : '#000000' },
       crops: cropsFor('center', 50, DEFAULT_PIP_FOR_READ, [a.crop]),
     };
   }
@@ -352,7 +354,21 @@ export function lookFromDocument(doc: RecipeDocument): Partial<EditorLook> {
       crops: cropsFor('split', splitRatio, DEFAULT_PIP_FOR_READ, [a.crop, b.crop]),
     };
   }
-  if (b !== undefined && output.layers.length === 2 && isFull(a.box)) {
+  // 크롭: 편집기가 그리는 작은 화면일 때만 — 자리가 허용 범위 안이고, 테두리가 있으면 굵기·모서리·그림자가 편집기 값이어야
+  // 한다. 아니면 편집기가 그 모양을 못 그려 미리보기가 다르고, 다시 저장하면 편집기 값으로 덮어쓴다
+  const pipFrameOk = (frame: RecipeOutputV2['layers'][number]['frame']) =>
+    frame === undefined ||
+    (PIP_BORDER_WIDTHS.some((px) => near(frame.width, px / UI_REFERENCE_WIDTH)) &&
+      near(frame.radius, PIP_RADIUS_PX / UI_REFERENCE_WIDTH) &&
+      frame.shadow);
+  if (
+    b !== undefined &&
+    output.layers.length === 2 &&
+    isFull(a.box) &&
+    a.frame === undefined &&
+    pipFrameOk(b.frame) &&
+    sameRecipe(pipRectOf(b.box), b.box)
+  ) {
     const pip = { ...b.box };
     return {
       ...common,
