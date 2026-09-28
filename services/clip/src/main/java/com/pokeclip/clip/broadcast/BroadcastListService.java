@@ -10,8 +10,10 @@ import com.pokeclip.clip.paging.ListLimit;
 import com.pokeclip.clip.segment.TimelineOriginReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -132,7 +134,7 @@ public class BroadcastListService {
                 ? CursorCodec.encode(CursorCodec.Kind.BROADCAST, page.get(page.size() - 1).getId())
                 : null;
         // 시각 기준점은 잘라 낸 한 장만 잰다(POK-255) — 「다음 장이 있나」를 보려고 더 받은 한 줄은 안 나간다
-        return new BroadcastPage(page, relations, next, origins.originsOf(page));
+        return new BroadcastPage(page, relations, next, originsOrEmpty(page));
     }
 
     /**
@@ -166,6 +168,19 @@ public class BroadcastListService {
         } catch (NumberFormatException e) {
             log.error("clip.list.identity_not_numeric reason=subject_not_numeric");
             throw new AccessErrors.NotViewableException("subject_not_numeric");
+        }
+    }
+
+    /**
+     * 기준점은 부가 칸이다. 못 재면(장부 표가 없거나 옛 모양) 칸만 비우고 목록은 낸다. 여기서 던지면 홈·라이브·다시보기가
+     * 전부 500이 된다(로컬 리뷰 1라운드). 비면 화면은 방송 시작 시각으로 대신한다.
+     */
+    private Map<String, Instant> originsOrEmpty(List<Broadcast> page) {
+        try {
+            return origins.originsOf(page);
+        } catch (DataAccessException e) {
+            log.warn("broadcast.timeline_origin_failed rows={} reason={}", page.size(), e.getClass().getSimpleName());
+            return Map.of();
         }
     }
 }

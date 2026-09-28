@@ -882,8 +882,25 @@ describe('LiveScreen — 지난 방송 상세', () => {
     expect(froms).toContain(expectedFrom);
   });
 
-  it('서버가 준 시각 기준점이 녹화 재생 서버·방송 시작보다 앞선다(POK-255)', async () => {
-    // 서버 기준점은 렌더가 자르는 축(조각 장부)이다 — 녹화 재생 서버(30초)와 달라도 서버 값(32초)을 쓴다
+  it('녹화가 없으면 서버가 준 시각 기준점으로 읽는다 — 방송 시작 시각이 아니다(POK-255)', async () => {
+    // 첫 조각이 방송 시작보다 32초 늦었다 — 방송 시작으로 대신하면 채팅 시점이 32초 어긋난다
+    server.vodOrigin = VOD_STARTED + 32_000;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
+
+    const froms = fetchSpy.mock.calls
+      .map(([url]) => new URL(String(url), 'http://localhost'))
+      .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
+      .map((u) => u.searchParams.get('from'));
+    expect(froms).toContain(
+      new Date(VOD_STARTED + 32_000 + 2_842_000 - 60_000 + 3_900).toISOString(),
+    );
+  });
+
+  it('틀고 있는 녹화가 있으면 채팅도 그 녹화 기준이다 — 플레이어와 같은 축이어야 영상과 맞는다', async () => {
     server.vodOrigin = VOD_STARTED + 32_000;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
@@ -892,11 +909,12 @@ describe('LiveScreen — 지난 방송 상세', () => {
     fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
     await settle();
 
-    const expectedFrom = new Date(VOD_STARTED + 32_000 + 2_842_000 - 60_000 + 3_900).toISOString();
     const froms = fetchSpy.mock.calls
       .map(([url]) => new URL(String(url), 'http://localhost'))
       .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
       .map((u) => u.searchParams.get('from'));
-    expect(froms).toContain(expectedFrom);
+    expect(froms).toContain(
+      new Date(VOD_STARTED + 30_000 + 2_842_000 - 60_000 + 3_900).toISOString(),
+    );
   });
 });

@@ -483,6 +483,39 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 .value(시작_시각.plusSeconds(5).toString()));
     }
 
+    /**
+     * 장부의 {@code start_pts_ms}는 방송을 넘어 이어진다(media가 마지막 행에서 이어 받는다). 그래서 시작 몇 분 전에 끝난 앞 방송
+     * 꼬리 조각은 pts가 <b>더 작다</b> — 「가장 작은 pts」로 고르면 그 조각이 뽑혀 앞 회차의 기준점이 나온다(로컬 리뷰 1라운드).
+     */
+    @Test
+    void 시작_몇_분_전의_앞_방송_꼬리_조각은_안_섞인다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-tail", TestIds.STREAMER, "live");
+        // 앞 회차 꼬리: 5분 전, pts 100,000 · 재생 시각이 벽시계보다 3초 앞서 있다(회차 안에서 쌓인 차)
+        조각을_넣는다("s-tail", 10, 100_000, 시작_시각.minusSeconds(300 - 3), 시작_시각.minusSeconds(300));
+        // 이번 회차 첫 조각: pts는 이어서 104,000 · 재생 시각은 벽시계로 다시 맞춰졌다
+        조각을_넣는다("s-tail", 11, 104_000, 시작_시각.plusSeconds(5), 시작_시각.plusSeconds(5));
+
+        목록("?state=live").andExpect(jsonPath("$.broadcasts[0].timelineOriginAt")
+                .value(시작_시각.plusSeconds(5).minusMillis(104_000).toString()));
+    }
+
+    /** 기준점은 부가 칸이다 — 장부 표를 못 읽어도 목록은 나가고 기준점만 빈다(여기서 500이면 홈·라이브가 통째로 죽는다). */
+    @Test
+    void 조각_장부를_못_읽어도_목록은_나가고_기준점만_빈다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-noledger", TestIds.STREAMER, "live");
+        jdbc.execute("ALTER TABLE stream_segments RENAME TO stream_segments_hidden");
+        try {
+            목록("?state=live")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-noledger"))
+                    .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(nullValue()));
+        } finally {
+            jdbc.execute("ALTER TABLE stream_segments_hidden RENAME TO stream_segments");
+        }
+    }
+
     /** 조각이 없으면 기준점도 없다 — 지어내지 않는다. 칸은 빼지 않고 null로 싣는다(화면이 「모름」을 안다). */
     @Test
     void 조각이_없으면_기준점은_null이다() throws Exception {

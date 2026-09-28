@@ -429,9 +429,13 @@ function WiredStudio({ data }: { data: Loaded }) {
   const { toast } = useToast();
   const { streamId, card, broadcast, window, saved, latestClip, trackLabels, recording } = data;
   const startedAt = broadcast.startedAt!;
-  // 카드·조각의 위치는 녹화 첫 조각 기준이다(조각 장부의 축) — 방송 시작 편지 시각과 수십 초 어긋날 수 있다.
-  // 🔴 카드·조각 ms의 0초 = 시각 기준점(서버 → 녹화 재생 서버 → 방송 시작, POK-255). 저장·다시 열기가 같은 값을 써야 제자리다
+  // 🔴 카드·조각 ms의 0초 = 시각 기준점(서버 → 녹화 재생 서버 → 방송 시작, POK-255). 저장·다시 열기가 같은 값을 써야 제자리다.
+  //    방송 시작 편지 시각과 수십 초 갈리고, 조각 장부의 위치 값은 방송을 넘어 이어지므로 녹화 시작과도 갈릴 수 있다
   const base = timelineBaseMs(broadcast, recording?.startMs ?? null);
+  // 녹화 끝을 기준점 축의 초로 — 녹화 길이는 녹화 시작부터 잰 값이라 그대로 쓰면 두 시작의 차만큼 끝이 어긋난다
+  const recordingEndSeconds = recording
+    ? (recording.startMs + recording.durationSeconds * 1000 - base) / 1000
+    : 0;
 
   const initialRange = useMemo(
     () => ({ startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 }),
@@ -442,7 +446,7 @@ function WiredStudio({ data }: { data: Loaded }) {
     streamId,
     // 재생 서버에는 「기준점 + 초」로 절대 시각을 묻는다 — 구간 초가 기준점 축이다
     recordingStartMs: base,
-    recordingSeconds: recording?.durationSeconds ?? 0,
+    recordingSeconds: recordingEndSeconds,
     initialRange,
   });
 
@@ -461,7 +465,7 @@ function WiredStudio({ data }: { data: Loaded }) {
     const endedMs = broadcast.endedAt ? Date.parse(broadcast.endedAt) - base : null;
     // 방송 길이 — 녹화가 있으면 녹화 길이, 끝났으면 실제 길이, 아니면 창 끝에 1분 여유
     const totalSeconds = Math.max(
-      recording?.durationSeconds ?? (endedMs ?? window.endMs + 60_000) / 1000,
+      recording ? recordingEndSeconds : (endedMs ?? window.endMs + 60_000) / 1000,
       window.endMs / 1000,
     );
     // 🔴 구간은 **그 하이라이트 안에서만** 잡는다(사용자 확정 2026-09-17) — 카드가 잡아 준 시작~끝이 곧 양쪽 한계이고,
@@ -476,7 +480,7 @@ function WiredStudio({ data }: { data: Loaded }) {
       minSeconds,
       range: { startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 },
     };
-  }, [broadcast.endedAt, base, window, card, saved, startedAt, recording]);
+  }, [broadcast.endedAt, base, window, card, saved, startedAt, recording, recordingEndSeconds]);
 
   /** 타임라인의 구간(방송 시작 기준 초) → 계약6 컷(절대 ms). 5초~3분 밖이면 저장 문이 거절하므로 여기서 맞춘다. */
   const documentFor = useCallback(
