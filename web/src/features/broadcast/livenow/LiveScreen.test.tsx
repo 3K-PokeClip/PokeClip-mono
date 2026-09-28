@@ -173,6 +173,8 @@ const server = vi.hoisted(() => ({
   vodChatEndless: false,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
   playback: 'off' as 'off' | 'grant' | 'fail',
+  /** 지난 방송의 시각 기준점(POK-255). null이면 서버가 모른다 */
+  vodOrigin: null as number | null,
 }));
 
 /** 지난 방송(2시간 반) — 수집기 1시간 창을 넘는다 */
@@ -201,6 +203,7 @@ function handle(url: string) {
       startedAt: new Date(VOD_STARTED).toISOString(),
       endedAt: new Date(VOD_ENDED).toISOString(),
       vodExpiresAt: null,
+      timelineOriginAt: server.vodOrigin === null ? null : new Date(server.vodOrigin).toISOString(),
     };
     if (u.searchParams.get('state') === 'past')
       return jsonResponse(200, { broadcasts: [vod], nextCursor: null });
@@ -263,6 +266,7 @@ let fetchSpy: ReturnType<typeof stubFetch>;
 
 beforeEach(() => {
   nav.search = '';
+  server.vodOrigin = null;
   server.live = true;
   server.failLive = false;
   server.relation = 'OWNER';
@@ -871,6 +875,24 @@ describe('LiveScreen — 지난 방송 상세', () => {
     await settle();
 
     const expectedFrom = new Date(base + 2_842_000 - 60_000 + 3_900).toISOString();
+    const froms = fetchSpy.mock.calls
+      .map(([url]) => new URL(String(url), 'http://localhost'))
+      .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
+      .map((u) => u.searchParams.get('from'));
+    expect(froms).toContain(expectedFrom);
+  });
+
+  it('서버가 준 시각 기준점이 녹화 재생 서버·방송 시작보다 앞선다(POK-255)', async () => {
+    // 서버 기준점은 렌더가 자르는 축(조각 장부)이다 — 녹화 재생 서버(30초)와 달라도 서버 값(32초)을 쓴다
+    server.vodOrigin = VOD_STARTED + 32_000;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    act(() => publishLiveData({ timeBaseMs: VOD_STARTED + 30_000 }));
+
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
+
+    const expectedFrom = new Date(VOD_STARTED + 32_000 + 2_842_000 - 60_000 + 3_900).toISOString();
     const froms = fetchSpy.mock.calls
       .map(([url]) => new URL(String(url), 'http://localhost'))
       .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)

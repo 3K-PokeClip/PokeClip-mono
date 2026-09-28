@@ -14,6 +14,7 @@ import {
   fetchLibraryDetail,
   fetchMeLoose,
   requestRender,
+  timelineBaseMs,
   updateRecipe,
   CUT_MAX_MS,
   CUT_MIN_MS,
@@ -308,8 +309,9 @@ async function loadFromRecipe(recipeId: number): Promise<Status> {
     };
   }
   const recording = await loadRecording(detail.streamId);
-  // 🔴 컷(절대 시각)을 화면 축으로 되돌리는 기준점은 녹화 시작이다 — 저장할 때와 같은 기준이어야 제자리로 온다.
-  const base = recording?.startMs ?? Date.parse(broadcast.startedAt);
+  // 🔴 컷(절대 시각)을 화면 축으로 되돌리는 기준점은 시각 기준점이다(서버 → 녹화 재생 서버 → 방송 시작, POK-255) —
+  //    저장할 때와 같은 기준이어야 제자리로 온다.
+  const base = timelineBaseMs(broadcast, recording?.startMs ?? null);
   return {
     kind: 'loaded',
     data: {
@@ -428,7 +430,8 @@ function WiredStudio({ data }: { data: Loaded }) {
   const { streamId, card, broadcast, window, saved, latestClip, trackLabels, recording } = data;
   const startedAt = broadcast.startedAt!;
   // 카드·조각의 위치는 녹화 첫 조각 기준이다(조각 장부의 축) — 방송 시작 편지 시각과 수십 초 어긋날 수 있다.
-  const base = recording?.startMs ?? Date.parse(startedAt);
+  // 🔴 카드·조각 ms의 0초 = 시각 기준점(서버 → 녹화 재생 서버 → 방송 시작, POK-255). 저장·다시 열기가 같은 값을 써야 제자리다
+  const base = timelineBaseMs(broadcast, recording?.startMs ?? null);
 
   const initialRange = useMemo(
     () => ({ startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 }),
@@ -437,7 +440,8 @@ function WiredStudio({ data }: { data: Loaded }) {
   // 실재생 — 녹화가 있을 때만 어댑터를 넘긴다(한 마운트 동안 있거나 없거나 고정: 훅의 규칙).
   const video = useEditorVideoPlayback({
     streamId,
-    recordingStartMs: recording?.startMs ?? 0,
+    // 재생 서버에는 「기준점 + 초」로 절대 시각을 묻는다 — 구간 초가 기준점 축이다
+    recordingStartMs: base,
     recordingSeconds: recording?.durationSeconds ?? 0,
     initialRange,
   });

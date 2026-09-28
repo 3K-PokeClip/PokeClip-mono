@@ -36,6 +36,18 @@ export interface LiveData {
    * 녹화를 알면 플레이어가 채우고, 모르면 null(그때는 방송 시작 시각으로 대신한다 — README 「시각 기준점」)
    */
   timeBaseMs: number | null;
+  /** 서버가 준 시각 기준점(epoch ms, POK-255) — 녹화 첫 조각의 절대 시각. 조각이 아직 없으면 null */
+  originMs: number | null;
+}
+
+/**
+ * 카드 ms·재생 위치(playheadMs)의 0초가 되는 절대 시각. 서버 기준점이 정본이고, 없으면 녹화 재생 서버, 그것도 없으면 방송 시작
+ * 시각으로 대신한다(수십 초 어긋날 수 있다 — README 「시각 기준점」)
+ */
+export function timeBaseOf(
+  live: Pick<LiveData, 'originMs' | 'timeBaseMs' | 'startedAt'>,
+): number | null {
+  return live.originMs ?? live.timeBaseMs ?? live.startedAt;
 }
 
 const INITIAL: LiveData = {
@@ -49,6 +61,7 @@ const INITIAL: LiveData = {
   playheadMs: null,
   relation: null,
   timeBaseMs: null,
+  originMs: null,
 };
 let state: LiveData = INITIAL;
 const listeners = new Set<() => void>();

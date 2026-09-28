@@ -23,6 +23,8 @@ const server = vi.hoisted(() => ({
   savedSchema: 2 as 1 | 2,
   /** 저장된 v2 출력. 없으면 세로 한 장 */
   savedOutput: null as unknown,
+  /** 시각 기준점(POK-255). null이면 서버가 모른다(방송 시작 시각으로 대신) */
+  origin: null as number | null,
   /** 저장된 v1 출력에 덧붙는 정사각 한 벌 */
   savedSquare: false,
   /** 저장된 자막. clip은 자막이 없으면 칸을 빼지 않고 null 로 준다 */
@@ -47,6 +49,7 @@ function broadcastRow() {
     startedAt: new Date(STARTED_AT).toISOString(),
     endedAt: new Date(STARTED_AT + 3_600_000).toISOString(),
     vodExpiresAt: null,
+    timelineOriginAt: server.origin === null ? null : new Date(server.origin).toISOString(),
   };
 }
 
@@ -166,6 +169,7 @@ beforeEach(() => {
   server.savedSchema = 2;
   server.savedOutput = null;
   server.savedSquare = false;
+  server.origin = null;
   server.savedSubtitles = null;
   server.relation = 'OWNER';
   server.delegations = [];
@@ -219,6 +223,22 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     ]);
     expect(doc).not.toHaveProperty('subtitles');
     expect(await screen.findByText(/편집본 #31 v1 저장됨/)).toBeInTheDocument();
+  });
+
+  it('서버가 시각 기준점을 주면 컷은 방송 시작이 아니라 그 기준점에 카드 창을 더한 것이다(POK-255)', async () => {
+    // 첫 조각이 방송 시작보다 32초 늦었다(2026-09-17 실측) — 방송 시작으로 대신하면 컷이 32초 앞을 자른다
+    server.origin = STARTED_AT + 32_000;
+    const user = userEvent.setup();
+    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+    await user.click(save);
+
+    await waitFor(() =>
+      expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
+    );
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)[0]?.cut).toEqual({
+      inAtMs: STARTED_AT + 32_000 + 60_000,
+      outAtMs: STARTED_AT + 32_000 + 72_400,
+    });
   });
 
   it('방송 트랙을 하나라도 켜면 최종 믹스(0)는 빼고 보낸다 — 같은 소리가 두 번 섞이면 안 된다', async () => {
