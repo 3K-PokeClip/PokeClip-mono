@@ -220,9 +220,26 @@ interface Loaded {
   recording: RecordingSpan | null;
 }
 
-/** 녹화 첫 구간 — 방송 기준 0초의 절대 시각. 재생 서버가 없으면 null(그때는 방송 시작 시각이 기준) */
-async function loadRecording(streamId: string): Promise<RecordingSpan | null> {
-  return (await fetchRecordingSpans(streamId))[0] ?? null;
+/**
+ * 이 방송의 녹화 — 방송 시간(시작 앞 2분 ~ 끝 뒤 10분) 안 구간들을 하나로 묶는다(첫 구간 시작 ~ 마지막 구간 끝). 재생 서버의
+ * 목록은 경로(스트림키) 전체라 앞 방송 녹화도 섞여 오고, 재접속하면 한 방송의 녹화도 여러 구간이 된다. 첫 구간 하나만 쓰면
+ * 두 번째 방송에서 앞 방송 녹화를 잡거나 재접속 뒤 끝을 짧게 잰다(로컬 리뷰 2라운드). 재생 서버가 없거나 녹화가 없으면 null
+ */
+async function loadRecording(
+  streamId: string,
+  broadcast: BroadcastRow,
+): Promise<RecordingSpan | null> {
+  const from = Date.parse(broadcast.startedAt!) - 2 * 60_000;
+  const until = broadcast.endedAt
+    ? Date.parse(broadcast.endedAt) + 10 * 60_000
+    : Number.POSITIVE_INFINITY;
+  const spans = (await fetchRecordingSpans(streamId)).filter(
+    (span) => span.startMs + span.durationSeconds * 1000 >= from && span.startMs <= until,
+  );
+  const first = spans[0];
+  if (first === undefined) return null;
+  const end = Math.max(...spans.map((span) => span.startMs + span.durationSeconds * 1000));
+  return { startMs: first.startMs, durationSeconds: (end - first.startMs) / 1000 };
 }
 
 /**
@@ -276,7 +293,7 @@ async function loadFromCard(streamId: string, cardId: string): Promise<Status> {
   }
   const [trackLabels, recording] = await Promise.all([
     loadTrackLabels(broadcast),
-    loadRecording(streamId),
+    loadRecording(streamId, broadcast),
   ]);
   return {
     kind: 'loaded',
@@ -308,7 +325,7 @@ async function loadFromRecipe(recipeId: number): Promise<Status> {
       message: '방송 시작 시각이 없어 편집본의 구간을 화면 축으로 못 옮겨요',
     };
   }
-  const recording = await loadRecording(detail.streamId);
+  const recording = await loadRecording(detail.streamId, broadcast);
   // 🔴 컷(절대 시각)을 화면 축으로 되돌리는 기준점은 시각 기준점이다(서버 → 녹화 재생 서버 → 방송 시작, POK-255) —
   //    저장할 때와 같은 기준이어야 제자리로 온다.
   const base = timelineBaseMs(broadcast, recording?.startMs ?? null);

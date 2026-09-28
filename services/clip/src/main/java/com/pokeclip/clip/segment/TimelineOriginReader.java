@@ -22,8 +22,11 @@ import java.util.Map;
  * 이 차가 일정하다</b>(2026-09-28 로컬 실방송 135조각 실측: 차이 0ms. 벽시계로 재면 9분에 2.1초 흔들렸다). 렌더가 자르는 축이
  * {@code playback_pdt}라 이 값에 카드 ms를 더하면 그 영상 프레임이 나온다.
  *
- * <p>🔴 <b>한계: 방송 중 재접속으로 재생 회차가 끊기면</b> {@code playback_pdt}가 벽시계로 다시 맞춰져 그 뒤 조각의 차가 달라진다
- * (앞 회차에서 쌓인 만큼, 수 초). 기준점 하나로는 재접속 뒤 카드가 그만큼 어긋난다. 조각마다 바꾸는 것은 별도 카드.
+ * <p>🔴 <b>한계 — 셋 다 같은 뿌리(재생 회차가 바뀌면 차가 달라진다)</b>: ① 방송 중 재접속으로 회차가 끊기면 {@code playback_pdt}가
+ * 벽시계로 다시 맞춰져 그 뒤 카드가 앞 회차에서 쌓인 차만큼(9분에 2초 꼴) 어긋난다. ② 같은 키로 재시작 편지가 오면 방송 줄의
+ * {@code started_at}이 새 시각으로 덮여 기준점이 재시작 쪽으로 옮겨가고, 그 전 카드가 같은 만큼 어긋난다. ③ 끊고 2분 안에 다시
+ * 켜면 앞 꼬리 조각이 섞인다. 시작 편지와 첫 조각의 관계는 1번 발행 코드가 이 저장소에 없어 코드로 증명하지 못했고 근거는 실측 한 번
+ * (첫 조각이 32초 뒤)이다. 조각마다 바꾸는 것은 별도 카드.
  *
  * <p><b>방송의 시간 안 첫 조각을 쓴다.</b> 장부의 {@code stream_id}는 지금 스트림키라(POK-233 전) 같은 스트리머의 다른 방송 조각도
  * 같은 이름으로 쌓이고, {@code start_pts_ms}는 방송을 넘어 계속 커진다(media가 마지막 행에서 이어 받는다). 그래서 앞 방송 꼬리 조각이
@@ -31,8 +34,11 @@ import java.util.Map;
  * {@code broadcasts.stream_id} UNIQUE) 섞일 일이 없지만, POK-233(회차 번호) 때 {@code session_id}로 바꿔야 한다. 조각이 없으면
  * 기준점도 없다({@code null}): 지어내지 않는다. 화면은 그때 방송 시작 시각으로 대신한다.
  *
- * <p>범위는 <b>벽시계 칸으로</b> 거른다. {@code (stream_id, start_wall_utc)} 색인을 타고, 벽시계와 재생 시각은 수 초 안이라 여유에
- * 든다. {@code COALESCE(...)}로 거르면 색인을 못 타 그 스트림키의 조각 이력 전체를 훑는다(로컬 리뷰 1라운드).
+ * <p>범위와 순서를 <b>벽시계 칸으로</b> 잡는다. {@code (stream_id, start_wall_utc)} 색인의 범위 조건이 되고, 벽시계와 재생 시각은
+ * 수 초 안이라 여유에 든다. 🔴 모양이 계획을 가른다(로컬 리뷰 1·2라운드, 한 키 30만 줄 실측): 범위를 재생 시각({@code COALESCE(pdt, wall)})
+ * 으로 걸거나 {@code (b.lo IS NULL OR wall >= b.lo)}처럼 OR로 걸면 색인 조건이 못 되고, {@code ORDER BY seq}면 PK를 처음부터
+ * 훑는다(버퍼 78,860 · 241ms). 빈 경계를 {@code ±infinity}로 채우고 벽시계 순으로 정렬하면 색인 범위 스캔이다(버퍼 89 · 0.23ms).
+ * 벽시계는 조각 경계에서 조금 거꾸로 갈 수 있지만 첫 조각을 고르는 데는 충분하다.
  *
  * <p>이 표의 소유는 1번(Media)이고 clip은 <b>읽기만</b> 한다({@link StreamSegmentReader}와 같다).
  */
@@ -57,9 +63,9 @@ public class TimelineOriginReader {
                            - s.start_pts_ms AS origin_ms
                       FROM stream_segments s
                      WHERE s.stream_id = b.stream_id
-                       AND (b.lo IS NULL OR s.start_wall_utc >= b.lo)
-                       AND (b.hi IS NULL OR s.start_wall_utc <= b.hi)
-                     ORDER BY s.seq
+                       AND s.start_wall_utc >= COALESCE(b.lo, '-infinity'::timestamptz)
+                       AND s.start_wall_utc <= COALESCE(b.hi, 'infinity'::timestamptz)
+                     ORDER BY s.start_wall_utc, s.seq
                      LIMIT 1) o""";
 
     private final JdbcTemplate jdbc;
