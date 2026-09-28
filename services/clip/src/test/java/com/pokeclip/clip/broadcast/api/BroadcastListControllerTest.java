@@ -434,6 +434,68 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.broadcasts[0].endedAt").value(지난_기한.minus(육십일).toString()));
     }
 
+    // ── 시각 기준점(POK-255) ───────────────────────────────────────
+
+    /**
+     * 기준점 = 첫 조각의 절대 시각 − 그 조각의 {@code start_pts_ms}. 첫 조각이 방송 시작 편지보다 <b>32초 늦게</b>
+     * 시작한 방송(2026-09-17 실측과 같은 모양)이면 기준점이 시작 편지가 아니라 첫 조각 쪽이어야 한다 — 웹이 이 값에 카드 ms를
+     * 더해 컷을 만들고, 시작 편지로 대신하면 편집 구간이 32초 어긋난다.
+     */
+    @Test
+    void 시각_기준점은_첫_조각의_절대_시각에서_pts를_뺀_값이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-origin", TestIds.STREAMER, "live");
+        Instant 첫_조각 = 시작_시각.plusSeconds(32);
+        // 조각 셋: pts 1500부터(녹화기가 앞을 잘랐다), playback_pdt는 조각 길이만큼 이어진다. 벽시계는 흔들린다
+        조각을_넣는다("s-origin", 1, 1_500, 첫_조각.plusMillis(1_500), 첫_조각.plusMillis(1_500 + 120));
+        조각을_넣는다("s-origin", 2, 5_500, 첫_조각.plusMillis(5_500), 첫_조각.plusMillis(5_500 - 80));
+        조각을_넣는다("s-origin", 3, 9_500, 첫_조각.plusMillis(9_500), 첫_조각.plusMillis(9_500 + 40));
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(첫_조각.toString()));
+    }
+
+    /** 재생 시각({@code playback_pdt})이 아직 빈 조각은 벽시계로 잰다 — 렌더 주문의 조각 찾기와 같은 축이다. */
+    @Test
+    void 재생_시각이_빈_조각은_벽시계로_잰다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-wall", TestIds.STREAMER, "live");
+        조각을_넣는다("s-wall", 1, 0, null, 시작_시각.plusSeconds(10));
+
+        목록("?state=live").andExpect(jsonPath("$.broadcasts[0].timelineOriginAt")
+                .value(시작_시각.plusSeconds(10).toString()));
+    }
+
+    /**
+     * 장부의 {@code stream_id}는 지금 스트림키라 <b>같은 이름으로 다른 방송의 조각</b>도 쌓인다(POK-233 전). 방송 시간
+     * 밖(시작 10분 전보다 이른) 조각은 안 본다 — 보면 지난 방송의 기준점이 나온다.
+     */
+    @Test
+    void 방송_시간_밖의_조각은_안_본다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-reuse", TestIds.STREAMER, "live");
+        // 하루 전 방송의 조각(pts 0) — 가장 작은 pts지만 방송 밖이다
+        조각을_넣는다("s-reuse", 1, 0, 시작_시각.minusSeconds(86_400), 시작_시각.minusSeconds(86_400));
+        조각을_넣는다("s-reuse", 2, 0, 시작_시각.plusSeconds(5), 시작_시각.plusSeconds(5));
+
+        목록("?state=live").andExpect(jsonPath("$.broadcasts[0].timelineOriginAt")
+                .value(시작_시각.plusSeconds(5).toString()));
+    }
+
+    /** 조각이 없으면 기준점도 없다 — 지어내지 않는다. 칸은 빼지 않고 null로 싣는다(화면이 「모름」을 안다). */
+    @Test
+    void 조각이_없으면_기준점은_null이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-empty", TestIds.STREAMER, "live");
+
+        String 본문 = 본문(목록("?state=live").andExpect(status().isOk()));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> 한_줄 = ((java.util.List<Map<String, Object>>) 맵(본문).get("broadcasts")).get(0);
+        assertThat(한_줄).containsKey("timelineOriginAt");
+        assertThat(한_줄.get("timelineOriginAt")).isNull();
+    }
+
     /**
      * 협상에 실패하면 상태 코드가 <b>500으로 둔갑한다</b> — POK-118이 이 자리에서 실제로 덴
      * 사고다. 세 갈래를 한 번에 보는 것은 {@code json} 하나가 셋의 공통 출구여서다.
@@ -498,5 +560,15 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 startedAt == null ? null : OffsetDateTime.ofInstant(startedAt, ZoneOffset.UTC),
                 endedAt == null ? null : OffsetDateTime.ofInstant(endedAt, ZoneOffset.UTC),
                 vodExpiresAt == null ? null : OffsetDateTime.ofInstant(vodExpiresAt, ZoneOffset.UTC));
+    }
+
+    private void 조각을_넣는다(String streamId, long seq, long startPtsMs, Instant playbackPdt, Instant wall) {
+        jdbc.update("""
+                        INSERT INTO stream_segments
+                            (stream_id, seq, start_pts_ms, start_wall_utc, playback_pdt, duration_ms, s3_key, upload_state)
+                        VALUES (?, ?, ?, ?, ?, 4000, ?, 'uploaded')""",
+                streamId, seq, startPtsMs, OffsetDateTime.ofInstant(wall, ZoneOffset.UTC),
+                playbackPdt == null ? null : OffsetDateTime.ofInstant(playbackPdt, ZoneOffset.UTC),
+                "streams/" + streamId + "/seg_" + seq + ".m4s");
     }
 }

@@ -7,6 +7,7 @@ import com.pokeclip.clip.delegation.ResolveResult;
 import com.pokeclip.clip.paging.CursorCodec;
 import com.pokeclip.clip.paging.InvalidListParamException;
 import com.pokeclip.clip.paging.ListLimit;
+import com.pokeclip.clip.segment.TimelineOriginReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -75,10 +76,13 @@ public class BroadcastListService {
 
     private final BroadcastRepository broadcasts;
     private final DelegationResolveClient delegation;
+    private final TimelineOriginReader origins;
 
-    BroadcastListService(BroadcastRepository broadcasts, DelegationResolveClient delegation) {
+    BroadcastListService(BroadcastRepository broadcasts, DelegationResolveClient delegation,
+                         TimelineOriginReader origins) {
         this.broadcasts = broadcasts;
         this.delegation = delegation;
+        this.origins = origins;
     }
 
     /**
@@ -127,7 +131,8 @@ public class BroadcastListService {
         String next = hasMore
                 ? CursorCodec.encode(CursorCodec.Kind.BROADCAST, page.get(page.size() - 1).getId())
                 : null;
-        return new BroadcastPage(page, relations, next);
+        // 시각 기준점은 잘라 낸 한 장만 잰다(POK-255) — 「다음 장이 있나」를 보려고 더 받은 한 줄은 안 나간다
+        return new BroadcastPage(page, relations, next, origins.originsOf(page));
     }
 
     /**

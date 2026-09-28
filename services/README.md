@@ -1292,6 +1292,7 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
 | `relation` | `OWNER` 또는 `EDITOR`. `NONE`은 안 나온다(안 나오는 것이 곧 `NONE`이다) |
 | `startedAt` · `endedAt` | 🔴 **`startedAt`은 `null`일 수 있다** — 아래 「알려진 한계」 |
 | `vodExpiresAt` | 기한이 지난 방송도 목록에는 그대로 둔다. 영상은 못 봐도 방송 기록은 남는다 |
+| `timelineOriginAt` | **시각 기준점**(POK-255): 이 방송의 카드·조각 ms(`streamTimestampMs`·`window`·`start_pts_ms`)가 0이 되는 절대 시각. 화면은 여기에 ms를 더해 편집본 컷(절대 시각)을 만들고 지난 방송 채팅 시점·차트 자리를 맞춘다. 값 = 조각 장부에서 방송 시간(시작 편지 앞 10분 ~ 종료 편지 뒤 10분) 안 조각 중 `start_pts_ms`가 가장 작은 것의 `COALESCE(playback_pdt, start_wall_utc) − start_pts_ms`(조각이 이어지는 동안 어느 조각으로 재도 같다). 🔴 **방송 시작 편지 시각과 다르다**(첫 조각이 수십 초 늦는다, 2026-09-17 실측 32초). **조각이 아직 없으면 `null`**(지어내지 않는다). 방송 시간으로 거르는 것은 장부 `stream_id`가 스트림키라 같은 스트리머의 다른 방송 조각이 같은 이름으로 쌓여서다(POK-233 전). 한 장의 방송 전부를 **질의 한 번**(`unnest` + `LATERAL`)으로 잰다 |
 
 **카드 한 줄은 통로로 오는 카드 JSON과 칸 하나까지 같다**(`JumpCardListShapeTest`가 두 경로의
 JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리하지 않게 하려는 것이다.
