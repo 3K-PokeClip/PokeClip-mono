@@ -64,8 +64,229 @@ describe('HomeScreen', () => {
 
     expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '발행 현황' })).toBeInTheDocument();
-    expect(await screen.findByText('준비 중')).toBeInTheDocument();
+    expect(await screen.findByText('아직 유튜브에 올린 영상이 없어요')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '만료 임박 VOD' })).toBeInTheDocument();
+  });
+
+  it('발행 현황은 보관함의 유튜브 업로드를 최근 순으로 보인다 — 실패는 빼고 확인 필요는 따로', async () => {
+    const upload = (id: number, title: string, status: string, updatedAt: string) => ({
+      id,
+      clipId: id,
+      outputId: 'o1',
+      title,
+      status,
+      videoId: status === 'uploaded' ? 'v' : null,
+      error: null,
+      requestedBy: '1',
+      createdAt: updatedAt,
+      updatedAt,
+    });
+    const entry = (recipeId: number, status: string, up: ReturnType<typeof upload>) => ({
+      ...EDITING_ENTRY,
+      recipeId,
+      status,
+      latestClip: {
+        id: recipeId,
+        streamId: 'stream-1',
+        recipeId,
+        recipeVersion: 3,
+        requestedBy: '1',
+        status: 'rendered',
+        progress: null,
+        outputs: [],
+        error: null,
+        createdAt: '2026-09-26T10:00:00Z',
+        updatedAt: '2026-09-26T10:00:00Z',
+        upload: up,
+      },
+    });
+    const items = [
+      entry(1, 'uploaded', upload(1, '옛 영상', 'uploaded', '2026-09-26T10:00:00Z')),
+      entry(2, 'uploading', upload(2, '올리는 영상', 'uploading', '2026-09-26T12:00:00Z')),
+      entry(3, 'checking', upload(3, '모르는 영상', 'checking', '2026-09-26T11:00:00Z')),
+      entry(4, 'rendered', upload(4, '실패한 영상', 'failed', '2026-09-26T13:00:00Z')),
+      // 올린 뒤 새 판을 저장하면 편집본은 「편집 중」이지만 올린 영상은 그대로 유튜브에 있다
+      entry(5, 'editing', upload(5, '새 판 저장한 영상', 'uploaded', '2026-09-26T09:00:00Z')),
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).startsWith('/api/clip/library')
+            ? new Response(JSON.stringify({ items, nextCursor: null }), { status: 200 })
+            : emptyJson(String(input)),
+        ),
+      ),
+    );
+    render(<HomeScreen />);
+
+    const card = (await screen.findByText('올리는 영상')).closest('ul');
+    expect(card).not.toBeNull();
+    const rows = Array.from(card?.querySelectorAll('li') ?? []).map((li) => li.textContent);
+    expect(rows).toEqual([
+      '올리는 영상업로드 중',
+      '모르는 영상확인 필요',
+      '옛 영상발행됨',
+      '새 판 저장한 영상발행됨',
+    ]);
+  });
+
+  it('라이브 띠의 클립 완료는 그 방송에서 영상까지 만든 편집본 수다', async () => {
+    const liveRow = {
+      streamId: 'stream-1',
+      status: 'live',
+      relation: 'OWNER',
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      endedAt: null,
+      vodExpiresAt: null,
+    };
+    const renderedClip = {
+      id: 1,
+      streamId: 'stream-1',
+      recipeId: 13,
+      recipeVersion: 3,
+      requestedBy: '1',
+      status: 'rendered',
+      progress: null,
+      outputs: [],
+      error: null,
+      createdAt: '2026-09-26T10:00:00Z',
+      updatedAt: '2026-09-26T10:00:00Z',
+      upload: null,
+    };
+    const items = [
+      EDITING_ENTRY,
+      // 영상을 만든 뒤 새 판을 저장만 한 편집본 — 만든 영상은 그대로 있다
+      { ...EDITING_ENTRY, recipeId: 17, status: 'editing', latestClip: renderedClip },
+      { ...EDITING_ENTRY, recipeId: 13, status: 'rendered', latestClip: renderedClip },
+      { ...EDITING_ENTRY, recipeId: 14, status: 'uploaded', latestClip: renderedClip },
+      { ...EDITING_ENTRY, recipeId: 15, status: 'failed' },
+      {
+        ...EDITING_ENTRY,
+        recipeId: 16,
+        status: 'rendered',
+        streamId: 'other',
+        latestClip: renderedClip,
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/clip/library')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ items, nextCursor: null }), { status: 200 }),
+          );
+        }
+        if (url.includes('state=live')) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ broadcasts: [liveRow], nextCursor: null }), {
+              status: 200,
+            }),
+          );
+        }
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+
+    expect(
+      await screen.findByText((_, el) => el?.textContent === '감지된 카드 0 · 클립 완료 3'),
+    ).toBeInTheDocument();
+  });
+
+  it('겹친 폴링에서 먼저 떠나 늦게 온 보관함 답이 더 새 발행 현황을 덮지 않는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const row = (status: string) => ({
+      ...EDITING_ENTRY,
+      recipeId: 21,
+      status,
+      latestClip: {
+        id: 21,
+        streamId: 'stream-1',
+        recipeId: 21,
+        recipeVersion: 3,
+        requestedBy: '1',
+        status: 'rendered',
+        progress: null,
+        outputs: [],
+        error: null,
+        createdAt: '2026-09-26T10:00:00Z',
+        updatedAt: '2026-09-26T10:00:00Z',
+        upload: {
+          id: 21,
+          clipId: 21,
+          outputId: 'o1',
+          title: '겹친 영상',
+          status,
+          videoId: status === 'uploaded' ? 'v' : null,
+          error: null,
+          requestedBy: '1',
+          createdAt: '2026-09-26T10:00:00Z',
+          updatedAt: '2026-09-26T10:00:00Z',
+        },
+      },
+    });
+    const body = (status: string) =>
+      new Response(JSON.stringify({ items: [row(status)], nextCursor: null }), { status: 200 });
+    let libraryCalls = 0;
+    let slow: () => void = () => {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (!url.startsWith('/api/clip/library')) return Promise.resolve(emptyJson(url));
+        libraryCalls += 1;
+        if (libraryCalls === 1) return Promise.resolve(body('uploading'));
+        if (libraryCalls === 2)
+          return new Promise<Response>((r) => (slow = () => r(body('uploading'))));
+        return Promise.resolve(body('uploaded'));
+      }),
+    );
+    try {
+      render(<HomeScreen />);
+      expect(await screen.findByText('업로드 중')).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000); // 둘째 읽기: 늦게 온다
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000); // 셋째 읽기: 올림
+      });
+      expect(await screen.findByText('발행됨')).toBeInTheDocument();
+
+      await act(async () => slow());
+      await act(async () => {});
+      expect(screen.getByText('발행됨')).toBeInTheDocument();
+      expect(screen.queryByText('업로드 중')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('보관함을 못 읽었으면 「올린 영상이 없다」고 하지 않는다', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).startsWith('/api/clip/library')
+            ? new Response(JSON.stringify({ error: 'unavailable' }), { status: 503 })
+            : emptyJson(String(input)),
+        ),
+      ),
+    );
+    render(<HomeScreen />);
+
+    expect(await screen.findByText('발행 현황을 불러오지 못했어요')).toBeInTheDocument();
+    expect(screen.queryByText('아직 유튜브에 올린 영상이 없어요')).not.toBeInTheDocument();
+  });
+
+  it('보관함 답이 오기 전에는 불러오는 중이다', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
+    render(<HomeScreen />);
+    expect(screen.getByText('발행 현황을 불러오는 중…')).toBeInTheDocument();
   });
 
   it('이어서 편집 배너가 가장 최근에 고친 편집본을 편집기로 연다', async () => {

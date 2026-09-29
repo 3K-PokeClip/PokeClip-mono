@@ -45,6 +45,8 @@ export function LibraryScreen(options: LibraryOptions = {}) {
     upload,
     retryRender,
     download,
+    previewUrl,
+    sendingIds,
     remove,
   } = useLibraryMockState(options);
   const open = selectedClip !== null;
@@ -195,6 +197,8 @@ export function LibraryScreen(options: LibraryOptions = {}) {
               onUpload={() => upload(panelClip.id)}
               onRetryRender={() => retryRender(panelClip.id)}
               onDownload={() => download(panelClip.id)}
+              sending={sendingIds.has(panelClip.id)}
+              loadPreview={panelClip.entry ? () => previewUrl(panelClip.id) : undefined}
               onDelete={() => setPendingDelete(panelClip)}
             />
           ) : null}

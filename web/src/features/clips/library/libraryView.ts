@@ -1,5 +1,6 @@
 import { ddayFor, type VodDday } from '@/features/broadcast/vod/vodListView';
 import { formatUptime } from '@/features/player/playerMath';
+import { ClipApiError } from '@/api/clipEditor';
 import type { ClipStatus, LibraryClip, LibraryRole } from './useLibraryMockState';
 
 // 시안 1g 보관함의 표시 규칙 — 상태가 배지·주 동작·보조 줄·칩·정렬로 어떻게 펼쳐지는지를
@@ -189,9 +190,11 @@ export type PrimaryAction =
     }
   /** href는 clip.youtubeUrl — 없으면 링크 대신 비활성 버튼을 그린다(LinkButton 규칙) */
   | { kind: 'external'; label: '유튜브 보기' }
-  | { kind: 'action'; label: string; action: 'upload' | 'retryRender' };
+  | { kind: 'action'; label: string; action: 'upload' | 'retryRender' }
+  /** 서버 일이 진행 중이라 누를 것이 없다 — 올리는 중·확인 필요(POK-111). 비활성 버튼으로 그린다 */
+  | { kind: 'busy'; label: string };
 
-export type PanelNote = 'expired' | 'pending';
+export type PanelNote = 'expired' | 'pending' | 'checking';
 
 export interface DetailView {
   badge: { tone: StatusTone; label: string };
@@ -307,14 +310,117 @@ export function detailViewFor(status: ClipStatus, role: LibraryRole): DetailView
   }
 }
 
+/**
+ * 서버 줄의 업로드 상태를 시안 규칙(detailViewFor) 위에 얹는다(POK-111). 화면 상태 일곱에는 올리는 중·확인 필요가
+ * 없어 둘 다 「업로드 대기」로 접히는데, 그대로 두면 올리는 중에 「업로드」를 또 누를 수 있다. 서버 편집본은 승인 단계가
+ * 없어(편집자도 바로 올린다) 「업로드 요청」이라 쓰면 거짓이 된다. 목업 줄은 시안 규칙 그대로 둔다.
+ */
+export function detailViewForClip(
+  clip: LibraryClip,
+  status: ClipStatus,
+  role: LibraryRole,
+): DetailView {
+  const view = detailViewFor(status, role);
+  switch (clip.entry?.status) {
+    case undefined:
+      return view;
+    case 'uploading':
+      return { ...view, primary: { kind: 'busy', label: '유튜브에 올리는 중' }, titleLocked: true };
+    case 'checking':
+      return {
+        ...view,
+        primary: { kind: 'busy', label: '업로드 확인 필요' },
+        titleLocked: true,
+        note: 'checking',
+      };
+    case 'uploaded':
+      // 올린 영상의 제목은 유튜브에 있다 — 여기서 고쳐도 저장할 곳이 없어 바뀐 척만 한다
+      return { ...view, titleLocked: true };
+    default: {
+      // 제목이 살아 있는 업로드에서 온 것이면(올린 뒤 새 판을 저장해 「편집 중」인 경우 포함) 고칠 곳이 없다 —
+      // 초안은 완성 편집본에만 남아 다음 읽기에 되돌아간다(PR #203 codex). 실패한 업로드는 다시 올리게 열어 둔다
+      const upload = clip.entry?.latestClip?.upload;
+      const titleLocked = view.titleLocked || (upload != null && upload.status !== 'failed');
+      return view.primary.kind === 'action' && view.primary.action === 'upload'
+        ? { ...view, titleLocked, primary: { ...view.primary, label: '업로드' } }
+        : { ...view, titleLocked };
+    }
+  }
+}
+
 /** 패널 안내 상자 문구 — 승인 대기는 시점마다 할 수 있는 일이 다르다 */
 export function noteText(note: PanelNote, role: LibraryRole): string {
+  if (note === 'checking') {
+    return '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 비공개 영상을 확인해 주세요.';
+  }
   if (note === 'expired') {
     return '원본 VOD가 만료되어 다시 편집할 수 없어요. 발행된 영상은 그대로 유지됩니다.';
   }
   return role === 'editor'
     ? '승인 대기 중에는 편집이 잠겨요. 수정이 필요하면 승인 대기함 › 내 요청에서 취소한 뒤 편집하세요.'
     : '승인 · 반려는 승인 대기함에서 처리해요. 여기서는 미리보기와 다운로드만 할 수 있어요.';
+}
+
+// ---------- 유튜브 업로드 (POK-111) ----------
+
+/**
+ * 업로드 제목이 서버 규칙(clip 업로드 문: 앞뒤 공백 뺀 1~100 코드포인트, < > 금지)에 맞지 않는 까닭. 맞으면 null.
+ * 서버도 같은 것을 400으로 거절하지만, 보내기 전에 말해야 패널에서 바로 고친다.
+ */
+export function uploadTitleProblem(title: string): string | null {
+  const trimmed = title.trim();
+  if (trimmed === '') return '유튜브 제목을 적어 주세요.';
+  if (Array.from(trimmed).length > 100) return '유튜브 제목은 100자까지예요.';
+  if (/[<>]/.test(trimmed)) return '유튜브 제목에는 < 와 > 를 쓸 수 없어요.';
+  return null;
+}
+
+/** 업로드 주문이 거절된 사유. 모르는 사유는 서버 코드를 그대로 보인다(지어내지 않는다) */
+export function uploadErrorMessage(e: unknown): string {
+  if (e instanceof ClipApiError) {
+    if (e.status === 400 && e.field === 'title') return '유튜브 제목을 확인해 주세요.';
+    // 출력(outputId)을 안 보내면 서버가 영상 출력 하나를 고르는데, 하나가 아니면(0개·여럿) 거절한다. 편집기는 세로 한 벌만 만든다
+    if (e.status === 400 && e.field === 'outputId') {
+      return '올릴 영상을 고를 수 없어요. 이 편집본은 영상 출력이 하나가 아니에요.';
+    }
+    if (e.code === 'clip_not_rendered') return '영상이 아직 완성되지 않았어요.';
+    if (e.status === 404) return '편집본을 찾을 수 없어요. 목록을 새로 고쳐 주세요.';
+    if (e.code === 'upload_unavailable') {
+      return '지금은 업로드를 받을 수 없어요. 잠시 뒤 다시 올려 주세요.';
+    }
+    if (e.code === 'authorization_unavailable') {
+      return '권한 확인이 잠시 안 돼요. 잠시 뒤 다시 올려 주세요.';
+    }
+  }
+  return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * 연동 문제로 끝난 업로드 코드(업로드 일꾼이 `YOUTUBE_` + auth 사유로 적는다). 일시 실패(REFRESH_UNAVAILABLE)는
+ * 일꾼이 다시 시도해 실패로 남지 않는다.
+ */
+const LINK_FAILURES = new Set(['YOUTUBE_NOT_LINKED', 'YOUTUBE_UNLINKED', 'YOUTUBE_BROKEN']);
+
+/**
+ * 지난 업로드가 실패한 편집본의 안내. 실패하면 서버가 편집본을 「완성」으로 돌려 다시 올릴 수 있게 하고, 사유는
+ * 가장 최근 업로드에 남는다. 다시 올리는 중이거나 실패가 없으면 null.
+ */
+export function uploadFailureText(clip: LibraryClip): string | null {
+  const entry = clip.entry;
+  const upload = entry?.latestClip?.upload;
+  if (entry?.status !== 'rendered' || upload?.status !== 'failed') return null;
+  const code = upload.error?.code ?? 'UNKNOWN';
+  if (LINK_FAILURES.has(code)) {
+    return '스트리머의 유튜브 채널 연동이 없거나 끊겨 올리지 못했어요. 스트리머가 설정 › 채널 연동에서 다시 연결한 뒤 올려 주세요.';
+  }
+  if (code === 'QUOTA_EXCEEDED') {
+    return '오늘 유튜브 업로드 한도를 다 써서 올리지 못했어요. 내일 다시 올려 주세요.';
+  }
+  if (code === 'YOUTUBE_REJECTED') {
+    const why = upload.error?.message ? `(${upload.error.message})` : '';
+    return `유튜브가 영상을 받지 않았어요${why}. 제목이나 영상을 확인한 뒤 다시 올려 주세요.`;
+  }
+  return `유튜브에 올리지 못했어요(${code}). 다시 올려 주세요.`;
 }
 
 // ---------- 표기 ----------
