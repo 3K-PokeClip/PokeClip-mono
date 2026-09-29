@@ -55,7 +55,7 @@ public class TimelineOriginReader {
      * 페이지의 방송 전부를 한 번에 잰다(방송마다 한 번씩 물으면 한 장에 최대 100번 왕복이다). 방송마다 범위 안 첫 조각(seq 순)
      * 하나를 {@code LATERAL}로 고른다.
      */
-    private static final String ORIGINS = """
+    static final String ORIGINS = """
             SELECT b.stream_id, o.origin_ms
               FROM unnest(?::text[], ?::timestamptz[], ?::timestamptz[]) AS b(stream_id, lo, hi)
               CROSS JOIN LATERAL (
