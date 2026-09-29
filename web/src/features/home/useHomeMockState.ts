@@ -409,8 +409,10 @@ function resumeDraftOf(entries: readonly LibraryEntry[]): ResumeDraft | null {
 const PUBLISH_LIMIT = 5;
 
 /**
- * 발행 현황 = 유튜브에 올리는 중·확인 필요·올림인 편집본을 최근 업로드 순으로. 실패한 업로드는 편집본이 「완성」으로
- * 돌아가 여기에 없다(보관함 패널이 사유를 말한다). 예약 발행은 아직 없다.
+ * 발행 현황 = 편집본마다 가장 최근 영상의 업로드를 최근 순으로(올리는 중·확인 필요·올림). 실패는 빼고(보관함 패널이 사유를
+ * 말한다) 예약 발행은 아직 없다. 🔴 편집본 상태가 아니라 <b>업로드 상태</b>로 가른다: 올린 뒤 새 판을 저장하면 편집본은
+ * 「편집 중」이 되지만 올린 영상은 유튜브에 그대로 있다. 새 판 영상을 만들면 목록 줄이 그 영상을 가리켜 옛 업로드는 안 보인다
+ * (보관함 목록이 편집본마다 가장 최근 영상 하나만 준다).
  */
 function publishRowsOf(entries: readonly LibraryEntry[]): PublishRow[] {
   const rows: (PublishRow & { at: number })[] = [];
@@ -418,11 +420,11 @@ function publishRowsOf(entries: readonly LibraryEntry[]): PublishRow[] {
     const upload = e.latestClip?.upload;
     if (upload == null) continue;
     const status: PublishStatus | null =
-      e.status === 'uploading'
+      upload.status === 'queued' || upload.status === 'uploading'
         ? 'uploading'
-        : e.status === 'checking'
+        : upload.status === 'checking'
           ? 'checking'
-          : e.status === 'uploaded'
+          : upload.status === 'uploaded'
             ? 'published'
             : null;
     if (status === null) continue;

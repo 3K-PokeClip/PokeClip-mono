@@ -333,6 +333,9 @@ export function detailViewForClip(
         titleLocked: true,
         note: 'checking',
       };
+    case 'uploaded':
+      // 올린 영상의 제목은 유튜브에 있다 — 여기서 고쳐도 저장할 곳이 없어 바뀐 척만 한다
+      return { ...view, titleLocked: true };
     default:
       return view.primary.kind === 'action' && view.primary.action === 'upload'
         ? { ...view, primary: { ...view.primary, label: '업로드' } }

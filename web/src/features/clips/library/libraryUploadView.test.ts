@@ -181,6 +181,12 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
     expect(view.note).toBeNull();
   });
 
+  it('올린 편집본은 제목이 잠긴다 — 고쳐도 유튜브 제목은 안 바뀐다', () => {
+    const view = detailViewForClip(toLibraryClip(entry('uploaded'), '9'), 'published', 'streamer');
+    expect(view.titleLocked).toBe(true);
+    expect(view.primary).toEqual({ kind: 'external', label: '유튜브 보기' });
+  });
+
   it('확인 필요는 다시 올리기를 막고 채널을 보라고 안내한다', () => {
     const view = detailViewForClip(toLibraryClip(entry('checking'), '9'), 'ready', 'streamer');
     expect(view.primary).toEqual({ kind: 'busy', label: '업로드 확인 필요' });

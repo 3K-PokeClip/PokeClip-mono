@@ -105,6 +105,8 @@ describe('HomeScreen', () => {
       entry(2, 'uploading', upload(2, '올리는 영상', 'uploading', '2026-09-26T12:00:00Z')),
       entry(3, 'checking', upload(3, '모르는 영상', 'checking', '2026-09-26T11:00:00Z')),
       entry(4, 'rendered', upload(4, '실패한 영상', 'failed', '2026-09-26T13:00:00Z')),
+      // 올린 뒤 새 판을 저장하면 편집본은 「편집 중」이지만 올린 영상은 그대로 유튜브에 있다
+      entry(5, 'editing', upload(5, '새 판 저장한 영상', 'uploaded', '2026-09-26T09:00:00Z')),
     ];
     vi.stubGlobal(
       'fetch',
@@ -121,7 +123,12 @@ describe('HomeScreen', () => {
     const card = (await screen.findByText('올리는 영상')).closest('ul');
     expect(card).not.toBeNull();
     const rows = Array.from(card?.querySelectorAll('li') ?? []).map((li) => li.textContent);
-    expect(rows).toEqual(['올리는 영상업로드 중', '모르는 영상확인 필요', '옛 영상발행됨']);
+    expect(rows).toEqual([
+      '올리는 영상업로드 중',
+      '모르는 영상확인 필요',
+      '옛 영상발행됨',
+      '새 판 저장한 영상발행됨',
+    ]);
   });
 
   it('라이브 띠의 클립 완료는 그 방송에서 영상까지 만든 편집본 수다', async () => {

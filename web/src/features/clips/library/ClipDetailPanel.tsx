@@ -308,6 +308,8 @@ function PreviewPlayer({
           autoPlay
           playsInline
           aria-label="선택한 편집본 미리보기"
+          // 주소는 60분짜리다. 만료(403) 등으로 못 읽으면 재생 단추로 돌아가 누를 때 새 주소를 받는다
+          onError={() => setUrl(null)}
         />
       </div>
     );
