@@ -314,10 +314,15 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
           .then(({ created, upload: snap }) => {
             titleDrafts.current.delete(id);
             listGeneration.current += 1;
-            // 다음 읽기(폴링)를 기다리지 않고 받은 업로드로 바로 옮긴다 — 그사이 단추가 다시 「업로드」로 돌아오지 않게
+            // 다음 읽기(폴링)를 기다리지 않고 받은 업로드로 바로 옮긴다 — 그사이 단추가 다시 「업로드」로 돌아오지 않게.
+            // 🔴 그사이 읽은 것이 더 새로우면 그대로 둔다(PR #203 codex): 이미 올리는 중·올림이면 답의 queued가 되돌리고,
+            // 다른 영상이 최신이 됐으면 옛 영상의 업로드가 새 영상에 붙는다. 「아직 올릴 수 있는 같은 영상」일 때만 얹는다
             setClips((prev) =>
               prev.map((c) =>
-                c.id === id && c.entry !== undefined
+                c.id === id &&
+                c.entry !== undefined &&
+                c.entry.status === 'rendered' &&
+                c.entry.latestClip?.id === snap.clipId
                   ? toLibraryClip(withUpload(c.entry, snap), meIdRef.current)
                   : c,
               ),

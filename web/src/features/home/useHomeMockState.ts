@@ -355,13 +355,19 @@ export function useHomeMockState(): HomeMockState {
   useEffect(() => {
     setGreeting(greetingFor(new Date().getHours()));
     let stopped = false;
+    // 읽기가 10초보다 오래 걸리면 다음 주기와 겹친다. 더 늦게 떠난 읽기가 이미 반영됐으면 먼저 떠나 늦게 온 답은 버린다
+    // (옛 「올리는 중」이 새 「발행됨」을 덮지 않게, PR #203 codex). 가장 최근 것만 받으면 늘 겹칠 때 아무것도 안 그려진다
+    let started = 0;
+    let applied = 0;
     const tick = async () => {
+      const mine = ++started;
       // 업로드가 끝나면 발행 현황이 바뀌어야 해서 방송과 같은 주기로 다시 읽는다. 못 읽으면 지난 값을 둔다
       const [loaded, entries] = await Promise.all([
         loadHome(Date.now()),
         fetchLibraryAll().catch(() => null),
       ]);
-      if (stopped) return;
+      if (stopped || mine < applied) return;
+      applied = mine;
       if (entries !== null) setLibrary(entries);
       setLibraryFailed(entries === null);
       // 못 읽었으면 지난 화면을 그대로 둔다. 첫 읽기부터 실패면 다음 주기까지 「불러오는 중」

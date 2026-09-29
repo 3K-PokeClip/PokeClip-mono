@@ -195,6 +195,74 @@ describe('HomeScreen', () => {
     ).toBeInTheDocument();
   });
 
+  it('겹친 폴링에서 먼저 떠나 늦게 온 보관함 답이 더 새 발행 현황을 덮지 않는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const row = (status: string) => ({
+      ...EDITING_ENTRY,
+      recipeId: 21,
+      status,
+      latestClip: {
+        id: 21,
+        streamId: 'stream-1',
+        recipeId: 21,
+        recipeVersion: 3,
+        requestedBy: '1',
+        status: 'rendered',
+        progress: null,
+        outputs: [],
+        error: null,
+        createdAt: '2026-09-26T10:00:00Z',
+        updatedAt: '2026-09-26T10:00:00Z',
+        upload: {
+          id: 21,
+          clipId: 21,
+          outputId: 'o1',
+          title: '겹친 영상',
+          status,
+          videoId: status === 'uploaded' ? 'v' : null,
+          error: null,
+          requestedBy: '1',
+          createdAt: '2026-09-26T10:00:00Z',
+          updatedAt: '2026-09-26T10:00:00Z',
+        },
+      },
+    });
+    const body = (status: string) =>
+      new Response(JSON.stringify({ items: [row(status)], nextCursor: null }), { status: 200 });
+    let libraryCalls = 0;
+    let slow: () => void = () => {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (!url.startsWith('/api/clip/library')) return Promise.resolve(emptyJson(url));
+        libraryCalls += 1;
+        if (libraryCalls === 1) return Promise.resolve(body('uploading'));
+        if (libraryCalls === 2)
+          return new Promise<Response>((r) => (slow = () => r(body('uploading'))));
+        return Promise.resolve(body('uploaded'));
+      }),
+    );
+    try {
+      render(<HomeScreen />);
+      expect(await screen.findByText('업로드 중')).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000); // 둘째 읽기: 늦게 온다
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000); // 셋째 읽기: 올림
+      });
+      expect(await screen.findByText('발행됨')).toBeInTheDocument();
+
+      await act(async () => slow());
+      await act(async () => {});
+      expect(screen.getByText('발행됨')).toBeInTheDocument();
+      expect(screen.queryByText('업로드 중')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('보관함을 못 읽었으면 「올린 영상이 없다」고 하지 않는다', async () => {
     vi.stubGlobal(
       'fetch',

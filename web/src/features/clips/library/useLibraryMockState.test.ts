@@ -435,6 +435,60 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
     expect(JSON.parse(String(upload?.[1]?.body))).toEqual({ title: '편집본 #12', outputId: 'v' });
   });
 
+  it('주문 답이 늦게 와도, 그사이 읽은 더 새 상태(올림)를 올리는 중으로 되돌리지 않는다', async () => {
+    let answer: (r: Response) => void = () => {};
+    let listStatus = 'rendered';
+    let listUpload: typeof uploadReply | null = null;
+    stubFetch((url, init) => {
+      if (init?.method === 'POST') return new Promise<Response>((resolve) => (answer = resolve));
+      return url.startsWith('/api/clip/library')
+        ? jsonResponse(200, {
+            items: [
+              {
+                ...libraryEntry,
+                status: listStatus,
+                latestClip: { ...rendered, upload: listUpload },
+              },
+            ],
+            nextCursor: null,
+          })
+        : jsonResponse(200, { id: 9 });
+    });
+    const { result } = await mount();
+
+    act(() => result.current.upload('12'));
+    listStatus = 'uploaded';
+    listUpload = { ...uploadReply, status: 'uploaded', videoId: 'v1' };
+    act(() => result.current.refresh());
+    await vi.waitFor(() => expect(result.current.clips[0]?.entry?.status).toBe('uploaded'));
+
+    await act(async () => answer(jsonResponse(201, uploadReply)));
+    await vi.waitFor(() => expect(result.current.sendingIds.size).toBe(0));
+    expect(result.current.clips[0]?.entry?.status).toBe('uploaded');
+  });
+
+  it('주문 답이 늦게 왔는데 그사이 다른 영상이 최신이 됐으면 옛 업로드를 새 영상에 붙이지 않는다', async () => {
+    let answer: (r: Response) => void = () => {};
+    let latest = rendered;
+    stubFetch((url, init) => {
+      if (init?.method === 'POST') return new Promise<Response>((resolve) => (answer = resolve));
+      return url.startsWith('/api/clip/library')
+        ? jsonResponse(200, { items: [{ ...libraryEntry, latestClip: latest }], nextCursor: null })
+        : jsonResponse(200, { id: 9 });
+    });
+    const { result } = await mount();
+
+    act(() => result.current.upload('12'));
+    latest = { ...rendered, id: 6 };
+    act(() => result.current.refresh());
+    await vi.waitFor(() => expect(result.current.clips[0]?.entry?.latestClip?.id).toBe(6));
+
+    await act(async () => answer(jsonResponse(201, uploadReply)));
+    await vi.waitFor(() => expect(result.current.sendingIds.size).toBe(0));
+    expect(result.current.clips[0]?.entry?.latestClip?.upload).toBeNull();
+    expect(result.current.clips[0]?.entry?.status).toBe('rendered');
+  });
+
   it('규칙에 안 맞는 제목은 보내지 않는다', async () => {
     const spy = serve(() => jsonResponse(201, uploadReply));
     const { result } = await mount();
