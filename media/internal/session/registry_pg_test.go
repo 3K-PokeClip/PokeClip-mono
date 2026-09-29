@@ -129,14 +129,15 @@ func TestDecideReturnsErrorWhenSessionQueryFails(t *testing.T) {
 	}
 }
 
-// explicitColumns 는 개시 트랜잭션이 **명시 대입**하는 7 컬럼이다(계획 3절 (가)).
-// 나머지 컬럼은 DDL 기본값에 의존한다 — 그래서 M3 는 stream_sessions DDL 을 건드리지 않는다.
+// explicitColumns 는 개시 트랜잭션이 **명시 대입**하는 8 컬럼이다(계획 3절 (가) · 2.3 registry 행 ⑶ — 재접속
+// 계승 갈래가 inherits_session 을 더했다). 나머지 컬럼은 DDL 기본값에 의존한다 — 그래서 stream_sessions DDL 을
+// 건드리지 않는다.
 var explicitColumns = []string{
 	"session_id", "stream_id", "started_at", "state",
-	"first_pdt", "target_duration", "discontinuity_base",
+	"first_pdt", "target_duration", "discontinuity_base", "inherits_session",
 }
 
-// assertOnlyExplicitColumnsWritten 은 "명시 7 컬럼을 뺀 나머지가 DDL 기본값 그대로"를 잰다.
+// assertOnlyExplicitColumnsWritten 은 "명시 8 컬럼을 뺀 나머지가 DDL 기본값 그대로"를 잰다.
 // 기본값을 손으로 32 개 나열하는 대신 **기본값만으로 만든 대조군 행**과 통째로 비교한다 —
 // 컬럼 수를 세다 틀릴 여지가 없고, 뒤에 컬럼이 늘어도 대조가 자동으로 따라간다.
 func assertOnlyExplicitColumnsWritten(t *testing.T, pool *pgxpool.Pool, id string) {
@@ -163,11 +164,11 @@ func assertOnlyExplicitColumnsWritten(t *testing.T, pool *pgxpool.Pool, id strin
 		t.Fatalf("기본값 대조 조회 실패: %v", err)
 	}
 	if got != want {
-		t.Errorf("명시 7 컬럼 밖이 기본값과 다르다\n 개시 행 = %s\n 대조군  = %s", got, want)
+		t.Errorf("명시 8 컬럼 밖이 기본값과 다르다\n 개시 행 = %s\n 대조군  = %s", got, want)
 	}
 }
 
-func TestOpenWritesSevenColumnsAndLeavesTheRestAtDDLDefaults(t *testing.T) {
+func TestOpenWritesEightColumnsAndLeavesTheRestAtDDLDefaults(t *testing.T) {
 	pool := newTestPool(t)
 	r, _ := newTestRegistry(time.Second, 30*time.Second)
 	in := Input{StreamID: "demo", Seq: 42, StartWallUTC: wall, DurationMS: 8000, Op: OpenOrCurrent}
@@ -193,11 +194,12 @@ func TestOpenWritesSevenColumnsAndLeavesTheRestAtDDLDefaults(t *testing.T) {
 		startedAt, gotFirstPD time.Time
 		targetDuration        int32
 		discBase              int64
+		inherits              *string
 	)
 	err := pool.QueryRow(context.Background(), `
-		SELECT stream_id, started_at, state, first_pdt, target_duration, discontinuity_base
+		SELECT stream_id, started_at, state, first_pdt, target_duration, discontinuity_base, inherits_session
 		  FROM stream_sessions WHERE session_id = $1`, id).
-		Scan(&streamID, &startedAt, &state, &gotFirstPD, &targetDuration, &discBase)
+		Scan(&streamID, &startedAt, &state, &gotFirstPD, &targetDuration, &discBase, &inherits)
 	if err != nil {
 		t.Fatalf("개시 행 조회 실패: %v", err)
 	}
@@ -218,6 +220,65 @@ func TestOpenWritesSevenColumnsAndLeavesTheRestAtDDLDefaults(t *testing.T) {
 	}
 	if discBase != 0 {
 		t.Errorf("discontinuity_base = %d, 기대 = 0 (비분할 개시는 승계하지 않는다)", discBase)
+	}
+	if inherits != nil {
+		t.Errorf("inherits_session = %q, 기대 = NULL (직전 회차가 없는 개시는 계승이 아니다)", *inherits)
+	}
+	assertOnlyExplicitColumnsWritten(t, pool, id)
+}
+
+// 8열의 짝 — 재접속 계승 개시는 여덟째 열에 물려받은 직전 회차를 쓰고, 불연속 기준을 복사하며, TD 를 직전 회차
+// TD 아래로 내리지 않는다(계획 2.3 registry 행 ⑴–⑶ · kty K1). 결정은 직전 회차를 기저 세션으로 두고 그 회차의 첫
+// 조각 경로를 init 게이트 입력으로 싣는다. 나머지 열은 여전히 DDL 기본값이다. 잡는 결함: 계승 판정이 서도 Open 이
+// inherits_session 을 NULL 로 쓰면 목록이 접두 없이 나가고, 직전 회차 조회가 종료 사유 · 조각 끝을 잃으면 판정
+// 재료가 영값이라 계승이 서지 않는다.
+func TestOpenWritesInheritsSessionForReconnect(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO stream_sessions (session_id, stream_id, started_at, state, end_reason, target_duration, discontinuity_base)
+		VALUES ('S-prev', 'demo', $1, 'ending', 'offline', 8, 3)`, wall.Add(-time.Hour)); err != nil {
+		t.Fatalf("직전 회차 픽스처 실패: %v", err)
+	}
+	// 직전 회차의 첫 · 마지막 조각 — 마지막 조각 끝은 wall − 2분 + 4초다.
+	for seq, start := range map[int64]time.Time{0: wall.Add(-time.Hour), 1: wall.Add(-2 * time.Minute)} {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO stream_segments
+				(stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, local_path, upload_state, bytes, session_id)
+			VALUES ('demo', $1, 0, $2, 4000, $3, $4, 'uploaded', 1000, 'S-prev')`,
+			seq, start, fmt.Sprintf("k-%d", seq), fmt.Sprintf("/recordings/demo/prev-%d.mp4", seq)); err != nil {
+			t.Fatalf("직전 회차 조각 픽스처 실패 seq=%d: %v", seq, err)
+		}
+	}
+	r := New(Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second, ReconnectWindow: 300 * time.Second})
+	in := Input{StreamID: "demo", Seq: 42, StartWallUTC: wall, DurationMS: 4000, Op: OpenOrCurrent}
+
+	var id string
+	withTx(t, pool, func(tx pgx.Tx) {
+		d, err := r.Decide(ctx, tx, in, wall)
+		if err != nil {
+			t.Fatalf("결정 실패: %v", err)
+		}
+		if d.Outcome != OutcomeOpen || d.BaseSessionID != "S-prev" || d.PrevFirstLocalPath != "/recordings/demo/prev-0.mp4" {
+			t.Fatalf("결정 (갈래, 기저, 직전 첫 조각) = (%v, %q, %q), want (open, S-prev, /recordings/demo/prev-0.mp4)",
+				d.Outcome, d.BaseSessionID, d.PrevFirstLocalPath)
+		}
+		if id, err = r.Open(ctx, tx, d, wall); err != nil {
+			t.Fatalf("개시 실패: %v", err)
+		}
+	})
+
+	var (
+		inherits *string
+		base     int64
+		td       int32
+	)
+	if err := pool.QueryRow(ctx, `SELECT inherits_session, discontinuity_base, target_duration FROM stream_sessions WHERE session_id = $1`,
+		id).Scan(&inherits, &base, &td); err != nil {
+		t.Fatalf("개시 행 조회 실패: %v", err)
+	}
+	if inherits == nil || *inherits != "S-prev" || base != 3 || td != 8 {
+		t.Errorf("(inherits_session 있음, discontinuity_base, target_duration) = (%v, %d, %d), want (S-prev, 3, 8)", inherits != nil, base, td)
 	}
 	assertOnlyExplicitColumnsWritten(t, pool, id)
 }

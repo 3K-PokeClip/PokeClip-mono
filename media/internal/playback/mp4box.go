@@ -1,9 +1,12 @@
 package playback
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	amp4 "github.com/abema/go-mp4"
@@ -152,6 +155,61 @@ func durationOf(t uint64, timescale uint32) time.Duration {
 	whole := t / ts * perSecond
 	frac := (t%ts*perSecond + ts/2) / ts
 	return time.Duration(whole + frac)
+}
+
+// stsdPath 는 트랙마다 하나인 stsd(표본 기술 — 코덱 사양) 상자의 자리다.
+var stsdPath = amp4.BoxPath{amp4.BoxTypeMoov(), amp4.BoxTypeTrak(), amp4.BoxTypeMdia(), amp4.BoxTypeMinf(),
+	amp4.BoxTypeStbl(), amp4.BoxTypeStsd()}
+
+// StsdFingerprint 는 녹화 조각 머리말의 트랙별 stsd 상자 바이트로 만든 지문(sha256)이다 — 재접속 계승의 코덱 호환
+// 게이트 입력이다(ADR-044 RC3-28 · 계획 2.1 mp4box 행 · 2.3 registry 행 ⑸ⓑ). 두 조각의 지문이 같으면 코덱 사양이
+// 같다.
+//
+// stsd 만 보는 이유: 계승 목록은 회차 경계에서 어차피 새 MAP 으로 바꾸므로 두 회차의 init 이 같을 필요는 없고 코덱
+// 사양만 같으면 된다 — 트랙 ID · mvhd · 녹화기 mtxi 는 달라도 된다(ADR-044 2026-08-31 갱신 3항). 세션 안 MAP
+// 단일성은 더 강한 조건이라 init 전체 해시(Output.InitSHA256)가 따로 맡는다.
+//
+// 트랙 순서를 정규화한다 — 상자 바이트를 사전순으로 정렬해 잇는다(상자마다 크기 머리로 시작해 이어 붙여도 경계가
+// 모호하지 않다). 리더 위치와 무관하게 처음부터 읽고, 끝나면 부르기 전 위치로 되돌린다(ReadMtxi 와 같다). stsd 가
+// 하나도 없으면 실패한다 — 호출자는 판독 실패로 다룬다.
+func StsdFingerprint(r io.ReadSeeker) ([32]byte, error) {
+	return fromStart(r, stsdFingerprint)
+}
+
+func stsdFingerprint(r io.ReadSeeker) ([32]byte, error) {
+	infos, err := amp4.ExtractBox(r, nil, stsdPath)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("playback: stsd 판독 실패: %w", err)
+	}
+	if len(infos) == 0 {
+		return [32]byte{}, errors.New("playback: 머리말에 stsd 상자가 없다")
+	}
+	boxes := make([][]byte, 0, len(infos))
+	for _, bi := range infos {
+		b, err := readWholeBox(r, bi)
+		if err != nil {
+			return [32]byte{}, err
+		}
+		boxes = append(boxes, b)
+	}
+	slices.SortFunc(boxes, bytes.Compare)
+	return sha256.Sum256(bytes.Join(boxes, nil)), nil
+}
+
+// readWholeBox 는 상자 하나를 머리째 읽는다. 크기는 입력 크기 상한 안이어야 한다 — 손상된 크기 칸이 거대한 할당을
+// 부르지 않게 한다(파일 끝까지인 상자 · 상한 초과는 거부).
+func readWholeBox(r io.ReadSeeker, bi *amp4.BoxInfo) ([]byte, error) {
+	if bi.ExtendToEOF || bi.Size > maxInputBytes {
+		return nil, fmt.Errorf("playback: %s 상자 크기(%d)는 받지 않는다", bi.Type, bi.Size)
+	}
+	if _, err := r.Seek(int64(bi.Offset), io.SeekStart); err != nil {
+		return nil, fmt.Errorf("playback: %s 상자 위치 이동 실패: %w", bi.Type, err)
+	}
+	b := make([]byte, bi.Size)
+	if _, err := io.ReadFull(r, b); err != nil {
+		return nil, fmt.Errorf("playback: %s 상자 읽기 실패: %w", bi.Type, err)
+	}
+	return b, nil
 }
 
 // fromStart 는 r 을 처음으로 되감아 read 를 부르고, 끝나면 r 을 부르기 전 위치로 되돌린다 —

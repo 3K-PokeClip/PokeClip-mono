@@ -25,6 +25,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxstate"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/playback"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/recording"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/cache"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/upload"
 )
 
@@ -108,7 +109,7 @@ func run() error {
 	// 장부에 협력자 둘을 끼운다(계획 4.6): 세션 결정자와 ③ 키 파생.
 	// 세션 판정 정책·키 형상은 각각 자기 패키지에 있고, 여기서 이어 붙이는 것이 전부다.
 	store := index.NewPGStore(pool,
-		newSessionDecider(cfg.SessionFloorSlack, cfg.ObsFresh, log), playback.SegKey)
+		newSessionDecider(cfg.SessionFloorSlack, cfg.ObsFresh, cfg.ReconnectWindow, log), playback.SegKey)
 
 	// 업로더가 파일을 여는 유일한 손잡이다. 루트를 못 열면 기동 실패다 —
 	// 그 상태로 진행하면 모든 PUT 이 열기 단계에서 실패한다.
@@ -228,6 +229,14 @@ func run() error {
 		armSweeper: up.ArmSweeper, stallFactor: collectStallFactor,
 		reattachWatcher: func() (*recording.Watcher, error) {
 			return assembleWatcher(ctx, cfg.Watcher)
+		},
+		// 되감기 캐시는 아직 조립하지 않는다(nil — push · 요구 적재가 아무것도 하지 않는다. 조립은
+		// 되감기 스위치 · 발행자와 같은 커밋이다). 4.1 종료 전이는 캐시와 무관하게 돈다.
+		rewind: rewindLoop{
+			ix: ix, root: cfg.SegmentRoot, log: log,
+			endLive: func(ctx context.Context, streamID string) (string, error) {
+				return index.EndLive(ctx, pool, streamID)
+			},
 		},
 	}
 	if w != nil {
@@ -364,7 +373,7 @@ type loopDeps struct {
 	// 업로더가 꺼져 있으면 Results() 가 nil 을 주므로 그 case 는 영구 비활성이다 —
 	// 훅 채널과 정확히 같은 규약이다.
 	uploadResults <-chan upload.Result
-	// holdTicks 는 보류 중인 꼬리를 살펴보는 주기다. 티커의 소유자는 run 이다.
+	// holdTicks 는 보류 중인 꼬리를 살펴보고 4.1 종료 판정을 돌리는 주기다. 티커의 소유자는 run 이다.
 	holdTicks <-chan time.Time
 
 	// armSweeper 는 첫 완주 수집에서 스위퍼를 여는 손잡이다(up.ArmSweeper).
@@ -379,6 +388,9 @@ type loopDeps struct {
 	// reattachWatcher 는 재장착 손잡이다(assembleWatcher). 성공 시 loop 이 채널 넷을
 	// 갈아 끼우고 SetAdopter 를 함께 부른다 — H4·H5 되돌림이 실제 워처로 복귀한다(f6f).
 	reattachWatcher func() (*recording.Watcher, error)
+
+	// rewind 는 루프가 되감기 회차 · 캐시를 돌보는 몫이다(4.1 종료 전이 — holdTicks case 가 부른다).
+	rewind rewindLoop
 }
 
 // collectStallFactor 는 수집 정지 판정 계수다. soft 예산 45초 × 2 = 90초 —
@@ -388,8 +400,8 @@ const collectStallFactor = 2.0
 // loop 은 종료·워처사망·완성세그먼트·재스캔요청·훅이벤트·훅사망·업로드결과·보류틱을
 // 한 곳에서 받아 차례로 처리한다.
 //
-// 주석 ⓑ: Scan·Handle·HandleHook·ApplyUploadResult·ReleaseHeldTails 의 호출자는 이 루프
-// 하나뿐이다. 그래서 Indexer 에 락이 없다(D10). select 는 한 번에 하나의 case 만 실행하므로
+// 주석 ⓑ: Scan·Handle·HandleHook·ApplyUploadResult·ReleaseHeldTails·OfflineDue·OfflineTried 의 호출자는
+// 이 루프 하나뿐이다. 그래서 Indexer 에 락이 없다(D10). select 는 한 번에 하나의 case 만 실행하므로
 // 이들이 동시에 불릴 수 없다. 이 규약을 깨고 다른 고루틴에서 부르면 즉시 seq 중복이 난다.
 func loop(ctx context.Context, d loopDeps) error {
 	ticker := time.NewTicker(d.rescanEvery)
@@ -504,8 +516,72 @@ func loop(ctx context.Context, d loopDeps) error {
 					"note", "수집 결과가 오지 않고 있다. FS 정지 의심 — 프로세스는 계속 돈다")
 			}
 			d.ix.ReleaseHeldTails()
+			// 4.1 판정은 틱 채널의 값이 아니라 지금 시각으로 선다 — 루프가 밀려 틱 값이 과거가 되면
+			// 관측 신선도가 그만큼 느슨해진다(현행 두 줄도 틱 값을 쓰지 않는다).
+			d.rewind.endOfflineSessions(ctx, time.Now())
 		}
 	}
+}
+
+// rewindLoop 은 루프가 되감기 회차 · 캐시를 돌보는 일이다 — loop 고루틴이 부르고 자기 고루틴이 없다(D10). 지금 하는
+// 일은 4.1 종료 전이의 실행 하나다(계획 4.1 · 4.5 E 부속 「루프 보조 타입」). 판정은 indexer 가 한다
+// (OfflineDue · OfflineTried) — 이 타입은 그 판정을 점검 발사 · 전이 · 캐시 push · 요구 적재로 옮길 뿐이다.
+type rewindLoop struct {
+	ix   *indexer.Indexer
+	root string
+	// cache 는 되감기 캐시다. nil 이면 push · 요구 적재가 아무것도 하지 않는다(캐시의 nil 규약).
+	cache *cache.Cache
+	log   *slog.Logger
+	// endLive 는 스트림의 live 회차를 ending(offline)으로 보내고 그 회차 ID 를 돌려준다(live 회차가 없으면 "") —
+	// 운영은 풀을 묶은 index.EndLive 다. 오류면 서버가 커밋했는지 모른다.
+	endLive func(ctx context.Context, streamID string) (sessionID string, err error)
+}
+
+// endOfflineSessions 는 4.1 종료 전이를 실행한다. holdTicks case 가 그 case 의 현재 시각 now 로 부르고, now 는 그
+// 틱의 판정과 모든 결과 되돌림에 같이 쓴다.
+//
+//	점검 발사  판정이 점검 수집을 요구하면 반드시 발사한다 — 재점검 갈래는 판정이 이미 그 표시를 썼다. 결과는
+//	           기존 CollectDone case 가 받는다.
+//	전이       due 차례로 endLive 를 부른다. 1행이면 그 회차의 ending 을 캐시에 넘기고, 1행 · 0행 모두 그
+//	           꼬리에 한 번 가드를 쓴다.
+//	실패       offlineFailed 가 받고 그 틱의 남은 전이를 멈춘다.
+//
+// 워커로 내리지 않는다 — 판정과 전이 사이에 INSERT 가 끼면 판정하지 않은 회차를 닫는다. 루프 점유는 전이 한 번에
+// index.TxnDeadline 이하다(EndLive 의 대기 상한).
+func (r rewindLoop) endOfflineSessions(ctx context.Context, now time.Time) {
+	due, collect := r.ix.OfflineDue(now)
+	if collect {
+		r.ix.StartCollect(ctx, r.root)
+	}
+	for _, streamID := range due {
+		sessionID, err := r.endLive(ctx, streamID)
+		if err != nil {
+			r.offlineFailed(ctx, streamID, err, now)
+			return
+		}
+		if sessionID != "" {
+			r.cache.ApplySessionEnding(streamID, sessionID)
+		}
+		r.ix.OfflineTried(streamID, true, now)
+	}
+}
+
+// offlineFailed 는 결과를 모르는 전이 실패다(시한 · lock_timeout · DB 오류 — 서버가 커밋했을 수 있다). ERROR 한
+// 줄을 남기고, 그 스트림에 뷰나 진행 중인 적재가 있으면 적재를 요구하고(힌트 없음 — 커밋됐으면 적재가 캐시
+// 회차를 ending 으로 맞춘다), offlineRetryAfter 동안 어느 스트림도 시도하지 않게 판정에 되돌린다. 한 번 가드는
+// 쓰지 않는다 — 쉼 뒤 같은 꼬리로 다시 시도한다.
+//
+// 부른 쪽 ctx 가 끝나 난 실패는 루프가 끝나는 중이라 아무것도 남기지 않는다 — ctx 가 끊은 실패는 DB 의 상태를
+// 말하지 않는다(발행 층 stopped 관례).
+func (r rewindLoop) offlineFailed(ctx context.Context, streamID string, err error, now time.Time) {
+	if ctx.Err() != nil {
+		return
+	}
+	r.log.Error("session_offline", "stream_id", streamID, "result", "failed", "err", err)
+	if _, hasView := r.cache.Snapshot(streamID).Cutoff(); hasView || r.cache.Loading(streamID) {
+		r.cache.DemandLoad(streamID, nil)
+	}
+	r.ix.OfflineTried(streamID, false, now)
 }
 
 // logReaderStopped 는 훅 채널이 멈춘 사실을 남긴다.

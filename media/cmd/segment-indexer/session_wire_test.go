@@ -103,7 +103,7 @@ func TestSessionDeciderCarriesBaseSessionAndPlanEndToEnd(t *testing.T) {
 		t.Fatalf("직전 세션 픽스처 실패: %v", err)
 	}
 
-	d := newSessionDecider(time.Second, 30*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	wall := wireBase.Add(time.Minute)
 	firstPDT := wall.Add(500 * time.Millisecond)
 
@@ -200,7 +200,7 @@ func TestSessionDeciderCopiesObservationFields(t *testing.T) {
 			pool := newWireTestPool(t)
 			ctx := context.Background()
 			var logs bytes.Buffer
-			d := newSessionDecider(time.Second, 30*time.Second, slog.New(slog.NewTextHandler(&logs, nil)))
+			d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, slog.New(slog.NewTextHandler(&logs, nil)))
 
 			obs := fresh()
 			c.mutate(&obs)
@@ -226,4 +226,78 @@ func TestSessionDeciderCopiesObservationFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 개시 결과 두 칸(EndingSessionID · PrevFirstLocalPath)도 운영 어댑터가 명시 복사로 옮긴다(계획 4.5 B #1 ·
+// 2.3 registry 행 ⑵). 어댑터는 필드별 복사라 한 줄을 빠뜨리면 여기서 탈락하고, 장부 쪽 시험(index 의 시험
+// 어댑터)은 그 탈락을 보지 못한다. 비분할 개시 행은 기저 세션이 비지 않는 스트림에서 연다 — 「새 칸 자리에
+// BaseSessionID 를 복사하는」 결함이 그 행에서 드러난다.
+func TestSessionDeciderCarriesOpeningResultsEndToEnd(t *testing.T) {
+	const stream = "wireopen"
+	decide := func(t *testing.T, pool *pgxpool.Pool, wall time.Time, durationMS int32) index.SessionDecision {
+		t.Helper()
+		d := newSessionDecider(time.Second, 30*time.Second, 300*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		tx, err := pool.Begin(t.Context())
+		if err != nil {
+			t.Fatalf("트랜잭션 시작 실패: %v", err)
+		}
+		defer func() { _ = tx.Rollback(t.Context()) }()
+		dec, err := d.Decide(t.Context(), tx, index.SessionInput{
+			StreamID: stream, Seq: 9, StartWallUTC: wall, DurationMS: durationMS,
+			SessionSource: index.SessionSource{Op: index.SessionOpenOrCurrent},
+		}, wall)
+		if err != nil {
+			t.Fatalf("Decide 실패: %v", err)
+		}
+		return dec
+	}
+	putSession := func(t *testing.T, pool *pgxpool.Pool, id, state string) {
+		t.Helper()
+		if _, err := pool.Exec(t.Context(), `
+			INSERT INTO stream_sessions (session_id, stream_id, started_at, state, first_pdt, end_reason)
+			VALUES ($1, $2, $3, $4, $3, CASE WHEN $4 = 'live' THEN NULL ELSE 'offline' END)`, id, stream, wireBase, state); err != nil {
+			t.Fatalf("세션 픽스처 실패 %s: %v", id, err)
+		}
+	}
+
+	t.Run("TD_분할", func(t *testing.T) {
+		pool := newWireTestPool(t)
+		putSession(t, pool, "S-live", "live")
+
+		dec := decide(t, pool, wireBase.Add(time.Minute), 6500) // round(6.5) = 7 > TD 6
+
+		if !dec.Opens || dec.EndingSessionID != "S-live" {
+			t.Errorf("(Opens, EndingSessionID) = (%v, %q), want (true, \"S-live\")", dec.Opens, dec.EndingSessionID)
+		}
+	})
+	t.Run("비분할_개시", func(t *testing.T) {
+		pool := newWireTestPool(t)
+		putSession(t, pool, "S-prev", "ended") // 조각이 없어 계승 대상이 아니다
+
+		dec := decide(t, pool, wireBase.Add(time.Minute), 4000)
+
+		if !dec.Opens || dec.BaseSessionID != "S-prev" || dec.EndingSessionID != "" || dec.PrevFirstLocalPath != "" {
+			t.Errorf("(Opens, BaseSessionID, EndingSessionID, PrevFirstLocalPath) = (%v, %q, %q, %q), want (true, \"S-prev\", \"\", \"\")",
+				dec.Opens, dec.BaseSessionID, dec.EndingSessionID, dec.PrevFirstLocalPath)
+		}
+	})
+	t.Run("재접속_계승_개시", func(t *testing.T) {
+		pool := newWireTestPool(t)
+		putSession(t, pool, "S-prev", "ending")
+		const firstPath = "/recordings/wireopen/prev-0.mp4"
+		if _, err := pool.Exec(t.Context(), `
+			INSERT INTO stream_segments
+				(stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, local_path, upload_state, bytes, session_id)
+			VALUES ($1, 0, 0, $2, 4000, $3, $4, 'pending', 1000, 'S-prev')`,
+			stream, wireBase, index.S3Key(stream, 0, wireBase), firstPath); err != nil {
+			t.Fatalf("직전 회차 조각 픽스처 실패: %v", err)
+		}
+
+		dec := decide(t, pool, wireBase.Add(124*time.Second), 4000) // 마지막 조각 끝(+4초)에서 120초 뒤
+
+		if !dec.Opens || dec.PrevFirstLocalPath != firstPath || dec.EndingSessionID != "" {
+			t.Errorf("(Opens, PrevFirstLocalPath, EndingSessionID) = (%v, %q, %q), want (true, %q, \"\")",
+				dec.Opens, dec.PrevFirstLocalPath, dec.EndingSessionID, firstPath)
+		}
+	})
 }

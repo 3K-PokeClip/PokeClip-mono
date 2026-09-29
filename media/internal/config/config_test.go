@@ -576,6 +576,10 @@ func TestLoadAppliesObservationDefaults(t *testing.T) {
 	if cfg.SessionFloorSlack != time.Second {
 		t.Errorf("SESSION_FLOOR_SLACK = %v, want 1s", cfg.SessionFloorSlack)
 	}
+	// 재접속 계승 창은 env 가 없는 설계값이다(ADR-044 결정 3) — 영값이면 계승 판정이 늘 거짓이다.
+	if cfg.ReconnectWindow != 300*time.Second {
+		t.Errorf("ReconnectWindow = %v, want 5m0s", cfg.ReconnectWindow)
+	}
 	// 판정 창 공시(90초) = OBS_BACKFILL + OBS_FRESH. 기본값이 그 산식과 맞아야 한다.
 	if got := cfg.ObsBackfill + cfg.ObsFresh; got != 90*time.Second {
 		t.Errorf("OBS_BACKFILL+OBS_FRESH = %v, want 90s(판정 창 공시)", got)

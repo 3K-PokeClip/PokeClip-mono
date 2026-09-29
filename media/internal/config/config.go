@@ -61,6 +61,10 @@ type Config struct {
 	// SessionFloorSlack 은 세션 귀속 하한의 여유다(설계 5.4.1 ⑴ — 시계 역행 방어).
 	// 판정은 session 레지스트리가 한다.
 	SessionFloorSlack time.Duration
+	// ReconnectWindow 는 재접속 계승 창이다 — 직전 회차 마지막 조각 끝에서 이 시간 안에 새 조각이
+	// 오면 새 회차가 직전 회차를 물려받는다(ADR-044 결정 3 · kty ⑷). 설계값이라 env 가 없고 값의 집은
+	// 여기 하나다. 판정은 session 레지스트리가 한다(조립점이 옮겨 담는다).
+	ReconnectWindow time.Duration
 }
 
 // 관측 축 기본값(설계 5.4.1·6.5.2). 판정 주체(indexer·session)는 이 값을 설정으로 받으며
@@ -316,6 +320,8 @@ func Load(env func(string) string) (Config, error) {
 		ObsFresh:          obsFresh,
 		ObsBackfill:       obsBackfill,
 		SessionFloorSlack: sessionFloorSlack,
+		// 설계값(ADR-044 결정 3 — IVS 300초 선례)이라 const 로 선언하지 않고 여기 한 자리에 적는다(계획 5절).
+		ReconnectWindow: 300 * time.Second,
 	}, nil
 }
 

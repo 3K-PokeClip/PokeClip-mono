@@ -55,10 +55,12 @@ func (d registryDecider) Decide(ctx context.Context, tx pgx.Tx, in SessionInput,
 		return SessionDecision{}, err
 	}
 	return SessionDecision{
-		Opens:         dec.Outcome == session.OutcomeOpen || dec.Outcome == session.OutcomeOpenFresh,
-		SessionID:     dec.SessionID,
-		BaseSessionID: dec.BaseSessionID,
-		Plan:          dec,
+		Opens:              dec.Outcome == session.OutcomeOpen || dec.Outcome == session.OutcomeOpenFresh,
+		SessionID:          dec.SessionID,
+		BaseSessionID:      dec.BaseSessionID,
+		EndingSessionID:    dec.EndingSessionID,
+		PrevFirstLocalPath: dec.PrevFirstLocalPath,
+		Plan:               dec,
 	}, nil
 }
 
@@ -83,9 +85,9 @@ func sessionOpForTest(op SessionOp) (session.Op, error) {
 }
 
 // newSessionStore 는 실물 세션 결정자와 실물 키 파생을 끼운 store 다(M3 형상).
-// 정책값은 config 기본값과 같다 — SESSION_FLOOR_SLACK 1초 · OBS_FRESH 30초.
+// 정책값은 config 기본값과 같다 — SESSION_FLOOR_SLACK 1초 · OBS_FRESH 30초 · 재접속 계승 창 300초.
 func newSessionStore(pool *pgxpool.Pool) Store {
-	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second})
+	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second, ReconnectWindow: 300 * time.Second})
 	return NewPGStore(pool, registryDecider{reg: reg}, playback.SegKey)
 }
 
@@ -582,31 +584,47 @@ func TestSessionOpenFoldsToCurrentOnlyWhenObservationStalesDuringAdvisoryWait(t 
 	}
 }
 
-// 계획 단계 3 ⑼ — M3 의 결속 한계를 문서화한다.
-// 세션 종료 전이(offline → ending → ended)가 M4/M6 라, 같은 stream_id 의 연속 방송은
-// 첫 live 세션에 계속 귀속된다. 발행 층이 없어 무해하며, 그 경로가 착지하면 s2_6b 가 실동한다.
-func TestConsecutiveBroadcastsStayOnTheFirstLiveSession(t *testing.T) {
+// 계획 4.1 「M3 한계의 소멸」 — 4.1 종료 전이(EndLive)가 첫 방송의 live 회차를 닫으면, 같은 stream_id 의 두
+// 시간 뒤 방송은 새 회차를 연다(M3 의 「연속 방송이 첫 live 세션에 계속 귀속된다」가 끝난다). 둘째 회차는
+// 비계승이다 — 재접속 계승 창(300초) 밖이라 계승 · 불연속 기준을 잇지 않는다.
+func TestConsecutiveBroadcastsOpenSeparateSessionsAfterEndLive(t *testing.T) {
 	pool := newTestPool(t)
 	store := newSessionStore(pool)
 	stream := sessionStream("rebroadcast")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if _, _, err := store.Insert(ctx, segAt(stream, 0, sessionBase, 4000), Seed{}, liveIngress()); err != nil {
 		t.Fatalf("첫 방송 Insert 실패: %v", err)
 	}
-	// 두 시간 뒤의 "다른 방송" — 관측도 유입도 새 방송이지만 세션은 그대로다.
+	first := carrierOf(t, pool, stream, 0)
+	if first.SessionID == nil {
+		t.Fatal("첫 방송이 회차에 귀속되지 않았다 — 준비가 어긋났다")
+	}
+	ended, err := EndLive(ctx, pool, stream)
+	if err != nil || ended != *first.SessionID {
+		t.Fatalf("EndLive = (%q, %v), want (%q, nil)", ended, err, *first.SessionID)
+	}
+	// 두 시간 뒤의 다른 방송.
 	later := sessionBase.Add(2 * time.Hour)
 	if _, _, err := store.Insert(ctx, segAt(stream, 1, later, 4000), Seed{}, liveIngress()); err != nil {
 		t.Fatalf("두 번째 방송 Insert 실패: %v", err)
 	}
 
 	sessions := sessionsOf(t, pool, stream)
-	if len(sessions) != 1 {
-		t.Fatalf("세션 수 = %d, want 1 — M3 는 세션 종료 전이가 없어 계속 귀속된다(공시된 한계)", len(sessions))
+	if len(sessions) != 2 || sessions[0].State != "ending" || sessions[1].State != "live" {
+		t.Fatalf("회차 state = %v, want [ending live] — 전이가 닫은 회차 뒤에 새 회차가 열려야 한다", statesOf(sessions))
 	}
-	first, second := carrierOf(t, pool, stream, 0), carrierOf(t, pool, stream, 1)
-	if first.SessionID == nil || second.SessionID == nil || *first.SessionID != *second.SessionID {
-		t.Fatalf("두 방송의 귀속 세션이 다르다: %v / %v", first.SessionID, second.SessionID)
+	second := carrierOf(t, pool, stream, 1)
+	if second.SessionID == nil || *second.SessionID != sessions[1].ID || *second.SessionID == *first.SessionID {
+		t.Fatalf("두 번째 방송의 귀속 = %v, want 새 회차 %q(첫 회차 %q 와 다름)", second.SessionID, sessions[1].ID, *first.SessionID)
+	}
+	var inherits *string
+	if err := pool.QueryRow(ctx, `SELECT inherits_session FROM stream_sessions WHERE session_id = $1`,
+		sessions[1].ID).Scan(&inherits); err != nil {
+		t.Fatalf("계승 열 조회 실패: %v", err)
+	}
+	if inherits != nil || sessions[1].DiscontinuityBase != 0 {
+		t.Errorf("둘째 회차 계승 = %v · base %d, want NULL · 0 — 300초 창 밖은 비계승이다", inherits, sessions[1].DiscontinuityBase)
 	}
 }
 

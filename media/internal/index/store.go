@@ -301,6 +301,8 @@ func withCommitted(res SeedResult, r Record, o sessionOpening) SeedResult {
 	res.DiscontinuityBase = o.discontinuityBase
 	res.TargetDuration = o.targetDuration
 	res.InheritsSession = o.inheritsSession
+	res.EndingSessionID = o.endingSessionID
+	res.PrevFirstLocalPath = o.prevFirstLocalPath
 	res.DurationMS = r.DurationMS
 	if r.SessionID != nil {
 		res.SessionID = *r.SessionID
@@ -368,6 +370,8 @@ func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src Se
 		if opening, err = readOpening(ctx, tx, sessionID); err != nil {
 			return r, sessionOpening{}, err
 		}
+		// 행에 쓰이지 않는 두 값은 결정에서 옮긴다 — Open 이 성공한 뒤라 개시가 실제로 쓴 결정의 값이다.
+		opening.endingSessionID, opening.prevFirstLocalPath = dec.EndingSessionID, dec.PrevFirstLocalPath
 	}
 	r.SessionID, r.PlaybackPDT = &sessionID, &pdt
 
@@ -380,12 +384,15 @@ func (s *pgStore) settleCarrier(ctx context.Context, tx pgx.Tx, r Record, src Se
 	return r, opening, nil
 }
 
-// sessionOpening 은 이 트랜잭션이 연 세션 행에 쓰인 값이다. 개시가 아니면 영값이다.
+// sessionOpening 은 이 트랜잭션이 연 세션 행에 쓰인 값과, 행에 쓰이지 않고 결정이 실어 온 개시 결과 두 값
+// (TD 분할이 끝낸 옛 회차 · 계승 개시의 직전 회차 첫 조각 경로)이다. 개시가 아니면 영값이다.
 type sessionOpening struct {
-	opened            bool
-	discontinuityBase int64
-	targetDuration    int32
-	inheritsSession   string
+	opened             bool
+	discontinuityBase  int64
+	targetDuration     int32
+	inheritsSession    string
+	endingSessionID    string
+	prevFirstLocalPath string
 }
 
 // openedSessionSQL 은 방금 연 세션 행에서 개시가 정한 세 열을 되읽는다.
@@ -538,4 +545,61 @@ func (s *pgStore) UpdateTail(ctx context.Context, streamID string, seq int64, du
 		return false, fmt.Errorf("꼬리 정정 실패 stream_id=%q seq=%d: %w", streamID, seq, err)
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// endLiveSQL 은 4.1 종료 전이다 — 스트림의 live 회차를 ending 으로 보내고 사유 offline 을 남긴다(계획 4.1 전이 · 사유는
+// 문장의 글자다). 술어가 회차가 아니라 스트림인 것이 계약이다: stream_sessions_one_live_uq 가 스트림당 live 1행을
+// 보증하고, 부르는 쪽(루프 — D10)이 판정과 이 문장 사이에 INSERT 를 끼우지 않으므로 판정한 그 회차를 닫는다.
+// state='live' 술어는 이미 끝난 회차의 사유 · 시각을 덮지 않게 한다 — session 의 endSessionSQL · 이 패키지의 init
+// 불일치 결속 CTE 와 같은 술어이고, 세 문장은 session/end_session_pg_test.go 가 대조한다(계획 부기 21).
+const endLiveSQL = `
+UPDATE stream_sessions
+   SET state = 'ending', ending_at = now(), end_reason = 'offline'
+ WHERE stream_id = $1 AND state = 'live'
+RETURNING session_id`
+
+// EndLive 는 streamID 의 live 회차를 ending(사유 offline)으로 보내고 그 회차 ID 를 돌려준다(계획 4.1 전이). live
+// 회차가 없으면 "" 이고 오류가 아니다.
+//
+// 트랜잭션은 이 함수가 BEGIN 부터 끝까지 소유한다. 첫 문장이 트랜잭션 지역 상한(lock_timeout 5초 · statement_timeout
+// 10초 — setTxnLimitsSQL)이고 ctx 시한은 트랜잭션 하나에 TxnDeadline 하나다 — 루프가 부르므로 루프 점유가 전이 한
+// 번에 TxnDeadline 을 넘지 않는다. 오류면 서버가 커밋했는지 모른다(부르는 쪽이 결과 모름으로 다룬다).
+func EndLive(ctx context.Context, pool *pgxpool.Pool, streamID string) (sessionID string, err error) {
+	return endLive(ctx, pool, streamID, TxnDeadline)
+}
+
+// endLive 는 EndLive 의 몸체다 — 시한 deadline 을 받는 것은 같은 패키지의 시험이 문장 시한과 되돌림 시한을 함께
+// 줄이기 위해서다(loadRewindLedger 와 같은 형).
+//
+// 실패하면 되돌린다. 되돌림 ctx 는 되돌리는 순간에 부른 쪽 ctx 에서 취소를 떼고 같은 시한을 새로 씌워 만든다 — 끝난
+// ctx 로 되돌리면 pgx 가 연결을 닫아 풀 연결이 버려지고, 미리 만들어 두면 시한을 다 쓴 갈래에서 그 ctx 도 끝나 있다.
+// COMMIT 오류 뒤에는 되돌리지 않는다 — pgx 의 Commit 은 결과와 상관없이 트랜잭션을 닫는다(미뤄 둔 되돌림은 문장
+// 없이 끝난다).
+func endLive(ctx context.Context, pool *pgxpool.Pool, streamID string, deadline time.Duration) (string, error) {
+	tctx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+	tx, err := pool.Begin(tctx)
+	if err != nil {
+		return "", fmt.Errorf("종료 전이 트랜잭션 시작 실패 stream_id=%q: %w", streamID, err)
+	}
+	defer func() {
+		rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), deadline)
+		defer rcancel()
+		_ = tx.Rollback(rctx)
+	}()
+	if _, err := tx.Exec(tctx, setTxnLimitsSQL); err != nil {
+		return "", fmt.Errorf("종료 전이 상한 설정 실패 stream_id=%q: %w", streamID, err)
+	}
+	var sessionID string
+	err = tx.QueryRow(tctx, endLiveSQL, streamID).Scan(&sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil // live 회차가 없다 — 바꾼 것이 없으니 미뤄 둔 되돌림으로 끝낸다
+	}
+	if err != nil {
+		return "", fmt.Errorf("종료 전이 실패 stream_id=%q: %w", streamID, err)
+	}
+	if err := tx.Commit(tctx); err != nil {
+		return "", fmt.Errorf("종료 전이 확정 실패 stream_id=%q: %w", streamID, err)
+	}
+	return sessionID, nil
 }

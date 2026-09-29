@@ -223,6 +223,10 @@ type Indexer struct {
 	// initAdmitted 는 이 프로세스에서 init 요청이 업로더에 접수된 스트림별 마지막 회차다 — init 은
 	// 회차마다 접수될 때까지 그 회차의 행에서 요청한다(upload.go requestRowUploads).
 	initAdmitted map[string]string
+	// opened 는 이 프로세스가 본 스트림별 마지막 개시 행의 결과다 — 그 회차의 init 요청이 개시 행의 계승 게이트
+	// 입력(물려받은 회차 · 그 회차 첫 조각 경로)을 싣게 한다. 거부 뒤 다음 행의 재요청도 같다(판단 J64). 수명은
+	// initAdmitted 와 같다.
+	opened map[string]index.SeedResult
 	// rewind 는 되감기 캐시다(rewind/cache). 장부에 커밋된 행(advance)과 꼬리 교정(correctTail)을
 	// 커밋 직후 그대로 넘긴다 — 캐시가 평시 DB 를 묻지 않고 목록을 만들 수 있는 통로가 이 둘이다(프로필
 	// 4절 「합성은 평시 DB 조회 0」). nil 이면 넘기지 않는다(캐시의 nil 규약 — 조립은 M4 PR ⓒ).
@@ -344,6 +348,7 @@ func New(store index.Store, probe fmp4meta.DurationProbe, w Adopter,
 		requested:       map[string]int64{},
 		chains:          map[string]playbackChain{},
 		initAdmitted:    map[string]string{},
+		opened:          map[string]index.SeedResult{},
 		pendingOffline:  map[string]sessionMark{},
 		lastOnlineAt:    map[string]time.Time{},
 		breaks:          map[string][]sessionBreak{},

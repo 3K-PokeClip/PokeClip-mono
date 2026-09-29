@@ -483,6 +483,76 @@ func TestOpenTargetDurationRoundsAndFloorsAtSix(t *testing.T) {
 	}
 }
 
+// 재접속 계승 판정(ADR-044 결정 3 · kty ⑷ — 계획 2.3 registry 행 ⑵)의 경계 표. 기산은 직전 회차 마지막 조각
+// 끝이고 창은 양 끝을 포함한다. 잡는 결함: ≤ 가 < 로 바뀌면 정확히 300초 만의 재접속이 새 방송이 되고, 음수
+// 공백을 받으면 직전 회차 끝보다 이른 조각(시계 역행)이 그 회차를 물려받는다. 영값 창은 「계승 안 함」이다 —
+// 공백 0 인 조각까지 막는다(Options 의 영값 = 안전 방향 규칙). init 불일치로 끝난 회차는 코덱이 바뀌었다는
+// 뜻이라 물려받지 않고, 아직 live 인 회차(조회 사이 남이 연 회차)는 끝난 회차가 아니다.
+func TestInheritableJudgesReconnectWindowBoundaries(t *testing.T) {
+	const window = 300 * time.Second
+	end := wall // 직전 회차 마지막 조각 끝
+	prev := func(state, reason string) previousSession {
+		return previousSession{id: "S-prev", state: state, endReason: reason, lastEnd: end}
+	}
+	tests := []struct {
+		name   string
+		prev   previousSession
+		start  time.Time
+		window time.Duration
+		want   bool
+	}{
+		{"창_안_120초", prev("ending", "offline"), end.Add(120 * time.Second), window, true},
+		{"정확히_300초", prev("ending", "offline"), end.Add(300 * time.Second), window, true},
+		{"300초_1ms_초과", prev("ending", "offline"), end.Add(300*time.Second + time.Millisecond), window, false},
+		{"공백_0", prev("ending", "offline"), end, window, true},
+		{"음수_공백", prev("ending", "offline"), end.Add(-time.Millisecond), window, false},
+		{"ended_회차", prev("ended", "offline"), end.Add(time.Second), window, true},
+		{"TD_분할로_끝난_회차", prev("ending", "td_exceeded"), end.Add(time.Second), window, true},
+		{"init_불일치로_끝난_회차", prev("ending", "init_mismatch"), end.Add(time.Second), window, false},
+		{"live_회차", prev("live", ""), end.Add(time.Second), window, false},
+		{"조각_없는_회차", previousSession{id: "S-prev", state: "ended", endReason: "offline"}, end.Add(time.Second), window, false},
+		{"창_영값", prev("ending", "offline"), end, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := inheritable(tt.prev, tt.start, tt.window); got != tt.want {
+				t.Errorf("inheritable(%+v, 끝+%v, %v) = %v, want %v", tt.prev, tt.start.Sub(end), tt.window, got, tt.want)
+			}
+		})
+	}
+}
+
+// 개시 결정의 EndingSessionID 는 TD 분할 갈래에서만 값이다(계획 4.5 B #1) — 분할이 같은 트랜잭션에서 ending 으로
+// 보내는 현 live 회차다. 잡는 결함: 분할이 싣지 않으면 캐시가 옛 회차를 live 로 든 채 새 회차가 열려 한 스트림에
+// live 회차 둘이 보인다 / 비분할(첫 회차 · 재접속 계승)이나 계속 갈래가 값을 실으면 끝나지 않은 회차를 강등한다.
+func TestOpenDecisionCarriesEndingSessionOnlyForTDSplit(t *testing.T) {
+	r, _ := newTestRegistry(time.Second, 30*time.Second)
+	live := &liveSession{id: "S-old", startedAt: wall, targetDuration: 6, discontinuityBase: 3}
+	in := func(durationMS int32) Input {
+		return Input{StreamID: "demo", Seq: 42, StartWallUTC: wall.Add(time.Minute), DurationMS: durationMS, Op: OpenOrCurrent}
+	}
+	prev := &previousSession{id: "S-prev", state: "ending", endReason: "offline", lastEnd: wall}
+
+	tests := []struct {
+		name        string
+		d           Decision
+		wantOutcome Outcome
+		want        string
+	}{
+		{"TD_분할", r.decide(live, in(6500), wall.Add(time.Minute)), OutcomeOpenFresh, "S-old"},
+		{"계속", r.decide(live, in(4000), wall.Add(time.Minute)), OutcomeCurrent, ""},
+		{"첫_회차_개시", r.decide(nil, in(4000), wall.Add(time.Minute)), OutcomeOpen, ""},
+		{"재접속_계승_개시", openDecision(in(4000), nil, prev), OutcomeOpen, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.d.Outcome != tt.wantOutcome || tt.d.EndingSessionID != tt.want {
+				t.Errorf("(갈래, EndingSessionID) = (%v, %q), want (%v, %q)", tt.d.Outcome, tt.d.EndingSessionID, tt.wantOutcome, tt.want)
+			}
+		})
+	}
+}
+
 // s4_signal_grades·s4_signal_present(M3 몫) — 두 신호는 **WARN** 이고 조치에 필요한
 // 라벨을 달고 나온다.
 //

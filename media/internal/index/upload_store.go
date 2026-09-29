@@ -47,6 +47,16 @@ type UploadTarget struct {
 	// 보류 목록에서 기다린다.
 	ExpectedInitSHA []byte
 
+	// 아래 둘은 init 축의 계승 호환 게이트 입력이다(계획 4.5 B #3 · #19 — ADR-044 stsd 지문). 실시간 작업은 개시 행의
+	// SeedResult 가, 스위퍼 작업은 init 조회가 싣는다. 다른 축에서는 비어 있다.
+
+	// InheritsSession 은 그 회차가 계승 후보면 물려받은 직전 회차다. 게이트의 판별은 이 칸 하나다(B #3) — 빈 값이면
+	// 계승 후보가 아니라 워커가 지문을 뜨지 않고 비호환 거짓을 넘긴다.
+	InheritsSession string
+	// PrevFirstLocalPath 는 물려받은 직전 회차의 첫 조각 local_path 다 — 새 회차 조각과 stsd 지문을 견줄 상대다.
+	// 계승 후보인데 빈 값이면(직전 회차에 조각이 없다) 워커가 비호환으로 판정한다(fail-closed).
+	PrevFirstLocalPath string
+
 	// 아래 셋은 ③ 조각의 시간 도장 메타다(계획 4.2-R R3). **메모리 필드이며 DB 통로가 아니다**
 	// — 장부에 컬럼이 없고, 스위퍼 조회는 채우지 않는다.
 
@@ -125,10 +135,11 @@ type UploadStore interface {
 	// 동등성) 보증이 통째로 사라진다.
 	//
 	// incompatible 은 워커가 계산한 **계승 비호환 여부**(ADR-044 `stsd` 지문)다. 참이면서
-	// 그 세션이 계승 후보(inherits_session IS NOT NULL)일 때만 계승을 **영속 해제**한다 —
-	// TD 분할 세션(inherits_session NULL·base 승계)은 무접촉이다. 해제는 첫 확정 1회뿐이라
-	// 이미 확정된 세션에는 참을 넘겨도 바뀌지 않는다. 계승 후보가 아닌 개시
-	// (SeedResult.PrevFirstLocalPath 가 빈 값)에서는 호출자가 거짓을 넘긴다 — 게이트 비적용.
+	// 그 세션이 계승 후보(inherits_session IS NOT NULL)일 때만 계승을 **영속 해제**하고 결과가
+	// InitMarkRevoked 다 — TD 분할 세션(inherits_session NULL·base 승계)은 무접촉이다. 해제는 첫 확정
+	// 1회뿐이라 이미 확정된 세션에는 참을 넘겨도 바뀌지 않는다. 판별은 계승 후보인가다(계획 4.5 B #3):
+	// 후보가 아니면(작업의 InheritsSession 이 빈 값) 호출자가 거짓을 넘기고 — 게이트 비적용 — 후보인데
+	// 직전 회차 첫 조각 경로가 비었거나 읽을 수 없으면 참을 넘긴다(fail-closed).
 	//
 	// 실패 쪽 CAS 는 없다. 5.5.5 가 init 에 성공 문장 하나만 정의하며, 실패 상태 컬럼을
 	// 새로 만들지 않는다(회수는 재추출·재요청으로 한다).
@@ -208,7 +219,7 @@ SELECT (SELECT count(*) FROM seg)`
 // 같은 층의 값이고 DDL CHECK 는 없다(ddl.go 의 end_reason text).
 const ReasonInitMismatch = "init_mismatch"
 
-// InitMark 는 첫 init CAS 의 결과 4분기다. bool 하나로는 "이미 같은 바이트로 확정됐다"(정상
+// InitMark 는 첫 init CAS 의 결과 5분기다. bool 하나로는 "이미 같은 바이트로 확정됐다"(정상
 // 재시도)와 "다른 바이트로 확정됐다"(세션을 쪼개야 하는 사건)를 구분할 수 없다.
 //
 // 영값은 판정이 아니다 — 오류와 함께만 나간다. 값이 1 부터인 이유는 안 채운 결과가 조용히
@@ -216,15 +227,19 @@ const ReasonInitMismatch = "init_mismatch"
 type InitMark uint8
 
 const (
-	// InitMarkSuccess — 이번 호출이 4열을 썼다.
+	// InitMarkSuccess — 이번 호출이 4열을 썼다(계승은 풀지 않았다).
 	InitMarkSuccess InitMark = iota + 1
-	// InitMarkAlreadySame — 이미 **같은** 바이트로 확정돼 있다. 멱등 재시도이며 정상이다.
+	// InitMarkAlreadySame — 이미 **같은** 바이트로 확정돼 있다. 멱등 재시도이며 정상이다. 앞선 확정이
+	// 계승을 풀었는지는 이 결과가 모른다(계획 4.5 A2 결정 10 — 호출자는 해제 여부를 표시하지 않는다).
 	InitMarkAlreadySame
 	// InitMarkMismatch — 이미 **다른** 바이트로 확정돼 있다. 그 세션의 MAP 은 바꿀 수 없으므로
 	// 호출자는 ERROR 를 남기고 작업을 끝낸다(재수거 사다리 — init 작업에는 조각이 없다).
 	InitMarkMismatch
 	// InitMarkMissing — 그 세션 행이 없다.
 	InitMarkMissing
+	// InitMarkRevoked — 이번 호출이 4열을 썼고 **같은 문장에서 계승을 풀었다**(계승 후보 ∧ 비호환 —
+	// 계획 4.5 A2 결정 8). 호출자는 init 확정과 계승 해제를 한 사건으로 이어 간다.
+	InitMarkRevoked
 )
 
 // String 은 로그와 테스트 실패 메시지에서 숫자 대신 이름이 보이게 한다.
@@ -238,6 +253,8 @@ func (m InitMark) String() string {
 		return "mismatch"
 	case InitMarkMissing:
 		return "missing"
+	case InitMarkRevoked:
+		return "revoked"
 	default:
 		return "unknown"
 	}
@@ -259,6 +276,10 @@ func (m InitMark) String() string {
 // inherits_session 이 NULL 인 채 base 를 승계하므로, 한정을 빼면 그 base 가 0 으로
 // 되돌아가 DISC-SEQ 가 역행한다.
 //
+// 해제했는가는 같은 문장이 돌려준다(계획 4.5 A2 결정 8) — upd 의 RETURNING 이 **갱신 전** 값(cur)으로 같은 술어를
+// 다시 세운다. 해제 판정의 자리는 이 문장 하나다: 워커가 「비호환 ∧ 후보」를 따로 계산하면 두 곳이 조용히 갈린다.
+// upd 가 0행이면(이미 확정 · 해시 불일치) 해제도 없다.
+//
 // cur 의 FOR UPDATE 는 같은 세션에 두 워커가 동시에 들어와도 판정이 갈리지 않게 한다.
 const markInitUploadedSQL = `
 WITH cur AS (
@@ -272,9 +293,11 @@ WITH cur AS (
       FROM cur
      WHERE s.session_id = $1 AND s.init_uploaded_at IS NULL
        AND (s.init_sha256 IS NULL OR s.init_sha256 = $2)
-    RETURNING 1
+    RETURNING (cur.inherits_session IS NOT NULL AND $5) AS revoked
 )
-SELECT (SELECT count(*) FROM upd), cur.init_sha256, cur.init_uploaded_at FROM cur`
+SELECT (SELECT count(*) FROM upd), cur.init_sha256, cur.init_uploaded_at,
+       COALESCE((SELECT revoked FROM upd), false)
+  FROM cur`
 
 // pendingArchiveUploadsSQL ($1 = tailGrace 초, $2 = limit, $3..$6 = 키셋 커서)
 //
@@ -293,7 +316,7 @@ SELECT t.stream_id, t.seq, t.s3_key, t.local_path, t.bytes,
        NOT EXISTS (SELECT 1 FROM stream_segments s
                     WHERE s.stream_id = t.stream_id AND s.seq > t.seq) AS is_tail,
        (t.upload_state <> 'pending') AS is_failed, t.start_wall_utc,
-       '', NULL::bytea
+       '', NULL::bytea, '', ''
   FROM stream_segments t
  WHERE t.upload_state IN ('pending','failed')
    AND t.local_path IS NOT NULL
@@ -332,7 +355,7 @@ SELECT t.stream_id, t.seq, t.playback_s3_key, t.local_path, t.bytes,
        NOT EXISTS (SELECT 1 FROM stream_segments s
                     WHERE s.stream_id = t.stream_id AND s.seq > t.seq) AS is_tail,
        (t.playback_upload_state <> 'pending') AS is_failed, t.start_wall_utc,
-       t.session_id, sess.init_sha256
+       t.session_id, sess.init_sha256, '', ''
   FROM stream_segments t
   JOIN stream_sessions sess ON sess.session_id = t.session_id
   JOIN stream_cutoffs  cut  ON cut.stream_id   = t.stream_id
@@ -367,10 +390,19 @@ SELECT t.stream_id, t.seq, t.playback_s3_key, t.local_path, t.bytes,
 //
 // 인자 자리도 둘과 다르다($1 = limit, $2..$4 = 커서): 꼬리 예외가 없어 tailGrace 가 없고,
 // 실패 클래스가 없어 정렬 첫 항도 없다(5.5.5 는 init 에 성공 문장 하나만 정의한다).
+//
+// 끝 두 열은 계승 호환 게이트 입력이다(계획 4.5 B #3 · #19 · 판단 J65) — 물려받은 회차(inherits_session)와 그
+// 회차의 첫 조각 local_path(stream_segments_session_idx 앞 끝). 재기동 뒤 재수거도 실시간 요청과 같은 판정을
+// 내리게 한다. 계승 후보가 아니거나 물려받은 회차에 조각이 없으면 빈 값이다 — 세 축이 한 Scan 을 쓰므로
+// ② · ③ 문장은 같은 자리에 빈 값 둘을 싣는다.
 const pendingInitUploadsSQL = `
 SELECT s.stream_id, 0::bigint, '', seg.local_path, seg.bytes,
        false AS is_tail, false AS is_failed, s.started_at,
-       s.session_id, NULL::bytea
+       s.session_id, NULL::bytea,
+       COALESCE(s.inherits_session, ''),
+       COALESCE((SELECT p.local_path FROM stream_segments p
+                  WHERE p.stream_id = s.stream_id AND p.session_id = s.inherits_session
+                  ORDER BY p.seq LIMIT 1), '')
   FROM stream_sessions s
   JOIN LATERAL (
        SELECT g.local_path, g.bytes FROM stream_segments g
@@ -483,9 +515,10 @@ func (s *pgUploadStore) MarkInitUploaded(ctx context.Context, sessionID string, 
 		updated    int
 		curSHA     []byte
 		uploadedAt *time.Time
+		revoked    bool
 	)
 	err := s.pool.QueryRow(ctx, markInitUploadedSQL, sessionID, sha, s3Key, size, incompatible).
-		Scan(&updated, &curSHA, &uploadedAt)
+		Scan(&updated, &curSHA, &uploadedAt, &revoked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// cur 가 비었다 = 그 세션 행이 없다. 불일치와는 다른 사건이다.
 		return InitMarkMissing, nil
@@ -495,6 +528,8 @@ func (s *pgUploadStore) MarkInitUploaded(ctx context.Context, sessionID string, 
 	}
 
 	switch {
+	case updated == 1 && revoked:
+		return InitMarkRevoked, nil
 	case updated == 1:
 		return InitMarkSuccess, nil
 	case uploadedAt != nil && bytes.Equal(curSHA, sha):
@@ -557,7 +592,8 @@ func (s *pgUploadStore) PendingUploads(ctx context.Context, axis Axis, tailGrace
 			key SweepCursor
 		)
 		if err := rows.Scan(&t.StreamID, &t.Seq, &t.S3Key, &t.LocalPath, &t.Bytes, &t.IsTail,
-			&key.IsFailed, &key.StartWall, &t.SessionID, &t.ExpectedInitSHA); err != nil {
+			&key.IsFailed, &key.StartWall, &t.SessionID, &t.ExpectedInitSHA,
+			&t.InheritsSession, &t.PrevFirstLocalPath); err != nil {
 			return nil, after, fmt.Errorf("업로드 대상 스캔 실패 axis=%s: %w", axis, err)
 		}
 		// 축은 조회가 정한다 — 조회가 곧 그 축의 자격 술어이므로 산출도 정의상 그 축이다.

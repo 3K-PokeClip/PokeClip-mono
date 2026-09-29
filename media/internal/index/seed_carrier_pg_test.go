@@ -272,3 +272,253 @@ func TestInsertDoesNotReportOpeningRolledBackByDuplicatePath(t *testing.T) {
 		t.Errorf("세션 수 = %d, want 1 — 롤백된 세션 행이 남았다", n)
 	}
 }
+
+// ── B #1 EndingSessionID — TD 분할이 ending 으로 보낸 옛 회차를 개시 결과로 알린다(계획 4.5 B #1 · 커밋 순서 6) ──
+
+// TD 분할 개시는 같은 트랜잭션이 ending 으로 보낸 옛 회차를 결과에 싣는다. 잡는 결함: 싣지 않으면 캐시가 옛
+// 회차를 live 로 든 채 새 회차가 열려 한 스트림에 live 회차 둘이 보이고(363 J33 창), 결정자 · 어댑터 · 장부
+// 어느 한 층이 옮기지 않아도 여기서 빈 값이 된다.
+func TestInsertReportsEndingSessionWhenTDSplitOpensSession(t *testing.T) {
+	pool := newTestPool(t)
+	stream := sessionStream("carrier-ending")
+	old := stream + "-s1"
+	putSession(t, pool, fixtureSession{id: old, stream: stream, startedAt: sessionBase, firstPDT: sessionBase})
+
+	// round(6.5) = 7 > TD 6 → TD 분할.
+	_, res, err := newSessionStore(pool).Insert(t.Context(),
+		segAt(stream, 0, sessionBase.Add(4*time.Second), 6500), Seed{}, liveIngress())
+	if err != nil {
+		t.Fatalf("Insert 실패: %v", err)
+	}
+
+	if !res.SessionOpened || res.SessionID == old || res.EndingSessionID != old {
+		t.Errorf("(SessionOpened, 새 회차 ≠ 옛 회차, EndingSessionID) = (%v, %v, %q), want (true, true, %q)",
+			res.SessionOpened, res.SessionID != old, res.EndingSessionID, old)
+	}
+	for _, s := range sessionsOf(t, pool, stream) {
+		if s.ID == old && s.State != "ending" {
+			t.Errorf("장부의 옛 회차 state = %q, want ending — 결과가 장부와 다르다", s.State)
+		}
+	}
+}
+
+// 분할이 아닌 개시와 계속 갈래는 EndingSessionID 가 빈 값이다. 직전 회차(ended · 조각 없음 — 계승 대상이 아니다)가
+// 있는 스트림에서 연다 — 기저 세션이 비지 않는 개시라, 「EndingSessionID 자리에 기저 세션을 싣는」 결함이
+// 여기서 드러난다.
+func TestInsertReportsNoEndingSessionOutsideTDSplit(t *testing.T) {
+	pool := newTestPool(t)
+	stream := sessionStream("carrier-no-ending")
+	putSession(t, pool, fixtureSession{id: stream + "-prev", stream: stream, startedAt: sessionBase.Add(-time.Hour), state: "ended"})
+	st := newSessionStore(pool)
+	ctx := t.Context()
+
+	_, opened, err := st.Insert(ctx, segAt(stream, 0, sessionBase, 4000), Seed{}, liveIngress())
+	if err != nil {
+		t.Fatalf("개시 Insert 실패: %v", err)
+	}
+	_, current, err := st.Insert(ctx, segAt(stream, 1, sessionBase.Add(4*time.Second), 4000), Seed{}, liveIngress())
+	if err != nil {
+		t.Fatalf("계속 Insert 실패: %v", err)
+	}
+
+	if !opened.SessionOpened || opened.EndingSessionID != "" {
+		t.Errorf("비분할 개시 (SessionOpened, EndingSessionID) = (%v, %q), want (true, \"\")", opened.SessionOpened, opened.EndingSessionID)
+	}
+	if current.SessionOpened || current.EndingSessionID != "" {
+		t.Errorf("계속 (SessionOpened, EndingSessionID) = (%v, %q), want (false, \"\")", current.SessionOpened, current.EndingSessionID)
+	}
+}
+
+// 롤백된 분할은 결과로 새지 않는다 — 분할의 옛 회차 종료와 새 회차 개시는 행 삽입과 한 트랜잭션이라 경로 중복
+// (23505)으로 되돌려지면 옛 회차는 live 그대로다. 결과가 EndingSessionID 를 싣으면 캐시가 끝나지 않은 회차를
+// 강등한다.
+func TestInsertDoesNotReportEndingSessionOfRolledBackSplit(t *testing.T) {
+	pool := newTestPool(t)
+	stream := sessionStream("carrier-ending-dup")
+	st := newSessionStore(pool)
+	ctx := t.Context()
+	first := segAt(stream, 0, sessionBase, 4000)
+	if _, _, err := st.Insert(ctx, first, Seed{}, liveIngress()); err != nil {
+		t.Fatalf("첫 Insert 실패: %v", err)
+	}
+	dup := segAt(stream, 1, sessionBase.Add(4*time.Second), 6500) // TD 분할 조각인데 경로가 겹친다
+	dup.LocalPath = first.LocalPath
+
+	out, res, err := st.Insert(ctx, dup, Seed{}, liveIngress())
+	if err != nil {
+		t.Fatalf("Insert 실패: %v", err)
+	}
+
+	if out != InsertDuplicatePath {
+		t.Fatalf("outcome = %v, want %v", out, InsertDuplicatePath)
+	}
+	if res != (SeedResult{}) {
+		t.Errorf("결과 = %+v, want 영값 — 롤백된 분할을 보고했다", res)
+	}
+	if got := statesOf(sessionsOf(t, pool, stream)); len(got) != 1 || got[0] != "live" {
+		t.Errorf("회차 state = %v, want [live] — 분할이 되돌려지지 않았다", got)
+	}
+}
+
+// ── 재접속 계승 개시 · K1(계획 2.3 registry 행 ⑴–⑷ · 6.4 재접속 계승 네 케이스 · 판단 J50) ──
+
+// endedBroadcast 는 한 방송을 두 조각(4초 · 4초)으로 열고 4.1 전이(EndLive)로 끝낸다. 그 회차와 첫 조각 경로를
+// 돌려주고, 회차의 불연속 기준을 base 로 둔다 — 기본값 0 과 겹치지 않는 값이라 복사 여부가 드러난다. 마지막
+// 조각 끝은 sessionBase + 8초다.
+func endedBroadcast(t *testing.T, pool *pgxpool.Pool, st Store, stream string, base int64) (sessionID, firstPath string) {
+	t.Helper()
+	ctx := t.Context()
+	first := segAt(stream, 0, sessionBase, 4000)
+	for _, r := range []Record{first, segAt(stream, 1, sessionBase.Add(4*time.Second), 4000)} {
+		if _, _, err := st.Insert(ctx, r, Seed{}, liveIngress()); err != nil {
+			t.Fatalf("직전 방송 Insert 실패 seq=%d: %v", r.Seq, err)
+		}
+	}
+	id := carrierOf(t, pool, stream, 0).SessionID
+	if id == nil {
+		t.Fatal("직전 방송이 회차에 귀속되지 않았다 — 준비가 어긋났다")
+	}
+	setDiscontinuityBase(t, pool, *id, base)
+	if ended, err := EndLive(ctx, pool, stream); err != nil || ended != *id {
+		t.Fatalf("EndLive = (%q, %v), want (%q, nil)", ended, err, *id)
+	}
+	return *id, first.LocalPath
+}
+
+// orNull 은 NULL 가능 문자열 열을 실패 문구용 값으로 편다(nil 이면 "NULL").
+func orNull(s *string) string {
+	if s == nil {
+		return "NULL"
+	}
+	return *s
+}
+
+// sessionLedger 는 회차 한 줄의 계승 축(inherits_session · discontinuity_base · target_duration)이다.
+func sessionLedger(t *testing.T, pool *pgxpool.Pool, sessionID string) (inherits *string, base int64, td int32) {
+	t.Helper()
+	if err := pool.QueryRow(t.Context(),
+		`SELECT inherits_session, discontinuity_base, target_duration FROM stream_sessions WHERE session_id = $1`,
+		sessionID).Scan(&inherits, &base, &td); err != nil {
+		t.Fatalf("회차 계승 축 조회 실패 %s: %v", sessionID, err)
+	}
+	return inherits, base, td
+}
+
+// reconnect_within_window_inherits — 끝난 회차의 마지막 조각 끝에서 120초 뒤 시작한 조각이 새 회차를 열며 그
+// 회차를 물려받는다. 장부에는 inherits_session 과 불연속 기준 복사가 남고, 개시 결과는 계승과 직전 회차 첫 조각
+// 경로(init 게이트 입력)를 싣는다(뮤테이션 25 · 36 생산 측). 창을 빼면 새 회차가 비계승으로 열리고, 결과가
+// 계승을 안 실으면 캐시가 접두를 못 세운다. 창 끝(정확히 300초) 행은 기산점이 마지막 조각의 **끝**(시작 + 길이)임을
+// 장부 문장에서 가른다 — 시작으로 세면 그 재접속이 304초라 새 방송이 된다.
+func TestReconnectWithinWindowInherits(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		gap  time.Duration // 직전 회차 마지막 조각 끝(sessionBase + 8초)에서 새 조각 시작까지
+	}{
+		{"120초", 120 * time.Second},
+		{"창_끝_300초", 300 * time.Second},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := newTestPool(t)
+			st := newSessionStore(pool)
+			stream := sessionStream("reconnect-within")
+			prev, prevFirst := endedBroadcast(t, pool, st, stream, 3)
+
+			_, res, err := st.Insert(t.Context(), segAt(stream, 2, sessionBase.Add(8*time.Second+tt.gap), 4000), Seed{}, liveIngress())
+			if err != nil {
+				t.Fatalf("재접속 Insert 실패: %v", err)
+			}
+
+			if !res.SessionOpened || res.InheritsSession != prev || res.PrevFirstLocalPath != prevFirst || res.DiscontinuityBase != 3 {
+				t.Errorf("개시 결과 (SessionOpened, InheritsSession, PrevFirstLocalPath, DiscontinuityBase) = (%v, %q, %q, %d), want (true, %q, %q, 3)",
+					res.SessionOpened, res.InheritsSession, res.PrevFirstLocalPath, res.DiscontinuityBase, prev, prevFirst)
+			}
+			if inherits, base, _ := sessionLedger(t, pool, res.SessionID); inherits == nil || *inherits != prev || base != 3 {
+				t.Errorf("장부의 새 회차 (inherits_session, discontinuity_base) = (%s, %d), want (%s, 3)", orNull(inherits), base, prev)
+			}
+		})
+	}
+}
+
+// reconnect_after_window_starts_fresh — 400초 뒤면 새 방송이다(ADR-044 결정 3 — 어제 방송 꼬리가 오늘 되감기에
+// 실리지 않게). 계승 · 불연속 기준 · 게이트 입력이 모두 비어야 한다(뮤테이션 25 의 다른 쪽).
+func TestReconnectAfterWindowStartsFresh(t *testing.T) {
+	pool := newTestPool(t)
+	st := newSessionStore(pool)
+	stream := sessionStream("reconnect-after")
+	endedBroadcast(t, pool, st, stream, 3)
+
+	_, res, err := st.Insert(t.Context(), segAt(stream, 2, sessionBase.Add(408*time.Second), 4000), Seed{}, liveIngress())
+	if err != nil {
+		t.Fatalf("재접속 Insert 실패: %v", err)
+	}
+
+	if !res.SessionOpened || res.InheritsSession != "" || res.PrevFirstLocalPath != "" || res.DiscontinuityBase != 0 {
+		t.Errorf("개시 결과 (SessionOpened, InheritsSession, PrevFirstLocalPath, DiscontinuityBase) = (%v, %q, %q, %d), want (true, \"\", \"\", 0)",
+			res.SessionOpened, res.InheritsSession, res.PrevFirstLocalPath, res.DiscontinuityBase)
+	}
+	if inherits, base, _ := sessionLedger(t, pool, res.SessionID); inherits != nil || base != 0 {
+		t.Errorf("장부의 새 회차 (inherits_session, discontinuity_base) = (%s, %d), want (NULL, 0)", orNull(inherits), base)
+	}
+}
+
+// reconnect_after_init_mismatch_no_inherit — init 불일치로 끝난 회차는 창 안이어도 물려받지 않는다(뮤테이션 28) —
+// 그 끝은 송출 머리말이 바뀌었다는 사건이라, 물려받으면 목록 앞머리의 옛 조각과 새 조각의 코덱 사양이 어긋난다.
+func TestReconnectAfterInitMismatchDoesNotInherit(t *testing.T) {
+	pool := newTestPool(t)
+	st := newSessionStore(pool)
+	stream := sessionStream("reconnect-mismatch")
+	prev, _ := endedBroadcast(t, pool, st, stream, 3)
+	if _, err := pool.Exec(t.Context(), `UPDATE stream_sessions SET end_reason = $2 WHERE session_id = $1`,
+		prev, ReasonInitMismatch); err != nil {
+		t.Fatalf("종료 사유 픽스처 실패: %v", err)
+	}
+
+	_, res, err := st.Insert(t.Context(), segAt(stream, 2, sessionBase.Add(128*time.Second), 4000), Seed{}, liveIngress())
+	if err != nil {
+		t.Fatalf("재접속 Insert 실패: %v", err)
+	}
+
+	if !res.SessionOpened || res.InheritsSession != "" || res.PrevFirstLocalPath != "" || res.DiscontinuityBase != 0 {
+		t.Errorf("개시 결과 (SessionOpened, InheritsSession, PrevFirstLocalPath, DiscontinuityBase) = (%v, %q, %q, %d), want (true, \"\", \"\", 0)",
+			res.SessionOpened, res.InheritsSession, res.PrevFirstLocalPath, res.DiscontinuityBase)
+	}
+}
+
+// reconnect_after_td_split_inherits_target_duration — TD 분할로 열린 회차(TD 8)를 창 안에서 물려받은 회차의 TD 는
+// 8 아래로 내려가지 않는다(kty K1 — max(6, 직전 회차 TD, round(첫 조각)) · 뮤테이션 93). 첫 조각이 4초라 개시
+// 규칙만 쓰면 6 이 되고, 접두로 실린 직전 회차 조각(7.6초)이 목록 TD 를 넘어 발행 전 검사가 막는다.
+func TestReconnectAfterTDSplitInheritsTargetDuration(t *testing.T) {
+	pool := newTestPool(t)
+	st := newSessionStore(pool)
+	stream := sessionStream("reconnect-td")
+	ctx := t.Context()
+	// 첫 회차는 4초 조각(TD 6)으로 열리고, 7.6초 조각(반올림 8 > 6)이 TD 분할로 TD 8 회차를 연다.
+	for _, r := range []Record{segAt(stream, 0, sessionBase, 4000), segAt(stream, 1, sessionBase.Add(4*time.Second), 7600)} {
+		if _, _, err := st.Insert(ctx, r, Seed{}, liveIngress()); err != nil {
+			t.Fatalf("준비 Insert 실패 seq=%d: %v", r.Seq, err)
+		}
+	}
+	split := carrierOf(t, pool, stream, 1).SessionID
+	if split == nil {
+		t.Fatal("TD 분할 조각이 회차에 귀속되지 않았다 — 준비가 어긋났다")
+	}
+	if _, _, td := sessionLedger(t, pool, *split); td != 8 {
+		t.Fatalf("TD 분할 회차 TD = %d, want 8 — 준비가 어긋났다", td)
+	}
+	if ended, err := EndLive(ctx, pool, stream); err != nil || ended != *split {
+		t.Fatalf("EndLive = (%q, %v), want (%q, nil)", ended, err, *split)
+	}
+
+	// 분할 회차의 마지막 조각 끝(4 + 7.6초)에서 120초 뒤의 4초 조각.
+	_, res, err := st.Insert(ctx, segAt(stream, 2, sessionBase.Add(131600*time.Millisecond), 4000), Seed{}, liveIngress())
+	if err != nil {
+		t.Fatalf("재접속 Insert 실패: %v", err)
+	}
+
+	if res.InheritsSession != *split || res.TargetDuration != 8 {
+		t.Errorf("개시 결과 (InheritsSession, TargetDuration) = (%q, %d), want (%q, 8)", res.InheritsSession, res.TargetDuration, *split)
+	}
+	if _, _, td := sessionLedger(t, pool, res.SessionID); td != 8 {
+		t.Errorf("장부의 계승 회차 TD = %d, want 8", td)
+	}
+}

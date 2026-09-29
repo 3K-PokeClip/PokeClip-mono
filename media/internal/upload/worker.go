@@ -270,12 +270,9 @@ func (u *Uploader) validateTarget(t index.UploadTarget, lg *slog.Logger) (string
 		return reject(reason)
 	}
 
-	rel, err := filepath.Rel(filepath.Clean(u.opt.SegmentRoot), filepath.Clean(t.LocalPath))
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return reject("root_escape")
-	}
-	if filepath.Dir(rel) != t.StreamID {
-		return reject("dir_mismatch")
+	rel, reason := u.streamRel(t.StreamID, t.LocalPath)
+	if reason != "" {
+		return reject(reason)
 	}
 	if t.Bytes <= 0 {
 		// bytes 가 없는 행은 처리 불가 데이터 오류다. coalesce 로 펴면 꼬리 대조와 CAS 가
@@ -288,6 +285,21 @@ func (u *Uploader) validateTarget(t index.UploadTarget, lg *slog.Logger) (string
 		return reject("no_session")
 	}
 	return rel, true
+}
+
+// streamRel 은 localPath 가 녹화 루트 안 그 스트림 디렉토리의 파일인지 보고, Root.Open 에 넘길 루트 기준 상대 경로를
+// 돌려준다. 어긋나면 거부 사유(root_escape · dir_mismatch)를 돌려준다 — 대상 검증(validateTarget)과 계승 게이트의
+// 직전 조각 열기(판단 J63)가 함께 쓰는 판정이다. 루트 이탈 판정이 디렉토리 일치 판정보다 앞인 순서는
+// validateTarget 의 ★ 계약 그대로다.
+func (u *Uploader) streamRel(streamID, localPath string) (rel, reason string) {
+	rel, err := filepath.Rel(filepath.Clean(u.opt.SegmentRoot), filepath.Clean(localPath))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "root_escape"
+	}
+	if filepath.Dir(rel) != streamID {
+		return "", "dir_mismatch"
+	}
+	return rel, ""
 }
 
 // classifyOpenError 는 Root.Open 실패를 세 갈래로 가른다.
@@ -379,15 +391,17 @@ func (u *Uploader) attemptOnce(j job, rel string, lg *slog.Logger) attemptResult
 		return attemptResult{outcome: outcomeNeutral}
 	}
 
-	// (f) 마킹 — 축 분기는 markUploadedByAxis 가 진다.
-	if !u.markUploadedByAxis(j, p, lg) {
+	// (f) 마킹 — 축 분기는 markUploadedByAxis 가 진다. init 축은 CAS 판정을 함께 돌려주고, 그 판정이
+	//     통지(afterUploaded)의 Dirty 표시를 가른다(계획 4.5 A2 결정 10).
+	ok, im := u.markUploadedByAxis(j, p, lg)
+	if !ok {
 		return attemptResult{outcome: outcomeNeutral}
 	}
 
 	lg.Info("segment_uploaded", "s3_key", t.S3Key, "bytes", p.size,
 		"elapsed_ms", elapsed.Milliseconds())
 	u.gate.clearBackoff(k)
-	u.afterUploaded(j, p)
+	u.afterUploaded(j, p, im)
 	return attemptResult{outcome: outcomeSuccess}
 }
 
@@ -435,15 +449,16 @@ func (u *Uploader) measureInput(j job, f *os.File, lg *slog.Logger) (size int64,
 }
 
 // markUploadedByAxis 는 성공 마킹의 축 분기다. 돌려주는 값은 "후처리(백오프 해제·통지)를
-// 이어가도 되는가"이며, false 면 호출자는 outcomeNeutral 로 끝낸다.
+// 이어가도 되는가"와 init 축의 CAS 판정이며, false 면 호출자는 outcomeNeutral 로 끝낸다. ② · ③ 은
+// 판정이 없어 영값이다(index.InitMark 영값은 「판정 아님」).
 //
 // 축마다 CAS 가 다르다(설계 5.5.5): ② 는 장부 크기가 앵커이고, ③ 은 산출 길이를 SET 하며,
 // init 은 산출 바이트의 해시로 첫 확정을 가른다.
-func (u *Uploader) markUploadedByAxis(j job, p payload, lg *slog.Logger) bool {
+func (u *Uploader) markUploadedByAxis(j job, p payload, lg *slog.Logger) (bool, index.InitMark) {
 	t := j.target
 	if planMark(t.Axis, index.UploadStateUploaded) != markCAS {
 		lg.Error("upload_mark_unsupported", "target_state", "uploaded", "s3_key", t.S3Key)
-		return false
+		return false, 0
 	}
 
 	// err 를 먼저 본다. (false, err) 를 CAS 거부로 오분류하면 안 된다(CX-2 ⑥).
@@ -466,13 +481,13 @@ func (u *Uploader) markUploadedByAxis(j job, p payload, lg *slog.Logger) bool {
 	case err != nil:
 		lg.Error("mark_error", "target_state", "uploaded", "err", err.Error())
 		u.gate.registerFailure(k)
-		return false
+		return false, 0
 	case !marked:
 		lg.Warn("upload_cas_rejected", "expect_bytes", t.Bytes, "target_state", "uploaded")
 		u.gate.registerFailure(k)
-		return false
+		return false, 0
 	}
-	return true
+	return true, 0
 }
 
 // markFailedByAxis 는 실패 마킹의 축 분기다. 돌려주는 값은 "후처리를 이어가도 되는가"이며,

@@ -172,8 +172,8 @@ func TestInitCASRevokesInheritanceWhenStsdIsIncompatible(t *testing.T) {
 		t.Fatalf("MarkInitUploaded 실패: %v", err)
 	}
 
-	if mark != InitMarkSuccess {
-		t.Fatalf("mark = %v, want %v", mark, InitMarkSuccess)
+	if mark != InitMarkRevoked {
+		t.Fatalf("mark = %v, want %v — 이 호출이 4열을 쓰며 계승을 풀었다(계획 4.5 A2 결정 8)", mark, InitMarkRevoked)
 	}
 	// revoke_survives_restart — DB 에서 다시 읽어 영속을 확인한다(메모리 비트가 아니다).
 	inherits, base := inheritanceOf(t, pool, "S-B")
@@ -248,5 +248,40 @@ func TestInitCASDoesNotRevokeInheritanceAfterInitIsConfirmed(t *testing.T) {
 	}
 	if inherits, base := inheritanceOf(t, pool, "S-late"); inherits == nil || *inherits != "S-prev" || base != 3 {
 		t.Errorf("(inherits_session, discontinuity_base) = (%v, %d), want (S-prev, 3) — 확정 뒤 계승이 풀렸다", inherits, base)
+	}
+}
+
+// mark_init_uploaded_reports_revocation(계획 4.5 A2 결정 8 · 뮤테이션 105) — 첫 init CAS 가 같은 문장에서 계승을
+// 풀었으면 결과가 InitMarkRevoked 다. 풀지 않은 확정(비호환 거짓 · 계승 후보가 아닌 회차)은 Success 다. 잡는 결함:
+// 해제를 결과로 돌려주지 않으면 워커가 해제를 캐시에 알릴 길이 없어 「init 확정 ∧ 낡은 계승」이 렌더에 보인다 —
+// 후보가 아닌 TD 분할 회차까지 Revoked 로 보고하면 캐시가 그 회차의 base 를 0 으로 되돌린다.
+func TestMarkInitUploadedReportsRevocation(t *testing.T) {
+	tests := []struct {
+		name         string
+		prev         string // "" 면 계승 후보가 아니다(TD 분할 회차 — inherits NULL · base 3)
+		incompatible bool
+		want         InitMark
+		wantInherits bool
+		wantBase     int64
+	}{
+		{"후보_비호환", "S-A", true, InitMarkRevoked, false, 0},
+		{"후보_호환", "S-A", false, InitMarkSuccess, true, 3},
+		{"비후보_비호환", "", true, InitMarkSuccess, false, 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := newTestPool(t)
+			st := NewUploadStore(pool)
+			inheritingSession(t, pool, "S-B", "markstream", tt.prev, 3)
+
+			got, err := st.MarkInitUploaded(t.Context(), "S-B", sha32(0x6a), "k", 10, tt.incompatible)
+
+			if err != nil || got != tt.want {
+				t.Fatalf("MarkInitUploaded = %v, %v; want %v, nil", got, err, tt.want)
+			}
+			if inherits, base := inheritanceOf(t, pool, "S-B"); (inherits != nil) != tt.wantInherits || base != tt.wantBase {
+				t.Errorf("(계승 있음, discontinuity_base) = (%v, %d), want (%v, %d)", inherits != nil, base, tt.wantInherits, tt.wantBase)
+			}
+		})
 	}
 }

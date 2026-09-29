@@ -3,6 +3,7 @@ package index
 import (
 	"bytes"
 	"context"
+	"maps"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -252,6 +253,44 @@ func TestPendingUploadsInitAxisPicksSessionsWithoutConfirmedInit(t *testing.T) {
 	}
 	if got.S3Key != "" {
 		t.Errorf("S3Key = %q, want 빈 값 — init 키는 장부의 예약값이 아니라 파생이다", got.S3Key)
+	}
+}
+
+// 스위퍼 init 조회는 계승 게이트 입력 두 칸을 싣는다(계획 4.5 B #3 · #19 · 판단 J65) — 재기동 뒤 재수거도 실시간
+// 요청과 같은 판정을 내리게 한다(revoke_survives_restart). 계승 후보면 물려받은 회차와 그 회차의 첫 조각 경로이고,
+// 후보가 아니면 둘 다 빈 값이다. 물려받은 회차에 조각이 없는 후보는 경로가 빈 값이다(워커가 비호환으로 판정한다 —
+// fail-closed). 잡는 결함: 조회가 게이트 입력을 안 실으면 재기동 뒤 첫 init 이 비후보로 읽혀 비호환 계승이 그대로
+// 확정되고, 직전 회차 대신 자기 회차의 첫 조각을 실으면 늘 호환으로 판정된다.
+func TestPendingUploadsInitAxisCarriesGateInputs(t *testing.T) {
+	pool := newTestPool(t)
+	st := NewUploadStore(pool)
+	ctx := t.Context()
+	inheritingSession(t, pool, "S-cand", "gatestream", "S-prev", 3)
+	seedSessionSegment(t, pool, "gatestream", "S-prev", 0)
+	seedSessionSegment(t, pool, "gatestream", "S-prev", 1)
+	seedSessionSegment(t, pool, "gatestream", "S-cand", 2)
+	openLiveSession(t, pool, "S-plain", "plainstream")
+	seedSessionSegment(t, pool, "plainstream", "S-plain", 0)
+	inheritingSession(t, pool, "S-bare", "barestream", "S-empty", 0) // 물려받은 회차에 조각이 없다
+	seedSessionSegment(t, pool, "barestream", "S-bare", 0)
+
+	rows, _, err := st.PendingUploads(ctx, AxisInit, 120, 10, SweepCursor{})
+	if err != nil {
+		t.Fatalf("PendingUploads 실패: %v", err)
+	}
+
+	type gate struct{ inherits, prevFirst string }
+	got := map[string]gate{}
+	for _, r := range rows {
+		got[r.SessionID] = gate{r.InheritsSession, r.PrevFirstLocalPath}
+	}
+	want := map[string]gate{
+		"S-cand":  {"S-prev", "/recordings/gatestream/seg_000000.mp4"},
+		"S-plain": {"", ""},
+		"S-bare":  {"S-empty", ""},
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("init 대상의 (InheritsSession, PrevFirstLocalPath) = %+v\nwant %+v", got, want)
 	}
 }
 

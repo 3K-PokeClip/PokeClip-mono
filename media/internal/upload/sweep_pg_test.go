@@ -11,13 +11,19 @@ package upload
 // PG_DSN 미설정이면 전량 skip 된다(REQUIRE_PG=1 인 CI 가 실주행 게이트다).
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4"
+	"github.com/bluenviron/mediacommon/v2/pkg/formats/fmp4/seekablebuffer"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
@@ -435,4 +441,205 @@ func TestSweepPGInitRecoversFromUnproducibleFirstSegment(t *testing.T) {
 	runQueue(u)
 
 	assertInitConfirmed(t, pool, "e1", "S-e1")
+}
+
+// ── 재접속 계승의 stsd 호환 게이트 — 장부의 해제까지(계획 2.3 registry 행 ⑸ · 4.5 A2 결정 8 · 6.4 재접속 계승) ──
+//
+// 실물 두 녹화가 재료다: segment_4s(새 회차 — 기본 생산자가 골든 init 을 만든다)와 segment_tail_2s(avcC 가 다른
+// 녹화 — 코덱 사양이 다른 재접속). 워커는 새 회차 조각과 물려받은 회차 첫 조각의 stsd 지문을 견주고, 첫 init CAS 가
+// 같은 문장에서 해제를 영속한다.
+
+// openInheritingSession 은 끝난 회차 prev 를 물려받은 live 회차를 넣는다 — 개시가 불연속 기준 base 를 복사했다.
+func openInheritingSession(t *testing.T, pool *pgxpool.Pool, sessionID, prev, streamID string, base int64) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO stream_sessions (session_id, stream_id, started_at, state, inherits_session, discontinuity_base)
+VALUES ($1, $2, now() - interval '10 minutes', 'live', $3, $4)`, sessionID, streamID, prev, base); err != nil {
+		t.Fatalf("계승 회차 픽스처 실패 %s: %v", sessionID, err)
+	}
+}
+
+// insertPrevFirstSegment 는 물려받은 회차의 첫 조각 행을 path 로 넣는다(스위퍼 init 조회의 게이트 입력 재료).
+func insertPrevFirstSegment(t *testing.T, pool *pgxpool.Pool, streamID, sessionID, path string, size int64) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `
+INSERT INTO stream_segments
+    (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key, local_path, upload_state, bytes, session_id)
+VALUES ($1, 0, 0, now() - interval '20 minutes', 4000, $2, $3, 'uploaded', $4, $5)`,
+		streamID, index.S3Key(streamID, 0, fixtureWall), path, size, sessionID); err != nil {
+		t.Fatalf("직전 회차 첫 조각 픽스처 실패: %v", err)
+	}
+}
+
+// orNull 은 NULL 가능 문자열 열을 실패 문구용 값으로 편다(nil 이면 "NULL").
+func orNull(s *string) string {
+	if s == nil {
+		return "NULL"
+	}
+	return *s
+}
+
+// inheritanceOf 는 회차의 계승 축(inherits_session · discontinuity_base)이다.
+func inheritanceOf(t *testing.T, pool *pgxpool.Pool, sessionID string) (inherits *string, base int64) {
+	t.Helper()
+	if err := pool.QueryRow(t.Context(),
+		`SELECT inherits_session, discontinuity_base FROM stream_sessions WHERE session_id = $1`, sessionID).
+		Scan(&inherits, &base); err != nil {
+		t.Fatalf("계승 축 조회 실패 %s: %v", sessionID, err)
+	}
+	return inherits, base
+}
+
+// writeRewrittenHeader 는 segment_4s 의 머리말을 mediacommon 으로 다시 쓴 조각을 <루트>/<streamID>/<name> 에 만든다 —
+// stsd 는 원본과 같고 moov(mvhd)는 다르다(playback TestStsdFingerprintIgnoresMoovOutsideStsd 가 같은 변형의 지문을 잰다).
+func writeRewrittenHeader(t *testing.T, dir, streamID, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile(fixture4sPath)
+	if err != nil {
+		t.Fatalf("실물 조각 읽기 실패: %v", err)
+	}
+	moof := bytes.Index(raw, []byte("moof")) - 4 // 첫 moof 상자의 머리(크기 4바이트 앞)
+	var ini fmp4.Init
+	if err := ini.Unmarshal(bytes.NewReader(raw[:moof])); err != nil {
+		t.Fatalf("머리말 해석 실패: %v", err)
+	}
+	var head seekablebuffer.Buffer
+	if err := ini.Marshal(&head); err != nil {
+		t.Fatalf("머리말 쓰기 실패: %v", err)
+	}
+	if bytes.Equal(head.Bytes(), raw[:moof]) {
+		t.Fatal("다시 쓴 머리말이 원본과 같다 — 준비가 어긋났다")
+	}
+	path := filepath.Join(dir, streamID, name)
+	if err := os.WriteFile(path, append(head.Bytes(), raw[moof:]...), 0o644); err != nil {
+		t.Fatalf("변형 조각 쓰기 실패: %v", err)
+	}
+	return path
+}
+
+// runGatedInit 은 새 회차 S-B(끝난 S-A 를 물려받은 live · base 3)의 실시간 init 작업을 돌리고 결과를 돌려준다 — 원천은
+// 새 회차 조각(segment_4s)이고, 게이트 입력은 개시 행이 싣는 두 칸(계승 S-A · 직전 회차 첫 조각 경로 prevPath)이다.
+func runGatedInit(t *testing.T, pool *pgxpool.Pool, u *Uploader, dir, stream, prevPath string) outcome {
+	t.Helper()
+	path, size := insertSegment(t, pool, dir, segRow{stream: stream, session: "S-B", seq: 5, archive: "uploaded", playback: "pending"})
+	return runLive(u, index.UploadTarget{StreamID: stream, Axis: index.AxisInit, SessionID: "S-B", LocalPath: path,
+		Bytes: size, IsTail: true, InheritsSession: "S-A", PrevFirstLocalPath: prevPath})
+}
+
+// reconnect_incompatible_stsd_revokes(뮤테이션 29 의 워커 종단 몫) — 코덱 사양이 다른 녹화로 재접속한 계승 후보의 첫
+// init CAS 가 장부의 계승을 풀고(inherits_session NULL · base 0), 그 확정이 해제 참인 원소로 루프에 간다. 잡는 결함:
+// CTE 의 해제 분기가 없으면 비호환 재접속이 계승을 유지해 옛 MAP 조각과 새 조각의 코덱 사양이 어긋난 목록이 나간다.
+func TestReconnectIncompatibleStsdRevokes(t *testing.T) {
+	pool := newSweepPool(t)
+	u, cap, dir, _ := newSweepPGUploader(t, pool, nil)
+	openSession(t, pool, "S-A", "rvk", "ended", false)
+	openInheritingSession(t, pool, "S-B", "S-A", "rvk", 3)
+	prevPath, _ := copyFile(t, fixtureTailPath, dir, "rvk", "prev0.mp4")
+
+	if got := runGatedInit(t, pool, u, dir, "rvk", prevPath); got != outcomeSuccess {
+		t.Fatalf("outcome = %v, want success (%s)", got, cap.dump())
+	}
+
+	assertInitConfirmed(t, pool, "rvk", "S-B")
+	if inherits, base := inheritanceOf(t, pool, "S-B"); inherits != nil || base != 0 {
+		t.Errorf("(inherits_session, discontinuity_base) = (%s, %d), want (NULL, 0)", orNull(inherits), base)
+	}
+	sameEvents(t, u.Dirty().Peek(), []DirtyEvent{
+		{Kind: DirtyUploaded, StreamID: "rvk", Axis: index.AxisInit, SessionID: "S-B", InheritRevoked: true},
+	})
+}
+
+// reconnect_same_stsd_different_moov_inherits(29 의 짝 대조군 · ADR-044) — 코덱 사양이 같은 재접속은 머리말의 다른
+// 상자(mvhd)가 달라도 계승을 유지하고 결과는 Success 다(해제 거짓인 원소). 해제가 상시 발동하면 여기서 잡힌다.
+func TestReconnectSameStsdDifferentMoovInherits(t *testing.T) {
+	pool := newSweepPool(t)
+	u, cap, dir, _ := newSweepPGUploader(t, pool, nil)
+	openSession(t, pool, "S-A", "same", "ended", false)
+	openInheritingSession(t, pool, "S-B", "S-A", "same", 3)
+	if err := os.MkdirAll(filepath.Join(dir, "same"), 0o755); err != nil {
+		t.Fatalf("디렉토리 생성 실패: %v", err)
+	}
+	prevPath := writeRewrittenHeader(t, dir, "same", "prev0.mp4")
+
+	if got := runGatedInit(t, pool, u, dir, "same", prevPath); got != outcomeSuccess {
+		t.Fatalf("outcome = %v, want success (%s)", got, cap.dump())
+	}
+
+	assertInitConfirmed(t, pool, "same", "S-B")
+	if inherits, base := inheritanceOf(t, pool, "S-B"); inherits == nil || *inherits != "S-A" || base != 3 {
+		t.Errorf("(inherits_session, discontinuity_base) = (%s, %d), want (S-A, 3)", orNull(inherits), base)
+	}
+	sameEvents(t, u.Dirty().Peek(), []DirtyEvent{{Kind: DirtyUploaded, StreamID: "same", Axis: index.AxisInit, SessionID: "S-B"}})
+	if n := cap.count("session_inherit_declined"); n != 0 {
+		t.Errorf("session_inherit_declined = %d줄, want 0줄", n)
+	}
+}
+
+// reconnect_prev_file_missing_revokes(계획 2.3 registry 행 ⑸ⓑ — cc r8 #12) — 물려받은 회차의 첫 조각 파일이 없으면
+// (RecordDeleteAfter 뒤 janitor 삭제) 견줄 수 없으므로 비호환으로 판정해 계승을 풀고(fail-closed), WARN
+// session_inherit_declined 한 줄을 남긴다.
+func TestReconnectPrevFileMissingRevokes(t *testing.T) {
+	pool := newSweepPool(t)
+	u, cap, dir, _ := newSweepPGUploader(t, pool, nil)
+	openSession(t, pool, "S-A", "gone", "ended", false)
+	openInheritingSession(t, pool, "S-B", "S-A", "gone", 3)
+
+	if got := runGatedInit(t, pool, u, dir, "gone", filepath.Join(dir, "gone", "janitor-deleted.mp4")); got != outcomeSuccess {
+		t.Fatalf("outcome = %v, want success (%s)", got, cap.dump())
+	}
+
+	if inherits, base := inheritanceOf(t, pool, "S-B"); inherits != nil || base != 0 {
+		t.Errorf("(inherits_session, discontinuity_base) = (%s, %d), want (NULL, 0)", orNull(inherits), base)
+	}
+	if rec := cap.one(t, "session_inherit_declined"); rec.level != slog.LevelWarn || rec.attrs["reason"] != "prev_open_failed" {
+		t.Errorf("session_inherit_declined = %v %v, want WARN reason=prev_open_failed", rec.level, rec.attrs)
+	}
+}
+
+// revoke_survives_restart(계획 6.4 재접속 계승 넷째 · 판단 J65) — 첫 프로세스는 CAS 전에 멈췄다(PUT 실패 — init 미확정 ·
+// 계승 그대로). 재기동한 프로세스는 개시 행을 본 적이 없지만 스위퍼 init 조회가 게이트 입력(계승 · 직전 첫 조각
+// 경로)을 실어 와 같은 판정(해제)을 내린다. 잡는 결함: 조회가 게이트 입력을 안 실으면 재수거가 비후보로 읽혀 비호환
+// 계승이 그대로 확정된다.
+func TestRevokeSurvivesRestart(t *testing.T) {
+	pool := newSweepPool(t)
+	failing := &fakePutter{fn: func(context.Context, string, io.Reader, int64) error { return errors.New("PUT 실패(시험)") }}
+	u, cap, dir, _ := newPlaybackUploader(t, index.NewUploadStore(pool), failing, nil, nil)
+	openSession(t, pool, "S-A", "rst", "ended", false)
+	openInheritingSession(t, pool, "S-B", "S-A", "rst", 3)
+	prevPath, prevSize := copyFile(t, fixtureTailPath, dir, "rst", "prev0.mp4")
+	insertPrevFirstSegment(t, pool, "rst", "S-A", prevPath, prevSize)
+	if got := runGatedInit(t, pool, u, dir, "rst", prevPath); got == outcomeSuccess {
+		t.Fatalf("첫 프로세스 outcome = success — 준비가 어긋났다(CAS 전에 멈춰야 한다) (%s)", cap.dump())
+	}
+	if inherits, _ := inheritanceOf(t, pool, "S-B"); inherits == nil {
+		t.Fatal("CAS 전에 멈췄는데 계승이 풀렸다 — 준비가 어긋났다")
+	}
+
+	restarted, rcap := restartedUploader(t, pool, dir)
+	restarted.sweepOnce(t.Context(), nil)
+	runQueue(restarted)
+
+	assertInitConfirmed(t, pool, "rst", "S-B")
+	if inherits, base := inheritanceOf(t, pool, "S-B"); inherits != nil || base != 0 {
+		t.Errorf("재기동 뒤 (inherits_session, discontinuity_base) = (%s, %d), want (NULL, 0) (%s)", orNull(inherits), base, rcap.dump())
+	}
+}
+
+// restartedUploader 는 같은 녹화 루트 dir 위에 새 업로더를 만든다 — 재기동의 재현이다(메모리는 비고 장부 · 파일은
+// 남는다). PUT 은 늘 성공하고 생산자는 기본값(실물 재포장)이다.
+func restartedUploader(t *testing.T, pool *pgxpool.Pool, dir string) (*Uploader, *logCapture) {
+	t.Helper()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatalf("os.OpenRoot 실패: %v", err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	opt := DefaultOptions(root, dir)
+	opt.RetryBase = time.Millisecond
+	opt.SweepEvery = time.Hour
+	cap := newLogCapture()
+	u := newWithClock(index.NewUploadStore(pool), &fakePutter{}, opt, cap.logger(), newFakeClock().now)
+	u.dirty = &Dirty{}
+	u.armForSweepTest()
+	return u, cap
 }

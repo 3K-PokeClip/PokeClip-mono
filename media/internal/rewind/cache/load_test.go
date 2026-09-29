@@ -453,6 +453,40 @@ func TestSessionPushesApplyOneDirection(t *testing.T) {
 	}
 }
 
+// 적재 중에 온 TD 분할 개시 push(EndingSessionID 를 싣는다 — 계획 4.5 B #1)는 로그에 담겼다가 적재분 위에 재생된다
+// (커밋 5 의 관문 — 새 규칙 0 · 판단 J62). 적재분의 옛 회차 O 가 live 면(스냅숏이 분할 커밋보다 먼저) 재생 뒤 ending
+// 이고, 이미 ending · ended 면(스냅숏이 분할 커밋 뒤 · 그 뒤 종료) 재생이 되돌리지도 넘어서지도 않는다(한 방향).
+// 잡는 결함: 재생이 그 칸을 버리면 옛 회차가 live 로 남아 게이트가 열리고, 무조건 ending 을 쓰면 ended 가 되살아난다.
+func TestLoadReplaysEndingSessionOfSplitOpening(t *testing.T) {
+	for _, snapState := range []string{"live", "ending", "ended"} {
+		t.Run("스냅숏_"+snapState, func(t *testing.T) {
+			c := &cache.Cache{}
+			token := c.BeginLoad(stream, nil)
+			split := index.RewindSession{SessionID: "P", State: "live", FirstPDT: at(12 * time.Second), TargetDuration: 7}
+			res := openingOf(split, 43, 6500)
+			res.EndingSessionID = "O"
+			c.ApplyInsert(stream, 43, res)
+
+			old := withMinSeq(sessionO, 40)
+			old.State = snapState
+			if applied, _ := c.CompleteLoad(stream, token, ledgerOf(40, ledgerRun("O", 40, 42, at(0)), old)); !applied {
+				t.Fatal("CompleteLoad 가 적재를 적용하지 않았다")
+			}
+
+			want := snapState
+			if snapState == "live" {
+				want = "ending"
+			}
+			if o, _ := c.Session(stream, "O"); o.State != want {
+				t.Errorf("재생 뒤 O state = %q, want %q", o.State, want)
+			}
+			if p, ok := c.Session(stream, "P"); !ok || p.State != "live" {
+				t.Errorf("재생 뒤 P = (%+v, %v), want live 회차", p.RewindSession, ok)
+			}
+		})
+	}
+}
+
 // 부정 표식은 재생 뒤에 정한다(체크리스트 A-4 2 「재생 뒤에도 컷오프 없음이면」) — 적재 중에 주조 push 가 와서 로그에
 // 있으면, 컷오프 없는 적재분(스냅숏이 주조보다 먼저였다)을 적용한 뒤의 재생에서 그 push 가 표식을 풀고 적재를 다시
 // 연다(요구 목록에 오른다). 표식을 재생 뒤에 덮으면 주조가 사라져 그 방송이 끝까지 발행되지 않는다.

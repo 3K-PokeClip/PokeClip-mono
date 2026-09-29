@@ -87,10 +87,12 @@ func (d phaseDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionInp
 		return index.SessionDecision{}, err
 	}
 	return index.SessionDecision{
-		Opens:         dec.Outcome == session.OutcomeOpen || dec.Outcome == session.OutcomeOpenFresh,
-		SessionID:     dec.SessionID,
-		BaseSessionID: dec.BaseSessionID,
-		Plan:          dec,
+		Opens:              dec.Outcome == session.OutcomeOpen || dec.Outcome == session.OutcomeOpenFresh,
+		SessionID:          dec.SessionID,
+		BaseSessionID:      dec.BaseSessionID,
+		EndingSessionID:    dec.EndingSessionID,
+		PrevFirstLocalPath: dec.PrevFirstLocalPath,
+		Plan:               dec,
 	}, nil
 }
 
@@ -144,8 +146,8 @@ func newPhaseFixture(t *testing.T, name string, p phase) *phaseFixture {
 	t.Helper()
 	pool := pgtest.Pool(t, "indexer", index.EnsureSchema, resetPhaseTables)
 
-	// 정책값은 config 기본값과 같다 — SESSION_FLOOR_SLACK 1초 · OBS_FRESH 30초.
-	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second})
+	// 정책값은 config 기본값과 같다 — SESSION_FLOOR_SLACK 1초 · OBS_FRESH 30초 · 재접속 계승 창 300초.
+	reg := session.New(session.Options{FloorSlack: time.Second, ObsFresh: 30 * time.Second, ReconnectWindow: 300 * time.Second})
 	store := index.NewPGStore(pool, phaseDecider{reg: reg}, playback.SegKey)
 
 	f := &phaseFixture{

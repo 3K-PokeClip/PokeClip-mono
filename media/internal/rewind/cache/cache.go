@@ -233,7 +233,8 @@ func (c *Cache) DemandedLoads() []LoadDemand {
 // (index.SeedResult)를 그대로 넘긴다(INSERT push).
 //
 //	개시(SessionOpened)   회차 축을 세운다 — 개시가 쓴 base·계승·TD·first_pdt, state live, init 미확정,
-//	                      회차 최소 seq = 이 seq. 계승 회차인데 뷰가 접두 회차를 모르면 적재를 요구한다(요구 ①)
+//	                      회차 최소 seq = 이 seq. 계승 회차인데 뷰가 접두 회차를 모르면 적재를 요구한다(요구 ①).
+//	                      TD 분할 개시면 같은 트랜잭션이 끝낸 옛 회차(EndingSessionID)를 ending 으로 둔다
 //	행                    뷰의 다음 seq 면 싣는다 — 커밋 값 그대로이고, ③ 전이며 GAP 원장 밖이다
 //
 // 뷰가 없으면 뷰를 push 하나로 만들지 않는다(계획 4.5 A3 결정 6 ⑤). 주조 push(Seeded)는 부정 표식이 있어도,
@@ -261,6 +262,11 @@ func (c *Cache) ApplyInsert(streamID string, seq int64, res index.SeedResult) {
 		return
 	}
 	if res.SessionOpened {
+		// TD 분할이면 같은 트랜잭션이 옛 회차를 ending 으로 보냈다(계획 4.5 B #1 · 판단 J62) — 새 회차 축을 세우는 이
+		// 호출에서 그 전이도 반영한다. 반영은 ApplySessionEnding 그대로다(한 방향 · 모르는 회차면 할 일 없음 · 요구 0).
+		if res.EndingSessionID != "" {
+			c.ApplySessionEnding(streamID, res.EndingSessionID)
+		}
 		// state 는 개시 문장이 쓰는 'live' 이고 init·종료 사유는 개시 때 비어 있다(session.openSessionSQL).
 		v.sessions[res.SessionID] = Session{RewindSession: index.RewindSession{
 			SessionID: res.SessionID, State: "live", DiscontinuityBase: res.DiscontinuityBase,
@@ -345,7 +351,8 @@ func (c *Cache) ApplyInitUploaded(streamID, sessionID string, revoked bool) {
 }
 
 // ApplySessionEnding 은 회차 sessionID 의 live → ending 전이를 반영한다 — 넘기는 쪽은 종료 전이(커밋 6 — 4.1
-// EndLive 1행)다. 한 방향이다: ending · ended 인 회차는 그대로 둔다. 모르는 회차면 아무것도 하지 않는다.
+// EndLive 1행)와 TD 분할 개시 push(ApplyInsert — 계획 4.5 B #1)다. 한 방향이다: ending · ended 인 회차는 그대로
+// 둔다. 모르는 회차면 아무것도 하지 않는다.
 func (c *Cache) ApplySessionEnding(streamID, sessionID string) {
 	if c.logged(streamID, func() { c.ApplySessionEnding(streamID, sessionID) }) {
 		return

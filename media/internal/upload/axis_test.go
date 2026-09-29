@@ -311,7 +311,7 @@ func TestMarkingRefusesUnknownAxis(t *testing.T) {
 	u, cap, _ := newWorkerUploader(t, st, &fakePutter{}, nil)
 	j := job{target: index.UploadTarget{StreamID: "demo", Seq: 7, SessionID: "S-1", Bytes: 64}}
 
-	if u.markUploadedByAxis(j, payload{size: 64}, u.log) {
+	if ok, _ := u.markUploadedByAxis(j, payload{size: 64}, u.log); ok {
 		t.Error("성공 마킹이 이어갔다 — 모르는 축은 거부한다")
 	}
 	if u.markFailedByAxis(j, playbackReasonUploadFailed, u.log) {
@@ -536,5 +536,85 @@ func TestKeyGrammarIsPerAxis(t *testing.T) {
 				t.Errorf("reason = %v, want %q", rec.attrs["reason"], c.reason)
 			}
 		})
+	}
+}
+
+// init_mark_outcome_transport_table(계획 4.5 A2 결정 10 · 뮤테이션 115 · 116) — init CAS 의 결과가 워커 경계를 건너
+// 어디로 가는가. 이어 가는 셋(Success · Revoked · AlreadySame)은 성공으로 끝나 기다리던 ③ 을 다시 넣고, 확정 사실은
+// Success 와 Revoked 만 Dirty 원소가 된다 — Revoked 는 해제 참으로(init 확정과 계승 해제가 한 원소). 나머지(Mismatch
+// · Missing · 오류)는 실패 등록(백오프) 뒤 보류를 풀지 않는다. 잡는 결함: Revoked 가 default 로 떨어지면 해제된
+// 회차의 init 이 확정 실패로 읽혀 그 회차 ③ 이 영영 보류되고(115), afterUploaded 가 판정을 버리면 해제가 루프에
+// 닿지 않는다(116).
+func TestInitMarkOutcomeTransportTable(t *testing.T) {
+	initEvent := func(revoked bool) []DirtyEvent {
+		return []DirtyEvent{{Kind: DirtyUploaded, StreamID: "demo", Axis: index.AxisInit, SessionID: "S-1", InheritRevoked: revoked}}
+	}
+	tests := []struct {
+		name        string
+		mark        index.InitMark
+		err         error
+		wantOutcome outcome
+		wantEvents  []DirtyEvent
+		wantRequeue bool
+	}{
+		{"성공", index.InitMarkSuccess, nil, outcomeSuccess, initEvent(false), true},
+		{"해제", index.InitMarkRevoked, nil, outcomeSuccess, initEvent(true), true},
+		{"이미_같음", index.InitMarkAlreadySame, nil, outcomeSuccess, nil, true},
+		{"불일치", index.InitMarkMismatch, nil, outcomeNeutral, nil, false},
+		{"세션_부재", index.InitMarkMissing, nil, outcomeNeutral, nil, false},
+		{"오류", 0, errors.New("연결 끊김"), outcomeNeutral, nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := &fakeUploadStore{onInitMark: func(string, []byte) (index.InitMark, error) { return tt.mark, tt.err }}
+			u, cap, dir, _ := newPlaybackUploader(t, st, &fakePutter{}, &fakeProducer{}, nil)
+			runLive(u, playbackTarget(t, "demo", 7, "S-1", writeSegment(t, dir, "demo", "seg7.mp4", 64), 64)) // 기대 init 을 몰라 보류된다
+			initJob := initJobTarget(t, dir, "demo", "S-1", "first.mp4", 64)
+
+			got := runLive(u, initJob)
+
+			if got != tt.wantOutcome {
+				t.Errorf("outcome = %v, want %v (%s)", got, tt.wantOutcome, cap.dump())
+			}
+			if _, blocked := u.gate.backoffBlocked(targetKeyOf(initJob)); blocked != !tt.wantRequeue {
+				t.Errorf("실패 등록(백오프) = %v, want %v", blocked, !tt.wantRequeue)
+			}
+			if requeued := len(u.queue) == 1; requeued != tt.wantRequeue {
+				t.Errorf("보류 ③ 재투입 = %v(큐 %d건), want %v", requeued, len(u.queue), tt.wantRequeue)
+			}
+			sameEvents(t, u.Dirty().Peek(), tt.wantEvents)
+		})
+	}
+}
+
+// already_same_does_not_restore_inheritance(계획 4.5 A2 결정 10 〔r42 재정의〕 · 뮤테이션 117) — 앞선 CAS 는 서버에서
+// 커밋됐는데(계승 해제였을 수 있다) 워커는 결과를 잃었고(MarkTimeout 시한), 재시도는 AlreadySame 을 받는다. 이
+// 호출은 앞선 확정이 계승을 풀었는지 모르므로 Dirty 에 표시하지 않는다 — 해제 거짓으로 표시하면 캐시가 「init 확정 ∧
+// 낡은 계승」을 얻는다(그 회차의 캐시 반영은 30초 감시 화해 몫 — 결정 11). 기다리던 ③ 은 그래도 다시 넣는다.
+func TestAlreadySameDoesNotRestoreInheritance(t *testing.T) {
+	calls := 0
+	st := &fakeUploadStore{onInitMark: func(string, []byte) (index.InitMark, error) {
+		calls++
+		if calls == 1 {
+			return 0, context.DeadlineExceeded // 서버는 커밋했고 워커는 결과를 잃었다
+		}
+		return index.InitMarkAlreadySame, nil
+	}}
+	u, cap, dir, _ := newPlaybackUploader(t, st, &fakePutter{}, &fakeProducer{}, nil)
+	runLive(u, playbackTarget(t, "demo", 7, "S-1", writeSegment(t, dir, "demo", "seg7.mp4", 64), 64))
+	initJob := initJobTarget(t, dir, "demo", "S-1", "first.mp4", 64)
+	if got := runLive(u, initJob); got != outcomeNeutral {
+		t.Fatalf("결과를 잃은 첫 시도 outcome = %v, want neutral — 준비가 어긋났다 (%s)", got, cap.dump())
+	}
+
+	if got := runLive(u, initJob); got != outcomeSuccess {
+		t.Fatalf("재시도 outcome = %v, want success (%s)", got, cap.dump())
+	}
+
+	if got := u.Dirty().Peek(); len(got) != 0 {
+		t.Errorf("Dirty = %+v, want 없음 — AlreadySame 은 해제 여부를 모른다", got)
+	}
+	if n := len(u.queue); n != 1 {
+		t.Errorf("보류 ③ 재투입 = %d건, want 1건", n)
 	}
 }

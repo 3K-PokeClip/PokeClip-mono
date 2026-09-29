@@ -29,6 +29,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/boundary"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/cache"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/rewind/publish"
 )
 
 // stream 은 픽스처 스트림이다.
@@ -265,6 +266,53 @@ func TestApplyInsertStopsAtAMissedSeq(t *testing.T) {
 
 	if got := seqsOf(c.Snapshot(stream).RowsFrom(0)); !reflect.DeepEqual(got, []int64{40, 41}) {
 		t.Errorf("행 = %v, want [40 41] — 빈 seq 뒤는 싣지 않는다", got)
+	}
+}
+
+// cache_demotes_prev_session_on_open(계획 2.1 upload.go 행 〔r53b〕 · 4.5 B #1 · 판단 J62) — TD 분할 개시 push 는
+// 같은 트랜잭션이 ending 으로 보낸 옛 회차(EndingSessionID)를 싣고, 캐시는 새 회차 축을 세우는 같은 호출에서 그
+// 회차를 ending 으로 둔다. 잡는 결함: 반영을 빼면 한 스트림에 live 회차 둘이 남아 옛 회차의 발행 게이트가 열린
+// 채다(ShouldTick 참 — 363 J33 창). 옛 회차는 init 이 올라간 회차라 반영이 없으면 게이트가 실제로 열려 있다.
+func TestCacheDemotesPrevSessionOnOpen(t *testing.T) {
+	c := &cache.Cache{}
+	old := withMinSeq(sessionO, 40)
+	old.InitUploaded = true
+	load(t, c, stream, ledgerOf(40, ledgerRun("O", 40, 42, at(0)), old))
+	split := index.RewindSession{SessionID: "P", State: "live", FirstPDT: at(12 * time.Second), TargetDuration: 7}
+	res := openingOf(split, 43, 6500)
+	res.EndingSessionID = "O"
+
+	c.ApplyInsert(stream, 43, res)
+
+	o, _ := c.Session(stream, "O")
+	if o.State != "ending" || publish.ShouldTick(o.RewindSession, c.Loading(stream)) {
+		t.Errorf("옛 회차 O (state, ShouldTick) = (%q, %v), want (ending, false)", o.State, publish.ShouldTick(o.RewindSession, c.Loading(stream)))
+	}
+	if p, ok := c.Session(stream, "P"); !ok || p.State != "live" {
+		t.Errorf("새 회차 P = (%+v, %v), want live 회차", p.RewindSession, ok)
+	}
+}
+
+// 모르는 회차를 끝낸 개시 push 는 새 회차만 세운다 — 옛 회차 항목을 만들지도 적재를 요구하지도 않는다(판단 J62 —
+// ApplySessionEnding 과 같은 「모르는 회차면 할 일 없음」). 잡는 결함: 없는 회차를 ending 항목으로 만들면 뷰에
+// 행 없는 회차가 쌓이고, 적재를 부르면 분할마다 스트림이 적재 중으로 빠져 틱이 멈춘다.
+func TestCacheIgnoresUnknownEndingSessionOnOpen(t *testing.T) {
+	c := &cache.Cache{}
+	load(t, c, stream, openedAt40())
+	split := index.RewindSession{SessionID: "P", State: "live", FirstPDT: at(7600 * time.Millisecond), TargetDuration: 7}
+	res := openingOf(split, 41, 6500)
+	res.EndingSessionID = "X"
+
+	c.ApplyInsert(stream, 41, res)
+
+	if _, ok := c.Session(stream, "X"); ok {
+		t.Error("모르는 회차 X 의 항목이 생겼다")
+	}
+	if d := c.DemandedLoads(); len(d) != 0 || c.Loading(stream) {
+		t.Errorf("(요구, 적재 중) = (%v, %v), want (없음, 거짓)", d, c.Loading(stream))
+	}
+	if p, ok := c.Session(stream, "P"); !ok || p.State != "live" {
+		t.Errorf("새 회차 P = (%+v, %v), want live 회차", p.RewindSession, ok)
 	}
 }
 

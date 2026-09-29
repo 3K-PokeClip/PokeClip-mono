@@ -25,11 +25,12 @@ type sessionDecider struct{ reg *session.Registry }
 
 // newSessionDecider 는 정책값을 config 에서 받아 결정자를 만든다.
 // 값의 집은 config 하나다 — 여기에 기본값을 또 적지 않는다.
-func newSessionDecider(floorSlack, obsFresh time.Duration, log *slog.Logger) index.SessionDecider {
+func newSessionDecider(floorSlack, obsFresh, reconnectWindow time.Duration, log *slog.Logger) index.SessionDecider {
 	return sessionDecider{reg: session.New(session.Options{
-		FloorSlack: floorSlack,
-		ObsFresh:   obsFresh,
-		Log:        log,
+		FloorSlack:      floorSlack,
+		ObsFresh:        obsFresh,
+		ReconnectWindow: reconnectWindow,
+		Log:             log,
 	})}
 }
 
@@ -56,12 +57,15 @@ func (d sessionDecider) Decide(ctx context.Context, tx pgx.Tx, in index.SessionI
 		return index.SessionDecision{}, err
 	}
 	// 결정 자체(개시 계획 포함)를 불투명 값으로 되돌려 준다 — Open 이 그대로 되받으므로
-	// 결정과 쓰기가 같은 입력을 본다는 것이 구조로 보장된다.
+	// 결정과 쓰기가 같은 입력을 본다는 것이 구조로 보장된다. 개시 결과 두 칸은 index 가 계획을 열지 않고
+	// 받을 수 있게 따로 옮긴다 — 필드별 복사라 빠뜨리면 여기서 탈락한다.
 	return index.SessionDecision{
-		Opens:         dec.Outcome == session.OutcomeOpen || dec.Outcome == session.OutcomeOpenFresh,
-		SessionID:     dec.SessionID,
-		BaseSessionID: dec.BaseSessionID,
-		Plan:          dec,
+		Opens:              dec.Outcome == session.OutcomeOpen || dec.Outcome == session.OutcomeOpenFresh,
+		SessionID:          dec.SessionID,
+		BaseSessionID:      dec.BaseSessionID,
+		EndingSessionID:    dec.EndingSessionID,
+		PrevFirstLocalPath: dec.PrevFirstLocalPath,
+		Plan:               dec,
 	}, nil
 }
 
