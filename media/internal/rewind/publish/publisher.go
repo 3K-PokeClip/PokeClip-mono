@@ -6,7 +6,11 @@ package publish
 // 들고 작업에 값으로 넘기며, 작업이 돌려준 새 값으로 갈아 끼운다(계획 4.5 A1 결정 3 · A3 결정 1 — 워커는
 // 값만 받는다). 그래서 발행자는 여러 스트림의 작업이 동시에 불러도 된다.
 //
-// 이 커밋에는 호출자가 없다 — 루프 배선(rewindDone case · 입력 공급 · P 보관)은 커밋 7 이다.
+// 차선의 작업은 셋이다 — 발행(Tick · RenewFence) · 적재(LoadLedger) · 30초 감시(Watch). 적재 · 감시의 신호는 루프가
+// 결과를 캐시에 반영한 뒤 얇은 래퍼 둘(ReportLoad · ReportWatch)로 남긴다 — 작업은 값만 돌려주고 캐시에는 로거가
+// 없다(체크리스트 419 A-7 4 · 장부 421 P-7).
+//
+// 호출자는 아직 없다 — 루프 배선(rewindDone case · 입력 공급 · P 보관 · 래퍼 호출)은 커밋 7 이다.
 
 import (
 	"context"
@@ -16,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 
@@ -97,6 +102,16 @@ type Options struct {
 	// 가 RefreshObligation − EdgeDelay 에 닿으면 뜬다.
 	EdgeDelay time.Duration
 
+	// 30초 감시 (c) 컷오프 부재의 설계값 둘이다(설계 4.1 (c) · 계획 5절 설계값 목록 · 판단 J43 — 감시 작업과 (c) 판정의
+	// 자리). check 가 둘 다 양수인지 본다.
+	//
+	// SeedAlarmAfter 는 설계의 SEED_ALARM_AFTER — 마지막 조각이 이 안인 컷오프 없는 스트림이 부재 후보다(10분 =
+	// 2 × RescanEvery — 점멸 방지). 이 값이 RescanEvery 의 두 배 이상인지는 조립이 지킨다(커밋 7 — RescanEvery 는
+	// env 로 바뀐다).
+	SeedAlarmAfter time.Duration
+	// SeedAlarmErrorTicks 는 부재가 연속 몇 번째 감시에 ERROR 로 오르는가다(40 — 30초 감시로 20분).
+	SeedAlarmErrorTicks int
+
 	// statementTimeout 은 DB 문장 하나(GAP 틱은 트랜잭션 하나)의 ctx 시한이다 — 0 이면 index.TxnDeadline 이다(stmtCtx).
 	// 같은 패키지의 시험만 바꾼다: 루프 ctx 는 살아 있고 문장만 시한을 넘는 국면을 10초 기다리지 않고 만든다.
 	statementTimeout time.Duration
@@ -116,13 +131,18 @@ func DefaultOptions(writer, baseURL string) Options {
 		GapHold:           2 * time.Second,
 		RefreshObligation: 9 * time.Second,
 		EdgeDelay:         1500 * time.Millisecond,
+
+		SeedAlarmAfter:      10 * time.Minute,
+		SeedAlarmErrorTicks: 40,
 	}
 }
 
 // check 는 설정이 세대 규약을 돌릴 수 있는지 본다. 관계가 어긋나면 모든 틱이 멈추는데 그 까닭이 로그에
 // 드러나지 않는다 — Lease ≤ T_pub 면 P3 앞 마감(m0 + Lease − T_pub)이 P0 앞이라 모든 틱이 PUT 없이 끝난다. 사다리
 // 설계값도 본다 — 0 이하면 정상 경로(holdAge 음수)의 조각도 L2 에 닿아 GAP 줄로 나가고(GAP 줄은 되돌리지 않는다), L1
-// 문턱이 GAP_HOLD 보다 길면 백오프를 당기기 전에 GAP 을 내며, T_edge 가 갱신 의무 이상이면 L4 가 정체 없이도 뜬다.
+// 문턱이 GAP_HOLD 보다 길면 백오프를 당기기 전에 GAP 을 내며, T_edge 가 갱신 의무 이상이면 L4 가 정체 없이도 뜬다. 감시
+// 설계값 둘도 양수여야 한다 — SEED_ALARM_AFTER 가 0 이하면 (c) 가 서지 않고, 승격 감시 수가 0 이하면 첫 감시에 ERROR
+// 다(체크리스트 419 A-8).
 func (o Options) check() error {
 	switch {
 	case o.Writer == "":
@@ -141,6 +161,9 @@ func (o Options) check() error {
 		return fmt.Errorf("publish: L1 문턱 %v 가 GAP_HOLD %v 보다 길다", o.ExpediteAfter, o.GapHold)
 	case o.EdgeDelay >= o.RefreshObligation:
 		return fmt.Errorf("publish: T_edge %v 가 갱신 의무 %v 보다 짧아야 한다", o.EdgeDelay, o.RefreshObligation)
+	case o.SeedAlarmAfter <= 0 || o.SeedAlarmErrorTicks <= 0:
+		return fmt.Errorf("publish: 감시 설계값이 0 이하다(SEED_ALARM_AFTER %v · ERROR 승격 감시 수 %d)",
+			o.SeedAlarmAfter, o.SeedAlarmErrorTicks)
 	}
 	return nil
 }
@@ -454,9 +477,9 @@ type Kind int
 const (
 	// KindPublish 는 발행 작업(틱 · lazy 갱신)이다 — 스트림 차선.
 	KindPublish Kind = iota + 1
-	// KindLoad 는 캐시 적재 작업이다 — 스트림 차선(작업 몸체는 커밋 5).
+	// KindLoad 는 캐시 적재 작업이다 — 스트림 차선(작업 몸체는 LoadLedger).
 	KindLoad
-	// KindWatch 는 30초 감시 · 부팅 목록 작업이다 — 프로세스 차선(작업 몸체는 커밋 5).
+	// KindWatch 는 30초 감시 · 부팅 목록 작업이다 — 프로세스 차선(작업 몸체는 Watch — 부팅 목록은 첫 감시의 live 행).
 	KindWatch
 )
 
@@ -471,6 +494,10 @@ type Result struct {
 	StreamID string
 	// Publish 는 발행 작업(KindPublish)의 결과다.
 	Publish Outcome
+	// Load 는 적재 작업(KindLoad)의 결과다(판단 J40).
+	Load LoadOutcome
+	// Watch 는 감시 작업(KindWatch)의 결과다(판단 J40).
+	Watch WatchOutcome
 
 	// lane 은 이 작업이 돈 차선이다 — Finish 가 비울 자리다. 차선이 채운다.
 	lane laneKey
@@ -547,4 +574,152 @@ func (l *Lanes) Finish(r Result) (rerun bool) {
 	delete(l.running, r.lane)
 	delete(l.merged, r.lane)
 	return rerun
+}
+
+// 감시 · 적재의 신호 키 — 설계가 이름을 준 둘(cache_drift_repaired — 설계 4.1 (a) · rewind_cutoff_absent — 설계 관측
+// 목록 · s4 신호 13종)과 적재 열화 하나(rewind_ledger_load_degraded — 계획 5절 로그 키 · 4.5 B #7)다. 메트릭 기반이
+// 없어 로그 키로 남긴다(gapPublishedLog 와 같은 형).
+const (
+	driftRepairedLog = "cache_drift_repaired"
+	cutoffAbsentLog  = "rewind_cutoff_absent"
+	loadDegradedLog  = "rewind_ledger_load_degraded"
+)
+
+// 신호 속성 값 — 드리프트의 종류(kind)와 적재 열화의 사유(reason)다(판단 J39 · J46 · 계획 4.5 B #7).
+const (
+	driftKindHead = "head"          // (a) 머리 드리프트 — 드리프트 까닭으로 연 적재가 적용됐다
+	driftKindInit = "init_uploaded" // 잃은 init 결과를 감시 화해가 되살렸다(A2 결정 11)
+	loadRowCap    = "row_cap"       // 적재가 행 수 상한에 닿았다(A3 결정 3)
+	loadFailed    = "load_failed"   // 적재 작업이 실패했다(판단 J46)
+)
+
+// LoadInput 은 적재 작업 하나의 입력이다 — 루프가 캐시에서 만든 값(BeginLoad 의 토큰 · 요구의 힌트 · 캐시 튜너블)이다.
+type LoadInput struct {
+	StreamID string
+	// Token 은 cache.LoadToken 이다 — 발행 층은 캐시를 임포트하지 않아 정수로 나른다(판단 J40).
+	Token uint64
+	// Bounds 는 적재 범위(힌트 · 되짚기 · 행 수 상한)다.
+	Bounds index.LedgerBounds
+}
+
+// LoadOutcome 은 적재 작업 하나의 결과다 — 토큰과 적재분 값(상한 도달 포함)이다. 루프가 cache.CompleteLoad 로 반영하고
+// ReportLoad 로 신호를 남긴다(커밋 7). Err 가 있으면 적재분은 비었다.
+type LoadOutcome struct {
+	Token uint64
+	index.RewindLedger
+	Err error
+}
+
+// WatchOutcome 은 30초 감시 작업 하나의 결과다 — 감시 한 문장의 종류별 행이다. 루프가 캐시 대조 · 화해로 반영하고
+// ReportWatch 로 신호를 남긴다(커밋 7). Err 가 있으면 그 틱의 (a) · (c) · 화해를 건너뛴다(판단 J46 — 로그 키는 커밋 7).
+type WatchOutcome struct {
+	index.RewindWatch
+	Err error
+}
+
+// LoadLedger 는 적재 작업의 몸체다 — 입력 값만 받아 장부를 읽고(index.LoadRewindLedger — 읽기 전용 · REPEATABLE READ
+// 한 트랜잭션 · 시한은 그 안에서 건다) 결과를 값으로 돌려준다. 캐시를 만지지 않는다(계획 4.5 A3 「동시성」). ctx 는
+// 루프 수명 ctx 다(Lanes.Start 의 계약).
+func (p *Publisher) LoadLedger(ctx context.Context, in LoadInput) LoadOutcome {
+	l, err := index.LoadRewindLedger(ctx, p.pool, in.StreamID, in.Bounds)
+	return LoadOutcome{Token: in.Token, RewindLedger: l, Err: err}
+}
+
+// Watch 는 30초 감시 작업의 몸체다 — 대조 입력 probes(루프가 cache.DriftProbes 로 뜬 값)와 SEED_ALARM_AFTER 로 감시
+// 한 문장을 읽어(index.LoadRewindWatch — 시한은 그 안에서 건다) 결과를 값으로 돌려준다. 캐시를 만지지 않는다.
+func (p *Publisher) Watch(ctx context.Context, probes []index.WatchProbe) WatchOutcome {
+	w, err := index.LoadRewindWatch(ctx, p.pool, probes, p.opt.SeedAlarmAfter)
+	return WatchOutcome{RewindWatch: w, Err: err}
+}
+
+// ReportLoad 는 적재 결과 out 의 신호를 남기는 얇은 래퍼다(장부 421 P-7) — 판정은 없고 줄만 남긴다. 루프는 결과를
+// 캐시에 반영한 뒤(cache.CompleteLoad) 부른다(커밋 7).
+//
+//	실패       ERROR rewind_ledger_load_degraded(reason=load_failed) — 시도마다 한 줄(판단 J46)
+//	상한 도달  ERROR 같은 키(reason=row_cap · 하한 · 행 수) — 적재 한 번에 한 줄(계획 4.5 A3 결정 3)
+//	드리프트   WARN cache_drift_repaired(kind=head) — driftRepaired(CompleteLoad 가 적용한 드리프트 까닭 적재)일 때
+//	           한 줄(장부 421 P-5 — 감지 때가 아니다)
+//
+// 부른 쪽 ctx(루프 수명)가 끝났으면 멈춘 작업이라 아무것도 남기지 않는다(stopped 관례).
+func (p *Publisher) ReportLoad(ctx context.Context, streamID string, out LoadOutcome, driftRepaired bool) {
+	if ctx.Err() != nil {
+		return
+	}
+	if out.Err != nil {
+		p.log.Log(ctx, slog.LevelError, loadDegradedLog, "stream", streamID, "reason", loadFailed,
+			"err", clipErr(out.Err.Error()))
+		return
+	}
+	if out.Capped {
+		p.log.Log(ctx, slog.LevelError, loadDegradedLog, "stream", streamID, "reason", loadRowCap,
+			"floor", out.FloorSeq, "rows", len(out.Rows))
+	}
+	if driftRepaired {
+		p.log.Log(ctx, slog.LevelWarn, driftRepairedLog, "stream", streamID, "kind", driftKindHead,
+			"cutoff", out.CutoffSeq, "floor", out.FloorSeq)
+	}
+}
+
+// CutoffAbsentState 는 (c) 컷오프 부재 감시의 상태다 — 스트림마다 연속으로 부재가 보인 감시 수다(판단 J42 —
+// LadderState 형). 루프가 들고 ReportWatch 가 돌려준 값으로 갈아 끼운다. 영값은 「아직 아무것도 남기지 않았다」다 —
+// 재기동하면 0 부터 센다(ERROR 가 최대 20분 늦는다 — 한계).
+type CutoffAbsentState struct {
+	ticks map[string]int
+}
+
+// ReportWatch 는 감시 결과 w 의 신호를 남기고 (c) 상태 st 를 갈아 끼울 값을 돌려주는 얇은 래퍼다(장부 421 P-7). 루프는
+// 결과를 캐시에 반영한 뒤(AuditDrift · ReconcileWatch) 화해가 돌려준 목록 repaired 와 함께 부른다(커밋 7).
+//
+//	화해  WARN cache_drift_repaired(kind=init_uploaded · revoked) — 목록 한 항목에 한 줄(계획 4.5 A2 결정 11)
+//	(c)   rewind_cutoff_absent 의 전이 — 판정은 judgeCutoffAbsent
+//
+// 드리프트 재료(w.Drift)는 로그하지 않는다 — 감지는 수리가 아니다(장부 421 P-5 · ReportLoad).
+func (p *Publisher) ReportWatch(ctx context.Context, st CutoffAbsentState, w index.RewindWatch, repaired []index.InitRepair) CutoffAbsentState {
+	for _, r := range repaired {
+		p.log.Log(ctx, slog.LevelWarn, driftRepairedLog, "stream", r.StreamID, "session", r.SessionID,
+			"kind", driftKindInit, "revoked", r.Revoked)
+	}
+	next, sigs := judgeCutoffAbsent(p.opt, st, w.Absent)
+	for _, s := range sigs {
+		p.log.Log(ctx, s.level, cutoffAbsentLog, s.attrs...)
+	}
+	return next
+}
+
+// absentSignal 은 (c) 판정이 남길 신호 한 줄이다 — rewind_cutoff_absent 키의 등급과 속성(키 · 값 쌍)이다.
+type absentSignal struct {
+	level slog.Level
+	attrs []any
+}
+
+// judgeCutoffAbsent 는 (c) 컷오프 부재 판정이다(설계 4.1 (c) · 9.1 s4_alarm_continuous · s4_signal_grades · 판단 J42 ·
+// 장부 421 P-9) — 감시 결과의 부재 스트림 absent 와 직전 상태 st 만 보고 새 상태와 남길 신호를 돌려준다(로그 · 시계 ·
+// DB 0). 전이만 남긴다: 들어올 때 WARN(value 1) · 연속 SeedAlarmErrorTicks 번째 감시에 ERROR(value 1) · 사라질 때
+// INFO(value 0 — watcher_degraded 선례). 계속 부재인 동안은 줄이 없다(점멸 금지). 감시가 실패한 틱에는 루프가
+// 부르지 않아 세지도 풀지도 않는다. 사라진 스트림은 새 상태에 남지 않아 다시 들어오면 0 부터 센다.
+func judgeCutoffAbsent(opt Options, st CutoffAbsentState, absent []index.WatchAbsent) (CutoffAbsentState, []absentSignal) {
+	next := CutoffAbsentState{ticks: make(map[string]int, len(absent))}
+	var sigs []absentSignal
+	for _, a := range absent {
+		n := st.ticks[a.StreamID] + 1
+		next.ticks[a.StreamID] = n
+		attrs := []any{"stream", a.StreamID, "ticks", n, "last_wall", a.LastWall, "value", 1}
+		if n == 1 {
+			sigs = append(sigs, absentSignal{level: slog.LevelWarn, attrs: attrs})
+		}
+		if n == opt.SeedAlarmErrorTicks {
+			sigs = append(sigs, absentSignal{level: slog.LevelError, attrs: attrs})
+		}
+	}
+	var gone []string
+	for id := range st.ticks {
+		if _, ok := next.ticks[id]; !ok {
+			gone = append(gone, id)
+		}
+	}
+	slices.Sort(gone)
+	for _, id := range gone {
+		sigs = append(sigs, absentSignal{level: slog.LevelInfo, attrs: []any{"stream", id, "ticks", st.ticks[id], "value", 0}})
+	}
+	return next, sigs
 }

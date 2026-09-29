@@ -390,7 +390,9 @@ func TestAbortLogOncePerReason(t *testing.T) {
 
 // 설정 검사 — 설계값 셋의 관계가 어긋나면 결정 9 의 P3 앞 판정이 모든 틱을 포기한다(Lease ≤ T_pub). writer
 // 토큰과 베이스 URL 이 비면 fence 와 목록 URI 를 만들 수 없다. 사다리 설계값 다섯은 모두 양수여야 하고(영값이면 정상
-// 경로의 조각이 곧바로 GAP 으로 나간다) L1 문턱 ≤ GAP_HOLD · T_edge < 갱신 의무다(c4-fix1 개정 3).
+// 경로의 조각이 곧바로 GAP 으로 나간다) L1 문턱 ≤ GAP_HOLD · T_edge < 갱신 의무다(c4-fix1 개정 3). 감시 설계값
+// 둘(SEED_ALARM_AFTER · ERROR 승격 감시 수)도 양수여야 한다 — 0 이면 (c) 가 서지 않거나 첫 감시에 ERROR 다(체크리스트
+// 419 A-8 · 〔r53b — Q-6〕).
 // 관계 행은 값 하나만 Lease 로 올려 그 관계만 어긋나게 둔다 — 나머지 값은 기본값(Lease 보다 짧다)이라, 관계 절
 // 하나를 지운 회귀도 가른다. 사다리 관계 행은 경계값(L1 문턱 = GAP_HOLD + 1ms · T_edge = 갱신 의무)이다.
 func TestNewValidatesOptions(t *testing.T) {
@@ -422,6 +424,10 @@ func TestNewValidatesOptions(t *testing.T) {
 		{"T_edge_0", func(o *Options) { o.EdgeDelay = 0 }},
 		{"L1_문턱이_GAP_HOLD_보다_김", func(o *Options) { o.ExpediteAfter = o.GapHold + time.Millisecond }},
 		{"T_edge_가_갱신_의무_이상", func(o *Options) { o.EdgeDelay = o.RefreshObligation }},
+		{"SEED_ALARM_AFTER_0", func(o *Options) { o.SeedAlarmAfter = 0 }},
+		{"SEED_ALARM_AFTER_음수", func(o *Options) { o.SeedAlarmAfter = -time.Minute }},
+		{"ERROR_승격_감시_수_0", func(o *Options) { o.SeedAlarmErrorTicks = 0 }},
+		{"ERROR_승격_감시_수_음수", func(o *Options) { o.SeedAlarmErrorTicks = -1 }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

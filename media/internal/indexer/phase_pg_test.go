@@ -326,16 +326,18 @@ func (f *phaseFixture) mustNotSeed(why string) {
 	}
 }
 
-// rewindWindow 는 장부를 부팅 재구성으로 다시 읽어 센 되감기 창이다(index.LoadRewindLedger
-// → cache.Reload → boundary.Compute, 직전 꼬리 없음). 컷오프가 없으면 멈춘다.
+// rewindWindow 는 장부를 적재로 다시 읽어 센 되감기 창이다(index.LoadRewindLedger → 적재(BeginLoad →
+// CompleteLoad) → boundary.Compute, 직전 꼬리 없음 · 튜너블 기본값). 컷오프가 없으면 멈춘다.
 func (f *phaseFixture) rewindWindow() boundary.Window {
 	f.t.Helper()
-	l, err := index.LoadRewindLedger(context.Background(), f.pool, f.stream)
+	o := cache.Options{}.WithDefaults()
+	l, err := index.LoadRewindLedger(context.Background(), f.pool, f.stream,
+		index.LedgerBounds{Lookback: o.LedgerLookback, RowCap: o.LedgerRowCap})
 	if err != nil {
 		f.t.Fatalf("LoadRewindLedger 실패: %v", err)
 	}
 	c := &cache.Cache{}
-	c.Reload(f.stream, l)
+	c.CompleteLoad(f.stream, c.BeginLoad(f.stream, nil), l)
 	w, ok := boundary.Compute(c.Snapshot(f.stream), 0)
 	if !ok {
 		f.t.Fatal("컷오프가 없어 되감기 창을 셀 수 없다")
