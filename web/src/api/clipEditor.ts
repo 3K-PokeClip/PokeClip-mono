@@ -35,6 +35,24 @@ export interface BroadcastRow {
   startedAt: string | null;
   endedAt: string | null;
   vodExpiresAt: string | null;
+  /**
+   * 시각 기준점(POK-255) — 이 방송의 카드·조각 ms가 0이 되는 절대 시각(녹화 첫 조각). 조각이 아직 없으면 null이고,
+   * 이 칸을 모르는 옛 서버면 빠져 온다. 둘 다 방송 시작 시각으로 대신한다(수십 초 어긋날 수 있다)
+   */
+  timelineOriginAt?: string | null;
+}
+
+/**
+ * 카드·조각 ms의 0초가 되는 절대 시각(epoch ms). 서버 기준점이 정본이고(렌더가 자르는 축과 같다), 없으면 녹화 재생 서버의
+ * 첫 구간, 그것도 없으면 방송 시작 시각으로 대신한다
+ */
+export function timelineBaseMs(
+  row: Pick<BroadcastRow, 'startedAt' | 'timelineOriginAt'>,
+  recordingStartMs: number | null = null,
+): number {
+  if (row.timelineOriginAt) return Date.parse(row.timelineOriginAt);
+  if (recordingStartMs !== null) return recordingStartMs;
+  return Date.parse(row.startedAt!);
 }
 
 export interface SegmentIndex {

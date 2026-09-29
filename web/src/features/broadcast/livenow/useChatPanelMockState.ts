@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '@/api/client';
-import { subscribeRelay, useLiveData, type RelayEvent } from './liveDataStore';
+import { subscribeRelay, timeBaseOf, useLiveData, type RelayEvent } from './liveDataStore';
 import { chartWindows } from './useLiveMockState';
 
 // 실시간 채팅 패널(시안 1b). clip 창구에 붙어 있다(POK-251).
@@ -271,7 +271,7 @@ export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
 
   // 지난 방송에서 카드를 누르면 그 시점 앞뒤 60초를 끝까지 따로 읽는다 — 처음 읽기는 창마다 상한이 있어
   // 채팅이 많은 시간대는 비어 있을 수 있다(PR #200 codex P1)
-  const vodBase = live.timeBaseMs ?? live.startedAt;
+  const vodBase = timeBaseOf(live);
   useEffect(() => {
     if (!enabled || !streamId || !isVod || live.playheadMs === null || vodBase === null) return;
     const center = vodBase + live.playheadMs;

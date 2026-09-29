@@ -7,7 +7,13 @@ import { chzzkLinkQueryOptions } from '@/api/chzzkLink';
 import { fetchAllJumpCards } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
 import { useAuthStore } from '@/stores/auth';
-import { emitRelay, publishLiveData, useLiveData, type RelayEvent } from './liveDataStore';
+import {
+  emitRelay,
+  publishLiveData,
+  timeBaseOf,
+  useLiveData,
+  type RelayEvent,
+} from './liveDataStore';
 
 // 디자인 1b 라이브 대시보드의 상태. clip 창구에 붙어 있다(POK-251): 카드 목록(GET jump-cards) +
 // 실시간(SSE events: 카드·중계 채팅·방송 정보) + 채팅량 차트(chat-chart) + 방송 정보(broadcast-info).
@@ -149,11 +155,9 @@ export function chartWindows(from: number, to: number): [number, number][] {
  * 뒤에 찍혀 마커가 엇나간다(PR #200 codex). 방송 시작 시각을 모르면 만든 시각으로 대신한다.
  * 기준점은 방송 시작 편지 시각이라 녹화 첫 조각과 수십 초 어긋날 수 있다(README 「시각 기준점」).
  */
-function cardAt(
-  c: { streamTimestampMs: number; createdAt: string },
-  startedAt: number | null,
-): number {
-  return startedAt !== null ? startedAt + c.streamTimestampMs : Date.parse(c.createdAt);
+/** 카드가 가리키는 절대 시각. 카드 ms는 시각 기준점(녹화 첫 조각) 축이다 — 방송 시작 시각에 더하면 수십 초 어긋난다 */
+function cardAt(c: { streamTimestampMs: number; createdAt: string }, base: number | null): number {
+  return base !== null ? base + c.streamTimestampMs : Date.parse(c.createdAt);
 }
 
 /** 응답을 JSON으로 받는다. 실패는 null — 폴링은 다음 주기에 다시 한다 */
@@ -246,6 +250,8 @@ export function useLiveMockState(): LiveMockState {
   const [sseOk, setSseOk] = useState(false);
   const [info, setInfo] = useState<BroadcastInfoResponse | null>(null);
   const live = useLiveData();
+  // 카드 ms의 0초(서버 기준점 → 녹화 재생 서버 → 방송 시작, POK-255)
+  const base = timeBaseOf(live);
   // 방송 번호는 화면 맨 위(useLiveStreamSelection)가 정한다. 정해지기 전(빈 문자열)에는 아무것도 안 받는다
   const streamId = live.streamId;
   const rangeRef = useRef<{ status: string; startedAt: number | null; endedAt: number | null }>({
@@ -484,9 +490,9 @@ export function useLiveMockState(): LiveMockState {
     publishLiveData({
       cardTimes: Object.values(cards)
         .filter((c) => !c.hidden)
-        .map((c) => cardAt(c, live.startedAt)),
+        .map((c) => cardAt(c, base)),
     });
-  }, [cards, live.startedAt]);
+  }, [cards, base]);
 
   const highlights = useMemo(() => {
     const list = Object.values(cards)
@@ -528,7 +534,7 @@ export function useLiveMockState(): LiveMockState {
     const markers = Object.values(cards)
       .filter((c) => !c.hidden)
       .map((c) => {
-        const t = cardAt(c, live.startedAt);
+        const t = cardAt(c, base);
         if (t < t0 || t > t1) return null;
         const i = Math.min(n - 1, Math.floor(((t - t0) / (t1 - t0)) * n));
         const bk = b[i];
@@ -545,7 +551,7 @@ export function useLiveMockState(): LiveMockState {
       markers,
       timeLabels: [lab(t0), lab(t0 + (t1 - t0) / 3), lab(t0 + ((t1 - t0) * 2) / 3), '지금'],
     };
-  }, [chart, cards, live.startedAt]);
+  }, [chart, cards, base]);
 
   const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
   const { data: me } = useMe();

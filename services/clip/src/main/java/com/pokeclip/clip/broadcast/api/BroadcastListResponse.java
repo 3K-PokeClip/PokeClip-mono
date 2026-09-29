@@ -30,6 +30,10 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      * <b>{@code state}로 접지 않고 실제 상태 값을 그대로 싣는다</b> — 나중에
      * {@code ended}와 {@code vod_ready}를 화면이 구분하고 싶어질 여지를 남긴다(PRD 결정).
      *
+     * <p>{@code timelineOriginAt}은 <b>시각 기준점</b>이다(POK-255) — 이 방송의 카드·조각 ms가 0이 되는 절대 시각.
+     * 화면은 여기에 ms를 더해 편집본 컷(절대 시각)을 만든다. 조각이 아직 없으면 {@code null}이고, 그때는 방송 시작
+     * 시각으로 대신한다(수십 초 어긋날 수 있다). 계산은 {@code TimelineOriginReader}.
+     *
      * <p>줄 번호는 안 싣는다 — 이어받기가 표시로 끝나므로 웹이 쓸 데가 없고,
      * 방송을 가리키는 이름은 {@code streamId}다(카드 목록 문이 그 값을 받는다).
      */
@@ -38,7 +42,8 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                        ResolveResult relation,
                        Instant startedAt,
                        Instant endedAt,
-                       Instant vodExpiresAt) {
+                       Instant vodExpiresAt,
+                       Instant timelineOriginAt) {
     }
 
     public static BroadcastListResponse from(BroadcastPage page) {
@@ -58,6 +63,7 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                 page.relations().get(row.getStreamerId()),
                 row.getStartedAt(),
                 row.getEndedAt(),
-                row.getVodExpiresAt());
+                row.getVodExpiresAt(),
+                page.origins().get(row.getStreamId()));
     }
 }

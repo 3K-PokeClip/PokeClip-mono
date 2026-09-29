@@ -2,6 +2,7 @@ package com.pokeclip.clip.broadcast;
 
 import com.pokeclip.clip.delegation.ResolveResult;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -15,9 +16,10 @@ import java.util.Map;
  * <p>키가 {@code String}인 것은 {@code broadcasts.streamer_id}가 {@code VARCHAR}이기 때문이다 —
  * 조회 조건과 같은 모양이라야 여기서 못 찾는 줄이 안 생긴다.
  */
-public record BroadcastPage(List<Broadcast> rows, Map<String, ResolveResult> relations, String nextCursor) {
+public record BroadcastPage(List<Broadcast> rows, Map<String, ResolveResult> relations, String nextCursor,
+                            Map<String, Instant> origins) {
 
-    private static final BroadcastPage EMPTY = new BroadcastPage(List.of(), Map.of(), null);
+    private static final BroadcastPage EMPTY = new BroadcastPage(List.of(), Map.of(), null, Map.of());
 
     public static BroadcastPage empty() {
         return EMPTY;

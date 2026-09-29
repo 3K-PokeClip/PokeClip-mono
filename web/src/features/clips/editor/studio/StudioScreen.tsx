@@ -14,6 +14,7 @@ import {
   fetchLibraryDetail,
   fetchMeLoose,
   requestRender,
+  timelineBaseMs,
   updateRecipe,
   CUT_MAX_MS,
   CUT_MIN_MS,
@@ -219,9 +220,26 @@ interface Loaded {
   recording: RecordingSpan | null;
 }
 
-/** 녹화 첫 구간 — 방송 기준 0초의 절대 시각. 재생 서버가 없으면 null(그때는 방송 시작 시각이 기준) */
-async function loadRecording(streamId: string): Promise<RecordingSpan | null> {
-  return (await fetchRecordingSpans(streamId))[0] ?? null;
+/**
+ * 이 방송의 녹화 — 방송 시간(시작 앞 2분 ~ 끝 뒤 10분) 안 구간들을 하나로 묶는다(첫 구간 시작 ~ 마지막 구간 끝). 재생 서버의
+ * 목록은 경로(스트림키) 전체라 앞 방송 녹화도 섞여 오고, 재접속하면 한 방송의 녹화도 여러 구간이 된다. 첫 구간 하나만 쓰면
+ * 두 번째 방송에서 앞 방송 녹화를 잡거나 재접속 뒤 끝을 짧게 잰다(로컬 리뷰 2라운드). 재생 서버가 없거나 녹화가 없으면 null
+ */
+async function loadRecording(
+  streamId: string,
+  broadcast: BroadcastRow,
+): Promise<RecordingSpan | null> {
+  const from = Date.parse(broadcast.startedAt!) - 2 * 60_000;
+  const until = broadcast.endedAt
+    ? Date.parse(broadcast.endedAt) + 10 * 60_000
+    : Number.POSITIVE_INFINITY;
+  const spans = (await fetchRecordingSpans(streamId)).filter(
+    (span) => span.startMs + span.durationSeconds * 1000 >= from && span.startMs <= until,
+  );
+  const first = spans[0];
+  if (first === undefined) return null;
+  const end = Math.max(...spans.map((span) => span.startMs + span.durationSeconds * 1000));
+  return { startMs: first.startMs, durationSeconds: (end - first.startMs) / 1000 };
 }
 
 /**
@@ -275,7 +293,7 @@ async function loadFromCard(streamId: string, cardId: string): Promise<Status> {
   }
   const [trackLabels, recording] = await Promise.all([
     loadTrackLabels(broadcast),
-    loadRecording(streamId),
+    loadRecording(streamId, broadcast),
   ]);
   return {
     kind: 'loaded',
@@ -307,9 +325,10 @@ async function loadFromRecipe(recipeId: number): Promise<Status> {
       message: '방송 시작 시각이 없어 편집본의 구간을 화면 축으로 못 옮겨요',
     };
   }
-  const recording = await loadRecording(detail.streamId);
-  // 🔴 컷(절대 시각)을 화면 축으로 되돌리는 기준점은 녹화 시작이다 — 저장할 때와 같은 기준이어야 제자리로 온다.
-  const base = recording?.startMs ?? Date.parse(broadcast.startedAt);
+  const recording = await loadRecording(detail.streamId, broadcast);
+  // 🔴 컷(절대 시각)을 화면 축으로 되돌리는 기준점은 시각 기준점이다(서버 → 녹화 재생 서버 → 방송 시작, POK-255) —
+  //    저장할 때와 같은 기준이어야 제자리로 온다.
+  const base = timelineBaseMs(broadcast, recording?.startMs ?? null);
   return {
     kind: 'loaded',
     data: {
@@ -427,8 +446,13 @@ function WiredStudio({ data }: { data: Loaded }) {
   const { toast } = useToast();
   const { streamId, card, broadcast, window, saved, latestClip, trackLabels, recording } = data;
   const startedAt = broadcast.startedAt!;
-  // 카드·조각의 위치는 녹화 첫 조각 기준이다(조각 장부의 축) — 방송 시작 편지 시각과 수십 초 어긋날 수 있다.
-  const base = recording?.startMs ?? Date.parse(startedAt);
+  // 🔴 카드·조각 ms의 0초 = 시각 기준점(서버 → 녹화 재생 서버 → 방송 시작, POK-255). 저장·다시 열기가 같은 값을 써야 제자리다.
+  //    방송 시작 편지 시각과 수십 초 갈리고, 조각 장부의 위치 값은 방송을 넘어 이어지므로 녹화 시작과도 갈릴 수 있다
+  const base = timelineBaseMs(broadcast, recording?.startMs ?? null);
+  // 녹화 끝을 기준점 축의 초로 — 녹화 길이는 녹화 시작부터 잰 값이라 그대로 쓰면 두 시작의 차만큼 끝이 어긋난다
+  const recordingEndSeconds = recording
+    ? (recording.startMs + recording.durationSeconds * 1000 - base) / 1000
+    : 0;
 
   const initialRange = useMemo(
     () => ({ startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 }),
@@ -437,8 +461,9 @@ function WiredStudio({ data }: { data: Loaded }) {
   // 실재생 — 녹화가 있을 때만 어댑터를 넘긴다(한 마운트 동안 있거나 없거나 고정: 훅의 규칙).
   const video = useEditorVideoPlayback({
     streamId,
-    recordingStartMs: recording?.startMs ?? 0,
-    recordingSeconds: recording?.durationSeconds ?? 0,
+    // 재생 서버에는 「기준점 + 초」로 절대 시각을 묻는다 — 구간 초가 기준점 축이다
+    recordingStartMs: base,
+    recordingSeconds: recordingEndSeconds,
     initialRange,
   });
 
@@ -457,7 +482,7 @@ function WiredStudio({ data }: { data: Loaded }) {
     const endedMs = broadcast.endedAt ? Date.parse(broadcast.endedAt) - base : null;
     // 방송 길이 — 녹화가 있으면 녹화 길이, 끝났으면 실제 길이, 아니면 창 끝에 1분 여유
     const totalSeconds = Math.max(
-      recording?.durationSeconds ?? (endedMs ?? window.endMs + 60_000) / 1000,
+      recording ? recordingEndSeconds : (endedMs ?? window.endMs + 60_000) / 1000,
       window.endMs / 1000,
     );
     // 🔴 구간은 **그 하이라이트 안에서만** 잡는다(사용자 확정 2026-09-17) — 카드가 잡아 준 시작~끝이 곧 양쪽 한계이고,
@@ -472,7 +497,7 @@ function WiredStudio({ data }: { data: Loaded }) {
       minSeconds,
       range: { startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 },
     };
-  }, [broadcast.endedAt, base, window, card, saved, startedAt, recording]);
+  }, [broadcast.endedAt, base, window, card, saved, startedAt, recording, recordingEndSeconds]);
 
   /** 타임라인의 구간(방송 시작 기준 초) → 계약6 컷(절대 ms). 5초~3분 밖이면 저장 문이 거절하므로 여기서 맞춘다. */
   const documentFor = useCallback(

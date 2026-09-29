@@ -42,11 +42,23 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
     setEndedAt(null);
     if (!streamId) {
       setStatus('offline');
-      publishLiveData({ status: 'offline', startedAt: null, endedAt: null, playheadMs: null });
+      publishLiveData({
+        status: 'offline',
+        startedAt: null,
+        endedAt: null,
+        playheadMs: null,
+        originMs: null,
+      });
       return;
     }
     setStatus('unknown');
-    publishLiveData({ status: 'unknown', startedAt: null, endedAt: null, playheadMs: null });
+    publishLiveData({
+      status: 'unknown',
+      startedAt: null,
+      endedAt: null,
+      playheadMs: null,
+      originMs: null,
+    });
     let alive = true;
     const load = async () => {
       try {
@@ -56,7 +68,13 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
         if (!row) {
           setMissingStreamId(streamId);
           setStatus('offline');
-          publishLiveData({ status: 'offline', startedAt: null, endedAt: null, relation: null });
+          publishLiveData({
+            status: 'offline',
+            startedAt: null,
+            endedAt: null,
+            relation: null,
+            originMs: null,
+          });
           return;
         }
         setMissingStreamId(null);
@@ -67,7 +85,14 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
         setStartedAt(s);
         setEndedAt(e);
         setNow(Date.now());
-        publishLiveData({ status: st, startedAt: s, endedAt: e, relation: row.relation });
+        // 시각 기준점(POK-255)은 방송 중에는 첫 조각이 올라온 뒤에야 생기므로 주기마다 다시 싣는다
+        publishLiveData({
+          status: st,
+          startedAt: s,
+          endedAt: e,
+          relation: row.relation,
+          originMs: ms(row.timelineOriginAt ?? null),
+        });
       } catch {
         /* 다음 주기에 다시 */
       }
