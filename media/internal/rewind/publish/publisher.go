@@ -29,9 +29,14 @@ import (
 // 「중단 · 포기 로그」). 틱만 포기하는 갈래는 WARN, 발행이 서는 갈래는 ERROR 다.
 const abortedLog = "rewind_publish_aborted"
 
+// gapPublishedLog 는 GAP 원장에 GAP 이 새로 섰다는 신호다 — 설계 관측 목록의 rewind_gap_published_total{reason}(계획
+// 5절 기정 신호)을 메트릭 기반이 없어 로그 키로 남긴다(판단 J28). GAP 트랜잭션의 커밋 뒤 한 줄이고(원장이 목록의
+// 진실원이 된 시각 — PUT 이 실패해도 다음 틱이 싣는다) 조각 하나를 GAP 으로 내준 사건이라 WARN 이다.
+const gapPublishedLog = "rewind_gap_published_total"
+
 // 중단 · 포기 사유 — 계획 4.5 A1 로그 표의 reason 값 전부(r45 여덟 · r50 일곱)와 결과 모름 둘(p0_unknown ·
-// p4_unknown — 커밋 3 r4 처분 R4-3), 쓰는 쪽 범위 검사 하나(meta_out_of_range — r5 처분 R5-2)다. 뒤의 셋은 계획 r51
-// 로그 표에 적을 몫이다.
+// p4_unknown — 커밋 3 r4 처분 R4-3), 쓰는 쪽 범위 검사 하나(meta_out_of_range — r5 처분 R5-2), GAP 트랜잭션 실패
+// 하나(gap_tx_failed — 커밋 4 · 판단 J25)다.
 const (
 	reasonMetaInvalid        = "meta_invalid"         // ERROR — R2 메타 누락 · 해석 실패(발행 정지)
 	reasonMetaOutOfRange     = "meta_out_of_range"    // ERROR — 올릴 판의 메타 정수나 끝 조각 DSN 이 2^53−1 을 넘음(발행 정지 — checkMetaRange)
@@ -51,6 +56,7 @@ const (
 	reasonP4NoRow            = "p4_no_row"            // WARN — P4 0행(설계 4.4.3 — CAS 거부)
 	reasonP4Unknown          = "p4_unknown"           // WARN — P4 결과 모름(DB 오류 — 서버 커밋 여부를 모른다)
 	reasonHeadFailed         = "head_failed"          // ERROR — Head 실패(403 포함)
+	reasonGapTxFailed        = "gap_tx_failed"        // WARN — GAP 트랜잭션의 P0 뒤 실패(속성 stage = insert · commit — 판단 J25)
 )
 
 // Options 는 발행자의 설정이다. 설계값 셋은 설계 4.4.3 · 6.2 가 값을 준 것이고(계획 5절 설계값 목록) 값의
@@ -74,8 +80,25 @@ type Options struct {
 	// 값이다(판단 J8 — 저장소 요청 한 번의 예산).
 	PublishTimeout time.Duration
 
-	// statementTimeout 은 DB 문장 하나의 ctx 시한이다 — 0 이면 index.TxnDeadline 이다(stmtCtx). 같은 패키지의 시험만
-	// 바꾼다: 루프 ctx 는 살아 있고 문장만 시한을 넘는 국면을 10초 기다리지 않고 만든다.
+	// 정체 사다리의 설계값 다섯이다(설계 4.6.3 · 4.6.5 · 판단 J21 — 사다리 EvaluateLadder 만 쓰고 check 가 양수 · 관계를
+	// 본다).
+	//
+	// E2EBudget 은 설계의 E2E_BUDGET — 조각이 끝난 뒤 목록에 실리기까지의 예산이다(2.0초 · F-7 전 잠정). holdAge 의
+	// 기준 dueAt 에 더한다.
+	E2EBudget time.Duration
+	// ExpediteAfter 는 L1 문턱이다(holdAge 0.5초).
+	ExpediteAfter time.Duration
+	// GapHold 는 설계의 GAP_HOLD — L2 문턱이다(holdAge 2.0초).
+	GapHold time.Duration
+	// RefreshObligation 은 목록 갱신 의무다(9.0초 = 1.5 × TD 6 — ADR-043). TD 분할 회차(TD 7 이상)의 실제 의무는 1.5 ×
+	// TD 라 L4 가 이르게 뜬다(안전 쪽).
+	RefreshObligation time.Duration
+	// EdgeDelay 는 설계의 T_edge — 엣지가 새 목록을 보이기까지의 시간이다(1.5초 = TTL 1.0 + 전파 0.5). L4 는 stallAge
+	// 가 RefreshObligation − EdgeDelay 에 닿으면 뜬다.
+	EdgeDelay time.Duration
+
+	// statementTimeout 은 DB 문장 하나(GAP 틱은 트랜잭션 하나)의 ctx 시한이다 — 0 이면 index.TxnDeadline 이다(stmtCtx).
+	// 같은 패키지의 시험만 바꾼다: 루프 ctx 는 살아 있고 문장만 시한을 넘는 국면을 10초 기다리지 않고 만든다.
 	statementTimeout time.Duration
 }
 
@@ -87,11 +110,19 @@ func DefaultOptions(writer, baseURL string) Options {
 		Lease:          5 * time.Second,
 		LazyRenewAfter: 3500 * time.Millisecond,
 		PublishTimeout: 2 * time.Second,
+
+		E2EBudget:         2 * time.Second,
+		ExpediteAfter:     500 * time.Millisecond,
+		GapHold:           2 * time.Second,
+		RefreshObligation: 9 * time.Second,
+		EdgeDelay:         1500 * time.Millisecond,
 	}
 }
 
 // check 는 설정이 세대 규약을 돌릴 수 있는지 본다. 관계가 어긋나면 모든 틱이 멈추는데 그 까닭이 로그에
-// 드러나지 않는다 — Lease ≤ T_pub 면 P3 앞 마감(m0 + Lease − T_pub)이 P0 앞이라 모든 틱이 PUT 없이 끝난다.
+// 드러나지 않는다 — Lease ≤ T_pub 면 P3 앞 마감(m0 + Lease − T_pub)이 P0 앞이라 모든 틱이 PUT 없이 끝난다. 사다리
+// 설계값도 본다 — 0 이하면 정상 경로(holdAge 음수)의 조각도 L2 에 닿아 GAP 줄로 나가고(GAP 줄은 되돌리지 않는다), L1
+// 문턱이 GAP_HOLD 보다 길면 백오프를 당기기 전에 GAP 을 내며, T_edge 가 갱신 의무 이상이면 L4 가 정체 없이도 뜬다.
 func (o Options) check() error {
 	switch {
 	case o.Writer == "":
@@ -103,14 +134,22 @@ func (o Options) check() error {
 	case o.Lease <= o.PublishTimeout || o.Lease <= o.LazyRenewAfter:
 		return fmt.Errorf("publish: lease %v 가 T_pub %v · lazy %v 보다 길어야 한다",
 			o.Lease, o.PublishTimeout, o.LazyRenewAfter)
+	case o.E2EBudget <= 0 || o.ExpediteAfter <= 0 || o.GapHold <= 0 || o.RefreshObligation <= 0 || o.EdgeDelay <= 0:
+		return fmt.Errorf("publish: 사다리 설계값이 0 이하다(E2E %v · L1 %v · GAP_HOLD %v · 갱신 의무 %v · T_edge %v)",
+			o.E2EBudget, o.ExpediteAfter, o.GapHold, o.RefreshObligation, o.EdgeDelay)
+	case o.ExpediteAfter > o.GapHold:
+		return fmt.Errorf("publish: L1 문턱 %v 가 GAP_HOLD %v 보다 길다", o.ExpediteAfter, o.GapHold)
+	case o.EdgeDelay >= o.RefreshObligation:
+		return fmt.Errorf("publish: T_edge %v 가 갱신 의무 %v 보다 짧아야 한다", o.EdgeDelay, o.RefreshObligation)
 	}
 	return nil
 }
 
 // Publisher 는 한 writer 의 세대 규약이다 — 설계 4.4.3 의 P0–P4 · R1–R4 와 설계 6.2 의 writer fence 를 돈다.
 //
-// DB 문장은 풀에서 한 문장씩 보낸다(판단 J7 — 평시 틱에 트랜잭션 왕복을 더하지 않는다). 문장마다 ctx 시한은
-// index.TxnDeadline 이다. 저장소는 조건부 쓰기만 한다(Store). 상태를 들지 않아 여러 고루틴에서 동시에 불러도
+// DB 문장은 풀에서 한 문장씩 보낸다(판단 J7 — 평시 틱에 트랜잭션 왕복을 더하지 않는다). GAP 틱만 P0 과 원장 INSERT 를
+// 트랜잭션 하나로 보낸다(판단 J20). ctx 시한은 문장마다(GAP 틱은 트랜잭션 하나에) index.TxnDeadline 이다(stmtCtx).
+// 저장소는 조건부 쓰기만 한다(Store). 상태를 들지 않아 여러 고루틴에서 동시에 불러도
 // 된다 — 한 회차의 작업은 차선이 한 번에 하나로 묶는다.
 type Publisher struct {
 	pool  *pgxpool.Pool
@@ -136,7 +175,8 @@ func New(pool *pgxpool.Pool, store Store, opt Options) (*Publisher, error) {
 	return &Publisher{pool: pool, store: store, opt: opt, log: log, now: time.Now}, nil
 }
 
-// stmtCtx 는 DB 문장 하나의 ctx 다 — 시한은 Options.statementTimeout 이고 0 이면 index.TxnDeadline 이다(판단 J7).
+// stmtCtx 는 DB 문장 하나의 ctx 다(GAP 틱은 트랜잭션 하나 · 그 되돌림 하나에 하나씩) — 시한은 Options.statementTimeout
+// 이고 0 이면 index.TxnDeadline 이다(판단 J7 · J20).
 func (p *Publisher) stmtCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 	timeout := p.opt.statementTimeout
 	if timeout == 0 {
@@ -172,22 +212,26 @@ type State struct {
 	// (결정 9 「Reconcile 예약」 · Head 실패 · 메타 해석 실패 · 획득 직후).
 	ReconcileDue bool
 
-	// lastAbort 는 이 목록에 마지막으로 남긴 중단 · 포기 사유다 — 같은 사유는 한 번만 남긴다.
-	lastAbort string
+	// lastAbort 는 이 목록에 마지막으로 남긴 중단 · 포기다 — 같은 것은 한 번만 남긴다(abortKey).
+	lastAbort abortKey
 }
 
-// noteAbort 는 사유 reason 을 적고 로그를 남길 차례인지 돌려준다 — 같은 사유가 이어지면 처음 한 번만 참이다
-// (계획 4.5 A1 「중단 · 포기 로그」 — C3 1회성 가드와 같은 형).
-func (s *State) noteAbort(reason string) bool {
-	if s.lastAbort == reason {
+// abortKey 는 중단 · 포기 로그 1회 가드의 단위다 — 사유와 stage 속성 값(없으면 빈 값)이다. 처치가 다른 갈래를 한 사유의
+// stage 로 가르는 gap_tx_failed(insert · commit — 판단 J25)는 갈래마다 한 줄을 남긴다(c4-fix3 개정 4 · 보안 r3 R3-L1).
+type abortKey struct{ reason, stage string }
+
+// noteAbort 는 중단 · 포기 k 를 적고 로그를 남길 차례인지 돌려준다 — 같은 사유 · 같은 stage 가 이어지면 처음 한 번만
+// 참이다(계획 4.5 A1 「중단 · 포기 로그」 — C3 1회성 가드와 같은 형).
+func (s *State) noteAbort(k abortKey) bool {
+	if s.lastAbort == k {
 		return false
 	}
-	s.lastAbort = reason
+	s.lastAbort = k
 	return true
 }
 
 // clearAbort 는 틱이 끝까지 갔다고 적는다 — 그 뒤의 중단 · 포기는 같은 사유여도 다시 남긴다.
-func (s *State) clearAbort() { s.lastAbort = "" }
+func (s *State) clearAbort() { s.lastAbort = abortKey{} }
 
 // Outcome 은 발행 작업 하나(틱 · lazy 갱신)의 결과다.
 type Outcome struct {
@@ -197,12 +241,20 @@ type Outcome struct {
 	Published bool
 	// Revoked 는 이 틱이 계승을 취소했는가다(P2′ 1행 — 계획 4.5 A2 결정 2). 루프가 캐시에 반영한다(커밋 5 · 7).
 	Revoked bool
-	// DemandLoad 는 그 스트림에 요구 적재를 내야 하는가다 — P2′ 가 0행이거나 결과를 모른다(A2 결정 2 · A3
-	// 결정 6 넷째 부류, 힌트 없음).
+	// DemandLoad 는 그 스트림에 요구 적재를 내야 하는가다 — P2′ 가 0행이거나 결과를 모른다(A2 결정 2) · GAP
+	// 트랜잭션의 COMMIT 결과를 모른다(판단 J25). A3 결정 6 넷째 부류이고 힌트는 없다.
 	DemandLoad bool
-	// Err 는 중단 · 포기 표 밖의 실패다 — 입력 결함(키 · 렌더)과 표에 갈래가 없는 DB 문장(획득 · 갱신 · R3 ·
-	// R4)의 오류. 부른 쪽 ctx(루프 수명)가 끝나 멈춘 틱도 그 ctx 오류를 여기에 싣는다(로그 · 화해 없이). 발행자는
-	// 이것을 로그하지 않는다(부른 쪽 몫). State 는 그대로 쓸 수 있다.
+	// GapSeq 는 이 GAP 틱에서 선 GAP 의 seq 다 — 원장 행을 새로 넣었든 이미 있었든 싣는다(판단 J18). PUT 이 실패해도
+	// 싣는다(원장 행은 이미 커밋됐다). 루프가 cache.ApplyPublishedGap 으로 반영한다(커밋 7). nil 이면 선 GAP 이 없다.
+	GapSeq *int64
+	// UploadedSeq 는 GAP 틱이 DB 에서 GAP 후보를 이미 uploaded 로 봐 GAP 을 넣지 않았을 때 그 seq 다(J18 · J26 — PUT
+	// 없이 끝났다). 루프가 cache.ApplyPlaybackUploaded 로 반영하고, 다음 평시 틱이 그 행을 일반 줄로 싣는다.
+	UploadedSeq *int64
+	// Err 는 중단 · 포기 표 밖의 실패다 — 입력 결함(키 · 렌더)과 표에 갈래가 없는 DB 문장(획득 · 갱신 · R3 · R4 ·
+	// GAP 트랜잭션의 BEGIN)의 오류. 부른 쪽 ctx(루프 수명)가 끝나 멈춘 틱도 그 ctx 오류를 여기에 싣는다(로그 · 화해
+	// 없이). 발행자는 이것을 로그하지 않는다(부른 쪽 몫). Err 가 있어도 State · Revoked · DemandLoad · GapSeq ·
+	// UploadedSeq 는 유효하다 — 루프가 모두 반영한다(커밋 7 · 예: GAP 이 선 틱의 PUT 뒤 화해가 실패해도 GapSeq 는
+	// 커밋된 원장 행이다).
 	Err error
 }
 

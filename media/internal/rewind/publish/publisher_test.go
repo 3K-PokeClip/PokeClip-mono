@@ -355,38 +355,44 @@ func TestParseMetaReadsTerminal(t *testing.T) {
 	}
 }
 
-// 로그 1회 가드(계획 4.5 A1 「중단 · 포기 로그」) — 같은 스트림 · 같은 사유는 한 번만 남기고, 상태가 바뀌면(다른
-// 사유 · 끝까지 간 틱) 다시 남긴다.
+// 로그 1회 가드(계획 4.5 A1 「중단 · 포기 로그」 · c4-fix3 개정 4) — 같은 스트림 · 같은 사유(stage 속성이 있으면 사유 ·
+// stage 쌍)는 한 번만 남기고, 상태가 바뀌면(다른 사유 · 다른 stage · 끝까지 간 틱) 다시 남긴다.
 func TestAbortLogOncePerReason(t *testing.T) {
 	var st State
 	steps := []struct {
-		reason string // "" 면 끝까지 간 틱
-		want   bool
+		reason, stage string // reason 이 "" 면 끝까지 간 틱
+		want          bool
 	}{
-		{"p0_no_row", true},
-		{"p0_no_row", false},
-		{"p0_no_row", false},
-		{"update_412", true},
-		{"p0_no_row", true},
-		{"", false},
-		{"p0_no_row", true},
-		{"p0_no_row", false},
+		{"p0_no_row", "", true},
+		{"p0_no_row", "", false},
+		{"p0_no_row", "", false},
+		{"update_412", "", true},
+		{"p0_no_row", "", true},
+		{"", "", false},
+		{"p0_no_row", "", true},
+		{"p0_no_row", "", false},
+		{"gap_tx_failed", "insert", true},
+		{"gap_tx_failed", "insert", false},
+		{"gap_tx_failed", "commit", true},
+		{"gap_tx_failed", "commit", false},
+		{"gap_tx_failed", "insert", true},
 	}
 	for i, s := range steps {
 		if s.reason == "" {
 			st.clearAbort()
 			continue
 		}
-		if got := st.noteAbort(s.reason); got != s.want {
-			t.Errorf("걸음 %d: noteAbort(%q) = %v, want %v", i, s.reason, got, s.want)
+		if got := st.noteAbort(abortKey{reason: s.reason, stage: s.stage}); got != s.want {
+			t.Errorf("걸음 %d: noteAbort(%q · stage %q) = %v, want %v", i, s.reason, s.stage, got, s.want)
 		}
 	}
 }
 
 // 설정 검사 — 설계값 셋의 관계가 어긋나면 결정 9 의 P3 앞 판정이 모든 틱을 포기한다(Lease ≤ T_pub). writer
-// 토큰과 베이스 URL 이 비면 fence 와 목록 URI 를 만들 수 없다.
+// 토큰과 베이스 URL 이 비면 fence 와 목록 URI 를 만들 수 없다. 사다리 설계값 다섯은 모두 양수여야 하고(영값이면 정상
+// 경로의 조각이 곧바로 GAP 으로 나간다) L1 문턱 ≤ GAP_HOLD · T_edge < 갱신 의무다(c4-fix1 개정 3).
 // 관계 행은 값 하나만 Lease 로 올려 그 관계만 어긋나게 둔다 — 나머지 값은 기본값(Lease 보다 짧다)이라, 관계 절
-// 하나를 지운 회귀도 가른다.
+// 하나를 지운 회귀도 가른다. 사다리 관계 행은 경계값(L1 문턱 = GAP_HOLD + 1ms · T_edge = 갱신 의무)이다.
 func TestNewValidatesOptions(t *testing.T) {
 	pool, err := pgxpool.New(context.Background(), "postgres://user@127.0.0.1:1/none")
 	if err != nil {
@@ -409,6 +415,13 @@ func TestNewValidatesOptions(t *testing.T) {
 		{"lazy_갱신_간격이_lease_이상", func(o *Options) { o.LazyRenewAfter = o.Lease }},
 		{"T_pub_0", func(o *Options) { o.PublishTimeout = 0 }},
 		{"lazy_갱신_간격_0", func(o *Options) { o.LazyRenewAfter = 0 }},
+		{"E2E_BUDGET_0", func(o *Options) { o.E2EBudget = 0 }},
+		{"L1_문턱_0", func(o *Options) { o.ExpediteAfter = 0 }},
+		{"GAP_HOLD_0", func(o *Options) { o.GapHold = 0 }},
+		{"갱신_의무_0", func(o *Options) { o.RefreshObligation = 0 }},
+		{"T_edge_0", func(o *Options) { o.EdgeDelay = 0 }},
+		{"L1_문턱이_GAP_HOLD_보다_김", func(o *Options) { o.ExpediteAfter = o.GapHold + time.Millisecond }},
+		{"T_edge_가_갱신_의무_이상", func(o *Options) { o.EdgeDelay = o.RefreshObligation }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -418,6 +431,11 @@ func TestNewValidatesOptions(t *testing.T) {
 				t.Errorf("New(%+v) = nil 오류, want 거부", opt)
 			}
 		})
+	}
+	same := base
+	same.ExpediteAfter = same.GapHold // L1 과 L2 가 같은 문턱이어도 된다(≤)
+	if _, err := New(pool, store, same); err != nil {
+		t.Errorf("New(L1 문턱 = GAP_HOLD) = %v, want nil", err)
 	}
 	if _, err := New(nil, store, base); err == nil {
 		t.Error("New(pool nil) = nil 오류, want 거부")

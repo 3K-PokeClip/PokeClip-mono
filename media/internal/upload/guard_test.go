@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/index"
 )
 
 func testOptions() Options {
@@ -411,4 +413,52 @@ func TestEnqueueRollsBackInflightOnQueueFull(t *testing.T) {
 	if !u.gate.acquireInflight(archiveKey("demo", 9)) {
 		t.Fatal("QueueFull 인데 in-flight 가 남아 있다 — 이 행은 영영 다시 접수되지 않는다")
 	}
+}
+
+// L1 expedite(설계 4.6.3 「L1 의 실체」 · 계획 판단 J19) — ③ 축 그 행의 백오프
+// nextAt 만 지금으로 둔다. 실패 횟수 · 연속 보류 · 격리 · in-flight · 브레이커는
+// 그대로이고, 같은 seq 의 ② 축 백오프도 그대로다. 백오프 항목이 없는 행이면 할 일이
+// 없다(항목을 만들지 않는다). 비활성 업로더에서는 아무것도 하지 않는다.
+func TestExpeditePullsOnlyPlaybackNextAt(t *testing.T) {
+	clk := newFakeClock()
+	root, dir := newRoot(t)
+	opt := DefaultOptions(root, dir)
+	u := newWithClock(&fakeUploadStore{}, &fakePutter{}, opt, newLogCapture().logger(), clk.now)
+	playback := targetKeyOf(index.UploadTarget{StreamID: "demo", Axis: index.AxisPlayback, Seq: 7})
+	archive := archiveKey("demo", 7)
+	u.gate.registerFailure(playback)
+	u.gate.registerFailure(playback)
+	u.gate.registerDeferred(playback) // failures 2 · 연속 보류 1 · nextAt = 지금 + SweepEvery
+	u.gate.registerFailure(archive)
+	archiveNext, _ := u.gate.backoffBlocked(archive)
+	u.gate.quarantine(playback)
+	u.gate.acquireInflight(playback)
+	for i := 0; i < opt.CircuitMax; i++ {
+		u.brk.of(index.AxisPlayback).record(outcomeHard, errors.New("403"))
+	}
+	clk.advance(time.Second)
+
+	u.Expedite("demo", 7)
+	u.Expedite("demo", 8) // 백오프 항목이 없는 행
+
+	if next, blocked := u.gate.backoffBlocked(playback); blocked || !next.Equal(clk.now()) {
+		t.Errorf("③ 백오프 = (nextAt %v, 막힘 %v), want (지금 %v, 풀림)", next, blocked, clk.now())
+	}
+	if e := u.gate.backoff[playback]; e.failures != 2 || e.deferredStreak != 1 {
+		t.Errorf("③ 백오프 항목 = failures %d · 연속 보류 %d, want 2 · 1(nextAt 만 당긴다)", e.failures, e.deferredStreak)
+	}
+	if next, blocked := u.gate.backoffBlocked(archive); !blocked || !next.Equal(archiveNext) {
+		t.Errorf("② 백오프 = (nextAt %v, 막힘 %v), want 그대로 (%v, 막힘)", next, blocked, archiveNext)
+	}
+	if _, ok := u.gate.backoff[targetKeyOf(index.UploadTarget{StreamID: "demo", Axis: index.AxisPlayback, Seq: 8})]; ok {
+		t.Error("항목이 없던 행에 백오프 항목이 생겼다")
+	}
+	if !u.gate.quarantined(playback) || u.gate.acquireInflight(playback) {
+		t.Error("격리 · in-flight 가 풀렸다, want 그대로")
+	}
+	if got := u.brk.of(index.AxisPlayback).current(); got != circuitOpen {
+		t.Errorf("③ 브레이커 = %v, want 그대로 open", got)
+	}
+
+	Disabled(newLogCapture().logger()).Expedite("demo", 7) // 게이트가 없는 업로더 — 아무것도 하지 않는다
 }

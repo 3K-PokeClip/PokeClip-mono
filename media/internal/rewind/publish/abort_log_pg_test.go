@@ -1,13 +1,17 @@
 package publish
 
-// 중단 · 포기 로그(계획 4.5 A1 「중단 · 포기 로그」 · 체크리스트 A-5 · J14) — 사유마다 한 번. fake Store + PG 통합이다.
+// 중단 · 포기 로그(계획 4.5 A1 「중단 · 포기 로그」 · 체크리스트 A-5 · J14) — 사유마다(stage 가 있으면 사유 · stage
+// 마다) 한 번. fake Store + PG 통합이다.
 
 import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // abortCase 는 중단 · 포기 갈래 하나다. setup 은 한 번 발행한 루프를 세우고, trigger 는 그 갈래를 밟는 틱을 한 번
@@ -252,6 +256,35 @@ func TestAbortLogRearmsAfterCleanTick(t *testing.T) {
 
 	if got := logs.aborts(); len(got) != 2 || got[0] != reasonP0NoRow || got[1] != reasonP0NoRow {
 		t.Errorf("중단 · 포기 로그 %v, want [p0_no_row p0_no_row](발행 한 번 사이에 둔 같은 사유)", got)
+	}
+}
+
+// gap_tx_failed 의 1회 가드는 (사유, stage) 단위다(보안 r3 R3-L1 · c4-fix3 개정 4 · 판단 J25) — 이 사유는 처치가 다른
+// 두 갈래(insert = 되돌려서 적용 없음 · commit = 적용 여부 모름 + 요구 적재)를 stage 속성으로 가른다. insert 실패가
+// 이어지면 한 줄이고, 그 뒤의 COMMIT 결과 모름은 한 줄을 더 남긴다 — 캐시가 모르는 원장 행(장부 388 G-1 의 전제)을
+// 알리는 줄이다.
+func TestGapTxFailedLogsOncePerStage(t *testing.T) {
+	l, _, logs := newGapLoop(t, 20, 6, "pending")
+	var fail string // 이 문장을 끝난 ctx 로 보낸다 — 서버에 닿지 않고 실패한다
+	l.pub.pool = hookedPool(t, l.pub.pool, traceSQL(func(ctx context.Context, _ *pgx.Conn, sql string) context.Context {
+		if sql == fail {
+			return expiredCtx(ctx)
+		}
+		return ctx
+	}))
+
+	fail = gapRecordSQL // stage=insert — 되돌린다
+	l.gapTick(t.Context(), 0, 8, 6)
+	l.gapTick(t.Context(), 0, 8, 6)
+	fail = "commit" // stage=commit — COMMIT 결과를 모른다
+	out := l.gapTick(t.Context(), 0, 8, 6)
+
+	var got []string
+	for _, r := range logs.abortRecs() {
+		got = append(got, r.attrs["reason"]+"/"+r.attrs["stage"])
+	}
+	if want := []string{"gap_tx_failed/insert", "gap_tx_failed/commit"}; !slices.Equal(got, want) || !out.DemandLoad {
+		t.Errorf("중단 · 포기 로그 %v · 셋째 틱 %+v, want %v(같은 stage 가 이어지면 한 줄) · 요구 적재", got, out, want)
 	}
 }
 

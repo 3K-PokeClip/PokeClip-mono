@@ -123,7 +123,7 @@ func (stmtHook) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData)
 
 // hookedPool 은 pool 과 같은 테스트 DB 에 붙되 문장마다 hook 을 거치는 새 풀이다 — 발행자의 DB 문장 사이(P0 과 P2′
 // 사이처럼 저장소 훅이 닿지 않는 자리)에 끼어드는 자리다. 풀은 t.Cleanup 이 닫는다.
-func hookedPool(t *testing.T, pool *pgxpool.Pool, hook stmtHook) *pgxpool.Pool {
+func hookedPool(t *testing.T, pool *pgxpool.Pool, hook pgx.QueryTracer) *pgxpool.Pool {
 	t.Helper()
 	cfg := pool.Config()
 	cfg.ConnConfig.Tracer = hook
@@ -281,11 +281,16 @@ func (r *logRecorder) aborts() []string {
 
 // abortRecs 는 중단 · 포기 로그 기록 전부다.
 func (r *logRecorder) abortRecs() []logRec {
+	return r.records(abortedLog)
+}
+
+// records 는 로그 키 msg 로 남긴 기록 전부다(남긴 순서).
+func (r *logRecorder) records(msg string) []logRec {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var out []logRec
 	for _, rec := range r.recs {
-		if rec.msg == abortedLog {
+		if rec.msg == msg {
 			out = append(out, rec)
 		}
 	}
@@ -355,10 +360,23 @@ func (l *loop) input(from, to int64) TickInput {
 // tick 은 창 [from, to] 로 틱을 한 번 내고 결과를 돌려준다.
 func (l *loop) tick(ctx context.Context, from, to int64) Outcome {
 	l.t.Helper()
-	out := l.pub.Tick(ctx, l.st, l.input(from, to))
+	return l.run(ctx, l.input(from, to))
+}
+
+// run 은 입력 in 으로 틱을 한 번 내고 결과를 장부 값에 반영한다 — 계승 취소 · 선 GAP · DB 가 본 ③ 확정을 캐시에
+// 넣는 루프의 일(커밋 5 · 7)의 흉내다.
+func (l *loop) run(ctx context.Context, in TickInput) Outcome {
+	l.t.Helper()
+	out := l.pub.Tick(ctx, l.st, in)
 	l.st = out.State
 	if out.Revoked {
 		l.fx.revoke()
+	}
+	if out.GapSeq != nil {
+		l.fx.markGap(*out.GapSeq)
+	}
+	if out.UploadedSeq != nil {
+		l.fx.markUploaded(*out.UploadedSeq)
 	}
 	return out
 }
@@ -466,6 +484,25 @@ func (f *fixture) revoke() {
 	s := f.sessions[f.owner]
 	s.InheritsSession, s.DiscontinuityBase = "", 0
 	f.sessions[f.owner] = s
+}
+
+// markGap 은 seq 행을 GAP 원장에 든 것으로 둔다 — 루프가 cache.ApplyPublishedGap 을 부르는 일의 흉내다. 없는 행이면
+// 아무것도 하지 않는다.
+func (f *fixture) markGap(seq int64) {
+	for i := range f.rows {
+		if f.rows[i].Seq == seq {
+			f.rows[i].IsGap = true
+		}
+	}
+}
+
+// markUploaded 는 seq 행의 ③ 이 올라간 것으로 둔다 — cache.ApplyPlaybackUploaded 의 흉내다.
+func (f *fixture) markUploaded(seq int64) {
+	for i := range f.rows {
+		if f.rows[i].Seq == seq {
+			f.rows[i].PlaybackUploaded = true
+		}
+	}
 }
 
 // setInitUploaded 는 회차 id 의 init 업로드 여부를 장부 값에서 바꾼다.

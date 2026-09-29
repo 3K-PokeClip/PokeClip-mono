@@ -47,11 +47,26 @@ RETURNING discontinuity_base`
 // p4ConfirmSQL 은 P4 확정 CAS 다(설계 4.4.3 P4 · 계획 4.5 A1 결정 2 · 8). fence · 세대 조건으로 올린 판의 ETag 와
 // DISC-SEQ(base — 파생값) · 마지막 seq 를 쓴다. state 조건은 넣지 않는다 — 예약 뒤 ending 된 틱도 확정한다(A0
 // 결정 2 · 체크리스트 A-2 12). published_seq 는 R3 가 max 로 맞추는 열이라 같은 값을 쓴다.
+//
+// 같은 문장이 그 스트림 GAP 원장의 확정 본문 범위 [$7 MSN, $6 끝 seq] 안 recorded 행을 put_confirmed 로 바꾼다(설계 6.3
+// · 판단 J27). FROM p4 로 묶여 원자다 — CAS 가 0행이거나 문장이 실패하면 GAP 행도 그대로이고, 데이터 수정 CTE 는 주
+// 질의가 읽지 않아도 끝까지 돈다(PostgreSQL 17 문서 7.8.4). 범위가 창 전체라 재기동 뒤 첫 P4 도 창 안을 모두 확정한다.
+// 결과는 끝 SELECT 의 행 값(CAS 가 바꾼 행 수)이다 — 명령 태그는 늘 1행이라 0행을 가르지 못한다.
 const p4ConfirmSQL = `
-UPDATE stream_sessions
-   SET manifest_etag = $4, discontinuity_base = $5, published_seq = $6
- WHERE session_id = $1 AND writer_fence = $2 AND manifest_gen = $3
-   AND fence_expires_at > now()`
+WITH p4 AS (
+    UPDATE stream_sessions
+       SET manifest_etag = $4, discontinuity_base = $5, published_seq = $6
+     WHERE session_id = $1 AND writer_fence = $2 AND manifest_gen = $3
+       AND fence_expires_at > now()
+    RETURNING stream_id
+), confirmed AS (
+    UPDATE stream_published_gaps g
+       SET published_state = 'put_confirmed', put_confirmed_at = now()
+      FROM p4
+     WHERE g.stream_id = p4.stream_id AND g.seq BETWEEN $7 AND $6
+       AND g.published_state = 'recorded'
+)
+SELECT count(*) FROM p4`
 
 // TickInput 은 발행 한 틱의 렌더 입력이다 — 루프가 캐시로 만든 값이다(워커는 캐시를 만지지 않는다 — 계획 4.5
 // A3 결정 1).
@@ -63,6 +78,10 @@ type TickInput struct {
 	// DiscontinuitySequence 는 이 목록의 DISC-SEQ 다 — P 가 있으면 NextDiscontinuitySequence 의 절대식 값(결정
 	// 1), 없으면 소유 회차의 개시 base(결정 6).
 	DiscontinuitySequence int64
+	// GapCandidate 는 GAP 후보 k(사다리 L2 — EvaluateLadder)다. nil 이면 평시 틱이다. 있으면 P0 과 k 의 원장 INSERT 를
+	// 한 트랜잭션으로 보내고 GAP 이 섰을 때만 발행한다(판단 J17 · J26). 창은 루프가 겹침 스냅숏(WithGap)으로 정했다.
+	// k 는 L2 를 결정한 그 평가의 LadderStep.Seq 여야 한다 — 워커와 원장 문장은 k 가 머리 다음 행인지 다시 보지 않는다.
+	GapCandidate *int64
 }
 
 // NextDiscontinuitySequence 는 P 뒤에 낼 목록의 EXT-X-DISCONTINUITY-SEQUENCE 다 — 계획 4.5 A1 결정 1 의
@@ -122,6 +141,8 @@ func (e *PrevMismatchError) Error() string {
 //	       (루프가 준 DISC-SEQ 는 옛 P 로 센 값이다)
 //	P0     m0 를 잡고 세대 예약 — 0행이면 포기 + 화해(p0_no_row), DB 오류면 같은 처치(p0_unknown — 결과 모름)
 //	대조   P0 의 manifest_etag ≠ P.ETag 면 PUT 없이 포기 + 화해(etag_source_mismatch — 결정 8)
+//	GAP    GAP 후보가 있으면 P0 · 대조 · 원장 INSERT 를 트랜잭션 하나로 보낸다 — GAP 이 섰을 때만 아래로 간다
+//	       (reserveGap)
 //	P1     렌더 — 세션 필터 뒤 행이 0 이면 끝(빈 창 — 판단 J5)
 //	P2     검사 S1–S7(prev = P) — S4 는 첫 PUT 전이면 P2′ 로 계승을 취소하고 다시 렌더 · 검사, 뒤면 발행 중단
 //	       (s4_after_publish) · 나머지 위반은 발행 중단(validate · disc_seq_decrease)
@@ -132,9 +153,9 @@ func (e *PrevMismatchError) Error() string {
 //	P4     확정 CAS — 0행이면 발행 불성립 + 화해(p4_no_row), DB 오류면 같은 처치(p4_unknown — 결과 모름)
 //
 // 결과 상태는 루프가 그대로 보관한다(틱 도중 회차 state 를 다시 보지 않는다 — 예약된 틱은 ending 이 와도 P4 까지
-// 간다). 중단 · 포기는 rewind_publish_aborted 로 남긴다(같은 사유는 한 번). 표 밖의 실패는 Outcome.Err 로 돌려주고
-// 로그하지 않는다. ctx 는 루프 수명 ctx 다(Lanes.Start 의 계약) — 그것이 끝났으면 실패 갈래는 로그 · 화해 없이
-// Outcome.Err(그 ctx 오류)로 끝낸다(stopped).
+// 간다). 중단 · 포기는 rewind_publish_aborted 로 남긴다(같은 사유 · stage 는 한 번). 표 밖의 실패는 Outcome.Err 로
+// 돌려주고 로그하지 않는다. ctx 는 루프 수명 ctx 다(Lanes.Start 의 계약) — 그것이 끝났으면 실패 갈래는 로그 · 화해
+// 없이 Outcome.Err(그 ctx 오류)로 끝낸다(stopped).
 func (p *Publisher) Tick(ctx context.Context, st State, in TickInput) Outcome {
 	key, err := manifestKey(in.Playlist.StreamID, in.Playlist.Owner)
 	if err != nil {
@@ -185,15 +206,9 @@ func (t *tick) ready(ctx context.Context) bool {
 // publish 는 P0 부터 P4 까지다.
 func (t *tick) publish(ctx context.Context, in TickInput) {
 	prev := t.out.State.Prev
-	m0 := t.p.now()
-	res, ok := t.reserve(ctx)
+	m0 := t.p.now() // P0 을 보내기 직전 — GAP 틱은 BEGIN 전이다(판단 J20)
+	res, ok := t.reserveTick(ctx, m0, prev, in.GapCandidate)
 	if !ok {
-		return
-	}
-	t.out.State.RenewedAt = m0
-	if !sameSource(res.etag, prev) {
-		t.abandon(ctx, reasonETagSourceMismatch)
-		t.reconcile(ctx)
 		return
 	}
 	pl := t.playlist(in)
@@ -260,20 +275,46 @@ func scanReservation(row pgx.Row) (reservation, error) {
 	return r, err
 }
 
-// reserve 는 P0 이다. 0행(CAS 거부 — p0_no_row)이거나 DB 오류(결과 모름 — p0_unknown)면 틱을 포기하고 화해한다 —
-// 서버가 예약을 커밋했는데 결과를 잃었어도 화해의 R3 가 DB 세대를 다시 읽어 온다.
+// reserveTick 은 P0 과 출처 대조다 — GAP 후보가 없으면 풀 단일 문장(reserve), 있으면 GAP 트랜잭션(reserveGap)이다
+// (판단 J17 — 두 틱은 P0 자리에서만 갈린다). m0 는 P0 을 보내기 직전 — GAP 틱은 BEGIN 전(판단 J20) — 의 시각이다
+// (결정 9). 참이면 렌더로 간다.
+func (t *tick) reserveTick(ctx context.Context, m0 time.Time, prev *Manifest, gap *int64) (reservation, bool) {
+	if gap != nil {
+		return t.reserveGap(ctx, m0, prev, *gap)
+	}
+	res, ok := t.reserve(ctx)
+	if !ok {
+		return reservation{}, false
+	}
+	t.out.State.RenewedAt = m0
+	if !sameSource(res.etag, prev) {
+		t.abandon(ctx, reasonETagSourceMismatch)
+		t.reconcile(ctx)
+		return reservation{}, false
+	}
+	return res, true
+}
+
+// reserve 는 평시 틱의 P0 이다 — 풀의 단일 문장이다(판단 J7). 실패 갈래는 p0Failed 다.
 func (t *tick) reserve(ctx context.Context) (reservation, bool) {
 	dctx, cancel := t.p.stmtCtx(ctx)
 	defer cancel()
 	st := &t.out.State
 	res, err := scanReservation(t.p.pool.QueryRow(dctx, p0ReserveSQL,
 		t.session, t.p.opt.Writer, st.Gen, t.p.opt.Lease))
-	if err == nil {
-		st.Gen, st.FenceHeld = res.gen, true
-		return res, true
-	}
-	if t.stopped(ctx) {
+	if err != nil {
+		t.p0Failed(ctx, err)
 		return reservation{}, false
+	}
+	st.Gen, st.FenceHeld = res.gen, true
+	return res, true
+}
+
+// p0Failed 는 P0 이 서지 못한 갈래다(평시 · GAP 틱 공통) — 0행(CAS 거부) p0_no_row · DB 오류(결과 모름) p0_unknown 은
+// 둘 다 틱을 포기하고 화해한다(결과를 잃었어도 R3 가 DB 세대를 다시 읽는다). 부른 쪽 ctx 가 끝났으면 남기지 않는다.
+func (t *tick) p0Failed(ctx context.Context, err error) {
+	if t.stopped(ctx) {
+		return
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		t.abandon(ctx, reasonP0NoRow)
@@ -281,11 +322,11 @@ func (t *tick) reserve(ctx context.Context) (reservation, bool) {
 		t.abandon(ctx, reasonP0Unknown, "err", err.Error())
 	}
 	t.reconcile(ctx)
-	return reservation{}, false
 }
 
 // playlist 는 렌더할 목록 값이다 — 루프가 준 값에 BaseURL 을 채우고 소유 회차 base 자리에 DISC-SEQ 를 적는다.
-// 루프의 값은 바꾸지 않는다(회차 목록을 새로 만든다).
+// GAP 틱이면 후보 행을 GAP 줄로 둔다(GAP 이 섰을 때만 렌더로 온다 — J26 · 설계 6.3 의 「캐시」 자리를 사본에서
+// 한다). 루프의 값은 바꾸지 않는다(회차 목록 · 행을 새로 만든다).
 func (t *tick) playlist(in TickInput) rewind.Playlist {
 	pl := in.Playlist
 	pl.BaseURL = t.p.opt.BaseURL
@@ -293,6 +334,14 @@ func (t *tick) playlist(in TickInput) rewind.Playlist {
 	for i := range pl.Sessions {
 		if pl.Sessions[i].ID == pl.Owner {
 			pl.Sessions[i].DiscontinuityBase = in.DiscontinuitySequence
+		}
+	}
+	if in.GapCandidate != nil {
+		pl.Rows = slices.Clone(pl.Rows)
+		for i := range pl.Rows {
+			if pl.Rows[i].Seq == *in.GapCandidate {
+				pl.Rows[i].IsGap = true
+			}
 		}
 	}
 	return pl
@@ -493,13 +542,16 @@ func (t *tick) putFailed(ctx context.Context, err error, prev *Manifest) {
 	t.reconcile(ctx)
 }
 
-// confirm 은 P4 다. 0행(CAS 거부 — p4_no_row)이거나 DB 오류(결과 모름 — p4_unknown)면 발행이 서지 않은 것이라
-// 곧바로 화해한다 — 올린 판은 저장소에 있으므로 화해가 그 판을 P 로 삼는다.
+// confirm 은 P4 다 — 같은 문장이 확정 본문 범위의 GAP 원장 행도 확정한다(p4ConfirmSQL). 0행(CAS 거부 — p4_no_row)이거나
+// DB 오류(결과 모름 — p4_unknown)면 발행이 서지 않은 것이라 곧바로 화해한다 — 올린 판은 저장소에 있으므로 화해가 그
+// 판을 P 로 삼는다(화해는 GAP 행을 확정하지 않는다 — 다음 P4 성공이 한다).
 func (t *tick) confirm(ctx context.Context, gen int64, desc rewind.Published, etag string) {
 	dctx, cancel := t.p.stmtCtx(ctx)
 	defer cancel()
-	tag, err := t.p.pool.Exec(dctx, p4ConfirmSQL, t.session, t.p.opt.Writer, gen, etag, desc.DiscontinuitySequence, desc.PublishedSeq)
-	if err == nil && tag.RowsAffected() == 1 {
+	var n int64
+	err := t.p.pool.QueryRow(dctx, p4ConfirmSQL, t.session, t.p.opt.Writer, gen, etag,
+		desc.DiscontinuitySequence, desc.PublishedSeq, desc.MediaSequence).Scan(&n)
+	if err == nil && n == 1 {
 		t.out.State.Prev = &Manifest{Published: desc, ETag: etag}
 		t.out.Published = true
 		return
@@ -545,31 +597,35 @@ func (t *tick) stopped(ctx context.Context) bool {
 	return err != nil
 }
 
-// abandon 은 틱만 포기하는 갈래를 적는다(WARN). 같은 사유가 이어지면 처음 한 번만 남긴다.
+// abandon 은 틱만 포기하는 갈래를 적는다(WARN). 같은 사유 · stage 가 이어지면 처음 한 번만 남긴다(note).
 func (t *tick) abandon(ctx context.Context, reason string, attrs ...any) {
 	t.note(ctx, slog.LevelWarn, reason, attrs)
 }
 
-// halt 는 발행이 서는 갈래를 적는다(ERROR). 같은 사유가 이어지면 처음 한 번만 남긴다.
+// halt 는 발행이 서는 갈래를 적는다(ERROR). 같은 사유 · stage 가 이어지면 처음 한 번만 남긴다(note).
 func (t *tick) halt(ctx context.Context, reason string, attrs ...any) {
 	t.note(ctx, slog.LevelError, reason, attrs)
 }
 
-// note 는 중단 · 포기 한 건을 적는다. 오류는 문장에 섞지 않고 속성(err)으로만 싣는다(커밋 2 리뷰 인계 — S3
-// 오류 문자열에는 서버 <Message> 의 개행이 실린다). err 속성 값은 clipErr 로 자른다 — 모든 사유와 모든 오류(저장소 ·
-// pgx · 검사 위반)가 이 한 자리를 지난다.
+// note 는 중단 · 포기 한 건을 적는다. 같은 사유(stage 속성이 있으면 사유와 stage — abortKey)가 이어지면 처음 한 번만
+// 남긴다. 오류는 문장에 섞지 않고 속성(err)으로만 싣는다(커밋 2 리뷰 인계 — S3 오류 문자열에는 서버 <Message> 의 개행이
+// 실린다). err 속성 값은 clipErr 로 자른다 — 모든 사유와 모든 오류(저장소 · pgx · 검사 위반)가 이 한 자리를 지난다.
 func (t *tick) note(ctx context.Context, level slog.Level, reason string, attrs []any) {
 	t.aborted = true
-	if !t.out.State.noteAbort(reason) {
-		return
-	}
+	key := abortKey{reason: reason}
 	args := append([]any{"stream", t.stream, "session", t.session, "reason", reason}, attrs...)
 	for i := len(args) - len(attrs); i+1 < len(args); i += 2 { // attrs 의 키 · 값 쌍
-		if s, ok := args[i+1].(string); ok && args[i] == "err" {
+		s, ok := args[i+1].(string)
+		switch {
+		case ok && args[i] == "err":
 			args[i+1] = clipErr(s)
+		case ok && args[i] == "stage":
+			key.stage = s
 		}
 	}
-	t.p.log.Log(ctx, level, abortedLog, args...)
+	if t.out.State.noteAbort(key) {
+		t.p.log.Log(ctx, level, abortedLog, args...)
+	}
 }
 
 // clipErr 는 로그 err 속성 값 s 가 1024바이트를 넘으면 앞 1024바이트(UTF-8 글자 가운데서는 자르지 않는다)에 잘림과
