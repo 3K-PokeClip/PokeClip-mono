@@ -23,6 +23,7 @@ export function HomeScreen() {
     live,
     vods,
     publishRows,
+    publishUnavailable,
     expiringVods,
     recentCards,
     loading,
@@ -64,7 +65,7 @@ export function HomeScreen() {
           aria-label="발행·보관 현황"
           data-tour-id={TOUR_TARGET.homeAside}
         >
-          <PublishStatusCard rows={publishRows} />
+          <PublishStatusCard rows={publishRows} unavailable={publishUnavailable} />
           <ExpiringVodCard vods={expiringVods} loading={loading} />
         </aside>
       </div>

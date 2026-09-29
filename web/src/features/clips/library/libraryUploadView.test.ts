@@ -4,6 +4,7 @@ import {
   type ClipSnapshot,
   type LibraryEntry,
   type LibraryStatus,
+  type UploadSnapshot,
 } from '@/api/clipEditor';
 import {
   detailViewForClip,
@@ -191,6 +192,30 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
     const view = detailViewForClip(toLibraryClip(entry('uploaded'), '9'), 'published', 'streamer');
     expect(view.titleLocked).toBe(true);
     expect(view.primary).toEqual({ kind: 'external', label: '유튜브 보기' });
+  });
+
+  it('올린 뒤 새 판을 저장해 「편집 중」이어도 업로드 제목이 보이면 잠근다 — 고쳐도 다음 읽기에 되돌아간다', () => {
+    const uploaded: UploadSnapshot = {
+      ...(failedUpload('UNKNOWN') as UploadSnapshot),
+      status: 'uploaded',
+      error: null,
+      videoId: 'v',
+    };
+    const view = detailViewForClip(
+      toLibraryClip(entry('editing', snapshot(uploaded)), '9'),
+      'editing',
+      'streamer',
+    );
+    expect(view.titleLocked).toBe(true);
+  });
+
+  it('실패한 업로드의 제목은 다시 올릴 수 있게 열어 둔다', () => {
+    const view = detailViewForClip(
+      toLibraryClip(entry('rendered', snapshot(failedUpload('UNKNOWN'))), '9'),
+      'ready',
+      'streamer',
+    );
+    expect(view.titleLocked).toBe(false);
   });
 
   it('확인 필요는 다시 올리기를 막고 채널을 보라고 안내한다', () => {

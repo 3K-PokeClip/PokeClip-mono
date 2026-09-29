@@ -98,7 +98,10 @@ export interface HomeMockState {
   dismissResume: () => void;
   live: LiveNow | null;
   vods: HomeVod[];
-  publishRows: PublishRow[];
+  /** 발행 현황 줄. 보관함을 아직 못 읽었으면 null — 빈 배열(「올린 영상 없음」)과 가른다 */
+  publishRows: PublishRow[] | null;
+  /** 보관함을 한 번도 못 읽었고 마지막 시도가 실패했다 */
+  publishUnavailable: boolean;
   expiringVods: ExpiringVod[];
   recentCards: RecentCard[];
   /** 첫 응답이 오기 전 true — 빈 목록을 「없음」으로 그리지 않기 위해 */
@@ -344,6 +347,7 @@ export function useHomeMockState(): HomeMockState {
   const [data, setData] = useState<Loaded>(EMPTY);
   // 보관함(POK-243) — 이어서 편집 · 발행 현황 · 클립 완료 수가 여기서 나온다. 못 읽으면 null(배너는 안내만, 수는 「준비 중」)
   const [library, setLibrary] = useState<LibraryEntry[] | null>(null);
+  const [libraryFailed, setLibraryFailed] = useState(false);
   const [loading, setLoading] = useState(true);
   // 인사말은 마운트 뒤 클라이언트 시계로 정한다 — 서버 렌더와 어긋나지 않게 초기값은 고정.
   const [greeting, setGreeting] = useState('안녕하세요');
@@ -359,6 +363,7 @@ export function useHomeMockState(): HomeMockState {
       ]);
       if (stopped) return;
       if (entries !== null) setLibrary(entries);
+      setLibraryFailed(entries === null);
       // 못 읽었으면 지난 화면을 그대로 둔다. 첫 읽기부터 실패면 다음 주기까지 「불러오는 중」
       if (loaded === null) return;
       setData(loaded);
@@ -385,7 +390,9 @@ export function useHomeMockState(): HomeMockState {
     dismissResume,
     live,
     vods: data.vods,
-    publishRows: library === null ? [] : publishRowsOf(library),
+    publishRows: library === null ? null : publishRowsOf(library),
+    // 한 번 읽은 뒤의 실패는 지난 줄을 그대로 둔다(방송 목록과 같다) — 안내는 아직 아무것도 모를 때만
+    publishUnavailable: library === null && libraryFailed,
     expiringVods: data.expiringVods,
     recentCards: data.recentCards,
     loading,

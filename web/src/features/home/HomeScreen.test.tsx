@@ -195,6 +195,32 @@ describe('HomeScreen', () => {
     ).toBeInTheDocument();
   });
 
+  it('보관함을 못 읽었으면 「올린 영상이 없다」고 하지 않는다', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).startsWith('/api/clip/library')
+            ? new Response(JSON.stringify({ error: 'unavailable' }), { status: 503 })
+            : emptyJson(String(input)),
+        ),
+      ),
+    );
+    render(<HomeScreen />);
+
+    expect(await screen.findByText('발행 현황을 불러오지 못했어요')).toBeInTheDocument();
+    expect(screen.queryByText('아직 유튜브에 올린 영상이 없어요')).not.toBeInTheDocument();
+  });
+
+  it('보관함 답이 오기 전에는 불러오는 중이다', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => {})),
+    );
+    render(<HomeScreen />);
+    expect(screen.getByText('발행 현황을 불러오는 중…')).toBeInTheDocument();
+  });
+
   it('이어서 편집 배너가 가장 최근에 고친 편집본을 편집기로 연다', async () => {
     render(<HomeScreen />);
 

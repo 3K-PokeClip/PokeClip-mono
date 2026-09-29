@@ -284,7 +284,7 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
 
     const [url, init] = posts(spy)[0] ?? [];
     expect(url).toBe('/api/clip/broadcasts/s%201/clips/5/uploads');
-    expect(JSON.parse(String(init?.body))).toEqual({ title: '보스 막타' });
+    expect(JSON.parse(String(init?.body))).toEqual({ title: '보스 막타', outputId: 'o1' });
     expect(result.current.clips[0]?.entry?.status).toBe('uploading');
     expect(result.current.clips[0]?.subtitleLabel).toBe('유튜브에 올리는 중');
     expect(result.current.clips[0]?.title).toBe('보스 막타');
@@ -300,6 +300,8 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
       result.current.upload('12');
     });
     act(() => result.current.upload('12'));
+    await vi.waitFor(() => expect(posts(spy)).toHaveLength(1));
+    await act(async () => {});
     expect(posts(spy)).toHaveLength(1);
 
     await act(async () => answer(jsonResponse(200, uploadReply)));
@@ -375,6 +377,62 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
     act(() => result.current.refresh());
     await vi.waitFor(() => expect(result.current.clips[0]?.entry?.status).toBe('uploaded'));
     expect(result.current.clips[0]?.title).toBe('다른 기기 제목');
+  });
+
+  it('영상 출력이 여럿이면 편집기가 고친 세로 출력을 올리고 틀고 받는다 — 첫 번째가 아니라', async () => {
+    const twoOutputs = {
+      ...rendered,
+      outputs: [
+        { outputId: 'sq', kind: 'video', s3Key: 'k1' },
+        { outputId: 'v', kind: 'video', s3Key: 'k2' },
+      ],
+    };
+    const spy = stubFetch((url, init) => {
+      if (init?.method === 'POST' && url.endsWith('/uploads'))
+        return jsonResponse(201, uploadReply);
+      if (init?.method === 'POST') {
+        return jsonResponse(200, {
+          clipId: 5,
+          expiresAt: '2026-09-20T13:00:00Z',
+          files: [
+            { outputId: 'sq', kind: 'video', fileName: 'sq.mp4', url: 'https://s3.example/sq.mp4' },
+            { outputId: 'v', kind: 'video', fileName: 'v.mp4', url: 'https://s3.example/v.mp4' },
+          ],
+        });
+      }
+      if (url === '/api/clip/library/12') {
+        return jsonResponse(200, {
+          ...libraryEntry,
+          latestClip: twoOutputs,
+          recipe: {
+            outputs: [
+              { outputId: 'sq', aspect: 'SQUARE_1_1', layers: [] },
+              { outputId: 'v', aspect: 'VERT_9_16', layers: [] },
+            ],
+          },
+        });
+      }
+      return url.startsWith('/api/clip/library')
+        ? jsonResponse(200, {
+            items: [{ ...libraryEntry, latestClip: twoOutputs }],
+            nextCursor: null,
+          })
+        : jsonResponse(200, { id: 9 });
+    });
+    const { result } = await mount();
+
+    let url: string | null = null;
+    await act(async () => {
+      url = await result.current.previewUrl('12');
+    });
+    expect(url).toBe('https://s3.example/v.mp4');
+
+    act(() => result.current.upload('12'));
+    await vi.waitFor(() => expect(result.current.sendingIds.size).toBe(0));
+    const upload = spy.mock.calls.find(
+      ([u, init]) => init?.method === 'POST' && String(u).endsWith('/uploads'),
+    );
+    expect(JSON.parse(String(upload?.[1]?.body))).toEqual({ title: '편집본 #12', outputId: 'v' });
   });
 
   it('규칙에 안 맞는 제목은 보내지 않는다', async () => {

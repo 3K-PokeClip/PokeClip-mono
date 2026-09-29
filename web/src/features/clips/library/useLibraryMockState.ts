@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
 import {
   fetchLibraryAll,
+  fetchLibraryDetail,
   fetchMeLoose,
   requestFileAccess,
   requestRender,
@@ -305,7 +306,11 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
         }
         if (sending.current.has(id)) return;
         setSendingFlag(id, true);
-        requestUpload(entry.streamId, clipId, { title: clip.title.trim() })
+        const title = clip.title.trim();
+        videoOutputOf(entry)
+          .then((outputId) =>
+            requestUpload(entry.streamId, clipId, outputId ? { title, outputId } : { title }),
+          )
           .then(({ created, upload: snap }) => {
             titleDrafts.current.delete(id);
             listGeneration.current += 1;
@@ -386,8 +391,13 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
         return null;
       }
       try {
-        const access = await requestFileAccess(clip.entry.streamId, latest.id);
-        const video = access.files.find((f) => f.kind === 'video');
+        const [access, outputId] = await Promise.all([
+          requestFileAccess(clip.entry.streamId, latest.id),
+          videoOutputOf(clip.entry),
+        ]);
+        const video =
+          access.files.find((f) => f.kind === 'video' && f.outputId === outputId) ??
+          access.files.find((f) => f.kind === 'video');
         if (video === undefined) throw new Error('영상 파일이 없어요');
         return video.url;
       } catch (e) {
@@ -514,4 +524,20 @@ function withUpload(entry: LibraryEntry, upload: UploadSnapshot): LibraryEntry {
     status,
     latestClip: entry.latestClip === null ? null : { ...entry.latestClip, upload },
   };
+}
+
+/**
+ * 이 편집본의 영상 출력(outputId) — 업로드·미리보기·내려받기가 같은 파일을 가리키게 한다. 하나면 그것, 이미 올린 것이 있으면
+ * 그것, 여럿이면 편집기가 고치는 세로(VERT_9_16) 출력이다. 편집기는 저장된 다른 비율 출력을 남겨 두므로(outputsFor)
+ * 첫 번째 영상이 세로라는 보장이 없다(PR #203 codex). 보관함 목록에는 출력의 비율이 없어 상세를 한 번 더 읽는다.
+ */
+async function videoOutputOf(entry: LibraryEntry): Promise<string | null> {
+  const videos = (entry.latestClip?.outputs ?? []).filter((o) => o.kind === 'video');
+  if (videos.length <= 1) return videos[0]?.outputId ?? null;
+  const has = (id: string | undefined) => id !== undefined && videos.some((v) => v.outputId === id);
+  const uploaded = entry.latestClip?.upload?.outputId;
+  if (has(uploaded)) return uploaded ?? null;
+  const detail = await fetchLibraryDetail(entry.recipeId);
+  const vertical = detail.recipe.outputs.find((o) => o.aspect === 'VERT_9_16')?.outputId;
+  return has(vertical) ? (vertical ?? null) : (videos[0]?.outputId ?? null);
 }

@@ -336,10 +336,15 @@ export function detailViewForClip(
     case 'uploaded':
       // 올린 영상의 제목은 유튜브에 있다 — 여기서 고쳐도 저장할 곳이 없어 바뀐 척만 한다
       return { ...view, titleLocked: true };
-    default:
+    default: {
+      // 제목이 살아 있는 업로드에서 온 것이면(올린 뒤 새 판을 저장해 「편집 중」인 경우 포함) 고칠 곳이 없다 —
+      // 초안은 완성 편집본에만 남아 다음 읽기에 되돌아간다(PR #203 codex). 실패한 업로드는 다시 올리게 열어 둔다
+      const upload = clip.entry?.latestClip?.upload;
+      const titleLocked = view.titleLocked || (upload != null && upload.status !== 'failed');
       return view.primary.kind === 'action' && view.primary.action === 'upload'
-        ? { ...view, primary: { ...view.primary, label: '업로드' } }
-        : view;
+        ? { ...view, titleLocked, primary: { ...view.primary, label: '업로드' } }
+        : { ...view, titleLocked };
+    }
   }
 }
 
