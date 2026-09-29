@@ -60,11 +60,20 @@ export function ClipDetailPanel({
   // 업로드·렌더 재시도는 상태를 바꾸고, 그러면 주 동작이 button ↔ anchor로 갈리거나 비활성이
   // 된다 — 누르고 있던 노드가 사라져 포커스가 body로 떨어진다. 전이를 일으킨 경우에만
   // 새 주 동작(비활성이면 그다음 조작부)으로 포커스를 옮긴다.
+  // 🔴 포커스가 실제로 떨어졌을 때만 옮긴다. 누른 뒤 아무것도 안 바뀐 경우(제목이 틀려 업로드가 안 나감)에도 표시가 남아,
+  // 다음에 제목을 칠 때 포커스를 단추로 빼앗으면 이어 친 스페이스가 반쯤 친 제목으로 업로드를 누른다(로컬 리뷰 2라운드).
   const actionsRef = useRef<HTMLDivElement>(null);
   const refocusAfterTransition = useRef(false);
   useEffect(() => {
     if (!refocusAfterTransition.current) return;
     refocusAfterTransition.current = false;
+    const active = document.activeElement;
+    const stillFocused =
+      active instanceof HTMLElement &&
+      active !== document.body &&
+      active.isConnected &&
+      !(active as HTMLButtonElement).disabled;
+    if (stillFocused) return;
     actionsRef.current?.querySelector<HTMLElement>('a[href], button:not([disabled])')?.focus();
   });
 
@@ -93,7 +102,12 @@ export function ClipDetailPanel({
         </IconButton>
       </div>
 
-      <InlineTitleInput value={clip.title} onChange={onTitleChange} readOnly={view.titleLocked} />
+      {/* 주문을 보내는 동안에도 잠근다 — 답이 오면 보낸 제목으로 덮여 그사이 고친 글자가 사라진다 */}
+      <InlineTitleInput
+        value={clip.title}
+        onChange={onTitleChange}
+        readOnly={view.titleLocked || sending}
+      />
 
       {/* 미리보기 — 완성 영상이 있으면 눌러서 튼다(주소는 그때 받는다). 없으면 장식이라 통째로 숨긴다.
           영상이 바뀌면(다시 렌더) 받은 주소를 버리도록 영상 번호로 새로 그린다 */}

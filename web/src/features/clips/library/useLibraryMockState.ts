@@ -225,15 +225,18 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
   // 패널에서 고친 제목(업로드 제목의 초안). 다시 읽기(10초 폴링)가 서버 줄로 덮어도 남아야 한다
   const titleDrafts = useRef(new Map<string, string>());
   const meIdRef = useRef<string | null>(null);
+  // 목록 읽기 세대. 업로드 답을 반영할 때 올려서, 그 전에 떠난 읽기가 늦게 와 「올리는 중」을 옛 줄로 덮지 못하게 한다
+  const listGeneration = useRef(0);
 
   useEffect(() => {
     setClock(new Date());
     if (options.clips !== undefined) return undefined;
     let alive = true;
+    const generation = listGeneration.current;
     (async () => {
       try {
         const [entries, me] = await Promise.all([fetchLibraryAll(), fetchMeLoose()]);
-        if (!alive) return;
+        if (!alive || generation !== listGeneration.current) return;
         const meId = me === null ? null : String(me.id);
         meIdRef.current = meId;
         setClips(
@@ -305,6 +308,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
         requestUpload(entry.streamId, clipId, { title: clip.title.trim() })
           .then((snap) => {
             titleDrafts.current.delete(id);
+            listGeneration.current += 1;
             // 다음 읽기(폴링)를 기다리지 않고 받은 업로드로 바로 옮긴다 — 그사이 단추가 다시 「업로드」로 돌아오지 않게
             setClips((prev) =>
               prev.map((c) =>

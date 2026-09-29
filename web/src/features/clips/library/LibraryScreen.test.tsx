@@ -751,6 +751,33 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     );
   });
 
+  it('제목이 틀려 업로드가 안 나가면, 이어서 제목을 고칠 때 포커스를 빼앗지 않는다', async () => {
+    const user = userEvent.setup();
+    const spy = stubFetch(() => jsonResponse(500));
+    show(serverClip('rendered'));
+    const title = within(panel()).getByRole('textbox');
+
+    await user.clear(title);
+    await user.click(within(panel()).getByRole('button', { name: '업로드' }));
+    await user.click(title);
+    await user.type(title, 'Best play');
+
+    expect(title).toHaveFocus();
+    expect(title).toHaveValue('Best play');
+    expect(spy.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
+  });
+
+  it('업로드 주문을 보내는 동안 제목이 잠긴다 — 보낸 뒤 고친 글자가 조용히 사라지지 않게', async () => {
+    const user = userEvent.setup();
+    stubFetch(() => new Promise<Response>(() => {}));
+    show(serverClip('rendered'));
+
+    await user.click(within(panel()).getByRole('button', { name: '업로드' }));
+
+    expect(within(panel()).getByRole('textbox')).toHaveAttribute('readonly');
+    expect(within(panel()).getByRole('button', { name: '업로드' })).toBeDisabled();
+  });
+
   it('영상이 없는 편집본은 미리보기가 장식이다', () => {
     show(serverClip('editing', null));
     expect(within(panel()).queryByRole('button', { name: '미리보기 재생' })).toBeNull();

@@ -306,6 +306,31 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
     await vi.waitFor(() => expect(result.current.sendingIds.size).toBe(0));
   });
 
+  it('주문 전에 떠난 목록 읽기가 늦게 와도 올리는 중을 되돌리지 않는다', async () => {
+    let listCalls = 0;
+    let lateList: (r: Response) => void = () => {};
+    stubFetch((url, init) => {
+      if (init?.method === 'POST') return jsonResponse(201, uploadReply);
+      if (url.startsWith('/api/clip/library')) {
+        listCalls += 1;
+        const body = { items: [libraryEntry], nextCursor: null };
+        return listCalls === 1
+          ? jsonResponse(200, body)
+          : new Promise<Response>((resolve) => (lateList = () => resolve(jsonResponse(200, body))));
+      }
+      return jsonResponse(200, { id: 9 });
+    });
+    const { result } = await mount();
+
+    act(() => result.current.refresh()); // 폴링처럼 읽기가 먼저 떠난다
+    act(() => result.current.upload('12'));
+    await vi.waitFor(() => expect(result.current.clips[0]?.entry?.status).toBe('uploading'));
+
+    await act(async () => lateList(jsonResponse(200, {})));
+    await act(async () => {});
+    expect(result.current.clips[0]?.entry?.status).toBe('uploading');
+  });
+
   it('규칙에 안 맞는 제목은 보내지 않는다', async () => {
     const spy = serve(() => jsonResponse(201, uploadReply));
     const { result } = await mount();
