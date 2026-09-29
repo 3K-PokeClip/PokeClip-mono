@@ -347,7 +347,7 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
     await vi.waitFor(() => expect(result.current.clips[0]?.entry?.status).toBe('uploaded'));
 
     expect(result.current.clips[0]?.title).toBe('먼저 올린 제목');
-    expect(document.body.textContent).toContain('이미 올린 업로드가 있어요');
+    expect(document.body.textContent).toContain('이미 주문된 업로드가 있어요');
     expect(document.body.textContent).not.toContain('유튜브 업로드를 시작했어요');
   });
 

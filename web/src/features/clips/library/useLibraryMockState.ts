@@ -326,7 +326,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
                   }
                 : {
                     tone: 'info',
-                    title: '이미 올린 업로드가 있어요',
+                    title: '이미 주문된 업로드가 있어요',
                     description: `같은 영상이 「${snap.title}」 제목으로 먼저 주문돼 있어요.`,
                   },
             );

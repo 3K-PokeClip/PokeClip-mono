@@ -110,7 +110,7 @@ describe('uploadErrorMessage — 주문이 거절된 사유를 사람 말로', (
 
   it('출력이 여럿이라 고를 영상을 몰라 거절되면 그렇게 말한다', () => {
     expect(uploadErrorMessage(new ClipApiError(400, 'invalid_request', 'outputId'))).toBe(
-      '올릴 영상을 고를 수 없어요. 출력이 여러 개인 편집본은 아직 올릴 수 없어요.',
+      '올릴 영상을 고를 수 없어요. 이 편집본은 영상 출력이 하나가 아니에요.',
     );
   });
 

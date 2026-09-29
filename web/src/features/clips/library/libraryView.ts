@@ -374,9 +374,9 @@ export function uploadTitleProblem(title: string): string | null {
 export function uploadErrorMessage(e: unknown): string {
   if (e instanceof ClipApiError) {
     if (e.status === 400 && e.field === 'title') return '유튜브 제목을 확인해 주세요.';
-    // 출력(outputId)을 안 보내면 서버가 영상 출력 하나를 고르는데, 여럿이면 거절한다. 편집기는 세로 한 벌만 만든다
+    // 출력(outputId)을 안 보내면 서버가 영상 출력 하나를 고르는데, 하나가 아니면(0개·여럿) 거절한다. 편집기는 세로 한 벌만 만든다
     if (e.status === 400 && e.field === 'outputId') {
-      return '올릴 영상을 고를 수 없어요. 출력이 여러 개인 편집본은 아직 올릴 수 없어요.';
+      return '올릴 영상을 고를 수 없어요. 이 편집본은 영상 출력이 하나가 아니에요.';
     }
     if (e.code === 'clip_not_rendered') return '영상이 아직 완성되지 않았어요.';
     if (e.status === 404) return '편집본을 찾을 수 없어요. 목록을 새로 고쳐 주세요.';
