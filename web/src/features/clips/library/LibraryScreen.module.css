@@ -433,6 +433,32 @@
   box-shadow: var(--pc-shadow-md);
 }
 
+/* 완성 영상이 있으면 미리보기 틀이 누르는 단추가 된다(POK-111) — 모양은 위 틀 그대로 */
+button.preview {
+  display: block;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+button.preview:disabled {
+  cursor: progress;
+}
+
+button.preview:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.previewVideo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
 /* 재생 글리프(44u 원) 아래에 둔다 — 한가운데 겹치면 글자가 원에 가려진다 */
 .previewLabel {
   position: absolute;

@@ -360,6 +360,38 @@ export function fetchClip(streamId: string, clipId: number): Promise<ClipSnapsho
   return getJson(`/api/clip/broadcasts/${encodeURIComponent(streamId)}/clips/${clipId}`);
 }
 
+/**
+ * 유튜브 업로드 주문(POK-220). 201 새 주문 · 200 같은 영상·출력의 살아 있는 업로드가 이미 있다(그것을 돌려준다).
+ * 400 invalid_request(field) · 409 clip_not_rendered · 503 upload_unavailable/authorization_unavailable.
+ * 방송 주인(스트리머)의 채널에 비공개로 올라간다.
+ */
+export function requestUpload(
+  streamId: string,
+  clipId: number,
+  body: { title: string; outputId?: string },
+): Promise<UploadSnapshot> {
+  return sendJson(
+    'POST',
+    `/api/clip/broadcasts/${encodeURIComponent(streamId)}/clips/${clipId}/uploads`,
+    body,
+  );
+}
+
+/** 완성 영상 파일 주소(POK-220). url은 60분짜리 서명 주소라 재생·내려받기에 같이 쓴다. 만료(403)면 다시 부른다 */
+export interface ClipFileAccess {
+  clipId: number;
+  expiresAt: string;
+  files: { outputId: string; kind: 'video' | 'srt'; fileName: string; url: string }[];
+}
+
+/** 409 clip_not_rendered 는 아직 영상이 없는 것 */
+export function requestFileAccess(streamId: string, clipId: number): Promise<ClipFileAccess> {
+  return sendJson(
+    'POST',
+    `/api/clip/broadcasts/${encodeURIComponent(streamId)}/clips/${clipId}/file-access`,
+  );
+}
+
 /** 내가 볼 수 있는 방송들의 편집본 전부 — 한 장씩 이어받아 끝까지 모은다(사람 규모라 몇 장이다). */
 export async function fetchLibraryAll(): Promise<LibraryEntry[]> {
   const items: LibraryEntry[] = [];

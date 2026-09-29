@@ -4,12 +4,13 @@ import type { PublishRow, PublishStatus } from './useHomeMockState';
 
 const STATUS_BADGE: Record<PublishStatus, { label: string; tone: BadgeTone }> = {
   uploading: { label: '업로드 중', tone: 'neutral' },
+  checking: { label: '확인 필요', tone: 'warning' },
   scheduled: { label: '예약됨', tone: 'neutral' },
   published: { label: '발행됨', tone: 'success' },
 };
 
-// 디자인 1a 우측 — 발행 현황 카드. 업로드·발행 백엔드가 없어 rows는 늘 비어 있고
-// 「준비 중」을 그린다. 행 렌더는 백엔드가 생기면 그대로 쓴다.
+// 디자인 1a 우측 — 발행 현황 카드. 줄은 보관함의 유튜브 업로드에서 온다(POK-111).
+// 업로드는 진행률을 주지 않아 막대가 없고, 조회수·예약도 아직 없어 보조 글이 없다.
 export function PublishStatusCard({ rows }: { rows: PublishRow[] }) {
   return (
     <Card variant="outline" padding={0}>
@@ -20,7 +21,7 @@ export function PublishStatusCard({ rows }: { rows: PublishRow[] }) {
         </span>
       </div>
       {rows.length === 0 ? (
-        <p className={styles.emptyState}>준비 중</p>
+        <p className={styles.emptyState}>아직 유튜브에 올린 영상이 없어요</p>
       ) : (
         <ul className={styles.asideRows}>
           {rows.map((row) => {

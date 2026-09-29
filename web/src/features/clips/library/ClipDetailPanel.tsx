@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ExternalLink, Play, Trash2, X } from 'lucide-react';
 import { Badge, Button, IconButton, LinkButton, VisuallyHidden } from '@/ui';
@@ -8,11 +8,12 @@ import { ddayFor } from '@/features/broadcast/vod/vodListView';
 import { InlineTitleInput } from './InlineTitleInput';
 import {
   dayTimeLabel,
-  detailViewFor,
+  detailViewForClip,
   durationLabel,
   noteText,
   retentionLabel,
   safeExternalUrl,
+  uploadFailureText,
   type DetailView,
 } from './libraryView';
 import type { ClipStatus, LibraryClip, LibraryRole } from './useLibraryMockState';
@@ -32,6 +33,8 @@ export function ClipDetailPanel({
   onRetryRender,
   onDownload,
   onDelete,
+  sending = false,
+  loadPreview,
 }: {
   clip: LibraryClip;
   status: ClipStatus;
@@ -43,8 +46,14 @@ export function ClipDetailPanel({
   onRetryRender: () => void;
   onDownload: () => void;
   onDelete: () => void;
+  /** 업로드 주문을 보내는 중 — 주 동작을 잠근다 */
+  sending?: boolean;
+  /** 완성 영상 주소를 받는다. 없으면(목업 줄) 미리보기는 장식이다 */
+  loadPreview?: () => Promise<string | null>;
 }) {
-  const view = detailViewFor(status, role);
+  const view = detailViewForClip(clip, status, role);
+  const uploadFailure = uploadFailureText(clip);
+  const playable = loadPreview !== undefined && clip.entry?.latestClip?.status === 'rendered';
   const duration = durationLabel(clip, status);
   const retention = ddayFor(clip.sourceExpiresAt, now);
 
@@ -86,17 +95,26 @@ export function ClipDetailPanel({
 
       <InlineTitleInput value={clip.title} onChange={onTitleChange} readOnly={view.titleLocked} />
 
-      {/* 미리보기 — 재생은 아직 없다(렌더 결과 파일이 없다). 장식이라 통째로 숨긴다 */}
+      {/* 미리보기 — 완성 영상이 있으면 눌러서 튼다(주소는 그때 받는다). 없으면 장식이라 통째로 숨긴다.
+          영상이 바뀌면(다시 렌더) 받은 주소를 버리도록 영상 번호로 새로 그린다 */}
       <div className={styles.previewWrap}>
-        <div className={styles.preview} aria-hidden="true">
-          <span className={styles.previewLabel}>선택한 편집본 미리보기</span>
-          <span className={styles.previewPlay}>
-            <Play size={18} fill="currentColor" />
-          </span>
-          {view.showDuration && duration ? (
-            <span className={styles.previewDuration}>{duration}</span>
-          ) : null}
-        </div>
+        {playable ? (
+          <PreviewPlayer
+            key={`${clip.id}:${clip.entry?.latestClip?.id}`}
+            load={loadPreview}
+            duration={view.showDuration ? duration : null}
+          />
+        ) : (
+          <div className={styles.preview} aria-hidden="true">
+            <span className={styles.previewLabel}>선택한 편집본 미리보기</span>
+            <span className={styles.previewPlay}>
+              <Play size={18} fill="currentColor" />
+            </span>
+            {view.showDuration && duration ? (
+              <span className={styles.previewDuration}>{duration}</span>
+            ) : null}
+          </div>
+        )}
       </div>
 
       <div className={styles.actions} ref={actionsRef}>
@@ -104,6 +122,7 @@ export function ClipDetailPanel({
           editHref={clip.editHref ?? '/clips/editor'}
           primary={view.primary}
           youtubeUrl={clip.youtubeUrl}
+          sending={sending}
           onUpload={() => runTransition(onUpload)}
           onRetryRender={() => runTransition(onRetryRender)}
         />
@@ -141,6 +160,7 @@ export function ClipDetailPanel({
           </IconButton>
         </div>
         {view.note ? <p className={styles.note}>{noteText(view.note, role)}</p> : null}
+        {uploadFailure ? <p className={styles.note}>{uploadFailure}</p> : null}
       </div>
 
       <hr className={styles.divider} />
@@ -191,12 +211,14 @@ function PrimaryControl({
   primary,
   editHref,
   youtubeUrl,
+  sending,
   onUpload,
   onRetryRender,
 }: {
   primary: DetailView['primary'];
   editHref: string;
   youtubeUrl: string | undefined;
+  sending: boolean;
   onUpload: () => void;
   onRetryRender: () => void;
 }) {
@@ -240,10 +262,82 @@ function PrimaryControl({
           variant="solid"
           size="md"
           fullWidth
+          disabled={primary.action === 'upload' && sending}
           onClick={primary.action === 'upload' ? onUpload : onRetryRender}
         >
           {primary.label}
         </Button>
       );
+    case 'busy':
+      return (
+        <Button variant="solid" size="md" fullWidth disabled>
+          {primary.label}
+        </Button>
+      );
   }
+}
+
+/**
+ * 완성 영상 미리보기. 누르기 전에는 시안의 재생 단추 그대로이고, 누르면 주소를 받아 그 자리에서 튼다. 주소는 60분짜리라
+ * 패널을 열 때마다 미리 받지 않는다.
+ */
+function PreviewPlayer({
+  load,
+  duration,
+}: {
+  load: () => Promise<string | null>;
+  duration: string | null;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  if (url !== null) {
+    return (
+      <div className={styles.preview}>
+        <video
+          className={styles.previewVideo}
+          src={url}
+          controls
+          autoPlay
+          playsInline
+          aria-label="선택한 편집본 미리보기"
+        />
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className={styles.preview}
+      aria-label="미리보기 재생"
+      disabled={loading}
+      onClick={() => {
+        setLoading(true);
+        void load().then((next) => {
+          if (!alive.current) return;
+          setLoading(false);
+          setUrl(next);
+        });
+      }}
+    >
+      <span className={styles.previewLabel} aria-hidden="true">
+        선택한 편집본 미리보기
+      </span>
+      <span className={styles.previewPlay} aria-hidden="true">
+        <Play size={18} fill="currentColor" />
+      </span>
+      {duration ? (
+        <span className={styles.previewDuration} aria-hidden="true">
+          {duration}
+        </span>
+      ) : null}
+    </button>
+  );
 }

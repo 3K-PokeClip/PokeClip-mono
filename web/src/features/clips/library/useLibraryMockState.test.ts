@@ -1,5 +1,5 @@
 import { act, renderHook } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { withToastProvider } from '@/test/testProviders';
 import { LIBRARY_FIXTURE } from './libraryFixture';
@@ -207,5 +207,173 @@ describe('useLibraryMockState — 서버 줄', () => {
     expect(result.current.clips[0]?.status).toBe('published');
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+});
+
+describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', () => {
+  const rendered = {
+    id: 5,
+    streamId: 's1',
+    recipeId: 12,
+    recipeVersion: 2,
+    requestedBy: '9',
+    status: 'rendered',
+    progress: null,
+    outputs: [{ outputId: 'o1', kind: 'video', s3Key: 'k' }],
+    error: null,
+    createdAt: '2026-09-20T11:00:00Z',
+    updatedAt: '2026-09-20T12:00:00Z',
+    upload: null,
+  };
+  const libraryEntry = {
+    recipeId: 12,
+    streamId: 's 1',
+    creatorId: '9',
+    recipeVersion: 2,
+    cut: { inAtMs: 0, outAtMs: 30_000 },
+    status: 'rendered',
+    broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+    latestClip: rendered,
+    createdAt: '2026-09-20T11:00:00Z',
+    updatedAt: '2026-09-20T12:00:00Z',
+  };
+  const uploadReply = {
+    id: 7,
+    clipId: 5,
+    outputId: 'o1',
+    title: '보스 막타',
+    status: 'queued',
+    videoId: null,
+    error: null,
+    requestedBy: '9',
+    createdAt: '2026-09-20T12:00:00Z',
+    updatedAt: '2026-09-20T12:00:00Z',
+  };
+
+  function serve(onPost: (url: string, init?: RequestInit) => Response | Promise<Response>) {
+    return stubFetch((url, init) => {
+      if (init?.method === 'POST') return onPost(url, init);
+      return url.startsWith('/api/clip/library')
+        ? jsonResponse(200, { items: [libraryEntry], nextCursor: null })
+        : jsonResponse(200, { id: 9 });
+    });
+  }
+
+  async function mount() {
+    const view = renderHook(() => useLibraryMockState(), { wrapper: withToastProvider });
+    await vi.waitFor(() => expect(view.result.current.loading).toBe(false));
+    return view;
+  }
+
+  function posts(spy: ReturnType<typeof stubFetch>) {
+    return spy.mock.calls.filter(([, init]) => init?.method === 'POST');
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('패널 제목(앞뒤 공백 뺌)으로 가장 최근 영상을 올리고, 답을 받자마자 올리는 중으로 바뀐다', async () => {
+    const spy = serve(() => jsonResponse(201, uploadReply));
+    const { result } = await mount();
+
+    act(() => result.current.renameClip('12', '  보스 막타 '));
+    act(() => result.current.upload('12'));
+    expect(result.current.sendingIds.has('12')).toBe(true);
+    await vi.waitFor(() => expect(result.current.sendingIds.has('12')).toBe(false));
+
+    const [url, init] = posts(spy)[0] ?? [];
+    expect(url).toBe('/api/clip/broadcasts/s%201/clips/5/uploads');
+    expect(JSON.parse(String(init?.body))).toEqual({ title: '보스 막타' });
+    expect(result.current.clips[0]?.entry?.status).toBe('uploading');
+    expect(result.current.clips[0]?.subtitleLabel).toBe('유튜브에 올리는 중');
+    expect(result.current.clips[0]?.title).toBe('보스 막타');
+  });
+
+  it('답을 기다리는 동안 다시 눌러도 한 번만 보낸다', async () => {
+    let answer: (r: Response) => void = () => {};
+    const spy = serve(() => new Promise<Response>((resolve) => (answer = resolve)));
+    const { result } = await mount();
+
+    act(() => {
+      result.current.upload('12');
+      result.current.upload('12');
+    });
+    act(() => result.current.upload('12'));
+    expect(posts(spy)).toHaveLength(1);
+
+    await act(async () => answer(jsonResponse(200, uploadReply)));
+    await vi.waitFor(() => expect(result.current.sendingIds.size).toBe(0));
+  });
+
+  it('규칙에 안 맞는 제목은 보내지 않는다', async () => {
+    const spy = serve(() => jsonResponse(201, uploadReply));
+    const { result } = await mount();
+
+    act(() => result.current.renameClip('12', 'a <b>'));
+    act(() => result.current.upload('12'));
+
+    expect(posts(spy)).toHaveLength(0);
+    expect(result.current.sendingIds.size).toBe(0);
+  });
+
+  it('거절되면 상태를 안 바꾸고 다시 누를 수 있다', async () => {
+    const spy = serve(() => jsonResponse(503, { code: 'upload_unavailable' }));
+    const { result } = await mount();
+
+    act(() => result.current.upload('12'));
+    await vi.waitFor(() => expect(result.current.sendingIds.size).toBe(0));
+    expect(result.current.clips[0]?.entry?.status).toBe('rendered');
+
+    act(() => result.current.upload('12'));
+    await vi.waitFor(() => expect(posts(spy)).toHaveLength(2));
+  });
+
+  it('고친 제목은 다시 읽어도 남는다 — 올리기 전 초안이다', async () => {
+    serve(() => jsonResponse(201, uploadReply));
+    const { result } = await mount();
+
+    act(() => result.current.renameClip('12', '초안 제목'));
+    act(() => result.current.refresh());
+    await vi.waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => {});
+    expect(result.current.clips[0]?.title).toBe('초안 제목');
+  });
+
+  it('미리보기·내려받기는 영상 파일 주소를 그때 받는다', async () => {
+    const spy = serve((url) =>
+      url.endsWith('/file-access')
+        ? jsonResponse(200, {
+            clipId: 5,
+            expiresAt: '2026-09-20T13:00:00Z',
+            files: [
+              { outputId: 'o1', kind: 'srt', fileName: 'a.srt', url: 'https://s3.example/a.srt' },
+              { outputId: 'o1', kind: 'video', fileName: 'a.mp4', url: 'https://s3.example/a.mp4' },
+            ],
+          })
+        : jsonResponse(500),
+    );
+    const { result } = await mount();
+
+    await expect(result.current.previewUrl('12')).resolves.toBe('https://s3.example/a.mp4');
+    expect(posts(spy)[0]?.[0]).toBe('/api/clip/broadcasts/s%201/clips/5/file-access');
+
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    act(() => result.current.download('12'));
+    await vi.waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+    expect((click.mock.contexts[0] as HTMLAnchorElement).href).toBe('https://s3.example/a.mp4');
+    click.mockRestore();
+  });
+
+  it('영상이 없으면 주소를 묻지 않는다', async () => {
+    libraryEntry.latestClip = null as unknown as typeof rendered;
+    const spy = serve(() => jsonResponse(500));
+    try {
+      const { result } = await mount();
+      await expect(result.current.previewUrl('12')).resolves.toBeNull();
+      expect(posts(spy)).toHaveLength(0);
+    } finally {
+      libraryEntry.latestClip = rendered;
+    }
   });
 });

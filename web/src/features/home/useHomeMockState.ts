@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/api/client';
-import { fetchAllBroadcasts, fetchAllJumpCards, fetchLibraryAll } from '@/api/clipEditor';
+import {
+  fetchAllBroadcasts,
+  fetchAllJumpCards,
+  fetchLibraryAll,
+  type LibraryEntry,
+} from '@/api/clipEditor';
 
 // 홈 대시보드 상태 — clip·auth 창구 배선(POK-251).
 // 목업 값은 전부 걷어냈다. 백엔드가 있는 것만 실값으로 채우고, 없는 칸은 null/빈 배열로
@@ -13,7 +18,7 @@ import { fetchAllBroadcasts, fetchAllJumpCards, fetchLibraryAll } from '@/api/cl
 //   GET /api/clip/broadcasts/{id}/jump-cards       → 카드 수 · 최근 하이라이트 카드
 //   GET /api/clip/broadcasts/{id}/broadcast-info   → 라이브 제목 (latest=null이면 streamId)
 //   GET /api/auth/me                               → 인사말의 이름
-// 백엔드가 없는 것: 이어서 편집(편집본) · 발행 현황 · 클립 완료 수 · 시청자 수.
+//   GET /api/clip/library                          → 이어서 편집 · 발행 현황 · 클립 완료 수(POK-111)
 
 /** 이어서 편집 배너 — 편집본 저장 API가 없어 항상 null. 닫기는 이번 세션에서만 유효 */
 export interface ResumeDraft {
@@ -34,7 +39,7 @@ export interface LiveNow {
   /** 시청자 수 — 백엔드가 없으면 null */
   viewers: string | null;
   detectedCards: number;
-  /** 클립 완료 수 — 렌더 백엔드가 없으면 null */
+  /** 이 방송에서 영상까지 만든 편집본 수. 보관함을 못 읽었으면 null */
   completedClips: number | null;
 }
 
@@ -49,7 +54,8 @@ export interface HomeVod {
   duration?: string;
 }
 
-export type PublishStatus = 'uploading' | 'scheduled' | 'published';
+/** checking = 유튜브에 올라갔는지 모른다(사람이 채널을 봐야 한다, POK-220) */
+export type PublishStatus = 'uploading' | 'checking' | 'scheduled' | 'published';
 
 export interface PublishRow {
   id: string;
@@ -336,33 +342,8 @@ export function useHomeMockState(): HomeMockState {
   const dismissResume = useCallback(() => setResumeDismissed(true), []);
 
   const [data, setData] = useState<Loaded>(EMPTY);
-  // 이어서 편집 = 보관함(POK-243)에서 가장 최근에 고친 「편집 중」 편집본 하나.
-  const [resumeDraft, setResumeDraft] = useState<ResumeDraft | null>(null);
-  useEffect(() => {
-    let alive = true;
-    fetchLibraryAll()
-      .then((entries) => {
-        if (!alive) return;
-        const editing = entries
-          .filter((e) => e.status === 'editing')
-          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
-        setResumeDraft(
-          editing === undefined
-            ? null
-            : {
-                title: `편집본 #${editing.recipeId}`,
-                meta: `방송 ${editing.streamId} · v${editing.recipeVersion} · ${new Date(editing.updatedAt).toLocaleString('ko-KR')} 고침`,
-                href: `/clips/editor/studio?recipe=${editing.recipeId}`,
-              },
-        );
-      })
-      .catch(() => {
-        /* 보관함을 못 읽으면 배너는 안내만 */
-      });
-    return () => {
-      alive = false;
-    };
-  }, []);
+  // 보관함(POK-243) — 이어서 편집 · 발행 현황 · 클립 완료 수가 여기서 나온다. 못 읽으면 null(배너는 안내만, 수는 「준비 중」)
+  const [library, setLibrary] = useState<LibraryEntry[] | null>(null);
   const [loading, setLoading] = useState(true);
   // 인사말은 마운트 뒤 클라이언트 시계로 정한다 — 서버 렌더와 어긋나지 않게 초기값은 고정.
   const [greeting, setGreeting] = useState('안녕하세요');
@@ -371,8 +352,13 @@ export function useHomeMockState(): HomeMockState {
     setGreeting(greetingFor(new Date().getHours()));
     let stopped = false;
     const tick = async () => {
-      const loaded = await loadHome(Date.now());
+      // 업로드가 끝나면 발행 현황이 바뀌어야 해서 방송과 같은 주기로 다시 읽는다. 못 읽으면 지난 값을 둔다
+      const [loaded, entries] = await Promise.all([
+        loadHome(Date.now()),
+        fetchLibraryAll().catch(() => null),
+      ]);
       if (stopped) return;
+      if (entries !== null) setLibrary(entries);
       // 못 읽었으면 지난 화면을 그대로 둔다. 첫 읽기부터 실패면 다음 주기까지 「불러오는 중」
       if (loaded === null) return;
       setData(loaded);
@@ -386,17 +372,85 @@ export function useHomeMockState(): HomeMockState {
     };
   }, []);
 
+  const live =
+    data.live === null
+      ? null
+      : { ...data.live, completedClips: completedClipsOf(library, data.live.streamId) };
+
   return {
     userName: data.userName,
     greeting,
-    resumeDraft,
+    resumeDraft: library === null ? null : resumeDraftOf(library),
     resumeDismissed,
     dismissResume,
-    live: data.live,
+    live,
     vods: data.vods,
-    publishRows: [],
+    publishRows: library === null ? [] : publishRowsOf(library),
     expiringVods: data.expiringVods,
     recentCards: data.recentCards,
     loading,
   };
+}
+
+/** 이어서 편집 = 가장 최근에 고친 「편집 중」 편집본 하나 */
+function resumeDraftOf(entries: readonly LibraryEntry[]): ResumeDraft | null {
+  const editing = entries
+    .filter((e) => e.status === 'editing')
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0];
+  return editing === undefined
+    ? null
+    : {
+        title: `편집본 #${editing.recipeId}`,
+        meta: `방송 ${editing.streamId} · v${editing.recipeVersion} · ${new Date(editing.updatedAt).toLocaleString('ko-KR')} 고침`,
+        href: `/clips/editor/studio?recipe=${editing.recipeId}`,
+      };
+}
+
+const PUBLISH_LIMIT = 5;
+
+/**
+ * 발행 현황 = 유튜브에 올리는 중·확인 필요·올림인 편집본을 최근 업로드 순으로. 실패한 업로드는 편집본이 「완성」으로
+ * 돌아가 여기에 없다(보관함 패널이 사유를 말한다). 예약 발행은 아직 없다.
+ */
+function publishRowsOf(entries: readonly LibraryEntry[]): PublishRow[] {
+  const rows: (PublishRow & { at: number })[] = [];
+  for (const e of entries) {
+    const upload = e.latestClip?.upload;
+    if (upload == null) continue;
+    const status: PublishStatus | null =
+      e.status === 'uploading'
+        ? 'uploading'
+        : e.status === 'checking'
+          ? 'checking'
+          : e.status === 'uploaded'
+            ? 'published'
+            : null;
+    if (status === null) continue;
+    rows.push({
+      id: String(upload.id),
+      title: upload.title,
+      status,
+      at: Date.parse(upload.updatedAt),
+    });
+  }
+  return rows
+    .sort((a, b) => b.at - a.at)
+    .slice(0, PUBLISH_LIMIT)
+    .map(({ at: _at, ...row }) => row);
+}
+
+/** 라이브 방송에서 영상까지 만든 편집본 수(완성 뒤 올리는 중·올림도 센다) */
+function completedClipsOf(
+  entries: readonly LibraryEntry[] | null,
+  streamId: string,
+): number | null {
+  if (entries === null) return null;
+  return entries.filter(
+    (e) =>
+      e.streamId === streamId &&
+      (e.status === 'rendered' ||
+        e.status === 'uploading' ||
+        e.status === 'checking' ||
+        e.status === 'uploaded'),
+  ).length;
 }

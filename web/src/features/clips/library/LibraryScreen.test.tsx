@@ -7,6 +7,8 @@ import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
 import { LibraryScreen } from './LibraryScreen';
 import { LIBRARY_FIXTURE } from './libraryFixture';
+import type { ClipSnapshot, LibraryStatus } from '@/api/clipEditor';
+import { toLibraryClip } from './useLibraryMockState';
 
 function cards() {
   return within(screen.getByRole('list', { name: '편집본 목록' })).getAllByRole('button');
@@ -619,5 +621,112 @@ describe('LibraryScreen — 서버 편집본', () => {
 
     await user.click(await screen.findByRole('button', { name: /^편집본 #12/ }));
     expect(within(panel()).getByRole('button', { name: '삭제' })).toBeDisabled();
+  });
+});
+
+describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', () => {
+  const NOW = new Date('2026-09-20T12:00:00Z');
+  const rendered: ClipSnapshot = {
+    id: 5,
+    streamId: 's1',
+    recipeId: 12,
+    recipeVersion: 2,
+    requestedBy: '9',
+    status: 'rendered',
+    progress: null,
+    outputs: [{ outputId: 'o1', kind: 'video', s3Key: 'k' }],
+    error: null,
+    createdAt: '2026-09-20T11:00:00Z',
+    updatedAt: '2026-09-20T12:00:00Z',
+    upload: null,
+  };
+  function serverClip(status: LibraryStatus, latestClip: ClipSnapshot | null = rendered) {
+    return toLibraryClip(
+      {
+        recipeId: 12,
+        streamId: 's1',
+        creatorId: '9',
+        recipeVersion: 2,
+        cut: { inAtMs: 0, outAtMs: 30_000 },
+        status,
+        broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+        latestClip,
+        createdAt: '2026-09-20T11:00:00Z',
+        updatedAt: '2026-09-20T12:00:00Z',
+      },
+      '9',
+    );
+  }
+  function show(clip: ReturnType<typeof serverClip>, role: 'streamer' | 'editor' = 'streamer') {
+    renderWithProviders(<LibraryScreen clips={[clip]} selectedId="12" now={NOW} role={role} />);
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('완성본은 편집자에게도 「업로드」다', () => {
+    show(serverClip('rendered'), 'editor');
+    expect(within(panel()).getByRole('button', { name: '업로드' })).toBeEnabled();
+  });
+
+  it('올리는 중에는 누를 수 없고 제목도 잠긴다', () => {
+    show(serverClip('uploading'));
+    expect(within(panel()).getByRole('button', { name: '유튜브에 올리는 중' })).toBeDisabled();
+    expect(within(panel()).queryByRole('button', { name: '업로드' })).toBeNull();
+    expect(within(panel()).getByRole('textbox')).toHaveAttribute('readonly');
+  });
+
+  it('확인 필요는 다시 올리기를 막고 채널을 보라고 한다', () => {
+    show(serverClip('checking'));
+    expect(within(panel()).getByRole('button', { name: '업로드 확인 필요' })).toBeDisabled();
+    expect(within(panel()).getByText(/유튜브 스튜디오에서 비공개 영상을 확인/)).toBeInTheDocument();
+  });
+
+  it('연동이 끊겨 실패한 업로드는 채널 연동으로 안내하고 다시 올릴 수 있다', () => {
+    show(
+      serverClip('rendered', {
+        ...rendered,
+        upload: {
+          id: 7,
+          clipId: 5,
+          outputId: 'o1',
+          title: '보스 막타',
+          status: 'failed',
+          videoId: null,
+          error: { code: 'YOUTUBE_UNLINKED', message: null },
+          requestedBy: '9',
+          createdAt: '2026-09-20T12:00:00Z',
+          updatedAt: '2026-09-20T12:01:00Z',
+        },
+      }),
+    );
+    expect(within(panel()).getByText(/설정 › 채널 연동에서 다시 연결/)).toBeInTheDocument();
+    expect(within(panel()).getByRole('button', { name: '업로드' })).toBeEnabled();
+  });
+
+  it('미리보기를 누르면 완성 영상을 그 자리에서 튼다', async () => {
+    const user = userEvent.setup();
+    stubFetch(() =>
+      jsonResponse(200, {
+        clipId: 5,
+        expiresAt: '2026-09-20T13:00:00Z',
+        files: [
+          { outputId: 'o1', kind: 'video', fileName: 'a.mp4', url: 'https://s3.example/a.mp4' },
+        ],
+      }),
+    );
+    show(serverClip('rendered'));
+
+    await user.click(within(panel()).getByRole('button', { name: '미리보기 재생' }));
+
+    const video = await within(panel()).findByLabelText('선택한 편집본 미리보기');
+    expect(video.tagName).toBe('VIDEO');
+    expect(video).toHaveAttribute('src', 'https://s3.example/a.mp4');
+  });
+
+  it('영상이 없는 편집본은 미리보기가 장식이다', () => {
+    show(serverClip('editing', null));
+    expect(within(panel()).queryByRole('button', { name: '미리보기 재생' })).toBeNull();
   });
 });
