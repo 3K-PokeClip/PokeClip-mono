@@ -30,7 +30,7 @@ import java.util.Map;
  *
  * <p><b>방송의 시간 안 첫 조각을 쓴다.</b> 장부의 {@code stream_id}는 지금 스트림키라(POK-233 전) 같은 스트리머의 다른 방송 조각도
  * 같은 이름으로 쌓이고, {@code start_pts_ms}는 방송을 넘어 계속 커진다(media가 마지막 행에서 이어 받는다). 그래서 앞 방송 꼬리 조각이
- * 섞이지 않게 <b>시작 편지 앞 2분 이후의 첫 조각</b>(seq 순)을 쓴다. 지금은 스트림키당 방송 줄이 하나라(clip
+ * 섞이지 않게 <b>시작 편지 앞 2분 이후의 첫 조각</b>(seq 순)을 쓴다. 시작 시각을 모르면 재지 않는다. 지금은 스트림키당 방송 줄이 하나라(clip
  * {@code broadcasts.stream_id} UNIQUE) 섞일 일이 없지만, POK-233(회차 번호) 때 {@code session_id}로 바꿔야 한다. 조각이 없으면
  * 기준점도 없다({@code null}): 지어내지 않는다. 화면은 그때 방송 시작 시각으로 대신한다.
  *
@@ -74,9 +74,13 @@ public class TimelineOriginReader {
         this.jdbc = jdbc;
     }
 
-    /** @return 방송 번호 → 기준점. 조각이 없는 방송은 맵에 없다 */
-    public Map<String, Instant> originsOf(List<Broadcast> broadcasts) {
+    /**
+     * @return 방송 번호 → 기준점. 조각이 없는 방송과 <b>시작 시각을 모르는 방송</b>(종료 편지가 먼저 온 자리표시)은 맵에 없다.
+     *         시작 시각이 없으면 아래 경계가 없어 같은 키의 앞 방송 조각이 첫 조각으로 뽑힌다(PR #202 codex)
+     */
+    public Map<String, Instant> originsOf(List<Broadcast> page) {
         Map<String, Instant> origins = new HashMap<>();
+        List<Broadcast> broadcasts = page.stream().filter(b -> b.getStartedAt() != null).toList();
         if (broadcasts.isEmpty()) {
             return origins;
         }
@@ -86,7 +90,7 @@ public class TimelineOriginReader {
         for (int i = 0; i < broadcasts.size(); i++) {
             Broadcast b = broadcasts.get(i);
             ids[i] = b.getStreamId();
-            lows[i] = b.getStartedAt() == null ? null : Timestamp.from(b.getStartedAt().minus(BEFORE_START));
+            lows[i] = Timestamp.from(b.getStartedAt().minus(BEFORE_START));
             highs[i] = b.getEndedAt() == null ? null : Timestamp.from(b.getEndedAt().plus(AFTER_END));
         }
         jdbc.query(con -> {

@@ -530,6 +530,24 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
     }
 
     /**
+     * 종료 편지가 먼저 와 시작 시각을 모르는 방송은 기준점을 안 잰다. 아래 경계가 없으면 같은 키의 <b>앞 방송 조각</b>이 첫 조각으로
+     * 뽑혀 남의 회차 기준점이 나간다(PR #202 codex).
+     */
+    @Test
+    void 시작_시각을_모르는_방송은_기준점을_안_잰다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-placeholder", TestIds.STREAMER, "ended", null, 시작_시각, 시작_시각.plus(육십일));
+        // 하루 전 방송의 조각 — 종료 편지보다 앞이라 위 경계에는 안 걸린다
+        조각을_넣는다("s-placeholder", 1, 0, 시작_시각.minusSeconds(86_400), 시작_시각.minusSeconds(86_400));
+
+        String 본문 = 본문(목록("?state=past").andExpect(status().isOk()));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> 한_줄 = ((java.util.List<Map<String, Object>>) 맵(본문).get("broadcasts")).get(0);
+        assertThat(한_줄).containsKey("timelineOriginAt");
+        assertThat(한_줄.get("timelineOriginAt")).isNull();
+    }
+
+    /**
      * 협상에 실패하면 상태 코드가 <b>500으로 둔갑한다</b> — POK-118이 이 자리에서 실제로 덴
      * 사고다. 세 갈래를 한 번에 보는 것은 {@code json} 하나가 셋의 공통 출구여서다.
      */
