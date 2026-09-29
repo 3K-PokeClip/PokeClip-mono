@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ExternalLink, Play, Trash2, X } from 'lucide-react';
-import { Badge, Button, IconButton, LinkButton, VisuallyHidden } from '@/ui';
+import { Badge, Button, IconButton, LinkButton, VisuallyHidden, useToast } from '@/ui';
 import { ddayFor } from '@/features/broadcast/vod/vodListView';
 import { InlineTitleInput } from './InlineTitleInput';
 import {
@@ -302,6 +302,7 @@ function PreviewPlayer({
   load: () => Promise<string | null>;
   duration: string | null;
 }) {
+  const { toast } = useToast();
   const [url, setUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const alive = useRef(true);
@@ -323,7 +324,14 @@ function PreviewPlayer({
           playsInline
           aria-label="선택한 편집본 미리보기"
           // 주소는 60분짜리다. 만료(403) 등으로 못 읽으면 재생 단추로 돌아가 누를 때 새 주소를 받는다
-          onError={() => setUrl(null)}
+          onError={() => {
+            setUrl(null);
+            toast({
+              tone: 'error',
+              title: '미리보기를 틀지 못했어요',
+              description: '다시 누르면 새 주소로 틀어요. 계속 안 되면 다운로드로 받아 보세요.',
+            });
+          }}
         />
       </div>
     );

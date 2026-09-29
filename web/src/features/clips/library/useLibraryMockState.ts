@@ -306,7 +306,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
         if (sending.current.has(id)) return;
         setSendingFlag(id, true);
         requestUpload(entry.streamId, clipId, { title: clip.title.trim() })
-          .then((snap) => {
+          .then(({ created, upload: snap }) => {
             titleDrafts.current.delete(id);
             listGeneration.current += 1;
             // 다음 읽기(폴링)를 기다리지 않고 받은 업로드로 바로 옮긴다 — 그사이 단추가 다시 「업로드」로 돌아오지 않게
@@ -317,11 +317,19 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
                   : c,
               ),
             );
-            toast({
-              tone: 'success',
-              title: '유튜브 업로드를 시작했어요',
-              description: '스트리머 채널에 비공개로 올라가요. 끝나면 여기 상태가 바뀌어요.',
-            });
+            toast(
+              created
+                ? {
+                    tone: 'success',
+                    title: '유튜브 업로드를 시작했어요',
+                    description: '스트리머 채널에 비공개로 올라가요. 끝나면 여기 상태가 바뀌어요.',
+                  }
+                : {
+                    tone: 'info',
+                    title: '이미 올린 업로드가 있어요',
+                    description: `같은 영상이 「${snap.title}」 제목으로 먼저 주문돼 있어요.`,
+                  },
+            );
           })
           .catch((e: unknown) => {
             toast({ tone: 'error', title: '업로드 주문 실패', description: uploadErrorMessage(e) });
@@ -478,8 +486,16 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
   };
 }
 
-function withDraft(clip: LibraryClip, drafts: ReadonlyMap<string, string>): LibraryClip {
+/**
+ * 고친 제목(초안)을 다시 읽은 줄에 얹는다. 올릴 수 있는(완성) 편집본에만 — 그 밖의 상태는 제목이 잠겨 있고, 다른 기기에서
+ * 올렸으면 서버의 업로드 제목이 정본이다(초안을 얹으면 유튜브에 없는 제목이 보인다).
+ */
+function withDraft(clip: LibraryClip, drafts: Map<string, string>): LibraryClip {
   const draft = drafts.get(clip.id);
+  if (draft !== undefined && clip.entry?.status !== 'rendered') {
+    drafts.delete(clip.id);
+    return clip;
+  }
   return draft === undefined ? clip : { ...clip, title: draft };
 }
 

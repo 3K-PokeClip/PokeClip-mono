@@ -778,6 +778,25 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     expect(within(panel()).getByRole('button', { name: '업로드' })).toBeDisabled();
   });
 
+  it('영상을 못 틀면 까닭을 알린다 — 단추만 조용히 돌아오지 않는다', async () => {
+    const user = userEvent.setup();
+    stubFetch(() =>
+      jsonResponse(200, {
+        clipId: 5,
+        expiresAt: '2026-09-20T13:00:00Z',
+        files: [
+          { outputId: 'o1', kind: 'video', fileName: 'a.mp4', url: 'https://s3.example/a.mp4' },
+        ],
+      }),
+    );
+    show(serverClip('rendered'));
+
+    await user.click(within(panel()).getByRole('button', { name: '미리보기 재생' }));
+    fireEvent.error(await within(panel()).findByLabelText('선택한 편집본 미리보기'));
+
+    expect(await screen.findByText('미리보기를 틀지 못했어요')).toBeInTheDocument();
+  });
+
   it('영상이 없는 편집본은 미리보기가 장식이다', () => {
     show(serverClip('editing', null));
     expect(within(panel()).queryByRole('button', { name: '미리보기 재생' })).toBeNull();

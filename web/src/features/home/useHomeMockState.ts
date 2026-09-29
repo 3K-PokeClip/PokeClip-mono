@@ -441,18 +441,16 @@ function publishRowsOf(entries: readonly LibraryEntry[]): PublishRow[] {
     .map(({ at: _at, ...row }) => row);
 }
 
-/** 라이브 방송에서 영상까지 만든 편집본 수(완성 뒤 올리는 중·올림도 센다) */
+/**
+ * 라이브 방송에서 영상까지 만든 편집본 수. 편집본 상태가 아니라 <b>가장 최근 영상이 완성인가</b>로 센다: 영상을 만든 뒤 새 판을
+ * 저장만 하면 편집본은 「편집 중」이지만 만든 영상은 그대로 있다(발행 현황과 같은 기준). 새 판을 다시 만드는 중이면 목록 줄이
+ * 그 영상을 가리켜 세지 않는다(보관함 목록은 편집본마다 영상 하나만 준다).
+ */
 function completedClipsOf(
   entries: readonly LibraryEntry[] | null,
   streamId: string,
 ): number | null {
   if (entries === null) return null;
-  return entries.filter(
-    (e) =>
-      e.streamId === streamId &&
-      (e.status === 'rendered' ||
-        e.status === 'uploading' ||
-        e.status === 'checking' ||
-        e.status === 'uploaded'),
-  ).length;
+  return entries.filter((e) => e.streamId === streamId && e.latestClip?.status === 'rendered')
+    .length;
 }

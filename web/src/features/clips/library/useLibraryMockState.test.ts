@@ -243,7 +243,7 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
     outputId: 'o1',
     title: '보스 막타',
     status: 'queued',
-    videoId: null,
+    videoId: null as string | null,
     error: null,
     requestedBy: '9',
     createdAt: '2026-09-20T12:00:00Z',
@@ -329,6 +329,52 @@ describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', 
     await act(async () => lateList(jsonResponse(200, {})));
     await act(async () => {});
     expect(result.current.clips[0]?.entry?.status).toBe('uploading');
+  });
+
+  it('이미 살아 있는 업로드를 돌려받으면(200) 새로 시작했다고 말하지 않는다', async () => {
+    serve(() =>
+      jsonResponse(200, {
+        ...uploadReply,
+        title: '먼저 올린 제목',
+        status: 'uploaded',
+        videoId: 'v1',
+      }),
+    );
+    const { result } = await mount();
+
+    act(() => result.current.renameClip('12', '내가 친 제목'));
+    act(() => result.current.upload('12'));
+    await vi.waitFor(() => expect(result.current.clips[0]?.entry?.status).toBe('uploaded'));
+
+    expect(result.current.clips[0]?.title).toBe('먼저 올린 제목');
+    expect(document.body.textContent).toContain('이미 올린 업로드가 있어요');
+    expect(document.body.textContent).not.toContain('유튜브 업로드를 시작했어요');
+  });
+
+  it('남은 제목 초안은 완성(올릴 수 있는) 편집본에만 얹는다 — 올린 뒤에는 서버 제목이 정본', async () => {
+    let status = 'rendered';
+    let upload: typeof uploadReply | null = null;
+    stubFetch((url, init) => {
+      if (init?.method === 'POST') return jsonResponse(503, { error: 'upload_unavailable' });
+      return url.startsWith('/api/clip/library')
+        ? jsonResponse(200, {
+            items: [{ ...libraryEntry, status, latestClip: { ...rendered, upload } }],
+            nextCursor: null,
+          })
+        : jsonResponse(200, { id: 9 });
+    });
+    const { result } = await mount();
+
+    act(() => result.current.renameClip('12', '실패한 초안'));
+    act(() => result.current.upload('12'));
+    await vi.waitFor(() => expect(result.current.sendingIds.size).toBe(0));
+
+    // 그사이 다른 기기에서 다른 제목으로 올렸다
+    status = 'uploaded';
+    upload = { ...uploadReply, title: '다른 기기 제목', status: 'uploaded', videoId: 'v2' };
+    act(() => result.current.refresh());
+    await vi.waitFor(() => expect(result.current.clips[0]?.entry?.status).toBe('uploaded'));
+    expect(result.current.clips[0]?.title).toBe('다른 기기 제목');
   });
 
   it('규칙에 안 맞는 제목은 보내지 않는다', async () => {

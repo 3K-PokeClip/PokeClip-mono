@@ -365,16 +365,17 @@ export function fetchClip(streamId: string, clipId: number): Promise<ClipSnapsho
  * 400 invalid_request(field) · 409 clip_not_rendered · 503 upload_unavailable/authorization_unavailable.
  * 방송 주인(스트리머)의 채널에 비공개로 올라간다.
  */
-export function requestUpload(
+export async function requestUpload(
   streamId: string,
   clipId: number,
   body: { title: string; outputId?: string },
-): Promise<UploadSnapshot> {
-  return sendJson(
-    'POST',
+): Promise<{ created: boolean; upload: UploadSnapshot }> {
+  const res = await clipFetch(
     `/api/clip/broadcasts/${encodeURIComponent(streamId)}/clips/${clipId}/uploads`,
-    body,
+    { method: 'POST', body: JSON.stringify(body) },
   );
+  // 200이면 보낸 제목이 아니라 먼저 주문된 업로드다 — 부른 쪽이 「새로 시작했다」고 말하지 않게 가른다
+  return { created: res.status === 201, upload: (await res.json()) as UploadSnapshot };
 }
 
 /** 완성 영상 파일 주소(POK-220). url은 60분짜리 서명 주소라 재생·내려받기에 같이 쓴다. 만료(403)면 다시 부른다 */

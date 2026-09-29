@@ -140,12 +140,34 @@ describe('HomeScreen', () => {
       endedAt: null,
       vodExpiresAt: null,
     };
+    const renderedClip = {
+      id: 1,
+      streamId: 'stream-1',
+      recipeId: 13,
+      recipeVersion: 3,
+      requestedBy: '1',
+      status: 'rendered',
+      progress: null,
+      outputs: [],
+      error: null,
+      createdAt: '2026-09-26T10:00:00Z',
+      updatedAt: '2026-09-26T10:00:00Z',
+      upload: null,
+    };
     const items = [
       EDITING_ENTRY,
-      { ...EDITING_ENTRY, recipeId: 13, status: 'rendered' },
-      { ...EDITING_ENTRY, recipeId: 14, status: 'uploaded' },
+      // 영상을 만든 뒤 새 판을 저장만 한 편집본 — 만든 영상은 그대로 있다
+      { ...EDITING_ENTRY, recipeId: 17, status: 'editing', latestClip: renderedClip },
+      { ...EDITING_ENTRY, recipeId: 13, status: 'rendered', latestClip: renderedClip },
+      { ...EDITING_ENTRY, recipeId: 14, status: 'uploaded', latestClip: renderedClip },
       { ...EDITING_ENTRY, recipeId: 15, status: 'failed' },
-      { ...EDITING_ENTRY, recipeId: 16, status: 'rendered', streamId: 'other' },
+      {
+        ...EDITING_ENTRY,
+        recipeId: 16,
+        status: 'rendered',
+        streamId: 'other',
+        latestClip: renderedClip,
+      },
     ];
     vi.stubGlobal(
       'fetch',
@@ -169,7 +191,7 @@ describe('HomeScreen', () => {
     render(<HomeScreen />);
 
     expect(
-      await screen.findByText((_, el) => el?.textContent === '감지된 카드 0 · 클립 완료 2'),
+      await screen.findByText((_, el) => el?.textContent === '감지된 카드 0 · 클립 완료 3'),
     ).toBeInTheDocument();
   });
 
