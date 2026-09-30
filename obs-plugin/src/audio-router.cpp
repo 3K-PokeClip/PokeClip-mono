@@ -12,6 +12,7 @@
 #include <util/config-file.h>
 #include <util/dstr.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -121,6 +122,19 @@ std::vector<AudioSourceInfo> Enumerate(const MonitoringPending &monitoring)
 			ctx.out.push_back(Describe(s, ctx.channels, 0, monitoring));
 	}
 	return ctx.out;
+}
+
+// 전역 장치는 장면 컬렉션마다 따로 저장된다(컬렉션 JSON의 DesktopAudioDevice1·AuxAudioDevice1 — 트랙 체크도 따로).
+// 원래 체크 백업만 컬렉션으로 나눈다. uuid 소스는 이미 전역에서 유일하다.
+void ScopeBackupKeys(std::vector<AudioSourceInfo> &sources)
+{
+	char *name = obs_frontend_get_current_scene_collection();
+	std::string collection = name ? name : "";
+	bfree(name);
+	for (AudioSourceInfo &s : sources) {
+		if (s.key.rfind("ch:", 0) == 0)
+			s.backupKey = s.key + "@" + collection;
+	}
 }
 
 // 새 참조를 돌려준다.
@@ -280,6 +294,7 @@ void AudioRouter::Reconcile(const char *reason)
 		monitoring = monitoringPending_;
 	}
 	std::vector<AudioSourceInfo> sources = Enumerate(monitoring);
+	ScopeBackupKeys(sources);
 	SettleMonitoring(monitoring);
 
 	auto apply = [&](const std::vector<MixerWrite> &writes) {
@@ -298,24 +313,38 @@ void AudioRouter::Reconcile(const char *reason)
 		applying_ = false;
 	};
 
-	// 원래 체크 되돌리기. ① 새로 본방 트랙이 된 트랙 — 자동 배정이 스템으로 바꿔 놨다면 시청자가 들을 믹스가
-	// 소스 하나뿐이다. 방송이 막 시작하는 참이어도 곧바로. ② 자동 배정을 껐거나 연결을 해제했다 — 트랙 2~6
-	// (본방 트랙 제외) 전부. 방송·녹화 중이면 지금 나가는 트랙이 바뀌므로 끝날 때까지 미룬다.
-	// 다 되돌리면 기억을 비운다 — 다시 켜면 그때의 체크를 새로 남긴다.
+	// 원래 체크 오가기 — 모두 지금 불러온 소스만. 다른 장면 컬렉션의 소스는 돌아올 때 맞춘다.
+	// ① 본방 트랙이 바뀐 만큼: 새로 본방 트랙이 된 트랙은 원래 체크로(자동 배정이 스템으로 바꿔 놨다면 시청자가
+	//    들을 믹스가 소스 하나뿐이다 — 방송이 막 시작하는 참이어도 곧바로), 본방에서 빠지는 트랙은 그동안
+	//    스트리머가 짠 체크를 원래 값으로 옮겨 둔다.
+	// ② 자동 배정을 껐거나 연결을 해제했다: 트랙 2~6(본방 트랙 제외) 전부. 방송·녹화 중이면 지금 나가는 트랙이
+	//    바뀌므로 끝날 때까지 미룬다. 되돌린 소스의 기억은 지운다 — 다시 켜면 그때의 체크를 새로 남긴다.
 	std::vector<AudioMixerBackup> backup = config.audioMixerBackup;
-	uint32_t newlyReserved = reserved & ~config.audioReservedMask;
-	bool restoreAll = !wanted && !backup.empty() && !locked;
-	uint32_t restoreBits = newlyReserved | (restoreAll ? (kStemMask & ~reserved) : 0u);
-	if (restoreBits != 0 && !backup.empty()) {
-		std::vector<MixerWrite> writes = RestoreWrites(sources, backup, restoreBits);
+	ReservedSync sync = SyncReservedTracks(sources, backup, reserved);
+	apply(sync.writes);
+	backup = sync.backupNext;
+	if (!sync.writes.empty())
+		obs_log(LOG_INFO, "audio routing: restored original main-stream track checks for %zu source(s)",
+			sync.writes.size());
+
+	std::set<std::string> present;
+	for (const AudioSourceInfo &s : sources)
+		present.insert(s.BackupKey());
+	bool presentBackup = std::any_of(backup.begin(), backup.end(),
+					 [&](const AudioMixerBackup &b) { return present.count(b.key) != 0; });
+	if (!wanted && presentBackup && !locked) {
+		std::vector<MixerWrite> writes = RestoreWrites(sources, backup, kStemMask & ~reserved);
 		apply(writes);
 		if (!writes.empty())
-			obs_log(LOG_INFO, "audio routing: restored original track checks for %zu source(s) (%s)",
-				writes.size(), restoreAll ? "auto-assign off" : "new main-stream track");
+			obs_log(LOG_INFO,
+				"audio routing: restored original track checks for %zu source(s) (auto-assign off)",
+				writes.size());
+		backup.erase(std::remove_if(backup.begin(), backup.end(),
+					    [&](const AudioMixerBackup &b) { return present.count(b.key) != 0; }),
+			     backup.end());
+		presentBackup = false;
 	}
-	if (restoreAll)
-		backup.clear();
-	bool restorePending = !wanted && !backup.empty();
+	bool restorePending = !wanted && presentBackup;
 
 	int overflow = 0;
 	std::vector<AudioTrackMapEntry> mapNext = config.audioTrackMap;
@@ -334,12 +363,10 @@ void AudioRouter::Reconcile(const char *reason)
 		backup = r.backupNext;
 		overflow = static_cast<int>(r.overflowKeys.size());
 	}
-	if (!(mapNext == config.audioTrackMap) || !(backup == config.audioMixerBackup) ||
-	    reserved != config.audioReservedMask)
+	if (!(mapNext == config.audioTrackMap) || !(backup == config.audioMixerBackup))
 		ConfigStore::Instance().Update([&](PluginConfig &c) {
 			c.audioTrackMap = mapNext;
 			c.audioMixerBackup = backup;
-			c.audioReservedMask = reserved;
 		});
 
 	if ((deferred || restorePending) && !deferRetryArmed_) {

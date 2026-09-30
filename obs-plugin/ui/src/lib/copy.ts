@@ -49,6 +49,7 @@ export const REASON: Record<string, string> = {
   mark_no_broadcast: 'PokeClip이 아직 이 방송을 찾지 못했어요.',
   mark_not_ready: '녹화가 막 시작돼 아직 표시할 자리가 없어요.',
   mark_expired: '10분 동안 보내지 못해 표시를 버렸어요.',
+  mark_rate_limited: 'PokeClip 서버가 잠시 표시를 받지 않아요.',
   mark_insecure: 'API 주소가 https가 아니라 표시를 보내지 않았어요. 설정 파일의 api_base를 https로 바꾸세요.',
   // 독 전용 — 브리지 요청 자체가 실패했다(플러그인이 멈췄거나 연결이 끊겼다)
   bridge_unreachable: '플러그인과 연결이 끊겨 표시하지 못했어요. OBS를 다시 시작하세요.',

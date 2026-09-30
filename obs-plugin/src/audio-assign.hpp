@@ -46,8 +46,12 @@ struct AudioSourceInfo {
 	bool audioActive = false; // 오디오를 넘긴다 (obs_source_audio_active — 기본 참, 브라우저 등이 스스로 끈다)
 	bool monitorOnly = false; // 모니터 전용 — 믹스에 안 들어간다
 	bool showing = false;     // 지금 방송 화면(프로그램)에 나온다 (obs_source_active) — 전역 장치는 늘 참
+	// 원래 체크 백업의 열쇠. 비우면 key. 전역 장치는 장면 컬렉션마다 따로 저장되므로(트랙 체크도 다르다)
+	// "ch:3@<컬렉션>"처럼 나눈다 — 배정 기억(key)은 컬렉션을 넘어 같은 트랙을 쓰려고 나누지 않는다.
+	std::string backupKey;
 
 	bool Candidate() const { return audioActive && !monitorOnly; }
+	const std::string &BackupKey() const { return backupKey.empty() ? key : backupKey; }
 };
 
 struct AudioTrackMapEntry {
@@ -62,9 +66,12 @@ struct AudioTrackMapEntry {
 
 // 자동 배정이 처음 트랙 2~6을 쓰기 전의 체크(스트리머가 짜 둔 것). 자동 배정을 끄거나 연결을 해제하면,
 // 또 어떤 트랙이 본방 트랙이 되면 그 트랙을 이 값으로 되돌린다 — 자동 배정이 스트리머의 구성을 지우지 않게.
+// 소스마다 따로 둔다 — 장면 컬렉션을 오가도 그때 없던 소스는 돌아올 때 맞춘다.
 struct AudioMixerBackup {
-	std::string key;
+	std::string key; // AudioSourceInfo::BackupKey()
 	uint32_t mixers = 0;
+	// 이 소스에서 본방 트랙으로 맞춰 둔(=스트리머 몫인) 트랙 비트. 본방 트랙이 바뀌면 이것과 비교해 오간다.
+	uint32_t restored = 0;
 
 	bool operator==(const AudioMixerBackup &) const = default;
 };
@@ -106,6 +113,18 @@ uint32_t RestoredMixers(uint32_t current, uint32_t original, uint32_t bits);
 // 지금 있는 소스 가운데 원래 체크가 남아 있는 것을 bits만큼 되돌리는 쓰기. 지금 비트와 같으면 뺀다.
 std::vector<MixerWrite> RestoreWrites(const std::vector<AudioSourceInfo> &sources,
 				      const std::vector<AudioMixerBackup> &backup, uint32_t bits);
+
+struct ReservedSync {
+	std::vector<MixerWrite> writes;
+	std::vector<AudioMixerBackup> backupNext;
+	bool backupChanged = false;
+};
+
+// 본방 트랙이 바뀐 만큼 지금 있는 소스의 원래 체크를 오간다. 새로 본방 트랙이 된 비트는 원래 값으로 되돌리고
+// (자동 배정이 스템으로 바꿔 놨으면 시청자가 소스 하나만 듣는다), 본방에서 빠지는 비트는 지금 값 — 그동안 스트리머가
+// 짠 믹스 — 을 원래 값으로 옮겨 둔다(곧 자동 배정이 스템으로 덮는다). 없는 소스는 돌아올 때 맞춘다.
+ReservedSync SyncReservedTracks(const std::vector<AudioSourceInfo> &sources,
+				const std::vector<AudioMixerBackup> &backup, uint32_t reserved);
 
 struct AudioSourceView {
 	std::string name;

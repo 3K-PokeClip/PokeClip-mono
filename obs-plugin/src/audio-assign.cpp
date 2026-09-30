@@ -111,14 +111,45 @@ std::vector<MixerWrite> RestoreWrites(const std::vector<AudioSourceInfo> &source
 	std::vector<MixerWrite> writes;
 	std::set<std::string> seen;
 	for (const AudioSourceInfo &s : sources) {
-		auto it = original.find(s.key);
-		if (it == original.end() || !seen.insert(s.key).second)
+		auto it = original.find(s.BackupKey());
+		if (it == original.end() || !seen.insert(s.BackupKey()).second)
 			continue;
 		uint32_t restored = RestoredMixers(s.mixers, it->second, bits);
 		if (restored != s.mixers)
 			writes.push_back({s.key, restored});
 	}
 	return writes;
+}
+
+ReservedSync SyncReservedTracks(const std::vector<AudioSourceInfo> &sources,
+				const std::vector<AudioMixerBackup> &backup, uint32_t reserved)
+{
+	ReservedSync r;
+	r.backupNext = backup;
+	reserved &= kStemMask;
+	std::map<std::string, size_t> index;
+	for (size_t i = 0; i < r.backupNext.size(); i++)
+		index.emplace(r.backupNext[i].key, i);
+	std::set<std::string> seen;
+	for (const AudioSourceInfo &s : sources) {
+		auto it = index.find(s.BackupKey());
+		if (it == index.end() || !seen.insert(s.BackupKey()).second)
+			continue;
+		AudioMixerBackup &b = r.backupNext[it->second];
+		uint32_t entering = reserved & ~b.restored;
+		uint32_t leaving = b.restored & ~reserved & kStemMask;
+		AudioMixerBackup next = b;
+		next.mixers = RestoredMixers(b.mixers, s.mixers, leaving);
+		next.restored = reserved;
+		uint32_t restored = RestoredMixers(s.mixers, b.mixers, entering);
+		if (restored != s.mixers)
+			r.writes.push_back({s.key, restored});
+		if (!(next == b)) {
+			b = next;
+			r.backupChanged = true;
+		}
+	}
+	return r;
 }
 
 AssignmentResult ComputeAssignment(const AssignmentInput &in)
@@ -280,19 +311,24 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 	}
 
 	// 5-1. 처음 쓰는 소스는 쓰기 전 체크를 남긴다 — 쓴 적 없는 소스의 지금 비트가 곧 스트리머가 짠 원래 값이다.
+	//      본방 트랙 비트는 쓰지 않으므로 그 자리에서 스트리머 몫으로 친다(restored).
 	r.backupNext = in.backup;
 	std::set<std::string> backedUp;
 	for (const AudioMixerBackup &b : r.backupNext)
 		backedUp.insert(b.key);
+	std::set<std::string> presentBackupKeys;
+	for (const AudioSourceInfo &s : in.sources)
+		presentBackupKeys.insert(s.BackupKey());
 	for (const MixerWrite &w : r.writes) {
-		if (backedUp.insert(w.key).second) {
-			r.backupNext.push_back({w.key, in.sources[sourceIndex.at(w.key)].mixers});
+		const AudioSourceInfo &s = in.sources[sourceIndex.at(w.key)];
+		if (backedUp.insert(s.BackupKey()).second) {
+			r.backupNext.push_back({s.BackupKey(), s.mixers, in.reserved & kStemMask});
 			r.backupChanged = true;
 		}
 	}
 	// 상한 — 지금 없는 소스의 것부터(먼저 남긴 순) 버린다.
 	for (size_t i = 0; r.backupNext.size() > kMixerBackupCap && i < r.backupNext.size();) {
-		if (!sourceIndex.count(r.backupNext[i].key)) {
+		if (!presentBackupKeys.count(r.backupNext[i].key)) {
 			r.backupNext.erase(r.backupNext.begin() + static_cast<std::ptrdiff_t>(i));
 			r.backupChanged = true;
 		} else {

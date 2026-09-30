@@ -148,7 +148,8 @@ MarkVerdict ClassifyMarkResponse(bool transportOk, long status, const std::strin
 	case 408:
 		return {MarkOutcome::Retry, "network"};
 	case 429:
-		return {MarkOutcome::Retry, "rate_limited"};
+		// 페어링의 rate_limited(「1분 뒤 다시 시도하세요」)와 달리 자동으로 다시 보낸다 — 사유도 따로.
+		return {MarkOutcome::Retry, "mark_rate_limited"};
 	case 503:
 		if (has("timeline_not_ready"))
 			return {MarkOutcome::Retry, "mark_not_ready"}; // 첫 조각이 아직 없어 시각 기준점이 없다

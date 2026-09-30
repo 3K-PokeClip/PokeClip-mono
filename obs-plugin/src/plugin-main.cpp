@@ -184,7 +184,6 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		    std::string passphrase = c.passphrase;
 		    std::vector<AudioTrackMapEntry> trackMap = c.audioTrackMap;
 		    std::vector<AudioMixerBackup> mixerBackup = c.audioMixerBackup;
-		    uint32_t reservedMask = c.audioReservedMask;
 		    bool dockIntroShown = c.dockIntroShown;
 		    std::string markHotkey = c.markHotkey;
 		    c = next;
@@ -194,7 +193,6 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		    // 이 요청이 읽은 옛 값으로 덮지 않는다.
 		    c.audioTrackMap = std::move(trackMap);
 		    c.audioMixerBackup = std::move(mixerBackup);
-		    c.audioReservedMask = reservedMask;
 		    c.dockIntroShown = dockIntroShown;
 		    c.markHotkey = std::move(markHotkey);
 	    }))

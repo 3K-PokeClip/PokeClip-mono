@@ -48,10 +48,13 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	status_->setWordWrap(true);
 	checks_ = new QLabel(this);
 	checks_->setWordWrap(true);
+	// 소스 이름·단축키처럼 사용자가 정한 글자를 싣는다 — 태그처럼 보여도 HTML로 그리지 않는다.
 	audio_ = new QLabel(this);
 	audio_->setWordWrap(true);
+	audio_->setTextFormat(Qt::PlainText);
 	marks_ = new QLabel(this);
 	marks_->setWordWrap(true);
+	marks_->setTextFormat(Qt::PlainText);
 	mark_ = new QPushButton(Text("Mark.Button"), this);
 	message_ = new QLabel(this);
 	message_->setWordWrap(true);

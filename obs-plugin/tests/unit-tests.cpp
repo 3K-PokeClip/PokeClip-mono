@@ -403,6 +403,12 @@ uint32_t WriteOf(const AssignmentResult &r, const std::string &key, uint32_t unc
 	return unchanged;
 }
 
+// 쓰기가 없으면 빈 값 — 앞선 개수 검사가 실패해도 러너가 죽지 않고 요약까지 가게.
+MixerWrite FirstWrite(const std::vector<MixerWrite> &writes)
+{
+	return writes.empty() ? MixerWrite{} : writes[0];
+}
+
 bool MapHas(const AssignmentResult &r, const std::string &key)
 {
 	for (const AudioTrackMapEntry &e : r.mapNext) {
@@ -604,6 +610,61 @@ TEST(audio_backup_keeps_checks_from_before_first_write)
 	CHECK((r2.backupNext == r.backupNext));
 }
 
+// 본방 트랙이 바뀌면 소스마다 원래 체크를 오간다: 들어오는 트랙은 되돌리고, 빠지는 트랙은 그동안 스트리머가
+// 고친 체크를 원래 값으로 옮긴다 — 다시 본방 트랙이 되면 처음 스냅샷이 아니라 고친 값이 돌아온다.
+TEST(audio_reserved_sync_restores_entering_and_keeps_edits_of_leaving)
+{
+	std::vector<AudioSourceInfo> sources = {Src("uuid:bgm", "BGM", AudioKind::Media, 100, 0x05)};
+	std::vector<AudioMixerBackup> backup = {{"uuid:bgm", 0x3F, 0}};
+
+	ReservedSync on = SyncReservedTracks(sources, backup, 0x02); // VOD 트랙(트랙 2)을 켰다
+	CHECK_EQ(on.writes.size(), 1u);
+	CHECK_EQ(FirstWrite(on.writes).mixers, 0x07u); // 트랙 2를 원래대로(켜짐)
+	CHECK((on.backupNext[0] == AudioMixerBackup{"uuid:bgm", 0x3F, 0x02}));
+
+	sources[0].mixers = 0x05; // 스트리머가 VOD 트랙에서 BGM을 뺐다
+	ReservedSync off = SyncReservedTracks(sources, on.backupNext, 0x00); // VOD 트랙을 껐다
+	CHECK(off.writes.empty());
+	CHECK((off.backupNext[0] == AudioMixerBackup{"uuid:bgm", 0x3D, 0x00})); // 뺀 것을 원래 값으로
+
+	sources[0].mixers = 0x09;                                             // 그동안 자동 배정이 트랙 4 스템으로
+	ReservedSync again = SyncReservedTracks(sources, off.backupNext, 0x02); // 다시 VOD 트랙
+	CHECK(again.writes.empty()); // BGM은 VOD에 다시 실리지 않는다
+	CHECK_EQ(again.backupNext[0].restored, 0x02u);
+}
+
+// 그때 없던(다른 장면 컬렉션의) 소스는 건드리지 않고, 돌아왔을 때 맞춘다.
+TEST(audio_reserved_sync_waits_for_absent_source)
+{
+	std::vector<AudioMixerBackup> backup = {{"uuid:a", 0x3F, 0}, {"uuid:b", 0x3F, 0}};
+	std::vector<AudioSourceInfo> onlyA = {Src("uuid:a", "A", AudioKind::Media, 100, 0x05)};
+	ReservedSync first = SyncReservedTracks(onlyA, backup, 0x02);
+	CHECK_EQ(first.writes.size(), 1u);
+	CHECK_EQ(first.backupNext[1].restored, 0u); // B는 아직
+
+	std::vector<AudioSourceInfo> onlyB = {Src("uuid:b", "B", AudioKind::Media, 100, 0x09)};
+	ReservedSync later = SyncReservedTracks(onlyB, first.backupNext, 0x02);
+	CHECK_EQ(later.writes.size(), 1u);
+	CHECK_EQ(FirstWrite(later.writes).mixers, 0x0Bu);
+	CHECK_EQ(later.backupNext[1].restored, 0x02u);
+}
+
+// 전역 장치는 컬렉션마다 따로 저장된다 — 백업 열쇠를 나눠, 다른 컬렉션 마이크의 원래 체크를 쓰지 않는다.
+TEST(audio_backup_key_scopes_global_device_by_collection)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3, 0x3F)};
+	in.sources[0].backupKey = "ch:3@방송용";
+	in.backup = {{"ch:3@녹화용", 0x03, 0}};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(r.backupNext.size(), 2u);
+	CHECK((r.backupNext[1] == AudioMixerBackup{"ch:3@방송용", 0x3F, 0}));
+
+	std::vector<MixerWrite> writes = RestoreWrites(in.sources, {{"ch:3@녹화용", 0x03, 0}}, 0x3E);
+	CHECK(writes.empty());
+}
+
 TEST(audio_restore_puts_back_original_checks)
 {
 	CHECK_EQ(RestoredMixers(0x03, 0x2D, 0x3E), 0x2Du); // 트랙 2~6 전부
@@ -616,8 +677,8 @@ TEST(audio_restore_puts_back_original_checks)
 	std::vector<AudioMixerBackup> backup = {{"ch:3", 0x07}, {"uuid:game", 0x05}, {"uuid:gone", 0x3F}};
 	std::vector<MixerWrite> writes = RestoreWrites(sources, backup, 0x3E);
 	CHECK_EQ(writes.size(), 1u); // 게임은 이미 원래대로, 새 소스는 원래 값이 없다, 없는 소스는 건너뛴다
-	CHECK_EQ(writes[0].key, std::string("ch:3"));
-	CHECK_EQ(writes[0].mixers, 0x07u);
+	CHECK_EQ(FirstWrite(writes).key, std::string("ch:3"));
+	CHECK_EQ(FirstWrite(writes).mixers, 0x07u);
 }
 
 // 소리를 안 내는 소스(오디오를 넘기지 않는 브라우저 등)는 자리를 잡지 않고 스템 비트도 비운다.
@@ -899,7 +960,7 @@ TEST(mark_response_classification)
 		 "mark_no_broadcast"));
 	CHECK(is(ClassifyMarkResponse(true, 404, R"({"status":404,"error":"Not Found","path":"/api/clip/streams/x/marks"})"),
 		 MarkOutcome::Drop, "mark_unsupported"));
-	CHECK(is(ClassifyMarkResponse(true, 429, ""), MarkOutcome::Retry, "rate_limited"));
+	CHECK(is(ClassifyMarkResponse(true, 429, ""), MarkOutcome::Retry, "mark_rate_limited"));
 	CHECK(is(ClassifyMarkResponse(true, 503, R"({"reason":"timeline_not_ready"})"), MarkOutcome::Retry,
 		 "mark_not_ready"));
 	CHECK(is(ClassifyMarkResponse(true, 502, "<html>"), MarkOutcome::Retry, "server_error"));
