@@ -7,6 +7,7 @@ const LIST_POLL_MS = 60_000;
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
 import { fetchRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
+import { recordingTimeline } from '@/features/player/recordingTimeline';
 import { excludeLive, filterByPeriod } from './vodListView';
 
 // 시안 1f 지난 방송 목록의 상태. 목록은 clip `GET /api/clip/broadcasts`(POK-174·ADR-055)에서 온다(POK-251).
@@ -130,6 +131,12 @@ interface WireBroadcast {
   ingestStreamId?: string | null;
 }
 
+function isoMs(iso: string | null): number | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? null : t;
+}
+
 export function useVodListMockState(options: VodListOptions = {}): VodListMockState {
   const { toast } = useToast();
   const [filter, setFilter] = useState<VodPeriodFilter>('all');
@@ -177,7 +184,11 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
               if (cardCount !== null)
                 cache.set(b.streamId, {
                   cardCount,
-                  recorded: known?.recorded === true || spans.length > 0,
+                  // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 다른 방송의 녹화도 섞여 온다(POK-233) — 다시보기와 같은
+                  // 규칙(방송 시간과 겹치는 구간)으로 거른다. 안 거르면 녹화 없는 방송이 「다시 보기 가능」으로 올라 열면 빈 화면이다
+                  recorded:
+                    known?.recorded === true ||
+                    recordingTimeline(spans, isoMs(b.startedAt), isoMs(b.endedAt)) !== null,
                 });
             }),
         );
