@@ -20,6 +20,16 @@ export function playbackConfigured(): boolean {
   return BASE !== '';
 }
 
+/**
+ * 녹화 시작 시각을 ms로 **올림**해 읽는다. 재생 서버는 마이크로초까지 주는데(`…16.372191Z`) Date.parse는 ms로 내린다 —
+ * 내린 값으로 두 번째 구간부터 달라 하면 요청이 틈 안으로 0.2ms 들어가 404다(2026-09-30 로컬 실측, POK-253).
+ */
+export function parseSpanStartMs(iso: string): number {
+  const ms = Date.parse(iso);
+  const fraction = /\.(\d+)/.exec(iso)?.[1] ?? '';
+  return /[1-9]/.test(fraction.slice(3)) ? ms + 1 : ms;
+}
+
 /** 녹화 구간. 재생 서버가 없거나 녹화가 없으면 빈 배열 */
 export async function fetchRecordingSpans(streamId: string): Promise<RecordingSpan[]> {
   if (BASE === '' || !STREAM_ID_RE.test(streamId)) return [];
@@ -28,7 +38,7 @@ export async function fetchRecordingSpans(streamId: string): Promise<RecordingSp
     if (!res.ok) return [];
     const body = (await res.json()) as { start: string; duration: number }[];
     return body
-      .map((span) => ({ startMs: Date.parse(span.start), durationSeconds: span.duration }))
+      .map((span) => ({ startMs: parseSpanStartMs(span.start), durationSeconds: span.duration }))
       .filter((span) => Number.isFinite(span.startMs) && span.durationSeconds > 0);
   } catch {
     return [];

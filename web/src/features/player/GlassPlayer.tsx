@@ -241,10 +241,15 @@ function GlassPlayerBody({
 
   const controlsShown = sim.controlsVisible || !sim.playing || settingsOpen || seeking;
 
+  // 🔴 서버로 보내는 길이 아직 없다 — 전에는 시크바에 표시만 찍고 「저장되었습니다」를 띄워 거짓 성공이었다(POK-253).
+  // 수동 마킹이 서버로 가기 전까지(POK-257) 준비 중이라고만 알린다. 자동 하이라이트 카드는 채팅 급증으로 따로 생긴다
   const handleClip = useCallback(() => {
-    sim.markClip();
-    toast({ tone: 'success', title: '최근 30초 클립이 저장되었습니다' });
-  }, [sim, toast]);
+    toast({
+      tone: 'info',
+      title: '클립 만들기는 준비 중이에요',
+      description: '채팅이 터진 순간은 하이라이트 카드로 자동으로 잡혀요.',
+    });
+  }, [toast]);
 
   const handlePip = useCallback(() => {
     toast({ tone: 'info', title: '미니 플레이어는 준비 중이에요' });

@@ -176,7 +176,9 @@ describe('GlassPlayer', () => {
     renderPlayer();
 
     await user.click(screen.getByRole('button', { name: '클립 만들기' }));
-    expect(screen.getByText('최근 30초 클립이 저장되었습니다')).toBeInTheDocument();
+    // 서버로 보내는 길이 없어 저장되었다고 하지 않는다(POK-253)
+    expect(screen.getByText('클립 만들기는 준비 중이에요')).toBeInTheDocument();
+    expect(screen.queryByText(/저장되었습니다/)).toBeNull();
   });
 
   it('설정 팝오버에서 화질 4개를 고를 수 있다', async () => {
