@@ -62,6 +62,21 @@ export function recordingTimeline(
 }
 
 /**
+ * 뒤로 갈 때의 자리. 틈 안이면 **앞 구간의 끝 1초 전**이다 — 다음 구간 시작으로 올리면 그 구간 시작에서 뒤로 가기를 아무리
+ * 눌러도 제자리라 앞 구간에 영영 못 간다(PR #205 codex). 첫 구간 앞이면 첫 구간 시작
+ */
+export function playableBackFrom(
+  timeline: Pick<RecordingTimeline, 'pieces'>,
+  seconds: number,
+): number {
+  const before = timeline.pieces.filter((p) => p.fromSeconds <= seconds);
+  const piece = before[before.length - 1];
+  if (piece === undefined) return timeline.pieces[0]?.fromSeconds ?? 0;
+  if (seconds < piece.toSeconds) return seconds;
+  return Math.max(piece.fromSeconds, piece.toSeconds - 1);
+}
+
+/**
  * 그 자리에서 틀 수 있는 한 덩어리. 틈 안이면 다음 구간 시작부터다. 녹화 끝을 지났으면 null
  */
 export function playableFrom(

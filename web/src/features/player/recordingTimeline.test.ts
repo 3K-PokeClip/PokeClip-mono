@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { playableFrom, recordingTimeline } from './recordingTimeline';
+import { playableBackFrom, playableFrom, recordingTimeline } from './recordingTimeline';
 
 // 녹화 구간 여럿 → 한 시간축(POK-253). 재생 서버는 틈을 건너 주지 않으므로(실측) 한 구간씩 튼다.
 
@@ -66,5 +66,23 @@ describe('playableFrom', () => {
   it('녹화 끝을 지나면 null', () => {
     expect(playableFrom(t, 38)).toBeNull();
     expect(playableFrom(t, 99)).toBeNull();
+  });
+});
+
+describe('playableBackFrom — 뒤로 갈 때', () => {
+  const t = recordingTimeline([span(0, 14), span(24, 14)], null, null)!;
+
+  it('구간 안이면 그 자리', () => {
+    expect(playableBackFrom(t, 30)).toBe(30);
+    expect(playableBackFrom(t, 5)).toBe(5);
+  });
+
+  it('틈 안이면 앞 구간 끝 1초 전 — 다음 구간 시작으로 올리면 앞 구간에 영영 못 간다(PR #205 codex)', () => {
+    expect(playableBackFrom(t, 19)).toBe(13);
+    expect(playableBackFrom(t, 14)).toBe(13);
+  });
+
+  it('첫 구간 앞이면 첫 구간 시작', () => {
+    expect(playableBackFrom(t, -3)).toBe(0);
   });
 });

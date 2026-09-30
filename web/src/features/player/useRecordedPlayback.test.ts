@@ -131,6 +131,61 @@ describe('useRecordedPlayback — 구간 여럿', () => {
   });
 });
 
+describe('useRecordedPlayback — 틈 앞뒤로 오가기(PR #205 codex)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function endPiece(video: HTMLVideoElement) {
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+  }
+
+  it('다음 구간 시작에서 뒤로 가면 앞 구간으로 간다 — 전에는 제자리였다', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() =>
+      useRecordedPlayback(
+        { current: video },
+        source([
+          [0, 14],
+          [24, 14],
+        ]),
+      ),
+    );
+    endPiece(video);
+    expect(requested(video).fromSeconds).toBe(24);
+    Object.defineProperty(video, 'ended', { value: false, configurable: true });
+
+    act(() => result.current.seekBy(5));
+    act(() => vi.advanceTimersByTime(300));
+
+    expect(requested(video)).toEqual({ fromSeconds: 13, duration: 1 });
+  });
+
+  it('다 본 뒤 재생을 누르면 처음부터 다시 튼다 — 전에는 마지막 구간만 다시 나왔다', () => {
+    const { video, play } = fakeVideo();
+    const { result } = renderHook(() =>
+      useRecordedPlayback(
+        { current: video },
+        source([
+          [0, 14],
+          [24, 14],
+        ]),
+      ),
+    );
+    endPiece(video);
+    endPiece(video);
+    play.mockClear();
+
+    act(() => result.current.togglePlay());
+
+    expect(requested(video)).toEqual({ fromSeconds: 0, duration: 14 });
+    expect(play).toHaveBeenCalled();
+  });
+});
+
 describe('useRecordedPlayback — 1시간 넘는 녹화', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());

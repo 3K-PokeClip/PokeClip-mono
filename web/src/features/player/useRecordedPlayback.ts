@@ -5,7 +5,7 @@ import { recordingClipUrl } from '@/api/mediaPlayback';
 import { AT_EDGE_THRESHOLD_SECONDS, behindFromSeekFraction } from './playerMath';
 import { useControlsAutoHide } from './useControlsAutoHide';
 import { PLAYER_QUALITIES, type PlayerQuality, type PlayerSimulation } from './usePlayerSimulation';
-import { playableFrom, type RecordingTimeline } from './recordingTimeline';
+import { playableBackFrom, playableFrom, type RecordingTimeline } from './recordingTimeline';
 
 // 끝난 방송 다시보기(POK-251) — 녹화 재생 서버에서 「지금 자리부터 끝까지」를 한 줄기로 받아 튼다.
 // 그 응답은 만들어 가며 흘려보내는 영상이라 브라우저가 건너뛰지 못한다(seekable 0~0, 실측). 그래서
@@ -112,10 +112,12 @@ export function useRecordedPlayback(
   }, [src, videoRef]);
 
   const jumpTo = useCallback(
-    (seconds: number) => {
+    (seconds: number, backward = false) => {
       const wanted = Math.min(Math.max(0, total - 1), Math.max(0, seconds));
-      // 틈 안이면 다음 구간 시작으로 — 시크바도 실제로 틀 자리를 보인다
-      const target = playableFrom(recordedRef.current, wanted)?.fromSeconds ?? wanted;
+      // 틈 안이면 다음 구간 시작으로(뒤로 가기면 앞 구간 끝으로) — 시크바도 실제로 틀 자리를 보인다
+      const target = backward
+        ? playableBackFrom(recordedRef.current, wanted)
+        : (playableFrom(recordedRef.current, wanted)?.fromSeconds ?? wanted);
       setPosition(target);
       if (seekTimer.current !== null) window.clearTimeout(seekTimer.current);
       // 시크바를 끄는 동안 매 좌표마다 새 줄기를 받지 않는다
@@ -151,6 +153,13 @@ export function useRecordedPlayback(
     togglePlay: useCallback(() => {
       const video = videoRef.current;
       if (video === null) return;
+      // 다 본 뒤 다시 누르면 처음부터다 — 그대로 틀면 브라우저가 지금 줄기(마지막 구간)만 다시 튼다(PR #205 codex)
+      if (video.ended && offsetRef.current > 0) {
+        wantPlayRef.current = true;
+        setPosition(0);
+        setOffset(0);
+        return;
+      }
       if (video.paused) void video.play().catch(() => undefined);
       else video.pause();
     }, [videoRef]),
@@ -174,7 +183,8 @@ export function useRecordedPlayback(
     ),
     // 음수는 엣지(끝) 방향 — 라이브 플레이어와 같은 부호
     seekBy: useCallback(
-      (delta: number) => jumpTo(offsetRef.current + (videoRef.current?.currentTime ?? 0) - delta),
+      (delta: number) =>
+        jumpTo(offsetRef.current + (videoRef.current?.currentTime ?? 0) - delta, delta > 0),
       [jumpTo, videoRef],
     ),
     // 지난 방송에는 「실시간」이 없다 — 처음으로 돌아간다
