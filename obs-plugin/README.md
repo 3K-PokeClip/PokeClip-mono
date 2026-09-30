@@ -4,7 +4,7 @@
 
 스트리머 PC의 OBS에 설치하는 C++ 플러그인(libobs)이다. 본방(치지직 RTMP)을 켜면 **같은 인코더로** 우리 서버에 SRT+MPEG-TS를 함께 보낸다 (ADR-001·ADR-002).
 
-## 지금 되는 것 (A1·A2)
+## 지금 되는 것 (A1·A2·A4 플러그인 쪽)
 
 | 기능 | 내용 |
 |---|---|
@@ -17,8 +17,9 @@
 | 브라우저 독 | obs-browser(CEF) 패널에 `ui/` 페이지. 상태·전송 시간·비트레이트·송출 점검·연결 해제 확인·고급 설정. 화면은 claude.ai/design 시안 「PokeClip Plugin UI」 기준이고, web 디자인 토큰·브랜드 심볼을 그대로 쓴다 |
 | Qt 폴백 | obs-browser가 없거나(일부 Linux·Wayland) 페이지가 붙지 않으면 최소 Qt 패널 — 기능은 같다 |
 | 재연결 표시 | 중간 단절은 libobs 기본 재연결(20회·2초)에 맡기고 독에 「재연결 중」을 띄운다 |
+| 핫키 마킹 (A4) | 단축키(기본 Ctrl+Shift+M)·독 버튼으로 「지금 이 순간」을 표시하면 누른 시각을 서버로 보낸다(재시도·중복 방지 포함). **받는 서버 창구는 아직 없다** — 아래 「핫키 마킹」 |
 
-**아직 안 되는 것** — 트랙 배정을 독에서 손으로 고치기(후속), 초기 접속 실패 재시도(A5), 핫키 마킹·종료 신호(A3·A4), SRT RTT 통계(A6), 설치 파일·서명(A7). 방송 중 1080p가 아니면 **경고만** 한다(M1 예외).
+**아직 안 되는 것** — 트랙 배정을 독에서 손으로 고치기(후속), 초기 접속 실패 재시도(A5), 종료 신호(A3), 마크를 받는 서버 창구(POK-119 — 플러그인 쪽만 있다), SRT RTT 통계(A6), 설치 파일·서명(A7). 방송 중 1080p가 아니면 **경고만** 한다(M1 예외).
 
 ## 구조
 
@@ -26,6 +27,7 @@
 obs-plugin/
   src/                C++ — plugin-main(이벤트·독 등록) · stream-target(출력 수명·오디오 6트랙) · gop-guard · pairing
                       · audio-assign(배정 규칙, OBS 무관) · audio-router(소스 열거·트랙 비트·기억)
+                      · mark-policy(마크 규칙, OBS 무관) · mark-sender(대기열·전송 스레드) · mark-hotkey(단축키 등록·바인딩)
                       · bridge-server(루프백 HTTP) · dock-host(CEF/폴백) · app-state(단일 상태) · config
   ui/                 브라우저 독 페이지 (Vite + Preact + TS). 빌드 산출물 → data/ui (gitignore)
   data/locale         en-US · ko-KR (폴백 패널·독 제목)
@@ -114,6 +116,8 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 | `dock_intro_shown` | `false` | 첫 실행 독 펼치기 여부 (내부용) |
 | `audio_auto_assign` | `true` | 오디오 소스를 트랙 2~6에 자동 배정. 끄면 OBS 고급 오디오 설정의 트랙 체크를 그대로 보낸다 |
 | `audio_track_map` | — | 소스별로 기억한 트랙(내부용, 최대 64개). 배정을 처음부터 다시 하려면 OBS를 끄고 이 키를 지운다 |
+| `clip_api_base` | 빈 값(= `api_base`) | 마크를 보낼 Clip API 주소. 개발용 — 독 화면에는 없다 |
+| `mark_hotkey` | — | 마지막으로 쓴 단축키 사본 `{"bindings":[…]}`(내부용). 프로필에 단축키가 없을 때 쓴다 |
 
 독 「고급 설정」에서는 수신 호스트·포트·SRT 지연과 스위치 넷(본방 동기·오디오 자동 배정·암호 사용·기본 패널)만 바꾼다 (송출 중에는 잠김). `api_base`는 스트리머가 바꿀 값이 아니라 화면에 없다 — 개발 중에는 설정 파일이나 `PUT /api/config`로 바꾼다.
 
@@ -141,6 +145,21 @@ OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio
 
 🔴 **스트리머의 녹화 트랙도 같은 체크를 쓴다.** 고급 출력 녹화에서 트랙 2~6을 쓰면 녹화 내용도 이 배정을 따른다. 트위치 VOD 트랙(트랙 2)을 쓰는 스트리머는 자동 배정을 끈다.
 
+## 핫키 마킹 (A4)
+
+방송 중 「지금 이 순간」을 표시하면 편집자 화면의 그 지점에 점프카드가 뜨게 하는 기능이다(ADR-002). 채팅 자동 탐지(2A)가 못 잡는 장면이나 채팅 수집이 멈췄을 때의 대안이다. **플러그인 쪽만 있다** — 받는 서버는 아래 선행 조건.
+
+- **누르는 곳** — OBS 단축키 「PokeClip: 지금 이 순간 표시」(기본 **Ctrl+Shift+M**, macOS도 Control 키) · 독 상태 카드의 「지금 이 순간 표시」 버튼 · Qt 폴백 패널 버튼. 셋이 같은 대기열로 간다.
+- **언제** — 우리 송출이 `전송 중`·`재연결 중`일 때만. 아니면 독에 「PokeClip으로 전송 중일 때만 표시할 수 있어요」. 2초 안의 연타는 한 번으로 친다.
+- **보내는 것** — `POST {clip_api_base}/api/clip/streams/{streamToken}/marks`, `Authorization: Bearer <passphrase>`, 본문 `{"eventId":"<UUID v4>","pressedAt":<epoch ms>,"sentAt":<epoch ms>}`. 누른 순간 시각을 찍고, 다시 보낼 때는 `sentAt`만 새로 붙인다. 시계 어긋남 보정(`pressedAt + (서버 수신 − sentAt)`)·녹화 기준점 환산(POK-255 `TimelineOriginReader`)·카드 창 [T−30s, T+10s]은 서버 몫이다.
+- **다시 보내기** — 전용 작업 스레드가 보낸다. 네트워크 오류·5xx·429·`503 timeline_not_ready`·`404 broadcast_not_found`는 1·2·4·8…초(최대 30초, `Retry-After`가 더 길면 그것 — 최대 60초) 뒤 **같은 `eventId`로** 다시 보내고, 누른 지 10분이 지나면 버린다. 방송이 끝나도 남은 마크는 계속 보낸다. OBS를 끄면 못 보낸 마크는 버린다(로그에 개수만).
+- **바로 버리는 것** — `400`, `401 invalid_stream_key`. **사유 없는 401·404·405**는 「서버에 마크 창구가 아직 없다」(`mark_unsupported`)로 본다 — 지금 Clip은 `/api/clip/**` 전부에 JWT를 요구해 passphrase Bearer에 본문 없는 401을 준다(2026-09-30 develop `SecurityConfig`).
+- **단축키 저장** — OBS 설정 › 단축키에서 바꾸면 OBS가 프로필 `basic.ini`의 `[Hotkeys] PokeClip.MarkMoment`에 적는다(프론트엔드 단축키만). OBS는 플러그인 단축키를 다시 읽어 주지 않으므로 플러그인이 시작·프로필 전환 때 읽는다: 프로필 값 → `pokeclip.json`의 `mark_hotkey` 사본(마지막으로 쓴 키) → 기본 Ctrl+Shift+M. 지운 키(빈 목록)는 그대로 둔다.
+- **macOS 권한** — OBS가 뒤에 있을 때도 단축키를 받으려면 OBS에 「입력 모니터링」 권한이 있어야 한다(오래된 설치는 「손쉬운 사용」). OBS 앞에서는 권한 없이도 된다.
+- **독 표기** — 키 이름으로 적는다(macOS `⌃⇧M` · 그 밖 `Ctrl+Shift+M`). OBS 자체 표기는 macOS 입력 소스를 따라, 한글 자판이면 M을 「ㅡ」로 보여준다.
+
+🔴 **서버 선행 조건** — 지금은 받는 곳이 없다. ① Clip 창구(POK-119 — 계약 4B 제안을 Jira에 적어 둠, 경로를 JWT 체인 밖으로 열고 passphrase로 인증) ② 카드가 붙을 방송 명부 행을 만드는 1번의 `broadcast.started` 발행(계약9). 그 전에 dev로 보내면 `mark_unsupported`가 정상이다. 로컬에서는 계약 제안대로 201·200(같은 eventId)·401·404·503을 돌려주는 목 서버를 띄우고 `clip_api_base`를 그쪽으로 둔다.
+
 ## 브리지 프로토콜 (독 페이지 ↔ 플러그인)
 
 `127.0.0.1:<임의 포트>`. 토큰(64 hex)은 독 URL 조각 `#token=`으로만 넘기고 페이지가 읽은 즉시 주소창에서 지운다.
@@ -153,6 +172,7 @@ OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio
 | `POST /api/pair` `{code}` | Bearer | 200 / 400 invalid_format / 404 not_found / 410 expired / 409 already_used·streaming / 429 rate_limited / 502 network·server_error |
 | `POST /api/unpair` | Bearer | 송출 중이면 409 |
 | `GET·PUT /api/config` | Bearer | 위 설정 표의 비밀 아닌 키 |
+| `POST /api/mark` | Bearer | 독 「지금 이 순간 표시」 — 202 받음 / 409 mark_not_live·no_key·invalid_key / 429 mark_too_soon. 보낸 결과는 상태 `marks`로 온다 |
 
 Host가 `127.0.0.1:<포트>`가 아니거나 `Origin`이 다른 오리진이면 403, 토큰이 없거나 틀리면 401, 본문 16KB 초과 413.
 
@@ -191,6 +211,11 @@ OBS 본방  → rtmp://127.0.0.1:1935  key=main          (compose MediaMTX RTMP 
 | `output_no_multitrack` | 이 OBS의 MPEG-TS 출력이 다중 오디오 트랙을 받지 않는다 — OBS 버전 확인(32.x 기준) |
 | `audio_encoder_failed` | AAC 인코더를 만들지 못함 — OBS 로그의 인코더 id 확인 (`ffmpeg_aac`가 기본 대체) |
 | `audio_track_attach_failed` | 6트랙 중 일부가 출력에 안 붙음 — 반쯤 붙은 채 보내지 않고 시작을 멈춘다 |
+| `mark_not_live` · `mark_too_soon` | 우리 송출 중이 아님 · 2초 안에 또 누름 |
+| `mark_unsupported` | 서버에 마크 창구가 아직 없다(사유 없는 401·404) — 위 「서버 선행 조건」 |
+| `mark_unauthorized` · `mark_rejected` | 서버가 스트림 키를 거절(다시 페어링) · 본문을 거절 |
+| `mark_no_broadcast` · `mark_not_ready` | 서버가 아직 이 방송을 모름 · 첫 조각 전 — 자동으로 다시 보낸다 |
+| `mark_expired` | 10분 동안 못 보내 버림 |
 
 ## 라이선스
 
