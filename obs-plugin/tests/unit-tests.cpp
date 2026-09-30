@@ -1,9 +1,10 @@
 // 의존성 없는 최소 테스트 러너. OBS를 띄우지 않고 검증할 수 있는 것만 여기서 잰다:
 // 페어링 코드 정규화 · keyint 옵션 제거 · streamid 파싱 · SRT URL · 브리지 보안 규칙(Host·Origin·토큰)·SSE ·
-// 오디오 트랙 자동 배정(A2).
+// 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4).
 #include "audio-assign.hpp"
 #include "bridge-server.hpp"
 #include "encoder-opts.hpp"
+#include "mark-policy.hpp"
 #include "pairing-code.hpp"
 #include "srt-url.hpp"
 
@@ -153,6 +154,7 @@ struct BridgeFixture {
 	BridgeServer server;
 	std::string token;
 	std::atomic<int> pairCalls{0};
+	std::atomic<int> markCalls{0};
 	std::string lastPairBody;
 	std::atomic<uint64_t> stateVersion{1};
 	std::mutex mutex;
@@ -188,6 +190,10 @@ struct BridgeFixture {
 		cb.unpair = []() -> BridgeCallbacks::Reply { return {200, R"({"ok":true})"}; };
 		cb.getConfig = [] { return std::string("{}"); };
 		cb.putConfig = [](const std::string &) -> BridgeCallbacks::Reply { return {200, "{}"}; };
+		cb.mark = [this]() -> BridgeCallbacks::Reply {
+			markCalls++;
+			return {409, R"({"ok":false,"reason":"mark_not_live"})"};
+		};
 		server.Start(dir.string(), cb);
 
 		std::string url = server.DockUrl();
@@ -294,6 +300,23 @@ TEST(bridge_pair_passes_body_and_status_through)
 	auto tooBig = cli.Post("/api/pair", f.Auth(), big, "application/json");
 	CHECK(tooBig && tooBig->status == 413);
 	CHECK_EQ(f.pairCalls.load(), 1);
+}
+
+TEST(bridge_mark_requires_token_and_passes_status)
+{
+	BridgeFixture f;
+	auto cli = f.Client();
+	auto anon = cli.Post("/api/mark", "", "application/json");
+	CHECK(anon && anon->status == 401);
+	CHECK_EQ(f.markCalls.load(), 0);
+
+	auto res = cli.Post("/api/mark", f.Auth(), "", "application/json");
+	CHECK(res);
+	if (res) {
+		CHECK_EQ(res->status, 409);
+		CHECK(res->body.find("mark_not_live") != std::string::npos);
+	}
+	CHECK_EQ(f.markCalls.load(), 1);
 }
 
 TEST(bridge_sse_sends_state_first)
@@ -616,6 +639,121 @@ TEST(audio_routing_view_reflects_actual_bits)
 	CHECK(line.find("T2 마이크(mic)") != std::string::npos);
 	CHECK(line.find("T4 –") != std::string::npos);
 	CHECK(line.find("mix-only 1") != std::string::npos);
+}
+
+// ---------------------------------------------------------------- 핫키 마킹 (A4)
+
+TEST(mark_url_encodes_token_and_trims_base)
+{
+	CHECK_EQ(MarkUrl("http://dev.pokeclip.com/", "abc_DEF-9"), "http://dev.pokeclip.com/api/clip/streams/abc_DEF-9/marks");
+	CHECK_EQ(MarkUrl("https://x.test//", "a/b?c"), "https://x.test/api/clip/streams/a%2Fb%3Fc/marks");
+}
+
+TEST(mark_body_has_three_fields)
+{
+	CHECK_EQ(MarkBodyJson("0f8fad5b-d9cb-469f-a165-70867728950e", 1759212000123, 1759212000456),
+		 R"({"eventId":"0f8fad5b-d9cb-469f-a165-70867728950e","pressedAt":1759212000123,"sentAt":1759212000456})");
+}
+
+TEST(mark_uuid_v4_sets_version_and_variant)
+{
+	std::array<uint8_t, 16> ones{};
+	ones.fill(0xFF);
+	std::string id = FormatUuidV4(ones);
+	CHECK_EQ(id.size(), 36u);
+	CHECK_EQ(id, "ffffffff-ffff-4fff-bfff-ffffffffffff");
+	std::array<uint8_t, 16> zeros{};
+	CHECK_EQ(FormatUuidV4(zeros), "00000000-0000-4000-8000-000000000000");
+}
+
+TEST(mark_retry_backoff_doubles_to_cap)
+{
+	CHECK_EQ(MarkRetryDelayMs(1), 1000);
+	CHECK_EQ(MarkRetryDelayMs(2), 2000);
+	CHECK_EQ(MarkRetryDelayMs(3), 4000);
+	CHECK_EQ(MarkRetryDelayMs(5), 16000);
+	CHECK_EQ(MarkRetryDelayMs(6), 30000);
+	CHECK_EQ(MarkRetryDelayMs(40), 30000);
+	// Retry-After가 더 길면 그것을, 단 60초까지
+	CHECK_EQ(MarkRetryDelayMs(1, 5000), 5000);
+	CHECK_EQ(MarkRetryDelayMs(3, 1000), 4000);
+	CHECK_EQ(MarkRetryDelayMs(1, 600000), 60000);
+}
+
+TEST(mark_retry_after_header)
+{
+	CHECK_EQ(ParseRetryAfterMs(" 5\r\n"), 5000);
+	CHECK_EQ(ParseRetryAfterMs("0"), 0);
+	CHECK_EQ(ParseRetryAfterMs("Wed, 21 Oct 2026 07:28:00 GMT"), 0);
+	CHECK_EQ(ParseRetryAfterMs(""), 0);
+	CHECK_EQ(ParseRetryAfterMs("99999999"), 60000);
+}
+
+TEST(mark_response_classification)
+{
+	auto is = [](const MarkVerdict &v, MarkOutcome o, const char *reason) { return v.outcome == o && v.reason == reason; };
+	CHECK(is(ClassifyMarkResponse(false, 0, ""), MarkOutcome::Retry, "network"));
+	CHECK(is(ClassifyMarkResponse(true, 201, "{}"), MarkOutcome::Delivered, ""));
+	CHECK(is(ClassifyMarkResponse(true, 200, "{}"), MarkOutcome::Delivered, "")); // 같은 eventId 재전송
+	CHECK(is(ClassifyMarkResponse(true, 400, R"({"reason":"invalid_request"})"), MarkOutcome::Drop, "mark_rejected"));
+	CHECK(is(ClassifyMarkResponse(true, 401, R"({"reason":"invalid_stream_key"})"), MarkOutcome::Drop,
+		 "mark_unauthorized"));
+	// 사유 없는 401 = Clip 기본 체인이 JWT 아닌 Bearer를 막았다 → 창구가 아직 없다
+	CHECK(is(ClassifyMarkResponse(true, 401, ""), MarkOutcome::Drop, "mark_unsupported"));
+	CHECK(is(ClassifyMarkResponse(true, 404, R"({"reason":"broadcast_not_found"})"), MarkOutcome::Retry,
+		 "mark_no_broadcast"));
+	CHECK(is(ClassifyMarkResponse(true, 404, R"({"status":404,"error":"Not Found","path":"/api/clip/streams/x/marks"})"),
+		 MarkOutcome::Drop, "mark_unsupported"));
+	CHECK(is(ClassifyMarkResponse(true, 429, ""), MarkOutcome::Retry, "rate_limited"));
+	CHECK(is(ClassifyMarkResponse(true, 503, R"({"reason":"timeline_not_ready"})"), MarkOutcome::Retry,
+		 "mark_not_ready"));
+	CHECK(is(ClassifyMarkResponse(true, 502, "<html>"), MarkOutcome::Retry, "server_error"));
+	CHECK(is(ClassifyMarkResponse(true, 301, ""), MarkOutcome::Drop, "bad_response"));
+}
+
+TEST(mark_expires_after_ten_minutes)
+{
+	CHECK(!MarkExpired(1000, 1000 + kMarkGiveUpMs - 1));
+	CHECK(MarkExpired(1000, 1000 + kMarkGiveUpMs));
+}
+
+TEST(mark_hotkey_label_ignores_keyboard_layout)
+{
+	HotkeyLabelParts p;
+	p.control = true;
+	p.shift = true;
+	p.keyName = "OBS_KEY_M";
+	p.keyText = "\xE3\x85\xA1"; // 한글 입력 소스의 macOS 표기 「ㅡ」
+	CHECK_EQ(FormatHotkeyLabel(p, true), "\xE2\x8C\x83\xE2\x87\xA7" "M");
+	CHECK_EQ(FormatHotkeyLabel(p, false), "Ctrl+Shift+M");
+
+	HotkeyLabelParts f;
+	f.alt = true;
+	f.keyName = "OBS_KEY_F10";
+	CHECK_EQ(FormatHotkeyLabel(f, false), "Alt+F10");
+
+	HotkeyLabelParts other;
+	other.command = true;
+	other.keyName = "OBS_KEY_SPACE";
+	other.keyText = "Space";
+	CHECK_EQ(FormatHotkeyLabel(other, true), "\xE2\x8C\x98" "Space");
+	CHECK_EQ(FormatHotkeyLabel(other, false), "Win+Space");
+
+	HotkeyLabelParts modsOnly;
+	modsOnly.control = true;
+	modsOnly.shift = true;
+	CHECK_EQ(FormatHotkeyLabel(modsOnly, false), "Ctrl+Shift");
+}
+
+TEST(mark_debounce_two_seconds)
+{
+	MarkDebouncer d;
+	CHECK(d.Accept(10000));
+	CHECK(!d.Accept(10001));
+	CHECK(!d.Accept(11999));
+	CHECK(d.Accept(12000));
+	CHECK(!d.Accept(13000)); // 기준은 마지막으로 받아들인 누름
+	CHECK(d.Accept(14000));
 }
 
 } // namespace

@@ -47,6 +47,12 @@ target_sources(
     src/fallback-panel.hpp
     src/gop-guard.cpp
     src/gop-guard.hpp
+    src/mark-hotkey.cpp
+    src/mark-hotkey.hpp
+    src/mark-policy.cpp
+    src/mark-policy.hpp
+    src/mark-sender.cpp
+    src/mark-sender.hpp
     src/pairing-code.cpp
     src/pairing-code.hpp
     src/pairing.cpp

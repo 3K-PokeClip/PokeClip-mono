@@ -192,6 +192,18 @@ std::string AppState::ToJson(const StateSnapshot &s)
 	obs_data_set_obj(root, "audio", audio);
 	obs_data_release(audio);
 
+	obs_data_t *marks = obs_data_create();
+	obs_data_set_string(marks, "hotkey", s.marks.hotkey.c_str());
+	obs_data_set_int(marks, "sent", s.marks.sent);
+	obs_data_set_int(marks, "pending", s.marks.pending);
+	obs_data_set_int(marks, "failed", s.marks.failed);
+	obs_data_set_int(marks, "seq", (long long)s.marks.seq);
+	obs_data_set_string(marks, "result", s.marks.result.c_str());
+	obs_data_set_string(marks, "reason", s.marks.reason.c_str());
+	obs_data_set_int(marks, "lastAt", s.marks.lastAt);
+	obs_data_set_obj(root, "marks", marks);
+	obs_data_release(marks);
+
 	std::string json = obs_data_get_json(root);
 	obs_data_release(root);
 	return json;

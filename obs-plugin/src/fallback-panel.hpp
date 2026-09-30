@@ -20,10 +20,13 @@ private:
 	void Render(const StateSnapshot &snapshot);
 	void OnPairClicked();
 	void OnUnpairClicked();
+	void OnMarkClicked();
 
 	QLabel *status_ = nullptr;
 	QLabel *checks_ = nullptr;
 	QLabel *audio_ = nullptr;
+	QLabel *marks_ = nullptr;
+	QPushButton *mark_ = nullptr;
 	QLabel *message_ = nullptr;
 	QLineEdit *code_ = nullptr;
 	QPushButton *pair_ = nullptr;

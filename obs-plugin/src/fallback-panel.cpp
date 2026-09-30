@@ -1,6 +1,7 @@
 #include "fallback-panel.hpp"
 
 #include "app-state.hpp"
+#include "mark-sender.hpp"
 #include "pairing.hpp"
 #include "ui-thread.hpp"
 
@@ -49,6 +50,9 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	checks_->setWordWrap(true);
 	audio_ = new QLabel(this);
 	audio_->setWordWrap(true);
+	marks_ = new QLabel(this);
+	marks_->setWordWrap(true);
+	mark_ = new QPushButton(Text("Mark.Button"), this);
 	message_ = new QLabel(this);
 	message_->setWordWrap(true);
 
@@ -71,6 +75,8 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	layout->addWidget(status_);
 	layout->addWidget(checks_);
 	layout->addWidget(audio_);
+	layout->addWidget(mark_);
+	layout->addWidget(marks_);
 	layout->addLayout(row);
 	layout->addWidget(unpair_);
 	layout->addWidget(message_);
@@ -80,6 +86,7 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	connect(pair_, &QPushButton::clicked, this, [this]() { OnPairClicked(); });
 	connect(code_, &QLineEdit::returnPressed, this, [this]() { OnPairClicked(); });
 	connect(unpair_, &QPushButton::clicked, this, [this]() { OnUnpairClicked(); });
+	connect(mark_, &QPushButton::clicked, this, [this]() { OnMarkClicked(); });
 
 	QPointer<FallbackPanel> self(this);
 	listenerId_ = AppState::Instance().AddListener([self](const StateSnapshot &s) {
@@ -131,6 +138,20 @@ void FallbackPanel::Render(const StateSnapshot &s)
 		audio_->setVisible(false);
 	}
 
+	// A4 — 우리 송출 중에만 누를 수 있다. 개수 줄은 지난 방송 것이 남아 있어도 보여준다.
+	bool sending = s.phase == StreamPhase::Live || s.phase == StreamPhase::Reconnecting;
+	mark_->setVisible(s.paired && sending);
+	if (s.paired && (sending || s.marks.sent || s.marks.pending || s.marks.failed)) {
+		QString hotkey = s.marks.hotkey.empty() ? Text("Mark.NoHotkey") : QString::fromStdString(s.marks.hotkey);
+		QString line = Text("Mark.Line").arg(s.marks.sent).arg(s.marks.pending).arg(s.marks.failed).arg(hotkey);
+		if (s.marks.result != "sent" && !s.marks.reason.empty())
+			line += " — " + LocalizedReason(s.marks.reason);
+		marks_->setText(line);
+		marks_->setVisible(true);
+	} else {
+		marks_->setVisible(false);
+	}
+
 	message_->setText(LocalizedReason(s.errorCode));
 	code_->setVisible(!s.paired);
 	pair_->setVisible(!s.paired);
@@ -154,6 +175,14 @@ void FallbackPanel::OnPairClicked()
 				self->code_->clear();
 		});
 	}).detach();
+}
+
+void FallbackPanel::OnMarkClicked()
+{
+	// 거절 사유(방송 아님 등)는 상태 줄에 실리고, 연타만 여기서 알린다.
+	MarkAccept a = MarkSender::Instance().Mark(MarkVia::Panel);
+	if (!a.ok && a.reason == "mark_too_soon")
+		message_->setText(LocalizedReason(a.reason));
 }
 
 void FallbackPanel::OnUnpairClicked()

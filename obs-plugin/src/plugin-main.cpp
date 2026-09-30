@@ -26,6 +26,8 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include "constants.hpp"
 #include "dock-host.hpp"
 #include "gop-guard.hpp"
+#include "mark-hotkey.hpp"
+#include "mark-sender.hpp"
 #include "pairing.hpp"
 #include "srt-target.hpp"
 #include "stream-target.hpp"
@@ -114,9 +116,16 @@ std::string ConfigJson()
 	obs_data_set_bool(d, "sync_start", c.syncStart);
 	obs_data_set_bool(d, "force_fallback", c.forceFallback);
 	obs_data_set_bool(d, "audio_auto_assign", c.audioAutoAssign);
+	obs_data_set_string(d, "clip_api_base", c.clipApiBase.c_str());
 	std::string json = obs_data_get_json(d);
 	obs_data_release(d);
 	return json;
+}
+
+bool IsHttpBase(const std::string &base)
+{
+	return (base.rfind("http://", 0) == 0 || base.rfind("https://", 0) == 0) && base.size() < 256 &&
+	       base.find_first_of(" \"'<>") == std::string::npos;
 }
 
 bool IsSafeHost(const std::string &host)
@@ -165,11 +174,10 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	flag("sync_start", next.syncStart);
 	flag("force_fallback", next.forceFallback);
 	flag("audio_auto_assign", next.audioAutoAssign);
+	str("clip_api_base", next.clipApiBase); // 개발용 — 독 설정에는 없다. 비우면 api_base
 	obs_data_release(d);
 
-	bool apiOk = (next.apiBase.rfind("http://", 0) == 0 || next.apiBase.rfind("https://", 0) == 0) &&
-		     next.apiBase.size() < 256 && next.apiBase.find_first_of(" \"'<>") == std::string::npos;
-	if (!apiOk)
+	if (!IsHttpBase(next.apiBase) || (!next.clipApiBase.empty() && !IsHttpBase(next.clipApiBase)))
 		return {400, JsonReason(false, "invalid_api_base")};
 	if (!IsSafeHost(next.ingestHost))
 		return {400, JsonReason(false, "invalid_ingest_host")};
@@ -183,12 +191,14 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		    std::string passphrase = c.passphrase;
 		    std::vector<AudioTrackMapEntry> trackMap = c.audioTrackMap;
 		    bool dockIntroShown = c.dockIntroShown;
+		    std::string markHotkey = c.markHotkey;
 		    c = next;
 		    c.streamId = streamId; // 키는 이 경로로 바꾸지 않는다 (페어링 전용)
 		    c.passphrase = passphrase;
-		    // 배정 기억·독 첫 실행 표시는 UI 스레드가 따로 저장한다 — 이 요청이 읽은 옛 값으로 덮지 않는다.
+		    // 배정 기억·독 첫 실행 표시·단축키 사본은 UI 스레드가 따로 저장한다 — 이 요청이 읽은 옛 값으로 덮지 않는다.
 		    c.audioTrackMap = std::move(trackMap);
 		    c.dockIntroShown = dockIntroShown;
+		    c.markHotkey = std::move(markHotkey);
 	    }))
 		return {500, JsonReason(false, "save_failed")};
 
@@ -249,6 +259,11 @@ BridgeCallbacks MakeBridgeCallbacks()
 	};
 	cb.getConfig = ConfigJson;
 	cb.putConfig = PutConfig;
+	cb.mark = []() -> BridgeCallbacks::Reply {
+		MarkAccept a = MarkSender::Instance().Mark(MarkVia::Dock);
+		int status = a.ok ? 202 : (a.reason == "mark_too_soon" ? 429 : 409);
+		return {status, JsonReason(a.ok, a.reason)};
+	};
 	return cb;
 }
 
@@ -272,6 +287,7 @@ void OnStreamingStarting()
 	// 본방 인코더가 돌기 전 마지막 배정 정리 — 이후 방송 중에는 이미 나가는 배정을 옮기지 않는다.
 	// 우리 송출을 안 해도(동기화 꺼짐) 녹화 트랙이 같은 믹서를 쓰므로 먼저 한다.
 	AudioRouter::Instance().Reconcile("stream starting");
+	MarkSender::Instance().ResetCounters(); // 보낸·실패 수는 방송 단위
 
 	AppState::Instance().Mutate([](StateSnapshot &s) {
 		s.obsStreaming = true;
@@ -337,6 +353,7 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 			g_statsTimer->start(1000);
 		}
 		AudioRouter::Instance().Reconcile("loaded");
+		RegisterMarkHotkey(); // 프로필 설정을 읽어야 해서 로드 뒤에
 		break;
 	}
 	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGING:
@@ -372,12 +389,20 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 	case OBS_FRONTEND_EVENT_THEME_CHANGED:
 		UpdateTheme();
 		break;
+	case OBS_FRONTEND_EVENT_PROFILE_CHANGING:
+		SaveMarkHotkeyCopy(); // 새 프로필에 단축키가 없으면 지금 키를 이어 쓴다
+		break;
 	case OBS_FRONTEND_EVENT_PROFILE_CHANGED:
+		StreamTarget::Instance().ForceStop();
+		ReloadMarkHotkey();
+		break;
 	case OBS_FRONTEND_EVENT_PROFILE_LIST_CHANGED:
 		StreamTarget::Instance().ForceStop();
 		break;
 	case OBS_FRONTEND_EVENT_EXIT:
 		AudioRouter::Instance().Shutdown(); // 종료 중 소스 정리 신호에 반응하지 않는다
+		UnregisterMarkHotkey();
+		MarkSender::Instance().Stop(); // 보내는 중이면 끊는다 — 종료를 막지 않는다
 		StreamTarget::Instance().ForceStop();
 		if (g_statsTimer)
 			g_statsTimer->stop();
@@ -405,6 +430,7 @@ bool obs_module_load(void)
 
 	if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
 		obs_log(LOG_WARNING, "curl_global_init failed — pairing will not work");
+	MarkSender::Instance().Start();
 
 	ConfigStore::Instance().Load();
 	SyncStateFromConfig();
@@ -435,6 +461,7 @@ bool obs_module_load(void)
 void obs_module_unload(void)
 {
 	obs_frontend_remove_event_callback(OnFrontendEvent, nullptr);
+	MarkSender::Instance().Stop(); // EXIT에서 이미 멈췄으면 아무것도 안 한다
 	AppState::Instance().Shutdown();
 	if (g_bridge) {
 		g_bridge->Stop();

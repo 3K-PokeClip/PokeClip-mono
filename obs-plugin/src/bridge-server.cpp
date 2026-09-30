@@ -148,6 +148,12 @@ bool BridgeServer::Start(const std::string &staticDir, BridgeCallbacks callbacks
 		res.set_content(body, "application/json");
 	});
 
+	svr.Post("/api/mark", [this](const httplib::Request &, httplib::Response &res) {
+		auto [status, body] = callbacks_.mark();
+		res.status = status;
+		res.set_content(body, "application/json");
+	});
+
 	svr.Get("/api/config", [this](const httplib::Request &, httplib::Response &res) {
 		res.set_content(callbacks_.getConfig(), "application/json");
 	});

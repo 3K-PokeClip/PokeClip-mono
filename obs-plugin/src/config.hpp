@@ -24,8 +24,14 @@ struct PluginConfig {
 	// A2: 오디오 소스를 트랙 2~6에 하나씩 자동 배정한다(audio-assign.hpp). 끄면 OBS 고급 오디오 설정 그대로.
 	bool audioAutoAssign = true;
 	std::vector<AudioTrackMapEntry> audioTrackMap; // 소스별로 기억한 자리 — 방송 간 배정을 유지한다
+	// A4: 마크를 보낼 Clip API 주소. 비우면 apiBase (dev는 웹 프록시가 /api/clip/**을 Clip으로 넘긴다).
+	std::string clipApiBase;
+	// A4: 마지막으로 쓴 단축키 바인딩 사본({"bindings":[...]} JSON). 비었으면 사본 없음.
+	// 프로필 basic.ini [Hotkeys]가 우선이고, 그 프로필에 없을 때 이것을, 이것도 없으면 기본 Ctrl+Shift+M을 쓴다.
+	std::string markHotkey;
 
 	bool HasKey() const { return !streamId.empty(); }
+	const std::string &ClipBase() const { return clipApiBase.empty() ? apiBase : clipApiBase; }
 };
 
 class ConfigStore {
