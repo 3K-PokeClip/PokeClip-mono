@@ -6,7 +6,7 @@ import tools.jackson.databind.JsonNode;
 import java.time.Instant;
 
 /**
- * 계약9 봉투(ADR-016). 필드 아홉이 정본이다.
+ * 계약9 봉투(ADR-016). 필드 열이 정본이다.
  *
  * <p><b>타입은 아직 1번과 대조되지 않았다.</b> 발행 코드가 없어 대조할 실물이 없고,
  * ADR-016은 이름만 나열한다. 어긋나면 고칠 곳은 여기 하나다.
@@ -16,6 +16,10 @@ import java.time.Instant;
  *
  * <p>Jackson 3다(Boot 4.1.0). 애노테이션만 2 자리에 남아 있다 —
  * jackson-annotations 2.21이 딸려오고 Jackson 3이 그대로 인식한다.
+ *
+ * <p>{@code ingestStreamId}는 물리 키다(2026-09-03 계약9 추가, POK-233). 조각 장부·녹화 경로의 {@code stream_id}이고,
+ * {@code streamId}는 방송마다 새 회차 번호가 되어 식별·멱등·순서에만 쓴다. 계약은 둘 다 필수지만 <b>없어도 받는다</b>.
+ * 1번은 소비자 배포 뒤에야 이 칸을 싣고, 그 전 편지는 {@code streamId}가 곧 물리 키다(그래서 null이면 그 값을 쓴다).
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record LifecycleEnvelope(
@@ -25,6 +29,7 @@ public record LifecycleEnvelope(
         Instant occurredAt,
         String streamId,
         String streamerId,
+        String ingestStreamId,
         long sequence,
         String traceId,
         JsonNode payload

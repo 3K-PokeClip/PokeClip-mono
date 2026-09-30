@@ -99,7 +99,9 @@ public class SegmentQueryService {
             throw new VodExpiredException();
         }
 
-        return SegmentWindowAssembler.assemble(reader.findOverlapping(streamId, startMs, endMs), startMs, endMs);
+        // 조각 장부는 물리 키로 찾는다(POK-233). streamId는 방송마다 새 회차 번호라 장부에 없는 이름이다
+        return SegmentWindowAssembler.assemble(
+                reader.findOverlapping(broadcast.ingestKey(), startMs, endMs), startMs, endMs);
     }
 
     /**

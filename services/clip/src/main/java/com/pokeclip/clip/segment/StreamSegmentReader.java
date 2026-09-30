@@ -62,9 +62,11 @@ public class StreamSegmentReader {
      * <p><b>거르지 않은 전부다</b> — {@code uploaded}가 아닌 조각도 그대로 실린다.
      * 무엇을 쓸 수 있는지는 조립기가 정한다.
      *
-     * <p>인자 순서에 주의: SQL 물음표는 {@code streamId} → {@code endMs} → {@code startMs}다.
+     * <p>인자 순서에 주의: SQL 물음표는 {@code ingestKey} → {@code endMs} → {@code startMs}다.
+     *
+     * @param ingestKey 물리 키({@code Broadcast.ingestKey()}, POK-233). 방송 번호가 아니다
      */
-    public List<StreamSegmentRow> findOverlapping(String streamId, long startMs, long endMs) {
+    public List<StreamSegmentRow> findOverlapping(String ingestKey, long startMs, long endMs) {
         return jdbc.query(OVERLAPPING,
                 (rs, rowNum) -> new StreamSegmentRow(
                         rs.getLong("seq"),
@@ -73,16 +75,18 @@ public class StreamSegmentReader {
                         rs.getString("s3_key"),
                         rs.getString("upload_state"),
                         rs.getBoolean("is_discontinuity")),
-                streamId, endMs, startMs);
+                ingestKey, endMs, startMs);
     }
 
     /**
      * 재생 축 {@code [inAtMs, outAtMs)}(UTC epoch ms)와 겹치는 조각을 {@code seq} 오름차순으로. 상태로 거르지 않는 것은
      * {@link #findOverlapping}과 같다 — 무엇을 쓸 수 있는지는 조립기가 정한다.
      *
-     * <p>인자 순서: {@code streamId} → {@code outAtMs} → {@code inAtMs}.
+     * <p>인자 순서: {@code ingestKey} → {@code outAtMs} → {@code inAtMs}.
+     *
+     * @param ingestKey 물리 키(POK-233). 방송 번호가 아니다
      */
-    public List<SegmentSource> findOverlappingByPlaybackTime(String streamId, long inAtMs, long outAtMs) {
+    public List<SegmentSource> findOverlappingByPlaybackTime(String ingestKey, long inAtMs, long outAtMs) {
         return jdbc.query(OVERLAPPING_BY_PLAYBACK_TIME,
                 (rs, rowNum) -> new SegmentSource(
                         rs.getLong("seq"),
@@ -90,6 +94,6 @@ public class StreamSegmentReader {
                         rs.getInt("duration_ms"),
                         rs.getString("s3_key"),
                         rs.getString("upload_state")),
-                streamId, outAtMs, inAtMs);
+                ingestKey, outAtMs, inAtMs);
     }
 }

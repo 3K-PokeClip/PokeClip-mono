@@ -74,7 +74,7 @@ class SlowSubscriberBackpressureTest extends IntegrationTestSupport {
     void 정리() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-slow", TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-slow", TestIds.STREAMER, null, 1L, Instant.now(), null));
         AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 

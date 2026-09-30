@@ -456,6 +456,39 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(첫_조각.toString()));
     }
 
+    /**
+     * 방송 번호가 회차 번호가 되면(POK-233) 같은 스트리머의 방송 둘이 <b>한 물리 키</b>를 나눠 쓴다. 조각은 물리 키로 찾고, 기준점은
+     * 방송 번호 자리에 실린다 — 맵을 물리 키로 채우면 목록이 방송 번호로 꺼내다 못 찾아 둘 다 빈다. 영상 주소용 물리 키도 싣는다.
+     */
+    @Test
+    void 물리_키를_나눠_쓰는_방송_둘은_각자_제_시간의_조각으로_기준점을_잰다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        Instant 어제 = 시작_시각.minusSeconds(86_400);
+        방송을_넣는다("S-old-1", TestIds.STREAMER, "ended", 어제, 어제.plusSeconds(3_600), 어제.plusSeconds(86_400 * 60L));
+        방송을_넣는다("S-new-2", TestIds.STREAMER, "live");
+        jdbc.update("UPDATE broadcasts SET ingest_stream_id = 'key-shared'");
+        조각을_넣는다("key-shared", 1, 0, 어제.plusSeconds(7), 어제.plusSeconds(7));
+        조각을_넣는다("key-shared", 900, 3_600_000, 시작_시각.plusSeconds(11), 시작_시각.plusSeconds(11));
+
+        목록("?state=live")
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("S-new-2"))
+                .andExpect(jsonPath("$.broadcasts[0].ingestStreamId").value("key-shared"))
+                .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt")
+                        .value(시작_시각.plusSeconds(11).minusMillis(3_600_000).toString()));
+        목록("?state=past")
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("S-old-1"))
+                .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(어제.plusSeconds(7).toString()));
+    }
+
+    /** 물리 키가 빈 옛 줄은 방송 번호가 곧 영상 주소의 키다 — 칸을 비우면 화면이 주소를 못 만든다. */
+    @Test
+    void 물리_키가_빈_옛_줄은_방송_번호를_물리_키로_싣는다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("old-key", TestIds.STREAMER, "live");
+
+        목록("?state=live").andExpect(jsonPath("$.broadcasts[0].ingestStreamId").value("old-key"));
+    }
+
     /** 재생 시각({@code playback_pdt})이 아직 빈 조각은 벽시계로 잰다 — 렌더 주문의 조각 찾기와 같은 축이다. */
     @Test
     void 재생_시각이_빈_조각은_벽시계로_잰다() throws Exception {
@@ -468,7 +501,7 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
     }
 
     /**
-     * 장부의 {@code stream_id}는 지금 스트림키라 <b>같은 이름으로 다른 방송의 조각</b>도 쌓인다(POK-233 전). 방송 시간
+     * 장부의 {@code stream_id}는 물리 키(오늘은 스트림키)라 <b>같은 이름으로 다른 방송의 조각</b>도 쌓인다. 방송 시간
      * 밖(시작 10분 전보다 이른) 조각은 안 본다 — 보면 지난 방송의 기준점이 나온다.
      */
     @Test

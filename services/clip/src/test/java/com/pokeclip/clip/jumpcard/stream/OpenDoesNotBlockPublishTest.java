@@ -130,7 +130,7 @@ class OpenDoesNotBlockPublishTest extends IntegrationTestSupport {
      */
     @Test
     void 자물쇠_안_조회는_이미_열린_트랜잭션에서_돈다() {
-        broadcasts.save(Broadcast.startedNow("s-tx", TestIds.STREAMER, 903L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-tx", TestIds.STREAMER, null, 903L, Instant.now(), null));
 
         AtomicReference<String> 트랜잭션이름 = new AtomicReference<>();
         doAnswer(invocation -> {
@@ -164,7 +164,7 @@ class OpenDoesNotBlockPublishTest extends IntegrationTestSupport {
      */
     @Test
     void 풀이_바쁜_동안_연결을_열어도_카드_발행이_막히지_않는다() throws Exception {
-        broadcasts.save(Broadcast.startedNow("s-blk", TestIds.STREAMER, 901L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-blk", TestIds.STREAMER, null, 901L, Instant.now(), null));
         카드를_심는다("s-blk");
         // 재는 쪽이 DB를 쓰면 무엇 때문에 막혔는지 갈리지 않는다. 미리 읽어 둔다.
         JumpCardSnapshot 카드 = registry == null ? null : service.snapshotsOf("s-blk").get(0);

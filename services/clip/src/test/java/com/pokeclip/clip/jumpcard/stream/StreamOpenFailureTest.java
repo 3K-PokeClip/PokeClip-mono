@@ -62,7 +62,7 @@ class StreamOpenFailureTest extends IntegrationTestSupport {
     void 정리() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-fail", TestIds.STREAMER, 1L, java.time.Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-fail", TestIds.STREAMER, null, 1L, java.time.Instant.now(), null));
         AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 

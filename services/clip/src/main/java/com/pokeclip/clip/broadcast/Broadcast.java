@@ -38,6 +38,13 @@ public class Broadcast {
     @Column(name = "streamer_id", nullable = false, length = 128)
     private String streamerId;
 
+    /**
+     * 물리 키(POK-233, 계약9 {@code ingestStreamId}). 조각 장부·녹화 경로의 {@code stream_id}다. null이면 이 칸을 안 실은
+     * 편지로 만든 줄이고, 그때는 {@code streamId}가 곧 물리 키다({@link #ingestKey()}).
+     */
+    @Column(name = "ingest_stream_id", length = 128)
+    private String ingestStreamId;
+
     @Convert(converter = BroadcastStatusConverter.class)
     @Column(name = "status", nullable = false, length = 16)
     private BroadcastStatus status;
@@ -73,10 +80,11 @@ public class Broadcast {
     protected Broadcast() {
     }
 
-    private Broadcast(String streamId, String streamerId, BroadcastStatus status,
+    private Broadcast(String streamId, String streamerId, String ingestStreamId, BroadcastStatus status,
                       Instant startedAt, Instant endedAt, String trackManifest, long lastSequence) {
         this.streamId = streamId;
         this.streamerId = streamerId;
+        this.ingestStreamId = blankToNull(ingestStreamId);
         this.status = status;
         this.startedAt = startedAt;
         this.endedAt = endedAt;
@@ -85,16 +93,16 @@ public class Broadcast {
         this.updatedAt = Instant.now();
     }
 
-    public static Broadcast startedNow(String streamId, String streamerId, long sequence,
+    public static Broadcast startedNow(String streamId, String streamerId, String ingestStreamId, long sequence,
                                        Instant startedAt, String trackManifest) {
-        return new Broadcast(streamId, streamerId, BroadcastStatus.LIVE,
+        return new Broadcast(streamId, streamerId, ingestStreamId, BroadcastStatus.LIVE,
                 startedAt, null, trackManifest, sequence);
     }
 
     /** ADR-016의 ended placeholder — 시작을 못 본 채 끝을 먼저 받은 줄. */
-    public static Broadcast endedPlaceholder(String streamId, String streamerId,
+    public static Broadcast endedPlaceholder(String streamId, String streamerId, String ingestStreamId,
                                              long sequence, Instant endedAt) {
-        Broadcast placeholder = new Broadcast(streamId, streamerId, BroadcastStatus.ENDED,
+        Broadcast placeholder = new Broadcast(streamId, streamerId, ingestStreamId, BroadcastStatus.ENDED,
                 null, endedAt, null, sequence);
         // 생성자에 칸을 더하지 않고 여기서 채운다 — startedNow는 endedAt이 null이라
         // 같은 식을 태울 수 없고, 생성자에 기한을 받는 칸을 열면 두 팩토리가 서로
@@ -166,6 +174,28 @@ public class Broadcast {
 
     public String getStreamerId() {
         return streamerId;
+    }
+
+    /**
+     * 조각 장부·녹화 경로를 찾는 키. 편지가 물리 키를 실었으면 그 값, 아니면 {@code streamId}다(옛 줄·지금 1번 편지).
+     * 식별·자격·로그에는 쓰지 않는다. 그것은 {@code streamId}다.
+     */
+    public String ingestKey() {
+        return ingestStreamId != null ? ingestStreamId : streamId;
+    }
+
+    /**
+     * 물리 키가 빈 줄이면 뒤 편지의 값으로 채운다. 이미 있으면 안 바꾼다. 한 회차의 편지 둘은 같은 경로를 싣는다(계약9)
+     * 그래서 다른 값이 오면 발행 쪽 결함이고, 먼저 저장한 키로 조각을 계속 찾는 편이 방송 도중 키가 바뀌는 것보다 낫다.
+     */
+    void fillIngestStreamId(String ingestStreamId) {
+        if (this.ingestStreamId == null) {
+            this.ingestStreamId = blankToNull(ingestStreamId);
+        }
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     public BroadcastStatus getStatus() {
