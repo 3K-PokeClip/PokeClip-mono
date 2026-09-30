@@ -114,13 +114,16 @@ export function PlayerControls({
         >
           <PictureInPicture2 size={19} aria-hidden />
         </button>
-        <PlayerSettingsPopover
-          quality={sim.quality}
-          onQualityChange={sim.setQuality}
-          lowLatency={sim.lowLatency}
-          onToggleLowLatency={sim.toggleLowLatency}
-          onOpenChange={onSettingsOpenChange}
-        />
+        {/* 실재생은 고를 화질이 없다(렌디션 하나) — 거짓 선택지를 안 보인다(POK-253) */}
+        {sim.settingsMenu && (
+          <PlayerSettingsPopover
+            quality={sim.quality}
+            onQualityChange={sim.setQuality}
+            lowLatency={sim.lowLatency}
+            onToggleLowLatency={sim.toggleLowLatency}
+            onOpenChange={onSettingsOpenChange}
+          />
+        )}
         <button
           ref={fullscreenButtonRef}
           type="button"

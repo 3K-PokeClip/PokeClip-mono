@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { recordingClipUrl } from '@/api/mediaPlayback';
+import { playableFrom, type RecordingPiece } from '@/features/player/recordingTimeline';
 import { boundaryAction, type EditorPlayback, type PlaybackBounds } from './editorPlayback';
 
 // 편집기의 실재생 어댑터(POK-251) — 녹화 재생 서버에서 「구간 앞뒤로 조금 넉넉한 창」을 mp4 한 덩어리로 받아
@@ -11,6 +12,9 @@ import { boundaryAction, type EditorPlayback, type PlaybackBounds } from './edit
 // 「방송 기준 초 = 창 시작 + video.currentTime」으로 옮긴다.
 //
 // 구간이 창 밖으로 나가면 창을 다시 잡아 새로 받는다. 핸들을 끄는 동안 매번 받지 않게 잠깐 기다렸다 바꾼다.
+//
+// 🔴 창은 녹화 구간 하나 안에 둔다(POK-253). 재생 서버는 틈 안에서 시작하는 요청에 404, 틈을 건너는 요청은 틈 앞에서
+// 끊는다(실측). 재접속 직후 카드는 앞 여유 10초가 틈에 걸려 미리보기가 통째로 실패했다. 구간이 틈을 건너면 틈 앞까지만 보인다.
 
 const PAD_SECONDS = 10;
 const REWINDOW_DELAY_MS = 500;
@@ -18,15 +22,31 @@ const REWINDOW_DELAY_MS = 500;
 interface Window {
   startSeconds: number;
   endSeconds: number;
+  /** 구간에 녹화가 하나도 없다(틈 안이거나 녹화 끝 뒤) — 받지 않고 미리보기 실패로 알린다 */
+  empty?: true;
 }
 
 function windowFor(
   range: { startSeconds: number; endSeconds: number },
   totalSeconds: number,
+  pieces: RecordingPiece[] | undefined,
 ): Window {
-  return {
+  const wide = {
     startSeconds: Math.max(0, range.startSeconds - PAD_SECONDS),
     endSeconds: Math.min(totalSeconds, range.endSeconds + PAD_SECONDS),
+  };
+  if (pieces === undefined) return wide;
+  // 구간의 시작이 든 녹화 구간(틈이면 다음 구간) 안으로 자른다
+  const piece = playableFrom({ pieces }, range.startSeconds);
+  const containing = piece && pieces.find((p) => p.toSeconds === piece.toSeconds)!;
+  // 구간 자체에 녹화가 없으면(통째로 틈 안이거나 녹화 끝 뒤) 받지 않는다 — 여유 10초만 다음 녹화에 닿아도 그 녹화를 보이면
+  // 고른 장면이 아닌 영상이다(PR #205 codex 2·3판)
+  if (!containing || containing.fromSeconds >= range.endSeconds) {
+    return { startSeconds: range.startSeconds, endSeconds: range.startSeconds, empty: true };
+  }
+  return {
+    startSeconds: Math.max(wide.startSeconds, containing.fromSeconds),
+    endSeconds: Math.min(wide.endSeconds, containing.toSeconds),
   };
 }
 
@@ -44,11 +64,15 @@ export function useEditorVideoPlayback(options: {
   recordingStartMs: number;
   /** 지금까지 녹화된 길이(초) */
   recordingSeconds: number;
+  /** 녹화 구간들(이 훅의 시간축 초). 없으면 한 덩어리로 본다 */
+  pieces?: RecordingPiece[];
   initialRange: { startSeconds: number; endSeconds: number };
 }): EditorVideoPlayback {
-  const { streamId, recordingStartMs, recordingSeconds, initialRange } = options;
+  const { streamId, recordingStartMs, recordingSeconds, pieces, initialRange } = options;
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
-  const [win, setWin] = useState<Window>(() => windowFor(initialRange, recordingSeconds));
+  const [win, setWin] = useState<Window>(() => windowFor(initialRange, recordingSeconds, pieces));
+  const piecesRef = useRef(pieces);
+  piecesRef.current = pieces;
   const [playing, setPlaying] = useState(false);
   const [currentSeconds, setCurrentSeconds] = useState(initialRange.startSeconds);
   const [failed, setFailed] = useState(false);
@@ -75,6 +99,11 @@ export function useEditorVideoPlayback(options: {
   const [src, setSrc] = useState('');
   useEffect(() => {
     if (recordingSeconds <= 0) return undefined;
+    if (win.empty) {
+      setFailed(true);
+      setSrc('');
+      return undefined;
+    }
     const abort = new AbortController();
     let objectUrl: string | null = null;
     setFailed(false);
@@ -94,7 +123,7 @@ export function useEditorVideoPlayback(options: {
       abort.abort();
       if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
     };
-  }, [remoteUrl, recordingSeconds]);
+  }, [remoteUrl, recordingSeconds, win.empty]);
 
   const clampToWindow = useCallback((seconds: number) => {
     const w = winRef.current;
@@ -220,12 +249,20 @@ export function useEditorVideoPlayback(options: {
       const needsEarlier = bounds.startSeconds < w.startSeconds + 0.5 && w.startSeconds > 0;
       const needsLater = bounds.endSeconds > w.endSeconds - 0.5 && w.endSeconds < recordingSeconds;
       if (!needsEarlier && !needsLater) return;
+      // 녹화 구간 끝에 막혀 더 넓힐 수 없으면 창을 다시 받지 않는다 — 같은 창을 매번 새로 받게 된다
+      const next = windowFor(bounds, recordingSeconds, piecesRef.current);
+      if (
+        next.startSeconds === w.startSeconds &&
+        next.endSeconds === w.endSeconds &&
+        next.empty === w.empty
+      )
+        return;
       if (rewindowTimer.current !== null) window.clearTimeout(rewindowTimer.current);
       rewindowTimer.current = window.setTimeout(() => {
         rewindowTimer.current = null;
         const current = boundsRef.current;
         pendingSeekRef.current = current.startSeconds;
-        setWin(windowFor(current, recordingSeconds));
+        setWin(windowFor(current, recordingSeconds, piecesRef.current));
       }, REWINDOW_DELAY_MS);
     },
     [recordingSeconds],

@@ -46,7 +46,12 @@ import {
   type TrackLabels,
 } from '@/api/audioTracks';
 import { fetchDelegationsAsEditor } from '@/api/editors';
-import { fetchRecordingSpans, type RecordingSpan } from '@/api/mediaPlayback';
+import { fetchRecordingSpans } from '@/api/mediaPlayback';
+import {
+  rebaseTimeline,
+  recordingTimeline,
+  type RecordingTimeline,
+} from '@/features/player/recordingTimeline';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
 import { lookFromDocument, outputsFor, sameRecipe, subtitlesFor } from '../recipeLook';
 
@@ -217,29 +222,23 @@ interface Loaded {
   /** 스트리머가 적어 둔 트랙 이름(POK-240). 못 읽으면 null — 그때는 「트랙 n」으로 보인다 */
   trackLabels: TrackLabels | null;
   /** 녹화(재생 서버). 있으면 미리보기에 실제 영상이 나오고, 시각의 기준점도 여기다 */
-  recording: RecordingSpan | null;
+  recording: RecordingTimeline | null;
 }
 
 /**
- * 이 방송의 녹화 — 방송 시간(시작 앞 2분 ~ 끝 뒤 10분) 안 구간들을 하나로 묶는다(첫 구간 시작 ~ 마지막 구간 끝). 재생 서버의
- * 목록은 경로(스트림키) 전체라 앞 방송 녹화도 섞여 오고, 재접속하면 한 방송의 녹화도 여러 구간이 된다. 첫 구간 하나만 쓰면
- * 두 번째 방송에서 앞 방송 녹화를 잡거나 재접속 뒤 끝을 짧게 잰다(로컬 리뷰 2라운드). 재생 서버가 없거나 녹화가 없으면 null
+ * 이 방송의 녹화 — 방송 시간과 겹치는 구간들(시계 차이 1분까지)을 한 시간축에 놓는다(첫 구간 시작 ~ 마지막 구간 끝, 틈 포함).
+ * 재생 서버의 목록은 경로(스트림키) 전체라 앞 방송 녹화도 섞여 오고, 재접속하면 한 방송의 녹화도 여러 구간이 된다(로컬 리뷰
+ * 2라운드). 구간 목록은 미리보기 창이 틈에 걸리지 않게 쓴다(POK-253). 재생 서버가 없거나 녹화가 없으면 null
  */
 async function loadRecording(
   streamId: string,
   broadcast: BroadcastRow,
-): Promise<RecordingSpan | null> {
-  const from = Date.parse(broadcast.startedAt!) - 2 * 60_000;
-  const until = broadcast.endedAt
-    ? Date.parse(broadcast.endedAt) + 10 * 60_000
-    : Number.POSITIVE_INFINITY;
-  const spans = (await fetchRecordingSpans(streamId)).filter(
-    (span) => span.startMs + span.durationSeconds * 1000 >= from && span.startMs <= until,
+): Promise<RecordingTimeline | null> {
+  return recordingTimeline(
+    await fetchRecordingSpans(streamId),
+    Date.parse(broadcast.startedAt!),
+    broadcast.endedAt ? Date.parse(broadcast.endedAt) : null,
   );
-  const first = spans[0];
-  if (first === undefined) return null;
-  const end = Math.max(...spans.map((span) => span.startMs + span.durationSeconds * 1000));
-  return { startMs: first.startMs, durationSeconds: (end - first.startMs) / 1000 };
 }
 
 /**
@@ -458,12 +457,18 @@ function WiredStudio({ data }: { data: Loaded }) {
     () => ({ startSeconds: window.startMs / 1000, endSeconds: window.endMs / 1000 }),
     [window],
   );
+  // 녹화 구간들도 기준점 축으로 옮긴다 — 녹화 축과 기준점 축은 두 시작의 차만큼 갈린다
+  const recordingPieces = useMemo(
+    () => (recording === null ? undefined : rebaseTimeline(recording, base).pieces),
+    [recording, base],
+  );
   // 실재생 — 녹화가 있을 때만 어댑터를 넘긴다(한 마운트 동안 있거나 없거나 고정: 훅의 규칙).
   const video = useEditorVideoPlayback({
     streamId,
     // 재생 서버에는 「기준점 + 초」로 절대 시각을 묻는다 — 구간 초가 기준점 축이다
     recordingStartMs: base,
     recordingSeconds: recordingEndSeconds,
+    pieces: recordingPieces,
     initialRange,
   });
 

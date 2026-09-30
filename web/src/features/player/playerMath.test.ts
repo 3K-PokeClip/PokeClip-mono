@@ -18,10 +18,14 @@ describe('formatBehind — 계약3 4절 시차 표기', () => {
     expect(formatBehind(307)).toBe('-05:07');
   });
 
-  it('상한은 -1:00:00이다', () => {
+  it('1시간부터는 -H:MM:SS다 — 라이브 창의 끝은 -1:00:00', () => {
     expect(formatBehind(LIVE_WINDOW_SECONDS)).toBe('-1:00:00');
-    expect(formatBehind(LIVE_WINDOW_SECONDS + 999)).toBe('-1:00:00');
     expect(formatBehind(3599)).toBe('-59:59');
+  });
+
+  it('1시간 넘는 녹화 다시보기는 -1:00:00에서 멈추지 않는다 — POK-253', () => {
+    expect(formatBehind(LIVE_WINDOW_SECONDS + 999)).toBe('-1:16:39');
+    expect(formatBehind(9000)).toBe('-2:30:00');
   });
 
   it('음수·0은 -00:00으로 바닥을 친다', () => {
@@ -87,8 +91,10 @@ describe('behindFromSeekFraction', () => {
     expect(behindFromSeekFraction(0.5, 600)).toBe(300);
   });
 
-  it('창은 계약 상한 1시간으로 잘린다', () => {
-    expect(behindFromSeekFraction(0.5, 99999)).toBe(LIVE_WINDOW_SECONDS / 2);
+  it('창을 1시간으로 자르지 않는다 — 2시간 반 녹화의 왼쪽 끝은 처음이다(POK-253). 라이브 상한은 창을 만드는 쪽이 건다', () => {
+    expect(behindFromSeekFraction(0, 9000)).toBe(9000);
+    expect(behindFromSeekFraction(0.5, 9000)).toBe(4500);
+    expect(progressFraction(4500, 9000)).toBe(0.5);
   });
 
   it('되감을 곳이 없으면 항상 0이다', () => {
