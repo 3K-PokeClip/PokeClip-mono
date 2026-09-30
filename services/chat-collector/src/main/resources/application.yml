@@ -37,6 +37,11 @@ spring:
     # 기본 1이면 V1 이하가 스킵된다. 우리 대역은 V3xx라 실질 영향은 없지만,
     # "아무것도 스킵하지 않는다"를 정확히 말하려면 0이다.
     baseline-version: 0
+    # 🔴 동시 색인(V309 CONCURRENTLY)은 잠금을 쥔 다른 트랜잭션이 끝나기를 기다린다. Flyway 기본은 잠금을 다른 연결의
+    # 트랜잭션으로 쥐어서 V309가 그 트랜잭션을 영영 기다리다 socketTimeout(10초)에 끊겼다. 부팅은 재시도로 넘어갔지만 그 사이
+    # 뒤 마이그레이션(V310~)이 안 돌아 표가 없었다(POK-233 시험에서 찾음). 세션 잠금이면 새 DB에서 열 개가 20ms에 다 선다.
+    postgresql:
+      transactional-lock: false
   http:
     clients:
       # 복수형이다. 단수형 spring.http.client.*는 4.0.0부터 아무것도 바인딩하지
