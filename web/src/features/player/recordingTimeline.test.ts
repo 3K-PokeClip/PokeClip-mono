@@ -30,16 +30,27 @@ describe('recordingTimeline', () => {
     expect(t.pieces).toEqual([{ fromSeconds: 0, toSeconds: 22 }]);
   });
 
-  it('같은 스트림키의 앞 방송 녹화는 뺀다 — 방송 시작 2분 앞보다 먼저 끝난 구간', () => {
+  it('같은 스트림키의 앞 방송 녹화는 뺀다 — 방송 시작 1분 앞보다 먼저 끝난 구간', () => {
     const started = T0 + 3_600_000;
     const t = recordingTimeline([span(0, 60), span(3_600, 30)], started, null)!;
     expect(t.startMs).toBe(started);
     expect(t.pieces).toEqual([{ fromSeconds: 0, toSeconds: 30 }]);
   });
 
-  it('방송 종료 10분 뒤보다 늦게 시작한 구간(다음 방송)은 뺀다', () => {
-    const t = recordingTimeline([span(0, 60), span(60 + 11 * 60, 30)], T0, T0 + 60_000)!;
-    expect(t.pieces).toHaveLength(1);
+  it('종료 5분 뒤 같은 키로 켠 다음 방송은 뺀다 — 다시보기가 다음 방송으로 이어지면 안 된다(PR #205 codex)', () => {
+    const t = recordingTimeline([span(0, 60), span(60 + 5 * 60, 30)], T0, T0 + 60_000)!;
+    expect(t.pieces).toEqual([{ fromSeconds: 0, toSeconds: 60 }]);
+  });
+
+  it('시작 90초 앞에 끝난 앞 방송은 뺀다 — 0초가 앞 방송으로 밀리면 안 된다(PR #205 codex)', () => {
+    const started = T0 + 200_000;
+    const t = recordingTimeline([span(0, 110), span(200, 30)], started, null)!;
+    expect(t.startMs).toBe(started);
+  });
+
+  it('녹화기가 시작 편지보다 먼저 서고 종료 뒤에 닫힌 구간은 제 방송이다 — 방송 시간과 겹친다', () => {
+    const t = recordingTimeline([span(0, 400)], T0 + 40_000, T0 + 100_000)!;
+    expect(t.pieces).toEqual([{ fromSeconds: 0, toSeconds: 400 }]);
   });
 
   it('남는 구간이 없으면 null', () => {

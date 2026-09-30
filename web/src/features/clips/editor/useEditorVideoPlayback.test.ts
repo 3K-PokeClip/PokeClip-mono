@@ -50,6 +50,23 @@ describe('useEditorVideoPlayback — 녹화 구간', () => {
     expect(requestedWindow(fetchSpy)).toEqual({ fromSeconds: 0, toSeconds: 14 });
   });
 
+  it('구간이 통째로 틈 안이면 받지 않고 미리보기 실패로 알린다 — 엉뚱한 녹화를 보이지 않는다(PR #205 codex)', () => {
+    const { result } = renderHook(() =>
+      useEditorVideoPlayback({
+        streamId: 'gaptest',
+        recordingStartMs: BASE,
+        recordingSeconds: 114,
+        pieces: [
+          { fromSeconds: 0, toSeconds: 14 },
+          { fromSeconds: 100, toSeconds: 114 },
+        ],
+        initialRange: { startSeconds: 50, endSeconds: 60 },
+      }),
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.current.playback.error).toBe('fatal');
+  });
+
   it('구간 목록이 없으면 전처럼 앞뒤 10초 여유다', () => {
     renderHook(() =>
       useEditorVideoPlayback({

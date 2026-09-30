@@ -22,21 +22,24 @@ export interface RecordingTimeline {
   pieces: RecordingPiece[];
 }
 
-/** 방송 앞뒤로 녹화를 얼마나 넉넉히 받아 줄까 — 녹화기는 시작 편지보다 먼저 서고 종료 편지보다 늦게 닫힌다 */
-const BEFORE_START_MS = 2 * 60_000;
-const AFTER_END_MS = 10 * 60_000;
+/**
+ * 방송 시간과 이만큼 떨어져 있어도 그 방송 녹화로 본다. 녹화기가 시작 편지보다 먼저 서고 종료 뒤에 닫히는 것은 구간이 방송
+ * 시간과 **겹쳐서** 이미 들어온다 — 이 여유는 시계 차이만 받는다. 넓히면 같은 스트림키로 바로 이어 켠 앞뒤 방송 녹화가 섞여
+ * 다시보기가 다음 방송으로 이어지고 0초가 앞 방송으로 밀린다(PR #205 codex, 전에는 앞 2분·뒤 10분).
+ */
+const TOLERANCE_MS = 60_000;
 
 /**
- * 그 방송의 녹화만 골라 시간축으로 만든다. 목록은 경로(스트림키) 전체라 앞 방송 녹화도 섞여 온다 — 방송 시각으로 거른다.
- * 시작 시각을 모르면 거르지 않는다. 남는 구간이 없으면 null
+ * 그 방송의 녹화만 골라 시간축으로 만든다. 목록은 경로(스트림키) 전체라 앞뒤 방송 녹화도 섞여 온다 — 방송 시간과 겹치는
+ * 구간만 남긴다. 시작 시각을 모르면 거르지 않는다. 남는 구간이 없으면 null
  */
 export function recordingTimeline(
   spans: RecordingSpan[],
   startedAtMs: number | null,
   endedAtMs: number | null,
 ): RecordingTimeline | null {
-  const from = startedAtMs === null ? Number.NEGATIVE_INFINITY : startedAtMs - BEFORE_START_MS;
-  const until = endedAtMs === null ? Number.POSITIVE_INFINITY : endedAtMs + AFTER_END_MS;
+  const from = startedAtMs === null ? Number.NEGATIVE_INFINITY : startedAtMs - TOLERANCE_MS;
+  const until = endedAtMs === null ? Number.POSITIVE_INFINITY : endedAtMs + TOLERANCE_MS;
   const mine = spans
     .filter((span) => span.startMs + span.durationSeconds * 1000 >= from && span.startMs <= until)
     .sort((a, b) => a.startMs - b.startMs);

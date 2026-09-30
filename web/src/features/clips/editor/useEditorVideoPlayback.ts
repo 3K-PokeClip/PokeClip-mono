@@ -22,6 +22,8 @@ const REWINDOW_DELAY_MS = 500;
 interface Window {
   startSeconds: number;
   endSeconds: number;
+  /** 구간에 녹화가 하나도 없다(틈 안이거나 녹화 끝 뒤) — 받지 않고 미리보기 실패로 알린다 */
+  empty?: true;
 }
 
 function windowFor(
@@ -33,14 +35,19 @@ function windowFor(
     startSeconds: Math.max(0, range.startSeconds - PAD_SECONDS),
     endSeconds: Math.min(totalSeconds, range.endSeconds + PAD_SECONDS),
   };
+  if (pieces === undefined) return wide;
   // 구간의 시작이 든 녹화 구간(틈이면 다음 구간) 안으로 자른다
-  const piece = pieces === undefined ? null : playableFrom({ pieces }, range.startSeconds);
-  if (piece === null) return wide;
-  const containing = pieces!.find((p) => p.toSeconds === piece.toSeconds)!;
-  return {
+  const piece = playableFrom({ pieces }, range.startSeconds);
+  const containing = piece && pieces.find((p) => p.toSeconds === piece.toSeconds)!;
+  const clipped = containing && {
     startSeconds: Math.max(wide.startSeconds, containing.fromSeconds),
     endSeconds: Math.min(wide.endSeconds, containing.toSeconds),
   };
+  // 여유까지 넣어도 녹화가 안 걸리면 받지 않는다 — 두 자르기가 엇갈려 뒤집힌 창으로 엉뚱한 구간을 보였다(PR #205 codex)
+  if (!clipped || clipped.startSeconds >= clipped.endSeconds) {
+    return { startSeconds: range.startSeconds, endSeconds: range.startSeconds, empty: true };
+  }
+  return clipped;
 }
 
 export interface EditorVideoPlayback {
@@ -92,6 +99,11 @@ export function useEditorVideoPlayback(options: {
   const [src, setSrc] = useState('');
   useEffect(() => {
     if (recordingSeconds <= 0) return undefined;
+    if (win.empty) {
+      setFailed(true);
+      setSrc('');
+      return undefined;
+    }
     const abort = new AbortController();
     let objectUrl: string | null = null;
     setFailed(false);
@@ -111,7 +123,7 @@ export function useEditorVideoPlayback(options: {
       abort.abort();
       if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
     };
-  }, [remoteUrl, recordingSeconds]);
+  }, [remoteUrl, recordingSeconds, win.empty]);
 
   const clampToWindow = useCallback((seconds: number) => {
     const w = winRef.current;
@@ -239,7 +251,12 @@ export function useEditorVideoPlayback(options: {
       if (!needsEarlier && !needsLater) return;
       // 녹화 구간 끝에 막혀 더 넓힐 수 없으면 창을 다시 받지 않는다 — 같은 창을 매번 새로 받게 된다
       const next = windowFor(bounds, recordingSeconds, piecesRef.current);
-      if (next.startSeconds === w.startSeconds && next.endSeconds === w.endSeconds) return;
+      if (
+        next.startSeconds === w.startSeconds &&
+        next.endSeconds === w.endSeconds &&
+        next.empty === w.empty
+      )
+        return;
       if (rewindowTimer.current !== null) window.clearTimeout(rewindowTimer.current);
       rewindowTimer.current = window.setTimeout(() => {
         rewindowTimer.current = null;
