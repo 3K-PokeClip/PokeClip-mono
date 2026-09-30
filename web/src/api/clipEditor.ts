@@ -40,6 +40,16 @@ export interface BroadcastRow {
    * 이 칸을 모르는 옛 서버면 빠져 온다. 둘 다 방송 시작 시각으로 대신한다(수십 초 어긋날 수 있다)
    */
   timelineOriginAt?: string | null;
+  /**
+   * 영상 경로의 키(POK-233) — 라이브·녹화 주소의 자리. 방송 번호가 회차 번호가 되면 이것과 갈린다. 이 칸을 모르는 옛 서버면
+   * 빠져 오고, 그때는 방송 번호가 곧 영상 경로다({@link mediaStreamId})
+   */
+  ingestStreamId?: string | null;
+}
+
+/** 영상 주소(라이브 LL-HLS·녹화 재생)를 만드는 키. 방송을 가리키는 번호(API 경로·자격)에는 쓰지 않는다 */
+export function mediaStreamId(row: Pick<BroadcastRow, 'streamId' | 'ingestStreamId'>): string {
+  return row.ingestStreamId || row.streamId;
 }
 
 /**

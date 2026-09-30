@@ -4,6 +4,7 @@ import {
   fetchAllBroadcasts,
   fetchBroadcast,
   fetchJumpCard,
+  mediaStreamId,
   requestRender,
 } from '@/api/clipEditor';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
@@ -110,5 +111,14 @@ describe('카드 목록 쪽 넘기기', () => {
     expect(urls).toHaveLength(2);
     expect(urls[0]).toContain('includeHidden=true');
     expect(urls[0]).toContain('limit=200');
+  });
+});
+
+describe('mediaStreamId — 영상 주소의 키(POK-233)', () => {
+  it('영상 경로의 키가 있으면 그것, 없거나 비면 방송 번호다', () => {
+    expect(mediaStreamId({ streamId: 'S-20260930-010000-k-1', ingestStreamId: 'k' })).toBe('k');
+    expect(mediaStreamId({ streamId: 'old-key' })).toBe('old-key');
+    expect(mediaStreamId({ streamId: 'old-key', ingestStreamId: null })).toBe('old-key');
+    expect(mediaStreamId({ streamId: 'old-key', ingestStreamId: '' })).toBe('old-key');
   });
 });

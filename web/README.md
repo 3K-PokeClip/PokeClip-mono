@@ -123,6 +123,10 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
   그래서 `recordingTimeline`이 **방송 시간 [시작, 종료]와 실제로 겹치는** 구간들(여유 없음 — 여유를 두면 같은 키로 그 안에 이어
   켠 앞뒤 방송이 섞인다. 켜자마자 끊긴 아주 짧은 첫 구간은 빠진다)을 한 축(첫 구간 시작 ~ 마지막 구간 끝, **틈 포함** —
   접으면 틈 뒤 카드가 어긋난다)에 놓고, 다시보기는 **한 구간씩** 받아 끝나면 다음 구간을 이어 튼다(틈을 누르면 다음 구간 시작).
+- 🔴 **영상 주소는 방송 번호가 아니라 영상 경로의 키로 만든다 (POK-233).** 1번이 편지의 방송 번호를 방송마다 새 회차 번호로
+  바꾸면 라이브·녹화 경로(스트림키)와 갈린다. clip이 방송 줄에 `ingestStreamId`를 실어 주고, 라이브 LL-HLS·녹화 목록·다시보기·
+  편집기 미리보기는 `mediaStreamId(row)`(= `ingestStreamId`, 없거나 비면 방송 번호)를 쓴다. **API 경로·출입증·채팅·카드는 방송
+  번호 그대로다.** 주소의 `?stream=`도 방송 번호라 영상 경로로 바로 쓰지 않는다(`useMediaSource`는 넘겨받은 키만 본다).
   편집기 미리보기 창은 구간의 시작이 든 녹화 구간 안으로 자른다(틈을 건너는 카드는 틈 앞까지만 보이고, 구간 자체에 녹화가 없으면
   여유가 다음 녹화에 닿아도 받지 않고 미리보기 실패로 알린다). 구간 시작은 **ms 올림**으로
   읽는다 — 재생 서버가 마이크로초까지 주는데 내리면 두 번째 구간부터 0.2ms 틈 안으로 들어가 404다(`parseSpanStartMs`). 시크바는
@@ -157,7 +161,7 @@ web/                     # 단일 Next.js 앱 (App Router + TanStack Query + Zus
 | `CLIP_API_URL`                        | `http://localhost:8081`    | clip 서버 — `/api/clip/*` rewrites 프록시 대상                                  |
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID`        | 구글 OAuth 클라이언트 ID   | 로그인 동의 URL 조립 — 백엔드 `GOOGLE_CLIENT_ID`와 같은 값                      |
 | `NEXT_PUBLIC_MEDIA_STUB_URL`          | 스텁 m3u8 주소             | 플레이어 개발용 정적 세그먼트 ([`infra/compose/stub/`](../infra/compose/stub/)) |
-| `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | LL-HLS 베이스              | 진짜 미디어 서버 (`{base}/{streamId}/index.m3u8`)                               |
+| `NEXT_PUBLIC_MEDIA_LIVE_BASE_URL`     | LL-HLS 베이스              | 진짜 미디어 서버 (`{base}/{영상 경로 키}/index.m3u8`, POK-233)                  |
 | `NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL` | 녹화 재생 서버 (비워도 됨) | 끝난 방송 다시보기·편집기 미리보기 (`{base}/list`·`{base}/get`, POK-251)        |
 
 서버 주소는 **코드에 하드코딩하지 않는다** — env 참조만. env가 없으면 해당 rewrites가

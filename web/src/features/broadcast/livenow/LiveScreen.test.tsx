@@ -23,6 +23,32 @@ vi.mock('next/navigation', () => ({
   notFound,
 }));
 
+// 영상 주소를 만든 키를 잰다(POK-233) — 실제 구현을 그대로 부르고 받은 키만 적는다
+const mediaCalls = vi.hoisted(() => ({
+  keys: [] as (string | null | undefined)[],
+  spans: [] as string[],
+}));
+vi.mock('@/features/player/mediaSource', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/features/player/mediaSource')>();
+  return {
+    ...actual,
+    useMediaSource: (key?: string | null) => {
+      mediaCalls.keys.push(key);
+      return actual.useMediaSource(key);
+    },
+  };
+});
+vi.mock('@/api/mediaPlayback', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/mediaPlayback')>();
+  return {
+    ...actual,
+    fetchRecordingSpans: (streamId: string) => {
+      mediaCalls.spans.push(streamId);
+      return actual.fetchRecordingSpans(streamId);
+    },
+  };
+});
+
 const STREAM_ID = 'live-1';
 const NOW = Date.parse('2026-09-26T12:00:00Z');
 /** 방송 경과 1:24:03 */
@@ -175,6 +201,8 @@ const server = vi.hoisted(() => ({
   playback: 'off' as 'off' | 'grant' | 'fail',
   /** 지난 방송의 시각 기준점(POK-255). null이면 서버가 모른다 */
   vodOrigin: null as number | null,
+  /** 영상 경로의 키(POK-233). undefined면 이 칸을 모르는 옛 서버다 */
+  ingest: undefined as string | undefined,
 }));
 
 /** 지난 방송(2시간 반) — 수집기 1시간 창을 넘는다 */
@@ -195,6 +223,7 @@ function handle(url: string) {
       startedAt: new Date(STARTED_AT).toISOString(),
       endedAt: null,
       vodExpiresAt: null,
+      ingestStreamId: server.ingest,
     };
     const vod = {
       streamId: VOD_ID,
@@ -204,6 +233,7 @@ function handle(url: string) {
       endedAt: new Date(VOD_ENDED).toISOString(),
       vodExpiresAt: null,
       timelineOriginAt: server.vodOrigin === null ? null : new Date(server.vodOrigin).toISOString(),
+      ingestStreamId: server.ingest,
     };
     if (u.searchParams.get('state') === 'past')
       return jsonResponse(200, { broadcasts: [vod], nextCursor: null });
@@ -267,6 +297,9 @@ let fetchSpy: ReturnType<typeof stubFetch>;
 beforeEach(() => {
   nav.search = '';
   server.vodOrigin = null;
+  server.ingest = undefined;
+  mediaCalls.keys = [];
+  mediaCalls.spans = [];
   server.live = true;
   server.failLive = false;
   server.relation = 'OWNER';
@@ -826,6 +859,39 @@ describe('LiveScreen — 긴 지난 방송', () => {
     expect(
       info.some((u) => u.searchParams.get('since') === new Date(VOD_STARTED).toISOString()),
     ).toBe(true);
+  });
+});
+
+describe('LiveScreen — 영상 경로의 키(POK-233)', () => {
+  afterEach(() => {
+    window.history.pushState({}, '', '/');
+  });
+
+  it('라이브 영상 주소는 방송 번호가 아니라 영상 경로의 키로 만든다 — 방송 번호가 회차 번호면 그 경로가 없다', async () => {
+    server.ingest = 'key-live';
+    await renderLive();
+    expect(mediaCalls.keys.at(-1)).toBe('key-live');
+  });
+
+  it('주소의 ?stream= 은 방송 번호다 — 그 값을 영상 경로로 바로 쓰지 않는다', async () => {
+    server.ingest = 'key-live';
+    nav.search = `?stream=${STREAM_ID}`;
+    window.history.pushState({}, '', `/broadcast?stream=${STREAM_ID}`);
+    await renderLive();
+    expect(mediaCalls.keys.at(-1)).toBe('key-live');
+  });
+
+  it('칸을 모르는 옛 서버면 방송 번호가 곧 영상 경로다', async () => {
+    await renderLive();
+    expect(mediaCalls.keys.at(-1)).toBe(STREAM_ID);
+  });
+
+  it('끝난 방송의 녹화는 영상 경로의 키로 찾는다', async () => {
+    server.ingest = 'key-vod';
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(mediaCalls.spans).toContain('key-vod');
+    expect(mediaCalls.spans).not.toContain(VOD_ID);
   });
 });
 

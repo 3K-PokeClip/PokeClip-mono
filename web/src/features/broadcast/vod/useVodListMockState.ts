@@ -1,6 +1,6 @@
 'use client';
 
-import { fetchAllBroadcasts, fetchAllJumpCards } from '@/api/clipEditor';
+import { fetchAllBroadcasts, fetchAllJumpCards, mediaStreamId } from '@/api/clipEditor';
 
 /** 지난 방송 목록을 다시 읽는 간격 — 끝난 방송이라 자주 볼 까닭이 없다 */
 const LIST_POLL_MS = 60_000;
@@ -126,6 +126,8 @@ interface WireBroadcast {
   startedAt: string | null;
   endedAt: string | null;
   vodExpiresAt: string | null;
+  /** 녹화 경로의 키(POK-233). 옛 서버면 빠져 온다 */
+  ingestStreamId?: string | null;
 }
 
 export function useVodListMockState(options: VodListOptions = {}): VodListMockState {
@@ -167,7 +169,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
                       () => null,
                     ),
                 // 녹화 재생 서버가 있으면 그 방송의 녹화가 실제로 있는지 본다 — 없으면 열어도 「영상 신호 없음」뿐이다
-                checkRecording(b) ? fetchRecordingSpans(b.streamId) : Promise.resolve([]),
+                checkRecording(b) ? fetchRecordingSpans(mediaStreamId(b)) : Promise.resolve([]),
               ]);
               // 카드 수를 못 읽었으면 기억하지 않는다 — 다음 주기에 다시 잰다.
               // 「녹화 있음」만 굳힌다: 방송 직후엔 녹화가 늦게 생기고 재생 서버가 잠깐 실패해도 빈 목록이 온다.

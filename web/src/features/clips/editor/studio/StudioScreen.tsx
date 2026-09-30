@@ -14,6 +14,7 @@ import {
   fetchLibraryDetail,
   fetchMeLoose,
   requestRender,
+  mediaStreamId,
   timelineBaseMs,
   updateRecipe,
   CUT_MAX_MS,
@@ -230,12 +231,10 @@ interface Loaded {
  * 재생 서버의 목록은 경로(스트림키) 전체라 앞 방송 녹화도 섞여 오고, 재접속하면 한 방송의 녹화도 여러 구간이 된다(로컬 리뷰
  * 2라운드). 구간 목록은 미리보기 창이 틈에 걸리지 않게 쓴다(POK-253). 재생 서버가 없거나 녹화가 없으면 null
  */
-async function loadRecording(
-  streamId: string,
-  broadcast: BroadcastRow,
-): Promise<RecordingTimeline | null> {
+async function loadRecording(broadcast: BroadcastRow): Promise<RecordingTimeline | null> {
   return recordingTimeline(
-    await fetchRecordingSpans(streamId),
+    // 녹화 재생 서버의 경로는 영상 키다(POK-233) — 방송 번호가 회차 번호면 그 이름의 녹화가 없다
+    await fetchRecordingSpans(mediaStreamId(broadcast)),
     Date.parse(broadcast.startedAt!),
     broadcast.endedAt ? Date.parse(broadcast.endedAt) : null,
   );
@@ -292,7 +291,7 @@ async function loadFromCard(streamId: string, cardId: string): Promise<Status> {
   }
   const [trackLabels, recording] = await Promise.all([
     loadTrackLabels(broadcast),
-    loadRecording(streamId, broadcast),
+    loadRecording(broadcast),
   ]);
   return {
     kind: 'loaded',
@@ -324,7 +323,7 @@ async function loadFromRecipe(recipeId: number): Promise<Status> {
       message: '방송 시작 시각이 없어 편집본의 구간을 화면 축으로 못 옮겨요',
     };
   }
-  const recording = await loadRecording(detail.streamId, broadcast);
+  const recording = await loadRecording(broadcast);
   // 🔴 컷(절대 시각)을 화면 축으로 되돌리는 기준점은 시각 기준점이다(서버 → 녹화 재생 서버 → 방송 시작, POK-255) —
   //    저장할 때와 같은 기준이어야 제자리로 온다.
   const base = timelineBaseMs(broadcast, recording?.startMs ?? null);
@@ -464,7 +463,7 @@ function WiredStudio({ data }: { data: Loaded }) {
   );
   // 실재생 — 녹화가 있을 때만 어댑터를 넘긴다(한 마운트 동안 있거나 없거나 고정: 훅의 규칙).
   const video = useEditorVideoPlayback({
-    streamId,
+    streamId: mediaStreamId(broadcast),
     // 재생 서버에는 「기준점 + 초」로 절대 시각을 묻는다 — 구간 초가 기준점 축이다
     recordingStartMs: base,
     recordingSeconds: recordingEndSeconds,
