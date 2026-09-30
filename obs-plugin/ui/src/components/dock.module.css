@@ -225,6 +225,59 @@
   font-weight: var(--pc-weight-medium);
 }
 
+/* ---------- 순간 표시 (A4) ---------- */
+.markBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pc-space-2);
+  padding-top: var(--pc-space-2);
+  border-top: 1px solid var(--pc-color-border-subtle);
+}
+.markRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pc-space-2);
+}
+.markButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pc-space-2);
+  height: 30px;
+  padding: 0 var(--pc-space-3);
+  border: 1px solid rgb(var(--pc-point-500-rgb) / 0.45);
+  border-radius: var(--pc-radius-md);
+  background: var(--pc-color-point-subtle);
+  color: var(--pc-color-point-text);
+  font-size: var(--pc-font-size-xs);
+  font-weight: var(--pc-weight-semibold);
+  cursor: pointer;
+  transition:
+    border-color var(--pc-duration-fast) var(--pc-ease-standard),
+    filter var(--pc-duration-fast) var(--pc-ease-standard);
+}
+.markButton:hover:not(:disabled) {
+  border-color: var(--pc-color-point);
+  filter: brightness(1.08);
+}
+.markButton:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.markHint {
+  font-size: var(--pc-font-size-2xs);
+  color: var(--pc-color-text-muted);
+}
+.kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--pc-color-border-default);
+  border-radius: var(--pc-radius-sm);
+  background: var(--pc-color-bg-inset);
+  font-family: var(--pc-font-mono);
+  font-size: var(--pc-font-size-2xs);
+  color: var(--pc-color-text-secondary);
+}
+
 /* ---------- 오류 알림 ---------- */
 .alert {
   display: flex;
@@ -353,6 +406,12 @@
   flex: none;
   margin-top: 1px;
   color: var(--pc-color-danger);
+}
+.toast[data-tone='success'] {
+  border-color: rgb(var(--pc-green-600-rgb) / 0.45);
+}
+.toast[data-tone='success'] .toastIcon {
+  color: var(--pc-color-success);
 }
 .toastText {
   flex: 1;

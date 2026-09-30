@@ -1,4 +1,4 @@
-import { Unlink } from 'lucide-preact';
+import { BookmarkPlus, Unlink } from 'lucide-preact';
 import { useEffect, useState } from 'preact/hooks';
 import { reasonText } from '../lib/copy';
 import { formatKbps, formatUptime, sparklinePath } from '../lib/format';
@@ -38,6 +38,64 @@ function Sparkline({ values }: { values: number[] }) {
   );
 }
 
+// A4 「지금 이 순간 표시」 — 핫키와 같은 대기열로 간다. 누른 뒤 2초는 플러그인도 연타로 거른다.
+const MARK_COOLDOWN_MS = 2000;
+
+function MarkRow({ state, onMark }: { state: BridgeState; onMark: () => void }) {
+  const [cooling, setCooling] = useState(false);
+  useEffect(() => {
+    if (!cooling) return;
+    const t = setTimeout(() => setCooling(false), MARK_COOLDOWN_MS);
+    return () => clearTimeout(t);
+  }, [cooling]);
+  const { hotkey, sent, pending, failed } = state.marks;
+
+  return (
+    <div class={styles.markBox}>
+      <div class={styles.markRow}>
+        <button
+          type="button"
+          class={styles.markButton}
+          disabled={cooling}
+          onClick={() => {
+            setCooling(true);
+            onMark();
+          }}
+        >
+          <BookmarkPlus size={13} strokeWidth={2.2} aria-hidden="true" />
+          <span>지금 이 순간 표시</span>
+        </button>
+        <span class={styles.markHint}>
+          {hotkey ? (
+            <>
+              단축키 <kbd class={styles.kbd}>{hotkey}</kbd>
+            </>
+          ) : (
+            '단축키 없음 · OBS 설정 › 단축키'
+          )}
+        </span>
+      </div>
+      {sent + pending + failed > 0 ? (
+        <div class={styles.metaRow}>
+          <span>
+            표시 <b>{sent}</b>
+          </span>
+          {pending > 0 ? (
+            <span>
+              보내는 중 <b>{pending}</b>
+            </span>
+          ) : null}
+          {failed > 0 ? (
+            <span>
+              실패 <b>{failed}</b>
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 type Tone = 'ready' | 'live' | 'warning' | 'danger' | undefined;
 
 function copyFor(state: BridgeState): { title: string; desc: string; tone: Tone } {
@@ -59,7 +117,15 @@ function copyFor(state: BridgeState): { title: string; desc: string; tone: Tone 
   }
 }
 
-export function StatusCard({ state, onAskUnpair }: { state: BridgeState; onAskUnpair: () => void }) {
+export function StatusCard({
+  state,
+  onAskUnpair,
+  onMark,
+}: {
+  state: BridgeState;
+  onAskUnpair: () => void;
+  onMark: () => void;
+}) {
   const history = useBitrateHistory(state);
   const { phase } = state;
   const sending = phase === 'live' || phase === 'reconnecting';
@@ -98,6 +164,7 @@ export function StatusCard({ state, onAskUnpair }: { state: BridgeState; onAskUn
                 드롭 <b>{state.stats.droppedFrames.toLocaleString('ko-KR')}</b>
               </span>
             </div>
+            <MarkRow state={state} onMark={onMark} />
           </>
         ) : null}
 

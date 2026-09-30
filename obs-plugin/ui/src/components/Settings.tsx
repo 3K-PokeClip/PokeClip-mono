@@ -68,7 +68,7 @@ export function Settings({ bridge, locked }: { bridge: Bridge; locked: boolean }
     e.preventDefault();
     if (!draft) return;
     setSaving(true);
-    const { api_base: _unused, ...editable } = draft;
+    const { api_base: _unused, clip_api_base: _dev, ...editable } = draft;
     const result = await bridge.putSettings(editable);
     setSaving(false);
     if (result.ok) {

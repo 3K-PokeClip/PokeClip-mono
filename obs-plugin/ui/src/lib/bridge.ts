@@ -9,6 +9,7 @@ export interface Bridge {
   unpair(): Promise<ActionResult>;
   getSettings(): Promise<PluginSettings>;
   putSettings(next: Partial<PluginSettings>): Promise<ActionResult & { settings?: PluginSettings }>;
+  mark(): Promise<ActionResult>; // A4 「지금 표시」 — 결과는 state.marks로 온다
 }
 
 const TOKEN_KEY = 'pokeclip.bridge.token';
@@ -113,6 +114,11 @@ export function createHttpBridge(token: string): Bridge {
     async putSettings(next) {
       const res = await fetch('/api/config', { method: 'PUT', headers: json, body: JSON.stringify(next) });
       if (res.ok) return { ok: true, settings: (await res.json()) as PluginSettings };
+      return readResult(res);
+    },
+
+    async mark() {
+      const res = await fetch('/api/mark', { method: 'POST', headers });
       return readResult(res);
     },
   };

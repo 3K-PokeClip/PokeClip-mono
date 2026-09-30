@@ -1,5 +1,5 @@
 import { CircleCheck, CircleDashed, CircleX, type LucideIcon, Radio, RefreshCw, WifiOff } from 'lucide-preact';
-import { useCallback, useEffect, useState } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { AudioTracks } from './components/AudioTracks';
 import { Checks } from './components/Checks';
 import styles from './components/dock.module.css';
@@ -10,7 +10,7 @@ import { StatusCard } from './components/StatusCard';
 import { Toast } from './components/Toast';
 import { UnpairDialog } from './components/UnpairDialog';
 import type { Bridge } from './lib/bridge';
-import { PHASE_LABEL, reasonText } from './lib/copy';
+import { markToast, PHASE_LABEL, reasonText, type ToastTone } from './lib/copy';
 import type { BridgeState } from './lib/types';
 
 type BadgeTone = 'neutral' | 'success' | 'point' | 'warning' | 'danger';
@@ -40,6 +40,8 @@ export function App({ bridge }: { bridge: Bridge }) {
   const [confirmUnpair, setConfirmUnpair] = useState(false);
   const [actionError, setActionError] = useState('');
   const [toastDismissed, setToastDismissed] = useState(false);
+  const [markNotice, setMarkNotice] = useState<{ tone: ToastTone; message: string } | null>(null);
+  const seenMarkSeq = useRef<number | null>(null);
 
   useEffect(() => {
     bridge
@@ -61,7 +63,32 @@ export function App({ bridge }: { bridge: Bridge }) {
     if (!state?.obsStreaming) setToastDismissed(false);
   }, [state?.obsStreaming]);
 
+  // 마크 결과는 seq가 오를 때 한 번만 알린다. 처음 붙을 때 남아 있던 지난 결과는 띄우지 않는다.
+  useEffect(() => {
+    if (!state) return;
+    const seq = state.marks.seq;
+    if (seenMarkSeq.current === null || seq < seenMarkSeq.current) {
+      seenMarkSeq.current = seq; // 첫 상태 · 플러그인 재시작
+      return;
+    }
+    if (seq === seenMarkSeq.current) return;
+    seenMarkSeq.current = seq;
+    const notice = markToast(state.marks);
+    if (notice) setMarkNotice(notice);
+  }, [state?.marks.seq]);
+
+  useEffect(() => {
+    if (!markNotice) return;
+    const t = setTimeout(() => setMarkNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [markNotice]);
+
   const closeDialog = useCallback(() => setConfirmUnpair(false), []);
+  const mark = useCallback(async () => {
+    // 거절 사유(방송 아님 등)는 state.marks로 오고, 연타만 여기서 알린다.
+    const r = await bridge.mark();
+    if (!r.ok && r.reason === 'mark_too_soon') setMarkNotice({ tone: 'warning', message: reasonText(r.reason) });
+  }, [bridge]);
 
   if (fatal && !state) {
     return (
@@ -110,6 +137,7 @@ export function App({ bridge }: { bridge: Bridge }) {
             setActionError('');
             setConfirmUnpair(true);
           }}
+          onMark={mark}
         />
       ) : (
         <PairCard onPair={(code) => bridge.pair(code)} />
@@ -137,7 +165,11 @@ export function App({ bridge }: { bridge: Bridge }) {
         />
       ) : null}
 
-      {showNoKeyToast ? <Toast message={reasonText('no_key')} onDismiss={() => setToastDismissed(true)} /> : null}
+      {showNoKeyToast ? (
+        <Toast message={reasonText('no_key')} onDismiss={() => setToastDismissed(true)} />
+      ) : markNotice ? (
+        <Toast tone={markNotice.tone} message={markNotice.message} onDismiss={() => setMarkNotice(null)} />
+      ) : null}
     </main>
   );
 }

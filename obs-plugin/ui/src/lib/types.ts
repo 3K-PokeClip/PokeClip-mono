@@ -14,6 +14,19 @@ export interface AudioRouting {
   overflow: number;
 }
 
+// A4 — 핫키 마킹. seq가 오를 때마다 결과 토스트를 한 번 띄운다 (src/app-state.hpp MarkStats).
+export type MarkResult = '' | 'sent' | 'retrying' | 'failed' | 'rejected';
+export interface MarkStats {
+  hotkey: string; // OBS 표기 그대로 (macOS ⌃⇧M · Windows Ctrl + Shift + M). 빈 문자열이면 안 묶였다
+  sent: number;
+  pending: number;
+  failed: number;
+  seq: number;
+  result: MarkResult;
+  reason: string;
+  lastAt: number;
+}
+
 export interface BridgeState {
   version: number;
   paired: boolean;
@@ -43,6 +56,7 @@ export interface BridgeState {
     audioTrackCount: number;
   };
   audio: AudioRouting;
+  marks: MarkStats;
 }
 
 export interface Hello {
@@ -61,6 +75,7 @@ export interface PluginSettings {
   sync_start: boolean;
   force_fallback: boolean;
   audio_auto_assign: boolean;
+  clip_api_base?: string; // 개발용 — 화면에 없다. 비우면 api_base
 }
 
 export type ActionResult = { ok: true } | { ok: false; reason: string };
