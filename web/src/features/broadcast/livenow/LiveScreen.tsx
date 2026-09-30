@@ -16,7 +16,7 @@ import { requestPlaybackAccess } from '@/api/clipEditor';
 import { vodStreamIdFromPath } from '@/features/broadcast/streamSelection';
 import { fetchRecordingSpans } from '@/api/mediaPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
-import { recordingTimeline } from '@/features/player/recordingTimeline';
+import { rebaseTimeline, recordingTimeline } from '@/features/player/recordingTimeline';
 import { publishLiveData, useLiveData } from './liveDataStore';
 import { useBroadcastClock, type BroadcastStatus } from './useBroadcastClock';
 import { useChatPanelMockState } from './useChatPanelMockState';
@@ -74,7 +74,7 @@ function LivePlayer({
 }) {
   // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
   // 주소에 ?stream= 이 없으면 clip 명부에서 고른 방송(liveDataStore)의 영상을 튼다.
-  const { streamId: liveStreamId } = useLiveData();
+  const { streamId: liveStreamId, originMs } = useLiveData();
   const src = useMediaSource(liveStreamId);
   // 끝난 방송은 LL-HLS 주소가 닫힌다 — 녹화 재생 서버에서 다시보기를 튼다(있을 때만).
   const [recorded, setRecorded] = useState<RecordedSource | null>(null);
@@ -85,8 +85,11 @@ function LivePlayer({
     let alive = true;
     // 첫 구간 하나만 쓰면 송출이 한 번 끊긴 방송은 그 뒤를 못 보고, 앞 방송 녹화를 잡을 수도 있다(POK-253)
     void fetchRecordingSpans(liveStreamId).then((spans) => {
-      const timeline = recordingTimeline(spans, startedAt, endedAt);
-      if (alive && timeline) {
+      const found = recordingTimeline(spans, startedAt, endedAt);
+      if (alive && found) {
+        // 재생기의 0초를 서버 기준점(카드·조각 위치의 0초, POK-255)에 세운다 — 녹화 시작에 세우면 두 시작의 차만큼 카드를
+        // 누른 자리와 영상이 어긋난다(POK-253). 서버가 모르면(null) 녹화 시작
+        const timeline = originMs === null ? found : rebaseTimeline(found, originMs);
         setRecorded({ streamId: liveStreamId, ...timeline });
         // 영상의 0초가 곧 카드 시점의 0초다 — 채팅도 이 기준으로 시점을 잡게 알린다
         publishLiveData({ timeBaseMs: timeline.startMs });
@@ -95,7 +98,7 @@ function LivePlayer({
     return () => {
       alive = false;
     };
-  }, [broadcastStatus, liveStreamId, startedAt, endedAt]);
+  }, [broadcastStatus, liveStreamId, startedAt, endedAt, originMs]);
   // 영상 출입증(POK-122) — 방송을 열 때 받고, 만료 5분 전에 다시 받는다. 쿠키 수명(운영 60분)이 지나면 새 조각이
   // 403이 되어 재생이 멈춘다(PR #200 codex P1). 실패하면 1분 뒤 다시 받는다. 서명 재료가 없는 서버(503)는
   // 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다. 실패해도 재생은 시도한다(로컬 media는 쿠키를 안 본다).

@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { recordingTimeline } from './recordingTimeline';
+import { rebaseTimeline, recordingTimeline } from './recordingTimeline';
 import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
 
 // 끝난 방송 다시보기(POK-253). 재생 서버는 틈을 건너 주지 않으므로(실측) 한 구간씩 달라 하고 이어 튼다.
@@ -182,6 +182,63 @@ describe('useRecordedPlayback — 틈 앞뒤로 오가기(PR #205 codex)', () =>
     act(() => result.current.togglePlay());
 
     expect(requested(video)).toEqual({ fromSeconds: 0, duration: 14 });
+    expect(play).toHaveBeenCalled();
+  });
+});
+
+describe('useRecordedPlayback — 남은 재생기 결함(POK-253)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('「실시간으로」는 녹화 끝으로 간다 — 전에는 처음(0초)으로 갔다', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() =>
+      useRecordedPlayback(
+        { current: video },
+        source([
+          [0, 14],
+          [24, 14],
+        ]),
+      ),
+    );
+    act(() => result.current.returnToLive());
+    act(() => vi.advanceTimersByTime(300));
+    expect(requested(video)).toEqual({ fromSeconds: 37, duration: 1 });
+    expect(result.current.atEdge).toBe(true);
+  });
+
+  it('보이는 볼륨(70%)을 영상에 싣는다 — 전에는 노드가 100%였다', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() => useRecordedPlayback({ current: video }, source([[0, 14]])));
+    expect(result.current.volume).toBe(70);
+    expect(video.volume).toBeCloseTo(0.7);
+  });
+
+  it('화질·저지연 설정 메뉴를 안 보인다 — 렌디션이 하나라 거짓 선택지다', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() => useRecordedPlayback({ current: video }, source([[0, 14]])));
+    expect(result.current.settingsMenu).toBe(false);
+  });
+
+  it('서버 기준점 축이면 첫 구간이 3초에 선다 — 받는 줄기도 녹화 시작부터, 다 본 뒤 재생은 브라우저가 그 줄기를 다시 튼다', () => {
+    const { video, play } = fakeVideo();
+    const rebased = { streamId: 'gaptest', ...rebaseTimeline(source([[0, 14]]), T0 - 3_000) };
+    const { result } = renderHook(() => useRecordedPlayback({ current: video }, rebased));
+    const url = new URL(video.src, 'http://localhost');
+    expect(Date.parse(url.searchParams.get('start')!)).toBe(T0);
+    expect(Number(url.searchParams.get('duration'))).toBe(14);
+
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+    const before = video.src;
+    play.mockClear();
+
+    // 첫 구간이 3초에 서므로 「0초로 돌리기」는 같은 줄기다 — 갈아 끼우지 않고 브라우저에 다시 틀게 한다
+    act(() => result.current.togglePlay());
+    expect(video.src).toBe(before);
     expect(play).toHaveBeenCalled();
   });
 });

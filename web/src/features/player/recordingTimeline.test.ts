@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { playableBackFrom, playableFrom, recordingTimeline } from './recordingTimeline';
+import {
+  playableBackFrom,
+  playableFrom,
+  rebaseTimeline,
+  recordingTimeline,
+} from './recordingTimeline';
 
 // 녹화 구간 여럿 → 한 시간축(POK-253). 재생 서버는 틈을 건너 주지 않으므로(실측) 한 구간씩 튼다.
 
@@ -30,23 +35,30 @@ describe('recordingTimeline', () => {
     expect(t.pieces).toEqual([{ fromSeconds: 0, toSeconds: 22 }]);
   });
 
-  it('같은 스트림키의 앞 방송 녹화는 뺀다 — 방송 시작 1분 앞보다 먼저 끝난 구간', () => {
+  it('같은 스트림키의 앞 방송 녹화는 뺀다 — 방송 시작보다 먼저 끝난 구간', () => {
     const started = T0 + 3_600_000;
     const t = recordingTimeline([span(0, 60), span(3_600, 30)], started, null)!;
     expect(t.startMs).toBe(started);
     expect(t.pieces).toEqual([{ fromSeconds: 0, toSeconds: 30 }]);
   });
 
-  it('종료 5분 뒤 같은 키로 켠 다음 방송은 뺀다 — 다시보기가 다음 방송으로 이어지면 안 된다(PR #205 codex)', () => {
-    const t = recordingTimeline([span(0, 60), span(60 + 5 * 60, 30)], T0, T0 + 60_000)!;
-    expect(t.pieces).toEqual([{ fromSeconds: 0, toSeconds: 60 }]);
-  });
+  it.each([5 * 60, 30])(
+    '종료 %i초 뒤 같은 키로 켠 다음 방송은 뺀다 — 다시보기가 다음 방송으로 이어지면 안 된다(PR #205 codex)',
+    (after) => {
+      const t = recordingTimeline([span(0, 60), span(60 + after, 30)], T0, T0 + 60_000)!;
+      expect(t.pieces).toEqual([{ fromSeconds: 0, toSeconds: 60 }]);
+    },
+  );
 
-  it('시작 90초 앞에 끝난 앞 방송은 뺀다 — 0초가 앞 방송으로 밀리면 안 된다(PR #205 codex)', () => {
-    const started = T0 + 200_000;
-    const t = recordingTimeline([span(0, 110), span(200, 30)], started, null)!;
-    expect(t.startMs).toBe(started);
-  });
+  it.each([90, 30])(
+    '시작 %i초 앞에 끝난 앞 방송은 뺀다 — 0초가 앞 방송으로 밀리면 안 된다(PR #205 codex)',
+    (before) => {
+      const started = T0 + 200_000;
+      const t = recordingTimeline([span(0, 200 - before), span(200, 30)], started, null)!;
+      expect(t.startMs).toBe(started);
+      expect(t.pieces).toHaveLength(1);
+    },
+  );
 
   it('녹화기가 시작 편지보다 먼저 서고 종료 뒤에 닫힌 구간은 제 방송이다 — 방송 시간과 겹친다', () => {
     const t = recordingTimeline([span(0, 400)], T0 + 40_000, T0 + 100_000)!;
@@ -95,5 +107,18 @@ describe('playableBackFrom — 뒤로 갈 때', () => {
 
   it('첫 구간 앞이면 첫 구간 시작', () => {
     expect(playableBackFrom(t, -3)).toBe(0);
+  });
+});
+
+describe('rebaseTimeline — 서버 기준점 축으로', () => {
+  it('녹화가 기준점보다 3초 늦게 섰으면 구간이 3초씩 뒤로 간다 — 카드를 누른 자리와 영상이 맞게', () => {
+    const t = recordingTimeline([span(0, 14), span(24, 14)], null, null)!;
+    const r = rebaseTimeline(t, T0 - 3_000);
+    expect(r.startMs).toBe(T0 - 3_000);
+    expect(r.pieces).toEqual([
+      { fromSeconds: 3, toSeconds: 17 },
+      { fromSeconds: 27, toSeconds: 41 },
+    ]);
+    expect(r.durationSeconds).toBe(41);
   });
 });

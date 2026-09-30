@@ -29,6 +29,8 @@ export function useRecordedPlayback(
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
   const [volume, setVolumeState] = useState(70);
+  const volumeRef = useRef(70);
+  volumeRef.current = volume;
   /** 가고 싶은 자리(방송 기준 초). 실제 줄기는 여기서 틀 수 있는 구간부터다 */
   const [offset, setOffset] = useState(0);
   const [position, setPosition] = useState(0);
@@ -73,6 +75,8 @@ export function useRecordedPlayback(
     if (video === null) return undefined;
     video.src = src;
     video.muted = muted;
+    // 70%로 보이는데 노드는 기본 100%였다(POK-253) — 줄기를 갈아 끼울 때마다 보이는 값을 싣는다
+    video.volume = volumeRef.current / 100;
     if (wantPlayRef.current) {
       void video.play().catch(() => {
         /* 자동재생 거부 — 재생 버튼이 남는다 */
@@ -148,13 +152,16 @@ export function useRecordedPlayback(
     uptimeSeconds: total,
     quality,
     lowLatency: false,
+    settingsMenu: false,
     clipMarked: false,
     controlsVisible,
     togglePlay: useCallback(() => {
       const video = videoRef.current;
       if (video === null) return;
-      // 다 본 뒤 다시 누르면 처음부터다 — 그대로 틀면 브라우저가 지금 줄기(마지막 구간)만 다시 튼다(PR #205 codex)
-      if (video.ended && offsetRef.current > 0) {
+      // 다 본 뒤 다시 누르면 처음부터다 — 그대로 틀면 브라우저가 지금 줄기(마지막 구간)만 다시 튼다(PR #205 codex).
+      // 「처음」은 0초가 아니라 첫 구간 시작이다(서버 기준점 축이면 녹화가 몇 초 뒤에 선다). 이미 첫 구간이면 브라우저가 다시 튼다
+      const first = playableFrom(recordedRef.current, 0)?.fromSeconds ?? 0;
+      if (video.ended && offsetRef.current > first) {
         wantPlayRef.current = true;
         setPosition(0);
         setOffset(0);
@@ -187,8 +194,8 @@ export function useRecordedPlayback(
         jumpTo(offsetRef.current + (videoRef.current?.currentTime ?? 0) - delta, delta > 0),
       [jumpTo, videoRef],
     ),
-    // 지난 방송에는 「실시간」이 없다 — 처음으로 돌아간다
-    returnToLive: useCallback(() => jumpTo(0), [jumpTo]),
+    // 지난 방송의 「실시간」 쪽 끝은 녹화 끝이다 — 시크바 오른쪽 끝·「실시간」 표기와 같은 자리(POK-253). 전에는 처음으로 갔다
+    returnToLive: useCallback(() => jumpTo(total), [jumpTo, total]),
     setQuality,
     toggleLowLatency: useCallback(() => undefined, []),
     markClip: useCallback(() => undefined, []),

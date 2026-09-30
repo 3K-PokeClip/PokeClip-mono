@@ -261,7 +261,8 @@ export function useHlsPlayback(
     seekToFraction,
     seekBy,
     returnToLive,
-    // 화질은 표시용 — hls.js 레벨 배선은 스파이크 범위 밖 (POK-23 이후)
+    // 화질은 표시용 — hls.js 레벨 배선은 스파이크 범위 밖 (POK-23 이후). 렌디션이 하나라 메뉴를 안 보인다(POK-253)
+    settingsMenu: false,
     setQuality,
     // 표시 전용 — lowLatencyMode는 Hls 생성자 전용 옵션이라 실반영엔 인스턴스 재생성이
     // 필요하다. 시킹 위치 복원 등 엣지가 커서 스파이크 범위 밖 (POK-23 이후).

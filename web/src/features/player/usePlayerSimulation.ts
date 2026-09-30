@@ -37,6 +37,11 @@ export interface PlayerSimulation {
   uptimeSeconds: number;
   quality: PlayerQuality;
   lowLatency: boolean;
+  /**
+   * 화질·저지연 설정 메뉴를 보일까. 실재생(라이브·다시보기)은 렌디션이 하나뿐이고 저지연도 반영하지 않아 고를 것이 없는
+   * 거짓 선택지라 끈다(POK-253, 계약3 2절). 목업 재생(스토리북·시안)만 보인다
+   */
+  settingsMenu: boolean;
   clipMarked: boolean;
   /** 자동 숨김 상태 — 일시정지 중엔 이 값과 무관하게 컨트롤을 보여준다 */
   controlsVisible: boolean;
@@ -139,6 +144,7 @@ export function usePlayerSimulation(options: PlayerSimulationOptions = {}): Play
     seekToFraction,
     seekBy,
     returnToLive: useCallback(() => setBehind(0), []),
+    settingsMenu: true,
     setQuality,
     toggleLowLatency: useCallback(() => setLowLatency((v) => !v), []),
     markClip,

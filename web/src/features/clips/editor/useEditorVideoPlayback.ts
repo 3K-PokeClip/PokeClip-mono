@@ -39,15 +39,15 @@ function windowFor(
   // 구간의 시작이 든 녹화 구간(틈이면 다음 구간) 안으로 자른다
   const piece = playableFrom({ pieces }, range.startSeconds);
   const containing = piece && pieces.find((p) => p.toSeconds === piece.toSeconds)!;
-  const clipped = containing && {
+  // 구간 자체에 녹화가 없으면(통째로 틈 안이거나 녹화 끝 뒤) 받지 않는다 — 여유 10초만 다음 녹화에 닿아도 그 녹화를 보이면
+  // 고른 장면이 아닌 영상이다(PR #205 codex 2·3판)
+  if (!containing || containing.fromSeconds >= range.endSeconds) {
+    return { startSeconds: range.startSeconds, endSeconds: range.startSeconds, empty: true };
+  }
+  return {
     startSeconds: Math.max(wide.startSeconds, containing.fromSeconds),
     endSeconds: Math.min(wide.endSeconds, containing.toSeconds),
   };
-  // 여유까지 넣어도 녹화가 안 걸리면 받지 않는다 — 두 자르기가 엇갈려 뒤집힌 창으로 엉뚱한 구간을 보였다(PR #205 codex)
-  if (!clipped || clipped.startSeconds >= clipped.endSeconds) {
-    return { startSeconds: range.startSeconds, endSeconds: range.startSeconds, empty: true };
-  }
-  return clipped;
 }
 
 export interface EditorVideoPlayback {

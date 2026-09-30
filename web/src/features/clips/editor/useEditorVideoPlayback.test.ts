@@ -67,6 +67,20 @@ describe('useEditorVideoPlayback — 녹화 구간', () => {
     expect(result.current.playback.error).toBe('fatal');
   });
 
+  it('구간은 틈 안인데 여유만 다음 녹화에 닿아도 받지 않는다 — 고른 장면이 아닌 영상이다(PR #205 codex)', () => {
+    const { result } = renderHook(() =>
+      useEditorVideoPlayback({
+        streamId: 'gaptest',
+        recordingStartMs: BASE,
+        recordingSeconds: 38,
+        pieces: PIECES,
+        initialRange: { startSeconds: 15, endSeconds: 16 },
+      }),
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.current.playback.error).toBe('fatal');
+  });
+
   it('구간 목록이 없으면 전처럼 앞뒤 10초 여유다', () => {
     renderHook(() =>
       useEditorVideoPlayback({

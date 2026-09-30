@@ -23,25 +23,23 @@ export interface RecordingTimeline {
 }
 
 /**
- * 방송 시간과 이만큼 떨어져 있어도 그 방송 녹화로 본다. 녹화기가 시작 편지보다 먼저 서고 종료 뒤에 닫히는 것은 구간이 방송
- * 시간과 **겹쳐서** 이미 들어온다 — 이 여유는 시계 차이만 받는다. 넓히면 같은 스트림키로 바로 이어 켠 앞뒤 방송 녹화가 섞여
- * 다시보기가 다음 방송으로 이어지고 0초가 앞 방송으로 밀린다(PR #205 codex, 전에는 앞 2분·뒤 10분).
- */
-const TOLERANCE_MS = 60_000;
-
-/**
- * 그 방송의 녹화만 골라 시간축으로 만든다. 목록은 경로(스트림키) 전체라 앞뒤 방송 녹화도 섞여 온다 — 방송 시간과 겹치는
- * 구간만 남긴다. 시작 시각을 모르면 거르지 않는다. 남는 구간이 없으면 null
+ * 그 방송의 녹화만 골라 시간축으로 만든다. 목록은 경로(스트림키) 전체라 앞뒤 방송 녹화도 섞여 온다 — **방송 시간
+ * [시작, 종료]와 실제로 겹치는 구간만** 남긴다. 시작·종료 시각을 모르는 쪽은 열어 둔다. 남는 구간이 없으면 null
+ *
+ * 여유를 두지 않는 이유: 녹화기가 시작 편지보다 먼저 서고(수십 초) 종료 뒤에 닫히는 것은 그 구간이 방송 시간과 **겹쳐서**
+ * 이미 들어온다. 여유를 두면 같은 스트림키로 그 여유 안에 이어 켠 앞뒤 방송 녹화가 섞여 다시보기가 다음 방송으로 이어지고
+ * 0초가 앞 방송으로 밀린다(PR #205 codex, 앞 2분·뒤 10분 → 1분 → 0). 시각은 녹화와 같은 media 시계에서 온다.
+ * 대가: 방송 시작 편지보다 **먼저 끝난** 아주 짧은 첫 구간(켜자마자 끊긴 송출)은 빠진다.
  */
 export function recordingTimeline(
   spans: RecordingSpan[],
   startedAtMs: number | null,
   endedAtMs: number | null,
 ): RecordingTimeline | null {
-  const from = startedAtMs === null ? Number.NEGATIVE_INFINITY : startedAtMs - TOLERANCE_MS;
-  const until = endedAtMs === null ? Number.POSITIVE_INFINITY : endedAtMs + TOLERANCE_MS;
+  const from = startedAtMs ?? Number.NEGATIVE_INFINITY;
+  const until = endedAtMs ?? Number.POSITIVE_INFINITY;
   const mine = spans
-    .filter((span) => span.startMs + span.durationSeconds * 1000 >= from && span.startMs <= until)
+    .filter((span) => span.startMs + span.durationSeconds * 1000 > from && span.startMs < until)
     .sort((a, b) => a.startMs - b.startMs);
   const first = mine[0];
   if (first === undefined) return null;
@@ -62,6 +60,19 @@ export function recordingTimeline(
     durationSeconds: pieces[pieces.length - 1]!.toSeconds,
     pieces,
   };
+}
+
+/**
+ * 축의 0초를 다른 절대 시각으로 옮긴다 — 카드·조각 위치는 서버 기준점(`timelineOriginAt`, POK-255) 축이라 재생기도 그 축에
+ * 서야 카드를 누른 자리와 영상이 맞는다. 녹화가 기준점보다 앞서 서면 첫 구간이 음수 초에서 시작한다(0초 앞은 못 간다)
+ */
+export function rebaseTimeline(timeline: RecordingTimeline, originMs: number): RecordingTimeline {
+  const shift = (timeline.startMs - originMs) / 1000;
+  const pieces = timeline.pieces.map((p) => ({
+    fromSeconds: p.fromSeconds + shift,
+    toSeconds: p.toSeconds + shift,
+  }));
+  return { startMs: originMs, durationSeconds: pieces[pieces.length - 1]!.toSeconds, pieces };
 }
 
 /**

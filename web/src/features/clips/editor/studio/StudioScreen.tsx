@@ -47,7 +47,11 @@ import {
 } from '@/api/audioTracks';
 import { fetchDelegationsAsEditor } from '@/api/editors';
 import { fetchRecordingSpans } from '@/api/mediaPlayback';
-import { recordingTimeline, type RecordingTimeline } from '@/features/player/recordingTimeline';
+import {
+  rebaseTimeline,
+  recordingTimeline,
+  type RecordingTimeline,
+} from '@/features/player/recordingTimeline';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
 import { lookFromDocument, outputsFor, sameRecipe, subtitlesFor } from '../recipeLook';
 
@@ -454,14 +458,10 @@ function WiredStudio({ data }: { data: Loaded }) {
     [window],
   );
   // 녹화 구간들도 기준점 축으로 옮긴다 — 녹화 축과 기준점 축은 두 시작의 차만큼 갈린다
-  const recordingPieces = useMemo(() => {
-    if (recording === null) return undefined;
-    const shift = (recording.startMs - base) / 1000;
-    return recording.pieces.map((piece) => ({
-      fromSeconds: piece.fromSeconds + shift,
-      toSeconds: piece.toSeconds + shift,
-    }));
-  }, [recording, base]);
+  const recordingPieces = useMemo(
+    () => (recording === null ? undefined : rebaseTimeline(recording, base).pieces),
+    [recording, base],
+  );
   // 실재생 — 녹화가 있을 때만 어댑터를 넘긴다(한 마운트 동안 있거나 없거나 고정: 훅의 규칙).
   const video = useEditorVideoPlayback({
     streamId,
