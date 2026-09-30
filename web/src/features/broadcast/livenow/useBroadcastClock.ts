@@ -20,6 +20,11 @@ export interface BroadcastClock {
    * 순간 앞 번호의 답을 새 번호의 답으로 읽는다(404 판단이 그 틈에 멀쩡한 방송을 없는 것으로 본다).
    */
   missingStreamId: string | null;
+  /**
+   * 영상 경로의 키(POK-233) — 라이브·녹화 주소에 쓴다. 명부 답을 받기 전이거나 옛 서버면 null이고, 그때는 방송 번호가 곧 영상
+   * 경로다. 방송 번호가 바뀌면 곧바로 null로 돌아간다(앞 방송의 키로 새 방송 영상을 찾지 않게)
+   */
+  ingestStreamId: string | null;
 }
 
 const POLL_MS = 30_000;
@@ -35,11 +40,13 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
   const [endedAt, setEndedAt] = useState<number | null>(null);
   const [status, setStatus] = useState<BroadcastStatus>('unknown');
   const [missingStreamId, setMissingStreamId] = useState<string | null>(null);
+  const [ingestStreamId, setIngestStreamId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     setStartedAt(null);
     setEndedAt(null);
+    setIngestStreamId(null);
     if (!streamId) {
       setStatus('offline');
       publishLiveData({
@@ -84,6 +91,7 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
         setStatus(st);
         setStartedAt(s);
         setEndedAt(e);
+        setIngestStreamId(row.ingestStreamId || null);
         setNow(Date.now());
         // 시각 기준점(POK-255)은 방송 중에는 첫 조각이 올라온 뒤에야 생기므로 주기마다 다시 싣는다
         publishLiveData({
@@ -116,5 +124,5 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
     const end = endedAt ?? now;
     uptimeSeconds = Math.max(0, Math.floor((end - startedAt) / 1000));
   }
-  return { status, uptimeSeconds, startedAt, endedAt, missingStreamId };
+  return { status, uptimeSeconds, startedAt, endedAt, missingStreamId, ingestStreamId };
 }

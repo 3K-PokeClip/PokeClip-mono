@@ -13,6 +13,19 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
 }));
 
+// 녹화 목록을 어느 키로 물었는지 잰다(POK-233) — 실제 구현을 그대로 부른다(재생 서버 주소가 없어 빈 목록이다)
+const spansAsked = vi.hoisted(() => [] as string[]);
+vi.mock('@/api/mediaPlayback', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/mediaPlayback')>();
+  return {
+    ...actual,
+    fetchRecordingSpans: (streamId: string) => {
+      spansAsked.push(streamId);
+      return actual.fetchRecordingSpans(streamId);
+    },
+  };
+});
+
 const STREAM_ID = 'stream-1';
 const STARTED_AT = Date.parse('2026-09-20T10:00:00Z');
 
@@ -30,6 +43,8 @@ const server = vi.hoisted(() => ({
   /** 저장된 자막. clip은 자막이 없으면 칸을 빼지 않고 null 로 준다 */
   savedSubtitles: null as unknown,
   relation: 'OWNER',
+  /** 영상 경로의 키(POK-233). undefined면 이 칸을 모르는 옛 서버다 */
+  ingest: undefined as string | undefined,
   delegations: [] as {
     id: number;
     counterpartId: number;
@@ -50,6 +65,7 @@ function broadcastRow() {
     endedAt: new Date(STARTED_AT + 3_600_000).toISOString(),
     vodExpiresAt: null,
     timelineOriginAt: server.origin === null ? null : new Date(server.origin).toISOString(),
+    ingestStreamId: server.ingest,
   };
 }
 
@@ -173,6 +189,8 @@ beforeEach(() => {
   server.savedSubtitles = null;
   server.relation = 'OWNER';
   server.delegations = [];
+  server.ingest = undefined;
+  spansAsked.length = 0;
   fetchSpy = stubFetch(handle);
 });
 
@@ -191,6 +209,19 @@ async function openFrom(search: string) {
   renderWithProviders(<StudioScreen />);
   return screen.findByRole('button', { name: '편집본 저장' });
 }
+
+describe('StudioScreen — 영상 경로의 키(POK-233)', () => {
+  it('녹화는 방송 번호가 아니라 영상 경로의 키로 찾는다 — 방송 번호가 회차 번호면 그 이름의 녹화가 없다', async () => {
+    server.ingest = 'key-studio';
+    await openFrom(`?stream=${STREAM_ID}&card=5`);
+    expect(spansAsked).toEqual(['key-studio']);
+  });
+
+  it('칸을 모르는 옛 서버면 방송 번호로 찾는다', async () => {
+    await openFrom(`?stream=${STREAM_ID}&card=5`);
+    expect(spansAsked).toEqual([STREAM_ID]);
+  });
+});
 
 describe('StudioScreen — 카드로 연 실제 편집기', () => {
   it('저장하면 카드 창을 방송 절대 시각의 컷으로 옮겨 새 편집본을 만든다', async () => {
