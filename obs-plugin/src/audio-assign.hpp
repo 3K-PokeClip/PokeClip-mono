@@ -7,7 +7,7 @@
 
 // 오디오 트랙 자동 배정 — OBS 헤더 없이 도는 순수 로직(단위 시험 대상). libobs 글루는 audio-router.cpp.
 //
-// ADR-017: OBS 트랙 1~6 = 믹서 0~5. 믹서 0(트랙 1)은 최종 믹스로 본방과 같은 것이라 건드리지 않는다.
+// ADR-017: OBS 트랙 1~6 = 믹서 0~5. 믹서 0(트랙 1)은 건드리지 않는다(단순 출력에서는 곧 본방 믹스).
 // 믹서 1~5(트랙 2~6)가 소스별 스템이고, 자동 배정은 이 다섯 자리에 소스를 하나씩 앉힌다.
 //
 // 규칙
@@ -24,8 +24,9 @@
 namespace pokeclip {
 
 inline constexpr int kStemSlots = 5;
-inline constexpr uint32_t kStemMask = 0x3E; // 믹서 1~5 비트
-inline constexpr size_t kTrackMapCap = 64;  // 설정 파일에 기억하는 배정 수 상한
+inline constexpr uint32_t kStemMask = 0x3E;    // 믹서 1~5 비트
+inline constexpr size_t kTrackMapCap = 64;     // 설정 파일에 기억하는 배정 수 상한
+inline constexpr size_t kMixerBackupCap = 128; // 원래 체크를 남기는 소스 수 상한
 
 enum class AudioKind { Mic, Desktop, App, Media, Browser, Other };
 
@@ -59,9 +60,19 @@ struct AudioTrackMapEntry {
 	bool operator==(const AudioTrackMapEntry &) const = default;
 };
 
+// 자동 배정이 처음 트랙 2~6을 쓰기 전의 체크(스트리머가 짜 둔 것). 자동 배정을 끄거나 연결을 해제하면,
+// 또 어떤 트랙이 본방 트랙이 되면 그 트랙을 이 값으로 되돌린다 — 자동 배정이 스트리머의 구성을 지우지 않게.
+struct AudioMixerBackup {
+	std::string key;
+	uint32_t mixers = 0;
+
+	bool operator==(const AudioMixerBackup &) const = default;
+};
+
 struct AssignmentInput {
 	std::vector<AudioSourceInfo> sources;
 	std::vector<AudioTrackMapEntry> map;
+	std::vector<AudioMixerBackup> backup; // 이미 남긴 원래 체크 — 처음 쓰는 소스만 더한다
 	bool locked = false;   // 방송·녹화 중 — 겹칠 때 지금 그 트랙에서 나가는 쪽을 남긴다
 	uint32_t reserved = 0; // 본방이 쓰는 믹서 비트 — 그 트랙(2~6)은 자리로 쓰지 않고 비트도 그대로 둔다
 	int64_t now = 0;
@@ -78,6 +89,8 @@ struct AssignmentResult {
 	std::vector<AudioTrackMapEntry> mapNext;
 	bool mapChanged = false;               // 자리·이름이 바뀌었거나 기억을 버렸다 (lastSeen만 바뀐 것은 아님)
 	std::vector<std::string> overflowKeys; // 자리가 모자라 믹스에만 들어가는 후보
+	std::vector<AudioMixerBackup> backupNext;
+	bool backupChanged = false;
 };
 
 // 결정적·멱등: 같은 입력이면 같은 결과, mapNext와 쓰기 결과를 다시 넣으면 writes가 비고 mapChanged가 거짓.
@@ -86,6 +99,13 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in);
 // 트랙 2~6 비트만 바꾼다 — 트랙 1(최종 믹스)과 쓰지 않는 상위 비트, 본방 트랙(reserved)은 그대로.
 // slot 0 = 스템 없음(믹스만). slot이 본방 트랙이면 그 비트도 켜지 않는다.
 uint32_t DesiredMixers(uint32_t current, int slot, uint32_t reserved = 0);
+
+// 원래 체크(original)에서 bits(트랙 2~6 가운데 되돌릴 것)만 가져온다. 나머지 비트는 지금 그대로.
+uint32_t RestoredMixers(uint32_t current, uint32_t original, uint32_t bits);
+
+// 지금 있는 소스 가운데 원래 체크가 남아 있는 것을 bits만큼 되돌리는 쓰기. 지금 비트와 같으면 뺀다.
+std::vector<MixerWrite> RestoreWrites(const std::vector<AudioSourceInfo> &sources,
+				      const std::vector<AudioMixerBackup> &backup, uint32_t bits);
 
 struct AudioSourceView {
 	std::string name;

@@ -183,13 +183,18 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		    std::string streamId = c.streamId;
 		    std::string passphrase = c.passphrase;
 		    std::vector<AudioTrackMapEntry> trackMap = c.audioTrackMap;
+		    std::vector<AudioMixerBackup> mixerBackup = c.audioMixerBackup;
+		    uint32_t reservedMask = c.audioReservedMask;
 		    bool dockIntroShown = c.dockIntroShown;
 		    std::string markHotkey = c.markHotkey;
 		    c = next;
 		    c.streamId = streamId; // 키는 이 경로로 바꾸지 않는다 (페어링 전용)
 		    c.passphrase = passphrase;
-		    // 배정 기억·독 첫 실행 표시·단축키 사본은 UI 스레드가 따로 저장한다 — 이 요청이 읽은 옛 값으로 덮지 않는다.
+		    // 배정 기억·원래 체크·독 첫 실행 표시·단축키 사본은 UI 스레드가 따로 저장한다 —
+		    // 이 요청이 읽은 옛 값으로 덮지 않는다.
 		    c.audioTrackMap = std::move(trackMap);
+		    c.audioMixerBackup = std::move(mixerBackup);
+		    c.audioReservedMask = reservedMask;
 		    c.dockIntroShown = dockIntroShown;
 		    c.markHotkey = std::move(markHotkey);
 	    }))

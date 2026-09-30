@@ -102,6 +102,21 @@ void ConfigStore::Load()
 		}
 		obs_data_array_release(map);
 	}
+	config_.audioMixerBackup.clear();
+	if (obs_data_array_t *backup = obs_data_get_array(data, "audio_mixer_backup")) {
+		size_t count = obs_data_array_count(backup);
+		for (size_t i = 0; i < count && i < kMixerBackupCap * 2; i++) {
+			obs_data_t *item = obs_data_array_item(backup, i);
+			AudioMixerBackup b;
+			b.key = obs_data_get_string(item, "key");
+			b.mixers = static_cast<uint32_t>(obs_data_get_int(item, "mixers"));
+			obs_data_release(item);
+			if (!b.key.empty())
+				config_.audioMixerBackup.push_back(std::move(b));
+		}
+		obs_data_array_release(backup);
+	}
+	config_.audioReservedMask = static_cast<uint32_t>(GetIntOr(data, "audio_reserved_mask", 0)) & kStemMask;
 	config_.clipApiBase = GetStringOr(data, "clip_api_base", "");
 	config_.markHotkey.clear();
 	if (obs_data_t *hotkey = obs_data_get_obj(data, "mark_hotkey")) {
@@ -157,6 +172,17 @@ bool ConfigStore::SaveLocked()
 	}
 	obs_data_set_array(data, "audio_track_map", map);
 	obs_data_array_release(map);
+	obs_data_array_t *backup = obs_data_array_create();
+	for (const AudioMixerBackup &b : config_.audioMixerBackup) {
+		obs_data_t *item = obs_data_create();
+		obs_data_set_string(item, "key", b.key.c_str());
+		obs_data_set_int(item, "mixers", b.mixers);
+		obs_data_array_push_back(backup, item);
+		obs_data_release(item);
+	}
+	obs_data_set_array(data, "audio_mixer_backup", backup);
+	obs_data_array_release(backup);
+	obs_data_set_int(data, "audio_reserved_mask", config_.audioReservedMask);
 	obs_data_set_string(data, "clip_api_base", config_.clipApiBase.c_str());
 	if (!config_.markHotkey.empty()) {
 		if (obs_data_t *hotkey = obs_data_create_from_json(config_.markHotkey.c_str())) {

@@ -136,10 +136,11 @@ obs_source_t *SourceByKey(const std::string &key)
 	return nullptr;
 }
 
-// 스트리머의 녹화 트랙도 같은 믹서를 쓴다 — 방송·녹화 중에는 지금 나가는 배정을 옮기지 않는다.
+// 스트리머의 녹화·리플레이 버퍼도 같은 믹서를 쓴다 — 그동안에는 지금 나가는 배정을 옮기지 않는다.
 bool Locked()
 {
-	return obs_frontend_streaming_active() || obs_frontend_recording_active() || StreamTarget::Instance().IsActive();
+	return obs_frontend_streaming_active() || obs_frontend_recording_active() ||
+	       obs_frontend_replay_buffer_active() || StreamTarget::Instance().IsActive();
 }
 
 uint32_t TrackBit(int track)
@@ -281,18 +282,9 @@ void AudioRouter::Reconcile(const char *reason)
 	std::vector<AudioSourceInfo> sources = Enumerate(monitoring);
 	SettleMonitoring(monitoring);
 
-	int overflow = 0;
-	if (applied) {
-		AssignmentInput in;
-		in.sources = sources;
-		in.map = config.audioTrackMap;
-		in.locked = locked;
-		in.reserved = reserved;
-		in.now = static_cast<int64_t>(std::time(nullptr));
-		AssignmentResult r = ComputeAssignment(in);
-
+	auto apply = [&](const std::vector<MixerWrite> &writes) {
 		applying_ = true;
-		for (const MixerWrite &w : r.writes) {
+		for (const MixerWrite &w : writes) {
 			obs_source_t *s = SourceByKey(w.key);
 			if (!s)
 				continue;
@@ -304,13 +296,53 @@ void AudioRouter::Reconcile(const char *reason)
 			}
 		}
 		applying_ = false;
+	};
 
+	// 원래 체크 되돌리기. ① 새로 본방 트랙이 된 트랙 — 자동 배정이 스템으로 바꿔 놨다면 시청자가 들을 믹스가
+	// 소스 하나뿐이다. 방송이 막 시작하는 참이어도 곧바로. ② 자동 배정을 껐거나 연결을 해제했다 — 트랙 2~6
+	// (본방 트랙 제외) 전부. 방송·녹화 중이면 지금 나가는 트랙이 바뀌므로 끝날 때까지 미룬다.
+	// 다 되돌리면 기억을 비운다 — 다시 켜면 그때의 체크를 새로 남긴다.
+	std::vector<AudioMixerBackup> backup = config.audioMixerBackup;
+	uint32_t newlyReserved = reserved & ~config.audioReservedMask;
+	bool restoreAll = !wanted && !backup.empty() && !locked;
+	uint32_t restoreBits = newlyReserved | (restoreAll ? (kStemMask & ~reserved) : 0u);
+	if (restoreBits != 0 && !backup.empty()) {
+		std::vector<MixerWrite> writes = RestoreWrites(sources, backup, restoreBits);
+		apply(writes);
+		if (!writes.empty())
+			obs_log(LOG_INFO, "audio routing: restored original track checks for %zu source(s) (%s)",
+				writes.size(), restoreAll ? "auto-assign off" : "new main-stream track");
+	}
+	if (restoreAll)
+		backup.clear();
+	bool restorePending = !wanted && !backup.empty();
+
+	int overflow = 0;
+	std::vector<AudioTrackMapEntry> mapNext = config.audioTrackMap;
+	if (applied) {
+		AssignmentInput in;
+		in.sources = sources;
+		in.map = config.audioTrackMap;
+		in.backup = backup;
+		in.locked = locked;
+		in.reserved = reserved;
+		in.now = static_cast<int64_t>(std::time(nullptr));
+		AssignmentResult r = ComputeAssignment(in);
+		apply(r.writes);
 		if (r.mapChanged)
-			ConfigStore::Instance().Update([&](PluginConfig &c) { c.audioTrackMap = r.mapNext; });
+			mapNext = r.mapNext;
+		backup = r.backupNext;
 		overflow = static_cast<int>(r.overflowKeys.size());
 	}
+	if (!(mapNext == config.audioTrackMap) || !(backup == config.audioMixerBackup) ||
+	    reserved != config.audioReservedMask)
+		ConfigStore::Instance().Update([&](PluginConfig &c) {
+			c.audioTrackMap = mapNext;
+			c.audioMixerBackup = backup;
+			c.audioReservedMask = reserved;
+		});
 
-	if (deferred && !deferRetryArmed_) {
+	if ((deferred || restorePending) && !deferRetryArmed_) {
 		deferRetryArmed_ = true;
 		RunInUiThreadAfter(kDeferredRetryMs, [this]() {
 			deferRetryArmed_ = false;
@@ -325,7 +357,10 @@ void AudioRouter::Reconcile(const char *reason)
 	options.overflow = overflow;
 	options.reserved = reserved;
 	AudioRoutingView view = BuildRoutingView(sources, options);
-	const char *mode = applied ? "auto" : (deferred ? "deferred" : "manual");
+	const char *mode = applied ? "auto"
+			   : deferred ? "deferred"
+			   : restorePending ? "manual (restore after stream/recording)"
+					    : "manual";
 	std::string line = std::string(mode) + " — " + DescribeRouting(view);
 	if (line != lastLogged_) {
 		obs_log(LOG_INFO, "audio routing (%s): %s", reason, line.c_str());

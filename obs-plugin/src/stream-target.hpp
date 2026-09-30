@@ -33,7 +33,8 @@ private:
 
 	void ConnectSignals();
 	void DisconnectSignals();
-	// A2: 트랙 1은 본방 오디오 인코더를 공유하고(AAC·믹서 0일 때), 트랙 2~6은 우리가 AAC 인코더를 만든다.
+	// A2: 트랙 1은 본방 오디오 인코더를 공유하고(AAC면 믹서와 상관없이 — 아니면 같은 믹서로 AAC를 만든다),
+	// 트랙 2~6은 우리가 AAC 인코더를 만든다.
 	bool AttachAudioEncoders(struct obs_encoder *streamAudio, std::string &errorCode);
 	// "stop" 신호 뒤 출력이 실제로 멈추면 해제한다. 세대가 바뀌었으면(새 출력) 아무것도 안 한다.
 	void ReleaseWhenStopped(uint64_t generation, int attemptsLeft);

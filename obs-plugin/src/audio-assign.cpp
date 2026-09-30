@@ -96,6 +96,31 @@ uint32_t DesiredMixers(uint32_t current, int slot, uint32_t reserved)
 	return next;
 }
 
+uint32_t RestoredMixers(uint32_t current, uint32_t original, uint32_t bits)
+{
+	bits &= kStemMask;
+	return (current & ~bits) | (original & bits);
+}
+
+std::vector<MixerWrite> RestoreWrites(const std::vector<AudioSourceInfo> &sources,
+				      const std::vector<AudioMixerBackup> &backup, uint32_t bits)
+{
+	std::map<std::string, uint32_t> original;
+	for (const AudioMixerBackup &b : backup)
+		original.emplace(b.key, b.mixers);
+	std::vector<MixerWrite> writes;
+	std::set<std::string> seen;
+	for (const AudioSourceInfo &s : sources) {
+		auto it = original.find(s.key);
+		if (it == original.end() || !seen.insert(s.key).second)
+			continue;
+		uint32_t restored = RestoredMixers(s.mixers, it->second, bits);
+		if (restored != s.mixers)
+			writes.push_back({s.key, restored});
+	}
+	return writes;
+}
+
 AssignmentResult ComputeAssignment(const AssignmentInput &in)
 {
 	AssignmentResult r;
@@ -152,6 +177,10 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 			bool bOn = (candidateOf(map[b].key)->mixers & bit) != 0;
 			if (aOn != bOn)
 				return aOn;
+			// 둘 다 켜져 있다 — 한쪽은 지웠다 되살린 소스가 저장값을 들고 온 것이다. 그 사이 빈자리에
+			// 나중에 앉은 쪽이 지금 이 트랙에서 나가던 주인이다.
+			if (aOn && map[a].assignedAt != map[b].assignedAt)
+				return map[a].assignedAt > map[b].assignedAt;
 		}
 		if (map[a].assignedAt != map[b].assignedAt)
 			return map[a].assignedAt < map[b].assignedAt; // 먼저 앉은 쪽
@@ -248,6 +277,27 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 		uint32_t desired = DesiredMixers(s.mixers, slot, in.reserved);
 		if (desired != s.mixers)
 			r.writes.push_back({s.key, desired});
+	}
+
+	// 5-1. 처음 쓰는 소스는 쓰기 전 체크를 남긴다 — 쓴 적 없는 소스의 지금 비트가 곧 스트리머가 짠 원래 값이다.
+	r.backupNext = in.backup;
+	std::set<std::string> backedUp;
+	for (const AudioMixerBackup &b : r.backupNext)
+		backedUp.insert(b.key);
+	for (const MixerWrite &w : r.writes) {
+		if (backedUp.insert(w.key).second) {
+			r.backupNext.push_back({w.key, in.sources[sourceIndex.at(w.key)].mixers});
+			r.backupChanged = true;
+		}
+	}
+	// 상한 — 지금 없는 소스의 것부터(먼저 남긴 순) 버린다.
+	for (size_t i = 0; r.backupNext.size() > kMixerBackupCap && i < r.backupNext.size();) {
+		if (!sourceIndex.count(r.backupNext[i].key)) {
+			r.backupNext.erase(r.backupNext.begin() + static_cast<std::ptrdiff_t>(i));
+			r.backupChanged = true;
+		} else {
+			i++;
+		}
 	}
 
 	// 6. 상한 — 지금 없는 기억 중 오래 안 보인 것부터 버린다. 지금 있는 소스의 기억은 버리지 않는다.

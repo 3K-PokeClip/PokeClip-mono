@@ -199,12 +199,13 @@ bool StreamTarget::AttachAudioEncoders(obs_encoder_t *streamAudio, std::string &
 		return false;
 	}
 
-	// 트랙 1은 본방 오디오 인코더를 그대로 쓴다 — 시청용 믹스가 본방과 같은 바이트다(ADR-017).
-	// 본방이 트랙 1이 아니거나(고급 출력에서 방송 트랙을 바꾼 경우) AAC가 아니면(Opus 등) 믹서 0 AAC를 우리가 만든다 —
-	// 계약의 「전 트랙 AAC」와 「트랙 1 = 최종 믹스」를 지킨다.
+	// 첫 오디오(서버 audio1 = 최종 믹스)는 본방 오디오 인코더를 그대로 쓴다 — 시청용 믹스가 본방과 같은 바이트다
+	// (ADR-017). 고급 출력에서 방송 트랙을 2~6으로 바꿨어도 그 믹서가 곧 시청자가 듣는 소리라 그대로 공유한다 —
+	// 트랙 1에 따로 AAC를 만들면 스트리머가 트랙 1에서 뺀 소스(녹화용 구성 등)가 빠진다.
+	// 본방이 AAC가 아니면(Opus 등) 같은 믹서로 AAC를 우리가 만든다 — 계약의 「전 트랙 AAC」를 지킨다.
 	const bool streamIsAac = IsAac(obs_encoder_get_codec(streamAudio));
 	const size_t streamMixer = obs_encoder_get_mixer_index(streamAudio);
-	const bool shareTrack1 = streamIsAac && streamMixer == 0;
+	const bool shareTrack1 = streamIsAac;
 	const std::string encoderId = streamIsAac ? obs_encoder_get_id(streamAudio) : kFallbackAacEncoderId;
 	if (!IsAac(obs_get_encoder_codec(encoderId.c_str()))) {
 		errorCode = "audio_encoder_failed";
@@ -225,10 +226,12 @@ bool StreamTarget::AttachAudioEncoders(obs_encoder_t *streamAudio, std::string &
 	std::array<obs_encoder_t *, kAudioTrackCount> encoders{};
 	if (shareTrack1)
 		encoders[0] = streamAudio;
-	for (size_t mixer = shareTrack1 ? 1 : 0; mixer < encoders.size(); mixer++) {
+	// 출력 트랙 i: 0 = 최종 믹스(본방 믹서), 1~5 = 스템(믹서 1~5).
+	for (size_t track = shareTrack1 ? 1 : 0; track < encoders.size(); track++) {
+		const size_t mixer = track == 0 ? streamMixer : track;
 		obs_data_t *settings = obs_data_create();
-		obs_data_set_int(settings, "bitrate", mixer == 0 ? track1Bitrate : kStemAudioBitrateKbps);
-		std::string name = std::string(kAudioEncoderNamePrefix) + std::to_string(mixer + 1);
+		obs_data_set_int(settings, "bitrate", track == 0 ? track1Bitrate : kStemAudioBitrateKbps);
+		std::string name = std::string(kAudioEncoderNamePrefix) + std::to_string(track + 1);
 		obs_encoder_t *encoder =
 			obs_audio_encoder_create(encoderId.c_str(), name.c_str(), settings, mixer, nullptr);
 		obs_data_release(settings);
@@ -240,7 +243,7 @@ bool StreamTarget::AttachAudioEncoders(obs_encoder_t *streamAudio, std::string &
 		}
 		obs_encoder_set_audio(encoder, obs_get_audio());
 		ownedAudioEncoders_.push_back(encoder);
-		encoders[mixer] = encoder;
+		encoders[track] = encoder;
 	}
 
 	// 붙이는 순서가 곧 MPEG-TS 오디오 순서다 — 트랙 1(최종 믹스)이 첫 오디오여야 서버의 재생 렌디션이
@@ -256,14 +259,14 @@ bool StreamTarget::AttachAudioEncoders(obs_encoder_t *streamAudio, std::string &
 	}
 
 	if (shareTrack1)
-		obs_log(LOG_INFO, "audio tracks: T1 shared '%s' (%s) + %d x %s @%d kbps (%s2..%d)",
-			obs_encoder_get_name(streamAudio), encoderId.c_str(), kAudioTrackCount - 1, encoderId.c_str(),
-			kStemAudioBitrateKbps, kAudioEncoderNamePrefix, kAudioTrackCount);
+		obs_log(LOG_INFO, "audio tracks: T1 shared '%s' (%s, OBS track %zu) + %d x %s @%d kbps (%s2..%d)",
+			obs_encoder_get_name(streamAudio), encoderId.c_str(), streamMixer + 1, kAudioTrackCount - 1,
+			encoderId.c_str(), kStemAudioBitrateKbps, kAudioEncoderNamePrefix, kAudioTrackCount);
 	else
 		obs_log(LOG_INFO,
-			"audio tracks: %d x %s — T1 own @%d kbps (stream audio is %s on track %zu), T2..T%d @%d kbps",
-			kAudioTrackCount, encoderId.c_str(), track1Bitrate, obs_encoder_get_codec(streamAudio),
-			streamMixer + 1, kAudioTrackCount, kStemAudioBitrateKbps);
+			"audio tracks: %d x %s — T1 own @%d kbps on OBS track %zu (stream audio %s), T2..T%d @%d kbps",
+			kAudioTrackCount, encoderId.c_str(), track1Bitrate, streamMixer + 1,
+			obs_encoder_get_codec(streamAudio), kAudioTrackCount, kStemAudioBitrateKbps);
 	return true;
 }
 

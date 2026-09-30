@@ -65,7 +65,10 @@ function MarkRow({ state, onMark }: { state: BridgeState; onMark: () => void }) 
           <BookmarkPlus size={13} strokeWidth={2.2} aria-hidden="true" />
           <span>지금 이 순간 표시</span>
         </button>
-        <span class={styles.markHint}>
+        <span
+          class={styles.markHint}
+          title={hotkey ? '다른 앱 단축키와 겹치면 OBS 설정 › 단축키에서 바꾸세요 — OBS가 뒤에 있어도 받아요.' : undefined}
+        >
           {hotkey ? (
             <>
               단축키 <kbd class={styles.kbd}>{hotkey}</kbd>

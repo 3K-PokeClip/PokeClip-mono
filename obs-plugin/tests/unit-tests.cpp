@@ -562,6 +562,64 @@ TEST(audio_locked_keeps_the_source_currently_on_the_track)
 	CHECK_EQ(SlotOf(free, "uuid:a"), 1); // 방송이 아니면 먼저 앉은 쪽
 }
 
+// 방송 중 A를 지우자 C가 그 트랙을 받았고, 이어서 A를 되살리면 A도 저장값대로 그 트랙이 켜진 채 온다.
+// 둘 다 켜져 있으면 그 사이 트랙을 받아 나가고 있던 C를 남긴다.
+TEST(audio_locked_keeps_owner_when_restored_source_returns_with_bits)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.locked = true;
+	in.map = {Entry("uuid:a", 1, 10), Entry("uuid:c", 1, 50)};
+	in.sources = {Src("uuid:a", "A", AudioKind::Media, 100, 0x03), Src("uuid:c", "C", AudioKind::Media, 101, 0x03)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:c"), 1);
+	CHECK_EQ(SlotOf(r, "uuid:a"), 2);
+	CHECK_EQ(WriteOf(r, "uuid:c", 0x03), 0x03u);
+}
+
+// 처음 쓰기 전의 체크를 남긴다 — 이미 남긴 것은 덮지 않고, 쓰지 않은 소스는 남기지 않는다.
+TEST(audio_backup_keeps_checks_from_before_first_write)
+{
+	AssignmentInput in;
+	in.now = 100;
+	// 솔로는 이미 자기 자리(트랙 4)에만 있어 쓸 것이 없다
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3, 0x07),
+		      Src("uuid:game", "게임", AudioKind::App, 100, 0x03),
+		      Src("uuid:solo", "솔로", AudioKind::Media, 101, 0x09)};
+	in.map = {Entry("uuid:solo", 3, 5)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK(r.backupChanged);
+	CHECK_EQ(r.backupNext.size(), 2u);
+	CHECK((r.backupNext[0] == AudioMixerBackup{"ch:3", 0x07}));
+	CHECK((r.backupNext[1] == AudioMixerBackup{"uuid:game", 0x03}));
+
+	AssignmentInput again;
+	again.now = 200;
+	again.map = r.mapNext;
+	again.backup = r.backupNext;
+	again.sources = Applied(in.sources, r);
+	again.sources[0].mixers = 0x3F; // OBS에서 손으로 바꿨다 — 되돌아가지만 원래 값은 처음 것 그대로
+	AssignmentResult r2 = ComputeAssignment(again);
+	CHECK(!r2.backupChanged);
+	CHECK((r2.backupNext == r.backupNext));
+}
+
+TEST(audio_restore_puts_back_original_checks)
+{
+	CHECK_EQ(RestoredMixers(0x03, 0x2D, 0x3E), 0x2Du); // 트랙 2~6 전부
+	CHECK_EQ(RestoredMixers(0x05, 0x03, 0x02), 0x07u); // 트랙 2만 — 새 본방 트랙
+	CHECK_EQ(RestoredMixers(0x81, 0x3E, 0xFF), 0xBFu); // 트랙 1·상위 비트는 bits에 있어도 안 건드린다
+
+	std::vector<AudioSourceInfo> sources = {Src("ch:3", "마이크", AudioKind::Mic, 3, 0x03),
+						Src("uuid:game", "게임", AudioKind::App, 100, 0x05),
+						Src("uuid:new", "새 소스", AudioKind::Media, 101, 0x09)};
+	std::vector<AudioMixerBackup> backup = {{"ch:3", 0x07}, {"uuid:game", 0x05}, {"uuid:gone", 0x3F}};
+	std::vector<MixerWrite> writes = RestoreWrites(sources, backup, 0x3E);
+	CHECK_EQ(writes.size(), 1u); // 게임은 이미 원래대로, 새 소스는 원래 값이 없다, 없는 소스는 건너뛴다
+	CHECK_EQ(writes[0].key, std::string("ch:3"));
+	CHECK_EQ(writes[0].mixers, 0x07u);
+}
+
 // 소리를 안 내는 소스(오디오를 넘기지 않는 브라우저 등)는 자리를 잡지 않고 스템 비트도 비운다.
 TEST(audio_silent_or_monitor_only_sources_get_no_stem)
 {

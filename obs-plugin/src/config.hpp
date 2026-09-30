@@ -24,6 +24,8 @@ struct PluginConfig {
 	// A2: 오디오 소스를 트랙 2~6에 하나씩 자동 배정한다(audio-assign.hpp). 끄면 OBS 고급 오디오 설정 그대로.
 	bool audioAutoAssign = true;
 	std::vector<AudioTrackMapEntry> audioTrackMap; // 소스별로 기억한 자리 — 방송 간 배정을 유지한다
+	std::vector<AudioMixerBackup> audioMixerBackup; // 자동 배정이 처음 쓰기 전의 트랙 체크 — 끄면 되돌린다
+	uint32_t audioReservedMask = 0; // 마지막으로 본 본방 트랙 비트 — 새로 본방 트랙이 된 트랙을 알아본다
 	// A4: 마크를 보낼 Clip API 주소. 비우면 apiBase (dev는 웹 프록시가 /api/clip/**을 Clip으로 넘긴다).
 	std::string clipApiBase;
 	// A4: 마지막으로 쓴 단축키 바인딩 사본({"bindings":[...]} JSON). 비었으면 사본 없음.
