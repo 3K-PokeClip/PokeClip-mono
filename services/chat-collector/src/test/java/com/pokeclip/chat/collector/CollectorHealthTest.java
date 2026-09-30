@@ -5,6 +5,7 @@ import com.pokeclip.chat.collector.broadcast.BroadcastEventProcessor;
 import com.pokeclip.chat.collector.broadcast.BroadcastSessions;
 import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
 import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
+import com.pokeclip.chat.collector.broadcast.IngestKeyStore;
 import com.pokeclip.chat.collector.broadcast.LifecycleEnvelope;
 import com.pokeclip.chat.collector.broadcast.ProcessResult;
 import com.pokeclip.chat.collector.broadcast.StreamerId;
@@ -76,6 +77,7 @@ class CollectorHealthTest extends IntegrationTestSupport {
     @Autowired FakeChzzkBehavior behavior;
     @Autowired RestClient.Builder restClientBuilder;
     @Autowired EndedStreamStore store;
+    @Autowired IngestKeyStore ingestKeys;
 
     /** 옛 경로의 상태. 편지 경로를 쓰는 프로세스에서는 DISABLED로 남는다(같이 못 켠다). */
     private final CollectionStatus legacy = new CollectionStatus();
@@ -322,7 +324,7 @@ class CollectorHealthTest extends IntegrationTestSupport {
                 new ChatBuffer(1_000), TestPersistence.disabledPersister(), ChatArchive.NONE);
         // 판정기는 <b>진짜 표</b>를 쓴다. 여기서 보는 갈래 셋은 표에 닿기 전에 갈리지만,
         // 가짜로 바꾸면 「닿기 전에 갈린다」는 사실 자체가 검사에서 사라진다.
-        processor = new BroadcastEventProcessor(store, new RefusingSessions(),
+        processor = new BroadcastEventProcessor(store, ingestKeys, new RefusingSessions(),
                 (streamId, reason) -> {
                     throw new AssertionError("못 쓸 편지가 포기 메모까지 갔다");
                 });
@@ -517,7 +519,7 @@ class CollectorHealthTest extends IntegrationTestSupport {
 
     private static LifecycleEnvelope envelope(String eventId, String eventType,
                                               String streamId, String streamerId) {
-        return new LifecycleEnvelope(1, eventId, eventType, 발생시각, streamId, streamerId, 1L, "t-1", null);
+        return new LifecycleEnvelope(1, eventId, eventType, 발생시각, streamId, streamerId, null, 1L, "t-1", null);
     }
 
     private static IntakeProperties intakeProperties() {

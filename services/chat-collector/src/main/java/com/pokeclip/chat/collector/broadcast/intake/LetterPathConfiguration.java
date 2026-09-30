@@ -4,6 +4,7 @@ import com.pokeclip.chat.collector.ChzzkProperties;
 import com.pokeclip.chat.collector.broadcast.BroadcastEventProcessor;
 import com.pokeclip.chat.collector.broadcast.BroadcastSessions;
 import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
+import com.pokeclip.chat.collector.broadcast.IngestKeyStore;
 import com.pokeclip.chat.collector.broadcast.LinkedSessionStarter;
 import com.pokeclip.chat.collector.broadcast.StoppedStreamRecorder;
 import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
@@ -86,9 +87,9 @@ public class LetterPathConfiguration {
      * 그 방송이 영원히 {@code unknown}이다(되돌아올 트리거가 없다).
      */
     @Bean
-    public BroadcastEventProcessor broadcastEventProcessor(EndedStreamStore store, BroadcastSessions sessions,
-                                                           StoppedStreamRecorder recorder) {
-        return new BroadcastEventProcessor(store, sessions, recorder::record);
+    public BroadcastEventProcessor broadcastEventProcessor(EndedStreamStore store, IngestKeyStore ingestKeys,
+                                                           BroadcastSessions sessions, StoppedStreamRecorder recorder) {
+        return new BroadcastEventProcessor(store, ingestKeys, sessions, recorder::record);
     }
 
     /** 편지 경로가 켜진 프로세스에서만 뜻이 있다 — 옛 경로는 등록부를 안 탄다. */

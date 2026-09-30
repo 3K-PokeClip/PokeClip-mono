@@ -1,5 +1,6 @@
 package com.pokeclip.chat.collector.sync;
 
+import com.pokeclip.chat.collector.broadcast.IngestKeyStore;
 import com.pokeclip.chat.collector.support.IntegrationTestSupport;
 import com.pokeclip.chat.collector.support.StreamSegmentsFixture;
 import com.pokeclip.web.support.LogCaptor;
@@ -72,7 +73,7 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
                                 SyncProperties wiredProperties, VideoPositionCalculator wiredCalculator) {
         this.jdbc = jdbc;
         this.ledger = ledger;
-        this.calculator = new VideoPositionCalculator(ledger, new SyncProperties(0, Map.of()));
+        this.calculator = new VideoPositionCalculator(ledger, new IngestKeyStore(jdbc), new SyncProperties(0, Map.of()));
         this.wiredProperties = wiredProperties;
         this.wiredCalculator = wiredCalculator;
     }
@@ -82,7 +83,7 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
      * {@link #calculator}(보정 0)라 뺄셈이 항등이고, 그래서 보정 경로를 하나도 안 잰다.
      */
     private VideoPositionCalculator 보정이(long defaultOffsetMs, Map<String, Long> perChannel) {
-        return new VideoPositionCalculator(ledger, new SyncProperties(defaultOffsetMs, perChannel));
+        return new VideoPositionCalculator(ledger, new IngestKeyStore(jdbc), new SyncProperties(defaultOffsetMs, perChannel));
     }
 
     @BeforeEach
@@ -188,6 +189,24 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
         assertThat(second.state()).isEqualTo(VideoPosition.State.CONVERTED);
         assertThat(second.positionMs()).as("pts 4000 + delta 1500").isEqualTo(5500L);
         assertThat(second.segmentSeq()).isEqualTo(2L);
+    }
+
+    /**
+     * 판별기는 <b>방송 번호</b>로 묻는데 방송 번호가 회차 번호가 되면(POK-233) 장부에 그 이름이 없다. 편지가 남긴 물리 키로 장부를
+     * 찾는다 — 방송 번호로 찾던 옛 코드는 「장부가 아직」(NOT_YET_INDEXED)을 영원히 답해 판별기가 카드를 못 만든다.
+     */
+    @Test
+    void 회차_번호로_물어도_물리_키의_조각으로_변환된다() {
+        String 회차 = "S-20260930-010000-key-v-1";
+        StreamSegmentsFixture.clear(jdbc, "key-v");
+        jdbc.update("DELETE FROM chat_ingest_keys WHERE stream_id = ?", 회차);
+        new IngestKeyStore(jdbc).remember(회차, "key-v");
+        StreamSegmentsFixture.insert(jdbc, "key-v", 1, 0, T0, 4000, false);
+
+        VideoPosition located = 물어본다(회차, 1500);
+
+        assertThat(located.state()).isEqualTo(VideoPosition.State.CONVERTED);
+        assertThat(located.positionMs()).isEqualTo(1500L);
     }
 
     /** 조각 경계에서 위치가 튀지 않는다 — 3999는 seq1의 끝, 4000은 seq2의 시작이다. */
@@ -393,7 +412,7 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
             }
         };
 
-        VideoPosition located = new VideoPositionCalculator(racing, new SyncProperties(0, Map.of()))
+        VideoPosition located = new VideoPositionCalculator(racing, new IngestKeyStore(jdbc), new SyncProperties(0, Map.of()))
                 .locate(RACE, "calc-channel", T0.plusMillis(1000));
 
         assertThat(located.state())
@@ -424,7 +443,7 @@ class VideoPositionCalculatorTest extends IntegrationTestSupport {
                 return super.hasAnySegment(streamId);
             }
         };
-        VideoPositionCalculator calculator = new VideoPositionCalculator(counting, new SyncProperties(0, Map.of()));
+        VideoPositionCalculator calculator = new VideoPositionCalculator(counting, new IngestKeyStore(jdbc), new SyncProperties(0, Map.of()));
 
         assertThat(calculator.locate(NORMAL, "calc-channel", T0.plusMillis(1500)).state())
                 .isEqualTo(VideoPosition.State.CONVERTED);

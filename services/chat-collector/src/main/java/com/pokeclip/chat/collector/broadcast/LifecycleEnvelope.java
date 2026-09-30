@@ -24,6 +24,7 @@ public record LifecycleEnvelope(
         Instant occurredAt,
         String streamId,
         String streamerId,
+        String ingestStreamId,
         long sequence,
         String traceId,
         JsonNode payload

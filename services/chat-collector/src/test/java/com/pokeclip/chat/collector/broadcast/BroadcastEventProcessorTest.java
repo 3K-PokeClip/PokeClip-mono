@@ -59,7 +59,7 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
     void 표를_비우고_판정기를_새로_만든다() {
         jdbc.update("DELETE FROM chat_ended_streams");
         남긴것.clear();
-        processor = new BroadcastEventProcessor(store, sessions,
+        processor = new BroadcastEventProcessor(store, new IngestKeyStore(jdbc), sessions,
                 (streamId, reason) -> 남긴것.add(streamId + "/" + reason));
         sessions.reset();
     }
@@ -394,6 +394,49 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
         return envelope(eventType, streamId, streamerId, sequence, 종료시각);
     }
 
+    // ── 물리 키(POK-233) ── 영상 시점 조회가 장부를 이 키로 찾는다
+
+    @Test
+    void 시작_편지의_물리_키를_적는다() {
+        jdbc.update("DELETE FROM chat_ingest_keys");
+        processor.process(withIngest("broadcast.started", "S-a-1", "key-a"));
+
+        assertThat(new IngestKeyStore(jdbc).keyOf("S-a-1")).isEqualTo("key-a");
+    }
+
+    @Test
+    void 물리_키가_없는_옛_편지면_방송_번호가_곧_물리_키다() {
+        jdbc.update("DELETE FROM chat_ingest_keys");
+        processor.process(started("old-key", 1));
+
+        assertThat(new IngestKeyStore(jdbc).keyOf("old-key")).isEqualTo("old-key");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_ingest_keys", Integer.class)).isZero();
+    }
+
+    @Test
+    void 종료_편지도_적고_이미_적힌_키는_안_바꾼다() {
+        jdbc.update("DELETE FROM chat_ingest_keys");
+        processor.process(withIngest("broadcast.ended", "S-b-2", "key-b"));
+        processor.process(withIngest("broadcast.ended", "S-b-2", "other"));
+
+        assertThat(new IngestKeyStore(jdbc).keyOf("S-b-2")).isEqualTo("key-b");
+    }
+
+    /** 칸 폭을 넘는 키는 적으면 저장에서 터져 이 방송의 편지가 영영 막힌다. 안 적고 편지는 평소대로 처리한다 */
+    @Test
+    void 칸_폭을_넘는_물리_키는_안_적고_편지는_처리한다() {
+        jdbc.update("DELETE FROM chat_ingest_keys");
+        ProcessResult result = processor.process(withIngest("broadcast.started", "S-c-3", "x".repeat(129)));
+
+        assertThat(result).isEqualTo(ProcessResult.PROCESSED);
+        assertThat(new IngestKeyStore(jdbc).keyOf("S-c-3")).isEqualTo("S-c-3");
+    }
+
+    private static LifecycleEnvelope withIngest(String eventType, String streamId, String ingest) {
+        return new LifecycleEnvelope(1, "evt-" + eventType + "-" + streamId + "-" + ingest, eventType,
+                종료시각, streamId, "42", ingest, 1, "trace-1", null);
+    }
+
     private static LifecycleEnvelope endedWithoutOccurredAt(String streamId) {
         return envelope("broadcast.ended", streamId, "42", 1, null);
     }
@@ -401,7 +444,7 @@ class BroadcastEventProcessorTest extends IntegrationTestSupport {
     private static LifecycleEnvelope envelope(String eventType, String streamId, String streamerId,
                                               long sequence, Instant occurredAt) {
         return new LifecycleEnvelope(1, "evt-" + eventType + "-" + streamId + "-" + sequence, eventType,
-                occurredAt, streamId, streamerId, sequence, "trace-1", null);
+                occurredAt, streamId, streamerId, null, sequence, "trace-1", null);
     }
 
     /**

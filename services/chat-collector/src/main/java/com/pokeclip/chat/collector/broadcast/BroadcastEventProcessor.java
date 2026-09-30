@@ -34,6 +34,7 @@ public class BroadcastEventProcessor {
     private static final int STREAM_ID_MAX_LENGTH = 128;
 
     private final EndedStreamStore store;
+    private final IngestKeyStore ingestKeys;
     private final BroadcastSessions sessions;
 
     /**
@@ -54,9 +55,10 @@ public class BroadcastEventProcessor {
     private final AtomicLong unknownTypes = new AtomicLong();
     private final AtomicLong malformedEnvelopes = new AtomicLong();
 
-    public BroadcastEventProcessor(EndedStreamStore store, BroadcastSessions sessions,
+    public BroadcastEventProcessor(EndedStreamStore store, IngestKeyStore ingestKeys, BroadcastSessions sessions,
                                    BiConsumer<String, StopReason> recorder) {
         this.store = store;
+        this.ingestKeys = ingestKeys;
         this.sessions = sessions;
         this.recorder = recorder;
     }
@@ -89,11 +91,29 @@ public class BroadcastEventProcessor {
             unreadableStreamerIds.incrementAndGet();
             return ProcessResult.UNREADABLE;
         }
+        rememberIngestKey(envelope);
         return switch (type) {
             case ENDED -> handleEnded(envelope);
             case STARTED -> handleStarted(envelope, streamer);
             case UNKNOWN -> throw new IllegalStateException("위에서 걸렀다");
         };
+    }
+
+    /**
+     * 물리 키를 적는다(POK-233). 영상 시점 조회가 장부를 이 키로 찾는다. <b>없어도 편지는 처리한다</b> — 1번은 소비자 배포 뒤에야
+     * 이 칸을 싣고, 그 전 편지는 방송 번호가 곧 물리 키다. 칸 폭(128)을 넘으면 적지 않고 경고만 남긴다: 세션을 막을 이유가 아니고,
+     * 적으면 저장에서 터져 이 방송의 편지가 영영 막힌다. 저장이 실패하면 던져서 편지를 다시 받는다(멱등이다).
+     */
+    private void rememberIngestKey(LifecycleEnvelope envelope) {
+        String ingest = envelope.ingestStreamId();
+        if (ingest == null || ingest.isBlank()) {
+            return;
+        }
+        if (ingest.length() > STREAM_ID_MAX_LENGTH) {
+            log.warn("chat.broadcast.ingest_key_too_long streamId={} length={}", envelope.streamId(), ingest.length());
+            return;
+        }
+        ingestKeys.remember(envelope.streamId(), ingest);
     }
 
     public BroadcastCounters counters() {
