@@ -11,12 +11,16 @@
 // 믹서 1~5(트랙 2~6)가 소스별 스템이고, 자동 배정은 이 다섯 자리에 소스를 하나씩 앉힌다.
 //
 // 규칙
-//  - 후보 = 실제로 소리를 내는(OBS 오디오 믹서에 보이는) 소스. 모니터 전용은 믹스에 안 들어가 제외.
+//  - 후보 = 오디오를 믹스로 넘기는 소스(오디오를 안 넘기는 브라우저·모니터 전용은 제외).
+//  - 새 자리는 지금 방송 화면(프로그램)에 나오는 후보만 받는다 — 다른 장면에만 있는 소스가 트랙을 먼저 채우지 않게.
+//    한 번 앉은 소스는 화면에서 빠져도 기억으로 자리를 지킨다 — 장면을 바꿀 때마다 트랙 주인이 바뀌지 않게.
 //  - 한 번 앉힌 자리는 설정 파일에 기억해 방송이 바뀌어도 그대로다(ADR-070 트랙 이름의 전제).
 //  - 새 후보는 우선순위(마이크 → 데스크탑 → 앱 → 미디어 → 브라우저 → 기타)로 줄 세워 가장 낮은 빈 자리에.
 //  - 지금 없는 소스의 기억은 자리를 잡지 않는다 — 지우지 않고 남겨 두지만 그 자리는 다른 소스가 쓸 수 있다.
 //  - 두 소스가 같은 자리를 기억하면 먼저 앉은 쪽이 이긴다. 방송·녹화 중에는 지금 그 트랙에서 나가는 쪽이 이긴다.
 //  - 자리가 모자라면 믹스 전용(트랙 2~6 어디에도 없음).
+//  - 본방(OBS 방송 출력)이 쓰는 트랙(고급 출력의 방송 트랙·VOD 트랙)은 자리로 쓰지 않고 비트도 건드리지 않는다 —
+//    스트리머가 그 트랙에 짜 둔 믹스가 곧 시청자가 듣는 소리다.
 namespace pokeclip {
 
 inline constexpr int kStemSlots = 5;
@@ -38,8 +42,9 @@ struct AudioSourceInfo {
 	AudioKind kind = AudioKind::Other;
 	int order = 0;            // 동률 순서 — 전역 장치는 채널 번호, 그 외 100 + 열거 순서
 	uint32_t mixers = 0;      // 지금 켜진 트랙 비트
-	bool audioActive = false; // OBS 오디오 믹서에 보이는 소스 = 실제로 소리를 낸다
+	bool audioActive = false; // 오디오를 넘긴다 (obs_source_audio_active — 기본 참, 브라우저 등이 스스로 끈다)
 	bool monitorOnly = false; // 모니터 전용 — 믹스에 안 들어간다
+	bool showing = false;     // 지금 방송 화면(프로그램)에 나온다 (obs_source_active) — 전역 장치는 늘 참
 
 	bool Candidate() const { return audioActive && !monitorOnly; }
 };
@@ -57,7 +62,8 @@ struct AudioTrackMapEntry {
 struct AssignmentInput {
 	std::vector<AudioSourceInfo> sources;
 	std::vector<AudioTrackMapEntry> map;
-	bool locked = false; // 방송·녹화 중 — 겹칠 때 지금 그 트랙에서 나가는 쪽을 남긴다
+	bool locked = false;   // 방송·녹화 중 — 겹칠 때 지금 그 트랙에서 나가는 쪽을 남긴다
+	uint32_t reserved = 0; // 본방이 쓰는 믹서 비트 — 그 트랙(2~6)은 자리로 쓰지 않고 비트도 그대로 둔다
 	int64_t now = 0;
 };
 
@@ -77,8 +83,9 @@ struct AssignmentResult {
 // 결정적·멱등: 같은 입력이면 같은 결과, mapNext와 쓰기 결과를 다시 넣으면 writes가 비고 mapChanged가 거짓.
 AssignmentResult ComputeAssignment(const AssignmentInput &in);
 
-// 트랙 2~6 비트만 바꾼다 — 트랙 1(최종 믹스)과 쓰지 않는 상위 비트는 그대로. slot 0 = 스템 없음(믹스만).
-uint32_t DesiredMixers(uint32_t current, int slot);
+// 트랙 2~6 비트만 바꾼다 — 트랙 1(최종 믹스)과 쓰지 않는 상위 비트, 본방 트랙(reserved)은 그대로.
+// slot 0 = 스템 없음(믹스만). slot이 본방 트랙이면 그 비트도 켜지 않는다.
+uint32_t DesiredMixers(uint32_t current, int slot, uint32_t reserved = 0);
 
 struct AudioSourceView {
 	std::string name;
@@ -90,6 +97,7 @@ struct AudioSourceView {
 struct AudioTrackView {
 	int track = 0; // 2~6 (OBS 화면 번호)
 	std::vector<AudioSourceView> sources;
+	bool mainStream = false; // 본방이 이 트랙을 쓴다 — 스템이 아니라 스트리머가 짠 믹스다
 
 	bool operator==(const AudioTrackView &) const = default;
 };
@@ -98,17 +106,26 @@ struct AudioTrackView {
 struct AudioRoutingView {
 	bool known = false;     // 한 번이라도 열거했다
 	bool autoAssign = true; // 설정 스위치
-	bool applied = false;   // 실제로 자동 배정 중 (스위치 on ∧ 페어링됨)
+	bool applied = false;   // 실제로 자동 배정 중 (스위치 on ∧ 페어링됨 ∧ 보류 아님)
+	bool deferred = false;  // 방송·녹화 중에 켜져 끝날 때까지 미뤘다 — 지금 나가는 트랙을 바꾸지 않는다
 	std::array<AudioTrackView, kStemSlots> tracks{};
-	std::vector<std::string> mixOnly;     // 후보인데 트랙 2~6 어디에도 없다
-	std::vector<std::string> monitorOnly; // 소리는 나지만 모니터 전용이라 믹스에 없다
+	std::vector<std::string> mixOnly;     // 화면에 나오는 후보인데 스템(본방 트랙 제외) 어디에도 없다
+	std::vector<std::string> monitorOnly; // 화면에 나오지만 모니터 전용이라 믹스에 없다
 	int overflow = 0;                     // 자동 배정에서 자리가 모자란 수
 
 	bool operator==(const AudioRoutingView &) const = default;
 };
 
-AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, bool autoAssign, bool applied,
-				  int overflow);
+struct RoutingViewOptions {
+	bool autoAssign = true;
+	bool applied = false;
+	bool deferred = false;
+	int overflow = 0;
+	uint32_t reserved = 0; // 본방이 쓰는 믹서 비트
+};
+
+// 화면에 안 나오고 스템에도 없는 소스(다른 장면에만 있는 것)는 목록에 올리지 않는다 — 지금 소리를 안 낸다.
+AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, const RoutingViewOptions &options);
 
 // 로그 한 줄: "T2 마이크/보조(mic) · T3 데스크탑 오디오(desktop) · T4 – · T5 – · T6 – · mix-only 0"
 std::string DescribeRouting(const AudioRoutingView &view);

@@ -87,10 +87,11 @@ AudioKind ClassifyGlobalChannel(int channel)
 	return AudioKind::Other;
 }
 
-uint32_t DesiredMixers(uint32_t current, int slot)
+uint32_t DesiredMixers(uint32_t current, int slot, uint32_t reserved)
 {
-	uint32_t next = current & ~kStemMask;
-	if (slot >= 1 && slot <= kStemSlots)
+	uint32_t owned = kStemMask & ~reserved; // 자동 배정이 맡는 비트 — 본방 트랙은 스트리머 몫
+	uint32_t next = current & ~owned;
+	if (slot >= 1 && slot <= kStemSlots && (owned & (1u << slot)) != 0)
 		next |= 1u << slot;
 	return next;
 }
@@ -136,7 +137,10 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 		}
 	}
 
+	auto isReserved = [&](int slot) { return (in.reserved & (1u << slot)) != 0; };
+
 	// 3. 기억한 자리 복원. 지금 소리를 내는 후보만 자리를 잡는다 — 없는 소스의 기억은 자리를 비워 둔다.
+	//    화면에 안 나와도 기억이 있으면 자리를 지킨다. 기억한 자리가 본방 트랙이 됐으면 새 자리를 찾는다.
 	std::array<int, kStemSlots + 1> holder{};
 	holder.fill(-1);
 	std::vector<std::string> losers;
@@ -157,7 +161,9 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 		if (!candidateOf(map[i].key))
 			continue;
 		int slot = map[i].slot;
-		if (holder[slot] < 0) {
+		if (isReserved(slot)) {
+			losers.push_back(map[i].key);
+		} else if (holder[slot] < 0) {
 			holder[slot] = static_cast<int>(i);
 		} else if (beats(i, static_cast<size_t>(holder[slot]), slot)) {
 			losers.push_back(map[static_cast<size_t>(holder[slot])].key);
@@ -170,6 +176,7 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 	std::map<std::string, int> slotOf;
 	std::array<bool, kStemSlots + 1> taken{};
 	for (int k = 1; k <= kStemSlots; k++) {
+		taken[k] = isReserved(k);
 		if (holder[k] >= 0) {
 			slotOf[map[static_cast<size_t>(holder[k])].key] = k;
 			taken[k] = true;
@@ -177,12 +184,13 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 	}
 
 	// 4. 자리 없는 후보(기억이 없거나 겹쳐서 밀렸다)를 우선순위로 줄 세워 가장 낮은 빈 자리에 앉힌다.
+	//    기억 없는 소스는 방송 화면에 나올 때 처음 자리를 받는다 — 다른 장면에만 있는 소스는 기다린다.
 	std::vector<const AudioSourceInfo *> queue;
 	for (const std::string &key : losers)
 		queue.push_back(candidateOf(key));
 	for (size_t i = 0; i < in.sources.size(); i++) {
 		const AudioSourceInfo &s = in.sources[i];
-		if (isFirst(i) && s.Candidate() && !mapKeys.count(s.key))
+		if (isFirst(i) && s.Candidate() && s.showing && !mapKeys.count(s.key))
 			queue.push_back(&s);
 	}
 	std::stable_sort(queue.begin(), queue.end(), [](const AudioSourceInfo *a, const AudioSourceInfo *b) {
@@ -230,13 +238,14 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 
 	// 5. 쓸 비트. 자리 없는 소스·후보가 아닌 소스도 트랙 2~6은 비운다 — 자동 배정이 스템을 맡는다.
 	//    그래야 소리를 늦게 내기 시작한 소스(브라우저 소리 켜기 등)가 모든 스템에 섞여 들지 않는다.
+	//    본방 트랙은 그대로 둔다.
 	for (size_t i = 0; i < in.sources.size(); i++) {
 		if (!isFirst(i))
 			continue;
 		const AudioSourceInfo &s = in.sources[i];
 		auto it = slotOf.find(s.key);
 		int slot = it != slotOf.end() ? it->second : 0;
-		uint32_t desired = DesiredMixers(s.mixers, slot);
+		uint32_t desired = DesiredMixers(s.mixers, slot, in.reserved);
 		if (desired != s.mixers)
 			r.writes.push_back({s.key, desired});
 	}
@@ -270,32 +279,37 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 	return r;
 }
 
-AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, bool autoAssign, bool applied,
-				  int overflow)
+AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, const RoutingViewOptions &options)
 {
 	AudioRoutingView v;
 	v.known = true;
-	v.autoAssign = autoAssign;
-	v.applied = applied;
-	v.overflow = overflow;
-	for (int i = 0; i < kStemSlots; i++)
-		v.tracks[static_cast<size_t>(i)].track = i + 2;
+	v.autoAssign = options.autoAssign;
+	v.applied = options.applied;
+	v.deferred = options.deferred;
+	v.overflow = options.overflow;
+	for (int i = 0; i < kStemSlots; i++) {
+		AudioTrackView &t = v.tracks[static_cast<size_t>(i)];
+		t.track = i + 2;
+		t.mainStream = (options.reserved & (1u << (i + 1))) != 0;
+	}
 
 	for (const AudioSourceInfo &s : sources) {
 		if (!s.audioActive)
 			continue;
 		if (s.monitorOnly) {
-			v.monitorOnly.push_back(s.name);
+			if (s.showing)
+				v.monitorOnly.push_back(s.name);
 			continue;
 		}
-		bool onStem = false;
+		bool onStem = false; // 본방 트랙은 스템이 아니다 — 거기에만 있으면 스템에는 없는 것
 		for (int m = 1; m <= kStemSlots; m++) {
-			if (s.mixers & (1u << m)) {
+			uint32_t bit = 1u << m;
+			if (s.mixers & bit) {
 				v.tracks[static_cast<size_t>(m - 1)].sources.push_back({s.name, s.kind});
-				onStem = true;
+				onStem = onStem || (options.reserved & bit) == 0;
 			}
 		}
-		if (!onStem)
+		if (!onStem && s.showing)
 			v.mixOnly.push_back(s.name);
 	}
 	return v;
@@ -307,7 +321,7 @@ std::string DescribeRouting(const AudioRoutingView &v)
 	for (const AudioTrackView &t : v.tracks) {
 		if (!out.empty())
 			out += " · ";
-		out += "T" + std::to_string(t.track) + " ";
+		out += "T" + std::to_string(t.track) + (t.mainStream ? " main-stream " : " ");
 		if (t.sources.empty()) {
 			out += "–";
 			continue;
@@ -321,6 +335,8 @@ std::string DescribeRouting(const AudioRoutingView &v)
 	out += " · mix-only " + std::to_string(v.mixOnly.size());
 	if (!v.monitorOnly.empty())
 		out += " · monitor-only " + std::to_string(v.monitorOnly.size());
+	if (v.deferred)
+		out += " · deferred until stream/recording stops";
 	return out;
 }
 

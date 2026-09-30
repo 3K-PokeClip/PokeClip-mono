@@ -125,12 +125,16 @@ void FallbackPanel::Render(const StateSnapshot &s)
 			QStringList names;
 			for (const AudioSourceView &src : t.sources)
 				names << QString::fromStdString(src.name);
-			parts << QString("T%1 %2").arg(t.track).arg(names.isEmpty() ? QString("–") : names.join(", "));
+			QString label = t.mainStream ? QString("T%1(%2)").arg(t.track).arg(Text("Audio.MainStream"))
+						     : QString("T%1").arg(t.track);
+			parts << label + " " + (names.isEmpty() ? QString("–") : names.join(", "));
 		}
 		QString line = Text("Audio.Title") + ": " + parts.join(" · ");
 		if (!s.audio.mixOnly.empty())
 			line += " · " + Text("Audio.MixOnly").arg(static_cast<int>(s.audio.mixOnly.size()));
-		if (!s.audio.autoAssign)
+		if (s.audio.deferred)
+			line += " " + Text("Audio.Deferred");
+		else if (!s.audio.autoAssign)
 			line += " " + Text("Audio.Manual");
 		audio_->setText(line);
 		audio_->setVisible(true);

@@ -1,6 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
+#include <map>
+#include <mutex>
 #include <string>
 
 struct calldata;
@@ -33,11 +36,20 @@ private:
 	static void OnSourceLoad(void *data, struct calldata *params);
 	static void OnSourceChanged(void *data, struct calldata *params);
 	static void OnMixersChanged(void *data, struct calldata *params);
+	static void OnMonitoringChanged(void *data, struct calldata *params);
+	void SettleMonitoring(const std::map<std::string, int> &seen);
 
 	std::atomic<bool> pending_{false};
 	std::atomic<bool> shutdown_{false};
 	std::atomic<bool> applying_{false}; // 우리가 트랙 비트를 쓰는 중 — 그 시그널로 다시 계산하지 않는다
-	bool loading_ = false;               // UI 스레드 전용
+	std::atomic<bool> applied_{false};  // 마지막 계산에서 자동 배정을 적용했다 — 새 소스 처리·보류 판정이 본다
+	std::atomic<uint32_t> reserved_{0}; // 마지막 계산의 본방 믹서 비트 (트랙 2~6만)
+	// audio_monitoring 시그널은 새 값을 저장하기 전에 온다(모니터 장치를 만들고 지운 뒤에야 저장 — macOS에서 수백 ms).
+	// 신호로 받은 새 값을 저장될 때까지 여기 둔다. 소스 uuid → obs_monitoring_type.
+	std::mutex monitoringMutex_;
+	std::map<std::string, int> monitoringPending_;
+	bool loading_ = false;              // UI 스레드 전용
+	bool deferRetryArmed_ = false;      // UI 스레드 전용 — 보류 중 다시 확인할 타이머가 걸려 있다
 	bool initialized_ = false;
 	std::string lastLogged_;
 };

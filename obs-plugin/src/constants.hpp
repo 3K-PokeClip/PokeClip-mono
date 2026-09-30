@@ -14,8 +14,11 @@ namespace pokeclip {
 // 독 id — OBS가 독 위치를 이 문자열로 저장한다. 바꾸면 사용자 배치가 초기화된다.
 inline constexpr const char *kDockId = "pokeclip-dock";
 
-// 페어링 교환 API 기본값. 운영 HTTPS 도메인이 정해지면 바꾼다 (ADR-036: dev 서버는 HTTP).
-inline constexpr const char *kDefaultApiBase = "http://dev.pokeclip.com";
+// 페어링 교환·마크 API 기본값. 운영 도메인이 정해지면 바꾼다. dev도 HTTPS다 — HTTP는 301로 HTTPS에 돌려보내므로
+// (2026-09-30 확인) POST가 닿지 않고, 마크의 passphrase가 평문으로 한 번 나간다.
+inline constexpr const char *kDefaultApiBase = "https://dev.pokeclip.com";
+// 예전 기본값 — 저장된 설정에 이 값이 있으면 읽을 때 위 값으로 올린다.
+inline constexpr const char *kLegacyDefaultApiBase = "http://dev.pokeclip.com";
 inline constexpr const char *kPairingExchangePath = "/api/stream-keys/pairing-codes/exchange";
 
 // SRT 수신부 기본값 (ADR-020 3절 ingest.* · 로컬 compose도 8890).

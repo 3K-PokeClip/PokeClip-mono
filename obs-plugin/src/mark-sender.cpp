@@ -65,11 +65,13 @@ bool IsHeaderSafe(const std::string &value)
 
 size_t WriteToString(char *ptr, size_t size, size_t nmemb, void *userdata)
 {
+	constexpr size_t kMaxBody = 16 * 1024;
 	auto *out = static_cast<std::string *>(userdata);
 	size_t n = size * nmemb;
-	if (out->size() + n > 16 * 1024)
-		return 0; // 사유 코드만 보면 된다 — 큰 본문은 끊는다
-	out->append(ptr, n);
+	// 사유 코드만 보면 된다 — 넘치는 부분은 버리되 받기는 끝까지 한다. 0을 돌려주면 curl이 쓰기 오류로 끝나
+	// 받은 HTTP 상태를 잃고 네트워크 실패로 다시 보낸다(큰 HTML 404를 10분 재전송).
+	if (out->size() < kMaxBody)
+		out->append(ptr, std::min(n, kMaxBody - out->size()));
 	return n;
 }
 
@@ -135,6 +137,11 @@ void MarkSender::ResetCounters()
 	std::lock_guard lock(mutex_);
 	sent_ = 0;
 	failed_ = 0;
+	// 지난 결과·사유도 지운다 — 폴백 패널이 새 방송에 옛 거절 사유를 붙이지 않게. seq는 그대로라 토스트는 없다.
+	AppState::Instance().Mutate([](StateSnapshot &s) {
+		s.marks.result.clear();
+		s.marks.reason.clear();
+	});
 	PublishLocked("", "");
 }
 
@@ -179,6 +186,8 @@ MarkAccept MarkSender::Mark(MarkVia via)
 		rejected = "no_key";
 	else if (!IsHeaderSafe(config.passphrase))
 		rejected = "invalid_key";
+	else if (!IsSecureMarkBase(config.ClipBase()))
+		rejected = "mark_insecure";
 	if (!rejected.empty()) {
 		obs_log(LOG_INFO, "mark via %s ignored: %s", ViaName(via), rejected.c_str());
 		PublishLocked("rejected", rejected);
@@ -190,8 +199,12 @@ MarkAccept MarkSender::Mark(MarkVia via)
 		return {false, "mark_too_soon"};
 
 	if (queue_.size() >= kMarkQueueCap) {
-		obs_log(LOG_WARNING, "mark: queue full — dropping oldest %.8s", queue_.front().eventId.c_str());
-		queue_.pop_front();
+		// 재시도는 뒤로 다시 들어가므로 맨 앞이 가장 오래된 누름이 아니다 — 누른 시각으로 고른다.
+		auto oldest = std::min_element(queue_.begin(), queue_.end(), [](const Pending &a, const Pending &b) {
+			return a.pressedSteadyMs < b.pressedSteadyMs;
+		});
+		obs_log(LOG_WARNING, "mark: queue full — dropping oldest %.8s", oldest->eventId.c_str());
+		queue_.erase(oldest);
 		failed_++;
 	}
 
@@ -228,6 +241,15 @@ void MarkSender::Run()
 		}
 		Pending p = std::move(*next);
 		queue_.erase(next);
+		// 예약할 때는 10분 안이었어도 앞선 전송(한 번에 최대 10초)이 밀리면 넘길 수 있다.
+		// 보내기 직전에 다시 본다.
+		if (MarkExpired(p.pressedSteadyMs, now)) {
+			failed_++;
+			obs_log(LOG_WARNING, "mark %.8s expired in queue after %d attempts", p.eventId.c_str(),
+				p.attempts);
+			PublishLocked("failed", "mark_expired");
+			continue;
+		}
 		inFlight_ = true;
 		p.attempts++;
 

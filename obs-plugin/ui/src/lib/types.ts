@@ -8,7 +8,9 @@ export interface AudioRouting {
   known: boolean;
   autoAssign: boolean;
   applied: boolean;
-  tracks: { track: number; sources: { name: string; kind: AudioKind }[] }[];
+  deferred: boolean; // 방송·녹화 중에 켜져 끝날 때까지 미뤘다 — 지금 나가는 트랙은 그대로
+  // mainStream — 본방(OBS 방송 출력)이 이 트랙을 쓴다. 자동 배정이 손대지 않는 스트리머의 믹스다.
+  tracks: { track: number; mainStream: boolean; sources: { name: string; kind: AudioKind }[] }[];
   mixOnly: { name: string }[];
   monitorOnly: { name: string }[];
   overflow: number;
@@ -79,3 +81,6 @@ export interface PluginSettings {
 }
 
 export type ActionResult = { ok: true } | { ok: false; reason: string };
+
+// A4 「지금 표시」 응답. 409(거절)는 플러그인이 state.marks로도 알리므로 상태 코드를 같이 넘긴다.
+export type MarkReply = ActionResult & { status: number };

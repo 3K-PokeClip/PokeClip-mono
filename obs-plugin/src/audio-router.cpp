@@ -9,8 +9,11 @@
 #include <obs-frontend-api.h>
 #include <obs-module.h>
 #include <plugin-support.h>
+#include <util/config-file.h>
+#include <util/dstr.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <map>
 #include <set>
@@ -24,9 +27,15 @@ namespace {
 constexpr uint32_t kFirstGlobalChannel = 1;
 constexpr uint32_t kLastGlobalChannel = 6;
 
-// 목록이 바뀌는 신호는 전부 한 번의 계산으로 모은다. 소리를 내기 시작·멈춘 소스도 후보가 바뀐다.
-const char *const kChangeSignals[] = {"source_destroy", "source_remove", "source_rename", "source_audio_activate",
-				      "source_audio_deactivate"};
+// 방송·녹화 중에 켜진 자동 배정을 미룬 동안, 끝났는지 다시 보는 간격. 우리 SRT 출력은 정지 신호 뒤에도
+// 잠시 active로 남아(stream-target.cpp ReleaseWhenStopped) 정지 이벤트 한 번으로는 놓칠 수 있다.
+constexpr int kDeferredRetryMs = 2000;
+
+// 목록이 바뀌는 신호는 전부 한 번의 계산으로 모은다. 소리를 내기 시작·멈춘 소스, 방송 화면에 들어오고 나간 소스도
+// 후보가 바뀐다(장면 전환마다 여러 개가 오지만 Schedule이 한 번으로 모은다).
+const char *const kChangeSignals[] = {"source_destroy",        "source_remove",           "source_rename",
+				      "source_audio_activate", "source_audio_deactivate", "source_activate",
+				      "source_deactivate"};
 
 bool IsAudioInput(obs_source_t *source)
 {
@@ -48,7 +57,10 @@ std::map<obs_source_t *, int> GlobalChannels()
 	return channels;
 }
 
-AudioSourceInfo Describe(obs_source_t *s, const std::map<obs_source_t *, int> &channels, int index)
+using MonitoringPending = std::map<std::string, int>;
+
+AudioSourceInfo Describe(obs_source_t *s, const std::map<obs_source_t *, int> &channels, int index,
+			 const MonitoringPending &monitoring)
 {
 	AudioSourceInfo info;
 	auto it = channels.find(s);
@@ -67,26 +79,34 @@ AudioSourceInfo Describe(obs_source_t *s, const std::map<obs_source_t *, int> &c
 	info.name = name ? name : "";
 	info.mixers = obs_source_get_audio_mixers(s);
 	info.audioActive = obs_source_audio_active(s);
-	info.monitorOnly = obs_source_get_monitoring_type(s) == OBS_MONITORING_TYPE_MONITOR_ONLY;
+	int monitoringType = obs_source_get_monitoring_type(s);
+	const char *uuid = obs_source_get_uuid(s);
+	auto pending = uuid ? monitoring.find(uuid) : monitoring.end();
+	if (pending != monitoring.end())
+		monitoringType = pending->second; // 시그널로 받았지만 아직 저장되지 않은 새 값
+	info.monitorOnly = monitoringType == OBS_MONITORING_TYPE_MONITOR_ONLY;
+	info.showing = obs_source_active(s);
 	return info;
 }
 
-std::vector<AudioSourceInfo> Enumerate()
+std::vector<AudioSourceInfo> Enumerate(const MonitoringPending &monitoring)
 {
 	struct Context {
 		std::map<obs_source_t *, int> channels;
 		std::set<obs_source_t *> seen;
 		std::vector<AudioSourceInfo> out;
+		const MonitoringPending *monitoring = nullptr;
 		int index = 0;
 	} ctx;
 	ctx.channels = GlobalChannels();
+	ctx.monitoring = &monitoring;
 
 	obs_enum_sources(
 		[](void *param, obs_source_t *s) {
 			auto *c = static_cast<Context *>(param);
 			if (!IsAudioInput(s))
 				return true;
-			AudioSourceInfo info = Describe(s, c->channels, c->index++);
+			AudioSourceInfo info = Describe(s, c->channels, c->index++, *c->monitoring);
 			if (info.key != "uuid:") {
 				c->out.push_back(std::move(info));
 				c->seen.insert(s);
@@ -98,7 +118,7 @@ std::vector<AudioSourceInfo> Enumerate()
 	// 전역 장치가 공개 열거에 안 나오는 빌드를 대비한다.
 	for (const auto &[s, ch] : ctx.channels) {
 		if (!ctx.seen.count(s) && IsAudioInput(s))
-			ctx.out.push_back(Describe(s, ctx.channels, 0));
+			ctx.out.push_back(Describe(s, ctx.channels, 0, monitoring));
 	}
 	return ctx.out;
 }
@@ -120,6 +140,66 @@ obs_source_t *SourceByKey(const std::string &key)
 bool Locked()
 {
 	return obs_frontend_streaming_active() || obs_frontend_recording_active() || StreamTarget::Instance().IsActive();
+}
+
+uint32_t TrackBit(int track)
+{
+	return track >= 1 && track <= 6 ? 1u << (track - 1) : 1u;
+}
+
+// OBS가 이 서비스에 VOD 트랙을 실제로 붙이는지. 사용자 지정 서버는 사용자 설정 스위치를, 그 밖은 Twitch만
+// (OBS 32 frontend/utility의 ServiceSupportsVodTrack·VodTrackMixerIdx·IsVodTrackEnabled와 같은 판정).
+bool VodTrackService(bool &custom)
+{
+	custom = false;
+	obs_service_t *service = obs_frontend_get_streaming_service(); // 참조를 늘리지 않는다
+	if (!service)
+		return false;
+	const char *id = obs_service_get_id(service);
+	custom = id && std::strcmp(id, "rtmp_custom") == 0;
+	if (custom) {
+		config_t *user = obs_frontend_get_user_config();
+		return user && config_get_bool(user, "General", "EnableCustomServerVodTrack");
+	}
+	obs_data_t *settings = obs_service_get_settings(service);
+	const char *name = settings ? obs_data_get_string(settings, "service") : nullptr;
+	bool twitch = name && astrcmpi(name, "Twitch") == 0;
+	obs_data_release(settings);
+	return twitch;
+}
+
+// 본방(OBS 방송 출력)이 쓰는 믹서 비트. 고급 출력은 방송 트랙을 1~6 중에서 고르고, Twitch VOD 트랙은 또 하나를 쓴다.
+// 방송 전에도 알아야 하므로 프로필 설정에서 읽고(OBS가 방송 시작 때 같은 값으로 출력을 짠다),
+// 방송 중이면 실제로 붙은 인코더의 믹서도 더한다.
+uint32_t MainStreamMixers()
+{
+	uint32_t mixers = 1u; // 단순 출력은 트랙 1
+	if (config_t *profile = obs_frontend_get_profile_config()) {
+		const char *mode = config_get_string(profile, "Output", "Mode");
+		bool advanced = mode && astrcmpi(mode, "Advanced") == 0;
+		bool custom = false;
+		bool vodService = VodTrackService(custom);
+		if (advanced) {
+			int track = static_cast<int>(config_get_int(profile, "AdvOut", "TrackIndex"));
+			int vodTrack = static_cast<int>(config_get_int(profile, "AdvOut", "VodTrackIndex"));
+			mixers = TrackBit(track);
+			if (vodService && config_get_bool(profile, "AdvOut", "VodTrackEnabled") && vodTrack != track)
+				mixers |= TrackBit(vodTrack);
+		} else if (vodService && config_get_bool(profile, "SimpleOutput", "VodTrackEnabled") &&
+			   (custom || config_get_bool(profile, "SimpleOutput", "UseAdvanced"))) {
+			mixers |= TrackBit(2); // 단순 출력의 VOD 트랙은 트랙 2 고정
+		}
+	}
+	if (obs_frontend_streaming_active()) {
+		if (obs_output_t *out = obs_frontend_get_streaming_output()) {
+			for (size_t i = 0; i < MAX_OUTPUT_AUDIO_ENCODERS; i++) {
+				if (obs_encoder_t *enc = obs_output_get_audio_encoder(out, i))
+					mixers |= 1u << obs_encoder_get_mixer_index(enc);
+			}
+			obs_output_release(out);
+		}
+	}
+	return mixers;
 }
 
 } // namespace
@@ -147,7 +227,7 @@ void AudioRouter::Shutdown()
 	shutdown_ = true;
 	if (!initialized_)
 		return;
-	// 소스별 audio_mixers 연결은 소스와 함께 사라진다. 그 전에 오는 시그널은 shutdown_이 막는다.
+	// 소스별 audio_mixers·audio_monitoring 연결은 소스와 함께 사라진다. 그 전에 오는 시그널은 shutdown_이 막는다.
 	signal_handler_t *sh = obs_get_signal_handler();
 	signal_handler_disconnect(sh, "source_create", &AudioRouter::OnSourceCreate, this);
 	signal_handler_disconnect(sh, "source_load", &AudioRouter::OnSourceLoad, this);
@@ -182,15 +262,32 @@ void AudioRouter::Reconcile(const char *reason)
 
 	PluginConfig config = ConfigStore::Instance().Get();
 	// 페어링 안 한 OBS의 녹화 트랙은 건드리지 않는다 — PokeClip과 연결된 OBS만 자동 배정한다.
-	bool applied = config.audioAutoAssign && config.HasKey();
-	std::vector<AudioSourceInfo> sources = Enumerate();
+	bool wanted = config.audioAutoAssign && config.HasKey();
+	bool locked = Locked();
+	// 방송·녹화 중에 자동 배정이 새로 켜졌다(스위치·페어링, 또는 그 상태로 OBS를 시작) — 처음 적용은 모든 소스의
+	// 트랙 2~6을 다시 쓰므로 지금 나가는 트랙이 바뀐다. 끝날 때까지 미룬다. 이미 적용 중이던 배정은 방송 중에도
+	// 잠금 규칙대로 새 소스만 빈 트랙에 앉힌다.
+	bool deferred = wanted && locked && !applied_;
+	bool applied = wanted && !deferred;
+	applied_ = applied;
+	uint32_t reserved = MainStreamMixers() & kStemMask;
+	reserved_ = reserved;
+
+	MonitoringPending monitoring;
+	{
+		std::lock_guard lock(monitoringMutex_);
+		monitoring = monitoringPending_;
+	}
+	std::vector<AudioSourceInfo> sources = Enumerate(monitoring);
+	SettleMonitoring(monitoring);
 
 	int overflow = 0;
 	if (applied) {
 		AssignmentInput in;
 		in.sources = sources;
 		in.map = config.audioTrackMap;
-		in.locked = Locked();
+		in.locked = locked;
+		in.reserved = reserved;
 		in.now = static_cast<int64_t>(std::time(nullptr));
 		AssignmentResult r = ComputeAssignment(in);
 
@@ -213,8 +310,23 @@ void AudioRouter::Reconcile(const char *reason)
 		overflow = static_cast<int>(r.overflowKeys.size());
 	}
 
-	AudioRoutingView view = BuildRoutingView(sources, config.audioAutoAssign, applied, overflow);
-	std::string line = std::string(applied ? "auto" : "manual") + " — " + DescribeRouting(view);
+	if (deferred && !deferRetryArmed_) {
+		deferRetryArmed_ = true;
+		RunInUiThreadAfter(kDeferredRetryMs, [this]() {
+			deferRetryArmed_ = false;
+			Schedule("deferred");
+		});
+	}
+
+	RoutingViewOptions options;
+	options.autoAssign = config.audioAutoAssign;
+	options.applied = applied;
+	options.deferred = deferred;
+	options.overflow = overflow;
+	options.reserved = reserved;
+	AudioRoutingView view = BuildRoutingView(sources, options);
+	const char *mode = applied ? "auto" : (deferred ? "deferred" : "manual");
+	std::string line = std::string(mode) + " — " + DescribeRouting(view);
 	if (line != lastLogged_) {
 		obs_log(LOG_INFO, "audio routing (%s): %s", reason, line.c_str());
 		lastLogged_ = line;
@@ -231,21 +343,25 @@ void AudioRouter::OnSourceCreate(void *data, calldata_t *params)
 	auto *source = static_cast<obs_source_t *>(calldata_ptr(params, "source"));
 	if (self->shutdown_ || !IsAudioInput(source))
 		return;
-	signal_handler_connect(obs_source_get_signal_handler(source), "audio_mixers", &AudioRouter::OnMixersChanged,
-			       self);
+	signal_handler_t *sh = obs_source_get_signal_handler(source);
+	signal_handler_connect(sh, "audio_mixers", &AudioRouter::OnMixersChanged, self);
+	signal_handler_connect(sh, "audio_monitoring", &AudioRouter::OnMonitoringChanged, self);
 
 	// OBS는 새 소스를 트랙 1~6에 전부 켠 채 만든다. 계산이 도는 몇 ms 사이에도 스템에 섞이지 않게
-	// 기억에 없는 새 소스는 곧바로 트랙 2~6을 끈다. 컬렉션을 읽는 중이면 저장값이 뒤이어 덮어쓴다(무해).
-	PluginConfig config = ConfigStore::Instance().Get();
-	if (config.audioAutoAssign && config.HasKey()) {
+	// 기억에 없는 새 소스는 곧바로 트랙 2~6(본방 트랙 제외)을 끈다.
+	// 컬렉션을 읽는 중이면 저장값이 뒤이어 덮어쓴다(무해).
+	// 자동 배정을 적용 중일 때만 — 끄거나 미룬 동안은 OBS 기본 동작 그대로 둔다.
+	if (self->applied_) {
+		PluginConfig config = ConfigStore::Instance().Get();
 		const char *uuid = obs_source_get_uuid(source);
 		std::string key = std::string("uuid:") + (uuid ? uuid : "");
 		bool remembered = false;
 		for (const AudioTrackMapEntry &e : config.audioTrackMap)
 			remembered = remembered || e.key == key;
+		uint32_t reserved = self->reserved_;
 		uint32_t mixers = obs_source_get_audio_mixers(source);
-		if (!remembered && (mixers & kStemMask) != 0)
-			obs_source_set_audio_mixers(source, DesiredMixers(mixers, 0));
+		if (!remembered && (mixers & kStemMask & ~reserved) != 0)
+			obs_source_set_audio_mixers(source, DesiredMixers(mixers, 0, reserved));
 	}
 	self->Schedule("source added");
 }
@@ -256,8 +372,9 @@ void AudioRouter::OnSourceLoad(void *data, calldata_t *params)
 	auto *source = static_cast<obs_source_t *>(calldata_ptr(params, "source"));
 	if (self->shutdown_ || !IsAudioInput(source))
 		return;
-	signal_handler_connect(obs_source_get_signal_handler(source), "audio_mixers", &AudioRouter::OnMixersChanged,
-			       self);
+	signal_handler_t *sh = obs_source_get_signal_handler(source);
+	signal_handler_connect(sh, "audio_mixers", &AudioRouter::OnMixersChanged, self);
+	signal_handler_connect(sh, "audio_monitoring", &AudioRouter::OnMonitoringChanged, self);
 	self->Schedule("source loaded");
 }
 
@@ -274,6 +391,36 @@ void AudioRouter::OnMixersChanged(void *data, calldata_t *)
 	if (self->applying_)
 		return;
 	self->Schedule("mixers changed");
+}
+
+// 오디오 모니터링을 바꿨다 — 모니터 전용이 되면 자리를 비우고, 출력으로 돌아오면 자리를 받아야 한다.
+// libobs는 이 시그널을 보낸 뒤 모니터 장치를 만들거나 지우고 나서야 새 값을 저장한다(obs-source.c
+// obs_source_set_monitoring_type) — 그 사이에 계산이 돌면 옛 값을 읽으므로 시그널의 새 값을 들고 간다.
+void AudioRouter::OnMonitoringChanged(void *data, calldata_t *params)
+{
+	auto *self = static_cast<AudioRouter *>(data);
+	auto *source = static_cast<obs_source_t *>(calldata_ptr(params, "source"));
+	const char *uuid = source ? obs_source_get_uuid(source) : nullptr;
+	if (uuid) {
+		std::lock_guard lock(self->monitoringMutex_);
+		self->monitoringPending_[uuid] = static_cast<int>(calldata_int(params, "type"));
+	}
+	self->Schedule("monitoring changed");
+}
+
+// 저장이 끝난(또는 소스가 사라진) 새 값은 지운다. 아직이면 남겨 두고 다음 계산에서 다시 본다.
+void AudioRouter::SettleMonitoring(const std::map<std::string, int> &seen)
+{
+	std::lock_guard lock(monitoringMutex_);
+	for (const auto &[uuid, type] : seen) {
+		auto it = monitoringPending_.find(uuid);
+		if (it == monitoringPending_.end() || it->second != type)
+			continue; // 그 사이 또 바뀌었다 — 새 값을 남긴다
+		obs_source_t *s = obs_get_source_by_uuid(uuid.c_str());
+		if (!s || obs_source_get_monitoring_type(s) == type)
+			monitoringPending_.erase(it);
+		obs_source_release(s);
+	}
 }
 
 } // namespace pokeclip

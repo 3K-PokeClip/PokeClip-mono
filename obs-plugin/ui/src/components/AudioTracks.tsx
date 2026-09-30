@@ -9,11 +9,17 @@ export function AudioTracks({ state }: { state: BridgeState }) {
   const { audio } = state;
   if (!audio.known) return null;
   const names = (list: { name: string }[]) => list.map((s) => s.name).join(', ');
+  const mainStreamTracks = audio.tracks.filter((t) => t.mainStream).map((t) => t.track);
+  const title = !audio.autoAssign
+    ? '오디오 트랙 · OBS 설정 그대로'
+    : audio.deferred
+      ? '오디오 트랙 · 자동 배정 대기'
+      : '오디오 트랙 · 자동 배정';
 
   return (
     <section class={styles.section} aria-labelledby="audio-title">
       <h3 id="audio-title" class={styles.sectionTitle}>
-        {audio.autoAssign ? '오디오 트랙 · 자동 배정' : '오디오 트랙 · OBS 설정 그대로'}
+        {title}
       </h3>
       <ul class={styles.checks}>
         <li class={styles.check}>
@@ -25,8 +31,13 @@ export function AudioTracks({ state }: { state: BridgeState }) {
         </li>
         {audio.tracks.map((t) => {
           const empty = t.sources.length === 0;
-          const kind =
-            t.sources.length === 1 ? AUDIO_KIND_LABEL[t.sources[0].kind] : t.sources.length > 1 ? `${t.sources.length}개 섞임` : '';
+          const kind = t.mainStream
+            ? '본방 트랙'
+            : t.sources.length === 1
+              ? AUDIO_KIND_LABEL[t.sources[0].kind]
+              : t.sources.length > 1
+                ? `${t.sources.length}개 섞임`
+                : '';
           return (
             <li class={styles.check} key={t.track}>
               <span class={styles.trackNo} data-filled={empty ? 'false' : 'true'}>
@@ -41,6 +52,14 @@ export function AudioTracks({ state }: { state: BridgeState }) {
           );
         })}
       </ul>
+      {audio.deferred ? (
+        <p class={styles.audioNote}>방송·녹화 중에 켜서 끝나면 자동 배정을 시작해요. 지금 나가는 트랙은 그대로예요.</p>
+      ) : null}
+      {audio.autoAssign && mainStreamTracks.length > 0 ? (
+        <p class={styles.audioNote}>
+          본방 오디오 트랙({mainStreamTracks.join('·')})은 자동 배정에서 뺐어요. 이 트랙에 넣을 소스는 OBS에서 직접 고르세요.
+        </p>
+      ) : null}
       {audio.mixOnly.length > 0 ? (
         <p class={styles.audioNote} data-tone={audio.applied ? 'warn' : undefined}>
           {audio.applied ? <TriangleAlert size={12} aria-hidden="true" /> : null}

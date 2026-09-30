@@ -1,5 +1,5 @@
 import { takeSseFrames } from './format';
-import type { ActionResult, BridgeState, Hello, PluginSettings } from './types';
+import type { ActionResult, BridgeState, Hello, MarkReply, PluginSettings } from './types';
 
 // 플러그인 루프백 브리지 클라이언트. 토큰은 URL 조각(#token=)으로 받아 sessionStorage 에만 둔다.
 export interface Bridge {
@@ -9,7 +9,7 @@ export interface Bridge {
   unpair(): Promise<ActionResult>;
   getSettings(): Promise<PluginSettings>;
   putSettings(next: Partial<PluginSettings>): Promise<ActionResult & { settings?: PluginSettings }>;
-  mark(): Promise<ActionResult>; // A4 「지금 표시」 — 결과는 state.marks로 온다
+  mark(): Promise<MarkReply>; // A4 「지금 표시」 — 받아들인 뒤의 결과·거절(409)은 state.marks로 온다
 }
 
 const TOKEN_KEY = 'pokeclip.bridge.token';
@@ -119,7 +119,7 @@ export function createHttpBridge(token: string): Bridge {
 
     async mark() {
       const res = await fetch('/api/mark', { method: 'POST', headers });
-      return readResult(res);
+      return { ...(await readResult(res)), status: res.status };
     },
   };
 }

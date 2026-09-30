@@ -23,6 +23,10 @@ inline constexpr const char *kMarkPathSuffix = "/marks";
 // clipBase(끝 '/'는 무시) + /api/clip/streams/{token}/marks. 토큰은 경로 조각으로 퍼센트 인코딩한다.
 std::string MarkUrl(const std::string &clipBase, const std::string &streamToken);
 
+// passphrase를 Bearer로 실어 보내도 되는 주소인지 — https, 또는 이 PC 안(localhost·127.x·[::1])의 http만.
+// 그 밖의 평문 HTTP면 마크를 받지 않는다(mark_insecure) — 같은 네트워크에서 스트림 키 비밀이 보인다.
+bool IsSecureMarkBase(const std::string &base);
+
 // 서버로 보낼 본문. 시각은 모두 스트리머 PC 시계(UTC epoch ms) — 시계 어긋남은 서버가 sentAt으로 보정한다.
 std::string MarkBodyJson(const std::string &eventId, int64_t pressedAt, int64_t sentAt);
 

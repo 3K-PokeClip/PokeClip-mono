@@ -73,6 +73,8 @@ void ConfigStore::Load()
 
 	PluginConfig d = config_;
 	config_.apiBase = GetStringOr(data, "api_base", d.apiBase);
+	if (config_.apiBase == kLegacyDefaultApiBase)
+		config_.apiBase = kDefaultApiBase; // 손대지 않은 옛 기본값 — dev는 HTTP를 HTTPS로 돌려보낸다
 	config_.ingestHost = GetStringOr(data, "ingest_host", d.ingestHost);
 	config_.ingestPort = GetIntOr(data, "ingest_port", d.ingestPort);
 	config_.streamId = GetStringOr(data, "streamid", "");

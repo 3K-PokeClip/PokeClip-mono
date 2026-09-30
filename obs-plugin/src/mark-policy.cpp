@@ -27,6 +27,61 @@ std::string MarkUrl(const std::string &clipBase, const std::string &streamToken)
 	return url;
 }
 
+namespace {
+
+bool StartsWithNoCase(const std::string &s, const char *prefix)
+{
+	size_t n = std::char_traits<char>::length(prefix);
+	if (s.size() < n)
+		return false;
+	for (size_t i = 0; i < n; i++) {
+		if (std::tolower(static_cast<unsigned char>(s[i])) != prefix[i])
+			return false;
+	}
+	return true;
+}
+
+bool AllOf(const std::string &s, const char *allowed)
+{
+	return s.find_first_not_of(allowed) == std::string::npos;
+}
+
+} // namespace
+
+bool IsSecureMarkBase(const std::string &base)
+{
+	if (StartsWithNoCase(base, "https://"))
+		return base.size() > 8;
+	if (!StartsWithNoCase(base, "http://"))
+		return false;
+
+	// 평문 HTTP는 이 PC 안(루프백)만 — 로컬 목 서버·auth 직결 개발용.
+	size_t end = base.find_first_of("/?#", 7);
+	std::string authority = base.substr(7, end == std::string::npos ? std::string::npos : end - 7);
+	if (authority.find('@') != std::string::npos)
+		return false; // http://localhost@다른호스트 — 실제로는 뒤쪽 호스트로 간다
+	std::string host;
+	std::string port;
+	if (!authority.empty() && authority[0] == '[') {
+		size_t close = authority.find(']');
+		if (close == std::string::npos)
+			return false;
+		host = authority.substr(1, close - 1);
+		port = authority.substr(close + 1);
+	} else {
+		size_t colon = authority.find(':');
+		host = authority.substr(0, colon);
+		port = colon == std::string::npos ? "" : authority.substr(colon);
+	}
+	if (!port.empty() && (port[0] != ':' || !AllOf(port.substr(1), "0123456789")))
+		return false;
+	std::transform(host.begin(), host.end(), host.begin(), [](unsigned char c) { return std::tolower(c); });
+	if (host == "localhost" || host == "::1")
+		return true;
+	return host.rfind("127.", 0) == 0 && AllOf(host, "0123456789.") &&
+	       std::count(host.begin(), host.end(), '.') == 3;
+}
+
 std::string MarkBodyJson(const std::string &eventId, int64_t pressedAt, int64_t sentAt)
 {
 	// eventId는 FormatUuidV4가 만든 16진수·하이픈뿐이라 이스케이프할 문자가 없다.

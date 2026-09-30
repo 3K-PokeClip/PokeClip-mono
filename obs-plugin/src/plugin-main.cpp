@@ -122,12 +122,6 @@ std::string ConfigJson()
 	return json;
 }
 
-bool IsHttpBase(const std::string &base)
-{
-	return (base.rfind("http://", 0) == 0 || base.rfind("https://", 0) == 0) && base.size() < 256 &&
-	       base.find_first_of(" \"'<>") == std::string::npos;
-}
-
 bool IsSafeHost(const std::string &host)
 {
 	if (host.empty() || host.size() > 253)
@@ -166,7 +160,9 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		if (obs_data_has_user_value(d, key))
 			out = obs_data_get_bool(d, key);
 	};
-	str("api_base", next.apiBase);
+	// api_base·clip_api_base는 여기서 받지 않는다 — 마크가 passphrase를 Bearer로 싣고 가는 곳이라,
+	// 브리지 토큰만으로 목적지를 바꿀 수 있으면 「비밀은 독에 주지 않는다」가 우회된다.
+	// 개발 중에는 설정 파일(pokeclip.json)로 바꾼다.
 	str("ingest_host", next.ingestHost);
 	num("ingest_port", next.ingestPort);
 	flag("send_passphrase", next.sendPassphrase);
@@ -174,11 +170,8 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	flag("sync_start", next.syncStart);
 	flag("force_fallback", next.forceFallback);
 	flag("audio_auto_assign", next.audioAutoAssign);
-	str("clip_api_base", next.clipApiBase); // 개발용 — 독 설정에는 없다. 비우면 api_base
 	obs_data_release(d);
 
-	if (!IsHttpBase(next.apiBase) || (!next.clipApiBase.empty() && !IsHttpBase(next.clipApiBase)))
-		return {400, JsonReason(false, "invalid_api_base")};
 	if (!IsSafeHost(next.ingestHost))
 		return {400, JsonReason(false, "invalid_ingest_host")};
 	if (next.ingestPort < 1 || next.ingestPort > 65535)
@@ -395,6 +388,7 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 	case OBS_FRONTEND_EVENT_PROFILE_CHANGED:
 		StreamTarget::Instance().ForceStop();
 		ReloadMarkHotkey();
+		AudioRouter::Instance().Schedule("profile changed"); // 본방 트랙(출력 설정)이 프로필마다 다르다
 		break;
 	case OBS_FRONTEND_EVENT_PROFILE_LIST_CHANGED:
 		StreamTarget::Instance().ForceStop();

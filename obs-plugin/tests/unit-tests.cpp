@@ -359,7 +359,7 @@ TEST(bridge_stop_is_prompt_with_open_sse)
 // ---------------------------------------------------------------- 오디오 트랙 자동 배정 (A2)
 
 AudioSourceInfo Src(const std::string &key, const std::string &name, AudioKind kind, int order,
-		    uint32_t mixers = 0x3F, bool active = true, bool monitorOnly = false)
+		    uint32_t mixers = 0x3F, bool active = true, bool monitorOnly = false, bool showing = true)
 {
 	AudioSourceInfo s;
 	s.key = key;
@@ -369,7 +369,15 @@ AudioSourceInfo Src(const std::string &key, const std::string &name, AudioKind k
 	s.mixers = mixers;
 	s.audioActive = active;
 	s.monitorOnly = monitorOnly;
+	s.showing = showing;
 	return s;
+}
+
+// 다른 장면에만 있는 소스 — 오디오는 넘기지만 지금 방송 화면에 없다.
+AudioSourceInfo Offscreen(const std::string &key, const std::string &name, AudioKind kind, int order,
+			  uint32_t mixers = 0x3F)
+{
+	return Src(key, name, kind, order, mixers, true, false, false);
 }
 
 AudioTrackMapEntry Entry(const std::string &key, int slot, int64_t assignedAt, int64_t lastSeen = 0)
@@ -438,6 +446,14 @@ TEST(audio_desired_mixers_keeps_track1_and_high_bits)
 	CHECK_EQ(DesiredMixers(0x01, 5), 0x21u);
 	CHECK_EQ(DesiredMixers(0x00, 1), 0x02u);
 	CHECK_EQ(DesiredMixers(0x3E, 0), 0x00u); // 트랙 1이 꺼져 있던 소스는 꺼진 채
+}
+
+// 본방 트랙(여기서는 트랙 2 = 믹서 1)은 켜진 채든 꺼진 채든 그대로 두고, 그 자리를 스템으로 쓰지 않는다.
+TEST(audio_desired_mixers_keeps_main_stream_track)
+{
+	CHECK_EQ(DesiredMixers(0x3F, 2, 0x02), 0x07u); // 트랙 1 + 본방 트랙 2 그대로 + 스템 트랙 3
+	CHECK_EQ(DesiredMixers(0x3F, 1, 0x02), 0x03u); // 본방 트랙을 자리로 받아도 켜지 않는다
+	CHECK_EQ(DesiredMixers(0x01, 3, 0x02), 0x09u); // 본방 트랙에 없던 소스는 없는 채
 }
 
 TEST(audio_first_run_orders_by_priority)
@@ -619,6 +635,78 @@ TEST(audio_drops_corrupt_memories)
 	CHECK(r.mapChanged);
 }
 
+// 고급 출력에서 방송 트랙을 2로 둔 스트리머 — 트랙 2는 시청자가 듣는 믹스라 자동 배정이 손대지 않는다.
+// 트랙 2를 기억하던 소스는 다른 빈 자리로 옮긴다(트랙 2의 체크는 스트리머가 짠 대로 남는다).
+TEST(audio_main_stream_track_is_not_a_slot)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.reserved = 0x02;
+	in.map = {Entry("uuid:bgm", 1, 10)};
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3), Src("ch:1", "데스크탑", AudioKind::Desktop, 1),
+		      Src("uuid:bgm", "BGM", AudioKind::Media, 100)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK(r.slotKey[1].empty());
+	CHECK_EQ(SlotOf(r, "ch:3"), 2);
+	CHECK_EQ(SlotOf(r, "ch:1"), 3);
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 4);
+	CHECK_EQ(WriteOf(r, "ch:3", 0x3F), 0x07u);     // 트랙 2(본방)는 켜진 그대로
+	CHECK_EQ(WriteOf(r, "uuid:bgm", 0x3F), 0x13u); // 트랙 1 + 트랙 2(본방) + 트랙 5
+	for (const AudioTrackMapEntry &e : r.mapNext)
+		CHECK(e.slot != 1);
+
+	AssignmentInput again;
+	again.now = 200;
+	again.reserved = 0x02;
+	again.map = r.mapNext;
+	again.sources = Applied(in.sources, r);
+	AssignmentResult second = ComputeAssignment(again);
+	CHECK(second.writes.empty());
+	CHECK(!second.mapChanged);
+}
+
+// 다른 장면에만 있는 소스는 트랙을 먼저 채우지 않는다 — 방송 화면에 나올 때 처음 자리를 받는다.
+TEST(audio_offscreen_source_waits_for_program)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3),
+		      Offscreen("uuid:intro", "인트로 영상", AudioKind::Media, 100),
+		      Offscreen("uuid:ending", "엔딩 영상", AudioKind::Media, 101),
+		      Src("uuid:bgm", "BGM", AudioKind::Media, 102)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "ch:3"), 1);
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 2); // 열거 순서가 앞선 인트로·엔딩보다 먼저
+	CHECK_EQ(SlotOf(r, "uuid:intro"), 0);
+	CHECK_EQ(WriteOf(r, "uuid:intro", 0x3F), 0x01u); // 스템에 섞여 있지 않게 비운다
+	CHECK(!MapHas(r, "uuid:intro"));
+	CHECK(r.overflowKeys.empty());
+
+	AssignmentInput shown;
+	shown.now = 200;
+	shown.map = r.mapNext;
+	shown.sources = Applied(in.sources, r);
+	shown.sources[1].showing = true; // 인트로 장면으로 넘어갔다
+	AssignmentResult r2 = ComputeAssignment(shown);
+	CHECK_EQ(SlotOf(r2, "uuid:intro"), 3);
+	CHECK_EQ(SlotOf(r2, "uuid:bgm"), 2);
+}
+
+// 한 번 앉은 소스는 화면에서 빠져도 자리를 지킨다 — 장면을 바꿀 때마다 트랙 주인이 바뀌면 트랙 이름이 무의미해진다.
+TEST(audio_remembered_offscreen_source_keeps_slot)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.locked = true;
+	in.map = {Entry("uuid:bgm", 1, 10)};
+	in.sources = {Offscreen("uuid:bgm", "BGM", AudioKind::Media, 100, 0x03),
+		      Src("ch:3", "마이크", AudioKind::Mic, 3, 0x01)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 1);
+	CHECK_EQ(SlotOf(r, "ch:3"), 2);
+	CHECK_EQ(WriteOf(r, "uuid:bgm", 0x03), 0x03u);
+}
+
 // 수동 모드(스위치 꺼짐)에서도 화면은 실제 비트를 그대로 보여준다 — 한 트랙에 여럿, 여러 트랙에 하나.
 TEST(audio_routing_view_reflects_actual_bits)
 {
@@ -627,7 +715,9 @@ TEST(audio_routing_view_reflects_actual_bits)
 						Src("uuid:game", "게임", AudioKind::App, 100, 0x05),
 						Src("uuid:fx", "효과음", AudioKind::Media, 101, 0x3F, true, true),
 						Src("uuid:overlay", "채팅창", AudioKind::Browser, 102, 0x3F, false)};
-	AudioRoutingView v = BuildRoutingView(sources, false, false, 0);
+	RoutingViewOptions options;
+	options.autoAssign = false;
+	AudioRoutingView v = BuildRoutingView(sources, options);
 	CHECK(v.known);
 	CHECK(!v.autoAssign);
 	CHECK_EQ(v.tracks[0].track, 2);
@@ -641,12 +731,59 @@ TEST(audio_routing_view_reflects_actual_bits)
 	CHECK(line.find("mix-only 1") != std::string::npos);
 }
 
+// 본방 트랙은 표시만 하고 스템으로 치지 않는다. 화면에 없고 스템에도 없는 소스는 목록에 올리지 않는다.
+TEST(audio_routing_view_marks_main_stream_and_hides_offscreen)
+{
+	std::vector<AudioSourceInfo> sources = {Src("ch:3", "마이크", AudioKind::Mic, 3, 0x03),
+						Src("uuid:game", "게임", AudioKind::App, 100, 0x05),
+						Offscreen("uuid:intro", "인트로 영상", AudioKind::Media, 101, 0x01),
+						Src("uuid:fx", "효과음", AudioKind::Media, 102, 0x3F, true, true,
+						    false)};
+	RoutingViewOptions options;
+	options.applied = true;
+	options.deferred = false;
+	options.reserved = 0x02;
+	AudioRoutingView v = BuildRoutingView(sources, options);
+	CHECK(v.tracks[0].mainStream);
+	CHECK(!v.tracks[1].mainStream);
+	CHECK_EQ(v.tracks[0].sources.size(), 1u); // 본방 트랙 2에 마이크
+	CHECK_EQ(v.mixOnly.size(), 1u);           // 마이크 — 본방 트랙에만 있고 스템에는 없다
+	CHECK_EQ(v.mixOnly[0], std::string("마이크"));
+	CHECK(v.monitorOnly.empty()); // 화면에 없는 효과음
+	CHECK(DescribeRouting(v).find("T2 main-stream 마이크(mic)") != std::string::npos);
+
+	options.applied = false;
+	options.deferred = true;
+	AudioRoutingView deferred = BuildRoutingView(sources, options);
+	CHECK(deferred.deferred);
+	CHECK(DescribeRouting(deferred).find("deferred") != std::string::npos);
+}
+
 // ---------------------------------------------------------------- 핫키 마킹 (A4)
 
 TEST(mark_url_encodes_token_and_trims_base)
 {
 	CHECK_EQ(MarkUrl("http://dev.pokeclip.com/", "abc_DEF-9"), "http://dev.pokeclip.com/api/clip/streams/abc_DEF-9/marks");
 	CHECK_EQ(MarkUrl("https://x.test//", "a/b?c"), "https://x.test/api/clip/streams/a%2Fb%3Fc/marks");
+}
+
+// passphrase를 싣는 주소 — https이거나 이 PC 안의 http만.
+TEST(mark_secure_base_allows_https_and_loopback_only)
+{
+	CHECK(IsSecureMarkBase("https://dev.pokeclip.com"));
+	CHECK(IsSecureMarkBase("HTTPS://x.test/"));
+	CHECK(IsSecureMarkBase("http://localhost:8082"));
+	CHECK(IsSecureMarkBase("http://127.0.0.1:9999/"));
+	CHECK(IsSecureMarkBase("http://[::1]:80"));
+	CHECK(IsSecureMarkBase("http://LOCALHOST"));
+	CHECK(!IsSecureMarkBase("http://dev.pokeclip.com"));
+	CHECK(!IsSecureMarkBase("http://localhost.evil.test"));
+	CHECK(!IsSecureMarkBase("http://localhost@evil.test"));
+	CHECK(!IsSecureMarkBase("http://127.0.0.1.nip.io"));
+	CHECK(!IsSecureMarkBase("http://localhost:80x"));
+	CHECK(!IsSecureMarkBase("ftp://localhost"));
+	CHECK(!IsSecureMarkBase("https://"));
+	CHECK(!IsSecureMarkBase(""));
 }
 
 TEST(mark_body_has_three_fields)

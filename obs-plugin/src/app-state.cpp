@@ -122,12 +122,14 @@ static obs_data_t *AudioToData(const AudioRoutingView &v)
 	obs_data_set_bool(audio, "known", v.known);
 	obs_data_set_bool(audio, "autoAssign", v.autoAssign);
 	obs_data_set_bool(audio, "applied", v.applied);
+	obs_data_set_bool(audio, "deferred", v.deferred);
 	obs_data_set_int(audio, "overflow", v.overflow);
 
 	obs_data_array_t *tracks = obs_data_array_create();
 	for (const AudioTrackView &t : v.tracks) {
 		obs_data_t *track = obs_data_create();
 		obs_data_set_int(track, "track", t.track);
+		obs_data_set_bool(track, "mainStream", t.mainStream);
 		obs_data_array_t *sources = obs_data_array_create();
 		for (const AudioSourceView &src : t.sources) {
 			obs_data_t *item = obs_data_create();

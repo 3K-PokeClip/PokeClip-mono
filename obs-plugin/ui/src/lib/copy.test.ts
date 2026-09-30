@@ -36,6 +36,8 @@ describe('사유 문구', () => {
       'mark_no_broadcast',
       'mark_not_ready',
       'mark_expired',
+      'mark_insecure',
+      'bridge_unreachable',
     ]) {
       expect(reasonText(code)).not.toContain(code);
     }
