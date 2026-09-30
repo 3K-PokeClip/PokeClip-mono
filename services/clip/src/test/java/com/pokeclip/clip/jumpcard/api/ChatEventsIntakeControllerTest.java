@@ -80,7 +80,7 @@ class ChatEventsIntakeControllerTest extends IntegrationTestSupport {
     @Test
     void 연결과_방송이_있으면_받은_수와_건너뛴_수를_준다() throws Exception {
         String streamId = unique("live");
-        broadcasts.save(Broadcast.startedNow(streamId, TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow(streamId, TestIds.STREAMER, null, 1L, Instant.now(), null));
         streams.open(streamId, unique("u"), Duration.ofMinutes(1));
 
         mvc.perform(post("/internal/broadcasts/" + streamId + "/chat-events")

@@ -31,12 +31,13 @@ public record LiveBroadcastsResponse(List<Item> broadcasts, boolean truncated) {
      * 그 줄이 사라지는 날 수집기가 받는 것이 「칸이 없는 줄」이면 파싱이 통째로 깨지지만,
      * 「{@code null}인 칸」이면 그 줄 하나만 판단하면 된다.
      */
-    public record Item(String streamId, String streamerId, Instant startedAt) {
+    public record Item(String streamId, String streamerId, Instant startedAt, String ingestStreamId) {
     }
 
     public static LiveBroadcastsResponse from(LiveBroadcastPage page) {
         List<Item> items = page.rows().stream()
-                .map(row -> new Item(row.getStreamId(), row.getStreamerId(), row.getStartedAt()))
+                .map(row -> new Item(row.getStreamId(), row.getStreamerId(), row.getStartedAt(),
+                        row.getIngestStreamId()))
                 .toList();
         return new LiveBroadcastsResponse(items, page.truncated());
     }

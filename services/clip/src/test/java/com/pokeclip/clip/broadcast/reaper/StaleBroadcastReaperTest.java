@@ -196,6 +196,40 @@ class StaleBroadcastReaperTest extends IntegrationTestSupport {
         assertThat(notified).isEmpty();
     }
 
+    /**
+     * 방송 번호가 회차 번호가 되면(POK-233) 장부에 그 이름이 없다. 방송 번호로 조각을 찾던 옛 코드는 「조각이 하나도 없다」로
+     * 읽고 시작 시각으로 재어 <b>살아있는 방송을 닫았다</b>.
+     */
+    @Test
+    void 회차_번호_방송은_물리_키의_조각으로_살아있음을_잰다() {
+        processor.process(Envelopes.startedWithIngest("e1", "S-20260818-000000-key-r-1", "key-r", 1L));
+        조각("key-r", 1, now.minus(Duration.ofMinutes(3)));
+
+        assertThat(reaper().reapOnce()).isZero();
+        assertThat(상태("S-20260818-000000-key-r-1")).isEqualTo("live");
+    }
+
+    /**
+     * 종료 편지를 놓친 방송 뒤에 같은 물리 키로 새 방송이 켜졌다. 새 방송 조각을 옛 방송의 신호로 세면 옛 방송이 새 방송이
+     * 끝날 때까지 안 닫히고 수집기가 치지직 자리를 둘 붙잡는다. 옛 방송은 제 마지막 조각 시각으로 닫히고 새 방송은 산다.
+     */
+    @Test
+    void 놓친_방송은_같은_키의_새_방송_조각을_제_신호로_안_센다() {
+        processor.process(Envelopes.startedWithIngest("e1", "S-old", "key-s", 1L));
+        조각("key-s", 1, STARTED.plus(Duration.ofMinutes(10)));
+        processor.process(Envelopes.startedWithIngest("e2", "S-new", "key-s", 1L));
+        jdbc.update("UPDATE broadcasts SET started_at = ? WHERE stream_id = 'S-new'",
+                java.sql.Timestamp.from(STARTED.plus(Duration.ofHours(1))));
+        조각("key-s", 2, now.minus(Duration.ofMinutes(3)));
+
+        assertThat(reaper().reapOnce()).isEqualTo(1);
+        assertThat(상태("S-old")).isEqualTo("ended");
+        assertThat(broadcasts.findByStreamId("S-old").orElseThrow().getEndedAt())
+                .isEqualTo(STARTED.plus(Duration.ofMinutes(10)));
+        assertThat(상태("S-new")).isEqualTo("live");
+        assertThat(notified).containsExactly("S-old");
+    }
+
     @Test
     void 알림_훅이_없어도_표는_굳힌다() {
         processor.process(Envelopes.started("e1", "s-nohook", 1L));

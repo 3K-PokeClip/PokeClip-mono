@@ -150,6 +150,22 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
         assertThat(AUTH.callCount()).isEqualTo(1);
     }
 
+    /**
+     * 조각 장부는 <b>물리 키</b>로 찾는다(POK-233). 방송 번호가 회차 번호가 되면 장부에 그 이름이 없어, 방송 번호로 찾던 옛 코드는
+     * 조각 0개로 409를 낸다. 조각은 물리 키 이름으로만 심었다.
+     */
+    @Test
+    void 방송_번호와_물리_키가_달라도_물리_키의_조각으로_주문한다() throws Exception {
+        볼_수_있다("OWNER");
+        jdbc.update("UPDATE broadcasts SET ingest_stream_id = 'key-render' WHERE stream_id = ?", 내_방송);
+        RenderFixtures.조각을_넣는다(jdbc, "key-render", 0);
+
+        주문(내_방송, 편집본).andExpect(status().isCreated());
+
+        JsonNode 봉투 = MAPPER.readTree(LocalStackFixture.receiveAndDelete(큐.queueUrl()));
+        assertThat(봉투.get("sourceKeys").get(0).get("s3Key").asString()).isEqualTo("streams/key-render/seg_2.m4s");
+    }
+
     /** 더블클릭 — 같은 편집본 같은 판이 진행 중이면 새 주문 없이 그것을 돌려준다(200). 큐에도 한 통뿐이다. */
     @Test
     void 같은_편집본을_두_번_주문하면_두_번째는_200이고_같은_영상이다() throws Exception {

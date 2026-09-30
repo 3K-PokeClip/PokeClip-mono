@@ -1,5 +1,6 @@
 package com.pokeclip.clip.playback.api;
 
+import com.pokeclip.clip.broadcast.BroadcastRepository;
 import com.pokeclip.clip.delegation.BroadcastAccessGuard;
 import com.pokeclip.clip.playback.PlaybackAccess;
 import com.pokeclip.clip.playback.PlaybackAccessSigner;
@@ -49,11 +50,14 @@ public class PlaybackAccessController {
     private static final Logger log = LoggerFactory.getLogger(PlaybackAccessController.class);
 
     private final BroadcastAccessGuard guard;
+    private final BroadcastRepository broadcasts;
     private final PlaybackAccessSigner signer;
     private final PlaybackProperties properties;
 
-    PlaybackAccessController(BroadcastAccessGuard guard, PlaybackAccessSigner signer, PlaybackProperties properties) {
+    PlaybackAccessController(BroadcastAccessGuard guard, BroadcastRepository broadcasts, PlaybackAccessSigner signer,
+                             PlaybackProperties properties) {
         this.guard = guard;
+        this.broadcasts = broadcasts;
         this.signer = signer;
         this.properties = properties;
     }
@@ -65,7 +69,9 @@ public class PlaybackAccessController {
         NotFoundFloor.mark(request);
         guard.requireViewable(jwt.getSubject(), streamId);
 
-        PlaybackAccess access = signer.issue(streamId, Instant.now());
+        // 쿠키 경로·정책은 영상 경로의 키다(POK-233). 미디어 주소의 {streamId} 자리는 물리 키라 방송 번호로 서명하면 CDN이 403이다
+        String ingestKey = broadcasts.findIngestKeyByStreamId(streamId).orElse(streamId);
+        PlaybackAccess access = signer.issue(ingestKey, Instant.now());
 
         HttpHeaders headers = new HttpHeaders();
         List<String> resources = new ArrayList<>(access.scopes().size());
@@ -76,7 +82,7 @@ public class PlaybackAccessController {
         }
 
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("streamId", access.streamId());
+        body.put("streamId", streamId);
         body.put("expiresAt", access.expiresAt().toString());
         body.put("resources", resources);
 

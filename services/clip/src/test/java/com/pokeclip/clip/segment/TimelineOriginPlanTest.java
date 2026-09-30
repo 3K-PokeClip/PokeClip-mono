@@ -57,9 +57,10 @@ class TimelineOriginPlanTest extends IntegrationTestSupport {
         List<String> plan = new ArrayList<>();
         jdbc.query(con -> {
             var ps = con.prepareStatement("EXPLAIN (ANALYZE, BUFFERS) " + TimelineOriginReader.ORIGINS);
-            ps.setArray(1, con.createArrayOf("text", new String[] {KEY}));
-            ps.setArray(2, con.createArrayOf("timestamptz", new Timestamp[] {lo}));
-            ps.setArray(3, con.createArrayOf("timestamptz", new Timestamp[] {null}));
+            ps.setArray(1, con.createArrayOf("text", new String[] {"S-plan-1"}));
+            ps.setArray(2, con.createArrayOf("text", new String[] {KEY}));
+            ps.setArray(3, con.createArrayOf("timestamptz", new Timestamp[] {lo}));
+            ps.setArray(4, con.createArrayOf("timestamptz", new Timestamp[] {null}));
             return ps;
         }, rs -> {
             plan.add(rs.getString(1));

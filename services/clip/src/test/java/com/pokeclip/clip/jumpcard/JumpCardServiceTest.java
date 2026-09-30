@@ -66,7 +66,7 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     void 정리() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, null, 1L, Instant.now(), null));
         AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
@@ -123,7 +123,7 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     /** 종료 이벤트가 먼저 도착해도 판별기의 마지막 카드가 버려지면 안 된다. */
     @Test
     void 끝난_방송에도_들어간다() {
-        broadcasts.save(Broadcast.endedPlaceholder("s-ended", TestIds.STREAMER, 9L, Instant.now()));
+        broadcasts.save(Broadcast.endedPlaceholder("s-ended", TestIds.STREAMER, null, 9L, Instant.now()));
 
         assertThat(service.record("s-ended", auto("e", 1_000L)).created()).isTrue();
     }

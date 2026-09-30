@@ -46,7 +46,7 @@ class JumpCardSchemaTest extends IntegrationTestSupport {
     void 앞_테스트의_흔적을_지운다() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.parse("2026-08-23T00:00:00Z"), null));
+        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, null, 1L, Instant.parse("2026-08-23T00:00:00Z"), null));
     }
 
     @Test

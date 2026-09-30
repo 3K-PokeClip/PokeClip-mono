@@ -103,14 +103,28 @@ class LiveBroadcastControllerTest extends IntegrationTestSupport {
                 .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-new"))
                 .andExpect(jsonPath("$.broadcasts[0].streamerId").value(TestIds.STREAMER))
                 .andExpect(jsonPath("$.broadcasts[0].startedAt").value(시작_시각.toString()))
+                .andExpect(jsonPath("$.broadcasts[0].ingestStreamId").value("s-new"))
                 .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-old")));
 
         assertThat(맵(본문).keySet())
                 .as("응답 칸이 둘뿐이다 — 늘어나면 POK-219가 읽는 계약이 조용히 바뀐다")
                 .containsExactlyInAnyOrder("broadcasts", "truncated");
         assertThat(한_줄(본문, 0).keySet())
-                .as("한 줄은 칸 셋뿐이다 — 엔티티를 그대로 실으면 안 쓰는 값까지 나간다")
-                .containsExactlyInAnyOrder("streamId", "streamerId", "startedAt");
+                .as("한 줄은 칸 넷뿐이다 — 엔티티를 그대로 실으면 안 쓰는 값까지 나간다")
+                .containsExactlyInAnyOrder("streamId", "streamerId", "startedAt", "ingestStreamId");
+    }
+
+    /**
+     * 수집기는 재시작 뒤 이 목록으로 붙고, 영상 시점을 물을 때 물리 키가 필요하다(POK-233). 방송 번호가 회차 번호면 그것으로는
+     * 조각 장부에서 못 찾는다. 위 갈래는 물리 키가 빈 옛 줄이 방송 번호로 채워지는 것을 잰다.
+     */
+    @Test
+    void 회차_번호_방송은_물리_키를_따로_싣는다() throws Exception {
+        방송을_넣는다("S-20260930-010000-key-l-1", TestIds.STREAMER, "live", 시작_시각);
+        jdbc.update("UPDATE broadcasts SET ingest_stream_id = 'key-l'");
+
+        부른다().andExpect(jsonPath("$.broadcasts[0].streamId").value("S-20260930-010000-key-l-1"))
+                .andExpect(jsonPath("$.broadcasts[0].ingestStreamId").value("key-l"));
     }
 
     /**

@@ -111,8 +111,10 @@ public class RenderRequestService {
         }
 
         // 조각이 「연속 uploaded」로 구간을 다 덮어야 주문한다. 조립기의 판정 그대로다(POK-117) — 축만 재생 축이다.
+        // 조각 장부는 물리 키로 찾는다(POK-233). 자격 판정을 지났으니 줄은 있다
+        String ingestKey = broadcasts.findIngestKeyByStreamId(streamId).orElse(streamId);
         List<SegmentSource> overlapping = segments.findOverlappingByPlaybackTime(
-                streamId, recipe.getCutInAtMs(), recipe.getCutOutAtMs());
+                ingestKey, recipe.getCutInAtMs(), recipe.getCutOutAtMs());
         SegmentWindow window = SegmentWindowAssembler.assemble(
                 overlapping.stream().map(SegmentSource::asRow).toList(), recipe.getCutInAtMs(), recipe.getCutOutAtMs());
         if (!window.complete()) {

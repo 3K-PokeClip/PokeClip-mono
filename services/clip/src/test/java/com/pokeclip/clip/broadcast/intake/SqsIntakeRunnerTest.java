@@ -258,7 +258,7 @@ class SqsIntakeRunnerTest {
      * "너무 길다"는 다른 신호다.
      */
     @ParameterizedTest(name = "{0} 129자")
-    @ValueSource(strings = {"eventId", "streamId", "streamerId"})
+    @ValueSource(strings = {"eventId", "streamId", "streamerId", "ingestStreamId"})
     void 식별자가_칸_폭을_넘으면_지우고_너무_길다고_남긴다(String field) {
         FakeSqsClient sqs = FakeSqsClient.withMessages(envelopeWith(field, "x".repeat(129)));
         SqsIntakeRunner runner = newRunner(sqs, envelope -> ProcessResult.PROCESSED);
@@ -282,7 +282,7 @@ class SqsIntakeRunnerTest {
      * 128자는 칸에 정확히 들어가므로 평소대로 처리돼야 한다.
      */
     @ParameterizedTest(name = "{0} 128자")
-    @ValueSource(strings = {"eventId", "streamId", "streamerId"})
+    @ValueSource(strings = {"eventId", "streamId", "streamerId", "ingestStreamId"})
     void 식별자가_칸_폭과_같으면_평소대로_처리한다(String field) {
         FakeSqsClient sqs = FakeSqsClient.withMessages(envelopeWith(field, "x".repeat(128)));
         SqsIntakeRunner runner = newRunner(sqs, envelope -> ProcessResult.PROCESSED);
@@ -317,6 +317,40 @@ class SqsIntakeRunnerTest {
         }
 
         assertThat(sqs.deletedReceiptHandles()).containsExactly("rh-0");
+    }
+
+    /**
+     * 물리 키(POK-233)는 <b>빠져도 받는다</b>. 1번은 소비자 배포 뒤에야 이 칸을 싣는다 — 필수로 거르면 그 전 편지가 전부
+     * 버려져 방송 명부가 멈춘다. 빠진 편지의 물리 키는 방송 번호다({@code Broadcast.ingestKey()}).
+     */
+    @Test
+    void 물리_키가_빠진_옛_편지도_처리한다() {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(envelopeWithout("ingestStreamId"));
+        List<LifecycleEnvelope> seen = new ArrayList<>();
+        SqsIntakeRunner runner = newRunner(sqs, envelope -> {
+            seen.add(envelope);
+            return ProcessResult.PROCESSED;
+        });
+
+        runner.pollOnce();
+
+        assertThat(seen).singleElement().extracting(LifecycleEnvelope::ingestStreamId).isNull();
+        assertThat(sqs.deletedReceiptHandles()).containsExactly("rh-0");
+    }
+
+    /** 칸 이름이 계약과 한 글자라도 갈리면 값이 조용히 null이 되어 위 갈래로 빠진다 — 실린 값이 처리기까지 가는지 잰다. */
+    @Test
+    void 물리_키를_실은_편지는_그_값을_처리기에_넘긴다() {
+        FakeSqsClient sqs = FakeSqsClient.withMessages(envelopeWith("ingestStreamId", "key-9"));
+        List<LifecycleEnvelope> seen = new ArrayList<>();
+        SqsIntakeRunner runner = newRunner(sqs, envelope -> {
+            seen.add(envelope);
+            return ProcessResult.PROCESSED;
+        });
+
+        runner.pollOnce();
+
+        assertThat(seen).singleElement().extracting(LifecycleEnvelope::ingestStreamId).isEqualTo("key-9");
     }
 
     /** 정상 봉투가 이 갈래로 새면 안 된다. */
@@ -718,6 +752,7 @@ class SqsIntakeRunnerTest {
                 "occurredAt", "2026-08-18T00:00:00Z",
                 "streamId", "s1",
                 "streamerId", TestIds.STREAMER,
+                "ingestStreamId", "key-1",
                 "sequence", 1,
                 "traceId", "trace-1",
                 "payload", Map.of()));

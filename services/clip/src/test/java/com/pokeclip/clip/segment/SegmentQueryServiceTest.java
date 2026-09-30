@@ -123,6 +123,22 @@ class SegmentQueryServiceTest extends IntegrationTestSupport {
     }
 
     /**
+     * 조각 장부는 <b>물리 키</b>로 찾는다(POK-233). 방송 번호가 회차 번호({@code S-…})가 되면 장부에 없는 이름이라, 방송 번호로
+     * 찾던 옛 코드는 조각 0개를 돌려준다. 같은 물리 키의 다른 이름 조각이 섞이지 않는 것은 위 갈래들이 이미 잰다.
+     */
+    @Test
+    void 방송_번호가_회차_번호여도_물리_키로_조각을_찾는다() {
+        방송중인_방송을_넣는다("S-20260930-010000-seg-1", 스트리머_번호);
+        jdbc.update("UPDATE broadcasts SET ingest_stream_id = 'key-seg' WHERE stream_id = 'S-20260930-010000-seg-1'");
+        조각을_넣는다("key-seg", 1, 4000, 4000, "uploaded", false);
+        given(자격창구.resolve(anyLong(), anyLong())).willReturn(ResolveResult.OWNER);
+
+        SegmentWindow 창 = service.previewWindow(요청자_주체, "S-20260930-010000-seg-1", 5000, 8000);
+
+        assertThat(창.segments()).extracting(StreamSegmentRow::seq).containsExactly(1L);
+    }
+
+    /**
      * 돈 내는 쪽(스트리머)과 매일 쓰는 쪽(전담 편집자)이 다르다 — <b>편집자가 못 열면 이 제품이
      * 안 돌아간다.</b> OWNER 갈래만 있으면 「OWNER만 통과」로 좁히는 회귀가 안 잡힌다.
      */

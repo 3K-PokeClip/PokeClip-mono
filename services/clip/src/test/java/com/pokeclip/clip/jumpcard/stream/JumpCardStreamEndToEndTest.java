@@ -69,7 +69,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     void 정리() {
         jdbc.update("DELETE FROM jump_cards");
         broadcasts.deleteAllInBatch();
-        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-1", TestIds.STREAMER, null, 1L, Instant.now(), null));
         AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 
@@ -115,7 +115,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
      */
     @Test
     void 카드가_0장인_방송에_붙어도_헤더가_바로_온다() {
-        broadcasts.save(Broadcast.startedNow("s-empty", TestIds.STREAMER, 3L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-empty", TestIds.STREAMER, null, 3L, Instant.now(), null));
         assertThat(service.snapshotsOf("s-empty")).as("카드가 0장이어야 이 갈래를 잰다").isEmpty();
 
         long startedAt = System.nanoTime();
@@ -164,7 +164,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
         // 전용 방송을 쓴다. connectionCount()는 서버 전체 수라 다른 시험이 열어 둔 연결이
         // 섞이면 "0이 된다"를 못 잰다 — 그 연결들은 다음 쓰기가 있어야 정리되기 때문이다.
         // 그래서 기준선을 재고, 이 시험이 연 자리 하나가 돌아오는 것만 본다.
-        broadcasts.save(Broadcast.startedNow("s-reopen", TestIds.STREAMER, 2L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-reopen", TestIds.STREAMER, null, 2L, Instant.now(), null));
         JumpCardSnapshot card = service.record("s-reopen", auto("evt-drain", 100_000L)).card();
 
         int baseline = registry.connectionCount();
@@ -213,7 +213,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     /** {@code ended}는 초기 전송에서 <b>살아남은 것</b>이다 — 없애면 화면이 끝난 방송에 영영 붙어 있는다. */
     @Test
     void 끝난_방송에_붙으면_ended만_오고_닫힌다() {
-        broadcasts.save(Broadcast.endedPlaceholder("s-ended", TestIds.STREAMER, 9L, Instant.now()));
+        broadcasts.save(Broadcast.endedPlaceholder("s-ended", TestIds.STREAMER, null, 9L, Instant.now()));
         service.record("s-ended", auto("evt-1", 1_000_000L));
 
         try (SseReader reader = open("s-ended", TestTokens.access("1708"))) {

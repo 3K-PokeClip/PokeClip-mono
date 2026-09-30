@@ -273,7 +273,7 @@ class ChatStreamEndToEndTest extends IntegrationTestSupport {
 
     private String liveBroadcast() {
         String streamId = "chat-e2e-" + UUID.randomUUID().toString().substring(0, 8);
-        broadcasts.save(Broadcast.startedNow(streamId, TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow(streamId, TestIds.STREAMER, null, 1L, Instant.now(), null));
         return streamId;
     }
 

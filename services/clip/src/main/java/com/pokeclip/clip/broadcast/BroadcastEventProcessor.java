@@ -54,14 +54,14 @@ public class BroadcastEventProcessor {
             // 진 쪽은 트랜잭션이 통째로 되감긴 뒤 재전송으로 다시 온다.
             Broadcast created = switch (envelope.type()) {
                 case BROADCAST_STARTED -> Broadcast.startedNow(envelope.streamId(),
-                        envelope.streamerId(), envelope.sequence(), envelope.occurredAt(),
+                        envelope.streamerId(), envelope.ingestStreamId(), envelope.sequence(), envelope.occurredAt(),
                         envelope.trackManifestJson());
                 case BROADCAST_ENDED -> {
                     // ADR-016의 ended placeholder. 서버를 죽이지 않고 흔적을 남긴다.
                     log.warn("broadcast.ended_before_started streamId={} eventId={} sequence={}",
                             envelope.streamId(), envelope.eventId(), envelope.sequence());
                     yield Broadcast.endedPlaceholder(envelope.streamId(), envelope.streamerId(),
-                            envelope.sequence(), envelope.occurredAt());
+                            envelope.ingestStreamId(), envelope.sequence(), envelope.occurredAt());
                 }
             };
             broadcasts.save(created);
@@ -69,6 +69,8 @@ public class BroadcastEventProcessor {
         }
 
         Broadcast broadcast = existing.get();
+        // 순서와 무관하게 채운다. 낡은 편지라도 같은 회차의 경로를 싣고, 빈 칸으로 두면 조각을 streamId로 찾아 못 찾는다
+        broadcast.fillIngestStreamId(envelope.ingestStreamId());
         boolean applied = switch (envelope.type()) {
             case BROADCAST_STARTED -> broadcast.applyStarted(envelope.sequence(),
                     envelope.occurredAt(), envelope.trackManifestJson());

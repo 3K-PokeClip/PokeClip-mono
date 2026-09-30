@@ -42,7 +42,7 @@ class BroadcastSchemaTest extends IntegrationTestSupport {
 
     @Test
     void 명부에_방송을_저장하고_읽는다() {
-        broadcasts.save(Broadcast.startedNow("stream-1", TestIds.STREAMER, 1L,
+        broadcasts.save(Broadcast.startedNow("stream-1", TestIds.STREAMER, null, 1L,
                 Instant.parse("2026-08-18T00:00:00Z"), null));
 
         assertThat(broadcasts.findByStreamId("stream-1")).isPresent().get()
@@ -56,7 +56,7 @@ class BroadcastSchemaTest extends IntegrationTestSupport {
 
     @Test
     void 종료_placeholder는_시작_시각이_비어_있다() {
-        broadcasts.save(Broadcast.endedPlaceholder("stream-2", TestIds.STREAMER, 5L,
+        broadcasts.save(Broadcast.endedPlaceholder("stream-2", TestIds.STREAMER, null, 5L,
                 Instant.parse("2026-08-18T01:00:00Z")));
 
         assertThat(broadcasts.findByStreamId("stream-2")).isPresent().get()

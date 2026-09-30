@@ -28,10 +28,10 @@ import java.util.Map;
  * 켜면 앞 꼬리 조각이 섞인다. 시작 편지와 첫 조각의 관계는 1번 발행 코드가 이 저장소에 없어 코드로 증명하지 못했고 근거는 실측 한 번
  * (첫 조각이 32초 뒤)이다. 조각마다 바꾸는 것은 별도 카드.
  *
- * <p><b>방송의 시간 안 첫 조각을 쓴다.</b> 장부의 {@code stream_id}는 지금 스트림키라(POK-233 전) 같은 스트리머의 다른 방송 조각도
+ * <p><b>방송의 시간 안 첫 조각을 쓴다.</b> 장부의 {@code stream_id}는 물리 키(오늘은 스트림키)라 같은 스트리머의 다른 방송 조각도
  * 같은 이름으로 쌓이고, {@code start_pts_ms}는 방송을 넘어 계속 커진다(media가 마지막 행에서 이어 받는다). 그래서 앞 방송 꼬리 조각이
- * 섞이지 않게 <b>시작 편지 앞 2분 이후의 첫 조각</b>(seq 순)을 쓴다. 시작 시각을 모르면 재지 않는다. 지금은 스트림키당 방송 줄이 하나라(clip
- * {@code broadcasts.stream_id} UNIQUE) 섞일 일이 없지만, POK-233(회차 번호) 때 {@code session_id}로 바꿔야 한다. 조각이 없으면
+ * 섞이지 않게 <b>시작 편지 앞 2분 이후의 첫 조각</b>(seq 순)을 쓴다. 시작 시각을 모르면 재지 않는다. 조각은 방송의 물리 키로 찾는다(POK-233). 회차 번호로 바뀌어도
+ * 같은 스트리머의 방송은 같은 물리 키를 나눠 쓰므로 이 시간 경계가 계속 앞뒤 방송을 가른다. 조각이 없으면
  * 기준점도 없다({@code null}): 지어내지 않는다. 화면은 그때 방송 시작 시각으로 대신한다.
  *
  * <p>범위와 순서를 <b>벽시계 칸으로</b> 잡는다. {@code (stream_id, start_wall_utc)} 색인의 범위 조건이 되고, 벽시계와 재생 시각은
@@ -57,12 +57,12 @@ public class TimelineOriginReader {
      */
     static final String ORIGINS = """
             SELECT b.stream_id, o.origin_ms
-              FROM unnest(?::text[], ?::timestamptz[], ?::timestamptz[]) AS b(stream_id, lo, hi)
+              FROM unnest(?::text[], ?::text[], ?::timestamptz[], ?::timestamptz[]) AS b(stream_id, ingest_key, lo, hi)
               CROSS JOIN LATERAL (
                     SELECT (EXTRACT(EPOCH FROM COALESCE(s.playback_pdt, s.start_wall_utc)) * 1000)::bigint
                            - s.start_pts_ms AS origin_ms
                       FROM stream_segments s
-                     WHERE s.stream_id = b.stream_id
+                     WHERE s.stream_id = b.ingest_key
                        AND s.start_wall_utc >= COALESCE(b.lo, '-infinity'::timestamptz)
                        AND s.start_wall_utc <= COALESCE(b.hi, 'infinity'::timestamptz)
                      ORDER BY s.start_wall_utc, s.seq
@@ -75,6 +75,9 @@ public class TimelineOriginReader {
     }
 
     /**
+     * 조각은 물리 키({@code ingestKey})로 찾고 맵은 방송 번호로 돌려준다(POK-233). 둘이 갈리는 줄에서 맵을 물리 키로 채우면
+     * 목록 응답이 방송 번호로 꺼내다 못 찾는다.
+     *
      * @return 방송 번호 → 기준점. 조각이 없는 방송과 <b>시작 시각을 모르는 방송</b>(종료 편지가 먼저 온 자리표시)은 맵에 없다.
      *         시작 시각이 없으면 아래 경계가 없어 같은 키의 앞 방송 조각이 첫 조각으로 뽑힌다(PR #202 codex)
      */
@@ -85,19 +88,22 @@ public class TimelineOriginReader {
             return origins;
         }
         String[] ids = new String[broadcasts.size()];
+        String[] keys = new String[broadcasts.size()];
         Timestamp[] lows = new Timestamp[broadcasts.size()];
         Timestamp[] highs = new Timestamp[broadcasts.size()];
         for (int i = 0; i < broadcasts.size(); i++) {
             Broadcast b = broadcasts.get(i);
             ids[i] = b.getStreamId();
+            keys[i] = b.ingestKey();
             lows[i] = Timestamp.from(b.getStartedAt().minus(BEFORE_START));
             highs[i] = b.getEndedAt() == null ? null : Timestamp.from(b.getEndedAt().plus(AFTER_END));
         }
         jdbc.query(con -> {
             var ps = con.prepareStatement(ORIGINS);
             ps.setArray(1, con.createArrayOf("text", ids));
-            ps.setArray(2, con.createArrayOf("timestamptz", lows));
-            ps.setArray(3, con.createArrayOf("timestamptz", highs));
+            ps.setArray(2, con.createArrayOf("text", keys));
+            ps.setArray(3, con.createArrayOf("timestamptz", lows));
+            ps.setArray(4, con.createArrayOf("timestamptz", highs));
             return ps;
         }, rs -> {
             origins.put(rs.getString("stream_id"), Instant.ofEpochMilli(rs.getLong("origin_ms")));

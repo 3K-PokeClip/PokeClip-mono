@@ -78,7 +78,7 @@ class PublishOrderTest extends IntegrationTestSupport {
     @BeforeEach
     void 정리() {
         방송과_카드를_비운다(jdbc);
-        broadcasts.save(Broadcast.startedNow("s-ord", TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-ord", TestIds.STREAMER, null, 1L, Instant.now(), null));
         AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
     }
 

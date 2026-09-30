@@ -84,7 +84,7 @@ class EndedRejectionTest extends IntegrationTestSupport {
 
     @Test
     void 큐가_차서_ended를_못_보내면_자리를_바로_회수한다() throws Exception {
-        broadcasts.save(Broadcast.startedNow("s-full", TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-full", TestIds.STREAMER, null, 1L, Instant.now(), null));
         String big = "x".repeat(20_000);
 
         try (LogCaptor logs = new LogCaptor();
@@ -124,7 +124,7 @@ class EndedRejectionTest extends IntegrationTestSupport {
     /** 대조군 — 같은 설정에서 큐에 자리가 있으면 실제로 보내고 닫는다. 「항상 빼는 것」이 아니다. */
     @Test
     void 큐에_자리가_있으면_ended가_실제로_가고_닫힌다() {
-        broadcasts.save(Broadcast.startedNow("s-room", TestIds.STREAMER, 1L, Instant.now(), null));
+        broadcasts.save(Broadcast.startedNow("s-room", TestIds.STREAMER, null, 1L, Instant.now(), null));
 
         try (LogCaptor logs = new LogCaptor();
              SseReader reader = new SseReader("http://localhost:" + port + "/api/clip/broadcasts/s-room/events",

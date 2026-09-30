@@ -34,10 +34,14 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      * 화면은 여기에 ms를 더해 편집본 컷(절대 시각)을 만든다. 조각이 아직 없으면 {@code null}이고, 그때는 방송 시작
      * 시각으로 대신한다(수십 초 어긋날 수 있다). 계산은 {@code TimelineOriginReader}.
      *
+     * <p>{@code ingestStreamId}는 녹화·라이브 영상 주소의 키다(POK-233). 방송을 가리키는 이름({@code streamId})과 갈릴 수
+     * 있어 화면은 영상 주소를 만들 때 이 값을 쓴다. 옛 줄은 {@code streamId}와 같다.
+     *
      * <p>줄 번호는 안 싣는다 — 이어받기가 표시로 끝나므로 웹이 쓸 데가 없고,
      * 방송을 가리키는 이름은 {@code streamId}다(카드 목록 문이 그 값을 받는다).
      */
     public record Item(String streamId,
+                       String ingestStreamId,
                        String status,
                        ResolveResult relation,
                        Instant startedAt,
@@ -59,6 +63,7 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      */
     private static Item toItem(Broadcast row, BroadcastPage page) {
         return new Item(row.getStreamId(),
+                row.ingestKey(),
                 row.getStatus().dbValue(),
                 page.relations().get(row.getStreamerId()),
                 row.getStartedAt(),
