@@ -163,6 +163,17 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         const cache = rowCache.current;
         const checkRecording = (b: WireBroadcast) =>
           b.status === 'ended' && playbackConfigured() && cache.get(b.streamId)?.recorded !== true;
+        // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 방송들이 같은 답을 받는다(POK-233) — 한 번 불러올 때 키마다
+        // 한 번만 묻는다. 방송마다 물으면 방송이 쌓인 계정은 같은 큰 요청을 주기마다 여러 번 보낸다(PR #208 codex)
+        const spansByKey = new Map<string, ReturnType<typeof fetchRecordingSpans>>();
+        const spansOf = (key: string) => {
+          let found = spansByKey.get(key);
+          if (found === undefined) {
+            found = fetchRecordingSpans(key);
+            spansByKey.set(key, found);
+          }
+          return found;
+        };
         await Promise.all(
           all
             .filter((b) => !cache.has(b.streamId) || checkRecording(b))
@@ -176,7 +187,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
                       () => null,
                     ),
                 // 녹화 재생 서버가 있으면 그 방송의 녹화가 실제로 있는지 본다 — 없으면 열어도 「영상 신호 없음」뿐이다
-                checkRecording(b) ? fetchRecordingSpans(mediaStreamId(b)) : Promise.resolve([]),
+                checkRecording(b) ? spansOf(mediaStreamId(b)) : Promise.resolve([]),
               ]);
               // 카드 수를 못 읽었으면 기억하지 않는다 — 다음 주기에 다시 잰다.
               // 「녹화 있음」만 굳힌다: 방송 직후엔 녹화가 늦게 생기고 재생 서버가 잠깐 실패해도 빈 목록이 온다.
