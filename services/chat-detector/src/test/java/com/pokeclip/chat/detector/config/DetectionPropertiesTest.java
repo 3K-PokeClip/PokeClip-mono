@@ -28,9 +28,9 @@ class DetectionPropertiesTest {
     private static DetectionProperties 설정(List<Long> windowSizesMs, long publishWindowMs) {
         return new DetectionProperties(Duration.ofSeconds(1), windowSizesMs, publishWindowMs,
                 Duration.ofSeconds(2), Duration.ofMinutes(10), Duration.ofSeconds(60),
-                Duration.ofMinutes(2), Duration.ofMinutes(15), 24, 3.0, 10,
+                Duration.ofSeconds(150), Duration.ofMinutes(15), 24, 3.0, 10,
                 DetectionProperties.Metric.MESSAGE, Duration.ofHours(24),
-                Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15), Duration.ofSeconds(5));
+                Duration.ofSeconds(20), Duration.ofSeconds(90), Duration.ofSeconds(15), Duration.ofSeconds(5));
     }
 
     /** 검증 대상이 사건 칸일 때 — 되돌아보기·간격·상한·앞당김만 받고 나머지는 운영 기본값이다. */
@@ -119,7 +119,7 @@ class DetectionPropertiesTest {
     private static DetectionProperties 시간칸을_바꾼_설정(String name, Duration value) {
         Duration cycle = Duration.ofSeconds(1), grace = Duration.ofSeconds(2),
                 late = Duration.ofMinutes(10), active = Duration.ofSeconds(60),
-                lookback = Duration.ofMinutes(2), baseline = Duration.ofMinutes(15),
+                lookback = Duration.ofSeconds(150), baseline = Duration.ofMinutes(15),
                 retention = Duration.ofHours(24);
         switch (name) {
             case "cycle-interval" -> cycle = value;
@@ -134,7 +134,7 @@ class DetectionPropertiesTest {
         return new DetectionProperties(cycle, List.of(3_000L, 5_000L, 10_000L), 5_000L,
                 grace, late, active, lookback, baseline, 24, 3.0, 10,
                 DetectionProperties.Metric.MESSAGE, retention,
-                Duration.ofSeconds(10), Duration.ofSeconds(90), Duration.ofSeconds(15), Duration.ofSeconds(5));
+                Duration.ofSeconds(20), Duration.ofSeconds(90), Duration.ofSeconds(15), Duration.ofSeconds(5));
     }
 
     /**
