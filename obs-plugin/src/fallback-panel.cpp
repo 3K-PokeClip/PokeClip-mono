@@ -151,8 +151,11 @@ void FallbackPanel::Render(const StateSnapshot &s)
 		audio_->setVisible(false);
 	}
 	// 자동 배정은 기본으로 꺼져 있다 — 켜는 길은 확인 창을 거친다(스템이 왜 필요한지·짜 둔 트랙을 덮어쓴다).
-	assign_->setVisible(s.paired && s.audio.known && !s.audio.autoAssign);
+	// 켜져 있으면 같은 버튼이 끄기다 — 독 「고급 설정」 스위치와 같이 원래 체크로 되돌린다(방송·녹화 중이면 끝난 뒤).
+	assign_->setText(Text(s.audio.autoAssign ? "Audio.Disable" : "Audio.Enable"));
+	assign_->setVisible(s.paired && s.audio.known);
 	audioCustom_ = s.audio.customRouting;
+	audioAutoAssign_ = s.audio.autoAssign;
 
 	// A4 — 우리 송출 중에만 누를 수 있다. 개수 줄은 지난 방송 것이 남아 있어도 보여준다.
 	bool sending = s.phase == StreamPhase::Live || s.phase == StreamPhase::Reconnecting;
@@ -203,13 +206,16 @@ void FallbackPanel::OnMarkClicked()
 
 void FallbackPanel::OnAssignClicked()
 {
-	QString body = Text("Audio.ConsentBody");
-	if (audioCustom_)
-		body += "\n\n" + Text("Audio.ConsentOverwrite");
-	if (QMessageBox::question(this, Text("Audio.ConsentTitle"), body) != QMessageBox::Yes)
-		return;
-	bool saved = ConfigStore::Instance().Commit([](PluginConfig &c) {
-		c.audioAutoAssign = true;
+	const bool enable = !audioAutoAssign_;
+	if (enable) {
+		QString body = Text("Audio.ConsentBody");
+		if (audioCustom_)
+			body += "\n\n" + Text("Audio.ConsentOverwrite");
+		if (QMessageBox::question(this, Text("Audio.ConsentTitle"), body) != QMessageBox::Yes)
+			return;
+	}
+	bool saved = ConfigStore::Instance().Commit([enable](PluginConfig &c) {
+		c.audioAutoAssign = enable;
 		c.audioAssignPrompted = true;
 	});
 	if (!saved) {

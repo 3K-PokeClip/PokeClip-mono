@@ -24,7 +24,8 @@ public:
 
 	// 본방 스트리밍 출력의 인코더를 공유해 시작한다. 실패 시 errorCode 채우고 false.
 	bool Start(const PluginConfig &config, std::string &errorCode);
-	void Stop();
+	// reason: 멈춘 뒤 남길 오류 사유(정적 문자열, 예: main_stream_failed). 없으면 stop 신호의 코드대로 남는다.
+	void Stop(const char *reason = nullptr);
 	void ForceStop();
 	bool IsActive() const;
 	void PollStats();
@@ -61,6 +62,10 @@ private:
 	std::atomic<bool> connecting_{false};
 	// 접속하는 사이 정지를 받았다(본방이 먼저 멈췄다) — 붙자마자 멈춘다.
 	std::atomic<bool> stopWhenConnected_{false};
+	// UI 스레드 전용 — 이 출력에 정지를 요청했다. 멈추는 중인 출력은 아직 active여도 새 방송에 다시 쓰지 않는다(Start).
+	bool stopRequested_ = false;
+	// 정지를 요청한 이유. OnStop이 성공 정지여도 이 사유로 오류를 남긴다 — 그 신호가 사유를 덮지 않게.
+	std::atomic<const char *> stopReason_{nullptr};
 	// 우리가 만든 오디오 인코더만(생성 참조를 우리가 쥔다). 출력이 제 참조를 놓은 뒤 Release()에서 놓는다.
 	std::vector<struct obs_encoder *> ownedAudioEncoders_;
 	std::unique_ptr<SignalContext> signalContext_;

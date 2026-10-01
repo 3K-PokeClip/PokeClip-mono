@@ -71,7 +71,9 @@ bool StreamTarget::IsActive() const
 
 bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 {
-	if (IsActive())
+	// 이미 보내는 중이면 그대로 쓴다(본방 송출 중에 동기화를 켠 경로). 정지를 요청한 출력은 active여도 멈추는 중이다 —
+	// 그대로 두면 곧 멈춰 이번 방송이 PokeClip 없이 지나간다. Release()로 마저 멈추고 새로 만든다.
+	if (IsActive() && !stopRequested_)
 		return true;
 
 	Release();
@@ -154,10 +156,13 @@ bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 	return true;
 }
 
-void StreamTarget::Stop()
+void StreamTarget::Stop(const char *reason)
 {
 	if (!output_)
 		return;
+	stopRequested_ = true;
+	if (reason)
+		stopReason_ = reason;
 	if (!obs_output_active(output_)) {
 		// mpegts 출력은 접속 스레드가 SRT에 붙은 뒤에야 active가 된다(obs-ffmpeg-mpegts.c ffmpeg_mpegts_finalize).
 		// 그 전에는 obs_output_stop이 아무것도 안 하므로, 붙자마자 OnStart가 멈추게 표시만 해 둔다.
@@ -219,6 +224,8 @@ void StreamTarget::Release()
 	signalContext_.reset(); // DisconnectSignals가 진행 중 콜백을 기다린 뒤라 안전하다
 	connecting_ = false;
 	stopWhenConnected_ = false;
+	stopRequested_ = false;
+	stopReason_ = nullptr;
 }
 
 bool StreamTarget::AttachAudioEncoders(obs_encoder_t *streamAudio, std::string &errorCode)
@@ -425,10 +432,18 @@ void StreamTarget::OnStop(void *data, calldata_t *params)
 		obs_log(LOG_WARNING, "SRT output stopped with code %d (%s)", code, name.c_str());
 
 	std::string detail = lastError ? lastError : "";
+	const char *reason = self->stopReason_.exchange(nullptr);
 	AppState::Instance().Mutate([&](StateSnapshot &s) {
-		s.phase = code == OBS_OUTPUT_SUCCESS ? StreamPhase::Idle : StreamPhase::Error;
-		s.errorCode = name;
-		s.errorDetail = detail;
+		if (reason) {
+			// 이유를 들고 멈췄다(본방이 시작되지 않음 등) — 정지 코드보다 그 이유가 스트리머에게 맞는 설명이다.
+			s.phase = StreamPhase::Error;
+			s.errorCode = reason;
+			s.errorDetail.clear();
+		} else {
+			s.phase = code == OBS_OUTPUT_SUCCESS ? StreamPhase::Idle : StreamPhase::Error;
+			s.errorCode = name;
+			s.errorDetail = detail;
+		}
 		s.stats.bitrateKbps = 0;
 	});
 

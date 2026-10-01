@@ -26,8 +26,10 @@ private:
 	QLabel *status_ = nullptr;
 	QLabel *checks_ = nullptr;
 	QLabel *audio_ = nullptr;
-	QPushButton *assign_ = nullptr; // 오디오 트랙 자동 배정 켜기 — 확인 창으로 묻는다(독의 처음 안내와 같은 내용)
-	bool audioCustom_ = false;      // 마지막 상태: 스트리머가 트랙 2~6을 직접 짜 뒀다
+	// 오디오 트랙 자동 배정 켜기·끄기 — 켜기는 확인 창으로 묻는다(독의 처음 안내와 같은 내용), 끄기는 독 스위치와 같다
+	QPushButton *assign_ = nullptr;
+	bool audioCustom_ = false;     // 마지막 상태: 스트리머가 트랙 2~6을 직접 짜 뒀다
+	bool audioAutoAssign_ = false; // 마지막 상태: 자동 배정이 켜져 있다 — 버튼이 끄기다
 	QLabel *marks_ = nullptr;
 	QPushButton *mark_ = nullptr;
 	QLabel *message_ = nullptr;

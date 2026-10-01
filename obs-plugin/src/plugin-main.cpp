@@ -314,7 +314,7 @@ void WatchMainStreamStart()
 		if (!IsStreamingPhase(AppState::Instance().Snapshot().phase))
 			return; // 우리 출력은 시작하지 않았다(동기화 꺼짐·키 없음·GOP 거절·시작 실패)
 		obs_log(LOG_WARNING, "stopping SRT output with the main stream");
-		StreamTarget::Instance().Stop();
+		StreamTarget::Instance().Stop("main_stream_failed"); // 정지가 끝나도 이 사유가 남는다(OnStop)
 		SetError(StreamPhase::Error, "main_stream_failed");
 	});
 }
