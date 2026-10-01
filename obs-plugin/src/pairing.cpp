@@ -11,6 +11,8 @@
 #include <obs-module.h>
 #include <plugin-support.h>
 
+#include <algorithm>
+
 
 namespace pokeclip {
 
@@ -18,11 +20,13 @@ namespace {
 
 size_t WriteToString(char *ptr, size_t size, size_t nmemb, void *userdata)
 {
+	constexpr size_t kMaxBody = 64 * 1024;
 	auto *out = static_cast<std::string *>(userdata);
 	size_t n = size * nmemb;
-	if (out->size() + n > 64 * 1024)
-		return 0; // 응답이 비정상적으로 크면 끊는다
-	out->append(ptr, n);
+	// 넘치는 부분은 버리되 받기는 끝까지 한다(전체는 CURLOPT_TIMEOUT이 묶는다). 0을 돌려주면 curl이 쓰기 오류로 끝나
+	// 받은 HTTP 상태를 잃고 「network」로 보고한다 — 프록시·WAF의 큰 HTML 오류 페이지. mark-sender.cpp와 같다.
+	if (out->size() < kMaxBody)
+		out->append(ptr, std::min(n, kMaxBody - out->size()));
 	return n;
 }
 

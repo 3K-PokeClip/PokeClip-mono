@@ -42,7 +42,6 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include <QTimer>
 
 #include <atomic>
-#include <cctype>
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("pokeclip-obs", "en-US")
@@ -124,18 +123,6 @@ std::string ConfigJson()
 	return json;
 }
 
-bool IsSafeHost(const std::string &host)
-{
-	if (host.empty() || host.size() > 253)
-		return false;
-	for (char ch : host) {
-		unsigned char c = static_cast<unsigned char>(ch);
-		if (!(std::isalnum(c) || c == '.' || c == '-' || c == ':' || c == '[' || c == ']'))
-			return false;
-	}
-	return true;
-}
-
 void OnStreamingStarting();
 
 BridgeCallbacks::Reply PutConfig(const std::string &body)
@@ -185,7 +172,7 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	if (streaming && !next.SameOutputSettings(current))
 		return {409, JsonReason(false, "streaming")};
 
-	if (!IsSafeHost(next.ingestHost))
+	if (!IsSafeIngestHost(next.ingestHost))
 		return {400, JsonReason(false, "invalid_ingest_host")};
 	if (next.ingestPort < 1 || next.ingestPort > 65535)
 		return {400, JsonReason(false, "invalid_ingest_port")};
@@ -301,14 +288,15 @@ void OnMainOutputStarting(void *, calldata_t *)
 }
 
 // 본방 시작이 그 자리에서 실패하면(OBSBasic::StartStreaming → DisplayStreamStartError) OBS는 STREAMING_STOPPED를
-// 보내지 않아 우리 출력만 남는다. OBS는 STREAMING_STARTING을 보낸 같은 호출 안에서 본방 obs_output_start를 부르므로
-// 다음 이벤트 루프 차례에 결과가 나와 있다. 시간으로 재지 않는다 — 접속이 느리거나 스트림 지연을 켠 본방은
-// start 신호(obs_frontend_streaming_active)가 몇 초~수십 초 뒤에 온다. 그 뒤의 실패는 OBS가 STREAMING_STOPPED를 보낸다.
-void StopIfMainStreamRejected()
+// 보내지 않는다 — 방송 중 표시(obsStreaming)도, 이미 시작한 우리 출력도 그대로 남는다. OBS는 STREAMING_STARTING을
+// 보낸 같은 호출 안에서 본방 obs_output_start를 부르므로 다음 이벤트 루프 차례에 결과가 나와 있다. 시간으로 재지 않는다
+// — 접속이 느리거나 스트림 지연을 켠 본방은 start 신호(obs_frontend_streaming_active)가 몇 초~수십 초 뒤에 온다.
+// 그 뒤의 실패는 OBS가 STREAMING_STOPPED를 보낸다.
+void WatchMainStreamStart()
 {
 	obs_output_t *mainOutput = obs_frontend_get_streaming_output();
 	if (!mainOutput)
-		return; // 본방 출력이 없으면 인코더를 못 빌려 Start가 이미 실패했다
+		return;
 	signal_handler_t *sh = obs_output_get_signal_handler(mainOutput);
 	g_mainStartAccepted = false;
 	signal_handler_connect(sh, "starting", OnMainOutputStarting, nullptr);
@@ -321,7 +309,11 @@ void StopIfMainStreamRejected()
 		obs_output_release(mainOutput);
 		if (accepted)
 			return;
-		obs_log(LOG_WARNING, "main stream did not start — stopping SRT output");
+		obs_log(LOG_WARNING, "main stream did not start");
+		AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = false; });
+		if (!IsStreamingPhase(AppState::Instance().Snapshot().phase))
+			return; // 우리 출력은 시작하지 않았다(동기화 꺼짐·키 없음·GOP 거절·시작 실패)
+		obs_log(LOG_WARNING, "stopping SRT output with the main stream");
 		StreamTarget::Instance().Stop();
 		SetError(StreamPhase::Error, "main_stream_failed");
 	});
@@ -338,6 +330,7 @@ void OnStreamingStarting()
 		s.obsStreaming = true;
 		s.checks = {};
 	});
+	WatchMainStreamStart(); // 그 자리 실패면 위 표시와 아래에서 시작한 우리 출력을 되돌린다
 
 	PluginConfig config = ConfigStore::Instance().Get();
 	if (!config.syncStart)
@@ -362,8 +355,6 @@ void OnStreamingStarting()
 		SetError(StreamPhase::Error, error);
 		return;
 	}
-
-	StopIfMainStreamRejected();
 }
 
 void OnFrontendEvent(enum obs_frontend_event event, void *)

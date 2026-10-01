@@ -12,7 +12,7 @@ import { Toast } from './components/Toast';
 import { UnpairDialog } from './components/UnpairDialog';
 import type { Bridge } from './lib/bridge';
 import { markToast, PHASE_LABEL, reasonText, type ToastTone } from './lib/copy';
-import type { BridgeState, MarkReply } from './lib/types';
+import type { BridgeState } from './lib/types';
 
 type BadgeTone = 'neutral' | 'success' | 'point' | 'warning' | 'danger';
 
@@ -89,13 +89,8 @@ export function App({ bridge }: { bridge: Bridge }) {
   const closeDialog = useCallback(() => setConfirmUnpair(false), []);
   const mark = useCallback(async () => {
     // 거절(409 — 방송 아님 등)은 플러그인이 state.marks로 알린다. 여기서는 그 밖의 실패 — 연타(429),
-    // 브리지 인증·서버 오류, 브리지에 닿지도 못한 경우 — 만 알린다.
-    let r: MarkReply;
-    try {
-      r = await bridge.mark();
-    } catch {
-      r = { ok: false, reason: 'bridge_unreachable', status: 0 };
-    }
+    // 브리지 인증·서버 오류, 브리지에 닿지도 못한 경우(bridge_unreachable — 브리지 클라이언트가 바꿔 준다) — 만 알린다.
+    const r = await bridge.mark();
     if (r.ok || r.status === 409) return;
     setMarkNotice({ tone: 'warning', message: reasonText(r.reason) });
   }, [bridge]);

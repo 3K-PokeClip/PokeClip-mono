@@ -41,8 +41,9 @@ private:
 	// "stop" 신호 뒤 출력이 실제로 멈추면 해제한다. 세대가 바뀌었으면(새 출력) 아무것도 안 한다.
 	void ReleaseWhenStopped(uint64_t generation, int attemptsLeft);
 	void ReleaseOwnedEncoders();
+	// SRT 접속 결과(start·stop 신호)가 날 때까지 기다린다 — 접속 중인 출력은 해제하면 안 된다(Release). 상한 안에 나면 true.
+	bool WaitForConnectResult();
 
-	static void OnStarting(void *data, struct calldata *params);
 	static void OnStart(void *data, struct calldata *params);
 	static void OnReconnect(void *data, struct calldata *params);
 	static void OnReconnectSuccess(void *data, struct calldata *params);

@@ -138,14 +138,10 @@ void MarkSender::ResetCounters()
 	sent_ = 0;
 	failed_ = 0;
 	// 지난 결과·사유도 지운다 — 폴백 패널이 새 방송에 옛 거절 사유를 붙이지 않게. seq는 그대로라 토스트는 없다.
-	AppState::Instance().Mutate([](StateSnapshot &s) {
-		s.marks.result.clear();
-		s.marks.reason.clear();
-	});
-	PublishLocked("", "");
+	PublishLocked("", "", true);
 }
 
-void MarkSender::PublishLocked(const char *result, const std::string &reason)
+void MarkSender::PublishLocked(const char *result, const std::string &reason, bool clearResult)
 {
 	int pending = static_cast<int>(queue_.size()) + (inFlight_ ? 1 : 0);
 	int sent = sent_, failed = failed_;
@@ -160,6 +156,9 @@ void MarkSender::PublishLocked(const char *result, const std::string &reason)
 			s.marks.seq++;
 			s.marks.result = res;
 			s.marks.reason = reason;
+		} else if (clearResult) {
+			s.marks.result.clear();
+			s.marks.reason.clear();
 		}
 	});
 }

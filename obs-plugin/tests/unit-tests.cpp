@@ -140,6 +140,21 @@ TEST(srt_server_url_has_no_secrets)
 	CHECK_EQ(BuildSrtServerUrl(c), "srt://ingest.pokeclip.com:8890?latency=1000000&pkt_size=1316");
 }
 
+TEST(ingest_host_rejects_port_outside_brackets)
+{
+	CHECK(IsSafeIngestHost("ingest.pokeclip.com"));
+	CHECK(IsSafeIngestHost("127.0.0.1"));
+	CHECK(IsSafeIngestHost("[::1]"));
+	CHECK(IsSafeIngestHost("[2001:db8::7]"));
+	CHECK(!IsSafeIngestHost("ingest.pokeclip.com:8890")); // srt://ingest.pokeclip.com:8890:8890 이 된다
+	CHECK(!IsSafeIngestHost("::1"));                      // IPv6는 대괄호로만
+	CHECK(!IsSafeIngestHost("[::1]:8890"));
+	CHECK(!IsSafeIngestHost("[]"));
+	CHECK(!IsSafeIngestHost(""));
+	CHECK(!IsSafeIngestHost("ingest pokeclip"));
+	CHECK(!IsSafeIngestHost("host?x=1"));
+}
+
 // ---------------------------------------------------------------- 토큰
 
 TEST(token_is_64_hex_and_unique)

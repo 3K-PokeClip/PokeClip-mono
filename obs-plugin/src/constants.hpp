@@ -38,6 +38,11 @@ inline constexpr int kReconnectDelaySec = 2;
 inline constexpr int kReleasePollMs = 100;
 inline constexpr int kReleasePollAttempts = 50;
 
+// SRT 접속 중인 출력을 해제하기 전에 접속 결과를 기다리는 상한·간격. SRT 접속 타임아웃(OBS mpegts는 따로 안 주므로
+// libsrt 기본 3초)보다 넉넉히 둔다 — 넘기면 force_stop이 접속 스레드를 기다린다.
+inline constexpr int kConnectResultWaitMs = 10000;
+inline constexpr int kConnectResultPollMs = 10;
+
 // 브라우저 독 페이지가 이 시간 안에 /api/hello를 부르지 않으면 Qt 폴백으로 바꾼다.
 inline constexpr int kBrowserWatchdogMs = 15000;
 

@@ -107,7 +107,7 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 | 키 | 기본값 | 뜻 |
 |---|---|---|
 | `api_base` | `https://dev.pokeclip.com` | 페어링 교환·마크 API. 운영 도메인이 정해지면 바꾼다 (로컬 auth 직결: `http://localhost:8082`). dev는 HTTP를 HTTPS로 301 돌려보내므로 예전 기본값 `http://dev.pokeclip.com`은 읽을 때 HTTPS로 올린다 |
-| `ingest_host` · `ingest_port` | `ingest.pokeclip.com` · `8890` | SRT 수신부 (ADR-020 3절) |
+| `ingest_host` · `ingest_port` | `ingest.pokeclip.com` · `8890` | SRT 수신부 (ADR-020 3절). 호스트는 이름·IPv4 또는 `[IPv6]` — 포트는 `ingest_port`로만(`host:포트`는 400) |
 | `streamid` · `passphrase` | — | 페어링이 채운다. **passphrase는 로그·브리지 응답에 싣지 않는다** |
 | `send_passphrase` | `true` | 로컬 compose MediaMTX는 passphrase 미설정이라 `false`여야 붙는다 (보내면 `REJ_BADSECRET`) |
 | `latency_ms` | `1000` | SRT latency. URL에는 마이크로초로 들어간다 |

@@ -56,7 +56,8 @@ private:
 	void Run();
 	SendResult Send(const Pending &p);
 	// mutex_를 쥔 채 부른다. result가 비어 있지 않으면 seq를 올려 독이 토스트를 띄우게 한다.
-	void PublishLocked(const char *result, const std::string &reason);
+	// result가 비면 결과·사유는 그대로 둔다 — clearResult면 비운다(새 방송).
+	void PublishLocked(const char *result, const std::string &reason, bool clearResult = false);
 
 	std::mutex mutex_;
 	std::condition_variable wake_;

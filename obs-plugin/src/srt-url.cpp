@@ -1,5 +1,8 @@
 #include "srt-url.hpp"
 
+#include <cctype>
+#include <string_view>
+
 namespace pokeclip {
 
 std::string StreamTokenOf(const std::string &streamId)
@@ -38,6 +41,20 @@ bool IsSafeStreamId(const std::string &streamId)
 		return false;
 	for (char c : streamId) {
 		if (c == '&' || c == '+' || c == ' ' || static_cast<unsigned char>(c) < 0x20)
+			return false;
+	}
+	return true;
+}
+
+bool IsSafeIngestHost(const std::string &host)
+{
+	if (host.empty() || host.size() > 253)
+		return false;
+	const bool ipv6 = host.size() > 2 && host.front() == '[' && host.back() == ']';
+	const std::string_view body = ipv6 ? std::string_view(host).substr(1, host.size() - 2) : std::string_view(host);
+	for (char ch : body) {
+		unsigned char c = static_cast<unsigned char>(ch);
+		if (!(std::isalnum(c) || c == '.' || c == '-' || (ipv6 && c == ':')))
 			return false;
 	}
 	return true;

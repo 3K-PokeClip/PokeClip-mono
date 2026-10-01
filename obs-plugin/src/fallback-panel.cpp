@@ -208,10 +208,15 @@ void FallbackPanel::OnAssignClicked()
 		body += "\n\n" + Text("Audio.ConsentOverwrite");
 	if (QMessageBox::question(this, Text("Audio.ConsentTitle"), body) != QMessageBox::Yes)
 		return;
-	ConfigStore::Instance().Update([](PluginConfig &c) {
+	bool saved = ConfigStore::Instance().Commit([](PluginConfig &c) {
 		c.audioAutoAssign = true;
 		c.audioAssignPrompted = true;
 	});
+	if (!saved) {
+		// 독 경로(PUT /api/config)와 같다 — 저장하지 못했으면 알리고 아무것도 바꾸지 않는다.
+		message_->setText(LocalizedReason("save_failed"));
+		return;
+	}
 	AudioRouter::Instance().Schedule("setting");
 }
 

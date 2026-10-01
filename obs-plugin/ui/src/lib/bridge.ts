@@ -43,6 +43,18 @@ async function readResult(res: Response): Promise<ActionResult> {
   return { ok: false, reason: body.reason ?? body.error ?? `http_${res.status}` };
 }
 
+// 브리지에 닿지도 못하면(플러그인이 멈췄거나 OBS가 종료 중) fetch가 던진다 — 동작 버튼이 로딩에 묶이지 않게
+// 실패 결과로 바꿔 돌려준다. hello·getSettings는 호출부가 catch 한다.
+const UNREACHABLE: ActionResult = { ok: false, reason: 'bridge_unreachable' };
+
+async function send(path: string, init: RequestInit): Promise<Response | null> {
+  try {
+    return await fetch(path, init);
+  } catch {
+    return null;
+  }
+}
+
 export function createHttpBridge(token: string): Bridge {
   const headers = { Authorization: `Bearer ${token}` };
   const json = { ...headers, 'Content-Type': 'application/json' };
@@ -96,13 +108,13 @@ export function createHttpBridge(token: string): Bridge {
     },
 
     async pair(code) {
-      const res = await fetch('/api/pair', { method: 'POST', headers: json, body: JSON.stringify({ code }) });
-      return readResult(res);
+      const res = await send('/api/pair', { method: 'POST', headers: json, body: JSON.stringify({ code }) });
+      return res ? readResult(res) : UNREACHABLE;
     },
 
     async unpair() {
-      const res = await fetch('/api/unpair', { method: 'POST', headers });
-      return readResult(res);
+      const res = await send('/api/unpair', { method: 'POST', headers });
+      return res ? readResult(res) : UNREACHABLE;
     },
 
     async getSettings() {
@@ -112,13 +124,15 @@ export function createHttpBridge(token: string): Bridge {
     },
 
     async putSettings(next) {
-      const res = await fetch('/api/config', { method: 'PUT', headers: json, body: JSON.stringify(next) });
+      const res = await send('/api/config', { method: 'PUT', headers: json, body: JSON.stringify(next) });
+      if (!res) return UNREACHABLE;
       if (res.ok) return { ok: true, settings: (await res.json()) as PluginSettings };
       return readResult(res);
     },
 
     async mark() {
-      const res = await fetch('/api/mark', { method: 'POST', headers });
+      const res = await send('/api/mark', { method: 'POST', headers });
+      if (!res) return { ...UNREACHABLE, status: 0 };
       return { ...(await readResult(res)), status: res.status };
     },
   };

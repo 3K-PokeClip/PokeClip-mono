@@ -52,7 +52,7 @@ export const REASON: Record<string, string> = {
   mark_rate_limited: 'PokeClip 서버가 잠시 표시를 받지 않아요.',
   mark_insecure: 'API 주소가 https가 아니라 표시를 보내지 않았어요. 설정 파일의 api_base를 https로 바꾸세요.',
   // 독 전용 — 브리지 요청 자체가 실패했다(플러그인이 멈췄거나 연결이 끊겼다)
-  bridge_unreachable: '플러그인과 연결이 끊겨 표시하지 못했어요. OBS를 다시 시작하세요.',
+  bridge_unreachable: '플러그인과 연결이 끊겼어요. OBS를 다시 시작하세요.',
 };
 
 export type ToastTone = 'success' | 'warning';

@@ -15,6 +15,7 @@ Copyright (C) SoraYuki, licensed under GPL-2.0.
 
 #include <array>
 #include <cstring>
+#include <thread>
 
 namespace pokeclip {
 
@@ -140,6 +141,7 @@ bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 	stopWhenConnected_ = false;
 	connecting_ = true;
 	if (!obs_output_start(output_)) {
+		connecting_ = false; // 접속 스레드가 뜨지 않았다 — Release()가 접속 결과를 기다리지 않게
 		const char *last = obs_output_get_last_error(output_);
 		errorCode = "start_failed";
 		obs_log(LOG_WARNING, "obs_output_start failed: %s", last ? last : "(no detail)");
@@ -160,16 +162,18 @@ void StreamTarget::Stop()
 		// mpegts 출력은 접속 스레드가 SRT에 붙은 뒤에야 active가 된다(obs-ffmpeg-mpegts.c ffmpeg_mpegts_finalize).
 		// 그 전에는 obs_output_stop이 아무것도 안 하므로, 붙자마자 OnStart가 멈추게 표시만 해 둔다.
 		// 깃발을 먼저 세우고 접속 중인지 나중에 본다 — OnStart는 반대 순서라 둘 중 하나는 반드시 상대를 본다.
-		if (!connecting_)
-			return; // 이미 멈춘 출력(해제 대기)이다
-		stopWhenConnected_ = true;
 		if (connecting_) {
-			AppState::Instance().Mutate([](StateSnapshot &s) { s.phase = StreamPhase::Stopping; });
-			return;
+			stopWhenConnected_ = true;
+			if (connecting_) {
+				AppState::Instance().Mutate([](StateSnapshot &s) { s.phase = StreamPhase::Stopping; });
+				return;
+			}
 		}
+		// 그새 접속이 끝났거나 이미 멈춘 출력(해제 대기)이다. libobs는 active를 켠 뒤에 start를 보내므로(OnStart가
+		// connecting_을 내린다) 붙었으면 지금 active다 — 그러면 아래에서 바로 멈춘다(OnStart가 깃발을 봤으면 한 번 더
+		// 부르지만 stopping 중이라 무시된다). 접속이 실패했으면 OnStop이 정리한다.
 		if (!obs_output_active(output_))
-			return; // 그새 접속이 실패해 끝났다 — OnStop이 정리한다
-		// 그새 붙었다 — 아래에서 바로 멈춘다(OnStart가 깃발을 봤으면 한 번 더 부르지만 stopping 중이라 무시된다)
+			return;
 	}
 	AppState::Instance().Mutate([](StateSnapshot &s) { s.phase = StreamPhase::Stopping; });
 	obs_output_stop(output_);
@@ -190,8 +194,15 @@ void StreamTarget::ForceStop()
 void StreamTarget::Release()
 {
 	if (output_) {
+		// 아직 SRT 접속 중이면 결과가 날 때까지 기다린다. 접속 중인 출력을 그대로 해제하면 mpegts destroy가 접속 스레드를
+		// join하는 사이 접속이 성공해 캡처가 시작되고, destroy가 이미 지나친 캡처 종료 스레드가 해제된 출력·인코더를 쓴다
+		// (obs-output.c obs_output_destroy는 그 스레드를 info.destroy보다 먼저 join한다). 결과가 나면 평소 경로가 안전하다
+		// — 붙었으면 active라 아래에서 멈추고, 실패했으면 이미 멈췄다.
+		// 🔴 그동안 UI 스레드가 기다린다(SRT 접속 타임아웃, 기본 3초) — 접속 중의 OBS 종료·프로필 전환·본방 재시작 때만.
+		bool resolved = WaitForConnectResult();
 		DisconnectSignals();
-		if (obs_output_active(output_))
+		// 상한을 넘기면 그래도 멈춘다 — force_stop은 접속 스레드를 기다린 뒤 정지한다.
+		if (obs_output_active(output_) || !resolved)
 			obs_output_force_stop(output_); // mpegts stop은 비동기 — 아래 destroy가 stopping_event를 기다린다
 
 		// 서비스는 우리가 만든 참조다. obs_output_set_service(nullptr)는 NULL을 거절해 떼어지지 않으므로,
@@ -290,6 +301,19 @@ bool StreamTarget::AttachAudioEncoders(obs_encoder_t *streamAudio, std::string &
 	return true;
 }
 
+bool StreamTarget::WaitForConnectResult()
+{
+	// OnStart·OnStop이 접속 스레드에서 connecting_을 내린다. 둘 다 UI 스레드를 기다리지 않으므로(상태 리스너는
+	// RunInUiThread로 넘기기만 한다) UI 스레드에서 여기서 막아도 교착되지 않는다.
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kConnectResultWaitMs);
+	while (connecting_ && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(kConnectResultPollMs));
+	if (connecting_)
+		obs_log(LOG_WARNING, "SRT output still connecting after %d ms — stopping it anyway",
+			kConnectResultWaitMs);
+	return !connecting_;
+}
+
 void StreamTarget::ReleaseOwnedEncoders()
 {
 	for (obs_encoder_t *encoder : ownedAudioEncoders_)
@@ -321,7 +345,8 @@ void StreamTarget::PollStats()
 void StreamTarget::ConnectSignals()
 {
 	signal_handler_t *sh = obs_output_get_signal_handler(output_);
-	signal_handler_connect(sh, "starting", &StreamTarget::OnStarting, signalContext_.get());
+	// starting은 받지 않는다 — libobs는 info.start가 돌아온 뒤에 보내므로(obs-output.c obs_output_start) 그새 접속이
+	// 끝나 온 start·stop을 덮는다. Starting은 Start()가 obs_output_start 전에 둔다.
 	signal_handler_connect(sh, "start", &StreamTarget::OnStart, signalContext_.get());
 	signal_handler_connect(sh, "reconnect", &StreamTarget::OnReconnect, signalContext_.get());
 	signal_handler_connect(sh, "reconnect_success", &StreamTarget::OnReconnectSuccess, signalContext_.get());
@@ -332,7 +357,6 @@ void StreamTarget::ConnectSignals()
 void StreamTarget::DisconnectSignals()
 {
 	signal_handler_t *sh = obs_output_get_signal_handler(output_);
-	signal_handler_disconnect(sh, "starting", &StreamTarget::OnStarting, signalContext_.get());
 	signal_handler_disconnect(sh, "start", &StreamTarget::OnStart, signalContext_.get());
 	signal_handler_disconnect(sh, "reconnect", &StreamTarget::OnReconnect, signalContext_.get());
 	signal_handler_disconnect(sh, "reconnect_success", &StreamTarget::OnReconnectSuccess, signalContext_.get());
@@ -341,11 +365,6 @@ void StreamTarget::DisconnectSignals()
 }
 
 // 아래 시그널은 libobs 스레드에서 온다. AppState는 스레드 안전하다. 출력 해제는 UI 스레드로 넘긴다.
-
-void StreamTarget::OnStarting(void *, calldata_t *)
-{
-	AppState::Instance().Mutate([](StateSnapshot &s) { s.phase = StreamPhase::Starting; });
-}
 
 void StreamTarget::OnStart(void *data, calldata_t *)
 {
