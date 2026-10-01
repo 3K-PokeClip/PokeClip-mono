@@ -1,0 +1,99 @@
+#pragma once
+
+#include "audio-assign.hpp"
+
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <mutex>
+#include <optional>
+#include <string>
+
+namespace pokeclip {
+
+enum class StreamPhase { Idle, Starting, Live, Reconnecting, Stopping, Error };
+
+const char *PhaseName(StreamPhase phase);
+// 우리 SRT 출력이 시작했거나 아직 멈추는 중이다. 브리지 워커처럼 UI 스레드가 아닌 곳은 출력 객체 대신 이걸 본다
+// (출력 포인터는 UI 스레드가 해제한다).
+bool IsStreamingPhase(StreamPhase phase);
+
+struct EncoderChecks {
+	std::optional<bool> gop2s;
+	std::optional<bool> res1080p;
+	std::optional<bool> sharedEncoder;
+	std::optional<bool> audioTracks; // A2: 6트랙이 출력에 붙었다
+	int audioTrackCount = 0;
+	int keyintSec = -1;
+	int width = 0;
+	int height = 0;
+	double fps = 0;
+};
+
+struct StreamStats {
+	double bitrateKbps = 0;
+	uint64_t totalFrames = 0;
+	int droppedFrames = 0;
+	int64_t uptimeSec = 0;
+};
+
+// A4 핫키 마킹 — 보낸·대기·실패 개수와 마지막 결과. seq가 오를 때마다 독이 토스트를 한 번 띄운다.
+struct MarkStats {
+	std::string hotkey; // 지금 묶인 단축키(OBS 표기). 빈 문자열이면 안 묶였다
+	int sent = 0;       // 이번 방송에서 서버가 받은 수
+	int pending = 0;    // 보내는 중·다시 보낼 차례를 기다리는 수 (지난 방송 것 포함)
+	int failed = 0;     // 이번 방송에서 버린 수
+	uint64_t seq = 0;
+	std::string result; // sent · retrying · failed · rejected (seq와 함께 바뀐다)
+	std::string reason; // result의 사유 코드 (copy.ts REASON · locale Reason.*)
+	int64_t lastAt = 0; // 마지막으로 받아들인 누름의 시각(UTC epoch ms)
+};
+
+// 독 페이지·폴백 패널이 그리는 유일한 상태 원천. 비밀은 담지 않는다.
+struct StateSnapshot {
+	uint64_t version = 0;
+	bool paired = false;
+	std::string keyHint; // streamid 토큰 끝 4자
+	std::string ingest;  // host:port
+	std::string apiBase;
+	StreamPhase phase = StreamPhase::Idle;
+	std::string errorCode;
+	std::string errorDetail;
+	bool obsStreaming = false;
+	bool darkTheme = true;
+	StreamStats stats;
+	EncoderChecks checks;
+	AudioRoutingView audio; // A2: 트랙 2~6에 어느 소스가 실리는지 (실제 트랙 비트 기준)
+	MarkStats marks;
+};
+
+class AppState {
+public:
+	static AppState &Instance();
+
+	StateSnapshot Snapshot() const;
+	void Mutate(const std::function<void(StateSnapshot &)> &mutate);
+
+	using Listener = std::function<void(const StateSnapshot &)>;
+	uint64_t AddListener(Listener listener);
+	void RemoveListener(uint64_t id);
+
+	// SSE용: sinceVersion보다 새 상태가 오면 true. timeout이면 false. Shutdown이면 false.
+	bool WaitForChange(uint64_t sinceVersion, std::chrono::milliseconds timeout, StateSnapshot &out);
+	void Shutdown();
+	bool IsShutdown() const;
+
+	static std::string ToJson(const StateSnapshot &snapshot);
+
+private:
+	mutable std::mutex mutex_;
+	std::condition_variable changed_;
+	StateSnapshot state_{};
+	bool shutdown_ = false;
+	std::map<uint64_t, Listener> listeners_;
+	uint64_t nextListenerId_ = 1;
+};
+
+} // namespace pokeclip

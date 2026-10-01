@@ -1,0 +1,54 @@
+/* 토큰은 web 정본을 그대로 import 한다. web reset.css는 창 폭 비례 루트 폰트라 좁은 독에서 글자가 작아져 쓰지 않는다. */
+@import '@pc-styles/tokens.css';
+@import '@pc-styles/fonts.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--pc-color-bg-canvas);
+  color: var(--pc-color-text-primary);
+  font-family: var(--pc-font-sans);
+  font-size: var(--pc-font-size-sm);
+  line-height: var(--pc-line-normal);
+  letter-spacing: var(--pc-letter-snug);
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+  overflow-x: hidden;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0ms !important;
+    transition-duration: 0ms !important;
+  }
+}
