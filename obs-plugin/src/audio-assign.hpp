@@ -147,6 +147,8 @@ struct AudioRoutingView {
 	bool autoAssign = true; // 설정 스위치
 	bool applied = false;   // 실제로 자동 배정 중 (스위치 on ∧ 페어링됨 ∧ 보류 아님)
 	bool deferred = false;  // 방송·녹화 중에 켜져 끝날 때까지 미뤘다 — 지금 나가는 트랙을 바꾸지 않는다
+	bool prompt = false;    // 페어링 뒤 아직 자동 배정을 켤지 묻지 않았다 — 독이 한 번 묻는다
+	bool customRouting = false; // 스트리머가 트랙 2~6을 직접 짜 둔 흔적이 있다 — 켜면 덮어쓴다고 알린다
 	std::array<AudioTrackView, kStemSlots> tracks{};
 	std::vector<std::string> mixOnly;     // 화면에 나오는 후보인데 스템(본방 트랙 제외) 어디에도 없다
 	std::vector<std::string> monitorOnly; // 화면에 나오지만 모니터 전용이라 믹스에 없다
@@ -159,9 +161,14 @@ struct RoutingViewOptions {
 	bool autoAssign = true;
 	bool applied = false;
 	bool deferred = false;
+	bool prompt = false;
 	int overflow = 0;
 	uint32_t reserved = 0; // 본방이 쓰는 믹서 비트
 };
+
+// 트랙 2~6(본방 트랙 제외)을 스트리머가 직접 짠 흔적이 있는지. OBS는 새 소스를 트랙 전부에 켠 채 만들므로,
+// 어떤 소스든 그 비트가 전부 켜져 있지 않으면(일부만·전부 끔) 손댄 것으로 본다.
+bool HasCustomStemRouting(const std::vector<AudioSourceInfo> &sources, uint32_t reserved);
 
 // 화면에 안 나오고 스템에도 없는 소스(다른 장면에만 있는 것)는 목록에 올리지 않는다 — 지금 소리를 안 낸다.
 AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, const RoutingViewOptions &options);

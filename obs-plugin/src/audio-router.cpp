@@ -381,6 +381,8 @@ void AudioRouter::Reconcile(const char *reason)
 	options.autoAssign = config.audioAutoAssign;
 	options.applied = applied;
 	options.deferred = deferred;
+	// 기본은 꺼짐 — 페어링한 뒤 아직 답하지 않았으면 독이 한 번 묻는다(스템이 왜 필요한지 + 짜 둔 트랙을 덮어쓴다).
+	options.prompt = config.HasKey() && !config.audioAutoAssign && !config.audioAssignPrompted;
 	options.overflow = overflow;
 	options.reserved = reserved;
 	AudioRoutingView view = BuildRoutingView(sources, options);

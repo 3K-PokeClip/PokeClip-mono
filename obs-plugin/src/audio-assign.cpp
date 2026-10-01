@@ -365,6 +365,13 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 	return r;
 }
 
+bool HasCustomStemRouting(const std::vector<AudioSourceInfo> &sources, uint32_t reserved)
+{
+	uint32_t owned = kStemMask & ~reserved;
+	return std::any_of(sources.begin(), sources.end(),
+			   [&](const AudioSourceInfo &s) { return (s.mixers & owned) != owned; });
+}
+
 AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, const RoutingViewOptions &options)
 {
 	AudioRoutingView v;
@@ -372,6 +379,8 @@ AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, c
 	v.autoAssign = options.autoAssign;
 	v.applied = options.applied;
 	v.deferred = options.deferred;
+	v.prompt = options.prompt;
+	v.customRouting = !options.applied && HasCustomStemRouting(sources, options.reserved);
 	v.overflow = options.overflow;
 	for (int i = 0; i < kStemSlots; i++) {
 		AudioTrackView &t = v.tracks[static_cast<size_t>(i)];

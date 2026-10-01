@@ -9,6 +9,8 @@ export interface AudioRouting {
   autoAssign: boolean;
   applied: boolean;
   deferred: boolean; // 방송·녹화 중에 켜져 끝날 때까지 미뤘다 — 지금 나가는 트랙은 그대로
+  prompt: boolean; // 페어링 뒤 아직 자동 배정을 켤지 묻지 않았다 — 독이 한 번 묻는다(기본은 꺼짐)
+  customRouting: boolean; // 스트리머가 트랙 2~6을 직접 짜 둔 흔적 — 켜면 덮어쓴다고 알린다
   // mainStream — 본방(OBS 방송 출력)이 이 트랙을 쓴다. 자동 배정이 손대지 않는 스트리머의 믹스다.
   tracks: { track: number; mainStream: boolean; sources: { name: string; kind: AudioKind }[] }[];
   mixOnly: { name: string }[];
@@ -77,6 +79,7 @@ export interface PluginSettings {
   sync_start: boolean;
   force_fallback: boolean;
   audio_auto_assign: boolean;
+  audio_assign_prompted?: boolean; // 처음 안내(자동 배정 켤까요?)에 답했다
   clip_api_base?: string; // 개발용 — 화면에 없다. 비우면 api_base
 }
 

@@ -123,6 +123,8 @@ static obs_data_t *AudioToData(const AudioRoutingView &v)
 	obs_data_set_bool(audio, "autoAssign", v.autoAssign);
 	obs_data_set_bool(audio, "applied", v.applied);
 	obs_data_set_bool(audio, "deferred", v.deferred);
+	obs_data_set_bool(audio, "prompt", v.prompt);
+	obs_data_set_bool(audio, "customRouting", v.customRouting);
 	obs_data_set_int(audio, "overflow", v.overflow);
 
 	obs_data_array_t *tracks = obs_data_array_create();

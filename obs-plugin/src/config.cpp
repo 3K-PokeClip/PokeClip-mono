@@ -85,6 +85,7 @@ void ConfigStore::Load()
 	config_.forceFallback = GetBoolOr(data, "force_fallback", d.forceFallback);
 	config_.dockIntroShown = GetBoolOr(data, "dock_intro_shown", d.dockIntroShown);
 	config_.audioAutoAssign = GetBoolOr(data, "audio_auto_assign", d.audioAutoAssign);
+	config_.audioAssignPrompted = GetBoolOr(data, "audio_assign_prompted", d.audioAssignPrompted);
 	config_.audioTrackMap.clear();
 	if (obs_data_array_t *map = obs_data_get_array(data, "audio_track_map")) {
 		// 손상 항목(자리 범위 밖·빈 열쇠)은 배정 계산이 걸러 낸다(ComputeAssignment 1단계).
@@ -164,6 +165,7 @@ bool ConfigStore::SaveLocked()
 	obs_data_set_bool(data, "force_fallback", config_.forceFallback);
 	obs_data_set_bool(data, "dock_intro_shown", config_.dockIntroShown);
 	obs_data_set_bool(data, "audio_auto_assign", config_.audioAutoAssign);
+	obs_data_set_bool(data, "audio_assign_prompted", config_.audioAssignPrompted);
 	obs_data_array_t *map = obs_data_array_create();
 	for (const AudioTrackMapEntry &e : config_.audioTrackMap) {
 		obs_data_t *item = obs_data_create();

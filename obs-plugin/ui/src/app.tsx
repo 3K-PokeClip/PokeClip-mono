@@ -1,5 +1,6 @@
 import { CircleCheck, CircleDashed, CircleX, type LucideIcon, Radio, RefreshCw, WifiOff } from 'lucide-preact';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import { AudioAssignPrompt } from './components/AudioAssignPrompt';
 import { AudioTracks } from './components/AudioTracks';
 import { Checks } from './components/Checks';
 import styles from './components/dock.module.css';
@@ -150,11 +151,13 @@ export function App({ bridge }: { bridge: Bridge }) {
         <PairCard onPair={(code) => bridge.pair(code)} />
       )}
 
+      {state.paired && state.audio.prompt ? <AudioAssignPrompt state={state} bridge={bridge} /> : null}
+
       {state.paired ? <Checks state={state} /> : null}
 
       {state.paired ? <AudioTracks state={state} /> : null}
 
-      <Settings bridge={bridge} locked={locked} />
+      <Settings bridge={bridge} locked={locked} autoAssign={state.audio.autoAssign} />
 
       <footer class={styles.footer}>
         <span>PokeClip for OBS {version && `v${version}`}</span>

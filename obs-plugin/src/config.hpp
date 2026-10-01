@@ -22,7 +22,10 @@ struct PluginConfig {
 	bool forceFallback = false;
 	bool dockIntroShown = false; // 첫 실행에 독을 한 번 펼쳤는지 (새 플러그인 독은 OBS가 숨긴 채 등록한다)
 	// A2: 오디오 소스를 트랙 2~6에 하나씩 자동 배정한다(audio-assign.hpp). 끄면 OBS 고급 오디오 설정 그대로.
-	bool audioAutoAssign = true;
+	// 기본은 꺼짐 — 스트리머가 짜 둔 트랙 체크를 동의 없이 바꾸지 않는다. 페어링 뒤 독에서 한 번 묻는다
+	// (사용자 결정 2026-10-01).
+	bool audioAutoAssign = false;
+	bool audioAssignPrompted = false; // 그 질문에 답했다(켜기·나중에) — 다시 묻지 않는다
 	std::vector<AudioTrackMapEntry> audioTrackMap; // 소스별로 기억한 자리 — 방송 간 배정을 유지한다
 	// 자동 배정이 처음 쓰기 전의 트랙 체크(소스·컬렉션별) — 끄면 되돌리고, 본방 트랙이 바뀌면 오간다
 	std::vector<AudioMixerBackup> audioMixerBackup;

@@ -116,6 +116,7 @@ std::string ConfigJson()
 	obs_data_set_bool(d, "sync_start", c.syncStart);
 	obs_data_set_bool(d, "force_fallback", c.forceFallback);
 	obs_data_set_bool(d, "audio_auto_assign", c.audioAutoAssign);
+	obs_data_set_bool(d, "audio_assign_prompted", c.audioAssignPrompted);
 	obs_data_set_string(d, "clip_api_base", c.clipApiBase.c_str());
 	std::string json = obs_data_get_json(d);
 	obs_data_release(d);
@@ -148,6 +149,7 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	PluginConfig next = ConfigStore::Instance().Get();
 	bool syncWasOn = next.syncStart;
 	bool autoAssignWas = next.audioAutoAssign;
+	bool promptedWas = next.audioAssignPrompted;
 	auto str = [&](const char *key, std::string &out) {
 		if (obs_data_has_user_value(d, key))
 			out = obs_data_get_string(d, key);
@@ -170,7 +172,11 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	flag("sync_start", next.syncStart);
 	flag("force_fallback", next.forceFallback);
 	flag("audio_auto_assign", next.audioAutoAssign);
+	flag("audio_assign_prompted", next.audioAssignPrompted);
 	obs_data_release(d);
+	// 스위치를 직접 바꿨으면 답한 것으로 친다 — 처음 안내를 다시 띄우지 않는다.
+	if (next.audioAutoAssign != autoAssignWas)
+		next.audioAssignPrompted = true;
 
 	if (!IsSafeHost(next.ingestHost))
 		return {400, JsonReason(false, "invalid_ingest_host")};
@@ -199,7 +205,7 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		return {500, JsonReason(false, "save_failed")};
 
 	SyncStateFromConfig();
-	if (next.audioAutoAssign != autoAssignWas)
+	if (next.audioAutoAssign != autoAssignWas || next.audioAssignPrompted != promptedWas)
 		AudioRouter::Instance().Schedule("setting");
 
 	// 동기화를 본방 송출 중에 켰다 — 「본방이 보내면 우리도 보낸다」를 지키려면 다음 방송을 기다리지 않고

@@ -850,6 +850,34 @@ TEST(audio_routing_view_reflects_actual_bits)
 	CHECK(line.find("mix-only 1") != std::string::npos);
 }
 
+// 자동 배정을 켤지 처음 물을 때, 스트리머가 트랙 2~6을 직접 짜 뒀으면 덮어쓴다고 알린다.
+// OBS는 새 소스를 트랙 전부에 켠 채 만들므로 「전부 켜짐」이 아니면 손댄 것이다. 본방 트랙은 안 건드리니 빼고 본다.
+TEST(audio_custom_routing_detects_hand_made_tracks)
+{
+	std::vector<AudioSourceInfo> fresh = {Src("ch:3", "마이크", AudioKind::Mic, 3, 0x3F),
+					      Src("uuid:game", "게임", AudioKind::App, 100, 0xFF)};
+	CHECK(!HasCustomStemRouting(fresh, 0));
+
+	std::vector<AudioSourceInfo> custom = fresh;
+	custom[1].mixers = 0x05; // 트랙 1·3만
+	CHECK(HasCustomStemRouting(custom, 0));
+	custom[1].mixers = 0x01; // 트랙 2~6 전부 끔
+	CHECK(HasCustomStemRouting(custom, 0));
+
+	std::vector<AudioSourceInfo> mainOnly = fresh;
+	mainOnly[1].mixers = 0x3D; // 본방 트랙 2만 꺼 뒀다 — 자동 배정이 덮어쓸 것이 아니다
+	CHECK(!HasCustomStemRouting(mainOnly, 0x02));
+
+	RoutingViewOptions options;
+	options.autoAssign = false;
+	options.prompt = true;
+	AudioRoutingView v = BuildRoutingView(custom, options);
+	CHECK(v.prompt);
+	CHECK(v.customRouting);
+	options.applied = true; // 이미 자동 배정 중이면 알릴 것이 없다
+	CHECK(!BuildRoutingView(custom, options).customRouting);
+}
+
 // 본방 트랙은 표시만 하고 스템으로 치지 않는다. 화면에 없고 스템에도 없는 소스는 목록에 올리지 않는다.
 TEST(audio_routing_view_marks_main_stream_and_hides_offscreen)
 {

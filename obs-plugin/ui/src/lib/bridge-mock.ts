@@ -3,7 +3,7 @@ import type { AudioRouting, BridgeState, MarkStats, Phase, PluginSettings } from
 
 // 개발 전용 — `pnpm dev` 에서 토큰 없이 열면 쓴다.
 // ?mock=unpaired|idle|live|reconnecting|error|no_key|encoder|audio_overflow|audio_manual|audio_main_stream|
-//       audio_deferred|mark_pending|mark_unsupported
+//       audio_deferred|audio_prompt|audio_prompt_custom|mark_pending|mark_unsupported
 // 트랙 2~6 목록으로 오디오 배정 상태를 만든다 (트랙 1은 늘 최종 믹스라 싣지 않는다). mainStream은 본방 트랙 번호.
 function routing(tracks: AudioRouting['tracks'][number]['sources'][], mainStream: number[] = []): AudioRouting {
   return {
@@ -11,6 +11,8 @@ function routing(tracks: AudioRouting['tracks'][number]['sources'][], mainStream
     autoAssign: true,
     applied: true,
     deferred: false,
+    prompt: false,
+    customRouting: false,
     tracks: tracks.map((sources, i) => ({ track: i + 2, mainStream: mainStream.includes(i + 2), sources })),
     mixOnly: [],
     monitorOnly: [],
@@ -102,6 +104,28 @@ export function createMockBridge(scenario: string): Bridge {
         [2],
       ),
     },
+    // 막 페어링했다 — 자동 배정은 기본으로 꺼져 있어 한 번 묻는다. 트랙은 OBS 기본(전부 켜짐)
+    audio_prompt: {
+      audio: {
+        ...routing([0, 1, 2, 3, 4].map(() => [
+          { name: '마이크/보조', kind: 'mic' as const },
+          { name: '데스크탑 오디오', kind: 'desktop' as const },
+        ])),
+        autoAssign: false,
+        applied: false,
+        prompt: true,
+      },
+    },
+    // 같은데 스트리머가 트랙 2~6을 직접 짜 뒀다 — 켜면 덮어쓴다고 알린다
+    audio_prompt_custom: {
+      audio: {
+        ...routing([[{ name: '마이크/보조', kind: 'mic' }, { name: '디스코드', kind: 'app' }], [{ name: '게임', kind: 'app' }], [], [], []]),
+        autoAssign: false,
+        applied: false,
+        prompt: true,
+        customRouting: true,
+      },
+    },
     // 녹화 중에 자동 배정을 켰다 — 지금 나가는 트랙은 그대로 두고 녹화가 끝나면 적용한다
     audio_deferred: {
       obsStreaming: false,
@@ -141,7 +165,8 @@ export function createMockBridge(scenario: string): Bridge {
     latency_ms: 1000,
     sync_start: true,
     force_fallback: false,
-    audio_auto_assign: true,
+    audio_auto_assign: state.audio.autoAssign,
+    audio_assign_prompted: !state.audio.prompt,
   };
   let lastMarkAt = 0;
   const listeners = new Set<(s: BridgeState) => void>();
@@ -188,8 +213,21 @@ export function createMockBridge(scenario: string): Bridge {
     async putSettings(next) {
       // 플러그인처럼 API 주소는 브리지로 안 바뀐다 — passphrase가 가는 곳이다
       const { api_base: _api, clip_api_base: _clip, ...editable } = next;
+      const autoWas = settings.audio_auto_assign;
       settings = { ...settings, ...editable };
-      emit({ ingest: `${settings.ingest_host}:${settings.ingest_port}` });
+      // 플러그인처럼: 스위치를 바꿨으면 처음 안내에 답한 것으로 친다
+      if (settings.audio_auto_assign !== autoWas) settings.audio_assign_prompted = true;
+      const answered = settings.audio_assign_prompted === true;
+      emit({
+        ingest: `${settings.ingest_host}:${settings.ingest_port}`,
+        audio: {
+          ...state.audio,
+          autoAssign: settings.audio_auto_assign,
+          applied: settings.audio_auto_assign && state.paired,
+          prompt: state.audio.prompt && !answered && !settings.audio_auto_assign,
+          customRouting: settings.audio_auto_assign ? false : state.audio.customRouting,
+        },
+      });
       return { ok: true, settings };
     },
     async mark() {

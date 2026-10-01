@@ -1,6 +1,8 @@
 #include "fallback-panel.hpp"
 
 #include "app-state.hpp"
+#include "audio-router.hpp"
+#include "config.hpp"
 #include "mark-sender.hpp"
 #include "pairing.hpp"
 #include "ui-thread.hpp"
@@ -10,6 +12,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
 #include <QStringList>
@@ -52,6 +55,7 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	audio_ = new QLabel(this);
 	audio_->setWordWrap(true);
 	audio_->setTextFormat(Qt::PlainText);
+	assign_ = new QPushButton(Text("Audio.Enable"), this);
 	marks_ = new QLabel(this);
 	marks_->setWordWrap(true);
 	marks_->setTextFormat(Qt::PlainText);
@@ -78,6 +82,7 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	layout->addWidget(status_);
 	layout->addWidget(checks_);
 	layout->addWidget(audio_);
+	layout->addWidget(assign_);
 	layout->addWidget(mark_);
 	layout->addWidget(marks_);
 	layout->addLayout(row);
@@ -90,6 +95,7 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	connect(code_, &QLineEdit::returnPressed, this, [this]() { OnPairClicked(); });
 	connect(unpair_, &QPushButton::clicked, this, [this]() { OnUnpairClicked(); });
 	connect(mark_, &QPushButton::clicked, this, [this]() { OnMarkClicked(); });
+	connect(assign_, &QPushButton::clicked, this, [this]() { OnAssignClicked(); });
 
 	QPointer<FallbackPanel> self(this);
 	listenerId_ = AppState::Instance().AddListener([self](const StateSnapshot &s) {
@@ -144,6 +150,9 @@ void FallbackPanel::Render(const StateSnapshot &s)
 	} else {
 		audio_->setVisible(false);
 	}
+	// 자동 배정은 기본으로 꺼져 있다 — 켜는 길은 확인 창을 거친다(스템이 왜 필요한지·짜 둔 트랙을 덮어쓴다).
+	assign_->setVisible(s.paired && s.audio.known && !s.audio.autoAssign);
+	audioCustom_ = s.audio.customRouting;
 
 	// A4 — 우리 송출 중에만 누를 수 있다. 개수 줄은 지난 방송 것이 남아 있어도 보여준다.
 	bool sending = s.phase == StreamPhase::Live || s.phase == StreamPhase::Reconnecting;
@@ -190,6 +199,20 @@ void FallbackPanel::OnMarkClicked()
 	MarkAccept a = MarkSender::Instance().Mark(MarkVia::Panel);
 	if (!a.ok && a.reason == "mark_too_soon")
 		message_->setText(LocalizedReason(a.reason));
+}
+
+void FallbackPanel::OnAssignClicked()
+{
+	QString body = Text("Audio.ConsentBody");
+	if (audioCustom_)
+		body += "\n\n" + Text("Audio.ConsentOverwrite");
+	if (QMessageBox::question(this, Text("Audio.ConsentTitle"), body) != QMessageBox::Yes)
+		return;
+	ConfigStore::Instance().Update([](PluginConfig &c) {
+		c.audioAutoAssign = true;
+		c.audioAssignPrompted = true;
+	});
+	AudioRouter::Instance().Schedule("setting");
 }
 
 void FallbackPanel::OnUnpairClicked()
