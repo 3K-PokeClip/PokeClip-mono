@@ -33,12 +33,6 @@ int AbortOnShutdown(void *, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
 	return AppState::Instance().IsShutdown() ? 1 : 0;
 }
 
-bool IsStreamingPhase(StreamPhase phase)
-{
-	return phase == StreamPhase::Starting || phase == StreamPhase::Live || phase == StreamPhase::Reconnecting ||
-	       phase == StreamPhase::Stopping;
-}
-
 std::string ReasonForStatus(long status)
 {
 	switch (status) {
@@ -143,7 +137,7 @@ PairingResult PairWithCode(const std::string &rawCode)
 		return result;
 	}
 
-	bool saved = ConfigStore::Instance().Update([&](PluginConfig &c) {
+	bool saved = ConfigStore::Instance().Commit([&](PluginConfig &c) {
 		c.streamId = streamId;
 		c.passphrase = passphrase;
 	});
@@ -173,7 +167,7 @@ PairingResult Unpair()
 		result.reason = "streaming";
 		return result;
 	}
-	bool saved = ConfigStore::Instance().Update([](PluginConfig &c) {
+	bool saved = ConfigStore::Instance().Commit([](PluginConfig &c) {
 		c.streamId.clear();
 		c.passphrase.clear();
 	});

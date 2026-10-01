@@ -41,6 +41,7 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include <QMainWindow>
 #include <QTimer>
 
+#include <atomic>
 #include <cctype>
 
 OBS_DECLARE_MODULE()
@@ -139,17 +140,18 @@ void OnStreamingStarting();
 
 BridgeCallbacks::Reply PutConfig(const std::string &body)
 {
-	if (StreamTarget::Instance().IsActive() || AppState::Instance().Snapshot().phase == StreamPhase::Starting)
-		return {409, JsonReason(false, "streaming")};
+	// 브리지 워커 스레드다 — 출력 객체(StreamTarget)는 UI 스레드가 해제하므로 만지지 않고 상태의 phase를 본다.
+	const bool streaming = IsStreamingPhase(AppState::Instance().Snapshot().phase);
 
 	obs_data_t *d = obs_data_create_from_json(body.c_str());
 	if (!d)
 		return {400, JsonReason(false, "invalid_json")};
 
-	PluginConfig next = ConfigStore::Instance().Get();
-	bool syncWasOn = next.syncStart;
-	bool autoAssignWas = next.audioAutoAssign;
-	bool promptedWas = next.audioAssignPrompted;
+	const PluginConfig current = ConfigStore::Instance().Get();
+	PluginConfig next = current;
+	bool syncWasOn = current.syncStart;
+	bool autoAssignWas = current.audioAutoAssign;
+	bool promptedWas = current.audioAssignPrompted;
 	auto str = [&](const char *key, std::string &out) {
 		if (obs_data_has_user_value(d, key))
 			out = obs_data_get_string(d, key);
@@ -178,6 +180,11 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	if (next.audioAutoAssign != autoAssignWas)
 		next.audioAssignPrompted = true;
 
+	// 송출 중에는 SRT 출력·동기화·독 표시 방식만 막는다. 오디오 배정 스위치·처음 안내 응답은 AudioRouter가 방송·녹화가
+	// 끝날 때까지 지금 나가는 트랙을 옮기지 않으므로 받는다 — 막으면 방송 중에 뜬 안내 카드에 답할 수 없다.
+	if (streaming && !next.SameOutputSettings(current))
+		return {409, JsonReason(false, "streaming")};
+
 	if (!IsSafeHost(next.ingestHost))
 		return {400, JsonReason(false, "invalid_ingest_host")};
 	if (next.ingestPort < 1 || next.ingestPort > 65535)
@@ -185,7 +192,7 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	if (next.latencyMs < 20 || next.latencyMs > 8000)
 		return {400, JsonReason(false, "invalid_latency")};
 
-	if (!ConfigStore::Instance().Update([&](PluginConfig &c) {
+	if (!ConfigStore::Instance().Commit([&](PluginConfig &c) {
 		    std::string streamId = c.streamId;
 		    std::string passphrase = c.passphrase;
 		    std::vector<AudioTrackMapEntry> trackMap = c.audioTrackMap;
@@ -211,7 +218,7 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	// 동기화를 본방 송출 중에 켰다 — 「본방이 보내면 우리도 보낸다」를 지키려면 다음 방송을 기다리지 않고
 	// 지금 시작한다. 시작 경로는 본방 STARTING과 같다(키·GOP 검사 포함). 브리지 워커 스레드라 UI 스레드로 넘긴다.
 	// 🔴 이미 돌던 인코더는 keyint를 못 바꾸므로(x264) 그때는 encoder_active로 거절된다 — 본방을 다시 켜야 한다.
-	if (next.syncStart && !syncWasOn && obs_frontend_streaming_active() && !StreamTarget::Instance().IsActive()) {
+	if (next.syncStart && !syncWasOn && !streaming && obs_frontend_streaming_active()) {
 		obs_log(LOG_INFO, "sync switched on while main stream is live — starting SRT output now");
 		RunInUiThread([]() { OnStreamingStarting(); });
 	}
@@ -284,6 +291,42 @@ void SetError(StreamPhase phase, const std::string &code)
 	});
 }
 
+// 본방 출력의 starting 신호 — obs_output_start가 그 자리에서 성공했을 때만 온다(obs-output.c obs_output_start,
+// 스트림 지연이면 obs-output-delay.c obs_output_delay_start). 아직 접속 중이거나 지연을 기다리는 중이어도 온다.
+std::atomic<bool> g_mainStartAccepted{false};
+
+void OnMainOutputStarting(void *, calldata_t *)
+{
+	g_mainStartAccepted = true;
+}
+
+// 본방 시작이 그 자리에서 실패하면(OBSBasic::StartStreaming → DisplayStreamStartError) OBS는 STREAMING_STOPPED를
+// 보내지 않아 우리 출력만 남는다. OBS는 STREAMING_STARTING을 보낸 같은 호출 안에서 본방 obs_output_start를 부르므로
+// 다음 이벤트 루프 차례에 결과가 나와 있다. 시간으로 재지 않는다 — 접속이 느리거나 스트림 지연을 켠 본방은
+// start 신호(obs_frontend_streaming_active)가 몇 초~수십 초 뒤에 온다. 그 뒤의 실패는 OBS가 STREAMING_STOPPED를 보낸다.
+void StopIfMainStreamRejected()
+{
+	obs_output_t *mainOutput = obs_frontend_get_streaming_output();
+	if (!mainOutput)
+		return; // 본방 출력이 없으면 인코더를 못 빌려 Start가 이미 실패했다
+	signal_handler_t *sh = obs_output_get_signal_handler(mainOutput);
+	g_mainStartAccepted = false;
+	signal_handler_connect(sh, "starting", OnMainOutputStarting, nullptr);
+
+	auto *main = static_cast<QMainWindow *>(obs_frontend_get_main_window());
+	QTimer::singleShot(0, main, [mainOutput, sh]() {
+		signal_handler_disconnect(sh, "starting", OnMainOutputStarting, nullptr);
+		// 본방 송출 중에 동기화를 켠 경로는 starting이 다시 오지 않는다 — 이미 보내고 있으면 받아들인 것이다.
+		bool accepted = g_mainStartAccepted || obs_frontend_streaming_active() || obs_output_active(mainOutput);
+		obs_output_release(mainOutput);
+		if (accepted)
+			return;
+		obs_log(LOG_WARNING, "main stream did not start — stopping SRT output");
+		StreamTarget::Instance().Stop();
+		SetError(StreamPhase::Error, "main_stream_failed");
+	});
+}
+
 void OnStreamingStarting()
 {
 	// 본방 인코더가 돌기 전 마지막 배정 정리 — 이후 방송 중에는 이미 나가는 배정을 옮기지 않는다.
@@ -320,15 +363,7 @@ void OnStreamingStarting()
 		return;
 	}
 
-	// 본방 출력이 비동기로 실패하면(키 오류 등) 우리 출력만 남는다 — 확인 후 같이 멈춘다.
-	auto *main = static_cast<QMainWindow *>(obs_frontend_get_main_window());
-	QTimer::singleShot(kMainStreamGuardMs, main, []() {
-		if (!obs_frontend_streaming_active() && StreamTarget::Instance().IsActive()) {
-			obs_log(LOG_WARNING, "main stream is not active — stopping SRT output");
-			StreamTarget::Instance().Stop();
-			SetError(StreamPhase::Error, "main_stream_failed");
-		}
-	});
+	StopIfMainStreamRejected();
 }
 
 void OnFrontendEvent(enum obs_frontend_event event, void *)
@@ -354,6 +389,7 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 			QObject::connect(g_statsTimer, &QTimer::timeout, []() { StreamTarget::Instance().PollStats(); });
 			g_statsTimer->start(1000);
 		}
+		AudioRouter::Instance().CollectionChanged();
 		AudioRouter::Instance().Reconcile("loaded");
 		RegisterMarkHotkey(); // 프로필 설정을 읽어야 해서 로드 뒤에
 		break;
@@ -362,7 +398,11 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 		AudioRouter::Instance().SetLoading(true);
 		break;
 	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED:
+		AudioRouter::Instance().CollectionChanged();
 		AudioRouter::Instance().SetLoading(false);
+		break;
+	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_RENAMED:
+		AudioRouter::Instance().CollectionRenamed();
 		break;
 	case OBS_FRONTEND_EVENT_RECORDING_STARTING:
 		AudioRouter::Instance().Reconcile("recording starting");

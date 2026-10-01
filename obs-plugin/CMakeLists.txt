@@ -57,6 +57,8 @@ target_sources(
     src/pairing-code.hpp
     src/pairing.cpp
     src/pairing.hpp
+    src/private-file.cpp
+    src/private-file.hpp
     src/srt-target.cpp
     src/srt-target.hpp
     src/srt-url.cpp

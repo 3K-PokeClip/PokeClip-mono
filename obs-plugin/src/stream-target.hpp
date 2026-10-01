@@ -2,6 +2,7 @@
 
 #include "config.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -15,7 +16,8 @@ struct calldata;
 namespace pokeclip {
 
 // 우리 서버로 가는 SRT+MPEG-TS 출력 하나. obs-multi-rtmp PushWidgetImpl의 출력 수명 관리를 이식했다.
-// Start/Stop/ForceStop/PollStats는 UI 스레드에서만 부른다.
+// 공개 함수는 모두(IsActive 포함) UI 스레드에서만 부른다 — 출력 포인터를 UI 스레드가 해제한다.
+// 다른 스레드는 AppState의 phase(IsStreamingPhase)를 본다.
 class StreamTarget {
 public:
 	static StreamTarget &Instance();
@@ -54,6 +56,10 @@ private:
 	};
 
 	struct obs_output *output_ = nullptr;
+	// obs_output_start 뒤 SRT 접속을 마치기(start 신호) 전 — 이 동안 obs_output_active는 거짓이다.
+	std::atomic<bool> connecting_{false};
+	// 접속하는 사이 정지를 받았다(본방이 먼저 멈췄다) — 붙자마자 멈춘다.
+	std::atomic<bool> stopWhenConnected_{false};
 	// 우리가 만든 오디오 인코더만(생성 참조를 우리가 쥔다). 출력이 제 참조를 놓은 뒤 Release()에서 놓는다.
 	std::vector<struct obs_encoder *> ownedAudioEncoders_;
 	std::unique_ptr<SignalContext> signalContext_;

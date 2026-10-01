@@ -29,6 +29,12 @@ public:
 	// 여러 시그널을 한 번의 Reconcile로 모은다.
 	void Schedule(const char *reason);
 
+	// 전역 장치의 원래 체크 열쇠는 장면 컬렉션 이름을 쓴다(ch:N@<이름>). OBS의 이름 바꾸기는 새 이름으로 컬렉션을
+	// 다시 불러와 CHANGED를 보낸 뒤에 RENAMED를 보내므로(OBSBasic_SceneCollections.cpp SetupRenameSceneCollection),
+	// CHANGED 때 이전 이름을 남겨 두었다가 RENAMED에서 열쇠를 옮긴다. 둘 다 UI 스레드.
+	void CollectionChanged(); // FINISHED_LOADING · SCENE_COLLECTION_CHANGED
+	void CollectionRenamed(); // SCENE_COLLECTION_RENAMED
+
 private:
 	AudioRouter() = default;
 
@@ -52,6 +58,8 @@ private:
 	bool deferRetryArmed_ = false;      // UI 스레드 전용 — 보류 중 다시 확인할 타이머가 걸려 있다
 	bool initialized_ = false;
 	std::string lastLogged_;
+	std::string collection_;         // UI 스레드 전용 — 지금 장면 컬렉션 이름
+	std::string previousCollection_; // UI 스레드 전용 — 마지막 CHANGED 전의 이름
 };
 
 } // namespace pokeclip

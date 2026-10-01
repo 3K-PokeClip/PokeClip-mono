@@ -36,6 +36,12 @@ struct PluginConfig {
 	std::string markHotkey;
 
 	bool HasKey() const { return !streamId.empty(); }
+	// 송출 중에 바꾸면 안 되는 값(SRT 출력·동기화·독 표시 방식)이 같은가. 오디오 배정 값은 보지 않는다.
+	bool SameOutputSettings(const PluginConfig &o) const
+	{
+		return ingestHost == o.ingestHost && ingestPort == o.ingestPort && sendPassphrase == o.sendPassphrase &&
+		       latencyMs == o.latencyMs && syncStart == o.syncStart && forceFallback == o.forceFallback;
+	}
 	const std::string &ClipBase() const { return clipApiBase.empty() ? apiBase : clipApiBase; }
 };
 
@@ -45,8 +51,12 @@ public:
 
 	void Load();
 	PluginConfig Get() const;
-	// 변경 후 즉시 저장한다. 저장 실패 시 false.
+	// 변경 후 즉시 저장한다. 저장 실패 시 false지만 메모리에는 남는다 — 이미 OBS에 적용한 값(트랙 체크 백업 등)을
+	// 이번 실행 동안이라도 기억해야 하는 경로용.
 	bool Update(const std::function<void(PluginConfig &)> &mutate);
+	// Update와 같되 저장에 실패하면 메모리도 되돌린다 — 실패를 독에 알리고 상태를 바꾸지 않는 경로(페어링·연결 해제·
+	// 설정 저장)용. 안 되돌리면 독은 옛 상태를 보이는데 다음 방송은 바뀐 값으로 돈다.
+	bool Commit(const std::function<void(PluginConfig &)> &mutate);
 
 private:
 	bool SaveLocked();

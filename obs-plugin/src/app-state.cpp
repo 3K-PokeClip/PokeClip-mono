@@ -25,6 +25,12 @@ const char *PhaseName(StreamPhase phase)
 	return "idle";
 }
 
+bool IsStreamingPhase(StreamPhase phase)
+{
+	return phase == StreamPhase::Starting || phase == StreamPhase::Live || phase == StreamPhase::Reconnecting ||
+	       phase == StreamPhase::Stopping;
+}
+
 AppState &AppState::Instance()
 {
 	static AppState state;

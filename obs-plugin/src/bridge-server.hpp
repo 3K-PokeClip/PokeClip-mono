@@ -42,7 +42,6 @@ public:
 	bool Running() const { return running_.load(); }
 	int Port() const { return port_; }
 	bool HelloSeen() const { return helloSeen_.load(); }
-	void ResetHello() { helloSeen_ = false; }
 
 	// 토큰은 URL 조각(#)으로 넘긴다 — 서버로 전송되지 않고, 페이지가 읽은 뒤 주소창에서 지운다.
 	std::string DockUrl() const;

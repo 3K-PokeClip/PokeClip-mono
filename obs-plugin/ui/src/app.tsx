@@ -49,7 +49,9 @@ export function App({ bridge }: { bridge: Bridge }) {
       .hello()
       .then((h) => {
         setVersion(h.pluginVersion);
-        setState(h.state);
+        // 구독(SSE) 첫 프레임이 먼저 왔으면 그쪽이 더 새 상태다 — 옛 스냅샷으로 되돌리면 화면이 한 번 뒤로 가고
+        // 마크 seq가 낮아져 지난 마크 토스트가 다시 뜬다.
+        setState((prev) => (prev && prev.version >= h.state.version ? prev : h.state));
       })
       .catch(() => setFatal(reasonText('unauthorized')));
     return bridge.subscribe(setState, setConnected);

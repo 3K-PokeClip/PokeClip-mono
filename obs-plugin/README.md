@@ -102,7 +102,7 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 
 ## 설정 파일
 
-`plugin_config/pokeclip-obs/pokeclip.json` (macOS `~/Library/Application Support/obs-studio/`, Windows `%APPDATA%\obs-studio\`) — 계정 단위라 OBS 프로필과 무관하다. POSIX에서는 권한 0600으로 쓴다.
+`plugin_config/pokeclip-obs/pokeclip.json` (macOS `~/Library/Application Support/obs-studio/`, Windows `%APPDATA%\obs-studio\`) — 계정 단위라 OBS 프로필과 무관하다. POSIX에서는 처음부터 권한 0600으로 쓴다(`.tmp`에 쓰고 rename, 이전 판은 `.bak`도 0600).
 
 | 키 | 기본값 | 뜻 |
 |---|---|---|
@@ -147,7 +147,7 @@ OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio
 6. **자리가 모자라면**(소리 나는 소스 6개 이상) 우선순위가 낮은 쪽이 믹스 전용이 되고 독에 경고가 뜬다.
 7. **방송·녹화·리플레이 버퍼 중에는** 지금 트랙에서 나가고 있는 소스를 옮기지 않는다(지웠다 되살린 소스가 저장값을 들고 와도 그 사이 트랙을 받은 소스를 남긴다). 새 소스만 빈 트랙에 들어간다(트랙 체크만 바뀌고 인코더 설정은 그대로라 송출에 영향 없음). **방송·녹화 중에 자동 배정이 새로 켜지면**(스위치·페어링) 처음 적용은 모든 소스를 다시 쓰므로 끝날 때까지 미룬다 — 독에 「자동 배정 대기」, 그동안은 OBS 설정 그대로.
 8. 자동 배정이 켜져 있으면 트랙 2~6 체크(본방 트랙 제외)는 플러그인이 맡는다 — OBS 고급 오디오 속성에서 바꿔도 되돌아간다. 손으로 정하려면 독 「고급 설정」에서 끈다.
-9. **원래 체크는 되돌린다** — 소스마다 처음 쓰기 전의 트랙 2~6 체크를 `audio_mixer_backup`에 남기고, 자동 배정을 끄거나 연결을 해제하면 그 값으로 되돌린다(방송·녹화·리플레이 버퍼 중이면 끝난 뒤). 어떤 트랙이 새로 본방 트랙이 되면 그 트랙 체크도 곧바로 되돌린다 — 자동 배정이 스템으로 바꿔 놓은 채면 시청자가 소스 하나만 듣는다. 본방에서 빠지는 트랙은 그동안 스트리머가 짠 체크를 원래 값으로 옮겨 둔다. **모두 소스 단위**다 — 다른 장면 컬렉션의 소스는 그 컬렉션을 열 때 맞추고, 끄기로 지우는 기억도 되돌린 소스 것뿐이다. 전역 장치(데스크탑·마이크)는 컬렉션마다 따로 저장되므로 백업도 컬렉션별로 나눈다. 자동 배정 중에 새로 만든 소스는 원래 체크가 없어(OBS 기본은 전부 켜짐) 믹스만으로 돌아간다.
+9. **원래 체크는 되돌린다** — 소스마다 처음 쓰기 전의 트랙 2~6 체크를 `audio_mixer_backup`에 남기고, 자동 배정을 끄거나 연결을 해제하면 그 값으로 되돌린다(방송·녹화·리플레이 버퍼 중이면 끝난 뒤). 어떤 트랙이 새로 본방 트랙이 되면 그 트랙 체크도 곧바로 되돌린다 — 자동 배정이 스템으로 바꿔 놓은 채면 시청자가 소스 하나만 듣는다. 본방에서 빠지는 트랙은 그동안 스트리머가 짠 체크를 원래 값으로 옮겨 둔다. **모두 소스 단위**다 — 다른 장면 컬렉션의 소스는 그 컬렉션을 열 때 맞추고, 끄기로 지우는 기억도 되돌린 소스 것뿐이다. 전역 장치(데스크탑·마이크)는 컬렉션마다 따로 저장되므로 백업도 컬렉션별로 나눈다(컬렉션 이름을 바꾸면 백업도 새 이름으로 옮긴다). 자동 배정 중에 새로 만든 소스는 원래 체크가 없어(OBS 기본은 전부 켜짐) 믹스만으로 돌아간다.
 
 🔴 **스트리머의 녹화 트랙도 같은 체크를 쓴다.** 고급 출력 녹화에서 트랙 2~6을 쓰면 녹화 내용도 이 배정을 따른다. 본방·VOD 트랙은 위 2번대로 건드리지 않지만, 녹화 전용으로 쓰는 트랙은 구분할 수 없다 — 그런 스트리머는 자동 배정을 끈다.
 
@@ -178,7 +178,7 @@ OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio
 | `GET /api/events` | Bearer | SSE `event: state` (상태가 바뀔 때, 15초 keep-alive). EventSource는 헤더를 못 붙여 페이지는 fetch 스트리밍으로 읽는다 |
 | `POST /api/pair` `{code}` | Bearer | 200 / 400 invalid_format / 404 not_found / 410 expired / 409 already_used·streaming / 429 rate_limited / 502 network·server_error |
 | `POST /api/unpair` | Bearer | 송출 중이면 409 |
-| `GET·PUT /api/config` | Bearer | 위 설정 표의 비밀 아닌 키. PUT은 `api_base`·`clip_api_base`를 무시한다 |
+| `GET·PUT /api/config` | Bearer | 위 설정 표의 비밀 아닌 키. PUT은 `api_base`·`clip_api_base`를 무시한다. 송출 중이면 409 streaming — 단 `audio_auto_assign`·`audio_assign_prompted`만 바뀐 요청은 받는다(배정은 방송·녹화가 끝난 뒤 적용) |
 | `POST /api/mark` | Bearer | 독 「지금 이 순간 표시」 — 202 받음 / 409 mark_not_live·no_key·invalid_key·mark_insecure(거절도 상태 `marks`로 온다) / 429 mark_too_soon. 보낸 결과는 상태 `marks`로 온다 |
 
 Host가 `127.0.0.1:<포트>`가 아니거나 `Origin`이 다른 오리진이면 403, 토큰이 없거나 틀리면 401, 본문 16KB 초과 413.

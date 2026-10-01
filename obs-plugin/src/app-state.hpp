@@ -16,6 +16,9 @@ namespace pokeclip {
 enum class StreamPhase { Idle, Starting, Live, Reconnecting, Stopping, Error };
 
 const char *PhaseName(StreamPhase phase);
+// 우리 SRT 출력이 시작했거나 아직 멈추는 중이다. 브리지 워커처럼 UI 스레드가 아닌 곳은 출력 객체 대신 이걸 본다
+// (출력 포인터는 UI 스레드가 해제한다).
+bool IsStreamingPhase(StreamPhase phase);
 
 struct EncoderChecks {
 	std::optional<bool> gop2s;

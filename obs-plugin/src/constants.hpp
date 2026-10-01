@@ -33,9 +33,6 @@ inline constexpr int kForcedKeyintSec = 2;
 inline constexpr int kReconnectRetries = 20;
 inline constexpr int kReconnectDelaySec = 2;
 
-// 본방 출력이 비동기로 실패했는지 확인하는 대기 시간.
-inline constexpr int kMainStreamGuardMs = 5000;
-
 // libobs는 "stop" 신호를 먼저 보내고 인코더를 멈춘 스레드가 나중에 active를 내린다(obs-output.c
 // end_data_capture). 출력 해제는 그 뒤에 해야 하므로 이 간격으로 확인한다 — 최대 간격 × 횟수.
 inline constexpr int kReleasePollMs = 100;

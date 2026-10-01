@@ -126,11 +126,17 @@ std::vector<AudioSourceInfo> Enumerate(const MonitoringPending &monitoring)
 
 // 전역 장치는 장면 컬렉션마다 따로 저장된다(컬렉션 JSON의 DesktopAudioDevice1·AuxAudioDevice1 — 트랙 체크도 따로).
 // 원래 체크 백업만 컬렉션으로 나눈다. uuid 소스는 이미 전역에서 유일하다.
-void ScopeBackupKeys(std::vector<AudioSourceInfo> &sources)
+std::string CurrentCollectionName()
 {
 	char *name = obs_frontend_get_current_scene_collection();
 	std::string collection = name ? name : "";
 	bfree(name);
+	return collection;
+}
+
+void ScopeBackupKeys(std::vector<AudioSourceInfo> &sources)
+{
+	std::string collection = CurrentCollectionName();
 	for (AudioSourceInfo &s : sources) {
 		if (s.key.rfind("ch:", 0) == 0)
 			s.backupKey = s.key + "@" + collection;
@@ -256,6 +262,28 @@ void AudioRouter::SetLoading(bool loading)
 	loading_ = loading;
 	if (!loading)
 		Reconcile("collection");
+}
+
+void AudioRouter::CollectionChanged()
+{
+	previousCollection_ = collection_;
+	collection_ = CurrentCollectionName();
+}
+
+void AudioRouter::CollectionRenamed()
+{
+	std::string from = previousCollection_;
+	collection_ = CurrentCollectionName();
+	if (from.empty())
+		return;
+	// 원래 체크 백업은 UI 스레드만 쓴다(설정 저장 요청은 이 값을 보존한다) — 읽고 쓰는 사이 바뀌지 않는다.
+	std::vector<AudioMixerBackup> backup = ConfigStore::Instance().Get().audioMixerBackup;
+	if (!RenameBackupCollection(backup, from, collection_))
+		return;
+	ConfigStore::Instance().Update([&](PluginConfig &c) { c.audioMixerBackup = backup; });
+	obs_log(LOG_INFO, "audio routing: moved original track checks to renamed scene collection '%s' → '%s'",
+		from.c_str(), collection_.c_str());
+	Schedule("collection renamed");
 }
 
 void AudioRouter::Schedule(const char *reason)

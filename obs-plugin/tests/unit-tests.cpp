@@ -3,6 +3,8 @@
 // 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4).
 #include "audio-assign.hpp"
 #include "bridge-server.hpp"
+#include "config.hpp"
+#include "private-file.hpp"
 #include "encoder-opts.hpp"
 #include "mark-policy.hpp"
 #include "pairing-code.hpp"
@@ -20,8 +22,13 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <string>
 #include <vector>
+
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 namespace {
 
@@ -665,6 +672,35 @@ TEST(audio_backup_key_scopes_global_device_by_collection)
 	CHECK(writes.empty());
 }
 
+TEST(audio_backup_follows_renamed_collection)
+{
+	// OBS는 새 이름으로 컬렉션을 다시 불러온 뒤에 RENAMED를 보낸다 — 그 사이 계산이 자동 배정된 체크(0x09)를
+	// 새 이름의 원래 값처럼 남겼다.
+	std::vector<AudioMixerBackup> backup = {{"ch:3@방송용", 0x03, 0},
+						{"ch:3@새이름", 0x09, 0},
+						{"ch:1@새이름", 0x11, 0},
+						{"ch:1@녹화용", 0x07, 0},
+						{"uuid:game", 0x05, 0}};
+	CHECK(RenameBackupCollection(backup, "방송용", "새이름"));
+	CHECK_EQ(backup.size(), 4u);
+	CHECK((backup[0] == AudioMixerBackup{"ch:3@새이름", 0x03, 0}));
+	CHECK((backup[1] == AudioMixerBackup{"ch:1@새이름", 0x11, 0})); // 옮겨 오지 않는 채널은 그대로
+	CHECK((backup[2] == AudioMixerBackup{"ch:1@녹화용", 0x07, 0})); // 다른 컬렉션도 그대로
+	CHECK((backup[3] == AudioMixerBackup{"uuid:game", 0x05, 0}));   // uuid 소스는 컬렉션을 안 단다
+
+	// 옮긴 열쇠로 되돌리기가 이름을 바꾸기 전의 원래 체크를 찾는다.
+	std::vector<AudioSourceInfo> sources = {Src("ch:3", "마이크", AudioKind::Mic, 3, 0x09)};
+	sources[0].backupKey = "ch:3@새이름";
+	std::vector<MixerWrite> writes = RestoreWrites(sources, backup, 0x3E);
+	CHECK_EQ(writes.size(), 1u);
+	CHECK_EQ(FirstWrite(writes).mixers, 0x03u);
+
+	std::vector<AudioMixerBackup> untouched = {{"ch:1@새이름", 0x07, 0}, {"ch:3@다른이름", 0x03, 0}};
+	CHECK(!RenameBackupCollection(untouched, "방송용", "새이름")); // 옮길 것이 없다
+	CHECK_EQ(untouched.size(), 2u);
+	CHECK(!RenameBackupCollection(backup, "새이름", "새이름"));
+}
+
 TEST(audio_restore_puts_back_original_checks)
 {
 	CHECK_EQ(RestoredMixers(0x03, 0x2D, 0x3E), 0x2Du); // 트랙 2~6 전부
@@ -905,6 +941,72 @@ TEST(audio_routing_view_marks_main_stream_and_hides_offscreen)
 	CHECK(deferred.deferred);
 	CHECK(DescribeRouting(deferred).find("deferred") != std::string::npos);
 }
+
+// ---------------------------------------------------------------- 설정
+
+TEST(config_audio_switches_are_not_output_settings)
+{
+	PluginConfig a;
+	a.ingestHost = "ingest.example";
+	a.ingestPort = 9000;
+	a.latencyMs = 120;
+	PluginConfig b = a;
+	b.audioAutoAssign = !a.audioAutoAssign;
+	b.audioAssignPrompted = !a.audioAssignPrompted;
+	CHECK(b.SameOutputSettings(a)); // 방송 중에도 받는다 — 처음 안내 카드의 답
+	b.ingestPort = 9001;
+	CHECK(!b.SameOutputSettings(a));
+	PluginConfig c = a;
+	c.syncStart = !a.syncStart;
+	CHECK(!c.SameOutputSettings(a));
+}
+
+#ifndef _WIN32
+TEST(private_file_is_owner_only_from_the_start)
+{
+	namespace fs = std::filesystem;
+	auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+	fs::path dir = fs::temp_directory_path() / ("pokeclip-private-test-" + std::to_string(stamp));
+	fs::create_directories(dir);
+	const std::string path = (dir / "pokeclip.json").string();
+	auto modeOf = [](const std::string &p) {
+		struct stat st {};
+		return stat(p.c_str(), &st) == 0 ? static_cast<unsigned>(st.st_mode & 0777) : 0u;
+	};
+	auto read = [](const std::string &p) {
+		std::ifstream in(p);
+		return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	};
+	mode_t oldMask = umask(022); // 흔한 기본값 — libobs 저장이면 tmp가 0644로 생긴다
+
+	CHECK(WritePrivateFileAtomic(path, "{\"passphrase\":\"first\"}"));
+	CHECK_EQ(modeOf(path), 0600u);
+	CHECK_EQ(read(path), std::string("{\"passphrase\":\"first\"}"));
+	CHECK(!fs::exists(path + ".tmp"));
+
+	// 지난 실행이 남긴 0644 tmp가 있어도 새 파일은 0600이다. 이전 파일은 .bak으로 남고(예전 판의 0644였어도) 0600이다.
+	std::ofstream(path + ".tmp") << "stale";
+	chmod((path + ".tmp").c_str(), 0644);
+	chmod(path.c_str(), 0644);
+	CHECK(WritePrivateFileAtomic(path, "second"));
+	CHECK_EQ(modeOf(path), 0600u);
+	CHECK_EQ(read(path), std::string("second"));
+	CHECK_EQ(read(path + ".bak"), std::string("{\"passphrase\":\"first\"}"));
+	CHECK_EQ(modeOf(path + ".bak"), 0600u);
+
+	// tmp 자리의 심볼릭 링크는 따라가지 않는다 — 쓰기가 실패하고 링크 대상·원래 파일은 그대로다.
+	fs::path victim = dir / "victim";
+	std::ofstream(victim) << "keep";
+	fs::create_symlink(victim, path + ".tmp");
+	CHECK(!WritePrivateFileAtomic(path, "third"));
+	CHECK_EQ(read(victim.string()), std::string("keep"));
+	CHECK_EQ(read(path), std::string("second"));
+
+	umask(oldMask);
+	std::error_code ec;
+	fs::remove_all(dir, ec);
+}
+#endif
 
 // ---------------------------------------------------------------- 핫키 마킹 (A4)
 

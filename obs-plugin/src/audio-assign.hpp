@@ -126,6 +126,11 @@ struct ReservedSync {
 ReservedSync SyncReservedTracks(const std::vector<AudioSourceInfo> &sources,
 				const std::vector<AudioMixerBackup> &backup, uint32_t reserved);
 
+// 장면 컬렉션 이름이 바뀌었다 — 전역 장치의 원래 체크 열쇠(ch:N@<이름>)를 새 이름으로 옮긴다. 같은 채널에 새 이름으로
+// 이미 있던 것은 버린다: OBS는 새 이름으로 컬렉션을 다시 불러온 뒤에 이름 변경을 알리므로, 그 사이 계산이 지금(자동
+// 배정된) 체크를 원래 값처럼 남겼을 수 있다. 옮긴 것이 있으면 true.
+bool RenameBackupCollection(std::vector<AudioMixerBackup> &backup, const std::string &from, const std::string &to);
+
 struct AudioSourceView {
 	std::string name;
 	AudioKind kind = AudioKind::Other;

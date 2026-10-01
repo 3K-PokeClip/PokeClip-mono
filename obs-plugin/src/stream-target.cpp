@@ -136,6 +136,9 @@ bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 		config.ingestPort, KeyHintOf(config.streamId).c_str(),
 		config.sendPassphrase && !config.passphrase.empty() ? "on" : "off");
 
+	// start 신호는 접속 스레드에서 obs_output_start가 돌아오기 전에도 올 수 있다 — 먼저 세운다.
+	stopWhenConnected_ = false;
+	connecting_ = true;
 	if (!obs_output_start(output_)) {
 		const char *last = obs_output_get_last_error(output_);
 		errorCode = "start_failed";
@@ -151,8 +154,23 @@ bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 
 void StreamTarget::Stop()
 {
-	if (!IsActive())
+	if (!output_)
 		return;
+	if (!obs_output_active(output_)) {
+		// mpegts 출력은 접속 스레드가 SRT에 붙은 뒤에야 active가 된다(obs-ffmpeg-mpegts.c ffmpeg_mpegts_finalize).
+		// 그 전에는 obs_output_stop이 아무것도 안 하므로, 붙자마자 OnStart가 멈추게 표시만 해 둔다.
+		// 깃발을 먼저 세우고 접속 중인지 나중에 본다 — OnStart는 반대 순서라 둘 중 하나는 반드시 상대를 본다.
+		if (!connecting_)
+			return; // 이미 멈춘 출력(해제 대기)이다
+		stopWhenConnected_ = true;
+		if (connecting_) {
+			AppState::Instance().Mutate([](StateSnapshot &s) { s.phase = StreamPhase::Stopping; });
+			return;
+		}
+		if (!obs_output_active(output_))
+			return; // 그새 접속이 실패해 끝났다 — OnStop이 정리한다
+		// 그새 붙었다 — 아래에서 바로 멈춘다(OnStart가 깃발을 봤으면 한 번 더 부르지만 stopping 중이라 무시된다)
+	}
 	AppState::Instance().Mutate([](StateSnapshot &s) { s.phase = StreamPhase::Stopping; });
 	obs_output_stop(output_);
 }
@@ -188,6 +206,8 @@ void StreamTarget::Release()
 	// 출력보다 먼저 놓으면 출력이 아직 쥔 채라 파괴되지 않고, 출력 없이 실패한 시작에서는 여기가 유일한 정리다.
 	ReleaseOwnedEncoders();
 	signalContext_.reset(); // DisconnectSignals가 진행 중 콜백을 기다린 뒤라 안전하다
+	connecting_ = false;
+	stopWhenConnected_ = false;
 }
 
 bool StreamTarget::AttachAudioEncoders(obs_encoder_t *streamAudio, std::string &errorCode)
@@ -327,8 +347,22 @@ void StreamTarget::OnStarting(void *, calldata_t *)
 	AppState::Instance().Mutate([](StateSnapshot &s) { s.phase = StreamPhase::Starting; });
 }
 
-void StreamTarget::OnStart(void *, calldata_t *)
+void StreamTarget::OnStart(void *data, calldata_t *)
 {
+	auto *ctx = static_cast<SignalContext *>(data);
+	StreamTarget *self = ctx->self;
+	self->connecting_ = false;
+	if (self->stopWhenConnected_.exchange(false)) {
+		// 접속하는 사이 본방이 멈췄다 — 본방 없이 우리만 보내지 않게 붙자마자 멈춘다.
+		// 이 신호는 접속 스레드 안에서 온다. 여기서 obs_output_stop을 부르면 그 스레드를 join하려 하므로 UI 스레드로 넘긴다.
+		obs_log(LOG_INFO, "SRT output connected after the main stream stopped — stopping");
+		uint64_t generation = ctx->generation;
+		RunInUiThread([self, generation]() {
+			if (self->generation_ == generation)
+				self->Stop();
+		});
+		return;
+	}
 	obs_log(LOG_INFO, "SRT output started");
 	AppState::Instance().Mutate([](StateSnapshot &s) {
 		s.phase = StreamPhase::Live;
@@ -359,6 +393,8 @@ void StreamTarget::OnStop(void *data, calldata_t *params)
 	auto *ctx = static_cast<SignalContext *>(data);
 	StreamTarget *self = ctx->self;
 	uint64_t generation = ctx->generation;
+	self->connecting_ = false; // 접속 실패도 여기로 온다
+	self->stopWhenConnected_ = false;
 	int code = (int)calldata_int(params, "code");
 	auto *output = static_cast<obs_output_t *>(calldata_ptr(params, "output"));
 	const char *lastError = output ? obs_output_get_last_error(output) : nullptr;

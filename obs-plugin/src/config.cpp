@@ -1,14 +1,11 @@
 #include "config.hpp"
 
 #include "constants.hpp"
+#include "private-file.hpp"
 
 #include <obs-module.h>
 #include <plugin-support.h>
 #include <util/platform.h>
-
-#ifndef _WIN32
-#include <sys/stat.h>
-#endif
 
 namespace pokeclip {
 
@@ -148,6 +145,17 @@ bool ConfigStore::Update(const std::function<void(PluginConfig &)> &mutate)
 	return SaveLocked();
 }
 
+bool ConfigStore::Commit(const std::function<void(PluginConfig &)> &mutate)
+{
+	std::lock_guard lock(mutex_);
+	PluginConfig previous = config_;
+	mutate(config_);
+	if (SaveLocked())
+		return true;
+	config_ = std::move(previous);
+	return false;
+}
+
 bool ConfigStore::SaveLocked()
 {
 	if (path_.empty())
@@ -198,13 +206,16 @@ bool ConfigStore::SaveLocked()
 		}
 	}
 
+#ifdef _WIN32
 	bool ok = obs_data_save_json_pretty_safe(data, path_.c_str(), "tmp", "bak");
+#else
+	// streamid·passphrase가 든다 — 처음부터 0600으로 쓴다. libobs 저장은 tmp를 umask 권한(보통 0644)으로 만들어
+	// rename하므로, 뒤에 chmod를 걸어도 그 사이 남이 읽을 틈이 있다.
+	const char *json = obs_data_get_json_pretty(data);
+	bool ok = json && *json && WritePrivateFileAtomic(path_, json);
+#endif
 	obs_data_release(data);
 
-#ifndef _WIN32
-	if (ok)
-		chmod(path_.c_str(), S_IRUSR | S_IWUSR);
-#endif
 	if (!ok)
 		obs_log(LOG_WARNING, "config save failed");
 	return ok;

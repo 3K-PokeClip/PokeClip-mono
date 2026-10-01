@@ -152,6 +152,44 @@ ReservedSync SyncReservedTracks(const std::vector<AudioSourceInfo> &sources,
 	return r;
 }
 
+bool RenameBackupCollection(std::vector<AudioMixerBackup> &backup, const std::string &from, const std::string &to)
+{
+	// 열쇠는 "ch:<번호>@<컬렉션>" — 번호에는 @가 없으므로 첫 @ 뒤가 컬렉션 이름이다. uuid 소스는 컬렉션을 안 단다.
+	auto split = [](const std::string &key, std::string &channel, std::string &collection) {
+		size_t at = key.find('@');
+		if (key.rfind("ch:", 0) != 0 || at == std::string::npos)
+			return false;
+		channel = key.substr(0, at);
+		collection = key.substr(at + 1);
+		return true;
+	};
+	if (from == to)
+		return false;
+
+	std::string channel;
+	std::string collection;
+	std::set<std::string> moving;
+	for (const AudioMixerBackup &b : backup) {
+		if (split(b.key, channel, collection) && collection == from)
+			moving.insert(channel);
+	}
+	if (moving.empty())
+		return false;
+
+	std::vector<AudioMixerBackup> next;
+	for (AudioMixerBackup b : backup) {
+		if (split(b.key, channel, collection) && moving.count(channel)) {
+			if (collection == to)
+				continue; // 이름 변경 중 다시 불러오며 생긴 것 — 옮겨 오는 원래 값이 맞다
+			if (collection == from)
+				b.key = channel + "@" + to;
+		}
+		next.push_back(std::move(b));
+	}
+	backup = std::move(next);
+	return true;
+}
+
 AssignmentResult ComputeAssignment(const AssignmentInput &in)
 {
 	AssignmentResult r;
