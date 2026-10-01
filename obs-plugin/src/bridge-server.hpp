@@ -28,6 +28,7 @@ struct BridgeCallbacks {
 	std::function<Reply()> unpair;
 	std::function<std::string()> getConfig;
 	std::function<Reply(const std::string &body)> putConfig;
+	std::function<Reply()> mark; // A4: 독의 「지금 표시」 버튼 — 핫키와 같은 대기열
 };
 
 class BridgeServer {

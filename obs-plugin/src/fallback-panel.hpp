@@ -20,9 +20,16 @@ private:
 	void Render(const StateSnapshot &snapshot);
 	void OnPairClicked();
 	void OnUnpairClicked();
+	void OnMarkClicked();
+	void OnAssignClicked();
 
 	QLabel *status_ = nullptr;
 	QLabel *checks_ = nullptr;
+	QLabel *audio_ = nullptr;
+	QPushButton *assign_ = nullptr; // 오디오 트랙 자동 배정 켜기 — 확인 창으로 묻는다(독의 처음 안내와 같은 내용)
+	bool audioCustom_ = false;      // 마지막 상태: 스트리머가 트랙 2~6을 직접 짜 뒀다
+	QLabel *marks_ = nullptr;
+	QPushButton *mark_ = nullptr;
 	QLabel *message_ = nullptr;
 	QLineEdit *code_ = nullptr;
 	QPushButton *pair_ = nullptr;

@@ -12,7 +12,7 @@ async function boot() {
     return;
   }
   if (import.meta.env.DEV) {
-    // 토큰 없이 개발 서버로 열면 목 브리지 (?mock=unpaired|idle|live|reconnecting|error|no_key|encoder)
+    // 토큰 없이 개발 서버로 열면 목 브리지 (?mock=unpaired|idle|live|reconnecting|error|no_key|encoder|audio_overflow|audio_manual)
     const { createMockBridge } = await import('./lib/bridge-mock');
     const scenario = new URLSearchParams(location.search).get('mock') ?? 'unpaired';
     render(<App bridge={createMockBridge(scenario)} />, root);

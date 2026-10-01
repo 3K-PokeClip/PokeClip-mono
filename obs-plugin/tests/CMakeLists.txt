@@ -13,8 +13,10 @@ find_package(Threads REQUIRED)
 add_executable(
   pokeclip-unit-tests
   unit-tests.cpp
+  "${PLUGIN_DIR}/src/audio-assign.cpp"
   "${PLUGIN_DIR}/src/bridge-server.cpp"
   "${PLUGIN_DIR}/src/encoder-opts.cpp"
+  "${PLUGIN_DIR}/src/mark-policy.cpp"
   "${PLUGIN_DIR}/src/pairing-code.cpp"
   "${PLUGIN_DIR}/src/srt-url.cpp"
 )

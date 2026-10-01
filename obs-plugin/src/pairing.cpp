@@ -2,6 +2,7 @@
 #include "pairing-code.hpp"
 
 #include "app-state.hpp"
+#include "audio-router.hpp"
 #include "config.hpp"
 #include "constants.hpp"
 #include "srt-target.hpp"
@@ -160,6 +161,7 @@ PairingResult PairWithCode(const std::string &rawCode)
 		}
 	});
 	obs_log(LOG_INFO, "paired (key …%s)", KeyHintOf(streamId).c_str());
+	AudioRouter::Instance().Schedule("paired"); // 페어링된 OBS부터 오디오 트랙을 자동 배정한다
 	result.ok = true;
 	return result;
 }
@@ -184,6 +186,7 @@ PairingResult Unpair()
 		s.keyHint.clear();
 	});
 	obs_log(LOG_INFO, "unpaired");
+	AudioRouter::Instance().Schedule("unpaired");
 	result.ok = true;
 	return result;
 }

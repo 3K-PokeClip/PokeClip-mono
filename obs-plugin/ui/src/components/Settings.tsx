@@ -43,9 +43,9 @@ function Toggle({
   );
 }
 
-// API 주소(api_base)는 시안대로 화면에서 뺐다 — 스트리머가 바꿀 값이 아니다.
-// 개발용으로 바꿀 때는 pokeclip.json 이나 PUT /api/config 로 넣는다.
-export function Settings({ bridge, locked }: { bridge: Bridge; locked: boolean }) {
+// API 주소(api_base)는 시안대로 화면에서 뺐다 — 스트리머가 바꿀 값이 아니고 브리지로도 못 바꾼다(설정 파일 전용).
+// autoAssign은 지금 상태 — 처음 안내 카드로 켜고 끈 것이 열어 둔 설정 초안에도 반영되게(낡은 초안 저장으로 꺼지지 않게).
+export function Settings({ bridge, locked, autoAssign }: { bridge: Bridge; locked: boolean; autoAssign: boolean }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<PluginSettings | null>(null);
   const [saving, setSaving] = useState(false);
@@ -59,6 +59,10 @@ export function Settings({ bridge, locked }: { bridge: Bridge; locked: boolean }
       .catch(() => setMessage({ ok: false, text: '설정을 불러오지 못했어요.' }));
   }, [open]);
 
+  useEffect(() => {
+    setDraft((d) => (d && d.audio_auto_assign !== autoAssign ? { ...d, audio_auto_assign: autoAssign } : d));
+  }, [autoAssign]);
+
   const set = <K extends keyof PluginSettings>(key: K, value: PluginSettings[K]) => {
     setDraft((d) => (d ? { ...d, [key]: value } : d));
     setMessage(null);
@@ -68,7 +72,8 @@ export function Settings({ bridge, locked }: { bridge: Bridge; locked: boolean }
     e.preventDefault();
     if (!draft) return;
     setSaving(true);
-    const { api_base: _unused, ...editable } = draft;
+    // 처음 안내에 답했는지(audio_assign_prompted)는 안내 카드·스위치가 정한다 — 이 저장이 옛 값으로 덮지 않게 뺀다.
+    const { api_base: _unused, clip_api_base: _dev, audio_assign_prompted: _prompted, ...editable } = draft;
     const result = await bridge.putSettings(editable);
     setSaving(false);
     if (result.ok) {
@@ -140,6 +145,14 @@ export function Settings({ bridge, locked }: { bridge: Bridge; locked: boolean }
               hint="본 방송이 시작·정지할 때 함께 전송하고 멈춰요. 잠시 끊겨 재연결 중일 땐 유지돼요."
               checked={draft.sync_start}
               onChange={(v) => set('sync_start', v)}
+            />
+            {/* A2 — 트랙 2~6을 소스별 스템으로 나눈다. 끄면 OBS 고급 오디오 설정의 트랙 체크를 그대로 보낸다. */}
+            <Toggle
+              id="setting-audio-auto"
+              label="오디오 트랙 자동 배정"
+              hint="소리 나는 소스를 트랙 2~6에 하나씩 나눠 실어 웹 편집기에서 소리를 따로 켜고 끌 수 있어요. 처음 켤 때의 트랙 체크를 기억해 끄면 되돌려요. 녹화 트랙도 같은 배정을 써요."
+              checked={draft.audio_auto_assign}
+              onChange={(v) => set('audio_auto_assign', v)}
             />
             <Toggle id="setting-passphrase" label="SRT 암호 사용" checked={draft.send_passphrase} onChange={(v) => set('send_passphrase', v)} />
             <Toggle

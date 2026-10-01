@@ -1,3 +1,5 @@
+import type { AudioKind, MarkStats } from './types';
+
 // 사용자 문구 — 플러그인 data/locale/ko-KR.ini 의 Reason.* 과 같은 뜻을 유지한다.
 export const REASON: Record<string, string> = {
   invalid_format: '8자리 코드(XXXX-XXXX)를 입력하세요.',
@@ -36,6 +38,48 @@ export const REASON: Record<string, string> = {
   invalid_ingest_port: '포트는 1–65535 사이여야 해요.',
   invalid_latency: '지연은 20–8000ms 사이여야 해요.',
   unauthorized: '독 페이지 인증이 만료됐어요. OBS를 다시 시작하세요.',
+  output_no_multitrack: 'OBS 출력이 다중 오디오 트랙을 받지 않아요.',
+  audio_encoder_failed: '오디오 트랙 인코더를 만들지 못했어요.',
+  audio_track_attach_failed: '오디오 트랙을 출력에 붙이지 못했어요.',
+  mark_not_live: 'PokeClip으로 전송 중일 때만 표시할 수 있어요.',
+  mark_too_soon: '방금 표시했어요. 2초 뒤에 다시 누를 수 있어요.',
+  mark_unsupported: 'PokeClip 서버가 아직 순간 표시를 받지 않아요.',
+  mark_unauthorized: '서버가 스트림 키를 거절해 표시하지 못했어요. 다시 연결하세요.',
+  mark_rejected: '서버가 표시 요청을 거절했어요.',
+  mark_no_broadcast: 'PokeClip이 아직 이 방송을 찾지 못했어요.',
+  mark_not_ready: '녹화가 막 시작돼 아직 표시할 자리가 없어요.',
+  mark_expired: '10분 동안 보내지 못해 표시를 버렸어요.',
+  mark_rate_limited: 'PokeClip 서버가 잠시 표시를 받지 않아요.',
+  mark_insecure: 'API 주소가 https가 아니라 표시를 보내지 않았어요. 설정 파일의 api_base를 https로 바꾸세요.',
+  // 독 전용 — 브리지 요청 자체가 실패했다(플러그인이 멈췄거나 연결이 끊겼다)
+  bridge_unreachable: '플러그인과 연결이 끊겨 표시하지 못했어요. OBS를 다시 시작하세요.',
+};
+
+export type ToastTone = 'success' | 'warning';
+
+// 마크 결과(state.marks.result) → 토스트. 결과가 없으면 null.
+export function markToast(marks: MarkStats): { tone: ToastTone; message: string } | null {
+  switch (marks.result) {
+    case 'sent':
+      return { tone: 'success', message: '지금 이 순간을 표시했어요.' };
+    case 'retrying':
+      return { tone: 'warning', message: `${reasonText(marks.reason)} 자동으로 다시 보내요.` };
+    case 'failed':
+    case 'rejected':
+      return { tone: 'warning', message: reasonText(marks.reason) };
+    default:
+      return null;
+  }
+}
+
+// 오디오 트랙 목록의 소스 종류 표기 (src/audio-assign.cpp AudioKindName 과 같은 키).
+export const AUDIO_KIND_LABEL: Record<AudioKind, string> = {
+  mic: '마이크',
+  desktop: '데스크탑',
+  app: '앱',
+  media: '미디어',
+  browser: '브라우저',
+  other: '기타',
 };
 
 export function reasonText(code: string): string {

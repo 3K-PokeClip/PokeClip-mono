@@ -1,5 +1,7 @@
 #pragma once
 
+#include "audio-assign.hpp"
+
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -19,6 +21,8 @@ struct EncoderChecks {
 	std::optional<bool> gop2s;
 	std::optional<bool> res1080p;
 	std::optional<bool> sharedEncoder;
+	std::optional<bool> audioTracks; // A2: 6트랙이 출력에 붙었다
+	int audioTrackCount = 0;
 	int keyintSec = -1;
 	int width = 0;
 	int height = 0;
@@ -30,6 +34,18 @@ struct StreamStats {
 	uint64_t totalFrames = 0;
 	int droppedFrames = 0;
 	int64_t uptimeSec = 0;
+};
+
+// A4 핫키 마킹 — 보낸·대기·실패 개수와 마지막 결과. seq가 오를 때마다 독이 토스트를 한 번 띄운다.
+struct MarkStats {
+	std::string hotkey; // 지금 묶인 단축키(OBS 표기). 빈 문자열이면 안 묶였다
+	int sent = 0;       // 이번 방송에서 서버가 받은 수
+	int pending = 0;    // 보내는 중·다시 보낼 차례를 기다리는 수 (지난 방송 것 포함)
+	int failed = 0;     // 이번 방송에서 버린 수
+	uint64_t seq = 0;
+	std::string result; // sent · retrying · failed · rejected (seq와 함께 바뀐다)
+	std::string reason; // result의 사유 코드 (copy.ts REASON · locale Reason.*)
+	int64_t lastAt = 0; // 마지막으로 받아들인 누름의 시각(UTC epoch ms)
 };
 
 // 독 페이지·폴백 패널이 그리는 유일한 상태 원천. 비밀은 담지 않는다.
@@ -46,6 +62,8 @@ struct StateSnapshot {
 	bool darkTheme = true;
 	StreamStats stats;
 	EncoderChecks checks;
+	AudioRoutingView audio; // A2: 트랙 2~6에 어느 소스가 실리는지 (실제 트랙 비트 기준)
+	MarkStats marks;
 };
 
 class AppState {

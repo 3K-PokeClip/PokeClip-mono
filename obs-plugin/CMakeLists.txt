@@ -30,6 +30,10 @@ target_sources(
     src/plugin-main.cpp
     src/app-state.cpp
     src/app-state.hpp
+    src/audio-assign.cpp
+    src/audio-assign.hpp
+    src/audio-router.cpp
+    src/audio-router.hpp
     src/bridge-server.cpp
     src/bridge-server.hpp
     src/config.cpp
@@ -43,6 +47,12 @@ target_sources(
     src/fallback-panel.hpp
     src/gop-guard.cpp
     src/gop-guard.hpp
+    src/mark-hotkey.cpp
+    src/mark-hotkey.hpp
+    src/mark-policy.cpp
+    src/mark-policy.hpp
+    src/mark-sender.cpp
+    src/mark-sender.hpp
     src/pairing-code.cpp
     src/pairing-code.hpp
     src/pairing.cpp

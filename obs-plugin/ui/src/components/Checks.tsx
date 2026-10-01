@@ -42,6 +42,12 @@ export function Checks({ state }: { state: BridgeState }) {
       state: stateOf(checks.res1080p, 'warn'),
       srText: '해상도',
     },
+    {
+      label: '오디오 6트랙',
+      value: checks.audioTrackCount > 0 ? `AAC ×${checks.audioTrackCount}` : '—',
+      state: stateOf(checks.audioTracks),
+      srText: '오디오 트랙',
+    },
   ];
 
   return (

@@ -14,8 +14,11 @@ namespace pokeclip {
 // 독 id — OBS가 독 위치를 이 문자열로 저장한다. 바꾸면 사용자 배치가 초기화된다.
 inline constexpr const char *kDockId = "pokeclip-dock";
 
-// 페어링 교환 API 기본값. 운영 HTTPS 도메인이 정해지면 바꾼다 (ADR-036: dev 서버는 HTTP).
-inline constexpr const char *kDefaultApiBase = "http://dev.pokeclip.com";
+// 페어링 교환·마크 API 기본값. 운영 도메인이 정해지면 바꾼다. dev도 HTTPS다 — HTTP는 301로 HTTPS에 돌려보내므로
+// (2026-09-30 확인) POST가 닿지 않고, 마크의 passphrase가 평문으로 한 번 나간다.
+inline constexpr const char *kDefaultApiBase = "https://dev.pokeclip.com";
+// 예전 기본값 — 저장된 설정에 이 값이 있으면 읽을 때 위 값으로 올린다.
+inline constexpr const char *kLegacyDefaultApiBase = "http://dev.pokeclip.com";
 inline constexpr const char *kPairingExchangePath = "/api/stream-keys/pairing-codes/exchange";
 
 // SRT 수신부 기본값 (ADR-020 3절 ingest.* · 로컬 compose도 8890).
@@ -33,7 +36,21 @@ inline constexpr int kReconnectDelaySec = 2;
 // 본방 출력이 비동기로 실패했는지 확인하는 대기 시간.
 inline constexpr int kMainStreamGuardMs = 5000;
 
+// libobs는 "stop" 신호를 먼저 보내고 인코더를 멈춘 스레드가 나중에 active를 내린다(obs-output.c
+// end_data_capture). 출력 해제는 그 뒤에 해야 하므로 이 간격으로 확인한다 — 최대 간격 × 횟수.
+inline constexpr int kReleasePollMs = 100;
+inline constexpr int kReleasePollAttempts = 50;
+
 // 브라우저 독 페이지가 이 시간 안에 /api/hello를 부르지 않으면 Qt 폴백으로 바꾼다.
 inline constexpr int kBrowserWatchdogMs = 15000;
+
+// A2 멀티오디오(ADR-017): 트랙 1(최종 믹스)은 본방 오디오 인코더를 공유하고(방송 트랙이 2~6이어도 그 믹서),
+// 트랙 2~6(믹서 1~5)은 플러그인이 AAC 인코더를 만든다. 128 kbps는 2026-08-03 6트랙 실측값 — ADR-020 오디오 칸은
+// 1번 비준 대상.
+inline constexpr int kAudioTrackCount = 6;
+inline constexpr int kStemAudioBitrateKbps = 128;
+inline constexpr int kFallbackTrack0BitrateKbps = 160; // 본방 오디오가 AAC가 아니고 비트레이트도 모를 때 우리 트랙 1
+inline constexpr const char *kFallbackAacEncoderId = "ffmpeg_aac";
+inline constexpr const char *kAudioEncoderNamePrefix = "pokeclip-audio-";
 
 } // namespace pokeclip
