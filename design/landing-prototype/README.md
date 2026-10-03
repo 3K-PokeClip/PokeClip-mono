@@ -37,18 +37,21 @@ URL 파라미터:
 
 ## 에셋
 
-프롬프트는 `~/Downloads/PokeClip 디자인/landing/ASSET_PROMPTS.md`에 있고, 원본은 같은 폴더의 `assets/`에 있습니다.
-- 원본은 2048px PNG입니다. `cwebp`로 줄여서 이 폴더에 넣었습니다.
-  - 포즈: 1024px
-  - 소품: 640px
-  - 히어로: 2560 / 1080px
-- 영상은 H.264(무음, faststart)로 줄였습니다(히어로 원본 4K 8MB → 1080p 1.0MB).
+프롬프트는 `~/Downloads/PokeClip 디자인/landing/ASSET_PROMPTS.md`에 있습니다. 원본은 같은 폴더에 두 벌입니다.
+- `assets/`: 첫 원본. 소품 9종·무대 배경·샘플 클립 3개는 지금도 이것을 씁니다.
+- `assets-pocket-refined/`: **주머니 수정본(2026-10-03).** 주머니를 얕고 몸에 붙게 고친 판으로, 포즈 10종·히어로 키프레임·OG·히어로 영상·점프 영상을 이것으로 바꿨습니다. 샘플 클립도 들어 있지만 첫 원본과 내용이 같아서(PSNR 47~50dB, 포키가 안 나옴) 바꾸지 않았습니다.
+
+변환 규칙입니다. 원본보다 크게 키우지 않습니다(수정본 README: 「임의 확대하지 않았습니다」).
+- 포즈는 `cwebp`로 1024px(듀오 1536×864) 투명 WebP, 소품은 640px입니다.
+- 히어로 키프레임은 PC가 원본 크기 1672×941, 모바일이 1080×1350입니다. OG는 1200×630 JPG입니다.
+- 영상은 H.264(무음, faststart, CRF 23)입니다. 히어로 PC는 원본 크기 1672×942(0.87MB), 모바일은 1080×1350(0.81MB)입니다. 첫·끝 프레임 PSNR이 44dB라 반복 이음새가 보이지 않습니다.
+- 점프는 그린 배경 `#01b140`을 키잉(`chromakey` + `despill`)한 뒤 960×540·20fps로 줄여 `img2webp`로 1회 재생 애니메이션 80프레임을 만들고, 마지막 프레임을 `poki-jump-end.webp`로 따로 둡니다.
 
 | 에셋 | 파일 | 위치 | 상태 |
 |---|---|---|---|
 | A1 히어로 키프레임 | `assets/img/hero-key-pc.webp` · `hero-key-mo.webp` | `.hero__poster` (모바일 ≤767은 mo) | 반영 — 영상 로드 전 포스터 · reduce 모드 대체 |
-| A1 히어로 루프 영상 | `assets/video/hero-pc.mp4`(1920×1080, 1.0MB) · `hero-mo.mp4`(1080×1350, 0.7MB) | `.hero__video` — 재생되면 포스터 위로 페이드인, 화면 밖이면 멈춤 | 반영 (첫·끝 프레임 PSNR 46dB라 이음새 없음) |
-| A4 포키 점프 | `assets/poki/poki-jump.webp`(그린 키잉 → 20fps 1회 재생 애니메이션 WebP, 516KB) | S11 진입 시 뛰어 들어와 손 흔들기 → 축하 포즈로 전환 | 반영 |
+| A1 히어로 루프 영상 | `assets/video/hero-pc.mp4`(1672×942, 0.87MB) · `hero-mo.mp4`(1080×1350, 0.81MB) | `.hero__video` — 재생되면 포스터 위로 페이드인, 화면 밖이면 멈춤 | 반영 — 주머니 수정본 (첫·끝 프레임 PSNR 44dB라 이음새 없음) |
+| A4 포키 점프 | `assets/poki/poki-jump.webp`(그린 키잉 → 20fps 1회 재생 애니메이션 WebP, 525KB) | S11 진입 시 뛰어 들어와 손 흔들기 → 축하 포즈로 전환 | 반영 — 주머니 수정본 |
 | A5 샘플 클립 | `assets/video/clip-{arena,race,soccer}.mp4`(720×1280) + 정점 프레임 `assets/img/clip-*-peak.webp` | S8 쇼츠 폰 3대(재생) · S4 편집기 미리보기(재생) · S3 점프카드 · S4 라이브/업로드 썸네일(정지 프레임) | 반영 — 가까워질 때 불러와 재생 |
 | P2 worried | `assets/poki/poki-worried.webp` | S2 · 스테이지 `worried` | 반영 |
 | P3 detect | `assets/poki/poki-detect.webp` | S3 · 스테이지 `detect` | 반영 |
