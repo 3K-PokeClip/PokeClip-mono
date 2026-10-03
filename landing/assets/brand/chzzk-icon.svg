@@ -1,0 +1,3 @@
+<!-- 치지직 앱 아이콘 — web ChannelMarks.tsx의 ChzzkMark(chzzk-mono-24.svg)를 검은 타일에 얹었다.
+     타일·마크 크기는 web 채널 행(.chzzkIcon: 타일 40·반경 11·마크 34)과 같다. 좌표를 임의로 고치지 않는다 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="11"/><path fill="#00FFA3" transform="translate(3 3) scale(1.4166667)" d="M10.228 4.523 L6.151 10.149 L11.076 10.149 L4.915 18.648 L18.035 18.648 L18.035 14.969 L12.518 14.969 L18.599 6.578 L13.674 6.578 L15.163 4.523 Z"/></svg>

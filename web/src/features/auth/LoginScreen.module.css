@@ -110,8 +110,26 @@
 .terms {
   margin-top: calc(24 * var(--pc-u));
   font-size: calc(12.5 * var(--pc-u));
+  line-height: 1.6;
   text-align: center;
   color: var(--pc-color-text-muted);
+}
+
+.terms a {
+  color: var(--pc-color-text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.terms a:focus-visible {
+  outline: 2px solid var(--pc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* 처리방침은 다른 고지와 구분되게 굵게 둔다 (개인정보위 작성지침) */
+.terms .privacyLink {
+  font-weight: 700;
+  color: var(--pc-color-text-primary);
 }
 
 /* 우측 히어로 — 브랜드 키비주얼. 그라디언트는 이미지 로드 전 배경 (의도적 비토큰).
