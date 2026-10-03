@@ -7,17 +7,19 @@
   <meta name="description" content="PokeClip 서비스 이용약관" />
   <meta name="theme-color" content="#141517" />
   <link rel="canonical" href="https://pokeclip.com/terms" />
-  <link rel="preload" href="../assets/fonts/PretendardVariable.woff2" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="../styles.css" />
-  <link rel="stylesheet" href="../legal.css" />
+  <link rel="preload" href="/assets/fonts/PretendardVariable.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/legal.css" />
+  <script src="/legal.js" defer></script>
 </head>
 <!--
   이용약관 1.0 (POK-269). 랜딩(pokeclip.com)의 정적 페이지이고, 대시보드(app.pokeclip.com)는 이 주소로 잇는다.
   쓰는 원칙 셋:
   1. 실제 동작만 적는다 — 보관 기간·업로드 방식은 코드 값과 같아야 한다.
   2. 「일체 책임지지 않는다」를 쓰지 않는다 — 고의·중과실 면책은 약관규제법 제7조로 무효다.
-  3. 가입은 로그인 화면 고지 + 로그인으로 성립한다(체크박스 없음) — 이 문서와 개정 이력을 지우지 않는 것이
-     동의의 증거다. 개정하면 이전 판을 따로 보존한다.
+  3. 가입은 로그인 화면 고지 + 로그인으로 성립한다(체크박스 없음) — 지난 판을 지우지 않는 것이 동의의 증거다.
+     개정은 scripts/legal-versions.mjs archive로 지금 판을 /terms/<시행일>/에 얼려 두고 시작한다.
+  자산 경로는 루트 기준(/styles.css)이다 — 지난 판이 한 단계 깊은 폴더로 복사돼도 그대로 열린다.
   🔴 〔 〕는 공개 전에 확정할 자리표시다. 남아 있으면 공개 배포하지 않는다 (scripts/check-legal.mjs --release).
 -->
 <body class="legal-page">
@@ -26,7 +28,7 @@
   <header class="legal-top">
     <div class="container legal-top__inner">
       <a href="/" aria-label="PokeClip 홈">
-        <img src="../assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
+        <img src="/assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
       </a>
     </div>
   </header>
@@ -35,7 +37,16 @@
     <article class="legal-doc">
       <header class="legal-doc__head">
         <h1>PokeClip 이용약관</h1>
-        <p class="legal-doc__meta">시행일 2026년 〔월〕 〔일〕</p>
+        <!-- legal-versions:start — scripts/legal-versions.mjs가 legal-versions.json으로 다시 쓴다. 손으로 고치지 않는다 -->
+        <div class="legal-version">
+          <details class="legal-version__menu">
+            <summary aria-label="시행일 2026.〔월〕.〔일〕 — 다른 판 보기">2026.〔월〕.〔일〕</summary>
+            <ul>
+              <li><a href="/terms/" aria-current="page">2026.〔월〕.〔일〕 <span class="legal-version__badge">현재</span></a></li>
+            </ul>
+          </details>
+        </div>
+        <!-- legal-versions:end -->
       </header>
 
       <nav class="legal-toc" aria-label="목차">
@@ -308,24 +319,13 @@
         </div>
       </section>
 
-      <section id="history" aria-labelledby="history-title">
-        <h2 id="history-title">개정 이력</h2>
-        <div class="legal-body">
-          <div class="legal-table" role="region" aria-label="개정 이력 표" tabindex="0">
-            <table>
-              <thead><tr><th scope="col">판</th><th scope="col">시행일</th><th scope="col">내용</th></tr></thead>
-              <tbody><tr><td>1.0</td><td>2026년 〔월〕 〔일〕</td><td>제정</td></tr></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
     </article>
   </main>
 
   <footer class="footer">
     <div class="container footer__inner">
       <div class="footer__brand">
-        <img src="../assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
+        <img src="/assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
         <p class="muted">라이브의 순간을 발견해, 주머니에 담다.</p>
       </div>
       <nav class="footer__links" aria-label="푸터 메뉴">
