@@ -155,7 +155,7 @@
   font-weight: 600;
   white-space: nowrap;
 }
-.legal-table tbody tr:last-child td { border-bottom: none; }
+.legal-table tbody tr:last-child > * { border-bottom: none; }
 
 /* 랜딩 본문의 고정 CTA 바가 없으니 푸터 아래 여백을 줄인다 */
 .legal-page .footer { padding-bottom: 48px; }
