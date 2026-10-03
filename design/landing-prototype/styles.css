@@ -718,10 +718,13 @@ strong { font-weight: 600; color: var(--t1); }
 .platforms { overflow: hidden; }
 .logos { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-bottom: 48px; }
 .logos__item {
-  display: flex; align-items: center; gap: 10px; height: 60px; padding: 0 16px 0 12px;
+  display: flex; align-items: center; gap: 10px; height: 60px; padding: 0 24px;
   border-radius: 999px; background: var(--bg-raised); border: 1px solid var(--border); font-size: 16px; font-weight: 600;
 }
-.logos__item img { height: 32px; width: auto; border-radius: 8px; }
+/* 세 로고 모두 공식 워드마크(치지직·YouTube는 배포 키트 흰색판, SOOP은 흰색 SVG)라 높이만 맞춘다 */
+.logos__item img { height: 24px; width: auto; }
+/* YouTube 워드마크는 글자가 가늘고 아이콘이 작아 같은 높이면 작아 보인다 — 시각 무게를 맞춘다 */
+.logos__item img[alt='YouTube'] { height: 30px; }
 .numbers { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .numbers > div { display: flex; flex-direction: column; gap: 4px; padding: 22px; border-radius: var(--radius); background: var(--bg-raised); border: 1px solid var(--border); }
 .numbers dt { font-size: 14px; font-weight: 600; color: var(--t2); }
@@ -731,7 +734,7 @@ strong { font-weight: 600; color: var(--t1); }
 }
 .numbers dd small { font-size: 0.42em; margin-left: 2px; }
 .numbers span { font-size: 13px; color: var(--t3); }
-@media (min-width: 768px) { .logos__item { height: 64px; padding: 0 20px 0 14px; font-size: 17px; } }
+@media (min-width: 768px) { .logos__item { height: 64px; padding: 0 28px; font-size: 17px; } .logos__item img { height: 26px; } .logos__item img[alt='YouTube'] { height: 34px; } }
 @media (min-width: 1024px) { .numbers { grid-template-columns: repeat(4, 1fr); gap: 20px; } .numbers > div { padding: 28px; } }
 
 .bands { position: relative; height: clamp(160px, 130px + 4vw, 220px); margin-top: 88px; }
