@@ -72,5 +72,27 @@ URL 파라미터:
 - 「바로 공개」. 기본은 비공개 업로드입니다.
 - 근거 없는 절약 수치
 - 「게임 이벤트 교차검증」
+- 「저작권 걱정 없음」 같은 보장 표현. 약관 13조가 「보장하지 않는다」고 적었습니다.
 
 핫키 마킹은 서버 창구(POK-119)가 없어서 「준비 중」으로 표기합니다.
+
+## 이용약관 · 개인정보 처리방침
+
+랜딩(pokeclip.com)이 문서의 **원본**입니다. 대시보드(app.pokeclip.com)는 문서를 갖지 않고 `https://pokeclip.com/terms`·`/privacy`로 잇기만 합니다(`web/src/features/legal/legalInfo.ts`). Google OAuth 동의 화면의 처리방침 주소도 여기입니다. 랜딩을 SSG로 옮길 때 두 문서와 검사 스크립트를 함께 옮깁니다.
+
+| 파일 | 역할 |
+|---|---|
+| `terms/index.html` | 이용약관 1.0 → `/terms` |
+| `privacy/index.html` | 개인정보 처리방침 1.0 → `/privacy` |
+| `legal.css` | `styles.css`의 토큰·푸터 위에 문서 레이아웃(본문 폭 760, 표만 가로 스크롤)만 얹습니다 |
+| `scripts/check-legal.mjs` | 빠지면 법 위반이 되는 문장을 지킵니다. 처리방침 필수 절 16개, YouTube 정책 주소, 14세 제한, 고의·중과실 면책 금지, 목차 링크 |
+
+```bash
+node design/landing-prototype/scripts/check-legal.mjs            # 내용 검사
+node design/landing-prototype/scripts/check-legal.mjs --release  # 자리표시 〔 〕가 남으면 실패 — 공개 배포 전에 돌린다
+```
+
+- **〔 〕는 공개 전에 채울 자리표시입니다.** 운영자 대표·보호책임자·저작권 침해 신고 담당자 이름과 시행일입니다.
+- **처리방침은 실제 동작과 같아야 합니다.** 3절 보유 기간의 세 행(시청자 채팅·후원, 탈퇴 시 회원 콘텐츠, 연동 채널 정보)은 아직 코드가 따르지 않는 목표값입니다. 구현되기 전에는 공개 배포하지 않습니다(POK-269 「추가 범위」 출시 게이트).
+- 문서를 고치면 개정 이력 표에 판을 추가하고 이전 판을 보존합니다. 가입 시각으로 그 회원에게 적용된 판을 찾는 근거라서 지우지 않습니다.
+- 경로는 `/terms`(디렉터리 index)입니다. `python3 -m http.server`는 `/terms`를 `/terms/`로 돌려 보내고, 정적 호스팅도 디렉터리 index를 켜면 그대로 동작합니다.
