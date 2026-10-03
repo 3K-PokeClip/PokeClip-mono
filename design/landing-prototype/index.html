@@ -210,75 +210,124 @@
         </div>
 
         <ol class="steps" data-steps>
+          <!-- 네 화면은 web/의 실제 화면(채널 연동·OBS 도크, 라이브 대시보드, 편집기 스튜디오, 보관함)을 그대로 옮긴 것이다.
+               문구·배지·버튼 이름을 바꾸려면 실제 화면부터 바꾼다 -->
           <li class="step is-active" data-step="1">
             <div class="step__text">
               <span class="step__num">01</span>
-              <h3 class="h3">OBS 플러그인 연결</h3>
-              <p class="body muted">플러그인을 설치하고 웹에서 받은 <strong>8자리 코드</strong>만 넣으면 끝이에요. 본방 인코더를 같이 써서 <strong>영상 인코딩이 추가되지 않아요</strong>.</p>
+              <h3 class="h3">채널 연동하고, 코드 8자리면 연결 끝</h3>
+              <p class="body muted">치지직·SOOP 채널과 YouTube를 한 번만 연동하고, 웹에서 받은 <strong>연동 코드 8자리</strong>를 OBS 플러그인에 넣으면 끝이에요. 본방 인코더를 같이 써서 <strong>영상 인코딩이 추가되지 않아요</strong>.</p>
             </div>
             <div class="step__screen mock screen-obs">
-              <div class="mock__bar"><span>OBS · PokeClip</span><span class="status status--ok"><i></i>연결됨</span></div>
+              <div class="mock__bar"><span>채널 연동 · OBS 플러그인</span><span class="status status--ok"><i></i>준비됐어요</span></div>
               <div class="obs">
-                <label class="obs__label">연동 코드</label>
-                <div class="obs__code"><span>4</span><span>K</span><span>7</span><span>P</span><span>2</span><span>Q</span><span>X</span><span>9</span></div>
-                <dl class="obs__stats">
-                  <div><dt>추가 인코딩</dt><dd>0</dd></div>
-                  <div><dt>오디오 트랙</dt><dd>6</dd></div>
-                  <div><dt>송출</dt><dd class="ok">PokeClip ↔ 치지직</dd></div>
-                </dl>
+                <ul class="conn">
+                  <li><img src="assets/brand/chzzk-icon.png" alt="" width="28" height="28" /><span class="conn__name"><b>치지직</b><span class="badge badge--ok">정상</span></span><span class="conn__sub">포키클립 게임채널</span><span class="mock__btn mock__btn--ghost">연동 해제</span></li>
+                  <li><span class="conn__tile conn__tile--soop"><img src="assets/brand/soop-logo-white.svg" alt="" height="10" /></span><span class="conn__name"><b>SOOP</b></span><span class="conn__sub">연동하면 SOOP 방송에서도 하이라이트를 감지해요</span><span class="mock__btn">연동</span></li>
+                  <li><span class="conn__tile"><span class="yt" aria-hidden="true"></span></span><span class="conn__name"><b>유튜브</b><span class="badge badge--ok">정상</span></span><span class="conn__sub">포키클립 쇼츠</span><span class="mock__btn mock__btn--ghost">연동 해제</span></li>
+                </ul>
+                <div class="obs__dock">
+                  <p class="obs__label">OBS · PokeClip 연결</p>
+                  <div class="obs__code" aria-label="연동 코드 4K7P-2QX9"><span>4</span><span>K</span><span>7</span><span>P</span><em>-</em><span>2</span><span>Q</span><span>X</span><span>9</span></div>
+                  <p class="obs__hint">OBS에서 방송을 시작하면 PokeClip으로 함께 전송돼요.</p>
+                </div>
               </div>
             </div>
           </li>
           <li class="step" data-step="2">
             <div class="step__text">
               <span class="step__num">02</span>
-              <h3 class="h3">평소처럼 방송, 감지는 자동</h3>
-              <p class="body muted">채팅이 몰리는 순간마다 <strong>점프카드</strong>가 라이브 대시보드에 쌓여요. 직접 찍고 싶은 장면은 핫키로 표시할 수 있어요 <span class="chip chip--soon">준비 중</span>.</p>
+              <h3 class="h3">평소처럼 방송하면, 포키가 골라요</h3>
+              <p class="body muted">방송이 켜지면 포키가 반응을 분석해 <strong>하이라이트 카드</strong>를 라이브 대시보드에 바로 쌓아요. 카드를 누르면 그 장면으로 이동하고, 채팅과 후원도 옆에서 같이 흘러요. 직접 남기고 싶은 장면은 단축키로 표시할 수 있어요 <span class="chip chip--soon">준비 중</span>.</p>
             </div>
             <div class="step__screen mock screen-live">
               <div class="mock__bar"><span>라이브 대시보드</span><span class="status status--live"><i></i>LIVE 1:24:41</span></div>
               <div class="live">
-                <div class="live__player"><img src="assets/img/clip-race-peak.webp" alt="" aria-hidden="true" loading="lazy" /><span class="dot-live"></span></div>
-                <ul class="live__cards">
-                  <li class="is-new"><b>마지막 한타 역전</b><span>채팅 급증 · 1:24:03</span></li>
-                  <li><b>바론 스틸</b><span>채팅 급증 · 0:58:12</span></li>
-                  <li><b>첫 킬</b><span>채팅 급증 · 0:12:40</span></li>
-                </ul>
+                <div class="live__main">
+                  <div class="live__player">
+                    <img src="assets/img/clip-race-peak.webp" alt="" aria-hidden="true" loading="lazy" />
+                    <span class="live__badge"><i></i>LIVE</span>
+                    <span class="live__viewers">1,842명 시청 중</span>
+                  </div>
+                  <div class="live__info"><span><b>1:24:03</b> 스트리밍 중</span><span class="live__mark">⚡ 수동 마킹 <kbd>F8</kbd></span></div>
+                  <p class="live__head"><b>하이라이트 카드</b><span>자동 감지 중</span></p>
+                  <ul class="live__rail">
+                    <li class="is-new">
+                      <span class="live__thumb"><img src="assets/img/clip-arena-peak.webp" alt="" aria-hidden="true" loading="lazy" /><em>자동 감지</em></span>
+                      <b>채팅이 튄 순간 #23</b>
+                      <span class="live__meta">채팅 ×3.4 급증 (52건) · 방금</span>
+                      <span class="live__row"><span class="badge badge--point">검토 대기</span><span class="mock__btn mock__btn--sm">편집</span></span>
+                    </li>
+                    <li>
+                      <span class="live__thumb"><img src="assets/img/clip-soccer-peak.webp" alt="" aria-hidden="true" loading="lazy" /><em>자동 감지</em></span>
+                      <b>채팅이 튄 순간 #22</b>
+                      <span class="live__meta">채팅 ×2.8 급증 (41건) · 26분 전</span>
+                      <span class="live__row"><span class="badge badge--ok">클립 완료</span><span class="mock__btn mock__btn--sm">편집</span></span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="live__chat">
+                  <p class="live__head"><b>실시간 채팅</b><span class="badge badge--ok">수집 중</span></p>
+                  <ul>
+                    <li><b style="--c:#7d93d9">감자칩</b>와 방금 그거</li>
+                    <li><b style="--c:#ef9bd3">새벽세시</b>ㅋㅋㅋㅋㅋ</li>
+                    <li class="live__gift"><b>초코송이 · 치즈 1,000</b>레전드 장면</li>
+                    <li><b style="--c:#9efaff">한타장인</b>클립각 클립각</li>
+                    <li><b style="--c:#8cfa5a">나무늘보</b>미쳤다 ㄷㄷ</li>
+                    <li><b style="--c:#e568ba">구독자1</b>다시 보여줘요</li>
+                  </ul>
+                </div>
               </div>
             </div>
           </li>
           <li class="step" data-step="3">
             <div class="step__text">
               <span class="step__num">03</span>
-              <h3 class="h3">카드를 눌러 바로 편집</h3>
-              <p class="body muted">구간은 <strong>5초에서 3분</strong>까지, 세로 쇼츠 <strong>레이아웃 5종</strong> 중에서 골라요. 방송이 아직 진행 중이어도 괜찮아요.</p>
+              <h3 class="h3">카드 한 번 누르면, 방송 중에도 편집</h3>
+              <p class="body muted">방송이 끝나길 기다리지 않아요. 카드를 누르면 편집기가 그 장면으로 열려요. 구간은 <strong>5초에서 3분</strong>까지, 세로 쇼츠 레이아웃 4종(세로·분할·중앙·크롭) 중에서 고르고, 오디오 탭에서 <strong>BGM 트랙만 끄면</strong> 돼요.</p>
             </div>
             <div class="step__screen mock screen-editor">
-              <div class="mock__bar"><span>클립 편집기</span><span class="muted">0:42</span></div>
+              <div class="mock__bar"><span>점프카드 #23 · 카드 1:24:03</span><span class="mock__btn mock__btn--solid">영상 만들기</span></div>
               <div class="editor">
-                <div class="editor__preview"><div class="editor__frame"><video muted loop playsinline preload="none" poster="assets/img/clip-arena-peak.webp" data-lazy-video data-src="assets/video/clip-arena.mp4" aria-hidden="true"></video></div></div>
-                <div class="editor__side">
-                  <p class="editor__label">레이아웃</p>
-                  <div class="editor__layouts"><i class="is-on"></i><i></i><i></i><i></i><i></i></div>
+                <ul class="editor__rail" aria-hidden="true"><li class="is-on">레이아웃</li><li>구간</li><li>자막</li><li>오디오</li><li>BGM·효과</li></ul>
+                <div class="editor__preview">
+                  <div class="editor__frame"><video muted loop playsinline preload="none" poster="assets/img/clip-arena-peak.webp" data-lazy-video data-src="assets/video/clip-arena.mp4" aria-hidden="true"></video></div>
+                  <span class="editor__cap">미리보기 · 분할 · 1× 배속</span>
                 </div>
-                <div class="editor__timeline"><span class="editor__range"></span><span class="editor__head"></span></div>
+                <div class="editor__audio">
+                  <p class="editor__label">오디오 · 트랙별 볼륨</p>
+                  <ul>
+                    <li><i class="sw"></i><span>최종 믹스(트랙 1)</span></li>
+                    <li><i class="sw is-on"></i><span>마이크</span><em>100%</em></li>
+                    <li><i class="sw is-on"></i><span>게임</span><em>80%</em></li>
+                    <li><i class="sw is-on"></i><span>디스코드</span><em>70%</em></li>
+                    <li class="is-off"><i class="sw"></i><span>BGM</span><em>끔</em></li>
+                  </ul>
+                </div>
+                <div class="editor__timeline"><span class="editor__range"></span><span class="editor__head"></span><span class="editor__len">/ 구간 12.4초</span></div>
               </div>
             </div>
           </li>
           <li class="step" data-step="4">
             <div class="step__text">
               <span class="step__num">04</span>
-              <h3 class="h3">YouTube에 비공개로 업로드</h3>
-              <p class="body muted">렌더가 끝나면 스트리머 채널에 <strong>비공개</strong>로 올라가요. 확인한 뒤 공개로 바꾸면 돼요.</p>
+              <h3 class="h3">보관함에서 확인하고, YouTube에 바로 공개</h3>
+              <p class="body muted">영상이 완성되면 보관함에서 미리 보고, <strong>업로드</strong>를 누르면 스트리머 채널에 <strong>공개로</strong> 바로 올라가요. YouTube 스튜디오를 따로 열 필요가 없어요.</p>
             </div>
             <div class="step__screen mock screen-upload">
-              <div class="mock__bar"><span>업로드</span><span class="status status--ok"><i></i>완료</span></div>
+              <div class="mock__bar"><span>보관함</span><span class="status status--ok"><i></i>YouTube 공개</span></div>
               <div class="upload">
-                <div class="upload__thumb"><img src="assets/img/clip-arena-peak.webp" alt="" aria-hidden="true" loading="lazy" /><span class="upload__play" aria-hidden="true"></span></div>
-                <div class="upload__info">
-                  <b>마지막 한타 역전 #shorts</b>
-                  <span class="muted">YouTube · 비공개 · 방금</span>
-                  <div class="upload__bar"><i></i></div>
+                <ul class="upload__grid">
+                  <li class="is-on"><img src="assets/img/clip-arena-peak.webp" alt="" aria-hidden="true" loading="lazy" /><span class="badge badge--ok">발행됨</span><b>채팅이 튄 순간 #23</b><em>0:42</em></li>
+                  <li><img src="assets/img/clip-race-peak.webp" alt="" aria-hidden="true" loading="lazy" /><span class="badge badge--neutral">업로드 대기</span><b>막판 추월</b><em>1:05</em></li>
+                  <li><img src="assets/img/clip-soccer-peak.webp" alt="" aria-hidden="true" loading="lazy" /><span class="badge badge--point">편집 중</span><b>슈퍼 세이브</b><em>0:51</em></li>
+                </ul>
+                <div class="upload__panel">
+                  <span class="badge badge--ok">발행됨</span>
+                  <b>채팅이 튄 순간 #23</b>
+                  <span class="upload__meta">원본 만료 D-58 · 9:16 · 1080×1920</span>
+                  <span class="mock__btn mock__btn--solid mock__btn--block">유튜브 보기 ↗</span>
+                  <span class="upload__done"><span class="yt" aria-hidden="true"></span>YouTube 공개 · 방금</span>
                 </div>
               </div>
             </div>
