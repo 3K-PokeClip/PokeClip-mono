@@ -1,0 +1,101 @@
+// 이용약관·개인정보 처리방침 정적 페이지 검사 (POK-269). 의존성 없이 node만으로 돈다.
+//
+//   node design/landing-prototype/scripts/check-legal.mjs            # 내용 검사
+//   node design/landing-prototype/scripts/check-legal.mjs --release  # + 자리표시 〔 〕가 남으면 실패 (공개 배포 전)
+//
+// 랜딩에는 테스트 장치가 없어서, 빠지면 법 위반이 되는 문장만 문자열로 지킨다.
+// 랜딩을 SSG로 옮기면 이 검사도 그쪽 테스트로 옮긴다.
+import { readFileSync } from 'node:fs';
+
+const root = new URL('..', import.meta.url);
+const read = (path) => readFileSync(new URL(path, root), 'utf8');
+const text = (html) => html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+const headings = (html) => [...html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/g)].map((m) => text(m[1]));
+
+const failures = [];
+const expect = (ok, message) => {
+  if (!ok) failures.push(message);
+};
+
+const pages = { terms: read('terms/index.html'), privacy: read('privacy/index.html') };
+
+// 개인정보 보호법 제30조·시행령 제31조와 작성지침(2025-04)이 요구하는 기재 항목
+const REQUIRED_PRIVACY_SECTIONS = [
+  '1. 개인정보의 처리 목적',
+  '2. 처리하는 개인정보 항목과 처리 근거',
+  '3. 개인정보의 보유 기간',
+  '4. 개인정보의 파기 절차와 방법',
+  '5. 개인정보의 제3자 제공',
+  '6. 개인정보 처리의 위탁',
+  '7. 개인정보의 국외 이전',
+  '8. 개인정보의 안전성 확보 조치',
+  '9. 자동 수집 장치의 설치·운영과 거부',
+  '10. 정보주체의 권리와 행사 방법',
+  '11. 자동화된 결정',
+  '12. 인공지능 관련 처리',
+  '13. YouTube API 서비스와 Google 사용자 데이터',
+  '14. 개인정보 보호책임자',
+  '15. 권익 침해 구제 방법',
+  '16. 개인정보 처리방침의 변경',
+];
+const privacyHeadings = headings(pages.privacy);
+for (const title of REQUIRED_PRIVACY_SECTIONS) {
+  expect(privacyHeadings.includes(title), `처리방침에 「${title}」 절이 없다`);
+}
+
+// YouTube API Services Developer Policies III.A — 주소는 정책에 적힌 그대로여야 한다
+const href = (html, url) => html.includes(`href="${url}"`);
+expect(href(pages.privacy, 'http://www.google.com/policies/privacy'), '처리방침에 Google 개인정보처리방침 링크가 없다');
+expect(
+  href(pages.privacy, 'https://security.google.com/settings/security/permissions'),
+  '처리방침에 Google 권한 철회 링크가 없다',
+);
+expect(
+  href(pages.privacy, 'https://developers.google.com/terms/api-services-user-data-policy'),
+  '처리방침에 Google API 사용자 데이터 정책(Limited Use) 링크가 없다',
+);
+expect(text(pages.privacy).includes('YouTube API 서비스를 사용합니다'), '처리방침에 YouTube API 사용 고지가 없다');
+expect(href(pages.terms, 'https://www.youtube.com/t/terms'), '약관에 YouTube 서비스 약관 링크가 없다');
+expect(
+  text(pages.terms).includes('회원은 서비스를 이용함으로써 YouTube 서비스 약관에 구속되는 데 동의합니다.'),
+  '약관에 YouTube 약관 구속 문장이 없다',
+);
+
+// 처리방침은 회원이 아닌 시청자 정보와 그 권리 행사를 밝혀야 한다
+expect(text(pages.privacy).includes('시청자 정보(회원 아님)'), '처리방침에 시청자 정보 항목이 없다');
+expect(text(pages.privacy).includes('회원이 아닌 시청자도 같은 권리를 행사할 수 있습니다.'), '처리방침에 시청자 권리 행사가 없다');
+
+// 약관 — 14세 제한, 저작권법 제103조 수령인, 약관규제법 제7조(고의·중과실 면책 무효)
+expect(text(pages.terms).includes('만 14세 미만은 가입할 수 없습니다.'), '약관에 만 14세 제한이 없다');
+expect(text(pages.terms).includes('복제·전송 중단 요청 담당자'), '약관에 복제·전송 중단 요청 담당자가 없다');
+expect(!text(pages.terms).includes('일체 책임'), '약관에 「일체 책임」 같은 전부 면책 문장이 있다');
+expect(
+  text(pages.terms).includes('고의나 중대한 과실로 생긴 손해에는 이 항을 적용하지 않습니다'),
+  '약관의 책임 제한에 고의·중과실 예외가 없다',
+);
+
+// 목차의 모든 링크가 실제 절로 이어진다
+for (const [name, html] of Object.entries(pages)) {
+  const toc = html.match(/<nav class="legal-toc"[\s\S]*?<\/nav>/);
+  expect(toc !== null, `${name}에 목차가 없다`);
+  for (const [, id] of toc?.[0].matchAll(/href="#([^"]+)"/g) ?? []) {
+    expect(html.includes(`id="${id}"`), `${name} 목차의 #${id}가 가리키는 절이 없다`);
+  }
+}
+
+// 자리표시 — 평소에는 알리기만 하고, --release에서는 실패시킨다.
+// HTML 주석은 뺀다 — 머리 주석이 「〔 〕는 자리표시다」라고 설명하느라 같은 괄호를 쓴다.
+const placeholders = Object.entries(pages).flatMap(([name, html]) =>
+  [...html.replace(/<!--[\s\S]*?-->/g, '').matchAll(/〔[^〕]*〕/g)].map((m) => `${name}: ${m[0]}`),
+);
+if (placeholders.length > 0) {
+  const message = `자리표시 ${placeholders.length}곳이 남았다 — ${[...new Set(placeholders)].join(', ')}`;
+  if (process.argv.includes('--release')) failures.push(message);
+  else console.warn(`⚠ ${message}`);
+}
+
+if (failures.length > 0) {
+  console.error(failures.map((f) => `✗ ${f}`).join('\n'));
+  process.exit(1);
+}
+console.log('✓ 약관·처리방침 검사 통과');
