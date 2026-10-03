@@ -35,9 +35,10 @@ const REQUIRED_PRIVACY_SECTIONS = [
   '11. 자동화된 결정',
   '12. 인공지능 관련 처리',
   '13. YouTube API 서비스와 Google 사용자 데이터',
-  '14. 개인정보 보호책임자',
-  '15. 권익 침해 구제 방법',
-  '16. 개인정보 처리방침의 변경',
+  '14. SOOP 연동과 채팅 데이터',
+  '15. 개인정보 보호책임자',
+  '16. 권익 침해 구제 방법',
+  '17. 개인정보 처리방침의 변경',
 ];
 const privacyHeadings = headings(pages.privacy);
 for (const title of REQUIRED_PRIVACY_SECTIONS) {
@@ -60,6 +61,17 @@ expect(href(pages.terms, 'https://www.youtube.com/t/terms'), '약관에 YouTube 
 expect(
   text(pages.terms).includes('회원은 서비스를 이용함으로써 YouTube 서비스 약관에 구속되는 데 동의합니다.'),
   '약관에 YouTube 약관 구속 문장이 없다',
+);
+
+// SOOP 개발자 이용약관 17항 — 동의 철회를 주기적으로 확인하고 지체 없이 파기해야 한다
+expect(
+  text(pages.privacy).includes('해제 즉시 토큰을 폐기하고 새로운 수집을 시작하지 않습니다'),
+  '처리방침에 SOOP 연동 해제 시 수집 중단이 없다',
+);
+expect(text(pages.privacy).includes('지체 없이 지웁니다'), '처리방침에 SOOP 데이터 지체 없는 삭제가 없다');
+expect(
+  text(pages.terms).includes('SOOP 이용약관과 운영정책을 지키는 데 동의합니다'),
+  '약관에 SOOP 약관 준수 문장이 없다',
 );
 
 // 처리방침은 회원이 아닌 시청자 정보와 그 권리 행사를 밝혀야 한다
