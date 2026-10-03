@@ -733,6 +733,8 @@ strong { font-weight: 600; color: var(--t1); }
 .footer__brand p { font-size: 14px; }
 .footer__links { display: flex; flex-wrap: wrap; gap: 10px 22px; font-size: 14px; }
 .footer__legal { font-size: 13px; }
+/* 처리방침은 다른 링크와 구분되게 굵게 (개인정보위 작성지침) */
+.footer__privacy { font-weight: 700; }
 @media (min-width: 1024px) {
   .footer { padding: 56px 0; }
   .footer__inner { grid-template-columns: 1fr auto; align-items: start; }
