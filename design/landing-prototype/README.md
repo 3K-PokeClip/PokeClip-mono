@@ -82,17 +82,32 @@ URL 파라미터:
 
 | 파일 | 역할 |
 |---|---|
-| `terms/index.html` | 이용약관 1.0 → `/terms` |
-| `privacy/index.html` | 개인정보 처리방침 1.0 → `/privacy` |
-| `legal.css` | `styles.css`의 토큰·푸터 위에 문서 레이아웃(본문 폭 760, 표만 가로 스크롤)만 얹습니다 |
-| `scripts/check-legal.mjs` | 빠지면 법 위반이 되는 문장을 지킵니다. 처리방침 필수 절 16개, YouTube 정책 주소, 14세 제한, 고의·중과실 면책 금지, 목차 링크 |
+| `terms/index.html` | 이용약관 현재 판 → `/terms/` |
+| `privacy/index.html` | 개인정보 처리방침 현재 판 → `/privacy/` |
+| `terms/<YYYY-MM-DD>/index.html` | 지난 판(그 시행일 판을 얼려 둔 복사본) → `/terms/2026-10-15/`. 처리방침도 같은 모양 |
+| `legal-versions.json` | **판 목록의 정본입니다.** 문서별로 새 판이 맨 앞이고, 시행일 드롭다운이 이 목록을 그립니다 |
+| `scripts/legal-versions.mjs` | 모든 판의 드롭다운을 목록대로 다시 쓰고, 개정 때 지금 판을 얼려 둡니다(`archive`) |
+| `legal.css` · `legal.js` | 문서 레이아웃과 시행일 드롭다운입니다. `legal.js`는 바깥 클릭·Esc로 닫기만 합니다. 드롭다운은 `<details>`라 JS 없이도 열립니다 |
+| `scripts/check-legal.mjs` | 빠지면 법 위반이 되는 문장을 지킵니다. 처리방침 필수 절 16개, YouTube 정책 주소, 14세 제한, 고의·중과실 면책 금지, 목차 링크, 드롭다운과 목록의 일치 |
 
 ```bash
 node design/landing-prototype/scripts/check-legal.mjs            # 내용 검사
 node design/landing-prototype/scripts/check-legal.mjs --release  # 자리표시 〔 〕가 남으면 실패 — 공개 배포 전에 돌린다
 ```
 
+**개정하는 법** — 토스 약관처럼 제목 아래 시행일 드롭다운에서 지난 판을 고를 수 있습니다. 지난 판은 **지우지도 고치지도 않습니다.** 가입 시각으로 그 회원에게 적용된 판을 찾는 근거입니다.
+
+```bash
+node design/landing-prototype/scripts/legal-versions.mjs archive terms 2026.11.01
+# ① 지금 판(예: 2026.10.15)을 terms/2026-10-15/index.html로 얼려 둔다 — 대표 주소도 그 판 주소로 바꾼다
+# ② legal-versions.json 맨 앞에 2026.11.01을 올리고 모든 판의 드롭다운을 다시 쓴다
+#    (지난 판에는 「이 약관은 ○○부터 ○○ 전까지 적용된 지난 판입니다 · 현재 판 보기」 안내가 붙는다)
+# ③ 그다음 terms/index.html 본문과 본문 속 시행일 문장(부칙)을 고치고 check-legal을 돌린다
+```
+
+- 드롭다운 블록(`legal-versions:start`~`end` 사이)은 손으로 고치지 않습니다. 목록을 고쳤으면 `node design/landing-prototype/scripts/legal-versions.mjs`로 다시 씁니다.
+- 시행일이 자리표시인 판은 `archive`가 거절합니다. 공개 전에 첫 판의 시행일을 `legal-versions.json`과 본문에 함께 채웁니다.
+- 자산 경로는 루트 기준(`/styles.css`, `/assets/...`)입니다. 지난 판이 한 단계 깊은 폴더에 있어도 그대로 열립니다. 그래서 문서 페이지는 `file://`로는 깨지고, 로컬 서버로 열어야 합니다.
 - **〔 〕는 공개 전에 채울 자리표시입니다.** 운영자 대표·보호책임자·저작권 침해 신고 담당자 이름과 시행일입니다.
 - **처리방침은 실제 동작과 같아야 합니다.** 3절 보유 기간의 세 행(시청자 채팅·후원, 탈퇴 시 회원 콘텐츠, 연동 채널 정보)은 아직 코드가 따르지 않는 목표값입니다. 구현되기 전에는 공개 배포하지 않습니다(POK-269 「추가 범위」 출시 게이트).
-- 문서를 고치면 개정 이력 표에 판을 추가하고 이전 판을 보존합니다. 가입 시각으로 그 회원에게 적용된 판을 찾는 근거라서 지우지 않습니다.
-- 경로는 `/terms`(디렉터리 index)입니다. `python3 -m http.server`는 `/terms`를 `/terms/`로 돌려 보내고, 정적 호스팅도 디렉터리 index를 켜면 그대로 동작합니다.
+- 경로는 `/terms/`(디렉터리 index)입니다. `python3 -m http.server`는 `/terms`를 `/terms/`로 돌려 보내고, 정적 호스팅도 디렉터리 index를 켜면 그대로 동작합니다.
