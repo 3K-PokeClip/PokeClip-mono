@@ -95,7 +95,7 @@ URL 파라미터:
 | `legal-versions.json` | **판 목록의 정본입니다.** 문서별로 새 판이 맨 앞이고, 시행일 드롭다운이 이 목록을 그립니다 |
 | `scripts/legal-versions.mjs` | 모든 판의 드롭다운을 목록대로 다시 쓰고, 개정 때 지금 판을 얼려 둡니다(`archive`) |
 | `legal.css` · `legal.js` | 문서 레이아웃과 시행일 드롭다운입니다. `legal.js`는 바깥 클릭·Esc로 닫기만 합니다. 드롭다운은 `<details>`라 JS 없이도 열립니다 |
-| `scripts/check-legal.mjs` | 빠지면 법 위반이 되는 문장을 지킵니다. 처리방침 필수 절 17개, YouTube 정책 주소, SOOP 약관 준수·연동 해제 시 삭제 문장, 14세 제한, 고의·중과실 면책 금지, 목차 링크, 드롭다운과 목록의 일치 |
+| `scripts/check-legal.mjs` | 빠지면 법 위반이 되는 문장을 지킵니다. 처리방침 필수 절 17개, YouTube 정책 주소, 치지직·SOOP 약관 준수·연동 해제 시 수집 중단과 삭제 문장, 14세 제한, 고의·중과실 면책 금지, 목차 링크, 드롭다운과 목록의 일치 |
 
 ```bash
 node landing/scripts/check-legal.mjs            # 내용 검사
