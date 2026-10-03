@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>개인정보 처리방침 · PokeClip</title>
+  <meta name="description" content="PokeClip 개인정보 처리방침" />
+  <meta name="theme-color" content="#141517" />
+  <link rel="canonical" href="https://pokeclip.com/privacy" />
+  <link rel="preload" href="../assets/fonts/PretendardVariable.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="../styles.css" />
+  <link rel="stylesheet" href="../legal.css" />
+</head>
+<!--
+  개인정보 처리방침 1.0 (POK-269). 랜딩(pokeclip.com)의 정적 페이지이고, 대시보드(app.pokeclip.com)와
+  Google OAuth 동의 화면은 이 주소를 가리킨다. 항목 순서는 개인정보위 「개인정보 처리방침 작성지침」(2025-04)을
+  따르고, 13절은 YouTube API Services Developer Policies III.A.2가 요구하는 고지를 한곳에 모은다.
+
+  처리방침은 실제 동작과 같아야 한다 — 다르게 쓰면 그 자체가 위반이다. 항목·기간을 바꾸려면 코드부터 바꾸고
+  이 문서를 따라 고친다(처리방침 개정은 시행 7일 전 공지).
+
+  🔴 출시 게이트(POK-269 「추가 범위」): 3절 표의 「시청자 채팅·후원」「탈퇴 시 회원 콘텐츠」「연동 채널 ID와
+  채널 이름」 행은 아직 코드가 따르지 않는 목표값이다. 이 셋이 구현되기 전에는 공개 배포하지 않는다.
+  🔴 〔 〕는 공개 전에 확정할 자리표시다 (scripts/check-legal.mjs --release).
+-->
+<body class="legal-page">
+  <a class="skip" href="#main">본문으로 건너뛰기</a>
+
+  <header class="legal-top">
+    <div class="container legal-top__inner">
+      <a href="/" aria-label="PokeClip 홈">
+        <img src="../assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
+      </a>
+    </div>
+  </header>
+
+  <main id="main" class="container legal">
+    <article class="legal-doc">
+      <header class="legal-doc__head">
+        <h1>개인정보 처리방침</h1>
+        <p class="legal-doc__meta">시행일 2026년 〔월〕 〔일〕</p>
+        <p class="legal-doc__intro">PokeClip 팀(대표 〔이름〕)(이하 「운영자」)은 「개인정보 보호법」에 따라 정보주체의 개인정보를 보호하고 관련 고충을 빠르게 처리하려고 이 처리방침을 둡니다. 이 방침은 PokeClip 회원(스트리머와 편집자)뿐 아니라, 서비스가 처리하는 시청자 정보에도 적용됩니다.</p>
+      </header>
+
+      <nav class="legal-toc" aria-label="목차">
+        <ol>
+          <li><a href="#purpose">1. 개인정보의 처리 목적</a></li>
+          <li><a href="#items">2. 처리하는 개인정보 항목과 처리 근거</a></li>
+          <li><a href="#retention">3. 개인정보의 보유 기간</a></li>
+          <li><a href="#destruction">4. 개인정보의 파기 절차와 방법</a></li>
+          <li><a href="#third-party">5. 개인정보의 제3자 제공</a></li>
+          <li><a href="#outsourcing">6. 개인정보 처리의 위탁</a></li>
+          <li><a href="#overseas">7. 개인정보의 국외 이전</a></li>
+          <li><a href="#safety">8. 개인정보의 안전성 확보 조치</a></li>
+          <li><a href="#cookies">9. 자동 수집 장치의 설치·운영과 거부</a></li>
+          <li><a href="#rights">10. 정보주체의 권리와 행사 방법</a></li>
+          <li><a href="#automated-decisions">11. 자동화된 결정</a></li>
+          <li><a href="#ai">12. 인공지능 관련 처리</a></li>
+          <li><a href="#youtube-google">13. YouTube API 서비스와 Google 사용자 데이터</a></li>
+          <li><a href="#officer">14. 개인정보 보호책임자</a></li>
+          <li><a href="#remedies">15. 권익 침해 구제 방법</a></li>
+          <li><a href="#changes">16. 개인정보 처리방침의 변경</a></li>
+        </ol>
+      </nav>
+
+      <section id="purpose" aria-labelledby="purpose-title">
+        <h2 id="purpose-title">1. 개인정보의 처리 목적</h2>
+        <div class="legal-body">
+          <p>운영자는 다음 목적으로 개인정보를 처리하고, 목적이 바뀌면 미리 알립니다.</p>
+          <ul>
+            <li>회원 가입, 본인 식별, 로그인 유지</li>
+            <li>서비스 제공: 방송 수신과 보관, 하이라이트 후보 표시, 클립 편집·렌더링, YouTube 업로드, 편집자 초대와 위임</li>
+            <li>치지직·YouTube 연동과 그 유지</li>
+            <li>서비스 알림과 중요한 고지 발송(서비스 안 알림과 이메일): 작업 결과, 초대, 약관·처리방침 변경, 보안 관련 안내</li>
+            <li>부정 이용 방지와 보안(스트림 키·페어링 남용 차단)</li>
+            <li>문의와 권리 행사 요청에 대한 응대</li>
+          </ul>
+          <p>광고성 정보는 보내지 않습니다. 앞으로 보내게 되면 이 방침을 바꾸고, 원하는 회원에게만 따로 동의를 받습니다.</p>
+        </div>
+      </section>
+
+      <section id="items" aria-labelledby="items-title">
+        <h2 id="items-title">2. 처리하는 개인정보 항목과 처리 근거</h2>
+        <div class="legal-body">
+          <p>서비스 제공에 꼭 필요한 정보는 「개인정보 보호법」 제15조 제1항 제4호(계약의 이행)에 따라 동의 없이 처리합니다. 회원이 아닌 시청자의 정보는 같은 항 제6호(정당한 이익)에 따라, 공개된 채팅을 하이라이트 분석과 편집에 쓰는 범위에서만 처리합니다.</p>
+          <div class="legal-table" role="region" aria-label="처리하는 개인정보 항목" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">구분</th><th scope="col">항목</th><th scope="col">수집 방법</th><th scope="col">처리 근거</th></tr></thead>
+              <tbody>
+                <tr><td>회원 기본 정보</td><td>Google 계정 고유 식별자, 이메일, 이름, 프로필 사진 주소</td><td>Google 로그인</td><td>계약 이행</td></tr>
+                <tr><td>회원이 입력한 정보</td><td>표시 이름, 업로드한 프로필 사진, 오디오 트랙 이름</td><td>회원 입력</td><td>계약 이행</td></tr>
+                <tr><td>편집자 초대</td><td>초대받는 사람의 이메일(가입한 계정과 대조하는 데만 씀)</td><td>스트리머 입력</td><td>계약 이행</td></tr>
+                <tr><td>연동 정보</td><td>치지직·YouTube 채널 ID와 채널 이름, 접근 토큰(암호화 보관)</td><td>회원의 연동 승인</td><td>계약 이행</td></tr>
+                <tr><td>송출 정보</td><td>스트림 키(해시와 암호문으로만 보관), 페어링 코드(해시)</td><td>서비스 발급</td><td>계약 이행</td></tr>
+                <tr><td>방송 데이터</td><td>방송 영상과 음성(최대 6개 오디오 트랙 — 출연자의 얼굴과 목소리가 담길 수 있음), 방송 제목·태그·카테고리·시청자 수</td><td>OBS 플러그인 송출, 치지직 API</td><td>계약 이행</td></tr>
+                <tr><td>편집·업로드 기록</td><td>편집본(구간, 트랙 선택, 자막 텍스트), 업로드 제목·설명·YouTube 영상 ID, 요청한 회원</td><td>회원 입력</td><td>계약 이행</td></tr>
+                <tr><td>시청자 정보(회원 아님)</td><td>치지직 채널 ID, 닉네임, 채팅 내용, 후원자의 채널 ID·닉네임·후원 금액·후원 메시지</td><td>스트리머가 연동한 치지직 채널에서 치지직 Open API로 수신</td><td>정당한 이익</td></tr>
+                <tr><td>자동 생성 정보</td><td>접속 IP의 해시값(페어링 시도 횟수 제한), 서비스 이용 기록</td><td>서비스 이용 중 자동 생성</td><td>계약 이행, 정당한 이익</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p><strong>동의를 받아 처리하는 항목은 현재 없습니다.</strong> 다음 정보는 처리하지 않습니다: 주민등록번호 같은 고유식별정보, 민감정보(얼굴이나 목소리로 사람을 알아보는 분석을 하지 않습니다), 결제 정보, 만 14세 미만 아동의 정보.</p>
+        </div>
+      </section>
+
+      <section id="retention" aria-labelledby="retention-title">
+        <h2 id="retention-title">3. 개인정보의 보유 기간</h2>
+        <div class="legal-body">
+          <div class="legal-table" role="region" aria-label="개인정보의 보유 기간 표" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">항목</th><th scope="col">보유 기간</th></tr></thead>
+              <tbody>
+                <tr><td>회원 기본 정보, 표시 이름</td><td>탈퇴할 때까지. 탈퇴하면 바로 알아볼 수 없게 익명화</td></tr>
+                <tr><td>업로드한 프로필 사진, 오디오 트랙 이름</td><td>탈퇴할 때까지. 탈퇴하면 바로 삭제</td></tr>
+                <tr><td>연동 접근 토큰</td><td>연동을 해제하거나 탈퇴하면 바로 삭제</td></tr>
+                <tr><td>연동 채널 ID와 채널 이름</td><td>연동 해제 또는 탈퇴 후 7일 이내 삭제</td></tr>
+                <tr><td>로그인 유지 토큰(해시)</td><td>만료되거나 폐기된 뒤 14일</td></tr>
+                <tr><td>접속 IP 해시</td><td>1시간</td></tr>
+                <tr><td>페어링 코드(해시)</td><td>만료된 뒤 1시간</td></tr>
+                <tr><td>되감기 영상</td><td>방송 중 최근 1시간</td></tr>
+                <tr><td>다시보기(VOD) 영상</td><td>방송 종료 후 60일</td></tr>
+                <tr><td>렌더링한 클립 파일</td><td>만든 뒤 60일</td></tr>
+                <tr><td>편집본, 업로드 기록</td><td>회원이 지우거나 탈퇴할 때까지</td></tr>
+                <tr><td>시청자 채팅·후원 정보, 방송 정보</td><td>그 방송의 다시보기 보관 기간과 같이(방송 종료 후 60일)</td></tr>
+                <tr><td>탈퇴한 회원의 방송 데이터·클립·편집본·업로드 기록</td><td>탈퇴 후 5일 이내 삭제</td></tr>
+                <tr><td>편집자 초대·위임 이력</td><td>상대 회원의 이력을 지키려고 남기되, 탈퇴한 쪽은 알아볼 수 없게 익명화</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="destruction" aria-labelledby="destruction-title">
+        <h2 id="destruction-title">4. 개인정보의 파기 절차와 방법</h2>
+        <div class="legal-body">
+          <ul>
+            <li>보유 기간이 지나거나 처리 목적을 이루면 5일 이내에 파기합니다.</li>
+            <li>전자 파일은 복구할 수 없는 방법으로 삭제합니다.</li>
+            <li>편집자 위임 이력처럼 지우면 다른 정보주체의 권리를 해치는 기록은 누구인지 알아볼 수 없게 바꿔(익명화) 남깁니다.</li>
+            <li>이미 YouTube 등 연동 플랫폼에 게시된 영상은 운영자가 지울 수 없습니다. 회원이 그 플랫폼에서 직접 지워야 합니다.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="third-party" aria-labelledby="third-party-title">
+        <h2 id="third-party-title">5. 개인정보의 제3자 제공</h2>
+        <div class="legal-body">
+          <p>운영자는 개인정보를 제3자에게 제공하지 않습니다. 다음은 회원의 지시에 따른 처리입니다.</p>
+          <ul>
+            <li>스트리머(또는 스트리머가 위임한 편집자)가 업로드를 요청하면 클립 영상과 제목·설명을 스트리머의 YouTube 채널로 보냅니다.</li>
+            <li>스트리머가 위임한 편집자는 그 스트리머의 방송 데이터와 채팅 데이터를 볼 수 있습니다.</li>
+          </ul>
+          <p>법령에 따라 수사기관 등이 정해진 절차로 요구하는 경우는 예외입니다.</p>
+        </div>
+      </section>
+
+      <section id="outsourcing" aria-labelledby="outsourcing-title">
+        <h2 id="outsourcing-title">6. 개인정보 처리의 위탁</h2>
+        <div class="legal-body">
+          <div class="legal-table" role="region" aria-label="개인정보 처리 위탁 표" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">수탁자</th><th scope="col">위탁 업무</th><th scope="col">처리 위치</th></tr></thead>
+              <tbody><tr><td>Amazon Web Services</td><td>서버·데이터베이스·파일 저장소 운영, 영상 전송</td><td>대한민국(서울 리전)</td></tr></tbody>
+            </table>
+          </div>
+          <p>이메일 발송을 업체에 맡기게 되면 수탁자를 이 표에 추가하고, 바뀐 처리방침을 시행 7일 전에 공지합니다.</p>
+        </div>
+      </section>
+
+      <section id="overseas" aria-labelledby="overseas-title">
+        <h2 id="overseas-title">7. 개인정보의 국외 이전</h2>
+        <div class="legal-body">
+          <p>스트리머가 YouTube 업로드를 요청하면 다음과 같이 개인정보가 국외로 이전됩니다. 업로드라는 서비스 계약을 이행하는 데 필요한 이전입니다.</p>
+          <div class="legal-table" role="region" aria-label="개인정보의 국외 이전 표" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">항목</th><th scope="col">내용</th></tr></thead>
+              <tbody>
+                <tr><td>이전받는 자</td><td>Google LLC (연락처: <a href="http://www.google.com/policies/privacy" target="_blank" rel="noopener noreferrer">Google 개인정보처리방침</a>의 문의 창구)</td></tr>
+                <tr><td>이전 국가</td><td>미국</td></tr>
+                <tr><td>이전 시기와 방법</td><td>업로드를 요청할 때 네트워크로 전송</td></tr>
+                <tr><td>이전 항목</td><td>클립 영상(출연자의 얼굴과 목소리, 화면에 보이는 채팅이 담길 수 있음), 제목, 설명</td></tr>
+                <tr><td>이전 목적</td><td>스트리머의 YouTube 채널에 업로드</td></tr>
+                <tr><td>보유 기간</td><td>Google 정책에 따름. 영상은 스트리머가 YouTube에서 지울 때까지</td></tr>
+                <tr><td>거부 방법과 효과</td><td>업로드를 요청하지 않거나 YouTube 연동을 해제하면 이전되지 않습니다. 이 경우 YouTube 업로드를 쓸 수 없습니다.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="safety" aria-labelledby="safety-title">
+        <h2 id="safety-title">8. 개인정보의 안전성 확보 조치</h2>
+        <div class="legal-body">
+          <ul>
+            <li>개인정보에 접근할 수 있는 사람을 운영에 필요한 팀원으로 한정합니다.</li>
+            <li>연동 토큰과 스트림 키 비밀값은 암호화(AES-256)해 보관합니다.</li>
+            <li>로그인 유지 토큰, 스트림 키 식별값, 페어링 코드는 원문을 두지 않고 해시로만 보관합니다.</li>
+            <li>권한이 없는 요청은 대상이 있는지조차 드러나지 않게 거절합니다.</li>
+            <li>영상은 서명된 쿠키로 권한 있는 회원만 재생할 수 있습니다.</li>
+            <li>전송 구간을 암호화(HTTPS)하고, 서버 관리용 접속 포트를 외부에 열지 않습니다.</li>
+            <li>로그에 이메일, 채팅 내용, 토큰을 남기지 않습니다.</li>
+            <li>서버와 데이터는 Amazon Web Services 데이터센터의 물리 보안 아래 둡니다.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="cookies" aria-labelledby="cookies-title">
+        <h2 id="cookies-title">9. 자동 수집 장치의 설치·운영과 거부</h2>
+        <div class="legal-body">
+          <ul>
+            <li><strong>쿠키:</strong> 대시보드(app.pokeclip.com)에서 영상 재생 권한을 확인하는 쿠키 한 종류만 씁니다(유효 1시간).</li>
+            <li><strong>브라우저 저장소:</strong> 대시보드는 로그인 유지 정보(최대 14일), 화면 테마, 처음 사용 안내 진행 상태, 편집기 패널 위치를 브라우저에 저장합니다.</li>
+            <li>서비스 소개 페이지(pokeclip.com)는 쿠키와 브라우저 저장소를 쓰지 않습니다.</li>
+            <li>방문 분석, 광고, 행태정보 수집을 위한 쿠키나 도구는 쓰지 않습니다.</li>
+          </ul>
+          <p>브라우저 설정에서 쿠키와 사이트 데이터를 막을 수 있습니다. 막으면 로그인 유지와 영상 재생을 쓸 수 없습니다.</p>
+        </div>
+      </section>
+
+      <section id="rights" aria-labelledby="rights-title">
+        <h2 id="rights-title">10. 정보주체의 권리와 행사 방법</h2>
+        <div class="legal-body">
+          <ol>
+            <li>정보주체는 언제든 자신의 개인정보 열람, 정정, 삭제, 처리 정지를 요구할 수 있습니다. 회원은 계정 설정에서 정보를 확인하고 탈퇴할 수 있고, 그 밖의 요구는 아래 개인정보 보호책임자에게 이메일로 할 수 있습니다.</li>
+            <li><strong>회원이 아닌 시청자도 같은 권리를 행사할 수 있습니다.</strong> 치지직 채널 ID나 닉네임, 해당 방송을 알려 주시면 확인한 뒤 처리합니다.</li>
+            <li>요구를 받으면 10일 이내에 처리하고 결과를 알립니다.</li>
+            <li>법정대리인이나 위임받은 사람을 통해서도 요구할 수 있습니다. 이때는 위임장이 필요합니다.</li>
+            <li>법령이 정한 사유가 있으면 요구를 거절할 수 있고, 그때는 이유를 알립니다.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="automated-decisions" aria-labelledby="automated-decisions-title">
+        <h2 id="automated-decisions-title">11. 자동화된 결정</h2>
+        <div class="legal-body">
+          <p>서비스는 정보주체에게 법적 효력이나 중대한 영향을 주는 완전히 자동화된 결정을 하지 않습니다. 하이라이트 후보는 채팅량 통계로 표시하는 참고 정보이고, 사람에 대한 결정이 아닙니다.</p>
+        </div>
+      </section>
+
+      <section id="ai" aria-labelledby="ai-title">
+        <h2 id="ai-title">12. 인공지능 관련 처리</h2>
+        <div class="legal-body">
+          <p>현재 서비스에는 생성형 인공지능 기능이 없습니다. 회원 콘텐츠와 채팅 데이터를 인공지능 모델 학습에 쓰지 않습니다. 인공지능 기능을 도입하면 그 용도, 처리하는 정보, 학습 활용 여부를 이 방침에 추가하고 미리 알립니다.</p>
+        </div>
+      </section>
+
+      <section id="youtube-google" aria-labelledby="youtube-google-title">
+        <h2 id="youtube-google-title">13. YouTube API 서비스와 Google 사용자 데이터</h2>
+        <div class="legal-body">
+          <ul>
+            <li>서비스는 <strong>YouTube API 서비스</strong>를 사용합니다.</li>
+            <li>접근하는 정보: 연동을 확인하는 YouTube 채널 ID와 채널 이름, 동영상 업로드 권한(youtube.upload)과 채널 조회 권한(youtube.readonly).</li>
+            <li>이용 방법: 스트리머가 요청한 클립을 스트리머의 채널에 <strong>비공개로</strong> 올립니다. 공개 전환은 스트리머가 YouTube에서 직접 합니다.</li>
+            <li>공유: 5절과 7절에 적은 경우 말고는 공유하지 않습니다.</li>
+            <li>저장: 접근 토큰은 암호화해 두고 연동 해제나 탈퇴 때 바로 지웁니다. 채널 정보는 연동 해제 후 7일 이내에 지웁니다.</li>
+            <li>권한 철회: <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">Google 보안 설정 페이지</a>에서 언제든 서비스의 접근 권한을 철회할 수 있습니다. 서비스 안에서 연동을 해제해도 Google 쪽 권한은 남을 수 있으니 이 페이지에서 함께 철회하세요.</li>
+            <li>Google의 개인정보 처리는 <a href="http://www.google.com/policies/privacy" target="_blank" rel="noopener noreferrer">Google 개인정보처리방침</a>을 따릅니다.</li>
+            <li>PokeClip이 Google API로 받은 정보를 쓰고 다른 앱으로 보내는 방식은 제한적 사용(Limited Use) 요건을 포함한 <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener noreferrer">Google API 서비스 사용자 데이터 정책</a>을 따릅니다. Google 사용자 데이터를 광고나 인공지능 모델 학습에 쓰지 않습니다.</li>
+            <li>문의: <a href="mailto:3k.pokeclip@gmail.com">3k.pokeclip@gmail.com</a></li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="officer" aria-labelledby="officer-title">
+        <h2 id="officer-title">14. 개인정보 보호책임자</h2>
+        <div class="legal-body">
+          <p>개인정보 처리에 관한 문의, 불만 처리, 피해 구제는 아래 보호책임자에게 연락해 주세요.</p>
+          <ul>
+            <li>개인정보 보호책임자: 〔이름〕</li>
+            <li>연락처: <a href="mailto:3k.pokeclip@gmail.com">3k.pokeclip@gmail.com</a></li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="remedies" aria-labelledby="remedies-title">
+        <h2 id="remedies-title">15. 권익 침해 구제 방법</h2>
+        <div class="legal-body">
+          <p>개인정보 침해로 상담이나 구제가 필요하면 아래 기관에 문의할 수 있습니다.</p>
+          <ul>
+            <li>개인정보분쟁조정위원회: 1833-6972 (www.kopico.go.kr)</li>
+            <li>개인정보침해신고센터: 국번 없이 118 (privacy.kisa.or.kr)</li>
+            <li>대검찰청: 국번 없이 1301 (www.spo.go.kr)</li>
+            <li>경찰청: 국번 없이 182 (ecrm.police.go.kr)</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="changes" aria-labelledby="changes-title">
+        <h2 id="changes-title">16. 개인정보 처리방침의 변경</h2>
+        <div class="legal-body">
+          <p>이 방침은 2026년 〔월〕 〔일〕부터 적용합니다. 내용을 바꾸면 시행 7일 전에(회원에게 불리하거나 중요한 변경은 30일 전에) 서비스 안에 공지합니다. 이전 판은 아래 개정 이력에 남깁니다.</p>
+        </div>
+      </section>
+
+      <section id="history" aria-labelledby="history-title">
+        <h2 id="history-title">개정 이력</h2>
+        <div class="legal-body">
+          <div class="legal-table" role="region" aria-label="개정 이력 표" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">판</th><th scope="col">시행일</th><th scope="col">내용</th></tr></thead>
+              <tbody><tr><td>1.0</td><td>2026년 〔월〕 〔일〕</td><td>제정</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </article>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer__inner">
+      <div class="footer__brand">
+        <img src="../assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
+        <p class="muted">라이브의 순간을 발견해, 주머니에 담다.</p>
+      </div>
+      <nav class="footer__links" aria-label="푸터 메뉴">
+        <a href="/">홈</a><a href="/terms">이용약관</a><a href="/privacy" class="footer__privacy" aria-current="page">개인정보 처리방침</a>
+      </nav>
+      <p class="footer__legal muted">운영 PokeClip 팀 · 문의 <a href="mailto:3k.pokeclip@gmail.com">3k.pokeclip@gmail.com</a> · © 2026 PokeClip</p>
+    </div>
+  </footer>
+</body>
+</html>
