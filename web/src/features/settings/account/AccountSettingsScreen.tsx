@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { LEGAL_URLS } from '@/features/legal/legalInfo';
 import { SettingsPageHeader } from '../SettingsPageHeader';
 import { LoginCard } from './LoginCard';
 import { ProfileCard } from './ProfileCard';
@@ -77,6 +78,22 @@ export function AccountSettingsScreen() {
           탈퇴하기
         </button>
       </div>
+
+      {/* 로그인한 뒤에도 약관·처리방침에 닿는 자리 (POK-269). 문서는 랜딩(pokeclip.com)에 있어
+          새 탭으로 연다. 처리방침은 굵게 구분한다 */}
+      <nav aria-label="약관 및 정책" className={styles.legalLinks}>
+        <a href={LEGAL_URLS.terms} target="_blank" rel="noopener noreferrer">
+          이용약관
+        </a>
+        <a
+          href={LEGAL_URLS.privacy}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={styles.privacyLink}
+        >
+          개인정보 처리방침
+        </a>
+      </nav>
 
       {/* 막힌 상태에서는 재확인 대신 이유를 보여 준다 — 두 모달이 동시에 뜨지 않는다 */}
       <WithdrawDialog
