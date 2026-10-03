@@ -501,7 +501,9 @@ strong { font-weight: 600; color: var(--t1); }
 .conn__tile { display: grid; place-items: center; overflow: hidden; background: #0e0f11; }
 .conn__tile--soop { background: #1d2a63; }
 .conn__tile--soop img { width: 22px; height: auto; }
-.conn__tile .yt { transform: scale(0.5); }
+/* .yt(36×26)를 scale로 줄이면 레이아웃 폭 36이 28px 타일의 그리드 칸을 늘려 4px 오른쪽으로 치우친다 — 크기 자체를 절반으로 */
+.conn__tile .yt { width: 18px; height: 13px; border-radius: 4px; }
+.conn__tile .yt::after { margin: -3px 0 0 -2px; border-left-width: 5.5px; border-top-width: 3px; border-bottom-width: 3px; }
 .conn__name { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .conn__sub { grid-column: 2; font-size: 11px; color: var(--t3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .conn .mock__btn { grid-column: 3; grid-row: 1 / span 2; }
@@ -1116,8 +1118,8 @@ strong { font-weight: 600; color: var(--t1); }
 /* 푸터: 하단 CTA 바는 푸터에서 숨으므로 바 자리 여백이 필요 없다 */
 @media (max-width: 1023px) { .footer { padding-bottom: calc(48px + env(safe-area-inset-bottom)); } }
 
-/* SOOP 워드마크를 다크 배경에서 흰색으로 */
-.logos__item img[alt='SOOP'] { filter: brightness(0) invert(1); }
+/* SOOP 워드마크 SVG는 배포판(White 포함)부터 채움 색 정의가 빠져 검게 그려진다 — 다크 배경에서 흰색으로 */
+.logos__item img[alt='SOOP'], .conn__tile--soop img { filter: brightness(0) invert(1); }
 
 /* S11: 높이가 낮은 가로 화면(768 안팎)에서 최종 CTA가 한 화면에 들어오게 */
 @media (max-height: 820px) and (min-width: 1024px) {
