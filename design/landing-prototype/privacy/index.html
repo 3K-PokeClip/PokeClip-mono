@@ -7,9 +7,10 @@
   <meta name="description" content="PokeClip 개인정보 처리방침" />
   <meta name="theme-color" content="#141517" />
   <link rel="canonical" href="https://pokeclip.com/privacy" />
-  <link rel="preload" href="../assets/fonts/PretendardVariable.woff2" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="../styles.css" />
-  <link rel="stylesheet" href="../legal.css" />
+  <link rel="preload" href="/assets/fonts/PretendardVariable.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/legal.css" />
+  <script src="/legal.js" defer></script>
 </head>
 <!--
   개인정보 처리방침 1.0 (POK-269). 랜딩(pokeclip.com)의 정적 페이지이고, 대시보드(app.pokeclip.com)와
@@ -17,7 +18,8 @@
   따르고, 13절은 YouTube API Services Developer Policies III.A.2가 요구하는 고지를 한곳에 모은다.
 
   처리방침은 실제 동작과 같아야 한다 — 다르게 쓰면 그 자체가 위반이다. 항목·기간을 바꾸려면 코드부터 바꾸고
-  이 문서를 따라 고친다(처리방침 개정은 시행 7일 전 공지).
+  이 문서를 따라 고친다(처리방침 개정은 시행 7일 전 공지). 개정은 scripts/legal-versions.mjs archive로 지금 판을
+  /privacy/<시행일>/에 얼려 두고 시작한다 — 지난 판은 지우지 않는다. 자산 경로가 루트 기준인 것도 그래서다.
 
   🔴 출시 게이트(POK-269 「추가 범위」): 3절 표의 「시청자 채팅·후원」「탈퇴 시 회원 콘텐츠」「연동 채널 ID와
   채널 이름」 행은 아직 코드가 따르지 않는 목표값이다. 이 셋이 구현되기 전에는 공개 배포하지 않는다.
@@ -29,7 +31,7 @@
   <header class="legal-top">
     <div class="container legal-top__inner">
       <a href="/" aria-label="PokeClip 홈">
-        <img src="../assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
+        <img src="/assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
       </a>
     </div>
   </header>
@@ -38,7 +40,16 @@
     <article class="legal-doc">
       <header class="legal-doc__head">
         <h1>개인정보 처리방침</h1>
-        <p class="legal-doc__meta">시행일 2026년 〔월〕 〔일〕</p>
+        <!-- legal-versions:start — scripts/legal-versions.mjs가 legal-versions.json으로 다시 쓴다. 손으로 고치지 않는다 -->
+        <div class="legal-version">
+          <details class="legal-version__menu">
+            <summary aria-label="시행일 2026.〔월〕.〔일〕 — 다른 판 보기">2026.〔월〕.〔일〕</summary>
+            <ul>
+              <li><a href="/privacy/" aria-current="page">2026.〔월〕.〔일〕 <span class="legal-version__badge">현재</span></a></li>
+            </ul>
+          </details>
+        </div>
+        <!-- legal-versions:end -->
         <p class="legal-doc__intro">PokeClip 팀(대표 〔이름〕)(이하 「운영자」)은 「개인정보 보호법」에 따라 정보주체의 개인정보를 보호하고 관련 고충을 빠르게 처리하려고 이 처리방침을 둡니다. 이 방침은 PokeClip 회원(스트리머와 편집자)뿐 아니라, 서비스가 처리하는 시청자 정보에도 적용됩니다.</p>
       </header>
 
@@ -288,28 +299,17 @@
       <section id="changes" aria-labelledby="changes-title">
         <h2 id="changes-title">16. 개인정보 처리방침의 변경</h2>
         <div class="legal-body">
-          <p>이 방침은 2026년 〔월〕 〔일〕부터 적용합니다. 내용을 바꾸면 시행 7일 전에(회원에게 불리하거나 중요한 변경은 30일 전에) 서비스 안에 공지합니다. 이전 판은 아래 개정 이력에 남깁니다.</p>
+          <p>이 방침은 2026년 〔월〕 〔일〕부터 적용합니다. 내용을 바꾸면 시행 7일 전에(회원에게 불리하거나 중요한 변경은 30일 전에) 서비스 안에 공지합니다. 지난 판은 제목 아래 시행일 목록에서 볼 수 있습니다.</p>
         </div>
       </section>
 
-      <section id="history" aria-labelledby="history-title">
-        <h2 id="history-title">개정 이력</h2>
-        <div class="legal-body">
-          <div class="legal-table" role="region" aria-label="개정 이력 표" tabindex="0">
-            <table>
-              <thead><tr><th scope="col">판</th><th scope="col">시행일</th><th scope="col">내용</th></tr></thead>
-              <tbody><tr><td>1.0</td><td>2026년 〔월〕 〔일〕</td><td>제정</td></tr></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
     </article>
   </main>
 
   <footer class="footer">
     <div class="container footer__inner">
       <div class="footer__brand">
-        <img src="../assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
+        <img src="/assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
         <p class="muted">라이브의 순간을 발견해, 주머니에 담다.</p>
       </div>
       <nav class="footer__links" aria-label="푸터 메뉴">
