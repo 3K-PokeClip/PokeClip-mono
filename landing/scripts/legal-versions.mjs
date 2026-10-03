@@ -54,7 +54,8 @@ export function syncAll({ write }) {
   for (const [doc, versions] of Object.entries(manifest)) {
     versions.forEach((version, index) => {
       const file = new URL(version.file, ROOT);
-      if (!existsSync(file)) throw new Error(`${version.file}가 없다 (legal-versions.json의 ${doc} ${version.label})`);
+      if (!existsSync(file))
+        throw new Error(`${version.file}가 없다 (legal-versions.json의 ${doc} ${version.label})`);
       const html = readFileSync(file, 'utf8');
       const match = html.match(BLOCK);
       if (!match) throw new Error(`${version.file}에 legal-versions 표시가 없다`);
@@ -75,9 +76,12 @@ function archive(doc, nextLabel) {
   if (!DATE.test(nextLabel ?? '')) throw new Error('새 시행일은 YYYY.MM.DD로 준다');
   const current = versions[0];
   if (!DATE.test(current.label)) {
-    throw new Error(`지금 판의 시행일(${current.label})이 확정되지 않았다 — 자리표시인 판은 보관할 수 없다`);
+    throw new Error(
+      `지금 판의 시행일(${current.label})이 확정되지 않았다 — 자리표시인 판은 보관할 수 없다`,
+    );
   }
-  if (nextLabel <= current.label) throw new Error(`새 시행일은 지금 판(${current.label})보다 뒤여야 한다`);
+  if (nextLabel <= current.label)
+    throw new Error(`새 시행일은 지금 판(${current.label})보다 뒤여야 한다`);
 
   const slug = current.label.replaceAll('.', '-');
   const archived = `${doc}/${slug}/index.html`;
@@ -97,7 +101,9 @@ function archive(doc, nextLabel) {
   syncAll({ write: true });
 
   console.log(`✓ ${current.label} 판을 ${archived}에 보관했다`);
-  console.log(`  다음: ${doc}/index.html 본문과 본문 속 시행일 문장을 ${nextLabel} 판으로 고친 뒤 check-legal을 돌린다`);
+  console.log(
+    `  다음: ${doc}/index.html 본문과 본문 속 시행일 문장을 ${nextLabel} 판으로 고친 뒤 check-legal을 돌린다`,
+  );
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -108,7 +114,9 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     } else if (command === '--check') {
       const stale = syncAll({ write: false });
       if (stale.length > 0) {
-        console.error(`✗ 드롭다운이 목록과 다르다: ${stale.join(', ')} — legal-versions.mjs를 돌린다`);
+        console.error(
+          `✗ 드롭다운이 목록과 다르다: ${stale.join(', ')} — legal-versions.mjs를 돌린다`,
+        );
         process.exit(1);
       }
       console.log('✓ 판 목록과 드롭다운이 같다');

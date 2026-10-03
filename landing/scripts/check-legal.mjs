@@ -10,7 +10,11 @@ import { syncAll } from './legal-versions.mjs';
 
 const root = new URL('..', import.meta.url);
 const read = (path) => readFileSync(new URL(path, root), 'utf8');
-const text = (html) => html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+const text = (html) =>
+  html
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 const headings = (html) => [...html.matchAll(/<h2[^>]*>([\s\S]*?)<\/h2>/g)].map((m) => text(m[1]));
 
 const failures = [];
@@ -47,7 +51,10 @@ for (const title of REQUIRED_PRIVACY_SECTIONS) {
 
 // YouTube API Services Developer Policies III.A — 주소는 정책에 적힌 그대로여야 한다
 const href = (html, url) => html.includes(`href="${url}"`);
-expect(href(pages.privacy, 'http://www.google.com/policies/privacy'), '처리방침에 Google 개인정보처리방침 링크가 없다');
+expect(
+  href(pages.privacy, 'http://www.google.com/policies/privacy'),
+  '처리방침에 Google 개인정보처리방침 링크가 없다',
+);
 expect(
   href(pages.privacy, 'https://security.google.com/settings/security/permissions'),
   '처리방침에 Google 권한 철회 링크가 없다',
@@ -56,33 +63,61 @@ expect(
   href(pages.privacy, 'https://developers.google.com/terms/api-services-user-data-policy'),
   '처리방침에 Google API 사용자 데이터 정책(Limited Use) 링크가 없다',
 );
-expect(text(pages.privacy).includes('YouTube API 서비스를 사용합니다'), '처리방침에 YouTube API 사용 고지가 없다');
-expect(href(pages.terms, 'https://www.youtube.com/t/terms'), '약관에 YouTube 서비스 약관 링크가 없다');
 expect(
-  text(pages.terms).includes('회원은 서비스를 이용함으로써 YouTube 서비스 약관에 구속되는 데 동의합니다.'),
+  text(pages.privacy).includes('YouTube API 서비스를 사용합니다'),
+  '처리방침에 YouTube API 사용 고지가 없다',
+);
+expect(
+  href(pages.terms, 'https://www.youtube.com/t/terms'),
+  '약관에 YouTube 서비스 약관 링크가 없다',
+);
+expect(
+  text(pages.terms).includes(
+    '회원은 서비스를 이용함으로써 YouTube 서비스 약관에 구속되는 데 동의합니다.',
+  ),
   '약관에 YouTube 약관 구속 문장이 없다',
 );
 
 // 치지직·SOOP은 같은 기준이다 — SOOP 개발자 이용약관 심사에 필요한 문장(제11조 ④⑤⑰)을 두 플랫폼에 함께 쓴다.
 // 제11조 ⑰: 동의 철회를 주기적으로 확인하고 지체 없이 파기한다
 expect(
-  text(pages.privacy).includes('해제하면 토큰을 폐기하고 그 채널의 정보를 더 받지 않으며, 그 채널에서 받은 개인정보는 지체 없이 파기합니다.'),
+  text(pages.privacy).includes(
+    '해제하면 토큰을 폐기하고 그 채널의 정보를 더 받지 않으며, 그 채널에서 받은 개인정보는 지체 없이 파기합니다.',
+  ),
   '처리방침에 치지직·SOOP 연동 해제 시 수집 중단과 지체 없는 파기가 없다',
 );
-expect(text(pages.privacy).includes('연동 상태를 주기적으로 확인해'), '처리방침에 치지직·SOOP 동의 철회 확인이 없다');
-expect(text(pages.privacy).includes('받은 정보를 팔거나 제3자에게 주지 않습니다.'), '처리방침에 치지직·SOOP 제3자 제공 금지가 없다');
+expect(
+  text(pages.privacy).includes('연동 상태를 주기적으로 확인해'),
+  '처리방침에 치지직·SOOP 동의 철회 확인이 없다',
+);
+expect(
+  text(pages.privacy).includes('받은 정보를 팔거나 제3자에게 주지 않습니다.'),
+  '처리방침에 치지직·SOOP 제3자 제공 금지가 없다',
+);
 expect(
   text(pages.terms).includes('치지직과 SOOP 각각의 이용약관과 운영정책을 지키는 데 동의합니다'),
   '약관에 치지직·SOOP 약관 준수 문장이 없다',
 );
 
 // 처리방침은 회원이 아닌 시청자 정보와 그 권리 행사를 밝혀야 한다
-expect(text(pages.privacy).includes('시청자 정보(회원 아님)'), '처리방침에 시청자 정보 항목이 없다');
-expect(text(pages.privacy).includes('회원이 아닌 시청자도 같은 권리를 행사할 수 있습니다.'), '처리방침에 시청자 권리 행사가 없다');
+expect(
+  text(pages.privacy).includes('시청자 정보(회원 아님)'),
+  '처리방침에 시청자 정보 항목이 없다',
+);
+expect(
+  text(pages.privacy).includes('회원이 아닌 시청자도 같은 권리를 행사할 수 있습니다.'),
+  '처리방침에 시청자 권리 행사가 없다',
+);
 
 // 약관 — 14세 제한, 저작권법 제103조 수령인, 약관규제법 제7조(고의·중과실 면책 무효)
-expect(text(pages.terms).includes('만 14세 미만은 가입할 수 없습니다.'), '약관에 만 14세 제한이 없다');
-expect(text(pages.terms).includes('복제·전송 중단 요청 담당자'), '약관에 복제·전송 중단 요청 담당자가 없다');
+expect(
+  text(pages.terms).includes('만 14세 미만은 가입할 수 없습니다.'),
+  '약관에 만 14세 제한이 없다',
+);
+expect(
+  text(pages.terms).includes('복제·전송 중단 요청 담당자'),
+  '약관에 복제·전송 중단 요청 담당자가 없다',
+);
 expect(!text(pages.terms).includes('일체 책임'), '약관에 「일체 책임」 같은 전부 면책 문장이 있다');
 expect(
   text(pages.terms).includes('고의나 중대한 과실로 생긴 손해에는 이 항을 적용하지 않습니다'),
@@ -101,7 +136,10 @@ for (const [name, html] of Object.entries(pages)) {
 // 시행일 드롭다운이 legal-versions.json과 같아야 한다 — 지난 판을 고를 수 없으면 판을 보관한 의미가 없다
 try {
   const stale = syncAll({ write: false });
-  expect(stale.length === 0, `시행일 드롭다운이 목록과 다르다: ${stale.join(', ')} — scripts/legal-versions.mjs를 돌린다`);
+  expect(
+    stale.length === 0,
+    `시행일 드롭다운이 목록과 다르다: ${stale.join(', ')} — scripts/legal-versions.mjs를 돌린다`,
+  );
 } catch (error) {
   failures.push(error.message);
 }
