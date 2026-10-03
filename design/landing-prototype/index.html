@@ -130,39 +130,46 @@
     <section class="section detect" id="detect" data-section="detect">
       <div class="container">
         <header class="section-head">
-          <p class="eyebrow eyebrow--point">자동 하이라이트 감지</p>
-          <h2 class="h2">채팅이 터지는 순간,<br />포키가 먼저 알아채요.</h2>
-          <p class="body muted">메시지 수가 아니라 <strong>말한 사람 수</strong>가 갑자기 늘어나는 순간을 봐요. 그 장면이 라이브 대시보드에 카드로 떠요.</p>
+          <p class="eyebrow eyebrow--point">포키 하이라이트 엔진</p>
+          <h2 class="h2">VOD 정주행은 그만.<br />포키가 먼저 찾아요.</h2>
+          <p class="body muted">포키는 방송 내내 <strong>채팅·후원·목소리 반응</strong>을 한꺼번에 읽어요. 반응이 함께 치솟는 순간을 골라 점수를 매기고, 라이브 대시보드에 <strong>점프카드</strong>로 바로 띄워요. 몇 시간짜리 다시보기를 처음부터 돌려 볼 필요가 없어요.</p>
         </header>
 
         <div class="stage" data-stage>
           <div class="stage__chat mock" aria-label="채팅 예시">
-            <div class="mock__bar"><span>채팅</span><span class="mock__count" data-chat-rate>분당 42</span></div>
+            <div class="mock__bar"><span>채팅 · 후원</span><span class="mock__count" data-chat-rate>분당 42</span></div>
             <div class="chat" data-chat><ul>
               <li><b style="--c:#7d93d9">감자칩</b>오 이거 뭐야</li>
               <li><b style="--c:#ef9bd3">새벽세시</b>ㅋㅋㅋㅋㅋㅋ</li>
+              <li class="chat__donation"><b style="--c:#ffd607">초코송이</b><span class="chat__amount">₩10,000</span>방금 거 레전드</li>
               <li><b style="--c:#9efaff">한타장인</b>와 방금 그거</li>
-              <li><b style="--c:#ffd607">초코송이</b>클립각 클립각</li>
               <li><b style="--c:#8cfa5a">나무늘보</b>미쳤다 ㄷㄷ</li>
               <li><b style="--c:#e568ba">구독자1</b>다시 보여줘요</li>
-              <li><b style="--c:#a8b9e8">야식왕</b>ㅋㅋㅋㅋㅋㅋㅋ</li>
+              <li class="chat__donation"><b style="--c:#a8b9e8">야식왕</b><span class="chat__amount">₩5,000</span>클립 따주세요</li>
+              <li><b style="--c:#ffb3d9">월요병</b>ㅋㅋㅋㅋㅋㅋㅋ</li>
             </ul></div>
           </div>
 
           <div class="stage__graph mock">
             <div class="mock__bar">
-              <span>말한 사람 수</span>
+              <span>방송 반응 분석</span>
               <span class="status" data-status><i class="spinner" aria-hidden="true"></i>분석 중…</span>
             </div>
             <svg class="wave" viewBox="0 0 600 220" preserveAspectRatio="none" data-wave aria-hidden="true"></svg>
             <div class="peak" data-peak><span class="peak__ring"></span><span class="peak__label">×3.4</span></div>
+            <!-- 신호 셋 — 기본값은 정점 상태(모션이 없을 때 그대로 보인다). motion.js가 스크롤에 맞춰 --v와 값을 바꾼다 -->
+            <ul class="signals" aria-label="포키가 보는 신호">
+              <li data-signal="chat" style="--v:.92"><span class="signals__name">채팅 반응</span><span class="signals__bar"><i></i></span><b class="signals__val" data-signal-val>×3.4</b></li>
+              <li data-signal="donation" style="--v:.72"><span class="signals__name">후원</span><span class="signals__bar"><i></i></span><b class="signals__val" data-signal-val>5건</b></li>
+              <li data-signal="voice" style="--v:.84"><span class="signals__name">목소리 반응</span><span class="signals__bar"><i></i></span><b class="signals__val" data-signal-val>높음</b></li>
+            </ul>
           </div>
 
           <article class="jumpcard" data-jumpcard aria-label="점프카드 예시">
             <div class="jumpcard__thumb">
               <img class="jumpcard__img" src="assets/img/clip-arena-peak.webp" alt="" aria-hidden="true" loading="lazy" />
               <span class="badge badge--point">97점</span>
-              <span class="jumpcard__reason">채팅 급증</span>
+              <span class="jumpcard__reason">반응 급증</span>
               <span class="jumpcard__dur">0:42</span>
               <svg class="jumpcard__spark" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true">
                 <polygon points="0,22 0,18 8,17 16,18 24,15 32,16 40,9 48,13 56,15 64,4 72,12 80,14 88,10 96,13 100,14 100,22" />
