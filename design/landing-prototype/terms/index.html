@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>이용약관 · PokeClip</title>
+  <meta name="description" content="PokeClip 서비스 이용약관" />
+  <meta name="theme-color" content="#141517" />
+  <link rel="canonical" href="https://pokeclip.com/terms" />
+  <link rel="preload" href="../assets/fonts/PretendardVariable.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="../styles.css" />
+  <link rel="stylesheet" href="../legal.css" />
+</head>
+<!--
+  이용약관 1.0 (POK-269). 랜딩(pokeclip.com)의 정적 페이지이고, 대시보드(app.pokeclip.com)는 이 주소로 잇는다.
+  쓰는 원칙 셋:
+  1. 실제 동작만 적는다 — 보관 기간·업로드 방식은 코드 값과 같아야 한다.
+  2. 「일체 책임지지 않는다」를 쓰지 않는다 — 고의·중과실 면책은 약관규제법 제7조로 무효다.
+  3. 가입은 로그인 화면 고지 + 로그인으로 성립한다(체크박스 없음) — 이 문서와 개정 이력을 지우지 않는 것이
+     동의의 증거다. 개정하면 이전 판을 따로 보존한다.
+  🔴 〔 〕는 공개 전에 확정할 자리표시다. 남아 있으면 공개 배포하지 않는다 (scripts/check-legal.mjs --release).
+-->
+<body class="legal-page">
+  <a class="skip" href="#main">본문으로 건너뛰기</a>
+
+  <header class="legal-top">
+    <div class="container legal-top__inner">
+      <a href="/" aria-label="PokeClip 홈">
+        <img src="../assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
+      </a>
+    </div>
+  </header>
+
+  <main id="main" class="container legal">
+    <article class="legal-doc">
+      <header class="legal-doc__head">
+        <h1>PokeClip 이용약관</h1>
+        <p class="legal-doc__meta">시행일 2026년 〔월〕 〔일〕</p>
+      </header>
+
+      <nav class="legal-toc" aria-label="목차">
+        <ol>
+          <li><a href="#purpose">제1조 (목적)</a></li>
+          <li><a href="#definitions">제2조 (정의)</a></li>
+          <li><a href="#notice-and-amendment">제3조 (약관의 게시와 개정)</a></li>
+          <li><a href="#other-rules">제4조 (약관 밖의 사항)</a></li>
+          <li><a href="#contract">제5조 (이용계약의 성립)</a></li>
+          <li><a href="#account">제6조 (계정과 스트림 키의 관리)</a></li>
+          <li><a href="#service">제7조 (서비스의 내용)</a></li>
+          <li><a href="#retention">제8조 (데이터 보관 기간)</a></li>
+          <li><a href="#platforms">제9조 (연동 플랫폼)</a></li>
+          <li><a href="#automation">제10조 (자동 기능과 인공지능)</a></li>
+          <li><a href="#delegation">제11조 (편집자 위임)</a></li>
+          <li><a href="#content-rights">제12조 (콘텐츠의 권리)</a></li>
+          <li><a href="#warranty">제13조 (회원의 보증)</a></li>
+          <li><a href="#takedown">제14조 (권리 침해 신고와 게시 중단)</a></li>
+          <li><a href="#prohibited">제15조 (금지 행위)</a></li>
+          <li><a href="#operator-duties">제16조 (운영자의 의무)</a></li>
+          <li><a href="#restriction">제17조 (이용 제한)</a></li>
+          <li><a href="#withdrawal">제18조 (탈퇴와 데이터 처리)</a></li>
+          <li><a href="#liability">제19조 (책임)</a></li>
+          <li><a href="#notification">제20조 (통지)</a></li>
+          <li><a href="#jurisdiction">제21조 (준거법과 관할)</a></li>
+          <li><a href="#addendum">부칙</a></li>
+        </ol>
+      </nav>
+
+      <section id="purpose" aria-labelledby="purpose-title">
+        <h2 id="purpose-title">제1조 (목적)</h2>
+        <div class="legal-body">
+          <p>이 약관은 PokeClip 팀(대표 〔이름〕)(이하 「운영자」)이 제공하는 PokeClip 서비스(이하 「서비스」)의 이용 조건과 절차, 운영자와 회원의 권리·의무와 책임을 정합니다.</p>
+        </div>
+      </section>
+
+      <section id="definitions" aria-labelledby="definitions-title">
+        <h2 id="definitions-title">제2조 (정의)</h2>
+        <div class="legal-body">
+          <ol>
+            <li>「회원」은 이 약관에 동의하고 Google 계정으로 서비스에 가입한 사람입니다.</li>
+            <li>「스트리머」는 자신의 방송을 서비스로 송출하고 방송 채널을 연동한 회원입니다.</li>
+            <li>「편집자」는 스트리머의 초대를 수락해 그 스트리머의 방송과 클립을 다룰 권한을 위임받은 회원입니다.</li>
+            <li>「연동 플랫폼」은 치지직, YouTube처럼 회원이 계정을 연결해 서비스와 함께 쓰는 외부 서비스입니다.</li>
+            <li>「방송 데이터」는 서비스가 받은 방송 영상·음성과 그 녹화본(되감기·다시보기)입니다.</li>
+            <li>「클립」은 방송 데이터에서 잘라 만든 영상이고, 「편집본」은 클립을 만들기 위한 구간·오디오 트랙·자막 같은 편집 정보입니다.</li>
+            <li>「채팅 데이터」는 연동 플랫폼에서 받은 시청자의 채팅과 후원 정보입니다.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="notice-and-amendment" aria-labelledby="notice-and-amendment-title">
+        <h2 id="notice-and-amendment-title">제3조 (약관의 게시와 개정)</h2>
+        <div class="legal-body">
+          <ol>
+            <li>운영자는 이 약관을 서비스 소개 페이지와 로그인 화면에서 연결되는 페이지에 게시합니다.</li>
+            <li>운영자는 관련 법령을 위반하지 않는 범위에서 이 약관을 개정할 수 있습니다.</li>
+            <li>약관을 개정하면 적용일과 개정 사유를 밝혀 적용일 7일 전부터 서비스 안에 공지합니다. 회원에게 불리하거나 중요한 변경은 적용일 30일 전부터 공지하고, 서비스 안 알림이나 회원의 Google 계정 이메일로 따로 알립니다.</li>
+            <li>제3항에 따라 알리면서 「적용일까지 거부 의사를 밝히지 않으면 동의한 것으로 본다」는 뜻을 분명히 알렸는데도 회원이 거부 의사를 밝히지 않으면, 회원이 개정 약관에 동의한 것으로 봅니다.</li>
+            <li>개정 약관에 동의하지 않는 회원은 이용계약을 해지(탈퇴)할 수 있습니다.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="other-rules" aria-labelledby="other-rules-title">
+        <h2 id="other-rules-title">제4조 (약관 밖의 사항)</h2>
+        <div class="legal-body">
+          <p>이 약관에 정하지 않은 사항은 관련 법령과 상관례에 따릅니다.</p>
+        </div>
+      </section>
+
+      <section id="contract" aria-labelledby="contract-title">
+        <h2 id="contract-title">제5조 (이용계약의 성립)</h2>
+        <div class="legal-body">
+          <ol>
+            <li>이용계약은 가입하려는 사람이 로그인 화면에서 이 약관에 동의한다는 안내를 보고 Google 계정으로 로그인하면 성립합니다.</li>
+            <li>만 14세 미만은 가입할 수 없습니다.</li>
+            <li>운영자는 다른 사람의 계정을 쓰는 경우, 이 약관 위반으로 이용이 제한된 적이 있는 경우, 법령을 위반할 목적이 분명한 경우에는 가입을 거절하거나 나중에 이용계약을 해지할 수 있습니다.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="account" aria-labelledby="account-title">
+        <h2 id="account-title">제6조 (계정과 스트림 키의 관리)</h2>
+        <div class="legal-body">
+          <p>회원은 자신의 Google 계정과 서비스가 발급한 스트림 키·페어링 코드를 스스로 관리하며, 다른 사람이 쓰게 해서는 안 됩니다. 도용을 알게 되면 바로 운영자에게 알리고 스트림 키를 새로 발급받아야 합니다.</p>
+        </div>
+      </section>
+
+      <section id="service" aria-labelledby="service-title">
+        <h2 id="service-title">제7조 (서비스의 내용)</h2>
+        <div class="legal-body">
+          <ol>
+            <li>운영자는 다음 서비스를 제공합니다.
+              <ul>
+                <li>OBS 플러그인으로 송출한 방송의 수신, 되감기, 다시보기</li>
+                <li>연동한 치지직 채널의 채팅을 분석한 하이라이트 후보 표시</li>
+                <li>클립 편집과 렌더링(오디오 트랙 선택, 화면 비율 변환 등)</li>
+                <li>스트리머의 YouTube 채널로 클립 업로드(기본은 비공개)</li>
+                <li>편집자 초대와 권한 위임</li>
+              </ul>
+            </li>
+            <li>서비스는 <strong>무료 베타</strong>로 제공합니다. 운영자는 기능을 추가·변경·중단할 수 있고, 회원에게 중요한 영향이 있으면 미리 공지합니다.</li>
+            <li>유료 서비스를 도입하면 요금과 조건을 정해 이 약관을 개정하거나 별도 약관을 두고 미리 알립니다. 회원이 따로 동의하기 전에는 요금을 받지 않습니다.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="retention" aria-labelledby="retention-title">
+        <h2 id="retention-title">제8조 (데이터 보관 기간)</h2>
+        <div class="legal-body">
+          <p>서비스는 다음 기간 동안 데이터를 보관하고, 기간이 지나면 삭제합니다.</p>
+          <ul>
+            <li>되감기: 방송 중 최근 1시간</li>
+            <li>다시보기(VOD): 방송 종료 후 60일</li>
+            <li>렌더링한 클립 파일: 만든 뒤 60일</li>
+            <li>편집본: 회원이 지우거나 탈퇴할 때까지</li>
+          </ul>
+          <p>서비스는 영상 보관 서비스가 아닙니다. 계속 보관해야 하는 영상은 기간 안에 YouTube 업로드 등으로 회원이 직접 보관해야 합니다.</p>
+        </div>
+      </section>
+
+      <section id="platforms" aria-labelledby="platforms-title">
+        <h2 id="platforms-title">제9조 (연동 플랫폼)</h2>
+        <div class="legal-body">
+          <ol>
+            <li>서비스의 일부 기능은 치지직, YouTube 같은 연동 플랫폼의 API에 의존합니다. 연동 플랫폼의 정책 변경, 사용량 한도(예: YouTube 업로드 횟수 한도), 장애에 따라 기능이 제한될 수 있습니다.</li>
+            <li>서비스의 YouTube 기능은 YouTube API 서비스를 사용합니다. <strong data-check="youtube-terms">회원은 서비스를 이용함으로써 <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer">YouTube 서비스 약관</a>에 구속되는 데 동의합니다.</strong> Google이 개인정보를 다루는 방식은 <a href="http://www.google.com/policies/privacy" target="_blank" rel="noopener noreferrer">Google 개인정보처리방침</a>을 따릅니다.</li>
+            <li>회원은 각 연동 플랫폼의 이용약관과 운영정책을 지켜야 합니다.</li>
+            <li>회원은 언제든 연동을 해제할 수 있습니다. YouTube 연동을 해제해도 Google 쪽에 남는 접근 권한은 <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">Google 계정 보안 설정</a>에서 직접 철회할 수 있습니다.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="automation" aria-labelledby="automation-title">
+        <h2 id="automation-title">제10조 (자동 기능과 인공지능)</h2>
+        <div class="legal-body">
+          <ol>
+            <li>하이라이트 후보는 채팅량 같은 통계 규칙으로 자동 표시하는 참고 정보입니다. 클립을 만들고 올릴지는 회원이 직접 정합니다.</li>
+            <li>운영자가 인공지능에 기반한 기능(예: 자막 초안)을 제공하게 되면, 그 기능이 인공지능에 기반한다는 사실을 해당 화면과 이 약관에 미리 알립니다.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="delegation" aria-labelledby="delegation-title">
+        <h2 id="delegation-title">제11조 (편집자 위임)</h2>
+        <div class="legal-body">
+          <ol>
+            <li>스트리머는 편집자를 초대해 자신의 방송 데이터, 클립, 편집본, YouTube 업로드 요청 기능을 쓸 권한을 위임할 수 있고, 언제든 위임을 회수할 수 있습니다. 편집자도 언제든 위임에서 나갈 수 있습니다.</li>
+            <li>스트리머는 자신이 위임한 편집자가 위임 범위에서 한 행위에 대해 운영자에게 책임을 집니다. 스트리머와 편집자 사이의 관계와 책임은 두 사람이 정합니다.</li>
+            <li>편집자는 위임받은 범위 안에서만 서비스를 써야 합니다.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="content-rights" aria-labelledby="content-rights-title">
+        <h2 id="content-rights-title">제12조 (콘텐츠의 권리)</h2>
+        <div class="legal-body">
+          <ol>
+            <li>회원의 방송 데이터, 클립, 편집본(이하 「회원 콘텐츠」)의 권리는 회원이나 정당한 권리자에게 있습니다.</li>
+            <li>회원은 서비스 제공에 필요한 범위, 즉 저장, 형식 변환, 편집 결과 생성, 회원이 지시한 연동 플랫폼으로의 전송에 한해 운영자가 회원 콘텐츠를 이용하도록 허락합니다. 이 허락은 해당 콘텐츠가 삭제되거나 회원이 탈퇴하면 끝납니다.</li>
+            <li>운영자는 회원 콘텐츠를 홍보 등 다른 목적에 쓰려면 회원의 별도 동의를 받습니다. 회원 콘텐츠와 채팅 데이터를 인공지능 모델 학습에 쓰지 않습니다.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="warranty" aria-labelledby="warranty-title">
+        <h2 id="warranty-title">제13조 (회원의 보증)</h2>
+        <div class="legal-body">
+          <p>회원은 다음을 보증합니다.</p>
+          <ol>
+            <li>서비스로 송출·편집·업로드하는 콘텐츠에 필요한 권리(음악, 게임 화면과 소리, 영상 소재 등)를 가지고 있거나 권리자에게 허락을 받았습니다.</li>
+            <li>방송에 함께 나오거나 목소리가 담기는 사람(합방 상대, 음성 채팅 참여자 등)에게 필요한 동의를 받았습니다.</li>
+            <li>서비스로 보는 시청자 정보를 연동 플랫폼 정책과 관련 법령에 맞게 다루고, 서비스 목적 밖으로 수집·이용·제공하지 않습니다.</li>
+          </ol>
+          <p>배경음악 트랙을 빼고 내보내는 기능은 편의 기능입니다. 클립에 저작권 문제가 없다는 것을 보장하지 않습니다.</p>
+        </div>
+      </section>
+
+      <section id="takedown" aria-labelledby="takedown-title">
+        <h2 id="takedown-title">제14조 (권리 침해 신고와 게시 중단)</h2>
+        <div class="legal-body">
+          <ol>
+            <li>서비스에 저장된 콘텐츠로 저작권 등 권리를 침해당했다고 주장하는 사람은 아래 담당자에게 복제·전송 중단을 요청할 수 있습니다. 요청에는 권리자임을 소명하는 자료와 침해 대상을 특정할 수 있는 정보를 담아야 합니다.
+              <ul>
+                <li>복제·전송 중단 요청 담당자: 〔이름〕 (<a href="mailto:3k.pokeclip@gmail.com">3k.pokeclip@gmail.com</a>)</li>
+              </ul>
+            </li>
+            <li>운영자는 요청을 받으면 해당 콘텐츠의 복제·전송을 바로 중단하고, 그 사실을 요청한 사람과 해당 회원에게 알립니다. 회원은 정당한 권리가 있음을 소명해 재개를 요청할 수 있습니다.</li>
+            <li>이미 YouTube 등 연동 플랫폼에 게시된 영상은 그 플랫폼의 신고 절차를 따릅니다.</li>
+            <li>운영자는 권리 침해를 되풀이하는 회원의 이용계약을 해지할 수 있습니다.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="prohibited" aria-labelledby="prohibited-title">
+        <h2 id="prohibited-title">제15조 (금지 행위)</h2>
+        <div class="legal-body">
+          <p>회원은 다음 행위를 해서는 안 됩니다.</p>
+          <ol>
+            <li>다른 사람의 계정이나 스트림 키를 쓰는 행위</li>
+            <li>권리 없는 콘텐츠를 송출하거나 업로드하는 행위</li>
+            <li>서비스나 연동 플랫폼의 서버·API에 권한 없이 접근하거나, 보안 장치를 우회하거나, 비정상적인 자동 요청으로 운영을 방해하는 행위</li>
+            <li>불법 촬영물, 음란물 등 법령이 금지하는 콘텐츠를 처리하는 행위</li>
+            <li>서비스로 얻은 시청자 정보를 서비스 목적 밖으로 수집·이용·제공하는 행위</li>
+            <li>그 밖에 관련 법령을 위반하는 행위</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="operator-duties" aria-labelledby="operator-duties-title">
+        <h2 id="operator-duties-title">제16조 (운영자의 의무)</h2>
+        <div class="legal-body">
+          <ol>
+            <li>운영자는 관련 법령과 이 약관을 지키고, 서비스를 안정적으로 제공하려고 노력합니다.</li>
+            <li>운영자는 개인정보 처리방침에 따라 회원과 시청자의 개인정보를 보호합니다.</li>
+            <li>운영자는 회원의 의견이나 불만을 받으면 빠르게 처리하고, 처리에 시간이 걸리면 그 이유와 일정을 알립니다.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="restriction" aria-labelledby="restriction-title">
+        <h2 id="restriction-title">제17조 (이용 제한)</h2>
+        <div class="legal-body">
+          <p>운영자는 회원이 제15조를 위반하면 미리 알린 뒤 이용을 제한하거나 이용계약을 해지할 수 있습니다. 다른 사람의 피해가 커지거나 보안 위협이 있는 급한 경우에는 먼저 제한하고 나중에 알립니다. 회원은 이용 제한에 이의를 제기할 수 있습니다.</p>
+        </div>
+      </section>
+
+      <section id="withdrawal" aria-labelledby="withdrawal-title">
+        <h2 id="withdrawal-title">제18조 (탈퇴와 데이터 처리)</h2>
+        <div class="legal-body">
+          <ol>
+            <li>회원은 계정 설정에서 언제든 탈퇴할 수 있습니다.</li>
+            <li>탈퇴하면 <a href="/privacy">개인정보 처리방침</a>에 정한 대로 회원 정보와 회원 콘텐츠를 파기합니다. 이미 연동 플랫폼에 게시된 영상은 지워지지 않으므로 회원이 그 플랫폼에서 직접 지워야 합니다.</li>
+            <li>탈퇴한 회원이 맡았거나 준 편집자 위임은 탈퇴와 함께 끝납니다.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="liability" aria-labelledby="liability-title">
+        <h2 id="liability-title">제19조 (책임)</h2>
+        <div class="legal-body">
+          <ol>
+            <li>운영자는 고의나 과실로 회원에게 손해를 입히면 관련 법령에 따라 배상합니다.</li>
+            <li>다음 사유로 생긴 손해는 운영자에게 고의나 과실이 없으면 책임지지 않습니다: 천재지변 같은 불가항력, 연동 플랫폼의 장애나 정책 변경, 회원의 귀책(계정·스트림 키 관리 소홀, 권리 없는 콘텐츠 등), 회원의 PC·네트워크·OBS 환경 문제.</li>
+            <li>서비스는 무료 베타로 제공됩니다. 운영자의 경과실로 생긴 손해에 대한 책임은 관련 법령이 허용하는 범위에서 제한됩니다. 다만 운영자의 고의나 중대한 과실로 생긴 손해에는 이 항을 적용하지 않습니다.</li>
+            <li>회원 사이(스트리머와 편집자 등) 또는 회원과 제3자 사이의 분쟁은 당사자가 해결합니다. 운영자는 법령이 허용하는 범위에서 분쟁 해결에 협조할 수 있습니다.</li>
+          </ol>
+        </div>
+      </section>
+
+      <section id="notification" aria-labelledby="notification-title">
+        <h2 id="notification-title">제20조 (통지)</h2>
+        <div class="legal-body">
+          <p>운영자는 서비스 안 공지·알림이나 회원의 Google 계정 이메일로 회원에게 알립니다. 회원 전체에 대한 통지는 7일 이상 서비스 안에 공지하는 것으로 갈음할 수 있습니다. 다만 회원에게 중대한 영향을 주는 사항은 따로 알립니다.</p>
+        </div>
+      </section>
+
+      <section id="jurisdiction" aria-labelledby="jurisdiction-title">
+        <h2 id="jurisdiction-title">제21조 (준거법과 관할)</h2>
+        <div class="legal-body">
+          <p>이 약관은 대한민국 법령에 따릅니다. 서비스 이용과 관련한 분쟁은 민사소송법에 따른 관할 법원에 제기합니다.</p>
+        </div>
+      </section>
+
+      <section id="addendum" aria-labelledby="addendum-title">
+        <h2 id="addendum-title">부칙</h2>
+        <div class="legal-body">
+          <p>이 약관은 2026년 〔월〕 〔일〕부터 시행합니다.</p>
+        </div>
+      </section>
+
+      <section id="history" aria-labelledby="history-title">
+        <h2 id="history-title">개정 이력</h2>
+        <div class="legal-body">
+          <div class="legal-table" role="region" aria-label="개정 이력 표" tabindex="0">
+            <table>
+              <thead><tr><th scope="col">판</th><th scope="col">시행일</th><th scope="col">내용</th></tr></thead>
+              <tbody><tr><td>1.0</td><td>2026년 〔월〕 〔일〕</td><td>제정</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </article>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer__inner">
+      <div class="footer__brand">
+        <img src="../assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
+        <p class="muted">라이브의 순간을 발견해, 주머니에 담다.</p>
+      </div>
+      <nav class="footer__links" aria-label="푸터 메뉴">
+        <a href="/">홈</a><a href="/terms" aria-current="page">이용약관</a><a href="/privacy" class="footer__privacy">개인정보 처리방침</a>
+      </nav>
+      <p class="footer__legal muted">운영 PokeClip 팀 · 문의 <a href="mailto:3k.pokeclip@gmail.com">3k.pokeclip@gmail.com</a> · © 2026 PokeClip</p>
+    </div>
+  </footer>
+</body>
+</html>
