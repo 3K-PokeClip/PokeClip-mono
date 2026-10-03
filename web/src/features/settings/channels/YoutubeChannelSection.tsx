@@ -1,6 +1,7 @@
 'use client';
 
 import { Info } from 'lucide-react';
+import { EXTERNAL_URLS } from '@/features/legal/legalInfo';
 import { YoutubeChannelRow } from './YoutubeChannelRow';
 import type { YoutubeLinkViewState } from './useYoutubeLinkState';
 import styles from './ChannelSettingsScreen.module.css';
@@ -33,6 +34,25 @@ export function YoutubeChannelSection({ state }: { state: YoutubeLinkViewState }
             원하는 채널을 선택해 주세요.
           </span>
         </div>
+        {/* YouTube API Services Developer Policies III.A — 연동 지점에서 YouTube 약관과 Google
+            처리방침을 보여 주고, 권한 철회 경로를 알린다 (POK-269). 주소는 legalInfo가 정책 그대로 쥔다. */}
+        <p className={styles.note}>
+          <span>
+            연동하면{' '}
+            <a href={EXTERNAL_URLS.youtubeTerms} target="_blank" rel="noopener noreferrer">
+              YouTube 서비스 약관
+            </a>
+            에 동의하게 됩니다. Google의 데이터 처리는{' '}
+            <a href={EXTERNAL_URLS.googlePrivacy} target="_blank" rel="noopener noreferrer">
+              Google 개인정보처리방침
+            </a>
+            을, 접근 권한 철회는{' '}
+            <a href={EXTERNAL_URLS.googlePermissions} target="_blank" rel="noopener noreferrer">
+              Google 보안 설정
+            </a>
+            을 확인해 주세요.
+          </span>
+        </p>
       </div>
     </section>
   );
