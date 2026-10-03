@@ -143,6 +143,7 @@
   const peak = $('[data-peak]');
   const card = $('[data-jumpcard]');
   const wave = $('[data-wave]');
+  const signals = $$('[data-signal]');
   let hit = null;
   function setHit(on) {
     if (on === hit) return;
@@ -157,6 +158,15 @@
     wave.style.clipPath = `inset(0 ${((1 - w) * 100).toFixed(2)}% 0 0)`;
     const surge = seg(w, LP.PEAK_AT - 0.14, LP.PEAK_AT + 0.02) * (1 - 0.6 * seg(w, LP.PEAK_AT + 0.14, 1));
     rate.textContent = `분당 ${Math.round(42 + 276 * surge)}`;
+    // 신호 셋 — 채팅과 목소리는 급증과 함께, 후원은 한 박자 늦게 몰린다
+    const gift = seg(w, LP.PEAK_AT - 0.04, LP.PEAK_AT + 0.06) * (1 - 0.5 * seg(w, LP.PEAK_AT + 0.16, 1));
+    signals.forEach((el) => {
+      const kind = el.dataset.signal;
+      const v = kind === 'chat' ? 0.26 + 0.66 * surge : kind === 'donation' ? 0.1 + 0.62 * gift : 0.3 + 0.54 * surge;
+      el.style.setProperty('--v', v.toFixed(3));
+      el.querySelector('[data-signal-val]').textContent =
+        kind === 'chat' ? `×${(1 + 2.4 * surge).toFixed(1)}` : kind === 'donation' ? `${Math.round(5 * gift)}건` : surge > 0.6 ? '높음' : surge > 0.25 ? '올라감' : '보통';
+    });
     setHit(w >= LP.PEAK_AT + 0.02);
   }
   if (full) {
