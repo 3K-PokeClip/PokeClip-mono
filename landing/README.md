@@ -5,7 +5,7 @@
 ## 실행
 
 ```bash
-python3 -m http.server 8765 --directory design/landing-prototype
+python3 -m http.server 8765 --directory landing
 # → http://127.0.0.1:8765/
 ```
 
@@ -97,21 +97,21 @@ URL 파라미터:
 | `scripts/check-legal.mjs` | 빠지면 법 위반이 되는 문장을 지킵니다. 처리방침 필수 절 16개, YouTube 정책 주소, 14세 제한, 고의·중과실 면책 금지, 목차 링크, 드롭다운과 목록의 일치 |
 
 ```bash
-node design/landing-prototype/scripts/check-legal.mjs            # 내용 검사
-node design/landing-prototype/scripts/check-legal.mjs --release  # 자리표시 〔 〕가 남으면 실패 — 공개 배포 전에 돌린다
+node landing/scripts/check-legal.mjs            # 내용 검사
+node landing/scripts/check-legal.mjs --release  # 자리표시 〔 〕가 남으면 실패 — 공개 배포 전에 돌린다
 ```
 
 **개정하는 법** — 토스 약관처럼 제목 아래 시행일 드롭다운에서 지난 판을 고를 수 있습니다. 지난 판은 **지우지도 고치지도 않습니다.** 가입 시각으로 그 회원에게 적용된 판을 찾는 근거입니다.
 
 ```bash
-node design/landing-prototype/scripts/legal-versions.mjs archive terms 2026.11.01
+node landing/scripts/legal-versions.mjs archive terms 2026.11.01
 # ① 지금 판(예: 2026.10.15)을 terms/2026-10-15/index.html로 얼려 둔다 — 대표 주소도 그 판 주소로 바꾼다
 # ② legal-versions.json 맨 앞에 2026.11.01을 올리고 모든 판의 드롭다운을 다시 쓴다
 #    (지난 판에는 「이 약관은 ○○부터 ○○ 전까지 적용된 지난 판입니다 · 현재 판 보기」 안내가 붙는다)
 # ③ 그다음 terms/index.html 본문과 본문 속 시행일 문장(부칙)을 고치고 check-legal을 돌린다
 ```
 
-- 드롭다운 블록(`legal-versions:start`~`end` 사이)은 손으로 고치지 않습니다. 목록을 고쳤으면 `node design/landing-prototype/scripts/legal-versions.mjs`로 다시 씁니다.
+- 드롭다운 블록(`legal-versions:start`~`end` 사이)은 손으로 고치지 않습니다. 목록을 고쳤으면 `node landing/scripts/legal-versions.mjs`로 다시 씁니다.
 - 시행일이 자리표시인 판은 `archive`가 거절합니다. 공개 전에 첫 판의 시행일을 `legal-versions.json`과 본문에 함께 채웁니다.
 - 자산 경로는 루트 기준(`/styles.css`, `/assets/...`)입니다. 지난 판이 한 단계 깊은 폴더에 있어도 그대로 열립니다. 그래서 문서 페이지는 `file://`로는 깨지고, 로컬 서버로 열어야 합니다.
 - **〔 〕는 공개 전에 채울 자리표시입니다.** 운영자 대표·보호책임자·저작권 침해 신고 담당자 이름과 시행일입니다.

@@ -1,6 +1,6 @@
 // 이용약관·개인정보 처리방침 주소 (POK-269).
 //
-// 두 문서는 랜딩(pokeclip.com)의 정적 페이지다 — 원본은 design/landing-prototype/terms·privacy이고,
+// 두 문서는 랜딩(pokeclip.com)의 정적 페이지다 — 원본은 landing/terms·privacy이고,
 // 랜딩을 SSG로 옮길 때 함께 옮긴다. 대시보드(app.pokeclip.com)는 문서를 갖지 않고 그 주소로 잇기만
 // 한다. 원본이 둘이면 두 문서가 서로 다른 말을 하게 된다.
 //

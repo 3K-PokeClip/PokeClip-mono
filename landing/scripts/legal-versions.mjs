@@ -1,8 +1,8 @@
 // 이용약관·개인정보 처리방침의 판(版) 보관 (POK-269). 토스 약관처럼 제목 아래 시행일 드롭다운으로 지난 판을 고른다.
 //
-//   node design/landing-prototype/scripts/legal-versions.mjs                        # 모든 판의 드롭다운을 목록대로 다시 쓴다
-//   node design/landing-prototype/scripts/legal-versions.mjs --check                # 다시 쓸 게 남았으면 실패 (check-legal이 부른다)
-//   node design/landing-prototype/scripts/legal-versions.mjs archive terms 2026.11.01
+//   node landing/scripts/legal-versions.mjs                        # 모든 판의 드롭다운을 목록대로 다시 쓴다
+//   node landing/scripts/legal-versions.mjs --check                # 다시 쓸 게 남았으면 실패 (check-legal이 부른다)
+//   node landing/scripts/legal-versions.mjs archive terms 2026.11.01
 //       # 지금 판을 /terms/<지금 시행일>/에 얼려 두고 새 시행일을 맨 앞에 올린다. 그다음 terms/index.html 본문을 고친다.
 //
 // 목록의 정본은 legal-versions.json이다(새 판이 맨 앞). 지난 판의 본문은 고치지 않는다 — 가입 시각으로 그 회원에게

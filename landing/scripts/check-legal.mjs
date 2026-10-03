@@ -1,7 +1,7 @@
 // 이용약관·개인정보 처리방침 정적 페이지 검사 (POK-269). 의존성 없이 node만으로 돈다.
 //
-//   node design/landing-prototype/scripts/check-legal.mjs            # 내용 검사
-//   node design/landing-prototype/scripts/check-legal.mjs --release  # + 자리표시 〔 〕가 남으면 실패 (공개 배포 전)
+//   node landing/scripts/check-legal.mjs            # 내용 검사
+//   node landing/scripts/check-legal.mjs --release  # + 자리표시 〔 〕가 남으면 실패 (공개 배포 전)
 //
 // 랜딩에는 테스트 장치가 없어서, 빠지면 법 위반이 되는 문장만 문자열로 지킨다.
 // 랜딩을 SSG로 옮기면 이 검사도 그쪽 테스트로 옮긴다.
