@@ -726,7 +726,7 @@ strong { font-weight: 600; color: var(--t1); }
 .logos__item .logos__icon { height: 28px; }
 .logos__item img[alt='치지직'] { height: 20px; }
 /* YouTube SVG는 여백 없이 로고 경계로 잘랐다 — 재생 아이콘 높이가 다른 워드마크 글자 몸통과 맞는 높이 */
-.logos__item img[alt='YouTube'] { height: 16px; }
+.logos__item img[alt='YouTube'] { height: 18px; }
 .numbers { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .numbers > div { display: flex; flex-direction: column; gap: 4px; padding: 22px; border-radius: var(--radius); background: var(--bg-raised); border: 1px solid var(--border); }
 .numbers dt { font-size: 14px; font-weight: 600; color: var(--t2); }
@@ -736,7 +736,7 @@ strong { font-weight: 600; color: var(--t1); }
 }
 .numbers dd small { font-size: 0.42em; margin-left: 2px; }
 .numbers span { font-size: 13px; color: var(--t3); }
-@media (min-width: 768px) { .logos__item { height: 64px; padding: 0 28px; font-size: 17px; } .logos__item img { height: 26px; } .logos__item .logos__icon { height: 30px; } .logos__item img[alt='치지직'] { height: 22px; } .logos__item img[alt='YouTube'] { height: 18px; } }
+@media (min-width: 768px) { .logos__item { height: 64px; padding: 0 28px; font-size: 17px; } .logos__item img { height: 26px; } .logos__item .logos__icon { height: 30px; } .logos__item img[alt='치지직'] { height: 22px; } .logos__item img[alt='YouTube'] { height: 20px; } }
 @media (min-width: 1024px) { .numbers { grid-template-columns: repeat(4, 1fr); gap: 20px; } .numbers > div { padding: 28px; } }
 
 .bands { position: relative; height: clamp(160px, 130px + 4vw, 220px); margin-top: 88px; }
