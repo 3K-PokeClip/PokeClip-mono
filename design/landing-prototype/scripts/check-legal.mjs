@@ -6,6 +6,7 @@
 // 랜딩에는 테스트 장치가 없어서, 빠지면 법 위반이 되는 문장만 문자열로 지킨다.
 // 랜딩을 SSG로 옮기면 이 검사도 그쪽 테스트로 옮긴다.
 import { readFileSync } from 'node:fs';
+import { syncAll } from './legal-versions.mjs';
 
 const root = new URL('..', import.meta.url);
 const read = (path) => readFileSync(new URL(path, root), 'utf8');
@@ -81,6 +82,14 @@ for (const [name, html] of Object.entries(pages)) {
   for (const [, id] of toc?.[0].matchAll(/href="#([^"]+)"/g) ?? []) {
     expect(html.includes(`id="${id}"`), `${name} 목차의 #${id}가 가리키는 절이 없다`);
   }
+}
+
+// 시행일 드롭다운이 legal-versions.json과 같아야 한다 — 지난 판을 고를 수 없으면 판을 보관한 의미가 없다
+try {
+  const stale = syncAll({ write: false });
+  expect(stale.length === 0, `시행일 드롭다운이 목록과 다르다: ${stale.join(', ')} — scripts/legal-versions.mjs를 돌린다`);
+} catch (error) {
+  failures.push(error.message);
 }
 
 // 자리표시 — 평소에는 알리기만 하고, --release에서는 실패시킨다.
