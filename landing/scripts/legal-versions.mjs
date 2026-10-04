@@ -7,6 +7,7 @@
 //
 // 목록의 정본은 legal-versions.json이다(새 판이 맨 앞). 지난 판의 본문은 고치지 않는다 — 가입 시각으로 그 회원에게
 // 적용된 판을 찾는 근거라서다. 이 스크립트가 다시 쓰는 것은 각 판의 legal-versions 표시 사이 드롭다운 블록뿐이다.
+import { createHash } from 'node:crypto';
 import {
   copyFileSync,
   existsSync,
@@ -75,6 +76,24 @@ export function syncAll({ write }) {
   return stale;
 }
 
+// 얼린 판 본문의 지문. 드롭다운 블록은 목록이 바뀔 때마다 다시 쓰므로 빼고 잰다.
+export function bodyHash(html) {
+  return createHash('sha256').update(html.replace(BLOCK, '')).digest('hex');
+}
+
+// 얼릴 때 적어 둔 지문과 지금 본문이 다른 지난 판을 돌려준다 — 일괄 치환이 지난 판까지 고친 것을 잡는다
+export function changedFrozen() {
+  const changed = [];
+  for (const versions of Object.values(readManifest())) {
+    for (const version of versions) {
+      if (!version.sha256) continue;
+      const html = readFileSync(new URL(version.file, ROOT), 'utf8');
+      if (bodyHash(html) !== version.sha256) changed.push(version.file);
+    }
+  }
+  return changed;
+}
+
 // 지금 판을 시행일 폴더에 얼려 두고, 새 시행일을 현재 판으로 올린다.
 function archive(doc, nextLabel) {
   const manifest = readManifest();
@@ -102,7 +121,7 @@ function archive(doc, nextLabel) {
   );
   writeFileSync(new URL(archived, ROOT), frozen);
 
-  versions[0] = { ...current, path: `/${doc}/${slug}/`, file: archived };
+  versions[0] = { ...current, path: `/${doc}/${slug}/`, file: archived, sha256: bodyHash(frozen) };
   versions.unshift({ label: nextLabel, path: `/${doc}/`, file: `${doc}/index.html` });
   writeFileSync(MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`);
   syncAll({ write: true });
@@ -129,6 +148,13 @@ if (invokedDirectly) {
       if (stale.length > 0) {
         console.error(
           `✗ 드롭다운이 목록과 다르다: ${stale.join(', ')} — legal-versions.mjs를 돌린다`,
+        );
+        process.exit(1);
+      }
+      const changed = changedFrozen();
+      if (changed.length > 0) {
+        console.error(
+          `✗ 얼린 지난 판의 본문이 바뀌었다: ${changed.join(', ')} — 지난 판은 고치지 않는다`,
         );
         process.exit(1);
       }

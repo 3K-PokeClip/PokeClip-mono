@@ -6,12 +6,13 @@
 // 랜딩에는 테스트 장치가 없어서, 빠지면 법 위반이 되는 문장만 문자열로 지킨다.
 // 랜딩을 SSG로 옮기면 이 검사도 그쪽 테스트로 옮긴다.
 import { readFileSync } from 'node:fs';
-import { syncAll } from './legal-versions.mjs';
+import { changedFrozen, readManifest, syncAll } from './legal-versions.mjs';
 
 const root = new URL('..', import.meta.url);
-// HTML 주석은 처음부터 뺀다 — 주석 처리한 필수 문장이 본문처럼 통과하거나, 머리 주석의 설명(「일체 책임지지 않는다」,
-// 〔 〕 자리표시 안내)이 금지 문장·자리표시로 걸리지 않게
-const read = (path) => readFileSync(new URL(path, root), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+const raw = (path) => readFileSync(new URL(path, root), 'utf8');
+// 내용 검사는 HTML 주석을 빼고 본다 — 주석 처리한 필수 문장이 본문처럼 통과하지 않게.
+// 주석 속 내부 메모는 아래에서 원문(raw)으로 따로 막는다
+const read = (path) => raw(path).replace(/<!--[\s\S]*?-->/g, '');
 const text = (html) =>
   html
     .replace(/<[^>]+>/g, '')
@@ -146,7 +147,42 @@ try {
   failures.push(error.message);
 }
 
-// 자리표시 — 평소에는 알리기만 하고, --release에서는 실패시킨다. (머리 주석은 read가 이미 뺐다)
+try {
+  const manifest = readManifest();
+
+  // 얼린 지난 판은 고치지 않는다 — 얼릴 때 적은 본문 지문과 지금 본문이 같아야 한다
+  const changed = changedFrozen();
+  expect(changed.length === 0, `얼린 지난 판의 본문이 바뀌었다: ${changed.join(', ')}`);
+
+  // 현재 판 시행일이 본문 시행 문장(약관 부칙·처리방침 17절)과 같아야 한다 — archive 뒤 본문을 안 고치면 여기서 걸린다
+  const koDate = (label) => {
+    const [y, m, d] = label.split('.');
+    const part = (v, unit) => (/^\d+$/.test(v) ? `${Number(v)}${unit}` : v);
+    return `${y}년 ${part(m, '월')} ${part(d, '일')}`;
+  };
+  const EFFECTIVE = { terms: '부터 시행합니다', privacy: '부터 적용합니다' };
+  for (const [doc, tail] of Object.entries(EFFECTIVE)) {
+    const { label } = manifest[doc][0];
+    expect(
+      text(pages[doc]).includes(`${koDate(label)}${tail}`),
+      `${doc} 본문의 시행일 문장이 목록의 현재 판(${label})과 다르다`,
+    );
+  }
+
+  // 공개 HTML(지난 판 포함)에는 내부 메모를 두지 않는다 — 주석도 소스 보기로 그대로 보인다. 메모는 README에 둔다
+  const memos = Object.values(manifest)
+    .flat()
+    .map((version) => version.file)
+    .filter((file) => /🔴|목표값/.test(raw(file)));
+  expect(
+    memos.length === 0,
+    `${memos.join(', ')}에 내부 메모(🔴·목표값)가 있다 — HTML 주석도 공개 소스에 보인다`,
+  );
+} catch (error) {
+  failures.push(error.message);
+}
+
+// 자리표시 —평소에는 알리기만 하고, --release에서는 실패시킨다. (머리 주석은 read가 이미 뺐다)
 const placeholders = Object.entries(pages).flatMap(([name, html]) =>
   [...html.matchAll(/〔[^〕]*〕/g)].map((m) => `${name}: ${m[0]}`),
 );
