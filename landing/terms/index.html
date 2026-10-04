@@ -11,19 +11,7 @@
   <link rel="stylesheet" href="/legal.css" />
   <script src="/legal.js" defer></script>
 </head>
-<!--
-  이용약관 1.0 (POK-269). 랜딩(pokeclip.com)의 정적 페이지이고, 대시보드(app.pokeclip.com)는 이 주소로 잇는다.
-  쓰는 원칙 셋:
-  1. 실제 동작만 적는다 — 보관 기간·업로드 방식은 코드 값과 같아야 한다.
-  2. 「일체 책임지지 않는다」를 쓰지 않는다 — 고의·중과실 면책은 약관규제법 제7조로 무효다.
-  3. 가입은 로그인 화면 고지 + 로그인으로 성립한다(체크박스 없음) — 지난 판을 지우지 않는 것이 동의의 증거다.
-     개정은 scripts/legal-versions.mjs archive로 지금 판을 /terms/<시행일>/에 얼려 두고 시작한다.
-  자산 경로는 루트 기준(/styles.css)이다 — 지난 판이 한 단계 깊은 폴더로 복사돼도 그대로 열린다.
-  🔴 제7조의 공개 범위 선택(공개·일부 공개·비공개)은 목표값이다. 지금 업로드 코드는 비공개 고정
-     (privacyStatus=private)이라 고르는 화면이 없다. 공개·일부 공개는 YouTube API 감사 통과가 전제다 — 감사 전에는
-     무엇을 골라도 YouTube가 비공개로 잠근다. 선택 화면과 감사 통과 둘 다 되기 전에는 공개 배포하지 않는다.
-  🔴 〔 〕는 공개 전에 확정할 자리표시다. 남아 있으면 공개 배포하지 않는다 (scripts/check-legal.mjs --release).
--->
+<!-- 이용약관 (POK-269). 쓰는 원칙과 공개 전 확인 목록은 저장소의 landing/README.md에 둔다 — 이 주석도 공개 소스에 보인다 -->
 <body class="legal-page">
   <a class="skip" href="#main">본문으로 건너뛰기</a>
 
@@ -176,8 +164,8 @@
         <div class="legal-body">
           <ol>
             <li>서비스의 일부 기능은 치지직, SOOP, YouTube 같은 연동 플랫폼의 API에 의존합니다. 연동 플랫폼의 정책 변경, 사용량 한도(예: YouTube 업로드 횟수 한도), 장애에 따라 기능이 제한될 수 있습니다.</li>
-            <li>서비스의 YouTube 기능은 YouTube API 서비스를 사용합니다. <strong data-check="youtube-terms">회원은 서비스를 이용함으로써 <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer">YouTube 서비스 약관</a>에 구속되는 데 동의합니다.</strong> Google이 개인정보를 다루는 방식은 <a href="http://www.google.com/policies/privacy" target="_blank" rel="noopener noreferrer">Google 개인정보처리방침</a>을 따릅니다.</li>
-            <li><strong data-check="live-platform-terms">서비스의 치지직 기능은 치지직 Open API를, SOOP 기능은 SOOP Open API와 Chat SDK를 사용합니다. 회원은 서비스를 이용함으로써 치지직과 SOOP 각각의 이용약관과 운영정책을 지키는 데 동의합니다.</strong> 두 플랫폼에서 받는 정보는 <a href="/privacy/#live-platforms">개인정보 처리방침 14절</a>에 따라 같은 기준으로 처리합니다.</li>
+            <li>서비스의 YouTube 기능은 YouTube API 서비스를 사용합니다. <strong>회원은 서비스를 이용함으로써 <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer">YouTube 서비스 약관</a>에 구속되는 데 동의합니다.</strong> Google이 개인정보를 다루는 방식은 <a href="http://www.google.com/policies/privacy" target="_blank" rel="noopener noreferrer">Google 개인정보처리방침</a>을 따릅니다.</li>
+            <li><strong>서비스의 치지직 기능은 치지직 Open API를, SOOP 기능은 SOOP Open API와 Chat SDK를 사용합니다. 회원은 서비스를 이용함으로써 치지직과 SOOP 각각의 이용약관과 운영정책을 지키는 데 동의합니다.</strong> 두 플랫폼에서 받는 정보는 <a href="/privacy/#live-platforms">개인정보 처리방침 14절</a>에 따라 같은 기준으로 처리합니다.</li>
             <li>회원은 각 연동 플랫폼의 이용약관과 운영정책을 지켜야 합니다.</li>
             <li>회원은 언제든 연동을 해제할 수 있습니다. YouTube 연동을 해제해도 Google 쪽에 남는 접근 권한은 <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">Google 계정 보안 설정</a>에서 직접 철회할 수 있습니다.</li>
           </ol>
