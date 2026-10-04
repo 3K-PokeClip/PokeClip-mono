@@ -34,20 +34,29 @@ public class QueueWorker implements SmartLifecycle {
 
     private final SqsClient sqs;
     private final String queueUrl;
-    private final JobProcessor processor;
+    private final MessageHandler processor;
     private final Duration visibilityTimeout;
     private final Duration pollWait;
-    private final ScheduledExecutorService keeper = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread t = new Thread(r, "render-visibility");
-        t.setDaemon(true);
-        return t;
-    });
+    /** 스레드 이름과 로그의 앞말. 렌더 줄은 {@code render}, 사진 줄은 {@code thumbnail}이라 한 프로세스 안에서 갈린다. */
+    private final String name;
+    private final ScheduledExecutorService keeper;
 
     private volatile boolean running;
     private Thread loop;
 
-    public QueueWorker(SqsClient sqs, String queueUrl, JobProcessor processor, Duration visibilityTimeout,
+    public QueueWorker(SqsClient sqs, String queueUrl, MessageHandler processor, Duration visibilityTimeout,
                        Duration pollWait) {
+        this("render", sqs, queueUrl, processor, visibilityTimeout, pollWait);
+    }
+
+    public QueueWorker(String name, SqsClient sqs, String queueUrl, MessageHandler processor, Duration visibilityTimeout,
+                       Duration pollWait) {
+        this.name = name;
+        this.keeper = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, name + "-visibility");
+            t.setDaemon(true);
+            return t;
+        });
         this.sqs = sqs;
         this.queueUrl = queueUrl;
         this.processor = processor;
@@ -58,8 +67,8 @@ public class QueueWorker implements SmartLifecycle {
     @Override
     public void start() {
         running = true;
-        loop = Thread.ofPlatform().name("render-queue").start(this::loop);
-        log.info("render.worker_started queue={}", queueUrl);
+        loop = Thread.ofPlatform().name(name + "-queue").start(this::loop);
+        log.info("{}.worker_started queue={}", name, queueUrl);
     }
 
     @Override
@@ -81,10 +90,10 @@ public class QueueWorker implements SmartLifecycle {
             try {
                 pollOnce();
             } catch (SdkException e) {
-                log.warn("render.receive_failed err={}", e.getMessage());
+                log.warn("{}.receive_failed err={}", name, e.getMessage());
                 sleep(Duration.ofSeconds(5));
             } catch (RuntimeException e) {
-                log.error("render.loop_error", e);
+                log.error("{}.loop_error", name, e);
                 sleep(Duration.ofSeconds(5));
             }
         }
@@ -116,7 +125,7 @@ public class QueueWorker implements SmartLifecycle {
         } finally {
             extender.cancel(false);
         }
-        log.info("render.message_done messageId={} receiveCount={} disposition={}", message.messageId(),
+        log.info("{}.message_done messageId={} receiveCount={} disposition={}", name, message.messageId(),
                 message.attributes().get(MessageSystemAttributeName.APPROXIMATE_RECEIVE_COUNT), disposition.kind());
         try {
             switch (disposition.kind()) {
@@ -131,7 +140,7 @@ public class QueueWorker implements SmartLifecycle {
             }
         } catch (SdkException e) {
             // 지우기에 실패해도 다음 수신의 STARTED가 proceed:false로 치운다(계약1 4절).
-            log.warn("render.disposition_failed messageId={} disposition={} err={}", message.messageId(),
+            log.warn("{}.disposition_failed messageId={} disposition={} err={}", name, message.messageId(),
                     disposition.kind(), e.getMessage());
         }
     }
@@ -142,7 +151,7 @@ public class QueueWorker implements SmartLifecycle {
                     .queueUrl(queueUrl).receiptHandle(receipt)
                     .visibilityTimeout((int) EXTEND_TO.toSeconds()).build());
         } catch (SdkException e) {
-            log.warn("render.extend_failed err={}", e.getMessage());
+            log.warn("{}.extend_failed err={}", name, e.getMessage());
         }
     }
 
