@@ -5,9 +5,8 @@
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   const root = document.documentElement;
 
-  // ?clean — 에셋 자리 라벨 숨김(리뷰용 스크린샷), ?mode=full|lite|reduce — 모드 강제
+  // ?mode=full|lite|reduce — 모드 강제
   const params = new URLSearchParams(location.search);
-  if (params.has('clean')) root.classList.add('is-clean');
   const forced = params.get('mode');
   if (forced === 'full' || forced === 'lite' || forced === 'reduce') root.dataset.mode = forced;
   const mode = root.dataset.mode;

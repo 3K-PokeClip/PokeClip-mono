@@ -8,7 +8,6 @@
   <meta name="theme-color" content="#141517" />
   <meta property="og:title" content="PokeClip — 방송이 끝나기 전에, 하이라이트는 이미 유튜브에." />
   <meta property="og:image" content="assets/img/og-base.jpg" />
-  <link rel="preload" href="assets/fonts/PretendardVariable.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="styles.css" />
   <script>
     // 첫 페인트 전에 모션 모드를 정한다 — full: 정밀 포인터 데스크톱, lite: 그 밖, reduce: 동작 줄이기
@@ -31,10 +30,15 @@
           });
         });
       }
-      // 모션 초기 상태가 잡히기 전 깜빡임 방지 — motion.js가 지우고, CDN이 막히면 2.5초 뒤 강제로 지운다
+      // 모션 초기 상태가 잡히기 전 깜빡임 방지 — motion.js가 지운다. CDN이 2.5초 안에 안 오면 여기서 지우고 motion-late를
+      // 남긴다. 늦게 도착한 motion.js는 그걸 보고 이미 읽히고 있는 정적 화면 위에 모션을 다시 걸지 않는다
       if (mode !== 'reduce') {
         root.classList.add('motion-pending');
-        setTimeout(function () { root.classList.remove('motion-pending'); }, 2500);
+        setTimeout(function () {
+          if (!root.classList.contains('motion-pending')) return;
+          root.classList.remove('motion-pending');
+          root.classList.add('motion-late');
+        }, 2500);
       }
     })();
   </script>

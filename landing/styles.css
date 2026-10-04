@@ -156,8 +156,6 @@ strong { font-weight: 600; color: var(--t1); }
   background: linear-gradient(var(--bg), var(--bg)) padding-box, var(--grad) border-box;
 }
 .chip--soon { background: rgb(255 214 7 / 0.12); color: var(--warn); }
-.chip--ok { background: rgb(48 172 4 / 0.16); color: var(--ok-text); }
-.chip--accent { background: var(--accent-subtle); color: var(--accent-300); }
 .chip--shimmer {
   background: linear-gradient(90deg, rgb(255 214 7 / 0.1) 0%, rgb(255 214 7 / 0.32) 50%, rgb(255 214 7 / 0.1) 100%);
   background-size: 200% 100%;
@@ -169,16 +167,6 @@ strong { font-weight: 600; color: var(--t1); }
 .badge--point { background: var(--point); color: #fff; }
 .badge--point-soft { background: var(--point-subtle); color: var(--point-300); }
 
-.dot-live { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--live); box-shadow: 0 0 0 4px rgb(255 77 106 / 0.2); }
-
-/* 에셋 자리 표시 — ?clean으로 숨김 */
-.slot-label {
-  display: inline-block; padding: 4px 9px; border-radius: 6px;
-  font-size: 12px; font-weight: 600; color: var(--warn);
-  border: 1px dashed rgb(255 214 7 / 0.55); background: rgb(0 0 0 / 0.55);
-  pointer-events: none;
-}
-.is-clean .slot-label { display: none; }
 
 /* UI 목업 공통 */
 .mock {
@@ -296,7 +284,6 @@ strong { font-weight: 600; color: var(--t1); }
   position: relative; overflow: hidden; aspect-ratio: 1 / 1; border-radius: var(--radius-hero);
   background: #0e0f11;
 }
-.hero__media .slot-label { position: absolute; right: 16px; top: 76px; z-index: 3; }
 .hero__scene { position: absolute; inset: 0; }
 /* 히어로 키프레임(A1 영상의 포스터). 모바일은 피사체가 위 60%, PC는 오른쪽 55% */
 .hero__poster, .hero__poster img, .hero__video { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -326,7 +313,6 @@ strong { font-weight: 600; color: var(--t1); }
     border-radius: var(--radius-hero); overflow: hidden; background: #0e0f11;
   }
   .hero__media { position: absolute; inset: 0; aspect-ratio: auto; border-radius: 0; }
-  .hero__media .slot-label { top: 84px; right: 28px; }
   /* 포스터 속 포키가 왼쪽 헤드라인과 겹치지 않게 오른쪽으로 민다(왼쪽 빈 곳은 그늘 그라데이션이 덮는다) */
   .hero__poster { transform: translateX(7%); }
   .hero__poster img, .hero__video { object-position: 100% 50%; }
@@ -450,7 +436,6 @@ strong { font-weight: 600; color: var(--t1); }
   /* 오른쪽 아래 돋보기 포키가 신호 값 숫자를 가리지 않게 비켜 둔다 */
   .signals { padding-right: 170px; }
   .stage__poki img { width: 300px; }
-  .stage__poki .slot-label { margin-top: -8px; }
 }
 
 /* S3→S4 커튼 — P2에서 스크럽 */
@@ -489,8 +474,8 @@ strong { font-weight: 600; color: var(--t1); }
 .mock__btn--block { width: 100%; height: 34px; }
 .badge--ok { background: rgb(48 172 4 / 0.18); color: var(--ok-text); }
 .badge--neutral { background: var(--surface-2); color: var(--t2); }
-.upload__play, .yt { position: relative; width: 36px; height: 26px; border-radius: 8px; background: #ff0033; }
-.upload__play::after, .yt::after { content: ''; position: absolute; left: 50%; top: 50%; margin: -6px 0 0 -4px; border-left: 11px solid #fff; border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
+.yt { position: relative; width: 36px; height: 26px; border-radius: 8px; background: #ff0033; }
+.yt::after { content: ''; position: absolute; left: 50%; top: 50%; margin: -6px 0 0 -4px; border-left: 11px solid #fff; border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
 
 /* 1 채널 연동 + OBS 도크 (설정 › 채널 연동, obs-plugin 도크 PairCard·StatusCard) */
 .obs { display: grid; gap: 12px; padding: 14px; }
@@ -920,9 +905,10 @@ strong { font-weight: 600; color: var(--t1); }
   .motion-full .features,
   .motion-full .cta { padding-block: clamp(84px, 5.2vw, 124px) clamp(32px, 2vw, 48px); }
 }
-/* S11 최종 CTA도 Full에서는 핀 섹션 — 한 화면 높이 + 세로 가운데 */
+/* S11 최종 CTA도 Full에서는 핀 섹션 — 최소 한 화면 높이 + 세로 가운데. 높이가 낮은 화면에서 내용이 넘치면
+   늘어나고(overflow: hidden이라 고정 높이면 버튼 줄이 잘린다), motion.js는 그때 핀을 걸지 않는다 */
 .motion-full .cta {
-  height: 100vh; height: 100svh; min-height: 0;
+  min-height: 100vh; min-height: 100svh;
   display: flex; flex-direction: column; justify-content: safe center;
   padding-block: 84px 32px;
 }
@@ -956,7 +942,6 @@ strong { font-weight: 600; color: var(--t1); }
   .motion-full .step__screen .upload { min-height: 30vh; }
   .motion-full .editor__frame { width: 92px; }
   .motion-full .editor__timeline { height: 40px; }
-  .motion-full .upload__thumb { width: 92px; }
 }
 
 /* S11 Full: 고정 푸터 리빌 */

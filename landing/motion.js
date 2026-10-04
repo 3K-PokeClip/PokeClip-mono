@@ -5,7 +5,9 @@
   const done = () => root.classList.remove('motion-pending');
   const mode = root.dataset.mode;
   const LP = window.PC_LP;
-  if (mode === 'reduce' || !window.gsap || !window.ScrollTrigger || !LP) {
+  // head의 2.5초 타임아웃이 먼저 왔으면(motion-late) 사용자는 이미 정적 화면을 읽고 있다 — 그 위에 인트로·리빌·핀을
+  // 걸면 보던 내용이 깜빡이고 핀 간격이 끼어들어 위치가 튄다. 정적 화면 그대로 둔다
+  if (mode === 'reduce' || root.classList.contains('motion-late') || !window.gsap || !window.ScrollTrigger || !LP) {
     done();
     return;
   }
@@ -56,13 +58,24 @@
 
   // ===== S1 히어로: 로드 인트로 =====
   const h1 = $('.hero h1');
-  const lines = window.SplitText ? window.SplitText.create(h1, { type: 'lines', mask: 'lines', linesClass: 'h1-line' }).lines : [h1];
   const intro = gsap.timeline({ defaults: { ease: 'expo.out' } });
+  // 제목 줄 나눔은 폰트에 달렸다. autoSplit은 폰트가 늦게 오거나 폭이 바뀌면 줄을 다시 나누고, onSplit이 돌려준 트윈의
+  // 진행을 새 줄에 이어 붙인다 — 그래서 2MB 폰트를 preload하지 않아도 줄 마스크가 어긋나지 않는다
+  if (window.SplitText) {
+    window.SplitText.create(h1, {
+      type: 'lines',
+      mask: 'lines',
+      linesClass: 'h1-line',
+      autoSplit: true,
+      onSplit: (self) => gsap.from(self.lines, { yPercent: 105, duration: 1.0, stagger: 0.12, ease: 'expo.out', delay: 0.28 }),
+    });
+  } else {
+    intro.from(h1, { yPercent: 105, duration: 1.0 }, 0.28);
+  }
   intro
     .from('.nav__pill', { y: -24, opacity: 0, duration: 0.9 }, 0.05)
     .from('.hero__scene', { opacity: 0, duration: 1.4, ease: 'power2.out' }, 0)
     .from('.chip--beta', { y: 16, opacity: 0, duration: 0.8 }, 0.2)
-    .from(lines, { yPercent: 105, duration: 1.0, stagger: 0.12 }, 0.28)
     .from('.hero__copy .lead', { y: 20, opacity: 0, duration: 0.8 }, 0.62)
     .from('.hero__copy .btn', { y: 16, opacity: 0, duration: 0.7, stagger: 0.08 }, 0.74)
     .from(['.hero__poster img', '.hero__video'], { scale: 1.08, duration: 2.2, ease: 'power2.out' }, 0);
@@ -75,7 +88,7 @@
       .fromTo('.hero__card', { clipPath: 'inset(10px round 40px)' }, { clipPath: 'inset(0px round 0px)', ease: 'none' }, 0)
       .fromTo('.hero__scene', { scale: 1.14 }, { scale: 1, ease: 'none' }, 0)
       .to('.hero__copy', { y: -60, opacity: 0, ease: 'power1.in', duration: 0.6 }, 0.4)
-      .to(['.hero__scroll', '.hero__media .slot-label'], { opacity: 0, duration: 0.2 }, 0);
+      .to('.hero__scroll', { opacity: 0, duration: 0.2 }, 0);
   } else {
     gsap.fromTo('.hero__scene', { scale: 1.08 }, { scale: 1, ease: 'none', scrollTrigger: { trigger: '.hero', start: 'top top', end: 'bottom top', scrub: true } });
   }
@@ -288,18 +301,23 @@
     const anims = $$('[data-marquee]').flatMap((el) => el.getAnimations());
     let boost = 0;
     ScrollTrigger.create({ trigger: '.bands', start: 'top bottom', end: 'bottom top', onUpdate: (s) => (boost = Math.min(4, Math.abs(s.getVelocity()) / 500)) });
+    // 값이 바뀔 때만 쓴다 — playbackRate 대입은 매번 현재 시각을 다시 맞춘다. 감쇠가 0.01 아래로 내려가면 1로 한 번 쓰고 멈춘다
+    let rate = 1;
     gsap.ticker.add(() => {
-      boost *= 0.92;
-      anims.forEach((a) => (a.playbackRate = 1 + boost));
+      boost = boost > 0.01 ? boost * 0.92 : 0;
+      if (1 + boost === rate) return;
+      rate = 1 + boost;
+      anims.forEach((a) => (a.playbackRate = rate));
     });
   }
 
   // S11 최종 CTA: 화면에 잠깐 멈춰 점프 → 축하(main.js)가 끝까지 보이게 한다.
-  // Full은 다른 핀 섹션처럼 한 화면 높이로 맞춰(CSS) 위에서 멈추고, lite는 한 화면에 들어올 때만 가운데에서 멈춘다
+  // Full은 다른 핀 섹션처럼 한 화면 높이로 맞춰(CSS) 위에서 멈추고, lite는 한 화면에 들어올 때만 가운데에서 멈춘다.
+  // Full의 높이는 「최소」 한 화면이라 내용이 넘치면 늘어난다(높이 약 590px 미만 데스크톱). 그때는 핀을 걸지 않는다 —
+  // 걸면 고정된 동안 아래쪽 「베타 시작하기」가 화면 밖에 남는다(1440×500에서 버튼 줄 전체가 잘렸다)
   const ctaSec = $('.cta');
-  const ctaFits = fits(ctaSec);
-  if (full) ScrollTrigger.create({ trigger: ctaSec, start: 'top top', end: '+=90%', pin: true });
-  else if (ctaFits) ScrollTrigger.create({ trigger: ctaSec, start: 'center center', end: '+=90%', pin: true });
+  const ctaFits = full ? ctaSec.offsetHeight <= window.innerHeight + 1 : fits(ctaSec);
+  if (ctaFits) ScrollTrigger.create({ trigger: ctaSec, start: full ? 'top top' : 'center center', end: '+=90%', pin: true });
   // lite의 핀 여부(공감·CTA)는 지금 화면 높이로 한 번 정한다. 기기를 돌려 판정이 뒤집히면 새로고침한다 — 그대로 두면
   // 화면보다 긴 섹션이 가운데 고정돼 잘리고, 핀만 다시 만들면 refresh 순서가 맨 뒤로 밀려 아래 트리거들이 그 핀 간격을 모른다.
   // resize가 아니라 회전만 본다 — 모바일 주소창이 접히며 높이가 바뀔 때마다 판정이 흔들리면 스크롤 중에 새로고침된다
