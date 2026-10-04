@@ -159,9 +159,14 @@ if (invokedDirectly) {
         process.exit(1);
       }
       console.log('✓ 판 목록과 드롭다운이 같다');
-    } else {
+    } else if (command === undefined) {
       const stale = syncAll({ write: true });
       console.log(stale.length > 0 ? `✓ 다시 썼다: ${stale.join(', ')}` : '✓ 바꿀 것이 없다');
+    } else {
+      // 오타(`check`, `arhive`)가 다시 쓰기로 떨어져 검사·보관이 된 줄 알고 넘어가지 않게 한다
+      throw new Error(
+        `모르는 명령 「${command}」 — 인자 없음(다시 쓰기) · --check · archive <terms|privacy> <YYYY.MM.DD>`,
+      );
     }
   } catch (error) {
     console.error(`✗ ${error.message}`);

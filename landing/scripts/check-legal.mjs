@@ -5,7 +5,7 @@
 //
 // 랜딩에는 테스트 장치가 없어서, 빠지면 법 위반이 되는 문장만 문자열로 지킨다.
 // 랜딩을 SSG로 옮기면 이 검사도 그쪽 테스트로 옮긴다.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { changedFrozen, readManifest, syncAll } from './legal-versions.mjs';
 
 const root = new URL('..', import.meta.url);
@@ -133,6 +133,27 @@ for (const [name, html] of Object.entries(pages)) {
   expect(toc !== null, `${name}에 목차가 없다`);
   for (const [, id] of toc?.[0].matchAll(/href="#([^"]+)"/g) ?? []) {
     expect(html.includes(`id="${id}"`), `${name} 목차의 #${id}가 가리키는 절이 없다`);
+  }
+}
+
+// 문서 밖에서 들어오는 앵커도 살아 있어야 한다 — 약관이 처리방침 절을, 대시보드 탈퇴 모달이 #retention을 가리킨다.
+// id를 바꾸면서 목차만 같이 고치면 위 검사는 통과하고, 바깥 링크는 조용히 문서 맨 위로 떨어진다
+const webLegal = new URL('../web/src/features/legal/legalInfo.ts', root);
+for (const [name, html] of Object.entries(pages)) {
+  for (const [, doc, id] of html.matchAll(
+    /href="(?:\.\.)?\/(terms|privacy)\/?(?:index\.html)?#([^"]+)"/g,
+  )) {
+    expect(pages[doc].includes(`id="${id}"`), `${name}이 가리키는 ${doc}#${id} 절이 없다`);
+  }
+}
+if (existsSync(webLegal)) {
+  for (const [, doc, id] of readFileSync(webLegal, 'utf8').matchAll(
+    /\/(terms|privacy)#([\w-]+)/g,
+  )) {
+    expect(
+      pages[doc].includes(`id="${id}"`),
+      `대시보드(legalInfo.ts)가 가리키는 ${doc}#${id} 절이 없다`,
+    );
   }
 }
 
