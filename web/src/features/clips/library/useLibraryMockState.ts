@@ -73,6 +73,8 @@ export interface LibraryClip {
   editHref?: string;
   /** 서버 줄 그대로 — 상세 패널이 영상 상태·파일 키를 보여 줄 때 쓴다. 시험 주입에는 없다 */
   entry?: LibraryEntry;
+  /** 최근 영상의 사진(POK-277). 없으면 자리표시 */
+  thumbnailUrl?: string | null;
 }
 
 function sourceLabelOf(entry: LibraryEntry): string {
@@ -145,6 +147,7 @@ export function toLibraryClip(entry: LibraryEntry, meId: string | null): Library
     youtubeUrl: youtubeUrlOf(entry),
     editHref: `/clips/editor/studio?recipe=${entry.recipeId}`,
     entry,
+    thumbnailUrl: entry.thumbnailUrl ?? null,
   };
 }
 

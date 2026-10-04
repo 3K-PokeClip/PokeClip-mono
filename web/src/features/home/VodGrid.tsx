@@ -23,7 +23,7 @@ export function VodGrid({ vods, loading }: { vods: HomeVod[]; loading: boolean }
           {vods.map((vod) => (
             <li key={vod.id} className={styles.vodCard}>
               <Link href={vod.href} className={styles.vodLink}>
-                <Thumb label="썸네일 준비 중">
+                <Thumb label="썸네일 준비 중" src={vod.thumbnailUrl}>
                   {vod.badge?.kind === 'preparing' ? (
                     <span className={styles.overlayPillTopLeft}>준비 중</span>
                   ) : null}

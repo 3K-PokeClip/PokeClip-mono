@@ -1,23 +1,33 @@
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
+import { ThumbnailImage } from '@/features/thumbnail/ThumbnailImage';
 import styles from './HomeScreen.module.css';
 
-// 16:9 썸네일 플레이스홀더 — 썸네일 파이프라인이 아직 없어 라벨만 보여준다.
-// 실이미지가 생기면 내부만 next/image로 교체하고 오버레이(children)는 그대로 둔다.
+// 16:9 썸네일. 사진(POK-277)이 있으면 칸을 채우고, 없으면 라벨 자리표시를 보인다. 오버레이(children)는 그대로 위에 얹힌다.
 export function Thumb({
   label,
+  src,
+  refreshMs,
   className,
   children,
 }: {
   label: string;
+  src?: string | null;
+  refreshMs?: number;
   className?: string;
   children?: ReactNode;
 }) {
   return (
     <div className={clsx(styles.thumb, className)}>
-      <span className={styles.thumbLabel} aria-hidden>
-        {label}
-      </span>
+      <ThumbnailImage
+        src={src}
+        refreshMs={refreshMs}
+        fallback={
+          <span className={styles.thumbLabel} aria-hidden>
+            {label}
+          </span>
+        }
+      />
       {children}
     </div>
   );

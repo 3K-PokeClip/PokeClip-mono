@@ -7,6 +7,7 @@ import { chzzkLinkQueryOptions } from '@/api/chzzkLink';
 import { fetchAllJumpCards } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
 import { useAuthStore } from '@/stores/auth';
+import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
 import {
   emitRelay,
   publishLiveData,
@@ -56,6 +57,8 @@ export interface LiveHighlight {
   claimedByMe?: boolean;
   /** 방금 감지된 카드 — 마젠타 틴트로 강조 */
   emphasized?: boolean;
+  /** 카드 시점 장면 사진(POK-277). 없으면 자리표시 */
+  thumbnailUrl?: string | null;
 }
 
 export interface ChatVolumeSeries {
@@ -90,6 +93,8 @@ interface Snapshot {
   hidden: boolean;
   eventSeq: number;
   createdAt: string;
+  /** 목록 문만 싣는다(POK-277). 통로로 온 카드는 비어 있다 */
+  thumbnailUrl?: string | null;
 }
 interface BroadcastInfoResponse {
   latest: {
@@ -228,6 +233,7 @@ function toHighlight(c: Snapshot, index: number, now: number): LiveHighlight {
     score: c.score ?? undefined,
     emphasized: index === 0,
     claimedByMe: c.claimedBy !== null && c.claimedBy === currentUserId(),
+    thumbnailUrl: c.thumbnailUrl ?? null,
   };
 }
 
@@ -284,7 +290,8 @@ export function useLiveMockState(): LiveMockState {
       if (stopped) return;
       setCards((prev) => {
         const next = { ...prev };
-        for (const c of list) next[c.id] = c;
+        // 통로(SSE)로 온 카드는 사진 칸이 비어 온다. 목록에서 받아 둔 사진을 지우지 않는다(POK-277)
+        for (const c of list) next[c.id] = keepKnownThumbnail(prev[c.id], c);
         return next;
       });
     };

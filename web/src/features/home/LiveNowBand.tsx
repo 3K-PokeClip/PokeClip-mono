@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Tag } from '@/ui';
 import { TOUR_TARGET } from '@/features/onboarding/tourSteps';
+import { LIVE_REFRESH_MS } from '@/features/thumbnail/thumbnailUrl';
 import styles from './HomeScreen.module.css';
 import { Thumb } from './Thumb';
 import type { LiveNow } from './useHomeMockState';
@@ -17,7 +18,12 @@ export function LiveNowBand({ live }: { live: LiveNow }) {
         라이브
       </h2>
       <div className={styles.liveBand}>
-        <Thumb label="라이브 방송 화면" className={styles.liveThumb}>
+        <Thumb
+          label="라이브 방송 화면"
+          src={live.thumbnailUrl}
+          refreshMs={LIVE_REFRESH_MS}
+          className={styles.liveThumb}
+        >
           <span className={styles.livePill}>LIVE {live.uptimeLabel}</span>
           <span className={styles.viewerPill}>
             {live.viewers === null ? '시청자 준비 중' : `시청자 ${live.viewers}`}

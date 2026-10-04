@@ -37,6 +37,8 @@ export interface VodBroadcast {
   endedAt: string | null;
   /** 60일 보관 만료 시각. 기한이 지난 방송도 목록에 남으므로 과거일 수 있다 */
   vodExpiresAt: string | null;
+  /** 가장 크게 터진 장면 사진(POK-277). 없으면 자리표시 */
+  thumbnailUrl?: string | null;
 }
 
 /**
@@ -129,6 +131,8 @@ interface WireBroadcast {
   vodExpiresAt: string | null;
   /** 녹화 경로의 키(POK-233). 옛 서버면 빠져 온다 */
   ingestStreamId?: string | null;
+  /** 사진 주소(POK-277). 옛 서버면 빠져 온다 */
+  thumbnailUrl?: string | null;
 }
 
 function isoMs(iso: string | null): number | null {
@@ -214,6 +218,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
           startedAt: b.startedAt,
           endedAt: b.endedAt,
           vodExpiresAt: b.vodExpiresAt,
+          thumbnailUrl: b.thumbnailUrl ?? null,
         }));
         const visuals: Record<string, VodRowVisual> = {};
         for (const b of rows) {

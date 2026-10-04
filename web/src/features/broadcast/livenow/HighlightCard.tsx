@@ -19,6 +19,7 @@ import { cardViewFor, cardVisualFor } from './highlightCardView';
 import type { CardVisual } from './useLiveDetailsMockState';
 import type { LiveHighlight, LiveStream } from './useLiveMockState';
 import { claimCard, hideCard } from './useLiveMockState';
+import { ThumbnailImage } from '@/features/thumbnail/ThumbnailImage';
 import { useLiveData } from './liveDataStore';
 
 // 하이라이트 카드(시안 1b) — 세로 목록의 한 행이던 것을 가로로 넘기는 카드로 바꿨다.
@@ -75,9 +76,14 @@ export function HighlightCard({
         onClick={() => onSeek(highlight.timestamp)}
         aria-label={`${highlight.timestamp} 시점으로 이동`}
       >
-        <span className={styles.cardThumbLabel} aria-hidden>
-          하이라이트 장면
-        </span>
+        <ThumbnailImage
+          src={highlight.thumbnailUrl}
+          fallback={
+            <span className={styles.cardThumbLabel} aria-hidden>
+              하이라이트 장면
+            </span>
+          }
+        />
         {visual.spark ? (
           <svg
             className={styles.cardSpark}
