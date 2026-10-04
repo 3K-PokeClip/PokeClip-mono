@@ -48,6 +48,9 @@
       e.preventDefault();
       if (lenis) lenis.scrollTo(anchorY(target), { duration: 1.4 });
       else window.scrollTo({ top: anchorY(target), behavior: 'smooth' });
+      // 기본 이동을 막았으니 포커스도 직접 옮긴다 — 안 옮기면 「본문으로 건너뛰기」 뒤 다음 Tab이 내비로 돌아가 화면이 다시 위로 튄다
+      if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+      target.focus({ preventScroll: true });
     }),
   );
 
@@ -77,41 +80,6 @@
     gsap.fromTo('.hero__scene', { scale: 1.08 }, { scale: 1, ease: 'none', scrollTrigger: { trigger: '.hero', start: 'top top', end: 'bottom top', scrub: true } });
   }
 
-  // ===== 공통 진입 리빌 (핀 타임라인이 맡는 요소는 제외) =====
-  const revealSel = [
-    '.pain .eyebrow', '.pain .h2',
-    '.detect .section-head > *',
-    '.how .section-head > *', '.how .rider',
-    '.team .section-head > *',
-    '.features .section-head > *',
-    '.platforms .section-head > *', '.logos__item', '.shorts', '.numbers > div',
-    '.pricing .section-head > *', '.plan',
-    '.faq .section-head > *', '.faq__list details',
-    '.cta__inner > :not(.cta__poki)', // CTA 포키는 점프 시퀀스(main.js)가 등장시킨다
-  ];
-  if (!full) revealSel.push('.bgm .section-head > *', '.tracks', '.step', '.stack__card', '.fcard', '.stage > :not(.jumpcard)');
-  const reveals = $$(revealSel.join(','));
-  gsap.set(reveals, { opacity: 0, y: 24 });
-  ScrollTrigger.batch(reveals, {
-    start: 'top 88%',
-    once: true,
-    onEnter: (batch) => gsap.to(batch, { opacity: 1, y: 0, duration: 0.8, ease: 'expo.out', stagger: 0.08, overwrite: true }),
-  });
-
-  // Full: 섹션 제목 단어별 블러 리빌(스크럽)
-  if (full && window.SplitText) {
-    ['.team .h2', '.features .h2', '.platforms .h2'].forEach((sel) => {
-      const el = $(sel);
-      gsap.set(el, { opacity: 1, y: 0 });
-      const words = window.SplitText.create(el, { type: 'words' }).words;
-      gsap.fromTo(
-        words,
-        { opacity: 0, y: 24, filter: 'blur(12px)' },
-        { opacity: 1, y: 0, filter: 'blur(0px)', stagger: 0.08, ease: 'none', scrollTrigger: { trigger: el, start: 'top 85%', end: 'top 45%', scrub: 0.6 } },
-      );
-    });
-  }
-
   // ===== S2 공감: 가라오케 (활성 줄 확대 + 글자 채움) =====
   const kLines = $$('[data-karaoke] li');
   function karaoke(p) {
@@ -126,7 +94,8 @@
   karaoke(0);
   // lite(모바일·태블릿)는 핀이 없으면 리스트가 화면을 지나는 짧은 거리 안에 네 줄이 다 칠해져 너무 빠르다.
   // 섹션이 한 화면에 들어오면 이 섹션만 화면 가운데에 잠깐 멈춰 1.1화면 동안 칠하고, 안 들어오면 칠하는 구간만 길게 잡는다
-  const painFits = $('.pain').offsetHeight <= window.innerHeight * 0.96;
+  const fits = (el) => el.offsetHeight <= window.innerHeight * 0.96;
+  const painFits = fits($('.pain'));
   ScrollTrigger.create(
     full
       ? { trigger: '.pain', start: 'top top', end: '+=150%', pin: true, scrub: true, onUpdate: (s) => karaoke(s.progress) }
@@ -288,15 +257,20 @@
       },
     });
   } else {
-    let idx = 0;
     let pauseUntil = 0;
     let visible = false;
     gallery.addEventListener('pointerdown', () => (pauseUntil = Date.now() + 8000), { passive: true });
     ScrollTrigger.create({ trigger: gallery, start: 'top 80%', end: 'bottom 20%', onToggle: (s) => (visible = s.isActive) });
     setInterval(() => {
       if (!visible || Date.now() < pauseUntil || document.hidden) return;
-      idx = (idx + 1) % cards.length;
-      gallery.scrollTo({ left: cards[idx].offsetLeft - cards[0].offsetLeft, behavior: 'smooth' });
+      // 지금 보이는 카드에서 이어 간다 — 따로 센 번호를 쓰면 사용자가 직접 넘긴 뒤 앞 카드로 되감긴다.
+      // 끝 카드는 스크롤 끝에 막혀 제 자리까지 못 가고 스냅이 앞 카드로 되돌리니(900px에서 1736 → 1302),
+      // 스크롤로 닿는 마지막 카드에 왔으면 처음으로 돌아간다. 「스크롤 끝에 닿았나」로 보면 스냅 때문에 끝에서 멈춘다
+      const step = cards[1] ? cards[1].offsetLeft - cards[0].offsetLeft : 1;
+      const last = Math.min(cards.length - 1, Math.floor((gallery.scrollWidth - gallery.clientWidth + 2) / step));
+      const cur = Math.round(gallery.scrollLeft / step);
+      const next = cur >= last ? 0 : cur + 1;
+      gallery.scrollTo({ left: cards[next].offsetLeft - cards[0].offsetLeft, behavior: 'smooth' });
     }, 3600);
   }
 
@@ -323,8 +297,54 @@
   // S11 최종 CTA: 화면에 잠깐 멈춰 점프 → 축하(main.js)가 끝까지 보이게 한다.
   // Full은 다른 핀 섹션처럼 한 화면 높이로 맞춰(CSS) 위에서 멈추고, lite는 한 화면에 들어올 때만 가운데에서 멈춘다
   const ctaSec = $('.cta');
+  const ctaFits = fits(ctaSec);
   if (full) ScrollTrigger.create({ trigger: ctaSec, start: 'top top', end: '+=90%', pin: true });
-  else if (ctaSec.offsetHeight <= window.innerHeight * 0.96) ScrollTrigger.create({ trigger: ctaSec, start: 'center center', end: '+=90%', pin: true });
+  else if (ctaFits) ScrollTrigger.create({ trigger: ctaSec, start: 'center center', end: '+=90%', pin: true });
+  // lite의 핀 여부(공감·CTA)는 지금 화면 높이로 한 번 정한다. 기기를 돌려 판정이 뒤집히면 새로고침한다 — 그대로 두면
+  // 화면보다 긴 섹션이 가운데 고정돼 잘리고, 핀만 다시 만들면 refresh 순서가 맨 뒤로 밀려 아래 트리거들이 그 핀 간격을 모른다.
+  // resize가 아니라 회전만 본다 — 모바일 주소창이 접히며 높이가 바뀔 때마다 판정이 흔들리면 스크롤 중에 새로고침된다
+  if (!full) {
+    window.matchMedia('(orientation: portrait)').addEventListener('change', () => {
+      if (fits($('.pain')) !== painFits || fits(ctaSec) !== ctaFits) location.reload();
+    });
+  }
+
+  // ===== 공통 진입 리빌 (핀 타임라인이 맡는 요소는 제외) =====
+  // 핀을 모두 만든 뒤에 만든다 — ScrollTrigger는 생성 순서대로 refresh해서, 핀보다 먼저 만든 트리거는 그 핀 간격을
+  // 모른다. 앞에 두었을 때 full(1800×1009)에서 S8~S10 리빌 start가 11,289px 앞서 화면 밖에서 끝났다
+  const revealSel = [
+    '.pain .eyebrow', '.pain .h2',
+    '.detect .section-head > *',
+    '.how .section-head > *', '.how .rider',
+    '.team .section-head > *',
+    '.features .section-head > *',
+    '.platforms .section-head > *', '.logos__item', '.shorts', '.numbers > div',
+    '.pricing .section-head > *', '.plan',
+    '.faq .section-head > *', '.faq__list details',
+    '.cta__inner > :not(.cta__poki)', // CTA 포키는 점프 시퀀스(main.js)가 등장시킨다
+  ];
+  if (!full) revealSel.push('.bgm .section-head > *', '.tracks', '.step', '.stack__card', '.fcard', '.stage > :not(.jumpcard)');
+  const reveals = $$(revealSel.join(','));
+  gsap.set(reveals, { opacity: 0, y: 24 });
+  ScrollTrigger.batch(reveals, {
+    start: 'top 88%',
+    once: true,
+    onEnter: (batch) => gsap.to(batch, { opacity: 1, y: 0, duration: 0.8, ease: 'expo.out', stagger: 0.08, overwrite: true }),
+  });
+
+  // Full: 섹션 제목 단어별 블러 리빌(스크럽). 위 리빌이 숨긴 제목을 다시 보이게 하므로 리빌 뒤에 둔다
+  if (full && window.SplitText) {
+    ['.team .h2', '.features .h2', '.platforms .h2'].forEach((sel) => {
+      const el = $(sel);
+      gsap.set(el, { opacity: 1, y: 0 });
+      const words = window.SplitText.create(el, { type: 'words' }).words;
+      gsap.fromTo(
+        words,
+        { opacity: 0, y: 24, filter: 'blur(12px)' },
+        { opacity: 1, y: 0, filter: 'blur(0px)', stagger: 0.08, ease: 'none', scrollTrigger: { trigger: el, start: 'top 85%', end: 'top 45%', scrub: 0.6 } },
+      );
+    });
+  }
 
   // ===== 포키 스테이지 (Full): 섹션의 포키 자리를 따라 날아다닌다 =====
   if (full) {
@@ -388,4 +408,12 @@
   // 폰트·이미지 로드 후 위치 재계산
   document.fonts?.ready.then(() => ScrollTrigger.refresh());
   window.addEventListener('load', () => ScrollTrigger.refresh());
+  // FAQ를 열고 닫으면 그 아래 CTA 핀 위치가 바뀐다(5개를 다 열면 322px). 연달아 눌러도 한 프레임에 한 번만 다시 잰다
+  let faqRefresh = 0;
+  $$('.faq__list details').forEach((d) =>
+    d.addEventListener('toggle', () => {
+      cancelAnimationFrame(faqRefresh);
+      faqRefresh = requestAnimationFrame(() => ScrollTrigger.refresh());
+    }),
+  );
 })();

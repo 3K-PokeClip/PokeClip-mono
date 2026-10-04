@@ -139,8 +139,11 @@
     peakEl.style.setProperty('--x', `${((box.left - host.left + box.width * peakPos.x) / host.width) * 100}%`);
     peakEl.style.setProperty('--y', `${box.top - host.top + box.height * peakPos.y}px`);
   }
-  placePeak();
-  window.addEventListener('resize', placePeak);
+  // 창 크기만이 아니라 그래프·그 상자의 크기가 바뀔 때마다 다시 맞춘다 — motion.js가 full에서 그래프를
+  // min(320px, 32vh)로 줄이면 창은 그대로라 resize가 오지 않는다(1440×800에서 피크가 정점보다 약 12px 아래)
+  const peakRO = new ResizeObserver(placePeak);
+  peakRO.observe(waveSvg);
+  peakRO.observe(waveSvg.parentElement);
 
   // ----- S4 단계 전환 (P1: 단계 텍스트가 화면 가운데에 오면 활성) -----
   const steps = $$('[data-step]');
@@ -228,14 +231,19 @@
       ([e]) => {
         if (!e.isIntersecting) return;
         jumpIO.disconnect();
+        const land = () => jumpFig.classList.add('is-landed');
         jumpImg.addEventListener(
           'load',
           () => {
+            if (jumpFig.classList.contains('is-landed')) return; // 늦게 도착한 점프는 틀지 않는다
             jumpFig.classList.add('is-jumping');
-            setTimeout(() => jumpFig.classList.add('is-landed'), 3400);
+            setTimeout(land, 3400);
           },
           { once: true },
         );
+        // jump-ready가 축하 포즈와 소품을 숨겨 두었다 — 점프 WebP(525KB)가 실패하거나 5초 안에 안 오면 바로 축하 포즈를 보인다
+        jumpImg.addEventListener('error', land, { once: true });
+        setTimeout(() => jumpFig.classList.contains('is-jumping') || land(), 5000);
         jumpImg.src = jumpImg.dataset.src; // 화면에 들어온 순간 불러와야 처음 프레임부터 재생된다
       },
       { threshold: 0.4 },

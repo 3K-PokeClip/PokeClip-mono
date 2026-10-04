@@ -98,6 +98,8 @@ ul, ol { list-style: none; padding: 0; }
 button { font: inherit; color: inherit; cursor: pointer; }
 strong { font-weight: 600; color: var(--t1); }
 :focus-visible { outline: 2px solid var(--accent-400); outline-offset: 3px; border-radius: 8px; }
+/* 앵커 이동으로 포커스만 넘겨받는 섹션·main(motion.js가 tabindex=-1을 단다)은 화면 전체에 테두리를 그리지 않는다 */
+[tabindex='-1']:focus-visible { outline: none; }
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .skip { position: fixed; left: 12px; top: -60px; z-index: 100; padding: 10px 16px; border-radius: 12px; background: var(--accent); color: #fff; font-weight: 600; }
