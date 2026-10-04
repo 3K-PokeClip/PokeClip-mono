@@ -912,6 +912,11 @@ strong { font-weight: 600; color: var(--t1); }
   display: flex; flex-direction: column; justify-content: safe center;
   padding-block: 84px 32px;
 }
+/* S4는 최소 한 화면 높이 — 가장 키 큰 라이브 화면(581px)이 단계 영역을 늘려 높이 약 1000px 미만에서는 넘친다.
+   넘치면 늘어나고, motion.js는 그때 핀 대신 P1 방식(단계 글이 화면 가운데를 지날 때 전환)으로 둔다 */
+.motion-full .how { height: auto; min-height: 100vh; min-height: 100svh; }
+/* 핀을 안 걸었을 때(how--static)는 P1 데스크톱처럼 화면이 단계 글을 따라 sticky로 붙는다 */
+.motion-full .how--static .step__screen { position: sticky; top: calc(50vh - 200px); align-self: start; }
 .motion-full .pain > .container,
 .motion-full .detect > .container,
 .motion-full .how > .container,
@@ -942,6 +947,17 @@ strong { font-weight: 600; color: var(--t1); }
   .motion-full .step__screen .upload { min-height: 30vh; }
   .motion-full .editor__frame { width: 92px; }
   .motion-full .editor__timeline { height: 40px; }
+}
+/* 화면 높이 640~760px(1366×768 노트북 브라우저 ≈ 650px) — 감지·BGM이 한 화면에 들어오게 더 촘촘하게.
+   640 아래는 head 스크립트가 full을 켜지 않는다(lite) */
+@media (max-height: 760px) {
+  .motion-full .section-head { margin-bottom: 16px; }
+  .motion-full .section-head .body { font-size: 15px; }
+  .motion-full .stage { min-height: min(460px, 44vh); }
+  .motion-full .wave { height: min(320px, 26vh); }
+  .motion-full .chat { max-height: min(360px, 36vh); }
+  .motion-full .tracks__list li { padding-block: 6px; }
+  .motion-full .tracks__wave { height: 26px; }
 }
 
 /* S11 Full: 고정 푸터 리빌 */

@@ -10,11 +10,13 @@
   <meta property="og:image" content="assets/img/og-base.jpg" />
   <link rel="stylesheet" href="styles.css" />
   <script>
-    // 첫 페인트 전에 모션 모드를 정한다 — full: 정밀 포인터 데스크톱, lite: 그 밖, reduce: 동작 줄이기
+    // 첫 페인트 전에 모션 모드를 정한다 — full: 정밀 포인터 데스크톱, lite: 그 밖, reduce: 동작 줄이기.
+    // full은 화면 높이 640px 이상만 — 그 아래(브라우저 확대·개발자 도구)에서는 한 화면에 묶인 핀 섹션이 넘치고
+    // 히어로의 「베타 시작하기」가 화면 밖에 남는다(1440×500·600에서 실측)
     (function () {
       var m = window.matchMedia;
       var REDUCE = '(prefers-reduced-motion: reduce)';
-      var FULL = '(min-width: 1024px) and (hover: hover) and (pointer: fine)';
+      var FULL = '(min-width: 1024px) and (min-height: 640px) and (hover: hover) and (pointer: fine)';
       function pick() {
         return m(REDUCE).matches ? 'reduce' : m(FULL).matches ? 'full' : 'lite';
       }
@@ -84,10 +86,11 @@
 
   <!-- Full 모드 전용 포키 스테이지 (P2에서 섹션별 앵커로 안무) -->
   <div class="poki-stage" aria-hidden="true" data-poki-stage>
-    <img class="poki-stage__pose is-on" data-pose="worried" src="assets/poki/poki-worried.webp" alt="" />
-    <img class="poki-stage__pose" data-pose="detect" src="assets/poki/poki-detect.webp" alt="" />
-    <img class="poki-stage__pose" data-pose="headphones" src="assets/poki/poki-headphones.webp" alt="" />
-    <img class="poki-stage__pose" data-pose="duo" src="assets/poki/poki-duo.webp" alt="" />
+    <!-- lazy — 스테이지는 full에서만 보인다(lite·reduce는 display:none이라 받지 않는다) -->
+    <img class="poki-stage__pose is-on" data-pose="worried" src="assets/poki/poki-worried.webp" alt="" loading="lazy" />
+    <img class="poki-stage__pose" data-pose="detect" src="assets/poki/poki-detect.webp" alt="" loading="lazy" />
+    <img class="poki-stage__pose" data-pose="headphones" src="assets/poki/poki-headphones.webp" alt="" loading="lazy" />
+    <img class="poki-stage__pose" data-pose="duo" src="assets/poki/poki-duo.webp" alt="" loading="lazy" />
   </div>
 
   <main id="main">
@@ -151,7 +154,7 @@
 
         <div class="stage" data-stage>
           <div class="stage__chat mock" aria-label="채팅 예시">
-            <div class="mock__bar"><span>채팅 · 후원</span><span class="mock__count" data-chat-rate>분당 42</span></div>
+            <div class="mock__bar"><span>채팅 · 후원</span><span class="mock__count" data-chat-rate>분당 318</span></div>
             <div class="chat" data-chat><ul>
               <li><b style="--c:#7d93d9">감자칩</b>오 이거 뭐야</li>
               <li><b style="--c:#ef9bd3">새벽세시</b>ㅋㅋㅋㅋㅋㅋ</li>
@@ -167,7 +170,8 @@
           <div class="stage__graph mock">
             <div class="mock__bar">
               <span>방송 반응 분석</span>
-              <span class="status" data-status><i class="spinner" aria-hidden="true"></i>분석 중…</span>
+              <!-- 기본값은 정점 상태 — 모션이 없을 때(reduce·motion-late) 피크·점프카드·신호와 같은 장면으로 보인다. motion.js가 시작 상태로 돌린다 -->
+              <span class="status is-hit" data-status><i></i>하이라이트 감지</span>
             </div>
             <svg class="wave" viewBox="0 0 600 220" preserveAspectRatio="none" data-wave aria-hidden="true"></svg>
             <div class="peak" data-peak><span class="peak__ring"></span><span class="peak__label">×3.4</span></div>
@@ -463,7 +467,6 @@
         </header>
         <ul class="logos">
           <li class="logos__item"><img class="logos__icon" src="assets/brand/chzzk-icon.svg" alt="" width="40" height="40" /><img src="assets/brand/chzzk-wordmark-white.svg" alt="치지직" width="1920" height="600" /></li>
-          <!-- SOOP은 심사 중 — 공개 시점에 지원으로 나간다(2026-10-03 결정) -->
           <li class="logos__item"><img src="assets/brand/soop-logo-white.svg" alt="SOOP" height="22" /></li>
           <li class="logos__item"><img src="assets/brand/youtube-logo-white.svg" alt="YouTube" width="828" height="184" /></li>
         </ul>
@@ -550,7 +553,7 @@
         <div class="plans">
           <article class="plan">
             <span class="plan__name">스트리머</span>
-            <div class="plan__price"><span class="plan__blur" aria-hidden="true">₩29,000</span><span class="chip chip--soon chip--shimmer">곧 공개</span></div>
+            <div class="plan__price"><span class="plan__blur" aria-hidden="true">₩00,000</span><span class="chip chip--soon chip--shimmer">곧 공개</span></div>
             <ul class="plan__list">
               <li>포키 실시간 하이라이트 감지</li><li>멀티트랙 편집 · BGM 제외</li><li>확인 후 YouTube 바로 공개</li><li>VOD 60일 보관</li>
             </ul>
@@ -618,7 +621,6 @@
         <a href="#detect">기능</a><a href="#how">작동 방식</a><a href="#faq">FAQ</a>
         <a href="/terms">이용약관</a><a href="/privacy" class="footer__privacy">개인정보 처리방침</a>
       </nav>
-      <!-- 무료 베타라 사업자 정보(번호·주소) 표시 의무가 아직 없다 — 유료화 때 여기에 붙인다 -->
       <p class="footer__legal muted">운영 PokeClip 팀 · 문의 <a href="mailto:3k.pokeclip@gmail.com">3k.pokeclip@gmail.com</a> · © 2026 PokeClip</p>
     </div>
   </footer>

@@ -178,11 +178,23 @@
   const gallery = $('[data-gallery]');
   const gDots = $$('[data-gallery-dots] i');
   const cards = $$('.fcard', gallery);
+  // 카드마다 그 카드로 넘겼을 때의 scrollLeft. 끝 카드들은 스크롤 끝에 막혀 제 자리까지 못 가므로 최대 스크롤로 자른다 —
+  // 「시작 위치 ÷ 간격」으로만 세면 390px에서는 다섯 번째 카드로 가지 않고, 768px에서는 끝까지 넘겨도 마지막 점이 안 켜진다
+  function galleryStops() {
+    const max = gallery.scrollWidth - gallery.clientWidth;
+    return cards.map((c) => Math.min(c.offsetLeft - cards[0].offsetLeft, max));
+  }
+  function galleryIndex(stops = galleryStops()) {
+    let best = 0;
+    stops.forEach((s, i) => {
+      if (Math.abs(s - gallery.scrollLeft) <= Math.abs(stops[best] - gallery.scrollLeft)) best = i;
+    });
+    return best;
+  }
   gallery.addEventListener(
     'scroll',
     () => {
-      const step = cards[1] ? cards[1].offsetLeft - cards[0].offsetLeft : 1;
-      const idx = Math.min(cards.length - 1, Math.round(gallery.scrollLeft / step));
+      const idx = galleryIndex();
       gDots.forEach((d, i) => d.classList.toggle('is-on', i === idx));
     },
     { passive: true },
@@ -250,5 +262,5 @@
     jumpIO.observe(jumpFig);
   }
 
-  window.PC_LP = { mode, toast, setStep, setLine, drawWave, speakers, PEAK_AT, observers: { lineIO, stepIO } };
+  window.PC_LP = { mode, toast, setStep, setLine, drawWave, speakers, PEAK_AT, galleryStops, galleryIndex, observers: { lineIO, stepIO } };
 })();

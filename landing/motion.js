@@ -22,9 +22,8 @@
   const clamp01 = gsap.utils.clamp(0, 1);
   const seg = (p, a, b) => clamp01((p - a) / (b - a)); // 진행률 p를 [a,b] 구간의 0..1로
 
-  // P1의 IntersectionObserver 기반 전환은 모션 타임라인이 대신한다
+  // P1의 IntersectionObserver 기반 전환은 모션 타임라인이 대신한다(S4 단계 전환은 핀을 걸 때만 — S4 블록에서 끊는다)
   LP.observers.lineIO.disconnect();
-  if (full) LP.observers.stepIO.disconnect();
 
   // ===== Lenis (Full만) =====
   let lenis = null;
@@ -72,12 +71,16 @@
   } else {
     intro.from(h1, { yPercent: 105, duration: 1.0 }, 0.28);
   }
+  // 히어로 버튼은 CSS가 transform 트랜지션과 hover 떠오름을 건다 — 트윈 동안은 트랜지션을 끄고, 끝나면 인라인
+  // transform을 지워 hover가 다시 먹게 한다(남겨 두면 translate(0,0)이 hover의 translateY(-2px)를 덮는다)
+  const heroBtns = $$('.hero__copy .btn');
+  gsap.set(heroBtns, { transition: 'none' });
   intro
     .from('.nav__pill', { y: -24, opacity: 0, duration: 0.9 }, 0.05)
     .from('.hero__scene', { opacity: 0, duration: 1.4, ease: 'power2.out' }, 0)
     .from('.chip--beta', { y: 16, opacity: 0, duration: 0.8 }, 0.2)
     .from('.hero__copy .lead', { y: 20, opacity: 0, duration: 0.8 }, 0.62)
-    .from('.hero__copy .btn', { y: 16, opacity: 0, duration: 0.7, stagger: 0.08 }, 0.74)
+    .from(heroBtns, { y: 16, opacity: 0, duration: 0.7, stagger: 0.08, clearProps: 'transform,opacity,transition' }, 0.74)
     .from(['.hero__poster img', '.hero__video'], { scale: 1.08, duration: 2.2, ease: 'power2.out' }, 0);
   done();
 
@@ -156,6 +159,7 @@
     // S4가 올라오는 동안 위로 빠진다. CSS의 translateY(101%)를 GSAP이 y(px)로 읽으므로 y:0으로 지운다
     const bars = $$('[data-curtain] i');
     gsap.set(bars, { y: 0, yPercent: 101 });
+    detect(0); // HTML 기본값은 정점 상태(모션 없는 화면용)라 스크롤 전 시작 상태로 돌린다
     const tl = gsap.timeline({ scrollTrigger: { trigger: '.detect', start: 'top top', end: '+=220%', pin: true, scrub: 0.5, onUpdate: (s) => detect(s.progress) } });
     tl.to(chat, { yPercent: -55, ease: 'power2.in', duration: 0.6 }, 0)
       .fromTo('.stage__prop', { scale: 0, opacity: 0 }, { scale: 1, opacity: 1, ease: 'back.out(2)', stagger: 0.05, duration: 0.12 }, 0.3)
@@ -177,7 +181,13 @@
   }
 
   // ===== S4 작동 방식: Full은 핀 + 아코디언 + 라이더 =====
-  if (full) {
+  // 핀은 섹션이 한 화면에 들어올 때만 건다. 가장 키 큰 라이브 화면(581px)이 단계 영역을 늘려, 높이 약 1000px 미만에서는
+  // 마지막 단계 설명이 화면 아래로 넘친다(760에서 181px — 고정 중에는 닿을 수 없다). 안 들어오면 핀 없이 P1처럼
+  // 단계 글이 화면 가운데를 지날 때 바뀐다(main.js의 stepIO를 끊지 않는다)
+  const howFits = full && $('.how').offsetHeight <= window.innerHeight + 1;
+  if (full && !howFits) $('.how').classList.add('how--static');
+  if (howFits) {
+    LP.observers.stepIO.disconnect();
     const fill = $('[data-rider-fill]');
     const rider = $('[data-rider-poki]');
     let cur = 0;
@@ -270,20 +280,23 @@
       },
     });
   } else {
-    let pauseUntil = 0;
+    // 사용자가 한 번이라도 만지면 자동 넘김을 아예 멈춘다 — 읽는 중에 넘어가지 않게, 키보드로 들어와도 멈추게(WCAG 2.2.2)
+    let stopped = false;
     let visible = false;
-    gallery.addEventListener('pointerdown', () => (pauseUntil = Date.now() + 8000), { passive: true });
+    ['pointerdown', 'wheel', 'focusin', 'keydown'].forEach((type) =>
+      gallery.addEventListener(type, () => (stopped = true), { passive: true }),
+    );
     ScrollTrigger.create({ trigger: gallery, start: 'top 80%', end: 'bottom 20%', onToggle: (s) => (visible = s.isActive) });
-    setInterval(() => {
-      if (!visible || Date.now() < pauseUntil || document.hidden) return;
-      // 지금 보이는 카드에서 이어 간다 — 따로 센 번호를 쓰면 사용자가 직접 넘긴 뒤 앞 카드로 되감긴다.
-      // 끝 카드는 스크롤 끝에 막혀 제 자리까지 못 가고 스냅이 앞 카드로 되돌리니(900px에서 1736 → 1302),
-      // 스크롤로 닿는 마지막 카드에 왔으면 처음으로 돌아간다. 「스크롤 끝에 닿았나」로 보면 스냅 때문에 끝에서 멈춘다
-      const step = cards[1] ? cards[1].offsetLeft - cards[0].offsetLeft : 1;
-      const last = Math.min(cards.length - 1, Math.floor((gallery.scrollWidth - gallery.clientWidth + 2) / step));
-      const cur = Math.round(gallery.scrollLeft / step);
-      const next = cur >= last ? 0 : cur + 1;
-      gallery.scrollTo({ left: cards[next].offsetLeft - cards[0].offsetLeft, behavior: 'smooth' });
+    const timer = setInterval(() => {
+      if (stopped) return clearInterval(timer);
+      if (!visible || document.hidden) return;
+      // 지금 보이는 카드에서 이어 간다. 위치는 main.js가 스크롤 끝으로 자른 값이다(390px에서 다섯 번째 카드 = 1227).
+      // 다음 자리가 간격의 절반보다 가까우면 스냅이 앞 카드로 되돌리니(900px에서 1302 → 1336) 처음으로 간다
+      const stops = LP.galleryStops();
+      const cur = LP.galleryIndex(stops);
+      const step = stops[1] - stops[0] || 1;
+      const next = cur + 1 < stops.length && stops[cur + 1] - stops[cur] >= step / 2 ? cur + 1 : 0;
+      gallery.scrollTo({ left: stops[next], behavior: 'smooth' });
     }, 3600);
   }
 
