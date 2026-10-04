@@ -17,6 +17,7 @@ import com.pokeclip.clip.render.ClipSnapshot;
 import com.pokeclip.clip.render.RenderJob;
 import com.pokeclip.clip.render.RenderJobRepository;
 import com.pokeclip.clip.render.RenderRequestService;
+import com.pokeclip.clip.thumbnail.ThumbnailUrls;
 import com.pokeclip.clip.upload.UploadRequestService;
 import com.pokeclip.clip.upload.UploadSnapshot;
 import org.slf4j.Logger;
@@ -66,11 +67,13 @@ public class LibraryService {
     /** 읽기 전용 + REPEATABLE READ — 이유는 클래스 주석. 주입받은 템플릿(READ COMMITTED)을 그대로 쓰면 안 된다. */
     private final TransactionTemplate transactions;
     private final ObjectMapper mapper;
+    private final ThumbnailUrls thumbnails;
 
     LibraryService(LibraryQuery query, RecipeRepository recipes, ClipRepository clips, RenderJobRepository jobs,
                    RenderRequestService render, UploadRequestService uploads, DelegationResolveClient delegation,
                    BroadcastAccessGuard guard,
-                   TransactionTemplate transactions, ObjectMapper mapper) {
+                   TransactionTemplate transactions, ObjectMapper mapper, ThumbnailUrls thumbnails) {
+        this.thumbnails = thumbnails;
         this.query = query;
         this.recipes = recipes;
         this.clips = clips;
@@ -160,6 +163,8 @@ public class LibraryService {
         Map<Long, UploadSnapshot> uploadByClipId = uploads.latestFor(clipIds).stream()
                 .collect(Collectors.toMap(UploadSnapshot::clipId, Function.identity()));
 
+        Map<Long, String> pictures = thumbnails.ofClips(clipIds);
+
         List<LibraryEntry> entries = new ArrayList<>(rows.size());
         for (LibraryRow row : rows) {
             // 질의가 준 번호는 같은 트랜잭션 안에서 읽었으니 반드시 있다 — 없으면 우리 버그라 500이 맞다.
@@ -172,7 +177,8 @@ public class LibraryService {
             entries.add(new LibraryEntry(recipe.getId(), recipe.getStreamId(), recipe.getCreatorId(),
                     recipe.getRecipeVersion(), cut, row.status(),
                     new BroadcastSummary(row.broadcastStatus(), row.startedAt(), row.endedAt(), row.vodExpiresAt()),
-                    latest, recipe.getCreatedAt(), recipe.getUpdatedAt()));
+                    latest, recipe.getCreatedAt(), recipe.getUpdatedAt(),
+                    row.clipId() == null ? null : pictures.get(row.clipId())));
         }
         return entries;
     }

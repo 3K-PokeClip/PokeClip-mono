@@ -37,6 +37,10 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      * <p>{@code ingestStreamId}는 녹화·라이브 영상 주소의 키다(POK-233). 방송을 가리키는 이름({@code streamId})과 갈릴 수
      * 있어 화면은 영상 주소를 만들 때 이 값을 쓴다. 옛 줄은 {@code streamId}와 같다.
      *
+     * <p>{@code thumbnailUrl}은 사진 주소다(POK-277, 수명 60분 미리서명). 방송 중이면 1분마다 바뀌는 최신 화면, 끝난 방송이면
+     * 점수가 가장 높은 카드의 장면이고 카드 사진이 없으면 마지막 라이브 화면이다. 사진이 없으면 {@code null}이다(화면은 자리표시).
+     * 목록을 다시 받을 때마다 새 주소가 오므로 덮어쓴 라이브 사진이 브라우저 캐시에 막히지 않는다.
+     *
      * <p>줄 번호는 안 싣는다 — 이어받기가 표시로 끝나므로 웹이 쓸 데가 없고,
      * 방송을 가리키는 이름은 {@code streamId}다(카드 목록 문이 그 값을 받는다).
      */
@@ -47,7 +51,8 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                        Instant startedAt,
                        Instant endedAt,
                        Instant vodExpiresAt,
-                       Instant timelineOriginAt) {
+                       Instant timelineOriginAt,
+                       String thumbnailUrl) {
     }
 
     public static BroadcastListResponse from(BroadcastPage page) {
@@ -69,6 +74,7 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                 row.getStartedAt(),
                 row.getEndedAt(),
                 row.getVodExpiresAt(),
-                page.origins().get(row.getStreamId()));
+                page.origins().get(row.getStreamId()),
+                page.thumbnails().get(row.getStreamId()));
     }
 }

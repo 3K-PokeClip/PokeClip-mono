@@ -8,6 +8,7 @@ import com.pokeclip.clip.paging.CursorCodec;
 import com.pokeclip.clip.paging.InvalidListParamException;
 import com.pokeclip.clip.paging.ListLimit;
 import com.pokeclip.clip.segment.TimelineOriginReader;
+import com.pokeclip.clip.thumbnail.ThumbnailUrls;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -79,12 +80,14 @@ public class BroadcastListService {
     private final BroadcastRepository broadcasts;
     private final DelegationResolveClient delegation;
     private final TimelineOriginReader origins;
+    private final ThumbnailUrls thumbnails;
 
     BroadcastListService(BroadcastRepository broadcasts, DelegationResolveClient delegation,
-                         TimelineOriginReader origins) {
+                         TimelineOriginReader origins, ThumbnailUrls thumbnails) {
         this.broadcasts = broadcasts;
         this.delegation = delegation;
         this.origins = origins;
+        this.thumbnails = thumbnails;
     }
 
     /**
@@ -134,7 +137,14 @@ public class BroadcastListService {
                 ? CursorCodec.encode(CursorCodec.Kind.BROADCAST, page.get(page.size() - 1).getId())
                 : null;
         // 시각 기준점은 잘라 낸 한 장만 잰다(POK-255) — 「다음 장이 있나」를 보려고 더 받은 한 줄은 안 나간다
-        return new BroadcastPage(page, relations, next, originsOrEmpty(page));
+        return new BroadcastPage(page, relations, next, originsOrEmpty(page), thumbnailsOf(page));
+    }
+
+    /** 사진 주소(POK-277). 방송 중이면 최신 화면, 끝났으면 최고 점수 카드 장면. 부가 칸이라 못 읽으면 비운다({@link ThumbnailUrls}). */
+    private Map<String, String> thumbnailsOf(List<Broadcast> page) {
+        List<String> live = page.stream().filter(b -> b.getStatus() == BroadcastStatus.LIVE).map(Broadcast::getStreamId).toList();
+        List<String> ended = page.stream().filter(b -> b.getStatus() != BroadcastStatus.LIVE).map(Broadcast::getStreamId).toList();
+        return thumbnails.ofBroadcasts(live, ended);
     }
 
     /**

@@ -225,7 +225,7 @@ class ChatPublishTest {
             awaitUntil(() -> registry.stuckSkippedCount() == 1);             // 창 첫 줄(1초 기다린 뒤)
             registry.publish(new JumpCardSnapshot(8L, "s-1", JumpCardSource.AUTO, 1_500L,
                     new JumpCardSnapshot.Window(1_000L, 2_000L), 97, null, null, null, null,
-                    false, null, 8L, Instant.parse("2026-08-23T00:00:00Z")));
+                    false, null, 8L, Instant.parse("2026-08-23T00:00:00Z"), null));
             awaitUntil(() -> registry.stuckSkippedCount() == 2);             // 이미 1초 넘게 막힘 — 창 안, 모음
             assertThat(captor.messages()).as("양성 대조 — 창 안 둘째 몫은 그 자리에서 안 찍혔다")
                     .filteredOn(m -> m.contains("reason=flush")).isEmpty();
@@ -256,7 +256,7 @@ class ChatPublishTest {
     private static JumpCardSnapshot card(String streamId) {
         return new JumpCardSnapshot(7L, streamId, JumpCardSource.AUTO, 1_500L,
                 new JumpCardSnapshot.Window(1_000L, 2_000L), 97, null, null, null, null,
-                false, null, 7L, Instant.parse("2026-08-23T00:00:00Z"));
+                false, null, 7L, Instant.parse("2026-08-23T00:00:00Z"), null);
     }
 
     private static void awaitUntil(BooleanSupplier condition) {

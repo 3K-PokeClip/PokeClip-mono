@@ -21,10 +21,12 @@ public record LibraryDetail(long recipeId,
                             ClipSnapshot latestClip,
                             Instant createdAt,
                             Instant updatedAt,
+                            String thumbnailUrl,
                             RecipeDocument recipe) {
 
     static LibraryDetail of(LibraryEntry entry, RecipeDocument recipe) {
         return new LibraryDetail(entry.recipeId(), entry.streamId(), entry.creatorId(), entry.recipeVersion(), entry.cut(),
-                entry.status(), entry.broadcast(), entry.latestClip(), entry.createdAt(), entry.updatedAt(), recipe);
+                entry.status(), entry.broadcast(), entry.latestClip(), entry.createdAt(), entry.updatedAt(), entry.thumbnailUrl(),
+                recipe);
     }
 }
