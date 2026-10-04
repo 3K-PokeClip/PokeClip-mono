@@ -71,6 +71,24 @@ describe('LoginScreen', () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/home'));
   });
 
+  it('가입 고지가 약관·처리방침 전문으로 잇고 만 14세 조건을 밝힌다', () => {
+    // 가입은 이 고지 + 로그인으로 성립한다(POK-269) — 링크가 없으면 약관 명시 의무를 못 채운다.
+    // 처리방침은 「동의」가 아니라 「확인」 대상이다.
+    render(<LoginScreen />);
+
+    // 문서는 랜딩(pokeclip.com)의 정적 페이지다 — 대시보드(app.pokeclip.com)는 그 주소로 잇는다
+    expect(screen.getByRole('link', { name: '이용약관' })).toHaveAttribute(
+      'href',
+      'https://pokeclip.com/terms',
+    );
+    expect(screen.getByRole('link', { name: '개인정보 처리방침' })).toHaveAttribute(
+      'href',
+      'https://pokeclip.com/privacy',
+    );
+    expect(screen.getByText(/만 14세 이상이며/)).toBeInTheDocument();
+    expect(screen.queryByText(/처리방침에 동의/)).not.toBeInTheDocument();
+  });
+
   it('접근성 위반이 없다', async () => {
     const { container } = render(<LoginScreen />);
     await act(async () => {

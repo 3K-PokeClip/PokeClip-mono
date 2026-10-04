@@ -1,6 +1,7 @@
 'use client';
 
 import { useId } from 'react';
+import { LEGAL_URLS } from '@/features/legal/legalInfo';
 import { Button, Dialog } from '@/ui';
 import type { WITHDRAW_FACTS } from './useAccountMockState';
 import styles from './AccountSettingsScreen.module.css';
@@ -103,6 +104,18 @@ export function WithdrawDialog({
               3k.pokeclip@gmail.com
             </a>
             )로 문의해 주세요.
+          </p>
+          <p className={styles.footnote}>
+            개인정보를 언제까지 보관하고 어떻게 파기하는지는{' '}
+            <a
+              className={styles.footnoteLink}
+              href={LEGAL_URLS.privacyRetention}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              개인정보 처리방침
+            </a>
+            에서 확인할 수 있어요.
           </p>
           <p className={styles.footnote}>
             그동안 PokeClip을 이용해 주셔서 감사합니다.

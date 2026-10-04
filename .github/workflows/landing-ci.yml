@@ -1,0 +1,24 @@
+# landing/ 전용 CI — 경로 필터로 랜딩 변경 PR에서만 돈다 (ADR-013 모노레포 원칙)
+# 약관·처리방침에서 빠지면 법 위반이 되는 문장과, 시행일 드롭다운이 판 목록과 같은지를 지킨다.
+# 의존성 없는 node 스크립트라 설치 단계가 없다. 자리표시 〔 〕는 여기서는 경고만 한다 — 공개 배포 전에는 --release로 돌린다.
+name: landing-ci
+
+on:
+  pull_request:
+    paths:
+      - 'landing/**'
+      # check-legal이 대시보드가 거는 약관·처리방침 앵커(#retention 등)도 확인한다
+      - 'web/src/features/legal/legalInfo.ts'
+      - '.github/workflows/landing-ci.yml'
+
+jobs:
+  legal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.node-version
+
+      - run: node landing/scripts/check-legal.mjs

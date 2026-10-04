@@ -8,6 +8,7 @@ import {
   consumeReturnPath,
   restoreReturnPath,
 } from '@/components/app-shell/AuthGuard';
+import { LEGAL_URLS } from '@/features/legal/legalInfo';
 import { useAuthHydration, useAuthStore } from '@/stores/auth';
 import { GoogleGIcon } from './GoogleGIcon';
 import { startGoogleLogin } from './googleOAuth';
@@ -69,8 +70,25 @@ export function LoginScreen() {
               지금은 로그인을 시작할 수 없어요. 잠시 후 다시 시도해 주세요.
             </p>
           ) : null}
+          {/* 가입은 이 고지 + 로그인으로 성립한다(체크박스 없음, POK-269). 약관은 「동의」,
+              처리방침은 「확인」이다 — 처리방침은 동의를 받는 대상이 아니다. 전문 링크가
+              문구 바로 옆에 있어야 약관 명시 의무(약관규제법 제3조)를 채운다.
+              문서는 랜딩(pokeclip.com)에 있어 새 탭으로 연다 — 로그인 흐름을 끊지 않는다. */}
           <p className={styles.terms}>
-            계속 진행하면 이용약관 및 개인정보 처리방침에 동의하게 됩니다.
+            Google로 시작하면 만 14세 이상이며{' '}
+            <a href={LEGAL_URLS.terms} target="_blank" rel="noopener noreferrer">
+              이용약관
+            </a>
+            에 동의한 것으로 봅니다. 개인정보 처리 내용은{' '}
+            <a
+              href={LEGAL_URLS.privacy}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={styles.privacyLink}
+            >
+              개인정보 처리방침
+            </a>
+            에서 확인하세요.
           </p>
         </div>
       </section>

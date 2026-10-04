@@ -1,0 +1,645 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>PokeClip 랜딩 시안</title>
+  <meta name="description" content="방송이 끝나기 전에, 하이라이트는 이미 유튜브에. 채팅이 터진 순간을 포키가 찾아 BGM 없는 클립으로 만들어요." />
+  <meta name="theme-color" content="#141517" />
+  <meta property="og:title" content="PokeClip — 방송이 끝나기 전에, 하이라이트는 이미 유튜브에." />
+  <meta property="og:image" content="assets/img/og-base.jpg" />
+  <link rel="stylesheet" href="styles.css" />
+  <script>
+    // 첫 페인트 전에 모션 모드를 정한다 — full: 정밀 포인터 데스크톱, lite: 그 밖, reduce: 동작 줄이기.
+    // full은 화면 높이 640px 이상만 — 그 아래(브라우저 확대·개발자 도구)에서는 한 화면에 묶인 핀 섹션이 넘치고
+    // 히어로의 「베타 시작하기」가 화면 밖에 남는다(1440×500·600에서 실측)
+    (function () {
+      var m = window.matchMedia;
+      var REDUCE = '(prefers-reduced-motion: reduce)';
+      var FULL = '(min-width: 1024px) and (min-height: 640px) and (hover: hover) and (pointer: fine)';
+      function pick() {
+        return m(REDUCE).matches ? 'reduce' : m(FULL).matches ? 'full' : 'lite';
+      }
+      var mode = pick();
+      var root = document.documentElement;
+      root.dataset.mode = mode;
+      // 모드는 한 번만 정한다. 창을 1024 아래로 줄이는 식으로 모드가 바뀌면 새로고침해 다시 정한다 — 그대로 두면
+      // full의 핀·한 화면 높이가 모바일 배치 위에 남아 섹션이 겹친다. 핀을 되돌려 다시 만드는 것보다 싸다. ?mode=로 강제했으면 두지 않는다
+      if (!/[?&]mode=(full|lite|reduce)(&|$)/.test(location.search)) {
+        [REDUCE, FULL].forEach(function (q) {
+          m(q).addEventListener('change', function () {
+            if (pick() !== mode) location.reload();
+          });
+        });
+      }
+      // 모션 초기 상태가 잡히기 전 깜빡임 방지 — motion.js가 지운다. CDN이 2.5초 안에 안 오면 여기서 지우고 motion-late를
+      // 남긴다. 늦게 도착한 motion.js는 그걸 보고 이미 읽히고 있는 정적 화면 위에 모션을 다시 걸지 않는다
+      if (mode !== 'reduce') {
+        root.classList.add('motion-pending');
+        setTimeout(function () {
+          if (!root.classList.contains('motion-pending')) return;
+          root.classList.remove('motion-pending');
+          root.classList.add('motion-late');
+        }, 2500);
+      }
+    })();
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">본문으로 건너뛰기</a>
+
+  <!-- ===== 공통 크롬: 떠 있는 글래스 pill 내비 ===== -->
+  <header class="nav" data-nav>
+    <div class="nav__pill">
+      <a class="nav__logo" href="#top" aria-label="PokeClip 홈">
+        <img src="assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
+      </a>
+      <nav class="nav__links" aria-label="주요 메뉴">
+        <a href="#detect">기능</a>
+        <a href="#how">작동 방식</a>
+        <a href="#team">편집자</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <div class="nav__actions">
+        <a class="btn btn--point btn--sm" href="/login" data-proto-link>베타 시작하기</a>
+        <button class="nav__menu" type="button" aria-expanded="false" aria-controls="sheet" data-menu-toggle>
+          <span class="sr-only">메뉴 열기</span>
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
+        </button>
+      </div>
+    </div>
+    <div class="sheet" id="sheet" hidden data-sheet>
+      <a href="#detect" data-sheet-link>기능</a>
+      <a href="#how" data-sheet-link>작동 방식</a>
+      <a href="#team" data-sheet-link>편집자</a>
+      <a href="#faq" data-sheet-link>FAQ</a>
+      <a class="btn btn--point btn--lg" href="/login" data-proto-link>베타 시작하기</a>
+    </div>
+  </header>
+
+  <!-- 데스크톱 좌측 섹션 인디케이터 -->
+  <ol class="indicator" aria-hidden="true" data-indicator>
+    <li data-for="top"></li><li data-for="pain"></li><li data-for="detect"></li><li data-for="how"></li>
+    <li data-for="bgm"></li><li data-for="team"></li><li data-for="features"></li><li data-for="platforms"></li>
+    <li data-for="pricing"></li><li data-for="faq"></li><li data-for="cta"></li>
+  </ol>
+
+  <!-- Full 모드 전용 포키 스테이지 (P2에서 섹션별 앵커로 안무) -->
+  <div class="poki-stage" aria-hidden="true" data-poki-stage>
+    <!-- lazy — 스테이지는 full에서만 보인다(lite·reduce는 display:none이라 받지 않는다) -->
+    <img class="poki-stage__pose is-on" data-pose="worried" src="assets/poki/poki-worried.webp" alt="" loading="lazy" />
+    <img class="poki-stage__pose" data-pose="detect" src="assets/poki/poki-detect.webp" alt="" loading="lazy" />
+    <img class="poki-stage__pose" data-pose="headphones" src="assets/poki/poki-headphones.webp" alt="" loading="lazy" />
+    <img class="poki-stage__pose" data-pose="duo" src="assets/poki/poki-duo.webp" alt="" loading="lazy" />
+  </div>
+
+  <main id="main">
+    <!-- ===== S1 히어로 ===== -->
+    <section class="hero" id="top" data-section="hero">
+      <div class="hero__card" data-hero-card>
+        <div class="hero__media" data-hero-media>
+          <!-- A1 히어로: 키프레임(포스터)을 먼저 보여 주고, 루프 영상이 재생되면 그 위로 페이드인. 영상 첫·끝 프레임 = 포스터 -->
+          <div class="hero__scene" aria-hidden="true">
+            <div class="hero__poster">
+              <picture>
+                <source media="(max-width: 767px)" srcset="assets/img/hero-key-mo.webp" />
+                <img src="assets/img/hero-key-pc.webp" alt="" width="1672" height="941" fetchpriority="high" />
+              </picture>
+              <video class="hero__video" muted loop playsinline preload="none" data-hero-video
+                data-src-pc="assets/video/hero-pc.mp4" data-src-mo="assets/video/hero-mo.mp4"></video>
+            </div>
+          </div>
+        </div>
+        <div class="hero__shade" aria-hidden="true"></div>
+        <div class="hero__copy" data-hero-copy>
+          <span class="chip chip--beta">BETA 오픈</span>
+          <h1 class="display" data-reveal-lines>방송이 끝나기 전에,<br />하이라이트는<br class="br-alt" /> 이미 유튜브에.</h1>
+          <p class="lead">AI를 활용해 포키가 방송을 실시간으로 분석해 하이라이트를 찾아내고, <strong>BGM 없는 클립</strong>으로 바로 만들어요.</p>
+          <div class="hero__ctas">
+            <a class="btn btn--point btn--lg" href="/login" data-proto-link>베타 시작하기</a>
+            <a class="btn btn--ghost btn--lg" href="#how">작동 방식 보기</a>
+          </div>
+        </div>
+        <div class="hero__scroll" aria-hidden="true"><span></span></div>
+      </div>
+    </section>
+
+    <!-- ===== S2 공감 (가라오케 리스트) ===== -->
+    <section class="section pain" id="pain" data-section="pain">
+      <div class="container pain__grid">
+        <div class="pain__text">
+          <p class="eyebrow">스트리머라면</p>
+          <h2 class="h2">이런 적 있죠?</h2>
+          <ol class="karaoke" data-karaoke>
+            <li class="is-active">어제 터진 장면, 아직 편집 중이에요</li>
+            <li>BGM 때문에 못 올린 클립이 쌓여요</li>
+            <li>방송하면서 클립까지는 무리예요</li>
+            <li>하이라이트 찾으러 VOD를 정주행해요</li>
+          </ol>
+        </div>
+        <figure class="pain__poki poki-inline" data-poki-inline="worried">
+          <img src="assets/poki/poki-worried.webp" alt="" width="1024" height="1024" loading="lazy" />
+        </figure>
+      </div>
+    </section>
+
+    <!-- ===== S3 채팅 급증 감지 (시그니처) ===== -->
+    <section class="section detect" id="detect" data-section="detect">
+      <div class="container">
+        <header class="section-head">
+          <p class="eyebrow eyebrow--point">포키 하이라이트 엔진</p>
+          <h2 class="h2">VOD 정주행은 그만.<br />포키가 먼저 찾아요.</h2>
+          <p class="body muted">포키는 방송 내내 <strong>채팅·후원·목소리 반응</strong>을 한꺼번에 읽어요. 반응이 함께 치솟는 순간을 골라 점수를 매기고, 라이브 대시보드에 <strong>점프카드</strong>로 바로 띄워요. 몇 시간짜리 다시보기를 처음부터 돌려 볼 필요가 없어요.</p>
+        </header>
+
+        <div class="stage" data-stage>
+          <div class="stage__chat mock" aria-label="채팅 예시">
+            <div class="mock__bar"><span>채팅 · 후원</span><span class="mock__count" data-chat-rate>분당 318</span></div>
+            <div class="chat" data-chat><ul>
+              <li><b style="--c:#7d93d9">감자칩</b>오 이거 뭐야</li>
+              <li><b style="--c:#ef9bd3">새벽세시</b>ㅋㅋㅋㅋㅋㅋ</li>
+              <li class="chat__donation"><b style="--c:#ffd607">초코송이</b><span class="chat__amount">₩10,000</span>방금 거 레전드</li>
+              <li><b style="--c:#9efaff">한타장인</b>와 방금 그거</li>
+              <li><b style="--c:#8cfa5a">나무늘보</b>미쳤다 ㄷㄷ</li>
+              <li><b style="--c:#e568ba">구독자1</b>다시 보여줘요</li>
+              <li class="chat__donation"><b style="--c:#a8b9e8">야식왕</b><span class="chat__amount">₩5,000</span>클립 따주세요</li>
+              <li><b style="--c:#ffb3d9">월요병</b>ㅋㅋㅋㅋㅋㅋㅋ</li>
+            </ul></div>
+          </div>
+
+          <div class="stage__graph mock">
+            <div class="mock__bar">
+              <span>방송 반응 분석</span>
+              <!-- 기본값은 정점 상태 — 모션이 없을 때(reduce·motion-late) 피크·점프카드·신호와 같은 장면으로 보인다. motion.js가 시작 상태로 돌린다 -->
+              <span class="status is-hit" data-status><i></i>하이라이트 감지</span>
+            </div>
+            <svg class="wave" viewBox="0 0 600 220" preserveAspectRatio="none" data-wave aria-hidden="true"></svg>
+            <div class="peak" data-peak><span class="peak__ring"></span><span class="peak__label">×3.4</span></div>
+            <!-- 신호 셋 — 기본값은 정점 상태(모션이 없을 때 그대로 보인다). motion.js가 스크롤에 맞춰 --v와 값을 바꾼다 -->
+            <ul class="signals" aria-label="포키가 보는 신호">
+              <li data-signal="chat" style="--v:.92"><span class="signals__name">채팅 반응</span><span class="signals__bar"><i></i></span><b class="signals__val" data-signal-val>×3.4</b></li>
+              <li data-signal="donation" style="--v:.72"><span class="signals__name">후원</span><span class="signals__bar"><i></i></span><b class="signals__val" data-signal-val>5건</b></li>
+              <li data-signal="voice" style="--v:.84"><span class="signals__name">목소리 반응</span><span class="signals__bar"><i></i></span><b class="signals__val" data-signal-val>높음</b></li>
+            </ul>
+          </div>
+
+          <article class="jumpcard" data-jumpcard aria-label="점프카드 예시">
+            <div class="jumpcard__thumb">
+              <img class="jumpcard__img" src="assets/img/clip-arena-peak.webp" alt="" aria-hidden="true" loading="lazy" />
+              <span class="badge badge--point">97점</span>
+              <span class="jumpcard__reason">반응 급증</span>
+              <span class="jumpcard__dur">0:42</span>
+              <svg class="jumpcard__spark" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true">
+                <polygon points="0,22 0,18 8,17 16,18 24,15 32,16 40,9 48,13 56,15 64,4 72,12 80,14 88,10 96,13 100,14 100,22" />
+                <polyline points="0,18 8,17 16,18 24,15 32,16 40,9 48,13 56,15 64,4 72,12 80,14 88,10 96,13 100,14" />
+              </svg>
+              <div class="jumpcard__track"><i style="left:64%"></i></div>
+            </div>
+            <div class="jumpcard__body">
+              <strong class="jumpcard__title">마지막 한타 역전</strong>
+              <span class="jumpcard__meta">라이브 · 1:24:03 지점 · 길이 0:42</span>
+              <div class="jumpcard__row"><span class="badge badge--point-soft">검토 대기</span><span class="muted">방금</span></div>
+              <div class="jumpcard__actions"><span class="btn btn--soft btn--xs">편집</span><span class="btn btn--accent btn--xs">업로드</span></div>
+            </div>
+          </article>
+
+          <figure class="stage__poki poki-inline" data-poki-inline="detect">
+            <img src="assets/poki/poki-detect.webp" alt="" width="1024" height="1024" loading="lazy" />
+          </figure>
+          <img class="stage__prop stage__prop--a" src="assets/props/prop-chat-3.webp" alt="" aria-hidden="true" loading="lazy" />
+          <img class="stage__prop stage__prop--b" src="assets/props/prop-chat-2.webp" alt="" aria-hidden="true" loading="lazy" />
+          <img class="stage__prop stage__prop--c" src="assets/props/prop-chat-1.webp" alt="" aria-hidden="true" loading="lazy" />
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== S4 작동 방식 4단계 ===== -->
+    <section class="section how" id="how" data-section="how">
+      <div class="container">
+        <header class="section-head">
+          <p class="eyebrow">작동 방식</p>
+          <h2 class="h2">한 번 연결하면,<br />그다음은 방송만.</h2>
+        </header>
+
+        <div class="rider" aria-hidden="true" data-rider>
+          <div class="rider__line"><i data-rider-fill></i></div>
+          <ol class="rider__ticks"><li>연결</li><li>감지</li><li>편집</li><li>업로드</li></ol>
+          <span class="rider__poki" data-rider-poki><img src="assets/poki/poki-run.webp" alt="" /><img src="assets/poki/poki-run-2.webp" alt="" /></span>
+        </div>
+
+        <ol class="steps" data-steps>
+          <!-- 네 화면은 web/의 실제 화면(채널 연동·OBS 도크, 라이브 대시보드, 편집기 스튜디오, 보관함)을 그대로 옮긴 것이다.
+               문구·배지·버튼 이름을 바꾸려면 실제 화면부터 바꾼다 -->
+          <li class="step is-active" data-step="1">
+            <div class="step__text">
+              <span class="step__num">01</span>
+              <h3 class="h3">채널 연동하고, 코드 8자리면 연결 끝</h3>
+              <p class="body muted">치지직·SOOP 채널과 YouTube를 한 번만 연동하고, 웹에서 받은 <strong>연동 코드 8자리</strong>를 OBS 플러그인에 넣으면 끝이에요. 그다음부터는 평소처럼 방송만 하면 돼요.</p>
+            </div>
+            <div class="step__screen mock screen-obs">
+              <div class="mock__bar"><span>채널 연동 · OBS 플러그인</span><span class="status status--ok"><i></i>준비됐어요</span></div>
+              <div class="obs">
+                <ul class="conn">
+                  <li><img src="assets/brand/chzzk-icon.svg" alt="" width="28" height="28" /><span class="conn__name"><b>치지직</b><span class="badge badge--ok">정상</span></span><span class="conn__sub">포키클립 게임채널</span><span class="mock__btn mock__btn--ghost">연동 해제</span></li>
+                  <li><span class="conn__tile conn__tile--soop"><img src="assets/brand/soop-logo-white.svg" alt="" height="10" /></span><span class="conn__name"><b>SOOP</b></span><span class="conn__sub">연동하면 SOOP 방송에서도 하이라이트를 감지해요</span><span class="mock__btn">연동</span></li>
+                  <li><span class="conn__tile"><span class="yt" aria-hidden="true"></span></span><span class="conn__name"><b>유튜브</b><span class="badge badge--ok">정상</span></span><span class="conn__sub">포키클립 쇼츠</span><span class="mock__btn mock__btn--ghost">연동 해제</span></li>
+                </ul>
+                <div class="obs__dock">
+                  <p class="obs__label">OBS · PokeClip 연결</p>
+                  <div class="obs__code" aria-label="연동 코드 4K7P-2QX9"><span>4</span><span>K</span><span>7</span><span>P</span><em>-</em><span>2</span><span>Q</span><span>X</span><span>9</span></div>
+                  <p class="obs__hint">OBS에서 방송을 시작하면 PokeClip으로 함께 전송돼요.</p>
+                </div>
+              </div>
+            </div>
+          </li>
+          <li class="step" data-step="2">
+            <div class="step__text">
+              <span class="step__num">02</span>
+              <h3 class="h3">평소처럼 방송하면, 포키가 골라요</h3>
+              <p class="body muted">방송이 켜지면 포키가 반응을 분석해 <strong>하이라이트 카드</strong>를 라이브 대시보드에 바로 쌓아요. 카드를 누르면 그 장면으로 이동하고, 채팅과 후원도 옆에서 같이 흘러요. 직접 남기고 싶은 순간은 <strong>방송 중에 단축키</strong>로 바로 기록할 수 있어요.</p>
+            </div>
+            <div class="step__screen mock screen-live">
+              <div class="mock__bar"><span>라이브 대시보드</span><span class="status status--live"><i></i>LIVE 1:24:41</span></div>
+              <div class="live">
+                <div class="live__main">
+                  <div class="live__player">
+                    <img src="assets/img/clip-race-peak.webp" alt="" aria-hidden="true" loading="lazy" />
+                    <span class="live__badge"><i></i>LIVE</span>
+                    <span class="live__viewers">1,842명 시청 중</span>
+                  </div>
+                  <div class="live__info"><span><b>1:24:03</b> 스트리밍 중</span><span class="live__mark">⚡ 수동 마킹 <kbd>F8</kbd></span></div>
+                  <p class="live__head"><b>하이라이트 카드</b><span>자동 감지 중</span></p>
+                  <ul class="live__rail">
+                    <li class="is-new">
+                      <span class="live__thumb"><img src="assets/img/clip-arena-peak.webp" alt="" aria-hidden="true" loading="lazy" /><em>자동 감지</em></span>
+                      <b>채팅이 튄 순간 #23</b>
+                      <span class="live__meta">채팅 ×3.4 급증 (52건) · 방금</span>
+                      <span class="live__row"><span class="badge badge--point">검토 대기</span><span class="mock__btn mock__btn--sm">편집</span></span>
+                    </li>
+                    <li>
+                      <span class="live__thumb"><img src="assets/img/clip-soccer-peak.webp" alt="" aria-hidden="true" loading="lazy" /><em>자동 감지</em></span>
+                      <b>채팅이 튄 순간 #22</b>
+                      <span class="live__meta">채팅 ×2.8 급증 (41건) · 26분 전</span>
+                      <span class="live__row"><span class="badge badge--ok">클립 완료</span><span class="mock__btn mock__btn--sm">편집</span></span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="live__chat">
+                  <p class="live__head"><b>실시간 채팅</b><span class="badge badge--ok">수집 중</span></p>
+                  <ul>
+                    <li><b style="--c:#7d93d9">감자칩</b>와 방금 그거</li>
+                    <li><b style="--c:#ef9bd3">새벽세시</b>ㅋㅋㅋㅋㅋ</li>
+                    <li class="live__gift"><b>초코송이 · 치즈 1,000</b>레전드 장면</li>
+                    <li><b style="--c:#9efaff">한타장인</b>클립각 클립각</li>
+                    <li><b style="--c:#8cfa5a">나무늘보</b>미쳤다 ㄷㄷ</li>
+                    <li><b style="--c:#e568ba">구독자1</b>다시 보여줘요</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </li>
+          <li class="step" data-step="3">
+            <div class="step__text">
+              <span class="step__num">03</span>
+              <h3 class="h3">카드 한 번 누르면, 방송 중에도 편집</h3>
+              <p class="body muted">방송이 끝나길 기다리지 않아요. 카드를 누르면 편집기가 그 장면으로 열리고, <strong>구간·자막·오디오·효과</strong>까지 PokeClip 안에서 한 번에 편집해요.</p>
+            </div>
+            <div class="step__screen mock screen-editor">
+              <div class="mock__bar"><span>점프카드 #23 · 카드 1:24:03</span><span class="mock__btn mock__btn--solid">영상 만들기</span></div>
+              <div class="editor">
+                <ul class="editor__rail" aria-hidden="true"><li class="is-on">레이아웃</li><li>구간</li><li>자막</li><li>오디오</li><li>BGM·효과</li></ul>
+                <div class="editor__preview">
+                  <div class="editor__frame"><video muted loop playsinline preload="none" poster="assets/img/clip-arena-peak.webp" data-lazy-video data-src="assets/video/clip-arena.mp4" aria-hidden="true"></video></div>
+                  <span class="editor__cap">미리보기 · 분할 · 1× 배속</span>
+                </div>
+                <div class="editor__audio">
+                  <p class="editor__label">오디오 · 트랙별 볼륨</p>
+                  <ul>
+                    <li><i class="sw"></i><span>최종 믹스(트랙 1)</span></li>
+                    <li><i class="sw is-on"></i><span>마이크</span><em>100%</em></li>
+                    <li><i class="sw is-on"></i><span>게임</span><em>80%</em></li>
+                    <li><i class="sw is-on"></i><span>디스코드</span><em>70%</em></li>
+                    <li class="is-off"><i class="sw"></i><span>BGM</span><em>끔</em></li>
+                  </ul>
+                </div>
+                <div class="editor__timeline"><span class="editor__range"></span><span class="editor__head"></span><span class="editor__len">/ 구간 12.4초</span></div>
+              </div>
+            </div>
+          </li>
+          <li class="step" data-step="4">
+            <div class="step__text">
+              <span class="step__num">04</span>
+              <h3 class="h3">보관함에서 확인하고, YouTube에 바로 공개</h3>
+              <p class="body muted">영상이 완성되면 보관함에서 확인하고, <strong>업로드</strong> 버튼만 누르면 연동한 YouTube 채널로 바로 올라가요.</p>
+            </div>
+            <div class="step__screen mock screen-upload">
+              <div class="mock__bar"><span>보관함</span><span class="status status--ok"><i></i>YouTube 공개</span></div>
+              <div class="upload">
+                <ul class="upload__grid">
+                  <li class="is-on"><img src="assets/img/clip-arena-peak.webp" alt="" aria-hidden="true" loading="lazy" /><span class="badge badge--ok">발행됨</span><b>채팅이 튄 순간 #23</b><em>0:42</em></li>
+                  <li><img src="assets/img/clip-race-peak.webp" alt="" aria-hidden="true" loading="lazy" /><span class="badge badge--neutral">업로드 대기</span><b>막판 추월</b><em>1:05</em></li>
+                  <li><img src="assets/img/clip-soccer-peak.webp" alt="" aria-hidden="true" loading="lazy" /><span class="badge badge--point">편집 중</span><b>슈퍼 세이브</b><em>0:51</em></li>
+                </ul>
+                <div class="upload__panel">
+                  <span class="badge badge--ok">발행됨</span>
+                  <b>채팅이 튄 순간 #23</b>
+                  <span class="upload__meta">원본 만료 D-58 · 9:16 · 1080×1920</span>
+                  <span class="mock__btn mock__btn--solid mock__btn--block">유튜브 보기 ↗</span>
+                  <span class="upload__done"><span class="yt" aria-hidden="true"></span>YouTube 공개 · 방금</span>
+                </div>
+              </div>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ===== S5 BGM 분리 (멀티트랙) ===== -->
+    <section class="section bgm" id="bgm" data-section="bgm">
+      <div class="container">
+        <div class="split" data-split aria-hidden="true">
+          <span class="split__word" data-split-left>게임 사운드</span>
+          <span class="split__pill" data-split-pill></span>
+          <span class="split__word split__word--bgm" data-split-right>BGM</span>
+        </div>
+        <header class="section-head section-head--center">
+          <p class="eyebrow eyebrow--point">멀티트랙 오디오</p>
+          <h2 class="h2">BGM 틀고 방송해도,<br />클립에선 BGM만 꺼요.</h2>
+          <p class="body muted">마이크·게임·디스코드·BGM이 <strong>트랙 6개</strong>로 따로 들어와요. 편집기에서 <strong>BGM 트랙 하나만 끄고</strong> 내보내면, 음원 때문에 묵혀 두던 클립도 신고 걱정을 덜고 올릴 수 있어요.</p>
+        </header>
+
+        <div class="tracks mock" data-tracks>
+          <div class="mock__bar"><span>오디오 트랙</span><span class="muted">내보내기: BGM 제외</span></div>
+          <ul class="tracks__list">
+            <li><span class="tracks__name">마이크</span><span class="tracks__wave" data-wave-seed="3"></span><span class="tracks__toggle is-on">켜짐</span></li>
+            <li><span class="tracks__name">게임</span><span class="tracks__wave" data-wave-seed="7"></span><span class="tracks__toggle is-on">켜짐</span></li>
+            <li><span class="tracks__name">디스코드</span><span class="tracks__wave" data-wave-seed="11"></span><span class="tracks__toggle is-on">켜짐</span></li>
+            <li class="is-muted" data-bgm-track><span class="tracks__name">BGM</span><span class="tracks__wave" data-wave-seed="19"></span><span class="tracks__toggle tracks__toggle--off">제외</span></li>
+            <li><span class="tracks__name">알림음</span><span class="tracks__wave" data-wave-seed="23"></span><span class="tracks__toggle is-on">켜짐</span></li>
+            <li><span class="tracks__name">전체 믹스</span><span class="tracks__wave" data-wave-seed="29"></span><span class="tracks__toggle">미사용</span></li>
+          </ul>
+        </div>
+        <figure class="bgm__poki poki-inline" data-poki-inline="headphones">
+          <img src="assets/poki/poki-headphones.webp" alt="" width="1024" height="1024" loading="lazy" />
+        </figure>
+      </div>
+    </section>
+
+    <!-- ===== S6 스트리머 × 편집자 (카드 스택) ===== -->
+    <section class="section team" id="team" data-section="team">
+      <div class="container">
+        <header class="section-head">
+          <p class="eyebrow">함께 만드는 클립</p>
+          <h2 class="h2">스트리머는 방송만,<br />편집자는 클릭만.</h2>
+        </header>
+        <figure class="team__duo poki-inline" data-poki-inline="duo">
+          <img src="assets/poki/poki-duo.webp" alt="" width="1536" height="864" loading="lazy" />
+        </figure>
+        <div class="stack" data-stack>
+          <article class="stack__card stack__card--a">
+            <span class="stack__tag">스트리머</span>
+            <h3 class="h3">한 번 연결해 두면 끝</h3>
+            <p class="body muted">채널 연동과 플러그인 설정은 처음 한 번만. 매 방송 다시 설정할 게 없어요.</p>
+          </article>
+          <article class="stack__card stack__card--b">
+            <span class="stack__tag stack__tag--point">편집자 · 무료</span>
+            <h3 class="h3">초대받으면 바로 편집</h3>
+            <p class="body muted">스트리머가 초대하면 그 채널의 하이라이트를 편집하고 업로드까지 맡을 수 있어요. 편집자는 비용이 들지 않아요.</p>
+          </article>
+          <article class="stack__card stack__card--c">
+            <span class="stack__tag">같은 화면</span>
+            <h3 class="h3">같은 카드를 함께 봐요</h3>
+            <p class="body muted">라이브 중에 쌓이는 점프카드를 스트리머와 편집자가 같은 대시보드에서 봐요.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== S7 기능 갤러리 (가로 스크롤) ===== -->
+    <section class="section features" id="features" data-section="features">
+      <div class="container">
+        <header class="section-head">
+          <p class="eyebrow">더 알아보기</p>
+          <h2 class="h2">놓친 장면도, 길이도, 음량도.</h2>
+        </header>
+      </div>
+      <div class="gallery" data-gallery>
+        <ul class="gallery__track" data-gallery-track>
+          <li class="fcard">
+            <div class="fcard__art fcard__art--rewind" aria-hidden="true"><span>−60:00</span></div>
+            <h3 class="h3">1시간 되감기</h3>
+            <p class="body muted">라이브 중에도 1시간 전 장면까지 돌려 보고 바로 잘라요.</p>
+          </li>
+          <li class="fcard">
+            <div class="fcard__art fcard__art--vod" aria-hidden="true"><span>60일</span></div>
+            <h3 class="h3">VOD 60일 보관</h3>
+            <p class="body muted">방송이 끝난 뒤에도 놓친 장면을 같은 편집기로 클립으로 만들어요.</p>
+          </li>
+          <li class="fcard">
+            <div class="fcard__art fcard__art--layout" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+            <h3 class="h3">세로 레이아웃 4종</h3>
+            <p class="body muted">게임 화면과 캠을 쇼츠 비율로 배치하는 레이아웃을 골라요.</p>
+          </li>
+          <li class="fcard">
+            <div class="fcard__art fcard__art--lufs" aria-hidden="true"><img src="assets/props/prop-waveform.webp" alt="" loading="lazy" /><span>−14 LUFS</span></div>
+            <h3 class="h3">음량 자동 평준화</h3>
+            <p class="body muted">렌더할 때 음량을 −14 LUFS에 맞춰서, 클립마다 소리가 들쭉날쭉하지 않아요.</p>
+          </li>
+          <li class="fcard">
+            <div class="fcard__art fcard__art--hotkey" aria-hidden="true"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>M</kbd></div>
+            <h3 class="h3">단축키로 직접 기록</h3>
+            <p class="body muted">채팅이 조용한 장면도, 방송 중에 단축키 한 번이면 그 순간이 카드로 남아요.</p>
+          </li>
+        </ul>
+      </div>
+      <div class="gallery__dots" aria-hidden="true" data-gallery-dots><i class="is-on"></i><i></i><i></i><i></i><i></i></div>
+    </section>
+
+    <!-- ===== S8 플랫폼 + 숫자 + 마키 ===== -->
+    <section class="section platforms" id="platforms" data-section="platforms">
+      <div class="container">
+        <figure class="platforms__poki poki-inline" aria-hidden="true">
+          <img src="assets/poki/poki-upload.webp" alt="" width="1024" height="1024" loading="lazy" />
+        </figure>
+        <header class="section-head section-head--center">
+          <p class="eyebrow">지원 플랫폼</p>
+          <h2 class="h2">치지직·SOOP에서 방송하고,<br />YouTube로 바로 올려요.</h2>
+        </header>
+        <ul class="logos">
+          <li class="logos__item"><img class="logos__icon" src="assets/brand/chzzk-icon.svg" alt="" width="40" height="40" /><img src="assets/brand/chzzk-wordmark-white.svg" alt="치지직" width="1920" height="600" /></li>
+          <li class="logos__item"><img src="assets/brand/soop-logo-white.svg" alt="SOOP" height="22" /></li>
+          <li class="logos__item"><img src="assets/brand/youtube-logo-white.svg" alt="YouTube" width="828" height="184" /></li>
+        </ul>
+        <div class="shorts" data-shorts>
+          <figure class="phone phone--l">
+            <video muted loop playsinline preload="none" poster="assets/img/clip-race-peak.webp" data-lazy-video data-src="assets/video/clip-race.mp4" aria-hidden="true"></video>
+            <figcaption><b>막판 추월 #shorts</b><span>YouTube 공개 · 방금</span></figcaption>
+          </figure>
+          <figure class="phone phone--c">
+            <video muted loop playsinline preload="none" poster="assets/img/clip-arena-peak.webp" data-lazy-video data-src="assets/video/clip-arena.mp4" aria-hidden="true"></video>
+            <figcaption><b>마지막 한타 역전 #shorts</b><span>YouTube 공개 · 방금</span></figcaption>
+          </figure>
+          <figure class="phone phone--r">
+            <video muted loop playsinline preload="none" poster="assets/img/clip-soccer-peak.webp" data-lazy-video data-src="assets/video/clip-soccer.mp4" aria-hidden="true"></video>
+            <figcaption><b>슈퍼 세이브 #shorts</b><span>YouTube 공개 · 방금</span></figcaption>
+          </figure>
+        </div>
+        <dl class="numbers">
+          <div><dt>오디오 트랙</dt><dd data-count="6">6</dd><span>개를 따로</span></div>
+          <div><dt>연결에 필요한 코드</dt><dd data-count="8">8</dd><span>자리면 끝</span></div>
+          <div><dt>라이브 지연</dt><dd>2–5<small>초</small></dd><span>대시보드 기준</span></div>
+          <div><dt>VOD 보관</dt><dd data-count="60">60<small>일</small></dd><span>놓친 장면도</span></div>
+        </dl>
+      </div>
+      <div class="bands" aria-hidden="true">
+        <!-- 띠 내용은 한 벌만 쓰고, 끊김 없는 반복용 복사본은 main.js가 붙인다 -->
+        <div class="band band--a"><div class="band__track" data-marquee="left">
+          <span class="mq mq--chat"><b style="--c:#ef9bd3">새벽세시</b>ㅋㅋㅋㅋㅋㅋㅋ</span>
+          <span class="mq mq--big">클립각</span>
+          <img class="mq-sticker" src="assets/props/prop-chat-2.webp" alt="" loading="lazy" />
+          <span class="mq mq--chat"><b style="--c:#9efaff">한타장인</b>와 방금 그거 뭐야</span>
+          <span class="mq mq--label">레전드</span>
+          <span class="mq mq--chat"><b style="--c:#ffd607">초코송이</b>다시 보여줘요 제발</span>
+          <img class="mq-sticker" src="assets/props/prop-pocket-spark.webp" alt="" loading="lazy" />
+          <span class="mq mq--big">ㄹㅇ 실화냐</span>
+          <span class="mq mq--chat"><b style="--c:#8cfa5a">나무늘보</b>미쳤다 ㄷㄷㄷ</span>
+          <span class="mq mq--label">쇼츠각</span>
+          <img class="mq-sticker" src="assets/props/prop-chat-3.webp" alt="" loading="lazy" />
+          <span class="mq mq--chat"><b style="--c:#a8b9e8">야식왕</b>방금 거 클립 따주세요</span>
+          <span class="mq mq--big">역전 가자</span>
+          <span class="mq mq--chat"><b style="--c:#e568ba">구독자1</b>GG</span>
+          <img class="mq-sticker" src="assets/props/prop-clip-card.webp" alt="" loading="lazy" />
+          <span class="mq mq--label">킹갓</span>
+          <span class="mq mq--chat"><b style="--c:#7d93d9">감자칩</b>이거 무조건 하이라이트</span>
+          <span class="mq mq--big">ㅋㅋㅋㅋ</span>
+          <span class="mq mq--chat"><b style="--c:#ffb3d9">월요병</b>소름 돋았다</span>
+          <img class="mq-sticker" src="assets/props/prop-chat-1.webp" alt="" loading="lazy" />
+          <span class="mq mq--label">명장면</span>
+          <span class="mq mq--chat"><b style="--c:#9ee6ff">편집러</b>바로 올려도 되겠는데</span>
+        </div></div>
+        <div class="band band--b"><div class="band__track" data-marquee="right">
+          <span class="mq mq--tag">HIGHLIGHT</span>
+          <span class="mq mq--stat">채팅 ×3.4</span>
+          <span class="mq mq--tag mq--point">CLIP!</span>
+          <span class="mq mq--stat">0:42</span>
+          <img class="mq-sticker mq-sticker--sm" src="assets/props/prop-play-card.webp" alt="" loading="lazy" />
+          <span class="mq mq--tag">BGM OFF</span>
+          <span class="mq mq--stat">트랙 6개</span>
+          <span class="mq mq--tag">9:16</span>
+          <span class="mq mq--stat">−14 LUFS</span>
+          <img class="mq-sticker mq-sticker--sm" src="assets/props/prop-waveform.webp" alt="" loading="lazy" />
+          <span class="mq mq--tag mq--ok">UPLOADED</span>
+          <span class="mq mq--stat">YouTube 바로 공개</span>
+          <span class="mq mq--tag">#shorts</span>
+          <span class="mq mq--stat">LIVE 1:24:03</span>
+          <img class="mq-sticker mq-sticker--sm" src="assets/props/prop-clip-card.webp" alt="" loading="lazy" />
+          <span class="mq mq--tag">점프카드</span>
+          <span class="mq mq--stat">97점</span>
+          <span class="mq mq--tag mq--point">하이라이트 감지</span>
+          <span class="mq mq--stat">레이아웃 4종</span>
+          <span class="mq mq--tag">VOD 60일</span>
+        </div></div>
+      </div>
+    </section>
+
+    <!-- ===== S9 요금 — 곧 공개 ===== -->
+    <section class="section pricing" id="pricing" data-section="pricing">
+      <div class="container">
+        <header class="section-head section-head--center">
+          <p class="eyebrow">요금</p>
+          <h2 class="h2">가격은 곧 공개돼요.</h2>
+          <p class="body muted">편집자는 언제나 무료예요.</p>
+        </header>
+        <div class="plans">
+          <article class="plan">
+            <span class="plan__name">스트리머</span>
+            <div class="plan__price"><span class="plan__blur" aria-hidden="true">₩00,000</span><span class="chip chip--soon chip--shimmer">곧 공개</span></div>
+            <ul class="plan__list">
+              <li>포키 실시간 하이라이트 감지</li><li>멀티트랙 편집 · BGM 제외</li><li>확인 후 YouTube 바로 공개</li><li>VOD 60일 보관</li>
+            </ul>
+            <a class="btn btn--point btn--md btn--block" href="/login" data-proto-link>베타 시작하기</a>
+          </article>
+          <article class="plan plan--editor">
+            <span class="plan__name">편집자</span>
+            <div class="plan__price"><b>무료</b></div>
+            <ul class="plan__list">
+              <li>초대받은 채널의 하이라이트 편집</li><li>스트리머 대신 업로드</li><li>같은 라이브 대시보드</li>
+            </ul>
+            <a class="btn btn--ghost btn--md btn--block" href="/login" data-proto-link>편집자로 시작하기</a>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== S10 FAQ ===== -->
+    <section class="section faq" id="faq" data-section="faq">
+      <div class="container container--narrow">
+        <header class="section-head section-head--center">
+          <p class="eyebrow">FAQ</p>
+          <h2 class="h2">자주 묻는 질문</h2>
+        </header>
+        <div class="faq__list">
+          <img class="faq__peek" src="assets/poki/poki-peek.webp" alt="" aria-hidden="true" loading="lazy" />
+          <details><summary>무엇이 필요한가요?</summary><p>OBS Studio와 치지직 또는 SOOP 채널, 클립을 올릴 YouTube 채널이 있으면 돼요. 로그인은 Google 계정으로 해요.</p></details>
+          <details><summary>방송 화질이나 PC 성능에 영향이 있나요?</summary><p>PokeClip으로도 같은 방송을 함께 보내기 때문에, 업로드 대역폭이 송출 한 줄만큼 더 필요해요.</p></details>
+          <details><summary>편집자도 비용을 내나요?</summary><p>아니요. 편집자는 무료예요. 스트리머가 초대하면 그 채널의 클립을 편집하고 올릴 수 있어요.</p></details>
+          <details><summary>채팅이 적은 방송도 쓸 수 있나요?</summary><p>채팅이 적으면 자동 감지가 부정확할 수 있어서, 엉뚱한 카드를 띄우지 않아요. 그럴 땐 방송 중에 단축키로 원하는 순간을 직접 기록하면 돼요.</p></details>
+          <details><summary>Mac에서도 되나요?</summary><p>OBS 플러그인은 Windows를 먼저 지원해요. macOS 빌드는 시험 단계예요.</p></details>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== S11 최종 CTA ===== -->
+    <section class="section cta" id="cta" data-section="cta">
+      <div class="container cta__inner">
+        <figure class="cta__poki poki-inline" data-poki-inline="cheer" data-jump>
+          <img class="cta__jump" alt="" aria-hidden="true" data-src="assets/poki/poki-jump.webp" />
+          <img class="cta__prop cta__prop--a" src="assets/props/prop-clip-card.webp" alt="" aria-hidden="true" loading="lazy" />
+          <img class="cta__prop cta__prop--b" src="assets/props/prop-play-card.webp" alt="" aria-hidden="true" loading="lazy" />
+          <img class="cta__prop cta__prop--c" src="assets/props/prop-pocket-spark.webp" alt="" aria-hidden="true" loading="lazy" />
+          <img class="cta__main" src="assets/poki/poki-cheer.webp" alt="" width="1024" height="1024" loading="lazy" />
+        </figure>
+        <h2 class="display display--cta">방송만 켜세요.<br />클립은 포키가 챙길게요.</h2>
+        <div class="hero__ctas hero__ctas--center">
+          <a class="btn btn--point btn--lg" href="/login" data-proto-link>베타 시작하기</a>
+          <a class="btn btn--ghost btn--lg" href="#how">작동 방식 다시 보기</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- S3→S4 전환: 계단식 그라데이션 막대 커튼 (Full 전용). 핀 요소 밖에 둬야 position:fixed가 화면 기준이 된다 -->
+  <div class="curtain" aria-hidden="true" data-curtain><i></i><i></i><i></i><i></i></div>
+
+  <footer class="footer" data-footer>
+    <div class="container footer__inner">
+      <div class="footer__brand">
+        <img src="assets/brand/pokeclip-logo-horizontal.svg" alt="PokeClip" width="132" height="28" />
+        <p class="muted">라이브의 순간을 발견해, 주머니에 담다.</p>
+      </div>
+      <nav class="footer__links" aria-label="푸터 메뉴">
+        <a href="#detect">기능</a><a href="#how">작동 방식</a><a href="#faq">FAQ</a>
+        <a href="/terms">이용약관</a><a href="/privacy" class="footer__privacy">개인정보 처리방침</a>
+      </nav>
+      <p class="footer__legal muted">운영 PokeClip 팀 · 문의 <a href="mailto:3k.pokeclip@gmail.com">3k.pokeclip@gmail.com</a> · © 2026 PokeClip</p>
+    </div>
+  </footer>
+
+  <!-- 모바일·태블릿 하단 고정 CTA 바 -->
+  <div class="cta-bar is-hidden" data-cta-bar>
+    <a class="btn btn--point btn--md" href="/login" data-proto-link>베타 시작하기</a>
+    <a class="btn btn--ghost btn--md" href="#how">작동 방식</a>
+  </div>
+
+  <div class="toast" role="status" aria-live="polite" data-toast></div>
+
+  <!-- 전부 defer라 이 순서대로 돈다. main.js(GSAP 없이 도는 기본 동작)를 CDN보다 앞에 둬, CDN이 멈춰도 메뉴·CTA 바·영상은 산다.
+       CDN은 버전을 고정했으니 SRI로 묶는다 — 버전을 올리면 integrity도 새로 계산한다(openssl dgst -sha384 -binary | openssl base64 -A) -->
+  <script src="main.js" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.15.0/gsap.min.js" integrity="sha384-XmJ9SoHtVOHoQUcKvFAzVXwdkKo1Ie3bhmSoIAkcdsHGaIrVJIkmozyq0FJeb/Ly" crossorigin="anonymous" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.15.0/ScrollTrigger.min.js" integrity="sha384-wl5TeDVvOWt30Pbf8aSo2ZrzsOjddu3avOBvHe+p+OhJt9gP6w9YXmDkN5DK2/dF" crossorigin="anonymous" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.15.0/SplitText.min.js" integrity="sha384-SWJ0lLVRoipvHh59xj0pL7uC7Ih51F+5smaFtrG+2nr+TlDZU5SYJHmxfolbeNTr" crossorigin="anonymous" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/lenis@1.3.26/dist/lenis.min.js" integrity="sha384-jqpi9VmOdhyLoLURgjCn7EpnG9BbnHW57ibIZoeaIU+erWDH3k8fQQg0xH2ySjnw" crossorigin="anonymous" defer></script>
+  <script src="motion.js" defer></script>
+</body>
+</html>
