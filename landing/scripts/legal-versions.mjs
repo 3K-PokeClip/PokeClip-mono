@@ -7,8 +7,15 @@
 //
 // 목록의 정본은 legal-versions.json이다(새 판이 맨 앞). 지난 판의 본문은 고치지 않는다 — 가입 시각으로 그 회원에게
 // 적용된 판을 찾는 근거라서다. 이 스크립트가 다시 쓰는 것은 각 판의 legal-versions 표시 사이 드롭다운 블록뿐이다.
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const ROOT = new URL('..', import.meta.url);
 const MANIFEST = new URL('legal-versions.json', ROOT);
@@ -106,7 +113,13 @@ function archive(doc, nextLabel) {
   );
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+// 직접 실행했는지는 실제 경로끼리 견준다 — import.meta.url은 심볼릭 링크를 푼 경로라, argv[1]을 그대로 견주면
+// /tmp(→/private/tmp) 클론이나 심링크 체크아웃에서 CLI가 통째로 건너뛰어져 --check가 아무 말 없이 통과한다
+const invokedDirectly =
+  process.argv[1] !== undefined &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+
+if (invokedDirectly) {
   const [command, ...args] = process.argv.slice(2);
   try {
     if (command === 'archive') {

@@ -9,7 +9,9 @@ import { readFileSync } from 'node:fs';
 import { syncAll } from './legal-versions.mjs';
 
 const root = new URL('..', import.meta.url);
-const read = (path) => readFileSync(new URL(path, root), 'utf8');
+// HTML 주석은 처음부터 뺀다 — 주석 처리한 필수 문장이 본문처럼 통과하거나, 머리 주석의 설명(「일체 책임지지 않는다」,
+// 〔 〕 자리표시 안내)이 금지 문장·자리표시로 걸리지 않게
+const read = (path) => readFileSync(new URL(path, root), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
 const text = (html) =>
   html
     .replace(/<[^>]+>/g, '')
@@ -144,10 +146,9 @@ try {
   failures.push(error.message);
 }
 
-// 자리표시 — 평소에는 알리기만 하고, --release에서는 실패시킨다.
-// HTML 주석은 뺀다 — 머리 주석이 「〔 〕는 자리표시다」라고 설명하느라 같은 괄호를 쓴다.
+// 자리표시 — 평소에는 알리기만 하고, --release에서는 실패시킨다. (머리 주석은 read가 이미 뺐다)
 const placeholders = Object.entries(pages).flatMap(([name, html]) =>
-  [...html.replace(/<!--[\s\S]*?-->/g, '').matchAll(/〔[^〕]*〕/g)].map((m) => `${name}: ${m[0]}`),
+  [...html.matchAll(/〔[^〕]*〕/g)].map((m) => `${name}: ${m[0]}`),
 );
 if (placeholders.length > 0) {
   const message = `자리표시 ${placeholders.length}곳이 남았다 — ${[...new Set(placeholders)].join(', ')}`;
