@@ -638,7 +638,7 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
         조각을_넣는다("s-sick", 1, 0, 시작_시각.plusSeconds(5), 시작_시각.plusSeconds(5));
 
         for (String[] 수집기 : new String[][] {{"503", ""}, {"200", "제목 아님"}, {"400", "{\"error\":\"too_many\"}"},
-                {"200", "{\"titles\":{\"s-sick\":{\"title\":7}}}"}, {"200", ""}}) {
+                {"200", "{\"titles\":{\"s-sick\":{\"title\":7}}}"}, {"200", ""}, {"200", "   "}, {"200", "[]"}}) {
             COLLECTOR.respondWith(TITLES, Integer.parseInt(수집기[0]), 수집기[1]);
             목록("?state=live")
                     .andExpect(status().isOk())

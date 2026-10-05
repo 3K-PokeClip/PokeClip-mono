@@ -52,12 +52,18 @@ public class BroadcastTitleClient {
         }
         try {
             CollectorResponse response = collector.get(PATH, Map.of("streamIds", String.join(",", streamIds)));
-            if (response.status() != 200 || response.body() == null) {
-                // 본문이 비면 readTree가 잭슨 예외가 아니라 IllegalArgumentException을 던져 목록 전체가 500이 된다(로컬 리뷰)
+            if (response.status() != 200) {
                 log.warn("clip.broadcast_title.unavailable cause=status={}", response.status());
                 return titles;
             }
-            JsonNode byStream = mapper.readTree(response.body()).path("titles");
+            // 🔴 본문이 비면(null) readTree가 잭슨 예외가 아니라 IllegalArgumentException을 던지고, 공백뿐이면 null을 돌려준다.
+            // 둘 다 그대로 두면 목록 전체가 500이다(로컬 리뷰 · PR #214 codex). 「읽을 것이 없다」를 한 자리에서 못 읽은 것으로 접는다
+            JsonNode root = response.body() == null ? null : mapper.readTree(response.body());
+            if (root == null || !root.isObject()) {
+                log.warn("clip.broadcast_title.unreadable cause=not_object");
+                return titles;
+            }
+            JsonNode byStream = root.path("titles");
             for (String streamId : streamIds) {
                 JsonNode one = byStream.path(streamId);
                 String title = text(one.path("title"));
