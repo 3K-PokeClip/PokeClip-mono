@@ -75,11 +75,15 @@ class ThumbnailProcessorTest {
     }
 
     private ThumbnailProcessor processor() {
+        return processor(new ProcessRunner(), Clock.systemUTC());
+    }
+
+    private ThumbnailProcessor processor(ProcessRunner runner, Clock clock) {
         RenderProperties props = new RenderProperties(null, null, null, false, "ap-northeast-2",
                 "http://127.0.0.1:" + clip.getAddress().getPort(), "secret-token", work, "ffmpeg", "ffprobe",
                 Duration.ofMinutes(1), Duration.ofSeconds(600), Duration.ofSeconds(1), List.of(), null);
-        return new ThumbnailProcessor(Fixtures.MAPPER, store, new ProcessRunner(), new ThumbnailReporter(props),
-                "ffmpeg", work.resolve("thumbnails"), Duration.ofSeconds(30), Clock.systemUTC());
+        return new ThumbnailProcessor(Fixtures.MAPPER, store, runner, new ThumbnailReporter(props),
+                "ffmpeg", work.resolve("thumbnails"), Duration.ofSeconds(30), clock);
     }
 
     /** 2초짜리 1280x720 시험 영상을 만들고, 창고 받기가 그 파일을 주고 올리기가 결과를 옮겨 두게 한다. */
@@ -101,9 +105,13 @@ class ThumbnailProcessorTest {
     }
 
     private static String 주문서(long offsetMs) {
+        return 주문서("card", offsetMs);
+    }
+
+    private static String 주문서(String kind, long offsetMs) {
         ObjectNode root = Fixtures.MAPPER.createObjectNode();
         root.put("schemaVersion", 1);
-        root.put("kind", "card");
+        root.put("kind", kind);
         root.put("targetId", "7");
         root.put("capturedAt", "2026-10-04T10:00:00Z");
         root.putObject("source").put("bucket", "segments-test").put("s3Key", "seg/1.ts").put("offsetMs", offsetMs);
@@ -181,5 +189,102 @@ class ThumbnailProcessorTest {
         Files.deleteIfExists(uploaded);
         status.set(400);
         assertThat(processor().process(주문서(1_000))).isEqualTo(Disposition.DELETE);
+    }
+
+    // ── PR #212 codex ───────────────────────────────────────────────────
+
+    /** 라이브는 잠깐 안 돼도 다시 하지 않는다. 다시 하면 그 사이 뒤 주문이 올린 새 장면을 옛 장면으로 덮는다. 카드는 둔다. */
+    @Test
+    void 라이브는_잠깐_안_돼도_지운다() {
+        doThrow(RenderFailure.transientFailure("잠깐", null)).when(store).download(any(), any(), any(), any());
+
+        String live = 주문서("live", 1_000)
+                .replace("\"targetId\":\"7\"", "\"targetId\":\"S-1\"")
+                .replace("thumbnails/card/7.jpg", "thumbnails/live/S-1.jpg");
+        assertThat(processor().process(live)).isEqualTo(Disposition.DELETE);
+        assertThat(processor().process(주문서("card", 1_000))).isEqualTo(Disposition.LEAVE);
+    }
+
+    /** 리다이렉트(3xx)는 받은 것이 아니다. 리다이렉트를 꺼 두면 retrieve()가 3xx를 안 던져 「받음」이 되고 메시지가 지워졌다. */
+    @Test
+    void 보고가_리다이렉트면_둔다() throws Exception {
+        원본이_있다();
+        status.set(302);
+
+        assertThat(processor().process(주문서(1_000))).isEqualTo(Disposition.LEAVE);
+    }
+
+    /** 정수 1만 받는다. "1"·1.9를 1로 바꿔 받으면 틀린 모양이 지나간다. */
+    @Test
+    void 판_번호가_정수_1이_아니면_지운다() {
+        assertThat(processor().process(주문서(1_000).replace("\"schemaVersion\":1", "\"schemaVersion\":\"1\"")))
+                .isEqualTo(Disposition.DELETE);
+        assertThat(processor().process(주문서(1_000).replace("\"schemaVersion\":1", "\"schemaVersion\":1.9")))
+                .isEqualTo(Disposition.DELETE);
+        verify(store, never()).download(any(), any(), any(), any());
+    }
+
+    /** ffmpeg가 실패하면서 깨진 파일을 남겨도 그것을 올리지 않고 첫 장면으로 다시 뽑는다. */
+    @Test
+    void 실패한_첫_뽑기의_찌꺼기를_올리지_않는다() {
+        doAnswer(inv -> {
+            Files.writeString(inv.<Path>getArgument(2), "src");
+            return null;
+        }).when(store).download(any(), any(), any(), any());
+        doAnswer(inv -> {
+            Files.copy(inv.<Path>getArgument(2), uploaded);
+            return null;
+        }).when(store).upload(any(), any(), any(), any(), any());
+        AtomicInteger calls = new AtomicInteger();
+        ProcessRunner fake = new ProcessRunner() {
+            @Override
+            public Result run(List<String> command, Path workDir, java.time.Instant deadline) {
+                Path out = Path.of(command.get(command.size() - 1));
+                try {
+                    if (calls.getAndIncrement() == 0) {
+                        Files.writeString(out, "깨짐");
+                        throw new Failed("ffmpeg", 1, "write error");
+                    }
+                    Files.writeString(out, "좋은 사진");
+                } catch (IOException e) {
+                    throw new IllegalStateException(e);
+                }
+                return new Result("", "");
+            }
+        };
+
+        assertThat(processor(fake, Clock.systemUTC()).process(주문서(1_000))).isEqualTo(Disposition.DELETE);
+        assertThat(calls.get()).isEqualTo(2);
+        assertThat(uploaded).hasContent("좋은 사진");
+    }
+
+    /** 받기·뽑기·올리기에 상한을 다 쓰면 보고를 시작하지 않고 둔다(보고 시한이 상한 밖에 붙지 않게). */
+    @Test
+    void 상한을_넘기면_보고하지_않고_둔다() throws Exception {
+        원본이_있다();
+        // 지금 기준이어야 한다. 과거 시각이면 ffmpeg가 상한 초과로 먼저 실패해 보고 갈래까지 안 간다(그래도 「둔다」라 초록이었다)
+        java.time.Instant t0 = java.time.Instant.now();
+        AtomicInteger ticks = new AtomicInteger();
+        Clock late = new Clock() {
+            @Override
+            public java.time.ZoneId getZone() {
+                return java.time.ZoneOffset.UTC;
+            }
+
+            @Override
+            public Clock withZone(java.time.ZoneId zone) {
+                return this;
+            }
+
+            @Override
+            public java.time.Instant instant() {
+                // 첫 번째(상한 계산)는 t0, 그 뒤는 상한(30초)을 넘긴 시각
+                return ticks.getAndIncrement() == 0 ? t0 : t0.plusSeconds(31);
+            }
+        };
+
+        assertThat(processor(new ProcessRunner(), late).process(주문서(1_000))).isEqualTo(Disposition.LEAVE);
+        assertThat(Files.exists(uploaded)).as("뽑기·올리기는 끝까지 갔다").isTrue();
+        assertThat(reports).isEmpty();
     }
 }

@@ -36,15 +36,18 @@ public class ThumbnailReporter {
                 .build();
     }
 
-    /** 200은 받음, 4xx는 확정 거절(다시 해도 같다), 그 밖은 clip이 못 받았다. */
+    /**
+     * 2xx는 받음, 4xx는 확정 거절(다시 해도 같다), 그 밖은 clip이 못 받았다. 🔴 3xx를 따로 본다: 리다이렉트를 끄면 {@code retrieve()}는
+     * 3xx를 오류로 안 던져 그대로 「받음」이 되고 메시지가 지워진다(PR #212 codex). clip 주소가 잘못 잡힌 것이라 못 받은 것으로 둔다.
+     */
     Outcome captured(String kind, String targetId, Instant capturedAt) {
         try {
-            client.post().uri("/internal/thumbnails")
+            var response = client.post().uri("/internal/thumbnails")
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(Map.of("kind", kind, "targetId", targetId, "capturedAt", capturedAt.toString()))
                     .retrieve()
                     .toBodilessEntity();
-            return Outcome.ACCEPTED;
+            return response.getStatusCode().is2xxSuccessful() ? Outcome.ACCEPTED : Outcome.UNAVAILABLE;
         } catch (RestClientResponseException e) {
             return e.getStatusCode().is4xxClientError() ? Outcome.REJECTED : Outcome.UNAVAILABLE;
         } catch (RestClientException e) {

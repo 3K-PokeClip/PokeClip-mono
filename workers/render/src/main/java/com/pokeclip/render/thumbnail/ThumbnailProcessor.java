@@ -30,6 +30,8 @@ import java.util.stream.Stream;
  * <ul>
  *   <li><b>지운다</b>: 끝났다 · 주문서 모양이 틀리다 · 원본이 창고에 없다(지워진 조각) · clip이 보고를 거절했다. 다시 해도 같다.</li>
  *   <li><b>둔다</b>: 창고·ffmpeg·clip이 잠깐 안 됐다. 숨김 시간 뒤 다시 오고, 세 번이면 DLQ로 간다(clip은 DLQ를 안 읽는다. 다음 순회가 다시 찍는다).</li>
+ *   <li>🔴 <b>라이브는 잠깐 안 돼도 지운다.</b> 라이브는 같은 키에 1분마다 덮어쓴다. 실패한 주문을 숨김 시간(2분) 뒤 다시 하면 그 사이
+ *       뒤 주문이 올린 새 장면을 옛 장면으로 덮는다(PR #212 codex). 다음 분의 주문이 새로 찍으므로 다시 할 이유가 없다.</li>
  * </ul>
  * 렌더 주문처럼 시작·진행 보고가 없다: 몇 초짜리 일이고, 같은 키에 덮어써도 사진은 하나라 실행을 가를 필요가 없다.
  */
@@ -82,12 +84,17 @@ public class ThumbnailProcessor implements MessageHandler {
         } catch (RenderFailure e) {
             log.warn("thumbnail.failed kind={} targetId={} retryable={} code={}", job.kind(), job.targetId(),
                     e.retryable(), e.code());
-            return e.retryable() ? Disposition.LEAVE : Disposition.DELETE;
+            return e.retryable() ? retryOrDrop(job) : Disposition.DELETE;
         } catch (ProcessRunner.Timeout | ProcessRunner.Failed | IOException | UncheckedIOException e) {
             log.warn("thumbnail.failed kind={} targetId={} reason={}", job.kind(), job.targetId(), e.getClass().getSimpleName());
-            return Disposition.LEAVE;
+            return retryOrDrop(job);
         } finally {
             deleteQuietly(dir);
+        }
+        // 상한 안에서 보고까지 끝낸다. 넘겼으면 보고를 시작하지 않는다(보고의 읽기 시한 10초가 상한 밖에 붙지 않게, PR #212 codex)
+        if (!clock.instant().isBefore(deadline)) {
+            log.warn("thumbnail.deadline_before_report kind={} targetId={}", job.kind(), job.targetId());
+            return retryOrDrop(job);
         }
         return switch (reporter.captured(job.kind(), job.targetId(), job.capturedAt())) {
             case ACCEPTED -> {
@@ -100,9 +107,14 @@ public class ThumbnailProcessor implements MessageHandler {
             }
             case UNAVAILABLE -> {
                 log.warn("thumbnail.report_unavailable kind={} targetId={}", job.kind(), job.targetId());
-                yield Disposition.LEAVE;
+                yield retryOrDrop(job);
             }
         };
+    }
+
+    /** 잠깐 안 된 실패의 처분. 라이브는 다시 하지 않는다(클래스 주석). */
+    private static Disposition retryOrDrop(ThumbnailJob job) {
+        return "live".equals(job.kind()) ? Disposition.DELETE : Disposition.LEAVE;
     }
 
     /**
@@ -116,6 +128,8 @@ public class ThumbnailProcessor implements MessageHandler {
             if (offsetMs == 0) {
                 throw e;
             }
+            // 실패하면서 빈·덜 쓴 파일을 남겼을 수 있다. 남기면 아래 검사가 그것을 사진으로 보고 올린다(PR #212 codex)
+            deleteFile(picture);
         }
         if (!Files.exists(picture) && offsetMs > 0) {
             runner.run(command(source, 0, picture), dir, deadline);
@@ -133,6 +147,14 @@ public class ThumbnailProcessor implements MessageHandler {
                 "-vf", "scale='min(" + MAX_WIDTH + ",iw)':-2",
                 "-q:v", "4",
                 picture.toString());
+    }
+
+    private static void deleteFile(Path file) {
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     private static void deleteQuietly(Path dir) {

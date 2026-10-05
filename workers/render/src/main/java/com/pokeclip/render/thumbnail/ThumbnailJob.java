@@ -20,7 +20,9 @@ record ThumbnailJob(String kind, String targetId, Instant capturedAt,
     static Optional<ThumbnailJob> parse(ObjectMapper mapper, String body) {
         try {
             JsonNode root = mapper.readTree(body);
-            if (root.path("schemaVersion").asInt(-1) != 1) {
+            // 정수 1만 받는다. asInt는 "1"·1.9도 1로 바꿔 틀린 모양이 지나간다(렌더 EnvelopeParser와 같은 검사, PR #212 codex)
+            JsonNode version = root.get("schemaVersion");
+            if (version == null || !version.isIntegralNumber() || version.asInt() != 1) {
                 return Optional.empty();
             }
             String kind = root.path("kind").asString("");
