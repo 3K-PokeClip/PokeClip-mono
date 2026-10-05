@@ -1,6 +1,11 @@
 'use client';
 
-import { fetchAllBroadcasts, fetchAllJumpCards, mediaStreamId } from '@/api/clipEditor';
+import {
+  broadcastTitle,
+  fetchAllBroadcasts,
+  fetchAllJumpCards,
+  mediaStreamId,
+} from '@/api/clipEditor';
 
 /** 지난 방송 목록을 다시 읽는 간격 — 끝난 방송이라 자주 볼 까닭이 없다 */
 const LIST_POLL_MS = 60_000;
@@ -133,6 +138,8 @@ interface WireBroadcast {
   ingestStreamId?: string | null;
   /** 사진 주소(POK-277). 옛 서버면 빠져 온다 */
   thumbnailUrl?: string | null;
+  /** 치지직 방송 제목(POK-259). 없거나 옛 서버면 비어 온다 */
+  title?: string | null;
 }
 
 function isoMs(iso: string | null): number | null {
@@ -220,6 +227,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
           vodExpiresAt: b.vodExpiresAt,
           thumbnailUrl: b.thumbnailUrl ?? null,
         }));
+        const titles = new Map(all.map((b) => [b.streamId, broadcastTitle(b)]));
         const visuals: Record<string, VodRowVisual> = {};
         for (const b of rows) {
           const dur =
@@ -227,7 +235,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
               ? Math.max(0, Math.round((Date.parse(b.endedAt) - Date.parse(b.startedAt)) / 1000))
               : null;
           visuals[b.streamId] = {
-            title: b.streamId,
+            title: titles.get(b.streamId) ?? b.streamId,
             durationSec: dur,
             cardCount: cache.get(b.streamId)?.cardCount ?? 0,
           };

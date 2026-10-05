@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  broadcastTitle,
   ClipApiError,
   fetchAllBroadcasts,
   fetchBroadcast,
@@ -111,6 +112,15 @@ describe('카드 목록 쪽 넘기기', () => {
     expect(urls).toHaveLength(2);
     expect(urls[0]).toContain('includeHidden=true');
     expect(urls[0]).toContain('limit=200');
+  });
+});
+
+describe('broadcastTitle — 방송을 보일 이름(POK-259)', () => {
+  it('치지직 제목이 있으면 앞뒤 공백을 깎아 쓰고, 없거나 비면 방송 번호다', () => {
+    expect(broadcastTitle({ streamId: 'S-1', title: '  롤 랭크 ' })).toBe('롤 랭크');
+    expect(broadcastTitle({ streamId: 'S-1', title: '   ' })).toBe('S-1');
+    expect(broadcastTitle({ streamId: 'S-1', title: null })).toBe('S-1');
+    expect(broadcastTitle({ streamId: 'S-1' })).toBe('S-1');
   });
 });
 
