@@ -25,6 +25,8 @@ export interface JumpCard {
   claimedBy: string | null;
   hidden: boolean;
   eventSeq: number | null;
+  /** 카드 시점 장면 사진(POK-277). 목록 문만 싣는다. 통로(SSE)로 온 카드는 비어 있다 */
+  thumbnailUrl?: string | null;
   createdAt: string;
 }
 
@@ -45,6 +47,11 @@ export interface BroadcastRow {
    * 빠져 오고, 그때는 방송 번호가 곧 영상 경로다({@link mediaStreamId})
    */
   ingestStreamId?: string | null;
+  /**
+   * 사진 주소(POK-277, 60분 미리서명). 방송 중이면 1분마다 바뀌는 최신 화면, 끝났으면 가장 크게 터진 카드 장면. 없거나 이 칸을
+   * 모르는 옛 서버면 자리표시를 그린다
+   */
+  thumbnailUrl?: string | null;
 }
 
 /** 영상 주소(라이브 LL-HLS·녹화 재생)를 만드는 키. 방송을 가리키는 번호(API 경로·자격)에는 쓰지 않는다 */
@@ -332,6 +339,8 @@ export interface LibraryEntry {
   latestClip: ClipSnapshot | null;
   createdAt: string;
   updatedAt: string;
+  /** latestClip의 사진(POK-277). 영상 구간 안 가장 크게 터진 장면, 없으면 가운데 */
+  thumbnailUrl?: string | null;
 }
 
 export interface LibraryDetail extends LibraryEntry {

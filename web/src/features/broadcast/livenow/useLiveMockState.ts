@@ -7,6 +7,7 @@ import { chzzkLinkQueryOptions } from '@/api/chzzkLink';
 import { fetchAllJumpCards } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
 import { useAuthStore } from '@/stores/auth';
+import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
 import {
   emitRelay,
   publishLiveData,
@@ -56,6 +57,8 @@ export interface LiveHighlight {
   claimedByMe?: boolean;
   /** 방금 감지된 카드 — 마젠타 틴트로 강조 */
   emphasized?: boolean;
+  /** 카드 시점 장면 사진(POK-277). 없으면 자리표시 */
+  thumbnailUrl?: string | null;
 }
 
 export interface ChatVolumeSeries {
@@ -90,6 +93,8 @@ interface Snapshot {
   hidden: boolean;
   eventSeq: number;
   createdAt: string;
+  /** 목록 문만 싣는다(POK-277). 통로로 온 카드는 비어 있다 */
+  thumbnailUrl?: string | null;
 }
 interface BroadcastInfoResponse {
   latest: {
@@ -228,6 +233,7 @@ function toHighlight(c: Snapshot, index: number, now: number): LiveHighlight {
     score: c.score ?? undefined,
     emphasized: index === 0,
     claimedByMe: c.claimedBy !== null && c.claimedBy === currentUserId(),
+    thumbnailUrl: c.thumbnailUrl ?? null,
   };
 }
 
@@ -280,11 +286,14 @@ export function useLiveMockState(): LiveMockState {
     setInfo(null);
     publishLiveData({ streamId, chart: null, info: null, cardTimes: [] });
     let stopped = false;
-    const merge = (list: Snapshot[]) => {
+    // fromStream: 통로(SSE)로 온 카드인가. 통로 카드는 사진 칸이 비어 오므로 받아 둔 사진을 지키고, 목록 응답은 서버 값이
+    // 정본이라 그대로 덮는다(사진이 사라졌으면 자리표시로 돌아가야 한다, PR #213 codex)
+    const merge = (list: Snapshot[], fromStream = false) => {
       if (stopped) return;
       setCards((prev) => {
         const next = { ...prev };
-        for (const c of list) next[c.id] = c;
+        // 통로(SSE)로 온 카드는 사진 칸이 비어 온다. 목록에서 받아 둔 사진을 지우지 않는다(POK-277)
+        for (const c of list) next[c.id] = fromStream ? keepKnownThumbnail(prev[c.id], c) : c;
         return next;
       });
     };
@@ -405,7 +414,7 @@ export function useLiveMockState(): LiveMockState {
             buf = buf.slice(idx + 2);
             if (parsed && parsed.event === 'card') {
               try {
-                merge([JSON.parse(parsed.data) as Snapshot]);
+                merge([JSON.parse(parsed.data) as Snapshot], true);
               } catch {
                 /* 무시 */
               }

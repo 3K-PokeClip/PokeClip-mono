@@ -41,6 +41,8 @@ export interface LiveNow {
   detectedCards: number;
   /** 이 방송에서 영상까지 만든 편집본 수. 보관함을 못 읽었으면 null */
   completedClips: number | null;
+  /** 최신 방송 화면 사진(POK-277). 아직 없으면 null */
+  thumbnailUrl?: string | null;
 }
 
 export type VodBadge = { kind: 'preparing' } | { kind: 'dday'; label: string };
@@ -52,6 +54,8 @@ export interface HomeVod {
   href: string;
   badge?: VodBadge;
   duration?: string;
+  /** 가장 크게 터진 장면 사진(POK-277). 없으면 자리표시 */
+  thumbnailUrl?: string | null;
 }
 
 /** checking = 유튜브에 올라갔는지 모른다(사람이 채널을 봐야 한다, POK-220) */
@@ -116,6 +120,8 @@ interface WireBroadcast {
   startedAt: string | null;
   endedAt: string | null;
   vodExpiresAt: string | null;
+  /** 사진 주소(POK-277). 옛 서버면 빠져 온다 */
+  thumbnailUrl?: string | null;
 }
 interface WireList {
   broadcasts: WireBroadcast[];
@@ -257,6 +263,7 @@ async function loadHome(now: number): Promise<Loaded | null> {
           : null,
       detectedCards: cardsByStream.get(liveBroadcast.streamId)?.length ?? 0,
       completedClips: null,
+      thumbnailUrl: liveBroadcast.thumbnailUrl ?? null,
     };
   }
 
@@ -286,6 +293,7 @@ async function loadHome(now: number): Promise<Loaded | null> {
       href: `/broadcast/vod/${encodeURIComponent(b.streamId)}`,
       badge,
       duration,
+      thumbnailUrl: b.thumbnailUrl ?? null,
     };
   });
 

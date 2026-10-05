@@ -483,6 +483,18 @@ describe('HomeScreen', () => {
 });
 
 describe('LiveNowBand', () => {
+  it('라이브 사진이 있으면 칸을 채우고, 없으면 자리표시를 보인다(POK-277)', () => {
+    const src =
+      'http://localhost:4566/clips-local/thumbnails/live/stream-1.jpg?X-Amz-Date=20261004T101500Z';
+    const { container, rerender } = render(<LiveNowBand live={{ ...LIVE, thumbnailUrl: src }} />);
+    expect(container.querySelector('img')).toHaveAttribute('src', src);
+    expect(screen.queryByText('라이브 방송 화면')).not.toBeInTheDocument();
+
+    rerender(<LiveNowBand live={LIVE} />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(screen.getByText('라이브 방송 화면')).toBeInTheDocument();
+  });
+
   it('방송 정보와 라이브 대시보드 진입 링크를 렌더한다', () => {
     render(<LiveNowBand live={LIVE} />);
 

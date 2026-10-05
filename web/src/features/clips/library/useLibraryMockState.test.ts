@@ -210,6 +210,50 @@ describe('useLibraryMockState — 서버 줄', () => {
   });
 });
 
+describe('useLibraryMockState — 썸네일 주소 갱신 (POK-277)', () => {
+  it('만드는 중이 없어도 5분마다 다시 읽어 새 사진 주소를 받는다(서명 60분이 만료되기 전에)', async () => {
+    vi.useFakeTimers();
+    let signed = 0;
+    const entry = () => ({
+      recipeId: 12,
+      streamId: 's1',
+      creatorId: '9',
+      recipeVersion: 1,
+      cut: { inAtMs: 0, outAtMs: 30_000 },
+      status: 'rendered',
+      broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+      latestClip: null,
+      createdAt: '2026-09-20T11:00:00Z',
+      updatedAt: '2026-09-20T12:00:00Z',
+      thumbnailUrl: `http://s3/thumbnails/clip/3.jpg?sig=${signed}`,
+    });
+    stubFetch((url) => {
+      if (!url.startsWith('/api/clip/library'))
+        return jsonResponse(200, { id: 9, email: 'me@example.com' });
+      const body = { items: [entry()], nextCursor: null };
+      signed += 1;
+      return jsonResponse(200, body);
+    });
+    const { result } = renderHook(() => useLibraryMockState(), { wrapper: withToastProvider });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.clips[0]?.thumbnailUrl).toBe('http://s3/thumbnails/clip/3.jpg?sig=0');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+    });
+    expect(result.current.clips[0]?.thumbnailUrl).toBe('http://s3/thumbnails/clip/3.jpg?sig=0');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(result.current.clips[0]?.thumbnailUrl).toBe('http://s3/thumbnails/clip/3.jpg?sig=1');
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+});
+
 describe('useLibraryMockState — 유튜브 업로드·내려받기 (POK-111)', () => {
   const rendered = {
     id: 5,

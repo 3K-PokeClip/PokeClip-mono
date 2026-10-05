@@ -24,6 +24,7 @@ import {
   qualityOptionsFor,
   rowViewFor,
 } from './vodListView';
+import { ThumbnailImage } from '@/features/thumbnail/ThumbnailImage';
 import styles from './VodListScreen.module.css';
 
 // 시안 1f의 목록 행 하나. 표시 규칙은 전부 vodListView가 정한다 — 이 파일은 그리기만 한다.
@@ -89,9 +90,14 @@ export function VodRow({
         {preparing ? (
           <Spinner size="sm" label="VOD 준비 중" />
         ) : (
-          <span className={styles.thumbLabel} aria-hidden="true">
-            썸네일
-          </span>
+          <ThumbnailImage
+            src={item.thumbnailUrl}
+            fallback={
+              <span className={styles.thumbLabel} aria-hidden="true">
+                썸네일
+              </span>
+            }
+          />
         )}
         {duration ? (
           <span className={styles.durationPill} aria-hidden="true">
