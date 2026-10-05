@@ -20,15 +20,18 @@ public class ThumbnailReporter {
 
     enum Outcome { ACCEPTED, REJECTED, UNAVAILABLE }
 
+    /** 보고 한 번이 걸릴 수 있는 최대 시간(연결 3초 + 읽기 10초). 처리기가 상한 안에 들어오는지 이것으로 잰다 */
+    static final Duration MAX_DURATION = Duration.ofSeconds(13);
+
     private final RestClient client;
 
     public ThumbnailReporter(RenderProperties properties) {
         HttpClient http = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(3))
+                .connectTimeout(Duration.ofSeconds(3)) // MAX_DURATION과 같이 바꾼다
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
         JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(http);
-        factory.setReadTimeout(Duration.ofSeconds(10));
+        factory.setReadTimeout(Duration.ofSeconds(10)); // MAX_DURATION과 같이 바꾼다
         this.client = RestClient.builder()
                 .requestFactory(factory)
                 .baseUrl(properties.clipBaseUrl())

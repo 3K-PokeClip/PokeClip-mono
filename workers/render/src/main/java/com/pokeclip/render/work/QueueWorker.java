@@ -121,7 +121,7 @@ public class QueueWorker implements SmartLifecycle {
                 EXTEND_EVERY.toMillis(), TimeUnit.MILLISECONDS);
         Disposition disposition;
         try {
-            disposition = processor.process(message.body());
+            disposition = processor.process(message.body(), receiveCount(message));
         } finally {
             extender.cancel(false);
         }
@@ -142,6 +142,14 @@ public class QueueWorker implements SmartLifecycle {
             // 지우기에 실패해도 다음 수신의 STARTED가 proceed:false로 치운다(계약1 4절).
             log.warn("{}.disposition_failed messageId={} disposition={} err={}", name, message.messageId(),
                     disposition.kind(), e.getMessage());
+        }
+    }
+
+    private static int receiveCount(Message message) {
+        try {
+            return Integer.parseInt(message.attributes().getOrDefault(MessageSystemAttributeName.APPROXIMATE_RECEIVE_COUNT, "1"));
+        } catch (NumberFormatException e) {
+            return 1;
         }
     }
 

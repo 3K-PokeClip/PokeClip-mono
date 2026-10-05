@@ -65,12 +65,23 @@ public class ThumbnailProcessor implements MessageHandler {
 
     @Override
     public Disposition process(String body) {
+        return process(body, 1);
+    }
+
+    @Override
+    public Disposition process(String body, int receiveCount) {
         Optional<ThumbnailJob> parsed = ThumbnailJob.parse(mapper, body);
         if (parsed.isEmpty()) {
             log.warn("thumbnail.invalid_job");
             return Disposition.DELETE;
         }
         ThumbnailJob job = parsed.get();
+        // 다시 받은 라이브 주문은 하지 않는다. 앞 수신이 올린 뒤 죽었거나 지우기가 실패해 SQS가 다시 내준 것이라, 그 사이 뒤 주문이
+        // 올린 새 장면을 옛 장면으로 덮는다(PR #212 codex 2판). 다음 분 주문이 새로 찍는다
+        if ("live".equals(job.kind()) && receiveCount > 1) {
+            log.info("thumbnail.live_redelivered_dropped targetId={} receiveCount={}", job.targetId(), receiveCount);
+            return Disposition.DELETE;
+        }
         Instant deadline = clock.instant().plus(timeout);
         Path dir = null;
         try {
@@ -91,8 +102,8 @@ public class ThumbnailProcessor implements MessageHandler {
         } finally {
             deleteQuietly(dir);
         }
-        // 상한 안에서 보고까지 끝낸다. 넘겼으면 보고를 시작하지 않는다(보고의 읽기 시한 10초가 상한 밖에 붙지 않게, PR #212 codex)
-        if (!clock.instant().isBefore(deadline)) {
+        // 상한 안에서 보고까지 끝낸다. 보고는 최대 연결 3초 + 읽기 10초라, 그만큼 안 남았으면 시작하지 않는다(PR #212 codex 1·2판)
+        if (clock.instant().plus(ThumbnailReporter.MAX_DURATION).isAfter(deadline)) {
             log.warn("thumbnail.deadline_before_report kind={} targetId={}", job.kind(), job.targetId());
             return retryOrDrop(job);
         }

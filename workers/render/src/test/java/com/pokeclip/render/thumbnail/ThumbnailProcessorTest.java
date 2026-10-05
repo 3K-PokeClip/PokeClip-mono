@@ -260,7 +260,7 @@ class ThumbnailProcessorTest {
 
     /** 받기·뽑기·올리기에 상한을 다 쓰면 보고를 시작하지 않고 둔다(보고 시한이 상한 밖에 붙지 않게). */
     @Test
-    void 상한을_넘기면_보고하지_않고_둔다() throws Exception {
+    void 남은_시간이_보고에_모자라면_보고하지_않고_둔다() throws Exception {
         원본이_있다();
         // 지금 기준이어야 한다. 과거 시각이면 ffmpeg가 상한 초과로 먼저 실패해 보고 갈래까지 안 간다(그래도 「둔다」라 초록이었다)
         java.time.Instant t0 = java.time.Instant.now();
@@ -278,13 +278,28 @@ class ThumbnailProcessorTest {
 
             @Override
             public java.time.Instant instant() {
-                // 첫 번째(상한 계산)는 t0, 그 뒤는 상한(30초)을 넘긴 시각
-                return ticks.getAndIncrement() == 0 ? t0 : t0.plusSeconds(31);
+                // 상한(30초)까지 10초 남았다. 보고는 최대 13초라 시작하면 상한을 넘긴다
+                return ticks.getAndIncrement() == 0 ? t0 : t0.plusSeconds(20);
             }
         };
 
         assertThat(processor(new ProcessRunner(), late).process(주문서(1_000))).isEqualTo(Disposition.LEAVE);
         assertThat(Files.exists(uploaded)).as("뽑기·올리기는 끝까지 갔다").isTrue();
         assertThat(reports).isEmpty();
+    }
+
+    /** 다시 받은 라이브 주문은 하지 않는다(앞 수신이 올린 뒤 죽었으면 그 사이 새 장면을 덮는다). 카드는 다시 받아도 한다. */
+    @Test
+    void 다시_받은_라이브_주문은_하지_않는다() throws Exception {
+        원본이_있다();
+        String live = 주문서("live", 1_000)
+                .replace("\"targetId\":\"7\"", "\"targetId\":\"S-1\"")
+                .replace("thumbnails/card/7.jpg", "thumbnails/live/S-1.jpg");
+
+        assertThat(processor().process(live, 2)).isEqualTo(Disposition.DELETE);
+        verify(store, never()).download(any(), any(), any(), any());
+
+        assertThat(processor().process(주문서(1_000), 2)).isEqualTo(Disposition.DELETE);
+        assertThat(reports).hasSize(1);
     }
 }
