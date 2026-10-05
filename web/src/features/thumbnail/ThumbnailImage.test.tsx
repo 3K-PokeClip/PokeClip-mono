@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ThumbnailImage } from './ThumbnailImage';
 
 const SRC = 'http://localhost:4566/clips-local/thumbnails/card/7.jpg?X-Amz-Date=20261004T101500Z';
@@ -28,5 +28,21 @@ describe('ThumbnailImage', () => {
 
     rerender(<ThumbnailImage src={OTHER} fallback={<span>자리표시</span>} />);
     expect(container.querySelector('img')).toHaveAttribute('src', OTHER);
+  });
+
+  it('못 받은 뒤 같은 사진의 새 서명 주소가 오면 바로 다시 시도한다(갱신 시간을 기다리지 않는다)', () => {
+    // 서명 3초 뒤로 시계를 고정한다. 안 그러면 「50분 지났다」로 새 주소를 쓰게 돼 이 갈래를 재지 못한다
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-04T10:15:06Z'));
+    const later = SRC.replace('20261004T101500Z', '20261004T101503Z');
+    const { container, rerender } = render(
+      <ThumbnailImage src={SRC} fallback={<span>자리표시</span>} />,
+    );
+    fireEvent.error(container.querySelector('img')!);
+    expect(container.querySelector('img')).toBeNull();
+
+    rerender(<ThumbnailImage src={later} fallback={<span>자리표시</span>} />);
+    expect(container.querySelector('img')).toHaveAttribute('src', later);
+    vi.useRealTimers();
   });
 });

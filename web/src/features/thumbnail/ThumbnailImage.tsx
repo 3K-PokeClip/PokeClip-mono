@@ -17,9 +17,13 @@ export function ThumbnailImage({
 }) {
   const [shown, setShown] = useState<string | null>(src ?? null);
   const [errored, setErrored] = useState(false);
+  // 못 받은 뒤에는 이어 쓰기를 하지 않고 들어온 주소로 바로 바꾼다. 같은 사진의 새 서명이 와도 보던(실패한) 주소를 붙잡으면
+  // 일시 오류 하나로 갱신 시간(최대 50분)까지 자리표시에 머문다(로컬 리뷰 1라운드)
   useEffect(() => {
-    setShown((prev) => pickThumbnailUrl(prev, src ?? null, Date.now(), refreshMs));
-  }, [src, refreshMs]);
+    setShown((prev) =>
+      errored ? (src ?? null) : pickThumbnailUrl(prev, src ?? null, Date.now(), refreshMs),
+    );
+  }, [src, refreshMs, errored]);
   // 새 주소면 다시 시도한다. 한 번 실패한 주소 때문에 다음 사진까지 막히지 않게
   useEffect(() => {
     setErrored(false);
