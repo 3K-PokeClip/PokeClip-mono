@@ -2,6 +2,7 @@ package com.pokeclip.clip.broadcast.api;
 
 import com.pokeclip.clip.broadcast.Broadcast;
 import com.pokeclip.clip.broadcast.BroadcastPage;
+import com.pokeclip.clip.collector.BroadcastTitle;
 import com.pokeclip.clip.delegation.ResolveResult;
 
 import java.time.Instant;
@@ -41,6 +42,10 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      * 점수가 가장 높은 카드의 장면이고 카드 사진이 없으면 마지막 라이브 화면이다. 사진이 없으면 {@code null}이다(화면은 자리표시).
      * 목록을 다시 받을 때마다 새 주소가 오므로 덮어쓴 라이브 사진이 브라우저 캐시에 막히지 않는다.
      *
+     * <p>{@code title}·{@code category}는 치지직 방송 제목과 카테고리다(POK-259). 수집기가 1분마다 남기는 방송 정보에서 제목이 있는
+     * 마지막 관측을 고르고, 카테고리는 같은 관측의 값이다. 관측이 없거나 수집기 표를 못 읽으면 둘 다 {@code null}이고 화면은 방송 번호를
+     * 보인다. 수집기에 한 장을 한 번에 묻는다({@code BroadcastTitleClient}).
+     *
      * <p>줄 번호는 안 싣는다 — 이어받기가 표시로 끝나므로 웹이 쓸 데가 없고,
      * 방송을 가리키는 이름은 {@code streamId}다(카드 목록 문이 그 값을 받는다).
      */
@@ -52,7 +57,9 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                        Instant endedAt,
                        Instant vodExpiresAt,
                        Instant timelineOriginAt,
-                       String thumbnailUrl) {
+                       String thumbnailUrl,
+                       String title,
+                       String category) {
     }
 
     public static BroadcastListResponse from(BroadcastPage page) {
@@ -67,6 +74,7 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      * 둘의 출처가 갈리는 날 이 칸이 조용히 비게 된다.
      */
     private static Item toItem(Broadcast row, BroadcastPage page) {
+        BroadcastTitle title = page.titles().get(row.getStreamId());
         return new Item(row.getStreamId(),
                 row.ingestKey(),
                 row.getStatus().dbValue(),
@@ -75,6 +83,8 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
                 row.getEndedAt(),
                 row.getVodExpiresAt(),
                 page.origins().get(row.getStreamId()),
-                page.thumbnails().get(row.getStreamId()));
+                page.thumbnails().get(row.getStreamId()),
+                title == null ? null : title.title(),
+                title == null ? null : title.category());
     }
 }

@@ -1,5 +1,6 @@
 package com.pokeclip.clip.broadcast;
 
+import com.pokeclip.clip.collector.BroadcastTitleClient;
 import com.pokeclip.clip.delegation.AccessErrors;
 import com.pokeclip.clip.delegation.AccessibleResult;
 import com.pokeclip.clip.delegation.DelegationResolveClient;
@@ -81,13 +82,15 @@ public class BroadcastListService {
     private final DelegationResolveClient delegation;
     private final TimelineOriginReader origins;
     private final ThumbnailUrls thumbnails;
+    private final BroadcastTitleClient titles;
 
     BroadcastListService(BroadcastRepository broadcasts, DelegationResolveClient delegation,
-                         TimelineOriginReader origins, ThumbnailUrls thumbnails) {
+                         TimelineOriginReader origins, ThumbnailUrls thumbnails, BroadcastTitleClient titles) {
         this.broadcasts = broadcasts;
         this.delegation = delegation;
         this.origins = origins;
         this.thumbnails = thumbnails;
+        this.titles = titles;
     }
 
     /**
@@ -137,7 +140,8 @@ public class BroadcastListService {
                 ? CursorCodec.encode(CursorCodec.Kind.BROADCAST, page.get(page.size() - 1).getId())
                 : null;
         // 시각 기준점은 잘라 낸 한 장만 잰다(POK-255) — 「다음 장이 있나」를 보려고 더 받은 한 줄은 안 나간다
-        return new BroadcastPage(page, relations, next, originsOrEmpty(page), thumbnailsOf(page));
+        return new BroadcastPage(page, relations, next, originsOrEmpty(page), thumbnailsOf(page),
+                titles.titlesOf(page.stream().map(Broadcast::getStreamId).toList()));
     }
 
     /** 사진 주소(POK-277). 방송 중이면 최신 화면, 끝났으면 최고 점수 카드 장면. 부가 칸이라 못 읽으면 비운다({@link ThumbnailUrls}). */
