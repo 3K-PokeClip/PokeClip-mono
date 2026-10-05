@@ -17,9 +17,9 @@ import java.util.Map;
  * 조회 조건과 같은 모양이라야 여기서 못 찾는 줄이 안 생긴다.
  */
 public record BroadcastPage(List<Broadcast> rows, Map<String, ResolveResult> relations, String nextCursor,
-                            Map<String, Instant> origins) {
+                            Map<String, Instant> origins, Map<String, String> thumbnails) {
 
-    private static final BroadcastPage EMPTY = new BroadcastPage(List.of(), Map.of(), null, Map.of());
+    private static final BroadcastPage EMPTY = new BroadcastPage(List.of(), Map.of(), null, Map.of(), Map.of());
 
     public static BroadcastPage empty() {
         return EMPTY;

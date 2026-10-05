@@ -14,6 +14,8 @@ import java.time.Instant;
  * @param cut 구간. 템플릿이면 {@code null}
  * @param latestClip 가장 최근에 만든 영상(주문 문의 봉투 그대로). 한 번도 안 만들었으면 {@code null}.
  *                   🔴 {@code recipeVersion}이 이 줄의 것과 다를 수 있다 — 그때 {@code status}는 {@code editing}이다
+ * @param thumbnailUrl {@code latestClip}의 사진 주소(POK-277, 수명 60분 미리서명). 영상 구간 안 최고 점수 카드 장면, 없으면 가운데.
+ *                     영상이 없거나 아직 안 찍었으면 {@code null}
  */
 public record LibraryEntry(long recipeId,
                            String streamId,
@@ -24,7 +26,13 @@ public record LibraryEntry(long recipeId,
                            BroadcastSummary broadcast,
                            ClipSnapshot latestClip,
                            Instant createdAt,
-                           Instant updatedAt) {
+                           Instant updatedAt,
+                           String thumbnailUrl) {
+
+    public LibraryEntry withThumbnailUrl(String url) {
+        return new LibraryEntry(recipeId, streamId, creatorId, recipeVersion, cut, status, broadcast, latestClip, createdAt,
+                updatedAt, url);
+    }
 
     /** 원본 방송 요약. 화면의 「8월 31일 라이브」·원본 만료 D-day 재료. 방송 목록 줄과 칸 이름이 같다. */
     public record BroadcastSummary(String status, Instant startedAt, Instant endedAt, Instant vodExpiresAt) {

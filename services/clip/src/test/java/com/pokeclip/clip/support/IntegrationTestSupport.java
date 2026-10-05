@@ -135,6 +135,7 @@ public abstract class IntegrationTestSupport {
      */
     protected static void 방송과_카드를_비운다(JdbcTemplate jdbc) {
         jdbc.update("DELETE FROM stream_segments");
+        jdbc.update("DELETE FROM thumbnails");
         jdbc.update("DELETE FROM render_job_events");
         jdbc.update("DELETE FROM render_jobs");
         jdbc.update("DELETE FROM clip_uploads");

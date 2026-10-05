@@ -452,7 +452,7 @@ class JumpCardStreamEndToEndTest extends IntegrationTestSupport {
     private JumpCardSnapshot 순번을_올린다(JumpCardSnapshot card, long eventSeq) {
         return new JumpCardSnapshot(card.id(), card.streamId(), card.source(), card.streamTimestampMs(),
                 card.window(), card.score(), card.evidence(), card.claimedBy(), card.claimedAt(),
-                card.claimExpiresAt(), card.hidden(), card.hiddenBy(), eventSeq, card.createdAt());
+                card.claimExpiresAt(), card.hidden(), card.hiddenBy(), eventSeq, card.createdAt(), null);
     }
 
     private HighlightRequest auto(String eventId, long start) {

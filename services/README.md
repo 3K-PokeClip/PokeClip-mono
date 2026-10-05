@@ -280,6 +280,9 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 | `UPLOAD_QUEUE_URL` | 빈 값 | 업로드 주문줄(표준 SQS). 실물 `pokeclip-jobs-upload`(2026-09-26, 숨김 900초) |
 | `UPLOAD_DLQ_URL` | 빈 값 | 실패 큐. 정리기가 1분마다 읽는다. 실물 `pokeclip-jobs-upload-dlq` |
 | `UPLOAD_RECONCILE_INTERVAL` | `PT1M` | 업로드 실패 큐를 훑는 주기 |
+| `THUMBNAIL_ENABLED` | `false` | 썸네일(POK-277). 켜면 `THUMBNAIL_QUEUE_URL`·`CLIPS_BUCKET`·`SEGMENT_BUCKET`이 필수고 비면 부팅이 거부된다. 꺼져 있으면 주문을 안 내고 목록의 `thumbnailUrl`이 전부 `null`(보고 문은 돈다). 줄 주소 덮기는 `RENDER_QUEUE_ENDPOINT`를 같이 쓴다 |
+| `THUMBNAIL_QUEUE_URL` | 빈 값 | 사진 주문줄(표준 SQS) `jobs-thumbnail` + 전용 DLQ. 🔴 **dev·운영에 아직 없다**(1번이 만든다). clip은 DLQ를 안 읽는다(다음 순회가 다시 찍는다) |
+| `THUMBNAIL_INTERVAL` | `PT1M` | 사진 주문을 훑는 주기. 라이브 사진이 이 간격으로 바뀐다(사용자 결정 1분) |
 | `PLAYBACK_ACCESS_TTL` | `PT60M` | 출입증 수명. 0 이하면 부팅 거부 |
 
 **출입증 셋(`CLOUDFRONT_KEY_PAIR_ID`·`CLOUDFRONT_PRIVATE_KEY_PEM`·`MEDIA_BASE_URL`)은 다 비면 「꺼짐」이고
@@ -1322,6 +1325,7 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
 | `startedAt` · `endedAt` | 🔴 **`startedAt`은 `null`일 수 있다** — 아래 「알려진 한계」 |
 | `vodExpiresAt` | 기한이 지난 방송도 목록에는 그대로 둔다. 영상은 못 봐도 방송 기록은 남는다 |
 | `timelineOriginAt` | **시각 기준점**(POK-255): 이 방송의 카드·조각 ms(`streamTimestampMs`·`window`·`start_pts_ms`)가 0이 되는 절대 시각. 화면은 여기에 ms를 더해 편집본 컷(절대 시각)을 만든다. 값 = 방송 시간(시작 편지 앞 **2분** ~ 종료 편지 뒤 10분, `start_wall_utc` 색인으로 거름) 안 **첫 조각**(seq 순)의 `COALESCE(playback_pdt, start_wall_utc) − start_pts_ms`. 한 재생 회차 안에서는 어느 조각으로 재도 같다(로컬 실방송 135조각 실측 차이 0ms, 벽시계로 재면 9분에 2.1초 흔들림). 🔴 **방송 시작 편지 시각과 다르다**(2026-09-17 실측 32초). 🔴 **장부의 `start_pts_ms`는 방송을 넘어 이어진다** — 그래서 「가장 작은 pts」가 아니라 시작 앞 2분 이후 첫 조각이다(앞 방송 꼬리가 섞이면 그 회차 값이 나온다). **조각이 없거나, 시작 시각을 모르는 방송(종료 편지가 먼저 온 자리표시)이거나, 장부를 못 읽으면 `null`**(목록은 그대로 나간다. 시작 시각이 없으면 아래 경계가 없어 앞 방송 조각이 뽑히므로 재지 않는다). 한계(같은 뿌리): 방송 중 재접속으로 재생 회차가 끊기거나, 같은 키로 재시작 편지가 와 `started_at`이 덮이거나, 끊고 2분 안에 다시 켜면 카드가 수 초 어긋난다(조각마다 바꾸는 것은 별도). 시작 편지와 첫 조각의 관계는 코드로 증명 못 했고 근거는 실측 한 번이다. POK-233 뒤에는 `session_id`로 골라야 한다. 한 장의 방송 전부를 질의 한 번(`unnest` + `LATERAL`) |
+| `thumbnailUrl` | 사진 주소(POK-277, 60분 미리서명). 방송 중이면 1분마다 바뀌는 최신 화면, 끝났으면 최고 점수 카드 장면(없으면 마지막 라이브 화면). 없으면 `null`. 아래 「썸네일」 절 |
 
 **카드 한 줄은 통로로 오는 카드 JSON과 칸 하나까지 같다**(`JumpCardListShapeTest`가 두 경로의
 JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리하지 않게 하려는 것이다.
@@ -2170,6 +2174,39 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 - **`checking`을 푸는 문이 없다**: 사람이 채널을 보고 「올라갔다(영상 번호)」·「안 올라갔다」를 적는 문은 업로드 상태 화면(F7) 카드에서 판다.
 - 하루 올릴 수 있는 개수(약 5개, 유튜브 쿼터)에 걸리면 일꾼이 `failed` + `QUOTA_EXCEEDED`로 보고한다(PR-B).
 
+### clip: 썸네일 (POK-277)
+
+**라이브는 1분마다 최신 화면, 지난 방송·카드·완성 영상은 가장 크게 터진 장면을 사진 한 장으로 찍어 목록에 싣는다.**
+표 `thumbnails`(`V211`). 사진은 3번이 찍는다(2026-10-04 사용자 결정): 영상 서버(1번 media)를 건드리지 않고 창고에 올라간 영상 조각에서
+일꾼(`workers/render`의 두 번째 소비자)이 한 장면을 jpg로 뽑는다. 렌더와 줄을 따로 둔다: 렌더 일꾼은 한 번에 한 주문이라 15분짜리
+렌더 뒤에 줄을 서면 라이브 사진이 멈춘다. 주문을 내는 쪽과 받는 쪽이 둘 다 3번이라 계약이 아니다(업로드와 같은 판단, 계약1 rev7).
+
+| 자리 | 사진 | 어디서 찍나 |
+|---|---|---|
+| 라이브(`state=live` 목록 `thumbnailUrl`) | 가장 최근에 올라간 조각의 가운데 | 조각 창고. 같은 조각이면 다시 안 찍는다(송출이 멈췄다) |
+| 지난 방송(`state=past` 목록 `thumbnailUrl`) | 숨기지 않은 카드 중 **점수가 가장 높은** 카드의 사진, 없으면 마지막 라이브 사진 | 읽을 때 고른다(따로 안 찍는다) |
+| 카드(카드 목록 `thumbnailUrl`) | 카드 시각(`stream_timestamp_ms`, 조각 pts 축)이 든 조각의 그 자리 | 조각 창고. 조각이 올라온 뒤에 대상이 된다 |
+| 보관함(`library` 목록·상세 `thumbnailUrl`, `latestClip`의 사진) | 영상 구간 안 최고 점수 카드 시점(시각 기준점으로 재생 축에 맞춘다), 없으면 가운데 | **완성 영상 파일**(보관함은 세로 영상이라 결과물의 장면이어야 한다) |
+
+- **순회**: `ThumbnailSweeper`가 `THUMBNAIL_INTERVAL`마다 라이브·카드·영상을 차례로 훑어 주문을 낸다. 카드·영상은 한 번에 50개, 사진이 안
+  오면 5분 뒤 다시, **세 번까지만**(조각이 지워졌으면 영원히 실패한다). 보관 기한이 지난 방송의 카드는 안 본다. 갈래마다 예외를 잡는다.
+- **조각 찾기**: 물리 키(`COALESCE(ingest_stream_id, stream_id)`, POK-233) + 방송 시간(시작 2분 전 ~ 종료 10분 뒤)으로 자른다. 같은 키의 앞
+  방송 조각을 안 찍는다. `upload_state = 'uploaded'`만 쓴다.
+- **주문서**: `{"schemaVersion":1,"kind":"live|card|clip","targetId","capturedAt","source":{"bucket","s3Key","offsetMs"},"output":{"bucket","s3Key"}}`.
+  사진 키는 clip이 정한다: `thumbnails/{kind}/{targetId}.jpg`(완성 영상 창고). 같은 대상은 늘 같은 키라 라이브 사진은 덮어써지고 쌓이지 않는다.
+- **보고 문**: `POST /internal/thumbnails` `{kind, targetId, capturedAt}`(`X-Internal-Token`). 200 `{"saved":true|false}`(false = 더 늦은
+  장면이 이미 있어 안 덮음, 실패 아님) · 400 `invalid_thumbnail_report`(모양: 방송 번호는 `[A-Za-z0-9_-]`, 카드·영상 번호는 숫자). **키를 받지
+  않는다**: 일꾼이 아무 키나 적어 남의 파일을 사진으로 내보낼 길이 없다. 같은 보고가 두 번 와도 같은 값이다.
+- **주소**: 수명 60분 S3 미리서명(완성 영상 주소와 같은 창고·방식). 목록을 다시 받을 때마다 새 주소라 덮어쓴 라이브 사진이 브라우저 캐시에 막히지
+  않는다. 사진은 부가 칸이라 꺼져 있거나 표를 못 읽으면 `null`이고 목록은 그대로 나간다. 한 장의 대상 전부를 질의 한 번으로 읽는다.
+- **통로(SSE)로 나가는 카드에는 사진이 없다**(`thumbnailUrl: null`): 막 생긴 카드라 아직 안 찍었고, 통로로 주소를 보내면 수명이 지난 뒤에도 남는다.
+  화면은 목록을 다시 받을 때 얻는다.
+
+**알려진 한계**
+- clip이 두 대면 주문이 두 번 나갈 수 있다. 같은 키·같은 값이라 사진은 하나지만 일꾼 일이 두 배다(clip 한 대 전제).
+- 카드 시각과 조각 pts는 방송 중 재접속·재시작으로 어긋날 수 있다(`timelineOriginAt`의 한계와 같은 뿌리).
+- 라이브 주문이 일꾼에서 늦게 처리되면 옛 장면이 같은 키를 잠깐 덮을 수 있다. 표의 시각은 되돌지 않고 다음 분에 다시 덮인다.
+
 ### clip — 보관함 목록·상세 (POK-243)
 
 **편집자가 보관함 화면을 열면 「내가 볼 수 있는 방송들의 편집본 전부」가 상태별로 나오고, 하나를 누르면 편집 기록과
@@ -2187,7 +2224,8 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 `cursor`는 불투명한 이어받기 표시(방송·카드 목록의 표시를 넣으면 400 — 종류 태그가 다르다).
 
 **줄 한 개** — `{"recipeId","streamId","creatorId","recipeVersion","cut":{"inAtMs","outAtMs"}|null,"status",
-"broadcast":{"status","startedAt","endedAt","vodExpiresAt"},"latestClip":<주문 문의 봉투 그대로>|null,"createdAt","updatedAt"}`.
+"broadcast":{"status","startedAt","endedAt","vodExpiresAt"},"latestClip":<주문 문의 봉투 그대로>|null,"createdAt","updatedAt","thumbnailUrl"|null}`.
+`thumbnailUrl`은 `latestClip`의 사진(POK-277, 「썸네일」 절).
 `latestClip`은 **지금 판으로 만든 영상 중 가장 최근 것**(주문·완성·실패 가리지 않고)이고, 지금 판 것이 없으면 옛 판의 가장 최근 것, 한 번도
 안 만들었으면 `null`이다. 🔴 **「번호가 가장 큰 영상」이 아니다** — 주문은 편집본을 읽고 나서 트랜잭션을 열므로 v1 주문이 v2 주문 뒤에
 끼어들 수 있고, 그때 번호가 큰 쪽이 옛 판이다(PR #189 codex). 🔴 **`latestClip.recipeVersion`이 줄의 `recipeVersion`과 다를 수 있다** —

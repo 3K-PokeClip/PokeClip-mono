@@ -199,7 +199,7 @@ class PublishOrderTest extends IntegrationTestSupport {
         return new JumpCardSnapshot(id, "s-ord", JumpCardSource.AUTO, 3_023_000L,
                 new JumpCardSnapshot.Window(3_000_000L, 3_042_000L), 97, null,
                 claimedBy, claimedBy == null ? null : now,
-                claimedBy == null ? null : now.plusSeconds(120), false, null, eventSeq, now);
+                claimedBy == null ? null : now.plusSeconds(120), false, null, eventSeq, now, null);
     }
 
     private HighlightRequest auto(String eventId, long start) {

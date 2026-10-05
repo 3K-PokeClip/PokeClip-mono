@@ -11,6 +11,7 @@ import com.pokeclip.clip.jumpcard.api.HighlightRequest;
 import com.pokeclip.clip.jumpcard.stream.CardStreamRegistry;
 import com.pokeclip.clip.paging.CursorCodec;
 import com.pokeclip.clip.paging.ListLimit;
+import com.pokeclip.clip.thumbnail.ThumbnailUrls;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -21,6 +22,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
+import java.util.Map;
 import java.util.function.IntSupplier;
 
 /** 카드를 쓰는 유일한 자리. 쓰기는 전부 네이티브 SQL이라 DB 시계와 순번 트리거를 탄다. */
@@ -50,6 +52,7 @@ public class JumpCardService {
     private final ObjectMapper mapper;
     private final CardStreamRegistry registry;
     private final BroadcastAccessGuard guard;
+    private final ThumbnailUrls thumbnails;
 
     /**
      * 🔴 <b>{@code @Transactional} 대신 이것을 쓰는 자리가 넷 있다</b>(집기·놓기·숨기기·되돌리기).
@@ -60,7 +63,8 @@ public class JumpCardService {
 
     JumpCardService(JumpCardRepository cards, BroadcastRepository broadcasts,
                     JumpCardProperties properties, ObjectMapper mapper, CardStreamRegistry registry,
-                    BroadcastAccessGuard guard, TransactionTemplate transactions) {
+                    BroadcastAccessGuard guard, TransactionTemplate transactions, ThumbnailUrls thumbnails) {
+        this.thumbnails = thumbnails;
         this.cards = cards;
         this.broadcasts = broadcasts;
         this.properties = properties;
@@ -258,7 +262,10 @@ public class JumpCardService {
         String next = hasMore
                 ? CursorCodec.encode(CursorCodec.Kind.CARD, last.getStreamTimestampMs(), last.getId())
                 : null;
-        return new JumpCardPage(page.stream().map(this::snapshot).toList(), next);
+        Map<Long, String> pictures = thumbnails.ofCards(page.stream().map(JumpCard::getId).toList());
+        return new JumpCardPage(page.stream()
+                .map(card -> snapshot(card).withThumbnailUrl(pictures.get(card.getId())))
+                .toList(), next);
     }
 
     /**

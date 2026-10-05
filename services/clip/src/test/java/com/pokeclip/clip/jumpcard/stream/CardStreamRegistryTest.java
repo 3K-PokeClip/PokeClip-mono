@@ -383,7 +383,7 @@ class CardStreamRegistryTest {
     private JumpCardSnapshot snapshot(String streamId, long id, long eventSeq) {
         return new JumpCardSnapshot(id, streamId, JumpCardSource.AUTO, 1_500L,
                 new JumpCardSnapshot.Window(1_000L, 2_000L), 97, null, null, null, null,
-                false, null, eventSeq, Instant.parse("2026-08-23T00:00:00Z"));
+                false, null, eventSeq, Instant.parse("2026-08-23T00:00:00Z"), null);
     }
 
     private void awaitUntil(BooleanSupplier condition) {
