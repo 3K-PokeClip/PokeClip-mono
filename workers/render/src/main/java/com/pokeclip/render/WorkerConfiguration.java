@@ -5,6 +5,9 @@ import com.pokeclip.render.media.MediaProbe;
 import com.pokeclip.render.media.ProcessRunner;
 import com.pokeclip.render.report.ClipReporter;
 import com.pokeclip.render.storage.S3Store;
+import com.pokeclip.render.thumbnail.ThumbnailProcessor;
+import com.pokeclip.render.thumbnail.ThumbnailProperties;
+import com.pokeclip.render.thumbnail.ThumbnailReporter;
 import com.pokeclip.render.work.ClipRenderer;
 import com.pokeclip.render.work.JobProcessor;
 import com.pokeclip.render.work.QueueWorker;
@@ -61,6 +64,16 @@ class WorkerConfiguration {
         ClipReporter reporter = new ClipReporter(p, mapper, ClipReporter.Sleeper.real());
         return new JobProcessor(new EnvelopeParser(mapper), reporter, renderer, store, p.workDir(), p.jobTimeout(),
                 Clock.systemUTC());
+    }
+
+    /** 사진 줄(POK-277). 렌더와 같은 프로세스·같은 AWS 클라이언트를 쓰고 줄과 스레드만 따로다. 줄 주소가 비면 안 본다. */
+    @Bean
+    @ConditionalOnExpression("!'${pokeclip.thumbnail.queue-url:}'.isBlank()")
+    QueueWorker thumbnailQueueWorker(RenderProperties p, ThumbnailProperties t, SqsClient sqs, S3Client s3,
+                                     ObjectMapper mapper) {
+        ThumbnailProcessor processor = new ThumbnailProcessor(mapper, new S3Store(s3), new ProcessRunner(),
+                new ThumbnailReporter(p), p.ffmpeg(), p.workDir().resolve("thumbnails"), t.timeout(), Clock.systemUTC());
+        return new QueueWorker("thumbnail", sqs, t.queueUrl(), processor, t.visibilityTimeout(), p.pollWait());
     }
 
     /** 줄 주소가 비면 줄을 안 본다. 부품만 띄워 보는 로컬 기동용. */

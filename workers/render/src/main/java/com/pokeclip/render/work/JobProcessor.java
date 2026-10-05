@@ -36,7 +36,7 @@ import java.util.concurrent.ThreadLocalRandom;
  * <p>어느 보고든 409면 reason으로 가른다: SUPERSEDED는 손대지 않고(유효한 새 실행이 돈다), TERMINAL·CANCELLED는 지운다.
  * clip이 끝내 답을 안 하면({@link ReportUnavailable}) 메시지를 그대로 둔다. 다시 받으면 clip의 판정이 이어진다.
  */
-public class JobProcessor {
+public class JobProcessor implements MessageHandler {
 
     private static final Logger log = LoggerFactory.getLogger(JobProcessor.class);
 
