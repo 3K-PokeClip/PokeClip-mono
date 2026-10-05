@@ -40,6 +40,9 @@ import {
 //
 // 시점(role)은 훅 값이다 — 시안의 스트리머/편집자 토글은 핸드오프용이라 제품 UI에 두지 않는다.
 
+/** 만드는 중·올리는 중이 없을 때 목록을 다시 읽는 간격. 썸네일 서명(60분)이 만료되기 전에 새 주소를 받으려고 */
+const STABLE_REFRESH_MS = 5 * 60_000;
+
 /** 화면 모드(ADR-032) — 계정 속성이 아니다 */
 export type LibraryRole = 'streamer' | 'editor';
 
@@ -264,9 +267,11 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
   const anyInProgress = clips.some(
     (clip) => clip.entry?.status === 'rendering' || clip.entry?.status === 'uploading',
   );
+  // 만드는 중이 없어도 5분마다는 다시 읽는다. 썸네일 주소(POK-277)가 60분짜리 서명이라, 처음 받은 주소만 쥐고 있으면
+  // 만료 뒤 늦게 보이는 사진(lazy)이나 한 번 실패한 사진이 새 주소를 못 받는다(PR #213 codex). 화면은 50분이 지나야
+  // 새 주소로 바꾸므로 5분 간격이면 만료 전에 바뀐다
   useEffect(() => {
-    if (!anyInProgress) return undefined;
-    const t = window.setInterval(refresh, 10_000);
+    const t = window.setInterval(refresh, anyInProgress ? 10_000 : STABLE_REFRESH_MS);
     return () => window.clearInterval(t);
   }, [anyInProgress, refresh]);
 

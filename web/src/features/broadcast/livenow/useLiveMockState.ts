@@ -286,12 +286,14 @@ export function useLiveMockState(): LiveMockState {
     setInfo(null);
     publishLiveData({ streamId, chart: null, info: null, cardTimes: [] });
     let stopped = false;
-    const merge = (list: Snapshot[]) => {
+    // fromStream: 통로(SSE)로 온 카드인가. 통로 카드는 사진 칸이 비어 오므로 받아 둔 사진을 지키고, 목록 응답은 서버 값이
+    // 정본이라 그대로 덮는다(사진이 사라졌으면 자리표시로 돌아가야 한다, PR #213 codex)
+    const merge = (list: Snapshot[], fromStream = false) => {
       if (stopped) return;
       setCards((prev) => {
         const next = { ...prev };
         // 통로(SSE)로 온 카드는 사진 칸이 비어 온다. 목록에서 받아 둔 사진을 지우지 않는다(POK-277)
-        for (const c of list) next[c.id] = keepKnownThumbnail(prev[c.id], c);
+        for (const c of list) next[c.id] = fromStream ? keepKnownThumbnail(prev[c.id], c) : c;
         return next;
       });
     };
@@ -412,7 +414,7 @@ export function useLiveMockState(): LiveMockState {
             buf = buf.slice(idx + 2);
             if (parsed && parsed.event === 'card') {
               try {
-                merge([JSON.parse(parsed.data) as Snapshot]);
+                merge([JSON.parse(parsed.data) as Snapshot], true);
               } catch {
                 /* 무시 */
               }
