@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class BroadcastInfoStoreTest extends IntegrationTestSupport {
 
     private static final List<String> STREAMS =
-            List.of("bi-1", "bi-cap", "bi-tags", "bi-null-tag", "bi-null-write");
+            List.of("bi-1", "bi-cap", "bi-tags", "bi-null-tag", "bi-null-write", "bi-title-a", "bi-title-b", "bi-title-gap");
     private static final Instant T = Instant.parse("2026-09-03T15:00:00Z");
 
     private final BroadcastInfoStore store;
@@ -54,6 +54,37 @@ class BroadcastInfoStoreTest extends IntegrationTestSupport {
                 .containsExactly(100, null);
         assertThat(store.latest("bi-없음")).isEmpty();
         assertThat(store.series("bi-없음", T, 720)).isEmpty();
+    }
+
+    /**
+     * 여러 방송의 마지막 제목을 한 번에 읽는다(POK-259). 방송마다 <b>자기</b> 제목을 받는지 같이 잰다. 질의 한 번이라 방송끼리
+     * 섞이면 여기서 드러난다. 관측이 없는 방송은 맵에 키가 없다.
+     */
+    @Test
+    void 여러_방송의_마지막_제목을_한_번에_준다() {
+        store.insert(new BroadcastInfo("bi-title-a", "CH", T, "옛 제목", List.of(), "Talk", null));
+        store.insert(new BroadcastInfo("bi-title-a", "CH", T.plusSeconds(60), "  새 제목 ", List.of(), "LoL", null));
+        store.insert(new BroadcastInfo("bi-title-b", "CH", T, "다른 방송", List.of(), null, null));
+
+        assertThat(store.latestTitles(List.of("bi-title-a", "bi-title-b", "bi-없음")))
+                .containsOnlyKeys("bi-title-a", "bi-title-b")
+                .containsEntry("bi-title-a", new BroadcastInfoStore.Title("새 제목", "LoL"))
+                .containsEntry("bi-title-b", new BroadcastInfoStore.Title("다른 방송", null));
+        assertThat(store.latestTitles(List.of())).isEmpty();
+    }
+
+    /**
+     * 제목을 못 얻은 회차(설정 조회와 라이브 목록이 둘 다 비었다)는 제목 없이 한 줄이 남는다. 그 줄을 고르면 보이던 제목이 방송
+     * 번호로 돌아가므로 제목이 있는 마지막 관측을 고르고, 카테고리도 그 줄 것을 싣는다.
+     */
+    @Test
+    void 제목이_빈_관측은_건너뛰고_그_앞_제목을_준다() {
+        store.insert(new BroadcastInfo("bi-title-gap", "CH", T, "살아 있는 제목", List.of(), "Talk", null));
+        store.insert(new BroadcastInfo("bi-title-gap", "CH", T.plusSeconds(60), null, List.of(), "LoL", null));
+        store.insert(new BroadcastInfo("bi-title-gap", "CH", T.plusSeconds(120), " \t ", List.of(), "LoL", null));
+
+        assertThat(store.latestTitles(List.of("bi-title-gap")))
+                .containsEntry("bi-title-gap", new BroadcastInfoStore.Title("살아 있는 제목", "Talk"));
     }
 
     /**

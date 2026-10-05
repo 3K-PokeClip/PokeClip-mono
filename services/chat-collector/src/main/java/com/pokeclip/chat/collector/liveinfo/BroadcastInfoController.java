@@ -1,6 +1,7 @@
 package com.pokeclip.chat.collector.liveinfo;
 
 import com.pokeclip.chat.collector.query.WindowRequest;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -9,6 +10,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 방송 정보 창구(POK-234 태스크 10).
@@ -41,6 +43,9 @@ public class BroadcastInfoController {
      */
     private static final int MAX_POINTS = 720;
 
+    /** 한 번에 묻는 방송 수 상한. clip 방송 목록 한 장의 상한(100)과 같다. */
+    static final int MAX_STREAMS = 100;
+
     private final BroadcastInfoStore store;
 
     public BroadcastInfoController(BroadcastInfoStore store) {
@@ -63,6 +68,28 @@ public class BroadcastInfoController {
                         info.viewers(), info.observedAt()))
                 .orElse(null);
         return new Response(latest, series);
+    }
+
+    /**
+     * 여러 방송의 마지막 제목을 한 번에 준다(POK-259). clip 방송 목록이 한 장(최대 100개)마다 한 번 부른다. 위 창구를 방송마다 부르면
+     * 한 장에 100번 왕복이다.
+     *
+     * <p>{@code GET /internal/broadcast-info/latest?streamIds=a,b}: 쉼표로 잇거나 이름을 되풀이한다(스프링이 둘 다 목록으로 묶는다).
+     * 제목이 있는 관측이 없는 방송은 {@code titles}에 키가 없다. 모르는 방송도 200이다(위 창구와 같은 이유).
+     * {@value #MAX_STREAMS}개를 넘으면 400 {@code too_many}다. 잘라 주면 부르는 쪽은 뒤 방송 제목이 「없다」로 보인다.
+     */
+    @GetMapping("/internal/broadcast-info/latest")
+    public ResponseEntity<?> latestTitles(@RequestParam(required = false) List<String> streamIds) {
+        List<String> ids = streamIds == null ? List.of()
+                : streamIds.stream().filter(id -> !id.isBlank()).distinct().toList();
+        if (ids.size() > MAX_STREAMS) {
+            return ResponseEntity.badRequest().body(Map.of("error", "too_many"));
+        }
+        return ResponseEntity.ok(new Titles(store.latestTitles(ids)));
+    }
+
+    /** {@code titles}: 방송 번호 → 마지막 제목. */
+    public record Titles(Map<String, BroadcastInfoStore.Title> titles) {
     }
 
     /**
