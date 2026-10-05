@@ -33,6 +33,8 @@ import java.util.OptionalLong;
  *
  * <p>주문은 멱등이다: 같은 대상은 늘 같은 키에 올라가고 보고도 같은 값을 적는다. 그래서 주문이 두 번 나가도(순회가 겹치거나 clip이 두
  * 대여도) 사진이 둘이 되지 않는다. 대신 card·clip은 {@link #MAX_ATTEMPTS}번까지만 낸다: 조각이 지워졌으면 영원히 실패한다.
+ * 횟수는 <b>줄에 실은 뒤에</b> 적는다. 앞에 적으면 줄이 15분 넘게 안 될 때 일꾼이 한 번도 못 받은 대상이 세 번을 다 써 영영 안 찍힌다
+ * (로컬 리뷰 1라운드). 실은 뒤 적기가 실패하면 다음 순회가 한 번 더 내는데, 같은 키라 해가 없다.
  *
  * <p>주문을 못 실어도(줄 오류) 다음 순회가 다시 찾는다. 따로 outbox가 없는 이유다: 사진은 놓쳐도 다음 분에 다시 찍으면 된다.
  */
@@ -126,9 +128,9 @@ public class ThumbnailSweeper {
         List<ThumbnailTargets.Card> rows = targets.cards(MAX_ATTEMPTS, now.minus(RETRY_AFTER), BATCH_LIMIT);
         for (ThumbnailTargets.Card row : rows) {
             String target = String.valueOf(row.id());
-            thumbnails.markRequested(ThumbnailKind.CARD, target, now);
             send(ThumbnailKind.CARD, target, segmentBucket, row.s3Key(),
                     row.streamTimestampMs() - row.segmentStartPtsMs(), now);
+            thumbnails.markRequested(ThumbnailKind.CARD, target, now);
         }
         if (!rows.isEmpty()) {
             log.info("thumbnail.sweep kind=card sent={}", rows.size());
@@ -146,8 +148,8 @@ public class ThumbnailSweeper {
                 thumbnails.markGivenUp(ThumbnailKind.CLIP, target, MAX_ATTEMPTS, now);
                 continue;
             }
-            thumbnails.markRequested(ThumbnailKind.CLIP, target, now);
             send(ThumbnailKind.CLIP, target, outputBucket, video, clipOffsetMs(row), now);
+            thumbnails.markRequested(ThumbnailKind.CLIP, target, now);
         }
         if (!rows.isEmpty()) {
             log.info("thumbnail.sweep kind=clip sent={}", rows.size());

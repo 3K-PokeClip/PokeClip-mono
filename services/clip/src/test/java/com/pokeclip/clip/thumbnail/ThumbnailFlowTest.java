@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 썸네일(POK-277)의 clip 절반: 어느 조각의 몇 ms를 찍으라고 주문하는가, 보고를 어떻게 적는가, 목록에 어느 사진을 싣는가.
@@ -225,6 +226,30 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
         sweeper().sweepCards();
         assertThat(sent).isEmpty();
         assertThat(thumbnails.keysOf(ThumbnailKind.CARD, List.of(String.valueOf(card)))).hasSize(1);
+    }
+
+    /** 줄이 안 되면 횟수를 안 쓴다. 쓰면 줄 장애 15분에 일꾼이 한 번도 못 받은 카드가 세 번을 다 써 영영 안 찍힌다(로컬 리뷰 1라운드). */
+    @Test
+    void 줄에_못_실으면_횟수를_쓰지_않는다() {
+        방송("S-c", "S-c", "ended", 시작, 시작.plus(Duration.ofMinutes(30)));
+        조각("S-c", 1, 0, 시작, "uploaded", "seg/1");
+        카드("S-c", 1_000, 50);
+        ThumbnailQueueClient down = new ThumbnailQueueClient(null, "unused") {
+            @Override
+            public void send(String body) {
+                throw new IllegalStateException("줄 장애");
+            }
+        };
+        ThumbnailSweeper broken = new ThumbnailSweeper(targets, thumbnails, down, broadcasts, origins, mapper,
+                조각_창고, 사진_창고, Clock.fixed(now, ZoneOffset.UTC));
+
+        for (int i = 0; i < 4; i++) {
+            assertThatThrownBy(broken::sweepCards).isInstanceOf(IllegalStateException.class);
+        }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM thumbnails", Integer.class)).isZero();
+
+        sweeper().sweepCards();
+        assertThat(sent).hasSize(1);
     }
 
     // ── 완성 영상 ───────────────────────────────────────────────────────────

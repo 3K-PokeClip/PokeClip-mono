@@ -117,7 +117,7 @@ public class LibraryService {
             return LibraryPage.empty();
         }
 
-        return transactions.execute(tx -> {
+        LibraryPage result = transactions.execute(tx -> {
             // 상한 하나를 더 받아 「다음 장이 있나」를 본다(방송 목록과 같은 수법).
             List<LibraryRow> rows = query.findPage(streamerIds, wanted, afterId, size + 1);
             boolean hasMore = rows.size() > size;
@@ -127,6 +127,7 @@ public class LibraryService {
                     : null;
             return new LibraryPage(assemble(page), next);
         });
+        return new LibraryPage(withPictures(result.items()), result.nextCursor());
     }
 
     /**
@@ -142,13 +143,30 @@ public class LibraryService {
             log.info("clip.library.not_viewable recipeId={} reason={}", recipeId, e.reason());
             throw new RecipeNotFoundException(recipeId);
         }
-        return transactions.execute(tx -> {
+        LibraryDetail detail = transactions.execute(tx -> {
             // 자격 판정 사이에 지워질 표가 없다(편집본은 영구 보존) — 그래도 다시 읽어 상태를 판정 뒤 시점으로 맞춘다.
             LibraryRow fresh = query.findOne(recipeId).orElseThrow(() -> new RecipeNotFoundException(recipeId));
             LibraryEntry entry = assemble(List.of(fresh)).get(0);
             Recipe recipe = recipes.findById(recipeId).orElseThrow(() -> new RecipeNotFoundException(recipeId));
             return LibraryDetail.of(entry, RecipeDocument.fromStored(mapper, recipe));
         });
+        return detail.withThumbnailUrl(withPictures(List.of(detail.entry())).get(0).thumbnailUrl());
+    }
+
+    /**
+     * 사진 주소(POK-277)는 <b>트랜잭션이 끝난 뒤</b> 붙인다. 사진은 부가 칸이라 못 읽으면 비우는데({@link ThumbnailUrls}), 트랜잭션
+     * 안에서 질의가 실패하면 예외를 삼켜도 PostgreSQL이 그 트랜잭션을 깨뜨려 뒤 질의·커밋이 실패한다(로컬 리뷰 1라운드). 밖에서 읽으면
+     * 실패가 그 자리에서 끝난다.
+     */
+    private List<LibraryEntry> withPictures(List<LibraryEntry> entries) {
+        List<Long> clipIds = entries.stream()
+                .filter(entry -> entry.latestClip() != null)
+                .map(entry -> entry.latestClip().id())
+                .toList();
+        Map<Long, String> pictures = thumbnails.ofClips(clipIds);
+        return entries.stream()
+                .map(entry -> entry.latestClip() == null ? entry : entry.withThumbnailUrl(pictures.get(entry.latestClip().id())))
+                .toList();
     }
 
     /** 줄들을 응답 모양으로. 편집본·영상·주문을 <b>각각 한 번씩</b> 읽는다 — 줄마다 묻지 않는다. 순서는 줄 순서 그대로. */
@@ -163,8 +181,6 @@ public class LibraryService {
         Map<Long, UploadSnapshot> uploadByClipId = uploads.latestFor(clipIds).stream()
                 .collect(Collectors.toMap(UploadSnapshot::clipId, Function.identity()));
 
-        Map<Long, String> pictures = thumbnails.ofClips(clipIds);
-
         List<LibraryEntry> entries = new ArrayList<>(rows.size());
         for (LibraryRow row : rows) {
             // 질의가 준 번호는 같은 트랜잭션 안에서 읽었으니 반드시 있다 — 없으면 우리 버그라 500이 맞다.
@@ -177,8 +193,7 @@ public class LibraryService {
             entries.add(new LibraryEntry(recipe.getId(), recipe.getStreamId(), recipe.getCreatorId(),
                     recipe.getRecipeVersion(), cut, row.status(),
                     new BroadcastSummary(row.broadcastStatus(), row.startedAt(), row.endedAt(), row.vodExpiresAt()),
-                    latest, recipe.getCreatedAt(), recipe.getUpdatedAt(),
-                    row.clipId() == null ? null : pictures.get(row.clipId())));
+                    latest, recipe.getCreatedAt(), recipe.getUpdatedAt(), null));
         }
         return entries;
     }

@@ -29,6 +29,11 @@ public record LibraryEntry(long recipeId,
                            Instant updatedAt,
                            String thumbnailUrl) {
 
+    public LibraryEntry withThumbnailUrl(String url) {
+        return new LibraryEntry(recipeId, streamId, creatorId, recipeVersion, cut, status, broadcast, latestClip, createdAt,
+                updatedAt, url);
+    }
+
     /** 원본 방송 요약. 화면의 「8월 31일 라이브」·원본 만료 D-day 재료. 방송 목록 줄과 칸 이름이 같다. */
     public record BroadcastSummary(String status, Instant startedAt, Instant endedAt, Instant vodExpiresAt) {
     }
