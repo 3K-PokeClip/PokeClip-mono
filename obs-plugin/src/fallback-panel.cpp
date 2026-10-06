@@ -5,6 +5,7 @@
 #include "config.hpp"
 #include "mark-sender.hpp"
 #include "pairing.hpp"
+#include "stream-control.hpp"
 #include "ui-thread.hpp"
 
 #include <obs-module.h>
@@ -16,8 +17,10 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QStringList>
+#include <QTimer>
 #include <QVBoxLayout>
 
+#include <chrono>
 #include <thread>
 
 namespace pokeclip {
@@ -49,6 +52,12 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	auto *title = new QLabel("<b>PokeClip for OBS</b>", this);
 	status_ = new QLabel(this);
 	status_->setWordWrap(true);
+	retry_ = new QLabel(this);
+	retry_->setWordWrap(true);
+	sendNow_ = new QPushButton(Text("Fallback.SendNow"), this);
+	stopRetry_ = new QPushButton(Text("Retry.Stop"), this);
+	retryTick_ = new QTimer(this);
+	retryTick_->setInterval(1000);
 	checks_ = new QLabel(this);
 	checks_->setWordWrap(true);
 	// 소스 이름·단축키처럼 사용자가 정한 글자를 싣는다 — 태그처럼 보여도 HTML로 그리지 않는다.
@@ -78,8 +87,15 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	note->setWordWrap(true);
 	note->setStyleSheet("color: gray; font-size: 11px;");
 
+	auto *retryRow = new QHBoxLayout();
+	retryRow->addWidget(sendNow_);
+	retryRow->addWidget(stopRetry_);
+	retryRow->addStretch(1);
+
 	layout->addWidget(title);
 	layout->addWidget(status_);
+	layout->addWidget(retry_);
+	layout->addLayout(retryRow);
 	layout->addWidget(checks_);
 	layout->addWidget(audio_);
 	layout->addWidget(assign_);
@@ -96,6 +112,10 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	connect(unpair_, &QPushButton::clicked, this, [this]() { OnUnpairClicked(); });
 	connect(mark_, &QPushButton::clicked, this, [this]() { OnMarkClicked(); });
 	connect(assign_, &QPushButton::clicked, this, [this]() { OnAssignClicked(); });
+	// 버튼은 UI 스레드에서 눌린다 — 독(브리지 워커)과 달리 그대로 부른다. 결과는 상태로 돌아와 Render가 그린다.
+	connect(sendNow_, &QPushButton::clicked, this, []() { SendNow(); });
+	connect(stopRetry_, &QPushButton::clicked, this, []() { StopRetryNow(); });
+	connect(retryTick_, &QTimer::timeout, this, [this]() { RenderRetryLine(); });
 
 	QPointer<FallbackPanel> self(this);
 	listenerId_ = AppState::Instance().AddListener([self](const StateSnapshot &s) {
@@ -121,6 +141,22 @@ void FallbackPanel::Render(const StateSnapshot &s)
 	if (s.phase == StreamPhase::Live)
 		line += QString(" · %1 kbps").arg(static_cast<int>(s.stats.bitrateKbps));
 	status_->setText(line);
+
+	// A5 — 재시도 중이면 진행과 「지금 다시 시도」·「재시도 멈추기」, 멈춰 있고 본방이 나가면 「지금 보내기」.
+	const bool retrying = s.retry.attempt > 0 &&
+			      (s.phase == StreamPhase::Starting || s.phase == StreamPhase::Reconnecting);
+	const bool waiting = retrying && s.retry.nextAt > 0;
+	retryAttempt_ = retrying ? s.retry.attempt : 0;
+	retryNextAt_ = s.retry.nextAt;
+	retryKeySuspect_ = s.retry.keySuspect;
+	RenderRetryLine();
+	if (waiting && !retryTick_->isActive())
+		retryTick_->start();
+	else if (!waiting)
+		retryTick_->stop();
+	sendNow_->setText(Text(retrying ? "Retry.Now" : "Fallback.SendNow"));
+	sendNow_->setVisible(waiting || CanSendNow(s));
+	stopRetry_->setVisible(retrying);
 
 	auto mark = [](const std::optional<bool> &v) { return !v.has_value() ? QString("–") : (*v ? "✓" : "✗"); };
 	checks_->setText(QString("GOP 2s %1   1080p %2   %3 %4   %5 %6")
@@ -171,10 +207,36 @@ void FallbackPanel::Render(const StateSnapshot &s)
 		marks_->setVisible(false);
 	}
 
-	message_->setText(LocalizedReason(s.errorCode));
+	QString reason = LocalizedReason(s.errorCode);
+	if (s.retry.gaveUp)
+		reason = Text("Retry.GaveUp") + " " + reason;
+	message_->setText(reason);
 	code_->setVisible(!s.paired);
 	pair_->setVisible(!s.paired);
 	unpair_->setVisible(s.paired);
+}
+
+void FallbackPanel::RenderRetryLine()
+{
+	if (retryAttempt_ <= 0) {
+		retry_->setVisible(false);
+		return;
+	}
+	QString line;
+	if (retryNextAt_ > 0) {
+		const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+					    std::chrono::system_clock::now().time_since_epoch())
+					    .count();
+		const int64_t leftMs = retryNextAt_ - now;
+		const int seconds = leftMs > 0 ? static_cast<int>((leftMs + 999) / 1000) : 0;
+		line = Text("Retry.Waiting").arg(retryAttempt_).arg(seconds);
+	} else {
+		line = Text("Retry.Connecting").arg(retryAttempt_);
+	}
+	if (retryKeySuspect_)
+		line += "\n" + Text("Retry.KeyHint");
+	retry_->setText(line);
+	retry_->setVisible(true);
 }
 
 void FallbackPanel::OnPairClicked()

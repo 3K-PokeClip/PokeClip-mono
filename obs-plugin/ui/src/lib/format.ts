@@ -30,6 +30,12 @@ export function formatKbps(kbps: number): string {
   return Math.round(kbps).toLocaleString('ko-KR');
 }
 
+// 다음 재시도까지 남은 시간 — 「12초 뒤」. 독은 OBS와 같은 PC에서 돌아 시계가 같다.
+export function formatCountdown(ms: number): string {
+  const sec = Math.ceil(ms / 1000);
+  return sec > 0 ? `${sec}초 뒤` : '곧';
+}
+
 // 스파크라인 SVG path — 값이 없으면 바닥선.
 export function sparklinePath(values: number[], width: number, height: number): string {
   if (values.length === 0) return `M0 ${height} L${width} ${height}`;

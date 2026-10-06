@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatCountdown,
   formatKbps,
   formatPairingInput,
   formatUptime,
@@ -20,6 +21,16 @@ describe('formatPairingInput', () => {
     expect(formatPairingInput('ab')).toBe('AB');
     expect(isCompletePairingCode('ABCD')).toBe(false);
     expect(isCompletePairingCode('ABCD-EFGH')).toBe(true);
+  });
+});
+
+describe('formatCountdown', () => {
+  it('남은 시간을 올림한 초로 적고, 지났으면 곧이라고 한다', () => {
+    expect(formatCountdown(11_400)).toBe('12초 뒤');
+    expect(formatCountdown(60_000)).toBe('60초 뒤');
+    expect(formatCountdown(1)).toBe('1초 뒤');
+    expect(formatCountdown(0)).toBe('곧');
+    expect(formatCountdown(-800)).toBe('곧');
   });
 });
 

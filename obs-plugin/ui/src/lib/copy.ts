@@ -53,7 +53,15 @@ export const REASON: Record<string, string> = {
   mark_insecure: 'API 주소가 https가 아니라 표시를 보내지 않았어요. 설정 파일의 api_base를 https로 바꾸세요.',
   // 독 전용 — 브리지 요청 자체가 실패했다(플러그인이 멈췄거나 연결이 끊겼다)
   bridge_unreachable: '플러그인과 연결이 끊겼어요. OBS를 다시 시작하세요.',
+  // 독 전용 — 「지금 보내기」·「재시도 멈추기」를 플러그인이 받지 않았다(누르는 사이 상태가 바뀌었다)
+  main_not_live: '본 방송이 나가는 동안에만 보낼 수 있어요.',
+  send_unavailable: '지금은 전송을 시작할 수 없어요.',
+  not_retrying: '지금은 재시도 중이 아니에요.',
 };
+
+// 서버가 살아 있는데 거절이 이어질 때 — 키 폐기·암호 오류·경로 없음은 플러그인에서 가를 수 없어 확인을 권한다.
+export const KEY_SUSPECT_HINT =
+  '수신 서버가 연결을 계속 거절해요. 스트림 키가 폐기됐거나 바뀌었을 수 있어요. PokeClip 웹에서 키를 확인하고, 재시도를 멈춘 뒤 다시 연결하세요.';
 
 export type ToastTone = 'success' | 'warning';
 

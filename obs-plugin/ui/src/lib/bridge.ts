@@ -10,6 +10,9 @@ export interface Bridge {
   getSettings(): Promise<PluginSettings>;
   putSettings(next: Partial<PluginSettings>): Promise<ActionResult & { settings?: PluginSettings }>;
   mark(): Promise<MarkReply>; // A4 「지금 표시」 — 받아들인 뒤의 결과·거절(409)은 state.marks로 온다
+  // A5 — 받아들이면 202이고 결과는 상태(phase·errorCode·retry)로 온다
+  sendNow(): Promise<ActionResult>; // 「지금 보내기」 · 「지금 다시 시도」
+  stopRetry(): Promise<ActionResult>; // 「재시도 멈추기」
 }
 
 const TOKEN_KEY = 'pokeclip.bridge.token';
@@ -134,6 +137,16 @@ export function createHttpBridge(token: string): Bridge {
       const res = await send('/api/mark', { method: 'POST', headers });
       if (!res) return { ...UNREACHABLE, status: 0 };
       return { ...(await readResult(res)), status: res.status };
+    },
+
+    async sendNow() {
+      const res = await send('/api/send-now', { method: 'POST', headers });
+      return res ? readResult(res) : UNREACHABLE;
+    },
+
+    async stopRetry() {
+      const res = await send('/api/stop-retry', { method: 'POST', headers });
+      return res ? readResult(res) : UNREACHABLE;
     },
   };
 }

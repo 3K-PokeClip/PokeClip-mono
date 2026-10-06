@@ -289,6 +289,34 @@
   color: var(--pc-color-text-primary);
   background: var(--pc-color-danger-subtle);
 }
+/* 자동으로 다시 시도하는 중의 원인 안내 — 아직 멈춘 것이 아니라 경고색 */
+.alert[data-tone='warning'] {
+  background: var(--pc-color-warning-subtle);
+}
+
+/* ---------- 자동 재시도 (A5) ---------- */
+.retryBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pc-space-2);
+}
+.retryLine {
+  font-size: var(--pc-font-size-xs);
+  font-weight: var(--pc-weight-medium);
+  color: var(--pc-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.retryHint {
+  margin: 0;
+  font-size: var(--pc-font-size-2xs);
+  line-height: var(--pc-line-normal);
+  color: var(--pc-color-text-muted);
+}
+.actionRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pc-space-2);
+}
 
 /* ---------- 연결 해제 ---------- */
 .unpairButton {

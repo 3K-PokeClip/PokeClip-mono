@@ -29,6 +29,8 @@ function badgeFor(state: BridgeState): { tone: BadgeTone; label: string; Icon: L
       if (state.errorCode) return { tone: 'danger', label: PHASE_LABEL.error, Icon: CircleX };
       return { tone: 'success', label: '준비됨', Icon: CircleCheck };
     default:
+      // 본방은 나가는데 우리만 안 보내고 있다(방송 중에 페어링함 등) — 「준비됨」이 아니다
+      if (state.canSendNow) return { tone: 'warning', label: '전송 꺼짐', Icon: CircleDashed };
       return { tone: 'success', label: '준비됨', Icon: CircleCheck };
   }
 }
@@ -86,7 +88,21 @@ export function App({ bridge }: { bridge: Bridge }) {
     return () => clearTimeout(t);
   }, [markNotice]);
 
+  // 동작 실패 안내는 그때의 상태에 대한 것이다 — 단계가 바뀌면 지운다.
+  useEffect(() => {
+    setActionError('');
+  }, [state?.phase]);
+
   const closeDialog = useCallback(() => setConfirmUnpair(false), []);
+  // A5 — 받아들여진 뒤의 결과(붙었다·또 실패했다)는 상태로 온다. 여기서는 요청이 거절된 경우만 알린다.
+  const sendNow = useCallback(async () => {
+    const r = await bridge.sendNow();
+    setActionError(r.ok ? '' : reasonText(r.reason));
+  }, [bridge]);
+  const stopRetry = useCallback(async () => {
+    const r = await bridge.stopRetry();
+    setActionError(r.ok ? '' : reasonText(r.reason));
+  }, [bridge]);
   const mark = useCallback(async () => {
     // 거절(409 — 방송 아님 등)은 플러그인이 state.marks로 알린다. 여기서는 그 밖의 실패 — 연타(429),
     // 브리지 인증·서버 오류, 브리지에 닿지도 못한 경우(bridge_unreachable — 브리지 클라이언트가 바꿔 준다) — 만 알린다.
@@ -143,6 +159,8 @@ export function App({ bridge }: { bridge: Bridge }) {
             setConfirmUnpair(true);
           }}
           onMark={mark}
+          onSendNow={sendNow}
+          onStopRetry={stopRetry}
         />
       ) : (
         <PairCard onPair={(code) => bridge.pair(code)} />
