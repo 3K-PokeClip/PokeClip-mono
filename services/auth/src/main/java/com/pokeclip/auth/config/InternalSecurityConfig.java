@@ -1,5 +1,6 @@
 package com.pokeclip.auth.config;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -21,7 +22,9 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
  *
  * <p>JwtDecoder를 아예 안 태운다. 사용자 JWT로는 여기 들어올 길이 없다.
  */
+// 웹 앱일 때만 있다. 이행 실행기(web-application-type: none)는 HttpSecurity 빈이 없어 이것이 있으면 못 뜬다(POK-272)
 @Configuration
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class InternalSecurityConfig {
 
     @Bean
