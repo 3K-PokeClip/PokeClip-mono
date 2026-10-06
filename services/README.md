@@ -133,14 +133,14 @@ set -a && . ../.env && set +a
 | `chat-collector` | `./gradlew :chat-collector:bootRun` | http://localhost:8083/actuator/health |
 | `chat-detector` | `./gradlew :chat-detector:bootRun` | http://localhost:8084/actuator/health |
 
-**`auth`가 부팅 검증·배포 명부로 보는 환경변수는 스물하나다.** 스물은 세 갈래로 나뉘고 갈래마다 「없으면 어떻게 되나」가 다르다.
-나머지 하나(`FORWARD_HEADERS_STRATEGY`)는 기본값이 있는 선택 변수라 표 아래에 따로 적는다.
+**`auth`가 부팅 검증·배포 명부로 보는 환경변수는 스물넷이다.** 스물은 세 갈래로 나뉘고 갈래마다 「없으면 어떻게 되나」가 다르다.
+나머지 넷(`FORWARD_HEADERS_STRATEGY`와 스트림키 암호 저장소 셋)은 기본값이 있는 배포 변수라 표 아래에 따로 적는다.
 이 셈에 안 드는 셋이 더 있다: `DB_HOST`·`DB_PORT`(기본 `localhost`·`5432`, `.env`에 없어 기본값을 남겼다)·`AWS_REGION`(기본 `ap-northeast-2`).
 셋 다 없어도 뜨고 검사 대상도 아니라 세지 않는다.
 🔴 **`GOOGLE_REDIRECT_URI`도 안 든다.** yml에 기본값(`http://localhost:3000/auth/callback`)이 있어 부팅 검증에는 안 걸리는데,
 compose는 `${GOOGLE_REDIRECT_URI:?}`로 **없으면 컨테이너가 아예 안 뜨게** 걸어 뒀고 `.env.dev.example`에도 있다.
 즉 로컬 `bootRun`에는 없어도 되고 dev 배포에는 반드시 있어야 해서, 「앱 시크릿 열둘」에도 「안 드는 셋」에도 자리가 없다.
-**yml 실물은 스물다섯이다**(위 스물하나 + 안 드는 셋 + 이것).
+**yml 실물은 스물여덟이다**(위 스물넷 + 안 드는 셋 + 이것).
 
 | 갈래 | 변수 | 없으면 | 어디서 얻나 |
 |---|---|---|---|
@@ -153,6 +153,17 @@ compose는 `${GOOGLE_REDIRECT_URI:?}`로 **없으면 컨테이너가 아예 안 
 🔴 운영 ECS 태스크 정의에는 `native`를 반드시 넣는다(명시 `none`이 Boot의 ECS 자동 감지를 끈다). 비우지 않는다
 (빈 값은 `none`이 아니라 Boot 유추다). 둘 다 그 절에 있다.
 기본값이 있어 `DeploymentEnvVarsTest`의 「빈 기본값」 정규식엔 안 걸리고 **기본값 있는 변수 명부**가 잡는다.
+
+**스물둘~스물넷: 스트림키 암호 저장소 셋(POK-272).** 로컬은 셋 다 없어도 뜬다(기본은 PG에 두기).
+dev는 아래 「스트림키 암호 이행」 절의 순서대로 채운다. 셋 다 기본값 있는 변수 명부에 있다.
+
+| 변수 | 기본 | 뜻 |
+|---|---|---|
+| `STREAM_KEY_SECRET_STORE_TYPE` | `postgres` | 스트림키 암호를 읽고 쓰는 곳. `postgres` 또는 `aws`(Secrets Manager). 다른 값이면 부팅 실패 |
+| `STREAM_KEY_SECRET_RETIRE_FROM` | `postgres` | 재발급·탈퇴 때 옛 암호를 지울 곳(쉼표 목록). **위 값을 반드시 포함한다**(아니면 부팅 실패). 병행 기간 dev는 `postgres,aws` |
+| `STREAM_KEY_SECRET_REF_PREFIX` | `pokeclip/local/stream-key/` | 새 암호 이름의 앞부분 = Secrets Manager 비밀 이름 접두. `/`로 끝나고 219자 이하. 🔴 **dev compose는 `:?`라 비면 compose가 파일 전체 보간에서 멈춘다.** auth만이 아니라 같은 배포 명령의 clip도 안 올라간다. IAM 정책이 이 접두 안만 허용해서 둔 장치다 |
+
+`SECRET_STORE_KEY`는 `aws`로 바꿔도 **계속 필수다.** 유튜브·치지직 토큰은 이번에 옮기지 않아 PG에 그대로 있다.
 
 **🔴 셋째 갈래는 「조건부 필수」다.** 나머지 둘과 성격이 다르니 규칙을 정확히 적어 둔다.
 
@@ -641,7 +652,7 @@ terminationGracePeriodSeconds: 20 # k8s (infra/ 는 1번 폴더라 여기서 못
 
 **셋에는 기본값이 없다**(POK-161). 커밋되는 파일에 비밀번호 기본값을 두면 **public
 저장소에 공개된 값으로 DB에 붙는 창**이 열리기 때문이다. 실행에 필요한 것은 위
-「환경변수 스물하나」 표를 본다.
+「환경변수 스물넷」 표를 본다.
 
 **이 방식을 다른 시크릿에 확대하지 않는다.** 여기가 통하는 것은 서버가 실제로 접속을
 시도하는 값이라서다 — 값이 없으면 리터럴 `${POSTGRES_PASSWORD}`가 그대로 비밀번호가
@@ -3103,7 +3114,109 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
   `RetentionCleanerPairingCodesTest`가 잰다
 
 **환경변수는 스물하나다.** `FORWARD_HEADERS_STRATEGY` 하나가 늘었다(선택, 기본 `none`). 새 표는 없다
-(`V112`는 인덱스 넷 + 페어링 표 둘의 주석).
+(`V112`는 인덱스 넷 + 페어링 표 둘의 주석). 지금은 POK-272가 셋을 더해 스물넷이다.
+
+### 스트림키 암호 Secrets Manager 이행 (POK-272)
+
+**스트림키 암호(`<토큰>:<passphrase>`)를 PG `secrets` 표에서 AWS Secrets Manager로 옮긴다**(ADR-018). 1번의 계정별
+방송 서버(POK-270)가 키마다 암호를 Secrets Manager에서 직접 읽기 때문이다. 명세는 1번 설계서 8-A(POK-272 명세
+코멘트 넷과 10-05 정정)이고, 유튜브·치지직 토큰은 대상이 아니다(계속 PG).
+
+**무엇이 바뀌었나**
+
+- 스트림키 쪽만 저장소를 설정으로 고른다. 주입 자리에 표지 `@StreamKeySecrets`가 붙은 둘(`StreamKeyService` 읽기,
+  `StreamKeyCreator` 쓰기)만 `type`에 따라 PG 또는 Secrets Manager를 받는다. 표지 없는 주입(유튜브·치지직 넷)은
+  `@Primary`인 PG다. lombok이 표지를 생성자로 복사하도록 `auth/lombok.config`가 있고, 그 파일이 빠지면 조용히 PG가 꽂히므로
+  `compileJava` 입력으로 선언해 뒀다
+- **읽기·쓰기 저장소와 폐기 정리를 갈랐다.** 재발급의 커밋 뒤 정리와 탈퇴 정리는 `StreamKeySecretRetirer`를 부르고, 그것이
+  `retire-from`의 **모든** 저장소에서 이름 셋(행의 이름, `접두+uuid`, `streamkey:uuid`)을 지운다. 이행·병행·롤백 중에는 같은
+  키의 사본이 양쪽에 있을 수 있어서다
+- 새 키 이름은 `PassphraseRefIssuer`가 `<접두><UUID>`로 짓는다(옛 `streamkey:<UUID>`는 `:` 때문에 Secrets Manager 이름이 못 된다).
+  **이름은 언제나 새 UUID다**. 강제 삭제가 비동기라 지운 이름을 바로 다시 만들 수 없고, Media 조정자의 「한 번 빠진 이름은
+  되살아나지 않는다」가 여기에 기댄다
+- 값은 쓴 뒤 안 바뀐다(재발급은 언제나 새 이름). `SecretStore.put`의 「덮어쓴다」는 유튜브·치지직 토큰 갱신이 쓴다
+
+**시간 상한.** Secrets Manager 호출은 DB 연결을 쥔 채 일어난다(페어링 발급·교환의 트랜잭션, 재발급의 회원 행 잠금).
+그래서 get·put·delete 하나마다 **공유 시한 3초**를 잡고, 그 안의 호출마다 `min(1초, 남은 시간)`을 요청 단위로 건다.
+「없음」은 방금 만든 비밀이 아직 안 보이는 것일 수 있어 100·200·400ms 뒤 최대 세 번 다시 읽고(시한 안에서만), 그래도 없으면
+빈손 + `auth.streamkey.secret.not_visible attempts=<n>` WARN이다. 삭제 예약은 빈손 + `…scheduled_for_deletion` WARN,
+스로틀·5xx·시간 초과·권한 거부는 `SecretStoreUnavailableException`(500)이다. 시간 초과는 다시 읽지 않는다.
+
+| 연결을 쥐는 시간 | 값 |
+|---|---|
+| 목표 대기 합 | 약 5초 = get 3초 + put 2초(호출 둘 × 1초) |
+| 시한 합 | 6초(연산마다 3초). 시험의 오차 0.3초는 연산마다 붙는다 |
+
+get·put이 한 트랜잭션에서 이어지는 갈래는 하나다. `ensureKey`가 새 키를 만들다 동시 요청에 져서 다시 읽을 때 put 다음 get이다
+(put은 `StreamKeyCreator.create`의 별도 트랜잭션이라 바깥 연결과 안쪽 연결을 하나씩 쥔다). get 뒤에 put이 오는 갈래는 없다
+(행이 있으면 get만, 없으면 put부터다).
+
+클라이언트는 `SecretsManagerClients` 한 곳에서 만든다. 웹 경로는 재시도 **standard**(코드에서 못박음. SDK 기본은 legacy이고
+환경 변수가 바꿀 수 있다), 시도 1초·호출 3초 안전망, HTTP 연결 0.5초·소켓 0.95초다. 이행 실행기는 따로 만든 클라이언트로
+첫 호출 한 번만 30초를 준다(KMS 기본 키의 첫 생성 지연).
+
+**배포 순서**(1번 설계 8-A 6). 🔴 **`.env`가 코드보다 먼저다.** compose의 `STREAM_KEY_SECRET_REF_PREFIX`가 `:?`라 코드가
+먼저 머지되면 develop 자동 배포의 `docker compose up … postgres auth clip`이 보간에서 통째로 멈춘다. auth만이 아니라
+clip 새 코드도 안 올라간다(그때는 `.env`를 채우고 다시 배포한다).
+
+| 단계 | 하는 일 | 통과 판정 |
+|---|---|---|
+| ⓪ | 1번이 dev EC2 역할에 정책을 붙인다(접두 `pokeclip/dev/stream-key/` 안의 Create·Put·Get·Delete 넷) | 정책 시뮬레이터로 접두 안 허용·밖 거부 |
+| ① | dev `.env`에 `STREAM_KEY_SECRET_REF_PREFIX=pokeclip/dev/stream-key/` · `STREAM_KEY_SECRET_STORE_TYPE=postgres` · `STREAM_KEY_SECRET_RETIRE_FROM=postgres,aws` | 세 줄 존재 |
+| ② | 코드 머지 → 자동 배포. **`type=postgres` 그대로** | auth healthy, 새로 발급한 이름이 `pokeclip/dev/stream-key/`로 시작, 테스트 계정 재발급이 WARN 없이 끝남 |
+| ③ | auth를 내리고 `sync` | `exit=0` |
+| ④ | `STREAM_KEY_SECRET_STORE_TYPE=aws`로 바꿔 auth 기동, 이어서 `verify` | 부팅 줄 `auth.streamkey.secret_store type=AWS`, `verify`의 `readable` = `targets`, 아래 조회가 0, 테스트 계정 resolve `valid:true`, 유튜브·치지직 연동 계정 하나의 상태 조회 정상 |
+
+```sql
+SELECT count(*) FROM stream_keys
+WHERE revoked_at IS NULL AND passphrase_ref NOT LIKE 'pokeclip/dev/stream-key/%';
+```
+
+**이행 실행기.** 프로필 `secret-migration`에서만 뜨고(웹·스케줄러 없음), 한 번 돌고 끝난다.
+
+```bash
+docker compose -f services/docker-compose.dev.yml run --rm   -e SPRING_PROFILES_ACTIVE=<기존 프로필>,secret-migration auth sync; echo "exit=$?"
+```
+
+- `sync`(인자를 빼면 이것). **auth를 내린 상태에서** 돈다. 양방향이다: 살아 있는 키마다 빈 쪽을 채우고(Secrets Manager에 쓰고
+  1·2·4·8·16초로 다시 읽어 확인, PG에 `접두+uuid` 사본), 행 이름을 새 이름으로 바꾼다(행 단위 커밋). **두 값이 다르면 어느 쪽도
+  안 덮고 결함으로 센다.** 폐기된 행은 정리기로 양쪽 사본을 지운다(초당 10회)
+- `verify`. 쓰기 0. 「Secrets Manager에서 읽히는 살아 있는 키 수 / 대상 수」를 센다. auth를 띄운 뒤에 돈다. **인자를 꼭 붙인다**
+- 출력은 건수 한 줄뿐이다(`auth.secret_migration.sync targets=… smWritten=… pgWritten=… refUpdated=… alreadyInSync=… defects=…
+  verifyDelayed=… retired=… retireFailed=…`). 값·이름은 안 찍는다
+- 종료 코드: **0** 정상 · **2** 결함·검증 지연·정리 실패·원격 오류·실행기 안의 예외 · **1** 실행기에 닿기 전 부팅 실패.
+  실행기 안의 예외를 2로 바꾸는 이유는 그대로 두면 `main` 밖으로 나가 1이 되어 부팅 실패와 섞여서다
+
+**롤백(aws → postgres)**: auth 중지 → `sync`(Secrets Manager에만 있는 키를 PG로 채운다) → `type=postgres` → 기동.
+`retire-from`은 그대로 둔다. **재전환(postgres → aws)**: ③·④를 다시 한다. 롤백 기간에 새로 발급된 키는 Secrets Manager에 없어
+Media 조정자가 못 읽는다(그 동안 dev-media로 새 키 송출이 안 된다).
+
+**병행 기간은 이행(④ 통과) 뒤 2주다**(POK-272 코멘트로 확정). 그동안 PG 사본을 둔다. 끝나면 후속 PR이 넷을 한다:
+`retire-from=aws` · PG `secrets`에서 이름이 `streamkey:` 또는 `pokeclip/dev/stream-key/`로 시작하는 행 삭제 · 이행 실행기 철거 ·
+그 행이 0인지 조회한 뒤 ADR-018 표기 변경. 실행기를 걷기 직전에 `sync`를 한 번 더 돌려 `retire_failed`로 남은 폐기 사본을 치운다.
+`SECRET_STORE_KEY`는 유튜브·치지직 토큰 때문에 남는다.
+
+**알고 남긴 것**
+
+- **고아 비밀.** 원격 쓰기는 DB 롤백을 안 따라온다. 순서가 비밀 먼저 → 행이라 최악이 아무 행도 안 가리키는 비밀 하나다(월 $0.40,
+  송출에는 무해). 삽입 실패로 생긴 고아는 찾으려면 리소스 한정이 안 되는 `ListSecrets`가 필요해 두지 않는다. 삭제 실패로 생긴
+  고아는 행이 남아 실행기의 폐기 행 정리가 지운다
+- **재발급 뒤 정리가 실패해도 재발급은 200이다.** 커밋 뒤 콜백의 예외는 스프링이 호출자에게 올려 보내므로, 그대로 두면 성공한
+  재발급이 500이 되고 `auth.streamkey.rotated` 감사 줄이 빠진다. 감사 줄을 먼저 찍고 정리 실패는
+  `auth.streamkey.secret.retire_failed userId=… causeType=…` WARN으로 남긴다. 남은 옛 사본은 병행 기간에는 이행 실행기의 폐기 행 정리가
+  지운다. 실행기를 걷은 뒤에는 지울 장치가 없어 WARN을 보고 손으로 지운다(송출에는 무해하고 비용만 든다)
+- **로그의 DB 층.** 시험에서 루트를 TRACE로 내리면 Hibernate와 PostgreSQL 드라이버가 SQL 매개변수로 비밀
+  **이름**을 찍는다. 값은 안 찍힌다. PG 저장소 때부터 같고 운영에서 DEBUG를 안 켜는 것으로 막는다(위 시크릿 절의 원칙)
+- 3초는 목표다. SDK의 중단이 늦을 수 있어 시험이 오차 0.3초로 잰다. 오차를 넘으면 비동기 클라이언트로 바꾼다(아직 필요 없었다)
+
+**실측(시험으로 잰 것, 1번 설계의 실측 6번)**
+
+- 요청 단위 `apiCallTimeout` 재정의는 그 호출 하나에만 걸리고, 무응답 서버에 대해 **1.007초**에 끊겼다(목표 1초 + 오차 0.3초 안)
+- 「0.8초 뒤 없음」 넷은 시도 셋 뒤 2.75초에 빈손(목표 2.7초 + 오차), put 「0.9초 뒤 이미 있음 → 덮어쓰기 무응답」은 1.93초
+- `PostgresSecretStore.delete`(Spring Data `deleteById`)는 없는 행에서 예외를 안 낸다(`SecretStoreTest.없는_참조를_지워도_터지지_않는다`)
+- Boot 4.1의 `@ConditionalOnWebApplication`은 `org.springframework.boot.autoconfigure.condition`에 있다. 웹 없이 띄웠을 때
+  웹에 기대는 빈은 보안 설정 둘(`SecurityConfig`·`InternalSecurityConfig`)뿐이었다
+
 
 ### chat-collector — 치지직 채팅 수신 (POK-85) · 자동 재연결 (POK-86) · 적재 (POK-84) · S3 원본 아카이브 (POK-116) · **자동 시작·다중 스트리머 (POK-127)** · **수집 상태 창구 (POK-128)** · **영상 위치 창구 (POK-92)** · **재부착 (POK-219)**
 

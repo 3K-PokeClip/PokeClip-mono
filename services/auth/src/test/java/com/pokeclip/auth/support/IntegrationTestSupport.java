@@ -30,7 +30,11 @@ public abstract class IntegrationTestSupport {
      * <b>{@code FATAL: sorry, too many clients already}</b>로 컨텍스트 로딩이
      * 무너진다 — 30 × 컨텍스트 수가 100을 넘기 때문이다.
      *
-     * <p>600인 이유: 지금 컨텍스트가 <b>21개</b>다(POK-89 실측 — 17은 POK-171 시점 값이고 그 뒤 사진·유튜브 시험이 둘,
+     * <p>🔴 <b>750으로 올렸다(POK-272).</b> 아래 「다음 카드가 컨텍스트를 하나라도 더하면 750」 지시대로다. 스트림키
+     * 저장소를 aws로 켠 컨텍스트 둘(LocalStack · 가짜 서버)이 더해져 <b>23개</b>다. 23 × 30 − 2 × 20 = <b>650</b>,
+     * 상한 747에서 여유 97(컨텍스트 셋). 다음에 넷째를 더하면 900으로 올린다.
+     *
+     * <p>(POK-272 전 문단) 600인 이유: 지금 컨텍스트가 <b>21개</b>다(POK-89 실측 — 17은 POK-171 시점 값이고 그 뒤 사진·유튜브 시험이 둘,
      * 이 카드가 둘(청소기를 켠 컨텍스트 · {@code native} 프록시 헤더를 켠 실서버 컨텍스트)을 더했다). 풀 10 컨텍스트 둘을
      * 빼면 21 × 30 − 2 × 20 = <b>590</b>, superuser 몫 3을 뺀 상한이 <b>597</b>이다 —
      * <b>남은 여유는 커넥션 7개, 컨텍스트로는 0개다.</b> 🔴 <b>다음 카드가 컨텍스트를 하나라도 더하면 이 값을 먼저 750으로 올린다</b>
@@ -44,7 +48,7 @@ public abstract class IntegrationTestSupport {
      */
     protected static final PostgreSQLContainer POSTGRES =
             new PostgreSQLContainer("postgres:17")
-                    .withCommand("postgres", "-c", "max_connections=600");
+                    .withCommand("postgres", "-c", "max_connections=750");
 
     /**
      * 가짜 치지직도 static으로 하나만 띄운다. 모든 컨텍스트가 같은 api-base-uri를 받아야

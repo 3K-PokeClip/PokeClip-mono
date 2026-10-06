@@ -160,6 +160,16 @@ pokeclip:
     # JWT_SECRET과 같다 — 안 주면 리터럴 "${SECRET_STORE_KEY}"가 바인딩돼
     # 서버는 뜨고 스트림키만 전부 실패한다.
     key: ${SECRET_STORE_KEY:}
+  stream-key-secret-store:
+    # 스트림키 암호를 어디서 읽고 쓰나(POK-272, ADR-018). postgres | aws. 위 secret-store(PG)는 유튜브·치지직
+    # 토큰이 계속 쓰므로 SECRET_STORE_KEY는 aws로 바꿔도 필수다.
+    type: ${STREAM_KEY_SECRET_STORE_TYPE:postgres}
+    # 재발급·탈퇴 때 옛 암호를 지울 저장소(쉼표 목록). type을 반드시 포함한다. 이행 병행 기간 dev는 postgres,aws.
+    retire-from: ${STREAM_KEY_SECRET_RETIRE_FROM:postgres}
+    # 새 암호 이름의 앞부분 = Secrets Manager 비밀 이름 접두. '/'로 끝난다. dev는 pokeclip/dev/stream-key/ 이고
+    # dev compose가 비면 기동을 거부한다(:?). IAM 정책이 이 접두 안만 허용한다.
+    ref-prefix: ${STREAM_KEY_SECRET_REF_PREFIX:pokeclip/local/stream-key/}
+    region: ${AWS_REGION:ap-northeast-2}
   internal-api:
     # Media(1번)가 X-Internal-Token 헤더로 보낸다. 기본값을 빈 문자열로 두는
     # 이유는 JWT_SECRET과 같다 — 안 주면 리터럴이 바인딩돼 서버는 뜨고

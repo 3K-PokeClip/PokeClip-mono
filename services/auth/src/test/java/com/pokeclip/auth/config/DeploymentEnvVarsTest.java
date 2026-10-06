@@ -76,7 +76,8 @@ class DeploymentEnvVarsTest {
      * 빠지면 세 시험이 전부 초록인 채 dev auth 컨테이너만 안 뜬다(주입으로 확인).
      */
     private static final Set<String> DEFAULTED_DEPLOY_VARS = Set.of(
-            "PROFILE_PHOTO_S3_FORCE_PATH_STYLE", "FORWARD_HEADERS_STRATEGY", "GOOGLE_REDIRECT_URI");
+            "PROFILE_PHOTO_S3_FORCE_PATH_STYLE", "FORWARD_HEADERS_STRATEGY", "GOOGLE_REDIRECT_URI",
+            "STREAM_KEY_SECRET_STORE_TYPE", "STREAM_KEY_SECRET_RETIRE_FROM", "STREAM_KEY_SECRET_REF_PREFIX");
 
     /**
      * 셋째 파일(yml)도 본다 — 명부는 상수라 yml 쪽 변수 이름을 오타 내면(`FORWARD_HEADER_STRATEGY`) compose·예시에

@@ -9,7 +9,7 @@ import com.pokeclip.auth.delegation.EditorInvitationRepository;
 import com.pokeclip.auth.profile.PhotoStorage;
 import com.pokeclip.auth.streamkey.StreamKeyRepository;
 import com.pokeclip.auth.streamkey.pairing.PairingCodeRepository;
-import com.pokeclip.auth.streamkey.secret.SecretStore;
+import com.pokeclip.auth.streamkey.secret.StreamKeySecretRetirer;
 import com.pokeclip.auth.token.RefreshTokenRepository;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
@@ -52,7 +52,7 @@ public class WithdrawalService {
     private final EditorDelegationRepository delegationRepository;
     private final EditorInvitationRepository invitationRepository;
     private final AudioTrackLabelRepository audioTrackLabelRepository;
-    private final SecretStore secretStore;
+    private final StreamKeySecretRetirer secretRetirer;
     private final PhotoStorage photoStorage;
     private final WithdrawalCleanupExecutor cleanup;
 
@@ -226,7 +226,7 @@ public class WithdrawalService {
         log.info("auth.withdrawal.cleanup.started userId={}", userId);
         RuntimeException failure = null;
         for (String ref : passphraseRefs) {
-            failure = deleteQuietly(() -> secretStore.delete(ref), failure);
+            failure = deleteQuietly(() -> secretRetirer.retire(ref), failure);
         }
         failure = deleteQuietly(() -> photoStorage.deleteAll(userId), failure);
         if (failure != null) {
