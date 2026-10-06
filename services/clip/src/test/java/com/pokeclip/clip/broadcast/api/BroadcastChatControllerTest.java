@@ -142,7 +142,7 @@ class BroadcastChatControllerTest extends IntegrationTestSupport {
     }
 
     /**
-     * 쿼리 값에 주소 틀 글자({@code {x}})가 오면 수집기 주소 조립이 던진다. 그것도 503으로 접혀야 한다 — 조립을 보내기 {@code try}
+     * 쿼리 값에 주소 틀 글자({@code {x}})가 오면 수집기 주소 조립이 던진다. 그것도 503으로 접혀야 한다. 조립을 보내기 {@code try}
      * 밖으로 빼면 500이 된다(POK-259에서 보내기를 나눌 때 짚은 자리).
      */
     @Test

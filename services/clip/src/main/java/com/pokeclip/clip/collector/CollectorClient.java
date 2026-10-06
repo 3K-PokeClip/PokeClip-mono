@@ -117,7 +117,7 @@ public class CollectorClient {
 
     /**
      * {@link #get}·{@link #postJson}이 같이 쓰는 보내기·상태 처리. 이유는 클래스 javadoc.
-     * 요청을 <b>여기 try 안에서</b> 조립한다 — 주소 조립이 던지는 것(쿼리 값의 {@code {}} 같은 템플릿 글자)도 503으로 접혀야 한다.
+     * 요청을 <b>여기 try 안에서</b> 조립한다. 주소 조립이 던지는 것(쿼리 값의 {@code {}} 같은 템플릿 글자)도 503으로 접혀야 한다.
      */
     private CollectorResponse send(Supplier<RestClient.RequestHeadersSpec<?>> request) {
         try {
