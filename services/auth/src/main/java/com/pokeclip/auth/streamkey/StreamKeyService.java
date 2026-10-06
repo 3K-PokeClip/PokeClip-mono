@@ -186,10 +186,20 @@ public class StreamKeyService {
         //
         // 로그도 같은 자리에서 찍는다. 롤백됐는데 "재발급했다"가 남으면
         // 조사에서 거짓 알리바이가 된다(TokenService.logAfterCommit과 같은 이유).
+        //
+        // 🔴 정리가 실패해도 재발급은 이미 끝났다. 커밋 뒤 콜백의 예외는 스프링이 삼키지 않고 호출자에게
+        // 올려 보내, 성공한 재발급이 500이 되고 아래 감사 줄도 빠진다. 정리가 원격 호출(Secrets Manager)이
+        // 되면서 스로틀·시간 초과로 실제로 나는 갈래다(POK-272 로컬 리뷰 1). 그래서 감사 줄을 먼저 찍고
+        // 정리 실패는 잡아서 WARN으로 남긴다. 남은 옛 사본은 행이 남아 있어 이행 실행기의 폐기 행 정리가 지운다.
         String staleRef = previous.getPassphraseRef();
         afterCommit(() -> {
-            secretRetirer.retire(staleRef);
             log.info("auth.streamkey.rotated userId={}", userId);
+            try {
+                secretRetirer.retire(staleRef);
+            } catch (RuntimeException e) {
+                log.warn("auth.streamkey.secret.retire_failed userId={} causeType={}",
+                        userId, e.getClass().getSimpleName());
+            }
         });
 
         return now;

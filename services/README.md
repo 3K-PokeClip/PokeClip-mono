@@ -161,7 +161,7 @@ dev는 아래 「스트림키 암호 이행」 절의 순서대로 채운다. �
 |---|---|---|
 | `STREAM_KEY_SECRET_STORE_TYPE` | `postgres` | 스트림키 암호를 읽고 쓰는 곳. `postgres` 또는 `aws`(Secrets Manager). 다른 값이면 부팅 실패 |
 | `STREAM_KEY_SECRET_RETIRE_FROM` | `postgres` | 재발급·탈퇴 때 옛 암호를 지울 곳(쉼표 목록). **위 값을 반드시 포함한다**(아니면 부팅 실패). 병행 기간 dev는 `postgres,aws` |
-| `STREAM_KEY_SECRET_REF_PREFIX` | `pokeclip/local/stream-key/` | 새 암호 이름의 앞부분 = Secrets Manager 비밀 이름 접두. `/`로 끝나고 219자 이하. 🔴 **dev compose는 `:?`라 비면 auth 컨테이너가 안 뜬다**. IAM 정책이 이 접두 안만 허용해서다 |
+| `STREAM_KEY_SECRET_REF_PREFIX` | `pokeclip/local/stream-key/` | 새 암호 이름의 앞부분 = Secrets Manager 비밀 이름 접두. `/`로 끝나고 219자 이하. 🔴 **dev compose는 `:?`라 비면 compose가 파일 전체 보간에서 멈춘다.** auth만이 아니라 같은 배포 명령의 clip도 안 올라간다. IAM 정책이 이 접두 안만 허용해서 둔 장치다 |
 
 `SECRET_STORE_KEY`는 `aws`로 바꿔도 **계속 필수다.** 유튜브·치지직 토큰은 이번에 옮기지 않아 PG에 그대로 있다.
 
@@ -3156,7 +3156,8 @@ get·put이 한 트랜잭션에서 이어지는 갈래는 하나다. `ensureKey`
 첫 호출 한 번만 30초를 준다(KMS 기본 키의 첫 생성 지연).
 
 **배포 순서**(1번 설계 8-A 6). 🔴 **`.env`가 코드보다 먼저다.** compose의 `STREAM_KEY_SECRET_REF_PREFIX`가 `:?`라 코드가
-먼저 머지되면 develop 자동 배포에서 auth가 안 뜬다(그때는 `.env`를 채우고 다시 배포한다).
+먼저 머지되면 develop 자동 배포의 `docker compose up … postgres auth clip`이 보간에서 통째로 멈춘다. auth만이 아니라
+clip 새 코드도 안 올라간다(그때는 `.env`를 채우고 다시 배포한다).
 
 | 단계 | 하는 일 | 통과 판정 |
 |---|---|---|
@@ -3199,6 +3200,9 @@ Media 조정자가 못 읽는다(그 동안 dev-media로 새 키 송출이 안 �
 - **고아 비밀.** 원격 쓰기는 DB 롤백을 안 따라온다. 순서가 비밀 먼저 → 행이라 최악이 아무 행도 안 가리키는 비밀 하나다(월 $0.40,
   송출에는 무해). 삽입 실패로 생긴 고아는 찾으려면 리소스 한정이 안 되는 `ListSecrets`가 필요해 두지 않는다. 삭제 실패로 생긴
   고아는 행이 남아 실행기의 폐기 행 정리가 지운다
+- **재발급 뒤 정리가 실패해도 재발급은 200이다.** 커밋 뒤 콜백의 예외는 스프링이 호출자에게 올려 보내므로, 그대로 두면 성공한
+  재발급이 500이 되고 `auth.streamkey.rotated` 감사 줄이 빠진다. 감사 줄을 먼저 찍고 정리 실패는
+  `auth.streamkey.secret.retire_failed userId=… causeType=…` WARN으로 남긴다. 남은 옛 사본은 행이 있어 이행 실행기의 폐기 행 정리가 지운다
 - **로그의 DB 층.** 시험에서 루트를 TRACE로 내리면 Hibernate와 PostgreSQL 드라이버가 SQL 매개변수로 비밀
   **이름**을 찍는다. 값은 안 찍힌다. PG 저장소 때부터 같고 운영에서 DEBUG를 안 켜는 것으로 막는다(위 시크릿 절의 원칙)
 - 3초는 목표다. SDK의 중단이 늦을 수 있어 시험이 오차 0.3초로 잰다. 오차를 넘으면 비동기 클라이언트로 바꾼다(아직 필요 없었다)

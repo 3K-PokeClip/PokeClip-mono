@@ -84,7 +84,8 @@ services:
       AWS_REGION: ${AWS_REGION:-ap-northeast-2}
       # 스트림키 암호 저장소(POK-272). 접두는 비면 기동을 거부한다: IAM 정책이 그 접두 안만 허용하고,
       # 로컬 기본값(pokeclip/local/stream-key/)으로 뜨면 재발급·탈퇴의 Secrets Manager 삭제가 권한 거부로 실패한다.
-      # 🔴 이 줄이 :? 라서 dev .env 에 세 줄이 먼저 들어간 뒤에 코드를 머지한다(자동 배포가 멈춘다).
+      # 🔴 이 줄이 :? 라서 dev .env 에 세 줄이 먼저 들어간 뒤에 코드를 머지한다. 빠지면 compose 가 파일 전체 보간에서
+      # 멈춰 auth 만이 아니라 같은 배포 명령(up postgres auth clip)의 clip 까지 안 올라간다.
       STREAM_KEY_SECRET_STORE_TYPE: ${STREAM_KEY_SECRET_STORE_TYPE:-postgres}
       STREAM_KEY_SECRET_RETIRE_FROM: ${STREAM_KEY_SECRET_RETIRE_FROM:-postgres}
       STREAM_KEY_SECRET_REF_PREFIX: ${STREAM_KEY_SECRET_REF_PREFIX:?}

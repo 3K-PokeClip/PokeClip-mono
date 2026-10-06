@@ -9,6 +9,7 @@ import com.pokeclip.auth.token.TokenService;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserService;
 import com.pokeclip.auth.withdrawal.WithdrawalTestSupport;
+import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -87,6 +88,30 @@ class StreamKeySecretsOutageTest extends WithdrawalTestSupport {
         FAKE.clearScripts();
         String body = exchange(code).andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         assertThat(JsonPath.read(body, "$.passphrase").toString()).isEqualTo(passphrase);
+    }
+
+    /**
+     * 재발급의 커밋 뒤 정리가 실패해도 재발급은 이미 끝났다. 200이고, 감사 줄과 정리 실패 WARN이 남는다
+     * (로컬 리뷰 1: 예외가 커밋 뒤에 올라가 500이 되고 감사 줄이 빠졌다).
+     */
+    @Test
+    void 커밋_뒤_정리가_실패해도_재발급은_200이고_기록이_남는다() throws Exception {
+        User user = newUser();
+        streamKeyService.ensureKey(user.getId());
+        String oldRef = streamKeyService.findAlive(user.getId()).orElseThrow().getPassphraseRef();
+        FAKE.script("DeleteSecret", Step.error("ThrottlingException", 400), Step.error("ThrottlingException", 400),
+                Step.error("ThrottlingException", 400), Step.error("ThrottlingException", 400));
+
+        try (LogCaptor logs = new LogCaptor()) {
+            mockMvc.perform(post("/api/stream-keys/rotate").header("Authorization", bearer(user)))
+                    .andExpect(status().isOk());
+
+            assertThat(logs.messages()).contains("auth.streamkey.rotated userId=" + user.getId());
+            assertThat(logs.messages()).anyMatch(m -> m.startsWith(
+                    "auth.streamkey.secret.retire_failed userId=" + user.getId() + " causeType="));
+        }
+        assertThat(streamKeyService.findAlive(user.getId()).orElseThrow().getPassphraseRef()).isNotEqualTo(oldRef);
+        assertThat(FAKE.has(oldRef)).as("정리가 실패한 옛 사본은 남는다(이행 실행기가 지운다)").isTrue();
     }
 
     private ResultActions exchange(String code) throws Exception {
