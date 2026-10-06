@@ -103,7 +103,9 @@ bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 {
 	// 이미 보내는 중이면 그대로 쓴다(본방 송출 중에 동기화를 켠 경로). 정지를 요청한 출력은 active여도 멈추는 중이다 —
 	// 그대로 두면 곧 멈춰 이번 방송이 PokeClip 없이 지나간다. Release()로 마저 멈추고 새로 만든다.
-	if (IsActive() && !stopRequested_)
+	// 스스로 멈춰 그만둔 출력(재시도하지 않는 코드·포기 — wanted_가 거짓)도 같다. active는 stop 신호 뒤 캡처가 다 끝나야
+	// 내려가므로, 그 사이에 온 「다시 연결」을 「이미 보내는 중」으로 읽으면 눌러도 아무 일이 없다.
+	if (IsActive() && !stopRequested_ && wanted_)
 		return true;
 
 	// 새 방송 구간이다 — 예약된 재시도를 버리고 처음부터 센다.
