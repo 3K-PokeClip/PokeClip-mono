@@ -60,11 +60,7 @@ export function statusView(state: BridgeState, nowMs: number): StatusView {
       view.desc = '본방과 같은 인코더로 함께 보내고 있어요.';
       view.tone = 'live';
       return view;
-    case 'reconnecting':
-      view.title = '재연결 중';
-      view.desc = '본방은 그대로 나가고 있어요.';
-      view.tone = 'warning';
-      return view;
+    // 'reconnecting'은 여기 없다 — 플러그인은 그 단계를 재시도 정보(retry.attempt ≥ 1)와 함께만 보내 위에서 끝난다
     case 'starting':
       view.title = '연결 중';
       view.desc = 'PokeClip 수신 서버에 붙는 중이에요.';
