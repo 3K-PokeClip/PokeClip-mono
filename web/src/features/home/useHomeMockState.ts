@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/api/client';
+import { broadcastTitle } from '@/api/clipEditor';
 import {
   fetchAllBroadcasts,
   fetchAllJumpCards,
@@ -122,6 +123,8 @@ interface WireBroadcast {
   vodExpiresAt: string | null;
   /** 사진 주소(POK-277). 옛 서버면 빠져 온다 */
   thumbnailUrl?: string | null;
+  /** 치지직 방송 제목(POK-259). 없거나 옛 서버면 비어 온다 */
+  title?: string | null;
 }
 interface WireList {
   broadcasts: WireBroadcast[];
@@ -248,7 +251,8 @@ async function loadHome(now: number): Promise<Loaded | null> {
     const info = await getJson<WireInfo>(
       `/api/clip/broadcasts/${encodeURIComponent(liveBroadcast.streamId)}/broadcast-info`,
     );
-    const title = info?.latest?.title?.trim() || liveBroadcast.streamId;
+    // 방송 정보 창구의 최신 관측이 먼저다(목록보다 늦게 바뀐 제목을 먼저 본다). 그 관측에 제목이 비면 목록 제목, 그것도 없으면 번호
+    const title = info?.latest?.title?.trim() || broadcastTitle(liveBroadcast);
     const startedAt = liveBroadcast.startedAt;
     live = {
       streamId: liveBroadcast.streamId,
@@ -288,7 +292,7 @@ async function loadHome(now: number): Promise<Loaded | null> {
         : undefined;
     return {
       id: b.streamId,
-      title: b.streamId,
+      title: broadcastTitle(b),
       meta: metaParts.join(' · '),
       href: `/broadcast/vod/${encodeURIComponent(b.streamId)}`,
       badge,
@@ -312,7 +316,7 @@ async function loadHome(now: number): Promise<Loaded | null> {
         id: b.streamId,
         dday: `D-${d}`,
         urgent: d <= 3,
-        title: cards ? `${b.streamId} · 카드 ${cards.length}개` : b.streamId,
+        title: cards ? `${broadcastTitle(b)} · 카드 ${cards.length}개` : broadcastTitle(b),
       };
     });
 

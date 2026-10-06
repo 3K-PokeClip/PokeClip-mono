@@ -32,6 +32,7 @@ vi.mock('@/api/clipEditor', async (importOriginal) => ({
         startedAt: new Date(MINE_START).toISOString(),
         endedAt: new Date(MINE_START + HOUR).toISOString(),
         vodExpiresAt: null,
+        title: '새벽 랭크',
       },
       {
         streamId: 'S-other',
@@ -75,5 +76,11 @@ describe('useVodListMockState — 녹화 있음 판정', () => {
     const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
     await waitFor(() => expect(result.current.totalCount).toBe(2));
     expect(api.asked).toEqual(['key-shared']);
+  });
+
+  it('행 제목은 치지직 제목이고, 제목이 없는 방송은 번호다(POK-259)', async () => {
+    const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
+    await waitFor(() => expect(result.current.visuals['S-mine']?.title).toBe('새벽 랭크'));
+    expect(result.current.visuals['S-other']?.title).toBe('S-other');
   });
 });

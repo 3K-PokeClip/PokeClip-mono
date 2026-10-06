@@ -570,7 +570,11 @@ export function useLiveMockState(): LiveMockState {
   const myName = me?.name ?? '';
   const stream = useMemo<LiveStream>(
     () => ({
-      title: info?.latest?.title ?? (streamId ? streamId : '방송 중인 채널이 없어요'),
+      // 방송 정보 관측의 제목이 먼저고, 그 관측에 제목이 비면 목록 제목(POK-259), 그것도 없으면 방송 번호
+      title:
+        info?.latest?.title?.trim() ||
+        live.listTitle ||
+        (streamId ? streamId : '방송 중인 채널이 없어요'),
       platform: '치지직',
       channelName,
       startedNote: !streamId
@@ -589,7 +593,7 @@ export function useLiveMockState(): LiveMockState {
       })(),
       editorName: myName,
     }),
-    [streamId, sseOk, info, live.status, channelName, myName],
+    [streamId, sseOk, info, live.status, live.listTitle, channelName, myName],
   );
 
   return { stream, highlights, hiddenCount, chatVolume, chatWarning: false };

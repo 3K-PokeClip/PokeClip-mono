@@ -203,6 +203,10 @@ const server = vi.hoisted(() => ({
   vodOrigin: null as number | null,
   /** 영상 경로의 키(POK-233). undefined면 이 칸을 모르는 옛 서버다 */
   ingest: undefined as string | undefined,
+  /** 방송 목록 줄의 제목(POK-259). undefined면 이 칸을 모르는 옛 서버다 */
+  listTitle: undefined as string | undefined,
+  /** 방송 정보 최신 관측에 제목이 비었다(그 회차에 제목을 못 얻었다) */
+  infoTitleMissing: false,
 }));
 
 /** 지난 방송(2시간 반) — 수집기 1시간 창을 넘는다 */
@@ -224,6 +228,7 @@ function handle(url: string) {
       endedAt: null,
       vodExpiresAt: null,
       ingestStreamId: server.ingest,
+      title: server.listTitle,
     };
     const vod = {
       streamId: VOD_ID,
@@ -246,7 +251,11 @@ function handle(url: string) {
     return jsonResponse(200, { cards: withHidden ? cards : cards.filter((c) => !c.hidden) });
   }
   if (path.endsWith('/chat-chart')) return jsonResponse(200, CHART);
-  if (path.endsWith('/broadcast-info')) return jsonResponse(200, INFO);
+  if (path.endsWith('/broadcast-info'))
+    return jsonResponse(
+      200,
+      server.infoTitleMissing ? { ...INFO, latest: { ...INFO.latest, title: null } } : INFO,
+    );
   if (path.endsWith('/chat-messages')) {
     // 채팅이 아주 많은 지난 방송 — 어느 창이든 쪽이 끝나지 않는다
     if (server.vodChatEndless && path.includes(`/${VOD_ID}/`))
@@ -298,6 +307,8 @@ beforeEach(() => {
   nav.search = '';
   server.vodOrigin = null;
   server.ingest = undefined;
+  server.listTitle = undefined;
+  server.infoTitleMissing = false;
   mediaCalls.keys = [];
   mediaCalls.spans = [];
   server.live = true;
@@ -488,6 +499,23 @@ describe('LiveScreen — 방송 정보 바', () => {
     expect(screen.getByText('1:24:03')).toBeInTheDocument();
     expect(screen.getByText('스트리밍 중')).toBeInTheDocument();
     expect(screen.getByRole('main')).toBeInTheDocument();
+  });
+
+  it('방송 정보 관측에 제목이 비면 목록 줄의 제목을 보인다 — 번호로 돌아가지 않는다(POK-259)', async () => {
+    server.listTitle = '목록에서 온 제목';
+    server.infoTitleMissing = true;
+    await renderLive();
+
+    expect(screen.getByRole('heading', { name: '목록에서 온 제목' })).toBeInTheDocument();
+  });
+
+  it('관측 제목이 있으면 그것이 먼저다 — 목록보다 늦게 바뀐 제목이다', async () => {
+    server.listTitle = '목록에서 온 옛 제목';
+    await renderLive();
+
+    expect(
+      screen.getByRole('heading', { name: '새벽 랭크 올리기 — 다이아 승급전 가보자' }),
+    ).toBeInTheDocument();
   });
 
   it('내 방송이면 채널 이름은 내 치지직 연동에서 온다', async () => {

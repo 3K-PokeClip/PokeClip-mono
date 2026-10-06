@@ -131,6 +131,78 @@ describe('HomeScreen', () => {
     ]);
   });
 
+  it('방송 번호 대신 치지직 제목을 보이고, 제목이 없는 방송만 번호다(POK-259)', async () => {
+    const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+    const liveRow = {
+      streamId: 'S-live-1',
+      status: 'live',
+      relation: 'OWNER',
+      startedAt: at(30),
+      endedAt: null,
+      vodExpiresAt: null,
+      title: '롤 마스터 승급전',
+      category: 'League of Legends',
+    };
+    const pastRows = [
+      {
+        streamId: 'S-past-1',
+        status: 'vod_ready',
+        relation: 'OWNER',
+        startedAt: at(3000),
+        endedAt: at(2900),
+        vodExpiresAt: new Date(Date.now() + 2 * 86_400_000).toISOString(),
+        title: '  새벽 랭크  ',
+        category: null,
+      },
+      {
+        streamId: 'S-past-2',
+        status: 'vod_ready',
+        relation: 'OWNER',
+        startedAt: at(6000),
+        endedAt: at(5900),
+        vodExpiresAt: null,
+        title: null,
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        const list = url.includes('state=live')
+          ? [liveRow]
+          : url.includes('state=past')
+            ? pastRows
+            : null;
+        if (list) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ broadcasts: list, nextCursor: null }), { status: 200 }),
+          );
+        }
+        // 방송 정보 관측은 있는데 그 회차에 제목을 못 얻었다 — 목록 제목으로 대신한다
+        if (url.endsWith('/broadcast-info')) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                latest: { title: null, tags: [], category: null, viewers: 12 },
+                series: [],
+              }),
+              { status: 200 },
+            ),
+          );
+        }
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+
+    expect(await screen.findByText('롤 마스터 승급전')).toBeInTheDocument();
+    expect(await screen.findAllByText('새벽 랭크')).not.toHaveLength(0);
+    expect(screen.getByText('새벽 랭크 · 카드 0개')).toBeInTheDocument();
+    expect(screen.getAllByText('S-past-2')).not.toHaveLength(0);
+    expect(screen.queryByText('S-live-1')).toBeNull();
+    expect(screen.queryByText('S-past-1')).toBeNull();
+  });
+
   it('라이브 띠의 클립 완료는 그 방송에서 영상까지 만든 편집본 수다', async () => {
     const liveRow = {
       streamId: 'stream-1',

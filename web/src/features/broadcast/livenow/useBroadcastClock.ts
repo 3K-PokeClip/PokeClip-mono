@@ -55,6 +55,7 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
         endedAt: null,
         playheadMs: null,
         originMs: null,
+        listTitle: null,
       });
       return;
     }
@@ -65,6 +66,7 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
       endedAt: null,
       playheadMs: null,
       originMs: null,
+      listTitle: null,
     });
     let alive = true;
     const load = async () => {
@@ -81,6 +83,7 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
             endedAt: null,
             relation: null,
             originMs: null,
+            listTitle: null,
           });
           return;
         }
@@ -100,6 +103,7 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
           endedAt: e,
           relation: row.relation,
           originMs: ms(row.timelineOriginAt ?? null),
+          listTitle: row.title?.trim() || null,
         });
       } catch {
         /* 다음 주기에 다시 */
