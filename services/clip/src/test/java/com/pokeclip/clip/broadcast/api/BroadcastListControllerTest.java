@@ -45,6 +45,9 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
 
     private static final String ACCESSIBLE = "/internal/editor-delegations/accessible";
 
+    /** 수집기의 「여러 방송의 마지막 제목」 창구(POK-259). */
+    private static final String TITLES = "/internal/broadcast-info/latest";
+
     /** JWT {@code sub}. 방송 픽스처의 스트리머 번호와 <b>다른 사람</b>이다. */
     private static final String 요청자 = "4174";
 
@@ -578,6 +581,82 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
         Map<String, Object> 한_줄 = ((java.util.List<Map<String, Object>>) 맵(본문).get("broadcasts")).get(0);
         assertThat(한_줄).containsKey("timelineOriginAt");
         assertThat(한_줄.get("timelineOriginAt")).isNull();
+    }
+
+    // ── 방송 제목(POK-259) ───────────────────────────────────────
+
+    /**
+     * 수집기가 준 방송마다의 마지막 제목·카테고리가 실린다. <b>한 장을 한 번에 묻는다</b>는 것(방송 수만큼 왕복하지 않는다)과 물은
+     * 방송 번호를 같이 잰다.
+     */
+    @Test
+    void 수집기가_준_제목과_카테고리가_방송마다_실린다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-a", TestIds.STREAMER, "live");
+        방송을_넣는다("s-b", TestIds.STREAMER, "live");
+        COLLECTOR.respondWith(TITLES, 200, """
+                {"titles":{"s-a":{"title":"새 제목","category":"League of Legends"},"s-b":{"title":"다른 방송","category":null}}}""");
+
+        목록("?state=live")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-b"))
+                .andExpect(jsonPath("$.broadcasts[0].title").value("다른 방송"))
+                .andExpect(jsonPath("$.broadcasts[0].category").value(nullValue()))
+                .andExpect(jsonPath("$.broadcasts[1].streamId").value("s-a"))
+                .andExpect(jsonPath("$.broadcasts[1].title").value("새 제목"))
+                .andExpect(jsonPath("$.broadcasts[1].category").value("League of Legends"));
+
+        assertThat(COLLECTOR.callCount()).as("방송마다 묻지 않고 한 장을 한 번에 묻는다").isEqualTo(1);
+        assertThat(COLLECTOR.lastPath()).isEqualTo(TITLES);
+        // 주소가 아니라 본문에 싣는다(128자 번호 100개면 주소가 톰캣 한도 8KB를 넘는다, PR #214 codex)
+        assertThat(COLLECTOR.lastMethod()).isEqualTo("POST");
+        assertThat(COLLECTOR.lastQuery()).isEmpty();
+        assertThat(COLLECTOR.lastBody()).isEqualTo("{\"streamIds\":[\"s-b\",\"s-a\"]}");
+    }
+
+    /** 수집기가 제목을 모르는 방송(관측이 아직 없다)은 칸을 빼지 않고 null로 싣는다. 화면은 그때 방송 번호를 보인다. */
+    @Test
+    void 수집기가_모르는_방송은_제목이_null이다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-noinfo", TestIds.STREAMER, "live");
+        COLLECTOR.respondWith(TITLES, 200, "{\"titles\":{}}");
+
+        String 본문 = 본문(목록("?state=live").andExpect(status().isOk()));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> 한_줄 = ((java.util.List<Map<String, Object>>) 맵(본문).get("broadcasts")).get(0);
+        assertThat(한_줄).containsKey("title").containsKey("category");
+        assertThat(한_줄.get("title")).isNull();
+        assertThat(한_줄.get("category")).isNull();
+    }
+
+    /**
+     * 제목은 부가 칸이다. 수집기가 죽었거나(5xx) 모르는 모양을 주거나 400을 줘도 목록은 나가고 제목만 빈다. 다른 부가 칸(기준점)은
+     * 그대로 실린다. 여기서 500이면 홈·지난 방송·라이브가 통째로 죽는다.
+     */
+    @Test
+    void 수집기가_아프면_목록은_나가고_제목만_빈다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        방송을_넣는다("s-sick", TestIds.STREAMER, "live");
+        조각을_넣는다("s-sick", 1, 0, 시작_시각.plusSeconds(5), 시작_시각.plusSeconds(5));
+
+        for (String[] 수집기 : new String[][] {{"503", ""}, {"200", "제목 아님"}, {"400", "{\"error\":\"too_many\"}"},
+                {"200", "{\"titles\":{\"s-sick\":{\"title\":7}}}"}, {"200", ""}, {"200", "   "}, {"200", "[]"}}) {
+            COLLECTOR.respondWith(TITLES, Integer.parseInt(수집기[0]), 수집기[1]);
+            목록("?state=live")
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.broadcasts[0].streamId").value("s-sick"))
+                    .andExpect(jsonPath("$.broadcasts[0].title").value(nullValue()))
+                    .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(시작_시각.plusSeconds(5).toString()));
+        }
+    }
+
+    /** 볼 방송이 없으면 수집기를 안 부른다(빈 목록에 왕복 하나를 태울 이유가 없다). */
+    @Test
+    void 방송이_없으면_수집기를_안_부른다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+
+        목록("?state=live").andExpect(status().isOk()).andExpect(jsonPath("$.broadcasts.length()").value(0));
+        assertThat(COLLECTOR.callCount()).isZero();
     }
 
     /**
