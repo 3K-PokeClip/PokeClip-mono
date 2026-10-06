@@ -25,10 +25,12 @@ export const REASON: Record<string, string> = {
   service_create_failed: 'SRT 서비스를 만들지 못했어요.',
   start_failed: 'SRT 출력을 시작하지 못했어요.',
   main_stream_failed: '본방이 시작되지 않아 PokeClip 전송도 멈췄어요.',
-  bad_path: '수신 서버가 암호 또는 주소를 거절했어요.',
-  connect_failed: '수신 서버가 연결을 거절했어요.',
+  // SRT 정지 코드 — 실제 원인대로 적는다(obs-ffmpeg-srt.h). bad_path는 주소(DNS)를 못 찾은 것이고, 서버 무응답과
+  // 거절(키 폐기·암호 오류·경로 없음)은 모두 connect_failed라 플러그인에서 가를 수 없다.
+  bad_path: '수신 서버 주소를 찾지 못했어요. 인터넷 연결과 수신 주소를 확인하세요.',
+  connect_failed: '수신 서버에 연결하지 못했어요. 서버가 응답하지 않거나 연결을 거절했어요.',
   timeout: 'PokeClip 수신 서버가 응답하지 않아요.',
-  disconnected: '연결이 끊겼어요. 재시도를 모두 실패했어요.',
+  disconnected: '수신 서버와의 연결이 끊겼어요.',
   invalid_stream: '스트림이 올바르지 않아요.',
   output_error: '출력 오류가 났어요.',
   encode_error: '인코더 오류가 났어요.',

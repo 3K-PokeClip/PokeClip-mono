@@ -44,6 +44,28 @@ describe('사유 문구', () => {
     }
   });
 
+  it('SRT 정지 사유는 실제 원인대로 적고, 독과 폴백 문구가 같다', () => {
+    // bad_path는 주소(DNS)를 못 찾은 것이다 — 예전처럼 「암호를 거절」이라고 하면 엉뚱한 곳을 고치게 된다
+    expect(REASON.bad_path).toContain('주소를 찾지 못했어요');
+    expect(REASON.bad_path).not.toContain('암호');
+    // 무응답과 거절이 같은 코드라 둘 다 말한다
+    expect(REASON.connect_failed).toContain('응답하지 않거나');
+    expect(REASON.connect_failed).toContain('거절');
+    // 끊긴 뒤에는 자동으로 다시 시도한다 — 「재시도를 모두 실패」는 포기했을 때 따로 알린다
+    expect(REASON.disconnected).not.toContain('실패');
+
+    const koReason = (code: string) => new RegExp(`^Reason\\.${code}="(.*)"$`, 'm').exec(koIni)?.[1];
+    for (const code of ['bad_path', 'connect_failed', 'timeout', 'disconnected']) {
+      expect(koReason(code), code).toBe(REASON[code]);
+    }
+  });
+
+  it('A5 「지금 보내기」·「재시도 멈추기」 거절 사유를 문구로 바꾼다', () => {
+    for (const code of ['main_not_live', 'send_unavailable', 'not_retrying']) {
+      expect(reasonText(code)).not.toContain(code);
+    }
+  });
+
   it('오디오 소스 종류 여섯에 이름이 있다 (src/audio-assign.cpp AudioKindName 과 같은 키)', () => {
     expect(Object.keys(AUDIO_KIND_LABEL).sort()).toEqual(['app', 'browser', 'desktop', 'media', 'mic', 'other']);
   });
