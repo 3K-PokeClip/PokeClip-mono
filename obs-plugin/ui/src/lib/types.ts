@@ -50,7 +50,7 @@ export interface BridgeState {
   errorDetail: string;
   obsStreaming: boolean;
   syncStart: boolean; // 설정 sync_start 사본
-  // 본방은 나가는데 우리 송출이 멈춰 있다 — 「지금 보내기」를 보여 준다 (src/app-state.hpp CanSendNow)
+  // 본방은 나가는데 우리 송출이 멈춰 있다 — 「다시 연결」을 보여 준다 (src/app-state.hpp CanSendNow)
   canSendNow: boolean;
   retry: RetryView;
   theme: 'dark' | 'light';

@@ -26,11 +26,11 @@ private:
 	void OnAssignClicked();
 
 	QLabel *status_ = nullptr;
-	// A5 — 재시도 진행(「재시도 N번째 · M초 뒤」)과 버튼. 상태는 다음 시도 시각만 주므로 남은 초는 여기서 센다 —
+	// A5 — 재시도 진행(「M초 뒤 다시 시도해요 · N번째」)과 버튼. 상태는 다음 시도 시각만 주므로 남은 초는 여기서 센다 —
 	// 기다리는 동안만 1초 타이머가 돈다.
 	QLabel *retry_ = nullptr;
-	QPushButton *sendNow_ = nullptr;   // 「지금 보내기」 · 기다리는 중이면 「지금 다시 시도」
-	QPushButton *stopRetry_ = nullptr; // 「재시도 멈추기」
+	QPushButton *sendNow_ = nullptr;   // 「다시 연결」 · 기다리는 중이면 「다시 시도」
+	QPushButton *stopRetry_ = nullptr; // 「재시도 중지」
 	QTimer *retryTick_ = nullptr;
 	int retryAttempt_ = 0;   // 마지막 상태: 0이면 재시도 중이 아니다
 	int64_t retryNextAt_ = 0; // 마지막 상태: 다음 시도 시각(UTC epoch ms), 0이면 접속 중

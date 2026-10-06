@@ -86,7 +86,7 @@ export function createMockBridge(scenario: string): Bridge {
       errorCode: 'connect_failed',
       retry: { ...NO_RETRY, attempt: 5, nextAt: Date.now() + 4000, keySuspect: true },
     },
-    // 65분을 다 써서 포기했다 — 본방은 나가는 중이라 「지금 보내기」
+    // 65분을 다 써서 포기했다 — 본방은 나가는 중이라 「다시 연결」
     gave_up: {
       phase: 'error',
       obsStreaming: true,
@@ -240,7 +240,7 @@ export function createMockBridge(scenario: string): Bridge {
         paired: true,
         keyHint: 'Q7ZK',
         errorCode: state.errorCode === 'no_key' ? '' : state.errorCode,
-        // 플러그인처럼: 본방이 나가는 중에 페어링했으면 「지금 보내기」가 뜬다
+        // 플러그인처럼: 본방이 나가는 중에 페어링했으면 「다시 연결」이 뜬다
         canSendNow: state.obsStreaming && (state.phase === 'idle' || state.phase === 'error'),
       });
       return { ok: true };

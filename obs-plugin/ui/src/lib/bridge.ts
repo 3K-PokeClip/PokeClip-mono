@@ -11,8 +11,8 @@ export interface Bridge {
   putSettings(next: Partial<PluginSettings>): Promise<ActionResult & { settings?: PluginSettings }>;
   mark(): Promise<MarkReply>; // A4 「지금 표시」 — 받아들인 뒤의 결과·거절(409)은 state.marks로 온다
   // A5 — 받아들이면 202이고 결과는 상태(phase·errorCode·retry)로 온다
-  sendNow(): Promise<ActionResult>; // 「지금 보내기」 · 「지금 다시 시도」
-  stopRetry(): Promise<ActionResult>; // 「재시도 멈추기」
+  sendNow(): Promise<ActionResult>; // 「다시 연결」 · 「다시 시도」
+  stopRetry(): Promise<ActionResult>; // 「재시도 중지」
 }
 
 const TOKEN_KEY = 'pokeclip.bridge.token';

@@ -203,7 +203,7 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 
 	// 동기화를 본방 송출 중에 켰다 — 「본방이 보내면 우리도 보낸다」를 지키려면 다음 방송을 기다리지 않고
 	// 지금 시작한다. 키·GOP 검사는 본방 STARTING과 같지만, 그때 하는 오디오 재배정·마크 카운터 초기화·본방 시작
-	// 감시는 다시 하지 않는다 — 방송 도중이다(「지금 보내기」와 같은 경로). 브리지 워커 스레드라 UI 스레드로 넘긴다.
+	// 감시는 다시 하지 않는다 — 방송 도중이다(「다시 연결」과 같은 경로). 브리지 워커 스레드라 UI 스레드로 넘긴다.
 	// 🔴 이미 돌던 인코더는 keyint를 못 바꾸므로(x264) 그때는 encoder_active로 거절된다 — 본방을 다시 켜야 한다.
 	if (next.syncStart && !syncWasOn && !streaming && obs_frontend_streaming_active()) {
 		obs_log(LOG_INFO, "sync switched on while main stream is live — starting SRT output now");
@@ -397,7 +397,7 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STOPPING:
 		// obs_output_stop 안에서 동기로 온다. 본방과 같이 멈춘다(예약된 재시도도 버린다).
-		// 방송 표시도 여기서 내린다 — STOPPED까지 남겨 두면 그사이 독에 「지금 보내기」가 잠깐 뜬다.
+		// 방송 표시도 여기서 내린다 — STOPPED까지 남겨 두면 그사이 독에 「다시 연결」이 잠깐 뜬다.
 		AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = false; });
 		StreamTarget::Instance().Stop();
 		break;

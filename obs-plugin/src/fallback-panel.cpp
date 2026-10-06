@@ -142,7 +142,7 @@ void FallbackPanel::Render(const StateSnapshot &s)
 		line += QString(" · %1 kbps").arg(static_cast<int>(s.stats.bitrateKbps));
 	status_->setText(line);
 
-	// A5 — 재시도 중이면 진행과 「지금 다시 시도」·「재시도 멈추기」, 멈춰 있고 본방이 나가면 「지금 보내기」.
+	// A5 — 재시도 중이면 진행과 「다시 시도」·「재시도 중지」, 멈춰 있고 본방이 나가면 「다시 연결」.
 	const bool retrying = s.retry.attempt > 0 &&
 			      (s.phase == StreamPhase::Starting || s.phase == StreamPhase::Reconnecting);
 	const bool waiting = retrying && s.retry.nextAt > 0;

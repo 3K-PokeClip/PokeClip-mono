@@ -19,7 +19,7 @@ describe('createHttpBridge', () => {
     await expect(bridge.stopRetry()).resolves.toEqual(unreachable);
   });
 
-  it('「지금 보내기」·「재시도 멈추기」는 본문 없는 POST로 가고 거절 사유를 돌려준다', async () => {
+  it('「다시 연결」·「재시도 중지」는 본문 없는 POST로 가고 거절 사유를 돌려준다', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 202 }))

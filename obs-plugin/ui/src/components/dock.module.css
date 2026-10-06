@@ -226,30 +226,20 @@
 }
 
 /* ---------- 순간 표시 (A4) ---------- */
-.markBox {
-  display: flex;
-  flex-direction: column;
-  gap: var(--pc-space-2);
-  padding-top: var(--pc-space-2);
-  border-top: 1px solid var(--pc-color-border-subtle);
-}
-.markRow {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--pc-space-2);
-}
+/* 카드 맨 아래를 꽉 채운다 — 이름은 왼쪽, 단축키는 버튼 안 오른쪽 */
 .markButton {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--pc-space-2);
-  height: 30px;
+  width: 100%;
+  height: 38px;
   padding: 0 var(--pc-space-3);
   border: 1px solid rgb(var(--pc-point-500-rgb) / 0.45);
   border-radius: var(--pc-radius-md);
   background: var(--pc-color-point-subtle);
   color: var(--pc-color-point-text);
-  font-size: var(--pc-font-size-xs);
+  font-size: var(--pc-font-size-sm);
   font-weight: var(--pc-weight-semibold);
   cursor: pointer;
   transition:
@@ -264,18 +254,40 @@
   opacity: 0.55;
   cursor: default;
 }
-.markHint {
-  font-size: var(--pc-font-size-2xs);
-  color: var(--pc-color-text-muted);
-}
-.kbd {
-  padding: 1px 5px;
-  border: 1px solid var(--pc-color-border-default);
-  border-radius: var(--pc-radius-sm);
+/* 전송 중 카드가 아닐 때(재연결 중) — 분홍은 전송 중의 상태색이라 여기서는 무채색으로 둔다 */
+.markButton[data-tone='neutral'] {
+  border-color: var(--pc-color-border-default);
   background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-primary);
+}
+.markButton[data-tone='neutral']:hover:not(:disabled) {
+  border-color: var(--pc-color-border-strong);
+  filter: none;
+}
+.markButton[data-tone='neutral'] .markKbd {
+  border-color: var(--pc-color-border-default);
+  color: var(--pc-color-text-secondary);
+  opacity: 1;
+}
+.markLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pc-space-2);
+}
+.markKbd {
+  padding: 1px 6px;
+  border: 1px solid rgb(var(--pc-point-500-rgb) / 0.35);
+  border-radius: var(--pc-radius-sm);
   font-family: var(--pc-font-mono);
   font-size: var(--pc-font-size-2xs);
-  color: var(--pc-color-text-secondary);
+  font-weight: var(--pc-weight-medium);
+  opacity: 0.85;
+}
+/* 단축키를 지운 스트리머에게만 — 어디서 다시 정하는지 */
+.markHint {
+  margin: 0;
+  font-size: var(--pc-font-size-2xs);
+  color: var(--pc-color-text-muted);
 }
 
 /* ---------- 오류 알림 ---------- */
@@ -295,27 +307,103 @@
 }
 
 /* ---------- 자동 재시도 (A5) ---------- */
-.retryBox {
-  display: flex;
+/* 재시도 중의 원인 상자 — 원인 아래에 진행 문장을 한 줄 붙인다 */
+.alert[data-stack] {
   flex-direction: column;
-  gap: var(--pc-space-2);
+  gap: 4px;
 }
-.retryLine {
-  font-size: var(--pc-font-size-xs);
-  font-weight: var(--pc-weight-medium);
+.alertNext {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pc-space-2);
   color: var(--pc-color-text-secondary);
   font-variant-numeric: tabular-nums;
 }
-.retryHint {
-  margin: 0;
+/* 아이콘은 문장과 같은 색을 쓴다(currentColor) */
+.alertNextText {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.alertCount {
+  flex: none;
   font-size: var(--pc-font-size-2xs);
-  line-height: var(--pc-line-normal);
   color: var(--pc-color-text-muted);
 }
-.actionRow {
-  display: flex;
-  flex-wrap: wrap;
+.spinIcon {
+  animation: pc-spin 1.4s linear infinite;
+}
+@keyframes pc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinIcon {
+    animation: none;
+  }
+}
+/* 「다시 시도」·「재시도 중지」 — 카드 폭을 똑같이 반씩. minmax(0, …)라 글자 길이가 달라도 폭이 같다 */
+.actionSplit {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--pc-space-2);
+}
+/* 카드 안 동작 버튼 — 높이·모서리·테두리 두께를 「순간 표시」·「연결 해제」와 맞춘다 */
+.actionButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  height: 34px;
+  padding: 0 var(--pc-space-3);
+  border: 1px solid transparent;
+  border-radius: var(--pc-radius-md);
+  font-size: var(--pc-font-size-xs);
+  font-weight: var(--pc-weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--pc-duration-fast) var(--pc-ease-standard),
+    border-color var(--pc-duration-fast) var(--pc-ease-standard),
+    color var(--pc-duration-fast) var(--pc-ease-standard);
+}
+.actionButton[data-block] {
+  width: 100%;
+  height: 38px;
+  font-size: var(--pc-font-size-sm);
+}
+.actionButton:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+/* 재시도 중 카드의 색은 상태색(노랑) 하나다 — 두 버튼은 무채색이고, 먼저 누를 쪽은 밝기와 굵기로만 앞세운다 */
+.actionButton[data-variant='strong'] {
+  border-color: var(--pc-color-border-default);
+  background: var(--pc-color-bg-surface-raised);
+  color: var(--pc-color-text-primary);
+}
+.actionButton[data-variant='strong']:hover:not(:disabled) {
+  border-color: var(--pc-color-border-strong);
+}
+.actionButton[data-variant='neutral'] {
+  border-color: var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-inset);
+  color: var(--pc-color-text-secondary);
+  font-weight: var(--pc-weight-medium);
+}
+.actionButton[data-variant='neutral']:hover:not(:disabled) {
+  border-color: var(--pc-color-border-default);
+  color: var(--pc-color-text-primary);
+}
+.actionButton[data-variant='solid'] {
+  background: var(--pc-color-accent);
+  color: var(--pc-color-text-on-accent);
+}
+.actionButton[data-variant='solid']:hover:not(:disabled) {
+  background: var(--pc-color-accent-hover);
 }
 
 /* ---------- 연결 해제 ---------- */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { REASON } from './copy';
+import { KEY_SUSPECT_HINT, REASON } from './copy';
 import { statusView } from './status';
 import type { BridgeState } from './types';
 
@@ -62,7 +62,8 @@ describe('statusView — 자동 재시도', () => {
     );
     expect(v.title).toBe('재연결 중');
     expect(v.retrying).toBe(true);
-    expect(v.retryLine).toBe('재시도 3번째 · 12초 뒤');
+    expect(v.retryText).toBe('12초 뒤 다시 시도해요');
+    expect(v.retryCount).toBe('3번째');
     expect(v.alert).toBe(REASON.disconnected);
     expect(v.canRetryNow).toBe(true);
     expect(v.canSendNow).toBe(false);
@@ -79,12 +80,13 @@ describe('statusView — 자동 재시도', () => {
       NOW,
     );
     expect(v.title).toBe('연결 재시도 중');
-    expect(v.retryLine).toBe('재시도 1번째 · 접속 중');
+    expect(v.retryText).toBe('다시 연결하는 중이에요');
+    expect(v.retryCount).toBe('1번째');
     expect(v.canRetryNow).toBe(false);
     expect(v.alert).toBe(REASON.bad_path);
   });
 
-  it('거절이 이어지면 키 확인 안내를 덧붙인다', () => {
+  it('거절이 이어지면 원인 자리에 키 확인 안내를 보여 준다', () => {
     const v = statusView(
       state({
         phase: 'starting',
@@ -94,19 +96,21 @@ describe('statusView — 자동 재시도', () => {
       }),
       NOW,
     );
-    expect(v.keyHint).toBe(true);
+    // 문단을 하나 더 쌓지 않고 원인 자리에 대신 싣는다
+    expect(v.alert).toBe(KEY_SUSPECT_HINT);
+    expect(v.alert).not.toBe(REASON.connect_failed);
   });
 
   it('재시도 정보 없이 연결 중이면 그냥 연결 중이다', () => {
     const v = statusView(state({ phase: 'starting', obsStreaming: true }), NOW);
     expect(v.title).toBe('연결 중');
     expect(v.retrying).toBe(false);
-    expect(v.retryLine).toBe('');
+    expect(v.retryText).toBe('');
   });
 });
 
 describe('statusView — 멈춘 뒤의 다음 행동', () => {
-  it('본방이 나가는 중에 멈췄으면 「지금 보내기」를 준다', () => {
+  it('본방이 나가는 중에 멈췄으면 「다시 연결」을 준다', () => {
     const v = statusView(state({ phase: 'error', errorCode: 'connect_failed', obsStreaming: true, canSendNow: true }), NOW);
     expect(v.title).toBe('전송이 멈췄어요');
     expect(v.canSendNow).toBe(true);
@@ -142,7 +146,7 @@ describe('statusView — 멈춘 뒤의 다음 행동', () => {
     expect(v.desc).toBe('다음 방송을 시작하면 다시 전송해요.');
   });
 
-  it('방송 중에 페어링하면 대기 단계에서도 「지금 보내기」를 준다', () => {
+  it('방송 중에 페어링하면 대기 단계에서도 「다시 연결」을 준다', () => {
     const v = statusView(state({ phase: 'idle', obsStreaming: true, canSendNow: true }), NOW);
     expect(v.canSendNow).toBe(true);
     expect(v.title).toBe('PokeClip 전송이 꺼져 있어요');

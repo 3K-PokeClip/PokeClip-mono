@@ -71,7 +71,7 @@ struct StateSnapshot {
 	std::string errorDetail;
 	RetryView retry;
 	bool obsStreaming = false;
-	bool syncStart = true; // 설정 sync_start 사본 — 「지금 보내기」 조건에 쓴다
+	bool syncStart = true; // 설정 sync_start 사본 — 「다시 연결」 조건에 쓴다
 	bool darkTheme = true;
 	StreamStats stats;
 	EncoderChecks checks;
@@ -79,7 +79,7 @@ struct StateSnapshot {
 	MarkStats marks;
 };
 
-// 「지금 보내기」를 보여 줄 상태인가 — 본방은 나가는데 우리 송출은 멈춰 있다(오류로 멈춤 · 재시도 포기 ·
+// 「다시 연결」을 보여 줄 상태인가 — 본방은 나가는데 우리 송출은 멈춰 있다(오류로 멈춤 · 재시도 포기 ·
 // 방송 중에 페어링함). 독·폴백 패널·브리지가 같은 판정을 쓴다.
 inline bool CanSendNow(const StateSnapshot &s)
 {
@@ -92,7 +92,7 @@ inline bool CanSendNow(const StateSnapshot &s)
 	       s.errorCode != "multitrack_video";
 }
 
-// 브리지가 「지금 보내기」 요청을 거절할 사유. 받을 수 있으면 빈 문자열.
+// 브리지가 「다시 연결」 요청을 거절할 사유. 받을 수 있으면 빈 문자열.
 inline const char *SendNowRejection(const StateSnapshot &s)
 {
 	if (s.retry.attempt > 0 && s.retry.nextAt > 0)

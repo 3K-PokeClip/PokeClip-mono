@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import enIni from '../../../data/locale/en-US.ini?raw';
 import koIni from '../../../data/locale/ko-KR.ini?raw';
-import { AUDIO_KIND_LABEL, markToast, REASON, reasonText } from './copy';
+import { AUDIO_KIND_LABEL, KEY_SUSPECT_HINT, markToast, REASON, reasonText } from './copy';
 import type { MarkStats } from './types';
 
 // 브리지가 보내는 사유 코드는 독(copy.ts)과 Qt 폴백(locale/*.ini)이 각자 문구로 바꾼다 —
@@ -48,19 +48,28 @@ describe('사유 문구', () => {
     // bad_path는 주소(DNS)를 못 찾은 것이다 — 예전처럼 「암호를 거절」이라고 하면 엉뚱한 곳을 고치게 된다
     expect(REASON.bad_path).toContain('주소를 찾지 못했어요');
     expect(REASON.bad_path).not.toContain('암호');
-    // 무응답과 거절이 같은 코드라 둘 다 말한다
-    expect(REASON.connect_failed).toContain('응답하지 않거나');
-    expect(REASON.connect_failed).toContain('거절');
+    // 무응답과 거절이 같은 코드다 — 예전처럼 「거절했어요」로 단정하지 않는다(거절이 이어질 때만 키 안내가 따로 나온다)
+    expect(REASON.connect_failed).not.toContain('거절');
     // 끊긴 뒤에는 자동으로 다시 시도한다 — 「재시도를 모두 실패」는 포기했을 때 따로 알린다
     expect(REASON.disconnected).not.toContain('실패');
 
     const koReason = (code: string) => new RegExp(`^Reason\\.${code}="(.*)"$`, 'm').exec(koIni)?.[1];
-    for (const code of ['bad_path', 'connect_failed', 'timeout', 'disconnected']) {
+    for (const code of ['bad_path', 'connect_failed', 'timeout', 'disconnected', 'encoder_active']) {
       expect(koReason(code), code).toBe(REASON[code]);
     }
+    expect(/^Retry\.KeyHint="(.*)"$/m.exec(koIni)?.[1]).toBe(KEY_SUSPECT_HINT);
   });
 
-  it('A5 「지금 보내기」·「재시도 멈추기」 거절 사유를 문구로 바꾼다', () => {
+  it('상태 카드에 쌓이는 원인 문구는 독 폭(300px)에서 두 줄을 넘지 않게 짧다', () => {
+    // 재시도 중에는 제목·설명·원인·진행 줄·버튼이 한 카드에 쌓인다 — 원인이 길면 카드가 글로 덮인다.
+    // 46자는 미리보기에서 잰 값이다(encoder_active 46자가 딱 두 줄). 글자 수는 어림이라, 늘릴 때는 미리보기로 확인한다.
+    for (const code of ['bad_path', 'connect_failed', 'timeout', 'disconnected', 'output_error', 'encoder_active']) {
+      expect(REASON[code].length, code).toBeLessThanOrEqual(46);
+    }
+    expect(KEY_SUSPECT_HINT.length).toBeLessThanOrEqual(46);
+  });
+
+  it('A5 「다시 연결」·「재시도 중지」 거절 사유를 문구로 바꾼다', () => {
     for (const code of ['main_not_live', 'send_unavailable', 'not_retrying']) {
       expect(reasonText(code)).not.toContain(code);
     }

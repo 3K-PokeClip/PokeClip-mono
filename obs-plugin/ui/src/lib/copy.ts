@@ -13,13 +13,13 @@ export const REASON: Record<string, string> = {
   bad_response: '서버 응답이 예상과 달라요.',
   save_failed: '설정을 저장하지 못했어요.',
   no_key: '연결되지 않아 이 방송은 PokeClip으로 전송되지 않아요.',
-  encoder_active: '방송 인코더가 이미 동작 중이라 키프레임 2초를 적용하지 못했어요. 녹화를 멈추거나, 본 방송을 다시 시작하세요.',
+  encoder_active: '키프레임 2초를 적용하지 못했어요. 녹화를 멈추거나 본 방송을 다시 시작하세요.',
   multitrack_video: '멀티트랙 비디오는 지원하지 않아요. 설정 › 방송에서 끄세요.',
   no_stream_output: 'OBS 방송 출력이 준비되지 않았어요.',
   no_video_encoder: '방송 비디오 인코더가 없어요.',
   no_audio_encoder: '방송 오디오 인코더가 없어요.',
   keyint_not_applied: '키프레임 간격 2초를 적용하지 못했어요.',
-  invalid_key: '저장된 키가 올바르지 않아요. 다시 연결하세요.',
+  invalid_key: '저장된 키가 올바르지 않아요. 연결을 해제한 뒤 새 코드를 입력하세요.',
   no_shared_encoder: '방송 인코더를 공유하지 못했어요.',
   output_create_failed: 'SRT 출력을 만들지 못했어요.',
   service_create_failed: 'SRT 서비스를 만들지 못했어요.',
@@ -27,8 +27,8 @@ export const REASON: Record<string, string> = {
   main_stream_failed: '본방이 시작되지 않아 PokeClip 전송도 멈췄어요.',
   // SRT 정지 코드 — 실제 원인대로 적는다(obs-ffmpeg-srt.h). bad_path는 주소(DNS)를 못 찾은 것이고, 서버 무응답과
   // 거절(키 폐기·암호 오류·경로 없음)은 모두 connect_failed라 플러그인에서 가를 수 없다.
-  bad_path: '수신 서버 주소를 찾지 못했어요. 인터넷 연결과 수신 주소를 확인하세요.',
-  connect_failed: '수신 서버에 연결하지 못했어요. 서버가 응답하지 않거나 연결을 거절했어요.',
+  bad_path: '수신 서버 주소를 찾지 못했어요. 인터넷 연결을 확인하세요.',
+  connect_failed: '수신 서버에 연결하지 못했어요.',
   timeout: 'PokeClip 수신 서버가 응답하지 않아요.',
   disconnected: '수신 서버와의 연결이 끊겼어요.',
   invalid_stream: '스트림이 올바르지 않아요.',
@@ -46,7 +46,7 @@ export const REASON: Record<string, string> = {
   mark_not_live: 'PokeClip으로 전송 중일 때만 표시할 수 있어요.',
   mark_too_soon: '방금 표시했어요. 2초 뒤에 다시 누를 수 있어요.',
   mark_unsupported: 'PokeClip 서버가 아직 순간 표시를 받지 않아요.',
-  mark_unauthorized: '서버가 스트림 키를 거절해 표시하지 못했어요. 다시 연결하세요.',
+  mark_unauthorized: '서버가 스트림 키를 거절해 표시하지 못했어요. 연결을 해제한 뒤 새 코드를 입력하세요.',
   mark_rejected: '서버가 표시 요청을 거절했어요.',
   mark_no_broadcast: 'PokeClip이 아직 이 방송을 찾지 못했어요.',
   mark_not_ready: '녹화가 막 시작돼 아직 표시할 자리가 없어요.',
@@ -55,7 +55,7 @@ export const REASON: Record<string, string> = {
   mark_insecure: 'API 주소가 https가 아니라 표시를 보내지 않았어요. 설정 파일의 api_base를 https로 바꾸세요.',
   // 독 전용 — 브리지 요청 자체가 실패했다(플러그인이 멈췄거나 연결이 끊겼다)
   bridge_unreachable: '플러그인과 연결이 끊겼어요. OBS를 다시 시작하세요.',
-  // 독 전용 — 「지금 보내기」·「재시도 멈추기」를 플러그인이 받지 않았다(누르는 사이 상태가 바뀌었다)
+  // 독 전용 — 「다시 연결」·「재시도 중지」를 플러그인이 받지 않았다(누르는 사이 상태가 바뀌었다)
   main_not_live: '본 방송이 나가는 동안에만 보낼 수 있어요.',
   send_unavailable: '지금은 전송을 시작할 수 없어요.',
   not_retrying: '지금은 재시도 중이 아니에요.',
@@ -63,7 +63,7 @@ export const REASON: Record<string, string> = {
 
 // 서버가 살아 있는데 거절이 이어질 때 — 키 폐기·암호 오류·경로 없음은 플러그인에서 가를 수 없어 확인을 권한다.
 export const KEY_SUSPECT_HINT =
-  '수신 서버가 연결을 계속 거절해요. 스트림 키가 폐기됐거나 바뀌었을 수 있어요. PokeClip 웹에서 키를 확인하고, 재시도를 멈춘 뒤 다시 연결하세요.';
+  '수신 서버가 연결을 계속 거절해요. PokeClip 웹에서 스트림 키를 확인하세요.';
 
 export type ToastTone = 'success' | 'warning';
 
