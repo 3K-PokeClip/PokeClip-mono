@@ -14,6 +14,7 @@ Copyright (C) SoraYuki, licensed under GPL-2.0.
 #include <plugin-support.h>
 
 #include <array>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 
@@ -28,6 +29,33 @@ bool IsAac(const char *codec)
 {
 	return codec && std::strcmp(codec, "aac") == 0;
 }
+
+int64_t MsBetween(std::chrono::steady_clock::time_point from, std::chrono::steady_clock::time_point to)
+{
+	return std::chrono::duration_cast<std::chrono::milliseconds>(to - from).count();
+}
+
+int64_t NowEpochMs()
+{
+	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+		.count();
+}
+
+// 재시도 정책의 시간을 몇 배로 빨리 감을지. 배포 빌드는 늘 1이다. 로컬 개발 빌드(macos-local)에서만 환경 변수
+// POKECLIP_RETRY_SCALE을 읽는다 — 65분짜리 정책 표를 실측에서 포기까지 돌려 보기 위해서다.
+double RetryTimeScale()
+{
+#ifdef POKECLIP_DEV_RETRY_SCALE
+	static const double scale = []() {
+		const char *env = std::getenv("POKECLIP_RETRY_SCALE");
+		double value = env ? std::atof(env) : 1.0;
+		return value >= 1.0 ? value : 1.0;
+	}();
+	return scale;
+#else
+	return 1.0;
+#endif
+}
 } // namespace
 
 const char *StopCodeName(int code)
@@ -36,9 +64,11 @@ const char *StopCodeName(int code)
 	case OBS_OUTPUT_SUCCESS:
 		return "";
 	case OBS_OUTPUT_BAD_PATH:
-		return "bad_path"; // SRT: passphrase 불일치(REJ_BADSECRET) 또는 URL 형식
+		return "bad_path"; // SRT: 호스트 이름을 찾지 못함(DNS)·URL 형식 (obs-ffmpeg-srt.h libsrt_setup)
 	case OBS_OUTPUT_CONNECT_FAILED:
-		return "connect_failed"; // 서버가 거절 (streamid·인가)
+		// 서버 무응답과 거절(키 폐기·passphrase 불일치·경로 없음)이 모두 이 코드다 — OBS의 SRT는 비차단으로
+		// 접속해 거절 사유를 신호까지 올리지 않는다.
+		return "connect_failed";
 	case OBS_OUTPUT_INVALID_STREAM:
 		return "invalid_stream";
 	case OBS_OUTPUT_ERROR:
@@ -52,7 +82,7 @@ const char *StopCodeName(int code)
 	case OBS_OUTPUT_ENCODE_ERROR:
 		return "encode_error";
 	case kOutputTimedOut:
-		return "timeout"; // 서버 무응답
+		return "timeout"; // 우리 URL로는 거의 나오지 않는다 — 접속 단계의 결과는 connect_failed·output_error로 덮인다
 	default:
 		return "unknown";
 	}
@@ -76,6 +106,22 @@ bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 	if (IsActive() && !stopRequested_)
 		return true;
 
+	// 새 방송 구간이다 — 예약된 재시도를 버리고 처음부터 센다.
+	CancelRetry();
+	wanted_ = true;
+	everConnected_ = false;
+	attempt_ = 0;
+	rejects_.Reset();
+	outageAt_ = std::chrono::steady_clock::now();
+	if (!BeginAttempt(config, errorCode, false)) {
+		wanted_ = false;
+		return false;
+	}
+	return true;
+}
+
+bool StreamTarget::BeginAttempt(const PluginConfig &config, std::string &errorCode, bool isRetry)
+{
 	Release();
 
 	if (!IsSafeStreamId(config.streamId)) {
@@ -126,12 +172,20 @@ bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 		Release(); // 반쯤 붙은 채로 보내지 않는다 — 트랙이 모자라면 서버의 트랙 번호가 어긋난다
 		return false;
 	}
-	obs_output_set_reconnect_settings(output_, kReconnectRetries, kReconnectDelaySec);
+	// libobs 재연결은 끈다(재시도 0회면 can_reconnect가 거짓 — obs-output.c). 끊기면 stop 신호가 곧바로 오고, 다시
+	// 붙일지는 HandleStop이 정책 표로 정한다. libobs에 맡기면 간격이 1.5배씩 늘어 300초 창을 놓친다.
+	obs_output_set_reconnect_settings(output_, 0, 0);
 
-	AppState::Instance().Mutate([](StateSnapshot &s) {
-		s.phase = StreamPhase::Starting;
-		s.errorCode.clear();
-		s.errorDetail.clear();
+	const bool reconnecting = everConnected_;
+	AppState::Instance().Mutate([&](StateSnapshot &s) {
+		s.phase = reconnecting ? StreamPhase::Reconnecting : StreamPhase::Starting;
+		if (isRetry) {
+			s.retry.nextAt = 0; // 지금 시도 중 — 마지막 실패 사유는 붙을 때까지 남겨 둔다
+		} else {
+			s.errorCode.clear();
+			s.errorDetail.clear();
+			s.retry = {};
+		}
 		s.stats = {};
 	});
 
@@ -142,6 +196,8 @@ bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 	// start 신호는 접속 스레드에서 obs_output_start가 돌아오기 전에도 올 수 있다 — 먼저 세운다.
 	stopWhenConnected_ = false;
 	connecting_ = true;
+	connectedThisOutput_ = false;
+	attemptAt_ = std::chrono::steady_clock::now();
 	if (!obs_output_start(output_)) {
 		connecting_ = false; // 접속 스레드가 뜨지 않았다 — Release()가 접속 결과를 기다리지 않게
 		const char *last = obs_output_get_last_error(output_);
@@ -158,6 +214,21 @@ bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 
 void StreamTarget::Stop(const char *reason)
 {
+	// 방송 구간이 끝났다 — 예약된 재시도부터 버린다. 다음 시도를 기다리던 중이면 접속 중인 출력이 없으므로
+	// 여기서 끝난다(끊긴 출력이 아직 풀리는 중이면 ReleaseWhenStopped가 마저 푼다).
+	const bool wasPending = retryPending_;
+	CancelRetry();
+	wanted_ = false;
+	if (wasPending) {
+		AppState::Instance().Mutate([reason](StateSnapshot &s) {
+			s.phase = reason ? StreamPhase::Error : StreamPhase::Idle;
+			s.errorCode = reason ? reason : "";
+			s.errorDetail.clear();
+			s.retry = {};
+			s.stats.bitrateKbps = 0;
+		});
+		return;
+	}
 	if (!output_)
 		return;
 	stopRequested_ = true;
@@ -186,14 +257,79 @@ void StreamTarget::Stop(const char *reason)
 
 void StreamTarget::ForceStop()
 {
-	bool had = output_ != nullptr;
+	bool had = output_ != nullptr || retryPending_; // 다음 시도를 기다리는 중이면 출력이 없어도 단계는 송출 중이다
+	CancelRetry();
+	wanted_ = false;
 	Release(); // 시그널을 먼저 끊으므로 OnStop이 오지 않는다 — 상태를 여기서 되돌린다
 	if (had)
 		AppState::Instance().Mutate([](StateSnapshot &s) {
 			if (s.phase != StreamPhase::Error)
 				s.phase = StreamPhase::Idle;
+			s.retry = {};
 			s.stats.bitrateKbps = 0;
 		});
+}
+
+void StreamTarget::CancelRetry()
+{
+	retrySeq_++;
+	retryPending_ = false;
+}
+
+bool StreamTarget::RetryNow()
+{
+	if (!retryPending_)
+		return false;
+	obs_log(LOG_INFO, "SRT output: retrying now (skipping the wait)");
+	FireRetry(++retrySeq_); // 먼저 예약한 타이머는 토큰이 달라 아무것도 안 한다
+	return true;
+}
+
+bool StreamTarget::StopRetry()
+{
+	if (retryPending_) {
+		CancelRetry();
+		wanted_ = false;
+		obs_log(LOG_INFO, "SRT output: retry stopped by the streamer");
+		// 마지막 실패 사유(errorCode)는 그대로 둔다 — 왜 멈춰 있는지가 그것이다.
+		AppState::Instance().Mutate([](StateSnapshot &s) {
+			s.phase = StreamPhase::Error;
+			s.retry = {};
+			s.stats.bitrateKbps = 0;
+		});
+		return true;
+	}
+	// 재시도 접속이 진행 중이다 — 접속은 중간에 끊을 수 없으니 평소 정지 경로로 보낸다(붙으면 곧바로 멈추고,
+	// 실패하면 그 코드가 남는다).
+	if (wanted_ && attempt_ > 0 && output_ && !connectedThisOutput_) {
+		obs_log(LOG_INFO, "SRT output: retry stopped by the streamer (attempt in flight)");
+		Stop();
+		return true;
+	}
+	return false;
+}
+
+void StreamTarget::FireRetry(uint64_t seq)
+{
+	if (seq != retrySeq_ || !retryPending_ || !wanted_)
+		return;
+	retryPending_ = false;
+
+	// 설정은 시도마다 새로 읽는다. 키·수신 주소는 송출 단계에서 잠기므로 그사이 바뀌지 않는다.
+	PluginConfig config = ConfigStore::Instance().Get();
+	std::string error;
+	if (BeginAttempt(config, error, true))
+		return;
+	// 그 자리 실패(본방 인코더가 사라짐 등)는 다시 해도 같다 — 그만둔다.
+	obs_log(LOG_WARNING, "SRT output retry could not start: %s", error.c_str());
+	wanted_ = false;
+	AppState::Instance().Mutate([&](StateSnapshot &s) {
+		s.phase = StreamPhase::Error;
+		s.errorCode = error;
+		s.errorDetail.clear();
+		s.retry = {};
+		s.stats.bitrateKbps = 0;
+	});
 }
 
 void StreamTarget::Release()
@@ -354,9 +490,8 @@ void StreamTarget::ConnectSignals()
 	signal_handler_t *sh = obs_output_get_signal_handler(output_);
 	// starting은 받지 않는다 — libobs는 info.start가 돌아온 뒤에 보내므로(obs-output.c obs_output_start) 그새 접속이
 	// 끝나 온 start·stop을 덮는다. Starting은 Start()가 obs_output_start 전에 둔다.
+	// reconnect·reconnect_success도 받지 않는다 — libobs 재연결을 꺼서 오지 않는다. 다시 붙을 때마다 start가 온다.
 	signal_handler_connect(sh, "start", &StreamTarget::OnStart, signalContext_.get());
-	signal_handler_connect(sh, "reconnect", &StreamTarget::OnReconnect, signalContext_.get());
-	signal_handler_connect(sh, "reconnect_success", &StreamTarget::OnReconnectSuccess, signalContext_.get());
 	signal_handler_connect(sh, "stopping", &StreamTarget::OnStopping, signalContext_.get());
 	signal_handler_connect(sh, "stop", &StreamTarget::OnStop, signalContext_.get());
 }
@@ -365,8 +500,6 @@ void StreamTarget::DisconnectSignals()
 {
 	signal_handler_t *sh = obs_output_get_signal_handler(output_);
 	signal_handler_disconnect(sh, "start", &StreamTarget::OnStart, signalContext_.get());
-	signal_handler_disconnect(sh, "reconnect", &StreamTarget::OnReconnect, signalContext_.get());
-	signal_handler_disconnect(sh, "reconnect_success", &StreamTarget::OnReconnectSuccess, signalContext_.get());
 	signal_handler_disconnect(sh, "stopping", &StreamTarget::OnStopping, signalContext_.get());
 	signal_handler_disconnect(sh, "stop", &StreamTarget::OnStop, signalContext_.get());
 }
@@ -394,19 +527,22 @@ void StreamTarget::OnStart(void *data, calldata_t *)
 		s.phase = StreamPhase::Live;
 		s.errorCode.clear();
 		s.errorDetail.clear();
+		s.retry = {};
+	});
+	// 재시도 상태는 UI 스레드 것이다. 이 출력의 stop은 이보다 뒤에 큐에 들어가므로 HandleStop이 늘 이 뒤에 돈다.
+	uint64_t generation = ctx->generation;
+	RunInUiThread([self, generation]() {
+		if (self->generation_ == generation && self->output_)
+			self->OnConnected();
 	});
 }
 
-void StreamTarget::OnReconnect(void *, calldata_t *)
+void StreamTarget::OnConnected()
 {
-	obs_log(LOG_INFO, "SRT output reconnecting");
-	AppState::Instance().Mutate([](StateSnapshot &s) { s.phase = StreamPhase::Reconnecting; });
-}
-
-void StreamTarget::OnReconnectSuccess(void *, calldata_t *)
-{
-	obs_log(LOG_INFO, "SRT output reconnected");
-	AppState::Instance().Mutate([](StateSnapshot &s) { s.phase = StreamPhase::Live; });
+	connectedThisOutput_ = true;
+	everConnected_ = true;
+	attempt_ = 0;
+	rejects_.Reset();
 }
 
 void StreamTarget::OnStopping(void *, calldata_t *)
@@ -433,21 +569,98 @@ void StreamTarget::OnStop(void *data, calldata_t *params)
 
 	std::string detail = lastError ? lastError : "";
 	const char *reason = self->stopReason_.exchange(nullptr);
-	AppState::Instance().Mutate([&](StateSnapshot &s) {
-		if (reason) {
-			// 이유를 들고 멈췄다(본방이 시작되지 않음 등) — 정지 코드보다 그 이유가 스트리머에게 맞는 설명이다.
+	// 그만둘지 다시 시도할지는 UI 스레드가 정한다 — 재시도 상태와 stopRequested_가 UI 스레드 것이고, 여기(접속·송신
+	// 스레드)에서 출력을 다시 시작하면 libobs가 지금 도는 이 스레드를 join하려 든다(obs-ffmpeg-mpegts.c start).
+	RunInUiThread([self, generation, code, detail = std::move(detail), reason]() {
+		self->HandleStop(generation, code, detail, reason);
+	});
+}
+
+void StreamTarget::HandleStop(uint64_t generation, int code, const std::string &detail, const char *reason)
+{
+	// 그새 출력이 바뀌었거나(새 시도) 이미 풀렸다(ForceStop) — 그쪽이 상태를 정했다.
+	if (generation_ != generation || !output_)
+		return;
+	// stop 신호가 온 뒤, 여기 닿기 전에 사유를 든 정지가 들어왔을 수 있다(본방이 그 자리에서 실패).
+	if (!reason)
+		reason = stopReason_.exchange(nullptr);
+
+	const std::string name = StopCodeName(code);
+	const auto now = std::chrono::steady_clock::now();
+	// 아래 ReleaseWhenStopped가 출력을 풀면 깃발도 지워진다 — 먼저 읽는다.
+	const bool requested = stopRequested_;
+	const bool wasConnected = connectedThisOutput_;
+
+	// 우리가 멈췄거나(본방 정지·사유를 든 정지), 방송 구간이 끝났거나, 다시 해도 같은 오류다 — 그만둔다.
+	if (reason || requested || !wanted_ || !IsRetryableStop(name)) {
+		CancelRetry();
+		wanted_ = false;
+		AppState::Instance().Mutate([&](StateSnapshot &s) {
+			if (reason) {
+				// 이유를 들고 멈췄다(본방이 시작되지 않음 등) — 정지 코드보다 그 이유가 스트리머에게 맞는 설명이다.
+				s.phase = StreamPhase::Error;
+				s.errorCode = reason;
+				s.errorDetail.clear();
+			} else {
+				s.phase = code == OBS_OUTPUT_SUCCESS ? StreamPhase::Idle : StreamPhase::Error;
+				s.errorCode = name;
+				s.errorDetail = detail;
+			}
+			s.retry = {};
+			s.stats.bitrateKbps = 0;
+		});
+		ReleaseWhenStopped(generation, kReleasePollAttempts);
+		return;
+	}
+
+	// 붙어 있다 끊겼으면 지금이 「끊긴 순간」이다. 붙지 못한 시도가 이어지는 중이면 처음 끊긴 순간부터 계속 센다.
+	if (wasConnected) {
+		outageAt_ = now;
+		attempt_ = 0;
+		rejects_.Reset();
+	}
+	rejects_.Record(name, MsBetween(attemptAt_, now));
+
+	const double scale = RetryTimeScale();
+	const RetryDecision next = NextRetry(static_cast<int64_t>(MsBetween(outageAt_, now) * scale));
+	if (!next.retry) {
+		obs_log(LOG_WARNING, "SRT output: giving up after %d retries (%s)", attempt_, name.c_str());
+		CancelRetry();
+		wanted_ = false;
+		AppState::Instance().Mutate([&](StateSnapshot &s) {
 			s.phase = StreamPhase::Error;
-			s.errorCode = reason;
-			s.errorDetail.clear();
-		} else {
-			s.phase = code == OBS_OUTPUT_SUCCESS ? StreamPhase::Idle : StreamPhase::Error;
 			s.errorCode = name;
 			s.errorDetail = detail;
-		}
+			s.retry = {};
+			s.retry.gaveUp = true;
+			s.stats.bitrateKbps = 0;
+		});
+		ReleaseWhenStopped(generation, kReleasePollAttempts);
+		return;
+	}
+
+	const int delayMs = static_cast<int>(next.delayMs / scale);
+	attempt_++;
+	retryPending_ = true;
+	const uint64_t seq = ++retrySeq_;
+	const int attempt = attempt_;
+	const bool reconnecting = everConnected_;
+	const bool keySuspect = rejects_.KeySuspect();
+	const int64_t nextAt = NowEpochMs() + delayMs;
+	obs_log(LOG_INFO, "SRT output: retry %d in %d ms (%s)", attempt, delayMs, name.c_str());
+	AppState::Instance().Mutate([&](StateSnapshot &s) {
+		s.phase = reconnecting ? StreamPhase::Reconnecting : StreamPhase::Starting;
+		s.errorCode = name; // 다시 붙을 때까지 독이 원인을 보여 준다
+		s.errorDetail = detail;
+		s.retry.attempt = attempt;
+		s.retry.nextAt = nextAt;
+		s.retry.gaveUp = false;
+		s.retry.keySuspect = keySuspect;
 		s.stats.bitrateKbps = 0;
 	});
-
-	RunInUiThread([self, generation]() { self->ReleaseWhenStopped(generation, kReleasePollAttempts); });
+	RunInUiThreadAfter(delayMs, [this, seq]() { FireRetry(seq); });
+	// 끊긴 출력은 실제로 멈춘 뒤에 푼다. 풀기가 늦어져도 다음 시도(BeginAttempt)가 Release()부터 하므로 새지 않는다.
+	ReleaseWhenStopped(generation, kReleasePollAttempts);
 }
 
 void StreamTarget::ReleaseWhenStopped(uint64_t generation, int attemptsLeft)

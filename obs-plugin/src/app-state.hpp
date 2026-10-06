@@ -51,6 +51,14 @@ struct MarkStats {
 	int64_t lastAt = 0; // 마지막으로 받아들인 누름의 시각(UTC epoch ms)
 };
 
+// A5 — 우리 출력이 끊기거나 붙지 못해 다시 시도하는 진행. attempt가 0이면 재시도 중이 아니다.
+struct RetryView {
+	int attempt = 0;         // 끊긴 뒤 몇 번째 재시도인가(1부터)
+	int64_t nextAt = 0;      // 다음 시도 시각(UTC epoch ms). 0이면 지금 시도 중
+	bool gaveUp = false;     // 정책 시간을 다 써서 멈췄다(phase는 Error)
+	bool keySuspect = false; // 서버가 살아 있는데 거절이 이어진다 — 키 상태 확인 안내
+};
+
 // 독 페이지·폴백 패널이 그리는 유일한 상태 원천. 비밀은 담지 않는다.
 struct StateSnapshot {
 	uint64_t version = 0;
@@ -61,6 +69,7 @@ struct StateSnapshot {
 	StreamPhase phase = StreamPhase::Idle;
 	std::string errorCode;
 	std::string errorDetail;
+	RetryView retry;
 	bool obsStreaming = false;
 	bool darkTheme = true;
 	StreamStats stats;

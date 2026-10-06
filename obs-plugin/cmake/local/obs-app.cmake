@@ -71,9 +71,14 @@ target_link_libraries(plugin-support PRIVATE OBS::libobs)
 function(pokeclip_local_configure_target target)
   target_link_libraries(${target} PRIVATE plugin-support OBS::libobs OBS::obs-frontend-api Qt6::Core Qt6::Widgets)
   target_compile_options(${target} PRIVATE -Wno-quoted-include-in-framework-header)
+  # 아래 두 옵션은 이 로컬 빌드에만 있다 — 배포 빌드에는 들어가지 않는다.
   option(POKECLIP_DEV_LOG_DOCK_URL "개발용: 독 URL(토큰 포함)을 OBS 로그에 남긴다 — 로컬 빌드 전용" ON)
   if(POKECLIP_DEV_LOG_DOCK_URL)
     target_compile_definitions(${target} PRIVATE POKECLIP_DEV_LOG_DOCK_URL)
+  endif()
+  option(POKECLIP_DEV_RETRY_SCALE "개발용: 환경 변수 POKECLIP_RETRY_SCALE로 재시도 정책 시간을 빨리 감는다 — 로컬 빌드 전용" ON)
+  if(POKECLIP_DEV_RETRY_SCALE)
+    target_compile_definitions(${target} PRIVATE POKECLIP_DEV_RETRY_SCALE)
   endif()
 
   set_target_properties(
