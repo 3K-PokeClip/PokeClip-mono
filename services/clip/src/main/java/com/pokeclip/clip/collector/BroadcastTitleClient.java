@@ -13,7 +13,7 @@ import java.util.Map;
 
 /**
  * 방송 목록 한 장의 치지직 제목·카테고리를 수집기에 <b>한 번에</b> 묻는다(POK-259). 수집기는 걷고 있는 방송마다 1분에 한 번 제목을
- * 관측해 쌓고(POK-234 PR-C), {@code GET /internal/broadcast-info/latest?streamIds=}가 방송마다 제목이 있는 마지막 관측을 준다.
+ * 관측해 쌓고(POK-234 PR-C), {@code POST /internal/broadcast-info/latest}가 방송마다 제목이 있는 마지막 관측을 준다.
  *
  * <p><b>표를 직접 읽지 않는다.</b> {@code broadcast_info}는 같은 DB에 있지만 수집기 표다. 서버끼리 서로의 표를 읽지 않는 것이
  * {@code services/README.md}의 규율이다(조각 장부는 계약으로 연 예외다).
@@ -51,7 +51,8 @@ public class BroadcastTitleClient {
             return titles;
         }
         try {
-            CollectorResponse response = collector.get(PATH, Map.of("streamIds", String.join(",", streamIds)));
+            // 본문에 싣는다. 주소에 이으면 128자 번호 100개가 13KB라 수집기 톰캣 요청 줄 한도(8KB)에 걸린다(PR #214 codex)
+            CollectorResponse response = collector.postJson(PATH, mapper.writeValueAsString(Map.of("streamIds", streamIds)));
             if (response.status() != 200) {
                 log.warn("clip.broadcast_title.unavailable cause=status={}", response.status());
                 return titles;

@@ -142,6 +142,20 @@ class BroadcastChatControllerTest extends IntegrationTestSupport {
     }
 
     /**
+     * 쿼리 값에 주소 틀 글자({@code {x}})가 오면 수집기 주소 조립이 던진다. 그것도 503으로 접혀야 한다 — 조립을 보내기 {@code try}
+     * 밖으로 빼면 500이 된다(POK-259에서 보내기를 나눌 때 짚은 자리).
+     */
+    @Test
+    void 쿼리에_주소_틀_글자가_와도_500이_아니다() throws Exception {
+        볼_수_있다("OWNER");
+        COLLECTOR.respondWith("/internal/streams/" + 내_방송 + "/chat-messages", 200, "{\"items\":[]}");
+
+        HttpResponse<String> 응답 = 부른다(내_방송, "chat-messages?from=%7Bx%7D&to=2026-09-01T00:10:00Z");
+
+        assertThat(응답.statusCode()).as(응답.body()).isNotEqualTo(500);
+    }
+
+    /**
      * 🔴 <b>이 카드가 막는 것: 로그인만 하면 남의 방송 채팅을 읽는 것.</b> 「자격 없음」과
      * 「없는 방송」의 본문이 갈리면 방송 번호를 넣어 보는 것만으로 실재를 알 수 있다.
      *

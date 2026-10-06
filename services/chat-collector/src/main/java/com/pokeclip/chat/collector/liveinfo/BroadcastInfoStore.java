@@ -63,6 +63,9 @@ public class BroadcastInfoStore {
      * <b>제목이 있는</b> 첫 줄 하나를 {@code LATERAL}로 고른다. 설정 조회와 라이브 목록이 둘 다 빈 회차는 제목 없이 한 줄이 남는데,
      * 그 줄을 고르면 보이던 제목이 방송 번호로 돌아간다. 카테고리는 고른 줄 것이다(다른 시점 값을 섞지 않는다).
      * {@code BroadcastTitlePlanTest}가 색인을 타는지 잰다.
+     *
+     * <p>한계: 「공백뿐」 판정이 PostgreSQL {@code \s}(로캘에 따라 다름)와 자바 {@code strip}에서 아주 드물게 갈린다. 제목이 자바만 공백으로
+     * 보는 글자(예: 로캘에 따라 U+3000)로만 이루어지면 그 줄이 뽑혀 빈 제목이 되고 clip이 버려 번호가 보인다(앞 관측 제목으로 안 간다).
      */
     static final String LATEST_TITLES = """
             SELECT s.stream_id, i.live_title, i.category

@@ -1326,7 +1326,7 @@ GET /api/clip/broadcasts/{streamId}/segments?startMs=&endMs=     Bearer JWT
 | `vodExpiresAt` | 기한이 지난 방송도 목록에는 그대로 둔다. 영상은 못 봐도 방송 기록은 남는다 |
 | `timelineOriginAt` | **시각 기준점**(POK-255): 이 방송의 카드·조각 ms(`streamTimestampMs`·`window`·`start_pts_ms`)가 0이 되는 절대 시각. 화면은 여기에 ms를 더해 편집본 컷(절대 시각)을 만든다. 값 = 방송 시간(시작 편지 앞 **2분** ~ 종료 편지 뒤 10분, `start_wall_utc` 색인으로 거름) 안 **첫 조각**(seq 순)의 `COALESCE(playback_pdt, start_wall_utc) − start_pts_ms`. 한 재생 회차 안에서는 어느 조각으로 재도 같다(로컬 실방송 135조각 실측 차이 0ms, 벽시계로 재면 9분에 2.1초 흔들림). 🔴 **방송 시작 편지 시각과 다르다**(2026-09-17 실측 32초). 🔴 **장부의 `start_pts_ms`는 방송을 넘어 이어진다** — 그래서 「가장 작은 pts」가 아니라 시작 앞 2분 이후 첫 조각이다(앞 방송 꼬리가 섞이면 그 회차 값이 나온다). **조각이 없거나, 시작 시각을 모르는 방송(종료 편지가 먼저 온 자리표시)이거나, 장부를 못 읽으면 `null`**(목록은 그대로 나간다. 시작 시각이 없으면 아래 경계가 없어 앞 방송 조각이 뽑히므로 재지 않는다). 한계(같은 뿌리): 방송 중 재접속으로 재생 회차가 끊기거나, 같은 키로 재시작 편지가 와 `started_at`이 덮이거나, 끊고 2분 안에 다시 켜면 카드가 수 초 어긋난다(조각마다 바꾸는 것은 별도). 시작 편지와 첫 조각의 관계는 코드로 증명 못 했고 근거는 실측 한 번이다. POK-233 뒤에는 `session_id`로 골라야 한다. 한 장의 방송 전부를 질의 한 번(`unnest` + `LATERAL`) |
 | `thumbnailUrl` | 사진 주소(POK-277, 60분 미리서명). 방송 중이면 1분마다 바뀌는 최신 화면, 끝났으면 최고 점수 카드 장면(없으면 마지막 라이브 화면). 없으면 `null`. 아래 「썸네일」 절 |
-| `title` · `category` | 치지직 방송 제목과 카테고리(POK-259). 수집기가 1분마다 남기는 방송 정보에서 **제목이 있는 마지막 관측**을 고르고, 카테고리는 같은 관측의 값이다(제목을 못 얻은 회차는 건너뛴다. 고르면 보이던 제목이 번호로 돌아간다). 한 장을 수집기에 **한 번에** 묻는다(`GET /internal/broadcast-info/latest`, 수집기 절). **관측이 없거나, 수집기 주소가 비었거나, 수집기가 아프면 둘 다 `null`이고 목록은 그대로 나간다.** 화면은 그때 방송 번호를 보인다. 🔴 수집기가 응답 없이 매달리면 목록이 시한(접속 2초 + 읽기 3초)만큼 늦어진다. clip은 수집기 표를 직접 읽지 않는다(위 「서로의 표를 직접 읽지 않는다」) |
+| `title` · `category` | 치지직 방송 제목과 카테고리(POK-259). 수집기가 1분마다 남기는 방송 정보에서 **제목이 있는 마지막 관측**을 고르고, 카테고리는 같은 관측의 값이다(제목을 못 얻은 회차는 건너뛴다. 고르면 보이던 제목이 번호로 돌아간다). 한 장을 수집기에 **한 번에** 묻는다(`POST /internal/broadcast-info/latest`, 수집기 절). **관측이 없거나, 수집기 주소가 비었거나, 수집기가 아프면 둘 다 `null`이고 목록은 그대로 나간다.** 화면은 그때 방송 번호를 보인다. 🔴 수집기가 응답 없이 매달리면 목록이 시한(접속 2초 + 읽기 3초)만큼 늦어진다. clip은 수집기 표를 직접 읽지 않는다(위 「서로의 표를 직접 읽지 않는다」) |
 
 **카드 한 줄은 통로로 오는 카드 JSON과 칸 하나까지 같다**(`JumpCardListShapeTest`가 두 경로의
 JSON 트리를 맞대어 지킨다). 화면이 같은 것을 두 벌로 처리하지 않게 하려는 것이다.
@@ -3296,7 +3296,7 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
 | `GET /internal/streams/{streamId}/chat-messages?from&to&limit&cursor&kinds&channelId` | **clip** | `X-Internal-Token` 헤더 |
 | `GET /internal/streams/{streamId}/chat-chart?from&to&bucket&channelId` | **clip** | `X-Internal-Token` 헤더 |
 | `GET /internal/streams/{streamId}/broadcast-info?since` | **clip** | `X-Internal-Token` 헤더 |
-| `GET /internal/broadcast-info/latest?streamIds` (POK-259) | **clip**(방송 목록) | `X-Internal-Token` 헤더 |
+| `POST /internal/broadcast-info/latest` (POK-259) | **clip**(방송 목록) | `X-Internal-Token` 헤더 |
 
 🔴 **「부르는 쪽」 칸을 「이미 그렇게 배선돼 있다」로 읽지 마라 — 창구마다 다르다**(2026-09-07 실측).
 **실제로 clip 코드에서 수집기를 부르는 것은 이 넷뿐이다**(POK-234가 만든
@@ -3362,7 +3362,8 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
 
 **제목 창구(`/internal/broadcast-info/latest`, POK-259)는 여러 방송의 마지막 제목을 한 번에 준다.** clip 방송 목록이
 한 장(최대 100개)마다 한 번 부른다. 위 창구는 방송 하나씩이라 한 장에 100번 왕복이 된다.
-`streamIds`는 쉼표로 잇거나 이름을 되풀이한다. 응답은 `{"titles":{"<방송 번호>":{"title":"…","category":"…"|null}}}`이고
+요청은 본문 `{"streamIds":["…"]}`이다. 읽기인데 POST인 것은 방송 번호가 최대 128자라 100개를 주소에 이으면 13KB쯤이 되어
+톰캣 요청 줄 한도(8KB)에 걸리고, 쉼표가 든 번호가 쪼개지기 때문이다(PR #214 codex). 응답은 `{"titles":{"<방송 번호>":{"title":"…","category":"…"|null}}}`이고
 **제목이 있는 관측이 없는 방송은 키가 없다**(모르는 방송도 200). 방송마다 **제목이 있는 마지막 관측**을 고르고(제목이 빈 회차는
 건너뛴다), 카테고리는 같은 관측의 값이다. 제목 앞뒤 공백은 깎는다. **100개를 넘으면 잘라 주지 않고 400 `too_many`**다
 (잘라 주면 뒤 방송 제목이 「없다」로 보인다). 질의 한 번(`unnest` + `LATERAL`)이고 `(stream_id, observed_at)` 색인을 최신부터 탄다

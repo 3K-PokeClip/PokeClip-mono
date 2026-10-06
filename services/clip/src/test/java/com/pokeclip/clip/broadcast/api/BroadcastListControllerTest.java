@@ -608,8 +608,10 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
 
         assertThat(COLLECTOR.callCount()).as("방송마다 묻지 않고 한 장을 한 번에 묻는다").isEqualTo(1);
         assertThat(COLLECTOR.lastPath()).isEqualTo(TITLES);
-        assertThat(java.net.URLDecoder.decode(COLLECTOR.lastQuery(), java.nio.charset.StandardCharsets.UTF_8))
-                .isEqualTo("streamIds=s-b,s-a");
+        // 주소가 아니라 본문에 싣는다(128자 번호 100개면 주소가 톰캣 한도 8KB를 넘는다, PR #214 codex)
+        assertThat(COLLECTOR.lastMethod()).isEqualTo("POST");
+        assertThat(COLLECTOR.lastQuery()).isEmpty();
+        assertThat(COLLECTOR.lastBody()).isEqualTo("{\"streamIds\":[\"s-b\",\"s-a\"]}");
     }
 
     /** 수집기가 제목을 모르는 방송(관측이 아직 없다)은 칸을 빼지 않고 null로 싣는다. 화면은 그때 방송 번호를 보인다. */
