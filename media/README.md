@@ -1286,8 +1286,9 @@ Control API의 교차 출처 허용 기본값 `apiAllowOrigins`가 `['*']`에서
 전제는 아니지만 **버전 문자열을 그대로 적어 둔 곳**이 더 있다. 함께 고친다 —
 [`docs/dev-environment.md`](../docs/dev-environment.md)의 서비스 표,
 [`Dockerfile.mtxhook`](Dockerfile.mtxhook) 주석의 상류 베이스 서술,
-그리고 [`infra/dev-media/compose.yml`](../infra/dev-media/compose.yml)의 상류 이미지 태그
-(그쪽은 임시 데모용이라 본선 핀을 따라가지 않는다 — ADR-040 만료분, 철거 대기).
+그리고 [`infra/dev-media/compose.yml`](../infra/dev-media/compose.yml)의 `image` 줄
+(데모 서버는 유지가 확정돼 제품 `FROM`과 같은 포크 좌표를 글자 그대로 쓴다 — ADR-040
+2026-08-30 추기 "dev-media compose 는 제품 핀과 같이 올린다").
 
 ### 이미지 출처에 묶인 전제 — 우리 포크 라인(`pokeclip`)
 
@@ -1336,7 +1337,8 @@ digest는 불변 좌표다 — 같은 태그를 다시 밀어도 가리키는 �
 **4건이 전부 상류 릴리스에 들어가면**(포크가 필요 없어지면) **포크 전용 장치를 전부
 걷어낸다** — 빠뜨리면 공식 태그에서 포크 전용 단언이 남아 빨간불이 된다. 정리 목록은
 [`version_contract_test.go`](internal/mtxhook/version_contract_test.go)의 `forkPinGuide`에 번호로
-적혀 있다(FROM 복귀 — 공식 이미지도 태그 + digest · `mediaMTXImage` 복귀 · 태그 상수 정리 ·
+적혀 있다(FROM 복귀 — 공식 이미지도 태그 + digest, dev-media `image` 줄도 같은 좌표로 ·
+`mediaMTXImage` 복귀 · 태그 상수 정리 ·
 digest 상수는 공식 이미지 digest로 · 포크 전용 테스트 2종 삭제 · 남는 `forkPinGuide` 참조를
 `versionUpgradeGuide`로 바꾼 뒤 `forkPinGuide` 삭제 · 이 절 삭제).
 

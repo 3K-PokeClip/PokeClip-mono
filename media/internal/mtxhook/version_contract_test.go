@@ -134,6 +134,7 @@ FROM 이 가리키는 이미지가 우리 포크 빌드가 아니다.
 빠뜨리면 공식 태그에서 포크 전용 단언이 남아 빨간불이 된다:
   1. Dockerfile FROM 을 bluenviron/mediamtx:<그 버전>@sha256:<그 이미지 digest> 로 되돌린다
      — 공식 이미지도 태그 + digest 로 고정한다(같은 태그를 다시 밀어도 바뀌지 않게).
+     infra/dev-media/compose.yml 의 image 줄도 FROM 과 같은 공식 좌표(태그 + digest)로 되돌린다.
   2. mediaMTXImage 를 "bluenviron/mediamtx" 로 되돌린다.
   3. pinnedMediaMTXTag 를 그 버전으로 고치거나, upstreamBaseVersion 하나로 합친다.
   4. pinnedMediaMTXDigest 는 그 공식 이미지의 digest 로 고치고

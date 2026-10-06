@@ -67,6 +67,7 @@ RUN mkdir -p /prep/recordings /prep/dvr /prep/hooks
 # 로 되돌리고(공식 이미지도 태그와 digest 를 함께 적는다) version_contract_test 의 **포크 전용
 # 상수·테스트를 전부** 정리한다(목록은 그 파일의 forkPinGuide 에 번호로 적혀 있다). 남는
 # 테스트·도우미의 forkPinGuide 참조를 versionUpgradeGuide 로 바꾼 뒤에 forkPinGuide 를 지운다.
+# infra/dev-media/compose.yml 의 image 줄도 이 FROM 과 같은 공식 좌표로 되돌린다.
 FROM ghcr.io/xodbs1021/mediamtx:v1.21.1-pokeclip.1@sha256:3078e9d73ad2506ccd572dde74da003cfae85f1e1ec985d4121df53218de8a32
 
 # /hooks-bin 은 바이너리 자리, /hooks 는 스풀 볼륨 자리다. 둘을 섞지 않는다 —

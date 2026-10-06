@@ -8,8 +8,8 @@
 
 services:
   mediamtx:
-    image: bluenviron/mediamtx:1.21.1 # 상류 공식 이미지. 본선 핀은 우리 포크 빌드로 옮겨갔고(media/Dockerfile.mtxhook FROM, ADR-050 선결 B) 이 임시 디렉터리는 따라가지 않는다.
-    user: "10002:10002" # 비특권 실행 승계(ADR-039). 공식 이미지를 UID 지정으로 돌려도 정상임은 실측됨
+    image: ghcr.io/xodbs1021/mediamtx:v1.21.1-pokeclip.1@sha256:3078e9d73ad2506ccd572dde74da003cfae85f1e1ec985d4121df53218de8a32 # 제품(media/Dockerfile.mtxhook FROM)과 같은 포크 좌표를 글자 그대로 쓴다 — ADR-040 2026-08-30 추기: 두 핀은 같이 올린다
+    user: "10002:10002" # 비특권 실행 승계(ADR-039). 이 이미지를 UID 지정으로 돌려도 정상임은 실측됨(2026-10-05 로컬 기동)
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
