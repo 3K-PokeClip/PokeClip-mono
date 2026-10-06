@@ -1,6 +1,6 @@
 // 의존성 없는 최소 테스트 러너. OBS를 띄우지 않고 검증할 수 있는 것만 여기서 잰다:
 // 페어링 코드 정규화 · keyint 옵션 제거 · streamid 파싱 · SRT URL · 브리지 보안 규칙(Host·Origin·토큰)·SSE ·
-// 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4).
+// 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4) · 재시도 정책(A5).
 #include "audio-assign.hpp"
 #include "bridge-server.hpp"
 #include "config.hpp"
@@ -8,6 +8,7 @@
 #include "encoder-opts.hpp"
 #include "mark-policy.hpp"
 #include "pairing-code.hpp"
+#include "retry-policy.hpp"
 #include "srt-url.hpp"
 
 #include <httplib.h>
@@ -1155,6 +1156,68 @@ TEST(mark_debounce_two_seconds)
 	CHECK(d.Accept(12000));
 	CHECK(!d.Accept(13000)); // 기준은 마지막으로 받아들인 누름
 	CHECK(d.Accept(14000));
+}
+
+// ───────────────────────── A5 재시도 정책 ─────────────────────────
+
+TEST(retry_interval_follows_policy_table)
+{
+	// 300초 창 안: 5초
+	CHECK(NextRetry(0).retry);
+	CHECK_EQ(NextRetry(0).delayMs, 5000);
+	CHECK_EQ(NextRetry(299999).delayMs, 5000);
+	// 창을 넘긴 뒤 30분: 30초
+	CHECK_EQ(NextRetry(300000).delayMs, 30000);
+	CHECK_EQ(NextRetry(35 * 60000 - 1).delayMs, 30000);
+	// 그 뒤 30분: 60초
+	CHECK_EQ(NextRetry(35 * 60000).delayMs, 60000);
+	CHECK(NextRetry(65 * 60000 - 1).retry);
+	CHECK_EQ(NextRetry(65 * 60000 - 1).delayMs, 60000);
+	// 65분: 포기
+	CHECK(!NextRetry(65 * 60000).retry);
+	CHECK(!NextRetry(24 * 3600000).retry);
+	// 시계가 거꾸로 갈 일은 없지만(단조 시계) 음수여도 창 안으로 친다
+	CHECK_EQ(NextRetry(-1).delayMs, 5000);
+}
+
+TEST(retry_only_for_network_side_stop_codes)
+{
+	for (const char *code : {"disconnected", "connect_failed", "bad_path", "timeout", "output_error"})
+		CHECK(IsRetryableStop(code));
+	// 다시 해도 같은 것 — 인코더·스트림·디스크, 그리고 성공 정지(빈 이름)
+	for (const char *code : {"", "invalid_stream", "encode_error", "unsupported", "no_space", "unknown"})
+		CHECK(!IsRetryableStop(code));
+	// 플러그인이 그 자리에서 내는 사유는 정지 코드가 아니다
+	CHECK(!IsRetryableStop("no_shared_encoder"));
+	CHECK(!IsRetryableStop("main_stream_failed"));
+}
+
+TEST(reject_streak_flags_key_after_three_fast_rejects)
+{
+	RejectStreak s;
+	CHECK(!s.KeySuspect());
+	s.Record("connect_failed", 40);
+	s.Record("connect_failed", 999);
+	CHECK(!s.KeySuspect());
+	s.Record("connect_failed", 12);
+	CHECK(s.KeySuspect());
+
+	// 무응답(접속 타임아웃을 다 씀)은 서버가 죽은 것이지 키 문제가 아니다
+	s.Record("connect_failed", 3000);
+	CHECK(!s.KeySuspect());
+
+	// 다른 코드가 끼면 다시 센다
+	s.Record("connect_failed", 10);
+	s.Record("connect_failed", 10);
+	s.Record("bad_path", 10);
+	s.Record("connect_failed", 10);
+	CHECK(!s.KeySuspect());
+
+	s.Record("connect_failed", 10);
+	s.Record("connect_failed", 10);
+	CHECK(s.KeySuspect());
+	s.Reset();
+	CHECK(!s.KeySuspect());
 }
 
 } // namespace

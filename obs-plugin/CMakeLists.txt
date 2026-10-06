@@ -59,6 +59,8 @@ target_sources(
     src/pairing.hpp
     src/private-file.cpp
     src/private-file.hpp
+    src/retry-policy.cpp
+    src/retry-policy.hpp
     src/srt-target.cpp
     src/srt-target.hpp
     src/srt-url.cpp
