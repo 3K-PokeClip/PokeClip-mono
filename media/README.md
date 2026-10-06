@@ -1322,7 +1322,8 @@ digest는 불변 좌표다 — 같은 태그를 다시 밀어도 가리키는 �
 민다 → `pokeclip-image` 워크플로가 멀티아치 이미지를 GHCR에 올리고 **실행 요약에 `FROM …@sha256:`
 한 줄을 찍는다** → 출처를 확인한다 — 그 실행의 `headSha`와 이미지에서 꺼낸 `/mediamtx`(플랫폼마다)의
 `vcs.revision`(`go version -m`)이 검수한 라인 tip과 같고 `vcs.modified=false`여야 한다 →
-그 값을 `Dockerfile.mtxhook`과 테스트 상수 2개에 옮긴다. 이미지 생성은
+그 값을 `Dockerfile.mtxhook`과 테스트 상수 2개 ·
+`infra/dev-media/compose.yml`의 `image` 줄(같은 좌표 — ADR-040)에 옮긴다. 이미지 생성은
 자동이고 제품 반영은 수동이다 — 핀 교체가 이 절의 재확인을 동반해야 하기 때문이다.
 
 **되감기 ③ 재포장 핀도 같은 때 대조한다.** 재포장 라이브러리(`mediacommon/v2`)의 판이 새 포크
