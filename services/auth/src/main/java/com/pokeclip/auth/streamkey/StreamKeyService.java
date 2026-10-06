@@ -1,6 +1,9 @@
 package com.pokeclip.auth.streamkey;
 
+import com.pokeclip.auth.streamkey.secret.PassphraseRefIssuer;
 import com.pokeclip.auth.streamkey.secret.SecretStore;
+import com.pokeclip.auth.streamkey.secret.StreamKeySecretRetirer;
+import com.pokeclip.auth.streamkey.secret.StreamKeySecrets;
 import com.pokeclip.auth.support.CrockfordBase32;
 import com.pokeclip.auth.support.Sha256;
 import com.pokeclip.auth.user.ActiveUserGuard;
@@ -18,7 +21,6 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Optional;
-import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -34,7 +36,10 @@ public class StreamKeyService {
 
     private final StreamKeyRepository streamKeyRepository;
     private final StreamKeyCreator streamKeyCreator;
+    @StreamKeySecrets
     private final SecretStore secretStore;
+    private final StreamKeySecretRetirer secretRetirer;
+    private final PassphraseRefIssuer refIssuer;
     private final UserRepository userRepository;
     private final ActiveUserGuard activeUserGuard;
     private final SecureRandom random = new SecureRandom();
@@ -64,7 +69,7 @@ public class StreamKeyService {
     private StreamKeyMaterial createOrRead(Long userId) {
         StreamKeyMaterial material = new StreamKeyMaterial(
                 CrockfordBase32.random(random, TOKEN_LENGTH), randomPassphrase());
-        String ref = "streamkey:" + UUID.randomUUID();
+        String ref = refIssuer.issue();
 
         try {
             StreamKey created = streamKeyCreator.create(userId, ref, material);
@@ -122,6 +127,10 @@ public class StreamKeyService {
      * 키 행은 있는데 secret이 없으면 우리 저장소가 어긋난 것이다. 500으로 올린다 —
      * Media 입장에서 "키가 틀림"이 아니라 "판단 불가"이고 조치가 정반대다.
      * RequestIdFilter의 request.failed ERROR가 상관 ID와 함께 잡는다.
+     *
+     * <p>저장소가 답하지 못한 경우(Secrets Manager 스로틀·시간 초과)는 저장소가
+     * {@code SecretStoreUnavailableException}을 던진다. 같은 500이지만 request.failed의 예외 종류로
+     * 「없음」과 「저장소 장애」가 갈린다.
      */
     StreamKeyMaterial materialOf(StreamKey key) {
         return StreamKeyMaterial.deserialize(secretStore.get(key.getPassphraseRef())
@@ -165,18 +174,21 @@ public class StreamKeyService {
         // create가 아니다. REQUIRES_NEW로 부르면 새 트랜잭션이 위의 revokeAlive를
         // 못 봐 부분 유니크 인덱스에 걸린다.
         streamKeyCreator.createInCurrentTransaction(
-                userId, "streamkey:" + UUID.randomUUID(), material);
+                userId, refIssuer.issue(), material);
 
         // 옛 secret 삭제를 커밋 뒤로 미룬다. 커밋 전에 지우면 롤백 시 "옛 키는
         // 살아 있는데 passphrase가 없는" 복구 불능 상태가 된다 — 그 스트리머는
         // 송출도 재발급도 못 한다. 커밋 후면 최악이 아무도 참조하지 않는 고아
         // secret 하나다. 후자를 택했다.
         //
+        // 지우는 곳은 읽기 저장소 하나가 아니라 retire-from의 전부다(POK-272). 이행·병행 중에는
+        // 같은 키의 사본이 PG와 Secrets Manager 양쪽에 있을 수 있다.
+        //
         // 로그도 같은 자리에서 찍는다. 롤백됐는데 "재발급했다"가 남으면
         // 조사에서 거짓 알리바이가 된다(TokenService.logAfterCommit과 같은 이유).
         String staleRef = previous.getPassphraseRef();
         afterCommit(() -> {
-            secretStore.delete(staleRef);
+            secretRetirer.retire(staleRef);
             log.info("auth.streamkey.rotated userId={}", userId);
         });
 

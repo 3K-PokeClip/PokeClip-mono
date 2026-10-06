@@ -82,6 +82,12 @@ services:
       PROFILE_PHOTO_TOKEN_SECRET: ${PROFILE_PHOTO_TOKEN_SECRET:-}
       PROFILE_PHOTO_BASE_URL: ${PROFILE_PHOTO_BASE_URL:-}
       AWS_REGION: ${AWS_REGION:-ap-northeast-2}
+      # 스트림키 암호 저장소(POK-272). 접두는 비면 기동을 거부한다: IAM 정책이 그 접두 안만 허용하고,
+      # 로컬 기본값(pokeclip/local/stream-key/)으로 뜨면 재발급·탈퇴의 Secrets Manager 삭제가 권한 거부로 실패한다.
+      # 🔴 이 줄이 :? 라서 dev .env 에 세 줄이 먼저 들어간 뒤에 코드를 머지한다(자동 배포가 멈춘다).
+      STREAM_KEY_SECRET_STORE_TYPE: ${STREAM_KEY_SECRET_STORE_TYPE:-postgres}
+      STREAM_KEY_SECRET_RETIRE_FROM: ${STREAM_KEY_SECRET_RETIRE_FROM:-postgres}
+      STREAM_KEY_SECRET_REF_PREFIX: ${STREAM_KEY_SECRET_REF_PREFIX:?}
       # 프록시 헤더 신뢰(POK-91). dev는 앞단이 없어 none. 로드밸런서를 붙이는 날 native 로 바꾼다.
       # 기본값이 있어 DeploymentEnvVarsTest의 정규식엔 안 걸리고 「기본값 있는 배포 변수」 명부가 잡는다.
       FORWARD_HEADERS_STRATEGY: ${FORWARD_HEADERS_STRATEGY:-none}
