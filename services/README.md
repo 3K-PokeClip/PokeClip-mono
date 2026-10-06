@@ -3193,7 +3193,8 @@ Media 조정자가 못 읽는다(그 동안 dev-media로 새 키 송출이 안 �
 
 **병행 기간은 이행(④ 통과) 뒤 2주다**(POK-272 코멘트로 확정). 그동안 PG 사본을 둔다. 끝나면 후속 PR이 넷을 한다:
 `retire-from=aws` · PG `secrets`에서 이름이 `streamkey:` 또는 `pokeclip/dev/stream-key/`로 시작하는 행 삭제 · 이행 실행기 철거 ·
-그 행이 0인지 조회한 뒤 ADR-018 표기 변경. `SECRET_STORE_KEY`는 유튜브·치지직 토큰 때문에 남는다.
+그 행이 0인지 조회한 뒤 ADR-018 표기 변경. 실행기를 걷기 직전에 `sync`를 한 번 더 돌려 `retire_failed`로 남은 폐기 사본을 치운다.
+`SECRET_STORE_KEY`는 유튜브·치지직 토큰 때문에 남는다.
 
 **알고 남긴 것**
 
@@ -3202,7 +3203,8 @@ Media 조정자가 못 읽는다(그 동안 dev-media로 새 키 송출이 안 �
   고아는 행이 남아 실행기의 폐기 행 정리가 지운다
 - **재발급 뒤 정리가 실패해도 재발급은 200이다.** 커밋 뒤 콜백의 예외는 스프링이 호출자에게 올려 보내므로, 그대로 두면 성공한
   재발급이 500이 되고 `auth.streamkey.rotated` 감사 줄이 빠진다. 감사 줄을 먼저 찍고 정리 실패는
-  `auth.streamkey.secret.retire_failed userId=… causeType=…` WARN으로 남긴다. 남은 옛 사본은 행이 있어 이행 실행기의 폐기 행 정리가 지운다
+  `auth.streamkey.secret.retire_failed userId=… causeType=…` WARN으로 남긴다. 남은 옛 사본은 병행 기간에는 이행 실행기의 폐기 행 정리가
+  지운다. 실행기를 걷은 뒤에는 지울 장치가 없어 WARN을 보고 손으로 지운다(송출에는 무해하고 비용만 든다)
 - **로그의 DB 층.** 시험에서 루트를 TRACE로 내리면 Hibernate와 PostgreSQL 드라이버가 SQL 매개변수로 비밀
   **이름**을 찍는다. 값은 안 찍힌다. PG 저장소 때부터 같고 운영에서 DEBUG를 안 켜는 것으로 막는다(위 시크릿 절의 원칙)
 - 3초는 목표다. SDK의 중단이 늦을 수 있어 시험이 오차 0.3초로 잰다. 오차를 넘으면 비동기 클라이언트로 바꾼다(아직 필요 없었다)

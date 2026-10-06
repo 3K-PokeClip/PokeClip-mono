@@ -190,7 +190,8 @@ public class StreamKeyService {
         // 🔴 정리가 실패해도 재발급은 이미 끝났다. 커밋 뒤 콜백의 예외는 스프링이 삼키지 않고 호출자에게
         // 올려 보내, 성공한 재발급이 500이 되고 아래 감사 줄도 빠진다. 정리가 원격 호출(Secrets Manager)이
         // 되면서 스로틀·시간 초과로 실제로 나는 갈래다(POK-272 로컬 리뷰 1). 그래서 감사 줄을 먼저 찍고
-        // 정리 실패는 잡아서 WARN으로 남긴다. 남은 옛 사본은 행이 남아 있어 이행 실행기의 폐기 행 정리가 지운다.
+        // 정리 실패는 잡아서 WARN으로 남긴다. 남은 옛 사본은 행이 남아 있어 병행 기간에는 이행 실행기의 폐기 행
+        // 정리가 지운다. 실행기를 걷은 뒤에는 지울 장치가 없다. WARN을 보고 손으로 지운다(송출에는 무해, 비용만 든다).
         String staleRef = previous.getPassphraseRef();
         afterCommit(() -> {
             log.info("auth.streamkey.rotated userId={}", userId);
