@@ -179,6 +179,18 @@ bool StreamTarget::BeginAttempt(const PluginConfig &config, std::string &errorCo
 	obs_output_set_reconnect_settings(output_, 0, 0);
 
 	const bool reconnecting = everConnected_;
+	// 전송 시간과 드롭 수는 방송 구간 단위다 — 붙어 있다 끊긴 뒤의 시도는 출력을 새로 만들어도 이어 센다. 다시 붙자마자
+	// 0으로 보이지 않게 첫 통계(PollStats) 전에 지금 값을 실어 둔다. 비트레이트는 출력마다 새로 잰다.
+	StreamStats carried;
+	if (reconnecting) {
+		const auto sinceStart = std::chrono::steady_clock::now() - startedAt_;
+		droppedBefore_ += lastDropped_;
+		carried.uptimeSec = std::chrono::duration_cast<std::chrono::seconds>(sinceStart).count();
+		carried.droppedFrames = droppedBefore_;
+	} else {
+		droppedBefore_ = 0;
+	}
+	lastDropped_ = 0;
 	AppState::Instance().Mutate([&](StateSnapshot &s) {
 		s.phase = reconnecting ? StreamPhase::Reconnecting : StreamPhase::Starting;
 		if (isRetry) {
@@ -188,7 +200,7 @@ bool StreamTarget::BeginAttempt(const PluginConfig &config, std::string &errorCo
 			s.errorDetail.clear();
 			s.retry = {};
 		}
-		s.stats = {};
+		s.stats = carried;
 	});
 
 	obs_log(LOG_INFO, "starting SRT output → %s:%d (key …%s, passphrase %s)", config.ingestHost.c_str(),
@@ -209,8 +221,12 @@ bool StreamTarget::BeginAttempt(const PluginConfig &config, std::string &errorCo
 		return false;
 	}
 
-	startedAt_ = lastPollAt_ = std::chrono::steady_clock::now();
+	lastPollAt_ = std::chrono::steady_clock::now();
 	lastBytes_ = 0;
+	// 전송 시간의 기준은 이 구간에서 처음 붙은 시도다 — 붙은 뒤에는 다시 잡지 않는다. 붙지 못한 시도가 이어지는
+	// 동안은 시도마다 새로 잡는다(그 시간은 보낸 시간이 아니다).
+	if (!reconnecting)
+		startedAt_ = lastPollAt_;
 	return true;
 }
 
@@ -482,7 +498,8 @@ void StreamTarget::PollStats()
 	StreamStats stats;
 	stats.bitrateKbps = kbps;
 	stats.totalFrames = static_cast<uint64_t>(obs_output_get_total_frames(output_));
-	stats.droppedFrames = obs_output_get_frames_dropped(output_);
+	lastDropped_ = obs_output_get_frames_dropped(output_);
+	stats.droppedFrames = droppedBefore_ + lastDropped_;
 	stats.uptimeSec = std::chrono::duration_cast<std::chrono::seconds>(now - startedAt_).count();
 	AppState::Instance().Mutate([&](StateSnapshot &s) { s.stats = stats; });
 }

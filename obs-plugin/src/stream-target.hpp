@@ -90,9 +90,13 @@ private:
 	std::vector<struct obs_encoder *> ownedAudioEncoders_;
 	std::unique_ptr<SignalContext> signalContext_;
 	uint64_t generation_ = 0;
+	// 전송 시간의 기준 — 이 방송 구간에서 처음 붙은 시도를 시작한 순간. 끊겼다 다시 붙어도 그대로 둔다.
 	std::chrono::steady_clock::time_point startedAt_{};
 	std::chrono::steady_clock::time_point lastPollAt_{};
 	uint64_t lastBytes_ = 0;
+	// 드롭 수도 구간 단위로 센다. 출력은 시도마다 새로 만들어 제 수를 0부터 세므로 앞선 출력들의 합을 들고 간다.
+	int droppedBefore_ = 0;
+	int lastDropped_ = 0; // 지금 출력에서 마지막으로 읽은 수
 
 	// ── A5 재시도 — 모두 UI 스레드 전용 ──
 	// 지금이 본방과 함께 보내야 하는 구간인가. 거짓이면 출력이 멈춰도 다시 시도하지 않는다.

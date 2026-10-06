@@ -14,8 +14,9 @@ function useBitrateHistory(state: BridgeState): number[] {
       setHistory([]);
       return;
     }
-    if (state.stats.uptimeSec <= 0) return; // 첫 통계 전 0 샘플로 선이 바닥에서 튀지 않게
-    setHistory((h) => [...h, state.stats.bitrateKbps].slice(-SPARK_POINTS));
+    // 첫 통계 전 0 샘플로 선이 바닥에서 튀지 않게 — 다시 붙었을 때는 전송 시간이 이어져 있어 시간으로는 못 가린다
+    const kbps = state.stats.bitrateKbps;
+    setHistory((h) => (h.length === 0 && kbps <= 0 ? h : [...h, kbps].slice(-SPARK_POINTS)));
   }, [state.stats.uptimeSec, state.phase]);
   return history;
 }
