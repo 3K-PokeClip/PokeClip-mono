@@ -406,8 +406,8 @@ MediaMTX 녹화 파일(영상 1 + 소리 6)
 (ADR-057 — 0번 소리가 종합 믹스다). 사이드카 프로세스 안에서 메모리로만 만든다. 디스크
 쓰기·자식 프로세스·이미지 변경이 없다(`internal/playback/producer.go` `Remuxer.Produce`).
 
-- **라이브러리 판을 녹화기와 맞췄다.** `github.com/bluenviron/mediacommon/v2` v2.9.3 은
-  MediaMTX 녹화기가 이 파일을 쓸 때 쓴 판이다(포크 `v1.20.1-pokeclip.2` 실행 파일에 박힌 판).
+- **라이브러리 판을 녹화기와 맞췄다.** `github.com/bluenviron/mediacommon/v2` v2.9.5 는
+  MediaMTX 녹화기가 이 파일을 쓸 때 쓴 판이다(포크 `v1.21.1-pokeclip.1` 실행 파일에 박힌 판).
   `TestRemuxMediacommonVersionMatchesRecorderPin` 이 `media/go.mod` 의 핀을 지키고,
   `TestRemuxOutputBytesGolden` 이 산출 바이트를 고정한다.
 - **파트를 다시 자르지 않는다.** 입력 파트 수 = 산출 파트 수이고 `mfra` 도 붙이지 않는다.
@@ -604,7 +604,7 @@ skew(k) = (pdt(k) − pdt(k−1)) − (pos(k) − pos(k−1))
 이미지 태그를 올릴 때마다 아래를 함께 한다(계획 7절 9).
 
 1. 새 포크 실행 파일에 박힌 `mediacommon/v2` 판을 `go version -m <실행 파일>` 로 읽는다.
-2. `media/go.mod` 의 핀(v2.9.3)과 다르면 핀과 `TestRemuxMediacommonVersionMatchesRecorderPin`
+2. `media/go.mod` 의 핀(v2.9.5)과 다르면 핀과 `TestRemuxMediacommonVersionMatchesRecorderPin`
    의 기대 판을 함께 새 판으로 올리고, `internal/playback` 테스트를 다시 돌린다.
    골든 init 바이트(`TestRemuxOutputBytesGolden` 이 고정한 산출)가 바뀌면 배포 때 이어지는 모든 회차의 첫 행
    init 재요청이 아래 알려진 한계 일곱째 행(init CAS `Mismatch`) 경로에 닿는다 — 배포 뒤

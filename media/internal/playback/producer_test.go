@@ -576,7 +576,8 @@ func TestRemuxStopsOnCanceledContext(t *testing.T) {
 // 입력 = testdata 실물 조각, pos = 그 조각 자기 mtxi(평소 경로 — offset 0).
 // 고정값은 이 구현으로 한 번 계산해 박았고, 스파이크 실측 프로그램(계획 68_ 원문, 2026-09-23
 // 71_ ② 실행)이 같은 파일·같은 pos 로 따로 낸 산출과 바이트 단위로 같다(init·조각 sha256 일치).
-// 골든만으로는 버전 변경을 못 잡는다(v2.9.3 ≡ v2.9.4 산출 실측) — 아래 핀 검사가 짝이다.
+// 골든만으로는 버전 변경을 못 잡는다(v2.9.3 ≡ v2.9.4 ≡ v2.9.5 산출 실측 — 출처는 아래 핀 검사
+// 주석). 아래 핀 검사가 짝이다.
 func TestRemuxOutputBytesGolden(t *testing.T) {
 	const (
 		wantInitLen = 1159
@@ -601,9 +602,10 @@ func hexSHA(b []byte) string {
 }
 
 // TestRemuxMediacommonVersionMatchesRecorderPin 은 재포장 라이브러리가 녹화기와 같은 판인지
-// 본다 — 리스크 A4, 뮤테이션 17e. 녹화기(포크 v1.20.1-pokeclip.2 실행 파일, `go version -m`)가
-// 녹화 조각을 쓸 때 쓴 mediacommon/v2 가 v2.9.3 이다. 판이 갈리면 상자 배치 해석이 갈릴 수 있고,
-// 산출 골든은 그 변화를 못 잡는다(v2.9.3 ≡ v2.9.4 산출 바이트 동일 실측 — 계획 68_).
+// 본다 — 리스크 A4, 뮤테이션 17e. 녹화기(포크 v1.21.1-pokeclip.1 실행 파일, `go version -m`)가
+// 녹화 조각을 쓸 때 쓴 mediacommon/v2 가 v2.9.5 이다. 판이 갈리면 상자 배치 해석이 갈릴 수 있고,
+// 산출 골든은 그 변화를 못 잡는다(v2.9.3 ≡ v2.9.4 ≡ v2.9.5 산출 바이트 동일 — v2.9.4 까지는 계획 68_,
+// v2.9.5 는 같은 프로그램을 v2.9.5 로 다시 빌드한 실측 D1r_04, 2026-10-05).
 // 포크 이미지 태그를 올릴 때 이 값과 go.mod 를 함께 고친다(계획 7절 9).
 //
 // 판은 빌드 정보가 아니라 go.mod 에서 읽는다 — 라이브러리 패키지의 테스트 바이너리는 빌드 정보에
@@ -614,7 +616,7 @@ func hexSHA(b []byte) string {
 func TestRemuxMediacommonVersionMatchesRecorderPin(t *testing.T) {
 	const (
 		module        = "github.com/bluenviron/mediacommon/v2"
-		recorderBuilt = "v2.9.3"
+		recorderBuilt = "v2.9.5"
 	)
 	var required string
 	for _, line := range strings.Split(string(readGoMod(t)), "\n") {

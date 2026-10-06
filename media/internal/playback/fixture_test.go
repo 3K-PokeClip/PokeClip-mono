@@ -20,10 +20,11 @@ import (
 //
 //	segment_4s.mp4       320x240 영상 1 + 소리 1, 파트 4개 — 상류 MediaMTX 1.19.3 녹화(2026-08-01, fmp4meta/testdata 와 같은 blob)
 //	segment_tail_2s.mp4  320x240 영상 1 + 소리 1, 꼬리 조각 — 상류 1.19.3, 위와 다른 녹화(avcC 가 다르다)
-//	segment_1v6a.mp4     1080p 영상 1 + 소리 6, 파트 1개 — 포크 v1.20.1-pokeclip.2 녹화(2026-09-23, 71_ ④) — 운영 형상(1v+6a) 실물
+//	segment_1v6a.mp4     1080p 영상 1 + 소리 6, 파트 1개 — 포크 v1.21.1-pokeclip.1 녹화(2026-10-05, 71_ ④ 형상) — 운영 형상(1v+6a) 실물
 //
 // 포크 태그를 올릴 때는 새 포크로 녹화한 조각으로 segment_1v6a 를 교체하고 실물 판독 테스트를
-// 다시 돌린다(계획 7절 9) — 녹화기 쪽 mtxi 형식 변경은 그것으로만 잡힌다.
+// 다시 돌린다(계획 7절 9) — 녹화기 쪽 mtxi 형식 변경은 그것으로만 잡힌다. 파트 1개짜리 조각은
+// `-re` 없이 밀어 넣은 송출에서 녹화기가 드리프트 리셋으로 일찍 닫은 것이다.
 const (
 	fixture4s   = "testdata/segment_4s.mp4"
 	fixtureTail = "testdata/segment_tail_2s.mp4"

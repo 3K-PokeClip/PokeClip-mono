@@ -60,7 +60,7 @@ func TestReadMtxiReadsRecorderValues(t *testing.T) {
 	}{
 		{fixture4s, "5204c7b4d7234bb0a751a18ac619856c", 1, 5_987_981_859, 1785564965619581782},
 		{fixtureTail, "cf6d2201dc9543b9a580e6cd1b8a26f5", 4, 17_992_993_197, 1785564871899441660},
-		{fixture1v6a, "bcde804ea09b4dac8c141d9917b6c255", 1, 5_804_988_662, 1790155256803838571},
+		{fixture1v6a, "5b688a667c8f4f73bb2a7b306987ed9f", 1, 19_876_258_503, 1791202855617159413},
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
@@ -107,7 +107,7 @@ func TestTrackEndsReportsEachKeptTrackEnd(t *testing.T) {
 	}{
 		{fixture4s, 4_012_411_111, 3_994_013_605},   // 361117 · 176136 틱
 		{fixtureTail, 1_973_844_444, 2_042_993_197}, // 177646 · 90096 틱(마지막 파트는 소리만)
-		{fixture1v6a, 228_344_444, 139_319_728},     // 20551 · 6144 틱
+		{fixture1v6a, 257_066_667, 139_319_728},     // 23136 · 6144 틱
 	}
 	for _, tt := range tests {
 		t.Run(tt.file, func(t *testing.T) {
