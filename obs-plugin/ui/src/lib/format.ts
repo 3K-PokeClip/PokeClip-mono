@@ -16,6 +16,27 @@ export function isCompletePairingCode(formatted: string): boolean {
   return formatted.replace('-', '').length === 8;
 }
 
+// 붙여넣은 글에서 페어링 코드를 고른다. 앞뒤 공백이나 안내 문구가 섞여 와도(「 KQ4M-7X2P」·「코드: KQ4M-7X2P」) 받는다.
+//   1. 하이픈으로 이은 4자-4자 — 웹이 복사해 주는 모양이라 가장 믿을 만하다
+//   2. 붙은 8자 · 공백 하나로 나뉜 4자 4자 — 여럿이면 숫자가 든 것을 먼저(낱말 「PokeClip」을 코드로 집지 않게)
+//   3. 그런 토막이 없으면 입력할 때처럼 앞에서부터 유효한 글자를 모은다
+const HYPHENATED_CODE = /(?<![0-9A-Za-z])([0-9A-Za-z]{4})\s*[-–—]\s*([0-9A-Za-z]{4})(?![0-9A-Za-z])/;
+const LOOSE_CODE = /(?<![0-9A-Za-z])([0-9A-Za-z]{4})\s?([0-9A-Za-z]{4})(?![0-9A-Za-z])/g;
+
+export function extractPairingCode(pasted: string): string {
+  const complete = (raw: string) => {
+    const code = formatPairingInput(raw);
+    return isCompletePairingCode(code) ? code : '';
+  };
+  const hyphenated = HYPHENATED_CODE.exec(pasted);
+  const fromHyphen = hyphenated ? complete(hyphenated[1] + hyphenated[2]) : '';
+  if (fromHyphen) return fromHyphen;
+
+  const tokens = [...pasted.matchAll(LOOSE_CODE)].map((m) => m[1] + m[2]).filter((raw) => complete(raw));
+  const token = tokens.find((raw) => /\d/.test(raw)) ?? tokens[0];
+  return token ? complete(token) : formatPairingInput(pasted);
+}
+
 export function formatUptime(totalSec: number): string {
   const sec = Math.max(0, Math.floor(totalSec));
   const h = Math.floor(sec / 3600);

@@ -1,6 +1,6 @@
 import { useRef, useState } from 'preact/hooks';
 import { reasonText } from '../lib/copy';
-import { formatPairingInput, isCompletePairingCode } from '../lib/format';
+import { extractPairingCode, formatPairingInput, isCompletePairingCode } from '../lib/format';
 import type { ActionResult } from '../lib/types';
 import styles from './dock.module.css';
 import { Button } from './ui';
@@ -43,6 +43,15 @@ export function PairCard({ onPair }: { onPair: (code: string) => Promise<ActionR
           value={code}
           onInput={(e) => {
             setCode(formatPairingInput((e.currentTarget as HTMLInputElement).value));
+            setError('');
+          }}
+          onPaste={(e) => {
+            // 브라우저는 붙여넣은 글을 maxLength(9)로 먼저 자른다 — 앞에 공백 하나만 있어도 코드 끝 글자가 잘려
+            // 붙여넣기가 안 되는 것처럼 보인다. 클립보드 글을 직접 받아 코드만 고른다.
+            const text = e.clipboardData?.getData('text') ?? '';
+            if (!text) return;
+            e.preventDefault();
+            setCode(extractPairingCode(text));
             setError('');
           }}
           placeholder="XXXX-XXXX"
