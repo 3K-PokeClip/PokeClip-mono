@@ -4,12 +4,14 @@
 # 실행되는 명령인데 MediaMTX 이미지는 scratch 라 셸도 curl 도 없다(실측). 훅이 부를 수 있는 것은 컨테이너 안에
 # 놓인 정적 바이너리뿐이라, 베이스 이미지 위에 mtxhookwrite 를 COPY 한 층만 얹는다.
 # **이 파일이 더하는 것은 훅 바이너리와 권한 층뿐이고 ENTRYPOINT 도 베이스 것을 물려받는다.**
-# 서버 바이너리 자체의 수정(슬레이트 무녹화)은 여기가 아니라 아래 FROM 이 가리키는
-# 포크 빌드 안에 들어 있다 — 그 사정은 FROM 바로 위 주석에 있다.
+# 서버 바이너리 자체의 수정(상류에 아직 머지되지 않은 4건)은 여기가 아니라 아래 FROM 이
+# 가리키는 포크 빌드 안에 들어 있다 — 그 사정은 FROM 바로 위 주석에 있다.
 #
-# **버전 고정의 유일한 집이 아래 FROM 이다.** compose 의 image: 가 build: 로 바뀌면서
-# pin 위치가 여기로 옮겨왔다 — 버전을 올릴 때는 이 줄만 고치고, media/README.md 의
+# **제품 버전 고정의 기준이 아래 FROM 이다.** compose 의 image: 가 build: 로 바뀌면서
+# pin 위치가 여기로 옮겨왔다 — 버전을 올릴 때는 이 줄을 고치고, media/README.md 의
 # "MediaMTX 버전업 체크리스트"를 따른다.
+# 함께 고칠 자리(version_contract_test 의 상수 ·
+# infra/dev-media/compose.yml 의 image 줄 등)도 그 체크리스트가 안내한다.
 
 # 빌드 스테이지의 Go 버전은 media/go.mod 의 go 지시자와 같은 1.26 으로 유지한다.
 FROM golang:1.26-alpine AS build
@@ -41,26 +43,35 @@ RUN mkdir -p /prep/recordings /prep/dvr /prep/hooks
 
 # 베이스는 **우리 포크 빌드**다 — 상류 공식 이미지가 아니다.
 #
-# 왜: 슬레이트(송출이 끊겼을 때 서버가 대신 내보내는 대기 화면)가 녹화 파일로도 저장되는데,
-# 그걸 끄는 스위치 `alwaysAvailableRecorded` 가 상류에 아직 없다. 제안은 상류 PR #6182(원저자 PR #5767 을
-# 우리가 리베이스·보강해 승계, 2026-09-03)이고 머지 시점은 상류에 달려 있다. 기다리는 동안 우리 라인이
-# 그 수정을 싣는다 — ADR-050 선결 B 결정(ⓑ 자체 빌드 선행).
+# 왜: 상류에 아직 머지되지 않은 우리 수정 4건을 제품에서 먼저 쓰기 위해서다. 셋은 상류에서
+# 심사 중이고(bluenviron/mediamtx#6206 · bluenviron/mediamtx#6259 · bluenviron/mediamtx#6261)
+# 하나는 아직 게시 전이다. 라인이 올라탄 상류 베이스에 들어올 때까지 우리 라인이 싣는다 —
+# ADR-050 선결 B 결정(ⓑ 자체 빌드 선행). 4건의 제품 효과와 되돌리면 잃는 것은
+# media/README.md 의 "이미지 출처에 묶인 전제" 절에 있다.
 #
-# 무엇이 들어 있나: 상류 main(f82bc23, 2026-09-01) + PR #5767 리베이스 + 정적 소스 갭 2건 수정 + 회귀 테스트(= 상류 PR #6182 의 내용).
-# 베이스 이동으로 우리가 상류에 머지시킨 #6154(hlsSegmentCount 검증)·#6155(훅 종료 코드 보고)가 베이스에 들어 있다.
-# 상류 릴리스 문자열은 그대로 1.20.1 이지만 베이스 커밋은 이동했다(e175003 → f82bc23) — README 의
-# 준버전업 규약대로 이동 구간이 닿는 전제만 표적 재확인했다(기록은 README "재검증 기록").
+# 무엇이 들어 있나: 상류 v1.21.1(04825598) + 수정 4건 + 라인 인프라(이미지 워크플로·문서).
+# 예전 포크가 싣던 슬레이트 무녹화 스위치(bluenviron/mediamtx#6182)는 v1.21.0 에 머지돼 라인에서
+# 뺐다. 상류 릴리스 문자열이 1.20.1 → 1.21.1 로 바뀐 진짜 버전업이라 README 의 전제 9곳을 전수
+# 재확인했다(기록은 README "1.20.1 → 1.21.1 재검증 기록").
 #
 # 어떻게 만들어지나: xodbs1021/mediamtx 의 `pokeclip` 라인에 `*-pokeclip.*` 태그를 밀면
-# 워크플로가 멀티아치 이미지를 GHCR 에 올리고 실행 요약에 digest 를 찍는다. 그 값을 여기 붙인다.
+# 워크플로가 멀티아치 이미지를 GHCR 에 올리고 실행 요약에 digest 를 찍는다. 그 값을 여기 붙인다 —
+# 붙이기 전에 출처를 확인한다(version_contract_test 의 forkPinGuide).
+# infra/dev-media/compose.yml 의 image 줄도 이 FROM 과 같은 좌표로 바꾼다(ADR-040).
 #
 # **태그와 digest 를 함께 적는다.** 태그는 사람이 읽는 이름이고, digest 는 불변 좌표다
 # (같은 태그를 다시 밀어도 이 줄이 가리키는 이미지는 바뀌지 않는다).
 #
-# 상류에 머지되면: 이 FROM 을 `bluenviron/mediamtx:<그 버전>` 으로 되돌리고
-# version_contract_test 의 **포크 전용 상수·테스트를 전부** 정리한다(목록은 그 파일의
-# forkPinGuide 에 번호로 적혀 있다). 경로 설정의 `alwaysAvailableRecorded` 는 그대로 둔다.
-FROM ghcr.io/xodbs1021/mediamtx:v1.20.1-pokeclip.2@sha256:704e9e2c7c3248953294ae80e0b0e1382d168b7c26d7999d7560e2f77aac2556
+# 상류에 일부 머지된 수정은 그 수정이 포함된 베이스로 옮긴 뒤에만 라인에서 뺀다
+# (베이스를 유지하면 수정도 유지한다). 릴리스 문자열이 같으면 준버전업 표적 재확인 뒤 `.N`을
+# 올리고, 새 릴리스로 옮기면 `v<새 버전>-pokeclip.1`로 발행하며 `upstreamBaseVersion` 갱신과
+# 전제 9곳 전수 재확인을 한다.
+# 4건이 전부 상류 릴리스에 들어가면 이 FROM 을 `bluenviron/mediamtx:<그 버전>@sha256:<digest>`
+# 로 되돌리고(공식 이미지도 태그와 digest 를 함께 적는다) version_contract_test 의 **포크 전용
+# 상수·테스트를 전부** 정리한다(목록은 그 파일의 forkPinGuide 에 번호로 적혀 있다). 남는
+# 테스트·도우미의 forkPinGuide 참조를 versionUpgradeGuide 로 바꾼 뒤에 forkPinGuide 를 지운다.
+# infra/dev-media/compose.yml 의 image 줄도 이 FROM 과 같은 공식 좌표로 되돌린다.
+FROM ghcr.io/xodbs1021/mediamtx:v1.21.1-pokeclip.1@sha256:3078e9d73ad2506ccd572dde74da003cfae85f1e1ec985d4121df53218de8a32
 
 # /hooks-bin 은 바이너리 자리, /hooks 는 스풀 볼륨 자리다. 둘을 섞지 않는다 —
 # 같은 디렉토리에 두면 볼륨 마운트가 바이너리를 가린다.

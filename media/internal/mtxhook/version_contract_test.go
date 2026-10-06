@@ -2,7 +2,7 @@ package mtxhook
 
 // 이 파일은 MediaMTX **버전 드리프트 방지 장치**다.
 //
-// 버전을 고정하는 자리는 media/Dockerfile.mtxhook 의 FROM 한 곳뿐이며 그것이 설계 의도다.
+// 제품 버전 고정의 기준은 media/Dockerfile.mtxhook 의 FROM 이며 그것이 설계 의도다.
 // 문제는 "1.19.3 이라서 참인 사실"에 기대는 코드·설정·문서가 그 바깥에 흩어져 있다는 것이다.
 // 그 전제가 새 버전에서 깨져도 **아무 오류가 나지 않는다** — 훅은 fire-and-forget 이라
 // 실행되지 않아도 무징후이고, 길이 측정은 틀린 값을 조용히 기록한다.
@@ -26,12 +26,12 @@ import (
 // **이 값만 바뀌는 것(.1 → .2)은 우리 수정이 바뀐 것이지 버전업이 아니다** — 그래서 이
 // 값이 어긋났을 때의 안내는 forkPinGuide(이미지 발행 절차)이지 9개 전제 재확인이 아니다.
 // 단, 같은 릴리스 안에서 상류 베이스 커밋이 이동한 경우는 준버전업이며 README 규약의 표적 재확인을 따른다.
-const pinnedMediaMTXTag = "v1.20.1-pokeclip.2"
+const pinnedMediaMTXTag = "v1.21.1-pokeclip.1"
 
 // upstreamBaseVersion 은 우리 포크 빌드가 올라타 있는 상류 MediaMTX 버전이다.
 // **아래 9개 전제를 짊어지는 상수는 이것 하나다** — 이 값을 고치는 행위가 곧 "9개 전제를
 // 새 버전에서 재확인했다"는 서명이고, 그때만 versionUpgradeGuide 가 안내로 나간다.
-const upstreamBaseVersion = "1.20.1"
+const upstreamBaseVersion = "1.21.1"
 
 // pinnedMediaMTXDigest 는 FROM 이 가리키는 이미지의 불변 좌표다.
 //
@@ -40,14 +40,14 @@ const upstreamBaseVersion = "1.20.1"
 // 그 좌표가 조용히 사라지거나 다른 값으로 바뀌는 것 — 즉 "핀이 풀린 상태"의 발견이다.
 // 닻을 태그에서 digest 로 옮긴 근거는 ADR-050 선결 B. 이미지를 새로 발행했다면 워크플로
 // 실행 요약이 찍어 주는 값을 여기에 옮겨 적는다.
-const pinnedMediaMTXDigest = "sha256:704e9e2c7c3248953294ae80e0b0e1382d168b7c26d7999d7560e2f77aac2556"
+const pinnedMediaMTXDigest = "sha256:3078e9d73ad2506ccd572dde74da003cfae85f1e1ec985d4121df53218de8a32"
 
 // mediaMTXImage 는 버전을 고정하는 베이스 이미지 이름이다. 같은 Dockerfile 에 빌드
 // 스테이지 FROM(golang:...)이 따로 있으므로 이 이름을 포함한 FROM 만 대상으로 삼는다.
 //
-// **상류 공식 이미지가 아니라 우리 포크 빌드다.** 슬레이트(대기 화면) 무녹화 스위치가
-// 상류에 아직 없어서, 머지될 때까지 우리 라인이 그 수정을 싣는다 — 자세한 사정은 Dockerfile
-// 주석과 media/README.md 의 "이미지 출처에 묶인 전제" 절에 있다.
+// **상류 공식 이미지가 아니라 우리 포크 빌드다.** 상류에 아직 머지되지 않은 우리 수정
+// 4건을, 라인이 올라탄 상류 베이스에 들어올 때까지 우리 라인이 싣는다 — 자세한 사정은
+// Dockerfile 주석과 media/README.md 의 "이미지 출처에 묶인 전제" 절에 있다.
 const mediaMTXImage = "xodbs1021/mediamtx"
 
 // dockerfileRel 은 저장소 루트 기준 경로다. 상대 경로 방식은 cmd/mtxhookwrite 의
@@ -89,39 +89,63 @@ const versionUpgradeGuide = `
     에서 기동 자체가 실패한다(POK-79 E7). → 새 버전 기본 설정의 CWD 쓰기 지점을 확인하고,
     기동 로그에 "failed to save"·"permission denied" 가 없는지 본다.
  9. media/README.md 전제 표 9행  (닻: "302 cookieCheck")
-    HLS 첫 요청의 302 cookieCheck 는 1.19.3 에도 있던 동작이다(이번에 처음 체크리스트화).
+    HLS 첫 요청의 302 cookieCheck 는 1.19.3 에도 있던 동작이다(1.20.1 전환 때 처음 체크리스트화).
     버전별 델타만 다르다 — 1.20.1: plain HTTP 쿠키 중단(Partitioned 통합)·세션 쿼리 폴백(만료 401).
+    1.21.1: 세션 수명을 서버가 관리한다 — 세션이 살아 있는데 muxer 가 닫히면 최대 30초 404,
+    세션이 없으면 401(본문 "session not found"), CORS 는 요청 Origin 을 그대로 돌려준다(Vary: Origin).
     이 행은 서빙 경계 상시 리스크라 롤백해도 걷어내지 않는다. 델타 서술만 그 버전 값으로 갱신한다.
 `
 
 // forkPinGuide 는 "버전"이 아니라 **"어느 이미지냐"** 가 어긋났을 때의 안내다.
 //
-// 위 9곳이 MediaMTX 버전에 묶인 전제라면, 이것은 이미지 출처에 묶인 전제 하나다:
-// 이 이미지에는 상류에 아직 없는 슬레이트 무녹화 수정이 들어 있다. 상류 공식 이미지로
-// 되돌리면 **대기 화면이 다시 녹화되어 저장소로 올라간다 — 오류도 로그도 없이.**
+// 위 9곳이 MediaMTX 버전에 묶인 전제라면, 이것은 이미지 출처에 묶인 전제다:
+// 이 이미지에는 상류에 아직 머지되지 않은 우리 수정 4건이 들어 있다. 상류 공식 이미지로
+// 되돌리면 그중 둘의 효과가 사라지고, 훅 실패 보고는 **사라져도 오류도 로그도 내지 않는다.**
 const forkPinGuide = `
 FROM 이 가리키는 이미지가 우리 포크 빌드가 아니다.
 
-이 이미지에만 있는 것: 슬레이트(송출이 끊겼을 때 서버가 대신 내보내는 대기 화면) 구간을
-녹화에서 빼는 스위치 alwaysAvailableRecorded. 상류 제안은 PR #5767 이고 아직 머지 전이다.
-공식 이미지로 되돌리면 그 스위치가 사라져 대기 화면이 조용히 저장소로 올라간다.
+이 이미지에만 있는 것 — 상류 v1.21.1 위의 미머지 수정 4건
+(media/README.md 의 "이미지 출처에 묶인 전제" 절):
+  - bluenviron/mediamtx#6206  설정 리로드와 훅 로깅 사이의 데이터 경합 수정
+  - bluenviron/mediamtx#6259  모든 훅 명령의 실패를 로그에 남긴다
+  - bluenviron/mediamtx#6261  CertLoader.Close() 가 watch() 의 끝을 기다린다
+  - (상류 미게시)             훅 출력을 서버 로그로 돌리는 설정 — 기본 꺼짐, 제품 설정에 키 없음
+상류 공식 이미지(bluenviron/mediamtx:1.21.1)로 되돌리면 runOnOffline·runOnRecordSegmentComplete
+의 실패가 다시 로그 없이 지나가고(bluenviron/mediamtx#6259), 로거를 다시 만드는 리로드에서
+훅 로깅과의 데이터 경합이 돌아온다(bluenviron/mediamtx#6206). 나머지 둘은 지금 설정에서
+차이가 없다 — CertLoader 를 만들지 않고(TLS·MoQ 꺼짐), 출력 설정은 꺼져 있다.
 
 새 이미지를 발행했다면:
   1. xodbs1021/mediamtx 의 pokeclip 라인에 커밋하고 *-pokeclip.* 태그를 민다.
   2. pokeclip-image 워크플로가 멀티아치 이미지를 올리고 실행 요약에 digest 를 찍는다.
-  3. 그 tag·digest 를 media/Dockerfile.mtxhook 의 FROM 과 이 파일의 상수 2개에 함께 옮긴다.
+  3. digest 를 옮기기 전에 출처를 확인한다 — 그 워크플로 실행 기록의 headSha 가 검수한 라인
+     tip 과 같고, 이미지에서 꺼낸 /mediamtx(플랫폼마다, docker create · docker cp)의
+     go version -m 이 vcs.revision=<그 tip> · vcs.modified=false 여야 한다.
+  4. 그 tag·digest 를 media/Dockerfile.mtxhook 의 FROM 과 이 파일의 상수 2개에 함께 옮긴다.
+  5. infra/dev-media/compose.yml 의 image 줄도 같은 좌표(태그+digest 글자 그대로)로 바꾼다
+     — ADR-040 2026-08-30 추기: 두 핀은 같이 올린다.
+  6. ③ 재포장 핀을 대조한다 — media/README.md 의 "포크 태그를 올릴 때 — ③ 재포장 핀 대조".
 
-상류에 PR #5767 이 머지됐다면(= 포크가 필요 없어졌다면) 아래를 전부 정리한다.
+상류 main 에만 일부 머지됐다면, 수정이 포함된 상류 커밋으로 베이스를 옮겨 준버전업 표적
+재확인을 마친 뒤 중복 수정을 빼고 .N 을 올려 위 절차로 다시 낸다(베이스를 유지하면 수정도 유지한다).
+새 상류 릴리스로 옮기는 경우에는 v<새 버전>-pokeclip.1 로 발행하고 upstreamBaseVersion 갱신과
+전제 9곳 전수 재확인을 함께 한다.
+4건이 전부 상류 릴리스에 들어갔다면(= 포크가 필요 없어졌다면) 아래를 전부 정리한다.
 빠뜨리면 공식 태그에서 포크 전용 단언이 남아 빨간불이 된다:
-  1. Dockerfile FROM 을 bluenviron/mediamtx:<그 버전> 으로 되돌린다.
+  1. Dockerfile FROM 을 bluenviron/mediamtx:<그 버전>@sha256:<그 이미지 digest> 로 되돌린다
+     — 공식 이미지도 태그 + digest 로 고정한다(같은 태그를 다시 밀어도 바뀌지 않게).
+     infra/dev-media/compose.yml 의 image 줄도 FROM 과 같은 공식 좌표(태그 + digest)로 되돌린다.
   2. mediaMTXImage 를 "bluenviron/mediamtx" 로 되돌린다.
   3. pinnedMediaMTXTag 를 그 버전으로 고치거나, upstreamBaseVersion 하나로 합친다.
-  4. pinnedMediaMTXDigest 상수와 TestPinnedMediaMTXDigestMatchesDockerfile 을 지운다
-     (공식 이미지는 태그 pin 을 쓰던 기존 관례로 돌아간다).
-  5. TestPinnedTagCarriesUpstreamBaseVersion 과 TestPinContractRejectsUnusedForkStageBypass,
-     그리고 이 안내(forkPinGuide)를 지운다 — 전부 포크 전용이다.
-  6. media/README.md 의 "이미지 출처에 묶인 전제" 절을 걷어낸다.
-경로 설정의 alwaysAvailableRecorded 는 그대로 둔다 — 상류 파라미터 이름이 같다.
+  4. pinnedMediaMTXDigest 는 그 공식 이미지의 digest 로 고치고
+     TestPinnedMediaMTXDigestMatchesDockerfile 은 남긴다(그 실패 안내는 versionUpgradeGuide 로).
+  5. TestPinnedTagCarriesUpstreamBaseVersion 과 TestPinContractRejectsUnusedForkStageBypass 를
+     지운다 — 둘 다 포크 전용이다. regexp import 는 이 둘 말고 쓰는 곳이 없어 함께 지운다.
+  6. 남는 테스트·도우미의 forkPinGuide 참조를 모두 versionUpgradeGuide 로 바꾼 뒤
+     이 안내(forkPinGuide)를 지운다 — 먼저 지우면 undefined: forkPinGuide 로 컴파일이 깨진다.
+  7. media/README.md 의 "이미지 출처에 묶인 전제" 절을 걷어낸다.
+끝으로 남는 포크 서술을 저장소 루트에서 찾아 고친다:
+  git grep -n -F -e -pokeclip. -e xodbs1021 -e 포크 -- media infra docs
 `
 
 // 고정 자리(Dockerfile 의 FROM)와 이 파일의 상수가 어긋나면 빨간불이 된다.

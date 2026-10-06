@@ -51,7 +51,7 @@ docker compose up -d --build
 |---|---|---|
 | postgres:17 | 5432 | 3번: 스키마 v0 마이그레이션은 여기에 (M1 2단계) |
 | redis:7.4 | 6379 | 3번: 키·TTL·pub/sub 설계 자리 |
-| media (MediaMTX 1.20.1 + 훅 바이너리) | UDP 8890 (SRT) · 1935 (RTMP) · 8888 (LL-HLS) | 1번: Media Origin 자리. 버전 고정은 `media/Dockerfile.mtxhook`의 `FROM`. **비특권 UID 10002로 실행**(POK-79) — 실행 계정 정본도 같은 Dockerfile의 `USER` |
+| media (MediaMTX 1.21.1 + 훅 바이너리) | UDP 8890 (SRT) · 1935 (RTMP) · 8888 (LL-HLS) | 1번: Media Origin 자리. 버전 고정은 `media/Dockerfile.mtxhook`의 `FROM`. **비특권 UID 10002로 실행**(POK-79) — 실행 계정 정본도 같은 Dockerfile의 `USER` |
 | media-stub (nginx) | 8080 | 2번: 플레이어 개발용 정적 세그먼트 (`infra/compose/stub/README.md`) |
 | segment-indexer | (포트 없음) | 1번: 녹화 세그먼트를 감지해 `stream_segments`에 기록하는 사이드카 (`media/README.md`) |
 
@@ -422,4 +422,4 @@ ERROR  Failed to proxy http://localhost:8082/api/auth/me AggregateError
 
 - 파라미터(4s/0.5s/900개): ADR-020 · 재생 규약: 계약3 (플레이어는 **catch-up 끄기** 필수)
 - 이 환경은 로컬 전용 — AWS 배포(프라이빗+NLB, ADR-021)는 별도 IaC로 진행
-- 멘토 데모용 AWS 임시 서버는 `infra/dev-media/`(기한부 — 2026-08-24 만료 후 디렉토리째 삭제, 팀 공용 아님)
+- 멘토 데모용 AWS 임시 서버는 `infra/dev-media/`(유지 확정 — ADR-040 2026-08-30 추기, 팀 공용 아님)
