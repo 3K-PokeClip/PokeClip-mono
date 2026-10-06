@@ -116,8 +116,8 @@ MediaMTX가 이벤트마다 컨테이너 안의 작은 명령을 실행하고(`m
 사이드카는 그 파일을 따라 읽는다. 켜 둔 훅은 3종이다 —
 `runOnOnline`·`runOnOffline`(세션 붙음/끊김) + `runOnRecordSegmentComplete`(조각 닫힘).
 
-- 구명칭 `runOnReady`는 **쓰지 않는다.** v1.19.3·v1.20.1에서 그것은 `runOnAvailable`로 매핑되며
-  "읽기 가능" 축이지 세션 축이 아니다.
+- 구명칭 `runOnReady`는 **쓰지 않는다.** v1.19.3·v1.20.1·v1.21.1에서 그것은 `runOnAvailable`로
+  매핑되며 "읽기 가능" 축이지 세션 축이 아니다.
 - 설정 자리: [`infra/compose/mediamtx.yml`](../infra/compose/mediamtx.yml)의 `pathDefaults`
   (이 블록은 `all_others`에도 상속된다).
 
@@ -1241,14 +1241,47 @@ CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리�
 | 3 | `media/README.md` — 훅 채널 절<br>(닻: `구명칭 runOnReady`) | 구명칭 `runOnReady`는 `runOnAvailable`("읽기 가능" 축)로 매핑되며 세션(Online) 축이 아니다. 그래서 쓰지 않는다 | 3·4는 같은 사실이다. `docker compose logs media \| head -50`에서 deprecated/unknown 파라미터 WARN을 본다. 훅 3종 이름(`runOnOnline`·`runOnOffline`·`runOnRecordSegmentComplete`)이 WARN 없이 살아 있는지가 핵심 |
 | 4 | `media/internal/mtxhook/event.go` — `Kind` 주석<br>(닻: `runOnAvailable 로 매핑`) | 위와 같은 사실을 코드 쪽에 적어 둔 것 | 위 3번과 함께 한 번에 확인한다 |
 | 5 | `media/internal/fmp4meta/probe.go`<br>(닻: `트랙 중 최대 길이`) | `moov/mvhd`(파일 전체 길이가 적힌 상자)의 duration이 "트랙 중 최대 길이"와 일치한다. 이게 어긋나면 인덱스의 `duration_ms`가 조용히 틀린다 | 새 버전이 떨어뜨린 세그먼트를 `ffprobe`(이 코드와 무관한 독립 구현)로 재고, `ProbeDurationMS` 결과와 100ms 안에서 맞는지 대조한다 |
-| 6 | `media/internal/fmp4meta/probe_test.go` + `testdata/`<br>(닻: `채취: MediaMTX`) | 픽스처 3종이 **1.19.3이 `recordPath`로 직접 떨어뜨린 원본**이다(1.20.1 산출물과 박스 배치 동일 확인 — 2026-08-28, 재채취 불요). 검증 대상이 MediaMTX의 박스 배치라서 재인코딩본으로는 대체할 수 없다 | 5번 대조가 어긋났을 때만 손댄다 — 새 버전 산출물로 픽스처를 다시 채취하고 오라클(ffprobe 실측값)도 함께 갱신한다. 어긋나지 않으면 그대로 둔다 |
+| 6 | `media/internal/fmp4meta/probe_test.go` + `testdata/`<br>(닻: `채취: MediaMTX`) | 픽스처 3종이 **1.19.3이 `recordPath`로 직접 떨어뜨린 원본**이다(1.20.1 산출물과 박스 배치 동일 확인 — 2026-08-28, 1.21.1 산출물도 동일 — 2026-10-05, 재채취 불요). 검증 대상이 MediaMTX의 박스 배치라서 재인코딩본으로는 대체할 수 없다 | 5번 대조가 어긋났을 때만 손댄다 — 새 버전 산출물로 픽스처를 다시 채취하고 오라클(ffprobe 실측값)도 함께 갱신한다. 어긋나지 않으면 그대로 둔다 |
 | 7 | `media/internal/recording/settle.go`<br>(닻: `업스트림 기본값 recordPartDuration`) | 업스트림 기본값 `recordPartDuration` = 1s. 쓰기와 쓰기 사이 공백을 "다 썼다"로 오해하지 않으려면 공백의 2배는 기다려야 하므로, 그 2배가 `SEGMENT_SETTLE_WAIT` 2s의 근거다 | 새 태그의 업스트림 기본 설정 파일(`mediamtx.yml`)에서 `recordPartDuration` 값을 확인한다. **1s보다 커졌으면 `SEGMENT_SETTLE_WAIT`를 그 2배로 올린다** — 안 올리면 절반짜리 파일을 완성으로 판정한다 |
 | 8 | `media/Dockerfile.mtxhook`<br>(닻: `USER 10002:10002`) | **MediaMTX가 루트FS·CWD에 쓰지 않는다.** 비root(UID 10002)로 도니까 쓰려는 순간 실패한다. 우리 설정은 `moq: no`라 참이지만, `moq`/`webrtc`/`rtsps`를 켜며 `auto.key`류 자동 생성 경로를 쓰면 비root에서 기동 자체가 실패한다(POK-79 실험 E7) | 새 버전 **기본 설정**에서 CWD에 파일을 쓰는 지점이 늘었는지 본다. 실물 확인은 기동 로그에 `failed to save`·`permission denied`가 뜨는지 — `docker compose logs media \| grep -iE 'permission denied\|failed to save'`가 0건이어야 한다 |
-| 9 | HLS 서빙 경계<br>(닻: `302 cookieCheck`) | **HLS 첫 요청은 302 `cookieCheck` 리다이렉트를 돈다 — 1.19.3에도 있던 동작이며 이번(1.20.1 전환)에 처음 체크리스트화했다**(우리 2026-08-17 결정 문서·v1.19.3 원문 대조). **버전별 델타**: 1.20.1은 plain HTTP에서 일반 쿠키를 중단하고 **Partitioned 쿠키(HTTPS 전용)로 통합**, HTTP에선 쿠키 미회신 시 **`?session=` 쿼리로 폴백**(만료 시 401 — 실측)·iOS UA 400 분기 제거. CDN(Bearer) 경로는 302를 우회한다 | CDN·서명 쿠키·매니페스트 TTL 경계에서 실측 — 캐시가 302·Set-Cookie를 어떻게 다루는지, **HTTP 오리진에서 세션 쿼리가 캐시 키를 오염시키는지**. 이 행은 버전 특정이 아니라 **서빙 경계 상시 리스크**다 — 롤백해도 걷어내지 않고 델타 서술만 그 버전 값으로 갱신한다. ADR-050 선결 A |
+| 9 | HLS 서빙 경계<br>(닻: `302 cookieCheck`) | **HLS 첫 요청은 302 `cookieCheck` 리다이렉트를 돈다 — 1.19.3에도 있던 동작이며 이번(1.20.1 전환)에 처음 체크리스트화했다**(우리 2026-08-17 결정 문서·v1.19.3 원문 대조). **버전별 델타**: 1.20.1은 plain HTTP에서 일반 쿠키를 중단하고 **Partitioned 쿠키(HTTPS 전용)로 통합**, HTTP에선 쿠키 미회신 시 **`?session=` 쿼리로 폴백**(만료 시 401 — 실측)·iOS UA 400 분기 제거. 1.21.1은 **세션 수명을 서버가 관리**한다 — 세션이 살아 있는데 muxer(한 경로의 HLS 재생목록과 세그먼트를 만드는 MediaMTX 안의 부품 — 송출이 끊기면 닫힌다)가 닫히면 30초 동안 404, 그 뒤와 세션이 없을 때는 401(본문 `session not found`), CORS(다른 출처(Origin)의 웹 페이지가 응답을 읽어도 되는지 서버가 헤더로 알려 주는 브라우저 규칙)는 `*` 대신 요청 Origin을 돌려주고 `Vary: Origin`을 붙인다(실측 — 아래 1.21.1 재검증 기록). CDN(Bearer) 경로는 302를 우회한다 | CDN·서명 쿠키·매니페스트 TTL 경계에서 실측 — 캐시가 302·Set-Cookie를 어떻게 다루는지, **HTTP 오리진에서 세션 쿼리가 캐시 키를 오염시키는지**. 이 행은 버전 특정이 아니라 **서빙 경계 상시 리스크**다 — 롤백해도 걷어내지 않고 델타 서술만 그 버전 값으로 갱신한다. ADR-050 선결 A |
 
 **1.19.3 → 1.20.1 재검증 기록 (2026-08-28)**: 기존 8곳 전항 확인 + 9번 신설(체크리스트화) — ①`all_others` 송출로 훅 3종 실발화(스풀 기록) ②`shellquote.Split` 후 `expandEnv` 순서 불변(`cmd_os.go:16→22`) ③④`runOnReady` deprecated 별칭 생존(`conf/path.go:354`)·기동 WARN 0 ⑤1.20.1 실산출물 mvhd 4.117s = 최대 트랙 길이 일치 ⑥박스 배치 동일(ftyp·moov·(moof·mdat)×N — 픽스처 유지) ⑦`recordPartDuration` 기본 1s 불변(`conf/path.go:376`) ⑧UID 10002로 녹화 기록·권한 오류 0(+상류 read-only FS 복원 커밋 `c9f003f`). 부수: 상류 `a56c635`가 우리가 겪은 설정 API 데드락을 해소.
 
 **준버전업 재확인 기록 (2026-09-03, `.1`→`.2`, 상류 베이스 e175003→f82bc23 13커밋)**: 이동 구간이 닿는 전제만 표적 재확인 — ②`shellquote.Split`(16행) 후 조각별 `expandEnv`(21~22행) 순서 불변, 파일은 #6156에서 `cmd_os.go`→`cmd_os_other.go`로 개명 ③④훅 이름 5종 존치·`runOnReady` 별칭 매핑 유지(`conf/path.go:351~364, 967~972`), 기동 WARN 0 ⑦`recordPartDuration` 기본값 1s(소스 `path.go:376` + 기동 후 `pathdefaults/get` 실측) ⑤⑥면제 — `internal/recorder` 이동 구간 diff 0(`record`·`formatprocessor` 경로는 존재하지 않음) ⑧`.2` compose 기동 로그에 권한 오류 0 · 추가로 `authInternalUsers` 기본 두 항목이 새 베이스 샘플과 동일(정규화 YAML 대조), playback 기본 비활성(`global/get` 실측). 스모크: 훅 3종 실발화(online 1·segcomplete 4·offline 1), #6155 신동작 확인(훅 비0 종료가 `runOnOnline command exited: command exited with code 1`로 보고), 익명 read 302 cookieCheck→200. 발행 이미지 격리 rig(GHCR digest 기준): 8축 전부 통과(유휴 무녹화·RTSP 송출 녹화 시작·동결·재개·정적 소스·오프라인 PATCH 동결·런타임 등록·SRT), 판정 대상 산출물 13개 전부 640x360(슬레이트 1920x1080 0건 — 일부러 슬레이트를 녹화하는 대조군 `pub1`은 지문 대상에서 제외), 기동 로그 `v1.20.1-pokeclip.2`. 포크 전량 테스트는 66패키지 중 63 통과, 3패키지(webrtc ICE 후보·mpegts/rtp 멀티캐스트 UDP)는 우리 커밋 없는 상류 원본 트리에서도 동일 실패 — 호스트 네트워크 환경 의존으로 제외.
+
+**1.20.1 → 1.21.1 재검증 기록 (2026-10-05)**: 진짜 버전업이라 9곳을 전수 확인했다. 측정 이미지는
+`ghcr.io/xodbs1021/mediamtx:v1.21.1-pokeclip.1@sha256:3078e9d7…8a32`(인덱스 digest
+— amd64 `2f14a8b3…` · arm64 `96c37c0a…`, 런타임 실측은 arm64)이고, 트리는 상류
+v1.21.1(`04825598`) + 수정 4건, 실행 파일에 박힌 판은 mediacommon v2.9.5 · go-mp4 v1.7.3이다
+(`go version -m`). 소스 대조는 옛 베이스 `f82bc23` → 라인 tip `62a9683d`로 했다.
+①`conf.go:1136`이 `pathDefaults`를 먼저 복사(`path.go:434-437`) — `all_others` 경로 송출
+3회에 훅 3종 실발화(스풀 online · segcomplete · offline, 사이드카 `reason` 5 전량)
+②`cmd_os_other.go:16` `shellquote.Split` → `:22` 조각별 `expandEnv` 순서 불변
+(수정 6이 더한 줄은 31–32 · 46행) ③④`runOnReady` deprecated 별칭 · `RunOnAvailable` 매핑
+유지(`conf/path.go:362 · 980`), 기동 로그 deprecated · unknown WARN 0
+⑤`internal/recorder` 이동 구간 diff 0 — 실측 녹화 39개에서 ffprobe 트랙 최대 길이와 장부
+`duration_ms`(go-mp4 v1.7.3) 차 최대 1.0ms ⑥같은 39개의 배치가 ftyp · moov · (moof ·
+mdat)×N(픽스처 유지) ⑦`recordPartDuration` 기본 1s(`path.go:387` + `pathdefaults/get`
+실측) ⑧UID 10002로 녹화(파일 소유 10002:10002) · 권한 오류 0 ⑨그대로인 것은 302 `cookieCheck` · 쿠키
+속성(`HttpOnly; Secure; SameSite=None; Partitioned`) · 쿠키 없는 `?session=` 폴백 200이고,
+바뀐 것은 델타 4가지다 — 세션 수명을 서버가 관리(bluenviron/mediamtx#6239), 살아 있는 세션에서 muxer가 닫히면
+30초 동안 404(bluenviron/mediamtx#6240 — 실측: 송출이 끊기고 muxer가 닫힌 뒤 30초 404, 이어서 401),
+세션 없음 401의 본문이 `session not found`(bluenviron/mediamtx#6241), CORS가 요청 Origin을
+돌려주고 `Vary: Origin`을 붙임(bluenviron/mediamtx#6200 · bluenviron/mediamtx#6201).
+무활동 만료 검사는 10초 주기라 만료는 마지막 요청 뒤 30–40초 사이다(실측: 35초 쉰 세션 200, 45초 쉰 세션 401). 부수:
+`authInternalUsers` 기본 두 항목이 새 베이스 샘플과 주석까지 같다(정규화 YAML 대조).
+Control API의 교차 출처 허용 기본값 `apiAllowOrigins`가 `['*']`에서 `[]`로
+바뀌었다(bluenviron/mediamtx#6165). 제품 설정은 이 키를 적지 않아 다른 출처의 브라우저
+페이지가 API 응답을 읽지 못한다 — 실측: Origin을 붙인 `/v3/paths/list`에 `.2`는
+`Access-Control-Allow-Origin: *`를 붙이고 새 이미지는 붙이지 않는다. 사이드카처럼
+서버에서 부르는 호출은 영향이 없다. LL-HLS
+표지(`CAN-BLOCK-RELOAD` · `EXT-X-PART` · GAP 채움을 뺀 실제 세그먼트 3개 이상
+`#EXTINF:4.00000`) 성립, `PART-HOLD-BACK=1.25000`(기록만). 사이드카 관측(`/v3/paths/list`)
+형상 그대로 · `mtxstate_poll_failed` 0. 재접속 합성에서 `hook_break_consumed`의 seq가
+`is_discontinuity=true` 행과 같다. 녹화기 WAR
+`sample of track 2 received too late, discarding`이 송출 연결마다 1줄 나오는데, 같은 송출에서
+`v1.20.1-pokeclip.2`도 같은 줄을 낸다(A/B 실측 — 소스도 같은 줄).
 
 전제는 아니지만 **버전 문자열을 그대로 적어 둔 곳**이 더 있다. 함께 고친다 —
 [`docs/dev-environment.md`](../docs/dev-environment.md)의 서비스 표,
@@ -1258,36 +1291,93 @@ CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리�
 
 ### 이미지 출처에 묶인 전제 — 우리 포크 라인(`pokeclip`)
 
-위 9곳이 **MediaMTX 버전**에 묶인 전제라면, 이것은 **어느 이미지냐**에 묶인 전제 하나다.
+위 9곳이 **MediaMTX 버전**에 묶인 전제라면, 이것은 **어느 이미지냐**에 묶인 전제다.
 
 `FROM`이 가리키는 것은 상류 공식 이미지가 아니라 우리 포크 빌드
-`ghcr.io/xodbs1021/mediamtx`다. 이 이미지에만 있는 것은 **슬레이트(송출이 끊겼을 때 서버가
-대신 내보내는 대기 화면) 구간을 녹화에서 빼는 스위치** `alwaysAvailableRecorded`이며,
-상류 제안(PR #6182, 원저자 PR #5767 승계)은 아직 머지 전이다. 결정 근거는 ADR-050 선결 B(ⓑ 자체 빌드 선행).
+`ghcr.io/xodbs1021/mediamtx`다. 상류 v1.21.1(`04825598`) 위에 **상류에 아직 머지되지 않은
+우리 수정 4건**을 얹었다. 결정 근거는 ADR-050 선결 B(ⓑ 자체 빌드 선행)다. 예전 포크가 싣던
+슬레이트 무녹화 스위치 `alwaysAvailableRecorded`(bluenviron/mediamtx#6182)는 v1.21.0에
+머지돼 라인에서 뺐다 — 이제 상류 공식 기능이다.
+
+4건은 아래와 같다. 첫 열의 번호는 우리 상류 기여 트랙의 번호라 위 전제 9곳의 번호와 다르다 —
+전제와 섞일 수 있는 자리에서는 "수정 9"처럼 적는다.
+
+| 수정 | 상류 | 제품에서 하는 일 | 상류 공식 이미지로 되돌리면 |
+|---|---|---|---|
+| 0b(가드 v2) — 설정 리로드와 훅 로깅 사이의 데이터 경합 수정 | bluenviron/mediamtx#6206 (심사 중) | 로거를 다시 만드는 리로드(로그 설정 변경) 때 돌던 훅이 끝나기를 기다린 뒤 로거를 다시 만든다. 그때 `waiting for running hooks` INF 한 줄이 남는다. 제품 훅 `mtxhookwrite`는 잠금 대기 상한이 200ms라 그 대기는 짧다 | 그 리로드에서 훅 로깅과의 데이터 경합이 돌아온다(상류 메인테이너가 버그로 인정 — 2026-09-20) |
+| 9 — 모든 훅 명령의 실패를 로그에 남긴다 | bluenviron/mediamtx#6259 (심사 중) | `runOnOffline`·`runOnRecordSegmentComplete`가 실패하면 `… command exited: …` 한 줄이 남는다. `runOnOnline`은 상류 1.21.1도 남긴다 | 두 훅의 실패가 다시 **오류도 로그도 없이** 지나간다 |
+| 10 — `CertLoader.Close()`가 `watch()`의 끝을 기다린다 | bluenviron/mediamtx#6261 (심사 중) | 없음 — 제품·dev-media는 TLS·MoQ를 켜지 않아 CertLoader를 만들지 않는다 | 차이 없음 |
+| 6 — 훅 출력을 서버 로그로 돌리는 설정 | 상류 미게시 | 없음 — 기본 꺼짐이고 제품 설정에 키가 없다. 켜기는 이 이미지 교체와 섞지 않고 후속 PR에서 한다(아래 「절차」 1) | 키가 없는 동안은 차이 없음 |
 
 | 전제 | 깨지면 무슨 일이 나나 | 어떻게 재확인하는가 |
 |---|---|---|
-| `FROM`이 우리 포크 빌드를 가리킨다<br>(닻: `pokeclip`) | 공식 이미지로 되돌리면 스위치가 사라져 **대기 화면이 다시 녹화되어 저장소로 올라간다 — 오류도 로그도 없이** | 기동 로그 첫 줄의 버전 문자열이 `v…-pokeclip.N`인지 본다(`docker compose logs media \| head -1`). 기계 방어는 `TestPinnedMediaMTXDigestMatchesDockerfile` |
+| `FROM`이 우리 포크 빌드를 가리킨다<br>(닻: `pokeclip`) | 공식 이미지로 되돌리면 위 표 넷째 열의 손실이 생긴다 — 수정 9의 손실은 **오류도 로그도 없이** 일어난다 | 기동 로그 첫 줄의 버전 문자열이 `v…-pokeclip.N`인지 본다(`docker compose logs media \| head -1`). 기계 방어는 `TestPinnedMediaMTXDigestMatchesDockerfile` |
 
-**핀은 태그와 digest를 함께 적는다.** 태그(`v1.20.1-pokeclip.2`)는 사람이 읽는 이름이고,
+**핀은 태그와 digest를 함께 적는다.** 태그(`v1.21.1-pokeclip.1`)는 사람이 읽는 이름이고,
 digest는 불변 좌표다 — 같은 태그를 다시 밀어도 가리키는 이미지가 바뀌지 않는다. 그래서
 버전 대조 테스트도 둘 다 본다(`pinnedMediaMTXTag`·`pinnedMediaMTXDigest`).
 
 **새 이미지를 만들 때**: `xodbs1021/mediamtx`의 `pokeclip` 라인에 커밋 → `*-pokeclip.*` 태그를
 민다 → `pokeclip-image` 워크플로가 멀티아치 이미지를 GHCR에 올리고 **실행 요약에 `FROM …@sha256:`
-한 줄을 찍는다** → 그 값을 `Dockerfile.mtxhook`과 테스트 상수 2개에 옮긴다. 이미지 생성은
+한 줄을 찍는다** → 출처를 확인한다 — 그 실행의 `headSha`와 이미지에서 꺼낸 `/mediamtx`(플랫폼마다)의
+`vcs.revision`(`go version -m`)이 검수한 라인 tip과 같고 `vcs.modified=false`여야 한다 →
+그 값을 `Dockerfile.mtxhook`과 테스트 상수 2개에 옮긴다. 이미지 생성은
 자동이고 제품 반영은 수동이다 — 핀 교체가 이 절의 재확인을 동반해야 하기 때문이다.
 
 **되감기 ③ 재포장 핀도 같은 때 대조한다.** 재포장 라이브러리(`mediacommon/v2`)의 판이 새 포크
 실행 파일에 박힌 판과 같아야 하고, 녹화기의 mtxi 형식이 그대로여야 한다. 절차는 「되감기 M4 ⓐ
 이관 기록」 절의 「포크 태그를 올릴 때」에 있다.
 
-**상류에 머지되면**(포크가 필요 없어지면) **포크 전용 장치를 전부 걷어낸다** — 빠뜨리면 공식
-태그에서 포크 전용 단언이 남아 빨간불이 된다. 정리 목록은
+**상류 main에만 일부 머지되어** 그 수정을 라인에서 빼려면, 먼저 수정이 포함된 상류 커밋으로
+베이스를 옮기고 이동 구간이 닿는 전제를 표적 재확인한 뒤(아래 준버전업) 중복 수정을 빼서
+`.N`을 올린다(베이스를 유지하면 수정도 유지한다). 그 수정을 포함한 새 상류 릴리스로 옮기면
+`v<새 버전>-pokeclip.1`로 발행하고, `upstreamBaseVersion`을 갱신하며 전제 9곳을 전수
+재확인한다.
+**4건이 전부 상류 릴리스에 들어가면**(포크가 필요 없어지면) **포크 전용 장치를 전부
+걷어낸다** — 빠뜨리면 공식 태그에서 포크 전용 단언이 남아 빨간불이 된다. 정리 목록은
 [`version_contract_test.go`](internal/mtxhook/version_contract_test.go)의 `forkPinGuide`에 번호로
-적혀 있다(FROM 복귀 · `mediaMTXImage` 복귀 · 태그 상수 정리 · digest 상수와 그 테스트 삭제 ·
-포크 전용 테스트 2종 삭제 · 이 절 삭제). 경로 설정의 `alwaysAvailableRecorded`는 그대로 둔다 —
-파라미터 이름이 같다.
+적혀 있다(FROM 복귀 — 공식 이미지도 태그 + digest · `mediaMTXImage` 복귀 · 태그 상수 정리 ·
+digest 상수는 공식 이미지 digest로 · 포크 전용 테스트 2종 삭제 · 남는 `forkPinGuide` 참조를
+`versionUpgradeGuide`로 바꾼 뒤 `forkPinGuide` 삭제 · 이 절 삭제).
+
+**이 핀을 되돌릴 때**: 이 이미지 교체 PR의 머지 커밋을 `git revert -m 1 <머지 커밋>`으로
+되돌리면 제품 `FROM`이 `v1.20.1-pokeclip.2` digest로, 재포장 핀이 v2.9.3으로, 재생 픽스처가
+옛 것으로, dev-media `image` 줄이 `bluenviron/mediamtx:1.21.1`로 함께 돌아간다. 팀은
+`git pull && docker compose up -d --build`로 반영한다. 순서가 둘이다.
+
+1.  수정 6 설정을 켜는 후속 PR이 머지돼 있으면 **그 PR을 먼저 revert한다** — 머지의 역순(위
+    「되돌리기와 긴급 정지」의 원칙과 같다). 수정 6이 없는 이미지(스톡 또는 이전 포크 태그
+    `v1.20.1-pokeclip.*`)는 그 키를 모르는 필드로 보고 기동을 거부한다
+    (`ERR: json: unknown field …`로 종료 1 — 2026-10-05 `v1.20.1-pokeclip.2` 실측).
+1.  팀 스택을 다시 띄우기 전에 옛 이미지로 설정 검사를 먼저 한다. `--validate-conf`를 아는
+    이미지(스톡 1.21.1 등)는 아래가 `configuration file is valid`로 끝나야 한다.
+
+    ```bash
+    docker run --rm -v "$PWD/infra/compose/mediamtx.yml:/mediamtx.yml:ro" \
+      <옛 이미지> --validate-conf=/mediamtx.yml
+    ```
+
+    `v1.20.1-pokeclip.*`는 이 플래그를 모른다(`unknown flag --validate-conf`로 종료 80 — 같은
+    날 실측). 그 이미지는 같은 마운트로 단독 기동해 `configuration loaded`가 찍히고 죽지
+    않는지 본다. 이 PR을 되돌리면 가는 `v1.20.1-pokeclip.2`는 아래처럼 본다(포트를 열지 않고
+    띄웠다가 지운다).
+
+    ```bash
+    docker run -d --name mtx-revert-check \
+      -v "$PWD/infra/compose/mediamtx.yml:/mediamtx.yml:ro" \
+      ghcr.io/xodbs1021/mediamtx:v1.20.1-pokeclip.2@sha256:704e9e2c7c3248953294ae80e0b0e1382d168b7c26d7999d7560e2f77aac2556
+    sleep 5
+    docker logs mtx-revert-check 2>&1 | head -3  # configuration loaded from /mediamtx.yml
+    docker inspect -f '{{.State.Status}}' mtx-revert-check  # running
+    docker rm -f mtx-revert-check
+    ```
+
+되돌린 뒤의 상태에서 알아 둘 것이 둘 있다.
+
+*   되돌린 `v1.20.1-pokeclip.2`에도 위 4건이 없다 — 위 표 넷째 열의 손실이 그대로 온다(수정 9는
+    오류도 로그도 없이 사라진다).
+*   데모 박스(dev-media 서버)는 develop을 따라가지 않아 이 revert로 바뀌지 않는다 — 박스는
+    따로 되돌린다.
 
 **포크 태그와 상류 버전의 관계**: 태그는 `v<상류버전>-pokeclip.<N>` 형식이고, 테스트
 `TestPinnedTagCarriesUpstreamBaseVersion`이 그 대응을 지킨다. `.1`→`.2`처럼 뒤 숫자만 오르는
