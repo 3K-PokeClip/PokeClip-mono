@@ -342,15 +342,15 @@ void OnStreamingStarting()
 	AudioRouter::Instance().Reconcile("stream starting");
 	MarkSender::Instance().ResetCounters(); // 보낸·실패 수는 방송 단위
 
-	AppState::Instance().Mutate([](StateSnapshot &s) {
-		s.obsStreaming = true;
-		s.checks = {};
-	});
-	WatchMainStreamStart(); // 그 자리 실패면 위 표시와 아래에서 시작한 우리 출력을 되돌린다
+	AppState::Instance().Mutate([](StateSnapshot &s) { s.checks = {}; });
+	WatchMainStreamStart(); // 그 자리 실패면 아래에서 올린 방송 표시와 시작한 우리 출력을 되돌린다
 
-	if (!ConfigStore::Instance().Get().syncStart)
-		return;
-	StartSrtOutputChecked(); // 키·GOP 확인 뒤 시작 — 실패 사유는 상태에 남는다
+	if (ConfigStore::Instance().Get().syncStart)
+		StartSrtOutputChecked(); // 키·GOP 확인 뒤 시작 — 실패 사유는 상태에 남는다
+
+	// 방송 표시는 우리 출력의 단계가 정해진 뒤에 올린다. 먼저 올리면 GOP 검사·출력 생성이 도는 동안 「본방은 나가는데
+	// 우리는 멈춰 있다」(CanSendNow)가 독에 나가 「다시 연결」이 잠깐 뜬다 — STOPPING에서 먼저 내리는 것과 같은 이유다.
+	AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = true; });
 }
 
 void OnFrontendEvent(enum obs_frontend_event event, void *)
