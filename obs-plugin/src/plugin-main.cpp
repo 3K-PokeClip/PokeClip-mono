@@ -207,7 +207,18 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	// 🔴 이미 돌던 인코더는 keyint를 못 바꾸므로(x264) 그때는 encoder_active로 거절된다 — 본방을 다시 켜야 한다.
 	if (next.syncStart && !syncWasOn && !streaming && obs_frontend_streaming_active()) {
 		obs_log(LOG_INFO, "sync switched on while main stream is live — starting SRT output now");
-		RunInUiThread([]() { StartSrtOutputChecked(); });
+		// 위 확인은 워커 스레드에서 했다 — 큐에서 기다리는 사이 본방이 멈췄거나 동기화를 다시 껐으면 시작하지 않는다.
+		// 본방 없이 시작하면 멈춰 줄 STREAMING_STOPPED가 다시 오지 않아 우리만 계속 보낸다(끊기면 재시도까지 한다).
+		RunInUiThread([]() {
+			StateSnapshot s = AppState::Instance().Snapshot();
+			if (!CanStartOnSyncEnabled(s)) {
+				obs_log(LOG_INFO, "sync-on start skipped (main stream %s, sync %s, phase %s)",
+					s.obsStreaming ? "live" : "not live", s.syncStart ? "on" : "off",
+					PhaseName(s.phase));
+				return;
+			}
+			StartSrtOutputChecked();
+		});
 	}
 	return {200, ConfigJson()};
 }

@@ -1333,6 +1333,37 @@ TEST(send_now_rejection_reasons)
 	CHECK_EQ(std::string(SendNowRejection(s)), "send_unavailable");
 }
 
+TEST(sync_on_start_rechecks_main_stream_sync_and_phase)
+{
+	StateSnapshot base;
+	base.obsStreaming = true;
+	base.syncStart = true;
+	CHECK(CanStartOnSyncEnabled(base)); // 대기 단계
+
+	// 키·GOP는 보지 않는다 — 시작 경로가 보고 사유를 남긴다
+	StateSnapshot s = base;
+	s.paired = false;
+	CHECK(CanStartOnSyncEnabled(s));
+	s = base;
+	s.phase = StreamPhase::Error;
+	s.errorCode = "encoder_active";
+	CHECK(CanStartOnSyncEnabled(s));
+
+	s = base;
+	s.obsStreaming = false; // 큐에서 기다리는 사이 본방이 멈췄다 — 시작하면 멈춰 줄 이벤트가 없다
+	CHECK(!CanStartOnSyncEnabled(s));
+	s = base;
+	s.syncStart = false; // 그새 동기화를 다시 껐다
+	CHECK(!CanStartOnSyncEnabled(s));
+
+	// 이미 도는 송출은 건드리지 않는다(접속 중인 출력을 새로 만들면 접속 결과를 기다리느라 UI 스레드가 멈춘다)
+	for (StreamPhase phase : {StreamPhase::Starting, StreamPhase::Live, StreamPhase::Reconnecting, StreamPhase::Stopping}) {
+		s = base;
+		s.phase = phase;
+		CHECK(!CanStartOnSyncEnabled(s));
+	}
+}
+
 } // namespace
 
 int main()

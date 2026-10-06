@@ -104,6 +104,14 @@ inline const char *SendNowRejection(const StateSnapshot &s)
 	return CanSendNow(s) ? "" : "send_unavailable";
 }
 
+// 방송 중에 동기화를 켰을 때 지금 시작해도 되는가 — 본방이 아직 나가고(STOPPING부터 거짓이다), 동기화가 켜져 있고,
+// 우리 송출이 돌고 있지 않다. 브리지 워커가 보고 UI 스레드로 넘긴 뒤에 다시 본다 — 그새 본방이 끝났을 수 있다.
+// 키·GOP는 여기서 보지 않는다(StartSrtOutputChecked가 보고 사유를 상태에 남긴다).
+inline bool CanStartOnSyncEnabled(const StateSnapshot &s)
+{
+	return s.obsStreaming && s.syncStart && (s.phase == StreamPhase::Idle || s.phase == StreamPhase::Error);
+}
+
 class AppState {
 public:
 	static AppState &Instance();
