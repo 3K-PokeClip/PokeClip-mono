@@ -144,7 +144,8 @@ FROM 이 가리키는 이미지가 우리 포크 빌드가 아니다.
   6. 남는 테스트·도우미의 forkPinGuide 참조를 모두 versionUpgradeGuide 로 바꾼 뒤
      이 안내(forkPinGuide)를 지운다 — 먼저 지우면 undefined: forkPinGuide 로 컴파일이 깨진다.
   7. media/README.md 의 "이미지 출처에 묶인 전제" 절을 걷어낸다.
-끝으로 남는 포크 서술(pokeclip. · xodbs1021 · 포크)을 media/ · infra/ · docs/ 에서 grep 해 고친다.
+끝으로 남는 포크 서술을 저장소 루트에서 찾아 고친다:
+  git grep -n -F -e -pokeclip. -e xodbs1021 -e 포크 -- media infra docs
 `
 
 // 고정 자리(Dockerfile 의 FROM)와 이 파일의 상수가 어긋나면 빨간불이 된다.

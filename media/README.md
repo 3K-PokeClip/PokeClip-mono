@@ -1342,7 +1342,8 @@ digest는 불변 좌표다 — 같은 태그를 다시 밀어도 가리키는 �
 digest 상수는 공식 이미지 digest로 · 포크 전용 테스트 2종 삭제 · 남는 `forkPinGuide` 참조를
 `versionUpgradeGuide`로 바꾼 뒤 `forkPinGuide` 삭제 · 이 절 삭제).
 
-**이 핀을 되돌릴 때**: 이 이미지 교체 PR의 머지 커밋을 `git revert -m 1 <머지 커밋>`으로
+**이 핀을 되돌릴 때 (2026-10-06 · 3K-PokeClip/pokeclip-mono#217 기준)**:
+이 이미지 교체 PR의 머지 커밋을 `git revert -m 1 <머지 커밋>`으로
 되돌리면 제품 `FROM`이 `v1.20.1-pokeclip.2` digest로, 재포장 핀이 v2.9.3으로, 재생 픽스처가
 옛 것으로, dev-media `image` 줄이 `bluenviron/mediamtx:1.21.1`로 함께 돌아간다. 팀은
 `git pull && docker compose up -d --build`로 반영한다. 순서가 둘이다.
