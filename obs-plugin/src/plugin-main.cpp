@@ -25,11 +25,11 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include "config.hpp"
 #include "constants.hpp"
 #include "dock-host.hpp"
-#include "gop-guard.hpp"
 #include "mark-hotkey.hpp"
 #include "mark-sender.hpp"
 #include "pairing.hpp"
 #include "srt-target.hpp"
+#include "stream-control.hpp"
 #include "stream-target.hpp"
 #include "ui-thread.hpp"
 
@@ -101,6 +101,7 @@ void SyncStateFromConfig()
 		s.keyHint = KeyHintOf(c.streamId);
 		s.ingest = c.ingestHost + ":" + std::to_string(c.ingestPort);
 		s.apiBase = c.apiBase;
+		s.syncStart = c.syncStart;
 	});
 }
 
@@ -122,8 +123,6 @@ std::string ConfigJson()
 	obs_data_release(d);
 	return json;
 }
-
-void OnStreamingStarting();
 
 BridgeCallbacks::Reply PutConfig(const std::string &body)
 {
@@ -203,11 +202,12 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		AudioRouter::Instance().Schedule("setting");
 
 	// 동기화를 본방 송출 중에 켰다 — 「본방이 보내면 우리도 보낸다」를 지키려면 다음 방송을 기다리지 않고
-	// 지금 시작한다. 시작 경로는 본방 STARTING과 같다(키·GOP 검사 포함). 브리지 워커 스레드라 UI 스레드로 넘긴다.
+	// 지금 시작한다. 키·GOP 검사는 본방 STARTING과 같지만, 그때 하는 오디오 재배정·마크 카운터 초기화·본방 시작
+	// 감시는 다시 하지 않는다 — 방송 도중이다(「지금 보내기」와 같은 경로). 브리지 워커 스레드라 UI 스레드로 넘긴다.
 	// 🔴 이미 돌던 인코더는 keyint를 못 바꾸므로(x264) 그때는 encoder_active로 거절된다 — 본방을 다시 켜야 한다.
 	if (next.syncStart && !syncWasOn && !streaming && obs_frontend_streaming_active()) {
 		obs_log(LOG_INFO, "sync switched on while main stream is live — starting SRT output now");
-		RunInUiThread([]() { OnStreamingStarting(); });
+		RunInUiThread([]() { StartSrtOutputChecked(); });
 	}
 	return {200, ConfigJson()};
 }
@@ -260,6 +260,20 @@ BridgeCallbacks MakeBridgeCallbacks()
 		int status = a.ok ? 202 : (a.reason == "mark_too_soon" ? 429 : 409);
 		return {status, JsonReason(a.ok, a.reason)};
 	};
+	// A5 — 워커 스레드라 상태로 미리 거르기만 하고, 출력은 UI 스레드에서 만진다. 결과는 상태(phase·errorCode)로 간다.
+	cb.sendNow = []() -> BridgeCallbacks::Reply {
+		std::string reason = SendNowRejection(AppState::Instance().Snapshot());
+		if (!reason.empty())
+			return {409, JsonReason(false, reason)};
+		RunInUiThread([]() { SendNow(); });
+		return {202, JsonReason(true, "")};
+	};
+	cb.stopRetry = []() -> BridgeCallbacks::Reply {
+		if (AppState::Instance().Snapshot().retry.attempt == 0)
+			return {409, JsonReason(false, "not_retrying")};
+		RunInUiThread([]() { StopRetryNow(); });
+		return {202, JsonReason(true, "")};
+	};
 	return cb;
 }
 
@@ -267,15 +281,6 @@ void UpdateTheme()
 {
 	bool dark = obs_frontend_is_theme_dark();
 	AppState::Instance().Mutate([dark](StateSnapshot &s) { s.darkTheme = dark; });
-}
-
-void SetError(StreamPhase phase, const std::string &code)
-{
-	AppState::Instance().Mutate([&](StateSnapshot &s) {
-		s.phase = phase;
-		s.errorCode = code;
-		s.errorDetail.clear();
-	});
 }
 
 // 본방 출력의 starting 신호 — obs_output_start가 그 자리에서 성공했을 때만 온다(obs-output.c obs_output_start,
@@ -314,8 +319,8 @@ void WatchMainStreamStart()
 		if (!IsStreamingPhase(AppState::Instance().Snapshot().phase))
 			return; // 우리 출력은 시작하지 않았다(동기화 꺼짐·키 없음·GOP 거절·시작 실패)
 		obs_log(LOG_WARNING, "stopping SRT output with the main stream");
-		StreamTarget::Instance().Stop("main_stream_failed"); // 정지가 끝나도 이 사유가 남는다(OnStop)
-		SetError(StreamPhase::Error, "main_stream_failed");
+		StreamTarget::Instance().Stop("main_stream_failed"); // 정지가 끝나도 이 사유가 남는다(HandleStop)
+		SetStreamError(StreamPhase::Error, "main_stream_failed");
 	});
 }
 
@@ -332,29 +337,9 @@ void OnStreamingStarting()
 	});
 	WatchMainStreamStart(); // 그 자리 실패면 위 표시와 아래에서 시작한 우리 출력을 되돌린다
 
-	PluginConfig config = ConfigStore::Instance().Get();
-	if (!config.syncStart)
+	if (!ConfigStore::Instance().Get().syncStart)
 		return;
-	if (!config.HasKey()) {
-		obs_log(LOG_INFO, "main stream starting but not paired — skipping SRT output");
-		SetError(StreamPhase::Idle, "no_key");
-		return;
-	}
-
-	GopGuardResult gop = EnforceStreamEncoderPolicy();
-	AppState::Instance().Mutate([&](StateSnapshot &s) { s.checks = gop.checks; });
-	if (!gop.ok) {
-		obs_log(LOG_WARNING, "not starting SRT output: %s", gop.errorCode.c_str());
-		SetError(StreamPhase::Error, gop.errorCode);
-		return;
-	}
-
-	std::string error;
-	if (!StreamTarget::Instance().Start(config, error)) {
-		obs_log(LOG_WARNING, "SRT output start failed: %s", error.c_str());
-		SetError(StreamPhase::Error, error);
-		return;
-	}
+	StartSrtOutputChecked(); // 키·GOP 확인 뒤 시작 — 실패 사유는 상태에 남는다
 }
 
 void OnFrontendEvent(enum obs_frontend_event event, void *)
@@ -411,7 +396,9 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 		AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = true; });
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STOPPING:
-		// obs_output_stop 안에서 동기로 온다. 본방과 같이 멈춘다.
+		// obs_output_stop 안에서 동기로 온다. 본방과 같이 멈춘다(예약된 재시도도 버린다).
+		// 방송 표시도 여기서 내린다 — STOPPED까지 남겨 두면 그사이 독에 「지금 보내기」가 잠깐 뜬다.
+		AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = false; });
 		StreamTarget::Instance().Stop();
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STOPPED:

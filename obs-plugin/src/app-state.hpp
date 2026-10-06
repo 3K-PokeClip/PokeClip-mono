@@ -71,12 +71,38 @@ struct StateSnapshot {
 	std::string errorDetail;
 	RetryView retry;
 	bool obsStreaming = false;
+	bool syncStart = true; // 설정 sync_start 사본 — 「지금 보내기」 조건에 쓴다
 	bool darkTheme = true;
 	StreamStats stats;
 	EncoderChecks checks;
 	AudioRoutingView audio; // A2: 트랙 2~6에 어느 소스가 실리는지 (실제 트랙 비트 기준)
 	MarkStats marks;
 };
+
+// 「지금 보내기」를 보여 줄 상태인가 — 본방은 나가는데 우리 송출은 멈춰 있다(오류로 멈춤 · 재시도 포기 ·
+// 방송 중에 페어링함). 독·폴백 패널·브리지가 같은 판정을 쓴다.
+inline bool CanSendNow(const StateSnapshot &s)
+{
+	if (!s.obsStreaming || !s.paired || !s.syncStart)
+		return false;
+	if (s.phase != StreamPhase::Idle && s.phase != StreamPhase::Error)
+		return false;
+	// 본방 인코더를 다시 띄워야 풀리는 사유 — 눌러도 같은 결과라 버튼을 주지 않는다.
+	return s.errorCode != "encoder_active" && s.errorCode != "keyint_not_applied" &&
+	       s.errorCode != "multitrack_video";
+}
+
+// 브리지가 「지금 보내기」 요청을 거절할 사유. 받을 수 있으면 빈 문자열.
+inline const char *SendNowRejection(const StateSnapshot &s)
+{
+	if (s.retry.attempt > 0 && s.retry.nextAt > 0)
+		return ""; // 다음 재시도를 기다리는 중 — 기다림만 건너뛴다
+	if (!s.obsStreaming)
+		return "main_not_live";
+	if (!s.paired)
+		return "no_key";
+	return CanSendNow(s) ? "" : "send_unavailable";
+}
 
 class AppState {
 public:

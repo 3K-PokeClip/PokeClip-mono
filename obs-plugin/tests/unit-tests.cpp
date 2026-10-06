@@ -1,6 +1,7 @@
 // 의존성 없는 최소 테스트 러너. OBS를 띄우지 않고 검증할 수 있는 것만 여기서 잰다:
 // 페어링 코드 정규화 · keyint 옵션 제거 · streamid 파싱 · SRT URL · 브리지 보안 규칙(Host·Origin·토큰)·SSE ·
-// 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4) · 재시도 정책(A5).
+// 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4) · 재시도 정책과 「지금 보내기」 조건(A5).
+#include "app-state.hpp"
 #include "audio-assign.hpp"
 #include "bridge-server.hpp"
 #include "config.hpp"
@@ -178,6 +179,8 @@ struct BridgeFixture {
 	std::string token;
 	std::atomic<int> pairCalls{0};
 	std::atomic<int> markCalls{0};
+	std::atomic<int> sendNowCalls{0};
+	std::atomic<int> stopRetryCalls{0};
 	std::string lastPairBody;
 	std::atomic<uint64_t> stateVersion{1};
 	std::mutex mutex;
@@ -216,6 +219,14 @@ struct BridgeFixture {
 		cb.mark = [this]() -> BridgeCallbacks::Reply {
 			markCalls++;
 			return {409, R"({"ok":false,"reason":"mark_not_live"})"};
+		};
+		cb.sendNow = [this]() -> BridgeCallbacks::Reply {
+			sendNowCalls++;
+			return {202, R"({"ok":true})"};
+		};
+		cb.stopRetry = [this]() -> BridgeCallbacks::Reply {
+			stopRetryCalls++;
+			return {409, R"({"ok":false,"reason":"not_retrying"})"};
 		};
 		server.Start(dir.string(), cb);
 
@@ -340,6 +351,35 @@ TEST(bridge_mark_requires_token_and_passes_status)
 		CHECK(res->body.find("mark_not_live") != std::string::npos);
 	}
 	CHECK_EQ(f.markCalls.load(), 1);
+}
+
+TEST(bridge_send_now_and_stop_retry_require_token_and_pass_status)
+{
+	BridgeFixture f;
+	auto cli = f.Client();
+	auto anonSend = cli.Post("/api/send-now", "", "application/json");
+	CHECK(anonSend && anonSend->status == 401);
+	auto anonStop = cli.Post("/api/stop-retry", "", "application/json");
+	CHECK(anonStop && anonStop->status == 401);
+	CHECK_EQ(f.sendNowCalls.load(), 0);
+	CHECK_EQ(f.stopRetryCalls.load(), 0);
+
+	auto sent = cli.Post("/api/send-now", f.Auth(), "", "application/json");
+	CHECK(sent && sent->status == 202);
+	CHECK_EQ(f.sendNowCalls.load(), 1);
+
+	auto stopped = cli.Post("/api/stop-retry", f.Auth(), "", "application/json");
+	CHECK(stopped);
+	if (stopped) {
+		CHECK_EQ(stopped->status, 409);
+		CHECK(stopped->body.find("not_retrying") != std::string::npos);
+	}
+	CHECK_EQ(f.stopRetryCalls.load(), 1);
+
+	// 읽기 요청으로는 시작되지 않는다
+	auto viaGet = cli.Get("/api/send-now", f.Auth());
+	CHECK(viaGet && viaGet->status == 404);
+	CHECK_EQ(f.sendNowCalls.load(), 1);
 }
 
 TEST(bridge_sse_sends_state_first)
@@ -1218,6 +1258,79 @@ TEST(reject_streak_flags_key_after_three_fast_rejects)
 	CHECK(s.KeySuspect());
 	s.Reset();
 	CHECK(!s.KeySuspect());
+}
+
+// 본방은 나가는데 우리 송출이 멈춘 상태 — 버튼이 뜨는 기준선.
+StateSnapshot StoppedWhileMainLive()
+{
+	StateSnapshot s;
+	s.obsStreaming = true;
+	s.paired = true;
+	s.syncStart = true;
+	s.phase = StreamPhase::Error;
+	s.errorCode = "connect_failed";
+	return s;
+}
+
+TEST(send_now_offered_only_when_main_is_live_and_we_are_stopped)
+{
+	StateSnapshot base = StoppedWhileMainLive();
+	CHECK(CanSendNow(base));
+
+	// 방송 중에 페어링한 직후 — 오류 없이 대기 단계다
+	StateSnapshot pairedMidStream = base;
+	pairedMidStream.phase = StreamPhase::Idle;
+	pairedMidStream.errorCode.clear();
+	CHECK(CanSendNow(pairedMidStream));
+
+	StateSnapshot s = base;
+	s.obsStreaming = false; // 본방이 없으면 우리만 보내지 않는다
+	CHECK(!CanSendNow(s));
+	s = base;
+	s.paired = false;
+	CHECK(!CanSendNow(s));
+	s = base;
+	s.syncStart = false; // 스트리머가 동기화를 껐다
+	CHECK(!CanSendNow(s));
+
+	for (StreamPhase phase : {StreamPhase::Starting, StreamPhase::Live, StreamPhase::Reconnecting, StreamPhase::Stopping}) {
+		s = base;
+		s.phase = phase;
+		CHECK(!CanSendNow(s));
+	}
+
+	// 본방 인코더를 다시 띄워야 풀린다 — 눌러도 같은 결과
+	for (const char *code : {"encoder_active", "keyint_not_applied", "multitrack_video"}) {
+		s = base;
+		s.errorCode = code;
+		CHECK(!CanSendNow(s));
+	}
+}
+
+TEST(send_now_rejection_reasons)
+{
+	StateSnapshot base = StoppedWhileMainLive();
+	CHECK_EQ(std::string(SendNowRejection(base)), "");
+
+	StateSnapshot s = base;
+	s.obsStreaming = false;
+	CHECK_EQ(std::string(SendNowRejection(s)), "main_not_live");
+	s = base;
+	s.paired = false;
+	CHECK_EQ(std::string(SendNowRejection(s)), "no_key");
+	s = base;
+	s.phase = StreamPhase::Live;
+	CHECK_EQ(std::string(SendNowRejection(s)), "send_unavailable");
+
+	// 다음 재시도를 기다리는 중이면 받는다(기다림만 건너뛴다) — 단계는 송출 중이다
+	s = base;
+	s.phase = StreamPhase::Reconnecting;
+	s.retry.attempt = 3;
+	s.retry.nextAt = 1791234567890;
+	CHECK_EQ(std::string(SendNowRejection(s)), "");
+	// 지금 접속 중인 시도는 건너뛸 기다림이 없다
+	s.retry.nextAt = 0;
+	CHECK_EQ(std::string(SendNowRejection(s)), "send_unavailable");
 }
 
 } // namespace

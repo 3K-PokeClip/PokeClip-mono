@@ -29,6 +29,9 @@ struct BridgeCallbacks {
 	std::function<std::string()> getConfig;
 	std::function<Reply(const std::string &body)> putConfig;
 	std::function<Reply()> mark; // A4: 독의 「지금 표시」 버튼 — 핫키와 같은 대기열
+	// A5: 「지금 보내기」·「지금 다시 시도」 — 본방은 두고 우리 송출만 시작한다 / 「재시도 멈추기」
+	std::function<Reply()> sendNow;
+	std::function<Reply()> stopRetry;
 };
 
 class BridgeServer {
