@@ -1,6 +1,7 @@
 package com.pokeclip.auth.streamkey.secret;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -8,7 +9,12 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.Optional;
 
+/**
+ * PG + AES-256-GCM 저장소. {@code @Primary}라 표지 없는 {@link SecretStore} 주입(유튜브·치지직 토큰)은 언제나
+ * 이것이다. 스트림키 쪽({@link StreamKeySecrets})은 설정이 이것과 Secrets Manager 중에 고른다(POK-272).
+ */
 @Component
+@Primary
 @RequiredArgsConstructor
 public class PostgresSecretStore implements SecretStore {
 
