@@ -7,9 +7,11 @@
 # 서버 바이너리 자체의 수정(상류에 아직 머지되지 않은 4건)은 여기가 아니라 아래 FROM 이
 # 가리키는 포크 빌드 안에 들어 있다 — 그 사정은 FROM 바로 위 주석에 있다.
 #
-# **버전 고정의 유일한 집이 아래 FROM 이다.** compose 의 image: 가 build: 로 바뀌면서
-# pin 위치가 여기로 옮겨왔다 — 버전을 올릴 때는 이 줄만 고치고, media/README.md 의
+# **제품 버전 고정의 기준이 아래 FROM 이다.** compose 의 image: 가 build: 로 바뀌면서
+# pin 위치가 여기로 옮겨왔다 — 버전을 올릴 때는 이 줄을 고치고, media/README.md 의
 # "MediaMTX 버전업 체크리스트"를 따른다.
+# 함께 고칠 자리(version_contract_test 의 상수 ·
+# infra/dev-media/compose.yml 의 image 줄 등)도 그 체크리스트가 안내한다.
 
 # 빌드 스테이지의 Go 버전은 media/go.mod 의 go 지시자와 같은 1.26 으로 유지한다.
 FROM golang:1.26-alpine AS build
