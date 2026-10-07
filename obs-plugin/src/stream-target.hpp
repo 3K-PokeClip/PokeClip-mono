@@ -37,8 +37,6 @@ public:
 	void PollStats();
 	void Release();
 
-	// 다음 시도를 기다리는 중인가(이때는 접속 중인 출력이 없다).
-	bool RetryPending() const { return retryPending_; }
 	// 기다리지 않고 지금 시도한다. 끊긴 뒤 지난 시간은 그대로 센다. 기다리는 중이 아니면 false.
 	bool RetryNow();
 	// 재시도를 그만두고 마지막 실패 사유를 오류로 남긴다 — 그래야 방송 중에 수신 주소·키를 고칠 수 있다
