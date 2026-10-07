@@ -153,6 +153,7 @@ PairingResult PairWithCode(const std::string &rawCode)
 	AppState::Instance().Mutate([&](StateSnapshot &s) {
 		s.paired = true;
 		s.keyHint = KeyHintOf(streamId);
+		s.retry.keySuspect = false; // 키가 바뀌었다 — 지난 키를 두고 띄운 확인 안내는 지운다
 		if (s.errorCode == "no_key") {
 			s.errorCode.clear();
 			s.errorDetail.clear();
@@ -182,6 +183,7 @@ PairingResult Unpair()
 	AppState::Instance().Mutate([](StateSnapshot &s) {
 		s.paired = false;
 		s.keyHint.clear();
+		s.retry.keySuspect = false;
 	});
 	obs_log(LOG_INFO, "unpaired");
 	AudioRouter::Instance().Schedule("unpaired");

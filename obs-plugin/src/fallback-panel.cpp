@@ -207,7 +207,8 @@ void FallbackPanel::Render(const StateSnapshot &s)
 		marks_->setVisible(false);
 	}
 
-	QString reason = LocalizedReason(s.errorCode);
+	// 재시도를 멈췄거나 포기한 뒤에도 키 확인 안내는 남긴다(재시도 중에는 위 재시도 줄이 보여 준다).
+	QString reason = !retrying && s.retry.keySuspect ? Text("Retry.KeyHint") : LocalizedReason(s.errorCode);
 	if (s.retry.gaveUp)
 		reason = Text("Retry.GaveUp") + " " + reason;
 	message_->setText(reason);

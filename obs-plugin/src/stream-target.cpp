@@ -312,8 +312,10 @@ bool StreamTarget::StopRetry()
 		obs_log(LOG_INFO, "SRT output: retry stopped by the streamer");
 		// 마지막 실패 사유(errorCode)는 그대로 둔다 — 왜 멈춰 있는지가 그것이다.
 		AppState::Instance().Mutate([](StateSnapshot &s) {
+			const bool keySuspect = s.retry.keySuspect;
 			s.phase = StreamPhase::Error;
 			s.retry = {};
+			s.retry.keySuspect = keySuspect; // 키 확인 안내는 남긴다 — 중지한 뒤에 연결을 해제하고 새 코드를 넣는다
 			s.stats.bitrateKbps = 0;
 		});
 		return true;
@@ -622,6 +624,7 @@ void StreamTarget::HandleStop(uint64_t generation, int code, const std::string &
 		// 끝났고, 다음 시도를 기다리던 중에 멈춘 경우(Stop)와 결과가 같아야 한다. 「재시도 중지」가 건 정지는 남긴다.
 		const bool stoppedWithMain = requested && !keepFailure;
 		AppState::Instance().Mutate([&](StateSnapshot &s) {
+			const bool keySuspect = s.retry.keySuspect;
 			if (reason) {
 				// 이유를 들고 멈췄다(본방이 시작되지 않음 등) — 정지 코드보다 그 이유가 스트리머에게 맞는 설명이다.
 				s.phase = StreamPhase::Error;
@@ -637,6 +640,8 @@ void StreamTarget::HandleStop(uint64_t generation, int code, const std::string &
 				s.errorDetail = detail;
 			}
 			s.retry = {};
+			// 「재시도 중지」가 건 정지로 실패했으면 키 확인 안내는 남긴다(기다리던 중에 중지한 StopRetry와 같다).
+			s.retry.keySuspect = keepFailure && s.phase == StreamPhase::Error && keySuspect;
 			s.stats.bitrateKbps = 0;
 		});
 		ReleaseWhenStopped(generation, kReleasePollAttempts);
@@ -657,12 +662,14 @@ void StreamTarget::HandleStop(uint64_t generation, int code, const std::string &
 		obs_log(LOG_WARNING, "SRT output: giving up after %d retries (%s)", attempt_, name.c_str());
 		CancelRetry();
 		wanted_ = false;
+		const bool suspect = rejects_.KeySuspect(); // 거절이 이어지다 포기했으면 키 확인 안내를 남긴다
 		AppState::Instance().Mutate([&](StateSnapshot &s) {
 			s.phase = StreamPhase::Error;
 			s.errorCode = name;
 			s.errorDetail = detail;
 			s.retry = {};
 			s.retry.gaveUp = true;
+			s.retry.keySuspect = suspect;
 			s.stats.bitrateKbps = 0;
 		});
 		ReleaseWhenStopped(generation, kReleasePollAttempts);

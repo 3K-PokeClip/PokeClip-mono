@@ -134,6 +134,22 @@ describe('statusView — 멈춘 뒤의 다음 행동', () => {
     expect(v.retrying).toBe(false);
   });
 
+  it('거절이 이어지다 재시도를 멈췄으면 키 확인 안내를 남긴다', () => {
+    const v = statusView(
+      state({
+        phase: 'error',
+        errorCode: 'connect_failed',
+        obsStreaming: true,
+        canSendNow: true,
+        retry: { attempt: 0, nextAt: 0, gaveUp: false, keySuspect: true },
+      }),
+      NOW,
+    );
+    expect(v.alert).toBe(KEY_SUSPECT_HINT);
+    expect(v.retrying).toBe(false);
+    expect(v.canSendNow).toBe(true);
+  });
+
   it('본방을 다시 켜야 풀리는 오류에는 버튼을 주지 않는다', () => {
     const v = statusView(state({ phase: 'error', errorCode: 'encoder_active', obsStreaming: true, canSendNow: false }), NOW);
     expect(v.canSendNow).toBe(false);

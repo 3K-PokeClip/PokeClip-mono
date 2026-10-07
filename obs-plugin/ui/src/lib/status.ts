@@ -78,7 +78,8 @@ export function statusView(state: BridgeState, nowMs: number): StatusView {
   if (phase === 'error' && state.errorCode) {
     view.title = '전송이 멈췄어요';
     view.tone = 'danger';
-    view.alert = reasonText(state.errorCode);
+    // 거절이 이어지다 재시도를 멈췄거나 포기했으면 키 확인 안내를 남긴다 — 다음에 할 일이 그것이다
+    view.alert = retry.keySuspect ? KEY_SUSPECT_HINT : reasonText(state.errorCode);
     view.canSendNow = state.canSendNow;
     const next = state.canSendNow
       ? '본방은 그대로 두고 다시 연결할 수 있어요.'
