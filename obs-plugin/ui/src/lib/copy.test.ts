@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import enIni from '../../../data/locale/en-US.ini?raw';
 import koIni from '../../../data/locale/ko-KR.ini?raw';
-import { AUDIO_KIND_LABEL, KEY_SUSPECT_HINT, markToast, REASON, reasonText } from './copy';
+import { AUDIO_KIND_LABEL, KEY_SUSPECT_HINT, markToast, noKeyToast, REASON, reasonText } from './copy';
 import type { MarkStats } from './types';
 
 // 브리지가 보내는 사유 코드는 독(copy.ts)과 Qt 폴백(locale/*.ini)이 각자 문구로 바꾼다 —
@@ -110,5 +110,13 @@ describe('마크 결과 토스트', () => {
 
   it('결과가 없으면 띄우지 않는다', () => {
     expect(markToast(marks({ result: '' }))).toBeNull();
+  });
+});
+
+describe('연결 없이 방송을 시작했을 때의 토스트', () => {
+  it('키프레임 간격을 맞췄으면 그 사실을 같이 알린다', () => {
+    expect(noKeyToast(false)).toBe(REASON.no_key);
+    expect(noKeyToast(true).startsWith(REASON.no_key)).toBe(true);
+    expect(noKeyToast(true)).toContain('키프레임 간격은 2초');
   });
 });

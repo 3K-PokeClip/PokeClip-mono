@@ -11,7 +11,7 @@ import { StatusCard } from './components/StatusCard';
 import { Toast } from './components/Toast';
 import { UnpairDialog } from './components/UnpairDialog';
 import type { Bridge } from './lib/bridge';
-import { markToast, PHASE_LABEL, reasonText, type ToastTone } from './lib/copy';
+import { markToast, noKeyToast, PHASE_LABEL, reasonText, type ToastTone } from './lib/copy';
 import type { BridgeState } from './lib/types';
 
 type BadgeTone = 'neutral' | 'success' | 'point' | 'warning' | 'danger';
@@ -191,7 +191,7 @@ export function App({ bridge }: { bridge: Bridge }) {
       ) : null}
 
       {showNoKeyToast ? (
-        <Toast message={reasonText('no_key')} onDismiss={() => setToastDismissed(true)} />
+        <Toast message={noKeyToast(state.checks.gop2s === true)} onDismiss={() => setToastDismissed(true)} />
       ) : markNotice ? (
         <Toast tone={markNotice.tone} message={markNotice.message} onDismiss={() => setMarkNotice(null)} />
       ) : null}
