@@ -37,6 +37,8 @@ describe('extractPairingCode — 붙여넣기', () => {
     expect(extractPairingCode('연결 코드는 KQ4M7X2P 입니다')).toBe('KQ4M-7X2P');
     // 8글자 낱말이 앞에 있어도 숫자가 든 토막을 코드로 본다
     expect(extractPairingCode('PokeClip KQ4M7X2P')).toBe('KQ4M-7X2P');
+    // 숫자가 없는 코드는 낱말과 가를 수 없다 — 안내 문구 뒤에 오는 쪽을 코드로 본다
+    expect(extractPairingCode('PokeClip ABCDEFGH')).toBe('ABCD-EFGH');
   });
   it('가운데가 공백·긴 줄표여도 받는다', () => {
     expect(extractPairingCode('KQ4M 7X2P')).toBe('KQ4M-7X2P');
