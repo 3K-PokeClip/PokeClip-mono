@@ -15,6 +15,24 @@ describe('createHttpBridge', () => {
     await expect(bridge.unpair()).resolves.toEqual(unreachable);
     await expect(bridge.putSettings({ audio_assign_prompted: true })).resolves.toEqual(unreachable);
     await expect(bridge.mark()).resolves.toEqual({ ...unreachable, status: 0 });
+    await expect(bridge.sendNow()).resolves.toEqual(unreachable);
+    await expect(bridge.stopRetry()).resolves.toEqual(unreachable);
+  });
+
+  it('「다시 연결」·「재시도 중지」는 본문 없는 POST로 가고 거절 사유를 돌려준다', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: false, reason: 'not_retrying' }), { status: 409 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const bridge = createHttpBridge('t'.repeat(64));
+
+    await expect(bridge.sendNow()).resolves.toEqual({ ok: true });
+    await expect(bridge.stopRetry()).resolves.toEqual({ ok: false, reason: 'not_retrying' });
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/send-now');
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/stop-retry');
+    expect(fetchMock.mock.calls[0][1].method).toBe('POST');
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe(`Bearer ${'t'.repeat(64)}`);
   });
 
   it('브리지가 답하면 상태 코드의 사유를 그대로 돌려준다', async () => {

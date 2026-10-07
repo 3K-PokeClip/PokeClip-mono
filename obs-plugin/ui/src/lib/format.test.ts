@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  extractPairingCode,
+  formatCountdown,
   formatKbps,
   formatPairingInput,
   formatUptime,
@@ -20,6 +22,46 @@ describe('formatPairingInput', () => {
     expect(formatPairingInput('ab')).toBe('AB');
     expect(isCompletePairingCode('ABCD')).toBe(false);
     expect(isCompletePairingCode('ABCD-EFGH')).toBe(true);
+  });
+});
+
+describe('extractPairingCode — 붙여넣기', () => {
+  it('앞뒤 공백·줄바꿈이 섞여도 코드를 통째로 받는다', () => {
+    expect(extractPairingCode(' KQ4M-7X2P')).toBe('KQ4M-7X2P');
+    expect(extractPairingCode('KQ4M-7X2P\n')).toBe('KQ4M-7X2P');
+    expect(extractPairingCode('\tkq4m-7x2p  ')).toBe('KQ4M-7X2P');
+  });
+  it('안내 문구와 같이 복사돼도 코드 모양 토막을 고른다', () => {
+    expect(extractPairingCode('코드: KQ4M-7X2P')).toBe('KQ4M-7X2P');
+    expect(extractPairingCode('PokeClip code KQ4M-7X2P (10분)')).toBe('KQ4M-7X2P');
+    expect(extractPairingCode('연결 코드는 KQ4M7X2P 입니다')).toBe('KQ4M-7X2P');
+    // 8글자 낱말이 앞에 있어도 숫자가 든 토막을 코드로 본다
+    expect(extractPairingCode('PokeClip KQ4M7X2P')).toBe('KQ4M-7X2P');
+    // 숫자가 없는 코드는 낱말과 가를 수 없다 — 안내 문구 뒤에 오는 쪽을 코드로 본다
+    expect(extractPairingCode('PokeClip ABCDEFGH')).toBe('ABCD-EFGH');
+  });
+  it('가운데가 공백·긴 줄표여도 받는다', () => {
+    expect(extractPairingCode('KQ4M 7X2P')).toBe('KQ4M-7X2P');
+    expect(extractPairingCode('KQ4M - 7X2P')).toBe('KQ4M-7X2P');
+    expect(extractPairingCode('KQ4M–7X2P')).toBe('KQ4M-7X2P');
+  });
+  it('서버 규칙대로 I·L→1, O→0 으로 바꾼다', () => {
+    expect(extractPairingCode('ilo0-ab12')).toBe('1100-AB12');
+  });
+  it('코드 모양이 없으면 입력할 때처럼 앞에서부터 모은다', () => {
+    expect(extractPairingCode('12 34 56 78')).toBe('1234-5678');
+    expect(extractPairingCode('abc')).toBe('ABC');
+    expect(extractPairingCode('한글만')).toBe('');
+  });
+});
+
+describe('formatCountdown', () => {
+  it('남은 시간을 올림한 초로 적고, 지났으면 곧이라고 한다', () => {
+    expect(formatCountdown(11_400)).toBe('12초 뒤');
+    expect(formatCountdown(60_000)).toBe('60초 뒤');
+    expect(formatCountdown(1)).toBe('1초 뒤');
+    expect(formatCountdown(0)).toBe('곧');
+    expect(formatCountdown(-800)).toBe('곧');
   });
 });
 

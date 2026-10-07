@@ -1,9 +1,10 @@
 import type { Bridge } from './bridge';
-import type { AudioRouting, BridgeState, MarkStats, Phase, PluginSettings } from './types';
+import type { AudioRouting, BridgeState, MarkStats, Phase, PluginSettings, RetryView } from './types';
 
 // 개발 전용 — `pnpm dev` 에서 토큰 없이 열면 쓴다.
 // ?mock=unpaired|idle|live|reconnecting|error|no_key|encoder|audio_overflow|audio_manual|audio_main_stream|
-//       audio_deferred|audio_prompt|audio_prompt_custom|mark_pending|mark_unsupported
+//       audio_deferred|audio_prompt|audio_prompt_custom|mark_pending|mark_unsupported|
+//       retry_first|retry_key|gave_up|paired_midstream
 // 트랙 2~6 목록으로 오디오 배정 상태를 만든다 (트랙 1은 늘 최종 믹스라 싣지 않는다). mainStream은 본방 트랙 번호.
 function routing(tracks: AudioRouting['tracks'][number]['sources'][], mainStream: number[] = []): AudioRouting {
   return {
@@ -21,6 +22,8 @@ function routing(tracks: AudioRouting['tracks'][number]['sources'][], mainStream
 }
 
 const NO_MARKS: MarkStats = { hotkey: '⌃⇧M', sent: 0, pending: 0, failed: 0, seq: 0, result: '', reason: '', lastAt: 0 };
+const NO_RETRY: RetryView = { attempt: 0, nextAt: 0, gaveUp: false, keySuspect: false };
+const MOCK_RETRY_INTERVAL_MS = 5000; // 300초 창 안의 간격과 같다
 
 export function createMockBridge(scenario: string): Bridge {
   const base: BridgeState = {
@@ -33,6 +36,9 @@ export function createMockBridge(scenario: string): Bridge {
     errorCode: '',
     errorDetail: '',
     obsStreaming: false,
+    syncStart: true,
+    canSendNow: false,
+    retry: NO_RETRY,
     theme: new URLSearchParams(location.search).get('theme') === 'light' ? 'light' : 'dark',
     stats: { bitrateKbps: 0, totalFrames: 0, droppedFrames: 0, uptimeSec: 0 },
     checks: {
@@ -63,7 +69,34 @@ export function createMockBridge(scenario: string): Bridge {
 
   const overrides: Record<string, Partial<BridgeState>> = {
     live: { phase: 'live', obsStreaming: true, checks: { ...liveChecks } },
-    reconnecting: { phase: 'reconnecting', obsStreaming: true, checks: { ...liveChecks } },
+    // 붙어 있다 끊겨 다시 붙는 중 — 3번째 재시도를 12초 뒤에 한다
+    reconnecting: {
+      phase: 'reconnecting',
+      obsStreaming: true,
+      errorCode: 'disconnected',
+      checks: { ...liveChecks },
+      retry: { ...NO_RETRY, attempt: 3, nextAt: Date.now() + 12000 },
+    },
+    // 처음부터 붙지 못했다(수신 주소를 못 찾음) — 지금 1번째 재시도로 접속 중
+    retry_first: { phase: 'starting', obsStreaming: true, errorCode: 'bad_path', retry: { ...NO_RETRY, attempt: 1 } },
+    // 서버가 살아 있는데 계속 거절한다 — 키 확인 안내
+    retry_key: {
+      phase: 'starting',
+      obsStreaming: true,
+      errorCode: 'connect_failed',
+      retry: { ...NO_RETRY, attempt: 5, nextAt: Date.now() + 4000, keySuspect: true },
+    },
+    // 65분을 다 써서 포기했다 — 본방은 나가는 중이라 「다시 연결」
+    gave_up: {
+      phase: 'error',
+      obsStreaming: true,
+      errorCode: 'connect_failed',
+      canSendNow: true,
+      checks: { ...liveChecks },
+      retry: { ...NO_RETRY, gaveUp: true },
+    },
+    // 페어링 없이 본방을 시작한 뒤 방송 중에 페어링했다 — 우리 송출은 아직 시작 전
+    paired_midstream: { phase: 'idle', obsStreaming: true, canSendNow: true },
     error: { phase: 'error', errorCode: 'timeout', checks: { ...liveChecks } },
     no_key: { paired: false, keyHint: '', phase: 'idle', errorCode: 'no_key', obsStreaming: true },
     audio_overflow: {
@@ -186,6 +219,11 @@ export function createMockBridge(scenario: string): Bridge {
       onConnection(true);
       onState(state);
       const timer = setInterval(() => {
+        // 재시도를 기다리던 시각이 지났다 — 또 실패한 것으로 치고 다음 시도를 잡는다
+        if (state.retry.attempt > 0 && state.retry.nextAt > 0 && Date.now() >= state.retry.nextAt) {
+          emit({ retry: { ...state.retry, attempt: state.retry.attempt + 1, nextAt: Date.now() + MOCK_RETRY_INTERVAL_MS } });
+          return;
+        }
         if (state.phase !== 'live') return;
         const jitter = 5800 + Math.random() * 900;
         emit({ stats: { ...state.stats, bitrateKbps: jitter, uptimeSec: state.stats.uptimeSec + 1 } });
@@ -198,7 +236,13 @@ export function createMockBridge(scenario: string): Bridge {
     async pair(code) {
       await new Promise((r) => setTimeout(r, 700));
       if (code.startsWith('0000')) return { ok: false, reason: 'expired' };
-      emit({ paired: true, keyHint: 'Q7ZK', errorCode: state.errorCode === 'no_key' ? '' : state.errorCode });
+      emit({
+        paired: true,
+        keyHint: 'Q7ZK',
+        errorCode: state.errorCode === 'no_key' ? '' : state.errorCode,
+        // 플러그인처럼: 본방이 나가는 중에 페어링했으면 「다시 연결」이 뜬다
+        canSendNow: state.obsStreaming && (state.phase === 'idle' || state.phase === 'error'),
+      });
       return { ok: true };
     },
     async unpair() {
@@ -246,6 +290,27 @@ export function createMockBridge(scenario: string): Bridge {
         else markResult({ pending, sent: state.marks.sent + 1, result: 'sent', reason: '' });
       }, 400);
       return { ok: true, status: 202 };
+    },
+    async sendNow() {
+      const connect = () =>
+        emit({ phase: 'live', errorCode: '', canSendNow: false, retry: NO_RETRY, checks: { ...liveChecks } });
+      // 다음 재시도를 기다리던 중 — 기다림만 건너뛰고 곧 붙는다
+      if (state.retry.attempt > 0 && state.retry.nextAt > 0) {
+        emit({ retry: { ...state.retry, nextAt: 0 } });
+        setTimeout(connect, 800);
+        return { ok: true };
+      }
+      if (!state.obsStreaming) return { ok: false, reason: 'main_not_live' };
+      if (!state.canSendNow) return { ok: false, reason: 'send_unavailable' };
+      emit({ phase: 'starting', errorCode: '', canSendNow: false, retry: NO_RETRY });
+      setTimeout(connect, 800);
+      return { ok: true };
+    },
+    async stopRetry() {
+      if (state.retry.attempt === 0) return { ok: false, reason: 'not_retrying' };
+      // 마지막 실패 사유는 남는다 — 왜 멈춰 있는지가 그것이다
+      emit({ phase: 'error', retry: NO_RETRY, canSendNow: state.obsStreaming });
+      return { ok: true };
     },
   };
 }

@@ -31,6 +31,14 @@ export interface MarkStats {
   lastAt: number;
 }
 
+// A5 — 자동 재시도 진행. attempt가 0이면 재시도 중이 아니다 (src/app-state.hpp RetryView).
+export interface RetryView {
+  attempt: number; // 끊긴 뒤 몇 번째 재시도인가(1부터)
+  nextAt: number; // 다음 시도 시각(UTC epoch ms). 0이면 지금 접속 중
+  gaveUp: boolean; // 정책 시간(65분)을 다 써서 멈췄다 — phase는 error
+  keySuspect: boolean; // 서버가 살아 있는데 거절이 이어진다 — 키 상태 확인 안내
+}
+
 export interface BridgeState {
   version: number;
   paired: boolean;
@@ -41,6 +49,10 @@ export interface BridgeState {
   errorCode: string;
   errorDetail: string;
   obsStreaming: boolean;
+  syncStart: boolean; // 설정 sync_start 사본
+  // 본방은 나가는데 우리 송출이 멈춰 있다 — 「다시 연결」을 보여 준다 (src/app-state.hpp CanSendNow)
+  canSendNow: boolean;
+  retry: RetryView;
   theme: 'dark' | 'light';
   stats: {
     bitrateKbps: number;

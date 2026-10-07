@@ -51,6 +51,14 @@ struct MarkStats {
 	int64_t lastAt = 0; // 마지막으로 받아들인 누름의 시각(UTC epoch ms)
 };
 
+// A5 — 우리 출력이 끊기거나 붙지 못해 다시 시도하는 진행. attempt가 0이면 재시도 중이 아니다.
+struct RetryView {
+	int attempt = 0;         // 끊긴 뒤 몇 번째 재시도인가(1부터)
+	int64_t nextAt = 0;      // 다음 시도 시각(UTC epoch ms). 0이면 지금 시도 중
+	bool gaveUp = false;     // 정책 시간을 다 써서 멈췄다(phase는 Error)
+	bool keySuspect = false; // 서버가 살아 있는데 거절이 이어진다 — 키 상태 확인 안내
+};
+
 // 독 페이지·폴백 패널이 그리는 유일한 상태 원천. 비밀은 담지 않는다.
 struct StateSnapshot {
 	uint64_t version = 0;
@@ -61,13 +69,51 @@ struct StateSnapshot {
 	StreamPhase phase = StreamPhase::Idle;
 	std::string errorCode;
 	std::string errorDetail;
+	RetryView retry;
 	bool obsStreaming = false;
+	bool syncStart = true; // 설정 sync_start 사본 — 「다시 연결」 조건에 쓴다
 	bool darkTheme = true;
 	StreamStats stats;
 	EncoderChecks checks;
 	AudioRoutingView audio; // A2: 트랙 2~6에 어느 소스가 실리는지 (실제 트랙 비트 기준)
 	MarkStats marks;
 };
+
+// 「다시 연결」을 보여 줄 상태인가 — 본방은 나가는데 우리 송출은 멈춰 있다(오류로 멈춤 · 재시도 포기 ·
+// 방송 중에 페어링함). 독·폴백 패널·브리지가 같은 판정을 쓴다.
+inline bool CanSendNow(const StateSnapshot &s)
+{
+	if (!s.obsStreaming || !s.paired || !s.syncStart)
+		return false;
+	if (s.phase != StreamPhase::Idle && s.phase != StreamPhase::Error)
+		return false;
+	// 본방 인코더를 다시 띄워야 풀리는 사유 — 눌러도 같은 결과라 버튼을 주지 않는다.
+	if (s.errorCode == "encoder_active" || s.errorCode == "keyint_not_applied" || s.errorCode == "multitrack_video")
+		return false;
+	// 저장된 키가 규칙에 어긋난다 — 이것도 눌러도 같은 결과다. 연결을 해제하고 새 코드를 넣으면 사유가 지워져
+	// (PairWithCode) 버튼이 다시 뜬다.
+	return s.errorCode != "invalid_key";
+}
+
+// 브리지가 「다시 연결」 요청을 거절할 사유. 받을 수 있으면 빈 문자열.
+inline const char *SendNowRejection(const StateSnapshot &s)
+{
+	if (s.retry.attempt > 0 && s.retry.nextAt > 0)
+		return ""; // 다음 재시도를 기다리는 중 — 기다림만 건너뛴다
+	if (!s.obsStreaming)
+		return "main_not_live";
+	if (!s.paired)
+		return "no_key";
+	return CanSendNow(s) ? "" : "send_unavailable";
+}
+
+// 방송 중에 동기화를 켰을 때 지금 시작해도 되는가 — 본방이 아직 나가고(STOPPING부터 거짓이다), 동기화가 켜져 있고,
+// 우리 송출이 돌고 있지 않다. 브리지 워커가 보고 UI 스레드로 넘긴 뒤에 다시 본다 — 그새 본방이 끝났을 수 있다.
+// 키·GOP는 여기서 보지 않는다(StartSrtOutputChecked가 보고 사유를 상태에 남긴다).
+inline bool CanStartOnSyncEnabled(const StateSnapshot &s)
+{
+	return s.obsStreaming && s.syncStart && (s.phase == StreamPhase::Idle || s.phase == StreamPhase::Error);
+}
 
 class AppState {
 public:

@@ -59,10 +59,14 @@ target_sources(
     src/pairing.hpp
     src/private-file.cpp
     src/private-file.hpp
+    src/retry-policy.cpp
+    src/retry-policy.hpp
     src/srt-target.cpp
     src/srt-target.hpp
     src/srt-url.cpp
     src/srt-url.hpp
+    src/stream-control.cpp
+    src/stream-control.hpp
     src/stream-target.cpp
     src/stream-target.hpp
     src/ui-thread.cpp

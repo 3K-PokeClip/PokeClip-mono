@@ -29,14 +29,12 @@ inline constexpr int kDefaultLatencyMs = 1000;
 // ADR-020: 세그먼트 4s가 GOP의 정수배여야 한다 — 플러그인이 2s로 강제한다.
 inline constexpr int kForcedKeyintSec = 2;
 
-// libobs 기본 재연결과 같은 값을 명시한다 (중간 단절은 libobs가 재시도).
-inline constexpr int kReconnectRetries = 20;
-inline constexpr int kReconnectDelaySec = 2;
-
 // libobs는 "stop" 신호를 먼저 보내고 인코더를 멈춘 스레드가 나중에 active를 내린다(obs-output.c
 // end_data_capture). 출력 해제는 그 뒤에 해야 하므로 이 간격으로 확인한다 — 최대 간격 × 횟수.
 inline constexpr int kReleasePollMs = 100;
 inline constexpr int kReleasePollAttempts = 50;
+
+// 재연결 횟수·간격은 여기 없다 — libobs 재연결을 끄고 플러그인이 정책 표(retry-policy.hpp)로 다시 시도한다.
 
 // SRT 접속 중인 출력을 해제하기 전에 접속 결과를 기다리는 상한·간격. SRT 접속 타임아웃(OBS mpegts는 따로 안 주므로
 // libsrt 기본 3초)보다 넉넉히 둔다 — 넘기면 force_stop이 접속 스레드를 기다린다.

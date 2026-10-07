@@ -175,7 +175,17 @@ std::string AppState::ToJson(const StateSnapshot &s)
 	obs_data_set_string(root, "errorCode", s.errorCode.c_str());
 	obs_data_set_string(root, "errorDetail", s.errorDetail.c_str());
 	obs_data_set_bool(root, "obsStreaming", s.obsStreaming);
+	obs_data_set_bool(root, "syncStart", s.syncStart);
+	obs_data_set_bool(root, "canSendNow", CanSendNow(s));
 	obs_data_set_string(root, "theme", s.darkTheme ? "dark" : "light");
+
+	obs_data_t *retry = obs_data_create();
+	obs_data_set_int(retry, "attempt", s.retry.attempt);
+	obs_data_set_int(retry, "nextAt", s.retry.nextAt);
+	obs_data_set_bool(retry, "gaveUp", s.retry.gaveUp);
+	obs_data_set_bool(retry, "keySuspect", s.retry.keySuspect);
+	obs_data_set_obj(root, "retry", retry);
+	obs_data_release(retry);
 
 	obs_data_t *stats = obs_data_create();
 	obs_data_set_double(stats, "bitrateKbps", s.stats.bitrateKbps);
