@@ -83,7 +83,9 @@ export function statusView(state: BridgeState, nowMs: number): StatusView {
     view.canSendNow = state.canSendNow;
     const next = state.canSendNow
       ? '본방은 그대로 두고 다시 연결할 수 있어요.'
-      : state.obsStreaming
+      : state.errorCode === 'invalid_key'
+        ? '새 코드를 입력하면 다시 전송할 수 있어요.' // 본방을 다시 켜도 같다 — 키를 다시 받아야 한다
+        : state.obsStreaming
         ? '본 방송을 다시 시작해야 전송할 수 있어요.'
         : '다음 방송을 시작하면 다시 전송해요.';
     view.desc = retry.gaveUp ? `${GAVE_UP} ${next}` : next;

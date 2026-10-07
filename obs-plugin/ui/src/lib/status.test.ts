@@ -156,6 +156,12 @@ describe('statusView — 멈춘 뒤의 다음 행동', () => {
     expect(v.desc).toContain('본 방송을 다시 시작');
   });
 
+  it('키가 올바르지 않으면 버튼 대신 새 코드를 안내한다', () => {
+    const v = statusView(state({ phase: 'error', errorCode: 'invalid_key', obsStreaming: true, canSendNow: false }), NOW);
+    expect(v.canSendNow).toBe(false);
+    expect(v.desc).toBe('새 코드를 입력하면 다시 전송할 수 있어요.');
+  });
+
   it('본방이 끝난 뒤의 오류는 다음 방송을 안내한다', () => {
     const v = statusView(state({ phase: 'error', errorCode: 'connect_failed' }), NOW);
     expect(v.canSendNow).toBe(false);

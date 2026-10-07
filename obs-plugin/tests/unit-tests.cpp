@@ -1305,6 +1305,11 @@ TEST(send_now_offered_only_when_main_is_live_and_we_are_stopped)
 		s.errorCode = code;
 		CHECK(!CanSendNow(s));
 	}
+
+	// 저장된 키가 규칙에 어긋나도 눌러 봐야 같은 결과다 — 새 코드를 넣어야 풀린다
+	s = base;
+	s.errorCode = "invalid_key";
+	CHECK(!CanSendNow(s));
 }
 
 TEST(send_now_rejection_reasons)

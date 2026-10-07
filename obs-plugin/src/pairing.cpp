@@ -154,9 +154,12 @@ PairingResult PairWithCode(const std::string &rawCode)
 		s.paired = true;
 		s.keyHint = KeyHintOf(streamId);
 		s.retry.keySuspect = false; // 키가 바뀌었다 — 지난 키를 두고 띄운 확인 안내는 지운다
-		if (s.errorCode == "no_key") {
+		// 키가 없거나 어긋나서 멈춰 있었으면 새 키로 풀렸다 — 사유를 지워야 「다시 연결」이 뜬다(CanSendNow).
+		if (s.errorCode == "no_key" || s.errorCode == "invalid_key") {
 			s.errorCode.clear();
 			s.errorDetail.clear();
+			if (s.phase == StreamPhase::Error)
+				s.phase = StreamPhase::Idle;
 		}
 	});
 	obs_log(LOG_INFO, "paired (key …%s)", KeyHintOf(streamId).c_str());

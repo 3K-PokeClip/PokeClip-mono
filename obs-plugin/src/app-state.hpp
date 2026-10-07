@@ -88,8 +88,11 @@ inline bool CanSendNow(const StateSnapshot &s)
 	if (s.phase != StreamPhase::Idle && s.phase != StreamPhase::Error)
 		return false;
 	// 본방 인코더를 다시 띄워야 풀리는 사유 — 눌러도 같은 결과라 버튼을 주지 않는다.
-	return s.errorCode != "encoder_active" && s.errorCode != "keyint_not_applied" &&
-	       s.errorCode != "multitrack_video";
+	if (s.errorCode == "encoder_active" || s.errorCode == "keyint_not_applied" || s.errorCode == "multitrack_video")
+		return false;
+	// 저장된 키가 규칙에 어긋난다 — 이것도 눌러도 같은 결과다. 연결을 해제하고 새 코드를 넣으면 사유가 지워져
+	// (PairWithCode) 버튼이 다시 뜬다.
+	return s.errorCode != "invalid_key";
 }
 
 // 브리지가 「다시 연결」 요청을 거절할 사유. 받을 수 있으면 빈 문자열.
