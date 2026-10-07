@@ -84,6 +84,9 @@ private:
 	std::atomic<bool> stopWhenConnected_{false};
 	// UI 스레드 전용 — 이 출력에 정지를 요청했다. 멈추는 중인 출력은 아직 active여도 새 방송에 다시 쓰지 않는다(Start).
 	bool stopRequested_ = false;
+	// UI 스레드 전용 — 그 정지는 「재시도 중지」가 접속 중인 시도에 건 것이다. 접속이 실패하면 그 사유를 남긴다(왜 멈춰
+	// 있는지가 그것이다). 본방이 끝나서 건 정지는 실패해도 사유를 남기지 않는다.
+	bool stopKeepsFailure_ = false;
 	// 정지를 요청한 이유. OnStop이 성공 정지여도 이 사유로 오류를 남긴다 — 그 신호가 사유를 덮지 않게.
 	std::atomic<const char *> stopReason_{nullptr};
 	// 우리가 만든 오디오 인코더만(생성 참조를 우리가 쥔다). 출력이 제 참조를 놓은 뒤 Release()에서 놓는다.

@@ -237,6 +237,7 @@ void StreamTarget::Stop(const char *reason)
 	const bool wasPending = retryPending_;
 	CancelRetry();
 	wanted_ = false;
+	stopKeepsFailure_ = false; // 「재시도 중지」가 건 정지였어도, 여기로 다시 오면 방송이 끝난 것이다
 	if (wasPending) {
 		AppState::Instance().Mutate([reason](StateSnapshot &s) {
 			s.phase = reason ? StreamPhase::Error : StreamPhase::Idle;
@@ -322,6 +323,7 @@ bool StreamTarget::StopRetry()
 	if (wanted_ && attempt_ > 0 && output_ && !connectedThisOutput_) {
 		obs_log(LOG_INFO, "SRT output: retry stopped by the streamer (attempt in flight)");
 		Stop();
+		stopKeepsFailure_ = true; // Stop()이 지운 뒤에 세운다 — 이 정지는 방송이 끝나서가 아니다
 		return true;
 	}
 	return false;
@@ -379,6 +381,7 @@ void StreamTarget::Release()
 	connecting_ = false;
 	stopWhenConnected_ = false;
 	stopRequested_ = false;
+	stopKeepsFailure_ = false;
 	stopReason_ = nullptr;
 }
 
@@ -608,17 +611,25 @@ void StreamTarget::HandleStop(uint64_t generation, int code, const std::string &
 	const auto now = std::chrono::steady_clock::now();
 	// 아래 ReleaseWhenStopped가 출력을 풀면 깃발도 지워진다 — 먼저 읽는다.
 	const bool requested = stopRequested_;
+	const bool keepFailure = stopKeepsFailure_;
 	const bool wasConnected = connectedThisOutput_;
 
 	// 우리가 멈췄거나(본방 정지·사유를 든 정지), 방송 구간이 끝났거나, 다시 해도 같은 오류다 — 그만둔다.
 	if (reason || requested || !wanted_ || !IsRetryableStop(name)) {
 		CancelRetry();
 		wanted_ = false;
+		// 본방이 끝나 우리가 멈춘 출력이면, 접속 중이던 시도가 실패 코드로 끝나도 사유를 남기지 않는다 — 방송은 이미
+		// 끝났고, 다음 시도를 기다리던 중에 멈춘 경우(Stop)와 결과가 같아야 한다. 「재시도 중지」가 건 정지는 남긴다.
+		const bool stoppedWithMain = requested && !keepFailure;
 		AppState::Instance().Mutate([&](StateSnapshot &s) {
 			if (reason) {
 				// 이유를 들고 멈췄다(본방이 시작되지 않음 등) — 정지 코드보다 그 이유가 스트리머에게 맞는 설명이다.
 				s.phase = StreamPhase::Error;
 				s.errorCode = reason;
+				s.errorDetail.clear();
+			} else if (stoppedWithMain) {
+				s.phase = StreamPhase::Idle;
+				s.errorCode.clear();
 				s.errorDetail.clear();
 			} else {
 				s.phase = code == OBS_OUTPUT_SUCCESS ? StreamPhase::Idle : StreamPhase::Error;
