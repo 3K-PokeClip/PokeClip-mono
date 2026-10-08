@@ -51,6 +51,8 @@ variables {
   instance_hibernation       = true
   instance_source_dest_check = false
 
+  instance_iam_instance_profile = "example-profile"
+
   # 규칙마다 다른 값을 넣어, 선언이 키별 현재 값을 그대로 쓰는지 본다.
   ingress_rules = {
     "80" = {
@@ -121,9 +123,10 @@ run "declares_dev_box" {
   assert {
     condition = (
       aws_vpc_security_group_ingress_rule.dev["80"].tags == tomap({ Name = "example-80" }) &&
-      length(aws_vpc_security_group_ingress_rule.dev["443"].tags) == 0
+      aws_vpc_security_group_ingress_rule.dev["443"].tags == null &&
+      aws_vpc_security_group_ingress_rule.dev["8082"].tags == null
     )
-    error_message = "dev 인그레스 규칙의 tags 가 키별 현재 값과 다르다."
+    error_message = "dev 인그레스 규칙의 tags 가 키별 현재 값(빈 태그는 null)과 다르다."
   }
 
   assert {
@@ -147,6 +150,11 @@ run "declares_dev_box" {
   }
 
   assert {
+    condition     = aws_instance.dev.iam_instance_profile == "example-profile"
+    error_message = "EC2 iam_instance_profile 이 instance_iam_instance_profile 현재 값과 다르다."
+  }
+
+  assert {
     condition     = aws_eip.dev.domain == "vpc"
     error_message = "EIP domain 이 vpc 가 아니다."
   }
@@ -154,6 +162,37 @@ run "declares_dev_box" {
   assert {
     condition     = output.dev_eip == "192.0.2.10"
     error_message = "출력 dev_eip 가 EIP 공인 주소가 아니다."
+  }
+}
+
+# 실제 규칙에 태그가 없으면 tags 는 null 이다. 빈 맵({})을 넘기면 O1 plan 이
+# 「+ tags = {}」 수정을 낸다 — 빈 입력은 생략 · {} 어느 쪽이든 null 로 간다.
+run "omits_empty_rule_tags" {
+  command = plan
+
+  variables {
+    ingress_rules = {
+      "80"   = { ip_protocol = "tcp", cidr_ipv4 = "0.0.0.0/0", tags = {} }
+      "443"  = { ip_protocol = "tcp", cidr_ipv4 = "0.0.0.0/0" }
+      "8082" = { ip_protocol = "tcp", cidr_ipv4 = "0.0.0.0/0", tags = {} }
+    }
+    egress_rule = {
+      ip_protocol = "-1"
+      cidr_ipv4   = "0.0.0.0/0"
+      tags        = {}
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      for rule in aws_vpc_security_group_ingress_rule.dev : rule.tags == null
+    ])
+    error_message = "빈 입력인 인그레스 규칙 tags 가 null 이 아니다."
+  }
+
+  assert {
+    condition     = aws_vpc_security_group_egress_rule.dev.tags == null
+    error_message = "빈 입력인 이그레스 규칙 tags 가 null 이 아니다."
   }
 }
 
@@ -165,6 +204,26 @@ run "rejects_malformed_instance_id" {
   }
 
   expect_failures = [var.instance_id]
+}
+
+run "rejects_empty_instance_profile" {
+  command = plan
+
+  variables {
+    instance_iam_instance_profile = ""
+  }
+
+  expect_failures = [var.instance_iam_instance_profile]
+}
+
+run "rejects_malformed_instance_profile" {
+  command = plan
+
+  variables {
+    instance_iam_instance_profile = "<INSTANCE_PROFILE_NAME_DEV>"
+  }
+
+  expect_failures = [var.instance_iam_instance_profile]
 }
 
 run "rejects_placeholder_rule_cidr" {

@@ -129,6 +129,21 @@ variable "instance_source_dest_check" {
   type        = bool
 }
 
+# 현재 연결을 코드에 명시적으로 고정한다. provider(6.x)에서 이 인자는
+# Optional + Computed 라 생략하면 현재 값이 유지되지만, 빈 값("")을 넣으면
+# 연결이 풀리고(SSM 접속 · 상자 권한 단절), 다른 이름은 연결을 바꾼다 — 이
+# 값을 바꾸는 변경은 권한 변경이므로 리뷰 대상이다.
+# 현재 값 그대로 넣는다.
+variable "instance_iam_instance_profile" {
+  description = "dev EC2 에 현재 붙어 있는 인스턴스 프로필 이름 그대로 — 프로필 · 역할은 이 루트가 관리하지 않음(import 대상 아님)."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[\\w+=,.@-]{1,128}$", var.instance_iam_instance_profile))
+    error_message = "instance_iam_instance_profile 은 IAM 이름 꼴([\\w+=,.@-] 1–128자)이어야 한다."
+  }
+}
+
 # 키 = local.dev_ingress_rules 의 키(포트). description · tags 는 설정에 없으면
 # plan 이 지우려 하므로 현재 값을 그대로 넣는다(없으면 생략). IPv6 · 접두사
 # 목록 · 참조 SG 규칙은 이 모양으로 표현하지 못한다 — O1 조사에서 나오면
