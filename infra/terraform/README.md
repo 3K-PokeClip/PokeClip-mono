@@ -113,23 +113,33 @@ shellcheck infra/terraform/scripts/*.sh
 
 ## guard 규칙
 
-`scripts/guard.sh` 는 트리 전체를 텍스트로 검사합니다. 규칙마다
-`scripts/testdata/guard/bad_<규칙>/` fixture 가 있고, `guard_test.sh` 가
-「bad 는 그 규칙으로 실패 · `ok/` 는 통과」를 먼저 확인합니다. 경로를
-겨누는 규칙의 fixture 는 그 경로를 fixture 트리 안에 그대로 둡니다.
+`scripts/guard.sh` 는 트리 전체를 텍스트로 검사합니다. 검사 전에 주석
+(`#` · `//` · `/* */`)과 heredoc 본문을 지우므로, 주석 속 예시는 위반도
+통과 근거도 되지 않습니다. 규칙마다
+`scripts/testdata/guard/bad_<규칙>[_<변형>]/` fixture 가 있고, `guard_test.sh`
+가 「bad 는 그 규칙으로 실패 · `ok/` 는 통과 · `err_*/` 와 읽을 수 없는 파일은
+종료 코드 2」를 먼저 확인합니다. 경로를 겨누는 규칙의 fixture 는 그 경로를
+fixture 트리 안에 그대로 둡니다.
 
 | 규칙 | 대상 경로 | 실패 조건 |
 |---|---|---|
+| R0 | 전체 | `*.tf.json` 파일(이 트리는 HCL 만 — guard 가 JSON 을 읽지 못함) |
 | R1 | 전체 | `resource` · `data` `aws_secretsmanager_secret_version` |
 | R2 | 전체 | `aws_cloudfrontkeyvaluestore_key*` |
-| R3 | 전체 | `aws_security_group` 블록 안 `ingress {` · `egress {` |
-| R4 | `modules/state_bucket` | `prevent_destroy = true` 없음 |
+| R3 | 전체 | `aws_security_group` 블록 바로 안 `ingress {` · `egress {` · `ingress =` · `egress =` |
+| R4 | `modules/state_bucket` | `aws_s3_bucket` 자원 없음, 또는 그 자원의 `lifecycle` 블록에 `prevent_destroy = true` 없음 |
+
+검사를 끝낼 수 없으면(검사할 `.tf` 0건 · 읽을 수 없는 파일 · grep 오류)
+위반 0 으로 넘어가지 않고 종료 코드 2 로 멈춥니다. R4 는 `modules/state_bucket`
+이 없는 트리(다른 규칙의 fixture)에서는 건너뜁니다.
 
 R5 이후 규칙은 그 규칙이 지키는 루트 · 모듈과 같은 PR 에서 더합니다.
 
 한계:
 
-*   텍스트 검사입니다. 다른 이름 · `dynamic` 블록 · 동적 생성으로
-    우회하는 것은 막지 못합니다. 그것은 리뷰가 막습니다.
-*   R3 은 중괄호 수로 블록 끝을 찾습니다. 문자열 안의 중괄호는 구분하지
-    못합니다.
+*   텍스트 검사입니다. 다른 이름 · `dynamic` 블록 · 동적 생성 · 한 줄에
+    여러 선언을 몰아 쓴 꼴로 우회하는 것은 막지 못합니다. 그것은 리뷰가
+    막습니다.
+*   R3 · R4 는 중괄호 수로 블록 끝을 찾습니다. 주석 · heredoc · 한 줄
+    문자열 속 중괄호는 세지 않지만, 문자열 보간(`${...}`) 안에 다시 따옴표를
+    넣은 꼴은 구분하지 못합니다.

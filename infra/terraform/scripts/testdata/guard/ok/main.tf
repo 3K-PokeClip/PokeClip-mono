@@ -21,3 +21,30 @@ resource "aws_vpc_security_group_egress_rule" "all" {
   ip_protocol       = "-1"
   cidr_ipv4         = "0.0.0.0/0"
 }
+
+# 주석 · 블록 주석 · heredoc 속 금지 선언은 실제 선언이 아니므로 통과한다.
+# resource "aws_secretsmanager_secret_version" "commented" {}
+// resource "aws_cloudfrontkeyvaluestore_key" "commented" {}
+/*
+resource "aws_secretsmanager_secret_version" "block_commented" {
+  secret_id = "example"
+}
+*/
+
+resource "aws_ssm_parameter" "doc" {
+  name  = "example"
+  type  = "String"
+  value = <<-EOT
+    resource "aws_secretsmanager_secret_version" "in_heredoc" {}
+  EOT
+}
+
+# SG 안의 주석 · 문자열 속 중괄호와 "ingress {" 글자는 블록으로 세지 않는다.
+resource "aws_security_group" "braces_in_text" {
+  name        = "example-text"
+  description = "not a block: ingress { }"
+  # ingress {
+  tags = {
+    Note = "}"
+  }
+}

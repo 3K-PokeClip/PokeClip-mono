@@ -5,6 +5,9 @@
 # testdata/guard/bad_<규칙>[_<변형>]/ 는 그 규칙 하나만 어기는 Terraform 트리다.
 # guard.sh 가 그 트리에서 실패하고, 출력에 그 규칙 이름이 나와야 통과다.
 # testdata/guard/ok/ 는 모든 규칙을 지키는 트리라 guard.sh 가 통과해야 한다.
+# testdata/guard/err_<이름>/ 은 검사할 수 없는 트리라 guard.sh 가 종료 코드 2
+# 로 실패해야 한다(fail-closed). 읽을 수 없는 파일은 git 에 둘 수 없어 시험이
+# 임시 디렉터리에 만든다.
 # 경로를 겨누는 규칙(R4 등)의 fixture 는 그 경로를 트리 안에 그대로 둔다.
 #
 # 사용: bash infra/terraform/scripts/guard_test.sh
@@ -73,6 +76,44 @@ expect_clean() {
   echo "ok: ok → 위반 0"
 }
 
+#######################################
+# 검사할 수 없는 트리에서 guard.sh 가 종료 코드 2 로 멈추는지 본다.
+# Arguments:
+#   시험 이름, 트리 디렉터리 경로.
+#######################################
+expect_error() {
+  local name="$1" dir="$2"
+  local output status
+  output="$(bash "${GUARD}" "${dir}" 2>&1)"
+  status=$?
+  if [[ "${status}" -ne 2 ]]; then
+    fail "${name}: 종료 코드 2 를 기대했으나 ${status} — ${output}"
+    return
+  fi
+  echo "ok: ${name} → 검사 불가(종료 2)"
+}
+
+#######################################
+# 읽을 수 없는 .tf 가 있으면 위반 0 으로 넘어가지 않고 멈추는지 본다.
+# root 는 권한과 상관없이 읽으므로 그때는 건너뛴다.
+#######################################
+expect_unreadable_error() {
+  local tmp
+  tmp="$(mktemp -d)" || {
+    fail "unreadable: 임시 디렉터리를 만들지 못함"
+    return
+  }
+  cp -R "${FIXTURES}/ok/." "${tmp}/"
+  chmod 000 "${tmp}/main.tf"
+  if [[ -r "${tmp}/main.tf" ]]; then
+    echo "skip: unreadable(현재 사용자가 권한과 상관없이 읽음)"
+  else
+    expect_error unreadable "${tmp}"
+  fi
+  chmod 644 "${tmp}/main.tf"
+  rm -rf -- "${tmp}"
+}
+
 main() {
   local dir
   local count=0
@@ -85,6 +126,12 @@ main() {
     fail "bad_* fixture 가 하나도 없음"
   fi
   expect_clean "${FIXTURES}/ok"
+  for dir in "${FIXTURES}"/err_*/; do
+    [[ -d "${dir}" ]] || continue
+    dir="${dir%/}"
+    expect_error "$(basename -- "${dir}")" "${dir}"
+  done
+  expect_unreadable_error
 
   if [[ "${failures}" -ne 0 ]]; then
     echo "guard_test: ${failures}건 실패" >&2
