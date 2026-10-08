@@ -46,7 +46,8 @@ fail() {
 # Arguments:
 #   fixture 디렉터리 경로.
 # Returns:
-#   임시 디렉터리를 만들지 못하면 1.
+#   임시 디렉터리를 만들거나 복사하지 못하면 1(준비 실패 — 빈 입력으로
+#   종료 2 를 성공으로 오인하지 않게 한다).
 #######################################
 run_guard() {
   local dir="$1"
@@ -58,7 +59,10 @@ run_guard() {
   fi
   tmp="$(mktemp -d)" || return 1
   for src in "${dir}"/*.tf.in; do
-    cp -- "${src}" "${tmp}/$(basename -- "${src}" .in)"
+    if ! cp -- "${src}" "${tmp}/$(basename -- "${src}" .in)"; then
+      rm -rf -- "${tmp}"
+      return 1
+    fi
   done
   run_output="$(bash "${GUARD}" "${tmp}" 2>&1)"
   run_status=$?
@@ -78,7 +82,7 @@ expect_violation() {
   rule="${name#bad_}"
   rule="${rule%%_*}"
   run_guard "${dir}" || {
-    fail "${name}: 임시 디렉터리를 만들지 못함"
+    fail "${name}: 시험 준비 실패(임시 디렉터리 · 복사)"
     return
   }
   output="${run_output}"
@@ -138,7 +142,7 @@ expect_fixture_error() {
   local name
   name="$(basename -- "${dir}")"
   run_guard "${dir}" || {
-    fail "${name}: 임시 디렉터리를 만들지 못함"
+    fail "${name}: 시험 준비 실패(임시 디렉터리 · 복사)"
     return
   }
   if [[ "${run_status}" -ne 2 ]]; then
@@ -158,8 +162,11 @@ expect_unreadable_error() {
     fail "unreadable: 임시 디렉터리를 만들지 못함"
     return
   }
-  cp -R "${FIXTURES}/ok/." "${tmp}/"
-  chmod 000 "${tmp}/main.tf"
+  if ! cp -R "${FIXTURES}/ok/." "${tmp}/" || ! chmod 000 "${tmp}/main.tf"; then
+    fail "unreadable: 시험 준비 실패(복사 · 권한)"
+    rm -rf -- "${tmp}"
+    return
+  fi
   if [[ -r "${tmp}/main.tf" ]]; then
     echo "skip: unreadable(현재 사용자가 권한과 상관없이 읽음)"
   else

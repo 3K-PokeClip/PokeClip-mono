@@ -1,0 +1,7 @@
+# 여러 줄 주석으로 나눈 선언 머리는 알아보지 못해 검사 불가다.
+resource /*
+  주석
+*/ "aws_secretsmanager_secret_version" "split" {
+  secret_id     = "example"
+  secret_string = "example"
+}

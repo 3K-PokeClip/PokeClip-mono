@@ -7,7 +7,8 @@
 # 검사 전에 주석(`#` · `//` · `/* */`)과 heredoc 본문을 빈 줄로 지운다.
 # 문자열과 그 안의 보간(`${…}` · `%{…}`)은 중첩까지 따라가므로, 그 속의
 # `#` · `<<` · 따옴표 · 중괄호는 코드로 읽지 않는다. 끝나지 않는 heredoc ·
-# 블록 주석 · 문자열, 알아보지 못하는 `<<` 는 검사 불가로 멈춘다.
+# 블록 주석 · 문자열, 알아보지 못하는 `<<`, 주석으로 나뉜 선언 머리는 검사
+# 불가로 멈춘다. 파일 첫머리 UTF-8 BOM · 줄끝 CR 은 지우고 읽는다.
 # 줄 번호는 그대로다. 텍스트 검사라 다른 이름 · 동적 생성으로 우회하는 것은
 # 막지 못한다 — 그것은 리뷰가 막는다.
 #
@@ -28,13 +29,16 @@ readonly SCRIPT_DIR
 # 안의 중괄호는 「_」로 바꿔 블록 깊이 계산(R3 · R4 · R11)에 끼지 않게 한다.
 # heredoc 종료자는 HCL 식별자(글자 · 숫자 · 밑줄 · 하이픈)이고, 코드 위치의
 # `<<` 만 heredoc 으로 본다. 종료 코드 3 = 끝나지 않는 heredoc · 블록 주석 ·
-# 줄을 넘는 문자열 · 보간, 보간 속 주석 · `<<`, 알아보지 못하는 `<<`.
+# 줄을 넘는 문자열 · 보간, 보간 속 주석 · `<<`, 알아보지 못하는 `<<`,
+# 키워드만 남은 줄(블록 주석이 `resource /* … */ "x"` 처럼 머리를 나눈 꼴).
 # awk 프로그램이라 작은따옴표가 맞다.
 # shellcheck disable=SC2016
 readonly STRIP_COMMENTS='
 function brace(ch) { return (ch == "{" || ch == "}") ? "_" : ch }
 {
   line = $0
+  if (NR == 1) { sub(/^\357\273\277/, "", line) }
+  sub(/\r$/, "", line)
   if (heredoc != "") {
     marker = line
     gsub(/^[[:space:]]+|[[:space:]]+$/, "", marker)
@@ -92,6 +96,10 @@ function brace(ch) { return (ch == "{" || ch == "}") ? "_" : ch }
     i++
   }
   if (sp > 0) { bad = 1; exit 3 }
+  if (code ~ /^[[:space:]]*(resource|data|dynamic|ingress|egress|lifecycle)[[:space:]]*$/) {
+    bad = 1
+    exit 3
+  }
   if (match(code, /<<-?[A-Za-z_][A-Za-z0-9_-]*[[:space:]]*$/)) {
     heredoc = substr(code, RSTART, RLENGTH)
     sub(/^<<-?/, "", heredoc)
@@ -107,17 +115,10 @@ END {
 }
 '
 
-# 한 줄의 문자열 리터럴 내용을 비운다(R3 · R4 공용). 중괄호는 이미
-# STRIP_COMMENTS 가 바꿔 두었으므로 깊이 계산에는 영향이 없다.
-readonly BLANK_STRINGS='function bare_line(s) {
-  gsub(/"([^"\\]|\\.)*"/, "\"\"", s)
-  return s
-}
-'
-
-# 자원 · data 선언의 머리: 키워드 뒤 공백이 없어도, 유형 라벨에 따옴표가
-# 없어도 같은 선언이다(`resource"x"` · `resource x y {`).
-readonly DECL='^[[:space:]]*(resource|data)[[:space:]]*"?'
+# 자원 · data 선언의 머리: 키워드 뒤 공백이 없어도(바로 따옴표), 유형 라벨에
+# 따옴표가 없어도 같은 선언이다(`resource"x"` · `resource x y {`). 키워드와
+# 이름이 붙은 속성 이름(`resourcex = …`)은 선언이 아니다.
+readonly DECL='^[[:space:]]*(resource|data)([[:space:]]+"?|")'
 readonly LABEL_END='("|[[:space:]]|[{]|$)'
 
 violations=0
@@ -266,18 +267,20 @@ check_r2() {
 }
 
 # R3: aws_security_group 블록 바로 안의 인라인 ingress · egress(블록 · 속성형 ·
-# dynamic 블록). 중괄호 깊이를 세어 블록 끝을 찾는다.
+# dynamic 블록). 중괄호 깊이를 세어 블록 끝을 찾는다. 문자열 · 보간 속
+# 중괄호는 STRIP_COMMENTS 가 이미 「_」로 바꿨다. 블록이 닫히지 않은 채 파일이
+# 끝나면 검사 불가다.
 check_r3() {
   local file="$1" content="$2"
   local lines
   # shellcheck disable=SC2016
-  lines="$(run_awk R3 "${file}" "${content}" "${BLANK_STRINGS}"'
-    $0 ~ ("^[[:space:]]*resource[[:space:]]*\"?aws_security_group" end) {
+  lines="$(run_awk R3 "${file}" "${content}" '
+    $0 ~ ("^[[:space:]]*resource([[:space:]]+\"?|\")aws_security_group" end) {
       in_sg = 1
       depth = 0
     }
     in_sg {
-      bare = bare_line($0)
+      bare = $0
       if (depth == 1 &&
           (bare ~ /^[[:space:]]*(ingress|egress)[[:space:]]*[{=]/ ||
            $0 ~ /^[[:space:]]*dynamic[[:space:]]*"?(ingress|egress)("|[[:space:]]|\{)/)) {
@@ -288,6 +291,7 @@ check_r3() {
       depth += opens - closes
       if (depth <= 0 && (opens + closes) > 0) { in_sg = 0 }
     }
+    END { if (in_sg) { exit 3 } }
   ' -v end="${LABEL_END}")" || exit 2
   report_lines R3 "${file}" "${lines}" \
     'aws_security_group 인라인 ingress · egress 금지(별도 규칙 자원으로)'
@@ -295,18 +299,19 @@ check_r3() {
 
 # 파일 하나에서 주어진 유형의 resource 마다 lifecycle 블록 안의
 # prevent_destroy = true 여부를 내는 awk 프로그램(-v types=…).
-# 자원마다 「ok <유형> <줄>」 또는 「missing <유형> <줄>」.
+# 자원마다 「ok <유형> <줄>」 또는 「missing <유형> <줄>」. 자원 블록이 닫히지
+# 않은 채 파일이 끝나면 종료 3(검사 불가).
 # shellcheck disable=SC2016
-readonly SCAN_PREVENT_DESTROY="${BLANK_STRINGS}"'
+readonly SCAN_PREVENT_DESTROY='
   BEGIN {
     n = split(types, list, " ")
     for (k = 1; k <= n; k++) { wanted[list[k]] = 1 }
   }
   {
-    bare = bare_line($0)
-    if (depth == 0 && match($0, /^[[:space:]]*resource[[:space:]]*"?[A-Za-z0-9_-]+/)) {
+    bare = $0
+    if (depth == 0 && match($0, /^[[:space:]]*resource([[:space:]]+"?|")[A-Za-z0-9_-]+/)) {
       type = substr($0, RSTART, RLENGTH)
-      sub(/^[[:space:]]*resource[[:space:]]*"?/, "", type)
+      sub(/^[[:space:]]*resource([[:space:]]+"?|")/, "", type)
       if (type in wanted) {
         in_res = 1
         protected = 0
@@ -337,6 +342,7 @@ readonly SCAN_PREVENT_DESTROY="${BLANK_STRINGS}"'
       in_res = 0
     }
   }
+  END { if (in_res) { exit 3 } }
 '
 
 #######################################

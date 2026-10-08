@@ -76,3 +76,8 @@ resource "aws_security_group_rule" "legacy_name_only" {
   protocol          = "tcp"
   cidr_blocks       = ["0.0.0.0/0"]
 }
+
+# 속성 이름이 resource 로 시작해도 선언이 아니다.
+locals {
+  resourceaws_secretsmanager_secret_version = "example"
+}
