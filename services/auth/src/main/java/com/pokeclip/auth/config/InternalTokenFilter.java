@@ -27,15 +27,22 @@ public class InternalTokenFilter extends OncePerRequestFilter {
     static final String HEADER = "X-Internal-Token";
 
     private final byte[] expected;
+    private final String headerName;
 
     public InternalTokenFilter(String token) {
+        this(token, HEADER);
+    }
+
+    /** 토큰을 {@code headerName} 헤더에서 받는다. 위 생성자는 {@value #HEADER}를 본다. */
+    public InternalTokenFilter(String token, String headerName) {
         this.expected = token.getBytes(StandardCharsets.UTF_8);
+        this.headerName = headerName;
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
-        String presented = request.getHeader(HEADER);
+        String presented = request.getHeader(headerName);
 
         if (presented == null
                 || !MessageDigest.isEqual(presented.getBytes(StandardCharsets.UTF_8), expected)) {
