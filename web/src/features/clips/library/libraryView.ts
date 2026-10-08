@@ -1,6 +1,7 @@
 import { ddayFor, type VodDday } from '@/features/broadcast/vod/vodListView';
 import { formatUptime } from '@/features/player/playerMath';
 import { ClipApiError } from '@/api/clipEditor';
+import { PRIVACY_AUDIT_NOTE, PRIVACY_LABEL } from '@/features/clips/editor/uploadInfo';
 import type { ClipStatus, LibraryClip, LibraryRole } from './useLibraryMockState';
 
 // 시안 1g 보관함의 표시 규칙 — 상태가 배지·주 동작·보조 줄·칩·정렬로 어떻게 펼쳐지는지를
@@ -26,14 +27,21 @@ export function isLibrarySort(value: string): value is LibrarySort {
 /** 배지 톤 — DS Badge tone의 부분집합 */
 export type StatusTone = 'point' | 'neutral' | 'warning' | 'danger' | 'success';
 
-/** 시안 1g 카드·패널 배지. 발행됨과 발행됨·원본 만료는 같은 「발행됨」이다 — 만료는 안내문이 말한다 */
+/**
+ * 시안 1g 카드·패널 배지 + 진행 단계 넷(POK-291). 유튜브에 올라간 것은 「업로드됨」이다(전에는 「발행됨」, 칩 이름은
+ * 그대로 둔다: 칩 이름은 2번 몫). 업로드됨과 업로드됨·원본 만료는 같은 배지다: 만료는 안내문이 말한다
+ */
 export const STATUS_BADGE: Record<ClipStatus, { tone: StatusTone; label: string }> = {
   editing: { tone: 'point', label: '편집 중' },
+  rendering: { tone: 'point', label: '만드는 중' },
   ready: { tone: 'neutral', label: '업로드 대기' },
+  uploading: { tone: 'point', label: '올리는 중' },
+  checking: { tone: 'warning', label: '확인 필요' },
+  uploadFailed: { tone: 'danger', label: '업로드 실패' },
   pending: { tone: 'warning', label: '승인 대기' },
   rejected: { tone: 'danger', label: '반려됨' },
-  published: { tone: 'success', label: '발행됨' },
-  expired: { tone: 'success', label: '발행됨' },
+  published: { tone: 'success', label: '업로드됨' },
+  expired: { tone: 'success', label: '업로드됨' },
   failed: { tone: 'danger', label: '렌더 실패' },
 };
 
@@ -73,10 +81,13 @@ export function chipsFor(role: LibraryRole): { value: LibraryChip; label: string
 /**
  * 편집본 하나가 속하는 칩. 칩은 전체를 분할한다 — 모든 편집본이 정확히 한 칩에 들어가
  * 칩 수의 합이 전체와 같다. 스트리머에겐 반려됨 칩이 없으므로 반려된 것도 작업 중이다.
+ * 진행 단계(POK-291): 만드는 중·올리는 중은 작업 중, 업로드 실패·확인 필요는 사람 손이 필요해 업로드 대기다.
  */
 export function chipOf(status: ClipStatus, role: LibraryRole): Exclude<LibraryChip, 'all'> {
   switch (status) {
     case 'ready':
+    case 'uploadFailed':
+    case 'checking':
       return 'ready';
     case 'published':
     case 'expired':
@@ -84,6 +95,8 @@ export function chipOf(status: ClipStatus, role: LibraryRole): Exclude<LibraryCh
     case 'rejected':
       return role === 'editor' ? 'rejected' : 'working';
     case 'editing':
+    case 'rendering':
+    case 'uploading':
     case 'pending':
     case 'failed':
       return 'working';
@@ -190,8 +203,9 @@ export type PrimaryAction =
     }
   /** href는 clip.youtubeUrl — 없으면 링크 대신 비활성 버튼을 그린다(LinkButton 규칙) */
   | { kind: 'external'; label: '유튜브 보기' }
-  | { kind: 'action'; label: string; action: 'upload' | 'retryRender' }
-  /** 서버 일이 진행 중이라 누를 것이 없다 — 올리는 중·확인 필요(POK-111). 비활성 버튼으로 그린다 */
+  /** retryUpload는 실패한 업로드를 저장된 정보 그대로 다시 올린다(POK-291, 창 없이) */
+  | { kind: 'action'; label: string; action: 'upload' | 'retryRender' | 'retryUpload' }
+  /** 서버 일이 진행 중이라 누를 것이 없다: 만드는 중·올리는 중·확인 필요. 비활성 버튼으로 그린다 */
   | { kind: 'busy'; label: string };
 
 export type PanelNote = 'expired' | 'pending' | 'checking';
@@ -263,6 +277,38 @@ export function detailViewFor(status: ClipStatus, role: LibraryRole): DetailView
         ...base,
         primary: { kind: 'link', label: '이어서 편집', href: '/clips/editor', variant: 'solid' },
       };
+    // 진행 단계(POK-291). 서버 일이 도는 동안은 누를 것이 없고, 제목은 업로드 정보에서 온 것이라 여기서 못 고친다
+    case 'rendering':
+      return {
+        ...base,
+        primary: { kind: 'busy', label: '영상 만드는 중' },
+        edit: EDIT_CONTINUE,
+        download: false,
+        titleLocked: true,
+      };
+    case 'uploading':
+      return {
+        ...base,
+        primary: { kind: 'busy', label: '유튜브에 올리는 중' },
+        edit: EDIT_CONTINUE,
+        titleLocked: true,
+      };
+    case 'checking':
+      return {
+        ...base,
+        primary: { kind: 'busy', label: '업로드 확인 필요' },
+        edit: EDIT_CONTINUE,
+        titleLocked: true,
+        note: 'checking',
+      };
+    case 'uploadFailed':
+      // 저장된 정보(제목·설명·태그·공개 범위·썸네일)로 다시 올린다: 패널 제목을 고쳐도 실리지 않으니 잠근다
+      return {
+        ...base,
+        primary: { kind: 'action', label: '다시 시도', action: 'retryUpload' },
+        edit: EDIT_CONTINUE,
+        titleLocked: true,
+      };
     case 'ready':
       return {
         ...base,
@@ -311,9 +357,9 @@ export function detailViewFor(status: ClipStatus, role: LibraryRole): DetailView
 }
 
 /**
- * 서버 줄의 업로드 상태를 시안 규칙(detailViewFor) 위에 얹는다(POK-111). 화면 상태 일곱에는 올리는 중·확인 필요가
- * 없어 둘 다 「업로드 대기」로 접히는데, 그대로 두면 올리는 중에 「업로드」를 또 누를 수 있다. 서버 편집본은 승인 단계가
- * 없어(편집자도 바로 올린다) 「업로드 요청」이라 쓰면 거짓이 된다. 목업 줄은 시안 규칙 그대로 둔다.
+ * 서버 줄을 시안 규칙(detailViewFor) 위에 얹는다(POK-111). 진행 단계(만드는 중·올리는 중·확인 필요·업로드 실패)는 이제
+ * 제 화면 상태가 있어 detailViewFor가 정한다(POK-291). 서버 편집본은 승인 단계가 없어(편집자도 바로 올린다)
+ * 「업로드 요청」이라 쓰면 거짓이 된다. 목업 줄은 시안 규칙 그대로 둔다.
  */
 export function detailViewForClip(
   clip: LibraryClip,
@@ -321,37 +367,24 @@ export function detailViewForClip(
   role: LibraryRole,
 ): DetailView {
   const view = detailViewFor(status, role);
-  switch (clip.entry?.status) {
-    case undefined:
-      return view;
-    case 'uploading':
-      return { ...view, primary: { kind: 'busy', label: '유튜브에 올리는 중' }, titleLocked: true };
-    case 'checking':
-      return {
-        ...view,
-        primary: { kind: 'busy', label: '업로드 확인 필요' },
-        titleLocked: true,
-        note: 'checking',
-      };
-    case 'uploaded':
-      // 올린 영상의 제목은 유튜브에 있다 — 여기서 고쳐도 저장할 곳이 없어 바뀐 척만 한다
-      return { ...view, titleLocked: true };
-    default: {
-      // 제목이 살아 있는 업로드에서 온 것이면(올린 뒤 새 판을 저장해 「편집 중」인 경우 포함) 고칠 곳이 없다 —
-      // 초안은 완성 편집본에만 남아 다음 읽기에 되돌아간다(PR #203 codex). 실패한 업로드는 다시 올리게 열어 둔다
-      const upload = clip.entry?.latestClip?.upload;
-      const titleLocked = view.titleLocked || (upload != null && upload.status !== 'failed');
-      return view.primary.kind === 'action' && view.primary.action === 'upload'
-        ? { ...view, titleLocked, primary: { ...view.primary, label: '업로드' } }
-        : { ...view, titleLocked };
-    }
-  }
+  const entry = clip.entry;
+  if (entry === undefined) return view;
+  // 올린 영상의 제목은 유튜브에 있다: 여기서 고쳐도 저장할 곳이 없어 바뀐 척만 한다
+  if (entry.status === 'uploaded') return { ...view, titleLocked: true };
+  // 제목이 살아 있는 업로드에서 온 것이면(올린 뒤 새 판을 저장해 「편집 중」인 경우 포함) 고칠 곳이 없다:
+  // 초안은 완성 편집본에만 남아 다음 읽기에 되돌아간다(PR #203 codex)
+  const upload = entry.latestClip?.upload;
+  const titleLocked = view.titleLocked || (upload != null && upload.status !== 'failed');
+  return view.primary.kind === 'action' && view.primary.action === 'upload'
+    ? { ...view, titleLocked, primary: { ...view.primary, label: '업로드' } }
+    : { ...view, titleLocked };
 }
 
 /** 패널 안내 상자 문구 — 승인 대기는 시점마다 할 수 있는 일이 다르다 */
 export function noteText(note: PanelNote, role: LibraryRole): string {
   if (note === 'checking') {
-    return '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 비공개 영상을 확인해 주세요.';
+    // 공개 범위를 고를 수 있게 되어(POK-291) 「비공개 영상」이라 못박지 않는다
+    return '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 영상이 올라갔는지 확인해 주세요.';
   }
   if (note === 'expired') {
     return '원본 VOD가 만료되어 다시 편집할 수 없어요. 발행된 영상은 그대로 유지됩니다.';
@@ -384,6 +417,10 @@ export function uploadErrorMessage(e: unknown): string {
       return '올릴 영상을 고를 수 없어요. 이 편집본은 영상 출력이 하나가 아니에요.';
     }
     if (e.code === 'clip_not_rendered') return '영상이 아직 완성되지 않았어요.';
+    if (e.code === 'already_uploaded') {
+      return '이 편집본의 같은 판이 이미 다른 영상으로 올라갔어요. 고친 뒤 다시 만들어 주세요.';
+    }
+    if (e.code === 'nothing_to_retry') return '다시 올릴 업로드가 없어요. 목록을 새로 고쳐 주세요.';
     if (e.status === 404) return '편집본을 찾을 수 없어요. 목록을 새로 고쳐 주세요.';
     if (e.code === 'upload_unavailable') {
       return '지금은 업로드를 받을 수 없어요. 잠시 뒤 다시 올려 주세요.';
@@ -421,6 +458,44 @@ export function uploadFailureText(clip: LibraryClip): string | null {
     return `유튜브가 영상을 받지 않았어요${why}. 제목이나 영상을 확인한 뒤 다시 올려 주세요.`;
   }
   return `유튜브에 올리지 못했어요(${code}). 다시 올려 주세요.`;
+}
+
+/** 썸네일만 못 붙인 까닭(업로드 일꾼의 썸네일 오류 코드, POK-291). 모르는 코드는 그대로 보인다 */
+const THUMBNAIL_REASON: Record<string, string> = {
+  THUMBNAIL_FORBIDDEN: '채널 전화 인증이 필요해요.',
+  THUMBNAIL_QUOTA_EXCEEDED: '오늘 유튜브 한도를 다 썼어요.',
+  THUMBNAIL_RATE_LIMITED: '유튜브가 잠시 요청을 막았어요.',
+  THUMBNAIL_INVALID_IMAGE: '유튜브가 이미지를 받지 않았어요. 크기와 형식을 확인해 주세요.',
+  THUMBNAIL_UNAUTHORIZED: '유튜브 채널 연동을 확인해 주세요.',
+  THUMBNAIL_NO_TOKEN: '유튜브 채널 연동을 확인해 주세요.',
+  THUMBNAIL_NOT_REPORTED: '썸네일 결과를 받지 못했어요.',
+};
+
+/**
+ * 영상은 올라갔는데 썸네일만 실패한 편집본의 안내(POK-291). 영상은 그대로 두고, 썸네일은 유튜브 스튜디오에서 직접 바꾸게
+ * 한다(다시 올리면 영상이 두 번 올라간다). 그 밖이면 null.
+ */
+export function thumbnailFailureText(clip: LibraryClip): string | null {
+  const entry = clip.entry;
+  const thumbnail = entry?.latestClip?.upload?.thumbnail;
+  if (entry?.status !== 'uploaded' || thumbnail?.status !== 'failed') return null;
+  const code = thumbnail.errorCode ?? 'UNKNOWN';
+  const reason = THUMBNAIL_REASON[code] ?? `(${code})`;
+  return `영상은 올라갔고 썸네일만 못 붙였어요. ${reason} 유튜브 스튜디오에서 직접 바꿀 수 있어요.`;
+}
+
+/**
+ * 공개 범위 안내(POK-291). 일부 공개·공개를 골랐어도 감사 전에는 비공개로 올라간다(ADR-084): 「업로드됨」만 보고 공개된
+ * 줄로 오해하지 않게 말한다. 비공개거나 고른 것이 없으면 null.
+ */
+export function privacyNoteText(clip: LibraryClip): string | null {
+  const entry = clip.entry;
+  if (entry === undefined) return null;
+  const upload = entry.latestClip?.upload;
+  const privacy =
+    upload != null ? upload.privacyStatus : (entry.uploadRequest?.privacyStatus ?? undefined);
+  if (privacy === undefined || privacy === 'private') return null;
+  return `공개 범위는 「${PRIVACY_LABEL[privacy]}」로 골랐어요. ${PRIVACY_AUDIT_NOTE}`;
 }
 
 // ---------- 표기 ----------

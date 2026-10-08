@@ -9,6 +9,8 @@ import {
 import {
   detailViewForClip,
   noteText,
+  privacyNoteText,
+  thumbnailFailureText,
   uploadErrorMessage,
   uploadFailureText,
   uploadTitleProblem,
@@ -105,6 +107,14 @@ describe('uploadErrorMessage — 주문이 거절된 사유를 사람 말로', (
       new ClipApiError(503, 'authorization_unavailable', null),
       '권한 확인이 잠시 안 돼요. 잠시 뒤 다시 올려 주세요.',
     ],
+    [
+      new ClipApiError(409, 'already_uploaded', null),
+      '이 편집본의 같은 판이 이미 다른 영상으로 올라갔어요. 고친 뒤 다시 만들어 주세요.',
+    ],
+    [
+      new ClipApiError(409, 'nothing_to_retry', null),
+      '다시 올릴 업로드가 없어요. 목록을 새로 고쳐 주세요.',
+    ],
   ])('%s', (error, message) => {
     expect(uploadErrorMessage(error)).toBe(message);
   });
@@ -182,7 +192,9 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
   });
 
   it('올리는 중에는 누를 수 없는 「유튜브에 올리는 중」이고 제목이 잠긴다', () => {
-    const view = detailViewForClip(toLibraryClip(entry('uploading'), '9'), 'ready', 'streamer');
+    const clip = toLibraryClip(entry('uploading'), '9');
+    const view = detailViewForClip(clip, clip.status, 'streamer');
+    expect(view.badge.label).toBe('올리는 중');
     expect(view.primary).toEqual({ kind: 'busy', label: '유튜브에 올리는 중' });
     expect(view.titleLocked).toBe(true);
     expect(view.note).toBeNull();
@@ -209,22 +221,23 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
     expect(view.titleLocked).toBe(true);
   });
 
-  it('실패한 업로드의 제목은 다시 올릴 수 있게 열어 둔다', () => {
-    const view = detailViewForClip(
-      toLibraryClip(entry('rendered', snapshot(failedUpload('UNKNOWN'))), '9'),
-      'ready',
-      'streamer',
-    );
-    expect(view.titleLocked).toBe(false);
+  it('실패한 업로드는 「업로드 실패」이고 저장된 정보로 「다시 시도」한다: 패널 제목은 실리지 않아 잠근다(POK-291)', () => {
+    const clip = toLibraryClip(entry('rendered', snapshot(failedUpload('UNKNOWN'))), '9');
+    expect(clip.status).toBe('uploadFailed');
+    const view = detailViewForClip(clip, clip.status, 'streamer');
+    expect(view.badge.label).toBe('업로드 실패');
+    expect(view.primary).toEqual({ kind: 'action', label: '다시 시도', action: 'retryUpload' });
+    expect(view.titleLocked).toBe(true);
   });
 
-  it('확인 필요는 다시 올리기를 막고 채널을 보라고 안내한다', () => {
-    const view = detailViewForClip(toLibraryClip(entry('checking'), '9'), 'ready', 'streamer');
+  it('확인 필요는 다시 올리기를 막고 채널을 보라고 안내한다: 공개 범위를 못박지 않는다', () => {
+    const clip = toLibraryClip(entry('checking'), '9');
+    const view = detailViewForClip(clip, clip.status, 'streamer');
     expect(view.primary).toEqual({ kind: 'busy', label: '업로드 확인 필요' });
     expect(view.titleLocked).toBe(true);
     expect(view.note).toBe('checking');
     expect(noteText('checking', 'streamer')).toBe(
-      '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 비공개 영상을 확인해 주세요.',
+      '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 영상이 올라갔는지 확인해 주세요.',
     );
   });
 
@@ -235,6 +248,89 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
       label: '업로드 요청',
       action: 'upload',
     });
+  });
+});
+
+function uploaded(over: Partial<UploadSnapshot> = {}): UploadSnapshot {
+  return {
+    ...(failedUpload('UNKNOWN') as UploadSnapshot),
+    status: 'uploaded',
+    error: null,
+    videoId: 'v1',
+    ...over,
+  };
+}
+
+describe('thumbnailFailureText: 영상은 올라갔고 썸네일만 실패(POK-291)', () => {
+  it('채널 인증이 없어 거절되면 전화 인증을 말한다', () => {
+    const clip = toLibraryClip(
+      entry(
+        'uploaded',
+        snapshot(
+          uploaded({
+            thumbnail: { source: 'file', status: 'failed', errorCode: 'THUMBNAIL_FORBIDDEN' },
+          }),
+        ),
+      ),
+      '9',
+    );
+    expect(thumbnailFailureText(clip)).toBe(
+      '영상은 올라갔고 썸네일만 못 붙였어요. 채널 전화 인증이 필요해요. 유튜브 스튜디오에서 직접 바꿀 수 있어요.',
+    );
+  });
+
+  it('모르는 코드는 코드를 그대로 보인다', () => {
+    const clip = toLibraryClip(
+      entry(
+        'uploaded',
+        snapshot(uploaded({ thumbnail: { source: 'scene', status: 'failed', errorCode: 'X_1' } })),
+      ),
+      '9',
+    );
+    expect(thumbnailFailureText(clip)).toContain('(X_1)');
+  });
+
+  it('붙었거나 고르지 않았거나 옛 서버(칸 없음)면 null', () => {
+    for (const thumbnail of [
+      { source: 'scene', status: 'set', errorCode: null },
+      { source: 'none', status: 'none', errorCode: null },
+      undefined,
+    ] as const) {
+      const clip = toLibraryClip(entry('uploaded', snapshot(uploaded({ thumbnail }))), '9');
+      expect(thumbnailFailureText(clip)).toBeNull();
+    }
+  });
+});
+
+describe('privacyNoteText: 고른 공개 범위와 감사 전 잠금(POK-291)', () => {
+  it('일부 공개·공개를 골랐으면 감사 전에는 비공개로 올라간다고 말한다', () => {
+    const clip = toLibraryClip(
+      entry('uploaded', snapshot(uploaded({ privacyStatus: 'public' }))),
+      '9',
+    );
+    expect(privacyNoteText(clip)).toBe(
+      '공개 범위는 「공개」로 골랐어요. 유튜브 API 감사를 통과하기 전에는 무엇을 골라도 비공개로 올라가요. 그때 올린 영상은 나중에 공개로 바꾸려면 다시 올려야 해요.',
+    );
+  });
+
+  it('업로드 줄이 아직 없으면 업로드 정보의 공개 범위로 말한다', () => {
+    const clip = toLibraryClip(
+      {
+        ...entry('rendering', null),
+        uploadRequest: { title: 't', privacyStatus: 'unlisted', thumbnailSource: 'none' },
+      },
+      '9',
+    );
+    expect(privacyNoteText(clip)).toContain('「일부 공개」');
+  });
+
+  it('비공개거나 옛 서버(칸 없음)면 말하지 않는다', () => {
+    expect(
+      privacyNoteText(
+        toLibraryClip(entry('uploaded', snapshot(uploaded({ privacyStatus: 'private' }))), '9'),
+      ),
+    ).toBeNull();
+    expect(privacyNoteText(toLibraryClip(entry('uploaded', snapshot(uploaded())), '9'))).toBeNull();
   });
 });
 

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, Scissors } from 'lucide-react';
 import { EmptyState, useToast } from '@/ui';
@@ -23,6 +23,8 @@ import {
   type ClipSnapshot,
   type JumpCard,
   type RecipeDocument,
+  type UploadInfo,
+  type UploadRequestSummary,
 } from '@/api/clipEditor';
 import { EditorHeader } from '../EditorHeader';
 import { PreviewCanvas } from '../PreviewCanvas';
@@ -55,6 +57,14 @@ import {
 } from '@/features/player/recordingTimeline';
 import { useEditorVideoPlayback } from '../useEditorVideoPlayback';
 import { lookFromDocument, outputsFor, sameRecipe, subtitlesFor } from '../recipeLook';
+import {
+  emptyUploadDraft,
+  UploadInfoDialog,
+  type UploadDraft,
+  type UploadFieldErrors,
+} from '../UploadInfoDialog';
+import { defaultSceneOffsetMs, sceneOffsetFromPlayhead } from '../uploadInfo';
+import { clipLabel, clipSettled } from './clipProgress';
 
 // 시안 1d-a 클립 편집기(스튜디오형). 전폭 자체 헤더를 가지므로 ScreenContainer를 쓰지 않는다
 // (라이브 대시보드 선례). 데이터·동작은 전부 useClipEditorMockState 뒤에 있다.
@@ -62,7 +72,8 @@ import { lookFromDocument, outputsFor, sameRecipe, subtitlesFor } from '../recip
 // clip 창구 배선(POK-251): 디자인은 그대로고 목업 값만 실제 값으로 바뀐다 —
 //   ?stream=&card=   점프카드 하나를 열어 그 창을 구간으로(처음 만드는 편집본)
 //   ?recipe=         보관함의 저장된 편집본을 다시 연다(GET /api/clip/library/{id})
-// 「편집본 저장」= POST/PUT recipes(계약6, 구간은 타임라인의 핸들 값) · 「영상 만들기」= POST renders.
+// 「편집본 저장」= POST/PUT recipes(계약6, 구간은 타임라인의 핸들 값) · 「영상 만들기」= 업로드 정보 창 → POST renders
+// (업로드 정보를 실어 보내면 렌더가 끝나는 대로 clip이 유튜브에 올린다, POK-291).
 // 파형·트랙·AI 자막·이미지·BGM은 백엔드가 없어 빈 채로 둔다(가짜 값을 심지 않는다).
 
 /**
@@ -141,6 +152,13 @@ export function StudioEditor(options: ClipEditorOptions = {}) {
   useEffect(() => {
     function onKeyDown(event: globalThis.KeyboardEvent) {
       const target = event.target instanceof Element ? event.target : null;
+      // 창(업로드 정보 등)이 떠 있는 동안에는 편집기 단축키를 통째로 끈다. 안 끄면 창 안 라디오 위 Space가 재생으로 새며
+      // 선택을 막고, 스위치·라디오 위 I·O·⌘Z가 창 뒤 편집기의 구간과 기록을 바꾼다(POK-291)
+      if (
+        target?.closest('[role="dialog"]') != null ||
+        document.querySelector('[aria-modal="true"]') !== null
+      )
+        return;
       if (target?.closest(TEXT_ENTRY) != null) return;
       const intent = editorIntentForKey(event);
       if (intent === null) return;
@@ -224,6 +242,8 @@ interface Loaded {
   trackLabels: TrackLabels | null;
   /** 녹화(재생 서버). 있으면 미리보기에 실제 영상이 나오고, 시각의 기준점도 여기다 */
   recording: RecordingTimeline | null;
+  /** 저장된 편집본 지금 판에 남겨 둔 업로드 정보(POK-291). 창을 다시 열 때 채운다 */
+  uploadRequest: UploadRequestSummary | null;
 }
 
 /**
@@ -274,9 +294,57 @@ function messageOf(e: unknown): string {
       return '영상 조각이 아직 다 안 올라왔어요 — 잠시 뒤 다시';
     if (e.status === 503 && e.code === 'render_unavailable')
       return '영상 만들기가 잠시 멈춰 있어요 — 잠시 뒤 다시 해 주세요';
+    // 유튜브 업로드 정보를 실은 주문의 거절(POK-291)
+    if (e.status === 409 && e.code === 'already_uploaded')
+      return '이미 올린 편집본이에요. 고친 뒤 다시 만들어 주세요';
+    if (e.status === 409 && e.code === 'youtube_not_linked')
+      return '스트리머의 유튜브 채널이 연결돼 있지 않아요';
+    if (e.status === 503 && e.code === 'upload_unavailable')
+      return '지금은 유튜브 업로드를 받을 수 없어요. 잠시 뒤 다시 해 주세요';
+    if (e.status === 503 && e.code === 'thumbnail_store_unavailable')
+      return '썸네일 이미지를 저장하지 못했어요. 잠시 뒤 다시 해 주세요';
     if (e.status === 400 && e.field) return `저장할 수 없는 값이 있어요 (${e.field})`;
   }
   return e instanceof Error ? e.message : String(e);
+}
+
+const UPLOAD_FIELD_MESSAGE: Required<UploadFieldErrors> = {
+  title: '유튜브 제목을 확인해 주세요.',
+  description: '설명을 확인해 주세요.',
+  tags: '태그를 확인해 주세요.',
+  privacyStatus: '공개 범위를 확인해 주세요.',
+  thumbnail: '썸네일을 확인해 주세요.',
+};
+
+/** 업로드 정보 칸을 짚은 거절이면 창 안 그 칸에 보일 사유. 아니면 null(토스트로 알린다) */
+function uploadFieldErrorOf(e: unknown): UploadFieldErrors | null {
+  if (!(e instanceof ClipApiError)) return null;
+  if (e.status === 413) return { thumbnail: '이미지는 10MB까지 올릴 수 있어요' };
+  if (e.status === 415) return { thumbnail: 'JPG나 PNG만 올릴 수 있어요' };
+  if (e.status !== 400 || e.field === null) return null;
+  // thumbnail.offsetMs 처럼 썸네일 안쪽 칸도 썸네일 칸이 말한다
+  const key = e.field.startsWith('thumbnail') ? 'thumbnail' : e.field;
+  return key in UPLOAD_FIELD_MESSAGE
+    ? { [key]: UPLOAD_FIELD_MESSAGE[key as keyof UploadFieldErrors] }
+    : null;
+}
+
+/** 창의 값 → 렌더 주문의 업로드 정보. 장면 시각은 완성 영상 안으로 자른다 */
+function uploadInfoOf(draft: UploadDraft, cutLengthMs: number): UploadInfo {
+  return {
+    title: draft.title.trim(),
+    description: draft.description,
+    tags: draft.tags,
+    privacyStatus: draft.privacyStatus,
+    madeForKids: draft.madeForKids,
+    thumbnail:
+      draft.thumbnailSource === 'scene'
+        ? {
+            source: 'scene',
+            offsetMs: Math.min(cutLengthMs - 1, Math.max(0, Math.round(draft.sceneOffsetMs))),
+          }
+        : { source: draft.thumbnailSource },
+  };
 }
 
 async function loadFromCard(streamId: string, cardId: string): Promise<Status> {
@@ -304,6 +372,7 @@ async function loadFromCard(streamId: string, cardId: string): Promise<Status> {
       latestClip: null,
       trackLabels,
       recording,
+      uploadRequest: null,
     },
   };
 }
@@ -338,6 +407,7 @@ async function loadFromRecipe(recipeId: number): Promise<Status> {
       latestClip: detail.latestClip,
       trackLabels: await loadTrackLabels(broadcast),
       recording,
+      uploadRequest: detail.uploadRequest ?? null,
     },
   };
 }
@@ -351,8 +421,17 @@ export function StudioScreen() {
   const [status, setStatus] = useState<Status>(() =>
     (streamId && cardId) || recipeId !== null ? { kind: 'loading' } : { kind: 'no-card' },
   );
+  // 이 화면이 첫 저장(POST)으로 만든 편집본. 주소를 ?recipe= 로 바꾸면 주소 값이 바뀌어 아래 읽기가 다시 돈다. 그러면
+  // 편집기가 새로 마운트되어 실행취소 기록을 잃고, 구간 한계가 카드 창에서 저장된 컷으로 좁아진다. 스스로 만든 것이면 안 읽는다
+  const ownRecipe = useRef<number | null>(null);
+  const adoptRecipe = useCallback((id: number) => {
+    ownRecipe.current = id;
+    // 새로고침·공유해도 같은 편집본으로 열리게 한다. 안 바꾸면 카드 주소로 다시 열려 다음 저장이 편집본을 하나 더 만든다
+    window.history.replaceState(null, '', `?recipe=${id}`);
+  }, []);
 
   useEffect(() => {
+    if (recipeId !== null && recipeId === ownRecipe.current) return undefined;
     if (!(streamId && cardId) && recipeId === null) {
       setStatus({ kind: 'no-card' });
       return undefined;
@@ -377,7 +456,7 @@ export function StudioScreen() {
     const key = status.data.card
       ? `card:${status.data.streamId}:${status.data.card.id}`
       : `recipe:${status.data.saved?.id}`;
-    return <WiredStudio key={key} data={status.data} />;
+    return <WiredStudio key={key} data={status.data} onRecipeCreated={adoptRecipe} />;
   }
 
   return (
@@ -425,23 +504,28 @@ interface SaveState {
   label: string;
   /** 마지막으로 서버에 저장한 본문 — 지금 화면과 다르면 영상 만들기 전에 먼저 저장한다 */
   savedDoc: RecipeDocument | null;
+  /** 서버에 남은 업로드 정보와 그 판. 같은 판이면 창을 다시 열 때 채운다 */
+  uploadRequest: { version: number; summary: UploadRequestSummary } | null;
 }
 
-function clipLabel(clip: ClipSnapshot): string {
-  switch (clip.status) {
-    case 'queued':
-      return `영상 #${clip.id} 주문됨`;
-    case 'rendering':
-      return `영상 #${clip.id} 만드는 중 ${clip.progress?.percent ?? 0}%`;
-    case 'rendered':
-      return `영상 #${clip.id} 완성`;
-    case 'failed':
-      return `영상 #${clip.id} 실패(${clip.error?.code ?? '?'})`;
-  }
+/** 창이 열려 있는 동안 쥐고 있는 것: 연 순간의 화면(레시피)·완성 영상 길이·처음 값 */
+interface PendingUpload {
+  recipe: EditorRecipe;
+  cutLengthMs: number;
+  initial: UploadDraft;
+  playheadOffsetMs: number | null;
 }
 
-function WiredStudio({ data }: { data: Loaded }) {
+function WiredStudio({
+  data,
+  onRecipeCreated,
+}: {
+  data: Loaded;
+  /** 첫 저장(POST)으로 편집본이 생겼다. 주소를 ?recipe= 로 바꾼다 */
+  onRecipeCreated: (recipeId: number) => void;
+}) {
   const { toast } = useToast();
+  const router = useRouter();
   const { streamId, card, broadcast, window, saved, latestClip, trackLabels, recording } = data;
   const startedAt = broadcast.startedAt!;
   // 🔴 카드·조각 ms의 0초 = 시각 기준점(서버 → 녹화 재생 서버 → 방송 시작, POK-255). 저장·다시 열기가 같은 값을 써야 제자리다.
@@ -478,6 +562,8 @@ function WiredStudio({ data }: { data: Loaded }) {
     clip: latestClip,
     label: saved ? `v${saved.version} 저장됨` : '저장 안 됨',
     savedDoc: saved ? saved.document : null,
+    uploadRequest:
+      saved && data.uploadRequest ? { version: saved.version, summary: data.uploadRequest } : null,
   }));
   const saveRef = useRef(save);
   saveRef.current = save;
@@ -546,9 +632,10 @@ function WiredStudio({ data }: { data: Loaded }) {
         version: snap.recipeVersion,
         savedDoc: doc,
       }));
+      if (recipeId === null) onRecipeCreated(snap.id);
       return snap;
     },
-    [streamId],
+    [streamId, onRecipeCreated],
   );
 
   const saveDraft = useCallback(
@@ -575,55 +662,132 @@ function WiredStudio({ data }: { data: Loaded }) {
     [documentFor, persist, toast],
   );
 
-  /**
-   * 영상은 저장된 판으로 만든다. 화면이 마지막 저장과 다르면(한 번도 안 저장했거나, 저장 뒤 또 고쳤으면) 먼저
-   * 저장해 새 판을 만들고 그 판으로 주문한다 — 저장 뒤 고친 것을 무시하고 옛 판을 렌더하면 화면과 다른 영상이
-   * 나온다(PR #200 codex P1). 같으면 저장하지 않고 바로 주문한다(판 번호를 헛되이 늘리지 않게)
-   */
-  const requestUpload = useCallback(
+  const [pending, setPending] = useState<PendingUpload | null>(null);
+  const [uploadErrors, setUploadErrors] = useState<UploadFieldErrors>({});
+  // 이 화면에서 마지막으로 보낸 창의 값. 다시 열면 그대로 채운다(고른 이미지 파일까지)
+  const lastDraft = useRef<UploadDraft | null>(null);
+  // 지금 재생 위치(기준점 축의 초). 녹화가 없으면 재생 위치가 늘 0이라 모르는 것으로 둔다. 재생 중에는 프레임마다
+  // 바뀌므로 ref로 읽는다(동작 콜백이 매 프레임 새로 만들어지지 않게)
+  const playheadRef = useRef<number | null>(null);
+  playheadRef.current = recording ? video.playback.currentSeconds : null;
+
+  /** 「영상 만들기」 = 업로드 정보 창을 연다. 연 순간의 화면이 주문할 모양이다(창이 떠 있는 동안 편집기는 안 바뀐다) */
+  const openUploadDialog = useCallback(
     (recipe: EditorRecipe) => {
       const current = saveRef.current;
       if (current.busy !== null) return;
-      const doc = documentFor(recipe);
+      const playheadSeconds = playheadRef.current;
+      const cut = documentFor(recipe).cut!;
+      const cutLengthMs = cut.outAtMs - cut.inAtMs;
+      const rangeStart = recipe.range.startSeconds;
+      const scene = defaultSceneOffsetMs(playheadSeconds, rangeStart, cutLengthMs);
+      const remembered = lastDraft.current;
+      const stored =
+        current.uploadRequest !== null && current.uploadRequest.version === current.version
+          ? current.uploadRequest.summary
+          : null;
+      const initial: UploadDraft = remembered
+        ? { ...remembered, sceneOffsetMs: Math.min(cutLengthMs - 1, remembered.sceneOffsetMs) }
+        : stored
+          ? {
+              ...emptyUploadDraft(scene),
+              title: stored.title,
+              privacyStatus: stored.privacyStatus,
+              thumbnailSource: stored.thumbnailSource,
+            }
+          : emptyUploadDraft(scene);
+      setUploadErrors({});
+      setPending({
+        recipe,
+        cutLengthMs,
+        initial,
+        playheadOffsetMs: sceneOffsetFromPlayhead(playheadSeconds, rangeStart, cutLengthMs),
+      });
+    },
+    [documentFor],
+  );
+
+  /**
+   * 창에서 확인. 영상은 저장된 판으로 만든다: 화면이 마지막 저장과 다르면(한 번도 안 저장했거나, 저장 뒤 또 고쳤으면) 먼저
+   * 저장해 새 판을 만들고 그 판으로 주문한다. 저장 뒤 고친 것을 무시하고 옛 판을 렌더하면 화면과 다른 영상이
+   * 나온다(PR #200 codex P1). 같으면 저장하지 않고 바로 주문한다(판 번호를 헛되이 늘리지 않게).
+   * 주문에 업로드 정보를 실으면 렌더가 끝나는 대로 clip이 올린다(POK-291). 웹이 렌더 끝을 기다렸다 다시 부르지 않는다.
+   */
+  const submitUpload = useCallback(
+    (draft: UploadDraft) => {
+      const current = saveRef.current;
+      if (pending === null || current.busy !== null) return;
+      lastDraft.current = draft;
+      const doc = documentFor(pending.recipe);
       const dirty =
         current.recipeId === null ||
         current.savedDoc === null ||
         !sameRecipe(current.savedDoc, doc);
+      const upload = uploadInfoOf(draft, pending.cutLengthMs);
+      setUploadErrors({});
       setSave((s) => ({
         ...s,
         busy: 'render',
         label: dirty ? '저장하고 영상 주문하는 중…' : '영상 주문하는 중…',
       }));
+      // 어느 단계에서 거절됐나. 저장 문의 400(field)은 업로드 정보 칸이 아니다
+      let stage: 'save' | 'render' = 'save';
       (dirty
         ? persist(current.recipeId, doc).then((snap) => snap.id)
         : Promise.resolve(current.recipeId as number)
       )
-        .then((recipeId) => requestRender(streamId, recipeId))
-        .then((clip) => {
+        .then((recipeId) => {
+          stage = 'render';
+          return requestRender(
+            streamId,
+            recipeId,
+            upload,
+            draft.thumbnailSource === 'file' ? draft.file : null,
+          );
+        })
+        .then(({ created, clip }) => {
           setSave((s) => ({
             ...s,
             busy: null,
             clip,
+            uploadRequest: clip.uploadRequest
+              ? { version: clip.recipeVersion, summary: clip.uploadRequest }
+              : s.uploadRequest,
             label: `편집본 #${s.recipeId} v${s.version} · ${clipLabel(clip)}`,
           }));
+          setPending(null);
+          // 200은 새 주문이 아니다: 같은 판이 만드는 중이면 끝난 뒤 이 정보로, 이미 만들어져 있으면 지금 올린다
           toast({
             tone: 'success',
-            title: `${clipLabel(clip)} — 다 만들어지면 보관함에서 완성으로 바뀌어요`,
+            title: created
+              ? '영상을 만들고 유튜브에 올릴게요'
+              : clip.status === 'rendered'
+                ? '만들어 둔 영상을 바로 유튜브에 올릴게요'
+                : '이 판은 이미 만드는 중이에요. 다 만들어지면 고른 정보로 올려요',
+            description: `${clipLabel(clip)}. 진행은 보관함에서 볼 수 있어요.`,
+            action: { label: '보관함 보기', onClick: () => router.push('/clips/library') },
           });
         })
         .catch((e: unknown) => {
           const message = messageOf(e);
           setSave((s) => ({ ...s, busy: null, label: `주문 실패 · ${message}` }));
+          const fieldErrors = stage === 'render' ? uploadFieldErrorOf(e) : null;
+          // 칸을 짚은 거절은 창 안 그 칸에. 고쳐서 다시 보내는 자리가 창이다
+          if (fieldErrors !== null) {
+            setUploadErrors(fieldErrors);
+            return;
+          }
+          setPending(null);
           toast({ tone: 'error', title: '영상 만들기 실패', description: message });
         });
     },
-    [documentFor, persist, streamId, toast],
+    [documentFor, pending, persist, router, streamId, toast],
   );
 
-  // 주문한 영상이 끝날 때까지 5초마다 상태를 다시 읽는다 — 일꾼의 보고가 clips 표를 바꾼다.
+  // 주문한 영상이 끝날 때까지(업로드 정보가 있으면 업로드가 끝날 때까지) 5초마다 상태를 다시 읽는다. 일꾼의 보고가
+  // clips·업로드 표를 바꾼다.
   const clipId = save.clip?.id ?? null;
-  const clipDone =
-    save.clip === null || save.clip.status === 'rendered' || save.clip.status === 'failed';
+  const clipDone = save.clip === null || clipSettled(save.clip);
   useEffect(() => {
     if (clipId === null || clipDone) return undefined;
     const t = globalThis.setInterval(() => {
@@ -667,7 +831,10 @@ function WiredStudio({ data }: { data: Loaded }) {
     return { tracks, muted, volumes };
   }, [saved, trackLabels]);
 
-  const actions = useMemo(() => ({ saveDraft, requestUpload }), [saveDraft, requestUpload]);
+  const actions = useMemo(
+    () => ({ saveDraft, requestUpload: openUploadDialog }),
+    [saveDraft, openUploadDialog],
+  );
   // 저장된 편집본을 열면 그 모양(레이아웃·자르는 자리·자막 방식)으로 연다 — 다시 저장해도 제자리다
   const initialLook = useMemo(
     () => (saved ? lookFromDocument(saved.document) : undefined),
@@ -719,6 +886,18 @@ function WiredStudio({ data }: { data: Loaded }) {
         initialLook={initialLook}
         initialSubtitles={initialSubtitles}
       />
+      {pending !== null ? (
+        <UploadInfoDialog
+          open
+          busy={save.busy === 'render'}
+          initial={pending.initial}
+          cutLengthMs={pending.cutLengthMs}
+          playheadOffsetMs={pending.playheadOffsetMs}
+          serverErrors={uploadErrors}
+          onCancel={() => setPending(null)}
+          onSubmit={submitUpload}
+        />
+      ) : null}
     </>
   );
 }

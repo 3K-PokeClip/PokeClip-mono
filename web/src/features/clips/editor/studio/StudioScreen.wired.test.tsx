@@ -8,10 +8,27 @@ import { StudioScreen } from './StudioScreen';
 // 실제 모드 편집기(POK-251) — 주소(?stream=&card= · ?recipe=)로 열어 clip에 저장·주문하는 길을 잰다.
 // 녹화 재생 서버가 없는 환경이라 구간의 기준점은 방송 시작 시각이다(README 「편집 구간의 시각 기준점」).
 
-const nav = vi.hoisted(() => ({ search: '' }));
-vi.mock('next/navigation', () => ({
-  useSearchParams: () => new URLSearchParams(nav.search),
+// 주소 뒤 값. Next는 window.history.replaceState를 라우터에 이어 useSearchParams를 맞춘다(Next 문서
+// 04-linking-and-navigating 「Native History API」): 모의도 그렇게 따라가야 「주소를 바꾸면 다시 읽는다」가 재어진다
+const nav = vi.hoisted(() => ({
+  search: '',
+  listeners: new Set<() => void>(),
+  pushed: [] as string[],
 }));
+vi.mock('next/navigation', async () => {
+  const React = await import('react');
+  const subscribe = (cb: () => void) => {
+    nav.listeners.add(cb);
+    return () => nav.listeners.delete(cb);
+  };
+  return {
+    useSearchParams: () => {
+      const search = React.useSyncExternalStore(subscribe, () => nav.search);
+      return React.useMemo(() => new URLSearchParams(search), [search]);
+    },
+    useRouter: () => ({ push: (href: string) => nav.pushed.push(href) }),
+  };
+});
 
 // 녹화 목록을 어느 키로 물었는지 잰다(POK-233) — 실제 구현을 그대로 부른다(재생 서버 주소가 없어 빈 목록이다)
 const spansAsked = vi.hoisted(() => [] as string[]);
@@ -51,6 +68,11 @@ const server = vi.hoisted(() => ({
     counterpartName: string;
     grantedAt: string;
   }[],
+  /** 영상 주문의 답: 상태 코드와 봉투에 덧댈 칸. error가 있으면 그 거절이다 */
+  render: { status: 201, clip: {} as Record<string, unknown> },
+  renderError: null as null | { status: number; body: Record<string, unknown> },
+  /** 저장된 편집본 지금 판의 업로드 정보(POK-291) */
+  savedUploadRequest: null as unknown,
 }));
 
 /** 원본(16:9)에서 9:16 을 오른쪽으로 치우쳐 잡은 자리 — 편집기 계산과 같은 정확한 비율 */
@@ -120,6 +142,7 @@ function handle(url: string, init?: RequestInit) {
       latestClip: null,
       createdAt: '2026-09-20T11:00:00Z',
       updatedAt: '2026-09-20T11:00:00Z',
+      uploadRequest: server.savedUploadRequest,
       recipe: {
         schemaVersion: server.savedSchema,
         streamId: STREAM_ID,
@@ -154,7 +177,8 @@ function handle(url: string, init?: RequestInit) {
     return jsonResponse(200, recipeSnapshot(31, 3, JSON.parse(String(init?.body))));
   }
   if (path === `/api/clip/broadcasts/${STREAM_ID}/recipes/31/renders` && method === 'POST') {
-    return jsonResponse(201, {
+    if (server.renderError) return jsonResponse(server.renderError.status, server.renderError.body);
+    return jsonResponse(server.render.status, {
       id: 77,
       streamId: STREAM_ID,
       recipeId: 31,
@@ -166,6 +190,7 @@ function handle(url: string, init?: RequestInit) {
       error: null,
       createdAt: '2026-09-20T11:00:00Z',
       updatedAt: '2026-09-20T11:00:00Z',
+      ...server.render.clip,
     });
   }
   if (path === '/api/auth/me')
@@ -190,12 +215,25 @@ beforeEach(() => {
   server.relation = 'OWNER';
   server.delegations = [];
   server.ingest = undefined;
+  server.render = { status: 201, clip: {} };
+  server.renderError = null;
+  server.savedUploadRequest = null;
   spansAsked.length = 0;
+  nav.pushed.length = 0;
   fetchSpy = stubFetch(handle);
+  // jsdom의 주소는 시험 사이에 남는다: 처음 자리로 돌리고, 바꾸면 모의 useSearchParams가 따라가게 한다
+  window.history.replaceState(null, '', '/clips/editor/studio');
+  const original = window.history.replaceState.bind(window.history);
+  vi.spyOn(window.history, 'replaceState').mockImplementation((data, unused, url) => {
+    original(data, unused, url);
+    nav.search = window.location.search;
+    for (const listener of nav.listeners) listener();
+  });
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 function bodiesOf(method: string, path: string) {
@@ -208,6 +246,30 @@ async function openFrom(search: string) {
   nav.search = search;
   renderWithProviders(<StudioScreen />);
   return screen.findByRole('button', { name: '편집본 저장' });
+}
+
+/** 「영상 만들기」 → 업로드 정보 창에 제목을 적고 「만들고 올리기」 */
+async function orderVideo(user: ReturnType<typeof userEvent.setup>, title = '보스 막타') {
+  await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+  const dialog = within(screen.getByRole('dialog', { name: '유튜브 업로드 정보' }));
+  const field = dialog.getByRole('textbox', { name: /제목/ });
+  await user.clear(field);
+  await user.type(field, title);
+  await user.click(dialog.getByRole('button', { name: '만들고 올리기' }));
+}
+
+const RENDERS = `/api/clip/broadcasts/${STREAM_ID}/recipes/31/renders`;
+
+/** 영상 주문 본문의 request 파트(JSON)와 thumbnail 파트 */
+async function renderPartsOf(index = 0) {
+  const init = fetchSpy.mock.calls.filter(([url, i]) => url === RENDERS && i?.method === 'POST')[
+    index
+  ]?.[1];
+  const form = init?.body as FormData;
+  return {
+    request: JSON.parse(await (form.get('request') as Blob).text()) as { upload: unknown },
+    thumbnail: form.get('thumbnail'),
+  };
 }
 
 describe('StudioScreen — 영상 경로의 키(POK-233)', () => {
@@ -315,7 +377,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     const user = userEvent.setup();
     await openFrom(`stream=${STREAM_ID}&card=5`);
 
-    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await orderVideo(user);
 
     await waitFor(() => expect(renders()).toBe(1));
     // 저장이 주문보다 먼저다 — 저장하지 않은 화면으로는 주문할 판이 없다
@@ -337,13 +399,13 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     await user.click(save);
     await screen.findByText(/편집본 #31 v1 저장됨/);
 
-    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await orderVideo(user);
     await waitFor(() => expect(renders()).toBe(1));
     expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(0);
 
     await user.click(screen.getByRole('tab', { name: '오디오' }));
     await user.click(screen.getByRole('switch', { name: '트랙 2 사용' }));
-    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await orderVideo(user);
     await waitFor(() => expect(renders()).toBe(2));
     expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)[0]?.audio).toEqual({
       tracks: [{ trackId: 1, gain: 1 }],
@@ -403,7 +465,7 @@ describe('StudioScreen — 편집본으로 다시 연 실제 편집기', () => {
     const user = userEvent.setup();
     await openFrom('recipe=31');
 
-    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await orderVideo(user);
 
     await waitFor(() =>
       expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1),
@@ -417,7 +479,7 @@ describe('StudioScreen — 편집본으로 다시 연 실제 편집기', () => {
     const user = userEvent.setup();
     await openFrom('recipe=31');
 
-    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await orderVideo(user);
 
     await waitFor(() =>
       expect(
@@ -619,7 +681,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
     expect(screen.getByRole('radio', { name: '60 : 40' })).toBeChecked();
     expect(screen.getByRole('switch', { name: '경계선 표시' })).not.toBeChecked();
 
-    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await orderVideo(user);
     await waitFor(() =>
       expect(
         fetchSpy.mock.calls.some(
@@ -674,7 +736,7 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
     expect(screen.getByRole('radio', { name: '상단' })).toBeChecked();
 
     // 고치지 않았으면 다시 저장하지 않는다 — 자막 방식·자리도 제자리로 돌아왔다
-    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await orderVideo(user);
     await waitFor(() =>
       expect(
         fetchSpy.mock.calls.some(
@@ -697,5 +759,180 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
     await openFrom('recipe=31');
     // 자막 도구 목록에는 있지만 결과 화면에 얹힌 번인 글자는 없다
     expect(screen.queryByText('“자막 파일에만”')).not.toBeInTheDocument();
+  });
+});
+
+describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => {
+  const renders = () =>
+    fetchSpy.mock.calls.filter(([url, init]) => url === RENDERS && init?.method === 'POST').length;
+  const dialog = () => within(screen.getByRole('dialog', { name: '유튜브 업로드 정보' }));
+
+  it('「영상 만들기」는 창만 연다: 확인하면 저장하고, 고른 정보가 multipart request 파트로 실린다', async () => {
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    expect(renders()).toBe(0);
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(0);
+
+    await user.type(dialog().getByRole('textbox', { name: /제목/ }), ' 보스 막타 ');
+    await user.type(dialog().getByRole('textbox', { name: /설명/ }), '역전');
+    await user.type(dialog().getByRole('textbox', { name: /태그/ }), '롤,보스 막타{Enter}');
+    await user.click(dialog().getByRole('radio', { name: '공개' }));
+    await user.click(dialog().getByRole('radio', { name: '장면 고르기' }));
+    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
+
+    await waitFor(() => expect(renders()).toBe(1));
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1);
+    const { request, thumbnail } = await renderPartsOf();
+    // 녹화가 없어 재생 위치를 모른다: 장면은 컷(12.4초)의 가운데
+    expect(request).toEqual({
+      upload: {
+        title: '보스 막타',
+        description: '역전',
+        tags: ['롤', '보스 막타'],
+        privacyStatus: 'public',
+        madeForKids: false,
+        thumbnail: { source: 'scene', offsetMs: 6_200 },
+      },
+    });
+    expect(thumbnail).toBeNull();
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '유튜브 업로드 정보' })).not.toBeInTheDocument(),
+    );
+
+    expect(await screen.findByText('영상을 만들고 유튜브에 올릴게요')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '보관함 보기' }));
+    expect(nav.pushed).toEqual(['/clips/library']);
+  });
+
+  it('이미지를 고르면 thumbnail 파트에 그 파일이 실린다', async () => {
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    await user.type(dialog().getByRole('textbox', { name: /제목/ }), '제목');
+    await user.click(dialog().getByRole('radio', { name: '이미지 올리기' }));
+    const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'cover.png', {
+      type: 'image/png',
+    });
+    await user.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
+    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
+
+    await waitFor(() => expect(renders()).toBe(1));
+    const { request, thumbnail } = await renderPartsOf();
+    expect(request.upload).toMatchObject({ thumbnail: { source: 'file' } });
+    expect((thumbnail as File).name).toBe('cover.png');
+  });
+
+  it('200은 새 주문이라 말하지 않는다: 만드는 중이면 끝나고, 이미 만들어졌으면 바로 올린다', async () => {
+    server.render = { status: 200, clip: { status: 'rendering' } };
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    await orderVideo(user);
+    expect(
+      await screen.findByText('이 판은 이미 만드는 중이에요. 다 만들어지면 고른 정보로 올려요'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('영상을 만들고 유튜브에 올릴게요')).not.toBeInTheDocument();
+
+    server.render = { status: 200, clip: { status: 'rendered' } };
+    await orderVideo(user);
+    expect(await screen.findByText('만들어 둔 영상을 바로 유튜브에 올릴게요')).toBeInTheDocument();
+    expect(screen.queryByText('영상을 만들고 유튜브에 올릴게요')).not.toBeInTheDocument();
+  });
+
+  it('이미 올린 편집본·연결 안 된 채널은 이유를 말하고 창을 닫는다', async () => {
+    server.renderError = { status: 409, body: { error: 'already_uploaded', uploadId: 4 } };
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    await orderVideo(user);
+    expect(
+      await screen.findByText('이미 올린 편집본이에요. 고친 뒤 다시 만들어 주세요'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '유튜브 업로드 정보' })).not.toBeInTheDocument();
+
+    server.renderError = { status: 409, body: { error: 'youtube_not_linked', reason: 'UNLINKED' } };
+    await orderVideo(user);
+    expect(
+      await screen.findByText('스트리머의 유튜브 채널이 연결돼 있지 않아요'),
+    ).toBeInTheDocument();
+  });
+
+  it('칸을 짚은 거절(400 field · 413 · 415)은 창 안 그 칸에 보이고 창이 남는다', async () => {
+    server.renderError = { status: 400, body: { error: 'invalid_request', field: 'tags' } };
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    await orderVideo(user);
+    await waitFor(() =>
+      expect(dialog().getByRole('textbox', { name: /태그/ })).toHaveAccessibleDescription(
+        /태그를 확인해 주세요/,
+      ),
+    );
+
+    server.renderError = { status: 413, body: { error: 'payload_too_large' } };
+    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
+    expect(await dialog().findByText('이미지는 10MB까지 올릴 수 있어요')).toBeInTheDocument();
+
+    server.renderError = { status: 415, body: { error: 'unsupported_image' } };
+    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
+    expect(await dialog().findByText('JPG나 PNG만 올릴 수 있어요')).toBeInTheDocument();
+  });
+
+  it('창이 떠 있는 동안 ⌘Z·Space는 뒤 편집기를 안 바꾼다: 창 안 라디오는 Space로 골라진다', async () => {
+    const user = userEvent.setup();
+    await openFrom(`stream=${STREAM_ID}&card=5`);
+    await user.click(screen.getByRole('tab', { name: '오디오' }));
+    await user.click(screen.getByRole('switch', { name: '트랙 2 사용' }));
+    expect(screen.getByRole('switch', { name: '트랙 2 사용' })).toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+    dialog().getByRole('switch', { name: '아동용 영상이에요' }).focus();
+    await user.keyboard('{Meta>}z{/Meta}');
+    const unlisted = dialog().getByRole('radio', { name: '일부 공개' });
+    unlisted.focus();
+    await user.keyboard(' ');
+    expect(unlisted).toBeChecked();
+
+    await user.click(dialog().getByRole('button', { name: '취소' }));
+    // ⌘Z가 창 뒤로 샜으면 트랙 2가 꺼져 있다
+    expect(screen.getByRole('switch', { name: '트랙 2 사용' })).toBeChecked();
+  });
+
+  it('카드로 연 편집기를 처음 저장하면 주소가 ?recipe= 로 바뀌고, 다시 읽지 않아 실행취소가 남는다', async () => {
+    const user = userEvent.setup();
+    const save = await openFrom(`stream=${STREAM_ID}&card=5`);
+    await user.click(screen.getByRole('tab', { name: '오디오' }));
+    await user.click(screen.getByRole('switch', { name: '트랙 2 사용' }));
+
+    await user.click(save);
+    await screen.findByText(/편집본 #31 v1 저장됨/);
+
+    expect(window.location.search).toBe('?recipe=31');
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1);
+    // 스스로 만든 편집본이라 다시 읽지 않는다: 읽으면 새로 마운트되어 기록과 카드 창을 잃는다
+    expect(fetchSpy.mock.calls.some(([url]) => url === '/api/clip/library/31')).toBe(false);
+    expect(screen.getByRole('heading', { name: '점프카드 #5' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '작업 이전으로' })).toBeEnabled();
+
+    // 다음 저장은 같은 편집본의 새 판이다(편집본이 하나 더 생기지 않는다)
+    await user.click(screen.getByRole('button', { name: '편집본 저장' }));
+    await waitFor(() =>
+      expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1),
+    );
+    expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1);
+  });
+
+  it('창을 다시 열면 같은 판에 남은 업로드 정보(제목·공개 범위·썸네일 방식)로 채운다', async () => {
+    server.savedUploadRequest = {
+      title: '먼저 적은 제목',
+      privacyStatus: 'unlisted',
+      thumbnailSource: 'scene',
+    };
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    await user.click(screen.getByRole('button', { name: '영상 만들기' }));
+
+    expect(dialog().getByRole('textbox', { name: /제목/ })).toHaveValue('먼저 적은 제목');
+    expect(dialog().getByRole('radio', { name: '일부 공개' })).toBeChecked();
+    expect(dialog().getByRole('radio', { name: '장면 고르기' })).toBeChecked();
   });
 });
