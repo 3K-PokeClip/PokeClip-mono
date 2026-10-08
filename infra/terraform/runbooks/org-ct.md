@@ -476,8 +476,8 @@ Root
 ## 3단계 — CT(O3)
 
 선행: 2단계 전부(2-8 의 발견 자원 처분 포함). 예외는 2-7 에서 kty 가
-삭제 시점을 3-5 직전으로 미룬 경우의 삭제와 그 뒤 확인뿐이며, 이것은 3-5
-착수 직전에 끝냅니다.
+삭제 시점을 3-5 직전으로 미룬 경우의 레코더 중지 · 삭제와 그 뒤 확인뿐이며,
+이것은 3-5 착수 직전에 끝냅니다.
 
 ### 3-1. 랜딩 존 설정
 
@@ -781,3 +781,9 @@ Root
         [Default controls](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_security_default_controls.html)
     *   멤버 계정 제거 조건(2-5 되돌리기):
         [Remove a member account](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_accounts_remove.html)
+    *   레코더 중지와 삭제 시점(2-7):
+        [StopConfigurationRecorder](https://docs.aws.amazon.com/config/latest/APIReference/API_StopConfigurationRecorder.html)
+    *   자동 등록 설정 갈래(3-5):
+        [Account auto-enrollment](https://docs.aws.amazon.com/controltower/latest/userguide/account-auto-enrollment.html)
+    *   트레일 보관 명령(2-7):
+        [CloudTrail additional CLI commands](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-additional-cli-commands.html)
