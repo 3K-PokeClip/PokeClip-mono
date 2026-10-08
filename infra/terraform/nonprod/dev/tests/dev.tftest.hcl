@@ -1,5 +1,6 @@
 # dev 상자 import 구성의 선언을 mock provider 로 단언한다.
 # 무변경(No changes)은 tftest 로 볼 수 없어 운영 O1 plan 이 판정한다.
+# EC2 · EIP · SG 의 prevent_destroy 는 tftest 로 볼 수 없어 guard R5 가 맡는다.
 
 mock_provider "aws" {}
 
@@ -47,6 +48,33 @@ variables {
   instance_tags              = { Name = "example" }
   eip_tags                   = {}
   security_group_tags        = {}
+  instance_hibernation       = true
+  instance_source_dest_check = false
+
+  # 규칙마다 다른 값을 넣어, 선언이 키별 현재 값을 그대로 쓰는지 본다.
+  ingress_rules = {
+    "80" = {
+      ip_protocol = "tcp"
+      cidr_ipv4   = "0.0.0.0/0"
+      description = "example http"
+      tags        = { Name = "example-80" }
+    }
+    "443" = {
+      ip_protocol = "tcp"
+      cidr_ipv4   = "0.0.0.0/0"
+    }
+    "8082" = {
+      ip_protocol = "tcp"
+      cidr_ipv4   = "198.51.100.0/24"
+      description = "example admin"
+    }
+  }
+  egress_rule = {
+    ip_protocol = "-1"
+    cidr_ipv4   = "0.0.0.0/0"
+    description = "example egress"
+    tags        = { Name = "example-egress" }
+  }
 }
 
 run "declares_dev_box" {
@@ -67,15 +95,55 @@ run "declares_dev_box" {
   assert {
     condition = alltrue([
       for key, rule in aws_vpc_security_group_ingress_rule.dev :
-      rule.to_port == rule.from_port && rule.ip_protocol == "tcp" &&
-      rule.cidr_ipv4 == "0.0.0.0/0" && tostring(rule.from_port) == key
+      rule.to_port == rule.from_port && tostring(rule.from_port) == key
     ])
-    error_message = "dev 인그레스 규칙이 키와 같은 단일 tcp 포트 · 0.0.0.0/0 이 아니다."
+    error_message = "dev 인그레스 규칙이 키와 같은 단일 포트가 아니다."
   }
 
   assert {
-    condition     = aws_vpc_security_group_egress_rule.dev.ip_protocol == "-1"
-    error_message = "dev 이그레스가 별도 규칙(전체 허용)으로 선언되지 않았다."
+    condition = alltrue([
+      for key, rule in aws_vpc_security_group_ingress_rule.dev :
+      rule.ip_protocol == var.ingress_rules[key].ip_protocol &&
+      rule.cidr_ipv4 == var.ingress_rules[key].cidr_ipv4
+    ])
+    error_message = "dev 인그레스 규칙의 protocol · CIDR 이 ingress_rules 의 현재 값과 다르다."
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_ingress_rule.dev["80"].description == "example http" &&
+      aws_vpc_security_group_ingress_rule.dev["443"].description == null &&
+      aws_vpc_security_group_ingress_rule.dev["8082"].description == "example admin"
+    )
+    error_message = "dev 인그레스 규칙의 description 이 키별 현재 값과 다르다."
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_ingress_rule.dev["80"].tags == tomap({ Name = "example-80" }) &&
+      length(aws_vpc_security_group_ingress_rule.dev["443"].tags) == 0
+    )
+    error_message = "dev 인그레스 규칙의 tags 가 키별 현재 값과 다르다."
+  }
+
+  assert {
+    condition = (
+      aws_vpc_security_group_egress_rule.dev.ip_protocol == "-1" &&
+      aws_vpc_security_group_egress_rule.dev.cidr_ipv4 == "0.0.0.0/0" &&
+      aws_vpc_security_group_egress_rule.dev.description == "example egress" &&
+      aws_vpc_security_group_egress_rule.dev.tags == tomap({ Name = "example-egress" })
+    )
+    error_message = "dev 이그레스 규칙이 egress_rule 의 현재 값과 다르다."
+  }
+
+  assert {
+    condition     = aws_instance.dev.hibernation == true
+    error_message = "EC2 hibernation 이 instance_hibernation 현재 값과 다르다."
+  }
+
+  assert {
+    condition     = aws_instance.dev.source_dest_check == false
+    error_message = "EC2 source_dest_check 가 instance_source_dest_check 현재 값과 다르다."
   }
 
   assert {
@@ -97,4 +165,32 @@ run "rejects_malformed_instance_id" {
   }
 
   expect_failures = [var.instance_id]
+}
+
+run "rejects_placeholder_rule_cidr" {
+  command = plan
+
+  variables {
+    ingress_rules = {
+      "80"   = { ip_protocol = "tcp", cidr_ipv4 = "<CIDR_DEV_80>" }
+      "443"  = { ip_protocol = "tcp", cidr_ipv4 = "0.0.0.0/0" }
+      "8082" = { ip_protocol = "tcp", cidr_ipv4 = "0.0.0.0/0" }
+    }
+  }
+
+  expect_failures = [var.ingress_rules]
+}
+
+run "rejects_rule_keys_other_than_declared_ports" {
+  command = plan
+
+  variables {
+    ingress_rules = {
+      "80"  = { ip_protocol = "tcp", cidr_ipv4 = "0.0.0.0/0" }
+      "443" = { ip_protocol = "tcp", cidr_ipv4 = "0.0.0.0/0" }
+      "22"  = { ip_protocol = "tcp", cidr_ipv4 = "0.0.0.0/0" }
+    }
+  }
+
+  expect_failures = [var.ingress_rules]
 }

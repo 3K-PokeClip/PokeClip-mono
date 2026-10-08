@@ -193,24 +193,33 @@ check_r3() {
 }
 
 #######################################
-# 파일 하나의 aws_s3_bucket 자원마다 lifecycle 블록 안의
+# 파일 하나에서 주어진 유형의 resource 마다 lifecycle 블록 안의
 # prevent_destroy = true 여부를 낸다.
 # Arguments:
-#   주석을 지운 내용(표준 입력).
+#   자원 유형 목록(공백 구분). 주석을 지운 내용은 표준 입력.
 # Outputs:
-#   자원마다 「ok <줄>」 또는 「missing <줄>」.
+#   자원마다 「ok <유형> <줄>」 또는 「missing <유형> <줄>」.
 #######################################
-scan_bucket_lifecycle() {
-  awk "${BLANK_STRINGS}"'
+scan_prevent_destroy() {
+  awk -v types="$1" "${BLANK_STRINGS}"'
+    BEGIN {
+      n = split(types, list, " ")
+      for (k = 1; k <= n; k++) { wanted[list[k]] = 1 }
+    }
     {
       bare = bare_line($0)
-      if (depth == 0 &&
-          $0 ~ /^[[:space:]]*resource[[:space:]]+"aws_s3_bucket"[[:space:]]/) {
-        in_bucket = 1
-        protected = 0
-        start = FNR
+      if (depth == 0 && match($0, /^[[:space:]]*resource[[:space:]]+"[^"]+"/)) {
+        type = substr($0, RSTART, RLENGTH)
+        sub(/^[[:space:]]*resource[[:space:]]+"/, "", type)
+        sub(/"$/, "", type)
+        if (type in wanted) {
+          in_res = 1
+          protected = 0
+          start = FNR
+          found = type
+        }
       }
-      if (in_bucket && depth == 1 &&
+      if (in_res && depth == 1 &&
           bare ~ /^[[:space:]]*lifecycle[[:space:]]*\{/) {
         in_lc = 1
       }
@@ -223,39 +232,58 @@ scan_bucket_lifecycle() {
       closes = gsub(/\}/, "}", bare)
       depth += opens - closes
       if (in_lc && depth <= 1) { in_lc = 0 }
-      if (in_bucket && depth <= 0 && (opens + closes) > 0) {
-        print (protected ? "ok " : "missing ") start
-        in_bucket = 0
+      if (in_res && depth <= 0 && (opens + closes) > 0) {
+        print (protected ? "ok " : "missing ") found " " start
+        in_res = 0
       }
     }
   '
 }
 
-# R4: 상태 버킷 모듈의 aws_s3_bucket 자원마다 lifecycle 블록 안에
-# prevent_destroy = true 가 있어야 한다. 모듈이 없는 트리(fixture)는 건너뛴다.
-check_r4() {
-  local dir="${ROOT}/modules/state_bucket"
-  local files file content results result
-  local buckets=0
+#######################################
+# 디렉터리의 주어진 유형 자원이 모두 prevent_destroy = true 인지 본다.
+# 유형마다 자원이 하나 이상 있어야 한다. 디렉터리가 없는 트리(다른 규칙의
+# fixture)는 건너뛴다.
+# Arguments:
+#   규칙 이름, 검사할 디렉터리, 자원 유형 목록(공백 구분).
+#######################################
+check_prevent_destroy() {
+  local rule="$1" dir="$2" types="$3"
+  local files file content results result type
+  local all=""
   files="$(list_tf_files "${dir}")" || die "파일 목록 실패: ${dir}"
   [[ -n "${files}" ]] || return 0
   while IFS= read -r file; do
     [[ "${file}" == *.tf ]] || continue
     content="$(strip_comments "${file}")" || exit 2
-    results="$(scan_bucket_lifecycle <<<"${content}")" ||
-      die "R4 검사 실패: ${file}"
+    results="$(scan_prevent_destroy "${types}" <<<"${content}")" ||
+      die "${rule} 검사 실패: ${file}"
     [[ -n "${results}" ]] || continue
+    all="${all}${results}"$'\n'
     while IFS= read -r result; do
-      buckets=$((buckets + 1))
-      if [[ "${result}" == missing* ]]; then
-        report R4 "${file}:${result#missing }" \
-          '상태 버킷 lifecycle 블록에 prevent_destroy = true 없음'
-      fi
+      [[ "${result}" == missing* ]] || continue
+      type="${result#missing }"
+      report "${rule}" "${file}:${type##* }" \
+        "${type% *} 의 lifecycle 블록에 prevent_destroy = true 없음"
     done <<<"${results}"
   done <<<"${files}"
-  if [[ "${buckets}" -eq 0 ]]; then
-    report R4 "${dir}:0" 'aws_s3_bucket 자원 없음'
-  fi
+  for type in ${types}; do
+    if ! grep -qE -- "^(ok|missing) ${type} " <<<"${all}"; then
+      report "${rule}" "${dir}:0" "${type} 자원 없음"
+    fi
+  done
+}
+
+# R4: 상태 버킷은 삭제 방지(prevent_destroy = true)여야 한다.
+check_r4() {
+  check_prevent_destroy R4 "${ROOT}/modules/state_bucket" aws_s3_bucket
+}
+
+# R5: import 한 dev 상자(EC2 · EIP · SG)는 삭제 방지여야 한다. 규칙 자원은
+# M12 가 지우므로 대상이 아니다.
+check_r5() {
+  check_prevent_destroy R5 "${ROOT}/nonprod/dev" \
+    'aws_instance aws_eip aws_security_group'
 }
 
 #######################################
@@ -293,6 +321,7 @@ main() {
     check_file "${file}"
   done <<<"${files}"
   check_r4
+  check_r5
 
   if [[ "${violations}" -ne 0 ]]; then
     echo "guard: 위반 ${violations}건" >&2

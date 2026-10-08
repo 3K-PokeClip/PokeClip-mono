@@ -116,3 +116,57 @@ variable "security_group_tags" {
   description = "dev SG 의 현재 태그."
   type        = map(string)
 }
+
+# hibernation 은 바뀌면 인스턴스를 새로 만든다(ForceNew). 현재 값 그대로 넣는다.
+variable "instance_hibernation" {
+  description = "dev EC2 의 현재 hibernation 설정."
+  type        = bool
+}
+
+# 설정에 없으면 provider 기본값 true 로 바꾸려 한다. 현재 값 그대로 넣는다.
+variable "instance_source_dest_check" {
+  description = "dev EC2 의 현재 source_dest_check."
+  type        = bool
+}
+
+# 키 = local.dev_ingress_rules 의 키(포트). description · tags 는 설정에 없으면
+# plan 이 지우려 하므로 현재 값을 그대로 넣는다(없으면 생략). IPv6 · 접두사
+# 목록 · 참조 SG 규칙은 이 모양으로 표현하지 못한다 — O1 조사에서 나오면
+# 선언을 바꾼다.
+variable "ingress_rules" {
+  description = "dev SG 인그레스 규칙별 현재 값(키 = 포트)."
+  type = map(object({
+    ip_protocol = string
+    cidr_ipv4   = string
+    description = optional(string)
+    tags        = optional(map(string), {})
+  }))
+
+  validation {
+    condition     = toset(keys(var.ingress_rules)) == toset(keys(local.dev_ingress_rules))
+    error_message = "ingress_rules 의 키는 선언된 포트(local.dev_ingress_rules)와 같아야 한다."
+  }
+
+  validation {
+    condition = alltrue([
+      for rule in values(var.ingress_rules) :
+      contains(["tcp", "udp"], rule.ip_protocol) && can(cidrhost(rule.cidr_ipv4, 0))
+    ])
+    error_message = "ingress_rules 의 ip_protocol 은 tcp · udp, cidr_ipv4 는 IPv4 CIDR 이어야 한다."
+  }
+}
+
+variable "egress_rule" {
+  description = "dev SG 이그레스 규칙의 현재 값."
+  type = object({
+    ip_protocol = string
+    cidr_ipv4   = string
+    description = optional(string)
+    tags        = optional(map(string), {})
+  })
+
+  validation {
+    condition     = can(cidrhost(var.egress_rule.cidr_ipv4, 0))
+    error_message = "egress_rule.cidr_ipv4 는 IPv4 CIDR 이어야 한다."
+  }
+}
