@@ -122,16 +122,23 @@ Root
 *   **함께 기록할 것**: O1 조사의 `AccessDenied` 오류 전문(계정 ID 는
     `<ACCOUNT_ID_NONPROD>` 로 가림)과 이번 결과를 나란히 적어 대조합니다.
 *   **완료 확인**: 「멤버 아님」 · 「멤버(조직 ID 는 `<ORG_ID_OLD>` 로만
-    기록)」 · 「판정 불가」 중 하나로 판정이 기록됨. 「판정 불가」면 2-5 로
-    가지 않습니다.
+    기록)」 · 「이 계정이 관리 계정(조직 ID 는 `<ORG_ID_OLD>` 로만 기록)」 ·
+    「판정 불가」 중 하나로 판정이 기록됨. 「판정 불가」나 「이 계정이 관리
+    계정」이면 2-5 로 가지 않고 여기서 멈춥니다.
+*   **「이 계정이 관리 계정」일 때**: 관리 계정은 기존 조직의 멤버를 모두
+    제거하고 조직을 삭제한 뒤에만 다른 조직으로 옮길 수 있습니다(근거 절).
+    기존 조직 삭제가 필요한 전환은 이 런북 범위 밖이며, 별도 kty 결정으로
+    정한 뒤에 2-5 로 돌아옵니다.
 *   **승인 지점**: 판정 결과 확인. 갈래 선택은 2-5 에서 합니다.
 *   **되돌리기**: 읽기만 하므로 없습니다.
 
 ### 2-2. 과거 비용 이력 받아 두기
 
 *   **누가**: kty(기존 계정 Billing · Cost Explorer 콘솔).
-*   **왜**: 계정이 조직에 들어가면 그 전 비용 이력에 접근할 수 없게 됩니다
-    (AWS 전환 가이드 — 볼트 Knowledge 6절). 되돌릴 수 없는 손실입니다.
+*   **왜**: 계정이 조직에 들어가거나 조직을 옮기면 그 전 비용 이력의 일부
+    (특히 Cost Explorer 조회)에 접근하지 못할 수 있습니다(AWS 전환 가이드 —
+    볼트 Knowledge 6절). 무엇이 남고 무엇을 잃는지는 확인하지 못했으므로
+    (「확인하지 못한 것」), 잃는다고 보고 전환 전에 받아 둡니다.
 *   **주의**: CUR(비용 · 사용 보고서)이나 Data Exports 는 만든 시점부터
     쌓이므로, 지금 새로 만들면 과거 달이 비어 있을 수 있습니다. 「내보내기를
     만들었다」로 끝내지 않고 과거 이력을 **실제로 받은 파일**로 확인합니다.
@@ -142,8 +149,13 @@ Root
     *   CUR · Data Exports 의 과거분 채우기(백필)를 AWS Support 에 요청.
 *   **어느 갈래든 먼저**: 2-5 의 어느 갈래(비소속 초대 · 직접 이전 · 독립
     전환)로 가든 이 걸음이 먼저 끝나야 합니다.
-*   **완료 확인**: 받은 파일이 기존 계정 밖(kty 보관 위치)에 있고, **첫 달과
-    마지막 달**(초대 직전 달까지)을 덮는지 kty 가 파일을 열어 확인.
+*   **완료 확인**: 받은 파일이 기존 계정 밖(kty 보관 위치)에 있고, 다음 둘을
+    모두 덮는지 kty 가 파일을 열어 확인.
+    *   kty 가 고른 과거 기간 **전체**(첫 달부터 지난달까지).
+    *   **당월**: 2-5 의 전환(초대 수락 · 직접 이전 · 탈퇴) 직전까지 조회
+        가능한 당월 자료.
+*   **전환 직전 갱신**: 받은 뒤 2-5 의 전환까지 시간이 지났으면, 전환 직전에
+    당월 자료(달이 바뀌었으면 지난달 포함)를 다시 받습니다.
 *   **승인 지점**: 다음 걸음으로 넘어가도 되는지.
 *   **되돌리기**: 필요 없습니다.
 
@@ -181,7 +193,21 @@ Root
 ### 2-5. 기존 계정을 조직에 들이기
 
 *   **누가**: kty — 관리 계정에서 초대, 기존 계정에서 수락.
-*   **선행**: 2-1 판정이 「판정 불가」가 아니고, 2-2 가 끝남.
+*   **선행**: 2-1 판정이 「멤버 아님」 또는 「멤버」이고, 2-2 가 끝남.
+*   **이전 조직 CT 흔적 확인**(「멤버」일 때, 초대 수락 전에 — 기존 계정에서
+    읽기): `AWSControlTowerExecution` · 이름이 `aws-controltower-` 로 시작하는
+    역할 같은 이전 조직 CT 관리 흔적이 있는지 봅니다.
+
+    ```
+    aws iam get-role --role-name AWSControlTowerExecution
+    aws iam list-roles --query "Roles[].RoleName"
+    ```
+*   **흔적이 있으면 — 수락 전 선행 조건**: kty 가 원본 조직에서 이 계정의 CT
+    등록 해제를 **끝내고 상태를 확인**한 뒤에만 초대를 수락합니다. 등록 해제
+    전후로 루트 사용자 또는 이 계정 자체의 관리자 주체로 들어갈 수 있는지
+    확인합니다(원본 조직의 역할에 기대지 않는 접근). 새 조직용 역할은 2-6 에서
+    준비합니다. 등록 해제가 정확히 무엇을 지우고 남기는지는 착수 때 원문을
+    확인합니다(「확인하지 못한 것」).
 *   **갈래**(2-1 판정에 따라 이 걸음에서 kty 가 고릅니다 — 승인 지점):
 
     | 갈래 | 언제 | 어떻게 |
@@ -190,17 +216,29 @@ Root
     | 나. 직접 이전 | 「멤버」 | 2025-11-19 부터 다른 조직의 멤버도 먼저 탈퇴하지 않고 새 조직의 초대를 받아 수락할 수 있습니다(근거 절). 초대 · 수락 방식은 가와 같습니다 |
     | 다. 독립 전환 | 「멤버」이고 나를 쓰지 않을 때 | 기존 조직에서 나와 독립 계정이 된 뒤 가로 갑니다 |
 
-    *   나 · 다의 사전 조건(이전 · 탈퇴 권한, 기존 조직 쪽 SCP)은 확인하지
+    *   다(독립 전환)의 사전 조건(탈퇴 권한 · 탈퇴 조건)은 확인하지
         못했습니다 — 고르기 전에 확인합니다(「확인하지 못한 것」).
-    *   「멤버」이면 기존 조직이 CT 로 이 계정을 관리했는지도 이 걸음 전에
-        봅니다(2-6 의 이전 흔적 확인).
+*   **나(직접 이전)를 고르면 수락 전에 모두 확인할 것**(AWS 이전 사전 조건 —
+    근거 절):
+    *   새 조직(2-4)을 만든 지 **7일 이상** 지났습니다.
+    *   기존 계정이 기존 조직 안에서 **만들어진** 계정이면, 만든 지 4일 이상
+        지났습니다(초대로 들어간 계정은 해당 없음).
+    *   기존 계정과 새 조직의 Seller of Record(판매 주체)가 같습니다.
+    *   기존 계정이 어떤 서비스의 위임 관리자로도 지정돼 있지 않습니다.
+    *   기존 조직 쪽 IAM 정책 · SCP 가 이전을 막지 않습니다.
+    *   기존 조직의 관리 계정을 신뢰하는 옛 `OrganizationAccountAccessRole`
+        을 지웠습니다(새 역할은 2-6). 지우기 전에 신뢰 정책을 기록합니다.
+    *   2-2 의 비용 보고서 백업이 끝났습니다(전환 직전 갱신 포함).
+    *   기존 계정이 기존 조직의 관리 계정이 아닙니다(관리 계정이면 2-1 에서
+        멈춤).
 *   **완료 확인**: 관리 계정의 계정 목록에 `<ACCOUNT_ID_NONPROD>` 가 활성으로
     보임. 읽기 명령(관리 계정에서):
 
     ```
     aws organizations list-accounts
     ```
-*   **승인 지점**: 갈래 선택 · 초대 발송 · 수락.
+*   **승인 지점**: 원본 조직 등록 해제 확인(흔적이 있을 때) · 갈래 선택 ·
+    초대 발송 · 수락.
 *   **되돌리기**: CT 등록 해제(등록한 뒤라면) → kty 가 **관리 계정 콘솔에서**
     기존 계정을 조직에서 제거. 2-4 의 기본 SCP 가 멤버 쪽 탈퇴를 막으므로
     기존 계정에서 탈퇴하지 않습니다. 제거 전에 확인할 것:
@@ -215,8 +253,8 @@ Root
     *   `OrganizationAccountAccessRole` 이 이미 있는지, 있으면 누구를
         신뢰하는지. 조직을 떠나도 이 역할은 자동으로 지워지지 않으므로, 이전
         조직의 관리 계정을 신뢰하는 역할이 남아 있을 수 있습니다.
-    *   `AWSControlTowerExecution` · 이름이 `aws-controltower-` 로 시작하는
-        역할 같은 이전 조직 CT 관리 흔적이 있는지.
+    *   이전 조직 CT 관리 흔적이 2-5 의 원본 조직 등록 해제 뒤에도 남았는지
+        (흔적 확인 자체는 2-5 에서 수락 전에 합니다).
 
     ```
     aws iam get-role --role-name OrganizationAccountAccessRole
@@ -224,7 +262,7 @@ Root
     aws iam list-roles --query "Roles[].RoleName"
     ```
 *   **갈래**(먼저 본 결과로 이 걸음에서 kty 가 고릅니다 — 승인 지점):
-    *   이전 조직 CT 흔적이 있으면 이전 조직 쪽 등록 해제가 먼저인지 정합니다.
+    *   이전 조직 CT 흔적이 남았으면 여기서 멈추고 kty 에게 되묻습니다.
     *   기존 역할이 있으면 옛 신뢰를 지우고 신뢰를 새 관리 계정으로 바꿀지,
         역할을 지우고 새로 만들지 정합니다.
     *   없으면 새로 만듭니다.
@@ -290,7 +328,7 @@ Root
 *   **무엇을**:
     *   LZ 판 4.0 · 홈 리전 서울 · 거버넌스 리전 서울 + `us-east-1`.
     *   리전 거부(Region deny)를 **Enabled** 로 고릅니다(정해진 것 표). 기본값은
-        꺼져 있으므로 직접 골라야 합니다.
+        Not enabled 이므로 직접 골라야 합니다(근거 절).
     *   통합: Logging · SecurityRoles · Config · IdC 를 켭니다. IdC 통합은
         Config · SecurityRoles 통합에 의존합니다.
     *   Log Archive · Audit 계정을 **새로** 만듭니다(이메일
@@ -358,6 +396,9 @@ Root
 
 *   **누가**: kty(CT 콘솔, 3-2 의 비루트 주체로).
 *   **무엇을**: 새 이메일 `<EMAIL_PROD>` 로 prod 계정을 Prod OU 에 만듭니다.
+*   **착수 때 확인**: Account Factory 화면이 요구하는 필수 입력(IdC 사용자
+    정보 등)을 화면에서 확인하고, 그 값은 kty 가 정합니다(「확인하지 못한
+    것」).
 *   **완료 확인**: CT 계정 화면에 `<ACCOUNT_ID_PROD>` 가 등록됨 · prod 계정에
     CT VPC 없음.
 *   **승인 지점**: 계정 생성(등록).
@@ -399,15 +440,25 @@ Root
 *   2-1 콘솔 화면의 실제 문구(멤버 · 비소속일 때 각각 무엇이 보이는지).
 *   2-2 과거 이력 수단의 범위: Cost Explorer 보관 기간, CUR · Data Exports
     백필 요청 절차와 가능 기간. AWS 문서 원문과 대조하지 않았습니다.
-*   2-5 나(직접 이전)의 사전 조건 — 이전에 필요한 권한, 대상 조직 생성 뒤
-    대기 기간이 있는지, 기존 조직 쪽 SCP 가 막는지.
+*   2-2 조직 전환 뒤 남는 비용 자료와 잃는 자료의 구분 — 리뷰어는 Bills ·
+    Invoice 는 보존되고 Cost Explorer 접근은 현재 소속에 따르며 이전 조직에
+    다시 들어가면 복원된다고 제시했습니다(Leave as member · Cost Explorer
+    접근 문서). 원문과 대조하지 않았습니다.
+*   2-5 나(직접 이전)의 사전 조건 목록은 원문과 대조했습니다. 남은 것은
+    기존 계정이 각 조건을 **충족하는지**(착수 때 확인)와 이전에 필요한 권한의
+    세부입니다.
+*   2-5 원본 조직 CT 등록 해제의 세부 동작 — 계정에 직접 적용된 베이스라인 ·
+    컨트롤만 해제하면 되는지(상속된 예방 컨트롤은 남아도 되는지), 등록 해제가
+    `AWSControlTowerExecution` 등 실행 역할을 지우는지, 원본 조직 쪽 절차.
+    리뷰어 제시(Account transfer · Unmanage an account 문서)이며 원문과
+    대조하지 않았습니다 — 착수 때 원문을 확인합니다.
 *   2-5 다(독립 전환)의 탈퇴 조건과 탈퇴 뒤 남는 것(설계서 13절).
-*   2-6 이전 조직 CT 흔적의 정리 방법(이전 조직 쪽 등록 해제 절차).
 *   2-5 되돌리기의 「독립 계정 운영에 필요한 정보」의 세부 항목.
 *   3-1 Audit 계정의 SecurityRoles · Config 겸용 허용 여부(설계서는 AWS
     manifest 예시를 근거로 가능하다고 봄, `15_rc` 는 미확인).
 *   계정 해지 조건 · OU 등록 해제 · CT 해제 뒤 남는 자원(설계서 13절).
 *   2-8 의 조사 수단.
+*   3-4 Account Factory 화면의 필수 입력 항목(IdC 사용자 정보 등).
 
 ## 근거
 
@@ -426,19 +477,28 @@ Root
         [AWS Organizations direct account transfers](https://aws.amazon.com/about-aws/whats-new/2025/11/aws-organizations-direct-account-transfers/)
     *   `AWSOrganizationsNotInUseException` = 조직에 속하지 않음(2-1):
         [DescribeOrganization](https://docs.aws.amazon.com/organizations/latest/APIReference/API_DescribeOrganization.html)
+*   AWS 문서(2026-10-08 리뷰 2라운드에서 대조):
+    *   직접 이전 사전 조건 — 대상 조직 생성 후 7일 · 조직 안에서 만든 계정은
+        생성 후 4일 · Seller of Record · 위임 관리자 · IAM/SCP · 옛
+        `OrganizationAccountAccessRole` 제거 · 보고서 백업 · 관리 계정이면
+        멤버 제거와 조직 삭제 뒤(2-1 · 2-5 나):
+        [Account migration](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_account_migration.html)
+    *   리전 거부 기본값 Not enabled(3-1):
+        [Pricing and regions](https://docs.aws.amazon.com/controltower/latest/userguide/pricing-and-regions.html)
 *   AWS 문서(리뷰어 제시 — 각 걸음 착수 때 원문 확인):
     *   거부 원인(2-1):
         [IAM troubleshoot access denied](https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html)
-    *   이전 사전 조건(2-5):
-        [Account migration](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_account_migration.html)
-    *   탈퇴 뒤 역할 잔존(2-6):
+    *   탈퇴 뒤 역할 잔존(2-6) · 비용 자료 보존 구분(2-2):
         [Leave as member](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_accounts_leave-as-member.html)
-    *   CT 계정 이전(2-6):
+    *   조직 변경 뒤 Cost Explorer 조회 범위 · 당월 자료(2-2):
+        [Cost Explorer access](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-access.html) ·
+        [What is Cost Explorer](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-what-is.html)
+    *   CT 계정 이전 — 원본 조직 등록 해제 순서(2-5):
         [Account transfer](https://docs.aws.amazon.com/controltower/latest/userguide/account-transfer.html)
+    *   등록 해제 동작(2-5):
+        [Unmanage an account](https://docs.aws.amazon.com/controltower/latest/userguide/unmanage-account.html)
     *   `AWSControlTowerExecution` 예시(2-6):
         [Enroll an existing account](https://docs.aws.amazon.com/controltower/latest/userguide/enroll-account.html)
-    *   리전 거부 설정(3-1):
-        [Pricing and regions](https://docs.aws.amazon.com/controltower/latest/userguide/pricing-and-regions.html)
     *   OU 등록 권한(3-2):
         [Register an existing OU](https://docs.aws.amazon.com/controltower/latest/userguide/importing-existing.html)
     *   콘솔 계정 생성 조건(3-2 · 3-4):
