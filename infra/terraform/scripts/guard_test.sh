@@ -236,6 +236,59 @@ expect_missing_conftest_error() {
   echo "ok: no-conftest → 검사 불가(종료 2)"
 }
 
+#######################################
+# 셸에 남은 CONFTEST_* 설정(다른 프로젝트의 namespace 등)이 정책을 끄지
+# 못하는지 본다.
+#######################################
+expect_conftest_env_ignored() {
+  local output status
+  output="$(CONFTEST_NAMESPACE=missing_namespace \
+    CONFTEST_POLICY=/nonexistent/policy \
+    bash "${GUARD}" "${FIXTURES}/bad_R1" 2>&1)"
+  status=$?
+  if [[ "${status}" -ne 1 || "${output}" != *"guard: R1 "* ]]; then
+    fail "conftest-env: 종료 1 · R1 위반을 기대했으나 ${status} — ${output}"
+    return
+  fi
+  echo "ok: conftest-env → R1 위반"
+}
+
+#######################################
+# deny 규칙이 하나도 안 돌면(패키지 이름 · deny 철자 실수) 위반 0 이 아니라
+# 종료 2 인지 본다. guard.sh 사본 옆에 deny 없는 정책만 둔다.
+#######################################
+expect_no_rules_error() {
+  local tmp output status
+  tmp="$(mktemp -d)" || {
+    fail "no-rules: 시험 준비 실패(임시 디렉터리)"
+    return
+  }
+  if ! mkdir -p "${tmp}/scripts" "${tmp}/policy/guard" ||
+    ! cp -- "${GUARD}" "${tmp}/scripts/guard.sh" ||
+    ! printf 'package main\n\nimport rego.v1\n\nnote := "no deny"\n' \
+      >"${tmp}/policy/guard/empty.rego"; then
+    fail "no-rules: 시험 준비 실패(복사)"
+    rm -rf -- "${tmp}"
+    return
+  fi
+  output="$(bash "${tmp}/scripts/guard.sh" "${FIXTURES}/bad_R1" 2>&1)"
+  status=$?
+  rm -rf -- "${tmp}"
+  if [[ "${status}" -ne 2 ]]; then
+    fail "no-rules: 종료 코드 2 를 기대했으나 ${status} — ${output}"
+    return
+  fi
+  echo "ok: no-rules → 검사 불가(종료 2)"
+}
+
+#######################################
+# 실제 트리의 하위 디렉터리를 루트로 주면 경로 규칙(R4 · R11)이 조용히
+# 빠지므로 종료 2 인지 본다.
+#######################################
+expect_subroot_error() {
+  expect_error subroot "${SCRIPT_DIR}/../nonprod/dev"
+}
+
 main() {
   local dir
   local count=0
@@ -260,6 +313,9 @@ main() {
   expect_unreadable_error
   expect_no_tmpfile_dependency
   expect_missing_conftest_error
+  expect_conftest_env_ignored
+  expect_no_rules_error
+  expect_subroot_error
 
   if [[ "${failures}" -ne 0 ]]; then
     echo "guard_test: ${failures}건 실패" >&2

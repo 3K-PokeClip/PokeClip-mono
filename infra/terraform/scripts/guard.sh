@@ -25,8 +25,8 @@ readonly POLICY_DIR="${SCRIPT_DIR}/../policy/guard"
 
 # `conftest test` 의 결과 줄. --combine 이라 파일 이름 자리가 Combined 다.
 readonly FAIL_PREFIX='FAIL - Combined - main - '
-# 요약 줄: 「N tests, N passed, N warnings, <실패> failures, <예외> exceptions」.
-SUMMARY_PATTERN='^[0-9]+ tests?, [0-9]+ passed, [0-9]+ warnings?, '
+# 요약 줄: 「<검사> tests, N passed, N warnings, <실패> failures, <예외> exceptions」.
+SUMMARY_PATTERN='^([0-9]+) tests?, [0-9]+ passed, [0-9]+ warnings?, '
 SUMMARY_PATTERN+='([0-9]+) failures?, ([0-9]+) exceptions?'
 readonly SUMMARY_PATTERN
 
@@ -73,16 +73,18 @@ split_lines() {
 }
 
 #######################################
-# 현재 디렉터리(루트) 아래 *.tf · *.tf.json(심볼릭 링크 포함)을 상대 경로로
-# 한 줄에 하나씩 낸다. fixture · provider 캐시는 뺀다.
+# 현재 디렉터리(루트) 아래 검사 대상을 상대 경로로 한 줄에 하나씩 낸다 —
+# 일반 파일 *.tf · *.tf.json, 그리고 이름과 상관없이 모든 심볼릭 링크(파일 ·
+# 디렉터리 — find 는 링크 디렉터리 안으로 들어가지 않으므로 링크 자체를
+# R0 로 막아야 그 너머가 검사에서 빠지지 않는다). fixture · provider 캐시는 뺀다.
 # Outputs:
 #   「./」로 시작하는 상대 경로(정렬).
 #######################################
 list_tf_files() {
   find . \
     \( -path ./scripts/testdata -o -name .terraform \) -prune \
-    -o \( -type f -o -type l \) \( -name '*.tf' -o -name '*.tf.json' \) \
-    -print |
+    -o -type l -print \
+    -o -type f \( -name '*.tf' -o -name '*.tf.json' \) -print |
     LC_ALL=C sort
 }
 
@@ -117,9 +119,10 @@ parses() {
 #######################################
 run_policy() {
   local output line
-  local fails=0 summary=""
+  local fails=0 summary="" tests=""
   output="$(conftest test --parser hcl2 --combine --no-fail --no-color \
-    --strict --show-builtin-errors --policy "${POLICY_DIR}" -- "$@" 2>&1)" || {
+    --strict --show-builtin-errors --namespace main \
+    --policy "${POLICY_DIR}" -- "$@" 2>&1)" || {
     echo "${output}" >&2
     die "conftest 실행 실패"
   }
@@ -130,15 +133,48 @@ run_policy() {
       report "${line#"${FAIL_PREFIX}"}"
       fails=$((fails + 1))
     elif [[ "${line}" =~ ${SUMMARY_PATTERN} && -z "${summary}" ]]; then
-      summary="${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
+      tests="${BASH_REMATCH[1]}"
+      summary="${BASH_REMATCH[2]} ${BASH_REMATCH[3]}"
     else
       echo "${output}" >&2
       die "conftest 출력에 모르는 줄: ${line}"
     fi
   done
   [[ -n "${summary}" ]] || die "conftest 출력에 요약 줄이 없음: ${output}"
+  # 규칙이 하나도 안 돌았으면(패키지 이름 · deny 철자 실수) 「위반 0」이 아니다.
+  [[ "${tests}" -gt 0 ]] || die "정책 규칙이 하나도 실행되지 않음(0 tests)"
   [[ "${summary}" == "${fails} 0" ]] ||
     die "conftest 요약(실패 · 예외 ${summary})이 FAIL 줄 ${fails}개와 맞지 않음"
+}
+
+#######################################
+# 셸에 남은 CONFTEST_* 설정(다른 프로젝트의 namespace · policy 등)을 지운다 —
+# 이 저장소 정책이 조용히 꺼지지 않게 한다.
+#######################################
+clear_conftest_env() {
+  local name
+  for name in $(compgen -e); do
+    if [[ "${name}" == CONFTEST_* ]]; then
+      unset "${name}"
+    fi
+  done
+}
+
+#######################################
+# 실제 트리(infra/terraform)의 하위 디렉터리를 루트로 주면 경로 규칙
+# (R4 · R11 — 루트 기준 상대 경로)이 조용히 빠지므로 멈춘다. fixture 트리
+# (scripts/testdata 아래)와 저장소 밖 트리는 허용한다.
+# Arguments:
+#   정규화한 루트 절대 경로.
+#######################################
+check_root() {
+  local root="$1" tree
+  tree="$(cd -P -- "${SCRIPT_DIR}/.." && pwd)" || die "트리 위치를 못 찾음"
+  case "${root}" in
+    "${tree}" | "${tree}/scripts/testdata/"*) ;;
+    "${tree}/"*) die "하위 디렉터리를 루트로 줄 수 없음(경로 규칙이 빠짐): ${root}" ;;
+    *) ;;
+  esac
 }
 
 main() {
@@ -159,6 +195,8 @@ main() {
   # 루트 기준으로 본다.
   cd -P -- "${1:-${SCRIPT_DIR}/..}" 2>/dev/null ||
     die "디렉터리가 없음: ${1:-${SCRIPT_DIR}/..}"
+  check_root "$(pwd -P)"
+  clear_conftest_env
 
   files="$(list_tf_files)" || die "파일 목록 실패: $(pwd)"
   [[ -n "${files}" ]] || die "검사할 .tf 파일이 없음: $(pwd)"
@@ -168,7 +206,7 @@ main() {
     # R0: 파서가 읽지 못하거나(JSON) 리뷰에 안 보이는(트리 밖 파일을 끌어
     # 들이는 링크) 꼴은 두지 않는다.
     if [[ -L "${file}" ]]; then
-      report "R0 ${file}: 심볼릭 링크 .tf 금지(일반 파일만)"
+      report "R0 ${file}: 심볼릭 링크 금지(파일 · 디렉터리 — 링크 너머가 검사에서 빠짐)"
     elif [[ "${file}" == *.tf.json ]]; then
       report "R0 ${file}: .tf.json 금지(이 트리는 HCL 만 — 정책이 JSON 구성을 읽지 않음)"
     elif parses "${file}"; then
