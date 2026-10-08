@@ -19,10 +19,13 @@ Control Tower(CT) 랜딩 존을 설정하는 절차입니다. 설계서 8절의 
 
 | 주체 | 하는 일 | 하지 않는 일 |
 |---|---|---|
-| kty(콘솔) | 계정 생성 · 조직 생성 · 초대와 수락 · 역할 수동 생성 · Config · CloudTrail 정리 · CT 콘솔 작업 전부 | — |
+| kty(콘솔 · CloudShell) | 계정 생성 · 조직 생성 · 초대와 수락 · 역할 수동 생성 · Config · CloudTrail 정리 · CT 콘솔 작업 전부. 콘솔로 할 수 없는 쓰기(2-7 의 Config 레코더 삭제)는 CloudShell 에서 CLI 로 직접 실행 | — |
 | 오케스트레이터 | kty 가 승인한 읽기 확인(아래 「완료 확인」의 읽기 명령)과 결과 기록 | 쓰기 명령 · 콘솔 작업 |
 | 에이전트 | 없음 | **계정 생성 · 초대 · CT 콘솔 작업은 에이전트가 하지 않습니다** |
 
+*   콘솔 · CloudShell 쓰기는 모두 kty 가 합니다. CloudShell 의 CLI 쓰기는
+    콘솔로 할 수 없는 작업(2-7)에 한한 예외입니다. 오케스트레이터는 그때도
+    읽기 확인만 합니다.
 *   모든 단계가 승인 지점입니다(설계서 8절 「각 단계」 · 「각 등록」). 한 단계의
     완료 확인이 끝나기 전에 다음 단계로 가지 않습니다.
 *   갈래가 나뉘는 걸음(2-5 · 2-6 · 3-1)에서는 그 걸음에서 kty 가 갈래를
@@ -186,6 +189,9 @@ Root
     aws organizations describe-organization
     aws organizations list-policies --filter SERVICE_CONTROL_POLICY
     ```
+*   **일정 메모**: 2-5 의 나(직접 이전)는 새 조직을 만든 지 7일이 지나야
+    합니다(2-5). 2-1 판정이 「멤버」이면 2-4 를 일찍 끝내 두고, 7일 뒤에
+    2-5 나를 진행합니다. 조직을 만든 날짜를 기록해 둡니다.
 *   **승인 지점**: 조직 생성.
 *   **되돌리기**: 조직 삭제. 멤버 계정을 모두 정리(2-5 되돌리기)한 뒤의 별도
     절차이며 이 런북 범위 밖입니다. 관리 계정의 탈퇴로는 되돌릴 수 없습니다.
@@ -208,6 +214,8 @@ Root
     확인합니다(원본 조직의 역할에 기대지 않는 접근). 새 조직용 역할은 2-6 에서
     준비합니다. 등록 해제가 정확히 무엇을 지우고 남기는지는 착수 때 원문을
     확인합니다(「확인하지 못한 것」).
+*   **원본 조직 관리자가 협조하지 않으면**(등록 해제 · 정책 확인 등): 여기서
+    멈추고 kty 에게 되묻습니다. 2-1 의 「판정 불가」와 같이 처리합니다.
 *   **갈래**(2-1 판정에 따라 이 걸음에서 kty 가 고릅니다 — 승인 지점):
 
     | 갈래 | 언제 | 어떻게 |
@@ -245,6 +253,8 @@ Root
     *   기존 계정이 독립 계정으로 운영되는 데 필요한 정보를 갖췄는지(제거 조건
         문서 — 근거 절).
     *   기존 계정이 어떤 서비스의 위임 관리자로 지정돼 있지 않은지.
+*   **나(직접 이전)로 들어온 뒤 되돌리면**: 제거된 계정은 옛 조직으로
+    돌아가지 않고 독립 계정이 됩니다.
 
 ### 2-6. 기존 계정의 역할 두 개 준비
 
@@ -266,21 +276,33 @@ Root
     *   기존 역할이 있으면 옛 신뢰를 지우고 신뢰를 새 관리 계정으로 바꿀지,
         역할을 지우고 새로 만들지 정합니다.
     *   없으면 새로 만듭니다.
+    *   2-5 에서 나(직접 이전)를 골랐다면 옛 `OrganizationAccountAccessRole`
+        은 2-5 에서 이미 지웠으므로, 위의 「옛 신뢰를 바꿀지 · 지우고 새로
+        만들지」 선택은 해당 없습니다. 새로 만듭니다.
 *   **무엇을**(최종 상태):
     *   `OrganizationAccountAccessRole` — 초대한 계정에는 자동으로 생기지
         않습니다(Organizations 초대 문서, 설계서 2-2 RC-35). 신뢰 대상은 새
-        관리 계정 `<ACCOUNT_ID_MGMT>` 입니다.
+        관리 계정 `<ACCOUNT_ID_MGMT>` 이고, 관리자 권한 정책을 붙입니다.
+        정책 이름(리뷰어 제시는 `AdministratorAccess`)과 만드는 절차는 착수
+        때 원문을 확인합니다(「확인하지 못한 것」).
     *   `AWSControlTowerExecution` — 초대한 계정을 CT 에 등록하려면
         필요합니다. CT 문서의 예시 템플릿 그대로 만듭니다: 신뢰 대상은 새 관리
         계정 `<ACCOUNT_ID_MGMT>`, 권한은 `AdministratorAccess`(설계서 2-3 의 4).
-*   **완료 확인**: 두 역할 모두 신뢰 정책의 주체가 `<ACCOUNT_ID_MGMT>` 뿐이고,
-    `AWSControlTowerExecution` 에 `AdministratorAccess` 가 붙어 있음. 읽기
-    명령(기존 계정에서):
+*   **완료 확인**: 다음을 모두 만족함.
+    *   두 역할 모두 신뢰 정책의 주체가 `<ACCOUNT_ID_MGMT>` 뿐임.
+    *   `AWSControlTowerExecution` 에 `AdministratorAccess` 가 붙어 있음.
+    *   `OrganizationAccountAccessRole` 에 관리자 권한 정책이 붙어 있음.
+    *   관리 계정에서 이 역할을 맡을 호출자(`<CALLER_ARN>`)의 정책이
+        `sts:AssumeRole` 을 허용함.
+
+    읽기 명령(마지막 줄만 관리 계정에서, 나머지는 기존 계정에서):
 
     ```
     aws iam get-role --role-name OrganizationAccountAccessRole
     aws iam get-role --role-name AWSControlTowerExecution
     aws iam list-attached-role-policies --role-name AWSControlTowerExecution
+    aws iam list-attached-role-policies --role-name OrganizationAccountAccessRole
+    aws iam simulate-principal-policy --policy-source-arn <CALLER_ARN> --action-names sts:AssumeRole --resource-arns arn:aws:iam::<ACCOUNT_ID_NONPROD>:role/OrganizationAccountAccessRole
     ```
 *   **승인 지점**: 갈래 선택 · 역할 생성 또는 변경.
 *   **되돌리기**: 역할 삭제(또는 바꾸기 전 신뢰 정책으로 복원 — 바꾸기 전에
@@ -290,9 +312,31 @@ Root
 
 ### 2-7. 기존 계정의 Config · CloudTrail 정리
 
-*   **누가**: kty(기존 계정 콘솔). 확인은 오케스트레이터 읽기.
+*   **누가**: kty(기존 계정 콘솔 · CloudShell). 확인은 오케스트레이터 읽기.
 *   **왜**: CT 등록 대상 계정에는 기존 Config 자원이 없어야 하고, 기존
     CloudTrail 트레일은 CT 트레일과 중복 과금됩니다(설계서 2-3 의 3).
+*   **콘솔로 끝나지 않는 것**: 고객 관리 Config 레코더는 콘솔에서 지울 수
+    없고 AWS CLI 로 지워야 합니다. 서비스 연결 레코더는 콘솔에서 지울 수
+    있습니다(근거 절). 리뷰어는 전달 채널도 콘솔에서 지울 수 없다고
+    제시했으나 원문과 대조하지 않았습니다 — 착수 때 원문을 확인합니다
+    (「확인하지 못한 것」). 레코더 종류를 가리는 방법도 착수 때 확인합니다.
+*   **Config 삭제 순서**(고객 관리 레코더가 있을 때, 거버넌스 리전마다 —
+    **kty 가 기존 계정 CloudShell 에서 직접 실행**, 오케스트레이터는 실행하지
+    않습니다):
+    1.  설정 보관: 아래 「완료 확인」의 읽기 명령 둘(레코더 · 전달 채널)
+        출력을 기존 계정 밖(kty 보관 위치)에 저장합니다.
+    1.  레코더 중지.
+    1.  전달 채널 삭제.
+    1.  레코더 삭제.
+    1.  읽기 재확인: 「완료 확인」의 읽기 명령으로 0건을 봅니다.
+
+    명령 예시(자리표시자만 — 실제 이름은 1번의 보관 출력에서 읽습니다):
+
+    ```
+    aws configservice stop-configuration-recorder --configuration-recorder-name <RECORDER_NAME> --region <REGION>
+    aws configservice delete-delivery-channel --delivery-channel-name <DELIVERY_CHANNEL_NAME> --region <REGION>
+    aws configservice delete-configuration-recorder --configuration-recorder-name <RECORDER_NAME> --region <REGION>
+    ```
 *   **완료 확인**: 거버넌스 리전(서울 · `us-east-1`)마다 Config 레코더 ·
     전달 채널 0건, 트레일 정리 결과를 기록. 읽기 명령(기존 계정에서, 리전마다):
 
@@ -301,9 +345,10 @@ Root
     aws configservice describe-delivery-channels --region <REGION>
     aws cloudtrail describe-trails --region <REGION>
     ```
-*   **승인 지점**: 지우기 전에 목록을 보고 kty 가 정합니다.
-*   **되돌리기**: 지운 설정을 다시 만듭니다. 지운 동안의 기록 공백은 되돌릴
-    수 없습니다.
+*   **승인 지점**: 지우기 전에 목록을 보고 kty 가 정합니다. CloudShell 의
+    삭제 명령도 kty 가 실행합니다.
+*   **되돌리기**: 보관한 설정으로 지운 설정을 다시 만듭니다. 지운 동안의
+    기록 공백은 되돌릴 수 없습니다.
 
 ### 2-8. 서울 · us-east-1 밖 자원 조사
 
@@ -386,8 +431,15 @@ Root
 *   **무엇을**(AWS 절차의 두 방법 중 하나 — 근거 절):
     *   인터넷 접근 서브넷을 끄고, 프라이빗 서브넷 수를 0 으로 둔 뒤 저장.
     *   또는 VPC 를 만들 리전을 모두 해제한 뒤 저장.
+*   **CIDR 주의**: VPC 없이 계정을 만들 때 기본 CIDR 을 그대로 남기면
+    「the CIDR is not valid」 오류로 계정 생성 요청이 실패합니다(근거 절).
+    무엇으로 바꾸거나 어떻게 처리해야 하는지는 원문에 없어 확인하지
+    못했습니다 — 착수 때 화면과 원문으로 확인하고 kty 가 정합니다
+    (「확인하지 못한 것」).
 *   **완료 확인**: Account Factory 설정 화면에서 고른 방법의 값(서브넷 끔 ·
-    프라이빗 서브넷 0, 또는 선택 리전 없음)이 저장돼 있음.
+    프라이빗 서브넷 0, 또는 선택 리전 없음)이 저장돼 있고, CIDR 칸을 어떻게
+    처리했는지(바꾼 경우 그 값)가 기록돼 있음. 토글 · 리전 선택만으로는
+    완료로 보지 않습니다.
 *   **승인 지점**: 설정 변경. **3-4 전에 끝나야 합니다.**
 *   **되돌리기**: 바꾸기 전 값으로 되돌려 저장합니다(바꾸기 전 값을
     기록해 둡니다).
@@ -395,7 +447,10 @@ Root
 ### 3-4. prod 계정 만들기(Account Factory)
 
 *   **누가**: kty(CT 콘솔, 3-2 의 비루트 주체로).
+*   **선행**: 3-3 완료(CIDR 처리 기록 포함).
 *   **무엇을**: 새 이메일 `<EMAIL_PROD>` 로 prod 계정을 Prod OU 에 만듭니다.
+*   **멈출 때**: 계정 생성이 CIDR 오류로 실패하면 여기서 멈추고 kty 에게
+    되묻습니다.
 *   **착수 때 확인**: Account Factory 화면이 요구하는 필수 입력(IdC 사용자
     정보 등)을 화면에서 확인하고, 그 값은 kty 가 정합니다(「확인하지 못한
     것」).
@@ -430,7 +485,7 @@ Root
 
 | 대상 | 방법 | 한계 |
 |---|---|---|
-| 기존 계정 초대 | CT 등록 해제 → kty 가 관리 계정 콘솔에서 멤버 제거(멤버 쪽 탈퇴는 기본 SCP 가 막음) | 제거 전 독립 계정 필수 정보 · 위임 관리자 확인. 남는 자원 **미확인** |
+| 기존 계정 초대 | CT 등록 해제 → kty 가 관리 계정 콘솔에서 멤버 제거(멤버 쪽 탈퇴는 기본 SCP 가 막음) | 제거 전 독립 계정 필수 정보 · 위임 관리자 확인. 나(직접 이전)로 들어왔어도 제거 뒤에는 옛 조직이 아니라 독립 계정. 남는 자원 **미확인** |
 | 조직 생성 | 멤버 계정을 모두 정리한 뒤 조직 삭제 — 별도 절차 | 이 런북 범위 밖 |
 | CT | LZ 해제 | 통합 계정 · 로그 자원이 남음. 관리 계정은 되돌릴 수 없는 선택 |
 
@@ -453,11 +508,19 @@ Root
     리뷰어 제시(Account transfer · Unmanage an account 문서)이며 원문과
     대조하지 않았습니다 — 착수 때 원문을 확인합니다.
 *   2-5 다(독립 전환)의 탈퇴 조건과 탈퇴 뒤 남는 것(설계서 13절).
+*   2-6 `OrganizationAccountAccessRole` 에 붙일 관리형 정책 이름과 수동 생성
+    절차 — 리뷰어 제시(역할 생성 문서)이며 원문과 대조하지 않았습니다.
 *   2-5 되돌리기의 「독립 계정 운영에 필요한 정보」의 세부 항목.
 *   3-1 Audit 계정의 SecurityRoles · Config 겸용 허용 여부(설계서는 AWS
     manifest 예시를 근거로 가능하다고 봄, `15_rc` 는 미확인).
 *   계정 해지 조건 · OU 등록 해제 · CT 해제 뒤 남는 자원(설계서 13절).
+*   2-7 전달 채널을 콘솔에서 지울 수 있는지 — 리뷰어는 불가로
+    제시했습니다(전달 채널 문서). 원문과 대조하지 않았습니다. 콘솔에서
+    안 되면 2-7 의 CloudShell 순서로 지웁니다.
+*   2-7 레코더 종류(고객 관리 · 서비스 연결)를 가리는 방법.
 *   2-8 의 조사 수단.
+*   3-3 기본 CIDR 의 처리 방법(무엇으로 바꾸는지) — 원문은 기본값을 남기면
+    실패한다고만 적습니다.
 *   3-4 Account Factory 화면의 필수 입력 항목(IdC 사용자 정보 등).
 
 ## 근거
@@ -485,7 +548,18 @@ Root
         [Account migration](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_account_migration.html)
     *   리전 거부 기본값 Not enabled(3-1):
         [Pricing and regions](https://docs.aws.amazon.com/controltower/latest/userguide/pricing-and-regions.html)
+*   AWS 문서(2026-10-08 리뷰 3라운드에서 대조):
+    *   고객 관리 레코더 삭제는 CLI 필요 · 서비스 연결 레코더는 콘솔 가능
+        (2-7):
+        [Deleting the configuration recorder](https://docs.aws.amazon.com/config/latest/developerguide/managing-recorder_console-delete.html)
+    *   VPC 없이 만들 때 기본 CIDR 을 남기면 「the CIDR is not valid」 로
+        실패(3-3 · 3-4, Possible Errors):
+        [Configure without a VPC](https://docs.aws.amazon.com/controltower/latest/userguide/configure-without-vpc.html)
 *   AWS 문서(리뷰어 제시 — 각 걸음 착수 때 원문 확인):
+    *   전달 채널 콘솔 삭제 불가(2-7):
+        [Delivery channel](https://docs.aws.amazon.com/config/latest/developerguide/update-dc-rename.html)
+    *   `OrganizationAccountAccessRole` 권한 정책 · 생성 절차(2-6):
+        [Create the cross-account role](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_accounts_create-cross-account-role.html)
     *   거부 원인(2-1):
         [IAM troubleshoot access denied](https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot_access-denied.html)
     *   탈퇴 뒤 역할 잔존(2-6) · 비용 자료 보존 구분(2-2):
@@ -503,7 +577,7 @@ Root
         [Register an existing OU](https://docs.aws.amazon.com/controltower/latest/userguide/importing-existing.html)
     *   콘솔 계정 생성 조건(3-2 · 3-4):
         [Quick account provisioning](https://docs.aws.amazon.com/controltower/latest/userguide/quick-account-provisioning.html)
-    *   VPC 없이 설정(3-3):
+    *   VPC 없이 설정 — 두 방법(3-3):
         [Configure without a VPC](https://docs.aws.amazon.com/controltower/latest/userguide/configure-without-vpc.html)
     *   기본 SCP(2-4):
         [Default controls](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_security_default_controls.html)
