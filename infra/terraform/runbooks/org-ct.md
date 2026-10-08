@@ -304,6 +304,11 @@ Root
     aws iam list-attached-role-policies --role-name OrganizationAccountAccessRole
     aws iam simulate-principal-policy --policy-source-arn <CALLER_ARN> --action-names sts:AssumeRole --resource-arns arn:aws:iam::<ACCOUNT_ID_NONPROD>:role/OrganizationAccountAccessRole
     ```
+
+    `simulate-principal-policy` 는 호출자 쪽 정책만 평가하고 역할의 신뢰
+    정책은 평가하지 않는다고 리뷰어가 제시했습니다(원문 미대조). 통과해도
+    위임 성공의 보장이 아니며, 신뢰 정책은 첫 항목(`get-role` 출력)으로 따로
+    봅니다.
 *   **승인 지점**: 갈래 선택 · 역할 생성 또는 변경.
 *   **되돌리기**: 역할 삭제(또는 바꾸기 전 신뢰 정책으로 복원 — 바꾸기 전에
     원래 신뢰 정책을 기록해 둡니다). `AWSControlTowerExecution` 은 등록 뒤 CT
@@ -315,20 +320,45 @@ Root
 *   **누가**: kty(기존 계정 콘솔 · CloudShell). 확인은 오케스트레이터 읽기.
 *   **왜**: CT 등록 대상 계정에는 기존 Config 자원이 없어야 하고, 기존
     CloudTrail 트레일은 CT 트레일과 중복 과금됩니다(설계서 2-3 의 3).
+*   **레코더는 두 종류입니다**: 고객 관리 레코더(계정이 직접 만든 것)와
+    서비스 연결 레코더(다른 AWS 서비스가 만든 것)입니다.
 *   **콘솔로 끝나지 않는 것**: 고객 관리 Config 레코더는 콘솔에서 지울 수
     없고 AWS CLI 로 지워야 합니다. 서비스 연결 레코더는 콘솔에서 지울 수
     있습니다(근거 절). 리뷰어는 전달 채널도 콘솔에서 지울 수 없다고
     제시했으나 원문과 대조하지 않았습니다 — 착수 때 원문을 확인합니다
-    (「확인하지 못한 것」). 레코더 종류를 가리는 방법도 착수 때 확인합니다.
-*   **Config 삭제 순서**(고객 관리 레코더가 있을 때, 거버넌스 리전마다 —
-    **kty 가 기존 계정 CloudShell 에서 직접 실행**, 오케스트레이터는 실행하지
-    않습니다):
-    1.  설정 보관: 아래 「완료 확인」의 읽기 명령 둘(레코더 · 전달 채널)
-        출력을 기존 계정 밖(kty 보관 위치)에 저장합니다.
+    (「확인하지 못한 것」).
+*   **레코더 전체 목록 보기**(거버넌스 리전마다, 읽기): 두 종류를 **각각**
+    확인합니다.
+    *   `describe-configuration-recorders` 를 레코더 지정 없이 부르면 고객
+        관리 레코더만 돌려준다는 서술(CLI · API 명세)과 전체를 돌려준다는
+        서술(개발자 가이드)이 엇갈린다고 리뷰어가 제시했습니다. 원문과
+        대조하지 않았으므로, 이 명령 하나의 결과로 「레코더 0건」을 판정하지
+        않습니다.
+    *   전체 목록을 보는 수단으로 리뷰어는 `list-configuration-recorders`
+        명령과 콘솔의 두 레코더 탭(고객 관리 · 서비스 연결)을 제시했습니다.
+        어느 수단이 두 종류를 모두 보여 주는지는 착수 때 원문으로 확인한 뒤
+        고릅니다(「확인하지 못한 것」).
+    *   두 종류를 모두 보여 주는 수단을 확인하지 못하면 여기서 멈추고 kty
+        에게 되묻습니다.
+*   **레코더에 기대는 서비스 확인**(착수 때, 지우기 전에): Security Hub 처럼
+    Config 레코더에 기대는 서비스를 기존 계정에서 쓰는지 확인하고, 지웠을 때
+    그 서비스에 생기는 영향을 kty 에게 알린 뒤 지웁니다. 어떤 서비스가
+    기대는지는 원문과 대조하지 않았습니다(「확인하지 못한 것」).
+*   **서비스 연결 레코더가 있으면**: 지우지 않고 여기서 멈춥니다. 그 레코더를
+    만든 연결 서비스, 그 서비스에서 먼저 할 조치, CT 등록을 위해 지워야
+    하는지를 확인한 뒤 kty 가 정합니다. 리뷰어는 연결 서비스가 사용 중이면
+    삭제가 거부된다고 제시했습니다(원문 미대조). 이 셋 중 하나라도 확인하지
+    못하면 진행하지 않습니다.
+*   **고객 관리 레코더 삭제 순서**(고객 관리 레코더가 있을 때, 거버넌스
+    리전마다 — **kty 가 기존 계정 CloudShell 에서 직접 실행**,
+    오케스트레이터는 실행하지 않습니다):
+    1.  설정 보관: 아래 「완료 확인」의 읽기 명령 둘(레코더 · 전달 채널)과
+        레코더 전체 목록의 출력을 기존 계정 밖(kty 보관 위치)에 저장합니다.
     1.  레코더 중지.
     1.  전달 채널 삭제.
     1.  레코더 삭제.
-    1.  읽기 재확인: 「완료 확인」의 읽기 명령으로 0건을 봅니다.
+    1.  읽기 재확인: 「완료 확인」의 읽기와 레코더 전체 목록으로 두 종류를
+        다시 봅니다.
 
     명령 예시(자리표시자만 — 실제 이름은 1번의 보관 출력에서 읽습니다):
 
@@ -337,8 +367,16 @@ Root
     aws configservice delete-delivery-channel --delivery-channel-name <DELIVERY_CHANNEL_NAME> --region <REGION>
     aws configservice delete-configuration-recorder --configuration-recorder-name <RECORDER_NAME> --region <REGION>
     ```
-*   **완료 확인**: 거버넌스 리전(서울 · `us-east-1`)마다 Config 레코더 ·
-    전달 채널 0건, 트레일 정리 결과를 기록. 읽기 명령(기존 계정에서, 리전마다):
+*   **완료 확인**: 거버넌스 리전(서울 · `us-east-1`)마다 다음을 모두 기록함.
+    *   레코더: 고객 관리 · 서비스 연결 **두 종류를 각각** 확인한 결과. 고객
+        관리 레코더 0건, 서비스 연결 레코더는 0건이거나 kty 가 남기기로
+        정한 것만 남음. 종류별로 둘 다 확인하기 전에는 완료로 보지 않습니다.
+    *   전달 채널 0건.
+    *   트레일 정리 결과.
+    *   레코더에 기대는 서비스 확인 결과.
+
+    읽기 명령(기존 계정에서, 리전마다). 레코더는 이 명령에 더해 위 「레코더
+    전체 목록 보기」에서 고른 수단으로 봅니다:
 
     ```
     aws configservice describe-configuration-recorders --region <REGION>
@@ -358,6 +396,9 @@ Root
 *   **무엇을**: 기존 계정에서 두 리전 밖에 자원이 있는지 읽기 전용으로
     조사합니다. 조사 수단은 설계서에 정해져 있지 않습니다 — 착수 때 정하고,
     수단이 놓치는 자원 종류를 함께 기록합니다.
+*   **조사 대상에 꼭 넣을 것**: 두 리전 밖의 Config 레코더 · 전달 채널(2-7
+    은 거버넌스 리전만 정리합니다). 레코더는 2-7 처럼 고객 관리 · 서비스 연결
+    두 종류를 각각 봅니다.
 *   **완료 확인**: 리전별 결과 기록. 자원이 있으면 옮길지 지울지 kty 가
     정하고, 그 처분이 끝난 뒤 3단계로 갑니다.
 *   **승인 지점**: 읽기 실행 · 발견 자원 처분.
@@ -467,10 +508,27 @@ Root
 *   **알 것**: 등록하면 CT 가 StackSet 을 배포하고 OU 의 SCP 를 적용하며
     Config 로 모든 자원을 기록합니다. 기존 계정의 VPC 는 만들거나 지우지
     않습니다.
-*   **완료 확인**: CT 계정 화면에 `<ACCOUNT_ID_NONPROD>` 가 등록됨. 등록 뒤에도
-    dev 상자 · 옛 존이 그대로인지 확인합니다.
-*   **승인 지점**: 등록.
-*   **되돌리기**: CT 등록 해제(설계서 9-1). 남는 자원은 **미확인**.
+*   **지금 계정의 위치**: 리뷰어는 초대로 들어온 계정이 조직 Root 에
+    놓인다고 제시했습니다(원문 미대조). 그래서 등록 전에 NonProd OU 로
+    옮기는 걸음을 둡니다.
+*   **무엇을**:
+    1.  kty 가 관리 계정 Organizations 콘솔에서 기존 계정을 NonProd OU 로
+        옮깁니다.
+    1.  kty 가 CT 콘솔에서 기존 계정을 등록(Enroll)합니다.
+
+    이 순서(OU 로 먼저 옮긴 뒤 등록할지, 등록 화면에서 대상 OU 를 고르면
+    되는지)는 확인하지 못했습니다 — 착수 때 원문을 확인하고 kty 가
+    정합니다(「확인하지 못한 것」).
+*   **완료 확인**: 기존 계정의 부모가 NonProd OU 이고, CT 계정 화면에
+    `<ACCOUNT_ID_NONPROD>` 가 등록됨. 등록 뒤에도 dev 상자 · 옛 존이
+    그대로인지 확인합니다. 읽기 명령(관리 계정에서):
+
+    ```
+    aws organizations list-parents --child-id <ACCOUNT_ID_NONPROD>
+    ```
+*   **승인 지점**: OU 이동 · 등록.
+*   **되돌리기**: CT 등록 해제(설계서 9-1). 남는 자원은 **미확인**. OU
+    이동은 계정을 Root 로 다시 옮깁니다.
 
 ## 다음 단계
 
@@ -517,8 +575,19 @@ Root
 *   2-7 전달 채널을 콘솔에서 지울 수 있는지 — 리뷰어는 불가로
     제시했습니다(전달 채널 문서). 원문과 대조하지 않았습니다. 콘솔에서
     안 되면 2-7 의 CloudShell 순서로 지웁니다.
-*   2-7 레코더 종류(고객 관리 · 서비스 연결)를 가리는 방법.
+*   2-6 `simulate-principal-policy` 의 평가 범위(신뢰 정책을 평가하지
+    않는다는 것) — 리뷰어 제시이며 원문과 대조하지 않았습니다.
+*   2-7 레코더 전체 목록을 보는 수단 — `describe-configuration-recorders` 를
+    레코더 지정 없이 불렀을 때 고객 관리 레코더만 돌려주는지 전체를
+    돌려주는지(리뷰어 제시: CLI · API 명세와 개발자 가이드가 엇갈림),
+    `list-configuration-recorders` 명령의 존재와 반환 범위, 콘솔 두 레코더
+    탭. 원문과 대조하지 않았습니다. 확인 전에는 2-7 을 완료로 보지 않습니다.
+*   2-7 서비스 연결 레코더 — 연결 서비스가 사용 중이면 삭제가 거부되는지,
+    CT 등록 전에 지워야 하는지(리뷰어 제시, 원문 미대조).
+*   2-7 Config 레코더에 기대는 서비스(Security Hub 등)의 목록과 영향.
 *   2-8 의 조사 수단.
+*   3-5 초대로 들어온 계정이 Root 에 놓이는지, OU 이동과 등록(Enroll)의
+    순서 — 리뷰어 제시이며 원문과 대조하지 않았습니다.
 *   3-3 기본 CIDR 의 처리 방법(무엇으로 바꾸는지) — 원문은 기본값을 남기면
     실패한다고만 적습니다.
 *   3-4 Account Factory 화면의 필수 입력 항목(IdC 사용자 정보 등).
@@ -556,6 +625,13 @@ Root
         실패(3-3 · 3-4, Possible Errors):
         [Configure without a VPC](https://docs.aws.amazon.com/controltower/latest/userguide/configure-without-vpc.html)
 *   AWS 문서(리뷰어 제시 — 각 걸음 착수 때 원문 확인):
+    *   레코더 지정 없는 조회의 반환 범위 · 전체 목록 · 서비스 연결 레코더
+        삭제 제약(2-7):
+        [describe-configuration-recorders CLI](https://docs.aws.amazon.com/cli/latest/reference/configservice/describe-configuration-recorders.html) ·
+        [DescribeConfigurationRecorders](https://docs.aws.amazon.com/config/latest/APIReference/API_DescribeConfigurationRecorders.html) ·
+        [Viewing the configuration recorder](https://docs.aws.amazon.com/config/latest/developerguide/configuration-recorder-view.html) ·
+        [ListConfigurationRecorders](https://docs.aws.amazon.com/config/latest/APIReference/API_ListConfigurationRecorders.html) ·
+        [DeleteServiceLinkedConfigurationRecorder](https://docs.aws.amazon.com/config/latest/APIReference/API_DeleteServiceLinkedConfigurationRecorder.html)
     *   전달 채널 콘솔 삭제 불가(2-7):
         [Delivery channel](https://docs.aws.amazon.com/config/latest/developerguide/update-dc-rename.html)
     *   `OrganizationAccountAccessRole` 권한 정책 · 생성 절차(2-6):
