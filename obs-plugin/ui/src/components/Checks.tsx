@@ -1,4 +1,5 @@
 import { Check, Minus, TriangleAlert, X } from 'lucide-preact';
+import { RES_ADVISORY } from '../lib/copy';
 import type { BridgeState, Tri } from '../lib/types';
 import styles from './dock.module.css';
 
@@ -66,6 +67,7 @@ export function Checks({ state }: { state: BridgeState }) {
           </li>
         ))}
       </ul>
+      {checks.res1080p === false ? <p class={styles.audioNote}>{RES_ADVISORY}</p> : null}
     </section>
   );
 }

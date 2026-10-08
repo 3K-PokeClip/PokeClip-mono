@@ -65,6 +65,9 @@ export const REASON: Record<string, string> = {
 export const KEY_SUSPECT_HINT =
   '수신 서버가 연결을 계속 거절해요. PokeClip 웹에서 스트림 키를 확인하세요.';
 
+// 송출 점검의 해상도 경고에 붙는 안내 — 1080p는 권장값이라(ADR-020) 어긋나도 막지 않는다.
+export const RES_ADVISORY = '1080p를 권장해요. 지금 해상도로도 그대로 전송돼요.';
+
 // 연결 없이 본방을 시작했을 때의 토스트. 동기화가 켜져 있으면 플러그인이 방송 중 연결에 대비해 본방 키프레임 간격을
 // 미리 2초로 맞추는데, 점검 카드는 연결된 뒤에만 보이므로 바꾼 사실을 여기서 같이 알린다.
 export function noKeyToast(gopApplied: boolean): string {

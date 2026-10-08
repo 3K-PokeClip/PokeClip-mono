@@ -159,8 +159,10 @@ void FallbackPanel::Render(const StateSnapshot &s)
 	stopRetry_->setVisible(retrying);
 
 	auto mark = [](const std::optional<bool> &v) { return !v.has_value() ? QString("–") : (*v ? "✓" : "✗"); };
+	// 1080p는 권장값이라 어긋나도 송출은 나간다 — 실패(✗)가 아니라 경고로 적는다.
+	QString res = s.checks.res1080p.value_or(true) ? mark(s.checks.res1080p) : QString("⚠");
 	checks_->setText(QString("GOP 2s %1   1080p %2   %3 %4   %5 %6")
-				 .arg(mark(s.checks.gop2s), mark(s.checks.res1080p), Text("Check.SharedEncoder"),
+				 .arg(mark(s.checks.gop2s), res, Text("Check.SharedEncoder"),
 				      mark(s.checks.sharedEncoder), Text("Check.AudioTracks"), mark(s.checks.audioTracks)));
 
 	// 트랙 1은 늘 최종 믹스라 트랙 2~6만 적는다. 실제 트랙 비트 기준이라 수동 모드에서도 진실을 보여준다.
