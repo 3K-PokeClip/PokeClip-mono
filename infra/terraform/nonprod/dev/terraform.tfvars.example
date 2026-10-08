@@ -17,6 +17,8 @@
 # 8. SG 의 revoke_rules_on_delete 처럼 AWS 에 없는 Terraform 전용 인자는
 #    import 뒤 기본값으로 수정이 뜰 수 있다. 첫 plan 에 뜨면 그 인자를 현재
 #    동작과 같은 값으로 선언에 적어 「수정 0」을 맞춘다.
+# 9. 인스턴스 프로필 이름(describe-instances 의 IamInstanceProfile — 선언하지
+#    않으면 plan 이 프로필을 뗀다). 프로필 · 역할 자체는 import 하지 않는다.
 # 첫 plan 이 「import 7 · 생성 0 · 수정 0 · 삭제 0」이 아니면 apply 하지 않는다.
 instance_id          = "<INSTANCE_ID_DEV>"
 instance_ami         = "<AMI_ID_DEV>"
@@ -30,12 +32,19 @@ egress_rule_id       = "<SG_RULE_ID_DEV_EGRESS>"
 
 security_group_description = "<SG_DESCRIPTION_DEV>"
 
+# 현재 붙어 있는 인스턴스 프로필 이름 그대로(ARN 아님).
+instance_iam_instance_profile = "<INSTANCE_PROFILE_NAME_DEV>"
+
 # true 또는 false(현재 값). 자리표시자 그대로면 plan 이 형식 오류로 멈춘다.
 instance_hibernation       = "<HIBERNATION_DEV>"
 instance_source_dest_check = "<SOURCE_DEST_CHECK_DEV>"
 
-instance_tags       = { Name = "<INSTANCE_NAME_TAG_DEV>" }
-eip_tags            = {}
+# 실물 태그 키 구조: EC2 는 Name · project, EIP 는 Name. 값은 현재 값 그대로.
+instance_tags = {
+  Name    = "<INSTANCE_NAME_TAG_DEV>"
+  project = "<INSTANCE_PROJECT_TAG_DEV>"
+}
+eip_tags            = { Name = "<EIP_NAME_TAG_DEV>" }
 security_group_tags = {}
 
 # description · tags 는 현재 값이 없으면 줄을 지운다.

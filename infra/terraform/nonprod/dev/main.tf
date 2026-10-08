@@ -22,6 +22,9 @@ resource "aws_instance" "dev" {
   hibernation       = var.instance_hibernation
   source_dest_check = var.instance_source_dest_check
 
+  # 프로필은 선언만 한다 — 프로필 · 역할 자체는 import 하지 않는다.
+  iam_instance_profile = var.instance_iam_instance_profile
+
   lifecycle {
     prevent_destroy = true
     ignore_changes  = [ami, user_data]
