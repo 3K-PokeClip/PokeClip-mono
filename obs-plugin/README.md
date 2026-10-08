@@ -213,7 +213,7 @@ OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio
 | `GET /api/events` | Bearer | SSE `event: state` (상태가 바뀔 때, 15초 keep-alive). EventSource는 헤더를 못 붙여 페이지는 fetch 스트리밍으로 읽는다 |
 | `POST /api/pair` `{code}` | Bearer | 200 / 400 invalid_format / 404 not_found / 410 expired / 409 already_used·streaming / 429 rate_limited / 502 network·server_error |
 | `POST /api/unpair` | Bearer | 송출 중이면 409 |
-| `POST /api/audio/assign` `{key, track}` | Bearer | 독 손 배정 — `track` 2~6은 그 트랙으로 옮긴다(찬 트랙이면 묶인다), 없으면 트랙에서 뺀다(본방 믹스에만). 202 받음(결과는 상태 `audio`로 온다 — 소스마다 `key`, 트랙에 없는 소스는 `mixOnly`) / 409 audio_off(자동 배정이 적용 중이 아님)·main_stream_track / 404 unknown_source / 400 bad_track. 방송 중에도 받는다. 202 뒤 UI 스레드에서 거절되면(그 찰나에 소스가 지워짐·그 트랙이 본방 트랙이 됨·설정 저장 실패 `save_failed`) 로그에만 남고 상태는 바뀌지 않는다 — 다시 누르면 새 상태 기준의 사유가 온다 |
+| `POST /api/audio/assign` `{key, track}` | Bearer | 독 손 배정 — `track` 2~6은 그 트랙으로 옮긴다(찬 트랙이면 묶인다), 없으면 트랙에서 뺀다(본방 믹스에만). 200 적용됨(결과는 상태 `audio`로 온다 — 소스마다 `key`, 트랙에 없는 소스는 `mixOnly`) / 202 UI 스레드가 1.5초 안에 답하지 않음(결과는 상태로) / 409 audio_off(자동 배정이 적용 중이 아님)·main_stream_track / 404 unknown_source / 400 bad_track / 500 save_failed(설정 파일을 못 써 기억도 되돌렸다). 방송 중에도 받는다 |
 | `GET·PUT /api/config` | Bearer | 위 설정 표의 비밀 아닌 키. PUT은 `api_base`·`clip_api_base`를 무시한다. 송출 중이면 409 streaming — 단 `audio_auto_assign`·`audio_assign_prompted`만 바뀐 요청은 받는다(배정은 방송·녹화가 끝난 뒤 적용) |
 | `POST /api/mark` | Bearer | 독 「순간 표시」 — 202 받음 / 409 mark_not_live·no_key·invalid_key·mark_insecure(거절도 상태 `marks`로 온다) / 429 mark_too_soon. 보낸 결과는 상태 `marks`로 온다 |
 | `POST /api/send-now` | Bearer | 독 「다시 연결」·「다시 시도」 — 202 받음(붙었는지는 상태로 온다) / 409 main_not_live·no_key·send_unavailable |

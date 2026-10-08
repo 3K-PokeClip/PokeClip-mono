@@ -42,6 +42,9 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include <QTimer>
 
 #include <atomic>
+#include <chrono>
+#include <future>
+#include <memory>
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("pokeclip-obs", "en-US")
@@ -322,13 +325,34 @@ BridgeCallbacks MakeBridgeCallbacks()
 		if (hasTrack && s.audio.tracks[static_cast<size_t>(track - 2)].mainStream)
 			return {409, JsonReason(false, "main_stream_track")};
 		int slot = hasTrack ? static_cast<int>(track) - 1 : 0;
-		RunInUiThread([key, slot]() {
+		// 기억 수정·재계산은 UI 스레드 것이라 거기서 돌리고, 결과를 잠깐 기다려 실제 상태 코드로 답한다 — 그 찰나의
+		// 거절(소스 삭제·본방 트랙 전환·설정 저장 실패)이 독에 사유로 간다. UI 스레드가 바쁘면 202(결과는 상태로 온다).
+		// 종료 중엔 큐에 넣은 일이 안 돌 수 있다(promise가 깨진다) — 그때도 202.
+		constexpr int kReplyWaitMs = 1500;
+		auto done = std::make_shared<std::promise<std::pair<bool, std::string>>>();
+		std::future<std::pair<bool, std::string>> result = done->get_future();
+		RunInUiThread([key, slot, done]() {
 			std::string reason;
-			if (!AudioRouter::Instance().AssignTrack(key, slot, reason))
+			bool ok = AudioRouter::Instance().AssignTrack(key, slot, reason);
+			if (!ok)
 				obs_log(LOG_WARNING, "audio routing: assign of %s rejected (%s)", key.c_str(),
 					reason.c_str());
+			done->set_value({ok, reason});
 		});
-		return {202, JsonReason(true, "")};
+		if (result.wait_for(std::chrono::milliseconds(kReplyWaitMs)) != std::future_status::ready)
+			return {202, JsonReason(true, "")};
+		try {
+			auto [ok, reason] = result.get();
+			if (ok)
+				return {200, JsonReason(true, "")};
+			int status = reason == "unknown_source" ? 404
+				     : reason == "bad_track"      ? 400
+				     : reason == "save_failed"    ? 500
+								    : 409; // audio_off · main_stream_track
+			return {status, JsonReason(false, reason)};
+		} catch (const std::future_error &) {
+			return {202, JsonReason(true, "")};
+		}
 	};
 	return cb;
 }
