@@ -14,7 +14,11 @@ resource "aws_route53_record" "ns" {
   name    = var.zone_name
   type    = "NS"
   ttl     = var.ns_ttl
-  records = aws_route53_zone.legacy.name_servers
+
+  # 존 name_servers 는 끝 점이 없고 실제 레코드 값은 끝 점이 있다. 점을 붙여
+  # 실물과 같게 한다(이미 있으면 겹쳐 붙이지 않는다) — 안 붙이면 O1 plan 이
+  # 값 수정을 낸다.
+  records = [for ns in aws_route53_zone.legacy.name_servers : "${trimsuffix(ns, ".")}."]
 }
 
 resource "aws_route53_record" "legacy" {
