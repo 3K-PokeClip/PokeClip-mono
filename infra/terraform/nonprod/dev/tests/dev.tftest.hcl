@@ -1,6 +1,6 @@
 # dev 상자 import 구성의 선언을 mock provider 로 단언한다.
 # 무변경(No changes)은 tftest 로 볼 수 없어 운영 O1 plan 이 판정한다.
-# EC2 · EIP · SG 의 prevent_destroy 는 tftest 로 볼 수 없어 guard R5 가 맡는다.
+# EC2 · EIP · SG 의 prevent_destroy 는 tftest 로 볼 수 없어 guard R11 이 맡는다.
 
 mock_provider "aws" {}
 

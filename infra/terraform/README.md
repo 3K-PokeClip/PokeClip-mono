@@ -155,9 +155,14 @@ fixture 트리 안에 그대로 둡니다.
 | R11 | `nonprod/dev` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원의 `lifecycle` 블록에 `prevent_destroy = true` 없음 |
 
 검사를 끝낼 수 없으면(검사할 `.tf` 0건 · 읽을 수 없는 파일 · 끝나지 않는
-heredoc · 블록 주석 · 알아보지 못하는 `<<` · grep 오류) 위반 0 으로 넘어가지
-않고 종료 코드 2 로 멈춥니다. guard 는 임시 파일을 쓰지 않습니다. R4 · R11 은 대상 경로가
-없는 트리(다른 규칙의 fixture)에서는 건너뜁니다.
+heredoc · 블록 주석 · 문자열 · 자원 블록 · 알아보지 못하는 `<<` · 주석으로
+나뉜 선언 머리 · awk 나 입력 전달 오류) 위반 0 으로 넘어가지 않고 종료
+코드 2 로 멈춥니다. guard 는 임시 파일 · 프로세스 치환을 쓰지 않습니다.
+R4 · R11 은 대상 경로가 없는 트리(다른 규칙의 fixture)에서는 건너뜁니다.
+
+guard 를 부르는 CI 는 계획의 M-CI(infra-ci)에서 붙습니다. 그 전까지는 PR
+마다 `bash infra/terraform/scripts/guard_test.sh` 와 `bash
+infra/terraform/scripts/guard.sh` 를 손으로 돌립니다.
 
 `prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R11 이
 맡습니다. 한 줄 꼴 `lifecycle { prevent_destroy = true }` 도 인정합니다.
@@ -178,5 +183,10 @@ R5 ~ R10 은 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키�
     속의 `#` · `<<` · 따옴표 · 중괄호는 코드로 읽지 않습니다. 여러 줄에 걸친
     보간 · 보간 속 주석이나 `<<` 는 알아보지 못해 종료 2 로 멈춥니다(안전한
     쪽 실패 — 그런 꼴은 쓰지 않거나 guard 를 고칩니다).
+*   파일 첫머리 UTF-8 BOM · 줄끝 CR(CRLF)은 지우고 읽습니다. 블록 주석이
+    `resource /* … */ "x"` 처럼 줄을 넘어 선언 머리를 나누면 종료 2 입니다.
+*   R1 은 Secrets Manager 비밀 버전만 봅니다. `aws_ssm_parameter` 의
+    SecureString 값도 상태에 평문으로 남지만 R1 대상이 아닙니다(설계상 SSM
+    비밀은 없음 — 쓰게 되면 리뷰가 막고 규칙을 더합니다).
 *   `terraform fmt -recursive` 를 깨는 fixture 는 `*.tf.in` 으로 두고
     `guard_test.sh` 가 임시 디렉터리에 `*.tf` 로 복사해 돌립니다.
