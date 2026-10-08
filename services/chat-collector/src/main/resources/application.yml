@@ -2,9 +2,10 @@ spring:
   task:
     scheduling:
       pool:
-        # @Scheduled가 셋이다(끝난 방송 치우기 · 재부착 · 방송 정보). 기본 1이면 방송 정보가 목록을 훑는 동안
-        # 재부착이 밀린다(ReattachScheduler 주석이 예고한 자리).
-        size: 3
+        # @Scheduled가 다섯이다(끝난 방송 치우기 · 재부착 · 방송 정보 · 탈퇴 채널 정리 · 60일 정리). 기본 1이면 방송 정보가
+        # 목록을 훑는 동안 재부착이 밀린다(ReattachScheduler 주석이 예고한 자리). 정리 둘이 큰 표를 지우는 동안에도
+        # 앞의 셋이 안 밀리게 하나씩 몫을 준다.
+        size: 5
   application:
     name: pokeclip-chat-collector
   datasource:
@@ -163,6 +164,18 @@ pokeclip:
       pending-max: ${CHAT_ARCHIVE_PENDING_MAX:60}
       # 수신→아카이브 바구니 상한(채팅 수). DB 바구니와 같은 1만. 넘치면 오래된 것부터(archiveBufferDropped).
       buffer-capacity: ${CHAT_ARCHIVE_BUFFER_MAX:10000}
+
+  chat-purge:
+    # 탈퇴 정리(POK-256). auth가 탈퇴한 스트리머의 채널을 알리면 명부에 적고 이 주기로 지운다.
+    interval: PT15S
+    # 탈퇴 알림 뒤 이만큼 늦게 받은 채팅까지 지운다(적재 바구니에 남아 있던 것). 창이 닫히면 명부 줄을 닫는다.
+    late-window: PT10M
+    # 채팅·후원·방송 정보 보관 기한. 영상 보관(60일, ADR-004)과 같다. 채팅 원본 파일(S3 chat/)은 창고 수명 규칙이 맡는다.
+    retain: P60D
+    retention-interval: PT1H
+    # 한 번에 지우는 줄 수. 긴 DELETE 하나가 적재를 막지 않게 자른다.
+    batch: 5000
+
   broadcast:
     # 메모 치우기 주기. 하루에 한 번이면 충분하지만, 프로세스가 하루를 못 살면
     # 한 번도 안 도므로 짧게 잡는다 — 지울 것이 없으면 DELETE 한 번이라 싸다.
