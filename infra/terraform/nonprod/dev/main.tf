@@ -5,6 +5,13 @@
 # O1 전 읽기 조사로 확인할 가정은 terraform.tfvars.example 머리 목록에 있다.
 
 locals {
+  # 태그 없는 실제 규칙의 tags 는 null 이라, 빈 맵({})을 넘기면 O1 plan 이
+  # 「+ tags = {}」 수정을 낸다. 빈 입력은 null 로 보낸다.
+  ingress_rule_tags = {
+    for key, rule in var.ingress_rules : key => length(rule.tags) > 0 ? rule.tags : null
+  }
+  egress_rule_tags = length(var.egress_rule.tags) > 0 ? var.egress_rule.tags : null
+
   # 키 = 포트. M12 에서 "8082" 를 뺀다. 규칙별 현재 값은 var.ingress_rules.
   dev_ingress_rules = {
     "80"   = 80
@@ -60,7 +67,7 @@ resource "aws_vpc_security_group_ingress_rule" "dev" {
   to_port           = each.value
   cidr_ipv4         = var.ingress_rules[each.key].cidr_ipv4
   description       = var.ingress_rules[each.key].description
-  tags              = var.ingress_rules[each.key].tags
+  tags              = local.ingress_rule_tags[each.key]
 }
 
 resource "aws_vpc_security_group_egress_rule" "dev" {
@@ -68,5 +75,5 @@ resource "aws_vpc_security_group_egress_rule" "dev" {
   ip_protocol       = var.egress_rule.ip_protocol
   cidr_ipv4         = var.egress_rule.cidr_ipv4
   description       = var.egress_rule.description
-  tags              = var.egress_rule.tags
+  tags              = local.egress_rule_tags
 }
