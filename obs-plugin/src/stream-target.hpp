@@ -98,6 +98,11 @@ private:
 	bool endSignalDecided_ = false;
 	// 정지를 요청한 이유. OnStop이 성공 정지여도 이 사유로 오류를 남긴다 — 그 신호가 사유를 덮지 않게.
 	std::atomic<const char *> stopReason_{nullptr};
+	// 이 출력의 stopping 신호가 UI 스레드 밖에서 났다 — 우리가 부르는 정지(obs_output_stop·Release의 force_stop)는 모두
+	// UI 스레드에서 나므로, 다른 스레드의 stopping은 libobs가 시작한 정지다(공유 인코더 실패 → full_stop이 인코더
+	// 스레드에서 두 출력을 force_stop, stop_code 0). 그 정지는 뒤따르는 본방 STOPPING이 조작처럼 보여도 조작이 아니라
+	// 종료 신호를 보내지 않는다(계약4 3-1 「오류로 멈춘 경우」). 시도마다 BeginAttempt가 지운다.
+	std::atomic<bool> stopInternal_{false};
 	// 우리가 만든 오디오 인코더만(생성 참조를 우리가 쥔다). 출력이 제 참조를 놓은 뒤 Release()에서 놓는다.
 	std::vector<struct obs_encoder *> ownedAudioEncoders_;
 	std::unique_ptr<SignalContext> signalContext_;
