@@ -51,6 +51,21 @@ run "imports_zone_and_records" {
     error_message = "옛 존 NS 레코드 TTL 이 ns_ttl 이 아니다."
   }
 
+  # 존 name_servers 는 끝 점이 없고 실제 NS 레코드 값은 끝 점이 있다 — 그대로
+  # 넘기면 O1 plan 이 값 수정을 낸다.
+  assert {
+    condition = (
+      length(aws_route53_record.ns.records) == length(aws_route53_zone.legacy.name_servers) &&
+      alltrue([for ns in aws_route53_record.ns.records : endswith(ns, ".")])
+    )
+    error_message = "NS 레코드 값이 네임서버마다 끝 점(.)으로 끝나는 하나씩이 아니다."
+  }
+
+  assert {
+    condition     = aws_route53_record.ns.records == toset(["ns-1.example.net.", "ns-2.example.org."])
+    error_message = "NS 레코드 값이 존 네임서버에 끝 점을 붙인 값이 아니다."
+  }
+
   assert {
     condition     = aws_route53_record.ns.name == "pokeclip.com" && aws_route53_record.ns.type == "NS"
     error_message = "NS 레코드가 존 apex NS 가 아니다."
@@ -83,6 +98,24 @@ run "imports_zone_and_records" {
   assert {
     condition     = output.records["dev_A"].records == toset(["192.0.2.10"])
     error_message = "출력 records 의 값이 레코드 값과 다르다."
+  }
+}
+
+# 네임서버 값에 이미 끝 점이 있어도 점을 겹쳐 붙이지 않는다.
+run "keeps_single_trailing_dot_on_ns_records" {
+  command = plan
+
+  override_resource {
+    target          = aws_route53_zone.legacy
+    override_during = plan
+    values = {
+      name_servers = ["ns-1.example.net.", "ns-2.example.org"]
+    }
+  }
+
+  assert {
+    condition     = aws_route53_record.ns.records == toset(["ns-1.example.net.", "ns-2.example.org."])
+    error_message = "끝 점이 이미 있는 네임서버에 점이 겹쳐 붙었다."
   }
 }
 
