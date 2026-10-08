@@ -16,6 +16,7 @@ add_executable(
   "${PLUGIN_DIR}/src/audio-assign.cpp"
   "${PLUGIN_DIR}/src/bridge-server.cpp"
   "${PLUGIN_DIR}/src/encoder-opts.cpp"
+  "${PLUGIN_DIR}/src/end-signal-policy.cpp"
   "${PLUGIN_DIR}/src/mark-policy.cpp"
   "${PLUGIN_DIR}/src/pairing-code.cpp"
   "${PLUGIN_DIR}/src/private-file.cpp"

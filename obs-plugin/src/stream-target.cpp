@@ -6,7 +6,10 @@ Copyright (C) SoraYuki, licensed under GPL-2.0.
 
 #include "app-state.hpp"
 #include "constants.hpp"
+#include "end-signal-policy.hpp"
+#include "end-signal-sender.hpp"
 #include "srt-target.hpp"
+#include "srt-url.hpp"
 #include "ui-thread.hpp"
 
 #include <obs-frontend-api.h>
@@ -39,6 +42,12 @@ int64_t NowEpochMs()
 {
 	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
 		.count();
+}
+
+// 단조 시계의 시각을 ms로 — 종료 신호 송신기(end-signal-sender)가 같은 시계로 elapsedSinceStopMs를 다시 잰다.
+int64_t ToSteadyMs(std::chrono::steady_clock::time_point tp)
+{
+	return std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch()).count();
 }
 
 // 재시도 정책의 시간을 몇 배로 빨리 감을지. 배포 빌드는 늘 1이다. 로컬 개발 빌드(macos-local)에서만 환경 변수
@@ -112,6 +121,9 @@ bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 	CancelRetry();
 	wanted_ = true;
 	everConnected_ = false;
+	stopIntentional_ = false;
+	endSignalDecided_ = false;
+	connectedAt_ = {};
 	attempt_ = 0;
 	rejects_.Reset();
 	outageAt_ = std::chrono::steady_clock::now();
@@ -230,7 +242,7 @@ bool StreamTarget::BeginAttempt(const PluginConfig &config, std::string &errorCo
 	return true;
 }
 
-void StreamTarget::Stop(const char *reason)
+void StreamTarget::Stop(const char *reason, bool intentional)
 {
 	// 방송 구간이 끝났다 — 예약된 재시도부터 버린다. 다음 시도를 기다리던 중이면 접속 중인 출력이 없으므로
 	// 여기서 끝난다(끊긴 출력이 아직 풀리는 중이면 ReleaseWhenStopped가 마저 푼다).
@@ -238,7 +250,12 @@ void StreamTarget::Stop(const char *reason)
 	CancelRetry();
 	wanted_ = false;
 	stopKeepsFailure_ = false; // 「재시도 중지」가 건 정지였어도, 여기로 다시 오면 방송이 끝난 것이다
+	// 사유를 든 정지(본방 시작 실패)는 스트리머 조작이 아니다. 출력이 있으면 HandleStop이 stop 신호 뒤에 이 값을 본다.
+	stopIntentional_ = intentional && !reason;
 	if (wasPending) {
+		// 출력이 없으니 stop 신호도 없다 — 멈춘 순간은 지금이고, 마지막 연결은 outageAt_에 끊긴 것이다(자동 재연결 중의
+		// 「방송 종료」도 보낸다 — 계약4 3-1).
+		DecideEndSignal(stopIntentional_, false, std::chrono::steady_clock::now(), "main_stop");
 		AppState::Instance().Mutate([reason](StateSnapshot &s) {
 			s.phase = reason ? StreamPhase::Error : StreamPhase::Idle;
 			s.errorCode = reason ? reason : "";
@@ -274,12 +291,19 @@ void StreamTarget::Stop(const char *reason)
 	obs_output_stop(output_);
 }
 
-void StreamTarget::ForceStop()
+void StreamTarget::ForceStop(bool intentional)
 {
 	bool had = output_ != nullptr || retryPending_; // 다음 시도를 기다리는 중이면 출력이 없어도 단계는 송출 중이다
+	// 이미 정지를 요청한 출력이면 그 정지의 의도를 따른다(stop 신호를 기다리던 중에 OBS가 닫혔다). 아니면 이번 강제
+	// 멈춤의 의도다. 멈춘 순간은 Release()가 돌아온 때 — 강제 멈춤도 출력이 실제로 멈춘 때가 기준이다(계약4 3절).
+	const bool intent = stopRequested_ ? stopIntentional_ : intentional;
+	const bool connectedAtStop = output_ != nullptr && connectedThisOutput_;
 	CancelRetry();
 	wanted_ = false;
 	Release(); // 시그널을 먼저 끊으므로 OnStop이 오지 않는다 — 상태를 여기서 되돌린다
+	if (had)
+		DecideEndSignal(intent, connectedAtStop, std::chrono::steady_clock::now(),
+				intentional ? "obs_exit" : "force_stop");
 	if (had)
 		AppState::Instance().Mutate([](StateSnapshot &s) {
 			if (s.phase != StreamPhase::Error)
@@ -310,6 +334,9 @@ bool StreamTarget::StopRetry()
 		CancelRetry();
 		wanted_ = false;
 		obs_log(LOG_INFO, "SRT output: retry stopped by the streamer");
+		// 방송 구간이 여기서 끝난다. 종료 신호는 보내지 않는다 — 본방은 살아 있고 마지막 연결은 이미 끊겼다. 보내면 키를
+		// 고쳐 다시 붙는 송출이 새 회차가 돼 되감기를 잃는다(규약의 「자동 재연결을 포기해 멈춘 경우」의 수동판).
+		DecideEndSignal(false, false, std::chrono::steady_clock::now(), "stop_retry");
 		// 마지막 실패 사유(errorCode)는 그대로 둔다 — 왜 멈춰 있는지가 그것이다.
 		AppState::Instance().Mutate([](StateSnapshot &s) {
 			const bool keySuspect = s.retry.keySuspect;
@@ -345,6 +372,7 @@ void StreamTarget::FireRetry(uint64_t seq)
 	// 그 자리 실패(본방 인코더가 사라짐 등)는 다시 해도 같다 — 그만둔다.
 	obs_log(LOG_WARNING, "SRT output retry could not start: %s", error.c_str());
 	wanted_ = false;
+	DecideEndSignal(false, false, std::chrono::steady_clock::now(), "retry_start_failed");
 	AppState::Instance().Mutate([&](StateSnapshot &s) {
 		s.phase = StreamPhase::Error;
 		s.errorCode = error;
@@ -534,6 +562,9 @@ void StreamTarget::OnStart(void *data, calldata_t *)
 {
 	auto *ctx = static_cast<SignalContext *>(data);
 	StreamTarget *self = ctx->self;
+	// 연결이 성립한 순간 — libobs는 SRT 핸드셰이크를 마치고 캡처를 시작한 뒤 start를 보낸다. 종료 신호의
+	// connectionDurationMs 기준(계약4 3-1)이라 UI 스레드로 넘기기 전에 여기서 잡는다.
+	const auto connectedAt = std::chrono::steady_clock::now();
 	self->connecting_ = false;
 	if (self->stopWhenConnected_.exchange(false)) {
 		// 접속하는 사이 본방이 멈췄다 — 본방 없이 우리만 보내지 않게 붙자마자 멈춘다.
@@ -541,8 +572,9 @@ void StreamTarget::OnStart(void *data, calldata_t *)
 		obs_log(LOG_INFO, "SRT output connected after the main stream stopped — stopping");
 		uint64_t generation = ctx->generation;
 		RunInUiThread([self, generation]() {
+			// 붙자마자 멈춘다 — 먼저 들어온 정지의 의도를 그대로 잇는다(종료 신호 판정).
 			if (self->generation_ == generation)
-				self->Stop();
+				self->Stop(nullptr, self->stopIntentional_);
 		});
 		return;
 	}
@@ -555,14 +587,15 @@ void StreamTarget::OnStart(void *data, calldata_t *)
 	});
 	// 재시도 상태는 UI 스레드 것이다. 이 출력의 stop은 이보다 뒤에 큐에 들어가므로 HandleStop이 늘 이 뒤에 돈다.
 	uint64_t generation = ctx->generation;
-	RunInUiThread([self, generation]() {
+	RunInUiThread([self, generation, connectedAt]() {
 		if (self->generation_ == generation && self->output_)
-			self->OnConnected();
+			self->OnConnected(connectedAt);
 	});
 }
 
-void StreamTarget::OnConnected()
+void StreamTarget::OnConnected(std::chrono::steady_clock::time_point connectedAt)
 {
+	connectedAt_ = connectedAt;
 	connectedThisOutput_ = true;
 	everConnected_ = true;
 	attempt_ = 0;
@@ -579,6 +612,8 @@ void StreamTarget::OnStop(void *data, calldata_t *params)
 	auto *ctx = static_cast<SignalContext *>(data);
 	StreamTarget *self = ctx->self;
 	uint64_t generation = ctx->generation;
+	// 멈춘 순간 — 종료 신호의 두 시간 값의 기준은 누른 순간이 아니라 이 stop 신호가 난 순간이다(계약4 3절).
+	const auto stopAt = std::chrono::steady_clock::now();
 	self->connecting_ = false; // 접속 실패도 여기로 온다
 	self->stopWhenConnected_ = false;
 	int code = (int)calldata_int(params, "code");
@@ -595,12 +630,13 @@ void StreamTarget::OnStop(void *data, calldata_t *params)
 	const char *reason = self->stopReason_.exchange(nullptr);
 	// 그만둘지 다시 시도할지는 UI 스레드가 정한다 — 재시도 상태와 stopRequested_가 UI 스레드 것이고, 여기(접속·송신
 	// 스레드)에서 출력을 다시 시작하면 libobs가 지금 도는 이 스레드를 join하려 든다(obs-ffmpeg-mpegts.c start).
-	RunInUiThread([self, generation, code, detail = std::move(detail), reason]() {
-		self->HandleStop(generation, code, detail, reason);
+	RunInUiThread([self, generation, code, detail = std::move(detail), reason, stopAt]() {
+		self->HandleStop(generation, code, detail, reason, stopAt);
 	});
 }
 
-void StreamTarget::HandleStop(uint64_t generation, int code, const std::string &detail, const char *reason)
+void StreamTarget::HandleStop(uint64_t generation, int code, const std::string &detail, const char *reason,
+			      std::chrono::steady_clock::time_point stopAt)
 {
 	// 그새 출력이 바뀌었거나(새 시도) 이미 풀렸다(ForceStop) — 그쪽이 상태를 정했다.
 	if (generation_ != generation || !output_)
@@ -644,6 +680,11 @@ void StreamTarget::HandleStop(uint64_t generation, int code, const std::string &
 			s.retry.keySuspect = keepFailure && s.phase == StreamPhase::Error && keySuspect;
 			s.stats.bitrateKbps = 0;
 		});
+		// 방송 구간이 끝났다 — 종료 신호는 우리가 스트리머 조작으로 멈춘 출력에만. 오류 코드로 스스로 멈춘 출력
+		// (다시 해도 같은 오류), 사유를 든 정지, 「재시도 중지」가 건 정지는 보내지 않는다.
+		DecideEndSignal(requested && stopIntentional_, wasConnected, stopAt,
+				reason ? "stopped_with_reason" : requested ? (keepFailure ? "stop_retry" : "main_stop")
+									    : "output_error");
 		ReleaseWhenStopped(generation, kReleasePollAttempts);
 		return;
 	}
@@ -672,6 +713,7 @@ void StreamTarget::HandleStop(uint64_t generation, int code, const std::string &
 			s.retry.keySuspect = suspect;
 			s.stats.bitrateKbps = 0;
 		});
+		DecideEndSignal(false, wasConnected, stopAt, "gave_up"); // 자동 재연결 포기 — 보내지 않는다(계약4 3-1)
 		ReleaseWhenStopped(generation, kReleasePollAttempts);
 		return;
 	}
@@ -698,6 +740,37 @@ void StreamTarget::HandleStop(uint64_t generation, int code, const std::string &
 	RunInUiThreadAfter(delayMs, [this, seq]() { FireRetry(seq); });
 	// 끊긴 출력은 실제로 멈춘 뒤에 푼다. 풀기가 늦어져도 다음 시도(BeginAttempt)가 Release()부터 하므로 새지 않는다.
 	ReleaseWhenStopped(generation, kReleasePollAttempts);
+}
+
+void StreamTarget::DecideEndSignal(bool intentional, bool connectedAtStop, std::chrono::steady_clock::time_point stopAt,
+				   const char *trigger)
+{
+	if (endSignalDecided_)
+		return; // 한 구간에 한 번 — STOPPING·STOPPED가 둘 다 Stop()을 부르고, EXIT의 ForceStop이 뒤따를 수 있다
+	endSignalDecided_ = true;
+
+	const EndSignalSkip skip = EndSignalSkipReason(intentional, everConnected_);
+	if (skip != EndSignalSkip::None) {
+		obs_log(LOG_INFO, "end-signal: not sent on %s (%s)", trigger, EndSignalSkipName(skip));
+		return;
+	}
+
+	// 키·수신 주소는 송출 단계에서 잠기므로 이 구간을 시작한 값과 같다.
+	const PluginConfig config = ConfigStore::Instance().Get();
+	if (!config.HasKey() || config.passphrase.empty()) {
+		obs_log(LOG_WARNING, "end-signal: not sent on %s (no key)", trigger);
+		return;
+	}
+	EndSignalRequest req;
+	req.streamId = config.streamId;
+	req.passphrase = config.passphrase; // Submit이 파생 값으로 바꾸고 지운다
+	req.baseOverride = config.endSignalBase;
+	req.stopAtSteadyMs = ToSteadyMs(stopAt);
+	req.connectionDurationMs = ConnectionDurationMs(ToSteadyMs(connectedAt_), connectedAtStop,
+							ToSteadyMs(outageAt_), ToSteadyMs(stopAt));
+	req.keyHint = KeyHintOf(config.streamId);
+	req.trigger = trigger;
+	EndSignalSender::Instance().Submit(std::move(req));
 }
 
 void StreamTarget::ReleaseWhenStopped(uint64_t generation, int attemptsLeft)

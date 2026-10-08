@@ -25,6 +25,7 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include "config.hpp"
 #include "constants.hpp"
 #include "dock-host.hpp"
+#include "end-signal-sender.hpp"
 #include "mark-hotkey.hpp"
 #include "mark-sender.hpp"
 #include "pairing.hpp"
@@ -335,8 +336,14 @@ void WatchMainStreamStart()
 	});
 }
 
+// 본방의 이번 정지가 스트리머 조작인가. STREAMING_STOPPING은 obs_output_stop 안에서만 동기로 오므로(OBS 「방송 종료」
+// 버튼·websocket 등), 본방이 스스로 끊겨 끝나면(재연결 소진) STOPPING 없이 STOPPED만 온다. A3(4D) 종료 신호는
+// 조작일 때만 보낸다(계약4 3-1) — 자력 종료 뒤 300초 안의 재시작은 같은 회차로 이어져야 한다.
+static bool g_mainStopRequested = false;
+
 void OnStreamingStarting()
 {
+	g_mainStopRequested = false;
 	// 본방 인코더가 돌기 전 마지막 배정 정리 — 이후 방송 중에는 이미 나가는 배정을 옮기지 않는다.
 	// 우리 송출을 안 해도(동기화 꺼짐) 녹화 트랙이 같은 믹서를 쓰므로 먼저 한다.
 	AudioRouter::Instance().Reconcile("stream starting");
@@ -410,11 +417,15 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 		// obs_output_stop 안에서 동기로 온다. 본방과 같이 멈춘다(예약된 재시도도 버린다).
 		// 방송 표시도 여기서 내린다 — STOPPED까지 남겨 두면 그사이 독에 「다시 연결」이 잠깐 뜬다.
 		AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = false; });
-		StreamTarget::Instance().Stop();
+		g_mainStopRequested = true;
+		StreamTarget::Instance().Stop(nullptr, /*intentional=*/true);
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STOPPED:
 		AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = false; });
-		StreamTarget::Instance().Stop();
+		// STOPPING이 앞서 왔으면 같은 조작의 뒷부분이고(Stop은 한 구간에 한 번만 신호를 정한다), 아니면 본방이 스스로
+		// 끊겨 끝난 것이다 — 종료 신호를 보내지 않는다.
+		StreamTarget::Instance().Stop(nullptr, g_mainStopRequested);
+		g_mainStopRequested = false;
 		AudioRouter::Instance().Schedule("stream stopped");
 		break;
 	case OBS_FRONTEND_EVENT_THEME_CHANGED:
@@ -435,7 +446,9 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 		AudioRouter::Instance().Shutdown(); // 종료 중 소스 정리 신호에 반응하지 않는다
 		UnregisterMarkHotkey();
 		MarkSender::Instance().Stop(); // 보내는 중이면 끊는다 — 종료를 막지 않는다
-		StreamTarget::Instance().ForceStop();
+		// 방송 중 OBS 닫기 — 스트리머 조작이므로 종료 신호를 보낸다(보낼 수 있을 때만). 송신기는 여기서 멈추지 않는다 —
+		// 언로드까지 남은 시간에 한 번 시도하고, obs_module_unload가 진행 중인 전송을 끊는다(남은 시도는 버린다).
+		StreamTarget::Instance().ForceStop(/*intentional=*/true);
 		if (g_statsTimer)
 			g_statsTimer->stop();
 		if (g_dock)
@@ -463,6 +476,7 @@ bool obs_module_load(void)
 	if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
 		obs_log(LOG_WARNING, "curl_global_init failed — pairing will not work");
 	MarkSender::Instance().Start();
+	EndSignalSender::Instance().Start();
 
 	ConfigStore::Instance().Load();
 	SyncStateFromConfig();
@@ -494,6 +508,7 @@ void obs_module_unload(void)
 {
 	obs_frontend_remove_event_callback(OnFrontendEvent, nullptr);
 	MarkSender::Instance().Stop(); // EXIT에서 이미 멈췄으면 아무것도 안 한다
+	EndSignalSender::Instance().Stop(); // EXIT 뒤 보내던 종료 신호가 있으면 여기서 끊는다 — 종료를 막지 않는다
 	AppState::Instance().Shutdown();
 	if (g_bridge) {
 		g_bridge->Stop();

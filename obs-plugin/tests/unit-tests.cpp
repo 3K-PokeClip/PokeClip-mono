@@ -1,12 +1,13 @@
 // 의존성 없는 최소 테스트 러너. OBS를 띄우지 않고 검증할 수 있는 것만 여기서 잰다:
 // 페어링 코드 정규화 · keyint 옵션 제거 · streamid 파싱 · SRT URL · 브리지 보안 규칙(Host·Origin·토큰)·SSE ·
-// 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4) · 재시도 정책과 「다시 연결」 조건(A5).
+// 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4) · 재시도 정책과 「다시 연결」 조건(A5) · 종료 신호 규칙(A3·4D).
 #include "app-state.hpp"
 #include "audio-assign.hpp"
 #include "bridge-server.hpp"
 #include "config.hpp"
 #include "private-file.hpp"
 #include "encoder-opts.hpp"
+#include "end-signal-policy.hpp"
 #include "mark-policy.hpp"
 #include "pairing-code.hpp"
 #include "retry-policy.hpp"
@@ -1383,6 +1384,137 @@ TEST(sync_on_start_rechecks_main_stream_sync_and_phase)
 		s.phase = phase;
 		CHECK(!CanStartOnSyncEnabled(s));
 	}
+}
+
+// ── A3 종료 신호(계약4 4D) ──
+
+std::string Hex32(const std::array<uint8_t, 32> &bytes)
+{
+	std::string s;
+	char buf[3];
+	for (uint8_t b : bytes) {
+		std::snprintf(buf, sizeof(buf), "%02x", b);
+		s += buf;
+	}
+	return s;
+}
+
+TEST(end_signal_sha256_known_vectors)
+{
+	// FIPS 180-4 · NIST 예시 벡터 — 빈 입력, 한 블록, 두 블록에 걸치는 입력, 블록 수천 개(길이 인코딩).
+	CHECK_EQ(Hex32(Sha256("")), std::string("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
+	CHECK_EQ(Hex32(Sha256("abc")), std::string("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
+	CHECK_EQ(Hex32(Sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")),
+		 std::string("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"));
+	CHECK_EQ(Hex32(Sha256(std::string(1000000, 'a'))),
+		 std::string("cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"));
+}
+
+TEST(end_signal_hmac_rfc4231_vectors)
+{
+	// 짧은 키(1·2) · 블록보다 긴 키(6·7 — passphrase가 64바이트를 넘을 수 있어 키 해시 경로가 맞아야 한다).
+	CHECK_EQ(HmacSha256Hex(std::string(20, '\x0b'), "Hi There"),
+		 std::string("b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"));
+	CHECK_EQ(HmacSha256Hex("Jefe", "what do ya want for nothing?"),
+		 std::string("5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"));
+	CHECK_EQ(HmacSha256Hex(std::string(20, '\xaa'), std::string(50, '\xdd')),
+		 std::string("773ea91e36800e46854db8ebd09181a72959098b3ef8c122d9635514ced565fe"));
+	CHECK_EQ(HmacSha256Hex(std::string(131, '\xaa'), "Test Using Larger Than Block-Size Key - Hash Key First"),
+		 std::string("60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"));
+	CHECK_EQ(HmacSha256Hex(std::string(131, '\xaa'),
+			       "This is a test using a larger than block-size key and a larger than block-size data. The "
+			       "key needs to be hashed before being used by the HMAC algorithm."),
+		 std::string("9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2"));
+}
+
+TEST(end_signal_derived_value_matches_contract_vector)
+{
+	// 계약4 3-1절 시험 벡터(예시 값 — 실제 키가 아니다).
+	CHECK_EQ(EndSignalDerivedValue("EXAMPLE-4d-test-vector-not-a-key"),
+		 std::string("bf127d0f99ed7397ea578d019fb6e83e0c15d36032f24420fef4d0294ca3e398"));
+	CHECK_EQ(EndSignalDerivedValue("EXAMPLE-4d-test-vector-not-a-key").size(), size_t(64));
+}
+
+TEST(end_signal_url_is_fixed_unless_override_is_loopback)
+{
+	const std::string fixed = "https://media.pokeclip.com/api/ingest/end-signal";
+	CHECK_EQ(EndSignalUrl(""), fixed);
+	CHECK_EQ(EndSignalUrl("https://evil.example"), fixed);
+	CHECK_EQ(EndSignalUrl("http://dev.pokeclip.com"), fixed);
+	CHECK_EQ(EndSignalUrl("https://127.0.0.1.evil.example"), fixed);
+	CHECK_EQ(EndSignalUrl("http://localhost@evil.example"), fixed);
+	CHECK_EQ(EndSignalUrl("http://127.0.0.1:80x"), fixed);
+	CHECK_EQ(EndSignalUrl("http://127.0.0.1:"), fixed);
+	CHECK_EQ(EndSignalUrl("http://127.0.0"), fixed);
+	CHECK_EQ(EndSignalUrl("ftp://127.0.0.1"), fixed);
+	CHECK_EQ(EndSignalUrl("http://127.0.0.1:8099/"), std::string("http://127.0.0.1:8099/api/ingest/end-signal"));
+	CHECK_EQ(EndSignalUrl("http://localhost:8099"), std::string("http://localhost:8099/api/ingest/end-signal"));
+	CHECK_EQ(EndSignalUrl("HTTP://LocalHost:8099"), std::string("HTTP://LocalHost:8099/api/ingest/end-signal"));
+	CHECK_EQ(EndSignalUrl("https://[::1]:8443"), std::string("https://[::1]:8443/api/ingest/end-signal"));
+	CHECK(IsLoopbackBase("http://127.255.0.9"));
+	CHECK(!IsLoopbackBase("http://"));
+}
+
+TEST(end_signal_body_fields_and_escaping)
+{
+	CHECK_EQ(EndSignalBodyJson("#!::r=ABCDEFGHJKMNPQRSTVWXYZ0123,m=publish", 420, 1834000),
+		 std::string(R"({"streamid":"#!::r=ABCDEFGHJKMNPQRSTVWXYZ0123,m=publish","elapsedSinceStopMs":420,)"
+			     R"("connectionDurationMs":1834000})"));
+	CHECK_EQ(EndSignalBodyJson("a\"b\\c", 0, 0),
+		 std::string(R"({"streamid":"a\"b\\c","elapsedSinceStopMs":0,"connectionDurationMs":0})"));
+}
+
+TEST(end_signal_response_classification)
+{
+	auto is = [](const EndSignalVerdict &v, EndSignalOutcome o, const char *reason) {
+		return v.outcome == o && std::string(v.reason) == reason;
+	};
+	CHECK(is(ClassifyEndSignalResponse(false, 0), EndSignalOutcome::Retry, "network"));
+	CHECK(is(ClassifyEndSignalResponse(true, 0), EndSignalOutcome::Retry, "network")); // 응답 없이 끝난 전송
+	CHECK(is(ClassifyEndSignalResponse(true, 202), EndSignalOutcome::Done, "accepted"));
+	CHECK(is(ClassifyEndSignalResponse(true, 200), EndSignalOutcome::Done, "accepted_unexpected_2xx"));
+	CHECK(is(ClassifyEndSignalResponse(true, 204), EndSignalOutcome::Done, "accepted_unexpected_2xx"));
+	CHECK(is(ClassifyEndSignalResponse(true, 301), EndSignalOutcome::Stop, "redirect"));
+	CHECK(is(ClassifyEndSignalResponse(true, 307), EndSignalOutcome::Stop, "redirect"));
+	CHECK(is(ClassifyEndSignalResponse(true, 400), EndSignalOutcome::Stop, "bad_request"));
+	CHECK(is(ClassifyEndSignalResponse(true, 401), EndSignalOutcome::Stop, "unauthorized"));
+	CHECK(is(ClassifyEndSignalResponse(true, 404), EndSignalOutcome::Stop, "rejected")); // 수신부 배포 전
+	CHECK(is(ClassifyEndSignalResponse(true, 429), EndSignalOutcome::Stop, "rate_limited"));
+	CHECK(is(ClassifyEndSignalResponse(true, 500), EndSignalOutcome::Retry, "server_error"));
+	CHECK(is(ClassifyEndSignalResponse(true, 503), EndSignalOutcome::Retry, "server_error"));
+}
+
+TEST(end_signal_retry_is_short_and_bounded)
+{
+	CHECK_EQ(EndSignalRetryDelayMs(1), int64_t(1000));
+	CHECK_EQ(EndSignalRetryDelayMs(2), int64_t(2000));
+	CHECK_EQ(EndSignalRetryDelayMs(3), int64_t(-1)); // 셋째 시도까지 — 그 뒤는 포기
+	CHECK_EQ(EndSignalRetryDelayMs(0), int64_t(-1));
+	CHECK(!EndSignalExpired(0));
+	CHECK(!EndSignalExpired(kEndSignalExpireMs));
+	CHECK(EndSignalExpired(kEndSignalExpireMs + 1));
+	CHECK(EndSignalExpired(-1));
+}
+
+TEST(end_signal_sent_only_for_intentional_stop_after_a_connection)
+{
+	CHECK(EndSignalSkipReason(true, true) == EndSignalSkip::None);
+	CHECK(EndSignalSkipReason(false, true) == EndSignalSkip::NotIntentional); // 오류·포기·재시도 중지·본방 자력 종료
+	CHECK(EndSignalSkipReason(true, false) == EndSignalSkip::NeverConnected); // 한 번도 붙지 못한 송출
+	CHECK(EndSignalSkipReason(false, false) == EndSignalSkip::NotIntentional);
+	CHECK_EQ(std::string(EndSignalSkipName(EndSignalSkip::None)), std::string("send"));
+	CHECK_EQ(std::string(EndSignalSkipName(EndSignalSkip::NotIntentional)), std::string("not_intentional"));
+	CHECK_EQ(std::string(EndSignalSkipName(EndSignalSkip::NeverConnected)), std::string("never_connected"));
+}
+
+TEST(end_signal_connection_duration_uses_last_connection)
+{
+	// 멈출 때 붙어 있었다 — 성립 1000 → 멈춤 5000
+	CHECK_EQ(ConnectionDurationMs(1000, true, 0, 5000), int64_t(4000));
+	// 멈추기 전에 끊겨 다시 붙는 중이었다 — 성립 1000 → 끊김 3000, 멈춤은 9000이지만 끊긴 연결까지만
+	CHECK_EQ(ConnectionDurationMs(1000, false, 3000, 9000), int64_t(2000));
+	// 시계 어긋남은 0으로
+	CHECK_EQ(ConnectionDurationMs(5000, true, 0, 4000), int64_t(0));
 }
 
 } // namespace
