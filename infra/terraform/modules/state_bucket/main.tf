@@ -74,8 +74,12 @@ resource "aws_s3_bucket_policy" "this" {
     ]
   })
 
-  # 퍼블릭 차단을 먼저 걸어 두고 정책을 붙인다.
-  depends_on = [aws_s3_bucket_public_access_block.this]
+  # 퍼블릭 차단 · 소유권 설정을 먼저 걸어 두고 정책을 붙인다. 동시에 걸면
+  # S3 가 OperationAborted(409)를 낼 수 있다.
+  depends_on = [
+    aws_s3_bucket_public_access_block.this,
+    aws_s3_bucket_ownership_controls.this,
+  ]
 }
 
 # 이전 상태 버전(지운 값이 남아 있을 수 있음)은 90일 뒤 지우고, 끝나지 않은
@@ -89,8 +93,11 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
 
     filter {}
 
+    # 90일 지난 이전 버전을 지우되 최근 5개는 남긴다 — apply 가 뜸한 루트도
+    # 손상된 상태를 되돌릴 버전이 남는다.
     noncurrent_version_expiration {
-      noncurrent_days = 90
+      noncurrent_days           = 90
+      newer_noncurrent_versions = 5
     }
 
     abort_incomplete_multipart_upload {

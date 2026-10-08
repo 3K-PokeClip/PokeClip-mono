@@ -67,6 +67,16 @@ run "bucket_is_protected" {
   assert {
     condition = one(flatten([
       for rule in aws_s3_bucket_lifecycle_configuration.this.rule : [
+        for expiration in rule.noncurrent_version_expiration :
+        expiration.newer_noncurrent_versions
+      ]
+    ])) == 5
+    error_message = "90일이 지나도 최근 이전 버전 5개는 남겨야 한다."
+  }
+
+  assert {
+    condition = one(flatten([
+      for rule in aws_s3_bucket_lifecycle_configuration.this.rule : [
         for abort in rule.abort_incomplete_multipart_upload :
         abort.days_after_initiation
       ]

@@ -14,6 +14,8 @@ zone_tags    = {}
 ns_ttl = "<NS_TTL_CURRENT>"
 
 # apex NS · SOA 는 넣지 않는다. 키는 임의 이름.
+# name 은 list-resource-record-sets 가 내는 FQDN 에서 끝 점만 뺀 꼴이다
+# (예: www.example.com). 상대 이름 · 끝 점이 있으면 import 뒤 plan 에 차이가 난다.
 records = {
   "<RECORD_KEY>" = {
     name    = "<RECORD_NAME>"
