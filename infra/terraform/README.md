@@ -151,7 +151,7 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R11 
 
 | 규칙 | 대상 경로 | 실패 조건 |
 |---|---|---|
-| R0 | 전체 | `*.tf.json` 파일 · 심볼릭 링크 `.tf`(guard.sh 가 셸로 검사) |
+| R0 | 전체 | `*.tf.json` 파일 · 심볼릭 링크(파일이든 디렉터리든 — guard.sh 가 셸로 검사) |
 | R1 | 전체 | `resource` · `data` `aws_secretsmanager_secret_version`(`count = 0` 이어도) |
 | R2 | 전체 | `resource` · `data` 유형이 `aws_cloudfrontkeyvaluestore_key` 로 시작 |
 | R3 | 전체 | `aws_security_group` 자원 안 `ingress` · `egress`(블록 · 속성 · `dynamic "ingress"` · `dynamic "egress"`) |
@@ -182,7 +182,11 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 ```
 
 *   `guard.sh [루트]` 는 루트로 옮겨 루트 기준 상대 경로로 검사합니다. 정책은
-    루트와 상관없이 늘 이 저장소의 `policy/guard` 를 씁니다.
+    루트와 상관없이 늘 이 저장소의 `policy/guard` 를 씁니다. 실제 트리의 하위
+    디렉터리(`nonprod/dev` 등)를 루트로 주면 경로 규칙이 빠지므로 종료 2 입니다
+    (fixture 트리 · 저장소 밖 트리는 허용).
+*   셸에 남은 `CONFTEST_*` 환경 변수는 지우고 `--namespace main` 으로 돕니다 —
+    다른 프로젝트 설정이 정책을 조용히 끄지 못하게 합니다.
 *   위반은 한 줄에 하나씩 「guard: R<번호> <상대 경로>: <설명>」으로 나옵니다.
 
 ### 종료 코드
@@ -191,12 +195,14 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 |---|---|
 | 0 | 위반 0 |
 | 1 | 위반 있음(R0 포함) |
-| 2 | 사용법 오류 · conftest 없음 · 검사 불가 — 파싱 실패 · 읽을 수 없는 파일 · 검사할 `.tf` 0건 · conftest 자체 오류(정책 컴파일 · 내장 함수 오류 · 모르는 출력) |
+| 2 | 사용법 오류 · conftest 없음 · 하위 디렉터리 루트 · 검사 불가 — 파싱 실패 · 읽을 수 없는 파일 · 검사할 `.tf` 0건 · 실행된 규칙 0건 · conftest 자체 오류(정책 컴파일 · 내장 함수 오류 · 모르는 출력) |
 
 검사를 끝낼 수 없으면 위반 0 으로 넘어가지 않고 2 로 멈춥니다(fail-closed).
 파싱 실패가 하나라도 있으면 정책을 돌리지 않습니다. conftest 는 위반과 오류를
 같은 종료 코드로 내므로, guard.sh 는 `--no-fail` 로 위반을 종료 코드에서 떼고
 (그러면 0 이 아닌 종료는 모두 오류) 결과 줄의 FAIL 수를 요약 줄과 맞춰 봅니다.
+요약의 검사 수가 0 이면(패키지 이름 · `deny` 철자 실수로 규칙이 하나도 안 돎)
+위반 0 이 아니라 2 입니다.
 
 ### fixture
 
@@ -211,8 +217,18 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 
 ### 한계
 
-*   다른 이름 · 모듈 안에 숨긴 선언 · 동적 생성(모듈 호출 · `for_each` 로
-    만드는 자원)으로 우회하는 것은 막지 못합니다. 그것은 리뷰가 막습니다.
+*   정책은 **이 트리에 직접 쓴 선언**만 봅니다. 직접 선언한 자원에
+    `count` · `for_each` 를 붙여도 잡지만, 다른 이름 · 외부 모듈 안에 숨긴
+    선언 · 모듈 호출로 만드는 자원은 못 봅니다. 그것은 리뷰가 막습니다.
+*   R4 · R11 은 대상 경로 아래 `.tf` 가 하나도 없으면 건너뜁니다(다른 규칙
+    fixture 를 위해). 대상 디렉터리를 통째로 지우거나 옮기는 PR 은 규칙도 함께
+    고쳐야 하며, 그것은 리뷰가 봅니다.
+*   이름이 `.terraform` 인 디렉터리는 깊이와 상관없이 검사에서 뺍니다(provider
+    캐시). 그 이름 아래에 구성을 두지 않습니다.
+*   `PATH` 의 conftest 를 믿습니다. 판정이 conftest 출력 형식(`FAIL - Combined -
+    main - ` 과 요약 줄)에 기대므로 버전을 바꾸면 모르는 줄로 종료 2 가 날 수
+    있습니다(안전한 쪽) — CI 는 0.71.1 고정, 로컬 brew 판은 `conftest
+    --version` 이 `dev` 로 나와 버전 문자열로는 확인되지 않습니다.
 *   R0(심볼릭 링크 · `.tf.json`)는 정책이 아니라 guard.sh 의 셸 검사입니다.
     `--parser hcl2` 는 JSON 구성을 읽지 못하므로 `.tf.json` 은 이 트리에 두지
     않습니다.
