@@ -68,6 +68,35 @@ class SceneExtractorTest {
         assertThat(image.getHeight()).isEqualTo(360);
     }
 
+    /**
+     * UPLOAD_WORK_DIR가 상대 경로면 영상·그림 경로도 상대 경로로 온다. 실행 폴더를 그림 폴더로 바꾸므로 상대 경로를 그대로 넘기면
+     * ffprobe·ffmpeg가 「그림 폴더/상대 경로」를 찾다 실패한다(로컬 리뷰 1라운드). 절대 경로로 바꿔 넘겨야 뽑힌다.
+     *
+     * <p>폴더는 JVM 현재 폴더 <b>아래</b>에 둔다. 임시 폴더(/var/…)를 현재 폴더 기준 상대 경로로 바꾸면 앞의 {@code ..}가 루트에서
+     * 멈춰 「그림 폴더/상대 경로」도 우연히 같은 파일을 가리키고, 결함이 있어도 초록이 된다.
+     */
+    @Test
+    void 상대_경로로_받아도_뽑는다() throws Exception {
+        Path video = 빨강_파랑_영상();
+        Path relative = Path.of("build", "tmp", "scene-relative-" + System.nanoTime());
+        Files.createDirectories(relative);
+        try {
+            Path relativeVideo = Files.copy(video, relative.resolve("rb.mp4"));
+            Path relativePicture = relative.resolve("thumb.jpg");
+            assertThat(relativeVideo.isAbsolute()).isFalse();
+
+            assertThat(real().extract(relativeVideo, 1_500, relativePicture)).isTrue();
+            assertThat(색(relativePicture)).isEqualTo("파랑");
+        } finally {
+            try (var files = Files.list(relative)) {
+                for (Path f : files.toList()) {
+                    Files.delete(f);
+                }
+            }
+            Files.delete(relative);
+        }
+    }
+
     @Test
     void 영상이_아니면_실패를_돌려준다() throws Exception {
         Assumptions.ffmpeg();

@@ -42,7 +42,11 @@ public class SceneExtractor {
 
     /** @return true면 {@code picture}에 그림이 있다 */
     public boolean extract(Path video, long offsetMs, Path picture) {
-        Path dir = picture.toAbsolutePath().getParent();
+        // 실행 폴더를 그림 폴더로 바꾸므로 인자도 절대 경로로 넘긴다. 상대 경로(UPLOAD_WORK_DIR=work 등)를 그대로 넘기면
+        // ffprobe·ffmpeg가 「그림 폴더/상대 경로」를 찾다 늘 실패한다.
+        video = video.toAbsolutePath();
+        picture = picture.toAbsolutePath();
+        Path dir = picture.getParent();
         long durationMs = durationMs(video, dir);
         long at = durationMs < 0 ? Math.max(0, offsetMs)
                 : Math.clamp(offsetMs, 0, Math.max(0, durationMs - TAIL_MARGIN_MS));
