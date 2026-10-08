@@ -7,7 +7,9 @@
 # testdata/guard/ok/ 는 모든 규칙을 지키는 트리라 guard.sh 가 통과해야 한다.
 # testdata/guard/err_<이름>/ 은 검사할 수 없는 트리라 guard.sh 가 종료 코드 2
 # 로 실패해야 한다(fail-closed). 읽을 수 없는 파일은 git 에 둘 수 없어 시험이
-# 임시 디렉터리에 만든다.
+# 임시 디렉터리에 만든다. HCL 로 틀린 err fixture 는 `terraform fmt
+# -recursive` 를 깨지 않게 *.tf.in 으로 두고, 시험이 임시 디렉터리에 *.tf 로
+# 복사해 돌린다.
 # 경로를 겨누는 규칙(R4 등)의 fixture 는 그 경로를 트리 안에 그대로 둔다.
 #
 # 사용: bash infra/terraform/scripts/guard_test.sh
@@ -52,7 +54,7 @@ expect_violation() {
     fail "${name}: 종료 코드 1 을 기대했으나 ${status}"
     return
   fi
-  if ! grep -q "^guard: ${rule} " <<<"${output}"; then
+  if [[ $'\n'"${output}" != *$'\n'"guard: ${rule} "* ]]; then
     fail "${name}: 출력에 ${rule} 위반이 없음 — ${output}"
     return
   fi
@@ -94,6 +96,31 @@ expect_error() {
 }
 
 #######################################
+# err fixture 하나를 시험한다. *.tf.in 이 있으면 임시 디렉터리에 *.tf 로
+# 복사해 돌린다.
+# Arguments:
+#   fixture 디렉터리 경로.
+#######################################
+expect_fixture_error() {
+  local dir="$1"
+  local name tmp src
+  name="$(basename -- "${dir}")"
+  if ! compgen -G "${dir}/*.tf.in" >/dev/null; then
+    expect_error "${name}" "${dir}"
+    return
+  fi
+  tmp="$(mktemp -d)" || {
+    fail "${name}: 임시 디렉터리를 만들지 못함"
+    return
+  }
+  for src in "${dir}"/*.tf.in; do
+    cp -- "${src}" "${tmp}/$(basename -- "${src}" .in)"
+  done
+  expect_error "${name}" "${tmp}"
+  rm -rf -- "${tmp}"
+}
+
+#######################################
 # 읽을 수 없는 .tf 가 있으면 위반 0 으로 넘어가지 않고 멈추는지 본다.
 # root 는 권한과 상관없이 읽으므로 그때는 건너뛴다.
 #######################################
@@ -114,6 +141,21 @@ expect_unreadable_error() {
   rm -rf -- "${tmp}"
 }
 
+#######################################
+# 임시 디렉터리를 못 쓰는 환경에서도 위반을 놓치지 않는지 본다(guard 는
+# 임시 파일을 쓰지 않는다).
+#######################################
+expect_no_tmpfile_dependency() {
+  local output status
+  output="$(TMPDIR=/nonexistent/guard-test bash "${GUARD}" "${FIXTURES}/bad_R1" 2>&1)"
+  status=$?
+  if [[ "${status}" -ne 1 || "${output}" != *"guard: R1 "* ]]; then
+    fail "no-tmpdir: 종료 1 · R1 위반을 기대했으나 ${status} — ${output}"
+    return
+  fi
+  echo "ok: no-tmpdir → R1 위반"
+}
+
 main() {
   local dir
   local count=0
@@ -128,10 +170,10 @@ main() {
   expect_clean "${FIXTURES}/ok"
   for dir in "${FIXTURES}"/err_*/; do
     [[ -d "${dir}" ]] || continue
-    dir="${dir%/}"
-    expect_error "$(basename -- "${dir}")" "${dir}"
+    expect_fixture_error "${dir%/}"
   done
   expect_unreadable_error
+  expect_no_tmpfile_dependency
 
   if [[ "${failures}" -ne 0 ]]; then
     echo "guard_test: ${failures}건 실패" >&2

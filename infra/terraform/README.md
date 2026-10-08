@@ -146,22 +146,25 @@ fixture 트리 안에 그대로 둡니다.
 
 | 규칙 | 대상 경로 | 실패 조건 |
 |---|---|---|
-| R0 | 전체 | `*.tf.json` 파일(이 트리는 HCL 만 — guard 가 JSON 을 읽지 못함) |
+| R0 | 전체 | `*.tf.json` 파일(이 트리는 HCL 만 — guard 가 JSON 을 읽지 못함) · 심볼릭 링크 `.tf` |
 | R1 | 전체 | `resource` · `data` `aws_secretsmanager_secret_version` |
 | R2 | 전체 | `aws_cloudfrontkeyvaluestore_key*` |
 | R3 | 전체 | `aws_security_group` 블록 바로 안 `ingress {` · `egress {` · `ingress =` · `egress =` |
 | R4 | `modules/state_bucket` | `aws_s3_bucket` 자원 없음, 또는 그 자원의 `lifecycle` 블록에 `prevent_destroy = true` 없음 |
-| R5 | `nonprod/dev` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원의 `lifecycle` 블록에 `prevent_destroy = true` 없음 |
+| R11 | `nonprod/dev` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원의 `lifecycle` 블록에 `prevent_destroy = true` 없음 |
 
-검사를 끝낼 수 없으면(검사할 `.tf` 0건 · 읽을 수 없는 파일 · grep 오류)
-위반 0 으로 넘어가지 않고 종료 코드 2 로 멈춥니다. R4 · R5 는 대상 경로가
+검사를 끝낼 수 없으면(검사할 `.tf` 0건 · 읽을 수 없는 파일 · 끝나지 않는
+heredoc · 블록 주석 · 알아보지 못하는 `<<` · grep 오류) 위반 0 으로 넘어가지
+않고 종료 코드 2 로 멈춥니다. guard 는 임시 파일을 쓰지 않습니다. R4 · R11 은 대상 경로가
 없는 트리(다른 규칙의 fixture)에서는 건너뜁니다.
 
-`prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R5 가
-맡습니다. dev SG 규칙 자원은 M12 가 8082 규칙을 지우므로 R5 대상이
-아닙니다. dev 상자를 없애는 PR 은 R5 를 함께 지웁니다.
+`prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R11 이
+맡습니다. 한 줄 꼴 `lifecycle { prevent_destroy = true }` 도 인정합니다.
+dev SG 규칙 자원은 M12 가 8082 규칙을 지우므로 R11 대상이 아닙니다. dev
+상자를 없애는 PR 은 R11 을 함께 지웁니다.
 
-R5 이후 규칙은 그 규칙이 지키는 루트 · 모듈과 같은 PR 에서 더합니다.
+R5 ~ R10 은 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 · 모듈과
+같은 PR 에서 그 번호로 더합니다.
 
 한계:
 

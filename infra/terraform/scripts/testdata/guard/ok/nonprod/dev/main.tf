@@ -13,9 +13,8 @@ resource "aws_eip" "dev" {
   domain   = "vpc"
   instance = aws_instance.dev.id
 
-  lifecycle {
-    prevent_destroy = true
-  }
+  # 한 줄 lifecycle 도 삭제 방지로 인정한다(terraform fmt 가 유지하는 꼴).
+  lifecycle { prevent_destroy = true }
 }
 
 resource "aws_security_group" "dev" {

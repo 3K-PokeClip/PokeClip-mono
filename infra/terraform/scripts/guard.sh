@@ -5,12 +5,15 @@
 # 규칙마다 함수 하나다. 위반은 표준 출력에 한 줄씩
 # 「guard: <규칙> <파일>:<줄>: <설명>」으로 적는다.
 # 검사 전에 주석(`#` · `//` · `/* */`)과 heredoc 본문을 빈 줄로 지운다.
+# 끝나지 않는 heredoc · 블록 주석, 알아보지 못하는 `<<` 는 검사 불가로 멈춘다.
 # 줄 번호는 그대로다. 텍스트 검사라 다른 이름 · 동적 생성으로 우회하는 것은
 # 막지 못한다 — 그것은 리뷰가 막는다.
 #
 # 사용: bash infra/terraform/scripts/guard.sh [Terraform 트리 루트]
 #       루트를 주지 않으면 이 스크립트가 든 infra/terraform 이다.
 # 종료 코드: 0 위반 0 / 1 위반 있음 / 2 사용법 오류 · 검사 불가(fail-closed)
+# 임시 파일을 쓰지 않는다(here-string 대신 파이프 · 프로세스 치환) — 임시
+# 디렉터리를 못 쓰는 환경에서 빈 입력으로 위반 0 을 내지 않게 한다.
 
 set -uo pipefail
 
@@ -19,6 +22,8 @@ readonly SCRIPT_DIR
 
 # 주석과 heredoc 본문을 지운다. 문자열("...") 안의 # · // 는 남긴다.
 # 줄 수는 그대로 둔다(지운 줄은 빈 줄). awk 프로그램이라 작은따옴표가 맞다.
+# heredoc 종료자는 HCL 식별자(글자 · 숫자 · 밑줄 · 하이픈)다.
+# 종료 코드 3 = 끝나지 않는 heredoc · 블록 주석 또는 알아보지 못하는 `<<`.
 # shellcheck disable=SC2016
 readonly STRIP_COMMENTS='
 {
@@ -54,12 +59,19 @@ readonly STRIP_COMMENTS='
     out = out c
     i++
   }
-  if (match(out, /<<-?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$/)) {
+  if (match(out, /<<-?[A-Za-z_][A-Za-z0-9_-]*[[:space:]]*$/)) {
     heredoc = substr(out, RSTART, RLENGTH)
     sub(/^<<-?/, "", heredoc)
     gsub(/[[:space:]]/, "", heredoc)
+  } else {
+    bare = out
+    gsub(/"([^"\\]|\\.)*"/, "\"\"", bare)
+    if (index(bare, "<<") > 0) { bad = 1; exit 3 }
   }
   print out
+}
+END {
+  if (!bad && (heredoc != "" || in_block)) { exit 3 }
 }
 '
 
@@ -95,7 +107,7 @@ report() {
 }
 
 #######################################
-# 디렉터리 아래 *.tf · *.tf.json 을 한 줄에 하나씩 낸다.
+# 디렉터리 아래 *.tf · *.tf.json(심볼릭 링크 포함)을 한 줄에 하나씩 낸다.
 # fixture · provider 캐시는 뺀다.
 # Globals:
 #   ROOT
@@ -109,7 +121,8 @@ list_tf_files() {
   [[ -d "${dir}" ]] || return 0
   find "${dir}" \
     \( -path "${ROOT}/scripts/testdata" -o -name .terraform \) -prune \
-    -o -type f \( -name '*.tf' -o -name '*.tf.json' \) -print |
+    -o \( -type f -o -type l \) \( -name '*.tf' -o -name '*.tf.json' \) \
+    -print |
     LC_ALL=C sort
 }
 
@@ -123,7 +136,8 @@ list_tf_files() {
 strip_comments() {
   local file="$1"
   [[ -r "${file}" ]] || die "읽을 수 없음: ${file}"
-  awk "${STRIP_COMMENTS}" "${file}" || die "주석 제거 실패: ${file}"
+  awk "${STRIP_COMMENTS}" "${file}" ||
+    die "주석 제거 실패(끝나지 않는 heredoc · 블록 주석, 알아보지 못하는 <<): ${file}"
 }
 
 #######################################
@@ -134,18 +148,24 @@ strip_comments() {
 report_matches() {
   local rule="$1" file="$2" content="$3" pattern="$4" message="$5"
   local matches status line
-  matches="$(grep -nE -- "${pattern}" <<<"${content}")"
+  matches="$(printf '%s\n' "${content}" | grep -nE -- "${pattern}")"
   status=$?
   [[ "${status}" -le 1 ]] || die "grep 실패(${status}): ${file}"
   [[ -n "${matches}" ]] || return 0
   while IFS= read -r line; do
     report "${rule}" "${file}:${line%%:*}" "${message}"
-  done <<<"${matches}"
+  done < <(printf '%s\n' "${matches}")
 }
 
 # R0: JSON 구성은 텍스트 검사가 읽지 못하므로 이 트리에는 두지 않는다.
+# 심볼릭 링크 .tf 도 두지 않는다(트리 밖 파일을 끌어들이고 리뷰에 안 보인다).
 check_r0() {
-  report R0 "$1:1" '.tf.json 금지(이 트리는 HCL 만 — guard 가 JSON 을 검사하지 못함)'
+  local file="$1"
+  if [[ -L "${file}" ]]; then
+    report R0 "${file}:1" '심볼릭 링크 .tf 금지(일반 파일만)'
+    return
+  fi
+  report R0 "${file}:1" '.tf.json 금지(이 트리는 HCL 만 — guard 가 JSON 을 검사하지 못함)'
 }
 
 # R1: 비밀 값 자원 · 비밀 값 data source 는 값을 상태에 남긴다.
@@ -168,7 +188,7 @@ check_r2() {
 check_r3() {
   local file="$1" content="$2"
   local lines line
-  lines="$(awk "${BLANK_STRINGS}"'
+  lines="$(printf '%s\n' "${content}" | awk "${BLANK_STRINGS}"'
     /^[[:space:]]*resource[[:space:]]+"aws_security_group"[[:space:]]/ {
       in_sg = 1
       depth = 0
@@ -184,12 +204,12 @@ check_r3() {
       depth += opens - closes
       if (depth <= 0 && (opens + closes) > 0) { in_sg = 0 }
     }
-  ' <<<"${content}")" || die "R3 검사 실패: ${file}"
+  ')" || die "R3 검사 실패: ${file}"
   [[ -n "${lines}" ]] || return 0
   while IFS= read -r line; do
     report R3 "${file}:${line}" \
       'aws_security_group 인라인 ingress · egress 금지(별도 규칙 자원으로)'
-  done <<<"${lines}"
+  done < <(printf '%s\n' "${lines}")
 }
 
 #######################################
@@ -223,6 +243,11 @@ scan_prevent_destroy() {
           bare ~ /^[[:space:]]*lifecycle[[:space:]]*\{/) {
         in_lc = 1
       }
+      # 한 줄 꼴: lifecycle { prevent_destroy = true }
+      if (in_res && depth == 1 &&
+          bare ~ /^[[:space:]]*lifecycle[[:space:]]*\{[[:space:]]*prevent_destroy[[:space:]]*=[[:space:]]*true[[:space:]]*\}[[:space:]]*$/) {
+        protected = 1
+      }
       if (in_lc && depth == 2 &&
           bare ~ /^[[:space:]]*prevent_destroy[[:space:]]*=/ &&
           bare ~ /=[[:space:]]*true[[:space:]]*$/) {
@@ -254,9 +279,10 @@ check_prevent_destroy() {
   files="$(list_tf_files "${dir}")" || die "파일 목록 실패: ${dir}"
   [[ -n "${files}" ]] || return 0
   while IFS= read -r file; do
-    [[ "${file}" == *.tf ]] || continue
+    # .tf.json · 심볼릭 링크는 R0 가 막는다.
+    [[ "${file}" == *.tf && ! -L "${file}" ]] || continue
     content="$(strip_comments "${file}")" || exit 2
-    results="$(scan_prevent_destroy "${types}" <<<"${content}")" ||
+    results="$(printf '%s\n' "${content}" | scan_prevent_destroy "${types}")" ||
       die "${rule} 검사 실패: ${file}"
     [[ -n "${results}" ]] || continue
     all="${all}${results}"$'\n'
@@ -265,10 +291,10 @@ check_prevent_destroy() {
       type="${result#missing }"
       report "${rule}" "${file}:${type##* }" \
         "${type% *} 의 lifecycle 블록에 prevent_destroy = true 없음"
-    done <<<"${results}"
-  done <<<"${files}"
+    done < <(printf '%s\n' "${results}")
+  done < <(printf '%s\n' "${files}")
   for type in ${types}; do
-    if ! grep -qE -- "^(ok|missing) ${type} " <<<"${all}"; then
+    if ! printf '%s\n' "${all}" | grep -qE -- "^(ok|missing) ${type} "; then
       report "${rule}" "${dir}:0" "${type} 자원 없음"
     fi
   done
@@ -279,10 +305,10 @@ check_r4() {
   check_prevent_destroy R4 "${ROOT}/modules/state_bucket" aws_s3_bucket
 }
 
-# R5: import 한 dev 상자(EC2 · EIP · SG)는 삭제 방지여야 한다. 규칙 자원은
-# M12 가 지우므로 대상이 아니다.
-check_r5() {
-  check_prevent_destroy R5 "${ROOT}/nonprod/dev" \
+# R11: import 한 dev 상자(EC2 · EIP · SG)는 삭제 방지여야 한다. 규칙 자원은
+# M12 가 지우므로 대상이 아니다. R5 ~ R10 은 계획의 후속 PR 이 쓴다.
+check_r11() {
+  check_prevent_destroy R11 "${ROOT}/nonprod/dev" \
     'aws_instance aws_eip aws_security_group'
 }
 
@@ -294,7 +320,7 @@ check_r5() {
 check_file() {
   local file="$1"
   local content
-  if [[ "${file}" == *.tf.json ]]; then
+  if [[ "${file}" == *.tf.json || -L "${file}" ]]; then
     check_r0 "${file}"
     return
   fi
@@ -319,9 +345,9 @@ main() {
   [[ -n "${files}" ]] || die "검사할 .tf 파일이 없음: ${ROOT}"
   while IFS= read -r file; do
     check_file "${file}"
-  done <<<"${files}"
+  done < <(printf '%s\n' "${files}")
   check_r4
-  check_r5
+  check_r11
 
   if [[ "${violations}" -ne 0 ]]; then
     echo "guard: 위반 ${violations}건" >&2

@@ -48,3 +48,12 @@ resource "aws_security_group" "braces_in_text" {
     Note = "}"
   }
 }
+
+# 하이픈이 든 heredoc 종료자도 heredoc 으로 지운다. 본문 속 /* 는 주석이 아니다.
+resource "aws_ssm_parameter" "doc_hyphen" {
+  name  = "example-hyphen"
+  type  = "String"
+  value = <<-DOC-TEXT
+    /* resource "aws_secretsmanager_secret_version" "in_heredoc" {}
+  DOC-TEXT
+}
