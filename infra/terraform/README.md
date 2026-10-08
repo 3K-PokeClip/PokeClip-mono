@@ -225,8 +225,18 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
     고쳐야 하며, 그것은 리뷰가 봅니다.
 *   이름이 `.terraform` 인 디렉터리는 깊이와 상관없이 검사에서 뺍니다(provider
     캐시). 그 이름 아래에 구성을 두지 않습니다.
-*   `PATH` 의 conftest 를 믿습니다. 판정이 conftest 출력 형식(`FAIL - Combined -
-    main - ` 과 요약 줄)에 기대므로 버전을 바꾸면 모르는 줄로 종료 2 가 날 수
+*   실제 트리보다 **상위** 디렉터리(`.` · `infra` 등)를 루트로 주면 경로 규칙
+    (R4 · R11)이 맞지 않고 `scripts/testdata` 도 빠지지 않아 fixture 위반이
+    쏟아집니다(종료 1 — 위반 0 으로 새지는 않음). 루트는 주지 않거나
+    `infra/terraform` 으로 줍니다.
+*   모든 심볼릭 링크가 R0 입니다(`.tf` 가 아닌 문서 링크도). 단 이름이
+    `.terraform` 인 것은 디렉터리든 링크든 건너뜁니다.
+*   `.gitignore` 가 막는 로컬 파일(`override.tf` · `*_override.tf` 등)은 로컬
+    guard 는 보지만 CI 는 볼 수 없습니다 — 커밋되지 않으므로 리뷰 대상도
+    아닙니다.
+*   `PATH` 의 conftest 를 믿습니다. `PATH` 에 `.` 이나 빈 항목을 두지 않습니다
+    (루트로 이동한 뒤 그 트리의 `conftest` 가 실행될 수 있음). 판정이
+    conftest 출력 형식(`FAIL - Combined - main - ` 과 요약 줄)에 기대므로 버전을 바꾸면 모르는 줄로 종료 2 가 날 수
     있습니다(안전한 쪽) — CI 는 0.71.1 고정, 로컬 brew 판은 `conftest
     --version` 이 `dev` 로 나와 버전 문자열로는 확인되지 않습니다.
 *   R0(심볼릭 링크 · `.tf.json`)는 정책이 아니라 guard.sh 의 셸 검사입니다.
