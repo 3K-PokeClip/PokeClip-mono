@@ -292,14 +292,18 @@ BridgeCallbacks MakeBridgeCallbacks()
 		if (!d)
 			return {400, JsonReason(false, "invalid_json")};
 		std::string key = obs_data_get_string(d, "key");
+		// null·생략 = 트랙에서 뺀다. 정수가 아닌 값(문자열·불리언·소수)은 거절한다 — 「생략」으로 읽으면 넣으려던 소스가
+		// 조용히 트랙에서 빠진다.
 		obs_data_item_t *item = obs_data_item_byname(d, "track");
-		bool hasTrack = item && obs_data_item_gettype(item) == OBS_DATA_NUMBER; // null·생략 = 트랙에서 뺀다
+		enum obs_data_type type = item ? obs_data_item_gettype(item) : OBS_DATA_NULL;
+		bool hasTrack = type == OBS_DATA_NUMBER && obs_data_item_numtype(item) == OBS_DATA_NUM_INT;
+		bool badTrack = type != OBS_DATA_NULL && !hasTrack;
 		obs_data_item_release(&item);
 		int track = hasTrack ? static_cast<int>(obs_data_get_int(d, "track")) : 0;
 		obs_data_release(d);
 		if (key.empty())
 			return {400, JsonReason(false, "invalid_json")};
-		if (hasTrack && (track < 2 || track > kStemSlots + 1))
+		if (badTrack || (hasTrack && (track < 2 || track > kStemSlots + 1)))
 			return {400, JsonReason(false, "bad_track")};
 
 		StateSnapshot s = AppState::Instance().Snapshot();
@@ -435,8 +439,17 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 	case OBS_FRONTEND_EVENT_RECORDING_STARTING:
 		AudioRouter::Instance().Reconcile("recording starting");
 		break;
+	// STARTING은 출력이 켜지기 전이라 그때 계산한 잠금(방송·녹화 중 — 독·폴백의 손 배정 확인 창 근거)은 거짓이다.
+	// 실제로 켜진 뒤(STARTED)와 리플레이 버퍼 시작·정지에 한 번 더 계산해 뷰의 locked를 맞춘다 — 배정은 바뀌지 않는다.
+	case OBS_FRONTEND_EVENT_RECORDING_STARTED:
+		AudioRouter::Instance().Schedule("recording started");
+		break;
 	case OBS_FRONTEND_EVENT_RECORDING_STOPPED:
 		AudioRouter::Instance().Schedule("recording stopped");
+		break;
+	case OBS_FRONTEND_EVENT_REPLAY_BUFFER_STARTED:
+	case OBS_FRONTEND_EVENT_REPLAY_BUFFER_STOPPED:
+		AudioRouter::Instance().Schedule("replay buffer changed");
 		break;
 	// 동기화 규칙(설정 sync_start): 본방의 시작·정지만 따라간다. 본방이 잠시 끊겨 재연결 중일 때는
 	// 프론트엔드 이벤트가 없고 obs_frontend_streaming_active()도 참으로 남으므로 우리 송출을 건드리지 않는다 —
@@ -446,6 +459,7 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STARTED:
 		AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = true; });
+		AudioRouter::Instance().Schedule("stream started"); // 위 RECORDING_STARTED와 같은 이유 — 잠금을 뷰에 싣는다
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STOPPING:
 		// obs_output_stop 안에서 동기로 온다. 본방과 같이 멈춘다(예약된 재시도도 버린다).
