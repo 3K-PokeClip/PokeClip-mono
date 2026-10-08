@@ -51,6 +51,8 @@ variables {
   instance_hibernation       = true
   instance_source_dest_check = false
 
+  instance_iam_instance_profile = "example-profile"
+
   # 규칙마다 다른 값을 넣어, 선언이 키별 현재 값을 그대로 쓰는지 본다.
   ingress_rules = {
     "80" = {
@@ -147,6 +149,11 @@ run "declares_dev_box" {
   }
 
   assert {
+    condition     = aws_instance.dev.iam_instance_profile == "example-profile"
+    error_message = "EC2 iam_instance_profile 이 instance_iam_instance_profile 현재 값과 다르다."
+  }
+
+  assert {
     condition     = aws_eip.dev.domain == "vpc"
     error_message = "EIP domain 이 vpc 가 아니다."
   }
@@ -165,6 +172,26 @@ run "rejects_malformed_instance_id" {
   }
 
   expect_failures = [var.instance_id]
+}
+
+run "rejects_empty_instance_profile" {
+  command = plan
+
+  variables {
+    instance_iam_instance_profile = ""
+  }
+
+  expect_failures = [var.instance_iam_instance_profile]
+}
+
+run "rejects_malformed_instance_profile" {
+  command = plan
+
+  variables {
+    instance_iam_instance_profile = "<INSTANCE_PROFILE_NAME_DEV>"
+  }
+
+  expect_failures = [var.instance_iam_instance_profile]
 }
 
 run "rejects_placeholder_rule_cidr" {
