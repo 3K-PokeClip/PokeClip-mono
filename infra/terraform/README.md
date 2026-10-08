@@ -17,7 +17,8 @@ Terraform 코드입니다. 설계 정본은 「HTTPS · 엣지 인프라 설계�
 ```
 infra/terraform/
 ├── modules/                       # 루트들이 쓰는 부품
-├── scripts/                       # guard.sh(금지 규약 검사) · guard_test.sh
+├── policy/guard/                  # 금지 규약 Rego 정책(conftest) · 단위 시험
+├── scripts/                       # guard.sh(금지 규약 검사 실행기) · guard_test.sh
 ├── mgmt/
 │   ├── bootstrap/                 # ① 상태 버킷
 │   └── org-extras/                # ② SCP · 권한 세트 할당 · Budgets · 드리프트 EventBridge
@@ -116,6 +117,7 @@ terraform fmt -check -recursive infra/terraform
 terraform -chdir=<루트·모듈> init -backend=false -input=false
 terraform -chdir=<루트·모듈> validate
 terraform -chdir=<tests/ 가 있는 루트·모듈> test
+conftest verify --policy infra/terraform/policy/guard
 bash infra/terraform/scripts/guard_test.sh
 bash infra/terraform/scripts/guard.sh
 shellcheck infra/terraform/scripts/*.sh
@@ -133,60 +135,93 @@ shellcheck infra/terraform/scripts/*.sh
 | data source 입력 인자 | data source 에 넘긴 인자(mock 계산 속성은 임의 값) |
 | override_data · override_resource | remote_state · 계산 속성을 고정한 뒤 비교 |
 | 운영 plan 확인 | 승인된 실제 plan. 무변경 · 변경 범위는 이것으로만 판정 |
-| guard.sh | 금지 자원 · 자원 부재 · 인라인 SG · prevent_destroy |
+| guard(conftest 정책) | 금지 자원 · 자원 부재 · 인라인 SG · prevent_destroy |
 
 ## guard 규칙
 
-`scripts/guard.sh` 는 트리 전체를 텍스트로 검사합니다. 검사 전에 주석
-(`#` · `//` · `/* */`)과 heredoc 본문을 지우므로, 주석 속 예시는 위반도
-통과 근거도 되지 않습니다. 규칙마다
-`scripts/testdata/guard/bad_<규칙>[_<변형>]/` fixture 가 있고, `guard_test.sh`
-가 「bad 는 그 규칙으로 실패 · `ok/` 는 통과 · `err_*/` 와 읽을 수 없는 파일은
-종료 코드 2」를 먼저 확인합니다. 경로를 겨누는 규칙의 fixture 는 그 경로를
-fixture 트리 안에 그대로 둡니다.
+guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R11 은
+[conftest](https://www.conftest.dev/)(`--parser hcl2`)로 돌리는 Rego 정책
+`policy/guard/*.rego` 가 판정합니다. `scripts/guard.sh` 는 얇은 실행기입니다.
+파서가 볼 수 없는 R0 를 직접 보고, 파일마다 파싱이 되는지 먼저 가린 뒤, 트리
+전체를 한 입력으로 묶어(`--combine`) 정책을 돌립니다. HCL 을 파서로 읽으므로
+주석 · heredoc · 문자열 속 글자는 선언으로 보이지 않습니다.
+
+예전 guard 는 awk 로 HCL 을 글자 단위로 읽었는데, M1 PR 리뷰 다섯 라운드 내내
+새 우회 꼴이 나와 파서 기반으로 바꿨습니다(볼트 결정 42).
 
 | 규칙 | 대상 경로 | 실패 조건 |
 |---|---|---|
-| R0 | 전체 | `*.tf.json` 파일(이 트리는 HCL 만 — guard 가 JSON 을 읽지 못함) · 심볼릭 링크 `.tf` |
-| R1 | 전체 | `resource` · `data` `aws_secretsmanager_secret_version` |
-| R2 | 전체 | `aws_cloudfrontkeyvaluestore_key*` |
-| R3 | 전체 | `aws_security_group` 블록 바로 안 `ingress {` · `egress {` · `ingress =` · `egress =` |
-| R4 | `modules/state_bucket` | `aws_s3_bucket` 자원 없음, 또는 그 자원의 `lifecycle` 블록에 `prevent_destroy = true` 없음 |
-| R11 | `nonprod/dev` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원의 `lifecycle` 블록에 `prevent_destroy = true` 없음 |
-
-검사를 끝낼 수 없으면(검사할 `.tf` 0건 · 읽을 수 없는 파일 · 끝나지 않는
-heredoc · 블록 주석 · 문자열 · 자원 블록 · 알아보지 못하는 `<<` · 주석으로
-나뉜 선언 머리 · awk 나 입력 전달 오류) 위반 0 으로 넘어가지 않고 종료
-코드 2 로 멈춥니다. guard 는 임시 파일 · 프로세스 치환을 쓰지 않습니다.
-R4 · R11 은 대상 경로가 없는 트리(다른 규칙의 fixture)에서는 건너뜁니다.
-
-guard 를 부르는 CI 는 계획의 M-CI(infra-ci)에서 붙습니다. 그 전까지는 PR
-마다 `bash infra/terraform/scripts/guard_test.sh` 와 `bash
-infra/terraform/scripts/guard.sh` 를 손으로 돌립니다.
+| R0 | 전체 | `*.tf.json` 파일 · 심볼릭 링크 `.tf`(guard.sh 가 셸로 검사) |
+| R1 | 전체 | `resource` · `data` `aws_secretsmanager_secret_version`(`count = 0` 이어도) |
+| R2 | 전체 | `resource` · `data` 유형이 `aws_cloudfrontkeyvaluestore_key` 로 시작 |
+| R3 | 전체 | `aws_security_group` 자원 안 `ingress` · `egress`(블록 · 속성 · `dynamic "ingress"` · `dynamic "egress"`) |
+| R4 | `modules/state_bucket/` | `aws_s3_bucket` 자원 없음, 또는 그 자원 중 `lifecycle { prevent_destroy = true }`(리터럴 `true`)가 없는 것 |
+| R11 | `nonprod/dev/` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원 중 리터럴 `prevent_destroy = true` 가 없는 것 |
 
 `prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R11 이
-맡습니다. 한 줄 꼴 `lifecycle { prevent_destroy = true }` 도 인정합니다.
-dev SG 규칙 자원은 M12 가 8082 규칙을 지우므로 R11 대상이 아닙니다. dev
-상자를 없애는 PR 은 R11 을 함께 지웁니다.
+맡습니다. conftest 는 식을 평가하지 않으므로 리터럴 `true` 만 인정합니다 —
+`true != true` · `var.keep` 같은 식과 문자열 `"true"` 는 위반입니다. R4 · R11 은
+대상 경로 아래 `.tf` 가 하나도 없는 트리(다른 규칙의 fixture)에서는 건너뜁니다.
+dev SG 규칙 자원은 M12 가 8082 규칙을 지우므로 R11 대상이 아닙니다. dev 상자를
+없애는 PR 은 R11 을 함께 지웁니다.
 
 R5 ~ R10 은 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 · 모듈과
-같은 PR 에서 그 번호로 더합니다.
+같은 PR 에서 그 번호로 `policy/guard/` 에 더합니다(정책 · `_test.rego` ·
+fixture 를 함께).
 
-한계:
+### 설치와 실행
 
-*   텍스트 검사입니다. 다른 이름 · 모듈 안에 숨긴 선언 · 한 줄에 여러
-    선언을 몰아 쓴 꼴로 우회하는 것은 막지 못합니다. 그것은 리뷰가
-    막습니다. 선언 머리는 `resource"x"`(공백 없음) · `resource x y {`(따옴표
-    없는 라벨)도 같은 선언으로 보고, R3 는 SG 안 `dynamic "ingress"` ·
-    `dynamic "egress"` 도 잡습니다.
-*   문자열과 그 안의 보간(`${...}` · `%{...}`)은 중첩까지 따라갑니다. 그
-    속의 `#` · `<<` · 따옴표 · 중괄호는 코드로 읽지 않습니다. 여러 줄에 걸친
-    보간 · 보간 속 주석이나 `<<` 는 알아보지 못해 종료 2 로 멈춥니다(안전한
-    쪽 실패 — 그런 꼴은 쓰지 않거나 guard 를 고칩니다).
-*   파일 첫머리 UTF-8 BOM · 줄끝 CR(CRLF)은 지우고 읽습니다. 블록 주석이
-    `resource /* … */ "x"` 처럼 줄을 넘어 선언 머리를 나누면 종료 2 입니다.
+*   로컬: `brew install conftest`. CI 는 계획의 M-CI(infra-ci)에서 conftest
+    0.71.1 을 체크섬 고정으로 내려받아 붙습니다. 그 전까지는 PR 마다 아래 셋을
+    손으로 돌립니다.
+
+```
+conftest verify --policy infra/terraform/policy/guard   # 정책 단위 시험
+bash infra/terraform/scripts/guard_test.sh              # fixture 끝에서 끝까지
+bash infra/terraform/scripts/guard.sh                   # 실제 트리
+```
+
+*   `guard.sh [루트]` 는 루트로 옮겨 루트 기준 상대 경로로 검사합니다. 정책은
+    루트와 상관없이 늘 이 저장소의 `policy/guard` 를 씁니다.
+*   위반은 한 줄에 하나씩 「guard: R<번호> <상대 경로>: <설명>」으로 나옵니다.
+
+### 종료 코드
+
+| 코드 | 뜻 |
+|---|---|
+| 0 | 위반 0 |
+| 1 | 위반 있음(R0 포함) |
+| 2 | 사용법 오류 · conftest 없음 · 검사 불가 — 파싱 실패 · 읽을 수 없는 파일 · 검사할 `.tf` 0건 · conftest 자체 오류(정책 컴파일 · 내장 함수 오류 · 모르는 출력) |
+
+검사를 끝낼 수 없으면 위반 0 으로 넘어가지 않고 2 로 멈춥니다(fail-closed).
+파싱 실패가 하나라도 있으면 정책을 돌리지 않습니다. conftest 는 위반과 오류를
+같은 종료 코드로 내므로, guard.sh 는 `--no-fail` 로 위반을 종료 코드에서 떼고
+(그러면 0 이 아닌 종료는 모두 오류) 결과 줄의 FAIL 수를 요약 줄과 맞춰 봅니다.
+
+### fixture
+
+규칙마다 `scripts/testdata/guard/bad_<규칙>[_<변형>]/` fixture 가 있고,
+`guard_test.sh` 가 「`conftest verify` 통과 · bad 는 그 규칙으로 종료 1 ·
+`ok/` 는 통과 · `err_*/` 와 읽을 수 없는 파일 · conftest 없음은 종료 2」를
+확인합니다. 나누는 기준은 Terraform 이 받는 코드인가입니다 — Terraform 이 받는
+꼴은 `bad_` · `ok`, 받지 않는(파싱되지 않는) 꼴은 `err_` 입니다. 경로를 겨누는
+규칙의 fixture 는 그 경로를 fixture 트리 안에 그대로 둡니다.
+`terraform fmt -recursive` 를 깨는 fixture 는 `*.tf.in` 으로 두고
+`guard_test.sh` 가 임시 디렉터리에 `*.tf` 로 복사해 돌립니다.
+
+### 한계
+
+*   다른 이름 · 모듈 안에 숨긴 선언 · 동적 생성(모듈 호출 · `for_each` 로
+    만드는 자원)으로 우회하는 것은 막지 못합니다. 그것은 리뷰가 막습니다.
+*   R0(심볼릭 링크 · `.tf.json`)는 정책이 아니라 guard.sh 의 셸 검사입니다.
+    `--parser hcl2` 는 JSON 구성을 읽지 못하므로 `.tf.json` 은 이 트리에 두지
+    않습니다.
 *   R1 은 Secrets Manager 비밀 버전만 봅니다. `aws_ssm_parameter` 의
     SecureString 값도 상태에 평문으로 남지만 R1 대상이 아닙니다(설계상 SSM
     비밀은 없음 — 쓰게 되면 리뷰가 막고 규칙을 더합니다).
-*   `terraform fmt -recursive` 를 깨는 fixture 는 `*.tf.in` 으로 두고
-    `guard_test.sh` 가 임시 디렉터리에 `*.tf` 로 복사해 돌립니다.
+*   파일 첫머리 UTF-8 BOM 과 줄끝 CR(CRLF)은 conftest 의 hcl2 파서가 그대로
+    읽습니다(Terraform 도 받음). BOM · CRLF 파일 안의 금지 선언도 잡힙니다
+    (`bad_R1_bom` · `bad_R1_crlf`).
+*   conftest 는 `count` 를 펼치지 않으므로 `count = 0` 인 금지 자원도
+    위반입니다. 반대로 식을 평가하지 않으므로 「true 와 같은 뜻의 식」도 R4 ·
+    R11 위반입니다(엄격한 쪽).
