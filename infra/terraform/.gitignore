@@ -7,3 +7,7 @@
 backend.hcl
 # 모듈 디렉터리의 잠금 파일은 시험용 init 부산물이다. 루트의 것만 추적한다.
 modules/**/.terraform.lock.hcl
+# bootstrap 1단(로컬 상태)에서 잠시 두는 백엔드 override 와 plan 파일.
+override.tf
+*_override.tf
+*.tfplan
