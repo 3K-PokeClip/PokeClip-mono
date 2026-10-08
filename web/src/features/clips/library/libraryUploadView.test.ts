@@ -153,13 +153,14 @@ describe('uploadFailureText — 지난 업로드가 실패한 편집본의 안�
     );
   });
 
-  it('유튜브 거절은 서버가 준 사유를 붙인다', () => {
+  it('유튜브 거절은 서버가 준 사유를 붙이고, 같은 정보로 다시 시도하지 말고 창에서 고쳐 올리라고 한다', () => {
     const clip = toLibraryClip(
       entry('rendered', snapshot(failedUpload('YOUTUBE_REJECTED', 'invalidTitle'))),
       '9',
     );
+    // 「다시 시도」는 실패한 줄의 제목·태그를 그대로 다시 보낸다. 보관함 제목은 잠겨 있어 고칠 곳은 편집기 창뿐이다
     expect(uploadFailureText(clip)).toBe(
-      '유튜브가 영상을 받지 않았어요(invalidTitle). 제목이나 영상을 확인한 뒤 다시 올려 주세요.',
+      '유튜브가 영상을 받지 않았어요(invalidTitle). 같은 정보로 다시 시도하면 또 거절될 수 있어요. 「이어서 편집」에서 영상 만들기 창을 열어 제목·태그를 고친 뒤 다시 올려 주세요.',
     );
   });
 
@@ -189,6 +190,22 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
         action: 'upload',
       });
     }
+  });
+
+  it('창에서 고른 업로드 정보가 남은 완성 편집본은 「업로드」하되 제목을 잠근다: 저장된 정보로 올라가 패널 제목은 실리지 않는다(POK-291)', () => {
+    const clip = toLibraryClip(
+      {
+        ...entry('rendered'),
+        uploadRequest: { title: '창 제목', privacyStatus: 'public', thumbnailSource: 'scene' },
+      },
+      '9',
+    );
+    const view = detailViewForClip(clip, clip.status, 'streamer');
+    expect(view.primary).toEqual({ kind: 'action', label: '업로드', action: 'upload' });
+    expect(view.titleLocked).toBe(true);
+    expect(
+      detailViewForClip(toLibraryClip(entry('rendered'), '9'), 'ready', 'streamer').titleLocked,
+    ).toBe(false);
   });
 
   it('올리는 중에는 누를 수 없는 「유튜브에 올리는 중」이고 제목이 잠긴다', () => {
@@ -276,6 +293,23 @@ describe('thumbnailFailureText: 영상은 올라갔고 썸네일만 실패(POK-2
     );
     expect(thumbnailFailureText(clip)).toBe(
       '영상은 올라갔고 썸네일만 못 붙였어요. 채널 전화 인증이 필요해요. 유튜브 스튜디오에서 직접 바꿀 수 있어요.',
+    );
+  });
+
+  it('붙었는지 확인하지 못했으면(재배달) 못 붙였다고 하지 않고 스튜디오에서 확인하라고 한다', () => {
+    const clip = toLibraryClip(
+      entry(
+        'uploaded',
+        snapshot(
+          uploaded({
+            thumbnail: { source: 'scene', status: 'failed', errorCode: 'THUMBNAIL_UNCONFIRMED' },
+          }),
+        ),
+      ),
+      '9',
+    );
+    expect(thumbnailFailureText(clip)).toBe(
+      '영상은 올라갔어요. 썸네일이 붙었는지 확인하지 못했어요. 유튜브 스튜디오에서 확인해 주세요.',
     );
   });
 

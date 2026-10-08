@@ -772,3 +772,133 @@ describe('useLibraryMockState: 업로드 다시 시도 (POK-291)', () => {
     expect(posts(spy)).toHaveLength(0);
   });
 });
+
+describe('useLibraryMockState: 업로드 정보가 있는데 업로드가 안 붙은 완성 영상의 「업로드」(POK-291)', () => {
+  const rendered = {
+    id: 5,
+    streamId: 's1',
+    recipeId: 12,
+    recipeVersion: 2,
+    requestedBy: '9',
+    status: 'rendered',
+    progress: null,
+    outputs: [{ outputId: 'o1', kind: 'video', s3Key: 'k' }],
+    error: null,
+    createdAt: '2026-09-20T11:00:00Z',
+    updatedAt: '2026-09-20T12:00:00Z',
+    upload: null as unknown,
+  };
+  const withIntent = (latestClip = rendered, status = 'rendered') => ({
+    recipeId: 12,
+    streamId: 's 1',
+    creatorId: '9',
+    recipeVersion: 2,
+    cut: { inAtMs: 0, outAtMs: 30_000 },
+    status,
+    broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+    latestClip,
+    createdAt: '2026-09-20T11:00:00Z',
+    updatedAt: '2026-09-20T12:00:00Z',
+    uploadRequest: { title: '창에서 적은 제목', privacyStatus: 'public', thumbnailSource: 'scene' },
+  });
+  const started = {
+    id: 8,
+    clipId: 5,
+    outputId: 'o1',
+    title: '창에서 적은 제목',
+    status: 'queued',
+    videoId: null as string | null,
+    error: null,
+    privacyStatus: 'public',
+    requestedBy: '9',
+    createdAt: '2026-09-20T12:00:00Z',
+    updatedAt: '2026-09-20T12:00:00Z',
+  };
+
+  function serve(
+    list: () => ReturnType<typeof withIntent>,
+    onPost: () => Response | Promise<Response>,
+  ) {
+    return stubFetch((url, init) => {
+      if (init?.method === 'POST') return onPost();
+      return url.startsWith('/api/clip/library')
+        ? jsonResponse(200, { items: [list()], nextCursor: null })
+        : jsonResponse(200, { id: 9 });
+    });
+  }
+
+  async function mount() {
+    const view = renderHook(() => useLibraryMockState(), { wrapper: withToastProvider });
+    await vi.waitFor(() => expect(view.result.current.loading).toBe(false));
+    return view;
+  }
+
+  const posts = (spy: ReturnType<typeof stubFetch>) =>
+    spy.mock.calls.filter(([, init]) => init?.method === 'POST');
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('옛 문(제목만) 대신 다시 시도 문을 본문 없이 불러 저장된 업로드 정보로 올린다', async () => {
+    const spy = serve(
+      () => withIntent(),
+      () => jsonResponse(201, started),
+    );
+    const { result } = await mount();
+    expect(result.current.clips[0]?.status).toBe('ready');
+
+    act(() => result.current.upload('12'));
+    await vi.waitFor(() => expect(result.current.sendingIds.size).toBe(0));
+
+    const [url, init] = posts(spy)[0] ?? [];
+    expect(url).toBe('/api/clip/broadcasts/s%201/clips/5/uploads/retry');
+    expect(init?.body).toBeUndefined();
+    expect(posts(spy)).toHaveLength(1);
+    expect(result.current.clips[0]?.status).toBe('uploading');
+    expect(document.body.textContent).toContain('유튜브 업로드를 시작했어요');
+  });
+
+  it('답을 기다리는 동안 연타해도 한 번만 보낸다', async () => {
+    let answer: (r: Response) => void = () => {};
+    const spy = serve(
+      () => withIntent(),
+      () => new Promise<Response>((resolve) => (answer = resolve)),
+    );
+    const { result } = await mount();
+
+    act(() => {
+      result.current.upload('12');
+      result.current.upload('12');
+    });
+    act(() => result.current.upload('12'));
+    await vi.waitFor(() => expect(posts(spy)).toHaveLength(1));
+    await act(async () => {});
+    expect(posts(spy)).toHaveLength(1);
+
+    await act(async () => answer(jsonResponse(201, started)));
+    await vi.waitFor(() => expect(result.current.sendingIds.size).toBe(0));
+  });
+
+  it('답이 늦게 와도 그사이 읽은 더 새 상태(올림)를 되돌리지 않는다', async () => {
+    let answer: (r: Response) => void = () => {};
+    let list = withIntent();
+    serve(
+      () => list,
+      () => new Promise<Response>((resolve) => (answer = resolve)),
+    );
+    const { result } = await mount();
+
+    act(() => result.current.upload('12'));
+    list = withIntent(
+      { ...rendered, upload: { ...started, id: 9, status: 'uploaded', videoId: 'v1' } },
+      'uploaded',
+    );
+    act(() => result.current.refresh());
+    await vi.waitFor(() => expect(result.current.clips[0]?.status).toBe('published'));
+
+    await act(async () => answer(jsonResponse(200, started)));
+    await vi.waitFor(() => expect(result.current.sendingIds.size).toBe(0));
+    expect(result.current.clips[0]?.status).toBe('published');
+  });
+});

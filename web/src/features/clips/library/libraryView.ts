@@ -1,6 +1,6 @@
 import { ddayFor, type VodDday } from '@/features/broadcast/vod/vodListView';
 import { formatUptime } from '@/features/player/playerMath';
-import { ClipApiError } from '@/api/clipEditor';
+import { ClipApiError, type LibraryEntry } from '@/api/clipEditor';
 import { PRIVACY_AUDIT_NOTE, PRIVACY_LABEL } from '@/features/clips/editor/uploadInfo';
 import type { ClipStatus, LibraryClip, LibraryRole } from './useLibraryMockState';
 
@@ -357,6 +357,16 @@ export function detailViewFor(status: ClipStatus, role: LibraryRole): DetailView
 }
 
 /**
+ * 완성됐고 영상 만들기 창에서 고른 업로드 정보가 남았는데 업로드 줄이 없는가(자동 업로드가 안 붙었다: 업로드가 꺼져 있었거나
+ * 서버 경합). 그러면 「업로드」는 제목만 싣는 옛 문이 아니라 다시 시도 문으로 그 판의 저장된 정보로 올린다(POK-291)
+ */
+export function uploadsFromIntent(entry: LibraryEntry): boolean {
+  return (
+    entry.status === 'rendered' && entry.uploadRequest != null && entry.latestClip?.upload == null
+  );
+}
+
+/**
  * 서버 줄을 시안 규칙(detailViewFor) 위에 얹는다(POK-111). 진행 단계(만드는 중·올리는 중·확인 필요·업로드 실패)는 이제
  * 제 화면 상태가 있어 detailViewFor가 정한다(POK-291). 서버 편집본은 승인 단계가 없어(편집자도 바로 올린다)
  * 「업로드 요청」이라 쓰면 거짓이 된다. 목업 줄은 시안 규칙 그대로 둔다.
@@ -374,7 +384,9 @@ export function detailViewForClip(
   // 제목이 살아 있는 업로드에서 온 것이면(올린 뒤 새 판을 저장해 「편집 중」인 경우 포함) 고칠 곳이 없다:
   // 초안은 완성 편집본에만 남아 다음 읽기에 되돌아간다(PR #203 codex)
   const upload = entry.latestClip?.upload;
-  const titleLocked = view.titleLocked || (upload != null && upload.status !== 'failed');
+  // 저장된 정보로 올리는 길이면 패널 제목은 실리지 않는다: 고쳐도 버려지니 잠근다
+  const titleLocked =
+    view.titleLocked || (upload != null && upload.status !== 'failed') || uploadsFromIntent(entry);
   return view.primary.kind === 'action' && view.primary.action === 'upload'
     ? { ...view, titleLocked, primary: { ...view.primary, label: '업로드' } }
     : { ...view, titleLocked };
@@ -455,7 +467,8 @@ export function uploadFailureText(clip: LibraryClip): string | null {
   }
   if (code === 'YOUTUBE_REJECTED') {
     const why = upload.error?.message ? `(${upload.error.message})` : '';
-    return `유튜브가 영상을 받지 않았어요${why}. 제목이나 영상을 확인한 뒤 다시 올려 주세요.`;
+    // 「다시 시도」는 실패한 줄의 제목·설명·태그를 그대로 다시 보내고 보관함 제목은 잠겨 있다. 고칠 곳은 편집기 창이다
+    return `유튜브가 영상을 받지 않았어요${why}. 같은 정보로 다시 시도하면 또 거절될 수 있어요. 「이어서 편집」에서 영상 만들기 창을 열어 제목·태그를 고친 뒤 다시 올려 주세요.`;
   }
   return `유튜브에 올리지 못했어요(${code}). 다시 올려 주세요.`;
 }
@@ -480,6 +493,10 @@ export function thumbnailFailureText(clip: LibraryClip): string | null {
   const thumbnail = entry?.latestClip?.upload?.thumbnail;
   if (entry?.status !== 'uploaded' || thumbnail?.status !== 'failed') return null;
   const code = thumbnail.errorCode ?? 'UNKNOWN';
+  // 재배달이라 붙었는지 모른다: 못 붙였다고 하면 이미 붙은 썸네일을 또 바꾸게 만든다
+  if (code === 'THUMBNAIL_UNCONFIRMED') {
+    return '영상은 올라갔어요. 썸네일이 붙었는지 확인하지 못했어요. 유튜브 스튜디오에서 확인해 주세요.';
+  }
   const reason = THUMBNAIL_REASON[code] ?? `(${code})`;
   return `영상은 올라갔고 썸네일만 못 붙였어요. ${reason} 유튜브 스튜디오에서 직접 바꿀 수 있어요.`;
 }

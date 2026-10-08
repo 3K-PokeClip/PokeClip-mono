@@ -21,6 +21,7 @@ import {
   sortClips,
   statusFor,
   uploadErrorMessage,
+  uploadsFromIntent,
   uploadTitleProblem,
   type LibraryChip,
   type LibrarySort,
@@ -343,18 +344,25 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       if (clip !== undefined && entry !== undefined) {
         const clipId = entry.latestClip?.id;
         if (entry.status !== 'rendered' || clipId === undefined) return;
-        const problem = uploadTitleProblem(clip.title);
-        if (problem !== null) {
-          toast({ tone: 'error', title: '제목을 고쳐 주세요', description: problem });
-          return;
+        // 영상 만들기 창에서 고른 업로드 정보가 있는데 자동 업로드가 안 붙었으면(업로드가 꺼져 있었거나 서버 경합) 옛 문은
+        // 제목만 실어 설명·태그·공개 범위·썸네일이 빠진다. 다시 시도 문은 업로드 줄이 없으면 그 판의 정보로 올린다(POK-291)
+        const fromIntent = uploadsFromIntent(entry);
+        if (!fromIntent) {
+          const problem = uploadTitleProblem(clip.title);
+          if (problem !== null) {
+            toast({ tone: 'error', title: '제목을 고쳐 주세요', description: problem });
+            return;
+          }
         }
         if (sending.current.has(id)) return;
         setSendingFlag(id, true);
         const title = clip.title.trim();
-        videoOutputOf(entry)
-          .then((outputId) =>
-            requestUpload(entry.streamId, clipId, outputId ? { title, outputId } : { title }),
-          )
+        (fromIntent
+          ? requestUploadRetry(entry.streamId, clipId)
+          : videoOutputOf(entry).then((outputId) =>
+              requestUpload(entry.streamId, clipId, outputId ? { title, outputId } : { title }),
+            )
+        )
           .then(({ created, upload: snap }) => {
             titleDrafts.current.delete(id);
             listGeneration.current += 1;

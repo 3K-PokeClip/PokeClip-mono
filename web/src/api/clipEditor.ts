@@ -471,8 +471,9 @@ export async function requestUpload(
 }
 
 /**
- * 실패한 업로드를 저장된 정보 그대로 다시 올린다(POK-291, 창 없이). 201 새로 시작 · 200 이미 살아 있는 업로드가 있다(그것을
- * 돌려준다). 409 nothing_to_retry(올린 적 없음)/already_uploaded(같은 판의 다른 영상이 올라갔다) · 503 upload_unavailable.
+ * 실패한 업로드를 저장된 정보 그대로 다시 올린다(POK-291, 창 없이). 업로드 줄이 아직 없으면 그 판의 업로드 정보(영상 만들기
+ * 창에서 고른 것)로 올린다. 201 새로 시작 · 200 이미 살아 있는 업로드가 있다(그것을 돌려준다). 409 nothing_to_retry(올린 적도
+ * 업로드 정보도 없음)/already_uploaded(같은 판의 다른 영상이 올라갔다) · 503 upload_unavailable.
  */
 export async function retryUpload(
   streamId: string,
