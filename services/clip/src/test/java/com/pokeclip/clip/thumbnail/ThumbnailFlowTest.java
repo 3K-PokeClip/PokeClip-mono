@@ -380,6 +380,8 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
         assertThat(controller.report(new ThumbnailReportController.ReportBody("live", "S-gone", at)).getStatusCode().value()).isEqualTo(404);
         assertThat(controller.report(new ThumbnailReportController.ReportBody("card", "999999", at)).getStatusCode().value()).isEqualTo(404);
         assertThat(controller.report(new ThumbnailReportController.ReportBody("clip", "999999", at)).getStatusCode().value()).isEqualTo(404);
+        // 보고 문은 19자리까지 받는다. bigint 밖이면 500이 아니라 「없음」이다.
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("card", "9999999999999999999", at)).getStatusCode().value()).isEqualTo(404);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM thumbnails", Integer.class)).isZero();
 
         // 있는 대상은 그대로 받는다: 대상 확인이 종류를 헷갈리면(카드 번호로 영상 표를 보면) 여기서 갈린다.

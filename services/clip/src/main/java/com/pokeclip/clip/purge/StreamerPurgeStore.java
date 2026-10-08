@@ -56,7 +56,7 @@ public class StreamerPurgeStore {
      * 표에서 지운다. 지울 파일 주소는 먼저 명부로 옮긴다: 표 줄이 사라지면 주소를 다시 알 길이 없다.
      * 호출자가 트랜잭션을 연다.
      *
-     * <p>방송·완성 영상 줄을 {@code FOR UPDATE}로 잡는다. 그 사이 새 카드·편집본·업로드가 외래키로 붙으면
+     * <p>방송·렌더 주문·완성 영상 줄을 이 순서로 {@code FOR UPDATE}로 잡는다. 그 사이 새 카드·편집본·업로드가 외래키로 붙으면
      * 마지막 방송 지우기가 외래키 위반으로 죽기 때문이다(자식 INSERT는 부모 줄에 KEY SHARE를 걸어 여기서 기다린다).
      */
     public Detached detach(String streamerId) {
@@ -70,6 +70,10 @@ public class StreamerPurgeStore {
         }, streamerId);
 
         Array streams = textArray(streamIds);
+        // 🔴 렌더 주문 줄을 완성 영상 줄보다 먼저 잠근다. 렌더 보고(JobEventService)가 주문 → 영상 순서로 잠그므로,
+        // 반대로 잡으면 탈퇴 정리와 늦게 온 보고가 서로를 기다리다 교착으로 한쪽이 끊긴다.
+        jdbc.queryForList("SELECT id FROM render_jobs WHERE clip_id IN (SELECT id FROM clips WHERE stream_id = ANY(?)) "
+                + "ORDER BY id FOR UPDATE", streams);
         List<String> clipIds = jdbc.queryForList(
                 "SELECT id::text FROM clips WHERE stream_id = ANY(?) ORDER BY id FOR UPDATE", String.class, streams);
         List<String> cardIds = jdbc.queryForList(
