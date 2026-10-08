@@ -189,6 +189,18 @@ class ThumbnailProcessorTest {
         Files.deleteIfExists(uploaded);
         status.set(400);
         assertThat(processor().process(주문서(1_000))).isEqualTo(Disposition.DELETE);
+        verify(store, never()).deleteQuietly(any(), any());
+    }
+
+    /** 대상이 탈퇴로 지워졌다(404, POK-256). clip의 지우기는 끝나 이 사진을 모르니 일꾼이 치운다. 400(모양 거절)과 갈린다. */
+    @Test
+    void 대상이_없으면_올린_사진을_치우고_지운다() throws Exception {
+        원본이_있다();
+        status.set(404);
+
+        assertThat(processor().process(주문서(1_000))).isEqualTo(Disposition.DELETE);
+
+        verify(store).deleteQuietly("clips-test", List.of("thumbnails/card/7.jpg"));
     }
 
     // ── PR #212 codex ───────────────────────────────────────────────────

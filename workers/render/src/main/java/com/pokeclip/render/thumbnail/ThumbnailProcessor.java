@@ -116,6 +116,12 @@ public class ThumbnailProcessor implements MessageHandler {
                 log.warn("thumbnail.report_rejected kind={} targetId={}", job.kind(), job.targetId());
                 yield Disposition.DELETE;
             }
+            case GONE -> {
+                // 그 사이 탈퇴로 대상이 지워졌다(POK-256). clip의 지우기는 이미 끝나 이 사진을 모른다.
+                boolean deleted = store.deleteQuietly(job.outputBucket(), List.of(job.outputKey()));
+                log.warn("thumbnail.target_gone kind={} targetId={} deleted={}", job.kind(), job.targetId(), deleted);
+                yield Disposition.DELETE;
+            }
             case UNAVAILABLE -> {
                 log.warn("thumbnail.report_unavailable kind={} targetId={}", job.kind(), job.targetId());
                 yield retryOrDrop(job);
