@@ -81,13 +81,13 @@ GopGuardResult EnforceStreamEncoderPolicy()
 	struct obs_video_info ovi = {};
 	if (obs_get_video_info(&ovi) && ovi.fps_den > 0)
 		r.checks.fps = static_cast<double>(ovi.fps_num) / ovi.fps_den;
-	// ADR-020: 1080p 고정은 M1에서 경고만 한다.
+	// ADR-020: 1080p는 권장값이다 — 어긋나도 막지 않고(ChecksAllowSend) 독이 경고로 보여 준다.
 	r.checks.res1080p = r.checks.width == 1920 && r.checks.height == 1080;
 
 	obs_log(LOG_INFO, "stream encoder '%s' (%s): keyint_sec %d -> %d, %dx%d @ %.3f fps", obs_encoder_get_name(venc),
 		obs_encoder_get_id(venc), before, r.checks.keyintSec, r.checks.width, r.checks.height, r.checks.fps);
 
-	r.ok = r.checks.gop2s.value_or(false);
+	r.ok = ChecksAllowSend(r.checks);
 	if (!r.ok)
 		r.errorCode = "keyint_not_applied";
 	return r;

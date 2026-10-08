@@ -101,6 +101,22 @@ TEST(strip_keyint_overrides_keeps_other_options)
 	CHECK_EQ(StripKeyintOverrides("keyintx=5"), "keyintx=5"); // 키 이름이 정확히 같을 때만
 }
 
+TEST(only_gop_gates_the_send_and_resolution_is_advisory)
+{
+	EncoderChecks c;
+	CHECK(!ChecksAllowSend(c)); // 아직 점검 전
+
+	c.gop2s = true;
+	c.res1080p = false; // 720p 본방 — 경고만 하고 보낸다 (ADR-020, POK-268)
+	c.width = 1280;
+	c.height = 720;
+	CHECK(ChecksAllowSend(c));
+
+	c.gop2s = false; // GOP 2초를 못 맞추면 1080p여도 보내지 않는다
+	c.res1080p = true;
+	CHECK(!ChecksAllowSend(c));
+}
+
 // ---------------------------------------------------------------- streamid · SRT URL
 
 const std::string kStreamId = "#!::r=H44ZA5QEAN81PBDDSN3BZPWPPV,m=publish";
