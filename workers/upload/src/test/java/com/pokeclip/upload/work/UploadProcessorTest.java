@@ -320,6 +320,29 @@ class UploadProcessorTest {
         assertThat(youtube.sessionsStarted()).isEqualTo(1);
     }
 
+    /**
+     * 🔴 1회차에 썸네일을 붙였는데(SET) clip 보고가 안 됐다. 2회차는 바이트를 하나도 안 보냈고 주소가 곧바로 「다 받았다」고 한다.
+     * 이때 다시 붙이기가 쿼터로 실패해도 채널에는 1회차 그림이 붙어 있을 수 있다. 실패 코드를 그대로 보내면 clip에는 그것이 첫 값으로
+     * 남아 보관함이 「썸네일만 못 붙였어요」로 틀리게 안내한다. 그래서 {@code THUMBNAIL_UNCONFIRMED}로 보고한다.
+     */
+    @Test
+    void 재배달에서_다시_붙이기가_실패하면_UNCONFIRMED다() {
+        internal.resultDown = 2;
+        String order = 주문서("", 장면(500));
+
+        assertThat(processor().process(order).kind()).isEqualTo(Disposition.Kind.DELAY);
+        assertThat(youtube.thumbnailsSet()).as("1회차에 이미 붙였다").hasSize(1);
+        youtube.thumbnailReplies.add("403 quotaExceeded");
+
+        Disposition 둘째 = processor().process(order);
+
+        assertThat(둘째).isEqualTo(Disposition.DELETE);
+        assertThat(internal.results).containsExactly("UPLOADED:vid1");
+        assertThat(internal.thumbnailResults).containsExactly("FAILED:THUMBNAIL_UNCONFIRMED");
+        assertThat(youtube.thumbnailCalls()).isEqualTo(2);
+        assertThat(youtube.videosCreated()).isEqualTo(1);
+    }
+
     /** 마지막 응답이 사라져 주소에 다시 물어 끝을 안 길(drive의 끝)에서도 썸네일이 붙는다. */
     @Test
     void 마지막_응답이_사라져도_썸네일을_붙인다() {
@@ -334,10 +357,11 @@ class UploadProcessorTest {
 
     /**
      * 끝을 아는 다른 자리(이어 갈 수 없을 때 결론 내기): 연동이 끊겨 토큰이 없는데 주소가 이미 다 받았다. 영상은 올림이다. 썸네일은
-     * auth에 한 번 더 물어 그래도 없으면 {@code THUMBNAIL_NO_TOKEN}.
+     * auth에 한 번 더 물어 그래도 없으면 못 붙인다. 이 배달은 바이트를 안 보냈으니(지난 배달이 영상을 끝냈다) 그때 붙었을 수 있어
+     * {@code THUMBNAIL_NO_TOKEN}이 아니라 {@code THUMBNAIL_UNCONFIRMED}로 보고한다.
      */
     @Test
-    void 토큰이_없고_주소가_이미_다_받았으면_올림에_NO_TOKEN이다() {
+    void 토큰이_없고_주소가_이미_다_받았으면_올림에_UNCONFIRMED다() {
         internal.accessToken = null;
         internal.refusal = "BROKEN";
         internal.sessionUri = youtube.openSession(SIZE);
@@ -347,7 +371,7 @@ class UploadProcessorTest {
 
         assertThat(d).isEqualTo(Disposition.DELETE);
         assertThat(internal.results).containsExactly("UPLOADED:vid1");
-        assertThat(internal.thumbnailResults).containsExactly("FAILED:THUMBNAIL_NO_TOKEN");
+        assertThat(internal.thumbnailResults).containsExactly("FAILED:THUMBNAIL_UNCONFIRMED");
         assertThat(internal.resolves).isEqualTo(2);
         assertThat(youtube.thumbnailCalls()).isZero();
     }

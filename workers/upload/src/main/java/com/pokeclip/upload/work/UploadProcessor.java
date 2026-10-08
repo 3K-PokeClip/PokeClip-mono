@@ -33,13 +33,17 @@ import java.util.stream.Stream;
  *
  * <p><b>썸네일(POK-291)은 영상이 끝난 뒤, clip에 올림을 보고하기 전에 붙인다</b>({@link #finish}). 보고를 먼저 하면 clip이 끝난 주문이
  * 되어, 붙이기 전에 멈춘 일꾼의 쪽지가 다시 와도 {@code proceed:false}라 영영 못 붙인다. 보고 전이면 다시 온 쪽지가 주소에 물어
- * 「다 받았다」를 듣고 이 자리로 다시 온다(같은 그림을 두 번 붙여도 해가 없다). 썸네일 실패는 쪽지를 남기지 않는다({@link ThumbnailStep}).
+ * 「다 받았다」를 듣고 이 자리로 다시 온다(같은 그림을 두 번 붙여도 해가 없다). 🔴 예외 하나: 두 번째 붙이기가 <b>실패</b>하면 첫 번째가
+ * 붙었는지 알 수 없다. 그래서 바이트를 안 보낸 배달의 썸네일 실패는 {@code THUMBNAIL_UNCONFIRMED}로 보고한다({@link #finish}).
+ * 썸네일 실패는 쪽지를 남기지 않는다({@link ThumbnailStep}).
  *
  * <p>토큰과 주소는 로그에 안 찍는다. 받은 파일은 끝나면 지운다.
  */
 public class UploadProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(UploadProcessor.class);
+    /** 이번에 못 붙였지만 지난 배달에서 붙었을 수 있다({@link #finish}). */
+    static final String THUMBNAIL_UNCONFIRMED = "THUMBNAIL_UNCONFIRMED";
 
     private final EnvelopeParser parser;
     private final ClipUploadApi clip;
@@ -138,7 +142,7 @@ public class UploadProcessor {
 
         if (!token.valid()) {
             // 주소는 있는데 토큰이 없다: 이어 갈 수는 없지만 끝났는지는 물어 볼 수 있다.
-            return settleWithoutContinuing(job, file, session, null, size, code, message);
+            return settleWithoutContinuing(job, file, session, null, size, false, code, message);
         }
 
         if (session == null) {
@@ -177,14 +181,17 @@ public class UploadProcessor {
     private Disposition drive(UploadEnvelope job, String session, String token, Path file, long size) {
         long id = job.uploadId();
         int failures = 0;
+        // 이 배달에서 바이트를 하나라도 보냈나. 안 보냈는데 끝났으면 지난 배달(또는 겹친 일꾼)이 영상을 끝낸 것이다(finish 주석).
+        boolean sentBytes = false;
         Progress progress = youtube.status(session, token, size);
         while (true) {
             switch (progress) {
                 case Progress.Done d -> {
-                    return finish(job, d.videoId(), file, token);
+                    return finish(job, d.videoId(), file, token, !sentBytes);
                 }
                 case Progress.Incomplete inc when inc.next() < size -> {
                     int length = (int) Math.min(chunkSize, size - inc.next());
+                    sentBytes = true;
                     progress = youtube.put(session, token, file, inc.next(), length, size);
                     if (!(progress instanceof Progress.Transient)) {
                         failures = 0;
@@ -214,7 +221,7 @@ public class UploadProcessor {
                     return Disposition.DELETE;
                 }
                 case Progress.Rejected r -> {
-                    return settleWithoutContinuing(job, file, session, token, size, "YOUTUBE_REJECTED",
+                    return settleWithoutContinuing(job, file, session, token, size, sentBytes, "YOUTUBE_REJECTED",
                             "유튜브가 바이트를 거절했다: HTTP " + r.status() + " " + r.reason());
                 }
             }
@@ -245,11 +252,11 @@ public class UploadProcessor {
      * 🔴 실패로 닫지 않는다: 자리가 비면 다시 올리고, 같은 주소로 다른 일꾼이 끝내면 영상이 둘 뜬다.
      */
     private Disposition settleWithoutContinuing(UploadEnvelope job, Path file, String session, String token, long size,
-                                                String code, String message) {
+                                                boolean sentBytes, String code, String message) {
         long id = job.uploadId();
         switch (youtube.status(session, token, size)) {
             case Progress.Done d -> {
-                return finish(job, d.videoId(), file, token);
+                return finish(job, d.videoId(), file, token, !sentBytes);
             }
             case Progress.Incomplete inc -> clip.checking(id, code, message + ". 유튜브는 덜 받았다고 한다");
             case Progress.Transient t -> {
@@ -266,10 +273,19 @@ public class UploadProcessor {
      * 올림을 보고한다(클래스 주석). 썸네일은 실패해도 쪽지를 남기지 않는다. 보고가 안 되면(clip 무응답) 지금처럼 쪽지를 남긴다:
      * 다시 오면 주소가 「다 받았다」고 해 이 자리로 다시 온다.
      *
-     * @param token 영상을 올린 토큰. 결론 내기 자리에서는 null일 수 있다
+     * <p>🔴 이 배달에서 바이트를 하나도 안 보냈는데 끝났으면(지난 배달이 영상을 끝냈다) 썸네일 실패를 그 코드 그대로 보내지 않고
+     * {@value #THUMBNAIL_UNCONFIRMED}로 보낸다. 지난 배달이 붙인 뒤 보고만 못 했을 수 있다: 그때의 SET은 clip에 닿은 적이 없어
+     * 이번 실패가 첫 값으로 남고, 보관함이 채널에 붙은 그림을 「못 붙였어요」로 안내한다(로컬 리뷰 1라운드).
+     *
+     * @param token          영상을 올린 토큰. 결론 내기 자리에서는 null일 수 있다
+     * @param finishedBefore 이 배달에서 바이트를 하나도 안 보냈다
      */
-    private Disposition finish(UploadEnvelope job, String videoId, Path file, String token) {
+    private Disposition finish(UploadEnvelope job, String videoId, Path file, String token, boolean finishedBefore) {
         ClipUploadApi.ThumbnailReport thumbnail = thumbnails.attach(job, videoId, file, token);
+        if (finishedBefore && "FAILED".equals(thumbnail.outcome())) {
+            log.info("upload.thumbnail_unconfirmed uploadId={} code={}", job.uploadId(), thumbnail.errorCode());
+            thumbnail = ClipUploadApi.ThumbnailReport.failed(THUMBNAIL_UNCONFIRMED);
+        }
         clip.uploaded(job.uploadId(), videoId, thumbnail);
         log.info("upload.done uploadId={} videoId={} thumbnail={}", job.uploadId(), videoId, thumbnail.outcome());
         return Disposition.DELETE;
