@@ -170,6 +170,14 @@ pokeclip:
     # dev compose가 비면 기동을 거부한다(:?). IAM 정책이 이 접두 안만 허용한다.
     ref-prefix: ${STREAM_KEY_SECRET_REF_PREFIX:pokeclip/local/stream-key/}
     region: ${AWS_REGION:ap-northeast-2}
+  withdrawal-purge:
+    # 탈퇴 뒤 clip·수집기에 「이 회원 기록을 지워라」를 보낸다(POK-256). 장부(withdrawal_purge_jobs)에 적고 받을 때까지
+    # 다시 보낸다. 두 주소가 비면 부팅이 거부된다 — 비어 있으면 탈퇴한 사람의 방송·채팅 기록이 조용히 남는다.
+    # compose 안에서는 http://clip:8081 · http://chat-collector:8083 이다.
+    clip-base-url: ${CLIP_BASE_URL:}
+    collector-base-url: ${COLLECTOR_BASE_URL:}
+    dispatch: true
+    interval: PT15S
   internal-api:
     # Media(1번)가 X-Internal-Token 헤더로 보낸다. 기본값을 빈 문자열로 두는
     # 이유는 JWT_SECRET과 같다 — 안 주면 리터럴이 바인딩돼 서버는 뜨고
