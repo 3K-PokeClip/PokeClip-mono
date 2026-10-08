@@ -2,6 +2,7 @@ package com.pokeclip.auth.youtube.api;
 
 import com.pokeclip.auth.youtube.YoutubeLinkService;
 import com.pokeclip.auth.youtube.YoutubeResolveResult;
+import com.pokeclip.auth.youtube.api.dto.YoutubeLinkCheckResponse;
 import com.pokeclip.auth.youtube.api.dto.YoutubeResolveRequest;
 import com.pokeclip.auth.youtube.api.dto.YoutubeResolveResponse;
 import jakarta.validation.Valid;
@@ -35,5 +36,15 @@ public class YoutubeLinkResolveController {
             log.info("auth.youtube.link.resolve_rejected userId={} reason={}", request.userId(), result.reason());
         }
         return YoutubeResolveResponse.from(result);
+    }
+
+    /**
+     * clip이 렌더 주문 전에 「이 스트리머가 유튜브를 연결했나」만 묻는다(POK-291). 판정은 resolve와 같고
+     * <b>토큰을 돌려주지 않고 갱신도 하지 않는다.</b> 늘 200인 이유도 resolve와 같다.
+     * 거절 로그를 안 남기는 이유: 렌더 주문마다 불려 미연동 스트리머면 같은 줄이 계속 쌓인다.
+     */
+    @PostMapping("/status")
+    public YoutubeLinkCheckResponse status(@Valid @RequestBody YoutubeResolveRequest request) {
+        return YoutubeLinkCheckResponse.from(service.check(request.userId()));
     }
 }
