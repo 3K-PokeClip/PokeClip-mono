@@ -67,7 +67,7 @@ export function Checks({ state }: { state: BridgeState }) {
           </li>
         ))}
       </ul>
-      {checks.res1080p === false ? <p class={styles.audioNote}>{RES_ADVISORY}</p> : null}
+      {checks.res1080p === false ? <p class={styles.note}>{RES_ADVISORY}</p> : null}
     </section>
   );
 }

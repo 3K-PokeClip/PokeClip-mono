@@ -651,7 +651,8 @@
 .trackSources[data-empty='true'] {
   color: var(--pc-color-text-disabled);
 }
-.audioNote {
+/* 카드 아래 작은 안내 문단 — 오디오 트랙·자동 배정 카드와 송출 점검 카드(해상도 권장)가 같이 쓴다 */
+.note {
   display: flex;
   align-items: flex-start;
   gap: 6px;
@@ -660,10 +661,10 @@
   line-height: 1.45;
   color: var(--pc-color-text-muted);
 }
-.audioNote[data-tone='warn'] {
+.note[data-tone='warn'] {
   color: var(--pc-color-warning);
 }
-.audioNote svg {
+.note svg {
   flex: none;
   margin-top: 2px;
 }
