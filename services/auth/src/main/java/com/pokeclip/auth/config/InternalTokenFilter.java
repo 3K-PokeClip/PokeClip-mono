@@ -12,7 +12,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
 /**
- * Media(Go)가 자기를 증명하는 유일한 수단. 이 필터가 지키는 엔드포인트는
+ * Media(Go)가 토큰 헤더로 자기를 증명하는 수단. 공용 체인은 X-Internal-Token을 보고,
+ * resolve 전용 출입증 체인(StreamKeyResolveSecurityConfig)은 같은 필터로 전용 헤더를
+ * 본다 — 그 체인은 출발지 잠금을 먼저 건다. 이 필터가 지키는 엔드포인트는
  * passphrase를 내려주므로, 뚫리면 전체 스트리머의 송출 경로가 열린다.
  *
  * <p>비교에 String.equals를 쓰지 않는다. 앞자리가 다르면 즉시 끝나므로 응답

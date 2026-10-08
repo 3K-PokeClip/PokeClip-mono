@@ -96,6 +96,8 @@ public class StreamKeyResolveSecurityConfig {
           "pokeclip.internal-api.stream-key-resolve.token 이 pokeclip.internal-api.token 과 같다:"
               + " 전용 토큰은 공용 토큰과 달라야 한다");
     }
+    // 아래 두 검사는 Boot 4.1.0 TomcatWebServerFactoryCustomizer.customizeRemoteIpValve 의 밸브 조건에서
+    // 왔다. Boot 판을 올리면 그 조건과 다시 대조한다.
     // 빈 값은 none 이 아니라 미설정(null)이다. 미설정이면 Boot 가 클라우드 플랫폼을 감지해 native 를 켤 수 있다.
     ForwardHeadersStrategy strategy = server.getForwardHeadersStrategy();
     if (strategy != ForwardHeadersStrategy.NONE) {

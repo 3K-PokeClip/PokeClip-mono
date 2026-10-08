@@ -48,6 +48,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultMatcher;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import java.lang.annotation.Annotation;
 import java.time.Duration;
@@ -128,6 +129,15 @@ class SecretLeakTest extends IntegrationTestSupport {
     private static final String YT_CHANNEL_ID = needle("youtube-channel");
 
     /**
+     * resolve 전용 출입증 바늘(계약4 4C). 토큰과 허용 대역은 설정(@DynamicPropertySource)에서 온다.
+     * 대역 바늘은 망 주소(.0)다 — 요청을 보내는 주소(.7)와 글자가 달라야, 설정 값이 샌 것과 요청자
+     * 주소가 찍힌 것이 갈린다. 주소는 문서용 대역(RFC 5737)이다.
+     */
+    private static final String RESOLVE_TOKEN = needle("stream-key-resolve-token");
+    private static final String RESOLVE_ALLOWED_NETWORK = "198.51.100.0";
+    private static final String RESOLVE_ALLOWED_SOURCE = "198.51.100.7";
+
+    /**
      * DEBUG에서 실제로 새는 것. 요청·응답 본문에 실려 다니는 둘뿐이다.
      * JWT 서명키는 본문에 실리지 않아 DEBUG에서도 안 샌다 — 그래서 여기 없다.
      */
@@ -202,6 +212,11 @@ class SecretLeakTest extends IntegrationTestSupport {
         // 「찾을 것이 없어서 통과」한다. 이 클래스는 이미 자기 @DynamicPropertySource를
         // 갖고 있으므로 컨텍스트가 더 늘지 않는다.
         PhotoLocalStackFixture.register(registry);
+        // resolve 전용 출입증도 연다. 닫혀 있으면 전용 헤더 요청이 401로 끝나 토큰·대역이 흐를 길이 없다.
+        // 같은 메서드에 더하므로 위와 같은 이유로 컨텍스트가 늘지 않는다.
+        registry.add("pokeclip.internal-api.stream-key-resolve.token", () -> RESOLVE_TOKEN);
+        registry.add("pokeclip.internal-api.stream-key-resolve.allowed-cidrs",
+                () -> RESOLVE_ALLOWED_NETWORK + "/24");
     }
 
     @AfterAll
@@ -391,6 +406,46 @@ class SecretLeakTest extends IntegrationTestSupport {
                     .doesNotContain("PairingCodeResponse[")
                     .doesNotContain("IssuedCode[");
         }
+    }
+
+    /**
+     * resolve 전용 출입증 체인(계약4 4C)의 세 갈래를 HTTP로 태운다 — 통과(200)·틀린 토큰(401)·
+     * 허용 밖 출발지(403). 찾을 것은 설정에서 온 토큰·대역과 요청이 내민 틀린 토큰이다. 지금은 출발지·토큰
+     * 필터에 로거가 없다 — "누가 막혔나 보자"며 출발지나 토큰을 찍는 변경이 여기서 걸린다.
+     */
+    @Test
+    void resolve_전용_출입증을_돌려도_토큰과_대역이_로그에_남지_않는다() throws Exception {
+        String wrongToken = needle("stream-key-resolve-wrong");
+        String outsideSource = "203.0.113.50";   // 허용 대역 밖(RFC 5737 문서용 주소)
+
+        try (LogCaptor captor = new LogCaptor()) {
+            mockMvc.perform(dedicatedResolve(RESOLVE_TOKEN, RESOLVE_ALLOWED_SOURCE))
+                    .andExpect(status().isOk());
+            mockMvc.perform(dedicatedResolve(wrongToken, RESOLVE_ALLOWED_SOURCE))
+                    .andExpect(status().isUnauthorized());
+            mockMvc.perform(dedicatedResolve(RESOLVE_TOKEN, outsideSource))
+                    .andExpect(status().isForbidden());
+
+            assertThat(captor.messages())
+                    .as("전용 체인을 지나 resolve까지 가지 못했다. 그러면 아무것도 검사하지 않은 것이다")
+                    .anyMatch(m -> m.startsWith("auth.streamkey.resolve_rejected"));
+            assertNoSecretsIn(captor, List.of(RESOLVE_TOKEN, wrongToken, RESOLVE_ALLOWED_NETWORK));
+            // 설정 record를 통째로 찍으면 토큰과 대역이 함께 나간다.
+            assertThat(String.join("\n", captor.messages()))
+                    .doesNotContain("StreamKeyResolveAccessProperties[");
+        }
+    }
+
+    /** 없는 키로 전용 헤더 resolve를 부른다. 없는 키면 컨트롤러가 거절 사유만 한 줄 남긴다. */
+    private static MockHttpServletRequestBuilder dedicatedResolve(String token, String source) {
+        return post("/internal/stream-keys/resolve")
+                .header("X-Stream-Key-Resolve-Token", token)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"streamid\":\"#!::r=7ZK3M9QW2XJ4NB6TC8VDFG5HRP,m=publish\"}")
+                .with(request -> {
+                    request.setRemoteAddr(source);
+                    return request;
+                });
     }
 
     /**

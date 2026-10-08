@@ -61,7 +61,8 @@ class SecretStoreMigrationBootTest extends IntegrationTestSupport {
     @Test
     void 대조_웹_컨텍스트에는_그_이름의_보안_체인이_있다() {
         assertThat(webContext.getBeanNamesForType(SecurityFilterChain.class))
-                .contains("securityFilterChain", "internalFilterChain", "streamKeyResolveFilterChain");
+                .contains("securityFilterChain", "internalFilterChain",
+                        "streamKeyResolveFilterChain");
         assertThat(WEB_AND_SCHEDULER_BEANS).contains(
                 beanNameOf(ChzzkTokenRefreshScheduler.class), beanNameOf(YoutubeRevocationCheckScheduler.class),
                 beanNameOf(RetentionCleanupScheduler.class));

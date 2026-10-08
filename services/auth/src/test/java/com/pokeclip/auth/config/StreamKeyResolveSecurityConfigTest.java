@@ -42,6 +42,12 @@ class StreamKeyResolveSecurityConfigTest extends IntegrationTestSupport {
 
   private static final String OUTSIDE_SOURCE = "203.0.113.50";
 
+  /**
+   * 앞 네 바이트(c6 33 64 07)가 {@link #ALLOWED_SOURCE}와 같은 IPv6 주소다. c000::/3 은 IETF 예약이라 누구에게도
+   * 배정되지 않는다. 문서용 IPv6(2001:db8::/32)는 앞 바이트가 32.1.13.184 라 문서용 IPv4 와 겹칠 수 없다.
+   */
+  private static final String IPV6_WITH_ALLOWED_LEADING_BYTES = "c633:6407::";
+
   private static final String UNKNOWN_KEY_BODY =
       "{\"streamid\":\"#!::r=7ZK3M9QW2XJ4NB6TC8VDFG5HRP,m=publish\"}";
 
@@ -85,6 +91,34 @@ class StreamKeyResolveSecurityConfigTest extends IntegrationTestSupport {
                   .header(RESOLVE_TOKEN_HEADER, RESOLVE_TOKEN)
                   .header("X-Forwarded-For", ALLOWED_SOURCE)
                   .with(from(OUTSIDE_SOURCE)))
+          .andExpect(status().isForbidden());
+    }
+
+    /**
+     * 판정은 출발지 다음 토큰이다. 허용 밖에서 오면 토큰이 틀려도 403 이다 — 순서가 뒤집히면 이 요청은 401 이
+     * 되어, 대역 밖에서도 응답 코드(401 · 403)로 토큰이 맞는지 가려 볼 수 있다.
+     */
+    @Test
+    void wrongTokenFromOutsideSource_isForbidden() throws Exception {
+      mockMvc
+          .perform(
+              resolve()
+                  .header(RESOLVE_TOKEN_HEADER, "wrong-" + RESOLVE_TOKEN)
+                  .with(from(OUTSIDE_SOURCE)))
+          .andExpect(status().isForbidden());
+    }
+
+    /**
+     * 원격 주소는 IPv4 만 받는다. 7.1 의 대역 매처는 주소 계열을 보지 않아 이 IPv6 주소가 허용 대역에 맞는다고
+     * 판정한다(spring-projects/spring-security#19733).
+     */
+    @Test
+    void ipv6SourceWithAllowedLeadingBytes_isForbidden() throws Exception {
+      mockMvc
+          .perform(
+              resolve()
+                  .header(RESOLVE_TOKEN_HEADER, RESOLVE_TOKEN)
+                  .with(from(IPV6_WITH_ALLOWED_LEADING_BYTES)))
           .andExpect(status().isForbidden());
     }
 

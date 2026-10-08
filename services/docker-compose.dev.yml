@@ -89,6 +89,11 @@ services:
       STREAM_KEY_SECRET_STORE_TYPE: ${STREAM_KEY_SECRET_STORE_TYPE:-postgres}
       STREAM_KEY_SECRET_RETIRE_FROM: ${STREAM_KEY_SECRET_RETIRE_FROM:-postgres}
       STREAM_KEY_SECRET_REF_PREFIX: ${STREAM_KEY_SECRET_REF_PREFIX:?}
+      # resolve 전용 출입증(계약4 4C — Media 가 X-Stream-Key-Resolve-Token 헤더로 부른다). :? 가 아니라 :- 다.
+      # 토큰이 비면 그 창구만 닫히고(전용 헤더 요청은 늘 401) auth 는 뜬다 — 값을 넣기 전에 머지돼도 배포가 auth 를
+      # 정상으로 다시 띄운다. 토큰을 넣으면 대역도 넣어야 하고, 아래 FORWARD_HEADERS_STRATEGY 가 none 이어야 부팅한다.
+      STREAM_KEY_RESOLVE_TOKEN: ${STREAM_KEY_RESOLVE_TOKEN:-}
+      STREAM_KEY_RESOLVE_ALLOWED_CIDRS: ${STREAM_KEY_RESOLVE_ALLOWED_CIDRS:-}
       # 프록시 헤더 신뢰(POK-91). dev는 앞단이 없어 none. 로드밸런서를 붙이는 날 native 로 바꾼다.
       # 기본값이 있어 DeploymentEnvVarsTest의 정규식엔 안 걸리고 「기본값 있는 배포 변수」 명부가 잡는다.
       FORWARD_HEADERS_STRATEGY: ${FORWARD_HEADERS_STRATEGY:-none}
