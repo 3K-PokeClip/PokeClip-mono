@@ -20,8 +20,8 @@ import java.util.regex.Pattern;
  * <p>보고에 키가 없다. 키는 clip이 대상으로 정한다({@link ThumbnailKind#keyOf}): 일꾼이 아무 키나 적어 남의 파일을 사진으로 내보내는
  * 길이 없다. 그래서 대상 번호의 모양만 본다. 방송 번호는 계약9의 글자 집합, 카드·영상 번호는 숫자다.
  *
- * <p>답: 200 {@code {"saved": true|false}}(false는 더 늦은 장면이 이미 있어 안 덮었다는 뜻이고 실패가 아니다) · 400 모양이 틀렸다.
- * 일꾼은 200이면 메시지를 지운다.
+ * <p>답: 200 {@code {"saved": true|false}}(false는 더 늦은 장면이 이미 있어 안 덮었다는 뜻이고 실패가 아니다) · 400 모양이 틀렸다 ·
+ * 404 대상이 없다(탈퇴로 지워졌다, POK-256). 일꾼은 200이면 메시지를 지우고, 404면 방금 올린 사진을 지운 뒤 메시지를 지운다.
  */
 @RestController
 public class ThumbnailReportController {
@@ -55,6 +55,9 @@ public class ThumbnailReportController {
             capturedAt = Instant.parse(body.capturedAt());
         } catch (NullPointerException | DateTimeParseException e) {
             return invalid("capturedAt");
+        }
+        if (!thumbnails.targetExists(kind.get(), body.targetId())) {
+            return ResponseEntity.status(404).body(Map.of("error", "thumbnail_target_not_found"));
         }
         boolean saved = thumbnails.saveCaptured(kind.get(), body.targetId(), capturedAt, clock.instant());
         return ResponseEntity.ok(Map.of("saved", saved));

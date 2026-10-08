@@ -364,8 +364,27 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
         assertThat(controller.report(new ThumbnailReportController.ReportBody("live", "a/b", at)).getStatusCode().value()).isEqualTo(400);
         assertThat(controller.report(new ThumbnailReportController.ReportBody("clip", "3", "어제")).getStatusCode().value()).isEqualTo(400);
 
-        assertThat(controller.report(new ThumbnailReportController.ReportBody("clip", "3", at)).getStatusCode().value()).isEqualTo(200);
-        assertThat(thumbnails.keysOf(ThumbnailKind.CLIP, List.of("3"))).containsEntry("3", "thumbnails/clip/3.jpg");
+        방송("S-report", "S-report", "ended", 시작, 시작.plusSeconds(60));
+        String clipId = Long.toString(완성_영상("S-report", 0, 10_000, "[]"));
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("clip", clipId, at)).getStatusCode().value()).isEqualTo(200);
+        assertThat(thumbnails.keysOf(ThumbnailKind.CLIP, List.of(clipId))).containsEntry(clipId, "thumbnails/clip/" + clipId + ".jpg");
+    }
+
+    /** 탈퇴로 지운 대상에 늦게 온 보고는 사진 줄을 되살리지 않는다(POK-256). 일꾼은 404를 받고 올린 사진을 지운다. */
+    @Test
+    void 대상이_없으면_404이고_사진_줄을_만들지_않는다() {
+        String at = now.toString();
+        방송("S-alive", "S-alive", "live", 시작, null);
+        String cardId = Long.toString(카드("S-alive", 1_000, 5));
+
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("live", "S-gone", at)).getStatusCode().value()).isEqualTo(404);
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("card", "999999", at)).getStatusCode().value()).isEqualTo(404);
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("clip", "999999", at)).getStatusCode().value()).isEqualTo(404);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM thumbnails", Integer.class)).isZero();
+
+        // 있는 대상은 그대로 받는다: 대상 확인이 종류를 헷갈리면(카드 번호로 영상 표를 보면) 여기서 갈린다.
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("live", "S-alive", at)).getStatusCode().value()).isEqualTo(200);
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("card", cardId, at)).getStatusCode().value()).isEqualTo(200);
     }
 
     // ── 도우미 ──────────────────────────────────────────────────────────────

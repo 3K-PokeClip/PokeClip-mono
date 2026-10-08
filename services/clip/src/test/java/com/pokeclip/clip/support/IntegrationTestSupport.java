@@ -110,7 +110,16 @@ public abstract class IntegrationTestSupport {
                         -- 계약-세그먼트인덱스 6-1(3번 승인 2026-09-01) 칸 둘. 렌더 주문(POK-125)이 playback_pdt로 조각을 찾는다.
                         session_id       text,
                         playback_pdt     timestamptz,
+                        -- 재생용 사본 키(계약 5-5, ADR-057). 탈퇴 정리(POK-256)가 원본과 같이 지운다.
+                        playback_s3_key  text,
                         PRIMARY KEY (stream_id, seq)
+                    )""");
+            // 1번 회차 장부의 칸 셋만. 탈퇴 정리(POK-256)가 회차 머리 파일(init) 키를 읽는다. 정본은 같은 ddl.go.
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS stream_sessions (
+                        session_id  text PRIMARY KEY,
+                        stream_id   text NOT NULL,
+                        init_s3_key text
                     )""");
         } catch (java.sql.SQLException e) {
             throw new IllegalStateException("baseline 시나리오 시드 실패", e);
@@ -135,6 +144,9 @@ public abstract class IntegrationTestSupport {
      */
     protected static void 방송과_카드를_비운다(JdbcTemplate jdbc) {
         jdbc.update("DELETE FROM stream_segments");
+        jdbc.update("DELETE FROM stream_sessions");
+        // 탈퇴 명부가 남으면 같은 스트리머 번호를 쓰는 다른 시험의 방송 편지가 버려진다(POK-256).
+        jdbc.update("DELETE FROM purged_streamers");
         jdbc.update("DELETE FROM thumbnails");
         jdbc.update("DELETE FROM render_job_events");
         jdbc.update("DELETE FROM render_jobs");

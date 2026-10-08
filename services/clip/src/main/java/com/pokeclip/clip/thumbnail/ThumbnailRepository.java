@@ -92,6 +92,19 @@ public class ThumbnailRepository {
      *
      * @return 줄이 바뀌었으면 {@code true}
      */
+    /**
+     * 사진을 붙일 대상이 아직 있나(POK-256). 탈퇴로 지운 방송·카드·영상에 늦게 온 보고가 사진 줄을 되살리지 않게 한다.
+     * 카드·영상 번호는 보고 문이 숫자만 받는다.
+     */
+    public boolean targetExists(ThumbnailKind kind, String targetId) {
+        String sql = switch (kind) {
+            case LIVE -> "SELECT EXISTS (SELECT 1 FROM broadcasts WHERE stream_id = ?)";
+            case CARD -> "SELECT EXISTS (SELECT 1 FROM jump_cards WHERE id = CAST(? AS bigint))";
+            case CLIP -> "SELECT EXISTS (SELECT 1 FROM clips WHERE id = CAST(? AS bigint))";
+        };
+        return Boolean.TRUE.equals(jdbc.queryForObject(sql, Boolean.class, targetId));
+    }
+
     public boolean saveCaptured(ThumbnailKind kind, String targetId, Instant capturedAt, Instant now) {
         return jdbc.update("""
                 INSERT INTO thumbnails (kind, target_id, s3_key, captured_at, updated_at)
