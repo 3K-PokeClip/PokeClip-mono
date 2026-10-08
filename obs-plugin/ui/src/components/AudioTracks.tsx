@@ -115,7 +115,13 @@ export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bri
               <select
                 class={styles.addSelect}
                 aria-label={`트랙 ${t.track}에 소스 넣기`}
-                title={canEdit ? `트랙 ${t.track}에 소스 넣기` : '자동 배정을 켜면 고를 수 있어요'}
+                title={
+                  canEdit
+                    ? `트랙 ${t.track}에 소스 넣기`
+                    : audio.deferred
+                      ? '방송·녹화가 끝나면 고를 수 있어요'
+                      : '자동 배정을 켜면 고를 수 있어요'
+                }
                 disabled={!canEdit || busy || candidates.length === 0}
                 value=""
                 onChange={(e) => {

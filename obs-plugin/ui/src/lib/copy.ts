@@ -60,7 +60,7 @@ export const REASON: Record<string, string> = {
   send_unavailable: '지금은 전송을 시작할 수 없어요.',
   not_retrying: '지금은 재시도 중이 아니에요.',
   // 독 전용 — 손 배정(POK-266)을 플러그인이 받지 않았다
-  audio_off: '자동 배정을 켜면 트랙을 고를 수 있어요.',
+  audio_off: '자동 배정이 적용 중일 때만 트랙을 고를 수 있어요.',
   unknown_source: '그 소스를 지금 찾을 수 없어요.',
   main_stream_track: '본방 트랙에는 넣을 수 없어요. OBS에서 직접 고르세요.',
   bad_track: '트랙은 2~6 사이여야 해요.',

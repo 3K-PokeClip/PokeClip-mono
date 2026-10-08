@@ -75,10 +75,14 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	rows->setHorizontalSpacing(6);
 	rows->setVerticalSpacing(2);
 	for (size_t i = 0; i < trackLabel_.size(); i++) {
+		// 한 트랙에 소스가 여럿이면(묶음, 자동 배정 전 OBS 기본) 이름이 길어진다 — 줄바꿈하고 콤보는 짧게 고정해
+		// 독의 최소 폭을 늘리지 않는다(내용 크기 콤보 + 한 줄 라벨이면 소스 6개에 700px이 됐다).
 		trackLabel_[i] = new QLabel(trackRows_);
 		trackLabel_[i]->setTextFormat(Qt::PlainText);
+		trackLabel_[i]->setWordWrap(true);
 		trackPick_[i] = new QComboBox(trackRows_);
-		trackPick_[i]->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+		trackPick_[i]->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+		trackPick_[i]->setMinimumContentsLength(8);
 		rows->addWidget(trackLabel_[i], static_cast<int>(i), 0, Qt::AlignVCenter);
 		rows->addWidget(trackPick_[i], static_cast<int>(i), 1);
 		connect(trackPick_[i], &QComboBox::activated, this, [this, i](int) { OnTrackPicked(i); });
