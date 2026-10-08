@@ -2,24 +2,28 @@ package com.pokeclip.upload.youtube;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 유튜브 이어 올리기(resumable upload) 규약 셋: 시작 · 「어디까지 받았나」 · 조각 보내기. 응답을 결과 종류로 나눠 돌려주고
+ * 유튜브 이어 올리기(resumable upload) 규약 셋: 시작 · 「어디까지 받았나」 · 조각 보내기. 그리고 다 올린 뒤의 썸네일 붙이기
+ * ({@code thumbnails.set}, POK-291). 응답을 결과 종류로 나눠 돌려주고
  * 무엇을 할지는 부른 쪽({@code UploadProcessor})이 정한다.
  *
  * <p><b>유튜브는 한 주소가 바이트를 다 받았을 때만 영상을 만든다.</b> 그래서 「주소에 물어 덜 받았다(308)」는 영상이 없다는
@@ -38,14 +42,16 @@ public class ResumableUploader {
     private final HttpClient http;
     private final ObjectMapper mapper;
     private final String startUrl;
+    private final String thumbnailUrl;
 
-    public ResumableUploader(ObjectMapper mapper, String startUrl) {
+    public ResumableUploader(ObjectMapper mapper, String startUrl, String thumbnailUrl) {
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
         this.mapper = mapper;
         this.startUrl = startUrl;
+        this.thumbnailUrl = thumbnailUrl;
     }
 
     /** 시작 결과. */
@@ -87,16 +93,25 @@ public class ResumableUploader {
         record Transient(String what) implements Progress { }
     }
 
-    public Start start(String accessToken, String title, String description, String privacyStatus, long size) {
+    /**
+     * @param privacyStatus 주문서 값(스트리머가 고른 것). 감사 전에는 유튜브가 무엇이든 비공개로 잠근다(ADR-084)
+     * @param tags          비었으면 칸을 아예 안 싣는다
+     */
+    public Start start(String accessToken, String title, String description, String privacyStatus, List<String> tags,
+                       boolean madeForKids, long size) {
         ObjectNode body = mapper.createObjectNode();
         ObjectNode snippet = body.putObject("snippet");
         snippet.put("title", title);
         snippet.put("description", description);
         // 20 = Gaming. MVP 게임은 LoL 하나다.
         snippet.put("categoryId", "20");
+        if (!tags.isEmpty()) {
+            ArrayNode array = snippet.putArray("tags");
+            tags.forEach(array::add);
+        }
         ObjectNode status = body.putObject("status");
         status.put("privacyStatus", privacyStatus);
-        status.put("selfDeclaredMadeForKids", false);
+        status.put("selfDeclaredMadeForKids", madeForKids);
         try {
             HttpResponse<String> response = http.send(HttpRequest.newBuilder(
                             URI.create(startUrl + "?uploadType=resumable&part=snippet,status"))
@@ -198,6 +213,78 @@ public class ResumableUploader {
             // 200인데 본문이 JSON이 아니다: 응답을 못 받은 것과 같게 다룬다(주소에 다시 묻는다).
             return new Progress.Transient(e.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * thumbnails.set 결과(POK-291). 어느 것도 영상을 바꾸지 않는다: 영상은 이미 올라갔다.
+     * 코드는 clip 썸네일 오류 칸({@code [A-Z0-9_]{1,32}})에 그대로 들어간다.
+     */
+    public sealed interface ThumbnailSet {
+        /** 붙었다. */
+        record Done() implements ThumbnailSet { }
+
+        /** 다시 해도 같다. */
+        record Failed(String code) implements ThumbnailSet { }
+
+        /** 잠깐 뒤 다시 해 볼 만하다(404·속도 제한·5xx·끊김). 짧은 재시도를 다 써도 안 되면 {@code code}로 남긴다. */
+        record Retry(String code) implements ThumbnailSet { }
+
+        /** 토큰이 안 먹혔다(401). 긴 업로드 동안 토큰이 끝났을 수 있다. */
+        record Unauthorized() implements ThumbnailSet { }
+    }
+
+    /** {@code POST {thumbnailUrl}?videoId=…&uploadType=media}. 본문이 그림 바이트다. */
+    public ThumbnailSet setThumbnail(String accessToken, String videoId, Path picture, String contentType) {
+        try {
+            HttpResponse<String> response = http.send(HttpRequest.newBuilder(URI.create(thumbnailUrl + "?videoId="
+                                    + URLEncoder.encode(videoId, StandardCharsets.UTF_8) + "&uploadType=media"))
+                            .timeout(Duration.ofSeconds(60))
+                            .header("Authorization", "Bearer " + accessToken)
+                            .header("Content-Type", contentType)
+                            .POST(HttpRequest.BodyPublishers.ofFile(picture))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            return classifyThumbnail(response.statusCode(), reason(response.body()));
+        } catch (IOException e) {
+            return new ThumbnailSet.Retry("THUMBNAIL_UNAVAILABLE");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new ThumbnailSet.Failed("THUMBNAIL_UNAVAILABLE");
+        }
+    }
+
+    /**
+     * 🔴 <b>사유를 상태 코드보다 먼저 본다.</b> 403 하나에 쿼터({@code quotaExceeded})와 권한 없음({@code forbidden}: 채널 전화 인증
+     * 미완 등)이 같이 온다. 상태 코드로 가르면 쿼터를 「권한 없음」으로 잘못 안내한다(시작 요청과 같은 교훈, PR #199 codex).
+     */
+    static ThumbnailSet classifyThumbnail(int code, String reason) {
+        if (code / 100 == 2) {
+            return new ThumbnailSet.Done();
+        }
+        if (QUOTA_REASONS.contains(reason)) {
+            return new ThumbnailSet.Failed("THUMBNAIL_QUOTA_EXCEEDED");
+        }
+        if (code == 429 || RATE_REASONS.contains(reason)) {
+            return new ThumbnailSet.Retry("THUMBNAIL_RATE_LIMITED");
+        }
+        if (code == 401) {
+            return new ThumbnailSet.Unauthorized();
+        }
+        if (code == 403) {
+            return new ThumbnailSet.Failed("THUMBNAIL_FORBIDDEN");
+        }
+        if (code == 404) {
+            // 막 올린 영상이 잠깐 안 보일 수 있다.
+            return new ThumbnailSet.Retry("THUMBNAIL_VIDEO_NOT_FOUND");
+        }
+        if (code / 100 == 5) {
+            return new ThumbnailSet.Retry("THUMBNAIL_UNAVAILABLE");
+        }
+        if (code == 400 || code == 413 || code == 415) {
+            // invalidImage·mediaBodyRequired. 그림 크기·형식이 안 맞는 것도 여기다.
+            return new ThumbnailSet.Failed("THUMBNAIL_INVALID_IMAGE");
+        }
+        return new ThumbnailSet.Failed("THUMBNAIL_UNAVAILABLE");
     }
 
     static long nextOffset(String range) {

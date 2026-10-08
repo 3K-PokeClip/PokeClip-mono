@@ -3,10 +3,13 @@ package com.pokeclip.upload;
 import com.pokeclip.upload.auth.YoutubeTokenClient;
 import com.pokeclip.upload.clip.ClipUploadApi;
 import com.pokeclip.upload.job.EnvelopeParser;
+import com.pokeclip.upload.media.ProcessRunner;
+import com.pokeclip.upload.media.SceneExtractor;
 import com.pokeclip.upload.storage.S3Download;
 import com.pokeclip.upload.work.InternalHttp;
 import com.pokeclip.upload.work.QueueWorker;
 import com.pokeclip.upload.work.Sleeper;
+import com.pokeclip.upload.work.ThumbnailStep;
 import com.pokeclip.upload.work.UploadProcessor;
 import com.pokeclip.upload.youtube.ResumableUploader;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
@@ -20,6 +23,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.List;
 
 /** 부품 조립. AWS 클라이언트마다 HTTP 스택을 URL connection으로 못박는다(렌더 일꾼과 같은 이유). */
 @Configuration
@@ -49,13 +53,22 @@ class WorkerConfiguration {
         return builder.build();
     }
 
+    /** 썸네일이 잠깐 안 될 때(404·속도 제한·5xx) 일꾼 안에서 다시 해 보는 간격. 세 번까지. 쪽지는 남기지 않는다. */
+    static final List<Duration> THUMBNAIL_RETRY_DELAYS = List.of(Duration.ofSeconds(2), Duration.ofSeconds(5));
+    /** ffprobe·ffmpeg 한 번의 시한. 넘기면 썸네일 실패로 본다. */
+    static final Duration FFMPEG_TIMEOUT = Duration.ofSeconds(30);
+
     @Bean
     UploadProcessor uploadProcessor(UploadProperties p, ObjectMapper mapper, S3Client s3) {
         InternalHttp http = new InternalHttp(mapper, p.internalToken(), p.retryDelays(), Sleeper.real());
-        return new UploadProcessor(new EnvelopeParser(mapper), new ClipUploadApi(http, p.clipBaseUrl()),
-                new YoutubeTokenClient(http, p.authBaseUrl()), new S3Download(s3),
-                new ResumableUploader(mapper, p.youtubeUploadUrl()), p.workDir(), p.chunkSize().toBytes(),
-                p.retryDelays(), Sleeper.real());
+        YoutubeTokenClient auth = new YoutubeTokenClient(http, p.authBaseUrl());
+        S3Download storage = new S3Download(s3);
+        ResumableUploader youtube = new ResumableUploader(mapper, p.youtubeUploadUrl(), p.youtubeThumbnailUrl());
+        ThumbnailStep thumbnails = new ThumbnailStep(
+                new SceneExtractor(new ProcessRunner(), p.ffmpegPath(), p.ffprobePath(), FFMPEG_TIMEOUT),
+                storage, youtube, auth, p.workDir(), THUMBNAIL_RETRY_DELAYS, Sleeper.real());
+        return new UploadProcessor(new EnvelopeParser(mapper), new ClipUploadApi(http, p.clipBaseUrl()), auth,
+                storage, youtube, thumbnails, p.workDir(), p.chunkSize().toBytes(), p.retryDelays(), Sleeper.real());
     }
 
     /** 줄 주소가 비면 줄을 안 본다. 부품만 띄워 보는 로컬 기동용. */
