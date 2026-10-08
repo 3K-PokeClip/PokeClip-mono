@@ -33,9 +33,13 @@ public:
 	// 예약된 재시도도 함께 그만둔다.
 	// intentional: 스트리머의 멈춤 조작(OBS 「방송 종료」)이다 — A3(4D) 종료 신호를 보낼지 가른다(계약4 3-1).
 	// 사유를 든 정지는 조작이 아니다. 본방이 스스로 끊겨 끝난 경우(STOPPING 없이 STOPPED)도 아니다.
-	void Stop(const char *reason = nullptr, bool intentional = false);
+	// deferIntent: 출력이 없는 구간(재시도 대기·「재시도 중지」 뒤)에서 본방 STOPPING이 왔는데 조작인지 아직 모른다 —
+	// 판정을 미루고 STOPPED에서 본방 stop 코드를 본 뒤 Stop(…, intentional)을 다시 부른다(공유 인코더 실패는 본방
+	// stop 코드 ENCODE_ERROR로 온다. 출력이 있을 때는 우리 출력 stopping의 스레드로 가른다 — stopInternal_).
+	void Stop(const char *reason = nullptr, bool intentional = false, bool deferIntent = false);
 	void ForceStop(bool intentional = false);
 	bool IsActive() const;
+	bool HasOutput() const { return output_ != nullptr; } // UI 스레드
 	void PollStats();
 	void Release();
 

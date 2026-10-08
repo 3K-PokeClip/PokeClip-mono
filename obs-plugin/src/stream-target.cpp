@@ -261,7 +261,7 @@ bool StreamTarget::BeginAttempt(const PluginConfig &config, std::string &errorCo
 	return true;
 }
 
-void StreamTarget::Stop(const char *reason, bool intentional)
+void StreamTarget::Stop(const char *reason, bool intentional, bool deferIntent)
 {
 	// 방송 구간이 끝났다 — 예약된 재시도부터 버린다. 다음 시도를 기다리던 중이면 접속 중인 출력이 없으므로
 	// 여기서 끝난다(끊긴 출력이 아직 풀리는 중이면 ReleaseWhenStopped가 마저 푼다).
@@ -273,9 +273,12 @@ void StreamTarget::Stop(const char *reason, bool intentional)
 	stopIntentional_ = intentional && !reason;
 	if (wasPending) {
 		// 출력이 없으니 stop 신호도 없다 — 멈춘 순간은 지금이고, 마지막 연결은 outageAt_에 끊긴 것이다(자동 재연결 중의
-		// 「방송 종료」도 보낸다 — 계약4 3-1).
-		DecideEndSignal(stopIntentional_, false, std::chrono::steady_clock::now(),
-				reason ? "stopped_with_reason" : "main_stop");
+		// 「방송 종료」도 보낸다 — 계약4 3-1). 조작인지 아직 모르면(deferIntent) 구간을 열어 둔 채 STOPPED를 기다린다.
+		if (deferIntent)
+			obs_log(LOG_INFO, "end-signal: intent deferred to main STOPPED (no output)");
+		else
+			DecideEndSignal(stopIntentional_, false, std::chrono::steady_clock::now(),
+					reason ? "stopped_with_reason" : "main_stop");
 		AppState::Instance().Mutate([reason](StateSnapshot &s) {
 			s.phase = reason ? StreamPhase::Error : StreamPhase::Idle;
 			s.errorCode = reason ? reason : "";
@@ -288,7 +291,8 @@ void StreamTarget::Stop(const char *reason, bool intentional)
 	if (!output_) {
 		// 출력이 없다. 「재시도 중지」로 구간을 열어 둔 채 멈춰 있었으면(연결 이력 있음, 아직 판정 안 함) 지금의 조작이
 		// 그 구간의 끝이다 — 마지막 연결은 outageAt_에 끊겼다. 이미 판정한 구간은 endSignalDecided_가 거른다.
-		if (!endSignalDecided_ && everConnected_)
+		// 조작인지 아직 모르면(deferIntent) STOPPED에서 다시 온다.
+		if (!endSignalDecided_ && everConnected_ && !deferIntent)
 			DecideEndSignal(stopIntentional_, false, std::chrono::steady_clock::now(),
 					reason ? "stopped_with_reason" : "main_stop");
 		return;
@@ -323,7 +327,9 @@ void StreamTarget::ForceStop(bool intentional)
 	// 이미 정지를 요청한 출력이면 그 정지의 의도를 따른다(stop 신호를 기다리던 중에 OBS가 닫혔다). 아니면 이번 강제
 	// 멈춤의 의도다. 멈춘 순간은 Release()가 돌아온 때 — 강제 멈춤도 출력이 실제로 멈춘 때가 기준이다(계약4 3절).
 	const bool requested = stopRequested_; // Release()가 지우므로 먼저 잡는다 — 판정과 로그 trigger가 같은 근거를 쓴다
-	const bool intent = requested ? stopIntentional_ : intentional;
+	// 먼저 들어온 정지가 본방 정지였으면 그 의도를 따른다. 「재시도 중지」가 건 정지(stopKeepsFailure_)는 구간을 닫지
+	// 않는 정지라 이번 강제 멈춤(OBS 닫기)의 의도가 끝을 정한다.
+	const bool intent = (requested && !stopKeepsFailure_) ? stopIntentional_ : intentional;
 	const bool hadOutput = output_ != nullptr;
 	// 「재시도 중지」로 열어 둔 구간(출력도 대기도 없지만 연결 이력이 있고 아직 판정 안 함)도 이번 멈춤이 끝이다.
 	const bool openSegment = !endSignalDecided_ && everConnected_;
@@ -741,6 +747,10 @@ void StreamTarget::HandleStop(uint64_t generation, int code, const std::string &
 		// 마지막 연결 기준으로 판정한다(Stop·ForceStop의 열린 구간 가지).
 		const bool internalStop = stopInternal_.load();
 		if (requested && keepFailure) {
+			// 이 출력이 붙었다 멈춘 것이면(접속 중 중지가 성공으로 끝남) 그 연결의 끝을 적어 둔다 — 뒤에 「방송 종료」가
+			// 열린 구간을 닫을 때 connectionDurationMs가 이 연결 기준이 되게.
+			if (wasConnected)
+				outageAt_ = stopAt;
 			obs_log(LOG_INFO, "end-signal: deferred on stop_retry");
 		} else {
 			DecideEndSignal(requested && stopIntentional_ && !internalStop, wasConnected, stopAt,
