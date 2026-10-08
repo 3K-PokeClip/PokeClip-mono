@@ -133,7 +133,8 @@ set -a && . ../.env && set +a
 | `chat-collector` | `./gradlew :chat-collector:bootRun` | http://localhost:8083/actuator/health |
 | `chat-detector` | `./gradlew :chat-detector:bootRun` | http://localhost:8084/actuator/health |
 
-**`auth`가 부팅 검증·배포 명부로 보는 환경변수는 스물여덟이다.** 스물넷은 다섯 갈래로 나뉘고 갈래마다 「없으면 어떻게 되나」가 다르다.
+**`auth`가 부팅 검증·배포 명부로 보는 환경변수는 스물여덟이다.**
+스물넷은 다섯 갈래로 나뉘고 갈래마다 「없으면 어떻게 되나」가 다르다.
 나머지 넷(`FORWARD_HEADERS_STRATEGY`와 스트림키 암호 저장소 셋)은 기본값이 있는 배포 변수라 표 아래에 따로 적는다.
 이 셈에 안 드는 셋이 더 있다: `DB_HOST`·`DB_PORT`(기본 `localhost`·`5432`, `.env`에 없어 기본값을 남겼다)·`AWS_REGION`(기본 `ap-northeast-2`).
 셋 다 없어도 뜨고 검사 대상도 아니라 세지 않는다.
@@ -150,7 +151,8 @@ compose는 `${GOOGLE_REDIRECT_URI:?}`로 **없으면 컨테이너가 아예 안 
 | **탈퇴 정리 알림 주소 둘**(POK-256) | `CLIP_BASE_URL` · `COLLECTOR_BASE_URL` | **부팅 실패**(`@NotBlank`). 비어 있으면 탈퇴한 사람의 방송·채팅 기록이 **조용히 남기** 때문이다 | 서버끼리 붙는 주소다. compose 안은 기본값(`http://clip:8081` · `http://chat-collector:8083`)이라 `.env`는 비워 둔다. 로컬은 `http://localhost:8081` · `:8083` |
 | **resolve 전용 출입증 둘**(계약4 4C) | `STREAM_KEY_RESOLVE_TOKEN` · `STREAM_KEY_RESOLVE_ALLOWED_CIDRS` | **그냥 뜬다. 전용 창구만 닫힌다** — 토큰이 없으면 전용 헤더(`X-Stream-Key-Resolve-Token`) resolve 요청은 늘 401이다. 공용 `X-Internal-Token` resolve는 그대로다. 🔴 토큰을 채우면 조건이 붙는다 — 대역이 비었거나 IPv4 CIDR가 아니거나, `FORWARD_HEADERS_STRATEGY`가 `none`이 아니거나, 톰캣 remoteip 헤더 속성이 있거나, 토큰이 `INTERNAL_API_TOKEN`과 같으면 **부팅 실패** | 토큰은 `openssl rand -hex 32`, 대역은 media-dev 사설 주소 `/32` 하나다. dev는 1번이 두 박스(auth `.env` · media-dev)에 같은 토큰을 한 자리에서 넣는다. 운영 auth는 이 창구를 안 써서 비워 둔다 |
 
-**스물다섯 번째: `FORWARD_HEADERS_STRATEGY`(POK-89, 선택).** 없으면 `none`(프록시 헤더를 안 믿는다). `native`면
+**스물다섯 번째: `FORWARD_HEADERS_STRATEGY`(POK-89, 선택).**
+없으면 `none`(프록시 헤더를 안 믿는다). `native`면
 사설망·루프백 소켓에서 온 요청의 `X-Forwarded-For`를 요청자 IP로 채택한다(아래 「운영 전 잔불 정리」 절).
 🔴 운영 ECS 태스크 정의에는 `native`를 반드시 넣는다(명시 `none`이 Boot의 ECS 자동 감지를 끈다). 비우지 않는다
 (빈 값은 `none`이 아니라 Boot 유추다). 둘 다 그 절에 있다.
@@ -861,8 +863,10 @@ preflight에서 막혀 **창구는 멀쩡한데 브라우저만 못 부른다.**
 **세 번째 `permitAll`**이라 같은 함정을 공유한다 — **이 경로의 실패 로그에 건수로 알람을 걸면 안 된다.**
 
 `resolve`는 **키가 틀려도 HTTP 200에 `valid:false`**로 답한다. Media에게
-"키가 틀림"(연결 거절)과 "Auth 장애"(판단 불가)는 조치가 정반대라 둘 다 4xx면
+"키가 틀림"(연결 거절)과 "Auth 장애"(판단 불가)는 원인과 후속 조치가 다르다(키가 틀림은
+키를 고쳐야 하고, Auth 장애는 Auth가 살아나면 재시도로 풀린다). 둘 다 4xx면
 Go 쪽에서 구분이 안 된다.
+Media의 응답기(새 송출 연결을 받을지 판정하는 쪽)는 두 경우 모두 그 새 연결을 거부한다.
 
 **`resolve`의 인증은 두 갈래다**(계약4 4C). 전용 헤더 `X-Stream-Key-Resolve-Token`이 붙은 요청은
 전용 체인만 본다 — 출발지(소켓 주소. `X-Forwarded-For`는 안 본다)가 허용 대역 밖이거나 IPv4가 아니면 403,

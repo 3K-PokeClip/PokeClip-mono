@@ -95,6 +95,8 @@ services:
       STREAM_KEY_RESOLVE_TOKEN: ${STREAM_KEY_RESOLVE_TOKEN:-}
       STREAM_KEY_RESOLVE_ALLOWED_CIDRS: ${STREAM_KEY_RESOLVE_ALLOWED_CIDRS:-}
       # 프록시 헤더 신뢰(POK-91). dev는 앞단이 없어 none. 로드밸런서를 붙이는 날 native 로 바꾼다.
+      # 위 resolve 전용 토큰(STREAM_KEY_RESOLVE_TOKEN)이 있으면 native 로 바꿀 수 없다(부팅 검사) —
+      # 토큰부터 비우거나 Media 쪽과 먼저 맞춘다(토큰을 비우면 전용 창구가 닫혀 Media 응답기의 새 송출이 모두 거부된다).
       # 기본값이 있어 DeploymentEnvVarsTest의 정규식엔 안 걸리고 「기본값 있는 배포 변수」 명부가 잡는다.
       FORWARD_HEADERS_STRATEGY: ${FORWARD_HEADERS_STRATEGY:-none}
       # 탈퇴 정리 알림(POK-256)을 보낼 두 서버. 비면 auth 부팅이 거부된다. 기본값이 compose 안 주소라 .env는 비워 둔다.
