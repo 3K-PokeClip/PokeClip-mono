@@ -175,14 +175,16 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         assertThat(count("broadcasts WHERE stream_id = 'S-again'")).isZero();
     }
 
-    /** 탈퇴 순간 붙어 있던 녹화가 정리 뒤에 조각 줄을 더해도 하루 동안은 다시 잡는다(PR #220 codex P1). */
+    /** 탈퇴 순간 붙어 있던 녹화가 정리 뒤에 조각 줄을 더해도 다시 잡는다(PR #220 codex 1·2판). */
     @Test
-    void 끝난_뒤_녹화_조각_줄이_다시_생기면_정리기가_다시_잡는다() {
+    void 끝난_뒤_녹화_조각_줄이_다시_생기면_기한_없이_정리기가_다시_잡는다() {
         심는다(탈퇴자, "S-gone", "K-gone");
         store.request(탈퇴자, Instant.now());
         purger(new FakeStorage()).purge(탈퇴자);
         assertThat(store.due(10)).isEmpty();
 
+        // 끝난 지 오래여도 잡는다(기한을 두면 그보다 오래 이어진 녹화의 줄이 남는다, codex 2판).
+        jdbc.update("UPDATE purged_streamers SET completed_at = now() - interval '3 days' WHERE streamer_id = ?", 탈퇴자);
         jdbc.update("INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key) "
                 + "VALUES ('K-gone', 99, 0, now(), 2000, 'streams/K-gone/99.m4s')");
 

@@ -25,10 +25,8 @@ public class ChatPurgeConfiguration {
     @Bean
     ChannelPurger channelPurger(ChatPurgeStore store, ArchivePurge archive, SessionRegistry sessions,
                                 ChatPurgeProperties properties) {
-        // 그 채널을 걷는 세션을 닫는다. 늦게 온 시작 편지는 auth가 연동을 닫아 다시 못 연다(연동 조회가 거절된다).
-        return new ChannelPurger(store, archive, channelId -> sessions.activeSessions().stream()
-                .filter(s -> channelId.equals(s.channelId()))
-                .forEach(s -> sessions.close(s.streamId())), properties, Instant::now);
+        // 그 채널을 걷는 세션을 닫는다(탈퇴 시각 전에 시작한 것만). 늦게 온 시작 편지는 auth가 연동을 닫아 다시 못 연다.
+        return new ChannelPurger(store, archive, sessions::closeChannel, properties, Instant::now);
     }
 
     @Bean

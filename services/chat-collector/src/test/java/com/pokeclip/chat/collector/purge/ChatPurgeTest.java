@@ -72,7 +72,7 @@ class ChatPurgeTest extends IntegrationTestSupport {
         }
         // 원본도 같은 창(탈퇴 + 10분)으로 자른다.
         assertThat(archived).containsExactly(탈퇴_채널 + "@" + 요청.plus(Duration.ofMinutes(10)));
-        assertThat(stopped).containsExactly(탈퇴_채널);
+        assertThat(stopped).as("탈퇴 시각 전에 시작한 세션만 닫는다").containsExactly(탈퇴_채널 + "@" + 요청);
         // 방송 번호 → 스트림키 짝도 지운다(그 방송의 채팅이 이 채널 것이었다).
         assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_ingest_keys WHERE stream_id = 'purge-stream'",
                 Integer.class)).isZero();
@@ -194,7 +194,7 @@ class ChatPurgeTest extends IntegrationTestSupport {
 
     private ChannelPurger purger(ArchivePurge archive, Instant now) {
         AtomicReference<Instant> clock = new AtomicReference<>(now);
-        return new ChannelPurger(store, archive, stopped::add, properties, clock::get);
+        return new ChannelPurger(store, archive, (c, since) -> stopped.add(c + "@" + since), properties, clock::get);
     }
 
     private Due due(String channelId) {

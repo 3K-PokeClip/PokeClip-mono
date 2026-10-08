@@ -44,11 +44,11 @@ public class StreamerPurgeStore {
      * 들어온 편지)다. 둘째 갈래가 없으면 그런 방송은 영영 남는다.
      */
     public List<String> due(int limit) {
-        // 끝난 뒤 하루 동안은 녹화 조각 줄이 다시 생겼는지도 본다. 영상 서버는 장부를 따로 쓰므로, 탈퇴 순간 붙어 있던
+        // 끝난 뒤에도 녹화 조각 줄이 다시 생겼는지 본다(기한 없이). 영상 서버는 장부를 따로 쓰므로, 탈퇴 순간 붙어 있던
         // 녹화가 정리 뒤에 줄을 더할 수 있다(PR #220 codex P1). 장부가 없는 배포(media 없음)에서는 그 갈래를 뺀다.
         String lateSegments = tableExists("stream_segments")
-                ? " OR (p.completed_at > now() - interval '1 day' AND EXISTS "
-                + "(SELECT 1 FROM stream_segments s WHERE s.stream_id = ANY(p.segment_keys)))"
+                // 기한을 두면 탈퇴 뒤 그보다 오래 이어진 녹화의 줄이 영영 남는다(PR #220 codex 2판). 열쇠마다 PK 색인 한 번이라 싸다.
+                ? " OR EXISTS (SELECT 1 FROM stream_segments s WHERE s.stream_id = ANY(p.segment_keys))"
                 : "";
         return jdbc.queryForList("""
                 SELECT p.streamer_id FROM purged_streamers p

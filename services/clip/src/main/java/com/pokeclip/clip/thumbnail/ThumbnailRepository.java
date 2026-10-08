@@ -61,7 +61,12 @@ public class ThumbnailRepository {
      * 주문을 냈다고 적는다(card·clip). 이미 올라온 사진은 건드리지 않는다. 다시 주문할지는 {@code attempts}·{@code requested_at}으로
      * 순회기의 조회가 정한다.
      */
+    @Transactional
     public void markRequested(ThumbnailKind kind, String targetId, Instant now) {
+        // 대상 줄을 잠근 채 있을 때만 적는다(POK-256). 정리기가 고른 직후 탈퇴 정리가 대상을 지우면 빈 사진 줄이 되살아난다.
+        if (!lockTarget(kind, targetId)) {
+            return;
+        }
         jdbc.update("""
                 INSERT INTO thumbnails (kind, target_id, requested_at, attempts, updated_at)
                 VALUES (?, ?, ?, 1, ?)
@@ -73,7 +78,11 @@ public class ThumbnailRepository {
     }
 
     /** 찍을 것이 없는 대상(영상 산출물이 없는 완성 영상)을 다시 안 보게 횟수를 다 쓴 것으로 적는다. */
+    @Transactional
     public void markGivenUp(ThumbnailKind kind, String targetId, int attempts, Instant now) {
+        if (!lockTarget(kind, targetId)) {
+            return;
+        }
         jdbc.update("""
                 INSERT INTO thumbnails (kind, target_id, requested_at, attempts, updated_at)
                 VALUES (?, ?, ?, ?, ?)
