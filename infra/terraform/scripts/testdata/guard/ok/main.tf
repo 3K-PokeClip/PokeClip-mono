@@ -81,3 +81,16 @@ resource "aws_security_group_rule" "legacy_name_only" {
 locals {
   resourceaws_secretsmanager_secret_version = "example"
 }
+
+# 여러 줄 for 식의 결과 줄이 ingress 여도 속성 이름이 아니라 값이다.
+locals {
+  ports = ["80", "443"]
+}
+
+resource "aws_security_group" "for_expr" {
+  name = "example-for"
+  description = join(",", [
+    for ingress in local.ports :
+    ingress
+  ])
+}

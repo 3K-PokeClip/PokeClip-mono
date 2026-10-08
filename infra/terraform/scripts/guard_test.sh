@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 #
-# guard.sh 의 규칙을 fixture 로 시험한다.
+# guard.sh 와 그 Rego 정책을 시험한다.
 #
+# 먼저 `conftest verify` 로 정책 단위 시험(policy/guard/*_test.rego)을 돌린다.
+# 그다음 fixture 로 guard.sh 를 끝에서 끝까지 돌린다.
 # testdata/guard/bad_<규칙>[_<변형>]/ 는 그 규칙 하나만 어기는 Terraform 트리다.
-# guard.sh 가 그 트리에서 실패하고, 출력에 그 규칙 이름이 나와야 통과다.
-# testdata/guard/ok/ 는 모든 규칙을 지키는 트리라 guard.sh 가 통과해야 한다.
-# testdata/guard/err_<이름>/ 은 검사할 수 없는 트리라 guard.sh 가 종료 코드 2
-# 로 실패해야 한다(fail-closed). 읽을 수 없는 파일은 git 에 둘 수 없어 시험이
-# 임시 디렉터리에 만든다. `terraform fmt -recursive` 를 깨는 fixture(HCL 로
-# 틀린 것 · fmt 가 고쳐 쓸 꼴)는 *.tf.in 으로 두고, 시험이 임시 디렉터리에
-# *.tf 로 복사해 돌린다.
-# 경로를 겨누는 규칙(R4 등)의 fixture 는 그 경로를 트리 안에 그대로 둔다.
+# guard.sh 가 그 트리에서 종료 1 로 실패하고, 출력에 그 규칙 이름이 나와야
+# 통과다. testdata/guard/ok/ 는 모든 규칙을 지키는 트리라 guard.sh 가 통과해야
+# 한다. testdata/guard/err_<이름>/ 은 Terraform 도 받지 않는(파싱되지 않는)
+# 트리라 guard.sh 가 종료 코드 2 로 실패해야 한다(fail-closed). 읽을 수 없는
+# 파일은 git 에 둘 수 없어 시험이 임시 디렉터리에 만든다.
+# `terraform fmt -recursive` 를 깨는 fixture(파싱 오류 · fmt 가 고쳐 쓸 꼴)는
+# *.tf.in 으로 두고, 시험이 임시 디렉터리에 *.tf 로 복사해 돌린다.
+# 경로를 겨누는 규칙(R4 · R11)의 fixture 는 그 경로를 트리 안에 그대로 둔다.
 #
 # 사용: bash infra/terraform/scripts/guard_test.sh
 # 종료 코드: 0 전부 통과 / 1 하나라도 실패
@@ -21,6 +23,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly GUARD="${SCRIPT_DIR}/guard.sh"
 readonly FIXTURES="${SCRIPT_DIR}/testdata/guard"
+readonly POLICY_DIR="${SCRIPT_DIR}/../policy/guard"
 
 failures=0
 run_output=""
@@ -191,9 +194,56 @@ expect_no_tmpfile_dependency() {
   echo "ok: no-tmpdir → R1 위반"
 }
 
+#######################################
+# 정책 단위 시험(conftest verify)을 돌린다.
+#######################################
+expect_policy_tests_pass() {
+  local output
+  if ! output="$(conftest verify --policy "${POLICY_DIR}" --strict \
+    --show-builtin-errors --no-color 2>&1)"; then
+    fail "conftest verify 실패 — ${output}"
+    return
+  fi
+  echo "ok: conftest verify → ${output##*$'\n'}"
+}
+
+#######################################
+# conftest 가 없으면 위반 0 으로 넘어가지 않고 종료 2 로 멈추는지 본다.
+# PATH 에서 conftest 가 든 디렉터리만 뺀다.
+#######################################
+expect_missing_conftest_error() {
+  local conftest_dir path_without dir output status
+  local old_ifs="${IFS}"
+  conftest_dir="$(dirname -- "$(command -v conftest)")"
+  path_without=""
+  IFS=":"
+  for dir in ${PATH}; do
+    [[ "${dir}" == "${conftest_dir}" ]] && continue
+    path_without="${path_without:+${path_without}:}${dir}"
+  done
+  IFS="${old_ifs}"
+  if PATH="${path_without}" command -v conftest >/dev/null 2>&1; then
+    echo "skip: no-conftest(PATH 의 다른 곳에도 conftest 가 있음)"
+    return
+  fi
+  output="$(PATH="${path_without}" "${BASH}" "${GUARD}" \
+    "${FIXTURES}/bad_R1" 2>&1)"
+  status=$?
+  if [[ "${status}" -ne 2 ]]; then
+    fail "no-conftest: 종료 코드 2 를 기대했으나 ${status} — ${output}"
+    return
+  fi
+  echo "ok: no-conftest → 검사 불가(종료 2)"
+}
+
 main() {
   local dir
   local count=0
+  if ! command -v conftest >/dev/null 2>&1; then
+    echo "guard_test: conftest 가 없습니다. 설치: brew install conftest" >&2
+    exit 1
+  fi
+  expect_policy_tests_pass
   for dir in "${FIXTURES}"/bad_*/; do
     [[ -d "${dir}" ]] || continue
     expect_violation "${dir%/}"
@@ -209,6 +259,7 @@ main() {
   done
   expect_unreadable_error
   expect_no_tmpfile_dependency
+  expect_missing_conftest_error
 
   if [[ "${failures}" -ne 0 ]]; then
     echo "guard_test: ${failures}건 실패" >&2
