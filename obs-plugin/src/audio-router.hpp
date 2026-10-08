@@ -29,6 +29,11 @@ public:
 	// 여러 시그널을 한 번의 Reconcile로 모은다.
 	void Schedule(const char *reason);
 
+	// 독의 손 배정(POK-266) — UI 스레드에서만. slot 1~5 = 그 트랙(2~6)으로 옮긴다, 0 = 트랙에서 뺀다(믹스에만).
+	// 자동 배정이 적용 중일 때만 받고(audio_off), 본방 트랙(main_stream_track)·없는 소스(unknown_source)는 거절한다.
+	// 기억을 고친 뒤 바로 Reconcile한다 — 방송·녹화 중이어도 스트리머가 고른 것이라 즉시 반영한다.
+	bool AssignTrack(const std::string &key, int slot, std::string &reason);
+
 	// 전역 장치의 원래 체크 열쇠는 장면 컬렉션 이름을 쓴다(ch:N@<이름>). OBS의 이름 바꾸기는 새 이름으로 컬렉션을
 	// 다시 불러와 CHANGED를 보낸 뒤에 RENAMED를 보내므로(OBSBasic_SceneCollections.cpp SetupRenameSceneCollection),
 	// CHANGED 때 이전 이름을 남겨 두었다가 RENAMED에서 열쇠를 옮긴다. 둘 다 UI 스레드.

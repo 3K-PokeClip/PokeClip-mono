@@ -1,7 +1,12 @@
 #pragma once
 
+#include "audio-assign.hpp"
+
 #include <QWidget>
 
+#include <array>
+
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -24,6 +29,7 @@ private:
 	void OnUnpairClicked();
 	void OnMarkClicked();
 	void OnAssignClicked();
+	void OnTrackPicked(size_t index);
 
 	QLabel *status_ = nullptr;
 	// A5 — 재시도 진행(「M초 뒤 다시 시도해요 · N번째」)과 버튼. 상태는 다음 시도 시각만 주므로 남은 초는 여기서 센다 —
@@ -41,6 +47,14 @@ private:
 	QPushButton *assign_ = nullptr;
 	bool audioCustom_ = false;     // 마지막 상태: 스트리머가 트랙 2~6을 직접 짜 뒀다
 	bool audioAutoAssign_ = false; // 마지막 상태: 자동 배정이 켜져 있다 — 버튼이 끄기다
+	// POK-266 손 배정 — 트랙 2~6마다 「T3 BGM, 알림」 줄과 「넣기: <소스>」·「빼기: <소스>」 콤보. 독의 칩 묶음과 같다.
+	QWidget *trackRows_ = nullptr;
+	std::array<QLabel *, kStemSlots> trackLabel_{};
+	std::array<QComboBox *, kStemSlots> trackPick_{};
+	// 마지막으로 줄·콤보를 만든 오디오 뷰 — 같으면 다시 만들지 않는다(전송 중엔 통계가 매초 상태를 바꾸는데, 콤보를 비우고
+	// 다시 채우면 열어 둔 팝업의 선택이 매초 첫 항목으로 돌아간다)
+	AudioRoutingView audioLast_{};
+	bool audioLocked_ = false; // 마지막 상태: 방송·녹화 중 — 넣기 전에 한 번 묻는다
 	QLabel *marks_ = nullptr;
 	QPushButton *mark_ = nullptr;
 	QLabel *message_ = nullptr;

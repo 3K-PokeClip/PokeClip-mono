@@ -1,0 +1,2 @@
+# CRLF 줄끝을 시험하는 fixture 는 바이트 그대로 둔다(루트 eol=lf 정규화 제외).
+bad_R1_crlf/*.tf.in -text

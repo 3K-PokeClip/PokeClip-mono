@@ -1,0 +1,32 @@
+# provider 캐시 · 상태 · 실제 값은 추적하지 않는다(README 「백엔드 규약」).
+.terraform/
+*.tfstate
+*.tfstate.*
+# Terraform 이 자동으로 읽는 값 파일(HCL · JSON 둘 다). 예시만 추적한다.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+backend.hcl
+# 모듈 디렉터리의 잠금 파일은 시험용 init 부산물이다. 루트의 것만 추적한다.
+modules/**/.terraform.lock.hcl
+# bootstrap 1단(로컬 상태)에서 잠시 두는 백엔드 override(HCL · JSON).
+override.tf
+*_override.tf
+override.tf.json
+*_override.tf.json
+# plan 파일(값이 평문으로 든다).
+*.tfplan
+*.plan
+tfplan
+plan.out
+*.tfplan.json
+tfplan.json
+plan.json
+# backend.hcl 변형(환경별 이름). 예시(.example)는 추적한다.
+backend-*.hcl
+backend.*.hcl
+# 충돌 로그 · CLI 설정(자격 증명이 들 수 있다).
+crash.log
+crash.*.log
+.terraformrc
+terraform.rc

@@ -208,10 +208,11 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 	};
 
 	// 1. 기억 정리 — 빈 열쇠·범위 밖 자리·겹친 열쇠(뒤엣것)는 버린다. 손으로 고친 설정 파일 방어.
+	//    slot 0은 「트랙에 없음」(독에서 뺐다)이라 유효하다.
 	std::vector<AudioTrackMapEntry> map;
 	std::set<std::string> mapKeys;
 	for (const AudioTrackMapEntry &e : in.map) {
-		if (e.key.empty() || e.slot < 1 || e.slot > kStemSlots || !mapKeys.insert(e.key).second) {
+		if (e.key.empty() || e.slot < 0 || e.slot > kStemSlots || !mapKeys.insert(e.key).second) {
 			r.mapChanged = true;
 			continue;
 		}
@@ -233,56 +234,32 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 
 	auto isReserved = [&](int slot) { return (in.reserved & (1u << slot)) != 0; };
 
-	// 3. 기억한 자리 복원. 지금 소리를 내는 후보만 자리를 잡는다 — 없는 소스의 기억은 자리를 비워 둔다.
-	//    화면에 안 나와도 기억이 있으면 자리를 지킨다. 기억한 자리가 본방 트랙이 됐으면 새 자리를 찾는다.
-	std::array<int, kStemSlots + 1> holder{};
-	holder.fill(-1);
-	std::vector<std::string> losers;
-	auto beats = [&](size_t a, size_t b, int slot) {
-		if (in.locked) {
-			// 방송·녹화 중에는 지금 그 트랙에서 나가고 있는 쪽을 옮기지 않는다.
-			uint32_t bit = 1u << slot;
-			bool aOn = (candidateOf(map[a].key)->mixers & bit) != 0;
-			bool bOn = (candidateOf(map[b].key)->mixers & bit) != 0;
-			if (aOn != bOn)
-				return aOn;
-			// 둘 다 켜져 있다 — 한쪽은 지웠다 되살린 소스가 저장값을 들고 온 것이다. 그 사이 빈자리에
-			// 나중에 앉은 쪽이 지금 이 트랙에서 나가던 주인이다.
-			if (aOn && map[a].assignedAt != map[b].assignedAt)
-				return map[a].assignedAt > map[b].assignedAt;
-		}
-		if (map[a].assignedAt != map[b].assignedAt)
-			return map[a].assignedAt < map[b].assignedAt; // 먼저 앉은 쪽
-		return map[a].key < map[b].key;
-	};
-	for (size_t i = 0; i < map.size(); i++) {
-		if (!candidateOf(map[i].key))
-			continue;
-		int slot = map[i].slot;
-		if (isReserved(slot)) {
-			losers.push_back(map[i].key);
-		} else if (holder[slot] < 0) {
-			holder[slot] = static_cast<int>(i);
-		} else if (beats(i, static_cast<size_t>(holder[slot]), slot)) {
-			losers.push_back(map[static_cast<size_t>(holder[slot])].key);
-			holder[slot] = static_cast<int>(i);
-		} else {
-			losers.push_back(map[i].key);
-		}
-	}
-
+	// 3. 기억한 자리대로 앉는다. 지금 소리를 내는 후보만 자리를 잡는다 — 없는 소스의 기억은 자리를 비워 둔다.
+	//    화면에 안 나와도 기억이 있으면 자리를 지킨다. 같은 자리를 기억하는 소스는 함께 앉는다(묶음) — 플러그인이
+	//    가르지 않는다. 트랙에서 뺀 소스(slot 0)는 자리도 줄도 없다. 기억한 자리가 본방 트랙이 됐으면 새 자리를 찾는다.
 	std::map<std::string, int> slotOf;
-	std::array<bool, kStemSlots + 1> taken{};
-	for (int k = 1; k <= kStemSlots; k++) {
-		taken[k] = isReserved(k);
-		if (holder[k] >= 0) {
-			slotOf[map[static_cast<size_t>(holder[k])].key] = k;
-			taken[k] = true;
-		}
+	std::array<std::vector<const AudioSourceInfo *>, kStemSlots + 1> occupants{}; // 자리별 점유자 — 합류 근거
+	std::array<bool, kStemSlots + 1> claimed{}; // 어떤 기억이든(지금 없는 소스 것도) 적어 둔 자리
+	auto seat = [&](const AudioSourceInfo *s, int slot) {
+		slotOf[s->key] = slot;
+		occupants[static_cast<size_t>(slot)].push_back(s);
+	};
+	std::vector<std::string> losers;
+	for (const AudioTrackMapEntry &e : map) {
+		if (e.slot == 0)
+			continue;
+		claimed[static_cast<size_t>(e.slot)] = true;
+		const AudioSourceInfo *s = candidateOf(e.key);
+		if (!s)
+			continue;
+		if (isReserved(e.slot))
+			losers.push_back(e.key);
+		else
+			seat(s, e.slot);
 	}
 
-	// 4. 자리 없는 후보(기억이 없거나 겹쳐서 밀렸다)를 우선순위로 줄 세워 가장 낮은 빈 자리에 앉힌다.
-	//    기억 없는 소스는 방송 화면에 나올 때 처음 자리를 받는다 — 다른 장면에만 있는 소스는 기다린다.
+	// 4. 자리 없는 후보(기억이 없거나 본방 트랙에 밀렸다)를 우선순위로 줄 세운다. 기억 없는 소스는 방송 화면에
+	//    나올 때 처음 자리를 받는다 — 다른 장면에만 있는 소스는 기다린다.
 	std::vector<const AudioSourceInfo *> queue;
 	for (const std::string &key : losers)
 		queue.push_back(candidateOf(key));
@@ -302,37 +279,98 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 		return a->key < b->key;
 	});
 
-	for (const AudioSourceInfo *s : queue) {
-		int free = 0;
+	//    빈 자리가 남는 동안은 자리를 하나씩 — 단, 아직 자리가 없는 종류가 먼저 받는다. 같은 종류가 이미 앉은
+	//    소스는 빈 자리가 「자리 없는 종류 수」보다 많이 남을 때만 제 자리를 받고, 아니면 그 종류의 트랙에 묶인다.
+	//    같은 종류가 없고 빈 자리도 없으면 우선순위가 가장 낮은 소스들이 있는 트랙에 묶인다.
+	auto kindSlot = [&](AudioKind kind) {
 		for (int k = 1; k <= kStemSlots; k++) {
-			if (!taken[k]) {
-				free = k;
-				break;
+			for (const AudioSourceInfo *o : occupants[static_cast<size_t>(k)]) {
+				if (o->kind == kind)
+					return k;
 			}
+		}
+		return 0;
+	};
+	auto freeSlots = [&]() {
+		int n = 0;
+		for (int k = 1; k <= kStemSlots; k++) {
+			if (!isReserved(k) && occupants[static_cast<size_t>(k)].empty())
+				n++;
+		}
+		return n;
+	};
+	auto lowestFree = [&]() { // 빈 트랙 가운데 아무 기억도 없는 트랙 먼저 — 지금 없는 소스가 돌아올 자리를 비워 둔다
+		for (int k = 1; k <= kStemSlots; k++) {
+			if (!isReserved(k) && occupants[static_cast<size_t>(k)].empty() && !claimed[static_cast<size_t>(k)])
+				return k;
+		}
+		for (int k = 1; k <= kStemSlots; k++) {
+			if (!isReserved(k) && occupants[static_cast<size_t>(k)].empty())
+				return k;
+		}
+		return 0;
+	};
+	auto lowestPriorityTrack = [&]() { // 점유자 중 가장 가치 있는 것이 가장 덜 가치 있는 트랙. 동률이면 높은 번호
+		int best = 0, bestWorth = -1;
+		for (int k = 1; k <= kStemSlots; k++) {
+			const auto &occ = occupants[static_cast<size_t>(k)];
+			if (isReserved(k) || occ.empty())
+				continue;
+			int worth = 99;
+			for (const AudioSourceInfo *o : occ)
+				worth = std::min(worth, AudioKindPriority(o->kind));
+			if (worth >= bestWorth) {
+				bestWorth = worth;
+				best = k;
+			}
+		}
+		return best;
+	};
+	std::set<AudioKind> pendingKinds; // 줄에 있는데 아직 어느 트랙에도 같은 종류가 없는 종류
+	for (const AudioSourceInfo *s : queue) {
+		if (kindSlot(s->kind) == 0)
+			pendingKinds.insert(s->kind);
+	}
+
+	for (const AudioSourceInfo *s : queue) {
+		int same = kindSlot(s->kind);
+		int slot = 0;
+		if (same == 0) {
+			slot = lowestFree();
+			if (slot == 0)
+				slot = lowestPriorityTrack();
+			pendingKinds.erase(s->kind);
+		} else if (freeSlots() > static_cast<int>(pendingKinds.size())) {
+			slot = lowestFree();
+		} else {
+			slot = same;
 		}
 		auto entry = std::find_if(map.begin(), map.end(),
 					  [&](const AudioTrackMapEntry &e) { return e.key == s->key; });
-		if (free == 0) {
+		if (slot == 0) {
 			r.overflowKeys.push_back(s->key);
 			if (entry != map.end()) {
-				map.erase(entry); // 밀렸는데 갈 자리도 없다 — 옛 기억을 버려 다음에 새 소스처럼 다룬다
+				map.erase(entry); // 갈 자리가 없다 — 옛 기억을 버려 다음에 새 소스처럼 다룬다
 				r.mapChanged = true;
 			}
 			continue;
 		}
-		taken[free] = true;
-		slotOf[s->key] = free;
+		seat(s, slot);
+		claimed[static_cast<size_t>(slot)] = true;
 		if (entry != map.end()) {
-			entry->slot = free;
-			entry->assignedAt = in.now;
+			if (entry->slot != slot) {
+				entry->slot = slot;
+				entry->assignedAt = in.now;
+				r.mapChanged = true;
+			}
 			entry->lastSeen = in.now;
 		} else {
-			map.push_back({s->key, free, s->name, in.now, in.now});
+			map.push_back({s->key, slot, s->name, in.now, in.now});
+			r.mapChanged = true;
 		}
-		r.mapChanged = true;
 	}
 	for (const auto &[key, slot] : slotOf)
-		r.slotKey[static_cast<size_t>(slot)] = key;
+		r.slotKeys[static_cast<size_t>(slot)].push_back(key);
 
 	// 5. 쓸 비트. 자리 없는 소스·후보가 아닌 소스도 트랙 2~6은 비운다 — 자동 배정이 스템을 맡는다.
 	//    그래야 소리를 늦게 내기 시작한 소스(브라우저 소리 켜기 등)가 모든 스템에 섞여 들지 않는다.
@@ -374,7 +412,8 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 		}
 	}
 
-	// 6. 상한 — 지금 없는 기억 중 오래 안 보인 것부터 버린다. 지금 있는 소스의 기억은 버리지 않는다.
+	// 6. 상한 — 지금 없는 소스의 기억 중 오래 안 보인 것부터 버린다. 지금 있는 소스의 기억은 버리지 않는다.
+	//    (독에서 옮긴 자리도 소스가 오래 없으면 밀려날 수 있다 — 돌아오면 새 소스처럼 다시 앉는다.)
 	if (map.size() > kTrackMapCap) {
 		std::vector<size_t> absent;
 		for (size_t i = 0; i < map.size(); i++) {
@@ -419,7 +458,7 @@ AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, c
 	v.deferred = options.deferred;
 	v.prompt = options.prompt;
 	v.customRouting = !options.applied && HasCustomStemRouting(sources, options.reserved);
-	v.overflow = options.overflow;
+	v.locked = options.locked;
 	for (int i = 0; i < kStemSlots; i++) {
 		AudioTrackView &t = v.tracks[static_cast<size_t>(i)];
 		t.track = i + 2;
@@ -434,16 +473,18 @@ AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, c
 				v.monitorOnly.push_back(s.name);
 			continue;
 		}
+		AudioSourceView view{s.name, s.kind, s.key};
 		bool onStem = false; // 본방 트랙은 스템이 아니다 — 거기에만 있으면 스템에는 없는 것
 		for (int m = 1; m <= kStemSlots; m++) {
 			uint32_t bit = 1u << m;
 			if (s.mixers & bit) {
-				v.tracks[static_cast<size_t>(m - 1)].sources.push_back({s.name, s.kind});
+				v.tracks[static_cast<size_t>(m - 1)].sources.push_back(view);
 				onStem = onStem || (options.reserved & bit) == 0;
 			}
 		}
-		if (!onStem && s.showing)
-			v.mixOnly.push_back(s.name);
+		bool offTrack = std::find(options.offTrack.begin(), options.offTrack.end(), s.key) != options.offTrack.end();
+		if (!onStem && (s.showing || offTrack))
+			v.mixOnly.push_back(view);
 	}
 	return v;
 }
@@ -465,7 +506,7 @@ std::string DescribeRouting(const AudioRoutingView &v)
 			out += t.sources[j].name + "(" + AudioKindName(t.sources[j].kind) + ")";
 		}
 	}
-	out += " · mix-only " + std::to_string(v.mixOnly.size());
+	out += " · no-track " + std::to_string(v.mixOnly.size());
 	if (!v.monitorOnly.empty())
 		out += " · monitor-only " + std::to_string(v.monitorOnly.size());
 	if (v.deferred)
