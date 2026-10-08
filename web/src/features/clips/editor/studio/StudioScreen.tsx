@@ -793,11 +793,12 @@ function WiredStudio({
     const t = globalThis.setInterval(() => {
       fetchClip(streamId, clipId)
         .then((clip) =>
-          setSave((s) => ({
-            ...s,
-            clip,
-            label: `편집본 #${s.recipeId} v${s.version} · ${clipLabel(clip)}`,
-          })),
+          // 묻는 사이 새 주문이 다른 영상을 받았으면 이 답은 옛 영상 것이다. 얹으면 새 영상을 옛 것으로 덮는다
+          setSave((s) =>
+            s.clip?.id === clip.id
+              ? { ...s, clip, label: `편집본 #${s.recipeId} v${s.version} · ${clipLabel(clip)}` }
+              : s,
+          ),
         )
         .catch(() => {
           /* 다음 틱에 다시 */

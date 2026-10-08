@@ -223,14 +223,21 @@ function UploadInfoForm({
           : undefined,
     };
     if (tags === null || Object.values(next).some((v) => v !== undefined)) {
-      setErrors((e) => ({ ...e, ...next }));
+      // 문제 있는 칸만 얹는다. 문제없는 칸에 빈 키를 남기면 그 칸의 서버 오류까지 가린다(errorOf)
+      const found = Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined));
+      setErrors((e) => ({ ...e, ...found }));
       return;
     }
     setTagText('');
+    // 고쳤다는 표시를 비운다: 이번에 보낸 것이 또 거절되면 서버 오류가 다시 보여야 한다
+    setErrors({});
     onSubmit({ ...draft, tags });
   };
 
-  const errorOf = (key: keyof UploadFieldErrors) => errors[key] ?? serverErrors[key];
+  // 칸을 고치면 set이 그 칸 키를 undefined로 남긴다. 키가 있으면 그 칸은 서버 오류를 가린다(고친 값이 아직 틀렸다고
+  // 읽히지 않게). 다음 보내기 때 비운다
+  const errorOf = (key: keyof UploadFieldErrors) =>
+    key in errors ? errors[key] : serverErrors[key];
   const bytes = descriptionBytes(draft.description);
 
   return (

@@ -168,6 +168,43 @@ describe('UploadInfoDialog', () => {
     );
   });
 
+  it('서버가 짚은 칸을 고치면 그 칸의 서버 오류가 사라진다', async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog(
+      {
+        serverErrors: {
+          title: '유튜브 제목을 확인해 주세요.',
+          thumbnail: '이미지는 10MB까지 올릴 수 있어요',
+        },
+      },
+      { title: '처음 제목', thumbnailSource: 'file' },
+    );
+    const title = dialog().getByRole('textbox', { name: /제목/ });
+    expect(title).toHaveAccessibleDescription(/유튜브 제목을 확인해 주세요/);
+
+    await user.type(title, '!');
+    expect(title).not.toHaveAccessibleDescription(/유튜브 제목을 확인해 주세요/);
+    expect(dialog().queryByText('유튜브 제목을 확인해 주세요.')).not.toBeInTheDocument();
+    // 고치지 않은 칸의 서버 오류는 남는다
+    expect(dialog().getByText('이미지는 10MB까지 올릴 수 있어요')).toBeInTheDocument();
+
+    await user.click(dialog().getByRole('radio', { name: '자동(유튜브가 고름)' }));
+    expect(dialog().queryByText('이미지는 10MB까지 올릴 수 있어요')).not.toBeInTheDocument();
+  });
+
+  it('다른 칸이 창 안 검사에 걸려도 고치지 않은 칸의 서버 오류는 남는다', async () => {
+    const user = userEvent.setup();
+    const { dialog, onSubmit } = renderDialog({
+      serverErrors: { description: '설명을 확인해 주세요.' },
+    });
+    // 제목이 비어 창 안 검사에 걸린다
+    await user.click(dialog().getByRole('button', { name: /만들고 올리기/ }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(dialog().getByRole('textbox', { name: /설명/ })).toHaveAccessibleDescription(
+      /설명을 확인해 주세요/,
+    );
+  });
+
   it('보내는 중에는 확인 단추가 잠기고 닫히지 않는다', async () => {
     const user = userEvent.setup();
     const { dialog, onCancel } = renderDialog({ busy: true });

@@ -73,6 +73,8 @@ const server = vi.hoisted(() => ({
   renderError: null as null | { status: number; body: Record<string, unknown> },
   /** 저장된 편집본 지금 판의 업로드 정보(POK-291) */
   savedUploadRequest: null as unknown,
+  /** 영상 상태 묻기(폴링)의 답. 시험이 준 약속이 풀릴 때 답한다 */
+  clipPoll: null as null | ((clipId: number) => Promise<Response>),
 }));
 
 /** 원본(16:9)에서 9:16 을 오른쪽으로 치우쳐 잡은 자리 — 편집기 계산과 같은 정확한 비율 */
@@ -193,6 +195,8 @@ function handle(url: string, init?: RequestInit) {
       ...server.render.clip,
     });
   }
+  const polled = path.match(new RegExp(`^/api/clip/broadcasts/${STREAM_ID}/clips/(\\d+)$`));
+  if (polled && method === 'GET' && server.clipPoll) return server.clipPoll(Number(polled[1]));
   if (path === '/api/auth/me')
     return jsonResponse(200, { id: 9, email: 'me@example.com', name: '나' });
   if (path === '/api/streamers/9/audio-tracks') return jsonResponse(200, { labels: {} });
@@ -218,6 +222,7 @@ beforeEach(() => {
   server.render = { status: 201, clip: {} };
   server.renderError = null;
   server.savedUploadRequest = null;
+  server.clipPoll = null;
   spansAsked.length = 0;
   nav.pushed.length = 0;
   fetchSpy = stubFetch(handle);
@@ -877,6 +882,22 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
     expect(await dialog().findByText('JPG나 PNG만 올릴 수 있어요')).toBeInTheDocument();
   });
 
+  it('서버가 짚은 칸은 고치면 오류가 사라지고, 고쳐 보낸 것이 또 거절되면 다시 보인다', async () => {
+    server.renderError = { status: 400, body: { error: 'invalid_request', field: 'title' } };
+    const user = userEvent.setup();
+    await openFrom('recipe=31');
+    await orderVideo(user);
+    const title = () => dialog().getByRole('textbox', { name: /제목/ });
+    await waitFor(() => expect(title()).toHaveAccessibleDescription(/제목을 확인해 주세요/));
+
+    await user.type(title(), '!');
+    expect(title()).not.toHaveAccessibleDescription(/제목을 확인해 주세요/);
+
+    await user.click(dialog().getByRole('button', { name: '만들고 올리기' }));
+    await waitFor(() => expect(renders()).toBe(2));
+    await waitFor(() => expect(title()).toHaveAccessibleDescription(/제목을 확인해 주세요/));
+  });
+
   it('창이 떠 있는 동안 ⌘Z·Space는 뒤 편집기를 안 바꾼다: 창 안 라디오는 Space로 골라진다', async () => {
     const user = userEvent.setup();
     await openFrom(`stream=${STREAM_ID}&card=5`);
@@ -919,6 +940,54 @@ describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => 
       expect(bodiesOf('PUT', `/api/clip/broadcasts/${STREAM_ID}/recipes/31`)).toHaveLength(1),
     );
     expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1);
+  });
+
+  it('옛 영상을 묻던 늦은 답은 새 주문의 영상을 덮지 않는다', async () => {
+    // 5초 묻기만 손으로 돌린다(다른 시계는 그대로)
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      let answerOld: (() => void) | null = null;
+      server.clipPoll = (clipId) =>
+        new Promise((resolve) => {
+          answerOld = () =>
+            resolve(
+              jsonResponse(200, {
+                id: clipId,
+                streamId: STREAM_ID,
+                recipeId: 31,
+                recipeVersion: 1,
+                requestedBy: '9',
+                status: 'rendering',
+                progress: { percent: 40 },
+                outputs: null,
+                error: null,
+                createdAt: '2026-09-20T11:00:00Z',
+                updatedAt: '2026-09-20T11:00:00Z',
+              }),
+            );
+        });
+      const user = userEvent.setup();
+      await openFrom('recipe=31');
+      await orderVideo(user);
+      await screen.findAllByText(/편집본 #31 v\d · 영상 #77 주문됨$/);
+
+      // 영상 #77을 묻는 요청이 떠났는데 답이 아직 안 왔다
+      vi.advanceTimersByTime(5_000);
+      await waitFor(() => expect(answerOld).not.toBeNull());
+
+      // 그 사이 새 주문이 영상 #78을 받는다
+      server.render = { status: 201, clip: { id: 78 } };
+      await orderVideo(user, '다시 만든 것');
+      await screen.findAllByText(/편집본 #31 v\d · 영상 #78 주문됨$/);
+
+      answerOld!();
+      // 늦은 답이 얹히면 헤더가 「영상 #77 만드는 중 40%」로 돌아간다
+      await new Promise((r) => setTimeout(r, 50));
+      expect(screen.getAllByText(/편집본 #31 v\d · 영상 #78 주문됨$/).length).toBeGreaterThan(0);
+      expect(screen.queryAllByText(/편집본 #31 v\d · 영상 #77/)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('창을 다시 열면 같은 판에 남은 업로드 정보(제목·공개 범위·썸네일 방식)로 채운다', async () => {
