@@ -1,12 +1,21 @@
 import type { Bridge } from './bridge';
-import type { AudioRouting, BridgeState, MarkStats, Phase, PluginSettings, RetryView } from './types';
+import type { AudioKind, AudioRouting, AudioSource, BridgeState, MarkStats, Phase, PluginSettings, RetryView } from './types';
 
 // 개발 전용 — `pnpm dev` 에서 토큰 없이 열면 쓴다.
-// ?mock=unpaired|idle|live|reconnecting|error|no_key|encoder|audio_overflow|audio_manual|audio_main_stream|
-//       audio_deferred|audio_prompt|audio_prompt_custom|mark_pending|mark_unsupported|
+// ?mock=unpaired|idle|live|reconnecting|error|no_key|encoder|audio_overflow|audio_grouped|audio_live|audio_manual|
+//       audio_main_stream|audio_deferred|audio_prompt|audio_prompt_custom|mark_pending|mark_unsupported|
 //       retry_first|retry_key|gave_up|paired_midstream
 // 트랙 2~6 목록으로 오디오 배정 상태를 만든다 (트랙 1은 늘 최종 믹스라 싣지 않는다). mainStream은 본방 트랙 번호.
-function routing(tracks: AudioRouting['tracks'][number]['sources'][], mainStream: number[] = []): AudioRouting {
+const src = (key: string, name: string, kind: AudioKind): AudioSource => ({ key, name, kind });
+const MIC = src('ch:3', '마이크/보조', 'mic');
+const MIC2 = src('uuid:mic2', '마이크 2', 'mic');
+const DESK = src('ch:1', '데스크탑 오디오', 'desktop');
+const DISCORD = src('uuid:discord', 'Discord', 'app');
+const GAME = src('uuid:game', '게임', 'app');
+const BGM = src('uuid:bgm', 'BGM', 'media');
+const ALERT = src('uuid:alert', '알림', 'browser');
+
+function routing(tracks: AudioSource[][], mainStream: number[] = []): AudioRouting {
   return {
     known: true,
     autoAssign: true,
@@ -14,6 +23,7 @@ function routing(tracks: AudioRouting['tracks'][number]['sources'][], mainStream
     deferred: false,
     prompt: false,
     customRouting: false,
+    locked: false,
     tracks: tracks.map((sources, i) => ({ track: i + 2, mainStream: mainStream.includes(i + 2), sources })),
     mixOnly: [],
     monitorOnly: [],
@@ -52,7 +62,7 @@ export function createMockBridge(scenario: string): Bridge {
       audioTracks: 'unknown',
       audioTrackCount: 0,
     },
-    audio: routing([[{ name: '마이크/보조', kind: 'mic' }], [{ name: '데스크탑 오디오', kind: 'desktop' }], [{ name: 'BGM', kind: 'media' }], [], []]),
+    audio: routing([[MIC], [DESK], [BGM], [], []]),
     marks: NO_MARKS,
   };
   const liveChecks = {
@@ -68,7 +78,7 @@ export function createMockBridge(scenario: string): Bridge {
   } as const;
 
   const overrides: Record<string, Partial<BridgeState>> = {
-    live: { phase: 'live', obsStreaming: true, checks: { ...liveChecks } },
+    live: { phase: 'live', obsStreaming: true, checks: { ...liveChecks }, audio: { ...base.audio, locked: true } },
     // 붙어 있다 끊겨 다시 붙는 중 — 3번째 재시도를 12초 뒤에 한다
     reconnecting: {
       phase: 'reconnecting',
@@ -76,6 +86,7 @@ export function createMockBridge(scenario: string): Bridge {
       errorCode: 'disconnected',
       checks: { ...liveChecks },
       retry: { ...NO_RETRY, attempt: 3, nextAt: Date.now() + 12000 },
+      audio: { ...base.audio, locked: true },
     },
     // 처음부터 붙지 못했다(수신 주소를 못 찾음) — 지금 1번째 재시도로 접속 중
     retry_first: { phase: 'starting', obsStreaming: true, errorCode: 'bad_path', retry: { ...NO_RETRY, attempt: 1 } },
@@ -99,51 +110,40 @@ export function createMockBridge(scenario: string): Bridge {
     paired_midstream: { phase: 'idle', obsStreaming: true, canSendNow: true },
     error: { phase: 'error', errorCode: 'timeout', checks: { ...liveChecks } },
     no_key: { paired: false, keyHint: '', phase: 'idle', errorCode: 'no_key', obsStreaming: true },
+    // 소스 7개 — 자리가 모자라면 같은 종류끼리 묶는다(마이크 2는 마이크 트랙, 게임은 앱 트랙)
     audio_overflow: {
       audio: {
-        ...routing([
-          [{ name: '마이크/보조', kind: 'mic' }],
-          [{ name: '마이크 2', kind: 'mic' }],
-          [{ name: '데스크탑 오디오', kind: 'desktop' }],
-          [{ name: 'Discord', kind: 'app' }],
-          [{ name: 'BGM', kind: 'media' }],
-        ]),
-        mixOnly: [{ name: '알림' }, { name: '캡처보드' }],
+        ...routing([[MIC, MIC2], [DESK], [DISCORD, GAME], [BGM], [ALERT]]),
         monitorOnly: [{ name: '효과음 미리듣기' }],
-        overflow: 2,
       },
+    },
+    // 독에서 BGM과 알림을 트랙 4에 묶었고 게임은 트랙에서 뺐다 — 「트랙 없음」 경고가 보인다
+    audio_grouped: {
+      audio: { ...routing([[MIC], [DESK], [BGM, ALERT], [], []]), mixOnly: [GAME] },
+    },
+    // 같은데 방송 중 — 「+」나 ×를 누르면 지금 나가는 트랙이 바뀐다고 한 번 묻는다
+    audio_live: {
+      phase: 'live',
+      obsStreaming: true,
+      checks: { ...liveChecks },
+      audio: { ...routing([[MIC], [DESK], [BGM], [], []]), mixOnly: [ALERT], locked: true },
     },
     audio_manual: {
       audio: {
-        ...routing([[{ name: '마이크/보조', kind: 'mic' }, { name: '게임', kind: 'app' }], [], [{ name: '데스크탑 오디오', kind: 'desktop' }], [], []]),
+        ...routing([[MIC, GAME], [], [DESK], [], []]),
         autoAssign: false,
         applied: false,
-        mixOnly: [{ name: 'BGM' }],
+        mixOnly: [BGM],
       },
     },
     // 고급 출력에서 방송 트랙을 2로 둔 스트리머 — 트랙 2는 스트리머가 짠 본방 믹스라 자동 배정이 비켜 간다
     audio_main_stream: {
-      audio: routing(
-        [
-          [
-            { name: '마이크/보조', kind: 'mic' },
-            { name: '데스크탑 오디오', kind: 'desktop' },
-          ],
-          [{ name: '마이크/보조', kind: 'mic' }],
-          [{ name: '데스크탑 오디오', kind: 'desktop' }],
-          [{ name: 'BGM', kind: 'media' }],
-          [],
-        ],
-        [2],
-      ),
+      audio: routing([[MIC, DESK], [MIC], [DESK], [BGM], []], [2]),
     },
     // 막 페어링했다 — 자동 배정은 기본으로 꺼져 있어 한 번 묻는다. 트랙은 OBS 기본(전부 켜짐)
     audio_prompt: {
       audio: {
-        ...routing([0, 1, 2, 3, 4].map(() => [
-          { name: '마이크/보조', kind: 'mic' as const },
-          { name: '데스크탑 오디오', kind: 'desktop' as const },
-        ])),
+        ...routing([0, 1, 2, 3, 4].map(() => [MIC, DESK])),
         autoAssign: false,
         applied: false,
         prompt: true,
@@ -152,7 +152,7 @@ export function createMockBridge(scenario: string): Bridge {
     // 같은데 스트리머가 트랙 2~6을 직접 짜 뒀다 — 켜면 덮어쓴다고 알린다
     audio_prompt_custom: {
       audio: {
-        ...routing([[{ name: '마이크/보조', kind: 'mic' }, { name: '디스코드', kind: 'app' }], [{ name: '게임', kind: 'app' }], [], [], []]),
+        ...routing([[MIC, DISCORD], [GAME], [], [], []]),
         autoAssign: false,
         applied: false,
         prompt: true,
@@ -163,9 +163,10 @@ export function createMockBridge(scenario: string): Bridge {
     audio_deferred: {
       obsStreaming: false,
       audio: {
-        ...routing([[{ name: '마이크/보조', kind: 'mic' }, { name: '게임', kind: 'app' }], [], [], [], []]),
+        ...routing([[MIC, GAME], [], [], [], []]),
         applied: false,
         deferred: true,
+        locked: true,
       },
     },
     // 서버가 첫 조각 전이라 503 — 하나는 다시 보내는 중
@@ -310,6 +311,23 @@ export function createMockBridge(scenario: string): Bridge {
       if (state.retry.attempt === 0) return { ok: false, reason: 'not_retrying' };
       // 마지막 실패 사유는 남는다 — 왜 멈춰 있는지가 그것이다
       emit({ phase: 'error', retry: NO_RETRY, canSendNow: state.obsStreaming });
+      return { ok: true };
+    },
+    // 플러그인처럼: 적용 중일 때만, 본방 트랙은 거절, 찬 트랙을 골라도 밀어내지 않고 묶는다. null은 트랙에서 뺀다(트랙 없음).
+    async assignAudio(key, track) {
+      if (!state.audio.applied) return { ok: false, reason: 'audio_off' };
+      const all = [...state.audio.tracks.flatMap((t) => t.sources), ...state.audio.mixOnly];
+      const found = all.find((s) => s.key === key);
+      if (!found) return { ok: false, reason: 'unknown_source' };
+      if (track !== null && state.audio.tracks[track - 2]?.mainStream) return { ok: false, reason: 'main_stream_track' };
+      await new Promise((r) => setTimeout(r, 300));
+      const tracks = state.audio.tracks.map((t) => {
+        if (t.mainStream) return t;
+        const sources = t.sources.filter((s) => s.key !== key);
+        return { ...t, sources: t.track === track ? [...sources, found] : sources };
+      });
+      const rest = state.audio.mixOnly.filter((s) => s.key !== key);
+      emit({ audio: { ...state.audio, tracks, mixOnly: track === null ? [...rest, found] : rest } });
       return { ok: true };
     },
   };

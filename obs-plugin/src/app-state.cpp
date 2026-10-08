@@ -122,6 +122,21 @@ static obs_data_array_t *NameArray(const std::vector<std::string> &names)
 	return array;
 }
 
+// 소스 목록 [{key, name, kind}] — 독이 key로 넣기·빼기를 보낸다.
+static obs_data_array_t *SourceArray(const std::vector<AudioSourceView> &sources)
+{
+	obs_data_array_t *array = obs_data_array_create();
+	for (const AudioSourceView &src : sources) {
+		obs_data_t *item = obs_data_create();
+		obs_data_set_string(item, "key", src.key.c_str());
+		obs_data_set_string(item, "name", src.name.c_str());
+		obs_data_set_string(item, "kind", AudioKindName(src.kind));
+		obs_data_array_push_back(array, item);
+		obs_data_release(item);
+	}
+	return array;
+}
+
 static obs_data_t *AudioToData(const AudioRoutingView &v)
 {
 	obs_data_t *audio = obs_data_create();
@@ -131,6 +146,7 @@ static obs_data_t *AudioToData(const AudioRoutingView &v)
 	obs_data_set_bool(audio, "deferred", v.deferred);
 	obs_data_set_bool(audio, "prompt", v.prompt);
 	obs_data_set_bool(audio, "customRouting", v.customRouting);
+	obs_data_set_bool(audio, "locked", v.locked);
 	obs_data_set_int(audio, "overflow", v.overflow);
 
 	obs_data_array_t *tracks = obs_data_array_create();
@@ -138,14 +154,7 @@ static obs_data_t *AudioToData(const AudioRoutingView &v)
 		obs_data_t *track = obs_data_create();
 		obs_data_set_int(track, "track", t.track);
 		obs_data_set_bool(track, "mainStream", t.mainStream);
-		obs_data_array_t *sources = obs_data_array_create();
-		for (const AudioSourceView &src : t.sources) {
-			obs_data_t *item = obs_data_create();
-			obs_data_set_string(item, "name", src.name.c_str());
-			obs_data_set_string(item, "kind", AudioKindName(src.kind));
-			obs_data_array_push_back(sources, item);
-			obs_data_release(item);
-		}
+		obs_data_array_t *sources = SourceArray(t.sources);
 		obs_data_set_array(track, "sources", sources);
 		obs_data_array_release(sources);
 		obs_data_array_push_back(tracks, track);
@@ -154,7 +163,7 @@ static obs_data_t *AudioToData(const AudioRoutingView &v)
 	obs_data_set_array(audio, "tracks", tracks);
 	obs_data_array_release(tracks);
 
-	obs_data_array_t *mixOnly = NameArray(v.mixOnly);
+	obs_data_array_t *mixOnly = SourceArray(v.mixOnly);
 	obs_data_set_array(audio, "mixOnly", mixOnly);
 	obs_data_array_release(mixOnly);
 	obs_data_array_t *monitorOnly = NameArray(v.monitorOnly);

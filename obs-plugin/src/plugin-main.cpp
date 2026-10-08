@@ -285,6 +285,47 @@ BridgeCallbacks MakeBridgeCallbacks()
 		RunInUiThread([]() { StopRetryNow(); });
 		return {202, JsonReason(true, "")};
 	};
+	// POK-266 — 손 배정(트랙으로 옮기기·트랙에서 빼기). 워커 스레드라 독에 보낸 상태(열쇠·본방 트랙·적용 중)로
+	// 미리 거르고, 기억 수정과 재계산은 UI 스레드에서 한다. 결과(누가 어느 트랙인지)는 상태 스트림으로 돌아간다.
+	cb.assignAudio = [](const std::string &body) -> BridgeCallbacks::Reply {
+		obs_data_t *d = obs_data_create_from_json(body.c_str());
+		if (!d)
+			return {400, JsonReason(false, "invalid_json")};
+		std::string key = obs_data_get_string(d, "key");
+		obs_data_item_t *item = obs_data_item_byname(d, "track");
+		bool hasTrack = item && obs_data_item_gettype(item) == OBS_DATA_NUMBER; // null·생략 = 트랙에서 뺀다
+		obs_data_item_release(&item);
+		int track = hasTrack ? static_cast<int>(obs_data_get_int(d, "track")) : 0;
+		obs_data_release(d);
+		if (key.empty())
+			return {400, JsonReason(false, "invalid_json")};
+		if (hasTrack && (track < 2 || track > kStemSlots + 1))
+			return {400, JsonReason(false, "bad_track")};
+
+		StateSnapshot s = AppState::Instance().Snapshot();
+		if (!s.audio.applied)
+			return {409, JsonReason(false, "audio_off")};
+		bool known = false;
+		auto scan = [&](const std::vector<AudioSourceView> &list) {
+			for (const AudioSourceView &v : list)
+				known = known || v.key == key;
+		};
+		for (const AudioTrackView &t : s.audio.tracks)
+			scan(t.sources);
+		scan(s.audio.mixOnly);
+		if (!known)
+			return {404, JsonReason(false, "unknown_source")};
+		if (hasTrack && s.audio.tracks[static_cast<size_t>(track - 2)].mainStream)
+			return {409, JsonReason(false, "main_stream_track")};
+		int slot = hasTrack ? track - 1 : 0;
+		RunInUiThread([key, slot]() {
+			std::string reason;
+			if (!AudioRouter::Instance().AssignTrack(key, slot, reason))
+				obs_log(LOG_WARNING, "audio routing: assign of %s rejected (%s)", key.c_str(),
+					reason.c_str());
+		});
+		return {202, JsonReason(true, "")};
+	};
 	return cb;
 }
 

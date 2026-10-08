@@ -381,7 +381,6 @@ void AudioRouter::Reconcile(const char *reason)
 		in.sources = sources;
 		in.map = config.audioTrackMap;
 		in.backup = backup;
-		in.locked = locked;
 		in.reserved = reserved;
 		in.now = static_cast<int64_t>(std::time(nullptr));
 		AssignmentResult r = ComputeAssignment(in);
@@ -409,6 +408,7 @@ void AudioRouter::Reconcile(const char *reason)
 	options.autoAssign = config.audioAutoAssign;
 	options.applied = applied;
 	options.deferred = deferred;
+	options.locked = locked;
 	// 기본은 꺼짐 — 페어링한 뒤 아직 답하지 않았으면 독이 한 번 묻는다(스템이 왜 필요한지 + 짜 둔 트랙을 덮어쓴다).
 	options.prompt = config.HasKey() && !config.audioAutoAssign && !config.audioAssignPrompted;
 	options.overflow = overflow;
@@ -425,6 +425,51 @@ void AudioRouter::Reconcile(const char *reason)
 	}
 	if (!(AppState::Instance().Snapshot().audio == view))
 		AppState::Instance().Mutate([&](StateSnapshot &s) { s.audio = view; });
+}
+
+bool AudioRouter::AssignTrack(const std::string &key, int slot, std::string &reason)
+{
+	if (!applied_) {
+		reason = "audio_off";
+		return false;
+	}
+	if (slot < 0 || slot > kStemSlots) {
+		reason = "bad_track";
+		return false;
+	}
+	if (slot > 0 && (reserved_.load() & (1u << slot)) != 0) {
+		reason = "main_stream_track";
+		return false;
+	}
+	obs_source_t *source = SourceByKey(key);
+	if (!source) {
+		reason = "unknown_source";
+		return false;
+	}
+	std::string name = obs_source_get_name(source);
+	obs_source_release(source);
+
+	// 기억을 그 자리로 고쳐 쓴다 — 계산은 기억대로 앉히므로(규칙 머리 주석) 다음 Reconcile이 비트를 맞춘다.
+	// slot 0 = 트랙에서 뺀다(믹스에만 남는다).
+	int64_t now = static_cast<int64_t>(std::time(nullptr));
+	ConfigStore::Instance().Update([&](PluginConfig &c) {
+		auto it = std::find_if(c.audioTrackMap.begin(), c.audioTrackMap.end(),
+				       [&](const AudioTrackMapEntry &e) { return e.key == key; });
+		if (it == c.audioTrackMap.end()) {
+			c.audioTrackMap.push_back({key, slot, name, now, now});
+		} else {
+			it->slot = slot;
+			it->name = name;
+			it->assignedAt = now;
+			it->lastSeen = now;
+		}
+	});
+	if (slot > 0)
+		obs_log(LOG_INFO, "audio routing: moved '%s' to track %d", name.c_str(), slot + 1);
+	else
+		obs_log(LOG_INFO, "audio routing: removed '%s' from tracks", name.c_str());
+	Reconcile("manual");
+	return true;
 }
 
 // 아래 시그널 핸들러는 libobs 스레드에서 올 수 있다 — UI 스레드로 모아 넘기기만 한다.

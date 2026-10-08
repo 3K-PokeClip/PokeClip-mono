@@ -39,6 +39,7 @@ function state(patch: Partial<BridgeState>): BridgeState {
       deferred: false,
       prompt: false,
       customRouting: false,
+      locked: false,
       tracks: [],
       mixOnly: [],
       monitorOnly: [],

@@ -197,6 +197,7 @@ struct BridgeFixture {
 	std::atomic<int> markCalls{0};
 	std::atomic<int> sendNowCalls{0};
 	std::atomic<int> stopRetryCalls{0};
+	std::string assignAudioBody; // 마지막 손 배정 요청 본문
 	std::string lastPairBody;
 	std::atomic<uint64_t> stateVersion{1};
 	std::mutex mutex;
@@ -239,6 +240,10 @@ struct BridgeFixture {
 		cb.sendNow = [this]() -> BridgeCallbacks::Reply {
 			sendNowCalls++;
 			return {202, R"({"ok":true})"};
+		};
+		cb.assignAudio = [this](const std::string &body) -> BridgeCallbacks::Reply {
+			assignAudioBody = body;
+			return {202, "{\"ok\":true}"};
 		};
 		cb.stopRetry = [this]() -> BridgeCallbacks::Reply {
 			stopRetryCalls++;
@@ -467,7 +472,8 @@ AudioTrackMapEntry Entry(const std::string &key, int slot, int64_t assignedAt, i
 int SlotOf(const AssignmentResult &r, const std::string &key)
 {
 	for (int k = 1; k <= kStemSlots; k++) {
-		if (r.slotKey[static_cast<size_t>(k)] == key)
+		const std::vector<std::string> &keys = r.slotKeys[static_cast<size_t>(k)];
+		if (std::find(keys.begin(), keys.end(), key) != keys.end())
 			return k;
 	}
 	return 0;
@@ -552,7 +558,7 @@ TEST(audio_first_run_orders_by_priority)
 	CHECK_EQ(SlotOf(r, "ch:1"), 2);
 	CHECK_EQ(SlotOf(r, "uuid:bgm"), 3);
 	CHECK_EQ(SlotOf(r, "uuid:alert"), 4);
-	CHECK(r.slotKey[5].empty());
+	CHECK(r.slotKeys[5].empty());
 	CHECK(r.overflowKeys.empty());
 	CHECK_EQ(r.mapNext.size(), 4u);
 	CHECK(r.mapChanged);
@@ -590,7 +596,9 @@ TEST(audio_remembered_slot_beats_priority)
 	CHECK_EQ(SlotOf(r, "ch:3"), 2);
 }
 
-TEST(audio_overflow_goes_mix_only_lowest_priority)
+// 소스가 자리보다 많으면(7개) 믹스만으로 밀어내지 않고 묶는다 — 아직 자리 없는 종류가 먼저 빈 트랙을 받고,
+// 같은 종류가 있는 소스(마이크 2)는 그 트랙에, 같은 종류가 없는 소스(캡처보드)는 우선순위가 가장 낮은 트랙(브라우저)에.
+TEST(audio_overflow_groups_by_kind)
 {
 	AssignmentInput in;
 	in.now = 100;
@@ -599,16 +607,66 @@ TEST(audio_overflow_goes_mix_only_lowest_priority)
 		      Src("ch:1", "데스크탑", AudioKind::Desktop, 1),       Src("ch:3", "마이크", AudioKind::Mic, 3),
 		      Src("ch:4", "마이크 2", AudioKind::Mic, 4)};
 	AssignmentResult r = ComputeAssignment(in);
-	CHECK_EQ(r.overflowKeys.size(), 2u);
-	CHECK_EQ(SlotOf(r, "uuid:alert"), 0);
-	CHECK_EQ(SlotOf(r, "uuid:other"), 0);
+	CHECK(r.overflowKeys.empty());
 	CHECK_EQ(SlotOf(r, "ch:3"), 1);
-	CHECK_EQ(SlotOf(r, "ch:4"), 2);
-	CHECK_EQ(WriteOf(r, "uuid:alert", 0x3F), 0x01u); // 믹스에만 남는다
-	CHECK(!MapHas(r, "uuid:alert"));
+	CHECK_EQ(SlotOf(r, "ch:4"), 1); // 마이크 트랙에 묶인다
+	CHECK_EQ(SlotOf(r, "ch:1"), 2);
+	CHECK_EQ(SlotOf(r, "uuid:discord"), 3);
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 4);
+	CHECK_EQ(SlotOf(r, "uuid:alert"), 5);
+	CHECK_EQ(SlotOf(r, "uuid:other"), 5); // 같은 종류가 없다 — 가장 덜 가치 있는 트랙에
+	CHECK_EQ(WriteOf(r, "ch:4", 0x3F), 0x03u);
+	CHECK_EQ(WriteOf(r, "uuid:other", 0x3F), 0x21u);
+	CHECK(MapHas(r, "uuid:other"));
+	CHECK_EQ(r.slotKeys[1].size(), 2u);
+
+	// 같은 입력을 다시 넣으면 그대로다 — 묶인 소스가 매번 줄을 다시 서도 자리는 같다.
+	AssignmentInput again = in;
+	again.sources = Applied(in.sources, r);
+	again.map = r.mapNext;
+	AssignmentResult r2 = ComputeAssignment(again);
+	CHECK(r2.writes.empty());
+	CHECK(!r2.mapChanged);
 }
 
-// 지금 없는 소스의 기억은 자리를 잡지 않지만 버리지도 않는다. 돌아오면 먼저 앉은 쪽이 자리를 되찾는다.
+// 자리가 남는 동안은 같은 종류라도 제 트랙을 받는다 — 단, 아직 자리 없는 종류가 먼저다.
+TEST(audio_new_kind_gets_free_track_before_same_kind_doubles_up)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {Entry("ch:3", 1, 10, 90), Entry("ch:1", 2, 10, 90), Entry("uuid:discord", 3, 10, 90),
+		  Entry("uuid:bgm", 4, 10, 90)};
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3),         Src("ch:1", "데스크탑", AudioKind::Desktop, 1),
+		      Src("uuid:discord", "Discord", AudioKind::App, 103), Src("uuid:bgm", "BGM", AudioKind::Media, 102),
+		      Src("ch:4", "마이크 2", AudioKind::Mic, 4),           Src("uuid:alert", "알림", AudioKind::Browser, 101)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "ch:4"), 1);       // 빈 트랙이 하나뿐 — 브라우저(새 종류) 몫이라 마이크 트랙에 묶인다
+	CHECK_EQ(SlotOf(r, "uuid:alert"), 5); // 새 종류가 빈 트랙을 받는다
+
+	AssignmentInput roomy = in;
+	roomy.sources.pop_back(); // 알림이 없으면 마이크 2가 빈 트랙을 받는다
+	AssignmentResult r2 = ComputeAssignment(roomy);
+	CHECK_EQ(SlotOf(r2, "ch:4"), 5);
+}
+
+// 같은 자리를 기억하는 소스는 빈 트랙이 있어도 함께 앉는다 — 독에서 묶어 둔 것을 플러그인이 가르지 않는다.
+TEST(audio_grouped_sources_stay_together_even_with_room)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {Entry("ch:3", 1, 10, 90), Entry("ch:4", 1, 50, 90)};
+	in.map[0].name = "마이크"; // 이름 갱신이 mapChanged를 켜지 않게
+	in.map[1].name = "마이크 2";
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3, 0x03), Src("ch:4", "마이크 2", AudioKind::Mic, 4, 0x03)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "ch:3"), 1);
+	CHECK_EQ(SlotOf(r, "ch:4"), 1);
+	CHECK(r.writes.empty());
+	CHECK(!r.mapChanged);
+}
+
+// 지금 없는 소스의 기억은 자리를 잡지 않지만 버리지도 않는다. 새 소스는 아무 기억도 없는 트랙을 먼저 받아
+// 돌아올 자리를 비워 두고, 돌아오면 기억대로 앉는다.
 TEST(audio_absent_memory_frees_slot_and_comes_back)
 {
 	AssignmentInput in;
@@ -617,7 +675,7 @@ TEST(audio_absent_memory_frees_slot_and_comes_back)
 	in.sources = {Src("uuid:b", "B", AudioKind::Media, 100), Src("uuid:c", "C", AudioKind::Media, 101)};
 	AssignmentResult r = ComputeAssignment(in);
 	CHECK_EQ(SlotOf(r, "uuid:b"), 2);
-	CHECK_EQ(SlotOf(r, "uuid:c"), 1);
+	CHECK_EQ(SlotOf(r, "uuid:c"), 3); // 트랙 2는 없는 A의 기억이 적어 둔 자리 — 비워 둔다
 	CHECK(MapHas(r, "uuid:a"));
 
 	AssignmentInput back;
@@ -626,40 +684,17 @@ TEST(audio_absent_memory_frees_slot_and_comes_back)
 	back.sources = Applied(in.sources, r);
 	back.sources.push_back(Src("uuid:a", "A", AudioKind::Media, 102, 0x01));
 	AssignmentResult r2 = ComputeAssignment(back);
-	CHECK_EQ(SlotOf(r2, "uuid:a"), 1); // assignedAt 10 < 100
+	CHECK_EQ(SlotOf(r2, "uuid:a"), 1);
 	CHECK_EQ(SlotOf(r2, "uuid:c"), 3);
 	CHECK_EQ(SlotOf(r2, "uuid:b"), 2);
-}
 
-TEST(audio_locked_keeps_the_source_currently_on_the_track)
-{
-	AssignmentInput in;
-	in.now = 100;
-	in.locked = true;
-	in.map = {Entry("uuid:a", 1, 10), Entry("uuid:c", 1, 50)};
-	in.sources = {Src("uuid:a", "A", AudioKind::Media, 100, 0x01), Src("uuid:c", "C", AudioKind::Media, 101, 0x03)};
-	AssignmentResult r = ComputeAssignment(in);
-	CHECK_EQ(SlotOf(r, "uuid:c"), 1); // 지금 트랙 2에서 나가고 있다 — 방송 중에는 옮기지 않는다
-	CHECK_EQ(SlotOf(r, "uuid:a"), 2);
-
-	in.locked = false;
-	AssignmentResult free = ComputeAssignment(in);
-	CHECK_EQ(SlotOf(free, "uuid:a"), 1); // 방송이 아니면 먼저 앉은 쪽
-}
-
-// 방송 중 A를 지우자 C가 그 트랙을 받았고, 이어서 A를 되살리면 A도 저장값대로 그 트랙이 켜진 채 온다.
-// 둘 다 켜져 있으면 그 사이 트랙을 받아 나가고 있던 C를 남긴다.
-TEST(audio_locked_keeps_owner_when_restored_source_returns_with_bits)
-{
-	AssignmentInput in;
-	in.now = 100;
-	in.locked = true;
-	in.map = {Entry("uuid:a", 1, 10), Entry("uuid:c", 1, 50)};
-	in.sources = {Src("uuid:a", "A", AudioKind::Media, 100, 0x03), Src("uuid:c", "C", AudioKind::Media, 101, 0x03)};
-	AssignmentResult r = ComputeAssignment(in);
-	CHECK_EQ(SlotOf(r, "uuid:c"), 1);
-	CHECK_EQ(SlotOf(r, "uuid:a"), 2);
-	CHECK_EQ(WriteOf(r, "uuid:c", 0x03), 0x03u);
+	// 적어 둔 자리뿐이면 그 자리를 쓴다 — 없는 소스가 트랙을 영영 막지는 않는다.
+	AssignmentInput full;
+	full.now = 100;
+	for (int k = 1; k <= kStemSlots; k++)
+		full.map.push_back(Entry("uuid:gone" + std::to_string(k), k, 10));
+	full.sources = {Src("uuid:new", "New", AudioKind::Media, 100)};
+	CHECK_EQ(SlotOf(ComputeAssignment(full), "uuid:new"), 1);
 }
 
 // 처음 쓰기 전의 체크를 남긴다 — 이미 남긴 것은 덮지 않고, 쓰지 않은 소스는 남기지 않는다.
@@ -801,7 +836,7 @@ TEST(audio_silent_or_monitor_only_sources_get_no_stem)
 	AssignmentResult r = ComputeAssignment(in);
 	CHECK_EQ(SlotOf(r, "uuid:overlay"), 0);
 	CHECK_EQ(SlotOf(r, "uuid:monitor"), 0);
-	CHECK_EQ(SlotOf(r, "uuid:bgm"), 1);
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 2); // 트랙 2는 조용한 채팅창의 기억이 적어 둔 자리 — 비워 둔다
 	CHECK_EQ(WriteOf(r, "uuid:overlay", 0x3F), 0x01u);
 	CHECK_EQ(WriteOf(r, "uuid:monitor", 0x3F), 0x01u);
 	CHECK(MapHas(r, "uuid:overlay")); // 소리를 다시 내면 자리를 되찾을 수 있게 남긴다
@@ -819,7 +854,10 @@ TEST(audio_global_device_keyed_by_channel)
 	CHECK_EQ(r.mapNext[0].name, std::string("새 이름 마이크"));
 }
 
-TEST(audio_loser_without_room_is_forgotten)
+// 같은 자리를 기억하는 자동 소스 둘 — 먼저 앉은 쪽이 지키고, 밀린 쪽은 갈 자리가 없으면 같은 종류 트랙(바로 그 자리)에
+// 묶인 채 남는다. 기억은 버리지 않는다.
+// 같은 자리 기억 + 빈 트랙 없음 — 묶음은 그대로, 새 소스가 나머지를 채운다.
+TEST(audio_contested_memory_stays_grouped_without_room)
 {
 	AssignmentInput in;
 	in.now = 100;
@@ -829,9 +867,120 @@ TEST(audio_loser_without_room_is_forgotten)
 		      Src("ch:5", "M3", AudioKind::Mic, 5),        Src("ch:6", "M4", AudioKind::Mic, 6)};
 	AssignmentResult r = ComputeAssignment(in);
 	CHECK_EQ(SlotOf(r, "uuid:a"), 1);
-	CHECK_EQ(SlotOf(r, "uuid:b"), 0);
-	CHECK(!MapHas(r, "uuid:b"));
+	CHECK_EQ(SlotOf(r, "uuid:b"), 1);
+	CHECK(MapHas(r, "uuid:b"));
+	CHECK(r.overflowKeys.empty());
+	CHECK_EQ(SlotOf(r, "ch:3"), 2);
+	CHECK_EQ(SlotOf(r, "ch:6"), 5);
+}
+
+// 트랙 2~6이 전부 본방 트랙이면 앉을 곳이 없다 — 그때만 믹스 전용으로 남고 기억을 버린다.
+TEST(audio_overflow_only_when_every_stem_is_main_stream)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.reserved = kStemMask;
+	in.map = {Entry("uuid:a", 1, 10)};
+	in.sources = {Src("uuid:a", "A", AudioKind::Other, 100)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:a"), 0);
+	CHECK(!MapHas(r, "uuid:a"));
 	CHECK_EQ(r.overflowKeys.size(), 1u);
+}
+
+// ---- 손 배정(POK-266) — 독이 기억을 고쳐 쓰고, 계산은 기억대로 앉힌다 ----
+
+// 독에서 찬 트랙으로 옮기면 밀어내지 않고 묶인다 — 방송 중에 지금 나가는 소스와도. 비트는 다음 계산이 맞춘다.
+TEST(audio_moved_source_joins_occupied_track_without_displacing)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {Entry("ch:1", 2, 10, 90), Entry("uuid:bgm", 2, 50)}; // 독이 BGM을 트랙 3(믹서 2)으로 옮겼다
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3, 0x01), Src("ch:1", "데스크탑", AudioKind::Desktop, 1, 0x05),
+		      Src("uuid:bgm", "BGM", AudioKind::Media, 100, 0x01)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "ch:1"), 2);
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 2);
+	CHECK_EQ(SlotOf(r, "ch:3"), 1); // 기억 없는 새 소스는 빈 자리로
+	CHECK_EQ(WriteOf(r, "uuid:bgm", 0x01), 0x05u);
+	CHECK_EQ(WriteOf(r, "ch:1", 0x05), 0x05u); // 그대로
+
+	// 다시 넣으면 그대로 — 멱등.
+	AssignmentInput again = in;
+	again.sources = Applied(in.sources, r);
+	again.map = r.mapNext;
+	AssignmentResult r2 = ComputeAssignment(again);
+	CHECK(r2.writes.empty());
+	CHECK(!r2.mapChanged);
+}
+
+// 독에서 뺀 소스(slot 0)는 어느 트랙에도 없이 믹스에만 남는다 — 자리를 받지도, 기억을 잃지도 않는다.
+TEST(audio_removed_source_stays_off_tracks)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {Entry("uuid:a", 0, 10)};
+	in.map[0].name = "A";
+	in.sources = {Src("uuid:a", "A", AudioKind::Media, 100), Src("ch:3", "마이크", AudioKind::Mic, 3)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:a"), 0);
+	CHECK_EQ(WriteOf(r, "uuid:a", 0x3F), 0x01u); // 트랙 1만
+	CHECK_EQ(SlotOf(r, "ch:3"), 1);
+	CHECK(MapHas(r, "uuid:a"));
+	CHECK(r.overflowKeys.empty());
+
+	AssignmentInput again = in;
+	again.sources = Applied(in.sources, r);
+	again.map = r.mapNext;
+	AssignmentResult r2 = ComputeAssignment(again);
+	CHECK(r2.writes.empty());
+	CHECK(!r2.mapChanged);
+	CHECK_EQ(SlotOf(r2, "uuid:a"), 0);
+}
+
+// 기억한 자리가 본방 트랙이 되면 새 자리를 받는다 — 플러그인이 자리를 옮기는 유일한 경우. 없는 소스의 기억은 그대로.
+TEST(audio_memory_on_main_stream_track_is_reseated)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.reserved = 0x04; // 트랙 3 = 믹서 2
+	in.map = {Entry("uuid:a", 2, 10), Entry("uuid:gone", 2, 10)};
+	in.map[0].name = "A";
+	in.sources = {Src("uuid:a", "A", AudioKind::Media, 100)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:a"), 1);
+	CHECK(r.mapChanged);
+	CHECK(MapHas(r, "uuid:gone"));
+	for (const AudioTrackMapEntry &e : r.mapNext) {
+		if (e.key == "uuid:a")
+			CHECK_EQ(e.assignedAt, 100);
+		if (e.key == "uuid:gone")
+			CHECK_EQ(e.slot, 2);
+	}
+}
+
+// 독 뷰 — 열쇠·잠금이 실리고, 트랙에 없는 소스는 열쇠와 함께 mixOnly에 오른다(독이 「트랙 없음」으로 알린다).
+TEST(audio_routing_view_lists_keys_and_sources_off_tracks)
+{
+	std::vector<AudioSourceInfo> sources = {Src("ch:3", "마이크", AudioKind::Mic, 3, 0x03),
+						Src("uuid:bgm", "BGM", AudioKind::Media, 100, 0x09),
+						Src("uuid:alert", "알림", AudioKind::Browser, 101, 0x09),
+						Src("uuid:off", "효과음", AudioKind::Media, 102, 0x01)};
+	RoutingViewOptions options;
+	options.autoAssign = true;
+	options.applied = true;
+	options.locked = true;
+	AudioRoutingView v = BuildRoutingView(sources, options);
+	CHECK(v.locked);
+	CHECK(v.tracks[0].sources[0] == (AudioSourceView{"마이크", AudioKind::Mic, "ch:3"}));
+	CHECK_EQ(v.tracks[2].sources.size(), 2u);
+	CHECK_EQ(v.tracks[2].sources[1].key, std::string("uuid:alert"));
+	CHECK_EQ(v.mixOnly.size(), 1u);
+	CHECK(v.mixOnly[0] == (AudioSourceView{"효과음", AudioKind::Media, "uuid:off"}));
+	std::string line = DescribeRouting(v);
+	CHECK(line.find("BGM(media), 알림(browser)") != std::string::npos);
+	CHECK(line.find("no-track 1") != std::string::npos);
+	CHECK(BuildRoutingView(sources, options) == v);
 }
 
 TEST(audio_prunes_absent_memories_beyond_cap)
@@ -854,11 +1003,12 @@ TEST(audio_drops_corrupt_memories)
 {
 	AssignmentInput in;
 	in.now = 100;
-	in.map = {Entry("uuid:zero", 0, 1), Entry("uuid:six", 6, 1), Entry("", 1, 1), Entry("uuid:dup", 2, 1),
-		  Entry("uuid:dup", 3, 1)};
+	in.map = {Entry("uuid:minus", -1, 1), Entry("uuid:six", 6, 1), Entry("", 1, 1), Entry("uuid:dup", 2, 1),
+		  Entry("uuid:dup", 3, 1), Entry("uuid:zero", 0, 1)};
 	AssignmentResult r = ComputeAssignment(in);
-	CHECK_EQ(r.mapNext.size(), 1u);
+	CHECK_EQ(r.mapNext.size(), 2u);
 	CHECK_EQ(r.mapNext[0].slot, 2);
+	CHECK_EQ(r.mapNext[1].slot, 0); // 0은 「트랙에 없음」 — 유효하다
 	CHECK(r.mapChanged);
 }
 
@@ -873,7 +1023,7 @@ TEST(audio_main_stream_track_is_not_a_slot)
 	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3), Src("ch:1", "데스크탑", AudioKind::Desktop, 1),
 		      Src("uuid:bgm", "BGM", AudioKind::Media, 100)};
 	AssignmentResult r = ComputeAssignment(in);
-	CHECK(r.slotKey[1].empty());
+	CHECK(r.slotKeys[1].empty());
 	CHECK_EQ(SlotOf(r, "ch:3"), 2);
 	CHECK_EQ(SlotOf(r, "ch:1"), 3);
 	CHECK_EQ(SlotOf(r, "uuid:bgm"), 4);
@@ -924,7 +1074,6 @@ TEST(audio_remembered_offscreen_source_keeps_slot)
 {
 	AssignmentInput in;
 	in.now = 100;
-	in.locked = true;
 	in.map = {Entry("uuid:bgm", 1, 10)};
 	in.sources = {Offscreen("uuid:bgm", "BGM", AudioKind::Media, 100, 0x03),
 		      Src("ch:3", "마이크", AudioKind::Mic, 3, 0x01)};
@@ -955,7 +1104,7 @@ TEST(audio_routing_view_reflects_actual_bits)
 	std::string line = DescribeRouting(v);
 	CHECK(line.find("T2 마이크(mic)") != std::string::npos);
 	CHECK(line.find("T4 –") != std::string::npos);
-	CHECK(line.find("mix-only 1") != std::string::npos);
+	CHECK(line.find("no-track 1") != std::string::npos);
 }
 
 // 자동 배정을 켤지 처음 물을 때, 스트리머가 트랙 2~6을 직접 짜 뒀으면 덮어쓴다고 알린다.
@@ -1003,7 +1152,7 @@ TEST(audio_routing_view_marks_main_stream_and_hides_offscreen)
 	CHECK(!v.tracks[1].mainStream);
 	CHECK_EQ(v.tracks[0].sources.size(), 1u); // 본방 트랙 2에 마이크
 	CHECK_EQ(v.mixOnly.size(), 1u);           // 마이크 — 본방 트랙에만 있고 스템에는 없다
-	CHECK_EQ(v.mixOnly[0], std::string("마이크"));
+	CHECK_EQ(v.mixOnly[0].name, std::string("마이크"));
 	CHECK(v.monitorOnly.empty()); // 화면에 없는 효과음
 	CHECK(DescribeRouting(v).find("T2 main-stream 마이크(mic)") != std::string::npos);
 

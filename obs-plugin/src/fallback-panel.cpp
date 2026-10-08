@@ -10,6 +10,8 @@
 
 #include <obs-module.h>
 
+#include <QComboBox>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -20,7 +22,9 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <chrono>
+#include <set>
 #include <thread>
 
 namespace pokeclip {
@@ -65,6 +69,21 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	audio_->setWordWrap(true);
 	audio_->setTextFormat(Qt::PlainText);
 	assign_ = new QPushButton(Text("Audio.Enable"), this);
+	trackRows_ = new QWidget(this);
+	auto *rows = new QGridLayout(trackRows_);
+	rows->setContentsMargins(0, 0, 0, 0);
+	rows->setHorizontalSpacing(6);
+	rows->setVerticalSpacing(2);
+	for (size_t i = 0; i < trackLabel_.size(); i++) {
+		trackLabel_[i] = new QLabel(trackRows_);
+		trackLabel_[i]->setTextFormat(Qt::PlainText);
+		trackPick_[i] = new QComboBox(trackRows_);
+		trackPick_[i]->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+		rows->addWidget(trackLabel_[i], static_cast<int>(i), 0, Qt::AlignVCenter);
+		rows->addWidget(trackPick_[i], static_cast<int>(i), 1);
+		connect(trackPick_[i], &QComboBox::activated, this, [this, i](int) { OnTrackPicked(i); });
+	}
+	rows->setColumnStretch(0, 1);
 	marks_ = new QLabel(this);
 	marks_->setWordWrap(true);
 	marks_->setTextFormat(Qt::PlainText);
@@ -98,6 +117,7 @@ FallbackPanel::FallbackPanel(const QString &reason, QWidget *parent) : QWidget(p
 	layout->addLayout(retryRow);
 	layout->addWidget(checks_);
 	layout->addWidget(audio_);
+	layout->addWidget(trackRows_);
 	layout->addWidget(assign_);
 	layout->addWidget(mark_);
 	layout->addWidget(marks_);
@@ -170,28 +190,74 @@ void FallbackPanel::Render(const StateSnapshot &s)
 	checks_->setText(checksText);
 
 	// 트랙 1은 늘 최종 믹스라 트랙 2~6만 적는다. 실제 트랙 비트 기준이라 수동 모드에서도 진실을 보여준다.
+	// 트랙마다 한 줄 + 콤보(POK-266) — 콤보는 그 트랙에 없는 소스를 「넣기」, 거기 있는 소스를 「빼기」.
+	// 어느 트랙에도 없는 소스는 제목 아래 「트랙 없음」으로 알린다.
 	if (s.paired && s.audio.known) {
-		QStringList parts;
+		QString line = Text("Audio.Title");
+		if (s.audio.deferred)
+			line += " " + Text("Audio.Deferred");
+		else if (!s.audio.autoAssign)
+			line += " " + Text("Audio.Manual");
+		if (!s.audio.mixOnly.empty()) {
+			QStringList gone;
+			for (const AudioSourceView &src : s.audio.mixOnly)
+				gone << QString::fromStdString(src.name);
+			line += "\n⚠ " + Text("Audio.NoTrack").arg(gone.join(", "));
+		}
+		audio_->setText(line);
+
+		std::vector<AudioSourceView> pool; // 고를 수 있는 소스 — 스템 트랙에 있는 것 + 트랙 2~6에 없는 것
+		std::set<std::string> seen;
 		for (const AudioTrackView &t : s.audio.tracks) {
+			if (t.mainStream)
+				continue;
+			for (const AudioSourceView &src : t.sources) {
+				if (seen.insert(src.key).second)
+					pool.push_back(src);
+			}
+		}
+		for (const AudioSourceView &src : s.audio.mixOnly) {
+			if (seen.insert(src.key).second)
+				pool.push_back(src);
+		}
+		for (size_t i = 0; i < trackLabel_.size(); i++) {
+			const AudioTrackView &t = s.audio.tracks[i];
 			QStringList names;
 			for (const AudioSourceView &src : t.sources)
 				names << QString::fromStdString(src.name);
 			QString label = t.mainStream ? QString("T%1(%2)").arg(t.track).arg(Text("Audio.MainStream"))
 						     : QString("T%1").arg(t.track);
-			parts << label + " " + (names.isEmpty() ? QString("–") : names.join(", "));
+			trackLabel_[i]->setText(label + " " + (names.isEmpty() ? QString("–") : names.join(", ")));
+
+			QComboBox *pick = trackPick_[i];
+			pick->blockSignals(true);
+			pick->clear();
+			pick->addItem(Text("Audio.Pick"));
+			if (!t.mainStream) {
+				for (const AudioSourceView &src : pool) {
+					bool here = std::any_of(t.sources.begin(), t.sources.end(),
+								[&](const AudioSourceView &x) { return x.key == src.key; });
+					if (!here)
+						pick->addItem(Text("Audio.PickAdd").arg(QString::fromStdString(src.name)),
+							      QStringList{"add", QString::fromStdString(src.key),
+									  QString::fromStdString(src.name)});
+				}
+				for (const AudioSourceView &src : t.sources)
+					pick->addItem(Text("Audio.PickRemove").arg(QString::fromStdString(src.name)),
+						      QStringList{"remove", QString::fromStdString(src.key),
+								  QString::fromStdString(src.name)});
+			}
+			pick->setCurrentIndex(0);
+			pick->setEnabled(s.audio.applied && !t.mainStream && pick->count() > 1);
+			pick->blockSignals(false);
 		}
-		QString line = Text("Audio.Title") + ": " + parts.join(" · ");
-		if (!s.audio.mixOnly.empty())
-			line += " · " + Text("Audio.MixOnly").arg(static_cast<int>(s.audio.mixOnly.size()));
-		if (s.audio.deferred)
-			line += " " + Text("Audio.Deferred");
-		else if (!s.audio.autoAssign)
-			line += " " + Text("Audio.Manual");
-		audio_->setText(line);
 		audio_->setVisible(true);
+		trackRows_->setVisible(true);
 	} else {
 		audio_->setVisible(false);
+		trackRows_->setVisible(false);
 	}
+	audioLocked_ = s.audio.locked;
 	// 자동 배정은 기본으로 꺼져 있다 — 켜는 길은 확인 창을 거친다(스템이 왜 필요한지·짜 둔 트랙을 덮어쓴다).
 	// 켜져 있으면 같은 버튼이 끄기다 — 독 「고급 설정」 스위치와 같이 원래 체크로 되돌린다(방송·녹화 중이면 끝난 뒤).
 	assign_->setText(Text(s.audio.autoAssign ? "Audio.Disable" : "Audio.Enable"));
@@ -293,6 +359,29 @@ void FallbackPanel::OnAssignClicked()
 		return;
 	}
 	AudioRouter::Instance().Schedule("setting");
+}
+
+void FallbackPanel::OnTrackPicked(size_t index)
+{
+	QComboBox *pick = trackPick_[index];
+	QStringList data = pick->currentData().toStringList();
+	pick->blockSignals(true);
+	pick->setCurrentIndex(0);
+	pick->blockSignals(false);
+	if (data.size() != 3)
+		return;
+	const bool add = data[0] == "add";
+	const int track = static_cast<int>(index) + 2;
+	// 방송·녹화 중의 넣기·빼기는 지금 나가는 트랙을 바꾼다 — 독처럼 한 번 묻는다.
+	if (audioLocked_ &&
+	    QMessageBox::question(this, Text(add ? "Audio.PinLiveTitle" : "Audio.RemoveLiveTitle").arg(track),
+				  Text(add ? "Audio.PinLiveBody" : "Audio.RemoveLiveBody").arg(data[2])) != QMessageBox::Yes)
+		return;
+	std::string reason;
+	if (!AudioRouter::Instance().AssignTrack(data[1].toStdString(), add ? track - 1 : 0, reason))
+		message_->setText(LocalizedReason(reason));
+	else
+		message_->clear();
 }
 
 void FallbackPanel::OnUnpairClicked()
