@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -20,13 +21,19 @@ public class ChannelPurger {
 
     private final ChatPurgeStore store;
     private final ArchivePurge archive;
+    private final Consumer<String> stopCollecting;
     private final ChatPurgeProperties properties;
     private final Supplier<Instant> clock;
 
-    public ChannelPurger(ChatPurgeStore store, ArchivePurge archive, ChatPurgeProperties properties,
-                         Supplier<Instant> clock) {
+    /**
+     * @param stopCollecting 그 채널을 지금 걷고 있는 세션을 닫는다. 탈퇴가 치지직 토큰을 폐기해도 붙어 있는 소켓이 끊긴다는
+     *                       보장이 없다(ADR-085 한계). 닫지 않으면 창이 닫힌 뒤 쌓인 채팅은 60일까지 남는다(PR #220 codex P1).
+     */
+    public ChannelPurger(ChatPurgeStore store, ArchivePurge archive, Consumer<String> stopCollecting,
+                         ChatPurgeProperties properties, Supplier<Instant> clock) {
         this.store = store;
         this.archive = archive;
+        this.stopCollecting = stopCollecting;
         this.properties = properties;
         this.clock = clock;
     }
@@ -34,7 +41,8 @@ public class ChannelPurger {
     /** 실패는 예외로 올린다. 정리기가 잡아 다음 순회에 다시 부른다. */
     public void purge(Due due) {
         Instant before = due.requestedAt().plus(properties.lateWindow());
-        int deleted = 0;
+        stopCollecting.accept(due.channelId());
+        int deleted = store.deleteIngestKeysOfChannel(due.channelId(), before);
         for (Table table : Table.values()) {
             int batch;
             do {
@@ -42,7 +50,7 @@ public class ChannelPurger {
                 deleted += batch;
             } while (batch == properties.batch());
         }
-        archive.deleteChannel(due.channelId());
+        archive.deleteChannel(due.channelId(), before);
         // 채널 번호는 안 찍는다(auth 규칙과 같다. 치지직 채널을 사람과 잇는 값이다).
         if (deleted > 0) {
             log.info("chat.purge.rows_deleted count={}", deleted);

@@ -175,6 +175,25 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         assertThat(count("broadcasts WHERE stream_id = 'S-again'")).isZero();
     }
 
+    /** 탈퇴 순간 붙어 있던 녹화가 정리 뒤에 조각 줄을 더해도 하루 동안은 다시 잡는다(PR #220 codex P1). */
+    @Test
+    void 끝난_뒤_녹화_조각_줄이_다시_생기면_정리기가_다시_잡는다() {
+        심는다(탈퇴자, "S-gone", "K-gone");
+        store.request(탈퇴자, Instant.now());
+        purger(new FakeStorage()).purge(탈퇴자);
+        assertThat(store.due(10)).isEmpty();
+
+        jdbc.update("INSERT INTO stream_segments (stream_id, seq, start_pts_ms, start_wall_utc, duration_ms, s3_key) "
+                + "VALUES ('K-gone', 99, 0, now(), 2000, 'streams/K-gone/99.m4s')");
+
+        assertThat(store.due(10)).containsExactly(탈퇴자);
+        FakeStorage files = new FakeStorage();
+        purger(files).purge(탈퇴자);
+        assertThat(files.segmentKeys).contains("streams/K-gone/99.m4s");
+        assertThat(count("stream_segments WHERE stream_id = 'K-gone'")).isZero();
+        assertThat(store.due(10)).isEmpty();
+    }
+
     @Test
     void 다시_요청하면_끝난_줄을_다시_연다() {
         store.request(탈퇴자, Instant.now());

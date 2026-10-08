@@ -17,7 +17,8 @@ public class PurgeJobRepository {
 
     public enum Target { CLIP, COLLECTOR }
 
-    public record Job(long id, long userId, Target target, String channelId, int attempts) {
+    /** @param createdAt 탈퇴 시각. 수집기가 이것을 지우는 범위의 기준으로 쓴다(도착 시각이 아니다) */
+    public record Job(long id, long userId, Target target, String channelId, int attempts, Instant createdAt) {
     }
 
     private final JdbcTemplate jdbc;
@@ -56,11 +57,11 @@ public class PurgeJobRepository {
     @Transactional
     public List<Job> claim(Instant now, Duration lease, int limit) {
         List<Job> jobs = jdbc.query("""
-                SELECT id, user_id, target, channel_id, attempts FROM withdrawal_purge_jobs
+                SELECT id, user_id, target, channel_id, attempts, created_at FROM withdrawal_purge_jobs
                  WHERE done_at IS NULL AND next_attempt_at <= ?
                  ORDER BY next_attempt_at LIMIT ? FOR UPDATE SKIP LOCKED""",
                 (rs, n) -> new Job(rs.getLong(1), rs.getLong(2), Target.valueOf(rs.getString(3)),
-                        rs.getString(4), rs.getInt(5)),
+                        rs.getString(4), rs.getInt(5), rs.getTimestamp(6).toInstant()),
                 Timestamp.from(now), limit);
         for (Job job : jobs) {
             jdbc.update("UPDATE withdrawal_purge_jobs SET next_attempt_at = ? WHERE id = ?",

@@ -44,19 +44,31 @@ public class StreamerPurgeStore {
      * 들어온 편지)다. 둘째 갈래가 없으면 그런 방송은 영영 남는다.
      */
     public List<String> due(int limit) {
+        // 끝난 뒤 하루 동안은 녹화 조각 줄이 다시 생겼는지도 본다. 영상 서버는 장부를 따로 쓰므로, 탈퇴 순간 붙어 있던
+        // 녹화가 정리 뒤에 줄을 더할 수 있다(PR #220 codex P1). 장부가 없는 배포(media 없음)에서는 그 갈래를 뺀다.
+        String lateSegments = tableExists("stream_segments")
+                ? " OR (p.completed_at > now() - interval '1 day' AND EXISTS "
+                + "(SELECT 1 FROM stream_segments s WHERE s.stream_id = ANY(p.segment_keys)))"
+                : "";
         return jdbc.queryForList("""
                 SELECT p.streamer_id FROM purged_streamers p
                  WHERE p.completed_at IS NULL
-                    OR EXISTS (SELECT 1 FROM broadcasts b WHERE b.streamer_id = p.streamer_id)
+                    OR EXISTS (SELECT 1 FROM broadcasts b WHERE b.streamer_id = p.streamer_id)""" + lateSegments + """
+
                  ORDER BY p.requested_at
                  LIMIT ?""", String.class, limit);
+    }
+
+    /** 창고가 없어 녹화 조각을 안 지우는 배포에서, 정리기가 그 줄을 「남은 일」로 계속 잡지 않게 열쇠를 비운다. */
+    public void clearSegmentKeys(String streamerId) {
+        jdbc.update("UPDATE purged_streamers SET segment_keys = '{}' WHERE streamer_id = ?", streamerId);
     }
 
     /**
      * 표에서 지운다. 지울 파일 주소는 먼저 명부로 옮긴다: 표 줄이 사라지면 주소를 다시 알 길이 없다.
      * 호출자가 트랜잭션을 연다.
      *
-     * <p>방송·렌더 주문·완성 영상 줄을 이 순서로 {@code FOR UPDATE}로 잡는다. 그 사이 새 카드·편집본·업로드가 외래키로 붙으면
+     * <p>방송·렌더 주문·완성 영상·카드 줄을 이 순서로 {@code FOR UPDATE}로 잡는다. 그 사이 새 카드·편집본·업로드가 외래키로 붙으면
      * 마지막 방송 지우기가 외래키 위반으로 죽기 때문이다(자식 INSERT는 부모 줄에 KEY SHARE를 걸어 여기서 기다린다).
      */
     public Detached detach(String streamerId) {
@@ -76,8 +88,10 @@ public class StreamerPurgeStore {
                 + "ORDER BY id FOR UPDATE", streams);
         List<String> clipIds = jdbc.queryForList(
                 "SELECT id::text FROM clips WHERE stream_id = ANY(?) ORDER BY id FOR UPDATE", String.class, streams);
+        // 카드도 잡는다. 썸네일 보고가 대상 줄을 FOR KEY SHARE로 잡고 적으므로, 여기서 먼저 잡아야 그 보고가 정리 뒤로 밀려
+        // 「없음」을 본다(ThumbnailRepository.saveIfTargetExists).
         List<String> cardIds = jdbc.queryForList(
-                "SELECT id::text FROM jump_cards WHERE stream_id = ANY(?)", String.class, streams);
+                "SELECT id::text FROM jump_cards WHERE stream_id = ANY(?) ORDER BY id FOR UPDATE", String.class, streams);
 
         List<String> prefixes = new ArrayList<>();
         clipIds.forEach(id -> {

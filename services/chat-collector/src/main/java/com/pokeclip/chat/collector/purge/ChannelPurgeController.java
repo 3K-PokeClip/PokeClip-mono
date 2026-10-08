@@ -3,9 +3,11 @@ package com.pokeclip.chat.collector.purge;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.Map;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -15,7 +17,7 @@ import java.util.regex.Pattern;
  * 필터({@code InternalApiConfiguration})를 지난다.
  *
  * <p>명부에 적고 202로 바로 답한다. 실제 지우기는 정리기가 한다. 같은 채널로 몇 번 불러도 결과가 같다.
- * 답: 202 · 400 채널 번호 모양이 틀렸다 · 401 토큰.
+ * 답: 202 · 400 채널 번호·시각 모양이 틀렸다 · 401 토큰.
  */
 @RestController
 public class ChannelPurgeController {
@@ -31,12 +33,22 @@ public class ChannelPurgeController {
         this.clock = Instant::now;
     }
 
+    /**
+     * @param since 탈퇴 시각(auth 장부의 줄을 만든 시각, ISO-8601). 지우는 범위의 기준이다. 없으면 받은 시각.
+     */
     @DeleteMapping("/internal/channels/{channelId}/chat-data")
-    public ResponseEntity<Map<String, Object>> purge(@PathVariable String channelId) {
+    public ResponseEntity<Map<String, Object>> purge(@PathVariable String channelId,
+                                                     @RequestParam(required = false) String since) {
         if (!CHANNEL_ID.matcher(channelId).matches()) {
             return ResponseEntity.badRequest().body(Map.of("error", "invalid_channel_id"));
         }
-        store.request(channelId, clock.get());
+        Instant at;
+        try {
+            at = since == null ? clock.get() : Instant.parse(since);
+        } catch (DateTimeParseException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid_since"));
+        }
+        store.request(channelId, at);
         return ResponseEntity.accepted().build();
     }
 }

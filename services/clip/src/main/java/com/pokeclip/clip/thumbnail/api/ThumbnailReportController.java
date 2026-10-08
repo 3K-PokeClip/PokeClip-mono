@@ -56,11 +56,12 @@ public class ThumbnailReportController {
         } catch (NullPointerException | DateTimeParseException e) {
             return invalid("capturedAt");
         }
-        if (!thumbnails.targetExists(kind.get(), body.targetId())) {
+        ThumbnailRepository.Saved saved = thumbnails.saveIfTargetExists(kind.get(), body.targetId(), capturedAt,
+                clock.instant());
+        if (saved == ThumbnailRepository.Saved.GONE) {
             return ResponseEntity.status(404).body(Map.of("error", "thumbnail_target_not_found"));
         }
-        boolean saved = thumbnails.saveCaptured(kind.get(), body.targetId(), capturedAt, clock.instant());
-        return ResponseEntity.ok(Map.of("saved", saved));
+        return ResponseEntity.ok(Map.of("saved", saved == ThumbnailRepository.Saved.SAVED));
     }
 
     private static ResponseEntity<Map<String, Object>> invalid(String field) {

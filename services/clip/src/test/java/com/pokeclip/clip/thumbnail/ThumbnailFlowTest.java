@@ -389,6 +389,36 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
         assertThat(controller.report(new ThumbnailReportController.ReportBody("card", cardId, at)).getStatusCode().value()).isEqualTo(200);
     }
 
+    /**
+     * 확인과 적기 사이에 탈퇴 정리가 끼면 대상 없는 사진 줄이 남았다(PR #220 codex P2). 정리처럼 카드 줄을 FOR UPDATE로 잡고
+     * 있는 동안 보고를 보내면 보고가 기다렸다가, 정리가 카드를 지우고 커밋한 뒤 「없음」을 봐야 한다.
+     */
+    @Test
+    void 정리가_대상을_잡고_있으면_보고가_기다렸다가_없음을_본다() throws Exception {
+        방송("S-race", "S-race", "ended", 시작, 시작.plusSeconds(60));
+        String cardId = Long.toString(카드("S-race", 1_000, 5));
+        javax.sql.DataSource ds = jdbc.getDataSource();
+        try (java.sql.Connection purge = ds.getConnection()) {
+            purge.setAutoCommit(false);
+            try (var lock = purge.prepareStatement("SELECT id FROM jump_cards WHERE id = ? FOR UPDATE")) {
+                lock.setLong(1, Long.parseLong(cardId));
+                lock.executeQuery();
+            }
+            java.util.concurrent.CompletableFuture<Integer> report = java.util.concurrent.CompletableFuture.supplyAsync(
+                    () -> controller.report(new ThumbnailReportController.ReportBody("card", cardId, now.toString()))
+                            .getStatusCode().value());
+            Thread.sleep(300);
+            assertThat(report).as("보고가 잠금을 안 기다렸다 — 확인과 적기가 갈라져 있다").isNotDone();
+            try (var del = purge.prepareStatement("DELETE FROM jump_cards WHERE id = ?")) {
+                del.setLong(1, Long.parseLong(cardId));
+                del.executeUpdate();
+            }
+            purge.commit();
+            assertThat(report.get(10, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(404);
+        }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM thumbnails", Integer.class)).isZero();
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────────────────
 
     private ThumbnailUrls urls(boolean enabled) {

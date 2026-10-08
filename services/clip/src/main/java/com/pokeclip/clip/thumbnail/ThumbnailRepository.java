@@ -1,6 +1,7 @@
 package com.pokeclip.clip.thumbnail;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
@@ -83,14 +84,25 @@ public class ThumbnailRepository {
                 kind.value(), targetId, Timestamp.from(now), attempts, Timestamp.from(now));
     }
 
+    /** 보고를 적은 결과. GONE은 대상이 없다(탈퇴로 지워졌다, POK-256). */
+    public enum Saved { SAVED, KEPT_NEWER, GONE }
+
     /**
-     * 사진을 붙일 대상이 아직 있나(POK-256). 탈퇴로 지운 방송·카드·영상에 늦게 온 보고가 사진 줄을 되살리지 않게 한다.
-     * 카드·영상 번호는 보고 문이 숫자만 받는다.
+     * 대상이 있을 때만 보고를 적는다(POK-256). 대상 줄을 {@code FOR KEY SHARE}로 잡은 채 적는다: 탈퇴 정리는 방송·영상·카드 줄을
+     * {@code FOR UPDATE}로 먼저 잡으므로, 정리가 먼저면 여기서 기다렸다가 「없음」을 보고, 여기가 먼저면 정리가 기다렸다가
+     * 이 줄까지 지운다. 확인과 적기를 갈라 두면 그 사이에 정리가 끼어 대상 없는 사진 줄이 남는다(PR #220 codex P2).
      */
-    public boolean targetExists(ThumbnailKind kind, String targetId) {
+    @Transactional
+    public Saved saveIfTargetExists(ThumbnailKind kind, String targetId, Instant capturedAt, Instant now) {
+        if (!lockTarget(kind, targetId)) {
+            return Saved.GONE;
+        }
+        return saveCaptured(kind, targetId, capturedAt, now) ? Saved.SAVED : Saved.KEPT_NEWER;
+    }
+
+    private boolean lockTarget(ThumbnailKind kind, String targetId) {
         if (kind == ThumbnailKind.LIVE) {
-            return Boolean.TRUE.equals(jdbc.queryForObject(
-                    "SELECT EXISTS (SELECT 1 FROM broadcasts WHERE stream_id = ?)", Boolean.class, targetId));
+            return !jdbc.queryForList("SELECT 1 FROM broadcasts WHERE stream_id = ? FOR KEY SHARE", targetId).isEmpty();
         }
         long id;
         try {
@@ -100,8 +112,7 @@ public class ThumbnailRepository {
             return false;
         }
         String table = kind == ThumbnailKind.CARD ? "jump_cards" : "clips";
-        return Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT EXISTS (SELECT 1 FROM " + table + " WHERE id = ?)", Boolean.class, id));
+        return !jdbc.queryForList("SELECT 1 FROM " + table + " WHERE id = ? FOR KEY SHARE", id).isEmpty();
     }
 
     /**

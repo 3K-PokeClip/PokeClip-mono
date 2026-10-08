@@ -50,34 +50,66 @@ class ChatPurgeTest extends IntegrationTestSupport {
             jdbc.update("DELETE FROM " + table + " WHERE channel_id LIKE 'purge-%'");
         }
         jdbc.update("DELETE FROM purged_channels WHERE channel_id LIKE 'purge-%'");
+        jdbc.update("DELETE FROM chat_ingest_keys WHERE stream_id LIKE 'purge-%'");
+        stopped.clear();
     }
+
+    private final List<String> stopped = new ArrayList<>();
 
     @Test
     void 탈퇴_채널의_채팅_후원_방송정보와_원본을_지우고_이웃은_남긴다() {
         심는다(탈퇴_채널, 요청.minusSeconds(3600));
         심는다(이웃_채널, 요청.minusSeconds(3600));
         List<String> archived = new ArrayList<>();
+        jdbc.update("INSERT INTO chat_ingest_keys (stream_id, ingest_stream_id) VALUES ('purge-stream', 'purge-key')");
 
         store.request(탈퇴_채널, 요청);
-        purger(archived::add, 요청.plus(Duration.ofMinutes(11))).purge(due(탈퇴_채널));
+        purger((c, before) -> archived.add(c + "@" + before), 요청.plus(Duration.ofMinutes(11))).purge(due(탈퇴_채널));
 
         for (String table : List.of("chat_messages", "chat_donations", "broadcast_info")) {
             assertThat(count(table, 탈퇴_채널)).as(table).isZero();
             assertThat(count(table, 이웃_채널)).as(table).isOne();
         }
-        assertThat(archived).containsExactly(탈퇴_채널);
+        // 원본도 같은 창(탈퇴 + 10분)으로 자른다.
+        assertThat(archived).containsExactly(탈퇴_채널 + "@" + 요청.plus(Duration.ofMinutes(10)));
+        assertThat(stopped).containsExactly(탈퇴_채널);
+        // 방송 번호 → 스트림키 짝도 지운다(그 방송의 채팅이 이 채널 것이었다).
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM chat_ingest_keys WHERE stream_id = 'purge-stream'",
+                Integer.class)).isZero();
         assertThat(store.due(10)).extracting(Due::channelId).doesNotContain(탈퇴_채널);
+    }
+
+    /** 응답을 못 받은 발송기가 다시 보내도 지우는 범위가 뒤로 밀리지 않는다(PR #220 codex P1). */
+    @Test
+    void 같은_탈퇴가_늦게_다시_와도_첫_기준_시각을_지킨다() {
+        store.request(탈퇴_채널, 요청);
+        store.request(탈퇴_채널, 요청.plus(Duration.ofHours(1)));
+
+        assertThat(due(탈퇴_채널).requestedAt()).isEqualTo(요청);
+    }
+
+    /** 끝난 뒤에 더 늦은 탈퇴가 오면(같은 채널을 연동했던 다른 계정) 다시 연다. 옛 탈퇴의 재전송은 안 연다. */
+    @Test
+    void 끝난_줄은_더_늦은_탈퇴만_다시_연다() {
+        store.request(탈퇴_채널, 요청);
+        store.complete(탈퇴_채널, 요청.plus(Duration.ofMinutes(11)));
+
+        store.request(탈퇴_채널, 요청);
+        assertThat(store.due(100)).extracting(Due::channelId).doesNotContain(탈퇴_채널);
+
+        store.request(탈퇴_채널, 요청.plus(Duration.ofDays(3)));
+        assertThat(due(탈퇴_채널).requestedAt()).isEqualTo(요청.plus(Duration.ofDays(3)));
     }
 
     @Test
     void 늦은_창이_닫히기_전에는_줄을_닫지_않고_창_안에_늦게_적재된_채팅도_지운다() {
         store.request(탈퇴_채널, 요청);
-        purger(c -> { }, 요청.plus(Duration.ofMinutes(1))).purge(due(탈퇴_채널));
+        purger((c, b) -> { }, 요청.plus(Duration.ofMinutes(1))).purge(due(탈퇴_채널));
         assertThat(store.due(10)).extracting(Due::channelId).contains(탈퇴_채널);
 
         // 바구니에 남아 있던 채팅이 지운 뒤 적재됐다(받은 시각은 탈퇴 직전).
         심는다(탈퇴_채널, 요청.minusSeconds(5));
-        purger(c -> { }, 요청.plus(Duration.ofMinutes(11))).purge(due(탈퇴_채널));
+        purger((c, b) -> { }, 요청.plus(Duration.ofMinutes(11))).purge(due(탈퇴_채널));
 
         assertThat(count("chat_messages", 탈퇴_채널)).isZero();
         assertThat(store.due(10)).extracting(Due::channelId).doesNotContain(탈퇴_채널);
@@ -89,7 +121,7 @@ class ChatPurgeTest extends IntegrationTestSupport {
         심는다(탈퇴_채널, 요청.plus(Duration.ofHours(2)));
         store.request(탈퇴_채널, 요청);
 
-        purger(c -> { }, 요청.plus(Duration.ofHours(3))).purge(due(탈퇴_채널));
+        purger((c, b) -> { }, 요청.plus(Duration.ofHours(3))).purge(due(탈퇴_채널));
 
         assertThat(count("chat_messages", 탈퇴_채널)).isOne();
     }
@@ -97,7 +129,7 @@ class ChatPurgeTest extends IntegrationTestSupport {
     @Test
     void 원본_지우기가_실패하면_줄을_닫지_않아_다음_순회가_다시_한다() {
         store.request(탈퇴_채널, 요청);
-        ChannelPurger broken = purger(c -> { throw new IllegalStateException("창고 장애"); },
+        ChannelPurger broken = purger((c, b) -> { throw new IllegalStateException("창고 장애"); },
                 요청.plus(Duration.ofHours(1)));
 
         assertThatThrownBy(() -> broken.purge(due(탈퇴_채널))).isInstanceOf(IllegalStateException.class);
@@ -113,7 +145,7 @@ class ChatPurgeTest extends IntegrationTestSupport {
                 탈퇴_채널, Timestamp.from(요청.minusSeconds(60)), Timestamp.from(요청.minusSeconds(60)));
         store.request(탈퇴_채널, 요청);
 
-        purger(c -> { }, 요청.plus(Duration.ofHours(1))).purge(due(탈퇴_채널));
+        purger((c, b) -> { }, 요청.plus(Duration.ofHours(1))).purge(due(탈퇴_채널));
 
         assertThat(count("chat_messages", 탈퇴_채널)).isZero();
     }
@@ -128,13 +160,17 @@ class ChatPurgeTest extends IntegrationTestSupport {
                 INSERT INTO chat_messages (channel_id, sender_channel_id, content, message_time, received_at, content_sha256)
                 VALUES (?, 'viewer', '옛 줄', ?, ?, 'legacy')""", 이웃_채널, Timestamp.from(old), Timestamp.from(old));
         심는다(탈퇴_채널, fresh);
+        jdbc.update("INSERT INTO chat_ingest_keys (stream_id, ingest_stream_id, created_at) VALUES ('purge-old', 'k', ?), "
+                + "('purge-new', 'k', ?)", Timestamp.from(old), Timestamp.from(fresh));
 
-        new ChatPurgeSweepers(store, purger(c -> { }, now), properties, () -> now).expire();
+        new ChatPurgeSweepers(store, purger((c, b) -> { }, now), properties, () -> now).expire();
 
         for (String table : List.of("chat_messages", "chat_donations", "broadcast_info")) {
             assertThat(count(table, 이웃_채널)).as(table).isZero();
             assertThat(count(table, 탈퇴_채널)).as(table).isOne();
         }
+        assertThat(jdbc.queryForList("SELECT stream_id FROM chat_ingest_keys WHERE stream_id LIKE 'purge-%'", String.class))
+                .containsExactly("purge-new");
     }
 
     @Test
@@ -145,16 +181,20 @@ class ChatPurgeTest extends IntegrationTestSupport {
                 탈퇴_채널)).isOne();
 
         assertThat(지운다("purge-a.b", "test-internal-token").statusCode()).isEqualTo(400);
+        assertThat(지운다("purge-x", "since=yesterday", "test-internal-token").statusCode()).isEqualTo(400);
+        // 탈퇴 시각을 실어 오면 그것이 기준이다(도착 시각이 아니다).
+        assertThat(지운다("purge-since", "since=2026-10-01T00:00:00Z", "test-internal-token").statusCode()).isEqualTo(202);
+        assertThat(due("purge-since").requestedAt()).isEqualTo(Instant.parse("2026-10-01T00:00:00Z"));
         assertThat(지운다("purge-other", null).statusCode()).isEqualTo(401);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM purged_channels WHERE channel_id LIKE 'purge-%'",
-                Integer.class)).isOne();
+                Integer.class)).isEqualTo(2);
     }
 
     // ── 도우미 ──────────────────────────────────────────────────────────────
 
     private ChannelPurger purger(ArchivePurge archive, Instant now) {
         AtomicReference<Instant> clock = new AtomicReference<>(now);
-        return new ChannelPurger(store, archive, properties, clock::get);
+        return new ChannelPurger(store, archive, stopped::add, properties, clock::get);
     }
 
     private Due due(String channelId) {
@@ -162,8 +202,12 @@ class ChatPurgeTest extends IntegrationTestSupport {
     }
 
     private HttpResponse<String> 지운다(String channelId, String token) throws Exception {
-        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(
-                "http://localhost:" + port + "/internal/channels/" + channelId + "/chat-data")).DELETE();
+        return 지운다(channelId, null, token);
+    }
+
+    private HttpResponse<String> 지운다(String channelId, String query, String token) throws Exception {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/internal/channels/"
+                + channelId + "/chat-data" + (query == null ? "" : "?" + query))).DELETE();
         if (token != null) {
             request.header("X-Internal-Token", token);
         }

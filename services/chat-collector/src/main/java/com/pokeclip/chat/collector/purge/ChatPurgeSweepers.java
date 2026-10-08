@@ -65,6 +65,7 @@ public class ChatPurgeSweepers {
                     deleted += batch;
                 } while (batch == properties.batch());
             }
+            deleted += store.deleteExpiredIngestKeys(cutoff);
             if (deleted > 0) {
                 log.info("chat.retention.expired count={}", deleted);
             }

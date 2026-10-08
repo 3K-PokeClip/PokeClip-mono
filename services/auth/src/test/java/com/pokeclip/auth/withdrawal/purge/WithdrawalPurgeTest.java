@@ -64,7 +64,9 @@ class WithdrawalPurgeTest extends WithdrawalTestSupport {
     void 가짜_서버를_띄운다() throws IOException {
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         server.createContext("/internal/", exchange -> {
-            received.add(exchange.getRequestMethod() + " " + exchange.getRequestURI().getPath() + " "
+            String query = exchange.getRequestURI().getQuery();
+            received.add(exchange.getRequestMethod() + " " + exchange.getRequestURI().getPath()
+                    + (query == null ? "" : "?" + query) + " "
                     + INTERNAL_TOKEN.equals(exchange.getRequestHeaders().getFirst("X-Internal-Token")));
             exchange.sendResponseHeaders(answer.get(), -1);
             exchange.close();
@@ -115,9 +117,12 @@ class WithdrawalPurgeTest extends WithdrawalTestSupport {
 
         dispatcher().dispatchOnce();
 
+        // 수집기에는 탈퇴 시각(장부 줄을 만든 시각)을 싣는다. 보내는 시각을 실으면 재전송마다 범위가 밀린다.
+        String since = jdbc.queryForObject("SELECT created_at FROM withdrawal_purge_jobs WHERE user_id = ? AND target = 'COLLECTOR'",
+                java.sql.Timestamp.class, user.getId()).toInstant().toString();
         assertThat(received).containsExactlyInAnyOrder(
                 "DELETE /internal/streamers/" + user.getId() + "/data true",
-                "DELETE /internal/channels/" + channel + "/chat-data true");
+                "DELETE /internal/channels/" + channel + "/chat-data?since=" + since + " true");
         assertThat(openJobs(user)).isZero();
     }
 

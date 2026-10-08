@@ -28,7 +28,9 @@ class PurgeNotifier {
         switch (job.target()) {
             case CLIP -> clip.delete().uri("/internal/streamers/{userId}/data", job.userId())
                     .retrieve().toBodilessEntity();
-            case COLLECTOR -> collector.delete().uri("/internal/channels/{channelId}/chat-data", job.channelId())
+            // 탈퇴 시각을 싣는다. 다시 보내거나 늦게 보내도 수집기가 지우는 범위가 뒤로 밀리지 않는다(PR #220 codex P1).
+            case COLLECTOR -> collector.delete().uri("/internal/channels/{channelId}/chat-data?since={since}",
+                            job.channelId(), job.createdAt().toString())
                     .retrieve().toBodilessEntity();
         }
     }

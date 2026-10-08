@@ -35,12 +35,20 @@ public class ChatPurgeStore {
         this.jdbc = jdbc;
     }
 
-    /** 명부에 적는다. 이미 있으면 요청 시각을 새로 잡고 다시 연다: 그 뒤에 받은 채팅도 지울 대상이다. */
-    public void request(String channelId, Instant now) {
+    /**
+     * 명부에 적는다. {@code since}는 auth가 적은 탈퇴 시각이다(도착 시각이 아니다: 발송기가 다시 보내거나 늦게 보내도
+     * 지우는 범위가 뒤로 밀리지 않는다, PR #220 codex P1).
+     *
+     * <p>같은 탈퇴가 다시 와도(응답을 못 받은 발송기의 재시도) 첫 줄을 그대로 둔다. 끝난 줄에 <b>그 뒤 시각</b>의 알림이 오면
+     * 새 탈퇴(같은 채널을 연동했던 다른 계정)라 다시 연다.
+     */
+    public void request(String channelId, Instant since) {
         jdbc.update("""
                 INSERT INTO purged_channels (channel_id, requested_at) VALUES (?, ?)
-                ON CONFLICT (channel_id) DO UPDATE SET requested_at = EXCLUDED.requested_at, completed_at = NULL""",
-                channelId, Timestamp.from(now));
+                ON CONFLICT (channel_id) DO UPDATE SET requested_at = EXCLUDED.requested_at, completed_at = NULL
+                 WHERE purged_channels.completed_at IS NOT NULL
+                   AND EXCLUDED.requested_at > purged_channels.completed_at""",
+                channelId, Timestamp.from(since));
     }
 
     public record Due(String channelId, Instant requestedAt) {
@@ -50,6 +58,25 @@ public class ChatPurgeStore {
         return jdbc.query("SELECT channel_id, requested_at FROM purged_channels WHERE completed_at IS NULL "
                         + "ORDER BY requested_at LIMIT ?",
                 (rs, n) -> new Due(rs.getString(1), rs.getTimestamp(2).toInstant()), limit);
+    }
+
+    /**
+     * 이 채널 방송들의 「방송 번호 → 물리 키(스트림키)」 짝을 지운다(PR #220 codex P2). 그 표에는 채널 칸이 없어
+     * 채팅·후원·방송 정보에 남은 방송 번호로 찾는다. 그래서 그 줄들을 지우기 <b>전에</b> 부른다.
+     */
+    public int deleteIngestKeysOfChannel(String channelId, Instant before) {
+        Timestamp at = Timestamp.from(before);
+        return jdbc.update("""
+                DELETE FROM chat_ingest_keys WHERE stream_id IN (
+                    SELECT stream_id FROM chat_messages WHERE channel_id = ? AND received_at < ? AND stream_id IS NOT NULL
+                    UNION SELECT stream_id FROM chat_donations WHERE channel_id = ? AND received_at < ?
+                    UNION SELECT stream_id FROM broadcast_info WHERE channel_id = ? AND observed_at < ?)""",
+                channelId, at, channelId, at, channelId, at);
+    }
+
+    /** 만든 지 기한이 지난 「방송 번호 → 물리 키」 짝. 방송 하나에 한 줄이라 묶음으로 자르지 않는다. */
+    public int deleteExpiredIngestKeys(Instant cutoff) {
+        return jdbc.update("DELETE FROM chat_ingest_keys WHERE created_at < ?", Timestamp.from(cutoff));
     }
 
     /** 이 채널에서 {@code before} 전에 받은 줄을 한 묶음 지운다. 지운 수가 {@code limit}보다 작으면 다 지운 것이다. */

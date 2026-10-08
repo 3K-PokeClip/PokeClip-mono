@@ -58,6 +58,7 @@ public class StreamerPurger {
             // 렌더가 꺼진 배포는 창고 이름을 모른다. 이 서버가 만든 파일도 없다. 녹화 조각 줄도 안 지운다: 줄을 지우면
             // media가 올린 파일의 키를 다시 알 길이 없다.
             store.clearPrefixes(streamerId);
+            store.clearSegmentKeys(streamerId);
             store.complete(streamerId, clock.instant());
             log.warn("clip.purge.storage_unavailable streamerId={}", streamerId);
             return;

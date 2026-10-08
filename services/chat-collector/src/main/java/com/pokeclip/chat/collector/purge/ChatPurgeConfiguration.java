@@ -2,6 +2,7 @@ package com.pokeclip.chat.collector.purge;
 
 import com.pokeclip.chat.collector.archive.ArchiveProperties;
 import com.pokeclip.chat.collector.archive.S3Clients;
+import com.pokeclip.chat.collector.session.SessionRegistry;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -22,8 +23,12 @@ public class ChatPurgeConfiguration {
     }
 
     @Bean
-    ChannelPurger channelPurger(ChatPurgeStore store, ArchivePurge archive, ChatPurgeProperties properties) {
-        return new ChannelPurger(store, archive, properties, Instant::now);
+    ChannelPurger channelPurger(ChatPurgeStore store, ArchivePurge archive, SessionRegistry sessions,
+                                ChatPurgeProperties properties) {
+        // 그 채널을 걷는 세션을 닫는다. 늦게 온 시작 편지는 auth가 연동을 닫아 다시 못 연다(연동 조회가 거절된다).
+        return new ChannelPurger(store, archive, channelId -> sessions.activeSessions().stream()
+                .filter(s -> channelId.equals(s.channelId()))
+                .forEach(s -> sessions.close(s.streamId())), properties, Instant::now);
     }
 
     @Bean
