@@ -60,8 +60,9 @@ final class SourceNetworkFilter extends OncePerRequestFilter {
 
   private boolean isAllowed(String remoteAddress) {
     try {
-      // 계열은 매처를 지난 뒤에 본다. 매처가 호스트 이름 꼴을 거르고 나서 InetAddress 로 바꾸므로
-      // (spring-security 7.1 InetAddressParser), 같은 문자열을 여기서 다시 바꿔도 이름 조회가 새로 생기지 않는다.
+      // 계열은 매처를 지난 뒤에 본다. 매처가 같은 문자열을 InetAddress.getByName 으로 바꾸는 데 성공해
+      // 참을 낸 뒤에만 여기 온다(spring-security 7.1 InetAddressParser) — 새 이름 조회는 생기지 않는다.
+      // 입력은 톰캣 소켓의 숫자 주소다.
       return allowed.stream().anyMatch(matcher -> matcher.matches(remoteAddress))
           && InetAddress.getByName(remoteAddress) instanceof Inet4Address;
     } catch (UnknownHostException | RuntimeException e) {
