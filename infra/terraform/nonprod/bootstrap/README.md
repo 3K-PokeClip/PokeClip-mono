@@ -4,8 +4,9 @@ nonprod 계정의 Terraform 상태 버킷을 만드는 루트입니다. 상태 �
 다른 nonprod 루트(dev · dns-legacy · dns-dev)가 상태를 둘 곳이 없으므로 이
 루트를 가장 먼저 적용합니다.
 
-버킷 설정(버전 관리 · SSE · 퍼블릭 차단 · `prevent_destroy`)은
-`modules/state_bucket` 이 정합니다. 잠금은 `use_lockfile = true` 입니다.
+버킷 설정(버전 관리 · SSE · 퍼블릭 차단 · ACL 끔 · TLS 강제 정책 ·
+이전 버전 90일 만료 · `prevent_destroy`)은 `modules/state_bucket` 이
+정합니다. 잠금은 `use_lockfile = true` 입니다.
 
 ## 2단 절차(운영 O1 — kty 승인)
 
@@ -24,7 +25,7 @@ nonprod 계정의 Terraform 상태 버킷을 만드는 루트입니다. 상태 �
     ```
     printf 'terraform {\n  backend "local" {}\n}\n' > backend_override.tf
     terraform init
-    terraform plan -out=bootstrap.tfplan    # 생성 4 · 그 밖 0 확인
+    terraform plan -out=bootstrap.tfplan    # 생성 7 · 그 밖 0 확인
     terraform apply bootstrap.tfplan
     ```
 
