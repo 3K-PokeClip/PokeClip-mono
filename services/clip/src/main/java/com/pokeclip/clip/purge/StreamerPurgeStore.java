@@ -1,5 +1,6 @@
 package com.pokeclip.clip.purge;
 
+import com.pokeclip.clip.upload.UploadThumbnailStore;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -107,6 +108,9 @@ public class StreamerPurgeStore {
         });
         cardIds.forEach(id -> prefixes.add("thumbnails/card/" + id + ".jpg"));
         streamIds.forEach(id -> prefixes.add("thumbnails/live/" + id + ".jpg"));
+        // 사용자가 올린 썸네일 그림(POK-291). 영상 번호가 아니라 스트리머 접두사 하나다: 렌더가 롤백돼 아무 줄도 안 가리키는
+        // 그림까지 덮는다. 방송이 하나도 없어도 넣는다(그림은 방송 줄보다 오래 남을 수 있다).
+        prefixes.add(UploadThumbnailStore.prefixOf(streamerId));
 
         jdbc.update("""
                 UPDATE purged_streamers
@@ -125,6 +129,9 @@ public class StreamerPurgeStore {
         jdbc.update("DELETE FROM render_jobs WHERE clip_id = ANY(CAST(? AS bigint[]))", clips);
         jdbc.update("DELETE FROM clip_uploads WHERE clip_id = ANY(CAST(? AS bigint[]))", clips);
         jdbc.update("DELETE FROM clips WHERE stream_id = ANY(?)", streams);
+        // 「렌더 뒤 업로드」 의도(POK-291)는 편집본의 자식이다. 잠그지 않고 지우기만 한다: 렌더 보고(render_jobs → clips →
+        // upload_requests)와 같은 순서라 교착이 없고, 새 의도는 방송 줄 KEY SHARE를 먼저 잡아 위 FOR UPDATE 뒤로 밀린다.
+        jdbc.update("DELETE FROM upload_requests WHERE recipe_id IN (SELECT id FROM recipes WHERE stream_id = ANY(?))", streams);
         jdbc.update("DELETE FROM recipes WHERE stream_id = ANY(?)", streams);
         jdbc.update("DELETE FROM jump_cards WHERE stream_id = ANY(?)", streams);
         jdbc.update("DELETE FROM broadcast_events WHERE stream_id = ANY(?)", streams);

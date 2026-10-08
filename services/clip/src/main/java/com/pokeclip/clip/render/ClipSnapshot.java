@@ -1,5 +1,6 @@
 package com.pokeclip.clip.render;
 
+import com.pokeclip.clip.upload.UploadRequestBrief;
 import com.pokeclip.clip.upload.UploadSnapshot;
 import tools.jackson.databind.JsonNode;
 
@@ -13,6 +14,8 @@ import java.util.UUID;
  * @param outputs 완성이면 일꾼이 보고한 산출물 목록(계약1 result) 그대로, 아니면 {@code null}. {@code s3Key}가 들어 있다 —
  *                화면은 그것으로 영상을 직접 못 받고(창고는 비공개) 출입증 문이 따로 필요하다(POK-243 이후)
  * @param upload 가장 최근 유튜브 업로드(POK-220). 한 번도 안 올렸으면 {@code null}
+ * @param uploadRequest 이 영상의 판(편집본·판 번호)에 걸린 「렌더 뒤 업로드」 의도 요약(POK-291). 없으면 {@code null}.
+ *                      완성인데 이것이 있고 {@code upload}가 아직 없으면 화면은 「올리는 중」으로 본다
  */
 public record ClipSnapshot(long id,
                            String streamId,
@@ -25,7 +28,8 @@ public record ClipSnapshot(long id,
                            Error error,
                            Instant createdAt,
                            Instant updatedAt,
-                           UploadSnapshot upload) {
+                           UploadSnapshot upload,
+                           UploadRequestBrief uploadRequest) {
 
     /** 일꾼이 마지막으로 보고한 진행. 주문만 됐으면 0·null. */
     public record Progress(int percent, String stage, int attempt, UUID jobId) {

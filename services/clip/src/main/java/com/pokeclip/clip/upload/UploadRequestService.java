@@ -7,8 +7,9 @@ import com.pokeclip.clip.render.ClipRepository;
 import com.pokeclip.clip.render.ClipStatus;
 import com.pokeclip.clip.render.RenderErrors.ClipNotFoundException;
 import com.pokeclip.clip.render.RenderErrors.ClipNotRenderedException;
-import com.pokeclip.clip.render.RenderProperties;
+import com.pokeclip.clip.upload.UploadErrors.AlreadyUploadedException;
 import com.pokeclip.clip.upload.UploadErrors.InvalidUploadRequestException;
+import com.pokeclip.clip.upload.UploadErrors.NothingToRetryException;
 import com.pokeclip.clip.upload.UploadErrors.UploadUnavailableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,18 +18,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.node.ObjectNode;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.OptionalLong;
 
 /**
  * 「이 영상을 유튜브에 올려 줘」를 받아 업로드 줄을 쓰고 주문줄에 싣는다(POK-220).
  *
- * <p><b>순서: 자격 → 영상 → 켜짐 → 완성 → 본문 → 선점(표) → 발행(큐).</b> 자격이 맨 앞인 이유는 다른 문과 같다.
+ * <p><b>순서: 자격 → 영상 → 켜짐 → 완성 → 본문 → 선점(표, 판 단위 중복 포함) → 커밋 뒤 발행(큐).</b> 자격이 맨 앞인 이유는 다른 문과 같다.
  * 승인 게이트는 없다(2026-08-30 결정): 편집자·스트리머 둘 다 자격만 있으면 올린다.
  *
  * <p><b>어느 채널에 올리나 = 방송의 스트리머</b>(ADR-010 Path A). 주문한 사람(편집자일 수 있다)의 채널이 아니다.
@@ -48,25 +46,20 @@ public class UploadRequestService {
     private final ClipRepository clips;
     private final BroadcastRepository broadcasts;
     private final ClipUploadRepository uploads;
-    private final UploadInserter inserter;
-    private final UploadPublisher publisher;
+    private final UploadAutoStarter starter;
     private final ObjectProvider<UploadQueueClient> queue;
-    private final RenderProperties render;
     private final TransactionTemplate transactions;
     private final ObjectMapper mapper;
 
     UploadRequestService(BroadcastAccessGuard guard, ClipRepository clips, BroadcastRepository broadcasts,
-                         ClipUploadRepository uploads, UploadInserter inserter, UploadPublisher publisher,
-                         ObjectProvider<UploadQueueClient> queue, RenderProperties render,
+                         ClipUploadRepository uploads, UploadAutoStarter starter, ObjectProvider<UploadQueueClient> queue,
                          TransactionTemplate transactions, ObjectMapper mapper) {
         this.guard = guard;
         this.clips = clips;
         this.broadcasts = broadcasts;
         this.uploads = uploads;
-        this.inserter = inserter;
-        this.publisher = publisher;
+        this.starter = starter;
         this.queue = queue;
-        this.render = render;
         this.transactions = transactions;
         this.mapper = mapper;
     }
@@ -80,7 +73,8 @@ public class UploadRequestService {
      * @throws ClipNotFoundException 그 방송에 그 번호의 영상이 없다 (404)
      * @throws UploadUnavailableException 주문줄이 꺼져 있다 (503)
      * @throws ClipNotRenderedException 영상이 아직 완성되지 않았다 (409)
-     * @throws InvalidUploadRequestException 제목·설명·벌 번호가 규칙에 안 맞는다 (400)
+     * @throws InvalidUploadRequestException 제목·설명·태그·공개 범위·벌 번호가 규칙에 안 맞는다 (400)
+     * @throws AlreadyUploadedException 같은 편집본 같은 판의 다른 영상·다른 벌이 이미 올라갔거나 올라가는 중이다 (409, POK-291)
      */
     public Requested request(String requesterSubject, String streamId, long clipId, UploadRequest body) {
         guard.requireViewable(requesterSubject, streamId);
@@ -91,32 +85,77 @@ public class UploadRequestService {
         if (clip.getStatus() != ClipStatus.RENDERED || clip.getOutputs() == null) {
             throw new ClipNotRenderedException(clipId);
         }
-        String title = title(body == null ? null : body.title());
-        String description = description(body == null ? null : body.description());
+        // 옛 문(보관함 「업로드」, 의도 없는 영상)은 썸네일을 안 받는다(POK-291). 나머지 칸은 「영상 만들기」와 같은 규칙이다.
+        UploadInfo info = new UploadInfo(
+                title(body == null ? null : body.title()),
+                description(body == null ? null : body.description()),
+                UploadInfoParser.tags(body == null ? null : body.tags()),
+                UploadInfoParser.privacy(body == null ? null : body.privacyStatus()),
+                body != null && Boolean.TRUE.equals(body.madeForKids()),
+                UploadInfo.Thumbnail.none());
         Video video = pickVideo(mapper.readTree(clip.getOutputs()), body == null ? null : body.outputId());
         // 방송은 영상이 있으니 반드시 있다(FK). 없으면 우리 버그라 500이 맞다.
         String channelOwner = broadcasts.findByStreamId(streamId).orElseThrow().getStreamerId();
 
         Requested requested = transactions.execute(status -> {
-            OptionalLong inserted = inserter.insertIfNoActive(clipId, video.outputId(), requesterSubject, channelOwner,
-                    title, description);
-            if (inserted.isEmpty()) {
-                // 이미 올렸거나 올리는 중이거나 결과 불명이다: 새로 만들지 않고 그것을 돌려준다.
-                ClipUpload active = uploads.findActive(clipId, video.outputId()).orElseThrow();
-                log.info("clip.upload.duplicate_request clipId={} outputId={} uploadId={} status={}",
-                        clipId, video.outputId(), active.getId(), active.getStatus().dbValue());
-                return new Requested(false, UploadSnapshot.of(active));
+            UploadAutoStarter.Started started = starter.enqueue(clip, video, requesterSubject, channelOwner, info);
+            if (started.created()) {
+                return new Requested(true, UploadSnapshot.of(uploads.findById(started.uploadId()).orElseThrow()));
             }
-            long uploadId = inserted.getAsLong();
-            inserter.fillPayload(uploadId, payload(uploadId, clip, channelOwner, video, title, description));
-            return new Requested(true, UploadSnapshot.of(uploads.findById(uploadId).orElseThrow()));
+            ClipUpload active = uploads.findById(started.uploadId()).orElseThrow();
+            if (active.getClipId() != clipId || !active.getOutputId().equals(video.outputId())) {
+                // 같은 판의 다른 영상(재렌더)이나 다른 벌이 이미 채널에 있거나 가는 중이다. 같은 영상이 둘 뜨는 길이다(POK-291).
+                throw new AlreadyUploadedException(active.getId());
+            }
+            // 이미 올렸거나 올리는 중이거나 결과 불명이다: 새로 만들지 않고 그것을 돌려준다.
+            log.info("clip.upload.duplicate_request clipId={} outputId={} uploadId={} status={}",
+                    clipId, video.outputId(), active.getId(), active.getStatus().dbValue());
+            return new Requested(false, UploadSnapshot.of(active));
         });
-
         if (requested.created()) {
-            // 커밋 뒤에 싣는다. 실패해도 예외를 올리지 않는다: 줄은 이미 있고 outbox가 다시 보낸다.
-            publisher.publishNow(requested.upload().id());
+            // 싣기는 커밋 뒤 훅이 했다(UploadAutoStarter.enqueue).
             log.info("clip.upload.requested uploadId={} clipId={} outputId={} requestedBy={}",
                     requested.upload().id(), clipId, video.outputId(), requesterSubject);
+        }
+        return requested;
+    }
+
+    /**
+     * 실패한 업로드를 <b>저장된 정보 그대로</b> 다시 올린다(POK-291, 창 없이). 최신 줄의 칸(벌·제목·설명·태그·공개 범위·아동용·썸네일)을
+     * 새 줄로 옮긴다. {@code checking}(결과 불명)은 대상이 아니다: 채널에 이미 있을 수 있어 다시 올리면 둘이 뜬다.
+     *
+     * @throws NothingToRetryException 이 영상은 한 번도 안 올렸다 (409)
+     * @throws AlreadyUploadedException 같은 판의 다른 영상이 이미 올라갔거나 올라가는 중이다 (409)
+     */
+    public Requested retry(String requesterSubject, String streamId, long clipId) {
+        guard.requireViewable(requesterSubject, streamId);
+        Clip clip = clips.findByIdAndStreamId(clipId, streamId).orElseThrow(() -> new ClipNotFoundException(clipId));
+        if (queue.getIfAvailable() == null) {
+            throw new UploadUnavailableException();
+        }
+        Requested requested = transactions.execute(status -> {
+            ClipUpload latest = uploads.findFirstByClipIdOrderByIdDesc(clipId)
+                    .orElseThrow(() -> new NothingToRetryException(clipId));
+            if (latest.getStatus() != UploadStatus.FAILED) {
+                // 살아 있다(올리는 중·올림·확인 필요): 그것을 돌려준다. 연타한 두 번째 누름도 여기로 온다.
+                return new Requested(false, UploadSnapshot.of(latest));
+            }
+            Video video = pickVideo(mapper.readTree(clip.getOutputs()), latest.getOutputId());
+            UploadAutoStarter.Started started = starter.enqueue(clip, video, requesterSubject, latest.getChannelOwner(),
+                    latest.info());
+            if (!started.created()) {
+                ClipUpload active = uploads.findById(started.uploadId()).orElseThrow();
+                if (active.getClipId() == clipId) {
+                    // 연타한 두 다시 시도가 겹쳤다: 앞 누름이 판 잠금 사이에 만든 줄이다. 그것을 돌려준다(위 「살아 있으면」과 같다).
+                    return new Requested(false, UploadSnapshot.of(active));
+                }
+                throw new AlreadyUploadedException(active.getId());
+            }
+            return new Requested(true, UploadSnapshot.of(uploads.findById(started.uploadId()).orElseThrow()));
+        });
+        if (requested.created()) {
+            log.info("clip.upload.retried uploadId={} clipId={} requestedBy={}", requested.upload().id(), clipId,
+                    requesterSubject);
         }
         return requested;
     }
@@ -162,28 +201,6 @@ public class UploadRequestService {
         }
         return videos.stream().filter(v -> v.outputId().equals(wanted)).findFirst()
                 .orElseThrow(() -> new InvalidUploadRequestException("outputId"));
-    }
-
-    private String payload(long uploadId, Clip clip, String channelOwner, Video video, String title, String description) {
-        ObjectNode root = mapper.createObjectNode();
-        root.put("schemaVersion", 1);
-        root.put("jobType", "UPLOAD");
-        root.put("uploadId", String.valueOf(uploadId));
-        root.put("clipId", String.valueOf(clip.getId()));
-        root.put("streamId", clip.getStreamId());
-        // auth 회원 번호(문자열). 일꾼이 이 번호로 유튜브 토큰을 묻는다.
-        root.put("channelOwnerUserId", channelOwner);
-        ObjectNode source = root.putObject("source");
-        source.put("bucket", render.outputBucket());
-        source.put("s3Key", video.s3Key());
-        source.put("outputId", video.outputId());
-        ObjectNode meta = root.putObject("video");
-        meta.put("title", title);
-        meta.put("description", description);
-        // ADR-010: 기본 비공개. 스트리머가 스튜디오에서 확인하고 공개로 바꾼다.
-        meta.put("privacyStatus", "private");
-        root.put("requestedAt", Instant.now().toString());
-        return mapper.writeValueAsString(root);
     }
 
     /** 영상 하나의 가장 최근 업로드. 영상 조회·보관함이 쓴다. */

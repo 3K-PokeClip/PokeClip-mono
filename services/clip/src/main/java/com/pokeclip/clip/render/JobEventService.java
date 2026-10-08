@@ -1,6 +1,7 @@
 package com.pokeclip.clip.render;
 
 import com.pokeclip.clip.render.RenderErrors.JobNotFoundException;
+import com.pokeclip.clip.upload.UploadAutoStarter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -40,14 +41,16 @@ public class JobEventService {
     private final RenderJobEventStore events;
     private final RenderProperties properties;
     private final ObjectMapper mapper;
+    private final UploadAutoStarter uploads;
 
     JobEventService(RenderJobRepository jobs, ClipRepository clips, RenderJobEventStore events,
-                    RenderProperties properties, ObjectMapper mapper) {
+                    RenderProperties properties, ObjectMapper mapper, UploadAutoStarter uploads) {
         this.jobs = jobs;
         this.clips = clips;
         this.events = events;
         this.properties = properties;
         this.mapper = mapper;
+        this.uploads = uploads;
     }
 
     /** @throws JobNotFoundException 모르는 jobId (404) — 이것만 장부에 안 남는다(적을 줄이 없다) */
@@ -126,7 +129,13 @@ public class JobEventService {
         return apply.get();
     }
 
-    /** result 검증이 상태 전이보다 먼저다(계약1 rev9) — 실패하면 상태 불변, 400을 저장해 replay. */
+    /**
+     * result 검증이 상태 전이보다 먼저다(계약1 rev9) — 실패하면 상태 불변, 400을 저장해 replay.
+     *
+     * <p>완성과 <b>같은 트랜잭션</b>에서 그 판의 「렌더 뒤 업로드」 의도대로 업로드 줄을 만든다(POK-291, {@link UploadAutoStarter}).
+     * 같은 성공 보고가 다시 오면 위 보고 장부가 먼저 막아 여기 다시 안 온다. 업로드 줄 쓰기가 실패하면 완성까지 되감기고 장부도 안 남아
+     * 일꾼이 같은 보고를 다시 보내면 처음부터 다시 된다.
+     */
     private Reply succeeded(RenderJob job, JobEventRequest event, Instant at) {
         String problem = validateResult(job, event.result());
         if (problem != null) {
@@ -134,7 +143,10 @@ public class JobEventService {
             return bad("INVALID_RESULT");
         }
         job.succeeded(at);
-        clips.findByIdForUpdate(job.getClipId()).ifPresent(c -> c.rendered(mapper.writeValueAsString(event.result())));
+        clips.findByIdForUpdate(job.getClipId()).ifPresent(c -> {
+            c.rendered(mapper.writeValueAsString(event.result()));
+            uploads.startFromRequest(c);
+        });
         return ok(Map.of());
     }
 

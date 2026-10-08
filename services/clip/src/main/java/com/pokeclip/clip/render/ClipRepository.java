@@ -25,4 +25,13 @@ public interface ClipRepository extends JpaRepository<Clip, Long> {
              LIMIT 1
             """, nativeQuery = true)
     Optional<Clip> findOpen(@Param("recipeId") long recipeId, @Param("recipeVersion") int recipeVersion);
+
+    /** 같은 편집본 같은 판의 가장 최근 영상(POK-291). 「영상 만들기」가 진행 중·이미 완성·다시 만들기를 가른다. */
+    @Query(value = """
+            SELECT * FROM clips
+             WHERE recipe_id = :recipeId AND recipe_version = :recipeVersion
+             ORDER BY id DESC
+             LIMIT 1
+            """, nativeQuery = true)
+    Optional<Clip> findLatestOfVersion(@Param("recipeId") long recipeId, @Param("recipeVersion") int recipeVersion);
 }

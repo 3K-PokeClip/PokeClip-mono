@@ -35,6 +35,15 @@ spring:
     baseline-on-migrate: true
     baseline-version: 0
 
+  servlet:
+    multipart:
+      # 「영상 만들기」의 썸네일 그림(POK-291). 서블릿 층이 바이트를 다 받기 전에 자르고 413 payload_too_large로 접는다.
+      # 유튜브 썸네일 문서 기준 상한 안쪽이다(실제 붙는 크기는 업로드 일꾼이 유튜브에 묻는다).
+      max-file-size: 10MB
+      # 🔴 요청 상한은 파일 상한보다 커야 한다. 같게 두면 multipart 경계·파트 헤더·request 파트가 더해져 정확히 10MB인 그림이
+      # 413이 된다(auth 프로필 사진에서 실측한 함정). RenderUploadSizeLimitTest가 「정확히 10MB는 통과」를 못박는다.
+      max-request-size: 11MB
+
   http:
     clients:
       # 복수형이다. 단수형 spring.http.client.*는 아무것도 바인딩하지 않고 오류도 없다

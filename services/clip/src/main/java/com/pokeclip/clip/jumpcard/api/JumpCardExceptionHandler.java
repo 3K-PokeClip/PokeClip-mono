@@ -28,6 +28,8 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -255,6 +257,58 @@ public class JumpCardExceptionHandler {
     @ExceptionHandler(UploadErrors.InvalidUploadRequestException.class)
     ResponseEntity<Map<String, Object>> invalidUpload(UploadErrors.InvalidUploadRequestException e) {
         return json(HttpStatus.BAD_REQUEST, field(e.field()));
+    }
+
+    // ── POK-291: 영상 만들기 + 유튜브 바로 올리기가 더한 갈래 ──────────
+
+    /**
+     * 413. 썸네일 그림이 상한(10MB)을 넘는다. 서블릿 층이 바이트를 다 받기 전에 끊고 여기로 온다(컨트롤러에 안 닿는다).
+     * 이 처리기가 없으면 스프링 기본 봉투로 나가 화면이 「무엇이 너무 큰지」를 못 가른다.
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<Map<String, Object>> payloadTooLarge(MaxUploadSizeExceededException e) {
+        return json(HttpStatus.CONTENT_TOO_LARGE, error("payload_too_large"));
+    }
+
+    /** 400. multipart에 필수 파트({@code request})가 없다. 스프링 기본 봉투로 나가지 않게 같은 400 모양으로 낸다. */
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    ResponseEntity<Map<String, Object>> missingPart(MissingServletRequestPartException e) {
+        return json(HttpStatus.BAD_REQUEST, field(e.getRequestPartName()));
+    }
+
+    /** 415. JPEG·PNG가 아니다(첫 바이트 판정). */
+    @ExceptionHandler(UploadErrors.UnsupportedImageException.class)
+    ResponseEntity<Map<String, Object>> unsupportedImage(UploadErrors.UnsupportedImageException e) {
+        return json(HttpStatus.UNSUPPORTED_MEDIA_TYPE, error("unsupported_image"));
+    }
+
+    /** 503. 그림을 창고에 못 뒀다. 렌더를 주문하기 전이다: 다시 누르면 된다. */
+    @ExceptionHandler(UploadErrors.ThumbnailStoreUnavailableException.class)
+    ResponseEntity<Map<String, Object>> thumbnailStoreUnavailable(UploadErrors.ThumbnailStoreUnavailableException e) {
+        log.warn("clip.upload.thumbnail_store_failed cause={}", e.getCause() == null ? "none" : e.getCause().getClass().getSimpleName());
+        return json(HttpStatus.SERVICE_UNAVAILABLE, error("thumbnail_store_unavailable"));
+    }
+
+    /** 409. 스트리머의 유튜브 채널이 연결돼 있지 않다. {@code reason}은 auth 판정 낱말(NOT_LINKED·UNLINKED·BROKEN)이다. */
+    @ExceptionHandler(UploadErrors.YoutubeNotLinkedException.class)
+    ResponseEntity<Map<String, Object>> youtubeNotLinked(UploadErrors.YoutubeNotLinkedException e) {
+        Map<String, Object> body = error("youtube_not_linked");
+        body.put("reason", e.reason());
+        return json(HttpStatus.CONFLICT, body);
+    }
+
+    /** 409. 같은 편집본 같은 판이 이미 올라갔거나 올라가는 중이다. 그 업로드 번호를 싣는다. */
+    @ExceptionHandler(UploadErrors.AlreadyUploadedException.class)
+    ResponseEntity<Map<String, Object>> alreadyUploaded(UploadErrors.AlreadyUploadedException e) {
+        Map<String, Object> body = error("already_uploaded");
+        body.put("uploadId", e.uploadId());
+        return json(HttpStatus.CONFLICT, body);
+    }
+
+    /** 409. 다시 시도할 업로드가 없다. */
+    @ExceptionHandler(UploadErrors.NothingToRetryException.class)
+    ResponseEntity<Map<String, Object>> nothingToRetry(UploadErrors.NothingToRetryException e) {
+        return json(HttpStatus.CONFLICT, error("nothing_to_retry"));
     }
 
     /** 404(일꾼 문). 모르는 업로드 번호. 바닥을 안 탄다: 서버 간 토큰이다. */
