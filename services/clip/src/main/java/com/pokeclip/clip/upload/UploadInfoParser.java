@@ -48,7 +48,7 @@ public final class UploadInfoParser {
     }
 
     /**
-     * 태그: 앞뒤 공백을 걷고, 빈 태그·{@code <}·{@code >}·{@code ,}를 거절하고, 똑같은 태그는 하나로(순서 유지).
+     * 태그: 앞뒤 공백을 걷고, 빈 태그·{@code <}·{@code >}·{@code ,}·제어 문자를 거절하고, 똑같은 태그는 하나로(순서 유지).
      * 합계 = Σ(코드포인트 수 + 공백이 든 태그면 2) + (개수 − 1) ≤ 500. {@code null}이면 빈 목록.
      */
     public static List<String> tags(List<String> raw) {
@@ -59,7 +59,7 @@ public final class UploadInfoParser {
         for (String tag : raw) {
             String stripped = tag == null ? "" : tag.strip();
             if (stripped.isEmpty() || stripped.indexOf('<') >= 0 || stripped.indexOf('>') >= 0
-                    || stripped.indexOf(',') >= 0) {
+                    || stripped.indexOf(',') >= 0 || UploadRequestService.hasControl(stripped, false)) {
                 throw new InvalidUploadRequestException("tags");
             }
             kept.add(stripped);

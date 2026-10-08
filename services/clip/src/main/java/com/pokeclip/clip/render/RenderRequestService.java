@@ -133,7 +133,8 @@ public class RenderRequestService {
      * · (b) 같은 판 최신 영상이 완성이면 다시 안 만들고 그 영상에 바로 업로드 줄(200) · (c) 그 밖은 렌더 주문 + 의도(201).
      * 의도는 갈래와 같은 트랜잭션에 쓴다: 렌더만 남고 정보가 사라지는 틈이 없다.
      *
-     * <p>⑥은 트랜잭션 밖이다. 뒤에서 거절되거나 롤백되면 그림이 아무도 안 가리키는 파일로 남는데, 스트리머 접두사라 탈퇴 정리가 지운다.
+     * <p>⑥은 트랜잭션 밖이다. 뒤 갈래 처리가 거절되거나 롤백되면 그 그림을 최선 노력으로 지운다(POK-291 로컬 리뷰 1라운드: 안 지우면
+     * 그 사이 탈퇴 정리가 이미 끝난 경우 영영 남는다). 지우기도 실패하면 스트리머 접두사라 다음 탈퇴 정리가 덮는다.
      *
      * @param requestJson JSON 본문({@code {"upload": …}}) 또는 multipart의 {@code request} 파트. 없으면 {@code null}
      * @param thumbnail   multipart의 {@code thumbnail} 파트. 없으면 {@code null}
@@ -176,20 +177,37 @@ public class RenderRequestService {
         uploads.findActiveForVersion(recipe.getId(), recipe.getRecipeVersion()).ifPresent(active -> {
             throw new AlreadyUploadedException(active.getId());
         });
+        String storedKey = null;
         if (thumbnail != null) {
-            info = info.withThumbnail(UploadInfo.Thumbnail.file(storeThumbnail(streamerId, contentType, thumbnail),
-                    contentType));
+            storedKey = storeThumbnail(streamerId, contentType, thumbnail);
+            info = info.withThumbnail(UploadInfo.Thumbnail.file(storedKey, contentType));
         }
 
         UploadIntent intent = new UploadIntent(requesterSubject, info);
-        Optional<Clip> latest = clips.findLatestOfVersion(recipe.getId(), recipe.getRecipeVersion());
-        if (latest.isPresent() && latest.get().getStatus() != ClipStatus.FAILED) {
-            Requested existing = transactions.execute(status -> onExisting(streamId, recipe, intent));
-            if (existing != null) {
-                return existing;
+        try {
+            Optional<Clip> latest = clips.findLatestOfVersion(recipe.getId(), recipe.getRecipeVersion());
+            if (latest.isPresent() && latest.get().getStatus() != ClipStatus.FAILED) {
+                Requested existing = transactions.execute(status -> joinExisting(streamId, recipe, intent).orElse(null));
+                if (existing != null) {
+                    return existing;
+                }
             }
+            return render(requesterSubject, streamId, recipe, intent);
+        } catch (RuntimeException e) {
+            if (storedKey != null) {
+                discardThumbnail(storedKey);
+            }
+            throw e;
         }
-        return render(requesterSubject, streamId, recipe, intent);
+    }
+
+    /** 거절·롤백된 주문의 그림을 지운다. 실패는 로그만: 원래 오류가 사람에게 갈 답이다. */
+    private void discardThumbnail(String key) {
+        try {
+            thumbnailStore.getObject().delete(key);
+        } catch (RuntimeException e) {
+            log.warn("clip.upload.thumbnail_cleanup_failed reason={}", e.getClass().getSimpleName());
+        }
     }
 
     /** 의도 한 벌: 누가 눌렀나 + 고른 정보. */
@@ -197,21 +215,29 @@ public class RenderRequestService {
     }
 
     /**
-     * 갈래 (a)·(b). 트랜잭션 안에서 다시 본다: 밖에서 본 상태는 그 사이에 바뀔 수 있다. 둘 다 아니게 됐으면 {@code null}을 돌려
-     * 갈래 (c)로 넘긴다(이 트랜잭션은 아무것도 안 쓰고 끝난다).
+     * 갈래 (a)·(b). 트랜잭션 안에서 다시 본다: 밖에서 본 상태는 그 사이에 바뀔 수 있다. 둘 다 아니게 됐으면 빈 값을 돌려
+     * 갈래 (c)로 넘긴다(이 트랜잭션은 아무것도 안 쓴다).
+     *
+     * <p>🔴 (a)는 만드는 중인 영상 줄을 <b>잠근 뒤에</b> 의도를 쓴다(POK-291 로컬 리뷰 1라운드). 렌더 성공 보고는 영상 줄을 잠근 뒤 의도를
+     * {@code FOR UPDATE}로 읽는데, 아직 커밋 안 된 의도는 그 읽기에 안 보이고 기다리게 하지도 않는다. 안 잠그면 성공 쪽은 「의도 없음」으로,
+     * 이쪽은 「만드는 중」으로 끝나 완성 + 의도 + 업로드 없음이 남는다(응답은 「다 만들어지면 올린다」). 잠그면 둘이 줄을 선다: 성공이 먼저면
+     * 그 뒤 완성으로 보여 (b)로, 이쪽이 먼저면 성공이 이 의도를 읽는다. 실패로 끝났으면 (c)다.
+     *
+     * <p>잠금 순서: 방송 줄({@code FOR KEY SHARE}) → 영상 줄 → 의도 줄. 탈퇴 정리({@code broadcasts → render_jobs → clips})와 같은 방향이다.
      */
-    private Requested onExisting(String streamId, Recipe recipe, UploadIntent intent) {
-        Optional<Clip> open = clips.findOpen(recipe.getId(), recipe.getRecipeVersion());
+    private Optional<Requested> joinExisting(String streamId, Recipe recipe, UploadIntent intent) {
+        requests.lockBroadcast(streamId);
+        Optional<Long> open = clips.lockOpenId(recipe.getId(), recipe.getRecipeVersion());
         if (open.isPresent()) {
-            // (a) 만드는 중: 의도만 덮어쓴다. 성공 보고가 그때 최신 의도를 읽어 올린다.
+            // (a) 만드는 중: 의도만 덮어쓴다. 성공 보고가 이 커밋 뒤에 최신 의도를 읽어 올린다.
             requests.upsert(streamId, recipe.getId(), recipe.getRecipeVersion(), intent.requestedBy(), intent.info());
             log.info("clip.render.upload_intent_on_open clipId={} recipeId={} recipeVersion={}",
-                    open.get().getId(), recipe.getId(), recipe.getRecipeVersion());
-            return new Requested(false, snapshot(open.get()));
+                    open.get(), recipe.getId(), recipe.getRecipeVersion());
+            return Optional.of(new Requested(false, snapshot(clips.findById(open.get()).orElseThrow())));
         }
         Optional<Clip> latest = clips.findLatestOfVersion(recipe.getId(), recipe.getRecipeVersion());
         if (latest.isEmpty() || latest.get().getStatus() != ClipStatus.RENDERED) {
-            return null;
+            return Optional.empty();
         }
         // (b) 이미 완성: 다시 안 만든다. 렌더 성공 때와 같은 메서드로 업로드 줄을 만든다(같은 뿌리 한 자리).
         requests.upsert(streamId, recipe.getId(), recipe.getRecipeVersion(), intent.requestedBy(), intent.info());
@@ -222,7 +248,7 @@ public class RenderRequestService {
             throw new AlreadyUploadedException(started.uploadId());
         }
         log.info("clip.render.upload_on_rendered clipId={} uploadId={}", rendered.getId(), started.uploadId());
-        return new Requested(false, snapshot(rendered));
+        return Optional.of(new Requested(false, snapshot(rendered)));
     }
 
     /**
@@ -258,13 +284,26 @@ public class RenderRequestService {
         RecipeDocument document = RecipeDocument.fromStored(mapper, recipe);
         String trackManifest = broadcasts.findByStreamId(streamId).map(b -> b.getTrackManifest()).orElse(null);
 
-        // 선점 + 주문 기록이 한 트랜잭션. 선점에 졌으면 아무것도 안 쓰고 진행 중인 것을 돌려준다(의도는 덮어쓴다: 갈래 a와 같다).
+        // 선점 + 주문 기록(+ 의도)이 한 트랜잭션. 선점에 졌으면 진행 중인 것을 돌려준다. 의도가 있으면 갈래 (a)·(b)와 같은 길
+        // (joinExisting)로 간다: 막던 영상 줄을 잠그고 다시 본다. 의도는 선점 <b>뒤에</b> 쓴다: 먼저 쓰면 의도 줄 → 영상 줄 순서로 잠가
+        // 성공 보고(영상 줄 → 의도 줄)와 교착한다.
         Requested requested = transactions.execute(status -> {
             if (intent != null) {
-                requests.upsert(streamId, recipe.getId(), recipe.getRecipeVersion(), intent.requestedBy(), intent.info());
+                requests.lockBroadcast(streamId);
             }
             OptionalLong inserted = inserter.insertIfNoOpen(streamId, recipe.getId(), recipe.getRecipeVersion(),
                     requesterSubject);
+            if (inserted.isEmpty() && intent != null) {
+                Optional<Requested> joined = joinExisting(streamId, recipe, intent);
+                if (joined.isPresent()) {
+                    return joined.get();
+                }
+                // 막던 영상이 그 사이 실패로 끝났다: 갈래 (c) 그대로 한 번 더 선점한다. 또 지면 그 사이 선점한 영상에 붙는다.
+                inserted = inserter.insertIfNoOpen(streamId, recipe.getId(), recipe.getRecipeVersion(), requesterSubject);
+                if (inserted.isEmpty()) {
+                    return joinExisting(streamId, recipe, intent).orElseThrow();
+                }
+            }
             if (inserted.isEmpty()) {
                 Clip open = clips.findOpen(recipe.getId(), recipe.getRecipeVersion()).orElseThrow();
                 log.info("clip.render.duplicate_request streamId={} recipeId={} recipeVersion={} clipId={}",
@@ -272,6 +311,9 @@ public class RenderRequestService {
                 return new Requested(false, snapshot(open));
             }
             long clipId = inserted.getAsLong();
+            if (intent != null) {
+                requests.upsert(streamId, recipe.getId(), recipe.getRecipeVersion(), intent.requestedBy(), intent.info());
+            }
             UUID jobId = UUID.randomUUID();
             String payload = RenderEnvelope.build(mapper, jobId, clipId, streamId, recipe.getRecipeVersion(),
                     document, taken, properties.segmentBucket(), properties.outputBucket(), trackManifest,

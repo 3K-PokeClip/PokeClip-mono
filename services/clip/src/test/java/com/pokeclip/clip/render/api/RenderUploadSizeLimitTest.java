@@ -94,6 +94,28 @@ class RenderUploadSizeLimitTest extends RenderUploadTestSupport {
         assertThat(count("upload_requests")).isZero();
     }
 
+    /**
+     * 그림을 창고에 둔 뒤 갈래 처리가 거절되면(여기서는 조각이 아직 없어 409) 그 그림을 지운다(POK-291 로컬 리뷰 1라운드). 안 지우면
+     * 아무 줄도 안 가리키는 그림이 남고, 그 사이 탈퇴 정리가 이미 끝났으면 영영 안 지워진다.
+     */
+    @Test
+    void 그림을_둔_뒤_거절되면_그_그림을_지운다() throws Exception {
+        jdbc.update("DELETE FROM stream_segments");
+        int 전 = 놓인_그림_수();
+
+        HttpResponse<String> response = 보낸다(그림_고름, 그림(PNG, 2048), "a.png");
+
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(409);
+        assertThat(response.body()).contains("source_not_ready");
+        assertThat(놓인_그림_수()).as("거절됐는데 그림이 창고에 남았다").isEqualTo(전);
+        assertThat(count("upload_requests")).isZero();
+    }
+
+    private int 놓인_그림_수() {
+        return LocalStackFixture.s3().listObjectsV2(b -> b.bucket(창고).prefix("upload-thumbnails/" + TestIds.STREAMER + "/"))
+                .contents().size();
+    }
+
     /** 그림 파트는 file일 때만 받는다. request 파트가 없으면 400 field=request. */
     @Test
     void 파트가_어긋나면_400이다() throws Exception {

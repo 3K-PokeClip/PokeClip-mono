@@ -5,7 +5,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
@@ -29,13 +28,13 @@ public class UploadPublisher {
         this.queue = queue;
         this.properties = properties;
         this.uploads = uploads;
-        // 🔴 늘 새 트랜잭션이다(POK-291). 업로드 줄을 만든 트랜잭션의 커밋 뒤 훅(afterCommit)에서도 부르는데, 그 자리에서 기본 전파
-        // (REQUIRED)로 열면 이미 커밋된 바깥 트랜잭션에 「참여」해 잠금 조회가 트랜잭션 없이 돌다 실패하고 즉시 발행이 조용히 빠진다
-        // (outbox가 30초 뒤에 싣는다). 스프링 TransactionSynchronization#afterCommit 문서의 경고 그대로다.
-        this.transactions = new TransactionTemplate(transactions.getTransactionManager());
-        this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.transactions = transactions;
     }
 
+    /**
+     * 트랜잭션 밖에서 부른다(POK-291): 커밋 뒤 발행은 {@link UploadPublishExecutor}의 스레드가 부른다. 커밋 뒤 훅 안에서 직접 부르면
+     * 기본 전파가 이미 커밋된 바깥 트랜잭션에 참여하고, 새 트랜잭션으로 열면 요청 하나가 커넥션 둘을 쥔다.
+     */
     public void publishNow(long uploadId) {
         publish(uploadId);
     }

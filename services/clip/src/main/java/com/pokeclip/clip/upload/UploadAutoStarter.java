@@ -11,8 +11,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -35,7 +33,8 @@ import java.util.OptionalLong;
  *
  * <p>잠금 순서: 부른 쪽이 {@code render_jobs → clips}를 잡은 뒤 여기서 {@code upload_requests}(FOR UPDATE) → 판 권고 잠금 순서로
  * 잡는다. 탈퇴 정리는 {@code render_jobs → clips}를 잡고 {@code upload_requests}는 잠그지 않고 지우기만 하므로(삭제가 줄 잠금을
- * 기다릴 뿐) 순서가 안 뒤집힌다.
+ * 기다릴 뿐) 순서가 안 뒤집힌다. 「영상 만들기」 갈래 (a)는 {@code broadcasts(KEY SHARE) → clips → upload_requests}로 잡아
+ * 성공 보고와 영상 줄에서 줄을 선다({@code RenderRequestService}).
  */
 @Component
 public class UploadAutoStarter {
@@ -47,7 +46,7 @@ public class UploadAutoStarter {
     private final UploadRequestStore requests;
     private final ClipUploadRepository uploads;
     private final UploadInserter inserter;
-    private final UploadPublisher publisher;
+    private final UploadPublishExecutor publishes;
     private final ObjectProvider<UploadQueueClient> queue;
     private final BroadcastRepository broadcasts;
     private final RenderJobRepository jobs;
@@ -55,12 +54,12 @@ public class UploadAutoStarter {
     private final ObjectMapper mapper;
 
     UploadAutoStarter(UploadRequestStore requests, ClipUploadRepository uploads, UploadInserter inserter,
-                      UploadPublisher publisher, ObjectProvider<UploadQueueClient> queue, BroadcastRepository broadcasts,
+                      UploadPublishExecutor publishes, ObjectProvider<UploadQueueClient> queue, BroadcastRepository broadcasts,
                       RenderJobRepository jobs, RenderProperties render, ObjectMapper mapper) {
         this.requests = requests;
         this.uploads = uploads;
         this.inserter = inserter;
-        this.publisher = publisher;
+        this.publishes = publishes;
         this.queue = queue;
         this.broadcasts = broadcasts;
         this.jobs = jobs;
@@ -84,6 +83,15 @@ public class UploadAutoStarter {
      * @param clip 방금 완성된(또는 이미 완성인) 영상. 산출물({@code outputs})이 채워져 있어야 한다
      */
     public Started startFromRequest(Clip clip) {
+        return startFromRequest(clip, null);
+    }
+
+    /**
+     * 위와 같고, 누른 사람을 따로 적는다(다시 시도 문: 의도는 그대로 쓰고 「누가 올렸나」는 지금 누른 사람이다).
+     *
+     * @param requestedBy 업로드 줄의 {@code requested_by}. {@code null}이면 의도를 마지막으로 남긴 사람
+     */
+    public Started startFromRequest(Clip clip, String requestedBy) {
         Optional<Stored> request = requests.findForUpdate(clip.getRecipeId(), clip.getRecipeVersion());
         if (request.isEmpty()) {
             return new Started(Skip.NO_REQUEST, 0);
@@ -96,7 +104,8 @@ public class UploadAutoStarter {
         Stored stored = request.get();
         String channelOwner = broadcasts.findStreamerIdByStreamId(clip.getStreamId()).orElseThrow();
         Video video = pickForAuto(clip);
-        Started started = enqueue(clip, video, stored.requestedBy(), channelOwner, stored.info());
+        Started started = enqueue(clip, video, requestedBy == null ? stored.requestedBy() : requestedBy, channelOwner,
+                stored.info());
         if (started.created()) {
             log.info("clip.upload.auto_started uploadId={} clipId={} outputId={}", started.uploadId(), clip.getId(),
                     video.outputId());
@@ -127,21 +136,11 @@ public class UploadAutoStarter {
         inserter.fillPayload(uploadId, UploadPayload.build(mapper, uploadId, clip.getId(), clip.getStreamId(), channelOwner,
                 new UploadPayload.Source(render.outputBucket(), video.s3Key(), video.outputId()), info,
                 render.outputBucket(), Instant.now()));
-        publishAfterCommit(uploadId);
+        // 커밋 뒤에 싣는다. 커밋 전에 실으면 일꾼이 아직 없는 줄을 보고 404를 받고, 롤백되면 유령 주문이 남는다. 훅 안에서는 전용
+        // 스레드에 제출만 한다(훅은 커넥션을 돌려주기 전에 돌아, 거기서 발행 트랜잭션을 열면 요청 하나가 커넥션 둘을 쥔다).
+        // 못 실으면 예외를 안 올린다: 줄은 있고 outbox가 다시 싣는다.
+        publishes.publishAfterCommit(uploadId);
         return new Started(null, uploadId);
-    }
-
-    /**
-     * 커밋 뒤에 싣는다. 커밋 전에 실으면 일꾼이 아직 없는 줄을 보고 404를 받고, 롤백되면 유령 주문이 남는다.
-     * 못 실으면 예외를 안 올린다: 줄은 있고 outbox가 다시 싣는다.
-     */
-    private void publishAfterCommit(long uploadId) {
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                publisher.publishNow(uploadId);
-            }
-        });
     }
 
     /**

@@ -62,11 +62,20 @@ public class UploadRequestStore {
      * 편집본 지우기가 외래키로 죽는다(이 표는 편집본만 가리켜 방송 줄을 안 건드린다).
      */
     public void upsert(String streamId, long recipeId, int recipeVersion, String requestedBy, UploadInfo info) {
-        jdbc.queryForList("SELECT stream_id FROM broadcasts WHERE stream_id = ? FOR KEY SHARE", streamId);
+        lockBroadcast(streamId);
         Thumbnail thumbnail = info.thumbnail();
         jdbc.update(UPSERT, recipeId, recipeVersion, requestedBy, info.title(), info.description(),
                 mapper.writeValueAsString(info.tags()), info.privacyStatus(), info.madeForKids(), thumbnail.source(),
                 thumbnail.offsetMs(), thumbnail.s3Key(), thumbnail.contentType());
+    }
+
+    /**
+     * 방송 줄을 {@code FOR KEY SHARE}로 잡는다(위 이유). 「영상 만들기」는 영상 줄을 잠그기 <b>전</b>에 이것부터 부른다: 잠금 순서
+     * {@code broadcasts → clips → upload_requests}가 탈퇴 정리({@code broadcasts → render_jobs → clips})와 같은 방향이어야 교착이 없다.
+     * 같은 트랜잭션에서 다시 잡아도 된다.
+     */
+    public void lockBroadcast(String streamId) {
+        jdbc.queryForList("SELECT stream_id FROM broadcasts WHERE stream_id = ? FOR KEY SHARE", streamId);
     }
 
     /**

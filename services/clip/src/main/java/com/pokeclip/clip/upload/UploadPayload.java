@@ -13,6 +13,8 @@ import java.time.Instant;
  *
  * <p>{@code schemaVersion}은 1 그대로다(POK-291). 새 칸(tags·madeForKids·thumbnail)은 선택 칸이라 옛 일꾼은 모르는 칸으로 넘긴다.
  * 판을 올리면 옛 일꾼이 주문서를 못 읽는다며 지우고, clip 줄은 {@code queued}로 영원히 남는다.
+ * 🔴 다만 넘긴다는 것이 무해하다는 뜻은 아니다: 옛 일꾼은 {@code madeForKids}를 읽지 않고 {@code false}로 덮어 올리고 태그·썸네일을
+ * 버린다. 그래서 배포 순서는 업로드 일꾼 → auth → clip → web이다(services/README 「유튜브 업로드 주문」 절).
  *
  * <p>토큰은 안 싣는다: 일꾼이 올리기 직전에 auth 창구에 묻는다(주문서는 로그·실패 큐에 남는다).
  */

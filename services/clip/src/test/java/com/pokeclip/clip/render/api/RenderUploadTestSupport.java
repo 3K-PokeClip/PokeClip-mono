@@ -4,8 +4,10 @@ import com.pokeclip.clip.render.RenderFixtures;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.LocalStackFixture;
 import com.pokeclip.clip.support.TestTokens;
+import com.pokeclip.clip.upload.UploadPublishExecutor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
@@ -17,8 +19,10 @@ import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Duration;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -63,6 +67,10 @@ abstract class RenderUploadTestSupport extends IntegrationTestSupport {
     final MockMvc mvc;
     final JdbcTemplate jdbc;
 
+    /** 커밋 뒤 발행은 전용 스레드에서 돈다. 요청이 돌아온 뒤에도 아직 안 실렸을 수 있어 재기 전에 기다린다. */
+    @Autowired
+    UploadPublishExecutor publishes;
+
     long 편집본;
 
     RenderUploadTestSupport(MockMvc mvc, JdbcTemplate jdbc) {
@@ -86,6 +94,7 @@ abstract class RenderUploadTestSupport extends IntegrationTestSupport {
     /** 다른 시험 클래스가 recipes·clips를 직접 지운다. 내 자식 줄을 내가 치운다. */
     @AfterEach
     void 흔적을_지운다() {
+        발행을_기다린다();
         jdbc.update("DELETE FROM clip_uploads");
         jdbc.update("DELETE FROM render_job_events");
         jdbc.update("DELETE FROM render_jobs");
@@ -121,7 +130,14 @@ abstract class RenderUploadTestSupport extends IntegrationTestSupport {
         if (body != null) {
             request.contentType(MediaType.APPLICATION_JSON).content(body);
         }
-        return mvc.perform(request);
+        ResultActions actions = mvc.perform(request);
+        발행을_기다린다();
+        return actions;
+    }
+
+    /** 전용 스레드에 맡긴 발행이 끝날 때까지 기다린다. 안 기다리면 늦게 실린 주문서가 다음 단언·다음 시험의 줄에 섞인다. */
+    void 발행을_기다린다() {
+        assertThat(publishes.awaitIdle(Duration.ofSeconds(30))).as("커밋 뒤 발행이 끝나지 않았다").isTrue();
     }
 
     /** 일꾼이 잡고(STARTED) 성공을 보고한다(SUCCEEDED). @return SUCCEEDED 본문(재전송 시험이 같은 것을 다시 보낸다) */
@@ -140,8 +156,10 @@ abstract class RenderUploadTestSupport extends IntegrationTestSupport {
     }
 
     ResultActions 보고(UUID jobId, String body) throws Exception {
-        return mvc.perform(post("/internal/jobs/" + jobId + "/events")
+        ResultActions actions = mvc.perform(post("/internal/jobs/" + jobId + "/events")
                 .header("X-Internal-Token", INTERNAL).contentType(MediaType.APPLICATION_JSON).content(body));
+        발행을_기다린다();
+        return actions;
     }
 
     UUID 잡(long clipId) {

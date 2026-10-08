@@ -4,6 +4,7 @@ import com.pokeclip.clip.upload.UploadErrors.ThumbnailStoreUnavailableException;
 import com.pokeclip.clip.upload.UploadErrors.UnsupportedImageException;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import java.io.InputStream;
@@ -71,6 +72,14 @@ public class UploadThumbnailStore {
         } catch (RuntimeException e) {
             throw new ThumbnailStoreUnavailableException(e);
         }
+    }
+
+    /**
+     * 둔 그림을 지운다. 그림을 둔 뒤 주문이 거절되거나 되감겼을 때 부른다(POK-291 로컬 리뷰 1라운드). 없는 키를 지워도 성공이다.
+     * 실패는 그대로 던진다: 부른 쪽이 로그만 남기고 원래 오류를 올린다.
+     */
+    public void delete(String key) {
+        s3.deleteObject(DeleteObjectRequest.builder().bucket(bucket).key(key).build());
     }
 
     private static boolean startsWith(byte[] head, byte[] magic) {

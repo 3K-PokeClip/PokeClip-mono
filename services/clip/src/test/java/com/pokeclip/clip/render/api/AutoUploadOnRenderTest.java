@@ -163,7 +163,7 @@ class AutoUploadOnRenderTest extends RenderUploadTestSupport {
         assertThat(jdbc.queryForObject("SELECT clip_id FROM clip_uploads", Long.class)).isEqualTo(첫째);
     }
 
-    /** 영상 조회가 그 판의 의도 요약을 싣는다: 화면이 「완성인데 업로드 줄이 아직 없다」를 「올리는 중」으로 본다. */
+    /** 영상 조회가 그 판의 의도 요약을 싣는다: 화면이 업로드 줄이 없을 때 고른 제목을 보이고, 완성인데 줄이 없으면 「업로드는 시작되지 않았어요」로 본다. */
     @Test
     void 영상_조회에_의도_요약이_실린다() throws Exception {
         long clipId = json(만들기(편집본, 기본_업로드()).andExpect(status().isCreated())

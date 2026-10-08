@@ -166,6 +166,11 @@ class RenderWithUploadControllerTest extends RenderUploadTestSupport {
         만들기(편집본, 업로드("{\"title\":\"t\",\"thumbnail\":{\"source\":\"file\"}}"))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("thumbnail"));
         만들기(편집본, "{\"upload\":").andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("upload"));
+        // NUL은 DB가 거절해 500이 됐다(POK-291 로컬 리뷰 1라운드).
+        만들기(편집본, 업로드("{\"title\":\"a\\u0000b\"}")).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.field").value("title"));
+        만들기(편집본, 업로드("{\"title\":\"t\",\"tags\":[\"a\\u0000b\"]}")).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.field").value("tags"));
 
         아무것도_안_남았다();
     }

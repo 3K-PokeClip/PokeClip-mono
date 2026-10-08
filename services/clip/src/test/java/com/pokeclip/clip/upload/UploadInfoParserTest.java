@@ -63,6 +63,24 @@ class UploadInfoParserTest {
                 .extracting(e -> ((InvalidUploadRequestException) e).field()).isEqualTo("upload");
     }
 
+    /**
+     * 제어 문자(NUL 등)는 그 칸 이름으로 400이다(POK-291 로컬 리뷰 1라운드). 안 막으면 검사·연결 확인·그림 저장을 다 지나 DB가
+     * 거절하고(VARCHAR의 0x00은 22021, jsonb 안의 NUL 이스케이프는 22P05) 처리기가 없어 500이 된다. 설명만 탭·줄바꿈을 받는다(여러 줄 설명).
+     */
+    @Test
+    void 제어_문자는_그_칸_이름으로_거절하고_설명의_탭과_줄바꿈은_받는다() {
+        거절("{\"title\":\"a\\u0000b\"}", "title");
+        거절("{\"title\":\"a\\nb\"}", "title");
+        거절("{\"title\":\"a\\u001Bb\"}", "title");
+        거절("{\"title\":\"t\",\"description\":\"a\\u0000b\"}", "description");
+        거절("{\"title\":\"t\",\"description\":\"a\\u007Fb\"}", "description");
+        거절("{\"title\":\"t\",\"tags\":[\"a\\u0000b\"]}", "tags");
+        거절("{\"title\":\"t\",\"tags\":[\"a\\tb\"]}", "tags");
+
+        assertThat(parse("{\"title\":\"t\",\"description\":\"첫 줄\\n\\t둘째 줄\\r\\n셋째\"}").description())
+                .isEqualTo("첫 줄\n\t둘째 줄\r\n셋째");
+    }
+
     /** 합계 = Σ(글자 + 공백이 든 태그면 따옴표 2) + 쉼표(개수 − 1). 정확히 500은 통과, 501은 거절. */
     @Test
     void 태그_합계는_따옴표와_쉼표까지_세어_500자다() {

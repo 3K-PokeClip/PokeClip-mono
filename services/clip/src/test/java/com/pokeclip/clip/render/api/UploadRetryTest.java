@@ -65,11 +65,49 @@ class UploadRetryTest extends RenderUploadTestSupport {
     }
 
     @Test
-    void 올린_적이_없으면_409_nothing_to_retry다() throws Exception {
+    void 올린_적도_의도도_없으면_409_nothing_to_retry다() throws Exception {
         long clipId = json(만들기(편집본, null).andExpect(status().isCreated())).get("id").asLong();
         완성시킨다(clipId, 영상_하나());
 
         다시(clipId).andExpect(status().isConflict()).andExpect(jsonPath("$.error").value("nothing_to_retry"));
+    }
+
+    /**
+     * 완성인데 업로드 줄이 없고 그 판의 의도가 있으면(자동 업로드를 건너뛴 영상: 성공 때 업로드 줄이 꺼져 있었다 등) 다시 시도가 <b>의도로</b>
+     * 업로드 줄을 만든다(201, POK-291 로컬 리뷰 1라운드). 보관함의 「업로드」가 이 문을 쓴다: 옛 문으로 가면 고른 설명·태그·공개 범위·썸네일이
+     * 빠진다. 렌더 성공 때와 같은 메서드라 벌 고르기·주문서도 같다.
+     */
+    @Test
+    void 올린_적이_없어도_의도가_있으면_의도로_올린다() throws Exception {
+        long clipId = json(만들기(편집본, null).andExpect(status().isCreated())).get("id").asLong();
+        완성시킨다(clipId, 영상_하나());
+        assertThat(업로드_줄_수()).isZero();
+        // 성공 보고 뒤에 의도만 남은 판(자동 업로드를 건너뛴 상태)을 만든다.
+        jdbc.update("""
+                INSERT INTO upload_requests (recipe_id, recipe_version, requested_by, title, description, tags, privacy_status,
+                                             made_for_kids, thumbnail_source, thumbnail_offset_ms)
+                SELECT recipe_id, recipe_version, '9999', '의도 제목', '의도 설명', '["롤"]'::jsonb, 'unlisted', true, 'scene', 3000
+                  FROM clips WHERE id = ?""", clipId);
+
+        JsonNode 응답 = json(다시(clipId).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("queued"))
+                .andExpect(jsonPath("$.title").value("의도 제목"))
+                .andExpect(jsonPath("$.privacyStatus").value("unlisted"))
+                .andExpect(jsonPath("$.thumbnail.source").value("scene")));
+
+        assertThat(업로드_줄_수()).isOne();
+        JsonNode 봉투 = MAPPER.readTree(LocalStackFixture.receiveAndDelete(업로드줄.queueUrl()));
+        assertThat(봉투.get("uploadId").asString()).isEqualTo(String.valueOf(응답.get("id").asLong()));
+        assertThat(봉투.at("/video/description").asString()).isEqualTo("의도 설명");
+        assertThat(봉투.at("/video/tags/0").asString()).isEqualTo("롤");
+        assertThat(봉투.at("/video/madeForKids").asBoolean()).isTrue();
+        assertThat(봉투.at("/thumbnail/offsetMs").asLong()).isEqualTo(3_000L);
+        assertThat(jdbc.queryForObject("SELECT requested_by FROM clip_uploads", String.class))
+                .as("의도를 남긴 사람이 아니라 지금 누른 사람").isEqualTo(요청자);
+
+        // 연타한 두 번째 누름은 그 줄을 200으로 돌려받는다.
+        다시(clipId).andExpect(status().isOk()).andExpect(jsonPath("$.id").value(응답.get("id").asLong()));
+        assertThat(업로드_줄_수()).isOne();
     }
 
     /**
@@ -114,7 +152,9 @@ class UploadRetryTest extends RenderUploadTestSupport {
     }
 
     private ResultActions 다시(long clipId) throws Exception {
-        return mvc.perform(post("/api/clip/broadcasts/" + 방송 + "/clips/" + clipId + "/uploads/retry")
+        ResultActions actions = mvc.perform(post("/api/clip/broadcasts/" + 방송 + "/clips/" + clipId + "/uploads/retry")
                 .header("Authorization", "Bearer " + TestTokens.access(요청자)));
+        발행을_기다린다();
+        return actions;
     }
 }

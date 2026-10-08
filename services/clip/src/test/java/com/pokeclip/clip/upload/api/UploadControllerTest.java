@@ -6,6 +6,7 @@ import com.pokeclip.clip.support.LocalStackFixture;
 import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import com.pokeclip.clip.upload.UploadDlqReconciler;
+import com.pokeclip.clip.upload.UploadPublishExecutor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,6 +19,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -59,11 +62,13 @@ class UploadControllerTest extends IntegrationTestSupport {
     private final MockMvc mvc;
     private final JdbcTemplate jdbc;
     private final UploadDlqReconciler reconciler;
+    private final UploadPublishExecutor publishes;
 
-    UploadControllerTest(MockMvc mvc, JdbcTemplate jdbc, UploadDlqReconciler reconciler) {
+    UploadControllerTest(MockMvc mvc, JdbcTemplate jdbc, UploadDlqReconciler reconciler, UploadPublishExecutor publishes) {
         this.mvc = mvc;
         this.jdbc = jdbc;
         this.reconciler = reconciler;
+        this.publishes = publishes;
     }
 
     private long 편집본;
@@ -80,6 +85,7 @@ class UploadControllerTest extends IntegrationTestSupport {
 
     @AfterEach
     void 내_흔적을_지운다() {
+        발행을_기다린다();
         jdbc.update("DELETE FROM clip_uploads");
         jdbc.update("DELETE FROM render_job_events");
         jdbc.update("DELETE FROM render_jobs");
@@ -280,6 +286,12 @@ class UploadControllerTest extends IntegrationTestSupport {
         }
         주문(내_방송, clipId, "{\"title\":\"ok\",\"description\":\"" + "가".repeat(1667) + "\"}")
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("description"));
+        // NUL은 DB가 거절해 500이 됐다(POK-291 로컬 리뷰 1라운드). 검사에서 그 칸 이름으로 막는다.
+        주문(내_방송, clipId, 제목("a\\u0000b")).andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("title"));
+        주문(내_방송, clipId, "{\"title\":\"ok\",\"description\":\"a\\u0000b\"}")
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("description"));
+        주문(내_방송, clipId, "{\"title\":\"ok\",\"tags\":[\"a\\u0000b\"]}")
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("tags"));
         assertThat(jdbc.queryForObject("SELECT count(*) FROM clip_uploads", Integer.class)).isZero();
 
         // 이모지 100개는 UTF-16으로 200칸이지만 유튜브 기준 100자다: 통과해야 한다.
@@ -568,8 +580,18 @@ class UploadControllerTest extends IntegrationTestSupport {
     }
 
     private ResultActions 주문(String streamId, long clipId, String body) throws Exception {
-        return mvc.perform(post("/api/clip/broadcasts/" + streamId + "/clips/" + clipId + "/uploads")
+        ResultActions actions = mvc.perform(post("/api/clip/broadcasts/" + streamId + "/clips/" + clipId + "/uploads")
                 .header("Authorization", 토큰()).contentType(MediaType.APPLICATION_JSON).content(body));
+        발행을_기다린다();
+        return actions;
+    }
+
+    /**
+     * 커밋 뒤 발행은 전용 스레드에서 돈다(POK-291). 안 기다리면 늦게 실린 주문서가 다음 단언에 섞이고, 발행이 줄을 다시 쓰는 동안
+     * 시험이 고친 칸을 덮는다.
+     */
+    private void 발행을_기다린다() {
+        assertThat(publishes.awaitIdle(Duration.ofSeconds(30))).as("커밋 뒤 발행이 끝나지 않았다").isTrue();
     }
 
     private ResultActions 일꾼(long uploadId, String door, String body) throws Exception {

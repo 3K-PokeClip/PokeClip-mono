@@ -154,6 +154,25 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         assertThat(store.due(10)).isEmpty();
     }
 
+    /**
+     * 렌더는 끄고 업로드만 켠 배포(POK-291 로컬 리뷰 1라운드): 녹화 조각 창고 이름을 몰라도 사용자가 올린 썸네일 그림은 이 서버가
+     * 만든 파일이다. 출력 창고 접두사는 지우고, 조각은 줄을 남긴다(줄이 먼저 사라지면 파일 키를 다시 알 길이 없다).
+     */
+    @Test
+    void 조각_창고를_모르는_배포면_출력_접두사만_지우고_녹화_조각_줄은_남긴다() {
+        심는다(탈퇴자, "S-gone", "K-gone");
+        FakeStorage files = new FakeStorage();
+        files.segments = false;
+
+        store.request(탈퇴자, Instant.now());
+        purger(files).purge(탈퇴자);
+
+        assertThat(files.prefixes).contains("upload-thumbnails/" + 탈퇴자 + "/");
+        assertThat(files.segmentKeys).isEmpty();
+        assertThat(count("stream_segments WHERE stream_id = 'K-gone'")).isEqualTo(2);
+        assertThat(store.due(10)).isEmpty();
+    }
+
     @Test
     void 탈퇴_뒤_늦게_온_방송_편지는_방송을_되살리지_않는다() {
         store.request(탈퇴자, Instant.now());
@@ -294,6 +313,12 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         final List<Integer> segmentCallSizes = new ArrayList<>();
         boolean failOutput;
         boolean failSegments;
+        boolean segments = true;
+
+        @Override
+        public boolean deletesSegments() {
+            return segments;
+        }
 
         @Override
         public void deleteOutputPrefix(String prefix) {

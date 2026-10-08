@@ -124,7 +124,11 @@ public class UploadRequestService {
      * 실패한 업로드를 <b>저장된 정보 그대로</b> 다시 올린다(POK-291, 창 없이). 최신 줄의 칸(벌·제목·설명·태그·공개 범위·아동용·썸네일)을
      * 새 줄로 옮긴다. {@code checking}(결과 불명)은 대상이 아니다: 채널에 이미 있을 수 있어 다시 올리면 둘이 뜬다.
      *
-     * @throws NothingToRetryException 이 영상은 한 번도 안 올렸다 (409)
+     * <p>한 번도 안 올린 완성 영상이고 그 판의 의도가 있으면(자동 업로드를 건너뛴 영상) <b>의도로</b> 새 줄을 만든다(POK-291 로컬 리뷰
+     * 1라운드). 렌더 성공 때와 같은 메서드다({@link UploadAutoStarter#startFromRequest}). 보관함의 「업로드」가 이 길을 써야 고른
+     * 설명·태그·공개 범위·썸네일이 빠지지 않는다(옛 문은 썸네일을 안 받는다).
+     *
+     * @throws NothingToRetryException 이 영상은 한 번도 안 올렸고 그 판의 의도도 없다 (409)
      * @throws AlreadyUploadedException 같은 판의 다른 영상이 이미 올라갔거나 올라가는 중이다 (409)
      */
     public Requested retry(String requesterSubject, String streamId, long clipId) {
@@ -134,8 +138,10 @@ public class UploadRequestService {
             throw new UploadUnavailableException();
         }
         Requested requested = transactions.execute(status -> {
-            ClipUpload latest = uploads.findFirstByClipIdOrderByIdDesc(clipId)
-                    .orElseThrow(() -> new NothingToRetryException(clipId));
+            ClipUpload latest = uploads.findFirstByClipIdOrderByIdDesc(clipId).orElse(null);
+            if (latest == null) {
+                return fromRequest(clip, requesterSubject);
+            }
             if (latest.getStatus() != UploadStatus.FAILED) {
                 // 살아 있다(올리는 중·올림·확인 필요): 그것을 돌려준다. 연타한 두 번째 누름도 여기로 온다.
                 return new Requested(false, UploadSnapshot.of(latest));
@@ -160,10 +166,36 @@ public class UploadRequestService {
         return requested;
     }
 
-    /** 앞뒤 공백을 걷고 1~100자, {@code <}·{@code >} 금지(유튜브 규칙). */
+    /** 한 번도 안 올린 영상: 그 판의 의도로 만든다. 의도가 없거나 아직 완성 전이면 다시 시도할 것이 없다. */
+    private Requested fromRequest(Clip clip, String requesterSubject) {
+        if (clip.getStatus() != ClipStatus.RENDERED || clip.getOutputs() == null) {
+            // 만드는 중이면 렌더 성공이 의도대로 올린다. 실패한 영상은 올릴 파일이 없다.
+            throw new NothingToRetryException(clip.getId());
+        }
+        UploadAutoStarter.Started started = starter.startFromRequest(clip, requesterSubject);
+        if (started.created()) {
+            return new Requested(true, UploadSnapshot.of(uploads.findById(started.uploadId()).orElseThrow()));
+        }
+        return switch (started.skipped()) {
+            case NO_REQUEST -> throw new NothingToRetryException(clip.getId());
+            // 위에서 줄이 켜진 것을 봤다. 그 사이 꺼질 길은 없지만 오면 꺼짐과 같다.
+            case DISABLED -> throw new UploadUnavailableException();
+            case ALREADY_ACTIVE -> {
+                ClipUpload active = uploads.findById(started.uploadId()).orElseThrow();
+                if (active.getClipId() == clip.getId()) {
+                    // 연타한 두 다시 시도가 겹쳤다: 앞 누름이 만든 줄이다.
+                    yield new Requested(false, UploadSnapshot.of(active));
+                }
+                throw new AlreadyUploadedException(active.getId());
+            }
+        };
+    }
+
+    /** 앞뒤 공백을 걷고 1~100자, {@code <}·{@code >}·제어 문자 금지(유튜브 규칙. 제목은 한 줄이라 탭·줄바꿈도 막는다). */
     static String title(String raw) {
         String title = raw == null ? "" : raw.strip();
-        if (title.isEmpty() || title.codePointCount(0, title.length()) > MAX_TITLE_CHARS || hasAngle(title)) {
+        if (title.isEmpty() || title.codePointCount(0, title.length()) > MAX_TITLE_CHARS || hasAngle(title)
+                || hasControl(title, false)) {
             throw new InvalidUploadRequestException("title");
         }
         return title;
@@ -171,7 +203,8 @@ public class UploadRequestService {
 
     static String description(String raw) {
         String description = raw == null ? "" : raw;
-        if (description.getBytes(StandardCharsets.UTF_8).length > MAX_DESCRIPTION_BYTES || hasAngle(description)) {
+        if (description.getBytes(StandardCharsets.UTF_8).length > MAX_DESCRIPTION_BYTES || hasAngle(description)
+                || hasControl(description, true)) {
             throw new InvalidUploadRequestException("description");
         }
         return description;
@@ -179,6 +212,17 @@ public class UploadRequestService {
 
     private static boolean hasAngle(String text) {
         return text.indexOf('<') >= 0 || text.indexOf('>') >= 0;
+    }
+
+    /**
+     * 제어 문자(NUL·ESC·DEL 등)가 있나(POK-291 로컬 리뷰 1라운드). 안 막으면 검사·연결 확인·그림 저장을 다 지나 DB가 거절하고
+     * (VARCHAR의 NUL은 22021, jsonb 안의 NUL 이스케이프는 22P05) 처리기가 없어 500이 된다. 400 {@code field}가 맞다.
+     *
+     * @param lineBreaks 탭·줄바꿈(CR·LF)을 받나. 여러 줄인 설명만 받는다
+     */
+    static boolean hasControl(String text, boolean lineBreaks) {
+        return text.codePoints().anyMatch(c -> Character.isISOControl(c)
+                && !(lineBreaks && (c == '\t' || c == '\n' || c == '\r')));
     }
 
     /** 올릴 영상 파일. 일꾼이 보고한 산출물(계약1 result) 중 {@code kind=video}. */
