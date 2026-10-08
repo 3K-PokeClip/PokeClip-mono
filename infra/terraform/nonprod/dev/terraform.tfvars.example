@@ -1,0 +1,17 @@
+# terraform.tfvars 로 복사해 실제 값을 넣는다. terraform.tfvars 는 추적하지 않는다.
+# 값은 운영 O1 전 읽기 조사(describe-*)의 현재 값 그대로다.
+instance_id          = "<INSTANCE_ID_DEV>"
+instance_ami         = "<AMI_ID_DEV>"
+instance_type        = "<INSTANCE_TYPE_DEV>"
+eip_allocation_id    = "<EIP_ALLOC_ID>"
+security_group_id    = "<SG_ID_DEV>"
+ingress_rule_id_80   = "<SG_RULE_ID_DEV_80>"
+ingress_rule_id_443  = "<SG_RULE_ID_DEV_443>"
+ingress_rule_id_8082 = "<SG_RULE_ID_DEV_8082>"
+egress_rule_id       = "<SG_RULE_ID_DEV_EGRESS>"
+
+security_group_description = "<SG_DESCRIPTION_DEV>"
+
+instance_tags       = { Name = "<INSTANCE_NAME_TAG_DEV>" }
+eip_tags            = {}
+security_group_tags = {}
