@@ -19,7 +19,7 @@ Control Tower(CT) 랜딩 존을 설정하는 절차입니다. 설계서 8절의 
 
 | 주체 | 하는 일 | 하지 않는 일 |
 |---|---|---|
-| kty(콘솔 · CloudShell) | 계정 생성 · 조직 생성 · 초대와 수락 · 역할 수동 생성 · Config · CloudTrail 정리 · CT 콘솔 작업 전부. 콘솔로 할 수 없는 쓰기(2-7 의 Config 레코더 삭제)는 CloudShell 에서 CLI 로 직접 실행 | — |
+| kty(콘솔 · CloudShell) | 계정 생성 · 조직 생성 · 관리 계정 이메일 검증 · 초대와 수락 · 역할 수동 생성 · Config · CloudTrail 정리 · CT 콘솔 작업 전부. 콘솔로 할 수 없는 쓰기(2-7 의 Config 레코더 삭제)는 CloudShell 에서 CLI 로 직접 실행 | — |
 | 오케스트레이터 | kty 가 승인한 읽기 확인(아래 「완료 확인」의 읽기 명령)과 결과 기록 | 쓰기 명령 · 콘솔 작업 |
 | 에이전트 | 없음 | **계정 생성 · 초대 · CT 콘솔 작업은 에이전트가 하지 않습니다** |
 
@@ -181,9 +181,17 @@ Root
 *   **알 것**: 기본 SCP 는 멤버 계정의 조직 탈퇴(`LeaveOrganization`)를
     거부합니다. 그래서 이 조직에 들어온 계정을 되돌릴 때는 멤버 쪽 탈퇴가
     아니라 관리 계정에서의 제거를 씁니다(2-5 되돌리기).
+*   **관리 계정 이메일 검증**(kty): 기존 계정을 조직에 초대하려면 먼저 관리
+    계정 이메일의 소유를 검증해야 합니다. 검증 메일은 24시간 안에 처리해야
+    하고, 지나면 검증 메일을 다시 보내 처리합니다(근거 절).
+    *   이미 검증된 계정이면 검증 상태만 확인하고 끝냅니다.
+    *   검증 메일이 만료됐으면 다시 보낸 뒤 24시간 안에 처리합니다.
+    *   검증 없이 초대하면 실패하며, 오류 이름은
+        `AccountOwnerNotVerifiedException` 이라고 리뷰어가 제시했습니다(리뷰어
+        제시 · 미대조).
 *   **완료 확인**: 관리 계정의 Organizations 화면에 조직 ID 와 관리 계정
-    `<ACCOUNT_ID_MGMT>` 가 보이고, 정책 화면에 기본 SCP 가 붙어 있음. 읽기
-    명령(관리 계정에서):
+    `<ACCOUNT_ID_MGMT>` 가 보이고, 정책 화면에 기본 SCP 가 붙어 있고, 관리
+    계정 이메일의 검증 완료가 확인됨. 읽기 명령(관리 계정에서):
 
     ```
     aws organizations describe-organization
@@ -191,15 +199,18 @@ Root
     ```
 *   **일정 메모**: 2-5 의 나(직접 이전)는 새 조직을 만든 지 7일이 지나야
     합니다(2-5). 2-1 판정이 「멤버」이면 2-4 를 일찍 끝내 두고, 7일 뒤에
-    2-5 나를 진행합니다. 조직을 만든 날짜를 기록해 둡니다.
-*   **승인 지점**: 조직 생성.
+    2-5 나를 진행합니다. 조직을 만든 날짜를 기록해 둡니다. 7일을 기다리는
+    동안 검증 메일의 24시간 기한이 지나므로, 검증은 메일을 받은 날 끝내거나
+    2-5 직전에 다시 보내 처리합니다.
+*   **승인 지점**: 조직 생성 · 이메일 검증.
 *   **되돌리기**: 조직 삭제. 멤버 계정을 모두 정리(2-5 되돌리기)한 뒤의 별도
     절차이며 이 런북 범위 밖입니다. 관리 계정의 탈퇴로는 되돌릴 수 없습니다.
 
 ### 2-5. 기존 계정을 조직에 들이기
 
 *   **누가**: kty — 관리 계정에서 초대, 기존 계정에서 수락.
-*   **선행**: 2-1 판정이 「멤버 아님」 또는 「멤버」이고, 2-2 가 끝남.
+*   **선행**: 2-1 판정이 「멤버 아님」 또는 「멤버」이고, 2-2 가 끝나고, 2-4
+    의 관리 계정 이메일 검증 완료가 확인됨(초대 발송 직전에 다시 봅니다).
 *   **이전 조직 CT 흔적 확인**(「멤버」일 때, 초대 수락 전에 — 기존 계정에서
     읽기): `AWSControlTowerExecution` · 이름이 `aws-controltower-` 로 시작하는
     역할 같은 이전 조직 CT 관리 흔적이 있는지 봅니다.
@@ -367,12 +378,23 @@ Root
     aws configservice delete-delivery-channel --delivery-channel-name <DELIVERY_CHANNEL_NAME> --region <REGION>
     aws configservice delete-configuration-recorder --configuration-recorder-name <RECORDER_NAME> --region <REGION>
     ```
+*   **레코더 없이 전달 채널만 남았으면**: 레코더 삭제 순서의 1번(설정
+    보관)을 한 뒤 전달 채널만 지우고, 5번(읽기 재확인)으로 레코더 0건 ·
+    전달 채널 0건을 다시 봅니다. 지우는 수단은 위 순서와 같습니다(콘솔
+    삭제 가능 여부는 「확인하지 못한 것」).
+*   **트레일 정리**(트레일이 있을 때, 거버넌스 리전마다):
+    1.  지우기 전에 트레일마다 설정(`describe-trails` 출력)과 로그를 쌓는
+        S3 버킷 · 접두사 위치를 기존 계정 밖(kty 보관 위치)에 기록합니다.
+    1.  트레일을 남길지 지울지 kty 가 정합니다.
+    1.  지우면 그때부터 CT 트레일이 이 계정을 기록하기 전까지 트레일
+        기록이 비는 감사 공백이 생길 수 있습니다. 이 위험을 알고 정합니다.
 *   **완료 확인**: 거버넌스 리전(서울 · `us-east-1`)마다 다음을 모두 기록함.
     *   레코더: 고객 관리 · 서비스 연결 **두 종류를 각각** 확인한 결과. 고객
         관리 레코더 0건, 서비스 연결 레코더는 0건이거나 kty 가 남기기로
         정한 것만 남음. 종류별로 둘 다 확인하기 전에는 완료로 보지 않습니다.
     *   전달 채널 0건.
-    *   트레일 정리 결과.
+    *   트레일 정리 결과(트레일마다 남김 · 지움, 지우기 전에 기록한 설정 ·
+        S3 위치의 보관 위치).
     *   레코더에 기대는 서비스 확인 결과.
 
     읽기 명령(기존 계정에서, 리전마다). 레코더는 이 명령에 더해 위 「레코더
@@ -385,8 +407,8 @@ Root
     ```
 *   **승인 지점**: 지우기 전에 목록을 보고 kty 가 정합니다. CloudShell 의
     삭제 명령도 kty 가 실행합니다.
-*   **되돌리기**: 보관한 설정으로 지운 설정을 다시 만듭니다. 지운 동안의
-    기록 공백은 되돌릴 수 없습니다.
+*   **되돌리기**: 보관한 설정으로 지운 설정(레코더 · 전달 채널 · 트레일)을
+    다시 만듭니다. 지운 동안의 기록 공백은 되돌릴 수 없습니다.
 
 ### 2-8. 서울 · us-east-1 밖 자원 조사
 
@@ -415,8 +437,10 @@ Root
     *   LZ 판 4.0 · 홈 리전 서울 · 거버넌스 리전 서울 + `us-east-1`.
     *   리전 거부(Region deny)를 **Enabled** 로 고릅니다(정해진 것 표). 기본값은
         Not enabled 이므로 직접 골라야 합니다(근거 절).
-    *   통합: Logging · SecurityRoles · Config · IdC 를 켭니다. IdC 통합은
-        Config · SecurityRoles 통합에 의존합니다.
+    *   통합: Logging · SecurityRoles · Config · IdC 를 켭니다. 설계 조사(15_rc)
+        기준으로 IdC 통합은 SecurityRoles 통합에, SecurityRoles 통합은 Config
+        통합에 기댑니다(LZ 4.0 변경 문서). 실제 의존은 착수 때 화면에서
+        확인합니다.
     *   Log Archive · Audit 계정을 **새로** 만듭니다(이메일
         `<EMAIL_LOG_ARCHIVE>` · `<EMAIL_AUDIT>`). 두 계정은 Security OU
         아래에 둡니다.
@@ -506,8 +530,10 @@ Root
 *   **선행**: 2-6(`AWSControlTowerExecution`) · 2-7(Config 0) · 3-2(NonProd OU
     등록 · `AWSControlTowerBaseline` 활성).
 *   **알 것**: 등록하면 CT 가 StackSet 을 배포하고 OU 의 SCP 를 적용하며
-    Config 로 모든 자원을 기록합니다. 기존 계정의 VPC 는 만들거나 지우지
-    않습니다.
+    Config 로 모든 자원을 기록합니다. 설계 조사(15_rc) 기준으로 기존 계정을
+    등록할 때 CT 는 VPC 를 만들거나 지우지 않습니다(Enroll an existing
+    account 문서). 착수 때 원문을 다시 확인하고, 등록 뒤 VPC 가 그대로인지는
+    아래 완료 확인에서 봅니다.
 *   **지금 계정의 위치**: 리뷰어는 초대로 들어온 계정이 조직 Root 에
     놓인다고 제시했습니다(원문 미대조). 그래서 등록 전에 NonProd OU 로
     옮기는 걸음을 둡니다.
@@ -520,8 +546,8 @@ Root
     되는지)는 확인하지 못했습니다 — 착수 때 원문을 확인하고 kty 가
     정합니다(「확인하지 못한 것」).
 *   **완료 확인**: 기존 계정의 부모가 NonProd OU 이고, CT 계정 화면에
-    `<ACCOUNT_ID_NONPROD>` 가 등록됨. 등록 뒤에도 dev 상자 · 옛 존이
-    그대로인지 확인합니다. 읽기 명령(관리 계정에서):
+    `<ACCOUNT_ID_NONPROD>` 가 등록됨. 등록 뒤에도 기존 VPC · dev 상자 · 옛
+    존이 그대로인지 확인합니다. 읽기 명령(관리 계정에서):
 
     ```
     aws organizations list-parents --child-id <ACCOUNT_ID_NONPROD>
@@ -551,6 +577,10 @@ Root
 
 *   기존 계정의 현재 조직 소속(2-1 에서 확인 — 설계서 13절).
 *   2-1 콘솔 화면의 실제 문구(멤버 · 비소속일 때 각각 무엇이 보이는지).
+*   2-4 이메일 검증 없이 초대했을 때의 오류 이름
+    (`AccountOwnerNotVerifiedException`) — 리뷰어 제시(초대 API 문서)이며
+    원문과 대조하지 않았습니다. 검증 상태를 보는 화면 위치도 착수 때 화면에서
+    확인합니다.
 *   2-2 과거 이력 수단의 범위: Cost Explorer 보관 기간, CUR · Data Exports
     백필 요청 절차와 가능 기간. AWS 문서 원문과 대조하지 않았습니다.
 *   2-2 조직 전환 뒤 남는 비용 자료와 잃는 자료의 구분 — 리뷰어는 Bills ·
@@ -571,6 +601,12 @@ Root
 *   2-5 되돌리기의 「독립 계정 운영에 필요한 정보」의 세부 항목.
 *   3-1 Audit 계정의 SecurityRoles · Config 겸용 허용 여부(설계서는 AWS
     manifest 예시를 근거로 가능하다고 봄, `15_rc` 는 미확인).
+*   3-1 통합 사이의 의존(IdC → SecurityRoles → Config) — 설계 조사(15_rc,
+    2026-10-06)의 LZ 4.0 변경 문서 대조이며, 이번 리뷰에서 다시 대조하지
+    않았습니다. 착수 때 화면에서 확인합니다.
+*   3-5 기존 계정 등록 때 CT 가 VPC 를 만들거나 지우지 않는다는 것 — 설계
+    조사(15_rc, 2026-10-06)의 등록 문서 대조이며, 이번 리뷰에서 다시 대조하지
+    않았습니다. 착수 때 원문을 확인합니다.
 *   계정 해지 조건 · OU 등록 해제 · CT 해제 뒤 남는 자원(설계서 13절).
 *   2-7 전달 채널을 콘솔에서 지울 수 있는지 — 리뷰어는 불가로
     제시했습니다(전달 채널 문서). 원문과 대조하지 않았습니다. 콘솔에서
@@ -624,7 +660,18 @@ Root
     *   VPC 없이 만들 때 기본 CIDR 을 남기면 「the CIDR is not valid」 로
         실패(3-3 · 3-4, Possible Errors):
         [Configure without a VPC](https://docs.aws.amazon.com/controltower/latest/userguide/configure-without-vpc.html)
+*   AWS 문서(2026-10-09 리뷰 5라운드에서 대조):
+    *   초대 전 관리 계정 이메일 검증 필요 · 검증 메일 24시간 안 처리 · 지나면
+        재발송(2-4 · 2-5):
+        [Email address verification](https://docs.aws.amazon.com/organizations/latest/userguide/about-email-verification.html)
+*   설계 조사(15_rc, 2026-10-06 대조 — 착수 때 원문 재확인):
+    *   통합 사이의 의존 IdC → SecurityRoles → Config(3-1):
+        [Key changes in LZ 4.0](https://docs.aws.amazon.com/controltower/latest/userguide/key-changes-lz-v4.html)
+    *   기존 계정 등록 때 VPC 를 만들거나 지우지 않음(3-5):
+        [Enroll an existing account](https://docs.aws.amazon.com/controltower/latest/userguide/enroll-account.html)
 *   AWS 문서(리뷰어 제시 — 각 걸음 착수 때 원문 확인):
+    *   검증 없이 초대할 때의 오류 이름(2-4):
+        [InviteAccountToOrganization](https://docs.aws.amazon.com/organizations/latest/APIReference/API_InviteAccountToOrganization.html)
     *   레코더 지정 없는 조회의 반환 범위 · 전체 목록 · 서비스 연결 레코더
         삭제 제약(2-7):
         [describe-configuration-recorders CLI](https://docs.aws.amazon.com/cli/latest/reference/configservice/describe-configuration-recorders.html) ·
