@@ -129,16 +129,14 @@ variable "instance_source_dest_check" {
   type        = bool
 }
 
-# 설정에 없으면 plan 이 프로필을 떼려 한다(SSM 접속 · 상자 권한이 끊긴다).
+# 현재 연결을 코드에 명시적으로 고정한다. provider(6.x)에서 이 인자는
+# Optional + Computed 라 생략하면 현재 값이 유지되지만, 빈 값("")을 넣으면
+# 연결이 풀리고(SSM 접속 · 상자 권한 단절), 다른 이름은 연결을 바꾼다 — 이
+# 값을 바꾸는 변경은 권한 변경이므로 리뷰 대상이다.
 # 현재 값 그대로 넣는다.
 variable "instance_iam_instance_profile" {
   description = "dev EC2 에 현재 붙어 있는 인스턴스 프로필 이름 그대로 — 프로필 · 역할은 이 루트가 관리하지 않음(import 대상 아님)."
   type        = string
-
-  validation {
-    condition     = length(var.instance_iam_instance_profile) > 0
-    error_message = "instance_iam_instance_profile 은 비어 있으면 안 된다."
-  }
 
   validation {
     condition     = can(regex("^[\\w+=,.@-]{1,128}$", var.instance_iam_instance_profile))
