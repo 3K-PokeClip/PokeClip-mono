@@ -72,7 +72,11 @@ export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bri
                   <span class={styles.srOnly}>트랙 </span>
                   {t.track}
                 </span>
-                <span class={styles.trackSources} title={names(t.sources)}>
+                <span
+                  class={styles.trackSources}
+                  data-empty={t.sources.length ? undefined : 'true'}
+                  title={t.sources.length ? names(t.sources) : undefined}
+                >
                   {t.sources.length ? names(t.sources) : '비어 있음'}
                 </span>
                 <span class={styles.checkValue}>본방 트랙</span>
