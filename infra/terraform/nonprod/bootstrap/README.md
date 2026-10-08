@@ -5,7 +5,7 @@ nonprod 계정의 Terraform 상태 버킷을 만드는 루트입니다. 상태 �
 루트를 가장 먼저 적용합니다.
 
 버킷 설정(버전 관리 · SSE · 퍼블릭 차단 · ACL 끔 · TLS 강제 정책 ·
-이전 버전 90일 만료 · `prevent_destroy`)은 `modules/state_bucket` 이
+이전 버전 90일 만료 · 최근 이전 버전 5개 보존 · `prevent_destroy`)은 `modules/state_bucket` 이
 정합니다. 잠금은 `use_lockfile = true` 입니다.
 
 ## 2단 절차(운영 O1 — kty 승인)
@@ -40,6 +40,10 @@ nonprod 계정의 Terraform 상태 버킷을 만드는 루트입니다. 상태 �
     ```
 
 로컬 `terraform.tfstate` 는 이관이 끝나고 「No changes」를 본 뒤에 지웁니다.
+이관(`-migrate-state`)이나 확인 plan 이 실패하면 로컬 `terraform.tfstate` ·
+`terraform.tfstate.backup` 을 지우지 않고 그대로 둡니다 — 버킷을 만든 유일한
+기록이고 평문 상태이므로 공유 위치로 옮기지 말고, 원인을 고쳐 다시 이관한
+뒤에 지웁니다.
 
 ## 출력
 
