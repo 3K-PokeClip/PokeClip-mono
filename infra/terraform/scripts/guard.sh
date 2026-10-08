@@ -119,9 +119,11 @@ parses() {
 #######################################
 run_policy() {
   local output line
+  # 검사 루트의 conftest.toml(ignore · namespace · policy 등)이 판정을 바꾸지
+  # 못하게 그 키들을 명시 인자로 덮는다(--ignore '^$' = 아무 파일도 빼지 않음).
   local fails=0 summary="" tests=""
   output="$(conftest test --parser hcl2 --combine --no-fail --no-color \
-    --strict --show-builtin-errors --namespace main \
+    --strict --show-builtin-errors --namespace main --ignore '^$' \
     --policy "${POLICY_DIR}" -- "$@" 2>&1)" || {
     echo "${output}" >&2
     die "conftest 실행 실패"

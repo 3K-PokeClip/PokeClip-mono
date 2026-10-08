@@ -282,6 +282,36 @@ expect_no_rules_error() {
 }
 
 #######################################
+# 검사 루트에 남은 conftest.toml(ignore 등)이 일부 파일을 검사에서 빼지
+# 못하는지 본다. bad_R1 사본에 정상 파일을 하나 더 두고 위반 파일만
+# 무시하는 설정을 둔다(전부 무시는 conftest 가 「파일 없음」 오류로 멈춘다).
+#######################################
+expect_conftest_config_ignored() {
+  local tmp output status
+  tmp="$(mktemp -d)" || {
+    fail "conftest-config: 시험 준비 실패(임시 디렉터리)"
+    return
+  }
+  if ! cp -R "${FIXTURES}/bad_R1/." "${tmp}/" ||
+    ! printf 'resource "aws_secretsmanager_secret" "ok" {\n  name = "x"\n}\n' \
+      >"${tmp}/other.tf" ||
+    ! printf 'ignore = "main"\nnamespace = ["missing"]\n' \
+      >"${tmp}/conftest.toml"; then
+    fail "conftest-config: 시험 준비 실패(복사)"
+    rm -rf -- "${tmp}"
+    return
+  fi
+  output="$(bash "${GUARD}" "${tmp}" 2>&1)"
+  status=$?
+  rm -rf -- "${tmp}"
+  if [[ "${status}" -ne 1 || "${output}" != *"guard: R1 "* ]]; then
+    fail "conftest-config: 종료 1 · R1 위반을 기대했으나 ${status} — ${output}"
+    return
+  fi
+  echo "ok: conftest-config → R1 위반"
+}
+
+#######################################
 # 실제 트리의 하위 디렉터리를 루트로 주면 경로 규칙(R4 · R11)이 조용히
 # 빠지므로 종료 2 인지 본다.
 #######################################
@@ -316,6 +346,7 @@ main() {
   expect_conftest_env_ignored
   expect_no_rules_error
   expect_subroot_error
+  expect_conftest_config_ignored
 
   if [[ "${failures}" -ne 0 ]]; then
     echo "guard_test: ${failures}건 실패" >&2
