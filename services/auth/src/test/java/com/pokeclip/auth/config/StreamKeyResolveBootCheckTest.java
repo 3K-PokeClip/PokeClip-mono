@@ -107,8 +107,12 @@ class StreamKeyResolveBootCheckTest {
   @Test
   void withToken_failsWhenAnyCidrIsNotIpv4() {
     String mixed = PREFIX + "allowed-cidrs=" + ALLOWED_ADDRESS + "/32," + IPV6_ADDRESS + "/32";
+    // IPv4 꼴 오타(접두 33)도 꼴 검사가 막아야 한다. 매처에 닿으면 매처가 값을 실패 메시지에 싣는다.
+    String malformedIpv4 = PREFIX + "allowed-cidrs=" + ALLOWED_ADDRESS + "/33";
 
     web(INTERNAL_TOKEN_SET, RESOLVE_TOKEN_SET, mixed, STRATEGY_NONE)
+        .run(context -> assertFailedWithoutValues(context, "allowed-cidrs"));
+    web(INTERNAL_TOKEN_SET, RESOLVE_TOKEN_SET, malformedIpv4, STRATEGY_NONE)
         .run(context -> assertFailedWithoutValues(context, "allowed-cidrs"));
   }
 
