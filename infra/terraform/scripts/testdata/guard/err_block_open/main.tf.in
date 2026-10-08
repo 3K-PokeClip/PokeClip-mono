@@ -1,0 +1,3 @@
+# 끝나지 않는 블록 주석은 검사 불가다.
+/*
+resource "aws_secretsmanager_secret_version" "x" {}

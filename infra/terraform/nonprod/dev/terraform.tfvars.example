@@ -1,0 +1,68 @@
+# terraform.tfvars 로 복사해 실제 값을 넣는다. terraform.tfvars 는 추적하지 않는다.
+# 값은 운영 O1 전 읽기 조사(describe-*)의 현재 값 그대로다.
+#
+# O1 전 읽기 조사로 확인할 가정(다르면 값만이 아니라 선언을 고친다):
+# 1. SG 의 인그레스 규칙이 정확히 tcp 80 · 443 · 8082 세 개이고, 각각 단일
+#    포트 · IPv4 CIDR 하나다(IPv6 · 접두사 목록 · 참조 SG 규칙이 없다).
+#    describe-security-group-rules 로 규칙 전부를 대조한다.
+# 2. 각 규칙의 ip_protocol · cidr_ipv4 · description · tags 현재 값.
+# 3. 이그레스 규칙이 하나(전체 허용)이고 그 description · tags 현재 값.
+# 4. EC2 hibernation(바뀌면 교체) · source_dest_check 현재 값.
+# 5. EC2 · EIP · SG 의 태그 · SG description(바뀌면 교체) · 인스턴스 유형.
+# 6. 루트 볼륨 · 추가 EBS: root_block_device 는 선언하지 않았고 provider 가
+#    현재 값을 읽어 둔다(Optional · Computed). 첫 plan 에 볼륨 속성 차이가
+#    뜨면 그때만 그 값을 선언에 적어 맞춘다 — 미리 볼륨 블록을 넣지 않는다.
+# 7. EIP 가 이 인스턴스에 연결돼 있다(describe-addresses 의 InstanceId). 다른
+#    인스턴스 · 미연결이면 첫 plan 에 차이가 뜬다.
+# 8. SG 의 revoke_rules_on_delete 처럼 AWS 에 없는 Terraform 전용 인자는
+#    import 뒤 기본값으로 수정이 뜰 수 있다. 첫 plan 에 뜨면 그 인자를 현재
+#    동작과 같은 값으로 선언에 적어 「수정 0」을 맞춘다.
+# 첫 plan 이 「import 7 · 생성 0 · 수정 0 · 삭제 0」이 아니면 apply 하지 않는다.
+instance_id          = "<INSTANCE_ID_DEV>"
+instance_ami         = "<AMI_ID_DEV>"
+instance_type        = "<INSTANCE_TYPE_DEV>"
+eip_allocation_id    = "<EIP_ALLOC_ID>"
+security_group_id    = "<SG_ID_DEV>"
+ingress_rule_id_80   = "<SG_RULE_ID_DEV_80>"
+ingress_rule_id_443  = "<SG_RULE_ID_DEV_443>"
+ingress_rule_id_8082 = "<SG_RULE_ID_DEV_8082>"
+egress_rule_id       = "<SG_RULE_ID_DEV_EGRESS>"
+
+security_group_description = "<SG_DESCRIPTION_DEV>"
+
+# true 또는 false(현재 값). 자리표시자 그대로면 plan 이 형식 오류로 멈춘다.
+instance_hibernation       = "<HIBERNATION_DEV>"
+instance_source_dest_check = "<SOURCE_DEST_CHECK_DEV>"
+
+instance_tags       = { Name = "<INSTANCE_NAME_TAG_DEV>" }
+eip_tags            = {}
+security_group_tags = {}
+
+# description · tags 는 현재 값이 없으면 줄을 지운다.
+ingress_rules = {
+  "80" = {
+    ip_protocol = "tcp"
+    cidr_ipv4   = "<CIDR_DEV_80>"
+    description = "<SG_RULE_DESCRIPTION_DEV_80>"
+    tags        = {}
+  }
+  "443" = {
+    ip_protocol = "tcp"
+    cidr_ipv4   = "<CIDR_DEV_443>"
+    description = "<SG_RULE_DESCRIPTION_DEV_443>"
+    tags        = {}
+  }
+  "8082" = {
+    ip_protocol = "tcp"
+    cidr_ipv4   = "<CIDR_DEV_8082>"
+    description = "<SG_RULE_DESCRIPTION_DEV_8082>"
+    tags        = {}
+  }
+}
+
+egress_rule = {
+  ip_protocol = "-1"
+  cidr_ipv4   = "<CIDR_DEV_EGRESS>"
+  description = "<SG_RULE_DESCRIPTION_DEV_EGRESS>"
+  tags        = {}
+}
