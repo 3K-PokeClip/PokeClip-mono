@@ -213,6 +213,8 @@ OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio
 | OBS 「방송 종료」(`STREAMING_STOPPING` → `STOPPED`) | 보낸다 | `main_stop` |
 | 자동 재연결 중에 「방송 종료」 | 보낸다 — 마지막 연결은 끊긴 그 연결 | `main_stop` |
 | 방송 중 OBS 닫기 | 보낸다(보낼 수 있을 때만 — 언로드가 진행 중 전송을 끊는다) | `obs_exit` |
+| 「방송 종료」 뒤 우리 출력이 다 멈추기 전에 본방을 다시 켬 | 보낸다 — 새 구간을 시작하기 전에 앞 구간 몫을 정한다(멈춘 순간은 그 시각으로 어림). 안 그러면 새 출력이 앞 출력의 신호를 끊어 판정이 사라진다 | `restart_before_stop` |
+| 정지가 접속 중에 들어왔는데 접속이 성공함 | 붙은 것으로 세고 곧바로 멈춘다 — 보낸다(지속 시간 ≈ 0) | `main_stop` |
 | 본방이 스스로 끊겨 끝남(`STOPPING` 없이 `STOPPED`) | 안 보낸다(`not_intentional`) | `main_stop` |
 | 오류 코드로 멈춤(다시 해도 같은 오류) | 안 보낸다 | `output_error` |
 | 독 「재시도 중지」 | 안 보낸다 — 본방은 살아 있고 마지막 연결은 이미 끊겼다. 보내면 키를 고쳐 다시 붙는 송출이 새 회차가 돼 되감기를 잃는다 | `stop_retry` |
@@ -220,7 +222,7 @@ OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio
 | 본방 시작 실패로 같이 멈춤 | 안 보낸다 | `stopped_with_reason` |
 | 그 송출에서 연결이 한 번도 성립하지 않음 | 안 보낸다(`never_connected`) | — |
 
-스트리머 조작인지는 우리 출력의 `stop` 코드가 아니라 **본방 정지 이벤트로 가른다** — `OBS_FRONTEND_EVENT_STREAMING_STOPPING`은 `obs_output_stop` 안에서만 동기로 오고(버튼·websocket), 본방이 스스로 끊기면(재연결 소진) `STOPPED`만 온다(2026-10-08 실측). A5가 libobs 재연결을 꺼서 끊길 때마다 우리 출력의 `stop`(−5)이 나므로 코드로는 가를 수 없다.
+스트리머 조작인지는 우리 출력의 `stop` 코드가 아니라 **본방 정지 이벤트로 가른다** — `OBS_FRONTEND_EVENT_STREAMING_STOPPING`은 `obs_output_stop` 안에서만 동기로 오고(버튼·websocket), 본방이 스스로 끊기면(재연결 소진) `STOPPED`만 온다(2026-10-08 실측). 본방이 재연결 중일 때 「방송 종료」를 눌러도 `obs_output_force_stop`이 `stopping`을 내므로 `STOPPING`이 온다(libobs 32.2.1 `obs-output.c` 대조). A5가 libobs 재연결을 꺼서 끊길 때마다 우리 출력의 `stop`(−5)이 나므로 코드로는 가를 수 없다.
 
 **요청** — `Authorization: Bearer <HMAC-SHA256(passphrase, "pokeclip-4d-v1") 소문자 hex 64자>`(passphrase 원문은 보내지 않는다), `Content-Type: application/json`, 본문 `{"streamid": "<SRT에 쓴 그 값>", "elapsedSinceStopMs": …, "connectionDurationMs": …}`. 두 시간 값의 기준은 **우리 출력이 실제로 멈춘 순간**이다 — 일반 멈춤은 `stop` 신호 시각, 재시도 대기 중의 정지(출력 없음)는 정지 요청 시각, 강제 멈춤(OBS 종료)은 멈춘 직후. `connectionDurationMs`는 마지막 연결의 `start` 신호(SRT 핸드셰이크를 마친 뒤) 시각부터, 붙어 있었으면 멈춘 순간까지, 끊겨 있었으면 끊김을 안 순간(그 출력의 `stop`)까지다. 우리 출력에 방송 지연은 걸지 않는다. HMAC·SHA-256은 의존성 없이 직접 구현했다(`src/end-signal-policy.cpp` — OBS deps에 OpenSSL 헤더가 없고, Qt는 OBS 없는 테스트 프로젝트에 못 묶는다. RFC 4231·FIPS 벡터와 계약 시험 벡터로 검증).
 

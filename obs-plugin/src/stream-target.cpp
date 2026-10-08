@@ -117,6 +117,13 @@ bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 	if (IsActive() && !stopRequested_ && wanted_)
 		return true;
 
+	// 앞 구간의 종료 신호가 아직 정해지지 않았으면 여기서 정한다 — 멈추는 중인 출력의 stop 신호를 기다리지 않고 새 구간을
+	// 시작하면 아래 BeginAttempt의 Release()가 시그널을 끊어 HandleStop이 오지 않는다(끝내고 곧바로 다시 켠 방송 —
+	// 4D가 가르려는 바로 그 경우). 멈춘 순간은 지금으로 잡는다(정지 요청과 지금 사이 어딘가 — 최선 노력).
+	if (!endSignalDecided_ && (output_ || retryPending_))
+		DecideEndSignal(stopIntentional_, connectedThisOutput_, std::chrono::steady_clock::now(),
+				"restart_before_stop");
+
 	// 새 방송 구간이다 — 예약된 재시도를 버리고 처음부터 센다.
 	CancelRetry();
 	wanted_ = true;
@@ -571,10 +578,15 @@ void StreamTarget::OnStart(void *data, calldata_t *)
 		// 이 신호는 접속 스레드 안에서 온다. 여기서 obs_output_stop을 부르면 그 스레드를 join하려 하므로 UI 스레드로 넘긴다.
 		obs_log(LOG_INFO, "SRT output connected after the main stream stopped — stopping");
 		uint64_t generation = ctx->generation;
-		RunInUiThread([self, generation]() {
-			// 붙자마자 멈춘다 — 먼저 들어온 정지의 의도를 그대로 잇는다(종료 신호 판정).
-			if (self->generation_ == generation)
-				self->Stop(nullptr, self->stopIntentional_);
+		RunInUiThread([self, generation, connectedAt]() {
+			if (self->generation_ != generation)
+				return;
+			// 붙기는 붙었다 — 종료 신호 판정에 「성립한 연결」로 센다(지속 시간은 0에 가깝다). 안 세면 첫 연결에서는
+			// never_connected로 신호를 건너뛰고, 재연결 중이면 앞 연결의 시각을 그대로 쓴다.
+			if (self->output_)
+				self->OnConnected(connectedAt);
+			// 붙자마자 멈춘다 — 먼저 들어온 정지의 의도를 그대로 잇는다.
+			self->Stop(nullptr, self->stopIntentional_);
 		});
 		return;
 	}
@@ -689,9 +701,10 @@ void StreamTarget::HandleStop(uint64_t generation, int code, const std::string &
 		return;
 	}
 
-	// 붙어 있다 끊겼으면 지금이 「끊긴 순간」이다. 붙지 못한 시도가 이어지는 중이면 처음 끊긴 순간부터 계속 센다.
+	// 붙어 있다 끊겼으면 그 stop 신호가 난 때가 「끊긴 순간」이다(UI 스레드가 밀려 여기 늦게 닿아도 — 종료 신호의
+	// connectionDurationMs가 그 지연을 품지 않게). 붙지 못한 시도가 이어지는 중이면 처음 끊긴 순간부터 계속 센다.
 	if (wasConnected) {
-		outageAt_ = now;
+		outageAt_ = stopAt;
 		attempt_ = 0;
 		rejects_.Reset();
 	}
