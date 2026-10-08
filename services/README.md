@@ -783,8 +783,8 @@ CHECK 제약**을 더한다(POK-171).
 🔴 **`PATCH`·`PUT`은 POK-207이 CORS 허용 목록에 넣은 것이다.** 없으면 화면의 「저장」이
 preflight에서 막혀 **창구는 멀쩡한데 브라우저만 못 부른다.** 자리는 `web-support/CorsConfig` 하나다.
 
-아래 표의 창구는 **서른**이다 — 스트림키 다섯(**계약4 = `POST /internal/stream-keys/resolve`** —
-1번 Media가 SRT 연결을 받기 전에 한 번 부른다) · 치지직 연동 다섯 · **유튜브 연동 다섯**(POK-121) ·
+아래 표의 창구는 **서른하나**다 — 스트림키 다섯(**계약4 = `POST /internal/stream-keys/resolve`** —
+1번 Media가 SRT 연결을 받기 전에 한 번 부른다) · 치지직 연동 다섯 · **유튜브 연동 여섯**(POK-121, 상태 확인 하나는 POK-291) ·
 편집자 위임 아홉 · **clip용 내부 창구 둘**(POK-175, 아래 절) · **회원정보 수정 셋**(POK-207) ·
 **회원 탈퇴 하나**(POK-171).
 로그인·토큰 창구 넷(`/api/auth/google`·`/refresh`·`/logout`·`/me`)은 이 표에 없다 — 위 「인증」 줄이 그것이다.
@@ -808,6 +808,7 @@ preflight에서 막혀 **창구는 멀쩡한데 브라우저만 못 부른다.**
 | `GET /api/youtube-link` | 웹 | 사용자 JWT |
 | `DELETE /api/youtube-link` | 웹 | 사용자 JWT |
 | `POST /internal/youtube-link/resolve` | **clip·업로드 워커** | `X-Internal-Token` 헤더 |
+| `POST /internal/youtube-link/status` — 연동 상태만(토큰·갱신 없음, POK-291) | **clip** | `X-Internal-Token` 헤더 |
 | `POST /api/editor-invitations` | 웹 | 사용자 JWT |
 | `GET /api/editor-invitations/sent` | 웹 | 사용자 JWT |
 | `GET /api/editor-invitations/received` | 웹 | 사용자 JWT |
@@ -2443,6 +2444,7 @@ scope는 둘 — 업로드(`youtube.upload`)와 채널 조회(`youtube.readonly`
 | `GET /api/youtube-link` | 200 `{linked:false}` 또는 `{linked, channelId, channelName, status, linkedAt, lastRefreshedAt, accessExpiresAt}`. `status` ∈ `ACTIVE`·`BROKEN`·`UNLINKED`(파생). **치지직과 달리 `EXPIRED`가 없다** — 구글 access는 1시간짜리라 늘 만료돼 있고 갱신으로 항상 해소되므로 상태가 아니다. `linked`는 `ACTIVE`일 때만 true |
 | `DELETE /api/youtube-link` | 204 (없어도 204). 행은 남고(`revoked_at`+`USER_UNLINKED`) 커밋 뒤에 secrets 삭제. 🔴 **구글에는 revoke를 보내지 않는다** — 아래 |
 | `POST /internal/youtube-link/resolve` `{userId}` | **항상 200** — 아래 |
+| `POST /internal/youtube-link/status` `{userId}` | **항상 200** `{"linked":true,"reason":null}` 또는 `{"linked":false,"reason":"NOT_LINKED"\|"UNLINKED"\|"BROKEN"}`. 회원 번호가 없으면 400. 아래 「`status`(clip용)」 |
 
 오류 본문은 `{"reason": "<위 코드>"}` 한 필드다. 토큰·code·state·채널 ID는 응답·로그 어디에도 안 남는다
 (`SecretLeakTest`가 왕복 전체를 태워 확인한다).
@@ -2471,6 +2473,18 @@ scope는 둘 — 업로드(`youtube.upload`)와 채널 조회(`youtube.readonly`
 임박한 토큰은 주지 않는다, 잠시 뒤 다시 부르면 된다). 거절 응답에는 `accessToken` 필드가 아예 없다.
 **남은 수명이 30분(`resolve-min-remaining`)보다 짧으면 넘기기 전에 즉석 갱신한다** — 구글 access가
 1시간짜리라 치지직(12시간)과 자릿수가 다르다.
+
+**`status`(clip용, POK-291) 계약.** `POST /internal/youtube-link/status {userId}`. 잠금은 `resolve`와 같은
+`/internal/**` 체인이다. clip이 「영상 만들기」 주문을 받으면 렌더 전에 **스트리머가 유튜브를 연결했나**만 묻는다.
+판정은 `resolve`와 같다(`NOT_LINKED` · `UNLINKED` · `BROKEN`). 다른 점은 셋이다.
+
+- **토큰을 돌려주지 않는다.** 응답 칸은 `linked`·`reason` 둘뿐이다(연결됐으면 `reason`은 `null`로 실린다).
+  clip은 토큰이 필요 없고, 받으면 clip 로그·메모리에 토큰이 흘러든다.
+- **갱신하지 않는다.** 구글도 secrets도 안 부르고 회원 행 락도 안 잡는다. access가 만료돼 있어도 「연결됨」이다:
+  만료는 갱신으로 풀리는 일상이고, 갱신이 실제로 거부되는지는 업로드 일꾼의 `resolve`가 그때 안다.
+  그래서 `REFRESH_UNAVAILABLE`은 이 창구에 없다.
+- **회원별 최신 연동 행 하나만 읽어 가른다.** 「살아 있는 행이 있으면 그것이 최신 행」이라는 저장 쪽 약속
+  (`YoutubeLinkWriter.create`가 회원 행 락 뒤에 옛 행을 닫고 새 행을 넣는다)에 기댄다. GET 상태와 같은 근거다.
 
 🔴 **해제해도 구글 쪽 허락은 남는다 — 웹이 안내해야 한다(2번 몫).** `DELETE`는 우리 표의 행을 닫고
 **secrets의 토큰 원문을 지운다**(우리는 다시 못 쓴다). 그러나 구글에 `revoke`는 보내지 않는다 —
