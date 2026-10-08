@@ -67,6 +67,9 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         assertThat(count("render_job_events")).isOne();
         assertThat(count("clip_uploads WHERE clip_id = " + gone.clipId)).isZero();
         assertThat(count("clip_uploads WHERE clip_id = " + kept.clipId)).isOne();
+        // 「렌더 뒤 업로드」 의도(POK-291)는 편집본보다 먼저 지운다(외래키). 이웃 것은 남는다.
+        assertThat(count("upload_requests WHERE recipe_id = " + gone.recipeId)).isZero();
+        assertThat(count("upload_requests WHERE recipe_id = " + kept.recipeId)).isOne();
         assertThat(count("thumbnails")).isEqualTo(3);
         assertThat(count("thumbnails WHERE target_id IN ('S-kept', '" + kept.clipId + "', '" + kept.cardId + "')")).isEqualTo(3);
         assertThat(count("stream_segments WHERE stream_id = 'K-gone'")).isZero();
@@ -74,7 +77,9 @@ class StreamerPurgerTest extends IntegrationTestSupport {
 
         assertThat(files.prefixes).containsExactlyInAnyOrder(
                 "clips/" + gone.clipId + "/", "thumbnails/clip/" + gone.clipId + ".jpg",
-                "thumbnails/card/" + gone.cardId + ".jpg", "thumbnails/live/S-gone.jpg");
+                "thumbnails/card/" + gone.cardId + ".jpg", "thumbnails/live/S-gone.jpg",
+                // 사용자가 올린 썸네일 그림(POK-291): 스트리머 접두사 하나. 이웃 스트리머의 접두사는 안 지운다.
+                "upload-thumbnails/" + 탈퇴자 + "/");
         assertThat(files.segmentKeys).containsExactlyInAnyOrder(
                 "streams/K-gone/1.m4s", "dvr/K-gone/1.m4s", "streams/K-gone/2.m4s", "dvr/K-gone/2.m4s",
                 "dvr/K-gone/init/a.mp4");
@@ -227,10 +232,10 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         return new StreamerPurger(store, tx, factory.getBeanProvider(PurgeStorage.class));
     }
 
-    private record Seeded(long clipId, long cardId) {
+    private record Seeded(long clipId, long cardId, long recipeId) {
     }
 
-    /** 방송 하나에 딸린 표 아홉을 한 줄씩(렌더 보고 기록·업로드·사진 셋·녹화 조각 둘·회차 머리 하나). */
+    /** 방송 하나에 딸린 표 열을 한 줄씩(렌더 보고 기록·업로드·업로드 의도·사진 셋·녹화 조각 둘·회차 머리 하나). */
     private Seeded 심는다(String streamerId, String streamId, String ingestKey) {
         방송(streamerId, streamId, ingestKey);
         jdbc.update("INSERT INTO broadcast_events (event_id, stream_id, event_type, sequence_no, processed_at) "
@@ -253,6 +258,8 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         jdbc.update("""
                 INSERT INTO clip_uploads (clip_id, output_id, requested_by, channel_owner, title, status, payload)
                 VALUES (?, 'vert', ?, ?, '제목', 'queued', '{}'::jsonb)""", clipId, streamerId, streamerId);
+        jdbc.update("INSERT INTO upload_requests (recipe_id, recipe_version, requested_by, title) VALUES (?, 1, ?, '제목')",
+                recipeId, streamerId);
         jdbc.update("INSERT INTO thumbnails (kind, target_id) VALUES ('live', ?), ('card', ?), ('clip', ?)",
                 streamId, Long.toString(cardId), Long.toString(clipId));
         for (int seq = 1; seq <= 2; seq++) {
@@ -263,7 +270,7 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         }
         jdbc.update("INSERT INTO stream_sessions (session_id, stream_id, init_s3_key) VALUES (?, ?, ?)",
                 "sess-" + ingestKey, ingestKey, "dvr/" + ingestKey + "/init/a.mp4");
-        return new Seeded(clipId, cardId);
+        return new Seeded(clipId, cardId, recipeId);
     }
 
     private void 방송(String streamerId, String streamId, String ingestKey) {
