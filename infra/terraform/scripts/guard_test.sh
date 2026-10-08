@@ -7,9 +7,9 @@
 # testdata/guard/ok/ 는 모든 규칙을 지키는 트리라 guard.sh 가 통과해야 한다.
 # testdata/guard/err_<이름>/ 은 검사할 수 없는 트리라 guard.sh 가 종료 코드 2
 # 로 실패해야 한다(fail-closed). 읽을 수 없는 파일은 git 에 둘 수 없어 시험이
-# 임시 디렉터리에 만든다. HCL 로 틀린 err fixture 는 `terraform fmt
-# -recursive` 를 깨지 않게 *.tf.in 으로 두고, 시험이 임시 디렉터리에 *.tf 로
-# 복사해 돌린다.
+# 임시 디렉터리에 만든다. `terraform fmt -recursive` 를 깨는 fixture(HCL 로
+# 틀린 것 · fmt 가 고쳐 쓸 꼴)는 *.tf.in 으로 두고, 시험이 임시 디렉터리에
+# *.tf 로 복사해 돌린다.
 # 경로를 겨누는 규칙(R4 등)의 fixture 는 그 경로를 트리 안에 그대로 둔다.
 #
 # 사용: bash infra/terraform/scripts/guard_test.sh
@@ -23,6 +23,8 @@ readonly GUARD="${SCRIPT_DIR}/guard.sh"
 readonly FIXTURES="${SCRIPT_DIR}/testdata/guard"
 
 failures=0
+run_output=""
+run_status=0
 
 #######################################
 # 시험 하나의 실패를 알리고 센다.
@@ -37,6 +39,33 @@ fail() {
 }
 
 #######################################
+# fixture 에 guard.sh 를 돌린다. *.tf.in 이 있으면 임시 디렉터리에 *.tf 로
+# 복사해 돌린다(그 fixture 는 *.tf.in 만 둔다).
+# Globals:
+#   run_output, run_status
+# Arguments:
+#   fixture 디렉터리 경로.
+# Returns:
+#   임시 디렉터리를 만들지 못하면 1.
+#######################################
+run_guard() {
+  local dir="$1"
+  local tmp src
+  if ! compgen -G "${dir}/*.tf.in" >/dev/null; then
+    run_output="$(bash "${GUARD}" "${dir}" 2>&1)"
+    run_status=$?
+    return 0
+  fi
+  tmp="$(mktemp -d)" || return 1
+  for src in "${dir}"/*.tf.in; do
+    cp -- "${src}" "${tmp}/$(basename -- "${src}" .in)"
+  done
+  run_output="$(bash "${GUARD}" "${tmp}" 2>&1)"
+  run_status=$?
+  rm -rf -- "${tmp}"
+}
+
+#######################################
 # bad fixture 하나가 기대한 규칙으로 실패하는지 본다.
 # Arguments:
 #   fixture 디렉터리 경로.
@@ -48,8 +77,12 @@ expect_violation() {
   # bad_R1_data → R1: 첫 밑줄 뒤 토막이 규칙 이름이다.
   rule="${name#bad_}"
   rule="${rule%%_*}"
-  output="$(bash "${GUARD}" "${dir}" 2>&1)"
-  status=$?
+  run_guard "${dir}" || {
+    fail "${name}: 임시 디렉터리를 만들지 못함"
+    return
+  }
+  output="${run_output}"
+  status="${run_status}"
   if [[ "${status}" -ne 1 ]]; then
     fail "${name}: 종료 코드 1 을 기대했으나 ${status}"
     return
@@ -96,28 +129,23 @@ expect_error() {
 }
 
 #######################################
-# err fixture 하나를 시험한다. *.tf.in 이 있으면 임시 디렉터리에 *.tf 로
-# 복사해 돌린다.
+# err fixture 하나가 종료 코드 2 로 멈추는지 본다.
 # Arguments:
 #   fixture 디렉터리 경로.
 #######################################
 expect_fixture_error() {
   local dir="$1"
-  local name tmp src
+  local name
   name="$(basename -- "${dir}")"
-  if ! compgen -G "${dir}/*.tf.in" >/dev/null; then
-    expect_error "${name}" "${dir}"
-    return
-  fi
-  tmp="$(mktemp -d)" || {
+  run_guard "${dir}" || {
     fail "${name}: 임시 디렉터리를 만들지 못함"
     return
   }
-  for src in "${dir}"/*.tf.in; do
-    cp -- "${src}" "${tmp}/$(basename -- "${src}" .in)"
-  done
-  expect_error "${name}" "${tmp}"
-  rm -rf -- "${tmp}"
+  if [[ "${run_status}" -ne 2 ]]; then
+    fail "${name}: 종료 코드 2 를 기대했으나 ${run_status} — ${run_output}"
+    return
+  fi
+  echo "ok: ${name} → 검사 불가(종료 2)"
 }
 
 #######################################

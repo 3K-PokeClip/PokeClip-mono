@@ -57,3 +57,22 @@ resource "aws_ssm_parameter" "doc_hyphen" {
     /* resource "aws_secretsmanager_secret_version" "in_heredoc" {}
   DOC-TEXT
 }
+
+# 보간 속 따옴표 · 중괄호 · # · << 는 문자열이라 주석 · heredoc · 블록으로 세지 않는다.
+resource "aws_security_group" "interp" {
+  name        = "example-interp"
+  description = "x ${format("}{ # <<EOT %s", "y")} z"
+  tags = {
+    Note = "$${not_interp} ${lower("A")}"
+  }
+}
+
+# 이름이 비슷한 다른 유형은 대상이 아니다.
+resource "aws_security_group_rule" "legacy_name_only" {
+  type              = "ingress"
+  security_group_id = aws_security_group.interp.id
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+}
