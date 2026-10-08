@@ -77,6 +77,16 @@ run "bucket_is_protected" {
   assert {
     condition = one(flatten([
       for rule in aws_s3_bucket_lifecycle_configuration.this.rule : [
+        for expiration in rule.expiration :
+        expiration.expired_object_delete_marker
+      ]
+    ])) == true
+    error_message = "이전 버전이 다 지워진 삭제 표지(use_lockfile 잠금 등)를 정리해야 한다."
+  }
+
+  assert {
+    condition = one(flatten([
+      for rule in aws_s3_bucket_lifecycle_configuration.this.rule : [
         for abort in rule.abort_incomplete_multipart_upload :
         abort.days_after_initiation
       ]

@@ -19,6 +19,12 @@ override.tf.json
 *.plan
 tfplan
 plan.out
+*.tfplan.json
+tfplan.json
+plan.json
+# backend.hcl 변형(환경별 이름). 예시(.example)는 추적한다.
+backend-*.hcl
+backend.*.hcl
 # 충돌 로그 · CLI 설정(자격 증명이 들 수 있다).
 crash.log
 crash.*.log

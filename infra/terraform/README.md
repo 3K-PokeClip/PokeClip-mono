@@ -13,6 +13,9 @@ Terraform 코드입니다. 설계 정본은 「HTTPS · 엣지 인프라 설계�
 ## 디렉터리
 
 루트 하나가 상태 하나입니다. 의존은 위에서 아래 한쪽으로만 흐릅니다.
+아래는 **목표 구조**입니다 — 지금(M1) 있는 것은 `modules/state_bucket` ·
+`policy/guard` · `scripts` · `nonprod/{bootstrap,dev,dns-legacy}` 뿐이고, 나머지
+루트는 계획의 후속 PR 이 더합니다.
 
 ```
 infra/terraform/
@@ -70,14 +73,16 @@ infra/terraform/
 
 ### 상태 읽기 권한은 비밀 열람 권한이다
 
-*   상태 파일에는 자원 속성이 평문으로 남습니다(SG · EIP · DNS 값, 이후
-    단계의 민감 속성). 상태 버킷 · 키를 읽을 수 있는 주체는 그 값을 모두
+*   상태 파일에는 자원 속성이 평문으로 남습니다(SG · EIP · DNS 값, dev EC2 의
+    `user_data` — 지금은 `ignore_changes` 로 선언만 비켜 갈 뿐 import 하면 현재
+    값이 상태에 들어갑니다, 이후 단계의 민감 속성). 상태 버킷 · 키를 읽을 수 있는 주체는 그 값을 모두
     읽을 수 있습니다.
-*   그래서 상태 읽기 권한은 비밀 열람 권한과 같은 무게로 줍니다. IAM 은
-    루트별 키 접두사(`<루트>/`)로 나눠, 한 루트를 다루는 역할이 다른
-    루트의 상태를 읽지 못하게 합니다.
+*   그래서 상태 읽기 권한은 비밀 열람 권한과 같은 무게로 줍니다. **계획(후속
+    M — 이 PR 에는 IAM 이 없습니다):** IAM 을 루트별 키 접두사(`<루트>/`)로
+    나눠, 한 루트를 다루는 역할이 다른 루트의 상태를 읽지 못하게 합니다.
 *   상태 버킷은 평문 HTTP · TLS 1.2 미만 요청을 정책으로 거부하고, ACL 을
-    끄고, 이전 버전을 90일 뒤 지우되 최근 이전 버전 5개는 남깁니다
+    끄고, 이전 버전을 90일 뒤 지우되 최근 이전 버전 5개는 남기고, 이전 버전이
+    다 지워진 삭제 표지(잠금 파일 등)는 정리합니다
     (`modules/state_bucket`).
 
 ### 운영 O1 전 확인
@@ -239,6 +244,11 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
     conftest 출력 형식(`FAIL - Combined - main - ` 과 요약 줄)에 기대므로 버전을 바꾸면 모르는 줄로 종료 2 가 날 수
     있습니다(안전한 쪽) — CI 는 0.71.1 고정, 로컬 brew 판은 `conftest
     --version` 이 `dev` 로 나와 버전 문자열로는 확인되지 않습니다.
+*   R3 은 `aws_security_group` 만 봅니다. 기본 SG(`aws_default_security_group`)
+    의 인라인 규칙은 대상이 아닙니다 — 기본 SG 를 Terraform 으로 다루게 되면
+    리뷰가 보고 규칙을 더합니다.
+*   검사 루트의 `conftest.toml` 은 `ignore` · `namespace` · `policy` 를 명시
+    인자로 덮어 판정에 영향을 주지 못합니다.
 *   R0(심볼릭 링크 · `.tf.json`)는 정책이 아니라 guard.sh 의 셸 검사입니다.
     `--parser hcl2` 는 JSON 구성을 읽지 못하므로 `.tf.json` 은 이 트리에 두지
     않습니다.

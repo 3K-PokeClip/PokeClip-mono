@@ -100,6 +100,11 @@ resource "aws_s3_bucket_lifecycle_configuration" "this" {
       newer_noncurrent_versions = 5
     }
 
+    # 이전 버전이 모두 지워진 삭제 표지(use_lockfile 잠금 파일 등)를 정리한다.
+    expiration {
+      expired_object_delete_marker = true
+    }
+
     abort_incomplete_multipart_upload {
       days_after_initiation = 7
     }

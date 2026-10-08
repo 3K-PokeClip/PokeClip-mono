@@ -9,8 +9,11 @@
 # 3. 이그레스 규칙이 하나(전체 허용)이고 그 description · tags 현재 값.
 # 4. EC2 hibernation(바뀌면 교체) · source_dest_check 현재 값.
 # 5. EC2 · EIP · SG 의 태그 · SG description(바뀌면 교체) · 인스턴스 유형.
-# 6. 루트 볼륨 · 추가 EBS 를 따로 정한 값이 없다(root_block_device ·
-#    ebs_block_device 를 선언하지 않았으므로, 있으면 첫 plan 에 차이가 난다).
+# 6. 루트 볼륨 · 추가 EBS: root_block_device 는 선언하지 않았고 provider 가
+#    현재 값을 읽어 둔다(Optional · Computed). 첫 plan 에 볼륨 속성 차이가
+#    뜨면 그때만 그 값을 선언에 적어 맞춘다 — 미리 볼륨 블록을 넣지 않는다.
+# 8. EIP 가 이 인스턴스에 연결돼 있다(describe-addresses 의 InstanceId). 다른
+#    인스턴스 · 미연결이면 첫 plan 에 차이가 뜬다.
 # 7. SG 의 revoke_rules_on_delete 처럼 AWS 에 없는 Terraform 전용 인자는
 #    import 뒤 기본값으로 수정이 뜰 수 있다. 첫 plan 에 뜨면 그 인자를 현재
 #    동작과 같은 값으로 선언에 적어 「수정 0」을 맞춘다.
