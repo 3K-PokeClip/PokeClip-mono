@@ -34,7 +34,9 @@ variable "zone_tags" {
   type        = map(string)
 }
 
-# 존 이전(운영 O6) 때 900 으로 내렸다가 172800 으로 올린다. 평소엔 현재 값.
+# 존 이전(운영 O6) 때 이 옛 존은 900 으로 **내리기만** 한다(설계 9-2). 이전이
+# 끝나면 옛 존은 지운다 — TTL 을 다시 올리는 대상은 새 존(prod/dns)이다.
+# 평소엔 현재 값.
 variable "ns_ttl" {
   description = "옛 존 apex NS 레코드 TTL(초). 현재 값을 넣는다."
   type        = number
