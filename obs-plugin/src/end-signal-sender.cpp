@@ -192,6 +192,11 @@ EndSignalSender::SendResult EndSignalSender::Send(const Pending &p, const std::s
 	r.transportOk = rc == CURLE_OK;
 	if (!r.transportOk && !stopping_)
 		obs_log(LOG_INFO, "end-signal (key …%s): network — %s", p.req.keyHint.c_str(), curl_easy_strerror(rc));
+	else if (!r.transportOk)
+		// OBS 종료가 진행 중인 전송을 끊었다 — 「보낼 수 있을 때만」의 그 경우다. 흔적을 남긴다(운영 HTTPS는 TLS 접속만으로
+		// 수백 ms라 빠른 종료에서는 여기로 올 수 있다. 종료를 늦추지는 않는다 — 계약4 3-1).
+		obs_log(LOG_WARNING, "end-signal (key …%s): attempt %d aborted by OBS exit — not sent (%s)",
+			p.req.keyHint.c_str(), p.attempts, curl_easy_strerror(rc));
 	return r;
 }
 
