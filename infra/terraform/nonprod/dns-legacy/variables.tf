@@ -47,6 +47,9 @@ variable "ns_ttl" {
 
 # 존이 스스로 갖는 apex NS · SOA 는 여기 넣지 않는다(NS 는 ns_ttl 로 따로,
 # SOA 는 관리하지 않는다).
+# 단순 레코드(name · type · ttl · records)만 표현한다. 별칭(alias) · 가중치 ·
+# 지연 · 장애 조치(set_identifier) · 헬스 체크가 붙은 레코드는 이 모양으로
+# import 할 수 없다 — O1 전 읽기 조사에서 나오면 선언을 먼저 고친다.
 variable "records" {
   description = "옛 존의 나머지 레코드(키 = 임의 이름). 단순 레코드만(별칭 없음)."
   type = map(object({

@@ -67,6 +67,29 @@ infra/terraform/
     `*.tfvars` 는 추적하지 않고 `terraform.tfvars.example` 의
     자리표시자(`<INSTANCE_ID_DEV>` 같은 꼴)만 추적합니다.
 
+### 상태 읽기 권한은 비밀 열람 권한이다
+
+*   상태 파일에는 자원 속성이 평문으로 남습니다(SG · EIP · DNS 값, 이후
+    단계의 민감 속성). 상태 버킷 · 키를 읽을 수 있는 주체는 그 값을 모두
+    읽을 수 있습니다.
+*   그래서 상태 읽기 권한은 비밀 열람 권한과 같은 무게로 줍니다. IAM 은
+    루트별 키 접두사(`<루트>/`)로 나눠, 한 루트를 다루는 역할이 다른
+    루트의 상태를 읽지 못하게 합니다.
+*   상태 버킷은 평문 HTTP · TLS 1.2 미만 요청을 정책으로 거부하고, ACL 을
+    끄고, 이전 버전을 90일 뒤 지웁니다(`modules/state_bucket`).
+
+### 운영 O1 전 확인
+
+import 루트(`nonprod/dev` · `nonprod/dns-legacy`)의 선언은 실물에 대한
+가정 위에 서 있습니다. 확인할 가정은 각 루트의 `terraform.tfvars.example`
+머리에 있습니다. 읽기 조사 결과가 가정과 다르면 값만 바꾸지 말고 선언을
+고칩니다. 특히:
+
+*   dev SG 규칙은 단일 포트 · IPv4 CIDR 하나 꼴만 표현합니다. IPv6 ·
+    접두사 목록 · 참조 SG 규칙은 표현하지 못합니다.
+*   dns-legacy `records` 는 단순 레코드만 표현합니다. 별칭 · 라우팅 정책 ·
+    헬스 체크 레코드는 표현하지 못합니다.
+
 ### 보안 그룹 규칙은 별도 자원만
 
 *   SG 규칙은 `aws_vpc_security_group_ingress_rule` ·
