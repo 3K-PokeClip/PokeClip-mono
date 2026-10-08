@@ -299,7 +299,7 @@ BridgeCallbacks MakeBridgeCallbacks()
 		bool hasTrack = type == OBS_DATA_NUMBER && obs_data_item_numtype(item) == OBS_DATA_NUM_INT;
 		bool badTrack = type != OBS_DATA_NULL && !hasTrack;
 		obs_data_item_release(&item);
-		int track = hasTrack ? static_cast<int>(obs_data_get_int(d, "track")) : 0;
+		long long track = hasTrack ? obs_data_get_int(d, "track") : 0; // 범위를 본 뒤에 좁힌다 — int로 먼저 감기면 통과한다
 		obs_data_release(d);
 		if (key.empty())
 			return {400, JsonReason(false, "invalid_json")};
@@ -321,7 +321,7 @@ BridgeCallbacks MakeBridgeCallbacks()
 			return {404, JsonReason(false, "unknown_source")};
 		if (hasTrack && s.audio.tracks[static_cast<size_t>(track - 2)].mainStream)
 			return {409, JsonReason(false, "main_stream_track")};
-		int slot = hasTrack ? track - 1 : 0;
+		int slot = hasTrack ? static_cast<int>(track) - 1 : 0;
 		RunInUiThread([key, slot]() {
 			std::string reason;
 			if (!AudioRouter::Instance().AssignTrack(key, slot, reason))

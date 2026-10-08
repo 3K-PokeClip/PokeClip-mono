@@ -161,9 +161,9 @@ struct AudioRoutingView {
 	bool customRouting = false; // 스트리머가 트랙 2~6을 직접 짜 둔 흔적이 있다 — 켜면 덮어쓴다고 알린다
 	bool locked = false;        // 방송·녹화·리플레이 버퍼·송출 중 — 독이 손 배정 전에 한 번 확인한다
 	std::array<AudioTrackView, kStemSlots> tracks{};
-	std::vector<AudioSourceView> mixOnly; // 트랙 없음 — 화면에 나오는 후보인데 스템(본방 트랙 제외) 어디에도 없다
+	// 트랙 없음 — 스템(본방 트랙 제외) 어디에도 없다: 화면에 나오는 후보와, 독에서 뺀 기억(slot 0)이 있는 소스
+	std::vector<AudioSourceView> mixOnly;
 	std::vector<std::string> monitorOnly; // 화면에 나오지만 모니터 전용이라 믹스에 없다
-	int overflow = 0;                     // 자동 배정에서 자리가 모자란 수(트랙 2~6이 전부 본방 트랙일 때)
 
 	bool operator==(const AudioRoutingView &) const = default;
 };
@@ -174,15 +174,17 @@ struct RoutingViewOptions {
 	bool deferred = false;
 	bool prompt = false;
 	bool locked = false;
-	int overflow = 0;
 	uint32_t reserved = 0; // 본방이 쓰는 믹서 비트
+	// 독에서 트랙에서 뺀 기억(slot 0)이 있는 열쇠 — 다른 장면에만 있어도 「트랙 없음」에 싣는다(안 보이면 되돌릴 수 없다)
+	std::vector<std::string> offTrack;
 };
 
 // 트랙 2~6(본방 트랙 제외)을 스트리머가 직접 짠 흔적이 있는지. OBS는 새 소스를 트랙 전부에 켠 채 만들므로,
 // 어떤 소스든 그 비트가 전부 켜져 있지 않으면(일부만·전부 끔) 손댄 것으로 본다.
 bool HasCustomStemRouting(const std::vector<AudioSourceInfo> &sources, uint32_t reserved);
 
-// 화면에 안 나오고 스템에도 없는 소스(다른 장면에만 있는 것)는 목록에 올리지 않는다 — 지금 소리를 안 낸다.
+// 화면에 안 나오고 스템에도 없는 소스(다른 장면에만 있는 것)는 목록에 올리지 않는다 — 지금 소리를 안 낸다. 단, 독에서 뺀
+// 기억이 있는 소스(options.offTrack)는 올린다 — 그 장면을 띄우지 않고도 다시 넣을 수 있어야 한다.
 AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, const RoutingViewOptions &options);
 
 // 로그 한 줄: "T2 마이크/보조(mic) · T3 BGM(media), 알림(browser) · T4 – · T5 – · T6 – · no-track 0"

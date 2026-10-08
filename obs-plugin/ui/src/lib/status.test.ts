@@ -43,7 +43,6 @@ function state(patch: Partial<BridgeState>): BridgeState {
       tracks: [],
       mixOnly: [],
       monitorOnly: [],
-      overflow: 0,
     },
     marks: { hotkey: '', sent: 0, pending: 0, failed: 0, seq: 0, result: '', reason: '', lastAt: 0 },
     ...patch,

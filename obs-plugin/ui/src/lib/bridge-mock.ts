@@ -27,7 +27,6 @@ function routing(tracks: AudioSource[][], mainStream: number[] = []): AudioRouti
     tracks: tracks.map((sources, i) => ({ track: i + 2, mainStream: mainStream.includes(i + 2), sources })),
     mixOnly: [],
     monitorOnly: [],
-    overflow: 0,
   };
 }
 

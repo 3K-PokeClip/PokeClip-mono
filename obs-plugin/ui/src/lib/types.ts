@@ -22,8 +22,6 @@ export interface AudioRouting {
   tracks: { track: number; mainStream: boolean; sources: AudioSource[] }[];
   mixOnly: AudioSource[]; // 트랙 없음 — 어느 스템에도 없어 본방 믹스에만 섞인다(독에서 뺐거나 자리를 못 받았다)
   monitorOnly: { name: string }[];
-  overflow: number; // 트랙 2~6이 전부 본방 트랙이라 앉을 곳이 없는 수
-
 }
 
 // A4 — 핫키 마킹. seq가 오를 때마다 결과 토스트를 한 번 띄운다 (src/app-state.hpp MarkStats).

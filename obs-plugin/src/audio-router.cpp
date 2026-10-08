@@ -374,7 +374,6 @@ void AudioRouter::Reconcile(const char *reason)
 	}
 	bool restorePending = !wanted && presentBackup;
 
-	int overflow = 0;
 	std::vector<AudioTrackMapEntry> mapNext = config.audioTrackMap;
 	if (applied) {
 		AssignmentInput in;
@@ -388,7 +387,6 @@ void AudioRouter::Reconcile(const char *reason)
 		if (r.mapChanged)
 			mapNext = r.mapNext;
 		backup = r.backupNext;
-		overflow = static_cast<int>(r.overflowKeys.size());
 	}
 	if (!(mapNext == config.audioTrackMap) || !(backup == config.audioMixerBackup))
 		ConfigStore::Instance().Update([&](PluginConfig &c) {
@@ -411,8 +409,12 @@ void AudioRouter::Reconcile(const char *reason)
 	options.locked = locked;
 	// 기본은 꺼짐 — 페어링한 뒤 아직 답하지 않았으면 독이 한 번 묻는다(스템이 왜 필요한지 + 짜 둔 트랙을 덮어쓴다).
 	options.prompt = config.HasKey() && !config.audioAutoAssign && !config.audioAssignPrompted;
-	options.overflow = overflow;
 	options.reserved = reserved;
+	if (applied) {
+		for (const AudioTrackMapEntry &e : mapNext)
+			if (e.slot == 0)
+				options.offTrack.push_back(e.key);
+	}
 	AudioRoutingView view = BuildRoutingView(sources, options);
 	const char *mode = applied ? "auto"
 			   : deferred ? "deferred"
@@ -446,13 +448,15 @@ bool AudioRouter::AssignTrack(const std::string &key, int slot, std::string &rea
 		reason = "unknown_source";
 		return false;
 	}
-	std::string name = obs_source_get_name(source);
+	const char *rawName = obs_source_get_name(source); // 이름 없는 소스는 NULL — 열거(Describe)와 같이 빈 이름으로
+	std::string name = rawName ? rawName : "";
 	obs_source_release(source);
 
 	// 기억을 그 자리로 고쳐 쓴다 — 계산은 기억대로 앉히므로(규칙 머리 주석) 다음 Reconcile이 비트를 맞춘다.
-	// slot 0 = 트랙에서 뺀다(믹스에만 남는다).
+	// slot 0 = 트랙에서 뺀다(믹스에만 남는다). 저장이 실패하면 메모리도 되돌린다(Commit) — 이번 세션에만 옮겨졌다가
+	// 다시 켜면 돌아오는 것보다 아무것도 안 바뀌는 쪽이 정직하다. 독은 202를 이미 받았으므로 사유는 로그에만 남는다.
 	int64_t now = static_cast<int64_t>(std::time(nullptr));
-	ConfigStore::Instance().Update([&](PluginConfig &c) {
+	bool saved = ConfigStore::Instance().Commit([&](PluginConfig &c) {
 		auto it = std::find_if(c.audioTrackMap.begin(), c.audioTrackMap.end(),
 				       [&](const AudioTrackMapEntry &e) { return e.key == key; });
 		if (it == c.audioTrackMap.end()) {
@@ -464,6 +468,10 @@ bool AudioRouter::AssignTrack(const std::string &key, int slot, std::string &rea
 			it->lastSeen = now;
 		}
 	});
+	if (!saved) {
+		reason = "save_failed";
+		return false;
+	}
 	if (slot > 0)
 		obs_log(LOG_INFO, "audio routing: moved '%s' to track %d", name.c_str(), slot + 1);
 	else

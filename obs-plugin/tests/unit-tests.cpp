@@ -374,6 +374,24 @@ TEST(bridge_mark_requires_token_and_passes_status)
 	CHECK_EQ(f.markCalls.load(), 1);
 }
 
+TEST(bridge_audio_assign_requires_token_and_passes_body)
+{
+	BridgeFixture f;
+	auto cli = f.Client();
+	const std::string body = R"({"key":"uuid:bgm","track":4})";
+	auto anon = cli.Post("/api/audio/assign", body, "application/json");
+	CHECK(anon && anon->status == 401);
+	CHECK(f.assignAudioBody.empty());
+
+	auto res = cli.Post("/api/audio/assign", f.Auth(), body, "application/json");
+	CHECK(res);
+	if (res) {
+		CHECK_EQ(res->status, 202);
+		CHECK(res->body.find("\"ok\":true") != std::string::npos);
+	}
+	CHECK_EQ(f.assignAudioBody, body); // 본문이 그대로 콜백에 간다 — 열쇠·트랙 해석은 plugin-main 쪽
+}
+
 TEST(bridge_send_now_and_stop_retry_require_token_and_pass_status)
 {
 	BridgeFixture f;
@@ -1161,6 +1179,25 @@ TEST(audio_routing_view_marks_main_stream_and_hides_offscreen)
 	AudioRoutingView deferred = BuildRoutingView(sources, options);
 	CHECK(deferred.deferred);
 	CHECK(DescribeRouting(deferred).find("deferred") != std::string::npos);
+}
+
+TEST(audio_routing_view_keeps_removed_offscreen_source_listed)
+{
+	// 독에서 뺀(slot 0) 소스는 다른 장면에만 있어도 「트랙 없음」에 남는다 — 안 보이면 되돌릴 수 없다.
+	// 기억 없는 화면 밖 소스(인트로)는 그대로 숨긴다.
+	std::vector<AudioSourceInfo> sources = {Src("uuid:game", "게임", AudioKind::App, 100, 0x05),
+						Offscreen("uuid:bgm", "BGM", AudioKind::Media, 101, 0x01),
+						Offscreen("uuid:intro", "인트로 영상", AudioKind::Media, 102, 0x01)};
+	RoutingViewOptions options;
+	options.applied = true;
+	options.offTrack = {"uuid:bgm"};
+	AudioRoutingView v = BuildRoutingView(sources, options);
+	CHECK_EQ(v.mixOnly.size(), 1u);
+	CHECK_EQ(v.mixOnly[0].key, std::string("uuid:bgm"));
+	CHECK(DescribeRouting(v).find("no-track 1") != std::string::npos);
+
+	options.offTrack.clear();
+	CHECK(BuildRoutingView(sources, options).mixOnly.empty());
 }
 
 // ---------------------------------------------------------------- 설정

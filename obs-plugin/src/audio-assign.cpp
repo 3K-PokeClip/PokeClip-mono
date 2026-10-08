@@ -459,7 +459,6 @@ AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, c
 	v.prompt = options.prompt;
 	v.customRouting = !options.applied && HasCustomStemRouting(sources, options.reserved);
 	v.locked = options.locked;
-	v.overflow = options.overflow;
 	for (int i = 0; i < kStemSlots; i++) {
 		AudioTrackView &t = v.tracks[static_cast<size_t>(i)];
 		t.track = i + 2;
@@ -483,7 +482,8 @@ AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, c
 				onStem = onStem || (options.reserved & bit) == 0;
 			}
 		}
-		if (!onStem && s.showing)
+		bool offTrack = std::find(options.offTrack.begin(), options.offTrack.end(), s.key) != options.offTrack.end();
+		if (!onStem && (s.showing || offTrack))
 			v.mixOnly.push_back(view);
 	}
 	return v;
