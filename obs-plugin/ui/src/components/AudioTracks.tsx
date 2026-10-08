@@ -181,17 +181,21 @@ export function AudioTracks({ state, bridge }: { state: BridgeState; bridge: Bri
 // 방송·녹화 중의 넣기·빼기 확인 — 지금 나가는 트랙이 바뀐다.
 function LiveDialog({ req, onCancel, onConfirm }: { req: Request; onCancel: () => void; onConfirm: () => Promise<void> }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
   const [busy, setBusy] = useState(false);
   const add = req.action === 'add';
 
+  // 처음 열릴 때만 취소에 포커스를 준다. 이 창은 전송 중에 뜨는데 그때는 통계로 매초 부모가 다시 그려져 onCancel이 새 함수가
+  // 되므로, 콜백을 의존성에 두면 포커스가 매초 취소로 돌아간다(「넣기」로 옮긴 포커스가 Enter 직전에 빼앗긴다).
   useEffect(() => {
     cancelRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Escape') onCancelRef.current();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel]);
+  }, []);
 
   return (
     <div class={styles.scrim} onClick={onCancel}>
