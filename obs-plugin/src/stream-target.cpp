@@ -120,9 +120,15 @@ bool StreamTarget::Start(const PluginConfig &config, std::string &errorCode)
 	// 앞 구간의 종료 신호가 아직 정해지지 않았으면 여기서 정한다 — 멈추는 중인 출력의 stop 신호를 기다리지 않고 새 구간을
 	// 시작하면 아래 BeginAttempt의 Release()가 시그널을 끊어 HandleStop이 오지 않는다(끝내고 곧바로 다시 켠 방송 —
 	// 4D가 가르려는 바로 그 경우). 멈춘 순간은 지금으로 잡는다(정지 요청과 지금 사이 어딘가 — 최선 노력).
-	if (!endSignalDecided_ && (output_ || retryPending_))
-		DecideEndSignal(stopIntentional_, connectedThisOutput_, std::chrono::steady_clock::now(),
+	if (!endSignalDecided_ && (output_ || retryPending_)) {
+		const bool intent = stopIntentional_;
+		const bool hadOutput = output_ != nullptr;
+		// 옛 출력을 실제로 멈춘 뒤에 판정한다 — 신호는 출력이 멈춘 뒤에 가야 하고 두 시간 값의 기준도 그 순간이다.
+		// 멈추는 중이던 출력은 여기서 강제로 멈춘다(어차피 BeginAttempt가 그렇게 한다).
+		Release();
+		DecideEndSignal(intent, hadOutput && connectedThisOutput_, std::chrono::steady_clock::now(),
 				"restart_before_stop");
+	}
 
 	// 새 방송 구간이다 — 예약된 재시도를 버리고 처음부터 센다.
 	CancelRetry();
@@ -222,6 +228,11 @@ bool StreamTarget::BeginAttempt(const PluginConfig &config, std::string &errorCo
 		s.stats = carried;
 	});
 
+	// 종료 신호는 이 출력이 쓴 키로 만든다(DecideEndSignal) — 구간 안에서는 키가 잠겨 시도마다 같은 값이다.
+	sessionStreamId_ = config.streamId;
+	sessionPassphrase_ = config.passphrase;
+	sessionEndSignalBase_ = config.endSignalBase;
+
 	obs_log(LOG_INFO, "starting SRT output → %s:%d (key …%s, passphrase %s)", config.ingestHost.c_str(),
 		config.ingestPort, KeyHintOf(config.streamId).c_str(),
 		config.sendPassphrase && !config.passphrase.empty() ? "on" : "off");
@@ -262,7 +273,8 @@ void StreamTarget::Stop(const char *reason, bool intentional)
 	if (wasPending) {
 		// 출력이 없으니 stop 신호도 없다 — 멈춘 순간은 지금이고, 마지막 연결은 outageAt_에 끊긴 것이다(자동 재연결 중의
 		// 「방송 종료」도 보낸다 — 계약4 3-1).
-		DecideEndSignal(stopIntentional_, false, std::chrono::steady_clock::now(), "main_stop");
+		DecideEndSignal(stopIntentional_, false, std::chrono::steady_clock::now(),
+				reason ? "stopped_with_reason" : "main_stop");
 		AppState::Instance().Mutate([reason](StateSnapshot &s) {
 			s.phase = reason ? StreamPhase::Error : StreamPhase::Idle;
 			s.errorCode = reason ? reason : "";
@@ -304,13 +316,15 @@ void StreamTarget::ForceStop(bool intentional)
 	// 이미 정지를 요청한 출력이면 그 정지의 의도를 따른다(stop 신호를 기다리던 중에 OBS가 닫혔다). 아니면 이번 강제
 	// 멈춤의 의도다. 멈춘 순간은 Release()가 돌아온 때 — 강제 멈춤도 출력이 실제로 멈춘 때가 기준이다(계약4 3절).
 	const bool intent = stopRequested_ ? stopIntentional_ : intentional;
-	const bool connectedAtStop = output_ != nullptr && connectedThisOutput_;
+	const bool hadOutput = output_ != nullptr;
 	CancelRetry();
 	wanted_ = false;
 	Release(); // 시그널을 먼저 끊으므로 OnStop이 오지 않는다 — 상태를 여기서 되돌린다
+	// 붙어 있었는지는 Release() 뒤에 본다 — 접속 중이던 출력이 기다리는 사이 붙었으면 Release()가 그것을 적는다.
+	// 로그 trigger는 판정에 쓴 의도와 같은 근거로 적는다 — 먼저 들어온 정지를 마저 끝낸 것이면 그 정지가 사유다.
 	if (had)
-		DecideEndSignal(intent, connectedAtStop, std::chrono::steady_clock::now(),
-				intentional ? "obs_exit" : "force_stop");
+		DecideEndSignal(intent, hadOutput && connectedThisOutput_, std::chrono::steady_clock::now(),
+				stopRequested_ ? "main_stop" : intentional ? "obs_exit" : "force_stop");
 	if (had)
 		AppState::Instance().Mutate([](StateSnapshot &s) {
 			if (s.phase != StreamPhase::Error)
@@ -399,6 +413,14 @@ void StreamTarget::Release()
 		// 🔴 그동안 UI 스레드가 기다린다(SRT 접속 타임아웃, 기본 3초) — 접속 중의 OBS 종료·프로필 전환·본방 재시작 때만.
 		bool resolved = WaitForConnectResult();
 		DisconnectSignals();
+		// 기다리는 사이 접속이 성립했을 수 있다 — OnStart가 큐에 넣은 OnConnected는 UI 스레드가 여기 막혀 있어 돌지
+		// 못하고, 아래에서 output_을 지우면 버려진다. 종료 신호 판정에 「성립한 연결」로 세도록 여기서 적는다(성립
+		// 시각은 지금으로 어림 — 지속 시간은 0에 가깝다).
+		if (resolved && !connectedThisOutput_ && obs_output_active(output_)) {
+			connectedThisOutput_ = true;
+			everConnected_ = true;
+			connectedAt_ = std::chrono::steady_clock::now();
+		}
 		// 상한을 넘기면 그래도 멈춘다 — force_stop은 접속 스레드를 기다린 뒤 정지한다.
 		if (obs_output_active(output_) || !resolved)
 			obs_output_force_stop(output_); // mpegts stop은 비동기 — 아래 destroy가 stopping_event를 기다린다
@@ -768,20 +790,21 @@ void StreamTarget::DecideEndSignal(bool intentional, bool connectedAtStop, std::
 		return;
 	}
 
-	// 키·수신 주소는 송출 단계에서 잠기므로 이 구간을 시작한 값과 같다.
-	const PluginConfig config = ConfigStore::Instance().Get();
-	if (!config.HasKey() || config.passphrase.empty()) {
+	// 지금의 설정이 아니라 이 구간의 SRT 출력이 쓴 키로 만든다(BeginAttempt가 적은 값) — HandleStop이 상태를 Idle로
+	// 올린 뒤라 브리지가 연결 해제·재페어링을 받아들일 수 있다. 그 순간 설정을 읽으면 「키 없음」이 되거나 다른 키의
+	// 신호가 된다.
+	if (sessionStreamId_.empty() || sessionPassphrase_.empty()) {
 		obs_log(LOG_WARNING, "end-signal: not sent on %s (no key)", trigger);
 		return;
 	}
 	EndSignalRequest req;
-	req.streamId = config.streamId;
-	req.passphrase = config.passphrase; // Submit이 파생 값으로 바꾸고 지운다
-	req.baseOverride = config.endSignalBase;
+	req.streamId = sessionStreamId_;
+	req.passphrase = sessionPassphrase_; // Submit이 파생 값으로 바꾸고 지운다
+	req.baseOverride = sessionEndSignalBase_;
 	req.stopAtSteadyMs = ToSteadyMs(stopAt);
 	req.connectionDurationMs = ConnectionDurationMs(ToSteadyMs(connectedAt_), connectedAtStop,
 							ToSteadyMs(outageAt_), ToSteadyMs(stopAt));
-	req.keyHint = KeyHintOf(config.streamId);
+	req.keyHint = KeyHintOf(sessionStreamId_);
 	req.trigger = trigger;
 	EndSignalSender::Instance().Submit(std::move(req));
 }

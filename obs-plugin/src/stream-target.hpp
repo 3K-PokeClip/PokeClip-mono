@@ -121,6 +121,12 @@ private:
 	// 마지막 연결이 성립한 순간(우리 출력의 start 신호 — SRT 핸드셰이크를 마친 뒤). 종료 신호의 connectionDurationMs
 	// 기준이다. 붙을 때마다 새로 잡고, 붙지 못한 시도는 건드리지 않는다.
 	std::chrono::steady_clock::time_point connectedAt_{};
+	// 이 방송 구간의 SRT 출력이 쓴 키 — 종료 신호는 지금의 설정이 아니라 이 값으로 만든다. HandleStop이 상태를 Idle로
+	// 올린 뒤에는 브리지가 연결 해제·재페어링을 받아들일 수 있어, 그 순간 설정을 읽으면 「키 없음」이 되거나 다른 키의
+	// 신호가 된다. BeginAttempt가 적는다.
+	std::string sessionStreamId_;
+	std::string sessionPassphrase_; // 비밀 — 로그 금지
+	std::string sessionEndSignalBase_;
 	bool retryPending_ = false;
 	int attempt_ = 0;       // 끊긴 뒤 예약한 재시도 수
 	uint64_t retrySeq_ = 0; // 예약 취소 토큰 — 값이 바뀌면 먼저 예약한 타이머는 아무것도 안 한다
