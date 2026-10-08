@@ -60,4 +60,12 @@ class PurgeConfigurationTest {
         runner.withPropertyValues("pokeclip.render.enabled=false", "pokeclip.upload.enabled=false")
                 .run(context -> assertThat(context).doesNotHaveBean(PurgeStorage.class));
     }
+
+    @Test
+    void 켜짐_값이_true_false_밖이어도_부팅이_깨지지_않는다() {
+        // 식(SpEL)으로 두 값을 이으면 "on or false"를 평가하다 부팅이 멈췄다(로컬 리뷰 2라운드). 속성 조건은 문자열 비교라 안 깨진다.
+        runner.withPropertyValues("pokeclip.render.enabled=false", "pokeclip.render.output-bucket=clips",
+                        "pokeclip.upload.enabled=on", "pokeclip.upload.queue-url=q", "pokeclip.upload.dlq-url=d")
+                .run(context -> assertThat(context).hasNotFailed());
+    }
 }

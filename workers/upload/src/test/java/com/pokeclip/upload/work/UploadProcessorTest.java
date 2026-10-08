@@ -343,6 +343,27 @@ class UploadProcessorTest {
         assertThat(youtube.videosCreated()).isEqualTo(1);
     }
 
+    /**
+     * 재배달이어도 지난 배달에서 붙었을 리 없는 사유(전화 인증이 없는 채널의 권한 없음)는 그 코드 그대로다(로컬 리뷰 2라운드).
+     * UNCONFIRMED로 덮으면 보관함이 「전화 인증이 필요해요」를 못 띄운다.
+     */
+    @Test
+    void 재배달이어도_권한_없음은_그대로_보고한다() {
+        internal.resultDown = 2;
+        youtube.thumbnailReplies.add("403 forbidden");
+        String order = 주문서("", 장면(500));
+
+        assertThat(processor().process(order).kind()).isEqualTo(Disposition.Kind.DELAY);
+        youtube.thumbnailReplies.add("403 forbidden");
+
+        Disposition 둘째 = processor().process(order);
+
+        assertThat(둘째).isEqualTo(Disposition.DELETE);
+        assertThat(internal.results).containsExactly("UPLOADED:vid1");
+        assertThat(internal.thumbnailResults).containsExactly("FAILED:THUMBNAIL_FORBIDDEN");
+        assertThat(youtube.videosCreated()).isEqualTo(1);
+    }
+
     /** 마지막 응답이 사라져 주소에 다시 물어 끝을 안 길(drive의 끝)에서도 썸네일이 붙는다. */
     @Test
     void 마지막_응답이_사라져도_썸네일을_붙인다() {

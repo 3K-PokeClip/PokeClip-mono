@@ -73,8 +73,12 @@ class IntentOnOpenClipRaceTest extends RenderUploadTestSupport {
                 .isEqualTo(clipId + ":펜타킬:unlisted");
     }
 
+    /**
+     * 요청이 진행 중 영상 줄 잠금({@code lockOpenId})에 줄을 섰나. DB 전체의 잠금 대기를 세면 다른 세션(일정 작업 등)의 대기로 루프가
+     * 일찍 끝나, 결함이 있어도 요청이 오기 전에 커밋해 초록이 될 수 있다(로컬 리뷰 2라운드). 그 쿼리 하나로 좁힌다.
+     */
     private int 잠금을_기다리는_수() {
         return jdbc.queryForObject("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
-                + "AND datname = current_database()", Integer.class);
+                + "AND datname = current_database() AND query LIKE '%FROM clips%FOR NO KEY UPDATE%'", Integer.class);
     }
 }

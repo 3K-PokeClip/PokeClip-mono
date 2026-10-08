@@ -328,8 +328,15 @@ public class RenderRequestService {
         });
 
         if (requested.created()) {
-            // 커밋 뒤에 싣는다. 실패해도 예외를 올리지 않는다 — 줄은 이미 있고 outbox가 다시 보낸다.
-            publisher.publishNow(requested.clip().id());
+            // 커밋 뒤에 싣는다. 실패해도 예외를 올리지 않는다 — 줄은 이미 있고 outbox가 다시 보낸다. 실음 앞의 조회가 DB 오류로
+            // 던지는 것까지 여기서 막는다(POK-291 로컬 리뷰 2라운드): 새어 나가면 이미 커밋된 주문이 500이 되고, 부른 쪽이 커밋된
+            // 의도가 가리키는 썸네일 그림까지 지운다.
+            try {
+                publisher.publishNow(requested.clip().id());
+            } catch (RuntimeException e) {
+                log.warn("clip.render.publish_after_commit_failed clipId={} reason={}", requested.clip().id(),
+                        e.getClass().getSimpleName());
+            }
         }
         return requested;
     }

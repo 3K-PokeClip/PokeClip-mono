@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Stream;
 
@@ -44,6 +45,11 @@ public class UploadProcessor {
     private static final Logger log = LoggerFactory.getLogger(UploadProcessor.class);
     /** 이번에 못 붙였지만 지난 배달에서 붙었을 수 있다({@link #finish}). */
     static final String THUMBNAIL_UNCONFIRMED = "THUMBNAIL_UNCONFIRMED";
+    /**
+     * 지난 배달에서도 붙었을 리 없는 실패(POK-291 로컬 리뷰 2라운드). 채널 권한(전화 인증)과 그림 자체는 몇 분 사이에 안 바뀐다.
+     * 이것까지 {@value #THUMBNAIL_UNCONFIRMED}로 덮으면 보관함이 「전화 인증이 필요해요」 같은 고칠 길을 잃는다.
+     */
+    private static final Set<String> NEVER_SET_BEFORE = Set.of("THUMBNAIL_FORBIDDEN", "THUMBNAIL_INVALID_IMAGE");
 
     private final EnvelopeParser parser;
     private final ClipUploadApi clip;
@@ -275,14 +281,15 @@ public class UploadProcessor {
      *
      * <p>🔴 이 배달에서 바이트를 하나도 안 보냈는데 끝났으면(지난 배달이 영상을 끝냈다) 썸네일 실패를 그 코드 그대로 보내지 않고
      * {@value #THUMBNAIL_UNCONFIRMED}로 보낸다. 지난 배달이 붙인 뒤 보고만 못 했을 수 있다: 그때의 SET은 clip에 닿은 적이 없어
-     * 이번 실패가 첫 값으로 남고, 보관함이 채널에 붙은 그림을 「못 붙였어요」로 안내한다(로컬 리뷰 1라운드).
+     * 이번 실패가 첫 값으로 남고, 보관함이 채널에 붙은 그림을 「못 붙였어요」로 안내한다(로컬 리뷰 1라운드). 단 지난 배달에서도 붙었을 리
+     * 없는 사유(권한 없음·그림 거절)는 원래 코드를 둔다(2라운드).
      *
      * @param token          영상을 올린 토큰. 결론 내기 자리에서는 null일 수 있다
      * @param finishedBefore 이 배달에서 바이트를 하나도 안 보냈다
      */
     private Disposition finish(UploadEnvelope job, String videoId, Path file, String token, boolean finishedBefore) {
         ClipUploadApi.ThumbnailReport thumbnail = thumbnails.attach(job, videoId, file, token);
-        if (finishedBefore && "FAILED".equals(thumbnail.outcome())) {
+        if (finishedBefore && "FAILED".equals(thumbnail.outcome()) && !NEVER_SET_BEFORE.contains(thumbnail.errorCode())) {
             log.info("upload.thumbnail_unconfirmed uploadId={} code={}", job.uploadId(), thumbnail.errorCode());
             thumbnail = ClipUploadApi.ThumbnailReport.failed(THUMBNAIL_UNCONFIRMED);
         }

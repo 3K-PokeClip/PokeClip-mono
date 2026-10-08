@@ -4,9 +4,11 @@ import com.pokeclip.clip.render.RenderProperties;
 import com.pokeclip.clip.upload.UploadProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.boot.autoconfigure.condition.AnyNestedCondition;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
@@ -32,7 +34,7 @@ public class PurgeConfiguration {
     private static final Logger log = LoggerFactory.getLogger(PurgeConfiguration.class);
 
     @Bean
-    @ConditionalOnExpression("${pokeclip.render.enabled:false} or ${pokeclip.upload.enabled:false}")
+    @Conditional(RenderOrUploadEnabled.class)
     public PurgeStorage purgeStorage(RenderProperties properties, UploadProperties upload) {
         // 창고 주소(지역·덮은 주소)는 켜진 쪽 설정을 따른다. 렌더가 꺼졌으면 그림을 둔 쪽(UploadConfiguration)과 같은 값이다.
         String region = properties.enabled() ? properties.region() : upload.region();
@@ -53,5 +55,24 @@ public class PurgeConfiguration {
         log.info("clip.purge.storage_enabled endpointOverride={} segments={}", hasEndpoint,
                 properties.segmentBucket() != null && !properties.segmentBucket().isBlank());
         return new S3PurgeStorage(builder.build(), properties.outputBucket(), properties.segmentBucket());
+    }
+
+    /**
+     * 렌더 줄이나 업로드 줄 중 하나라도 켜졌나. 식(SpEL)으로 두 값을 이으면 {@code true}·{@code false} 밖의 값(on·빈 값)에서
+     * 부팅이 깨진다(POK-291 로컬 리뷰 2라운드). 속성 조건 둘을 「하나라도」로 묶어 예전 {@code ConditionalOnProperty}와 같이 읽는다.
+     */
+    static class RenderOrUploadEnabled extends AnyNestedCondition {
+
+        RenderOrUploadEnabled() {
+            super(ConfigurationPhase.REGISTER_BEAN);
+        }
+
+        @ConditionalOnProperty(prefix = "pokeclip.render", name = "enabled", havingValue = "true")
+        static class Render {
+        }
+
+        @ConditionalOnProperty(prefix = "pokeclip.upload", name = "enabled", havingValue = "true")
+        static class Upload {
+        }
     }
 }
