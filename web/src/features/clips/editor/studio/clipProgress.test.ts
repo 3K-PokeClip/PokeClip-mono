@@ -48,9 +48,9 @@ describe('clipLabel', () => {
         }),
       ),
     ).toBe('영상 #77 만드는 중 42%');
-    // 렌더는 끝났고 업로드 줄은 아직 없다: 정보가 있으면 곧 올라간다
+    // 완성과 업로드 줄은 한 트랜잭션이라, 정보가 있는데 줄이 없으면 자동 업로드를 건너뛴 것이다
     expect(clipLabel(clip({ uploadRequest: intent, upload: null }))).toBe(
-      '영상 #77 유튜브에 올리는 중',
+      '영상 #77 완성 · 업로드는 시작되지 않았어요',
     );
     expect(clipLabel(clip({ uploadRequest: intent, upload: upload('uploading') }))).toBe(
       '영상 #77 유튜브에 올리는 중',
@@ -76,7 +76,8 @@ describe('clipSettled: 상태 확인을 멈추는 때', () => {
   });
 
   it('완성됐어도 업로드 정보가 있으면 업로드가 끝날 때까지 묻는다', () => {
-    expect(clipSettled(clip({ uploadRequest: intent, upload: null }))).toBe(false);
+    // 줄이 없으면 기다려도 안 생긴다: 끝없이 묻지 않는다
+    expect(clipSettled(clip({ uploadRequest: intent, upload: null }))).toBe(true);
     expect(clipSettled(clip({ uploadRequest: intent, upload: upload('queued') }))).toBe(false);
     expect(clipSettled(clip({ uploadRequest: intent, upload: upload('uploading') }))).toBe(false);
     expect(clipSettled(clip({ uploadRequest: intent, upload: upload('uploaded') }))).toBe(true);
