@@ -1,0 +1,9 @@
+# provider 캐시 · 상태 · 실제 값은 추적하지 않는다(README 「백엔드 규약」).
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+backend.hcl
+# 모듈 디렉터리의 잠금 파일은 시험용 init 부산물이다. 루트의 것만 추적한다.
+modules/**/.terraform.lock.hcl
