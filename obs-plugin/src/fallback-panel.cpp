@@ -192,7 +192,8 @@ void FallbackPanel::Render(const StateSnapshot &s)
 	// 트랙 1은 늘 최종 믹스라 트랙 2~6만 적는다. 실제 트랙 비트 기준이라 수동 모드에서도 진실을 보여준다.
 	// 트랙마다 한 줄 + 콤보(POK-266) — 콤보는 그 트랙에 없는 소스를 「넣기」, 거기 있는 소스를 「빼기」.
 	// 어느 트랙에도 없는 소스는 제목 아래 「트랙 없음」으로 알린다.
-	if (s.paired && s.audio.known) {
+	if (s.paired && s.audio.known && !(s.audio == audioLast_)) {
+		audioLast_ = s.audio;
 		QString line = Text("Audio.Title");
 		if (s.audio.deferred)
 			line += " " + Text("Audio.Deferred");
@@ -251,12 +252,10 @@ void FallbackPanel::Render(const StateSnapshot &s)
 			pick->setEnabled(s.audio.applied && !t.mainStream && pick->count() > 1);
 			pick->blockSignals(false);
 		}
-		audio_->setVisible(true);
-		trackRows_->setVisible(true);
-	} else {
-		audio_->setVisible(false);
-		trackRows_->setVisible(false);
 	}
+	const bool showAudio = s.paired && s.audio.known;
+	audio_->setVisible(showAudio);
+	trackRows_->setVisible(showAudio);
 	audioLocked_ = s.audio.locked;
 	// 자동 배정은 기본으로 꺼져 있다 — 켜는 길은 확인 창을 거친다(스템이 왜 필요한지·짜 둔 트랙을 덮어쓴다).
 	// 켜져 있으면 같은 버튼이 끄기다 — 독 「고급 설정」 스위치와 같이 원래 체크로 되돌린다(방송·녹화 중이면 끝난 뒤).
