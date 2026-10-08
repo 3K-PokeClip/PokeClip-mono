@@ -33,7 +33,7 @@ export function AudioAssignPrompt({ state, bridge }: { state: BridgeState; bridg
         </p>
       </div>
       {state.audio.customRouting ? (
-        <p class={styles.audioNote} data-tone="warn">
+        <p class={styles.note} data-tone="warn">
           <TriangleAlert size={12} aria-hidden="true" />
           지금 OBS 트랙 2~6에 직접 짜 둔 구성이 있어요. 켜면 PokeClip 배정으로 바꾸고, 나중에 끄면 원래대로 되돌려요.
         </p>

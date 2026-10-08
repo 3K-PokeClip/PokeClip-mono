@@ -32,6 +32,13 @@ struct EncoderChecks {
 	double fps = 0;
 };
 
+// 송출을 막는 점검은 GOP 2초 하나다. 1080p는 권장값이라(ADR-020, POK-268) 어긋나도 독에 경고만 띄우고 보낸다 —
+// 본방 인코더를 공유해(ADR-001) 우리 출력만 다른 해상도로 보낼 수 없다.
+inline bool ChecksAllowSend(const EncoderChecks &c)
+{
+	return c.gop2s.value_or(false);
+}
+
 struct StreamStats {
 	double bitrateKbps = 0;
 	uint64_t totalFrames = 0;

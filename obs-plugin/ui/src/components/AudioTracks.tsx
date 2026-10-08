@@ -53,15 +53,15 @@ export function AudioTracks({ state }: { state: BridgeState }) {
         })}
       </ul>
       {audio.deferred ? (
-        <p class={styles.audioNote}>방송·녹화 중에 켜서 끝나면 자동 배정을 시작해요. 지금 나가는 트랙은 그대로예요.</p>
+        <p class={styles.note}>방송·녹화 중에 켜서 끝나면 자동 배정을 시작해요. 지금 나가는 트랙은 그대로예요.</p>
       ) : null}
       {audio.autoAssign && mainStreamTracks.length > 0 ? (
-        <p class={styles.audioNote}>
+        <p class={styles.note}>
           본방 오디오 트랙({mainStreamTracks.join('·')})은 자동 배정에서 뺐어요. 이 트랙에 넣을 소스는 OBS에서 직접 고르세요.
         </p>
       ) : null}
       {audio.mixOnly.length > 0 ? (
-        <p class={styles.audioNote} data-tone={audio.applied ? 'warn' : undefined}>
+        <p class={styles.note} data-tone={audio.applied ? 'warn' : undefined}>
           {audio.applied ? <TriangleAlert size={12} aria-hidden="true" /> : null}
           {audio.applied
             ? `트랙이 모자라 믹스에만 들어가요: ${names(audio.mixOnly)}`
@@ -69,7 +69,7 @@ export function AudioTracks({ state }: { state: BridgeState }) {
         </p>
       ) : null}
       {audio.monitorOnly.length > 0 ? (
-        <p class={styles.audioNote}>모니터 전용이라 송출되지 않아요: {names(audio.monitorOnly)}</p>
+        <p class={styles.note}>모니터 전용이라 송출되지 않아요: {names(audio.monitorOnly)}</p>
       ) : null}
     </section>
   );
