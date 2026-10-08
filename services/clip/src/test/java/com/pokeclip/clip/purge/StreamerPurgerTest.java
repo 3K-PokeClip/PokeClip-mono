@@ -158,6 +158,16 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         assertThat(result).isEqualTo(ProcessResult.IGNORED_PURGED);
         assertThat(count("broadcasts WHERE stream_id = 'S-late'")).isZero();
         assertThat(count("broadcast_events WHERE stream_id = 'S-late'")).isZero();
+        // 버린 편지의 물리 키는 남긴다. 그 키로 이미 쌓인 녹화 조각을 정리기가 찾게 한다(codex 3판).
+        assertThat(store.segmentKeys(탈퇴자)).contains("S-late");
+
+        // 끝난 명부에 처음 보는 키의 편지가 오면 다시 연다.
+        store.complete(탈퇴자, Instant.now());
+        processor.process(new LifecycleEnvelope(1, "evt-" + UUID.randomUUID(), "broadcast.started", 시작, "S-late2",
+                탈퇴자, "K-late2", 1, null, null));
+        assertThat(store.segmentKeys(탈퇴자)).contains("K-late2");
+        assertThat(store.due(10)).containsExactly(탈퇴자);
+
         // 이웃 편지는 그대로 받는다: 명부 확인이 번호를 안 가리면 여기서 갈린다.
         assertThat(processor.process(편지(이웃, "S-next", "broadcast.started"))).isEqualTo(ProcessResult.PROCESSED);
     }

@@ -152,6 +152,21 @@ class WithdrawalPurgeTest extends WithdrawalTestSupport {
         assertThat(openJobs(user)).isZero();
     }
 
+    /**
+     * 3xx는 지우기 문에 닿지 않은 것이다(https로 넘기는 주소 등). 성공으로 닫으면 영영 안 지워진다(codex 3판 지적).
+     * 지금 구성(jdk 클라이언트, 리다이렉트 안 따름)의 RestClient는 302도 예외로 던져 재현되지 않았다. 클라이언트 구성이 바뀌는 날의 그물이다.
+     */
+    @Test
+    void 리다이렉트를_받으면_닫지_않는다() throws Exception {
+        User user = newUser();
+        withdraw(user);
+        answer.set(302);
+
+        dispatcher().dispatchOnce();
+
+        assertThat(openJobs(user)).isOne();
+    }
+
     @Test
     void 다시_보내는_간격은_두_배씩_늘고_한_시간에서_멈춘다() {
         assertThat(PurgeDispatcher.backoff(0)).isEqualTo(Duration.ofSeconds(15));

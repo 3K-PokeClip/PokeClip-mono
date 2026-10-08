@@ -34,6 +34,13 @@ public class StreamerPurgeStore {
                 streamerId, Timestamp.from(now));
     }
 
+    /** 버린 편지의 물리 키를 명부에 더하고, 없던 키면 줄을 다시 연다. */
+    public void rememberSegmentKey(String streamerId, String key) {
+        jdbc.update("""
+                UPDATE purged_streamers SET segment_keys = array_append(segment_keys, ?), completed_at = NULL
+                 WHERE streamer_id = ? AND NOT (? = ANY(segment_keys))""", key, streamerId, key);
+    }
+
     public boolean isPurged(String streamerId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM purged_streamers WHERE streamer_id = ?)", Boolean.class, streamerId));
