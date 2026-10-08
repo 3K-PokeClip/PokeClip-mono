@@ -248,6 +248,11 @@ pokeclip:
     # 사진 주소의 수명. 화면은 목록을 다시 받을 때 새 주소를 받는다.
     url-ttl: PT60M
 
+  purge:
+    # 탈퇴 정리기(POK-256). auth가 탈퇴를 알리면 명부에 적고 이 주기로 표·창고·녹화 조각을 지운다.
+    # 켜고 끄는 값이 없다: 꺼 두면 탈퇴한 사람의 기록이 남는다.
+    interval: PT15S
+
   playback:
     # 영상 출입증(POK-122). 셋(key-pair-id · private-key-pem · resource-base-url)이 다 비면 「꺼짐」이고
     # 부팅은 산다 — 로컬에는 CloudFront가 없다. 꺼진 채로 문을 부르면 503 playback_signing_unavailable.

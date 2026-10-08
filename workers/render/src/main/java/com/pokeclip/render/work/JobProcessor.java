@@ -107,6 +107,7 @@ public class JobProcessor implements MessageHandler {
 
         Instant began = clock.instant();
         ProgressGate gate = new ProgressGate(job.jobId(), token);
+        List<String> uploaded = new ArrayList<>();
         try (Workspace workspace = new Workspace(workRoot, job.jobId())) {
             Instant deadline = began.plus(jobTimeout);
             List<ClipRenderer.Produced> produced = renderer.render(job, workspace.dir(), deadline, gate::report);
@@ -116,6 +117,7 @@ public class JobProcessor implements MessageHandler {
                 String key = job.outputKey(token, name);
                 store.upload(job.outputBucket(), key, p.file(),
                         "video".equals(p.kind()) ? "video/mp4" : "application/x-subrip", deadline);
+                uploaded.add(key);
                 result.add(new ResultItem(p.outputId(), p.kind(), key));
             }
             gate.report(95, "upload");
@@ -126,8 +128,15 @@ public class JobProcessor implements MessageHandler {
                 return afterTerminal(job.jobId(), () -> reporter.terminalFailed(job.jobId(), token,
                         ErrorCode.RESULT_VALIDATION, "완성 파일 목록이 주문과 맞지 않는다", true));
             }
+            if (reply.status() == 404) {
+                // 그 사이 탈퇴로 주문이 지워졌다(POK-256). clip의 지우기는 이미 끝나 이 파일들을 모른다.
+                removeOrphans(job, uploaded);
+            }
             return afterReply(job.jobId(), reply);
         } catch (Aborted e) {
+            if (e.gone) {
+                removeOrphans(job, uploaded);
+            }
             return e.disposition;
         } catch (RenderFailure f) {
             return failed(job, token, finalAttempt, f);
@@ -180,6 +189,15 @@ public class JobProcessor implements MessageHandler {
         return Disposition.LEAVE;
     }
 
+    private void removeOrphans(JobEnvelope job, List<String> keys) {
+        if (keys.isEmpty()) {
+            return;
+        }
+        boolean all = store.deleteQuietly(job.outputBucket(), keys);
+        log.warn("render.job_gone jobId={} clipId={} filesDeleted={} complete={}", job.jobId(), job.clipId(),
+                keys.size(), all);
+    }
+
     /** 진행 보고를 5초에 한 번으로 거르고, 보고가 409면 렌더를 멈춘다(내 실행이 무효가 됐다). */
     private final class ProgressGate {
         private final UUID jobId;
@@ -206,17 +224,25 @@ public class JobProcessor implements MessageHandler {
             }
             if (reply.status() == 409) {
                 log.info("render.aborted jobId={} reason={}", jobId, reply.reason());
-                throw new Aborted("SUPERSEDED".equals(reply.reason()) ? Disposition.LEAVE : Disposition.DELETE);
+                throw new Aborted("SUPERSEDED".equals(reply.reason()) ? Disposition.LEAVE : Disposition.DELETE, false);
+            }
+            if (reply.status() == 404) {
+                // 주문이 사라졌다(탈퇴, POK-256). 더 만들어 봐야 올릴 자리가 없다. 이미 올린 것이 있으면 치운다.
+                log.info("render.aborted jobId={} reason=JOB_GONE", jobId);
+                throw new Aborted(Disposition.DELETE, true);
             }
         }
     }
 
     private static final class Aborted extends RuntimeException {
         private final Disposition disposition;
+        /** 주문이 사라져 멈췄다(404). 이미 올린 파일을 치워야 한다. */
+        private final boolean gone;
 
-        Aborted(Disposition disposition) {
+        Aborted(Disposition disposition, boolean gone) {
             super(null, null, false, false);
             this.disposition = disposition;
+            this.gone = gone;
         }
     }
 }

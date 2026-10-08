@@ -141,4 +141,23 @@ describe('OAuthCallbackScreen', () => {
     // 히스토리를 남기면 뒤로 가기가 소모된 state의 콜백 URL로 돌아간다.
     expect(link).toHaveAttribute('data-replace');
   });
+
+  it('구글 이메일 인증을 안 마친 계정(403)은 서버 문구로 할 일을 알려 준다', async () => {
+    window.sessionStorage.setItem(STATE_KEY, JSON.stringify({ state: 'state-1', returnTo: null }));
+    searchRef.current = new URLSearchParams('code=code-1&state=state-1');
+    stubFetch(() =>
+      jsonResponse(403, {
+        message: '구글 계정의 이메일 인증을 마친 뒤 다시 로그인해 주세요',
+        reason: 'GOOGLE_EMAIL_UNVERIFIED',
+      }),
+    );
+
+    renderWithClient(<OAuthCallbackScreen />);
+
+    expect(await screen.findByText('로그인할 수 없는 계정이에요')).toBeInTheDocument();
+    expect(
+      screen.getByText('구글 계정의 이메일 인증을 마친 뒤 다시 로그인해 주세요'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '로그인 화면으로' })).toHaveAttribute('href', '/login');
+  });
 });

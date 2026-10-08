@@ -14,6 +14,7 @@ import com.pokeclip.auth.token.RefreshTokenRepository;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
 import com.pokeclip.auth.youtube.YoutubeLinkWriter;
+import com.pokeclip.auth.withdrawal.purge.PurgeJobRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,6 +56,7 @@ public class WithdrawalService {
     private final StreamKeySecretRetirer secretRetirer;
     private final PhotoStorage photoStorage;
     private final WithdrawalCleanupExecutor cleanup;
+    private final PurgeJobRepository purgeJobs;
 
     @Transactional
     public void withdraw(Long userId) {
@@ -152,6 +154,14 @@ public class WithdrawalService {
         // 「마이크」·「게임」이 대개지만 자유 입력이라 개인정보가 안 들어온다고 보장할 수 없다.
         // JDBC라 영속성 컨텍스트를 안 건드린다 — 아래 재조회 규칙과 무관하다.
         audioTrackLabelRepository.deleteAllOfUser(userId);
+
+        // 🔴 다른 서버의 기록(POK-256) — clip의 방송·카드·편집본·영상과 수집기의 채팅·후원. 여기서 「지울 일」을
+        // 장부에 적기만 하고 보내는 것은 발송기(PurgeDispatcher)가 받을 때까지 한다. 커밋 뒤 정리 스레드(아래)에
+        // 맡기지 않는 이유: 그쪽은 재시도가 없어 clip이 잠깐 죽어 있던 탈퇴는 기록이 영영 남는다.
+        // 이 트랜잭션에 적으므로 탈퇴가 되감기면 장부 줄도 같이 사라진다. 치지직 채널 목록을 읽으므로
+        // 위의 연동 폐기보다 뒤여야 한다(폐기된 줄도 남아 있어 읽힌다. 순서는 「다른 회원이 쥔 채널」 판정에만 걸린다).
+        // JDBC라 영속성 컨텍스트를 안 건드린다 — 아래 재조회 규칙과 무관하다.
+        purgeJobs.enqueue(userId, now);
 
         // 🔴 표 밖에 남는 것 둘 — 스트림키 비밀값과 사진 파일. 여기서 지우지 않고 자리만 읽어 둔다.
         //

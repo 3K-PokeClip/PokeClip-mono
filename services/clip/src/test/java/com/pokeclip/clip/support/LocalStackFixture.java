@@ -70,6 +70,11 @@ public final class LocalStackFixture {
         return SQS;
     }
 
+    /** S3 대조·준비용 클라이언트. 탈퇴 정리 시험(POK-256)이 지운 뒤 창고에 무엇이 남았나 센다. */
+    public static S3Client s3() {
+        return S3;
+    }
+
     public static String region() {
         return LOCALSTACK.getRegion();
     }

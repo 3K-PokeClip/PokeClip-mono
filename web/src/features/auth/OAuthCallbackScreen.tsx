@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { LinkButton, Spinner } from '@/ui';
 import { ReplaceLink } from '@/components/ReplaceLink';
 import { loginWithGoogle } from '@/api/auth';
+import { ApiError } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import { consumeOAuthState } from './googleOAuth';
 import styles from './OAuthCallbackScreen.module.css';
@@ -88,7 +89,12 @@ export function OAuthCallbackScreen() {
         useAuthStore.getState().setTokens(pair);
         router.replace(sanitizeReturnTo(stored.returnTo));
       })
-      .catch(() => {
+      .catch((e: unknown) => {
+        // 사유가 실려 온 거절(403 이메일 미인증 · 409 이메일 중복)은 서버 문구로 무엇을 할지 알려 준다.
+        if (e instanceof ApiError && e.code !== null) {
+          setPhase({ kind: 'error', title: '로그인할 수 없는 계정이에요', description: e.message });
+          return;
+        }
         // 401 사유 미공개 계약 + 네트워크 실패 — 문구를 나누지 않는다.
         setPhase({
           kind: 'error',

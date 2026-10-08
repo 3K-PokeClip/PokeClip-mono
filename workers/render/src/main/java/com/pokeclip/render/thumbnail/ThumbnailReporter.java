@@ -18,7 +18,8 @@ import java.util.Map;
  */
 public class ThumbnailReporter {
 
-    enum Outcome { ACCEPTED, REJECTED, UNAVAILABLE }
+    /** GONE: 대상이 없다(404, 탈퇴로 지워졌다, POK-256). 방금 올린 사진을 치워야 한다. */
+    enum Outcome { ACCEPTED, REJECTED, GONE, UNAVAILABLE }
 
     /** 보고 한 번이 걸릴 수 있는 최대 시간(연결 3초 + 읽기 10초). 처리기가 상한 안에 들어오는지 이것으로 잰다 */
     static final Duration MAX_DURATION = Duration.ofSeconds(13);
@@ -52,6 +53,9 @@ public class ThumbnailReporter {
                     .toBodilessEntity();
             return response.getStatusCode().is2xxSuccessful() ? Outcome.ACCEPTED : Outcome.UNAVAILABLE;
         } catch (RestClientResponseException e) {
+            if (e.getStatusCode().value() == 404) {
+                return Outcome.GONE;
+            }
             return e.getStatusCode().is4xxClientError() ? Outcome.REJECTED : Outcome.UNAVAILABLE;
         } catch (RestClientException e) {
             return Outcome.UNAVAILABLE;

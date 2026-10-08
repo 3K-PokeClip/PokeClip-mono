@@ -1,6 +1,7 @@
 package com.pokeclip.clip.thumbnail;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
@@ -60,7 +61,12 @@ public class ThumbnailRepository {
      * 주문을 냈다고 적는다(card·clip). 이미 올라온 사진은 건드리지 않는다. 다시 주문할지는 {@code attempts}·{@code requested_at}으로
      * 순회기의 조회가 정한다.
      */
+    @Transactional
     public void markRequested(ThumbnailKind kind, String targetId, Instant now) {
+        // 대상 줄을 잠근 채 있을 때만 적는다(POK-256). 정리기가 고른 직후 탈퇴 정리가 대상을 지우면 빈 사진 줄이 되살아난다.
+        if (!lockTarget(kind, targetId)) {
+            return;
+        }
         jdbc.update("""
                 INSERT INTO thumbnails (kind, target_id, requested_at, attempts, updated_at)
                 VALUES (?, ?, ?, 1, ?)
@@ -72,7 +78,11 @@ public class ThumbnailRepository {
     }
 
     /** 찍을 것이 없는 대상(영상 산출물이 없는 완성 영상)을 다시 안 보게 횟수를 다 쓴 것으로 적는다. */
+    @Transactional
     public void markGivenUp(ThumbnailKind kind, String targetId, int attempts, Instant now) {
+        if (!lockTarget(kind, targetId)) {
+            return;
+        }
         jdbc.update("""
                 INSERT INTO thumbnails (kind, target_id, requested_at, attempts, updated_at)
                 VALUES (?, ?, ?, ?, ?)
@@ -81,6 +91,37 @@ public class ThumbnailRepository {
                        attempts = EXCLUDED.attempts,
                        updated_at = EXCLUDED.updated_at""",
                 kind.value(), targetId, Timestamp.from(now), attempts, Timestamp.from(now));
+    }
+
+    /** 보고를 적은 결과. GONE은 대상이 없다(탈퇴로 지워졌다, POK-256). */
+    public enum Saved { SAVED, KEPT_NEWER, GONE }
+
+    /**
+     * 대상이 있을 때만 보고를 적는다(POK-256). 대상 줄을 {@code FOR KEY SHARE}로 잡은 채 적는다: 탈퇴 정리는 방송·영상·카드 줄을
+     * {@code FOR UPDATE}로 먼저 잡으므로, 정리가 먼저면 여기서 기다렸다가 「없음」을 보고, 여기가 먼저면 정리가 기다렸다가
+     * 이 줄까지 지운다. 확인과 적기를 갈라 두면 그 사이에 정리가 끼어 대상 없는 사진 줄이 남는다(PR #220 codex P2).
+     */
+    @Transactional
+    public Saved saveIfTargetExists(ThumbnailKind kind, String targetId, Instant capturedAt, Instant now) {
+        if (!lockTarget(kind, targetId)) {
+            return Saved.GONE;
+        }
+        return saveCaptured(kind, targetId, capturedAt, now) ? Saved.SAVED : Saved.KEPT_NEWER;
+    }
+
+    private boolean lockTarget(ThumbnailKind kind, String targetId) {
+        if (kind == ThumbnailKind.LIVE) {
+            return !jdbc.queryForList("SELECT 1 FROM broadcasts WHERE stream_id = ? FOR KEY SHARE", targetId).isEmpty();
+        }
+        long id;
+        try {
+            id = Long.parseLong(targetId);
+        } catch (NumberFormatException e) {
+            // 보고 문은 19자리까지 받는다. bigint 밖이면 그런 줄은 없다(SQL로 넘기면 CAST가 터져 500).
+            return false;
+        }
+        String table = kind == ThumbnailKind.CARD ? "jump_cards" : "clips";
+        return !jdbc.queryForList("SELECT 1 FROM " + table + " WHERE id = ? FOR KEY SHARE", id).isEmpty();
     }
 
     /**

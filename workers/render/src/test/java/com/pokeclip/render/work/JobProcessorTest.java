@@ -169,6 +169,37 @@ class JobProcessorTest {
                 .isEqualTo("RESULT_VALIDATION");
     }
 
+    /** 렌더하는 사이 탈퇴로 주문이 지워졌다(POK-256). clip의 지우기는 끝나 이 파일을 모르니 일꾼이 치운다. */
+    @Test
+    void 성공_보고가_404면_올린_파일을_치우고_지운다() {
+        clip.answer("SUCCEEDED", 404, "{}");
+
+        assertThat(processor.process(body())).isEqualTo(Disposition.DELETE);
+
+        verify(store).deleteQuietly("clips", List.of("clips/42/" + FakeClip.TOKEN + "/o1.mp4"));
+    }
+
+    @Test
+    void 진행_보고가_404면_렌더를_멈추고_올린_게_없으면_치울_것도_없다() {
+        when(renderer.render(any(), any(), any(), any())).thenAnswer(inv -> {
+            ClipRenderer.Progress progress = inv.getArgument(3);
+            progress.report(10, "download");
+            throw new AssertionError("404 뒤에도 계속 일했다");
+        });
+        clip.answer("PROGRESS", 404, "{}");
+
+        assertThat(processor.process(body())).isEqualTo(Disposition.DELETE);
+        assertThat(clip.types()).containsExactly("STARTED", "PROGRESS");
+        verify(store, never()).upload(any(), any(), any(), any(), any());
+        verify(store, never()).deleteQuietly(any(), any());
+    }
+
+    @Test
+    void 성공하면_올린_파일을_안_치운다() {
+        processor.process(body());
+        verify(store, never()).deleteQuietly(any(), any());
+    }
+
     @Test
     void 모르는_잡이면_지운다() {
         clip.answer("STARTED", 404, "{}");

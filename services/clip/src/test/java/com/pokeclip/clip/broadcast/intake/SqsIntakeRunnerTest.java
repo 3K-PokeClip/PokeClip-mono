@@ -780,7 +780,7 @@ class SqsIntakeRunnerTest {
         private final Function<LifecycleEnvelope, ProcessResult> behavior;
 
         StubProcessor(Function<LifecycleEnvelope, ProcessResult> behavior) {
-            super(null, null);
+            super(null, null, null);
             this.behavior = behavior;
         }
 

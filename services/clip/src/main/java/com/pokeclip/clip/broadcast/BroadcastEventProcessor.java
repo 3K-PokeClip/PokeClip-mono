@@ -1,5 +1,6 @@
 package com.pokeclip.clip.broadcast;
 
+import com.pokeclip.clip.purge.StreamerPurgeStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -28,14 +29,28 @@ public class BroadcastEventProcessor {
 
     private final BroadcastRepository broadcasts;
     private final BroadcastEventRepository events;
+    private final StreamerPurgeStore purges;
 
-    public BroadcastEventProcessor(BroadcastRepository broadcasts, BroadcastEventRepository events) {
+    public BroadcastEventProcessor(BroadcastRepository broadcasts, BroadcastEventRepository events,
+                                   StreamerPurgeStore purges) {
         this.broadcasts = broadcasts;
         this.events = events;
+        this.purges = purges;
     }
 
     @Transactional
     public ProcessResult process(LifecycleEnvelope envelope) {
+        // 탈퇴한 스트리머의 편지는 버린다(POK-256). 지운 뒤 늦게 온 시작·종료 편지가 방송 줄을 되살린다.
+        // 편지 기록(broadcast_events)도 안 남긴다: 그 표도 탈퇴 때 지운 것이다.
+        if (purges.isPurged(envelope.streamerId())) {
+            // 편지의 물리 키는 남긴다. 영상 서버가 이미 그 키로 조각을 적었는데 정리가 방송 줄을 못 봤으면, 이 키 말고는
+            // 그 조각을 찾을 길이 없다(PR #220 codex 3판). 명부를 다시 열어 정리기가 그 조각을 지우게 한다.
+            purges.rememberSegmentKey(envelope.streamerId(),
+                    envelope.ingestStreamId() != null ? envelope.ingestStreamId() : envelope.streamId());
+            log.info("broadcast.event.purged_streamer_dropped eventId={} streamId={} type={}",
+                    envelope.eventId(), envelope.streamId(), envelope.eventType());
+            return ProcessResult.IGNORED_PURGED;
+        }
         int inserted = events.insertIfAbsent(envelope.eventId(), envelope.streamId(),
                 envelope.type().name(), envelope.sequence(), Instant.now());
         if (inserted == 0) {

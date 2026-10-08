@@ -43,6 +43,12 @@ pokeclip:
     # IllegalStateException으로 컨텍스트가 죽고, IntegrationTestSupport를 상속한
     # 테스트가 전부 같이 죽는다. 값을 바꿀 일이 있으면 `base64 -d | wc -c`로 먼저 센다.
     key: dGVzdC1vbmx5LWFlcy0yNTYta2V5LTMyYnl0ZXMhISE=
+  withdrawal-purge:
+    # 시험은 발송기를 안 돌린다. WithdrawalPurgeTest가 가짜 서버로 한 바퀴씩 손으로 부른다.
+    # 주소는 아무도 안 듣는 포트다(실수로 보내면 연결 거부로 바로 실패한다).
+    clip-base-url: http://127.0.0.1:1
+    collector-base-url: http://127.0.0.1:1
+    dispatch: false
   internal-api:
     token: test-only-internal-token-32bytes-long!!
   chzzk:

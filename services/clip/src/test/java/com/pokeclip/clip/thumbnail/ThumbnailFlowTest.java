@@ -364,8 +364,63 @@ class ThumbnailFlowTest extends IntegrationTestSupport {
         assertThat(controller.report(new ThumbnailReportController.ReportBody("live", "a/b", at)).getStatusCode().value()).isEqualTo(400);
         assertThat(controller.report(new ThumbnailReportController.ReportBody("clip", "3", "어제")).getStatusCode().value()).isEqualTo(400);
 
-        assertThat(controller.report(new ThumbnailReportController.ReportBody("clip", "3", at)).getStatusCode().value()).isEqualTo(200);
-        assertThat(thumbnails.keysOf(ThumbnailKind.CLIP, List.of("3"))).containsEntry("3", "thumbnails/clip/3.jpg");
+        방송("S-report", "S-report", "ended", 시작, 시작.plusSeconds(60));
+        String clipId = Long.toString(완성_영상("S-report", 0, 10_000, "[]"));
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("clip", clipId, at)).getStatusCode().value()).isEqualTo(200);
+        assertThat(thumbnails.keysOf(ThumbnailKind.CLIP, List.of(clipId))).containsEntry(clipId, "thumbnails/clip/" + clipId + ".jpg");
+    }
+
+    /** 탈퇴로 지운 대상에 늦게 온 보고는 사진 줄을 되살리지 않는다(POK-256). 일꾼은 404를 받고 올린 사진을 지운다. */
+    @Test
+    void 대상이_없으면_404이고_사진_줄을_만들지_않는다() {
+        String at = now.toString();
+        방송("S-alive", "S-alive", "live", 시작, null);
+        String cardId = Long.toString(카드("S-alive", 1_000, 5));
+
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("live", "S-gone", at)).getStatusCode().value()).isEqualTo(404);
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("card", "999999", at)).getStatusCode().value()).isEqualTo(404);
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("clip", "999999", at)).getStatusCode().value()).isEqualTo(404);
+        // 보고 문은 19자리까지 받는다. bigint 밖이면 500이 아니라 「없음」이다.
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("card", "9999999999999999999", at)).getStatusCode().value()).isEqualTo(404);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM thumbnails", Integer.class)).isZero();
+        // 정리기의 주문 기록도 없는 대상에는 줄을 안 만든다(codex 2판: 고른 직후 탈퇴 정리가 지운 대상).
+        thumbnails.markRequested(ThumbnailKind.CARD, "999999", now);
+        thumbnails.markGivenUp(ThumbnailKind.CLIP, "999999", 3, now);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM thumbnails", Integer.class)).isZero();
+
+        // 있는 대상은 그대로 받는다: 대상 확인이 종류를 헷갈리면(카드 번호로 영상 표를 보면) 여기서 갈린다.
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("live", "S-alive", at)).getStatusCode().value()).isEqualTo(200);
+        assertThat(controller.report(new ThumbnailReportController.ReportBody("card", cardId, at)).getStatusCode().value()).isEqualTo(200);
+    }
+
+    /**
+     * 확인과 적기 사이에 탈퇴 정리가 끼면 대상 없는 사진 줄이 남았다(PR #220 codex P2). 정리처럼 카드 줄을 FOR UPDATE로 잡고
+     * 있는 동안 보고를 보내면 보고가 기다렸다가, 정리가 카드를 지우고 커밋한 뒤 「없음」을 봐야 한다.
+     */
+    @Test
+    void 정리가_대상을_잡고_있으면_보고가_기다렸다가_없음을_본다() throws Exception {
+        방송("S-race", "S-race", "ended", 시작, 시작.plusSeconds(60));
+        String cardId = Long.toString(카드("S-race", 1_000, 5));
+        javax.sql.DataSource ds = jdbc.getDataSource();
+        try (java.sql.Connection purge = ds.getConnection()) {
+            purge.setAutoCommit(false);
+            try (var lock = purge.prepareStatement("SELECT id FROM jump_cards WHERE id = ? FOR UPDATE")) {
+                lock.setLong(1, Long.parseLong(cardId));
+                lock.executeQuery();
+            }
+            java.util.concurrent.CompletableFuture<Integer> report = java.util.concurrent.CompletableFuture.supplyAsync(
+                    () -> controller.report(new ThumbnailReportController.ReportBody("card", cardId, now.toString()))
+                            .getStatusCode().value());
+            Thread.sleep(300);
+            assertThat(report).as("보고가 잠금을 안 기다렸다 — 확인과 적기가 갈라져 있다").isNotDone();
+            try (var del = purge.prepareStatement("DELETE FROM jump_cards WHERE id = ?")) {
+                del.setLong(1, Long.parseLong(cardId));
+                del.executeUpdate();
+            }
+            purge.commit();
+            assertThat(report.get(10, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(404);
+        }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM thumbnails", Integer.class)).isZero();
     }
 
     // ── 도우미 ──────────────────────────────────────────────────────────────
