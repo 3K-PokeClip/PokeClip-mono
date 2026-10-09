@@ -21,6 +21,10 @@ inline constexpr int kEndSignalMaxAttempts = 3;                   // 첫 시도 
 inline constexpr int64_t kEndSignalRetryDelayMs[] = {1000, 2000}; // 첫 실패 1초 뒤, 둘째 실패 2초 뒤
 inline constexpr long kEndSignalAttemptTimeoutSec = 5;            // 시도당 제한 — 최악 약 18초 뒤 포기
 inline constexpr int64_t kEndSignalExpireMs = 60000; // 멈춘 순간부터 이 시간이 지나면 보내지 않는다(elapsedSinceStopMs 상한)
+// OBS가 닫힐 때 진행 중이거나 막 큐에 들어간 첫 시도를 기다려 주는 상한. 운영 HTTPS는 TLS 접속만으로 수백 ms라 곧바로
+// 끊으면 「방송 중 OBS 닫기」의 신호가 대개 비게 된다(리뷰 4판). 규약의 「OBS 종료를 늦추지 않는다」와의 절충이라 짧게
+// 둔다 — 재시도 대기는 하지 않고, 상한이 지나면 끊고 남은 시도는 버린다.
+inline constexpr int64_t kEndSignalExitGraceMs = 2000;
 
 // SHA-256(FIPS 180-4). 외부 의존이 없다 — OBS deps에 OpenSSL 헤더가 없고, Qt는 OBS 없는 테스트에 못 묶는다.
 std::array<uint8_t, 32> Sha256(const std::string &data);

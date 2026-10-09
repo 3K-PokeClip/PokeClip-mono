@@ -56,8 +56,17 @@ void EndSignalSender::Stop()
 		if (!started_)
 			return;
 		started_ = false;
-		stopping_ = true;
+		draining_ = true; // 큐에 든 첫 시도는 보내되 재시도는 예약하지 않는다
 	}
+	wake_.notify_all();
+	{
+		// 진행 중이거나 막 큐에 들어간 첫 시도(방송 중 OBS 닫기)를 짧게 기다린다 — 곧바로 끊으면 TLS 접속 시간 안에
+		// 닿지 못한다. 상한이 지나면 끊는다(계약4 3-1 「남은 시도는 버린다」, 종료를 오래 늦추지 않는다).
+		std::unique_lock lock(mutex_);
+		drained_.wait_for(lock, std::chrono::milliseconds(kEndSignalExitGraceMs),
+				  [this]() { return !inFlight_ && queue_.empty(); });
+	}
+	stopping_ = true;
 	wake_.notify_all();
 	if (worker_.joinable())
 		worker_.join();
@@ -93,7 +102,9 @@ void EndSignalSender::Run()
 	std::unique_lock lock(mutex_);
 	while (!stopping_) {
 		if (queue_.empty()) {
-			wake_.wait(lock, [this]() { return stopping_ || !queue_.empty(); });
+			if (draining_)
+				break; // 종료 중이고 보낼 것이 없다
+			wake_.wait(lock, [this]() { return stopping_ || draining_ || !queue_.empty(); });
 			continue;
 		}
 		auto next = std::min_element(queue_.begin(), queue_.end(), [](const Pending &a, const Pending &b) {
@@ -101,6 +112,14 @@ void EndSignalSender::Run()
 		});
 		int64_t now = NowSteadyMs();
 		if (next->dueSteadyMs > now) {
+			if (draining_) {
+				// 종료 중 — 재시도 대기는 하지 않는다(남은 시도는 버린다).
+				obs_log(LOG_INFO, "end-signal (key …%s): retry dropped at exit after %d attempt(s)",
+					next->req.keyHint.c_str(), next->attempts);
+				queue_.erase(next);
+				drained_.notify_all();
+				continue;
+			}
 			wake_.wait_for(lock, std::chrono::milliseconds(next->dueSteadyMs - now));
 			continue;
 		}
@@ -118,9 +137,12 @@ void EndSignalSender::Run()
 		p.attempts++;
 		const std::string body = EndSignalBodyJson(p.req.streamId, elapsed, p.req.connectionDurationMs);
 
+		inFlight_ = true;
 		lock.unlock();
 		SendResult r = Send(p, body);
 		lock.lock();
+		inFlight_ = false;
+		drained_.notify_all();
 		if (stopping_)
 			break; // 끊긴 전송의 결과는 따지지 않는다
 
@@ -138,6 +160,11 @@ void EndSignalSender::Run()
 			const int64_t delay = EndSignalRetryDelayMs(p.attempts);
 			if (delay < 0) {
 				obs_log(LOG_WARNING, "end-signal (key …%s): giving up after %d attempt(s) — %s (http %ld)",
+					p.req.keyHint.c_str(), p.attempts, v.reason, r.status);
+				break;
+			}
+			if (draining_) {
+				obs_log(LOG_WARNING, "end-signal (key …%s): attempt %d failed — %s (http %ld), not retried at exit",
 					p.req.keyHint.c_str(), p.attempts, v.reason, r.status);
 				break;
 			}

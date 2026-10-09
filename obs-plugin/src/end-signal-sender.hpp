@@ -30,7 +30,8 @@ public:
 	static EndSignalSender &Instance();
 
 	void Start();
-	// 진행 중인 전송을 끊고 작업 스레드를 기다린다(OBS 종료를 늦추지 않는다). 남은 시도는 버린다.
+	// OBS 종료 — 진행 중이거나 막 큐에 들어간 첫 시도는 최대 kEndSignalExitGraceMs 기다린 뒤 끊고, 재시도 대기는 하지
+	// 않으며 남은 시도는 버린다. 그 뒤 작업 스레드를 기다린다.
 	void Stop();
 	// 막지 않는다 — UI 스레드에서 부른다. 파생 값을 여기서 만들고 passphrase는 버린다.
 	void Submit(EndSignalRequest request);
@@ -55,8 +56,11 @@ private:
 
 	std::mutex mutex_;
 	std::condition_variable wake_;
+	std::condition_variable drained_; // 전송이 끝나거나 큐가 비면 — Stop의 유예 대기가 듣는다
 	std::deque<Pending> queue_;
 	bool started_ = false;
+	bool draining_ = false; // 종료 중 — 큐에 있는 첫 시도는 보내되 재시도는 예약하지 않는다
+	bool inFlight_ = false;
 	std::thread worker_;
 	std::atomic<bool> stopping_{false};
 };
