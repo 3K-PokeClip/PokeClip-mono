@@ -292,9 +292,13 @@ void StreamTarget::Stop(const char *reason, bool intentional, bool deferIntent)
 		// 출력이 없다. 「재시도 중지」로 구간을 열어 둔 채 멈춰 있었으면(연결 이력 있음, 아직 판정 안 함) 지금의 조작이
 		// 그 구간의 끝이다 — 마지막 연결은 outageAt_에 끊겼다. 이미 판정한 구간은 endSignalDecided_가 거른다.
 		// 조작인지 아직 모르면(deferIntent) STOPPED에서 다시 온다.
-		if (!endSignalDecided_ && everConnected_ && !deferIntent)
-			DecideEndSignal(stopIntentional_, false, std::chrono::steady_clock::now(),
-					reason ? "stopped_with_reason" : "main_stop");
+		if (!endSignalDecided_ && everConnected_) {
+			if (deferIntent)
+				obs_log(LOG_INFO, "end-signal: intent deferred to main STOPPED (no output)");
+			else
+				DecideEndSignal(stopIntentional_, false, std::chrono::steady_clock::now(),
+						reason ? "stopped_with_reason" : "main_stop");
+		}
 		return;
 	}
 	stopRequested_ = true;
