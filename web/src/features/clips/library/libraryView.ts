@@ -1,7 +1,12 @@
 import { ddayFor, type VodDday } from '@/features/broadcast/vod/vodListView';
 import { formatUptime } from '@/features/player/playerMath';
-import { ClipApiError, type LibraryEntry, type PrivacyStatus } from '@/api/clipEditor';
-import { PRIVACY_LABEL } from '@/features/clips/editor/uploadInfo';
+import { ClipApiError, type LibraryEntry } from '@/api/clipEditor';
+import {
+  PRIVACY_CHANGE_NOTE,
+  PRIVACY_LABEL,
+  PRIVACY_VIEWERS,
+  PUBLIC_NOTIFY_NOTE,
+} from '@/features/clips/editor/uploadInfo';
 import type { ClipStatus, LibraryClip, LibraryRole } from './useLibraryMockState';
 
 // 시안 1g 보관함의 표시 규칙 — 상태가 배지·주 동작·보조 줄·칩·정렬로 어떻게 펼쳐지는지를
@@ -495,22 +500,17 @@ export function thumbnailFailureText(clip: LibraryClip): string | null {
   const code = thumbnail.errorCode ?? 'UNKNOWN';
   // 재배달이라 붙었는지 모른다: 못 붙였다고 하면 이미 붙은 썸네일을 또 바꾸게 만든다
   if (code === 'THUMBNAIL_UNCONFIRMED') {
-    return '영상은 올라갔어요. 썸네일이 붙었는지 확인하지 못했어요. 유튜브 스튜디오에서 확인해 주세요.';
+    return '영상은 올라갔어요. 썸네일이 붙었는지 확인하지 못했어요. 스트리머 채널의 유튜브 스튜디오에서 확인해 주세요.';
   }
   const reason = THUMBNAIL_REASON[code] ?? `(${code})`;
-  return `영상은 올라갔고 썸네일만 못 붙였어요. ${reason} 유튜브 스튜디오에서 직접 바꿀 수 있어요.`;
+  return `영상은 올라갔고 썸네일만 못 붙였어요. ${reason} 스트리머 채널의 유튜브 스튜디오에서 직접 바꿀 수 있어요.`;
 }
 
-/** 공개 범위마다 누가 보나. 창 안내(PRIVACY_NOTE)와 같은 말이다 */
-const PRIVACY_AUDIENCE: Record<Exclude<PrivacyStatus, 'private'>, string> = {
-  unlisted: '주소를 아는 사람은 누구나 볼 수 있어요',
-  public: '누구나 볼 수 있어요',
-};
-
 /**
- * 공개 범위 안내(POK-291). 일부 공개·공개는 고른 그대로 올라가 남이 본다(uploadInfo.ts PRIVACY_NOTE 주석): 업로드 단계마다
- * 누가 보는지를 말한다. 올린 범위는 우리가 실어 보낸 값이라 스트리머가 스튜디오에서 바꾸면 모른다(services README 알려진 한계).
- * 비공개거나 고른 것이 없으면 null.
+ * 공개 범위 안내(POK-291). 일부 공개·공개는 고른 그대로 올라가 남이 본다(uploadInfo.ts PRIVACY_VIEWERS). 편집본 상태마다
+ * 그 범위로 올라가게 하는 길(자동 · 「업로드」 · 「다시 시도」 · 「렌더 재시도」)과 누가 보는지를 말한다. 「올렸어요」는 올릴 때의
+ * 범위다: 스트리머가 스튜디오에서 바꾸면 모른다(services README 알려진 한계). 편집 중이면 latestClip이 옛 판이라 말하지 않는다
+ * (그 판의 다시 시도 단추도 없고, 새 판은 창에서 다시 고른다). 비공개거나 고른 것이 없으면 null.
  */
 export function privacyNoteText(clip: LibraryClip): string | null {
   const entry = clip.entry;
@@ -519,20 +519,30 @@ export function privacyNoteText(clip: LibraryClip): string | null {
   const privacy =
     upload != null ? upload.privacyStatus : (entry.uploadRequest?.privacyStatus ?? undefined);
   if (privacy === undefined || privacy === 'private') return null;
-  const label = PRIVACY_LABEL[privacy];
-  const audience = PRIVACY_AUDIENCE[privacy];
-  switch (upload?.status) {
+  const label = `「${PRIVACY_LABEL[privacy]}」`;
+  const viewers = PRIVACY_VIEWERS[privacy];
+  // 아직 안 올라갔다: 올라가면 누가 보나, 공개면 구독자 알림까지(창을 거치지 않는 단추도 같은 경고를 본다)
+  const reach = `올라가면 ${viewers} 볼 수 있어요.${privacy === 'public' ? ` ${PUBLIC_NOTIFY_NOTE}` : ''}`;
+  switch (entry.status) {
     case 'uploaded':
-      return `「${label}」로 올렸어요. ${audience}. 바꾸려면 스트리머 채널의 유튜브 스튜디오에서 바꿔요.`;
+      return `${label}(${viewers} 볼 수 있는 범위)로 올렸어요. ${PRIVACY_CHANGE_NOTE}`;
     case 'checking':
-      // 채널에 올라갔는지 모른다: 확인 안내가 따로 뜬다
-      return `「${label}」로 골랐어요. 올라갔다면 ${audience}.`;
+      // 채널에서 올라갔는지 보라는 안내(noteText)가 따로 뜬다
+      return `${label}로 골랐어요. 올라갔다면 ${viewers} 볼 수 있어요.`;
+    case 'rendering':
+    case 'uploading':
+      // 렌더 성공이 그 판의 업로드 정보로 스스로 올린다
+      return `${label}로 올라가요. ${reach}`;
+    case 'rendered':
+      // 업로드 실패면 「다시 시도」가 실패한 줄의 범위를, 자동 업로드를 건너뛰었으면 「업로드」가 그 판의 정보를 그대로 쓴다
+      return upload?.status === 'failed'
+        ? `「다시 시도」를 누르면 ${label}로 올라가요. ${reach}`
+        : `「업로드」를 누르면 ${label}로 올라가요. ${reach}`;
     case 'failed':
-      // 다시 시도는 실패한 줄의 범위를 그대로 복사한다
-      return `다시 올리면 「${label}」로 올라가요. 올라가면 ${audience}.`;
+      // 렌더 실패: 렌더를 다시 해 성공하면 그 판의 정보로 이어서 올린다
+      return `「렌더 재시도」가 끝나면 ${label}로 올라가요. ${reach}`;
     default:
-      // 아직 안 올라갔다: 올릴 정보만 있음(렌더 중·자동 업로드 전) · 줄에 섬 · 올리는 중
-      return `「${label}」로 올라가요. 올라가면 ${audience}.`;
+      return null;
   }
 }
 

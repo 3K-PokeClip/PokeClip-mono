@@ -230,8 +230,8 @@ export interface LibraryMockState {
   /** 제목 인라인 편집 — 입력마다 저장한다(시안 1g ③) */
   renameClip: (id: string, title: string) => void;
   /**
-   * 서버 줄: 유튜브 업로드를 주문한다. 그 판의 업로드 정보가 있으면 다시 시도 문으로 그 정보(제목·공개 범위·썸네일)대로
-   * 올리고(POK-291), 없으면 패널의 제목으로 옛 문을 탄다(POK-111, 업로드 정보 창 없이 만든 옛 영상의 길이라 비공개).
+   * 서버 줄: 유튜브 업로드를 주문한다. 업로드 줄이 없고 그 판의 업로드 정보가 있으면 다시 시도 문으로 그 정보(제목·설명·태그·
+   * 공개 범위·아동용·썸네일)대로 올리고(POK-291), 없으면 패널의 제목으로 옛 문을 탄다(POK-111, 창 없이 만든 옛 영상의 길이라 비공개).
    * 목업 줄: 업로드 대기 → 발행됨(스트리머) / 승인 대기(편집자). 그 밖의 상태는 무시
    */
   upload: (id: string) => void;
@@ -335,7 +335,8 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     setSendingIds(new Set(sending.current));
   }, []);
 
-  // 서버 줄은 가장 최근 영상을 패널 제목으로 올린다. 서버가 같은 영상·출력의 살아 있는 업로드를 돌려주므로(200)
+  // 서버 줄은 가장 최근 영상을 올린다: 그 판의 업로드 정보가 있으면 그 정보로, 없으면 패널 제목으로(아래 fromIntent).
+  // 서버가 같은 영상·출력의 살아 있는 업로드를 돌려주므로(200)
   // 겹쳐 눌러도 두 번 올라가지 않지만, 보내는 중에는 단추를 잠가 헛요청도 안 보낸다.
   // 목업 줄은 상태 전이만 흉내 낸다 — 성공 토스트는 결과를 지어내는 일이라 띄우지 않는다.
   const upload = useCallback(
@@ -446,7 +447,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
               ? {
                   tone: 'success',
                   title: '다시 올리기 시작했어요',
-                  description: '저장된 정보 그대로 올려요. 끝나면 여기 상태가 바뀌어요.',
+                  description: `저장된 정보 그대로 스트리머 채널에 ${PRIVACY_LABEL[snap.privacyStatus ?? 'private']}로 올려요. 끝나면 여기 상태가 바뀌어요.`,
                 }
               : {
                   tone: 'info',

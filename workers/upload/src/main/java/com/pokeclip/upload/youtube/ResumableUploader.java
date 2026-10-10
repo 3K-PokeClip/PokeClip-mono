@@ -94,8 +94,8 @@ public class ResumableUploader {
     }
 
     /**
-     * @param privacyStatus 주문서 값(스트리머가 고른 것, ADR-084). 유튜브가 그대로 쓴다: 문서(videos.insert)가 미검증 API 프로젝트의
-     *                      영상도 비공개로 제한하지 않는다고 적고, 2026-10-11 실측에서도 공개는 공개로 남았다. 응답에서는 id만 읽는다
+     * @param privacyStatus 주문서 값(주문한 사람이 고른 것, ADR-084). 유튜브가 이 범위를 쓰는 사정(문서 둘이 어긋나고 실측은
+     *                      테스트 상태 앱 하나다)은 services/README.md 업로드 절
      * @param tags          비었으면 칸을 아예 안 싣는다
      */
     public Start start(String accessToken, String title, String description, String privacyStatus, List<String> tags,
@@ -185,6 +185,7 @@ public class ResumableUploader {
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             int code = response.statusCode();
             if (code == 200 || code == 201) {
+                // 완료 응답에서는 id만 읽는다: 실제 공개 범위(status.privacyStatus)는 안 본다(README 아직 없는 것)
                 String id = mapper.readTree(response.body()).path("id").asString(null);
                 return id == null ? new Progress.Transient("no id") : new Progress.Done(id);
             }

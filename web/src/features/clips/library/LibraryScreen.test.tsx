@@ -760,6 +760,34 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     ).toBeInTheDocument();
   });
 
+  it('공개로 올린 편집본은 패널에 누가 보는지와 바꾸는 곳을 말한다(POK-291)', () => {
+    show(
+      serverClip('uploaded', {
+        ...rendered,
+        upload: {
+          ...failedUpload,
+          status: 'uploaded',
+          error: null,
+          videoId: 'v1',
+          privacyStatus: 'public',
+        },
+      }),
+    );
+    expect(
+      within(panel()).getByText(
+        '「공개」(누구나 볼 수 있는 범위)로 올렸어요. 올린 뒤에는 스트리머 채널의 유튜브 스튜디오에서만 바꿀 수 있어요.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('업로드 실패 뒤 고쳐 저장한 편집 중 줄은 옛 판의 공개 범위를 말하지 않는다(POK-291)', () => {
+    show(
+      serverClip('editing', { ...rendered, upload: { ...failedUpload, privacyStatus: 'public' } }),
+    );
+    expect(within(panel()).getByText('편집 중')).toBeInTheDocument();
+    expect(within(panel()).queryByText(/「공개」/)).not.toBeInTheDocument();
+  });
+
   it('미리보기를 누르면 완성 영상을 그 자리에서 튼다', async () => {
     const user = userEvent.setup();
     stubFetch(() =>

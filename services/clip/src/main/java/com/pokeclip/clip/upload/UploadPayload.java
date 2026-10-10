@@ -44,7 +44,7 @@ final class UploadPayload {
         ObjectNode video = root.putObject("video");
         video.put("title", info.title());
         video.put("description", info.description());
-        // 스트리머가 고른 값(ADR-084). 유튜브가 이 범위를 그대로 쓰는 것은 업로드 일꾼 ResumableUploader 주석.
+        // 주문한 사람(스트리머·편집자)이 고른 값(ADR-084). 유튜브가 이 범위를 쓰는 사정은 services/README.md 업로드 절.
         video.put("privacyStatus", info.privacyStatus());
         ArrayNode tags = video.putArray("tags");
         info.tags().forEach(tags::add);

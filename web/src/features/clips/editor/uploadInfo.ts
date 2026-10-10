@@ -11,13 +11,27 @@ export const PRIVACY_LABEL: Record<PrivacyStatus, string> = {
 };
 
 /**
- * 창의 공개 범위 안내. 고른 범위 그대로 올라간다: 유튜브 문서(videos.insert의 status.privacyStatus)가 지금 「미검증 API 프로젝트의
- * 영상도 비공개로 제한하지 않는다」고 적고, 2026-10-11 실측에서도 공개는 공개로 남았다(그 전에 적은 「감사 전엔 비공개로 잠긴다」는 틀렸다).
- * 편집자도 고를 수 있고 경고만 보이며, 구독자 알림은 유튜브 기본값(공개면 감)대로다: 둘 다 2026-10-11 사용자 결정.
- * 올린 뒤에는 우리가 범위를 못 바꾼다(youtube.upload·youtube.readonly로는 videos.update를 못 부른다)
+ * 공개 범위마다 누가 보나. 창과 보관함이 이 말로 문장을 만든다. 고른 범위 그대로 올라간다는 근거와 단서(유튜브 문서 둘이 어긋나고
+ * 실측은 테스트 상태 앱 하나다)는 services/README.md 업로드 절에 있다
  */
-export const PRIVACY_NOTE =
-  '일부 공개는 주소를 아는 사람이, 공개는 누구나 볼 수 있어요. 공개는 구독자에게 새 영상 알림이 갈 수 있어요. 다 만들어지는 대로 바로 올라가고, 올린 뒤에는 스트리머 채널의 유튜브 스튜디오에서만 바꿀 수 있어요.';
+export const PRIVACY_VIEWERS: Record<Exclude<PrivacyStatus, 'private'>, string> = {
+  unlisted: '주소를 아는 사람만',
+  public: '누구나',
+};
+
+/** 공개로 올라갈 때 덧붙인다. notifySubscribers를 안 보내 유튜브 기본값대로 알림이 간다(2026-10-11 사용자 결정) */
+export const PUBLIC_NOTIFY_NOTE = '구독자에게 새 영상 알림이 갈 수 있어요.';
+
+/** 올린 뒤 범위를 바꾸는 곳. 우리는 못 바꾼다(youtube.upload·youtube.readonly로는 videos.update를 못 부른다) */
+export const PRIVACY_CHANGE_NOTE =
+  '올린 뒤에는 스트리머 채널의 유튜브 스튜디오에서만 바꿀 수 있어요.';
+
+/** 창의 공개 범위 안내: 고른 범위에 맞춘다. 편집자도 고를 수 있고 경고만 보인다(2026-10-11 사용자 결정) */
+export function privacyNote(privacy: PrivacyStatus): string {
+  if (privacy === 'private') return PRIVACY_CHANGE_NOTE;
+  const notify = privacy === 'public' ? ` ${PUBLIC_NOTIFY_NOTE}` : '';
+  return `${PRIVACY_VIEWERS[privacy]} 볼 수 있어요.${notify} ${PRIVACY_CHANGE_NOTE}`;
+}
 
 export const THUMBNAIL_PHONE_NOTE =
   '직접 고른 썸네일은 유튜브 채널 전화 인증이 끝나야 붙어요. 안 붙으면 영상만 올라가요.';

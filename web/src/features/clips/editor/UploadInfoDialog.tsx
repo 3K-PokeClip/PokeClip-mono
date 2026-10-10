@@ -24,7 +24,7 @@ import {
   descriptionBytes,
   descriptionProblem,
   PRIVACY_LABEL,
-  PRIVACY_NOTE,
+  privacyNote,
   THUMBNAIL_PHONE_NOTE,
   thumbnailFileProblem,
 } from './uploadInfo';
@@ -319,7 +319,7 @@ function UploadInfoForm({
           </RadioGroup>
           {errorOf('privacyStatus') ? <Field.Error>{errorOf('privacyStatus')}</Field.Error> : null}
           <Text as="p" size="sm" tone="muted" id={privacyNoteId}>
-            {PRIVACY_NOTE}
+            {privacyNote(draft.privacyStatus)}
           </Text>
         </Field>
 

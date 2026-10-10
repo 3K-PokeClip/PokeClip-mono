@@ -44,12 +44,34 @@ describe('UploadInfoDialog', () => {
     expect(dialog().getByRole('button', { name: '만들고 올리기' })).toBeEnabled();
     // 헤더의 「영상 만들기」와 겹치지 않는다
     expect(dialog().queryByRole('button', { name: '영상 만들기' })).not.toBeInTheDocument();
-    // 공개 범위 경고는 문장 전체를 잰다: 누가 보는지·구독자 알림·바꾸는 곳 중 하나가 빠져도 빨간불이어야 한다
+    // 비공개(처음 값)면 바꾸는 곳만 말한다
+    expect(
+      dialog().getByText('올린 뒤에는 스트리머 채널의 유튜브 스튜디오에서만 바꿀 수 있어요.'),
+    ).toBeInTheDocument();
+  });
+
+  it('공개 범위를 고르면 안내가 그 범위로 바뀐다: 누가 보는지 · 공개면 구독자 알림 · 바꾸는 곳(POK-291)', async () => {
+    const user = userEvent.setup();
+    const { dialog } = renderDialog();
+
+    // 문장 전체를 잰다: 셋 중 하나가 빠지거나 범위가 섞여도 빨간불이어야 한다
+    await user.click(dialog().getByRole('radio', { name: '공개' }));
     expect(
       dialog().getByText(
-        '일부 공개는 주소를 아는 사람이, 공개는 누구나 볼 수 있어요. 공개는 구독자에게 새 영상 알림이 갈 수 있어요. 다 만들어지는 대로 바로 올라가고, 올린 뒤에는 스트리머 채널의 유튜브 스튜디오에서만 바꿀 수 있어요.',
+        '누구나 볼 수 있어요. 구독자에게 새 영상 알림이 갈 수 있어요. 올린 뒤에는 스트리머 채널의 유튜브 스튜디오에서만 바꿀 수 있어요.',
       ),
     ).toBeInTheDocument();
+
+    await user.click(dialog().getByRole('radio', { name: '일부 공개' }));
+    expect(
+      dialog().getByText(
+        '주소를 아는 사람만 볼 수 있어요. 올린 뒤에는 스트리머 채널의 유튜브 스튜디오에서만 바꿀 수 있어요.',
+      ),
+    ).toBeInTheDocument();
+    // 라디오 묶음이 이 안내를 설명으로 가리킨다
+    expect(dialog().getByRole('radiogroup', { name: '공개 범위' })).toHaveAccessibleDescription(
+      '주소를 아는 사람만 볼 수 있어요. 올린 뒤에는 스트리머 채널의 유튜브 스튜디오에서만 바꿀 수 있어요.',
+    );
   });
 
   it('모든 칸을 채워 보내면 그 값이 그대로 간다', async () => {

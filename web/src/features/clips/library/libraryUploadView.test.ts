@@ -292,7 +292,7 @@ describe('thumbnailFailureText: 영상은 올라갔고 썸네일만 실패(POK-2
       '9',
     );
     expect(thumbnailFailureText(clip)).toBe(
-      '영상은 올라갔고 썸네일만 못 붙였어요. 채널 전화 인증이 필요해요. 유튜브 스튜디오에서 직접 바꿀 수 있어요.',
+      '영상은 올라갔고 썸네일만 못 붙였어요. 채널 전화 인증이 필요해요. 스트리머 채널의 유튜브 스튜디오에서 직접 바꿀 수 있어요.',
     );
   });
 
@@ -309,7 +309,7 @@ describe('thumbnailFailureText: 영상은 올라갔고 썸네일만 실패(POK-2
       '9',
     );
     expect(thumbnailFailureText(clip)).toBe(
-      '영상은 올라갔어요. 썸네일이 붙었는지 확인하지 못했어요. 유튜브 스튜디오에서 확인해 주세요.',
+      '영상은 올라갔어요. 썸네일이 붙었는지 확인하지 못했어요. 스트리머 채널의 유튜브 스튜디오에서 확인해 주세요.',
     );
   });
 
@@ -336,56 +336,88 @@ describe('thumbnailFailureText: 영상은 올라갔고 썸네일만 실패(POK-2
   });
 });
 
-describe('privacyNoteText: 고른 공개 범위를 업로드 단계마다(POK-291)', () => {
-  const clipWith = (over: Partial<UploadSnapshot>) =>
-    toLibraryClip(entry('uploaded', snapshot(uploaded(over))), '9');
-
-  it('올라갔으면 누가 보는지와 바꾸는 곳(스트리머 채널의 스튜디오)을 말한다', () => {
-    expect(privacyNoteText(clipWith({ privacyStatus: 'public' }))).toBe(
-      '「공개」로 올렸어요. 누구나 볼 수 있어요. 바꾸려면 스트리머 채널의 유튜브 스튜디오에서 바꿔요.',
+describe('privacyNoteText: 편집본 상태마다 그 범위로 올라가게 하는 길과 누가 보는지(POK-291)', () => {
+  // 서버가 실제로 내는 조합만 쓴다: 보관함 상태와 latestClip·업로드 상태가 같이 움직인다(clip LibraryQuery STATUS_CASE)
+  const CHANGE = '올린 뒤에는 스트리머 채널의 유튜브 스튜디오에서만 바꿀 수 있어요.';
+  const NOTIFY = '구독자에게 새 영상 알림이 갈 수 있어요.';
+  const withUploadAt = (status: LibraryStatus, over: Partial<UploadSnapshot>) =>
+    toLibraryClip(entry(status, snapshot(uploaded(over))), '9');
+  const withIntent = (
+    status: LibraryStatus,
+    latestClip: ClipSnapshot | null,
+    privacyStatus: 'unlisted' | 'public',
+  ) =>
+    toLibraryClip(
+      {
+        ...entry(status, latestClip),
+        uploadRequest: { title: 't', privacyStatus, thumbnailSource: 'none' },
+      },
+      '9',
     );
-    expect(privacyNoteText(clipWith({ privacyStatus: 'unlisted' }))).toBe(
-      '「일부 공개」로 올렸어요. 주소를 아는 사람은 누구나 볼 수 있어요. 바꾸려면 스트리머 채널의 유튜브 스튜디오에서 바꿔요.',
-    );
-  });
-
-  it('실패했으면 다시 올릴 때의 범위로 말한다: 못 올린 영상을 공개됐다고 하지 않는다', () => {
-    const clip = toLibraryClip(
+  const failedAt = (status: LibraryStatus, privacyStatus: 'unlisted' | 'public') =>
+    toLibraryClip(
       entry(
-        'rendered',
-        snapshot({ ...failedUpload('QUOTA_EXCEEDED'), privacyStatus: 'public' } as UploadSnapshot),
+        status,
+        snapshot({ ...failedUpload('QUOTA_EXCEEDED'), privacyStatus } as UploadSnapshot),
       ),
       '9',
     );
-    expect(privacyNoteText(clip)).toBe(
-      '다시 올리면 「공개」로 올라가요. 올라가면 누구나 볼 수 있어요.',
+
+  it('올라갔으면 올릴 때의 범위와 바꾸는 곳을 말한다', () => {
+    expect(privacyNoteText(withUploadAt('uploaded', { privacyStatus: 'public' }))).toBe(
+      `「공개」(누구나 볼 수 있는 범위)로 올렸어요. ${CHANGE}`,
+    );
+    expect(privacyNoteText(withUploadAt('uploaded', { privacyStatus: 'unlisted' }))).toBe(
+      `「일부 공개」(주소를 아는 사람만 볼 수 있는 범위)로 올렸어요. ${CHANGE}`,
     );
   });
 
   it('확인 필요면 고른 범위만 말한다: 올라갔는지 모른다', () => {
-    expect(privacyNoteText(clipWith({ status: 'checking', privacyStatus: 'unlisted' }))).toBe(
-      '「일부 공개」로 골랐어요. 올라갔다면 주소를 아는 사람은 누구나 볼 수 있어요.',
-    );
+    expect(
+      privacyNoteText(withUploadAt('checking', { status: 'checking', privacyStatus: 'public' })),
+    ).toBe('「공개」로 골랐어요. 올라갔다면 누구나 볼 수 있어요.');
+    expect(
+      privacyNoteText(withUploadAt('checking', { status: 'checking', privacyStatus: 'unlisted' })),
+    ).toBe('「일부 공개」로 골랐어요. 올라갔다면 주소를 아는 사람만 볼 수 있어요.');
   });
 
-  it('업로드 줄이 아직 없거나 올리는 중이면 올라갈 범위로 말한다', () => {
-    const intentOnly = toLibraryClip(
-      {
-        ...entry('rendering', null),
-        uploadRequest: { title: 't', privacyStatus: 'unlisted', thumbnailSource: 'none' },
-      },
-      '9',
+  it('만드는 중·올리는 중이면 저절로 올라갈 범위를 말하고, 공개면 구독자 알림까지', () => {
+    expect(
+      privacyNoteText(withUploadAt('uploading', { status: 'queued', privacyStatus: 'public' })),
+    ).toBe(`「공개」로 올라가요. 올라가면 누구나 볼 수 있어요. ${NOTIFY}`);
+    expect(
+      privacyNoteText(
+        withIntent('rendering', { ...snapshot(null), status: 'rendering' }, 'unlisted'),
+      ),
+    ).toBe('「일부 공개」로 올라가요. 올라가면 주소를 아는 사람만 볼 수 있어요.');
+  });
+
+  it('눌러야 올라가면 그 단추를 말한다: 다시 시도 · 업로드 · 렌더 재시도', () => {
+    expect(privacyNoteText(failedAt('rendered', 'public'))).toBe(
+      `「다시 시도」를 누르면 「공개」로 올라가요. 올라가면 누구나 볼 수 있어요. ${NOTIFY}`,
     );
-    expect(privacyNoteText(intentOnly)).toBe(
-      '「일부 공개」로 올라가요. 올라가면 주소를 아는 사람은 누구나 볼 수 있어요.',
+    expect(privacyNoteText(failedAt('rendered', 'unlisted'))).toBe(
+      '「다시 시도」를 누르면 「일부 공개」로 올라가요. 올라가면 주소를 아는 사람만 볼 수 있어요.',
     );
-    expect(privacyNoteText(clipWith({ status: 'uploading', privacyStatus: 'public' }))).toBe(
-      '「공개」로 올라가요. 올라가면 누구나 볼 수 있어요.',
+    // 자동 업로드를 건너뛴 완성 영상: 「업로드」가 그 판의 정보로 올린다
+    expect(privacyNoteText(withIntent('rendered', snapshot(null), 'public'))).toBe(
+      `「업로드」를 누르면 「공개」로 올라가요. 올라가면 누구나 볼 수 있어요. ${NOTIFY}`,
     );
+    expect(
+      privacyNoteText(withIntent('failed', { ...snapshot(null), status: 'failed' }, 'public')),
+    ).toBe(`「렌더 재시도」가 끝나면 「공개」로 올라가요. 올라가면 누구나 볼 수 있어요. ${NOTIFY}`);
+  });
+
+  it('편집 중이면 말하지 않는다: latestClip은 옛 판이고 그 판을 다시 올리는 단추가 없다', () => {
+    // 공개 업로드가 실패한 뒤 「이어서 편집」에서 고쳐 저장한 줄
+    expect(privacyNoteText(failedAt('editing', 'public'))).toBeNull();
+    expect(
+      privacyNoteText(withUploadAt('editing', { status: 'checking', privacyStatus: 'public' })),
+    ).toBeNull();
   });
 
   it('비공개거나 옛 서버(칸 없음)면 말하지 않는다', () => {
-    expect(privacyNoteText(clipWith({ privacyStatus: 'private' }))).toBeNull();
+    expect(privacyNoteText(withUploadAt('uploaded', { privacyStatus: 'private' }))).toBeNull();
     expect(privacyNoteText(toLibraryClip(entry('uploaded', snapshot(uploaded())), '9'))).toBeNull();
   });
 });
