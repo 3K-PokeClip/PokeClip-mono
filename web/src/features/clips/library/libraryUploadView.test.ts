@@ -336,14 +336,14 @@ describe('thumbnailFailureText: 영상은 올라갔고 썸네일만 실패(POK-2
   });
 });
 
-describe('privacyNoteText: 고른 공개 범위와 감사 전 잠금(POK-291)', () => {
-  it('일부 공개·공개를 골랐으면 감사 전에는 비공개로 올라간다고 말한다', () => {
+describe('privacyNoteText: 고른 공개 범위(POK-291)', () => {
+  it('일부 공개·공개를 골랐으면 고른 그대로 올라가 남이 볼 수 있다고 말한다', () => {
     const clip = toLibraryClip(
       entry('uploaded', snapshot(uploaded({ privacyStatus: 'public' }))),
       '9',
     );
     expect(privacyNoteText(clip)).toBe(
-      '공개 범위는 「공개」로 골랐어요. 유튜브 API 감사를 통과하기 전에는 무엇을 골라도 비공개로 올라가요. 그때 올린 영상은 나중에 공개로 바꾸려면 다시 올려야 해요.',
+      '공개 범위는 「공개」로 골랐어요. 고른 범위 그대로 올라가요. 공개를 고르면 영상이 다 만들어지는 대로 누구나 볼 수 있어요. 올린 뒤 바꾸려면 유튜브 스튜디오에서 바꿔요.',
     );
   });
 

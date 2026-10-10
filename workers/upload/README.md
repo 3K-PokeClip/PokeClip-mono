@@ -7,8 +7,8 @@
 - 자바 21 · Spring Boot 4.1 · 웹 서버 없음 · 한 번에 한 주문(렌더 일꾼과 같은 도구).
 - **DB에 안 붙는다**(`workers/README.md`). 상태는 clip의 일꾼 문 셋으로만 바꾼다: `/internal/uploads/{id}/start|session|result`.
 - **토큰은 주문서에 없다.** 올리기 직전에 auth `POST /internal/youtube-link/resolve {userId}`에 묻고, 받은 토큰은 쓰고 버린다.
-- **공개 범위는 스트리머가 고른 대로 싣는다**(`private`·`unlisted`·`public`, ADR-084). 🔴 유튜브 API 감사를 통과하기 전에는
-  무엇을 골라도 유튜브가 비공개로 잠근다. 일꾼은 응답에서 영상 번호만 읽어 잠겼는지 모른다.
+- **공개 범위는 스트리머가 고른 대로 싣는다**(`private`·`unlisted`·`public`, ADR-084). 🔴 유튜브가 그대로 쓴다: 2026-10-11 실측에서
+  감사 전인데도 `public`은 공개로, `unlisted`는 일부 공개로 남았다(문서의 「감사 전엔 비공개로 잠긴다」가 안 걸렸다). 일꾼은 응답에서 영상 번호만 읽는다.
 - 태그(`snippet.tags`, 비었으면 칸을 안 싣는다)와 아동용 여부(`status.selfDeclaredMadeForKids`)도 주문서 값 그대로. 분류는 게임(`categoryId=20`).
 - 장면 썸네일을 뽑으려고 **ffmpeg·ffprobe가 필요하다**(이미지에는 apt 꾸러미로 들어 있다).
 
@@ -155,5 +155,5 @@ cd workers/upload && ./gradlew bootJar
 - **「확인 중」을 푸는 문**: 사람이 채널을 보고 결과를 적는 것은 업로드 상태 화면(F7) 카드에서.
 - **유튜브 자막 등록**(F5, `captions.insert` 400유닛) · 예약 공개 · 조회수.
 - **썸네일만 다시 붙이는 문**: 영상은 올라갔고 썸네일만 실패했으면 지금은 결과만 남는다(채널 전화 인증 뒤 다시 붙이는 길이 없다).
-- **실제 공개 범위 읽기**: 감사 전 비공개 잠금을 알리려면 완료 응답의 `status.privacyStatus`를 읽어 보고해야 한다(실측 필요).
+- **실제 공개 범위 읽기**: 유튜브가 고른 범위를 바꾸는 날(잠금 정책 등)을 알리려면 완료 응답의 `status.privacyStatus`를 읽어 보고해야 한다.
 - ECS 작업 정의·CI(렌더 일꾼과 같이 인프라 몫).

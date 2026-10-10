@@ -1,7 +1,7 @@
 import { ddayFor, type VodDday } from '@/features/broadcast/vod/vodListView';
 import { formatUptime } from '@/features/player/playerMath';
 import { ClipApiError, type LibraryEntry } from '@/api/clipEditor';
-import { PRIVACY_AUDIT_NOTE, PRIVACY_LABEL } from '@/features/clips/editor/uploadInfo';
+import { PRIVACY_LABEL, PRIVACY_NOTE } from '@/features/clips/editor/uploadInfo';
 import type { ClipStatus, LibraryClip, LibraryRole } from './useLibraryMockState';
 
 // 시안 1g 보관함의 표시 규칙 — 상태가 배지·주 동작·보조 줄·칩·정렬로 어떻게 펼쳐지는지를
@@ -502,8 +502,8 @@ export function thumbnailFailureText(clip: LibraryClip): string | null {
 }
 
 /**
- * 공개 범위 안내(POK-291). 일부 공개·공개를 골랐어도 감사 전에는 비공개로 올라간다(ADR-084): 「업로드됨」만 보고 공개된
- * 줄로 오해하지 않게 말한다. 비공개거나 고른 것이 없으면 null.
+ * 공개 범위 안내(POK-291). 일부 공개·공개는 고른 그대로 올라가 남이 볼 수 있다(2026-10-11 실측, 감사 전 잠금이 안 걸렸다):
+ * 「업로드됨」 줄이 누구에게 보이는지와 바꾸는 곳을 말한다. 비공개거나 고른 것이 없으면 null.
  */
 export function privacyNoteText(clip: LibraryClip): string | null {
   const entry = clip.entry;
@@ -512,7 +512,7 @@ export function privacyNoteText(clip: LibraryClip): string | null {
   const privacy =
     upload != null ? upload.privacyStatus : (entry.uploadRequest?.privacyStatus ?? undefined);
   if (privacy === undefined || privacy === 'private') return null;
-  return `공개 범위는 「${PRIVACY_LABEL[privacy]}」로 골랐어요. ${PRIVACY_AUDIT_NOTE}`;
+  return `공개 범위는 「${PRIVACY_LABEL[privacy]}」로 골랐어요. ${PRIVACY_NOTE}`;
 }
 
 // ---------- 표기 ----------

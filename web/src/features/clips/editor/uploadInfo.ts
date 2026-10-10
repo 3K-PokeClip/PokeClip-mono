@@ -3,15 +3,19 @@ import type { PrivacyStatus } from '@/api/clipEditor';
 // 업로드 정보 창(POK-291)의 규칙: 렌더와 떼어 순수 함수로 둔다. clip 렌더 주문 문이 같은 규칙으로 400을 주지만,
 // 보내기 전에 창 안에서 말해야 그 칸을 바로 고친다. 제목 규칙은 보관함의 uploadTitleProblem을 그대로 쓴다.
 
-/** 공개 범위 셋. 감사 전에는 무엇을 골라도 비공개로 올라간다(ADR-084): 창과 보관함이 같은 말을 쓴다 */
+/**
+ * 공개 범위 셋. 고른 범위 그대로 올라간다: 2026-10-11 실측에서 감사 전인데도 공개는 공개로, 일부 공개는 일부 공개로 남았다
+ * (문서의 「감사 전엔 비공개로 잠긴다」가 이 프로젝트에 안 걸렸다). 창과 보관함이 같은 말을 쓴다
+ */
 export const PRIVACY_LABEL: Record<PrivacyStatus, string> = {
   private: '비공개',
   unlisted: '일부 공개',
   public: '공개',
 };
 
-export const PRIVACY_AUDIT_NOTE =
-  '유튜브 API 감사를 통과하기 전에는 무엇을 골라도 비공개로 올라가요. 그때 올린 영상은 나중에 공개로 바꾸려면 다시 올려야 해요.';
+/** 올린 뒤 공개 범위는 우리가 못 바꾼다(youtube.upload 범위로는 videos.update를 못 부른다) */
+export const PRIVACY_NOTE =
+  '고른 범위 그대로 올라가요. 공개를 고르면 영상이 다 만들어지는 대로 누구나 볼 수 있어요. 올린 뒤 바꾸려면 유튜브 스튜디오에서 바꿔요.';
 
 export const THUMBNAIL_PHONE_NOTE =
   '직접 고른 썸네일은 유튜브 채널 전화 인증이 끝나야 붙어요. 안 붙으면 영상만 올라가요.';

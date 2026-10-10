@@ -94,7 +94,7 @@ public class ResumableUploader {
     }
 
     /**
-     * @param privacyStatus 주문서 값(스트리머가 고른 것). 감사 전에는 유튜브가 무엇이든 비공개로 잠근다(ADR-084)
+     * @param privacyStatus 주문서 값(스트리머가 고른 것, ADR-084). 유튜브가 그대로 쓴다(감사 전 잠금이 안 걸린다, 2026-10-11 실측)
      * @param tags          비었으면 칸을 아예 안 싣는다
      */
     public Start start(String accessToken, String title, String description, String privacyStatus, List<String> tags,

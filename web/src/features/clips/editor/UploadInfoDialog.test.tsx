@@ -44,9 +44,7 @@ describe('UploadInfoDialog', () => {
     expect(dialog().getByRole('button', { name: '만들고 올리기' })).toBeEnabled();
     // 헤더의 「영상 만들기」와 겹치지 않는다
     expect(dialog().queryByRole('button', { name: '영상 만들기' })).not.toBeInTheDocument();
-    expect(
-      dialog().getByText(/유튜브 API 감사를 통과하기 전에는 무엇을 골라도 비공개로 올라가요/),
-    ).toBeInTheDocument();
+    expect(dialog().getByText(/고른 범위 그대로 올라가요/)).toBeInTheDocument();
   });
 
   it('모든 칸을 채워 보내면 그 값이 그대로 간다', async () => {
