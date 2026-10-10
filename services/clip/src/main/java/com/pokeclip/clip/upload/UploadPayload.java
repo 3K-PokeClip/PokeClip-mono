@@ -44,7 +44,7 @@ final class UploadPayload {
         ObjectNode video = root.putObject("video");
         video.put("title", info.title());
         video.put("description", info.description());
-        // 스트리머가 고른 값(ADR-084). 유튜브가 그대로 쓴다: 2026-10-11 실측에서 감사 전인데도 공개가 공개로 올라갔다.
+        // 스트리머가 고른 값(ADR-084). 유튜브가 이 범위를 그대로 쓰는 것은 업로드 일꾼 ResumableUploader 주석.
         video.put("privacyStatus", info.privacyStatus());
         ArrayNode tags = video.putArray("tags");
         info.tags().forEach(tags::add);

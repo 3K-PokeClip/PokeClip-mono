@@ -9,7 +9,7 @@ import java.util.List;
  *
  * @param status        {@link UploadStatus} 소문자
  * @param videoId       올렸을 때만. 주소는 {@code https://youtu.be/{videoId}}
- * @param privacyStatus 고른 공개 범위(POK-291). 유튜브가 그대로 쓴다(감사 전 잠금이 안 걸린다, 2026-10-11 실측)
+ * @param privacyStatus 고른 공개 범위(POK-291). 우리가 실어 보낸 값이다(스튜디오에서 바꾸면 모른다)
  * @param thumbnail     썸네일 고르기와 결과(POK-291)
  */
 public record UploadSnapshot(long id,

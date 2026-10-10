@@ -6,8 +6,7 @@ import java.util.List;
  * clip이 줄에 실은 업로드 주문서(clip {@code UploadRequestService.payload}). 토큰은 없다.
  *
  * @param channelOwnerUserId auth 회원 번호. 이 번호로 유튜브 토큰을 묻는다(방송의 스트리머, ADR-010 Path A)
- * @param privacyStatus      스트리머가 고른 공개 범위({@code private}·{@code unlisted}·{@code public}, ADR-084). 유튜브가
- *                           그대로 쓴다(감사 전 잠금이 안 걸린다, 2026-10-11 실측)
+ * @param privacyStatus      스트리머가 고른 공개 범위({@code private}·{@code unlisted}·{@code public}, ADR-084)
  * @param tags               유튜브 태그. 없으면 빈 목록
  * @param madeForKids        아동용 영상이라고 스스로 밝히는가
  * @param thumbnail          붙일 썸네일. 없으면 null(유튜브가 고른다)

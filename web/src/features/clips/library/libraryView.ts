@@ -1,7 +1,7 @@
 import { ddayFor, type VodDday } from '@/features/broadcast/vod/vodListView';
 import { formatUptime } from '@/features/player/playerMath';
-import { ClipApiError, type LibraryEntry } from '@/api/clipEditor';
-import { PRIVACY_LABEL, PRIVACY_NOTE } from '@/features/clips/editor/uploadInfo';
+import { ClipApiError, type LibraryEntry, type PrivacyStatus } from '@/api/clipEditor';
+import { PRIVACY_LABEL } from '@/features/clips/editor/uploadInfo';
 import type { ClipStatus, LibraryClip, LibraryRole } from './useLibraryMockState';
 
 // 시안 1g 보관함의 표시 규칙 — 상태가 배지·주 동작·보조 줄·칩·정렬로 어떻게 펼쳐지는지를
@@ -501,9 +501,16 @@ export function thumbnailFailureText(clip: LibraryClip): string | null {
   return `영상은 올라갔고 썸네일만 못 붙였어요. ${reason} 유튜브 스튜디오에서 직접 바꿀 수 있어요.`;
 }
 
+/** 공개 범위마다 누가 보나. 창 안내(PRIVACY_NOTE)와 같은 말이다 */
+const PRIVACY_AUDIENCE: Record<Exclude<PrivacyStatus, 'private'>, string> = {
+  unlisted: '주소를 아는 사람은 누구나 볼 수 있어요',
+  public: '누구나 볼 수 있어요',
+};
+
 /**
- * 공개 범위 안내(POK-291). 일부 공개·공개는 고른 그대로 올라가 남이 볼 수 있다(2026-10-11 실측, 감사 전 잠금이 안 걸렸다):
- * 「업로드됨」 줄이 누구에게 보이는지와 바꾸는 곳을 말한다. 비공개거나 고른 것이 없으면 null.
+ * 공개 범위 안내(POK-291). 일부 공개·공개는 고른 그대로 올라가 남이 본다(uploadInfo.ts PRIVACY_NOTE 주석): 업로드 단계마다
+ * 누가 보는지를 말한다. 올린 범위는 우리가 실어 보낸 값이라 스트리머가 스튜디오에서 바꾸면 모른다(services README 알려진 한계).
+ * 비공개거나 고른 것이 없으면 null.
  */
 export function privacyNoteText(clip: LibraryClip): string | null {
   const entry = clip.entry;
@@ -512,7 +519,21 @@ export function privacyNoteText(clip: LibraryClip): string | null {
   const privacy =
     upload != null ? upload.privacyStatus : (entry.uploadRequest?.privacyStatus ?? undefined);
   if (privacy === undefined || privacy === 'private') return null;
-  return `공개 범위는 「${PRIVACY_LABEL[privacy]}」로 골랐어요. ${PRIVACY_NOTE}`;
+  const label = PRIVACY_LABEL[privacy];
+  const audience = PRIVACY_AUDIENCE[privacy];
+  switch (upload?.status) {
+    case 'uploaded':
+      return `「${label}」로 올렸어요. ${audience}. 바꾸려면 스트리머 채널의 유튜브 스튜디오에서 바꿔요.`;
+    case 'checking':
+      // 채널에 올라갔는지 모른다: 확인 안내가 따로 뜬다
+      return `「${label}」로 골랐어요. 올라갔다면 ${audience}.`;
+    case 'failed':
+      // 다시 시도는 실패한 줄의 범위를 그대로 복사한다
+      return `다시 올리면 「${label}」로 올라가요. 올라가면 ${audience}.`;
+    default:
+      // 아직 안 올라갔다: 올릴 정보만 있음(렌더 중·자동 업로드 전) · 줄에 섬 · 올리는 중
+      return `「${label}」로 올라가요. 올라가면 ${audience}.`;
+  }
 }
 
 // ---------- 표기 ----------
