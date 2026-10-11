@@ -60,6 +60,16 @@ export interface GlassPlayerProps {
   recorded?: RecordedSource | null;
   /** 녹화 다시보기를 이 자리(방송 기준 초)부터 튼다. 녹화 플레이어가 설 때 한 번만 읽는다(useRecordedPlayback) */
   startAtSeconds?: number | null;
+  /**
+   * 녹화 다시보기의 재생 위치(방송 기준 초, 내림)가 바뀔 때마다 알린다. 지난 방송 채팅이 그 시각까지의 줄만 보인다(POK-324).
+   * 녹화를 틀 때만 부른다: 라이브 채팅은 영상 위치를 따르지 않는다
+   */
+  onPlaybackPosition?: (seconds: number) => void;
+  /**
+   * 녹화 다시보기에서 사람이 옮겼다(시크바·화살표·끝으로·카드·다 본 뒤 처음부터). 재생으로 흐르거나 녹화 틈을 넘을 때는 부르지
+   * 않는다: 녹화가 옮긴 자리는 지난 방송 채팅이 이것으로만 따라간다(영상 없이 누른 카드는 화면이 따로 알린다)
+   */
+  onSeek?: () => void;
   /** 소스가 없을 때 목업 재생으로 시안 동작을 보인다 — 스토리북·시험 전용. 실제 화면은 끈다 */
   simulate?: boolean;
   /** clip의 방송 명부가 말하는 상태 — 상단 배지(LIVE·종료·확인 중)의 근거. 없으면 LIVE */
@@ -146,7 +156,19 @@ function NoSignalGlassPlayer({
 /** 끝난 방송 다시보기 — 같은 몸통(컨트롤·시크바)에 녹화 재생 훅을 끼운다 */
 function RecordedGlassPlayer(props: GlassPlayerProps & { recorded: RecordedSource }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const sim = useRecordedPlayback(videoRef, props.recorded, props.startAtSeconds ?? 0);
+  const sim = useRecordedPlayback(
+    videoRef,
+    props.recorded,
+    props.startAtSeconds ?? 0,
+    props.onSeek,
+  );
+  // 초가 바뀔 때만 알린다: timeupdate는 1초에 네 번쯤 온다. 내린다: 영상 시각을 넘는 줄은 보이지 않는다. 카드는 그 시각에
+  // 정확히 서므로(seekToPosition) 카드와 같은 초다
+  const second = Math.floor(sim.positionSeconds);
+  const { onPlaybackPosition } = props;
+  useEffect(() => {
+    onPlaybackPosition?.(second);
+  }, [second, onPlaybackPosition]);
   return (
     <GlassPlayerBody
       {...props}
@@ -272,8 +294,12 @@ function GlassPlayerBody({
       seekToUptime: (target: number) => {
         // 옮겼다고 하면 고른 시점이 알림도 없이 사라진다(리뷰 2라운드)
         if (sim.windowSeconds <= 0) return false;
-        const behind = Math.min(sim.windowSeconds, Math.max(0, sim.uptimeSeconds - target));
-        sim.seekToFraction(progressFraction(behind, sim.windowSeconds));
+        // 녹화 다시보기는 그 자리로 바로 간다. 비율을 거치면 시차를 초 단위로 반올림해 카드보다 1초 안쪽 앞에 섰다(POK-324)
+        if (sim.seekToPosition) sim.seekToPosition(target);
+        else {
+          const behind = Math.min(sim.windowSeconds, Math.max(0, sim.uptimeSeconds - target));
+          sim.seekToFraction(progressFraction(behind, sim.windowSeconds));
+        }
         sim.wake();
         return true;
       },
