@@ -3,6 +3,7 @@
 #include <QMetaObject>
 #include <QObject>
 #include <QPointer>
+#include <QThread>
 #include <QTimer>
 
 namespace pokeclip {
@@ -23,6 +24,12 @@ void RunInUiThread(std::function<void()> task)
 		return;
 	// 같은 스레드여도 큐에 넣는다 — libobs 콜백 안에서 재진입하지 않게.
 	QMetaObject::invokeMethod(context, [task = std::move(task)]() { task(); }, Qt::QueuedConnection);
+}
+
+bool OnUiThread()
+{
+	QObject *context = g_context.data();
+	return context && QThread::currentThread() == context->thread();
 }
 
 void RunInUiThreadAfter(int delayMs, std::function<void()> task)
