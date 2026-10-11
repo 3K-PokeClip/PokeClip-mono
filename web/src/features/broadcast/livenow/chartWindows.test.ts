@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { COLLECTOR_WINDOW_MS, chartWindows } from './useLiveMockState';
+import { COLLECTOR_WINDOW_MS } from './chatCollector';
+import { chartWindows } from './useLiveMockState';
 
 // 수집기는 채팅·차트를 한 번에 1시간까지만 준다(window-max PT1H, 넘으면 400 too_wide — PR #200 codex)
 describe('chartWindows', () => {

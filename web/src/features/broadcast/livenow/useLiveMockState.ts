@@ -10,6 +10,7 @@ import { useAuthStore } from '@/stores/auth';
 import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
 import { timeAgo } from '@/lib/timeAgo';
 import { endedWindowStart } from '@/features/broadcast/endedWindow';
+import { COLLECTOR_WINDOW_MS } from './chatCollector';
 import {
   emitRelay,
   publishLiveData,
@@ -140,9 +141,6 @@ export function claimCard(cardId: string) {
 export function hideCard(cardId: string) {
   return cardCall('POST', `${cardPath(cardId)}/hide`);
 }
-
-/** 수집기가 한 번에 받는 가장 긴 창 — chat-collector pokeclip.query.window-max */
-export const COLLECTOR_WINDOW_MS = 60 * 60_000;
 
 /** [from, to)를 수집기 한 번에 받을 수 있는 1시간 창들로 자른다 */
 export function chartWindows(from: number, to: number): [number, number][] {
