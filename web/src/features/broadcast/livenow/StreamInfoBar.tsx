@@ -22,7 +22,7 @@ export function StreamInfoBar({
 }: {
   stream: LiveStream;
   meta: StreamMeta;
-  /** 시청자 줄 — 「1,842명 시청 중」 또는 수집 전 안내 */
+  /** 시청자 줄: 「1,842명 시청 중」, 끝난 방송은 「끝날 때 N명 시청」, 값이 없으면 그 까닭(확인 중·기록 없음·수집 전) */
   viewersLabel: string;
   /** 흐르는 경과 표기: clip의 startedAt에서 센다. 모르면 null이다 */
   uptimeLabel: string | null;
@@ -72,13 +72,9 @@ export function StreamInfoBar({
         <span className={styles.infoDivider} aria-hidden />
         <span className={styles.infoUptime}>
           {uptimeLabel !== null ? (
-            <>
-              <span className={styles.infoUptimeValue}>{uptimeLabel}</span>
-              <span>{uptimeNote}</span>
-            </>
-          ) : (
-            <span>{uptimeNote}</span>
-          )}
+            <span className={styles.infoUptimeValue}>{uptimeLabel}</span>
+          ) : null}
+          <span>{uptimeNote}</span>
         </span>
       </div>
       <span className={styles.infoRule} aria-hidden />

@@ -64,6 +64,11 @@ export interface GlassPlayerProps {
   simulate?: boolean;
   /** clip의 방송 명부가 말하는 상태 — 상단 배지(LIVE·종료·확인 중)의 근거. 없으면 LIVE */
   broadcastStatus?: PlayerBroadcastStatus;
+  /**
+   * 영상이 없을 때 자리 표시의 아랫줄. 없으면 상태에 따른 기본 말이다. 끝난 방송은 녹화를 찾는 중인지, 찾았는데 없는지를
+   * 바깥(녹화를 찾는 쪽)이 안다
+   */
+  noSignalNote?: string;
   /** 화면 안에 꽉 채워 넣는 모드 — 라운드·외곽 여백 제거 (1b 라이브 대시보드) */
   embed?: boolean;
   /** 테스트용 시뮬레이션 초기값 */
@@ -101,6 +106,7 @@ function NoSignalGlassPlayer({
   channelName,
   viewersNote,
   broadcastStatus,
+  noSignalNote,
   embed = false,
   chatPanelOpen,
   onToggleChatPanel,
@@ -119,9 +125,10 @@ function NoSignalGlassPlayer({
                 : '영상 신호 없음'}
           </span>
           <span className={styles.noSignalSub}>
-            {broadcastStatus === 'offline'
-              ? '방송을 시작하면 여기에 나타나요'
-              : '영상 서버에 아직 연결되지 않았어요'}
+            {noSignalNote ??
+              (broadcastStatus === 'offline'
+                ? '방송을 시작하면 여기에 나타나요'
+                : '영상 서버에 아직 연결되지 않았어요')}
           </span>
         </div>
       </div>

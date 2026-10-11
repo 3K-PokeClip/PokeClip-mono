@@ -116,7 +116,7 @@ type LoadedInfo = BroadcastInfoResponse & { scope: LiveInfoScope };
 const CHART_MINUTES = 10;
 const CHART_BUCKET = 30;
 /** 끝난 방송을 읽는 창의 최대 길이. 수집기가 한 번에 주는 시청자 기록 720점(1분 간격)과 같은 길이다 */
-export const ENDED_TAIL_MS = 12 * 60 * 60_000;
+const ENDED_TAIL_MS = 12 * 60 * 60_000;
 
 /**
  * 끝난 방송의 그래프·시청자 기록을 읽기 시작할 시각(epoch ms). 시작~끝이되 12시간이 넘거나 시작 시각을 모르면(종료 알림이 먼저
@@ -398,7 +398,8 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
 
     const loadInfo = async () => {
       const rg = rangeRef.current;
-      // 꺼짐(번호가 없거나 명부에 없는 방송)이면 읽을 것이 없다. 읽어도 곧 상태가 바뀌어 버려진다(리뷰 4라운드)
+      // 꺼짐은 명부에 없는 방송이다(위임 회수·탈퇴): 볼 수 없게 된 방송이라 읽지 않는다. 시계가 명부를 다시 물어 방송이
+      // 돌아오면 상태가 바뀌어 그때 읽는다(리뷰 4·5라운드)
       if (rg.status === 'offline') return;
       // 지난 방송은 그래프와 같은 창의 시청자 기록을 달라고 한다: 안 주면 서버가 최근 1시간만 준다(PR #200 codex). 그 밖(라이브,
       // 아직 모름)은 최근 창으로 읽고 그렇다고 표시한다. 제목·카테고리는 창과 무관해 명부 답을 기다리지 않는다(리뷰 4라운드)
@@ -475,7 +476,8 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
                   viewers: number | null;
                 };
                 setInfo((prev) => {
-                  // 통로는 방송 중에만 온다: 지금 기준 창의 기록이다
+                  // 통로는 방송 중에만 온다. 기록은 받아 둔 창 그대로 이어 붙인다: 끝난 뒤 늦게 온 이벤트가 방송 창 기록을
+                  // 최근 창으로 바꾸지 않게
                   const next: LoadedInfo = {
                     scope: prev?.scope ?? 'recent',
                     latest: {

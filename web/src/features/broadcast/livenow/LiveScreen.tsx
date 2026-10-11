@@ -27,11 +27,17 @@ import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { fetchRecordingSpans } from '@/api/mediaPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
 import { rebaseTimeline, recordingTimeline } from '@/features/player/recordingTimeline';
-import { publishLiveData, resetLiveData, useLiveData } from './liveDataStore';
+import {
+  missingWord,
+  publishLiveData,
+  resetLiveData,
+  trustedViewerSeries,
+  useLiveData,
+} from './liveDataStore';
 import { useBroadcastClock, type BroadcastStatus } from './useBroadcastClock';
 import { useChatPanelMockState } from './useChatPanelMockState';
 import { useLiveDetailsMockState } from './useLiveDetailsMockState';
-import { useLiveMockState, type LiveStream } from './useLiveMockState';
+import { endedWindowStart, useLiveMockState, type LiveStream } from './useLiveMockState';
 import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
 import { useLiveStreamSelection } from './useLiveStreamSelection';
@@ -57,6 +63,14 @@ import { useManualMarking } from './useManualMarking';
 // 이 주석을 LCP·SEO 근거로 쓰지 말 것.
 /** 출입증을 만료 몇 분 전에 다시 받을지 */
 const PLAYBACK_ACCESS_MARGIN_MS = 5 * 60_000;
+/** 경과 뒤에 붙는 말. 경과를 모르면 이 말만 선다(지난 방송 주소는 명부 답 전에도 「방송함」이다) */
+const UPTIME_NOTE: Record<BroadcastStatus, string> = {
+  live: '스트리밍 중',
+  ended: '방송함',
+  unknown: '확인 중',
+  offline: '방송 중이 아니에요',
+};
+
 /** 출입증 실패 뒤 다시 받기까지 */
 const PLAYBACK_ACCESS_RETRY_MS = 60_000;
 /** 만료 시각을 모를 때 다시 받는 간격 — 운영 쿠키 수명 60분보다 짧게 */
@@ -108,15 +122,23 @@ function LivePlayer({
   const src = useMediaSource(mediaKey);
   // 끝난 방송은 LL-HLS 주소가 닫힌다 — 녹화 재생 서버에서 다시보기를 튼다(있을 때만).
   const [recorded, setRecorded] = useState<RecordedSource | null>(null);
+  /** 녹화 목록을 다 물었나. 그 전에는 「찾는 중」, 물었는데 없으면 「찾지 못했어요」다 */
+  const [lookupDone, setLookupDone] = useState(false);
   useEffect(() => {
     setRecorded(null);
+    setLookupDone(false);
     publishLiveData({ timeBaseMs: null });
     if (broadcastStatus !== 'ended' || !mediaKey) return undefined;
     let alive = true;
+    // 시작 시각을 모르는 방송(자리표시)은 그래프·채팅과 같은 끝 12시간 안에서만 찾는다: 하한이 없으면 같은 송출 키로 한 다른 날
+    // 방송의 녹화를 틀고, 채팅도 그 날짜를 물었다(리뷰 5라운드)
+    const fromMs = startedAt ?? (endedAt === null ? null : endedWindowStart(null, endedAt));
     // 첫 구간 하나만 쓰면 송출이 한 번 끊긴 방송은 그 뒤를 못 보고, 앞 방송 녹화를 잡을 수도 있다(POK-253)
     void fetchRecordingSpans(mediaKey).then((spans) => {
-      const found = recordingTimeline(spans, startedAt, endedAt);
-      if (alive && found) {
+      if (!alive) return;
+      setLookupDone(true);
+      const found = recordingTimeline(spans, fromMs, endedAt);
+      if (found) {
         // 재생기의 0초를 서버 기준점(카드·조각 위치의 0초, POK-255)에 세운다 — 녹화 시작에 세우면 두 시작의 차만큼 카드를
         // 누른 자리와 영상이 어긋난다(POK-253). 서버가 모르면(null) 녹화 시작
         const timeline = originMs === null ? found : rebaseTimeline(found, originMs);
@@ -167,6 +189,14 @@ function LivePlayer({
       channelName={stream.channelName}
       viewersNote={viewersNote}
       broadcastStatus={displayStatus}
+      // 녹화를 찾는 동안과 못 찾은 뒤를 가른다: 「아직 연결되지 않았어요」는 기다리면 나올 것처럼 읽혔다(리뷰 4라운드 실기동)
+      noSignalNote={
+        displayStatus === 'ended'
+          ? lookupDone
+            ? '녹화 영상을 찾지 못했어요'
+            : '녹화 영상을 찾는 중이에요'
+          : undefined
+      }
       // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
       // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다
       src={broadcastStatus === 'live' ? src : null}
@@ -187,13 +217,15 @@ function LivePlayer({
 export function LiveScreen() {
   // 저장소는 화면 하나의 것이다. 다른 방송을 보던 화면에서 넘어오면 앞 방송의 제목·시청자 수·그래프가 남아 첫 그리기에 칠해지고,
   // 그 그리기의 효과들이 앞 방송 번호로 요청을 보냈다(리뷰 3·4라운드). 그래서 비운 뒤에야 그린다: 레이아웃 효과에서 바꾼 상태는
-  // 칠하기 전에 다시 그려져 빈 첫 그림은 보이지 않는다. 같은 화면 안에서 방송이 바뀔 때는 저장소가 스스로 비운다
+  // 칠하기 전에 다시 그려져 빈 첫 그림은 보이지 않는다. 같은 화면 안에서 방송이 바뀔 때는 저장소가 스스로 비운다.
+  // 그 첫 그림도 빈칸(null)이 아니라 빈 상자다: Next 16.3 스크롤 처리기는 잡을 화면이 없으면 건너뛰고 다음 그림에는 다시 돌지
+  // 않아, 맨 위로 올리라는 뜻이 남았다(리뷰 5라운드)
   const [storeCleared, setStoreCleared] = useState(false);
   useLayoutEffect(() => {
     resetLiveData();
     setStoreCleared(true);
   }, []);
-  return storeCleared ? <LiveScreenBody /> : null;
+  return storeCleared ? <LiveScreenBody /> : <div />;
 }
 
 function LiveScreenBody() {
@@ -235,22 +267,20 @@ function LiveDashboard() {
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
   // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
   // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다).
-  const chat = useChatPanelMockState(chatPanelOpen && !chatWarning, pastRoute);
-  const stats = useLiveStatsMockState(ended);
+  const chat = useChatPanelMockState(chatPanelOpen && !chatWarning, ended);
+  const stats = useLiveStatsMockState(viewStatus);
 
   // 시청자 수는 broadcast-info의 series에서 마지막으로 잰 값이다(수집기 PR-C 전에는 없다). 수집기는 목록에서 채널을 못 찾은
   // 회차를 빈 값으로 남기므로 마지막 관측이 비어도 그 앞의 값을 쓴다: 통계의 최고·평균과 같은 규칙이다(리뷰 3라운드). 끝난 방송은
   // 지금 보는 사람이 아니라 끝날 때 값이고(QA 2026-10-11 리뷰: 며칠 전 방송을 지금 1,842명이 보는 것처럼 읽혔다), 방송 정보를
-  // 받기 전이면 「기록 없음」이라 단정하지 않는다. 끝난 방송은 방송 창으로 읽은 기록만 믿는다: 명부 답 전에 최근 창으로 읽은
-  // 빈 기록은 끝난 방송의 기록이 아니다(리뷰 4라운드)
+  // 받기 전이면 「기록 없음」이라 단정하지 않는다. 어떤 기록을 믿고(끝난 방송은 방송 창으로 읽은 것만, 리뷰 4라운드) 값이 없을 때
+  // 무엇이라 쓰는지는 통계와 같은 함수 하나가 정한다(리뷰 5라운드)
   const viewersLabel = useMemo(() => {
-    const v = info?.series?.findLast((p) => p.viewers !== null)?.viewers ?? null;
-    if (ended) {
-      if (info?.scope !== 'broadcast') return '시청자 수 확인 중';
-      return v === null ? '시청자 수 기록 없음' : `끝날 때 ${v.toLocaleString()}명 시청`;
-    }
-    return v === null ? '시청자 수 수집 전' : `${v.toLocaleString()}명 시청 중`;
-  }, [info, ended]);
+    const series = trustedViewerSeries(viewStatus, info);
+    const v = series?.findLast((p) => p.viewers !== null)?.viewers ?? null;
+    if (v === null) return `시청자 수 ${missingWord(viewStatus, series !== null)}`;
+    return ended ? `끝날 때 ${v.toLocaleString()}명 시청` : `${v.toLocaleString()}명 시청 중`;
+  }, [info, viewStatus, ended]);
 
   // 카드의 타임라인 위치(posPercent)는 방송 경과 대비다 — 실경과를 넣어야 눈금이 맞는다
   const streamForCards = useMemo<LiveStream>(
@@ -357,18 +387,8 @@ function LiveDashboard() {
             meta={streamMeta}
             viewersLabel={viewersLabel}
             uptimeLabel={uptimeLabel}
-            uptimeNote={
-              ended
-                ? '방송함'
-                : viewStatus === 'live'
-                  ? '스트리밍 중'
-                  : viewStatus === 'unknown'
-                    ? '확인 중'
-                    : '방송 중이 아니에요'
-            }
-            metaNote={
-              !info ? '방송 정보 확인 중' : ended ? '방송 정보 기록 없음' : '방송 정보 수집 전'
-            }
+            uptimeNote={UPTIME_NOTE[viewStatus]}
+            metaNote={`방송 정보 ${missingWord(viewStatus, info !== null)}`}
             // 만드는 중 자리는 수동 마킹이 서버에 남을 때(POK-257) 쓴다
             pendingLabel={null}
             onMark={marking.mark}

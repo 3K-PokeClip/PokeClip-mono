@@ -9,7 +9,7 @@ import {
   useLiveData,
   type RelayEvent,
 } from './liveDataStore';
-import { chartWindows, ENDED_TAIL_MS } from './useLiveMockState';
+import { chartWindows, endedWindowStart } from './useLiveMockState';
 
 // 실시간 채팅 패널(시안 1b). clip 창구에 붙어 있다(POK-251).
 // 라이브: 카드 통로(SSE)의 chat·donation 중계가 주 경로이고 chat-messages 폴링이 메우기·폴백이다.
@@ -42,8 +42,8 @@ export interface ChatPanelMockState {
   surges: ChatSurge[];
   messages: ChatPanelMessage[];
   /**
-   * 하단 상태줄의 「분당 N」: 최근 1분 채팅 수. 지난 방송은 차트가 읽은 방송 창의 평균이고(방송 전체, 12시간 넘으면 끝 12시간),
-   * 그 차트가 아직 없으면 모른다(null)
+   * 하단 상태줄의 「분당 N」: 최근 1분 채팅 수. 끝난 화면은 차트가 읽은 방송 창의 평균이고(방송 전체, 12시간 넘으면 끝 12시간)
+   * 통계의 「분당 평균 채팅」과 같은 수다. 그 차트가 아직 없으면 모른다(null)
    */
   ratePerMinute: number | null;
   /** 고른 시점 앞뒤 채팅을 보여 주나(지난 방송). 아니면 시점을 골라도 최신 채팅 그대로다 */
@@ -136,10 +136,11 @@ function toPanel(it: WireItem): ChatPanelMessage {
 }
 
 /**
- * @param pastRoute 지난 방송 주소(/broadcast/vod/…)로 열었나. 그 주소에서는 명부가 방송 중이라고 답할 때만 실시간 채팅을 읽는다:
- *   방송 상태를 모르는 동안 최근 창을 읽으면 끝난 방송의 「채팅 기록」 자리에 엉뚱한 창의 채팅을 채운다(리뷰 3라운드)
+ * @param ended 화면이 끝난 방송으로 보이나(LiveDashboard의 viewStatus). 지난 방송 주소는 명부 답 전에도 그렇다. 그동안은 실시간
+ *   채팅을 읽지 않는다: 최근 창을 읽으면 끝난 방송의 「채팅 기록」 자리에 엉뚱한 창의 채팅을 채운다(리뷰 3라운드). 통계와 같은
+ *   값을 받는다: 채팅만 따로 계산하면 화면 상태 규칙이 바뀔 때 둘이 갈린다(리뷰 5라운드)
  */
-export function useChatPanelMockState(enabled: boolean, pastRoute: boolean): ChatPanelMockState {
+export function useChatPanelMockState(enabled: boolean, ended: boolean): ChatPanelMockState {
   const [raw, setRaw] = useState<Record<string, WireItem>>({});
   const lastTime = useRef<number>(0);
   const nextId = useRef<number>(1);
@@ -148,15 +149,16 @@ export function useChatPanelMockState(enabled: boolean, pastRoute: boolean): Cha
   const pollRef = useRef<(() => Promise<void>) | null>(null);
   const live = useLiveData();
   const streamId = live.streamId;
-  // 지난 방송 채팅을 읽기 시작할 시각. 시작 시각을 모르는 방송(자리표시)은 그래프·시청자 기록처럼 끝 12시간이다: 아무 창도 안 읽어
-  // 채팅만 비었다(리뷰 4라운드)
+  // 지난 방송 채팅을 읽기 시작할 시각. 그래프·시청자 기록과 같은 창이다(endedWindowStart): 시작 시각을 모르는 방송은 아무 창도
+  // 안 읽어 채팅만 비었고(리뷰 4라운드), 12시간 넘는 방송은 채팅만 처음부터 읽어 통계와 다른 창을 보였다(리뷰 5라운드)
   const vodFrom =
     live.status === 'ended' && live.endedAt !== null
-      ? (live.startedAt ?? live.endedAt - ENDED_TAIL_MS)
+      ? endedWindowStart(live.startedAt, live.endedAt)
       : null;
   const isVod = vodFrom !== null;
 
-  // 지난 방송: 시작~종료 전체를 받는다. 수집기는 한 번에 1시간까지만 받으므로(넘으면 400 too_wide)
+  // 지난 방송: 그 창(방송 전체, 12시간 넘으면 끝 12시간)을 받는다. 앞쪽 카드는 그 시점 앞뒤 60초를 따로 읽는다(아래).
+  // 수집기는 한 번에 1시간까지만 받으므로(넘으면 400 too_wide)
   // 1시간 창마다 커서로 넘긴다(PR #200 codex). 창마다 최대 5장(1,000건). 폴링 없음
   useEffect(() => {
     if (!enabled || !streamId || vodFrom === null || live.endedAt === null) return;
@@ -190,7 +192,9 @@ export function useChatPanelMockState(enabled: boolean, pastRoute: boolean): Cha
           }
         } while (cursor !== null);
       }
-      if (!stopped) setRaw(acc);
+      // 덮지 않고 합친다: 그 사이 카드 시점 앞뒤 60초를 따로 읽어 넣었을 수 있다. 1시간 창은 창마다 상한(1,000건)이라 채팅이
+      // 몰린 카드 시점이 빠지는데, 덮으면 그것까지 지워 「채팅 0건」이 됐다(리뷰 5라운드). 이 효과가 처음에 비웠으므로 앞 방송 것은 없다
+      if (!stopped) setRaw((prev) => ({ ...acc, ...prev }));
     })();
     return () => {
       stopped = true;
@@ -199,8 +203,7 @@ export function useChatPanelMockState(enabled: boolean, pastRoute: boolean): Cha
 
   // 실시간 중계 수신(카드 통로의 chat·donation). 구멍·세대 변화면 2초 뒤 범위 창구로 메운다
   useEffect(() => {
-    if (!enabled || !streamId || isVod || live.status === 'offline') return;
-    if (pastRoute && live.status !== 'live') return;
+    if (!enabled || !streamId || ended || live.status === 'offline') return;
     lastSeq.current = null;
     return subscribeRelay((ev: RelayEvent) => {
       const item: WireItem = {
@@ -230,11 +233,10 @@ export function useChatPanelMockState(enabled: boolean, pastRoute: boolean): Cha
         }, 2000);
       }
     });
-  }, [enabled, streamId, isVod, live.status, pastRoute]);
+  }, [enabled, streamId, ended, live.status]);
 
   useEffect(() => {
-    if (!enabled || !streamId || isVod || live.status === 'offline') return;
-    if (pastRoute && live.status !== 'live') return;
+    if (!enabled || !streamId || ended || live.status === 'offline') return;
     setRaw({});
     lastTime.current = 0;
     let stopped = false;
@@ -290,7 +292,7 @@ export function useChatPanelMockState(enabled: boolean, pastRoute: boolean): Cha
       stopped = true;
       window.clearInterval(t);
     };
-  }, [enabled, streamId, isVod, live.status, pastRoute]);
+  }, [enabled, streamId, ended, live.status]);
 
   // 지난 방송에서 카드를 누르면 그 시점 앞뒤 60초를 끝까지 따로 읽는다 — 처음 읽기는 창마다 상한이 있어
   // 채팅이 많은 시간대는 비어 있을 수 있다(PR #200 codex P1)
@@ -369,18 +371,18 @@ export function useChatPanelMockState(enabled: boolean, pastRoute: boolean): Cha
   }, [items, isVod, live.playheadMs, vodBase]);
 
   const ratePerMinute = useMemo<number | null>(() => {
-    // 지난 방송(명부 답을 기다리는 지난 방송 주소 포함)은 차트가 센 수를 차트가 읽은 길이로 나눈다(12시간 넘는 방송은 끝 12시간).
-    // 그 차트가 없으면 모른다: 받아 둔 채팅은 창마다 상한이 있어 방송 길이로 나누면 늘 적게 나온다. 통계도 그때 「확인 중」이다
-    // (리뷰 4라운드)
-    if (isVod || (pastRoute && live.status !== 'live')) {
+    // 끝난 화면(명부 답을 기다리는 지난 방송 주소 포함)은 차트가 센 수를 차트가 읽은 길이로 나눈다(12시간 넘는 방송은 끝 12시간).
+    // 통계와 같은 수라 반올림하지 않는다: 자릿수는 패널이 통계처럼 맞춘다(리뷰 5라운드). 그 차트가 없으면 모른다: 받아 둔 채팅은
+    // 창마다 상한이 있어 방송 길이로 나누면 늘 적게 나온다. 통계도 그때 「확인 중」이다(리뷰 4라운드)
+    if (ended) {
       const chart = live.chart;
       if (chart === null || chart.scope === 'recent') return null;
       const { minutes, chats } = chartSpan(chart);
-      return Math.round(chats / minutes);
+      return chats / minutes;
     }
     const cut = Date.now() - 60_000 + CHAT_LEAD_MS;
     return items.filter((it) => Date.parse(it.time) >= cut).length;
-  }, [items, isVod, pastRoute, live.status, live.chart]);
+  }, [items, ended, live.chart]);
 
   const surges = useMemo<ChatSurge[]>(() => {
     const cut = Date.now() - 2 * 60_000 + CHAT_LEAD_MS;

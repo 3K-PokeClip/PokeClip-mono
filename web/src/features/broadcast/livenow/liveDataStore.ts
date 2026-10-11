@@ -79,6 +79,29 @@ export function chartSpan(chart: LiveChart): { minutes: number; chats: number } 
   };
 }
 
+/**
+ * 시청자 기록 중 화면이 믿는 것. 끝난 방송은 방송 창으로 읽은 기록만(명부 답 전에 최근 창으로 읽은 빈 기록은 그 방송의 것이
+ * 아니다, 리뷰 4라운드), 라이브는 받은 기록이다. 상태를 모르거나 받기 전이면 null이다. 정보 바의 시청자 수와 통계의 최고·평균이
+ * 이것 하나로 센다(리뷰 5라운드)
+ */
+export function trustedViewerSeries(
+  view: LiveBroadcastStatus,
+  info: LiveInfo | null,
+): LiveInfo['series'] | null {
+  if (view === 'ended') return info?.scope === 'broadcast' ? info.series : null;
+  if (view === 'live') return info?.series ?? null;
+  return null;
+}
+
+/**
+ * 값이 없는 자리에 쓰는 말. 모르면(받기 전, 상태를 모름) 「확인 중」, 끝난 방송에 없으면 「기록 없음」, 라이브에서 받았는데 아직
+ * 못 쟀으면 「수집 전」이다. 칸마다 따로 정해서 한 화면에 「확인 중」과 「수집 전」이 같이 섰다(리뷰 5라운드)
+ */
+export function missingWord(view: LiveBroadcastStatus, received: boolean): string {
+  if (!received || view === 'unknown' || view === 'offline') return '확인 중';
+  return view === 'ended' ? '기록 없음' : '수집 전';
+}
+
 const INITIAL: LiveData = {
   streamId: '',
   chart: null,

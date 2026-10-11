@@ -77,6 +77,10 @@ export function useBroadcastClock(streamId: string): BroadcastClock {
         if (!row) {
           setMissingStreamId(streamId);
           setStatus('offline');
+          // 볼 수 없게 된 방송(위임 회수·탈퇴)은 시각도 비운다: 남기면 「방송 중이 아니에요」 옆에서 경과가 흘렀다(리뷰 5라운드)
+          setStartedAt(null);
+          setEndedAt(null);
+          setIngestStreamId(null);
           publishLiveData({
             status: 'offline',
             startedAt: null,

@@ -97,8 +97,14 @@ export const ChatPanel = memo(function ChatPanel({
     return () => observer.disconnect();
   }, [following, handleScroll]);
 
+  // 끝난 방송의 분당 수는 통계의 「분당 평균 채팅」과 같은 평균이라 자릿수도 같게 쓴다: 반올림이 다르면 한 화면에 1과 0.7이
+  // 섰다(리뷰 5라운드). 라이브는 최근 1분의 개수다
   const rateLabel =
-    ratePerMinute === null ? '' : ` · 분당 ${ratePerMinute.toLocaleString('ko-KR')}`;
+    ratePerMinute === null
+      ? ''
+      : ` · 분당 ${mode === 'ended' ? ratePerMinute.toFixed(1) : ratePerMinute.toLocaleString('ko-KR')}`;
+  // 끝난 방송의 채팅은 새 메시지가 오지 않는 기록이다. 바닥에 붙어 있어도 「최신 메시지를 따라간다」가 아니다(리뷰 5라운드)
+  const followNote = mode === 'ended' ? '마지막 메시지까지 보는 중' : '최신 메시지 따라가는 중';
   // 끝난 방송의 채팅은 흐르는 것이 아니라 남은 기록이다(QA 2026-10-11)
   const heading = mode === 'ended' ? '채팅 기록' : '실시간 채팅';
 
@@ -173,7 +179,7 @@ export const ChatPanel = memo(function ChatPanel({
         <span>
           {collectionWarning
             ? '수집 끊김 · 새 메시지 없음'
-            : `${following ? '최신 메시지 따라가는 중' : '지난 메시지 보는 중'}${rateLabel}`}
+            : `${following ? followNote : '지난 메시지 보는 중'}${rateLabel}`}
         </span>
         {/* 키워드 설정 화면은 라우트가 없다 — 「제목 수정」(StreamInfoBar)처럼 자리만 지킨다 */}
         <button type="button" className={styles.chatFooterLink} disabled>
