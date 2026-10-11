@@ -45,6 +45,7 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
   categorySegments,
   metrics,
   highlightSummary,
+  ended = false,
 }: {
   chatVolume: ChatVolumeSeries;
   viewerLine: readonly Point[];
@@ -53,15 +54,18 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
   metrics: LiveMetric[];
   /** 카드 목록에서 센 값 — 목업에 박으면 필터 표기와 어긋난다 */
   highlightSummary: { total: number; auto: number; manual: number };
+  /** 끝난 방송 — 실시간이 아니라 그 방송의 통계다(QA 2026-10-11) */
+  ended?: boolean;
 }) {
   const chatLine = chatVolumeLine(chatVolume);
+  const heading = ended ? '방송 통계' : '실시간 통계';
   const markers = highlightMarkers(chatVolume);
 
   return (
-    <section className={styles.statsPanel} aria-label="실시간 통계">
+    <section className={styles.statsPanel} aria-label={heading}>
       <div className={styles.statsHeader}>
         <ChartLine size={15} aria-hidden className={styles.statsHeaderIcon} />
-        <h2 className={styles.statsHeading}>실시간 통계</h2>
+        <h2 className={styles.statsHeading}>{heading}</h2>
         <div className={styles.statsLegend}>
           {LEGEND.map(({ label, className }) => (
             <span key={label} className={styles.legendItem}>

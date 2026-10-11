@@ -28,6 +28,7 @@ export function PlayerSeekBar({
   onSeekBy,
   onReturnToLive,
   onSeekingChange,
+  replay = false,
 }: {
   behindSeconds: number;
   /** 되감기 창 = 시크바 좌측 끝 (계약3 4절 4번) */
@@ -38,6 +39,8 @@ export function PlayerSeekBar({
   onReturnToLive: () => void;
   /** 드래그 중 알림 — GlassPlayer가 그동안 컨트롤 숨김을 유보한다 */
   onSeekingChange: (seeking: boolean) => void;
+  /** 끝난 방송의 녹화 다시보기 — 오른쪽 끝은 「실시간」이 아니라 녹화 끝이다(PlayerControls와 같다) */
+  replay?: boolean;
 }) {
   // 드래그 중 표시할 위치. null이면 실제 재생 위치(prop)를 그대로 쓴다.
   const [dragFraction, setDragFraction] = useState<number | null>(null);
@@ -116,11 +119,19 @@ export function PlayerSeekBar({
     <div
       role="slider"
       tabIndex={0}
-      aria-label="라이브 탐색"
+      aria-label={replay ? '다시보기 탐색' : '라이브 탐색'}
       aria-valuemin={-windowSeconds}
       aria-valuemax={0}
       aria-valuenow={-displayBehind}
-      aria-valuetext={atEdge ? '실시간' : `실시간에서 ${formatBehind(displayBehind)}`}
+      aria-valuetext={
+        replay
+          ? atEdge
+            ? '녹화 끝'
+            : `녹화 끝에서 ${formatBehind(displayBehind)}`
+          : atEdge
+            ? '실시간'
+            : `실시간에서 ${formatBehind(displayBehind)}`
+      }
       className={styles.seekArea}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

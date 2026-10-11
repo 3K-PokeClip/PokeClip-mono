@@ -552,9 +552,15 @@ export function useLiveMockState(): LiveMockState {
     return {
       points,
       markers,
-      timeLabels: [lab(t0), lab(t0 + (t1 - t0) / 3), lab(t0 + ((t1 - t0) * 2) / 3), '지금'],
+      // 끝난 방송의 오른쪽 끝은 「지금」이 아니라 마지막 칸이 끝난 시각이다(QA 2026-10-11)
+      timeLabels: [
+        lab(t0),
+        lab(t0 + (t1 - t0) / 3),
+        lab(t0 + ((t1 - t0) * 2) / 3),
+        live.status === 'ended' ? lab(t1) : '지금',
+      ],
     };
-  }, [chart, cards, base]);
+  }, [chart, cards, base, live.status]);
 
   const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
   const { data: me } = useMe();

@@ -270,6 +270,7 @@ function LiveDashboard() {
             visuals={cardVisuals}
             pendingLabel={marking.pendingLabel}
             detectionPaused={chatWarning}
+            ended={clock.status === 'ended'}
             onSeek={handleSeek}
           />
         </div>
@@ -296,6 +297,7 @@ function LiveDashboard() {
         categorySegments={stats.categorySegments}
         metrics={stats.metrics}
         highlightSummary={highlightSummary}
+        ended={clock.status === 'ended'}
       />
     </main>
   );

@@ -651,6 +651,17 @@ describe('LiveScreen — 하이라이트 카드', () => {
   });
 });
 
+describe('LiveScreen — 라이브 문구', () => {
+  it('방송 중에는 라이브 문구 그대로다: 실시간 채팅·실시간 통계·자동 감지 중·그래프 끝 「지금」', async () => {
+    await renderLive();
+
+    expect(screen.getByRole('complementary', { name: '실시간 채팅' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '실시간 통계' })).toBeInTheDocument();
+    expect(screen.getByText('자동 감지 중 · 카드 클릭 = 시점 이동')).toBeInTheDocument();
+    expect(screen.getByText('지금')).toBeInTheDocument();
+  });
+});
+
 describe('LiveScreen — 수동 마킹', () => {
   // 이 파일은 전부 fireEvent다 — userEvent는 가짜 시계와 엉켜 멈춘다(GlassPlayer 자동 숨김 케이스와 같은 이유).
 
@@ -992,6 +1003,20 @@ describe('LiveScreen — 지난 방송 상세', () => {
     expect(froms).toContain(
       new Date(VOD_STARTED + 32_000 + 2_842_000 - 60_000 + 3_900).toISOString(),
     );
+  });
+
+  it('지난 방송은 라이브 문구를 쓰지 않는다: 채팅 기록·방송 통계, 감지 중 안내 없음, 그래프 끝은 끝난 시각', async () => {
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBeInTheDocument();
+    expect(screen.queryByRole('complementary', { name: '실시간 채팅' })).toBeNull();
+    expect(screen.getByRole('region', { name: '방송 통계' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: '실시간 통계' })).toBeNull();
+    expect(screen.getByText('카드 클릭 = 시점 이동')).toBeInTheDocument();
+    expect(screen.queryByText(/자동 감지 중/)).toBeNull();
+    // 끝난 방송에 「지금」은 없다 — 그래프 오른쪽 끝은 마지막 칸이 끝난 시각이다
+    expect(screen.queryByText('지금')).toBeNull();
   });
 
   it('틀고 있는 녹화가 있으면 채팅도 그 녹화 기준이다 — 플레이어와 같은 축이어야 영상과 맞는다', async () => {

@@ -180,6 +180,7 @@ function GlassPlayerBody({
   onToggleChatPanel,
   controllerRef,
   onUptimeChange,
+  recorded,
   sim,
   videoNode,
 }: GlassPlayerBodyProps) {
@@ -374,9 +375,11 @@ function GlassPlayerBody({
           onSeekBy={sim.seekBy}
           onReturnToLive={sim.returnToLive}
           onSeekingChange={setSeeking}
+          replay={Boolean(recorded)}
         />
         <PlayerControls
           sim={sim}
+          replay={Boolean(recorded)}
           chatToggle={
             overlayChat && fullscreen
               ? { on: chatOn, onToggle: () => setChatOn((on) => !on), ref: chatToggleRef }

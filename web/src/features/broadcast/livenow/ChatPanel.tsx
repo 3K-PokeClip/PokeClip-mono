@@ -97,12 +97,14 @@ export const ChatPanel = memo(function ChatPanel({
   }, [following, handleScroll]);
 
   const rateLabel = `분당 ${ratePerMinute.toLocaleString('ko-KR')}`;
+  // 끝난 방송의 채팅은 흐르는 것이 아니라 남은 기록이다(QA 2026-10-11)
+  const heading = mode === 'ended' ? '채팅 기록' : '실시간 채팅';
 
   return (
-    <aside className={styles.chatPanel} aria-label="실시간 채팅">
+    <aside className={styles.chatPanel} aria-label={heading}>
       <div className={styles.chatHeader}>
         <MessageSquare size={15} aria-hidden className={styles.chatHeaderIcon} />
-        <span className={styles.chatHeading}>실시간 채팅</span>
+        <span className={styles.chatHeading}>{heading}</span>
         {/* 배지를 갈아끼우는 게 아니라 늘 서 있는 리전 안에서 글만 바꾼다 —
             지운 경고 배너가 갖고 있던 role="status"를 여기가 승계한다. 없으면 수집이
             끊기는 순간을 눈으로 보는 사람만 알고, 듣는 사람은 헤더로 돌아와야 안다. */}
