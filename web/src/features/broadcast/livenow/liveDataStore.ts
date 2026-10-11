@@ -9,10 +9,17 @@ export interface LiveChartBucket {
   chats: number;
   donations: number;
 }
+/**
+ * 차트가 실제로 읽은 창. 방송 전체 · 끝 12시간(그보다 긴 방송) · 지금 기준 최근 10분(라이브, 또는 방송 정보를 아직 모를 때).
+ * 이름표(「방송 중 채팅」·그래프 끝 시각)는 방송 상태가 아니라 이 값을 본다: 상태로 다시 계산하면 아직 남아 있는 다른 창의
+ * 차트에 엉뚱한 이름을 붙인다(QA 2026-10-11 리뷰 2라운드)
+ */
+export type LiveChartScope = 'broadcast' | 'tail' | 'recent';
 export interface LiveChart {
   bucketSeconds: number;
   buckets: LiveChartBucket[];
   appliedOffsetMs: number;
+  scope: LiveChartScope;
 }
 export interface LiveInfo {
   latest: { title: string | null; tags: string[]; category: string | null } | null;

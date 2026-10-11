@@ -33,8 +33,8 @@ function forwardTarget(recorded: RecordingTimeline, seconds: number): number {
 }
 
 /**
- * @param startAtSeconds 처음 달라는 줄기의 자리(방송 기준 초). 마운트 때 한 번만 읽는다. 선 다음에 옮기면 개발 서버(StrictMode)가
- *   새로 선 부품을 껐다 켤 때 기다리던 이동이 지워져 처음부터 튼다(QA 2026-10-11). 고른 시점이 있으면 여기로 준다
+ * @param startAtSeconds 처음 달라는 줄기의 자리(방송 기준 초). 마운트 때 한 번만 읽는다. 녹화가 서기 전에 고른 시점(홈에서 고른
+ *   카드 등)은 옮길 플레이어가 없었으므로 여기로 받아 첫 줄기부터 그 자리다(QA 2026-10-11). 선 다음의 이동은 컨트롤러로 한다
  */
 export function useRecordedPlayback(
   videoRef: RefObject<HTMLVideoElement | null>,
@@ -132,14 +132,13 @@ export function useRecordedPlayback(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src, videoRef]);
 
-  /** 디바운스가 끝나 아직 걸지 않은 이동의 도착점 */
-  const pendingJumpRef = useRef<number | null>(null);
   /**
    * 도착점으로 줄기를 옮긴다. 지금 줄기가 이미 그 자리에서 시작하면 주소가 같아 다시 받지 않으므로 줄기 처음으로 되감는다:
-   * 같은 카드를 다시 눌렀는데 영상이 그대로 흐르던 결함(QA 2026-10-11 리뷰)
+   * 같은 카드를 다시 눌렀는데 영상이 그대로 흐르던 결함(QA 2026-10-11 리뷰). 같은 자리인지는 주소가 쓰는 ms로 가른다:
+   * 1ms 안쪽 차이를 다른 자리로 보면 같은 주소라 다시 받지도 되감지도 않는다(리뷰 2라운드)
    */
   const landRef = useRef((target: number) => {
-    if (target !== offsetRef.current) {
+    if (Math.round(target * 1000) !== Math.round(offsetRef.current * 1000)) {
       setOffset(target);
       return;
     }
@@ -157,29 +156,15 @@ export function useRecordedPlayback(
         : forwardTarget(recordedRef.current, seconds);
       setPosition(target);
       if (seekTimer.current !== null) window.clearTimeout(seekTimer.current);
-      pendingJumpRef.current = target;
-      // 시크바를 끄는 동안 매 좌표마다 새 줄기를 받지 않는다
+      // 시크바를 끄는 동안 매 좌표마다 새 줄기를 받지 않는다. 언마운트 때 이 타이머를 지우지 않는다: 진짜 언마운트면 걸려도
+      // 아무 일도 없고(영상 노드가 떨어져 있다), 개발 서버(StrictMode)가 새로 선 부품을 껐다 켤 때 선 직후에 건 이동을
+      // 잃지 않는다(QA 2026-10-11)
       seekTimer.current = window.setTimeout(() => {
         seekTimer.current = null;
-        pendingJumpRef.current = null;
         landRef.current(target);
       }, SEEK_DEBOUNCE_MS);
     },
     [total],
-  );
-
-  // 기다리던 이동은 버리지 않고 바로 건다. 진짜 언마운트면 아무 일도 하지 않고, 개발 서버(StrictMode)가 새로 선 부품을
-  // 껐다 켤 때는 선 직후에 건 이동(홈에서 고른 카드 등)을 잃지 않는다(QA 2026-10-11)
-  useEffect(
-    () => () => {
-      if (seekTimer.current === null) return;
-      window.clearTimeout(seekTimer.current);
-      seekTimer.current = null;
-      const pending = pendingJumpRef.current;
-      pendingJumpRef.current = null;
-      if (pending !== null) landRef.current(pending);
-    },
-    [],
   );
 
   const behindSeconds = Math.max(0, Math.round(total - position));

@@ -47,11 +47,6 @@ function usableWindow(windowSeconds: number): number {
 }
 
 /**
- * 라이브 엣지 대비 시차 표기 — 계약3 4절: `-01:23` 형태(분 2자리), 1시간부터 `-1:00:00`.
- * 시안 프로토타입의 `-1:23` 표기 대신 티켓·계약 표기를 따른다.
- * 라이브는 창이 1시간이라 `-1:00:00`을 넘지 않고, 1시간 넘는 녹화 다시보기는 `-1:23:45`까지 간다(POK-253).
- */
-/**
  * 오른쪽 끝을 부르는 말. 라이브는 실시간이고, 녹화 다시보기는 녹화 끝이다(QA 2026-10-11). 버튼 글자·이름과 시크바 낭독이
  * 이 표 하나를 쓴다: 따로 적으면 한쪽만 바뀌어 화면과 화면 낭독기가 다른 말을 한다
  */
@@ -76,6 +71,11 @@ export function edgeWords(replay: boolean): (typeof EDGE_WORDS)[keyof typeof EDG
   return replay ? EDGE_WORDS.replay : EDGE_WORDS.live;
 }
 
+/**
+ * 라이브 엣지 대비 시차 표기 — 계약3 4절: `-01:23` 형태(분 2자리), 1시간부터 `-1:00:00`.
+ * 시안 프로토타입의 `-1:23` 표기 대신 티켓·계약 표기를 따른다.
+ * 라이브는 창이 1시간이라 `-1:00:00`을 넘지 않고, 1시간 넘는 녹화 다시보기는 `-1:23:45`까지 간다(POK-253).
+ */
 export function formatBehind(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
   if (s >= LIVE_WINDOW_SECONDS) {

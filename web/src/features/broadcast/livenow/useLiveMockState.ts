@@ -14,6 +14,7 @@ import {
   publishLiveData,
   timeBaseOf,
   useLiveData,
+  type LiveChart,
   type RelayEvent,
 } from './liveDataStore';
 
@@ -245,7 +246,7 @@ function parseSseBlock(block: string): { event: string; data: string } | null {
 
 export function useLiveMockState(): LiveMockState {
   const [cards, setCards] = useState<Record<number, Snapshot>>({});
-  const [chart, setChart] = useState<ChartPage | null>(null);
+  const [chart, setChart] = useState<LiveChart | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [sseOk, setSseOk] = useState(false);
   const [info, setInfo] = useState<BroadcastInfoResponse | null>(null);
@@ -329,9 +330,10 @@ export function useLiveMockState(): LiveMockState {
           const first = pages[0];
           // 한 조각이라도 못 받으면 구멍 난 차트를 그리지 않는다 — 다음 주기에 다시
           if (first && pages.every((pg) => pg !== null)) {
-            const joined: ChartPage = {
+            const joined: LiveChart = {
               ...first,
               buckets: pages.flatMap((pg) => (pg as ChartPage).buckets),
+              scope: start === rg.startedAt ? 'broadcast' : 'tail',
             };
             setChart(joined);
             publishLiveData({ chart: joined });
@@ -351,8 +353,9 @@ export function useLiveMockState(): LiveMockState {
           `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-chart?${qs}`,
         );
         if (page) {
-          setChart(page);
-          publishLiveData({ chart: page });
+          const recent: LiveChart = { ...page, scope: 'recent' };
+          setChart(recent);
+          publishLiveData({ chart: recent });
         }
       } catch {
         /* 다음 주기에 다시 */
@@ -505,9 +508,6 @@ export function useLiveMockState(): LiveMockState {
   }, [cards, now]);
   const hiddenCount = useMemo(() => Object.values(cards).filter((c) => c.hidden).length, [cards]);
 
-  /** 차트가 방송 전체를 읽었나. loadChart가 창을 고르는 조건과 같다(아니면 지금 기준 최근 10분) */
-  const wholeBroadcast =
-    live.status === 'ended' && live.startedAt !== null && live.endedAt !== null;
   const chatVolume = useMemo<ChatVolumeSeries>(() => {
     if (!chart || chart.buckets.length === 0)
       return {
@@ -561,10 +561,10 @@ export function useLiveMockState(): LiveMockState {
         lab(t0),
         lab(t0 + (t1 - t0) / 3),
         lab(t0 + ((t1 - t0) * 2) / 3),
-        wholeBroadcast ? lab(t1) : '지금',
+        chart.scope === 'recent' ? '지금' : lab(t1),
       ],
     };
-  }, [chart, cards, base, wholeBroadcast]);
+  }, [chart, cards, base]);
 
   const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
   const { data: me } = useMe();

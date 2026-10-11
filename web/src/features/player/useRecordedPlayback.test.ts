@@ -317,6 +317,23 @@ describe('useRecordedPlayback: 이동이 사라지지 않는다', () => {
     expect(video.currentTime).toBe(0);
   });
 
+  it('같은 자리인지는 주소가 쓰는 ms로 가른다: 1ms 안쪽 차이로 새 주소도 되감기도 없이 멈추지 않는다', () => {
+    // 녹화 길이에 소수가 있으면 카드 경로(비율 반올림)의 도착점이 시작 위치와 1ms 안쪽으로 다르다(리뷰 2라운드)
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([[0, 100.0004]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded, 42));
+    video.currentTime = 30;
+
+    act(() => {
+      result.current.seekToFraction(0.42);
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(requested(video).fromSeconds).toBe(42);
+    expect(video.currentTime).toBe(0);
+  });
+
   it('선 직후에 건 이동도 StrictMode가 껐다 켜는 사이에 잃지 않는다', () => {
     const { video } = fakeVideo();
     const ref = { current: video };

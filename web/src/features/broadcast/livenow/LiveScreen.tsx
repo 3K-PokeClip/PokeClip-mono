@@ -14,7 +14,7 @@ import { StreamInfoBar } from './StreamInfoBar';
 import { notFound, usePathname, useSearchParams } from 'next/navigation';
 import { requestPlaybackAccess } from '@/api/clipEditor';
 import { useToast } from '@/ui';
-import { vodStreamIdFromPath } from '@/features/broadcast/streamSelection';
+import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { fetchRecordingSpans } from '@/api/mediaPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
 import { rebaseTimeline, recordingTimeline } from '@/features/player/recordingTimeline';
@@ -178,20 +178,21 @@ function LiveDashboard() {
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const { streamId, info } = useLiveData();
   const clock = useBroadcastClock(streamId);
+  // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
+  const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   // 지난 방송 상세 주소로 들어왔는데 그 방송이 명부에 없으면(없는 번호·권한 회수) 404 화면으로 보낸다 —
   // 빈 대시보드를 보여 주지 않는다(PR #200 codex, 404 계약: README 「404 계약」)
   if (
     clock.missingStreamId !== null &&
     clock.missingStreamId === streamId &&
-    vodStreamIdFromPath() === streamId
+    vodRouteId === streamId
   )
     notFound();
   const playerRef = useRef<GlassPlayerController>(null);
   const { toast } = useToast();
-  // 지난 방송 주소면 명부 답을 받기 전에도 끝난 방송이다. 시계가 'unknown'인 동안(조회가 늦거나 실패) 라이브 문구를
-  // 보이지 않는다(QA 2026-10-11 리뷰). 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
-  const onVodRoute = (usePathname() ?? '').startsWith('/broadcast/vod/');
-  const viewStatus = clock.status === 'unknown' && onVodRoute ? 'ended' : clock.status;
+  // 지난 방송 주소면 명부가 방송 중이라고 답하기 전까지 끝난 방송이다. 방송 번호를 정하기 전(offline)이나 명부 조회가
+  // 늦거나 실패한 동안(unknown) 라이브 문구로 깜박이지 않는다(QA 2026-10-11 리뷰)
+  const viewStatus = vodRouteId !== null && clock.status !== 'live' ? 'ended' : clock.status;
   const ended = viewStatus === 'ended';
 
   const uptimeSeconds = clock.uptimeSeconds;
@@ -207,11 +208,17 @@ function LiveDashboard() {
   const stats = useLiveStatsMockState();
 
   // 시청자 수는 broadcast-info의 series 마지막 값 — 수집기 PR-C 전에는 없다. 끝난 방송은 지금 보는 사람이 아니라
-  // 끝날 때 값이다(QA 2026-10-11 리뷰: 며칠 전 방송을 지금 1,842명이 보는 것처럼 읽혔다)
+  // 끝날 때 값이다(QA 2026-10-11 리뷰: 며칠 전 방송을 지금 1,842명이 보는 것처럼 읽혔다). 수집기는 목록에서 채널을
+  // 못 찾은 회차를 빈 값으로 남기므로 끝난 방송은 마지막으로 잰 값을 쓴다. 방송 정보를 받기 전이면 「기록 없음」이라
+  // 단정하지 않는다
   const viewersLabel = useMemo(() => {
+    if (ended) {
+      if (!info) return '시청자 수 확인 중';
+      const v = info.series?.findLast((p) => p.viewers !== null)?.viewers ?? null;
+      return v === null ? '시청자 수 기록 없음' : `끝날 때 ${v.toLocaleString()}명 시청`;
+    }
     const last = info?.series?.length ? info.series[info.series.length - 1] : null;
     const v = last?.viewers ?? null;
-    if (ended) return v === null ? '시청자 수 기록 없음' : `끝날 때 ${v.toLocaleString()}명 시청`;
     return v === null ? '시청자 수 수집 전' : `${v.toLocaleString()}명 시청 중`;
   }, [info, ended]);
 
@@ -243,10 +250,12 @@ function LiveDashboard() {
       // 영상이 없어도 채팅 패널이 그 시점을 보여준다(지난 방송)
       publishLiveData({ playheadMs: seconds * 1000 });
       const moved = playerRef.current?.seekToUptime(seconds) ?? false;
-      setPendingStart(moved ? null : { streamId, seconds });
+      // 녹화의 시작 위치로 남기는 것은 끝난 방송만이다. 라이브 영상(HLS)은 시작 위치를 읽지 않아, 남겨 두면 방송이 끝나
+      // 녹화로 바뀔 때 오래전 카드로 튄다(리뷰 2라운드)
+      setPendingStart(moved || !ended ? null : { streamId, seconds });
       return moved;
     },
-    [streamId],
+    [streamId, ended],
   );
   const handleRecordedReady = useCallback(() => setPendingStart(null), []);
 
@@ -270,11 +279,17 @@ function LiveDashboard() {
       const seconds = parseClockLabel(timestamp);
       if (seconds === null) return;
       linkedDoneRef.current = linkedCardId;
-      // 사람이 누른 것만 알린다. 주소의 카드로 옮길 때는 녹화를 찾는 중일 뿐이라 말하지 않는다(리뷰)
+      // 사람이 누른 것만 알린다. 주소의 카드로 옮길 때는 녹화를 찾는 중일 뿐이라 말하지 않는다(리뷰).
+      // 채팅이 그 시점으로 가는 것은 지난 방송뿐이다: 라이브 채팅은 최신 그대로라 옮겼다고 하면 거짓이다(리뷰 2라운드)
       if (!seekTo(seconds))
-        toast({ tone: 'info', title: '영상은 아직 없어요 · 채팅을 그 시점으로 옮겼어요' });
+        toast({
+          tone: 'info',
+          title: chat.followsPlayhead
+            ? '영상은 아직 없어요 · 채팅을 그 시점으로 옮겼어요'
+            : '영상은 아직 없어요',
+        });
     },
-    [linkedCardId, seekTo, toast],
+    [linkedCardId, seekTo, toast, chat.followsPlayhead],
   );
 
   return (

@@ -478,6 +478,18 @@ describe('GlassPlayer: 바깥 이동 명령의 결과', () => {
     expect(screen.queryByText(/영상은 아직 없어요/)).toBeNull();
   });
 
+  it('되감을 구간이 아직 없으면 옮기지 못했다고 돌려준다: 라이브 영상이 목록을 받기 전이다', () => {
+    // 라이브 영상(HLS)은 목록을 받기 전에 되감을 구간이 0초라 이동을 조용히 버린다. 옮겼다고 하면 알림도 없이 사라진다(리뷰 2라운드)
+    const controllerRef = createRef<GlassPlayerController>();
+    renderPlayer({ initialUptimeSeconds: 0 }, { controllerRef });
+
+    let moved: boolean | undefined;
+    act(() => {
+      moved = controllerRef.current?.seekToUptime(10);
+    });
+    expect(moved).toBe(false);
+  });
+
   it('재생 중인 플레이어는 옮겼다고 돌려준다', () => {
     const controllerRef = createRef<GlassPlayerController>();
     renderPlayer(undefined, { controllerRef });

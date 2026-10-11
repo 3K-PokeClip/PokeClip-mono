@@ -37,6 +37,8 @@ export interface ChatPanelMockState {
   messages: ChatPanelMessage[];
   /** 하단 상태줄의 「분당 N」 — 최근 1분 채팅 수(지난 방송은 전체 평균) */
   ratePerMinute: number;
+  /** 고른 시점 앞뒤 채팅을 보여 주나(지난 방송). 아니면 시점을 골라도 최신 채팅 그대로다 */
+  followsPlayhead: boolean;
 }
 
 // ── clip 창구 배선: chat-messages(메우기·지난 방송) + 카드 통로 중계(라이브) ──
@@ -347,10 +349,14 @@ export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
 
   const ratePerMinute = useMemo(() => {
     if (isVod && live.startedAt !== null && live.endedAt !== null) {
-      const minutes = Math.max(1, (live.endedAt - live.startedAt) / 60_000);
-      // 받아 둔 채팅은 창마다 상한이 있어 일부일 수 있다 — 차트가 센 전체 수를 쓴다. 차트가 없을 때만 받은 수로 대신한다
-      const total = live.chart ? live.chart.buckets.reduce((a, b) => a + b.chats, 0) : items.length;
-      return Math.round(total / minutes);
+      // 받아 둔 채팅은 창마다 상한이 있어 일부일 수 있다: 차트가 센 수를 차트가 읽은 길이로 나눈다(12시간 넘는 방송은
+      // 끝 12시간만 읽는다). 방송 차트를 아직 못 받았으면(최근 창뿐) 받은 수를 방송 길이로 나눠 대신한다(리뷰 2라운드)
+      const chart = live.chart;
+      if (chart && chart.scope !== 'recent') {
+        const chartMinutes = Math.max(1, (chart.buckets.length * chart.bucketSeconds) / 60);
+        return Math.round(chart.buckets.reduce((a, b) => a + b.chats, 0) / chartMinutes);
+      }
+      return Math.round(items.length / Math.max(1, (live.endedAt - live.startedAt) / 60_000));
     }
     const cut = Date.now() - 60_000 + CHAT_LEAD_MS;
     return items.filter((it) => Date.parse(it.time) >= cut).length;
@@ -374,5 +380,5 @@ export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
       .map(([keyword, count]) => ({ keyword, count }));
   }, [items]);
 
-  return { surges, messages, ratePerMinute };
+  return { surges, messages, ratePerMinute, followsPlayhead: isVod };
 }

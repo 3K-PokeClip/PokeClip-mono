@@ -43,8 +43,9 @@ import { useSimulatedChat } from './useSimulatedChat';
 /** 바깥에서 플레이어에 내리는 명령 — sim이 Body 안에서 생겨 상태로는 끌어올릴 수 없다 */
 export interface GlassPlayerController {
   /**
-   * 방송 경과 시각(초)으로 이동 — 되감기 창 밖은 가장 오래된 지점으로 클램프. 옮길 영상이 없으면(자리 표시) false를
-   * 돌려준다: 녹화를 찾는 중일 수도, 아예 없을 수도 있어 무엇을 말할지는 부른 쪽이 정한다(QA 2026-10-11 리뷰)
+   * 방송 경과 시각(초)으로 이동 — 되감기 창 밖은 가장 오래된 지점으로 클램프. 옮길 영상이 없거나(자리 표시) 아직 되감을
+   * 구간이 없으면(라이브 영상이 목록을 받기 전) false를 돌려준다: 녹화를 찾는 중일 수도, 아예 없을 수도 있어 무엇을 말할지는
+   * 부른 쪽이 정한다(QA 2026-10-11 리뷰)
    */
   seekToUptime: (uptimeSeconds: number) => boolean;
 }
@@ -94,7 +95,7 @@ function SimulatedGlassPlayer(props: GlassPlayerProps) {
 }
 /**
  * media 서버가 없을 때의 플레이어 — 같은 프레임 안에 사실만 적는다.
- * 움직이는 진행바·재생 버튼·시간 표기가 없다(지어낼 수 없다). 시점 이동 명령은 토스트로 거절한다.
+ * 움직이는 진행바·재생 버튼·시간 표기가 없다(지어낼 수 없다). 시점 이동 명령은 false로 거절한다(알릴지는 부르는 쪽이 정한다).
  */
 function NoSignalGlassPlayer({
   channelName,
@@ -262,6 +263,8 @@ function GlassPlayerBody({
     controllerRef,
     () => ({
       seekToUptime: (target: number) => {
+        // 옮겼다고 하면 고른 시점이 알림도 없이 사라진다(리뷰 2라운드)
+        if (sim.windowSeconds <= 0) return false;
         const behind = Math.min(sim.windowSeconds, Math.max(0, sim.uptimeSeconds - target));
         sim.seekToFraction(progressFraction(behind, sim.windowSeconds));
         sim.wake();
