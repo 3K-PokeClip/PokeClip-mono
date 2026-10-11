@@ -26,6 +26,8 @@ vi.mock('next/navigation', () => ({
 const mediaCalls = vi.hoisted(() => ({
   keys: [] as (string | null | undefined)[],
   spans: [] as string[],
+  /** 녹화 목록의 답. null이면 실제 구현이다(재생 서버를 안 정해 늘 빈 목록) */
+  answer: null as Promise<{ startMs: number; durationSeconds: number }[]> | null,
 }));
 vi.mock('@/features/player/mediaSource', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/player/mediaSource')>();
@@ -43,7 +45,7 @@ vi.mock('@/api/mediaPlayback', async (importOriginal) => {
     ...actual,
     fetchRecordingSpans: (streamId: string) => {
       mediaCalls.spans.push(streamId);
-      return actual.fetchRecordingSpans(streamId);
+      return mediaCalls.answer ?? actual.fetchRecordingSpans(streamId);
     },
   };
 });
@@ -310,6 +312,7 @@ beforeEach(() => {
   server.infoTitleMissing = false;
   mediaCalls.keys = [];
   mediaCalls.spans = [];
+  mediaCalls.answer = null;
   server.live = true;
   server.failLive = false;
   server.relation = 'OWNER';
@@ -571,7 +574,7 @@ describe('LiveScreen — 하이라이트 카드', () => {
     expect(screen.getByText(/^97점 · /)).toBeInTheDocument();
   });
 
-  it('강조는 맨 앞 카드 하나뿐이다 — 여럿이면 「방금」이라는 뜻을 잃는다', async () => {
+  it('강조는 맨 앞 카드 하나뿐이다: 여럿이면 「방금」이라는 뜻을 잃는다', async () => {
     const { container } = await renderLive();
     expect(container.querySelectorAll('[class*="cardEmphasized"]')).toHaveLength(1);
   });
@@ -629,7 +632,7 @@ describe('LiveScreen — 하이라이트 카드', () => {
   });
 });
 
-describe('LiveScreen — 라이브 문구', () => {
+describe('LiveScreen: 라이브 문구', () => {
   it('방송 중에는 라이브 문구 그대로다: 실시간 채팅·실시간 통계·자동 감지 중·그래프 끝 「지금」', async () => {
     await renderLive();
 
@@ -644,7 +647,7 @@ describe('LiveScreen — 수동 마킹', () => {
   // 이 파일은 전부 fireEvent다 — userEvent는 가짜 시계와 엉켜 멈춘다(GlassPlayer 자동 숨김 케이스와 같은 이유).
   //
   // 누른 순간을 서버에 카드로 남기는 길이 아직 없다(POK-257, MVP 밖). 화면에만 카드를 세우면 새로 고침에 사라지고 편집도
-  // 못 하는 가짜 성공이다(QA 2026-10-11) — 준비 중이라고만 말한다.
+  // 못 하는 가짜 성공이다(QA 2026-10-11). 준비 중이라고만 말한다.
   const PREPARING = '수동 마킹은 아직 준비 중이에요. 준비되면 알려드릴게요.';
 
   afterEach(() => {
@@ -662,7 +665,7 @@ describe('LiveScreen — 수동 마킹', () => {
     });
     expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
     expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).not.toBeInTheDocument();
-    // 카드 수·필터·지표가 그대로다 — 서버에 없는 카드를 세지 않는다
+    // 카드 수·필터·지표가 그대로다. 서버에 없는 카드를 세지 않는다
     expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
     expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
@@ -799,7 +802,7 @@ describe('LiveScreen — 실시간 통계', () => {
     expect(note.nextElementSibling).toHaveTextContent('8');
   });
 
-  it('하이라이트 지표는 카드 목록에서 센다 — 필터 칩과 같은 수다', async () => {
+  it('하이라이트 지표는 카드 목록에서 센다: 필터 칩과 같은 수다', async () => {
     await renderLive();
 
     expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
@@ -885,6 +888,76 @@ describe('LiveScreen — 영상 경로의 키(POK-233)', () => {
   });
 });
 
+describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
+  // 홈 「최근 하이라이트」는 지난 방송 주소에 ?card= 를 싣는다(QA 2026-10-11). 전에는 방송 번호만 실어 처음부터 틀었다
+  afterEach(() => {
+    window.history.pushState({}, '', '/');
+  });
+
+  /** 지금 녹화 플레이어가 달라고 한 줄기의 시작(epoch ms) */
+  function requestedStart(container: HTMLElement): number | null {
+    const video = container.querySelector('video');
+    if (video === null || video.src === '') return null;
+    return Date.parse(new URL(video.src, 'http://localhost').searchParams.get('start') ?? '');
+  }
+
+  function stubMediaElement() {
+    // jsdom에는 미디어 재생이 없다. 재생 요청만 받아 둔다
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+  }
+
+  it('녹화가 없으면 채팅을 그 카드 시점으로 옮긴다', async () => {
+    server.vodOrigin = VOD_STARTED + 32_000;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}?card=4`);
+    await renderLive();
+
+    const froms = fetchSpy.mock.calls
+      .map(([url]) => new URL(String(url), 'http://localhost'))
+      .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
+      .map((u) => u.searchParams.get('from'));
+    expect(froms).toContain(
+      new Date(VOD_STARTED + 32_000 + 2_842_000 - 60_000 + 3_900).toISOString(),
+    );
+  });
+
+  it('녹화가 있으면 녹화가 뜨는 대로 그 카드 시점부터 튼다: 처음부터 틀지 않는다', async () => {
+    stubMediaElement();
+    server.vodOrigin = VOD_STARTED;
+    mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}?card=4`);
+    const { container } = await renderLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    expect(requestedStart(container)).toBe(VOD_STARTED + 2_842_000);
+  });
+
+  it('녹화를 찾는 동안 누른 카드도 녹화가 뜨면 그 시점부터다', async () => {
+    stubMediaElement();
+    server.vodOrigin = VOD_STARTED;
+    let answer: (spans: { startMs: number; durationSeconds: number }[]) => void = () => undefined;
+    mediaCalls.answer = new Promise((resolve) => {
+      answer = resolve;
+    });
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    const { container } = await renderLive();
+
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await act(async () => {
+      answer([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    expect(requestedStart(container)).toBe(VOD_STARTED + 2_842_000);
+  });
+});
+
 describe('LiveScreen — 지난 방송 상세', () => {
   afterEach(() => {
     window.history.pushState({}, '', '/');
@@ -966,7 +1039,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     expect(screen.queryByRole('region', { name: '실시간 통계' })).toBeNull();
     expect(screen.getByText('카드 클릭 = 시점 이동')).toBeInTheDocument();
     expect(screen.queryByText(/자동 감지 중/)).toBeNull();
-    // 끝난 방송에 「지금」은 없다 — 그래프 오른쪽 끝은 마지막 칸이 끝난 시각이다
+    // 끝난 방송에 「지금」은 없다. 그래프 오른쪽 끝은 마지막 칸이 끝난 시각이다
     expect(screen.queryByText('지금')).toBeNull();
   });
 

@@ -331,9 +331,10 @@ async function loadHome(now: number): Promise<Loaded | null> {
         positionLabel: msToClock(c.streamTimestampMs),
         score: c.score,
         createdAt: c.createdAt,
+        // 지난 방송은 카드 번호를 싣는다. 방송 번호만 실으면 그 화면이 처음부터 튼다(QA 2026-10-11)
         href: isLive
           ? `/broadcast/livenow?stream=${encodeURIComponent(streamId)}`
-          : `/broadcast/vod/${encodeURIComponent(streamId)}`,
+          : `/broadcast/vod/${encodeURIComponent(streamId)}?card=${encodeURIComponent(String(c.id))}`,
         isLive,
       });
     }

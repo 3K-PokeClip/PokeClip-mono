@@ -13,7 +13,7 @@ import { LiveStatsPanel } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
 import { notFound } from 'next/navigation';
 import { requestPlaybackAccess } from '@/api/clipEditor';
-import { vodStreamIdFromPath } from '@/features/broadcast/streamSelection';
+import { cardIdFromSearch, vodStreamIdFromPath } from '@/features/broadcast/streamSelection';
 import { fetchRecordingSpans } from '@/api/mediaPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
 import { rebaseTimeline, recordingTimeline } from '@/features/player/recordingTimeline';
@@ -61,6 +61,7 @@ function LivePlayer({
   controllerRef,
   chatPanelOpen,
   onToggleChatPanel,
+  onRecordedChange,
 }: {
   stream: LiveStream;
   viewersNote: string;
@@ -74,6 +75,8 @@ function LivePlayer({
   controllerRef: Ref<GlassPlayerController>;
   chatPanelOpen: boolean;
   onToggleChatPanel: () => void;
+  /** 녹화 플레이어가 섰다(true)·내려갔다(false). 선 뒤에 부르므로 그때는 controllerRef가 녹화 플레이어다 */
+  onRecordedChange: (ready: boolean) => void;
 }) {
   // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
   // 주소에 ?stream= 이 없으면 clip 명부에서 고른 방송(liveDataStore)의 영상을 튼다.
@@ -104,6 +107,9 @@ function LivePlayer({
       alive = false;
     };
   }, [broadcastStatus, mediaKey, startedAt, endedAt, originMs]);
+  useEffect(() => {
+    onRecordedChange(recorded !== null);
+  }, [recorded, onRecordedChange]);
   // 영상 출입증(POK-122) — 방송을 열 때 받고, 만료 5분 전에 다시 받는다. 쿠키 수명(운영 60분)이 지나면 새 조각이
   // 403이 되어 재생이 멈춘다(PR #200 codex P1). 실패하면 1분 뒤 다시 받는다. 서명 재료가 없는 서버(503)는
   // 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다. 실패해도 재생은 시도한다(로컬 media는 쿠키를 안 본다).
@@ -179,7 +185,7 @@ function LiveDashboard() {
 
   const uptimeSeconds = clock.uptimeSeconds;
   const uptimeLabel = uptimeSeconds === null ? null : formatUptime(uptimeSeconds);
-  // 서버에 남길 길이 생길 때까지 준비 중이라고만 말한다(POK-257) — 카드를 만들지 않는다
+  // 서버에 남길 길이 생길 때까지 준비 중이라고만 말한다(POK-257). 카드를 만들지 않는다
   const marking = useManualMarking();
   // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
@@ -204,20 +210,52 @@ function LiveDashboard() {
 
   // 필터 개수도 통계의 하이라이트 줄도 같은 카드 목록에서 센다. 어느 한쪽을 따로 세면 두 표기가 언젠가 어긋난다.
   //
-  // 경과 표기 때문에 이 컴포넌트는 매초 다시 그려진다 — 요약이 매번 새 객체면
+  // 경과 표기 때문에 이 컴포넌트는 매초 다시 그려진다. 요약이 매번 새 객체면
   // 아래 패널들의 memo가 통째로 무력해지므로 여기서 정체성을 붙잡아 둔다.
   const highlightSummary = useMemo(() => {
     const manual = highlights.filter((card) => card.source === 'manual').length;
     return { total: highlights.length, auto: highlights.length - manual, manual };
   }, [highlights]);
 
-  const handleSeek = useCallback((timestamp: string) => {
-    const seconds = parseClockLabel(timestamp);
-    if (seconds === null) return;
+  // 녹화는 방송을 연 뒤에 찾는다. 그 전에 고른 시점은 플레이어가 없어 사라지고, 뒤늦게 선 녹화는 처음부터 튼다.
+  // 그래서 녹화가 서면 마지막으로 고른 시점으로 옮긴다(QA 2026-10-11)
+  const recordedReadyRef = useRef(false);
+  const pendingSeekRef = useRef<number | null>(null);
+  const seekTo = useCallback((seconds: number) => {
     // 영상이 없어도 채팅 패널이 그 시점을 보여준다(지난 방송)
     publishLiveData({ playheadMs: seconds * 1000 });
     playerRef.current?.seekToUptime(seconds);
+    pendingSeekRef.current = recordedReadyRef.current ? null : seconds;
   }, []);
+  const handleRecordedChange = useCallback((ready: boolean) => {
+    recordedReadyRef.current = ready;
+    const pending = pendingSeekRef.current;
+    if (!ready || pending === null) return;
+    pendingSeekRef.current = null;
+    playerRef.current?.seekToUptime(pending);
+  }, []);
+
+  // 홈 「최근 하이라이트」가 주소에 실은 카드(?card=). 카드가 오는 대로 한 번 그 시점으로 옮긴다. 사람이 먼저 고르면 그쪽이다
+  const [linkedCardId] = useState(cardIdFromSearch);
+  const linkedDoneRef = useRef(false);
+  useEffect(() => {
+    if (linkedCardId === null || linkedDoneRef.current) return;
+    const card = highlights.find((h) => h.id === `card-${linkedCardId}`);
+    const seconds = card ? parseClockLabel(card.timestamp) : null;
+    if (seconds === null) return;
+    linkedDoneRef.current = true;
+    seekTo(seconds);
+  }, [highlights, linkedCardId, seekTo]);
+
+  const handleSeek = useCallback(
+    (timestamp: string) => {
+      const seconds = parseClockLabel(timestamp);
+      if (seconds === null) return;
+      linkedDoneRef.current = true;
+      seekTo(seconds);
+    },
+    [seekTo],
+  );
 
   return (
     <main className={styles.container}>
@@ -237,6 +275,7 @@ function LiveDashboard() {
                 controllerRef={playerRef}
                 chatPanelOpen={chatPanelOpen}
                 onToggleChatPanel={toggleChatPanel}
+                onRecordedChange={handleRecordedChange}
               />
             </Suspense>
           </div>

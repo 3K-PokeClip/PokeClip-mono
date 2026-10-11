@@ -13,6 +13,12 @@ export function vodStreamIdFromPath(): string | null {
   return m?.[1] ? decodeURIComponent(m[1]) : null;
 }
 
+/** 주소의 ?card= 값. 홈 「최근 하이라이트」가 그 카드 시점부터 보라고 싣는 카드 번호다. 없으면 null */
+export function cardIdFromSearch(): string | null {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search).get('card');
+}
+
 /** @param fresh 기억해 둔 답을 버리고 clip에 다시 묻는다 — 방송이 끝났는지 확인할 때 */
 /** 기억해 둔 답을 버린다 — 시험 사이에 앞 시험의 방송이 남지 않게 */
 export function forgetLiveStreamId() {
