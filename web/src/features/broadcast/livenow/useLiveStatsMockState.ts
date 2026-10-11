@@ -8,6 +8,7 @@ import { useMemo } from 'react';
 import { TIMELINE_HEIGHT, TIMELINE_WIDTH, type Point } from './statsTimeline';
 import {
   chartSpan,
+  formatPerMinute,
   missingWord,
   trustedViewerSeries,
   useLiveData,
@@ -28,12 +29,16 @@ export interface LiveMetric {
 }
 
 export interface LiveStatsMockState {
-  /** 시청자 추이 — 시안 뷰박스(860 × 150) 좌표. 수집 전이면 빈 배열 */
+  /** 시청자 추이: 시안 뷰박스(860 × 150) 좌표. 값이 없으면 빈 배열 */
   viewerLine: readonly Point[];
   /** 후원이 들어온 시점 마커 — 같은 뷰박스 좌표 */
   donations: readonly Point[];
   categorySegments: CategorySegment[];
   metrics: LiveMetric[];
+  /** 믿는 기록에서 마지막으로 잰 시청자 수(빈 관측은 건너뛴다). 정보 바·플레이어 필도 이것을 쓴다 */
+  lastViewers: number | null;
+  /** 시청자 값이 없을 때의 말(missingWord). 통계의 최고·평균과 정보 바가 같은 말을 한다 */
+  noViewers: string;
 }
 
 /** 채팅 수의 이름은 차트가 실제로 읽은 창대로다(QA 2026-10-11 리뷰): 방송 전체, 끝 12시간(그보다 긴 방송), 지금 기준 최근 창 */
@@ -115,7 +120,7 @@ export function useLiveStatsMockState(view: LiveBroadcastStatus): LiveStatsMockS
         : { label: '채팅', value: '확인 중' },
       {
         label: '분당 평균 채팅',
-        value: span ? (span.chats / span.minutes).toFixed(1) : '확인 중',
+        value: span ? formatPerMinute(span.chats / span.minutes) : '확인 중',
       },
       { label: '후원', value: chart ? `${totalDonations}회` : '확인 중' },
     ];
@@ -127,6 +132,7 @@ export function useLiveStatsMockState(view: LiveBroadcastStatus): LiveStatsMockS
         ? [{ label: category, minutes: Math.round(span.minutes), percent: 100 }]
         : [];
 
-    return { viewerLine, donations, categorySegments, metrics };
+    const lastViewers = series.at(-1)?.viewers ?? null;
+    return { viewerLine, donations, categorySegments, metrics, lastViewers, noViewers };
   }, [data, view]);
 }

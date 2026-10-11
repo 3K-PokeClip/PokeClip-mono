@@ -35,8 +35,10 @@ vi.mock('next/navigation', () => ({
 const mediaCalls = vi.hoisted(() => ({
   keys: [] as (string | null | undefined)[],
   spans: [] as string[],
-  /** 녹화 목록의 답. null이면 실제 구현이다(재생 서버를 안 정해 늘 빈 목록) */
-  answer: null as Promise<{ startMs: number; durationSeconds: number }[]> | null,
+  /** 녹화 목록의 답. null이면 실제 구현이다(재생 서버를 안 정해 늘 빈 목록). 답이 null이면 묻지 못한 것이다 */
+  answer: null as Promise<{ startMs: number; durationSeconds: number }[] | null> | null,
+  /** 재생 서버 주소가 정해졌나. 시험 환경은 비어 있다 */
+  configured: false,
 }));
 vi.mock('@/features/player/mediaSource', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/player/mediaSource')>();
@@ -52,9 +54,16 @@ vi.mock('@/api/mediaPlayback', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/mediaPlayback')>();
   return {
     ...actual,
+    playbackConfigured: () => mediaCalls.configured,
     fetchRecordingSpans: (streamId: string) => {
       mediaCalls.spans.push(streamId);
-      return mediaCalls.answer ?? actual.fetchRecordingSpans(streamId);
+      return (
+        mediaCalls.answer?.then((spans) => spans ?? []) ?? actual.fetchRecordingSpans(streamId)
+      );
+    },
+    lookupRecordingSpans: (streamId: string) => {
+      mediaCalls.spans.push(streamId);
+      return mediaCalls.answer ?? actual.lookupRecordingSpans(streamId);
     },
   };
 });
@@ -276,6 +285,12 @@ const server = vi.hoisted(() => ({
   infoNoLatest: false,
   /** 지난 방송 채팅: 1시간 창은 카드 시점의 채팅을 주지 않고(창마다 상한이 있다) 시점 앞뒤 60초 창만 그 1건을 준다 */
   vodFocusChat: false,
+  /** vodFocusChat의 시점 앞뒤 60초 창 답을 이 약속이 풀릴 때까지 붙든다 */
+  focusGate: null as Promise<void> | null,
+  /** 지난 방송 차트가 창마다 채팅 7건뿐이다(2시간 반 방송이면 분당 평균 0.7) */
+  vodChartSparse: false,
+  /** 지난 방송의 끝 시각을 이만큼 늦춘다(침묵으로 닫힌 방송에 진짜 종료가 뒤늦게 온 경우) */
+  vodEndShiftMs: 0,
 }));
 
 /** 지난 방송(2시간 반) — 수집기 1시간 창을 넘는다 */
@@ -302,7 +317,9 @@ function listResponse(u: URL): Response {
     status: 'ended',
     relation: 'OWNER',
     startedAt: server.vodStartUnknown ? null : new Date(VOD_STARTED).toISOString(),
-    endedAt: new Date(server.vodLong ? VOD_STARTED + 15 * 3_600_000 : VOD_ENDED).toISOString(),
+    endedAt: new Date(
+      (server.vodLong ? VOD_STARTED + 15 * 3_600_000 : VOD_ENDED) + server.vodEndShiftMs,
+    ).toISOString(),
     vodExpiresAt: null,
     timelineOriginAt: server.vodOrigin === null ? null : new Date(server.vodOrigin).toISOString(),
     ingestStreamId: server.ingest,
@@ -358,6 +375,11 @@ function handle(url: string) {
       return gate.then(() => jsonResponse(200, CHART));
   }
   if (path.endsWith('/chat-chart')) {
+    if (server.vodChartSparse && path.includes(`/${VOD_ID}/`))
+      return jsonResponse(200, {
+        ...CHART,
+        buckets: CHART.buckets.map((b, i) => ({ ...b, chats: i === 0 ? 7 : 0, donations: 0 })),
+      });
     if (server.vodChartFail && Date.parse(u.searchParams.get('from')!) < NOW - 3_600_000)
       return jsonResponse(503, { error: 'unavailable' });
     return jsonResponse(200, CHART);
@@ -376,7 +398,9 @@ function handle(url: string) {
       if (to - from > 5 * 60_000)
         return jsonResponse(200, { items: [], nextCursor: null, appliedOffsetMs: 0 });
       const item = { ...CHAT[0], id: 99, time: new Date(from + 30_000).toISOString() };
-      return jsonResponse(200, { items: [item], nextCursor: null, appliedOffsetMs: 0 });
+      const focus = () =>
+        jsonResponse(200, { items: [item], nextCursor: null, appliedOffsetMs: 0 });
+      return server.focusGate ? server.focusGate.then(focus) : focus();
     }
     // 채팅이 아주 많은 지난 방송 — 어느 창이든 쪽이 끝나지 않는다
     if (server.vodChatEndless && path.includes(`/${VOD_ID}/`))
@@ -445,6 +469,9 @@ beforeEach(() => {
   server.chartRecentGate = null;
   server.infoNoLatest = false;
   server.vodFocusChat = false;
+  server.focusGate = null;
+  server.vodChartSparse = false;
+  server.vodEndShiftMs = 0;
   chatModes.length = 0;
   playerStatuses.length = 0;
   // 앞 시험이 단언에서 멈춰도 지난 방송 주소가 다음 시험으로 새지 않는다
@@ -452,6 +479,7 @@ beforeEach(() => {
   mediaCalls.keys = [];
   mediaCalls.spans = [];
   mediaCalls.answer = null;
+  mediaCalls.configured = false;
   server.live = true;
   server.failLive = false;
   server.relation = 'OWNER';
@@ -1153,6 +1181,77 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
     expect(requestedStart(container)).toBe(VOD_STARTED);
   });
 
+  it('재생 서버가 잠깐 실패하면 녹화를 30초 뒤 다시 묻고, 녹화가 있으면 그때 튼다', async () => {
+    // 조회 실패를 빈 목록으로 접어 「녹화 영상을 찾지 못했어요」로 굳혔다. 다시 묻지도 않았다(리뷰 6라운드)
+    stubMediaElement();
+    mediaCalls.configured = true;
+    mediaCalls.answer = Promise.resolve(null);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    const { container } = await renderLive();
+    expect(screen.getByText('영상 서버에 아직 연결되지 않았어요')).toBeInTheDocument();
+    expect(screen.queryByText('녹화 영상을 찾지 못했어요')).toBeNull();
+
+    mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(requestedStart(container)).toBe(VOD_STARTED);
+  });
+
+  it('시작 시각을 아는 12시간 넘는 방송은 녹화 전체를 튼다: 앞쪽 카드에도 영상이 있어야 한다', async () => {
+    // 그래프·채팅은 끝 12시간만 읽지만 녹화까지 자르면 앞 3시간 카드는 영상이 없다(리뷰 6라운드에서 시험 빈틈을 찾음)
+    stubMediaElement();
+    server.vodLong = true;
+    // 송출이 한 번 끊긴 방송: 앞 구간(2시간)은 끝 12시간 창보다 먼저 끝난다. 창으로 자르면 이 구간이 빠진다
+    mediaCalls.answer = Promise.resolve([
+      { startMs: VOD_STARTED, durationSeconds: 2 * 3_600 },
+      { startMs: VOD_STARTED + 2 * 3_600_000 + 60_000, durationSeconds: 13 * 3_600 },
+    ]);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    const { container } = await renderLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    expect(requestedStart(container)).toBe(VOD_STARTED);
+  });
+
+  it('카드 시점 채팅을 읽는 동안은 그 수를 「확인 중」이라 쓴다: 모르는 수를 0건이라 하지 않는다', async () => {
+    let release: () => void = () => undefined;
+    server.vodFocusChat = true;
+    server.focusGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    openFromHome(4);
+    await renderLive();
+    expect(screen.getByText(/시점 앞뒤 60초 채팅 확인 중/)).toBeInTheDocument();
+
+    await act(async () => {
+      release();
+    });
+    await settle();
+    expect(screen.getByText(/시점 앞뒤 60초 채팅 1건/)).toBeInTheDocument();
+  });
+
+  it('방송 끝 시각이 고쳐져 채팅을 다시 읽어도 카드 시점의 채팅은 남는다', async () => {
+    // 1시간 창 읽기만 다시 돌며 처음에 비우고, 시점 읽기는 다시 돌지 않아 「채팅 0건」이 됐다(리뷰 6라운드)
+    server.vodFocusChat = true;
+    openFromHome(4);
+    await renderLive();
+    expect(screen.getByText(/시점 앞뒤 60초 채팅 1건/)).toBeInTheDocument();
+
+    server.vodEndShiftMs = 90_000;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await settle();
+    expect(screen.getByText(/시점 앞뒤 60초 채팅 1건/)).toBeInTheDocument();
+  });
+
   it('카드 시점의 채팅은 방송 전체 채팅을 다 읽은 뒤에도 남는다: 1시간 창은 상한이 있어 그 시점이 빠질 수 있다', async () => {
     // 시점 앞뒤 60초는 따로 끝까지 읽는다. 그런데 차례로 도는 1시간 창 읽기가 나중에 끝나며 통째로 덮어 「채팅 0건」이 됐다.
     // 카드는 채팅이 몰린 순간에 생겨 바로 그 자리가 빠진다(리뷰 5라운드)
@@ -1453,7 +1552,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     await renderLive();
 
     // 통계의 「분당 평균 채팅」과 같은 수다(소수 한 자리): 반올림이 다르면 한 화면에 1과 0.7이 선다(리뷰 5라운드)
-    expect(screen.getByText(/분당 48\.0$/)).toBeInTheDocument();
+    expect(screen.getByText(/분당 평균 48\.0$/)).toBeInTheDocument();
   });
 
   it('끝난 방송의 시청자 수는 비어 있는 마지막 관측이 아니라 마지막으로 잰 값이다', async () => {
@@ -1724,15 +1823,16 @@ describe('LiveScreen — 지난 방송 상세', () => {
     expect(screen.getByText('방송 정보 기록 없음')).toBeInTheDocument();
   });
 
-  it('끝난 방송의 영상 자리는 녹화를 찾는 동안 「찾는 중」, 없으면 「찾지 못했어요」다: 「아직 연결되지 않았어요」라고 하지 않는다', async () => {
+  it('끝난 방송의 영상 자리는 녹화를 확인하는 동안 「확인하고 있어요」, 없으면 「찾지 못했어요」다: 「아직 연결되지 않았어요」라고 하지 않는다', async () => {
     // 녹화가 없거나 보관 기간이 지난 방송에도 「아직」이라 해서 기다리면 나올 것처럼 읽혔다(리뷰 4라운드 실기동)
     let answer: (spans: { startMs: number; durationSeconds: number }[]) => void = () => undefined;
+    mediaCalls.configured = true;
     mediaCalls.answer = new Promise((resolve) => {
       answer = resolve;
     });
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
-    expect(screen.getByText('녹화 영상을 찾는 중이에요')).toBeInTheDocument();
+    expect(screen.getByText('녹화 영상을 확인하고 있어요')).toBeInTheDocument();
     expect(screen.queryByText(/아직 연결되지 않았어요/)).toBeNull();
 
     await act(async () => {
@@ -1740,6 +1840,66 @@ describe('LiveScreen — 지난 방송 상세', () => {
     });
     await settle();
     expect(screen.getByText('녹화 영상을 찾지 못했어요')).toBeInTheDocument();
+  });
+
+  it('재생 서버가 없는 환경에서는 녹화가 없다고 단정하지 않는다: 영상 서버에 아직 연결되지 않았다', async () => {
+    // dev·운영은 녹화 재생 서버 주소가 비어 있다. 묻지도 않고 끝난 방송마다 「녹화 영상을 찾지 못했어요」라고 했다(리뷰 6라운드).
+    // 녹화 답을 붙들어 두어도 「확인하고 있어요」라 하지 않는다: 물을 곳이 없다
+    mediaCalls.answer = new Promise(() => undefined);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.getByText('영상 서버에 아직 연결되지 않았어요')).toBeInTheDocument();
+    expect(screen.queryByText(/녹화 영상을/)).toBeNull();
+  });
+
+  it('지난 방송 주소는 명부 답 전에도 녹화를 확인하고 있다고 쓴다: 라이브 화면에는 녹화 말이 없다', async () => {
+    mediaCalls.configured = true;
+    server.listGate = new Promise(() => undefined);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.getByText('녹화 영상을 확인하고 있어요')).toBeInTheDocument();
+  });
+
+  it('라이브 화면의 영상 자리에는 녹화를 찾는다는 말이 없다', async () => {
+    mediaCalls.configured = true;
+    await renderLive();
+
+    expect(screen.queryByText(/녹화 영상을/)).toBeNull();
+  });
+
+  it('녹화가 없다고 확인된 지난 방송에서 카드를 누르면 「녹화 영상이 없어요」다: 플레이어와 같은 말이다', async () => {
+    // 플레이어는 「찾지 못했어요」인데 알림은 「영상은 아직 없어요」라 한 화면에서 말이 어긋났다(리뷰 6라운드)
+    mediaCalls.configured = true;
+    mediaCalls.answer = Promise.resolve([]);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    expect(
+      screen.getByText('녹화 영상이 없어요 · 채팅을 그 시점으로 옮겼어요'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/영상은 아직 없어요/)).toBeNull();
+  });
+
+  it('명부 답 전에도 최신 관측이 없는 지난 방송의 태그 자리는 「방송 정보 기록 없음」이다', async () => {
+    server.listGate = new Promise(() => undefined);
+    server.infoNoLatest = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.getByText('방송 정보 기록 없음')).toBeInTheDocument();
+  });
+
+  it('끝난 방송 채팅 바닥의 분당 수는 통계와 같은 「분당 평균」이다: 반올림이 다르면 1과 0.7이 선다', async () => {
+    // 가짜 차트의 평균이 정수면 반올림이 되살아나도 모른다(리뷰 6라운드). 창마다 7건 × 3창 ÷ 30분 = 0.7
+    server.vodChartSparse = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.getByText(/분당 평균 0\.7$/)).toBeInTheDocument();
+    expect(screen.getByText('분당 평균 채팅').nextElementSibling).toHaveTextContent('0.7');
   });
 
   it('지난 방송 채팅 바닥은 「최신 메시지 따라가는 중」이라 하지 않는다: 새 메시지가 오지 않는 기록이다', async () => {
@@ -1805,7 +1965,7 @@ describe('LiveScreen: 값이 없을 때의 말(리뷰 5라운드)', () => {
     expect(screen.getByText('방송 정보 확인 중')).toBeInTheDocument();
   });
 
-  it('주소에 박힌 라이브가 명부에서 사라지면 경과 시간도 멈춘다: 「방송 중이 아니에요」 옆에서 시계가 흐르지 않는다', async () => {
+  it('주소에 박힌 라이브가 명부에서 사라지면 경과 시간을 지운다: 「방송 중이 아니에요」 옆에서 시계가 흐르지 않는다', async () => {
     // 위임이 회수되거나 탈퇴로 지워진 방송이다. 시계의 시작 시각이 남아 「1:24:04 방송 중이 아니에요」가 됐다(리뷰 5라운드)
     nav.search = `?stream=${STREAM_ID}`;
     window.history.pushState({}, '', `/broadcast?stream=${STREAM_ID}`);

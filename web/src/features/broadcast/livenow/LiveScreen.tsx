@@ -24,20 +24,15 @@ import { notFound, usePathname, useSearchParams } from 'next/navigation';
 import { requestPlaybackAccess } from '@/api/clipEditor';
 import { useToast } from '@/ui';
 import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
-import { fetchRecordingSpans } from '@/api/mediaPlayback';
+import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
 import { rebaseTimeline, recordingTimeline } from '@/features/player/recordingTimeline';
-import {
-  missingWord,
-  publishLiveData,
-  resetLiveData,
-  trustedViewerSeries,
-  useLiveData,
-} from './liveDataStore';
+import { missingWord, publishLiveData, resetLiveData, useLiveData } from './liveDataStore';
 import { useBroadcastClock, type BroadcastStatus } from './useBroadcastClock';
 import { useChatPanelMockState } from './useChatPanelMockState';
 import { useLiveDetailsMockState } from './useLiveDetailsMockState';
-import { endedWindowStart, useLiveMockState, type LiveStream } from './useLiveMockState';
+import { recordingSearchFrom } from '../endedWindow';
+import { useLiveMockState, type LiveStream } from './useLiveMockState';
 import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
 import { useLiveStreamSelection } from './useLiveStreamSelection';
@@ -71,6 +66,16 @@ const UPTIME_NOTE: Record<BroadcastStatus, string> = {
   offline: '방송 중이 아니에요',
 };
 
+/** 녹화 목록을 묻지 못했을 때 다시 묻기까지. 목록 화면이 다시 읽는 주기와 같다 */
+const RECORDING_RETRY_MS = 30_000;
+
+/** 녹화를 찾은 결과: 확인 중 · 없음 · 물을 수 없음(재생 서버가 없거나 조회 실패) · 찾음 */
+type RecordingLookup =
+  | { kind: 'pending' }
+  | { kind: 'none' }
+  | { kind: 'unavailable' }
+  | { kind: 'found'; source: RecordedSource };
+
 /** 출입증 실패 뒤 다시 받기까지 */
 const PLAYBACK_ACCESS_RETRY_MS = 60_000;
 /** 만료 시각을 모를 때 다시 받는 간격 — 운영 쿠키 수명 60분보다 짧게 */
@@ -90,6 +95,7 @@ function LivePlayer({
   onToggleChatPanel,
   startAtSeconds,
   onRecordedReady,
+  onRecordingMissing,
 }: {
   stream: LiveStream;
   viewersNote: string;
@@ -113,6 +119,8 @@ function LivePlayer({
   startAtSeconds: number | null;
   /** 녹화 플레이어가 섰다. 시작 위치를 받았으니 부른 쪽이 비운다 */
   onRecordedReady: () => void;
+  /** 녹화가 없다고 확인됐나. 카드를 누를 때의 알림이 플레이어와 같은 말을 하게 부른 쪽에 알린다 */
+  onRecordingMissing: (missing: boolean) => void;
 }) {
   // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
   // 주소에 ?stream= 이 없으면 clip 명부에서 고른 방송(liveDataStore)의 영상을 튼다.
@@ -121,39 +129,63 @@ function LivePlayer({
   const mediaKey = ingestStreamId ?? liveStreamId;
   const src = useMediaSource(mediaKey);
   // 끝난 방송은 LL-HLS 주소가 닫힌다 — 녹화 재생 서버에서 다시보기를 튼다(있을 때만).
-  const [recorded, setRecorded] = useState<RecordedSource | null>(null);
-  /** 녹화 목록을 다 물었나. 그 전에는 「찾는 중」, 물었는데 없으면 「찾지 못했어요」다 */
-  const [lookupDone, setLookupDone] = useState(false);
+  const [lookup, setLookup] = useState<RecordingLookup>({ kind: 'pending' });
   useEffect(() => {
-    setRecorded(null);
-    setLookupDone(false);
+    setLookup({ kind: 'pending' });
     publishLiveData({ timeBaseMs: null });
     if (broadcastStatus !== 'ended' || !mediaKey) return undefined;
     let alive = true;
+    let retry: number | undefined;
     // 시작 시각을 모르는 방송(자리표시)은 그래프·채팅과 같은 끝 12시간 안에서만 찾는다: 하한이 없으면 같은 송출 키로 한 다른 날
-    // 방송의 녹화를 틀고, 채팅도 그 날짜를 물었다(리뷰 5라운드)
-    const fromMs = startedAt ?? (endedAt === null ? null : endedWindowStart(null, endedAt));
-    // 첫 구간 하나만 쓰면 송출이 한 번 끊긴 방송은 그 뒤를 못 보고, 앞 방송 녹화를 잡을 수도 있다(POK-253)
-    void fetchRecordingSpans(mediaKey).then((spans) => {
-      if (!alive) return;
-      setLookupDone(true);
-      const found = recordingTimeline(spans, fromMs, endedAt);
-      if (found) {
+    // 방송의 녹화를 틀고, 채팅도 그 날짜를 물었다(리뷰 5라운드). 지난 방송 목록도 같은 하한이다(recordingSearchFrom)
+    const fromMs = recordingSearchFrom(startedAt, endedAt);
+    const ask = () => {
+      // 첫 구간 하나만 쓰면 송출이 한 번 끊긴 방송은 그 뒤를 못 보고, 앞 방송 녹화를 잡을 수도 있다(POK-253)
+      void lookupRecordingSpans(mediaKey).then((spans) => {
+        if (!alive) return;
+        if (spans === null) {
+          // 묻지 못했다(재생 서버 없음·조회 실패). 녹화가 없다는 뜻이 아니라 단정하지 않고, 서버가 있으면 다시 묻는다:
+          // 조회 실패를 빈 목록으로 접어 「찾지 못했어요」로 굳혔다(리뷰 6라운드)
+          setLookup({ kind: 'unavailable' });
+          if (playbackConfigured()) retry = window.setTimeout(ask, RECORDING_RETRY_MS);
+          return;
+        }
+        const found = recordingTimeline(spans, fromMs, endedAt);
+        if (!found) {
+          setLookup({ kind: 'none' });
+          return;
+        }
         // 재생기의 0초를 서버 기준점(카드·조각 위치의 0초, POK-255)에 세운다 — 녹화 시작에 세우면 두 시작의 차만큼 카드를
         // 누른 자리와 영상이 어긋난다(POK-253). 서버가 모르면(null) 녹화 시작
         const timeline = originMs === null ? found : rebaseTimeline(found, originMs);
-        setRecorded({ streamId: mediaKey, ...timeline });
+        setLookup({ kind: 'found', source: { streamId: mediaKey, ...timeline } });
         // 영상의 0초가 곧 카드 시점의 0초다 — 채팅도 이 기준으로 시점을 잡게 알린다
         publishLiveData({ timeBaseMs: timeline.startMs });
-      }
-    });
+      });
+    };
+    ask();
     return () => {
       alive = false;
+      window.clearTimeout(retry);
     };
   }, [broadcastStatus, mediaKey, startedAt, endedAt, originMs]);
+  const recorded = lookup.kind === 'found' ? lookup.source : null;
   useEffect(() => {
     if (recorded !== null) onRecordedReady();
   }, [recorded, onRecordedReady]);
+  const recordingMissing = lookup.kind === 'none';
+  useEffect(() => {
+    onRecordingMissing(recordingMissing);
+  }, [recordingMissing, onRecordingMissing]);
+  // 끝난 방송의 영상 자리 아랫줄. 확인하는 동안 「확인하고 있어요」, 없으면 「찾지 못했어요」다(「아직 연결되지 않았어요」는
+  // 기다리면 나올 것처럼 읽혔다, 리뷰 4라운드 실기동). 재생 서버가 없거나 묻지 못했으면 기본 말이 맞다: 그때 「찾지 못했어요」라
+  // 하면 녹화가 지워진 것처럼 읽혔다(dev·운영은 재생 서버 주소가 비어 있다, 리뷰 6라운드)
+  const noSignalNote =
+    displayStatus !== 'ended' || !playbackConfigured() || lookup.kind === 'unavailable'
+      ? undefined
+      : lookup.kind === 'none'
+        ? '녹화 영상을 찾지 못했어요'
+        : '녹화 영상을 확인하고 있어요';
   // 영상 출입증(POK-122) — 방송을 열 때 받고, 만료 5분 전에 다시 받는다. 쿠키 수명(운영 60분)이 지나면 새 조각이
   // 403이 되어 재생이 멈춘다(PR #200 codex P1). 실패하면 1분 뒤 다시 받는다. 서명 재료가 없는 서버(503)는
   // 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다. 실패해도 재생은 시도한다(로컬 media는 쿠키를 안 본다).
@@ -189,14 +221,7 @@ function LivePlayer({
       channelName={stream.channelName}
       viewersNote={viewersNote}
       broadcastStatus={displayStatus}
-      // 녹화를 찾는 동안과 못 찾은 뒤를 가른다: 「아직 연결되지 않았어요」는 기다리면 나올 것처럼 읽혔다(리뷰 4라운드 실기동)
-      noSignalNote={
-        displayStatus === 'ended'
-          ? lookupDone
-            ? '녹화 영상을 찾지 못했어요'
-            : '녹화 영상을 찾는 중이에요'
-          : undefined
-      }
+      noSignalNote={noSignalNote}
       // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
       // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다
       src={broadcastStatus === 'live' ? src : null}
@@ -274,13 +299,15 @@ function LiveDashboard() {
   // 회차를 빈 값으로 남기므로 마지막 관측이 비어도 그 앞의 값을 쓴다: 통계의 최고·평균과 같은 규칙이다(리뷰 3라운드). 끝난 방송은
   // 지금 보는 사람이 아니라 끝날 때 값이고(QA 2026-10-11 리뷰: 며칠 전 방송을 지금 1,842명이 보는 것처럼 읽혔다), 방송 정보를
   // 받기 전이면 「기록 없음」이라 단정하지 않는다. 어떤 기록을 믿고(끝난 방송은 방송 창으로 읽은 것만, 리뷰 4라운드) 값이 없을 때
-  // 무엇이라 쓰는지는 통계와 같은 함수 하나가 정한다(리뷰 5라운드)
-  const viewersLabel = useMemo(() => {
-    const series = trustedViewerSeries(viewStatus, info);
-    const v = series?.findLast((p) => p.viewers !== null)?.viewers ?? null;
-    if (v === null) return `시청자 수 ${missingWord(viewStatus, series !== null)}`;
-    return ended ? `끝날 때 ${v.toLocaleString()}명 시청` : `${v.toLocaleString()}명 시청 중`;
-  }, [info, viewStatus, ended]);
+  // 무엇이라 쓰는지는 통계와 같은 함수 하나가 정한다(리뷰 5라운드). 값과 말은 통계 훅이 센 것을 그대로 쓴다: 두 곳에서 따로
+  // 세면 한쪽 인자만 바뀌어도 다시 갈린다(리뷰 6라운드)
+  const v = stats.lastViewers;
+  const viewersLabel =
+    v === null
+      ? `시청자 수 ${stats.noViewers}`
+      : ended
+        ? `끝날 때 ${v.toLocaleString('ko-KR')}명 시청`
+        : `${v.toLocaleString('ko-KR')}명 시청 중`;
 
   // 카드의 타임라인 위치(posPercent)는 방송 경과 대비다 — 실경과를 넣어야 눈금이 맞는다
   const streamForCards = useMemo<LiveStream>(
@@ -324,6 +351,8 @@ function LiveDashboard() {
     publishLiveData({ playheadMs: null });
   }, [live]);
   const handleRecordedReady = useCallback(() => setPendingStart(null), []);
+  /** 녹화가 없다고 확인됐나(플레이어가 알린다). 카드를 누를 때 「아직」이라 하지 않는다 */
+  const [recordingMissing, setRecordingMissing] = useState(false);
 
   // 홈 「최근 하이라이트」가 주소에 실은 카드(?card=). 카드가 오는 대로 한 번 그 시점으로 옮긴다. 사람이 먼저 고르면 그쪽이다.
   // window.location이 아니라 useSearchParams로 읽는다: Next는 다른 화면에서 넘어올 때 새 화면을 먼저 그리고 주소창은 그 뒤에
@@ -350,12 +379,14 @@ function LiveDashboard() {
       if (!seekTo(seconds))
         toast({
           tone: 'info',
-          title: chat.followsPlayhead
-            ? '영상은 아직 없어요 · 채팅을 그 시점으로 옮겼어요'
-            : '영상은 아직 없어요',
+          // 녹화가 없다고 확인된 방송은 플레이어처럼 없다고 말한다: 「아직 없어요」는 기다리면 나올 것처럼 읽혀 플레이어의 「찾지
+          // 못했어요」와 한 화면에서 어긋났다(리뷰 6라운드)
+          title: `${recordingMissing ? '녹화 영상이 없어요' : '영상은 아직 없어요'}${
+            chat.followsPlayhead ? ' · 채팅을 그 시점으로 옮겼어요' : ''
+          }`,
         });
     },
-    [linkedCardId, seekTo, toast, chat.followsPlayhead],
+    [linkedCardId, seekTo, toast, chat.followsPlayhead, recordingMissing],
   );
 
   return (
@@ -379,6 +410,7 @@ function LiveDashboard() {
                 onToggleChatPanel={toggleChatPanel}
                 startAtSeconds={pendingStart}
                 onRecordedReady={handleRecordedReady}
+                onRecordingMissing={setRecordingMissing}
               />
             </Suspense>
           </div>

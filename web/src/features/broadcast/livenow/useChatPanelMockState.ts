@@ -9,11 +9,12 @@ import {
   useLiveData,
   type RelayEvent,
 } from './liveDataStore';
-import { chartWindows, endedWindowStart } from './useLiveMockState';
+import { endedWindowStart } from '../endedWindow';
+import { chartWindows } from './useLiveMockState';
 
 // 실시간 채팅 패널(시안 1b). clip 창구에 붙어 있다(POK-251).
 // 라이브: 카드 통로(SSE)의 chat·donation 중계가 주 경로이고 chat-messages 폴링이 메우기·폴백이다.
-// 지난 방송: 시작~종료 전체를 chat-messages로 한 번에 받는다.
+// 지난 방송: 그래프·시청자 기록과 같은 창(방송 전체, 12시간 넘으면 끝 12시간)을 chat-messages로 1시간 창씩 받는다.
 // 방송 번호는 라이브 훅이 정한 것(liveDataStore)을 같이 쓴다 — 방송이 바뀌면 함께 바뀐다.
 
 export const CHAT_PANEL_INTERVAL_MS = 3500;
@@ -142,6 +143,8 @@ function toPanel(it: WireItem): ChatPanelMessage {
  */
 export function useChatPanelMockState(enabled: boolean, ended: boolean): ChatPanelMockState {
   const [raw, setRaw] = useState<Record<string, WireItem>>({});
+  /** 카드 시점 앞뒤 60초를 읽는 중인가. 그동안 그 수는 모른다(「확인 중」) */
+  const [focusReading, setFocusReading] = useState(false);
   const lastTime = useRef<number>(0);
   const nextId = useRef<number>(1);
   const lastSeq = useRef<{ seq: number; epoch: number } | null>(null);
@@ -157,7 +160,7 @@ export function useChatPanelMockState(enabled: boolean, ended: boolean): ChatPan
       : null;
   const isVod = vodFrom !== null;
 
-  // 지난 방송: 그 창(방송 전체, 12시간 넘으면 끝 12시간)을 받는다. 앞쪽 카드는 그 시점 앞뒤 60초를 따로 읽는다(아래).
+  // 지난 방송: 그 창(방송 전체, 12시간 넘으면 끝 12시간)을 받는다. 카드를 고르면 그 시점 앞뒤 60초는 따로 읽는다(아래).
   // 수집기는 한 번에 1시간까지만 받으므로(넘으면 400 too_wide)
   // 1시간 창마다 커서로 넘긴다(PR #200 codex). 창마다 최대 5장(1,000건). 폴링 없음
   useEffect(() => {
@@ -268,7 +271,9 @@ export function useChatPanelMockState(enabled: boolean, ended: boolean): ChatPan
           cursor = pg.nextCursor;
           pages += 1;
         } while (cursor !== null && pages < LIVE_POLL_PAGE_BUDGET);
-        if (items.length === 0) return;
+        // 본문을 받는 사이 효과가 멈췄으면(방송이 끝나 지난 방송 읽기로 바뀜) 싣지 않는다: 덮지 않고 합치게 된 뒤로는 끝난 뒤의
+        // 줄이 「채팅 기록」에 남았다(리뷰 6라운드)
+        if (stopped || items.length === 0) return;
         const page = { items, appliedOffsetMs };
         setRaw((prev) => {
           const next = { ...prev };
@@ -303,6 +308,7 @@ export function useChatPanelMockState(enabled: boolean, ended: boolean): ChatPan
     const from = center - 60_000 + CHAT_LEAD_MS;
     const to = center + 60_000 + CHAT_LEAD_MS;
     let stopped = false;
+    setFocusReading(true);
     (async () => {
       const got: WireItem[] = [];
       let cursor: string | null = null;
@@ -327,7 +333,9 @@ export function useChatPanelMockState(enabled: boolean, ended: boolean): ChatPan
           cursor = null;
         }
       } while (cursor !== null);
-      if (stopped || got.length === 0) return;
+      if (stopped) return;
+      setFocusReading(false);
+      if (got.length === 0) return;
       setRaw((prev) => {
         const next = { ...prev };
         for (const it of got) {
@@ -340,7 +348,9 @@ export function useChatPanelMockState(enabled: boolean, ended: boolean): ChatPan
     return () => {
       stopped = true;
     };
-  }, [enabled, streamId, isVod, live.playheadMs, vodBase]);
+    // 방송 창을 다시 읽으면(끝 시각이 고쳐짐 등) 그 읽기가 처음에 비우므로 이 시점도 다시 읽는다: 안 그러면 「채팅 0건」이
+    // 됐다(리뷰 6라운드)
+  }, [enabled, streamId, isVod, live.playheadMs, vodBase, vodFrom, live.endedAt]);
 
   const items = useMemo(
     () => Object.values(raw).sort((a, b) => Date.parse(a.time) - Date.parse(b.time) || a.id - b.id),
@@ -363,12 +373,17 @@ export function useChatPanelMockState(enabled: boolean, ended: boolean): ChatPan
         sc = sec % 60;
       const label = `${h}:${String(m).padStart(2, '0')}:${String(sc).padStart(2, '0')}`;
       return [
-        { id: -1, kind: 'system' as const, text: `${label} 시점 앞뒤 60초 채팅 ${inWin.length}건` },
+        {
+          id: -1,
+          kind: 'system' as const,
+          // 그 시점을 읽는 동안은 모른다: 1시간 창에서 받아 둔 일부를 수로 쓰면 0건이나 덜 센 수가 섰다(리뷰 6라운드)
+          text: `${label} 시점 앞뒤 60초 채팅 ${focusReading ? '확인 중' : `${inWin.length}건`}`,
+        },
         ...inWin.map(toPanel),
       ];
     }
     return items.map(toPanel);
-  }, [items, isVod, live.playheadMs, vodBase]);
+  }, [items, isVod, live.playheadMs, vodBase, focusReading]);
 
   const ratePerMinute = useMemo<number | null>(() => {
     // 끝난 화면(명부 답을 기다리는 지난 방송 주소 포함)은 차트가 센 수를 차트가 읽은 길이로 나눈다(12시간 넘는 방송은 끝 12시간).

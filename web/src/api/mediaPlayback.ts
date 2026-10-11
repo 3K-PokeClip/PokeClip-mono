@@ -30,19 +30,30 @@ export function parseSpanStartMs(iso: string): number {
   return /[1-9]/.test(fraction.slice(3)) ? ms + 1 : ms;
 }
 
-/** 녹화 구간. 재생 서버가 없거나 녹화가 없으면 빈 배열 */
-export async function fetchRecordingSpans(streamId: string): Promise<RecordingSpan[]> {
-  if (BASE === '' || !STREAM_ID_RE.test(streamId)) return [];
+/**
+ * 녹화 구간을 묻는다. 재생 서버가 없거나(주소 설정 없음) 묻지 못했으면(네트워크 오류·서버 오류) null이다: 녹화가 없다는 뜻이
+ * 아니다. 녹화가 없으면 빈 배열이다. 재생 서버는 그 경로의 녹화 폴더가 없으면 400으로 답하고(2026-10-11 로컬 실측), 404도 같은
+ * 뜻으로 받는다
+ */
+export async function lookupRecordingSpans(streamId: string): Promise<RecordingSpan[] | null> {
+  if (BASE === '') return null;
+  if (!STREAM_ID_RE.test(streamId)) return [];
   try {
     const res = await fetch(`${BASE}/list?path=${encodeURIComponent(streamId)}`);
-    if (!res.ok) return [];
+    if (res.status === 400 || res.status === 404) return [];
+    if (!res.ok) return null;
     const body = (await res.json()) as { start: string; duration: number }[];
     return body
       .map((span) => ({ startMs: parseSpanStartMs(span.start), durationSeconds: span.duration }))
       .filter((span) => Number.isFinite(span.startMs) && span.durationSeconds > 0);
   } catch {
-    return [];
+    return null;
   }
+}
+
+/** 녹화 구간. 재생 서버가 없거나 녹화가 없거나 묻지 못했으면 빈 배열이다(「있음」만 쓰는 목록·편집기) */
+export async function fetchRecordingSpans(streamId: string): Promise<RecordingSpan[]> {
+  return (await lookupRecordingSpans(streamId)) ?? [];
 }
 
 /** 그 구간의 mp4 주소. startMs 는 절대 시각(UTC epoch ms) */

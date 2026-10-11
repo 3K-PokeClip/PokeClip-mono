@@ -205,4 +205,10 @@ describe('ChatPanel — 목록', () => {
     expect(items[0]).toHaveTextContent('한타 각');
     expect(items[1]).toHaveTextContent('하이라이트 감지');
   });
+
+  it('끝난 방송의 분당 수는 「분당 평균」을 천 단위 쉼표와 소수 한 자리로 쓴다: 통계와 같은 꼴이다', () => {
+    // 소수 한 자리만 맞추면 큰 방송은 「분당 1234.5」로 라이브 바닥·옆 통계의 쉼표와 갈렸다(리뷰 6라운드)
+    render(<ChatPanel {...PROPS} mode="ended" ratePerMinute={1234.5} />);
+    expect(screen.getByText('마지막 메시지까지 보는 중 · 분당 평균 1,234.5')).toBeInTheDocument();
+  });
 });

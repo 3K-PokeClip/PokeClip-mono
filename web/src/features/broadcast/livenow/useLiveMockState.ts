@@ -9,6 +9,7 @@ import { useMe } from '@/features/auth/useSession';
 import { useAuthStore } from '@/stores/auth';
 import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
 import { timeAgo } from '@/lib/timeAgo';
+import { endedWindowStart } from '../endedWindow';
 import {
   emitRelay,
   publishLiveData,
@@ -115,19 +116,6 @@ type LoadedInfo = BroadcastInfoResponse & { scope: LiveInfoScope };
 
 const CHART_MINUTES = 10;
 const CHART_BUCKET = 30;
-/** 끝난 방송을 읽는 창의 최대 길이. 수집기가 한 번에 주는 시청자 기록 720점(1분 간격)과 같은 길이다 */
-const ENDED_TAIL_MS = 12 * 60 * 60_000;
-
-/**
- * 끝난 방송의 그래프·시청자 기록을 읽기 시작할 시각(epoch ms). 시작~끝이되 12시간이 넘거나 시작 시각을 모르면(종료 알림이 먼저
- * 와서 생긴 자리표시 방송) 끝 12시간이다. 둘이 이 하나로 같은 창을 읽는다: 따로 고르면 최고·평균은 있는데 선이 없었다(리뷰 4라운드)
- */
-export function endedWindowStart(startedAt: number | null, endedAt: number): number {
-  return startedAt !== null && endedAt - startedAt <= ENDED_TAIL_MS
-    ? startedAt
-    : endedAt - ENDED_TAIL_MS;
-}
-
 export interface CardActionResult {
   ok: boolean;
   status: number;
