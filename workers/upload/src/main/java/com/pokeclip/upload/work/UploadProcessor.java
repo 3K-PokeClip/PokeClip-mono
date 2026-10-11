@@ -16,7 +16,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Stream;
 
 /**
  * 업로드 주문 하나를 끝까지 처리한다(POK-220).
@@ -30,30 +32,45 @@ import java.util.concurrent.ThreadLocalRandom;
  *       영상이 없다는 증거가 못 된다(PR #198 codex P1, clip도 같은 규칙으로 받는다). 모르면 쪽지를 남긴다.</li>
  * </ol>
  *
+ * <p><b>썸네일(POK-291)은 영상이 끝난 뒤, clip에 올림을 보고하기 전에 붙인다</b>({@link #finish}). 보고를 먼저 하면 clip이 끝난 주문이
+ * 되어, 붙이기 전에 멈춘 일꾼의 쪽지가 다시 와도 {@code proceed:false}라 영영 못 붙인다. 보고 전이면 다시 온 쪽지가 주소에 물어
+ * 「다 받았다」를 듣고 이 자리로 다시 온다(같은 그림을 두 번 붙여도 해가 없다). 🔴 예외 하나: 두 번째 붙이기가 <b>실패</b>하면 첫 번째가
+ * 붙었는지 알 수 없다. 그래서 바이트를 안 보낸 배달의 썸네일 실패는 {@code THUMBNAIL_UNCONFIRMED}로 보고한다({@link #finish}).
+ * 썸네일 실패는 쪽지를 남기지 않는다({@link ThumbnailStep}).
+ *
  * <p>토큰과 주소는 로그에 안 찍는다. 받은 파일은 끝나면 지운다.
  */
 public class UploadProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(UploadProcessor.class);
+    /** 이번에 못 붙였지만 지난 배달에서 붙었을 수 있다({@link #finish}). */
+    static final String THUMBNAIL_UNCONFIRMED = "THUMBNAIL_UNCONFIRMED";
+    /**
+     * 지난 배달에서도 붙었을 리 없는 실패(POK-291 로컬 리뷰 2라운드). 채널 권한(전화 인증)과 그림 자체는 몇 분 사이에 안 바뀐다.
+     * 이것까지 {@value #THUMBNAIL_UNCONFIRMED}로 덮으면 보관함이 「전화 인증이 필요해요」 같은 고칠 길을 잃는다.
+     */
+    private static final Set<String> NEVER_SET_BEFORE = Set.of("THUMBNAIL_FORBIDDEN", "THUMBNAIL_INVALID_IMAGE");
 
     private final EnvelopeParser parser;
     private final ClipUploadApi clip;
     private final YoutubeTokenClient auth;
     private final S3Download storage;
     private final ResumableUploader youtube;
+    private final ThumbnailStep thumbnails;
     private final Path workDir;
     private final long chunkSize;
     private final List<Duration> retryDelays;
     private final Sleeper sleeper;
 
     public UploadProcessor(EnvelopeParser parser, ClipUploadApi clip, YoutubeTokenClient auth, S3Download storage,
-                           ResumableUploader youtube, Path workDir, long chunkSize, List<Duration> retryDelays,
-                           Sleeper sleeper) {
+                           ResumableUploader youtube, ThumbnailStep thumbnails, Path workDir, long chunkSize,
+                           List<Duration> retryDelays, Sleeper sleeper) {
         this.parser = parser;
         this.clip = clip;
         this.auth = auth;
         this.storage = storage;
         this.youtube = youtube;
+        this.thumbnails = thumbnails;
         this.workDir = workDir;
         this.chunkSize = chunkSize;
         this.retryDelays = retryDelays;
@@ -76,10 +93,13 @@ public class UploadProcessor {
             log.warn("upload.unavailable uploadId={} what={}", job.uploadId(), e.getMessage());
             return retryLater();
         } finally {
-            try {
-                Files.deleteIfExists(file);
-            } catch (java.io.IOException e) {
-                log.warn("upload.cleanup_failed uploadId={}", job.uploadId());
+            for (Path temp : Stream.concat(Stream.of(file), ThumbnailStep.files(workDir, job.uploadId()).stream())
+                    .toList()) {
+                try {
+                    Files.deleteIfExists(temp);
+                } catch (java.io.IOException e) {
+                    log.warn("upload.cleanup_failed uploadId={}", job.uploadId());
+                }
             }
         }
     }
@@ -128,11 +148,12 @@ public class UploadProcessor {
 
         if (!token.valid()) {
             // 주소는 있는데 토큰이 없다: 이어 갈 수는 없지만 끝났는지는 물어 볼 수 있다.
-            return settleWithoutContinuing(id, session, null, size, code, message);
+            return settleWithoutContinuing(job, file, session, null, size, false, code, message);
         }
 
         if (session == null) {
-            Start start = youtube.start(token.accessToken(), job.title(), job.description(), job.privacyStatus(), size);
+            Start start = youtube.start(token.accessToken(), job.title(), job.description(), job.privacyStatus(),
+                    job.tags(), job.madeForKids(), size);
             switch (start) {
                 case Start.Session s -> {
                     session = clip.session(id, s.uri());
@@ -142,11 +163,11 @@ public class UploadProcessor {
                     }
                 }
                 case Start.Quota q -> {
-                    return failUnlessAdopted(id, token.accessToken(), file, size, "QUOTA_EXCEEDED",
+                    return failUnlessAdopted(job, token.accessToken(), file, size, "QUOTA_EXCEEDED",
                             "유튜브 하루 올리기 한도에 걸렸다(" + q.reason() + "). 내일 다시 올린다");
                 }
                 case Start.Rejected r -> {
-                    return failUnlessAdopted(id, token.accessToken(), file, size, "YOUTUBE_REJECTED",
+                    return failUnlessAdopted(job, token.accessToken(), file, size, "YOUTUBE_REJECTED",
                             "유튜브가 올리기를 거절했다: HTTP " + r.status() + " " + r.reason());
                 }
                 case Start.Unauthorized u -> {
@@ -159,22 +180,24 @@ public class UploadProcessor {
                 }
             }
         }
-        return drive(id, session, token.accessToken(), file, size);
+        return drive(job, session, token.accessToken(), file, size);
     }
 
     /** 주소에 먼저 묻고, 덜 받았으면 그 자리부터 조각을 보낸다. 끊기면 다시 묻는다. */
-    private Disposition drive(long id, String session, String token, Path file, long size) {
+    private Disposition drive(UploadEnvelope job, String session, String token, Path file, long size) {
+        long id = job.uploadId();
         int failures = 0;
+        // 이 배달에서 바이트를 하나라도 보냈나. 안 보냈는데 끝났으면 지난 배달(또는 겹친 일꾼)이 영상을 끝낸 것이다(finish 주석).
+        boolean sentBytes = false;
         Progress progress = youtube.status(session, token, size);
         while (true) {
             switch (progress) {
                 case Progress.Done d -> {
-                    clip.uploaded(id, d.videoId());
-                    log.info("upload.done uploadId={} videoId={}", id, d.videoId());
-                    return Disposition.DELETE;
+                    return finish(job, d.videoId(), file, token, !sentBytes);
                 }
                 case Progress.Incomplete inc when inc.next() < size -> {
                     int length = (int) Math.min(chunkSize, size - inc.next());
+                    sentBytes = true;
                     progress = youtube.put(session, token, file, inc.next(), length, size);
                     if (!(progress instanceof Progress.Transient)) {
                         failures = 0;
@@ -204,7 +227,7 @@ public class UploadProcessor {
                     return Disposition.DELETE;
                 }
                 case Progress.Rejected r -> {
-                    return settleWithoutContinuing(id, session, token, size, "YOUTUBE_REJECTED",
+                    return settleWithoutContinuing(job, file, session, token, size, sentBytes, "YOUTUBE_REJECTED",
                             "유튜브가 바이트를 거절했다: HTTP " + r.status() + " " + r.reason());
                 }
             }
@@ -215,14 +238,16 @@ public class UploadProcessor {
      * 시작이 거절됐다. 🔴 실패를 보내기 전에 clip에 다시 묻는다: 이 일꾼이 시작을 청하는 사이 겹친 일꾼이 주소를 적어 두었으면
      * 실패 보고는 그 주소로 이어 갈 길을 막는다(clip이 확인 중으로 닫고 쪽지가 지워진다, PR #199 codex). 적힌 주소가 있으면 그리로 잇는다.
      */
-    private Disposition failUnlessAdopted(long id, String token, Path file, long size, String code, String message) {
+    private Disposition failUnlessAdopted(UploadEnvelope job, String token, Path file, long size, String code,
+                                          String message) {
+        long id = job.uploadId();
         ClipUploadApi.Start again = clip.start(id);
         if (!again.found() || !again.proceed()) {
             return Disposition.DELETE;
         }
         if (again.sessionUri() != null) {
             log.info("upload.adopt_session uploadId={} after={}", id, code);
-            return drive(id, again.sessionUri(), token, file, size);
+            return drive(job, again.sessionUri(), token, file, size);
         }
         clip.failed(id, code, message);
         return Disposition.DELETE;
@@ -232,10 +257,13 @@ public class UploadProcessor {
      * 주소가 생긴 뒤 더 보낼 수 없을 때 결론 내기. 주소에 물어 다 받았으면 올림, 아니면 확인 중(사람이 채널을 본다).
      * 🔴 실패로 닫지 않는다: 자리가 비면 다시 올리고, 같은 주소로 다른 일꾼이 끝내면 영상이 둘 뜬다.
      */
-    private Disposition settleWithoutContinuing(long id, String session, String token, long size, String code,
-                                                String message) {
+    private Disposition settleWithoutContinuing(UploadEnvelope job, Path file, String session, String token, long size,
+                                                boolean sentBytes, String code, String message) {
+        long id = job.uploadId();
         switch (youtube.status(session, token, size)) {
-            case Progress.Done d -> clip.uploaded(id, d.videoId());
+            case Progress.Done d -> {
+                return finish(job, d.videoId(), file, token, !sentBytes);
+            }
             case Progress.Incomplete inc -> clip.checking(id, code, message + ". 유튜브는 덜 받았다고 한다");
             case Progress.Transient t -> {
                 // 지금은 모른다. 쪽지를 남긴다: 다시 와서 물으면 된다. 끝내 모르면 실패 큐에서 checking이 된다.
@@ -245,6 +273,31 @@ public class UploadProcessor {
         }
         return Disposition.DELETE;
     }
+
+    /**
+     * 영상이 끝난 자리 둘(이어 올리기의 끝 · 이어 갈 수 없을 때 결론 내기)이 모이는 곳. 🔴 썸네일을 <b>먼저</b> 붙이고 그 결과를 실어
+     * 올림을 보고한다(클래스 주석). 썸네일은 실패해도 쪽지를 남기지 않는다. 보고가 안 되면(clip 무응답) 지금처럼 쪽지를 남긴다:
+     * 다시 오면 주소가 「다 받았다」고 해 이 자리로 다시 온다.
+     *
+     * <p>🔴 이 배달에서 바이트를 하나도 안 보냈는데 끝났으면(지난 배달이 영상을 끝냈다) 썸네일 실패를 그 코드 그대로 보내지 않고
+     * {@value #THUMBNAIL_UNCONFIRMED}로 보낸다. 지난 배달이 붙인 뒤 보고만 못 했을 수 있다: 그때의 SET은 clip에 닿은 적이 없어
+     * 이번 실패가 첫 값으로 남고, 보관함이 채널에 붙은 그림을 「못 붙였어요」로 안내한다(로컬 리뷰 1라운드). 단 지난 배달에서도 붙었을 리
+     * 없는 사유(권한 없음·그림 거절)는 원래 코드를 둔다(2라운드).
+     *
+     * @param token          영상을 올린 토큰. 결론 내기 자리에서는 null일 수 있다
+     * @param finishedBefore 이 배달에서 바이트를 하나도 안 보냈다
+     */
+    private Disposition finish(UploadEnvelope job, String videoId, Path file, String token, boolean finishedBefore) {
+        ClipUploadApi.ThumbnailReport thumbnail = thumbnails.attach(job, videoId, file, token);
+        if (finishedBefore && "FAILED".equals(thumbnail.outcome()) && !NEVER_SET_BEFORE.contains(thumbnail.errorCode())) {
+            log.info("upload.thumbnail_unconfirmed uploadId={} code={}", job.uploadId(), thumbnail.errorCode());
+            thumbnail = ClipUploadApi.ThumbnailReport.failed(THUMBNAIL_UNCONFIRMED);
+        }
+        clip.uploaded(job.uploadId(), videoId, thumbnail);
+        log.info("upload.done uploadId={} videoId={} thumbnail={}", job.uploadId(), videoId, thumbnail.outcome());
+        return Disposition.DELETE;
+    }
+
 
     private static Progress transientProgress(String what) {
         return new Progress.Transient(what);

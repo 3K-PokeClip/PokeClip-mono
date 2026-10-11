@@ -171,6 +171,27 @@ public class YoutubeLinkService {
         return links.findFirstByUserIdOrderByCreatedAtDesc(userId);
     }
 
+    /**
+     * clip용(POK-291). resolve와 같은 판정(NOT_LINKED · UNLINKED · BROKEN)을 <b>토큰·갱신 없이</b> 준다.
+     * 갱신기도 secrets도 안 부른다: 렌더 주문마다 구글 할당량을 쓰거나 회원 행 락을 잡을 이유가 없다.
+     *
+     * <p>회원별 <b>최신 행 하나</b>를 한 번에 읽고 그 상태로만 가른다. 「살아있는 행 찾기 → 없으면 최신 행」처럼
+     * 두 번 읽으면 그 사이 커밋된 새 연동(ACTIVE)을 집어 UNLINKED로 오분류한다(resolve가 락 안에서 읽는 이유와 같다).
+     * 한 번 읽기가 맞는 근거는 「살아있는 행이 있으면 그것이 최신 행」이라는 저장 쪽 약속이다:
+     * {@link YoutubeLinkWriter#create}가 회원 행 락 뒤에 옛 행을 닫고 시각을 잡아 새 행을 넣는다. GET 상태도 같은 약속에 기댄다.
+     *
+     * <p>access 만료는 보지 않는다. 만료는 갱신으로 풀리는 일상이라 「연결됨」이고, 갱신이 실제로 거부되는지는
+     * 업로드 일꾼의 resolve가 그때 안다.
+     */
+    public YoutubeLinkCheck check(Long userId) {
+        LinkStatus last = links.findFirstByUserIdOrderByCreatedAtDesc(userId)
+                .map(YoutubeChannelLink::status).orElse(null);
+        if (last == LinkStatus.ACTIVE) {
+            return new YoutubeLinkCheck(true, null);
+        }
+        return new YoutubeLinkCheck(false, reasonOf(last));
+    }
+
     /** 트랜잭션은 writer에 있다(자기 호출 함정). 살아있는 행이 없으면 아무것도 안 하고 조용히 끝. */
     public void unlink(Long userId) {
         writer.revoke(userId, Instant.now());

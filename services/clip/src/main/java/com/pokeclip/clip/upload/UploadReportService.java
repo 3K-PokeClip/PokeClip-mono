@@ -34,6 +34,7 @@ public class UploadReportService {
     static final Pattern ERROR_CODE = Pattern.compile("[A-Z0-9_]{1,32}");
     static final int MAX_SESSION_URI = 2048;
     static final int MAX_ERROR_MESSAGE = 512;
+    private static final java.util.Set<String> THUMBNAIL_OUTCOMES = java.util.Set.of("SET", "FAILED", "NONE");
     private static final Pattern URL = Pattern.compile("(?i)\\b(?:https?|ftp)://\\S+");
 
     private final ClipUploadRepository uploads;
@@ -96,8 +97,23 @@ public class UploadReportService {
         });
     }
 
-    /** 일꾼의 끝 보고. {@code outcome}은 {@code UPLOADED}·{@code FAILED}·{@code CHECKING}. 같은 끝 보고가 다시 오면 200. */
+    /** 썸네일 결과 없이 온 끝 보고(옛 일꾼). */
     public Reply result(long uploadId, String outcome, String videoId, String errorCode, String errorMessage) {
+        return result(uploadId, outcome, videoId, errorCode, errorMessage, null, null);
+    }
+
+    /**
+     * 일꾼의 끝 보고. {@code outcome}은 {@code UPLOADED}·{@code FAILED}·{@code CHECKING}. 같은 끝 보고가 다시 오면 200.
+     *
+     * <p>썸네일 칸 둘(POK-291)은 영상이 올라가는 전이(올리는 중 → 올림 · 확인 중 → 올림) <b>둘 다</b>에서 적는다. 🔴 <b>모양이 틀려도
+     * 400으로 거절하지 않는다</b>: 거절하면 일꾼이 같은 보고를 되풀이하다 실패 큐로 가고, 정리기가 영상이 있는데도 확인 중으로 닫는다.
+     * 모르는 값은 「칸 없음」으로 다룬다. 같은 끝 보고의 재전송은 처음 값이 이긴다(손대지 않는다).
+     *
+     * @param thumbnailOutcome   {@code SET}·{@code FAILED}·{@code NONE}. 그 밖·{@code null}은 칸 없음
+     * @param thumbnailErrorCode {@code [A-Z0-9_]{1,32}}. 모양이 틀리면 버린다
+     */
+    public Reply result(long uploadId, String outcome, String videoId, String errorCode, String errorMessage,
+                        String thumbnailOutcome, String thumbnailErrorCode) {
         UploadStatus target = switch (outcome == null ? "" : outcome) {
             case "UPLOADED" -> UploadStatus.UPLOADED;
             case "FAILED" -> UploadStatus.FAILED;
@@ -111,6 +127,10 @@ public class UploadReportService {
             throw new InvalidUploadRequestException("errorCode");
         }
         String message = redact(errorMessage);
+        // Set.of는 null을 물으면 예외를 던진다(400이 아니라 500). 칸 없음을 먼저 가른다.
+        String thumbOutcome = thumbnailOutcome != null && THUMBNAIL_OUTCOMES.contains(thumbnailOutcome) ? thumbnailOutcome : null;
+        String thumbCode = thumbnailErrorCode != null && ERROR_CODE.matcher(thumbnailErrorCode).matches()
+                ? thumbnailErrorCode : null;
 
         return transactions.execute(tx -> {
             ClipUpload upload = uploads.findByIdForUpdate(uploadId).orElseThrow(() -> new UploadNotFoundException(uploadId));
@@ -121,6 +141,7 @@ public class UploadReportService {
             if (current == UploadStatus.CHECKING && effective == UploadStatus.UPLOADED) {
                 // 확인 중이던 것에 늦은 올림 보고가 왔다: 채널에 영상이 있다는 확정이다.
                 upload.uploaded(videoId);
+                upload.thumbnailReported(thumbOutcome, thumbCode);
                 log.info("clip.upload.checking_resolved uploadId={}", uploadId);
                 return ok(upload);
             }
@@ -137,7 +158,10 @@ public class UploadReportService {
                 log.warn("clip.upload.failed_with_session_held uploadId={} code={}", uploadId, errorCode);
             }
             switch (effective) {
-                case UPLOADED -> upload.uploaded(videoId);
+                case UPLOADED -> {
+                    upload.uploaded(videoId);
+                    upload.thumbnailReported(thumbOutcome, thumbCode);
+                }
                 case FAILED -> upload.failed(errorCode, message);
                 default -> upload.checking(errorCode, message);
             }

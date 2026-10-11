@@ -18,7 +18,12 @@ pokeclip:
     internal-token: ${INTERNAL_API_TOKEN:}
     # 유튜브 이어 올리기 시작 주소. 시험만 가짜 서버로 바꾼다.
     youtube-upload-url: ${YOUTUBE_UPLOAD_URL:https://www.googleapis.com/upload/youtube/v3/videos}
+    # 썸네일 붙이기(thumbnails.set) 주소. 시험만 가짜 서버로 바꾼다.
+    youtube-thumbnail-url: ${YOUTUBE_THUMBNAIL_URL:https://www.googleapis.com/upload/youtube/v3/thumbnails/set}
     work-dir: ${UPLOAD_WORK_DIR:/tmp/pokeclip-upload}
+    # 장면 썸네일을 뽑을 때 쓴다. 이미지에는 apt 꾸러미로 들어 있다.
+    ffmpeg-path: ${FFMPEG_PATH:ffmpeg}
+    ffprobe-path: ${FFPROBE_PATH:ffprobe}
     # 한 번에 보내는 조각. 유튜브는 256KiB의 배수를 요구한다(마지막 조각만 예외).
     chunk-size: 8MB
     # 큐 설정(900초)과 같아야 한다. 이 값에서 2분 전부터 숨김 시간을 늘린다.

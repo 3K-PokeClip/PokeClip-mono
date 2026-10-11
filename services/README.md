@@ -783,8 +783,8 @@ CHECK 제약**을 더한다(POK-171).
 🔴 **`PATCH`·`PUT`은 POK-207이 CORS 허용 목록에 넣은 것이다.** 없으면 화면의 「저장」이
 preflight에서 막혀 **창구는 멀쩡한데 브라우저만 못 부른다.** 자리는 `web-support/CorsConfig` 하나다.
 
-아래 표의 창구는 **서른**이다 — 스트림키 다섯(**계약4 = `POST /internal/stream-keys/resolve`** —
-1번 Media가 SRT 연결을 받기 전에 한 번 부른다) · 치지직 연동 다섯 · **유튜브 연동 다섯**(POK-121) ·
+아래 표의 창구는 **서른하나**다 — 스트림키 다섯(**계약4 = `POST /internal/stream-keys/resolve`** —
+1번 Media가 SRT 연결을 받기 전에 한 번 부른다) · 치지직 연동 다섯 · **유튜브 연동 여섯**(POK-121, 상태 확인 하나는 POK-291) ·
 편집자 위임 아홉 · **clip용 내부 창구 둘**(POK-175, 아래 절) · **회원정보 수정 셋**(POK-207) ·
 **회원 탈퇴 하나**(POK-171).
 로그인·토큰 창구 넷(`/api/auth/google`·`/refresh`·`/logout`·`/me`)은 이 표에 없다 — 위 「인증」 줄이 그것이다.
@@ -808,6 +808,7 @@ preflight에서 막혀 **창구는 멀쩡한데 브라우저만 못 부른다.**
 | `GET /api/youtube-link` | 웹 | 사용자 JWT |
 | `DELETE /api/youtube-link` | 웹 | 사용자 JWT |
 | `POST /internal/youtube-link/resolve` | **clip·업로드 워커** | `X-Internal-Token` 헤더 |
+| `POST /internal/youtube-link/status` — 연동 상태만(토큰·갱신 없음, POK-291) | **clip** | `X-Internal-Token` 헤더 |
 | `POST /api/editor-invitations` | 웹 | 사용자 JWT |
 | `GET /api/editor-invitations/sent` | 웹 | 사용자 JWT |
 | `GET /api/editor-invitations/received` | 웹 | 사용자 JWT |
@@ -2050,12 +2051,15 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `POST /api/clip/broadcasts/{streamId}/recipes/{id}/renders` | Bearer JWT | **201** 봉투(새 주문) · **200** 봉투(같은 편집본 같은 판이 이미 진행 중 — 그것을 돌려준다) · 400 `{"error":"invalid_request","field":"cut"}`(템플릿) · 404 `broadcast_not_found`/`recipe_not_found` · **409** `{"error":"source_not_ready"}` · **422** `{"error":"message_too_large"}` · 401 · 503 `authorization_unavailable`/**`render_unavailable`** |
+| `POST /api/clip/broadcasts/{streamId}/recipes/{id}/renders` (본문 없음 · JSON `{"upload":…}` · multipart, POK-291) | Bearer JWT | **201** 봉투(새 주문) · **200** 봉투(같은 편집본 같은 판이 이미 진행 중이거나, 업로드 정보를 실었는데 이미 완성: 그것을 돌려준다) · 400 `{"error":"invalid_request","field":"cut"\|업로드 칸}` · 404 `broadcast_not_found`/`recipe_not_found` · **409** `{"error":"source_not_ready"}`·`already_uploaded`·`youtube_not_linked` · **413** `payload_too_large` · **415** `unsupported_image` · **422** `{"error":"message_too_large"}` · 401 · 503 `authorization_unavailable`/**`render_unavailable`**/`upload_unavailable`/`thumbnail_store_unavailable` |
 | `GET /api/clip/broadcasts/{streamId}/clips/{clipId}` | Bearer JWT | **200** 봉투 · 404 `broadcast_not_found`/`clip_not_found` · 401 · 503 |
 | `POST /internal/jobs/{jobId}/events` (계약1 4절) | `X-Internal-Token` | **200** 전이 응답 · **400** `{"reason":"INVALID_EVENT"\|"INVALID_RESULT"}` 또는 `{"error":"invalid_request","field":…}` · **404** `{"error":"job_not_found"}` · **409** `{"reason":"SUPERSEDED"\|"TERMINAL"}` · 401 |
 
-**봉투**: `{"id","streamId","recipeId","recipeVersion","requestedBy","status","progress":{"percent","stage","attempt","jobId"},"outputs","error":{"code","message"},"createdAt","updatedAt","upload"}`.
+**봉투**: `{"id","streamId","recipeId","recipeVersion","requestedBy","status","progress":{"percent","stage","attempt","jobId"},"outputs","error":{"code","message"},"createdAt","updatedAt","upload","uploadRequest"}`.
 `upload`는 가장 최근 유튜브 업로드(아래 「유튜브 업로드 주문」 절의 봉투)이고 한 번도 안 올렸으면 `null`이다(POK-220).
+`uploadRequest`는 그 영상의 판(편집본·판 번호)에 걸린 「렌더 뒤 업로드」 의도 요약 `{"title","privacyStatus","thumbnailSource"}`이고 없으면 `null`이다(POK-291).
+완성과 업로드 줄은 한 트랜잭션이라, 완성인데 `uploadRequest`가 있고 `upload`가 없으면 **자동 업로드를 건너뛴 것**이다(업로드 줄 꺼짐 ·
+같은 판이 이미 올라감). 화면은 「업로드는 시작되지 않았어요」로 보고 묻기를 멈춘다(보관함의 「업로드」가 다시 시도 문으로 저장된 정보로 올린다).
 `status`는 **`queued`(주문됨) → `rendering`(만드는 중) → `rendered`(완성) | `failed`(실패)** 넷 — 2번 화면의 거르기 값이라 이름을 바꾸지 않는다.
 업로드 상태는 POK-220이 더한다. `outputs`는 완성했을 때 일꾼이 보고한 산출물 목록(`outputId`·`kind`·`s3Key`) 그대로인데
 **화면이 그 키로 영상을 직접 받을 수는 없다**(창고는 비공개): 보고 받을 주소는 아래 「완성 영상 주소」 문(POK-247)이 준다.
@@ -2097,7 +2101,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 | `STARTED` | 주문됨·시작됨 | 200 `{proceed:true, executionToken(새 UUID), attemptOrdinal(+1), isFinalAttempt(≥3)}` — 옛 토큰은 이 순간부터 죽는다, 진행률 0, 영상 `rendering` |
 | `STARTED` | 끝남 | 200 `{proceed:false}` — 일꾼은 메시지를 지운다 |
 | `PROGRESS`·`RETRY_SCHEDULED` | 시작됨 + 토큰 일치 | 200 `{}` — 진행률은 같은 토큰 안에서 단조(뒤로 가는 값 무시) |
-| `SUCCEEDED` | 시작됨 + 토큰 일치 | **산출물 검증이 전이보다 먼저** — 실패면 400 `INVALID_RESULT`(상태 불변) · 통과면 `rendered`, `outputs` 저장 |
+| `SUCCEEDED` | 시작됨 + 토큰 일치 | **산출물 검증이 전이보다 먼저** — 실패면 400 `INVALID_RESULT`(상태 불변) · 통과면 `rendered`, `outputs` 저장 · **그 판의 업로드 의도가 있으면 같은 트랜잭션에서 업로드 줄**(POK-291, 아래 절) |
 | `TERMINAL_FAILED` | 시작됨 + 토큰 일치 · **주문됨 + 무토큰**(preflight) | 200 — `failed`, `error.code`·`message` 저장 |
 | 토큰 불일치 | 시작됨 | **409 `SUPERSEDED`** — 일꾼은 중단만, 메시지는 안 건드린다 |
 | 아무 보고 | 끝남 | **409 `TERMINAL`** |
@@ -2112,6 +2116,60 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 편집자가 다시 「만들어 줘」(새 영상 줄).
 
 **같은 판정기·같은 404·같은 25ms 바닥.** `clip_not_found`도 바닥을 탄다.
+
+#### 「영상 만들기」 = 렌더 + 유튜브 바로 올리기 (POK-291)
+
+편집기의 「영상 만들기」가 업로드 정보 창(제목 · 설명 · 태그 · 공개 범위 · 아동용 · 썸네일)을 받아 **렌더를 주문하고, 렌더가 성공하면 clip이
+스스로 업로드 줄을 만든다.** 웹이 렌더 끝을 기다렸다가 업로드 문을 다시 부르지 않는다. 정보는 표 `upload_requests`(`V213`)에
+**편집본 판 하나에 한 줄**로 남는다(같은 판에 다시 누르면 덮어쓴다. 마지막 누름이 이긴다). 영상 줄이 아니라 판에 묶는 이유: 렌더가 실패해 같은 판을
+다시 만들면 새 영상 줄이 생기는데, 그 영상이 성공할 때 저장된 정보로 이어서 올려야 한다(본문 없이 다시 만들어도 된다).
+
+**본문 셋**
+- **없음**: 지금과 똑같이 렌더만. 단 그 판에 의도가 있으면 렌더 성공 때 업로드가 붙는다.
+- **JSON** `{"upload": UploadInfo}` · **multipart** 파트 `request`(JSON, 같은 모양) + `thumbnail`(그림, `thumbnail.source`가 `file`일 때만. 그 밖에 오면 400 `field=thumbnail`).
+  그림은 JSON으로 못 보낸다(400 `field=thumbnail`). multipart인데 `request`가 없으면 400 `field=request`.
+
+```json
+UploadInfo = {"title":"필수","description":null,"tags":["…"],"privacyStatus":"private|unlisted|public|null(→private)",
+              "madeForKids":false,"thumbnail":null | {"source":"none"} | {"source":"scene","offsetMs":12000} | {"source":"file"}}
+```
+
+**검사(전부 트랜잭션 전, 걸리면 아무것도 안 남는다)**: 제목·설명은 업로드 문과 같은 규칙 · 태그는 앞뒤 공백을 걷고 빈 태그·`<`·`>`·`,` 거절,
+똑같은 태그는 하나로(순서 유지), 합계 = Σ(코드포인트 + 공백이 든 태그면 2) + (개수 − 1) ≤ 500 · 공개 범위는 세 값 · `madeForKids`는 불리언 ·
+장면은 **정수** `0 ≤ offsetMs < 컷 길이`(완성 영상 첫 장면 기준, 컷이 없으면 거절) · 그림은 **10MB**(`spring.servlet.multipart.max-file-size`, 요청 상한
+11MB. 같게 두면 정확히 10MB가 413이다) 초과면 **413** `payload_too_large`, 첫 바이트가 JPEG(`FF D8 FF`)·PNG(`89 50 4E 47 0D 0A 1A 0A`)가 아니면
+**415** `unsupported_image`. 형식은 첫 바이트로 정한다(보낸 쪽이 밝힌 형식·이름은 안 믿는다).
+
+**판정 순서(업로드 정보가 있을 때)**: ① 자격·편집본(404) ② 업로드 줄 꺼짐 → **503 `upload_unavailable`**(렌더 전에 막는다) ③ 검사(400·413·415)
+④ **유튜브 연결 미리 확인**: 방송 스트리머로 auth `POST /internal/youtube-link/status`를 묻는다(시한 2초). `linked=false`면 **409
+`{"error":"youtube_not_linked","reason"}`**. auth가 5xx·시간 초과·이상한 답이면 **그냥 진행**(`clip.upload.link_check_skipped`): 렌더를 auth 장애로 막지 않는다
+⑤ 같은 판 중복: 그 판의 영상 중 하나라도 살아 있는(실패 아닌) 업로드가 있으면 **409 `{"error":"already_uploaded","uploadId"}`**
+⑥ 그림이면 창고에 둔다(`CLIPS_BUCKET`의 `upload-thumbnails/{streamerUserId}/{uuid}.{jpg|png}`, 실패 503 `thumbnail_store_unavailable`)
+⑦ 갈래(의도 덮어쓰기와 한 트랜잭션): **(a)** 같은 판이 만드는 중 → 그 영상 줄을 잠그고 다시 본 뒤(아직 만드는 중이면) 의도만 덮어쓰고 그 영상 **200** · **(b)** 같은 판 최신 영상이 완성 → 다시 렌더하지
+않고 그 영상에 업로드 줄을 만들어 커밋 뒤 바로 싣는다 **200**(봉투의 `upload`가 찬다) · **(c)** 그 밖(영상 없음 · 마지막이 실패) → 렌더 주문
+길 그대로(렌더 꺼짐 503 · 템플릿 400 · 조각 409) **201**.
+
+**렌더 성공 → 자동 업로드(`UploadAutoStarter`)는 성공 전이와 같은 트랜잭션이다.** 의도를 `FOR UPDATE`로 읽고 → 업로드 줄 꺼짐이면 건너뛴다(줄을 만들면
+아무도 안 실어 영원히 「올리는 중」이다) → 판 잠금 뒤 같은 판에 살아 있는 업로드가 있으면 건너뛴다 → 벌은 영상이 하나면 그것, 여럿이면 세로
+(`VERT_9_16`, 이 영상을 만든 주문서의 편집본에서 읽는다), 없으면 벌 번호 사전순 첫째(ADR-080 규칙을 서버도) → 줄 + 주문서 → **커밋 뒤 바로 싣는다**.
+같은 성공 보고의 재전송은 보고 장부가 막아 줄이 안 는다. 업로드 줄 쓰기가 실패하면 **완성까지 되감긴다**(장부에도 안 남아 일꾼이 다시 보내면
+처음부터 된다). 커밋 뒤에 따로 만들면 완성과 장부만 남고 업로드는 영영 안 생긴다. 갈래 (b)도 같은 메서드를 쓴다.
+잠금 순서: `render_jobs → clips → upload_requests → 판 권고 잠금(pg_advisory_xact_lock)`. 탈퇴 정리는 `upload_requests`를 잠그지 않고 지우기만 한다.
+**새 의도는 방송 줄을 `FOR KEY SHARE`로 먼저 잡는다**: 탈퇴 정리가 방송 줄을 `FOR UPDATE`로 잡으므로, 정리가 지운 직후 의도가 들어와 편집본 지우기가
+외래키로 죽는 틈이 없다.
+🔴 **갈래 (a)는 만드는 중인 영상 줄을 잠근 뒤에 의도를 쓴다**(POK-291 로컬 리뷰 1라운드). 성공 보고는 영상 줄을 잠근 뒤 의도를 `FOR UPDATE`로
+읽는데, 아직 커밋 안 된 새 의도는 그 읽기에 안 보이고 기다리게 하지도 않는다. 잠그지 않으면 「완성 + 의도 + 업로드 없음」이 남고 응답은 「다 만들어지면 올린다」다.
+잠근 뒤 다시 보아 그사이 완성이 됐으면 갈래 (b)로, 실패로 끝났으면 갈래 (c)로 간다. 잠금 순서는 `broadcasts(KEY SHARE) → clips → upload_requests`로
+탈퇴 정리(`broadcasts → render_jobs → clips`)와 같은 방향이다. 렌더 주문 길(c)의 선점에 진 갈래도 같은 메서드를 지난다.
+
+**「영상 만들기」의 한계**
+- 🔴 **창고에 둔 그림이 아무도 안 가리키는 파일로 남을 수 있다**(같은 판에 그림을 다시 올려 의도가 덮일 때, 지우기 자체가 실패할 때).
+  ⑥ 뒤 갈래 처리가 예외로 끝나면(렌더 꺼짐·조각 미준비·롤백) 그 그림을 최선 노력으로 지운다(실패는 로그 `clip.upload.thumbnail_cleanup_failed`만).
+  남은 것은 스트리머 접두사라 탈퇴 정리가 지운다. 그 전까지는 남는다(치우는 장치 없음).
+- clip 역할에 **`CLIPS_BUCKET`의 `upload-thumbnails/*` `s3:PutObject`**가 있어야 한다(지금까지 clip은 그 창고를 읽고 지우기만 했다). 업로드 일꾼은 같은 키의 `s3:GetObject`.
+- 10MB를 **약 2MB보다 크게** 넘는 요청은 413 대신 연결이 끊긴다(톰캣이 남은 바이트를 2MB까지만 버리고 읽는다: `server.tomcat.max-swallow-size`).
+  화면이 10MB를 먼저 막는다.
+- 판 단위 중복 검사는 업로드 줄을 넣는 자리 넷(옛 문 · 다시 시도 · 렌더 성공 자동 · 갈래 b)이 권고 잠금 안에서 한다. clip이 여러 대여도 같은 DB 잠금이다.
 
 **알려진 한계**
 - **취소가 없다.** 계약1은 취소를 종결의 한 형태로 두는데 이 카드 범위 밖이다 — 끝날 때까지 기다리거나 실패하게 둔다
@@ -2143,17 +2201,20 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 
 ### clip: 유튜브 업로드 주문 (POK-220)
 
-**완성 영상을 스트리머 채널에 비공개로 올리는 주문을 받아 줄(SQS `jobs-upload`)에 넣고, 업로드 일꾼의 보고로 상태를 바꾼다.**
+**완성 영상을 스트리머 채널에 올리는 주문을 받아 줄(SQS `jobs-upload`)에 넣고, 업로드 일꾼의 보고로 상태를 바꾼다.**
+업로드 줄은 이 문 말고도 「영상 만들기」의 렌더 성공(자동)과 다시 시도 문이 만든다(POK-291, 위 렌더 절).
 표 `clip_uploads`(`V209`). 일꾼은 `workers/upload/`(POK-220 PR-B)다. 승인 게이트는 없다(2026-08-30 결정): 편집자·스트리머 둘 다 자격만 있으면 올린다.
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `POST /api/clip/broadcasts/{streamId}/clips/{clipId}/uploads` `{title, description?, outputId?}` | Bearer JWT | **201** 봉투(새 주문) · **200** 봉투(같은 영상 같은 벌의 살아 있는 업로드가 있다, 그것을 돌려준다) · 400 `{"error":"invalid_request","field":"title\|description\|outputId"}` · 404 `broadcast_not_found`/`clip_not_found` · **409** `clip_not_rendered` · 401 · 503 `authorization_unavailable`/**`upload_unavailable`** |
+| `POST /api/clip/broadcasts/{streamId}/clips/{clipId}/uploads` `{title, description?, outputId?, tags?, privacyStatus?, madeForKids?}` | Bearer JWT | **201** 봉투(새 주문) · **200** 봉투(같은 영상 같은 벌의 살아 있는 업로드가 있다, 그것을 돌려준다) · 400 `{"error":"invalid_request","field":"title\|description\|outputId\|tags\|privacyStatus"}` · 404 `broadcast_not_found`/`clip_not_found` · **409** `clip_not_rendered`·**`already_uploaded`**(같은 판의 다른 영상·다른 벌이 살아 있다, POK-291) · 401 · 503 `authorization_unavailable`/**`upload_unavailable`** |
+| `POST /api/clip/broadcasts/{streamId}/clips/{clipId}/uploads/retry` (본문 없음, POK-291) | Bearer JWT | **201** 봉투(최신 실패 줄의 칸을 그대로 복사한 새 줄. 올린 적이 없고 그 판의 의도가 있으면 **의도로** 만든 새 줄) · **200** 봉투(최신이 살아 있다: 그것) · **409** `nothing_to_retry`(올린 적도 의도도 없음)·`already_uploaded`(같은 판의 다른 영상이 살아 있다) · 404 · 401 · 503 `upload_unavailable` |
 | `POST /internal/uploads/{id}/start` | `X-Internal-Token` | 200 `{"proceed":true,"status","attempt","sessionUri"\|null}` 또는 `{"proceed":false,"status"}`(끝난 주문) · 404 `upload_not_found` |
 | `POST /internal/uploads/{id}/session` `{sessionUri}` | `X-Internal-Token` | 200 `{"sessionUri"}` = **먼저 적힌 주소**(일꾼은 자기 주소를 버리고 이것을 쓴다) · 409 `{"reason":"NOT_STARTED"\|"TERMINAL"}` · 400 |
-| `POST /internal/uploads/{id}/result` `{outcome, videoId?, errorCode?, errorMessage?}` | `X-Internal-Token` | 200 `{"status"}`(같은 끝 보고가 다시 와도 200. 주소가 적힌 줄의 `FAILED`는 `checking`으로 받는다) · 409 `TERMINAL`(다른 끝으로 덮기. `checking`→`UPLOADED`만 허용)·`NOT_STARTED` · 400 |
+| `POST /internal/uploads/{id}/result` `{outcome, videoId?, errorCode?, errorMessage?, thumbnailOutcome?, thumbnailErrorCode?}` | `X-Internal-Token` | 200 `{"status"}`(같은 끝 보고가 다시 와도 200. 주소가 적힌 줄의 `FAILED`는 `checking`으로 받는다) · 409 `TERMINAL`(다른 끝으로 덮기. `checking`→`UPLOADED`만 허용)·`NOT_STARTED` · 400 |
 
-**봉투**: `{"id","clipId","outputId","title","status","videoId","error":{"code","message"},"requestedBy","createdAt","updatedAt"}`.
+**봉투**: `{"id","clipId","outputId","title","status","videoId","error":{"code","message"},"requestedBy","createdAt","updatedAt","privacyStatus","madeForKids","tags":[…],"thumbnail":{"source","status","errorCode"}}`.
+설명은 안 싣는다(보관함 목록 폴링이 무거워진다). `thumbnail.status`는 `none`(붙일 것 없음) · `pending`(결과 전) · `set` · `failed`(POK-291).
 `status`는 `queued` → `uploading` → `uploaded` | `failed` | `checking`. 🔴 **이어 올리기 주소(`session_uri`)는 봉투에 없다** :
 그 주소 자체가 올리기 권한이다. 로그에도 안 찍는다. 일꾼 문만 돌려준다.
 
@@ -2176,16 +2237,46 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 
 - **채널 = 방송의 스트리머**(`broadcasts.streamer_id`, ADR-010 Path A). 주문한 사람(편집자일 수 있다)의 채널이 아니다.
 - **토큰은 주문서에 없다.** 일꾼이 올리기 직전에 auth `POST /internal/youtube-link/resolve {userId}`에 묻는다: 주문서는 로그·실패 큐에 남는다.
-- **비공개로 올린다**(ADR-010). 주문서 `video.privacyStatus = "private"`. 공개 전환은 스트리머가 스튜디오에서 한다.
+- **공개 범위는 주문한 사람이 고른다**(ADR-084, POK-291). 주문서 `video.privacyStatus`에 줄의 값을 싣는다(기본 `private`). 편집자도 고를 수 있다.
+- 🔴 **고른 범위 그대로 올라간다.** 2026-10-11 로컬 실기동에서 `public`·`unlisted`로 올린 시험 영상을 처리 뒤 `videos.list`로 읽으니 그대로였고,
+  유튜브 문서(videos.insert의 `status.privacyStatus`, 2026-10-08 UTC판)도 「미검증 API 프로젝트에서 올린 영상도 비공개로 제한하지 않는다」고 적는다.
+  **단서 둘**: 유튜브 도움말 「Videos locked as private」(answer/7300965)는 지금도 「미검증 API 서비스로 올려 잠긴 영상은 이의 제기가 안 되고 다시
+  올려야 한다」고 적어 공식 출처가 어긋나고, 실측은 테스트 상태 OAuth 앱 하나다. 운영 앱으로 바꿀 때 다시 잰다. 10-08에 적은 「감사 전엔 비공개로
+  잠긴다」는 그래서 지금은 틀렸다.
+- 공개 업로드는 구독자 알림도 유튜브 기본값(켜짐)대로 간다(`notifySubscribers`를 안 보낸다). 확인 없이 바로 공개되는 것, 편집자의 공개 선택, 알림은
+  2026-10-11 사용자 결정으로 그대로 두고 창과 보관함이 경고한다. 올린 뒤 범위는 스트리머가 유튜브 스튜디오에서 바꾼다: 지금 범위
+  (`youtube.upload`·`youtube.readonly`)로는 `videos.update`를 못 부른다.
 - **제목·설명은 유튜브 규칙을 먼저 본다**: 제목 1~100자(코드포인트, 앞뒤 공백 걷음), 설명 5000바이트, 둘 다 `<`·`>` 금지.
   줄에 실린 뒤 유튜브가 거절하면 늦다. 제목은 이 줄에 남는다(편집본(계약6)에는 제목 칸이 없다).
 - **벌 고르기**: 영상 파일이 하나면 그것, 여럿이면 `outputId` 필수(무엇을 올릴지 우리가 정하지 않는다). 지금 편집 화면은 편집본마다 한 벌만 만든다.
-- **주문서**: `{"schemaVersion":1,"jobType":"UPLOAD","uploadId","clipId","streamId","channelOwnerUserId","source":{"bucket","s3Key","outputId"},"video":{"title","description","privacyStatus"},"requestedAt"}`.
-  선기록·후발행(outbox)은 렌더와 같다. 같은 주문서가 두 통 실려도 영상은 하나다(위 두 번째 길).
+- **주문서**: `{"schemaVersion":1,"jobType":"UPLOAD","uploadId","clipId","streamId","channelOwnerUserId","source":{"bucket","s3Key","outputId"},"video":{"title","description","privacyStatus","tags":[…],"madeForKids"},"thumbnail":null|{"source":"scene","offsetMs"}|{"source":"file","bucket","s3Key","contentType"},"requestedAt"}`.
+  `schemaVersion`은 1 그대로다(POK-291): 새 칸은 선택 칸이고, 판을 올리면 옛 일꾼이 못 읽는다며 지워 줄이 `queued`로 영원히 남는다. 쓰는 자리는 하나다(`UploadPayload`).
+  선기록·후발행(outbox)은 렌더와 같다. 줄을 만든 트랜잭션의 **커밋 뒤 훅은 전용 스레드(`upload-publish-N`, 둘)에 발행을 제출만 한다**
+  (`UploadPublishExecutor`, POK-291 로컬 리뷰 1라운드). 🔴 커밋 뒤 훅은 원 커넥션을 돌려주기 **전**에 돈다: 그 안에서 발행 트랜잭션을 열면 요청 하나가
+  커넥션 둘을 쥐고, 풀 크기(기본 10)만큼 겹치면 풀 시한 30초 동안 clip 전체가 멈춘다(auth `ChzzkCleanupExecutor`와 같은 모양). 줄이 차서 버려지면
+  WARN `clip.upload.publish_rejected`이고 outbox가 30초 뒤에 싣는다. 같은 주문서가 두 통 실려도 영상은 하나다(위 두 번째 길).
+- **🔴 판 하나는 채널에 하나**(POK-291). 부분 UNIQUE는 (영상, 벌) 단위라 같은 판을 다시 렌더한 다른 영상·다른 벌을 못 막았다. 업로드 줄을 넣는 자리 넷이
+  전부 판 권고 잠금 뒤 「그 판의 영상 중 살아 있는 업로드」를 보고, 있으면 새로 안 만든다(옛 문·다시 시도는 409 `already_uploaded`).
+- **다시 시도**: 업로드 줄이 하나도 없고 그 판의 의도가 있으면 렌더 성공 때와 같은 메서드로 **의도에서** 새 줄을 만든다(201. 자동 업로드를 건너뛴 영상을
+  보관함 「업로드」가 고른 정보 그대로 올리는 길이다. 옛 문으로 가면 설명·태그·썸네일이 빠진다). 의도도 없으면 409 `nothing_to_retry`.
+  최신 줄이 `failed`일 때만 새 줄을 만든다(벌·제목·설명·태그·공개 범위·아동용·썸네일을 복사, 썸네일 상태는 다시 `pending`). `checking`은 대상이 아니다
+  (채널에 이미 있을 수 있다. 살아 있는 것으로 보고 200).
+- **썸네일 결과**: `UPLOADED` 보고의 납작한 칸 둘 `thumbnailOutcome`(`SET`·`FAILED`·`NONE`) · `thumbnailErrorCode`(`[A-Z0-9_]{1,32}`). 올리는 중 → 올림,
+  확인 중 → 올림 **두 전이 모두**에서 적는다. `SET` → `set`, `FAILED` → `failed` + 코드, `NONE`·칸 없음 → 줄이 `pending`이면 `failed` + `THUMBNAIL_NOT_REPORTED`
+  (옛 일꾼), `none`이면 그대로. 🔴 **칸이 이상해도 400으로 거절하지 않는다**: 거절하면 일꾼이 같은 보고를 되풀이하다 실패 큐로 가고, 정리기가 영상이 있는데도
+  확인 중으로 닫는다. 같은 끝 보고의 재전송은 처음 값이 이긴다. 코드는 일꾼이 정한다(`THUMBNAIL_FORBIDDEN` = 채널 전화 인증 필요 등, `workers/upload` README).
+
+**🔴 배포 순서(POK-291): 업로드 일꾼 → auth → clip → web.**
+- 일꾼이 먼저인 이유: 옛 일꾼은 새 주문서 칸을 모르는 칸으로 버리는데, 무해하지 않다. `madeForKids`를 읽지 않고 `false`로 덮어 올리고(아동용 신고가 틀린다),
+  태그를 빼고, 썸네일을 안 붙인다(clip에는 `THUMBNAIL_NOT_REPORTED`로만 남는다). 그 사이 clip 줄과 화면은 고른 값을 말해 채널과 어긋난다.
+- auth가 clip보다 먼저인 이유: 새 clip이 연결 확인 문(`/internal/youtube-link/status`)을 묻는다. 옛 auth면 확인을 건너뛰고 진행하지만(막지는 않는다) 확인이 빠진다.
+- clip이 web보다 먼저인 이유: 옛 clip의 렌더 주문 문은 본문을 안 받아 업로드 정보를 무시하고 렌더만 한 뒤 201을 준다. 화면은 「올릴게요」라고 하는데 아무것도 안 올라간다.
 
 **알려진 한계**
 - **`checking`을 푸는 문이 없다**: 사람이 채널을 보고 「올라갔다(영상 번호)」·「안 올라갔다」를 적는 문은 업로드 상태 화면(F7) 카드에서 판다.
-- 하루 올릴 수 있는 개수(약 5개, 유튜브 쿼터)에 걸리면 일꾼이 `failed` + `QUOTA_EXCEEDED`로 보고한다(PR-B).
+- **「업로드됨」은 유튜브가 바이트를 받았다는 뜻이다.** 처리(인코딩)가 끝났는지 모르고, 공개 범위도 우리가 실어 보낸 값이다: 유튜브(잠금)나
+  스트리머(스튜디오)가 바꾸면 모르고 보관함은 올릴 때의 범위를 말한다(일꾼은 완료 응답에서 `id`만 읽고, `videos.list`를 읽는 곳이 없다).
+- 하루 올리기 한도(Video Uploads 몫, 프로젝트 하루 100회. `workers/upload` README 쿼터 절)에 걸리면 일꾼이 `failed` + `QUOTA_EXCEEDED`로 보고한다(PR-B).
 
 ### clip: 썸네일 (POK-277)
 
@@ -2237,7 +2328,9 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 `cursor`는 불투명한 이어받기 표시(방송·카드 목록의 표시를 넣으면 400 — 종류 태그가 다르다).
 
 **줄 한 개** — `{"recipeId","streamId","creatorId","recipeVersion","cut":{"inAtMs","outAtMs"}|null,"status",
-"broadcast":{"status","startedAt","endedAt","vodExpiresAt"},"latestClip":<주문 문의 봉투 그대로>|null,"createdAt","updatedAt","thumbnailUrl"|null}`.
+"broadcast":{"status","startedAt","endedAt","vodExpiresAt"},"latestClip":<주문 문의 봉투 그대로>|null,"createdAt","updatedAt","thumbnailUrl"|null,
+"uploadRequest":{"title","privacyStatus","thumbnailSource"}|null}`.
+`uploadRequest`는 이 편집본 **지금 판**의 「렌더 뒤 업로드」 의도 요약이다(POK-291). 업로드 줄이 아직 없을 때 화면이 이 제목을 보인다.
 `thumbnailUrl`은 `latestClip`의 사진(POK-277, 「썸네일」 절).
 `latestClip`은 **지금 판으로 만든 영상 중 가장 최근 것**(주문·완성·실패 가리지 않고)이고, 지금 판 것이 없으면 옛 판의 가장 최근 것, 한 번도
 안 만들었으면 `null`이다. 🔴 **「번호가 가장 큰 영상」이 아니다** — 주문은 편집본을 읽고 나서 트랜잭션을 열므로 v1 주문이 v2 주문 뒤에
@@ -2258,6 +2351,8 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 | `uploaded` | 유튜브에 올렸다. `latestClip.upload.videoId`로 `https://youtu.be/{videoId}` | 발행됨 |
 
 업로드가 실패하면(유튜브에 영상이 없는 것이 확실) `rendered`(업로드 대기)로 돌아간다. 사유는 `latestClip.upload.error`.
+**「업로드 실패」는 서버 상태가 아니다**(POK-291에서도 이 표는 안 바꿨다): 화면이 `rendered && latestClip.upload.status == "failed"`로 만들고, 「다시 시도」는
+업로드 다시 시도 문을 부른다.
 **승인 상태 칸은 만들지 않는다**(2026-08-30 결정: 승인 게이트 없음 — 편집자·스트리머 둘 다 업로드한다). 화면 시안의
 「승인 대기」·「반려됨」 배지는 이 결정 전에 그려진 것이고 2번에게 전했다.
 
@@ -2373,6 +2468,7 @@ scope는 둘 — 업로드(`youtube.upload`)와 채널 조회(`youtube.readonly`
 | `GET /api/youtube-link` | 200 `{linked:false}` 또는 `{linked, channelId, channelName, status, linkedAt, lastRefreshedAt, accessExpiresAt}`. `status` ∈ `ACTIVE`·`BROKEN`·`UNLINKED`(파생). **치지직과 달리 `EXPIRED`가 없다** — 구글 access는 1시간짜리라 늘 만료돼 있고 갱신으로 항상 해소되므로 상태가 아니다. `linked`는 `ACTIVE`일 때만 true |
 | `DELETE /api/youtube-link` | 204 (없어도 204). 행은 남고(`revoked_at`+`USER_UNLINKED`) 커밋 뒤에 secrets 삭제. 🔴 **구글에는 revoke를 보내지 않는다** — 아래 |
 | `POST /internal/youtube-link/resolve` `{userId}` | **항상 200** — 아래 |
+| `POST /internal/youtube-link/status` `{userId}` | **항상 200** `{"linked":true,"reason":null}` 또는 `{"linked":false,"reason":"NOT_LINKED"\|"UNLINKED"\|"BROKEN"}`. 회원 번호가 없으면 400. 아래 「`status`(clip용)」 |
 
 오류 본문은 `{"reason": "<위 코드>"}` 한 필드다. 토큰·code·state·채널 ID는 응답·로그 어디에도 안 남는다
 (`SecretLeakTest`가 왕복 전체를 태워 확인한다).
@@ -2401,6 +2497,18 @@ scope는 둘 — 업로드(`youtube.upload`)와 채널 조회(`youtube.readonly`
 임박한 토큰은 주지 않는다, 잠시 뒤 다시 부르면 된다). 거절 응답에는 `accessToken` 필드가 아예 없다.
 **남은 수명이 30분(`resolve-min-remaining`)보다 짧으면 넘기기 전에 즉석 갱신한다** — 구글 access가
 1시간짜리라 치지직(12시간)과 자릿수가 다르다.
+
+**`status`(clip용, POK-291) 계약.** `POST /internal/youtube-link/status {userId}`. 잠금은 `resolve`와 같은
+`/internal/**` 체인이다. clip이 「영상 만들기」 주문을 받으면 렌더 전에 **스트리머가 유튜브를 연결했나**만 묻는다.
+판정은 `resolve`와 같다(`NOT_LINKED` · `UNLINKED` · `BROKEN`). 다른 점은 셋이다.
+
+- **토큰을 돌려주지 않는다.** 응답 칸은 `linked`·`reason` 둘뿐이다(연결됐으면 `reason`은 `null`로 실린다).
+  clip은 토큰이 필요 없고, 받으면 clip 로그·메모리에 토큰이 흘러든다.
+- **갱신하지 않는다.** 구글도 secrets도 안 부르고 회원 행 락도 안 잡는다. access가 만료돼 있어도 「연결됨」이다:
+  만료는 갱신으로 풀리는 일상이고, 갱신이 실제로 거부되는지는 업로드 일꾼의 `resolve`가 그때 안다.
+  그래서 `REFRESH_UNAVAILABLE`은 이 창구에 없다.
+- **회원별 최신 연동 행 하나만 읽어 가른다.** 「살아 있는 행이 있으면 그것이 최신 행」이라는 저장 쪽 약속
+  (`YoutubeLinkWriter.create`가 회원 행 락 뒤에 옛 행을 닫고 새 행을 넣는다)에 기댄다. GET 상태와 같은 근거다.
 
 🔴 **해제해도 구글 쪽 허락은 남는다 — 웹이 안내해야 한다(2번 몫).** `DELETE`는 우리 표의 행을 닫고
 **secrets의 토큰 원문을 지운다**(우리는 다시 못 쓴다). 그러나 구글에 `revoke`는 보내지 않는다 —
@@ -3009,8 +3117,8 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
 
 | 어디 | 지우는 것 | 언제 |
 |---|---|---|
-| clip 표 | 그 회원의 방송 · 방송 편지 기록 · 카드 · 편집본 · 완성 영상 · 렌더 주문·보고 · 업로드 기록 · 썸네일 줄 | 알림 뒤 15초 안 |
-| clip 창고 `CLIPS_BUCKET` | `clips/{clipId}/` · `thumbnails/{live,card,clip}/…jpg` | 표 다음 |
+| clip 표 | 그 회원의 방송 · 방송 편지 기록 · 카드 · 편집본 · **렌더 뒤 업로드 의도(`upload_requests`, 편집본보다 먼저)** · 완성 영상 · 렌더 주문·보고 · 업로드 기록 · 썸네일 줄 | 알림 뒤 15초 안 |
+| clip 창고 `CLIPS_BUCKET` | `clips/{clipId}/` · `thumbnails/{live,card,clip}/…jpg` · **`upload-thumbnails/{streamerUserId}/`**(사용자가 올린 썸네일 그림, 스트리머 접두사 하나라 아무 줄도 안 가리키는 그림까지 덮는다, POK-291) | 표 다음 |
 | 1번 장부·창고 `SEGMENT_BUCKET` | 녹화 조각 줄(`stream_segments`)과 그 파일(원본·재생용 사본) · 회차 머리 파일(init) | 창고 다음, 500줄씩 |
 | 수집기 표 | 그 회원이 연동했던 치지직 채널의 채팅 · 후원 · 방송 정보 | 알림 뒤 15초 안, 늦게 적재된 것까지 10분 동안 |
 | 수집기 창고 `S3_BUCKET` | 채팅 원본 `chat/{channelId}/` | 표 다음 |
@@ -3069,7 +3177,9 @@ OBS는 트랙 여섯을 항상 다 보내고 트랙에 이름이 없다(계약9�
 - **회차 줄(`stream_sessions`)과 그 딸린 1번 표는 남긴다.** 다른 1번 표가 외래키로 걸려 있고 회원 정보가 없다.
 - **채팅 원본 파일의 60일 보관은 코드가 아니라 창고 수명 규칙이 맡는다.** 채팅 원본 창고(`S3_BUCKET`)에 `chat/` 60일 만료 규칙을
   1번이 건다. 지금 dev는 원본 창고가 꺼져 있다.
-- **렌더가 꺼진 배포(`RENDER_ENABLED=false`)는 창고 이름을 몰라 표만 지운다**(WARN `clip.purge.storage_unavailable`). 녹화 조각 줄도 안 지운다.
+- **렌더도 업로드도 꺼진 배포는 창고 이름을 몰라 표만 지운다**(WARN `clip.purge.storage_unavailable`). 녹화 조각 줄도 안 지운다.
+  **렌더만 끄고 업로드를 켠 배포**는 출력 창고(`CLIPS_BUCKET`)를 안다: 사용자가 올린 썸네일 그림(`upload-thumbnails/{streamerUserId}/`)을 포함해
+  출력 접두사는 지우고, 녹화 조각 창고 이름(`SEGMENT_BUCKET`)을 모르면 조각은 파일도 줄도 안 지운다(WARN `clip.purge.segments_skipped`, POK-291).
 - **편집자가 남의 방송에 남긴 흔적은 그대로다**(카드를 집은 사람 · 편집본 작성자 = 회원 번호). 이름·이메일은 탈퇴 때 익명화된다(사용자 결정).
 - **지운 기록은 되돌릴 수 없다.** 백업이 없다.
 - **이미 시작된 유튜브 업로드는 끝까지 간다.** 업로드 일꾼은 이어 올리기 주소를 받은 뒤 clip에 묻지 않고 조각을 보낸다. 탈퇴 전에

@@ -170,7 +170,7 @@ export function App({ bridge }: { bridge: Bridge }) {
 
       {state.paired ? <Checks state={state} /> : null}
 
-      {state.paired ? <AudioTracks state={state} /> : null}
+      {state.paired ? <AudioTracks state={state} bridge={bridge} /> : null}
 
       <Settings bridge={bridge} locked={locked} autoAssign={state.audio.autoAssign} />
 

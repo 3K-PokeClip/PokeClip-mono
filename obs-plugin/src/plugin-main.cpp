@@ -43,6 +43,9 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include <QTimer>
 
 #include <atomic>
+#include <chrono>
+#include <future>
+#include <memory>
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("pokeclip-obs", "en-US")
@@ -286,6 +289,72 @@ BridgeCallbacks MakeBridgeCallbacks()
 		RunInUiThread([]() { StopRetryNow(); });
 		return {202, JsonReason(true, "")};
 	};
+	// POK-266 — 손 배정(트랙으로 옮기기·트랙에서 빼기). 워커 스레드라 독에 보낸 상태(열쇠·본방 트랙·적용 중)로
+	// 미리 거르고, 기억 수정과 재계산은 UI 스레드에서 한다. 결과(누가 어느 트랙인지)는 상태 스트림으로 돌아간다.
+	cb.assignAudio = [](const std::string &body) -> BridgeCallbacks::Reply {
+		obs_data_t *d = obs_data_create_from_json(body.c_str());
+		if (!d)
+			return {400, JsonReason(false, "invalid_json")};
+		std::string key = obs_data_get_string(d, "key");
+		// null·생략 = 트랙에서 뺀다. 정수가 아닌 값(문자열·불리언·소수)은 거절한다 — 「생략」으로 읽으면 넣으려던 소스가
+		// 조용히 트랙에서 빠진다.
+		obs_data_item_t *item = obs_data_item_byname(d, "track");
+		enum obs_data_type type = item ? obs_data_item_gettype(item) : OBS_DATA_NULL;
+		bool hasTrack = type == OBS_DATA_NUMBER && obs_data_item_numtype(item) == OBS_DATA_NUM_INT;
+		bool badTrack = type != OBS_DATA_NULL && !hasTrack;
+		obs_data_item_release(&item);
+		long long track = hasTrack ? obs_data_get_int(d, "track") : 0; // 범위를 본 뒤에 좁힌다 — int로 먼저 감기면 통과한다
+		obs_data_release(d);
+		if (key.empty())
+			return {400, JsonReason(false, "invalid_json")};
+		if (badTrack || (hasTrack && (track < 2 || track > kStemSlots + 1)))
+			return {400, JsonReason(false, "bad_track")};
+
+		StateSnapshot s = AppState::Instance().Snapshot();
+		if (!s.audio.applied)
+			return {409, JsonReason(false, "audio_off")};
+		bool known = false;
+		auto scan = [&](const std::vector<AudioSourceView> &list) {
+			for (const AudioSourceView &v : list)
+				known = known || v.key == key;
+		};
+		for (const AudioTrackView &t : s.audio.tracks)
+			scan(t.sources);
+		scan(s.audio.mixOnly);
+		if (!known)
+			return {404, JsonReason(false, "unknown_source")};
+		if (hasTrack && s.audio.tracks[static_cast<size_t>(track - 2)].mainStream)
+			return {409, JsonReason(false, "main_stream_track")};
+		int slot = hasTrack ? static_cast<int>(track) - 1 : 0;
+		// 기억 수정·재계산은 UI 스레드 것이라 거기서 돌리고, 결과를 잠깐 기다려 실제 상태 코드로 답한다 — 그 찰나의
+		// 거절(소스 삭제·본방 트랙 전환·설정 저장 실패)이 독에 사유로 간다. UI 스레드가 바쁘면 202(결과는 상태로 온다).
+		// 종료 중엔 큐에 넣은 일이 안 돌 수 있다(promise가 깨진다) — 그때도 202.
+		constexpr int kReplyWaitMs = 1500;
+		auto done = std::make_shared<std::promise<std::pair<bool, std::string>>>();
+		std::future<std::pair<bool, std::string>> result = done->get_future();
+		RunInUiThread([key, slot, done]() {
+			std::string reason;
+			bool ok = AudioRouter::Instance().AssignTrack(key, slot, reason);
+			if (!ok)
+				obs_log(LOG_WARNING, "audio routing: assign of %s rejected (%s)", key.c_str(),
+					reason.c_str());
+			done->set_value({ok, reason});
+		});
+		if (result.wait_for(std::chrono::milliseconds(kReplyWaitMs)) != std::future_status::ready)
+			return {202, JsonReason(true, "")};
+		try {
+			auto [ok, reason] = result.get();
+			if (ok)
+				return {200, JsonReason(true, "")};
+			int status = reason == "unknown_source" ? 404
+				     : reason == "bad_track"      ? 400
+				     : reason == "save_failed"    ? 500
+								    : 409; // audio_off · main_stream_track
+			return {status, JsonReason(false, reason)};
+		} catch (const std::future_error &) {
+			return {202, JsonReason(true, "")};
+		}
+	};
 	return cb;
 }
 
@@ -433,8 +502,17 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 	case OBS_FRONTEND_EVENT_RECORDING_STARTING:
 		AudioRouter::Instance().Reconcile("recording starting");
 		break;
+	// STARTING은 출력이 켜지기 전이라 그때 계산한 잠금(방송·녹화 중 — 독·폴백의 손 배정 확인 창 근거)은 거짓이다.
+	// 실제로 켜진 뒤(STARTED)와 리플레이 버퍼 시작·정지에 한 번 더 계산해 뷰의 locked를 맞춘다 — 배정은 바뀌지 않는다.
+	case OBS_FRONTEND_EVENT_RECORDING_STARTED:
+		AudioRouter::Instance().Schedule("recording started");
+		break;
 	case OBS_FRONTEND_EVENT_RECORDING_STOPPED:
 		AudioRouter::Instance().Schedule("recording stopped");
+		break;
+	case OBS_FRONTEND_EVENT_REPLAY_BUFFER_STARTED:
+	case OBS_FRONTEND_EVENT_REPLAY_BUFFER_STOPPED:
+		AudioRouter::Instance().Schedule("replay buffer changed");
 		break;
 	// 동기화 규칙(설정 sync_start): 본방의 시작·정지만 따라간다. 본방이 잠시 끊겨 재연결 중일 때는
 	// 프론트엔드 이벤트가 없고 obs_frontend_streaming_active()도 참으로 남으므로 우리 송출을 건드리지 않는다 —
@@ -444,6 +522,7 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STARTED:
 		AppState::Instance().Mutate([](StateSnapshot &s) { s.obsStreaming = true; });
+		AudioRouter::Instance().Schedule("stream started"); // 위 RECORDING_STARTED와 같은 이유 — 잠금을 뷰에 싣는다
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STOPPING:
 		// obs_output_stop 안에서 동기로 온다. 본방과 같이 멈춘다(예약된 재시도도 버린다).

@@ -668,6 +668,98 @@
   flex: none;
   margin-top: 2px;
 }
+/* 손 배정(POK-266) — 트랙 행에 소스 칩(× = 트랙에서 빼기), 행 끝 「+」(소스를 고르는 네이티브 select) */
+.trackRow {
+  align-items: flex-start;
+}
+.trackRow .trackNo {
+  margin-top: 1px;
+}
+.chips {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--pc-radius-pill);
+  border: 1px solid var(--pc-color-border-subtle);
+  background: var(--pc-color-bg-inset);
+  font-size: var(--pc-font-size-2xs);
+  white-space: nowrap;
+}
+.chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chipX {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  margin-right: -4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--pc-radius-circle);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.chipX:hover:not(:disabled) {
+  opacity: 1;
+  background: rgb(0 0 0 / 0.15);
+}
+.chipX:disabled {
+  cursor: progress;
+}
+.addSelect {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: var(--pc-radius-sm);
+  border: 1px dashed var(--pc-color-border-default);
+  background: transparent
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M12 5v14M5 12h14'/%3E%3C/svg%3E")
+    no-repeat center;
+  color: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+.addSelect option {
+  color: var(--pc-color-text-primary);
+}
+.addSelect:hover:not(:disabled) {
+  border-color: var(--pc-color-border-strong);
+}
+.addSelect:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.addSelect:focus {
+  outline: none;
+  border-color: var(--pc-color-accent);
+}
+.dialogButton[data-kind='primary'] {
+  border: 1px solid var(--pc-color-accent);
+  background: var(--pc-color-accent);
+  color: var(--pc-color-bg-canvas);
+  font-weight: var(--pc-weight-semibold);
+}
+.dialogButton[data-kind='primary']:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
 .srOnly {
   position: absolute;
   width: 1px;

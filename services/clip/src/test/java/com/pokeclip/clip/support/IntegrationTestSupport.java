@@ -152,6 +152,8 @@ public abstract class IntegrationTestSupport {
         jdbc.update("DELETE FROM render_jobs");
         jdbc.update("DELETE FROM clip_uploads");
         jdbc.update("DELETE FROM clips");
+        // 「렌더 뒤 업로드」 의도(POK-291)는 편집본의 자식이다.
+        jdbc.update("DELETE FROM upload_requests");
         jdbc.update("DELETE FROM recipes");
         jdbc.update("DELETE FROM jump_cards");
         jdbc.update("DELETE FROM broadcast_events");

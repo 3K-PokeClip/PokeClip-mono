@@ -5,6 +5,7 @@ Copyright (C) SoraYuki, licensed under GPL-2.0.
 #include "stream-target.hpp"
 
 #include "app-state.hpp"
+#include "audio-router.hpp"
 #include "constants.hpp"
 #include "end-signal-policy.hpp"
 #include "end-signal-sender.hpp"
@@ -637,6 +638,8 @@ void StreamTarget::OnStart(void *data, calldata_t *)
 		return;
 	}
 	obs_log(LOG_INFO, "SRT output started");
+	// 우리 출력도 오디오 배정의 잠금 조건(AudioRouter Locked)이다 — 켜진 뒤 한 번 계산해 독·폴백의 locked를 맞춘다.
+	AudioRouter::Instance().Schedule("srt started");
 	AppState::Instance().Mutate([](StateSnapshot &s) {
 		s.phase = StreamPhase::Live;
 		s.errorCode.clear();
@@ -859,6 +862,8 @@ void StreamTarget::ReleaseWhenStopped(uint64_t generation, int attemptsLeft)
 		return;
 	if (!obs_output_active(output_)) {
 		Release(); // 우리가 만든 오디오 인코더 5개도 여기서 풀린다
+		// 본방 STOPPED의 재계산은 우리 출력이 아직 active일 때 돌아 locked가 참으로 남는다 — 풀린 뒤 한 번 더.
+		AudioRouter::Instance().Schedule("srt released");
 		return;
 	}
 	if (attemptsLeft <= 0) {

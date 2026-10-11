@@ -32,6 +32,8 @@ struct BridgeCallbacks {
 	// A5: 「다시 연결」·「다시 시도」 — 본방은 두고 우리 송출만 시작한다 / 「재시도 중지」
 	std::function<Reply()> sendNow;
 	std::function<Reply()> stopRetry;
+	// POK-266: 독의 손 배정 — {"key", "track"(2~6 = 그 트랙으로, 없거나 null = 트랙에서 뺀다)}. 결과는 상태(audio)로 간다.
+	std::function<Reply(const std::string &body)> assignAudio;
 };
 
 class BridgeServer {

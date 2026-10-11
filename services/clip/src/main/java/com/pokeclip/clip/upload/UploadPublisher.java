@@ -31,6 +31,10 @@ public class UploadPublisher {
         this.transactions = transactions;
     }
 
+    /**
+     * 트랜잭션 밖에서 부른다(POK-291): 커밋 뒤 발행은 {@link UploadPublishExecutor}의 스레드가 부른다. 커밋 뒤 훅 안에서 직접 부르면
+     * 기본 전파가 이미 커밋된 바깥 트랜잭션에 참여하고, 새 트랜잭션으로 열면 요청 하나가 커넥션 둘을 쥔다.
+     */
     public void publishNow(long uploadId) {
         publish(uploadId);
     }

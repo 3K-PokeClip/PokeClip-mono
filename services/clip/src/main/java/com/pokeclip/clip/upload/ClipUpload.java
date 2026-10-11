@@ -7,7 +7,11 @@ import jakarta.persistence.Table;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
+
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 업로드 주문 한 줄({@code clip_uploads}). 새 줄은 {@link UploadInserter}가 SQL로 넣는다(부분 UNIQUE에 걸리면 조용히 비켜야 해서).
@@ -69,6 +73,38 @@ public class ClipUpload {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    // ── POK-291: 고른 정보와 썸네일. 새 줄은 UploadInserter가 SQL로 채운다 ──
+
+    /** 문자열 배열(JSON). 읽을 때 {@link #getTags()}가 푼다. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "tags", nullable = false, columnDefinition = "jsonb")
+    private String tags;
+
+    @Column(name = "privacy_status", nullable = false, length = 8)
+    private String privacyStatus;
+
+    @Column(name = "made_for_kids", nullable = false)
+    private boolean madeForKids;
+
+    @Column(name = "thumbnail_source", nullable = false, length = 8)
+    private String thumbnailSource;
+
+    @Column(name = "thumbnail_offset_ms")
+    private Long thumbnailOffsetMs;
+
+    @Column(name = "thumbnail_s3_key", length = 512)
+    private String thumbnailS3Key;
+
+    @Column(name = "thumbnail_content_type", length = 32)
+    private String thumbnailContentType;
+
+    /** {@code none}·{@code pending}·{@code set}·{@code failed}. 영상 상태와 따로 간다. */
+    @Column(name = "thumbnail_status", nullable = false, length = 8)
+    private String thumbnailStatus;
+
+    @Column(name = "thumbnail_error_code", length = 32)
+    private String thumbnailErrorCode;
+
     protected ClipUpload() {
     }
 
@@ -99,6 +135,26 @@ public class ClipUpload {
         this.errorCode = null;
         this.errorMessage = null;
         this.updatedAt = Instant.now();
+    }
+
+    /**
+     * 일꾼이 보고한 썸네일 결과를 적는다(POK-291). 영상이 올라간 순간에만 부른다. 결과가 없거나 모르는 값이면, 붙일 것이 있었던
+     * 줄({@code pending})은 「보고 안 됨」으로 닫는다(옛 일꾼): 그대로 두면 화면이 영원히 「붙이는 중」으로 본다.
+     *
+     * @param outcome {@code SET}·{@code FAILED}·{@code NONE} 또는 {@code null}(칸 없음·모르는 값)
+     * @param code    {@code FAILED}일 때의 코드. 모양이 틀렸으면 {@code null}
+     */
+    void thumbnailReported(String outcome, String code) {
+        if ("SET".equals(outcome)) {
+            this.thumbnailStatus = "set";
+            this.thumbnailErrorCode = null;
+        } else if ("FAILED".equals(outcome)) {
+            this.thumbnailStatus = "failed";
+            this.thumbnailErrorCode = code;
+        } else if ("pending".equals(this.thumbnailStatus)) {
+            this.thumbnailStatus = "failed";
+            this.thumbnailErrorCode = "THUMBNAIL_NOT_REPORTED";
+        }
     }
 
     void failed(String code, String message) {
@@ -183,4 +239,50 @@ public class ClipUpload {
     public Instant getUpdatedAt() {
         return updatedAt;
     }
+
+    public List<String> getTags() {
+        return tags == null ? List.of() : TAGS_READER.readValue(tags, STRINGS);
+    }
+
+    public String getPrivacyStatus() {
+        return privacyStatus;
+    }
+
+    public boolean isMadeForKids() {
+        return madeForKids;
+    }
+
+    public String getThumbnailSource() {
+        return thumbnailSource;
+    }
+
+    public Long getThumbnailOffsetMs() {
+        return thumbnailOffsetMs;
+    }
+
+    public String getThumbnailS3Key() {
+        return thumbnailS3Key;
+    }
+
+    public String getThumbnailContentType() {
+        return thumbnailContentType;
+    }
+
+    public String getThumbnailStatus() {
+        return thumbnailStatus;
+    }
+
+    public String getThumbnailErrorCode() {
+        return thumbnailErrorCode;
+    }
+
+    /** 이 줄에 적힌 고른 정보 한 벌. 다시 시도가 이것을 그대로 새 줄로 옮긴다. */
+    UploadInfo info() {
+        return new UploadInfo(title, description, getTags(), privacyStatus, madeForKids,
+                new UploadInfo.Thumbnail(thumbnailSource, thumbnailOffsetMs, thumbnailS3Key, thumbnailContentType));
+    }
+
+    private static final ObjectMapper TAGS_READER = new ObjectMapper();
+    private static final TypeReference<List<String>> STRINGS = new TypeReference<>() {
+    };
 }

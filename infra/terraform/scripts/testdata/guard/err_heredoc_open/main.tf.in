@@ -1,0 +1,5 @@
+# 끝나지 않는 heredoc 은 검사 불가다.
+resource "aws_ssm_parameter" "doc" {
+  value = <<-DOC-TEXT
+    never closed
+}

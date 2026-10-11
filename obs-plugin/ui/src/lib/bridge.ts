@@ -13,6 +13,9 @@ export interface Bridge {
   // A5 — 받아들이면 202이고 결과는 상태(phase·errorCode·retry)로 온다
   sendNow(): Promise<ActionResult>; // 「다시 연결」 · 「다시 시도」
   stopRetry(): Promise<ActionResult>; // 「재시도 중지」
+  // POK-266 — 손 배정. track 2~6 = 그 트랙으로 옮긴다(찬 트랙이면 묶인다), null = 트랙에서 뺀다(본방 믹스에만).
+  // 받아들이면 202이고 결과는 state.audio로 온다.
+  assignAudio(key: string, track: number | null): Promise<ActionResult>;
 }
 
 const TOKEN_KEY = 'pokeclip.bridge.token';
@@ -146,6 +149,12 @@ export function createHttpBridge(token: string): Bridge {
 
     async stopRetry() {
       const res = await send('/api/stop-retry', { method: 'POST', headers });
+      return res ? readResult(res) : UNREACHABLE;
+    },
+
+    async assignAudio(key, track) {
+      const body = track === null ? { key } : { key, track };
+      const res = await send('/api/audio/assign', { method: 'POST', headers: json, body: JSON.stringify(body) });
       return res ? readResult(res) : UNREACHABLE;
     },
   };

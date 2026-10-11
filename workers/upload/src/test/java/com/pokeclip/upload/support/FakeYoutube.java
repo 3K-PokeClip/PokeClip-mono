@@ -2,6 +2,8 @@ package com.pokeclip.upload.support;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -9,9 +11,12 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -22,6 +27,10 @@ import java.util.regex.Pattern;
  *
  * <p>손잡이: 시작에서 쿼터 거절 · 마지막 조각의 응답 버리기(영상은 만들고 연결만 끊는다 = 「성공했는데 응답만 못 받음」) ·
  * 조각에 5xx 몇 번 · 조각 거절(400) · 주소 없애기(404).
+ *
+ * <p>썸네일({@code thumbnails.set}, POK-291)은 {@code /upload/thumbnails/set}에 따로 둔다. JDK 서버는 가장 긴 접두사 문맥을 고르므로
+ * 시작 문맥({@code /upload})이 가로채지 않는다. 손잡이는 {@link #thumbnailReplies}(「403 forbidden」처럼 상태와 사유를 차례로 준다)와
+ * {@link #thumbnailToken}(썸네일 문이 받아 주는 토큰)이다.
  */
 public class FakeYoutube implements AutoCloseable {
 
@@ -45,18 +54,35 @@ public class FakeYoutube implements AutoCloseable {
     public volatile int chunkServerErrors;
     public volatile boolean rejectChunks;
     public volatile boolean goneSessions;
+    /** 썸네일 문이 받아 주는 토큰. 다르면 401(긴 업로드 뒤 토큰이 끝난 흉내). */
+    public volatile String thumbnailToken = GOOD_TOKEN;
+    /** 썸네일 문이 차례로 줄 실패. {@code "403 forbidden"}처럼 상태와 사유. 비면 성공(영상이 있을 때). */
+    public final Deque<String> thumbnailReplies = new ConcurrentLinkedDeque<>();
+    private final AtomicInteger thumbnailCalls = new AtomicInteger();
+    private final List<Thumbnail> thumbnails = Collections.synchronizedList(new ArrayList<>());
+    private final ObjectMapper mapper = new ObjectMapper();
+
+    /** 붙은 썸네일 하나. */
+    public record Thumbnail(String videoId, String contentType, byte[] bytes) {
+    }
 
     public static final class Session {
         public final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         public long size;
         public String title;
+        public String description;
         public String privacy;
+        /** 시작 본문의 {@code snippet.tags}. 칸이 없으면 null. */
+        public List<String> tags;
+        /** 시작 본문의 {@code status.selfDeclaredMadeForKids}. 칸이 없거나 불리언이 아니면 null. */
+        public Boolean madeForKids;
         public String videoId;
     }
 
     public FakeYoutube() throws IOException {
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         server.createContext("/upload", this::start);
+        server.createContext("/upload/thumbnails/set", this::thumbnail);
         server.createContext("/session/", this::session);
         server.start();
     }
@@ -67,6 +93,29 @@ public class FakeYoutube implements AutoCloseable {
 
     public int videosCreated() {
         return videos.get();
+    }
+
+    public String thumbnailUrl() {
+        return "http://127.0.0.1:" + server.getAddress().getPort() + "/upload/thumbnails/set";
+    }
+
+    /** 썸네일 문에 온 요청 수(실패 포함). */
+    public int thumbnailCalls() {
+        return thumbnailCalls.get();
+    }
+
+    /** 실제로 붙은 썸네일들. */
+    public List<Thumbnail> thumbnailsSet() {
+        synchronized (thumbnails) {
+            return List.copyOf(thumbnails);
+        }
+    }
+
+    /** 시험이 「이미 다 받은 주소」를 만든다(다른 일꾼이 끝까지 보냈다). */
+    public void completeSession(String uri, byte[] bytes) {
+        Session s = session(uri);
+        s.bytes.writeBytes(bytes);
+        s.videoId = "vid" + videos.incrementAndGet();
     }
 
     public int sessionsStarted() {
@@ -112,8 +161,21 @@ public class FakeYoutube implements AutoCloseable {
         }
         String uri = openSession(Long.parseLong(ex.getRequestHeaders().getFirst("X-Upload-Content-Length")));
         Session s = session(uri);
-        s.title = field(body, "title");
-        s.privacy = field(body, "privacyStatus");
+        // 정규식은 문자열 값만 잡는다. 배열(tags)·불리언(madeForKids)까지 재려고 본문을 JSON으로 읽는다.
+        JsonNode root = mapper.readTree(body);
+        JsonNode snippet = root.path("snippet");
+        JsonNode status = root.path("status");
+        s.title = snippet.path("title").asString(null);
+        s.description = snippet.path("description").asString(null);
+        s.privacy = status.path("privacyStatus").asString(null);
+        if (snippet.has("tags")) {
+            s.tags = new ArrayList<>();
+            for (JsonNode tag : snippet.path("tags")) {
+                s.tags.add(tag.asString());
+            }
+        }
+        JsonNode kids = status.path("selfDeclaredMadeForKids");
+        s.madeForKids = kids.isBoolean() ? kids.asBoolean() : null;
         ex.getResponseHeaders().add("Location", uri);
         reply(ex, 200, "");
     }
@@ -169,6 +231,34 @@ public class FakeYoutube implements AutoCloseable {
         reply(ex, 201, "{\"id\":\"" + s.videoId + "\"}");
     }
 
+    private void thumbnail(HttpExchange ex) throws IOException {
+        thumbnailCalls.incrementAndGet();
+        byte[] body = ex.getRequestBody().readAllBytes();
+        String auth = ex.getRequestHeaders().getFirst("Authorization");
+        seenAuth.add(String.valueOf(auth));
+        if (!("Bearer " + thumbnailToken).equals(auth)) {
+            reply(ex, 401, "{\"error\":{\"code\":401,\"errors\":[{\"reason\":\"authError\"}]}}");
+            return;
+        }
+        String scripted = thumbnailReplies.poll();
+        if (scripted != null) {
+            String[] parts = scripted.split(" ", 2);
+            reply(ex, Integer.parseInt(parts[0]), "{\"error\":{\"code\":" + parts[0] + ",\"errors\":[{\"reason\":\""
+                    + (parts.length > 1 ? parts[1] : "") + "\"}]}}");
+            return;
+        }
+        String query = ex.getRequestURI().getQuery();
+        Matcher m = Pattern.compile("videoId=([^&]+)").matcher(query == null ? "" : query);
+        String videoId = m.find() ? m.group(1) : null;
+        boolean exists = sessions.values().stream().anyMatch(s -> videoId != null && videoId.equals(s.videoId));
+        if (!exists || query == null || !query.contains("uploadType=media")) {
+            reply(ex, 404, "{\"error\":{\"code\":404,\"errors\":[{\"reason\":\"videoNotFound\"}]}}");
+            return;
+        }
+        thumbnails.add(new Thumbnail(videoId, ex.getRequestHeaders().getFirst("Content-Type"), body));
+        reply(ex, 200, "{\"kind\":\"youtube#thumbnailSetResponse\",\"items\":[]}");
+    }
+
     private void incomplete(HttpExchange ex, Session s) throws IOException {
         if (s.bytes.size() > 0) {
             ex.getResponseHeaders().add("Range", "bytes=0-" + (s.bytes.size() - 1));
@@ -184,11 +274,6 @@ public class FakeYoutube implements AutoCloseable {
             ex.getResponseBody().write(bytes);
         }
         ex.close();
-    }
-
-    private static String field(String json, String name) {
-        Matcher m = Pattern.compile("\"" + name + "\":\"([^\"]*)\"").matcher(json);
-        return m.find() ? m.group(1) : null;
     }
 
     @Override

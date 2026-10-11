@@ -6,6 +6,7 @@ import com.pokeclip.clip.support.LocalStackFixture;
 import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
 import com.pokeclip.clip.upload.UploadDlqReconciler;
+import com.pokeclip.clip.upload.UploadPublishExecutor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,6 +19,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -59,11 +62,13 @@ class UploadControllerTest extends IntegrationTestSupport {
     private final MockMvc mvc;
     private final JdbcTemplate jdbc;
     private final UploadDlqReconciler reconciler;
+    private final UploadPublishExecutor publishes;
 
-    UploadControllerTest(MockMvc mvc, JdbcTemplate jdbc, UploadDlqReconciler reconciler) {
+    UploadControllerTest(MockMvc mvc, JdbcTemplate jdbc, UploadDlqReconciler reconciler, UploadPublishExecutor publishes) {
         this.mvc = mvc;
         this.jdbc = jdbc;
         this.reconciler = reconciler;
+        this.publishes = publishes;
     }
 
     private long 편집본;
@@ -80,6 +85,7 @@ class UploadControllerTest extends IntegrationTestSupport {
 
     @AfterEach
     void 내_흔적을_지운다() {
+        발행을_기다린다();
         jdbc.update("DELETE FROM clip_uploads");
         jdbc.update("DELETE FROM render_job_events");
         jdbc.update("DELETE FROM render_jobs");
@@ -153,6 +159,111 @@ class UploadControllerTest extends IntegrationTestSupport {
         assertThat(새것).isNotEqualTo(첫째);
     }
 
+    /**
+     * 옛 문도 태그·공개 범위·아동용을 받아 주문서에 싣는다(POK-291). 비공개 고정이 없어졌다: 고른 값이 그대로 간다. 썸네일은 이 문에서
+     * 안 받는다(none).
+     */
+    @Test
+    void 옛_문도_고른_공개_범위와_태그와_아동용을_싣는다() throws Exception {
+        볼_수_있다();
+        long clipId = 완성된_영상(영상_하나());
+
+        주문(내_방송, clipId, "{\"title\":\"t\",\"tags\":[\" 롤 \",\"롤\",\"펜타킬\"],\"privacyStatus\":\"public\",\"madeForKids\":true}")
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.privacyStatus").value("public"))
+                .andExpect(jsonPath("$.madeForKids").value(true))
+                .andExpect(jsonPath("$.tags.length()").value(2))
+                .andExpect(jsonPath("$.thumbnail.source").value("none"))
+                .andExpect(jsonPath("$.thumbnail.status").value("none"));
+
+        JsonNode 봉투 = MAPPER.readTree(LocalStackFixture.receiveAndDelete(줄.queueUrl()));
+        assertThat(봉투.get("video").get("privacyStatus").asString()).isEqualTo("public");
+        assertThat(봉투.get("video").get("madeForKids").asBoolean()).isTrue();
+        assertThat(봉투.get("video").get("tags").toString()).isEqualTo("[\"롤\",\"펜타킬\"]");
+        assertThat(봉투.get("thumbnail").isNull()).isTrue();
+        주문(내_방송, clipId, "{\"title\":\"t\",\"privacyStatus\":\"friends\"}").andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.field").value("privacyStatus"));
+        주문(내_방송, clipId, "{\"title\":\"t\",\"tags\":[\"a,b\"]}").andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.field").value("tags"));
+    }
+
+    /**
+     * 🔴 같은 편집본 같은 판의 <b>다른 영상</b>(재렌더)이 이미 올라가는 중이면 옛 문도 409 {@code already_uploaded}(POK-291). 부분
+     * UNIQUE는 (영상, 벌) 단위라 이 구멍을 못 막았다: 같은 영상이 채널에 둘 뜬다. 같은 영상 같은 벌이면 지금처럼 그것을 200으로 준다.
+     */
+    @Test
+    void 같은_판의_다른_영상이_올라가는_중이면_옛_문도_409다() throws Exception {
+        볼_수_있다();
+        long 첫째 = 완성된_영상(영상_하나());
+        long 첫_업로드 = 본문(주문(내_방송, 첫째, 제목("하나")).andExpect(status().isCreated())).get("id").asLong();
+        long 둘째 = 완성된_영상(영상_하나());   // 같은 편집본 같은 판(1)의 재렌더
+
+        주문(내_방송, 둘째, 제목("둘")).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("already_uploaded"))
+                .andExpect(jsonPath("$.uploadId").value(첫_업로드));
+        주문(내_방송, 첫째, 제목("하나")).andExpect(status().isOk()).andExpect(jsonPath("$.id").value(첫_업로드));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM clip_uploads", Integer.class)).isOne();
+
+        jdbc.update("UPDATE clip_uploads SET status = 'failed' WHERE id = ?", 첫_업로드);
+        주문(내_방송, 둘째, 제목("둘")).andExpect(status().isCreated());
+    }
+
+    // ── 썸네일 결과 보고(POK-291) ───────────────────────────────────
+
+    /** SET → set, FAILED → failed + 코드. 같은 끝 보고의 재전송은 처음 값이 이긴다. */
+    @Test
+    void 썸네일_결과는_올림_보고와_같이_적고_재전송은_처음_값이_이긴다() throws Exception {
+        볼_수_있다();
+        long 붙음 = 썸네일_고른_업로드();
+        일꾼(붙음, "start", "{}");
+        올림(붙음, ",\"thumbnailOutcome\":\"SET\"").andExpect(status().isOk());
+        올림(붙음, ",\"thumbnailOutcome\":\"FAILED\",\"thumbnailErrorCode\":\"THUMBNAIL_FORBIDDEN\"").andExpect(status().isOk());
+        assertThat(썸네일(붙음)).isEqualTo("set:null");
+
+        long 실패 = 썸네일_고른_업로드_다른_영상();
+        일꾼(실패, "start", "{}");
+        올림(실패, ",\"thumbnailOutcome\":\"FAILED\",\"thumbnailErrorCode\":\"THUMBNAIL_FORBIDDEN\"").andExpect(status().isOk());
+        assertThat(썸네일(실패)).isEqualTo("failed:THUMBNAIL_FORBIDDEN");
+    }
+
+    /**
+     * 칸이 없거나(옛 일꾼) NONE이면: 붙일 것이 있던 줄(pending)은 failed + {@code THUMBNAIL_NOT_REPORTED}, 붙일 것이 없던 줄(none)은 그대로.
+     * 🔴 이상한 값(모르는 결과·숫자·객체·틀린 코드)도 <b>400이 아니다</b>: 거절하면 일꾼이 같은 보고를 되풀이하다 실패 큐로 가고, 정리기가
+     * 영상이 있는데도 확인 중으로 닫는다. 영상은 올림으로 적힌다.
+     */
+    @Test
+    void 썸네일_칸이_없거나_이상해도_올림은_받고_보고_안_됨으로_닫는다() throws Exception {
+        볼_수_있다();
+        String[] 이상한_칸 = {"", ",\"thumbnailOutcome\":\"NONE\"", ",\"thumbnailOutcome\":\"MAYBE\"",
+                ",\"thumbnailOutcome\":7", ",\"thumbnailOutcome\":{\"a\":1},\"thumbnailErrorCode\":[1]",
+                ",\"thumbnailOutcome\":\"FAILED\",\"thumbnailErrorCode\":\"소문자-안됨\""};
+        for (int i = 0; i < 이상한_칸.length; i++) {
+            long id = i == 0 ? 썸네일_고른_업로드() : 썸네일_고른_업로드_다른_영상();
+            일꾼(id, "start", "{}");
+            올림(id, 이상한_칸[i]).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("uploaded"));
+            assertThat(썸네일(id)).as(이상한_칸[i]).isEqualTo(i == 5 ? "failed:null" : "failed:THUMBNAIL_NOT_REPORTED");
+        }
+
+        long 없음 = 주문한_업로드_다른_영상();   // 옛 문: 썸네일 none
+        일꾼(없음, "start", "{}");
+        올림(없음, "").andExpect(status().isOk());
+        assertThat(썸네일(없음)).isEqualTo("none:null");
+    }
+
+    /** 확인 중 → 늦은 올림 보고(두 번째 전이)에서도 썸네일을 적는다. 한 전이에만 적으면 그 길의 썸네일이 영원히 pending이다. */
+    @Test
+    void 확인_중에서_올림으로_갈_때도_썸네일을_적는다() throws Exception {
+        볼_수_있다();
+        long id = 썸네일_고른_업로드();
+        일꾼(id, "start", "{}");
+        일꾼(id, "session", 주소_본문(주소1));
+        일꾼(id, "result", "{\"outcome\":\"FAILED\",\"errorCode\":\"YOUTUBE_REJECTED\"}").andExpect(jsonPath("$.status").value("checking"));
+
+        올림(id, ",\"thumbnailOutcome\":\"SET\"").andExpect(status().isOk()).andExpect(jsonPath("$.status").value("uploaded"));
+
+        assertThat(썸네일(id)).isEqualTo("set:null");
+    }
+
     @Test
     void 완성_전이면_409다() throws Exception {
         볼_수_있다();
@@ -175,6 +286,12 @@ class UploadControllerTest extends IntegrationTestSupport {
         }
         주문(내_방송, clipId, "{\"title\":\"ok\",\"description\":\"" + "가".repeat(1667) + "\"}")
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("description"));
+        // NUL은 DB가 거절해 500이 됐다(POK-291 로컬 리뷰 1라운드). 검사에서 그 칸 이름으로 막는다.
+        주문(내_방송, clipId, 제목("a\\u0000b")).andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("title"));
+        주문(내_방송, clipId, "{\"title\":\"ok\",\"description\":\"a\\u0000b\"}")
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("description"));
+        주문(내_방송, clipId, "{\"title\":\"ok\",\"tags\":[\"a\\u0000b\"]}")
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.field").value("tags"));
         assertThat(jdbc.queryForObject("SELECT count(*) FROM clip_uploads", Integer.class)).isZero();
 
         // 이모지 100개는 UTF-16으로 200칸이지만 유튜브 기준 100자다: 통과해야 한다.
@@ -420,6 +537,31 @@ class UploadControllerTest extends IntegrationTestSupport {
         return 주문한_업로드();
     }
 
+    /**
+     * 썸네일(장면)을 고른 업로드. 옛 문은 썸네일을 안 받으므로 의도에 장면을 적고 렌더 성공으로 만드는 대신, 줄을 그 상태로 맞춘다
+     * (이 클래스가 재는 것은 결과 보고 문이다. 업로드 줄이 썸네일을 갖게 되는 길은 AutoUploadOnRenderTest가 잰다).
+     */
+    private long 썸네일_고른_업로드() throws Exception {
+        long id = 주문한_업로드();
+        jdbc.update("UPDATE clip_uploads SET thumbnail_source = 'scene', thumbnail_offset_ms = 1000, "
+                + "thumbnail_status = 'pending' WHERE id = ?", id);
+        return id;
+    }
+
+    private long 썸네일_고른_업로드_다른_영상() throws Exception {
+        편집본 = RenderFixtures.편집본을_넣는다(jdbc, 내_방송, RenderFixtures.CUT_IN, RenderFixtures.CUT_OUT);
+        return 썸네일_고른_업로드();
+    }
+
+    private ResultActions 올림(long id, String thumbnailFields) throws Exception {
+        return 일꾼(id, "result", "{\"outcome\":\"UPLOADED\",\"videoId\":\"abcDEF12345\"" + thumbnailFields + "}");
+    }
+
+    private String 썸네일(long id) {
+        return jdbc.queryForObject("SELECT thumbnail_status || ':' || coalesce(thumbnail_error_code, 'null') "
+                + "FROM clip_uploads WHERE id = ?", String.class, id);
+    }
+
     private String 상태(long id) {
         return jdbc.queryForObject("SELECT status || ':' || coalesce(error_code, 'null') FROM clip_uploads WHERE id = ?",
                 String.class, id);
@@ -438,8 +580,18 @@ class UploadControllerTest extends IntegrationTestSupport {
     }
 
     private ResultActions 주문(String streamId, long clipId, String body) throws Exception {
-        return mvc.perform(post("/api/clip/broadcasts/" + streamId + "/clips/" + clipId + "/uploads")
+        ResultActions actions = mvc.perform(post("/api/clip/broadcasts/" + streamId + "/clips/" + clipId + "/uploads")
                 .header("Authorization", 토큰()).contentType(MediaType.APPLICATION_JSON).content(body));
+        발행을_기다린다();
+        return actions;
+    }
+
+    /**
+     * 커밋 뒤 발행은 전용 스레드에서 돈다(POK-291). 안 기다리면 늦게 실린 주문서가 다음 단언에 섞이고, 발행이 줄을 다시 쓰는 동안
+     * 시험이 고친 칸을 덮는다.
+     */
+    private void 발행을_기다린다() {
+        assertThat(publishes.awaitIdle(Duration.ofSeconds(30))).as("커밋 뒤 발행이 끝나지 않았다").isTrue();
     }
 
     private ResultActions 일꾼(long uploadId, String door, String body) throws Exception {
