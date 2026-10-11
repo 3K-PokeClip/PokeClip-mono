@@ -38,7 +38,7 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
   pendingLabel: string | null;
   /** 수집이 끊겨 자동 탐지가 멈춘 상태 — 감지 중이라고 말하면 거짓이 된다 */
   detectionPaused: boolean;
-  /** 끝난 방송 — 감지는 방송 중에 끝났다. 「자동 감지 중」이라고 하면 지금 감지하는 것처럼 읽힌다(QA 2026-10-11) */
+  /** 끝난 방송: 감지는 방송 중에 끝났다. 「자동 감지 중」이라고 하면 지금 감지하는 것처럼 읽힌다(QA 2026-10-11) */
   ended?: boolean;
   onSeek: (timestamp: string) => void;
 }) {

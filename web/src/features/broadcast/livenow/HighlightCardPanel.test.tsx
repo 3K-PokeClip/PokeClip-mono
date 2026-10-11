@@ -28,7 +28,7 @@ function renderPanel(props: { detectionPaused: boolean; ended?: boolean }) {
   );
 }
 
-describe('HighlightCardPanel — 머리 안내', () => {
+describe('HighlightCardPanel: 머리 안내', () => {
   it('수집이 끊겨 감지가 멈추면 멈췄다고만 말한다: 핫키로 남기는 길은 아직 없다(POK-119·257)', () => {
     renderPanel({ detectionPaused: true });
     expect(screen.getByText('자동 감지 멈춤 · 카드 클릭 = 시점 이동')).toBeInTheDocument();

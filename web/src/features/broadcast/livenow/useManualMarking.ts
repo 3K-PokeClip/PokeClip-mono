@@ -4,7 +4,7 @@ import { useCallback, useEffect } from 'react';
 import { useToast } from '@/ui';
 import { isMarkHotkey, isTypingTarget } from './markKey';
 
-// 수동 마킹(시안 1b) — 누른 순간을 서버에 카드로 남기는 길이 아직 없다(POK-257, MVP 밖).
+// 수동 마킹(시안 1b): 누른 순간을 서버에 카드로 남기는 길이 아직 없다(POK-257, MVP 밖).
 //
 // 전에는 3초 뒤 화면에만 카드를 세웠다. 그 카드는 새로 고침에 사라지고 편집기도 못 찾는, 저장된 것처럼 보이는
 // 가짜 성공이었다. 지난 방송에서는 방송 끝 시각에 찍혔다(QA 2026-10-11). 그래서 단추와 핫키는 두고 준비 중이라고만

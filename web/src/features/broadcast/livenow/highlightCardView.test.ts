@@ -123,11 +123,11 @@ describe('cardVisualFor — 모르는 카드는 계약 필드에서 세운다', 
   });
 });
 
-describe('cardAgeLabel — 카드를 만든 지 얼마나 됐나', () => {
+describe('cardAgeLabel: 카드를 만든 지 얼마나 됐나', () => {
   const NOW = Date.parse('2026-10-11T02:00:00Z');
   const ago = (seconds: number) => new Date(NOW - seconds * 1000).toISOString();
 
-  it('막 뜬 카드는 초까지 센다 — 라이브에서 방금 감지된 카드다', () => {
+  it('막 뜬 카드는 초까지 센다: 라이브에서 방금 감지된 카드다', () => {
     expect(cardAgeLabel(ago(5), NOW)).toBe('방금');
     expect(cardAgeLabel(ago(42), NOW)).toBe('42초 전');
   });
@@ -138,7 +138,7 @@ describe('cardAgeLabel — 카드를 만든 지 얼마나 됐나', () => {
     expect(cardAgeLabel(ago(86_399), NOW)).toBe('23시간 전');
   });
 
-  it('하루가 넘으면 일이다 — 지난 방송 카드가 「4275분 전」이 되지 않는다(홈과 같은 표기)', () => {
+  it('하루가 넘으면 일이다: 지난 방송 카드가 「4275분 전」이 되지 않는다(홈과 같은 표기)', () => {
     expect(cardAgeLabel(ago(4275 * 60), NOW)).toBe('2일 전');
   });
 

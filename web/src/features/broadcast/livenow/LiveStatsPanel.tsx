@@ -54,7 +54,7 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
   metrics: LiveMetric[];
   /** 카드 목록에서 센 값 — 목업에 박으면 필터 표기와 어긋난다 */
   highlightSummary: { total: number; auto: number; manual: number };
-  /** 끝난 방송 — 실시간이 아니라 그 방송의 통계다(QA 2026-10-11) */
+  /** 끝난 방송: 실시간이 아니라 그 방송의 통계다(QA 2026-10-11) */
   ended?: boolean;
 }) {
   const chatLine = chatVolumeLine(chatVolume);

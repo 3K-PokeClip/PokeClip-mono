@@ -400,8 +400,8 @@ describe('GlassPlayer', () => {
   });
 });
 
-describe('GlassPlayer — 녹화 다시보기', () => {
-  // jsdom에는 미디어 재생이 없다 — 재생 요청만 받아 둔다
+describe('GlassPlayer: 녹화 다시보기', () => {
+  // jsdom에는 미디어 재생이 없다. 재생 요청만 받아 둔다
   beforeEach(() => {
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);

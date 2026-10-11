@@ -39,7 +39,7 @@ export function PlayerSeekBar({
   onReturnToLive: () => void;
   /** 드래그 중 알림 — GlassPlayer가 그동안 컨트롤 숨김을 유보한다 */
   onSeekingChange: (seeking: boolean) => void;
-  /** 끝난 방송의 녹화 다시보기 — 오른쪽 끝은 「실시간」이 아니라 녹화 끝이다(PlayerControls와 같다) */
+  /** 끝난 방송의 녹화 다시보기: 오른쪽 끝은 「실시간」이 아니라 녹화 끝이다(PlayerControls와 같다) */
   replay?: boolean;
 }) {
   // 드래그 중 표시할 위치. null이면 실제 재생 위치(prop)를 그대로 쓴다.
