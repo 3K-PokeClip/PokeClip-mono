@@ -42,7 +42,11 @@ function niceMax(v: number): number {
   return Math.ceil(v / 5) * 5;
 }
 
-export function useLiveStatsMockState(): LiveStatsMockState {
+/**
+ * @param ended 화면이 끝난 방송으로 보이나(지난 방송 주소는 명부 답 전에도 그렇다). 끝난 방송은 시청자 기록을 방송 창으로 읽은
+ *   것만 믿고, 모르면 「확인 중」, 기록이 없으면 「기록 없음」이라 쓴다: 「수집 전」은 앞으로 모으겠다는 라이브 말이다(리뷰 4라운드)
+ */
+export function useLiveStatsMockState(ended: boolean): LiveStatsMockState {
   const data = useLiveData();
 
   return useMemo(() => {
@@ -57,8 +61,9 @@ export function useLiveStatsMockState(): LiveStatsMockState {
       .map((b, i) => (b.donations > 0 ? ([x(i), yChat(b.chats)] as const) : null))
       .filter((p): p is readonly [number, number] => p !== null);
 
-    // 시청자: broadcast-info의 series를 차트 시간축(첫 버킷~지금)에 얹는다
-    const series = (data.info?.series ?? []).filter((p) => p.viewers !== null) as {
+    // 시청자: broadcast-info의 series를 차트 시간축(첫 버킷~지금)에 얹는다. 끝난 방송은 방송 창으로 읽은 기록만 쓴다
+    const viewerInfo = ended && data.info?.scope !== 'broadcast' ? null : data.info;
+    const series = (viewerInfo?.series ?? []).filter((p) => p.viewers !== null) as {
       observedAt: string;
       viewers: number;
     }[];
@@ -89,9 +94,10 @@ export function useLiveStatsMockState(): LiveStatsMockState {
       ? Math.round(series.reduce((a, p) => a + p.viewers, 0) / series.length)
       : null;
 
+    const noViewers = !ended ? '수집 전' : viewerInfo === null ? '확인 중' : '기록 없음';
     const metrics: LiveMetric[] = [
-      { label: '최고 시청자', value: peak === null ? '수집 전' : peak.toLocaleString('ko-KR') },
-      { label: '평균 시청자', value: avg === null ? '수집 전' : avg.toLocaleString('ko-KR') },
+      { label: '최고 시청자', value: peak === null ? noViewers : peak.toLocaleString('ko-KR') },
+      { label: '평균 시청자', value: avg === null ? noViewers : avg.toLocaleString('ko-KR') },
       // 차트가 아직 없으면 수를 지어내지 않는다: 「최근 1분 채팅 0」은 지어낸 1분과 0이다(리뷰 3라운드)
       chart && span
         ? {
@@ -114,5 +120,5 @@ export function useLiveStatsMockState(): LiveStatsMockState {
         : [];
 
     return { viewerLine, donations, categorySegments, metrics };
-  }, [data]);
+  }, [data, ended]);
 }

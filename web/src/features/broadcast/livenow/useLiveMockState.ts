@@ -15,6 +15,7 @@ import {
   timeBaseOf,
   useLiveData,
   type LiveChart,
+  type LiveInfoScope,
   type RelayEvent,
 } from './liveDataStore';
 
@@ -109,11 +110,23 @@ interface BroadcastInfoResponse {
 }
 /** chat-chart 응답 한 장. 어느 창을 읽었는지(scope)는 부른 쪽이 안다 */
 type ChartPage = Omit<LiveChart, 'scope'>;
+/** 받아 둔 방송 정보. 시청자 기록을 어느 창으로 읽었는지(scope)를 같이 둔다 */
+type LoadedInfo = BroadcastInfoResponse & { scope: LiveInfoScope };
 
 const CHART_MINUTES = 10;
 const CHART_BUCKET = 30;
-/** 시작 시각을 모르는 지난 방송의 시청자 기록은 끝 시각 이만큼 전부터 달라고 한다. 수집기가 한 번에 주는 720점(1분 간격)이다 */
-const INFO_TAIL_MS = 12 * 60 * 60_000;
+/** 끝난 방송을 읽는 창의 최대 길이. 수집기가 한 번에 주는 시청자 기록 720점(1분 간격)과 같은 길이다 */
+export const ENDED_TAIL_MS = 12 * 60 * 60_000;
+
+/**
+ * 끝난 방송의 그래프·시청자 기록을 읽기 시작할 시각(epoch ms). 시작~끝이되 12시간이 넘거나 시작 시각을 모르면(종료 알림이 먼저
+ * 와서 생긴 자리표시 방송) 끝 12시간이다. 둘이 이 하나로 같은 창을 읽는다: 따로 고르면 최고·평균은 있는데 선이 없었다(리뷰 4라운드)
+ */
+export function endedWindowStart(startedAt: number | null, endedAt: number): number {
+  return startedAt !== null && endedAt - startedAt <= ENDED_TAIL_MS
+    ? startedAt
+    : endedAt - ENDED_TAIL_MS;
+}
 
 export interface CardActionResult {
   ok: boolean;
@@ -239,15 +252,16 @@ function parseSseBlock(block: string): { event: string; data: string } | null {
 }
 
 /**
- * @param pastRoute 지난 방송 주소(/broadcast/vod/…)로 열었나. 그 주소에서는 명부가 답하기 전(방송 상태를 모름)에 라이브의 최근 창으로
- *   읽지 않는다: 그렇게 읽은 빈 기록을 끝난 방송의 것으로 보고 「기록 없음」이라 했다(리뷰 3라운드)
+ * @param pastRoute 지난 방송 주소(/broadcast/vod/…)로 열었나. 그 주소에서는 명부가 답하기 전(방송 상태를 모름)에 그래프를 라이브의
+ *   최근 창으로 읽지 않는다(리뷰 3라운드). 방송 정보는 기다리지 않는다: 제목·카테고리는 창과 무관하고, 시청자 기록은 읽은 창을
+ *   같이 둬서 끝난 방송이 최근 창의 기록을 믿지 않게 한다(리뷰 4라운드)
  */
-export function useLiveMockState(pastRoute = false): LiveMockState {
+export function useLiveMockState(pastRoute: boolean): LiveMockState {
   const [cards, setCards] = useState<Record<number, Snapshot>>({});
   const [chart, setChart] = useState<LiveChart | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [sseOk, setSseOk] = useState(false);
-  const [info, setInfo] = useState<BroadcastInfoResponse | null>(null);
+  const [info, setInfo] = useState<LoadedInfo | null>(null);
   const live = useLiveData();
   // 카드 ms의 0초(서버 기준점 → 녹화 재생 서버 → 방송 시작, POK-255)
   const base = timeBaseOf(live);
@@ -259,8 +273,6 @@ export function useLiveMockState(pastRoute = false): LiveMockState {
     endedAt: null,
   });
   rangeRef.current = { status: live.status, startedAt: live.startedAt, endedAt: live.endedAt };
-  const pastRouteRef = useRef(pastRoute);
-  pastRouteRef.current = pastRoute;
   const chartRef = useRef(chart);
   chartRef.current = chart;
 
@@ -277,16 +289,16 @@ export function useLiveMockState(pastRoute = false): LiveMockState {
 
   useEffect(() => {
     if (!streamId) return;
-    // 방송이 바뀌면 앞 방송의 것은 전부 비운다
+    // 방송이 바뀌면 앞 방송의 것은 전부 비운다. 방송 번호는 올리지 않는다: 올리는 곳은 방송을 고르는 훅 하나다(저장소는 번호가
+    // 바뀌면 통째로 비운다)
     setCards({});
     setChart(null);
     setInfo(null);
-    publishLiveData({ streamId, chart: null, info: null, cardTimes: [] });
+    publishLiveData({ chart: null, info: null, cardTimes: [] });
     let stopped = false;
     type Range = typeof rangeRef.current;
-    /** 지난 방송 주소인데 방송 상태를 아직 모른다: 어느 창으로 읽을지 모르니 기다린다 */
-    const waitForRange = (rg: Range) =>
-      pastRouteRef.current && rg.status !== 'live' && rg.status !== 'ended';
+    /** 지난 방송 주소인데 방송 상태를 아직 모른다: 그래프를 어느 창으로 읽을지 모르니 기다린다 */
+    const waitForRange = (rg: Range) => pastRoute && rg.status !== 'live' && rg.status !== 'ended';
     /**
      * 읽은 답을 실어도 되나. 방송이 바뀌었거나(효과가 끝남) 읽는 동안 방송 상태·시각이 바뀌었으면 옛 창의 답이라 버린다: 늦게 와서
      * 새 방송의 제목·시청자 수를, 끝난 방송의 「끝날 때 N명」을 덮었다(리뷰 3라운드)
@@ -324,12 +336,12 @@ export function useLiveMockState(pastRoute = false): LiveMockState {
         const to = new Date();
         const from = new Date(to.getTime() - CHART_MINUTES * 60_000);
         const bucket = CHART_BUCKET;
-        // 지난 방송은 시작~종료 전체를 본다. 수집기는 한 번에 1시간까지만 받으므로(window-max PT1H,
-        // 넘으면 400 too_wide) 1시간씩 나눠 읽어 이어 붙인다(PR #200 codex). 버킷은 길이에 맞춰 고른다
-        if (rg.status === 'ended' && rg.startedAt !== null && rg.endedAt !== null) {
-          const dur = rg.endedAt - rg.startedAt;
+        // 지난 방송은 시작~종료 전체를 본다(12시간이 넘거나 시작을 모르면 끝 12시간, endedWindowStart). 수집기는 한 번에
+        // 1시간까지만 받으므로(window-max PT1H, 넘으면 400 too_wide) 1시간씩 나눠 읽어 이어 붙인다(PR #200 codex). 버킷은 길이에 맞춰 고른다
+        if (rg.status === 'ended' && rg.endedAt !== null) {
+          const start = endedWindowStart(rg.startedAt, rg.endedAt);
+          const dur = rg.endedAt - start;
           const vodBucket = dur <= 60 * 60_000 ? 10 : dur <= 6 * 60 * 60_000 ? 30 : 60;
-          const start = dur > 12 * 60 * 60_000 ? rg.endedAt - 12 * 60 * 60_000 : rg.startedAt;
           // 라이브 때 읽은 최근 그래프는 끝난 방송의 창이 아니다. 남겨 두면 다시 읽지 않아 「지금」이 굳는다(리뷰 3라운드)
           if (chartRef.current?.scope === 'recent') {
             setChart(null);
@@ -386,13 +398,14 @@ export function useLiveMockState(pastRoute = false): LiveMockState {
 
     const loadInfo = async () => {
       const rg = rangeRef.current;
-      if (waitForRange(rg)) return;
-      // 지난 방송은 시작부터의 시청자 기록을 달라고 한다: 안 주면 서버가 최근 1시간만 준다(PR #200 codex). 시작 시각을 모르면
-      // 끝 시각 기준으로 달라고 한다: 최근 1시간 창이면 끝난 지 한참 된 방송은 늘 비어 「기록 없음」이 된다(리뷰 3라운드)
+      // 꺼짐(번호가 없거나 명부에 없는 방송)이면 읽을 것이 없다. 읽어도 곧 상태가 바뀌어 버려진다(리뷰 4라운드)
+      if (rg.status === 'offline') return;
+      // 지난 방송은 그래프와 같은 창의 시청자 기록을 달라고 한다: 안 주면 서버가 최근 1시간만 준다(PR #200 codex). 그 밖(라이브,
+      // 아직 모름)은 최근 창으로 읽고 그렇다고 표시한다. 제목·카테고리는 창과 무관해 명부 답을 기다리지 않는다(리뷰 4라운드)
       const sinceMs =
-        rg.status !== 'ended'
-          ? null
-          : (rg.startedAt ?? (rg.endedAt === null ? null : rg.endedAt - INFO_TAIL_MS));
+        rg.status === 'ended' && rg.endedAt !== null
+          ? endedWindowStart(rg.startedAt, rg.endedAt)
+          : null;
       const since =
         sinceMs === null
           ? ''
@@ -401,8 +414,9 @@ export function useLiveMockState(pastRoute = false): LiveMockState {
         `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info${since}`,
       );
       if (page && stillCurrent(rg)) {
-        setInfo(page);
-        publishLiveData({ info: page });
+        const loaded: LoadedInfo = { ...page, scope: sinceMs === null ? 'recent' : 'broadcast' };
+        setInfo(loaded);
+        publishLiveData({ info: loaded });
       }
     };
     const ctrl = new AbortController();
@@ -461,7 +475,9 @@ export function useLiveMockState(pastRoute = false): LiveMockState {
                   viewers: number | null;
                 };
                 setInfo((prev) => {
-                  const next: BroadcastInfoResponse = {
+                  // 통로는 방송 중에만 온다: 지금 기준 창의 기록이다
+                  const next: LoadedInfo = {
+                    scope: prev?.scope ?? 'recent',
                     latest: {
                       title: ev.title,
                       tags: ev.tags ?? [],
@@ -518,7 +534,7 @@ export function useLiveMockState(pastRoute = false): LiveMockState {
       clearInterval(t3);
       if (reloadRangeRef.current === reloadRange) reloadRangeRef.current = null;
     };
-  }, [streamId]);
+  }, [streamId, pastRoute]);
 
   useEffect(() => {
     publishLiveData({

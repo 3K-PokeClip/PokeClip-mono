@@ -242,7 +242,7 @@ const server = vi.hoisted(() => ({
   vodStartUnknown: false,
   /** 지난 방송이 15시간이다. 차트는 끝 12시간만 읽는다 */
   vodLong: false,
-  /** 지난 방송 시간대(한 시간 넘게 지난 창)를 읽는 차트만 실패한다. 먼저 받은 최근 10분 차트가 남는다 */
+  /** 지난 방송 시간대(한 시간 넘게 지난 창)를 읽는 차트만 실패한다 */
   vodChartFail: false,
   /** 방송 정보 시청자 기록의 마지막 관측이 비었다(그 회차에 목록에서 못 찾음) */
   infoLastNull: false,
@@ -250,8 +250,17 @@ const server = vi.hoisted(() => ({
   infoFail: false,
   /** 라이브 방송이 끝났다: 「방송 중」 목록에서 빠지고 지난 목록에 끝난 줄로 온다 */
   liveEnded: false,
-  /** 방송 목록(명부) 답을 이 약속이 풀릴 때까지 붙든다: 명부보다 다른 답이 먼저 오는 순서를 잰다 */
+  /**
+   * 방송 번호로 명부를 찾는 질의의 답을 이 약속이 풀릴 때까지 붙든다: 명부보다 다른 답이 먼저 오는 순서를 잰다. 방송 번호를
+   * 고르는 질의(limit=1)는 붙들지 않는다
+   */
   listGate: null as Promise<void> | null,
+  /** 「방송 중」 목록의 방송이 위임받은 다른 방송(live-2, EDITOR)으로 바뀌었다 */
+  liveStream2: false,
+  /** since를 단 방송 정보 조회만 실패한다 */
+  infoSinceFail: false,
+  /** 방송 정보 시청자 기록이 전부 빈 관측이다(목록에서 채널을 한 번도 못 찾음) */
+  infoNoViewers: false,
   /** since 없는 방송 정보 답을 이 약속이 풀릴 때까지 붙든다: 늦게 온 옛 창의 답을 잰다 */
   infoNoSinceGate: null as Promise<void> | null,
   /** 지금 기준 최근 창의 채팅 차트 답을 이 약속이 풀릴 때까지 붙든다 */
@@ -268,9 +277,9 @@ function listResponse(u: URL): Response {
   if (server.failLive) return jsonResponse(503, { error: 'unavailable' });
   const live = u.searchParams.get('state') === 'live' && server.live;
   const row = {
-    streamId: STREAM_ID,
+    streamId: server.liveStream2 ? 'live-2' : STREAM_ID,
     status: 'live',
-    relation: server.relation,
+    relation: server.liveStream2 ? 'EDITOR' : server.relation,
     startedAt: new Date(STARTED_AT).toISOString(),
     endedAt: null,
     vodExpiresAt: null,
@@ -302,12 +311,15 @@ function listResponse(u: URL): Response {
 
 /** 방송 정보의 답. 수집기는 since가 없으면 최근 1시간만 준다(DEFAULT_WINDOW): 몇 시간 전에 끝난 지난 방송은 기록이 비어 온다 */
 function infoResponse(path: string, noSince: boolean): Response {
+  if (server.infoSinceFail && !noSince) return jsonResponse(503, { error: 'unavailable' });
   const info = server.infoTitleMissing
     ? { ...INFO, latest: { ...INFO.latest, title: null } }
     : INFO;
-  const body = server.infoLastNull
-    ? { ...info, series: [...info.series.slice(0, -1), { ...info.series[2], viewers: null }] }
-    : info;
+  const body = server.infoNoViewers
+    ? { ...info, series: info.series.map((p) => ({ ...p, viewers: null })) }
+    : server.infoLastNull
+      ? { ...info, series: [...info.series.slice(0, -1), { ...info.series[2], viewers: null }] }
+      : info;
   return jsonResponse(
     200,
     noSince && path.includes(`/${VOD_ID}/`) ? { ...body, series: [] } : body,
@@ -318,7 +330,9 @@ function handle(url: string) {
   const u = new URL(url, 'http://localhost');
   const path = u.pathname;
   if (path === '/api/clip/broadcasts')
-    return server.listGate ? server.listGate.then(() => listResponse(u)) : listResponse(u);
+    return server.listGate && u.searchParams.get('limit') !== '1'
+      ? server.listGate.then(() => listResponse(u))
+      : listResponse(u);
   if (path.endsWith('/jump-cards')) {
     // 숨긴 카드는 includeHidden일 때만 hidden:true로 온다(서버 기본은 뺀다)
     const withHidden = u.searchParams.get('includeHidden') === 'true';
@@ -404,6 +418,9 @@ beforeEach(() => {
   server.liveEnded = false;
   server.listGate = null;
   server.infoNoSinceGate = null;
+  server.liveStream2 = false;
+  server.infoSinceFail = false;
+  server.infoNoViewers = false;
   server.chartRecentGate = null;
   chatModes.length = 0;
   playerStatuses.length = 0;
@@ -602,6 +619,21 @@ describe('LiveScreen — 방송 정보 바', () => {
     expect(screen.getByRole('main')).toBeInTheDocument();
   });
 
+  it('같은 화면에서 방송이 바뀌어도 앞 방송의 관계가 남지 않는다: 명부 답 전에 남의 방송에 내 채널 이름을 붙이지 않는다', async () => {
+    // 저장소는 방송 번호가 바뀌면 앞 방송의 값을 통째로 버린다. 칸마다 따로 비우면 빠뜨린 칸(관계)이 남았다(리뷰 4라운드)
+    await renderLive();
+    expect(screen.getAllByText('게임하는너구리').length).toBeGreaterThan(0);
+
+    server.liveStream2 = true;
+    server.listGate = new Promise(() => undefined);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await settle();
+
+    expect(screen.queryByText('게임하는너구리')).toBeNull();
+  });
+
   it('라이브의 시청자 수도 비어 있는 마지막 관측이 아니라 마지막으로 잰 값이다: 통계와 같은 규칙이다', async () => {
     // 수집기는 그 회차에 목록에서 채널을 못 찾으면 빈 값을 남긴다. 그때 「수집 전」이라 하면 바로 아래 통계의 최고·평균과
     // 모순이다(리뷰 3라운드)
@@ -759,6 +791,8 @@ describe('LiveScreen: 라이브 문구', () => {
     expect(screen.getByRole('region', { name: '실시간 통계' })).toBeInTheDocument();
     expect(screen.getByText('자동 감지 중 · 카드 클릭 = 시점 이동')).toBeInTheDocument();
     expect(screen.getByText('지금')).toBeInTheDocument();
+    // 채팅 수 이름은 차트가 읽은 창대로다: 라이브는 지금 기준 최근 창이다
+    expect(screen.getByText('최근 10분 채팅')).toBeInTheDocument();
   });
 });
 
@@ -768,10 +802,6 @@ describe('LiveScreen — 수동 마킹', () => {
   // 누른 순간을 서버에 카드로 남기는 길이 아직 없다(POK-257, MVP 밖). 화면에만 카드를 세우면 새로 고침에 사라지고 편집도
   // 못 하는 가짜 성공이다(QA 2026-10-11). 준비 중이라고만 말한다.
   const PREPARING = '수동 마킹은 아직 준비 중이에요. 준비되면 알려드릴게요.';
-
-  afterEach(() => {
-    window.history.pushState({}, '', '/');
-  });
 
   it('버튼을 누르면 준비 중이라고 알리고 카드를 만들지 않는다', async () => {
     await renderLive();
@@ -957,10 +987,6 @@ describe('LiveScreen — 접근성', () => {
 });
 
 describe('LiveScreen — 긴 지난 방송', () => {
-  afterEach(() => {
-    window.history.pushState({}, '', '/');
-  });
-
   it('1시간 넘는 방송의 채팅·차트를 1시간 창으로 나눠 읽고, 시청자 기록은 시작 시각부터 달라고 한다', async () => {
     // 수집기는 한 번에 1시간까지만 받는다 — 넘으면 400 too_wide로 채팅·차트가 통째로 빈다(PR #200 codex)
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
@@ -990,10 +1016,6 @@ describe('LiveScreen — 긴 지난 방송', () => {
 });
 
 describe('LiveScreen — 영상 경로의 키(POK-233)', () => {
-  afterEach(() => {
-    window.history.pushState({}, '', '/');
-  });
-
   it('라이브 영상 주소는 방송 번호가 아니라 영상 경로의 키로 만든다 — 방송 번호가 회차 번호면 그 경로가 없다', async () => {
     server.ingest = 'key-live';
     await renderLive();
@@ -1032,10 +1054,6 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     nav.search = `?card=${cardId}`;
   }
-
-  afterEach(() => {
-    window.history.pushState({}, '', '/');
-  });
 
   /** 지금 녹화 플레이어가 달라고 한 줄기의 시작(epoch ms) */
   function requestedStart(container: HTMLElement): number | null {
@@ -1197,6 +1215,25 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
     expect(screen.queryByText(/시점 앞뒤 60초/)).toBeNull();
   });
 
+  it('주소의 카드는 한 번만 옮긴다: 사람이 다른 카드를 고른 뒤 몇 초가 지나도 주소의 카드로 돌아가지 않는다', async () => {
+    // 카드 목록은 매초 새로 만들어져 주소 카드 효과가 매초 다시 돈다. 이미 옮겼다는 표시가 없으면 사람이 고른 시점을
+    // 매초 되돌린다(리뷰 4라운드)
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    nav.search = '?card=4';
+    await renderLive();
+    expect(screen.getByText(/^0:47:22 시점 앞뒤 60초/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '1:23:20 시점으로 이동' }));
+    await settle();
+    expect(screen.getByText(/^1:23:20 시점 앞뒤 60초/)).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    await settle();
+    expect(screen.getByText(/^1:23:20 시점 앞뒤 60초/)).toBeInTheDocument();
+  });
+
   it('녹화를 찾는 동안 누른 카드도 녹화가 뜨면 그 시점부터다', async () => {
     stubMediaElement();
     server.vodOrigin = VOD_STARTED;
@@ -1222,10 +1259,6 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
 });
 
 describe('LiveScreen — 지난 방송 상세', () => {
-  afterEach(() => {
-    window.history.pushState({}, '', '/');
-  });
-
   it('명부에 없는 방송이면 404 화면으로 보낸다 — 빈 대시보드를 보이지 않는다', async () => {
     window.history.pushState({}, '', '/broadcast/vod/nope');
     await renderLive();
@@ -1357,7 +1390,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    // 시험 서버는 칸 크기와 무관하게 30초 칸 20개(10분)를 준다: 12창이면 120분이다
+    // 시험 서버는 칸 크기와 무관하게 창마다 30초 칸 20개(10분)를 준다: 1시간 창 12개면 120분이다
     expect(screen.getByText('마지막 120분 채팅')).toBeInTheDocument();
     expect(screen.queryByText('방송 중 채팅')).toBeNull();
   });
@@ -1388,6 +1421,94 @@ describe('LiveScreen — 지난 방송 상세', () => {
 
     expect(screen.getAllByText('시청자 수 확인 중').length).toBeGreaterThan(0);
     expect(screen.queryByText('시청자 수 기록 없음')).toBeNull();
+    // 태그 자리도 같다: 받기 전이다(「수집 전」은 앞으로 모으겠다는 라이브 말이다, 리뷰 4라운드)
+    expect(screen.getByText('방송 정보 확인 중')).toBeInTheDocument();
+    expect(screen.queryByText('방송 정보 수집 전')).toBeNull();
+  });
+
+  it('시작 시각도 기준점도 모르는 지난 방송에서 카드를 누르면 채팅을 옮겼다고 하지 않는다: 그 시점을 절대 시각으로 못 바꾼다', async () => {
+    server.vodStartUnknown = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    expect(screen.getByText('영상은 아직 없어요')).toBeInTheDocument();
+    expect(screen.queryByText(/채팅을 그 시점으로 옮겼어요/)).toBeNull();
+  });
+
+  it('다른 방송을 보던 화면에서 넘어와도 앞 방송으로 요청을 보내지 않는다: 저장소를 비운 뒤에 그린다', async () => {
+    // 비우기 전에 그리면 그 그리기가 앞 방송의 값을 칠하고, 그 효과들이 앞 방송 번호로 요청을 보낸다(리뷰 4라운드)
+    act(() => publishLiveData({ streamId: STREAM_ID, status: 'live', startedAt: STARTED_AT }));
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    const stale = fetchSpy.mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.includes(`/broadcasts/${STREAM_ID}/`));
+    expect(stale).toEqual([]);
+  });
+
+  it('명부 답 전에도 지난 방송의 제목·카테고리는 바로 보인다: 시간 창과 무관한 방송 정보다', async () => {
+    // 시청자 기록 때문에 방송 정보 전체를 기다리면 제목 자리에 방송 번호가, 태그 자리에 「방송 정보 수집 전」이 남는다
+    // (리뷰 4라운드)
+    server.listGate = new Promise(() => undefined);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.getByRole('heading', { level: 1, name: INFO.latest.title })).toBeInTheDocument();
+    expect(screen.getByText('리그 오브 레전드')).toBeInTheDocument();
+    expect(screen.queryByText('방송 정보 수집 전')).toBeNull();
+  });
+
+  it('지난 방송은 경과 시간을 모를 때도 「방송 중이 아니에요」라고 쓰지 않는다: 명부 답 전이다', async () => {
+    server.listGate = new Promise(() => undefined);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.queryByText('방송 중이 아니에요')).toBeNull();
+    expect(screen.getByText('방송함')).toBeInTheDocument();
+  });
+
+  it('지난 방송의 시청자 지표는 라이브 말(「수집 전」)을 쓰지 않는다: 기록을 받기 전에는 「확인 중」이다', async () => {
+    // 명부 답 전에는 최근 창으로 읽은 방송 정보만 있다. 그 기록은 끝난 방송의 것이 아니다
+    server.listGate = new Promise(() => undefined);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.queryByText('수집 전')).toBeNull();
+    expect(screen.getByText('최고 시청자').nextElementSibling).toHaveTextContent('확인 중');
+    expect(screen.getByText('평균 시청자').nextElementSibling).toHaveTextContent('확인 중');
+  });
+
+  it('시청자 기록이 전부 빈 지난 방송은 정보 바와 통계가 같은 말이다: 「기록 없음」', async () => {
+    server.infoNoViewers = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.getAllByText('시청자 수 기록 없음').length).toBeGreaterThan(0);
+    expect(screen.queryByText('수집 전')).toBeNull();
+    expect(screen.getByText('최고 시청자').nextElementSibling).toHaveTextContent('기록 없음');
+  });
+
+  it('명부 답보다 먼저 온 최근 창의 시청자 기록을 끝난 방송의 기록으로 보지 않는다: since 답이 실패해도 「기록 없음」이 아니다', async () => {
+    // 라이브 주소로 연 끝난 방송은 명부 답 전에 최근 창으로 읽는다. 그 답은 끝난 방송의 기록이 아니다(리뷰 4라운드)
+    server.infoSinceFail = true;
+    nav.search = `?stream=${VOD_ID}`;
+    window.history.pushState({}, '', `/broadcast/livenow?stream=${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.getAllByText('시청자 수 확인 중').length).toBeGreaterThan(0);
+    expect(screen.queryByText('시청자 수 기록 없음')).toBeNull();
+  });
+
+  it('차트가 없으면 채팅 바닥도 분당 수를 지어내지 않는다: 통계와 같은 규칙이다', async () => {
+    // 받은 채팅은 창마다 상한이 있어 방송 길이로 나누면 늘 적게 나온다. 통계는 「확인 중」인데 채팅 바닥은 「분당 0」이었다
+    // (리뷰 4라운드)
+    server.vodChartFail = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.queryByText(/분당 \d/)).toBeNull();
   });
 
   it('다른 방송을 보던 화면의 값이 남지 않는다: 명부 답 전에는 앞 방송의 관계로 내 채널 이름을 붙이지 않는다', async () => {
@@ -1402,7 +1523,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
 
   it('명부 답을 기다리는 동안은 지난 방송을 최근 창으로 읽지 않는다: 시청자 수를 「기록 없음」이라 단정하지 않는다', async () => {
     // 수집기는 since가 없으면 최근 1시간만 준다. 명부 답 전에 그렇게 읽은 빈 기록을 끝난 방송의 기록으로 보면
-    // 「기록 없음」이 된다(리뷰 3라운드). 차트·채팅도 그 동안 최근 창을 읽지 않는다
+    // 「기록 없음」이 된다(리뷰 3라운드). 차트·채팅은 그 동안 읽지 않고, 방송 정보는 제목·카테고리만 쓴다(리뷰 4라운드)
     let release: () => void = () => undefined;
     server.listGate = new Promise((resolve) => {
       release = resolve;
@@ -1416,7 +1537,6 @@ describe('LiveScreen — 지난 방송 상세', () => {
       fetchSpy.mock.calls
         .map(([url]) => new URL(String(url), 'http://localhost'))
         .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/${part}`);
-    expect(vodCalls('broadcast-info')).toEqual([]);
     expect(vodCalls('chat-chart')).toEqual([]);
     expect(vodCalls('chat-messages')).toEqual([]);
 
@@ -1477,8 +1597,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
       .map(([url]) => new URL(String(url), 'http://localhost'))
       .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/broadcast-info`)
       .map((u) => u.searchParams.get('since'));
+    // 명부 답 전에는 제목·카테고리를 위해 최근 창으로도 읽는다(그 시청자 기록은 끝난 방송의 것으로 보지 않는다)
     expect(sinces).toContain(new Date(VOD_ENDED - 12 * 3_600_000).toISOString());
-    expect(sinces).not.toContain(null);
     expect(screen.getAllByText('끝날 때 1,842명 시청').length).toBeGreaterThan(0);
   });
 
@@ -1508,13 +1628,20 @@ describe('LiveScreen — 지난 방송 상세', () => {
     expect(screen.queryByText(/^최근 \d+분 채팅$/)).toBeNull();
   });
 
-  it('시작 시각을 모르는 지난 방송은 그래프가 지금 기준 최근 10분 창이라 끝이 「지금」이다', async () => {
-    // 이 창의 오른쪽 끝을 끝난 시각처럼 적으면 13:30에 끝난 방송이 지금 끝난 것처럼 읽힌다(리뷰 스윕)
+  it('시작 시각을 모르는 지난 방송은 그래프·채팅·시청자 기록을 같은 창(끝 12시간)으로 읽는다', async () => {
+    // 그래프만 지금 기준 최근 10분을 읽으면 끝난 지 한참 된 방송은 늘 비고, 시청자 기록과 다른 창이라 최고·평균은 있는데
+    // 선이 없다. 채팅은 아예 읽지 않았다(리뷰 4라운드)
     server.vodStartUnknown = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
 
-    expect(screen.getByText('지금')).toBeInTheDocument();
+    expect(screen.queryByText('지금')).toBeNull();
+    expect(screen.getByText('마지막 120분 채팅')).toBeInTheDocument();
+    const froms = fetchSpy.mock.calls
+      .map(([url]) => new URL(String(url), 'http://localhost'))
+      .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
+      .map((u) => Date.parse(u.searchParams.get('from') ?? ''));
+    expect(froms).toContain(VOD_ENDED - 12 * 3_600_000);
   });
 
   it('지난 방송은 라이브 문구를 쓰지 않는다: 채팅 기록·방송 통계, 감지 중 안내 없음, 그래프 끝은 끝난 시각', async () => {

@@ -9,7 +9,7 @@ import {
   useLiveData,
   type RelayEvent,
 } from './liveDataStore';
-import { chartWindows } from './useLiveMockState';
+import { chartWindows, ENDED_TAIL_MS } from './useLiveMockState';
 
 // 실시간 채팅 패널(시안 1b). clip 창구에 붙어 있다(POK-251).
 // 라이브: 카드 통로(SSE)의 chat·donation 중계가 주 경로이고 chat-messages 폴링이 메우기·폴백이다.
@@ -41,8 +41,11 @@ export type ChatPanelMessage =
 export interface ChatPanelMockState {
   surges: ChatSurge[];
   messages: ChatPanelMessage[];
-  /** 하단 상태줄의 「분당 N」: 최근 1분 채팅 수. 지난 방송은 차트가 읽은 창의 평균이다(방송 전체, 12시간 넘으면 끝 12시간) */
-  ratePerMinute: number;
+  /**
+   * 하단 상태줄의 「분당 N」: 최근 1분 채팅 수. 지난 방송은 차트가 읽은 방송 창의 평균이고(방송 전체, 12시간 넘으면 끝 12시간),
+   * 그 차트가 아직 없으면 모른다(null)
+   */
+  ratePerMinute: number | null;
   /** 고른 시점 앞뒤 채팅을 보여 주나(지난 방송). 아니면 시점을 골라도 최신 채팅 그대로다 */
   followsPlayhead: boolean;
 }
@@ -136,7 +139,7 @@ function toPanel(it: WireItem): ChatPanelMessage {
  * @param pastRoute 지난 방송 주소(/broadcast/vod/…)로 열었나. 그 주소에서는 명부가 방송 중이라고 답할 때만 실시간 채팅을 읽는다:
  *   방송 상태를 모르는 동안 최근 창을 읽으면 끝난 방송의 「채팅 기록」 자리에 엉뚱한 창의 채팅을 채운다(리뷰 3라운드)
  */
-export function useChatPanelMockState(enabled: boolean, pastRoute = false): ChatPanelMockState {
+export function useChatPanelMockState(enabled: boolean, pastRoute: boolean): ChatPanelMockState {
   const [raw, setRaw] = useState<Record<string, WireItem>>({});
   const lastTime = useRef<number>(0);
   const nextId = useRef<number>(1);
@@ -145,15 +148,21 @@ export function useChatPanelMockState(enabled: boolean, pastRoute = false): Chat
   const pollRef = useRef<(() => Promise<void>) | null>(null);
   const live = useLiveData();
   const streamId = live.streamId;
-  const isVod = live.status === 'ended' && live.startedAt !== null && live.endedAt !== null;
+  // 지난 방송 채팅을 읽기 시작할 시각. 시작 시각을 모르는 방송(자리표시)은 그래프·시청자 기록처럼 끝 12시간이다: 아무 창도 안 읽어
+  // 채팅만 비었다(리뷰 4라운드)
+  const vodFrom =
+    live.status === 'ended' && live.endedAt !== null
+      ? (live.startedAt ?? live.endedAt - ENDED_TAIL_MS)
+      : null;
+  const isVod = vodFrom !== null;
 
   // 지난 방송: 시작~종료 전체를 받는다. 수집기는 한 번에 1시간까지만 받으므로(넘으면 400 too_wide)
   // 1시간 창마다 커서로 넘긴다(PR #200 codex). 창마다 최대 5장(1,000건). 폴링 없음
   useEffect(() => {
-    if (!enabled || !streamId || !isVod || live.startedAt === null || live.endedAt === null) return;
+    if (!enabled || !streamId || vodFrom === null || live.endedAt === null) return;
     setRaw({});
     let stopped = false;
-    const windows = chartWindows(live.startedAt, live.endedAt);
+    const windows = chartWindows(vodFrom, live.endedAt);
     (async () => {
       const acc: Record<string, WireItem> = {};
       for (const [from, to] of windows) {
@@ -186,7 +195,7 @@ export function useChatPanelMockState(enabled: boolean, pastRoute = false): Chat
     return () => {
       stopped = true;
     };
-  }, [enabled, streamId, isVod, live.startedAt, live.endedAt]);
+  }, [enabled, streamId, vodFrom, live.endedAt]);
 
   // 실시간 중계 수신(카드 통로의 chat·donation). 구멍·세대 변화면 2초 뒤 범위 창구로 메운다
   useEffect(() => {
@@ -359,20 +368,19 @@ export function useChatPanelMockState(enabled: boolean, pastRoute = false): Chat
     return items.map(toPanel);
   }, [items, isVod, live.playheadMs, vodBase]);
 
-  const ratePerMinute = useMemo(() => {
-    if (isVod && live.startedAt !== null && live.endedAt !== null) {
-      // 받아 둔 채팅은 창마다 상한이 있어 일부일 수 있다: 차트가 센 수를 차트가 읽은 길이로 나눈다(12시간 넘는 방송은
-      // 끝 12시간만 읽는다). 방송 차트를 아직 못 받았으면(최근 창뿐) 받은 수를 방송 길이로 나눠 대신한다(리뷰 2라운드)
+  const ratePerMinute = useMemo<number | null>(() => {
+    // 지난 방송(명부 답을 기다리는 지난 방송 주소 포함)은 차트가 센 수를 차트가 읽은 길이로 나눈다(12시간 넘는 방송은 끝 12시간).
+    // 그 차트가 없으면 모른다: 받아 둔 채팅은 창마다 상한이 있어 방송 길이로 나누면 늘 적게 나온다. 통계도 그때 「확인 중」이다
+    // (리뷰 4라운드)
+    if (isVod || (pastRoute && live.status !== 'live')) {
       const chart = live.chart;
-      if (chart && chart.scope !== 'recent') {
-        const { minutes, chats } = chartSpan(chart);
-        return Math.round(chats / minutes);
-      }
-      return Math.round(items.length / Math.max(1, (live.endedAt - live.startedAt) / 60_000));
+      if (chart === null || chart.scope === 'recent') return null;
+      const { minutes, chats } = chartSpan(chart);
+      return Math.round(chats / minutes);
     }
     const cut = Date.now() - 60_000 + CHAT_LEAD_MS;
     return items.filter((it) => Date.parse(it.time) >= cut).length;
-  }, [items, isVod, live.startedAt, live.endedAt, live.chart]);
+  }, [items, isVod, pastRoute, live.status, live.chart]);
 
   const surges = useMemo<ChatSurge[]>(() => {
     const cut = Date.now() - 2 * 60_000 + CHAT_LEAD_MS;
@@ -392,5 +400,6 @@ export function useChatPanelMockState(enabled: boolean, pastRoute = false): Chat
       .map(([keyword, count]) => ({ keyword, count }));
   }, [items]);
 
-  return { surges, messages, ratePerMinute, followsPlayhead: isVod };
+  // 채팅이 고른 시점을 따라가려면 그 시점을 절대 시각으로 바꿀 기준점이 있어야 한다(시작 시각을 모르는 방송은 없을 수 있다)
+  return { surges, messages, ratePerMinute, followsPlayhead: isVod && vodBase !== null };
 }

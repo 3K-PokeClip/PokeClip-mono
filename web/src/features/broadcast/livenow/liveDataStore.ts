@@ -10,8 +10,8 @@ export interface LiveChartBucket {
   donations: number;
 }
 /**
- * 차트가 실제로 읽은 창. 방송 전체 · 끝 12시간(그보다 긴 방송) · 지금 기준 최근 10분(라이브, 라이브 주소에서 방송 상태를 아직
- * 모를 때, 시작 시각을 모르는 지난 방송). 이름표(「방송 중 채팅」·그래프 끝 시각)와 분당 수는 방송 상태가 아니라 이 값을 본다:
+ * 차트가 실제로 읽은 창. 방송 전체 · 끝 12시간(그보다 긴 방송, 시작 시각을 모르는 방송) · 지금 기준 최근 10분(라이브, 라이브
+ * 주소에서 방송 상태를 아직 모를 때). 이름표(「방송 중 채팅」·그래프 끝 시각)와 분당 수는 방송 상태가 아니라 이 값을 본다:
  * 상태로 다시 계산하면 아직 남아 있는 다른 창의 차트에 엉뚱한 이름을 붙인다(QA 2026-10-11 리뷰 2라운드)
  */
 export type LiveChartScope = 'broadcast' | 'tail' | 'recent';
@@ -21,9 +21,16 @@ export interface LiveChart {
   appliedOffsetMs: number;
   scope: LiveChartScope;
 }
+/**
+ * 방송 정보의 시청자 기록(series)을 어느 창으로 읽었나. 끝난 방송의 구간(since)이면 broadcast, 수집기 기본인 지금 기준 최근
+ * 1시간이면 recent다. 끝난 방송의 시청자 수·통계는 broadcast만 믿는다: 명부 답 전에 recent로 읽은 빈 기록을 끝난 방송의 것으로
+ * 보고 「기록 없음」이라 했다(리뷰 4라운드). 제목·카테고리·태그(latest)는 창과 무관해 언제든 쓴다
+ */
+export type LiveInfoScope = 'broadcast' | 'recent';
 export interface LiveInfo {
   latest: { title: string | null; tags: string[]; category: string | null } | null;
   series: { observedAt: string; viewers: number | null }[];
+  scope: LiveInfoScope;
 }
 export type LiveBroadcastStatus = 'live' | 'ended' | 'offline' | 'unknown';
 export interface LiveData {
@@ -62,7 +69,8 @@ export function timeBaseOf(
 
 /**
  * 차트가 읽은 길이(분)와 그 안의 채팅 수. 수집기가 빈 칸도 0으로 채워 주므로 칸 수 × 칸 길이가 읽은 길이다. 통계의 분당 평균과
- * 채팅 패널의 「분당 N」이 이것 하나로 센다: 따로 세면 한 화면의 두 수가 갈라진다(리뷰 3라운드)
+ * 지난 방송 채팅 패널의 「분당 N」이 이것 하나로 센다: 따로 세면 한 화면의 두 수가 갈라진다(리뷰 3라운드). 차트가 없으면 둘 다
+ * 수를 적지 않는다(리뷰 4라운드)
  */
 export function chartSpan(chart: LiveChart): { minutes: number; chats: number } {
   return {
@@ -89,11 +97,14 @@ let state: LiveData = INITIAL;
 const listeners = new Set<() => void>();
 
 export function publishLiveData(patch: Partial<LiveData>) {
-  state = { ...state, ...patch };
+  // 방송 번호가 바뀌면 앞 방송의 값은 통째로 버린다. 칸마다 따로 비우면 빠뜨린 칸(관계 등)이 다음 방송에 남았다(리뷰 4라운드).
+  // 방송 번호를 올리는 곳은 방송을 고르는 훅 하나다
+  const base = patch.streamId !== undefined && patch.streamId !== state.streamId ? INITIAL : state;
+  state = { ...base, ...patch };
   listeners.forEach((l) => l());
 }
 
-/** 시험 사이에 앞 시험의 방송이 남지 않게 비운다 */
+/** 앞 방송의 값을 통째로 비운다. 라이브 화면이 설 때 그리기 전에 부르고(LiveScreen), 시험 사이에도 부른다 */
 export function resetLiveData() {
   state = INITIAL;
   listeners.forEach((l) => l());

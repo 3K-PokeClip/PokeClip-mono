@@ -185,11 +185,18 @@ function LivePlayer({
 // 아예 돌지 않아야 하므로, 분기를 그 훅들보다 위인 컴포넌트 경계에서 한다.
 // 꺼짐은 둘이다: 시안 확인용 토글(?mock=offline, 개발 전용)과 실제로 방송 중인 것이 없을 때.
 export function LiveScreen() {
-  // 저장소는 화면 하나의 것이다. 다른 방송을 보던 화면에서 넘어오면 앞 방송의 제목·시청자 수·그래프가 남아 그대로 보였다
-  // (리뷰 3라운드). 화면에 칠하기 전에 비운다: 방송 번호를 올리는 선택 훅의 효과보다 먼저다
+  // 저장소는 화면 하나의 것이다. 다른 방송을 보던 화면에서 넘어오면 앞 방송의 제목·시청자 수·그래프가 남아 첫 그리기에 칠해지고,
+  // 그 그리기의 효과들이 앞 방송 번호로 요청을 보냈다(리뷰 3·4라운드). 그래서 비운 뒤에야 그린다: 레이아웃 효과에서 바꾼 상태는
+  // 칠하기 전에 다시 그려져 빈 첫 그림은 보이지 않는다. 같은 화면 안에서 방송이 바뀔 때는 저장소가 스스로 비운다
+  const [storeCleared, setStoreCleared] = useState(false);
   useLayoutEffect(() => {
     resetLiveData();
+    setStoreCleared(true);
   }, []);
+  return storeCleared ? <LiveScreenBody /> : null;
+}
+
+function LiveScreenBody() {
   const { status } = useLiveStatusMockState();
   const selection = useLiveStreamSelection();
   const offline = status === 'offline' || (selection.resolved && selection.streamId === '');
@@ -215,8 +222,8 @@ function LiveDashboard() {
   const playerRef = useRef<GlassPlayerController>(null);
   const { toast } = useToast();
   // 지난 방송 주소면 명부가 방송 중이라고 답하기 전까지 끝난 방송이다. 방송 번호를 정하기 전(offline)이나 명부 조회가
-  // 늦거나 실패한 동안(unknown) 라이브 문구로 깜박이지 않는다(QA 2026-10-11 리뷰)
-  const viewStatus = vodRouteId !== null && clock.status !== 'live' ? 'ended' : clock.status;
+  // 늦거나 실패한 동안(unknown) 라이브 문구로 깜박이지 않는다(QA 2026-10-11 리뷰). 문구를 내는 곳은 전부 이것을 받는다
+  const viewStatus = pastRoute && clock.status !== 'live' ? 'ended' : clock.status;
   const ended = viewStatus === 'ended';
 
   const uptimeSeconds = clock.uptimeSeconds;
@@ -229,16 +236,17 @@ function LiveDashboard() {
   // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
   // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다).
   const chat = useChatPanelMockState(chatPanelOpen && !chatWarning, pastRoute);
-  const stats = useLiveStatsMockState();
+  const stats = useLiveStatsMockState(ended);
 
   // 시청자 수는 broadcast-info의 series에서 마지막으로 잰 값이다(수집기 PR-C 전에는 없다). 수집기는 목록에서 채널을 못 찾은
   // 회차를 빈 값으로 남기므로 마지막 관측이 비어도 그 앞의 값을 쓴다: 통계의 최고·평균과 같은 규칙이다(리뷰 3라운드). 끝난 방송은
   // 지금 보는 사람이 아니라 끝날 때 값이고(QA 2026-10-11 리뷰: 며칠 전 방송을 지금 1,842명이 보는 것처럼 읽혔다), 방송 정보를
-  // 받기 전이면 「기록 없음」이라 단정하지 않는다
+  // 받기 전이면 「기록 없음」이라 단정하지 않는다. 끝난 방송은 방송 창으로 읽은 기록만 믿는다: 명부 답 전에 최근 창으로 읽은
+  // 빈 기록은 끝난 방송의 기록이 아니다(리뷰 4라운드)
   const viewersLabel = useMemo(() => {
     const v = info?.series?.findLast((p) => p.viewers !== null)?.viewers ?? null;
     if (ended) {
-      if (!info) return '시청자 수 확인 중';
+      if (info?.scope !== 'broadcast') return '시청자 수 확인 중';
       return v === null ? '시청자 수 기록 없음' : `끝날 때 ${v.toLocaleString()}명 시청`;
     }
     return v === null ? '시청자 수 수집 전' : `${v.toLocaleString()}명 시청 중`;
@@ -349,7 +357,18 @@ function LiveDashboard() {
             meta={streamMeta}
             viewersLabel={viewersLabel}
             uptimeLabel={uptimeLabel}
-            uptimeNote={ended ? '방송함' : '스트리밍 중'}
+            uptimeNote={
+              ended
+                ? '방송함'
+                : viewStatus === 'live'
+                  ? '스트리밍 중'
+                  : viewStatus === 'unknown'
+                    ? '확인 중'
+                    : '방송 중이 아니에요'
+            }
+            metaNote={
+              !info ? '방송 정보 확인 중' : ended ? '방송 정보 기록 없음' : '방송 정보 수집 전'
+            }
             // 만드는 중 자리는 수동 마킹이 서버에 남을 때(POK-257) 쓴다
             pendingLabel={null}
             onMark={marking.mark}
