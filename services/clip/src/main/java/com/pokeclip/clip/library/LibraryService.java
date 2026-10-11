@@ -18,7 +18,9 @@ import com.pokeclip.clip.render.RenderJob;
 import com.pokeclip.clip.render.RenderJobRepository;
 import com.pokeclip.clip.render.RenderRequestService;
 import com.pokeclip.clip.thumbnail.ThumbnailUrls;
+import com.pokeclip.clip.upload.UploadRequestBrief;
 import com.pokeclip.clip.upload.UploadRequestService;
+import com.pokeclip.clip.upload.UploadRequestStore;
 import com.pokeclip.clip.upload.UploadSnapshot;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,7 +30,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
@@ -68,12 +72,15 @@ public class LibraryService {
     private final TransactionTemplate transactions;
     private final ObjectMapper mapper;
     private final ThumbnailUrls thumbnails;
+    private final UploadRequestStore uploadRequests;
 
     LibraryService(LibraryQuery query, RecipeRepository recipes, ClipRepository clips, RenderJobRepository jobs,
                    RenderRequestService render, UploadRequestService uploads, DelegationResolveClient delegation,
                    BroadcastAccessGuard guard,
-                   TransactionTemplate transactions, ObjectMapper mapper, ThumbnailUrls thumbnails) {
+                   TransactionTemplate transactions, ObjectMapper mapper, ThumbnailUrls thumbnails,
+                   UploadRequestStore uploadRequests) {
         this.thumbnails = thumbnails;
+        this.uploadRequests = uploadRequests;
         this.query = query;
         this.recipes = recipes;
         this.clips = clips;
@@ -180,20 +187,28 @@ public class LibraryService {
                 .collect(Collectors.toMap(RenderJob::getClipId, Function.identity()));
         Map<Long, UploadSnapshot> uploadByClipId = uploads.latestFor(clipIds).stream()
                 .collect(Collectors.toMap(UploadSnapshot::clipId, Function.identity()));
+        // 「렌더 뒤 업로드」 의도(POK-291): 줄마다 지금 판 + 최신 영상의 판. 한 번에 읽는다(줄마다 안 묻는다).
+        Set<UploadRequestStore.Key> keys = new HashSet<>();
+        recipeById.values().forEach(r -> keys.add(new UploadRequestStore.Key(r.getId(), r.getRecipeVersion())));
+        clipById.values().forEach(c -> keys.add(new UploadRequestStore.Key(c.getRecipeId(), c.getRecipeVersion())));
+        Map<UploadRequestStore.Key, UploadRequestBrief> briefs = uploadRequests.briefs(keys);
 
         List<LibraryEntry> entries = new ArrayList<>(rows.size());
         for (LibraryRow row : rows) {
             // 질의가 준 번호는 같은 트랜잭션 안에서 읽었으니 반드시 있다 — 없으면 우리 버그라 500이 맞다.
             Recipe recipe = recipeById.get(row.recipeId());
-            ClipSnapshot latest = row.clipId() == null ? null
-                    : render.snapshot(clipById.get(row.clipId()), Optional.ofNullable(jobByClipId.get(row.clipId())),
-                            Optional.ofNullable(uploadByClipId.get(row.clipId())));
+            Clip clip = row.clipId() == null ? null : clipById.get(row.clipId());
+            ClipSnapshot latest = clip == null ? null
+                    : render.snapshot(clip, Optional.ofNullable(jobByClipId.get(row.clipId())),
+                            Optional.ofNullable(uploadByClipId.get(row.clipId())),
+                            Optional.ofNullable(briefs.get(new UploadRequestStore.Key(clip.getRecipeId(), clip.getRecipeVersion()))));
             RecipeDocument.Cut cut = recipe.getCutInAtMs() == null ? null
                     : new RecipeDocument.Cut(recipe.getCutInAtMs(), recipe.getCutOutAtMs());
             entries.add(new LibraryEntry(recipe.getId(), recipe.getStreamId(), recipe.getCreatorId(),
                     recipe.getRecipeVersion(), cut, row.status(),
                     new BroadcastSummary(row.broadcastStatus(), row.startedAt(), row.endedAt(), row.vodExpiresAt()),
-                    latest, recipe.getCreatedAt(), recipe.getUpdatedAt(), null));
+                    latest, recipe.getCreatedAt(), recipe.getUpdatedAt(), null,
+                    briefs.get(new UploadRequestStore.Key(recipe.getId(), recipe.getRecipeVersion()))));
         }
         return entries;
     }

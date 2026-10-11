@@ -33,7 +33,7 @@ class UploadPropertiesTest {
 
     private static UploadProperties 설정(String queueUrl, String token) {
         return new UploadProperties(queueUrl, null, null, false, "ap-northeast-2", "http://clip", "http://auth", token,
-                "http://yt", Path.of("/tmp"), DataSize.ofMegabytes(8), Duration.ofSeconds(900), Duration.ofSeconds(20),
-                List.of());
+                "http://yt", "http://yt-thumb", Path.of("/tmp"), "ffmpeg", "ffprobe", DataSize.ofMegabytes(8),
+                Duration.ofSeconds(900), Duration.ofSeconds(20), List.of());
     }
 }

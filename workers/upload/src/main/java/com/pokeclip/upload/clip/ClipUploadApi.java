@@ -48,8 +48,29 @@ public class ClipUploadApi {
         return reply.body().path("sessionUri").asString();
     }
 
-    public void uploaded(long uploadId, String videoId) {
-        result(uploadId, "UPLOADED", Map.of("videoId", videoId));
+    /**
+     * 올림 보고에 싣는 썸네일 결과(POK-291 명세 §6). 납작한 칸 둘({@code thumbnailOutcome}·{@code thumbnailErrorCode})로 간다.
+     *
+     * @param outcome   {@code SET}·{@code FAILED}·{@code NONE}
+     * @param errorCode {@code FAILED}일 때만. {@code THUMBNAIL_*}
+     */
+    public record ThumbnailReport(String outcome, String errorCode) {
+        public static final ThumbnailReport NONE = new ThumbnailReport("NONE", null);
+        public static final ThumbnailReport SET = new ThumbnailReport("SET", null);
+
+        public static ThumbnailReport failed(String code) {
+            return new ThumbnailReport("FAILED", code);
+        }
+    }
+
+    public void uploaded(long uploadId, String videoId, ThumbnailReport thumbnail) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("videoId", videoId);
+        body.put("thumbnailOutcome", thumbnail.outcome());
+        if (thumbnail.errorCode() != null) {
+            body.put("thumbnailErrorCode", thumbnail.errorCode());
+        }
+        result(uploadId, "UPLOADED", body);
     }
 
     public void failed(long uploadId, String code, String message) {

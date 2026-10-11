@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { describe, expect, it } from 'vitest';
 import { renderWithProviders } from '@/test/testProviders';
+import { Dialog, RadioGroup } from '@/ui';
 import { StudioEditor } from './StudioScreen';
 import type { ClipEditorOptions } from '../useClipEditorMockState';
 
@@ -389,6 +390,37 @@ describe('StudioScreen', () => {
     expect(screen.getByRole('button', { name: '작업 이전으로' })).toBeEnabled();
     // Space는 여전히 버튼 것이라 재생으로 새지 않는다
     expect(screen.getByRole('button', { name: '재생' })).toBeInTheDocument();
+  });
+
+  it('창(dialog)이 떠 있으면 I·O·Space가 뒤 편집기를 안 바꾼다: 창 안 라디오는 Space로 골라진다(POK-291)', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <StudioEditor />
+        <Dialog open>
+          <Dialog.Content>
+            <Dialog.Title>창</Dialog.Title>
+            <RadioGroup aria-label="고르기" defaultValue="a">
+              <RadioGroup.Item value="a" label="가" />
+              <RadioGroup.Item value="b" label="나" />
+            </RadioGroup>
+            <button type="button">창 단추</button>
+          </Dialog.Content>
+        </Dialog>
+      </>,
+    );
+    const dialog = within(screen.getByRole('dialog', { name: '창' }));
+
+    dialog.getByRole('button', { name: '창 단추' }).focus();
+    await user.keyboard('{o}{i}');
+    // 버튼 위 O는 원래 통과해 끝점을 당긴다(위 시험): 창 안이면 막혀 되돌릴 거리가 안 생긴다
+    expect(screen.getByRole('button', { name: '작업 이전으로', hidden: true })).toBeDisabled();
+
+    const second = dialog.getByRole('radio', { name: '나' });
+    second.focus();
+    await user.keyboard(' ');
+    expect(second).toBeChecked();
+    expect(screen.getByRole('button', { name: '재생', hidden: true })).toBeInTheDocument();
   });
 
   it('핸들 ARIA 범위가 3분 상한까지 반영한다', () => {
