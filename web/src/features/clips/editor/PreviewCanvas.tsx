@@ -28,6 +28,14 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
     state.subtitle.status === 'ready' && state.subtitleMode !== 'cc'
       ? (state.subtitle.items.find((item) => item.id === state.selectedSubtitleId)?.text ?? null)
       : null;
+  // 결과 설명은 결과에 실제로 들어갈 것을 말한다: 자막이 없는데 고른 방식(번인+CC)만 적으면 자막이 들어갈 것처럼
+  // 읽힌다(QA 2026-10-11)
+  const subtitleNote =
+    state.subtitle.status === 'ready' && state.subtitle.items.length > 0
+      ? state.subtitleModeLabel
+      : state.subtitle.status === 'generating'
+        ? '만드는 중'
+        : '없음';
 
   const result = (
     <div
@@ -97,7 +105,7 @@ export function PreviewCanvas({ state }: { state: ClipEditorMockState }) {
           {result}
           <span className={styles.stageNote}>
             {editingLayout ? '' : '미리보기 · '}
-            {state.layoutLabel} · 자막 {state.subtitleModeLabel} · {state.speed}× 배속
+            {state.layoutLabel} · 자막 {subtitleNote} · {state.speed}× 배속
           </span>
         </section>
       </div>

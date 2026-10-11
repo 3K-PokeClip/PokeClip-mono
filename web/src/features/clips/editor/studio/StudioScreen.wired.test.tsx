@@ -765,6 +765,23 @@ describe('StudioScreen — 화면에서 고른 모양이 저장 본문에 그대
     // 자막 도구 목록에는 있지만 결과 화면에 얹힌 번인 글자는 없다
     expect(screen.queryByText('“자막 파일에만”')).not.toBeInTheDocument();
   });
+
+  it('자막이 없으면 결과 설명도 「자막 없음」이다: 고른 방식(번인+CC)만 적으면 자막이 들어갈 것처럼 읽힌다', async () => {
+    await openFrom('recipe=31');
+    expect(screen.getByText(/자막 없음 · 1× 배속/)).toBeInTheDocument();
+    expect(screen.queryByText(/자막 번인\+CC/)).not.toBeInTheDocument();
+  });
+
+  it('저장된 자막이 있으면 결과 설명은 고른 방식을 적는다', async () => {
+    server.savedSubtitles = {
+      mode: 'BURN_ONLY',
+      segments: [
+        { startAtMs: STARTED_AT + 121_500, endAtMs: STARTED_AT + 123_000, text: '저장된 첫 자막' },
+      ],
+    };
+    await openFrom('recipe=31');
+    expect(screen.getByText(/자막 번인 · 1× 배속/)).toBeInTheDocument();
+  });
 });
 
 describe('StudioScreen: 영상 만들기 + 유튜브 올리기(POK-291)', () => {
