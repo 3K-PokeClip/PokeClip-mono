@@ -1,4 +1,4 @@
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -889,7 +889,16 @@ describe('LiveScreen — 영상 경로의 키(POK-233)', () => {
 });
 
 describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
-  // 홈 「최근 하이라이트」는 지난 방송 주소에 ?card= 를 싣는다(QA 2026-10-11). 전에는 방송 번호만 실어 처음부터 틀었다
+  // 홈 「최근 하이라이트」는 지난 방송 주소에 ?card= 를 싣는다(QA 2026-10-11). 전에는 방송 번호만 실어 처음부터 틀었다.
+  //
+  // 🔴 Next는 다른 화면에서 넘어올 때 새 화면을 먼저 그리고 주소창은 그 뒤에 바꾼다. 그래서 이 시험들은 카드 번호를
+  // useSearchParams(nav.search)로만 주고 주소창(window.location)에는 싣지 않는다. 주소창을 먼저 바꾸면 그 순서를 못 잰다
+  // (주소창을 읽던 첫 구현이 시험은 통과하고 실기동에서 처음부터 틀었다).
+  function openFromHome(cardId: number) {
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    nav.search = `?card=${cardId}`;
+  }
+
   afterEach(() => {
     window.history.pushState({}, '', '/');
   });
@@ -901,6 +910,20 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
     return Date.parse(new URL(video.src, 'http://localhost').searchParams.get('start') ?? '');
   }
 
+  /**
+   * 개발 서버처럼 StrictMode로 그린다. 새로 선 부품의 효과를 껐다 켜므로, 녹화가 서는 순간에 건 이동이 그 「끄기」에
+   * 지워지는지를 잰다(실기동에서 그렇게 처음부터 틀었다)
+   */
+  async function renderLiveStrict() {
+    const result = renderWithProviders(
+      <StrictMode>
+        <LiveScreen />
+      </StrictMode>,
+    );
+    await settle();
+    return result;
+  }
+
   function stubMediaElement() {
     // jsdom에는 미디어 재생이 없다. 재생 요청만 받아 둔다
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
@@ -909,7 +932,7 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
 
   it('녹화가 없으면 채팅을 그 카드 시점으로 옮긴다', async () => {
     server.vodOrigin = VOD_STARTED + 32_000;
-    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}?card=4`);
+    openFromHome(4);
     await renderLive();
 
     const froms = fetchSpy.mock.calls
@@ -925,12 +948,33 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
     stubMediaElement();
     server.vodOrigin = VOD_STARTED;
     mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
-    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}?card=4`);
-    const { container } = await renderLive();
+    openFromHome(4);
+    const { container } = await renderLiveStrict();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(300);
     });
 
+    expect(requestedStart(container)).toBe(VOD_STARTED + 2_842_000);
+  });
+
+  it('녹화 플레이어가 한 번 더 새로 서도 그 카드 시점이다: 새로 선 녹화는 처음부터 튼다', async () => {
+    // 방송 정보(기준점 등)가 늦게 오면 녹화를 다시 찾아 플레이어가 새로 선다(실기동에서 녹화 목록을 두 번 읽었다)
+    stubMediaElement();
+    mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
+    openFromHome(4);
+    const { container } = await renderLiveStrict();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(requestedStart(container)).toBe(VOD_STARTED + 2_842_000);
+
+    act(() => publishLiveData({ originMs: VOD_STARTED }));
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    expect(mediaCalls.spans.length).toBeGreaterThan(1);
     expect(requestedStart(container)).toBe(VOD_STARTED + 2_842_000);
   });
 
@@ -942,7 +986,7 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
       answer = resolve;
     });
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
-    const { container } = await renderLive();
+    const { container } = await renderLiveStrict();
 
     fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
     await act(async () => {

@@ -54,6 +54,8 @@ export interface GlassPlayerProps {
   src?: string | null;
   /** 끝난 방송의 녹화(재생 서버) — 있으면 HLS 대신 이것으로 다시보기를 튼다 */
   recorded?: RecordedSource | null;
+  /** 녹화 다시보기를 이 자리(방송 기준 초)부터 튼다. 녹화 플레이어가 설 때 한 번만 읽는다(useRecordedPlayback) */
+  startAtSeconds?: number | null;
   /** 소스가 없을 때 목업 재생으로 시안 동작을 보인다 — 스토리북·시험 전용. 실제 화면은 끈다 */
   simulate?: boolean;
   /** clip의 방송 명부가 말하는 상태 — 상단 배지(LIVE·종료·확인 중)의 근거. 없으면 LIVE */
@@ -142,7 +144,7 @@ function NoSignalGlassPlayer({
 /** 끝난 방송 다시보기 — 같은 몸통(컨트롤·시크바)에 녹화 재생 훅을 끼운다 */
 function RecordedGlassPlayer(props: GlassPlayerProps & { recorded: RecordedSource }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const sim = useRecordedPlayback(videoRef, props.recorded);
+  const sim = useRecordedPlayback(videoRef, props.recorded, props.startAtSeconds ?? 0);
   return (
     <GlassPlayerBody
       {...props}

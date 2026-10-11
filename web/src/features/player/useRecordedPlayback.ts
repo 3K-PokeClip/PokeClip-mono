@@ -21,19 +21,36 @@ export type RecordedSource = RecordingTimeline & { streamId: string };
 
 const SEEK_DEBOUNCE_MS = 250;
 
+/** 녹화 안으로 자른 자리(초). 끝은 마지막 1초 앞이다 */
+function clampToRecording(total: number, seconds: number): number {
+  return Math.min(Math.max(0, total - 1), Math.max(0, seconds));
+}
+
+/** 앞으로 가는 이동의 도착점: 녹화 안으로 자르고, 틈 안이면 다음 구간 시작이다(재생 서버는 틈을 건너 주지 않는다) */
+function forwardTarget(recorded: RecordingTimeline, seconds: number): number {
+  const wanted = clampToRecording(recorded.durationSeconds, seconds);
+  return playableFrom(recorded, wanted)?.fromSeconds ?? wanted;
+}
+
+/**
+ * @param startAtSeconds 처음 달라는 줄기의 자리(방송 기준 초). 마운트 때 한 번만 읽는다. 선 다음에 옮기면 개발 서버(StrictMode)가
+ *   새로 선 부품을 껐다 켤 때 기다리던 이동이 지워져 처음부터 튼다(QA 2026-10-11). 고른 시점이 있으면 여기로 준다
+ */
 export function useRecordedPlayback(
   videoRef: RefObject<HTMLVideoElement | null>,
   recorded: RecordedSource,
+  startAtSeconds = 0,
 ): PlayerSimulation {
   const total = recorded.durationSeconds;
+  const startAt = () => (startAtSeconds > 0 ? forwardTarget(recorded, startAtSeconds) : 0);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
   const [volume, setVolumeState] = useState(70);
   const volumeRef = useRef(70);
   volumeRef.current = volume;
   /** 가고 싶은 자리(방송 기준 초). 실제 줄기는 여기서 틀 수 있는 구간부터다 */
-  const [offset, setOffset] = useState(0);
-  const [position, setPosition] = useState(0);
+  const [offset, setOffset] = useState(startAt);
+  const [position, setPosition] = useState(startAt);
   const [quality, setQuality] = useState<PlayerQuality>(PLAYER_QUALITIES[0]);
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
   // 틈 안이면 다음 구간 시작, 녹화 끝을 지났으면 마지막 구간 끝 1초 앞(끝까지 본 뒤 다시 누른 경우)
@@ -117,11 +134,10 @@ export function useRecordedPlayback(
 
   const jumpTo = useCallback(
     (seconds: number, backward = false) => {
-      const wanted = Math.min(Math.max(0, total - 1), Math.max(0, seconds));
       // 틈 안이면 다음 구간 시작으로(뒤로 가기면 앞 구간 끝으로) — 시크바도 실제로 틀 자리를 보인다
       const target = backward
-        ? playableBackFrom(recordedRef.current, wanted)
-        : (playableFrom(recordedRef.current, wanted)?.fromSeconds ?? wanted);
+        ? playableBackFrom(recordedRef.current, clampToRecording(total, seconds))
+        : forwardTarget(recordedRef.current, seconds);
       setPosition(target);
       if (seekTimer.current !== null) window.clearTimeout(seekTimer.current);
       // 시크바를 끄는 동안 매 좌표마다 새 줄기를 받지 않는다
