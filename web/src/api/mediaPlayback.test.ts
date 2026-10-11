@@ -23,7 +23,10 @@ describe('parseSpanStartMs — 녹화 시작을 ms로 올린다(POK-253)', () =>
 describe('lookupRecordingSpans: 녹화 없음과 물을 수 없음을 가른다(리뷰 6라운드)', () => {
   // 재생 서버가 없거나 조회가 실패해도 빈 목록으로 접어 화면이 「녹화 영상을 찾지 못했어요」로 굳었다
   let fetchSpy: ReturnType<typeof stubFetch>;
-  async function load(base: string, answer: () => Promise<Response>) {
+  async function load(
+    base: string,
+    answer: (url: string, init?: RequestInit) => Promise<Response>,
+  ) {
     vi.resetModules();
     vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', base);
     fetchSpy = stubFetch(answer);
@@ -58,6 +61,32 @@ describe('lookupRecordingSpans: 녹화 없음과 물을 수 없음을 가른다(
     const offline = await load('http://pb', () => Promise.reject(new TypeError('network')));
     expect(await offline.lookupRecordingSpans('vod-1')).toBeNull();
     expect(await offline.fetchRecordingSpans('vod-1')).toEqual([]);
+  });
+
+  it('답이 10초 안에 오지 않으면 null이다: 재생 서버가 연결만 받고 답하지 않아도 끝없이 기다리지 않는다', async () => {
+    // 지난 방송 채팅이 이 답을 기다리므로, 답이 없으면 채팅이 요청 하나 없이 「불러오고 있어요」에 멈췄다(POK-324 리뷰 2라운드)
+    vi.useFakeTimers();
+    try {
+      const hung = await load(
+        'http://pb',
+        (_url, init) =>
+          new Promise<Response>((_, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError')),
+            );
+          }),
+      );
+      let answer: unknown = 'waiting';
+      void hung.lookupRecordingSpans('vod-1').then((spans) => {
+        answer = spans;
+      });
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(answer).toBe('waiting');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(answer).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('녹화가 있으면 구간을 준다', async () => {
