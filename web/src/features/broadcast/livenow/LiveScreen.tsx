@@ -1,6 +1,15 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type Ref } from 'react';
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Ref,
+} from 'react';
 import clsx from 'clsx';
 import styles from './LiveScreen.module.css';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
@@ -18,7 +27,7 @@ import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { fetchRecordingSpans } from '@/api/mediaPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
 import { rebaseTimeline, recordingTimeline } from '@/features/player/recordingTimeline';
-import { publishLiveData, useLiveData } from './liveDataStore';
+import { publishLiveData, resetLiveData, useLiveData } from './liveDataStore';
 import { useBroadcastClock, type BroadcastStatus } from './useBroadcastClock';
 import { useChatPanelMockState } from './useChatPanelMockState';
 import { useLiveDetailsMockState } from './useLiveDetailsMockState';
@@ -57,6 +66,7 @@ function LivePlayer({
   stream,
   viewersNote,
   broadcastStatus,
+  displayStatus,
   startedAt,
   endedAt,
   ingestStreamId,
@@ -69,7 +79,13 @@ function LivePlayer({
 }: {
   stream: LiveStream;
   viewersNote: string;
+  /** 명부가 답한 방송 상태. 녹화를 찾고 영상 주소를 고르는 데만 쓴다 */
   broadcastStatus: BroadcastStatus;
+  /**
+   * 플레이어 문구(배지·자리 표시)의 상태. 지난 방송 주소면 명부 답 전에도 끝난 방송이다(리뷰 3라운드). 녹화 찾기에 이것을 쓰면
+   * 시작·종료 시각 없이 찾아 같은 스트림키의 앞뒤 방송 녹화가 섞인다
+   */
+  displayStatus: BroadcastStatus;
   /** 방송 시작·종료(epoch ms) — 같은 스트림키의 앞뒤 방송 녹화를 거른다 */
   startedAt: number | null;
   endedAt: number | null;
@@ -150,7 +166,7 @@ function LivePlayer({
       key={uptimeSeconds === null ? 'clock-pending' : 'clock-known'}
       channelName={stream.channelName}
       viewersNote={viewersNote}
-      broadcastStatus={broadcastStatus}
+      broadcastStatus={displayStatus}
       // 라이브 주소는 방송 중일 때만 — 끝난 방송의 LL-HLS는 닫혀 있어 검은 화면과 오류만 남는다(PR #200 codex).
       // 끝난 방송은 녹화가 있으면 recorded로, 없으면 「지난 방송 영상」 자리를 그린다
       src={broadcastStatus === 'live' ? src : null}
@@ -169,6 +185,11 @@ function LivePlayer({
 // 아예 돌지 않아야 하므로, 분기를 그 훅들보다 위인 컴포넌트 경계에서 한다.
 // 꺼짐은 둘이다: 시안 확인용 토글(?mock=offline, 개발 전용)과 실제로 방송 중인 것이 없을 때.
 export function LiveScreen() {
+  // 저장소는 화면 하나의 것이다. 다른 방송을 보던 화면에서 넘어오면 앞 방송의 제목·시청자 수·그래프가 남아 그대로 보였다
+  // (리뷰 3라운드). 화면에 칠하기 전에 비운다: 방송 번호를 올리는 선택 훅의 효과보다 먼저다
+  useLayoutEffect(() => {
+    resetLiveData();
+  }, []);
   const { status } = useLiveStatusMockState();
   const selection = useLiveStreamSelection();
   const offline = status === 'offline' || (selection.resolved && selection.streamId === '');
@@ -176,12 +197,13 @@ export function LiveScreen() {
 }
 
 function LiveDashboard() {
-  const { stream, highlights, chatVolume, chatWarning } = useLiveMockState();
+  // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
+  const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
+  const pastRoute = vodRouteId !== null;
+  const { stream, highlights, chatVolume, chatWarning } = useLiveMockState(pastRoute);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const { streamId, info } = useLiveData();
   const clock = useBroadcastClock(streamId);
-  // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
-  const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   // 지난 방송 상세 주소로 들어왔는데 그 방송이 명부에 없으면(없는 번호·권한 회수) 404 화면으로 보낸다 —
   // 빈 대시보드를 보여 주지 않는다(PR #200 codex, 404 계약: README 「404 계약」)
   if (
@@ -206,21 +228,19 @@ function LiveDashboard() {
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
   // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
   // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다).
-  const chat = useChatPanelMockState(chatPanelOpen && !chatWarning);
+  const chat = useChatPanelMockState(chatPanelOpen && !chatWarning, pastRoute);
   const stats = useLiveStatsMockState();
 
-  // 시청자 수는 broadcast-info의 series 마지막 값 — 수집기 PR-C 전에는 없다. 끝난 방송은 지금 보는 사람이 아니라
-  // 끝날 때 값이다(QA 2026-10-11 리뷰: 며칠 전 방송을 지금 1,842명이 보는 것처럼 읽혔다). 수집기는 목록에서 채널을
-  // 못 찾은 회차를 빈 값으로 남기므로 끝난 방송은 마지막으로 잰 값을 쓴다. 방송 정보를 받기 전이면 「기록 없음」이라
-  // 단정하지 않는다
+  // 시청자 수는 broadcast-info의 series에서 마지막으로 잰 값이다(수집기 PR-C 전에는 없다). 수집기는 목록에서 채널을 못 찾은
+  // 회차를 빈 값으로 남기므로 마지막 관측이 비어도 그 앞의 값을 쓴다: 통계의 최고·평균과 같은 규칙이다(리뷰 3라운드). 끝난 방송은
+  // 지금 보는 사람이 아니라 끝날 때 값이고(QA 2026-10-11 리뷰: 며칠 전 방송을 지금 1,842명이 보는 것처럼 읽혔다), 방송 정보를
+  // 받기 전이면 「기록 없음」이라 단정하지 않는다
   const viewersLabel = useMemo(() => {
+    const v = info?.series?.findLast((p) => p.viewers !== null)?.viewers ?? null;
     if (ended) {
       if (!info) return '시청자 수 확인 중';
-      const v = info.series?.findLast((p) => p.viewers !== null)?.viewers ?? null;
       return v === null ? '시청자 수 기록 없음' : `끝날 때 ${v.toLocaleString()}명 시청`;
     }
-    const last = info?.series?.length ? info.series[info.series.length - 1] : null;
-    const v = last?.viewers ?? null;
     return v === null ? '시청자 수 수집 전' : `${v.toLocaleString()}명 시청 중`;
   }, [info, ended]);
 
@@ -241,24 +261,30 @@ function LiveDashboard() {
 
   // 녹화는 방송을 연 뒤에 찾는다. 그 전에 고른 시점은 옮길 플레이어가 없어(자리 표시) 그냥 사라지고, 뒤늦게 선 녹화는
   // 처음부터 튼다. 그래서 플레이어가 못 옮긴 시점만 남겨 두었다가 녹화의 시작 위치로 넘긴다(QA 2026-10-11 실기동).
-  // 녹화가 받으면 비운다: 남겨 두면 시크바로 옮긴 뒤 녹화가 다시 설 때나 라이브가 끝나 녹화로 바뀔 때 오래전 카드로 튄다.
-  // 방송 번호로 묶는다: 라이브 화면은 방송이 바뀌어도 그대로 서 있다(리뷰)
-  const [pendingStart, setPendingStart] = useState<{ streamId: string; seconds: number } | null>(
-    null,
-  );
+  // 녹화가 받으면 비운다: 남겨 두면 시크바로 옮긴 뒤 녹화가 다시 설 때 오래전 카드로 튄다
+  const [pendingStart, setPendingStart] = useState<number | null>(null);
+  // 라이브에서 고른 시점은 남기지 않는다. 라이브 영상(HLS)은 시작 위치를 읽지 않고 라이브 채팅은 재생 위치를 따르지 않아,
+  // 남겨 두면 방송이 끝난 뒤 녹화는 처음부터인데 채팅만 그 카드에 묶이거나 오래전 카드로 튄다(리뷰 2·3라운드).
+  // 명부 답 전(상태를 모름)에 고른 시점은 남긴다: 끝난 방송으로 밝혀지면 녹화가 그 시점부터 선다(리뷰 3라운드)
+  const live = clock.status === 'live';
   /** @returns 플레이어가 그 자리로 옮겼나(영상이 없으면 false) */
   const seekTo = useCallback(
     (seconds: number) => {
+      const moved = playerRef.current?.seekToUptime(seconds) ?? false;
+      if (live) return moved;
       // 영상이 없어도 채팅 패널이 그 시점을 보여준다(지난 방송)
       publishLiveData({ playheadMs: seconds * 1000 });
-      const moved = playerRef.current?.seekToUptime(seconds) ?? false;
-      // 녹화의 시작 위치로 남기는 것은 끝난 방송만이다. 라이브 영상(HLS)은 시작 위치를 읽지 않아, 남겨 두면 방송이 끝나
-      // 녹화로 바뀔 때 오래전 카드로 튄다(리뷰 2라운드)
-      setPendingStart(moved || !ended ? null : { streamId, seconds });
+      setPendingStart(moved ? null : seconds);
       return moved;
     },
-    [streamId, ended],
+    [live],
   );
+  // 방송 중으로 밝혀지면 모르는 동안 고른 시점을 버린다(위와 같은 이유)
+  useEffect(() => {
+    if (!live) return;
+    setPendingStart(null);
+    publishLiveData({ playheadMs: null });
+  }, [live]);
   const handleRecordedReady = useCallback(() => setPendingStart(null), []);
 
   // 홈 「최근 하이라이트」가 주소에 실은 카드(?card=). 카드가 오는 대로 한 번 그 시점으로 옮긴다. 사람이 먼저 고르면 그쪽이다.
@@ -305,6 +331,7 @@ function LiveDashboard() {
                 stream={stream}
                 viewersNote={viewersLabel}
                 broadcastStatus={clock.status}
+                displayStatus={viewStatus}
                 startedAt={clock.startedAt}
                 endedAt={clock.endedAt}
                 ingestStreamId={clock.ingestStreamId}
@@ -312,7 +339,7 @@ function LiveDashboard() {
                 controllerRef={playerRef}
                 chatPanelOpen={chatPanelOpen}
                 onToggleChatPanel={toggleChatPanel}
-                startAtSeconds={pendingStart?.streamId === streamId ? pendingStart.seconds : null}
+                startAtSeconds={pendingStart}
                 onRecordedReady={handleRecordedReady}
               />
             </Suspense>

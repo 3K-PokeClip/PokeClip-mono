@@ -26,6 +26,11 @@ function clampToRecording(total: number, seconds: number): number {
   return Math.min(Math.max(0, total - 1), Math.max(0, seconds));
 }
 
+/** 줄기 주소의 시작 자리(녹화 시작부터 ms). 주소와 「같은 자리인가」 판정이 같은 반올림을 써야 둘이 갈라지지 않는다 */
+function pieceOffsetMs(seconds: number): number {
+  return Math.round(seconds * 1000);
+}
+
 /** 앞으로 가는 이동의 도착점: 녹화 안으로 자르고, 틈 안이면 다음 구간 시작이다(재생 서버는 틈을 건너 주지 않는다) */
 function forwardTarget(recorded: RecordingTimeline, seconds: number): number {
   const wanted = clampToRecording(recorded.durationSeconds, seconds);
@@ -81,7 +86,7 @@ export function useRecordedPlayback(
     () =>
       recordingClipUrl(
         recorded.streamId,
-        recorded.startMs + Math.round(piece.fromSeconds * 1000),
+        recorded.startMs + pieceOffsetMs(piece.fromSeconds),
         Math.max(1, piece.toSeconds - piece.fromSeconds),
       ),
     [recorded.streamId, recorded.startMs, piece],
@@ -132,22 +137,6 @@ export function useRecordedPlayback(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src, videoRef]);
 
-  /**
-   * 도착점으로 줄기를 옮긴다. 지금 줄기가 이미 그 자리에서 시작하면 주소가 같아 다시 받지 않으므로 줄기 처음으로 되감는다:
-   * 같은 카드를 다시 눌렀는데 영상이 그대로 흐르던 결함(QA 2026-10-11 리뷰). 같은 자리인지는 주소가 쓰는 ms로 가른다:
-   * 1ms 안쪽 차이를 다른 자리로 보면 같은 주소라 다시 받지도 되감지도 않는다(리뷰 2라운드)
-   */
-  const landRef = useRef((target: number) => {
-    if (Math.round(target * 1000) !== Math.round(offsetRef.current * 1000)) {
-      setOffset(target);
-      return;
-    }
-    const video = videoRef.current;
-    if (video === null) return;
-    video.currentTime = 0;
-    if (wantPlayRef.current) void video.play().catch(() => undefined);
-  });
-
   const jumpTo = useCallback(
     (seconds: number, backward = false) => {
       // 틈 안이면 다음 구간 시작으로(뒤로 가기면 앞 구간 끝으로) — 시크바도 실제로 틀 자리를 보인다
@@ -157,14 +146,24 @@ export function useRecordedPlayback(
       setPosition(target);
       if (seekTimer.current !== null) window.clearTimeout(seekTimer.current);
       // 시크바를 끄는 동안 매 좌표마다 새 줄기를 받지 않는다. 언마운트 때 이 타이머를 지우지 않는다: 진짜 언마운트면 걸려도
-      // 아무 일도 없고(영상 노드가 떨어져 있다), 개발 서버(StrictMode)가 새로 선 부품을 껐다 켤 때 선 직후에 건 이동을
-      // 잃지 않는다(QA 2026-10-11)
+      // 아무 일도 없고(언마운트된 부품의 setOffset은 버려지고 영상 노드도 떨어져 있다), 개발 서버(StrictMode)가 새로 선 부품을
+      // 껐다 켤 때 선 직후에 건 이동을 잃지 않는다(QA 2026-10-11)
       seekTimer.current = window.setTimeout(() => {
         seekTimer.current = null;
-        landRef.current(target);
+        if (pieceOffsetMs(target) !== pieceOffsetMs(offsetRef.current)) {
+          setOffset(target);
+          return;
+        }
+        // 지금 줄기가 이미 그 자리에서 시작하면 주소가 같아 다시 받지 않으므로 줄기 처음으로 되감는다: 같은 카드를 다시
+        // 눌렀는데 영상이 그대로 흐르던 결함(QA 2026-10-11 리뷰). 같은 자리인지는 주소가 쓰는 ms로 가른다: 1ms 안쪽 차이를
+        // 다른 자리로 보면 같은 주소라 다시 받지도 되감지도 않는다(리뷰 2라운드)
+        const video = videoRef.current;
+        if (video === null) return;
+        video.currentTime = 0;
+        if (wantPlayRef.current) void video.play().catch(() => undefined);
       }, SEEK_DEBOUNCE_MS);
     },
-    [total],
+    [total, videoRef],
   );
 
   const behindSeconds = Math.max(0, Math.round(total - position));

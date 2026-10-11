@@ -4,11 +4,11 @@ import styles from './LiveScreen.module.css';
 import { LiveStatsPanel } from './LiveStatsPanel';
 import type { Point } from './statsTimeline';
 
-describe('LiveStatsPanel: 시간 눈금', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
+describe('LiveStatsPanel: 시간 눈금', () => {
   it('짧은 지난 방송처럼 눈금 글자가 겹쳐도 React key가 겹치지 않는다', () => {
     // 2분짜리 방송은 시:분 눈금이 「14:00 · 14:01 · 14:02 · 14:02」가 된다(리뷰). 글자를 key로 쓰면 같은 key 경고가 난다
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);

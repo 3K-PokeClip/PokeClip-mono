@@ -6,7 +6,7 @@
 // 선을 그리지 않고 지표에 「수집 전」이라 적는다 — 가짜 선은 그리지 않는다.
 import { useMemo } from 'react';
 import { TIMELINE_HEIGHT, TIMELINE_WIDTH, type Point } from './statsTimeline';
-import { useLiveData } from './liveDataStore';
+import { chartSpan, useLiveData, type LiveChartScope } from './liveDataStore';
 
 export interface CategorySegment {
   label: string;
@@ -28,6 +28,13 @@ export interface LiveStatsMockState {
   categorySegments: CategorySegment[];
   metrics: LiveMetric[];
 }
+
+/** 채팅 수의 이름은 차트가 실제로 읽은 창대로다(QA 2026-10-11 리뷰): 방송 전체, 끝 12시간(그보다 긴 방송), 지금 기준 최근 창 */
+const CHAT_COUNT_LABEL: Record<LiveChartScope, (minutes: number) => string> = {
+  broadcast: () => '방송 중 채팅',
+  tail: (minutes) => `마지막 ${minutes}분 채팅`,
+  recent: (minutes) => `최근 ${minutes}분 채팅`,
+};
 
 /** 눈금이 1, 2 같은 값으로 튀지 않게 5 단위로 올린다 */
 function niceMax(v: number): number {
@@ -74,9 +81,9 @@ export function useLiveStatsMockState(): LiveStatsMockState {
         .filter((p): p is readonly [number, number] => p !== null);
     }
 
-    const totalChats = buckets.reduce((a, b) => a + b.chats, 0);
+    const chart = data.chart;
+    const span = chart ? chartSpan(chart) : null;
     const totalDonations = buckets.reduce((a, b) => a + b.donations, 0);
-    const minutes = Math.max(1, (n * bucketSeconds) / 60);
     const peak = series.length ? Math.max(...series.map((p) => p.viewers)) : null;
     const avg = series.length
       ? Math.round(series.reduce((a, p) => a + p.viewers, 0) / series.length)
@@ -85,25 +92,26 @@ export function useLiveStatsMockState(): LiveStatsMockState {
     const metrics: LiveMetric[] = [
       { label: '최고 시청자', value: peak === null ? '수집 전' : peak.toLocaleString('ko-KR') },
       { label: '평균 시청자', value: avg === null ? '수집 전' : avg.toLocaleString('ko-KR') },
-      // 차트가 실제로 읽은 창대로 말한다(QA 2026-10-11 리뷰). 방송 전체면 그 방송의 채팅이고, 12시간 넘는
-      // 방송은 끝 12시간만 읽었으며, 방송 전체를 아직 못 받았으면 받아 둔 최근 창 그대로다
+      // 차트가 아직 없으면 수를 지어내지 않는다: 「최근 1분 채팅 0」은 지어낸 1분과 0이다(리뷰 3라운드)
+      chart && span
+        ? {
+            label: CHAT_COUNT_LABEL[chart.scope](Math.round(span.minutes)),
+            value: span.chats.toLocaleString('ko-KR'),
+          }
+        : { label: '채팅', value: '확인 중' },
       {
-        label:
-          data.chart?.scope === 'broadcast'
-            ? '방송 중 채팅'
-            : data.chart?.scope === 'tail'
-              ? `마지막 ${Math.round(minutes)}분 채팅`
-              : `최근 ${Math.round(minutes)}분 채팅`,
-        value: totalChats.toLocaleString('ko-KR'),
+        label: '분당 평균 채팅',
+        value: span ? (span.chats / span.minutes).toFixed(1) : '확인 중',
       },
-      { label: '분당 평균 채팅', value: (totalChats / minutes).toFixed(1) },
-      { label: '후원', value: `${totalDonations}회` },
+      { label: '후원', value: chart ? `${totalDonations}회` : '확인 중' },
     ];
 
     const category = data.info?.latest?.category ?? null;
-    const categorySegments: CategorySegment[] = category
-      ? [{ label: category, minutes: Math.round(minutes), percent: 100 }]
-      : [];
+    // 막대는 그래프 창의 길이다. 그래프가 없으면 그 길이도 모른다
+    const categorySegments: CategorySegment[] =
+      category && span
+        ? [{ label: category, minutes: Math.round(span.minutes), percent: 100 }]
+        : [];
 
     return { viewerLine, donations, categorySegments, metrics };
   }, [data]);

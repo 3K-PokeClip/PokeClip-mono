@@ -2,7 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '@/api/client';
-import { subscribeRelay, timeBaseOf, useLiveData, type RelayEvent } from './liveDataStore';
+import {
+  chartSpan,
+  subscribeRelay,
+  timeBaseOf,
+  useLiveData,
+  type RelayEvent,
+} from './liveDataStore';
 import { chartWindows } from './useLiveMockState';
 
 // 실시간 채팅 패널(시안 1b). clip 창구에 붙어 있다(POK-251).
@@ -35,7 +41,7 @@ export type ChatPanelMessage =
 export interface ChatPanelMockState {
   surges: ChatSurge[];
   messages: ChatPanelMessage[];
-  /** 하단 상태줄의 「분당 N」 — 최근 1분 채팅 수(지난 방송은 전체 평균) */
+  /** 하단 상태줄의 「분당 N」: 최근 1분 채팅 수. 지난 방송은 차트가 읽은 창의 평균이다(방송 전체, 12시간 넘으면 끝 12시간) */
   ratePerMinute: number;
   /** 고른 시점 앞뒤 채팅을 보여 주나(지난 방송). 아니면 시점을 골라도 최신 채팅 그대로다 */
   followsPlayhead: boolean;
@@ -126,7 +132,11 @@ function toPanel(it: WireItem): ChatPanelMessage {
   };
 }
 
-export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
+/**
+ * @param pastRoute 지난 방송 주소(/broadcast/vod/…)로 열었나. 그 주소에서는 명부가 방송 중이라고 답할 때만 실시간 채팅을 읽는다:
+ *   방송 상태를 모르는 동안 최근 창을 읽으면 끝난 방송의 「채팅 기록」 자리에 엉뚱한 창의 채팅을 채운다(리뷰 3라운드)
+ */
+export function useChatPanelMockState(enabled: boolean, pastRoute = false): ChatPanelMockState {
   const [raw, setRaw] = useState<Record<string, WireItem>>({});
   const lastTime = useRef<number>(0);
   const nextId = useRef<number>(1);
@@ -181,6 +191,7 @@ export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
   // 실시간 중계 수신(카드 통로의 chat·donation). 구멍·세대 변화면 2초 뒤 범위 창구로 메운다
   useEffect(() => {
     if (!enabled || !streamId || isVod || live.status === 'offline') return;
+    if (pastRoute && live.status !== 'live') return;
     lastSeq.current = null;
     return subscribeRelay((ev: RelayEvent) => {
       const item: WireItem = {
@@ -210,10 +221,11 @@ export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
         }, 2000);
       }
     });
-  }, [enabled, streamId, isVod, live.status]);
+  }, [enabled, streamId, isVod, live.status, pastRoute]);
 
   useEffect(() => {
     if (!enabled || !streamId || isVod || live.status === 'offline') return;
+    if (pastRoute && live.status !== 'live') return;
     setRaw({});
     lastTime.current = 0;
     let stopped = false;
@@ -269,7 +281,7 @@ export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
       stopped = true;
       window.clearInterval(t);
     };
-  }, [enabled, streamId, isVod, live.status]);
+  }, [enabled, streamId, isVod, live.status, pastRoute]);
 
   // 지난 방송에서 카드를 누르면 그 시점 앞뒤 60초를 끝까지 따로 읽는다 — 처음 읽기는 창마다 상한이 있어
   // 채팅이 많은 시간대는 비어 있을 수 있다(PR #200 codex P1)
@@ -353,8 +365,8 @@ export function useChatPanelMockState(enabled: boolean): ChatPanelMockState {
       // 끝 12시간만 읽는다). 방송 차트를 아직 못 받았으면(최근 창뿐) 받은 수를 방송 길이로 나눠 대신한다(리뷰 2라운드)
       const chart = live.chart;
       if (chart && chart.scope !== 'recent') {
-        const chartMinutes = Math.max(1, (chart.buckets.length * chart.bucketSeconds) / 60);
-        return Math.round(chart.buckets.reduce((a, b) => a + b.chats, 0) / chartMinutes);
+        const { minutes, chats } = chartSpan(chart);
+        return Math.round(chats / minutes);
       }
       return Math.round(items.length / Math.max(1, (live.endedAt - live.startedAt) / 60_000));
     }
