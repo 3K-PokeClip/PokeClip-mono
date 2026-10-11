@@ -25,8 +25,8 @@ export interface HighlightCardView {
 /**
  * 카드가 실제로 그릴 표기값. cardVisuals에 있으면 그대로 쓰고, 없으면 계약 필드에서 만든다.
  *
- * 폴백이 필요한 이유는 둘이다: ① 수동 마킹으로 방금 생긴 카드는 목업 맵에 없다
- * ② POK-180이 실 SSE 카드를 실으면 id가 전부 낯설어진다. 어느 쪽이든 화면은 서야 한다.
+ * 폴백이 필요한 이유: 실연동 카드(card-N)는 목업 맵에 없다(POK-180·251, 맵은 지금 비어 있다). 그래도 화면은 서야 한다.
+ * (전에는 화면에서 찍은 수동 마킹 카드도 여기로 왔지만 그 카드는 없어졌다, QA 2026-10-11)
  * meta 문자열을 파싱하지 않는 것은 의도다 — 자유 서술이라 형식이 바뀌면 조용히 어긋난다.
  */
 export interface ResolvedCardVisual {
@@ -113,19 +113,6 @@ function fallbackPosPercent(timestamp: string, uptimeSeconds: number): number {
   const seconds = parseClockLabel(timestamp);
   if (seconds === null || uptimeSeconds <= 0) return 100;
   return Math.min(100, Math.max(0, Math.round((seconds / uptimeSeconds) * 100)));
-}
-
-/**
- * 카드 메타 줄의 「얼마 전」(카드를 만든 시각 기준). 라이브에서 막 뜬 카드는 초까지 센다. 지난 방송 카드는 며칠 지난
- * 것이라 분까지만 세면 「4275분 전」이 된다(QA 2026-10-11). 홈 「최근 하이라이트」처럼 시간·일로 올린다.
- */
-export function cardAgeLabel(createdAtIso: string, now: number): string {
-  const diff = Math.max(0, Math.floor((now - Date.parse(createdAtIso)) / 1000));
-  if (diff < 10) return '방금';
-  if (diff < 60) return `${diff}초 전`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}분 전`;
-  if (diff < 86_400) return `${Math.floor(diff / 3600)}시간 전`;
-  return `${Math.floor(diff / 86_400)}일 전`;
 }
 
 export function cardVisualFor(

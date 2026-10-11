@@ -135,8 +135,9 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
             ))}
           </div>
           <div className={styles.statsAxis}>
-            {chatVolume.timeLabels.map((label) => (
-              <span key={label}>{label}</span>
+            {/* 눈금은 자리가 고정된 넷이라 자리로 묶는다. 짧은 방송은 시:분 글자가 겹친다(QA 2026-10-11 리뷰) */}
+            {chatVolume.timeLabels.map((label, index) => (
+              <span key={index}>{label}</span>
             ))}
           </div>
         </div>

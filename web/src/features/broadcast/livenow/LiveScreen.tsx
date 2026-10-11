@@ -11,8 +11,9 @@ import { HighlightCardPanel } from './HighlightCardPanel';
 import { LiveOfflineScreen } from './LiveOfflineScreen';
 import { LiveStatsPanel } from './LiveStatsPanel';
 import { StreamInfoBar } from './StreamInfoBar';
-import { notFound, useSearchParams } from 'next/navigation';
+import { notFound, usePathname, useSearchParams } from 'next/navigation';
 import { requestPlaybackAccess } from '@/api/clipEditor';
+import { useToast } from '@/ui';
 import { vodStreamIdFromPath } from '@/features/broadcast/streamSelection';
 import { fetchRecordingSpans } from '@/api/mediaPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
@@ -36,8 +37,8 @@ import { useManualMarking } from './useManualMarking';
 
 // useSearchParams(?stream=)는 프리렌더에서 가장 가까운 Suspense 경계까지 CSR로 전환한다 —
 // 화면 전체가 아니라 플레이어만 빠지도록 여기서 분리하고 경계는 playerFrame 안에 둔다.
-// 단, 오프라인 목업 토글(?mock=offline)이 화면 맨 위에서 같은 훅을 읽는 동안에는 page.tsx의
-// 경계까지 화면 전체가 빠진다 — 토글이 실제 방송 상태 조회로 바뀌면 이 경계가 다시 뜻을 갖는다.
+// 단, 화면 맨 위의 오프라인 목업 토글(?mock=offline)과 대시보드의 ?card=(홈에서 고른 카드, QA 2026-10-11)도
+// 같은 훅을 읽어 page.tsx의 경계까지 화면 전체가 빠진다. 이 경계로 좁히려면 둘 다 훅 밖으로 옮겨야 한다.
 //
 // 다만 지금 이 라우트의 프리렌더 HTML은 어차피 비어 있다 — AuthGuard가 hydrate 전에
 // (dock) 서브트리를 통째로 null로 만들기 때문이다(.next/server/app/broadcast/livenow.html로 확인).
@@ -62,6 +63,7 @@ function LivePlayer({
   chatPanelOpen,
   onToggleChatPanel,
   startAtSeconds,
+  onRecordedReady,
 }: {
   stream: LiveStream;
   viewersNote: string;
@@ -75,8 +77,10 @@ function LivePlayer({
   controllerRef: Ref<GlassPlayerController>;
   chatPanelOpen: boolean;
   onToggleChatPanel: () => void;
-  /** 녹화가 서면 이 자리(방송 기준 초)부터 튼다. 마지막으로 고른 시점이다 */
+  /** 녹화가 서면 이 자리(방송 기준 초)부터 튼다. 녹화가 서기 전에 고른 시점이다 */
   startAtSeconds: number | null;
+  /** 녹화 플레이어가 섰다. 시작 위치를 받았으니 부른 쪽이 비운다 */
+  onRecordedReady: () => void;
 }) {
   // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
   // 주소에 ?stream= 이 없으면 clip 명부에서 고른 방송(liveDataStore)의 영상을 튼다.
@@ -107,6 +111,9 @@ function LivePlayer({
       alive = false;
     };
   }, [broadcastStatus, mediaKey, startedAt, endedAt, originMs]);
+  useEffect(() => {
+    if (recorded !== null) onRecordedReady();
+  }, [recorded, onRecordedReady]);
   // 영상 출입증(POK-122) — 방송을 열 때 받고, 만료 5분 전에 다시 받는다. 쿠키 수명(운영 60분)이 지나면 새 조각이
   // 403이 되어 재생이 멈춘다(PR #200 codex P1). 실패하면 1분 뒤 다시 받는다. 서명 재료가 없는 서버(503)는
   // 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다. 실패해도 재생은 시도한다(로컬 media는 쿠키를 안 본다).
@@ -180,6 +187,12 @@ function LiveDashboard() {
   )
     notFound();
   const playerRef = useRef<GlassPlayerController>(null);
+  const { toast } = useToast();
+  // 지난 방송 주소면 명부 답을 받기 전에도 끝난 방송이다. 시계가 'unknown'인 동안(조회가 늦거나 실패) 라이브 문구를
+  // 보이지 않는다(QA 2026-10-11 리뷰). 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
+  const onVodRoute = (usePathname() ?? '').startsWith('/broadcast/vod/');
+  const viewStatus = clock.status === 'unknown' && onVodRoute ? 'ended' : clock.status;
+  const ended = viewStatus === 'ended';
 
   const uptimeSeconds = clock.uptimeSeconds;
   const uptimeLabel = uptimeSeconds === null ? null : formatUptime(uptimeSeconds);
@@ -193,12 +206,14 @@ function LiveDashboard() {
   const chat = useChatPanelMockState(chatPanelOpen && !chatWarning);
   const stats = useLiveStatsMockState();
 
-  // 시청자 수는 broadcast-info의 series 마지막 값 — 수집기 PR-C 전에는 없다
+  // 시청자 수는 broadcast-info의 series 마지막 값 — 수집기 PR-C 전에는 없다. 끝난 방송은 지금 보는 사람이 아니라
+  // 끝날 때 값이다(QA 2026-10-11 리뷰: 며칠 전 방송을 지금 1,842명이 보는 것처럼 읽혔다)
   const viewersLabel = useMemo(() => {
     const last = info?.series?.length ? info.series[info.series.length - 1] : null;
     const v = last?.viewers ?? null;
+    if (ended) return v === null ? '시청자 수 기록 없음' : `끝날 때 ${v.toLocaleString()}명 시청`;
     return v === null ? '시청자 수 수집 전' : `${v.toLocaleString()}명 시청 중`;
-  }, [info]);
+  }, [info, ended]);
 
   // 카드의 타임라인 위치(posPercent)는 방송 경과 대비다 — 실경과를 넣어야 눈금이 맞는다
   const streamForCards = useMemo<LiveStream>(
@@ -215,16 +230,25 @@ function LiveDashboard() {
     return { total: highlights.length, auto: highlights.length - manual, manual };
   }, [highlights]);
 
-  // 녹화는 방송을 연 뒤에 찾고, 방송 정보(기준점 등)가 늦게 오면 한 번 더 찾아 플레이어가 새로 선다. 새로 선 녹화가
-  // 처음부터 틀면 그 전에 고른 시점을 잃는다. 선 다음에 옮기는 것도 안 된다: 개발 서버(StrictMode)가 새로 선 부품을
-  // 껐다 켤 때 기다리던 이동이 지워진다(QA 2026-10-11 실기동). 그래서 마지막으로 고른 시점을 녹화의 시작 위치로 넘긴다
-  const [wantedSeconds, setWantedSeconds] = useState<number | null>(null);
-  const seekTo = useCallback((seconds: number) => {
-    setWantedSeconds(seconds);
-    // 영상이 없어도 채팅 패널이 그 시점을 보여준다(지난 방송)
-    publishLiveData({ playheadMs: seconds * 1000 });
-    playerRef.current?.seekToUptime(seconds);
-  }, []);
+  // 녹화는 방송을 연 뒤에 찾는다. 그 전에 고른 시점은 옮길 플레이어가 없어(자리 표시) 그냥 사라지고, 뒤늦게 선 녹화는
+  // 처음부터 튼다. 그래서 플레이어가 못 옮긴 시점만 남겨 두었다가 녹화의 시작 위치로 넘긴다(QA 2026-10-11 실기동).
+  // 녹화가 받으면 비운다: 남겨 두면 시크바로 옮긴 뒤 녹화가 다시 설 때나 라이브가 끝나 녹화로 바뀔 때 오래전 카드로 튄다.
+  // 방송 번호로 묶는다: 라이브 화면은 방송이 바뀌어도 그대로 서 있다(리뷰)
+  const [pendingStart, setPendingStart] = useState<{ streamId: string; seconds: number } | null>(
+    null,
+  );
+  /** @returns 플레이어가 그 자리로 옮겼나(영상이 없으면 false) */
+  const seekTo = useCallback(
+    (seconds: number) => {
+      // 영상이 없어도 채팅 패널이 그 시점을 보여준다(지난 방송)
+      publishLiveData({ playheadMs: seconds * 1000 });
+      const moved = playerRef.current?.seekToUptime(seconds) ?? false;
+      setPendingStart(moved ? null : { streamId, seconds });
+      return moved;
+    },
+    [streamId],
+  );
+  const handleRecordedReady = useCallback(() => setPendingStart(null), []);
 
   // 홈 「최근 하이라이트」가 주소에 실은 카드(?card=). 카드가 오는 대로 한 번 그 시점으로 옮긴다. 사람이 먼저 고르면 그쪽이다.
   // window.location이 아니라 useSearchParams로 읽는다: Next는 다른 화면에서 넘어올 때 새 화면을 먼저 그리고 주소창은 그 뒤에
@@ -246,9 +270,11 @@ function LiveDashboard() {
       const seconds = parseClockLabel(timestamp);
       if (seconds === null) return;
       linkedDoneRef.current = linkedCardId;
-      seekTo(seconds);
+      // 사람이 누른 것만 알린다. 주소의 카드로 옮길 때는 녹화를 찾는 중일 뿐이라 말하지 않는다(리뷰)
+      if (!seekTo(seconds))
+        toast({ tone: 'info', title: '영상은 아직 없어요 · 채팅을 그 시점으로 옮겼어요' });
     },
-    [linkedCardId, seekTo],
+    [linkedCardId, seekTo, toast],
   );
 
   return (
@@ -269,7 +295,8 @@ function LiveDashboard() {
                 controllerRef={playerRef}
                 chatPanelOpen={chatPanelOpen}
                 onToggleChatPanel={toggleChatPanel}
-                startAtSeconds={wantedSeconds}
+                startAtSeconds={pendingStart?.streamId === streamId ? pendingStart.seconds : null}
+                onRecordedReady={handleRecordedReady}
               />
             </Suspense>
           </div>
@@ -278,7 +305,7 @@ function LiveDashboard() {
             meta={streamMeta}
             viewersLabel={viewersLabel}
             uptimeLabel={uptimeLabel}
-            uptimeNote={clock.status === 'ended' ? '방송함' : '스트리밍 중'}
+            uptimeNote={ended ? '방송함' : '스트리밍 중'}
             // 만드는 중 자리는 수동 마킹이 서버에 남을 때(POK-257) 쓴다
             pendingLabel={null}
             onMark={marking.mark}
@@ -289,7 +316,7 @@ function LiveDashboard() {
             visuals={cardVisuals}
             pendingLabel={null}
             detectionPaused={chatWarning}
-            ended={clock.status === 'ended'}
+            ended={ended}
             onSeek={handleSeek}
           />
         </div>
@@ -301,7 +328,7 @@ function LiveDashboard() {
               surges={chat.surges}
               messages={chat.messages}
               ratePerMinute={chat.ratePerMinute}
-              mode={clock.status}
+              mode={viewStatus}
               collectionWarning={chatWarning}
               onCollapse={toggleChatPanel}
             />
@@ -316,7 +343,7 @@ function LiveDashboard() {
         categorySegments={stats.categorySegments}
         metrics={stats.metrics}
         highlightSummary={highlightSummary}
-        ended={clock.status === 'ended'}
+        ended={ended}
       />
     </main>
   );

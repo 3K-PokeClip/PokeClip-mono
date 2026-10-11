@@ -39,6 +39,9 @@ export function useLiveStatsMockState(): LiveStatsMockState {
   const data = useLiveData();
 
   return useMemo(() => {
+    // 차트가 방송 전체를 읽었나. useLiveMockState가 창을 고르는 조건과 같다
+    const wholeBroadcast =
+      data.status === 'ended' && data.startedAt !== null && data.endedAt !== null;
     const buckets = data.chart?.buckets ?? [];
     const bucketSeconds = data.chart?.bucketSeconds ?? 30;
     const chatMax = niceMax(Math.max(0, ...buckets.map((b) => b.chats)));
@@ -85,7 +88,11 @@ export function useLiveStatsMockState(): LiveStatsMockState {
     const metrics: LiveMetric[] = [
       { label: '최고 시청자', value: peak === null ? '수집 전' : peak.toLocaleString('ko-KR') },
       { label: '평균 시청자', value: avg === null ? '수집 전' : avg.toLocaleString('ko-KR') },
-      { label: `최근 ${Math.round(minutes)}분 채팅`, value: totalChats.toLocaleString('ko-KR') },
+      // 방송 전체를 읽은 끝난 방송이면 「최근 150분」이 아니라 그 방송의 채팅이다(QA 2026-10-11 리뷰)
+      {
+        label: wholeBroadcast ? '방송 중 채팅' : `최근 ${Math.round(minutes)}분 채팅`,
+        value: totalChats.toLocaleString('ko-KR'),
+      },
       { label: '분당 평균 채팅', value: (totalChats / minutes).toFixed(1) },
       { label: '후원', value: `${totalDonations}회` },
     ];

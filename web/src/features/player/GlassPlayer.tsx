@@ -42,8 +42,11 @@ import { useSimulatedChat } from './useSimulatedChat';
 // 패널이 접혀 있는 동안 플레이어 안에 남는 유일한 복귀 통로다.
 /** 바깥에서 플레이어에 내리는 명령 — sim이 Body 안에서 생겨 상태로는 끌어올릴 수 없다 */
 export interface GlassPlayerController {
-  /** 방송 경과 시각(초)으로 이동 — 되감기 창 밖은 가장 오래된 지점으로 클램프 */
-  seekToUptime: (uptimeSeconds: number) => void;
+  /**
+   * 방송 경과 시각(초)으로 이동 — 되감기 창 밖은 가장 오래된 지점으로 클램프. 옮길 영상이 없으면(자리 표시) false를
+   * 돌려준다: 녹화를 찾는 중일 수도, 아예 없을 수도 있어 무엇을 말할지는 부른 쪽이 정한다(QA 2026-10-11 리뷰)
+   */
+  seekToUptime: (uptimeSeconds: number) => boolean;
 }
 
 export interface GlassPlayerProps {
@@ -102,16 +105,7 @@ function NoSignalGlassPlayer({
   onToggleChatPanel,
   controllerRef,
 }: GlassPlayerProps) {
-  const { toast } = useToast();
-  useImperativeHandle(
-    controllerRef,
-    () => ({
-      seekToUptime: () => {
-        toast({ tone: 'info', title: '영상은 아직 없어요 · 채팅을 그 시점으로 옮겼어요' });
-      },
-    }),
-    [toast],
-  );
+  useImperativeHandle(controllerRef, () => ({ seekToUptime: () => false }), []);
   return (
     <div className={clsx(styles.player, embed && styles.embed)} data-controls="visible">
       <div className={styles.videoSlot} role="status">
@@ -182,7 +176,6 @@ function GlassPlayerBody({
   onToggleChatPanel,
   controllerRef,
   onUptimeChange,
-  recorded,
   sim,
   videoNode,
 }: GlassPlayerBodyProps) {
@@ -272,6 +265,7 @@ function GlassPlayerBody({
         const behind = Math.min(sim.windowSeconds, Math.max(0, sim.uptimeSeconds - target));
         sim.seekToFraction(progressFraction(behind, sim.windowSeconds));
         sim.wake();
+        return true;
       },
     }),
     [sim],
@@ -377,11 +371,10 @@ function GlassPlayerBody({
           onSeekBy={sim.seekBy}
           onReturnToLive={sim.returnToLive}
           onSeekingChange={setSeeking}
-          replay={Boolean(recorded)}
+          replay={sim.replay}
         />
         <PlayerControls
           sim={sim}
-          replay={Boolean(recorded)}
           chatToggle={
             overlayChat && fullscreen
               ? { on: chatOn, onToggle: () => setChatOn((on) => !on), ref: chatToggleRef }

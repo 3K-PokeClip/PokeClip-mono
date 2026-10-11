@@ -361,7 +361,9 @@ describe('GlassPlayer', () => {
     const controllerRef = createRef<GlassPlayerController>();
     renderPlayer({ initialUptimeSeconds: 5043 }, { controllerRef });
 
-    act(() => controllerRef.current?.seekToUptime(4960));
+    act(() => {
+      controllerRef.current?.seekToUptime(4960);
+    });
     expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
       'aria-valuenow',
       '-83',
@@ -373,7 +375,9 @@ describe('GlassPlayer', () => {
     const controllerRef = createRef<GlassPlayerController>();
     renderPlayer({ initialUptimeSeconds: 5043 }, { controllerRef });
 
-    act(() => controllerRef.current?.seekToUptime(0));
+    act(() => {
+      controllerRef.current?.seekToUptime(0);
+    });
     expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
       'aria-valuenow',
       '-3600',
@@ -448,5 +452,40 @@ describe('GlassPlayer: 녹화 다시보기', () => {
       'aria-valuetext',
       '녹화 끝에서 -07:24',
     );
+  });
+});
+
+describe('GlassPlayer: 바깥 이동 명령의 결과', () => {
+  it('영상이 없는 자리 플레이어는 옮기지 못했다고 돌려주고 스스로 알리지 않는다: 녹화를 찾는 중일 수 있다', () => {
+    const controllerRef = createRef<GlassPlayerController>();
+    render(
+      <ToastProvider>
+        <GlassPlayer
+          channelName="게임하는너구리"
+          viewersNote="시청자 수 수집 전"
+          broadcastStatus="ended"
+          embed
+          controllerRef={controllerRef}
+        />
+      </ToastProvider>,
+    );
+
+    let moved: boolean | undefined;
+    act(() => {
+      moved = controllerRef.current?.seekToUptime(120);
+    });
+    expect(moved).toBe(false);
+    expect(screen.queryByText(/영상은 아직 없어요/)).toBeNull();
+  });
+
+  it('재생 중인 플레이어는 옮겼다고 돌려준다', () => {
+    const controllerRef = createRef<GlassPlayerController>();
+    renderPlayer(undefined, { controllerRef });
+
+    let moved: boolean | undefined;
+    act(() => {
+      moved = controllerRef.current?.seekToUptime(10);
+    });
+    expect(moved).toBe(true);
   });
 });

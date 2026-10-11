@@ -42,6 +42,11 @@ export interface PlayerSimulation {
    * 거짓 선택지라 끈다(POK-253, 계약3 2절). 목업 재생(스토리북·시안)만 보인다
    */
   settingsMenu: boolean;
+  /**
+   * 끝난 방송의 녹화 다시보기인가. 오른쪽 끝이 「실시간」이 아니라 녹화 끝이고 그 끝으로 가는 동작도 녹화 재생이 정한다
+   * (ADR-081 8). 버튼·시크바 문구가 이 값으로 갈린다(QA 2026-10-11)
+   */
+  replay: boolean;
   clipMarked: boolean;
   /** 자동 숨김 상태 — 일시정지 중엔 이 값과 무관하게 컨트롤을 보여준다 */
   controlsVisible: boolean;
@@ -145,6 +150,7 @@ export function usePlayerSimulation(options: PlayerSimulationOptions = {}): Play
     seekBy,
     returnToLive: useCallback(() => setBehind(0), []),
     settingsMenu: true,
+    replay: false,
     setQuality,
     toggleLowLatency: useCallback(() => setLowLatency((v) => !v), []),
     markClip,

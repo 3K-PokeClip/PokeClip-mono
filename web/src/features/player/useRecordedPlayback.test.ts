@@ -1,3 +1,4 @@
+import { StrictMode, useEffect, useRef } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { rebaseTimeline, recordingTimeline } from './recordingTimeline';
@@ -292,5 +293,51 @@ describe('useRecordedPlayback: 시작 위치', () => {
       ),
     );
     expect(requested(video).fromSeconds).toBe(20);
+  });
+});
+
+describe('useRecordedPlayback: 이동이 사라지지 않는다', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('지금 줄기가 시작한 자리로 다시 옮기면 줄기 처음으로 되감는다: 같은 카드를 다시 눌러도 그 자리부터다', () => {
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([[0, 100]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded, 42));
+    // 42초부터 30초를 봤다
+    video.currentTime = 30;
+
+    act(() => {
+      result.current.seekToFraction(0.42);
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(requested(video).fromSeconds).toBe(42);
+    expect(video.currentTime).toBe(0);
+  });
+
+  it('선 직후에 건 이동도 StrictMode가 껐다 켜는 사이에 잃지 않는다', () => {
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([[0, 100]]);
+    // 부모 효과처럼 한 번만 건다: StrictMode가 효과를 다시 돌려도 이동은 다시 걸리지 않는다
+    function useSeekOnMount() {
+      const sim = useRecordedPlayback(ref, recorded);
+      const done = useRef(false);
+      useEffect(() => {
+        if (done.current) return;
+        done.current = true;
+        sim.seekToFraction(0.5);
+      });
+      return sim;
+    }
+    renderHook(() => useSeekOnMount(), { wrapper: StrictMode });
+
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(requested(video).fromSeconds).toBe(50);
   });
 });

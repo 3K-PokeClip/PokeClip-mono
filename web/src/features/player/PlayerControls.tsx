@@ -13,14 +13,13 @@ import {
 import type { Ref } from 'react';
 import clsx from 'clsx';
 import styles from './GlassPlayer.module.css';
-import { formatBehind } from './playerMath';
+import { edgeWords, formatBehind } from './playerMath';
 import { PlayerSettingsPopover } from './PlayerSettingsPopover';
 import type { PlayerSimulation } from './usePlayerSimulation';
 
 // 하단 버튼줄 — 재생·볼륨·LIVE 복귀(계약3 4절) / 클립·(채팅)·미니·설정·전체 화면.
 export function PlayerControls({
   sim,
-  replay = false,
   chatToggle,
   fullscreenButtonRef,
   onClip,
@@ -29,11 +28,6 @@ export function PlayerControls({
   onSettingsOpenChange,
 }: {
   sim: PlayerSimulation;
-  /**
-   * 끝난 방송의 녹화 다시보기: 오른쪽 끝이 「실시간」이 아니라 녹화 끝이다. 누르면 녹화 끝으로 가는 동작은 같고(ADR-081 8)
-   * 이름만 바뀐다. 「실시간으로」라고 하면 끝난 방송이 지금 방송 중인 것처럼 읽힌다(QA 2026-10-11)
-   */
-  replay?: boolean;
   /**
    * 플레이어 안 채팅 오버레이 토글 — 없으면 버튼을 그리지 않는다.
    * GlassPlayer는 전체 화면일 때만 넘긴다: 기본 상태에선 옆 채팅 패널이 채팅을 맡아 중복이고,
@@ -51,6 +45,7 @@ export function PlayerControls({
   /** 설정 팝오버 열림 알림 — 열려 있는 동안 GlassPlayer가 컨트롤 숨김을 유보한다 */
   onSettingsOpenChange?: (open: boolean) => void;
 }) {
+  const edge = edgeWords(sim.replay);
   return (
     <div className={styles.buttonRow}>
       <div className={styles.buttonGroup}>
@@ -89,17 +84,11 @@ export function PlayerControls({
         <button
           type="button"
           className={styles.livePillBtn}
-          aria-label={replay ? '녹화 끝으로 이동' : '실시간으로 이동'}
+          aria-label={edge.goToLabel}
           onClick={sim.returnToLive}
         >
           <span className={styles.livePillDot} data-at-edge={sim.atEdge || undefined} aria-hidden />
-          {replay
-            ? sim.atEdge
-              ? '녹화 끝'
-              : `${formatBehind(sim.behindSeconds)} · 끝으로`
-            : sim.atEdge
-              ? '실시간'
-              : `${formatBehind(sim.behindSeconds)} · 실시간으로`}
+          {sim.atEdge ? edge.atEdge : `${formatBehind(sim.behindSeconds)} · ${edge.goTo}`}
         </button>
       </div>
       <div className={styles.buttonGroup}>

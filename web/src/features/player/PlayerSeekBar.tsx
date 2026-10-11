@@ -5,6 +5,7 @@ import styles from './GlassPlayer.module.css';
 import { seekIntentForKey } from './playerKeys';
 import {
   behindFromSeekFraction,
+  edgeWords,
   formatBehind,
   isAtEdge,
   progressFraction,
@@ -39,7 +40,7 @@ export function PlayerSeekBar({
   onReturnToLive: () => void;
   /** 드래그 중 알림 — GlassPlayer가 그동안 컨트롤 숨김을 유보한다 */
   onSeekingChange: (seeking: boolean) => void;
-  /** 끝난 방송의 녹화 다시보기: 오른쪽 끝은 「실시간」이 아니라 녹화 끝이다(PlayerControls와 같다) */
+  /** 끝난 방송의 녹화 다시보기(재생 계약의 replay). 오른쪽 끝을 부르는 말이 갈린다 */
   replay?: boolean;
 }) {
   // 드래그 중 표시할 위치. null이면 실제 재생 위치(prop)를 그대로 쓴다.
@@ -62,6 +63,7 @@ export function PlayerSeekBar({
   // 스크린리더가 좌측 끝에 붙은 썸을 두고 그보다 큰 시차를 읽는다.
   const displayBehind = Math.min(rawBehind, windowSeconds);
   const atEdge = isAtEdge(displayBehind);
+  const edge = edgeWords(replay);
   const pct = progressFraction(displayBehind, windowSeconds) * 100;
   // 클립 마커는 프리뷰를 따라가지 않는다 — 실제 재생 지점 기준 구간이라 스크럽과 무관하다
   const clipPct = progressFraction(behindSeconds, windowSeconds) * 100;
@@ -119,19 +121,11 @@ export function PlayerSeekBar({
     <div
       role="slider"
       tabIndex={0}
-      aria-label={replay ? '다시보기 탐색' : '라이브 탐색'}
+      aria-label={edge.seekLabel}
       aria-valuemin={-windowSeconds}
       aria-valuemax={0}
       aria-valuenow={-displayBehind}
-      aria-valuetext={
-        replay
-          ? atEdge
-            ? '녹화 끝'
-            : `녹화 끝에서 ${formatBehind(displayBehind)}`
-          : atEdge
-            ? '실시간'
-            : `실시간에서 ${formatBehind(displayBehind)}`
-      }
+      aria-valuetext={atEdge ? edge.atEdge : `${edge.fromEdge} ${formatBehind(displayBehind)}`}
       className={styles.seekArea}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

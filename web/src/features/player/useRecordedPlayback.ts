@@ -132,6 +132,23 @@ export function useRecordedPlayback(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [src, videoRef]);
 
+  /** 디바운스가 끝나 아직 걸지 않은 이동의 도착점 */
+  const pendingJumpRef = useRef<number | null>(null);
+  /**
+   * 도착점으로 줄기를 옮긴다. 지금 줄기가 이미 그 자리에서 시작하면 주소가 같아 다시 받지 않으므로 줄기 처음으로 되감는다:
+   * 같은 카드를 다시 눌렀는데 영상이 그대로 흐르던 결함(QA 2026-10-11 리뷰)
+   */
+  const landRef = useRef((target: number) => {
+    if (target !== offsetRef.current) {
+      setOffset(target);
+      return;
+    }
+    const video = videoRef.current;
+    if (video === null) return;
+    video.currentTime = 0;
+    if (wantPlayRef.current) void video.play().catch(() => undefined);
+  });
+
   const jumpTo = useCallback(
     (seconds: number, backward = false) => {
       // 틈 안이면 다음 구간 시작으로(뒤로 가기면 앞 구간 끝으로) — 시크바도 실제로 틀 자리를 보인다
@@ -140,18 +157,27 @@ export function useRecordedPlayback(
         : forwardTarget(recordedRef.current, seconds);
       setPosition(target);
       if (seekTimer.current !== null) window.clearTimeout(seekTimer.current);
+      pendingJumpRef.current = target;
       // 시크바를 끄는 동안 매 좌표마다 새 줄기를 받지 않는다
       seekTimer.current = window.setTimeout(() => {
         seekTimer.current = null;
-        setOffset(target);
+        pendingJumpRef.current = null;
+        landRef.current(target);
       }, SEEK_DEBOUNCE_MS);
     },
     [total],
   );
 
+  // 기다리던 이동은 버리지 않고 바로 건다. 진짜 언마운트면 아무 일도 하지 않고, 개발 서버(StrictMode)가 새로 선 부품을
+  // 껐다 켤 때는 선 직후에 건 이동(홈에서 고른 카드 등)을 잃지 않는다(QA 2026-10-11)
   useEffect(
     () => () => {
-      if (seekTimer.current !== null) window.clearTimeout(seekTimer.current);
+      if (seekTimer.current === null) return;
+      window.clearTimeout(seekTimer.current);
+      seekTimer.current = null;
+      const pending = pendingJumpRef.current;
+      pendingJumpRef.current = null;
+      if (pending !== null) landRef.current(pending);
     },
     [],
   );
@@ -169,6 +195,7 @@ export function useRecordedPlayback(
     quality,
     lowLatency: false,
     settingsMenu: false,
+    replay: true,
     clipMarked: false,
     controlsVisible,
     togglePlay: useCallback(() => {

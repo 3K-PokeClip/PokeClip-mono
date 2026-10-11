@@ -8,7 +8,7 @@ import { fetchAllJumpCards } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
 import { useAuthStore } from '@/stores/auth';
 import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
-import { cardAgeLabel } from './highlightCardView';
+import { timeAgo } from '@/lib/timeAgo';
 import {
   emitRelay,
   publishLiveData,
@@ -221,7 +221,7 @@ function toHighlight(c: Snapshot, index: number, now: number): LiveHighlight {
     id: `card-${c.id}`,
     timestamp: msToClock(c.streamTimestampMs),
     title: manual ? '핫키로 남긴 순간' : `채팅이 튄 순간 #${c.id}`,
-    meta: `${reason} · ${winSec}초 · ${cardAgeLabel(c.createdAt, now)}`,
+    meta: `${reason} · ${winSec}초 · ${timeAgo(c.createdAt, now)}`,
     status,
     source: manual ? 'manual' : 'auto',
     score: c.score ?? undefined,
@@ -505,6 +505,9 @@ export function useLiveMockState(): LiveMockState {
   }, [cards, now]);
   const hiddenCount = useMemo(() => Object.values(cards).filter((c) => c.hidden).length, [cards]);
 
+  /** 차트가 방송 전체를 읽었나. loadChart가 창을 고르는 조건과 같다(아니면 지금 기준 최근 10분) */
+  const wholeBroadcast =
+    live.status === 'ended' && live.startedAt !== null && live.endedAt !== null;
   const chatVolume = useMemo<ChatVolumeSeries>(() => {
     if (!chart || chart.buckets.length === 0)
       return {
@@ -552,15 +555,16 @@ export function useLiveMockState(): LiveMockState {
     return {
       points,
       markers,
-      // 끝난 방송의 오른쪽 끝은 「지금」이 아니라 마지막 칸이 끝난 시각이다(QA 2026-10-11)
+      // 방송 전체를 읽은 끝난 방송이면 오른쪽 끝은 「지금」이 아니라 마지막 칸이 끝난 시각이다(QA 2026-10-11).
+      // 시작 시각을 몰라 지금 기준 최근 10분을 읽은 방송은 그 창의 끝이 정말 지금이다(창을 고르는 조건과 같다)
       timeLabels: [
         lab(t0),
         lab(t0 + (t1 - t0) / 3),
         lab(t0 + ((t1 - t0) * 2) / 3),
-        live.status === 'ended' ? lab(t1) : '지금',
+        wholeBroadcast ? lab(t1) : '지금',
       ],
     };
-  }, [chart, cards, base, live.status]);
+  }, [chart, cards, base, wholeBroadcast]);
 
   const { data: chzzk } = useQuery(chzzkLinkQueryOptions);
   const { data: me } = useMe();
