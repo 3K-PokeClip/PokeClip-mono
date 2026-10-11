@@ -51,6 +51,14 @@ pokeclip:
     dispatch: false
   internal-api:
     token: test-only-internal-token-32bytes-long!!
+    # 셸에 STREAM_KEY_RESOLVE_TOKEN·STREAM_KEY_RESOLVE_ALLOWED_CIDRS가 export돼 있어도 시험은 닫힌 창구를 잰다 —
+    # 아래 forward-headers-strategy 줄과 같은 이유로 이 두 줄이 기본 yml의 placeholder 줄을 덮는다.
+    # 창구를 여는 시험의 @TestPropertySource·@DynamicPropertySource는 이것보다 위라 그쪽은 계속 열린다.
+    # 재현: export한 채 돌리면 WithoutResolveToken이 401 대신 403이었고, ForwardedHeadersNativeTest는
+    # native라 부팅 검사에 걸려 컨텍스트가 안 떴다.
+    stream-key-resolve:
+      token: ""
+      allowed-cidrs: ""
   chzzk:
     app:
       client-id: test-chzzk-client-id

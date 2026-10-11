@@ -38,8 +38,9 @@ class SecretStoreMigrationBootTest extends IntegrationTestSupport {
     private static final AtomicInteger EXIT = MigrationExitCapture.EXIT;
     private static final AtomicReference<ConfigurableApplicationContext> SEEN = MigrationExitCapture.SEEN;
 
-    /** 웹 보안 체인 둘 + 스케줄러 셋의 빈 이름. */
+    /** 웹 보안 체인 셋 + 스케줄러 셋의 빈 이름. */
     private static final String[] WEB_AND_SCHEDULER_BEANS = {"securityFilterChain", "internalFilterChain",
+            "streamKeyResolveFilterChain",
             "chzzkTokenRefreshScheduler", "youtubeRevocationCheckScheduler", "retentionCleanupScheduler"};
 
     private final JdbcTemplate jdbc;
@@ -54,13 +55,14 @@ class SecretStoreMigrationBootTest extends IntegrationTestSupport {
     }
 
     /**
-     * 대조. 위 이름들이 틀리면 「없다」가 저절로 참이 된다. 웹 시험 컨텍스트에는 보안 체인 둘이 그 이름으로 있다.
+     * 대조. 위 이름들이 틀리면 「없다」가 저절로 참이 된다. 웹 시험 컨텍스트에는 보안 체인 셋이 그 이름으로 있다.
      * 스케줄러는 시험 프로필이 꺼 두어 여기서도 없으므로 클래스 이름에서 빈 이름이 나오는지만 맞춰 본다.
      */
     @Test
     void 대조_웹_컨텍스트에는_그_이름의_보안_체인이_있다() {
         assertThat(webContext.getBeanNamesForType(SecurityFilterChain.class))
-                .contains("securityFilterChain", "internalFilterChain");
+                .contains("securityFilterChain", "internalFilterChain",
+                        "streamKeyResolveFilterChain");
         assertThat(WEB_AND_SCHEDULER_BEANS).contains(
                 beanNameOf(ChzzkTokenRefreshScheduler.class), beanNameOf(YoutubeRevocationCheckScheduler.class),
                 beanNameOf(RetentionCleanupScheduler.class));
