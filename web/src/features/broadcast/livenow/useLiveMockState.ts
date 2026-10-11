@@ -8,11 +8,15 @@ import { fetchAllJumpCards } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
 import { useAuthStore } from '@/stores/auth';
 import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
+import { timeAgo } from '@/lib/timeAgo';
+import { endedWindowStart } from '@/features/broadcast/endedWindow';
 import {
   emitRelay,
   publishLiveData,
   timeBaseOf,
   useLiveData,
+  type LiveChart,
+  type LiveInfoScope,
   type RelayEvent,
 } from './liveDataStore';
 
@@ -105,20 +109,13 @@ interface BroadcastInfoResponse {
   } | null;
   series: { observedAt: string; viewers: number | null }[];
 }
-interface ChartBucket {
-  start: string;
-  chats: number;
-  donations: number;
-}
-interface ChartPage {
-  bucketSeconds: number;
-  buckets: ChartBucket[];
-  appliedOffsetMs: number;
-}
+/** chat-chart 응답 한 장. 어느 창을 읽었는지(scope)는 부른 쪽이 안다 */
+type ChartPage = Omit<LiveChart, 'scope'>;
+/** 받아 둔 방송 정보. 시청자 기록을 어느 창으로 읽었는지(scope)를 같이 둔다 */
+type LoadedInfo = BroadcastInfoResponse & { scope: LiveInfoScope };
 
 const CHART_MINUTES = 10;
 const CHART_BUCKET = 30;
-
 export interface CardActionResult {
   ok: boolean;
   status: number;
@@ -183,13 +180,6 @@ function msToClock(ms: number): string {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
-function timeAgo(iso: string, now: number): string {
-  const diff = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
-  if (diff < 10) return '방금';
-  if (diff < 60) return `${diff}초 전`;
-  return `${Math.floor(diff / 60)}분 전`;
-}
-
 /** 지금 로그인한 회원 번호 — 토큰의 sub. 카드의 claimedBy와 같은 값이다 */
 function currentUserId(): string | null {
   try {
@@ -249,12 +239,17 @@ function parseSseBlock(block: string): { event: string; data: string } | null {
   return { event, data: data.join('\n') };
 }
 
-export function useLiveMockState(): LiveMockState {
+/**
+ * @param pastRoute 지난 방송 주소(/broadcast/vod/…)로 열었나. 그 주소에서는 명부가 답하기 전(방송 상태를 모름)에 그래프를 라이브의
+ *   최근 창으로 읽지 않는다(리뷰 3라운드). 방송 정보는 기다리지 않는다: 제목·카테고리는 창과 무관하고, 시청자 기록은 읽은 창을
+ *   같이 둬서 끝난 방송이 최근 창의 기록을 믿지 않게 한다(리뷰 4라운드)
+ */
+export function useLiveMockState(pastRoute: boolean): LiveMockState {
   const [cards, setCards] = useState<Record<number, Snapshot>>({});
-  const [chart, setChart] = useState<ChartPage | null>(null);
+  const [chart, setChart] = useState<LiveChart | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [sseOk, setSseOk] = useState(false);
-  const [info, setInfo] = useState<BroadcastInfoResponse | null>(null);
+  const [info, setInfo] = useState<LoadedInfo | null>(null);
   const live = useLiveData();
   // 카드 ms의 0초(서버 기준점 → 녹화 재생 서버 → 방송 시작, POK-255)
   const base = timeBaseOf(live);
@@ -266,6 +261,8 @@ export function useLiveMockState(): LiveMockState {
     endedAt: null,
   });
   rangeRef.current = { status: live.status, startedAt: live.startedAt, endedAt: live.endedAt };
+  const chartRef = useRef(chart);
+  chartRef.current = chart;
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -280,12 +277,25 @@ export function useLiveMockState(): LiveMockState {
 
   useEffect(() => {
     if (!streamId) return;
-    // 방송이 바뀌면 앞 방송의 것은 전부 비운다
+    // 방송이 바뀌면 앞 방송의 것은 전부 비운다. 방송 번호는 올리지 않는다: 올리는 곳은 방송을 고르는 훅 하나다(저장소는 번호가
+    // 바뀌면 통째로 비운다)
     setCards({});
     setChart(null);
     setInfo(null);
-    publishLiveData({ streamId, chart: null, info: null, cardTimes: [] });
+    publishLiveData({ chart: null, info: null, cardTimes: [] });
     let stopped = false;
+    type Range = typeof rangeRef.current;
+    /** 지난 방송 주소인데 방송 상태를 아직 모른다: 그래프를 어느 창으로 읽을지 모르니 기다린다 */
+    const waitForRange = (rg: Range) => pastRoute && rg.status !== 'live' && rg.status !== 'ended';
+    /**
+     * 읽은 답을 실어도 되나. 방송이 바뀌었거나(효과가 끝남) 읽는 동안 방송 상태·시각이 바뀌었으면 옛 창의 답이라 버린다: 늦게 와서
+     * 새 방송의 제목·시청자 수를, 끝난 방송의 「끝날 때 N명」을 덮었다(리뷰 3라운드)
+     */
+    const stillCurrent = (rg: Range) =>
+      !stopped &&
+      rangeRef.current.status === rg.status &&
+      rangeRef.current.startedAt === rg.startedAt &&
+      rangeRef.current.endedAt === rg.endedAt;
     // fromStream: 통로(SSE)로 온 카드인가. 통로 카드는 사진 칸이 비어 오므로 받아 둔 사진을 지키고, 목록 응답은 서버 값이
     // 정본이라 그대로 덮는다(사진이 사라졌으면 자리표시로 돌아가야 한다, PR #213 codex)
     const merge = (list: Snapshot[], fromStream = false) => {
@@ -310,15 +320,21 @@ export function useLiveMockState(): LiveMockState {
     const loadChart = async () => {
       try {
         const rg = rangeRef.current;
+        if (waitForRange(rg)) return;
         const to = new Date();
         const from = new Date(to.getTime() - CHART_MINUTES * 60_000);
         const bucket = CHART_BUCKET;
-        // 지난 방송은 시작~종료 전체를 본다. 수집기는 한 번에 1시간까지만 받으므로(window-max PT1H,
-        // 넘으면 400 too_wide) 1시간씩 나눠 읽어 이어 붙인다(PR #200 codex). 버킷은 길이에 맞춰 고른다
-        if (rg.status === 'ended' && rg.startedAt !== null && rg.endedAt !== null) {
-          const dur = rg.endedAt - rg.startedAt;
+        // 지난 방송은 시작~종료 전체를 본다(12시간이 넘거나 시작을 모르면 끝 12시간, endedWindowStart). 수집기는 한 번에
+        // 1시간까지만 받으므로(window-max PT1H, 넘으면 400 too_wide) 1시간씩 나눠 읽어 이어 붙인다(PR #200 codex). 버킷은 길이에 맞춰 고른다
+        if (rg.status === 'ended' && rg.endedAt !== null) {
+          const start = endedWindowStart(rg.startedAt, rg.endedAt);
+          const dur = rg.endedAt - start;
           const vodBucket = dur <= 60 * 60_000 ? 10 : dur <= 6 * 60 * 60_000 ? 30 : 60;
-          const start = dur > 12 * 60 * 60_000 ? rg.endedAt - 12 * 60 * 60_000 : rg.startedAt;
+          // 라이브 때 읽은 최근 그래프는 끝난 방송의 창이 아니다. 남겨 두면 다시 읽지 않아 「지금」이 굳는다(리뷰 3라운드)
+          if (chartRef.current?.scope === 'recent') {
+            setChart(null);
+            publishLiveData({ chart: null });
+          }
           const pages = await Promise.all(
             chartWindows(start, rg.endedAt).map(([a, b]) =>
               getJsonOrNull<ChartPage>(
@@ -332,12 +348,14 @@ export function useLiveMockState(): LiveMockState {
               ),
             ),
           );
+          if (!stillCurrent(rg)) return;
           const first = pages[0];
           // 한 조각이라도 못 받으면 구멍 난 차트를 그리지 않는다 — 다음 주기에 다시
           if (first && pages.every((pg) => pg !== null)) {
-            const joined: ChartPage = {
+            const joined: LiveChart = {
               ...first,
-              buckets: pages.flatMap((pg) => (pg as ChartPage).buckets),
+              buckets: pages.flatMap((pg) => pg.buckets),
+              scope: start === rg.startedAt ? 'broadcast' : 'tail',
             };
             setChart(joined);
             publishLiveData({ chart: joined });
@@ -356,9 +374,10 @@ export function useLiveMockState(): LiveMockState {
         const page = await getJsonOrNull<ChartPage>(
           `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-chart?${qs}`,
         );
-        if (page) {
-          setChart(page);
-          publishLiveData({ chart: page });
+        if (page && stillCurrent(rg)) {
+          const recent: LiveChart = { ...page, scope: 'recent' };
+          setChart(recent);
+          publishLiveData({ chart: recent });
         }
       } catch {
         /* 다음 주기에 다시 */
@@ -366,18 +385,27 @@ export function useLiveMockState(): LiveMockState {
     };
 
     const loadInfo = async () => {
-      // 지난 방송은 시작부터의 시청자 기록을 달라고 한다 — 안 주면 서버가 최근 1시간만 준다(PR #200 codex)
       const rg = rangeRef.current;
+      // 꺼짐은 명부에 없는 방송이다(위임 회수·탈퇴): 볼 수 없게 된 방송이라 읽지 않는다. 시계가 명부를 다시 물어 방송이
+      // 돌아오면 상태가 바뀌어 그때 읽는다(리뷰 4·5라운드)
+      if (rg.status === 'offline') return;
+      // 지난 방송은 그래프와 같은 창의 시청자 기록을 달라고 한다: 안 주면 서버가 최근 1시간만 준다(PR #200 codex). 그 밖(라이브,
+      // 아직 모름)은 최근 창으로 읽고 그렇다고 표시한다. 제목·카테고리는 창과 무관해 명부 답을 기다리지 않는다(리뷰 4라운드)
+      const sinceMs =
+        rg.status === 'ended' && rg.endedAt !== null
+          ? endedWindowStart(rg.startedAt, rg.endedAt)
+          : null;
       const since =
-        rg.status === 'ended' && rg.startedAt !== null
-          ? `?${new URLSearchParams({ since: new Date(rg.startedAt).toISOString() })}`
-          : '';
+        sinceMs === null
+          ? ''
+          : `?${new URLSearchParams({ since: new Date(sinceMs).toISOString() })}`;
       const page = await getJsonOrNull<BroadcastInfoResponse>(
         `/api/clip/broadcasts/${encodeURIComponent(streamId)}/broadcast-info${since}`,
       );
-      if (page) {
-        setInfo(page);
-        publishLiveData({ info: page });
+      if (page && stillCurrent(rg)) {
+        const loaded: LoadedInfo = { ...page, scope: sinceMs === null ? 'recent' : 'broadcast' };
+        setInfo(loaded);
+        publishLiveData({ info: loaded });
       }
     };
     const ctrl = new AbortController();
@@ -436,7 +464,10 @@ export function useLiveMockState(): LiveMockState {
                   viewers: number | null;
                 };
                 setInfo((prev) => {
-                  const next: BroadcastInfoResponse = {
+                  // 통로는 방송 중에만 온다. 기록은 받아 둔 창 그대로 이어 붙인다: 끝난 뒤 늦게 온 이벤트가 방송 창 기록을
+                  // 최근 창으로 바꾸지 않게
+                  const next: LoadedInfo = {
+                    scope: prev?.scope ?? 'recent',
                     latest: {
                       title: ev.title,
                       tags: ev.tags ?? [],
@@ -493,7 +524,7 @@ export function useLiveMockState(): LiveMockState {
       clearInterval(t3);
       if (reloadRangeRef.current === reloadRange) reloadRangeRef.current = null;
     };
-  }, [streamId]);
+  }, [streamId, pastRoute]);
 
   useEffect(() => {
     publishLiveData({
@@ -558,7 +589,14 @@ export function useLiveMockState(): LiveMockState {
     return {
       points,
       markers,
-      timeLabels: [lab(t0), lab(t0 + (t1 - t0) / 3), lab(t0 + ((t1 - t0) * 2) / 3), '지금'],
+      // 방송 전체·끝 12시간을 읽은 끝난 방송이면 오른쪽 끝은 「지금」이 아니라 마지막 칸이 끝난 시각이다(QA 2026-10-11).
+      // 지금 기준 최근 10분을 읽은 차트만 끝이 「지금」이다: 그 차트는 10초마다 다시 읽는다
+      timeLabels: [
+        lab(t0),
+        lab(t0 + (t1 - t0) / 3),
+        lab(t0 + ((t1 - t0) * 2) / 3),
+        chart.scope === 'recent' ? '지금' : lab(t1),
+      ],
     };
   }, [chart, cards, base]);
 
@@ -574,7 +612,9 @@ export function useLiveMockState(): LiveMockState {
       title:
         info?.latest?.title?.trim() ||
         live.listTitle ||
-        (streamId ? streamId : '방송 중인 채널이 없어요'),
+        // 지난 방송 주소는 방송 번호를 정하기 전에도 라이브 안내(「방송 중인 채널이 없어요」)를 쓰지 않는다(리뷰 3라운드)
+        streamId ||
+        (pastRoute ? '지난 방송' : '방송 중인 채널이 없어요'),
       platform: '치지직',
       channelName,
       startedNote: !streamId
@@ -593,7 +633,7 @@ export function useLiveMockState(): LiveMockState {
       })(),
       editorName: myName,
     }),
-    [streamId, sseOk, info, live.status, live.listTitle, channelName, myName],
+    [streamId, sseOk, info, live.status, live.listTitle, channelName, myName, pastRoute],
   );
 
   return { stream, highlights, hiddenCount, chatVolume, chatWarning: false };

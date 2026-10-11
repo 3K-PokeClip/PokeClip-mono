@@ -9,7 +9,15 @@ let cached: Promise<string | null> | null = null;
 
 /** 지난 방송 상세 경로면 그 방송 번호. 라이브 화면과 같은 컴포넌트를 쓰기 위한 분기다 */
 export function vodStreamIdFromPath(): string | null {
-  const m = window.location.pathname.match(/^\/broadcast\/vod\/([^/]+)/);
+  return vodStreamIdFromPathname(window.location.pathname);
+}
+
+/**
+ * {@link vodStreamIdFromPath}의 주소를 받는 쪽. 그리는 중에는 Next의 usePathname 값을 넘긴다: 다른 화면에서 넘어온
+ * 직후 첫 그리기의 window.location은 아직 옛 주소다
+ */
+export function vodStreamIdFromPathname(pathname: string): string | null {
+  const m = pathname.match(/^\/broadcast\/vod\/([^/]+)/);
   return m?.[1] ? decodeURIComponent(m[1]) : null;
 }
 

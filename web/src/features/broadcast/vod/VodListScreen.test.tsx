@@ -292,6 +292,42 @@ describe('VodListScreen — 서버 목록', () => {
     vi.unstubAllGlobals();
   });
 
+  it('처음 불러오는 동안은 「없다」가 아니라 「불러오는 중」이다: 비어 있는 목록은 아직 모르는 것이다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let answer: (response: Response) => void = () => undefined;
+    stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?')
+        ? new Promise<Response>((resolve) => {
+            answer = resolve;
+          })
+        : jsonResponse(200, { cards: [], nextCursor: null }),
+    );
+
+    renderWithProviders(<VodListScreen />);
+    expect(screen.getByText('불러오는 중…')).toBeInTheDocument();
+    expect(screen.queryByText('아직 지난 방송이 없어요')).toBeNull();
+
+    await act(async () => {
+      answer(jsonResponse(200, { broadcasts: [], nextCursor: null }));
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    // 서버가 「없다」고 답한 뒤에야 빈 상태다
+    expect(screen.getByText('아직 지난 방송이 없어요')).toBeInTheDocument();
+    expect(screen.queryByText('불러오는 중…')).toBeNull();
+  });
+
+  it('첫 조회가 실패하면 다음 주기까지 「불러오는 중」이다: 못 읽은 것을 「없다」고 하지 않는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    stubFetch(() => jsonResponse(503, { error: 'unavailable' }));
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(screen.getByText('불러오는 중…')).toBeInTheDocument();
+    expect(screen.queryByText('아직 지난 방송이 없어요')).toBeNull();
+  });
+
   it('방송마다 카드 수는 한 번만 센다 — 다시 읽을 때 전체 이력의 카드를 또 부르지 않는다', async () => {
     // 주기마다 방송마다 카드 목록을 부르면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex)
     vi.useFakeTimers({ shouldAdvanceTime: true });

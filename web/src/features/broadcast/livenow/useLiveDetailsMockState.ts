@@ -4,8 +4,8 @@ import { useMemo } from 'react';
 import { useLiveData } from './liveDataStore';
 
 // 방송 정보(카테고리·태그)는 clip의 broadcast-info 창구에서 온다(POK-251).
-// 수집기 PR-C가 아직 없어 latest는 대개 null이다 — 그때는 칩을 하나도 안 그리고
-// 화면이 「방송 정보 수집 전」이라고 말한다. 카드 표기값(cardVisuals)은 어느 창구도 주지 않으므로
+// latest가 없으면 칩을 하나도 안 그리고 화면이 그 까닭을 말한다(대시보드의 missingWord: 확인 중·기록 없음·수집 전).
+// 카드 표기값(cardVisuals)은 어느 창구도 주지 않으므로
 // 빈 맵이다 — highlightCardView의 폴백이 계약 필드만으로 카드를 세운다.
 
 export interface StreamMeta {
@@ -14,7 +14,7 @@ export interface StreamMeta {
   tags: string[];
   /** 카테고리 썸네일 자리 표시 문구 (이미지 소스가 아직 없다) */
   thumbLabel: string;
-  /** broadcast-info의 latest가 있었는가 — false면 화면이 「수집 전」을 말한다 */
+  /** broadcast-info의 latest가 있었는가. false면 화면이 그 까닭(확인 중·기록 없음·수집 전)을 말한다 */
   collected: boolean;
 }
 

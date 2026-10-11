@@ -1,3 +1,4 @@
+import { StrictMode, useEffect, useRef } from 'react';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { rebaseTimeline, recordingTimeline } from './recordingTimeline';
@@ -261,5 +262,99 @@ describe('useRecordedPlayback — 1시간 넘는 녹화', () => {
     act(() => result.current.seekToFraction(0));
     act(() => vi.advanceTimersByTime(300));
     expect(requested(video).fromSeconds).toBe(0);
+  });
+});
+
+describe('useRecordedPlayback: 시작 위치', () => {
+  // 녹화 플레이어가 선 다음에 옮기면, 개발 서버(StrictMode)가 새로 선 부품을 껐다 켤 때 기다리던 이동이 지워져
+  // 처음부터 튼다(QA 2026-10-11 실기동). 그래서 고른 시점을 시작 위치로 받아 처음 달라는 줄기부터 그 자리다
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('시작 위치를 주면 처음부터가 아니라 그 자리의 줄기를 달라고 한다', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() =>
+      useRecordedPlayback({ current: video }, source([[0, 100]]), 42),
+    );
+    expect(requested(video).fromSeconds).toBe(42);
+    expect(result.current.behindSeconds).toBe(58);
+  });
+
+  it('시작 위치가 틈 안이면 다음 구간 시작이다: 재생 서버는 틈을 건너 주지 않는다', () => {
+    const { video } = fakeVideo();
+    renderHook(() =>
+      useRecordedPlayback(
+        { current: video },
+        source([
+          [0, 10],
+          [20, 10],
+        ]),
+        15,
+      ),
+    );
+    expect(requested(video).fromSeconds).toBe(20);
+  });
+});
+
+describe('useRecordedPlayback: 이동이 사라지지 않는다', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('지금 줄기가 시작한 자리로 다시 옮기면 줄기 처음으로 되감는다: 같은 카드를 다시 눌러도 그 자리부터다', () => {
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([[0, 100]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded, 42));
+    // 42초부터 30초를 봤다
+    video.currentTime = 30;
+
+    act(() => {
+      result.current.seekToFraction(0.42);
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(requested(video).fromSeconds).toBe(42);
+    expect(video.currentTime).toBe(0);
+  });
+
+  it('같은 자리인지는 주소가 쓰는 ms로 가른다: 1ms 안쪽 차이로 새 주소도 되감기도 없이 멈추지 않는다', () => {
+    // 녹화 길이에 소수가 있으면 카드 경로(비율 반올림)의 도착점이 시작 위치와 1ms 안쪽으로 다르다(리뷰 2라운드)
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([[0, 100.0004]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded, 42));
+    video.currentTime = 30;
+
+    act(() => {
+      result.current.seekToFraction(0.42);
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(requested(video).fromSeconds).toBe(42);
+    expect(video.currentTime).toBe(0);
+  });
+
+  it('선 직후에 건 이동도 StrictMode가 껐다 켜는 사이에 잃지 않는다', () => {
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([[0, 100]]);
+    // 부모 효과처럼 한 번만 건다: StrictMode가 효과를 다시 돌려도 이동은 다시 걸리지 않는다
+    function useSeekOnMount() {
+      const sim = useRecordedPlayback(ref, recorded);
+      const done = useRef(false);
+      useEffect(() => {
+        if (done.current) return;
+        done.current = true;
+        sim.seekToFraction(0.5);
+      });
+      return sim;
+    }
+    renderHook(() => useSeekOnMount(), { wrapper: StrictMode });
+
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(requested(video).fromSeconds).toBe(50);
   });
 });

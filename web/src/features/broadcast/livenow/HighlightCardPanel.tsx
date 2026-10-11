@@ -29,6 +29,7 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
   visuals,
   pendingLabel,
   detectionPaused,
+  ended = false,
   onSeek,
 }: {
   highlights: LiveHighlight[];
@@ -37,6 +38,8 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
   pendingLabel: string | null;
   /** 수집이 끊겨 자동 탐지가 멈춘 상태 — 감지 중이라고 말하면 거짓이 된다 */
   detectionPaused: boolean;
+  /** 끝난 방송: 감지는 방송 중에 끝났다. 「자동 감지 중」이라고 하면 지금 감지하는 것처럼 읽힌다(QA 2026-10-11) */
+  ended?: boolean;
   onSeek: (timestamp: string) => void;
 }) {
   const [filter, setFilter] = useState<Filter>('all');
@@ -50,8 +53,10 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
       <div className={styles.cardPanelHeader}>
         <h2 className={styles.cardPanelHeading}>하이라이트 카드</h2>
         <span className={styles.cardPanelNote}>
-          {detectionPaused ? '자동 감지 멈춤 · 핫키로 직접 남길 수 있어요' : '자동 감지 중'} · 카드
-          클릭 = 시점 이동
+          {ended
+            ? '카드 클릭 = 시점 이동'
+            : // 멈췄을 때 「핫키로 직접 남길 수 있어요」라고 했지만 그 길은 아직 없다(POK-119·257, QA 2026-10-11)
+              `${detectionPaused ? '자동 감지 멈춤' : '자동 감지 중'} · 카드 클릭 = 시점 이동`}
         </span>
         <div className={styles.filterGroup} role="group" aria-label="하이라이트 필터">
           {FILTERS.map(({ value, label }) => (

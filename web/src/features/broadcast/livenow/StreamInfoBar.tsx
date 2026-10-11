@@ -16,17 +16,26 @@ export function StreamInfoBar({
   viewersLabel,
   uptimeLabel,
   uptimeNote,
+  metaNote,
   pendingLabel,
   onMark,
 }: {
   stream: LiveStream;
   meta: StreamMeta;
-  /** 시청자 줄 — 「1,842명 시청 중」 또는 수집 전 안내 */
+  /** 시청자 줄: 「1,842명 시청 중」, 끝난 방송은 「끝날 때 N명 시청」, 값이 없으면 그 까닭(확인 중·기록 없음·수집 전) */
   viewersLabel: string;
-  /** 흐르는 경과 표기 — clip의 startedAt에서 센다. null이면 방송 중이 아니다 */
+  /** 흐르는 경과 표기: clip의 startedAt에서 센다. 모르면 null이다 */
   uptimeLabel: string | null;
-  /** 경과 뒤에 붙는 말. 라이브 「스트리밍 중」, 지난 방송 「방송함」 */
-  uptimeNote?: string;
+  /**
+   * 경과 뒤에 붙는 말. 라이브 「스트리밍 중」, 지난 방송 「방송함」. 경과를 모르면 이 말만 선다: 지난 방송·명부 답 전에
+   * 「방송 중이 아니에요」라고 하면 거짓이다(리뷰 4라운드)
+   */
+  uptimeNote: string;
+  /**
+   * 방송 정보(카테고리·태그)가 없을 때의 말(missingWord). 받기 전·상태를 모름·명부에 없음 「확인 중」, 받았는데 없으면 라이브
+   * 「수집 전」, 지난 방송 「기록 없음」
+   */
+  metaNote: string;
   /** 만드는 중인 카드의 시각 — 있으면 버튼 아래 피드백이 선다 */
   pendingLabel: string | null;
   onMark: () => void;
@@ -56,8 +65,8 @@ export function StreamInfoBar({
               ))}
             </>
           ) : (
-            // 수집기 PR-C가 아직 없다 — 칩을 지어내지 않고 사실만 적는다
-            <span className={styles.infoNote}>방송 정보 수집 전</span>
+            // 칩을 지어내지 않고 사실만 적는다
+            <span className={styles.infoNote}>{metaNote}</span>
           )}
         </div>
       </div>
@@ -66,13 +75,9 @@ export function StreamInfoBar({
         <span className={styles.infoDivider} aria-hidden />
         <span className={styles.infoUptime}>
           {uptimeLabel !== null ? (
-            <>
-              <span className={styles.infoUptimeValue}>{uptimeLabel}</span>
-              <span>{uptimeNote ?? '스트리밍 중'}</span>
-            </>
-          ) : (
-            <span>방송 중이 아니에요</span>
-          )}
+            <span className={styles.infoUptimeValue}>{uptimeLabel}</span>
+          ) : null}
+          <span>{uptimeNote}</span>
         </span>
       </div>
       <span className={styles.infoRule} aria-hidden />

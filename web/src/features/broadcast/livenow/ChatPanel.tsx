@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 
 import clsx from 'clsx';
 import { MessageSquare, PanelRightClose } from 'lucide-react';
 import { Badge, IconButton, Tag } from '@/ui';
+import { formatPerMinute } from './liveDataStore';
 import styles from './LiveScreen.module.css';
 import type { ChatPanelMessage, ChatSurge } from './useChatPanelMockState';
 
@@ -54,7 +55,8 @@ export const ChatPanel = memo(function ChatPanel({
   surges: ChatSurge[];
   /** 오래된 → 최신 순. DOM도 이 순서다 — 스크린 리더가 화면과 같은 흐름으로 읽는다 */
   messages: ChatPanelMessage[];
-  ratePerMinute: number;
+  /** 분당 채팅 수. 모르면 null이고 상태줄에 수를 적지 않는다 */
+  ratePerMinute: number | null;
   /** 방송 상태 — 배지 문구가 여기서 갈린다. 안 주면 수집 중 */
   mode?: 'live' | 'ended' | 'offline' | 'unknown';
   /** 수집이 끊겼는가 — 동결 계약의 chatWarning을 그대로 받는다 */
@@ -96,13 +98,24 @@ export const ChatPanel = memo(function ChatPanel({
     return () => observer.disconnect();
   }, [following, handleScroll]);
 
-  const rateLabel = `분당 ${ratePerMinute.toLocaleString('ko-KR')}`;
+  // 끝난 방송의 분당 수는 통계의 「분당 평균 채팅」과 같은 평균이라 이름도 꼴도 같게 쓴다(formatPerMinute): 카드 시점 창의 수
+  // 아래에 「분당 0.7」만 쓰면 그 창의 수처럼 읽혔다(리뷰 6라운드). 라이브는 최근 1분의 개수다
+  const rateLabel =
+    ratePerMinute === null
+      ? ''
+      : mode === 'ended'
+        ? ` · 분당 평균 ${formatPerMinute(ratePerMinute)}`
+        : ` · 분당 ${ratePerMinute.toLocaleString('ko-KR')}`;
+  // 끝난 방송의 채팅은 새 메시지가 오지 않는 기록이다. 바닥에 붙어 있어도 「최신 메시지를 따라간다」가 아니다(리뷰 5라운드)
+  const followNote = mode === 'ended' ? '마지막 메시지까지 보는 중' : '최신 메시지 따라가는 중';
+  // 끝난 방송의 채팅은 흐르는 것이 아니라 남은 기록이다(QA 2026-10-11)
+  const heading = mode === 'ended' ? '채팅 기록' : '실시간 채팅';
 
   return (
-    <aside className={styles.chatPanel} aria-label="실시간 채팅">
+    <aside className={styles.chatPanel} aria-label={heading}>
       <div className={styles.chatHeader}>
         <MessageSquare size={15} aria-hidden className={styles.chatHeaderIcon} />
-        <span className={styles.chatHeading}>실시간 채팅</span>
+        <span className={styles.chatHeading}>{heading}</span>
         {/* 배지를 갈아끼우는 게 아니라 늘 서 있는 리전 안에서 글만 바꾼다 —
             지운 경고 배너가 갖고 있던 role="status"를 여기가 승계한다. 없으면 수집이
             끊기는 순간을 눈으로 보는 사람만 알고, 듣는 사람은 헤더로 돌아와야 안다. */}
@@ -169,7 +182,7 @@ export const ChatPanel = memo(function ChatPanel({
         <span>
           {collectionWarning
             ? '수집 끊김 · 새 메시지 없음'
-            : `${following ? '최신 메시지 따라가는 중' : '지난 메시지 보는 중'} · ${rateLabel}`}
+            : `${following ? followNote : '지난 메시지 보는 중'}${rateLabel}`}
         </span>
         {/* 키워드 설정 화면은 라우트가 없다 — 「제목 수정」(StreamInfoBar)처럼 자리만 지킨다 */}
         <button type="button" className={styles.chatFooterLink} disabled>

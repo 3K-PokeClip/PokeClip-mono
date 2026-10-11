@@ -427,6 +427,55 @@ describe('HomeScreen', () => {
     expect(screen.getAllByText('D-2').length).toBeGreaterThan(0);
   });
 
+  it('지난 방송의 최근 하이라이트는 그 카드 번호를 싣고 간다: 지난 방송 화면이 처음이 아니라 그 시점부터 튼다', async () => {
+    const card = {
+      id: 35,
+      streamId: 'past-1',
+      source: 'auto',
+      streamTimestampMs: 1_009_000,
+      window: { startMs: 990_000, endMs: 1_030_000 },
+      score: 80,
+      evidence: null,
+      claimedBy: null,
+      hidden: false,
+      eventSeq: 1,
+      createdAt: '2026-10-08T05:50:00Z',
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('state=past')) {
+          const body = {
+            broadcasts: [
+              {
+                streamId: 'past-1',
+                status: 'vod_ready',
+                relation: 'OWNER',
+                startedAt: '2026-10-08T05:41:00Z',
+                endedAt: '2026-10-08T06:07:00Z',
+                vodExpiresAt: null,
+              },
+            ],
+            nextCursor: null,
+          };
+          return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+        }
+        if (url.includes('/past-1/jump-cards'))
+          return Promise.resolve(
+            new Response(JSON.stringify({ cards: [card], nextCursor: null }), { status: 200 }),
+          );
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+
+    expect(await screen.findByRole('link', { name: 'past-1 · 0:16:49' })).toHaveAttribute(
+      'href',
+      '/broadcast/vod/past-1?card=35',
+    );
+  });
+
   it('이미 만료된 방송은 만료 임박에 넣지 않는다 — D-0으로 쌓이지 않는다', async () => {
     const past = (days: number) => new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
     const row = (streamId: string, vodExpiresAt: string) => ({
