@@ -170,7 +170,8 @@ async function getJsonOrNull<T>(path: string): Promise<T | null> {
   }
 }
 
-function msToClock(ms: number): string {
+/** 방송 기준 ms → 카드의 시계 표기(h:mm:ss). 지난 방송 채팅 창 바닥도 같은 꼴로 쓴다 */
+export function msToClock(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);

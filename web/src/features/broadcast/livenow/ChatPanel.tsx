@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import { MessageSquare, PanelRightClose } from 'lucide-react';
-import { Badge, IconButton, Tag } from '@/ui';
+import { Badge, IconButton, Tag, VisuallyHidden } from '@/ui';
 import { formatPerMinute } from './liveDataStore';
 import styles from './LiveScreen.module.css';
 import type { ChatPanelMessage, ChatSurge } from './useChatPanelMockState';
@@ -49,6 +49,10 @@ export const ChatPanel = memo(function ChatPanel({
   messages,
   ratePerMinute,
   mode,
+  replayClock,
+  replayWaiting = false,
+  statusNote,
+  followJump,
   collectionWarning,
   onCollapse,
 }: {
@@ -59,6 +63,24 @@ export const ChatPanel = memo(function ChatPanel({
   ratePerMinute: number | null;
   /** 방송 상태 — 배지 문구가 여기서 갈린다. 안 주면 수집 중 */
   mode?: 'live' | 'ended' | 'offline' | 'unknown';
+  /**
+   * 끝난 방송 채팅이 보여 주는 영상 시점(h:mm:ss). 있으면 바닥이 「그 시점까지 보는 중」이다. 없으면 기록 끝까지이거나, 아직 어느
+   * 시점을 보일지 모른다(replayWaiting)
+   */
+  replayClock?: string | null;
+  /** 끝난 방송인데 채팅을 보일 시점을 아직 모른다(명부 답 전, 녹화가 자리를 알리기 전). 바닥이 「시점을 확인하는 중」이다 */
+  replayWaiting?: boolean;
+  /**
+   * 채팅을 읽는 중·읽지 못함(목록의 상태 줄과 같은 말). 화면 낭독기에 알린다: 목록 안의 줄은 듣는 사람이 목록을 훑기 전에는
+   * 모른다(POK-324 리뷰 1라운드). 눈에는 그 줄이 이미 보이므로 숨겨서 싣는다. 바닥 줄에는 쓰지 않는다
+   */
+  statusNote?: string | null;
+  /**
+   * 사람이 영상을 옮긴 횟수(카드·시크바·화살표·끝으로·다 본 뒤 처음부터). 바뀌면 맨 아래(옮긴 시점)를 따라가는 상태로 돌아간다.
+   * 위로 올려 옛 줄을 읽던 자리가 남으면 옮긴 시점의 줄이 아니라 엉뚱한 줄이 보인다. 다시 세우지 않는다: 목록에 있던 포커스·선택을
+   * 잃었다(리뷰 1라운드)
+   */
+  followJump?: number;
   /** 수집이 끊겼는가 — 동결 계약의 chatWarning을 그대로 받는다 */
   collectionWarning: boolean;
   onCollapse: () => void;
@@ -68,6 +90,12 @@ export const ChatPanel = memo(function ChatPanel({
   // 위로 올라가 옛 줄을 읽는 동안엔 자리를 지킨다 — 하단 상태줄의 「따라가는 중」도 이 값이 말한다.
   const listRef = useRef<HTMLUListElement>(null);
   const [following, setFollowing] = useState(true);
+  // 옮긴 횟수가 바뀐 그리기에서 바로 따라가기로 돌린다(그린 뒤 효과로 돌리면 옛 자리를 한 번 칠한다)
+  const [seenJump, setSeenJump] = useState(followJump);
+  if (seenJump !== followJump) {
+    setSeenJump(followJump);
+    setFollowing(true);
+  }
 
   const handleScroll = useCallback(() => {
     const el = listRef.current;
@@ -98,16 +126,27 @@ export const ChatPanel = memo(function ChatPanel({
     return () => observer.disconnect();
   }, [following, handleScroll]);
 
-  // 끝난 방송의 분당 수는 통계의 「분당 평균 채팅」과 같은 평균이라 이름도 꼴도 같게 쓴다(formatPerMinute): 카드 시점 창의 수
-  // 아래에 「분당 0.7」만 쓰면 그 창의 수처럼 읽혔다(리뷰 6라운드). 라이브는 최근 1분의 개수다
+  // 끝난 방송의 분당 수는 통계의 「분당 평균 채팅」과 같은 평균이라 이름도 꼴도 같게 쓴다(formatPerMinute): 채팅 기록 아래에
+  // 「분당 0.7」만 쓰면 보이는 줄의 수처럼 읽혔다(리뷰 6라운드). 라이브는 최근 1분의 개수다
   const rateLabel =
     ratePerMinute === null
       ? ''
       : mode === 'ended'
         ? ` · 분당 평균 ${formatPerMinute(ratePerMinute)}`
         : ` · 분당 ${ratePerMinute.toLocaleString('ko-KR')}`;
-  // 끝난 방송의 채팅은 새 메시지가 오지 않는 기록이다. 바닥에 붙어 있어도 「최신 메시지를 따라간다」가 아니다(리뷰 5라운드)
-  const followNote = mode === 'ended' ? '마지막 메시지까지 보는 중' : '최신 메시지 따라가는 중';
+  // 끝난 방송의 채팅은 새 메시지가 오지 않는 기록이다. 바닥에 붙어 있어도 「최신 메시지를 따라간다」가 아니다(리뷰 5라운드).
+  // 영상 시각을 따라가면 그 시점까지다: 5분을 보는데 「마지막 메시지까지」라 하면 방송 끝까지 본 것처럼 읽힌다(POK-324). 시점을
+  // 아직 모르면 그렇다고 쓴다: 녹화가 자리를 알리기 전에 바닥만 끝까지 본 것처럼 말했다(리뷰 2라운드). 바닥은 어디까지 보는지만
+  // 말하고 읽는 중·실패는 목록의 상태 줄이 말한다: 같은 말을 두 번 썼고, 긴 실패 문구는 바닥을 두 줄로 접어 따라가기를 풀 때마다
+  // 목록 높이가 바뀌어 맨 아래로 도로 끌려갔다(리뷰 3라운드)
+  const followNote =
+    mode === 'ended'
+      ? replayClock
+        ? `${replayClock} 시점까지 보는 중`
+        : replayWaiting
+          ? '시점을 확인하는 중'
+          : '마지막 메시지까지 보는 중'
+      : '최신 메시지 따라가는 중';
   // 끝난 방송의 채팅은 흐르는 것이 아니라 남은 기록이다(QA 2026-10-11)
   const heading = mode === 'ended' ? '채팅 기록' : '실시간 채팅';
 
@@ -141,6 +180,8 @@ export const ChatPanel = memo(function ChatPanel({
               수집 중
             </Badge>
           )}
+          {/* 배지 글과 붙어 「지난 채팅채팅을…」으로 읽히지 않게 띄운다 */}
+          {statusNote ? <VisuallyHidden>{` ${statusNote}`}</VisuallyHidden> : null}
         </span>
         <IconButton
           variant="ghost"

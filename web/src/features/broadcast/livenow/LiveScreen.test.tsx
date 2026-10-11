@@ -14,6 +14,7 @@ import { publishLiveData, resetLiveData } from '@/features/broadcast/livenow/liv
 import { forgetLiveStreamId } from '@/features/broadcast/streamSelection';
 import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
+import { fakeScrollMetrics } from '@/test/scrollMetrics';
 import { renderWithProviders } from '@/test/testProviders';
 
 // 라이브 대시보드(시안 1b)는 clip 창구에 붙어 있다(POK-251). 이 시험은 서버 응답을 흉내 내고
@@ -67,8 +68,8 @@ vi.mock('@/api/mediaPlayback', async (importOriginal) => {
 
 // 채팅 패널이 그려질 때 받은 mode: 지난 방송으로 들어오는 동안 라이브 문구로 깜박이는지 잰다(리뷰 2라운드)
 const chatModes = vi.hoisted(() => [] as (string | undefined)[]);
-// 채팅 패널이 그려질 때 받은 첫 줄: 카드 시점 줄이 수를 모르는 동안 한 번이라도 「0건」으로 그려지는지 잰다(리뷰 7라운드)
-const chatHeads = vi.hoisted(() => [] as string[]);
+// 채팅 패널이 그려질 때마다 받은 줄의 글: 한 번이라도 옛 줄이나 빈 창을 그렸는지 잰다(POK-324 리뷰 1라운드)
+const chatTexts = vi.hoisted(() => [] as string[][]);
 vi.mock('@/features/broadcast/livenow/ChatPanel', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/features/broadcast/livenow/ChatPanel')>();
   const { createElement } = await import('react');
@@ -76,8 +77,7 @@ vi.mock('@/features/broadcast/livenow/ChatPanel', async (importOriginal) => {
     ...actual,
     ChatPanel: (props: import('react').ComponentProps<typeof actual.ChatPanel>) => {
       chatModes.push(props.mode);
-      const head = props.messages[0];
-      if (head?.kind === 'system') chatHeads.push(head.text);
+      chatTexts.push(props.messages.map((m) => m.text));
       return createElement(actual.ChatPanel, props);
     },
   };
@@ -244,7 +244,6 @@ const server = vi.hoisted(() => ({
   relation: 'OWNER',
   hidden: new Set<number>(),
   chatPaged: false,
-  vodChatEndless: false,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
   playback: 'off' as 'off' | 'grant' | 'fail',
   /** 지난 방송의 시각 기준점(POK-255). null이면 서버가 모른다 */
@@ -284,12 +283,16 @@ const server = vi.hoisted(() => ({
   chartRecentGate: null as Promise<void> | null,
   /** 방송 정보에 최신 관측이 없다(수집기가 그 방송을 한 번도 못 쟀다) */
   infoNoLatest: false,
-  /** 지난 방송 채팅: 1시간 창은 카드 시점의 채팅을 주지 않고(창마다 상한이 있다) 시점 앞뒤 60초 창만 그 1건을 준다 */
-  vodFocusChat: false,
-  /** vodFocusChat의 시점 앞뒤 60초 창 답을 이 약속이 풀릴 때까지 붙든다 */
-  focusGate: null as Promise<void> | null,
-  /** vodFocusChat의 시점 앞뒤 60초 창 조회가 실패한다 */
-  focusFail: false,
+  /** 지난 방송 채팅을 VOD_CHAT으로 준다(영상 축으로 묻고 표 축으로 답한다, 쪽·커서까지) */
+  vodChat: false,
+  /** vodChat 답을 이 약속이 풀릴 때까지 붙든다 */
+  vodChatGate: null as Promise<void> | null,
+  /** vodChat 조회가 실패한다 */
+  vodChatFail: false,
+  /** 지난 방송 차트를 묻는 창에 맞춘 칸으로, 칸마다 이만큼의 채팅으로 준다. null이면 CHART 그대로다 */
+  vodChartPerBucket: null as number | null,
+  /** 지난 방송 차트 답을 이 약속이 풀릴 때까지 붙든다: 채팅이 차트보다 먼저 오는 순서를 잰다 */
+  vodChartGate: null as Promise<void> | null,
   /**
    * 지난 방송 차트가 창마다 첫 칸에 채팅 7건뿐이다. 이 서버는 창마다 30초 칸 20개(10분)를 주므로 2시간 반 방송(1시간 창 셋)은
    * 30분에 21건, 분당 평균 0.7이다
@@ -305,6 +308,66 @@ const server = vi.hoisted(() => ({
 const VOD_ID = 'vod-1';
 const VOD_STARTED = NOW - 10 * 3_600_000;
 const VOD_ENDED = VOD_STARTED + 2.5 * 3_600_000;
+
+/** 지난 방송 채팅의 시차 보정(POK-92 실측): 표 축 시각 = 영상 축 시각 + 이것 */
+const VOD_OFFSET = 3_900;
+/**
+ * 지난 방송 채팅: 영상 시각 5초부터 10초마다 한 줄(「N초 채팅」)씩 끝까지 900줄. 영상 시각의 0초는 방송 시작이다(녹화도 그때
+ * 시작하고 서버 기준점은 모른다). 30초 칸마다 3줄이라 vodChartPerBucket = 3이 이 채팅의 차트다
+ */
+const VOD_CHAT = [
+  // 방송 시작 1초 뒤(표 축)에 친 채팅: 영상 축으로는 시작보다 2.9초 앞이다
+  {
+    kind: 'chat',
+    id: 999,
+    time: new Date(VOD_STARTED + 1_000).toISOString(),
+    nickname: '첫손님',
+    senderChannelId: 'v-first',
+    text: '방송 시작 인사',
+    amount: null,
+  },
+  ...Array.from({ length: 900 }, (_, i) => {
+    const seconds = 5 + i * 10;
+    return {
+      kind: 'chat',
+      id: 1_000 + i,
+      time: new Date(VOD_STARTED + seconds * 1000 + VOD_OFFSET).toISOString(),
+      nickname: '다시보기',
+      senderChannelId: `v${i % 7}`,
+      text: `${seconds}초 채팅`,
+      amount: null,
+    };
+  }),
+];
+
+/**
+ * 수집기처럼 영상 축 [from, to)를 물으면 표 축 시각 오름차순으로 limit건씩, 커서를 달아 준다. 붙든 답은 끊으면 브라우저 fetch처럼
+ * 바로 실패한다: 끊기가 요청까지 닿는지 잰다
+ */
+function vodChatResponse(u: URL, signal?: AbortSignal | null): Response | Promise<Response> {
+  const from = Date.parse(u.searchParams.get('from') ?? '');
+  const to = Date.parse(u.searchParams.get('to') ?? '');
+  const limit = Number(u.searchParams.get('limit') ?? '200');
+  const start = Number(u.searchParams.get('cursor') ?? '0');
+  const inWindow = VOD_CHAT.filter((it) => {
+    const at = Date.parse(it.time) - VOD_OFFSET;
+    return at >= from && at < to;
+  });
+  const answer = () =>
+    server.vodChatFail
+      ? jsonResponse(503, { error: 'unavailable' })
+      : jsonResponse(200, {
+          items: inWindow.slice(start, start + limit),
+          nextCursor: start + limit < inWindow.length ? String(start + limit) : null,
+          appliedOffsetMs: VOD_OFFSET,
+        });
+  const gate = server.vodChatGate;
+  if (gate === null) return answer();
+  return new Promise<Response>((resolve, reject) => {
+    signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    void gate.then(() => resolve(answer()));
+  });
+}
 
 /** 방송 목록(명부)의 답 */
 function listResponse(u: URL): Response {
@@ -364,7 +427,7 @@ function infoResponse(path: string, noSince: boolean): Response {
   );
 }
 
-function handle(url: string) {
+function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   const u = new URL(url, 'http://localhost');
   const path = u.pathname;
   if (path === '/api/clip/broadcasts')
@@ -383,6 +446,25 @@ function handle(url: string) {
       return gate.then(() => jsonResponse(200, CHART));
   }
   if (path.endsWith('/chat-chart')) {
+    if (server.vodChartGate && path.includes(`/${VOD_ID}/`)) {
+      const gate = server.vodChartGate;
+      server.vodChartGate = null;
+      return gate.then(() => handle(url, init));
+    }
+    if (server.vodChartPerBucket !== null && path.includes(`/${VOD_ID}/`)) {
+      // 수집기처럼 묻는 창(영상 축)의 시작부터 칸을 자르고 칸 시작은 표 축으로 준다
+      const from = Date.parse(u.searchParams.get('from') ?? '');
+      const to = Date.parse(u.searchParams.get('to') ?? '');
+      const bucket = Number(u.searchParams.get('bucket'));
+      const buckets = [];
+      for (let t = from; t < to; t += bucket * 1000)
+        buckets.push({
+          start: new Date(t + VOD_OFFSET).toISOString(),
+          chats: server.vodChartPerBucket,
+          donations: 0,
+        });
+      return jsonResponse(200, { bucketSeconds: bucket, appliedOffsetMs: VOD_OFFSET, buckets });
+    }
     if (server.vodChartSparse && path.includes(`/${VOD_ID}/`)) {
       const first = server.vodChartBusy ? 12_345 : 7;
       return jsonResponse(200, {
@@ -402,21 +484,7 @@ function handle(url: string) {
       : infoResponse(path, noSince);
   }
   if (path.endsWith('/chat-messages')) {
-    if (server.vodFocusChat && path.includes(`/${VOD_ID}/`)) {
-      const from = Date.parse(u.searchParams.get('from') ?? '');
-      const to = Date.parse(u.searchParams.get('to') ?? '');
-      if (to - from > 5 * 60_000)
-        return jsonResponse(200, { items: [], nextCursor: null, appliedOffsetMs: 0 });
-      const item = { ...CHAT[0], id: 99, time: new Date(from + 30_000).toISOString() };
-      const focus = () =>
-        server.focusFail
-          ? jsonResponse(503, { error: 'unavailable' })
-          : jsonResponse(200, { items: [item], nextCursor: null, appliedOffsetMs: 0 });
-      return server.focusGate ? server.focusGate.then(focus) : focus();
-    }
-    // 채팅이 아주 많은 지난 방송 — 어느 창이든 쪽이 끝나지 않는다
-    if (server.vodChatEndless && path.includes(`/${VOD_ID}/`))
-      return jsonResponse(200, { items: [], nextCursor: 'more', appliedOffsetMs: 0 });
+    if (server.vodChat && path.includes(`/${VOD_ID}/`)) return vodChatResponse(u, init?.signal);
     // 200건이 넘으면 서버는 오래된 쪽부터 주고 커서를 단다 — chatPaged면 두 쪽으로 나눠 준다
     if (server.chatPaged && u.searchParams.get('cursor') === null)
       return jsonResponse(200, { items: CHAT.slice(0, 3), nextCursor: 'p2', appliedOffsetMs: 0 });
@@ -480,14 +548,16 @@ beforeEach(() => {
   server.infoNoViewers = false;
   server.chartRecentGate = null;
   server.infoNoLatest = false;
-  server.vodFocusChat = false;
-  server.focusGate = null;
-  server.focusFail = false;
+  server.vodChat = false;
+  server.vodChatGate = null;
+  server.vodChatFail = false;
+  server.vodChartPerBucket = null;
+  server.vodChartGate = null;
   server.vodChartSparse = false;
   server.vodChartBusy = false;
   server.vodEndShiftMs = 0;
   chatModes.length = 0;
-  chatHeads.length = 0;
+  chatTexts.length = 0;
   playerStatuses.length = 0;
   // 앞 시험이 단언에서 멈춰도 지난 방송 주소가 다음 시험으로 새지 않는다
   window.history.pushState({}, '', '/');
@@ -500,7 +570,6 @@ beforeEach(() => {
   server.relation = 'OWNER';
   server.hidden = new Set();
   server.chatPaged = false;
-  server.vodChatEndless = false;
   server.playback = 'off';
   notFound.mockClear();
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.
@@ -534,6 +603,20 @@ async function renderLive() {
   const result = renderWithProviders(<LiveScreen />);
   await settle();
   return result;
+}
+
+function stubMediaElement() {
+  // jsdom에는 미디어 재생이 없다. 재생 요청만 받아 둔다
+  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+}
+
+/** 지난 방송 채팅을 물은 창의 시작(epoch ms)들 */
+function chatFroms(): number[] {
+  return fetchSpy.mock.calls
+    .map(([url]) => new URL(String(url), 'http://localhost'))
+    .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
+    .map((u) => Date.parse(u.searchParams.get('from') ?? ''));
 }
 
 describe('LiveScreen — 방송 꺼짐', () => {
@@ -1053,7 +1136,7 @@ describe('LiveScreen — 접근성', () => {
 });
 
 describe('LiveScreen — 긴 지난 방송', () => {
-  it('1시간 넘는 방송의 채팅·차트를 1시간 창으로 나눠 읽고, 시청자 기록은 시작 시각부터 달라고 한다', async () => {
+  it('1시간 넘는 방송도 채팅·차트를 1시간 이하 창으로 읽고(차트는 나눠 이어 붙인다), 시청자 기록은 시작 시각부터 달라고 한다', async () => {
     // 수집기는 한 번에 1시간까지만 받는다 — 넘으면 400 too_wide로 채팅·차트가 통째로 빈다(PR #200 codex)
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
@@ -1067,9 +1150,11 @@ describe('LiveScreen — 긴 지난 방송', () => {
             Date.parse(u.searchParams.get('to') ?? '') -
             Date.parse(u.searchParams.get('from') ?? ''),
         );
+    expect(spans('chat-chart').length).toBeGreaterThanOrEqual(3);
+    // 채팅은 영상 시각 둘레만 읽는다(POK-324). 그래도 한 번에 묻는 창은 1시간 이하다
     for (const part of ['chat-chart', 'chat-messages']) {
       const got = spans(part);
-      expect(got.length).toBeGreaterThanOrEqual(3);
+      expect(got.length).toBeGreaterThan(0);
       for (const ms of got) expect(ms).toBeLessThanOrEqual(3_600_000);
     }
     const info = fetchSpy.mock.calls
@@ -1142,24 +1227,14 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
     return result;
   }
 
-  function stubMediaElement() {
-    // jsdom에는 미디어 재생이 없다. 재생 요청만 받아 둔다
-    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
-    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
-  }
-
-  it('녹화가 없으면 채팅을 그 카드 시점으로 옮긴다', async () => {
+  it('녹화가 없으면 채팅이 그 카드 시점까지에서 멈춘다: 서버 기준점 축으로 그 둘레를 읽는다', async () => {
     server.vodOrigin = VOD_STARTED + 32_000;
     openFromHome(4);
     await renderLive();
 
-    const froms = fetchSpy.mock.calls
-      .map(([url]) => new URL(String(url), 'http://localhost'))
-      .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
-      .map((u) => u.searchParams.get('from'));
-    expect(froms).toContain(
-      new Date(VOD_STARTED + 32_000 + 2_842_000 - 60_000 + 3_900).toISOString(),
-    );
+    // 차트가 이 방송의 칸이 아니면(시험 서버의 CHART) 카드 시점 60초 앞부터 읽는다. 요청은 영상 축이다(보정은 수집기가 더한다)
+    expect(chatFroms()).toContain(VOD_STARTED + 32_000 + 2_842_000 - 60_000);
+    expect(screen.getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
     // 사람이 누른 것이 아니다. 「영상은 아직 없어요」를 먼저 띄우지 않는다
     expect(screen.queryByText(/영상은 아직 없어요/)).not.toBeInTheDocument();
   });
@@ -1269,105 +1344,6 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
     expect(requestedStart(container)).toBe(VOD_STARTED);
   });
 
-  it('카드 시점 채팅을 읽는 동안은 그 수를 「확인 중」이라 쓴다: 모르는 수를 0건이라 하지 않는다', async () => {
-    let release: () => void = () => undefined;
-    server.vodFocusChat = true;
-    server.focusGate = new Promise((resolve) => {
-      release = resolve;
-    });
-    openFromHome(4);
-    await renderLive();
-    expect(screen.getByText(/시점 앞뒤 60초 채팅 확인 중/)).toBeInTheDocument();
-
-    await act(async () => {
-      release();
-    });
-    await settle();
-    expect(screen.getByText(/시점 앞뒤 60초 채팅 1건/)).toBeInTheDocument();
-    // 처음 그릴 때부터 「확인 중」이다: 읽기를 시작하며 표시를 켜면 그 앞 한 번은 받아 둔 수로 「0건」을 그렸다(리뷰 7라운드)
-    expect(chatHeads.filter((t) => t.includes('시점 앞뒤 60초'))).not.toContainEqual(
-      expect.stringMatching(/0건$/),
-    );
-  });
-
-  it('다른 카드를 누르면 그 시점을 다 읽기 전까지 「확인 중」이다: 앞 카드에서 읽은 것으로 수를 세지 않는다', async () => {
-    server.vodFocusChat = true;
-    openFromHome(4);
-    await renderLive();
-    expect(screen.getByText(/0:47:22 시점 앞뒤 60초 채팅 1건/)).toBeInTheDocument();
-
-    let release: () => void = () => undefined;
-    server.focusGate = new Promise((resolve) => {
-      release = resolve;
-    });
-    chatHeads.length = 0;
-    fireEvent.click(screen.getByRole('button', { name: '1:23:20 시점으로 이동' }));
-    await settle();
-    expect(screen.getByText(/1:23:20 시점 앞뒤 60초 채팅 확인 중/)).toBeInTheDocument();
-    expect(chatHeads.filter((t) => t.startsWith('1:23:20'))).not.toContainEqual(
-      expect.stringMatching(/건$/),
-    );
-
-    await act(async () => {
-      release();
-    });
-    await settle();
-    expect(screen.getByText(/1:23:20 시점 앞뒤 60초 채팅 1건/)).toBeInTheDocument();
-  });
-
-  it('카드 시점 채팅을 읽지 못하면 그렇다고 쓴다: 0건이라 하지 않는다', async () => {
-    // 읽기가 실패해도 「다 읽음」으로 넘어가 「0건」이라 단정했다(리뷰 7라운드)
-    server.vodFocusChat = true;
-    server.focusFail = true;
-    openFromHome(4);
-    await renderLive();
-
-    expect(screen.getByText(/시점 앞뒤 60초 채팅을 불러오지 못했어요/)).toBeInTheDocument();
-    expect(screen.queryByText(/시점 앞뒤 60초 채팅 0건/)).toBeNull();
-  });
-
-  it('카드 시점 채팅을 읽은 뒤 채팅 패널을 접었다 펴도 그 수는 0건으로 바뀌지 않는다', async () => {
-    // 패널을 펴면 방송 창을 처음부터 다시 읽으며 받아 둔 채팅을 비운다. 시점 채팅이 거기에 섞여 있으면 함께 지워진다
-    server.vodFocusChat = true;
-    openFromHome(4);
-    await renderLive();
-    expect(screen.getByText(/시점 앞뒤 60초 채팅 1건/)).toBeInTheDocument();
-    chatHeads.length = 0;
-
-    fireEvent.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
-    fireEvent.click(screen.getByRole('button', { name: '채팅 열기' }));
-    await settle();
-    expect(screen.getByText(/시점 앞뒤 60초 채팅 1건/)).toBeInTheDocument();
-    expect(chatHeads.filter((t) => t.includes('시점 앞뒤 60초'))).not.toContainEqual(
-      expect.stringMatching(/0건$/),
-    );
-  });
-
-  it('방송 끝 시각이 고쳐져 채팅을 다시 읽어도 카드 시점의 채팅은 남는다', async () => {
-    // 1시간 창 읽기만 다시 돌며 처음에 비우고, 시점 읽기는 다시 돌지 않아 「채팅 0건」이 됐다(리뷰 6라운드)
-    server.vodFocusChat = true;
-    openFromHome(4);
-    await renderLive();
-    expect(screen.getByText(/시점 앞뒤 60초 채팅 1건/)).toBeInTheDocument();
-
-    server.vodEndShiftMs = 90_000;
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(61_000);
-    });
-    await settle();
-    expect(screen.getByText(/시점 앞뒤 60초 채팅 1건/)).toBeInTheDocument();
-  });
-
-  it('카드 시점의 채팅은 방송 전체 채팅을 다 읽은 뒤에도 남는다: 1시간 창은 상한이 있어 그 시점이 빠질 수 있다', async () => {
-    // 시점 앞뒤 60초는 따로 끝까지 읽는다. 그런데 차례로 도는 1시간 창 읽기가 나중에 끝나며 통째로 덮어 「채팅 0건」이 됐다.
-    // 카드는 채팅이 몰린 순간에 생겨 바로 그 자리가 빠진다(리뷰 5라운드)
-    server.vodFocusChat = true;
-    openFromHome(4);
-    await renderLive();
-
-    expect(screen.getByText(/시점 앞뒤 60초 채팅 1건/)).toBeInTheDocument();
-  });
-
   it('녹화 플레이어가 시작 위치를 받은 뒤에는 비운다: 다시 서도 옛 카드 시점으로 되돌아가지 않는다', async () => {
     // 시작 위치는 녹화가 서기 전에 고른 시점을 위한 것이다. 받은 뒤에도 남기면 시크바·「끝으로」로 옮긴 뒤 녹화가
     // 다시 설 때 오래전 카드로 튄다(리뷰). 다시 선 녹화는 처음부터다. 지금 위치는 플레이어 밖에서 모른다(예전과 같다)
@@ -1410,7 +1386,7 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
     });
 
     expect(requestedStart(container)).toBe(STARTED_AT);
-    expect(screen.queryByText(/시점 앞뒤 60초/)).toBeNull();
+    expect(screen.queryByText(/0:47:22 시점까지/)).toBeNull();
   });
 
   it('명부 답 전에 누른 카드는 끝난 방송으로 밝혀지면 그 시점부터 튼다: 라이브 주소로 연 끝난 방송', async () => {
@@ -1467,7 +1443,7 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
     });
 
     expect(requestedStart(container)).toBe(STARTED_AT);
-    expect(screen.queryByText(/시점 앞뒤 60초/)).toBeNull();
+    expect(screen.queryByText(/0:47:22 시점까지/)).toBeNull();
   });
 
   it('주소의 카드는 한 번만 옮긴다: 사람이 다른 카드를 고른 뒤 몇 초가 지나도 주소의 카드로 돌아가지 않는다', async () => {
@@ -1476,17 +1452,17 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     nav.search = '?card=4';
     await renderLive();
-    expect(screen.getByText(/^0:47:22 시점 앞뒤 60초/)).toBeInTheDocument();
+    expect(screen.getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '1:23:20 시점으로 이동' }));
     await settle();
-    expect(screen.getByText(/^1:23:20 시점 앞뒤 60초/)).toBeInTheDocument();
+    expect(screen.getByText(/^1:23:20 시점까지 보는 중/)).toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
     await settle();
-    expect(screen.getByText(/^1:23:20 시점 앞뒤 60초/)).toBeInTheDocument();
+    expect(screen.getByText(/^1:23:20 시점까지 보는 중/)).toBeInTheDocument();
   });
 
   it('녹화를 찾는 동안 누른 카드도 녹화가 뜨면 그 시점부터다', async () => {
@@ -1513,6 +1489,506 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
   });
 });
 
+describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
+  // 채팅 창은 영상 시각까지 나온 줄만 보인다. 10분에서 3분으로 되돌리면 3~10분 채팅은 사라지고, 재생하면 그 시각의 줄이 붙는다.
+  // 전에는 방송 전체 채팅을 한꺼번에 깔아 영상을 어디로 옮겨도 채팅 창은 끝부분 그대로였다
+
+  /**
+   * 녹화가 있는 지난 방송을 연다. 녹화는 처음(0초)부터 선다. 재생 서버 주소가 있다: 녹화를 찾는 운영 조합이 그렇다(주소가 없으면
+   * 녹화를 묻지도 않는다). 없이 돌리면 녹화를 기다리는 길을 한 번도 안 지났다(리뷰 2라운드)
+   */
+  async function openWithRecording(
+    spans: { startMs: number; durationSeconds: number }[] = [
+      { startMs: VOD_STARTED, durationSeconds: 9_000 },
+    ],
+  ) {
+    stubMediaElement();
+    server.vodChat = true;
+    mediaCalls.configured = true;
+    mediaCalls.answer = Promise.resolve(spans);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    const result = await renderLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    await settle();
+    return result;
+  }
+
+  /** 영상 노드가 지금 줄기 안에서 그 자리(초)까지 흘렀다. 줄기의 0초는 그 구간의 시작이다(첫 구간이면 곧 방송 기준 초) */
+  async function playTo(container: HTMLElement, seconds: number) {
+    const video = container.querySelector('video')!;
+    await act(async () => {
+      video.currentTime = seconds;
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+    await settle();
+  }
+
+  it('녹화를 틀면 채팅은 영상 시각까지의 줄만 보이고, 재생하면 그 시각의 줄이 붙는다', async () => {
+    const { container } = await openWithRecording();
+    // 처음(0초)에는 아직 나온 채팅이 없다
+    expect(screen.queryByText('5초 채팅')).toBeNull();
+    expect(screen.getByText(/^0:00:00 시점까지 보는 중/)).toBeInTheDocument();
+
+    await playTo(container, 20);
+    expect(screen.getByText('5초 채팅')).toBeInTheDocument();
+    expect(screen.getByText('15초 채팅')).toBeInTheDocument();
+    expect(screen.queryByText('25초 채팅')).toBeNull();
+
+    await playTo(container, 600);
+    expect(screen.getByText('595초 채팅')).toBeInTheDocument();
+    expect(screen.queryByText('605초 채팅')).toBeNull();
+    expect(screen.getByText(/^0:10:00 시점까지 보는 중/)).toBeInTheDocument();
+  });
+
+  it('되감으면 그 뒤 채팅은 사라지고 그 시각까지의 줄이 보인다: 10분에서 2분으로', async () => {
+    const { container } = await openWithRecording();
+    await playTo(container, 600);
+    expect(screen.getByText('595초 채팅')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '0:02:00 시점으로 이동' }));
+    await settle();
+
+    expect(screen.getByText('115초 채팅')).toBeInTheDocument();
+    expect(screen.queryByText('125초 채팅')).toBeNull();
+    expect(screen.queryByText('595초 채팅')).toBeNull();
+    expect(screen.getByText(/^0:02:00 시점까지 보는 중/)).toBeInTheDocument();
+    // 녹화가 그 시점으로 옮겼다: 영상이 없다고 하지 않는다
+    expect(screen.queryByText(/영상은 아직 없어요/)).toBeNull();
+  });
+
+  it('녹화 길이에 소수가 있어도 카드를 누르면 채팅 바닥이 카드와 같은 시각이다: 재생기가 카드 시각에 정확히 선다', async () => {
+    // 시크바 비율을 거치면 시차를 초 단위로 반올림해 0:47:22 카드에서 2,841.75초에 섰다. 카드는 그 자리로 바로 간다(리뷰 1라운드)
+    await openWithRecording([{ startMs: VOD_STARTED, durationSeconds: 9_000.754 }]);
+
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
+    expect(screen.getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
+  });
+
+  it('영상이 없으면 카드를 누르기 전에는 방송 끝까지의 최근 300줄이고, 누르면 그 시점까지에서 멈춘다', async () => {
+    server.vodChat = true;
+    server.vodChartPerBucket = 3;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    expect(screen.getByText('8995초 채팅')).toBeInTheDocument();
+    expect(screen.getByText('6005초 채팅')).toBeInTheDocument();
+    // 라이브 채팅과 같은 300줄이다
+    expect(screen.queryByText('5995초 채팅')).toBeNull();
+    expect(screen.getByText(/^마지막 메시지까지 보는 중/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
+    expect(screen.getByText('2835초 채팅')).toBeInTheDocument();
+    expect(screen.queryByText('2845초 채팅')).toBeNull();
+    expect(screen.queryByText('8995초 채팅')).toBeNull();
+    expect(screen.getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
+    expect(
+      screen.getByText('영상은 아직 없어요 · 채팅을 그 시점으로 옮겼어요'),
+    ).toBeInTheDocument();
+
+    // 재생할 영상이 없으니 흐르지 않는다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    await settle();
+    expect(screen.queryByText('2845초 채팅')).toBeNull();
+  });
+
+  it('영상이 없어도 카드를 누르면 채팅 창이 그 시점(맨 아래)을 따라간다: 위로 올려 읽던 자리에 남지 않는다', async () => {
+    server.vodChat = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const list = within(panel).getByRole('list', { name: '채팅 메시지' });
+    const setScrollTop = fakeScrollMetrics(list, {
+      scrollHeight: 1000,
+      clientHeight: 300,
+      scrollTop: 200,
+    });
+    fireEvent.scroll(list);
+    expect(within(panel).getByText(/^지난 메시지 보는 중/)).toBeInTheDocument();
+    setScrollTop.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
+    expect(within(panel).getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
+    // 문구만이 아니라 목록도 실제로 맨 아래로 내린다
+    expect(setScrollTop).toHaveBeenCalledWith(1000);
+  });
+
+  it('그 시각 둘레만 읽는다: 차트로 그 앞 300줄이 차는 칸부터고, 방송 처음부터 다 받지 않는다', async () => {
+    // 채팅이 많은 방송은 수만 줄이다. 전에는 방송 전체를 1시간 창마다 미리 받았고, 창마다 상한이 있어 몰린 시간대가 빠졌다
+    server.vodChat = true;
+    server.vodChartPerBucket = 3;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    fireEvent.click(screen.getByRole('button', { name: '1:23:20 시점으로 이동' }));
+    await settle();
+
+    // 30초 칸마다 3줄: 5,000초가 걸친 칸(4,980초) 앞 100칸의 시작이 1,980초다
+    expect(chatFroms()).toContain(VOD_STARTED + 1_980_000);
+    expect(Math.min(...chatFroms())).toBeGreaterThanOrEqual(VOD_STARTED + 1_980_000);
+    expect(screen.getByText('4995초 채팅')).toBeInTheDocument();
+    expect(screen.getByText('2005초 채팅')).toBeInTheDocument();
+    expect(screen.queryByText('5005초 채팅')).toBeNull();
+  });
+
+  it('그 시각까지 다 읽기 전에는 「채팅을 불러오고 있어요」다: 빈 창을 채팅이 없는 것처럼 보이지 않는다', async () => {
+    let release: () => void = () => undefined;
+    server.vodChat = true;
+    server.vodChatGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const list = within(panel).getByRole('list', { name: '채팅 메시지' });
+    expect(within(list).getByText('채팅을 불러오고 있어요')).toBeInTheDocument();
+    // 듣는 사람에게도 알린다: 목록 안의 줄은 목록을 훑기 전에는 모른다
+    expect(within(panel).getByRole('status')).toHaveTextContent('채팅을 불러오고 있어요');
+
+    await act(async () => {
+      release();
+    });
+    await settle();
+    expect(screen.queryByText('채팅을 불러오고 있어요')).toBeNull();
+    expect(screen.getByText('8995초 채팅')).toBeInTheDocument();
+  });
+
+  it('읽지 못하면 그렇다고 쓰고 10초 뒤 다시 읽는다', async () => {
+    server.vodChat = true;
+    server.vodChatFail = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    expect(
+      within(within(panel).getByRole('list', { name: '채팅 메시지' })).getByText(
+        /^채팅을 불러오지 못했어요/,
+      ),
+    ).toBeInTheDocument();
+    expect(within(panel).getByRole('status')).toHaveTextContent('채팅을 불러오지 못했어요');
+
+    server.vodChatFail = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await settle();
+    expect(screen.queryByText(/^채팅을 불러오지 못했어요/)).toBeNull();
+    expect(screen.getByText('8995초 채팅')).toBeInTheDocument();
+  });
+
+  it('사람이 옮기면 채팅 창이 그 시점(맨 아래)을 따라가고, 녹화 틈을 재생으로 넘을 때는 읽던 자리를 지킨다', async () => {
+    // 커서가 튀었는지로 짐작해 채팅 창을 새로 세우면, 틈을 넘을 때도 위로 올려 읽던 자리와 목록 포커스를 잃었다(리뷰 1라운드)
+    const { container } = await openWithRecording([
+      { startMs: VOD_STARTED, durationSeconds: 100 },
+      { startMs: VOD_STARTED + 160_000, durationSeconds: 8_840 },
+    ]);
+    await playTo(container, 95);
+    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const list = within(panel).getByRole('list', { name: '채팅 메시지' });
+    list.focus();
+    // 위로 올려 옛 줄을 읽는다
+    const setScrollTop = fakeScrollMetrics(list, {
+      scrollHeight: 1000,
+      clientHeight: 300,
+      scrollTop: 200,
+    });
+    fireEvent.scroll(list);
+    expect(within(panel).getByText(/^지난 메시지 보는 중/)).toBeInTheDocument();
+    setScrollTop.mockClear();
+
+    // 첫 구간이 끝나 다음 구간(160초)을 이어 튼다: 사람이 옮긴 것이 아니다
+    const video = container.querySelector('video')!;
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    await act(async () => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+    await settle();
+    // 둘째 구간(160초)의 줄기 0초다
+    await playTo(container, 0);
+    expect(screen.getByText('155초 채팅')).toBeInTheDocument();
+    expect(within(panel).getByText(/^지난 메시지 보는 중/)).toBeInTheDocument();
+    expect(setScrollTop).not.toHaveBeenCalled();
+
+    // 카드를 누르면 그 시점을 따라간다. 다시 세우지 않아 목록 포커스도 남는다
+    fireEvent.click(screen.getByRole('button', { name: '0:01:00 시점으로 이동' }));
+    await settle();
+    expect(screen.getByRole('complementary', { name: '채팅 기록' })).toBe(panel);
+    expect(within(panel).getByText(/^0:01:00 시점까지 보는 중/)).toBeInTheDocument();
+    expect(setScrollTop).toHaveBeenCalledWith(1000);
+    expect(document.activeElement).toBe(list);
+  });
+
+  it('녹화를 화살표·끝으로로 옮겨도 채팅 창이 그 시점(맨 아래)을 따라간다: 재생기가 알리는 옮김이 화면까지 닿는다', async () => {
+    // 카드는 화면이 따로 알려 이 길이 끊겨도 카드 시험은 초록이었다(리뷰 2라운드)
+    const { container } = await openWithRecording();
+    await playTo(container, 600);
+    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const list = within(panel).getByRole('list', { name: '채팅 메시지' });
+    const setScrollTop = fakeScrollMetrics(list, {
+      scrollHeight: 1000,
+      clientHeight: 300,
+      scrollTop: 200,
+    });
+    fireEvent.scroll(list);
+    expect(within(panel).getByText(/^지난 메시지 보는 중/)).toBeInTheDocument();
+    setScrollTop.mockClear();
+    const player = container.querySelector('[data-controls]')!;
+
+    fireEvent.keyDown(player, { key: 'ArrowLeft' });
+    await settle();
+    expect(within(panel).getByText(/^0:09:50 시점까지 보는 중/)).toBeInTheDocument();
+    expect(setScrollTop).toHaveBeenCalledWith(1000);
+
+    fireEvent.scroll(list);
+    expect(within(panel).getByText(/^지난 메시지 보는 중/)).toBeInTheDocument();
+    fireEvent.keyDown(player, { key: 'End' });
+    await settle();
+    expect(within(panel).getByText(/^2:29:59 시점까지 보는 중/)).toBeInTheDocument();
+  });
+
+  it('옮긴 자리를 처음부터 다시 읽으면 앞서 보낸 채팅 요청을 끊는다: 답하지 않는 요청을 기다리다 갇히지 않는다', async () => {
+    // 끊기 손잡이가 수집기 요청까지 닿는지 잰다: 화면이 넘기지 않으면 로더가 끊어도 브라우저 요청은 그대로라, 그 답을 기다리느라
+    // 옮긴 자리를 영영 못 읽었다(리뷰 2라운드)
+    server.vodChat = true;
+    server.vodChatGate = new Promise(() => undefined);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    const first = fetchSpy.mock.calls.find(([url]) => String(url).includes('/chat-messages'))!;
+    const signal = (first[1] as RequestInit | undefined)?.signal;
+    expect(signal?.aborted).toBe(false);
+    server.vodChatGate = null;
+
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
+
+    expect(signal?.aborted).toBe(true);
+    expect(screen.getByText('2835초 채팅')).toBeInTheDocument();
+  });
+
+  it('녹화 틈 안 카드를 멈춘 채 다시 눌러도 채팅은 재생기가 선 자리다: 카드 시각에 남지 않는다', async () => {
+    // 카드 시각도 같이 쓰면 재생기가 같은 초에 머물 때 바로잡히지 않아 영상은 0:50:00인데 채팅은 0:47:22였다(리뷰 1라운드)
+    await openWithRecording([
+      { startMs: VOD_STARTED, durationSeconds: 2_000 },
+      { startMs: VOD_STARTED + 3_000_000, durationSeconds: 6_000 },
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
+    expect(screen.getByText(/^0:50:00 시점까지 보는 중/)).toBeInTheDocument();
+    expect(screen.getByText('2995초 채팅')).toBeInTheDocument();
+    expect(screen.queryByText('3005초 채팅')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
+    expect(screen.getByText(/^0:50:00 시점까지 보는 중/)).toBeInTheDocument();
+    // 카드 시각 둘레를 헛되이 묻지도 않는다
+    expect(chatFroms()).not.toContain(VOD_STARTED + 2_842_000 - 60_000);
+  });
+
+  it('채팅 창을 접었다 펴도 치운 읽기의 옛 줄을 한 번도 그리지 않는다', async () => {
+    // 접었다 펴면 열쇠가 같은 글자라 치운 로더의 옛 줄(그 사이 옮기기 전 시점)을 한 번 그렸다(리뷰 1라운드)
+    const { container } = await openWithRecording();
+    await playTo(container, 600);
+    fireEvent.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
+    fireEvent.click(screen.getByRole('button', { name: '1:23:20 시점으로 이동' }));
+    await settle();
+    chatTexts.length = 0;
+
+    fireEvent.click(screen.getByRole('button', { name: '채팅 열기' }));
+    await settle();
+    expect(screen.getByText('4995초 채팅')).toBeInTheDocument();
+    expect(chatTexts.some((texts) => texts.includes('595초 채팅'))).toBe(false);
+  });
+
+  it('차트가 채팅보다 늦게 와도 보이던 줄을 지우지 않고 그 앞만 더 읽어 붙인다', async () => {
+    // 비우고 처음부터 다시 읽어 「6줄 → 불러오고 있어요 → 300줄」로 깜박이고 같은 줄을 두 번 받았다(리뷰 1라운드).
+    // 재생 서버가 없는 dev·운영에서 지난 방송을 열 때의 흐름이다
+    let release: () => void = () => undefined;
+    server.vodChat = true;
+    server.vodChartPerBucket = 3;
+    server.vodChartGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    // 차트가 없어 끝 60초 앞부터 읽었다
+    expect(screen.getByText('8995초 채팅')).toBeInTheDocument();
+    expect(screen.queryByText('8935초 채팅')).toBeNull();
+    chatTexts.length = 0;
+
+    await act(async () => {
+      release();
+    });
+    await settle();
+    expect(screen.getByText('6005초 채팅')).toBeInTheDocument();
+    expect(chatTexts.every((texts) => texts.includes('8995초 채팅'))).toBe(true);
+    expect(chatFroms().filter((from) => from === VOD_ENDED - 60_000)).toHaveLength(1);
+    expect(chatFroms()).toContain(VOD_STARTED + 6_000_000);
+  });
+
+  it('녹화를 찾는 동안은 채팅을 정하지 않는다: 방송 끝 채팅을 먼저 읽어 보였다가 0초로 비우지 않는다', async () => {
+    stubMediaElement();
+    server.vodChat = true;
+    mediaCalls.configured = true;
+    let answer: (spans: { startMs: number; durationSeconds: number }[]) => void = () => undefined;
+    mediaCalls.answer = new Promise((resolve) => {
+      answer = resolve;
+    });
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(
+      within(screen.getByRole('list', { name: '채팅 메시지' })).getByText('채팅을 불러오고 있어요'),
+    ).toBeInTheDocument();
+    expect(chatFroms()).toEqual([]);
+    // 바닥은 시점을 아직 모른다고 한다: 목록은 「불러오고 있어요」인데 바닥만 끝까지 본 것처럼 말했다(리뷰 2라운드)
+    expect(screen.queryByText(/마지막 메시지까지 보는 중/)).toBeNull();
+    expect(screen.getByRole('button', { name: '키워드 설정' }).parentElement).toHaveTextContent(
+      /^시점을 확인하는 중/,
+    );
+
+    await act(async () => {
+      answer([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    await settle();
+    expect(screen.getByText(/^0:00:00 시점까지 보는 중/)).toBeInTheDocument();
+    expect(chatTexts.some((texts) => texts.includes('8995초 채팅'))).toBe(false);
+    // 녹화를 찾은 뒤에는 그 시각 둘레를 실제로 읽는다(빈 목록이면 아래 단언이 저절로 참이다, 리뷰 2라운드)
+    expect(chatFroms().length).toBeGreaterThan(0);
+    expect(Math.max(...chatFroms())).toBeLessThan(VOD_STARTED + 3_600_000);
+    expect(screen.getByText('방송 시작 인사')).toBeInTheDocument();
+  });
+
+  it('방송 시작 직후의 채팅도 보인다: 채팅 시각이 보정만큼 늦어 영상 축으로는 시작보다 앞이다', async () => {
+    // 읽는 하한을 방송 시작에 두면 시작 뒤 보정(3.9초) 안에 친 채팅을 영영 읽지 않았다(리뷰 1라운드)
+    await openWithRecording();
+    expect(screen.getByText('방송 시작 인사')).toBeInTheDocument();
+    expect(screen.queryByText('5초 채팅')).toBeNull();
+  });
+
+  it('급증 키워드도 영상 시각 앞 2분으로 센다: 지금 기준으로 세면 지난 방송은 늘 비었다', async () => {
+    const { container } = await openWithRecording();
+    await playTo(container, 60);
+    expect(screen.getByText('채팅 ×6')).toBeInTheDocument();
+
+    await playTo(container, 600);
+    expect(screen.getByText('채팅 ×12')).toBeInTheDocument();
+  });
+
+  it('채팅 창을 접었다 펴도 그 시점의 채팅이다', async () => {
+    server.vodChat = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
+    expect(screen.getByText('2835초 채팅')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '채팅 패널 접기' }));
+    fireEvent.click(screen.getByRole('button', { name: '채팅 열기' }));
+    await settle();
+    expect(screen.getByText('2835초 채팅')).toBeInTheDocument();
+    expect(screen.queryByText('2845초 채팅')).toBeNull();
+  });
+
+  it('방송 끝 시각이 고쳐져 다시 읽어도 그 시점의 채팅이다', async () => {
+    // 끝 시각이 바뀌면 읽는 범위가 바뀌어 처음부터 다시 읽는다. 그래도 고른 시점은 그대로다
+    server.vodChat = true;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
+
+    const asked = chatFroms().length;
+
+    server.vodEndShiftMs = 90_000;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+    await settle();
+    // 읽는 범위가 바뀌어 다시 물었다. 옛 읽기의 줄이 남아서 맞는 것이 아니다
+    expect(chatFroms().length).toBeGreaterThan(asked);
+    expect(screen.getByText('2835초 채팅')).toBeInTheDocument();
+    expect(screen.queryByText('2845초 채팅')).toBeNull();
+  });
+
+  it('영상 시각 쪽은 다 있고 그 앞만 모자라면 목록 맨 위에 「이전 채팅을 불러오고 있어요」라 쓴다: 영상 시각 쪽에 끼우지 않는다', async () => {
+    // 맨 아래(영상 시각 쪽)에 쓰면 카드 뒤 ←마다 「채팅을 불러오고 있어요」가 끼었다 빠졌다(리뷰 3라운드)
+    const { container } = await openWithRecording();
+    // 멀리 있는 카드로 가면 그 둘레(60초 앞부터)를 처음부터 읽는다
+    fireEvent.click(screen.getByRole('button', { name: '1:23:20 시점으로 이동' }));
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    await settle();
+    // ← 한 번이면 그 앞 10초를 덧붙여 읽는데 답이 늦다
+    let release: () => void = () => undefined;
+    server.vodChatGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    fireEvent.keyDown(container.querySelector('[data-controls]')!, { key: 'ArrowLeft' });
+    await settle();
+    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const items = within(within(panel).getByRole('list', { name: '채팅 메시지' })).getAllByRole(
+      'listitem',
+    );
+    expect(items[0]).toHaveTextContent('이전 채팅을 불러오고 있어요');
+    expect(items.at(-1)).toHaveTextContent('4985초 채팅');
+    expect(within(panel).getByRole('status')).toHaveTextContent('이전 채팅을 불러오고 있어요');
+
+    server.vodChatGate = null;
+    await act(async () => {
+      release();
+    });
+    await settle();
+    expect(screen.queryByText('이전 채팅을 불러오고 있어요')).toBeNull();
+    expect(screen.getByText('4935초 채팅')).toBeInTheDocument();
+  });
+
+  it('녹화를 늦게 찾으면 채팅 창이 그 재생 위치(맨 아래)를 따라간다: 위로 올려 읽던 방송 끝 자리에 남지 않는다', async () => {
+    // 「묻지 못함」 뒤 1분 재조회로 녹화를 찾으면 채팅이 방송 끝 줄에서 0초 줄로 통째로 바뀌는데, 따라가기 신호가 없어 위로 올려
+    // 읽던 창이 「지난 메시지 보는 중」 그대로였다(리뷰 3라운드)
+    stubMediaElement();
+    server.vodChat = true;
+    mediaCalls.configured = true;
+    mediaCalls.answer = Promise.resolve(null);
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    expect(screen.getByText('8995초 채팅')).toBeInTheDocument();
+    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const list = within(panel).getByRole('list', { name: '채팅 메시지' });
+    const setScrollTop = fakeScrollMetrics(list, {
+      scrollHeight: 1000,
+      clientHeight: 300,
+      scrollTop: 200,
+    });
+    fireEvent.scroll(list);
+    expect(within(panel).getByText(/^지난 메시지 보는 중/)).toBeInTheDocument();
+    setScrollTop.mockClear();
+
+    mediaCalls.answer = Promise.resolve([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    await settle();
+
+    expect(screen.getByText('방송 시작 인사')).toBeInTheDocument();
+    expect(within(panel).getByText(/^0:00:00 시점까지 보는 중/)).toBeInTheDocument();
+    expect(setScrollTop).toHaveBeenCalledWith(1000);
+  });
+});
+
 describe('LiveScreen — 지난 방송 상세', () => {
   it('명부에 없는 방송이면 404 화면으로 보낸다 — 빈 대시보드를 보이지 않는다', async () => {
     window.history.pushState({}, '', '/broadcast/vod/nope');
@@ -1528,23 +2004,8 @@ describe('LiveScreen — 지난 방송 상세', () => {
     expect(notFound).not.toHaveBeenCalled();
   });
 
-  it('채팅이 아주 많은 지난 방송도 모든 시간대를 읽는다 — 앞 시간대가 상한을 다 쓰지 않는다', async () => {
-    // 서버가 오래된 것부터 주므로 방송 전체에 상한 하나를 두면 후반이 통째로 빈다(PR #200 codex P1)
-    server.vodChatEndless = true;
-    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
-    await renderLive();
-
-    const froms = new Set(
-      fetchSpy.mock.calls
-        .map(([url]) => new URL(String(url), 'http://localhost'))
-        .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
-        .map((u) => u.searchParams.get('from')),
-    );
-    for (const at of [VOD_STARTED, VOD_STARTED + 3_600_000, VOD_STARTED + 7_200_000])
-      expect(froms.has(new Date(at).toISOString())).toBe(true);
-  });
-
-  it('카드를 누르면 그 시점 앞뒤 60초를 영상과 같은 기준점(녹화 시작)으로 따로 읽는다', async () => {
+  it('카드를 누르면 채팅이 그 시점까지의 줄만 보이고, 그 시점은 영상과 같은 기준점(녹화 시작) 축이다', async () => {
+    server.vodChat = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
     // 녹화 첫 조각이 방송 시작보다 30초 늦게 시작했다 — 카드 시점은 그 축이다
@@ -1554,16 +2015,15 @@ describe('LiveScreen — 지난 방송 상세', () => {
     fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
     await settle();
 
-    const expectedFrom = new Date(base + 2_842_000 - 60_000 + 3_900).toISOString();
-    const froms = fetchSpy.mock.calls
-      .map(([url]) => new URL(String(url), 'http://localhost'))
-      .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
-      .map((u) => u.searchParams.get('from'));
-    expect(froms).toContain(expectedFrom);
+    // 방송 시작 기준 2,872초다: 방송 시작에 더했으면 2,845초 채팅이 보인다
+    expect(screen.getByText('2865초 채팅')).toBeInTheDocument();
+    expect(screen.queryByText('2875초 채팅')).toBeNull();
+    expect(chatFroms()).toContain(base + 2_842_000 - 60_000);
   });
 
   it('녹화가 없으면 서버가 준 시각 기준점으로 읽는다 — 방송 시작 시각이 아니다(POK-255)', async () => {
     // 첫 조각이 방송 시작보다 32초 늦었다 — 방송 시작으로 대신하면 채팅 시점이 32초 어긋난다
+    server.vodChat = true;
     server.vodOrigin = VOD_STARTED + 32_000;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
@@ -1571,13 +2031,9 @@ describe('LiveScreen — 지난 방송 상세', () => {
     fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
     await settle();
 
-    const froms = fetchSpy.mock.calls
-      .map(([url]) => new URL(String(url), 'http://localhost'))
-      .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
-      .map((u) => u.searchParams.get('from'));
-    expect(froms).toContain(
-      new Date(VOD_STARTED + 32_000 + 2_842_000 - 60_000 + 3_900).toISOString(),
-    );
+    expect(screen.getByText('2865초 채팅')).toBeInTheDocument();
+    expect(screen.queryByText('2875초 채팅')).toBeNull();
+    expect(chatFroms()).toContain(VOD_STARTED + 32_000 + 2_842_000 - 60_000);
   });
 
   /** Next의 HistoryUpdater처럼 그린 뒤 커밋에서(효과보다 먼저) 주소창을 바꾼다. 그리는 동안의 주소창은 옛 주소다 */
@@ -1687,10 +2143,23 @@ describe('LiveScreen — 지난 방송 상세', () => {
     server.vodStartUnknown = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
+    // 채팅은 영상 시각을 따르지 않아 카드를 눌러도 그대로다: 위로 올려 읽던 자리도 그대로 둔다(리뷰 2라운드)
+    const panel = screen.getByRole('complementary', { name: '채팅 기록' });
+    const list = within(panel).getByRole('list', { name: '채팅 메시지' });
+    const setScrollTop = fakeScrollMetrics(list, {
+      scrollHeight: 1000,
+      clientHeight: 300,
+      scrollTop: 200,
+    });
+    fireEvent.scroll(list);
+    setScrollTop.mockClear();
 
     fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
     expect(screen.getByText('영상은 아직 없어요')).toBeInTheDocument();
     expect(screen.queryByText(/채팅을 그 시점으로 옮겼어요/)).toBeNull();
+    expect(within(panel).getByText(/^지난 메시지 보는 중/)).toBeInTheDocument();
+    expect(setScrollTop).not.toHaveBeenCalled();
   });
 
   it('다른 방송을 보던 화면에서 넘어와도 앞 방송으로 요청을 보내지 않는다: 저장소를 비운 뒤에 그린다', async () => {
@@ -1759,7 +2228,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
   });
 
   it('차트가 없으면 채팅 바닥도 분당 수를 지어내지 않는다: 통계와 같은 규칙이다', async () => {
-    // 받은 채팅은 창마다 상한이 있어 방송 길이로 나누면 늘 적게 나온다. 통계는 「확인 중」인데 채팅 바닥은 「분당 0」이었다
+    // 받아 둔 채팅은 영상 시각 둘레뿐이라 방송 길이로 나눌 수 없다. 통계는 「확인 중」인데 채팅 바닥은 「분당 0」이었다
     // (리뷰 4라운드)
     server.vodChartFail = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
@@ -1787,6 +2256,10 @@ describe('LiveScreen — 지난 방송 상세', () => {
         .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/${part}`);
     expect(vodCalls('chat-chart')).toEqual([]);
     expect(vodCalls('chat-messages')).toEqual([]);
+    // 채팅 창은 빈 창이 아니라 읽는 중이다: 채팅이 없는 방송처럼 보이지 않는다(POK-324 리뷰 1라운드)
+    expect(
+      within(screen.getByRole('list', { name: '채팅 메시지' })).getByText('채팅을 불러오고 있어요'),
+    ).toBeInTheDocument();
     // 채팅 바닥도 그 동안은 분당 수를 적지 않는다: 라이브의 최근 1분 수(0)는 이 방송의 수가 아니다(리뷰 5라운드)
     expect(screen.queryByText(/· 분당/)).toBeNull();
 
@@ -1887,11 +2360,10 @@ describe('LiveScreen — 지난 방송 상세', () => {
 
     expect(screen.queryByText('지금')).toBeNull();
     expect(screen.getByText('마지막 120분 채팅')).toBeInTheDocument();
-    const froms = fetchSpy.mock.calls
-      .map(([url]) => new URL(String(url), 'http://localhost'))
-      .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
-      .map((u) => Date.parse(u.searchParams.get('from') ?? ''));
-    expect(froms).toContain(VOD_ENDED - 12 * 3_600_000);
+    // 채팅도 읽는다(전에는 아예 읽지 않았다). 시작 시각을 모르니 끝 12시간보다 앞은 읽지 않는다
+    const froms = chatFroms();
+    expect(froms.length).toBeGreaterThan(0);
+    for (const from of froms) expect(from).toBeGreaterThanOrEqual(VOD_ENDED - 12 * 3_600_000);
   });
 
   it('지난 방송은 라이브 문구를 쓰지 않는다: 채팅 기록·방송 통계, 감지 중 안내 없음, 그래프 끝은 끝난 시각', async () => {
@@ -1908,18 +2380,18 @@ describe('LiveScreen — 지난 방송 상세', () => {
     expect(screen.queryByText('지금')).toBeNull();
   });
 
-  it('12시간 넘는 지난 방송의 채팅도 그래프·시청자 기록과 같은 끝 12시간 창으로 읽는다', async () => {
-    // 채팅만 처음부터 읽어 통계의 「마지막 720분」과 다른 창을 보였다. 앞쪽 카드는 그 시점 앞뒤 60초를 따로 읽는다(리뷰 5라운드)
+  it('12시간 넘는 지난 방송도 채팅은 영상 시각 둘레만 읽는다: 카드를 누르기 전에는 끝, 앞쪽 카드는 그 시점이다', async () => {
+    // 처음부터 다 읽지 않는다. 그래프는 끝 12시간이지만 채팅은 그 방송의 것이라 앞쪽 카드 시점도 읽는다(POK-324)
     server.vodLong = true;
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
     await renderLive();
+    const froms = chatFroms;
+    expect(froms().length).toBeGreaterThan(0);
+    expect(Math.min(...froms())).toBeGreaterThanOrEqual(VOD_STARTED + 3 * 3_600_000);
 
-    const froms = fetchSpy.mock.calls
-      .map(([url]) => new URL(String(url), 'http://localhost'))
-      .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
-      .map((u) => Date.parse(u.searchParams.get('from') ?? ''));
-    expect(froms.length).toBeGreaterThan(0);
-    expect(Math.min(...froms)).toBe(VOD_STARTED + 3 * 3_600_000);
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await settle();
+    expect(froms()).toContain(VOD_STARTED + 2_842_000 - 60_000);
   });
 
   it('방송 정보에 최신 관측이 없는 지난 방송은 태그 자리가 「방송 정보 기록 없음」이다', async () => {
@@ -2048,13 +2520,7 @@ describe('LiveScreen — 지난 방송 상세', () => {
     fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
     await settle();
 
-    const froms = fetchSpy.mock.calls
-      .map(([url]) => new URL(String(url), 'http://localhost'))
-      .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/chat-messages`)
-      .map((u) => u.searchParams.get('from'));
-    expect(froms).toContain(
-      new Date(VOD_STARTED + 30_000 + 2_842_000 - 60_000 + 3_900).toISOString(),
-    );
+    expect(chatFroms()).toContain(VOD_STARTED + 30_000 + 2_842_000 - 60_000);
   });
 });
 

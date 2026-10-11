@@ -80,6 +80,14 @@ type RecordingLookup =
   | { kind: 'unavailable' }
   | { kind: 'found'; source: RecordedSource };
 
+/**
+ * 녹화가 서서 재생 위치를 알려 올 수 있나(찾는 중이거나 찾았다). 영상 자리 아랫줄(「확인하고 있어요」)과 지난 방송 채팅의 기다림이
+ * 이 판정 하나를 쓴다: 따로 쓰면 조회 결과가 하나 늘 때 둘이 갈린다(리뷰 2라운드)
+ */
+function recordingMayPlay(kind: RecordingLookup['kind']): boolean {
+  return kind === 'pending' || kind === 'found';
+}
+
 /** 출입증 실패 뒤 다시 받기까지 */
 const PLAYBACK_ACCESS_RETRY_MS = 60_000;
 /** 만료 시각을 모를 때 다시 받는 간격 — 운영 쿠키 수명 60분보다 짧게 */
@@ -99,7 +107,9 @@ function LivePlayer({
   onToggleChatPanel,
   startAtSeconds,
   onRecordedReady,
-  onRecordingMissing,
+  onRecordingLookup,
+  onPlaybackPosition,
+  onSeek,
 }: {
   stream: LiveStream;
   viewersNote: string;
@@ -123,8 +133,15 @@ function LivePlayer({
   startAtSeconds: number | null;
   /** 녹화 플레이어가 섰다. 시작 위치를 받았으니 부른 쪽이 비운다 */
   onRecordedReady: () => void;
-  /** 녹화가 없다고 확인됐나. 카드를 누를 때의 알림이 플레이어와 같은 말을 하게 부른 쪽에 알린다 */
-  onRecordingMissing: (missing: boolean) => void;
+  /**
+   * 녹화 조회 결과가 바뀌었다. 카드를 누를 때의 알림이 플레이어와 같은 말을 하고(없음), 지난 방송 채팅이 녹화가 자리를 알려 올
+   * 때까지 기다리게(확인 중·찾음) 부른 쪽에 알린다
+   */
+  onRecordingLookup: (kind: RecordingLookup['kind']) => void;
+  /** 녹화의 재생 위치(방송 기준 초)가 바뀌었다. 지난 방송 채팅이 그 시각까지의 줄만 보인다 */
+  onPlaybackPosition: (seconds: number) => void;
+  /** 녹화에서 사람이 옮겼다(시크바·화살표·끝으로·카드·다 본 뒤 처음부터). 지난 방송 채팅이 그 시점(맨 아래)을 따라간다 */
+  onSeek: () => void;
 }) {
   // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
   // 주소에 ?stream= 이 없으면 clip 명부에서 고른 방송(liveDataStore)의 영상을 튼다.
@@ -140,8 +157,9 @@ function LivePlayer({
     if (broadcastStatus !== 'ended' || !mediaKey) return undefined;
     let alive = true;
     let retry: number | undefined;
-    // 시작 시각을 모르는 방송(자리표시)은 그래프·채팅과 같은 끝 12시간 안에서만 찾는다: 하한이 없으면 같은 송출 키로 한 다른 날
-    // 방송의 녹화를 틀고, 채팅도 그 날짜를 물었다(리뷰 5라운드). 지난 방송 목록도 같은 하한이다(recordingSearchFrom)
+    // 시작 시각을 모르는 방송(자리표시)은 그래프와 같은 끝 12시간 안에서만 찾는다: 하한이 없으면 같은 송출 키로 한 다른 날 방송의
+    // 녹화를 틀고, 채팅도 그 날짜를 물었다(리뷰 5라운드). 지난 방송 목록도 같은 하한이고(recordingSearchFrom), 지난 방송 채팅은 이
+    // 하한에서 보정 여유(60초)만큼 앞부터 읽는다(POK-324)
     const fromMs = recordingSearchFrom(startedAt, endedAt);
     const ask = () => {
       // 첫 구간 하나만 쓰면 송출이 한 번 끊긴 방송은 그 뒤를 못 보고, 앞 방송 녹화를 잡을 수도 있다(POK-253)
@@ -175,20 +193,21 @@ function LivePlayer({
   useEffect(() => {
     if (recorded !== null) onRecordedReady();
   }, [recorded, onRecordedReady]);
-  const recordingMissing = lookup.kind === 'none';
   useEffect(() => {
-    onRecordingMissing(recordingMissing);
-  }, [recordingMissing, onRecordingMissing]);
+    onRecordingLookup(lookup.kind);
+  }, [lookup.kind, onRecordingLookup]);
   // 끝난 방송의 영상 자리 아랫줄. 확인하는 동안 「확인하고 있어요」, 없으면 「찾지 못했어요」다(「아직 연결되지 않았어요」는
   // 기다리면 나올 것처럼 읽혔다, 리뷰 4라운드 실기동). 재생 서버가 없거나 묻지 못했으면 플레이어의 기본 말 「영상 서버에 아직
   // 연결되지 않았어요」가 맞다: 그때 「찾지 못했어요」라 하면 녹화가 지워진 것처럼 읽혔다(dev·운영은 재생 서버 주소가 비어 있다,
   // 리뷰 6라운드)
   const noSignalNote =
-    displayStatus !== 'ended' || !playbackConfigured() || lookup.kind === 'unavailable'
+    displayStatus !== 'ended' || !playbackConfigured()
       ? undefined
-      : lookup.kind === 'none'
-        ? '녹화 영상을 찾지 못했어요'
-        : '녹화 영상을 확인하고 있어요';
+      : recordingMayPlay(lookup.kind)
+        ? '녹화 영상을 확인하고 있어요'
+        : lookup.kind === 'none'
+          ? '녹화 영상을 찾지 못했어요'
+          : undefined;
   // 영상 출입증(POK-122) — 방송을 열 때 받고, 만료 5분 전에 다시 받는다. 쿠키 수명(운영 60분)이 지나면 새 조각이
   // 403이 되어 재생이 멈춘다(PR #200 codex P1). 실패하면 1분 뒤 다시 받는다. 서명 재료가 없는 서버(503)는
   // 출입증이 필요 없는 곳이라(로컬·dev) 다시 묻지 않는다. 실패해도 재생은 시도한다(로컬 media는 쿠키를 안 본다).
@@ -230,6 +249,8 @@ function LivePlayer({
       src={broadcastStatus === 'live' ? src : null}
       recorded={recorded}
       startAtSeconds={startAtSeconds}
+      onPlaybackPosition={onPlaybackPosition}
+      onSeek={onSeek}
       embed
       simulationOptions={{ initialUptimeSeconds: uptimeSeconds ?? 0 }}
       controllerRef={controllerRef}
@@ -293,9 +314,26 @@ function LiveDashboard() {
   // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
+  /** 녹화 조회 결과(플레이어가 알린다). 없다고 확인되면 카드를 누를 때 「아직」이라 하지 않는다 */
+  const [recordingLookup, setRecordingLookup] = useState<RecordingLookup['kind']>('pending');
+  const recordingMissing = recordingLookup === 'none';
+  // 재생 서버가 있고 녹화를 찾는 중이면 곧 재생기가 자리를 알려 온다(찾으면 재생기가 서는 그리기에서 알린다). 그때까지 지난 방송
+  // 채팅은 기다린다: 방송 끝을 먼저 읽어 끝 채팅이 잠깐 보였다가 0초 빈 창으로 바뀌었다(POK-324 리뷰 1라운드). 녹화 조회에는
+  // 시한이 있어(lookupRecordingSpans) 재생 서버가 답하지 않아도 끝없이 기다리지 않는다(리뷰 2라운드)
+  const awaitPlayhead = playbackConfigured() && recordingMayPlay(recordingLookup);
+  // 사람이 옮긴 횟수(영상 없이 누른 카드, 녹화의 시크바·화살표·끝으로·카드·다 본 뒤 처음부터). 바뀌면 채팅 창이 그 시점(맨
+  // 아래)을 따라간다: 재생으로 흐르거나 녹화 틈을 넘는 것은 옮긴 것이 아니다(커서가 튀었는지로 짐작해 틈을 넘을 때도 읽던 자리를
+  // 잃었다, 리뷰 1라운드)
+  const [chatJump, setChatJump] = useState(0);
+  const bumpChatJump = useCallback(() => setChatJump((n) => n + 1), []);
+  // 녹화를 찾으면 채팅이 그 녹화의 재생 위치로 통째로 바뀐다(방송 끝 줄 → 0초 줄). 위로 올려 읽던 자리가 남으면 엉뚱한 줄이
+  // 보이므로 그 시점(맨 아래)을 따라간다: 「묻지 못함」·「없음」 뒤 1분 재조회로 찾을 때 그랬다(리뷰 3라운드)
+  useEffect(() => {
+    if (recordingLookup === 'found') bumpChatJump();
+  }, [recordingLookup, bumpChatJump]);
   // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
   // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다).
-  const chat = useChatPanelMockState(chatPanelOpen && !chatWarning, ended);
+  const chat = useChatPanelMockState(chatPanelOpen && !chatWarning, ended, awaitPlayhead);
   const stats = useLiveStatsMockState(viewStatus);
 
   // 시청자 수는 broadcast-info의 series에서 마지막으로 잰 값이다(수집기 PR-C 전에는 없다). 수집기는 목록에서 채널을 못 찾은
@@ -335,18 +373,30 @@ function LiveDashboard() {
   // 남겨 두면 방송이 끝난 뒤 녹화는 처음부터인데 채팅만 그 카드에 묶이거나 오래전 카드로 튄다(리뷰 2·3라운드).
   // 명부 답 전(상태를 모름)에 고른 시점은 남긴다: 끝난 방송으로 밝혀지면 녹화가 그 시점부터 선다(리뷰 3라운드)
   const live = clock.status === 'live';
+  const followsPlayhead = chat.followsPlayhead;
   /** @returns 플레이어가 그 자리로 옮겼나(영상이 없으면 false) */
   const seekTo = useCallback(
     (seconds: number) => {
       const moved = playerRef.current?.seekToUptime(seconds) ?? false;
       if (live) return moved;
-      // 영상이 없어도 채팅 패널이 그 시점을 보여준다(지난 방송)
-      publishLiveData({ playheadMs: seconds * 1000 });
+      // 녹화가 옮겼으면 재생기가 옮긴 자리와 옮겼다는 것을 알린다(handlePlaybackPosition·onSeek: 틈 안 카드면 다음 구간 시작이다).
+      // 여기서도 카드 시각을 쓰면 재생기가 같은 초에 머물 때 바로잡히지 않아 채팅만 카드 시각에 남았다(리뷰 1라운드). 영상이 없으면
+      // 채팅이 그 시점까지에서 멈추고 그 시점(맨 아래)을 따라간다(지난 방송, POK-324). 채팅이 영상 시각을 따르지 않는 방송(기준점이
+      // 없는 자리표시)이면 채팅이 그대로이니 위로 올려 읽던 자리도 그대로 둔다(리뷰 2라운드)
+      if (!moved) {
+        publishLiveData({ playheadMs: seconds * 1000 });
+        if (followsPlayhead) bumpChatJump();
+      }
       setPendingStart(moved ? null : seconds);
       return moved;
     },
-    [live],
+    [live, followsPlayhead, bumpChatJump],
   );
+  // 녹화가 흐르는 대로 채팅에 알린다: 지난 방송 채팅은 영상 시각까지의 줄만 보이고, 재생하면 그 시각의 줄이 붙는다(POK-324).
+  // 녹화는 끝난 방송에만 서므로 라이브 채팅은 영향이 없다
+  const handlePlaybackPosition = useCallback((seconds: number) => {
+    publishLiveData({ playheadMs: seconds * 1000 });
+  }, []);
   // 방송 중으로 밝혀지면 모르는 동안 고른 시점을 버린다(위와 같은 이유)
   useEffect(() => {
     if (!live) return;
@@ -354,8 +404,6 @@ function LiveDashboard() {
     publishLiveData({ playheadMs: null });
   }, [live]);
   const handleRecordedReady = useCallback(() => setPendingStart(null), []);
-  /** 녹화가 없다고 확인됐나(플레이어가 알린다). 카드를 누를 때 「아직」이라 하지 않는다 */
-  const [recordingMissing, setRecordingMissing] = useState(false);
 
   // 홈 「최근 하이라이트」가 주소에 실은 카드(?card=). 카드가 오는 대로 한 번 그 시점으로 옮긴다. 사람이 먼저 고르면 그쪽이다.
   // window.location이 아니라 useSearchParams로 읽는다: Next는 다른 화면에서 넘어올 때 새 화면을 먼저 그리고 주소창은 그 뒤에
@@ -413,7 +461,9 @@ function LiveDashboard() {
                 onToggleChatPanel={toggleChatPanel}
                 startAtSeconds={pendingStart}
                 onRecordedReady={handleRecordedReady}
-                onRecordingMissing={setRecordingMissing}
+                onRecordingLookup={setRecordingLookup}
+                onPlaybackPosition={handlePlaybackPosition}
+                onSeek={bumpChatJump}
               />
             </Suspense>
           </div>
@@ -447,6 +497,10 @@ function LiveDashboard() {
               messages={chat.messages}
               ratePerMinute={chat.ratePerMinute}
               mode={viewStatus}
+              replayClock={chat.replayClock}
+              replayWaiting={chat.replayWaiting}
+              statusNote={chat.statusNote}
+              followJump={chatJump}
               collectionWarning={chatWarning}
               onCollapse={toggleChatPanel}
             />

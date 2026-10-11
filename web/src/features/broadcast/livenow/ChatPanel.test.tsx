@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatPanel } from '@/features/broadcast/livenow/ChatPanel';
 import type { ChatPanelMessage } from '@/features/broadcast/livenow/useChatPanelMockState';
+import { fakeScrollMetrics } from '@/test/scrollMetrics';
 
 // 라이브 화면 목업은 수집이 늘 끊긴 상태(useLiveMockState.chatWarning: true)라 상태줄의 정상 분기가
 // 화면 테스트에선 한 번도 그려지지 않는다 — 여기서 직접 그린다.
@@ -36,26 +37,6 @@ function renderPanel(overrides: Partial<typeof PROPS> = {}) {
     update: (next: Partial<typeof PROPS>) =>
       view.rerender(<ChatPanel {...PROPS} {...overrides} {...next} />),
   };
-}
-
-/**
- * jsdom은 레이아웃이 없어 스크롤 치수가 전부 0이다 — 목록에 값을 꽂아 넘친 상태를 흉내 낸다.
- * scrollTop 세터는 spy로 둔다: 「끝에 있을 때만 바닥으로 붙인다」를 관찰할 유일한 창구다
- * (빈 함수로 두면 그 동작이 통째로 빠져도 테스트가 전부 초록이다).
- */
-function fakeScrollMetrics(
-  el: HTMLElement,
-  { scrollHeight, clientHeight, scrollTop }: Record<string, number>,
-) {
-  const setScrollTop = vi.fn();
-  Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => scrollHeight });
-  Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => clientHeight });
-  Object.defineProperty(el, 'scrollTop', {
-    configurable: true,
-    get: () => scrollTop,
-    set: setScrollTop,
-  });
-  return setScrollTop;
 }
 
 /**
@@ -161,6 +142,93 @@ describe('ChatPanel — 바닥 고정', () => {
 
     update({ messages: [...MESSAGES, NEXT_MESSAGE] });
     expect(setScrollTop).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatPanel: 지난 방송 다시 보기(POK-324)', () => {
+  it('영상을 옮기면 위로 올려 읽던 중이어도 그 시점(맨 아래)을 따라간다: 다시 세우지 않아 목록 포커스가 남는다', () => {
+    const view = render(<ChatPanel {...PROPS} mode="ended" replayClock="0:10:00" followJump={0} />);
+    const list = chatList();
+    list.focus();
+    fakeScrollMetrics(list, { scrollHeight: 1000, clientHeight: 300, scrollTop: 200 });
+    fireEvent.scroll(list);
+    expect(screen.getByText(/지난 메시지 보는 중/)).toBeInTheDocument();
+    const setScrollTop = fakeScrollMetrics(list, {
+      scrollHeight: 1000,
+      clientHeight: 300,
+      scrollTop: 200,
+    });
+
+    view.rerender(
+      <ChatPanel
+        {...PROPS}
+        messages={[...MESSAGES, NEXT_MESSAGE]}
+        mode="ended"
+        replayClock="0:02:00"
+        followJump={1}
+      />,
+    );
+    expect(screen.getByText(/^0:02:00 시점까지 보는 중/)).toBeInTheDocument();
+    expect(setScrollTop).toHaveBeenCalled();
+    expect(chatList()).toBe(list);
+    expect(document.activeElement).toBe(list);
+  });
+
+  it('줄은 그대로이고 옮긴 횟수만 바뀌어도 맨 아래로 내린다: 같은 카드를 다시 누를 때', () => {
+    // 영상이 없으면 같은 카드를 다시 눌러도 줄이 같다. 바닥 문구만 「따라가는 중」으로 돌고 목록은 위에 머물 수 있었다(리뷰 2라운드)
+    const view = render(<ChatPanel {...PROPS} mode="ended" replayClock="0:10:00" followJump={0} />);
+    const list = chatList();
+    fakeScrollMetrics(list, { scrollHeight: 1000, clientHeight: 300, scrollTop: 200 });
+    fireEvent.scroll(list);
+    const setScrollTop = fakeScrollMetrics(list, {
+      scrollHeight: 1000,
+      clientHeight: 300,
+      scrollTop: 200,
+    });
+
+    view.rerender(<ChatPanel {...PROPS} mode="ended" replayClock="0:10:00" followJump={1} />);
+
+    expect(setScrollTop).toHaveBeenCalledWith(1000);
+    expect(screen.getByText(/^0:10:00 시점까지 보는 중/)).toBeInTheDocument();
+  });
+
+  it('채팅을 읽는 중·읽지 못함은 머리의 알림 자리에도 싣는다: 목록 안의 줄은 듣는 사람이 훑기 전에는 모른다', () => {
+    render(<ChatPanel {...PROPS} mode="ended" statusNote="채팅을 불러오지 못했어요" />);
+    // 배지 글과 띄어 싣는다: 붙으면 「지난 채팅채팅을…」으로 읽혔다(리뷰 2라운드)
+    expect(screen.getByRole('status').textContent).toBe('지난 채팅 채팅을 불러오지 못했어요');
+  });
+
+  it('어느 시점을 보일지 아직 모르면 바닥은 「시점을 확인하는 중」이다: 끝까지 본 것처럼 말하지 않는다', () => {
+    // 녹화가 자리를 알리기 전·명부 답 전(리뷰 2라운드)
+    render(
+      <ChatPanel
+        {...PROPS}
+        mode="ended"
+        replayClock={null}
+        replayWaiting
+        statusNote="채팅을 불러오고 있어요"
+      />,
+    );
+    expect(screen.queryByText(/마지막 메시지까지 보는 중/)).toBeNull();
+    // 바닥 줄은 「키워드 설정」 단추와 같은 칸이다
+    const footer = screen.getByRole('button', { name: '키워드 설정' }).parentElement!;
+    expect(footer).toHaveTextContent(/^시점을 확인하는 중/);
+  });
+
+  it('바닥은 어디까지 보는지만 말한다: 읽는 중·실패 문장은 목록의 상태 줄과 낭독에만 있다', () => {
+    // 바닥에도 쓰면 같은 말을 두 번 썼고, 긴 실패 문구가 바닥을 두 줄로 접어 따라가기를 풀 때마다 목록 높이가 바뀌어 맨 아래로
+    // 도로 끌려갔다(리뷰 3라운드)
+    render(
+      <ChatPanel
+        {...PROPS}
+        mode="ended"
+        replayClock={null}
+        statusNote="채팅을 불러오지 못했어요. 잠시 뒤 다시 불러와요"
+      />,
+    );
+    const footer = screen.getByRole('button', { name: '키워드 설정' }).parentElement!;
+    expect(footer).toHaveTextContent(/^마지막 메시지까지 보는 중/);
+    expect(footer).not.toHaveTextContent('불러오지 못했어요');
   });
 });
 
