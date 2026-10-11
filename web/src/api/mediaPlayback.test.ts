@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { parseSpanStartMs } from './mediaPlayback';
 
 describe('parseSpanStartMs — 녹화 시작을 ms로 올린다(POK-253)', () => {
@@ -21,10 +22,11 @@ describe('parseSpanStartMs — 녹화 시작을 ms로 올린다(POK-253)', () =>
 
 describe('lookupRecordingSpans: 녹화 없음과 물을 수 없음을 가른다(리뷰 6라운드)', () => {
   // 재생 서버가 없거나 조회가 실패해도 빈 목록으로 접어 화면이 「녹화 영상을 찾지 못했어요」로 굳었다
+  let fetchSpy: ReturnType<typeof stubFetch>;
   async function load(base: string, answer: () => Promise<Response>) {
     vi.resetModules();
     vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', base);
-    vi.stubGlobal('fetch', vi.fn(answer));
+    fetchSpy = stubFetch(answer);
     return import('./mediaPlayback');
   }
 
@@ -33,10 +35,12 @@ describe('lookupRecordingSpans: 녹화 없음과 물을 수 없음을 가른다(
     vi.unstubAllGlobals();
   });
 
-  it('재생 서버 주소가 없으면 null이다: 녹화가 없다는 뜻이 아니다', async () => {
-    const m = await load('', () => Promise.reject(new Error('부르면 안 된다')));
+  it('재생 서버 주소가 없으면 묻지 않고 null이다: 녹화가 없다는 뜻이 아니다', async () => {
+    // 물으면 빈 목록이 오게 둔다: 실패로 두면 조회 함수가 그 실패를 null로 삼켜, 묻지 않는지를 재지 못했다(리뷰 7라운드)
+    const m = await load('', () => Promise.resolve(jsonResponse(200, [])));
     expect(await m.lookupRecordingSpans('vod-1')).toBeNull();
     expect(await m.fetchRecordingSpans('vod-1')).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('녹화 폴더가 없다는 400과 404는 녹화 없음(빈 배열)이다', async () => {

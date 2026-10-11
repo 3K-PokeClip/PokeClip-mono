@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
 import { fetchRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import { recordingTimeline } from '@/features/player/recordingTimeline';
-import { recordingSearchFrom } from '../endedWindow';
+import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
 import { excludeLive, filterByPeriod } from './vodListView';
 
 // 시안 1f 지난 방송 목록의 상태. 목록은 clip `GET /api/clip/broadcasts`(POK-174·ADR-055)에서 온다(POK-251).

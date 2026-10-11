@@ -2,9 +2,9 @@
 
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { formatPerMinute } from './liveDataStore';
 import { MessageSquare, PanelRightClose } from 'lucide-react';
 import { Badge, IconButton, Tag } from '@/ui';
+import { formatPerMinute } from './liveDataStore';
 import styles from './LiveScreen.module.css';
 import type { ChatPanelMessage, ChatSurge } from './useChatPanelMockState';
 
@@ -98,19 +98,18 @@ export const ChatPanel = memo(function ChatPanel({
     return () => observer.disconnect();
   }, [following, handleScroll]);
 
-  const ended = mode === 'ended';
   // 끝난 방송의 분당 수는 통계의 「분당 평균 채팅」과 같은 평균이라 이름도 꼴도 같게 쓴다(formatPerMinute): 카드 시점 창의 수
   // 아래에 「분당 0.7」만 쓰면 그 창의 수처럼 읽혔다(리뷰 6라운드). 라이브는 최근 1분의 개수다
   const rateLabel =
     ratePerMinute === null
       ? ''
-      : ended
+      : mode === 'ended'
         ? ` · 분당 평균 ${formatPerMinute(ratePerMinute)}`
         : ` · 분당 ${ratePerMinute.toLocaleString('ko-KR')}`;
   // 끝난 방송의 채팅은 새 메시지가 오지 않는 기록이다. 바닥에 붙어 있어도 「최신 메시지를 따라간다」가 아니다(리뷰 5라운드)
-  const followNote = ended ? '마지막 메시지까지 보는 중' : '최신 메시지 따라가는 중';
+  const followNote = mode === 'ended' ? '마지막 메시지까지 보는 중' : '최신 메시지 따라가는 중';
   // 끝난 방송의 채팅은 흐르는 것이 아니라 남은 기록이다(QA 2026-10-11)
-  const heading = ended ? '채팅 기록' : '실시간 채팅';
+  const heading = mode === 'ended' ? '채팅 기록' : '실시간 채팅';
 
   return (
     <aside className={styles.chatPanel} aria-label={heading}>

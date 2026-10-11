@@ -9,7 +9,7 @@ import { useMe } from '@/features/auth/useSession';
 import { useAuthStore } from '@/stores/auth';
 import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
 import { timeAgo } from '@/lib/timeAgo';
-import { endedWindowStart } from '../endedWindow';
+import { endedWindowStart } from '@/features/broadcast/endedWindow';
 import {
   emitRelay,
   publishLiveData,

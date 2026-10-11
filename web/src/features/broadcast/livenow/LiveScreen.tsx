@@ -24,6 +24,7 @@ import { notFound, usePathname, useSearchParams } from 'next/navigation';
 import { requestPlaybackAccess } from '@/api/clipEditor';
 import { useToast } from '@/ui';
 import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
+import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
 import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
 import { rebaseTimeline, recordingTimeline } from '@/features/player/recordingTimeline';
@@ -31,7 +32,6 @@ import { missingWord, publishLiveData, resetLiveData, useLiveData } from './live
 import { useBroadcastClock, type BroadcastStatus } from './useBroadcastClock';
 import { useChatPanelMockState } from './useChatPanelMockState';
 import { useLiveDetailsMockState } from './useLiveDetailsMockState';
-import { recordingSearchFrom } from '../endedWindow';
 import { useLiveMockState, type LiveStream } from './useLiveMockState';
 import { useLiveStatsMockState } from './useLiveStatsMockState';
 import { useLiveStatusMockState } from './useLiveStatusMockState';
@@ -66,8 +66,12 @@ const UPTIME_NOTE: Record<BroadcastStatus, string> = {
   offline: '방송 중이 아니에요',
 };
 
-/** 녹화 목록을 묻지 못했을 때 다시 묻기까지. 목록 화면이 다시 읽는 주기와 같다 */
-const RECORDING_RETRY_MS = 30_000;
+/**
+ * 녹화를 찾지 못했을 때 다시 묻기까지. 지난 방송 목록이 녹화를 다시 확인하는 주기(LIST_POLL_MS)와 같고, 목록처럼 「있음」만
+ * 굳힌다: 녹화가 늦게 잡히거나 재생 서버가 녹화 폴더를 못 읽어도(400) 「없음」으로 오는데, 굳히면 목록은 「다시 보기 가능」이
+ * 된 방송을 이 화면만 계속 「찾지 못했어요」라 했다(리뷰 7라운드)
+ */
+const RECORDING_RETRY_MS = 60_000;
 
 /** 녹화를 찾은 결과: 확인 중 · 없음 · 물을 수 없음(재생 서버가 없거나 조회 실패) · 찾음 */
 type RecordingLookup =
@@ -143,16 +147,14 @@ function LivePlayer({
       // 첫 구간 하나만 쓰면 송출이 한 번 끊긴 방송은 그 뒤를 못 보고, 앞 방송 녹화를 잡을 수도 있다(POK-253)
       void lookupRecordingSpans(mediaKey).then((spans) => {
         if (!alive) return;
-        if (spans === null) {
-          // 묻지 못했다(재생 서버 없음·조회 실패). 녹화가 없다는 뜻이 아니라 단정하지 않고, 서버가 있으면 다시 묻는다:
-          // 조회 실패를 빈 목록으로 접어 「찾지 못했어요」로 굳혔다(리뷰 6라운드)
-          setLookup({ kind: 'unavailable' });
-          if (playbackConfigured()) retry = window.setTimeout(ask, RECORDING_RETRY_MS);
-          return;
-        }
-        const found = recordingTimeline(spans, fromMs, endedAt);
+        const found = spans === null ? null : recordingTimeline(spans, fromMs, endedAt);
         if (!found) {
-          setLookup({ kind: 'none' });
+          // 묻지 못했으면(재생 서버 없음·조회 실패) 녹화가 없다는 뜻이 아니라 「물을 수 없음」이다: 조회 실패를 빈 목록으로 접어
+          // 「찾지 못했어요」로 굳혔다(리뷰 6라운드). 어느 쪽이든 서버가 있으면 다시 묻는다. 같은 답이면 상태를 그대로 둔다: 새 값을
+          // 넣으면 다시 물을 때마다 플레이어를 다시 그렸다(리뷰 7라운드)
+          const kind = spans === null ? 'unavailable' : 'none';
+          setLookup((prev) => (prev.kind === kind ? prev : { kind }));
+          if (playbackConfigured()) retry = window.setTimeout(ask, RECORDING_RETRY_MS);
           return;
         }
         // 재생기의 0초를 서버 기준점(카드·조각 위치의 0초, POK-255)에 세운다 — 녹화 시작에 세우면 두 시작의 차만큼 카드를
@@ -178,8 +180,9 @@ function LivePlayer({
     onRecordingMissing(recordingMissing);
   }, [recordingMissing, onRecordingMissing]);
   // 끝난 방송의 영상 자리 아랫줄. 확인하는 동안 「확인하고 있어요」, 없으면 「찾지 못했어요」다(「아직 연결되지 않았어요」는
-  // 기다리면 나올 것처럼 읽혔다, 리뷰 4라운드 실기동). 재생 서버가 없거나 묻지 못했으면 기본 말이 맞다: 그때 「찾지 못했어요」라
-  // 하면 녹화가 지워진 것처럼 읽혔다(dev·운영은 재생 서버 주소가 비어 있다, 리뷰 6라운드)
+  // 기다리면 나올 것처럼 읽혔다, 리뷰 4라운드 실기동). 재생 서버가 없거나 묻지 못했으면 플레이어의 기본 말 「영상 서버에 아직
+  // 연결되지 않았어요」가 맞다: 그때 「찾지 못했어요」라 하면 녹화가 지워진 것처럼 읽혔다(dev·운영은 재생 서버 주소가 비어 있다,
+  // 리뷰 6라운드)
   const noSignalNote =
     displayStatus !== 'ended' || !playbackConfigured() || lookup.kind === 'unavailable'
       ? undefined

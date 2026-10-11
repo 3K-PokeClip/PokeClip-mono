@@ -2,7 +2,7 @@
 // 가능」인데 열면 「녹화 영상을 찾지 못했어요」였다(리뷰 6라운드)
 
 /** 끝난 방송을 읽는 창의 최대 길이. 수집기가 한 번에 주는 시청자 기록 720점(1분 간격)과 같은 길이다 */
-export const ENDED_TAIL_MS = 12 * 60 * 60_000;
+const ENDED_TAIL_MS = 12 * 60 * 60_000;
 
 /**
  * 끝난 방송의 그래프·시청자 기록·채팅을 읽기 시작할 시각(epoch ms). 시작~끝이되 12시간이 넘거나 시작 시각을 모르면(종료 알림이
@@ -25,5 +25,5 @@ export function recordingSearchFrom(
   endedAt: number | null,
 ): number | null {
   if (startedAt !== null) return startedAt;
-  return endedAt === null ? null : endedAt - ENDED_TAIL_MS;
+  return endedAt === null ? null : endedWindowStart(null, endedAt);
 }
