@@ -4,7 +4,6 @@ import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
 import { publishLiveData, resetLiveData } from '@/features/broadcast/livenow/liveDataStore';
-import { CARD_CREATE_MS } from '@/features/broadcast/livenow/useManualMarking';
 import { forgetLiveStreamId } from '@/features/broadcast/streamSelection';
 import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
@@ -572,17 +571,9 @@ describe('LiveScreen — 하이라이트 카드', () => {
     expect(screen.getByText(/^97점 · /)).toBeInTheDocument();
   });
 
-  it('강조는 맨 앞 카드 하나뿐이다 — 마킹할수록 쌓이면 「방금」이라는 뜻을 잃는다', async () => {
+  it('강조는 맨 앞 카드 하나뿐이다 — 여럿이면 「방금」이라는 뜻을 잃는다', async () => {
     const { container } = await renderLive();
-
-    const emphasizedCount = () => container.querySelectorAll('[class*="cardEmphasized"]').length;
-    expect(emphasizedCount()).toBe(1);
-
-    fireEvent.keyDown(document, { key: 'F8' });
-    act(() => {
-      vi.advanceTimersByTime(CARD_CREATE_MS);
-    });
-    expect(emphasizedCount()).toBe(1);
+    expect(container.querySelectorAll('[class*="cardEmphasized"]')).toHaveLength(1);
   });
 
   it('필터 칩이 실제 카드 수를 센다 — 전체 8 · 자동 6 · 수동 2', async () => {
@@ -625,19 +616,6 @@ describe('LiveScreen — 하이라이트 카드', () => {
     expect(screen.queryByText('채팅이 튄 순간 #8')).not.toBeInTheDocument();
   });
 
-  it('이 화면에서 찍은 수동 마킹 카드는 서버에 없어 편집을 잠근다', async () => {
-    await renderLive();
-    fireEvent.keyDown(document, { key: 'F8' });
-    act(() => {
-      vi.advanceTimersByTime(CARD_CREATE_MS);
-    });
-    const card = screen.getByRole('heading', { name: '1:24:03 수동 마킹' }).closest('article');
-    expect(card).not.toBeNull();
-    // 링크가 아니라 잠긴 단추다 — 편집기는 marked-… 카드를 찾을 수 없다(PR #200 codex)
-    expect(within(card as HTMLElement).queryByRole('link', { name: '편집' })).toBeNull();
-    expect(within(card as HTMLElement).getByRole('button', { name: '편집' })).toBeDisabled();
-  });
-
   it('숨기기를 누르면 clip에 숨김을 보낸다', async () => {
     await renderLive();
 
@@ -664,95 +642,74 @@ describe('LiveScreen — 라이브 문구', () => {
 
 describe('LiveScreen — 수동 마킹', () => {
   // 이 파일은 전부 fireEvent다 — userEvent는 가짜 시계와 엉켜 멈춘다(GlassPlayer 자동 숨김 케이스와 같은 이유).
+  //
+  // 누른 순간을 서버에 카드로 남기는 길이 아직 없다(POK-257, MVP 밖). 화면에만 카드를 세우면 새로 고침에 사라지고 편집도
+  // 못 하는 가짜 성공이다(QA 2026-10-11) — 준비 중이라고만 말한다.
+  const PREPARING = '수동 마킹은 아직 준비 중이에요. 준비되면 알려드릴게요.';
 
-  it('버튼을 누르면 피드백과 만드는 중 자리가 서고, 잠시 뒤 카드가 된다', async () => {
+  afterEach(() => {
+    window.history.pushState({}, '', '/');
+  });
+
+  it('버튼을 누르면 준비 중이라고 알리고 카드를 만들지 않는다', async () => {
     await renderLive();
 
     fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
-    expect(screen.getByText('1:24:03 마킹됨 · 카드 생성 중')).toBeInTheDocument();
-    expect(screen.getByText('카드 만드는 중…')).toBeInTheDocument();
+    expect(screen.getByText(PREPARING)).toBeInTheDocument();
 
     act(() => {
-      vi.advanceTimersByTime(CARD_CREATE_MS);
+      vi.advanceTimersByTime(5_000);
     });
-
     expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '1:24:03 수동 마킹' })).toBeInTheDocument();
-    // 만들어진 카드가 필터 개수에도 바로 반영된다
-    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '전체 9' })).toBeInTheDocument();
+    expect(screen.queryByText(/마킹됨 · 카드 생성 중/)).not.toBeInTheDocument();
+    // 카드 수·필터·지표가 그대로다 — 서버에 없는 카드를 세지 않는다
+    expect(screen.getByRole('button', { name: '전체 8' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
+    expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
   });
 
-  it('경과 시간이 흐르고, 마킹은 멈춘 값이 아니라 그때의 시각을 찍는다', async () => {
-    await renderLive();
-
-    expect(screen.getByText('1:24:03')).toBeInTheDocument();
-
-    act(() => {
-      vi.advanceTimersByTime(120_000); // 2분
-    });
-    expect(screen.getByText('1:26:03')).toBeInTheDocument();
-
-    fireEvent.keyDown(document, { key: 'F8' });
-    expect(screen.getByText('1:26:03 마킹됨 · 카드 생성 중')).toBeInTheDocument();
-
-    act(() => {
-      vi.advanceTimersByTime(CARD_CREATE_MS);
-    });
-    // 카드가 서기까지 3초가 더 흘러도 시각은 누른 순간으로 굳어 있다
-    expect(screen.getByRole('heading', { name: '1:26:03 수동 마킹' })).toBeInTheDocument();
-  });
-
-  it('「자동」을 보고 있을 땐 만드는 중 자리도 두지 않는다', async () => {
-    // 만들어질 카드는 수동이라 이 필터에선 안 보인다 — 자리만 섰다 사라지면 실패로 읽힌다
-    await renderLive();
-
-    fireEvent.click(screen.getByRole('button', { name: '자동 6' }));
-    fireEvent.keyDown(document, { key: 'F8' });
-
-    expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
-    // 눌린 것 자체는 버튼 아래 피드백이 말한다
-    expect(screen.getByText(/마킹됨 · 카드 생성 중/)).toBeInTheDocument();
-  });
-
-  it('F8을 누르면 어디에 포커스가 있든 같은 흐름이 돈다', async () => {
+  it('F8도 어디에 포커스가 있든 같은 안내다', async () => {
     await renderLive();
 
     fireEvent.keyDown(document, { key: 'F8' });
-    expect(screen.getByText('카드 만드는 중…')).toBeInTheDocument();
-
-    act(() => {
-      vi.advanceTimersByTime(CARD_CREATE_MS);
-    });
-    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
-  });
-
-  it('만드는 중에 또 눌러도 카드는 하나만 생긴다', async () => {
-    await renderLive();
-
-    fireEvent.keyDown(document, { key: 'F8' });
-    fireEvent.keyDown(document, { key: 'F8' });
-    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
-
-    act(() => {
-      vi.advanceTimersByTime(CARD_CREATE_MS);
-    });
-    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+    expect(screen.getByText(PREPARING)).toBeInTheDocument();
   });
 
   it('자동반복과 입력 중인 곳에서 누른 F8은 무시한다', async () => {
     await renderLive();
 
-    // 누르고 있으면 초당 수십 장이 생긴다
+    // 누르고 있으면 초당 수십 번 눌린다
     fireEvent.keyDown(document, { key: 'F8', repeat: true });
-    expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
-
     // 글자를 치는 곳에서 누른 키는 그쪽 것이다
     const input = document.createElement('input');
     document.body.appendChild(input);
     fireEvent.keyDown(input, { key: 'F8' });
-    expect(screen.queryByText('카드 만드는 중…')).not.toBeInTheDocument();
     input.remove();
+
+    expect(screen.queryByText(PREPARING)).not.toBeInTheDocument();
+  });
+
+  it('지난 방송에서도 같다: 방송 끝 시각에 카드가 생기지 않는다', async () => {
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    fireEvent.click(screen.getByRole('button', { name: /수동 마킹/ }));
+    expect(screen.getByText(PREPARING)).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(screen.queryByRole('heading', { name: /수동 마킹$/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
+  });
+
+  it('경과 시간이 흐른다', async () => {
+    await renderLive();
+
+    expect(screen.getByText('1:24:03')).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(120_000); // 2분
+    });
+    expect(screen.getByText('1:26:03')).toBeInTheDocument();
   });
 });
 
@@ -842,18 +799,12 @@ describe('LiveScreen — 실시간 통계', () => {
     expect(note.nextElementSibling).toHaveTextContent('8');
   });
 
-  it('하이라이트 지표는 카드 목록에서 센다 — 마킹하면 필터와 같이 움직인다', async () => {
+  it('하이라이트 지표는 카드 목록에서 센다 — 필터 칩과 같은 수다', async () => {
     await renderLive();
 
     expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
-
-    fireEvent.keyDown(document, { key: 'F8' });
-    act(() => {
-      vi.advanceTimersByTime(CARD_CREATE_MS);
-    });
-
-    expect(screen.getByText('자동 6 · 수동 3')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '수동 3' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '자동 6' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '수동 2' })).toBeInTheDocument();
   });
 });
 

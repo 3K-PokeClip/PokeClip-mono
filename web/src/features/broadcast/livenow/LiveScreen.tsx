@@ -177,16 +177,10 @@ function LiveDashboard() {
     notFound();
   const playerRef = useRef<GlassPlayerController>(null);
 
-  // 표기는 매초 다시 그려지고(clock이 상태), 「지금 몇 시인가」를 묻는 마킹은 ref로 읽는다 —
-  // 둘 다 같은 시계에서 나와야 어긋나지 않는다.
   const uptimeSeconds = clock.uptimeSeconds;
   const uptimeLabel = uptimeSeconds === null ? null : formatUptime(uptimeSeconds);
-  const uptimeRef = useRef(0);
-  useEffect(() => {
-    uptimeRef.current = uptimeSeconds ?? 0;
-  }, [uptimeSeconds]);
-  const readMarkTimestamp = useCallback(() => formatUptime(uptimeRef.current), []);
-  const marking = useManualMarking(readMarkTimestamp);
+  // 서버에 남길 길이 생길 때까지 준비 중이라고만 말한다(POK-257) — 카드를 만들지 않는다
+  const marking = useManualMarking();
   // 접으면 패널 자체가 사라지므로 되살릴 통로는 플레이어 상단 오버레이의 여는 버튼이다
   const [chatPanelOpen, setChatPanelOpen] = useState(true);
   const toggleChatPanel = useCallback(() => setChatPanelOpen((open) => !open), []);
@@ -208,23 +202,14 @@ function LiveDashboard() {
     [stream, uptimeSeconds],
   );
 
-  // 찍어 만든 카드가 앞, 그다음이 감지된 카드 — 필터 개수도 통계의 하이라이트 줄도
-  // 이 합친 목록에서 센다. 어느 한쪽을 따로 세면 두 표기가 언젠가 어긋난다.
+  // 필터 개수도 통계의 하이라이트 줄도 같은 카드 목록에서 센다. 어느 한쪽을 따로 세면 두 표기가 언젠가 어긋난다.
   //
-  // 경과 표기 때문에 이 컴포넌트는 매초 다시 그려진다 — 목록·요약이 매번 새 객체면
+  // 경과 표기 때문에 이 컴포넌트는 매초 다시 그려진다 — 요약이 매번 새 객체면
   // 아래 패널들의 memo가 통째로 무력해지므로 여기서 정체성을 붙잡아 둔다.
-  const cards = useMemo(
-    () =>
-      [...marking.manualCards, ...highlights].map((card, index) =>
-        // 강조는 「방금」이라는 뜻이라 맨 앞 하나만 남긴다 — 마킹할수록 쌓이면 아무 말도 안 하게 된다
-        index === 0 || !card.emphasized ? card : { ...card, emphasized: false },
-      ),
-    [marking.manualCards, highlights],
-  );
   const highlightSummary = useMemo(() => {
-    const manual = cards.filter((card) => card.source === 'manual').length;
-    return { total: cards.length, auto: cards.length - manual, manual };
-  }, [cards]);
+    const manual = highlights.filter((card) => card.source === 'manual').length;
+    return { total: highlights.length, auto: highlights.length - manual, manual };
+  }, [highlights]);
 
   const handleSeek = useCallback((timestamp: string) => {
     const seconds = parseClockLabel(timestamp);
@@ -261,14 +246,15 @@ function LiveDashboard() {
             viewersLabel={viewersLabel}
             uptimeLabel={uptimeLabel}
             uptimeNote={clock.status === 'ended' ? '방송함' : '스트리밍 중'}
-            pendingLabel={marking.pendingLabel}
+            // 만드는 중 자리는 수동 마킹이 서버에 남을 때(POK-257) 쓴다
+            pendingLabel={null}
             onMark={marking.mark}
           />
           <HighlightCardPanel
-            highlights={cards}
+            highlights={highlights}
             stream={streamForCards}
             visuals={cardVisuals}
-            pendingLabel={marking.pendingLabel}
+            pendingLabel={null}
             detectionPaused={chatWarning}
             ended={clock.status === 'ended'}
             onSeek={handleSeek}

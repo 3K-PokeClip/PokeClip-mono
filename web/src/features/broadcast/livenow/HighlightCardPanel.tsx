@@ -55,7 +55,8 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
         <span className={styles.cardPanelNote}>
           {ended
             ? '카드 클릭 = 시점 이동'
-            : `${detectionPaused ? '자동 감지 멈춤 · 핫키로 직접 남길 수 있어요' : '자동 감지 중'} · 카드 클릭 = 시점 이동`}
+            : // 멈췄을 때 「핫키로 직접 남길 수 있어요」라고 했지만 그 길은 아직 없다(POK-119·257, QA 2026-10-11)
+              `${detectionPaused ? '자동 감지 멈춤' : '자동 감지 중'} · 카드 클릭 = 시점 이동`}
         </span>
         <div className={styles.filterGroup} role="group" aria-label="하이라이트 필터">
           {FILTERS.map(({ value, label }) => (
