@@ -108,12 +108,10 @@ export const LiveStatsPanel = memo(function LiveStatsPanel({
                 className={styles.statsNow}
               />
             </svg>
-            {markers.map((point) => (
-              <span
-                key={`hl-${point[0]}-${point[1]}`}
-                className={styles.statsHighlight}
-                style={markerStyle(point)}
-              />
+            {/* 자리로 묶는다. 카드는 차트 칸 자리에 찍혀 같은 칸의 카드 둘은 좌표가 같다: 좌표로 묶으면 key가 겹쳐
+                차트를 다시 읽을 때마다 옛 점이 남는다(리뷰 2라운드) */}
+            {markers.map((point, index) => (
+              <span key={index} className={styles.statsHighlight} style={markerStyle(point)} />
             ))}
             {donations.map((point) => (
               <span

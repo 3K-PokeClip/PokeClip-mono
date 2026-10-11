@@ -38,7 +38,9 @@ import { useManualMarking } from './useManualMarking';
 // useSearchParams(?stream=)는 프리렌더에서 가장 가까운 Suspense 경계까지 CSR로 전환한다 —
 // 화면 전체가 아니라 플레이어만 빠지도록 여기서 분리하고 경계는 playerFrame 안에 둔다.
 // 단, 화면 맨 위의 오프라인 목업 토글(?mock=offline)과 대시보드의 ?card=(홈에서 고른 카드, QA 2026-10-11)도
-// 같은 훅을 읽어 page.tsx의 경계까지 화면 전체가 빠진다. 이 경계로 좁히려면 둘 다 훅 밖으로 옮겨야 한다.
+// 같은 훅을 읽어 라이브 page.tsx의 경계까지 화면 전체가 빠진다. 이 경계로 좁히려면 둘 다 훅 밖으로 옮겨야 한다.
+// 지난 방송 상세(vod/[streamId])는 동적 경로라 프리렌더가 없어 그 page.tsx에는 경계가 없다. 그 경로를 정적으로
+// 바꾸면(generateStaticParams) 거기에도 경계가 필요하다(리뷰 2라운드).
 //
 // 다만 지금 이 라우트의 프리렌더 HTML은 어차피 비어 있다 — AuthGuard가 hydrate 전에
 // (dock) 서브트리를 통째로 null로 만들기 때문이다(.next/server/app/broadcast/livenow.html로 확인).
