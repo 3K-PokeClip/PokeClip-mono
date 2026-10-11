@@ -8,6 +8,7 @@ import { fetchAllJumpCards } from '@/api/clipEditor';
 import { useMe } from '@/features/auth/useSession';
 import { useAuthStore } from '@/stores/auth';
 import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
+import { cardAgeLabel } from './highlightCardView';
 import {
   emitRelay,
   publishLiveData,
@@ -183,13 +184,6 @@ function msToClock(ms: number): string {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
-function timeAgo(iso: string, now: number): string {
-  const diff = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
-  if (diff < 10) return '방금';
-  if (diff < 60) return `${diff}초 전`;
-  return `${Math.floor(diff / 60)}분 전`;
-}
-
 /** 지금 로그인한 회원 번호 — 토큰의 sub. 카드의 claimedBy와 같은 값이다 */
 function currentUserId(): string | null {
   try {
@@ -227,7 +221,7 @@ function toHighlight(c: Snapshot, index: number, now: number): LiveHighlight {
     id: `card-${c.id}`,
     timestamp: msToClock(c.streamTimestampMs),
     title: manual ? '핫키로 남긴 순간' : `채팅이 튄 순간 #${c.id}`,
-    meta: `${reason} · ${winSec}초 · ${timeAgo(c.createdAt, now)}`,
+    meta: `${reason} · ${winSec}초 · ${cardAgeLabel(c.createdAt, now)}`,
     status,
     source: manual ? 'manual' : 'auto',
     score: c.score ?? undefined,

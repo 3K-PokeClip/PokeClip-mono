@@ -115,6 +115,19 @@ function fallbackPosPercent(timestamp: string, uptimeSeconds: number): number {
   return Math.min(100, Math.max(0, Math.round((seconds / uptimeSeconds) * 100)));
 }
 
+/**
+ * 카드 메타 줄의 「얼마 전」(카드를 만든 시각 기준). 라이브에서 막 뜬 카드는 초까지 센다. 지난 방송 카드는 며칠 지난
+ * 것이라 분까지만 세면 「4275분 전」이 된다(QA 2026-10-11) — 홈 「최근 하이라이트」처럼 시간·일로 올린다.
+ */
+export function cardAgeLabel(createdAtIso: string, now: number): string {
+  const diff = Math.max(0, Math.floor((now - Date.parse(createdAtIso)) / 1000));
+  if (diff < 10) return '방금';
+  if (diff < 60) return `${diff}초 전`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}분 전`;
+  if (diff < 86_400) return `${Math.floor(diff / 3600)}시간 전`;
+  return `${Math.floor(diff / 86_400)}일 전`;
+}
+
 export function cardVisualFor(
   highlight: LiveHighlight,
   stream: LiveStream,
