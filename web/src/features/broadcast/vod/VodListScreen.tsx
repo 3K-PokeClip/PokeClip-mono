@@ -20,6 +20,7 @@ export function VodListScreen(options: VodListOptions = {}) {
     now,
     broadcasts,
     totalCount,
+    loading,
     visuals,
     filter,
     setFilter,
@@ -50,7 +51,13 @@ export function VodListScreen(options: VodListOptions = {}) {
         ) : null}
       </div>
 
-      {totalCount === 0 ? (
+      {loading ? (
+        // 첫 읽기가 끝나기 전의 빈 목록은 「모른다」다: 빈 상태를 먼저 보이면 방송이 없는 줄 안다(QA 2026-10-11).
+        // 글자 한 줄로만 말한다(홈 「불러오는 중…」과 같은 방식)
+        <p className={styles.filterEmpty} role="status">
+          불러오는 중…
+        </p>
+      ) : totalCount === 0 ? (
         <EmptyState
           icon={<Video size={21} />}
           title="아직 지난 방송이 없어요"

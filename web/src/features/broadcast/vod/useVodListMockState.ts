@@ -95,6 +95,11 @@ export interface VodListMockState {
   broadcasts: VodBroadcast[];
   /** 필터와 무관한 전체 수 — 「아직 없다」와 「이 기간에 없다」를 가른다 */
   totalCount: number;
+  /**
+   * 서버 목록을 아직 한 번도 못 읽었다. 그동안의 빈 목록은 「없다」가 아니라 「모른다」다(QA 2026-10-11). 첫 읽기부터
+   * 실패하면 다음 주기까지 그대로다(홈과 같은 규칙)
+   */
+  loading: boolean;
   visuals: Record<string, VodRowVisual>;
   filter: VodPeriodFilter;
   setFilter: (filter: VodPeriodFilter) => void;
@@ -156,6 +161,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     () => options.downloads ?? {},
   );
   const [fetched, setFetched] = useState<VodBroadcast[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [fetchedVisuals, setFetchedVisuals] = useState<Record<string, VodRowVisual>>({});
   const [now, setNow] = useState(() => new Date());
   const rowCache = useRef(new Map<string, { cardCount: number; recorded: boolean }>());
@@ -244,6 +250,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         setFetched(rows);
         setFetchedVisuals(visuals);
         setNow(new Date());
+        setLoaded(true);
       } catch {
         /* 다음 주기에 다시 */
       }
@@ -289,6 +296,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     now: baseNow,
     broadcasts,
     totalCount: past.length,
+    loading: options.broadcasts === undefined && !loaded,
     visuals,
     filter,
     setFilter,
