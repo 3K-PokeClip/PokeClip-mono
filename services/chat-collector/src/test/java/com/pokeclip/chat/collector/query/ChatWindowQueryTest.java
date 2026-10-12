@@ -44,7 +44,8 @@ class ChatWindowQueryTest extends IntegrationTestSupport {
     private static final Set<String> ALL = Set.of("chat", "donation");
 
     private static final List<String> STREAMS =
-            List.of("win-off", "win-same", "win-axis", "win-axis-d", "win-idx", "win-kinds");
+            List.of("win-off", "win-same", "win-axis", "win-axis-d", "win-idx", "win-kinds",
+                    "win-prev", "win-this");
 
     /** 지문(channel_id, sender_channel_id, message_time, content_sha256)이 겹치면 접힌다. */
     private static final AtomicInteger SEQ = new AtomicInteger();
@@ -216,6 +217,36 @@ class ChatWindowQueryTest extends IntegrationTestSupport {
             assertThat(second.items()).as(kind).hasSize(1);
             assertThat(second.nextCursor()).as(kind + " — 다 줬으니 끝이다").isNull();
         }
+    }
+
+    /**
+     * 🔴 <b>같은 채널에서 바로 앞에 끝난 방송이 창에 들어와도 이 방송 것만 나온다.</b>
+     * 웹의 지난 방송 채팅(ADR-092)은 읽는 하한을 방송 시작보다 60초 앞에 둔다(채팅 시각이
+     * 영상보다 보정만큼 늦어서). 그러면 앞 방송의 끝자락이 창에 든다. 그것을 걸러 내는 것은
+     * 시각이 아니라 두 질의의 {@code WHERE stream_id = ?}다.
+     *
+     * <p>픽스처가 채널을 하나로 고정하므로 두 방송은 <b>같은 채널</b>이다. 채팅과 후원을 둘 다
+     * 심는 것은 두 질의가 거르기를 <b>각자</b> 가져서다(한쪽만 재면 쌍둥이 중 한쪽이 무방비다).
+     * 앞 방송으로도 물어 그 줄들이 정말 창 안에 있음을 같이 본다.
+     */
+    @Test
+    void 같은_채널의_앞_방송은_창이_겹쳐도_섞이지_않는다() {
+        Instant start = Instant.parse("2026-09-04T12:00:00Z");
+        insertChat("win-prev", start.minusSeconds(30), "앞방송채팅");
+        insertDonation("win-prev", start.minusSeconds(20), "앞방송후원");
+        insertChat("win-this", start.plusSeconds(2), "이방송채팅");
+        insertDonation("win-this", start.plusSeconds(3), "이방송후원");
+        WindowRequest w = new WindowRequest(start.minusSeconds(60), start.plusSeconds(60));
+
+        ChatWindowPage 이방송 = queryWith(0).find("win-this", null, w, ALL, 200, null);
+        ChatWindowPage 앞방송 = queryWith(0).find("win-prev", null, w, ALL, 200, null);
+
+        assertThat(이방송.items()).extracting(ChatWindowItem::text)
+                .as("방송 번호로 안 거르면 앞 방송 줄이 섞인다")
+                .containsExactly("이방송채팅", "이방송후원");
+        assertThat(앞방송.items()).extracting(ChatWindowItem::text)
+                .as("양성 대조: 앞 방송 줄도 이 창 안에 있다")
+                .containsExactly("앞방송채팅", "앞방송후원");
     }
 
     /**
