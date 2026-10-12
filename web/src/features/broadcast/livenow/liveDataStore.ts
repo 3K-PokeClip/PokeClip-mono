@@ -3,6 +3,7 @@
 // 라이브 화면 훅들이 같이 쓰는 작은 저장소(POK-251) — 방송 번호·방송 상태·차트·방송 정보를 한 곳에 둔다.
 // 훅마다 따로 받으면 같은 화면의 두 패널이 서로 다른 방송·시각을 보게 된다.
 import { useSyncExternalStore } from 'react';
+import type { LivePosition } from '@/features/player/useHlsPlayback';
 
 export interface LiveChartBucket {
   start: string;
@@ -46,6 +47,11 @@ export interface LiveData {
    * 보인다(POK-324). 모르면 null이고 채팅은 방송 끝까지다
    */
   playheadMs: number | null;
+  /**
+   * 라이브 재생기를 실시간에서 충분히(← 한 번) 되감았을 때 그 자리(POK-326). 채팅이 그 시각까지의 줄만 보인다. 실시간에 있거나
+   * 영상 시각을 모르면(목록에 시각 표시가 없음) null이고 채팅은 최신이다
+   */
+  liveRewind: LivePosition | null;
   /** 이 방송과 나의 관계 — OWNER(내 방송) · EDITOR(위임받은 방송). 모르면 null */
   relation: string | null;
   /**
@@ -122,6 +128,7 @@ const INITIAL: LiveData = {
   startedAt: null,
   endedAt: null,
   playheadMs: null,
+  liveRewind: null,
   relation: null,
   timeBaseMs: null,
   originMs: null,
@@ -134,6 +141,10 @@ export function publishLiveData(patch: Partial<LiveData>) {
   // 방송 번호가 바뀌면 앞 방송의 값은 통째로 버린다. 칸마다 따로 비우면 빠뜨린 칸(관계 등)이 다음 방송에 남았다(리뷰 4라운드).
   // 방송 번호를 올리는 곳은 방송을 고르는 훅 하나다
   const base = patch.streamId !== undefined && patch.streamId !== state.streamId ? INITIAL : state;
+  // 바뀐 칸이 없으면 알리지 않는다: 라이브 재생기는 실시간에 있는 동안에도 매초 같은 값(liveRewind: null)을 싣는데, 알리면
+  // 구독하는 화면(카드마다·통계)이 매초 다시 그려졌다(POK-326 리뷰 1라운드)
+  const keys = Object.keys(patch) as (keyof LiveData)[];
+  if (base === state && keys.every((key) => Object.is(state[key], patch[key]))) return;
   state = { ...base, ...patch };
   listeners.forEach((l) => l());
 }

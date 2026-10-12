@@ -3,7 +3,10 @@ import {
   behindFromCurrentTime,
   dvrRange,
   liveEdgePosition,
+  mediaTimeAt,
+  programDateAt,
   rewindWindowSeconds,
+  type DatedFragment,
   type SeekableLike,
 } from './dvrWindow';
 import { LIVE_EDGE_BACKOFF_SECONDS, LIVE_WINDOW_SECONDS, isAtEdge } from './playerMath';
@@ -140,8 +143,52 @@ describe('rewindWindowSeconds', () => {
   });
 
   it('syncPosition이 없으면 백오프 지점 기준이다 (Safari 네이티브)', () => {
-    expect(rewindWindowSeconds({ start: 0, end: 600 }, null)).toBe(
-      600 - LIVE_EDGE_BACKOFF_SECONDS,
-    );
+    expect(rewindWindowSeconds({ start: 0, end: 600 }, null)).toBe(600 - LIVE_EDGE_BACKOFF_SECONDS);
+  });
+});
+
+describe('programDateAt·mediaTimeAt: 영상 시각과 실제 시각(PDT) 환산 (POK-326)', () => {
+  // 계약3: 재생 위치 ↔ PDT 환산은 조각마다 그 조각의 PDT를 기준으로 한다. 4초 조각 셋, 둘째와 셋째 사이에서 시각이 10초 뛴다
+  // (송출이 다시 붙은 자리: 목록의 PDT만 끊긴 만큼 뛰고 영상 시각은 이어진다)
+  const T = Date.parse('2026-10-12T05:00:00Z');
+  const frags: DatedFragment[] = [
+    { start: 100, duration: 4, programDateTime: T },
+    { start: 104, duration: 4, programDateTime: T + 4_000 },
+    { start: 108, duration: 4, programDateTime: T + 18_000 },
+  ];
+
+  it('그 자리를 품은 조각의 시각에 조각 안 거리를 더한다: 시각이 뛴 조각은 그 조각의 시각을 쓴다', () => {
+    expect(programDateAt(frags, 101.5)).toBe(T + 1_500);
+    expect(programDateAt(frags, 109)).toBe(T + 19_000);
+  });
+
+  it('마지막 조각 뒤(LL-HLS의 만드는 중인 조각)는 마지막 조각에서 이어 센다', () => {
+    expect(programDateAt(frags, 113)).toBe(T + 23_000);
+  });
+
+  it('첫 조각보다 앞이면 첫 조각에서 거꾸로 센다: 1시간 창이 맨 앞 조각을 버려도 그 자리를 보던 재생 위치의 시각을 안다', () => {
+    expect(programDateAt(frags, 99)).toBe(T - 1_000);
+  });
+
+  it('조각이 없거나 시각 표시가 없으면 모른다(null)', () => {
+    expect(programDateAt([], 0)).toBeNull();
+    expect(programDateAt([{ start: 0, duration: 4, programDateTime: null }], 1)).toBeNull();
+    expect(programDateAt([{ start: 4, duration: 4, programDateTime: null }], 1)).toBeNull();
+  });
+
+  it('실제 시각을 영상 시각으로 거꾸로 바꾼다: 시각이 뛴 틈 안은 뒤 조각의 시작이다', () => {
+    expect(mediaTimeAt(frags, T + 1_500)).toBe(101.5);
+    expect(mediaTimeAt(frags, T + 19_000)).toBe(109);
+    // 둘째 조각 끝(T+8초)과 셋째 조각 시작(T+18초) 사이는 영상이 없다
+    expect(mediaTimeAt(frags, T + 12_000)).toBe(108);
+  });
+
+  it('첫 조각보다 이른 시각은 첫 조각에서 거꾸로 이어 센다(부르는 쪽이 되감기 창 안으로 자른다)', () => {
+    expect(mediaTimeAt(frags, T - 30_000)).toBe(70);
+  });
+
+  it('조각이 없거나 시각 표시가 없으면 모른다(null)', () => {
+    expect(mediaTimeAt([], T)).toBeNull();
+    expect(mediaTimeAt([{ start: 0, duration: 4, programDateTime: null }], T)).toBeNull();
   });
 });
