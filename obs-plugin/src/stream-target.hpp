@@ -31,9 +31,15 @@ public:
 	bool Start(const PluginConfig &config, std::string &errorCode);
 	// reason: 멈춘 뒤 남길 오류 사유(정적 문자열, 예: main_stream_failed). 없으면 stop 신호의 코드대로 남는다.
 	// 예약된 재시도도 함께 그만둔다.
-	void Stop(const char *reason = nullptr);
-	void ForceStop();
+	// intentional: 스트리머의 멈춤 조작(OBS 「방송 종료」)이다 — A3(4D) 종료 신호를 보낼지 가른다(계약4 3-1).
+	// 사유를 든 정지는 조작이 아니다. 본방이 스스로 끊겨 끝난 경우(STOPPING 없이 STOPPED)도 아니다.
+	// deferIntent: 출력이 없는 구간(재시도 대기·「재시도 중지」 뒤)에서 본방 STOPPING이 왔는데 조작인지 아직 모른다 —
+	// 판정을 미루고 STOPPED에서 본방 stop 코드를 본 뒤 Stop(…, intentional)을 다시 부른다(공유 인코더 실패는 본방
+	// stop 코드 ENCODE_ERROR로 온다. 출력이 있을 때는 우리 출력 stopping의 스레드로 가른다 — stopInternal_).
+	void Stop(const char *reason = nullptr, bool intentional = false, bool deferIntent = false);
+	void ForceStop(bool intentional = false);
 	bool IsActive() const;
+	bool HasOutput() const { return output_ != nullptr; } // UI 스레드
 	void PollStats();
 	void Release();
 
@@ -48,9 +54,14 @@ private:
 
 	// Start()의 본체이자 재시도 한 번 — 출력을 새로 만들어 접속을 시작한다. isRetry면 독의 마지막 실패 사유를 남겨 둔다.
 	bool BeginAttempt(const PluginConfig &config, std::string &errorCode, bool isRetry);
-	// stop 신호의 뒷일(UI 스레드) — 그만둘지 다시 시도할지 정한다.
-	void HandleStop(uint64_t generation, int code, const std::string &detail, const char *reason);
-	void OnConnected();
+	// stop 신호의 뒷일(UI 스레드) — 그만둘지 다시 시도할지 정한다. stopAt = 그 신호가 난 순간(멈춘 순간, 계약4 3절).
+	void HandleStop(uint64_t generation, int code, const std::string &detail, const char *reason,
+			std::chrono::steady_clock::time_point stopAt);
+	void OnConnected(std::chrono::steady_clock::time_point connectedAt);
+	// 방송 구간이 끝나는 자리마다 한 번 — A3(4D) 종료 신호를 보낼지 정하고 보낸다(end-signal-policy). 두 번째 호출은
+	// 아무것도 안 한다. connectedAtStop: 멈출 때 붙어 있었다(아니면 마지막 연결은 outageAt_에 끊긴 것).
+	void DecideEndSignal(bool intentional, bool connectedAtStop, std::chrono::steady_clock::time_point stopAt,
+			     const char *trigger);
 	void FireRetry(uint64_t seq);
 	void CancelRetry();
 
@@ -85,8 +96,17 @@ private:
 	// UI 스레드 전용 — 그 정지는 「재시도 중지」가 접속 중인 시도에 건 것이다. 접속이 실패하면 그 사유를 남긴다(왜 멈춰
 	// 있는지가 그것이다). 본방이 끝나서 건 정지는 실패해도 사유를 남기지 않는다.
 	bool stopKeepsFailure_ = false;
+	// UI 스레드 전용 — 이 정지는 스트리머 조작이다(Stop의 intentional). HandleStop이 종료 신호를 가를 때 본다.
+	bool stopIntentional_ = false;
+	// UI 스레드 전용 — 이 방송 구간의 종료 신호를 이미 정했다(보냈든 안 보냈든). Start()가 지운다.
+	bool endSignalDecided_ = false;
 	// 정지를 요청한 이유. OnStop이 성공 정지여도 이 사유로 오류를 남긴다 — 그 신호가 사유를 덮지 않게.
 	std::atomic<const char *> stopReason_{nullptr};
+	// 이 출력의 stopping 신호가 UI 스레드 밖에서 났다 — 우리가 부르는 정지(obs_output_stop·Release의 force_stop)는 모두
+	// UI 스레드에서 나므로, 다른 스레드의 stopping은 libobs가 시작한 정지다(공유 인코더 실패 → full_stop이 인코더
+	// 스레드에서 두 출력을 force_stop, stop_code 0). 그 정지는 뒤따르는 본방 STOPPING이 조작처럼 보여도 조작이 아니라
+	// 종료 신호를 보내지 않는다(계약4 3-1 「오류로 멈춘 경우」). 시도마다 BeginAttempt가 지운다.
+	std::atomic<bool> stopInternal_{false};
 	// 우리가 만든 오디오 인코더만(생성 참조를 우리가 쥔다). 출력이 제 참조를 놓은 뒤 Release()에서 놓는다.
 	std::vector<struct obs_encoder *> ownedAudioEncoders_;
 	std::unique_ptr<SignalContext> signalContext_;
@@ -107,6 +127,15 @@ private:
 	bool everConnected_ = false;
 	// 지금 출력이 붙었었다 — 이 출력이 멈추면 「끊긴 순간」을 새로 잡는다.
 	bool connectedThisOutput_ = false;
+	// 마지막 연결이 성립한 순간(우리 출력의 start 신호 — SRT 핸드셰이크를 마친 뒤). 종료 신호의 connectionDurationMs
+	// 기준이다. 붙을 때마다 새로 잡고, 붙지 못한 시도는 건드리지 않는다.
+	std::chrono::steady_clock::time_point connectedAt_{};
+	// 이 방송 구간의 SRT 출력이 쓴 키 — 종료 신호는 지금의 설정이 아니라 이 값으로 만든다. HandleStop이 상태를 Idle로
+	// 올린 뒤에는 브리지가 연결 해제·재페어링을 받아들일 수 있어, 그 순간 설정을 읽으면 「키 없음」이 되거나 다른 키의
+	// 신호가 된다. BeginAttempt가 적는다.
+	std::string sessionStreamId_;
+	std::string sessionPassphrase_; // 비밀 — 로그 금지
+	std::string sessionEndSignalBase_;
 	bool retryPending_ = false;
 	int attempt_ = 0;       // 끊긴 뒤 예약한 재시도 수
 	uint64_t retrySeq_ = 0; // 예약 취소 토큰 — 값이 바뀌면 먼저 예약한 타이머는 아무것도 안 한다

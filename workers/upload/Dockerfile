@@ -9,6 +9,10 @@ COPY src src
 RUN ./gradlew --no-daemon -q bootJar -x test
 
 FROM eclipse-temurin:21-jre
+# ffmpeg(ffprobe 포함): 장면 썸네일을 완성 영상에서 뽑는다(POK-291). 자막을 태우지 않으니 글꼴은 필요 없다.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 10004 --create-home upload
 USER upload
 WORKDIR /app

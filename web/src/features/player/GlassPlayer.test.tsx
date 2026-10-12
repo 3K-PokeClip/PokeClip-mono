@@ -1,10 +1,11 @@
 import { act, createRef, type ComponentProps } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToastProvider } from '@/ui';
 import { GlassPlayer, type GlassPlayerController } from '@/features/player/GlassPlayer';
 import type { PlayerSimulationOptions } from '@/features/player/usePlayerSimulation';
+import { recordingTimeline } from '@/features/player/recordingTimeline';
 
 type PanelProps = Pick<
   ComponentProps<typeof GlassPlayer>,
@@ -360,7 +361,9 @@ describe('GlassPlayer', () => {
     const controllerRef = createRef<GlassPlayerController>();
     renderPlayer({ initialUptimeSeconds: 5043 }, { controllerRef });
 
-    act(() => controllerRef.current?.seekToUptime(4960));
+    act(() => {
+      controllerRef.current?.seekToUptime(4960);
+    });
     expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
       'aria-valuenow',
       '-83',
@@ -372,7 +375,9 @@ describe('GlassPlayer', () => {
     const controllerRef = createRef<GlassPlayerController>();
     renderPlayer({ initialUptimeSeconds: 5043 }, { controllerRef });
 
-    act(() => controllerRef.current?.seekToUptime(0));
+    act(() => {
+      controllerRef.current?.seekToUptime(0);
+    });
     expect(screen.getByRole('slider', { name: '라이브 탐색' })).toHaveAttribute(
       'aria-valuenow',
       '-3600',
@@ -396,5 +401,103 @@ describe('GlassPlayer', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('GlassPlayer: 녹화 다시보기', () => {
+  // jsdom에는 미디어 재생이 없다. 재생 요청만 받아 둔다
+  beforeEach(() => {
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function renderRecorded() {
+    const T0 = Date.parse('2026-10-08T02:43:39Z');
+    const timeline = recordingTimeline([{ startMs: T0, durationSeconds: 444 }], null, null)!;
+    return render(
+      <ToastProvider>
+        <GlassPlayer
+          channelName="게임하는너구리"
+          viewersNote="시청자 수 수집 전"
+          broadcastStatus="ended"
+          embed
+          recorded={{ streamId: 'test1008a', ...timeline }}
+        />
+      </ToastProvider>,
+    );
+  }
+
+  it('오른쪽 끝은 「실시간」이 아니라 녹화 끝이다: 이름만 바뀌고 누르면 녹화 끝으로 간다(ADR-081)', () => {
+    renderRecorded();
+
+    expect(screen.queryByRole('button', { name: '실시간으로 이동' })).toBeNull();
+    const pill = screen.getByRole('button', { name: '녹화 끝으로 이동' });
+    // 처음은 녹화 맨 앞이라 끝까지 7분 24초다
+    expect(pill).toHaveTextContent('-07:24 · 끝으로');
+    expect(pill).not.toHaveTextContent('실시간');
+
+    fireEvent.click(pill);
+    expect(pill).toHaveTextContent('녹화 끝');
+    expect(pill).not.toHaveTextContent('끝으로');
+  });
+
+  it('시크바도 다시보기라고 읽는다: 화면 낭독기가 「실시간에서」라고 하지 않는다', () => {
+    renderRecorded();
+
+    expect(screen.queryByRole('slider', { name: '라이브 탐색' })).toBeNull();
+    expect(screen.getByRole('slider', { name: '다시보기 탐색' })).toHaveAttribute(
+      'aria-valuetext',
+      '녹화 끝에서 -07:24',
+    );
+  });
+});
+
+describe('GlassPlayer: 바깥 이동 명령의 결과', () => {
+  it('영상이 없는 자리 플레이어는 옮기지 못했다고 돌려주고 스스로 알리지 않는다: 녹화를 찾는 중일 수 있다', () => {
+    const controllerRef = createRef<GlassPlayerController>();
+    render(
+      <ToastProvider>
+        <GlassPlayer
+          channelName="게임하는너구리"
+          viewersNote="시청자 수 수집 전"
+          broadcastStatus="ended"
+          embed
+          controllerRef={controllerRef}
+        />
+      </ToastProvider>,
+    );
+
+    let moved: boolean | undefined;
+    act(() => {
+      moved = controllerRef.current?.seekToUptime(120);
+    });
+    expect(moved).toBe(false);
+    expect(screen.queryByText(/영상은 아직 없어요/)).toBeNull();
+  });
+
+  it('되감을 구간이 아직 없으면 옮기지 못했다고 돌려준다: 라이브 영상이 목록을 받기 전이다', () => {
+    // 라이브 영상(HLS)은 목록을 받기 전에 되감을 구간이 0초라 이동을 조용히 버린다. 옮겼다고 하면 알림도 없이 사라진다(리뷰 2라운드)
+    const controllerRef = createRef<GlassPlayerController>();
+    renderPlayer({ initialUptimeSeconds: 0 }, { controllerRef });
+
+    let moved: boolean | undefined;
+    act(() => {
+      moved = controllerRef.current?.seekToUptime(10);
+    });
+    expect(moved).toBe(false);
+  });
+
+  it('재생 중인 플레이어는 옮겼다고 돌려준다', () => {
+    const controllerRef = createRef<GlassPlayerController>();
+    renderPlayer(undefined, { controllerRef });
+
+    let moved: boolean | undefined;
+    act(() => {
+      moved = controllerRef.current?.seekToUptime(10);
+    });
+    expect(moved).toBe(true);
   });
 });

@@ -42,8 +42,12 @@ import { useSimulatedChat } from './useSimulatedChat';
 // 패널이 접혀 있는 동안 플레이어 안에 남는 유일한 복귀 통로다.
 /** 바깥에서 플레이어에 내리는 명령 — sim이 Body 안에서 생겨 상태로는 끌어올릴 수 없다 */
 export interface GlassPlayerController {
-  /** 방송 경과 시각(초)으로 이동 — 되감기 창 밖은 가장 오래된 지점으로 클램프 */
-  seekToUptime: (uptimeSeconds: number) => void;
+  /**
+   * 방송 경과 시각(초)으로 이동 — 되감기 창 밖은 가장 오래된 지점으로 클램프. 옮길 영상이 없거나(자리 표시) 아직 되감을
+   * 구간이 없으면(라이브 영상이 목록을 받기 전) false를 돌려준다: 녹화를 찾는 중일 수도, 아예 없을 수도 있어 무엇을 말할지는
+   * 부른 쪽이 정한다(QA 2026-10-11 리뷰)
+   */
+  seekToUptime: (uptimeSeconds: number) => boolean;
 }
 
 export interface GlassPlayerProps {
@@ -54,10 +58,17 @@ export interface GlassPlayerProps {
   src?: string | null;
   /** 끝난 방송의 녹화(재생 서버) — 있으면 HLS 대신 이것으로 다시보기를 튼다 */
   recorded?: RecordedSource | null;
+  /** 녹화 다시보기를 이 자리(방송 기준 초)부터 튼다. 녹화 플레이어가 설 때 한 번만 읽는다(useRecordedPlayback) */
+  startAtSeconds?: number | null;
   /** 소스가 없을 때 목업 재생으로 시안 동작을 보인다 — 스토리북·시험 전용. 실제 화면은 끈다 */
   simulate?: boolean;
   /** clip의 방송 명부가 말하는 상태 — 상단 배지(LIVE·종료·확인 중)의 근거. 없으면 LIVE */
   broadcastStatus?: PlayerBroadcastStatus;
+  /**
+   * 영상이 없을 때 자리 표시의 아랫줄. 없으면 상태에 따른 기본 말이다. 끝난 방송은 녹화를 찾는 중인지, 찾았는데 없는지를
+   * 바깥(녹화를 찾는 쪽)이 안다
+   */
+  noSignalNote?: string;
   /** 화면 안에 꽉 채워 넣는 모드 — 라운드·외곽 여백 제거 (1b 라이브 대시보드) */
   embed?: boolean;
   /** 테스트용 시뮬레이션 초기값 */
@@ -89,27 +100,19 @@ function SimulatedGlassPlayer(props: GlassPlayerProps) {
 }
 /**
  * media 서버가 없을 때의 플레이어 — 같은 프레임 안에 사실만 적는다.
- * 움직이는 진행바·재생 버튼·시간 표기가 없다(지어낼 수 없다). 시점 이동 명령은 토스트로 거절한다.
+ * 움직이는 진행바·재생 버튼·시간 표기가 없다(지어낼 수 없다). 시점 이동 명령은 false로 거절한다(알릴지는 부르는 쪽이 정한다).
  */
 function NoSignalGlassPlayer({
   channelName,
   viewersNote,
   broadcastStatus,
+  noSignalNote,
   embed = false,
   chatPanelOpen,
   onToggleChatPanel,
   controllerRef,
 }: GlassPlayerProps) {
-  const { toast } = useToast();
-  useImperativeHandle(
-    controllerRef,
-    () => ({
-      seekToUptime: () => {
-        toast({ tone: 'info', title: '영상은 아직 없어요 · 채팅을 그 시점으로 옮겼어요' });
-      },
-    }),
-    [toast],
-  );
+  useImperativeHandle(controllerRef, () => ({ seekToUptime: () => false }), []);
   return (
     <div className={clsx(styles.player, embed && styles.embed)} data-controls="visible">
       <div className={styles.videoSlot} role="status">
@@ -122,9 +125,10 @@ function NoSignalGlassPlayer({
                 : '영상 신호 없음'}
           </span>
           <span className={styles.noSignalSub}>
-            {broadcastStatus === 'offline'
-              ? '방송을 시작하면 여기에 나타나요'
-              : '영상 서버에 아직 연결되지 않았어요'}
+            {noSignalNote ??
+              (broadcastStatus === 'offline'
+                ? '방송을 시작하면 여기에 나타나요'
+                : '영상 서버에 아직 연결되지 않았어요')}
           </span>
         </div>
       </div>
@@ -142,7 +146,7 @@ function NoSignalGlassPlayer({
 /** 끝난 방송 다시보기 — 같은 몸통(컨트롤·시크바)에 녹화 재생 훅을 끼운다 */
 function RecordedGlassPlayer(props: GlassPlayerProps & { recorded: RecordedSource }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const sim = useRecordedPlayback(videoRef, props.recorded);
+  const sim = useRecordedPlayback(videoRef, props.recorded, props.startAtSeconds ?? 0);
   return (
     <GlassPlayerBody
       {...props}
@@ -266,9 +270,12 @@ function GlassPlayerBody({
     controllerRef,
     () => ({
       seekToUptime: (target: number) => {
+        // 옮겼다고 하면 고른 시점이 알림도 없이 사라진다(리뷰 2라운드)
+        if (sim.windowSeconds <= 0) return false;
         const behind = Math.min(sim.windowSeconds, Math.max(0, sim.uptimeSeconds - target));
         sim.seekToFraction(progressFraction(behind, sim.windowSeconds));
         sim.wake();
+        return true;
       },
     }),
     [sim],
@@ -374,6 +381,7 @@ function GlassPlayerBody({
           onSeekBy={sim.seekBy}
           onReturnToLive={sim.returnToLive}
           onSeekingChange={setSeeking}
+          replay={sim.replay}
         />
         <PlayerControls
           sim={sim}

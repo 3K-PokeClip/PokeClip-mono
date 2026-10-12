@@ -26,6 +26,19 @@ public interface ClipUploadRepository extends JpaRepository<ClipUpload, Long> {
             """, nativeQuery = true)
     Optional<ClipUpload> findActive(@Param("clipId") long clipId, @Param("outputId") String outputId);
 
+    /**
+     * 같은 편집본 같은 판의 영상들(재렌더로 여럿일 수 있다) 중 어느 것에든 살아 있는(실패 아닌) 업로드(POK-291).
+     * 「판 하나는 채널에 하나」의 판정이다. 부르기 전에 {@link UploadInserter#lockVersion}을 잡는다.
+     */
+    @Query(value = """
+            SELECT u.* FROM clip_uploads u
+              JOIN clips c ON c.id = u.clip_id
+             WHERE c.recipe_id = :recipeId AND c.recipe_version = :recipeVersion AND u.status <> 'failed'
+             ORDER BY u.id DESC
+             LIMIT 1
+            """, nativeQuery = true)
+    Optional<ClipUpload> findActiveForVersion(@Param("recipeId") long recipeId, @Param("recipeVersion") int recipeVersion);
+
     Optional<ClipUpload> findFirstByClipIdOrderByIdDesc(long clipId);
 
     /** 영상 여러 벌의 가장 최근 업로드를 한 번에: 보관함 목록이 줄마다 묻지 않게. */

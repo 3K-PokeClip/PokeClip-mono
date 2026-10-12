@@ -14,14 +14,15 @@ Terraform 코드입니다. 설계 정본은 「HTTPS · 엣지 인프라 설계�
 
 루트 하나가 상태 하나입니다. 의존은 위에서 아래 한쪽으로만 흐릅니다.
 아래는 **목표 구조**입니다 — 지금(M1) 있는 것은 `modules/state_bucket` ·
-`policy/guard` · `scripts` · `nonprod/{bootstrap,dev,dns-legacy}` 뿐이고, 나머지
-루트는 계획의 후속 PR 이 더합니다.
+`policy/guard` · `scripts` · `runbooks` · `nonprod/{bootstrap,dev,dns-legacy}`
+뿐이고, 나머지 루트는 계획의 후속 PR 이 더합니다.
 
 ```
 infra/terraform/
 ├── modules/                       # 루트들이 쓰는 부품
 ├── policy/guard/                  # 금지 규약 Rego 정책(conftest) · 단위 시험
 ├── scripts/                       # guard.sh(금지 규약 검사 실행기) · guard_test.sh
+├── runbooks/                      # 운영 단계 절차(kty 승인) — org-ct.md 등
 ├── mgmt/
 │   ├── bootstrap/                 # ① 상태 버킷
 │   └── org-extras/                # ② SCP · 권한 세트 할당 · Budgets · 드리프트 EventBridge
@@ -46,6 +47,8 @@ infra/terraform/
 ⑤ · ⑪ 은 prod 런타임 트랙(별도)이 소유합니다. Control Tower 가 만드는
 것(조직 · OU · 계정)은 이 트리가 소유하지 않습니다. `infra/dev-media/` 는
 이 트리 밖이며 건드리지 않습니다.
+
+운영 단계 절차는 `runbooks/` 에 있습니다 — [조직 · CT 도입](runbooks/org-ct.md).
 
 ## 규약
 

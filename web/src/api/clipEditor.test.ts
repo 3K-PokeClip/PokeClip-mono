@@ -7,6 +7,8 @@ import {
   fetchJumpCard,
   mediaStreamId,
   requestRender,
+  retryUpload,
+  type UploadInfo,
 } from '@/api/clipEditor';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 
@@ -28,15 +30,95 @@ describe('clip 창구 호출', () => {
     expect((err as ClipApiError).field).toBeNull();
   });
 
-  it('주문은 POST로 가고 응답 봉투를 그대로 돌려준다', async () => {
+  it('주문은 POST로 가고 응답 봉투를 그대로 돌려준다: 업로드 정보가 없으면 본문도 없다', async () => {
     const spy = stubFetch(() => jsonResponse(201, { id: 3, status: 'queued' }));
 
-    const clip = await requestRender('s 1', 7);
+    const { created, clip } = await requestRender('s 1', 7);
 
+    expect(created).toBe(true);
     expect(clip).toMatchObject({ id: 3, status: 'queued' });
     const [url, init] = spy.mock.calls[0] ?? [];
     expect(url).toBe('/api/clip/broadcasts/s%201/recipes/7/renders');
     expect(init?.method).toBe('POST');
+    expect(init?.body).toBeUndefined();
+  });
+
+  it('200은 새 주문이 아니다: 같은 판이 이미 만들어지는 중이거나 만들어져 있다', async () => {
+    stubFetch(() => jsonResponse(200, { id: 3, status: 'rendering' }));
+    expect((await requestRender('s1', 7)).created).toBe(false);
+  });
+});
+
+describe('영상 만들기 + 유튜브 올리기 주문 (POK-291)', () => {
+  const info: UploadInfo = {
+    title: '보스 막타',
+    description: '설명',
+    tags: ['롤', '보스 막타'],
+    privacyStatus: 'unlisted',
+    madeForKids: false,
+    thumbnail: { source: 'scene', offsetMs: 12_000 },
+  };
+
+  async function partsOf(init: RequestInit | undefined) {
+    expect(init?.body).toBeInstanceOf(FormData);
+    const form = init?.body as FormData;
+    const request = form.get('request') as Blob;
+    expect(request.type).toBe('application/json');
+    return { form, request: JSON.parse(await request.text()) as unknown };
+  }
+
+  it('업로드 정보는 multipart의 request 파트(JSON)로 간다: 형식은 브라우저가 경계까지 정한다', async () => {
+    const spy = stubFetch(() => jsonResponse(201, { id: 3, status: 'queued' }));
+
+    await requestRender('s1', 7, info);
+
+    const [, init] = spy.mock.calls[0] ?? [];
+    const { form, request } = await partsOf(init);
+    expect(request).toEqual({ upload: info });
+    expect(form.has('thumbnail')).toBe(false);
+    // 직접 Content-Type을 박으면 경계(boundary)가 사라져 서버가 파트를 못 찾는다
+    expect(new Headers(init?.headers).has('Content-Type')).toBe(false);
+  });
+
+  it('이미지를 올리면 thumbnail 파트에 파일이 실린다', async () => {
+    const spy = stubFetch(() => jsonResponse(201, { id: 3, status: 'queued' }));
+    const file = new File([new Uint8Array([0xff, 0xd8, 0xff])], 'cover.jpg', {
+      type: 'image/jpeg',
+    });
+
+    await requestRender('s1', 7, { ...info, thumbnail: { source: 'file' } }, file);
+
+    const { form, request } = await partsOf(spy.mock.calls[0]?.[1]);
+    expect(request).toEqual({ upload: { ...info, thumbnail: { source: 'file' } } });
+    const part = form.get('thumbnail') as File;
+    expect(part.name).toBe('cover.jpg');
+    expect(new Uint8Array(await part.arrayBuffer())).toEqual(new Uint8Array([0xff, 0xd8, 0xff]));
+  });
+
+  it('이미지를 고르지 않은 썸네일이면 파일을 들고 있어도 싣지 않는다: 서버가 400으로 거절한다', async () => {
+    const spy = stubFetch(() => jsonResponse(201, { id: 3, status: 'queued' }));
+    const file = new File([new Uint8Array([1])], 'x.png', { type: 'image/png' });
+
+    await requestRender('s1', 7, info, file);
+
+    const { form } = await partsOf(spy.mock.calls[0]?.[1]);
+    expect(form.has('thumbnail')).toBe(false);
+  });
+
+  it('업로드 다시 시도는 본문 없이 POST하고 201·200을 가른다', async () => {
+    const spy = stubFetch(() => jsonResponse(201, { id: 9, clipId: 5, status: 'queued' }));
+
+    const { created, upload } = await retryUpload('s 1', 5);
+
+    expect(created).toBe(true);
+    expect(upload).toMatchObject({ id: 9, status: 'queued' });
+    const [url, init] = spy.mock.calls[0] ?? [];
+    expect(url).toBe('/api/clip/broadcasts/s%201/clips/5/uploads/retry');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBeUndefined();
+
+    stubFetch(() => jsonResponse(200, { id: 8, clipId: 5, status: 'uploading' }));
+    expect((await retryUpload('s1', 5)).created).toBe(false);
   });
 });
 

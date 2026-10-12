@@ -41,6 +41,10 @@ target_sources(
     src/constants.hpp
     src/encoder-opts.cpp
     src/encoder-opts.hpp
+    src/end-signal-policy.cpp
+    src/end-signal-policy.hpp
+    src/end-signal-sender.cpp
+    src/end-signal-sender.hpp
     src/dock-host.cpp
     src/dock-host.hpp
     src/fallback-panel.cpp

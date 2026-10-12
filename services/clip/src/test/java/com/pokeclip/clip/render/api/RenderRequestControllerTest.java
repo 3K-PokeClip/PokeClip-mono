@@ -99,6 +99,7 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
         jdbc.update("DELETE FROM render_jobs");
         jdbc.update("DELETE FROM clip_uploads");
         jdbc.update("DELETE FROM clips");
+        jdbc.update("DELETE FROM upload_requests");
         jdbc.update("DELETE FROM recipes");
         jdbc.update("DELETE FROM stream_segments");
     }
@@ -220,6 +221,60 @@ class RenderRequestControllerTest extends IntegrationTestSupport {
         주문(내_방송, 편집본).andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error").value("source_not_ready"));
         assertThat(jdbc.queryForObject("SELECT count(*) FROM clips", Integer.class)).isZero();
+    }
+
+    /**
+     * 업로드 줄이 꺼진 배포(이 컨텍스트: 렌더만 켬)에서 업로드 정보를 실은 「영상 만들기」는 <b>렌더 전에</b> 503이다(POK-291).
+     * 렌더만 하고 업로드를 못 하면 사람은 올렸다고 믿는다. 다시 시도 문도 같다. 본문 없는 주문은 지금처럼 돈다.
+     */
+    @Test
+    void 업로드_줄이_꺼져_있으면_업로드를_실은_주문과_다시_시도는_503이다() throws Exception {
+        볼_수_있다("OWNER");
+        RenderFixtures.조각을_넣는다(jdbc, 내_방송, 0);
+
+        mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/recipes/" + 편집본 + "/renders")
+                        .header("Authorization", "Bearer " + TestTokens.access(요청자))
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"upload\":{\"title\":\"t\"}}"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("upload_unavailable"));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM clips", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM upload_requests", Integer.class)).isZero();
+        assertThat(LocalStackFixture.receiveAndDelete(큐.queueUrl())).isNull();
+
+        long clipId = 완성된_영상();
+        mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/clips/" + clipId + "/uploads/retry")
+                        .header("Authorization", "Bearer " + TestTokens.access(요청자)))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.error").value("upload_unavailable"));
+    }
+
+    /** 렌더 성공 때 의도가 있어도 업로드 줄이 꺼져 있으면 줄을 안 만든다(만들면 아무도 안 실어 영원히 「올리는 중」이다). */
+    @Test
+    void 업로드_줄이_꺼져_있으면_렌더_성공이_업로드_줄을_안_만든다() throws Exception {
+        볼_수_있다("OWNER");
+        RenderFixtures.조각을_넣는다(jdbc, 내_방송, 0);
+        long clipId = MAPPER.readTree(본문(주문(내_방송, 편집본).andExpect(status().isCreated()))).get("id").asLong();
+        jdbc.update("INSERT INTO upload_requests (recipe_id, recipe_version, requested_by, title) VALUES (?, 1, ?, '제목')",
+                편집본, 요청자);
+        String jobId = jdbc.queryForObject("SELECT id::text FROM render_jobs WHERE clip_id = ?", String.class, clipId);
+        String token = MAPPER.readTree(본문(mvc.perform(post("/internal/jobs/" + jobId + "/events")
+                        .header("X-Internal-Token", "test-only-internal-token-32bytes-long!!")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"eventId\":\"" + UUID.randomUUID() + "\",\"eventType\":\"STARTED\","
+                                + "\"occurredAt\":\"2026-10-08T00:00:00Z\"}")))).get("executionToken").asString();
+
+        mvc.perform(post("/internal/jobs/" + jobId + "/events")
+                        .header("X-Internal-Token", "test-only-internal-token-32bytes-long!!")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"eventId\":\"" + UUID.randomUUID() + "\",\"eventType\":\"SUCCEEDED\","
+                                + "\"occurredAt\":\"2026-10-08T00:00:00Z\",\"executionToken\":\"" + token + "\","
+                                + "\"result\":[{\"outputId\":\"o1\",\"kind\":\"video\",\"s3Key\":\"clips/" + clipId + "/" + token
+                                + "/o1.mp4\"}]}"))
+                .andExpect(status().isOk());
+
+        assertThat(jdbc.queryForObject("SELECT status FROM clips WHERE id = ?", String.class, clipId)).isEqualTo("rendered");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM clip_uploads", Integer.class)).isZero();
     }
 
     @Test

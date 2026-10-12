@@ -301,7 +301,7 @@ describe('LibraryScreen — 상태별 액션 7종', () => {
     expect(inside.queryByRole('link', { name: /편집/ })).toBeNull();
     expect(inside.getByText(/원본 VOD가 만료되어 다시 편집할 수 없어요/)).toBeInTheDocument();
     expect(inside.getByText('원본 만료됨')).toBeInTheDocument();
-    expect(inside.getByText('발행됨')).toBeInTheDocument();
+    expect(inside.getByText('업로드됨')).toBeInTheDocument();
   });
 
   it('렌더 실패 — 렌더 재시도 버튼 · 다운로드 없음 · 길이 없음', () => {
@@ -377,7 +377,7 @@ describe('LibraryScreen — 목업 전이', () => {
 
     await user.click(inside.getByRole('button', { name: '업로드' }));
 
-    expect(inside.getByText('발행됨')).toBeInTheDocument();
+    expect(inside.getByText('업로드됨')).toBeInTheDocument();
     expect(inside.getByRole('button', { name: '유튜브 보기' })).toBeDisabled();
     expect(inside.queryByRole('link', { name: /유튜브 보기/ })).toBeNull();
     expect(inside.getByRole('link', { name: '새 버전으로 편집' })).toBeInTheDocument();
@@ -680,29 +680,112 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
   it('확인 필요는 다시 올리기를 막고 채널을 보라고 한다', () => {
     show(serverClip('checking'));
     expect(within(panel()).getByRole('button', { name: '업로드 확인 필요' })).toBeDisabled();
-    expect(within(panel()).getByText(/유튜브 스튜디오에서 비공개 영상을 확인/)).toBeInTheDocument();
+    expect(
+      within(panel()).getByText(/유튜브 스튜디오에서 영상이 올라갔는지 확인/),
+    ).toBeInTheDocument();
   });
 
-  it('연동이 끊겨 실패한 업로드는 채널 연동으로 안내하고 다시 올릴 수 있다', () => {
+  const failedUpload = {
+    id: 7,
+    clipId: 5,
+    outputId: 'o1',
+    title: '보스 막타',
+    status: 'failed',
+    videoId: null,
+    error: { code: 'YOUTUBE_UNLINKED', message: null },
+    requestedBy: '9',
+    createdAt: '2026-09-20T12:00:00Z',
+    updatedAt: '2026-09-20T12:01:00Z',
+  };
+
+  it('연동이 끊겨 실패한 업로드는 「업로드 실패」 배지와 채널 연동 안내, 「다시 시도」를 보인다', () => {
+    show(serverClip('rendered', { ...rendered, upload: failedUpload }));
+    expect(within(panel()).getByText('업로드 실패')).toBeInTheDocument();
+    expect(within(panel()).getByText(/설정 › 채널 연동에서 다시 연결/)).toBeInTheDocument();
+    expect(within(panel()).getByRole('button', { name: '다시 시도' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^보스 막타 · 업로드 실패/ })).toBeInTheDocument();
+  });
+
+  it('「다시 시도」는 저장된 정보로 다시 올리고, 보내는 동안 단추가 잠긴다(POK-291)', async () => {
+    let answer: (r: Response) => void = () => {};
+    const spy = stubFetch(() => new Promise<Response>((resolve) => (answer = resolve)));
+    const user = userEvent.setup();
+    show(serverClip('rendered', { ...rendered, upload: failedUpload }));
+
+    await user.click(within(panel()).getByRole('button', { name: '다시 시도' }));
+    expect(within(panel()).getByRole('button', { name: '다시 시도' })).toBeDisabled();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/5/uploads/retry');
+
+    await act(async () =>
+      answer(jsonResponse(201, { ...failedUpload, id: 8, status: 'queued', error: null })),
+    );
+    expect(
+      await within(panel()).findByRole('button', { name: '유튜브에 올리는 중' }),
+    ).toBeDisabled();
+    expect(within(panel()).getByText('올리는 중')).toBeInTheDocument();
+  });
+
+  it('만드는 중은 진행 줄이 안내 자리에 서고 「자막」 칸은 진행을 말하지 않는다(POK-291)', () => {
     show(
-      serverClip('rendered', {
+      serverClip('rendering', {
+        ...rendered,
+        status: 'rendering',
+        progress: { percent: 42, stage: null, attempt: 1, jobId: 'j' },
+      }),
+    );
+    const inside = within(panel());
+    expect(inside.getByText('만드는 중')).toBeInTheDocument();
+    expect(inside.getByText('영상 만드는 중 42%')).toBeInTheDocument();
+    expect(inside.getByText('자막').nextElementSibling).toHaveTextContent('—');
+    expect(inside.getByRole('button', { name: '영상 만드는 중' })).toBeDisabled();
+  });
+
+  it('영상은 올라갔는데 썸네일만 실패하면 그렇게 말한다(POK-291)', () => {
+    show(
+      serverClip('uploaded', {
         ...rendered,
         upload: {
-          id: 7,
-          clipId: 5,
-          outputId: 'o1',
-          title: '보스 막타',
-          status: 'failed',
-          videoId: null,
-          error: { code: 'YOUTUBE_UNLINKED', message: null },
-          requestedBy: '9',
-          createdAt: '2026-09-20T12:00:00Z',
-          updatedAt: '2026-09-20T12:01:00Z',
+          ...failedUpload,
+          status: 'uploaded',
+          error: null,
+          videoId: 'v1',
+          thumbnail: { source: 'file', status: 'failed', errorCode: 'THUMBNAIL_FORBIDDEN' },
         },
       }),
     );
-    expect(within(panel()).getByText(/설정 › 채널 연동에서 다시 연결/)).toBeInTheDocument();
-    expect(within(panel()).getByRole('button', { name: '업로드' })).toBeEnabled();
+    expect(within(panel()).getByText('업로드됨')).toBeInTheDocument();
+    expect(
+      within(panel()).getByText(/영상은 올라갔고 썸네일만 못 붙였어요. 채널 전화 인증이 필요해요/),
+    ).toBeInTheDocument();
+  });
+
+  it('공개로 올린 편집본은 패널에 누가 보는지와 바꾸는 곳을 말한다(POK-291)', () => {
+    show(
+      serverClip('uploaded', {
+        ...rendered,
+        upload: {
+          ...failedUpload,
+          status: 'uploaded',
+          error: null,
+          videoId: 'v1',
+          privacyStatus: 'public',
+        },
+      }),
+    );
+    expect(
+      within(panel()).getByText(
+        '「공개」(누구나 볼 수 있는 범위)로 올렸어요. 올린 뒤에는 스트리머 채널의 유튜브 스튜디오에서만 바꿀 수 있어요.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('업로드 실패 뒤 고쳐 저장한 편집 중 줄은 옛 판의 공개 범위를 말하지 않는다(POK-291)', () => {
+    show(
+      serverClip('editing', { ...rendered, upload: { ...failedUpload, privacyStatus: 'public' } }),
+    );
+    expect(within(panel()).getByText('편집 중')).toBeInTheDocument();
+    expect(within(panel()).queryByText(/「공개」/)).not.toBeInTheDocument();
   });
 
   it('미리보기를 누르면 완성 영상을 그 자리에서 튼다', async () => {

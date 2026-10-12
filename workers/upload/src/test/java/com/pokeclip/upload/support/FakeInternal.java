@@ -9,6 +9,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.IntSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -34,6 +35,16 @@ public class FakeInternal implements AutoCloseable {
     /** 설정하면 두 번째 start부터 이 주소가 적혀 있다(이 일꾼이 시작하는 사이 다른 일꾼이 적었다). */
     public volatile String lateSession;
     public final List<String> results = new ArrayList<>();
+    /** UPLOADED 보고에 실린 썸네일 결과. {@code "SET"} · {@code "FAILED:코드"} · {@code "NONE"} · 칸이 없으면 {@code "null"}. */
+    public final List<String> thumbnailResults = new ArrayList<>();
+    /** result 문이 5xx를 줄 횟수(clip이 보고를 못 받는다 = 일꾼이 보고 전에 멈춘 것과 같다). */
+    public volatile int resultDown;
+    /** 설정하면 result를 받는 순간 이 값을 재 {@link #atResult}에 남긴다(보고 시점에 썸네일이 이미 붙었나). */
+    public volatile IntSupplier probeAtResult;
+    public final List<Integer> atResult = new ArrayList<>();
+    /** 설정하면 두 번째 resolve부터 이 토큰을 준다(auth가 토큰을 새로 갱신했다). */
+    public volatile String accessTokenAfterFirst;
+    public volatile int resolves;
 
     public FakeInternal() throws IOException {
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
@@ -87,6 +98,11 @@ public class FakeInternal implements AutoCloseable {
                 reply(ex, 200, "{\"sessionUri\":\"" + sessionUri + "\"}");
             }
             case "result" -> {
+                if (resultDown > 0) {
+                    resultDown--;
+                    reply(ex, 503, "{}");
+                    return;
+                }
                 if (settled) {
                     reply(ex, 409, "{\"reason\":\"TERMINAL\"}");
                     return;
@@ -94,6 +110,14 @@ public class FakeInternal implements AutoCloseable {
                 String outcome = field(body, "outcome");
                 String detail = "UPLOADED".equals(outcome) ? field(body, "videoId") : field(body, "errorCode");
                 results.add(outcome + ":" + detail);
+                if ("UPLOADED".equals(outcome)) {
+                    String thumb = field(body, "thumbnailOutcome");
+                    String code = field(body, "thumbnailErrorCode");
+                    thumbnailResults.add(code == null ? String.valueOf(thumb) : thumb + ":" + code);
+                    if (probeAtResult != null) {
+                        atResult.add(probeAtResult.getAsInt());
+                    }
+                }
                 status = switch (outcome) {
                     case "UPLOADED" -> "uploaded";
                     case "FAILED" -> "failed";
@@ -105,8 +129,11 @@ public class FakeInternal implements AutoCloseable {
         }
     }
 
-    private void resolve(HttpExchange ex) throws IOException {
+    private synchronized void resolve(HttpExchange ex) throws IOException {
         ex.getRequestBody().readAllBytes();
+        if (resolves++ >= 1 && accessTokenAfterFirst != null) {
+            accessToken = accessTokenAfterFirst;
+        }
         if (accessToken != null) {
             reply(ex, 200, "{\"valid\":true,\"channelId\":\"UC1\",\"accessToken\":\"" + accessToken + "\"}");
         } else {

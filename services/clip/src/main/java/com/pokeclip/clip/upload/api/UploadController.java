@@ -38,4 +38,18 @@ public class UploadController {
         Requested requested = service.request(jwt.getSubject(), streamId, clipId, body);
         return ResponseEntity.status(requested.created() ? HttpStatus.CREATED : HttpStatus.OK).body(requested.upload());
     }
+
+    /**
+     * 실패한 업로드를 저장된 정보로 다시 올린다(POK-291). 본문 없음. 201 새 업로드 · 200 최신 업로드가 아직 살아 있다(그것을 돌려준다)
+     * · 409 {@code nothing_to_retry}·{@code already_uploaded}.
+     */
+    @PostMapping("/api/clip/broadcasts/{streamId}/clips/{clipId}/uploads/retry")
+    public ResponseEntity<UploadSnapshot> retry(@PathVariable String streamId,
+                                                @PathVariable long clipId,
+                                                @AuthenticationPrincipal Jwt jwt,
+                                                HttpServletRequest request) {
+        NotFoundFloor.mark(request);
+        Requested requested = service.retry(jwt.getSubject(), streamId, clipId);
+        return ResponseEntity.status(requested.created() ? HttpStatus.CREATED : HttpStatus.OK).body(requested.upload());
+    }
 }

@@ -3,10 +3,18 @@
 // 실시간 통계(시안 1b)의 값을 clip 창구에서 만든다(POK-251). 채팅량 선과 하이라이트 마커는 여기 없다 —
 // 동결 계약(useLiveMockState.chatVolume)에서 statsTimeline이 파생한다.
 // 후원은 chat-chart 버킷에서, 시청자·카테고리는 broadcast-info에서 온다. 시청자 값이 없으면
-// 선을 그리지 않고 지표에 「수집 전」이라 적는다 — 가짜 선은 그리지 않는다.
+// 선을 그리지 않고 지표에 그 까닭을 적는다(missingWord: 확인 중·기록 없음·수집 전). 가짜 선은 그리지 않는다.
 import { useMemo } from 'react';
 import { TIMELINE_HEIGHT, TIMELINE_WIDTH, type Point } from './statsTimeline';
-import { useLiveData } from './liveDataStore';
+import {
+  chartSpan,
+  formatPerMinute,
+  missingWord,
+  trustedViewerSeries,
+  useLiveData,
+  type LiveBroadcastStatus,
+  type LiveChartScope,
+} from './liveDataStore';
 
 export interface CategorySegment {
   label: string;
@@ -21,13 +29,24 @@ export interface LiveMetric {
 }
 
 export interface LiveStatsMockState {
-  /** 시청자 추이 — 시안 뷰박스(860 × 150) 좌표. 수집 전이면 빈 배열 */
+  /** 시청자 추이: 시안 뷰박스(860 × 150) 좌표. 값이 없으면 빈 배열 */
   viewerLine: readonly Point[];
   /** 후원이 들어온 시점 마커 — 같은 뷰박스 좌표 */
   donations: readonly Point[];
   categorySegments: CategorySegment[];
   metrics: LiveMetric[];
+  /** 믿는 기록에서 마지막으로 잰 시청자 수(빈 관측은 건너뛴다). 정보 바·플레이어 필도 이것을 쓴다 */
+  lastViewers: number | null;
+  /** 시청자 값이 없을 때의 말(missingWord). 통계의 최고·평균과 정보 바가 같은 말을 한다 */
+  noViewers: string;
 }
+
+/** 채팅 수의 이름은 차트가 실제로 읽은 창대로다(QA 2026-10-11 리뷰): 방송 전체, 끝 12시간(그보다 긴 방송), 지금 기준 최근 창 */
+const CHAT_COUNT_LABEL: Record<LiveChartScope, (minutes: number) => string> = {
+  broadcast: () => '방송 중 채팅',
+  tail: (minutes) => `마지막 ${minutes}분 채팅`,
+  recent: (minutes) => `최근 ${minutes}분 채팅`,
+};
 
 /** 눈금이 1, 2 같은 값으로 튀지 않게 5 단위로 올린다 */
 function niceMax(v: number): number {
@@ -35,7 +54,12 @@ function niceMax(v: number): number {
   return Math.ceil(v / 5) * 5;
 }
 
-export function useLiveStatsMockState(): LiveStatsMockState {
+/**
+ * @param view 화면이 이 방송을 무엇으로 보나(LiveDashboard의 viewStatus. 지난 방송 주소는 명부 답 전에도 끝난 방송이다).
+ *   시청자 기록은 정보 바와 같은 규칙으로 믿고(trustedViewerSeries), 없을 때의 말도 같다(missingWord): 칸마다 따로 정해서
+ *   한 화면에 「확인 중」과 「수집 전」이 섰다(리뷰 4·5라운드)
+ */
+export function useLiveStatsMockState(view: LiveBroadcastStatus): LiveStatsMockState {
   const data = useLiveData();
 
   return useMemo(() => {
@@ -50,8 +74,9 @@ export function useLiveStatsMockState(): LiveStatsMockState {
       .map((b, i) => (b.donations > 0 ? ([x(i), yChat(b.chats)] as const) : null))
       .filter((p): p is readonly [number, number] => p !== null);
 
-    // 시청자: broadcast-info의 series를 차트 시간축(첫 버킷~지금)에 얹는다
-    const series = (data.info?.series ?? []).filter((p) => p.viewers !== null) as {
+    // 시청자: broadcast-info의 series를 차트 시간축(첫 버킷~지금)에 얹는다. 믿는 기록만 쓴다(정보 바와 같다)
+    const trusted = trustedViewerSeries(view, data.info);
+    const series = (trusted ?? []).filter((p) => p.viewers !== null) as {
       observedAt: string;
       viewers: number;
     }[];
@@ -74,27 +99,40 @@ export function useLiveStatsMockState(): LiveStatsMockState {
         .filter((p): p is readonly [number, number] => p !== null);
     }
 
-    const totalChats = buckets.reduce((a, b) => a + b.chats, 0);
+    const chart = data.chart;
+    const span = chart ? chartSpan(chart) : null;
     const totalDonations = buckets.reduce((a, b) => a + b.donations, 0);
-    const minutes = Math.max(1, (n * bucketSeconds) / 60);
     const peak = series.length ? Math.max(...series.map((p) => p.viewers)) : null;
     const avg = series.length
       ? Math.round(series.reduce((a, p) => a + p.viewers, 0) / series.length)
       : null;
 
+    const noViewers = missingWord(view, trusted !== null);
     const metrics: LiveMetric[] = [
-      { label: '최고 시청자', value: peak === null ? '수집 전' : peak.toLocaleString('ko-KR') },
-      { label: '평균 시청자', value: avg === null ? '수집 전' : avg.toLocaleString('ko-KR') },
-      { label: `최근 ${Math.round(minutes)}분 채팅`, value: totalChats.toLocaleString('ko-KR') },
-      { label: '분당 평균 채팅', value: (totalChats / minutes).toFixed(1) },
-      { label: '후원', value: `${totalDonations}회` },
+      { label: '최고 시청자', value: peak === null ? noViewers : peak.toLocaleString('ko-KR') },
+      { label: '평균 시청자', value: avg === null ? noViewers : avg.toLocaleString('ko-KR') },
+      // 차트가 아직 없으면 수를 지어내지 않는다: 「최근 1분 채팅 0」은 지어낸 1분과 0이다(리뷰 3라운드)
+      chart && span
+        ? {
+            label: CHAT_COUNT_LABEL[chart.scope](Math.round(span.minutes)),
+            value: span.chats.toLocaleString('ko-KR'),
+          }
+        : { label: '채팅', value: '확인 중' },
+      {
+        label: '분당 평균 채팅',
+        value: span ? formatPerMinute(span.chats / span.minutes) : '확인 중',
+      },
+      { label: '후원', value: chart ? `${totalDonations}회` : '확인 중' },
     ];
 
     const category = data.info?.latest?.category ?? null;
-    const categorySegments: CategorySegment[] = category
-      ? [{ label: category, minutes: Math.round(minutes), percent: 100 }]
-      : [];
+    // 막대는 그래프 창의 길이다. 그래프가 없으면 그 길이도 모른다
+    const categorySegments: CategorySegment[] =
+      category && span
+        ? [{ label: category, minutes: Math.round(span.minutes), percent: 100 }]
+        : [];
 
-    return { viewerLine, donations, categorySegments, metrics };
-  }, [data]);
+    const lastViewers = series.at(-1)?.viewers ?? null;
+    return { viewerLine, donations, categorySegments, metrics, lastViewers, noViewers };
+  }, [data, view]);
 }

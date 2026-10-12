@@ -121,6 +121,7 @@ void ConfigStore::Load()
 		obs_data_array_release(backup);
 	}
 	config_.clipApiBase = GetStringOr(data, "clip_api_base", "");
+	config_.endSignalBase = GetStringOr(data, "end_signal_base", "");
 	config_.markHotkey.clear();
 	if (obs_data_t *hotkey = obs_data_get_obj(data, "mark_hotkey")) {
 		config_.markHotkey = obs_data_get_json(hotkey);
@@ -199,6 +200,7 @@ bool ConfigStore::SaveLocked()
 	obs_data_set_array(data, "audio_mixer_backup", backup);
 	obs_data_array_release(backup);
 	obs_data_set_string(data, "clip_api_base", config_.clipApiBase.c_str());
+	obs_data_set_string(data, "end_signal_base", config_.endSignalBase.c_str());
 	if (!config_.markHotkey.empty()) {
 		if (obs_data_t *hotkey = obs_data_create_from_json(config_.markHotkey.c_str())) {
 			obs_data_set_obj(data, "mark_hotkey", hotkey);

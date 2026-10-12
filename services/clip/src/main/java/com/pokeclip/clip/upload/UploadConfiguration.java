@@ -9,6 +9,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.S3ClientBuilder;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.SqsClientBuilder;
 
@@ -35,6 +37,28 @@ public class UploadConfiguration {
         }
         log.info("upload.enabled region={} endpointOverride={}", properties.region(), properties.hasEndpoint());
         return new UploadQueueClient(builder.build(), properties.queueUrl(), properties.dlqUrl());
+    }
+
+    /**
+     * 사용자가 올린 썸네일 그림을 두는 창고(POK-291). 업로드 줄과 같이 켜진다: 그림은 업로드에만 쓰이고, 꺼져 있으면 주문 문이
+     * 그 전에 503이다. 창고는 올릴 영상과 같은 곳(CLIPS_BUCKET)이다. 주소를 덮으면(LocalStack) 경로 방식이다.
+     */
+    @Bean
+    @ConditionalOnProperty(prefix = "pokeclip.upload", name = "enabled", havingValue = "true")
+    public UploadThumbnailStore uploadThumbnailStore(UploadProperties properties, RenderProperties render) {
+        requireSourceBucket(render.outputBucket());
+        S3ClientBuilder builder = S3Client.builder()
+                .region(Region.of(properties.region()))
+                .forcePathStyle(properties.hasEndpoint())
+                // SPI 후보가 둘이라 명시한다(PurgeConfiguration과 같은 이유).
+                .httpClient(UrlConnectionHttpClient.builder()
+                        .connectionTimeout(Duration.ofSeconds(2))
+                        .socketTimeout(Duration.ofSeconds(30))
+                        .build());
+        if (properties.hasEndpoint()) {
+            builder.endpointOverride(URI.create(properties.endpoint()));
+        }
+        return new UploadThumbnailStore(builder.build(), render.outputBucket());
     }
 
     /**

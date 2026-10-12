@@ -1,74 +1,31 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect } from 'react';
+import { useToast } from '@/ui';
 import { isMarkHotkey, isTypingTarget } from './markKey';
-import type { LiveHighlight } from './useLiveMockState';
 
-// 수동 마킹(시안 1b) — 목업 데이터가 아니라 동작 시뮬레이션이다(usePlayerSimulation 계열).
+// 수동 마킹(시안 1b): 누른 순간을 서버에 카드로 남기는 길이 아직 없다(POK-257, MVP 밖).
 //
-// 실연동 때는 mark() 안이 「서버에 찍어 보내고 SSE로 되받는다」로 바뀌고, 되받기 전까지
-// 자리를 지키는 pending만 남는다. 만들어진 카드가 useLiveMockState.highlights를 타고
-// 들어오면 manualCards는 자연히 비고, 화면의 병합식은 그대로 성립한다.
+// 전에는 3초 뒤 화면에만 카드를 세웠다. 그 카드는 새로 고침에 사라지고 편집기도 못 찾는, 저장된 것처럼 보이는
+// 가짜 성공이었다. 지난 방송에서는 방송 끝 시각에 찍혔다(QA 2026-10-11). 그래서 단추와 핫키는 두고 준비 중이라고만
+// 말한다(없는 기능은 「준비 중」, ADR-077). 서버 길이 생기면 mark() 안이 「서버에 찍어 보내고 통로로 되받는다」가 되고,
+// 되받기 전까지의 자리는 StreamInfoBar·HighlightCardPanel의 pendingLabel이 그린다. 지난 방송에서 찍으려면 방송 시계가
+// 아니라 플레이어의 재생 위치를 읽어야 한다: 방송 시계는 끝난 방송에서 방송 길이에 멈춰 있어 끝 시각에 찍혔다.
 //
 // 리스너를 document에 다는 이유: 핫키의 쓸모가 "어디를 보고 있든 눌리는 것"이라
 // 화면 컨테이너에 달면 포커스가 밖에 있을 때 죽는다. 대신 가드가 둘 붙는다 —
 // 입력 중인 곳(isTypingTarget)과 이미 누군가 처리한 키(defaultPrevented).
 
-/** 마킹부터 카드가 서기까지 — 시안의 「카드 만드는 중…」이 머무는 시간 */
-export const CARD_CREATE_MS = 3000;
-
-export interface ManualMarkingState {
-  /** 카드를 만드는 중 — 버튼 아래 피드백과 목록 맨 앞 자리 표시가 이 값 하나로 함께 선다 */
-  pending: boolean;
-  /** 만드는 중인 카드의 시각 표기 — 쉬는 중이면 null */
-  pendingLabel: string | null;
-  /** 이 화면에서 찍어 만든 카드 — 최신이 앞 */
-  manualCards: LiveHighlight[];
-  mark: () => void;
-}
-
-function createManualCard(sequence: number, timestamp: string): LiveHighlight {
-  return {
-    id: `marked-${sequence}`,
-    timestamp,
-    title: `${timestamp} 수동 마킹`,
-    meta: '수동 마킹 · 방금',
-    status: 'manual',
-    source: 'manual',
-    // 방금 생긴 카드라는 표시 — 계약이 이미 가진 자리다
-    emphasized: true,
-  };
-}
-
-/**
- * @param readTimestamp 누른 그 순간의 시각 표기를 읽는다. 값이 아니라 함수로 받는 이유 둘 —
- *   경과는 매초 흐르므로 마운트 때 값을 굳히면 나중에 누른 마킹이 과거로 찍히고,
- *   값으로 받으면 매초 바뀌는 인자 탓에 아래 document 리스너가 초마다 다시 붙는다.
- *   호출부가 정체성이 고정된 함수를 준다.
- */
-export function useManualMarking(readTimestamp: () => string): ManualMarkingState {
-  const [pendingLabel, setPendingLabel] = useState<string | null>(null);
-  const [manualCards, setManualCards] = useState<LiveHighlight[]>([]);
-  const timer = useRef<number>(undefined);
-  const sequence = useRef(0);
-  // 상태가 아니라 ref로 막는 이유 — mark의 정체성이 pending마다 바뀌면 아래 리스너가 매번 재등록된다
-  const busy = useRef(false);
+export function useManualMarking(): { mark: () => void } {
+  const { toast } = useToast();
 
   const mark = useCallback(() => {
-    // 만드는 중에 또 누르면 앞 카드가 자리를 잃는다 — 시안에도 자리는 하나뿐이다
-    if (busy.current) return;
-    busy.current = true;
-    // 카드가 서기까지 3초가 흐르므로 시각은 누른 순간에 굳힌다 — 다 만들어진 뒤에 읽으면
-    // 카드가 3초 뒤를 가리켜, 눌러서 이동했을 때 마킹한 장면을 지나쳐 있다.
-    const timestamp = readTimestamp();
-    setPendingLabel(timestamp);
-    timer.current = window.setTimeout(() => {
-      sequence.current += 1;
-      setManualCards((prev) => [createManualCard(sequence.current, timestamp), ...prev]);
-      setPendingLabel(null);
-      busy.current = false;
-    }, CARD_CREATE_MS);
-  }, [readTimestamp]);
+    toast({
+      tone: 'info',
+      title: '준비 중인 기능이에요',
+      description: '수동 마킹은 아직 준비 중이에요. 준비되면 알려드릴게요.',
+    });
+  }, [toast]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -83,7 +40,5 @@ export function useManualMarking(readTimestamp: () => string): ManualMarkingStat
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [mark]);
 
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-
-  return { pending: pendingLabel !== null, pendingLabel, manualCards, mark };
+  return { mark };
 }

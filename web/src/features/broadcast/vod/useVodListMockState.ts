@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
 import { fetchRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import { recordingTimeline } from '@/features/player/recordingTimeline';
+import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
 import { excludeLive, filterByPeriod } from './vodListView';
 
 // 시안 1f 지난 방송 목록의 상태. 목록은 clip `GET /api/clip/broadcasts`(POK-174·ADR-055)에서 온다(POK-251).
@@ -95,6 +96,11 @@ export interface VodListMockState {
   broadcasts: VodBroadcast[];
   /** 필터와 무관한 전체 수 — 「아직 없다」와 「이 기간에 없다」를 가른다 */
   totalCount: number;
+  /**
+   * 서버 목록을 아직 한 번도 못 읽었다. 그동안의 빈 목록은 「없다」가 아니라 「모른다」다(QA 2026-10-11). 첫 읽기부터
+   * 실패하면 다음 주기까지 그대로다(홈과 같은 규칙)
+   */
+  loading: boolean;
   visuals: Record<string, VodRowVisual>;
   filter: VodPeriodFilter;
   setFilter: (filter: VodPeriodFilter) => void;
@@ -156,6 +162,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     () => options.downloads ?? {},
   );
   const [fetched, setFetched] = useState<VodBroadcast[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [fetchedVisuals, setFetchedVisuals] = useState<Record<string, VodRowVisual>>({});
   const [now, setNow] = useState(() => new Date());
   const rowCache = useRef(new Map<string, { cardCount: number; recorded: boolean }>());
@@ -207,10 +214,15 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
                 cache.set(b.streamId, {
                   cardCount,
                   // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 다른 방송의 녹화도 섞여 온다(POK-233) — 다시보기와 같은
-                  // 규칙(방송 시간과 겹치는 구간)으로 거른다. 안 거르면 녹화 없는 방송이 「다시 보기 가능」으로 올라 열면 빈 화면이다
+                  // 규칙(방송 시간과 겹치는 구간, 시작 시각을 모르면 끝 12시간)으로 거른다. 안 거르면 녹화 없는 방송이 「다시 보기
+                  // 가능」으로 올라 열면 빈 화면이다(리뷰 6라운드: 다시보기만 하한을 좁혀 둘이 갈렸다)
                   recorded:
                     known?.recorded === true ||
-                    recordingTimeline(spans, isoMs(b.startedAt), isoMs(b.endedAt)) !== null,
+                    recordingTimeline(
+                      spans,
+                      recordingSearchFrom(isoMs(b.startedAt), isoMs(b.endedAt)),
+                      isoMs(b.endedAt),
+                    ) !== null,
                 });
             }),
         );
@@ -244,6 +256,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         setFetched(rows);
         setFetchedVisuals(visuals);
         setNow(new Date());
+        setLoaded(true);
       } catch {
         /* 다음 주기에 다시 */
       }
@@ -289,6 +302,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     now: baseNow,
     broadcasts,
     totalCount: past.length,
+    loading: options.broadcasts === undefined && !loaded,
     visuals,
     filter,
     setFilter,

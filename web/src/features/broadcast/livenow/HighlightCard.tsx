@@ -57,8 +57,6 @@ export function HighlightCard({
   const processing = view.state === 'processing';
   // 편집기는 방송 번호와 카드 번호(`card-23` → 23)로 클립을 연다
   const { streamId } = useLiveData();
-  // 서버 카드(card-N)만 편집기가 찾을 수 있다
-  const fromServer = highlight.id.startsWith('card-');
   const editorHref = `/clips/editor?stream=${encodeURIComponent(streamId)}&card=${highlight.id.replace(/^card-/, '')}`;
 
   return (
@@ -151,24 +149,18 @@ export function HighlightCard({
           <div className={styles.cardActions}>
             {/* 「편집」을 누르는 것이 곧 「이 카드는 내가 집었다」다(clip claim) — 다른 편집자 화면에 「○○ 편집 중」이 뜬다.
                 이미 남이 집은 카드면 서버가 거절하지만 들어가 보는 것까지 막지는 않는다. */}
-            {fromServer ? (
-              <LinkButton
-                as={Link}
-                href={editorHref}
-                variant="soft"
-                size="sm"
-                onClick={() => {
-                  void claimCard(highlight.id);
-                }}
-              >
-                편집
-              </LinkButton>
-            ) : (
-              // 이 화면에서 찍은 수동 마킹은 아직 서버에 없는 카드다(marked-…) — 편집기가 찾을 수 없어 잠근다(PR #200 codex)
-              <Button variant="soft" size="sm" disabled>
-                편집
-              </Button>
-            )}
+            {/* 카드는 전부 서버 카드(card-N)다. 화면에만 세우던 수동 마킹 카드(marked-…)는 없어졌다(QA 2026-10-11) */}
+            <LinkButton
+              as={Link}
+              href={editorHref}
+              variant="soft"
+              size="sm"
+              onClick={() => {
+                void claimCard(highlight.id);
+              }}
+            >
+              편집
+            </LinkButton>
             <Button variant="solid" size="sm" disabled>
               원클릭 업로드
             </Button>
@@ -176,20 +168,18 @@ export function HighlightCard({
               <Bookmark size={15} aria-hidden />
             </IconButton>
             {/* 숨기기(clip hide) — 시안에는 카드별 단추가 없어 같은 줄의 작은 아이콘 하나로 둔다. 숨긴 수는 패널 머리가 센다 */}
-            {highlight.id.startsWith('card-') ? (
-              <IconButton
-                variant="ghost"
-                size="sm"
-                aria-label="이 카드 숨기기"
-                onClick={() => {
-                  void hideCard(highlight.id).then((r) => {
-                    if (!r.ok) toast({ tone: 'error', title: '카드를 숨기지 못했어요' });
-                  });
-                }}
-              >
-                <EyeOff size={15} aria-hidden />
-              </IconButton>
-            ) : null}
+            <IconButton
+              variant="ghost"
+              size="sm"
+              aria-label="이 카드 숨기기"
+              onClick={() => {
+                void hideCard(highlight.id).then((r) => {
+                  if (!r.ok) toast({ tone: 'error', title: '카드를 숨기지 못했어요' });
+                });
+              }}
+            >
+              <EyeOff size={15} aria-hidden />
+            </IconButton>
           </div>
         ) : null}
       </div>

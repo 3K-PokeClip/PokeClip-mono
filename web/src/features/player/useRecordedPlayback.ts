@@ -21,19 +21,41 @@ export type RecordedSource = RecordingTimeline & { streamId: string };
 
 const SEEK_DEBOUNCE_MS = 250;
 
+/** 녹화 안으로 자른 자리(초). 끝은 마지막 1초 앞이다 */
+function clampToRecording(total: number, seconds: number): number {
+  return Math.min(Math.max(0, total - 1), Math.max(0, seconds));
+}
+
+/** 줄기 주소의 시작 자리(녹화 시작부터 ms). 주소와 「같은 자리인가」 판정이 같은 반올림을 써야 둘이 갈라지지 않는다 */
+function pieceOffsetMs(seconds: number): number {
+  return Math.round(seconds * 1000);
+}
+
+/** 앞으로 가는 이동의 도착점: 녹화 안으로 자르고, 틈 안이면 다음 구간 시작이다(재생 서버는 틈을 건너 주지 않는다) */
+function forwardTarget(recorded: RecordingTimeline, seconds: number): number {
+  const wanted = clampToRecording(recorded.durationSeconds, seconds);
+  return playableFrom(recorded, wanted)?.fromSeconds ?? wanted;
+}
+
+/**
+ * @param startAtSeconds 처음 달라는 줄기의 자리(방송 기준 초). 마운트 때 한 번만 읽는다. 녹화가 서기 전에 고른 시점(홈에서 고른
+ *   카드 등)은 옮길 플레이어가 없었으므로 여기로 받아 첫 줄기부터 그 자리다(QA 2026-10-11). 선 다음의 이동은 컨트롤러로 한다
+ */
 export function useRecordedPlayback(
   videoRef: RefObject<HTMLVideoElement | null>,
   recorded: RecordedSource,
+  startAtSeconds = 0,
 ): PlayerSimulation {
   const total = recorded.durationSeconds;
+  const startAt = () => (startAtSeconds > 0 ? forwardTarget(recorded, startAtSeconds) : 0);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(true);
   const [volume, setVolumeState] = useState(70);
   const volumeRef = useRef(70);
   volumeRef.current = volume;
   /** 가고 싶은 자리(방송 기준 초). 실제 줄기는 여기서 틀 수 있는 구간부터다 */
-  const [offset, setOffset] = useState(0);
-  const [position, setPosition] = useState(0);
+  const [offset, setOffset] = useState(startAt);
+  const [position, setPosition] = useState(startAt);
   const [quality, setQuality] = useState<PlayerQuality>(PLAYER_QUALITIES[0]);
   const { controlsVisible, wake, sleep } = useControlsAutoHide(playing);
   // 틈 안이면 다음 구간 시작, 녹화 끝을 지났으면 마지막 구간 끝 1초 앞(끝까지 본 뒤 다시 누른 경우)
@@ -64,7 +86,7 @@ export function useRecordedPlayback(
     () =>
       recordingClipUrl(
         recorded.streamId,
-        recorded.startMs + Math.round(piece.fromSeconds * 1000),
+        recorded.startMs + pieceOffsetMs(piece.fromSeconds),
         Math.max(1, piece.toSeconds - piece.fromSeconds),
       ),
     [recorded.streamId, recorded.startMs, piece],
@@ -117,27 +139,31 @@ export function useRecordedPlayback(
 
   const jumpTo = useCallback(
     (seconds: number, backward = false) => {
-      const wanted = Math.min(Math.max(0, total - 1), Math.max(0, seconds));
       // 틈 안이면 다음 구간 시작으로(뒤로 가기면 앞 구간 끝으로) — 시크바도 실제로 틀 자리를 보인다
       const target = backward
-        ? playableBackFrom(recordedRef.current, wanted)
-        : (playableFrom(recordedRef.current, wanted)?.fromSeconds ?? wanted);
+        ? playableBackFrom(recordedRef.current, clampToRecording(total, seconds))
+        : forwardTarget(recordedRef.current, seconds);
       setPosition(target);
       if (seekTimer.current !== null) window.clearTimeout(seekTimer.current);
-      // 시크바를 끄는 동안 매 좌표마다 새 줄기를 받지 않는다
+      // 시크바를 끄는 동안 매 좌표마다 새 줄기를 받지 않는다. 언마운트 때 이 타이머를 지우지 않는다: 진짜 언마운트면 걸려도
+      // 아무 일도 없고(언마운트된 부품의 setOffset은 버려지고 영상 노드도 떨어져 있다), 개발 서버(StrictMode)가 새로 선 부품을
+      // 껐다 켤 때 선 직후에 건 이동을 잃지 않는다(QA 2026-10-11)
       seekTimer.current = window.setTimeout(() => {
         seekTimer.current = null;
-        setOffset(target);
+        if (pieceOffsetMs(target) !== pieceOffsetMs(offsetRef.current)) {
+          setOffset(target);
+          return;
+        }
+        // 지금 줄기가 이미 그 자리에서 시작하면 주소가 같아 다시 받지 않으므로 줄기 처음으로 되감는다: 같은 카드를 다시
+        // 눌렀는데 영상이 그대로 흐르던 결함(QA 2026-10-11 리뷰). 같은 자리인지는 주소가 쓰는 ms로 가른다: 1ms 안쪽 차이를
+        // 다른 자리로 보면 같은 주소라 다시 받지도 되감지도 않는다(리뷰 2라운드)
+        const video = videoRef.current;
+        if (video === null) return;
+        video.currentTime = 0;
+        if (wantPlayRef.current) void video.play().catch(() => undefined);
       }, SEEK_DEBOUNCE_MS);
     },
-    [total],
-  );
-
-  useEffect(
-    () => () => {
-      if (seekTimer.current !== null) window.clearTimeout(seekTimer.current);
-    },
-    [],
+    [total, videoRef],
   );
 
   const behindSeconds = Math.max(0, Math.round(total - position));
@@ -153,6 +179,7 @@ export function useRecordedPlayback(
     quality,
     lowLatency: false,
     settingsMenu: false,
+    replay: true,
     clipMarked: false,
     controlsVisible,
     togglePlay: useCallback(() => {

@@ -31,6 +31,9 @@ struct PluginConfig {
 	std::vector<AudioMixerBackup> audioMixerBackup;
 	// A4: 마크를 보낼 Clip API 주소. 비우면 apiBase (dev는 웹 프록시가 /api/clip/**을 Clip으로 넘긴다).
 	std::string clipApiBase;
+	// A3(4D): 종료 신호 기준 주소 덮어쓰기. 루프백(localhost·127.x·[::1])일 때만 인정하고 아니면 운영 주소
+	// (end-signal-policy kEndSignalBase)로 간다 — 규약 「개발 빌드만 루프백」. 화면·브리지에 없다(파일로만 바꾼다).
+	std::string endSignalBase;
 	// A4: 마지막으로 쓴 단축키 바인딩 사본({"bindings":[...]} JSON). 비었으면 사본 없음.
 	// 프로필 basic.ini [Hotkeys]가 우선이고, 그 프로필에 없을 때 이것을, 이것도 없으면 기본 Ctrl+Shift+M을 쓴다.
 	std::string markHotkey;

@@ -43,6 +43,7 @@ export function LibraryScreen(options: LibraryOptions = {}) {
     deselect,
     renameClip,
     upload,
+    retryUpload,
     retryRender,
     download,
     previewUrl,
@@ -196,6 +197,7 @@ export function LibraryScreen(options: LibraryOptions = {}) {
               onTitleChange={(title) => renameClip(panelClip.id, title)}
               onUpload={() => upload(panelClip.id)}
               onRetryRender={() => retryRender(panelClip.id)}
+              onRetryUpload={() => retryUpload(panelClip.id)}
               onDownload={() => download(panelClip.id)}
               sending={sendingIds.has(panelClip.id)}
               loadPreview={panelClip.entry ? () => previewUrl(panelClip.id) : undefined}

@@ -85,10 +85,15 @@ public final class LocalStackFixture {
 
     /** 창고를 만들고(있으면 그대로) 파일 하나를 놓는다. 완성 영상 주소 시험이 「그 주소로 진짜 받아지나」를 잰다. */
     public static void putObject(String bucket, String key, byte[] body, String contentType) {
+        ensureBucket(bucket);
+        S3.putObject(b -> b.bucket(bucket).key(key).contentType(contentType), RequestBody.fromBytes(body));
+    }
+
+    /** 창고가 없으면 만든다. 썸네일 그림 시험(POK-291)이 운영 코드의 putObject 앞에 부른다. */
+    public static synchronized void ensureBucket(String bucket) {
         if (S3.listBuckets().buckets().stream().noneMatch(b -> b.name().equals(bucket))) {
             S3.createBucket(b -> b.bucket(bucket));
         }
-        S3.putObject(b -> b.bucket(bucket).key(key).contentType(contentType), RequestBody.fromBytes(body));
     }
 
     /** 표준 큐 + 전용 실패 큐(POK-125 렌더 주문줄 모양). {@code maxReceiveCount}를 넘으면 실패 큐로 옮긴다. */

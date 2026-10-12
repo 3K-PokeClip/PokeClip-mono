@@ -40,6 +40,11 @@ class S3PurgeStorage implements PurgeStorage {
     }
 
     @Override
+    public boolean deletesSegments() {
+        return segmentBucket != null && !segmentBucket.isBlank();
+    }
+
+    @Override
     public void deleteSegmentObjects(List<String> keys) {
         deleteAll(segmentBucket, keys);
     }

@@ -11,6 +11,8 @@ const MINE_START = Date.parse('2026-09-29T10:00:00Z');
 const api = vi.hoisted(() => ({
   spans: [] as { startMs: number; durationSeconds: number }[],
   asked: [] as string[],
+  /** 목록 끝에 더할 방송 줄 */
+  extra: [] as Record<string, unknown>[],
 }));
 vi.mock('@/api/mediaPlayback', () => ({
   playbackConfigured: () => true,
@@ -43,12 +45,14 @@ vi.mock('@/api/clipEditor', async (importOriginal) => ({
         endedAt: new Date(MINE_START - 23 * HOUR).toISOString(),
         vodExpiresAt: null,
       },
+      ...api.extra,
     ]),
 }));
 
 afterEach(() => {
   api.spans = [];
   api.asked = [];
+  api.extra = [];
 });
 
 describe('useVodListMockState — 녹화 있음 판정', () => {
@@ -82,5 +86,26 @@ describe('useVodListMockState — 녹화 있음 판정', () => {
     const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
     await waitFor(() => expect(result.current.visuals['S-mine']?.title).toBe('새벽 랭크'));
     expect(result.current.visuals['S-other']?.title).toBe('S-other');
+  });
+
+  it('시작 시각 없는 방송은 끝 12시간 밖의 다른 날 녹화로 「다시 보기 가능」이 되지 않는다: 다시보기와 같은 하한이다', async () => {
+    // 다시보기만 하한을 좁혀, 목록은 열어 주는데 들어가면 「녹화 영상을 찾지 못했어요」였다(리뷰 6라운드)
+    api.extra = [
+      {
+        streamId: 'S-placeholder',
+        ingestStreamId: 'key-shared',
+        status: 'ended',
+        relation: 'OWNER',
+        startedAt: null,
+        endedAt: new Date(MINE_START + 3 * HOUR).toISOString(),
+        vodExpiresAt: null,
+      },
+    ];
+    api.spans = [{ startMs: MINE_START - 24 * HOUR, durationSeconds: 1800 }];
+    const { result } = renderHook(() => useVodListMockState(), { wrapper: withToastProvider });
+    await waitFor(() => expect(result.current.totalCount).toBe(3));
+    expect(result.current.broadcasts.find((b) => b.streamId === 'S-placeholder')?.status).toBe(
+      'ended',
+    );
   });
 });

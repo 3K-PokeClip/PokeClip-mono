@@ -11,8 +11,10 @@ import {
   detailViewForClip,
   durationLabel,
   noteText,
+  privacyNoteText,
   retentionLabel,
   safeExternalUrl,
+  thumbnailFailureText,
   uploadFailureText,
   type DetailView,
 } from './libraryView';
@@ -31,6 +33,7 @@ export function ClipDetailPanel({
   onTitleChange,
   onUpload,
   onRetryRender,
+  onRetryUpload,
   onDownload,
   onDelete,
   sending = false,
@@ -44,15 +47,19 @@ export function ClipDetailPanel({
   onTitleChange: (title: string) => void;
   onUpload: () => void;
   onRetryRender: () => void;
+  /** 업로드 실패를 저장된 정보 그대로 다시 올린다(POK-291) */
+  onRetryUpload: () => void;
   onDownload: () => void;
   onDelete: () => void;
-  /** 업로드 주문을 보내는 중 — 주 동작을 잠근다 */
+  /** 업로드 주문·다시 시도를 보내는 중: 주 동작을 잠근다 */
   sending?: boolean;
   /** 완성 영상 주소를 받는다. 없으면(목업 줄) 미리보기는 장식이다 */
   loadPreview?: () => Promise<string | null>;
 }) {
   const view = detailViewForClip(clip, status, role);
   const uploadFailure = uploadFailureText(clip);
+  const thumbnailFailure = thumbnailFailureText(clip);
+  const privacyNote = privacyNoteText(clip);
   const playable = loadPreview !== undefined && clip.entry?.latestClip?.status === 'rendered';
   const duration = durationLabel(clip, status);
   const retention = ddayFor(clip.sourceExpiresAt, now);
@@ -139,6 +146,7 @@ export function ClipDetailPanel({
           sending={sending}
           onUpload={() => runTransition(onUpload)}
           onRetryRender={() => runTransition(onRetryRender)}
+          onRetryUpload={() => runTransition(onRetryUpload)}
         />
         <div className={styles.actionRow}>
           {view.edit ? (
@@ -173,8 +181,12 @@ export function ClipDetailPanel({
             <Trash2 size={14} aria-hidden />
           </IconButton>
         </div>
+        {/* 진행 한 줄(만드는 중 N% · 올리는 중)은 원래 안내 자리에 둔다: 「자막」 칸은 자막 정보 자리다(POK-291) */}
+        {clip.progressLabel ? <p className={styles.note}>{clip.progressLabel}</p> : null}
         {view.note ? <p className={styles.note}>{noteText(view.note, role)}</p> : null}
         {uploadFailure ? <p className={styles.note}>{uploadFailure}</p> : null}
+        {thumbnailFailure ? <p className={styles.note}>{thumbnailFailure}</p> : null}
+        {privacyNote ? <p className={styles.note}>{privacyNote}</p> : null}
       </div>
 
       <hr className={styles.divider} />
@@ -228,6 +240,7 @@ function PrimaryControl({
   sending,
   onUpload,
   onRetryRender,
+  onRetryUpload,
 }: {
   primary: DetailView['primary'];
   editHref: string;
@@ -235,6 +248,7 @@ function PrimaryControl({
   sending: boolean;
   onUpload: () => void;
   onRetryRender: () => void;
+  onRetryUpload: () => void;
 }) {
   switch (primary.kind) {
     case 'link':
@@ -276,8 +290,14 @@ function PrimaryControl({
           variant="solid"
           size="md"
           fullWidth
-          disabled={primary.action === 'upload' && sending}
-          onClick={primary.action === 'upload' ? onUpload : onRetryRender}
+          disabled={primary.action !== 'retryRender' && sending}
+          onClick={
+            primary.action === 'upload'
+              ? onUpload
+              : primary.action === 'retryUpload'
+                ? onRetryUpload
+                : onRetryRender
+          }
         >
           {primary.label}
         </Button>

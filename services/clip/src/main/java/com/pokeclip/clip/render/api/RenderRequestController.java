@@ -6,17 +6,22 @@ import com.pokeclip.clip.render.RenderRequestService.Requested;
 import com.pokeclip.clip.support.NotFoundFloor;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
- * 영상 만들기 주문 문 둘(POK-125) — 주문·하나 보기. 목록은 POK-243. 본문이 없다: 무엇을 만들지는 편집본 번호가 말한다.
+ * 영상 만들기 주문 문 둘(POK-125) — 주문·하나 보기. 목록은 POK-243. 무엇을 만들지는 편집본 번호가 말한다.
+ * 본문은 선택이고 「렌더 뒤 유튜브에 올릴 정보」다(POK-291).
  *
  * <p>거절 판정이 여기 하나도 없다({@code RecipeController}와 같은 규칙). 하는 일은 사용자 번호를 토큰에서 꺼내고
  * 404 기준 시각을 찍는 것뿐이다.
@@ -31,14 +36,38 @@ public class RenderRequestController {
         this.service = service;
     }
 
-    /** 201 새 주문 · 200 같은 편집본 같은 판이 이미 진행 중(그것을 돌려준다 — 더블클릭이 주문을 두 번 안 만든다). */
+    /**
+     * 201 새 주문 · 200 같은 편집본 같은 판이 이미 진행 중(그것을 돌려준다 — 더블클릭이 주문을 두 번 안 만든다).
+     *
+     * <p>본문(POK-291): 없으면 렌더만. JSON {@code {"upload": …}}이면 렌더 뒤 유튜브까지. 이미 완성된 판이면 다시 안 만들고 200.
+     * 본문은 글자로 받아 서비스가 읽는다(칸 검사가 서비스에 있다).
+     */
     @PostMapping("/recipes/{recipeId}/renders")
     public ResponseEntity<ClipSnapshot> request(@PathVariable String streamId,
                                                 @PathVariable long recipeId,
+                                                @RequestBody(required = false) String body,
                                                 @AuthenticationPrincipal Jwt jwt,
                                                 HttpServletRequest request) {
         NotFoundFloor.mark(request);
-        Requested requested = service.request(jwt.getSubject(), streamId, recipeId);
+        return reply(service.request(jwt.getSubject(), streamId, recipeId, body, null, false));
+    }
+
+    /**
+     * 썸네일 그림을 함께 보내는 「영상 만들기」(POK-291). 파트 {@code request}(JSON, 위와 같은 모양) + {@code thumbnail}(그림,
+     * {@code thumbnail.source}가 {@code file}일 때만). 크기 상한(10MB)은 서블릿 층이 자른다(413).
+     */
+    @PostMapping(path = "/recipes/{recipeId}/renders", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ClipSnapshot> requestWithFile(@PathVariable String streamId,
+                                                        @PathVariable long recipeId,
+                                                        @RequestPart("request") String body,
+                                                        @RequestPart(value = "thumbnail", required = false) MultipartFile thumbnail,
+                                                        @AuthenticationPrincipal Jwt jwt,
+                                                        HttpServletRequest request) {
+        NotFoundFloor.mark(request);
+        return reply(service.request(jwt.getSubject(), streamId, recipeId, body, thumbnail, true));
+    }
+
+    private static ResponseEntity<ClipSnapshot> reply(Requested requested) {
         return ResponseEntity.status(requested.created() ? HttpStatus.CREATED : HttpStatus.OK).body(requested.clip());
     }
 

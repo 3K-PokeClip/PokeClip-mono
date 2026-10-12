@@ -9,6 +9,7 @@ import {
   requestFileAccess,
   requestRender,
   requestUpload,
+  retryUpload as requestUploadRetry,
   ClipApiError,
   type LibraryEntry,
   type UploadSnapshot,
@@ -20,10 +21,12 @@ import {
   sortClips,
   statusFor,
   uploadErrorMessage,
+  uploadsFromIntent,
   uploadTitleProblem,
   type LibraryChip,
   type LibrarySort,
 } from './libraryView';
+import { PRIVACY_LABEL } from '@/features/clips/editor/uploadInfo';
 
 // 시안 1g 보관함의 상태 (POK-251 — 실제 값).
 //
@@ -32,8 +35,9 @@ import {
 // 시안이 그리는 칸이라 서버 줄을 여기서 옮긴다(toLibraryClip). 서버가 아직 안 주는 칸은 지어내지
 // 않는다 — 제목은 업로드 제목이 없으면 「편집본 #번호」, 만든 사람은 회원 번호.
 //
-// 화면 상태 7종 중 서버가 주는 것은 넷이다(편집 중·업로드 대기·발행됨·실패). 승인 대기·반려는 승인 게이트가 없어
-// 쓰지 않는다. 「만드는 중」·「올리는 중」·「확인 필요」는 화면 상태에 없어 보조 줄과 패널 주 동작이 말한다(POK-111).
+// 화면 상태는 시안 1g의 7종에 진행 단계 넷을 더했다(POK-291): 만드는 중 · 올리는 중 · 확인 필요 · 업로드 실패. 승인 대기·반려는
+// 승인 게이트가 없어 서버 줄에는 쓰지 않는다. 업로드 실패는 서버 상태가 아니다: 서버는 완성(rendered)으로 돌려주고, 웹이
+// 「가장 최근 업로드가 실패」로 만든다(서버 상태를 늘리면 clip 규칙·웹 규칙을 같이 바꿔야 한다).
 //
 // 동작은 줄마다 갈린다: 서버에서 온 줄(`entry`가 있다)은 실제 문으로 가고, 시험·스토리북이 주입한 목업 줄은
 // 상태 전이만 흉내 낸다(예전 목업 그대로 — 화면 흐름을 시험이 계속 잴 수 있게).
@@ -46,9 +50,22 @@ const STABLE_REFRESH_MS = 5 * 60_000;
 /** 화면 모드(ADR-032) — 계정 속성이 아니다 */
 export type LibraryRole = 'streamer' | 'editor';
 
-/** 시안 1g ④의 7종. expired는 발행됨 중 원본 VOD 보관이 지난 것이다(ADR-004 60일) */
+/**
+ * 시안 1g ④의 7종 + 진행 단계 넷(POK-291: rendering 만드는 중 · uploading 올리는 중 · checking 확인 필요 · uploadFailed 업로드
+ * 실패). expired는 발행됨 중 원본 VOD 보관이 지난 것이다(ADR-004 60일)
+ */
 export type ClipStatus =
-  'editing' | 'ready' | 'pending' | 'rejected' | 'published' | 'expired' | 'failed';
+  | 'editing'
+  | 'rendering'
+  | 'ready'
+  | 'uploading'
+  | 'checking'
+  | 'uploadFailed'
+  | 'pending'
+  | 'rejected'
+  | 'published'
+  | 'expired'
+  | 'failed';
 
 export interface LibraryClip {
   id: string;
@@ -64,6 +81,8 @@ export interface LibraryClip {
   sourceExpiresAt: string | null;
   templateLabel: string;
   subtitleLabel: string;
+  /** 서버 줄의 진행 한 줄(만드는 중 N% · 올리는 중 · 렌더 실패 사유). 패널이 배지 아래 안내 자리에 그린다. 목업 줄에는 없다 */
+  progressLabel?: string | null;
   /** ISO — 생성순 */
   createdAt: string;
   /** ISO — 최근 편집순 */
@@ -88,27 +107,32 @@ function sourceLabelOf(entry: LibraryEntry): string {
     : `${d.getMonth() + 1}월 ${d.getDate()}일 ${entry.broadcast.status === 'live' ? '라이브' : '방송'}`;
 }
 
-function subtitleLabelOf(entry: LibraryEntry): string {
+/**
+ * 진행 한 줄(POK-291). 예전에는 패널의 「자막」 칸에 들어갔는데 그 칸은 자막 정보 자리라 떼어 냈다. 배지가 이미 말하는
+ * 상태(완성·확인 필요·업로드됨)는 되풀이하지 않는다: 확인 필요는 안내문이, 업로드 실패는 사유 문구가 말한다.
+ */
+function progressLabelOf(entry: LibraryEntry): string | null {
   const clip = entry.latestClip;
   switch (entry.status) {
     case 'editing':
       return clip === null
-        ? '아직 영상 안 만듦'
+        ? null
         : `v${clip.recipeVersion} 영상 있음 · 지금은 v${entry.recipeVersion}`;
-    case 'rendering':
-      return clip?.status === 'rendering'
-        ? `영상 만드는 중 ${clip.progress?.percent ?? 0}%`
-        : '영상 주문됨 · 차례 기다리는 중';
-    case 'rendered':
-      return `완성 · 파일 ${clip?.outputs?.length ?? 0}개`;
+    case 'rendering': {
+      const step =
+        clip?.status === 'rendering'
+          ? `영상 만드는 중 ${clip.progress?.percent ?? 0}%`
+          : '영상 주문됨 · 차례 기다리는 중';
+      return entry.uploadRequest ? `${step} · 끝나면 유튜브에 올려요` : step;
+    }
     case 'failed':
       return `렌더 실패 · ${clip?.error?.code ?? '?'}`;
     case 'uploading':
       return '유튜브에 올리는 중';
+    case 'rendered':
     case 'checking':
-      return '유튜브에 올라갔는지 확인이 필요해요';
     case 'uploaded':
-      return '유튜브에 올림';
+      return null;
   }
 }
 
@@ -118,33 +142,44 @@ function youtubeUrlOf(entry: LibraryEntry): string | undefined {
 }
 
 /**
- * 서버 줄 → 화면 칸. 상태 일곱을 화면 상태로 접는다: rendering 은 화면에 칸이 없어 editing(보조 줄이 말한다),
- * 올리는 중·확인 중은 완성(ready) 위에 보조 줄로, 올림은 발행됨이다.
+ * 서버 줄 → 화면 칸. 서버 상태 일곱이 화면 상태로 하나씩 간다(POK-291): 만드는 중·올리는 중·확인 필요가 제 배지를 갖고,
+ * 올림은 발행됨(배지 「업로드됨」)이다. 업로드 실패는 아래 toLibraryClip이 만든다.
  */
 const SCREEN_STATUS: Record<LibraryEntry['status'], ClipStatus> = {
   editing: 'editing',
-  rendering: 'editing',
+  rendering: 'rendering',
   rendered: 'ready',
   failed: 'failed',
-  uploading: 'ready',
-  checking: 'ready',
+  uploading: 'uploading',
+  checking: 'checking',
   uploaded: 'published',
 };
 
+/** 화면 상태. 완성인데 가장 최근 업로드가 실패면 「업로드 실패」다(서버는 다시 올릴 수 있게 완성으로 돌려준다) */
+function screenStatusOf(entry: LibraryEntry): ClipStatus {
+  if (entry.status === 'rendered' && entry.latestClip?.upload?.status === 'failed')
+    return 'uploadFailed';
+  return SCREEN_STATUS[entry.status];
+}
+
 export function toLibraryClip(entry: LibraryEntry, meId: string | null): LibraryClip {
-  const status: ClipStatus = SCREEN_STATUS[entry.status];
+  const status: ClipStatus = screenStatusOf(entry);
   const mine = meId !== null && String(entry.creatorId) === meId;
   return {
     id: String(entry.recipeId),
-    // 제목 칸이 서버에 있는 곳은 유튜브 업로드뿐이다(POK-220) — 올린 적이 있으면 그 제목을 보인다
-    title: entry.latestClip?.upload?.title ?? `편집본 #${entry.recipeId}`,
+    // 제목 칸이 서버에 있는 곳은 유튜브 업로드(POK-220)와 업로드 정보(POK-291)뿐이다: 올린 적이 있으면 그 제목,
+    // 아직 업로드 줄이 없으면(만드는 중) 창에서 적은 제목을 보인다
+    title:
+      entry.latestClip?.upload?.title ?? entry.uploadRequest?.title ?? `편집본 #${entry.recipeId}`,
     status,
     durationSec: entry.cut ? Math.round((entry.cut.outAtMs - entry.cut.inAtMs) / 1000) : null,
     owner: { name: mine ? '나' : `편집자 ${entry.creatorId}`, me: mine },
     sourceLabel: sourceLabelOf(entry),
     sourceExpiresAt: entry.broadcast.vodExpiresAt,
     templateLabel: '세로 쇼츠 1벌',
-    subtitleLabel: subtitleLabelOf(entry),
+    // 자막 정보는 목록에 없다: 지어내지 않는다
+    subtitleLabel: '—',
+    progressLabel: progressLabelOf(entry),
     createdAt: entry.createdAt,
     editedAt: entry.updatedAt,
     youtubeUrl: youtubeUrlOf(entry),
@@ -195,11 +230,14 @@ export interface LibraryMockState {
   /** 제목 인라인 편집 — 입력마다 저장한다(시안 1g ③) */
   renameClip: (id: string, title: string) => void;
   /**
-   * 서버 줄: 패널의 제목으로 유튜브 업로드를 주문한다(POK-111, 스트리머 채널에 비공개). 목업 줄: 업로드 대기 →
-   * 발행됨(스트리머) / 승인 대기(편집자). 그 밖의 상태는 무시
+   * 서버 줄: 유튜브 업로드를 주문한다. 업로드 줄이 없고 그 판의 업로드 정보가 있으면 다시 시도 문으로 그 정보(제목·설명·태그·
+   * 공개 범위·아동용·썸네일)대로 올리고(POK-291), 없으면 패널의 제목으로 옛 문을 탄다(POK-111, 창 없이 만든 옛 영상의 길이라 비공개).
+   * 목업 줄: 업로드 대기 → 발행됨(스트리머) / 승인 대기(편집자). 그 밖의 상태는 무시
    */
   upload: (id: string) => void;
-  /** 업로드 주문을 보내고 답을 기다리는 편집본 — 두 번 눌러 두 번 보내지 않게 패널이 단추를 잠근다 */
+  /** 업로드 실패한 서버 줄을 저장된 정보 그대로 다시 올린다(POK-291, 창 없이). 그 밖의 줄은 무시 */
+  retryUpload: (id: string) => void;
+  /** 업로드 주문·다시 시도를 보내고 답을 기다리는 편집본: 두 번 눌러 두 번 보내지 않게 패널이 단추를 잠근다 */
   sendingIds: ReadonlySet<string>;
   /** 렌더 실패 → 업로드 대기. 결과를 토스트로 흉내 내지 않는다 */
   retryRender: (id: string) => void;
@@ -297,7 +335,8 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     setSendingIds(new Set(sending.current));
   }, []);
 
-  // 서버 줄은 가장 최근 영상을 패널 제목으로 올린다. 서버가 같은 영상·출력의 살아 있는 업로드를 돌려주므로(200)
+  // 서버 줄은 가장 최근 영상을 올린다: 그 판의 업로드 정보가 있으면 그 정보로, 없으면 패널 제목으로(아래 fromIntent).
+  // 서버가 같은 영상·출력의 살아 있는 업로드를 돌려주므로(200)
   // 겹쳐 눌러도 두 번 올라가지 않지만, 보내는 중에는 단추를 잠가 헛요청도 안 보낸다.
   // 목업 줄은 상태 전이만 흉내 낸다 — 성공 토스트는 결과를 지어내는 일이라 띄우지 않는다.
   const upload = useCallback(
@@ -307,18 +346,25 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       if (clip !== undefined && entry !== undefined) {
         const clipId = entry.latestClip?.id;
         if (entry.status !== 'rendered' || clipId === undefined) return;
-        const problem = uploadTitleProblem(clip.title);
-        if (problem !== null) {
-          toast({ tone: 'error', title: '제목을 고쳐 주세요', description: problem });
-          return;
+        // 영상 만들기 창에서 고른 업로드 정보가 있는데 자동 업로드가 안 붙었으면(업로드가 꺼져 있었거나 서버 경합) 옛 문은
+        // 제목만 실어 설명·태그·공개 범위·썸네일이 빠진다. 다시 시도 문은 업로드 줄이 없으면 그 판의 정보로 올린다(POK-291)
+        const fromIntent = uploadsFromIntent(entry);
+        if (!fromIntent) {
+          const problem = uploadTitleProblem(clip.title);
+          if (problem !== null) {
+            toast({ tone: 'error', title: '제목을 고쳐 주세요', description: problem });
+            return;
+          }
         }
         if (sending.current.has(id)) return;
         setSendingFlag(id, true);
         const title = clip.title.trim();
-        videoOutputOf(entry)
-          .then((outputId) =>
-            requestUpload(entry.streamId, clipId, outputId ? { title, outputId } : { title }),
-          )
+        (fromIntent
+          ? requestUploadRetry(entry.streamId, clipId)
+          : videoOutputOf(entry).then((outputId) =>
+              requestUpload(entry.streamId, clipId, outputId ? { title, outputId } : { title }),
+            )
+        )
           .then(({ created, upload: snap }) => {
             titleDrafts.current.delete(id);
             listGeneration.current += 1;
@@ -340,7 +386,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
                 ? {
                     tone: 'success',
                     title: '유튜브 업로드를 시작했어요',
-                    description: '스트리머 채널에 비공개로 올라가요. 끝나면 여기 상태가 바뀌어요.',
+                    description: `스트리머 채널에 ${PRIVACY_LABEL[snap.privacyStatus ?? 'private']}로 올라가요. 끝나면 여기 상태가 바뀌어요.`,
                   }
                 : {
                     tone: 'info',
@@ -364,7 +410,62 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     [clips, patch, role, setSendingFlag, toast],
   );
 
+  // 업로드 다시 시도(POK-291) = 실패한 업로드의 칸(제목·설명·태그·공개 범위·썸네일·출력)을 서버가 복사해 새로 올린다.
+  // 웹은 그 칸들을 들고 있지 않아(목록이 무거워진다) 본문 없이 부른다. 늦은 답 막기는 업로드 주문과 같은 두 장치다
+  // (ADR-080 6번): 목록 읽기 세대를 올려 그 전에 떠난 읽기를 버리고, 답은 「아직 실패한 같은 영상」일 때만 얹는다.
+  const retryUpload = useCallback(
+    (id: string) => {
+      const entry = clips.find((c) => c.id === id)?.entry;
+      const clipId = entry?.latestClip?.id;
+      if (
+        entry === undefined ||
+        clipId === undefined ||
+        entry.status !== 'rendered' ||
+        entry.latestClip?.upload?.status !== 'failed'
+      )
+        return;
+      if (sending.current.has(id)) return;
+      setSendingFlag(id, true);
+      requestUploadRetry(entry.streamId, clipId)
+        .then(({ created, upload: snap }) => {
+          listGeneration.current += 1;
+          // 🔴 그사이 읽은 것이 더 새로우면 그대로 둔다: 다른 탭에서 다시 시도해 올리는 중·올림이 됐거나 다른 영상이 최신이
+          // 됐으면 이 답(queued)이 그것을 되돌린다. 「아직 실패한 같은 영상」일 때만 얹는다
+          setClips((prev) =>
+            prev.map((c) =>
+              c.id === id &&
+              c.entry !== undefined &&
+              c.entry.status === 'rendered' &&
+              c.entry.latestClip?.id === snap.clipId &&
+              c.entry.latestClip?.upload?.status === 'failed'
+                ? toLibraryClip(withUpload(c.entry, snap), meIdRef.current)
+                : c,
+            ),
+          );
+          toast(
+            created
+              ? {
+                  tone: 'success',
+                  title: '다시 올리기 시작했어요',
+                  description: `저장된 정보 그대로 스트리머 채널에 ${PRIVACY_LABEL[snap.privacyStatus ?? 'private']}로 올려요. 끝나면 여기 상태가 바뀌어요.`,
+                }
+              : {
+                  tone: 'info',
+                  title: '이미 올리는 중인 업로드가 있어요',
+                  description: '다른 곳에서 먼저 다시 올렸어요.',
+                },
+          );
+        })
+        .catch((e: unknown) => {
+          toast({ tone: 'error', title: '다시 시도 실패', description: uploadErrorMessage(e) });
+        })
+        .finally(() => setSendingFlag(id, false));
+    },
+    [clips, setSendingFlag, toast],
+  );
+
   // 렌더 재시도 = 같은 편집본을 다시 주문한다(POK-125: 끝난 영상은 자리를 비워 다시 주문할 수 있다).
+  // 그 판의 업로드 정보가 서버에 남아 있으면 렌더가 끝나는 대로 clip이 이어서 올린다(POK-291).
   const retryRender = useCallback(
     (id: string) => {
       const entry = clips.find((c) => c.id === id)?.entry;
@@ -373,7 +474,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
         return;
       }
       requestRender(entry.streamId, entry.recipeId)
-        .then((snap) => {
+        .then(({ clip: snap }) => {
           toast({ tone: 'success', title: `영상 #${snap.id} 다시 주문됨` });
           refresh();
         })
@@ -501,6 +602,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     deselect,
     renameClip,
     upload,
+    retryUpload,
     sendingIds,
     retryRender,
     download,

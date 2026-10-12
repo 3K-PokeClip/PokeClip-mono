@@ -55,8 +55,8 @@ public class StreamerPurger {
 
         PurgeStorage files = storage.getIfAvailable();
         if (files == null) {
-            // 렌더가 꺼진 배포는 창고 이름을 모른다. 이 서버가 만든 파일도 없다. 녹화 조각 줄도 안 지운다: 줄을 지우면
-            // media가 올린 파일의 키를 다시 알 길이 없다.
+            // 렌더도 업로드도 꺼진 배포는 창고 이름을 모른다(그 배포에서는 이 서버가 창고에 새 파일을 만들지 않는다).
+            // 녹화 조각 줄도 안 지운다: 줄을 지우면 media가 올린 파일의 키를 다시 알 길이 없다.
             store.clearPrefixes(streamerId);
             store.clearSegmentKeys(streamerId);
             store.complete(streamerId, clock.instant());
@@ -69,7 +69,14 @@ public class StreamerPurger {
             files.deleteOutputPrefix(prefix);
             store.prefixDone(streamerId, prefix);
         }
-        int segments = purgeSegments(streamerId, files);
+        int segments = 0;
+        if (files.deletesSegments()) {
+            segments = purgeSegments(streamerId, files);
+        } else {
+            // 렌더를 끄고 업로드만 켠 배포: 조각 창고 이름을 모른다. 줄을 남기면 파일 키를 잃지 않는다(위 갈래와 같은 이유).
+            store.clearSegmentKeys(streamerId);
+            log.warn("clip.purge.segments_skipped streamerId={}", streamerId);
+        }
         store.complete(streamerId, clock.instant());
         log.info("clip.purge.completed streamerId={} prefixes={} segments={}", streamerId, prefixes.size(), segments);
     }

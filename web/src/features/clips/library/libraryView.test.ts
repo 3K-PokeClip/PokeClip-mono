@@ -64,14 +64,57 @@ const ONE_OF_EACH: LibraryClip[] = STATUSES.map((status) =>
 );
 
 describe('libraryView — STATUS_BADGE', () => {
-  it('7개 상태의 배지 톤·라벨이 시안과 같다 — 발행됨·원본 만료는 같은 「발행됨」이다', () => {
+  it('시안 7개 상태의 배지 톤·라벨: 유튜브에 올라간 것은 「업로드됨」이고 원본 만료도 같은 배지다(POK-291)', () => {
     expect(STATUS_BADGE.editing).toEqual({ tone: 'point', label: '편집 중' });
     expect(STATUS_BADGE.ready).toEqual({ tone: 'neutral', label: '업로드 대기' });
     expect(STATUS_BADGE.pending).toEqual({ tone: 'warning', label: '승인 대기' });
     expect(STATUS_BADGE.rejected).toEqual({ tone: 'danger', label: '반려됨' });
-    expect(STATUS_BADGE.published).toEqual({ tone: 'success', label: '발행됨' });
+    expect(STATUS_BADGE.published).toEqual({ tone: 'success', label: '업로드됨' });
     expect(STATUS_BADGE.expired).toEqual(STATUS_BADGE.published);
     expect(STATUS_BADGE.failed).toEqual({ tone: 'danger', label: '렌더 실패' });
+  });
+
+  it('진행 단계 넷의 배지: 만드는 중 · 올리는 중 · 확인 필요 · 업로드 실패(POK-291)', () => {
+    expect(STATUS_BADGE.rendering.label).toBe('만드는 중');
+    expect(STATUS_BADGE.uploading.label).toBe('올리는 중');
+    expect(STATUS_BADGE.checking).toEqual({ tone: 'warning', label: '확인 필요' });
+    expect(STATUS_BADGE.uploadFailed).toEqual({ tone: 'danger', label: '업로드 실패' });
+  });
+});
+
+describe('libraryView: 진행 단계의 칩과 패널(POK-291)', () => {
+  it('만드는 중·올리는 중은 작업 중, 손이 필요한 업로드 실패·확인 필요는 업로드 대기 칩이다', () => {
+    for (const role of ROLES) {
+      expect(chipOf('rendering', role)).toBe('working');
+      expect(chipOf('uploading', role)).toBe('working');
+      expect(chipOf('uploadFailed', role)).toBe('ready');
+      expect(chipOf('checking', role)).toBe('ready');
+    }
+  });
+
+  it('서버 일이 도는 동안은 누를 것이 없고 제목이 잠긴다: 이어서 편집은 열어 둔다', () => {
+    expect(detailViewFor('rendering', 'streamer')).toMatchObject({
+      primary: { kind: 'busy', label: '영상 만드는 중' },
+      titleLocked: true,
+      download: false,
+      edit: { label: '이어서 편집' },
+    });
+    expect(detailViewFor('uploading', 'editor')).toMatchObject({
+      primary: { kind: 'busy', label: '유튜브에 올리는 중' },
+      titleLocked: true,
+    });
+    expect(detailViewFor('checking', 'streamer')).toMatchObject({
+      primary: { kind: 'busy', label: '업로드 확인 필요' },
+      note: 'checking',
+    });
+  });
+
+  it('업로드 실패의 주 동작은 「다시 시도」다: 저장된 정보로 올리니 제목은 잠근다', () => {
+    expect(detailViewFor('uploadFailed', 'streamer')).toMatchObject({
+      primary: { kind: 'action', label: '다시 시도', action: 'retryUpload' },
+      titleLocked: true,
+      download: true,
+    });
   });
 });
 

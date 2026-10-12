@@ -313,6 +313,21 @@ export interface ClipSnapshot {
   updatedAt: string;
   /** 가장 최근 유튜브 업로드(POK-220). 한 번도 안 올렸으면 null. 옛 응답에는 칸이 없다 */
   upload?: UploadSnapshot | null;
+  /**
+   * 이 영상의 판(recipeId·recipeVersion)에 남겨 둔 업로드 정보(POK-291). 있으면 렌더가 끝나는 대로 clip이 저절로 올린다.
+   * 없으면 null, 이 칸을 모르는 옛 서버면 빠져 온다
+   */
+  uploadRequest?: UploadRequestSummary | null;
+}
+
+export type PrivacyStatus = 'private' | 'unlisted' | 'public';
+export type ThumbnailSource = 'none' | 'scene' | 'file';
+
+/** 업로드 정보의 요약(POK-291). 설명·태그는 목록이 무거워져 싣지 않는다 */
+export interface UploadRequestSummary {
+  title: string;
+  privacyStatus: PrivacyStatus;
+  thumbnailSource: ThumbnailSource;
 }
 
 /** 유튜브 업로드 한 건(POK-220). 주소는 https://youtu.be/{videoId} */
@@ -327,6 +342,16 @@ export interface UploadSnapshot {
   requestedBy: string;
   createdAt: string;
   updatedAt: string;
+  /** 아래 넷은 POK-291에 생겼다. 옛 서버면 빠져 온다(그때는 비공개·썸네일 없음이었다) */
+  privacyStatus?: PrivacyStatus;
+  madeForKids?: boolean;
+  tags?: string[];
+  /** 썸네일. status: none(안 고름) · pending(붙이는 중) · set(붙음) · failed(못 붙임, errorCode에 사유) */
+  thumbnail?: {
+    source: ThumbnailSource;
+    status: 'none' | 'pending' | 'set' | 'failed';
+    errorCode: string | null;
+  };
 }
 
 /** 보관함 상태 일곱(clip LibraryStatus). 뒤의 셋은 유튜브 업로드(POK-220) */
@@ -352,6 +377,8 @@ export interface LibraryEntry {
   updatedAt: string;
   /** latestClip의 사진(POK-277). 영상 구간 안 가장 크게 터진 장면, 없으면 가운데 */
   thumbnailUrl?: string | null;
+  /** 이 편집본 **지금 판**에 남겨 둔 업로드 정보(POK-291). 없으면 null, 옛 서버면 빠져 온다 */
+  uploadRequest?: UploadRequestSummary | null;
 }
 
 export interface LibraryDetail extends LibraryEntry {
@@ -378,12 +405,47 @@ export function fetchRecipe(streamId: string, recipeId: number): Promise<RecipeS
   return getJson(`/api/clip/broadcasts/${encodeURIComponent(streamId)}/recipes/${recipeId}`);
 }
 
-/** 201 새 주문 · 200 같은 판이 이미 진행 중(그것을 돌려준다). 409 source_not_ready 는 조각이 덜 올라온 것. */
-export function requestRender(streamId: string, recipeId: number): Promise<ClipSnapshot> {
-  return sendJson(
-    'POST',
+/**
+ * 「영상 만들기」 창에서 고른 유튜브 업로드 정보(POK-291). 칸 이름은 clip 렌더 주문 문의 `upload`와 한 글자도 다르지 않다.
+ * 썸네일 이미지 파일은 JSON에 못 싣는다: source가 file이면 파일은 multipart의 thumbnail 파트로 따로 간다.
+ */
+export interface UploadInfo {
+  title: string;
+  description: string;
+  tags: string[];
+  privacyStatus: PrivacyStatus;
+  madeForKids: boolean;
+  thumbnail: { source: 'none' } | { source: 'scene'; offsetMs: number } | { source: 'file' };
+}
+
+/**
+ * 영상 주문. 201 새 주문 · 200 같은 판이 이미 진행 중이거나 이미 만들어져 있다(그것을 돌려준다). 409 source_not_ready 는
+ * 조각이 덜 올라온 것.
+ *
+ * `upload`를 주면 렌더가 끝나는 대로 clip이 그 정보로 유튜브에 올린다(POK-291). 본문은 multipart다: request 파트(JSON
+ * `{upload}`) + 이미지를 고른 경우 thumbnail 파트. 거절은 400 invalid_request(field) · 409 already_uploaded/youtube_not_linked ·
+ * 413 payload_too_large · 415 unsupported_image · 503 upload_unavailable/thumbnail_store_unavailable.
+ */
+export async function requestRender(
+  streamId: string,
+  recipeId: number,
+  upload?: UploadInfo,
+  thumbnailFile?: Blob | null,
+): Promise<{ created: boolean; clip: ClipSnapshot }> {
+  let body: FormData | undefined;
+  if (upload !== undefined) {
+    body = new FormData();
+    body.append('request', new Blob([JSON.stringify({ upload })], { type: 'application/json' }));
+    // 이미지를 고른 경우에만 싣는다: 그 밖에 파일이 오면 서버가 400(field=thumbnail)으로 거절한다
+    if (upload.thumbnail.source === 'file' && thumbnailFile)
+      body.append('thumbnail', thumbnailFile);
+  }
+  const res = await clipFetch(
     `/api/clip/broadcasts/${encodeURIComponent(streamId)}/recipes/${recipeId}/renders`,
+    { method: 'POST', body },
   );
+  // 200이면 새로 주문한 것이 아니다: 부른 쪽이 「새로 만든다」고 말하지 않게 가른다
+  return { created: res.status === 201, clip: (await res.json()) as ClipSnapshot };
 }
 
 export function fetchClip(streamId: string, clipId: number): Promise<ClipSnapshot> {
@@ -392,8 +454,8 @@ export function fetchClip(streamId: string, clipId: number): Promise<ClipSnapsho
 
 /**
  * 유튜브 업로드 주문(POK-220). 201 새 주문 · 200 같은 영상·출력의 살아 있는 업로드가 이미 있다(그것을 돌려준다).
- * 400 invalid_request(field) · 409 clip_not_rendered · 503 upload_unavailable/authorization_unavailable.
- * 방송 주인(스트리머)의 채널에 비공개로 올라간다.
+ * 400 invalid_request(field) · 409 clip_not_rendered/already_uploaded · 503 upload_unavailable/authorization_unavailable.
+ * 방송 주인(스트리머)의 채널에 올라간다. 공개 범위를 안 보내면 비공개다(업로드 정보 창 없이 만든 옛 영상의 길).
  */
 export async function requestUpload(
   streamId: string,
@@ -405,6 +467,22 @@ export async function requestUpload(
     { method: 'POST', body: JSON.stringify(body) },
   );
   // 200이면 보낸 제목이 아니라 먼저 주문된 업로드다 — 부른 쪽이 「새로 시작했다」고 말하지 않게 가른다
+  return { created: res.status === 201, upload: (await res.json()) as UploadSnapshot };
+}
+
+/**
+ * 실패한 업로드를 저장된 정보 그대로 다시 올린다(POK-291, 창 없이). 업로드 줄이 아직 없으면 그 판의 업로드 정보(영상 만들기
+ * 창에서 고른 것)로 올린다. 201 새로 시작 · 200 이미 살아 있는 업로드가 있다(그것을 돌려준다). 409 nothing_to_retry(올린 적도
+ * 업로드 정보도 없음)/already_uploaded(같은 판의 다른 영상이 올라갔다) · 503 upload_unavailable.
+ */
+export async function retryUpload(
+  streamId: string,
+  clipId: number,
+): Promise<{ created: boolean; upload: UploadSnapshot }> {
+  const res = await clipFetch(
+    `/api/clip/broadcasts/${encodeURIComponent(streamId)}/clips/${clipId}/uploads/retry`,
+    { method: 'POST' },
+  );
   return { created: res.status === 201, upload: (await res.json()) as UploadSnapshot };
 }
 
