@@ -1918,6 +1918,35 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     expect(screen.queryByText('2845초 채팅')).toBeNull();
   });
 
+  it('녹화를 다시 찾으면 옛 녹화의 재생 위치에 머물지 않는다: 찾는 동안은 시점을 확인하고, 못 찾으면 방송 끝까지다', async () => {
+    // 끝 시각이 고쳐지면 녹화를 다시 찾는다. 옛 녹화가 알린 자리를 남기면 찾는 동안 그 자리를 보이고, 끝내 못 찾으면 방송 끝으로
+    // 돌아가지 않고 거기에 멈췄다(PR #230 codex). 영상 없이 누른 카드 시각은 남는다(위 시험)
+    const { container } = await openWithRecording();
+    await playTo(container, 600);
+    expect(screen.getByText(/^0:10:00 시점까지 보는 중/)).toBeInTheDocument();
+
+    let answer: (spans: null) => void = () => undefined;
+    mediaCalls.answer = new Promise((resolve) => {
+      answer = resolve;
+    });
+    // 차트가 없으면 끝 60초 앞부터 읽으므로 마지막 줄(8995초)이 그 안에 들게 30초만 민다
+    server.vodEndShiftMs = 30_000;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    await settle();
+    expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
+    expect(screen.queryByText('595초 채팅')).toBeNull();
+
+    await act(async () => {
+      answer(null);
+    });
+    await settle();
+    expect(screen.getByText(/^마지막 메시지까지 보는 중/)).toBeInTheDocument();
+    expect(screen.getByText('8995초 채팅')).toBeInTheDocument();
+    expect(screen.queryByText('595초 채팅')).toBeNull();
+  });
+
   it('영상 시각 쪽은 다 있고 그 앞만 모자라면 목록 맨 위에 「이전 채팅을 불러오고 있어요」라 쓴다: 영상 시각 쪽에 끼우지 않는다', async () => {
     // 맨 아래(영상 시각 쪽)에 쓰면 카드 뒤 ←마다 「채팅을 불러오고 있어요」가 끼었다 빠졌다(리뷰 3라운드)
     const { container } = await openWithRecording();

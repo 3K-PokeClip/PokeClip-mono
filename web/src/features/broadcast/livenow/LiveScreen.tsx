@@ -331,6 +331,15 @@ function LiveDashboard() {
   useEffect(() => {
     if (recordingLookup === 'found') bumpChatJump();
   }, [recordingLookup, bumpChatJump]);
+  // 재생 위치가 녹화가 알린 자리인가(영상 없이 누른 카드 시각이 아니라). 끝 시각·기준점이 고쳐져 녹화를 다시 찾으면 그 녹화가
+  // 알린 자리는 버린다: 남기면 찾는 동안 옛 녹화의 자리를 보이고, 끝내 못 찾으면 방송 끝으로 돌아가지 않고 거기에 멈췄다
+  // (PR #230 codex). 카드 시각은 남긴다: 영상이 없으면 채팅은 누른 카드 시각까지에서 멈춘다
+  const playheadFromRecording = useRef(false);
+  useEffect(() => {
+    if (recordingLookup === 'found' || !playheadFromRecording.current) return;
+    playheadFromRecording.current = false;
+    publishLiveData({ playheadMs: null });
+  }, [recordingLookup]);
   // 수집이 끊겼으면 새 채팅도 멈춘다 — 「수집 끊김」이라면서 메시지가 계속 쌓이면
   // 화면이 스스로 모순된다(ADR-011: 끊기면 자동 탐지를 정직하게 비활성화한다).
   const chat = useChatPanelMockState(chatPanelOpen && !chatWarning, ended, awaitPlayhead);
@@ -384,6 +393,7 @@ function LiveDashboard() {
       // 채팅이 그 시점까지에서 멈추고 그 시점(맨 아래)을 따라간다(지난 방송, POK-324). 채팅이 영상 시각을 따르지 않는 방송(기준점이
       // 없는 자리표시)이면 채팅이 그대로이니 위로 올려 읽던 자리도 그대로 둔다(리뷰 2라운드)
       if (!moved) {
+        playheadFromRecording.current = false;
         publishLiveData({ playheadMs: seconds * 1000 });
         if (followsPlayhead) bumpChatJump();
       }
@@ -395,6 +405,7 @@ function LiveDashboard() {
   // 녹화가 흐르는 대로 채팅에 알린다: 지난 방송 채팅은 영상 시각까지의 줄만 보이고, 재생하면 그 시각의 줄이 붙는다(POK-324).
   // 녹화는 끝난 방송에만 서므로 라이브 채팅은 영향이 없다
   const handlePlaybackPosition = useCallback((seconds: number) => {
+    playheadFromRecording.current = true;
     publishLiveData({ playheadMs: seconds * 1000 });
   }, []);
   // 방송 중으로 밝혀지면 모르는 동안 고른 시점을 버린다(위와 같은 이유)
