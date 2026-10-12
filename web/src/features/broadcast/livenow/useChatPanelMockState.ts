@@ -418,13 +418,17 @@ export function useChatPanelMockState(
   }, [items, ended, live.chart]);
 
   const surges = useMemo<ChatSurge[]>(() => {
-    // 라이브는 지금 앞 2분, 지난 방송은 영상 시각 앞 2분의 채팅이다(POK-324): 지난 방송을 지금 기준으로 세면 늘 비었다
+    // 라이브는 지금 앞 2분, 지난 방송은 영상 시각 앞 2분의 채팅이다(POK-324): 지난 방송을 지금 기준으로 세면 늘 비었다. 끝난
+    // 방송인데 시점을 아직 모르면 비운다: 라이브 채팅으로 세면 라이브가 끝나 녹화를 기다리는 동안 빈 채팅 창 옆에 방송 끝 무렵
+    // 키워드가 섰다(PR #230 codex)
     const recent =
       replay !== null && replayCursor !== null
         ? replay.lines
             .filter((line) => line.at >= replayCursor - 2 * 60_000)
             .map((line) => line.item)
-        : items.filter((it) => Date.parse(it.time) >= Date.now() - 2 * 60_000 + CHAT_LEAD_MS);
+        : ended
+          ? []
+          : items.filter((it) => Date.parse(it.time) >= Date.now() - 2 * 60_000 + CHAT_LEAD_MS);
     const freq = new Map<string, number>();
     for (const it of recent) {
       if (it.kind !== 'chat') continue;
@@ -439,7 +443,7 @@ export function useChatPanelMockState(
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
       .map(([keyword, count]) => ({ keyword, count }));
-  }, [items, replay, replayCursor]);
+  }, [items, replay, replayCursor, ended]);
 
   // 채팅이 고른 시점을 따라가려면 그 시점을 절대 시각으로 바꿀 기준점이 있어야 한다(시작 시각을 모르는 방송은 없을 수 있다)
   const followsPlayhead = replayUpper !== null && vodBase !== null;

@@ -1994,6 +1994,27 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
   });
 
+  it('라이브가 끝나 녹화 시점을 기다리는 동안은 라이브 때 급증 키워드를 보이지 않는다', async () => {
+    // 끝난 방송의 급증 키워드는 영상 시각 앞 2분이다. 시점을 기다리는 동안 라이브 채팅으로 세면 빈 채팅 창 옆에 방송 끝 무렵
+    // 키워드가 섰다(PR #230 codex)
+    stubMediaElement();
+    mediaCalls.configured = true;
+    mediaCalls.answer = new Promise(() => undefined);
+    nav.search = `?stream=${STREAM_ID}`;
+    window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
+    await renderLive();
+    expect(screen.getByText('ㅋㅋㅋㅋ ×3')).toBeInTheDocument();
+
+    server.liveEnded = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
+    expect(screen.queryByText('ㅋㅋㅋㅋ ×3')).toBeNull();
+    expect(screen.queryByText('미쳤다 ×2')).toBeNull();
+  });
+
   it('명부가 늦게 답해 녹화 조회가 늦게 시작해도 채팅은 그 조회부터 10초를 기다린다', async () => {
     // 녹화 조회는 끝난 방송으로 밝혀진 뒤에야 시작한다. 채팅의 10초를 화면을 연 때부터 세면, 명부가 8초 걸린 화면은 조회 2초 만에
     // 방송 끝을 보였다가 녹화를 찾으면 녹화 위치로 바뀌었다(PR #230 codex)
