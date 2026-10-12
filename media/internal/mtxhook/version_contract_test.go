@@ -45,9 +45,9 @@ const pinnedMediaMTXDigest = "sha256:8b5318ceee0b4a3638ce3a8fe8cfa5afbfaea71413f
 // mediaMTXImage 는 버전을 고정하는 베이스 이미지 이름이다. 같은 Dockerfile 에 빌드
 // 스테이지 FROM(golang:...)이 따로 있으므로 이 이름을 포함한 FROM 만 대상으로 삼는다.
 //
-// **상류 공식 이미지가 아니라 우리 포크 빌드다.** 상류에 아직 머지되지 않은 우리 수정
-// 4건을, 라인이 올라탄 상류 베이스에 들어올 때까지 우리 라인이 싣는다 — 자세한 사정은
-// Dockerfile 주석과 media/README.md 의 "이미지 출처에 묶인 전제" 절에 있다.
+// **상류 공식 이미지가 아니라 우리 포크 빌드다.** 상류 베이스에 없는 수정을, 라인이 올라탄
+// 상류 베이스에 들어올 때까지 우리 라인이 싣는다 — 수정 목록의 정본은 media/README.md 의
+// "이미지 출처에 묶인 전제" 절 표이고, 자세한 사정은 Dockerfile 주석에도 있다.
 const mediaMTXImage = "xodbs1021/mediamtx"
 
 // dockerfileRel 은 저장소 루트 기준 경로다. 상대 경로 방식은 cmd/mtxhookwrite 의
@@ -99,21 +99,29 @@ const versionUpgradeGuide = `
 // forkPinGuide 는 "버전"이 아니라 **"어느 이미지냐"** 가 어긋났을 때의 안내다.
 //
 // 위 9곳이 MediaMTX 버전에 묶인 전제라면, 이것은 이미지 출처에 묶인 전제다:
-// 이 이미지에는 상류에 아직 머지되지 않은 우리 수정 4건이 들어 있다. 상류 공식 이미지로
-// 되돌리면 그중 둘의 효과가 사라지고, 훅 실패 보고는 **사라져도 오류도 로그도 내지 않는다.**
+// 이 이미지에는 라인이 올라탄 상류 베이스에 없는 수정이 들어 있다(목록의 정본은 media/README.md
+// 의 "이미지 출처에 묶인 전제" 절 표). 상류 공식 이미지로 되돌리면 그 표 넷째 열의 손실이 생기고,
+// 훅 실패 보고는 **사라져도 오류도 로그도 내지 않는다.**
 const forkPinGuide = `
 FROM 이 가리키는 이미지가 우리 포크 빌드가 아니다.
 
-이 이미지에만 있는 것 — 상류 v1.21.1 위의 미머지 수정 4건
-(media/README.md 의 "이미지 출처에 묶인 전제" 절):
+이 이미지에만 있는 것 — 상류 v1.21.1 에 없는 수정
+(정본은 media/README.md 의 "이미지 출처에 묶인 전제" 절 표):
   - bluenviron/mediamtx#6206  설정 리로드와 훅 로깅 사이의 데이터 경합 수정
+                              — 닫힘(2026-10-11) — 상류는 bluenviron/mediamtx#6326 으로 다르게 고침(릴리스 전)
   - bluenviron/mediamtx#6259  모든 훅 명령의 실패를 로그에 남긴다
   - bluenviron/mediamtx#6261  CertLoader.Close() 가 watch() 의 끝을 기다린다
   - (상류 미게시)             훅 출력을 서버 로그로 돌리는 설정 — 기본 꺼짐, 제품 설정에 키 없음
+  - bluenviron/mediamtx#6292  설정 PATCH 가 <redacted> 를 비밀번호로 저장하지 않는다
+                              — 체리픽: 상류 v1.21.2 에 있다. 라인 베이스가 v1.21.1 이라 싣는다
+  - bluenviron/mediamtx#6306  U — 인증 사용자별 SRT passphrase. 값이 있으면 경로 passphrase 를 대신한다
 상류 공식 이미지(bluenviron/mediamtx:1.21.1)로 되돌리면 runOnOffline·runOnRecordSegmentComplete
 의 실패가 다시 로그 없이 지나가고(bluenviron/mediamtx#6259), 로거를 다시 만드는 리로드에서
-훅 로깅과의 데이터 경합이 돌아온다(bluenviron/mediamtx#6206). 나머지 둘은 지금 설정에서
-차이가 없다 — CertLoader 를 만들지 않고(TLS·MoQ 꺼짐), 출력 설정은 꺼져 있다.
+훅 로깅과의 데이터 경합이 돌아온다(bluenviron/mediamtx#6206). U 를 쓰는 dev-media 계정별
+방송(후속 PR) 뒤라면 사용자 값이 사라져 모든 SRT 송출이 경로 잠금값에 막힌다
+(bluenviron/mediamtx#6306 — 안전한 실패지만 송출이 멈춘다). 나머지는 지금 설정에서
+차이가 없다 — CertLoader 를 만들지 않고(TLS·MoQ 꺼짐), 출력 설정은 꺼져 있고, 설정 PATCH 를
+부르지 않으며, 인증 사용자에 srtPassphrase 가 없다.
 
 새 이미지를 발행했다면:
   1. xodbs1021/mediamtx 의 pokeclip 라인에 커밋하고 *-pokeclip.* 태그를 민다.
@@ -122,19 +130,24 @@ FROM 이 가리키는 이미지가 우리 포크 빌드가 아니다.
      tip 과 같고, 이미지에서 꺼낸 /mediamtx(플랫폼마다, docker create · docker cp)의
      go version -m 이 vcs.revision=<그 tip> · vcs.modified=false 여야 한다.
   4. 그 tag·digest 를 media/Dockerfile.mtxhook 의 FROM 과 이 파일의 상수 2개에 함께 옮긴다.
-  5. infra/dev-media/compose.yml 의 image 줄도 같은 좌표(태그+digest 글자 그대로)로 바꾼다
-     — ADR-040 2026-08-30 추기: 두 핀은 같이 올린다.
+  5. infra/dev-media/compose.yml 의 image 줄(dev-media 서버 핀)은 따로 판단한다 — 서버가 필요로
+     할 때 서버 기준으로 올리고, 이 FROM 과 같을 필요는 없다(ADR-040 2026-10-12 추기).
   6. ③ 재포장 핀을 대조한다 — media/README.md 의 "포크 태그를 올릴 때 — ③ 재포장 핀 대조".
 
 상류 main 에만 일부 머지됐다면, 수정이 포함된 상류 커밋으로 베이스를 옮겨 준버전업 표적
 재확인을 마친 뒤 중복 수정을 빼고 .N 을 올려 위 절차로 다시 낸다(베이스를 유지하면 수정도 유지한다).
 새 상류 릴리스로 옮기는 경우에는 v<새 버전>-pokeclip.1 로 발행하고 upstreamBaseVersion 갱신과
 전제 9곳 전수 재확인을 함께 한다.
-4건이 전부 상류 릴리스에 들어갔다면(= 포크가 필요 없어졌다면) 아래를 전부 정리한다.
+README 표의 모든 행이 상류 릴리스에 들어갔다면 — bluenviron/mediamtx#6206 처럼 상류가 다른
+수정으로 대체한 것은 그 대체 수정(bluenviron/mediamtx#6326)이 들어갔다면(= 포크가 필요 없어졌다면)
+포크를 걷어낸다. 그 표에는 U(bluenviron/mediamtx#6306)도 있다 — U 없이 공식 이미지로 되돌리면
+U 를 쓰는 dev-media 계정별 방송(후속 PR) 뒤에는 모든 SRT 송출이 경로 잠금값에 막힌다.
+걷어낼 때는 아래를 전부 정리한다.
 빠뜨리면 공식 태그에서 포크 전용 단언이 남아 빨간불이 된다:
   1. Dockerfile FROM 을 bluenviron/mediamtx:<그 버전>@sha256:<그 이미지 digest> 로 되돌린다
      — 공식 이미지도 태그 + digest 로 고정한다(같은 태그를 다시 밀어도 바뀌지 않게).
-     infra/dev-media/compose.yml 의 image 줄도 FROM 과 같은 공식 좌표(태그 + digest)로 되돌린다.
+     infra/dev-media/compose.yml 의 image 줄(서버 핀)은 서버가 기대는 수정(특히 U)을 기준으로
+     따로 판단한다.
   2. mediaMTXImage 를 "bluenviron/mediamtx" 로 되돌린다.
   3. pinnedMediaMTXTag 를 그 버전으로 고치거나, upstreamBaseVersion 하나로 합친다.
   4. pinnedMediaMTXDigest 는 그 공식 이미지의 digest 로 고치고
