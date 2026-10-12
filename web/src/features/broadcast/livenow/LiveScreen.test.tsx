@@ -1939,7 +1939,7 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
       server.vodChartPerBucket = 3;
       window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
       await renderLive();
-      const charts = want.mock.calls.map((call) => call[3] ?? null);
+      const charts = want.mock.calls.map((call) => call[2]?.chart ?? null);
       expect(charts.some((c) => c !== null && c.scope === 'broadcast')).toBe(true);
     } finally {
       want.mockRestore();

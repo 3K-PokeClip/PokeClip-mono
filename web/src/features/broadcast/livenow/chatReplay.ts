@@ -9,7 +9,12 @@
 // 시각 축: 요청 from·to는 영상 축이고(수집기가 보정을 더해 표를 찾는다) 답의 시각은 표 축이다. 줄의 at은 답의 시각에서 그 답의
 // appliedOffsetMs를 뺀 영상 축 시각이다(services README 「계약 셋」 1번, ADR-066). 고정값(3,900ms)을 빼지 않는다: 채널별 보정이
 // 생기면 어긋난다.
+//
+// 라이브 되감기(POK-326)도 같은 로더다. 영상 시각은 라이브 영상 목록의 시각 표시(PDT)로 안다. 다른 것은 위 끝 하나다: 지난
+// 방송은 방송 끝으로 고정이고, 라이브는 「표에 다 들어온 자리」라 시간이 가며 늦은 쪽으로 움직인다(liveSettledUpTo).
 
+import { SEEK_STEP_SECONDS, isAtEdge } from '@/features/player/playerMath';
+import type { LivePosition } from '@/features/player/useHlsPlayback';
 import { COLLECTOR_WINDOW_MS, type WireItem, type WirePage } from './chatCollector';
 import type { LiveChart } from './liveDataStore';
 
@@ -69,6 +74,52 @@ const BURST_REST_MS = 1_000;
  * 채팅을 못 읽었다(PR #230 codex). 처음부터 크게 읽지 않는 것은 그 앞이 빽빽할 수 있어서다
  */
 const EXTEND_FIRST_MS = 60_000;
+
+/**
+ * 라이브 채팅이 표에 들어가기까지의 여유. 적재는 1초마다 몰아 쓰고(ADR-068 「놓친 채팅이 표에 들어가는 것은 최대 1초 뒤」), 서버
+ * 사이 시계·전달의 흔들림을 2초 더 본다. 보정(표 축이 영상 축보다 늦은 폭)과 따로 더한다
+ */
+const LIVE_SETTLE_MS = 3_000;
+/**
+ * 라이브 되감기에서 위 끝이 다 읽은 구간보다 이만큼 넘게 앞서야 그 사이를 더 읽는다. 위 끝은 재생하며 매초 움직여, 늘 끝까지 읽으면
+ * 1초 치를 매초 물었다
+ */
+export const LIVE_READ_STEP_MS = 2_000;
+/**
+ * 라이브 되감기에서 보이는 자리는 위 끝보다 이만큼 앞까지다. 다 읽은 구간은 위 끝보다 걸음(LIVE_READ_STEP_MS)에 1초(위 끝은 초
+ * 단위로 움직인다)와 그 사이를 읽는 답을 기다리는 동안만큼 처진다: 보이는 자리가 다 읽은 구간을 넘으면 읽는 동안마다 「불러오고
+ * 있어요」로 깜박인다. 그래서 걸음에 묶어 둔다(답이 2초 안에 오면 깜박이지 않는다)
+ */
+const LIVE_SHOW_GAP_MS = LIVE_READ_STEP_MS + 3_000;
+
+/**
+ * 라이브 채팅이 되감은 영상을 따르나. 실시간에서 ← 한 번(SEEK_STEP_SECONDS, 10초) 이상 뒤면 따르고, 재생기의 「실시간」(3초 미만,
+ * isAtEdge)으로 돌아오면 최신 채팅이다. 그 사이는 앞 상태 그대로다: 하나의 경계로 가르면 그 언저리에서 시차가 1초씩 흔들릴 때마다
+ * 채팅 창이 통째로 바뀌었다 돌아온다. 이보다 덜 밀린 것(스톨, 실시간 끝에서 조금 처진 것)은 최신 채팅 그대로다
+ */
+export function nextLiveFollow(following: boolean, behindSeconds: number): boolean {
+  if (behindSeconds >= SEEK_STEP_SECONDS) return true;
+  if (isAtEdge(behindSeconds)) return false;
+  return following;
+}
+
+/**
+ * 라이브 되감기에서 채팅이 표에 다 들어온 자리(영상 축 epoch ms). 실시간 끝의 시각에서 보정과 적재 여유를 뺀다: 그보다 늦은 줄은
+ * 아직 표에 없을 수 있고, 그 구간을 읽어 「다 읽음」으로 두면 나중에 들어온 줄이 영영 빠진다. 실시간 끝의 시각은 재생기가 조각의
+ * 시각 표시로 센다(영상 서버 시계 축이다. 브라우저 시계를 믿지 않는다)
+ * @param offsetMs 표 축이 영상 축보다 늦은 폭(차트의 appliedOffsetMs)
+ */
+export function liveSettledUpTo(position: LivePosition, offsetMs: number): number {
+  return position.edgeAtMs - offsetMs - LIVE_SETTLE_MS;
+}
+
+/**
+ * 라이브 되감기에서 채팅이 보이는 마지막 시각(영상 축). 되감은 자리이되 위 끝 LIVE_SHOW_GAP_MS 앞까지다: 실시간에 가까운 자리는
+ * 아직 표에 없을 줄을 기다리며 「불러오고 있어요」로 깜박이지 않고 몇 초 앞 줄까지 보인다. 하한 아래로 가지 않는다
+ */
+export function liveShownUpTo(atMs: number, upperMs: number, lowerMs: number): number {
+  return Math.max(lowerMs, Math.min(atMs, upperMs - LIVE_SHOW_GAP_MS));
+}
 
 /** 다시 보기가 쥔 한 줄 */
 export interface ReplayLine {
@@ -272,6 +323,19 @@ interface FrontRead {
   lines: ReplayLine[];
 }
 
+/** want에 이름으로 넘기는 것. 셋 다 epoch ms 숫자라 자리로 넘기면 순서가 바뀌어도 타입이 못 잡는다(리뷰 1라운드) */
+export interface WantOptions {
+  /**
+   * 시작점까지 읽고도 영상 시각 앞 줄이 모자라면 여기까지 앞을 더 읽는다. 시작점이 짐작일 때(replayStartIsGuess) 하한을 넘긴다.
+   * 정하지 않으면 시작점이다(더 읽지 않는다)
+   */
+  floorMs?: number;
+  /** 그 방송의 차트. 사람이 옮겼을 때 다 읽은 구간과 새 자리 사이 줄을 센다 */
+  chart?: LiveChart | null;
+  /** 읽을 상한을 이 값으로 바꾼다(라이브 되감기: 표에 다 들어온 자리, liveSettledUpTo). 정하지 않으면 그대로다 */
+  upperMs?: number;
+}
+
 /** 영상 시각과, 그 앞 줄을 채우려면 읽기 시작할 자리와, 모자라도 그보다 이른 쪽은 더 읽지 않는 바닥(want가 정한다) */
 interface Wanted {
   cursorMs: number;
@@ -280,8 +344,8 @@ interface Wanted {
 }
 
 /**
- * 한 방송의 채팅을 영상 시각 둘레만 읽어 쥔다. 방송이 바뀌면 새로 만든다(하한·상한이 방송의 것이다). React는 subscribe·
- * getSnapshot으로 붙는다(useSyncExternalStore)
+ * 한 방송의 채팅을 영상 시각 둘레만 읽어 쥔다. 방송이 바뀌면 새로 만든다(하한·상한이 방송의 것이다). 라이브 되감기는 상한이
+ * 움직여 want가 매번 준다. React는 subscribe·getSnapshot으로 붙는다(useSyncExternalStore)
  */
 export class ChatReplayLoader {
   private lines: ReplayLine[] = [];
@@ -309,12 +373,14 @@ export class ChatReplayLoader {
 
   /**
    * @param lowerMs 읽을 하한(영상 축)
-   * @param upperMs 읽을 상한(방송 끝)
+   * @param upperMs 읽을 상한. 지난 방송은 방송 끝이다. 라이브 되감기는 want가 매번 주는 값으로 바뀐다
+   * @param upperStepMs 상한이 다 읽은 구간보다 이만큼 넘게 앞서야 더 읽는다(라이브 되감기는 LIVE_READ_STEP_MS). 고정 상한은 0이다
    */
   constructor(
     private readonly fetchPage: ReplayFetch,
     private readonly lowerMs: number,
-    private readonly upperMs: number,
+    private upperMs: number,
+    private readonly upperStepMs = 0,
   ) {}
 
   readonly subscribe = (listener: () => void): (() => void) => {
@@ -329,17 +395,14 @@ export class ChatReplayLoader {
   /**
    * 영상 시각이 정해졌다(재생하며 매초, 옮기면 바로). 모자란 곳만 읽는다
    * @param readFromMs 영상 시각 앞 줄을 채우려면 읽기 시작할 자리(replayReadStart)
-   * @param floorMs 시작점까지 읽고도 영상 시각 앞 줄이 모자라면 여기까지 앞을 더 읽는다. 시작점이 짐작일 때(replayStartIsGuess)
-   *   하한을 넘긴다. 정하지 않으면 시작점이다(더 읽지 않는다)
-   * @param chart 그 방송의 차트. 사람이 옮겼을 때 다 읽은 구간과 새 자리 사이 줄을 센다
    */
   want(
     cursorMs: number,
     readFromMs: number,
-    floorMs: number = readFromMs,
-    chart: LiveChart | null = null,
+    { floorMs = readFromMs, chart = null, upperMs = this.upperMs }: WantOptions = {},
   ): void {
     if (this.disposed) return;
+    this.upperMs = upperMs;
     const cursor = Math.min(this.upperMs, Math.max(this.lowerMs, cursorMs));
     const readFrom = Math.min(cursor, Math.max(this.lowerMs, readFromMs));
     const floor = Math.min(readFrom, Math.max(this.lowerMs, floorMs));
@@ -457,7 +520,10 @@ export class ChatReplayLoader {
         if (this.waitTimer !== undefined) return;
         this.reviewFront();
         const front = this.front;
-        if (front === null && this.to >= Math.min(this.upperMs, this.wanted.cursorMs + AHEAD_MS)) {
+        if (
+          front === null &&
+          this.to >= Math.min(this.upperMs - this.upperStepMs, this.wanted.cursorMs + AHEAD_MS)
+        ) {
           // 더 읽을 것이 없다: 앞선 실패는 이제 보이는 것과 상관없다. 남겨 두면 나중의 정상 읽기 동안 「불러오지 못했어요」가
           // 섰다(리뷰 3라운드)
           this.failed = false;

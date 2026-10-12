@@ -275,7 +275,7 @@ export function useChatPanelMockState(
   const chart = live.chart;
   useLayoutEffect(() => {
     if (loader === null || replayCursor === null || readFrom === null || readFloor === null) return;
-    loader.want(replayCursor, readFrom, readFloor, chart);
+    loader.want(replayCursor, readFrom, { floorMs: readFloor, chart });
   }, [loader, replayCursor, readFrom, readFloor, chart]);
 
   // 실시간 중계 수신(카드 통로의 chat·donation). 구멍·세대 변화면 2초 뒤 범위 창구로 메운다
