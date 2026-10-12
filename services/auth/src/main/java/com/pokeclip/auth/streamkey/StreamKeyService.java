@@ -125,7 +125,7 @@ public class StreamKeyService {
 
     /**
      * 키 행은 있는데 secret이 없으면 우리 저장소가 어긋난 것이다. 500으로 올린다 —
-     * Media 입장에서 "키가 틀림"이 아니라 "판단 불가"이고 조치가 정반대다.
+     * Media 입장에서 "키가 틀림"이 아니라 "판단 불가"이고, 둘은 원인과 후속 조치가 다르다.
      * RequestIdFilter의 request.failed ERROR가 상관 ID와 함께 잡는다.
      *
      * <p>저장소가 답하지 못한 경우(Secrets Manager 스로틀·시간 초과)는 저장소가

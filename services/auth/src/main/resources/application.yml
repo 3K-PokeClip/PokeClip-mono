@@ -183,6 +183,13 @@ pokeclip:
     # 이유는 JWT_SECRET과 같다 — 안 주면 리터럴이 바인딩돼 서버는 뜨고
     # 검증 API만 전부 401이 된다.
     token: ${INTERNAL_API_TOKEN:}
+    # resolve 전용 출입증(계약4 4C). Media가 이 토큰을 X-Stream-Key-Resolve-Token 헤더에 싣고 허용 대역(IPv4 CIDR,
+    # 쉼표 목록) 안에서만 부른다. 토큰이 비면 창구가 닫힌다 — 전용 헤더 요청은 늘 401이고 auth는 그대로 뜬다.
+    # 운영 auth는 이 창구를 안 써서 비워 둔다. 토큰이 있으면 StreamKeyResolveSecurityConfig가 부팅을 검사한다
+    # (대역이 있고 IPv4 · 위 forward-headers-strategy가 none · 톰캣 remoteip 헤더 속성 없음 · 공용 토큰과 다름).
+    stream-key-resolve:
+      token: ${STREAM_KEY_RESOLVE_TOKEN:}
+      allowed-cidrs: ${STREAM_KEY_RESOLVE_ALLOWED_CIDRS:}
   chzzk:
     # 앱 셋은 한 덩어리다(ChzzkProperties.App). 하나만 빠져도 부팅에서 죽는다.
     # 기본값을 빈 문자열로 두는 이유는 JWT_SECRET과 같다.

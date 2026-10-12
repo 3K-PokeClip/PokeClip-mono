@@ -88,7 +88,8 @@ class StreamKeyResolveControllerTest extends IntegrationTestSupport {
 
     /**
      * 계약의 핵심. valid:false도 200이다 — Media 입장에서 "키가 틀림"(연결 거절)과
-     * "Auth 장애"(판단 불가)는 조치가 정반대인데, 둘 다 4xx면 Go 쪽에서 구분이 안 된다.
+     * "Auth 장애"(판단 불가)는 원인과 후속 조치가 다른데, 둘 다 4xx면 Go 쪽에서 구분이 안 된다.
+     * Media의 응답기(새 송출 연결을 받을지 판정하는 쪽)는 두 경우 모두 그 새 연결을 거부한다.
      */
     @Test
     void 없는_키도_HTTP_200에_valid_false로_돌려준다() throws Exception {

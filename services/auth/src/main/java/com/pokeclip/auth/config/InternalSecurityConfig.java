@@ -13,7 +13,8 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 
 /**
  * /internal/** 전용 체인. 기본 SecurityConfig보다 먼저 매칭돼 이 경로를 통째로
- * 가져간다.
+ * 가져간다. 단 전용 헤더가 붙은 resolve 요청은 그보다 앞선 {@code @Order(0)} 체인
+ * (StreamKeyResolveSecurityConfig)이 먼저 가져간다.
  *
  * <p>체인을 나눈 이유가 둘이다. 기본 체인의 anyRequest().authenticated()와
  * oauth2ResourceServer가 걸리면 Media 헤더가 401을 맞는다. 그리고 <b>인증 수단
