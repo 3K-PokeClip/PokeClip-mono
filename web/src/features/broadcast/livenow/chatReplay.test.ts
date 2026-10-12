@@ -836,23 +836,53 @@ describe('ChatReplayLoader: 그 시각 둘레만 읽는다', () => {
     );
   });
 
-  it('한 번에 50쪽을 다 써도 영상 시각에 못 닿으면 실패로 두고 10초 뒤 이어 읽는다: 영상이 없어도 「불러오고 있어요」에 갇히지 않는다', async () => {
+  it('한 번에 50쪽을 다 써도 영상 시각에 못 닿으면 1초 쉬고 이어 읽는다: 실패로 두지 않고, 영상이 없어도 「불러오고 있어요」에 갇히지 않는다', async () => {
     // 1초에 3만 줄: 50쪽(2만 5천 줄)으로는 1초도 못 채운다
     const srv = collector(steady(2, 30_000));
     const loader = new ChatReplayLoader(srv.fetchPage, T0, T0 + HOUR);
+    const view = () => replayView(loader.getSnapshot(), T0 + 1_000, T0 + HOUR, T0 + 1_000);
     loader.want(T0 + 1_000, T0);
     await settle();
     expect(srv.calls).toHaveLength(50);
-    expect(replayView(loader.getSnapshot(), T0 + 1_000, T0 + HOUR, T0 + 1_000).status).toBe(
-      'failed',
-    );
+    expect(view().status).toBe('loading');
+
+    await vi.advanceTimersByTimeAsync(999);
+    await settle();
+    expect(srv.calls).toHaveLength(50);
+    await vi.advanceTimersByTimeAsync(1);
+    await settle();
+    expect(srv.calls.length).toBeGreaterThan(50);
 
     await vi.advanceTimersByTimeAsync(10_000);
     await settle();
-    expect(srv.calls.length).toBeGreaterThan(50);
-    expect(replayView(loader.getSnapshot(), T0 + 1_000, T0 + HOUR, T0 + 1_000).status).toBe(
-      'ready',
+    expect(view().status).toBe('ready');
+  });
+
+  it('정상 답만으로 한 번에 50쪽을 다 써도 실패로 두지 않는다: 다시 시작 없이 영상 시각이 계속 늦은 쪽으로 가도(→ 연타) 「불러오지 못했어요」가 서지 않는다', async () => {
+    // 쪽 수 상한은 쏟아지는 요청을 막는 것이다. 다 쓰면 실패로 두어, 받는 동안 →를 연타하면 실패한 요청 하나 없이 「채팅을
+    // 불러오지 못했어요」가 10초 섰다(리뷰 3라운드 P6)
+    const srv = collector(steady(3_600, 10), 20);
+    let cursor = T0 + 600_000;
+    const loader: ChatReplayLoader = new ChatReplayLoader(
+      async (from, to, after, signal) => {
+        const page = await srv.fetchPage(from, to, after, signal);
+        // 받는 동안 영상 시각이 늦은 쪽으로 간다: 다시 시작할 만큼 멀지는 않다
+        cursor += 2_000;
+        loader.want(cursor, cursor - 60_000);
+        return page;
+      },
+      T0,
+      T0 + HOUR,
     );
+    loader.want(cursor, cursor - 60_000);
+    await settle();
+    expect(srv.calls).toHaveLength(50);
+    expect(loader.getSnapshot().failed).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await settle();
+    expect(srv.calls.length).toBeGreaterThan(50);
+    expect(loader.getSnapshot().failed).toBe(false);
   });
 
   it('빈 쪽에 커서가 달려 와도 멈춘다: 끝없이 묻지 않는다', async () => {

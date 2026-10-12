@@ -45,11 +45,14 @@ const RETRY_MS = 10_000;
  */
 const PAGE_TIMEOUT_MS = 10_000;
 /**
- * 한 번 채울 때 읽는 쪽 수 상한. 다 쓰면 실패로 두고 10초 뒤 이어 읽는다: 서버가 쪽을 끝없이 달아 줘도 요청이 쏟아지지 않고,
- * 영상이 없어 영상 시각이 안 바뀌는 화면도 「불러오고 있어요」에 멈추지 않는다(리뷰 1라운드). 처음부터 다시 읽으면 새로 센다:
- * 연달아 옮기는 동안 받은 정상 답까지 이어 세어 실패한 요청 없이 실패로 섰다(리뷰 2라운드)
+ * 한 번 채울 때 읽는 쪽 수 상한. 다 쓰면 BURST_REST_MS 쉬고 이어 읽는다: 서버가 쪽을 끝없이 달아 줘도 요청이 쏟아지지 않고,
+ * 영상이 없어 영상 시각이 안 바뀌는 화면도 「불러오고 있어요」에 멈추지 않는다(리뷰 1라운드). 실패로 두지 않는다: 받은 것은 정상
+ * 답뿐이라, 받는 동안 →를 연타하면 실패한 요청 하나 없이 「불러오지 못했어요」가 섰다(리뷰 3라운드). 처음부터 다시 읽으면 새로
+ * 센다(리뷰 2라운드)
  */
 const PAGES_PER_PUMP = 50;
+/** 한 번에 읽는 쪽 수를 다 쓰면 이만큼 쉬고 이어 읽는다 */
+const BURST_REST_MS = 1_000;
 
 /** 다시 보기가 쥔 한 줄 */
 export interface ReplayLine {
@@ -228,7 +231,8 @@ export class ChatReplayLoader {
   private nextSeq = 1;
   private pumping = false;
   private failed = false;
-  private retryTimer: number | undefined;
+  /** 실패 뒤 다시 읽기나 쪽 수를 다 쓴 뒤 쉬기를 기다린다 */
+  private waitTimer: number | undefined;
   private disposed = false;
   private snapshot: ReplaySnapshot = EMPTY_REPLAY;
   private readonly listeners = new Set<() => void>();
@@ -270,7 +274,7 @@ export class ChatReplayLoader {
   dispose(): void {
     this.disposed = true;
     this.controller.abort();
-    window.clearTimeout(this.retryTimer);
+    window.clearTimeout(this.waitTimer);
     this.listeners.clear();
   }
 
@@ -311,8 +315,8 @@ export class ChatReplayLoader {
     this.open = null;
     this.front = null;
     this.failed = false;
-    window.clearTimeout(this.retryTimer);
-    this.retryTimer = undefined;
+    window.clearTimeout(this.waitTimer);
+    this.waitTimer = undefined;
   }
 
   /**
@@ -342,8 +346,8 @@ export class ChatReplayLoader {
       let pages = 0;
       for (;;) {
         if (Number.isNaN(this.wanted.cursorMs) || this.disposed) return;
-        // 실패 뒤 다시 읽기를 기다린다
-        if (this.retryTimer !== undefined) return;
+        // 실패 뒤 다시 읽기나 쉬기를 기다린다
+        if (this.waitTimer !== undefined) return;
         this.reviewFront();
         const front = this.front;
         if (front === null && this.to >= Math.min(this.upperMs, this.wanted.cursorMs + AHEAD_MS)) {
@@ -354,7 +358,7 @@ export class ChatReplayLoader {
           return;
         }
         if (pages >= PAGES_PER_PUMP) {
-          this.fail();
+          this.waitThenPump(BURST_REST_MS);
           return;
         }
         const signal = this.controller.signal;
@@ -473,10 +477,15 @@ export class ChatReplayLoader {
   private fail(): void {
     this.failed = true;
     this.emit();
-    this.retryTimer = window.setTimeout(() => {
-      this.retryTimer = undefined;
+    this.waitThenPump(RETRY_MS);
+  }
+
+  /** 그만큼 기다렸다 이어 읽는다. 그 사이 영상 시각이 바뀌어도 다시 묻지 않는다(멀리 옮겨 처음부터 다시 읽으면 바로 읽는다) */
+  private waitThenPump(ms: number): void {
+    this.waitTimer = window.setTimeout(() => {
+      this.waitTimer = undefined;
       void this.pump();
-    }, RETRY_MS);
+    }, ms);
   }
 
   /**
