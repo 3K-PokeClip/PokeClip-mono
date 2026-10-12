@@ -1,0 +1,26 @@
+// 수집기 채팅 창구(clip을 거친 chat-messages)의 줄 형식과 한도. 줄 형식은 라이브 채팅 패널과 지난 방송 다시 보기(chatReplay.ts)가
+// 같이 쓰고, 창 길이는 차트 창(useLiveMockState)도 쓴다. 쪽 크기는 다시 보기만 쓴다(라이브 폴링은 200줄씩 따로 묻는다). 다시 보기
+// 로더가 훅 파일에서 형식을 가져오면 두 파일이 서로를 가리켰다(리뷰 1라운드). 받는 코드(apiFetch)는 두지 않는다: 순수한 로더가
+// 상수 하나 때문에 인증 저장소까지 끌어왔다(리뷰 2라운드)
+
+/** 수집기가 한 번에 받는 가장 긴 창: chat-collector pokeclip.query.window-max(넘으면 400 too_wide). 차트도 같다 */
+export const COLLECTOR_WINDOW_MS = 60 * 60_000;
+/** 한 쪽에 받는 줄 수 상한: chat-collector pokeclip.query.page-max(더 달라 하면 잘라 준다) */
+export const CHAT_PAGE_MAX = 500;
+
+/** chat-messages 한 줄 */
+export interface WireItem {
+  kind: 'chat' | 'donation';
+  id: number;
+  time: string;
+  nickname: string | null;
+  senderChannelId: string;
+  text: string | null;
+  amount: number | null;
+}
+/** chat-messages 한 쪽 */
+export interface WirePage {
+  items: WireItem[];
+  nextCursor: string | null;
+  appliedOffsetMs: number;
+}

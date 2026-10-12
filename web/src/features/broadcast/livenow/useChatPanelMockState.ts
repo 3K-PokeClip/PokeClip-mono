@@ -1,8 +1,19 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { apiFetch } from '@/api/client';
-import { endedWindowStart } from '@/features/broadcast/endedWindow';
+import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
+import { CHAT_PAGE_MAX, type WireItem, type WirePage } from './chatCollector';
+import {
+  CHAT_KEEP,
+  ChatReplayLoader,
+  EMPTY_REPLAY,
+  replayReadStart,
+  replayStartIsGuess,
+  replayView,
+  type ReplaySnapshot,
+  type ReplayStatus,
+} from './chatReplay';
 import {
   chartSpan,
   subscribeRelay,
@@ -10,11 +21,11 @@ import {
   useLiveData,
   type RelayEvent,
 } from './liveDataStore';
-import { chartWindows } from './useLiveMockState';
+import { msToClock } from './useLiveMockState';
 
 // 실시간 채팅 패널(시안 1b). clip 창구에 붙어 있다(POK-251).
 // 라이브: 카드 통로(SSE)의 chat·donation 중계가 주 경로이고 chat-messages 폴링이 메우기·폴백이다.
-// 지난 방송: 그래프·시청자 기록과 같은 창(방송 전체, 12시간 넘으면 끝 12시간)을 chat-messages로 1시간 창씩 받는다.
+// 지난 방송: 영상 시각까지 나온 줄만 보이고 chat-messages에서 그 둘레만 읽는다(chatReplay.ts, POK-324).
 // 방송 번호는 라이브 훅이 정한 것(liveDataStore)을 같이 쓴다 — 방송이 바뀌면 함께 바뀐다.
 
 export const CHAT_PANEL_INTERVAL_MS = 3500;
@@ -47,55 +58,60 @@ export interface ChatPanelMockState {
    * 넘으면 끝 12시간) 통계의 「분당 평균 채팅」과 같은 수다. 그 차트가 아직 없으면 모른다(null)
    */
   ratePerMinute: number | null;
-  /** 고른 시점 앞뒤 채팅을 보여 주나(지난 방송). 아니면 시점을 골라도 최신 채팅 그대로다 */
+  /** 고른 시점까지의 채팅을 보여 주나(지난 방송). 아니면 시점을 골라도 최신 채팅 그대로다 */
   followsPlayhead: boolean;
+  /**
+   * 지난 방송 채팅이 보이는 영상 시점(h:mm:ss). 재생 위치가 없으면 null이다: 방송 끝까지 보이거나(replayWaiting 거짓), 아직 어느
+   * 시점을 보일지 모른다(replayWaiting 참)
+   */
+  replayClock: string | null;
+  /** 끝난 방송인데 채팅을 보일 영상 시점을 아직 모른다(명부 답 전, 녹화가 자리를 알리기 전) */
+  replayWaiting: boolean;
+  /**
+   * 지난 방송 채팅을 읽는 중이거나 읽지 못했을 때의 말(목록의 상태 줄과 같다). 채팅 창이 화면 낭독기에 알린다: 목록 안의 줄은
+   * 듣는 사람이 목록을 훑기 전에는 모른다(리뷰 1라운드). 다 읽었으면 null
+   */
+  statusNote: string | null;
 }
 
 // ── clip 창구 배선: chat-messages(메우기·지난 방송) + 카드 통로 중계(라이브) ──
-interface WireItem {
-  kind: 'chat' | 'donation';
-  id: number;
-  time: string;
-  nickname: string | null;
-  senderChannelId: string;
-  text: string | null;
-  amount: number | null;
-}
-interface WirePage {
-  items: WireItem[];
-  nextCursor: string | null;
-  appliedOffsetMs: number;
-}
-
 const POLL_MS = 5000;
 
 /** 라이브 폴링 한 번에 따라가는 쪽 수 상한(쪽당 200건) — 화면은 최근 300건만 남긴다 */
 const LIVE_POLL_PAGE_BUDGET = 10;
 
 /**
- * 지난 방송 채팅을 처음 읽을 때 1시간 창마다의 쪽 수 상한(쪽당 200건). 창마다 따로 둔다 — 방송 전체에 하나를 두면
- * 서버가 오래된 것부터 주므로 앞부분에서 다 써 버려 후반이 통째로 빈다(PR #200 codex P1). 모자란 시점은
- * 카드를 누를 때 그 앞뒤를 따로 끝까지 읽는다(VOD_FOCUS_PAGE_BUDGET)
+ * 지난 방송 채팅을 읽는 하한을 방송 시작보다 이만큼 앞에 둔다. 채팅 시각(표 축)은 영상 축보다 보정(실측 3.9초)만큼 늦어서, 방송
+ * 시작 직후의 채팅은 영상 축으로 시작보다 앞이다: 하한을 시작에 두면 그 채팅을 영영 읽지 않았다(리뷰 1라운드). 앞을 넓혀도 같은
+ * 채널의 앞 방송 채팅이 섞이지 않는 것은 수집기가 방송 번호로 거르기 때문이다(chat-collector ChatWindowQuery의 `WHERE stream_id`).
+ * 그 거르기를 고정하는 수집기 조회 시험은 아직 없다(적재 쪽 ChatPersisterTest#두_방송의_채팅이_안_섞인다는 조회를 타지 않는다)
  */
-const VOD_CHAT_PAGES_PER_WINDOW = 5;
-/** 카드를 누른 시점 앞뒤 60초를 읽을 때 쪽 수 상한 */
-const VOD_FOCUS_PAGE_BUDGET = 10; // SSE 중계가 주 경로, 폴링은 메우기·폴백
+const REPLAY_LOWER_SLACK_MS = 60_000;
+
+/** 지난 방송 채팅 창 상태 줄의 말. 영상 시각 쪽을 아직 다 못 읽었을 때는 맨 아래, 그 앞만 모자랄 때는 맨 위에 선다 */
+const REPLAY_LOADING = '채팅을 불러오고 있어요';
+const REPLAY_NOTE: Record<ReplayStatus, string | null> = {
+  ready: null,
+  loading: REPLAY_LOADING,
+  failed: '채팅을 불러오지 못했어요. 잠시 뒤 다시 불러와요',
+  earlierLoading: '이전 채팅을 불러오고 있어요',
+  earlierFailed: '이전 채팅을 불러오지 못했어요. 잠시 뒤 다시 불러와요',
+};
 
 /**
  * 채팅 시각(표 축)이 화면(영상) 시각보다 앞서는 폭 — 시차 보정 실측 중앙값 3,884ms(POK-92)를 올려 잡았다.
- * 「최근 1분」「시점 앞뒤 60초」 창을 채팅 축으로 옮길 때 더한다.
+ * 라이브의 「최근 1분」「최근 2분」 창을 채팅 축으로 옮길 때 더한다. 지난 방송은 답의 appliedOffsetMs로 되돌린다(chatReplay.ts)
  */
 const CHAT_LEAD_MS = 3900;
 
-const KEEP_REAL = 300;
 function trim(map: Record<string, WireItem>): Record<string, WireItem> {
   const keys = Object.keys(map);
-  if (keys.length <= KEEP_REAL) return map;
+  if (keys.length <= CHAT_KEEP) return map;
   const sorted = keys.sort(
     (a, b) => Date.parse((map[a] as WireItem).time) - Date.parse((map[b] as WireItem).time),
   );
   const next: Record<string, WireItem> = {};
-  for (const k of sorted.slice(-KEEP_REAL)) next[k] = map[k] as WireItem;
+  for (const k of sorted.slice(-CHAT_KEEP)) next[k] = map[k] as WireItem;
   return next;
 }
 
@@ -108,6 +124,35 @@ function fingerprint(it: {
 }): string {
   return `${it.kind}|${it.time}|${it.senderChannelId}|${it.text ?? ''}`;
 }
+
+/**
+ * 영상 축 [fromMs, toMs)의 채팅 한 쪽(CHAT_PAGE_MAX줄까지). 수집기가 보정을 더해 표를 찾고 답의 시각은 표 축이다(services
+ * README 「계약 셋」 1번). cursor는 앞 쪽의 nextCursor다. signal을 끝까지 넘긴다: 로더가 처음부터 다시 읽을 때 앞서 보낸 요청을
+ * 끊는다(리뷰 1라운드)
+ */
+async function fetchChatPage(
+  streamId: string,
+  fromMs: number,
+  toMs: number,
+  cursor: string | null,
+  signal: AbortSignal,
+): Promise<WirePage> {
+  const qs = new URLSearchParams({
+    from: new Date(fromMs).toISOString(),
+    to: new Date(toMs).toISOString(),
+    limit: String(CHAT_PAGE_MAX),
+  });
+  if (cursor) qs.set('cursor', cursor);
+  const r = await apiFetch(
+    `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-messages?${qs}`,
+    { signal },
+  );
+  return (await r.json()) as WirePage;
+}
+
+/** 로더가 없을 때(라이브·방송 정하기 전·접힘) 다시 보기 저장소의 자리 */
+const noReplaySubscribe = (): (() => void) => () => undefined;
+const emptyReplay = (): ReplaySnapshot => EMPTY_REPLAY;
 
 function colorOf(senderChannelId: string): number {
   let h = 0;
@@ -140,18 +185,16 @@ function toPanel(it: WireItem): ChatPanelMessage {
  * @param ended 화면이 끝난 방송으로 보이나(LiveDashboard의 viewStatus). 지난 방송 주소는 명부 답 전에도 그렇다. 그동안은 실시간
  *   채팅을 읽지 않는다: 최근 창을 읽으면 끝난 방송의 「채팅 기록」 자리에 엉뚱한 창의 채팅을 채운다(리뷰 3라운드). 통계와 같은
  *   값을 받는다: 채팅만 따로 계산하면 화면 상태 규칙이 바뀔 때 둘이 갈린다(리뷰 5라운드)
+ * @param awaitPlayhead 녹화가 곧 재생 위치를 알려 온다(찾는 중이거나 찾았다. 찾으면 재생기가 서는 그리기에서 바로 알린다). 위치를
+ *   모르는 동안은 지난 방송 채팅을 정하지 않고 「불러오고 있어요」다: 방송 끝을 먼저 읽어 끝 채팅이 잠깐 보였다가 0초 빈 창으로
+ *   바뀌었다(리뷰 1라운드)
  */
-export function useChatPanelMockState(enabled: boolean, ended: boolean): ChatPanelMockState {
+export function useChatPanelMockState(
+  enabled: boolean,
+  ended: boolean,
+  awaitPlayhead = false,
+): ChatPanelMockState {
   const [raw, setRaw] = useState<Record<string, WireItem>>({});
-  /**
-   * 카드 시점 앞뒤 60초를 다 읽은 결과와 그 시점(방송 번호·시점 시각). 읽다 실패했으면 items가 null이다. 방송 창 읽기가 비우는
-   * raw와 따로 둔다: 섞어 두면 창을 다시 읽을 때 함께 지워져 「채팅 0건」이 됐다(리뷰 5·6라운드)
-   */
-  const [focusRead, setFocusRead] = useState<{
-    streamId: string;
-    center: number;
-    items: WireItem[] | null;
-  } | null>(null);
   const lastTime = useRef<number>(0);
   const nextId = useRef<number>(1);
   const lastSeq = useRef<{ seq: number; epoch: number } | null>(null);
@@ -159,55 +202,80 @@ export function useChatPanelMockState(enabled: boolean, ended: boolean): ChatPan
   const pollRef = useRef<(() => Promise<void>) | null>(null);
   const live = useLiveData();
   const streamId = live.streamId;
-  // 지난 방송 채팅을 읽기 시작할 시각. 그래프·시청자 기록과 같은 창이다(endedWindowStart): 시작 시각을 모르는 방송은 아무 창도
-  // 안 읽어 채팅만 비었고(리뷰 4라운드), 12시간 넘는 방송은 채팅만 처음부터 읽어 통계와 다른 창을 보였다(리뷰 5라운드)
-  const vodFrom =
-    live.status === 'ended' && live.endedAt !== null
-      ? endedWindowStart(live.startedAt, live.endedAt)
-      : null;
-  const isVod = vodFrom !== null;
 
-  // 지난 방송: 그 창(방송 전체, 12시간 넘으면 끝 12시간)을 받는다. 카드를 고르면 그 시점 앞뒤 60초는 따로 읽는다(아래).
-  // 수집기는 한 번에 1시간까지만 받으므로(넘으면 400 too_wide)
-  // 1시간 창마다 커서로 넘긴다(PR #200 codex). 창마다 최대 5장(1,000건). 폴링 없음
+  // 지난 방송 채팅은 영상 시각까지의 줄만 보이고 그 둘레만 읽는다(POK-324). 읽을 하한은 녹화와 같은 자리(시작 시각, 모르면 끝
+  // 12시간, recordingSearchFrom)에서 보정 여유만큼 앞이다. 그래프의 창(끝 12시간)으로 자르지 않는다: 긴 방송의 앞쪽 카드 시점
+  // 채팅도 그 방송의 것이다
+  const replayUpper = live.status === 'ended' ? live.endedAt : null;
+  const searchFrom = replayUpper === null ? null : recordingSearchFrom(live.startedAt, replayUpper);
+  const replayLower = searchFrom === null ? null : searchFrom - REPLAY_LOWER_SLACK_MS;
+  const vodBase = timeBaseOf(live);
+  // 채팅이 보이는 마지막 영상 시각. 재생 위치(녹화가 흐르는 자리, 영상 없이 누른 카드)를 알면 그 시각이고, 녹화가 곧 알려 올
+  // 것이면 아직 모르고(null), 둘 다 아니면 방송 끝이다. 시점의 0초는 영상과 같은 기준점이다(녹화 첫 조각): 방송 시작 시각에
+  // 더하면 그 차이만큼 영상과 어긋난다(PR #200 codex)
+  const replayCursor =
+    replayUpper === null || replayLower === null
+      ? null
+      : live.playheadMs !== null && vodBase !== null
+        ? Math.min(replayUpper, Math.max(replayLower, vodBase + live.playheadMs))
+        : awaitPlayhead
+          ? null
+          : replayUpper;
+  const readFrom = useMemo(
+    () =>
+      replayCursor === null || replayLower === null
+        ? null
+        : replayReadStart(live.chart, replayCursor, replayLower),
+    [live.chart, replayCursor, replayLower],
+  );
+  // 모자라도 그보다 이른 쪽은 더 읽지 않는 바닥. 시작점이 짐작이면(끝 12시간 차트가 영상 시각 앞 300건을 못 셈) 하한까지 앞을 더
+  // 읽는다: 차트 첫 칸에서 멈추면 그 앞 채팅이 있어도 끝 12시간의 몇 줄만 보였다(PR #230 codex)
+  const readFloor = useMemo(
+    () =>
+      replayCursor === null || replayLower === null || readFrom === null
+        ? null
+        : replayStartIsGuess(live.chart, replayCursor)
+          ? replayLower
+          : readFrom,
+    [live.chart, replayCursor, replayLower, readFrom],
+  );
+
+  // 한 방송(하한·상한)에 로더 하나다. 열쇠가 바뀌면 새로 세우고, 세우기 전 한 번은 옛 로더가 아니라 빈 것으로 그린다. 치우면
+  // 들고 있지도 않는다: 채팅 창을 접었다 펴면 열쇠가 같은 글자라 치운 로더의 옛 줄을 한 번 그렸다(리뷰 1라운드)
+  const replayKey =
+    enabled && streamId && replayLower !== null && replayUpper !== null
+      ? `${streamId}|${replayLower}|${replayUpper}`
+      : null;
+  const [replayState, setReplayState] = useState<{
+    key: string;
+    loader: ChatReplayLoader;
+  } | null>(null);
   useEffect(() => {
-    if (!enabled || !streamId || vodFrom === null || live.endedAt === null) return;
-    setRaw({});
-    let stopped = false;
-    const windows = chartWindows(vodFrom, live.endedAt);
-    (async () => {
-      const acc: Record<string, WireItem> = {};
-      for (const [from, to] of windows) {
-        let cursor: string | null = null;
-        let budget = VOD_CHAT_PAGES_PER_WINDOW;
-        do {
-          if (budget-- <= 0) break;
-          const qs = new URLSearchParams({
-            from: new Date(from).toISOString(),
-            to: new Date(to).toISOString(),
-            limit: '200',
-          });
-          if (cursor) qs.set('cursor', cursor);
-          try {
-            const r = await apiFetch(
-              `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-messages?${qs}`,
-            );
-            if (stopped) return;
-            const pg = (await r.json()) as WirePage;
-            for (const it of pg.items) acc[fingerprint(it)] = it;
-            cursor = pg.nextCursor;
-          } catch {
-            // 이 창만 건너뛴다 — 한 창의 실패로 방송 전체 채팅을 비우지 않는다
-            cursor = null;
-          }
-        } while (cursor !== null);
-      }
-      if (!stopped) setRaw(acc);
-    })();
+    if (replayKey === null || replayLower === null || replayUpper === null) return;
+    const next = new ChatReplayLoader(
+      (from, to, cursor, signal) => fetchChatPage(streamId, from, to, cursor, signal),
+      replayLower,
+      replayUpper,
+    );
+    setReplayState({ key: replayKey, loader: next });
     return () => {
-      stopped = true;
+      next.dispose();
+      setReplayState((current) => (current?.loader === next ? null : current));
     };
-  }, [enabled, streamId, vodFrom, live.endedAt]);
+  }, [replayKey, streamId, replayLower, replayUpper]);
+  const loader = replayState !== null && replayState.key === replayKey ? replayState.loader : null;
+  const snapshot = useSyncExternalStore(
+    loader?.subscribe ?? noReplaySubscribe,
+    loader?.getSnapshot ?? emptyReplay,
+    emptyReplay,
+  );
+  // 그리기 전에 알린다: 처음부터 다시 읽어야 하면 바로 비워 그려, 옮긴 시점에 옛 구간의 줄을 한 번 칠하지 않는다
+  // 차트도 넘긴다: 사람이 옮겼을 때 다 읽은 구간과 새 자리 사이 줄을 세어, 채팅이 몰린 구간이면 사이를 다 읽지 않고 다시 읽는다
+  const chart = live.chart;
+  useLayoutEffect(() => {
+    if (loader === null || replayCursor === null || readFrom === null || readFloor === null) return;
+    loader.want(replayCursor, readFrom, readFloor, chart);
+  }, [loader, replayCursor, readFrom, readFloor, chart]);
 
   // 실시간 중계 수신(카드 통로의 chat·donation). 구멍·세대 변화면 2초 뒤 범위 창구로 메운다
   useEffect(() => {
@@ -304,104 +372,41 @@ export function useChatPanelMockState(enabled: boolean, ended: boolean): ChatPan
     };
   }, [enabled, streamId, ended, live.status]);
 
-  // 지난 방송에서 카드를 누르면 그 시점 앞뒤 60초를 따로 읽는다(쪽 수 상한까지): 처음 읽기는 창마다 상한이 있어
-  // 채팅이 많은 시간대는 비어 있을 수 있다(PR #200 codex P1)
-  const vodBase = timeBaseOf(live);
-  const focusCenter =
-    isVod && live.playheadMs !== null && vodBase !== null ? vodBase + live.playheadMs : null;
-  useEffect(() => {
-    if (!enabled || !streamId || focusCenter === null) return;
-    const from = focusCenter - 60_000 + CHAT_LEAD_MS;
-    const to = focusCenter + 60_000 + CHAT_LEAD_MS;
-    let stopped = false;
-    (async () => {
-      const got: WireItem[] = [];
-      let cursor: string | null = null;
-      let failed = false;
-      let budget = VOD_FOCUS_PAGE_BUDGET;
-      do {
-        if (budget-- <= 0) break;
-        const qs = new URLSearchParams({
-          from: new Date(from).toISOString(),
-          to: new Date(to).toISOString(),
-          limit: '200',
-        });
-        if (cursor) qs.set('cursor', cursor);
-        try {
-          const r = await apiFetch(
-            `/api/clip/broadcasts/${encodeURIComponent(streamId)}/chat-messages?${qs}`,
-          );
-          if (stopped) return;
-          const pg = (await r.json()) as WirePage;
-          got.push(...pg.items);
-          cursor = pg.nextCursor;
-        } catch {
-          failed = true;
-          cursor = null;
-        }
-      } while (cursor !== null);
-      if (!stopped) setFocusRead({ streamId, center: focusCenter, items: failed ? null : got });
-    })();
-    return () => {
-      stopped = true;
-    };
-  }, [enabled, streamId, focusCenter]);
-  // 지금 시점을 다 읽었으면 그 결과, 아니면 null(읽는 중)이다. 그릴 때 정한다: 읽기를 시작하며 표시를 켜면 그 앞 한 번은 받아 둔
-  // 일부로 「0건」을 그렸다(리뷰 7라운드)
-  const focus =
-    focusRead !== null && focusRead.streamId === streamId && focusRead.center === focusCenter
-      ? focusRead
-      : null;
-
-  const items = useMemo(() => {
-    const all = { ...raw };
-    for (const it of focus?.items ?? []) {
-      const k = fingerprint(it);
-      if (!all[k]) all[k] = it;
-    }
-    return Object.values(all).sort(
-      (a, b) => Date.parse(a.time) - Date.parse(b.time) || a.id - b.id,
-    );
-  }, [raw, focus]);
-  // 지난 방송에서 카드를 눌렀으면 그 시점 앞뒤 60초만 보여준다(영상 대신 채팅이 그 시점을 말한다)
-  const messages = useMemo(() => {
-    // 시점의 0초는 영상과 같은 기준점이다(녹화 첫 조각) — 방송 시작 시각에 더하면 그 차이만큼 영상과 어긋난다(PR #200 codex)
-    if (isVod && live.playheadMs !== null && vodBase !== null) {
-      const center = vodBase + live.playheadMs;
-      const lo = center - 60_000 + CHAT_LEAD_MS;
-      const hi = center + 60_000 + CHAT_LEAD_MS;
-      const inWin = items.filter((it) => {
-        const t = Date.parse(it.time);
-        return t >= lo && t <= hi;
-      });
-      const sec = Math.floor(live.playheadMs / 1000);
-      const h = Math.floor(sec / 3600),
-        m = Math.floor((sec % 3600) / 60),
-        sc = sec % 60;
-      const label = `${h}:${String(m).padStart(2, '0')}:${String(sc).padStart(2, '0')}`;
-      return [
-        {
-          id: -1,
-          kind: 'system' as const,
-          // 그 시점을 읽는 동안은 모른다: 1시간 창에서 받아 둔 일부를 수로 쓰면 0건이나 덜 센 수가 섰다(리뷰 6라운드). 읽다 실패해도
-          // 모른다: 「다 읽음」으로 넘어가 「0건」이라 했다(리뷰 7라운드)
-          text:
-            focus === null
-              ? `${label} 시점 앞뒤 60초 채팅 확인 중`
-              : focus.items === null
-                ? `${label} 시점 앞뒤 60초 채팅을 불러오지 못했어요`
-                : `${label} 시점 앞뒤 60초 채팅 ${inWin.length}건`,
-        },
-        ...inWin.map(toPanel),
-      ];
-    }
-    return items.map(toPanel);
-  }, [items, isVod, live.playheadMs, vodBase, focus]);
+  const items = useMemo(
+    () => Object.values(raw).sort((a, b) => Date.parse(a.time) - Date.parse(b.time) || a.id - b.id),
+    [raw],
+  );
+  const replay = useMemo(
+    () =>
+      replayCursor === null || replayUpper === null || readFloor === null
+        ? null
+        : replayView(snapshot, replayCursor, replayUpper, readFloor),
+    [snapshot, replayCursor, replayUpper, readFloor],
+  );
+  // 지난 방송 채팅을 읽는 중이거나 읽지 못했을 때의 말. 목록의 상태 줄과 화면 낭독(statusNote)이 이 값 하나를 쓴다: 따로 가르면
+  // 한쪽만 바뀔 때 둘이 다른 말을 한다(리뷰 2라운드). 끝난 방송인데 아직 영상 시각을 모르면(명부 답 전, 녹화가 자리를 알리기 전)
+  // 빈 창이 아니라 읽는 중이다
+  const replayWaiting = ended && replay === null;
+  const statusNote = replay === null ? (ended ? REPLAY_LOADING : null) : REPLAY_NOTE[replay.status];
+  const messages = useMemo<ChatPanelMessage[]>(() => {
+    if (replay === null && !ended) return items.map(toPanel);
+    // 줄 번호는 로더가 매긴 일련번호다: 채팅과 후원은 표가 달라 id가 겹친다
+    const lines: ChatPanelMessage[] = (replay?.lines ?? []).map((line) => ({
+      ...toPanel(line.item),
+      id: line.seq,
+    }));
+    if (statusNote === null) return lines;
+    const note: ChatPanelMessage = { id: -1, kind: 'system', text: statusNote };
+    // 그 시각까지 다 읽지 못했으면 맨 아래(그 시각 쪽)에 쓴다: 빈 창을 채팅이 없는 것처럼 보이지 않는다. 그 앞만 모자라면 맨 위에
+    // 쓴다: 맨 아래에 쓰면 카드 뒤 ←마다 영상 시각 쪽에 「불러오고 있어요」가 끼었다 빠졌다(리뷰 3라운드)
+    const earlier = replay?.status === 'earlierLoading' || replay?.status === 'earlierFailed';
+    return earlier ? [note, ...lines] : [...lines, note];
+  }, [items, replay, ended, statusNote]);
 
   const ratePerMinute = useMemo<number | null>(() => {
     // 끝난 화면(명부 답을 기다리는 지난 방송 주소 포함)은 차트가 센 수를 차트가 읽은 길이로 나눈다(12시간 넘는 방송은 끝 12시간).
     // 통계와 같은 수라 반올림하지 않는다: 자릿수는 패널이 통계처럼 맞춘다(리뷰 5라운드). 그 차트가 없으면 모른다: 받아 둔 채팅은
-    // 창마다 상한이 있어 방송 길이로 나누면 늘 적게 나온다. 통계도 그때 「확인 중」이다(리뷰 4라운드)
+    // 영상 시각 둘레뿐이라 방송 길이로 나눌 수 없다. 통계도 그때 「확인 중」이다(리뷰 4라운드)
     if (ended) {
       const chart = live.chart;
       if (chart === null || chart.scope === 'recent') return null;
@@ -413,10 +418,20 @@ export function useChatPanelMockState(enabled: boolean, ended: boolean): ChatPan
   }, [items, ended, live.chart]);
 
   const surges = useMemo<ChatSurge[]>(() => {
-    const cut = Date.now() - 2 * 60_000 + CHAT_LEAD_MS;
+    // 라이브는 지금 앞 2분, 지난 방송은 영상 시각 앞 2분의 채팅이다(POK-324): 지난 방송을 지금 기준으로 세면 늘 비었다. 끝난
+    // 방송인데 시점을 아직 모르면 비운다: 라이브 채팅으로 세면 라이브가 끝나 녹화를 기다리는 동안 빈 채팅 창 옆에 방송 끝 무렵
+    // 키워드가 섰다(PR #230 codex)
+    const recent =
+      replay !== null && replayCursor !== null
+        ? replay.lines
+            .filter((line) => line.at >= replayCursor - 2 * 60_000)
+            .map((line) => line.item)
+        : ended
+          ? []
+          : items.filter((it) => Date.parse(it.time) >= Date.now() - 2 * 60_000 + CHAT_LEAD_MS);
     const freq = new Map<string, number>();
-    for (const it of items) {
-      if (it.kind !== 'chat' || Date.parse(it.time) < cut) continue;
+    for (const it of recent) {
+      if (it.kind !== 'chat') continue;
       for (const w of (it.text ?? '').split(/\s+/)) {
         const k = w.trim();
         if (k.length < 2) continue;
@@ -428,8 +443,17 @@ export function useChatPanelMockState(enabled: boolean, ended: boolean): ChatPan
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
       .map(([keyword, count]) => ({ keyword, count }));
-  }, [items]);
+  }, [items, replay, replayCursor, ended]);
 
   // 채팅이 고른 시점을 따라가려면 그 시점을 절대 시각으로 바꿀 기준점이 있어야 한다(시작 시각을 모르는 방송은 없을 수 있다)
-  return { surges, messages, ratePerMinute, followsPlayhead: isVod && vodBase !== null };
+  const followsPlayhead = replayUpper !== null && vodBase !== null;
+  return {
+    surges,
+    messages,
+    ratePerMinute,
+    followsPlayhead,
+    replayClock: followsPlayhead && live.playheadMs !== null ? msToClock(live.playheadMs) : null,
+    replayWaiting,
+    statusNote,
+  };
 }

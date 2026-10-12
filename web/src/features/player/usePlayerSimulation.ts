@@ -57,6 +57,11 @@ export interface PlayerSimulation {
   seekToFraction: (fraction: number) => void;
   /** 키보드 시킹 — 음수는 엣지 방향 */
   seekBy: (deltaSeconds: number) => void;
+  /**
+   * 녹화 다시보기만: 그 자리(방송 기준 초)로 바로 옮긴다. 카드처럼 정확한 시각으로 갈 때 쓴다: 시크바 비율을 거치면 시차를 초
+   * 단위로 반올림해 1초 안쪽 앞에 섰다(POK-324 리뷰 1라운드). 없으면 비율로 옮긴다
+   */
+  seekToPosition?: (seconds: number) => void;
   /** 명시적 LIVE 복귀 (계약3 4절) */
   returnToLive: () => void;
   setQuality: (quality: PlayerQuality) => void;

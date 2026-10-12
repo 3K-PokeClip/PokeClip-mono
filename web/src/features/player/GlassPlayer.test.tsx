@@ -414,9 +414,12 @@ describe('GlassPlayer: 녹화 다시보기', () => {
     vi.restoreAllMocks();
   });
 
-  function renderRecorded() {
+  function renderRecorded(
+    props: Partial<ComponentProps<typeof GlassPlayer>> = {},
+    durationSeconds = 444,
+  ) {
     const T0 = Date.parse('2026-10-08T02:43:39Z');
-    const timeline = recordingTimeline([{ startMs: T0, durationSeconds: 444 }], null, null)!;
+    const timeline = recordingTimeline([{ startMs: T0, durationSeconds }], null, null)!;
     return render(
       <ToastProvider>
         <GlassPlayer
@@ -425,10 +428,71 @@ describe('GlassPlayer: 녹화 다시보기', () => {
           broadcastStatus="ended"
           embed
           recorded={{ streamId: 'test1008a', ...timeline }}
+          {...props}
         />
       </ToastProvider>,
     );
   }
+
+  /** 영상 노드가 그 시각까지 흘렀다 */
+  function playTo(container: HTMLElement, seconds: number) {
+    const video = container.querySelector('video')!;
+    act(() => {
+      video.currentTime = seconds;
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+  }
+
+  it('재생 위치가 초 단위로 바뀔 때마다 알린다: 지난 방송 채팅이 그 시각까지의 줄만 보인다(POK-324)', () => {
+    const heard = vi.fn();
+    const { container } = renderRecorded({ onPlaybackPosition: heard });
+
+    playTo(container, 12.2);
+    expect(heard).toHaveBeenLastCalledWith(12);
+    // 내린다: 영상 시각을 넘는 줄은 보이지 않는다(반올림하면 0.5초 앞 줄까지 보였다)
+    playTo(container, 12.9);
+    expect(heard).toHaveBeenLastCalledWith(12);
+    playTo(container, 13.1);
+
+    // timeupdate는 1초에 네 번쯤 온다. 같은 초면 다시 알리지 않는다
+    expect(heard.mock.calls.map(([seconds]) => seconds)).toEqual([0, 12, 13]);
+  });
+
+  it('카드처럼 정확한 시각으로 옮기면 그 초에 선다: 녹화 길이에 소수가 있어도 1초 앞에 서지 않는다', () => {
+    // 시크바 비율을 거치면 시차를 초 단위로 반올림해 600.7초 녹화에서 149초 카드가 148.7초에 섰다(리뷰 1라운드)
+    const heard = vi.fn();
+    const controllerRef = createRef<GlassPlayerController>();
+    renderRecorded({ onPlaybackPosition: heard, controllerRef }, 600.7);
+
+    act(() => {
+      controllerRef.current?.seekToUptime(149);
+    });
+    expect(heard).toHaveBeenLastCalledWith(149);
+  });
+
+  it('옮기면 옮긴 자리를 바로 알리고, 새 줄기가 붙기 전 옛 줄기의 시각으로 되돌아가지 않는다', () => {
+    vi.useFakeTimers();
+    try {
+      const heard = vi.fn();
+      const { container } = renderRecorded({ onPlaybackPosition: heard });
+      playTo(container, 30);
+      heard.mockClear();
+
+      fireEvent.click(screen.getByRole('button', { name: '녹화 끝으로 이동' }));
+      // 끝은 마지막 1초 앞이다
+      expect(heard.mock.calls.map(([seconds]) => seconds)).toEqual([443]);
+      playTo(container, 30.3);
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      // 새 줄기의 0초가 443초다(반올림해도 443): 옛 줄기의 기준이면 0초로 알렸다
+      playTo(container, 0.4);
+
+      expect(heard.mock.calls.map(([seconds]) => seconds)).toEqual([443]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('오른쪽 끝은 「실시간」이 아니라 녹화 끝이다: 이름만 바뀌고 누르면 녹화 끝으로 간다(ADR-081)', () => {
     renderRecorded();
