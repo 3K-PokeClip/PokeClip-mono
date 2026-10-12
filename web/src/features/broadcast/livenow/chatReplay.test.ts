@@ -3,6 +3,7 @@ import {
   ChatReplayLoader,
   linesUpTo,
   replayReadStart,
+  replayStartIsGuess,
   replayView,
   type ReplayFetch,
   type ReplayLine,
@@ -191,6 +192,23 @@ describe('replayReadStart: 어디부터 읽나', () => {
   });
 });
 
+describe('replayStartIsGuess: 시작점이 짐작인가', () => {
+  it('끝 12시간만 그린 차트가 영상 시각 앞 300건을 못 세면 짐작이다: 차트 밖(더 이른 쪽) 채팅은 모른다', () => {
+    const tail = chart([10, 10, 10], { scope: 'tail', firstMs: T0 + HOUR });
+    expect(replayStartIsGuess(tail, T0 + HOUR + 30_000)).toBe(true);
+    // 영상 시각이 차트보다 앞이어도 짐작이다
+    expect(replayStartIsGuess(tail, T0 + 30_000)).toBe(true);
+    // 300건을 세면 짐작이 아니다
+    expect(replayStartIsGuess(chart([200, 200], { scope: 'tail' }), T0 + 20_000)).toBe(false);
+  });
+
+  it('방송 전체 차트·차트 없음·라이브 최근 창은 짐작이 아니다', () => {
+    expect(replayStartIsGuess(chart([10, 10]), T0 + 20_000)).toBe(false);
+    expect(replayStartIsGuess(null, T0 + 20_000)).toBe(false);
+    expect(replayStartIsGuess(chart([10, 10], { scope: 'recent' }), T0 + 20_000)).toBe(false);
+  });
+});
+
 describe('replayView: 무엇을 보이나', () => {
   const lines: ReplayLine[] = [10, 20, 30].map((s, i) => ({
     seq: i,
@@ -240,16 +258,17 @@ describe('replayView: 무엇을 보이나', () => {
     ).toBe('ready');
   });
 
-  it('영상 시각 쪽은 다 있는데 다 읽은 구간이 읽기 시작점보다 늦게 서서 앞이 모자라면 이른 쪽을 읽는 중·실패다: 보이는 줄은 그대로다', () => {
-    // 로더가 지금 덧붙이는 중인지가 아니라 화면이 정한 읽기 시작점으로 가른다: 덧붙이기는 앞 요청이 끝나야 서서 그 사이 몇 줄만
-    // 보이는 창을 다 읽은 것처럼 그렸다(리뷰 3라운드)
+  it('영상 시각 쪽은 다 있는데 다 읽은 구간이 하한보다 늦게 서서 앞이 모자라면 이른 쪽을 읽는 중·실패다: 보이는 줄은 그대로다', () => {
+    // 로더가 지금 덧붙이는 중인지가 아니라 스냅숏과 하한으로 가른다: 덧붙이기는 앞 요청이 끝나야 서서 그 사이 몇 줄만 보이는 창을
+    // 다 읽은 것처럼 그렸다(리뷰 3라운드). 읽기 시작점이 아니라 하한이다: 시작점은 차트로 짐작한 것이라 거기서 멈추면 300줄을 못
+    // 채웠다(PR #230 codex 3판)
     const view = replayView(snap({}), T0 + 25_000, T0 + HOUR, T0 - 60_000);
     expect(view.status).toBe('earlierLoading');
     expect(view.lines).toHaveLength(2);
     expect(replayView(snap({ failed: true }), T0 + 25_000, T0 + HOUR, T0 - 60_000).status).toBe(
       'earlierFailed',
     );
-    // 다 읽은 구간이 읽기 시작점부터 서면 몇 줄이어도 다 읽은 것이다(그 앞에 줄이 없다)
+    // 다 읽은 구간이 하한부터 서면 몇 줄이어도 다 읽은 것이다(그 앞에 줄이 없다)
     expect(replayView(snap({}), T0 + 25_000, T0 + HOUR, T0).status).toBe('ready');
     // 영상 시각 쪽을 아직 못 읽었으면 그쪽이 먼저다
     expect(replayView(snap({}), T0 + 50_000, T0 + HOUR, T0 - 60_000).status).toBe('loading');
@@ -488,6 +507,107 @@ describe('ChatReplayLoader: 그 시각 둘레만 읽는다', () => {
     const done = replayView(loader.getSnapshot(), T0 + 290_000, T0 + HOUR, T0 + 284_000);
     expect(done.status).toBe('ready');
     expect(done.lines).toHaveLength(300);
+  });
+
+  /** 처음 1,000초는 1초에 한 줄, 그 뒤는 100초에 한 줄(1,000초~3,500초) */
+  function denseThenSparse(): WireItem[] {
+    const items = steady(1_000);
+    for (let k = 0; k <= 25; k += 1) items.push(chatAt(T0 + (1_000 + k * 100) * 1000, 10_000 + k));
+    return items;
+  }
+
+  it('읽기 시작점까지 읽어도 영상 시각 앞 줄이 300 미만이고 하한보다 늦으면 그 앞을 더 읽는다: 끝 12시간 차트로 고른 시작점에서 멈추지 않는다', async () => {
+    // 12시간 넘는 방송은 차트가 끝 12시간뿐이라, 그 안에 300건이 없으면 차트 첫 칸을 시작점으로 확정해 그 앞 채팅을 안 읽었다(PR
+    // #230 codex 3판). 시작점은 짐작이다: 300줄이 찰 때까지(하한까지) 60초·2분·4분… 늘려 가며 앞을 더 읽는다
+    const srv = collector(denseThenSparse());
+    const loader = new ChatReplayLoader(srv.fetchPage, T0, T0 + HOUR);
+    loader.want(T0 + 3_000_000, T0 + 2_000_000, T0);
+    await settle();
+
+    const view = replayView(loader.getSnapshot(), T0 + 3_000_000, T0 + HOUR, T0);
+    expect(view.status).toBe('ready');
+    expect(view.lines).toHaveLength(300);
+    expect(view.lines[0]!.at).toBe(T0 + 721_000);
+    expect(view.lines.at(-1)!.at).toBe(T0 + 3_000_000);
+    // 영상 시각 쪽을 먼저 읽고, 앞은 차례로 늘렸다: 60초 → 2분 → 4분 → 8분 → 16분(빽빽해 두 쪽)
+    expect(srv.calls.map((c) => [(c.from - T0) / 1000, (c.to - T0) / 1000])).toEqual([
+      [2_000, 3_600],
+      [1_940, 2_000],
+      [1_820, 1_940],
+      [1_580, 1_820],
+      [1_100, 1_580],
+      [140, 1_100],
+      [140, 1_100],
+    ]);
+  });
+
+  it('하한까지 읽어도 300줄이 안 되면 거기서 멈추고 다 읽은 것이다', async () => {
+    const items: WireItem[] = [];
+    for (let s = 0; s < 3_600; s += 100) items.push(chatAt(T0 + s * 1000, s + 1));
+    const srv = collector(items);
+    const loader = new ChatReplayLoader(srv.fetchPage, T0, T0 + HOUR);
+    loader.want(T0 + 3_000_000, T0 + 2_940_000, T0);
+    await settle();
+
+    expect(loader.getSnapshot().from).toBe(T0);
+    const view = replayView(loader.getSnapshot(), T0 + 3_000_000, T0 + HOUR, T0);
+    expect(view.status).toBe('ready');
+    expect(view.lines).toHaveLength(31);
+    const asked = srv.calls.length;
+    loader.want(T0 + 3_001_000, T0 + 2_941_000, T0);
+    await settle();
+    expect(srv.calls).toHaveLength(asked);
+  });
+
+  it('앞을 늘리는 길이는 모자랄 때마다 60초부터 다시 센다: 멀리 옮긴 뒤 첫 늘림이 앞서 늘린 길이(1시간)로 크게 읽지 않는다', async () => {
+    const items: WireItem[] = [];
+    for (let s = 0; s < 7_200; s += 100) items.push(chatAt(T0 + s * 1000, s + 1));
+    const srv = collector(items);
+    const loader = new ChatReplayLoader(srv.fetchPage, T0, T0 + 2 * HOUR);
+    loader.want(T0 + 3_000_000, T0 + 2_940_000, T0);
+    await settle();
+    expect(loader.getSnapshot().from).toBe(T0);
+
+    const asked = srv.calls.length;
+    loader.want(T0 + 7_000_000, T0 + 6_940_000, T0);
+    await settle();
+    expect(srv.calls[asked]).toEqual({ from: T0 + 6_940_000, to: T0 + 2 * HOUR, cursor: null });
+    expect(srv.calls[asked + 1]).toEqual({
+      from: T0 + 6_880_000,
+      to: T0 + 6_940_000,
+      cursor: null,
+    });
+  });
+
+  it('앞을 더 읽는 동안은 이른 쪽을 읽는 중이다: 보이는 줄은 그대로 두고, 다 채우면 다 읽은 것이다', async () => {
+    const srv = collector(denseThenSparse());
+    let release: () => void = () => undefined;
+    // 첫 쪽(시작점부터)은 바로 답하고, 앞을 더 읽는 요청부터 붙든다
+    const first = srv.fetchPage;
+    let asked = 0;
+    const held: ReplayFetch = (from, to, cursor, signal) => {
+      asked += 1;
+      if (asked === 1) return first(from, to, cursor, signal);
+      return new Promise((resolve) => {
+        release = () => resolve(first(from, to, cursor, signal));
+      });
+    };
+    const gated = new ChatReplayLoader(held, T0, T0 + HOUR);
+    gated.want(T0 + 3_000_000, T0 + 2_000_000, T0);
+    await settle();
+    const during = replayView(gated.getSnapshot(), T0 + 3_000_000, T0 + HOUR, T0);
+    expect(during.status).toBe('earlierLoading');
+    expect(during.lines).toHaveLength(11);
+    expect(during.lines.at(-1)!.at).toBe(T0 + 3_000_000);
+
+    // 60초·2분·4분·8분·16분(두 쪽)
+    for (let i = 0; i < 6; i += 1) {
+      release();
+      await settle();
+    }
+    const after = replayView(gated.getSnapshot(), T0 + 3_000_000, T0 + HOUR, T0);
+    expect(after.status).toBe('ready');
+    expect(after.lines).toHaveLength(300);
   });
 
   it('앞을 덧붙이는 동안은 버리지 않는다: 답이 오기 전에 늦은 쪽으로 갔다 돌아와도 빈 곳 없이 그 시각의 줄이다', async () => {

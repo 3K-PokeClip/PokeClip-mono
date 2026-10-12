@@ -9,6 +9,7 @@ import {
   ChatReplayLoader,
   EMPTY_REPLAY,
   replayReadStart,
+  replayStartIsGuess,
   replayView,
   type ReplaySnapshot,
   type ReplayStatus,
@@ -227,6 +228,17 @@ export function useChatPanelMockState(
         : replayReadStart(live.chart, replayCursor, replayLower),
     [live.chart, replayCursor, replayLower],
   );
+  // 모자라도 그보다 이른 쪽은 더 읽지 않는 바닥. 시작점이 짐작이면(끝 12시간 차트가 영상 시각 앞 300건을 못 셈) 하한까지 앞을 더
+  // 읽는다: 차트 첫 칸에서 멈추면 그 앞 채팅이 있어도 끝 12시간의 몇 줄만 보였다(PR #230 codex)
+  const readFloor = useMemo(
+    () =>
+      replayCursor === null || replayLower === null || readFrom === null
+        ? null
+        : replayStartIsGuess(live.chart, replayCursor)
+          ? replayLower
+          : readFrom,
+    [live.chart, replayCursor, replayLower, readFrom],
+  );
 
   // 한 방송(하한·상한)에 로더 하나다. 열쇠가 바뀌면 새로 세우고, 세우기 전 한 번은 옛 로더가 아니라 빈 것으로 그린다. 치우면
   // 들고 있지도 않는다: 채팅 창을 접었다 펴면 열쇠가 같은 글자라 치운 로더의 옛 줄을 한 번 그렸다(리뷰 1라운드)
@@ -259,9 +271,9 @@ export function useChatPanelMockState(
   );
   // 그리기 전에 알린다: 처음부터 다시 읽어야 하면 바로 비워 그려, 옮긴 시점에 옛 구간의 줄을 한 번 칠하지 않는다
   useLayoutEffect(() => {
-    if (loader === null || replayCursor === null || readFrom === null) return;
-    loader.want(replayCursor, readFrom);
-  }, [loader, replayCursor, readFrom]);
+    if (loader === null || replayCursor === null || readFrom === null || readFloor === null) return;
+    loader.want(replayCursor, readFrom, readFloor);
+  }, [loader, replayCursor, readFrom, readFloor]);
 
   // 실시간 중계 수신(카드 통로의 chat·donation). 구멍·세대 변화면 2초 뒤 범위 창구로 메운다
   useEffect(() => {
@@ -364,10 +376,10 @@ export function useChatPanelMockState(
   );
   const replay = useMemo(
     () =>
-      replayCursor === null || replayUpper === null || readFrom === null
+      replayCursor === null || replayUpper === null || readFloor === null
         ? null
-        : replayView(snapshot, replayCursor, replayUpper, readFrom),
-    [snapshot, replayCursor, replayUpper, readFrom],
+        : replayView(snapshot, replayCursor, replayUpper, readFloor),
+    [snapshot, replayCursor, replayUpper, readFloor],
   );
   // 지난 방송 채팅을 읽는 중이거나 읽지 못했을 때의 말. 목록의 상태 줄과 화면 낭독(statusNote)이 이 값 하나를 쓴다: 따로 가르면
   // 한쪽만 바뀔 때 둘이 다른 말을 한다(리뷰 2라운드). 끝난 방송인데 아직 영상 시각을 모르면(명부 답 전, 녹화가 자리를 알리기 전)

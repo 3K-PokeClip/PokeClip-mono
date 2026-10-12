@@ -53,6 +53,12 @@ const PAGE_TIMEOUT_MS = 10_000;
 const PAGES_PER_PUMP = 50;
 /** 한 번에 읽는 쪽 수를 다 쓰면 이만큼 쉬고 이어 읽는다 */
 const BURST_REST_MS = 1_000;
+/**
+ * 읽기 시작점까지 읽고도 영상 시각 앞 줄이 CHAT_KEEP에 못 미치면 앞을 처음 이만큼 더 읽고, 모자랄 때마다 두 배씩(1시간까지) 늘린다.
+ * 시작점은 차트로 짐작한 것이다: 12시간 넘는 방송은 차트가 끝 12시간뿐이라 그 안에 300건이 없으면 차트 첫 칸에서 멈춰 그 앞
+ * 채팅을 못 읽었다(PR #230 codex). 처음부터 크게 읽지 않는 것은 그 앞이 빽빽할 수 있어서다
+ */
+const EXTEND_FIRST_MS = 60_000;
 
 /** 다시 보기가 쥔 한 줄 */
 export interface ReplayLine {
@@ -137,42 +143,67 @@ export function replayReadStart(
   lowerMs: number,
 ): number {
   if (chart !== null && chart.scope !== 'recent' && chart.buckets.length > 0) {
-    const span = chart.bucketSeconds * 1000;
-    // 칸 시작은 표 축이다
-    const atOf = (i: number) => Date.parse(chart.buckets[i]!.start) - chart.appliedOffsetMs;
-    let sum = 0;
-    let start: number | null = null;
-    for (let i = chart.buckets.length - 1; i >= 0; i -= 1) {
-      const at = atOf(i);
-      if (at + span > cursorMs) continue;
-      start = at;
-      // 후원도 채팅 창에 선다
-      sum += chart.buckets[i]!.chats + chart.buckets[i]!.donations;
-      if (sum >= CHAT_KEEP) return Math.max(lowerMs, start);
-    }
-    if (chart.scope === 'broadcast' && atOf(0) <= cursorMs) return lowerMs;
+    const { start, sum } = countBack(chart, cursorMs);
+    if (sum >= CHAT_KEEP) return Math.max(lowerMs, start!);
+    if (chart.scope === 'broadcast' && chartStart(chart) <= cursorMs) return lowerMs;
     if (start !== null) return Math.max(lowerMs, start);
   }
   return Math.max(lowerMs, cursorMs - FALLBACK_BACK_MS);
 }
 
 /**
+ * 읽기 시작점이 짐작인가. 끝 12시간만 그린 차트(tail)가 영상 시각 앞에서 CHAT_KEEP건을 세지 못했을 때다(그 안에 300건이 없거나
+ * 영상 시각이 차트보다 앞이다): 차트 밖(더 이른 쪽)의 채팅은 모른다. 그때 로더는 시작점까지 읽고도 모자라면 하한까지 앞을 더
+ * 읽는다. 차트 첫 칸을 시작점으로 확정하면 12시간 넘는 방송에서 최근 300줄이 아니라 끝 12시간의 몇 줄만 보였다(PR #230 codex).
+ * 방송 전체 차트는 세지 못하면 시작점이 이미 하한이고, 차트가 없으면 60초 앞을 그대로 쓴다
+ */
+export function replayStartIsGuess(chart: LiveChart | null, cursorMs: number): boolean {
+  if (chart === null || chart.scope !== 'tail' || chart.buckets.length === 0) return false;
+  return countBack(chart, cursorMs).sum < CHAT_KEEP;
+}
+
+/** 차트 첫 칸의 시작(영상 축). 칸 시작은 표 축이다 */
+function chartStart(chart: LiveChart): number {
+  return Date.parse(chart.buckets[0]!.start) - chart.appliedOffsetMs;
+}
+
+/**
+ * 영상 시각 앞 칸을 거꾸로 세어 CHAT_KEEP건이 차는 칸의 시작과 센 수. 영상 시각이 걸친 칸은 세지 않는다(그 뒤 줄이 섞여 있다).
+ * 다 세어도 모자라면 마지막으로 센 칸(첫 칸)의 시작이고, 한 칸도 못 셌으면 null이다
+ */
+function countBack(chart: LiveChart, cursorMs: number): { start: number | null; sum: number } {
+  const span = chart.bucketSeconds * 1000;
+  let sum = 0;
+  let start: number | null = null;
+  for (let i = chart.buckets.length - 1; i >= 0; i -= 1) {
+    const at = Date.parse(chart.buckets[i]!.start) - chart.appliedOffsetMs;
+    if (at + span > cursorMs) continue;
+    start = at;
+    // 후원도 채팅 창에 선다
+    sum += chart.buckets[i]!.chats + chart.buckets[i]!.donations;
+    if (sum >= CHAT_KEEP) break;
+  }
+  return { start, sum };
+}
+
+/**
  * 영상 시각에 보일 줄과 상태. 영상 시각까지 빠짐없이 읽었으면 ready, 아니면 읽는 중이거나 실패다: 빈 창을 「채팅 없음」처럼
- * 보이지 않는다. 방송 끝까지 읽었으면 끝 뒤에는 읽을 것이 없다. 영상 시각 쪽은 다 있는데 다 읽은 구간이 읽기 시작점보다 늦게 서서
- * 그 앞 줄이 300에 못 미치면 earlierLoading·earlierFailed다(보이는 줄은 그대로). 로더가 지금 덧붙이는 중인지가 아니라 화면이 정한
- * 읽기 시작점으로 가른다: 덧붙이기는 앞 요청이 끝나야 서서, 그 사이 몇 줄만 보이는 창을 다 읽은 것처럼 그렸다(리뷰 3라운드)
- * @param readFromMs 영상 시각 앞 줄을 채우려면 읽기 시작할 자리(replayReadStart). 로더에 넘긴 것과 같은 값
+ * 보이지 않는다. 방송 끝까지 읽었으면 끝 뒤에는 읽을 것이 없다. 영상 시각 쪽은 다 있는데 다 읽은 구간이 바닥보다 늦게 서서 그 앞
+ * 줄이 300에 못 미치면 earlierLoading·earlierFailed다(보이는 줄은 그대로, 로더가 앞을 더 읽는다). 로더가 지금 덧붙이는 중인지가
+ * 아니라 스냅숏과 바닥으로 가른다: 덧붙이기는 앞 요청이 끝나야 서서, 그 사이 몇 줄만 보이는 창을 다 읽은 것처럼 그렸다(리뷰
+ * 3라운드)
+ * @param floorMs 이보다 이른 쪽은 더 읽지 않는 자리. 로더에 넘긴 것과 같다(읽기 시작점, 시작점이 짐작이면 하한)
  */
 export function replayView(
   snap: ReplaySnapshot,
   cursorMs: number,
   upperMs: number,
-  readFromMs: number,
+  floorMs: number,
 ): { lines: ReplayLine[]; status: ReplayStatus } {
   const lines = linesUpTo(snap.lines, cursorMs);
   const covered = snap.from <= cursorMs && (cursorMs < snap.to || snap.to >= upperMs);
   if (!covered) return { lines, status: snap.failed ? 'failed' : 'loading' };
-  if (snap.from > readFromMs && lines.length < CHAT_KEEP)
+  if (snap.from > floorMs && lines.length < CHAT_KEEP)
     return { lines, status: snap.failed ? 'earlierFailed' : 'earlierLoading' };
   return { lines, status: 'ready' };
 }
@@ -207,10 +238,11 @@ interface FrontRead {
   lines: ReplayLine[];
 }
 
-/** 영상 시각과, 그 앞 줄을 채우려면 읽기 시작할 자리(want가 정한다) */
+/** 영상 시각과, 그 앞 줄을 채우려면 읽기 시작할 자리와, 모자라도 그보다 이른 쪽은 더 읽지 않는 바닥(want가 정한다) */
 interface Wanted {
   cursorMs: number;
   readFromMs: number;
+  floorMs: number;
 }
 
 /**
@@ -224,8 +256,10 @@ export class ChatReplayLoader {
   /** 늦은 쪽을 이어 읽을 창: 마지막 쪽에 커서가 달려 왔다 */
   private open: WindowAsk | null = null;
   private front: FrontRead | null = null;
+  /** 시작점까지 읽고도 모자랄 때 다음에 앞을 더 읽을 길이(EXTEND_FIRST_MS부터 두 배씩) */
+  private extendMs = EXTEND_FIRST_MS;
   /** 마지막으로 정한 영상 시각과 읽기 시작점. 아직 없으면 NaN이다 */
-  private wanted: Wanted = { cursorMs: Number.NaN, readFromMs: Number.NaN };
+  private wanted: Wanted = { cursorMs: Number.NaN, readFromMs: Number.NaN, floorMs: Number.NaN };
   /** 이 세대의 요청을 끊는 손잡이. 처음부터 다시 읽으면 끊고 새로 만든다: 끊긴 요청의 답·실패는 버린다 */
   private controller = new AbortController();
   private nextSeq = 1;
@@ -259,12 +293,15 @@ export class ChatReplayLoader {
   /**
    * 영상 시각이 정해졌다(재생하며 매초, 옮기면 바로). 모자란 곳만 읽는다
    * @param readFromMs 영상 시각 앞 줄을 채우려면 읽기 시작할 자리(replayReadStart)
+   * @param floorMs 시작점까지 읽고도 영상 시각 앞 줄이 모자라면 여기까지 앞을 더 읽는다. 시작점이 짐작일 때(replayStartIsGuess)
+   *   하한을 넘긴다. 정하지 않으면 시작점이다(더 읽지 않는다)
    */
-  want(cursorMs: number, readFromMs: number): void {
+  want(cursorMs: number, readFromMs: number, floorMs: number = readFromMs): void {
     if (this.disposed) return;
     const cursor = Math.min(this.upperMs, Math.max(this.lowerMs, cursorMs));
     const readFrom = Math.min(cursor, Math.max(this.lowerMs, readFromMs));
-    this.wanted = { cursorMs: cursor, readFromMs: readFrom };
+    const floor = Math.min(readFrom, Math.max(this.lowerMs, floorMs));
+    this.wanted = { cursorMs: cursor, readFromMs: readFrom, floorMs: floor };
     if (this.mustRestart(cursor, readFrom)) this.restart(readFrom);
     else this.trim(cursor);
     this.emit();
@@ -286,21 +323,36 @@ export class ChatReplayLoader {
     return cursor + RESTART_GAP_MS < this.from;
   }
 
-  /** 영상 시각 앞 줄이 모자라 다 읽은 구간보다 이른 쪽을 더 읽어야 하나 */
+  /**
+   * 영상 시각 앞 줄이 모자라 다 읽은 구간보다 이른 쪽을 더 읽어야 하나. 바닥까지 읽었으면 더 없다. 영상 시각이 다 읽은 구간 안이면
+   * 늦은 쪽 읽기가 영상 시각을 넘은 뒤에만이다: 처음부터 다시 읽은 직후(줄 0개)에 앞부터 읽으면 영상 시각 쪽이 늦게 보인다
+   */
   private needsFront(): boolean {
-    const { cursorMs, readFromMs } = this.wanted;
-    return this.from > readFromMs && countBefore(this.lines, cursorMs, true) < CHAT_KEEP;
+    const { cursorMs, floorMs } = this.wanted;
+    return (
+      this.from > floorMs &&
+      (cursorMs < this.to || this.to >= this.upperMs) &&
+      countBefore(this.lines, cursorMs, true) < CHAT_KEEP
+    );
   }
 
   /**
-   * 덧붙이기를 세우거나 거둔다. 덧붙이는 사이 영상 시각이 늦은 쪽으로 가 더는 모자라지 않으면 거둔다: 필요 없어진 덧붙이기를
-   * 끝까지 읽느라 옮긴 자리의 늦은 쪽 읽기가 늦었다(리뷰 2라운드)
+   * 덧붙이기를 세우거나 거둔다. 읽기 시작점이 다 읽은 구간보다 이르면 거기부터, 시작점까지 읽고도 모자라면(시작점이 짐작일 때)
+   * EXTEND_FIRST_MS부터 두 배씩 바닥까지 앞을 더 읽는다. 덧붙이는 사이 영상 시각이 늦은 쪽으로 가 더는 모자라지 않으면 거둔다: 필요 없어진 덧붙이기를 끝까지
+   * 읽느라 옮긴 자리의 늦은 쪽 읽기가 늦었다(리뷰 2라운드)
    */
   private reviewFront(): void {
     const needed = this.needsFront();
+    // 모자라지 않으면 늘릴 길이를 처음으로 되돌린다(처음부터 다시 읽은 직후도 영상 시각 쪽을 읽기 전이라 여기서 되돌린다)
+    if (!needed) this.extendMs = EXTEND_FIRST_MS;
     if (this.front !== null && !needed) this.front = null;
     else if (this.front === null && needed) {
-      const start = this.wanted.readFromMs;
+      const { readFromMs, floorMs } = this.wanted;
+      let start = readFromMs;
+      if (readFromMs >= this.from) {
+        start = Math.max(floorMs, this.from - this.extendMs);
+        this.extendMs = Math.min(COLLECTOR_WINDOW_MS, this.extendMs * 2);
+      }
       this.front = { start, at: start, end: this.from, open: null, lines: [] };
     }
   }
