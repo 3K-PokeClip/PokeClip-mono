@@ -21,7 +21,7 @@ public record BroadcastListResponse(List<Item> broadcasts, String nextCursor) {
      *
      * <p>🔴 <b>{@code startedAt}이 {@code null}로 나갈 수 있다</b> — 종료 선도착 placeholder는
      * 시작을 못 본 줄이다(ADR-016). <b>감추거나 지어내지 않는다</b>(PRD 성공 기준). 화면은
-     * 그것을 「시작 시각 미상」으로 그린다.
+     * 그것을 「시작 시각 미상」으로 그린다. 시작 편지가 늦게라도 오면 그 시각으로 찬다(POK-327).
      *
      * <p>{@code vodExpiresAt}을 싣는 것은 <b>기한이 지난 방송도 목록에 그대로 두기</b>
      * 때문이다 — 영상은 못 봐도 방송 기록은 남고, 화면이 「보관 만료」를 그릴 재료가 필요하다.

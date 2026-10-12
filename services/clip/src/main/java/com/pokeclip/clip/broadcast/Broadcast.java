@@ -49,7 +49,7 @@ public class Broadcast {
     @Column(name = "status", nullable = false, length = 16)
     private BroadcastStatus status;
 
-    /** 종료 선도착 placeholder는 null이다. */
+    /** 종료 선도착 placeholder는 null이다. 낮은 순서의 시작 편지가 늦게 오면 그 시각으로 찬다({@link #fillStartOfPlaceholder}). */
     @Column(name = "started_at")
     private Instant startedAt;
 
@@ -116,7 +116,7 @@ public class Broadcast {
      * 않고 false를 돌려준다 — <b>순서를 바로잡는 것이 아니라 견디는 것</b>이 목표다.
      *
      * <p>이미 ENDED인 줄에 시작이 와도 상태를 되돌리지 않는다. 순서 번호가 더
-     * 높다면 시작 시각만 채운다(placeholder였던 줄이 뒤늦게 시작 정보를 얻는 경우).
+     * 높다면 시작 시각만 채운다. 낮은 순서로 늦게 온 시작은 {@link #fillStartOfPlaceholder}가 받는다.
      */
     boolean applyStarted(long sequence, Instant at, String trackManifest) {
         if (sequence <= this.lastSequence) {
@@ -134,6 +134,27 @@ public class Broadcast {
             this.trackManifest = trackManifest;
         }
         this.lastSequence = sequence;
+        this.updatedAt = Instant.now();
+        return true;
+    }
+
+    /**
+     * 종료가 먼저 와 시작 시각을 모르는 줄(placeholder)에, 순서 번호가 낮아 {@link #applyStarted}가 거른 시작 편지의
+     * 시각만 채운다(POK-327). 같은 방송 안에서는 큐가 순서를 지키므로 이 편지는 대개 처리에 거듭 실패해 실패 편지함으로 갔다가
+     * 되돌려진 것이다. 버리면 시작 시각이 영영 비고, 화면은 끝 12시간 창으로만 읽어 같은 물리 키로 한 앞 회차 녹화가 섞인다.
+     *
+     * <p>상태·순서 번호·보관 기한은 안 바꾼다. 끝난 방송은 끝난 채로 두고(ADR-016 「더 낮은 sequence의 started는 무시한다」)
+     * 비어 있던 사실 하나만 받는다. 물리 키({@link #fillIngestStreamId})와 같은 규칙이다: 빈 칸은 낡은 편지로도 채우고 있는 값은 안 바꾼다.
+     * 그래서 정상 순서로 받은 시작 시각을 낡은 편지가 옮기지 못하고, 시작·종료가 어느 순서로 와도 마지막 줄이 같다.
+     * 시각이 없거나 끝보다 늦으면 안 채운다. 받으면 화면이 [시작, 끝] 창을 거꾸로 잡아 시각을 모를 때보다 나빠진다.
+     *
+     * @return 채웠으면 true
+     */
+    boolean fillStartOfPlaceholder(Instant at) {
+        if (this.startedAt != null || this.endedAt == null || at == null || at.isAfter(this.endedAt)) {
+            return false;
+        }
+        this.startedAt = at;
         this.updatedAt = Instant.now();
         return true;
     }
