@@ -109,6 +109,19 @@ class ChzzkLiveInfoClientTest {
     }
 
     @Test
+    void 커서의_더하기를_그대로_두지_않고_인코딩해_다음_장을_읽는다() {
+        // 치지직 커서는 base64라 + / = 가 섞인다. +를 그대로 보내면 치지직이 공백으로 읽고 400 「잘못된 next 값입니다」를
+        // 준다(2026-10-12 실측: 회차마다 2~4장째에서 끊겨 시청자 수를 한 번도 못 채웠다). 위 시험의 abc==로는 이 갈래가 안 보인다.
+        bodyByQuery.put("/open/v1/lives?size=20&next=ytwg%2BGEd%2FBQ%3D%3D", """
+                {"content":{"data":[{"channelId":"c-3","concurrentUserCount":1}],"page":{"next":null}}}""");
+
+        ChzzkLiveInfoClient.LivePage page = client().lives("ytwg+GEd/BQ==");
+
+        assertThat(seenQueries).containsExactly("/open/v1/lives?size=20&next=ytwg%2BGEd%2FBQ%3D%3D");
+        assertThat(page.entries()).extracting(ChzzkLiveInfoClient.LiveEntry::channelId).containsExactly("c-3");
+    }
+
+    @Test
     void 목록_429는_전용_예외다() {
         statusByPath.put("/open/v1/lives", 429);
 

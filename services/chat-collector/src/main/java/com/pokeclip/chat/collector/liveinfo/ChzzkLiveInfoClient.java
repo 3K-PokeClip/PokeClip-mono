@@ -8,6 +8,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 치지직 방송 정보 REST 둘 — 방송 설정(스트리머 토큰)과 전체 라이브 목록(앱 인증).
@@ -77,13 +78,18 @@ public class ChzzkLiveInfoClient {
     public LivePage lives(String next) {
         UriComponentsBuilder uri = UriComponentsBuilder.fromUriString(baseUrl + "/open/v1/lives")
                 .queryParam("size", PAGE_SIZE);
+        // 🔴 커서는 값 자리({next})로 넘긴다. 커서는 base64라 +가 섞이는데, 주소 틀에 바로 넣으면 encode()가 +를
+        // 쿼리에 써도 되는 글자로 보고 그대로 둔다 → 치지직이 공백으로 읽고 400 「잘못된 next 값입니다」(2026-10-12 실측:
+        // 회차마다 2~4장째에서 끊겨 시청자 수를 한 번도 못 채웠다). 값 자리의 값은 예약 문자까지 전부 바뀐다(+ → %2B).
+        Map<String, String> values = Map.of();
         if (next != null) {
-            uri.queryParam("next", next);
+            uri.queryParam("next", "{next}");
+            values = Map.of("next", next);
         }
         String body;
         try {
             body = restClient.get()
-                    .uri(uri.encode().build().toUri())
+                    .uri(uri.encode().buildAndExpand(values).toUri())
                     .header("Client-Id", clientId)
                     .header("Client-Secret", clientSecret)
                     .retrieve()
