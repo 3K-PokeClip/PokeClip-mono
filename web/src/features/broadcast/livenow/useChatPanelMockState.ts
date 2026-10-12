@@ -84,7 +84,8 @@ const LIVE_POLL_PAGE_BUDGET = 10;
  * 지난 방송 채팅을 읽는 하한을 방송 시작보다 이만큼 앞에 둔다. 채팅 시각(표 축)은 영상 축보다 보정(실측 3.9초)만큼 늦어서, 방송
  * 시작 직후의 채팅은 영상 축으로 시작보다 앞이다: 하한을 시작에 두면 그 채팅을 영영 읽지 않았다(리뷰 1라운드). 앞을 넓혀도 같은
  * 채널의 앞 방송 채팅이 섞이지 않는 것은 수집기가 방송 번호로 거르기 때문이다(chat-collector ChatWindowQuery의 `WHERE stream_id`).
- * 그 거르기를 고정하는 수집기 조회 시험은 아직 없다(적재 쪽 ChatPersisterTest#두_방송의_채팅이_안_섞인다는 조회를 타지 않는다)
+ * 그 거르기는 수집기 조회 시험 ChatWindowQueryTest#같은_채널의_앞_방송은_창이_겹쳐도_섞이지_않는다가 고정한다(차트는
+ * ChatChartQueryTest#같은_채널의_앞_방송은_창이_겹쳐도_세지_않는다)
  */
 const REPLAY_LOWER_SLACK_MS = 60_000;
 
