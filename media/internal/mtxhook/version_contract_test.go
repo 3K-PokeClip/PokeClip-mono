@@ -26,7 +26,7 @@ import (
 // **이 값만 바뀌는 것(.1 → .2)은 우리 수정이 바뀐 것이지 버전업이 아니다** — 그래서 이
 // 값이 어긋났을 때의 안내는 forkPinGuide(이미지 발행 절차)이지 9개 전제 재확인이 아니다.
 // 단, 같은 릴리스 안에서 상류 베이스 커밋이 이동한 경우는 준버전업이며 README 규약의 표적 재확인을 따른다.
-const pinnedMediaMTXTag = "v1.21.1-pokeclip.1"
+const pinnedMediaMTXTag = "v1.21.1-pokeclip.2"
 
 // upstreamBaseVersion 은 우리 포크 빌드가 올라타 있는 상류 MediaMTX 버전이다.
 // **아래 9개 전제를 짊어지는 상수는 이것 하나다** — 이 값을 고치는 행위가 곧 "9개 전제를
@@ -40,7 +40,7 @@ const upstreamBaseVersion = "1.21.1"
 // 그 좌표가 조용히 사라지거나 다른 값으로 바뀌는 것 — 즉 "핀이 풀린 상태"의 발견이다.
 // 닻을 태그에서 digest 로 옮긴 근거는 ADR-050 선결 B. 이미지를 새로 발행했다면 워크플로
 // 실행 요약이 찍어 주는 값을 여기에 옮겨 적는다.
-const pinnedMediaMTXDigest = "sha256:3078e9d73ad2506ccd572dde74da003cfae85f1e1ec985d4121df53218de8a32"
+const pinnedMediaMTXDigest = "sha256:8b5318ceee0b4a3638ce3a8fe8cfa5afbfaea71413ffaa330b601f1cc6264dc8"
 
 // mediaMTXImage 는 버전을 고정하는 베이스 이미지 이름이다. 같은 Dockerfile 에 빌드
 // 스테이지 FROM(golang:...)이 따로 있으므로 이 이름을 포함한 FROM 만 대상으로 삼는다.

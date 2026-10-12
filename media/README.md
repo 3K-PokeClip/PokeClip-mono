@@ -1285,6 +1285,29 @@ Control API의 교차 출처 허용 기본값 `apiAllowOrigins`가 `['*']`에서
 `sample of track 2 received too late, discarding`이 송출 연결마다 1줄 나오는데, 같은 송출에서
 `v1.20.1-pokeclip.2`도 같은 줄을 낸다(A/B 실측 — 소스도 같은 줄).
 
+**표적 재확인 기록 (2026-10-12, `v1.21.1-pokeclip.1`→`.2`, 상류 베이스 `04825598` 그대로)**:
+베이스가 그대로라 준버전업이 아니다. 라인에 더한 커밋은 셋이다 — 체리픽 `33bc311`(상류
+`72e809b6`) · U(사용자별 SRT passphrase) `b9735847` · `POKECLIP.md` `ff1f75bb`. 그
+diff가 전제 9곳에 닿는지 가르고, 닿는 파일이 있는 전제는 실측으로 다시 봤다. 측정 이미지는
+`ghcr.io/xodbs1021/mediamtx:v1.21.1-pokeclip.2@sha256:8b5318ce…4dc8`(인덱스 digest
+— amd64 `c6d01969…` · arm64 `8fb08d4f…`, 런타임 실측은 arm64)이다. 태그 대상 커밋
+`ff1f75bb`와 digest는 2026-10-08 독립 확인(`imagetools inspect` · 익명 pull ·
+`ls-remote`)과 같다. ②⑤⑥⑨는 diff가 닿지 않는다 — `internal/externalcmd` ·
+`internal/recorder` · `internal/servers/hls` 변경 0파일. ①③④⑦은 닻 줄이 글자
+그대로이고 줄 번호만 밀렸다 — ①`newPath(&conf.PathDefaults, …)` `conf.go:1136→1143`
+③④`runOnReady` 매핑 `conf/path.go:980→981` ⑦기본값 `path.go:387→388`. 실측은 설정에
+이름 없는 경로로 40초 송출했다(`all_others`로 붙음). ①훅 3종 스풀 online 1 ·
+segcomplete 10 · offline 1 ③④기동 로그 deprecated · unknown WARN 0
+⑦`pathdefaults/get`의 `recordPartDuration` 1s ⑧녹화 10개 모두 10002:10002 · 권한
+오류 0 ⑨302 `cookieCheck` → 200. 기동 첫 줄은 `MediaMTX v1.21.1-pokeclip.2`다. LL-HLS
+표지는 `index.m3u8`이 가리키는 미디어 재생목록에서 성립한다 — `CAN-BLOCK-RELOAD` ·
+`EXT-X-PART` · GAP 채움을 뺀 실제 세그먼트 중 `#EXTINF:4.00000` 5개,
+`PART-HOLD-BACK=1.25000`(기록만). 녹화기 WAR `sample of track 2 received too late,
+discarding`이 송출 연결마다 1줄인 것은 그대로다 — 같은 송출에서 `.1`도 같은 줄을
+낸다(A/B 실측). 부수: `.2`의 샘플 설정은 `authInternalUsers` 첫 항목에 빈
+`srtPassphrase:`를 더했다. 제품 설정에는 이 키가 없고, 빈 값은 지정하지 않은 것과
+같다(실측 `global/get` — 세 항목 모두 빈 값).
+
 전제는 아니지만 **버전 문자열을 그대로 적어 둔 곳**이 더 있다. 함께 고친다 —
 [`docs/dev-environment.md`](../docs/dev-environment.md)의 서비스 표,
 [`Dockerfile.mtxhook`](Dockerfile.mtxhook) 주석의 상류 베이스 서술,
@@ -1297,12 +1320,13 @@ Control API의 교차 출처 허용 기본값 `apiAllowOrigins`가 `['*']`에서
 위 9곳이 **MediaMTX 버전**에 묶인 전제라면, 이것은 **어느 이미지냐**에 묶인 전제다.
 
 `FROM`이 가리키는 것은 상류 공식 이미지가 아니라 우리 포크 빌드
-`ghcr.io/xodbs1021/mediamtx`다. 상류 v1.21.1(`04825598`) 위에 **상류에 아직 머지되지 않은
-우리 수정 4건**을 얹었다. 결정 근거는 ADR-050 선결 B(ⓑ 자체 빌드 선행)다. 예전 포크가 싣던
+`ghcr.io/xodbs1021/mediamtx`다. 상류 v1.21.1(`04825598`) 위에 수정 6건을 얹었다 —
+**상류에 아직 머지되지 않은 우리 수정 5건**과, 상류에 머지됐지만 라인의 베이스(v1.21.1)에는
+없는 수정 1건이다. 결정 근거는 ADR-050 선결 B(ⓑ 자체 빌드 선행)다. 예전 포크가 싣던
 슬레이트 무녹화 스위치 `alwaysAvailableRecorded`(bluenviron/mediamtx#6182)는 v1.21.0에
 머지돼 라인에서 뺐다 — 이제 상류 공식 기능이다.
 
-4건은 아래와 같다. 첫 열의 번호는 우리 상류 기여 트랙의 번호라 위 전제 9곳의 번호와 다르다 —
+6건은 아래와 같다. 첫 열의 번호는 우리 상류 기여 트랙의 번호라 위 전제 9곳의 번호와 다르다 —
 전제와 섞일 수 있는 자리에서는 "수정 9"처럼 적는다.
 
 | 수정 | 상류 | 제품에서 하는 일 | 상류 공식 이미지로 되돌리면 |
@@ -1311,6 +1335,8 @@ Control API의 교차 출처 허용 기본값 `apiAllowOrigins`가 `['*']`에서
 | 9 — 모든 훅 명령의 실패를 로그에 남긴다 | bluenviron/mediamtx#6259 (심사 중) | `runOnOffline`·`runOnRecordSegmentComplete`가 실패하면 `… command exited: …` 한 줄이 남는다. `runOnOnline`은 상류 1.21.1도 남긴다 | 두 훅의 실패가 다시 **오류도 로그도 없이** 지나간다 |
 | 10 — `CertLoader.Close()`가 `watch()`의 끝을 기다린다 | bluenviron/mediamtx#6261 (심사 중) | 없음 — 제품·dev-media는 TLS·MoQ를 켜지 않아 CertLoader를 만들지 않는다 | 차이 없음 |
 | 6 — 훅 출력을 서버 로그로 돌리는 설정 | 상류 미게시 | 없음 — 기본 꺼짐이고 제품 설정에 키가 없다. 켜기는 이 이미지 교체와 섞지 않고 후속 PR에서 한다(아래 「절차」 1) | 키가 없는 동안은 차이 없음 |
+| 체리픽 — 설정 PATCH가 `<redacted>`(설정 조회 API가 비밀번호 자리에 돌려주는 가림 문자열)를 비밀번호로 저장하지 않는다 | bluenviron/mediamtx#6292 (상류 머지 — v1.21.2에 들어갔다. 라인의 베이스가 v1.21.1이라 싣는다) | 없음 — 제품·dev-media 어디도 설정 PATCH(`/v3/config/global/patch`)를 부르지 않는다. 아래 U가 이 수정이 만든 `PatchGlobal` 블록을 고치므로 U와 함께 싣는다 | 차이 없음 |
+| U(사용자별 SRT passphrase 트랙) — 인증 사용자의 `srtPassphrase`. 값이 있으면 경로 passphrase를 대신하고, HTTP 인증이면 2xx 응답 본문이 값을 준다 | bluenviron/mediamtx#6306 (심사 중) | 없음 — 제품·dev-media 설정의 인증 사용자에 이 키가 없어 지금처럼 경로 값을 쓴다(제품 설정 실측: 세 항목 모두 빈 값). 계정별 방송을 여는 dev-media 후속 PR이 쓴다 | 지금 설정에서는 차이 없음. 그 후속 PR 뒤에는 사용자 값이 사라져 모든 SRT 송출이 경로 잠금값(사용자 값 없이는 송출이 열리지 않게 거는 경로 passphrase)에 막힌다 — 안전한 실패지만 송출이 멈춘다 |
 
 | 전제 | 깨지면 무슨 일이 나나 | 어떻게 재확인하는가 |
 |---|---|---|
