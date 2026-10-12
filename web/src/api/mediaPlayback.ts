@@ -10,10 +10,11 @@
 const BASE = (process.env.NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL ?? '').replace(/\/+$/, '');
 const STREAM_ID_RE = /^[A-Za-z0-9_-]+$/;
 /**
- * 녹화 목록을 이만큼 기다린다. 넘으면 묻지 못한 것(null)으로 본다: 재생 서버가 연결만 받고 답하지 않으면 영상 자리는 끝없이
- * 「확인하고 있어요」였고, 그 답을 기다리는 지난 방송 채팅도 요청 하나 없이 「불러오고 있어요」에 멈췄다(POK-324 리뷰 2라운드)
+ * 녹화 목록을 이만큼 기다린다(답의 본문까지). 넘으면 묻지 못한 것(null)으로 본다: 재생 서버가 연결만 받고 답하지 않으면 영상 자리는
+ * 끝없이 「확인하고 있어요」였다(POK-324 리뷰 2라운드). 10초였을 때는 느리게라도 답하는 서버를 늘 묻지 못한 것으로 봐 녹화를 못
+ * 틀었다(PR #230): 지난 방송 채팅은 이 답을 다 기다리지 않는다(LiveScreen의 CHAT_WAIT_MS)
  */
-const LIST_TIMEOUT_MS = 10_000;
+const LIST_TIMEOUT_MS = 30_000;
 
 export interface RecordingSpan {
   /** 녹화 시작(UTC epoch ms) */
@@ -43,11 +44,9 @@ export function parseSpanStartMs(iso: string): number {
 export async function lookupRecordingSpans(streamId: string): Promise<RecordingSpan[] | null> {
   if (BASE === '') return null;
   if (!STREAM_ID_RE.test(streamId)) return [];
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LIST_TIMEOUT_MS);
   try {
     const res = await fetch(`${BASE}/list?path=${encodeURIComponent(streamId)}`, {
-      signal: controller.signal,
+      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
     });
     if (res.status === 400 || res.status === 404) return [];
     if (!res.ok) return null;
@@ -57,8 +56,6 @@ export async function lookupRecordingSpans(streamId: string): Promise<RecordingS
       .filter((span) => Number.isFinite(span.startMs) && span.durationSeconds > 0);
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

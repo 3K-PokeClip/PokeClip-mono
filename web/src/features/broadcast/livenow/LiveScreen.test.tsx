@@ -1946,6 +1946,54 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     }
   });
 
+  it('녹화 조회가 10초 넘게 걸리면 채팅은 방송 끝을 보이고, 늦게 찾으면 그 재생 위치를 따라간다: 느린 재생 서버도 녹화를 튼다', async () => {
+    // 녹화 목록을 10초에 끊으면 느리게라도 답하는 재생 서버는 늘 「묻지 못함」이라 녹화를 못 틀었다(PR #230). 조회는 30초까지
+    // 기다리고(lookupRecordingSpans), 채팅은 10초만 기다린다
+    stubMediaElement();
+    server.vodChat = true;
+    mediaCalls.configured = true;
+    let answer: (spans: { startMs: number; durationSeconds: number }[]) => void = () => undefined;
+    mediaCalls.answer = new Promise((resolve) => {
+      answer = resolve;
+    });
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    await settle();
+    expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await settle();
+    expect(screen.getByText(/^마지막 메시지까지 보는 중/)).toBeInTheDocument();
+    expect(screen.getByText('8995초 채팅')).toBeInTheDocument();
+    expect(screen.getByText('녹화 영상을 확인하고 있어요')).toBeInTheDocument();
+
+    await act(async () => {
+      answer([{ startMs: VOD_STARTED, durationSeconds: 9_000 }]);
+    });
+    await settle();
+    expect(screen.getByText(/^0:00:00 시점까지 보는 중/)).toBeInTheDocument();
+    expect(screen.getByText('방송 시작 인사')).toBeInTheDocument();
+    expect(screen.queryByText('8995초 채팅')).toBeNull();
+
+    // 끝 시각이 고쳐져 녹화를 다시 찾으면 다시 10초까지 기다린다: 앞서 다 기다린 표시가 남으면 바로 방송 끝을 보였다
+    mediaCalls.answer = new Promise(() => undefined);
+    server.vodEndShiftMs = 30_000;
+    const asked = mediaCalls.spans.length;
+    for (let i = 0; i < 40 && mediaCalls.spans.length === asked; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+    }
+    await settle();
+    expect(mediaCalls.spans.length).toBeGreaterThan(asked);
+    expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
+  });
+
   it('12시간 넘는 방송에서 끝 12시간 차트에 채팅이 300건 안 되면 그 앞 채팅까지 읽어 최근 300줄을 보인다', async () => {
     // 끝 12시간 차트의 첫 칸을 읽기 시작점으로 확정하면 그 앞에 채팅이 있어도 빈 창이었다(PR #230 codex). 이 방송은 채팅이 처음
     // 2시간 반에만 있다

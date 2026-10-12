@@ -63,31 +63,40 @@ describe('lookupRecordingSpans: 녹화 없음과 물을 수 없음을 가른다(
     expect(await offline.fetchRecordingSpans('vod-1')).toEqual([]);
   });
 
-  it('답이 10초 안에 오지 않으면 null이다: 재생 서버가 연결만 받고 답하지 않아도 끝없이 기다리지 않는다', async () => {
-    // 지난 방송 채팅이 이 답을 기다리므로, 답이 없으면 채팅이 요청 하나 없이 「불러오고 있어요」에 멈췄다(POK-324 리뷰 2라운드)
-    vi.useFakeTimers();
-    try {
-      const hung = await load(
-        'http://pb',
-        (_url, init) =>
-          new Promise<Response>((_, reject) => {
-            init?.signal?.addEventListener('abort', () =>
-              reject(new DOMException('aborted', 'AbortError')),
-            );
-          }),
-      );
-      let answer: unknown = 'waiting';
-      void hung.lookupRecordingSpans('vod-1').then((spans) => {
-        answer = spans;
-      });
-      await vi.advanceTimersByTimeAsync(9_999);
-      expect(answer).toBe('waiting');
-      await vi.advanceTimersByTimeAsync(1);
-      expect(answer).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+  it.each([
+    ['연결만 받고 답하지 않는 서버', false],
+    ['머리만 보내고 본문을 끝내지 않는 서버', true],
+  ])(
+    '답이 30초 안에 오지 않으면 null이다(%s): 끝없이 기다리지 않는다',
+    async (_name, headersOnly) => {
+      // 지난 방송 채팅이 이 답을 기다리므로, 답이 없으면 채팅이 요청 하나 없이 「불러오고 있어요」에 멈췄다(POK-324 리뷰 2라운드).
+      // 시한은 본문까지 걸린다: 머리만 오고 본문이 멈춘 서버에서도 끝나야 한다(리뷰 3라운드 P9). 10초였을 때는 느리게라도 답하는
+      // 서버를 늘 묻지 못한 것으로 봐 녹화를 못 틀었다(PR #230)
+      vi.useFakeTimers();
+      try {
+        const hung = await load('http://pb', (_url, init) => {
+          const aborted = () =>
+            new Promise<never>((_, reject) => {
+              init?.signal?.addEventListener('abort', () =>
+                reject(new DOMException('aborted', 'AbortError')),
+              );
+            });
+          if (!headersOnly) return aborted();
+          return Promise.resolve({ ok: true, status: 200, json: aborted } as unknown as Response);
+        });
+        let answer: unknown = 'waiting';
+        void hung.lookupRecordingSpans('vod-1').then((spans) => {
+          answer = spans;
+        });
+        await vi.advanceTimersByTimeAsync(29_999);
+        expect(answer).toBe('waiting');
+        await vi.advanceTimersByTimeAsync(1);
+        expect(answer).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('녹화가 있으면 구간을 준다', async () => {
     const m = await load('http://pb', () =>

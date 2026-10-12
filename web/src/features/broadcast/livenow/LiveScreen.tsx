@@ -72,6 +72,12 @@ const UPTIME_NOTE: Record<BroadcastStatus, string> = {
  * 된 방송을 이 화면만 계속 「찾지 못했어요」라 했다(리뷰 7라운드)
  */
 const RECORDING_RETRY_MS = 60_000;
+/**
+ * 지난 방송 채팅이 녹화를 찾는 동안 기다리는 한도. 넘으면 방송 끝을 보이고, 늦게 찾으면 그 재생 위치를 따라간다. 녹화 조회 자체는
+ * 느린 재생 서버도 기다리게 더 오래 둔다(lookupRecordingSpans 30초): 조회를 10초에 끊었을 때는 느리게라도 답하는 서버를 늘
+ * 묻지 못한 것으로 봐 녹화를 못 틀었다(PR #230)
+ */
+const CHAT_WAIT_MS = 10_000;
 
 /** 녹화를 찾은 결과: 확인 중 · 없음 · 물을 수 없음(재생 서버가 없거나 조회 실패) · 찾음 */
 type RecordingLookup =
@@ -82,7 +88,7 @@ type RecordingLookup =
 
 /**
  * 녹화가 서서 재생 위치를 알려 올 수 있나(찾는 중이거나 찾았다). 영상 자리 아랫줄(「확인하고 있어요」)과 지난 방송 채팅의 기다림이
- * 이 판정 하나를 쓴다: 따로 쓰면 조회 결과가 하나 늘 때 둘이 갈린다(리뷰 2라운드)
+ * 이 판정 하나를 쓴다: 따로 쓰면 조회 결과가 하나 늘 때 둘이 갈린다(리뷰 2라운드). 채팅은 찾는 중을 CHAT_WAIT_MS까지만 기다린다
  */
 function recordingMayPlay(kind: RecordingLookup['kind']): boolean {
   return kind === 'pending' || kind === 'found';
@@ -318,9 +324,19 @@ function LiveDashboard() {
   const [recordingLookup, setRecordingLookup] = useState<RecordingLookup['kind']>('pending');
   const recordingMissing = recordingLookup === 'none';
   // 재생 서버가 있고 녹화를 찾는 중이면 곧 재생기가 자리를 알려 온다(찾으면 재생기가 서는 그리기에서 알린다). 그때까지 지난 방송
-  // 채팅은 기다린다: 방송 끝을 먼저 읽어 끝 채팅이 잠깐 보였다가 0초 빈 창으로 바뀌었다(POK-324 리뷰 1라운드). 녹화 조회에는
-  // 시한이 있어(lookupRecordingSpans) 재생 서버가 답하지 않아도 끝없이 기다리지 않는다(리뷰 2라운드)
-  const awaitPlayhead = playbackConfigured() && recordingMayPlay(recordingLookup);
+  // 채팅은 기다린다: 방송 끝을 먼저 읽어 끝 채팅이 잠깐 보였다가 0초 빈 창으로 바뀌었다(POK-324 리뷰 1라운드). 찾는 중이 CHAT_WAIT_MS를
+  // 넘으면 기다리지 않고 방송 끝을 보인다(재생 서버가 답하지 않거나 느려도 채팅을 비워 두지 않는다, 리뷰 2라운드·PR #230)
+  const [chatWaitOver, setChatWaitOver] = useState(false);
+  useEffect(() => {
+    setChatWaitOver(false);
+    if (recordingLookup !== 'pending') return undefined;
+    const timer = window.setTimeout(() => setChatWaitOver(true), CHAT_WAIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [recordingLookup]);
+  const awaitPlayhead =
+    playbackConfigured() &&
+    recordingMayPlay(recordingLookup) &&
+    !(recordingLookup === 'pending' && chatWaitOver);
   // 사람이 옮긴 횟수(영상 없이 누른 카드, 녹화의 시크바·화살표·끝으로·카드·다 본 뒤 처음부터). 바뀌면 채팅 창이 그 시점(맨
   // 아래)을 따라간다: 재생으로 흐르거나 녹화 틈을 넘는 것은 옮긴 것이 아니다(커서가 튀었는지로 짐작해 틈을 넘을 때도 읽던 자리를
   // 잃었다, 리뷰 1라운드)
