@@ -33,7 +33,7 @@ class ChatChartQueryTest extends IntegrationTestSupport {
             new java.util.concurrent.atomic.AtomicLong();
 
     private static final List<String> STREAMS = List.of("chart-1", "chart-off", "chart-nano", "chart-idx",
-            "chart-prev", "chart-this");
+            "chart-micro", "chart-prev", "chart-this");
 
     private static final AtomicInteger SEQ = new AtomicInteger(700_000);
 
@@ -151,9 +151,10 @@ class ChatChartQueryTest extends IntegrationTestSupport {
 
     /**
      * 🔴 <b>같은 채널에서 바로 앞에 끝난 방송이 창에 들어와도 이 방송 것만 센다.</b>
-     * 목록 창구의 같은 이름 검사와 같은 이유다: 창이 방송 시작보다 앞으로 넓어지면 앞 방송의
-     * 끝자락이 창에 들고, 그것을 걸러 내는 것은 두 질의의 {@code WHERE stream_id = ?}다.
-     * 채팅·후원을 둘 다 심고 앞 방송으로도 물어 그 줄들이 창 안에 있음을 같이 본다.
+     * 목록 창구의 {@code ChatWindowQueryTest.같은_채널의_앞_방송은_창이_겹쳐도_섞이지_않는다}와
+     * 같은 이유다: 창이 방송 시작보다 앞으로 넓어지면 앞 방송의 끝자락이 창에 들고, 그것을
+     * 걸러 내는 것은 두 질의의 {@code WHERE stream_id = ?}다. 채팅·후원을 둘 다 심고 앞 방송으로도
+     * 물어 그 줄들이 창 안에 있음을 같이 본다.
      */
     @Test
     void 같은_채널의_앞_방송은_창이_겹쳐도_세지_않는다() {
