@@ -6,6 +6,8 @@ import {
   behindFromCurrentTime,
   dvrRange,
   liveEdgePosition,
+  mediaTimeAt,
+  programDateAt,
   rewindWindowSeconds,
 } from './dvrWindow';
 import { HLS_DVR_CONFIG } from './hlsConfig';
@@ -21,13 +23,35 @@ import {
 
 // 실재생 훅 (POK-31) — usePlayerSimulation과 같은 PlayerSimulation 계약을 반환한다.
 // hls.js 인스턴스·<video> 바인딩은 전부 여기 있고, UI(GlassPlayer 이하)는 어느 훅인지 모른다.
-// jsdom엔 미디어 구현이 없어 이 훅은 테스트하지 않는다 — src 없는 테스트는 시뮬레이션 경로를 탄다.
+// jsdom엔 미디어 구현이 없어 이 훅만 따로 시험하지 않는다: src 없는 시험은 시뮬레이션 경로를 탄다. 라이브 화면 시험이
+// hls.js를 흉내 내 재생기의 자리(livePosition)·실제 시각으로 옮기기(seekToDate)·사람이 옮김(onSeek)을 잰다(POK-326).
 
+/** 재생 위치에 영상 자료가 있다(HTMLMediaElement.HAVE_CURRENT_DATA) */
+const HAVE_CURRENT_DATA = 2;
+
+/**
+ * 라이브 재생기의 자리(POK-326). 시각은 조각마다 그 조각의 시각 표시(PDT)로 센 실제 시각(epoch ms)이다. 같은 실제 초 안에서
+ * 시차도 같으면 재생기는 그 초에 처음 잰 값을 둔다
+ */
+export interface LivePosition {
+  /** 재생 위치의 실제 시각 */
+  atMs: number;
+  /** 실시간 끝(재생기가 서는 라이브 끝)의 실제 시각. 라이브 채팅이 표에 다 들어온 자리를 이것으로 센다 */
+  edgeAtMs: number;
+  /** 실시간 끝에서 몇 초 뒤인가(정수, 재생기 시차 표기와 같은 값) */
+  behindSeconds: number;
+}
+
+/**
+ * @param onSeek 사람이 옮겼다(시크바·키·실시간으로·카드). 재생으로 흐를 때는 부르지 않는다: 라이브 채팅이 맨 아래(되감은 자리,
+ *   실시간이면 최신)로 간다(POK-326)
+ */
 export function useHlsPlayback(
   videoRef: RefObject<HTMLVideoElement | null>,
   src: string,
   options: PlayerSimulationOptions = {},
-): PlayerSimulation {
+  onSeek?: () => void,
+): PlayerSimulation & { livePosition: LivePosition | null } {
   // playing은 video 이벤트로만 바꾼다 — 자동재생이 거부되면 false로 남아 재생 버튼이 노출된다
   const [playing, setPlaying] = useState(false);
   // 자동재생 정책상 muted로 시작한다 (시뮬레이션의 muted=false와 다른 점)
@@ -37,6 +61,10 @@ export function useHlsPlayback(
   // 매니페스트 로드 전엔 되감을 곳이 없다 — 0이면 시크바가 엣지에 붙는다 (POK-32)
   const [windowSeconds, setWindowSeconds] = useState(0);
   const [uptimeSeconds, setUptime] = useState(options.initialUptimeSeconds ?? 0);
+  // 재생기의 자리(재생 위치·실시간 끝의 실제 시각, 시차). 라이브 채팅이 되감은 영상의 시각을 따른다(POK-326). 목록에 시각
+  // 표시가 없거나 아직 모르면 null. 셋을 한 순간에 같이 잰다(paint): 시크는 시차를 바로 바꾸는데 시각은 다음 paint에 바뀌어,
+  // 따로 알리면 새 시차에 옛 시각이 붙어 실시간 끝을 시크 폭만큼 늦게 셈했다(채팅이 아직 표에 없는 구간까지 「다 읽음」으로 뒀다)
+  const [livePosition, setLivePosition] = useState<LivePosition | null>(null);
   const [quality, setQuality] = useState<PlayerQuality>(PLAYER_QUALITIES[0]);
   const [lowLatency, setLowLatency] = useState(true);
   const [clipMarked, setClipMarked] = useState(false);
@@ -85,8 +113,9 @@ export function useHlsPlayback(
         video.currentTime = Math.max(range.start, live - clamped);
         setBehind(Math.round(clamped));
       }
+      onSeek?.();
     },
-    [videoRef],
+    [videoRef, onSeek],
   );
 
   const seekToFraction = useCallback(
@@ -104,6 +133,23 @@ export function useHlsPlayback(
         behindFromCurrentTime(range, video.currentTime, hlsRef.current?.liveSyncPosition ?? null) +
           deltaSeconds,
       );
+    },
+    [videoRef, seekToBehind],
+  );
+
+  // 실제 시각으로 옮긴다(라이브 카드, POK-326). 그 시각을 품은 조각의 시각 표시로 영상 시각을 셈하고, 시크는 같은 한 길
+  // (seekToBehind)을 탄다: 되감기 창 밖은 가장 오래된 지점으로 자른다. 방송 경과 시계로 옮기면 숨은 탭에서 그 시계의 타이머가
+  // 늦춰져 카드보다 몇 분 늦은 자리(심하면 실시간 끝)로 갔다(리뷰 1라운드). 시각 표시가 없으면 false: 부르는 쪽이 경과 시계로 옮긴다
+  const seekToDate = useCallback(
+    (epochMs: number): boolean => {
+      const video = videoRef.current;
+      if (!video) return false;
+      const range = dvrRange(video.seekable);
+      const target = mediaTimeAt(hlsRef.current?.latestLevelDetails?.fragments ?? [], epochMs);
+      if (!range || target === null) return false;
+      const live = liveEdgePosition(range, hlsRef.current?.liveSyncPosition ?? null);
+      seekToBehind(live - target);
+      return true;
     },
     [videoRef, seekToBehind],
   );
@@ -161,6 +207,8 @@ export function useHlsPlayback(
     setBehind(0);
     // 이전 스트림의 창 폭이 새 스트림 시크바에 남으면 안 된다
     setWindowSeconds(0);
+    // 이전 스트림의 자리도 남기지 않는다: 새 스트림 채팅이 앞 방송 시각을 따른다
+    setLivePosition(null);
 
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
@@ -176,7 +224,27 @@ export function useHlsPlayback(
       // 창 폭도 정수로 반올림한다 — live - range.start는 계속 흐르는 실수라 그대로 세팅하면
       // timeupdate마다 값이 달라져 리렌더가 돈다 (시차를 반올림하는 이유와 같다)
       setWindowSeconds(Math.round(rewindWindowSeconds(range, sync)));
-      setBehind(behindFromCurrentTime(range, video.currentTime, sync));
+      const behind = behindFromCurrentTime(range, video.currentTime, sync);
+      setBehind(behind);
+      // 재생 위치에 영상이 없으면(첫 조각이 붙기 전, 옮긴 자리를 받는 중, 미디어 오류 복구로 다시 붙는 중) 자리를 바꾸지 않는다:
+      // 그때의 재생 위치(첫 조각 전엔 0초)는 보고 있는 화면이 아니라, 라이브를 여는 순간 1시간 되감은 것처럼 채팅이 따라갔다
+      // (POK-326 리뷰 1라운드)
+      if (video.readyState < HAVE_CURRENT_DATA) return;
+      // 시각은 조각 목록으로 센다(programDateAt). 같은 실제 초 안에서 시차도 같으면 앞 값(같은 객체)을 둔다: timeupdate는 1초에
+      // 네 번쯤 온다(시차를 반올림하는 이유와 같다). 정각 초로 내리지 않는다: 카드·채팅 바닥 시계의 0초(서버 기준점)는 ms 자리가
+      // 있어, 내리면 카드로 정확히 옮겨도 채팅이 카드보다 그만큼 일찍 잘리고 바닥이 1초 이르게 섰다(리뷰 2라운드)
+      const fragments = hlsRef.current?.latestLevelDetails?.fragments ?? [];
+      const at = programDateAt(fragments, video.currentTime);
+      const edge = programDateAt(fragments, liveEdgePosition(range, sync));
+      setLivePosition((prev) => {
+        if (at === null || edge === null) return null;
+        const atMs = Math.round(at);
+        return prev !== null &&
+          Math.floor(prev.atMs / 1000) === Math.floor(atMs / 1000) &&
+          prev.behindSeconds === behind
+          ? prev
+          : { atMs, edgeAtMs: Math.round(edge), behindSeconds: behind };
+      });
     };
     video.addEventListener('play', onPlay);
     video.addEventListener('pause', onPause);
@@ -248,6 +316,7 @@ export function useHlsPlayback(
     muted,
     volume,
     behindSeconds,
+    livePosition,
     atEdge: isAtEdge(behindSeconds),
     windowSeconds,
     uptimeSeconds,
@@ -260,6 +329,7 @@ export function useHlsPlayback(
     setVolume,
     seekToFraction,
     seekBy,
+    seekToDate,
     returnToLive,
     // 화질은 표시용 — hls.js 레벨 배선은 스파이크 범위 밖 (POK-23 이후). 렌디션이 하나라 메뉴를 안 보인다(POK-253)
     settingsMenu: false,
