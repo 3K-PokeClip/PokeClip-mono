@@ -780,6 +780,45 @@ describe('ChatReplayLoader: 그 시각 둘레만 읽는다', () => {
     );
   });
 
+  it.each([
+    ['끊으면 실패하는 받기', true],
+    ['끊어도 영영 답하지 않는 받기', false],
+  ])(
+    '답이 끝나지 않는 요청은 10초 뒤 끊고 실패로 둔 뒤 10초 뒤 다시 읽는다(%s): 멈춘 화면도 「불러오고 있어요」에 갇히지 않는다',
+    async (_name, honorsAbort) => {
+      // 서버가 연결만 받고 답을 끝내지 않으면 읽기가 영영 멈췄다. 쪽 수 상한과 10초 뒤 다시 읽기는 답이 오거나 실패해야 돌고, 끊기는
+      // 멀리 옮길 때만이라 멈춘 화면은 「채팅을 불러오고 있어요」에 머물렀다(PR #230 codex)
+      const srv = collector(steady(600));
+      let hang = true;
+      const signals: AbortSignal[] = [];
+      const fetchPage: ReplayFetch = (from, to, cursor, signal) => {
+        signals.push(signal);
+        if (!hang) return srv.fetchPage(from, to, cursor, signal);
+        return new Promise((_, reject) => {
+          if (honorsAbort) signal.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+      };
+      const loader = new ChatReplayLoader(fetchPage, T0, T0 + HOUR);
+      const view = () => replayView(loader.getSnapshot(), T0 + 100_000, T0 + HOUR, T0 + 100_000);
+      loader.want(T0 + 100_000, T0 + 40_000);
+      await settle();
+      await vi.advanceTimersByTimeAsync(9_999);
+      await settle();
+      expect(view().status).toBe('loading');
+
+      await vi.advanceTimersByTimeAsync(1);
+      await settle();
+      expect(signals[0]!.aborted).toBe(true);
+      expect(view().status).toBe('failed');
+
+      hang = false;
+      await vi.advanceTimersByTimeAsync(10_000);
+      await settle();
+      expect(signals).toHaveLength(2);
+      expect(view().status).toBe('ready');
+    },
+  );
+
   it('200인데 items가 없는 쪽은 실패로 둔다: 재생이 흘러도 10초 동안 다시 묻지 않는다', async () => {
     const srv = collector(steady(600));
     srv.state.noItems = true;

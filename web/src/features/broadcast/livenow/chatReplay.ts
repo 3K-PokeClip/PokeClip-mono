@@ -39,6 +39,12 @@ const DROP_BATCH = 1_400;
 /** 읽지 못하면 이만큼 뒤 다시 읽는다. 그 사이 재생이 흘러도 다시 묻지 않는다 */
 const RETRY_MS = 10_000;
 /**
+ * 한 쪽의 답을 기다리는 시한. 넘기면 그 요청을 끊고 읽지 못한 것으로 본다(RETRY_MS 뒤 다시 읽는다). 서버가 연결만 받고 답을 끝내지
+ * 않으면 읽기가 영영 멈춰, 멈춘 화면은 「불러오고 있어요」에 머물렀다(PR #230 codex). clip은 수집기를 연결 2초·읽기 3초 시한으로
+ * 부르므로 정상 답은 이 안에 온다
+ */
+const PAGE_TIMEOUT_MS = 10_000;
+/**
  * 한 번 채울 때 읽는 쪽 수 상한. 다 쓰면 실패로 두고 10초 뒤 이어 읽는다: 서버가 쪽을 끝없이 달아 줘도 요청이 쏟아지지 않고,
  * 영상이 없어 영상 시각이 안 바뀌는 화면도 「불러오고 있어요」에 멈추지 않는다(리뷰 1라운드). 처음부터 다시 읽으면 새로 센다:
  * 연달아 옮기는 동안 받은 정상 답까지 이어 세어 실패한 요청 없이 실패로 섰다(리뷰 2라운드)
@@ -169,7 +175,8 @@ export function replayView(
 }
 
 /**
- * 영상 축 [fromMs, toMs)의 한 쪽을 받는다. cursor는 앞 쪽의 nextCursor다. 처음부터 다시 읽으면 signal로 앞서 보낸 요청을 끊는다
+ * 영상 축 [fromMs, toMs)의 한 쪽을 받는다. cursor는 앞 쪽의 nextCursor다. 처음부터 다시 읽거나 답이 시한(10초)을 넘기면 signal로
+ * 그 요청을 끊는다
  */
 export type ReplayFetch = (
   fromMs: number,
@@ -366,7 +373,7 @@ export class ChatReplayLoader {
         let page: WirePage;
         let added: ReplayLine[];
         try {
-          page = await this.fetchPage(ask.fromMs, ask.toMs, ask.cursor, signal);
+          page = await this.fetchWithin(ask, signal);
           added = this.parse(page);
         } catch {
           if (this.disposed) return;
@@ -393,6 +400,30 @@ export class ChatReplayLoader {
     } finally {
       this.pumping = false;
     }
+  }
+
+  /**
+   * 한 쪽을 PAGE_TIMEOUT_MS 안에 받는다. 넘기면 그 요청을 끊고 던진다(읽지 못함). 처음부터 다시 읽으면(signal) 그 요청도 끊는다.
+   * 답과 시한을 겨룬다: 끊기를 듣지 않는 대기(토큰 갱신을 기다리는 동안 등)도 시한에 끝난다
+   */
+  private fetchWithin(ask: WindowAsk, signal: AbortSignal): Promise<WirePage> {
+    const request = new AbortController();
+    const stop = () => request.abort();
+    signal.addEventListener('abort', stop);
+    let timer: number | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = window.setTimeout(() => {
+        stop();
+        reject(new Error('chat page timeout'));
+      }, PAGE_TIMEOUT_MS);
+    });
+    return Promise.race([
+      this.fetchPage(ask.fromMs, ask.toMs, ask.cursor, request.signal),
+      late,
+    ]).finally(() => {
+      window.clearTimeout(timer);
+      signal.removeEventListener('abort', stop);
+    });
   }
 
   /**
