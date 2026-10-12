@@ -66,7 +66,7 @@ export interface GlassPlayerProps {
    */
   onPlaybackPosition?: (seconds: number) => void;
   /**
-   * 녹화 다시보기에서 사람이 옮겼다(시크바·화살표·끝으로·카드·다 본 뒤 처음부터). 재생으로 흐르거나 녹화 틈을 넘을 때는 부르지
+   * 녹화 다시보기에서 사람이 옮겼다(시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤 처음부터). 재생으로 흐르거나 녹화 틈을 넘을 때는 부르지
    * 않는다: 녹화가 옮긴 자리는 지난 방송 채팅이 이것으로만 따라간다(영상 없이 누른 카드는 화면이 따로 알린다)
    */
   onSeek?: () => void;

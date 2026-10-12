@@ -502,6 +502,8 @@ export class ChatReplayLoader {
           continue;
         }
         pages += 1;
+        // 덧붙이기는 이 반복 맨 위(reviewFront)에서만 서고 거둔다: 기다리는 사이 바뀌는 것은 처음부터 다시 읽기뿐이고 그 답은 위에서
+        // 버렸다. want에서 거두게 바꾸면 거둔 덧붙이기의 답이 여기 붙어 빈 곳이 「다 읽음」 안에 남는다(리뷰 3라운드)
         if (front !== null) this.appendFront(front, page, added, ask);
         else this.append(page, added, ask);
         this.failed = false;

@@ -146,7 +146,7 @@ function LivePlayer({
   onRecordingLookup: (kind: RecordingLookup['kind']) => void;
   /** 녹화의 재생 위치(방송 기준 초)가 바뀌었다. 지난 방송 채팅이 그 시각까지의 줄만 보인다 */
   onPlaybackPosition: (seconds: number) => void;
-  /** 녹화에서 사람이 옮겼다(시크바·화살표·끝으로·카드·다 본 뒤 처음부터). 지난 방송 채팅이 그 시점(맨 아래)을 따라간다 */
+  /** 녹화에서 사람이 옮겼다(시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤 처음부터). 지난 방송 채팅이 그 시점(맨 아래)을 따라간다 */
   onSeek: () => void;
 }) {
   // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
@@ -337,7 +337,7 @@ function LiveDashboard() {
     playbackConfigured() &&
     recordingMayPlay(recordingLookup) &&
     !(recordingLookup === 'pending' && chatWaitOver);
-  // 사람이 옮긴 횟수(영상 없이 누른 카드, 녹화의 시크바·화살표·끝으로·카드·다 본 뒤 처음부터). 바뀌면 채팅 창이 그 시점(맨
+  // 사람이 옮긴 횟수(영상 없이 누른 카드, 녹화의 시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤 처음부터). 바뀌면 채팅 창이 그 시점(맨
   // 아래)을 따라간다: 재생으로 흐르거나 녹화 틈을 넘는 것은 옮긴 것이 아니다(커서가 튀었는지로 짐작해 틈을 넘을 때도 읽던 자리를
   // 잃었다, 리뷰 1라운드)
   const [chatJump, setChatJump] = useState(0);

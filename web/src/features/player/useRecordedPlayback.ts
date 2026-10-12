@@ -42,7 +42,7 @@ function forwardTarget(recorded: RecordingTimeline, seconds: number): number {
  *   카드 등)은 옮길 플레이어가 없었으므로 여기로 받아 첫 줄기부터 그 자리다(QA 2026-10-11). 선 다음의 이동은 컨트롤러로 한다.
  *   0이면 첫 구간 시작이다: 서버 기준점 축이면 녹화가 몇 초 뒤에 서는데 자리를 0초로 알리면 지난 방송 채팅이 영상보다 앞 시각에
  *   섰다(리뷰 3라운드)
- * @param onSeek 사람이 옮겼다(시크바·화살표·끝으로·카드·다 본 뒤 처음부터). 재생으로 흐르거나 녹화 틈을 넘을 때는 부르지 않는다:
+ * @param onSeek 사람이 옮겼다(시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤 처음부터). 재생으로 흐르거나 녹화 틈을 넘을 때는 부르지 않는다:
  *   녹화가 옮긴 자리는 지난 방송 채팅이 이것으로만 따라가 맨 아래로 간다(POK-324)
  */
 export function useRecordedPlayback(
