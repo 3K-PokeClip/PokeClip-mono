@@ -138,6 +138,21 @@ class BroadcastOrderingTest extends IntegrationTestSupport {
                 .satisfies(b -> assertThat(b.getStartedAt()).isNull());
     }
 
+    /**
+     * 늦게 온 낮은 번호의 시작도 빈 트랙 정보를 채운다(PR #234 codex). 렌더 주문서가 이 값을 그대로 실으므로, 비워 두면
+     * 순서대로 받은 방송과 달리 되돌린 방송만 트랙 대응 없이 영상을 만든다.
+     */
+    @Test
+    void 낮은_번호로_늦게_온_시작도_빈_트랙_정보를_채운다() {
+        processor.process(Envelopes.ended("e1", "s11", 5L));
+
+        assertThat(processor.process(Envelopes.startedWithManifest("e2", "s11", 3L)))
+                .isEqualTo(ProcessResult.PROCESSED);
+
+        assertThat(broadcasts.findByStreamId("s11")).get()
+                .satisfies(b -> assertThat(b.getTrackManifest()).contains("manifestVersion"));
+    }
+
     /** 채우는 재료는 시작 편지의 시각뿐이다. 낡은 종료 편지의 시각은 그 방송이 시작한 때가 아니다. */
     @Test
     void 낮은_번호의_종료로는_시작_시각을_채우지_않는다() {

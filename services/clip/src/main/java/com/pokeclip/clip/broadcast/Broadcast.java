@@ -147,14 +147,18 @@ public class Broadcast {
      * 비어 있던 사실 하나만 받는다. 물리 키({@link #fillIngestStreamId})와 같은 규칙이다: 빈 칸은 낡은 편지로도 채우고 있는 값은 안 바꾼다.
      * 그래서 정상 순서로 받은 시작 시각을 낡은 편지가 옮기지 못하고, 시작·종료가 어느 순서로 와도 마지막 줄이 같다.
      * 시각이 없거나 끝보다 늦으면 안 채운다. 받으면 화면이 [시작, 끝] 창을 거꾸로 잡아 시각을 모를 때보다 나빠진다.
+     * 트랙 정보도 비어 있으면 같이 채운다: 렌더 주문서가 이 값을 싣는다(PR #234 codex).
      *
      * @return 채웠으면 true
      */
-    boolean fillStartOfPlaceholder(Instant at) {
+    boolean fillStartOfPlaceholder(Instant at, String trackManifest) {
         if (this.startedAt != null || this.endedAt == null || at == null || at.isAfter(this.endedAt)) {
             return false;
         }
         this.startedAt = at;
+        if (this.trackManifest == null) {
+            this.trackManifest = trackManifest;
+        }
         this.updatedAt = Instant.now();
         return true;
     }

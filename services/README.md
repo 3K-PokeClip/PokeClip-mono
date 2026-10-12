@@ -904,7 +904,8 @@ Media의 응답기(새 송출 연결을 받을지 판정하는 쪽)는 두 경�
 
 **낮은 번호의 시작도 빈 시작 시각은 채운다**(POK-327). 같은 방송 안에서는 큐가 순서를 지키므로 이 편지는 대개
 처리에 거듭 실패해 실패 편지함(DLQ)으로 갔다가 되돌려진 것이다. 상태·`last_sequence`·보관 기한은 그대로 두고
-`started_at`만 그 편지의 `occurredAt`으로 채운다(결과는 처리됨, 로그 `broadcast.placeholder.started_filled`).
+`started_at`만 그 편지의 `occurredAt`으로 채운다(트랙 정보가 비었으면 그것도. 렌더 주문서가 싣는다. 결과는 처리됨,
+로그 `broadcast.placeholder.started_filled`).
 이미 시각이 있거나 그 시각이 종료보다 늦으면 안 채운다. 그래서 시작·종료가 어느 순서로 와도 마지막 줄이 같다.
 **`ended_before_started` 경고가 보이면 clip 실패 편지함에 그 방송의 시작 편지가 남았는지 보고 되돌린다.**
 되돌린 편지가 이 규칙으로 시작 시각을 채운다. 끝내 안 오면 `started_at`은 NULL로 남는다.
