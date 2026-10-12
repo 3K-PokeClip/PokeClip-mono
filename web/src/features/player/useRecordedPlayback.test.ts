@@ -358,3 +358,235 @@ describe('useRecordedPlayback: 이동이 사라지지 않는다', () => {
     expect(requested(video).fromSeconds).toBe(50);
   });
 });
+
+describe('useRecordedPlayback: 재생 위치(POK-324)', () => {
+  // 지난 방송 채팅은 이 재생 위치까지의 줄만 보인다. 위치가 옛 자리로 튀면 채팅도 옛 시각으로 돌아간다
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function tick(video: HTMLVideoElement, seconds: number) {
+    act(() => {
+      video.currentTime = seconds;
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+  }
+
+  it('재생 위치는 지금 줄기의 시작 + 영상 노드 시각이다', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() =>
+      useRecordedPlayback({ current: video }, source([[0, 100]]), 42),
+    );
+    expect(result.current.positionSeconds).toBe(42);
+
+    tick(video, 5);
+    expect(result.current.positionSeconds).toBe(47);
+  });
+
+  it('옮기는 동안 옛 줄기의 시각으로 되돌아가지 않는다: 줄기를 갈아 끼우기 전에 시크바가 옛 자리로 튀었다', () => {
+    const { video } = fakeVideo();
+    // 화면의 영상 노드 ref는 그대로다(useRef). 그릴 때마다 새 ref를 주면 줄기를 다시 붙여 옮기기가 끝난 것으로 본다
+    const ref = { current: video };
+    const recorded = source([[0, 100]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
+    tick(video, 30);
+
+    act(() => {
+      result.current.seekToFraction(0.8);
+    });
+    expect(result.current.positionSeconds).toBe(80);
+    // 줄기를 갈아 끼우기 전(250ms)에도 옛 줄기는 흐른다
+    tick(video, 30.25);
+    expect(result.current.positionSeconds).toBe(80);
+    expect(result.current.behindSeconds).toBe(20);
+
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(requested(video).fromSeconds).toBe(80);
+    // 새 줄기가 붙은 뒤에는 그 줄기의 시각으로 흐른다
+    tick(video, 1);
+    expect(result.current.positionSeconds).toBe(81);
+  });
+
+  it('250ms 안에 두 번 옮겨도 둘 다 간다: 옮기는 중에는 도착점에서 센다', () => {
+    // 화살표가 옛 줄기 시각에서 세면 두 번째 누름이 첫 번째를 덮어 10초만 갔다(리뷰 1라운드)
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([[0, 100]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded, 50));
+
+    act(() => {
+      result.current.seekBy(10);
+      result.current.seekBy(10);
+    });
+    expect(result.current.positionSeconds).toBe(30);
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(requested(video).fromSeconds).toBe(30);
+  });
+
+  it('사람이 옮길 때만 알린다: 다음 구간으로 이어 틀 때는 알리지 않는다', () => {
+    // 지난 방송 채팅은 이 알림으로만 맨 아래를 따라간다. 녹화 틈을 넘을 때도 알리면 위로 올려 읽던 자리를 잃었다(리뷰 1라운드)
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const onSeek = vi.fn();
+    const recorded = source([
+      [0, 14],
+      [24, 14],
+    ]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded, 0, onSeek));
+
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+    expect(requested(video).fromSeconds).toBe(24);
+    expect(onSeek).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.seekToFraction(0.5);
+    });
+    expect(onSeek).toHaveBeenCalledTimes(1);
+  });
+
+  it('지금 줄기의 시작으로 다시 옮겨 되감아도 그 뒤 재생 위치가 다시 흐른다', () => {
+    const { video } = fakeVideo();
+    const { result } = renderHook(() =>
+      useRecordedPlayback({ current: video }, source([[0, 100]]), 42),
+    );
+    tick(video, 30);
+
+    act(() => {
+      result.current.seekToFraction(0.42);
+      vi.advanceTimersByTime(300);
+    });
+    expect(video.currentTime).toBe(0);
+    expect(result.current.positionSeconds).toBe(42);
+
+    tick(video, 2);
+    expect(result.current.positionSeconds).toBe(44);
+  });
+
+  it('옮기는 동안 옛 구간이 끝나도 다음 구간을 붙이지 않는다: 자리가 옮긴 곳 → 다음 구간 → 옮긴 곳으로 오가지 않는다', () => {
+    // 옛 줄기가 끝나는 알림만 「옮기는 중」을 안 봐 채팅 커서와 시크바가 5 → 24 → 5초로 오갔다(리뷰 2라운드)
+    const { video } = fakeVideo();
+    const ref = { current: video };
+    const recorded = source([
+      [0, 14],
+      [24, 14],
+    ]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded));
+    tick(video, 13.9);
+
+    act(() => {
+      result.current.seekToPosition?.(5);
+    });
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    act(() => {
+      video.dispatchEvent(new Event('pause'));
+      video.dispatchEvent(new Event('ended'));
+    });
+    expect(result.current.positionSeconds).toBe(5);
+
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(requested(video).fromSeconds).toBe(5);
+    expect(result.current.positionSeconds).toBe(5);
+  });
+
+  it('다 본 뒤 처음부터 다시 틀면 사람이 옮긴 것으로 알린다: 구간이 하나여도 지난 방송 채팅이 처음을 따라간다', () => {
+    // 구간이 하나면 브라우저가 같은 줄기를 다시 틀어 알리지 않았다(리뷰 2라운드)
+    const { video, play } = fakeVideo();
+    const onSeek = vi.fn();
+    const ref = { current: video };
+    const recorded = source([[0, 100]]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded, 0, onSeek));
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+    Object.defineProperty(video, 'paused', { value: true, configurable: true });
+
+    act(() => result.current.togglePlay());
+
+    expect(onSeek).toHaveBeenCalledTimes(1);
+    expect(play).toHaveBeenCalled();
+  });
+
+  it('다 본 뒤 처음부터 다시 틀면 그 자리는 0초가 아니라 첫 구간 시작이다: 서버 기준점 축이면 녹화가 몇 초 뒤에 선다', () => {
+    const { video } = fakeVideo();
+    const onSeek = vi.fn();
+    const ref = { current: video };
+    // 녹화가 기준점보다 12초 뒤에 서고 구간이 둘이다
+    const rebased = {
+      streamId: 'gaptest',
+      ...rebaseTimeline(
+        source([
+          [0, 50],
+          [60, 40],
+        ]),
+        T0 - 12_000,
+      ),
+    };
+    const { result } = renderHook(() => useRecordedPlayback(ref, rebased, 0, onSeek));
+    act(() => {
+      result.current.seekToPosition?.(80);
+      vi.advanceTimersByTime(300);
+    });
+    onSeek.mockClear();
+    Object.defineProperty(video, 'ended', { value: true, configurable: true });
+
+    act(() => result.current.togglePlay());
+
+    expect(onSeek).toHaveBeenCalledTimes(1);
+    expect(result.current.positionSeconds).toBe(12);
+  });
+
+  it('다 본 뒤 옮기는 중에 재생을 누르면 옮긴 자리부터 튼다: 처음으로 덮었다가 되돌아오지 않는다', () => {
+    // 끝난 옛 줄기의 ended를 보고 처음부터로 덮으면 걸린 이동이 옮긴 자리로 다시 돌려 자리가 80 → 0 → 80으로 오갔고 지난 방송
+    // 채팅도 두 번 처음부터 다시 읽었다(리뷰 3라운드)
+    const { video, play } = fakeVideo();
+    const onSeek = vi.fn();
+    const ref = { current: video };
+    const recorded = source([
+      [0, 50],
+      [60, 40],
+    ]);
+    const { result } = renderHook(() => useRecordedPlayback(ref, recorded, 0, onSeek));
+    const end = () => {
+      Object.defineProperty(video, 'ended', { value: true, configurable: true });
+      Object.defineProperty(video, 'paused', { value: true, configurable: true });
+      act(() => {
+        video.dispatchEvent(new Event('pause'));
+        video.dispatchEvent(new Event('ended'));
+      });
+    };
+    // 첫 구간이 끝나 둘째 구간을 이어 틀고, 그것도 끝까지 봤다
+    end();
+    end();
+    act(() => result.current.seekToPosition?.(80));
+    onSeek.mockClear();
+    play.mockClear();
+
+    act(() => result.current.togglePlay());
+    expect(result.current.positionSeconds).toBe(80);
+    expect(onSeek).not.toHaveBeenCalled();
+
+    Object.defineProperty(video, 'ended', { value: false, configurable: true });
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(requested(video).fromSeconds).toBe(80);
+    expect(play).toHaveBeenCalled();
+  });
+
+  it('처음 자리는 0초가 아니라 첫 구간 시작이다: 서버 기준점 축이면 녹화가 몇 초 뒤에 선다', () => {
+    // 0초로 알리면 지난 방송 채팅이 영상보다 앞 시각에 섰다(자동재생이 막혀 멈춘 채 서면 그대로 남았다, 리뷰 3라운드)
+    const { video } = fakeVideo();
+    const rebased = { streamId: 'gaptest', ...rebaseTimeline(source([[0, 50]]), T0 - 12_000) };
+    const { result } = renderHook(() => useRecordedPlayback({ current: video }, rebased));
+    expect(result.current.positionSeconds).toBe(12);
+    // 받는 줄기는 녹화 시작부터다
+    expect(requested(video).fromSeconds).toBe(0);
+  });
+});

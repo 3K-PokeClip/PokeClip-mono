@@ -9,6 +9,12 @@
 
 const BASE = (process.env.NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL ?? '').replace(/\/+$/, '');
 const STREAM_ID_RE = /^[A-Za-z0-9_-]+$/;
+/**
+ * 녹화 목록을 이만큼 기다린다(답의 본문까지). 넘으면 묻지 못한 것(null)으로 본다: 재생 서버가 연결만 받고 답하지 않으면 영상 자리는
+ * 끝없이 「확인하고 있어요」였다(POK-324 리뷰 2라운드). 10초였을 때는 느리게라도 답하는 서버를 늘 묻지 못한 것으로 봐 녹화를 못
+ * 틀었다(PR #230): 지난 방송 채팅은 이 답을 다 기다리지 않는다(LiveScreen의 CHAT_WAIT_MS)
+ */
+const LIST_TIMEOUT_MS = 30_000;
 
 export interface RecordingSpan {
   /** 녹화 시작(UTC epoch ms) */
@@ -33,13 +39,15 @@ export function parseSpanStartMs(iso: string): number {
 /**
  * 녹화 구간을 묻는다. 재생 서버가 없거나(주소 설정 없음) 묻지 못했으면(네트워크 오류·서버 오류) null이다: 녹화가 없다는 뜻이
  * 아니다. 녹화가 없으면 빈 배열이다. 재생 서버는 그 경로의 녹화 폴더가 없으면 400으로 답하고(2026-10-11 로컬 실측), 404도 같은
- * 뜻으로 받는다
+ * 뜻으로 받는다. LIST_TIMEOUT_MS 안에 답(본문까지)이 오지 않아도 묻지 못한 것이다
  */
 export async function lookupRecordingSpans(streamId: string): Promise<RecordingSpan[] | null> {
   if (BASE === '') return null;
   if (!STREAM_ID_RE.test(streamId)) return [];
   try {
-    const res = await fetch(`${BASE}/list?path=${encodeURIComponent(streamId)}`);
+    const res = await fetch(`${BASE}/list?path=${encodeURIComponent(streamId)}`, {
+      signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
+    });
     if (res.status === 400 || res.status === 404) return [];
     if (!res.ok) return null;
     const body = (await res.json()) as { start: string; duration: number }[];

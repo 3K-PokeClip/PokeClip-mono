@@ -10,6 +10,7 @@ import { useAuthStore } from '@/stores/auth';
 import { keepKnownThumbnail } from '@/features/thumbnail/thumbnailUrl';
 import { timeAgo } from '@/lib/timeAgo';
 import { endedWindowStart } from '@/features/broadcast/endedWindow';
+import { COLLECTOR_WINDOW_MS } from './chatCollector';
 import {
   emitRelay,
   publishLiveData,
@@ -141,9 +142,6 @@ export function hideCard(cardId: string) {
   return cardCall('POST', `${cardPath(cardId)}/hide`);
 }
 
-/** 수집기가 한 번에 받는 가장 긴 창 — chat-collector pokeclip.query.window-max */
-export const COLLECTOR_WINDOW_MS = 60 * 60_000;
-
 /** [from, to)를 수집기 한 번에 받을 수 있는 1시간 창들로 자른다 */
 export function chartWindows(from: number, to: number): [number, number][] {
   const windows: [number, number][] = [];
@@ -172,7 +170,8 @@ async function getJsonOrNull<T>(path: string): Promise<T | null> {
   }
 }
 
-function msToClock(ms: number): string {
+/** 방송 기준 ms → 카드의 시계 표기(h:mm:ss). 지난 방송 채팅 창 바닥도 같은 꼴로 쓴다 */
+export function msToClock(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);

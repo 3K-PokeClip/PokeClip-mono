@@ -41,7 +41,10 @@ export interface LiveData {
   status: LiveBroadcastStatus;
   startedAt: number | null; // epoch ms
   endedAt: number | null; // epoch ms (지난 방송만)
-  /** 카드를 눌러 옮긴 재생 위치(방송 시작 기준 ms). 영상이 없어도 채팅은 그 시점을 보여준다 */
+  /**
+   * 지난 방송의 재생 위치(시각 기준점 축 ms). 녹화가 흐르는 자리이고, 영상이 없으면 누른 카드 시점이다. 채팅이 이 시각까지의 줄만
+   * 보인다(POK-324). 모르면 null이고 채팅은 방송 끝까지다
+   */
   playheadMs: number | null;
   /** 이 방송과 나의 관계 — OWNER(내 방송) · EDITOR(위임받은 방송). 모르면 null */
   relation: string | null;
