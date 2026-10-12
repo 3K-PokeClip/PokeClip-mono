@@ -114,6 +114,7 @@ function LivePlayer({
   startAtSeconds,
   onRecordedReady,
   onRecordingLookup,
+  onRecordingLookupStart,
   onPlaybackPosition,
   onSeek,
 }: {
@@ -144,6 +145,11 @@ function LivePlayer({
    * 때까지 기다리게(확인 중·찾음) 부른 쪽에 알린다
    */
   onRecordingLookup: (kind: RecordingLookup['kind']) => void;
+  /**
+   * 녹화 조회를 새로 시작했다(끝난 방송으로 밝혀졌거나 끝 시각·기준점·영상 키가 바뀜). 조회 결과는 확인 중 그대로라 onRecordingLookup이
+   * 다시 불리지 않는다: 지난 방송 채팅의 기다림(CHAT_WAIT_MS)을 이 조회부터 다시 센다
+   */
+  onRecordingLookupStart: () => void;
   /** 녹화의 재생 위치(방송 기준 초)가 바뀌었다. 지난 방송 채팅이 그 시각까지의 줄만 보인다 */
   onPlaybackPosition: (seconds: number) => void;
   /** 녹화에서 사람이 옮겼다(시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤 처음부터). 지난 방송 채팅이 그 시점(맨 아래)을 따라간다 */
@@ -167,6 +173,7 @@ function LivePlayer({
     // 녹화를 틀고, 채팅도 그 날짜를 물었다(리뷰 5라운드). 지난 방송 목록도 같은 하한이고(recordingSearchFrom), 지난 방송 채팅은 이
     // 하한에서 보정 여유(60초)만큼 앞부터 읽는다(POK-324)
     const fromMs = recordingSearchFrom(startedAt, endedAt);
+    onRecordingLookupStart();
     const ask = () => {
       // 첫 구간 하나만 쓰면 송출이 한 번 끊긴 방송은 그 뒤를 못 보고, 앞 방송 녹화를 잡을 수도 있다(POK-253)
       void lookupRecordingSpans(mediaKey).then((spans) => {
@@ -194,7 +201,7 @@ function LivePlayer({
       alive = false;
       window.clearTimeout(retry);
     };
-  }, [broadcastStatus, mediaKey, startedAt, endedAt, originMs]);
+  }, [broadcastStatus, mediaKey, startedAt, endedAt, originMs, onRecordingLookupStart]);
   const recorded = lookup.kind === 'found' ? lookup.source : null;
   useEffect(() => {
     if (recorded !== null) onRecordedReady();
@@ -326,13 +333,17 @@ function LiveDashboard() {
   // 재생 서버가 있고 녹화를 찾는 중이면 곧 재생기가 자리를 알려 온다(찾으면 재생기가 서는 그리기에서 알린다). 그때까지 지난 방송
   // 채팅은 기다린다: 방송 끝을 먼저 읽어 끝 채팅이 잠깐 보였다가 0초 빈 창으로 바뀌었다(POK-324 리뷰 1라운드). 찾는 중이 CHAT_WAIT_MS를
   // 넘으면 기다리지 않고 방송 끝을 보인다(재생 서버가 답하지 않거나 느려도 채팅을 비워 두지 않는다, 리뷰 2라운드·PR #230)
+  // 기다림은 녹화 조회 하나마다 센다: 화면을 연 때부터 세면 명부가 늦게 답한 화면은 조회를 시작하자마자 방송 끝을 보였다(PR #230
+  // codex). 조회를 새로 시작해도 결과는 확인 중 그대로라 시작 횟수로 다시 센다
   const [chatWaitOver, setChatWaitOver] = useState(false);
+  const [lookupStarts, setLookupStarts] = useState(0);
+  const handleRecordingLookupStart = useCallback(() => setLookupStarts((n) => n + 1), []);
   useEffect(() => {
     setChatWaitOver(false);
     if (recordingLookup !== 'pending') return undefined;
     const timer = window.setTimeout(() => setChatWaitOver(true), CHAT_WAIT_MS);
     return () => window.clearTimeout(timer);
-  }, [recordingLookup]);
+  }, [recordingLookup, lookupStarts]);
   const awaitPlayhead =
     playbackConfigured() &&
     recordingMayPlay(recordingLookup) &&
@@ -489,6 +500,7 @@ function LiveDashboard() {
                 startAtSeconds={pendingStart}
                 onRecordedReady={handleRecordedReady}
                 onRecordingLookup={setRecordingLookup}
+                onRecordingLookupStart={handleRecordingLookupStart}
                 onPlaybackPosition={handlePlaybackPosition}
                 onSeek={bumpChatJump}
               />

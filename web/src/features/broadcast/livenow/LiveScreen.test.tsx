@@ -1994,6 +1994,42 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
   });
 
+  it('명부가 늦게 답해 녹화 조회가 늦게 시작해도 채팅은 그 조회부터 10초를 기다린다', async () => {
+    // 녹화 조회는 끝난 방송으로 밝혀진 뒤에야 시작한다. 채팅의 10초를 화면을 연 때부터 세면, 명부가 8초 걸린 화면은 조회 2초 만에
+    // 방송 끝을 보였다가 녹화를 찾으면 녹화 위치로 바뀌었다(PR #230 codex)
+    stubMediaElement();
+    server.vodChat = true;
+    mediaCalls.configured = true;
+    mediaCalls.answer = new Promise(() => undefined);
+    let release: () => void = () => undefined;
+    server.listGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000);
+    });
+    await act(async () => {
+      release();
+    });
+    await settle();
+    expect(mediaCalls.spans.length).toBeGreaterThan(0);
+
+    // 조회 5초째(연 지 13초): 아직 기다린다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    await settle();
+    expect(screen.getByText(/^시점을 확인하는 중/)).toBeInTheDocument();
+    // 조회 10초째: 방송 끝을 보인다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    await settle();
+    expect(screen.getByText(/^마지막 메시지까지 보는 중/)).toBeInTheDocument();
+  });
+
   it('12시간 넘는 방송에서 끝 12시간 차트에 채팅이 300건 안 되면 그 앞 채팅까지 읽어 최근 300줄을 보인다', async () => {
     // 끝 12시간 차트의 첫 칸을 읽기 시작점으로 확정하면 그 앞에 채팅이 있어도 빈 창이었다(PR #230 codex). 이 방송은 채팅이 처음
     // 2시간 반에만 있다
