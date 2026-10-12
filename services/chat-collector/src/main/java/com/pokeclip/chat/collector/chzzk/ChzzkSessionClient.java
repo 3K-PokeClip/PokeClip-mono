@@ -3,7 +3,11 @@ package com.pokeclip.chat.collector.chzzk;
 import com.pokeclip.chat.collector.StopReason;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.util.UriComponentsBuilder;
 import tools.jackson.databind.ObjectMapper;
+
+import java.net.URI;
+import java.util.Map;
 
 /**
  * 치지직 REST 둘. 세션 발급과 채팅 구독.
@@ -63,7 +67,7 @@ public class ChzzkSessionClient {
     public boolean unsubscribeChatQuietly(String sessionKey) {
         try {
             restClient.post()
-                    .uri(baseUrl + "/open/v1/sessions/events/unsubscribe/chat?sessionKey=" + sessionKey)
+                    .uri(sessionKeyUri("/open/v1/sessions/events/unsubscribe/chat", sessionKey))
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
                     .toBodilessEntity();
@@ -85,7 +89,7 @@ public class ChzzkSessionClient {
     public DonationSubscription subscribeDonation(String sessionKey) {
         try {
             restClient.post()
-                    .uri(baseUrl + "/open/v1/sessions/events/subscribe/donation?sessionKey=" + sessionKey)
+                    .uri(sessionKeyUri("/open/v1/sessions/events/subscribe/donation", sessionKey))
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
                     .toBodilessEntity();
@@ -109,7 +113,7 @@ public class ChzzkSessionClient {
     public boolean unsubscribeDonationQuietly(String sessionKey) {
         try {
             restClient.post()
-                    .uri(baseUrl + "/open/v1/sessions/events/unsubscribe/donation?sessionKey=" + sessionKey)
+                    .uri(sessionKeyUri("/open/v1/sessions/events/unsubscribe/donation", sessionKey))
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
                     .toBodilessEntity();
@@ -123,7 +127,7 @@ public class ChzzkSessionClient {
     public void subscribeChat(String sessionKey) {
         try {
             restClient.post()
-                    .uri(baseUrl + "/open/v1/sessions/events/subscribe/chat?sessionKey=" + sessionKey)
+                    .uri(sessionKeyUri("/open/v1/sessions/events/subscribe/chat", sessionKey))
                     .header("Authorization", "Bearer " + accessToken)
                     .retrieve()
                     .toBodilessEntity();
@@ -141,5 +145,16 @@ public class ChzzkSessionClient {
             throw new SessionEstablishException(EstablishStage.SUBSCRIBE,
                     StopReason.SUBSCRIBE_FAILED, "cause=" + e.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * 세션 키를 값 자리로 넘긴 주소. 키는 치지직이 준 값이고 문서가 모양을 약속하지 않는다(지금 실측은 UUID).
+     * 주소에 바로 이어 붙이면 {@code +}가 공백으로 읽힌다. 라이브 목록 커서가 그렇게 400을 받았다(POK-325,
+     * {@code ChzzkLiveInfoClient.lives}). 값 자리를 예약 문자까지 바꾸는 것도 {@code encode()}다.
+     */
+    private URI sessionKeyUri(String path, String sessionKey) {
+        return UriComponentsBuilder.fromUriString(baseUrl + path)
+                .queryParam("sessionKey", "{sessionKey}")
+                .encode().buildAndExpand(Map.of("sessionKey", sessionKey)).toUri();
     }
 }
