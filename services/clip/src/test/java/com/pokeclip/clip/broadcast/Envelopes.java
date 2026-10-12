@@ -45,6 +45,21 @@ public final class Envelopes {
                 "trace-1", MAPPER.createObjectNode());
     }
 
+    /** 시각을 정해 주는 시작 봉투(POK-327). 늦게 온 시작이 끝보다 앞인지 뒤인지, 목록에 어느 시각이 실리는지를 잰다. */
+    public static LifecycleEnvelope started(String eventId, String streamId, String ingestStreamId, long sequence,
+                                            Instant occurredAt) {
+        return new LifecycleEnvelope(1, eventId, "broadcast.started",
+                occurredAt, streamId, TestIds.STREAMER, ingestStreamId, sequence,
+                "trace-1", MAPPER.createObjectNode());
+    }
+
+    public static LifecycleEnvelope ended(String eventId, String streamId, String ingestStreamId, long sequence,
+                                          Instant occurredAt) {
+        return new LifecycleEnvelope(1, eventId, "broadcast.ended",
+                occurredAt, streamId, TestIds.STREAMER, ingestStreamId, sequence,
+                "trace-1", MAPPER.createObjectNode());
+    }
+
     /** streamerId가 없어 NOT NULL 제약에 걸린다 — 저장 실패 경로를 만든다. */
     public static LifecycleEnvelope startedWithoutStreamer(String eventId, String streamId, long sequence) {
         return new LifecycleEnvelope(1, eventId, "broadcast.started",

@@ -1,6 +1,8 @@
 package com.pokeclip.clip.broadcast.api;
 
 import ch.qos.logback.classic.Level;
+import com.pokeclip.clip.broadcast.BroadcastEventProcessor;
+import com.pokeclip.clip.broadcast.Envelopes;
 import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
@@ -61,10 +63,12 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
 
     private final MockMvc mvc;
     private final JdbcTemplate jdbc;
+    private final BroadcastEventProcessor processor;
 
-    BroadcastListControllerTest(MockMvc mvc, JdbcTemplate jdbc) {
+    BroadcastListControllerTest(MockMvc mvc, JdbcTemplate jdbc, BroadcastEventProcessor processor) {
         this.mvc = mvc;
         this.jdbc = jdbc;
+        this.processor = processor;
     }
 
     @BeforeEach
@@ -581,6 +585,32 @@ class BroadcastListControllerTest extends IntegrationTestSupport {
         Map<String, Object> 한_줄 = ((java.util.List<Map<String, Object>>) 맵(본문).get("broadcasts")).get(0);
         assertThat(한_줄).containsKey("timelineOriginAt");
         assertThat(한_줄.get("timelineOriginAt")).isNull();
+    }
+
+    /**
+     * 종료 편지가 먼저 와 생긴 방송도 시작 편지가 늦게 오면 목록에 그 시작 시각이 실리고, 기준점도 <b>그 회차의</b> 조각으로 잰다
+     * (POK-327). 웹은 시작 시각이 있으면 [시작, 끝] 창을 타서 웹 코드를 안 바꾼다. 같은 물리 키로 세 시간 전에 한 앞 회차 조각은
+     * 시작 2분 전 경계에 걸려 안 섞인다. 시작을 모르던 때는 웹이 끝 12시간 창으로 읽어 그 회차 녹화까지 틀 수 있었다.
+     */
+    @Test
+    void 종료가_먼저_온_방송도_늦게_온_시작_편지로_시작_시각과_기준점이_실린다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        Instant 끝 = 시작_시각.plusSeconds(3_600);
+        processor.process(Envelopes.ended("e-end", "S-late", "key-shared", 2L, 끝));
+        processor.process(Envelopes.started("e-start", "S-late", "key-shared", 1L, 시작_시각));
+        // 같은 물리 키의 앞 회차 조각(세 시간 전)과 이 회차 첫 조각(32초 뒤). pts는 회차를 넘어 이어진다
+        조각을_넣는다("key-shared", 1, 0, 시작_시각.minusSeconds(10_800), 시작_시각.minusSeconds(10_800));
+        Instant 첫_조각 = 시작_시각.plusSeconds(32);
+        조각을_넣는다("key-shared", 2, 3_600_000, 첫_조각, 첫_조각);
+
+        목록("?state=past")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.broadcasts.length()").value(1))
+                .andExpect(jsonPath("$.broadcasts[0].streamId").value("S-late"))
+                .andExpect(jsonPath("$.broadcasts[0].status").value("ended"))
+                .andExpect(jsonPath("$.broadcasts[0].startedAt").value(시작_시각.toString()))
+                .andExpect(jsonPath("$.broadcasts[0].endedAt").value(끝.toString()))
+                .andExpect(jsonPath("$.broadcasts[0].timelineOriginAt").value(첫_조각.minusMillis(3_600_000).toString()));
     }
 
     // ── 방송 제목(POK-259) ───────────────────────────────────────
