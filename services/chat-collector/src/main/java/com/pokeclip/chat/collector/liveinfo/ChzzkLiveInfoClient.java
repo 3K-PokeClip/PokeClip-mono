@@ -54,6 +54,20 @@ public class ChzzkLiveInfoClient {
         }
     }
 
+    /** 목록이 429 밖의 HTTP 실패를 줬다. 응답 본문은 버리고 상태 코드만 든다 — 부르는 쪽이 그 코드를 로그에 남긴다. */
+    public static class ListFailedException extends RuntimeException {
+        private final int status;
+
+        public ListFailedException(int status) {
+            super("chzzk lives status=" + status);
+            this.status = status;
+        }
+
+        public int status() {
+            return status;
+        }
+    }
+
     /** 던지지 않는다 — 한 스트리머의 거부가 다른 스트리머의 기록을 막으면 안 된다. */
     public SettingResult setting(String accessToken) {
         try {
@@ -74,13 +88,17 @@ public class ChzzkLiveInfoClient {
         }
     }
 
-    /** @param next 첫 장이면 null. 429면 {@link TooManyRequestsException}, 그 밖 실패는 그대로 던진다 */
+    /**
+     * @param next 첫 장이면 null. 429면 {@link TooManyRequestsException}, 그 밖 HTTP 실패는 상태 코드만 든
+     *             {@link ListFailedException}(본문은 버린다), 연결·해석 실패는 그대로 던진다
+     */
     public LivePage lives(String next) {
         UriComponentsBuilder uri = UriComponentsBuilder.fromUriString(baseUrl + "/open/v1/lives")
                 .queryParam("size", PAGE_SIZE);
         // 🔴 커서는 값 자리({next})로 넘긴다. 커서는 base64라 +가 섞이는데, 주소 틀에 바로 넣으면 encode()가 +를
-        // 쿼리에 써도 되는 글자로 보고 그대로 둔다 → 치지직이 공백으로 읽고 400 「잘못된 next 값입니다」(2026-10-12 실측:
-        // 회차마다 2~4장째에서 끊겨 시청자 수를 한 번도 못 채웠다). 값 자리의 값은 예약 문자까지 전부 바뀐다(+ → %2B).
+        // 쿼리에 써도 되는 글자로 보고 그대로 둔다 → 치지직이 공백으로 읽고 400 「잘못된 next 값입니다」(POK-325: 회차마다
+        // 2~4장째에서 끊겨 작은 방송의 시청자 수를 한 번도 못 채웠다). 값 자리를 예약 문자까지 바꾸는(+ → %2B) 것도
+        // encode()다. 지우거나 buildAndExpand 뒤로 옮기면 +가 다시 그대로 나간다.
         Map<String, String> values = Map.of();
         if (next != null) {
             uri.queryParam("next", "{next}");
@@ -98,7 +116,7 @@ public class ChzzkLiveInfoClient {
             if (e.getStatusCode().value() == 429) {
                 throw new TooManyRequestsException();
             }
-            throw new IllegalStateException("chzzk lives status=" + e.getStatusCode().value());
+            throw new ListFailedException(e.getStatusCode().value());
         }
         JsonNode content = MAPPER.readTree(body).path("content");
         List<LiveEntry> entries = new ArrayList<>();

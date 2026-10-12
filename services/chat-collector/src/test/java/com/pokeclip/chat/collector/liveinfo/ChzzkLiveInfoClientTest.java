@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
@@ -54,8 +55,12 @@ class ChzzkLiveInfoClientTest {
         server.stop(0);
     }
 
+    /**
+     * 운영과 같은 JDK 요청 팩토리로 잰다(쌍둥이 시험 {@code ChzzkLinkClientTest}와 같다). {@code RestClient.create()}는
+     * 클래스패스의 Apache HC5를 골라 429를 1초 뒤 스스로 다시 보내는 등 운영에 없는 길을 지난다.
+     */
     private ChzzkLiveInfoClient client() {
-        return new ChzzkLiveInfoClient(RestClient.create(),
+        return new ChzzkLiveInfoClient(RestClient.builder().requestFactory(new JdkClientHttpRequestFactory()).build(),
                 "http://127.0.0.1:" + server.getAddress().getPort(), "app-id", "app-secret");
     }
 
@@ -126,5 +131,19 @@ class ChzzkLiveInfoClientTest {
         statusByPath.put("/open/v1/lives", 429);
 
         assertThatThrownBy(() -> client().lives(null)).isInstanceOf(ChzzkLiveInfoClient.TooManyRequestsException.class);
+    }
+
+    @Test
+    void 목록_429_밖의_실패는_상태_코드만_든_전용_예외다() {
+        // 상태 코드가 로그까지 가야 400(우리 요청이 틀림)과 5xx(기다리면 되는 장애)가 갈린다(POK-325). 본문은 싣지 않는다.
+        statusByPath.put("/open/v1/lives", 400);
+        bodyByQuery.put("/open/v1/lives", """
+                {"code":400,"message":"잘못된 next 값입니다.","echo":"app-secret"}""");
+
+        assertThatThrownBy(() -> client().lives("ytwg+GEd/BQ=="))
+                .isInstanceOfSatisfying(ChzzkLiveInfoClient.ListFailedException.class,
+                        e -> assertThat(e.status()).isEqualTo(400))
+                .hasMessageNotContaining("app-secret")
+                .hasMessageNotContaining("잘못된");
     }
 }
