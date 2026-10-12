@@ -26,9 +26,17 @@ import { useToast } from '@/ui';
 import { vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
 import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
+import type { LivePosition } from '@/features/player/useHlsPlayback';
 import type { RecordedSource } from '@/features/player/useRecordedPlayback';
 import { rebaseTimeline, recordingTimeline } from '@/features/player/recordingTimeline';
-import { missingWord, publishLiveData, resetLiveData, useLiveData } from './liveDataStore';
+import { nextLiveFollow } from './chatReplay';
+import {
+  missingWord,
+  publishLiveData,
+  resetLiveData,
+  timeBaseOf,
+  useLiveData,
+} from './liveDataStore';
 import { useBroadcastClock, type BroadcastStatus } from './useBroadcastClock';
 import { useChatPanelMockState } from './useChatPanelMockState';
 import { useLiveDetailsMockState } from './useLiveDetailsMockState';
@@ -116,6 +124,7 @@ function LivePlayer({
   onRecordingLookup,
   onRecordingLookupStart,
   onPlaybackPosition,
+  onLivePosition,
   onSeek,
 }: {
   stream: LiveStream;
@@ -152,7 +161,12 @@ function LivePlayer({
   onRecordingLookupStart: () => void;
   /** 녹화의 재생 위치(방송 기준 초)가 바뀌었다. 지난 방송 채팅이 그 시각까지의 줄만 보인다 */
   onPlaybackPosition: (seconds: number) => void;
-  /** 녹화에서 사람이 옮겼다(시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤 처음부터). 지난 방송 채팅이 그 시점(맨 아래)을 따라간다 */
+  /** 라이브 재생기의 자리(실제 시각·실시간에서 몇 초 뒤)가 바뀌었다. 되감으면 라이브 채팅이 그 시각까지의 줄만 보인다(POK-326) */
+  onLivePosition: (position: LivePosition | null) => void;
+  /**
+   * 사람이 옮겼다(시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤 처음부터). 지난 방송 채팅이 그 시점(맨 아래)을
+   * 따라간다. 라이브 재생기도 부른다(실시간으로 포함)
+   */
   onSeek: () => void;
 }) {
   // env 미설정이면 null → GlassPlayer가 「영상 신호 없음」 자리 표시를 그린다.
@@ -263,6 +277,7 @@ function LivePlayer({
       recorded={recorded}
       startAtSeconds={startAtSeconds}
       onPlaybackPosition={onPlaybackPosition}
+      onLivePosition={onLivePosition}
       onSeek={onSeek}
       embed
       simulationOptions={{ initialUptimeSeconds: uptimeSeconds ?? 0 }}
@@ -303,7 +318,10 @@ function LiveDashboard() {
   const pastRoute = vodRouteId !== null;
   const { stream, highlights, chatVolume, chatWarning } = useLiveMockState(pastRoute);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
-  const { streamId, info } = useLiveData();
+  const liveData = useLiveData();
+  const { streamId, info } = liveData;
+  /** 카드 시각의 0초(카드 목록과 같은 기준점, timeBaseOf). 라이브 카드를 그 실제 시각으로 옮길 때 쓴다(POK-326) */
+  const cardBase = timeBaseOf(liveData);
   const clock = useBroadcastClock(streamId);
   // 지난 방송 상세 주소로 들어왔는데 그 방송이 명부에 없으면(없는 번호·권한 회수) 404 화면으로 보낸다 —
   // 빈 대시보드를 보여 주지 않는다(PR #200 codex, 404 계약: README 「404 계약」)
@@ -348,9 +366,9 @@ function LiveDashboard() {
     playbackConfigured() &&
     recordingMayPlay(recordingLookup) &&
     !(recordingLookup === 'pending' && chatWaitOver);
-  // 사람이 옮긴 횟수(영상 없이 누른 카드, 녹화의 시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤 처음부터). 바뀌면 채팅 창이 그 시점(맨
-  // 아래)을 따라간다: 재생으로 흐르거나 녹화 틈을 넘는 것은 옮긴 것이 아니다(커서가 튀었는지로 짐작해 틈을 넘을 때도 읽던 자리를
-  // 잃었다, 리뷰 1라운드)
+  // 채팅 창이 그 시점(맨 아래)을 따라가는 횟수. 사람이 옮긴 것(영상 없이 누른 카드, 녹화의 시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤
+  // 처음부터, 채팅이 따르는 동안의 라이브 시크)과 라이브 채팅이 영상을 따르기 시작하거나 멈춘 것이다(POK-326): 재생으로 흐르거나
+  // 녹화 틈을 넘는 것은 옮긴 것이 아니다(커서가 튀었는지로 짐작해 틈을 넘을 때도 읽던 자리를 잃었다, 리뷰 1라운드)
   const [chatJump, setChatJump] = useState(0);
   const bumpChatJump = useCallback(() => setChatJump((n) => n + 1), []);
   // 녹화를 찾으면 채팅이 그 녹화의 재생 위치로 통째로 바뀐다(방송 끝 줄 → 0초 줄). 위로 올려 읽던 자리가 남으면 엉뚱한 줄이
@@ -405,15 +423,22 @@ function LiveDashboard() {
   // 처음부터 튼다. 그래서 플레이어가 못 옮긴 시점만 남겨 두었다가 녹화의 시작 위치로 넘긴다(QA 2026-10-11 실기동).
   // 녹화가 받으면 비운다: 남겨 두면 시크바로 옮긴 뒤 녹화가 다시 설 때 오래전 카드로 튄다
   const [pendingStart, setPendingStart] = useState<number | null>(null);
-  // 라이브에서 고른 시점은 남기지 않는다. 라이브 영상(HLS)은 시작 위치를 읽지 않고 라이브 채팅은 재생 위치를 따르지 않아,
-  // 남겨 두면 방송이 끝난 뒤 녹화는 처음부터인데 채팅만 그 카드에 묶이거나 오래전 카드로 튄다(리뷰 2·3라운드).
+  // 라이브에서 고른 시점은 남기지 않는다. 라이브 영상(HLS)은 시작 위치를 읽지 않고 라이브 채팅은 고른 시점이 아니라 재생기가
+  // 알린 자리(되감은 영상의 시각, POK-326)를 따라, 남겨 두면 방송이 끝난 뒤 녹화는 처음부터인데 채팅만 그 카드에 묶이거나
+  // 오래전 카드로 튄다(리뷰 2·3라운드).
   // 명부 답 전(상태를 모름)에 고른 시점은 남긴다: 끝난 방송으로 밝혀지면 녹화가 그 시점부터 선다(리뷰 3라운드)
   const live = clock.status === 'live';
   const followsPlayhead = chat.followsPlayhead;
   /** @returns 플레이어가 그 자리로 옮겼나(영상이 없으면 false) */
   const seekTo = useCallback(
     (seconds: number) => {
-      const moved = playerRef.current?.seekToUptime(seconds) ?? false;
+      // 라이브는 카드의 실제 시각(기준점 + 카드 초)으로 옮긴다: 재생기가 조각의 시각 표시로 영상 시각을 센다(POK-326). 방송 경과
+      // 시계로 옮기면 숨은 탭에서 그 시계의 타이머가 늦춰져 카드보다 몇 분 늦은 자리(심하면 실시간 끝)로 갔고, 채팅도 그 자리를
+      // 따랐다(리뷰 1라운드). 시각 표시가 없으면 경과 시계로 옮긴다
+      const player = playerRef.current;
+      const moved =
+        (live && cardBase !== null && (player?.seekToTime?.(cardBase + seconds * 1000) ?? false)) ||
+        (player?.seekToUptime(seconds) ?? false);
       if (live) return moved;
       // 녹화가 옮겼으면 재생기가 옮긴 자리와 옮겼다는 것을 알린다(handlePlaybackPosition·onSeek: 틈 안 카드면 다음 구간 시작이다).
       // 여기서도 카드 시각을 쓰면 재생기가 같은 초에 머물 때 바로잡히지 않아 채팅만 카드 시각에 남았다(리뷰 1라운드). 영상이 없으면
@@ -427,7 +452,7 @@ function LiveDashboard() {
       setPendingStart(moved ? null : seconds);
       return moved;
     },
-    [live, followsPlayhead, bumpChatJump],
+    [live, cardBase, followsPlayhead, bumpChatJump],
   );
   // 녹화가 흐르는 대로 채팅에 알린다: 지난 방송 채팅은 영상 시각까지의 줄만 보이고, 재생하면 그 시각의 줄이 붙는다(POK-324).
   // 녹화는 끝난 방송에만 서므로 라이브 채팅은 영향이 없다
@@ -442,6 +467,34 @@ function LiveDashboard() {
     publishLiveData({ playheadMs: null });
   }, [live]);
   const handleRecordedReady = useCallback(() => setPendingStart(null), []);
+  // 라이브 되감기(POK-326): 재생기가 실시간에서 10초 이상 뒤면 채팅이 그 자리(영상 시각)까지의 줄만 보이고, 재생기의 「실시간」으로
+  // 돌아오면 최신 채팅이다. 그 사이는 앞 상태 그대로다(nextLiveFollow). 따르기 시작하거나 멈추면 채팅 창이 맨 아래를 따라간다:
+  // 채팅이 통째로 바뀌어(최신 ↔ 되감은 자리) 위로 올려 읽던 자리가 남으면 엉뚱한 줄이 보인다
+  // 시작 시각을 모르는 방송은 채팅이 따르지 못한다(읽을 하한이 없다, 채팅 훅과 같은 조건): 판정도 켜지 않는다. 켜면 채팅은 그대로인데
+  // 판정이 바뀔 때마다 위로 올려 읽던 자리를 맨 아래로 끌어 내렸다(리뷰 1라운드)
+  const liveFollowRef = useRef(false);
+  const canFollowRef = useRef(false);
+  canFollowRef.current = clock.startedAt !== null;
+  const handleLivePosition = useCallback(
+    (position: LivePosition | null) => {
+      const follow =
+        position !== null &&
+        canFollowRef.current &&
+        nextLiveFollow(liveFollowRef.current, position.behindSeconds);
+      if (follow !== liveFollowRef.current) {
+        liveFollowRef.current = follow;
+        bumpChatJump();
+      }
+      publishLiveData({ liveRewind: follow ? position : null });
+    },
+    [bumpChatJump],
+  );
+  // 사람이 옮겼다. 녹화는 늘 채팅 창이 그 시점을 따라간다(POK-324). 라이브는 채팅이 영상을 따르는 동안만이다: 따르지
+  // 않으면(실시간 근처, 시작 시각을 모름, 목록에 시각 표시가 없음) 채팅은 그대로라 위로 올려 읽던 자리를 지킨다(리뷰 2라운드).
+  // 따르기가 켜지거나 꺼지는 시크는 handleLivePosition이 끈다
+  const handlePlayerSeek = useCallback(() => {
+    if (!live || liveFollowRef.current) bumpChatJump();
+  }, [live, bumpChatJump]);
 
   // 홈 「최근 하이라이트」가 주소에 실은 카드(?card=). 카드가 오는 대로 한 번 그 시점으로 옮긴다. 사람이 먼저 고르면 그쪽이다.
   // window.location이 아니라 useSearchParams로 읽는다: Next는 다른 화면에서 넘어올 때 새 화면을 먼저 그리고 주소창은 그 뒤에
@@ -464,7 +517,8 @@ function LiveDashboard() {
       if (seconds === null) return;
       linkedDoneRef.current = linkedCardId;
       // 사람이 누른 것만 알린다. 주소의 카드로 옮길 때는 녹화를 찾는 중일 뿐이라 말하지 않는다(리뷰).
-      // 채팅이 그 시점으로 가는 것은 지난 방송뿐이다: 라이브 채팅은 최신 그대로라 옮겼다고 하면 거짓이다(리뷰 2라운드)
+      // 영상 없이 채팅만 그 시점으로 가는 것은 지난 방송뿐이다: 라이브 채팅은 옮긴 영상의 시각을 따르므로(POK-326) 영상이 못 옮기면
+      // 최신 그대로라 옮겼다고 하면 거짓이다(리뷰 2라운드)
       if (!seekTo(seconds))
         toast({
           tone: 'info',
@@ -502,7 +556,8 @@ function LiveDashboard() {
                 onRecordingLookup={setRecordingLookup}
                 onRecordingLookupStart={handleRecordingLookupStart}
                 onPlaybackPosition={handlePlaybackPosition}
-                onSeek={bumpChatJump}
+                onLivePosition={handleLivePosition}
+                onSeek={handlePlayerSeek}
               />
             </Suspense>
           </div>

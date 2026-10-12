@@ -8,6 +8,9 @@ import {
   CHAT_KEEP,
   ChatReplayLoader,
   EMPTY_REPLAY,
+  LIVE_READ_STEP_MS,
+  liveSettledUpTo,
+  liveShownUpTo,
   replayReadStart,
   replayStartIsGuess,
   replayView,
@@ -19,13 +22,15 @@ import {
   subscribeRelay,
   timeBaseOf,
   useLiveData,
+  type LiveChart,
   type RelayEvent,
 } from './liveDataStore';
 import { msToClock } from './useLiveMockState';
 
 // 실시간 채팅 패널(시안 1b). clip 창구에 붙어 있다(POK-251).
 // 라이브: 카드 통로(SSE)의 chat·donation 중계가 주 경로이고 chat-messages 폴링이 메우기·폴백이다.
-// 지난 방송: 영상 시각까지 나온 줄만 보이고 chat-messages에서 그 둘레만 읽는다(chatReplay.ts, POK-324).
+// 지난 방송: 영상 시각까지 나온 줄만 보이고 chat-messages에서 그 둘레만 읽는다(chatReplay.ts, POK-324). 라이브도 재생기를
+// 되감으면 같다(POK-326): 그동안 중계·폴링은 그대로 받아 두어, 실시간으로 돌아오면 최신 줄이 바로 보인다.
 // 방송 번호는 라이브 훅이 정한 것(liveDataStore)을 같이 쓴다 — 방송이 바뀌면 함께 바뀐다.
 
 export const CHAT_PANEL_INTERVAL_MS = 3500;
@@ -54,15 +59,19 @@ export interface ChatPanelMockState {
   surges: ChatSurge[];
   messages: ChatPanelMessage[];
   /**
-   * 하단 상태줄의 「분당 N」: 최근 1분 채팅 수. 끝난 화면은 「분당 평균 N」으로, 차트가 읽은 방송 창의 평균이고(방송 전체, 12시간
-   * 넘으면 끝 12시간) 통계의 「분당 평균 채팅」과 같은 수다. 그 차트가 아직 없으면 모른다(null)
+   * 하단 상태줄의 「분당 N」: 최근 1분 채팅 수(라이브를 되감았으면 영상 시각 앞 1분, POK-326). 끝난 화면은 「분당 평균 N」으로, 차트가
+   * 읽은 방송 창의 평균이고(방송 전체, 12시간 넘으면 끝 12시간) 통계의 「분당 평균 채팅」과 같은 수다. 그 차트가 아직 없으면 모른다(null)
    */
   ratePerMinute: number | null;
-  /** 고른 시점까지의 채팅을 보여 주나(지난 방송). 아니면 시점을 골라도 최신 채팅 그대로다 */
+  /**
+   * 고른 시점(카드·녹화의 재생 위치)까지의 채팅을 보여 주나(지난 방송). 아니면 시점을 골라도 채팅은 고른 시점을 따르지 않는다: 라이브는
+   * 재생기가 알린 자리(되감은 영상의 시각)를 따르고, 되감지 않았으면 최신이다(POK-326)
+   */
   followsPlayhead: boolean;
   /**
-   * 지난 방송 채팅이 보이는 영상 시점(h:mm:ss). 재생 위치가 없으면 null이다: 방송 끝까지 보이거나(replayWaiting 거짓), 아직 어느
-   * 시점을 보일지 모른다(replayWaiting 참)
+   * 채팅이 보이는 영상 시점(h:mm:ss): 지난 방송의 재생 위치, 라이브를 되감은 자리(POK-326, 실시간에 가까우면 위 끝 조금 앞에서
+   * 자른 실제로 보이는 끝). 지난 방송에 재생 위치가 없으면 null이다: 방송 끝까지 보이거나(replayWaiting 거짓), 아직 어느 시점을
+   * 보일지 모른다(replayWaiting 참). 라이브는 실시간에 있으면 null이다(최신 채팅)
    */
   replayClock: string | null;
   /** 끝난 방송인데 채팅을 보일 영상 시점을 아직 모른다(명부 답 전, 녹화가 자리를 알리기 전) */
@@ -151,7 +160,7 @@ async function fetchChatPage(
   return (await r.json()) as WirePage;
 }
 
-/** 로더가 없을 때(라이브·방송 정하기 전·접힘) 다시 보기 저장소의 자리 */
+/** 로더가 없을 때(되감지 않은 라이브·방송 정하기 전·접힘) 다시 보기 저장소의 자리 */
 const noReplaySubscribe = (): (() => void) => () => undefined;
 const emptyReplay = (): ReplaySnapshot => EMPTY_REPLAY;
 
@@ -207,27 +216,50 @@ export function useChatPanelMockState(
   // 지난 방송 채팅은 영상 시각까지의 줄만 보이고 그 둘레만 읽는다(POK-324). 읽을 하한은 녹화와 같은 자리(시작 시각, 모르면 끝
   // 12시간, recordingSearchFrom)에서 보정 여유만큼 앞이다. 그래프의 창(끝 12시간)으로 자르지 않는다: 긴 방송의 앞쪽 카드 시점
   // 채팅도 그 방송의 것이다
-  const replayUpper = live.status === 'ended' ? live.endedAt : null;
-  const searchFrom = replayUpper === null ? null : recordingSearchFrom(live.startedAt, replayUpper);
+  //
+  // 라이브를 되감았으면(POK-326) 위 끝은 표에 다 들어온 자리다: 실시간 끝에서 보정과 적재 여유를 뺀 자리라 시간이 가며 늦은 쪽으로
+  // 움직인다(liveSettledUpTo). 보정은 차트가 받은 값이고, 차트가 오기 전이면 실측 중앙값이다. 하한은 지난 방송과 같은 자리(라이브는
+  // 끝 시각이 없어 시작 시각)다: 시작을 모르면 하한이 없어 따라가지 않는다(화면도 그때는 따르기를 켜지 않는다)
+  const liveReplayable = live.status === 'live';
+  const liveRewind = liveReplayable ? live.liveRewind : null;
+  const liveUpper =
+    liveRewind === null
+      ? null
+      : liveSettledUpTo(liveRewind, live.chart?.appliedOffsetMs ?? CHAT_LEAD_MS);
+  const replayUpper = live.status === 'ended' ? live.endedAt : liveUpper;
+  const searchFrom = recordingSearchFrom(live.startedAt, live.endedAt);
   const replayLower = searchFrom === null ? null : searchFrom - REPLAY_LOWER_SLACK_MS;
   const vodBase = timeBaseOf(live);
   // 채팅이 보이는 마지막 영상 시각. 재생 위치(녹화가 흐르는 자리, 영상 없이 누른 카드)를 알면 그 시각이고, 녹화가 곧 알려 올
   // 것이면 아직 모르고(null), 둘 다 아니면 방송 끝이다. 시점의 0초는 영상과 같은 기준점이다(녹화 첫 조각): 방송 시작 시각에
-  // 더하면 그 차이만큼 영상과 어긋난다(PR #200 codex)
+  // 더하면 그 차이만큼 영상과 어긋난다(PR #200 codex). 라이브를 되감았으면 되감은 자리의 실제 시각이되 위 끝 조금 앞까지다
+  // (liveShownUpTo)
   const replayCursor =
     replayUpper === null || replayLower === null
       ? null
-      : live.playheadMs !== null && vodBase !== null
-        ? Math.min(replayUpper, Math.max(replayLower, vodBase + live.playheadMs))
-        : awaitPlayhead
-          ? null
-          : replayUpper;
+      : liveRewind !== null
+        ? liveShownUpTo(liveRewind.atMs, replayUpper, replayLower)
+        : live.playheadMs !== null && vodBase !== null
+          ? Math.min(replayUpper, Math.max(replayLower, vodBase + live.playheadMs))
+          : awaitPlayhead
+            ? null
+            : replayUpper;
+  // 라이브 차트(지금 기준 최근 10분)는 그 방송의 끝부분이다: 지난 방송의 끝 12시간 차트처럼 센다. 그 안에서 되감은 자리 앞
+  // 300줄이 안 차면 차트 밖(더 이른 쪽)은 모르니 하한까지 앞을 더 읽는다(replayStartIsGuess). 최근 창으로 두면 60초 앞부터만
+  // 읽고 멈춰, 채팅이 뜸한 방송은 되감는 순간 300줄이 몇 줄로 줄었다
+  const replayChart = useMemo<LiveChart | null>(
+    () =>
+      liveReplayable && live.chart?.scope === 'recent'
+        ? { ...live.chart, scope: 'tail' }
+        : live.chart,
+    [live.chart, liveReplayable],
+  );
   const readFrom = useMemo(
     () =>
       replayCursor === null || replayLower === null
         ? null
-        : replayReadStart(live.chart, replayCursor, replayLower),
-    [live.chart, replayCursor, replayLower],
+        : replayReadStart(replayChart, replayCursor, replayLower),
+    [replayChart, replayCursor, replayLower],
   );
   // 모자라도 그보다 이른 쪽은 더 읽지 않는 바닥. 시작점이 짐작이면(끝 12시간 차트가 영상 시각 앞 300건을 못 셈) 하한까지 앞을 더
   // 읽는다: 차트 첫 칸에서 멈추면 그 앞 채팅이 있어도 끝 12시간의 몇 줄만 보였다(PR #230 codex)
@@ -235,35 +267,40 @@ export function useChatPanelMockState(
     () =>
       replayCursor === null || replayLower === null || readFrom === null
         ? null
-        : replayStartIsGuess(live.chart, replayCursor)
+        : replayStartIsGuess(replayChart, replayCursor)
           ? replayLower
           : readFrom,
-    [live.chart, replayCursor, replayLower, readFrom],
+    [replayChart, replayCursor, replayLower, readFrom],
   );
 
   // 한 방송(하한·상한)에 로더 하나다. 열쇠가 바뀌면 새로 세우고, 세우기 전 한 번은 옛 로더가 아니라 빈 것으로 그린다. 치우면
-  // 들고 있지도 않는다: 채팅 창을 접었다 펴면 열쇠가 같은 글자라 치운 로더의 옛 줄을 한 번 그렸다(리뷰 1라운드)
+  // 들고 있지도 않는다: 채팅 창을 접었다 펴면 열쇠가 같은 글자라 치운 로더의 옛 줄을 한 번 그렸다(리뷰 1라운드). 라이브는 상한이
+  // 움직여 열쇠에 넣지 않고 want로 넘긴다(넣으면 로더를 매초 새로 세워 처음부터 다시 읽는다). 라이브는 따르기를 멈추면(실시간으로
+  // 돌아오면) 로더를 치운다: 쥐고 있으면 아무도 보지 않는 읽기가 이어졌다(실패하면 10초마다 다시 묻고, 뜸한 방송은 앞 덧붙이기를
+  // 끝까지 했다, POK-326 리뷰 2라운드). 다시 되감으면 처음부터 읽는다
   const replayKey =
     enabled && streamId && replayLower !== null && replayUpper !== null
-      ? `${streamId}|${replayLower}|${replayUpper}`
+      ? `${streamId}|${replayLower}|${live.status === 'ended' ? replayUpper : 'live'}`
       : null;
+  const fixedUpper = live.status === 'ended' ? replayUpper : null;
   const [replayState, setReplayState] = useState<{
     key: string;
     loader: ChatReplayLoader;
   } | null>(null);
   useEffect(() => {
-    if (replayKey === null || replayLower === null || replayUpper === null) return;
+    if (replayKey === null || replayLower === null) return;
     const next = new ChatReplayLoader(
       (from, to, cursor, signal) => fetchChatPage(streamId, from, to, cursor, signal),
       replayLower,
-      replayUpper,
+      fixedUpper ?? Number.POSITIVE_INFINITY,
+      fixedUpper === null ? LIVE_READ_STEP_MS : 0,
     );
     setReplayState({ key: replayKey, loader: next });
     return () => {
       next.dispose();
       setReplayState((current) => (current?.loader === next ? null : current));
     };
-  }, [replayKey, streamId, replayLower, replayUpper]);
+  }, [replayKey, streamId, replayLower, fixedUpper]);
   const loader = replayState !== null && replayState.key === replayKey ? replayState.loader : null;
   const snapshot = useSyncExternalStore(
     loader?.subscribe ?? noReplaySubscribe,
@@ -271,12 +308,16 @@ export function useChatPanelMockState(
     emptyReplay,
   );
   // 그리기 전에 알린다: 처음부터 다시 읽어야 하면 바로 비워 그려, 옮긴 시점에 옛 구간의 줄을 한 번 칠하지 않는다
-  // 차트도 넘긴다: 사람이 옮겼을 때 다 읽은 구간과 새 자리 사이 줄을 세어, 채팅이 몰린 구간이면 사이를 다 읽지 않고 다시 읽는다
-  const chart = live.chart;
+  // 차트도 넘긴다: 사람이 옮겼을 때 다 읽은 구간과 새 자리 사이 줄을 세어, 채팅이 몰린 구간이면 사이를 다 읽지 않고 다시 읽는다.
+  // 라이브 되감기는 움직이는 상한(표에 다 들어온 자리)도 넘긴다
   useLayoutEffect(() => {
     if (loader === null || replayCursor === null || readFrom === null || readFloor === null) return;
-    loader.want(replayCursor, readFrom, { floorMs: readFloor, chart });
-  }, [loader, replayCursor, readFrom, readFloor, chart]);
+    loader.want(replayCursor, readFrom, {
+      floorMs: readFloor,
+      chart: replayChart,
+      upperMs: liveUpper ?? undefined,
+    });
+  }, [loader, replayCursor, readFrom, readFloor, replayChart, liveUpper]);
 
   // 실시간 중계 수신(카드 통로의 chat·donation). 구멍·세대 변화면 2초 뒤 범위 창구로 메운다
   useEffect(() => {
@@ -414,14 +455,19 @@ export function useChatPanelMockState(
       const { minutes, chats } = chartSpan(chart);
       return chats / minutes;
     }
+    // 라이브를 되감았으면 영상 시각 앞 1분의 줄 수다(급증처럼 영상 시각 기준, POK-326). 영상 시각 쪽을 다 읽기 전에는 모른다
+    if (replay !== null && replayCursor !== null)
+      return replay.status === 'loading' || replay.status === 'failed'
+        ? null
+        : replay.lines.filter((line) => line.at >= replayCursor - 60_000).length;
     const cut = Date.now() - 60_000 + CHAT_LEAD_MS;
     return items.filter((it) => Date.parse(it.time) >= cut).length;
-  }, [items, ended, live.chart]);
+  }, [items, ended, live.chart, replay, replayCursor]);
 
   const surges = useMemo<ChatSurge[]>(() => {
-    // 라이브는 지금 앞 2분, 지난 방송은 영상 시각 앞 2분의 채팅이다(POK-324): 지난 방송을 지금 기준으로 세면 늘 비었다. 끝난
-    // 방송인데 시점을 아직 모르면 비운다: 라이브 채팅으로 세면 라이브가 끝나 녹화를 기다리는 동안 빈 채팅 창 옆에 방송 끝 무렵
-    // 키워드가 섰다(PR #230 codex)
+    // 라이브는 지금 앞 2분, 지난 방송과 되감은 라이브(POK-326)는 영상 시각 앞 2분의 채팅이다(POK-324): 지난 방송을 지금
+    // 기준으로 세면 늘 비었다. 끝난 방송인데 시점을 아직 모르면 비운다: 라이브 채팅으로 세면 라이브가 끝나 녹화를 기다리는 동안 빈
+    // 채팅 창 옆에 방송 끝 무렵 키워드가 섰다(PR #230 codex)
     const recent =
       replay !== null && replayCursor !== null
         ? replay.lines
@@ -446,14 +492,21 @@ export function useChatPanelMockState(
       .map(([keyword, count]) => ({ keyword, count }));
   }, [items, replay, replayCursor, ended]);
 
-  // 채팅이 고른 시점을 따라가려면 그 시점을 절대 시각으로 바꿀 기준점이 있어야 한다(시작 시각을 모르는 방송은 없을 수 있다)
-  const followsPlayhead = replayUpper !== null && vodBase !== null;
+  // 채팅이 고른 시점을 따라가려면 그 시점을 절대 시각으로 바꿀 기준점이 있어야 한다(시작 시각을 모르는 방송은 없을 수 있다).
+  // 지난 방송만이다: 라이브는 고른 시점이 아니라 재생기가 알린 자리(되감은 영상의 시각)를 따른다
+  const followsPlayhead = live.status === 'ended' && replayUpper !== null && vodBase !== null;
   return {
     surges,
     messages,
     ratePerMinute,
     followsPlayhead,
-    replayClock: followsPlayhead && live.playheadMs !== null ? msToClock(live.playheadMs) : null,
+    // 라이브는 실제로 보이는 끝이다(실시간에 가까우면 되감은 자리보다 몇 초 앞): 바닥은 어디까지 보는지만 말한다(ChatPanel)
+    replayClock:
+      liveRewind !== null && replayCursor !== null && vodBase !== null
+        ? msToClock(replayCursor - vodBase)
+        : followsPlayhead && live.playheadMs !== null
+          ? msToClock(live.playheadMs)
+          : null,
     replayWaiting,
     statusNote,
   };

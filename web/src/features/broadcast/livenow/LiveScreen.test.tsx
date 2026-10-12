@@ -11,7 +11,12 @@ import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
 import { ChatReplayLoader } from '@/features/broadcast/livenow/chatReplay';
-import { publishLiveData, resetLiveData } from '@/features/broadcast/livenow/liveDataStore';
+import { CHAT_PAGE_MAX } from '@/features/broadcast/livenow/chatCollector';
+import {
+  publishLiveData,
+  resetLiveData,
+  useLiveData,
+} from '@/features/broadcast/livenow/liveDataStore';
 import { forgetLiveStreamId } from '@/features/broadcast/streamSelection';
 import { useAuthStore } from '@/stores/auth';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
@@ -98,8 +103,81 @@ vi.mock('@/features/player/GlassPlayer', async (importOriginal) => {
   };
 });
 
+// 라이브 재생기(hls.js) 흉내(POK-326): 목록의 조각 하나가 영상 0초(지금 1시간 전, MEDIA_ZERO)부터 지금까지를 덮고, 재생기는 그
+// 조각의 시각 표시(PDT)로 실제 시각을 센다. 영상 주소가 없는 시험(대부분)은 라이브 재생기가 서지 않아 이 흉내를 타지 않는다
+const hlsFake = vi.hoisted(() => ({
+  /** 목록에 시각 표시(PDT)가 있나 */
+  pdt: true,
+  /**
+   * 영상 노드의 readyState. 4(HAVE_ENOUGH_DATA)면 재생 위치에 영상이 있다. 1(HAVE_METADATA)은 첫 조각이 붙기 전처럼 재생 위치에
+   * 영상이 없다
+   */
+  readyState: 4,
+  /**
+   * 목록이 MediaMTX처럼 4초 조각 900개(1시간)이고 조각이 생길 때마다 맨 앞 조각을 버린다. 아니면 조각 하나가 영상 0초부터 지금까지를
+   * 덮는다
+   */
+  sliding: false,
+  /** 재생기가 서는 라이브 끝(영상 초)을 이 값으로 둔다. 없으면 liveSyncSeconds */
+  sync: null as number | null,
+  /** 되감기 창(seekable)의 끝(영상 초)을 이 값으로 둔다. 없으면 지금 */
+  seekableEnd: null as number | null,
+}));
+/** 재생기가 서는 라이브 끝(영상 초): 영상 끝(지금)에서 2초 뒤다 */
+function liveSyncSeconds(): number {
+  return (Date.now() - MEDIA_ZERO) / 1000 - 2;
+}
+vi.mock('hls.js', () => {
+  class FakeHls {
+    static isSupported() {
+      return true;
+    }
+    static Events = { ERROR: 'hlsError', MANIFEST_PARSED: 'hlsManifestParsed' };
+    static ErrorTypes = { NETWORK_ERROR: 'networkError', MEDIA_ERROR: 'mediaError' };
+    private readonly handlers = new Map<string, () => void>();
+    on(event: string, handler: () => void) {
+      this.handlers.set(event, handler);
+    }
+    attachMedia() {}
+    loadSource() {
+      this.handlers.get('hlsManifestParsed')?.();
+    }
+    startLoad() {}
+    recoverMediaError() {}
+    destroy() {}
+    get liveSyncPosition() {
+      return hlsFake.sync ?? liveSyncSeconds();
+    }
+    get latestLevelDetails() {
+      if (hlsFake.sliding) {
+        const last = Math.floor((Date.now() - MEDIA_ZERO) / 4_000) * 4;
+        const fragments = [];
+        for (let start = Math.max(0, last - 3_600); start < last; start += 4)
+          fragments.push({
+            start,
+            duration: 4,
+            programDateTime: hlsFake.pdt ? MEDIA_ZERO + start * 1000 : null,
+          });
+        return { fragments };
+      }
+      return {
+        fragments: [
+          {
+            start: 0,
+            duration: (Date.now() - MEDIA_ZERO) / 1000,
+            programDateTime: hlsFake.pdt ? MEDIA_ZERO : null,
+          },
+        ],
+      };
+    }
+  }
+  return { default: FakeHls };
+});
+
 const STREAM_ID = 'live-1';
 const NOW = Date.parse('2026-09-26T12:00:00Z');
+/** 라이브 영상 0초의 실제 시각(POK-326): 되감기 창 1시간의 처음이다 */
+const MEDIA_ZERO = NOW - 3_600_000;
 /** 방송 경과 1:24:03 */
 const STARTED_AT = NOW - 5043_000;
 const ME = '9';
@@ -306,6 +384,20 @@ const server = vi.hoisted(() => ({
   vodChartBusy: false,
   /** 지난 방송의 끝 시각을 이만큼 늦춘다(침묵으로 닫힌 방송에 진짜 종료가 뒤늦게 온 경우) */
   vodEndShiftMs: 0,
+  /** 라이브 채팅을 liveTimelineResponse로 준다(묻는 창 안의 줄만, 지금보다 앞만, 쪽·커서까지) */
+  liveChatTimeline: false,
+  /** liveTimelineResponse가 받은 물음: 창 끝·쪽 크기·물은 시각 */
+  liveAsks: [] as { to: number; limit: number; at: number }[],
+  /** 라이브 채팅·차트의 시차 보정(표 축 = 영상 축 + 이것). 0이 아니면 보정 배선을 잰다 */
+  liveOffsetMs: 0,
+  /** 라이브 줄에 시작 시각이 없고 시각 기준점만 있다(명부가 시작을 모르는 라이브) */
+  liveStartUnknown: false,
+  /** 라이브 줄의 시각 기준점(카드 0초). 서버 기준점은 첫 조각의 PDT − pts라 ms 자리가 있다. 없으면 싣지 않는다 */
+  liveOriginMs: null as number | null,
+  /** 라이브 다시 보기 물음(한 쪽 CHAT_PAGE_MAX줄)에 503을 준다. 폴링(200줄)은 그대로다 */
+  liveReplayFail: false,
+  /** 라이브 차트(최근 10분)가 칸마다 1건이다: 실제 채팅(10초마다 한 줄)보다 훨씬 적게 세어 300줄이 차는 칸을 못 찾는다 */
+  liveChartSparse: false,
 }));
 
 /** 지난 방송(2시간 반) — 수집기 1시간 창을 넘는다 */
@@ -345,14 +437,52 @@ const VOD_CHAT = [
 ];
 
 /**
+ * 라이브 채팅(POK-326): 방송 시작 5초부터 10초마다 한 줄(「라이브 N초」, N = 방송 시작부터 초). 표에 이미 들어온 줄(지금보다
+ * 앞)만 준다. 보정은 0이다(라이브 차트 CHART와 같다). 수집기처럼 [from, to)를 물으면 시각 오름차순으로 limit건씩, 커서를 달아 준다
+ */
+function liveTimelineResponse(u: URL): Response {
+  const from = Date.parse(u.searchParams.get('from') ?? '');
+  const to = Date.parse(u.searchParams.get('to') ?? '');
+  server.liveAsks.push({ to, limit: Number(u.searchParams.get('limit')), at: Date.now() });
+  if (server.liveReplayFail && Number(u.searchParams.get('limit')) === CHAT_PAGE_MAX)
+    return jsonResponse(503, { error: 'unavailable' });
+  const offset = server.liveOffsetMs;
+  const items = [];
+  // 표 축 시각(영상 축 + 보정)이 지금보다 앞인 줄만 표에 있다
+  for (let n = 5; STARTED_AT + n * 1000 + offset <= Date.now(); n += 10) {
+    const at = STARTED_AT + n * 1000;
+    if (at < from || at >= to) continue;
+    items.push({
+      kind: 'chat',
+      id: 50_000 + n,
+      time: new Date(at + offset).toISOString(),
+      nickname: '라이브',
+      senderChannelId: `l${n % 7}`,
+      text: `라이브 ${n}초`,
+      amount: null,
+    });
+  }
+  return pagedResponse(u, items, offset);
+}
+
+/** 수집기처럼 묻는 창의 줄을 limit건씩 나눠 다음 커서를 달아 준다(커서는 다음 쪽의 시작 번호) */
+function pagedResponse(u: URL, inWindow: unknown[], appliedOffsetMs: number): Response {
+  const limit = Number(u.searchParams.get('limit') ?? '200');
+  const start = Number(u.searchParams.get('cursor') ?? '0');
+  return jsonResponse(200, {
+    items: inWindow.slice(start, start + limit),
+    nextCursor: start + limit < inWindow.length ? String(start + limit) : null,
+    appliedOffsetMs,
+  });
+}
+
+/**
  * 수집기처럼 영상 축 [from, to)를 물으면 표 축 시각 오름차순으로 limit건씩, 커서를 달아 준다. 붙든 답은 끊으면 브라우저 fetch처럼
  * 바로 실패한다: 끊기가 요청까지 닿는지 잰다
  */
 function vodChatResponse(u: URL, signal?: AbortSignal | null): Response | Promise<Response> {
   const from = Date.parse(u.searchParams.get('from') ?? '');
   const to = Date.parse(u.searchParams.get('to') ?? '');
-  const limit = Number(u.searchParams.get('limit') ?? '200');
-  const start = Number(u.searchParams.get('cursor') ?? '0');
   const inWindow = VOD_CHAT.filter((it) => {
     const at = Date.parse(it.time) - VOD_OFFSET;
     return at >= from && at < to;
@@ -360,11 +490,7 @@ function vodChatResponse(u: URL, signal?: AbortSignal | null): Response | Promis
   const answer = () =>
     server.vodChatFail
       ? jsonResponse(503, { error: 'unavailable' })
-      : jsonResponse(200, {
-          items: inWindow.slice(start, start + limit),
-          nextCursor: start + limit < inWindow.length ? String(start + limit) : null,
-          appliedOffsetMs: VOD_OFFSET,
-        });
+      : pagedResponse(u, inWindow, VOD_OFFSET);
   const holdBefore = server.vodChatHoldBefore;
   if (holdBefore !== null && from < holdBefore)
     return new Promise<Response>((resolve, reject) => {
@@ -387,8 +513,11 @@ function listResponse(u: URL): Response {
     streamId: server.liveStream2 ? 'live-2' : STREAM_ID,
     status: 'live',
     relation: server.liveStream2 ? 'EDITOR' : server.relation,
-    startedAt: new Date(STARTED_AT).toISOString(),
+    startedAt: server.liveStartUnknown ? null : new Date(STARTED_AT).toISOString(),
     endedAt: null,
+    ...(server.liveStartUnknown || server.liveOriginMs !== null
+      ? { timelineOriginAt: new Date(server.liveOriginMs ?? STARTED_AT).toISOString() }
+      : {}),
     vodExpiresAt: null,
     ingestStreamId: server.ingest,
     title: server.listTitle,
@@ -484,7 +613,14 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
     }
     if (server.vodChartFail && Date.parse(u.searchParams.get('from')!) < NOW - 3_600_000)
       return jsonResponse(503, { error: 'unavailable' });
-    return jsonResponse(200, CHART);
+    // 라이브 되감기 보정 시험(POK-326)은 라이브 채팅과 같은 보정을 차트에도 싣는다
+    if (server.liveChartSparse)
+      return jsonResponse(200, {
+        ...CHART,
+        appliedOffsetMs: server.liveOffsetMs,
+        buckets: CHART.buckets.map((b) => ({ ...b, chats: 1, donations: 0 })),
+      });
+    return jsonResponse(200, { ...CHART, appliedOffsetMs: server.liveOffsetMs });
   }
   if (path.endsWith('/broadcast-info')) {
     if (server.infoFail) return jsonResponse(503, { error: 'unavailable' });
@@ -495,6 +631,7 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   }
   if (path.endsWith('/chat-messages')) {
     if (server.vodChat && path.includes(`/${VOD_ID}/`)) return vodChatResponse(u, init?.signal);
+    if (server.liveChatTimeline && path.includes(`/${STREAM_ID}/`)) return liveTimelineResponse(u);
     // 200건이 넘으면 서버는 오래된 쪽부터 주고 커서를 단다 — chatPaged면 두 쪽으로 나눠 준다
     if (server.chatPaged && u.searchParams.get('cursor') === null)
       return jsonResponse(200, { items: CHAT.slice(0, 3), nextCursor: 'p2', appliedOffsetMs: 0 });
@@ -568,6 +705,18 @@ beforeEach(() => {
   server.vodChartSparse = false;
   server.vodChartBusy = false;
   server.vodEndShiftMs = 0;
+  server.liveChatTimeline = false;
+  server.liveAsks = [];
+  server.liveStartUnknown = false;
+  server.liveOffsetMs = 0;
+  server.liveOriginMs = null;
+  server.liveReplayFail = false;
+  server.liveChartSparse = false;
+  hlsFake.pdt = true;
+  hlsFake.readyState = 4;
+  hlsFake.sliding = false;
+  hlsFake.sync = null;
+  hlsFake.seekableEnd = null;
   chatModes.length = 0;
   chatTexts.length = 0;
   playerStatuses.length = 0;
@@ -615,6 +764,19 @@ async function renderLive() {
   const result = renderWithProviders(<LiveScreen />);
   await settle();
   return result;
+}
+
+/**
+ * 영상 노드가 그 자리(영상 초)를 튼다: 자리를 옮기고 timeupdate를 보낸다. 녹화는 지금 줄기 안의 초(첫 구간이면 곧 방송 기준 초),
+ * 라이브는 되감기 창의 초다
+ */
+async function playTo(container: HTMLElement, seconds: number) {
+  const video = container.querySelector('video')!;
+  await act(async () => {
+    video.currentTime = seconds;
+    video.dispatchEvent(new Event('timeupdate'));
+  });
+  await settle();
 }
 
 function stubMediaElement() {
@@ -902,7 +1064,8 @@ describe('LiveScreen — 하이라이트 카드', () => {
     await renderLive();
 
     fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
-    // 라이브 채팅은 재생 위치를 따르지 않는다: 「채팅을 그 시점으로 옮겼어요」는 거짓이다(리뷰 2라운드)
+    // 라이브 채팅은 영상 없이 누른 카드 시점을 따르지 않는다(되감은 영상의 시각만 따른다, POK-326): 「채팅을 그 시점으로
+    // 옮겼어요」는 거짓이다(리뷰 2라운드)
     expect(screen.getByText('영상은 아직 없어요')).toBeInTheDocument();
     expect(screen.queryByText(/채팅을 그 시점으로 옮겼어요/)).not.toBeInTheDocument();
   });
@@ -1379,8 +1542,9 @@ describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
   });
 
   it('라이브에서 영상 없이 누른 카드는 남지 않는다: 방송이 끝나 녹화가 서도 녹화도 채팅도 그 카드로 가지 않는다', async () => {
-    // 라이브 영상(HLS)은 시작 위치를 읽지 않고 라이브 채팅은 재생 위치를 따르지 않는다. 남겨 두면 방송이 끝나 녹화로
-    // 바뀔 때 오래전 카드로 튀거나(리뷰 2라운드), 녹화는 처음부터인데 채팅만 그 카드에 묶인다(리뷰 3라운드)
+    // 라이브 영상(HLS)은 시작 위치를 읽지 않고 라이브 채팅은 누른 카드가 아니라 되감은 영상의 시각만 따른다(POK-326).
+    // 남겨 두면 방송이 끝나 녹화로 바뀔 때 오래전 카드로 튀거나(리뷰 2라운드), 녹화는 처음부터인데 채팅만 그 카드에
+    // 묶인다(리뷰 3라운드)
     stubMediaElement();
     nav.search = `?stream=${STREAM_ID}`;
     window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
@@ -1525,16 +1689,6 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     });
     await settle();
     return result;
-  }
-
-  /** 영상 노드가 지금 줄기 안에서 그 자리(초)까지 흘렀다. 줄기의 0초는 그 구간의 시작이다(첫 구간이면 곧 방송 기준 초) */
-  async function playTo(container: HTMLElement, seconds: number) {
-    const video = container.querySelector('video')!;
-    await act(async () => {
-      video.currentTime = seconds;
-      video.dispatchEvent(new Event('timeupdate'));
-    });
-    await settle();
   }
 
   it('녹화를 틀면 채팅은 영상 시각까지의 줄만 보이고, 재생하면 그 시각의 줄이 붙는다', async () => {
@@ -2790,5 +2944,424 @@ describe('LiveScreen: 값이 없을 때의 말(리뷰 5라운드)', () => {
     await settle();
 
     expect(firstCommit[0]).toBeGreaterThan(0);
+  });
+});
+
+describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
+  // 라이브 중 영상을 되감으면 채팅이 그 시각까지의 줄로 바뀌고, 재생하면 그 시각의 줄이 붙는다. 재생기의 「실시간」으로 돌아오면
+  // 최신 채팅이다. 전에는 라이브 채팅이 재생 위치를 따르지 않아 영상은 과거인데 채팅은 「지금」이었다
+
+  /** 라이브 영상 주소와 되감기 창(영상 0초부터 지금까지)을 세운다. 라이브 채팅은 방송 시작부터 10초마다 한 줄이다 */
+  function stubLiveVideo() {
+    stubMediaElement();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_LIVE_BASE_URL', 'http://media.test');
+    vi.spyOn(HTMLMediaElement.prototype, 'seekable', 'get').mockImplementation(
+      () =>
+        ({
+          length: 1,
+          start: () => 0,
+          end: () => hlsFake.seekableEnd ?? (Date.now() - MEDIA_ZERO) / 1000,
+        }) as TimeRanges,
+    );
+    vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockImplementation(
+      () => hlsFake.readyState,
+    );
+    server.liveChatTimeline = true;
+  }
+
+  /** 라이브 영상이 선 방송을 열고 재생기가 라이브 끝(지금 2초 전)에서 튼다. pdt가 거짓이면 목록에 시각 표시가 없다 */
+  async function openLive(pdt = true) {
+    hlsFake.pdt = pdt;
+    stubLiveVideo();
+    const result = await renderLive();
+    await playTo(result.container, liveSyncSeconds());
+    return result;
+  }
+
+  /** 재생기가 옮긴 뒤 영상이 그 자리에서 흐른다(시크 뒤 timeupdate) */
+  async function tick(container: HTMLElement) {
+    const video = container.querySelector('video')!;
+    await act(async () => {
+      video.dispatchEvent(new Event('timeupdate'));
+    });
+    await settle();
+  }
+
+  /** 그만큼(초) 재생한다: 시계와 영상이 같이 흐른다 */
+  async function playFor(container: HTMLElement, seconds: number) {
+    const video = container.querySelector('video')!;
+    for (let i = 0; i < seconds; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+        video.currentTime += 1;
+        video.dispatchEvent(new Event('timeupdate'));
+      });
+    }
+    await settle();
+  }
+
+  const seekBar = () => screen.getByRole('slider', { name: '라이브 탐색' });
+  const chatPanel = () => screen.getByRole('complementary', { name: '실시간 채팅' });
+  /** 다시 보기 읽기의 물음(한 쪽 CHAT_PAGE_MAX줄). 라이브 폴링은 200줄씩이라 가른다 */
+  const replayAsks = () => server.liveAsks.filter((ask) => ask.limit === CHAT_PAGE_MAX);
+
+  /** 채팅 목록을 위로 올려 읽는 중으로 둔다. 맨 아래로 내린 기록(scrollTop)을 돌려준다 */
+  function scrollChatUp() {
+    const list = within(chatPanel()).getByRole('list', { name: '채팅 메시지' });
+    const setScrollTop = fakeScrollMetrics(list, {
+      scrollHeight: 1000,
+      clientHeight: 300,
+      scrollTop: 200,
+    });
+    fireEvent.scroll(list);
+    expect(within(chatPanel()).getByText(/^지난 메시지 보는 중/)).toBeInTheDocument();
+    setScrollTop.mockClear();
+    return setScrollTop;
+  }
+
+  it('← 한 번(10초) 되감으면 채팅이 그 시각까지의 줄로 바뀌고, 실시간으로 돌아오면 최신 채팅이다', async () => {
+    const { container } = await openLive();
+    expect(within(chatPanel()).getByText('라이브 5035초')).toBeInTheDocument();
+    expect(within(chatPanel()).getByText(/^최신 메시지 따라가는 중/)).toBeInTheDocument();
+
+    fireEvent.keyDown(seekBar(), { key: 'ArrowLeft' });
+    await tick(container);
+    // 영상은 지금 12초 전(방송 1:23:51)이다: 그 뒤 줄은 사라지고 그 앞 줄은 보인다
+    expect(within(chatPanel()).queryByText('라이브 5035초')).toBeNull();
+    expect(within(chatPanel()).getByText('라이브 5025초')).toBeInTheDocument();
+    // 분당 수도 영상 시각 앞 1분이다(실시간 끝에서는 지금 앞 1분이라 5줄)
+    expect(within(chatPanel()).getByText('1:23:51 시점까지 보는 중 · 분당 6')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '실시간으로 이동' }));
+    await tick(container);
+    expect(within(chatPanel()).getByText('라이브 5035초')).toBeInTheDocument();
+    expect(within(chatPanel()).getByText(/^최신 메시지 따라가는 중/)).toBeInTheDocument();
+  });
+
+  it('되감은 채 재생하면 그 시각에 나온 줄이 붙고, 표에 다 들어오지 않은 자리(실시간 끝 − 보정 − 3초)는 묻지 않는다', async () => {
+    const { container } = await openLive();
+    fireEvent.keyDown(seekBar(), { key: 'PageDown' });
+    await tick(container);
+    // 지금 62초 전(방송 4981초)
+    expect(within(chatPanel()).getByText('라이브 4975초')).toBeInTheDocument();
+    expect(within(chatPanel()).queryByText('라이브 4985초')).toBeNull();
+    // 앞 줄은 라이브 차트(최근 10분)로 그 앞 300줄이 차는 칸(지금 480초 전, 방송 4563초)부터 읽는다: 60초 앞부터만 읽으면
+    // 채팅이 뜸한 방송은 되감는 순간 300줄이 몇 줄로 줄었다
+    expect(within(chatPanel()).getByText('라이브 4565초')).toBeInTheDocument();
+    expect(within(chatPanel()).queryByText('라이브 4555초')).toBeNull();
+
+    await playFor(container, 20);
+    expect(within(chatPanel()).getByText('라이브 4995초')).toBeInTheDocument();
+    expect(within(chatPanel()).queryByText('라이브 5005초')).toBeNull();
+
+    // 묻는 순간 실시간 끝(지금 2초 전)에서 3초 앞까지만 묻는다(보정 0)
+    expect(replayAsks().length).toBeGreaterThan(0);
+    for (const ask of replayAsks()) expect(ask.to).toBeLessThanOrEqual(ask.at - 5_000);
+    // 재생하는 20초 동안 처음부터 다시 읽지 않고 늘어난 만큼만 3초마다 묻는다(처음 읽기 하나 + 일곱)
+    expect(replayAsks().length).toBeLessThanOrEqual(8);
+  });
+
+  it('시차 보정이 있으면 그만큼 더 이른 자리까지만 묻는다: 보정은 차트가 받은 값이다', async () => {
+    // 표 축 = 영상 축 + 6초. 위 끝은 실시간 끝(지금 2초 전) − 6초 − 3초다. 고정값(3.9초)을 빼면 아직 표에 없을 줄까지 다 읽음으로 뒀다
+    server.liveOffsetMs = 6_000;
+    const { container } = await openLive();
+    fireEvent.keyDown(seekBar(), { key: 'PageDown' });
+    await tick(container);
+
+    expect(within(chatPanel()).getByText('라이브 4975초')).toBeInTheDocument();
+    expect(within(chatPanel()).queryByText('라이브 4985초')).toBeNull();
+    expect(replayAsks().length).toBeGreaterThan(0);
+    for (const ask of replayAsks()) expect(ask.to).toBeLessThanOrEqual(ask.at - 11_000);
+  });
+
+  it('라이브 중 카드를 누르면 영상과 채팅이 같이 그 시점으로 간다: 카드의 실제 시각으로 옮긴다', async () => {
+    // 재생기 경과 시계(방송 시작 기준, 숨은 탭에서 밀린다)가 아니라 카드의 실제 시각에 조각의 시각 표시로 선다
+    const { container } = await openLive();
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await tick(container);
+
+    expect(within(chatPanel()).getByText('라이브 2835초')).toBeInTheDocument();
+    expect(within(chatPanel()).queryByText('라이브 2845초')).toBeNull();
+    expect(within(chatPanel()).queryByText('라이브 5035초')).toBeNull();
+    expect(within(chatPanel()).getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
+    // 영상이 그 시점으로 옮겼다: 영상이 없다고 하지 않는다
+    expect(screen.queryByText(/영상은 아직 없어요/)).toBeNull();
+  });
+
+  it('카드 0초(서버 기준점)에 ms 자리가 있어도 카드를 누르면 바닥이 그 카드 시점이다: 영상의 실제 시각을 정각 초로 내리지 않는다', async () => {
+    // 서버 기준점은 첫 조각의 PDT − pts라 ms 자리가 있다. 영상의 실제 시각을 정각 초로 내리면 카드로 정확히 옮겨도 그만큼 앞에서
+    // 잘려 바닥이 「0:47:21」이었다(리뷰 2라운드)
+    server.liveOriginMs = STARTED_AT + 567;
+    const { container } = await openLive();
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await tick(container);
+
+    expect(within(chatPanel()).getByText(/^0:47:22 시점까지 보는 중/)).toBeInTheDocument();
+    expect(within(chatPanel()).getByText('라이브 2835초')).toBeInTheDocument();
+    expect(within(chatPanel()).queryByText('라이브 2845초')).toBeNull();
+  });
+
+  it('영상 목록에 시각 표시가 없으면 라이브 카드는 재생기의 방송 경과로 옮긴다: 옮기지 못했다고 하지 않는다', async () => {
+    const { container } = await openLive(false);
+    const video = container.querySelector('video')!;
+    const before = video.currentTime;
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await tick(container);
+
+    expect(video.currentTime).toBeLessThan(before - 60);
+    expect(screen.queryByText(/영상은 아직 없어요/)).toBeNull();
+  });
+
+  it('되감을 구간이 없으면(목록이 막 새로 섰다) 카드를 눌러도 옮겼다고 하지 않는다: 「영상은 아직 없어요」', async () => {
+    // 목록이 재생기의 목표 지연보다 짧으면 재생기의 라이브 끝이 창 처음에 붙어 되감을 구간이 0초다(영상 서버가 다시 붙은 직후).
+    // 시각 표시로 카드의 영상 시각은 셀 수 있지만 옮길 곳이 없다: 방송 경과로 옮길 때와 같이 옮기지 못했다고 알린다(리뷰 2라운드)
+    hlsFake.sync = 0;
+    hlsFake.seekableEnd = 2;
+    stubLiveVideo();
+    const { container } = await renderLive();
+    await playTo(container, 0);
+    fireEvent.click(screen.getByRole('button', { name: '0:47:22 시점으로 이동' }));
+    await tick(container);
+
+    expect(screen.getByText(/영상은 아직 없어요/)).toBeInTheDocument();
+  });
+
+  it('맨 앞(Home)으로 옮기면 채팅도 되감기 창 처음까지의 줄이고, 표에 다 들어온 자리보다 늦게 묻지 않는다', async () => {
+    const { container } = await openLive();
+    fireEvent.keyDown(seekBar(), { key: 'Home' });
+    await tick(container);
+
+    // 영상 0초 = 지금 1시간 전(방송 1443초)
+    expect(within(chatPanel()).getByText('라이브 1435초')).toBeInTheDocument();
+    expect(within(chatPanel()).queryByText('라이브 1445초')).toBeNull();
+    for (const ask of replayAsks()) expect(ask.to).toBeLessThanOrEqual(ask.at - 5_000);
+  });
+
+  it('1시간 창이 밀려 맨 앞 조각이 목록에서 빠져도 Home으로 되감은 채팅은 영상 시각을 따른다: 멈춰 있어도 최신으로 튀지 않는다', async () => {
+    // 1시간 창은 4초 조각이 생길 때마다 맨 앞 조각을 버린다. 맨 앞을 보던 재생 위치는 목록 밖으로 밀려도 버퍼에 남아 그 자리를
+    // 튼다: 목록의 첫 조각에서 거꾸로 센다. 모른다고 하면 영상은 1시간 전인데 채팅이 최신으로 튀었다(리뷰 2라운드)
+    hlsFake.sliding = true;
+    const { container } = await openLive();
+    fireEvent.keyDown(seekBar(), { key: 'Home' });
+    await tick(container);
+    expect(within(chatPanel()).getByText('라이브 1435초')).toBeInTheDocument();
+
+    // 멈춘 채 6초: 재생 위치는 그대로이고 맨 앞 조각이 빠진다(재생기가 1초마다 다시 잰다)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    await settle();
+    expect(within(chatPanel()).getByText('라이브 1435초')).toBeInTheDocument();
+    expect(within(chatPanel()).queryByText('라이브 5035초')).toBeNull();
+    expect(within(chatPanel()).getByText(/^0:24:03 시점까지 보는 중/)).toBeInTheDocument();
+  });
+
+  it('라이브 차트(최근 10분)가 되감은 자리 앞 300줄을 못 세면 300줄이 찰 때까지 앞을 더 읽는다(하한은 방송 시작 − 60초): 뜸하게 세인 방송도 300줄이다', async () => {
+    // 차트가 칸마다 1건이라 300줄이 차는 칸이 차트 밖이다. 최근 창으로 세면 영상 시각 60초 앞부터만 읽고 멈춰 몇 줄만 보였다.
+    // 실제 채팅은 10초마다 한 줄이라 앞을 더 읽으면 300줄이 찬다
+    server.liveChartSparse = true;
+    const { container } = await openLive();
+    fireEvent.keyDown(seekBar(), { key: 'PageDown' });
+    await tick(container);
+
+    // 지금 62초 전(방송 4981초)까지 300줄: 1985초부터 4975초까지
+    expect(within(chatPanel()).getByText('라이브 4975초')).toBeInTheDocument();
+    expect(within(chatPanel()).getByText('라이브 1985초')).toBeInTheDocument();
+    expect(within(chatPanel()).queryByText('라이브 1975초')).toBeNull();
+  });
+
+  it('라이브를 열 때 첫 조각이 붙기 전(재생 위치 0초)에는 채팅이 따라가지 않는다: 1시간 되감은 것처럼 읽지 않는다', async () => {
+    // 첫 조각 전에도 되감기 창은 1시간이고 재생 위치는 0초다. 그때 시차를 재면 1시간 되감은 것으로 보였다
+    hlsFake.readyState = 1;
+    stubLiveVideo();
+    const { container } = await renderLive();
+    await tick(container);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await settle();
+    expect(within(chatPanel()).getByText(/^최신 메시지 따라가는 중/)).toBeInTheDocument();
+    expect(replayAsks()).toEqual([]);
+
+    // 첫 조각이 붙어 실시간 끝에서 튼다
+    hlsFake.readyState = 4;
+    await playTo(container, liveSyncSeconds());
+    expect(within(chatPanel()).getByText('라이브 5035초')).toBeInTheDocument();
+    expect(within(chatPanel()).getByText(/^최신 메시지 따라가는 중/)).toBeInTheDocument();
+    expect(replayAsks()).toEqual([]);
+  });
+
+  it('분당 수는 영상 시각 앞 1분(그 경계 줄 포함)의 줄 수다: 급증 키워드와 같은 경계다', async () => {
+    // 영상이 실시간에서 56초 처져 지금 58초 전(방송 4985초)을 튼다. 그 앞 1분은 4925초부터라 4925~4985초의 일곱 줄이다
+    const { container } = await openLive();
+    await playTo(container, liveSyncSeconds() - 56);
+    expect(within(chatPanel()).getByText('1:23:05 시점까지 보는 중 · 분당 7')).toBeInTheDocument();
+  });
+
+  it('실시간에서 10초 안쪽으로 밀리면 채팅은 최신 그대로다: 따라가기는 ← 한 번(10초)부터다', async () => {
+    const { container } = await openLive();
+    await playTo(container, liveSyncSeconds() - 5);
+
+    expect(within(chatPanel()).getByText('라이브 5035초')).toBeInTheDocument();
+    expect(within(chatPanel()).getByText(/^최신 메시지 따라가는 중/)).toBeInTheDocument();
+  });
+
+  it('따르던 채팅은 재생기가 「실시간」(3초 안)으로 돌아와야 최신이다: 그 사이(5초 뒤)에서는 계속 영상 시각이고 바닥은 실제로 보이는 끝이다', async () => {
+    const { container } = await openLive();
+    fireEvent.keyDown(seekBar(), { key: 'ArrowLeft' });
+    await tick(container);
+    await playTo(container, liveSyncSeconds() - 5);
+    // 영상은 지금 7초 전이지만 위 끝(지금 5초 전) 5초 앞까지만 보인다: 바닥은 보이는 끝(지금 10초 전, 1:23:53)을 말한다
+    expect(within(chatPanel()).queryByText('라이브 5035초')).toBeNull();
+    expect(within(chatPanel()).getByText(/^1:23:53 시점까지 보는 중/)).toBeInTheDocument();
+
+    await playTo(container, liveSyncSeconds());
+    expect(within(chatPanel()).getByText('라이브 5035초')).toBeInTheDocument();
+  });
+
+  it('영상 목록에 시각 표시(PDT)가 없으면 되감아도 채팅은 최신 그대로다: 영상 시각을 모르면 따라가지 않는다', async () => {
+    const { container } = await openLive(false);
+    fireEvent.keyDown(seekBar(), { key: 'PageDown' });
+    await tick(container);
+
+    expect(within(chatPanel()).getByText('라이브 5035초')).toBeInTheDocument();
+    expect(within(chatPanel()).getByText(/^최신 메시지 따라가는 중/)).toBeInTheDocument();
+  });
+
+  it('되감아 채팅이 영상을 따르기 시작하면 채팅 창이 그 시점(맨 아래)을 따라간다: 위로 올려 읽던 자리에 남지 않는다', async () => {
+    const { container } = await openLive();
+    const setScrollTop = scrollChatUp();
+
+    fireEvent.keyDown(seekBar(), { key: 'PageDown' });
+    await tick(container);
+    expect(within(chatPanel()).getByText(/^1:23:01 시점까지 보는 중/)).toBeInTheDocument();
+    expect(setScrollTop).toHaveBeenCalledWith(1000);
+  });
+
+  it('따르는 동안 다시 옮기면(← 한 번 더) 채팅 창이 그 시점(맨 아래)으로 간다: 위로 올려 읽던 자리에 남지 않는다', async () => {
+    const { container } = await openLive();
+    fireEvent.keyDown(seekBar(), { key: 'PageDown' });
+    await tick(container);
+    const setScrollTop = scrollChatUp();
+
+    fireEvent.keyDown(seekBar(), { key: 'ArrowLeft' });
+    await tick(container);
+    expect(within(chatPanel()).getByText(/^1:22:51 시점까지 보는 중/)).toBeInTheDocument();
+    expect(setScrollTop).toHaveBeenCalledWith(1000);
+  });
+
+  it('옮기지 않아도 영상이 실시간에서 10초 이상 처지면 채팅이 그 시각을 따르고 그 시점(맨 아래)으로 간다', async () => {
+    // 네트워크가 느려 재생이 멈칫하면 영상은 실시간에서 밀린다. 사람이 옮긴 것이 아니어도 채팅이 통째로 바뀌므로 맨 아래로 간다
+    const { container } = await openLive();
+    const setScrollTop = scrollChatUp();
+
+    await playTo(container, liveSyncSeconds() - 12);
+    expect(within(chatPanel()).queryByText('라이브 5035초')).toBeNull();
+    expect(within(chatPanel()).getByText(/^1:23:49 시점까지 보는 중/)).toBeInTheDocument();
+    expect(setScrollTop).toHaveBeenCalledWith(1000);
+  });
+
+  it('실시간으로 돌아오면 되감은 자리 읽기를 멈춘다: 읽지 못하던 채팅을 아무도 안 보는데 다시 묻지 않는다', async () => {
+    // 되감은 채 읽기가 실패하면 10초 뒤 다시 묻는다. 실시간으로 돌아와도 그 읽기를 쥐고 있으면 채팅은 최신을 보이는데 실패가
+    // 이어지는 한 10초마다 끝없이 물었다(리뷰 2라운드)
+    server.liveReplayFail = true;
+    const { container } = await openLive();
+    fireEvent.keyDown(seekBar(), { key: 'PageDown' });
+    await tick(container);
+    expect(within(chatPanel()).getAllByText(/채팅을 불러오지 못했어요/).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: '실시간으로 이동' }));
+    await tick(container);
+    expect(within(chatPanel()).getByText('라이브 5035초')).toBeInTheDocument();
+    const asked = replayAsks().length;
+    // 실시간에서 30초 본다(영상이 멈추면 실시간에서 처져 10초 뒤 다시 따르기 시작한다)
+    await playFor(container, 30);
+    expect(within(chatPanel()).getByText(/^최신 메시지 따라가는 중/)).toBeInTheDocument();
+    expect(replayAsks()).toHaveLength(asked);
+  });
+
+  it('재생기는 같은 실제 초 안에서 시차도 같으면 자리를 다시 알리지 않는다: 되감은 채 영상이 흐를 때마다 화면을 다시 그리지 않는다', async () => {
+    // timeupdate는 1초에 네 번쯤 온다. 그때마다 새 자리를 알리면 저장소를 구독하는 화면(카드마다·통계)이 따라 다시 그려진다
+    const rewinds: unknown[] = [];
+    function RewindProbe() {
+      rewinds.push(useLiveData().liveRewind);
+      return null;
+    }
+    stubLiveVideo();
+    const { container } = renderWithProviders(
+      <>
+        <LiveScreen />
+        <RewindProbe />
+      </>,
+    );
+    await settle();
+    await playTo(container, liveSyncSeconds());
+    fireEvent.keyDown(seekBar(), { key: 'PageDown' });
+    await tick(container);
+    const followed = rewinds.at(-1);
+    expect(followed).not.toBeNull();
+    const renders = rewinds.length;
+
+    const video = container.querySelector('video')!;
+    for (let i = 0; i < 3; i += 1) {
+      await act(async () => {
+        video.currentTime += 0.1;
+        video.dispatchEvent(new Event('timeupdate'));
+      });
+    }
+    await settle();
+    expect(rewinds.at(-1)).toBe(followed);
+    expect(rewinds).toHaveLength(renders);
+  });
+
+  it('방송이 끝나 라이브 재생기가 내려가면 되감은 자리를 지운다: 같은 방송이 다시 라이브가 되어도 옛 자리로 채팅을 읽지 않는다', async () => {
+    const rewinds: unknown[] = [];
+    function RewindProbe() {
+      rewinds.push(useLiveData().liveRewind);
+      return null;
+    }
+    // 주소에 방송 번호를 박는다: 방송이 끝나도 같은 방송이 끝난 방송으로 남는다(안 박으면 방송 번호가 비워져 저장소가 통째로
+    // 비워지므로 재생기가 지웠는지 잴 수 없다)
+    nav.search = `?stream=${STREAM_ID}`;
+    window.history.pushState({}, '', `/broadcast/livenow?stream=${STREAM_ID}`);
+    stubLiveVideo();
+    const { container } = renderWithProviders(
+      <>
+        <LiveScreen />
+        <RewindProbe />
+      </>,
+    );
+    await settle();
+    await playTo(container, liveSyncSeconds());
+    fireEvent.keyDown(seekBar(), { key: 'PageDown' });
+    await tick(container);
+    expect(rewinds.at(-1)).not.toBeNull();
+
+    server.liveEnded = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    // 같은 방송이 끝난 방송으로 남고 라이브 재생기만 내려갔다
+    expect(screen.getByText('방송함')).toBeInTheDocument();
+    expect(container.querySelector('video')).toBeNull();
+    expect(rewinds.at(-1)).toBeNull();
+  });
+
+  it('방송 시작 시각을 모르면 되감아도 채팅은 최신 그대로다: 읽을 하한이 없어 따라가지 않고, 위로 올려 읽던 자리도 지킨다', async () => {
+    server.liveStartUnknown = true;
+    const { container } = await openLive();
+    scrollChatUp();
+
+    // 옮기지 않고 영상이 처졌다: 따를 수 없는 방송이라 판정도 바뀌지 않는다(바뀌면 채팅은 그대로인데 맨 아래로 끌어 내렸다)
+    await playTo(container, liveSyncSeconds() - 12);
+    expect(within(chatPanel()).getByText('라이브 5035초')).toBeInTheDocument();
+    expect(within(chatPanel()).getByText(/^지난 메시지 보는 중/)).toBeInTheDocument();
+
+    // 사람이 옮겨도 같다: 채팅이 영상을 따르지 않으면 시크가 채팅 창을 끌지 않는다(리뷰 2라운드)
+    fireEvent.keyDown(seekBar(), { key: 'ArrowLeft' });
+    await tick(container);
+    expect(within(chatPanel()).getByText('라이브 5035초')).toBeInTheDocument();
+    expect(within(chatPanel()).getByText(/^지난 메시지 보는 중/)).toBeInTheDocument();
   });
 });
