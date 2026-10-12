@@ -10,6 +10,7 @@ import { fireEvent, screen, within } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
+import { ChatReplayLoader } from '@/features/broadcast/livenow/chatReplay';
 import { publishLiveData, resetLiveData } from '@/features/broadcast/livenow/liveDataStore';
 import { forgetLiveStreamId } from '@/features/broadcast/streamSelection';
 import { useAuthStore } from '@/stores/auth';
@@ -1927,6 +1928,22 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
     expect(chatFroms().length).toBeGreaterThan(asked);
     expect(screen.getByText('2835초 채팅')).toBeInTheDocument();
     expect(screen.queryByText('2845초 채팅')).toBeNull();
+  });
+
+  it('지난 방송 차트를 채팅 읽기에 넘긴다: 사람이 옮겼을 때 사이 줄을 차트로 세어 채팅이 몰린 구간이면 사이를 다 읽지 않는다', async () => {
+    // 차트를 안 넘기면 다시 읽기 문턱이 시간(30초)뿐이라, 채팅이 몰린 구간의 30초 안쪽 이동은 사이 수천 줄을 다 읽어야 했다(리뷰
+    // 3라운드 W2). 사이 줄 셈은 로더 시험이 잰다: 여기서는 화면이 차트를 넘기는지만 본다
+    const want = vi.spyOn(ChatReplayLoader.prototype, 'want');
+    try {
+      server.vodChat = true;
+      server.vodChartPerBucket = 3;
+      window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+      await renderLive();
+      const charts = want.mock.calls.map((call) => call[3] ?? null);
+      expect(charts.some((c) => c !== null && c.scope === 'broadcast')).toBe(true);
+    } finally {
+      want.mockRestore();
+    }
   });
 
   it('12시간 넘는 방송에서 끝 12시간 차트에 채팅이 300건 안 되면 그 앞 채팅까지 읽어 최근 300줄을 보인다', async () => {

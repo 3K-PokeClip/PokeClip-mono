@@ -270,10 +270,12 @@ export function useChatPanelMockState(
     emptyReplay,
   );
   // 그리기 전에 알린다: 처음부터 다시 읽어야 하면 바로 비워 그려, 옮긴 시점에 옛 구간의 줄을 한 번 칠하지 않는다
+  // 차트도 넘긴다: 사람이 옮겼을 때 다 읽은 구간과 새 자리 사이 줄을 세어, 채팅이 몰린 구간이면 사이를 다 읽지 않고 다시 읽는다
+  const chart = live.chart;
   useLayoutEffect(() => {
     if (loader === null || replayCursor === null || readFrom === null || readFloor === null) return;
-    loader.want(replayCursor, readFrom, readFloor);
-  }, [loader, replayCursor, readFrom, readFloor]);
+    loader.want(replayCursor, readFrom, readFloor, chart);
+  }, [loader, replayCursor, readFrom, readFloor, chart]);
 
   // 실시간 중계 수신(카드 통로의 chat·donation). 구멍·세대 변화면 2초 뒤 범위 창구로 메운다
   useEffect(() => {

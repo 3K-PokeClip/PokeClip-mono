@@ -24,6 +24,16 @@ const AHEAD_MS = 30_000;
  * 사이를 다 읽어도 싸고, 느린 답을 기다리는 사이 재생이 흘러 시작점이 끝을 조금 넘을 때마다 다시 시작하면 끝내 아무것도 못 읽는다
  */
 const RESTART_GAP_MS = 30_000;
+/**
+ * 사람이 옮겼을 때(JUMP_MS 넘게 건너뜀) 다 읽은 구간과 새 자리 사이가 차트로 센 줄이 이만큼(두 쪽)을 넘으면 30초 안쪽이어도 처음부터
+ * 다시 읽는다: 채팅이 몰린 구간은 30초 안쪽도 수천 줄이라 그 사이를 다 읽는 동안 영상 시각 쪽이 늦게 보였다(리뷰 3라운드 W2)
+ */
+const RESTART_LINES = 1_000;
+/**
+ * 영상 시각이 한 번에 이만큼 넘게 바뀌면 사람이 옮긴 것으로 본다(재생은 1초씩 흐른다). 재생으로 흐를 때는 시간으로만 다시
+ * 시작을 가른다: 느린 답을 기다리는 사이 쌓인 줄로 다시 시작하면 매초 끊고 다시 물어 끝내 아무것도 못 읽는다
+ */
+const JUMP_MS = 5_000;
 /** 버릴 때 영상 시각 앞에 남기는 줄. 보이는 양의 두 배다: 조금 되감을 때마다 다시 읽지 않게 */
 const HOLD_BACK = CHAT_KEEP * 2;
 /**
@@ -162,6 +172,30 @@ export function replayStartIsGuess(chart: LiveChart | null, cursorMs: number): b
   return countBack(chart, cursorMs).sum < CHAT_KEEP;
 }
 
+/**
+ * 차트로 센 영상 축 [aMs, bMs)의 줄 수(칸에 걸친 만큼 나눠 센다). 차트가 없거나 라이브 최근 창이거나 [aMs, bMs)를 다 덮지 않으면
+ * 모른다(null)
+ */
+export function chartLinesBetween(
+  chart: LiveChart | null,
+  aMs: number,
+  bMs: number,
+): number | null {
+  if (chart === null || chart.scope === 'recent' || chart.buckets.length === 0 || bMs <= aMs)
+    return null;
+  const span = chart.bucketSeconds * 1000;
+  const atOf = (start: string) => Date.parse(start) - chart.appliedOffsetMs;
+  if (aMs < chartStart(chart) || bMs > atOf(chart.buckets[chart.buckets.length - 1]!.start) + span)
+    return null;
+  let sum = 0;
+  for (const bucket of chart.buckets) {
+    const at = atOf(bucket.start);
+    const overlap = Math.min(bMs, at + span) - Math.max(aMs, at);
+    if (overlap > 0) sum += ((bucket.chats + bucket.donations) * overlap) / span;
+  }
+  return sum;
+}
+
 /** 차트 첫 칸의 시작(영상 축). 칸 시작은 표 축이다 */
 function chartStart(chart: LiveChart): number {
   return Date.parse(chart.buckets[0]!.start) - chart.appliedOffsetMs;
@@ -258,6 +292,8 @@ export class ChatReplayLoader {
   private front: FrontRead | null = null;
   /** 시작점까지 읽고도 모자랄 때 다음에 앞을 더 읽을 길이(EXTEND_FIRST_MS부터 두 배씩) */
   private extendMs = EXTEND_FIRST_MS;
+  /** 마지막으로 받은 차트. 사람이 옮겼을 때 사이 줄을 센다(없으면 시간으로만 가른다) */
+  private chart: LiveChart | null = null;
   /** 마지막으로 정한 영상 시각과 읽기 시작점. 아직 없으면 NaN이다 */
   private wanted: Wanted = { cursorMs: Number.NaN, readFromMs: Number.NaN, floorMs: Number.NaN };
   /** 이 세대의 요청을 끊는 손잡이. 처음부터 다시 읽으면 끊고 새로 만든다: 끊긴 요청의 답·실패는 버린다 */
@@ -295,14 +331,22 @@ export class ChatReplayLoader {
    * @param readFromMs 영상 시각 앞 줄을 채우려면 읽기 시작할 자리(replayReadStart)
    * @param floorMs 시작점까지 읽고도 영상 시각 앞 줄이 모자라면 여기까지 앞을 더 읽는다. 시작점이 짐작일 때(replayStartIsGuess)
    *   하한을 넘긴다. 정하지 않으면 시작점이다(더 읽지 않는다)
+   * @param chart 그 방송의 차트. 사람이 옮겼을 때 다 읽은 구간과 새 자리 사이 줄을 센다
    */
-  want(cursorMs: number, readFromMs: number, floorMs: number = readFromMs): void {
+  want(
+    cursorMs: number,
+    readFromMs: number,
+    floorMs: number = readFromMs,
+    chart: LiveChart | null = null,
+  ): void {
     if (this.disposed) return;
     const cursor = Math.min(this.upperMs, Math.max(this.lowerMs, cursorMs));
     const readFrom = Math.min(cursor, Math.max(this.lowerMs, readFromMs));
     const floor = Math.min(readFrom, Math.max(this.lowerMs, floorMs));
+    const jumped = !(Math.abs(cursor - this.wanted.cursorMs) < JUMP_MS);
     this.wanted = { cursorMs: cursor, readFromMs: readFrom, floorMs: floor };
-    if (this.mustRestart(cursor, readFrom)) this.restart(readFrom);
+    this.chart = chart;
+    if (this.mustRestart(cursor, readFrom, jumped)) this.restart(readFrom);
     else this.trim(cursor);
     this.emit();
     void this.pump();
@@ -315,12 +359,23 @@ export class ChatReplayLoader {
     this.listeners.clear();
   }
 
-  private mustRestart(cursor: number, readFrom: number): boolean {
+  private mustRestart(cursor: number, readFrom: number, jumped: boolean): boolean {
     if (Number.isNaN(this.from)) return true;
     // 다 읽은 구간보다 멀리 늦은 쪽으로 옮겼다: 사이를 다 읽지 않는다
-    if (readFrom > this.to + RESTART_GAP_MS) return true;
+    if (readFrom > this.to && this.farApart(this.to, readFrom, jumped)) return true;
     // 다 읽은 구간보다 멀리 이른 쪽으로 되감았다: 그 사이를 다 읽지 않는다. 가까우면 그 앞을 덧붙인다(pump)
-    return cursor + RESTART_GAP_MS < this.from;
+    return cursor < this.from && this.farApart(cursor, this.from, jumped);
+  }
+
+  /**
+   * [aMs, bMs)를 다 읽고 가느니 그 자리부터 다시 읽는 게 나은가. 시간으로 RESTART_GAP_MS를 넘으면 늘 그렇고, 사람이 옮겼으면
+   * 차트로 센 사이 줄이 RESTART_LINES를 넘어도 그렇다(재생으로 흐를 때는 시간으로만)
+   */
+  private farApart(aMs: number, bMs: number, jumped: boolean): boolean {
+    if (bMs - aMs > RESTART_GAP_MS) return true;
+    if (!jumped) return false;
+    const lines = chartLinesBetween(this.chart, aMs, bMs);
+    return lines !== null && lines > RESTART_LINES;
   }
 
   /**

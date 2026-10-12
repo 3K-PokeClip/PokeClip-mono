@@ -5,6 +5,7 @@ import {
   replayReadStart,
   replayStartIsGuess,
   replayView,
+  chartLinesBetween,
   type ReplayFetch,
   type ReplayLine,
   type ReplaySnapshot,
@@ -209,6 +210,22 @@ describe('replayStartIsGuess: 시작점이 짐작인가', () => {
   });
 });
 
+describe('chartLinesBetween: 차트로 센 사이 줄 수', () => {
+  it('걸친 만큼 나눠 센다', () => {
+    const c = chart([100, 200, 300]);
+    expect(chartLinesBetween(c, T0, T0 + 30_000)).toBe(600);
+    expect(chartLinesBetween(c, T0 + 5_000, T0 + 15_000)).toBe(150);
+  });
+
+  it('차트가 덮지 않거나 차트가 없거나 라이브 최근 창이면 모른다(null)', () => {
+    const c = chart([100, 200, 300]);
+    expect(chartLinesBetween(c, T0 - 1_000, T0 + 10_000)).toBeNull();
+    expect(chartLinesBetween(c, T0, T0 + 31_000)).toBeNull();
+    expect(chartLinesBetween(null, T0, T0 + 10_000)).toBeNull();
+    expect(chartLinesBetween(chart([100], { scope: 'recent' }), T0, T0 + 10_000)).toBeNull();
+  });
+});
+
 describe('replayView: 무엇을 보이나', () => {
   const lines: ReplayLine[] = [10, 20, 30].map((s, i) => ({
     seq: i,
@@ -407,6 +424,69 @@ describe('ChatReplayLoader: 그 시각 둘레만 읽는다', () => {
     expect(replayView(loader.getSnapshot(), T0 + 110_000, T0 + HOUR, T0 + 110_000).status).toBe(
       'ready',
     );
+  });
+
+  /** 1초에 100줄(700초)과 그 차트(10초 칸 1,000건) */
+  function denseWithChart() {
+    return { items: steady(700, 100), chart: chart(Array.from({ length: 70 }, () => 1_000)) };
+  }
+
+  it('사람이 늦은 쪽으로 옮겨 사이가 차트로 1,000줄을 넘으면 30초 안쪽이어도 그 자리부터 다시 읽는다: 채팅이 몰린 구간에서 사이를 다 읽지 않는다', async () => {
+    // 다시 읽기 문턱이 시간(30초)뿐이라 채팅이 몰린 구간에서는 그 안쪽 이동이 가장 비쌌다: 사이 수천 줄을 다 읽어야 영상 시각
+    // 쪽이 보였다(리뷰 3라운드 W2)
+    const { items, chart: c } = denseWithChart();
+    const srv = collector(items);
+    const loader = new ChatReplayLoader(srv.fetchPage, T0, T0 + HOUR);
+    loader.want(T0 + 300_000, T0 + 297_000, T0 + 297_000, c);
+    await settle();
+    const asked = srv.calls.length;
+    const to = loader.getSnapshot().to;
+
+    // 45초 늦은 쪽으로: 다 읽은 끝과 새 시작점 사이는 30초 안쪽이지만 1,400줄쯤이다
+    loader.want(T0 + 345_000, T0 + 342_000, T0 + 342_000, c);
+    expect(T0 + 342_000 - to).toBeLessThan(30_000);
+    await settle();
+    expect(srv.calls[asked]).toEqual({ from: T0 + 342_000, to: T0 + HOUR, cursor: null });
+    expect(replayView(loader.getSnapshot(), T0 + 345_000, T0 + HOUR, T0 + 342_000).status).toBe(
+      'ready',
+    );
+  });
+
+  it('사람이 다 읽은 구간보다 조금 이른 쪽으로 되감아도 사이가 차트로 1,000줄을 넘으면 덧붙이지 않고 그 자리부터 다시 읽는다', async () => {
+    const { items, chart: c } = denseWithChart();
+    const srv = collector(items);
+    const loader = new ChatReplayLoader(srv.fetchPage, T0, T0 + HOUR);
+    loader.want(T0 + 600_000, T0 + 597_000, T0 + 597_000, c);
+    await settle();
+    const asked = srv.calls.length;
+
+    // 15초 되감기: 영상 시각과 다 읽은 구간 사이 12초가 1,200줄이다
+    loader.want(T0 + 585_000, T0 + 582_000, T0 + 582_000, c);
+    await settle();
+    expect(srv.calls[asked]).toEqual({ from: T0 + 582_000, to: T0 + HOUR, cursor: null });
+    expect(replayView(loader.getSnapshot(), T0 + 585_000, T0 + HOUR, T0 + 582_000).status).toBe(
+      'ready',
+    );
+  });
+
+  it('재생으로 흐를 때는 사이 줄이 차트로 1,000을 넘어도 다시 시작하지 않는다: 느린 답을 기다리는 사이 쌓인 줄로 매초 끊지 않는다', async () => {
+    const { items, chart: c } = denseWithChart();
+    const srv = collector(items);
+    let release: () => void = () => undefined;
+    srv.state.gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const loader = new ChatReplayLoader(srv.fetchPage, T0, T0 + HOUR);
+    loader.want(T0 + 300_000, T0 + 297_000, T0 + 297_000, c);
+    await settle();
+    // 첫 답이 오기 전에 20초 재생: 시작점이 다 읽은 끝보다 2,000줄쯤 늦다
+    for (let s = 301; s <= 320; s += 1) {
+      loader.want(T0 + s * 1000, T0 + (s - 3) * 1000, T0 + (s - 3) * 1000, c);
+      await settle();
+    }
+    expect(srv.calls).toHaveLength(1);
+    expect(srv.signals[0]!.aborted).toBe(false);
+    release();
   });
 
   it('구간 안이어도 영상 시각 앞 줄이 300 미만이면 그 앞만 읽어 붙인다: 쥔 줄을 다시 받지 않는다', async () => {
