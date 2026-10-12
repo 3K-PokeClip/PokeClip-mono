@@ -1227,8 +1227,9 @@ CI(`media-ci`)는 `go test`에 `-coverprofile`을 붙여 패키지별 커버리�
 (compose의 `image:`가 `build:`로 바뀌면서 옮겨왔다). **지금 그 줄은 상류 공식 이미지가 아니라
 우리 포크 빌드를 태그+digest로 가리킨다** — 아래 "이미지 출처에 묶인 전제" 절을 함께 읽는다. 훅 파라미터 이름은 버전 사이에 조용히
 바뀌거나 사라질 수 있고, **훅이 실행되지 않아도 아무 오류가 나지 않는다**. 그래서 절차를 고정한다.
-`FROM`과 함께 고칠 자리(테스트 상수 ·
-`infra/dev-media/compose.yml`의 `image` 줄 등)는 아래 체크리스트가 안내한다.
+`FROM`과 함께 고칠 자리(테스트 상수 등)는 아래 체크리스트가 안내한다. dev-media(서버) 핀인
+`infra/dev-media/compose.yml`의 `image` 줄은 서버가 필요로 할 때 서버 기준으로 올리고, 제품
+`FROM`과 같을 필요는 없다(ADR-040 2026-10-12 추기).
 
 ### 버전에 묶인 전제 9곳 — 절차보다 먼저 확인한다
 
@@ -1285,38 +1286,70 @@ Control API의 교차 출처 허용 기본값 `apiAllowOrigins`가 `['*']`에서
 `sample of track 2 received too late, discarding`이 송출 연결마다 1줄 나오는데, 같은 송출에서
 `v1.20.1-pokeclip.2`도 같은 줄을 낸다(A/B 실측 — 소스도 같은 줄).
 
+**표적 재확인 기록 (2026-10-12, `v1.21.1-pokeclip.1`→`.2`, 상류 베이스 `04825598` 그대로)**:
+베이스가 그대로라 준버전업이 아니다. 라인에 더한 커밋은 셋이다 — 체리픽 `33bc311`(상류
+`72e809b6`) · U(사용자별 SRT passphrase) `b9735847` · `POKECLIP.md` `ff1f75bb`. 그
+diff가 전제 9곳에 닿는지 가르고, 닿는 파일이 있는 전제는 실측으로 다시 봤다. 측정 이미지는
+`ghcr.io/xodbs1021/mediamtx:v1.21.1-pokeclip.2@sha256:8b5318ce…4dc8`(인덱스 digest
+— amd64 `c6d01969…` · arm64 `8fb08d4f…`, 런타임 실측은 arm64)이다. 태그 대상 커밋
+`ff1f75bb`와 digest는 2026-10-08 독립 확인(`imagetools inspect` · 익명 pull ·
+`ls-remote`)과 같다. ②⑤⑥⑨는 diff가 닿지 않는다 — `internal/externalcmd` ·
+`internal/recorder` · `internal/servers/hls` 변경 0파일. ①③④⑦은 닻 줄이 글자
+그대로이고 줄 번호만 밀렸다 — ①`newPath(&conf.PathDefaults, …)` `conf.go:1136→1143`
+③④`runOnReady` 매핑 `conf/path.go:980→981` ⑦기본값 `path.go:387→388`. 실측은 설정에
+이름 없는 경로로 40초 송출했다(`all_others`로 붙음). ①훅 3종 스풀 online 1 ·
+segcomplete 10 · offline 1 ③④기동 로그 deprecated · unknown WARN 0
+⑦`pathdefaults/get`의 `recordPartDuration` 1s ⑧녹화 10개 모두 10002:10002 · 권한
+오류 0 ⑨302 `cookieCheck` → 200. 기동 첫 줄은 `MediaMTX v1.21.1-pokeclip.2`다. LL-HLS
+표지는 `index.m3u8`이 가리키는 미디어 재생목록에서 성립한다 — `CAN-BLOCK-RELOAD` ·
+`EXT-X-PART` · GAP 채움을 뺀 실제 세그먼트 중 `#EXTINF:4.00000` 5개,
+`PART-HOLD-BACK=1.25000`(기록만). 녹화기 WAR `sample of track 2 received too late,
+discarding`이 송출 연결마다 1줄인 것은 그대로다 — 같은 송출에서 `.1`도 같은 줄을
+낸다(A/B 실측). 부수: `.2`의 샘플 설정은 `authInternalUsers` 첫 항목에 빈
+`srtPassphrase:`를 더했다. 제품 설정에는 이 키가 없고, 빈 값은 지정하지 않은 것과
+같다(실측 `global/get` — 세 항목 모두 빈 값).
+출처 확인(아래 「새 이미지를 만들 때」)과 ③ 재포장 핀 대조(「포크 태그를 올릴 때」)도 다시
+했다 — 두 아치 `/mediamtx`의 `vcs.revision`과 발행 실행 `headSha`가 태그 대상 커밋
+`ff1f75bb`이고 `vcs.modified=false`이며, 박힌 `mediacommon/v2` v2.9.5 ·
+`go-mp4` v1.7.3이 `media/go.mod`와 같다. 픽스처 재채취는 면제다 — 두 태그 사이
+`internal/recorder` · `internal/formatprocessor` · `go.mod` 변경 0파일.
+
 전제는 아니지만 **버전 문자열을 그대로 적어 둔 곳**이 더 있다. 함께 고친다 —
 [`docs/dev-environment.md`](../docs/dev-environment.md)의 서비스 표,
-[`Dockerfile.mtxhook`](Dockerfile.mtxhook) 주석의 상류 베이스 서술,
-그리고 [`infra/dev-media/compose.yml`](../infra/dev-media/compose.yml)의 `image` 줄
-(데모 서버는 유지가 확정돼 제품 `FROM`과 같은 포크 좌표를 글자 그대로 쓴다 — ADR-040
-2026-08-30 추기 "dev-media compose 는 제품 핀과 같이 올린다").
+[`Dockerfile.mtxhook`](Dockerfile.mtxhook) 주석의 상류 베이스 서술.
+[`infra/dev-media/compose.yml`](../infra/dev-media/compose.yml)의 `image` 줄
+(dev-media 서버 핀)은 따로 판단한다 — 서버가 필요로 할 때 서버 기준으로 올리고, 제품
+`FROM`과 같을 필요는 없다(ADR-040 2026-10-12 추기).
 
 ### 이미지 출처에 묶인 전제 — 우리 포크 라인(`pokeclip`)
 
 위 9곳이 **MediaMTX 버전**에 묶인 전제라면, 이것은 **어느 이미지냐**에 묶인 전제다.
 
 `FROM`이 가리키는 것은 상류 공식 이미지가 아니라 우리 포크 빌드
-`ghcr.io/xodbs1021/mediamtx`다. 상류 v1.21.1(`04825598`) 위에 **상류에 아직 머지되지 않은
-우리 수정 4건**을 얹었다. 결정 근거는 ADR-050 선결 B(ⓑ 자체 빌드 선행)다. 예전 포크가 싣던
+`ghcr.io/xodbs1021/mediamtx`다. 상류 v1.21.1(`04825598`) 위에 수정을 얹었다 —
+**상류에서 심사 중이거나 아직 게시 전인 우리 수정**과, 상류가 다른 수정(bluenviron/mediamtx#6326 —
+릴리스 전)으로 대체한 0b와, 상류에 머지됐지만 라인의 베이스(v1.21.1)에는
+없는 체리픽이다. 결정 근거는 ADR-050 선결 B(ⓑ 자체 빌드 선행)다. 예전 포크가 싣던
 슬레이트 무녹화 스위치 `alwaysAvailableRecorded`(bluenviron/mediamtx#6182)는 v1.21.0에
 머지돼 라인에서 뺐다 — 이제 상류 공식 기능이다.
 
-4건은 아래와 같다. 첫 열의 번호는 우리 상류 기여 트랙의 번호라 위 전제 9곳의 번호와 다르다 —
+수정은 아래 표와 같다. 첫 열의 번호는 우리 상류 기여 트랙의 번호라 위 전제 9곳의 번호와 다르다 —
 전제와 섞일 수 있는 자리에서는 "수정 9"처럼 적는다.
 
 | 수정 | 상류 | 제품에서 하는 일 | 상류 공식 이미지로 되돌리면 |
 |---|---|---|---|
-| 0b(가드 v2) — 설정 리로드와 훅 로깅 사이의 데이터 경합 수정 | bluenviron/mediamtx#6206 (심사 중) | 로거를 다시 만드는 리로드(로그 설정 변경) 때 돌던 훅이 끝나기를 기다린 뒤 로거를 다시 만든다. 그때 `waiting for running hooks` INF 한 줄이 남는다. 제품 훅 `mtxhookwrite`는 잠금 대기 상한이 200ms라 그 대기는 짧다 | 그 리로드에서 훅 로깅과의 데이터 경합이 돌아온다(상류 메인테이너가 버그로 인정 — 2026-09-20) |
+| 0b(가드 v2) — 설정 리로드와 훅 로깅 사이의 데이터 경합 수정 | bluenviron/mediamtx#6206 (닫힘(2026-10-11) — 상류는 bluenviron/mediamtx#6326으로 다르게 고침(릴리스 전)) | 로거를 다시 만드는 리로드(로그 설정 변경) 때 돌던 훅이 끝나기를 기다린 뒤 로거를 다시 만든다. 그때 `waiting for running hooks` INF 한 줄이 남는다. 제품 훅 `mtxhookwrite`는 잠금 대기 상한이 200ms라 그 대기는 짧다 | 그 리로드에서 훅 로깅과의 데이터 경합이 돌아온다(상류 메인테이너가 버그로 인정 — 2026-09-20) |
 | 9 — 모든 훅 명령의 실패를 로그에 남긴다 | bluenviron/mediamtx#6259 (심사 중) | `runOnOffline`·`runOnRecordSegmentComplete`가 실패하면 `… command exited: …` 한 줄이 남는다. `runOnOnline`은 상류 1.21.1도 남긴다 | 두 훅의 실패가 다시 **오류도 로그도 없이** 지나간다 |
 | 10 — `CertLoader.Close()`가 `watch()`의 끝을 기다린다 | bluenviron/mediamtx#6261 (심사 중) | 없음 — 제품·dev-media는 TLS·MoQ를 켜지 않아 CertLoader를 만들지 않는다 | 차이 없음 |
 | 6 — 훅 출력을 서버 로그로 돌리는 설정 | 상류 미게시 | 없음 — 기본 꺼짐이고 제품 설정에 키가 없다. 켜기는 이 이미지 교체와 섞지 않고 후속 PR에서 한다(아래 「절차」 1) | 키가 없는 동안은 차이 없음 |
+| 체리픽 — 설정 PATCH가 `<redacted>`(설정 조회 API가 비밀번호 자리에 돌려주는 가림 문자열)를 비밀번호로 저장하지 않는다 | bluenviron/mediamtx#6292 (상류 머지 — v1.21.2에 들어갔다. 라인의 베이스가 v1.21.1이라 싣는다) | 없음 — 제품·dev-media 어디도 설정 PATCH(`/v3/config/global/patch`)를 부르지 않는다. 아래 U가 이 수정이 만든 `PatchGlobal` 블록을 고치므로 U와 함께 싣는다 | 차이 없음 |
+| U(사용자별 SRT passphrase 트랙) — 인증 사용자의 `srtPassphrase`. 값이 있으면 경로 passphrase를 대신하고, HTTP 인증이면 2xx 응답 본문이 값을 준다 | bluenviron/mediamtx#6306 (심사 중) | 없음 — 제품·dev-media 설정의 인증 사용자에 이 키가 없어 지금처럼 경로 값을 쓴다(제품 설정 실측: 세 항목 모두 빈 값). 계정별 방송을 여는 dev-media 후속 PR이 쓴다 | 지금 설정에서는 차이 없음. 그 후속 PR 뒤에는 사용자 값이 사라져 모든 SRT 송출이 경로 잠금값(사용자 값 없이는 송출이 열리지 않게 거는 경로 passphrase)에 막힌다 — 안전한 실패지만 송출이 멈춘다 |
 
 | 전제 | 깨지면 무슨 일이 나나 | 어떻게 재확인하는가 |
 |---|---|---|
 | `FROM`이 우리 포크 빌드를 가리킨다<br>(닻: `pokeclip`) | 공식 이미지로 되돌리면 위 표 넷째 열의 손실이 생긴다 — 수정 9의 손실은 **오류도 로그도 없이** 일어난다 | 기동 로그 첫 줄의 버전 문자열이 `v…-pokeclip.N`인지 본다(`docker compose logs media \| head -1`). 기계 방어는 `TestPinnedMediaMTXDigestMatchesDockerfile` |
 
-**핀은 태그와 digest를 함께 적는다.** 태그(`v1.21.1-pokeclip.1`)는 사람이 읽는 이름이고,
+**핀은 태그와 digest를 함께 적는다.** 태그(`v<상류>-pokeclip.<N>`)는 사람이 읽는 이름이고,
 digest는 불변 좌표다 — 같은 태그를 다시 밀어도 가리키는 이미지가 바뀌지 않는다. 그래서
 버전 대조 테스트도 둘 다 본다(`pinnedMediaMTXTag`·`pinnedMediaMTXDigest`).
 
@@ -1324,8 +1357,9 @@ digest는 불변 좌표다 — 같은 태그를 다시 밀어도 가리키는 �
 민다 → `pokeclip-image` 워크플로가 멀티아치 이미지를 GHCR에 올리고 **실행 요약에 `FROM …@sha256:`
 한 줄을 찍는다** → 출처를 확인한다 — 그 실행의 `headSha`와 이미지에서 꺼낸 `/mediamtx`(플랫폼마다)의
 `vcs.revision`(`go version -m`)이 검수한 라인 tip과 같고 `vcs.modified=false`여야 한다 →
-그 값을 `Dockerfile.mtxhook`과 테스트 상수 2개 ·
-`infra/dev-media/compose.yml`의 `image` 줄(같은 좌표 — ADR-040)에 옮긴다. 이미지 생성은
+그 값을 `Dockerfile.mtxhook`과 테스트 상수 2개에 옮긴다. dev-media(서버) 핀인
+`infra/dev-media/compose.yml`의 `image` 줄은 서버가 필요로 할 때 서버 기준으로 따로 올린다
+(ADR-040 2026-10-12 추기). 이미지 생성은
 자동이고 제품 반영은 수동이다 — 핀 교체가 이 절의 재확인을 동반해야 하기 때문이다.
 
 **되감기 ③ 재포장 핀도 같은 때 대조한다.** 재포장 라이브러리(`mediacommon/v2`)의 판이 새 포크
@@ -1337,13 +1371,23 @@ digest는 불변 좌표다 — 같은 태그를 다시 밀어도 가리키는 �
 `.N`을 올린다(베이스를 유지하면 수정도 유지한다). 그 수정을 포함한 새 상류 릴리스로 옮기면
 `v<새 버전>-pokeclip.1`로 발행하고, `upstreamBaseVersion`을 갱신하며 전제 9곳을 전수
 재확인한다.
-**4건이 전부 상류 릴리스에 들어가면**(포크가 필요 없어지면) **포크 전용 장치를 전부
+**위 표의 모든 행이 상류 릴리스에 들어가면**(0b처럼 상류가 다른 수정으로 대체한 행은 그 대체
+수정 bluenviron/mediamtx#6326이 들어가면) 포크가 필요 없어진다. 표에는 U도 있다 — U 없이 공식
+이미지로 되돌리면 U를 쓰는 dev-media 계정별 방송(후속 PR) 뒤에는 모든 SRT 송출이 경로
+잠금값에 막힌다(위 U 행). 그때 **포크 전용 장치를 전부
 걷어낸다** — 빠뜨리면 공식 태그에서 포크 전용 단언이 남아 빨간불이 된다. 정리 목록은
 [`version_contract_test.go`](internal/mtxhook/version_contract_test.go)의 `forkPinGuide`에 번호로
-적혀 있다(FROM 복귀 — 공식 이미지도 태그 + digest, dev-media `image` 줄도 같은 좌표로 ·
-`mediaMTXImage` 복귀 · 태그 상수 정리 ·
+적혀 있다(FROM 복귀 — 공식 이미지도 태그 + digest, dev-media `image` 줄은 서버가 기대는
+수정(특히 U)을 기준으로 따로 판단 · `mediaMTXImage` 복귀 · 태그 상수 정리 ·
 digest 상수는 공식 이미지 digest로 · 포크 전용 테스트 2종 삭제 · 남는 `forkPinGuide` 참조를
 `versionUpgradeGuide`로 바꾼 뒤 `forkPinGuide` 삭제 · 이 절 삭제).
+
+**`v1.21.1-pokeclip.2` 핀을 되돌릴 때 (2026-10-12 기준)**: 이 핀을 올린 PR의 머지 커밋을
+`git revert -m 1 <머지 커밋>`으로 되돌리면 제품 `FROM` · dev-media `image` 줄 · 테스트 상수가
+함께 `v1.21.1-pokeclip.1`로 돌아간다. U를 쓰는 후속 PR(dev-media 계정별 방송)이 머지돼 있으면
+**그 PR을 먼저 revert한다** — 머지의 역순(위 「되돌리기와 긴급 정지」의 원칙과 같다). `.1`에는
+U가 없어 그 구성에서 모든 SRT 송출이 경로 잠금값에 막힌다(안전한 실패지만 송출이 멈춘다).
+데모 박스(dev-media 서버)는 develop을 따라가지 않아 이 revert로 바뀌지 않는다 — 박스는 따로 되돌린다.
 
 **이 핀을 되돌릴 때 (2026-10-06 · 3K-PokeClip/pokeclip-mono#217 기준)**:
 이 이미지 교체 PR의 머지 커밋을 `git revert -m 1 <머지 커밋>`으로
@@ -1380,7 +1424,7 @@ digest 상수는 공식 이미지 digest로 · 포크 전용 테스트 2종 삭�
 
 되돌린 뒤의 상태에서 알아 둘 것이 둘 있다.
 
-*   되돌린 `v1.20.1-pokeclip.2`에도 위 4건이 없다 — 위 표 넷째 열의 손실이 그대로 온다(수정 9는
+*   되돌린 `v1.20.1-pokeclip.2`에도 위 표의 수정이 없다 — 위 표 넷째 열의 손실이 그대로 온다(수정 9는
     오류도 로그도 없이 사라진다).
 *   데모 박스(dev-media 서버)는 develop을 따라가지 않아 이 revert로 바뀌지 않는다 — 박스는
     따로 되돌린다.
