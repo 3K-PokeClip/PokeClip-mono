@@ -141,13 +141,14 @@ classify_files() {
   while IFS= read -r -d '' file; do
     file="${file#./}"
     name="${file##*/}"
-    if [[ "${file}" == *[[:cntrl:]]* ]]; then
+    if is_conftest_config "${name}"; then
+      # 링크든(conftest 는 링크를 따라 읽는다) 경로에 제어 문자가 있든,
+      # 종류와 상관없이 그 이름이면 설정 파일이다. 경로는 %q 로 적는다.
+      printf 'config R0 %q: conftest 설정 파일 금지(%s)\n' "${file}" \
+        "정책 · R12 표지를 바꿀 수 있음"
+    elif [[ "${file}" == *[[:cntrl:]]* ]]; then
       printf 'r0 R0 %q: 이름에 줄바꿈 · 제어 문자 금지(%s)\n' "${file}" \
         "줄 단위 처리 · 리뷰에서 숨음"
-    elif is_conftest_config "${name}"; then
-      # 링크여도(conftest 는 링크를 따라 읽는다) 종류와 상관없이 설정 파일.
-      printf 'config R0 %s: conftest 설정 파일 금지(%s)\n' "${file}" \
-        "정책 · R12 표지를 바꿀 수 있음"
     elif [[ -L "${file}" ]]; then
       printf 'r0 R0 %s: 심볼릭 링크 금지(%s)\n' "${file}" \
         "파일 · 디렉터리 — 링크 너머가 검사에서 빠짐"
