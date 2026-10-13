@@ -715,13 +715,14 @@ expect_no_rules_error() {
 # Outputs:
 #   임시 디렉터리 경로.
 # Returns:
-#   복사 · 쓰기에 실패하면 1(만든 임시 디렉터리는 지운다).
+#   복사 · 쓰기에 실패하거나 사본에 링크가 있으면 1(만든 임시 디렉터리는
+#   지운다).
 #######################################
 make_config_ignored_copy() {
   local source="$1"
   local tmp
   tmp="$(new_tmp_dir)" || return 1
-  if ! cp -R "${source}/." "${tmp}/" ||
+  if ! cp -R "${source}/." "${tmp}/" || ! has_no_links "${tmp}" ||
     ! printf 'resource "aws_secretsmanager_secret" "ok" {\n  name = "x"\n}\n' \
       >"${tmp}/other.tf" ||
     ! printf 'ignore = "main"\nnamespace = ["missing"]\n' \
@@ -980,12 +981,13 @@ make_conftest_recorder() {
 # Outputs:
 #   설정 파일의 트리 안 경로(R0 줄에 나올 이름).
 # Returns:
-#   준비하지 못하면 1.
+#   준비하지 못하거나 사본에 링크가 있으면 1.
 #######################################
 make_config_tree() {
   local tree="$1" source="$2" planted="$3" form="$4"
   local config="conftest.toml"
   mkdir -p "${tree}" && cp -R "${source}/." "${tree}/" &&
+    has_no_links "${tree}" &&
     printf 'update = ["%s"]\n' "${planted}" >"${tree}/notes.txt" || return 1
   case "${form}" in
     file) mv -- "${tree}/notes.txt" "${tree}/${config}" ;;
@@ -1059,12 +1061,14 @@ expect_config_stops_before_conftest() {
 # Arguments:
 #   탐침 파일을 만들 디렉터리.
 # Returns:
-#   접으면 0, 아니면 1.
+#   접으면 0, 접지 않으면 1, 탐침 파일을 만들지 못하면 2.
 #######################################
 probe_case_folding() {
   local dir="$1"
-  { : >"${dir}/confte"$'\xc5\xbf'"t.toml"; } 2>/dev/null &&
-    [[ -e "${dir}/conftest.toml" ]]
+  if ! { : >"${dir}/confte"$'\xc5\xbf'"t.toml"; } 2>/dev/null; then
+    return 2
+  fi
+  [[ -e "${dir}/conftest.toml" ]]
 }
 
 #######################################
@@ -1124,11 +1128,11 @@ expect_folded_config_stops_before_conftest() {
   if [[ -n "${tmp}" ]]; then
     rm -rf -- "${tmp}"
   fi
-  if [[ "${status}" -ne 0 ]]; then
-    echo "skip: config-first-folded(파일 시스템이 ſ 를 s 로 접지 않음)"
-    return
-  fi
-  expect_config_stops_before_conftest folded
+  case "${status}" in
+    0) expect_config_stops_before_conftest folded ;;
+    1) echo "skip: config-first-folded(파일 시스템이 ſ 를 s 로 접지 않음)" ;;
+    *) fail "config-first-folded: 탐침 파일을 만들지 못함 — ${probe}" ;;
+  esac
 }
 
 #######################################
