@@ -285,6 +285,40 @@ expect_marker_injection_rejected() {
 }
 
 #######################################
+# 저장소 밖 사본의 conftest.toml 이 링크면 run_guard_outside 가 치환하기
+# 전에 준비 실패로 멈춰, 링크 너머 파일에 쓰지 않는지 본다.
+#######################################
+expect_outside_config_link_refused() {
+  local tmp before after
+  local prepared=0
+  tmp="$(new_tmp_dir)" || {
+    fail "outside-config-link: 시험 준비 실패(임시 디렉터리)"
+    return
+  }
+  if ! mkdir -p "${tmp}/fx" ||
+    ! printf 'data = ["%s"]\n' "${MARKER_PLACEHOLDER}" >"${tmp}/decoy.txt" ||
+    ! printf 'locals {}\n' >"${tmp}/fx/main.tf" ||
+    ! ln -s "${tmp}/decoy.txt" "${tmp}/fx/conftest.toml"; then
+    fail "outside-config-link: 시험 준비 실패(링크)"
+    rm -rf -- "${tmp}"
+    return
+  fi
+  before="$(<"${tmp}/decoy.txt")"
+  if run_guard_outside "${tmp}/fx"; then
+    prepared=1
+  fi
+  after="$(<"${tmp}/decoy.txt")"
+  rm -rf -- "${tmp}"
+  if [[ "${after}" != "${before}" ]]; then
+    fail "outside-config-link: 링크 너머 파일이 바뀜 — ${after}"
+  elif [[ "${prepared}" -eq 1 ]]; then
+    fail "outside-config-link: 준비 실패를 기대했으나 guard 를 돌림"
+  else
+    echo "ok: outside-config-link → 준비 실패 · 링크 너머 무변경"
+  fi
+}
+
+#######################################
 # 저장소의 실제 트리(운영 표지)가 위반 0 인지 본다. fixture 안의
 # conftest.toml(scripts/testdata)은 검사 범위 밖이라 잡히지 않아야 한다.
 #######################################
@@ -446,6 +480,31 @@ expect_policy_tests_ignore_config() {
     return
   fi
   echo "ok: verify-config → ${summary}"
+}
+
+#######################################
+# 호출한 디렉터리의 conftest.toml 이 data(fixture 표지)를 실어도 정책 단위
+# 시험이 흔들리지 않고 전부 통과하는지 본다.
+#######################################
+expect_policy_tests_ignore_data() {
+  local tmp summary
+  tmp="$(new_tmp_dir)" || {
+    fail "verify-data: 시험 준비 실패(임시 디렉터리)"
+    return
+  }
+  if ! mkdir -p "${tmp}/marker" ||
+    ! printf '{"mode": "fixture"}\n' >"${tmp}/marker/mode.json" ||
+    ! printf 'data = ["%s"]\n' "${tmp}/marker" >"${tmp}/conftest.toml"; then
+    fail "verify-data: 시험 준비 실패(설정 파일)"
+    rm -rf -- "${tmp}"
+    return
+  fi
+  if ! summary="$(cd -- "${tmp}" && run_policy_tests "${POLICY_DIR}")"; then
+    fail "verify-data: 전부 통과를 기대했으나 — ${summary}"
+  else
+    echo "ok: verify-data → ${summary}"
+  fi
+  rm -rf -- "${tmp}"
 }
 
 #######################################
@@ -762,51 +821,134 @@ expect_enumeration_boundaries() {
 }
 
 #######################################
+# guard.sh · 정책 · 표지(빈 설정 포함) 사본을 <dir>/kit 에 만든다 — 정책
+# 디렉터리가 바뀌는지를 저장소를 건드리지 않고 보려고.
+# Arguments:
+#   임시 디렉터리.
+# Returns:
+#   복사하지 못하면 1.
+#######################################
+make_guard_kit() {
+  local kit="$1/kit"
+  mkdir -p "${kit}/scripts" "${kit}/policy" &&
+    cp -- "${GUARD}" "${kit}/scripts/guard.sh" &&
+    cp -R -- "${MARKER_DIR}" "${kit}/scripts/" &&
+    cp -R -- "${POLICY_DIR}" "${kit}/policy/guard"
+}
+
+#######################################
+# 부를 때마다 인자를 <dir>/calls.log 에 한 줄씩 적고 진짜 conftest 를
+# 실행하는 대역을 <dir>/bin/conftest 에 만든다.
+# Arguments:
+#   임시 디렉터리.
+# Returns:
+#   만들지 못하면 1.
+#######################################
+make_conftest_recorder() {
+  local dir="$1"
+  local real
+  real="$(command -v conftest)" || return 1
+  mkdir -p "${dir}/bin" &&
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>%q\nexec %q "$@"\n' \
+      "${dir}/calls.log" "${real}" >"${dir}/bin/conftest" &&
+    chmod +x "${dir}/bin/conftest"
+}
+
+#######################################
 # 설정 파일이 정책을 내려받게(update) 해 둔 트리에서 guard.sh 가 conftest 를
-# 한 번도 부르지 않고 R0 로 끝나, 정책 디렉터리가 그대로인지 본다.
-# guard.sh · 정책 · 표지 사본과, 부를 때마다 기록하는 conftest 대역을 쓴다.
+# 한 번도 부르지 않고 R0 로 끝나, 정책 디렉터리가 그대로인지 본다. 설정
+# 파일은 일반 파일(file)이거나, update 를 담은 다른 파일을 가리키는
+# 링크(link)다. guard.sh · 정책 · 표지 사본과 conftest 대역을 쓴다.
+# Arguments:
+#   설정 파일 꼴 — file · link.
 #######################################
 expect_config_stops_before_conftest() {
-  local tmp kit before after output status real
+  local form="$1"
+  local name="config-first-${form}"
+  local tmp kit tree before after output status
   tmp="$(new_tmp_dir)" || {
-    fail "config-first: 시험 준비 실패(임시 디렉터리)"
+    fail "${name}: 시험 준비 실패(임시 디렉터리)"
     return
   }
   kit="${tmp}/kit"
-  real="$(command -v conftest)"
-  if ! mkdir -p "${kit}/scripts" "${kit}/policy" "${tmp}/bin" "${tmp}/tree" ||
-    ! cp -- "${GUARD}" "${kit}/scripts/guard.sh" ||
-    ! cp -R -- "${MARKER_DIR}" "${kit}/scripts/" ||
-    ! cp -R -- "${POLICY_DIR}" "${kit}/policy/guard" ||
-    ! cp -R "${FIXTURES}/ok_R12/." "${tmp}/tree/" ||
+  tree="${tmp}/tree"
+  if ! make_guard_kit "${tmp}" || ! make_conftest_recorder "${tmp}" ||
+    ! mkdir -p "${tree}" || ! cp -R "${FIXTURES}/ok_R12/." "${tree}/" ||
     ! printf 'package main\n\nfixture_tree if true\n' \
       >"${tmp}/planted.rego" ||
-    ! printf 'update = ["%s"]\n' "${tmp}/planted.rego" \
-      >"${tmp}/tree/conftest.toml" ||
-    ! printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>%q\nexec %q "$@"\n' \
-      "${tmp}/calls.log" "${real}" >"${tmp}/bin/conftest" ||
-    ! chmod +x "${tmp}/bin/conftest"; then
-    fail "config-first: 시험 준비 실패(복사)"
+    ! printf 'update = ["%s"]\n' "${tmp}/planted.rego" >"${tree}/notes.txt"
+  then
+    fail "${name}: 시험 준비 실패(복사)"
     rm -rf -- "${tmp}"
     return
   fi
+  case "${form}" in
+    file) mv -- "${tree}/notes.txt" "${tree}/conftest.toml" ;;
+    link) ln -s notes.txt "${tree}/conftest.toml" ;;
+    *) false ;;
+  esac || {
+    fail "${name}: 시험 준비 실패(설정 파일)"
+    rm -rf -- "${tmp}"
+    return
+  }
   before="$(ls -A "${kit}/policy/guard")"
   output="$(PATH="${tmp}/bin:${PATH}" bash "${kit}/scripts/guard.sh" \
-    "${tmp}/tree" 2>&1)"
+    "${tree}" 2>&1)"
   status=$?
   after="$(ls -A "${kit}/policy/guard")"
   if [[ -s "${tmp}/calls.log" ]]; then
-    fail "config-first: conftest 가 불림 — $(<"${tmp}/calls.log")"
+    fail "${name}: conftest 가 불림 — $(<"${tmp}/calls.log")"
   elif [[ "${before}" != "${after}" ]]; then
-    fail "config-first: 정책 디렉터리가 바뀜 — ${after}"
+    fail "${name}: 정책 디렉터리가 바뀜 — ${after}"
   elif [[ "${status}" -ne 1 ||
     $'\n'"${output}" != *$'\n'"guard: R0 conftest.toml: "* ]]; then
-    fail "config-first: 종료 1 · R0 conftest.toml 을 기대했으나 ${status}" \
+    fail "${name}: 종료 1 · R0 conftest.toml 을 기대했으나 ${status}" \
       "— ${output}"
   else
-    echo "ok: config-first → R0 · conftest 미호출 · 정책 무변경"
+    echo "ok: ${name} → R0 · conftest 미호출 · 정책 무변경"
   fi
   rm -rf -- "${tmp}"
+}
+
+#######################################
+# guard.sh 가 conftest 를 부를 때마다 저장소에 고정한 빈 설정을
+# --config-file 로 넘기는지 본다 — 검사 루트의 설정 파일을 아예 읽지
+# 않게. 설정 파일 이름 판정(R0 선차단)과 따로 지키는 겹이라, 이름 판정이
+# 있어도 이 인자가 빠지면 실패한다.
+#######################################
+expect_conftest_config_pinned() {
+  local tmp pinned line output status
+  local calls=0 unpinned=""
+  pinned="--config-file $(cd -P -- "${MARKER_DIR}" && pwd)/empty-config.toml"
+  tmp="$(new_tmp_dir)" || {
+    fail "config-pinned: 시험 준비 실패(임시 디렉터리)"
+    return
+  }
+  if ! make_conftest_recorder "${tmp}"; then
+    fail "config-pinned: 시험 준비 실패(대역)"
+    rm -rf -- "${tmp}"
+    return
+  fi
+  output="$(PATH="${tmp}/bin:${PATH}" bash "${GUARD}" "${FIXTURES}/ok_R12" \
+    2>&1)"
+  status=$?
+  if [[ -s "${tmp}/calls.log" ]]; then
+    while IFS= read -r line; do
+      calls=$((calls + 1))
+      if [[ "${line}" != *"${pinned}"* ]]; then
+        unpinned="${line}"
+      fi
+    done <"${tmp}/calls.log"
+  fi
+  rm -rf -- "${tmp}"
+  if [[ "${status}" -ne 0 || "${calls}" -lt 2 ]]; then
+    fail "config-pinned: 종료 0 · 호출 2회 이상을 기대했으나 ${status}" \
+      "· ${calls}회 — ${output}"
+  elif [[ -n "${unpinned}" ]]; then
+    fail "config-pinned: 빈 설정 없이 부름 — ${unpinned}"
+  else
+    echo "ok: config-pinned → 호출 ${calls}회 모두 빈 설정 명시"
+  fi
 }
 
 main() {
@@ -826,6 +968,7 @@ main() {
   }
   expect_policy_tests_pass
   expect_policy_tests_ignore_config
+  expect_policy_tests_ignore_data
   expect_zero_policy_tests_error
   for dir in "${FIXTURES}"/bad_*/; do
     [[ -d "${dir}" ]] || continue
@@ -855,10 +998,13 @@ main() {
     'guard: R12 nonprod/dns-legacy: resource "aws_route53_zone" "legacy" 선언 없음'
   expect_outside_clean "${FIXTURES}/ok_R12"
   expect_marker_injection_rejected
+  expect_outside_config_link_refused
   expect_operational_tree_clean
   # 열거 경계 · conftest 설정 파일(저장소 밖에서 만든 트리).
   expect_enumeration_boundaries
-  expect_config_stops_before_conftest
+  expect_config_stops_before_conftest file
+  expect_config_stops_before_conftest link
+  expect_conftest_config_pinned
 
   if [[ "${failures}" -ne 0 ]]; then
     echo "guard_test: ${failures}건 실패" >&2
