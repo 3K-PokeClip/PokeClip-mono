@@ -138,7 +138,8 @@ terraform fmt -check -recursive infra/terraform
 terraform -chdir=<루트·모듈> init -backend=false -input=false
 terraform -chdir=<루트·모듈> validate
 terraform -chdir=<tests/ 가 있는 루트·모듈> test
-conftest verify --policy infra/terraform/policy/guard
+conftest verify -c infra/terraform/scripts/guard-data/empty-config.toml \
+  --policy infra/terraform/policy/guard --namespace main
 bash infra/terraform/scripts/guard_test.sh
 bash infra/terraform/scripts/guard.sh
 shellcheck infra/terraform/scripts/*.sh
@@ -209,7 +210,9 @@ CI 자동 푸시를 켜는 후속 PR(40차)이 더합니다.
     손으로 돌립니다.
 
 ```
-conftest verify --policy infra/terraform/policy/guard   # 정책 단위 시험
+conftest verify -c infra/terraform/scripts/guard-data/empty-config.toml \
+  --policy infra/terraform/policy/guard \
+  --namespace main                                      # 정책 단위 시험
 bash infra/terraform/scripts/guard_test.sh              # fixture 끝에서 끝까지
 bash infra/terraform/scripts/guard.sh                   # 실제 트리
 ```
