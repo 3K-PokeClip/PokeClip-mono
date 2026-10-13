@@ -9,10 +9,13 @@ import (
 	"log"
 	"log/slog"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +26,7 @@ import (
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/ingestauth"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/keyresolve"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/streamkey"
 )
 
 // 시험의 합성 값이다. 토큰은 토큰 꼴(26자 Crockford 대문자)만 맞춘 값이고, 출입증 · API 비번 · passphrase 는 어떤
@@ -84,7 +88,7 @@ func cutEnv(mtxURL string) map[string]string {
 }
 
 // newTestSite 는 시험의 자리다 — 임시 거부 목록 파일(denyContent 로 쓴다) · 빈 기록 디렉터리 · 임의 포트의 healthz ·
-// 넉넉한 cut 시한.
+// 넉넉한 cut 시한 · 운영과 같은 net.Listen.
 func newTestSite(t *testing.T, denyContent string) site {
 	t.Helper()
 	s := site{
@@ -92,6 +96,7 @@ func newTestSite(t *testing.T, denyContent string) site {
 		connLogDir: t.TempDir(),
 		healthAddr: "127.0.0.1:0",
 		cutTimeout: 30 * time.Second,
+		listen:     net.Listen,
 	}
 	writeFile(t, s.denyList, denyContent)
 	return s
@@ -140,6 +145,98 @@ func checkNoSecrets(t *testing.T, outputs []string, extra ...string) {
 			}
 		}
 	}
+}
+
+// 잡은 출력(stdout · stderr · 기록)은 실패 문구에 그대로 싣지 않는다 — 누설 회귀가 생기면 그 출력에 합성 비밀이 실려 CI
+// 기록으로 간다(프로필 4절). 실패 문구에는 줄 수 · 바이트 수 · 이벤트 이름과, 꼴이 확인된 값(이름 · 등급 · 토큰 · 연결
+// id · IP 주소 · 포트 · 수 · 참거짓)만 싣는다. 그 밖의 값은 길이만 싣는다.
+var (
+	// nameShape 는 이벤트 · 사유 · 부류 · 필드 이름의 꼴이다 — 숫자가 없어 16진 · base64 비밀은 이 꼴이 아니다.
+	nameShape   = regexp.MustCompile(`^[a-z][a-z_]*$`)
+	connIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	portShape   = regexp.MustCompile(`^[0-9]{1,5}$`)
+	logLevels   = []string{"DEBUG", "INFO", "WARN", "ERROR"}
+)
+
+// safeToShow 는 출력에서 읽은 문자열 s 를 실패 문구에 그대로 실어도 되는 꼴인지 본다.
+func safeToShow(s string) bool {
+	if nameShape.MatchString(s) || connIDShape.MatchString(s) || portShape.MatchString(s) {
+		return true
+	}
+	if streamkey.IsToken(s) || slices.Contains(logLevels, s) {
+		return true
+	}
+	if _, err := netip.ParseAddr(s); err == nil {
+		return true
+	}
+	_, err := netip.ParseAddrPort(s)
+	return err == nil
+}
+
+// shown 은 출력에서 읽은 값 v 를 실패 문구에 싣는 꼴이다 — 수 · 참거짓과 꼴이 확인된 문자열은 그대로, 그 밖의 문자열은
+// 길이만, 없는 값은 <absent> 다.
+func shown(v any) string {
+	switch v := v.(type) {
+	case nil:
+		return "<absent>"
+	case float64, bool:
+		return fmt.Sprint(v)
+	case string:
+		if safeToShow(v) {
+			return strconv.Quote(v)
+		}
+		return fmt.Sprintf("<%d bytes>", len(v))
+	}
+	return fmt.Sprintf("<%T>", v)
+}
+
+// eventSummary 는 slog 줄 하나(해석한 꼴)를 실패 문구에 싣는 꼴이다 — 필드마다 shown 이고, 이름 꼴이 아닌 필드 이름은
+// 길이만 싣는다.
+func eventSummary(e map[string]any) string {
+	var fields []string
+	for _, key := range slices.Sorted(maps.Keys(e)) {
+		name := key
+		if !nameShape.MatchString(key) {
+			name = fmt.Sprintf("<%d-byte key>", len(key))
+		}
+		fields = append(fields, name+"="+shown(e[key]))
+	}
+	return "{" + strings.Join(fields, " ") + "}"
+}
+
+// eventsSummary 는 slog 줄 여럿을 eventSummary 로 싣는 꼴이다.
+func eventsSummary(events []map[string]any) string {
+	parts := make([]string, 0, len(events))
+	for _, e := range events {
+		parts = append(parts, eventSummary(e))
+	}
+	return "[" + strings.Join(parts, " ") + "]"
+}
+
+// lineCount 는 s 의 줄 수다. 빈 출력은 0 줄이고, 끝 줄바꿈이 없는 마지막 조각도 한 줄이다.
+func lineCount(s string) int {
+	n := 0
+	for range strings.Lines(s) {
+		n++
+	}
+	return n
+}
+
+// outputSummary 는 잡은 출력 out 을 실패 문구에 싣는 꼴이다 — 줄 수 · 바이트 수와, slog JSON 줄이 있으면 그 이벤트
+// 이름(shown)만 싣는다.
+func outputSummary(out string) string {
+	var events []string
+	for line := range strings.Lines(out) {
+		var e map[string]any
+		if json.Unmarshal([]byte(line), &e) == nil {
+			events = append(events, shown(e["msg"]))
+		}
+	}
+	summary := fmt.Sprintf("%d line(s), %d byte(s)", lineCount(out), len(out))
+	if len(events) > 0 {
+		summary += ", events [" + strings.Join(events, " ") + "]"
+	}
+	return summary
 }
 
 // keepDefaultLogger 는 run 이 바꾸는 전역 로거를 시험이 끝나면 되돌린다. run 은 slog.SetDefault 를 부르고, 그것은
@@ -255,6 +352,12 @@ func startResponder(t *testing.T, s site, env map[string]string) *runningRespond
 	started := waitForEvent(t, r.stdout, "ingestauth_started", r.done, 5*time.Second)
 	r.listen, _ = started["listen"].(string)
 	r.health, _ = started["health"].(string)
+	// 두 주소는 시험이 다시 쓰고 실패 문구 · 다이얼 에러에 실린다 — IP:포트 꼴이 아니면 여기서 멈춘다.
+	for name, addr := range map[string]string{"listen": r.listen, "health": r.health} {
+		if _, err := netip.ParseAddrPort(addr); err != nil {
+			t.Fatalf("ingestauth_started %s = %s, want <IP>:<port>", name, shown(started[name]))
+		}
+	}
 	return r
 }
 
@@ -363,20 +466,33 @@ type fakeConn struct {
 // 자격이 틀리면 401 이고, 목록은 created 순으로 itemsPerPage 를 따라 나누며(빈 목록은 pageCount 0), kick 은 목록에서
 // 곧바로 지우고 없는 id 는 404 다. 에러 본문은 원본의 JSON 꼴이다.
 type fakeMediaMTX struct {
-	srv *httptest.Server
+	srv        *httptest.Server
+	user, pass string // 받는 Basic 자격 — 만든 뒤 바꾸지 않는다
 
 	mu       sync.Mutex
 	conns    map[string]fakeConn
-	status   map[string]int // 갈래(list · get · kick) → 이 상태로 답한다
-	sticky   bool           // kick 이 200 을 내지만 연결을 지우지 않는다(확인 시한)
-	hangList bool           // 목록 요청을 요청 ctx 가 끝날 때까지 붙잡는다(cut 시한)
-	kicks    []string       // 200 으로 끝난 kick 의 id(차례대로)
-	requests int            // 받은 요청 수
+	status   map[string]int  // 갈래(list · get · kick) → 이 상태로 답한다
+	missing  map[string]bool // 갈래 → 경로가 없는 것처럼 gin 기본 404(text/plain — JSON 에러 꼴이 아님)로 답한다
+	sticky   bool            // kick 이 200 을 내지만 연결을 지우지 않는다(확인 시한)
+	hangList bool            // 목록 요청을 요청 ctx 가 끝날 때까지 붙잡는다(cut 시한)
+	onGet    func()          // 조회 요청이 닿으면 답하기 전에 부른다 — 확인 단계에 든 것을 시험이 안다
+	kicks    []string        // 200 으로 끝난 kick 의 id(차례대로)
+	requests int             // 받은 요청 수
 }
 
 func newFakeMediaMTX(t *testing.T) *fakeMediaMTX {
 	t.Helper()
-	m := &fakeMediaMTX{conns: make(map[string]fakeConn), status: make(map[string]int)}
+	return newFakeMediaMTXFor(t, testAPIUser, testAPIPass)
+}
+
+// newFakeMediaMTXFor 는 Basic 자격 user · pass 만 받는 가짜 MediaMTX 다 — 누설 시험은 고유한 API 사용자를 카나리아로
+// 쓴다.
+func newFakeMediaMTXFor(t *testing.T, user, pass string) *fakeMediaMTX {
+	t.Helper()
+	m := &fakeMediaMTX{
+		user: user, pass: pass,
+		conns: make(map[string]fakeConn), status: make(map[string]int), missing: make(map[string]bool),
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v3/srtconns/list", m.list)
 	mux.HandleFunc("GET /v3/srtconns/get/{id}", m.get)
@@ -385,7 +501,7 @@ func newFakeMediaMTX(t *testing.T) *fakeMediaMTX {
 		m.mu.Lock()
 		m.requests++
 		m.mu.Unlock()
-		if user, pass, ok := r.BasicAuth(); !ok || user != testAPIUser || pass != testAPIPass {
+		if user, pass, ok := r.BasicAuth(); !ok || user != m.user || pass != m.pass {
 			writeMTXError(w, http.StatusUnauthorized)
 			return
 		}
@@ -402,15 +518,20 @@ func writeMTXError(w http.ResponseWriter, status int) {
 	fmt.Fprintf(w, `{"status":"error","error":%q}`, http.StatusText(status))
 }
 
-// injected 는 갈래 route 에 넣은 실패가 있으면 그 상태로 답하고 참을 돌려준다.
-func (m *fakeMediaMTX) injected(w http.ResponseWriter, route string) bool {
+// injected 는 갈래 route 에 넣은 실패가 있으면 그것으로 답하고 참을 돌려준다. 경로 없음이 먼저다 — 원본은 경로가 없으면
+// 인증 뒤 gin 의 기본 404(text/plain 「404 page not found」)를 낸다(http.NotFound 와 같은 꼴).
+func (m *fakeMediaMTX) injected(w http.ResponseWriter, r *http.Request, route string) bool {
 	m.mu.Lock()
+	missing := m.missing[route]
 	status, ok := m.status[route]
 	m.mu.Unlock()
-	if ok {
+	switch {
+	case missing:
+		http.NotFound(w, r)
+	case ok:
 		writeMTXError(w, status)
 	}
-	return ok
+	return missing || ok
 }
 
 // item 은 연결 하나의 Control API 항목이다(APISRTConn 가운데 절단과 사람이 보는 필드).
@@ -427,7 +548,7 @@ func (c fakeConn) item(id string) map[string]any {
 }
 
 func (m *fakeMediaMTX) list(w http.ResponseWriter, r *http.Request) {
-	if m.injected(w, "list") {
+	if m.injected(w, r, "list") {
 		return
 	}
 	m.mu.Lock()
@@ -454,7 +575,13 @@ func (m *fakeMediaMTX) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *fakeMediaMTX) get(w http.ResponseWriter, r *http.Request) {
-	if m.injected(w, "get") {
+	m.mu.Lock()
+	onGet := m.onGet
+	m.mu.Unlock()
+	if onGet != nil {
+		onGet()
+	}
+	if m.injected(w, r, "get") {
 		return
 	}
 	id := r.PathValue("id")
@@ -470,7 +597,7 @@ func (m *fakeMediaMTX) get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *fakeMediaMTX) kick(w http.ResponseWriter, r *http.Request) {
-	if m.injected(w, "kick") {
+	if m.injected(w, r, "kick") {
 		return
 	}
 	id := r.PathValue("id")

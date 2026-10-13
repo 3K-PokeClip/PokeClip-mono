@@ -23,12 +23,15 @@ import (
 // 돌려주고, 가짜 MediaMTX 는 Basic 자격이 맞을 때만 답한다. 실패 문구에는 카나리아 이름 · 출력 자리 · 횟수만 싣는다 —
 // 출력 내용과 카나리아 값은 싣지 않는다.
 
-// MediaMTX 요청의 비밀 필드에 싣는 카나리아다(합성 — 어떤 계정의 값도 아니다).
+// MediaMTX 요청의 비밀 필드에 싣는 카나리아와 누설 시험의 Control API 사용자다(합성 — 어떤 계정의 값도 아니다). 설정값
+// testAPIUser("ingest-auth")는 실행 파일 이름 · stderr 머리와 겹쳐 카나리아로 쓸 수 없다 — 누설 시험만 고유한 사용자를
+// 쓴다(MTX_API_USER · 가짜 MediaMTX 의 자격 · api 행의 user).
 const (
 	leakRequestUser     = "synthetic-mtx-user-leak-0002"
 	leakRequestPassword = "synthetic-mtx-password-leak-0002"
 	leakRequestToken    = "synthetic-mtx-jwt-leak-0002"
 	leakRequestQuery    = "synthetic-mtx-query-leak-0002"
+	leakAPIUser         = "synthetic-mtx-api-user-leak-0003"
 )
 
 // leakCanary 는 출력 어디에도 나와서는 안 되는 합성 비밀 하나다. 실패 문구에는 name 만 싣는다.
@@ -42,8 +45,9 @@ type leakCanary struct {
 var leakCanaries = []leakCanary{
 	{name: "passphrase", value: testPassphrase},
 	{name: "resolve 출입증", value: testResolveToken},
+	{name: "API 사용자", value: leakAPIUser},
 	{name: "API 비번", value: testAPIPass},
-	{name: "Basic 자격", value: base64.StdEncoding.EncodeToString([]byte(testAPIUser + ":" + testAPIPass))},
+	{name: "Basic 자격", value: base64.StdEncoding.EncodeToString([]byte(leakAPIUser + ":" + testAPIPass))},
 	{name: "MediaMTX 요청 user", value: leakRequestUser},
 	{name: "MediaMTX 요청 password", value: leakRequestPassword},
 	{name: "MediaMTX 요청 token", value: leakRequestToken},
@@ -116,14 +120,15 @@ func missingEvents(out string, names ...string) []string {
 
 // run 의 한 생애 — 기동 · publish 허용(기록 회전) · 거절 · 본문 해석 실패 · api 행 · 거부 목록의 틀린 줄(healthz 실패 ·
 // 게이지 set · clear) · auth 끊김(판정 불가 · auth 게이지) · 정지 — 의 출력에 비밀이 없다. 요청 본문의 비밀 필드 ·
-// 출입증(환경 변수 → 4C 머리) · API 비번(환경 변수 · api 행) · passphrase(4C 답)가 이 흐름의 입력이다. 거부 목록에는
-// 운영자가 토큰 자리에 출입증을 잘못 붙인 줄을 둔다.
+// 출입증(환경 변수 → 4C 머리) · API 사용자 · 비번(환경 변수 · api 행 — 허용 행의 user 도 카나리아다) · passphrase(4C
+// 답)가 이 흐름의 입력이다. 거부 목록에는 운영자가 토큰 자리에 출입증을 잘못 붙인 줄을 둔다.
 func TestNoSecretsInRunOutputs(t *testing.T) {
 	auth := newFakeAuth(t)
 	s := newTestSite(t, "")
 	fillGeneration(t, s.connLogDir) // 첫 허용이 세대를 돌린다 — 새 세대의 첫 줄은 시작 표시다
 	env := responderEnv(auth.srv.URL)
 	env["LOG_LEVEL"] = "debug" // DEBUG 이벤트(api 행 허용)까지 훑는다
+	env["MTX_API_USER"] = leakAPIUser
 	r := startResponder(t, s, env)
 	var bodied []int // 본문을 실은 비-2xx 응답의 상태(누설 규칙 3)
 	post := func(body string) (int, string) {
@@ -140,8 +145,8 @@ func TestNoSecretsInRunOutputs(t *testing.T) {
 	}
 	post(strings.Replace(leakPublishBody(testToken, testConnID(2)), `"protocol":"srt"`, `"protocol":"rtmp"`, 1))
 	post("user=" + leakRequestUser + "&password=" + leakRequestPassword + "&token=" + leakRequestToken + "&query=" + leakRequestQuery)
-	if status, _ := post(leakAPIBody("127.0.0.1", testAPIUser, testAPIPass)); status != http.StatusOK {
-		t.Errorf("POST api with the configured credentials = %d, want 200 — the API password never reached the api row", status)
+	if status, _ := post(leakAPIBody("127.0.0.1", leakAPIUser, testAPIPass)); status != http.StatusOK {
+		t.Errorf("POST api with the configured credentials = %d, want 200 — the API user and password never reached the api row", status)
 	}
 	post(leakAPIBody("127.0.0.1", leakRequestUser, leakRequestPassword))
 	writeFile(t, s.denyList, testOtherToken+"\n"+testResolveToken+"\n")
@@ -192,19 +197,18 @@ func TestNoSecretsInRunOutputs(t *testing.T) {
 }
 
 // cut 의 세 갈래(기록 · 목록 · 기록 밖)와 실패 사유의 출력(stdout 한 줄 · stderr)에 비밀이 없다. 가짜 MediaMTX 는 Basic
-// 자격이 맞을 때만 답하므로 끝까지 끊은 cut 이 곧 자격이 실린 증거다. 실패 사유는 Control API 500(api_unreachable) 한
-// 갈래만 돈다 — 사유 표 전체는 cut_test 가 평문 카나리아로 보고, 여기서는 Basic 자격(base64)까지 훑는다.
+// 자격이 맞을 때만 답하므로(실패를 넣은 갈래도 자격을 본 뒤 500 이다) 끝까지 끊은 cut 과 그 갈래의 500 이 곧 자격이
+// 실린 증거다. 실패는 Control API 의 세 요청 — 목록 · kick · 조회 — 을 하나씩 500 으로 돈다: 그 에러가 cut 의 stderr 로
+// 나가는 자리가 요청마다 따로다(mtxctl 의 상태 에러 반환). 사유 표 전체는 cut_test 가 평문 카나리아로 보고, 여기서는
+// API 사용자와 Basic 자격(base64)까지 훑는다.
 func TestNoSecretsInCutOutputs(t *testing.T) {
 	// 기록 갈래는 고정물이 둔다 — 거부 목록에 testToken, 기록과 목록에 그 토큰의 1번 연결.
-	s, m, env := cutFixture(t)
+	s, m, env := cutFixtureWithAPIUser(t, leakAPIUser)
 	m.add(testConnID(2), fakeConn{created: time.Now(), state: "publish", path: testToken})      // 목록 갈래 — 기록에 없다
 	m.add(testConnID(3), fakeConn{created: time.Now().Add(-40 * time.Second), state: "idle"})   // 기록 밖 갈래 — 기록보다 먼저 생겨 30초 넘음
 	m.add(testConnID(4), fakeConn{created: time.Now(), state: "publish", path: testOtherToken}) // 다른 토큰 — 남는다
 
 	code, stdout, stderr := runCut(t, s, env, testToken)
-	m.set(func(m *fakeMediaMTX) { m.status["list"] = http.StatusInternalServerError })
-	failCode, failStdout, failStderr := runCut(t, s, env, testToken)
-
 	if completed := logEvents(stdout, "ingestauth_cut_completed"); code != 0 || len(completed) != 1 {
 		t.Errorf("cut over the three branches = %d with %d cut_completed lines, want 0 with one", code, len(completed))
 	} else {
@@ -218,18 +222,37 @@ func TestNoSecretsInCutOutputs(t *testing.T) {
 			}
 		}
 	}
-	incomplete := logEvents(failStdout, "ingestauth_cut_incomplete")
-	reasonOK := len(incomplete) == 1 && incomplete[0]["reason"] == "api_unreachable"
-	if failCode != 1 || !reasonOK || failStderr == "" {
-		t.Errorf("cut while the Control API answers 500 = %d (one api_unreachable line: %t, reason on stderr: %t), want 1 with both", failCode, reasonOK, failStderr != "")
+	outputs := []leakOutput{{place: "cut stdout (세 갈래)", content: stdout}, {place: "cut stderr (세 갈래)", content: stderr}}
+
+	// 실패 셋. 기록 갈래의 1번 연결은 앞의 cut 이 끊었어도 kick 은 나간다. 조회 실패는 새 송출(5번)을 kick 200 으로
+	// 끊은 뒤의 확인 조회다. 그 요청의 실패가 stderr 에 적혔는지 먼저 본다(양성 대조 — 그 갈래의 에러가 출력 자리를
+	// 지났다).
+	for _, f := range []struct {
+		place  string // 실패 문구의 출력 자리 이름
+		inject func()
+		failed string // 그 요청의 실패가 stderr 에 적히는 꼴(mtxctl.Error 의 문구)
+	}{
+		{place: "목록 500", inject: func() { m.set(func(m *fakeMediaMTX) { m.status["list"] = 500 }) }, failed: "mtxctl: list — HTTP 500"},
+		{place: "kick 500", inject: func() {
+			m.set(func(m *fakeMediaMTX) { delete(m.status, "list"); m.status["kick"] = 500 })
+		}, failed: "mtxctl: kick — HTTP 500"},
+		{place: "조회 500", inject: func() {
+			m.add(testConnID(5), fakeConn{created: time.Now(), state: "publish", path: testToken})
+			m.set(func(m *fakeMediaMTX) { delete(m.status, "kick"); m.status["get"] = 500 })
+		}, failed: "mtxctl: get — HTTP 500"},
+	} {
+		f.inject()
+		failCode, failStdout, failStderr := runCut(t, s, env, testToken)
+		incomplete := logEvents(failStdout, "ingestauth_cut_incomplete")
+		reasonOK := len(incomplete) == 1 && incomplete[0]["reason"] == "api_unreachable"
+		if named := strings.Contains(failStderr, f.failed); failCode != 1 || !reasonOK || !named {
+			t.Errorf("cut while the Control API answers %s = %d (one api_unreachable line: %t, that request's failure on stderr: %t), want 1 with both",
+				f.place, failCode, reasonOK, named)
+		}
+		outputs = append(outputs, leakOutput{place: "cut stdout (" + f.place + ")", content: failStdout},
+			leakOutput{place: "cut stderr (" + f.place + ")", content: failStderr})
 	}
-	outputs := append([]leakOutput{
-		{place: "cut stdout (세 갈래)", content: stdout},
-		{place: "cut stderr (세 갈래)", content: stderr},
-		{place: "cut stdout (Control API 500)", content: failStdout},
-		{place: "cut stderr (Control API 500)", content: failStderr},
-	}, stateFiles(t, s.connLogDir)...)
-	for _, p := range leakProblems(outputs) {
+	for _, p := range leakProblems(append(outputs, stateFiles(t, s.connLogDir)...)) {
 		t.Error(p)
 	}
 }

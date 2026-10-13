@@ -64,7 +64,12 @@ func callerAddr(raw string) (netip.Addr, error) {
 }
 
 // specified 는 IPv4-mapped 를 푼 addr 이 미지정 주소가 아니면 그것을 돌려준다. name 은 에러에 싣는 변수 이름이다.
+// zone 이 붙은 주소는 받지 않는다 — 처리기(ingestauth)는 zone 붙은 주소를 zone 없는 주소와 다르게 보는데, Unmap 은
+// IPv4-mapped 의 zone 을 지워 다른 주소를 만든다. 제어망은 IPv4 리터럴이라(설계 2-8) zone 이 쓰일 자리가 없다.
 func specified(name string, addr netip.Addr) (netip.Addr, error) {
+	if addr.Zone() != "" {
+		return netip.Addr{}, fmt.Errorf("%s 의 IP 에는 zone(%%…)을 붙일 수 없다", name)
+	}
 	addr = addr.Unmap()
 	if addr.IsUnspecified() {
 		return netip.Addr{}, fmt.Errorf("%s 의 IP 는 미지정 주소(0.0.0.0 · ::)일 수 없다", name)
@@ -104,18 +109,62 @@ func newControlClient(getenv func(string) string) (*mtxctl.Client, error) {
 	return c, nil
 }
 
-// newResolver 는 STREAM_KEY_RESOLVE_URL · STREAM_KEY_RESOLVE_TOKEN 으로 4C 클라이언트를 만든다. 기동 로그에 실을 auth
-// 의 호스트:포트도 돌려준다 — URL 의 사용자 정보 · 경로 · 질의는 싣지 않는다.
-func newResolver(getenv func(string) string) (*keyresolve.Client, string, error) {
+// newResolver 는 STREAM_KEY_RESOLVE_URL · STREAM_KEY_RESOLVE_TOKEN 으로 4C 클라이언트를 만든다. 기동 로그에 실을 4C
+// 끝점의 모습(authTarget)도 돌려준다.
+func newResolver(getenv func(string) string) (*keyresolve.Client, authTarget, error) {
 	raw := getenv(envResolveURL)
 	c, err := keyresolve.NewClient(keyresolve.ClientOptions{BaseURL: raw, Token: keyresolve.NewSecret(getenv(envResolveToken))})
 	if err != nil {
-		return nil, "", fmt.Errorf("%s · %s: %w", envResolveURL, envResolveToken, err)
+		return nil, authTarget{}, fmt.Errorf("%s · %s: %w", envResolveURL, envResolveToken, err)
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		// NewClient 가 이미 해석했으므로 오지 않는다. 해석 에러의 문구는 원문을 담으므로 싣지 않는다.
-		return nil, "", errors.New(envResolveURL + " 를 해석하지 못했다")
+		return nil, authTarget{}, errors.New(envResolveURL + " 를 해석하지 못했다")
 	}
-	return c, u.Host, nil
+	return c, authTargetOf(u), nil
+}
+
+// authTarget 은 기동 로그에 싣는 4C 끝점의 모습이다 — 호스트의 부류와 포트뿐이다. 주소는 싣지 않는다 — 기동 로그는 이슈 ·
+// 문서 · 리뷰로 옮겨지는데 dev 상자의 사설 주소가 따라가지 않게 한다(설계 6절). 부류로 설계 2-6 의 「공인 주소면 403」을
+// 가른다.
+type authTarget struct {
+	hostKind string // hostPrivate · hostPublic · hostName · hostOther
+	port     string // URL 의 포트 — 없으면 스킴의 기본 포트(전송이 다이얼하는 포트)
+}
+
+// authTarget.hostKind 의 값이다.
+const (
+	hostPrivate = "private" // 사설 주소(RFC 1918 · RFC 4193) — 설계 값(dev 상자의 사설 주소)
+	hostPublic  = "public"  // 그 밖의 전역 유니캐스트 — auth 의 출발지 잠금에 걸려 403 이다
+	hostName    = "name"    // IP 리터럴이 아니다 — DNS 가 푼다
+	hostOther   = "other"   // 루프백 · 링크 로컬 · 미지정 · 멀티캐스트 — 설계가 쓰는 꼴이 아니다
+)
+
+// authTargetOf 는 u 의 authTarget 이다. u 는 keyresolve.NewClient 가 받은 URL 이라 스킴은 http · https 이고 호스트가
+// 있다.
+func authTargetOf(u *url.URL) authTarget {
+	port := u.Port()
+	if port == "" {
+		port = "80"
+		if u.Scheme == "https" {
+			port = "443"
+		}
+	}
+	return authTarget{hostKind: hostKindOf(u.Hostname()), port: port}
+}
+
+// hostKindOf 는 host(URL 의 Hostname — 괄호 · 포트 없음)의 부류다. 사설을 먼저 본다 — IsGlobalUnicast 는 사설 주소에도
+// 참이다.
+func hostKindOf(host string) string {
+	addr, err := netip.ParseAddr(host)
+	switch {
+	case err != nil:
+		return hostName
+	case addr.IsPrivate():
+		return hostPrivate
+	case addr.IsGlobalUnicast():
+		return hostPublic
+	}
+	return hostOther
 }

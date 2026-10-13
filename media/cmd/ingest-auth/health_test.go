@@ -58,13 +58,13 @@ func TestCheckHealthExitCodes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			code, stderr := runHealthcheck(t, fakeHealthz(t, tc.answer))
 			if code != tc.want {
-				t.Errorf("healthcheck against %s = %d, want %d; stderr: %s", tc.name, code, tc.want, stderr)
+				t.Errorf("healthcheck against %s = %d, want %d (stderr: %s)", tc.name, code, tc.want, outputSummary(stderr))
 			}
 			if tc.wantStderr == "" && stderr != "" {
-				t.Errorf("healthcheck against %s wrote to stderr: %q, want nothing", tc.name, stderr)
+				t.Errorf("healthcheck against %s wrote to stderr (%s), want nothing", tc.name, outputSummary(stderr))
 			}
 			if !strings.Contains(stderr, tc.wantStderr) {
-				t.Errorf("healthcheck against %s stderr = %q, want it to carry %q", tc.name, stderr, tc.wantStderr)
+				t.Errorf("healthcheck against %s stderr (%s) does not carry %q", tc.name, outputSummary(stderr), tc.wantStderr)
 			}
 		})
 	}
@@ -75,7 +75,7 @@ func TestCheckHealthFailsWhenNothingListens(t *testing.T) {
 	addr := ln.Addr().String()
 	ln.Close()
 	if code, stderr := runHealthcheck(t, addr); code != 1 || stderr == "" {
-		t.Errorf("healthcheck against a closed port = %d (stderr %q), want 1 with a reason", code, stderr)
+		t.Errorf("healthcheck against a closed port = %d (stderr: %s), want 1 with a reason", code, outputSummary(stderr))
 	}
 }
 

@@ -75,7 +75,8 @@ func serve(ctx context.Context, s site, getenv func(string) string, stdout, stde
 	log.Info("ingestauth_started",
 		"listen", r.auth.ln.Addr().String(),
 		"caller_ip", cfg.callerIP.String(),
-		"auth_host", cfg.authHost,
+		"auth_host_kind", cfg.auth.hostKind,
+		"auth_port", cfg.auth.port,
 		"deadline_ms", ingestauth.MaxDeadline.Milliseconds(),
 		"health", r.health.ln.Addr().String())
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
@@ -94,7 +95,7 @@ type serveConfig struct {
 	listen   netip.AddrPort // 인증 리스너 — 이 IP 가 SelfIP 다
 	callerIP netip.Addr
 	resolver *keyresolve.Client
-	authHost string // 기동 로그의 auth_host — auth 의 호스트:포트
+	auth     authTarget // 기동 로그의 auth_host_kind · auth_port — 주소는 없다
 }
 
 // loadServeConfig 는 run 의 환경 변수를 모두 검사한다(설계 2-6 — 필수값이 비면 기동 실패). cut 만 쓰는 MTX_API_URL 도
@@ -115,11 +116,11 @@ func loadServeConfig(getenv func(string) string) (serveConfig, error) {
 	if _, err := newControlClient(getenv); err != nil {
 		return serveConfig{}, err
 	}
-	resolver, authHost, err := newResolver(getenv)
+	resolver, auth, err := newResolver(getenv)
 	if err != nil {
 		return serveConfig{}, err
 	}
-	return serveConfig{listen: listen, callerIP: callerIP, resolver: resolver, authHost: authHost}, nil
+	return serveConfig{listen: listen, callerIP: callerIP, resolver: resolver, auth: auth}, nil
 }
 
 // listening 은 리스너 하나와 그 위에서 돌릴 서버다.
@@ -153,7 +154,7 @@ func openResponder(s site, cfg serveConfig, getenv func(string) string, log *slo
 	if err != nil {
 		return responder{}, err
 	}
-	authLn, healthLn, err := listenBoth(cfg.listen.String(), s.healthAddr)
+	authLn, healthLn, err := listenBoth(s.listen, cfg.listen.String(), s.healthAddr)
 	if err != nil {
 		return responder{}, err
 	}
@@ -165,13 +166,13 @@ func openResponder(s site, cfg serveConfig, getenv func(string) string, log *slo
 	}, nil
 }
 
-// listenBoth 는 인증 리스너와 healthz 리스너를 연다. 둘째가 실패하면 첫째를 닫는다.
-func listenBoth(authAddr, healthAddr string) (auth, health net.Listener, err error) {
-	auth, err = net.Listen("tcp", authAddr)
+// listenBoth 는 listen(운영은 net.Listen)으로 인증 리스너와 healthz 리스너를 연다. 둘째가 실패하면 첫째를 닫는다.
+func listenBoth(listen func(network, address string) (net.Listener, error), authAddr, healthAddr string) (auth, health net.Listener, err error) {
+	auth, err = listen("tcp", authAddr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("인증 리스너를 열지 못했다: %w", err)
 	}
-	health, err = net.Listen("tcp", healthAddr)
+	health, err = listen("tcp", healthAddr)
 	if err != nil {
 		return nil, nil, errors.Join(fmt.Errorf("healthz 리스너를 열지 못했다: %w", err), auth.Close())
 	}
@@ -185,8 +186,9 @@ func routed(pattern string, h http.Handler) http.Handler {
 	return mux
 }
 
-// newServer 는 h 를 두 리스너 공통의 한도(위 상수)로 싼 http.Server 다. 서버 자신의 로그(처리기 패닉 등)는 log 의
-// ERROR 로 낸다 — 텍스트 줄이 JSON 로그에 섞이지 않게.
+// newServer 는 h 를 두 리스너 공통의 한도(위 상수)로 싼 http.Server 다. 서버 자신의 로그(처리기 패닉 · Accept 실패
+// 등)는 log 의 ERROR 로 낸다. ErrorLog 가 nil 이면 SetDefault 를 거쳐 INFO 로 나간다 — warn · error 에서도 남게 ERROR 로
+// 낸다.
 func newServer(h http.Handler, log *slog.Logger) *http.Server {
 	return &http.Server{
 		Handler:           h,

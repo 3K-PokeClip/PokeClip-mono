@@ -31,10 +31,10 @@ func runConfigFailure(t *testing.T, args []string, env map[string]string, name s
 	stdout, stderr := newOutputLog(), newOutputLog()
 	code := run(ctx, newTestSite(t, ""), args, getenvFrom(env), stdout, stderr)
 	if code != 2 {
-		t.Errorf("run(%q) = %d, want 2 (configuration error); stderr: %s", args, code, stderr.String())
+		t.Errorf("run(%q) = %d, want 2 (configuration error; stderr: %s)", args, code, outputSummary(stderr.String()))
 	}
 	if !strings.Contains(stderr.String(), name) {
-		t.Errorf("run(%q) stderr does not name %s: %q", args, name, stderr.String())
+		t.Errorf("run(%q) stderr does not name %s (stderr: %s)", args, name, outputSummary(stderr.String()))
 	}
 	if events := logEvents(stdout.String(), "ingestauth_started"); len(events) != 0 {
 		t.Errorf("run(%q) logged ingestauth_started despite the configuration error", args)
@@ -66,11 +66,17 @@ func TestRunRejectsInvalidValues(t *testing.T) {
 		{name: "LISTEN_미지정_IPv4", key: "INGEST_AUTH_LISTEN", value: "0.0.0.0:0"},
 		{name: "LISTEN_미지정_IPv6", key: "INGEST_AUTH_LISTEN", value: "[::]:0"},
 		{name: "LISTEN_미지정_mapped", key: "INGEST_AUTH_LISTEN", value: "[::ffff:0.0.0.0]:0"},
+		// zone 붙은 주소 — 처리기는 zone 붙은 주소를 zone 없는 주소와 다르게 본다. 묶을 수 없는 주소라 검사를 빠뜨린
+		// 변이도 곧바로 끝난다.
+		{name: "LISTEN_zone_mapped", key: "INGEST_AUTH_LISTEN", value: "[::ffff:192.0.2.20%eth0]:0", canary: true},
+		{name: "LISTEN_zone_링크_로컬", key: "INGEST_AUTH_LISTEN", value: "[fe80::1%eth0]:0", canary: true},
 		{name: "CALLER_꼴_밖", key: "INGEST_AUTH_CALLER_IP", value: "synthetic-caller-canary-0001", canary: true},
 		{name: "CALLER_호스트_이름", key: "INGEST_AUTH_CALLER_IP", value: "mediamtx.test", canary: true},
 		{name: "CALLER_미지정_IPv4", key: "INGEST_AUTH_CALLER_IP", value: "0.0.0.0"},
 		{name: "CALLER_미지정_IPv6", key: "INGEST_AUTH_CALLER_IP", value: "::"},
 		{name: "CALLER_미지정_mapped", key: "INGEST_AUTH_CALLER_IP", value: "::ffff:0.0.0.0"},
+		{name: "CALLER_zone_mapped", key: "INGEST_AUTH_CALLER_IP", value: "::ffff:192.0.2.10%eth0", canary: true},
+		{name: "CALLER_zone_링크_로컬", key: "INGEST_AUTH_CALLER_IP", value: "fe80::1%eth0", canary: true},
 		{name: "MTX_URL_https", key: "MTX_API_URL", value: "https://192.0.2.10:9997", canary: true},
 		{name: "MTX_URL_호스트_이름", key: "MTX_API_URL", value: "http://mediamtx.test:9997", canary: true},
 		{name: "MTX_URL_사용자_정보", key: "MTX_API_URL", value: "http://synthetic-userinfo-canary@192.0.2.10:9997", canary: true},
@@ -88,6 +94,40 @@ func TestRunRejectsInvalidValues(t *testing.T) {
 				extra = append(extra, tc.value)
 			}
 			runConfigFailure(t, nil, env, tc.key, extra...)
+		})
+	}
+}
+
+// 기동 로그에 싣는 4C 끝점은 호스트의 부류와 포트뿐이다(설계 6절 — 주소는 싣지 않는다). 부류는 설계 2-6 의 「공인 주소면
+// 403」을 가르는 데 쓴다. 포트가 없으면 전송이 다이얼하는 스킴의 기본 포트다. 사설 주소는 합성 값이다(저장소 선례).
+func TestNewResolverReportsHostKindAndPort(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		url  string
+		want authTarget
+	}{
+		{name: "사설_IPv4", url: "http://192.168.0.1:8082", want: authTarget{hostKind: "private", port: "8082"}},
+		{name: "사설_IPv6_ULA", url: "http://[fd00::1]:8082", want: authTarget{hostKind: "private", port: "8082"}},
+		{name: "사설_IPv4-mapped", url: "http://[::ffff:192.168.0.1]:8082", want: authTarget{hostKind: "private", port: "8082"}},
+		{name: "공인_IPv4", url: "http://198.51.100.20:8082", want: authTarget{hostKind: "public", port: "8082"}},
+		{name: "공인_IPv6", url: "http://[2001:db8::20]:8082", want: authTarget{hostKind: "public", port: "8082"}},
+		{name: "이름", url: "http://auth.test:8082", want: authTarget{hostKind: "name", port: "8082"}},
+		{name: "루프백", url: "http://127.0.0.1:8082", want: authTarget{hostKind: "other", port: "8082"}},
+		{name: "링크_로컬_zone", url: "http://[fe80::1%25eth0]:8082", want: authTarget{hostKind: "other", port: "8082"}},
+		{name: "포트_없음_http", url: "http://192.168.0.1", want: authTarget{hostKind: "private", port: "80"}},
+		{name: "포트_없음_https", url: "https://auth.test", want: authTarget{hostKind: "name", port: "443"}},
+		{name: "경로", url: "http://198.51.100.20:8082/base", want: authTarget{hostKind: "public", port: "8082"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := configEnv()
+			env["STREAM_KEY_RESOLVE_URL"] = tc.url
+			_, got, err := newResolver(getenvFrom(env))
+			if err != nil {
+				t.Fatalf("newResolver(%s) returned error: %v", tc.name, err)
+			}
+			if got != tc.want {
+				t.Errorf("newResolver(%s) target = %+v, want %+v", tc.name, got, tc.want)
+			}
 		})
 	}
 }
@@ -120,10 +160,10 @@ func TestCutRequiresControlVariables(t *testing.T) {
 				t.Errorf("run(cut) without a usable %s = %d, want 2", tc.key, code)
 			}
 			if !strings.Contains(stderr.String(), tc.key) {
-				t.Errorf("run(cut) stderr does not name %s: %q", tc.key, stderr.String())
+				t.Errorf("run(cut) stderr does not name %s (stderr: %s)", tc.key, outputSummary(stderr.String()))
 			}
 			if stdout.String() != "" {
-				t.Errorf("run(cut) wrote to stdout despite the configuration error: %q", stdout.String())
+				t.Errorf("run(cut) wrote to stdout despite the configuration error (stdout: %s)", outputSummary(stdout.String()))
 			}
 			checkNoSecrets(t, []string{stdout.String(), stderr.String()}, tc.value)
 		})

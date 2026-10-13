@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"time"
 )
@@ -35,7 +36,7 @@ const (
 	// cutDeadline 은 cut 한 번의 전체 시한이다. MediaMTX 의 SRT 서버 루프가 멈추면 Control API 가 끝없이 기다리므로
 	// (포크 srt/server.go 287–300) 시한이 있어야 cut 이 끝난다. 크기는 기록 두 세대의 줄 상한(약 19,070 — 세대 1 MiB ÷
 	// 줄 110 바이트 이상)을 모두 kick 하고(kick 마다 MediaMTX 가 응답기에 api 인증을 묻는다) 두 판독의 확인(2초씩)과
-	// 목록을 더해도 넘지 않게 잡았다 — kick 한 번이 약 6ms 이하면 된다. kick 시간은 아직 재지 않았다(설계 7절 4′).
+	// 목록을 더해도 넘지 않게 잡았다 — kick 한 번이 약 6ms 이하면 된다. kick 시간은 재지 않았다 — 실측 거리다.
 	cutDeadline = 2 * time.Minute
 )
 
@@ -49,17 +50,19 @@ const (
 // usage 는 사용법 오류 때 stderr 에 쓰는 글이다. 받은 인자는 싣지 않는다.
 const usage = "사용법: ingest-auth [run] | ingest-auth healthcheck | ingest-auth cut <토큰>"
 
-// site 는 하위 명령이 기대는 고정 자리와 시한이다. 운영 값은 main 이 위 상수로 채운다. 시험만 임시 디렉터리 · 임의
-// 포트 · 짧은 시한을 준다.
+// site 는 하위 명령이 기대는 고정 자리와 시한이다. 운영 값은 main 이 위 상수와 net.Listen 으로 채운다. 시험만 임시
+// 디렉터리 · 임의 포트 · 짧은 시한을 주고, 연 리스너를 쥐어 서버가 스스로 멈춘 경우를 만든다.
 type site struct {
 	denyList   string        // 거부 목록 파일 — run 의 처리기 · healthz 와 cut 이 읽는다
 	connLogDir string        // 허용 연결 기록 디렉터리 — run 이 쓰고 cut 이 읽는다
 	healthAddr string        // healthz 리스너(루프백)
 	cutTimeout time.Duration // cut 한 번의 전체 시한
+	// listen 은 run 의 두 리스너를 연다.
+	listen func(network, address string) (net.Listener, error)
 }
 
 func main() {
-	deployed := site{denyList: denyListFile, connLogDir: connLogDirectory, healthAddr: healthListen, cutTimeout: cutDeadline}
+	deployed := site{denyList: denyListFile, connLogDir: connLogDirectory, healthAddr: healthListen, cutTimeout: cutDeadline, listen: net.Listen}
 	os.Exit(run(context.Background(), deployed, os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
 }
 

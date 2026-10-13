@@ -19,7 +19,7 @@ const (
 	reasonNotDenied          = "not_denied"           // 거부 목록에 없다 — 아무것도 끊지 않았다(종료 2)
 	reasonDenyListUnreadable = "denylist_unreadable"  // 거부 목록을 읽지 못했다 — 아무것도 끊지 않았다
 	reasonAPIAuth            = "api_auth"             // Control API 401 — 응답기 부재 · 고장(MediaMTX 가 api 인증을 응답기에 묻는다)
-	reasonAPIIncompatible    = "api_incompatible"     // 목록 404 · 해석 실패 · 여러 페이지 — Control API 가 cut 이 아는 꼴이 아니다
+	reasonAPIIncompatible    = "api_incompatible"     // 경로 없음 404 · 해석 실패 · 여러 페이지 — Control API 가 cut 이 아는 꼴이 아니다
 	reasonAPIUnreachable     = "api_unreachable"      // Control API 무응답(cut 시한 포함) · 전송 실패 · 기대 밖 상태
 	reasonInternalError      = "internal_error"       // 모르는 에러 꼴 · Cut 의 계약과 어긋난 결과
 	reasonConnLogUnreadable  = "connlog_unreadable"   // 기록을 읽지 못했거나 줄이 없다 — 목록 갈래만 끊었다
@@ -97,8 +97,10 @@ func cutOutcome(r ingestauth.CutReport, err error) (code int, reason string) {
 
 // cutReason 은 err(errors.Join 일 수 있다)를 reason 하나로 옮긴다. 까닭이 여럿이면 먼저 풀어야 다른 일을 다시 할 수
 // 있는 것을 고른다 — 거부 목록 → Control API(401 → 꼴 불일치 → 무응답) → 모르는 꼴 → 기록 읽기 → 기록 창 → 확인
-// 시한. Cut 은 Control API · ctx · 모르는 실패를 첫 하나만 남긴다 — 그래서 500 뒤에 온 401 은 보이지 않을 수 있다.
-// 그때 보고되는 api_unreachable 의 운영 순서가 응답기 healthy 확인부터라(설계 3-4 3) 401 의 처방도 거친다.
+// 시한. Cut 은 까닭을 갈래(401 · 그 밖의 Control API · ctx 끝 · 모르는 꼴 …)마다 첫 하나만 남긴다 — 그래서 앞의 500
+// 뒤에 온 401 도 api_auth 로 나온다. 한계: 「그 밖의 Control API」 한 칸 안에서는 첫 것만 남아, 앞의 무응답(500 등)
+// 뒤에 온 꼴 불일치(경로 없음 404 · 해석 실패)는 api_unreachable 에 가려진다. 두 사유의 운영 순서가 같은 것은 첫
+// 단계(응답기 healthy 확인)뿐이다(설계 3-4 3).
 func cutReason(err error) string {
 	found := make(map[string]bool)
 	for _, part := range joinedParts(err) {
@@ -145,14 +147,16 @@ func partReason(err error) string {
 	return reasonInternalError
 }
 
-// apiReason 은 Control API 실패 하나의 reason 이다. Op · Kind 의 값은 mtxctl.Error 문서의 것이다. 목록 404 는 경로가
-// 없다는 뜻이라(설계의 /v3/srtconns/* 는 원본에서 deprecated 별칭 — 포크 api.go 217–220) MediaMTX 를 다시 띄워도
-// 풀리지 않는다 — 무응답과 가른다. 조회 · kick 의 404 는 Cut 이 「없음」으로 읽으므로 여기 오지 않는다.
+// apiReason 은 Control API 실패 하나의 reason 이다. Op · Kind 의 값은 mtxctl.Error 문서의 것이다. 404 는 갈래(목록 ·
+// 조회 · kick)와 무관하게 경로가 없다는 뜻이다(설계의 /v3/srtconns/* 는 원본에서 deprecated 별칭 — 포크 api.go
+// 217–220). 연결 없음 404(본문이 Control API 의 에러 꼴)는 mtxctl 이 「없음」으로 바꿔 여기 오지 않는다. 404 · 해석
+// 실패 · 여러 페이지는 무응답과 가른다 — cut 은 재시작으로 풀리지 않는다(판 · 경로 호환을 고쳐야 한다). 유출 키의
+// 송출을 바로 끊는 수단은 MediaMTX 최후 재시작이고, 그것은 이 사유와 별개다(설계 3-4 3).
 func apiReason(e *mtxctl.Error) string {
 	switch {
 	case e.Kind == "status" && e.Status == http.StatusUnauthorized:
 		return reasonAPIAuth
-	case e.Kind == "status" && e.Status == http.StatusNotFound && e.Op == "list", e.Kind == "parse", e.Kind == "pages":
+	case e.Kind == "status" && e.Status == http.StatusNotFound, e.Kind == "parse", e.Kind == "pages":
 		return reasonAPIIncompatible
 	}
 	return reasonAPIUnreachable

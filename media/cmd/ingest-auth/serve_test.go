@@ -48,20 +48,25 @@ func TestRunServesPublishAndStops(t *testing.T) {
 
 	started := logEvents(r.stdout.String(), "ingestauth_started")[0]
 	if !strings.HasPrefix(r.listen, "127.0.0.1:") || r.listen == "127.0.0.1:0" {
-		t.Errorf("ingestauth_started listen = %q, want the bound 127.0.0.1:<port> (only the configured IP)", r.listen)
+		t.Errorf("ingestauth_started listen = %s, want the bound 127.0.0.1:<port> (only the configured IP)", shown(r.listen))
 	}
 	if !strings.HasPrefix(r.health, "127.0.0.1:") || r.health == "127.0.0.1:0" {
-		t.Errorf("ingestauth_started health = %q, want the bound 127.0.0.1:<port>", r.health)
+		t.Errorf("ingestauth_started health = %s, want the bound 127.0.0.1:<port>", shown(r.health))
+	}
+	_, authPort, err := net.SplitHostPort(auth.srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("Setup: fake auth address: %v", err)
 	}
 	wantFields := map[string]any{
-		"level":       "INFO",
-		"caller_ip":   "127.0.0.1",
-		"auth_host":   strings.TrimPrefix(auth.srv.URL, "http://"),
-		"deadline_ms": float64(1125),
+		"level":          "INFO",
+		"caller_ip":      "127.0.0.1",
+		"auth_host_kind": "other", // httptest 의 루프백
+		"auth_port":      authPort,
+		"deadline_ms":    float64(1125),
 	}
 	for name, want := range wantFields {
 		if got := started[name]; got != want {
-			t.Errorf("ingestauth_started %s = %v, want %v", name, got, want)
+			t.Errorf("ingestauth_started %s = %s, want %v", name, shown(got), want)
 		}
 	}
 
@@ -74,15 +79,15 @@ func TestRunServesPublishAndStops(t *testing.T) {
 		t.Fatalf("LoadAllowed(%s) returned error: %v", s.connLogDir, err)
 	}
 	if got := allowed.Tokens[testConnID(1)]; got != testToken {
-		t.Errorf("connection log maps %s to %q, want %q", testConnID(1), got, testToken)
+		t.Errorf("connection log maps %s to %s, want %q", testConnID(1), shown(got), testToken)
 	}
 
 	if code := r.stopAndWait(t); code != 0 {
-		t.Errorf("run after its context ended = %d, want 0; stderr: %s", code, r.stderr.String())
+		t.Errorf("run after its context ended = %d, want 0 (stderr: %s)", code, outputSummary(r.stderr.String()))
 	}
 	stopped := logEvents(r.stdout.String(), "ingestauth_stopped")
 	if len(stopped) != 1 || stopped[0]["level"] != "INFO" {
-		t.Errorf("ingestauth_stopped events = %v, want one at INFO", stopped)
+		t.Errorf("ingestauth_stopped events = %s, want one at INFO", eventsSummary(stopped))
 	}
 	if _, _, err := postAuth(context.Background(), r.listen, publishBody(testToken, testConnID(2)), nil); err == nil {
 		t.Errorf("POST after run returned succeeded, want the listener closed")
@@ -90,17 +95,25 @@ func TestRunServesPublishAndStops(t *testing.T) {
 	checkNoSecrets(t, []string{r.stdout.String(), r.stderr.String()})
 }
 
-// auth_host 는 URL 의 호스트:포트만이다 — 경로에 잘못 넣은 값이 기동 로그에 실리지 않는다(설계 6절 누설 규칙). 사용자
-// 정보 · 질의가 든 URL 은 keyresolve.NewClient 가 거부해 설정 오류다(config_test 의 RESOLVE_URL_사용자_정보 행).
-func TestRunStartedLogCarriesOnlyTheAuthHost(t *testing.T) {
-	const canary = "synthetic-path-canary-0002"
-	auth := newFakeAuth(t)
-	env := responderEnv(auth.srv.URL + "/" + canary)
-	r := startResponder(t, newTestSite(t, ""), env)
-	if got, want := logEvents(r.stdout.String(), "ingestauth_started")[0]["auth_host"], strings.TrimPrefix(auth.srv.URL, "http://"); got != want {
-		t.Errorf("ingestauth_started auth_host = %v, want %v", got, want)
+// 기동 로그는 4C 끝점의 주소를 싣지 않는다 — 호스트의 부류와 포트뿐이다(설계 6절). 경로에 잘못 넣은 값도 실리지 않는다.
+// 사용자 정보 · 질의가 든 URL 은 keyresolve.NewClient 가 거부해 설정 오류다(config_test 의 RESOLVE_URL_사용자_정보 행).
+// 기동은 4C 를 부르지 않으므로 닿지 않는 주소로도 뜬다.
+func TestRunStartedLogCarriesOnlyAuthHostKindAndPort(t *testing.T) {
+	const (
+		host   = "192.168.0.1" // 합성 사설 주소(저장소 선례 — internal/config 시험) — 기동 로그에 나오면 안 된다
+		canary = "synthetic-path-canary-0002"
+	)
+	r := startResponder(t, newTestSite(t, ""), responderEnv("http://"+host+":8082/"+canary))
+	started := logEvents(r.stdout.String(), "ingestauth_started")[0]
+	for name, want := range map[string]string{"auth_host_kind": "private", "auth_port": "8082"} {
+		if got := started[name]; got != want {
+			t.Errorf("ingestauth_started %s = %s, want %q", name, shown(got), want)
+		}
 	}
-	checkNoSecrets(t, []string{r.stdout.String(), r.stderr.String()}, canary)
+	if _, ok := started["auth_host"]; ok {
+		t.Errorf("ingestauth_started carries auth_host, want only auth_host_kind and auth_port")
+	}
+	checkNoSecrets(t, []string{r.stdout.String(), r.stderr.String()}, host, canary)
 }
 
 // 인증 처리기는 POST /mediamtx/auth 하나에만 있다(설계 2-6 · 2-8 authHTTPAddress). 다른 경로 · 메서드는 처리기에
@@ -176,7 +189,7 @@ func TestRunHealthcheckRereadsDenyListAndConnLog(t *testing.T) {
 	for _, step := range steps {
 		step.do()
 		if code, stderr := runHealthcheck(t, r.health); code != step.want {
-			t.Errorf("after %s: healthcheck = %d, want %d; stderr: %s", step.name, code, step.want, stderr)
+			t.Errorf("after %s: healthcheck = %d, want %d (stderr: %s)", step.name, code, step.want, outputSummary(stderr))
 		}
 	}
 }
@@ -187,7 +200,7 @@ func TestHealthzSharesDenyListWithHandler(t *testing.T) {
 	s := newTestSite(t, testToken+"\n")
 	r := startResponder(t, s, responderEnv(auth.srv.URL))
 	if code, stderr := runHealthcheck(t, r.health); code != 0 {
-		t.Fatalf("healthcheck = %d, want 0; stderr: %s", code, stderr)
+		t.Fatalf("healthcheck = %d, want 0 (stderr: %s)", code, outputSummary(stderr))
 	}
 	writeFile(t, s.denyList, "") // 파일에서 지운다 — 한 번 읽은 토큰은 응답기 수명 동안 남는다
 	if status, _ := mustPostAuth(t, r.listen, publishBody(testToken, testConnID(1)), nil); status != http.StatusUnauthorized {
@@ -195,7 +208,7 @@ func TestHealthzSharesDenyListWithHandler(t *testing.T) {
 	}
 	denied := logEvents(r.stdout.String(), "ingestauth_publish_denied")
 	if len(denied) != 1 || denied[0]["reason"] != "denylisted" {
-		t.Errorf("ingestauth_publish_denied events = %v, want one with reason denylisted", denied)
+		t.Errorf("ingestauth_publish_denied events = %s, want one with reason denylisted", eventsSummary(denied))
 	}
 }
 
@@ -312,7 +325,7 @@ func TestRunFinishesInFlightRequestOnStop(t *testing.T) {
 		t.Fatal("the fake auth did not receive the resolve within 5s")
 	}
 	if code := r.stopAndWait(t); code != 0 {
-		t.Errorf("run = %d, want 0; stderr: %s", code, r.stderr.String())
+		t.Errorf("run = %d, want 0 (stderr: %s)", code, outputSummary(r.stderr.String()))
 	}
 	res := <-done
 	if res.err != nil || res.status != http.StatusOK || res.body != wantAllowedBody {
@@ -391,15 +404,15 @@ func TestRunRejectsOversizedHeaders(t *testing.T) {
 	}
 }
 
-// 시한 근처의 resolve(0.9초 — MaxDeadline 1.125초 안)도 200 으로 끝난다 — 서버의 쓰기 · 읽기 시한이 가드보다
-// 길다.
+// 시한 근처의 resolve(0.7초 — MaxDeadline 1.125초 안, 여유 425ms)도 200 으로 끝난다 — 서버의 쓰기 · 읽기 시한이 가드보다
+// 길다. 실제 시계다 — http.Server 의 시한은 가짜 시계로 옮길 수 없다.
 func TestRunAnswersSlowResolveWithinDeadline(t *testing.T) {
 	auth := newFakeAuth(t)
-	auth.delay.Store(int64(900 * time.Millisecond))
+	auth.delay.Store(int64(700 * time.Millisecond))
 	r := startResponder(t, newTestSite(t, ""), responderEnv(auth.srv.URL))
 	status, body, err := postAuth(t.Context(), r.listen, publishBody(testToken, testConnID(1)), nil)
 	if err != nil || status != http.StatusOK || body != wantAllowedBody {
-		t.Errorf("POST publish with a 0.9s resolve = %d, %v (allowed body: %t), want 200 with the allowed body",
+		t.Errorf("POST publish with a 0.7s resolve = %d, %v (allowed body: %t), want 200 with the allowed body",
 			status, err, body == wantAllowedBody)
 	}
 }
@@ -440,6 +453,62 @@ func TestServeUntilDoneStopsBothWhenOneServerFails(t *testing.T) {
 	}
 }
 
+// 인증 서버가 스스로 멈추면(리스너의 Accept 가 실패) run 은 healthz 서버도 멈추고 1 로 끝난다 — docker 에 정상 종료(0)로
+// 보이지 않게. 시험은 site 의 리스너 함수로 run 이 연 인증 리스너를 쥐고 닫는다.
+func TestRunFailsWhenAuthServerStops(t *testing.T) {
+	auth := newFakeAuth(t)
+	s := newTestSite(t, "")
+	opened := make(chan net.Listener, 2) // run 은 리스너를 둘 연다
+	s.listen = func(network, address string) (net.Listener, error) {
+		ln, err := net.Listen(network, address)
+		if err == nil {
+			opened <- ln
+		}
+		return ln, err
+	}
+	r := startResponder(t, s, responderEnv(auth.srv.URL))
+	for range 2 {
+		if ln := <-opened; ln.Addr().String() == r.listen {
+			ln.Close() // 인증 서버의 Accept 가 실패한다
+		}
+	}
+	select {
+	case <-r.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return within 5s after the auth listener failed")
+	}
+	if r.code != 1 {
+		t.Errorf("run after the auth listener failed = %d, want 1", r.code)
+	}
+	if r.stderr.String() == "" {
+		t.Errorf("run wrote no reason to stderr after the auth listener failed")
+	}
+}
+
+// healthz 리스너를 열지 못하면 먼저 연 인증 리스너를 닫는다 — run 이 1 로 끝난 뒤 같은 인증 주소에 곧바로 다시 묶인다.
+func TestRunReleasesAuthListenerWhenHealthzListenerFails(t *testing.T) {
+	keepDefaultLogger(t)
+	auth := newFakeAuth(t)
+	free := listenLoopback(t)
+	authAddr := free.Addr().String()
+	free.Close() // 빈 포트를 고른다
+	s := newTestSite(t, "")
+	s.healthAddr = listenLoopback(t).Addr().String() // 이미 쓰는 주소
+	env := responderEnv(auth.srv.URL)
+	env["INGEST_AUTH_LISTEN"] = authAddr
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	stderr := newOutputLog()
+	if code := run(ctx, s, nil, getenvFrom(env), io.Discard, stderr); code != 1 {
+		t.Fatalf("run with the healthz address in use = %d, want 1 (stderr: %s)", code, outputSummary(stderr.String()))
+	}
+	ln, err := net.Listen("tcp", authAddr)
+	if err != nil {
+		t.Fatalf("listen on the auth address after run failed to start: %v", err)
+	}
+	ln.Close()
+}
+
 // 기동 실패는 1 이고 시작 로그 없이 돌아온다.
 func TestRunFailsToStart(t *testing.T) {
 	for _, tc := range []struct {
@@ -467,7 +536,7 @@ func TestRunFailsToStart(t *testing.T) {
 			stdout, stderr := newOutputLog(), newOutputLog()
 			code := run(ctx, s, nil, getenvFrom(env), stdout, stderr)
 			if code != 1 {
-				t.Errorf("run = %d, want 1; stderr: %s", code, stderr.String())
+				t.Errorf("run = %d, want 1 (stderr: %s)", code, outputSummary(stderr.String()))
 			}
 			if stderr.String() == "" {
 				t.Errorf("run wrote no reason to stderr")

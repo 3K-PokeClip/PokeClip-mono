@@ -29,7 +29,7 @@ func TestRunRejectsUsageErrors(t *testing.T) {
 				t.Errorf("run(%q) wrote no usage to stderr", tc.args)
 			}
 			if stdout.String() != "" {
-				t.Errorf("run(%q) wrote to stdout: %q, want nothing", tc.args, stdout.String())
+				t.Errorf("run(%q) wrote to stdout (%s), want nothing", tc.args, outputSummary(stdout.String()))
 			}
 		})
 	}
