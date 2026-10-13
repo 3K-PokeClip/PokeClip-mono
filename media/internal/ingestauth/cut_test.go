@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,7 +102,7 @@ func TestCutUnmappedBranch(t *testing.T) {
 	}
 }
 
-// 부수 피해 없음(설계 2-4 729행 · 계획 9-2 B14): 기록에 있는 다른 토큰의 판독 중 연결은 생긴 지 120초여도 끊지 않는다
+// 부수 피해 없음(설계 2-4 729행): 기록에 있는 다른 토큰의 판독 중 연결은 생긴 지 120초여도 끊지 않는다
 // — 기록 밖 갈래는 「어느 토큰으로도 기록에 없는」 연결만 본다. 그 연결의 created 는 Since 앞이다(기록이 담기 전에
 // 생겨 기다리다 허용됐다). 다른 토큰에 등록된 연결과, 끊는 토큰의 경로를 읽는 연결(state read)도 그대로다 — 목록
 // 갈래는 송출(publish)만 본다.
@@ -152,6 +153,34 @@ func TestCutUnmappedYoungIsIncomplete(t *testing.T) {
 	}
 	if got, want := f.mtx.live(), []string{young}; !slices.Equal(got, want) {
 		t.Errorf("live connections after Cut = %v, want %v", got, want)
+	}
+}
+
+// 기록 밖 미완의 셈(UnmappedYoung)은 두 판독의 합집합이다(설계 3-4 2.8 — 둘째 판독의 미완 조건도 첫 판독과 같다). 첫
+// 판독에서 어렸던 기록 밖 판독 중 연결이 둘째 판독 전에 닫혀도(인증 거부 · 송출자의 끊음) 첫 판독이 그 연결을 끊지 않고
+// 지나갔다는 것은 보고에 남는다 — 에러(ErrConnLogWindowShort)와 셈이 어긋나지 않게. 연결은 첫 목록을 만든 뒤
+// 닫는다(가짜의 고리).
+func TestCutUnmappedYoungCountsBothReads(t *testing.T) {
+	f := newCutFixture(t, 1<<20)
+	young := testConnID(1)
+	f.mtx.add(fakeConn{id: young, created: f.at(-10 * time.Second)})
+	f.clock.moveTo(10 * time.Second)
+	f.mtx.set(func(m *fakeMediaMTX) {
+		m.onList = func(call int) {
+			if call == 1 {
+				m.close(young)
+			}
+		}
+	})
+
+	rep, err := f.cut(t, testTokenA)
+
+	if !errors.Is(err, ErrConnLogWindowShort) {
+		t.Errorf("Cut(X) = %v, want ErrConnLogWindowShort (the first read left a young connection)", err)
+	}
+	checkReport(t, rep, CutReport{UnmappedYoung: 1, Covered: 10 * time.Second})
+	if got := f.mtx.live(); len(got) != 0 {
+		t.Errorf("live connections after Cut = %v, want none (the young one closes before the second read — else the scenario did not happen)", got)
 	}
 }
 
@@ -208,7 +237,7 @@ func TestCutAfterStateDirRecreated(t *testing.T) {
 	}
 }
 
-// 시작 표시 뒤 인증 대기(설계 2-4 733행 · 계획 9-2 B13): 기록에 시작 표시만 있고, 가짜 목록에 시작 표시 뒤에 생긴
+// 시작 표시 뒤 인증 대기(설계 2-4 733행): 기록에 시작 표시만 있고, 가짜 목록에 시작 표시 뒤에 생긴
 // path 빈 연결이 있으면 unmapped_young 은 0, 에러는 nil(종료 코드 0)이다. Since 를 읽은 시각으로 두면 이 연결이 미완으로
 // 잡혀 기록이 처음 열린 뒤 30초 동안 미완이 되풀이된다(설계 3-4 1055행).
 func TestCutStartMarkOnlyAwaitingAuth(t *testing.T) {
@@ -245,6 +274,51 @@ func TestCutUnmappedAgeBoundary(t *testing.T) {
 	checkReport(t, rep, CutReport{FromUnmapped: 1, Kicked: 1, UnmappedYoung: 1, Covered: 10 * time.Second})
 	if got, want := f.mtx.kicked200(), []string{over}; !slices.Equal(got, want) {
 		t.Errorf("kicked %v, want %v", got, want)
+	}
+}
+
+// kick 차례(설계 3-4 2.6): 판독마다 그 판독의 목록에 있는 id(기록 갈래 가운데 목록에 있는 것 · 목록 갈래 · 기록 밖
+// 갈래)를 먼저 kick 하고, 기록에만 있는 id(이미 닫힌 연결의 줄)는 그 뒤에 한다. 낡은 줄이 수천이어도(재접속 · 틀린
+// passphrase 시도 — 줄은 허용 때 쓰인다) cut 의 시한 안에 살아 있는 연결에 먼저 닿게. 낡은 id 는 id 순으로 살아 있는 id
+// 보다 앞서게 둔다.
+func TestCutKicksListedConnsFirst(t *testing.T) {
+	f := newCutFixture(t, 1<<20)
+	stale := []string{testConnID(1), testConnID(2), testConnID(3)} // 기록에만 있다 — 이미 닫힌 연결의 줄
+	// live 는 기록과 목록에, pushed 는 목록에만(줄이 밀려난 등록 연결) 있고, lost 는 기록 밖 판독 중(41초)이다.
+	live, pushed, lost := testConnID(7), testConnID(8), testConnID(9)
+	f.mtx.add(fakeConn{id: live, created: f.at(500 * time.Millisecond), state: statePublish, path: testTokenA})
+	f.mtx.add(fakeConn{id: pushed, created: f.at(-100 * time.Second), state: statePublish, path: testTokenA})
+	f.mtx.add(fakeConn{id: lost, created: f.at(-31 * time.Second)})
+	f.clock.moveTo(time.Second)
+	for _, id := range append(slices.Clone(stale), live) {
+		f.mustAllow(t, testTokenA, id)
+	}
+	f.clock.moveTo(10 * time.Second)
+
+	rep, err := f.cut(t, testTokenA)
+
+	if err != nil {
+		t.Errorf("Cut(X) returned error: %v", err)
+	}
+	checkReport(t, rep, CutReport{FromLog: 4, FromList: 1, FromUnmapped: 1, Kicked: 3, AlreadyGone: 3, Covered: 10 * time.Second})
+	var kicks []string
+	for _, r := range f.mtx.requestLog() {
+		if id, ok := strings.CutPrefix(r, "POST /v3/srtconns/kick/"); ok {
+			kicks = append(kicks, id)
+		}
+	}
+	listed := []string{live, pushed, lost}
+	lastListed, firstStale := -1, len(kicks)
+	for i, id := range kicks {
+		if slices.Contains(listed, id) {
+			lastListed = i
+		}
+		if slices.Contains(stale, id) {
+			firstStale = min(firstStale, i)
+		}
+	}
+	if len(kicks) != len(listed)+len(stale) || lastListed > firstStale {
+		t.Errorf("kick order %v, want the listed ids %v first and the log-only ids %v after", kicks, listed, stale)
 	}
 }
 
@@ -433,7 +507,7 @@ func TestCutAPIFailures(t *testing.T) {
 			f.mtx.set(func(m *fakeMediaMTX) { m.authorize = func(string, string) bool { return false } })
 		}, wantOp: "list", wantKind: "status", wantCode: http.StatusUnauthorized, wantNoGet: true},
 		{name: "목록_404_경로_없음", setup: func(t *testing.T, f *cutFixture) {
-			f.mtx.set(func(m *fakeMediaMTX) { m.fail["list"] = http.StatusNotFound })
+			f.mtx.set(func(m *fakeMediaMTX) { m.missing["list"] = true })
 		}, wantOp: "list", wantKind: "status", wantCode: http.StatusNotFound, wantNoGet: true},
 		{name: "닿지_않음", setup: func(t *testing.T, f *cutFixture) { f.mtx.srv.Close() }, wantOp: "list", wantKind: "unreachable", wantNoGet: true},
 		{name: "ctx_끝남", cancelCtx: true, wantOp: "list", wantKind: "timeout", wantNoGet: true},
@@ -495,9 +569,227 @@ func TestCutAPIFailures(t *testing.T) {
 	}
 }
 
+// 미완의 까닭은 갈래마다 처음 하나씩 남는다 — Control API 실패는 401(api_auth 의 재료)과 그 밖으로, 확인 중에 끝난
+// 부르는 쪽 ctx 와 모르는 꼴의 실패도 따로다. 앞의 실패가 뒤의 다른 까닭을 가리지 않는다 — kick 500 뒤에 응답기가 죽어
+// 401 이 와도 cut 하위 명령이 api_auth 를 고를 수 있다(설계 3-4 3 의 운영 순서). 같은 갈래가 id 마다 되풀이돼도 하나만
+// 남는다.
+func TestCutKeepsEachKindOfFailure(t *testing.T) {
+	a, b := testConnID(1), testConnID(2)
+	// upper 는 기록을 손으로 고친 줄의 id 다 — MediaMTX 연결 id 꼴이 아니라 kick · 조회가 모르는 꼴의 실패를 낸다.
+	upper := strings.ToUpper(testConnID(0xabc))
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T, f *cutFixture, cancel context.CancelFunc)
+		want      CutReport
+		wantKinds []string // cutFailureKinds
+	}{
+		{
+			name: "kick_500_뒤_응답기가_죽어_401",
+			setup: func(_ *testing.T, f *cutFixture, _ context.CancelFunc) {
+				f.mtx.set(func(m *fakeMediaMTX) {
+					m.failKick[a], m.failKick[b] = http.StatusInternalServerError, http.StatusUnauthorized
+					m.fail["get"] = http.StatusUnauthorized
+				})
+			},
+			want:      CutReport{FromLog: 2, Remaining: []string{a, b}, Covered: 10 * time.Second},
+			wantKinds: []string{"kick status 401", "kick status 500"},
+		},
+		{
+			name: "kick_500_뒤_확인_중_ctx_끝",
+			setup: func(_ *testing.T, f *cutFixture, cancel context.CancelFunc) {
+				f.mtx.set(func(m *fakeMediaMTX) {
+					m.failKick[a] = http.StatusInternalServerError
+					m.onGet = func(string) { cancel() }
+				})
+			},
+			want:      CutReport{FromLog: 2, Kicked: 1, Remaining: []string{a, b}, Covered: 10 * time.Second},
+			wantKinds: []string{"ctx canceled", "kick status 500"},
+		},
+		{
+			name: "kick_500_과_모르는_꼴",
+			setup: func(t *testing.T, f *cutFixture, _ context.CancelFunc) {
+				f.mtx.set(func(m *fakeMediaMTX) { m.failKick[a] = http.StatusInternalServerError })
+				appendRawConnLine(t, f, connLine{At: f.at(time.Second), Path: testTokenA, ID: upper})
+			},
+			want:      CutReport{FromLog: 3, Kicked: 1, Remaining: []string{a, upper}, Covered: 10 * time.Second},
+			wantKinds: []string{"kick status 500", "unknown"},
+		},
+		{
+			name: "네_갈래가_함께", // 어느 두 갈래를 한 칸으로 합쳐도 하나가 빠진다
+			setup: func(t *testing.T, f *cutFixture, cancel context.CancelFunc) {
+				f.mtx.set(func(m *fakeMediaMTX) {
+					m.failKick[a], m.failKick[b] = http.StatusInternalServerError, http.StatusUnauthorized
+					m.onGet = func(string) { cancel() }
+				})
+				appendRawConnLine(t, f, connLine{At: f.at(time.Second), Path: testTokenA, ID: upper})
+			},
+			want:      CutReport{FromLog: 3, Remaining: []string{a, b, upper}, Covered: 10 * time.Second},
+			wantKinds: []string{"ctx canceled", "kick status 401", "kick status 500", "unknown"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCutFixture(t, 1<<20)
+			f.mtx.add(fakeConn{id: a, created: f.at(500 * time.Millisecond)})
+			f.mtx.add(fakeConn{id: b, created: f.at(500 * time.Millisecond)})
+			f.clock.moveTo(time.Second)
+			f.mustAllow(t, testTokenA, a)
+			f.mustAllow(t, testTokenA, b)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			tc.setup(t, f, cancel)
+			f.clock.moveTo(10 * time.Second)
+
+			rep, err := f.cutter().cut(ctx, testTokenA, NewDenyList(f.denyPath, discardLogger()), f.connDir, f.client)
+
+			if got := cutFailureKinds(err); !slices.Equal(got, tc.wantKinds) {
+				t.Errorf("Cut(X) with %s failed with %v, want %v", tc.name, got, tc.wantKinds)
+			}
+			checkReport(t, rep, tc.want)
+		})
+	}
+}
+
+// kick 의 404 는 Control API 의 에러 꼴(연결 없음)일 때만 「이미 없음」이다(설계 3-4 2.6). 판 올림으로 kick 경로가
+// 사라지면 원본(gin)은 text/plain 404 를 낸다 — 그것을 「이미 없음」으로 세면 끊지 못한 송출이 남는데 nil(종료 0)이다.
+// 그런 404 는 Control API 실패이고 그 id 는 확인한다. 에러 꼴 404 여도 그 판독의 목록에 있던 id 는 확인한다 — 목록에
+// 없던 id(이미 닫힌 연결의 줄)는 목록과 같은 뜻이라 확인하지 않는다. 확인 조회가 오면 가짜가 부르는 쪽 ctx 를 끊어,
+// 연결이 남은 채 확인을 끝낸다(실제로 기다리지 않는다).
+func TestCutReadsOnlyConnNotFoundAsGone(t *testing.T) {
+	live, closed := testConnID(1), testConnID(2)
+	tests := []struct {
+		name       string
+		setup      func(m *fakeMediaMTX)
+		closedLine bool // 기록에 이미 닫힌 연결(목록에 없음)의 줄을 더한다
+		cancelGet  bool // 확인 조회가 오면 부르는 쪽 ctx 를 끊는다
+		want       CutReport
+		wantKinds  []string // cutFailureKinds(끊긴 ctx 의 둘째 목록은 Control API 칸이 비었을 때만 list timeout)
+	}{
+		{
+			name:      "kick_경로_없음",
+			setup:     func(m *fakeMediaMTX) { m.missing["kick"] = true },
+			cancelGet: true,
+			want:      CutReport{FromLog: 1, Remaining: []string{live}, Covered: 10 * time.Second},
+			wantKinds: []string{"ctx canceled", "kick status 404"},
+		},
+		{
+			name:      "kick_조회_경로_모두_없음",
+			setup:     func(m *fakeMediaMTX) { m.missing["kick"], m.missing["get"] = true, true },
+			want:      CutReport{FromLog: 1, Remaining: []string{live}, Covered: 10 * time.Second},
+			wantKinds: []string{"kick status 404"},
+		},
+		{
+			name:       "목록에_있던_id_의_에러_꼴_404",
+			setup:      func(m *fakeMediaMTX) { m.failKick[live] = http.StatusNotFound },
+			closedLine: true,
+			cancelGet:  true,
+			want:       CutReport{FromLog: 2, AlreadyGone: 2, Remaining: []string{live}, Covered: 10 * time.Second},
+			wantKinds:  []string{"ctx canceled", "list timeout"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCutFixture(t, 1<<20)
+			f.mtx.add(fakeConn{id: live, created: f.at(500 * time.Millisecond), state: statePublish, path: testTokenA})
+			f.clock.moveTo(time.Second)
+			f.mustAllow(t, testTokenA, live)
+			if tc.closedLine {
+				f.mustAllow(t, testTokenA, closed)
+			}
+			f.clock.moveTo(10 * time.Second)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			f.mtx.set(func(m *fakeMediaMTX) {
+				tc.setup(m)
+				if tc.cancelGet {
+					m.onGet = func(string) { cancel() }
+				}
+			})
+
+			rep, err := f.cutter().cut(ctx, testTokenA, NewDenyList(f.denyPath, discardLogger()), f.connDir, f.client)
+
+			if err == nil {
+				t.Errorf("Cut(X) with %s = nil error, want an error (X's connection is still live)", tc.name)
+			}
+			if got := cutFailureKinds(err); !slices.Equal(got, tc.wantKinds) {
+				t.Errorf("Cut(X) with %s failed with %v, want %v", tc.name, got, tc.wantKinds)
+			}
+			checkReport(t, rep, tc.want)
+			if n := f.mtx.countRequests("GET /v3/srtconns/get/" + live); n < 1 {
+				t.Errorf("lookups of the listed connection = %d, want at least 1", n)
+			}
+			if n := f.mtx.countRequests("GET /v3/srtconns/get/" + closed); tc.closedLine && n != 0 {
+				t.Errorf("lookups of the closed connection = %d, want 0 (it was not on the list)", n)
+			}
+			if got, want := f.mtx.live(), []string{live}; !slices.Equal(got, want) {
+				t.Errorf("live connections after Cut = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// 목록 본문을 해석하지 못하면(판 올림 — 모르는 꼴의 항목) 목록 없이 가를 수 있는 기록 갈래만 끊고 확인한 뒤 그 목록
+// 에러로 멈춘다(종료 코드 1 · api_incompatible). 목록 갈래 · 기록 밖 갈래와 둘째 판독은 하지 않는다 — 목록을 믿을 수
+// 없다. 401 · 전송 실패 · ctx 끝이면 kick 도 같은 까닭으로 실패하므로 아무것도 하지 않고 멈춘다(TestCutAPIFailures).
+func TestCutUnparsableListStillCutsLogBranch(t *testing.T) {
+	f := newCutFixture(t, 1<<20)
+	logged, pushed := testConnID(1), testConnID(2)
+	f.mtx.add(fakeConn{id: logged, created: f.at(500 * time.Millisecond), state: statePublish, path: testTokenA})
+	f.mtx.add(fakeConn{id: pushed, created: f.at(-100 * time.Second), state: statePublish, path: testTokenA})
+	f.mtx.add(fakeConn{id: strings.ToUpper(testConnID(0xabc)), created: f.at(-100 * time.Second)}) // 해석되지 않는 항목
+	f.clock.moveTo(time.Second)
+	f.mustAllow(t, testTokenA, logged)
+	f.clock.moveTo(10 * time.Second)
+
+	rep, err := f.cut(t, testTokenA)
+
+	if got, want := cutFailureKinds(err), []string{"list parse"}; !slices.Equal(got, want) {
+		t.Errorf("Cut(X) with an unparsable list failed with %v, want %v", got, want)
+	}
+	checkReport(t, rep, CutReport{FromLog: 1, Kicked: 1})
+	if got, want := f.mtx.kicked200(), []string{logged}; !slices.Equal(got, want) {
+		t.Errorf("kicked %v, want %v (the log branch only)", got, want)
+	}
+	if n := f.mtx.countRequests("GET /v3/srtconns/get/" + logged); n < 1 {
+		t.Errorf("lookups of the kicked connection = %d, want at least 1", n)
+	}
+	if n := f.mtx.countRequests("GET /v3/srtconns/list"); n != 1 {
+		t.Errorf("list requests = %d, want 1 (no second read after the list failed)", n)
+	}
+}
+
 // 확인 도중 부르는 쪽 ctx 가 확인 시한보다 먼저 끝나면, 남은 id 와 그 ctx 의 에러다 — 확인 시한(ErrVerifyTimeout)으로
-// 바꿔 적지 않는다. cut 하위 명령이 자기 시한과 확인 시한을 가를 수 있게.
-func TestCutCallerDeadlineDuringVerify(t *testing.T) {
+// 바꿔 적지 않는다. cut 하위 명령이 자기 시한과 확인 시한을 가를 수 있게. ctx 는 가짜 MediaMTX 가 첫 조회를 받을 때
+// 끊는다 — 확인 단계에 들어선 것이 보장되고 실제 시간에 기대지 않는다. 확인 상한은 1시간이라 그쪽이 먼저 끝나지 않는다.
+func TestCutCallerCancelDuringVerify(t *testing.T) {
+	f := newCutFixture(t, 1<<20)
+	stuck := testConnID(1)
+	f.mtx.add(fakeConn{id: stuck, created: f.at(500 * time.Millisecond)})
+	f.clock.moveTo(time.Second)
+	f.mustAllow(t, testTokenA, stuck)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	f.mtx.set(func(m *fakeMediaMTX) {
+		m.sticky = true
+		m.onGet = func(string) { cancel() }
+	})
+	c := f.cutter()
+	c.verifyWithin = time.Hour
+
+	rep, err := c.cut(ctx, testTokenA, NewDenyList(f.denyPath, discardLogger()), f.connDir, f.client)
+
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrVerifyTimeout) {
+		t.Errorf("Cut(X) whose caller ctx ends during the verify failed with %v, want context.Canceled and not ErrVerifyTimeout", cutFailureKinds(err))
+	}
+	if !slices.Equal(rep.Remaining, []string{stuck}) {
+		t.Errorf("Remaining = %v, want [%s]", rep.Remaining, stuck)
+	}
+}
+
+// 확인 상한은 조회 사이의 기다림에서도 끝난다 — 조회가 연결이 남았다고 답한 뒤 다음 조회 때가 오기 전에 상한이 지나면 남은
+// id 와 ErrVerifyTimeout 이다. 다음 조회 때(1시간)는 오지 않게 두어 조회 중이 아니라 기다림에서 끝나게 한다(상한 20ms —
+// 확인 상한은 실제 시계의 ctx 시한이라 그만큼은 실제로 기다린다).
+func TestCutVerifyTimeoutBetweenLookups(t *testing.T) {
 	f := newCutFixture(t, 1<<20)
 	stuck := testConnID(1)
 	f.mtx.add(fakeConn{id: stuck, created: f.at(500 * time.Millisecond)})
@@ -505,17 +797,25 @@ func TestCutCallerDeadlineDuringVerify(t *testing.T) {
 	f.mustAllow(t, testTokenA, stuck)
 	f.mtx.set(func(m *fakeMediaMTX) { m.sticky = true })
 	c := f.cutter()
-	c.verifyWithin = cutVerifyWithin // 2초 — 부르는 쪽 시한(200ms)이 먼저 끝나게
-	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
-	defer cancel()
+	c.verifyWithin, c.verifyEvery = 20*time.Millisecond, time.Hour
 
-	rep, err := c.cut(ctx, testTokenA, NewDenyList(f.denyPath, discardLogger()), f.connDir, f.client)
+	rep, err := c.cut(t.Context(), testTokenA, NewDenyList(f.denyPath, discardLogger()), f.connDir, f.client)
 
-	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrVerifyTimeout) {
-		t.Errorf("Cut(X) whose caller deadline ends during the verify = %v, want context.DeadlineExceeded and not ErrVerifyTimeout", err)
+	if got, want := cutFailureKinds(err), []string{"verify timeout"}; !slices.Equal(got, want) {
+		t.Errorf("Cut(X) whose kicked connection stays failed with %v, want %v", got, want)
 	}
-	if !slices.Equal(rep.Remaining, []string{stuck}) {
-		t.Errorf("Remaining = %v, want [%s]", rep.Remaining, stuck)
+	checkReport(t, rep, CutReport{FromLog: 1, Kicked: 1, Remaining: []string{stuck}, Covered: time.Second})
+	if n := f.mtx.countRequests("GET /v3/srtconns/get/" + stuck); n != 1 {
+		t.Errorf("lookups of the stuck connection = %d, want 1 (the limit ends the wait for the next one)", n)
+	}
+}
+
+// 공개 Cut 은 운영 설정으로 돈다 — 확인 상한 2초(설계 3-4 2.7 「최대 2초」). 시험의 고정물은 짧은 확인 상한을 쓰고, 공개
+// Cut 을 부르는 시험은 연결이 곧바로 사라져 상한에 닿지 않으므로 운영 값은 이 시험이 본다. 길면 cut 하위 명령의 전체
+// 시한까지 확인이 늘어 verify_timeout 대신 api_unreachable 로 끝난다.
+func TestCutOperatingVerifyLimit(t *testing.T) {
+	if got, want := operatingCutter().verifyWithin, 2*time.Second; got != want {
+		t.Errorf("operatingCutter().verifyWithin = %v, want %v", got, want)
 	}
 }
 

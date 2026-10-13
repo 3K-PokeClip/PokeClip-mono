@@ -1,12 +1,15 @@
 package ingestauth
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -66,6 +69,8 @@ type fakeConn struct {
 //   - kick 된 연결은 그 뒤 허용 응답을 받아도 수락되지 않는다 — Accept 직후 ctx 종료로 닫힌다(conn.go 179–198행).
 //   - Basic 자격은 authorize 가 판정하고, 아니면 401 · WWW-Authenticate 다(api.go 316–341행 — 원본은 응답기의 api
 //     행에 묻는다).
+//   - 에러는 원본의 JSON 꼴이다(api.go 284–300행). 없는 경로는 자격 판정 뒤 gin 기본 404(text/plain — gin.go 759 ·
+//     764–779)다. 시험은 갈래의 경로를 없앨 수 있다(missing — 판 올림).
 //
 // 모형에 없는 것: SRT 소켓 · 핸드셰이크, kick 시점에 등록 직전이던 연결의 순간 등록(설계 3-4 2.7), 인증 실패 지연.
 type fakeMediaMTX struct {
@@ -79,10 +84,12 @@ type fakeMediaMTX struct {
 	requests  []string        // 받은 요청 "<메서드> <경로>"(차례대로)
 	lists     int             // 받은 목록 요청 수
 	nextID    int
-	fail      map[string]int // 갈래(list · get · kick) → 그 상태로 답한다
-	failKick  map[string]int // id → 그 id 의 kick 만 그 상태로 답한다
-	sticky    bool           // kick 이 200 을 내지만 연결을 지우지 않는다(확인 시한 시험)
-	onList    func(call int) // 목록을 만든 뒤 답하기 전에 부른다(잠금 밖 · 서버 고루틴)
+	fail      map[string]int  // 갈래(list · get · kick) → 그 상태로 답한다
+	failKick  map[string]int  // id → 그 id 의 kick 만 그 상태로 답한다
+	missing   map[string]bool // 없앤 갈래(list · get · kick) — 그 경로가 사라진 것처럼 gin 기본 404 로 답한다
+	sticky    bool            // kick 이 200 을 내지만 연결을 지우지 않는다(확인 시한 시험)
+	onList    func(call int)  // 목록을 만든 뒤 답하기 전에 부른다(잠금 밖 · 서버 고루틴)
+	onGet     func(id string) // 조회 요청을 받으면 답하기 전에 부른다(잠금 밖 · 서버 고루틴)
 }
 
 // newFakeMediaMTX 는 시험 자격(testAPIUser · testAPIPass)을 받는 가짜 MediaMTX 를 띄운다.
@@ -94,6 +101,7 @@ func newFakeMediaMTX(t *testing.T) *fakeMediaMTX {
 		kicked:    make(map[string]bool),
 		fail:      make(map[string]int),
 		failKick:  make(map[string]int),
+		missing:   make(map[string]bool),
 		nextID:    1 << 20, // 시험이 testConnID 로 직접 만드는 id 와 겹치지 않게
 	}
 	m.srv = httptest.NewServer(http.HandlerFunc(m.serve))
@@ -101,10 +109,10 @@ func newFakeMediaMTX(t *testing.T) *fakeMediaMTX {
 	return m
 }
 
-// serve 는 Control API 요청 하나에 답한다 — 자격 → 기록 → 주입한 실패 → 경로 차례다.
+// serve 는 Control API 요청 하나에 답한다 — 자격 → 기록 → 조회 고리 → 없앤 경로 → 주입한 실패 → 경로 차례다.
 func (m *fakeMediaMTX) serve(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
-	authorize := m.authorize
+	authorize, onGet := m.authorize, m.onGet
 	m.requests = append(m.requests, r.Method+" "+r.URL.Path)
 	m.mu.Unlock()
 	user, pass, _ := r.BasicAuth()
@@ -114,6 +122,13 @@ func (m *fakeMediaMTX) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	route, id, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/v3/srtconns/"), "/")
+	if route == "get" && onGet != nil {
+		onGet(id)
+	}
+	if m.routeMissing(route) {
+		writeRouteNotFound(w)
+		return
+	}
 	if status, ok := m.injected(route, id); ok {
 		writeMTXError(w, status, "injected failure")
 		return
@@ -126,8 +141,15 @@ func (m *fakeMediaMTX) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && route == "kick":
 		m.kick(w, id)
 	default:
-		writeMTXError(w, http.StatusNotFound, "not found")
+		writeRouteNotFound(w)
 	}
+}
+
+// routeMissing 은 시험이 그 갈래의 경로를 없앴는지 본다.
+func (m *fakeMediaMTX) routeMissing(route string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.missing[route]
 }
 
 // injected 는 시험이 그 갈래(와 그 id)에 넣은 실패 상태다.
@@ -148,6 +170,13 @@ func writeMTXError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "error", "error": msg})
+}
+
+// writeRouteNotFound 는 없는 경로 · 메서드에 gin 이 내는 기본 404(gin.go 33 · 759 · 764–779 — text/plain)를 쓴다.
+func writeRouteNotFound(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = io.WriteString(w, "404 page not found")
 }
 
 // writeMTXJSON 은 200 과 v 의 JSON 을 쓴다.
@@ -446,6 +475,23 @@ func (f *cutFixture) mustAllow(t *testing.T, token, connID string) {
 	}
 }
 
+// appendRawConnLine 은 Append 의 꼴 검사를 거치지 않고 현재 세대 끝에 l 을 덧붙인다 — 기록을 손으로 고친 줄이다.
+func appendRawConnLine(t *testing.T, f *cutFixture, l connLine) {
+	t.Helper()
+	line, err := encodeConnLine(l)
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	file, err := os.OpenFile(filepath.Join(f.connDir, connLogName), os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("Setup: opening the current generation returned error: %v", err)
+	}
+	_, werr := file.Write(line)
+	if err := errors.Join(werr, file.Close()); err != nil {
+		t.Fatalf("Setup: appending a raw line returned error: %v", err)
+	}
+}
+
 // cutVerifyWithinInTests 는 시험의 확인 시한이다 — 확인 시한 시험이 실제로 2초를 기다리지 않게 줄인다. 가짜는 kick 한
 // 연결을 곧바로 지우므로 정상 갈래는 첫 조회에서 끝난다.
 const cutVerifyWithinInTests = 200 * time.Millisecond
@@ -459,6 +505,43 @@ func (f *cutFixture) cutter() cutter {
 func (f *cutFixture) cut(t *testing.T, token string) (CutReport, error) {
 	t.Helper()
 	return f.cutter().cut(t.Context(), token, NewDenyList(f.denyPath, discardLogger()), f.connDir, f.client)
+}
+
+// cutFailureKinds 는 Cut 의 에러가 묶은 까닭마다의 갈래 이름이다(바이트 순) — Control API 실패는 「<Op> status <상태>」
+// · 「<Op> <Kind>」, ctx 끝은 「ctx canceled」 · 「ctx deadline」, 미완의 센티널은 그 이름, 그 밖은 「unknown」. 에러
+// 문구를 싣지 않으므로 실패 문구에 그대로 써도 된다. cut 하위 명령처럼 errors.Join 의 첫 층만 펼친다.
+func cutFailureKinds(err error) []string {
+	if err == nil {
+		return nil
+	}
+	parts := []error{err}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		parts = joined.Unwrap()
+	}
+	var kinds []string
+	for _, part := range parts {
+		var apiErr *mtxctl.Error
+		kind := "unknown"
+		switch {
+		case errors.As(part, &apiErr) && apiErr.Kind == "status":
+			kind = fmt.Sprintf("%s status %d", apiErr.Op, apiErr.Status)
+		case errors.As(part, &apiErr):
+			kind = apiErr.Op + " " + apiErr.Kind
+		case errors.Is(part, context.Canceled):
+			kind = "ctx canceled"
+		case errors.Is(part, context.DeadlineExceeded):
+			kind = "ctx deadline"
+		case errors.Is(part, ErrConnLogUnreadable):
+			kind = "connlog unreadable"
+		case errors.Is(part, ErrConnLogWindowShort):
+			kind = "connlog window short"
+		case errors.Is(part, ErrVerifyTimeout):
+			kind = "verify timeout"
+		}
+		kinds = append(kinds, kind)
+	}
+	slices.Sort(kinds)
+	return kinds
 }
 
 // checkReport 는 got 이 want 와 같은지 본다. Remaining 은 차례와 무관하게 견준다.

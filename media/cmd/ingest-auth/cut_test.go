@@ -181,6 +181,14 @@ func TestCutReportsWhyItIsIncomplete(t *testing.T) {
 			reason: "api_unreachable",
 		},
 		{
+			name: "kick_500_뒤_조회_401", // 앞의 500 이 뒤의 401(응답기 부재)을 가리지 않는다
+			setup: func(_ *testing.T, _ *site, m *fakeMediaMTX, _ map[string]string) {
+				m.set(func(m *fakeMediaMTX) { m.status["kick"], m.status["get"] = 500, 401 })
+			},
+			reason: "api_auth",
+			fields: map[string]any{"kicked": 0.0, "remaining": 1.0},
+		},
+		{
 			name: "api_연결_거부",
 			setup: func(t *testing.T, _ *site, _ *fakeMediaMTX, env map[string]string) {
 				ln := listenLoopback(t)

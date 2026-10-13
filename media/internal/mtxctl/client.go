@@ -32,8 +32,9 @@ const (
 // 어떤 목록도 한 페이지다.
 const listItemsPerPage = 1<<31 - 1
 
-// maxListBytes 는 읽어 들이는 목록 본문의 상한이다. 항목 하나(APISRTConn 61필드)가 많아야 약 2.4 KB 라 약 2만 7천
-// 연결이다. 그보다 많으면 목록이 실패한다(Kind parse).
+// maxListBytes 는 읽어 들이는 목록 본문의 상한이다 — 보장하는 것은 이 상한뿐이다. 항목 하나(APISRTConn 61필드)는 측정
+// 샘플로 약 2.4 KB 라 약 2만 7천 연결 몫이지만, query 같은 가변 문자열이 길면 항목이 커져 그보다 적다. 넘으면 목록이
+// 실패한다(Kind parse).
 const maxListBytes = 64 << 20
 
 // connectTimeout 은 연결 준비 하나 — TCP 다이얼 · TLS 악수 — 의 상한이다. Go 전송은 연결 준비를 요청 ctx 의 취소에서 떼어
@@ -144,14 +145,16 @@ type SRTConn struct {
 	State   string    `json:"state"`   // idle · read · publish
 }
 
-// ErrNotFound 는 KickSRTConn 이 kick 하려던 연결이 없다는 것이다(404) — 이미 닫혔거나 kick 됐다.
+// ErrNotFound 는 KickSRTConn 이 kick 하려던 연결이 없다는 것이다(본문이 Control API 의 에러 꼴인 404) — 이미 닫혔거나
+// kick 됐다. 경로가 없는 404 는 ErrNotFound 가 아니라 *Error(Kind status · Status 404)다.
 var ErrNotFound = errors.New("mtxctl: 그 연결이 없다")
 
 // errInvalidID 는 조회 · kick 의 id 가 MediaMTX 연결 id 꼴이 아니라는 것이다. 요청을 내지 않는다.
 var errInvalidID = errors.New("mtxctl: 연결 id 가 MediaMTX 의 꼴(소문자 UUID)이 아니다 — 요청을 내지 않았다")
 
 // Error 는 Control API 요청 하나가 기대한 답으로 끝나지 않은 것이다. 이 패키지의 요청 메서드가 돌려주는 에러는
-// ErrNotFound 와 id 꼴 에러를 빼면 모두 *Error 다.
+// ErrNotFound 와 id 꼴 에러를 빼면 모두 *Error 다. Status 404 는 경로가 없다는 것이다 — 조회 · kick 의 연결 없음
+// 404(본문이 Control API 의 에러 꼴)는 *Error 가 아니다(SRTConnExists 는 거짓, KickSRTConn 은 ErrNotFound).
 type Error struct {
 	Op     string // list · get · kick
 	Kind   string // timeout · unreachable · status · parse · pages
@@ -182,9 +185,11 @@ const (
 	kindPages       = "pages"       // 목록이 여러 페이지다 — 한 순간의 연결 집합이 아니다
 )
 
-// listResponse 는 GET /v3/srtconns/list 의 응답(APISRTConnList)이다. itemCount 는 읽지 않는다 — 한 페이지인지는
-// pageCount 하나로 판정한다(mtxstate 와 같은 판단).
+// listResponse 는 GET /v3/srtconns/list 의 응답(APISRTConnList)이다. 한 페이지인지는 pageCount 로 판정한다(mtxstate 와
+// 같은 판단). itemCount 는 원본이 페이지를 나누기 전의 전체 수다(api_srt.go 21행) — items 의 수와 같아야 잘리지 않은
+// 목록이다.
 type listResponse struct {
+	ItemCount int       `json:"itemCount"`
 	PageCount int       `json:"pageCount"`
 	Items     []SRTConn `json:"items"`
 }
@@ -194,8 +199,8 @@ type listResponse struct {
 // 연결 때문에 뒤 항목이 앞으로 밀려 하나가 건너뛰어질 수 있다. 원본은 목록을 SRT 서버 루프 안에서 한 번에 만들므로
 // (srt/server.go 208–221행) 한 페이지는 그 순간의 연결 집합 그대로다.
 //
-// 돌아온 pageCount 가 1 보다 크면 에러(Kind pages)다. items 가 없거나, 항목에 id(소문자 UUID) · created 가 없으면
-// 에러(Kind parse)다.
+// 돌아온 pageCount 가 1 보다 크면 에러(Kind pages)다. items 가 없거나, itemCount 가 items 의 수와 다르거나, 항목이 계약
+// 꼴(validConn)이 아니면 에러(Kind parse)다 — 판 올림으로 꼴이 바뀐 목록을 그대로 쓰면 절단의 갈래가 연결을 빠뜨린다.
 func (c *Client) SRTConns(ctx context.Context) ([]SRTConn, error) {
 	resp, err := c.do(ctx, opList, http.MethodGet, listPath, "itemsPerPage="+strconv.Itoa(listItemsPerPage))
 	if err != nil {
@@ -216,7 +221,7 @@ func (c *Client) SRTConns(ctx context.Context) ([]SRTConn, error) {
 	return decodeList(raw)
 }
 
-// decodeList 는 목록 본문을 해석하고 한 페이지인지 · 항목이 계약 꼴인지 본다.
+// decodeList 는 목록 본문을 해석하고 한 페이지인지 · 잘리지 않았는지 · 항목이 계약 꼴인지 본다.
 func decodeList(raw []byte) ([]SRTConn, error) {
 	var list *listResponse
 	if err := json.Unmarshal(raw, &list); err != nil || list == nil || list.Items == nil {
@@ -225,16 +230,35 @@ func decodeList(raw []byte) ([]SRTConn, error) {
 	if list.PageCount > 1 {
 		return nil, &Error{Op: opList, Kind: kindPages}
 	}
+	if list.ItemCount != len(list.Items) {
+		return nil, &Error{Op: opList, Kind: kindParse}
+	}
 	for _, conn := range list.Items {
-		if !connIDPattern.MatchString(conn.ID) || conn.Created.IsZero() {
+		if !validConn(conn) {
 			return nil, &Error{Op: opList, Kind: kindParse}
 		}
 	}
 	return list.Items, nil
 }
 
-// SRTConnExists 는 GET /v3/srtconns/get/{id} 로 그 연결이 아직 있는지 본다 — 200 이면 참, 404 면 거짓이다. 그 밖의
-// 상태는 에러(Kind status)다. id 가 MediaMTX 연결 id 꼴(소문자 UUID)이 아니면 요청 없이 에러다.
+// validConn 은 목록 항목 c 가 계약 꼴인지 본다 — id(소문자 UUID) · created 가 있고, state 가 idle · read · publish 가운데
+// 하나이며, idle 일 때만 path 가 빈다(srt/conn.go 72–77 · 254–259 · 323–329행 — 원본은 state 와 path 를 함께 바꾼다).
+func validConn(c SRTConn) bool {
+	if !connIDPattern.MatchString(c.ID) || c.Created.IsZero() {
+		return false
+	}
+	switch c.State {
+	case "idle":
+		return c.Path == ""
+	case "read", "publish":
+		return c.Path != ""
+	}
+	return false
+}
+
+// SRTConnExists 는 GET /v3/srtconns/get/{id} 로 그 연결이 아직 있는지 본다 — 200 이면 참, 연결 없음 404(본문이 Control
+// API 의 에러 꼴 — isAPIError)면 거짓이다. 그 밖의 상태는 경로가 없는 404 를 포함해 에러(Kind status)다. id 가 MediaMTX
+// 연결 id 꼴(소문자 UUID)이 아니면 요청 없이 에러다.
 func (c *Client) SRTConnExists(ctx context.Context, id string) (bool, error) {
 	if !connIDPattern.MatchString(id) {
 		return false, errInvalidID
@@ -248,14 +272,17 @@ func (c *Client) SRTConnExists(ctx context.Context, id string) (bool, error) {
 	case http.StatusOK:
 		return true, nil
 	case http.StatusNotFound:
-		return false, nil
+		if isAPIError(resp.Body) {
+			return false, nil
+		}
 	}
 	return false, &Error{Op: opGet, Kind: kindStatus, Status: resp.StatusCode}
 }
 
 // KickSRTConn 은 POST /v3/srtconns/kick/{id} 로 그 연결을 끊는다. 원본은 목록에서 곧바로 지우고 연결의 ctx 를
-// 끊는다(srt/server.go 232–241행). 404 면 ErrNotFound 다. 그 밖의 상태는 에러(Kind status)다. id 가 MediaMTX 연결
-// id 꼴(소문자 UUID)이 아니면 요청 없이 에러다 — ErrNotFound 가 아니다.
+// 끊는다(srt/server.go 232–241행). 연결 없음 404(본문이 Control API 의 에러 꼴 — isAPIError)면 ErrNotFound 다. 그 밖의
+// 상태는 경로가 없는 404 를 포함해 에러(Kind status)다. id 가 MediaMTX 연결 id 꼴(소문자 UUID)이 아니면 요청 없이
+// 에러다 — ErrNotFound 가 아니다.
 func (c *Client) KickSRTConn(ctx context.Context, id string) error {
 	if !connIDPattern.MatchString(id) {
 		return errInvalidID
@@ -269,9 +296,27 @@ func (c *Client) KickSRTConn(ctx context.Context, id string) error {
 	case http.StatusOK:
 		return nil
 	case http.StatusNotFound:
-		return ErrNotFound
+		if isAPIError(resp.Body) {
+			return ErrNotFound
+		}
 	}
 	return &Error{Op: opKick, Kind: kindStatus, Status: resp.StatusCode}
+}
+
+// isAPIError 는 응답 본문이 Control API 의 에러 꼴({"status":"error","error":…} — api.go 284–300행 writeError)인지
+// 본다. 원본이 연결 없음에 내는 404 는 이 꼴이고(api_srt.go 41–42 · 61–62행), 경로가 없거나 메서드가 다를 때 gin 이
+// 내는 기본 404(text/plain 「404 page not found」 — gin.go 759행)는 아니다. 그래서 404 를 「연결 없음」으로 읽는 것은
+// 이 꼴일 때뿐이다 — 판 올림으로 조회 · kick 경로가 사라진 것을 「없음」으로 읽으면 끊지 못한 연결이 남는데 절단이
+// 끝까지 끊었다고 본다. 본문은 maxDrainBytes 까지만 읽고(넘으면 꼴이 아니다), 에러 문구는 보지도 싣지도 않는다.
+func isAPIError(body io.Reader) bool {
+	raw, err := io.ReadAll(io.LimitReader(body, maxDrainBytes))
+	if err != nil {
+		return false
+	}
+	var e struct {
+		Status string `json:"status"`
+	}
+	return json.Unmarshal(raw, &e) == nil && e.Status == "error"
 }
 
 // do 는 Basic 자격을 실은 요청 하나를 보내고 응답을 돌려준다. 전송이 실패하면 *Error(timeout · unreachable)다.

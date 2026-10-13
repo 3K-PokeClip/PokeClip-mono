@@ -475,7 +475,9 @@ func TestNoSecretsInOutputsAcrossGaugeTransitions(t *testing.T) {
 // 절단 세 갈래(기록 · 목록 · 기록 밖)와 기록 회전(시작 표시)의 출력에도 비밀이 없다. 처리기가 허용한 연결이 기록에 쓰이고
 // (maxBytes 1 — 허용마다 회전해 앞 줄이 밀려난다), 절단이 그 기록과 가짜 MediaMTX 의 목록으로 끊는다. 가짜 MediaMTX 는
 // Control API 요청의 Basic 자격을 응답기의 api 행에 묻는다(설계 3-4 2) — API 비번이 api 행을 지난다. 틀린 자격의 절단과
-// Control API 500 의 절단은 에러로 끝난다 — 그 에러 문구와 보고도 절단 출력이다.
+// Control API 가 목록 · kick · 조회에 500 으로 답하는 절단은 에러로 끝난다 — 그 에러 문구와 보고도 절단 출력이다. 세
+// 요청의 실패는 Control API 클라이언트의 서로 다른 반환 자리라 하나씩 지난다 — 어느 자리가 요청 머리(Basic 자격)를 에러에
+// 실어도 드러나게.
 func TestNoSecretsInOutputsAcrossCut(t *testing.T) {
 	f := newLeakFixture(t, fixtureOptions{connMaxBytes: 1})
 	m := newFakeMediaMTX(t)
@@ -510,6 +512,13 @@ func TestNoSecretsInOutputsAcrossCut(t *testing.T) {
 	repWrong, errWrong := cut(wrong)
 	m.set(func(m *fakeMediaMTX) { m.fail["list"] = http.StatusInternalServerError })
 	rep500, err500 := cut(newLeakMTXClient(t, m.srv.URL))
+	// kick 실패 — 기록 갈래의 logged 를 kick 한다(연결은 첫 절단에 끊겼어도 kick 은 나간다).
+	m.set(func(m *fakeMediaMTX) { delete(m.fail, "list"); m.fail["kick"] = http.StatusInternalServerError })
+	repKick, errKick := cut(newLeakMTXClient(t, m.srv.URL))
+	// 조회 실패 — 끊긴 listed 를 다시 둬 kick 이 200 으로 끝나고 확인 조회가 나가게 한다.
+	m.add(fakeConn{id: listed, created: allowed.Since.Add(-time.Minute), state: statePublish, path: testTokenA})
+	m.set(func(m *fakeMediaMTX) { delete(m.fail, "kick"); m.fail["get"] = http.StatusInternalServerError })
+	repGet, errGet := cut(newLeakMTXClient(t, m.srv.URL))
 
 	// 보고의 id 는 찍지 않는다 — 기록 줄에 비밀이 실리면 id 자리로 따라 나온다. 셈만 싣는다.
 	if cutErr != nil || rep.FromLog != 1 || rep.FromList != 1 || rep.FromUnmapped != 1 || rep.Kicked != 3 {
@@ -519,13 +528,16 @@ func TestNoSecretsInOutputsAcrossCut(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		err    error
+		op     string
 		status int
 	}{
-		{name: "wrong credentials", err: errWrong, status: http.StatusUnauthorized},
-		{name: "Control API 500", err: err500, status: http.StatusInternalServerError},
+		{name: "wrong credentials", err: errWrong, op: "list", status: http.StatusUnauthorized},
+		{name: "Control API 500", err: err500, op: "list", status: http.StatusInternalServerError},
+		{name: "kick 500", err: errKick, op: "kick", status: http.StatusInternalServerError},
+		{name: "lookup 500", err: errGet, op: "get", status: http.StatusInternalServerError},
 	} {
-		if apiErr := (*mtxctl.Error)(nil); !errors.As(tc.err, &apiErr) || apiErr.Status != tc.status {
-			t.Errorf("Cut with %s did not end with Control API status %d", tc.name, tc.status)
+		if apiErr := (*mtxctl.Error)(nil); !errors.As(tc.err, &apiErr) || apiErr.Op != tc.op || apiErr.Status != tc.status {
+			t.Errorf("Cut with %s did not end with Control API %s status %d", tc.name, tc.op, tc.status)
 		}
 	}
 	events := f.events(t)
@@ -552,8 +564,8 @@ func TestNoSecretsInOutputsAcrossCut(t *testing.T) {
 		t.Errorf("connection log files = %d, want 2 generations", generations)
 	}
 	outputs = append(outputs,
-		leakOutput{place: "Cut 보고", content: fmt.Sprintf("%+v\n%+v\n%+v", rep, repWrong, rep500)},
-		leakOutput{place: "Cut 에러", content: fmt.Sprint(cutErr, errWrong, err500)},
+		leakOutput{place: "Cut 보고", content: fmt.Sprintf("%+v\n%+v\n%+v\n%+v\n%+v", rep, repWrong, rep500, repKick, repGet)},
+		leakOutput{place: "Cut 에러", content: fmt.Sprint(cutErr, errWrong, err500, errKick, errGet)},
 	)
 	for _, p := range leakProblems(outputs, f.responses()) {
 		t.Error(p)

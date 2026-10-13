@@ -29,6 +29,7 @@ const (
 	testPass = "synthetic-api-pass-0001"
 	testID   = "0b1f2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d" // MediaMTX 연결 id 꼴(uuid.UUID 의 JSON — 소문자)
 	testID2  = "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f"
+	testID3  = "2d3e4f5a-6b7c-4d8e-9f0a-1b2c3d4e5f6a"
 	testPath = "SYNTHET1CTEST000000000000A" // 토큰 = 경로 이름
 )
 
@@ -142,6 +143,19 @@ func replyJSON(status int, body string) http.HandlerFunc {
 // notFoundBody 는 원본이 없는 연결에 내는 본문이다(api.go 284–293 writeError · srt/server.go 25).
 const notFoundBody = `{"status":"error","error":"connection not found"}`
 
+// routeNotFoundBody 는 경로가 없거나 메서드가 다를 때 gin 이 내는 기본 404 본문이다 — text/plain(gin.go 33 · 759 ·
+// 764–779). 인증 미들웨어를 지난 뒤에 난다. 판 올림으로 조회 · kick 경로가 사라지면 이 꼴이다.
+const routeNotFoundBody = "404 page not found"
+
+// replyText 는 status 와 text/plain 본문으로 답한다.
+func replyText(status int, body string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	}
+}
+
 // newTestClient 는 apiURL 의 Control API 를 시험 자격으로 부르는 클라이언트다.
 func newTestClient(t *testing.T, apiURL string) *Client {
 	t.Helper()
@@ -250,7 +264,7 @@ func TestNewClientBoundsConnectionSetup(t *testing.T) {
 }
 
 // SRTConns 는 GET /v3/srtconns/list 를 한 번 부르고, itemsPerPage 에 받을 수 있는 가장 큰 값(2³¹−1 — 원본
-// paginate.go 35행은 31비트까지 받는다)을 실어 어떤 목록도 한 페이지로 받는다(설계 2-5 — 계획 9-2 B15). 요청마다
+// paginate.go 35행은 31비트까지 받는다)을 실어 어떤 목록도 한 페이지로 받는다(설계 2-5). 요청마다
 // Basic 자격을 싣는다.
 func TestSRTConnsRequestsOnePage(t *testing.T) {
 	a := newFakeAPI(t, replyJSON(http.StatusOK, listBody(t, 0)))
@@ -280,11 +294,12 @@ func TestSRTConnsRequestsOnePage(t *testing.T) {
 }
 
 // SRTConns 는 항목의 id · created · path · state 를 옮긴다. created 는 MediaMTX 가 쓴 시각대 그대로 해석한다 — 같은
-// 순간이면 시각대가 달라도 같다.
+// 순간이면 시각대가 달라도 같다. state 는 셋 다 받는다 — 등록 전 idle(path 빈 값) · 송출 publish · 읽기 read(path 참).
 func TestSRTConnsDecodesItems(t *testing.T) {
 	body := listBody(t, 1,
 		srtConnItem(testID, "2026-10-12T09:00:00.123456789Z", "idle", ""),
-		srtConnItem(testID2, "2026-10-12T18:00:01+09:00", "publish", testPath))
+		srtConnItem(testID2, "2026-10-12T18:00:01+09:00", "publish", testPath),
+		srtConnItem(testID3, "2026-10-12T09:00:02Z", "read", testPath))
 	a := newFakeAPI(t, replyJSON(http.StatusOK, body))
 	c := newTestClient(t, a.srv.URL)
 
@@ -295,6 +310,7 @@ func TestSRTConnsDecodesItems(t *testing.T) {
 	want := []SRTConn{
 		{ID: testID, Created: time.Date(2026, 10, 12, 9, 0, 0, 123456789, time.UTC), Path: "", State: "idle"},
 		{ID: testID2, Created: time.Date(2026, 10, 12, 9, 0, 1, 0, time.UTC), Path: testPath, State: "publish"},
+		{ID: testID3, Created: time.Date(2026, 10, 12, 9, 0, 2, 0, time.UTC), Path: testPath, State: "read"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("SRTConns() = %+v, want %+v", got, want)
@@ -319,7 +335,7 @@ func TestSRTConnsAcceptsEmptyList(t *testing.T) {
 }
 
 // 돌아온 pageCount 가 1 보다 크면 에러다 — 여러 페이지로 받으면 페이지 사이에 사라진 연결 때문에 뒤 항목이 앞으로
-// 밀려 하나가 건너뛰어질 수 있다(설계 2-5 766행 · 계획 9-2 B15). 가짜는 다음 페이지를 물으면 남은 항목을 준다 —
+// 밀려 하나가 건너뛰어질 수 있다(설계 2-5 766행). 가짜는 다음 페이지를 물으면 남은 항목을 준다 —
 // 페이지를 이어 받는 클라이언트면 에러 없이 끝난다.
 func TestSRTConnsRejectsMultiplePages(t *testing.T) {
 	first := listBody(t, 2, srtConnItem(testID, "2026-10-12T09:00:00Z", "idle", ""))
@@ -346,13 +362,31 @@ func TestSRTConnsRejectsMultiplePages(t *testing.T) {
 
 // 본문이 계약 꼴이 아니면 parse 에러다. items 가 없으면 빈 목록이 아니다 — 응답의 꼴이 바뀐 것을 「연결 0」으로
 // 읽으면 거짓 성공이다. 항목에는 id(소문자 UUID)와 created 가 있어야 한다. created 가 영값인 항목을 넘기면 절단의
-// 기록 밖 갈래가 「Since 앞 · 나이 무한」으로 읽어 끊는다.
+// 기록 밖 갈래가 「Since 앞 · 나이 무한」으로 읽어 끊는다. state 는 idle · read · publish 가운데 하나이고 idle 일 때만
+// path 가 빈다(srt/conn.go 72–77 · 254–259 · 323–329행) — 판 올림으로 등록 전 연결의 state 가 새 값이 되거나 path 가
+// 등록 전에 차면, 줄이 밀려난 판독 중 연결이 기록 밖 갈래에서 빠진다. itemCount 는 원본이 페이지를 나누기 전의 전체
+// 수라(api_srt.go 21행) items 의 수와 같아야 한다 — 다르면 목록이 말없이 잘린 것이다.
 func TestSRTConnsRejectsMalformedBody(t *testing.T) {
 	okItem := srtConnItem(testID, "2026-10-12T09:00:00Z", "idle", "")
 	without := func(key string) map[string]any {
 		item := srtConnItem(testID2, "2026-10-12T09:00:00Z", "idle", "")
 		delete(item, key)
 		return item
+	}
+	item := func(state, path string) map[string]any {
+		return srtConnItem(testID2, "2026-10-12T09:00:00Z", state, path)
+	}
+	// counted 는 itemCount 를 따로 정한 한 페이지 본문이다. itemCount 가 음수면 그 필드를 뺀다.
+	counted := func(itemCount int, items ...map[string]any) string {
+		body := map[string]any{"pageCount": 1, "items": items}
+		if itemCount >= 0 {
+			body["itemCount"] = itemCount
+		}
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("Setup: json.Marshal of the list body returned error: %v", err)
+		}
+		return string(b)
 	}
 	tests := []struct {
 		name string
@@ -367,6 +401,15 @@ func TestSRTConnsRejectsMalformedBody(t *testing.T) {
 		{name: "id_꼴_아님", body: listBody(t, 1, srtConnItem("../config/global/patch", "2026-10-12T09:00:00Z", "idle", ""))},
 		{name: "created_없음", body: listBody(t, 1, okItem, without("created"))},
 		{name: "created_꼴_아님", body: listBody(t, 1, srtConnItem(testID2, "yesterday", "idle", ""))},
+		{name: "state_모르는_값", body: listBody(t, 1, okItem, item("authenticating", ""))},
+		{name: "state_빈_값", body: listBody(t, 1, okItem, item("", ""))},
+		{name: "state_없음", body: listBody(t, 1, okItem, without("state"))},
+		{name: "idle_인데_path", body: listBody(t, 1, okItem, item("idle", testPath))},
+		{name: "publish_인데_빈_path", body: listBody(t, 1, okItem, item("publish", ""))},
+		{name: "read_인데_빈_path", body: listBody(t, 1, okItem, item("read", ""))},
+		{name: "itemCount_가_적음", body: counted(1, okItem, item("idle", ""))},
+		{name: "itemCount_가_많음_잘린_목록", body: counted(3, okItem, item("idle", ""))},
+		{name: "itemCount_없음", body: counted(-1, okItem)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -383,7 +426,7 @@ func TestSRTConnsRejectsMalformedBody(t *testing.T) {
 	}
 }
 
-// 목록 본문은 64 MiB 까지 읽는다(항목 하나가 많아야 약 2.4 KB — 약 2만 7천 연결). 상한과 같은 크기는 받고, 한
+// 목록 본문은 64 MiB 까지 읽는다(항목 하나는 측정 샘플로 약 2.4 KB — 고정 상한이 아니다). 상한과 같은 크기는 받고, 한
 // 바이트 넘으면 parse 에러다. 본문은 빈 목록 뒤를 공백으로 채운 온전한 JSON 이다.
 func TestSRTConnsReadsBodyUpTo64MiB(t *testing.T) {
 	empty := listBody(t, 0)
@@ -407,23 +450,32 @@ func TestSRTConnsReadsBodyUpTo64MiB(t *testing.T) {
 	}
 }
 
-// SRTConnExists 는 GET /v3/srtconns/get/{id} 다 — 200 이면 참, 404 면 거짓, 그 밖의 상태는 에러다.
+// SRTConnExists 는 GET /v3/srtconns/get/{id} 다 — 200 이면 참, 연결 없음 404(Control API 의 에러 꼴 본문)면 거짓, 그 밖의
+// 상태는 에러다. 경로가 없는 404(gin 기본 — text/plain)를 「사라짐」으로 읽으면 판 올림에서 확인이 거짓으로 끝난다.
 func TestSRTConnExists(t *testing.T) {
 	tests := []struct {
 		name       string
 		status     int
 		body       string
+		text       bool // 본문을 text/plain 으로 낸다(gin 기본 404)
 		want       bool
 		wantStatus int // 0 이면 에러 없음
 	}{
 		{name: "200", status: http.StatusOK, body: `{"id":"` + testID + `"}`, want: true},
 		{name: "404", status: http.StatusNotFound, body: notFoundBody, want: false},
+		{name: "404_경로_없음", status: http.StatusNotFound, body: routeNotFoundBody, text: true, wantStatus: http.StatusNotFound},
+		{name: "404_빈_본문", status: http.StatusNotFound, body: "", wantStatus: http.StatusNotFound},
+		{name: "404_에러_꼴_아닌_JSON", status: http.StatusNotFound, body: `{"status":"ok"}`, wantStatus: http.StatusNotFound},
 		{name: "401", status: http.StatusUnauthorized, body: `{"status":"error","error":"authentication error"}`, wantStatus: http.StatusUnauthorized},
 		{name: "500", status: http.StatusInternalServerError, body: `{"status":"error","error":"terminated"}`, wantStatus: http.StatusInternalServerError},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			a := newFakeAPI(t, replyJSON(tc.status, tc.body))
+			reply := replyJSON(tc.status, tc.body)
+			if tc.text {
+				reply = replyText(tc.status, tc.body)
+			}
+			a := newFakeAPI(t, reply)
 			c := newTestClient(t, a.srv.URL)
 
 			got, err := c.SRTConnExists(t.Context(), testID)
@@ -446,23 +498,33 @@ func TestSRTConnExists(t *testing.T) {
 	}
 }
 
-// KickSRTConn 은 POST /v3/srtconns/kick/{id} 다 — 200 이면 nil, 404 면 ErrNotFound(이미 없다), 그 밖의 상태는 에러다.
+// KickSRTConn 은 POST /v3/srtconns/kick/{id} 다 — 200 이면 nil, 연결 없음 404(Control API 의 에러 꼴 본문)면
+// ErrNotFound(이미 없다), 그 밖의 상태는 에러다. 경로가 없는 404(gin 기본 — text/plain)는 ErrNotFound 가 아니다 — 판
+// 올림에서 kick 경로만 사라지면 끊지 못한 연결을 「이미 없음」으로 세어 거짓 성공이 된다.
 func TestKickSRTConn(t *testing.T) {
 	tests := []struct {
 		name       string
 		status     int
 		body       string
+		text       bool  // 본문을 text/plain 으로 낸다(gin 기본 404)
 		wantErr    error // ErrNotFound 를 기대할 때
 		wantStatus int   // 0 이고 wantErr 도 nil 이면 에러 없음
 	}{
 		{name: "200", status: http.StatusOK, body: `{"status":"ok"}`},
 		{name: "404", status: http.StatusNotFound, body: notFoundBody, wantErr: ErrNotFound},
+		{name: "404_경로_없음", status: http.StatusNotFound, body: routeNotFoundBody, text: true, wantStatus: http.StatusNotFound},
+		{name: "404_빈_본문", status: http.StatusNotFound, body: "", wantStatus: http.StatusNotFound},
+		{name: "404_에러_꼴_아닌_JSON", status: http.StatusNotFound, body: `{"status":"ok"}`, wantStatus: http.StatusNotFound},
 		{name: "401", status: http.StatusUnauthorized, body: `{"status":"error","error":"authentication error"}`, wantStatus: http.StatusUnauthorized},
 		{name: "500", status: http.StatusInternalServerError, body: `{"status":"error","error":"terminated"}`, wantStatus: http.StatusInternalServerError},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			a := newFakeAPI(t, replyJSON(tc.status, tc.body))
+			reply := replyJSON(tc.status, tc.body)
+			if tc.text {
+				reply = replyText(tc.status, tc.body)
+			}
+			a := newFakeAPI(t, reply)
 			c := newTestClient(t, a.srv.URL)
 
 			err := c.KickSRTConn(t.Context(), testID)
@@ -487,6 +549,31 @@ func TestKickSRTConn(t *testing.T) {
 				t.Errorf("KickSRTConn(%q) sent %+v, want one POST /v3/srtconns/kick/%s with the Basic credentials", testID, reqs, testID)
 			}
 		})
+	}
+}
+
+// 404 의 본문을 읽다가 연결이 끊기면 Control API 의 에러 꼴인지 알 수 없다 — 조회 · kick 모두 「없음」으로 읽지 않고
+// 그 상태의 에러다.
+func TestClient404BodyCutShortIsNotGone(t *testing.T) {
+	a := newFakeAPI(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", "4096")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"status":"error","error":"connection not found"}`) // 약속한 길이보다 짧게 쓰고 끝낸다
+	})
+	c := newTestClient(t, a.srv.URL)
+
+	kickErr := c.KickSRTConn(t.Context(), testID)
+	_, getErr := c.SRTConnExists(t.Context(), testID)
+
+	for _, tc := range []struct {
+		op  string
+		err error
+	}{{op: "kick", err: kickErr}, {op: "get", err: getErr}} {
+		var e *Error
+		if !errors.As(tc.err, &e) || e.Op != tc.op || e.Kind != "status" || e.Status != http.StatusNotFound || errors.Is(tc.err, ErrNotFound) {
+			t.Errorf("%s answered a 404 whose body is cut short = %v, want *Error{Op: %s, Kind: status, Status: 404}", tc.op, tc.err, tc.op)
+		}
 	}
 }
 
