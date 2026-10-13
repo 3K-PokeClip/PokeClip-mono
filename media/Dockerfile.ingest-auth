@@ -1,0 +1,31 @@
+# ingest-auth 응답기 — 멀티스테이지 빌드 (설계 2-6 · 2-8)
+# 빌드 스테이지의 Go 버전은 media/go.mod 의 go 지시자와 같은 1.27 로 유지한다.
+
+FROM golang:1.27-alpine AS build
+WORKDIR /src
+
+# 의존만 먼저 받아 두면 소스만 바뀐 재빌드가 빨라진다.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+# CGO_ENABLED=0 = 순수 정적 바이너리. 빌드 이미지의 libc 에 묶이지 않는다.
+RUN CGO_ENABLED=0 go build -trimpath -o /out/ingest-auth ./cmd/ingest-auth
+
+# 최종 스테이지를 scratch 가 아니라 alpine 으로 두는 이유는 media/Dockerfile 과 같다 — 검증 가능성.
+# 운영 확인(거부 목록을 UID 10003 이 읽는가, 기록 디렉터리에 쓸 수 있는가)을 컨테이너 안에서 실제로 해 볼 수 있다.
+# 응답기 자신은 셸을 쓰지 않는다 — compose healthcheck 와 cut 은 이 바이너리를 exec 꼴로 부른다.
+FROM alpine:3
+
+# 바이너리 자리는 /ingest-auth 다. compose healthcheck(["CMD", "/ingest-auth", "healthcheck"])와 RUNBOOK 의 cut
+# (docker compose exec ingest-auth /ingest-auth cut <토큰>)이 이 경로를 부른다(설계 2-8 · 3-4).
+# --chown=0:0 은 실행 계정이 바이너리를 덮어쓰지 못하게 root 소유로 못박는다 — COPY --from 은 빌드 스테이지의 uid 를
+# 그대로 옮기므로(Dockerfile.mtxhook 의 실측), 빌드 스테이지에 USER 를 더하는 변경 하나로 소유가 바뀌지 않게 한다.
+COPY --chown=0:0 --from=build /out/ingest-auth /ingest-auth
+
+# 비특권 UID 10003 으로 돌린다(설계 2-8 — compose 의 user 와 같다). 숫자로 적는다.
+# 거부 목록(/etc/ingest-auth)과 허용 연결 기록(/var/lib/ingest-auth)은 compose 가 호스트 디렉터리로 붙인다 —
+# 이미지에 두지 않는다.
+USER 10003:10003
+
+ENTRYPOINT ["/ingest-auth"]
