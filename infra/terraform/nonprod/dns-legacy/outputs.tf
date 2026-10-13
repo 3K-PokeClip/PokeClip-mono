@@ -1,10 +1,10 @@
 output "name_servers" {
-  description = "옛 존 네임서버 — 존 이전 해석 비교(9-2)의 대상."
+  description = "공개 존 네임서버 — 리스 만료 대비(설계 9-2)의 NS 보관."
   value       = aws_route53_zone.legacy.name_servers
 }
 
 output "records" {
-  description = "옛 존의 나머지 레코드 전 목록 — 새 존 · dns-dev 복사 근거."
+  description = "공개 존의 나머지 레코드 전 목록 — 리스 만료 대비(설계 9-2)의 레코드 보관."
   value = {
     for key, record in aws_route53_record.legacy : key => {
       name    = record.name

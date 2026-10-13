@@ -17,9 +17,11 @@ hits(rule, files) := {msg |
 	startswith(msg, concat("", [rule, " "]))
 }
 
-# 위반이 하나도 없는지.
+# 위반이 하나도 없는지. 시험 입력은 부분 트리라 fixture 표지로 돌린다 — 운영
+# 표지면 공개 존 루트의 부재(R12 ① · ②)가 끼므로(운영 모드는
+# public_zone_test.rego 가 따로 본다).
 clean(files) if {
-	msgs := deny with input as files
+	msgs := deny with input as files with data.mode as "fixture"
 	count(msgs) == 0
 }
 
