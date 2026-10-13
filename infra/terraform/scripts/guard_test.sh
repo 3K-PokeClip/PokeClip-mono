@@ -867,14 +867,16 @@ make_conftest_recorder() {
 # 설정 파일이 정책을 내려받게(update) 해 둔 트리에서 guard.sh 가 conftest 를
 # 한 번도 부르지 않고 R0 로 끝나, 정책 디렉터리가 그대로인지 본다. 설정
 # 파일은 일반 파일(file)이거나, update 를 담은 다른 파일을 가리키는
-# 링크(link)다. guard.sh · 정책 · 표지 사본과 conftest 대역을 쓴다.
+# 링크(link)이거나, 이름에 줄바꿈이 든 하위 디렉터리 안의 일반 파일
+# (nested-ctrl)이다. guard.sh · 정책 · 표지 사본과 conftest 대역을 쓴다.
 # Arguments:
-#   설정 파일 꼴 — file · link.
+#   설정 파일 꼴 — file · link · nested-ctrl.
 #######################################
 expect_config_stops_before_conftest() {
   local form="$1"
   local name="config-first-${form}"
   local tmp kit tree before after output status
+  local config="conftest.toml"
   tmp="$(new_tmp_dir)" || {
     fail "${name}: 시험 준비 실패(임시 디렉터리)"
     return
@@ -892,8 +894,13 @@ expect_config_stops_before_conftest() {
     return
   fi
   case "${form}" in
-    file) mv -- "${tree}/notes.txt" "${tree}/conftest.toml" ;;
-    link) ln -s notes.txt "${tree}/conftest.toml" ;;
+    file) mv -- "${tree}/notes.txt" "${tree}/${config}" ;;
+    link) ln -s notes.txt "${tree}/${config}" ;;
+    nested-ctrl)
+      config="mod"$'\n'"x/conftest.toml"
+      mkdir -- "${tree}/mod"$'\n'"x" &&
+        mv -- "${tree}/notes.txt" "${tree}/${config}"
+      ;;
     *) false ;;
   esac || {
     fail "${name}: 시험 준비 실패(설정 파일)"
@@ -909,9 +916,9 @@ expect_config_stops_before_conftest() {
     fail "${name}: conftest 가 불림 — $(<"${tmp}/calls.log")"
   elif [[ "${before}" != "${after}" ]]; then
     fail "${name}: 정책 디렉터리가 바뀜 — ${after}"
-  elif [[ "${status}" -ne 1 ||
-    $'\n'"${output}" != *$'\n'"guard: R0 conftest.toml: "* ]]; then
-    fail "${name}: 종료 1 · R0 conftest.toml 을 기대했으나 ${status}" \
+  elif [[ "${status}" -ne 1 || $'\n'"${output}" != \
+    *$'\n'"guard: R0 $(printf '%q' "${config}"): "* ]]; then
+    fail "${name}: 종료 1 · R0 설정 파일을 기대했으나 ${status}" \
       "— ${output}"
   else
     echo "ok: ${name} → R0 · conftest 미호출 · 정책 무변경"
@@ -1013,6 +1020,7 @@ main() {
   expect_enumeration_boundaries
   expect_config_stops_before_conftest file
   expect_config_stops_before_conftest link
+  expect_config_stops_before_conftest nested-ctrl
   expect_conftest_config_pinned
 
   if [[ "${failures}" -ne 0 ]]; then
