@@ -339,8 +339,10 @@ expect_outside_config_link_refused() {
 
 #######################################
 # 링크가 든 fixture 를 사본으로 쓰는 준비가 링크 너머(저장소 밖 파일)에
-# 쓰지 않고 준비 실패로 멈추는지 본다 — run_guard_prepared(준비 함수가
-# 씀) · run_guard_outside · make_unreadable_copy(chmod) 셋 다.
+# 쓰지 않고 준비 실패로 멈추는지 본다 — fixture 사본에 쓰는 다섯 곳 모두:
+# run_guard_prepared(준비 함수가 씀) · run_guard_outside(치환) ·
+# make_unreadable_copy(chmod) · make_config_ignored_copy(other.tf ·
+# conftest.toml) · make_config_tree(notes.txt).
 #######################################
 expect_fixture_links_refused() {
   local tmp fx before copy
@@ -352,7 +354,9 @@ expect_fixture_links_refused() {
   fx="${tmp}/fx"
   if ! mkdir -p "${fx}" || ! printf 'decoy\n' >"${tmp}/decoy" ||
     ! ln -s "${tmp}/decoy" "${fx}/main.tf" ||
-    ! ln -s "${tmp}/decoy" "${fx}/conftest.yaml"; then
+    ! ln -s "${tmp}/decoy" "${fx}/conftest.yaml" ||
+    ! ln -s "${tmp}/decoy" "${fx}/other.tf" ||
+    ! ln -s "${tmp}/decoy" "${fx}/notes.txt"; then
     fail "fixture-links: 시험 준비 실패(링크)"
     rm -rf -- "${tmp}"
     return
@@ -371,6 +375,16 @@ expect_fixture_links_refused() {
     failed=1
     rm -rf -- "${copy}"
   fi
+  if copy="$(make_config_ignored_copy "${fx}")"; then
+    fail "fixture-links: make_config_ignored_copy 가 준비 실패 없이 씀"
+    failed=1
+    rm -rf -- "${copy}"
+  fi
+  if make_config_tree "${tmp}/tree" "${fx}" "${tmp}/planted.rego" file \
+    >/dev/null; then
+    fail "fixture-links: make_config_tree 가 준비 실패 없이 씀"
+    failed=1
+  fi
   if [[ ! -r "${tmp}/decoy" ]]; then
     fail "fixture-links: 링크 너머 파일의 권한이 바뀜"
     failed=1
@@ -382,7 +396,7 @@ expect_fixture_links_refused() {
   fi
   rm -rf -- "${tmp}"
   if [[ "${failed}" -eq 0 ]]; then
-    echo "ok: fixture-links → 세 준비 모두 준비 실패 · 링크 너머 무변경"
+    echo "ok: fixture-links → 다섯 준비 모두 준비 실패 · 링크 너머 무변경"
   fi
 }
 
@@ -694,6 +708,31 @@ expect_no_rules_error() {
 }
 
 #######################################
+# fixture 를 임시 디렉터리에 복사하고, 정상 파일 other.tf 와 위반 파일만
+# 무시하는 conftest.toml 을 더한다.
+# Arguments:
+#   fixture 디렉터리.
+# Outputs:
+#   임시 디렉터리 경로.
+# Returns:
+#   복사 · 쓰기에 실패하면 1(만든 임시 디렉터리는 지운다).
+#######################################
+make_config_ignored_copy() {
+  local source="$1"
+  local tmp
+  tmp="$(new_tmp_dir)" || return 1
+  if ! cp -R "${source}/." "${tmp}/" ||
+    ! printf 'resource "aws_secretsmanager_secret" "ok" {\n  name = "x"\n}\n' \
+      >"${tmp}/other.tf" ||
+    ! printf 'ignore = "main"\nnamespace = ["missing"]\n' \
+      >"${tmp}/conftest.toml"; then
+    rm -rf -- "${tmp}"
+    return 1
+  fi
+  echo "${tmp}"
+}
+
+#######################################
 # 검사 루트에 남은 conftest.toml(ignore 등)이 위반 파일을 빼 위반 0 으로
 # 새지 못하는지 본다. bad_R1 사본에 정상 파일을 하나 더 두고 위반 파일만
 # 무시하는 설정을 둔다. 설정 파일이 있으면 guard 는 conftest 를 부르기 전에
@@ -701,19 +740,10 @@ expect_no_rules_error() {
 #######################################
 expect_conftest_config_ignored() {
   local tmp output status
-  tmp="$(new_tmp_dir)" || {
-    fail "conftest-config: 시험 준비 실패(임시 디렉터리)"
+  tmp="$(make_config_ignored_copy "${FIXTURES}/bad_R1")" || {
+    fail "conftest-config: 시험 준비 실패(임시 디렉터리 · 복사)"
     return
   }
-  if ! cp -R "${FIXTURES}/bad_R1/." "${tmp}/" ||
-    ! printf 'resource "aws_secretsmanager_secret" "ok" {\n  name = "x"\n}\n' \
-      >"${tmp}/other.tf" ||
-    ! printf 'ignore = "main"\nnamespace = ["missing"]\n' \
-      >"${tmp}/conftest.toml"; then
-    fail "conftest-config: 시험 준비 실패(복사)"
-    rm -rf -- "${tmp}"
-    return
-  fi
   output="$(bash "${GUARD}" "${tmp}" 2>&1)"
   status=$?
   rm -rf -- "${tmp}"
@@ -942,6 +972,36 @@ make_conftest_recorder() {
 }
 
 #######################################
+# fixture 사본에 정책을 내려받게(update) 하는 설정 파일을 꼴대로 둔 트리를
+# 만든다 — file(일반 파일) · link(update 를 담은 notes.txt 를 가리키는
+# 링크) · nested-ctrl(줄바꿈 하위 디렉터리 안) · folded(루트 confteſt.toml).
+# Arguments:
+#   트리 디렉터리, fixture 디렉터리, 내려받을 정책 파일, 꼴.
+# Outputs:
+#   설정 파일의 트리 안 경로(R0 줄에 나올 이름).
+# Returns:
+#   준비하지 못하면 1.
+#######################################
+make_config_tree() {
+  local tree="$1" source="$2" planted="$3" form="$4"
+  local config="conftest.toml"
+  mkdir -p "${tree}" && cp -R "${source}/." "${tree}/" &&
+    printf 'update = ["%s"]\n' "${planted}" >"${tree}/notes.txt" || return 1
+  case "${form}" in
+    file) mv -- "${tree}/notes.txt" "${tree}/${config}" ;;
+    link) ln -s notes.txt "${tree}/${config}" ;;
+    nested-ctrl)
+      config="mod"$'\n'"x/conftest.toml"
+      mkdir -- "${tree}/mod"$'\n'"x" &&
+        mv -- "${tree}/notes.txt" "${tree}/${config}"
+      ;;
+    folded) mv -- "${tree}/notes.txt" "${tree}/confte"$'\xc5\xbf'"t.toml" ;;
+    *) false ;;
+  esac || return 1
+  echo "${config}"
+}
+
+#######################################
 # 설정 파일이 정책을 내려받게(update) 해 둔 트리에서 guard.sh 가 conftest 를
 # 한 번도 부르지 않고 R0 로 끝나, 정책 디렉터리가 그대로인지 본다. 설정
 # 파일은 일반 파일(file)이거나, update 를 담은 다른 파일을 가리키는
@@ -955,8 +1015,7 @@ make_conftest_recorder() {
 expect_config_stops_before_conftest() {
   local form="$1"
   local name="config-first-${form}"
-  local tmp kit tree before after output status
-  local config="conftest.toml"
+  local tmp kit tree before after output status config
   tmp="$(new_tmp_dir)" || {
     fail "${name}: 시험 준비 실패(임시 디렉터리)"
     return
@@ -964,27 +1023,15 @@ expect_config_stops_before_conftest() {
   kit="${tmp}/kit"
   tree="${tmp}/tree"
   if ! make_guard_kit "${tmp}" || ! make_conftest_recorder "${tmp}" ||
-    ! mkdir -p "${tree}" || ! cp -R "${FIXTURES}/ok_R12/." "${tree}/" ||
     ! printf 'package main\n\nfixture_tree if true\n' \
-      >"${tmp}/planted.rego" ||
-    ! printf 'update = ["%s"]\n' "${tmp}/planted.rego" >"${tree}/notes.txt"
-  then
+      >"${tmp}/planted.rego"; then
     fail "${name}: 시험 준비 실패(복사)"
     rm -rf -- "${tmp}"
     return
   fi
-  case "${form}" in
-    file) mv -- "${tree}/notes.txt" "${tree}/${config}" ;;
-    link) ln -s notes.txt "${tree}/${config}" ;;
-    nested-ctrl)
-      config="mod"$'\n'"x/conftest.toml"
-      mkdir -- "${tree}/mod"$'\n'"x" &&
-        mv -- "${tree}/notes.txt" "${tree}/${config}"
-      ;;
-    folded) mv -- "${tree}/notes.txt" "${tree}/confte"$'\xc5\xbf'"t.toml" ;;
-    *) false ;;
-  esac || {
-    fail "${name}: 시험 준비 실패(설정 파일)"
+  config="$(make_config_tree "${tree}" "${FIXTURES}/ok_R12" \
+    "${tmp}/planted.rego" "${form}")" || {
+    fail "${name}: 시험 준비 실패(사본 · 설정 파일)"
     rm -rf -- "${tmp}"
     return
   }
@@ -1008,24 +1055,76 @@ expect_config_stops_before_conftest() {
 }
 
 #######################################
+# 파일 시스템이 confteſt.toml(U+017F)을 conftest.toml 로 접는지 탐침한다.
+# Arguments:
+#   탐침 파일을 만들 디렉터리.
+# Returns:
+#   접으면 0, 아니면 1.
+#######################################
+probe_case_folding() {
+  local dir="$1"
+  { : >"${dir}/confte"$'\xc5\xbf'"t.toml"; } 2>/dev/null &&
+    [[ -e "${dir}/conftest.toml" ]]
+}
+
+#######################################
+# 접기 탐침이 탐침 파일을 만들지 못하면 「접지 않음」(skip)이 아니라 실패로
+# 적는지 본다 — 쓸 수 없는 디렉터리로 흉내 내고, 하위 셸에서 돌려 그 실패가
+# 이 시험의 실패 수에 섞이지 않게 한다. root 처럼 권한과 상관없이 쓰면
+# 건너뛴다.
+#######################################
+expect_folding_probe_error() {
+  local tmp output
+  tmp="$(new_tmp_dir)" || {
+    fail "folding-probe-error: 시험 준비 실패(임시 디렉터리)"
+    return
+  }
+  if ! mkdir -- "${tmp}/ro" || ! chmod 555 "${tmp}/ro"; then
+    fail "folding-probe-error: 시험 준비 실패(쓸 수 없는 디렉터리)"
+    rm -rf -- "${tmp}"
+    return
+  fi
+  if [[ -w "${tmp}/ro" ]]; then
+    echo "skip: folding-probe-error(현재 사용자가 권한과 상관없이 씀)"
+    chmod 755 "${tmp}/ro"
+    rm -rf -- "${tmp}"
+    return
+  fi
+  output="$(expect_folded_config_stops_before_conftest "${tmp}/ro" 2>&1)"
+  chmod 755 "${tmp}/ro"
+  rm -rf -- "${tmp}"
+  if [[ "${output}" == *"skip: config-first-folded"* ||
+    "${output}" != *"FAIL: config-first-folded: "* ]]; then
+    fail "folding-probe-error: 만들기 실패를 FAIL 로 기대했으나 — ${output}"
+    return
+  fi
+  echo "ok: folding-probe-error → 만들기 실패는 FAIL(skip 아님)"
+}
+
+#######################################
 # 파일 시스템이 confteſt.toml(U+017F)을 conftest.toml 로 접으면(macOS
 # APFS) 그 파일도 설정 파일로 세어 conftest 를 부르지 않는지 본다. 접지
 # 않는(대소문자를 구분하는) 파일 시스템이면 이 사례는 뜻이 없으므로 skip
 # 으로 적는다.
+# Arguments:
+#   탐침 파일을 만들 디렉터리(없으면 새 임시 디렉터리).
 #######################################
 expect_folded_config_stops_before_conftest() {
-  local tmp
-  local folds=0
-  tmp="$(new_tmp_dir)" || {
-    fail "config-first-folded: 시험 준비 실패(임시 디렉터리)"
-    return
-  }
-  if : >"${tmp}/confte"$'\xc5\xbf'"t.toml" &&
-    [[ -e "${tmp}/conftest.toml" ]]; then
-    folds=1
+  local probe="${1:-}"
+  local tmp="" status
+  if [[ -z "${probe}" ]]; then
+    tmp="$(new_tmp_dir)" || {
+      fail "config-first-folded: 시험 준비 실패(임시 디렉터리)"
+      return
+    }
+    probe="${tmp}"
   fi
-  rm -rf -- "${tmp}"
-  if [[ "${folds}" -eq 0 ]]; then
+  probe_case_folding "${probe}"
+  status=$?
+  if [[ -n "${tmp}" ]]; then
+    rm -rf -- "${tmp}"
+  fi
+  if [[ "${status}" -ne 0 ]]; then
     echo "skip: config-first-folded(파일 시스템이 ſ 를 s 로 접지 않음)"
     return
   fi
@@ -1129,6 +1228,7 @@ main() {
   expect_config_stops_before_conftest link
   expect_config_stops_before_conftest nested-ctrl
   expect_folded_config_stops_before_conftest
+  expect_folding_probe_error
   expect_conftest_config_pinned
 
   if [[ "${failures}" -ne 0 ]]; then
