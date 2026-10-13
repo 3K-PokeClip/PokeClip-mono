@@ -19,7 +19,10 @@
 # fixture 는 fixture 표지라 공개 존 루트의 부재를 건너뛰고, 저장소 밖 사본은
 # 운영 표지라 부재가 위반이다. testdata/guard/ok_R12/ 는 두 표지 모두 통과해야
 # 하고, testdata/guard/op_<규칙>_<변형>/ 은 저장소 밖 사본(운영 표지)으로만
-# 돌린다. 저장소 밖 사본은 mktemp -d 로 만들고 돌린 뒤 지워 남지 않았는지 본다.
+# 돌린다. 저장소 밖 사본은 돌린 뒤 지워 남지 않았는지 본다.
+#
+# 시험의 임시 디렉터리는 모두 한 뿌리($TMPDIR/guard_test.*) 아래에 만들고,
+# 끝날 때와 중단 신호(INT · TERM)를 받을 때 뿌리를 통째로 지운다.
 #
 # 사용: bash infra/terraform/scripts/guard_test.sh
 # 종료 코드: 0 전부 통과 / 1 하나라도 실패
@@ -39,6 +42,42 @@ readonly MARKER_PLACEHOLDER='@GUARD_FIXTURE_MARKER@'
 failures=0
 run_output=""
 run_status=0
+# 시험이 만드는 임시 디렉터리의 뿌리. 끝날 때와 중단 신호에 통째로 지운다.
+tmp_root=""
+
+#######################################
+# 임시 디렉터리 뿌리를 지운다(EXIT 트랩 — INT · TERM 도 exit 로 여기 온다).
+# Globals:
+#   tmp_root
+#######################################
+remove_tmp_root() {
+  if [[ -n "${tmp_root}" ]]; then
+    rm -rf -- "${tmp_root}"
+  fi
+}
+
+#######################################
+# 시험용 임시 디렉터리를 뿌리(tmp_root) 아래에 만든다.
+# Globals:
+#   tmp_root
+# Outputs:
+#   새 디렉터리 경로.
+#######################################
+new_tmp_dir() {
+  mktemp -d "${tmp_root}/case.XXXXXX"
+}
+
+#######################################
+# 셸에 남은 CONFTEST_* 설정(다른 프로젝트의 namespace 등)을 지운다.
+#######################################
+clear_conftest_env() {
+  local name
+  for name in $(compgen -e); do
+    if [[ "${name}" == CONFTEST_* ]]; then
+      unset "${name}"
+    fi
+  done
+}
 
 #######################################
 # 시험 하나의 실패를 알리고 센다.
@@ -71,7 +110,7 @@ run_guard() {
     run_status=$?
     return 0
   fi
-  tmp="$(mktemp -d)" || return 1
+  tmp="$(new_tmp_dir)" || return 1
   for src in "${dir}"/*.tf.in; do
     if ! cp -- "${src}" "${tmp}/$(basename -- "${src}" .in)"; then
       rm -rf -- "${tmp}"
@@ -152,7 +191,7 @@ run_guard_outside() {
   local dir="$1"
   local tmp config content
   local marker="${MARKER_DIR}/fixture"
-  tmp="$(mktemp -d)" || return 1
+  tmp="$(new_tmp_dir)" || return 1
   config="${tmp}/conftest.toml"
   if ! cp -R "${dir}/." "${tmp}/"; then
     rm -rf -- "${tmp}"
@@ -303,7 +342,7 @@ expect_fixture_error() {
 #######################################
 expect_unreadable_error() {
   local tmp
-  tmp="$(mktemp -d)" || {
+  tmp="$(new_tmp_dir)" || {
     fail "unreadable: 임시 디렉터리를 만들지 못함"
     return
   }
@@ -348,12 +387,22 @@ expect_no_tmpfile_dependency() {
 run_policy_tests() {
   local policy="$1"
   local output
-  if ! output="$(conftest verify --policy "${policy}" --strict \
-    --show-builtin-errors --no-color 2>&1)"; then
+  # 셸에 남은 CONFTEST_* 와 호출한 디렉터리 설정의 namespace 가 시험을
+  # 고르지 못하게, 환경을 지운 하위 셸에서 namespace 를 명시해 돌린다.
+  if ! output="$(clear_conftest_env
+    conftest verify --policy "${policy}" --namespace main --strict \
+      --show-builtin-errors --no-color 2>&1)"; then
     echo "${output}"
     return 1
   fi
-  echo "${output##*$'\n'}"
+  output="${output##*$'\n'}"
+  # 시험이 하나도 돌지 않았으면(namespace · 정책 경로 실수) 통과가 아니다.
+  if [[ ! "${output}" =~ ^([0-9]+)\ tests?, ]] ||
+    [[ "${BASH_REMATCH[1]}" -eq 0 ]]; then
+    echo "시험이 하나도 돌지 않음: ${output}"
+    return 1
+  fi
+  echo "${output}"
 }
 
 #######################################
@@ -374,7 +423,7 @@ expect_policy_tests_pass() {
 #######################################
 expect_policy_tests_ignore_config() {
   local tmp summary
-  tmp="$(mktemp -d)" || {
+  tmp="$(new_tmp_dir)" || {
     fail "verify-config: 시험 준비 실패(임시 디렉터리)"
     return
   }
@@ -404,7 +453,7 @@ expect_policy_tests_ignore_config() {
 #######################################
 expect_zero_policy_tests_error() {
   local tmp summary status
-  tmp="$(mktemp -d)" || {
+  tmp="$(new_tmp_dir)" || {
     fail "verify-zero: 시험 준비 실패(임시 디렉터리)"
     return
   }
@@ -476,7 +525,7 @@ expect_conftest_env_ignored() {
 #######################################
 expect_no_rules_error() {
   local tmp output status
-  tmp="$(mktemp -d)" || {
+  tmp="$(new_tmp_dir)" || {
     fail "no-rules: 시험 준비 실패(임시 디렉터리)"
     return
   }
@@ -506,7 +555,7 @@ expect_no_rules_error() {
 #######################################
 expect_conftest_config_ignored() {
   local tmp output status
-  tmp="$(mktemp -d)" || {
+  tmp="$(new_tmp_dir)" || {
     fail "conftest-config: 시험 준비 실패(임시 디렉터리)"
     return
   }
@@ -544,6 +593,14 @@ main() {
     echo "guard_test: conftest 가 없습니다. 설치: brew install conftest" >&2
     exit 1
   fi
+  # 트랩을 먼저 건다 — 뿌리를 만든 직후에 신호가 와도 남지 않게.
+  trap remove_tmp_root EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/guard_test.XXXXXX")" || {
+    echo "guard_test: 임시 디렉터리를 만들지 못함" >&2
+    exit 1
+  }
   expect_policy_tests_pass
   expect_policy_tests_ignore_config
   expect_zero_policy_tests_error
