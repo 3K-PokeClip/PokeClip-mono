@@ -156,7 +156,7 @@ shellcheck infra/terraform/scripts/*.sh
 
 ## guard 규칙
 
-guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R11 은
+guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R13 은
 [conftest](https://www.conftest.dev/)(`--parser hcl2`)로 돌리는 Rego 정책
 `policy/guard/*.rego` 가 판정합니다. `scripts/guard.sh` 는 얇은 실행기입니다.
 파서가 볼 수 없는 R0 를 직접 보고, 파일마다 파싱이 되는지 먼저 가린 뒤, 트리
@@ -168,23 +168,35 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R11 
 
 | 규칙 | 대상 경로 | 실패 조건 |
 |---|---|---|
-| R0 | 전체 | `*.tf.json` 파일 · 심볼릭 링크(파일이든 디렉터리든 — guard.sh 가 셸로 검사) |
+| R0 | 전체 | `*.tf.json` 파일 · 심볼릭 링크(파일이든 디렉터리든) · conftest 설정 파일 `conftest.*`(대소문자 무관 — 검사 루트에서 읽혀 정책 · R12 표지를 바꿀 수 있음). guard.sh 가 셸로 검사 |
 | R1 | 전체 | `resource` · `data` `aws_secretsmanager_secret_version`(`count = 0` 이어도) |
 | R2 | 전체 | `resource` · `data` 유형이 `aws_cloudfrontkeyvaluestore_key` 로 시작 |
 | R3 | 전체 | `aws_security_group` 자원 안 `ingress` · `egress`(블록 · 속성 · `dynamic "ingress"` · `dynamic "egress"`) |
 | R4 | `modules/state_bucket/` | `aws_s3_bucket` 자원 없음, 또는 그 자원 중 `lifecycle { prevent_destroy = true }`(리터럴 `true`)가 없는 것 |
 | R11 | `nonprod/dev/` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원 중 리터럴 `prevent_destroy = true` 가 없는 것 |
+| R12 | `nonprod/dns-legacy/` | 운영 트리: ① 그 루트 바로 아래 `.tf` 없음 ② 주소가 정확히 `aws_route53_zone.legacy` 인 선언 없음 ③ 그 루트의 `aws_route53_zone` 중 리터럴 `prevent_destroy = true` 가 없는 것. fixture 트리는 ① · ② 의 부재만 건너뜀(③ 은 그대로) |
+| R13 | 전체 | 문자열 · 숫자 리터럴(맵 키 포함) 안의 12자리 숫자열(앞뒤가 숫자가 아님 — ARN 속 계정 ID 포함) · 이름에 `account_id` 가 든 `variable`(대소문자 무관). 위반 메시지는 그 숫자열을 가림 |
 
-`prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R11 이
+`prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R11 · R12 가
 맡습니다. conftest 는 식을 평가하지 않으므로 리터럴 `true` 만 인정합니다 —
 `true != true` · `var.keep` 같은 식과 문자열 `"true"` 는 위반입니다. R4 · R11 은
 대상 경로 아래 `.tf` 가 하나도 없는 트리(다른 규칙의 fixture)에서는 건너뜁니다.
 dev SG 규칙 자원은 M12 가 8082 규칙을 지우므로 R11 대상이 아닙니다. dev 상자를
 없애는 PR 은 R11 을 함께 지웁니다.
 
-R5 ~ R10 은 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 · 모듈과
-같은 PR 에서 그 번호로 `policy/guard/` 에 더합니다(정책 · `_test.rego` ·
-fixture 를 함께).
+**R12 는 운영 트리에서 건너뛰지 않습니다.** 공개 존 루트의 파일을 지우거나
+옮기면 `prevent_destroy` 도 함께 사라져 아무것도 막지 못하기 때문입니다(설계
+3-1). 운영 트리와 fixture 트리를 가르는 표지(`mode`)는 guard.sh 가 루트를 보고
+골라 `scripts/guard-data/<표지>/mode.json` 을 늘 `--data` 로 넘깁니다. 루트가
+`scripts/testdata/` 아래일 때만 `fixture` 이고, 실제 트리 · 저장소 밖 트리는
+`operational` 입니다. 정책은 표지가 정확히 `fixture` 일 때만 ① · ② 의 부재를
+건너뛰고, 표지가 없거나 모르는 값이면 운영 트리로 봅니다. 루트를 옮기거나 존
+주소를 바꾸는 PR 은 R12 도 같은 PR 에서 고쳐야 통과합니다.
+
+R6 · R8 ~ R10 은 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 ·
+모듈과 같은 PR 에서 그 번호로 `policy/guard/` 에 더합니다(정책 · `_test.rego` ·
+fixture 를 함께). R5 · R7 은 **보류**입니다 — R5 는 재개 키트(결정 46), R7 은
+CI 자동 푸시를 켜는 후속 PR(40차)이 더합니다.
 
 ### 설치와 실행
 
@@ -228,7 +240,9 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 `ok/` 는 통과 · `err_*/` 와 읽을 수 없는 파일 · conftest 없음은 종료 2」를
 확인합니다. 나누는 기준은 Terraform 이 받는 코드인가입니다 — Terraform 이 받는
 꼴은 `bad_` · `ok`, 받지 않는(파싱되지 않는) 꼴은 `err_` 입니다. 경로를 겨누는
-규칙의 fixture 는 그 경로를 fixture 트리 안에 그대로 둡니다.
+규칙의 fixture 는 그 경로를 fixture 트리 안에 그대로 둡니다. R12 의 운영 표지
+사례는 fixture 를 저장소 밖 임시 디렉터리에 복사해 돌립니다 — `ok_R12/` 는 두
+표지 모두 통과하고, `op_<규칙>_<변형>/` 은 그 저장소 밖 사본으로만 돌립니다.
 `terraform fmt -recursive` 를 깨는 fixture 는 `*.tf.in` 으로 두고
 `guard_test.sh` 가 임시 디렉터리에 `*.tf` 로 복사해 돌립니다.
 
@@ -243,7 +257,7 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 *   이름이 `.terraform` 인 디렉터리는 깊이와 상관없이 검사에서 뺍니다(provider
     캐시). 그 이름 아래에 구성을 두지 않습니다.
 *   실제 트리보다 **상위** 디렉터리(`.` · `infra` 등)를 루트로 주면 경로 규칙
-    (R4 · R11)이 맞지 않고 `scripts/testdata` 도 빠지지 않아 fixture 위반이
+    (R4 · R11 · R12)이 맞지 않고 `scripts/testdata` 도 빠지지 않아 fixture 위반이
     쏟아집니다(종료 1 — 위반 0 으로 새지는 않음). 루트는 주지 않거나
     `infra/terraform` 으로 줍니다.
 *   모든 심볼릭 링크가 R0 입니다(`.tf` 가 아닌 문서 링크도). 단 이름이
@@ -259,10 +273,14 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 *   R3 은 `aws_security_group` 만 봅니다. 기본 SG(`aws_default_security_group`)
     의 인라인 규칙은 대상이 아닙니다 — 기본 SG 를 Terraform 으로 다루게 되면
     리뷰가 보고 규칙을 더합니다.
-*   검사 루트의 `conftest.toml` 은 `ignore` · `namespace` · `policy` 를 명시
-    인자로 덮어 판정에 영향을 주지 못합니다. 그 밖의 키(`output` · `data` 등)는
-    덮지 않습니다 — 출력이 바뀌면 모르는 줄로 종료 2 가 납니다(안전한 쪽).
-*   R0(심볼릭 링크 · `.tf.json`)는 정책이 아니라 guard.sh 의 셸 검사입니다.
+*   검사 트리 안의 conftest 설정 파일(`conftest.*`)은 R0 위반입니다. conftest
+    0.71.1 은 검사 루트의 `conftest.<확장자>` 를 읽습니다 — viper 가 찾는
+    12개 확장자 가운데 toml · yaml · yml · json · env · dotenv 는 읽어 적용하고,
+    나머지(hcl · ini 등)는 읽다가 오류로 멈춥니다. guard.sh 는 `ignore` ·
+    `namespace` · `policy` · `data` 도 명시 인자로 넘기지만, 설정 파일과 명시
+    인자의 병합 거동에는 기대지 않습니다.
+*   R0(심볼릭 링크 · `.tf.json` · conftest 설정 파일)는 정책이 아니라 guard.sh
+    의 셸 검사입니다.
     `--parser hcl2` 는 JSON 구성을 읽지 못하므로 `.tf.json` 은 이 트리에 두지
     않습니다.
 *   R1 은 Secrets Manager 비밀 버전만 봅니다. `aws_ssm_parameter` 의

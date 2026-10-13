@@ -2,10 +2,12 @@
 #
 # Terraform 트리의 금지 규약을 검사한다(README 「guard 규칙」).
 #
-# 규칙 R1 ~ R11 은 conftest(`--parser hcl2`)로 돌리는 Rego 정책
+# 규칙 R1 ~ R13 은 conftest(`--parser hcl2`)로 돌리는 Rego 정책
 # (`../policy/guard`)이 판정한다. 이 스크립트는 얇은 실행기다 — 파서가 볼 수
-# 없는 R0(`.tf.json` · 심볼릭 링크 `.tf`)를 직접 보고, 파일마다 파싱이 되는지
-# 먼저 가린 뒤, 정책을 한 번에(`--combine`) 돌려 종료 코드를 정한다.
+# 없는 R0(`.tf.json` · 심볼릭 링크 · conftest 설정 파일)를 직접 보고, 파일마다
+# 파싱이 되는지 먼저 가린 뒤, 정책을 한 번에(`--combine`) 돌려 종료 코드를
+# 정한다. R12 의 모드 표지(fixture · operational)는 이 스크립트가 루트를 보고
+# 골라 늘 `--data` 로 넘긴다.
 # 위반은 표준 출력에 한 줄씩 「guard: R<번호> <상대 경로>: <설명>」으로 적는다.
 #
 # 사용: bash infra/terraform/scripts/guard.sh [Terraform 트리 루트]
@@ -22,6 +24,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly POLICY_DIR="${SCRIPT_DIR}/../policy/guard"
+# R12 모드 표지(키 하나 mode)의 저장소 고정 위치 — <표지>/mode.json.
+readonly MARKER_DIR="${SCRIPT_DIR}/guard-data"
 
 # `conftest test` 의 결과 줄. --combine 이라 파일 이름 자리가 Combined 다.
 readonly FAIL_PREFIX='FAIL - Combined - main - '
@@ -77,6 +81,9 @@ split_lines() {
 # 일반 파일 *.tf · *.tf.json, 그리고 이름과 상관없이 모든 심볼릭 링크(파일 ·
 # 디렉터리 — find 는 링크 디렉터리 안으로 들어가지 않으므로 링크 자체를
 # R0 로 막아야 그 너머가 검사에서 빠지지 않는다). fixture · provider 캐시는 뺀다.
+# conftest 설정 파일(conftest.* — 대소문자 무관)도 낸다: conftest 0.71.1 은
+# 검사 루트의 conftest.<확장자>(viper 가 찾는 toml · yaml · json · env 등)를
+# 읽어 정책 · 표지를 바꿀 수 있다.
 # Outputs:
 #   「./」로 시작하는 상대 경로(정렬).
 #######################################
@@ -84,7 +91,8 @@ list_tf_files() {
   find . \
     \( -path ./scripts/testdata -o -name .terraform \) -prune \
     -o -type l -print \
-    -o -type f \( -name '*.tf' -o -name '*.tf.json' \) -print |
+    -o -type f \( -name '*.tf' -o -name '*.tf.json' \) -print \
+    -o -type f -iname 'conftest.*' -print |
     LC_ALL=C sort
 }
 
@@ -115,16 +123,18 @@ parses() {
 # 내장 함수 오류 등)다. 결과 줄의 FAIL 수가 요약 줄의 failures 와 다르거나
 # 모르는 줄 · 예외가 있으면 검사 불가로 멈춘다.
 # Arguments:
-#   검사할 상대 경로들.
+#   R12 표지 파일 절대 경로, 검사할 상대 경로들.
 #######################################
 run_policy() {
-  local output line
-  # 검사 루트의 conftest.toml(ignore · namespace · policy 등)이 판정을 바꾸지
-  # 못하게 그 키들을 명시 인자로 덮는다(--ignore '^$' = 아무 파일도 빼지 않음).
+  local marker="$1" output line
+  shift
+  # 검사 루트의 conftest 설정 파일(ignore · namespace · policy · data 등)이
+  # 판정을 바꾸지 못하게 그 키들을 명시 인자로 덮는다(--ignore '^$' = 아무
+  # 파일도 빼지 않음). 설정 파일 자체도 R0 위반이라 덮는 쪽에만 기대지 않는다.
   local fails=0 summary="" tests=""
   output="$(conftest test --parser hcl2 --combine --no-fail --no-color \
     --strict --show-builtin-errors --namespace main --ignore '^$' \
-    --policy "${POLICY_DIR}" -- "$@" 2>&1)" || {
+    --policy "${POLICY_DIR}" --data "${marker}" -- "$@" 2>&1)" || {
     echo "${output}" >&2
     die "conftest 실행 실패"
   }
@@ -179,8 +189,28 @@ check_root() {
   esac
 }
 
+#######################################
+# R12 모드 표지 파일을 고른다. 루트가 이 트리의 scripts/testdata 아래일 때만
+# fixture 이고, 그 밖(실제 트리 · 저장소 밖 트리)은 operational 이다.
+# Arguments:
+#   정규화한 루트 절대 경로.
+# Outputs:
+#   표지 파일 절대 경로.
+# Returns:
+#   트리 위치를 못 찾으면 1.
+#######################################
+marker_file() {
+  local root="$1" tree mode=operational
+  tree="$(cd -P -- "${SCRIPT_DIR}/.." && pwd)" || return 1
+  case "${root}" in
+    "${tree}/scripts/testdata/"*) mode=fixture ;;
+    *) ;;
+  esac
+  echo "${MARKER_DIR}/${mode}/mode.json"
+}
+
 main() {
-  local files file
+  local files file marker
   local parse_failed=0
   local -a tf_files=()
   if [[ "$#" -gt 1 ]]; then
@@ -198,6 +228,7 @@ main() {
   cd -P -- "${1:-${SCRIPT_DIR}/..}" 2>/dev/null ||
     die "디렉터리가 없음: ${1:-${SCRIPT_DIR}/..}"
   check_root "$(pwd -P)"
+  marker="$(marker_file "$(pwd -P)")" || die "트리 위치를 못 찾음"
   clear_conftest_env
 
   files="$(list_tf_files)" || die "파일 목록 실패: $(pwd)"
@@ -211,6 +242,9 @@ main() {
       report "R0 ${file}: 심볼릭 링크 금지(파일 · 디렉터리 — 링크 너머가 검사에서 빠짐)"
     elif [[ "${file}" == *.tf.json ]]; then
       report "R0 ${file}: .tf.json 금지(이 트리는 HCL 만 — 정책이 JSON 구성을 읽지 않음)"
+    elif [[ "${file}" != *.tf ]]; then
+      # list_tf_files 가 낸 나머지는 conftest 설정 파일(conftest.*)뿐이다.
+      report "R0 ${file}: conftest 설정 파일 금지(정책 · R12 표지를 바꿀 수 있음)"
     elif parses "${file}"; then
       tf_files+=("${file}")
     else
@@ -219,7 +253,7 @@ main() {
   done
   [[ "${parse_failed}" -eq 0 ]] || exit 2
   if [[ "${#tf_files[@]}" -gt 0 ]]; then
-    run_policy "${tf_files[@]}"
+    run_policy "${marker}" "${tf_files[@]}"
   fi
 
   if [[ "${violations}" -ne 0 ]]; then
