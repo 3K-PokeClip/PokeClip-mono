@@ -327,6 +327,55 @@ expect_outside_config_link_refused() {
 }
 
 #######################################
+# 링크가 든 fixture 를 사본으로 쓰는 준비가 링크 너머(저장소 밖 파일)에
+# 쓰지 않고 준비 실패로 멈추는지 본다 — run_guard_prepared(준비 함수가
+# 씀) · run_guard_outside · make_unreadable_copy(chmod) 셋 다.
+#######################################
+expect_fixture_links_refused() {
+  local tmp fx before copy
+  local failed=0
+  tmp="$(new_tmp_dir)" || {
+    fail "fixture-links: 시험 준비 실패(임시 디렉터리)"
+    return
+  }
+  fx="${tmp}/fx"
+  if ! mkdir -p "${fx}" || ! printf 'decoy\n' >"${tmp}/decoy" ||
+    ! ln -s "${tmp}/decoy" "${fx}/main.tf" ||
+    ! ln -s "${tmp}/decoy" "${fx}/conftest.yaml"; then
+    fail "fixture-links: 시험 준비 실패(링크)"
+    rm -rf -- "${tmp}"
+    return
+  fi
+  before="$(<"${tmp}/decoy")"
+  if run_guard_prepared make_conftest_yaml "${fx}"; then
+    fail "fixture-links: run_guard_prepared 가 준비 실패 없이 돌림"
+    failed=1
+  fi
+  if run_guard_outside "${fx}"; then
+    fail "fixture-links: run_guard_outside 가 준비 실패 없이 돌림"
+    failed=1
+  fi
+  if copy="$(make_unreadable_copy "${fx}")"; then
+    fail "fixture-links: make_unreadable_copy 가 준비 실패 없이 권한을 바꿈"
+    failed=1
+    rm -rf -- "${copy}"
+  fi
+  if [[ ! -r "${tmp}/decoy" ]]; then
+    fail "fixture-links: 링크 너머 파일의 권한이 바뀜"
+    failed=1
+    chmod 644 "${tmp}/decoy"
+  fi
+  if [[ "$(<"${tmp}/decoy")" != "${before}" ]]; then
+    fail "fixture-links: 링크 너머 파일의 내용이 바뀜"
+    failed=1
+  fi
+  rm -rf -- "${tmp}"
+  if [[ "${failed}" -eq 0 ]]; then
+    echo "ok: fixture-links → 세 준비 모두 준비 실패 · 링크 너머 무변경"
+  fi
+}
+
+#######################################
 # 저장소의 실제 트리(운영 표지)가 위반 0 인지 본다. fixture 안의
 # conftest.toml(scripts/testdata)은 검사 범위 밖이라 잡히지 않아야 한다.
 #######################################
@@ -379,20 +428,36 @@ expect_fixture_error() {
 }
 
 #######################################
+# fixture 를 임시 디렉터리에 복사하고 그 main.tf 를 읽을 수 없게(000)
+# 만든다.
+# Arguments:
+#   fixture 디렉터리.
+# Outputs:
+#   임시 디렉터리 경로.
+# Returns:
+#   복사 · 권한 변경에 실패하면 1(만든 임시 디렉터리는 지운다).
+#######################################
+make_unreadable_copy() {
+  local source="$1"
+  local tmp
+  tmp="$(new_tmp_dir)" || return 1
+  if ! cp -R "${source}/." "${tmp}/" || ! chmod 000 "${tmp}/main.tf"; then
+    rm -rf -- "${tmp}"
+    return 1
+  fi
+  echo "${tmp}"
+}
+
+#######################################
 # 읽을 수 없는 .tf 가 있으면 위반 0 으로 넘어가지 않고 멈추는지 본다.
 # root 는 권한과 상관없이 읽으므로 그때는 건너뛴다.
 #######################################
 expect_unreadable_error() {
   local tmp
-  tmp="$(new_tmp_dir)" || {
-    fail "unreadable: 임시 디렉터리를 만들지 못함"
+  tmp="$(make_unreadable_copy "${FIXTURES}/ok")" || {
+    fail "unreadable: 시험 준비 실패(임시 디렉터리 · 복사 · 권한)"
     return
   }
-  if ! cp -R "${FIXTURES}/ok/." "${tmp}/" || ! chmod 000 "${tmp}/main.tf"; then
-    fail "unreadable: 시험 준비 실패(복사 · 권한)"
-    rm -rf -- "${tmp}"
-    return
-  fi
   if [[ -r "${tmp}/main.tf" ]]; then
     echo "skip: unreadable(현재 사용자가 권한과 상관없이 읽음)"
   else
@@ -664,15 +729,15 @@ expect_subroot_error() {
 # Globals:
 #   run_output, run_status
 # Arguments:
-#   준비 함수 이름(인자 = 사본 루트).
+#   준비 함수 이름(인자 = 사본 루트), fixture 디렉터리(없으면 ok_R12).
 # Returns:
 #   임시 디렉터리를 만들거나 준비하지 못하면 1.
 #######################################
 run_guard_prepared() {
-  local setup="$1"
+  local setup="$1" source="${2:-${FIXTURES}/ok_R12}"
   local tmp
   tmp="$(new_tmp_dir)" || return 1
-  if ! cp -R "${FIXTURES}/ok_R12/." "${tmp}/" || ! "${setup}" "${tmp}"; then
+  if ! cp -R "${source}/." "${tmp}/" || ! "${setup}" "${tmp}"; then
     rm -rf -- "${tmp}"
     return 1
   fi
@@ -868,9 +933,11 @@ make_conftest_recorder() {
 # 한 번도 부르지 않고 R0 로 끝나, 정책 디렉터리가 그대로인지 본다. 설정
 # 파일은 일반 파일(file)이거나, update 를 담은 다른 파일을 가리키는
 # 링크(link)이거나, 이름에 줄바꿈이 든 하위 디렉터리 안의 일반 파일
-# (nested-ctrl)이다. guard.sh · 정책 · 표지 사본과 conftest 대역을 쓴다.
+# (nested-ctrl)이거나, 루트의 confteſt.toml(U+017F — 파일 시스템이
+# conftest.toml 로 접는 이름, folded)이다. guard.sh · 정책 · 표지 사본과
+# conftest 대역을 쓴다.
 # Arguments:
-#   설정 파일 꼴 — file · link · nested-ctrl.
+#   설정 파일 꼴 — file · link · nested-ctrl · folded.
 #######################################
 expect_config_stops_before_conftest() {
   local form="$1"
@@ -901,6 +968,7 @@ expect_config_stops_before_conftest() {
       mkdir -- "${tree}/mod"$'\n'"x" &&
         mv -- "${tree}/notes.txt" "${tree}/${config}"
       ;;
+    folded) mv -- "${tree}/notes.txt" "${tree}/confte"$'\xc5\xbf'"t.toml" ;;
     *) false ;;
   esac || {
     fail "${name}: 시험 준비 실패(설정 파일)"
@@ -924,6 +992,31 @@ expect_config_stops_before_conftest() {
     echo "ok: ${name} → R0 · conftest 미호출 · 정책 무변경"
   fi
   rm -rf -- "${tmp}"
+}
+
+#######################################
+# 파일 시스템이 confteſt.toml(U+017F)을 conftest.toml 로 접으면(macOS
+# APFS) 그 파일도 설정 파일로 세어 conftest 를 부르지 않는지 본다. 접지
+# 않는(대소문자를 구분하는) 파일 시스템이면 이 사례는 뜻이 없으므로 skip
+# 으로 적는다.
+#######################################
+expect_folded_config_stops_before_conftest() {
+  local tmp
+  local folds=0
+  tmp="$(new_tmp_dir)" || {
+    fail "config-first-folded: 시험 준비 실패(임시 디렉터리)"
+    return
+  }
+  if : >"${tmp}/confte"$'\xc5\xbf'"t.toml" &&
+    [[ -e "${tmp}/conftest.toml" ]]; then
+    folds=1
+  fi
+  rm -rf -- "${tmp}"
+  if [[ "${folds}" -eq 0 ]]; then
+    echo "skip: config-first-folded(파일 시스템이 ſ 를 s 로 접지 않음)"
+    return
+  fi
+  expect_config_stops_before_conftest folded
 }
 
 #######################################
@@ -1015,12 +1108,14 @@ main() {
   expect_outside_clean "${FIXTURES}/ok_R12"
   expect_marker_injection_rejected
   expect_outside_config_link_refused
+  expect_fixture_links_refused
   expect_operational_tree_clean
   # 열거 경계 · conftest 설정 파일(저장소 밖에서 만든 트리).
   expect_enumeration_boundaries
   expect_config_stops_before_conftest file
   expect_config_stops_before_conftest link
   expect_config_stops_before_conftest nested-ctrl
+  expect_folded_config_stops_before_conftest
   expect_conftest_config_pinned
 
   if [[ "${failures}" -ne 0 ]]; then
