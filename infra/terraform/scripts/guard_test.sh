@@ -586,6 +586,226 @@ expect_subroot_error() {
   expect_error subroot "${SCRIPT_DIR}/../nonprod/dev"
 }
 
+#######################################
+# ok_R12 를 저장소 밖 임시 디렉터리에 복사하고, 준비 함수로 사례를 만든 뒤
+# guard.sh 를 돌린다. 숨김 · 줄바꿈 · 제어 문자 이름은 저장소에 두지 않고
+# 여기서 만든다.
+# Globals:
+#   run_output, run_status
+# Arguments:
+#   준비 함수 이름(인자 = 사본 루트).
+# Returns:
+#   임시 디렉터리를 만들거나 준비하지 못하면 1.
+#######################################
+run_guard_prepared() {
+  local setup="$1"
+  local tmp
+  tmp="$(new_tmp_dir)" || return 1
+  if ! cp -R "${FIXTURES}/ok_R12/." "${tmp}/" || ! "${setup}" "${tmp}"; then
+    rm -rf -- "${tmp}"
+    return 1
+  fi
+  run_output="$(bash "${GUARD}" "${tmp}" 2>&1)"
+  run_status=$?
+  rm -rf -- "${tmp}"
+}
+
+#######################################
+# 준비한 사례가 기대한 위반 줄과 함께 종료 1 로 실패하는지 본다.
+# Arguments:
+#   사례 이름, 준비 함수 이름, 출력에 있어야 할 위반 줄 앞부분(하나 이상).
+#######################################
+expect_prepared_violation() {
+  local name="$1" setup="$2"
+  local expected rule
+  shift 2
+  # 「guard: R0 <경로>: 」 → R0
+  rule="${1#guard: }"
+  rule="${rule%% *}"
+  run_guard_prepared "${setup}" || {
+    fail "${name}: 시험 준비 실패(임시 디렉터리 · 복사 · 준비)"
+    return
+  }
+  if [[ "${run_status}" -ne 1 ]]; then
+    fail "${name}: 종료 코드 1 을 기대했으나 ${run_status} — ${run_output}"
+    return
+  fi
+  for expected in "$@"; do
+    if [[ $'\n'"${run_output}" != *$'\n'"${expected}"* ]]; then
+      fail "${name}: 출력에 「${expected}」 가 없음 — ${run_output}"
+      return
+    fi
+  done
+  echo "ok: ${name} → ${rule} 위반"
+}
+
+#######################################
+# 준비한 사례가 위반 0 으로 통과하는지 본다.
+# Arguments:
+#   사례 이름, 준비 함수 이름.
+#######################################
+expect_prepared_clean() {
+  local name="$1" setup="$2"
+  run_guard_prepared "${setup}" || {
+    fail "${name}: 시험 준비 실패(임시 디렉터리 · 복사 · 준비)"
+    return
+  }
+  if [[ "${run_status}" -ne 0 ]]; then
+    fail "${name}: 종료 코드 0 을 기대했으나 ${run_status} — ${run_output}"
+    return
+  fi
+  echo "ok: ${name} → 위반 0"
+}
+
+# 준비 함수들. 인자는 ok_R12 사본 루트다.
+
+# 공개 존 루트의 main.tf 를 숨김 이름으로(Terraform 은 읽지 않는다).
+hide_root_main() {
+  mv -- "$1/nonprod/dns-legacy/main.tf" "$1/nonprod/dns-legacy/.main.tf"
+}
+
+# 숨김 이름 여럿: main 과 함께 .outputs.tf · .imports.tf · .extra.tf.json.
+hide_root_files() {
+  hide_root_main "$1" &&
+    printf 'locals {}\n' >"$1/nonprod/dns-legacy/.outputs.tf" &&
+    printf 'locals {}\n' >"$1/nonprod/dns-legacy/.imports.tf" &&
+    printf '{}\n' >"$1/nonprod/dns-legacy/.extra.tf.json"
+}
+
+# 줄바꿈 이름: 진짜 override 는 a.tf<줄바꿈>b_override.tf 이고, 줄 단위로
+# 쪼개면 나오는 두 이름(a.tf · 루트의 b_override.tf)을 미끼로 둔다.
+make_newline_override() {
+  local dir="$1/nonprod/dns-legacy"
+  printf '%s\n' 'resource "aws_route53_zone" "legacy" {' '  lifecycle {' \
+    '    prevent_destroy = false' '  }' '}' \
+    >"${dir}/a.tf"$'\n'"b_override.tf" &&
+    printf 'locals {}\n' >"${dir}/a.tf" &&
+    printf 'locals {}\n' >"$1/b_override.tf"
+}
+
+# 제어 문자(탭) 이름의 .tf.
+make_control_char_name() {
+  printf 'locals {}\n' >"$1/x"$'\t'"y.tf"
+}
+
+# 줄바꿈이 든 디렉터리 아래의 .tf.
+make_newline_dir() {
+  mkdir -- "$1/mod"$'\n'"x" && printf 'locals {}\n' >"$1/mod"$'\n'"x/main.tf"
+}
+
+# 이름이 .terraform 인 심볼릭 링크(진짜 provider 캐시는 디렉터리다).
+make_terraform_link() {
+  ln -s missing "$1/nonprod/dns-legacy/.terraform"
+}
+
+# scripts/testdata 자리의 심볼릭 링크(fixture 를 빼는 자리).
+make_testdata_link() {
+  mkdir -p -- "$1/scripts" && ln -s ../nonprod "$1/scripts/testdata"
+}
+
+# 진짜 .terraform 디렉터리 안의 .tf 는 검사하지 않는다(provider 캐시).
+make_terraform_dir() {
+  mkdir -p -- "$1/nonprod/dns-legacy/.terraform" &&
+    printf '%s\n' 'resource "aws_secretsmanager_secret_version" "x" {}' \
+      >"$1/nonprod/dns-legacy/.terraform/cached.tf"
+}
+
+# conftest 가 읽는 설정 이름(확장자가 다른 것 · 대문자).
+make_conftest_yaml() {
+  printf 'namespace:\n  - main\n' >"$1/conftest.yaml"
+}
+
+make_conftest_upper() {
+  printf 'namespace = ["main"]\n' >"$1/CONFTEST.TOML"
+}
+
+# conftest 가 읽지 않는 이름(문서 · pytest 관례).
+make_conftest_lookalikes() {
+  printf '# notes\n' >"$1/conftest.md" &&
+    printf '# pytest\n' >"$1/conftest.py"
+}
+
+#######################################
+# 숨김 이름 · 줄바꿈 · 제어 문자 · 링크(guard 가 보는 파일 집합이 Terraform
+# 이 읽는 집합을 덮는가)와 conftest 설정 파일 이름을 본다.
+#######################################
+expect_enumeration_boundaries() {
+  local newline_file newline_dir
+  newline_file="$(printf '%q' "nonprod/dns-legacy/a.tf"$'\n'"b_override.tf")"
+  newline_dir="$(printf '%q' "mod"$'\n'"x/main.tf")"
+  expect_prepared_violation hidden-main hide_root_main \
+    "guard: R0 nonprod/dns-legacy/.main.tf: "
+  expect_prepared_violation hidden-many hide_root_files \
+    "guard: R0 nonprod/dns-legacy/.main.tf: " \
+    "guard: R0 nonprod/dns-legacy/.outputs.tf: " \
+    "guard: R0 nonprod/dns-legacy/.imports.tf: " \
+    "guard: R0 nonprod/dns-legacy/.extra.tf.json: "
+  expect_prepared_violation newline-name make_newline_override \
+    "guard: R0 ${newline_file}: "
+  expect_prepared_violation control-char-name make_control_char_name \
+    "guard: R0 $(printf '%q' "x"$'\t'"y.tf"): "
+  expect_prepared_violation newline-dir make_newline_dir \
+    "guard: R0 ${newline_dir}: "
+  expect_prepared_violation terraform-link make_terraform_link \
+    "guard: R0 nonprod/dns-legacy/.terraform: "
+  expect_prepared_violation testdata-link make_testdata_link \
+    "guard: R0 scripts/testdata: "
+  expect_prepared_clean terraform-dir make_terraform_dir
+  expect_prepared_violation conftest-yaml make_conftest_yaml \
+    "guard: R0 conftest.yaml: "
+  expect_prepared_violation conftest-upper make_conftest_upper \
+    "guard: R0 CONFTEST.TOML: "
+  expect_prepared_clean conftest-lookalikes make_conftest_lookalikes
+}
+
+#######################################
+# 설정 파일이 정책을 내려받게(update) 해 둔 트리에서 guard.sh 가 conftest 를
+# 한 번도 부르지 않고 R0 로 끝나, 정책 디렉터리가 그대로인지 본다.
+# guard.sh · 정책 · 표지 사본과, 부를 때마다 기록하는 conftest 대역을 쓴다.
+#######################################
+expect_config_stops_before_conftest() {
+  local tmp kit before after output status real
+  tmp="$(new_tmp_dir)" || {
+    fail "config-first: 시험 준비 실패(임시 디렉터리)"
+    return
+  }
+  kit="${tmp}/kit"
+  real="$(command -v conftest)"
+  if ! mkdir -p "${kit}/scripts" "${kit}/policy" "${tmp}/bin" "${tmp}/tree" ||
+    ! cp -- "${GUARD}" "${kit}/scripts/guard.sh" ||
+    ! cp -R -- "${MARKER_DIR}" "${kit}/scripts/" ||
+    ! cp -R -- "${POLICY_DIR}" "${kit}/policy/guard" ||
+    ! cp -R "${FIXTURES}/ok_R12/." "${tmp}/tree/" ||
+    ! printf 'package main\n\nfixture_tree if true\n' \
+      >"${tmp}/planted.rego" ||
+    ! printf 'update = ["%s"]\n' "${tmp}/planted.rego" \
+      >"${tmp}/tree/conftest.toml" ||
+    ! printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>%q\nexec %q "$@"\n' \
+      "${tmp}/calls.log" "${real}" >"${tmp}/bin/conftest" ||
+    ! chmod +x "${tmp}/bin/conftest"; then
+    fail "config-first: 시험 준비 실패(복사)"
+    rm -rf -- "${tmp}"
+    return
+  fi
+  before="$(ls -A "${kit}/policy/guard")"
+  output="$(PATH="${tmp}/bin:${PATH}" bash "${kit}/scripts/guard.sh" \
+    "${tmp}/tree" 2>&1)"
+  status=$?
+  after="$(ls -A "${kit}/policy/guard")"
+  if [[ -s "${tmp}/calls.log" ]]; then
+    fail "config-first: conftest 가 불림 — $(<"${tmp}/calls.log")"
+  elif [[ "${before}" != "${after}" ]]; then
+    fail "config-first: 정책 디렉터리가 바뀜 — ${after}"
+  elif [[ "${status}" -ne 1 ||
+    $'\n'"${output}" != *$'\n'"guard: R0 conftest.toml: "* ]]; then
+    fail "config-first: 종료 1 · R0 conftest.toml 을 기대했으나 ${status}" \
+      "— ${output}"
+  else
+    echo "ok: config-first → R0 · conftest 미호출 · 정책 무변경"
+  fi
+  rm -rf -- "${tmp}"
+}
+
 main() {
   local dir
   local count=0
@@ -633,6 +853,9 @@ main() {
   expect_outside_clean "${FIXTURES}/ok_R12"
   expect_marker_injection_rejected
   expect_operational_tree_clean
+  # 열거 경계 · conftest 설정 파일(저장소 밖에서 만든 트리).
+  expect_enumeration_boundaries
+  expect_config_stops_before_conftest
 
   if [[ "${failures}" -ne 0 ]]; then
     echo "guard_test: ${failures}건 실패" >&2
