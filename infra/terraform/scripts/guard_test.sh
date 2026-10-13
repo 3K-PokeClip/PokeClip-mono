@@ -337,16 +337,90 @@ expect_no_tmpfile_dependency() {
 }
 
 #######################################
+# 정책 디렉터리 하나에 정책 단위 시험(conftest verify)을 돌린다.
+# Arguments:
+#   정책 디렉터리.
+# Outputs:
+#   통과면 요약 줄, 아니면 conftest 출력.
+# Returns:
+#   통과면 0, 아니면 1.
+#######################################
+run_policy_tests() {
+  local policy="$1"
+  local output
+  if ! output="$(conftest verify --policy "${policy}" --strict \
+    --show-builtin-errors --no-color 2>&1)"; then
+    echo "${output}"
+    return 1
+  fi
+  echo "${output##*$'\n'}"
+}
+
+#######################################
 # 정책 단위 시험(conftest verify)을 돌린다.
 #######################################
 expect_policy_tests_pass() {
-  local output
-  if ! output="$(conftest verify --policy "${POLICY_DIR}" --strict \
-    --show-builtin-errors --no-color 2>&1)"; then
-    fail "conftest verify 실패 — ${output}"
+  local summary
+  if ! summary="$(run_policy_tests "${POLICY_DIR}")"; then
+    fail "conftest verify 실패 — ${summary}"
     return
   fi
-  echo "ok: conftest verify → ${output##*$'\n'}"
+  echo "ok: conftest verify → ${summary}"
+}
+
+#######################################
+# 셸에 남은 CONFTEST_* 설정과 호출한 디렉터리의 conftest.toml(다른
+# namespace)이 정책 단위 시험을 0 개로 비우지 못하는지 본다.
+#######################################
+expect_policy_tests_ignore_config() {
+  local tmp summary
+  tmp="$(mktemp -d)" || {
+    fail "verify-config: 시험 준비 실패(임시 디렉터리)"
+    return
+  }
+  if ! printf 'namespace = ["missing"]\n' >"${tmp}/conftest.toml"; then
+    fail "verify-config: 시험 준비 실패(설정 파일)"
+    rm -rf -- "${tmp}"
+    return
+  fi
+  summary="$(export CONFTEST_NAMESPACE=missing_namespace
+    run_policy_tests "${POLICY_DIR}")"
+  if [[ ! "${summary}" =~ ^([1-9][0-9]*)\ tests?, ]]; then
+    fail "verify-env: 시험이 1개 이상 돌기를 기대했으나 — ${summary}"
+  else
+    echo "ok: verify-env → ${summary}"
+  fi
+  summary="$(cd -- "${tmp}" && run_policy_tests "${POLICY_DIR}")"
+  rm -rf -- "${tmp}"
+  if [[ ! "${summary}" =~ ^([1-9][0-9]*)\ tests?, ]]; then
+    fail "verify-config: 시험이 1개 이상 돌기를 기대했으나 — ${summary}"
+    return
+  fi
+  echo "ok: verify-config → ${summary}"
+}
+
+#######################################
+# 시험이 하나도 없는 정책 디렉터리는 「통과」 가 아니라 실패인지 본다.
+#######################################
+expect_zero_policy_tests_error() {
+  local tmp summary status
+  tmp="$(mktemp -d)" || {
+    fail "verify-zero: 시험 준비 실패(임시 디렉터리)"
+    return
+  }
+  if ! printf 'package main\n\nnote := "no tests"\n' >"${tmp}/empty.rego"; then
+    fail "verify-zero: 시험 준비 실패(정책)"
+    rm -rf -- "${tmp}"
+    return
+  fi
+  summary="$(run_policy_tests "${tmp}")"
+  status=$?
+  rm -rf -- "${tmp}"
+  if [[ "${status}" -eq 0 ]]; then
+    fail "verify-zero: 시험 0개를 실패로 기대했으나 통과 — ${summary}"
+    return
+  fi
+  echo "ok: verify-zero → 실패(시험 0개)"
 }
 
 #######################################
@@ -471,6 +545,8 @@ main() {
     exit 1
   fi
   expect_policy_tests_pass
+  expect_policy_tests_ignore_config
+  expect_zero_policy_tests_error
   for dir in "${FIXTURES}"/bad_*/; do
     [[ -d "${dir}" ]] || continue
     expect_violation "${dir%/}"
