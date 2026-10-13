@@ -5,12 +5,15 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"strings"
 	"testing"
 
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/ingestauth"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/keyresolve"
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxctl"
 )
@@ -43,15 +46,20 @@ func printedForms(t *testing.T, name string, value any) []leakOutput {
 		outputs = append(outputs, leakOutput{place: h.place, content: buf.String()})
 	}
 	b, err := json.Marshal(value)
-	if err != nil {
+	var unsupported *json.UnsupportedTypeError
+	switch {
+	case errors.As(err, &unsupported):
+		// json 이 찍을 수 없는 타입의 필드(ingestauth.Options.Now 같은 함수)가 있으면 에러 문구가 그 값의 출력이다.
+		b = []byte(err.Error())
+	case err != nil:
 		t.Errorf("json.Marshal(%s) returned error: %v", name, err)
 	}
 	return append(outputs, leakOutput{place: "json.Marshal", content: string(b)})
 }
 
-// serveConfig · 4C 클라이언트 · Control API 클라이언트와 두 설정 구조체(값 · 포인터 · 다른 값의 비공개 필드)를 어느 동사 ·
-// slog · json 으로 찍어도 출입증 · API 비번이 나오지 않는다(설계 6절 누설 규칙 2). 클라이언트와 serveConfig 는 run · cut 이
-// 쓰는 생성자로 만든다.
+// serveConfig · 4C 클라이언트 · Control API 클라이언트와 세 설정 구조체(값 · 포인터 · 다른 값의 비공개 필드 — 처리기
+// Options 포함)를 어느 동사 · slog · json 으로 찍어도 출입증 · API 비번이 나오지 않는다(설계 6절 누설 규칙 2). 클라이언트와
+// serveConfig 는 run · cut 이 쓰는 생성자로 만든다.
 func TestAssembledValuesHideSecrets(t *testing.T) {
 	getenv := getenvFrom(configEnv())
 	cfg, err := loadServeConfig(getenv)
@@ -64,10 +72,17 @@ func TestAssembledValuesHideSecrets(t *testing.T) {
 	}
 	resolveOpt := keyresolve.ClientOptions{BaseURL: "http://192.0.2.30:8082", Token: keyresolve.NewSecret(testResolveToken)}
 	mtxOpt := mtxctl.Options{APIURL: "http://192.0.2.10:9997", User: testAPIUser, Pass: mtxctl.NewSecret(testAPIPass)}
+	handlerOpt := ingestauth.Options{
+		CallerIP: netip.MustParseAddr("192.0.2.10"),
+		SelfIP:   netip.MustParseAddr("192.0.2.20"),
+		APIUser:  testAPIUser,
+		APIPass:  ingestauth.NewSecret(testAPIPass),
+	}
 	held := struct {
 		resolve keyresolve.ClientOptions
 		mtx     mtxctl.Options
-	}{resolveOpt, mtxOpt}
+		handler ingestauth.Options
+	}{resolveOpt, mtxOpt, handlerOpt}
 	values := []struct {
 		name  string
 		value any
@@ -80,8 +95,10 @@ func TestAssembledValuesHideSecrets(t *testing.T) {
 		{name: "mtxctl.Options", value: mtxOpt},
 		{name: "*mtxctl.Options", value: &mtxOpt},
 		{name: "*mtxctl.Client", value: mtx},
-		{name: "두 설정을 비공개 필드로 든 값", value: held},
-		{name: "두 설정을 비공개 필드로 든 값의 포인터", value: &held},
+		{name: "ingestauth.Options", value: handlerOpt},
+		{name: "*ingestauth.Options", value: &handlerOpt},
+		{name: "세 설정을 비공개 필드로 든 값", value: held},
+		{name: "세 설정을 비공개 필드로 든 값의 포인터", value: &held},
 	}
 	// %x 는 문자열을 16진으로, Basic 자격은 머리에 base64 로 실린다 — 원문만 보면 그 둘을 놓친다.
 	secrets := []leakCanary{

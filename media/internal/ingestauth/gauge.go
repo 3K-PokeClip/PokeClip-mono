@@ -14,8 +14,8 @@ import (
 //
 // denied_during 은 게이지가 선 동안(set 을 낸 요청 포함) ingestauth_publish_denied 로 끝난 publish 수다(사유 무관).
 // budget_denied · recheck_denied 는 그 가운데 예산 · 차례 거절 수다. down_for 는 set 에서 clear 까지다(Options.Now).
-// 상태 · 셈 · 로그는 잠금 하나 안에서 바꾼다 — 그래서 set · clear 로그가 전이의 차례대로 난다. 여러 고루틴이 함께
-// 불러도 된다.
+// 상태 · 셈 · 로그(게이지 로그와 거절 로그)는 잠금 하나 안에서 바꾸고 낸다 — 그래서 set · clear 로그가 전이의 차례대로
+// 나고, recovered 의 denied_during 은 그 앞의 degraded 뒤에 난 거절 줄 수와 같다. 여러 고루틴이 함께 불러도 된다.
 type authGauge struct {
 	now func() time.Time
 	log *slog.Logger
@@ -28,17 +28,35 @@ type authGauge struct {
 	recheckDenied int
 }
 
-// undecided 는 판정 불가 하나를 적는다. 판정된 상태였으면 set 한다. failure · status 는 keyresolve.UndecidedError 의
-// Kind · Status 다.
-func (g *authGauge) undecided(failure string, status int) {
+// undecidedCause 는 판정 불가로 끝난 거절의 까닭이다 — keyresolve.UndecidedError 의 Kind · Status 이고, 게이지 set 의
+// reason · status 로 싣는다.
+type undecidedCause struct {
+	failure string
+	status  int
+}
+
+// denied 는 publish 거절 하나를 적는다. cause 가 nil 이 아니면 그 거절은 판정 불가로 끝난 것이라, 판정된 상태였으면
+// 먼저 set 한다(ingestauth_auth_degraded). 게이지가 선 동안이면 그 거절을 센다 — set 을 낸 거절도 든다. emit 은 그
+// 거절의 로그(ingestauth_publish_denied)를 내는 함수이고 같은 잠금 안에서 부른다 — 전이 · 셈 · 거절 로그 사이에 다른
+// 요청의 clear 가 끼지 않는다. emit 은 게이지의 메서드를 부르지 않는다(같은 잠금이라 멈춘다).
+func (g *authGauge) denied(reason string, cause *undecidedCause, emit func()) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.degraded {
-		return
+	if cause != nil && !g.degraded {
+		g.degraded, g.since = true, g.now()
+		g.deniedDuring, g.budgetDenied, g.recheckDenied = 0, 0, 0
+		g.log.Error("ingestauth_auth_degraded", "reason", cause.failure, "status", cause.status)
 	}
-	g.degraded, g.since = true, g.now()
-	g.deniedDuring, g.budgetDenied, g.recheckDenied = 0, 0, 0
-	g.log.Error("ingestauth_auth_degraded", "reason", failure, "status", status)
+	if g.degraded {
+		g.deniedDuring++
+		switch reason {
+		case reasonBudgetExhausted:
+			g.budgetDenied++
+		case reasonRecheckWait:
+			g.recheckDenied++
+		}
+	}
+	emit()
 }
 
 // decided 는 판정 결과 하나를 적는다. 판정 불가 상태였으면 clear 한다.
@@ -54,22 +72,6 @@ func (g *authGauge) decided() {
 		"denied_during", g.deniedDuring,
 		"budget_denied", g.budgetDenied,
 		"recheck_denied", g.recheckDenied)
-}
-
-// denied 는 publish 거절 하나를 센다. 게이지가 선 동안만 센다.
-func (g *authGauge) denied(reason string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if !g.degraded {
-		return
-	}
-	g.deniedDuring++
-	switch reason {
-	case reasonBudgetExhausted:
-		g.budgetDenied++
-	case reasonRecheckWait:
-		g.recheckDenied++
-	}
 }
 
 // connLogGauge 는 허용 연결 기록 게이지다(설계 6절 게이지 표). 쓰기가 실패하면 set(ingestauth_connlog_error — 이동안 새

@@ -3,6 +3,7 @@ package ingestauth
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/keyresolve"
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/streamkey"
 )
 
 // 처리기 시험의 합성 값이다. 주소는 문서용 대역(RFC 5737)이고, 자격 · 출입증 · passphrase 는 어떤 계정의 값도
@@ -74,6 +77,20 @@ func (c *handlerClock) now() time.Time {
 func (c *handlerClock) onNextRead(hook func()) {
 	c.nextRead.Store(&hook)
 }
+
+// onRead 는 n 번째 now(1 이면 바로 다음)가 시각을 돌려주기 전에 hook 을 부르게 한다.
+func (c *handlerClock) onRead(n int, hook func()) {
+	if n <= 1 {
+		c.onNextRead(hook)
+		return
+	}
+	c.onNextRead(func() { c.onRead(n-1, hook) })
+}
+
+// readAdmit 은 publish 하나가 Options.Now 를 읽는 차례에서 차례 admit 의 자리다(처리기 · 예산 · 차례가 같은 시계를
+// 읽는다 — 바깥 층의 차감 시작(1) → 예산 allow(2) → 늦은 요청 확인 뒤 차례 admit(3) → resolve 시작(4)). onRead 로 그
+// 자리에 고리를 건다.
+const readAdmit = 3
 
 // authAnswer 는 가짜 auth 의 답 하나다.
 type authAnswer struct {
@@ -181,7 +198,7 @@ func resolvedToken(r *http.Request) (string, error) {
 	rest, okPrefix := strings.CutPrefix(body.StreamID, "#!::r=")
 	token, okSuffix := strings.CutSuffix(rest, ",m=publish")
 	if !okPrefix || !okSuffix {
-		return "", fmt.Errorf("streamid %q 가 정규형이 아니다", body.StreamID)
+		return "", fmt.Errorf("streamid(%d 바이트)가 정규형이 아니다", len(body.StreamID))
 	}
 	return token, nil
 }
@@ -243,11 +260,15 @@ type handlerFixture struct {
 	connDir  string
 }
 
-// fixtureOptions 는 newHandlerFixture 의 선택값이다. 영값이면 Deadline 0(MaxDeadline) · 기록 1 MiB · 가짜 auth 다.
+// fixtureOptions 는 newHandlerFixture 의 선택값이다. 영값이면 Deadline 0(MaxDeadline) · 기록 1 MiB · 가짜 auth · 시험
+// 주소다.
 type fixtureOptions struct {
 	deadline     time.Duration
 	connMaxBytes int64
 	resolver     *keyresolve.Client // nil 이면 가짜 auth 를 부르는 클라이언트
+	callerIP     netip.Addr         // 영값이면 testCallerIP
+	selfIP       netip.Addr         // 영값이면 testSelfIP
+	apiUser      string             // 비면 testAPIUser
 }
 
 func newHandlerFixture(t *testing.T, o fixtureOptions) *handlerFixture {
@@ -266,11 +287,18 @@ func newHandlerFixture(t *testing.T, o fixtureOptions) *handlerFixture {
 	}
 	connDir := t.TempDir()
 	conns, _ := openTestConnLog(t, connDir, connMax, newFakeClock())
+	callerIP, selfIP := o.callerIP, o.selfIP
+	if !callerIP.IsValid() {
+		callerIP = testCallerIP
+	}
+	if !selfIP.IsValid() {
+		selfIP = testSelfIP
+	}
 	h, err := newHandler(resolver, NewDenyList(denyPath, log), conns, Options{
-		CallerIP: testCallerIP,
-		SelfIP:   testSelfIP,
-		APIUser:  testAPIUser,
-		APIPass:  testAPIPass,
+		CallerIP: callerIP,
+		SelfIP:   selfIP,
+		APIUser:  cmp.Or(o.apiUser, testAPIUser),
+		APIPass:  NewSecret(testAPIPass),
 		Deadline: o.deadline,
 		Now:      clock.now,
 		Log:      log,
@@ -458,17 +486,77 @@ func (e handlerEvent) has(key string) bool {
 	return found
 }
 
+// closedWord 는 닫힌 집합 값의 꼴이다 — 소문자 · 밑줄 낱말(reason · wait · scope · resolve_status 의 갈래) 또는 세 자리
+// HTTP 상태.
+var closedWord = regexp.MustCompile(`^([a-z][a-z_]*|[0-9]{3})$`)
+
+// String 은 e 를 실패 문구용으로 줄인 것이다(%v · %+v 가 쓴다). 수는 그대로, 문자열은 꼴이 확인된 값 — 이벤트 이름 ·
+// 등급 · 닫힌 집합 꼴(reason · resolve_status · wait · scope) · 토큰 꼴 path · 연결 id 꼴 conn_id · IP 주소(ip ·
+// remote_ip) · 키 이름 — 만 그대로 싣고 그 밖은 길이만 싣는다. 시험이 잡은 로그의 내용이 실패 문구로 새지 않게
+// 한다(누설 시험의 실패 문구 규칙과 같다 — 이름 · 자리 · 횟수 · 길이).
+func (e handlerEvent) String() string {
+	isAddr := func(s string) bool { _, err := netip.ParseAddr(s); return err == nil }
+	fields := []string{
+		"msg=" + shownIf(e.Msg, func(s string) bool { return strings.HasPrefix(s, "ingestauth_") && closedWord.MatchString(s) }),
+		"level=" + shownIf(e.Level, func(s string) bool { return slices.Contains([]string{"DEBUG", "INFO", "WARN", "ERROR"}, s) }),
+	}
+	for _, s := range []struct {
+		key, value string
+		ok         func(string) bool
+	}{
+		{"path", e.Path, streamkey.IsToken},
+		{"conn_id", e.ConnID, connIDPattern.MatchString},
+		{"reason", e.Reason, closedWord.MatchString},
+		{"resolve_status", e.ResolveStatus, closedWord.MatchString},
+		{"wait", e.Wait, closedWord.MatchString},
+		{"scope", e.Scope, closedWord.MatchString},
+		{"ip", e.IP, isAddr},
+		{"remote_ip", e.RemoteIP, isAddr},
+	} {
+		if s.value != "" {
+			fields = append(fields, s.key+"="+shownIf(s.value, s.ok))
+		}
+	}
+	for _, n := range []struct {
+		key   string
+		value int64
+	}{
+		{"resolve_ms", e.ResolveMS}, {"user_id", e.UserID}, {"cleared", int64(e.Cleared)}, {"status", int64(e.Status)},
+		{"denied_during", int64(e.DeniedDuring)}, {"budget_denied", int64(e.BudgetDenied)}, {"recheck_denied", int64(e.RecheckDenied)},
+	} {
+		if n.value != 0 {
+			fields = append(fields, fmt.Sprintf("%s=%d", n.key, n.value))
+		}
+	}
+	if e.DownFor != 0 {
+		fields = append(fields, "down_for="+time.Duration(e.DownFor).String())
+	}
+	keys := make([]string, len(e.Keys))
+	for i, k := range e.Keys {
+		keys[i] = shownIf(k, closedWord.MatchString)
+	}
+	return "{" + strings.Join(fields, " ") + " keys=" + strings.Join(keys, ",") + "}"
+}
+
+// shownIf 는 ok(s) 면 s, 아니면 s 의 길이만이다.
+func shownIf(s string, ok func(string) bool) string {
+	if ok(s) {
+		return s
+	}
+	return fmt.Sprintf("<%d bytes>", len(s))
+}
+
 // handlerEvents 는 msg 가 name 인 이벤트를 낸 차례대로 돌려준다. name 이 비면 모두다.
 func handlerEvents(t *testing.T, logs *logRecorder, name string) []handlerEvent {
 	t.Helper()
 	var got []handlerEvent
 	sc := bufio.NewScanner(strings.NewReader(logs.String()))
 	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
-	for sc.Scan() {
+	for n := 1; sc.Scan(); n++ {
 		var e handlerEvent
 		var keys map[string]any
 		if err := errors.Join(json.Unmarshal(sc.Bytes(), &e), json.Unmarshal(sc.Bytes(), &keys)); err != nil {
-			t.Fatalf("slog 출력 %q 을 해석하지 못했다: %v", sc.Text(), err)
+			t.Fatalf("slog 출력의 %d번째 줄(%d 바이트)을 해석하지 못했다: %v", n, len(sc.Bytes()), err)
 		}
 		e.Keys = slices.Sorted(maps.Keys(keys))
 		if name == "" || e.Msg == name {

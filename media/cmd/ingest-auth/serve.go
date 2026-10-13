@@ -147,7 +147,7 @@ func openResponder(s site, cfg serveConfig, getenv func(string) string, log *slo
 		CallerIP: cfg.callerIP,
 		SelfIP:   cfg.listen.Addr(),
 		APIUser:  getenv(envMTXAPIUser),
-		APIPass:  getenv(envMTXAPIPass),
+		APIPass:  ingestauth.NewSecret(getenv(envMTXAPIPass)),
 		Log:      log,
 	})
 	if err != nil {

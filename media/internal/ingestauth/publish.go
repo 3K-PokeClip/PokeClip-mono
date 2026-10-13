@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -39,8 +40,8 @@ const (
 // publish 는 판정표의 publish 행이다. 차례는 형식 → 거부 목록 → 예산 → 요청 ctx → 실패 토큰 차례 → resolve → 기억
 // 갱신 → 기록 추가 → 마지막 거부 확인 → 200 이고(설계 2-4 · 3-1), 위에서부터 처음 맞는 행이 답이다. 예산 · 차례
 // 거절은 resolve 를 부르지 않고, 예산 거절 · 끝난 ctx 의 요청은 차례를 쓰지 않는다. 응답기는 기다리게 하지 않는다 —
-// 양보도 곧바로 401 이다. resolveBy 는 resolve 의 시한이다(요청이 처리기에 닿은 실제 시각 + Deadline).
-func (h *handler) publish(ctx context.Context, w http.ResponseWriter, req mtxRequest, resolveBy time.Time) {
+// 양보도 곧바로 401 이다. ctx 는 요청 ctx 다 — 그 시한이 바깥 가드다(layers).
+func (h *handler) publish(ctx context.Context, w http.ResponseWriter, req mtxRequest) {
 	if reason, ok := publishForm(req); !ok {
 		h.denyPublish(w, req, denial{reason: reason})
 		return
@@ -53,8 +54,11 @@ func (h *handler) publish(ctx context.Context, w http.ResponseWriter, req mtxReq
 		h.denyPublish(w, req, denial{reason: reasonBudgetExhausted})
 		return
 	}
-	// 바깥 가드가 이미 끝낸 요청이면 resolve 를 부르지 않는다 — 헛된 auth 호출 · 게이지 전이 · 차례 소비를 막는다.
-	if ctx.Err() != nil {
+	// 바깥 가드가 이미 끝낸 요청(MediaMTX 가 버린 요청 포함)이거나 resolve 할 시간이 남지 않은 요청이면 resolve 를
+	// 부르지 않는다 — 헛된 auth 호출 · 판정 불가 · 게이지 전이 · 차례 소비를 막는다. 시간이 남지 않은 요청에 부르면
+	// auth 에 묻지도 않고 곧바로 판정 불가(timeout)다.
+	resolveBy := h.resolveDeadline(ctx)
+	if ctx.Err() != nil || !time.Now().Before(resolveBy) {
 		h.late(w, req)
 		return
 	}
@@ -62,13 +66,16 @@ func (h *handler) publish(ctx context.Context, w http.ResponseWriter, req mtxReq
 		h.denyPublish(w, req, denial{reason: reasonRecheckWait, wait: wait})
 		return
 	}
-	resolveCtx, cancel := context.WithDeadline(ctx, resolveBy)
+	// resolve 는 요청 취소에서 뗀다 — MediaMTX 가 resolve 도중 요청을 버려도(재시작 · 리로드 · 망) 그 취소가 판정 불가
+	// (timeout)로 와 헛된 auth_degraded 와 그 토큰의 기억을 남기지 않게. 시한은 resolveBy 하나이고 바깥 가드보다
+	// 앞이라, 떼어도 가드가 끊을 resolve 는 없다. 버린 요청의 resolve 는 그 시한까지만 산다.
+	resolveCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), resolveBy)
 	defer cancel()
 	j := h.judge(resolveCtx, req.path)
 	h.report(req, j)
 	switch j.kind {
 	case judgedUsable:
-		h.allowPublish(w, req, j)
+		h.allowPublish(ctx, w, req, j)
 	case judgedOutOfFormat:
 		// auth 의 계약 위반이다. 값은 싣지 않는다.
 		h.log.Error("ingestauth_passphrase_invalid", "path", req.path)
@@ -76,6 +83,17 @@ func (h *handler) publish(ctx context.Context, w http.ResponseWriter, req mtxReq
 	default:
 		h.denyPublish(w, req, j.denial(j.deniedReason()))
 	}
+}
+
+// resolveDeadline 은 resolve 의 시한이다 — 요청 ctx 의 시한(바깥 가드 — 바깥 층이 도착 시각에서 잰다)보다 guardMargin
+// 앞이라, resolve 가 시한에 끝나면 처리기가 가드보다 먼저 401 을 쓴다. 요청 ctx 에 시한이 없으면(바깥 층을 거치지 않고
+// 안쪽만 부른 요청) 지금부터 Deadline 이다.
+func (h *handler) resolveDeadline(ctx context.Context) time.Time {
+	guardBy, ok := ctx.Deadline()
+	if !ok {
+		return time.Now().Add(h.deadline)
+	}
+	return guardBy.Add(-guardMargin)
 }
 
 // publishForm 은 publish 형식 행(판정표 — publish 가 아님 · protocol≠srt · 토큰 꼴 아님 · id 없음)에 걸린 까닭이다.
@@ -134,7 +152,7 @@ func (h *handler) judge(ctx context.Context, token string) judgment {
 func (h *handler) report(req mtxRequest, j judgment) {
 	switch j.kind {
 	case judgedUndecided:
-		h.authGauge.undecided(j.failure, j.status)
+		// 게이지 set 은 그 거절의 셈 · 로그와 한 잠금 구간에서 한다(denyPublish).
 	case judgedBroken:
 		// 처리기 · 설정 결함이다 — auth 의 판정이 아니므로 게이지를 건드리지 않는다.
 	default:
@@ -147,8 +165,10 @@ func (h *handler) report(req mtxRequest, j judgment) {
 
 // allowPublish 는 쓸 수 있는 값을 받은 연결을 허용한다 — 기록 추가 → 마지막 거부 확인 → 200 이다. 기록이 응답보다
 // 먼저라서 허용된 연결은 반드시 기록에 있고, 확인이 기록 뒤라서 그 사이 적힌 거부를 놓치지 않는다(설계 2-4 허용
-// 순서 · 3-4 증명). 기록은 있는데 연결이 없는 경우(마지막 확인의 거부 · 가드의 503)는 무해하다.
-func (h *handler) allowPublish(w http.ResponseWriter, req mtxRequest, j judgment) {
+// 순서 · 3-4 증명). 기록은 있는데 연결이 없는 경우(마지막 확인의 거부 · 가드의 503)는 무해하다. 200 을 가드 버퍼에 쓰면
+// ingestauth_publish_allowed 의 필드를 요청의 허용 칸에 남긴다 — 그 로그는 바깥 층이 가드가 실제로 200 을 쓴 것을 본 뒤에
+// 낸다(publishAllowed).
+func (h *handler) allowPublish(ctx context.Context, w http.ResponseWriter, req mtxRequest, j judgment) {
 	if err := h.connGauge.append(h.conns, req.path, req.connID); err != nil {
 		h.denyPublish(w, req, j.denial(reasonConnLogUnwritable))
 		return
@@ -161,11 +181,45 @@ func (h *handler) allowPublish(w http.ResponseWriter, req mtxRequest, j judgment
 		h.late(w, req) // 바깥 가드가 먼저 답했다 — 200 은 버려졌다
 		return
 	}
-	h.log.Info("ingestauth_publish_allowed",
-		"path", req.path,
-		"conn_id", req.connID,
-		"user_id", j.verdict.UserID,
-		"resolve_ms", j.took.Milliseconds())
+	if slot := allowedSlot(ctx); slot != nil {
+		*slot = publishAllowed{set: true, path: req.path, connID: req.connID, userID: j.verdict.UserID, resolveTook: j.took}
+	}
+}
+
+// publishAllowed 는 ingestauth_publish_allowed 의 필드다(설계 6절 — path · conn_id · user_id · resolve_ms). 안쪽
+// 처리기가 200 을 가드 버퍼에 쓴 뒤 요청의 허용 칸에 남기고, 바깥 층이 가드가 MediaMTX 에 실제로 200 을 쓴 것을 본 뒤에
+// 낸다 — 가드 버퍼의 200 이 시한에 닥쳐 503 으로 바뀌면(TimeoutHandler 는 안쪽의 끝과 시한이 함께 준비되면 어느 쪽이든
+// 고른다) MediaMTX 는 거절을 받았으므로 내지 않는다.
+type publishAllowed struct {
+	set         bool // 안쪽이 200 을 가드 버퍼에 썼다
+	path        string
+	connID      string
+	userID      int64
+	resolveTook time.Duration
+}
+
+// log 는 a 를 ingestauth_publish_allowed(INFO)로 낸다.
+func (a *publishAllowed) log(l *slog.Logger) {
+	l.Info("ingestauth_publish_allowed",
+		"path", a.path,
+		"conn_id", a.connID,
+		"user_id", a.userID,
+		"resolve_ms", a.resolveTook.Milliseconds())
+}
+
+// allowedSlotKey 는 요청 ctx 에 실린 허용 칸(*publishAllowed)의 열쇠다. 칸은 바깥 층이 요청마다 하나 만들어 가드에
+// 넘긴다 — 안쪽 처리기는 가드(http.TimeoutHandler)를 지나 요청 ctx 로만 바깥 층에 닿는다.
+type allowedSlotKey struct{}
+
+// withAllowedSlot 은 slot 을 실은 ctx 다.
+func withAllowedSlot(ctx context.Context, slot *publishAllowed) context.Context {
+	return context.WithValue(ctx, allowedSlotKey{}, slot)
+}
+
+// allowedSlot 은 ctx 에 실린 허용 칸이다. 없으면(바깥 층을 거치지 않은 요청) nil 이다.
+func allowedSlot(ctx context.Context) *publishAllowed {
+	slot, _ := ctx.Value(allowedSlotKey{}).(*publishAllowed)
+	return slot
 }
 
 // allowedBody 는 허용 응답의 본문이다 — 2xx 본문 JSON 객체의 srtPassphrase(설계 2-1 A2 — U 형식 확정 전 가정).
@@ -174,7 +228,7 @@ type allowedBody struct {
 }
 
 // writeAllowed 는 허용 응답 200 {"srtPassphrase":"<원문>"} · Cache-Control: no-store 를 쓴다. 200 본문 조립은 이
-// 함수 하나이고(계획 S6-1), Passphrase.Reveal 을 부르는 곳도 여기 하나다(설계 6절 누설 규칙). U 의 응답 형식이
+// 함수 하나이고, Passphrase.Reveal 을 부르는 곳도 여기 하나다(설계 6절 누설 규칙). U 의 응답 형식이
 // 바뀌면 이 함수와 그 시험만 고친다(설계 2-9). 바깥 가드가 이미 답했으면 쓰기가 버려지고 에러다.
 func writeAllowed(w http.ResponseWriter, p streamkey.Passphrase) error {
 	// 문자열 필드 하나뿐인 구조체라 Marshal 은 실패하지 않는다.
@@ -189,15 +243,16 @@ func writeAllowed(w http.ResponseWriter, p streamkey.Passphrase) error {
 // denial 은 publish 거절 하나의 로그 필드다(ingestauth_publish_denied — 설계 6절).
 type denial struct {
 	reason        string
-	wait          string        // reason 이 recheck_wait 일 때만 — gap(칸이 닫힘) · yield(양보)
-	resolveStatus string        // resolve 를 불렀을 때만(judgment.resolveStatus)
-	resolveTook   time.Duration // resolve 에 걸린 시간. 부르지 않았으면 0
+	wait          string          // reason 이 recheck_wait 일 때만 — gap(칸이 닫힘) · yield(양보)
+	resolveStatus string          // resolve 를 불렀을 때만(judgment.resolveStatus)
+	resolveTook   time.Duration   // resolve 에 걸린 시간. 부르지 않았으면 0
+	cause         *undecidedCause // resolve 가 판정 불가로 끝났을 때만 — auth 게이지를 세운다
 }
 
-// denyPublish 는 publish 를 401(본문 없음)로 거절하고 ingestauth_publish_denied(WARN)를 낸다. auth 게이지가 서
-// 있으면 그 동안의 거절로 센다.
+// denyPublish 는 publish 를 401(본문 없음)로 거절하고 ingestauth_publish_denied(WARN)를 낸다. 판정 불가로 끝난 거절이면
+// auth 게이지를 세우고, 게이지가 서 있으면 그 동안의 거절로 센다 — 게이지 전이 · 셈 · 거절 로그가 한 잠금
+// 구간이다(authGauge.denied).
 func (h *handler) denyPublish(w http.ResponseWriter, req mtxRequest, d denial) {
-	h.authGauge.denied(d.reason)
 	attrs := append(identityAttrs(req),
 		"reason", d.reason,
 		"resolve_status", d.resolveStatus,
@@ -205,14 +260,15 @@ func (h *handler) denyPublish(w http.ResponseWriter, req mtxRequest, d denial) {
 	if d.wait != "" {
 		attrs = append(attrs, "wait", d.wait)
 	}
-	h.log.Warn("ingestauth_publish_denied", attrs...)
+	h.authGauge.denied(d.reason, d.cause, func() { h.log.Warn("ingestauth_publish_denied", attrs...) })
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
-// late 는 바깥 가드가 이미 답한 publish 다 — 요청 ctx 가 끝나 resolve 를 건너뛰었거나 200 쓰기가 버려졌다(판정표
-// 「요청 ctx 가 이미 끝남」). ingestauth_publish_late(DEBUG)를 내고 401(본문 없음)을 쓴다. 가드가 이미 답했으면 그
-// 쓰기는 버려진다. 그래도 쓰는 것은 가드와 겨루는 경우의 몫이다 — 안쪽 처리기가 아무것도 쓰지 않고 돌아가면
-// TimeoutHandler 는 처리 끝과 시한이 함께 준비됐을 때 그 응답을 200(빈 본문)으로 낼 수 있다.
+// late 는 늦은 publish 다 — 요청 ctx 가 끝났거나(바깥 가드가 이미 답함 · MediaMTX 가 버림) resolve 할 시간이 남지 않아
+// resolve 를 건너뛰었거나, 200 쓰기가 버려졌다(판정표 「요청 ctx 가 이미 끝남」). ingestauth_publish_late(DEBUG)를 내고
+// 401(본문 없음)을 쓴다. 가드가 이미 답했으면 그 쓰기는 버려진다. 그래도 쓰는 것은 가드와 겨루는 경우의 몫이다 — 안쪽
+// 처리기가 아무것도 쓰지 않고 돌아가면 TimeoutHandler 는 처리 끝과 시한이 함께 준비됐을 때 그 응답을 200(빈 본문)으로
+// 낼 수 있다.
 func (h *handler) late(w http.ResponseWriter, req mtxRequest) {
 	h.log.Debug("ingestauth_publish_late", identityAttrs(req)...)
 	w.WriteHeader(http.StatusUnauthorized)
@@ -255,8 +311,8 @@ type judgment struct {
 }
 
 // judgeResolve 는 Resolve 한 번의 결과(v · err)를 판정표의 resolve 행으로 가른다. took 은 그 resolve 에 걸린
-// 시간이다(음수면 0 — 시험 시계가 뒤로 감). 에러 문구는 갈래로만 남기고 담지 않는다 — 요청 생성 실패의 문구에는
-// endpoint 가 실린다(c1 이월 1).
+// 시간이다(음수면 0 — 시험 시계가 뒤로 감). 에러는 갈래로만 남기고 그 문구를 담지 않는다 — 판정 불가의 갈래(Kind ·
+// Status)만 로그에 싣는다.
 func judgeResolve(v keyresolve.Verdict, err error, took time.Duration) judgment {
 	j := judgment{took: max(took, 0)}
 	var undecided *keyresolve.UndecidedError
@@ -271,7 +327,7 @@ func judgeResolve(v keyresolve.Verdict, err error, took time.Duration) judgment 
 		j.kind, j.reason = judgedRejected, rejectReason(v.Reason)
 	case v.Passphrase.IsZero():
 		// 허락인데 값이 없다(keyresolve 는 이 값을 내지 않는다). 200 을 쓰면 MediaMTX 가 경로 잠금값으로 판정해
-		// 잠금값이 거절을 떠맡으므로 형식 밖과 같게 다룬다(c1 이월 3).
+		// 잠금값이 거절을 떠맡으므로 형식 밖과 같게 다룬다(설계 2-4 「확정 거절도 401」).
 		j.kind = judgedOutOfFormat
 	default:
 		j.kind, j.verdict = judgedUsable, v
@@ -293,7 +349,7 @@ func rejectReason(authReason string) string {
 	return reasonRejected
 }
 
-// outcome 은 실패 토큰 기억에 적을 결과의 갈래다. 그 밖의 에러면 ok 가 거짓이다 — 기억에 적지 않는다(c1 이월 1).
+// outcome 은 실패 토큰 기억에 적을 결과의 갈래다. 그 밖의 에러면 ok 가 거짓이다 — 기억에 적지 않는다.
 func (j judgment) outcome() (o resolveOutcome, ok bool) {
 	switch j.kind {
 	case judgedUsable:
@@ -332,7 +388,11 @@ func (j judgment) deniedReason() string {
 	return reasonInternalError
 }
 
-// denial 은 resolve 를 부른 뒤 reason 으로 끝난 거절이다.
+// denial 은 resolve 를 부른 뒤 reason 으로 끝난 거절이다. 판정 불가면 그 까닭을 실어 auth 게이지를 세우게 한다.
 func (j judgment) denial(reason string) denial {
-	return denial{reason: reason, resolveStatus: j.resolveStatus(), resolveTook: j.took}
+	d := denial{reason: reason, resolveStatus: j.resolveStatus(), resolveTook: j.took}
+	if j.kind == judgedUndecided {
+		d.cause = &undecidedCause{failure: j.failure, status: j.status}
+	}
+	return d
 }

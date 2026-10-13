@@ -81,9 +81,34 @@ func TestNoSecretsInOutputsAcrossJudgmentRows(t *testing.T) {
 			wantEvent:  leakEvent{Msg: "ingestauth_request_invalid", Reason: "malformed"},
 		},
 		{
+			name:       "본문_해석_실패_크기", // 카나리아는 상한 안쪽(본문 앞)에 있고 채움이 상한을 넘긴다
+			send:       publishWith(func(b *mtxAuthBody) { b.UserAgent = strings.Repeat("x", maxRequestBytes) }),
+			wantStatus: http.StatusBadRequest,
+			wantEvent:  leakEvent{Msg: "ingestauth_request_invalid", Reason: "too_large"},
+		},
+		{
+			name: "본문_해석_실패_연결_id",
+			send: publishWith(func(b *mtxAuthBody) {
+				upper := strings.ToUpper(testConnID(0xabc)) // 16진 글자가 있어야 대문자 꼴이 소문자 꼴과 다르다
+				b.ID = &upper
+			}),
+			wantStatus: http.StatusBadRequest,
+			wantEvent:  leakEvent{Msg: "ingestauth_request_invalid", Reason: "bad_conn_id"},
+		},
+		{
+			name: "본문_해석_실패_읽기", // 카나리아 본문을 내준 뒤 읽기가 실패한다
+			send: func(t *testing.T, f *leakFixture) *httptest.ResponseRecorder {
+				r := newAuthRequest(t, "")
+				r.Body = &readFailsAfter{data: mustJSON(t, leakPublishBody(testTokenA, testConnID(1)))}
+				return f.send(r)
+			},
+			wantStatus: http.StatusBadRequest,
+			wantEvent:  leakEvent{Msg: "ingestauth_request_invalid", Reason: "read_error"},
+		},
+		{
 			name: "api_허용",
 			send: func(t *testing.T, f *leakFixture) *httptest.ResponseRecorder {
-				return f.send(newAuthRequest(t, leakAPIBody(testSelfIP.String(), testAPIUser, testAPIPass)))
+				return f.send(newAuthRequest(t, leakAPIBody(testSelfIP.String(), leakAPIUser, testAPIPass)))
 			},
 			wantStatus: http.StatusOK,
 			wantEvent:  leakEvent{Msg: "ingestauth_api_allowed", Level: "DEBUG"},
@@ -99,7 +124,7 @@ func TestNoSecretsInOutputsAcrossJudgmentRows(t *testing.T) {
 		{
 			name: "api_거절_출발지",
 			send: func(t *testing.T, f *leakFixture) *httptest.ResponseRecorder {
-				return f.send(newAuthRequest(t, leakAPIBody("192.0.2.30", testAPIUser, testAPIPass)))
+				return f.send(newAuthRequest(t, leakAPIBody("192.0.2.30", leakAPIUser, testAPIPass)))
 			},
 			wantStatus: http.StatusUnauthorized,
 			wantEvent:  leakEvent{Msg: "ingestauth_api_denied"},
@@ -481,10 +506,10 @@ func TestNoSecretsInOutputsAcrossCut(t *testing.T) {
 		t.Fatalf("Setup: mtxctl.NewClient with wrong credentials returned %T, want a client", err)
 	}
 
-	rep, cutErr := cut(newTestMTXClient(t, m.srv.URL))
+	rep, cutErr := cut(newLeakMTXClient(t, m.srv.URL))
 	repWrong, errWrong := cut(wrong)
 	m.set(func(m *fakeMediaMTX) { m.fail["list"] = http.StatusInternalServerError })
-	rep500, err500 := cut(newTestMTXClient(t, m.srv.URL))
+	rep500, err500 := cut(newLeakMTXClient(t, m.srv.URL))
 
 	// 보고의 id 는 찍지 않는다 — 기록 줄에 비밀이 실리면 id 자리로 따라 나온다. 셈만 싣는다.
 	if cutErr != nil || rep.FromLog != 1 || rep.FromList != 1 || rep.FromUnmapped != 1 || rep.Kicked != 3 {

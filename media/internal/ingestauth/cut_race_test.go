@@ -118,7 +118,7 @@ func newCutHandler(t *testing.T) *cutHandler {
 		CallerIP: testCallerIP,
 		SelfIP:   testSelfIP,
 		APIUser:  testAPIUser,
-		APIPass:  testAPIPass,
+		APIPass:  NewSecret(testAPIPass),
 		Now:      clock.now,
 		Log:      discardLogger(),
 	})

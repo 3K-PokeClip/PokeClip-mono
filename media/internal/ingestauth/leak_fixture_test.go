@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +14,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/mtxctl"
 )
 
 // 누설 시험이 새로 심는 카나리아 값이다(합성 — 어떤 계정의 값도 아니다). 고정물의 passphrase · 출입증 · API 비번과
 // 함께 출력 어디에도 나와서는 안 된다.
 const (
+	leakAPIUser         = "synthetic-api-user-leak-0001"     // 누설 고정물의 action=api 사용자 — 허용 행의 요청 user 로 흐른다
 	leakRequestUser     = "synthetic-mtx-user-leak-0001"     // MediaMTX 요청의 user(streamid 의 u · api 행의 사용자)
 	leakRequestPassword = "synthetic-mtx-password-leak-0001" // MediaMTX 요청의 password(streamid 의 s · api 행의 비번)
 	leakRequestToken    = "synthetic-mtx-jwt-leak-0001"      // MediaMTX 요청의 token
@@ -33,13 +37,14 @@ type leakCanary struct {
 }
 
 // leakCanaries 는 이 패키지 누설 시험의 카나리아다 — 누설 규칙의 passphrase · 출입증 · Basic 자격 · MediaMTX 요청의
-// user · password · token · query · 응답 본문.
+// user(허용 행의 API 사용자 포함) · password · token · query · 응답 본문.
 var leakCanaries = []leakCanary{
 	{name: "passphrase", value: testPassphrase},
 	{name: "형식 밖 passphrase", value: leakBadPassphrase},
 	{name: "resolve 출입증", value: testResolveToken},
+	{name: "API 사용자", value: leakAPIUser},
 	{name: "API 비번", value: testAPIPass},
-	{name: "Basic 자격", value: basicCredentials(testAPIUser, testAPIPass)},
+	{name: "Basic 자격", value: basicCredentials(leakAPIUser, testAPIPass)},
 	{name: "틀린 Basic 자격", value: basicCredentials(leakRequestUser, leakRequestPassword)},
 	{name: "MediaMTX 요청 user", value: leakRequestUser},
 	{name: "MediaMTX 요청 password", value: leakRequestPassword},
@@ -131,7 +136,8 @@ func leakAPIBody(ip, user, pass string) mtxAuthBody {
 }
 
 // leakFixture 는 누설 시험의 처리기 고정물이다 — handlerFixture 에 기록의 회전 로그를 처리기 로그와 같은 모음으로 잇고
-// (고정물은 회전 로그를 버린다), 처리기가 낸 응답을 모두 모은다(누설 규칙 3).
+// (고정물은 회전 로그를 버린다), 처리기가 낸 응답을 모두 모은다(누설 규칙 3). action=api 사용자는 카나리아 leakAPIUser
+// 다 — 허용 행의 요청 user 도 카나리아로 흐른다(고정물의 testAPIUser 는 흔한 이름이라 카나리아로 쓸 수 없다).
 type leakFixture struct {
 	*handlerFixture
 
@@ -141,10 +147,37 @@ type leakFixture struct {
 
 func newLeakFixture(t *testing.T, o fixtureOptions) *leakFixture {
 	t.Helper()
+	o.apiUser = leakAPIUser
 	f := newHandlerFixture(t, o)
 	f.h.conns.log = f.h.log
 	return &leakFixture{handlerFixture: f}
 }
+
+// newLeakMTXClient 는 누설 고정물의 API 자격(leakAPIUser · testAPIPass)으로 apiURL 의 Control API 를 부르는 실제
+// 클라이언트다.
+func newLeakMTXClient(t *testing.T, apiURL string) *mtxctl.Client {
+	t.Helper()
+	c, err := mtxctl.NewClient(mtxctl.Options{APIURL: apiURL, User: leakAPIUser, Pass: mtxctl.NewSecret(testAPIPass)})
+	if err != nil {
+		t.Fatalf("Setup: mtxctl.NewClient returned %T, want a client", err)
+	}
+	return c
+}
+
+// readFailsAfter 는 data 를 내준 뒤 읽기마다 실패하는 요청 본문이다 — 본문을 읽다가 실패하는 갈래(read_error)에
+// 카나리아를 흘린다.
+type readFailsAfter struct{ data []byte }
+
+func (b *readFailsAfter) Read(p []byte) (int, error) {
+	if len(b.data) == 0 {
+		return 0, errors.New("synthetic read failure")
+	}
+	n := copy(p, b.data)
+	b.data = b.data[n:]
+	return n, nil
+}
+
+func (b *readFailsAfter) Close() error { return nil }
 
 // send 는 r 을 처리기 전체(바깥 층 · 가드 · 안쪽)에 보내고 응답을 모은다.
 func (f *leakFixture) send(r *http.Request) *httptest.ResponseRecorder {

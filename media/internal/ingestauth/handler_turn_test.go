@@ -91,7 +91,7 @@ func latestOffset(ends []time.Time, start time.Time) time.Duration {
 // 반례 A(설계 2-4 709행 · 3-8 1590행): 맨 앞 X 는 홀수 물결에 1.125초 판정 불가 · 짝수 물결에 10ms valid:false, 그다음
 // 넷은 늘 1.125초 판정 불가, 나머지 25 는 30ms valid:true 다. 넷째 물결에서 정상 25건이 묶음 시작 2.25초 안에 resolve
 // 하고, 해제는 물결 2 의 scope=token 하나(X)뿐이다. 해제를 「판정 결과면 모두 지움」(r1.5)으로 넓히면 그 해제가 모두를
-// 지운다(음성 B9).
+// 지운다.
 func TestHandlerCounterexampleA(t *testing.T) {
 	f := newHandlerFixture(t, fixtureOptions{})
 	tokens := waveTokens(30)
@@ -129,7 +129,7 @@ func TestHandlerCounterexampleA(t *testing.T) {
 // 기억됐다. auth 가 돌아온 뒤 첫 물결을 w₁ 이라 하면, w₁ 의 돌림 차례가 어디에 있든 — F 에 있던 경우를 포함해 —
 // 둘째 물결(w₂) 안에 scope=all 해제가 나고 셋째 물결(w₃) 안에 나머지 29 가 모두 200 이다. 기억은 실제 장애처럼
 // 처리기로 쌓는다(3초 간격 판정 불가 — 예산이 매번 다시 찬다). 기억된 차례가 F → L₂₉ → L₁ … 이면 w₂ 의 해제는 맨
-// 뒤에 오는 L₂₉ 가 낸다(최악 j = 29). 맨 뒤로 보내기를 빼거나(음성 B8) 돌림을 빼면(B10) F 가 칸을 쥐어 w₂ 에
+// 뒤에 오는 L₂₉ 가 낸다(최악 j = 29). 맨 뒤로 보내기를 빼거나 돌림을 빼면 F 가 칸을 쥐어 w₂ 에
 // 해제가 없다.
 func TestHandlerCounterexampleB(t *testing.T) {
 	tokens := waveTokens(30)
@@ -192,7 +192,66 @@ func TestHandlerCounterexampleB(t *testing.T) {
 	}
 }
 
-// 예산 먼저(설계 2-4 704행 · c3 보안 1 · 2): 예산 거절은 차례를 쓰지 않고 도착 시각도 적지 않는다. 기억된 X(먼저) · Y
+// 차례 거절의 두 갈래(설계 2-4 판정표 recheck_wait · 3-8 돌림): 기억된 X(가장 오래) · Y · Z 가운데 X 가 오기 전에 Y 가
+// 재확인해 칸을 쓰면, 칸이 닫힌 동안 온 X 는 wait=gap 이고 기다리는 중이 된다. 칸이 다시 열린 뒤 온 Z 는 더 오래 기다린
+// X 에게 양보한다 — 401 · recheck_wait · wait=yield · resolve 호출 0.
+func TestHandlerTurnGapAndYield(t *testing.T) {
+	f := newHandlerFixture(t, fixtureOptions{})
+	tokX, tokY, tokZ := waveToken(1), waveToken(2), waveToken(3)
+	for _, token := range []string{tokX, tokY, tokZ} {
+		f.h.failed.record(token, outcomeUndecided)
+	}
+	f.auth.answerAll(answerUndecided(100 * time.Millisecond))
+	f.publish(t, tokY, testConnID(1)) // X 가 아직 오지 않아 Y 가 재확인한다(칸을 쓴다)
+	f.clock.advance(time.Second)
+	f.publish(t, tokX, testConnID(2)) // 칸이 닫혔다 — gap. X 는 기다리는 중이 된다
+	f.clock.advance(4 * time.Second)  // 칸이 다시 열렸다(Y 의 재확인에서 5.1초)
+	before := f.auth.callCount()
+
+	rr := f.publish(t, tokZ, testConnID(3))
+
+	if rr.Code != http.StatusUnauthorized || f.auth.callCount() != before {
+		t.Errorf("publish of Z while older X waits = %d with resolves %d → %d, want 401 without a resolve", rr.Code, before, f.auth.callCount())
+	}
+	var waits []string
+	for _, e := range handlerEvents(t, f.logs, "ingestauth_publish_denied") {
+		if e.Reason == "recheck_wait" {
+			waits = append(waits, e.Wait)
+		}
+	}
+	if want := []string{"gap", "yield"}; !slices.Equal(waits, want) {
+		t.Errorf("recheck_wait denials' wait = %v, want %v (X 는 칸이 닫혀서 · Z 는 X 에게 양보해서)", waits, want)
+	}
+}
+
+// admit 을 지난 publish 에서 resolve 쪽이 패닉하면 기억에 없던 토큰도 판정 불가로 새로 기억한다 — auth 의 판정을 받지
+// 못했으므로 판정 불가와 같다(이미 기억된 토큰은 TestHandlerPanicSendsTokenToBack). 그 시각은 패닉 시각이다. 게이지는
+// 건드리지 않는다.
+func TestHandlerPanicRemembersUnrememberedToken(t *testing.T) {
+	f := newHandlerFixture(t, fixtureOptions{})
+	panicking := answerUsable(400 * time.Millisecond)
+	panicking.before = func() { f.clock.onNextRead(func() { panic(errInjectedPanic) }) } // resolve 직후 처리기의 첫 시계 읽기
+	f.auth.answerAll(panicking)
+	if _, remembered := entryOf(f.h.failed, testTokenA); remembered {
+		t.Fatalf("Setup: token is remembered before the panic")
+	}
+
+	if _, recovered := f.servePanicking(newAuthRequest(t, publishBody(testTokenA, testConnID(1)))); recovered != errInjectedPanic {
+		t.Fatalf("panic out of the resolve = %v, want the injected panic", recovered)
+	}
+
+	switch e, remembered := entryOf(f.h.failed, testTokenA); {
+	case !remembered:
+		t.Errorf("after the panic: token is not remembered, want remembered as undecided")
+	case !e.failedAt.Equal(f.clock.start.Add(400 * time.Millisecond)):
+		t.Errorf("after the panic: token remembered at %v, want at the panic (+400ms)", e.failedAt.Sub(f.clock.start))
+	}
+	if got := gaugeNames(t, f.logs, "ingestauth_auth_degraded", "ingestauth_auth_recovered"); len(got) != 0 {
+		t.Errorf("auth gauge events after a panic = %v, want none", got)
+	}
+}
+
+// 예산 먼저(설계 2-4 704행): 예산 거절은 차례를 쓰지 않고 도착 시각도 적지 않는다. 기억된 X(먼저) · Y
 // 가 있고 예산이 바닥난 때 X 가 오면 401(budget_exhausted)이고 X 의 도착 · 재확인 칸이 그대로다. 그래서 잔액이 다시
 // 차면 Y 가 곧바로 재확인한다 — X 의 도착이 적혔으면 Y 는 양보했고(yield), 칸을 썼으면 기다렸다(gap).
 func TestHandlerBudgetDenialLeavesTurn(t *testing.T) {
@@ -220,8 +279,8 @@ func TestHandlerBudgetDenialLeavesTurn(t *testing.T) {
 	}
 }
 
-// admit 가 참을 돌려준 뒤 resolve 쪽이 패닉하면 그 토큰을 판정 불가로 적어 차례 맨 뒤로 보낸다(c3 이월 5 · 결함 예측
-// P5 — 설계 690행은 차감만 말한다). 적지 않으면 그 토큰이 맨 앞에 남아, 칸이 다시 열린 뒤 온 더 젊은 기억 토큰 Y 가
+// admit 가 참을 돌려준 뒤 resolve 쪽이 패닉하면 그 토큰을 판정 불가로 적어 차례 맨 뒤로 보낸다(설계 690행은 차감만
+// 말한다). 적지 않으면 그 토큰이 맨 앞에 남아, 칸이 다시 열린 뒤 온 더 젊은 기억 토큰 Y 가
 // 양보한다(최대 기억 수명 300초까지). 게이지는 건드리지 않는다 — 패닉은 auth 의 판정이 아니다.
 func TestHandlerPanicSendsTokenToBack(t *testing.T) {
 	f := newHandlerFixture(t, fixtureOptions{})

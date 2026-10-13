@@ -1,7 +1,12 @@
 package ingestauth
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"sync"
 	"testing"
 	"time"
 )
@@ -149,7 +154,7 @@ func TestHandlerGuardChargesUntilGuard(t *testing.T) {
 	waitClosed(t, served, "the guard's 503")
 
 	if rr.Code != http.StatusServiceUnavailable || rr.Body.String() != "timeout" {
-		t.Errorf("stalled publish = %d %q, want 503 \"timeout\" from the guard", rr.Code, rr.Body.String())
+		t.Errorf("stalled publish = %d with a %d-byte body (is \"timeout\": %t), want 503 \"timeout\" from the guard", rr.Code, rr.Body.Len(), rr.Body.String() == "timeout")
 	}
 	if got := balanceOf(f.h.budget); got != 787500*time.Microsecond {
 		t.Errorf("balance when the guard answered = %v, want 787.5ms", got)
@@ -186,7 +191,61 @@ func TestHandlerPanicIsCharged(t *testing.T) {
 	}
 }
 
-// 거부 목록 판정은 예산보다 앞이다(설계 2-4 691행 · 음성 B6). api 요청은 잔액이 음수여도 200 이다 — 예산 · 차례에
+// clockedLog 는 slog 출력을 rec 에 모으고, event 줄을 쓸 때마다 시험 시계를 step 만큼 옮긴다 — 느린 로그 출력(로그
+// 드라이버)을 실제로 기다리지 않고 흉내 낸다. slog 처리기가 쓰기를 잠금으로 줄 세우므로, 동시 요청의 그 줄은 차례로
+// 시계를 옮긴다.
+type clockedLog struct {
+	rec   *logRecorder
+	clock *handlerClock
+	event []byte
+	step  time.Duration
+}
+
+func (w *clockedLog) Write(p []byte) (int, error) {
+	if bytes.Contains(p, w.event) {
+		w.clock.advance(w.step)
+	}
+	return w.rec.Write(p)
+}
+
+// 제어망 안 낯선 출발지의 403 은 예산을 만지지 않는다 — 출발지 검사가 예산 차감보다 먼저다(설계 2-4 판정표 첫 행). 낯선
+// 출발지 스물이 함께 오고 그 로그 줄이 줄마다 10ms 걸려 줄을 서도 잔액은 처음(1.375초) 그대로다. 403 행도 빼면 줄
+// 서기가 빚을 제곱으로 늘려 모든 계정의 새 송출 · 재접속이 budget_exhausted 가 된다. MediaMTX(CallerIP)의 요청은
+// 지금처럼 걸린 시간을 뺀다(대조).
+func TestHandlerForeignCallerLeavesBudget(t *testing.T) {
+	f := newHandlerFixture(t, fixtureOptions{})
+	slow := &clockedLog{rec: f.logs, clock: f.clock, event: []byte(`"msg":"ingestauth_caller_denied"`), step: 10 * time.Millisecond}
+	f.h.log = slog.New(slog.NewJSONHandler(slow, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	const callers = 20
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range callers {
+		r := newAuthRequest(t, publishBody(waveToken(i), testConnID(i)))
+		r.RemoteAddr = netip.AddrPortFrom(netip.MustParseAddr("192.0.2.11"), uint16(41000+i)).String()
+		wg.Go(func() {
+			<-start
+			if rr := f.serve(r); rr.Code != http.StatusForbidden {
+				t.Errorf("auth request %d from a foreign TCP peer = %d, want 403", i, rr.Code)
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	if n := len(handlerEvents(t, f.logs, "ingestauth_caller_denied")); n != callers {
+		t.Fatalf("Setup: caller_denied events = %d, want %d", n, callers)
+	}
+	if got := balanceOf(f.h.budget); got != holdBurst {
+		t.Errorf("balance after %d concurrent foreign 403s = %v, want %v (403 은 예산을 만지지 않는다)", callers, got, holdBurst)
+	}
+
+	f.auth.answerAll(answerUsable(400 * time.Millisecond))
+	f.publish(t, testTokenA, testConnID(callers))
+	if got, want := balanceOf(f.h.budget), 1175*time.Millisecond; got != want {
+		t.Errorf("balance after a 0.4s publish from CallerIP = %v, want %v (1.375 + 0.2 − 0.4)", got, want)
+	}
+}
+
+// 거부 목록 판정은 예산보다 앞이다(설계 2-4 691행). api 요청은 잔액이 음수여도 200 이다 — 예산 · 차례에
 // 걸리지 않아 바닥난 예산에서도 cut 이 돈다.
 func TestHandlerDenylistAndAPIBeforeBudget(t *testing.T) {
 	f := newHandlerFixture(t, fixtureOptions{})
@@ -211,7 +270,7 @@ func TestHandlerDenylistAndAPIBeforeBudget(t *testing.T) {
 	}
 }
 
-// 바깥 가드가 끝낸 뒤 깨어난 안쪽 처리기는 resolve 를 부르지 않는다(설계 2-4 693행 · 677 · 음성 B7) — 가짜 auth 호출
+// 바깥 가드가 끝낸 뒤 깨어난 안쪽 처리기는 resolve 를 부르지 않는다(설계 2-4 693행 · 677) — 가짜 auth 호출
 // 0 · 게이지 전이 0 · 차례 소비 0(도착 · 재확인 칸 그대로). 끝난 ctx 로 Resolve 를 부르면 연결 전에 돌아오므로 호출
 // 수만으로는 가르지 못한다 — 게이지와 차례를 함께 본다.
 func TestHandlerLateInnerSkipsResolve(t *testing.T) {
@@ -240,8 +299,56 @@ func TestHandlerLateInnerSkipsResolve(t *testing.T) {
 	}
 }
 
-// 가드가 먼저 503 을 낸 뒤 안쪽이 200 을 쓰면 그 쓰기는 버려진다 — publish_allowed 대신 publish_late(DEBUG)다(결함 예측
-// P4). 기록 줄은 남는다(무해 — 설계 2-4 「시한 가드가 503 으로 바꿔 친 경우」).
+// heldLog 는 slog 출력을 rec 에 모으되, event 줄은 release 가 닫힐 때까지 붙잡는다 — 그 줄을 쓰는 층을 그 자리에 멈춘다.
+type heldLog struct {
+	rec     *logRecorder
+	event   []byte
+	release <-chan struct{}
+}
+
+func (w *heldLog) Write(p []byte) (int, error) {
+	if bytes.Contains(p, w.event) {
+		<-w.release
+	}
+	return w.rec.Write(p)
+}
+
+// statusNotifier 는 바깥(MediaMTX 쪽)에 상태가 쓰이면 written 을 닫는 ResponseRecorder 다.
+type statusNotifier struct {
+	*httptest.ResponseRecorder
+	written chan struct{}
+	once    sync.Once
+}
+
+func (s *statusNotifier) WriteHeader(code int) {
+	s.ResponseRecorder.WriteHeader(code)
+	s.once.Do(func() { close(s.written) })
+}
+
+// publish_allowed 는 MediaMTX 에 실제로 200 이 나간 뒤에만 난다(설계 6절 「인증 통과」). 안쪽이 200 을 가드 버퍼에 쓴
+// 뒤 시한이 닥치면 가드는 그 버퍼를 버리고 503 을 낸다 — 그 publish 에 publish_allowed 가 남으면 운영자는 거절된 송출을
+// 허용으로 읽는다. 로그 출력이 publish_allowed 줄을 바깥에 상태가 쓰일 때까지 붙잡는다 — 그 줄을 200 을 쓰기 전에 내는
+// 층이 있으면 가드의 시한이 그 사이에 닥쳐 503 이 나간다. 어느 쪽이든 「200 이면 허용 로그 하나 · 아니면 0」이다.
+func TestHandlerAllowedIsLoggedOnlyAfterA200(t *testing.T) {
+	f := newHandlerFixture(t, fixtureOptions{deadline: guardDeadline})
+	rr := &statusNotifier{ResponseRecorder: httptest.NewRecorder(), written: make(chan struct{})}
+	f.h.log = slog.New(slog.NewJSONHandler(&heldLog{rec: f.logs, event: []byte(`"msg":"ingestauth_publish_allowed"`), release: rr.written}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	f.auth.answerAll(answerUsable(10 * time.Millisecond))
+
+	f.srv.ServeHTTP(rr, newAuthRequest(t, publishBody(testTokenA, testConnID(1))))
+	waitForInnerEnd(t, f.logs)
+
+	allowed := len(handlerEvents(t, f.logs, "ingestauth_publish_allowed"))
+	switch {
+	case rr.Code == http.StatusOK && allowed != 1:
+		t.Errorf("publish answered 200 logged %d publish_allowed events, want 1", allowed)
+	case rr.Code != http.StatusOK && allowed != 0:
+		t.Errorf("publish answered %d logged %d publish_allowed events, want 0 (MediaMTX 는 거절을 받았다)", rr.Code, allowed)
+	}
+}
+
+// 가드가 먼저 503 을 낸 뒤 안쪽이 200 을 쓰면 그 쓰기는 버려진다 — publish_allowed 대신 publish_late(DEBUG)다. 기록 줄은
+// 남는다(무해 — 설계 2-4 「시한 가드가 503 으로 바꿔 친 경우」).
 func TestHandlerLateAllowIsNotLoggedAsAllowed(t *testing.T) {
 	f := newHandlerFixture(t, fixtureOptions{deadline: guardDeadline})
 	release := make(chan struct{})

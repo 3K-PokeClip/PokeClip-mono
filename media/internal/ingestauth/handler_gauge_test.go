@@ -1,13 +1,39 @@
 package ingestauth
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 	"os"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 )
+
+// yieldingHandler 는 publish_denied 기록을 안쪽 처리기에 넘기기 전에 다른 고루틴에 차례를 넘긴다 — 차례 넘기기가 안쪽
+// 처리기의 쓰기 잠금 앞이라, 거절 로그를 내는 자리와 그 앞의 게이지 잠금 사이의 틈을 넓힌다(helpers_test 의
+// fakeClock.Now 와 같은 수). 게이지 로그(degraded · recovered)에서는 넘기지 않는다 — 넘기면 끼어든 clear 의 로그도 함께
+// 늦어 틈이 도로 좁아진다.
+type yieldingHandler struct{ slog.Handler }
+
+func (y yieldingHandler) Handle(ctx context.Context, r slog.Record) error {
+	if r.Message == "ingestauth_publish_denied" {
+		for range 3 {
+			runtime.Gosched()
+		}
+	}
+	return y.Handler.Handle(ctx, r)
+}
+
+func (y yieldingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return yieldingHandler{y.Handler.WithAttrs(attrs)}
+}
+
+func (y yieldingHandler) WithGroup(name string) slog.Handler {
+	return yieldingHandler{y.Handler.WithGroup(name)}
+}
 
 // gaugeNames 는 이벤트 이름 가운데 names 에 든 것만 차례대로 돌려준다.
 func gaugeNames(t *testing.T, logs *logRecorder, names ...string) []string {
@@ -21,7 +47,7 @@ func gaugeNames(t *testing.T, logs *logRecorder, names ...string) []string {
 	return got
 }
 
-// auth 게이지 짝(설계 6절 게이지 표 · 2-4 713행 — 부31): 처음 상태(판정됨)에서 첫 판정 불가면 auth_degraded(reason ·
+// auth 게이지 짝(설계 6절 게이지 표 · 2-4 713행): 처음 상태(판정됨)에서 첫 판정 불가면 auth_degraded(reason ·
 // status), 그 뒤 첫 판정 결과면 auth_recovered(down_for · denied_during · budget_denied · recheck_denied)다. 둘 다
 // ERROR 다. 예산 · 차례 거절은 게이지를 바꾸지 않고 recovered 의 셈에만 든다. denied_during 은 게이지가 선 동안(세운
 // 요청 포함) 401 로 끝난 publish 수(사유 무관)이고, budget_denied · recheck_denied 는 그 가운데 예산 · 차례 거절이다.
@@ -45,7 +71,8 @@ func TestHandlerAuthGaugePair(t *testing.T) {
 		{at: -1, token: tokB, wantReason: "budget_exhausted"},          // t=3.375 — 잔액이 0 보다 작다
 		{at: 4 * time.Second, token: tokB, wantReason: "recheck_wait"}, // 잔액 0 · 칸은 t=6.25 까지 닫힘
 		{at: 10 * time.Second, token: tokC, wantReason: ""},            // 판정 결과 → 게이지 clear(t=10.03)
-		{at: 11 * time.Second, token: tokB, wantReason: "undecided"},   // 다시 판정 불가 → 다시 set
+		{at: 11 * time.Second, token: tokB, wantReason: "undecided"},   // 다시 판정 불가 → 다시 set(t=12.125 — 셈은 0 에서)
+		{at: 13 * time.Second, token: tokC, wantReason: ""},            // 판정 결과 → 다시 clear(t=13.03)
 	}
 	for i, s := range steps {
 		if s.at >= 0 {
@@ -62,24 +89,30 @@ func TestHandlerAuthGaugePair(t *testing.T) {
 	}
 
 	if got, want := gaugeNames(t, f.logs, "ingestauth_auth_degraded", "ingestauth_auth_recovered"),
-		[]string{"ingestauth_auth_degraded", "ingestauth_auth_recovered", "ingestauth_auth_degraded"}; !slices.Equal(got, want) {
+		[]string{"ingestauth_auth_degraded", "ingestauth_auth_recovered", "ingestauth_auth_degraded", "ingestauth_auth_recovered"}; !slices.Equal(got, want) {
 		t.Fatalf("auth gauge events = %v, want %v (예산 · 차례 거절은 게이지를 바꾸지 않는다)", got, want)
 	}
 	degraded := handlerEvents(t, f.logs, "ingestauth_auth_degraded")[0]
 	if degraded.Level != "ERROR" || degraded.Reason != "status" || degraded.Status != http.StatusInternalServerError {
-		t.Errorf("auth_degraded = %+v, want ERROR with reason status and status 500", degraded)
+		t.Errorf("auth_degraded = %v, want ERROR with reason status and status 500", degraded)
 	}
-	recovered := lastEvent(t, f.logs, "ingestauth_auth_recovered")
-	want := handlerEvent{Level: "ERROR", DownFor: int64(8905 * time.Millisecond), DeniedDuring: 5, BudgetDenied: 1, RecheckDenied: 1}
-	if recovered.Level != want.Level || recovered.DownFor != want.DownFor || recovered.DeniedDuring != want.DeniedDuring ||
-		recovered.BudgetDenied != want.BudgetDenied || recovered.RecheckDenied != want.RecheckDenied {
-		t.Errorf("auth_recovered = %+v, want level %s, down_for %v, denied_during %d, budget_denied %d, recheck_denied %d (set t=1.125 · clear t=10.03)",
-			recovered, want.Level, time.Duration(want.DownFor), want.DeniedDuring, want.BudgetDenied, want.RecheckDenied)
+	// 둘째 짝의 셈은 둘째 set 에서 0 으로 시작한다 — 첫 짝의 거절이 쌓이지 않는다.
+	recovered := handlerEvents(t, f.logs, "ingestauth_auth_recovered")
+	for i, want := range []handlerEvent{
+		{Level: "ERROR", DownFor: int64(8905 * time.Millisecond), DeniedDuring: 5, BudgetDenied: 1, RecheckDenied: 1}, // set t=1.125 · clear t=10.03
+		{Level: "ERROR", DownFor: int64(905 * time.Millisecond), DeniedDuring: 1},                                     // set t=12.125 · clear t=13.03
+	} {
+		got := recovered[i]
+		if got.Level != want.Level || got.DownFor != want.DownFor || got.DeniedDuring != want.DeniedDuring ||
+			got.BudgetDenied != want.BudgetDenied || got.RecheckDenied != want.RecheckDenied {
+			t.Errorf("auth_recovered[%d] = %v, want level %s, down_for %v, denied_during %d, budget_denied %d, recheck_denied %d",
+				i, got, want.Level, time.Duration(want.DownFor), want.DeniedDuring, want.BudgetDenied, want.RecheckDenied)
+		}
 	}
 }
 
-// 거부 목록 짝(설계 6절 · 2-4 713행 — 부31): 파일 권한을 뺐다가 되돌리면 denylist_error · denylist_recovered 가 같은
-// 등급(ERROR)으로 한 번씩 난다. 이 짝은 DenyList 가 내고(c2) 처리기는 다시 내지 않는다(작업 지시 2절).
+// 거부 목록 짝(설계 6절 · 2-4 713행): 파일 권한을 뺐다가 되돌리면 denylist_error · denylist_recovered 가 같은
+// 등급(ERROR)으로 한 번씩 난다. 이 짝은 DenyList 가 내고 처리기는 다시 내지 않는다.
 func TestHandlerDenylistGaugePair(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root 는 권한 검사를 우회한다")
@@ -103,7 +136,7 @@ func TestHandlerDenylistGaugePair(t *testing.T) {
 	}
 }
 
-// 기록 짝(설계 6절 「쓰기 실패 → set · 첫 쓰기 성공 → clear」 · 2-4 713행 — 부31): 기록 디렉터리 쓰기 권한을 뺐다가
+// 기록 짝(설계 6절 「쓰기 실패 → set · 첫 쓰기 성공 → clear」 · 2-4 713행): 기록 디렉터리 쓰기 권한을 뺐다가
 // 되돌리면 connlog_error · connlog_recovered 가 같은 등급(ERROR)으로 한 번씩 난다. 실패가 이어져도 set 은 한 번이다.
 func TestHandlerConnLogGaugePair(t *testing.T) {
 	if os.Geteuid() == 0 {
@@ -174,7 +207,7 @@ func TestHandlerFailedClearedLevelAndScope(t *testing.T) {
 	}
 }
 
-// 기록 게이지는 쓰기와 전이를 잠금 하나로 묶는다(결함 예측 P8): 실패하는 쓰기와 성공하는 쓰기가 여러 고루틴에서
+// 기록 게이지는 쓰기와 전이를 잠금 하나로 묶는다: 실패하는 쓰기와 성공하는 쓰기가 여러 고루틴에서
 // 겹쳐도 경쟁이 없고(-race), connlog_error 와 connlog_recovered 가 error 로 시작해 번갈아 나며, 마지막 쓰기가
 // 성공이면 recovered 로 끝난다. 실패하는 쓰기는 빈 토큰이다 — ConnLog.Append 가 파일에 닿기 전에 에러를 돌려준다.
 func TestConnLogGaugeConcurrentAppends(t *testing.T) {
@@ -213,7 +246,65 @@ func TestConnLogGaugeConcurrentAppends(t *testing.T) {
 	}
 }
 
-// 게이지 상태는 잠금 안에서 바뀌고 set · clear 로그는 그 차례대로 난다(결함 예측 P6 · P8): 여러 요청이 판정 불가 ·
+// 판정 불가로 끝난 거절의 게이지 set · 그 거절의 셈 · publish_denied 로그는 한 차례로 난다(설계 6절 「denied_during 은
+// 게이지가 선 동안(set 을 낸 요청 포함) publish_denied 로 끝난 publish 수」). 판정 불가와 쓸 수 있는 값이 여러
+// 고루틴에서 함께 와도, auth_degraded 에서 다음 auth_recovered 까지 난 publish_denied 줄 수가 그 recovered 의
+// denied_during 과 같고, 세운 요청이 늘 들어 1 이상이다. 세운 요청의 셈이 다른 요청의 clear 뒤로 밀리면 0 이 되고, 거절
+// 로그가 셈과 떨어지면 줄 수와 셈이 어긋난다. 판마다 출발 장벽을 함께 지나 겹침이 스케줄에 기대지 않고, 로그 처리기가
+// 거절 기록마다 차례를 넘겨(yieldingHandler) 거절 로그를 내는 자리와 게이지 잠금 사이의 틈을 넓힌다(-race).
+func TestHandlerAuthGaugeCountsEveryDenialWhileDegraded(t *testing.T) {
+	if p := runtime.GOMAXPROCS(0); p < 2 {
+		t.Skipf("GOMAXPROCS=%d — 게이지 경쟁은 P 가 둘 이상일 때만 가른다", p)
+	}
+	f := newHandlerFixture(t, fixtureOptions{})
+	log := slog.New(yieldingHandler{slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})})
+	f.h.log, f.h.authGauge.log = log, log // 거절 로그와 게이지 로그가 한 처리기로 줄을 선다
+	f.auth.setAnswer(func(token string) authAnswer {
+		if token[len(token)-1]%2 == 1 {
+			return answerUndecided(0)
+		}
+		return answerUsable(0)
+	})
+	const rounds, workers = 200, 8
+	for round := range rounds {
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for w := range workers {
+			n := round*workers + w
+			r := newAuthRequest(t, publishBody(waveToken(n), testConnID(n)))
+			wg.Go(func() {
+				<-start
+				f.serve(r)
+			})
+		}
+		close(start)
+		wg.Wait()
+	}
+
+	degraded, segments := false, 0
+	denied := 0 // 지금 구간(degraded 뒤)에 난 publish_denied 줄 수
+	for i, e := range handlerEvents(t, f.logs, "") {
+		switch e.Msg {
+		case "ingestauth_auth_degraded":
+			degraded, denied = true, 0
+		case "ingestauth_publish_denied":
+			if degraded {
+				denied++
+			}
+		case "ingestauth_auth_recovered":
+			segments++
+			if e.DeniedDuring != denied || e.DeniedDuring < 1 {
+				t.Errorf("event %d: auth_recovered denied_during = %d after %d publish_denied lines since auth_degraded, want equal and at least 1", i, e.DeniedDuring, denied)
+			}
+			degraded = false
+		}
+	}
+	if segments == 0 {
+		t.Errorf("auth gauge segments = 0, want degraded/recovered pairs (판정 불가와 판정 결과가 섞이지 않았다)")
+	}
+}
+
+// 게이지 상태는 잠금 안에서 바뀌고 set · clear 로그는 그 차례대로 난다: 여러 요청이 판정 불가 ·
 // 판정 결과 · 기록 쓰기를 함께 내도 auth 게이지 이벤트는 degraded 로 시작해 번갈아 나고 경쟁이 없다(-race).
 func TestHandlerGaugesUnderConcurrentRequests(t *testing.T) {
 	f := newHandlerFixture(t, fixtureOptions{})

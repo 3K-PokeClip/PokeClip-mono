@@ -32,30 +32,37 @@ const (
 var connIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // mtxRequest 는 MediaMTX 인증 요청(10필드 — 포크 auth/manager.go 203–225행) 가운데 처리기가 보는 것이다. token ·
-// query · userAgent 는 받지 않는다. user · password 는 api 행만 견주고 publish 는 읽지 않는다(설계 2-4).
+// query · userAgent 는 받지 않는다. user · password 는 api 행만 견주므로 action=api 일 때만 채운다(설계 2-4 「읽지도
+// 기록하지도 않는 필드」 — publish 의 user · password).
 type mtxRequest struct {
-	ip       netip.Addr // 인증을 청한 클라이언트의 주소(IPv4-mapped 는 IPv4 로). api 행이 SelfIP 와 견준다
-	user     string
-	password string
+	ip       netip.Addr // 인증을 청한 클라이언트의 주소(comparableAddr). api 행이 SelfIP 와 견준다
+	user     string     // action=api 일 때만
+	password string     // action=api 일 때만
 	action   string
 	path     string
 	protocol string
 	connID   string // 연결 id. 본문에서 null 이면 비어 있다
 }
 
-// wireRequest 는 인증 요청 본문의 JSON 꼴이다. 모르는 필드는 버린다.
+// wireRequest 는 인증 요청 본문의 JSON 꼴 가운데 모든 행이 보는 필드다. 모르는 필드는 버린다 — user · password 도
+// 여기서는 해석하지 않는다(wireCredentials).
 type wireRequest struct {
 	IP       string  `json:"ip"`
-	User     string  `json:"user"`
-	Password string  `json:"password"`
 	Action   string  `json:"action"`
 	Path     string  `json:"path"`
 	Protocol string  `json:"protocol"`
 	ID       *string `json:"id"`
 }
 
+// wireCredentials 는 action=api 의 자격 필드다. 다른 행은 이 둘을 해석하지 않는다.
+type wireCredentials struct {
+	User     string `json:"user"`
+	Password string `json:"password"`
+}
+
 // readRequest 는 본문을 maxRequestBytes 까지 읽어 mtxRequest 로 만든다. 받지 못하면 ok 가 거짓이고 invalid 가 그
-// 까닭이다(ingestauth_request_invalid 의 reason). 본문의 값은 까닭에 싣지 않는다.
+// 까닭이다(ingestauth_request_invalid 의 reason). 본문의 값은 까닭에 싣지 않는다. 자격 필드는 action=api 일 때만 따로
+// 해석한다 — 그 꼴이 틀린 api 요청은 malformed 다.
 func readRequest(body io.Reader) (req mtxRequest, invalid string, ok bool) {
 	// 상한보다 한 바이트 더 읽어야 넘쳤는지 알 수 있다.
 	raw, err := io.ReadAll(io.LimitReader(body, maxRequestBytes+1))
@@ -81,23 +88,39 @@ func readRequest(body io.Reader) (req mtxRequest, invalid string, ok bool) {
 		}
 		connID = *w.ID
 	}
-	return mtxRequest{
-		ip:       ip.Unmap(),
-		user:     w.User,
-		password: w.Password,
+	req = mtxRequest{
+		ip:       comparableAddr(ip),
 		action:   w.Action,
 		path:     w.Path,
 		protocol: w.Protocol,
 		connID:   connID,
-	}, "", true
+	}
+	if w.Action == actionAPI {
+		var c wireCredentials
+		if err := json.Unmarshal(raw, &c); err != nil {
+			return mtxRequest{}, invalidMalformed, false
+		}
+		req.user, req.password = c.User, c.Password
+	}
+	return req, "", true
 }
 
-// peerAddr 는 TCP 피어 주소(http.Request.RemoteAddr — 「IP:포트」)의 IP 다. 포트를 떼고 IPv4-mapped IPv6 는 IPv4 로
-// 바꾼다. 해석하지 못하면 ok 가 거짓이다.
+// peerAddr 는 TCP 피어 주소(http.Request.RemoteAddr — 「IP:포트」)의 IP 다. 포트를 떼고 comparableAddr 로 바꾼다.
+// 해석하지 못하면 ok 가 거짓이다.
 func peerAddr(remoteAddr string) (addr netip.Addr, ok bool) {
 	ap, err := netip.ParseAddrPort(remoteAddr)
 	if err != nil {
 		return netip.Addr{}, false
 	}
-	return ap.Addr().Unmap(), true
+	return comparableAddr(ap.Addr()), true
+}
+
+// comparableAddr 는 a 를 견줄 꼴로 바꾼다 — IPv4-mapped IPv6 는 IPv4 로 풀되, zone 이 붙은 주소는 그대로 둔다. Unmap 은
+// zone 까지 지우므로 풀면 zone 붙은 mapped 주소가 zone 없는 IPv4 와 같아진다 — zone 은 그 주소의 일부라 다른 주소로
+// 본다. TCP 피어 · 본문 ip · 설정 주소(CallerIP · SelfIP)가 모두 이것을 거친다.
+func comparableAddr(a netip.Addr) netip.Addr {
+	if a.Zone() != "" {
+		return a
+	}
+	return a.Unmap()
 }

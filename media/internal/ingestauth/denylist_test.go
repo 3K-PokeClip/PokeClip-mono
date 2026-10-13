@@ -358,41 +358,41 @@ func TestDenyListGaugeReemitsWhenReasonChanges(t *testing.T) {
 }
 
 // Contains(처리기 여럿)와 Check(healthz)가 동시에 돌아도 합집합 · 게이지가 경쟁하지 않는다(-race).
-// 파일은 이름 바꾸기로 교체한다 — 운영자의 해제 · 틀린 줄 걷기 절차와 같은 꼴이다.
+// 파일은 이름 바꾸기로 교체한다 — 운영자의 해제 · 틀린 줄 걷기 절차와 같은 꼴이다. 판마다 시험 고루틴이
+// 출발 장벽을 열고 교체 하나와 읽는 일꾼 넷이 함께 지난다 — 겹침이 스케줄에 기대지 않는다.
 func TestDenyListConcurrentUse(t *testing.T) {
 	path, d, _ := newTestDenyList(t, testTokenA+"\n")
 	if err := d.Check(); err != nil {
 		t.Fatalf("Setup: Check() = %v, want nil", err)
 	}
-	const rounds = 200
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		for i := range rounds {
+	const rounds, readers = 200, 4
+	for i := range rounds {
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			<-start
 			content := testTokenA + "\n"
 			if i%2 == 1 {
 				content += testTokenB + "\n"
 			}
 			if err := replaceFile(path, content); err != nil {
 				t.Errorf("replaceFile(%q) returned error: %v", path, err)
-				return
 			}
-		}
-	})
-	for range 4 {
-		wg.Go(func() {
-			for range rounds {
+		})
+		for range readers {
+			wg.Go(func() {
+				<-start
 				if got, err := d.Contains(testTokenA); err != nil || !got {
 					t.Errorf("Contains(%q) = %v, %v, want true, nil", testTokenA, got, err)
-					return
 				}
 				if err := d.Check(); err != nil {
 					t.Errorf("Check() = %v, want nil", err)
-					return
 				}
-			}
-		})
+			})
+		}
+		close(start)
+		wg.Wait()
 	}
-	wg.Wait()
 }
 
 // replaceFile 은 content 를 같은 디렉터리의 임시 파일에 쓴 뒤 이름 바꾸기로 path 에 끼운다.

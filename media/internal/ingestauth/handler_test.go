@@ -1,6 +1,8 @@
 package ingestauth
 
 import (
+	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +20,7 @@ import (
 
 // validOptions 는 NewHandler 가 받는 선택값이다 — 시험이 한 칸씩 망가뜨린다.
 func validOptions() Options {
-	return Options{CallerIP: testCallerIP, SelfIP: testSelfIP, APIUser: testAPIUser, APIPass: testAPIPass}
+	return Options{CallerIP: testCallerIP, SelfIP: testSelfIP, APIUser: testAPIUser, APIPass: NewSecret(testAPIPass)}
 }
 
 // NewHandler 는 쓸 수 없는 선택값이면 에러다(설계 2-6 「필수값이 비면 기동 실패」). 빈 자격을 받으면 SelfIP 의 누구나
@@ -40,7 +42,8 @@ func TestNewHandlerRejectsBadOptions(t *testing.T) {
 		{name: "CallerIP_영값", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.CallerIP = netip.Addr{} }},
 		{name: "SelfIP_영값", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.SelfIP = netip.Addr{} }},
 		{name: "APIUser_빈_값", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.APIUser = "" }},
-		{name: "APIPass_빈_값", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.APIPass = "" }},
+		{name: "APIPass_빈_값", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.APIPass = NewSecret("") }},
+		{name: "APIPass_영값", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.APIPass = Secret{} }},
 		{name: "Deadline_음수", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.Deadline = -time.Millisecond }},
 		{name: "Deadline_MaxDeadline_초과", resolver: resolver, deny: deny, conns: conns, edit: func(o *Options) { o.Deadline = MaxDeadline + time.Nanosecond }},
 	}
@@ -113,14 +116,14 @@ func TestNewHandlerServesAuthRequests(t *testing.T) {
 	rr, served, finish := f.stalledPublish(t, testTokenA, testConnID(1))
 	waitClosed(t, served, "the guard's 503 through NewHandler")
 	if rr.Code != http.StatusServiceUnavailable || rr.Body.String() != "timeout" {
-		t.Errorf("stalled publish through NewHandler = %d %q, want 503 \"timeout\" from the guard", rr.Code, rr.Body.String())
+		t.Errorf("stalled publish through NewHandler = %d with a %d-byte body (is \"timeout\": %t), want 503 \"timeout\" from the guard", rr.Code, rr.Body.Len(), rr.Body.String() == "timeout")
 	}
 	finish()
 	waitForInnerEnd(t, logs) // 늦게 깬 안쪽 처리기가 끝난 뒤에 시험을 마친다
 }
 
 // TCP 피어가 CallerIP 가 아니면 본문을 읽기 전에 403(본문 없음)이다(판정표 첫 행). 포트를 떼고 IPv4-mapped IPv6 는
-// IPv4 로 견준다.
+// IPv4 로 견준다. zone 이 붙은 주소는 풀지 않는다 — zone 은 그 주소의 일부라 zone 없는 CallerIP 와 다르다.
 func TestHandlerChecksCaller(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -130,6 +133,7 @@ func TestHandlerChecksCaller(t *testing.T) {
 	}{
 		{name: "CallerIP", remoteAddr: "192.0.2.10:40000", wantCode: http.StatusOK},
 		{name: "IPv4-mapped_CallerIP", remoteAddr: "[::ffff:192.0.2.10]:40000", wantCode: http.StatusOK},
+		{name: "zone_붙은_IPv4-mapped_CallerIP", remoteAddr: "[::ffff:192.0.2.10%eth0]:40000", wantCode: http.StatusForbidden, wantRemote: "::ffff:192.0.2.10%eth0"},
 		{name: "다른_IPv4", remoteAddr: "192.0.2.11:40000", wantCode: http.StatusForbidden, wantRemote: "192.0.2.11"},
 		{name: "SelfIP", remoteAddr: "192.0.2.20:40000", wantCode: http.StatusForbidden, wantRemote: "192.0.2.20"},
 		{name: "IPv6", remoteAddr: "[2001:db8::10]:40000", wantCode: http.StatusForbidden, wantRemote: "2001:db8::10"},
@@ -247,6 +251,45 @@ func requestInvalidMismatch(t *testing.T, f *handlerFixture, rr *httptest.Respon
 	return errors.Join(errs...)
 }
 
+// user · password 는 action=api 에서만 해석 · 보관한다(설계 2-4 「읽지도 기록하지도 않는 필드」 — publish 의 user ·
+// password). publish 는 그 둘의 JSON 꼴이 틀려도(숫자 · 객체) 판정표의 다음 행으로 가고, 해석한 요청에 그 값을 쥐지
+// 않는다. api 는 둘을 견주므로 꼴이 틀리면 본문 해석 실패(400 · malformed)다.
+func TestHandlerReadsCredentialsOnlyForAPI(t *testing.T) {
+	t.Run("publish_꼴_틀린_자격", func(t *testing.T) {
+		f := newHandlerFixture(t, fixtureOptions{})
+		raw := mustJSON(t, publishBody(testTokenA, testConnID(1)))
+		raw = bytes.Replace(raw, []byte(`"user":"streamid-user"`), []byte(`"user":5`), 1)
+		raw = bytes.Replace(raw, []byte(`"password":"streamid-pass"`), []byte(`"password":{"s":1}`), 1)
+		if !bytes.Contains(raw, []byte(`"user":5`)) || !bytes.Contains(raw, []byte(`"password":{"s":1}`)) {
+			t.Fatalf("Setup: the publish body does not carry the non-string credentials")
+		}
+		if rr := f.serve(newAuthRequest(t, raw)); rr.Code != http.StatusOK {
+			t.Errorf("publish whose user · password are not JSON strings = %d, want 200 (publish 는 그 둘을 해석하지 않는다)", rr.Code)
+		}
+	})
+	t.Run("publish_자격_보관_안_함", func(t *testing.T) {
+		req, invalid, ok := readRequest(bytes.NewReader(mustJSON(t, publishBody(testTokenA, testConnID(1)))))
+		if !ok {
+			t.Fatalf("readRequest(publish) = invalid %q, want a request", invalid)
+		}
+		if req.user != "" || req.password != "" {
+			t.Errorf("readRequest(publish) kept credentials of lengths %d · %d, want none", len(req.user), len(req.password))
+		}
+	})
+	t.Run("api_꼴_틀린_자격", func(t *testing.T) {
+		f := newHandlerFixture(t, fixtureOptions{})
+		raw := mustJSON(t, apiBody(testSelfIP.String(), testAPIUser, testAPIPass))
+		raw = bytes.Replace(raw, []byte(`"user":"`+testAPIUser+`"`), []byte(`"user":5`), 1)
+		if !bytes.Contains(raw, []byte(`"user":5`)) {
+			t.Fatalf("Setup: the api body does not carry the non-string user")
+		}
+		rr := f.serve(newAuthRequest(t, raw))
+		if err := requestInvalidMismatch(t, f, rr, "malformed"); err != nil {
+			t.Errorf("api request whose user is not a JSON string: %v", err)
+		}
+	})
+}
+
 // 본문은 16 KiB 까지 받는다 — 정확히 16 KiB 인 본문은 판정표의 다음 행으로 간다(설계 2-4 「16 KiB 까지만 읽는다」).
 func TestHandlerReadsBodyUpTo16KiB(t *testing.T) {
 	f := newHandlerFixture(t, fixtureOptions{})
@@ -263,15 +306,18 @@ func TestHandlerReadsBodyUpTo16KiB(t *testing.T) {
 }
 
 // action=api 는 출발지(본문의 ip)가 SelfIP(cut)이고 자격이 맞을 때만 200(본문 없음)이고, 그 밖은 401(본문 없음 ·
-// api_denied — ip)이다(판정표 api 두 행). 자격은 상수 시간으로 견준다 — 길이가 달라도 같은 길을 탄다.
+// api_denied — ip)이다(판정표 api 두 행). 자격은 상수 시간으로 견준다 — 길이가 달라도 같은 길을 탄다. 본문 ip 도 TCP
+// 피어와 같은 규칙으로 견준다 — IPv4-mapped 는 풀고 zone 붙은 주소는 풀지 않는다.
 func TestHandlerAPI(t *testing.T) {
 	tests := []struct {
 		name     string
 		body     mtxAuthBody
 		wantCode int
+		wantIP   string // api_denied 의 ip. 비면 본문 ip 를 Unmap 한 값
 	}{
 		{name: "SelfIP_맞는_자격", body: apiBody("192.0.2.20", testAPIUser, testAPIPass), wantCode: http.StatusOK},
 		{name: "IPv4-mapped_SelfIP", body: apiBody("::ffff:192.0.2.20", testAPIUser, testAPIPass), wantCode: http.StatusOK},
+		{name: "zone_붙은_IPv4-mapped_SelfIP", body: apiBody("::ffff:192.0.2.20%eth0", testAPIUser, testAPIPass), wantCode: http.StatusUnauthorized, wantIP: "::ffff:192.0.2.20%eth0"},
 		{name: "틀린_사용자", body: apiBody("192.0.2.20", "ingest-autH", testAPIPass), wantCode: http.StatusUnauthorized},
 		{name: "틀린_비번", body: apiBody("192.0.2.20", testAPIUser, testAPIPass[:len(testAPIPass)-1]+"2"), wantCode: http.StatusUnauthorized},
 		{name: "더_긴_비번", body: apiBody("192.0.2.20", testAPIUser, testAPIPass+"0"), wantCode: http.StatusUnauthorized},
@@ -298,12 +344,44 @@ func TestHandlerAPI(t *testing.T) {
 				}
 				return
 			}
-			wantIP := netip.MustParseAddr(tc.body.IP).Unmap().String()
+			wantIP := tc.wantIP
+			if wantIP == "" {
+				wantIP = netip.MustParseAddr(tc.body.IP).Unmap().String()
+			}
 			if len(denied) != 1 || denied[0].Level != "WARN" || denied[0].IP != wantIP || len(allowed) != 0 {
 				t.Errorf("api %s: api_denied %+v · api_allowed %d, want one WARN with ip %q · 0", tc.name, denied, len(allowed), wantIP)
 			}
 			if f.auth.callCount() != 0 {
 				t.Errorf("api %s: fake auth calls = %d, want 0", tc.name, f.auth.callCount())
+			}
+		})
+	}
+}
+
+// 설정 주소(CallerIP · SelfIP)도 TCP 피어 · 본문 ip 와 같은 규칙으로 견준다 — IPv4-mapped 로 준 설정값은 IPv4 로 풀고,
+// zone 이 붙은 설정값은 풀지 않아 zone 없는 피어 · ip 와 다르다.
+func TestHandlerComparesConfiguredAddresses(t *testing.T) {
+	readBody := mtxAuthBody{IP: testPublisherIP, Action: "read"}
+	tests := []struct {
+		name     string
+		opts     fixtureOptions
+		remote   string // TCP 피어. 비면 192.0.2.10:40000
+		body     mtxAuthBody
+		wantCode int
+	}{
+		{name: "IPv4-mapped_CallerIP", opts: fixtureOptions{callerIP: netip.MustParseAddr("::ffff:192.0.2.10")}, body: readBody, wantCode: http.StatusOK},
+		{name: "IPv4-mapped_SelfIP", opts: fixtureOptions{selfIP: netip.MustParseAddr("::ffff:192.0.2.20")}, body: apiBody("192.0.2.20", testAPIUser, testAPIPass), wantCode: http.StatusOK},
+		{name: "zone_CallerIP_같은_zone_피어", opts: fixtureOptions{callerIP: netip.MustParseAddr("::ffff:192.0.2.10%eth0")}, remote: "[::ffff:192.0.2.10%eth0]:40000", body: readBody, wantCode: http.StatusOK},
+		{name: "zone_CallerIP_zone_없는_피어", opts: fixtureOptions{callerIP: netip.MustParseAddr("::ffff:192.0.2.10%eth0")}, body: readBody, wantCode: http.StatusForbidden},
+		{name: "zone_SelfIP_zone_없는_ip", opts: fixtureOptions{selfIP: netip.MustParseAddr("::ffff:192.0.2.20%eth0")}, body: apiBody("192.0.2.20", testAPIUser, testAPIPass), wantCode: http.StatusUnauthorized},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newHandlerFixture(t, tc.opts)
+			r := newAuthRequest(t, tc.body)
+			r.RemoteAddr = cmp.Or(tc.remote, "192.0.2.10:40000")
+			if rr := f.serve(r); rr.Code != tc.wantCode {
+				t.Errorf("%s request from TCP peer %q = %d, want %d", tc.body.Action, r.RemoteAddr, rr.Code, tc.wantCode)
 			}
 		})
 	}

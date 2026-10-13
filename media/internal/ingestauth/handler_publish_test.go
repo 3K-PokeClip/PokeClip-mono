@@ -18,7 +18,7 @@ import (
 )
 
 // requestFailsBaseURL 은 keyresolve.NewClient 를 지나고 Resolve 의 요청 만들기에서 실패하는 BaseURL 이다(영역 id 의
-// '[' — 다시 해석하면 invalid IP-literal). Resolve 가 「그 밖의 에러」를 돌려주고, 그 문구에는 endpoint 가 실린다.
+// '[' — 다시 해석하면 invalid IP-literal). Resolve 가 「그 밖의 에러」를 돌려준다(그 문구는 고정 문구라 끝점이 없다).
 const requestFailsBaseURL = "http://[fe80::1%25%20%5b]:8082"
 
 // lastDenied 는 마지막 publish_denied 다. 없으면 영값과 거짓이다.
@@ -43,8 +43,8 @@ func allowedConns(t *testing.T, dir string) map[string]string {
 
 // 형식 행(판정표 — publish 가 아님 · protocol≠srt · 토큰 꼴 아님 · id 없음)은 401 · 본문 없음 · publish_denied 이고
 // resolve 를 부르지 않는다. path 는 토큰 꼴일 때만 싣는다 — 토큰 꼴이 아닌 값은 잘못 붙인 비밀일 수 있다. 형식 행은
-// 거부 목록 · 예산 · 차례보다 앞이라 기억(도착 · 칸)을 바꾸지 않고, 토큰 꼴이 아닌 값은 기억의 키가 되지 않는다(c3
-// 보안 2 · 작업 지시 3절 c3 2).
+// 거부 목록 · 예산 · 차례보다 앞이라 기억(도착 · 칸)을 바꾸지 않고, 토큰 꼴이 아닌 값은 기억의 키가 되지 않는다(설계
+// 2-4 판정표 순서).
 func TestHandlerPublishFormRows(t *testing.T) {
 	junk := "live/" + strings.Repeat("x", 200)
 	tests := []struct {
@@ -80,13 +80,13 @@ func TestHandlerPublishFormRows(t *testing.T) {
 				t.Fatalf("publish %s: publish_denied = %+v (found %t), want WARN with reason %q", tc.name, e, ok, tc.wantReason)
 			}
 			if e.has("path") != (tc.wantPath != "") || e.Path != tc.wantPath {
-				t.Errorf("publish %s: publish_denied path = %q (present %t), want %q", tc.name, e.Path, e.has("path"), tc.wantPath)
+				t.Errorf("publish %s: publish_denied path = %s (present %t), want %q", tc.name, shownIf(e.Path, streamkey.IsToken), e.has("path"), tc.wantPath)
 			}
 			if tc.wantConnID != (e.ConnID == testConnID(1)) || tc.wantConnID != e.has("conn_id") {
-				t.Errorf("publish %s: publish_denied conn_id = %q (present %t), want present %t", tc.name, e.ConnID, e.has("conn_id"), tc.wantConnID)
+				t.Errorf("publish %s: publish_denied conn_id = %s (present %t), want present %t", tc.name, shownIf(e.ConnID, connIDPattern.MatchString), e.has("conn_id"), tc.wantConnID)
 			}
 			if e.ResolveStatus != "" || e.ResolveMS != 0 || e.has("wait") {
-				t.Errorf("publish %s: resolve_status %q · resolve_ms %d · wait present %t, want empty · 0 · absent", tc.name, e.ResolveStatus, e.ResolveMS, e.has("wait"))
+				t.Errorf("publish %s: resolve_status %s · resolve_ms %d · wait present %t, want empty · 0 · absent", tc.name, shownIf(e.ResolveStatus, closedWord.MatchString), e.ResolveMS, e.has("wait"))
 			}
 			if n := f.auth.callCount(); n != 0 {
 				t.Errorf("publish %s: fake auth calls = %d, want 0", tc.name, n)
@@ -126,7 +126,7 @@ func TestHandlerPublishDenylistedBeforeResolve(t *testing.T) {
 }
 
 // C2 읽기 실패 단언(설계 착수 체크리스트 207행): 거부 목록 파일 권한을 빼면 publish 는 401(denylist_unreadable)이고
-// resolve 를 부르지 않는다. 권한을 되돌리면 다시 허용한다(음성 B3 — 읽기 실패를 직전 집합으로 보면 허용된다).
+// resolve 를 부르지 않는다. 권한을 되돌리면 다시 허용한다(읽기 실패를 직전 집합으로 보면 허용된다).
 func TestHandlerPublishDenylistUnreadable(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root 는 권한 검사를 우회한다")
@@ -200,8 +200,8 @@ func sameAllowed(got, want handlerEvent) bool {
 }
 
 // resolve 행(판정표): 판정 불가는 401 · reason=undecided · resolve_status 이고 그 토큰을 기억하며 auth 게이지를 세운다.
-// valid:true 인데 userId 가 없으면 keyresolve 가 판정 불가(parse)로 돌려준다(c1 이월 2). valid:false 는 401 이고
-// reason 은 닫힌 집합이다 — 모르는 이유 · 빈 이유 · 긴 이유는 rejected 로 싣고 원문을 싣지 않는다(c1 이월 6). passphrase
+// valid:true 인데 userId 가 없으면 keyresolve 가 판정 불가(parse)로 돌려준다. valid:false 는 401 이고
+// reason 은 닫힌 집합이다 — 모르는 이유 · 빈 이유 · 긴 이유는 rejected 로 싣고 원문을 싣지 않는다. passphrase
 // 형식 밖은 publish_denied 대신 passphrase_invalid(ERROR — path)다. 어느 행도 기록에 줄을 쓰지 않는다.
 func TestHandlerPublishResolveRows(t *testing.T) {
 	longReason := strings.Repeat("Z", 3000)
@@ -268,6 +268,48 @@ func TestHandlerPublishResolveRows(t *testing.T) {
 	}
 }
 
+// 게이지가 선 상태(다른 토큰의 판정 불가)에서 온 resolve 행: 판정 결과(valid:false 의 모든 이유 · passphrase 형식 밖)는
+// clear — auth_recovered 하나이고 그 셈에는 게이지를 세운 거절만 든다(clear 를 낸 요청은 게이지가 내려간 뒤의
+// 거절이다). 판정 불가는 게이지를 그대로 두고, 그 밖의 에러(처리기 · 설정 결함 — auth 의 판정이 아니다)도 그대로다(설계
+// 2-4 판정표 · 6절 게이지 표 「판정 결과에는 valid:false · 형식 밖도 들어간다」).
+func TestHandlerPublishResolveRowsWhileDegraded(t *testing.T) {
+	tests := []struct {
+		name          string
+		opts          fixtureOptions
+		answer        authAnswer
+		wantRecovered bool
+	}{
+		{name: "판정_불가", answer: answerUndecided(10 * time.Millisecond)},
+		{name: "MALFORMED", answer: answerRejected("MALFORMED", 10*time.Millisecond), wantRecovered: true},
+		{name: "NOT_FOUND", answer: answerRejected("NOT_FOUND", 10*time.Millisecond), wantRecovered: true},
+		{name: "REVOKED", answer: answerRejected("REVOKED", 10*time.Millisecond), wantRecovered: true},
+		{name: "모르는_이유", answer: answerRejected("SOMETHING_NEW", 10*time.Millisecond), wantRecovered: true},
+		{name: "이유_없음", answer: authAnswer{took: 10 * time.Millisecond, body: `{"valid":false}`}, wantRecovered: true},
+		{name: "형식_밖_passphrase", answer: answerOutOfFormat(10 * time.Millisecond), wantRecovered: true},
+		{name: "그_밖의_에러", opts: fixtureOptions{resolver: newTestResolver(t, requestFailsBaseURL)}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newHandlerFixture(t, tc.opts)
+			f.h.authGauge.denied(reasonUndecided, &undecidedCause{failure: "status", status: http.StatusInternalServerError}, func() {})
+			f.auth.answerAll(tc.answer)
+
+			rr := f.publish(t, testTokenA, testConnID(1))
+
+			if rr.Code != http.StatusUnauthorized {
+				t.Errorf("publish answered %s while degraded = %d, want 401", tc.name, rr.Code)
+			}
+			recovered := handlerEvents(t, f.logs, "ingestauth_auth_recovered")
+			switch {
+			case !tc.wantRecovered && len(recovered) != 0:
+				t.Errorf("publish answered %s while degraded: auth_recovered events = %d, want 0 (게이지 그대로)", tc.name, len(recovered))
+			case tc.wantRecovered && (len(recovered) != 1 || recovered[0].Level != "ERROR" || recovered[0].DeniedDuring != 1):
+				t.Errorf("publish answered %s while degraded: auth_recovered = %v, want one ERROR with denied_during 1", tc.name, recovered)
+			}
+		})
+	}
+}
+
 // boolToInt 는 b 가 참이면 1 이다.
 func boolToInt(b bool) int {
 	if b {
@@ -276,37 +318,107 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// resolve ctx 에는 시한(Deadline — 0 이면 MaxDeadline)이 있다(c1 이월 4). 요청 ctx 가 끝날 때까지 붙잡는 가짜 auth
-// 에서도 처리기가 시한에 스스로 401(undecided · timeout)을 낸다 — 바깥 가드(Deadline + 50ms)의 503 이 아니다. 시한은
-// 요청이 처리기에 닿은 실제 시각부터 잰다.
+// resolve ctx 에는 시한(Deadline)이 있다. 요청 ctx 가 끝날 때까지 붙잡는 가짜 auth 에서도 처리기가 시한에 스스로
+// resolve 를 끝내 판정 불가(timeout)로 거절한다 — 그 시한은 Deadline 보다 이르지 않다. 처리기의 401 이 가드의 503 보다
+// 먼저인지는 실제 시간의 경주라 여기서 가르지 않는다 — resolve 시한이 가드보다 guardMargin 앞이라는 것은
+// TestHandlerPublishResolveEndsBeforeGuard 가 결정적으로 보고, Deadline 0 의 기본값(MaxDeadline)은
+// TestNewHandlerAppliesDefaults 가 본다.
 func TestHandlerPublishResolveHasDeadline(t *testing.T) {
-	tests := []struct {
-		name     string
-		deadline time.Duration
-		want     time.Duration
-	}{
-		{name: "기본_MaxDeadline", want: MaxDeadline},
-		{name: "짧은_Deadline", deadline: 30 * time.Millisecond, want: 30 * time.Millisecond},
+	const deadline = 30 * time.Millisecond
+	f := newHandlerFixture(t, fixtureOptions{deadline: deadline})
+	f.auth.answerAll(authAnswer{hang: true})
+	start := time.Now()
+
+	f.publish(t, testTokenA, testConnID(1))
+	end := waitForInnerEnd(t, f.logs)
+
+	if elapsed := time.Since(start); elapsed < deadline {
+		t.Errorf("publish against a hanging auth ended after %v, want at least the Deadline %v", elapsed, deadline)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newHandlerFixture(t, fixtureOptions{deadline: tc.deadline})
-			f.auth.answerAll(authAnswer{hang: true})
-			start := time.Now()
+	if end != "ingestauth_publish_denied" {
+		t.Errorf("publish against a hanging auth ended with %s, want ingestauth_publish_denied", end)
+	}
+	if e, ok := lastDenied(t, f.logs); !ok || e.Reason != "undecided" || e.ResolveStatus != "timeout" {
+		t.Errorf("publish_denied against a hanging auth = %v (found %t), want reason undecided with resolve_status timeout", e, ok)
+	}
+	if n := f.auth.callCount(); n != 1 {
+		t.Errorf("fake auth calls against a hanging auth = %d, want 1", n)
+	}
+}
 
-			rr := f.publish(t, testTokenA, testConnID(1))
+// resolve 의 시한은 요청의 시한(바깥 가드 — 바깥 층이 도착 시각에서 한 번 잰다)보다 guardMargin 앞이다(설계 3-7 「요청
+// 도착부터 응답까지」 · 바깥 가드 +50ms). 그래서 안쪽 처리기가 늦게 깨도 resolve 와 가드가 같은 도착 시각에서 재고,
+// resolve 가 시한에 끝나면 처리기가 가드보다 먼저 401 을 쓴다. 남은 시간이 guardMargin 안인 요청은 resolve 를 부르지
+// 않고(auth 호출 0) 늦은 요청으로 끝낸다(publish_late) — 부르면 곧바로 판정 불가(timeout)가 나 헛된 auth_degraded 와 그
+// 토큰의 기억이 생긴다. 요청 ctx 에 guardMargin 보다 가까운 시한을 달아, 실제로 기다리지 않고 시한의 유도를 가른다.
+func TestHandlerPublishResolveEndsBeforeGuard(t *testing.T) {
+	f := newHandlerFixture(t, fixtureOptions{})
+	f.auth.answerAll(answerUsable(10 * time.Millisecond))
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(guardMargin-time.Millisecond))
+	defer cancel()
 
-			elapsed := time.Since(start)
-			if rr.Code != http.StatusUnauthorized {
-				t.Errorf("publish against a hanging auth = %d, want 401 from the handler (not the guard's 503)", rr.Code)
-			}
-			if elapsed < tc.want || elapsed >= tc.want+guardMargin {
-				t.Errorf("publish against a hanging auth returned after %v, want within [%v, %v)", elapsed, tc.want, tc.want+guardMargin)
-			}
-			if e, ok := lastDenied(t, f.logs); !ok || e.Reason != "undecided" || e.ResolveStatus != "timeout" {
-				t.Errorf("publish_denied against a hanging auth = %+v (found %t), want reason undecided with resolve_status timeout", e, ok)
-			}
-		})
+	rr := f.serve(newAuthRequest(t, publishBody(testTokenA, testConnID(1))).WithContext(ctx))
+	end := waitForInnerEnd(t, f.logs)
+
+	if rr.Code == http.StatusOK {
+		t.Errorf("publish with less than guardMargin left = 200, want no 200 (resolve 시한이 이미 지났다)")
+	}
+	if n := f.auth.callCount(); n != 0 {
+		t.Errorf("fake auth calls for a publish with less than guardMargin left = %d, want 0", n)
+	}
+	if end != "ingestauth_publish_late" {
+		t.Errorf("publish with less than guardMargin left ended with %s, want ingestauth_publish_late", end)
+	}
+	if got := gaugeNames(t, f.logs, "ingestauth_auth_degraded", "ingestauth_auth_recovered"); len(got) != 0 {
+		t.Errorf("auth gauge events for a publish with less than guardMargin left = %v, want none", got)
+	}
+	if n := memorySize(f.h.failed); n != 0 {
+		t.Errorf("failed-token memory after a publish with less than guardMargin left has %d entries, want 0", n)
+	}
+}
+
+// MediaMTX 가 resolve 도중 요청을 버려도(재시작 · 리로드 · 망 — 요청 ctx 취소) 그 취소는 판정 불가가 아니다 — resolve
+// 는 요청 취소에서 떨어져 auth 의 답(또는 resolve 시한)으로 끝난다. 그래서 헛된 auth_degraded(ERROR)도 그 토큰의 기억도
+// 없다(설계 2-4 「헛된 auth_degraded · auth_recovered 짝이 나지 않는다」). 버린 요청에는 가드가 이미 답했으므로
+// 처리기의 쓰기는 버려지고 publish_late 로 끝난다. 취소는 늦은 요청 확인 뒤 · resolve 앞(차례 admit 의 시계 읽기)에서
+// 하고, 가드가 그 취소로 답한 뒤에 resolve 로 간다.
+func TestHandlerCallerCancelIsNotUndecided(t *testing.T) {
+	f := newHandlerFixture(t, fixtureOptions{})
+	f.auth.answerAll(answerUsable(10 * time.Millisecond))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	r := newAuthRequest(t, publishBody(testTokenA, testConnID(1))).WithContext(ctx)
+	rr := httptest.NewRecorder()
+	served := make(chan struct{})
+	f.clock.onRead(readAdmit, func() {
+		if n := f.auth.callCount(); n != 0 {
+			t.Errorf("the clock read hooked as admit came after %d resolve call(s), want before any", n)
+		}
+		cancel()
+		<-served
+	})
+	go func() {
+		defer close(served)
+		f.srv.ServeHTTP(rr, r)
+	}()
+
+	waitClosed(t, served, "the guard's answer to the dropped request")
+	end := waitForInnerEnd(t, f.logs)
+
+	if end != "ingestauth_publish_late" {
+		t.Errorf("publish dropped by MediaMTX before the resolve ended with %s, want ingestauth_publish_late", end)
+	}
+	if n := f.auth.callCount(); n != 1 {
+		t.Errorf("fake auth calls for a publish dropped before the resolve = %d, want 1 (resolve 는 요청 취소에서 떨어져 있다)", n)
+	}
+	if got := gaugeNames(t, f.logs, "ingestauth_auth_degraded", "ingestauth_auth_recovered"); len(got) != 0 {
+		t.Errorf("auth gauge events for a publish dropped by MediaMTX = %v, want none", got)
+	}
+	if _, remembered := entryOf(f.h.failed, testTokenA); remembered {
+		t.Errorf("token of a publish dropped by MediaMTX is remembered, want not (판정 불가가 아니다)")
+	}
+	if n := countDenied(t, f.logs, "undecided"); n != 0 {
+		t.Errorf("undecided denials for a publish dropped by MediaMTX = %d, want 0", n)
 	}
 }
 
@@ -340,7 +452,7 @@ func TestHandlerPublishConnLogUnwritable(t *testing.T) {
 	}
 }
 
-// C2 순서 단언(설계 착수 체크리스트 205행 · 계획 9-2 B1): 가짜 auth 가 resolve 를 처리하는 동안 거부 목록에 그 토큰을
+// C2 순서 단언(설계 착수 체크리스트 205행): 가짜 auth 가 resolve 를 처리하는 동안 거부 목록에 그 토큰을
 // 적은 뒤 valid:true 를 돌려준다. 응답은 401(denylisted)이고, 허용 연결 기록에는 그 연결의 줄이 있다 — 기록 추가가
 // 마지막 거부 확인보다 먼저다. 옛 순서(재확인 → 기록)면 줄이 없다.
 func TestHandlerPublishRecordsBeforeFinalDenyCheck(t *testing.T) {
@@ -398,9 +510,9 @@ func TestHandlerPublishFinalDenyCheckUnreadable(t *testing.T) {
 	}
 }
 
-// Resolve 의 그 밖의 에러(c1 이월 1 — 토큰 꼴 아님 · 요청 생성 실패 · nil ctx)는 처리기 기본 갈래로 401 이다. 게이지 ·
-// 기억은 건드리지 않고 에러 원문(요청 생성 실패면 endpoint 가 실린다)을 로그에 싣지 않는다. 처리기에 닿는 것은 요청
-// 생성 실패 하나다 — 나머지 둘은 judgeResolve 시험이 실제 에러로 본다.
+// Resolve 의 그 밖의 에러(토큰 꼴 아님 · 요청 생성 실패 · nil ctx)는 처리기 기본 갈래로 401 이다. 게이지 · 기억은
+// 건드리지 않고 에러 문구를 로그에 싣지 않는다 — 로그에 끝점 조각이 없다(keyresolve 의 그 문구도 끝점을 싣지 않는다).
+// 처리기에 닿는 것은 요청 생성 실패 하나다 — 나머지 둘은 judgeResolve 시험이 실제 에러로 본다.
 func TestHandlerPublishResolveRequestFailure(t *testing.T) {
 	f := newHandlerFixture(t, fixtureOptions{resolver: newTestResolver(t, requestFailsBaseURL)})
 
@@ -425,9 +537,9 @@ func TestHandlerPublishResolveRequestFailure(t *testing.T) {
 	}
 }
 
-// judgeResolve 는 Resolve 의 결과를 판정표의 갈래로 가른다. 그 밖의 에러 셋(c1 이월 1)은 실제 클라이언트가 돌려준 값으로
-// 본다 — 기억에 적지 않는다(outcome 없음). Valid 인데 영값 Passphrase 면 200 을 쓰지 않는 형식 밖이다(c1 이월 3 —
-// keyresolve 는 이 값을 내지 않아 처리기 수준으로는 닿지 않는다).
+// judgeResolve 는 Resolve 의 결과를 판정표의 갈래로 가른다. 그 밖의 에러 셋은 실제 클라이언트가 돌려준 값으로
+// 본다 — 기억에 적지 않는다(outcome 없음). Valid 인데 영값 Passphrase 면 200 을 쓰지 않는 형식 밖이다(keyresolve 는 이
+// 값을 내지 않아 처리기 수준으로는 닿지 않는다).
 func TestJudgeResolve(t *testing.T) {
 	pass, err := streamkey.NewPassphrase(testPassphrase)
 	if err != nil {
@@ -435,7 +547,7 @@ func TestJudgeResolve(t *testing.T) {
 	}
 	client := newTestResolver(t, "http://auth.test:8082")
 	_, notTokenErr := client.Resolve(t.Context(), "not-a-token")
-	var nilCtx context.Context // c1 이월 1 의 nil ctx 갈래를 실제 에러로 얻는다
+	var nilCtx context.Context // nil ctx 갈래를 실제 에러로 얻는다
 	_, nilCtxErr := client.Resolve(nilCtx, testTokenA)
 	_, requestErr := newTestResolver(t, requestFailsBaseURL).Resolve(t.Context(), testTokenA)
 	for name, err := range map[string]error{"not_token": notTokenErr, "nil_ctx": nilCtxErr, "request": requestErr} {
@@ -482,7 +594,7 @@ func TestJudgeResolve(t *testing.T) {
 
 // 요청 ctx 가 이미 끝난 publish 는 resolve 를 부르지 않는다(판정표 — 바깥 가드가 먼저 끝냄). 그래도 401 을 쓴다 — 안쪽
 // 처리기가 아무것도 쓰지 않고 돌아가면 TimeoutHandler 는 done 과 시한이 함께 준비됐을 때 그 응답을 200 으로 낼 수
-// 있다(결함 예측 P29). 안쪽 처리기를 가드 없이 곧바로 부른다.
+// 있다. 안쪽 처리기를 가드 없이 곧바로 부른다.
 func TestHandlerLatePublishWritesUnauthorized(t *testing.T) {
 	f := newHandlerFixture(t, fixtureOptions{})
 	ctx, cancel := context.WithCancel(t.Context())

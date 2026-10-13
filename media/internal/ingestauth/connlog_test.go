@@ -62,26 +62,30 @@ func TestConnLogLogsRotation(t *testing.T) {
 }
 
 // 잠금 안 at(설계 2-4 · 3-4): 여러 고루틴이 Append 한 뒤 파일의 at 이 줄 순서대로 커진다. at 을 잠금
-// 밖에서 찍으면 늦게 찍힌 줄이 먼저 쓰여 순서가 뒤집힌다(-race -count=20 으로 돈다).
+// 밖에서 찍으면 늦게 찍힌 줄이 먼저 쓰여 순서가 뒤집힌다(-race -count=20 으로 돈다). 판마다 시험 고루틴이 출발
+// 장벽을 열고 일꾼 모두가 함께 한 번씩 Append 한다 — 한 일꾼이 제 몫을 다 끝낸 뒤 다음 일꾼이 도는 스케줄은
+// 생기지 않는다.
 func TestConnLogAppendStampsAtInsideLock(t *testing.T) {
 	dir := t.TempDir()
 	c, _ := openTestConnLog(t, dir, 1<<20, newFakeClock())
-	const goroutines, perGoroutine = 8, 50
-	var wg sync.WaitGroup
-	for g := range goroutines {
-		wg.Go(func() {
-			for i := range perGoroutine {
-				if err := c.Append(testTokenA, testConnID(g*perGoroutine+i)); err != nil {
+	const goroutines, rounds = 8, 50
+	for round := range rounds {
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for g := range goroutines {
+			wg.Go(func() {
+				<-start
+				if err := c.Append(testTokenA, testConnID(round*goroutines+g)); err != nil {
 					t.Errorf("Append returned error: %v", err)
-					return
 				}
-			}
-		})
+			})
+		}
+		close(start)
+		wg.Wait()
 	}
-	wg.Wait()
 
 	lines := readLines(t, filepath.Join(dir, connLogName))
-	if want := 1 + goroutines*perGoroutine; len(lines) != want {
+	if want := 1 + goroutines*rounds; len(lines) != want {
 		t.Fatalf("line count = %d, want %d (시작 표시 하나 + Append 마다 한 줄)", len(lines), want)
 	}
 	for i := 1; i < len(lines); i++ {
