@@ -38,6 +38,8 @@ readonly POLICY_DIR="${SCRIPT_DIR}/../policy/guard"
 # conftest.toml 에서 그 경로로 바꿀 자리표시자.
 readonly MARKER_DIR="${SCRIPT_DIR}/guard-data"
 readonly MARKER_PLACEHOLDER='@GUARD_FIXTURE_MARKER@'
+# guard.sh 와 같은 저장소 고정 빈 설정 — conftest verify 에도 --config-file 로.
+readonly EMPTY_CONFIG="${MARKER_DIR}/empty-config.toml"
 
 failures=0
 run_output=""
@@ -185,7 +187,8 @@ expect_clean() {
 # Arguments:
 #   fixture 디렉터리 경로.
 # Returns:
-#   임시 디렉터리를 만들거나 복사 · 치환하지 못하면 1.
+#   임시 디렉터리를 만들거나 복사 · 치환하지 못하면, 또는 사본의
+#   conftest.toml 이 링크면 1.
 #######################################
 run_guard_outside() {
   local dir="$1"
@@ -194,6 +197,11 @@ run_guard_outside() {
   tmp="$(new_tmp_dir)" || return 1
   config="${tmp}/conftest.toml"
   if ! cp -R "${dir}/." "${tmp}/"; then
+    rm -rf -- "${tmp}"
+    return 1
+  fi
+  # 설정 파일이 링크면 치환하지 않고 준비 실패 — 링크 너머 파일에 쓰지 않는다.
+  if [[ -L "${config}" ]]; then
     rm -rf -- "${tmp}"
     return 1
   fi
@@ -421,11 +429,12 @@ expect_no_tmpfile_dependency() {
 run_policy_tests() {
   local policy="$1"
   local output
-  # 셸에 남은 CONFTEST_* 와 호출한 디렉터리 설정의 namespace 가 시험을
-  # 고르지 못하게, 환경을 지운 하위 셸에서 namespace 를 명시해 돌린다.
+  # 셸에 남은 CONFTEST_* 와 호출한 디렉터리의 설정(namespace · data 등)이
+  # 시험을 흔들지 못하게, 환경을 지운 하위 셸에서 빈 설정과 namespace 를
+  # 명시해 돌린다.
   if ! output="$(clear_conftest_env
-    conftest verify --policy "${policy}" --namespace main --strict \
-      --show-builtin-errors --no-color 2>&1)"; then
+    conftest verify --config-file "${EMPTY_CONFIG}" --policy "${policy}" \
+      --namespace main --strict --show-builtin-errors --no-color 2>&1)"; then
     echo "${output}"
     return 1
   fi

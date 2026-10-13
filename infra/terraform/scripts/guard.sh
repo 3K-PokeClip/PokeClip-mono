@@ -27,6 +27,9 @@ readonly SCRIPT_DIR
 readonly POLICY_DIR="${SCRIPT_DIR}/../policy/guard"
 # R12 모드 표지(키 하나 mode)의 저장소 고정 위치 — <표지>/mode.json.
 readonly MARKER_DIR="${SCRIPT_DIR}/guard-data"
+# conftest 를 부를 때마다 --config-file 로 넘기는 저장소 고정 빈 설정 — 검사
+# 루트(작업 디렉터리)의 conftest.<확장자> 를 아예 찾지 않게 한다.
+readonly EMPTY_CONFIG="${MARKER_DIR}/empty-config.toml"
 # conftest 0.71.1(viper v1.21.0)이 검사 루트에서 conftest.<확장자> 로 찾는
 # 설정 파일 확장자. 대소문자는 가리지 않는다(macOS 기본 파일 시스템).
 CONFTEST_CONFIG_EXTS=(json toml yaml yml properties props prop hcl tfvars dotenv
@@ -141,16 +144,21 @@ classify_files() {
     if [[ "${file}" == *[[:cntrl:]]* ]]; then
       printf 'r0 R0 %q: 이름에 줄바꿈 · 제어 문자 금지(%s)\n' "${file}" \
         "줄 단위 처리 · 리뷰에서 숨음"
-    elif [[ -L "${file}" ]]; then
-      echo "r0 R0 ${file}: 심볼릭 링크 금지(파일 · 디렉터리 — 링크 너머가 검사에서 빠짐)"
     elif is_conftest_config "${name}"; then
-      echo "config R0 ${file}: conftest 설정 파일 금지(정책 · R12 표지를 바꿀 수 있음)"
+      # 링크여도(conftest 는 링크를 따라 읽는다) 종류와 상관없이 설정 파일.
+      printf 'config R0 %s: conftest 설정 파일 금지(%s)\n' "${file}" \
+        "정책 · R12 표지를 바꿀 수 있음"
+    elif [[ -L "${file}" ]]; then
+      printf 'r0 R0 %s: 심볼릭 링크 금지(%s)\n' "${file}" \
+        "파일 · 디렉터리 — 링크 너머가 검사에서 빠짐"
     elif [[ "${file}" == *.tf.json ]]; then
-      echo "r0 R0 ${file}: .tf.json 금지(이 트리는 HCL 만 — 정책이 JSON 구성을 읽지 않음)"
+      printf 'r0 R0 %s: .tf.json 금지(%s)\n' "${file}" \
+        "이 트리는 HCL 만 — 정책이 JSON 구성을 읽지 않음"
     elif [[ "${file}" == *.tf && "${name}" == .* ]]; then
-      echo "r0 R0 ${file}: 숨김 .tf 금지(Terraform 은 읽지 않는데 guard 는 셈)"
+      printf 'r0 R0 %s: 숨김 .tf 금지(%s)\n' "${file}" \
+        "Terraform 은 읽지 않는데 guard 는 셈"
     elif [[ "${file}" == *.tf ]]; then
-      echo "tf ${file}"
+      printf 'tf %s\n' "${file}"
     fi
   done
 }
@@ -169,8 +177,8 @@ parses() {
     echo "guard: 검사 불가: 읽을 수 없음: ${file}" >&2
     return 1
   fi
-  if ! error="$(conftest parse --parser hcl2 -- "${file}" 2>&1 \
-    >/dev/null)"; then
+  if ! error="$(conftest parse --config-file "${EMPTY_CONFIG}" --parser hcl2 \
+    -- "${file}" 2>&1 >/dev/null)"; then
     echo "guard: 검사 불가: 파싱 실패: ${file}: ${error}" >&2
     return 1
   fi
@@ -187,11 +195,13 @@ parses() {
 run_policy() {
   local marker="$1" output line
   shift
-  # 설정 파일이 있으면 main 이 conftest 를 부르기 전에 멈춘다. 그래도 겹으로,
-  # 판정에 닿는 키(ignore · namespace · policy · data)는 명시 인자로 덮는다
+  # 설정 파일이 있으면 main 이 conftest 를 부르기 전에 멈춘다. 겹으로, 빈
+  # 설정을 --config-file 로 명시해 검사 루트의 설정을 아예 읽지 않고, 판정에
+  # 닿는 키(ignore · namespace · policy · data)도 명시 인자로 덮는다
   # (--ignore '^$' = 아무 파일도 빼지 않음).
   local fails=0 summary="" tests=""
-  output="$(conftest test --parser hcl2 --combine --no-fail --no-color \
+  output="$(conftest test --config-file "${EMPTY_CONFIG}" --parser hcl2 \
+    --combine --no-fail --no-color \
     --strict --show-builtin-errors --namespace main --ignore '^$' \
     --policy "${POLICY_DIR}" --data "${marker}" -- "$@" 2>&1)" || {
     echo "${output}" >&2
@@ -282,6 +292,7 @@ main() {
     exit 2
   fi
   [[ -d "${POLICY_DIR}" ]] || die "정책 디렉터리가 없음: ${POLICY_DIR}"
+  [[ -f "${EMPTY_CONFIG}" ]] || die "빈 설정 파일이 없음: ${EMPTY_CONFIG}"
   # 루트로 옮겨 상대 경로로 넘긴다: 정책이 경로(modules/state_bucket/ 등)를
   # 루트 기준으로 본다.
   cd -P -- "${1:-${SCRIPT_DIR}/..}" 2>/dev/null ||
