@@ -119,7 +119,12 @@ public class BroadcastInfoCollector {
                 lastPagesScanned, refused);
     }
 
-    /** 429면 다음 회차들을 건너뛰고(백오프 두 배, 최대 5분) 이번 회차는 시청자 수 없이 남긴다. */
+    /**
+     * 목록을 넘기며 걷는 채널을 찾는다. 실패하면 그 장 앞에서 찾은 채널은 시청자 수를 남기고 못 찾은 채널만 비운다.
+     *
+     * <p>429면 그 회차 시작부터 백오프(주기, 이어지면 두 배씩, 최대 5분)가 지나기 전 회차를 건너뛴다. 다음 회차는 앞 회차가
+     * 끝나고 주기 뒤에 오므로({@code fixedDelay}) 첫 429는 실제로 건너뛰는 회차가 없고, 연속 둘째 429부터 건너뛴다.
+     */
     private Map<String, LiveEntry> scanLives(Set<String> wanted, Instant now) {
         Map<String, LiveEntry> found = new HashMap<>();
         int pages = 0;
@@ -140,6 +145,10 @@ public class BroadcastInfoCollector {
             backoff = backoff.isZero() ? properties.interval() : min(backoff.multipliedBy(2), MAX_BACKOFF);
             pausedUntil = now.plus(backoff);
             log.warn("liveinfo.lives_throttled pages={} backoffMs={}", pages, backoff.toMillis());
+        } catch (ChzzkLiveInfoClient.ListFailedException e) {
+            // 상태 코드를 남긴다. 400(우리 요청이 틀림)과 5xx(기다리면 되는 장애)가 갈린다. causeType만 남기던 때는 둘이
+            // 같은 한 줄이라 커서 인코딩 결함이 한 달 숨었다(POK-325).
+            log.warn("liveinfo.lives_failed pages={} status={}", pages, e.status());
         } catch (RuntimeException e) {
             log.warn("liveinfo.lives_failed pages={} causeType={}", pages, e.getClass().getSimpleName());
         }

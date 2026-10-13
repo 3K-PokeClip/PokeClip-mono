@@ -93,6 +93,14 @@ public class BroadcastEventProcessor {
         };
 
         if (!applied) {
+            // 낡은 시작이라도 종료가 먼저 와 빈 시작 시각은 채운다(POK-327). 상태·순서 번호는 그대로다
+            if (envelope.type() == LifecycleEventType.BROADCAST_STARTED
+                    && broadcast.fillStartOfPlaceholder(envelope.occurredAt(), envelope.trackManifestJson())) {
+                log.info("broadcast.placeholder.started_filled streamId={} eventId={} sequence={} lastSequence={} startedAt={}",
+                        envelope.streamId(), envelope.eventId(), envelope.sequence(),
+                        broadcast.getLastSequence(), envelope.occurredAt());
+                return ProcessResult.PROCESSED;
+            }
             log.warn("broadcast.event.stale_ignored streamId={} eventId={} sequence={} lastSequence={}",
                     envelope.streamId(), envelope.eventId(), envelope.sequence(),
                     broadcast.getLastSequence());

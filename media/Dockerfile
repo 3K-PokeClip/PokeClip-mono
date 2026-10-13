@@ -1,7 +1,7 @@
 # segment-indexer 사이드카 — 멀티스테이지 빌드
-# 빌드 스테이지의 Go 버전은 media/go.mod 의 go 지시자와 같은 1.26 으로 유지한다.
+# 빌드 스테이지의 Go 버전은 media/go.mod 의 go 지시자와 같은 1.27 로 유지한다.
 
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 
 # 의존만 먼저 받아 두면 소스만 바뀐 재빌드가 빨라진다.

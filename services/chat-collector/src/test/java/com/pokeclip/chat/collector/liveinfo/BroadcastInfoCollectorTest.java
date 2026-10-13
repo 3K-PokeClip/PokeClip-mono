@@ -8,6 +8,7 @@ import com.pokeclip.chat.collector.relay.RelayPayload;
 import com.pokeclip.chat.collector.relay.RelaySink;
 import com.pokeclip.chat.collector.session.SessionRegistry;
 import com.pokeclip.chat.collector.session.SessionRegistry.ActiveSession;
+import com.pokeclip.web.support.LogCaptor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -75,8 +76,40 @@ class BroadcastInfoCollectorTest {
         assertThat(stored.get(1).viewers()).isEqualTo(40);
         assertThat(stored.get(0).observedAt()).isEqualTo(now.get());
         assertThat(client.pagesRead.get()).as("셋째 장은 안 읽는다").isEqualTo(2);
+        assertThat(client.cursorsAsked).as("앞 장이 준 커서를 다음 요청에 그대로 넘긴다").containsExactly(null, "p2");
         assertThat(collector.lastPagesScanned()).isEqualTo(2);
         assertThat(relayed).containsExactly("s-a:broadcast-info", "s-b:broadcast-info");
+    }
+
+    @Test
+    void 목록이_끝없이_이어져도_상한_장_수에서_멈춘다() {
+        // 고친 뒤(POK-325)엔 목록을 끝까지 넘기는 것이 정상이라, 치지직이 다음 장을 계속 주면 이 상한이 끝없는 요청을 막는 유일한 막이다.
+        client.endless = true;
+        BroadcastInfoCollector collector = collector();
+
+        collector.tick();
+
+        assertThat(client.pagesRead.get()).isEqualTo(PROPS.maxPages());
+        assertThat(collector.lastPagesScanned()).isEqualTo(PROPS.maxPages());
+        assertThat(stored).extracting(BroadcastInfo::viewers).containsExactly(null, null);
+    }
+
+    @Test
+    void 목록이_중간_장에서_실패하면_앞_장에서_찾은_시청자_수는_남기고_상태_코드를_남긴다() {
+        client.pages = List.of(new LivePage(List.of(entry("c-a", 300)), "p2"));
+        client.failAt = 1;
+        client.failStatus = 400;
+        client.settings.put("tok-a", new SettingResult(new LiveSetting("A", List.of(), null), 200));
+        client.settings.put("tok-b", new SettingResult(new LiveSetting("B", List.of(), null), 200));
+
+        try (LogCaptor captor = new LogCaptor()) {
+            collector().tick();
+
+            assertThat(captor.messages())
+                    .as("400(우리 요청이 틀림)과 5xx(기다리면 되는 장애)를 로그로 가른다(POK-325)")
+                    .contains("liveinfo.lives_failed pages=1 status=400");
+        }
+        assertThat(stored).extracting(BroadcastInfo::viewers).containsExactly(300, null);
     }
 
     @Test
@@ -193,9 +226,19 @@ class BroadcastInfoCollectorTest {
     private static final class FakeClient extends ChzzkLiveInfoClient {
         List<LivePage> pages = List.of();
         boolean throttle;
+        /**
+         * 참이면 다음 장을 계속 준다(상한 시험). 1,000장째에서는 Error를 던진다. 수집기에 상한이 없으면 시험이 끝없이 도는
+         * 대신 그 Error로 끝나 빨간불이 된다(JUnit {@code @Timeout}은 쉬지 않고 도는 반복을 못 끊는다).
+         */
+        boolean endless;
+        /** 이 순번의 장에서 {@link ListFailedException}을 던진다. -1이면 안 던진다. */
+        int failAt = -1;
+        int failStatus;
         final Map<String, SettingResult> settings = new java.util.concurrent.ConcurrentHashMap<>();
         final AtomicInteger pagesRead = new AtomicInteger();
         final AtomicInteger settingCalls = new AtomicInteger();
+        /** 받은 커서를 순서대로 적는다. 첫 장은 null이다. */
+        final List<String> cursorsAsked = new CopyOnWriteArrayList<>();
 
         FakeClient() {
             super(null, "http://unused", "id", "secret");
@@ -209,10 +252,20 @@ class BroadcastInfoCollectorTest {
 
         @Override
         public LivePage lives(String next) {
+            cursorsAsked.add(next);
             if (throttle) {
                 throw new TooManyRequestsException();
             }
             int index = pagesRead.getAndIncrement();
+            if (index == failAt) {
+                throw new ListFailedException(failStatus);
+            }
+            if (endless) {
+                if (index >= 1_000) {
+                    throw new AssertionError("1,000장을 넘겼다: 수집기에 페이지 상한이 없다");
+                }
+                return new LivePage(List.of(entry("other", 1)), "p" + (index + 2));
+            }
             return pages.get(index);
         }
     }

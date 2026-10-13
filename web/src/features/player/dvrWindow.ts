@@ -81,3 +81,53 @@ export function rewindWindowSeconds(range: DvrRange, syncPosition: number | null
   const width = liveEdgePosition(range, syncPosition) - range.start;
   return Math.min(LIVE_WINDOW_SECONDS, Math.max(0, width));
 }
+
+/** 영상 목록의 조각 하나. 구조 타입이라 hls.js의 Fragment를 그대로 넘긴다 */
+export interface DatedFragment {
+  /** 영상 시각(초) */
+  start: number;
+  duration: number;
+  /** 그 조각 첫 화면의 실제 시각(epoch ms, EXT-X-PROGRAM-DATE-TIME). 목록에 없으면 null */
+  programDateTime: number | null;
+}
+
+/**
+ * 영상 시각 t(초)의 실제 시각(epoch ms). 계약3: 「재생 위치 ↔ PDT 환산은 조각마다 그 조각의 PDT를 기준으로 한다」. t를 품은
+ * 조각의 시각에 조각 안 거리를 더하고, 마지막 조각 뒤(LL-HLS의 만드는 중인 조각은 아직 목록에 조각으로 없다)는 마지막 조각에서
+ * 이어 센다. 첫 조각보다 앞이면 첫 조각에서 거꾸로 센다: 1시간 창은 조각이 생길 때마다 맨 앞 조각을 버려, 맨 앞을 보던 재생
+ * 위치가 목록 밖으로 밀린다(그 조각은 버퍼에 남아 계속 튼다). 모른다고 하면 영상은 1시간 전인데 채팅이 최신으로 튀었다(POK-326
+ * 리뷰 2라운드). 첫 조각을 받기 전의 0초는 부르는 쪽이 거른다(재생 위치에 영상이 없다). 조각이 없거나 시각 표시가 없으면
+ * 모른다(null). hls.js playingDate를 쓰지 않는다: 그것은 재생 위치가 0이면 「값 없음」으로 보고 직전 자리의 시각을 줘, 시작
+ * 직후·맨 앞으로 옮긴 직후에 시차와 다른 자리를 가리켰다(POK-326 리뷰 1라운드)
+ */
+export function programDateAt(fragments: readonly DatedFragment[], t: number): number | null {
+  for (let i = fragments.length - 1; i >= 0; i -= 1) {
+    const frag = fragments[i]!;
+    if (frag.start > t && i > 0) continue;
+    return frag.programDateTime === null ? null : frag.programDateTime + (t - frag.start) * 1000;
+  }
+  return null;
+}
+
+/**
+ * 실제 시각(epoch ms)의 영상 시각(초): programDateAt의 거꾸로. 그 시각 앞에서 시작한 마지막 조각에서 센다: 조각 사이에서 시각이
+ * 뛴 틈(송출이 다시 붙은 자리) 안이면 영상이 없으니 뒤 조각의 시작이다. 첫 조각보다 이르면 첫 조각에서 거꾸로 이어 센다(부르는
+ * 쪽이 되감기 창 안으로 자른다). 조각이 없거나 시각 표시가 없으면 null
+ */
+export function mediaTimeAt(fragments: readonly DatedFragment[], epochMs: number): number | null {
+  const first = fragments[0];
+  if (first === undefined) return null;
+  for (let i = fragments.length - 1; i >= 0; i -= 1) {
+    const frag = fragments[i]!;
+    if (frag.programDateTime === null) return null;
+    if (frag.programDateTime > epochMs) continue;
+    const offset = (epochMs - frag.programDateTime) / 1000;
+    const next = fragments[i + 1];
+    // 이 조각 끝을 넘었는데 다음 조각이 더 늦게 시작하면 틈 안이다
+    if (offset > frag.duration && next !== undefined) return next.start;
+    return frag.start + offset;
+  }
+  return first.programDateTime === null
+    ? null
+    : first.start + (epochMs - first.programDateTime) / 1000;
+}

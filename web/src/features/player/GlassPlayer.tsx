@@ -20,7 +20,7 @@ import { PlayerSeekBar } from './PlayerSeekBar';
 import { PlayerTopOverlay, type PlayerBroadcastStatus } from './PlayerTopOverlay';
 import { seekIntentForKey } from './playerKeys';
 import { progressFraction } from './playerMath';
-import { useHlsPlayback } from './useHlsPlayback';
+import { useHlsPlayback, type LivePosition } from './useHlsPlayback';
 import { useRecordedPlayback, type RecordedSource } from './useRecordedPlayback';
 import {
   usePlayerSimulation,
@@ -48,6 +48,11 @@ export interface GlassPlayerController {
    * 부른 쪽이 정한다(QA 2026-10-11 리뷰)
    */
   seekToUptime: (uptimeSeconds: number) => boolean;
+  /**
+   * 실제 시각(epoch ms)으로 이동: 라이브 실재생만 있다(조각의 시각 표시(PDT)로 셈한다, POK-326). 목록에 시각 표시가 없으면 false라
+   * 부른 쪽이 seekToUptime으로 옮긴다. 방송 경과 시계로 옮기면 숨은 탭에서 그 시계가 밀려 카드보다 늦은 자리로 갔다
+   */
+  seekToTime?: (epochMs: number) => boolean;
 }
 
 export interface GlassPlayerProps {
@@ -62,14 +67,20 @@ export interface GlassPlayerProps {
   startAtSeconds?: number | null;
   /**
    * 녹화 다시보기의 재생 위치(방송 기준 초, 내림)가 바뀔 때마다 알린다. 지난 방송 채팅이 그 시각까지의 줄만 보인다(POK-324).
-   * 녹화를 틀 때만 부른다: 라이브 채팅은 영상 위치를 따르지 않는다
+   * 녹화를 틀 때만 부른다: 라이브 재생기의 자리는 onLivePosition이 알린다(POK-326)
    */
   onPlaybackPosition?: (seconds: number) => void;
   /**
    * 녹화 다시보기에서 사람이 옮겼다(시크바·키(화살표·PageUp·PageDown·Home)·끝으로·카드·다 본 뒤 처음부터). 재생으로 흐르거나 녹화 틈을 넘을 때는 부르지
-   * 않는다: 녹화가 옮긴 자리는 지난 방송 채팅이 이것으로만 따라간다(영상 없이 누른 카드는 화면이 따로 알린다)
+   * 않는다: 녹화가 옮긴 자리는 지난 방송 채팅이 이것으로만 따라간다(영상 없이 누른 카드는 화면이 따로 알린다). 라이브 재생기도
+   * 사람이 옮기면(실시간으로 포함) 부른다: 라이브 채팅도 맨 아래(되감은 자리, 실시간이면 최신)로 간다(POK-326)
    */
   onSeek?: () => void;
+  /**
+   * 라이브 재생기의 자리(실제 시각·실시간에서 몇 초 뒤)가 바뀔 때마다 알린다. 영상 목록에 시각 표시(PDT)가 없으면 null이다. 라이브
+   * 채팅이 되감은 자리를 따른다(POK-326). 방송이 끝나면 채팅은 이 값을 보지 않는다(지난 방송은 녹화의 재생 위치를 따른다)
+   */
+  onLivePosition?: (position: LivePosition | null) => void;
   /** 소스가 없을 때 목업 재생으로 시안 동작을 보인다 — 스토리북·시험 전용. 실제 화면은 끈다 */
   simulate?: boolean;
   /** clip의 방송 명부가 말하는 상태 — 상단 배지(LIVE·종료·확인 중)의 근거. 없으면 LIVE */
@@ -180,7 +191,16 @@ function RecordedGlassPlayer(props: GlassPlayerProps & { recorded: RecordedSourc
 
 function HlsGlassPlayer(props: GlassPlayerProps & { src: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const sim = useHlsPlayback(videoRef, props.src, props.simulationOptions);
+  const sim = useHlsPlayback(videoRef, props.src, props.simulationOptions, props.onSeek);
+  // 초가 바뀌거나 시차가 바뀔 때만 알린다(재생기가 초로 내리고, 같은 값이면 같은 객체를 둔다)
+  const { onLivePosition } = props;
+  const { livePosition } = sim;
+  useEffect(() => {
+    onLivePosition?.(livePosition);
+  }, [livePosition, onLivePosition]);
+  // 내려갈 때 지운다: 방송이 끝나 녹화로 바뀌면 라이브에서 되감은 자리가 저장소에 남는다. 같은 방송이 다시 라이브가 되면 새
+  // 재생기가 자리를 알리기 전 그림이 옛 자리로 채팅을 읽었다(리뷰 1라운드)
+  useEffect(() => () => onLivePosition?.(null), [onLivePosition]);
   return (
     <GlassPlayerBody
       {...props}
@@ -300,6 +320,12 @@ function GlassPlayerBody({
           const behind = Math.min(sim.windowSeconds, Math.max(0, sim.uptimeSeconds - target));
           sim.seekToFraction(progressFraction(behind, sim.windowSeconds));
         }
+        sim.wake();
+        return true;
+      },
+      seekToTime: (epochMs: number) => {
+        // seekToUptime과 같은 막이: 되감을 구간이 없으면 옮길 곳이 없다(리뷰 2라운드)
+        if (sim.windowSeconds <= 0 || !sim.seekToDate?.(epochMs)) return false;
         sim.wake();
         return true;
       },

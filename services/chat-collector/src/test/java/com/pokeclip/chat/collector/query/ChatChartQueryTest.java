@@ -32,7 +32,8 @@ class ChatChartQueryTest extends IntegrationTestSupport {
     private static final java.util.concurrent.atomic.AtomicLong DONATION_SEQ =
             new java.util.concurrent.atomic.AtomicLong();
 
-    private static final List<String> STREAMS = List.of("chart-1", "chart-off", "chart-nano", "chart-idx");
+    private static final List<String> STREAMS = List.of("chart-1", "chart-off", "chart-nano", "chart-idx",
+            "chart-micro", "chart-prev", "chart-this");
 
     private static final AtomicInteger SEQ = new AtomicInteger(700_000);
 
@@ -146,6 +147,34 @@ class ChatChartQueryTest extends IntegrationTestSupport {
         assertThat(page.buckets()).extracting(ChartBucket::chats)
                 .as("경계를 밀리초로 자르면 이 채팅이 통째로 빠진다 — 목록 창구와 숫자가 갈린다")
                 .containsExactly(0L, 1L);
+    }
+
+    /**
+     * 🔴 <b>같은 채널에서 바로 앞에 끝난 방송이 창에 들어와도 이 방송 것만 센다.</b>
+     * 목록 창구의 {@code ChatWindowQueryTest.같은_채널의_앞_방송은_창이_겹쳐도_섞이지_않는다}와
+     * 같은 이유다: 창이 방송 시작보다 앞으로 넓어지면 앞 방송의 끝자락이 창에 들고, 그것을
+     * 걸러 내는 것은 두 질의의 {@code WHERE stream_id = ?}다. 채팅·후원을 둘 다 심고 앞 방송으로도
+     * 물어 그 줄들이 창 안에 있음을 같이 본다.
+     */
+    @Test
+    void 같은_채널의_앞_방송은_창이_겹쳐도_세지_않는다() {
+        Instant start = Instant.parse("2026-09-04T12:00:00Z");
+        insertChat("chart-prev", start.minusSeconds(30), "앞방송채팅");
+        insertDonation("chart-prev", start.minusSeconds(20), "앞방송후원");
+        insertChat("chart-this", start.plusSeconds(2), "이방송채팅");
+        insertDonation("chart-this", start.plusSeconds(3), "이방송후원");
+        WindowRequest w = new WindowRequest(start.minusSeconds(60), start.plusSeconds(60));
+
+        ChatChartPage 이방송 = queryWith(0).count("chart-this", null, w, 60);
+        ChatChartPage 앞방송 = queryWith(0).count("chart-prev", null, w, 60);
+
+        assertThat(이방송.buckets()).extracting(ChartBucket::chats)
+                .as("방송 번호로 안 거르면 앞 방송 채팅까지 센다").containsExactly(0L, 1L);
+        assertThat(이방송.buckets()).extracting(ChartBucket::donations)
+                .as("방송 번호로 안 거르면 앞 방송 후원까지 센다").containsExactly(0L, 1L);
+        assertThat(앞방송.buckets()).extracting(ChartBucket::chats)
+                .as("양성 대조: 앞 방송 줄도 이 창 안에 있다").containsExactly(1L, 0L);
+        assertThat(앞방송.buckets()).extracting(ChartBucket::donations).containsExactly(1L, 0L);
     }
 
     /**
