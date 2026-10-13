@@ -12,7 +12,14 @@
 # 파일은 git 에 둘 수 없어 시험이 임시 디렉터리에 만든다.
 # `terraform fmt -recursive` 를 깨는 fixture(파싱 오류 · fmt 가 고쳐 쓸 꼴)는
 # *.tf.in 으로 두고, 시험이 임시 디렉터리에 *.tf 로 복사해 돌린다.
-# 경로를 겨누는 규칙(R4 · R11)의 fixture 는 그 경로를 트리 안에 그대로 둔다.
+# 경로를 겨누는 규칙(R4 · R11 · R12)의 fixture 는 그 경로를 트리 안에 그대로
+# 둔다.
+#
+# R12 는 표지에 따라 다르게 판정한다. 제자리(scripts/testdata 아래)에서 돈
+# fixture 는 fixture 표지라 공개 존 루트의 부재를 건너뛰고, 저장소 밖 사본은
+# 운영 표지라 부재가 위반이다. testdata/guard/ok_R12/ 는 두 표지 모두 통과해야
+# 하고, testdata/guard/op_<규칙>_<변형>/ 은 저장소 밖 사본(운영 표지)으로만
+# 돌린다. 저장소 밖 사본은 mktemp -d 로 만들고 돌린 뒤 지워 남지 않았는지 본다.
 #
 # 사용: bash infra/terraform/scripts/guard_test.sh
 # 종료 코드: 0 전부 통과 / 1 하나라도 실패
@@ -24,6 +31,10 @@ readonly SCRIPT_DIR
 readonly GUARD="${SCRIPT_DIR}/guard.sh"
 readonly FIXTURES="${SCRIPT_DIR}/testdata/guard"
 readonly POLICY_DIR="${SCRIPT_DIR}/../policy/guard"
+# guard.sh 가 정책에 넘기는 R12 표지(저장소 고정 경로)와, 표지 주입 fixture 의
+# conftest.toml 에서 그 경로로 바꿀 자리표시자.
+readonly MARKER_DIR="${SCRIPT_DIR}/guard-data"
+readonly MARKER_PLACEHOLDER='@GUARD_FIXTURE_MARKER@'
 
 failures=0
 run_output=""
@@ -98,6 +109,12 @@ expect_violation() {
     fail "${name}: 출력에 ${rule} 위반이 없음 — ${output}"
     return
   fi
+  # 제자리(fixture 표지)에서 돈 다른 규칙의 fixture 에는 R12 가 끼지 않는다.
+  if [[ "${rule}" != R12 ]] && ! compgen -G "${dir}/*.tf.in" >/dev/null &&
+    [[ $'\n'"${output}" == *$'\n'"guard: R12 "* ]]; then
+    fail "${name}: fixture 표지인데 R12 위반이 나옴 — ${output}"
+    return
+  fi
   echo "ok: ${name} → ${rule} 위반"
 }
 
@@ -108,14 +125,139 @@ expect_violation() {
 #######################################
 expect_clean() {
   local dir="$1"
-  local output status
+  local name output status
+  name="$(basename -- "${dir}")"
   output="$(bash "${GUARD}" "${dir}" 2>&1)"
   status=$?
   if [[ "${status}" -ne 0 ]]; then
-    fail "ok: 종료 코드 0 을 기대했으나 ${status} — ${output}"
+    fail "${name}: 종료 코드 0 을 기대했으나 ${status} — ${output}"
     return
   fi
-  echo "ok: ok → 위반 0"
+  echo "ok: ${name} → 위반 0"
+}
+
+#######################################
+# fixture 를 저장소 밖 임시 디렉터리에 복사해 guard.sh 를 돌린다 — 루트가
+# scripts/testdata 밖이라 guard.sh 는 운영 표지를 넘긴다. 사본 루트의
+# conftest.toml 에 든 자리표시자는 저장소의 fixture 표지 절대 경로로 바꾼다.
+# 임시 디렉터리는 돌린 뒤 지우고, 남았으면 실패로 센다.
+# Globals:
+#   run_output, run_status
+# Arguments:
+#   fixture 디렉터리 경로.
+# Returns:
+#   임시 디렉터리를 만들거나 복사 · 치환하지 못하면 1.
+#######################################
+run_guard_outside() {
+  local dir="$1"
+  local tmp config content
+  local marker="${MARKER_DIR}/fixture"
+  tmp="$(mktemp -d)" || return 1
+  config="${tmp}/conftest.toml"
+  if ! cp -R "${dir}/." "${tmp}/"; then
+    rm -rf -- "${tmp}"
+    return 1
+  fi
+  if [[ -f "${config}" ]]; then
+    content="$(<"${config}")"
+    # 바꿀 값은 인용하지 않는다 — bash 3.2 는 그 따옴표를 글자로 남긴다.
+    content="${content//"${MARKER_PLACEHOLDER}"/${marker}}"
+    if ! printf '%s\n' "${content}" >"${config}"; then
+      rm -rf -- "${tmp}"
+      return 1
+    fi
+  fi
+  run_output="$(bash "${GUARD}" "${tmp}" 2>&1)"
+  run_status=$?
+  rm -rf -- "${tmp}"
+  if [[ -e "${tmp}" ]]; then
+    fail "$(basename -- "${dir}"): 임시 디렉터리가 남음 — ${tmp}"
+  fi
+}
+
+#######################################
+# 저장소 밖 사본(운영 표지)이 기대한 위반으로 실패하는지 본다.
+# Arguments:
+#   fixture 디렉터리 경로, 출력에 있어야 할 위반 줄의 앞부분.
+#######################################
+expect_outside_violation() {
+  local dir="$1" expected="$2"
+  local name
+  name="$(basename -- "${dir}")"
+  run_guard_outside "${dir}" || {
+    fail "${name}(저장소 밖): 시험 준비 실패(임시 디렉터리 · 복사)"
+    return
+  }
+  if [[ "${run_status}" -ne 1 ]]; then
+    fail "${name}(저장소 밖): 종료 코드 1 을 기대했으나 ${run_status}" \
+      "— ${run_output}"
+    return
+  fi
+  if [[ $'\n'"${run_output}" != *$'\n'"${expected}"* ]]; then
+    fail "${name}(저장소 밖): 출력에 「${expected}」 가 없음 — ${run_output}"
+    return
+  fi
+  echo "ok: ${name}(저장소 밖) → ${expected}"
+}
+
+#######################################
+# 저장소 밖 사본(운영 표지)이 위반 0 으로 통과하는지 본다.
+# Arguments:
+#   fixture 디렉터리 경로.
+#######################################
+expect_outside_clean() {
+  local dir="$1"
+  local name
+  name="$(basename -- "${dir}")"
+  run_guard_outside "${dir}" || {
+    fail "${name}(저장소 밖): 시험 준비 실패(임시 디렉터리 · 복사)"
+    return
+  }
+  if [[ "${run_status}" -ne 0 ]]; then
+    fail "${name}(저장소 밖): 종료 코드 0 을 기대했으나 ${run_status}" \
+      "— ${run_output}"
+    return
+  fi
+  echo "ok: ${name}(저장소 밖) → 위반 0"
+}
+
+#######################################
+# 설정 파일로 R12 표지를 fixture 로 바꾸려 해도 위반 0 으로 새지 않는지 본다.
+# 설정 파일과 명시 인자의 병합 거동에 기대지 않도록 종료 코드는 「0 이
+# 아님」(1 또는 2) 만, 출력은 R0 줄만 단언한다.
+#######################################
+expect_marker_injection_rejected() {
+  local name="op_R12_conftest_inject"
+  run_guard_outside "${FIXTURES}/${name}" || {
+    fail "${name}(저장소 밖): 시험 준비 실패(임시 디렉터리 · 복사 · 치환)"
+    return
+  }
+  if [[ "${run_status}" -eq 0 ]]; then
+    fail "${name}(저장소 밖): 종료 코드가 0 이 아니길 기대했으나 0" \
+      "— ${run_output}"
+    return
+  fi
+  if [[ $'\n'"${run_output}" != *$'\n'"guard: R0 conftest.toml: "* ]]; then
+    fail "${name}(저장소 밖): 출력에 R0 conftest.toml 위반이 없음" \
+      "— ${run_output}"
+    return
+  fi
+  echo "ok: ${name}(저장소 밖) → 종료 ${run_status} · R0 설정 파일"
+}
+
+#######################################
+# 저장소의 실제 트리(운영 표지)가 위반 0 인지 본다. fixture 안의
+# conftest.toml(scripts/testdata)은 검사 범위 밖이라 잡히지 않아야 한다.
+#######################################
+expect_operational_tree_clean() {
+  local output status
+  output="$(bash "${GUARD}" 2>&1)"
+  status=$?
+  if [[ "${status}" -ne 0 ]]; then
+    fail "operational-tree: 종료 코드 0 을 기대했으나 ${status} — ${output}"
+    return
+  fi
+  echo "ok: operational-tree → 위반 0"
 }
 
 #######################################
@@ -255,7 +397,8 @@ expect_conftest_env_ignored() {
 
 #######################################
 # deny 규칙이 하나도 안 돌면(패키지 이름 · deny 철자 실수) 위반 0 이 아니라
-# 종료 2 인지 본다. guard.sh 사본 옆에 deny 없는 정책만 둔다.
+# 종료 2 인지 본다. guard.sh 사본 옆에 deny 없는 정책과 표지만 둔다(표지가
+# 없어 멈추는 다른 종료 2 와 가리려고 출력의 0 tests 도 본다).
 #######################################
 expect_no_rules_error() {
   local tmp output status
@@ -265,6 +408,7 @@ expect_no_rules_error() {
   }
   if ! mkdir -p "${tmp}/scripts" "${tmp}/policy/guard" ||
     ! cp -- "${GUARD}" "${tmp}/scripts/guard.sh" ||
+    ! cp -R -- "${MARKER_DIR}" "${tmp}/scripts/" ||
     ! printf 'package main\n\nimport rego.v1\n\nnote := "no deny"\n' \
       >"${tmp}/policy/guard/empty.rego"; then
     fail "no-rules: 시험 준비 실패(복사)"
@@ -274,8 +418,8 @@ expect_no_rules_error() {
   output="$(bash "${tmp}/scripts/guard.sh" "${FIXTURES}/bad_R1" 2>&1)"
   status=$?
   rm -rf -- "${tmp}"
-  if [[ "${status}" -ne 2 ]]; then
-    fail "no-rules: 종료 코드 2 를 기대했으나 ${status} — ${output}"
+  if [[ "${status}" -ne 2 || "${output}" != *"0 tests"* ]]; then
+    fail "no-rules: 종료 2 · 0 tests 를 기대했으나 ${status} — ${output}"
     return
   fi
   echo "ok: no-rules → 검사 불가(종료 2)"
@@ -336,6 +480,7 @@ main() {
     fail "bad_* fixture 가 하나도 없음"
   fi
   expect_clean "${FIXTURES}/ok"
+  expect_clean "${FIXTURES}/ok_R12"
   for dir in "${FIXTURES}"/err_*/; do
     [[ -d "${dir}" ]] || continue
     expect_fixture_error "${dir%/}"
@@ -347,12 +492,20 @@ main() {
   expect_no_rules_error
   expect_subroot_error
   expect_conftest_config_ignored
+  # 운영 표지: 저장소 밖 사본과 저장소의 실제 트리.
+  expect_outside_violation "${FIXTURES}/ok" \
+    "guard: R12 nonprod/dns-legacy: .tf 없음"
+  expect_outside_violation "${FIXTURES}/op_R12_rename" \
+    'guard: R12 nonprod/dns-legacy: resource "aws_route53_zone" "legacy" 선언 없음'
+  expect_outside_clean "${FIXTURES}/ok_R12"
+  expect_marker_injection_rejected
+  expect_operational_tree_clean
 
   if [[ "${failures}" -ne 0 ]]; then
     echo "guard_test: ${failures}건 실패" >&2
     exit 1
   fi
-  echo "guard_test: 전부 통과(bad ${count}개 · ok 1개)"
+  echo "guard_test: 전부 통과(bad ${count}개 · ok 2개 · 운영 표지 5개)"
 }
 
 main "$@"
