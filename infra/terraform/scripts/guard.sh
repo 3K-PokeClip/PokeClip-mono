@@ -52,7 +52,7 @@ LINES=()
 #   설명.
 #######################################
 die() {
-  echo "guard: 검사 불가: $*" >&2
+  printf 'guard: 검사 불가: %s\n' "$*" >&2
   exit 2
 }
 
@@ -64,7 +64,7 @@ die() {
 #   「R<번호> <상대 경로>: <설명>」.
 #######################################
 report() {
-  echo "guard: $1"
+  printf 'guard: %s\n' "$1"
   violations=$((violations + 1))
 }
 
@@ -280,7 +280,7 @@ marker_file() {
 }
 
 main() {
-  local entries entry file marker
+  local entries entry file marker ext folded
   local parse_failed=0 configs=0
   local -a candidates=() tf_files=()
   if [[ "$#" -gt 1 ]]; then
@@ -304,27 +304,43 @@ main() {
 
   entries="$(list_tf_files | classify_files)" ||
     die "파일 목록 실패: $(pwd)"
-  [[ -n "${entries}" ]] || die "검사할 .tf 파일이 없음: $(pwd)"
-  split_lines "${entries}"
   # R0: 파서가 읽지 못하거나(JSON) 리뷰 · Terraform 과 보는 것이 갈리는(링크 ·
   # 숨김 · 줄바꿈 이름) 꼴, 그리고 conftest 설정 파일은 두지 않는다.
-  for entry in "${LINES[@]}"; do
-    case "${entry}" in
-      "tf "*) candidates+=("${entry#tf }") ;;
-      "config "*)
-        report "${entry#config }"
+  if [[ -n "${entries}" ]]; then
+    split_lines "${entries}"
+    for entry in "${LINES[@]}"; do
+      case "${entry}" in
+        "tf "*) candidates+=("${entry#tf }") ;;
+        "config "*)
+          report "${entry#config }"
+          configs=$((configs + 1))
+          ;;
+        "r0 "*) report "${entry#r0 }" ;;
+        *) die "분류 결과에 모르는 줄: ${entry}" ;;
+      esac
+    done
+  fi
+  # 검사 루트는 conftest(viper)처럼 파일 시스템에 직접 묻는다 — 대소문자 ·
+  # 유니코드를 접는 파일 시스템(macOS)에서는 이름 판정이 못 보는 꼴
+  # (confteſt.toml 등)도 conftest.<확장자> 로 찾히기 때문이다.
+  if [[ "${configs}" -eq 0 ]]; then
+    folded="파일 시스템이 이 이름으로 찾음 — 대소문자 · 유니코드 접기"
+    for ext in "${CONFTEST_CONFIG_EXTS[@]}"; do
+      if [[ -e "conftest.${ext}" || -L "conftest.${ext}" ]]; then
+        report "R0 conftest.${ext}: conftest 설정 파일 금지(${folded})"
         configs=$((configs + 1))
-        ;;
-      "r0 "*) report "${entry#r0 }" ;;
-      *) die "분류 결과에 모르는 줄: ${entry}" ;;
-    esac
-  done
+      fi
+    done
+  fi
   # conftest 는 검사 루트의 설정 파일을 읽어 정책을 내려받기(update)까지
   # 하므로, 설정 파일이 하나라도 있으면 conftest 를 한 번도 부르지 않는다.
   if [[ "${configs}" -gt 0 ]]; then
     echo "guard: conftest 설정 파일이 있어 conftest 를 부르지 않음 —" \
       "위반 ${violations}건" >&2
     exit 1
+  fi
+  if [[ "${#candidates[@]}" -eq 0 && "${violations}" -eq 0 ]]; then
+    die "검사할 .tf 파일이 없음: $(pwd)"
   fi
   if [[ "${#candidates[@]}" -gt 0 ]]; then
     for file in "${candidates[@]}"; do

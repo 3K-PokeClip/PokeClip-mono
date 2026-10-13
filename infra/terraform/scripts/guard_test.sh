@@ -82,6 +82,20 @@ clear_conftest_env() {
 }
 
 #######################################
+# 디렉터리 안에 심볼릭 링크가 하나도 없는지 본다 — fixture 사본에 쓰거나
+# 권한을 바꿀 때 링크 너머(저장소 밖 파일)에 닿지 않게.
+# Arguments:
+#   디렉터리.
+# Returns:
+#   링크가 없으면 0, 있거나 찾지 못하면 1.
+#######################################
+has_no_links() {
+  local found
+  found="$(find "$1" -type l -print -quit)" || return 1
+  [[ -z "${found}" ]]
+}
+
+#######################################
 # 시험 하나의 실패를 알리고 센다.
 # Globals:
 #   failures
@@ -187,8 +201,8 @@ expect_clean() {
 # Arguments:
 #   fixture 디렉터리 경로.
 # Returns:
-#   임시 디렉터리를 만들거나 복사 · 치환하지 못하면, 또는 사본의
-#   conftest.toml 이 링크면 1.
+#   임시 디렉터리를 만들거나 복사 · 치환하지 못하면, 또는 사본에 링크가
+#   있으면 1.
 #######################################
 run_guard_outside() {
   local dir="$1"
@@ -196,12 +210,9 @@ run_guard_outside() {
   local marker="${MARKER_DIR}/fixture"
   tmp="$(new_tmp_dir)" || return 1
   config="${tmp}/conftest.toml"
-  if ! cp -R "${dir}/." "${tmp}/"; then
-    rm -rf -- "${tmp}"
-    return 1
-  fi
-  # 설정 파일이 링크면 치환하지 않고 준비 실패 — 링크 너머 파일에 쓰지 않는다.
-  if [[ -L "${config}" ]]; then
+  # 사본에 링크가 하나라도 있으면(설정 파일 포함) 치환 · 실행하지 않고 준비
+  # 실패 — 링크 너머 파일에 쓰지 않는다.
+  if ! cp -R "${dir}/." "${tmp}/" || ! has_no_links "${tmp}"; then
     rm -rf -- "${tmp}"
     return 1
   fi
@@ -441,7 +452,8 @@ make_unreadable_copy() {
   local source="$1"
   local tmp
   tmp="$(new_tmp_dir)" || return 1
-  if ! cp -R "${source}/." "${tmp}/" || ! chmod 000 "${tmp}/main.tf"; then
+  if ! cp -R "${source}/." "${tmp}/" || ! has_no_links "${tmp}" ||
+    ! chmod 000 "${tmp}/main.tf"; then
     rm -rf -- "${tmp}"
     return 1
   fi
@@ -737,7 +749,8 @@ run_guard_prepared() {
   local setup="$1" source="${2:-${FIXTURES}/ok_R12}"
   local tmp
   tmp="$(new_tmp_dir)" || return 1
-  if ! cp -R "${source}/." "${tmp}/" || ! "${setup}" "${tmp}"; then
+  if ! cp -R "${source}/." "${tmp}/" || ! has_no_links "${tmp}" ||
+    ! "${setup}" "${tmp}"; then
     rm -rf -- "${tmp}"
     return 1
   fi
