@@ -86,3 +86,47 @@ test_r13_other_names_allowed if {
 	]
 	count(hits("R13", files)) == 0
 }
+
+# 변수 이름은 소문자로 바꾸고 - · _ 를 뺀 뒤 accountid 가 드는지 본다.
+test_r13_account_id_variable_spellings if {
+	variables := {
+		"accountId": [{}],
+		"account-id": [{}],
+		"ACCOUNTID": [{}],
+		"prod-Account_Id": [{}],
+	}
+	count(hits("R13", [tf(other, {"variable": variables})])) == 4
+}
+
+# 4-4-4 대시 표기도 계정 ID 꼴이다(문자열 · ARN · 맵 키).
+test_r13_dashed_account_id if {
+	every value in ["1234-5678-9012", "arn:aws:iam::1234-5678-9012:root"] {
+		count(hits("R13", [r13_local(value)])) == 1
+	}
+	files := [tf(other, {"locals": [{"tags": {"1234-5678-9012": "example"}}]})]
+	count(hits("R13", files)) == 1
+}
+
+# 다른 대시 묶음(자릿수가 다르거나 앞뒤에 숫자가 붙음)은 대상이 아니다.
+test_r13_other_dashed_numbers_allowed if {
+	values := [
+		"123-4567-8901",
+		"1234-5678-901",
+		"12345-5678-9012",
+		"1234-5678-90123",
+		"2026-10-13",
+	]
+	every value in values {
+		count(hits("R13", [r13_local(value)])) == 0
+	}
+}
+
+# 메시지는 대시 표기도 가린다.
+test_r13_message_hides_dashed_value if {
+	files := [tf(other, {"locals": [{"tags": {"1234-5678-9012": "example"}}]})]
+	msgs := hits("R13", files)
+	count(msgs) == 1
+	every msg in msgs {
+		not contains(msg, "1234-5678-9012")
+	}
+}
