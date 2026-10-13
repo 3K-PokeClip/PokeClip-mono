@@ -13,6 +13,7 @@ Terraform 코드입니다. 설계 정본은 「HTTPS · 엣지 인프라 설계�
 ## 디렉터리
 
 루트 하나가 상태 하나입니다. 의존은 위에서 아래 한쪽으로만 흐릅니다.
+`prod/*` · `nonprod/*` 는 같은 리스 계정 안의 환경입니다(설계 3-1).
 아래는 **목표 구조**입니다 — 지금(M1) 있는 것은 `modules/state_bucket` ·
 `policy/guard` · `scripts` · `runbooks` · `nonprod/{bootstrap,dev,dns-legacy}`
 뿐이고, 나머지 루트는 계획의 후속 PR 이 더합니다.
@@ -23,32 +24,34 @@ infra/terraform/
 ├── policy/guard/                  # 금지 규약 Rego 정책(conftest) · 단위 시험
 ├── scripts/                       # guard.sh(금지 규약 검사 실행기) · guard_test.sh
 ├── runbooks/                      # 운영 단계 절차(kty 승인) — org-ct.md 등
-├── mgmt/
+├── mgmt/                          # (보류 — 결정 46 · 재개 키트)
 │   ├── bootstrap/                 # ① 상태 버킷
 │   └── org-extras/                # ② SCP · 권한 세트 할당 · Budgets · 드리프트 EventBridge
 ├── nonprod/
 │   ├── bootstrap/                 # ① 상태 버킷
 │   ├── dev/                       # ② dev EC2 · EIP · SG import(무변경) — 출력 dev_eip
-│   ├── dns-legacy/                # ③ 옛 존 import(무변경) — 존 이전 때 NS TTL 하향 · 끝나면 삭제
-│   └── dns-dev/                   # ④ dev 자식 존 + apex A + 옛 존의 dev 하위 레코드
+│   ├── dns-legacy/                # ③ 공개 존 영구 소유(리스 기간) — 존 prevent_destroy(R12)
+│   └── dns-dev/                   # ④ dev 자식 존 + apex A + 옛 존의 dev 하위 레코드(보류 — 결정 46 · 재개 키트)
 └── prod/
     ├── bootstrap/                 # ① 상태 버킷
     ├── secrets/                   # ② CloudFront 공개키 · 엣지 비밀 그릇(값 없음)
-    ├── dns/                       # ③ 새 존 · 이전용 레코드 복사본 · dev 위임 NS
+    ├── dns/                       # ③ 새 존 · 이전용 레코드 복사본 · dev 위임 NS(보류 — 결정 46 · 재개 키트)
     ├── network/                   # ④ VPC · 서브넷 · NAT · S3 Gateway EP
     ├── certs/                     # ⑥ ACM 서울 · us-east-1
-    ├── registry/                  # ⑦ ECR · CI 푸시 역할 · apex 업로드 역할
+    ├── registry/                  # ⑦ ECR(CI 역할은 쓰기로 할 때 — 40차)
     ├── platform/                  # ⑧ 공개 ALB · WAF · 내부 ALB · NLB · ECS
     ├── media/                     # ⑨ Media EC2 · 인스턴스 역할 · Media SG
     ├── edge/                      # ⑩ CloudFront 배포 · WAF · KVS · CF Function
     └── records/                   # ⑫ 운영 별칭 레코드
 ```
 
-⑤ · ⑪ 은 prod 런타임 트랙(별도)이 소유합니다. Control Tower 가 만드는
-것(조직 · OU · 계정)은 이 트리가 소유하지 않습니다. `infra/dev-media/` 는
-이 트리 밖이며 건드리지 않습니다.
+⑤ · ⑪ 은 prod 런타임 트랙(별도)이 소유합니다. 운영 측(ISB)이 만든 것(SCP ·
+OU · 운영 측 역할)과 기존 수동 자원(IAM 사용자 · dev 자동 주체 · GitHub OIDC
+공급자)은 이 트리가 소유하지 않습니다. `infra/dev-media/` 는 이 트리 밖이며
+건드리지 않습니다.
 
-운영 단계 절차는 `runbooks/` 에 있습니다 — [조직 · CT 도입](runbooks/org-ct.md).
+운영 단계 절차는 `runbooks/` 에 있습니다 —
+[조직 · CT 도입(보류 — 결정 46)](runbooks/org-ct.md).
 
 ## 규약
 
@@ -70,7 +73,8 @@ infra/terraform/
 
 ### 실제 값은 추적하지 않는다
 
-*   계정 ID · 인스턴스 ID · 리소스 ID · 사설 IP 는 `*.tfvars` 에 둡니다.
+*   계정 ID 는 `data.aws_caller_identity` 로 얻고 tfvars · 코드 리터럴에 두지
+    않습니다(R13). 인스턴스 ID · 리소스 ID · 사설 IP 는 `*.tfvars` 에 둡니다.
     `*.tfvars` 는 추적하지 않고 `terraform.tfvars.example` 의
     자리표시자(`<INSTANCE_ID_DEV>` 같은 꼴)만 추적합니다.
 
@@ -134,7 +138,8 @@ terraform fmt -check -recursive infra/terraform
 terraform -chdir=<루트·모듈> init -backend=false -input=false
 terraform -chdir=<루트·모듈> validate
 terraform -chdir=<tests/ 가 있는 루트·모듈> test
-conftest verify --policy infra/terraform/policy/guard
+conftest verify -c infra/terraform/scripts/guard-data/empty-config.toml \
+  --policy infra/terraform/policy/guard --namespace main
 bash infra/terraform/scripts/guard_test.sh
 bash infra/terraform/scripts/guard.sh
 shellcheck infra/terraform/scripts/*.sh
@@ -156,7 +161,7 @@ shellcheck infra/terraform/scripts/*.sh
 
 ## guard 규칙
 
-guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R11 은
+guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R13 은
 [conftest](https://www.conftest.dev/)(`--parser hcl2`)로 돌리는 Rego 정책
 `policy/guard/*.rego` 가 판정합니다. `scripts/guard.sh` 는 얇은 실행기입니다.
 파서가 볼 수 없는 R0 를 직접 보고, 파일마다 파싱이 되는지 먼저 가린 뒤, 트리
@@ -168,23 +173,35 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R11 
 
 | 규칙 | 대상 경로 | 실패 조건 |
 |---|---|---|
-| R0 | 전체 | `*.tf.json` 파일 · 심볼릭 링크(파일이든 디렉터리든 — guard.sh 가 셸로 검사) |
+| R0 | 전체 | `*.tf.json` 파일 · 심볼릭 링크(파일이든 디렉터리든 — 이름이 `.terraform` · `scripts/testdata` 여도) · 숨김 `.tf`(이름이 `.` 으로 시작 — Terraform 은 읽지 않음) · 경로에 줄바꿈 · 제어 문자가 든 항목 · conftest 설정 파일 `conftest.<확장자>`(viper 12종 · 대소문자 무관 · 링크여도 — 있으면 conftest 를 부르지 않고 종료 1). guard.sh 가 셸로 검사 |
 | R1 | 전체 | `resource` · `data` `aws_secretsmanager_secret_version`(`count = 0` 이어도) |
 | R2 | 전체 | `resource` · `data` 유형이 `aws_cloudfrontkeyvaluestore_key` 로 시작 |
 | R3 | 전체 | `aws_security_group` 자원 안 `ingress` · `egress`(블록 · 속성 · `dynamic "ingress"` · `dynamic "egress"`) |
 | R4 | `modules/state_bucket/` | `aws_s3_bucket` 자원 없음, 또는 그 자원 중 `lifecycle { prevent_destroy = true }`(리터럴 `true`)가 없는 것 |
 | R11 | `nonprod/dev/` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원 중 리터럴 `prevent_destroy = true` 가 없는 것 |
+| R12 | `nonprod/dns-legacy/` | 운영 트리: ① 그 루트 바로 아래 `.tf` 없음 ② 주소가 정확히 `aws_route53_zone.legacy` 인 선언 없음 ③ 그 루트의 `aws_route53_zone` 중 리터럴 `prevent_destroy = true` 가 없는 것. fixture 트리는 ① · ② 의 부재만 건너뜀(③ 은 그대로) |
+| R13 | 전체(`.tf` 만 — `*.example` · 시험 파일 · 주석은 리뷰) | 문자열 · 숫자 리터럴(맵 키 포함) 안의 계정 ID 꼴 숫자열 — 12자리 · 4-4-4 대시 표기(앞뒤가 숫자가 아님 — ARN 속 계정 ID 포함) · 이름을 소문자로 바꾸고 `-` · `_` 를 뺐을 때 `accountid` 가 드는 `variable`(`accountId` · `account-id` 포함). 위반 메시지는 그 숫자열을 가림 |
 
-`prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R11 이
+`prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R11 · R12 가
 맡습니다. conftest 는 식을 평가하지 않으므로 리터럴 `true` 만 인정합니다 —
 `true != true` · `var.keep` 같은 식과 문자열 `"true"` 는 위반입니다. R4 · R11 은
 대상 경로 아래 `.tf` 가 하나도 없는 트리(다른 규칙의 fixture)에서는 건너뜁니다.
 dev SG 규칙 자원은 M12 가 8082 규칙을 지우므로 R11 대상이 아닙니다. dev 상자를
 없애는 PR 은 R11 을 함께 지웁니다.
 
-R5 ~ R10 은 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 · 모듈과
-같은 PR 에서 그 번호로 `policy/guard/` 에 더합니다(정책 · `_test.rego` ·
-fixture 를 함께).
+**R12 는 운영 트리에서 건너뛰지 않습니다.** 공개 존 루트의 파일을 지우거나
+옮기면 `prevent_destroy` 도 함께 사라져 아무것도 막지 못하기 때문입니다(설계
+3-1). 운영 트리와 fixture 트리를 가르는 표지(`mode`)는 guard.sh 가 루트를 보고
+골라 `scripts/guard-data/<표지>/mode.json` 을 늘 `--data` 로 넘깁니다. 루트가
+`scripts/testdata/` 아래일 때만 `fixture` 이고, 실제 트리 · 저장소 밖 트리는
+`operational` 입니다. 정책은 표지가 정확히 `fixture` 일 때만 ① · ② 의 부재를
+건너뛰고, 표지가 없거나 모르는 값이면 운영 트리로 봅니다. 루트를 옮기거나 존
+주소를 바꾸는 PR 은 R12 도 같은 PR 에서 고쳐야 통과합니다.
+
+R6 · R8 ~ R10 은 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 ·
+모듈과 같은 PR 에서 그 번호로 `policy/guard/` 에 더합니다(정책 · `_test.rego` ·
+fixture 를 함께). R5 · R7 은 **보류**입니다 — R5 는 재개 키트(결정 46), R7 은
+CI 자동 푸시를 켜는 후속 PR(40차)이 더합니다.
 
 ### 설치와 실행
 
@@ -193,7 +210,9 @@ fixture 를 함께).
     손으로 돌립니다.
 
 ```
-conftest verify --policy infra/terraform/policy/guard   # 정책 단위 시험
+conftest verify -c infra/terraform/scripts/guard-data/empty-config.toml \
+  --policy infra/terraform/policy/guard \
+  --namespace main                                      # 정책 단위 시험
 bash infra/terraform/scripts/guard_test.sh              # fixture 끝에서 끝까지
 bash infra/terraform/scripts/guard.sh                   # 실제 트리
 ```
@@ -228,7 +247,12 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 `ok/` 는 통과 · `err_*/` 와 읽을 수 없는 파일 · conftest 없음은 종료 2」를
 확인합니다. 나누는 기준은 Terraform 이 받는 코드인가입니다 — Terraform 이 받는
 꼴은 `bad_` · `ok`, 받지 않는(파싱되지 않는) 꼴은 `err_` 입니다. 경로를 겨누는
-규칙의 fixture 는 그 경로를 fixture 트리 안에 그대로 둡니다.
+규칙의 fixture 는 그 경로를 fixture 트리 안에 그대로 둡니다. R12 의 운영 표지
+사례는 fixture 를 저장소 밖 임시 디렉터리에 복사해 돌립니다 — `ok_R12/` 는 두
+표지 모두 통과하고, `op_<규칙>_<변형>/` 은 그 저장소 밖 사본으로만 돌립니다.
+열거 경계(숨김 · 줄바꿈 · 제어 문자 이름 · 링크)와 conftest 설정 파일 사례는
+저장소에 두지 않고, `guard_test.sh` 가 `ok_R12/` 의 저장소 밖 사본에 만들어
+돌립니다.
 `terraform fmt -recursive` 를 깨는 fixture 는 `*.tf.in` 으로 두고
 `guard_test.sh` 가 임시 디렉터리에 `*.tf` 로 복사해 돌립니다.
 
@@ -240,14 +264,18 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 *   R4 · R11 은 대상 경로 아래 `.tf` 가 하나도 없으면 건너뜁니다(다른 규칙
     fixture 를 위해). 대상 디렉터리를 통째로 지우거나 옮기는 PR 은 규칙도 함께
     고쳐야 하며, 그것은 리뷰가 봅니다.
-*   이름이 `.terraform` 인 디렉터리는 깊이와 상관없이 검사에서 뺍니다(provider
-    캐시). 그 이름 아래에 구성을 두지 않습니다.
+*   이름이 `.terraform` 인 **디렉터리**는 깊이와 상관없이 검사에서
+    뺍니다(provider 캐시). 그 이름 아래에 구성을 두지 않습니다. 같은 이름의
+    링크는 R0 입니다.
+*   `scripts/testdata` · `.terraform` 아래의 모듈을 module `source` 로 쓰면
+    Terraform 은 읽지만 guard 는 그 모듈을 보지 못합니다(검사에서 빼는
+    디렉터리) — 리뷰 몫입니다.
 *   실제 트리보다 **상위** 디렉터리(`.` · `infra` 등)를 루트로 주면 경로 규칙
-    (R4 · R11)이 맞지 않고 `scripts/testdata` 도 빠지지 않아 fixture 위반이
+    (R4 · R11 · R12)이 맞지 않고 `scripts/testdata` 도 빠지지 않아 fixture 위반이
     쏟아집니다(종료 1 — 위반 0 으로 새지는 않음). 루트는 주지 않거나
     `infra/terraform` 으로 줍니다.
-*   모든 심볼릭 링크가 R0 입니다(`.tf` 가 아닌 문서 링크도). 단 이름이
-    `.terraform` 인 것은 디렉터리든 링크든 건너뜁니다.
+*   모든 심볼릭 링크가 R0 입니다(`.tf` 가 아닌 문서 링크도, 이름이
+    `.terraform` 이어도).
 *   `.gitignore` 가 막는 로컬 파일(`override.tf` · `*_override.tf` 등)은 로컬
     guard 는 보지만 CI 는 볼 수 없습니다 — 커밋되지 않으므로 리뷰 대상도
     아닙니다.
@@ -259,12 +287,28 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 *   R3 은 `aws_security_group` 만 봅니다. 기본 SG(`aws_default_security_group`)
     의 인라인 규칙은 대상이 아닙니다 — 기본 SG 를 Terraform 으로 다루게 되면
     리뷰가 보고 규칙을 더합니다.
-*   검사 루트의 `conftest.toml` 은 `ignore` · `namespace` · `policy` 를 명시
-    인자로 덮어 판정에 영향을 주지 못합니다. 그 밖의 키(`output` · `data` 등)는
-    덮지 않습니다 — 출력이 바뀌면 모르는 줄로 종료 2 가 납니다(안전한 쪽).
-*   R0(심볼릭 링크 · `.tf.json`)는 정책이 아니라 guard.sh 의 셸 검사입니다.
+*   검사 트리 안의 conftest 설정 파일 `conftest.<확장자>`(viper 가 찾는 12종,
+    대소문자 무관)는 일반 파일이든 링크든 R0 위반입니다. conftest 0.71.1 은
+    검사 루트의 그 파일을 읽습니다 — json · toml · yaml · yml · dotenv · env
+    6종은 읽어 적용하고(namespace · data 를 바꾸고 `update` 로 정책을
+    내려받기까지 함), properties · props · prop · hcl · tfvars · ini 6종은
+    읽다가 오류로 멈춥니다. 어느 쪽이든 R0 이고, 하나라도 있으면 guard.sh 는
+    conftest 를 한 번도 부르지 않고 종료 1 로 멈춥니다. `conftest.md` 처럼
+    conftest 가 읽지 않는 이름은 대상이 아닙니다.
+*   겹으로, guard.sh 와 guard_test.sh 는 conftest 를 부를 때마다 저장소에
+    고정한 빈 설정(`scripts/guard-data/empty-config.toml`)을 `--config-file`
+    로 넘깁니다. 그래서 conftest 는 검사 루트나 호출한 디렉터리의 설정을 아예
+    찾지 않습니다.
+*   R0(심볼릭 링크 · `.tf.json` · 숨김 · 줄바꿈 · 제어 문자 이름 · conftest
+    설정 파일)는 정책이 아니라 guard.sh 의 셸 검사입니다. 파일 목록은 NUL 로
+    구분해 읽으므로 이름 속 줄바꿈이 한 항목을 둘로 쪼개지 못합니다.
     `--parser hcl2` 는 JSON 구성을 읽지 못하므로 `.tf.json` 은 이 트리에 두지
     않습니다.
+*   R13 은 guard 가 정책에 넘기는 `.tf` 만 봅니다. 추적되는 `*.example`
+    (`terraform.tfvars.example` · `backend.hcl.example`) · 시험 파일
+    (`*.tftest.hcl`) · 주석(hcl2 가 버림)은 보지 않으므로 리뷰가 봅니다. 계정
+    ID 꼴은 12자리 숫자열과 4-4-4 대시 표기뿐이고, 그 밖의 꼴(공백 · 점 구분
+    등)도 리뷰 몫입니다.
 *   R1 은 Secrets Manager 비밀 버전만 봅니다. `aws_ssm_parameter` 의
     SecureString 값도 상태에 평문으로 남지만 R1 대상이 아닙니다(설계상 SSM
     비밀은 없음 — 쓰게 되면 리뷰가 막고 규칙을 더합니다).

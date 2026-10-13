@@ -2,7 +2,7 @@
 # 값은 운영 O1 전의 읽기 조사(옛 존 레코드 목록 · NS TTL)로 채운다.
 
 variable "region" {
-  description = "nonprod 계정 리전(Route 53 은 전역이지만 provider 가 요구)."
+  description = "nonprod 환경 리전(리스 계정 — Route 53 은 전역이지만 provider 가 요구)."
   type        = string
   default     = "ap-northeast-2"
 }
@@ -34,9 +34,7 @@ variable "zone_tags" {
   type        = map(string)
 }
 
-# 존 이전(운영 O6) 때 이 옛 존은 900 으로 **내리기만** 한다(설계 9-2). 이전이
-# 끝나면 옛 존은 지운다 — TTL 을 다시 올리는 대상은 새 존(prod/dns)이다.
-# 평소엔 현재 값.
+# 존 이전 없음 — 현재 값 유지(설계 3-1).
 variable "ns_ttl" {
   description = "옛 존 apex NS 레코드 TTL(초). 현재 값을 넣는다."
   type        = number

@@ -1,8 +1,8 @@
 # nonprod/bootstrap
 
-nonprod 계정의 Terraform 상태 버킷을 만드는 루트입니다. 상태 버킷이 없으면
-다른 nonprod 루트(dev · dns-legacy · dns-dev)가 상태를 둘 곳이 없으므로 이
-루트를 가장 먼저 적용합니다.
+nonprod 환경(리스 계정)의 Terraform 상태 버킷을 만드는 루트입니다. 상태
+버킷이 없으면 다른 nonprod 루트(dev · dns-legacy · dns-dev(보류))가 상태를 둘
+곳이 없으므로 이 루트를 가장 먼저 적용합니다.
 
 버킷 설정(버전 관리 · SSE · 퍼블릭 차단 · ACL 끔 · TLS 강제 정책 ·
 이전 버전 90일 만료 · 최근 이전 버전 5개 보존 · `prevent_destroy`)은 `modules/state_bucket` 이
