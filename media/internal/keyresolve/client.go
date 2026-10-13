@@ -1,6 +1,6 @@
 // Package keyresolve 는 계약4 4C(POST /internal/stream-keys/resolve)의 클라이언트다.
 //
-// 이 패키지의 에러에는 응답 본문 · 출입증 토큰 · passphrase 가 실리지 않는다(설계 6절 누설 규칙).
+// 이 패키지의 에러에는 응답 본문 · 출입증 토큰 · passphrase · 끝점(BaseURL)이 실리지 않는다(설계 6절 누설 규칙).
 // 로거도 두지 않는다 — 무엇을 기록할지는 부르는 쪽이 정한다.
 package keyresolve
 
@@ -11,8 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
+	"time"
+	"unicode"
 
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/streamkey"
 )
@@ -24,21 +28,23 @@ const Header = "X-Stream-Key-Resolve-Token"
 // resolvePath 는 4C 의 경로다(auth 쪽 StreamKeyResolveController).
 const resolvePath = "/internal/stream-keys/resolve"
 
-// ClientOptions 는 NewClient 의 설정이다.
+// ClientOptions 는 NewClient 의 설정이다. Token 은 Secret 이라 ClientOptions 를 어떻게 찍어도 출입증이 나오지 않는다.
 type ClientOptions struct {
 	BaseURL string // http://<dev EC2 사설 주소>:8082 — 값은 .env 에만. 비면 NewClient 가 거부
-	Token   string // auth 의 STREAM_KEY_RESOLVE_TOKEN 과 같은 값. 비면 거부
+	Token   Secret // auth 의 STREAM_KEY_RESOLVE_TOKEN 과 같은 값(NewSecret 으로 감싼다). 비면 거부
 }
 
-// Client 는 4C 를 부르는 클라이언트다. 여러 고루틴이 함께 써도 된다.
+// Client 는 4C 를 부르는 클라이언트다. 여러 고루틴이 함께 써도 된다. 출입증은 요청 머리에 싣는 함수 안에만 있어서
+// Client 를 어떻게 찍어도 나오지 않는다.
 type Client struct {
 	endpoint   string
-	token      string
+	authorize  func(*http.Request) // 요청에 전용 출입증 머리를 싣는다
 	httpClient *http.Client
 }
 
-// NewClient 는 opt 를 검사해 Client 를 만든다. BaseURL · Token 이 비었거나 BaseURL 이 http · https 의
-// 절대 URL(호스트 포함)이 아니면 에러다.
+// NewClient 는 opt 를 검사해 Client 를 만든다. BaseURL · Token 이 비었거나, BaseURL 이 http · https 의 절대 URL(호스트
+// 포함)이 아니거나 사용자 정보 · 질의 · 조각이 있으면 에러다. Token 에 제어 문자가 있거나 앞뒤가 공백이어도 에러다 —
+// 머리 값으로 그대로 실을 수 없다.
 //
 // 에러에는 BaseURL · Token 의 값도, url.Parse 의 에러 문구(입력 원문을 담는다)도 싣지 않는다 —
 // 설정을 잘못 넣으면 BaseURL 자리에 토큰이 들어갈 수 있다.
@@ -46,22 +52,33 @@ func NewClient(opt ClientOptions) (*Client, error) {
 	if opt.BaseURL == "" {
 		return nil, errors.New("keyresolve: BaseURL 이 비었다")
 	}
-	if opt.Token == "" {
+	token := opt.Token.reveal()
+	if token == "" {
 		return nil, errors.New("keyresolve: Token 이 비었다")
+	}
+	if !headerSafe(token) {
+		return nil, errors.New("keyresolve: Token 에 제어 문자가 있거나 앞뒤가 공백이다 — 머리 값으로 그대로 실을 수 없다")
 	}
 	base, err := url.Parse(opt.BaseURL)
 	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Hostname() == "" {
 		return nil, errors.New("keyresolve: BaseURL 은 http 또는 https 의 절대 URL(호스트 포함)이어야 한다")
 	}
+	// 사용자 정보는 요청마다 Basic 머리로 auth 에 가고, 질의는 auth 까지 간다. 둘 다 끝점 문자열에도 남는다.
+	if base.User != nil || base.RawQuery != "" || base.ForceQuery || base.Fragment != "" {
+		return nil, errors.New("keyresolve: BaseURL 에 사용자 정보 · 질의 · 조각이 있다")
+	}
 	return &Client{
-		endpoint: base.JoinPath(resolvePath).String(),
-		token:    opt.Token,
+		endpoint:  base.JoinPath(resolvePath).String(),
+		authorize: func(r *http.Request) { r.Header.Set(Header, token) },
 		// Timeout 을 두지 않는다 — 시한은 Resolve 의 ctx 하나다.
 		httpClient: &http.Client{
-			// 기본 전송(http.DefaultTransport)은 HTTP_PROXY 같은 환경변수의 프록시를 탄다. 영값
-			// Transport 는 Proxy 가 nil 이라 auth 에 바로 붙는다 — 전용 토큰 헤더가 프록시를 거치지
-			// 않는다. 연결은 다시 쓴다(keep-alive 는 영값에서 켜져 있다).
-			Transport: &http.Transport{},
+			// 기본 전송(http.DefaultTransport)은 HTTP_PROXY 같은 환경변수의 프록시를 탄다. 이 전송은
+			// Proxy 가 nil 이라 auth 에 바로 붙는다 — 전용 토큰 헤더가 프록시를 거치지 않는다. 연결은
+			// 다시 쓴다(keep-alive 는 기본으로 켜져 있다). 연결 준비에는 connectTimeout 상한을 둔다.
+			Transport: &http.Transport{
+				DialContext:         (&net.Dialer{Timeout: connectTimeout}).DialContext,
+				TLSHandshakeTimeout: connectTimeout,
+			},
 			// 리다이렉트를 따르지 않는다. 따라가면 Go 는 사용자 정의 헤더(전용 토큰)를 새 주소에도
 			// 싣는다. 3xx 는 그대로 돌아와 비-200(Kind "status")이 된다.
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -69,6 +86,13 @@ func NewClient(opt ClientOptions) (*Client, error) {
 			},
 		},
 	}, nil
+}
+
+// headerSafe 는 s 를 머리 값으로 그대로 실을 수 있는지 본다 — 제어 문자(줄바꿈 · NUL · 탭 · DEL 등)가 없고 앞뒤가
+// 공백이 아니어야 한다. Go 전송은 제어 문자가 든 머리 값을 보내지 않고(그 실패는 auth 에 닿지 못한 것처럼 보인다),
+// 앞뒤 공백은 받는 쪽이 걷어 다른 값이 된다(RFC 9110 5.5).
+func headerSafe(s string) bool {
+	return !strings.ContainsFunc(s, unicode.IsControl) && !strings.HasPrefix(s, " ") && !strings.HasSuffix(s, " ")
 }
 
 // Verdict 는 auth 가 판정한 결과다.
@@ -108,6 +132,12 @@ const (
 // maxBodyBytes 는 읽어 들이는 응답 본문의 상한이다(설계 2-3). 정상 응답은 100바이트 안팎이다.
 const maxBodyBytes = 4 << 10
 
+// connectTimeout 은 연결 준비 하나 — TCP 다이얼 · TLS 악수 — 의 상한이다. Go 전송은 연결 준비를 요청 ctx 의 취소에서 떼어
+// 둔다(다음 요청이 그 연결을 쓸 수 있게 — net/http Transport.getConn). 그래서 auth 가 SYN 이나 TLS 를 붙잡으면 Resolve 는
+// ctx 시한에 돌아와도 다이얼 고루틴과 소켓이 남고 요청마다 쌓인다 — 이 상한이 그것을 묶는다. 처리기 시한(ingestauth
+// MaxDeadline 1.125초)과 바깥 가드(1.175초)보다 길게 둬, 요청의 결과(시한 안에 못 닿으면 timeout)는 그대로 ctx 가 정한다.
+const connectTimeout = 2 * time.Second
+
 // resolveRequest 는 4C 요청 본문(ResolveRequest)이다.
 type resolveRequest struct {
 	StreamID string `json:"streamid"`
@@ -127,7 +157,8 @@ type resolveResponse struct {
 //
 // auth 가 판정을 돌려주지 못하면 에러는 *UndecidedError 다. ctx 가 끝나 답을 못 받으면 — 시한이든
 // 취소든 — Kind 는 timeout 이다. auth 가 허락했지만 passphrase 가 형식 밖이면 ErrInvalidPassphrase 다.
-// token 이 토큰 꼴이 아니면 auth 에 묻지 않고 그 밖의 에러를 돌려준다.
+// token 이 토큰 꼴이 아니거나 요청을 만들지 못하면(nil ctx · 다시 해석하지 못하는 끝점) auth 에 묻지 않고 그 밖의 에러를
+// 돌려준다 — 그 문구에도 끝점은 없다.
 func (c *Client) Resolve(ctx context.Context, token string) (Verdict, error) {
 	// token 으로 streamid 를 다시 만드므로 토큰 꼴만 받는다. 쉼표가 든 값은 auth 가 다른 r 값을
 	// 읽게 만들 수 있다(auth 의 StreamId.parse 는 마지막 r 을 읽는다).
@@ -138,10 +169,12 @@ func (c *Client) Resolve(ctx context.Context, token string) (Verdict, error) {
 	body, _ := json.Marshal(resolveRequest{StreamID: "#!::r=" + token + ",m=publish"})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return Verdict{}, err
+		// NewClient 를 지나도 끝점을 다시 해석하지 못할 수 있다(IPv6 영역 id 의 이상한 글자). nil ctx 도 여기로 온다. 원인
+		// 에러의 문구에는 끝점이 실리므로 싣지 않는다.
+		return Verdict{}, errors.New("keyresolve: 요청을 만들지 못했다 — 끝점을 다시 해석하지 못했거나 ctx 가 nil 이다")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(Header, c.token)
+	c.authorize(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

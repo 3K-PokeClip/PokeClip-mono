@@ -225,7 +225,7 @@ func (a *fakeAuth) callCount() int {
 // newTestResolver 는 baseURL 의 4C 를 부르는 실제 클라이언트다.
 func newTestResolver(t *testing.T, baseURL string) *keyresolve.Client {
 	t.Helper()
-	c, err := keyresolve.NewClient(keyresolve.ClientOptions{BaseURL: baseURL, Token: testResolveToken})
+	c, err := keyresolve.NewClient(keyresolve.ClientOptions{BaseURL: baseURL, Token: keyresolve.NewSecret(testResolveToken)})
 	if err != nil {
 		t.Fatalf("Setup: keyresolve.NewClient(BaseURL=%q) returned error: %v", baseURL, err)
 	}

@@ -87,8 +87,8 @@ func logLevel(raw string) (slog.Level, error) {
 }
 
 // newControlClient 는 MTX_API_URL · MTX_API_USER · MTX_API_PASS 로 Control API 클라이언트를 만든다. MTX_API_URL 은 http
-// 만 받는다 — 제어망 평문이 설계 값이고(설계 0절 내부 구간 · 2-6), mtxctl 의 전송은 TLS 악수 시한을 두지 않는다. 그
-// 밖의 검사(IP 리터럴 호스트 · 경로 · 사용자 정보 없음 · 자격)는 mtxctl.NewClient 가 한다.
+// 만 받는다 — 제어망 평문이 설계 값이다(설계 0절 내부 구간 · 2-6). 그 밖의 검사(IP 리터럴 호스트 · 경로 · 사용자 정보
+// 없음 · 자격)는 mtxctl.NewClient 가 한다.
 func newControlClient(getenv func(string) string) (*mtxctl.Client, error) {
 	if err := requireSet(getenv, envMTXAPIURL, envMTXAPIUser, envMTXAPIPass); err != nil {
 		return nil, err
@@ -97,7 +97,7 @@ func newControlClient(getenv func(string) string) (*mtxctl.Client, error) {
 	if u, err := url.Parse(raw); err != nil || u.Scheme != "http" {
 		return nil, fmt.Errorf("%s 는 http URL 이어야 한다", envMTXAPIURL)
 	}
-	c, err := mtxctl.NewClient(mtxctl.Options{APIURL: raw, User: getenv(envMTXAPIUser), Pass: getenv(envMTXAPIPass)})
+	c, err := mtxctl.NewClient(mtxctl.Options{APIURL: raw, User: getenv(envMTXAPIUser), Pass: mtxctl.NewSecret(getenv(envMTXAPIPass))})
 	if err != nil {
 		return nil, fmt.Errorf("%s · %s · %s: %w", envMTXAPIURL, envMTXAPIUser, envMTXAPIPass, err)
 	}
@@ -108,7 +108,7 @@ func newControlClient(getenv func(string) string) (*mtxctl.Client, error) {
 // 의 호스트:포트도 돌려준다 — URL 의 사용자 정보 · 경로 · 질의는 싣지 않는다.
 func newResolver(getenv func(string) string) (*keyresolve.Client, string, error) {
 	raw := getenv(envResolveURL)
-	c, err := keyresolve.NewClient(keyresolve.ClientOptions{BaseURL: raw, Token: getenv(envResolveToken)})
+	c, err := keyresolve.NewClient(keyresolve.ClientOptions{BaseURL: raw, Token: keyresolve.NewSecret(getenv(envResolveToken))})
 	if err != nil {
 		return nil, "", fmt.Errorf("%s · %s: %w", envResolveURL, envResolveToken, err)
 	}

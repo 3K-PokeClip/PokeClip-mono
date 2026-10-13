@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -35,6 +36,12 @@ const listItemsPerPage = 1<<31 - 1
 // 연결이다. 그보다 많으면 목록이 실패한다(Kind parse).
 const maxListBytes = 64 << 20
 
+// connectTimeout 은 연결 준비 하나 — TCP 다이얼 · TLS 악수 — 의 상한이다. Go 전송은 연결 준비를 요청 ctx 의 취소에서 떼어
+// 둔다(net/http Transport.getConn). 상한이 없으면 Control API 가 SYN 이나 TLS 를 붙잡을 때 요청은 부르는 쪽 ctx(cut 은 전체
+// 시한 2분)가 끝나야 돌아오고, 연결 준비는 그 뒤에도 남는다. 제어망 안이라 정상 다이얼은 밀리초 안이다 — 2초면 cut 전체
+// 시한의 작은 몫으로 닿지 않는 Control API 를 unreachable 로 가른다.
+const connectTimeout = 2 * time.Second
+
 // maxDrainBytes 는 조회 · kick 응답 본문을 비울 때 읽는 상한이다. 비워야 전송이 TCP 연결을 다시 쓴다 — 절단의 확인은
 // 같은 id 를 여러 번 조회한다.
 const maxDrainBytes = 64 << 10
@@ -42,13 +49,12 @@ const maxDrainBytes = 64 << 10
 // connIDPattern 은 MediaMTX 연결 id 의 꼴이다 — uuid.UUID 의 JSON(소문자 16진 8-4-4-4-12).
 var connIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// Options 는 NewClient 의 설정이다. fmt 와 encoding/json 으로 찍어도 — 그래서 slog 의 Text · JSON 처리기로 찍어도 —
-// Pass 는 나오지 않는다. 다만 다른 값의 비공개 필드로 담아 fmt 로 찍으면 fmt 가 Format 을 부르지 못해 Pass 가 그대로
-// 나온다. 그렇게 담아 찍지 않는다.
+// Options 는 NewClient 의 설정이다. Pass 는 Secret 이라 Options 를 fmt(값과 맞지 않는 동사 포함) · slog · encoding/json
+// 어디로 찍어도 — 다른 값의 비공개 필드로 담아 찍어도 — 비번이 나오지 않는다.
 type Options struct {
 	APIURL string // http://<A_mtx>:9997 — IP 리터럴. 경로 · 사용자 정보 · 질의 · 조각은 받지 않는다
 	User   string // Control API 의 Basic 자격 — MediaMTX 가 응답기의 action=api 행에 묻는다. ':' 를 담을 수 없다
-	Pass   string `json:"-"`
+	Pass   Secret `json:"-"`
 }
 
 // Format 은 o 를 Pass 없이 쓴다. 동사와 무관하게 같은 꼴이다.
@@ -70,7 +76,7 @@ type Client struct {
 // 하려는 것이다. 에러에는 설정값을 싣지 않는다 — 자리를 잘못 넣으면 APIURL 자리에 비번이 들어갈 수 있다.
 func NewClient(opt Options) (*Client, error) {
 	switch {
-	case opt.User == "" || opt.Pass == "":
+	case opt.User == "" || opt.Pass.reveal() == "":
 		return nil, errors.New("mtxctl: Control API 자격(User · Pass)이 비었다")
 	case strings.Contains(opt.User, ":"):
 		return nil, errors.New("mtxctl: User 에 ':' 가 있다 — Basic 자격은 첫 ':' 에서 사용자와 비번을 가른다")
@@ -79,15 +85,19 @@ func NewClient(opt Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	user, pass := opt.User, opt.Pass
+	user, pass := opt.User, opt.Pass.reveal()
 	return &Client{
 		base:      base,
 		authorize: func(r *http.Request) { r.SetBasicAuth(user, pass) },
 		// Timeout 을 두지 않는다 — 시한은 부르는 쪽 ctx 하나다.
 		httpClient: &http.Client{
-			// 영값 Transport 는 Proxy 가 nil 이라 환경 변수의 프록시를 타지 않는다 — Basic 자격이 프록시를 거치지
-			// 않고, 응답기의 api 행이 판정하는 출발지(SelfIP)도 바뀌지 않는다. 연결은 다시 쓴다.
-			Transport: &http.Transport{},
+			// 이 전송은 Proxy 가 nil 이라 환경 변수의 프록시를 타지 않는다 — Basic 자격이 프록시를 거치지
+			// 않고, 응답기의 api 행이 판정하는 출발지(SelfIP)도 바뀌지 않는다. 연결은 다시 쓴다. 연결 준비에는
+			// connectTimeout 상한을 둔다.
+			Transport: &http.Transport{
+				DialContext:         (&net.Dialer{Timeout: connectTimeout}).DialContext,
+				TLSHandshakeTimeout: connectTimeout,
+			},
 			// 리다이렉트를 따르지 않는다. 따라가면 Go 는 같은 호스트에 Authorization 을 다시 싣는다. 3xx 는 그 상태의
 			// 에러(Kind status)가 된다.
 			CheckRedirect: func(*http.Request, []*http.Request) error {

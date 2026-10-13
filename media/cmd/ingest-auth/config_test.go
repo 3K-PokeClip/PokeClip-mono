@@ -77,6 +77,7 @@ func TestRunRejectsInvalidValues(t *testing.T) {
 		{name: "MTX_URL_꼴_밖", key: "MTX_API_URL", value: "synthetic-mtx-url-canary-0001", canary: true},
 		{name: "MTX_USER_쌍점", key: "MTX_API_USER", value: "synthetic:user-canary", canary: true},
 		{name: "RESOLVE_URL_꼴_밖", key: "STREAM_KEY_RESOLVE_URL", value: "synthetic-resolve-url-canary-0001", canary: true},
+		{name: "RESOLVE_URL_사용자_정보", key: "STREAM_KEY_RESOLVE_URL", value: "http://synthetic-userinfo-canary-0002@192.0.2.30:8082", canary: true},
 		{name: "LOG_LEVEL_꼴_밖", key: "LOG_LEVEL", value: "synthetic-level-canary-0001", canary: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -89,7 +89,7 @@ func replyJSON(status int, body string) http.HandlerFunc {
 
 func newTestClient(t *testing.T, baseURL string) *Client {
 	t.Helper()
-	c, err := NewClient(ClientOptions{BaseURL: baseURL, Token: testResolveToken})
+	c, err := NewClient(ClientOptions{BaseURL: baseURL, Token: NewSecret(testResolveToken)})
 	if err != nil {
 		t.Fatalf("Setup: NewClient(BaseURL=%q) returned error: %v", baseURL, err)
 	}
@@ -97,40 +97,55 @@ func newTestClient(t *testing.T, baseURL string) *Client {
 }
 
 // 거부 에러에는 토큰 값이 없어야 한다. BaseURL 도 싣지 않는다 — 설정을 잘못 넣으면 그 자리에
-// 토큰이 들어갈 수 있다(마지막 행).
+// 토큰이 들어갈 수 있다(BaseURL_에_토큰 행). 실패 문구도 행의 값 대신 행 이름을 싣는다 — 값에 출입증이 들어 있다.
 func TestNewClientRejectsBadOptions(t *testing.T) {
+	token := NewSecret(testResolveToken)
 	tests := []struct {
 		name string
 		opt  ClientOptions
 	}{
-		{name: "BaseURL_빈_값", opt: ClientOptions{Token: testResolveToken}},
+		{name: "BaseURL_빈_값", opt: ClientOptions{Token: token}},
 		{name: "Token_빈_값", opt: ClientOptions{BaseURL: "http://auth.test:8082"}},
-		{name: "scheme_없음", opt: ClientOptions{BaseURL: "auth.test:8082", Token: testResolveToken}},
-		{name: "상대_경로", opt: ClientOptions{BaseURL: "/internal", Token: testResolveToken}},
-		{name: "scheme_ftp", opt: ClientOptions{BaseURL: "ftp://auth.test:8082", Token: testResolveToken}},
-		{name: "호스트_없음", opt: ClientOptions{BaseURL: "http://", Token: testResolveToken}},
-		{name: "포트만", opt: ClientOptions{BaseURL: "http://:8082", Token: testResolveToken}},
-		{name: "해석_불가", opt: ClientOptions{BaseURL: "http://auth test:8082", Token: testResolveToken}},
-		{name: "BaseURL_에_토큰", opt: ClientOptions{BaseURL: testResolveToken, Token: testResolveToken}},
+		{name: "scheme_없음", opt: ClientOptions{BaseURL: "auth.test:8082", Token: token}},
+		{name: "상대_경로", opt: ClientOptions{BaseURL: "/internal", Token: token}},
+		{name: "scheme_ftp", opt: ClientOptions{BaseURL: "ftp://auth.test:8082", Token: token}},
+		{name: "호스트_없음", opt: ClientOptions{BaseURL: "http://", Token: token}},
+		{name: "포트만", opt: ClientOptions{BaseURL: "http://:8082", Token: token}},
+		{name: "해석_불가", opt: ClientOptions{BaseURL: "http://auth test:8082", Token: token}},
+		{name: "BaseURL_에_토큰", opt: ClientOptions{BaseURL: testResolveToken, Token: token}},
+		// 사용자 정보는 요청마다 Basic 머리로 auth 에 가고, 질의는 auth 까지 가며, 둘 다 끝점 문자열에 남는다.
+		{name: "사용자_정보", opt: ClientOptions{BaseURL: "http://user:" + testResolveToken + "@auth.test:8082", Token: token}},
+		{name: "질의", opt: ClientOptions{BaseURL: "http://auth.test:8082?k=" + testResolveToken, Token: token}},
+		{name: "빈_질의", opt: ClientOptions{BaseURL: "http://auth.test:8082/?", Token: token}},
+		{name: "조각", opt: ClientOptions{BaseURL: "http://auth.test:8082#" + testResolveToken, Token: token}},
+		// 머리 값으로 그대로 실을 수 없는 Token — Go 전송은 제어 문자가 든 머리를 보내지 않아 auth 에 닿지 못한 것
+		// (unreachable)처럼 보이고, 앞뒤 공백은 받는 쪽이 걷어 다른 값이 된다(RFC 9110 5.5).
+		{name: "Token_끝_줄바꿈", opt: ClientOptions{BaseURL: "http://auth.test:8082", Token: NewSecret(testResolveToken + "\n")}},
+		{name: "Token_머리_주입", opt: ClientOptions{BaseURL: "http://auth.test:8082", Token: NewSecret(testResolveToken + "\r\nX-Injected: 1")}},
+		{name: "Token_NUL", opt: ClientOptions{BaseURL: "http://auth.test:8082", Token: NewSecret(testResolveToken + "\x00")}},
+		{name: "Token_가운데_탭", opt: ClientOptions{BaseURL: "http://auth.test:8082", Token: NewSecret(testResolveToken + "\tx")}},
+		{name: "Token_DEL", opt: ClientOptions{BaseURL: "http://auth.test:8082", Token: NewSecret(testResolveToken + "\x7f")}},
+		{name: "Token_앞_공백", opt: ClientOptions{BaseURL: "http://auth.test:8082", Token: NewSecret(" " + testResolveToken)}},
+		{name: "Token_뒤_공백", opt: ClientOptions{BaseURL: "http://auth.test:8082", Token: NewSecret(testResolveToken + " ")}},
 	}
 	for _, tc := range tests {
 		c, err := NewClient(tc.opt)
 		if err == nil {
-			t.Errorf("%s: NewClient(BaseURL=%q) returned nil error, want error", tc.name, tc.opt.BaseURL)
+			t.Errorf("NewClient(%s) returned nil error, want error", tc.name)
 			continue
 		}
 		if c != nil {
-			t.Errorf("%s: NewClient(BaseURL=%q) returned a non-nil Client with the error", tc.name, tc.opt.BaseURL)
+			t.Errorf("NewClient(%s) returned a non-nil Client with the error", tc.name)
 		}
-		if strings.Contains(err.Error(), testResolveToken) {
-			t.Errorf("%s: NewClient(BaseURL=%q) error %q contains the token", tc.name, tc.opt.BaseURL, err)
+		if n := strings.Count(err.Error(), testResolveToken); n > 0 {
+			t.Errorf("NewClient(%s) error carries the resolve token %d time(s), want 0 (error length %d)", tc.name, n, len(err.Error()))
 		}
 	}
 }
 
 func TestNewClientAcceptsAbsoluteHTTPURL(t *testing.T) {
 	for _, base := range []string{"http://auth.test:8082", "http://auth.test:8082/", "https://auth.test"} {
-		c, err := NewClient(ClientOptions{BaseURL: base, Token: testResolveToken})
+		c, err := NewClient(ClientOptions{BaseURL: base, Token: NewSecret(testResolveToken)})
 		if err != nil {
 			t.Errorf("NewClient(BaseURL=%q) returned error: %v", base, err)
 			continue
@@ -154,7 +169,7 @@ func TestResolveReturnsValidVerdict(t *testing.T) {
 		t.Errorf("Resolve(%q) = %+v, want Valid with UserID 42 and no Reason", testToken, v)
 	}
 	if got := v.Passphrase.Reveal(); got != testPassphrase {
-		t.Errorf("Resolve(%q).Passphrase.Reveal() = %q, want %q", testToken, got, testPassphrase)
+		t.Errorf("Resolve(%q).Passphrase.Reveal() is not the passphrase in the response (length %d, want %d)", testToken, len(got), len(testPassphrase))
 	}
 }
 
@@ -181,13 +196,14 @@ func TestResolveReturnsRejection(t *testing.T) {
 			auth := newFakeAuth(t, replyJSON(http.StatusOK, tc.body))
 			c := newTestClient(t, auth.srv.URL)
 
+			// 실패 문구에는 본문 대신 행 이름을 싣는다 — 값이_실린_거절 행의 본문에 passphrase 가 있다.
 			v, err := c.Resolve(t.Context(), testToken)
 			if err != nil {
-				t.Fatalf("Resolve(%q) with body %s returned error: %v", testToken, tc.body, err)
+				t.Fatalf("Resolve(%q) with the %s body returned error: %v", testToken, tc.name, err)
 			}
 			if v.Valid || v.Reason != tc.wantReason || v.UserID != 0 || !v.Passphrase.IsZero() {
-				t.Errorf("Resolve(%q) with body %s = %+v, want a rejection with Reason %q and no UserID or Passphrase",
-					testToken, tc.body, v, tc.wantReason)
+				t.Errorf("Resolve(%q) with the %s body = %+v, want a rejection with Reason %q and no UserID or Passphrase",
+					testToken, tc.name, v, tc.wantReason)
 			}
 		})
 	}
@@ -211,11 +227,13 @@ func TestResolveSendsCanonicalRequest(t *testing.T) {
 		if ct := got.header.Get("Content-Type"); ct != "application/json" {
 			t.Errorf("Content-Type = %q, want %q", ct, "application/json")
 		}
+		// 머리 값은 찍지 않는다 — 출입증이다. 값의 수와 같은지만 싣는다.
 		if v := got.header.Values(Header); len(v) != 1 || v[0] != testResolveToken {
-			t.Errorf("%s values = %q, want exactly the resolve token", Header, v)
+			firstIsToken := len(v) > 0 && v[0] == testResolveToken
+			t.Errorf("%s has %d value(s) (the first is the resolve token: %t), want exactly the resolve token", Header, len(v), firstIsToken)
 		}
 		if v := got.header.Values("X-Internal-Token"); len(v) != 0 {
-			t.Errorf("X-Internal-Token values = %q, want none", v)
+			t.Errorf("X-Internal-Token has %d value(s), want none", len(v))
 		}
 		var body map[string]string
 		if err := json.Unmarshal(got.body, &body); err != nil {
@@ -306,7 +324,7 @@ func TestResolveNon200IsUndecidedStatus(t *testing.T) {
 // timeout 이다 — 어느 쪽이든 부르는 쪽이 더 기다리지 않은 것이지 auth 에 닿지 못한 것이 아니다.
 func TestResolveTimeoutIsUndecidedTimeout(t *testing.T) {
 	t.Run("시한", func(t *testing.T) {
-		auth, _ := newHangingAuth(t, nil)
+		auth, arrived := newHangingAuth(t, nil)
 		c := newTestClient(t, auth.srv.URL)
 		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 		defer cancel()
@@ -316,10 +334,17 @@ func TestResolveTimeoutIsUndecidedTimeout(t *testing.T) {
 			t.Errorf("Resolve(%q) past the ctx deadline: err = %v, want *UndecidedError{Kind: timeout}", testToken, err)
 		}
 		// 처리기가 모두 돌아온 뒤에 센다. 서버 닫기는 처리 중인 요청이 끝나길 기다리고, 붙잡힌 처리기는
-		// 클라이언트가 연결을 끊으면 돌아온다.
+		// 클라이언트가 연결을 끊으면 돌아온다. ctx 의 시한은 만들 때 정해져 요청이 닿기 전에 흐른다 — 느린 러너에서는
+		// 요청이 auth 에 닿기 전에 끝날 수 있다. 그래서 닿았으면(arrived) 한 번, 아니면 0 번이 재시도 없음이다.
 		auth.srv.Close()
-		if n := auth.calls.Load(); n != 1 {
-			t.Errorf("fake auth calls = %d, want 1 (no retry)", n)
+		var want int32
+		select {
+		case <-arrived:
+			want = 1
+		default:
+		}
+		if n := auth.calls.Load(); n != want {
+			t.Errorf("fake auth calls = %d, want %d (no retry — the request reached auth: %t)", n, want, want == 1)
 		}
 	})
 	t.Run("취소", func(t *testing.T) {
@@ -356,7 +381,14 @@ func TestResolveConnectionFailureIsUndecidedUnreachable(t *testing.T) {
 	}
 }
 
-// 200 머리를 보낸 뒤 본문에서 실패해도 Kind 는 같은 규칙이다 — 본문을 붙잡으면 ctx 시한에 걸려
+// roundTripFunc 는 함수를 http.RoundTripper 로 쓴다 — 시험이 실제 전송을 감싸 그 사이의 때를 안다.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+// 200 머리를 보낸 뒤 본문에서 실패해도 Kind 는 같은 규칙이다 — 본문을 붙잡은 채 ctx 가 끝나면
 // timeout, 본문 도중 연결이 끊기면 unreachable 이다.
 func TestResolveBodyFailureAfter200(t *testing.T) {
 	// writePartial 은 200 머리와 본문 앞부분을 내보낸다(Flush — 그래서 클라이언트는 본문 읽기에 들어간다).
@@ -370,10 +402,25 @@ func TestResolveBodyFailureAfter200(t *testing.T) {
 	t.Run("본문_붙잡음", func(t *testing.T) {
 		auth, _ := newHangingAuth(t, writePartial)
 		c := newTestClient(t, auth.srv.URL)
-		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
+		// 200 머리를 받은 뒤에 ctx 를 끝낸다 — 그래야 실패가 본문 읽기에서 난다. 요청 전에 시작한 시한이면 느린 러너에서
+		// 머리를 받기 전에 끝나 본문 갈래를 밟지 않는다. 전송을 감싸 머리를 받은 때를 안다.
+		base := c.httpClient.Transport
+		gotHead := false
+		c.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			resp, err := base.RoundTrip(r)
+			if err == nil {
+				gotHead = true
+				cancel()
+			}
+			return resp, err
+		})
 
 		_, err := c.Resolve(ctx, testToken)
+		if !gotHead {
+			t.Fatalf("Resolve(%q) never received the 200 head, want the failure to come from reading the body", testToken)
+		}
 		if ue := asUndecided(err); ue == nil || ue.Kind != "timeout" {
 			t.Errorf("Resolve(%q) with a stalled 200 body: err = %v, want *UndecidedError{Kind: timeout}", testToken, err)
 		}
@@ -417,9 +464,10 @@ func TestResolveUnparsableBodyIsUndecidedParse(t *testing.T) {
 			auth := newFakeAuth(t, replyJSON(http.StatusOK, tc.body))
 			c := newTestClient(t, auth.srv.URL)
 
+			// 실패 문구에는 본문 대신 행 이름을 싣는다 — 여러 행의 본문에 passphrase 가 있다.
 			_, err := c.Resolve(t.Context(), testToken)
 			if ue := asUndecided(err); ue == nil || ue.Kind != "parse" {
-				t.Errorf("Resolve(%q) with body %s: err = %v, want *UndecidedError{Kind: parse}", testToken, tc.body, err)
+				t.Errorf("Resolve(%q) with the %s body: err = %v, want *UndecidedError{Kind: parse}", testToken, tc.name, err)
 			}
 		})
 	}
@@ -469,12 +517,38 @@ func TestResolveErrorsCarryNoBodyOrSecrets(t *testing.T) {
 				t.Fatalf("Resolve(%q) with HTTP %d (%s, %d-byte body) returned nil error, want error",
 					testToken, tc.status, tc.name, len(tc.body))
 			}
-			for _, secret := range []string{marker, testResolveToken, testPassphrase} {
-				if strings.Contains(err.Error(), secret) {
-					t.Errorf("Resolve(%q) error %q contains %q", testToken, err, secret)
+			// 실패 문구에는 에러 원문 · 카나리아 값을 싣지 않는다 — 카나리아 이름 · 횟수 · 길이만.
+			for _, canary := range []struct{ name, value string }{
+				{name: "response body", value: marker},
+				{name: "resolve token", value: testResolveToken},
+				{name: "passphrase", value: testPassphrase},
+			} {
+				if n := strings.Count(err.Error(), canary.value); n > 0 {
+					t.Errorf("Resolve(%q) with HTTP %d (%s) error carries the %s canary %d time(s), want 0 (error length %d)",
+						testToken, tc.status, tc.name, canary.name, n, len(err.Error()))
 				}
 			}
 		})
+	}
+}
+
+// NewClient 를 지나도 끝점을 다시 해석하지 못하는 BaseURL(IPv6 영역 id 의 '[')이면 요청을 만들지 못한다. 그 에러는 판단
+// 불가도 형식 밖도 아닌 그 밖의 에러이고, 문구에 끝점도 url.Parse 의 원인 문구도 싣지 않는다 — 부르는 쪽이 에러를
+// 찍으면 BaseURL 이 로그에 남는다.
+func TestResolveRequestBuildFailureCarriesNoEndpoint(t *testing.T) {
+	c := newTestClient(t, "http://[fe80::1%25%20%5b]:8082")
+
+	_, err := c.Resolve(t.Context(), testToken)
+	if err == nil {
+		t.Fatalf("Resolve(%q) with an endpoint that does not parse again returned nil error, want error", testToken)
+	}
+	if asUndecided(err) != nil || errors.Is(err, ErrInvalidPassphrase) {
+		t.Errorf("Resolve(%q) with an endpoint that does not parse again: err = %v, want an error that is neither *UndecidedError nor ErrInvalidPassphrase", testToken, err)
+	}
+	for _, fragment := range []string{"fe80", "8082", "stream-keys", "IP-literal"} {
+		if strings.Contains(err.Error(), fragment) {
+			t.Errorf("Resolve(%q) error carries the endpoint fragment %q (error length %d)", testToken, fragment, len(err.Error()))
+		}
 	}
 }
 
@@ -501,16 +575,20 @@ func TestResolveOutOfFormatPassphraseIsErrInvalidPassphrase(t *testing.T) {
 			auth := newFakeAuth(t, replyJSON(http.StatusOK, body))
 			c := newTestClient(t, auth.srv.URL)
 
+			// 실패 문구에는 본문 · 에러 원문 대신 행 이름 · 횟수 · 길이를 싣는다 — 본문에 passphrase 가 있다.
 			_, err := c.Resolve(t.Context(), testToken)
 			if !errors.Is(err, ErrInvalidPassphrase) {
-				t.Fatalf("Resolve(%q) with body %s: err = %v, want ErrInvalidPassphrase", testToken, body, err)
+				t.Fatalf("Resolve(%q) with the %s passphrase: err = %v, want ErrInvalidPassphrase", testToken, tc.name, err)
 			}
 			if ue := asUndecided(err); ue != nil {
-				t.Errorf("Resolve(%q) with body %s: err is also *UndecidedError %+v, want only ErrInvalidPassphrase",
-					testToken, body, ue)
+				t.Errorf("Resolve(%q) with the %s passphrase: err is also *UndecidedError %+v, want only ErrInvalidPassphrase",
+					testToken, tc.name, ue)
 			}
-			if tc.value != "" && strings.Contains(err.Error(), tc.value) {
-				t.Errorf("Resolve(%q) error %q contains the passphrase value", testToken, err)
+			if tc.value == "" {
+				return
+			}
+			if n := strings.Count(err.Error(), tc.value); n > 0 {
+				t.Errorf("Resolve(%q) error carries the %s passphrase %d time(s), want 0 (error length %d)", testToken, tc.name, n, len(err.Error()))
 			}
 		})
 	}
@@ -556,6 +634,25 @@ func TestNewClientUsesDirectTransportWithoutOwnTimeout(t *testing.T) {
 	}
 	if c.httpClient.Timeout != 0 {
 		t.Errorf("http.Client.Timeout = %v, want 0 (the deadline is the ctx alone)", c.httpClient.Timeout)
+	}
+}
+
+// 연결 준비(TCP 다이얼 · TLS 악수)에는 상한이 있다. Go 전송은 연결 준비를 요청 ctx 의 취소에서 떼어 두므로, 상한이 없으면
+// auth 가 SYN · TLS 를 붙잡을 때 Resolve 가 ctx 시한에 돌아온 뒤에도 다이얼 고루틴과 소켓이 남는다. 영값 Transport 는 시한
+// 없는 다이얼러를 쓴다(DialContext 가 nil). 다이얼러의 Timeout 값 자체는 함수 값 밖에서 읽을 수 없어, 다이얼러가
+// 끼워졌는지와 같은 상수를 쓰는 TLSHandshakeTimeout 을 본다.
+func TestNewClientBoundsConnectionSetup(t *testing.T) {
+	c := newTestClient(t, "http://auth.test:8082")
+
+	tr, ok := c.httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Client transport = %T, want *http.Transport", c.httpClient.Transport)
+	}
+	if tr.DialContext == nil {
+		t.Error("Transport.DialContext is nil, want a dialer with a timeout (the zero Transport dials without one)")
+	}
+	if got, want := tr.TLSHandshakeTimeout, 2*time.Second; got != want {
+		t.Errorf("Transport.TLSHandshakeTimeout = %v, want %v", got, want)
 	}
 }
 

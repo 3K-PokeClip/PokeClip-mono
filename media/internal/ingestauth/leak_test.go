@@ -476,7 +476,7 @@ func TestNoSecretsInOutputsAcrossCut(t *testing.T) {
 	cut := func(client *mtxctl.Client) (CutReport, error) {
 		return c.cut(t.Context(), testTokenA, NewDenyList(f.denyPath, f.h.log), f.connDir, client)
 	}
-	wrong, err := mtxctl.NewClient(mtxctl.Options{APIURL: m.srv.URL, User: leakRequestUser, Pass: leakRequestPassword})
+	wrong, err := mtxctl.NewClient(mtxctl.Options{APIURL: m.srv.URL, User: leakRequestUser, Pass: mtxctl.NewSecret(leakRequestPassword)})
 	if err != nil {
 		t.Fatalf("Setup: mtxctl.NewClient with wrong credentials returned %T, want a client", err)
 	}

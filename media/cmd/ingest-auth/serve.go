@@ -87,7 +87,8 @@ func serve(ctx context.Context, s site, getenv func(string) string, stdout, stde
 	return exitOK
 }
 
-// serveConfig 는 run 의 설정 가운데 조립에 쓰는 것이다. 비밀은 담지 않는다 — 출입증은 resolver 안에만 있고, API 비번은
+// serveConfig 는 run 의 설정 가운데 조립에 쓰는 것이다. 찍을 수 있는 자리에 비밀이 없다 — 출입증은 resolver 의 머리
+// 싣는 함수 안에만 있어 serveConfig 를 어느 동사 · slog · json 으로 찍어도 나오지 않고(assembly_leak_test), API 비번은
 // 처리기를 만들 때 환경 변수에서 곧바로 넘긴다.
 type serveConfig struct {
 	listen   netip.AddrPort // 인증 리스너 — 이 IP 가 SelfIP 다

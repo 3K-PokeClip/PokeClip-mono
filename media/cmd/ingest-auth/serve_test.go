@@ -90,11 +90,12 @@ func TestRunServesPublishAndStops(t *testing.T) {
 	checkNoSecrets(t, []string{r.stdout.String(), r.stderr.String()})
 }
 
-// auth_host 는 URL 의 호스트:포트만이다 — 사용자 정보에 잘못 넣은 값이 기동 로그에 실리지 않는다(설계 6절 누설 규칙).
+// auth_host 는 URL 의 호스트:포트만이다 — 경로에 잘못 넣은 값이 기동 로그에 실리지 않는다(설계 6절 누설 규칙). 사용자
+// 정보 · 질의가 든 URL 은 keyresolve.NewClient 가 거부해 설정 오류다(config_test 의 RESOLVE_URL_사용자_정보 행).
 func TestRunStartedLogCarriesOnlyTheAuthHost(t *testing.T) {
-	const canary = "synthetic-userinfo-canary-0002"
+	const canary = "synthetic-path-canary-0002"
 	auth := newFakeAuth(t)
-	env := responderEnv(strings.Replace(auth.srv.URL, "http://", "http://"+canary+"@", 1))
+	env := responderEnv(auth.srv.URL + "/" + canary)
 	r := startResponder(t, newTestSite(t, ""), env)
 	if got, want := logEvents(r.stdout.String(), "ingestauth_started")[0]["auth_host"], strings.TrimPrefix(auth.srv.URL, "http://"); got != want {
 		t.Errorf("ingestauth_started auth_host = %v, want %v", got, want)

@@ -37,8 +37,11 @@ func TestIsToken(t *testing.T) {
 		{name: "소문자_한_자", s: "01ARZ3NDEKTSV4RRFFQ69G5FAv", want: false},
 		{name: "앞_공백", s: " 1ARZ3NDEKTSV4RRFFQ69G5FAV", want: false},
 		{name: "가운데_공백", s: "01ARZ3NDEKTS 4RRFFQ69G5FAV", want: false},
-		// 25자 뒤 줄바꿈은 26바이트다. 끝 줄바꿈을 허용하는 정규식 엔진이면 여기서 샌다.
+		// 25자 뒤 줄바꿈 — 바이트로는 26이다.
 		{name: "25자_끝_줄바꿈", s: "01ARZ3NDEKTSV4RRFFQ69G5FA\n", want: false},
+		// 26자 뒤 줄바꿈 — $ 가 끝 줄바꿈 앞에서도 맞으면((?m) 이나 그렇게 도는 엔진) 여기서 샌다. Go 의 $ 는 텍스트 끝에만
+		// 맞는다(regexp/syntax).
+		{name: "26자_끝_줄바꿈", s: "01ARZ3NDEKTSV4RRFFQ69G5FAV\n", want: false},
 		{name: "하이픈", s: "01ARZ3NDEKTSV4RRFFQ69G5FA-", want: false},
 		// 전각 Ａ(U+FF21)로 바꾼 26글자 — 글자 수는 맞지만 ASCII 가 아니다.
 		{name: "전각_글자", s: "01ARZ3NDEKTSV4RRFFQ69G5FＡV", want: false},

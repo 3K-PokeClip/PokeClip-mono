@@ -389,7 +389,7 @@ func (m *fakeMediaMTX) set(edit func(m *fakeMediaMTX)) {
 // newTestMTXClient 는 apiURL 의 Control API 를 시험 자격으로 부르는 실제 mtxctl.Client 다.
 func newTestMTXClient(t *testing.T, apiURL string) *mtxctl.Client {
 	t.Helper()
-	c, err := mtxctl.NewClient(mtxctl.Options{APIURL: apiURL, User: testAPIUser, Pass: testAPIPass})
+	c, err := mtxctl.NewClient(mtxctl.Options{APIURL: apiURL, User: testAPIUser, Pass: mtxctl.NewSecret(testAPIPass)})
 	if err != nil {
 		t.Fatalf("Setup: mtxctl.NewClient(APIURL=%q) returned error: %v", apiURL, err)
 	}

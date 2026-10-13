@@ -145,7 +145,7 @@ const notFoundBody = `{"status":"error","error":"connection not found"}`
 // newTestClient 는 apiURL 의 Control API 를 시험 자격으로 부르는 클라이언트다.
 func newTestClient(t *testing.T, apiURL string) *Client {
 	t.Helper()
-	c, err := NewClient(Options{APIURL: apiURL, User: testUser, Pass: testPass})
+	c, err := NewClient(Options{APIURL: apiURL, User: testUser, Pass: NewSecret(testPass)})
 	if err != nil {
 		t.Fatalf("Setup: NewClient(APIURL=%q) returned error: %v", apiURL, err)
 	}
@@ -157,14 +157,15 @@ func newTestClient(t *testing.T, apiURL string) *Client {
 // 문구에 실린다. User · Pass 는 비면 안 되고 User 에는 ':' 가 없어야 한다(RFC 7617 2절 — Basic 은 첫 ':' 에서 가른다).
 // 에러에는 어느 설정값도 싣지 않는다 — 자리를 잘못 넣으면 APIURL 자리에 비번이 들어갈 수 있다.
 func TestNewClientRejectsBadOptions(t *testing.T) {
-	valid := Options{APIURL: "http://192.0.2.1:9997", User: testUser, Pass: testPass}
+	valid := Options{APIURL: "http://192.0.2.1:9997", User: testUser, Pass: NewSecret(testPass)}
 	tests := []struct {
 		name string
 		edit func(*Options)
 	}{
 		{name: "APIURL_빈_값", edit: func(o *Options) { o.APIURL = "" }},
 		{name: "User_빈_값", edit: func(o *Options) { o.User = "" }},
-		{name: "Pass_빈_값", edit: func(o *Options) { o.Pass = "" }},
+		{name: "Pass_빈_값", edit: func(o *Options) { o.Pass = NewSecret("") }},
+		{name: "Pass_영값", edit: func(o *Options) { o.Pass = Secret{} }},
 		{name: "User_에_쌍점", edit: func(o *Options) { o.User = "ingest:auth" }},
 		{name: "호스트_이름", edit: func(o *Options) { o.APIURL = "http://mediamtx:9997" }},
 		{name: "scheme_없음", edit: func(o *Options) { o.APIURL = "//192.0.2.1:9997" }},
@@ -204,7 +205,7 @@ func TestNewClientAcceptsIPLiteralURL(t *testing.T) {
 		"http://[2001:db8::1]:9997",
 		"http://[fe80::1%25eth0]:9997",
 	} {
-		if _, err := NewClient(Options{APIURL: apiURL, User: testUser, Pass: testPass}); err != nil {
+		if _, err := NewClient(Options{APIURL: apiURL, User: testUser, Pass: NewSecret(testPass)}); err != nil {
 			t.Errorf("NewClient(APIURL=%q) returned error: %v", apiURL, err)
 		}
 	}
@@ -226,6 +227,25 @@ func TestNewClientUsesDirectTransportWithoutOwnTimeout(t *testing.T) {
 	}
 	if c.httpClient.Timeout != 0 {
 		t.Errorf("http.Client.Timeout = %v, want 0 (the deadline is the ctx)", c.httpClient.Timeout)
+	}
+}
+
+// 연결 준비(TCP 다이얼 · TLS 악수)에는 상한이 있다. Go 전송은 연결 준비를 요청 ctx 의 취소에서 떼어 두므로, 상한이 없으면
+// Control API 가 SYN · TLS 를 붙잡을 때 요청은 부르는 쪽 ctx 가 끝나야 돌아오고 다이얼 고루틴과 소켓은 그 뒤에도 남는다.
+// 영값 Transport 는 시한 없는 다이얼러를 쓴다(DialContext 가 nil). 다이얼러의 Timeout 값 자체는 함수 값 밖에서 읽을 수 없어,
+// 다이얼러가 끼워졌는지와 같은 상수를 쓰는 TLSHandshakeTimeout 을 본다.
+func TestNewClientBoundsConnectionSetup(t *testing.T) {
+	c := newTestClient(t, "http://192.0.2.1:9997")
+
+	tr, ok := c.httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport = %T, want *http.Transport", c.httpClient.Transport)
+	}
+	if tr.DialContext == nil {
+		t.Error("Transport.DialContext is nil, want a dialer with a timeout (the zero Transport dials without one)")
+	}
+	if got, want := tr.TLSHandshakeTimeout, 2*time.Second; got != want {
+		t.Errorf("Transport.TLSHandshakeTimeout = %v, want %v", got, want)
 	}
 }
 
@@ -509,17 +529,27 @@ func TestClientErrorsCarryOnlyStatus(t *testing.T) {
 	_, getErr := c.SRTConnExists(t.Context(), testID)
 	kickErr := c.KickSRTConn(t.Context(), testID)
 
-	for _, err := range []error{listErr, getErr, kickErr} {
-		if err == nil {
-			t.Errorf("Control API answered 500, want an error")
+	// 실패 문구에는 에러 원문 · 카나리아 값을 싣지 않는다 — 갈래 · 카나리아 이름 · 횟수 · 길이만.
+	for _, tc := range []struct {
+		op  string
+		err error
+	}{{op: "list", err: listErr}, {op: "get", err: getErr}, {op: "kick", err: kickErr}} {
+		if tc.err == nil {
+			t.Errorf("%s against a Control API answering 500 returned nil error, want an error", tc.op)
 			continue
 		}
-		msg := err.Error()
-		if strings.Contains(msg, canary) || strings.Contains(msg, testPass) || strings.Contains(msg, testUser) {
-			t.Errorf("error %q carries the response body or the credentials", msg)
+		msg := tc.err.Error()
+		for _, c := range []struct{ name, value string }{
+			{name: "response body", value: canary},
+			{name: "API password", value: testPass},
+			{name: "API user", value: testUser},
+		} {
+			if n := strings.Count(msg, c.value); n > 0 {
+				t.Errorf("%s error carries the %s canary %d time(s), want 0 (error length %d)", tc.op, c.name, n, len(msg))
+			}
 		}
 		if !strings.Contains(msg, "500") {
-			t.Errorf("error %q does not carry the status code 500", msg)
+			t.Errorf("%s error does not carry the status code 500 (error length %d)", tc.op, len(msg))
 		}
 	}
 }
@@ -545,7 +575,7 @@ func TestClientTransportFailures(t *testing.T) {
 				continue
 			}
 			if msg := tc.err.Error(); strings.Contains(msg, strings.TrimPrefix(a.srv.URL, "http://")) {
-				t.Errorf("%s error %q carries the request URL", tc.op, msg)
+				t.Errorf("%s error carries the request URL (error length %d)", tc.op, len(msg))
 			}
 		}
 	})
@@ -644,7 +674,7 @@ func TestClientReusesConnection(t *testing.T) {
 // Options 와 Client 는 fmt · slog(Text · JSON) · encoding/json 어디로 찍어도 비번이 나오지 않는다 — 기동 로그 ·
 // 에러 문구에 통째로 넘겨도 새지 않게(설계 6절 누설 규칙 — API 비번). 다른 값의 공개 필드로 담겨 찍혀도 같다.
 func TestOptionsAndClientHidePassword(t *testing.T) {
-	opt := Options{APIURL: "http://192.0.2.1:9997", User: testUser, Pass: testPass}
+	opt := Options{APIURL: "http://192.0.2.1:9997", User: testUser, Pass: NewSecret(testPass)}
 	c := newTestClient(t, opt.APIURL)
 	holder := struct {
 		Opt    Options
