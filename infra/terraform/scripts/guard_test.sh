@@ -549,9 +549,10 @@ expect_no_rules_error() {
 }
 
 #######################################
-# 검사 루트에 남은 conftest.toml(ignore 등)이 일부 파일을 검사에서 빼지
-# 못하는지 본다. bad_R1 사본에 정상 파일을 하나 더 두고 위반 파일만
-# 무시하는 설정을 둔다(전부 무시는 conftest 가 「파일 없음」 오류로 멈춘다).
+# 검사 루트에 남은 conftest.toml(ignore 등)이 위반 파일을 빼 위반 0 으로
+# 새지 못하는지 본다. bad_R1 사본에 정상 파일을 하나 더 두고 위반 파일만
+# 무시하는 설정을 둔다. 설정 파일이 있으면 guard 는 conftest 를 부르기 전에
+# R0 로 멈춘다(그래서 R1 줄은 나오지 않는다).
 #######################################
 expect_conftest_config_ignored() {
   local tmp output status
@@ -571,11 +572,13 @@ expect_conftest_config_ignored() {
   output="$(bash "${GUARD}" "${tmp}" 2>&1)"
   status=$?
   rm -rf -- "${tmp}"
-  if [[ "${status}" -ne 1 || "${output}" != *"guard: R1 "* ]]; then
-    fail "conftest-config: 종료 1 · R1 위반을 기대했으나 ${status} — ${output}"
+  if [[ "${status}" -ne 1 ||
+    $'\n'"${output}" != *$'\n'"guard: R0 conftest.toml: "* ]]; then
+    fail "conftest-config: 종료 1 · R0 conftest.toml 을 기대했으나 ${status}" \
+      "— ${output}"
     return
   fi
-  echo "ok: conftest-config → R1 위반"
+  echo "ok: conftest-config → R0 위반"
 }
 
 #######################################

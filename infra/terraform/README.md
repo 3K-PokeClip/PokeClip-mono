@@ -172,7 +172,7 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R13 
 
 | 규칙 | 대상 경로 | 실패 조건 |
 |---|---|---|
-| R0 | 전체 | `*.tf.json` 파일 · 심볼릭 링크(파일이든 디렉터리든) · conftest 설정 파일 `conftest.*`(대소문자 무관 — 검사 루트에서 읽혀 정책 · R12 표지를 바꿀 수 있음). guard.sh 가 셸로 검사 |
+| R0 | 전체 | `*.tf.json` 파일 · 심볼릭 링크(파일이든 디렉터리든 — 이름이 `.terraform` · `scripts/testdata` 여도) · 숨김 `.tf`(이름이 `.` 으로 시작 — Terraform 은 읽지 않음) · 경로에 줄바꿈 · 제어 문자가 든 항목 · conftest 설정 파일 `conftest.<확장자>`(viper 12종 · 대소문자 무관 — 있으면 conftest 를 부르지 않고 종료 1). guard.sh 가 셸로 검사 |
 | R1 | 전체 | `resource` · `data` `aws_secretsmanager_secret_version`(`count = 0` 이어도) |
 | R2 | 전체 | `resource` · `data` 유형이 `aws_cloudfrontkeyvaluestore_key` 로 시작 |
 | R3 | 전체 | `aws_security_group` 자원 안 `ingress` · `egress`(블록 · 속성 · `dynamic "ingress"` · `dynamic "egress"`) |
@@ -247,6 +247,9 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 규칙의 fixture 는 그 경로를 fixture 트리 안에 그대로 둡니다. R12 의 운영 표지
 사례는 fixture 를 저장소 밖 임시 디렉터리에 복사해 돌립니다 — `ok_R12/` 는 두
 표지 모두 통과하고, `op_<규칙>_<변형>/` 은 그 저장소 밖 사본으로만 돌립니다.
+열거 경계(숨김 · 줄바꿈 · 제어 문자 이름 · 링크)와 conftest 설정 파일 사례는
+저장소에 두지 않고, `guard_test.sh` 가 `ok_R12/` 의 저장소 밖 사본에 만들어
+돌립니다.
 `terraform fmt -recursive` 를 깨는 fixture 는 `*.tf.in` 으로 두고
 `guard_test.sh` 가 임시 디렉터리에 `*.tf` 로 복사해 돌립니다.
 
@@ -258,14 +261,15 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 *   R4 · R11 은 대상 경로 아래 `.tf` 가 하나도 없으면 건너뜁니다(다른 규칙
     fixture 를 위해). 대상 디렉터리를 통째로 지우거나 옮기는 PR 은 규칙도 함께
     고쳐야 하며, 그것은 리뷰가 봅니다.
-*   이름이 `.terraform` 인 디렉터리는 깊이와 상관없이 검사에서 뺍니다(provider
-    캐시). 그 이름 아래에 구성을 두지 않습니다.
+*   이름이 `.terraform` 인 **디렉터리**는 깊이와 상관없이 검사에서
+    뺍니다(provider 캐시). 그 이름 아래에 구성을 두지 않습니다. 같은 이름의
+    링크는 R0 입니다.
 *   실제 트리보다 **상위** 디렉터리(`.` · `infra` 등)를 루트로 주면 경로 규칙
     (R4 · R11 · R12)이 맞지 않고 `scripts/testdata` 도 빠지지 않아 fixture 위반이
     쏟아집니다(종료 1 — 위반 0 으로 새지는 않음). 루트는 주지 않거나
     `infra/terraform` 으로 줍니다.
-*   모든 심볼릭 링크가 R0 입니다(`.tf` 가 아닌 문서 링크도). 단 이름이
-    `.terraform` 인 것은 디렉터리든 링크든 건너뜁니다.
+*   모든 심볼릭 링크가 R0 입니다(`.tf` 가 아닌 문서 링크도, 이름이
+    `.terraform` 이어도).
 *   `.gitignore` 가 막는 로컬 파일(`override.tf` · `*_override.tf` 등)은 로컬
     guard 는 보지만 CI 는 볼 수 없습니다 — 커밋되지 않으므로 리뷰 대상도
     아닙니다.
@@ -277,14 +281,16 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 *   R3 은 `aws_security_group` 만 봅니다. 기본 SG(`aws_default_security_group`)
     의 인라인 규칙은 대상이 아닙니다 — 기본 SG 를 Terraform 으로 다루게 되면
     리뷰가 보고 규칙을 더합니다.
-*   검사 트리 안의 conftest 설정 파일(`conftest.*`)은 R0 위반입니다. conftest
-    0.71.1 은 검사 루트의 `conftest.<확장자>` 를 읽습니다 — viper 가 찾는
-    12개 확장자 가운데 toml · yaml · yml · json · env · dotenv 는 읽어 적용하고,
-    나머지(hcl · ini 등)는 읽다가 오류로 멈춥니다. guard.sh 는 `ignore` ·
-    `namespace` · `policy` · `data` 도 명시 인자로 넘기지만, 설정 파일과 명시
-    인자의 병합 거동에는 기대지 않습니다.
-*   R0(심볼릭 링크 · `.tf.json` · conftest 설정 파일)는 정책이 아니라 guard.sh
-    의 셸 검사입니다.
+*   검사 트리 안의 conftest 설정 파일 `conftest.<확장자>`(viper 가 찾는 12종
+    — json · toml · yaml · yml · properties · props · prop · hcl · tfvars ·
+    dotenv · env · ini, 대소문자 무관)는 R0 위반입니다. conftest 0.71.1 은
+    검사 루트의 그 파일을 읽어 namespace · data 를 바꾸고 `update` 로 정책을
+    내려받기까지 하므로, 하나라도 있으면 guard.sh 는 conftest 를 한 번도
+    부르지 않고 종료 1 로 멈춥니다. `conftest.md` 처럼 conftest 가 읽지 않는
+    이름은 대상이 아닙니다.
+*   R0(심볼릭 링크 · `.tf.json` · 숨김 · 줄바꿈 · 제어 문자 이름 · conftest
+    설정 파일)는 정책이 아니라 guard.sh 의 셸 검사입니다. 파일 목록은 NUL 로
+    구분해 읽으므로 이름 속 줄바꿈이 한 항목을 둘로 쪼개지 못합니다.
     `--parser hcl2` 는 JSON 구성을 읽지 못하므로 `.tf.json` 은 이 트리에 두지
     않습니다.
 *   R1 은 Secrets Manager 비밀 버전만 봅니다. `aws_ssm_parameter` 의

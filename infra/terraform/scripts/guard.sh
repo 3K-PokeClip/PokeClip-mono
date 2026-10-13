@@ -4,9 +4,10 @@
 #
 # 규칙 R1 ~ R13 은 conftest(`--parser hcl2`)로 돌리는 Rego 정책
 # (`../policy/guard`)이 판정한다. 이 스크립트는 얇은 실행기다 — 파서가 볼 수
-# 없는 R0(`.tf.json` · 심볼릭 링크 · conftest 설정 파일)를 직접 보고, 파일마다
-# 파싱이 되는지 먼저 가린 뒤, 정책을 한 번에(`--combine`) 돌려 종료 코드를
-# 정한다. R12 의 모드 표지(fixture · operational)는 이 스크립트가 루트를 보고
+# 없는 R0(`.tf.json` · 심볼릭 링크 · 숨김 · 줄바꿈 · 제어 문자 이름 · conftest
+# 설정 파일)를 직접 보고, 설정 파일이 있으면 conftest 를 부르지 않고 멈추고,
+# 파일마다 파싱이 되는지 먼저 가린 뒤, 정책을 한 번에(`--combine`) 돌려 종료
+# 코드를 정한다. R12 의 모드 표지(fixture · operational)는 이 스크립트가 루트를 보고
 # 골라 늘 `--data` 로 넘긴다.
 # 위반은 표준 출력에 한 줄씩 「guard: R<번호> <상대 경로>: <설명>」으로 적는다.
 #
@@ -26,6 +27,11 @@ readonly SCRIPT_DIR
 readonly POLICY_DIR="${SCRIPT_DIR}/../policy/guard"
 # R12 모드 표지(키 하나 mode)의 저장소 고정 위치 — <표지>/mode.json.
 readonly MARKER_DIR="${SCRIPT_DIR}/guard-data"
+# conftest 0.71.1(viper v1.21.0)이 검사 루트에서 conftest.<확장자> 로 찾는
+# 설정 파일 확장자. 대소문자는 가리지 않는다(macOS 기본 파일 시스템).
+CONFTEST_CONFIG_EXTS=(json toml yaml yml properties props prop hcl tfvars dotenv
+  env ini)
+readonly CONFTEST_CONFIG_EXTS
 
 # `conftest test` 의 결과 줄. --combine 이라 파일 이름 자리가 Combined 다.
 readonly FAIL_PREFIX='FAIL - Combined - main - '
@@ -77,23 +83,76 @@ split_lines() {
 }
 
 #######################################
-# 현재 디렉터리(루트) 아래 검사 대상을 상대 경로로 한 줄에 하나씩 낸다 —
-# 일반 파일 *.tf · *.tf.json, 그리고 이름과 상관없이 모든 심볼릭 링크(파일 ·
-# 디렉터리 — find 는 링크 디렉터리 안으로 들어가지 않으므로 링크 자체를
-# R0 로 막아야 그 너머가 검사에서 빠지지 않는다). fixture · provider 캐시는 뺀다.
-# conftest 설정 파일(conftest.* — 대소문자 무관)도 낸다: conftest 0.71.1 은
-# 검사 루트의 conftest.<확장자>(viper 가 찾는 toml · yaml · json · env 등)를
-# 읽어 정책 · 표지를 바꿀 수 있다.
+# 현재 디렉터리(루트) 아래 검사 대상을 상대 경로로 NUL 구분해 낸다 —
+# 이름에 줄바꿈이 있어도 한 항목이 둘로 쪼개지지 않게. 대상은 일반 파일
+# *.tf · *.tf.json, conftest.*(설정 파일 후보 — 대소문자 무관), 그리고 이름과
+# 상관없이 모든 심볼릭 링크다(find 는 링크 디렉터리 안으로 들어가지 않으므로
+# 링크 자체를 R0 로 막아야 그 너머가 검사에서 빠지지 않는다). fixture 와
+# provider 캐시는 진짜 디렉터리일 때만 뺀다 — 그 이름의 링크는 R0 로 잡힌다.
 # Outputs:
-#   「./」로 시작하는 상대 경로(정렬).
+#   「./」로 시작하는 상대 경로(정렬 · NUL 구분).
 #######################################
 list_tf_files() {
   find . \
-    \( -path ./scripts/testdata -o -name .terraform \) -prune \
-    -o -type l -print \
-    -o -type f \( -name '*.tf' -o -name '*.tf.json' \) -print \
-    -o -type f -iname 'conftest.*' -print |
-    LC_ALL=C sort
+    \( -path ./scripts/testdata -type d -o -name .terraform -type d \) -prune \
+    -o -type l -print0 \
+    -o -type f \( -name '*.tf' -o -name '*.tf.json' -o -iname 'conftest.*' \) \
+    -print0 |
+    LC_ALL=C sort -z
+}
+
+#######################################
+# conftest 가 검사 루트에서 설정으로 읽는 이름인지 본다 — conftest.<확장자>,
+# 확장자는 CONFTEST_CONFIG_EXTS, 대소문자 무관.
+# Arguments:
+#   파일 이름(경로 없이).
+# Returns:
+#   설정 파일 이름이면 0, 아니면 1.
+#######################################
+is_conftest_config() {
+  local name="$1"
+  local ext status=1
+  shopt -s nocasematch
+  for ext in "${CONFTEST_CONFIG_EXTS[@]}"; do
+    if [[ "${name}" == "conftest.${ext}" ]]; then
+      status=0
+      break
+    fi
+  done
+  shopt -u nocasematch
+  return "${status}"
+}
+
+#######################################
+# list_tf_files 의 NUL 구분 목록을 읽어 항목마다 한 줄로 분류한다. 부모에
+# 상태를 넘기지 않는 순수 필터라 파이프로 잇고, 종료 코드는 부모가
+# pipefail 로 본다. Terraform 이 읽는 파일 집합과 guard 가 보는 집합이
+# 갈리는 꼴(숨김 이름 · 줄바꿈 · 제어 문자 · 링크)은 여기서 R0 가 된다.
+# 줄바꿈 · 제어 문자가 든 경로는 %q 로 적으므로 결과 줄에 줄바꿈이 끼지
+# 않는다.
+# Outputs:
+#   한 줄에 하나 — 「r0 <위반>」 · 「config <위반>」 · 「tf <상대 경로>」.
+#######################################
+classify_files() {
+  local file name
+  while IFS= read -r -d '' file; do
+    file="${file#./}"
+    name="${file##*/}"
+    if [[ "${file}" == *[[:cntrl:]]* ]]; then
+      printf 'r0 R0 %q: 이름에 줄바꿈 · 제어 문자 금지(%s)\n' "${file}" \
+        "줄 단위 처리 · 리뷰에서 숨음"
+    elif [[ -L "${file}" ]]; then
+      echo "r0 R0 ${file}: 심볼릭 링크 금지(파일 · 디렉터리 — 링크 너머가 검사에서 빠짐)"
+    elif is_conftest_config "${name}"; then
+      echo "config R0 ${file}: conftest 설정 파일 금지(정책 · R12 표지를 바꿀 수 있음)"
+    elif [[ "${file}" == *.tf.json ]]; then
+      echo "r0 R0 ${file}: .tf.json 금지(이 트리는 HCL 만 — 정책이 JSON 구성을 읽지 않음)"
+    elif [[ "${file}" == *.tf && "${name}" == .* ]]; then
+      echo "r0 R0 ${file}: 숨김 .tf 금지(Terraform 은 읽지 않는데 guard 는 셈)"
+    elif [[ "${file}" == *.tf ]]; then
+      echo "tf ${file}"
+    fi
+  done
 }
 
 #######################################
@@ -128,9 +187,9 @@ parses() {
 run_policy() {
   local marker="$1" output line
   shift
-  # 검사 루트의 conftest 설정 파일(ignore · namespace · policy · data 등)이
-  # 판정을 바꾸지 못하게 그 키들을 명시 인자로 덮는다(--ignore '^$' = 아무
-  # 파일도 빼지 않음). 설정 파일 자체도 R0 위반이라 덮는 쪽에만 기대지 않는다.
+  # 설정 파일이 있으면 main 이 conftest 를 부르기 전에 멈춘다. 그래도 겹으로,
+  # 판정에 닿는 키(ignore · namespace · policy · data)는 명시 인자로 덮는다
+  # (--ignore '^$' = 아무 파일도 빼지 않음).
   local fails=0 summary="" tests=""
   output="$(conftest test --parser hcl2 --combine --no-fail --no-color \
     --strict --show-builtin-errors --namespace main --ignore '^$' \
@@ -210,9 +269,9 @@ marker_file() {
 }
 
 main() {
-  local files file marker
-  local parse_failed=0
-  local -a tf_files=()
+  local entries entry file marker
+  local parse_failed=0 configs=0
+  local -a candidates=() tf_files=()
   if [[ "$#" -gt 1 ]]; then
     echo "사용: guard.sh [Terraform 트리 루트]" >&2
     exit 2
@@ -231,26 +290,39 @@ main() {
   marker="$(marker_file "$(pwd -P)")" || die "트리 위치를 못 찾음"
   clear_conftest_env
 
-  files="$(list_tf_files)" || die "파일 목록 실패: $(pwd)"
-  [[ -n "${files}" ]] || die "검사할 .tf 파일이 없음: $(pwd)"
-  split_lines "${files}"
-  for file in "${LINES[@]}"; do
-    file="${file#./}"
-    # R0: 파서가 읽지 못하거나(JSON) 리뷰에 안 보이는(트리 밖 파일을 끌어
-    # 들이는 링크) 꼴은 두지 않는다.
-    if [[ -L "${file}" ]]; then
-      report "R0 ${file}: 심볼릭 링크 금지(파일 · 디렉터리 — 링크 너머가 검사에서 빠짐)"
-    elif [[ "${file}" == *.tf.json ]]; then
-      report "R0 ${file}: .tf.json 금지(이 트리는 HCL 만 — 정책이 JSON 구성을 읽지 않음)"
-    elif [[ "${file}" != *.tf ]]; then
-      # list_tf_files 가 낸 나머지는 conftest 설정 파일(conftest.*)뿐이다.
-      report "R0 ${file}: conftest 설정 파일 금지(정책 · R12 표지를 바꿀 수 있음)"
-    elif parses "${file}"; then
-      tf_files+=("${file}")
-    else
-      parse_failed=1
-    fi
+  entries="$(list_tf_files | classify_files)" ||
+    die "파일 목록 실패: $(pwd)"
+  [[ -n "${entries}" ]] || die "검사할 .tf 파일이 없음: $(pwd)"
+  split_lines "${entries}"
+  # R0: 파서가 읽지 못하거나(JSON) 리뷰 · Terraform 과 보는 것이 갈리는(링크 ·
+  # 숨김 · 줄바꿈 이름) 꼴, 그리고 conftest 설정 파일은 두지 않는다.
+  for entry in "${LINES[@]}"; do
+    case "${entry}" in
+      "tf "*) candidates+=("${entry#tf }") ;;
+      "config "*)
+        report "${entry#config }"
+        configs=$((configs + 1))
+        ;;
+      "r0 "*) report "${entry#r0 }" ;;
+      *) die "분류 결과에 모르는 줄: ${entry}" ;;
+    esac
   done
+  # conftest 는 검사 루트의 설정 파일을 읽어 정책을 내려받기(update)까지
+  # 하므로, 설정 파일이 하나라도 있으면 conftest 를 한 번도 부르지 않는다.
+  if [[ "${configs}" -gt 0 ]]; then
+    echo "guard: conftest 설정 파일이 있어 conftest 를 부르지 않음 —" \
+      "위반 ${violations}건" >&2
+    exit 1
+  fi
+  if [[ "${#candidates[@]}" -gt 0 ]]; then
+    for file in "${candidates[@]}"; do
+      if parses "${file}"; then
+        tf_files+=("${file}")
+      else
+        parse_failed=1
+      fi
+    done
+  fi
   [[ "${parse_failed}" -eq 0 ]] || exit 2
   if [[ "${#tf_files[@]}" -gt 0 ]]; then
     run_policy "${marker}" "${tf_files[@]}"
