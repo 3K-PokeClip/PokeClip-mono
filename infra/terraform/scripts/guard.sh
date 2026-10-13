@@ -175,12 +175,12 @@ parses() {
   local file="$1"
   local error
   if [[ ! -r "${file}" ]]; then
-    echo "guard: 검사 불가: 읽을 수 없음: ${file}" >&2
+    printf 'guard: 검사 불가: 읽을 수 없음: %s\n' "${file}" >&2
     return 1
   fi
   if ! error="$(conftest parse --config-file "${EMPTY_CONFIG}" --parser hcl2 \
     -- "${file}" 2>&1 >/dev/null)"; then
-    echo "guard: 검사 불가: 파싱 실패: ${file}: ${error}" >&2
+    printf 'guard: 검사 불가: 파싱 실패: %s: %s\n' "${file}" "${error}" >&2
     return 1
   fi
 }
@@ -205,7 +205,7 @@ run_policy() {
     --combine --no-fail --no-color \
     --strict --show-builtin-errors --namespace main --ignore '^$' \
     --policy "${POLICY_DIR}" --data "${marker}" -- "$@" 2>&1)" || {
-    echo "${output}" >&2
+    printf '%s\n' "${output}" >&2
     die "conftest 실행 실패"
   }
   [[ -n "${output}" ]] || die "conftest 출력이 비었음"
@@ -218,7 +218,7 @@ run_policy() {
       tests="${BASH_REMATCH[1]}"
       summary="${BASH_REMATCH[2]} ${BASH_REMATCH[3]}"
     else
-      echo "${output}" >&2
+      printf '%s\n' "${output}" >&2
       die "conftest 출력에 모르는 줄: ${line}"
     fi
   done
@@ -276,7 +276,7 @@ marker_file() {
     "${tree}/scripts/testdata/"*) mode=fixture ;;
     *) ;;
   esac
-  echo "${MARKER_DIR}/${mode}/mode.json"
+  printf '%s\n' "${MARKER_DIR}/${mode}/mode.json"
 }
 
 main() {
@@ -284,11 +284,11 @@ main() {
   local parse_failed=0 configs=0
   local -a candidates=() tf_files=()
   if [[ "$#" -gt 1 ]]; then
-    echo "사용: guard.sh [Terraform 트리 루트]" >&2
+    printf '%s\n' "사용: guard.sh [Terraform 트리 루트]" >&2
     exit 2
   fi
   if ! command -v conftest >/dev/null 2>&1; then
-    echo "guard: conftest 가 없습니다. 설치: brew install conftest" \
+    printf '%s %s\n' "guard: conftest 가 없습니다. 설치: brew install conftest" \
       "(CI 는 0.71.1 고정)" >&2
     exit 2
   fi
@@ -335,7 +335,7 @@ main() {
   # conftest 는 검사 루트의 설정 파일을 읽어 정책을 내려받기(update)까지
   # 하므로, 설정 파일이 하나라도 있으면 conftest 를 한 번도 부르지 않는다.
   if [[ "${configs}" -gt 0 ]]; then
-    echo "guard: conftest 설정 파일이 있어 conftest 를 부르지 않음 —" \
+    printf '%s %s\n' "guard: conftest 설정 파일이 있어 conftest 를 부르지 않음 —" \
       "위반 ${violations}건" >&2
     exit 1
   fi
@@ -357,10 +357,10 @@ main() {
   fi
 
   if [[ "${violations}" -ne 0 ]]; then
-    echo "guard: 위반 ${violations}건" >&2
+    printf 'guard: 위반 %s건\n' "${violations}" >&2
     exit 1
   fi
-  echo "guard: 위반 0"
+  printf '%s\n' "guard: 위반 0"
 }
 
 main "$@"
