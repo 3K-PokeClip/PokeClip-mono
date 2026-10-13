@@ -172,7 +172,7 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R13 
 
 | 규칙 | 대상 경로 | 실패 조건 |
 |---|---|---|
-| R0 | 전체 | `*.tf.json` 파일 · 심볼릭 링크(파일이든 디렉터리든 — 이름이 `.terraform` · `scripts/testdata` 여도) · 숨김 `.tf`(이름이 `.` 으로 시작 — Terraform 은 읽지 않음) · 경로에 줄바꿈 · 제어 문자가 든 항목 · conftest 설정 파일 `conftest.<확장자>`(viper 12종 · 대소문자 무관 — 있으면 conftest 를 부르지 않고 종료 1). guard.sh 가 셸로 검사 |
+| R0 | 전체 | `*.tf.json` 파일 · 심볼릭 링크(파일이든 디렉터리든 — 이름이 `.terraform` · `scripts/testdata` 여도) · 숨김 `.tf`(이름이 `.` 으로 시작 — Terraform 은 읽지 않음) · 경로에 줄바꿈 · 제어 문자가 든 항목 · conftest 설정 파일 `conftest.<확장자>`(viper 12종 · 대소문자 무관 · 링크여도 — 있으면 conftest 를 부르지 않고 종료 1). guard.sh 가 셸로 검사 |
 | R1 | 전체 | `resource` · `data` `aws_secretsmanager_secret_version`(`count = 0` 이어도) |
 | R2 | 전체 | `resource` · `data` 유형이 `aws_cloudfrontkeyvaluestore_key` 로 시작 |
 | R3 | 전체 | `aws_security_group` 자원 안 `ingress` · `egress`(블록 · 속성 · `dynamic "ingress"` · `dynamic "egress"`) |
@@ -264,6 +264,9 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 *   이름이 `.terraform` 인 **디렉터리**는 깊이와 상관없이 검사에서
     뺍니다(provider 캐시). 그 이름 아래에 구성을 두지 않습니다. 같은 이름의
     링크는 R0 입니다.
+*   `scripts/testdata` · `.terraform` 아래의 모듈을 module `source` 로 쓰면
+    Terraform 은 읽지만 guard 는 그 모듈을 보지 못합니다(검사에서 빼는
+    디렉터리) — 리뷰 몫입니다.
 *   실제 트리보다 **상위** 디렉터리(`.` · `infra` 등)를 루트로 주면 경로 규칙
     (R4 · R11 · R12)이 맞지 않고 `scripts/testdata` 도 빠지지 않아 fixture 위반이
     쏟아집니다(종료 1 — 위반 0 으로 새지는 않음). 루트는 주지 않거나
@@ -281,13 +284,18 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
 *   R3 은 `aws_security_group` 만 봅니다. 기본 SG(`aws_default_security_group`)
     의 인라인 규칙은 대상이 아닙니다 — 기본 SG 를 Terraform 으로 다루게 되면
     리뷰가 보고 규칙을 더합니다.
-*   검사 트리 안의 conftest 설정 파일 `conftest.<확장자>`(viper 가 찾는 12종
-    — json · toml · yaml · yml · properties · props · prop · hcl · tfvars ·
-    dotenv · env · ini, 대소문자 무관)는 R0 위반입니다. conftest 0.71.1 은
-    검사 루트의 그 파일을 읽어 namespace · data 를 바꾸고 `update` 로 정책을
-    내려받기까지 하므로, 하나라도 있으면 guard.sh 는 conftest 를 한 번도
-    부르지 않고 종료 1 로 멈춥니다. `conftest.md` 처럼 conftest 가 읽지 않는
-    이름은 대상이 아닙니다.
+*   검사 트리 안의 conftest 설정 파일 `conftest.<확장자>`(viper 가 찾는 12종,
+    대소문자 무관)는 일반 파일이든 링크든 R0 위반입니다. conftest 0.71.1 은
+    검사 루트의 그 파일을 읽습니다 — json · toml · yaml · yml · dotenv · env
+    6종은 읽어 적용하고(namespace · data 를 바꾸고 `update` 로 정책을
+    내려받기까지 함), properties · props · prop · hcl · tfvars · ini 6종은
+    읽다가 오류로 멈춥니다. 어느 쪽이든 R0 이고, 하나라도 있으면 guard.sh 는
+    conftest 를 한 번도 부르지 않고 종료 1 로 멈춥니다. `conftest.md` 처럼
+    conftest 가 읽지 않는 이름은 대상이 아닙니다.
+*   겹으로, guard.sh 와 guard_test.sh 는 conftest 를 부를 때마다 저장소에
+    고정한 빈 설정(`scripts/guard-data/empty-config.toml`)을 `--config-file`
+    로 넘깁니다. 그래서 conftest 는 검사 루트나 호출한 디렉터리의 설정을 아예
+    찾지 않습니다.
 *   R0(심볼릭 링크 · `.tf.json` · 숨김 · 줄바꿈 · 제어 문자 이름 · conftest
     설정 파일)는 정책이 아니라 guard.sh 의 셸 검사입니다. 파일 목록은 NUL 로
     구분해 읽으므로 이름 속 줄바꿈이 한 항목을 둘로 쪼개지 못합니다.
