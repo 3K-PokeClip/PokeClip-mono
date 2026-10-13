@@ -179,7 +179,7 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R13 
 | R4 | `modules/state_bucket/` | `aws_s3_bucket` 자원 없음, 또는 그 자원 중 `lifecycle { prevent_destroy = true }`(리터럴 `true`)가 없는 것 |
 | R11 | `nonprod/dev/` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원 중 리터럴 `prevent_destroy = true` 가 없는 것 |
 | R12 | `nonprod/dns-legacy/` | 운영 트리: ① 그 루트 바로 아래 `.tf` 없음 ② 주소가 정확히 `aws_route53_zone.legacy` 인 선언 없음 ③ 그 루트의 `aws_route53_zone` 중 리터럴 `prevent_destroy = true` 가 없는 것. fixture 트리는 ① · ② 의 부재만 건너뜀(③ 은 그대로) |
-| R13 | 전체 | 문자열 · 숫자 리터럴(맵 키 포함) 안의 12자리 숫자열(앞뒤가 숫자가 아님 — ARN 속 계정 ID 포함) · 이름에 `account_id` 가 든 `variable`(대소문자 무관). 위반 메시지는 그 숫자열을 가림 |
+| R13 | 전체(`.tf` 만 — `*.example` · 시험 파일 · 주석은 리뷰) | 문자열 · 숫자 리터럴(맵 키 포함) 안의 계정 ID 꼴 숫자열 — 12자리 · 4-4-4 대시 표기(앞뒤가 숫자가 아님 — ARN 속 계정 ID 포함) · 이름을 소문자로 바꾸고 `-` · `_` 를 뺐을 때 `accountid` 가 드는 `variable`(`accountId` · `account-id` 포함). 위반 메시지는 그 숫자열을 가림 |
 
 `prevent_destroy` 는 `terraform test`(mock)로 관찰할 수 없어 R4 · R11 · R12 가
 맡습니다. conftest 는 식을 평가하지 않으므로 리터럴 `true` 만 인정합니다 —
@@ -293,6 +293,11 @@ bash infra/terraform/scripts/guard.sh                   # 실제 트리
     구분해 읽으므로 이름 속 줄바꿈이 한 항목을 둘로 쪼개지 못합니다.
     `--parser hcl2` 는 JSON 구성을 읽지 못하므로 `.tf.json` 은 이 트리에 두지
     않습니다.
+*   R13 은 guard 가 정책에 넘기는 `.tf` 만 봅니다. 추적되는 `*.example`
+    (`terraform.tfvars.example` · `backend.hcl.example`) · 시험 파일
+    (`*.tftest.hcl`) · 주석(hcl2 가 버림)은 보지 않으므로 리뷰가 봅니다. 계정
+    ID 꼴은 12자리 숫자열과 4-4-4 대시 표기뿐이고, 그 밖의 꼴(공백 · 점 구분
+    등)도 리뷰 몫입니다.
 *   R1 은 Secrets Manager 비밀 버전만 봅니다. `aws_ssm_parameter` 의
     SecureString 값도 상태에 평문으로 남지만 R1 대상이 아닙니다(설계상 SSM
     비밀은 없음 — 쓰게 되면 리뷰가 막고 규칙을 더합니다).
