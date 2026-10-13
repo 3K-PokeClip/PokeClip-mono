@@ -13,6 +13,7 @@ Terraform 코드입니다. 설계 정본은 「HTTPS · 엣지 인프라 설계�
 ## 디렉터리
 
 루트 하나가 상태 하나입니다. 의존은 위에서 아래 한쪽으로만 흐릅니다.
+`prod/*` · `nonprod/*` 는 같은 리스 계정 안의 환경입니다(설계 3-1).
 아래는 **목표 구조**입니다 — 지금(M1) 있는 것은 `modules/state_bucket` ·
 `policy/guard` · `scripts` · `runbooks` · `nonprod/{bootstrap,dev,dns-legacy}`
 뿐이고, 나머지 루트는 계획의 후속 PR 이 더합니다.
@@ -23,32 +24,34 @@ infra/terraform/
 ├── policy/guard/                  # 금지 규약 Rego 정책(conftest) · 단위 시험
 ├── scripts/                       # guard.sh(금지 규약 검사 실행기) · guard_test.sh
 ├── runbooks/                      # 운영 단계 절차(kty 승인) — org-ct.md 등
-├── mgmt/
+├── mgmt/                          # (보류 — 결정 46 · 재개 키트)
 │   ├── bootstrap/                 # ① 상태 버킷
 │   └── org-extras/                # ② SCP · 권한 세트 할당 · Budgets · 드리프트 EventBridge
 ├── nonprod/
 │   ├── bootstrap/                 # ① 상태 버킷
 │   ├── dev/                       # ② dev EC2 · EIP · SG import(무변경) — 출력 dev_eip
-│   ├── dns-legacy/                # ③ 옛 존 import(무변경) — 존 이전 때 NS TTL 하향 · 끝나면 삭제
-│   └── dns-dev/                   # ④ dev 자식 존 + apex A + 옛 존의 dev 하위 레코드
+│   ├── dns-legacy/                # ③ 공개 존 영구 소유(리스 기간) — 존 prevent_destroy(R12)
+│   └── dns-dev/                   # ④ dev 자식 존 + apex A + 옛 존의 dev 하위 레코드(보류 — 결정 46 · 재개 키트)
 └── prod/
     ├── bootstrap/                 # ① 상태 버킷
     ├── secrets/                   # ② CloudFront 공개키 · 엣지 비밀 그릇(값 없음)
-    ├── dns/                       # ③ 새 존 · 이전용 레코드 복사본 · dev 위임 NS
+    ├── dns/                       # ③ 새 존 · 이전용 레코드 복사본 · dev 위임 NS(보류 — 결정 46 · 재개 키트)
     ├── network/                   # ④ VPC · 서브넷 · NAT · S3 Gateway EP
     ├── certs/                     # ⑥ ACM 서울 · us-east-1
-    ├── registry/                  # ⑦ ECR · CI 푸시 역할 · apex 업로드 역할
+    ├── registry/                  # ⑦ ECR(CI 역할은 쓰기로 할 때 — 40차)
     ├── platform/                  # ⑧ 공개 ALB · WAF · 내부 ALB · NLB · ECS
     ├── media/                     # ⑨ Media EC2 · 인스턴스 역할 · Media SG
     ├── edge/                      # ⑩ CloudFront 배포 · WAF · KVS · CF Function
     └── records/                   # ⑫ 운영 별칭 레코드
 ```
 
-⑤ · ⑪ 은 prod 런타임 트랙(별도)이 소유합니다. Control Tower 가 만드는
-것(조직 · OU · 계정)은 이 트리가 소유하지 않습니다. `infra/dev-media/` 는
-이 트리 밖이며 건드리지 않습니다.
+⑤ · ⑪ 은 prod 런타임 트랙(별도)이 소유합니다. 운영 측(ISB)이 만든 것(SCP ·
+OU · 운영 측 역할)과 기존 수동 자원(IAM 사용자 · dev 자동 주체 · GitHub OIDC
+공급자)은 이 트리가 소유하지 않습니다. `infra/dev-media/` 는 이 트리 밖이며
+건드리지 않습니다.
 
-운영 단계 절차는 `runbooks/` 에 있습니다 — [조직 · CT 도입](runbooks/org-ct.md).
+운영 단계 절차는 `runbooks/` 에 있습니다 —
+[조직 · CT 도입(보류 — 결정 46)](runbooks/org-ct.md).
 
 ## 규약
 
@@ -70,7 +73,8 @@ infra/terraform/
 
 ### 실제 값은 추적하지 않는다
 
-*   계정 ID · 인스턴스 ID · 리소스 ID · 사설 IP 는 `*.tfvars` 에 둡니다.
+*   계정 ID 는 `data.aws_caller_identity` 로 얻고 tfvars · 코드 리터럴에 두지
+    않습니다(R13). 인스턴스 ID · 리소스 ID · 사설 IP 는 `*.tfvars` 에 둡니다.
     `*.tfvars` 는 추적하지 않고 `terraform.tfvars.example` 의
     자리표시자(`<INSTANCE_ID_DEV>` 같은 꼴)만 추적합니다.
 

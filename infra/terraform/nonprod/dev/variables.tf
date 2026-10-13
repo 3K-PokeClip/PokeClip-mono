@@ -2,7 +2,7 @@
 # 값은 운영 O1 전의 읽기 조사로 채운다.
 
 variable "region" {
-  description = "nonprod 계정 리전."
+  description = "nonprod 환경 리전(리스 계정)."
   type        = string
   default     = "ap-northeast-2"
 }

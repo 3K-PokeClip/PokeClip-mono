@@ -2,7 +2,7 @@
 # 값은 운영 O1 전의 읽기 조사(옛 존 레코드 목록 · NS TTL)로 채운다.
 
 variable "region" {
-  description = "nonprod 계정 리전(Route 53 은 전역이지만 provider 가 요구)."
+  description = "nonprod 환경 리전(리스 계정 — Route 53 은 전역이지만 provider 가 요구)."
   type        = string
   default     = "ap-northeast-2"
 }
