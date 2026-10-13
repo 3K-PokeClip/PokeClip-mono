@@ -55,29 +55,31 @@ func TestIsToken(t *testing.T) {
 	}
 }
 
-// 길이 경계는 10–64자다. 32자 고정은 auth 의 형식이라 media 에 박지 않는다(설계 2-2).
+// 길이 경계는 10–64자다. 32자 고정은 auth 의 형식이라 media 에 박지 않는다(설계 2-2). 실패 문구에는 값 대신
+// 행 이름과 길이를 싣는다 — 합성이어도 passphrase 꼴 값이다.
 func TestNewPassphraseAcceptsInFormat(t *testing.T) {
-	for _, raw := range []string{
-		"Syn-10char",                   // 10자 — 하한
-		strings.Repeat("Ab-_", 16),     // 64자 — 상한
-		syntheticRaw,                   // 32자 — auth 의 꼴
-		"0123456789abcdefABCDEF_-xyzZ", // 문자셋 네 갈래
+	for _, tc := range []struct{ name, raw string }{
+		{name: "10자_하한", raw: "Syn-10char"},
+		{name: "64자_상한", raw: strings.Repeat("Ab-_", 16)},
+		{name: "32자_auth_꼴", raw: syntheticRaw},
+		{name: "문자셋_네_갈래", raw: "0123456789abcdefABCDEF_-xyzZ"},
 	} {
-		p, err := NewPassphrase(raw)
+		p, err := NewPassphrase(tc.raw)
 		if err != nil {
-			t.Errorf("NewPassphrase(%q) returned error: %v", raw, err)
+			t.Errorf("NewPassphrase(%s — %d bytes) returned error: %v", tc.name, len(tc.raw), err)
 			continue
 		}
-		if got := p.Reveal(); got != raw {
-			t.Errorf("NewPassphrase(%q).Reveal() = %q, want the raw value", raw, got)
+		if got := p.Reveal(); got != tc.raw {
+			t.Errorf("NewPassphrase(%s).Reveal() returned %d bytes that differ from the raw value (%d bytes)", tc.name, len(got), len(tc.raw))
 		}
 		if p.IsZero() {
-			t.Errorf("NewPassphrase(%q).IsZero() = true, want false", raw)
+			t.Errorf("NewPassphrase(%s).IsZero() = true, want false", tc.name)
 		}
 	}
 }
 
-// 거부 에러 문구에는 원문이 없어야 한다 — 에러는 로그로 흘러간다(설계 6절 누설 규칙).
+// 거부 에러 문구에는 원문이 없어야 한다 — 에러는 로그로 흘러간다(설계 6절 누설 규칙). 실패 문구에는 값 대신 행
+// 이름과 길이를 싣는다.
 func TestNewPassphraseRejectsOutOfFormat(t *testing.T) {
 	tests := []struct {
 		name string
@@ -98,14 +100,14 @@ func TestNewPassphraseRejectsOutOfFormat(t *testing.T) {
 	for _, tc := range tests {
 		p, err := NewPassphrase(tc.raw)
 		if err == nil {
-			t.Errorf("%s: NewPassphrase(%q) returned nil error, want error", tc.name, tc.raw)
+			t.Errorf("NewPassphrase(%s — %d bytes) returned nil error, want error", tc.name, len(tc.raw))
 			continue
 		}
 		if tc.raw != "" && strings.Contains(err.Error(), tc.raw) {
-			t.Errorf("%s: NewPassphrase(%q) error %q contains the raw value", tc.name, tc.raw, err)
+			t.Errorf("NewPassphrase(%s) error carries the raw value (error length %d)", tc.name, len(err.Error()))
 		}
 		if !p.IsZero() {
-			t.Errorf("%s: NewPassphrase(%q) returned a non-zero Passphrase with the error", tc.name, tc.raw)
+			t.Errorf("NewPassphrase(%s) returned a non-zero Passphrase with the error", tc.name)
 		}
 	}
 }
@@ -116,7 +118,7 @@ func TestZeroPassphrase(t *testing.T) {
 		t.Error("Passphrase{}.IsZero() = false, want true")
 	}
 	if got := p.Reveal(); got != "" {
-		t.Errorf("Passphrase{}.Reveal() = %q, want empty", got)
+		t.Errorf("Passphrase{}.Reveal() returned %d bytes, want empty", len(got))
 	}
 }
 
@@ -133,7 +135,7 @@ func mustPassphrase(t *testing.T, raw string) Passphrase {
 	t.Helper()
 	p, err := NewPassphrase(raw)
 	if err != nil {
-		t.Fatalf("Setup: NewPassphrase(%q) returned error: %v", raw, err)
+		t.Fatalf("Setup: NewPassphrase(<%d bytes>) returned error: %v", len(raw), err)
 	}
 	return p
 }
@@ -145,17 +147,17 @@ func TestPassphraseFormatsRedacted(t *testing.T) {
 		for _, arg := range []any{p, &p} {
 			got := fmt.Sprintf(verb, arg)
 			if strings.Contains(got, syntheticRaw) {
-				t.Errorf("fmt.Sprintf(%q, %T) = %q, contains the raw value", verb, arg, got)
+				t.Errorf("fmt.Sprintf(%q, %T) carries the raw value (output length %d)", verb, arg, len(got))
 			}
 			if !strings.Contains(got, redactedMark) {
-				t.Errorf("fmt.Sprintf(%q, %T) = %q, want it to contain %q", verb, arg, got, redactedMark)
+				t.Errorf("fmt.Sprintf(%q, %T) does not show %q (output length %d)", verb, arg, redactedMark, len(got))
 			}
 		}
 	}
 	// %d · %x 는 String 을 거치지 않거나 바이트를 바꿔 찍는다. 원문만 없으면 된다.
 	for _, verb := range []string{"%d", "%x"} {
 		if got := fmt.Sprintf(verb, p); strings.Contains(got, syntheticRaw) {
-			t.Errorf("fmt.Sprintf(%q, Passphrase) = %q, contains the raw value", verb, got)
+			t.Errorf("fmt.Sprintf(%q, Passphrase) carries the raw value (output length %d)", verb, len(got))
 		}
 	}
 }
@@ -167,7 +169,7 @@ func TestPassphraseInStructFormatsWithoutRaw(t *testing.T) {
 	for _, verb := range []string{"%v", "%+v", "%#v", "%d"} {
 		for _, arg := range []any{h, &h} {
 			if got := fmt.Sprintf(verb, arg); strings.Contains(got, syntheticRaw) {
-				t.Errorf("fmt.Sprintf(%q, %T) = %q, contains the raw value", verb, arg, got)
+				t.Errorf("fmt.Sprintf(%q, %T) carries the raw value (output length %d)", verb, arg, len(got))
 			}
 		}
 	}
@@ -187,10 +189,10 @@ func TestPassphraseLogsRedacted(t *testing.T) {
 			slog.Any("value", p), "pointer", &p, "struct", h, "struct_pointer", &h)
 		got := buf.String()
 		if strings.Contains(got, syntheticRaw) {
-			t.Errorf("%s handler output = %q, contains the raw value", name, got)
+			t.Errorf("%s handler output carries the raw value (output length %d)", name, len(got))
 		}
 		if !strings.Contains(got, redactedMark) {
-			t.Errorf("%s handler output = %q, want it to contain %q", name, got, redactedMark)
+			t.Errorf("%s handler output does not show %q (output length %d)", name, redactedMark, len(got))
 		}
 	}
 }
@@ -207,7 +209,7 @@ func TestPassphraseMarshalsWithoutRaw(t *testing.T) {
 			continue
 		}
 		if strings.Contains(string(b), syntheticRaw) {
-			t.Errorf("json.Marshal(%T) = %s, contains the raw value", v, b)
+			t.Errorf("json.Marshal(%T) carries the raw value (output length %d)", v, len(b))
 		}
 	}
 }

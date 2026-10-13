@@ -63,7 +63,7 @@ func TestHoldBudgetOverdraftRecoversAfterRefill(t *testing.T) {
 	}
 }
 
-// 긴 유휴 뒤의 보충은 넘치지 않고 1.375초로 잘린다(작업 지시 3절 5). 경과 × 0.5 를 time.Duration 곱으로
+// 긴 유휴 뒤의 보충은 넘치지 않고 1.375초로 잘린다. 경과 × 0.5 를 time.Duration 곱으로
 // 셈하면 경과 약 18.4초에서 int64 가 넘친다.
 func TestHoldBudgetLongIdleRefillsToBurst(t *testing.T) {
 	for _, idle := range []time.Duration{20 * time.Second, time.Hour, 1000 * time.Hour, math.MaxInt64} {
@@ -120,26 +120,30 @@ func TestHoldBudgetChargeIgnoresNegativeDuration(t *testing.T) {
 	}
 }
 
-// allow · charge 는 여러 요청 고루틴이 함께 불러도 된다 — 차감이 빠지지 않는다(작업 지시 4절 9). 시계를
-// 멈춰 두면 보충이 없으므로 잔액은 처음 1.375초에서 차감의 합을 뺀 값이다.
+// allow · charge 는 여러 요청 고루틴이 함께 불러도 된다 — 차감이 빠지지 않는다. 판마다 시험 고루틴이 출발 장벽을
+// 열고 일꾼 모두가 함께 한 번씩 부른다 — 한 일꾼이 제 몫을 다 끝낸 뒤 다음 일꾼이 도는 스케줄은 생기지 않는다.
+// 시계를 멈춰 두면 보충이 없으므로 잔액은 처음 1.375초에서 차감의 합을 뺀 값이다.
 func TestHoldBudgetConcurrentUse(t *testing.T) {
 	clock := newManualClock()
 	b := newHoldBudget(clock.now)
-	const workers, charges = 50, 20
+	const workers, rounds = 50, 20
 
-	var wg sync.WaitGroup
-	for range workers {
-		wg.Go(func() {
-			for range charges {
+	for range rounds {
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for range workers {
+			wg.Go(func() {
+				<-start
 				b.allow()
 				b.charge(time.Millisecond)
-			}
-		})
+			})
+		}
+		close(start)
+		wg.Wait()
 	}
-	wg.Wait()
 
 	if got, want := balanceOf(b), 375*time.Millisecond; got != want {
-		t.Errorf("balance after %d concurrent charges of 1ms = %v, want %v", workers*charges, got, want)
+		t.Errorf("balance after %d concurrent charges of 1ms = %v, want %v", workers*rounds, got, want)
 	}
 }
 

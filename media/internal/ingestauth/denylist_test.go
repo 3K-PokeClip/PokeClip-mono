@@ -4,11 +4,14 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // newTestDenyList 는 임시 디렉터리의 거부 목록 경로와, content 로 채운 그 파일을 읽는 DenyList 를 만든다.
@@ -122,6 +125,35 @@ func TestDenyListCheckRereadsFile(t *testing.T) {
 	}
 }
 
+// 거부 목록을 읽지 못해도 Contains 는 에러와 함께 지금까지 읽은 토큰(합집합)의 판정을 돌려준다 — 이미 막은 토큰은 읽기
+// 실패에서도 참이라, 거부가 호출자의 에러 처리 하나에만 기대지 않는다. 읽은 적 없는 토큰은 거짓이다.
+func TestDenyListContainsReportsUnionOnReadError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 는 권한 검사를 우회한다")
+	}
+	path, d, _ := newTestDenyList(t, testTokenA+"\n")
+	if got, err := d.Contains(testTokenA); err != nil || !got {
+		t.Fatalf("Setup: Contains(%q) = %v, %v, want true, nil", testTokenA, got, err)
+	}
+	chmod(t, path, 0o000)
+
+	for _, tc := range []struct {
+		token string
+		want  bool
+	}{
+		{token: testTokenA, want: true},  // 합집합에 있다
+		{token: testTokenB, want: false}, // 읽은 적 없다
+	} {
+		got, err := d.Contains(tc.token)
+		if err == nil {
+			t.Errorf("Contains(%q) on an unreadable file returned nil error, want error", tc.token)
+		}
+		if got != tc.want {
+			t.Errorf("Contains(%q) on an unreadable file = %v, want %v (합집합의 판정)", tc.token, got, tc.want)
+		}
+	}
+}
+
 // Check 가 읽은 토큰도 합집합에 든다. 파일에 적고 Check 만 부른 뒤 파일을 지워도 그 토큰은 거부된다.
 func TestDenyListCheckAddsToUnion(t *testing.T) {
 	path, d, _ := newTestDenyList(t, testTokenA+"\n")
@@ -230,8 +262,8 @@ func TestDenyListLogsInvalidLinesGauge(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Check() with an invalid line = nil, want error")
 	}
-	if strings.Contains(err.Error(), pastedSecret) {
-		t.Errorf("Check() error %q contains the invalid line", err)
+	if n := strings.Count(err.Error(), pastedSecret); n > 0 {
+		t.Errorf("Check() error carries the invalid line %d time(s), want 0 (error length %d)", n, len(err.Error()))
 	}
 	if err := d.Check(); err == nil {
 		t.Errorf("second Check() with the same invalid line = nil, want error")
@@ -257,7 +289,7 @@ func TestDenyListLogsInvalidLinesGauge(t *testing.T) {
 		t.Errorf("ingestauth_denylist_recovered = %+v, want one event at ERROR", recovered)
 	}
 	if out := rec.String(); strings.Contains(out, pastedSecret) {
-		t.Errorf("slog output contains the invalid line: %s", out)
+		t.Errorf("slog output carries the invalid line %d time(s), want 0 (output length %d)", strings.Count(out, pastedSecret), len(out))
 	}
 }
 
@@ -284,6 +316,44 @@ func TestDenyListLogsUnreadableGauge(t *testing.T) {
 	recovered := rec.events(t, "ingestauth_denylist_recovered")
 	if len(recovered) != 1 || recovered[0].Level != "ERROR" {
 		t.Errorf("ingestauth_denylist_recovered = %+v, want one event at ERROR", recovered)
+	}
+}
+
+// 게이지가 선 채 사유가 바뀌면(틀린 줄 ↔ 못 읽음) ingestauth_denylist_error 를 같은 등급으로 다시 낸다 — 마지막 신호가
+// 지금의 원인이라 운영자가 원인을 거꾸로 읽지 않는다. 같은 사유가 이어지면(틀린 줄 수만 바뀌어도) 내지 않는다.
+func TestDenyListGaugeReemitsWhenReasonChanges(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 는 권한 검사를 우회한다")
+	}
+	path, d, rec := newTestDenyList(t, "not-a-token\n"+testTokenA+"\n")
+	steps := []struct {
+		name string
+		edit func()
+	}{
+		{name: "틀린_줄", edit: func() {}},
+		{name: "틀린_줄_수만_바뀜", edit: func() { writeFile(t, path, "not-a-token\nstill-not\n"+testTokenA+"\n") }},
+		{name: "못_읽음", edit: func() { chmod(t, path, 0o000) }},
+		{name: "못_읽음_그대로", edit: func() {}},
+		{name: "권한만_되돌림", edit: func() { chmod(t, path, 0o644) }}, // 틀린 줄은 남았다
+		{name: "고침", edit: func() { writeFile(t, path, testTokenA+"\n") }},
+	}
+	for _, step := range steps {
+		step.edit()
+		_ = d.Check() // 결과는 다른 시험이 본다 — 이 시험은 신호만 본다
+	}
+
+	var reasons []string
+	for _, e := range rec.events(t, "ingestauth_denylist_error") {
+		if e.Level != "ERROR" {
+			t.Errorf("ingestauth_denylist_error level = %s, want ERROR", e.Level)
+		}
+		reasons = append(reasons, e.Reason)
+	}
+	if want := []string{"invalid_lines", "unreadable", "invalid_lines"}; !slices.Equal(reasons, want) {
+		t.Errorf("ingestauth_denylist_error reasons = %v, want %v (사유가 바뀔 때마다 한 번)", reasons, want)
+	}
+	if recovered := rec.events(t, "ingestauth_denylist_recovered"); len(recovered) != 1 {
+		t.Errorf("ingestauth_denylist_recovered count = %d, want 1", len(recovered))
 	}
 }
 
@@ -383,7 +453,119 @@ func TestDenyListRereadsSameSizeAndModTime(t *testing.T) {
 	}
 }
 
-// 공유 입력 벡터(계획 PC-25 · S7-5 — 장부 305 부33 · 부40 · 부45): testdata 의 입력을 DenyList 로 읽은
+// fifoOpenBound 는 FIFO 시험이 Contains 의 반환을 기다리는 상한이다. 통과하는 갈래는 곧바로 끝나고, 열기에서 멈추는
+// 회귀일 때만 이만큼 기다린다.
+const fifoOpenBound = 5 * time.Second
+
+// 거부 목록 자리에 일반 파일이 아닌 것이 놓이면 읽기 실패다(새 연결 거부 — 게이지 unreadable). 쓰는 쪽 없는 FIFO 는
+// 열기에서 멈추지 않고 곧바로 에러다 — 멈추면 잠금을 쥔 채라 처리기 · healthz · cut 의 첫 확인이 모두 멈춘다. 링크는
+// 따르되 그 끝이 일반 파일이어야 한다 — 장치로 가는 링크는 에러다.
+func TestDenyListRejectsNonRegularFile(t *testing.T) {
+	t.Run("FIFO", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "deny-tokens")
+		if err := syscall.Mkfifo(path, 0o600); err != nil {
+			t.Fatalf("Setup: syscall.Mkfifo(%q) returned error: %v", path, err)
+		}
+		d := NewDenyList(path, discardLogger())
+		done := make(chan error, 1)
+		go func() {
+			_, err := d.Contains(testTokenA)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Errorf("Contains(%q) on a FIFO returned nil error, want error", testTokenA)
+			}
+		case <-time.After(fifoOpenBound):
+			t.Errorf("Contains(%q) on a FIFO did not return within %v — 열기에서 멈췄다", testTokenA, fifoOpenBound)
+			// 쓰는 쪽으로 한 번 열고 닫아 멈춘 열기를 풀고, 그 고루틴이 끝나기를 기다린다. 읽는 쪽이 없으면 이 열기는
+			// 멈추지 않고 곧바로 에러다(O_NONBLOCK).
+			if f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+				f.Close() // 쓰는 쪽을 닫으면 읽는 쪽은 EOF 를 받는다 — 닫기 실패가 판정을 바꾸지 않는다
+				<-done
+			}
+		}
+	})
+	t.Run("장치로_가는_링크", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "deny-tokens")
+		symlink(t, os.DevNull, path)
+		d := NewDenyList(path, discardLogger())
+		if _, err := d.Contains(testTokenA); err == nil {
+			t.Errorf("Contains(%q) on a symlink to %s returned nil error, want error", testTokenA, os.DevNull)
+		}
+		if err := d.Check(); err == nil {
+			t.Errorf("Check() on a symlink to %s = nil, want error", os.DevNull)
+		}
+	})
+}
+
+// denyListOfSize 는 첫 줄이 token 이고 나머지가 주석 한 줄인, 정확히 size 바이트의 거부 목록 내용이다.
+func denyListOfSize(token string, size int) string {
+	head := token + "\n"
+	return head + "#" + strings.Repeat("x", size-len(head)-2) + "\n"
+}
+
+// 거부 목록은 denyListMaxBytes 까지만 읽는다 — 넘는 파일은 읽기 실패다(새 연결 거부 · Check 에러). 그 파일의 토큰은
+// 합집합에 넣지 않는다(잘린 내용을 판정에 쓰지 않는다). 상한과 같은 크기는 그대로 읽는다.
+func TestDenyListRejectsOversizedFile(t *testing.T) {
+	tests := []struct {
+		name    string
+		size    int
+		want    bool // 그 파일의 토큰을 막는가 — 상한을 넘으면 읽지 않으므로 합집합에 없다
+		wantErr bool
+	}{
+		{name: "상한", size: denyListMaxBytes, want: true},
+		{name: "상한_넘음", size: denyListMaxBytes + 1, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, d, _ := newTestDenyList(t, denyListOfSize(testTokenA, tc.size))
+			got, err := d.Contains(testTokenA)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("Contains(%q) on a %d-byte deny list: err = %v, want error presence = %v", testTokenA, tc.size, err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("Contains(%q) on a %d-byte deny list = %v, want %v", testTokenA, tc.size, got, tc.want)
+			}
+			if err := d.Check(); (err != nil) != tc.wantErr {
+				t.Errorf("Check() on a %d-byte deny list = %v, want error presence = %v", tc.size, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// 합집합의 키는 읽은 파일의 버퍼를 붙잡지 않는다 — 큰 파일에서 읽은 토큰이 파일에서 빠진 뒤에도 그 파일만큼의 메모리가 남지
+// 않는다. 상한에 꽉 찬 파일을 읽힌 거부 목록 여럿에서 토큰을 빼고 다시 읽힌 뒤 살아 있는 힙을 잰다.
+func TestDenyListKeysDoNotRetainTheFileBuffer(t *testing.T) {
+	const lists = 64
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	ds := make([]*DenyList, lists)
+	for i := range ds {
+		path := filepath.Join(t.TempDir(), "deny-tokens")
+		writeFile(t, path, denyListOfSize(testTokenA, denyListMaxBytes))
+		ds[i] = NewDenyList(path, discardLogger())
+		if got, err := ds[i].Contains(testTokenA); err != nil || !got {
+			t.Fatalf("Setup: Contains(%q) on a full deny list = %v, %v, want true, nil", testTokenA, got, err)
+		}
+		writeFile(t, path, testTokenB+"\n") // A 가 파일에서 빠진다 — 합집합에는 남는다
+		if got, err := ds[i].Contains(testTokenA); err != nil || !got {
+			t.Fatalf("Setup: Contains(%q) after the edit = %v, %v, want true, nil", testTokenA, got, err)
+		}
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(ds)
+
+	limit := int64(lists * denyListMaxBytes / 4)
+	if retained := int64(after.HeapAlloc) - int64(before.HeapAlloc); retained > limit {
+		t.Errorf("%d deny lists retain %d bytes after their token left the file, want at most %d (합집합의 키가 읽은 버퍼를 붙잡는다)", lists, retained, limit)
+	}
+}
+
+// 공유 입력 벡터(설계 2-4 시험 「줄 문법」): testdata 의 입력을 DenyList 로 읽은
 // 유효 토큰 집합(바이트 순 정렬 · 한 줄에 하나 · 끝 줄바꿈)과 틀린 줄 수가 기대 파일과 바이트까지 같다.
 // RUNBOOK 의 셸 계수(LC_ALL=C · bash)가 같은 세 파일로 같은 결과를 내야 한다 — 이 시험은 Go 쪽 절반이다.
 func TestDenyListSharedVector(t *testing.T) {
@@ -425,8 +607,8 @@ func TestDenyListSharedVector(t *testing.T) {
 
 	// 줄 내용은 어디에도 싣지 않는다. 벡터의 값은 모두 SYNTHET1CTEST 로 시작한다(소문자 행 포함).
 	for name, out := range map[string]string{"slog output": rec.String(), "Check() error": errString(checkErr)} {
-		if strings.Contains(strings.ToUpper(out), "SYNTHET1CTEST") {
-			t.Errorf("%s contains a line of the vector: %s", name, out)
+		if n := strings.Count(strings.ToUpper(out), "SYNTHET1CTEST"); n > 0 {
+			t.Errorf("%s carries lines of the vector %d time(s), want 0 (length %d)", name, n, len(out))
 		}
 	}
 }

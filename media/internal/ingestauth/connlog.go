@@ -11,7 +11,10 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"syscall"
 	"time"
+
+	"github.com/3K-PokeClip/pokeclip-mono/media/internal/streamkey"
 )
 
 // 허용 연결 기록의 두 세대 파일 이름이다. 둘 다 기록 디렉터리 바로 아래에 있다.
@@ -21,7 +24,7 @@ const (
 )
 
 // connLogFileMode 는 세대 파일의 모드다. 쓰는 응답기와 읽는 cut 이 같은 계정(UID 10003)이고, 상태
-// 디렉터리도 그 계정만 연다(10003:10003 0700 — 설계 2-8).
+// 디렉터리도 그 계정만 연다(10003:10003 0700 — 설계 2-8). 연 세대 파일에 이 밖의 권한이 있으면 쓰지 않는다.
 const connLogFileMode = 0o600
 
 // ConnLog 는 응답기가 허용한 송출 연결의 추가 전용 기록이다(JSON Lines — at · path · id, 비밀 없음).
@@ -45,7 +48,8 @@ type ConnLog struct {
 }
 
 // OpenConnLog 는 dir 의 기록을 이어 쓰려고 연다. 현재 세대가 없거나 비어 있으면 시작 표시와 함께 새로
-// 만든다. 쓸 수 없으면 에러다(기동 실패). maxBytes 는 0 보다 커야 한다. now 가 nil 이면 time.Now 다.
+// 만든다. 쓸 수 없으면 에러다(기동 실패) — 현재 세대 자리가 링크이거나 그 파일에 connLogFileMode 밖의
+// 권한이 있어도 그렇다. maxBytes 는 0 보다 커야 한다. now 가 nil 이면 time.Now 다.
 func OpenConnLog(dir string, maxBytes int64, now func() time.Time) (*ConnLog, error) {
 	if dir == "" {
 		return nil, errors.New("ingestauth: 허용 연결 기록의 디렉터리가 비었다")
@@ -64,14 +68,18 @@ func OpenConnLog(dir string, maxBytes int64, now func() time.Time) (*ConnLog, er
 }
 
 // open 은 현재 세대를 이어 쓰려고 연다. 없거나 비어 있으면(시작 표시를 쓰기 전에 끝난 세대) 새 세대를
-// 만든다. 앞 프로세스가 줄 가운데서 끝났으면 다음 줄이 줄바꿈을 앞세우게 한다.
+// 만든다. 앞 프로세스가 줄 가운데서 끝났으면 다음 줄이 줄바꿈을 앞세우게 한다. 현재 세대 자리의 링크는
+// 따르지 않고(에러), 연 파일에 connLogFileMode 밖의 권한이 있으면 에러다.
 func (c *ConnLog) open() error {
-	f, err := os.OpenFile(c.path(connLogName), os.O_RDWR|os.O_APPEND, 0)
+	f, err := os.OpenFile(c.path(connLogName), os.O_RDWR|os.O_APPEND|syscall.O_NOFOLLOW, 0)
 	if errors.Is(err, fs.ErrNotExist) {
 		return c.startGeneration()
 	}
 	if err != nil {
 		return fmt.Errorf("ingestauth: 허용 연결 기록을 열지 못했다: %w", err)
+	}
+	if err := checkOwnerOnly(f); err != nil {
+		return errors.Join(err, f.Close())
 	}
 	size, torn, err := fileEnd(f)
 	if err != nil {
@@ -110,14 +118,25 @@ func fileEnd(f *os.File) (size int64, torn bool, err error) {
 // 쓴 줄은 페이지 캐시에 남아 재기동 뒤 cut 이 읽는다. 상자가 죽으면 연결도 함께 사라진다.
 //
 // 현재 세대가 maxBytes 에 이르렀으면 줄을 쓰기 전에 직전 세대로 돌린다. 쓰기가 줄 가운데서 끊기면
-// (디스크 부족 등) 에러이고, 다음 줄은 줄바꿈을 앞세워 그 조각에 붙지 않게 쓴다. token · connID 가
-// 비면 에러다 — 그 줄은 시작 표시와 구별되지 않거나 id 대응이 없다.
+// (디스크 부족 등) 에러이고, 다음 줄은 줄바꿈을 앞세워 그 조각에 붙지 않게 쓴다. token 이 토큰 꼴
+// (streamkey.IsToken)이 아니거나 connID 가 MediaMTX 연결 id 꼴(connIDPattern — 소문자 UUID)이 아니면 쓰지 않고
+// 에러다 — 빈 값은 시작 표시와 구별되지 않고, 다른 꼴은 cut 이 받는 목록의 id 와 맞지 않거나 JSON 이 잘못된
+// UTF-8 을 U+FFFD 로 바꿔 다른 줄의 id 와 겹친다. 에러에는 값을 싣지 않는다.
 func (c *ConnLog) Append(token, connID string) error {
-	if token == "" || connID == "" {
-		return errors.New("ingestauth: 토큰과 연결 id 가 모두 있어야 기록한다")
+	if !streamkey.IsToken(token) {
+		return errors.New("ingestauth: 토큰 꼴이 아닌 값은 기록하지 않는다")
+	}
+	if !connIDPattern.MatchString(connID) {
+		return errors.New("ingestauth: MediaMTX 연결 id 꼴이 아닌 값은 기록하지 않는다")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// 현재 세대를 누가 지우거나 바꿔 끼웠으면 쓰지도 돌리지도 않는다 — 끼운 파일을 직전 세대로 넘기거나 비우지 않는다.
+	if c.f != nil {
+		if err := c.checkOpenedIsCurrent(); err != nil {
+			return err
+		}
+	}
 	if err := c.rotateIfFull(); err != nil {
 		return err
 	}
@@ -151,12 +170,16 @@ func (c *ConnLog) rotateIfFull() error {
 }
 
 // startGeneration 은 현재 세대 파일을 새로 만들고 첫 줄로 시작 표시를 쓴다. 이 이름에 파일이 있으면
-// 비우고 다시 쓴다 — 시작 표시를 다 쓰지 못하고 남은, 이 기록 자신의 빈 세대다. c.mu 를 잡은 채로
-// (OpenConnLog 에서는 값을 내주기 전에) 부른다.
+// 비우고 다시 쓴다 — 시작 표시를 다 쓰지 못하고 남은, 이 기록 자신의 빈 세대다. 그 자리의 링크는 따르지
+// 않고(에러), 남은 파일은 만들 때의 모드를 받지 않으므로 연 뒤에 connLogFileMode 밖의 권한이 없는지 본다.
+// c.mu 를 잡은 채로(OpenConnLog 에서는 값을 내주기 전에) 부른다.
 func (c *ConnLog) startGeneration() error {
-	f, err := os.OpenFile(c.path(connLogName), os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND, connLogFileMode)
+	f, err := os.OpenFile(c.path(connLogName), os.O_WRONLY|os.O_CREATE|os.O_TRUNC|os.O_APPEND|syscall.O_NOFOLLOW, connLogFileMode)
 	if err != nil {
 		return fmt.Errorf("ingestauth: 허용 연결 기록의 새 세대를 만들지 못했다: %w", err)
+	}
+	if err := checkOwnerOnly(f); err != nil {
+		return errors.Join(err, f.Close())
 	}
 	mark, err := encodeConnLine(connLine{At: c.now()})
 	if err != nil {
@@ -166,6 +189,18 @@ func (c *ConnLog) startGeneration() error {
 		return errors.Join(fmt.Errorf("ingestauth: 새 세대에 시작 표시를 쓰지 못했다: %w", err), f.Close())
 	}
 	c.f, c.size, c.torn = f, int64(len(mark)), false
+	return nil
+}
+
+// checkOwnerOnly 는 연 세대 파일에 connLogFileMode 밖의 권한(그룹 · 다른 사용자)이 없는지 본다.
+func checkOwnerOnly(f *os.File) error {
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("ingestauth: 연 기록 파일을 보지 못했다: %w", err)
+	}
+	if perm := fi.Mode().Perm(); perm&^connLogFileMode != 0 {
+		return fmt.Errorf("ingestauth: 허용 연결 기록 파일의 모드가 %v 다 — %v 밖의 권한이 없어야 한다", perm, os.FileMode(connLogFileMode))
+	}
 	return nil
 }
 
@@ -195,19 +230,26 @@ func (c *ConnLog) Check() error {
 	return checkCanCreate(c.dir)
 }
 
-// checkCurrent 는 현재 세대 경로가 연 파일과 같은지 본다. 누가 바꿔 끼우거나 지우면 다르다 — 그대로 쓰면
-// cut 이 읽지 않는 파일에 쓰게 된다(설계 3-4). 회전과 겹치지 않게 c.mu 안에서 본다.
+// checkCurrent 는 현재 세대가 있고 그 경로가 연 파일과 같은지 본다. 회전과 겹치지 않게 c.mu 안에서 본다.
 func (c *ConnLog) checkCurrent() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.f == nil {
 		return errors.New("ingestauth: 허용 연결 기록에 현재 세대가 없다 — 회전이 새 세대를 만들지 못했다")
 	}
+	return c.checkOpenedIsCurrent()
+}
+
+// checkOpenedIsCurrent 는 연 파일이 지금도 현재 세대 경로의 파일인지 본다. 경로는 링크를 따르지 않고 본다(Lstat) — 링크로
+// 바꿔 끼운 것도 다르다. 누가 지우거나 바꿔 끼우면 다르다 — 그대로 쓰면 cut 이 읽지 않는 파일에 쓰게 되고, 회전이 끼운
+// 파일을 직전 세대로 넘기면 Check 가 다시 nil 이 되어 Since 가 그 파일의 at 으로 끌려간다(설계 3-4). c.mu 를 잡은 채로,
+// c.f 가 nil 이 아닐 때 부른다.
+func (c *ConnLog) checkOpenedIsCurrent() error {
 	opened, err := c.f.Stat()
 	if err != nil {
 		return fmt.Errorf("ingestauth: 연 기록 파일을 보지 못했다: %w", err)
 	}
-	named, err := os.Stat(c.path(connLogName))
+	named, err := os.Lstat(c.path(connLogName))
 	if err != nil {
 		return fmt.Errorf("ingestauth: 현재 세대 경로를 보지 못했다: %w", err)
 	}

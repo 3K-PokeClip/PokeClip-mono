@@ -66,10 +66,10 @@ func (r *logRecorder) events(t *testing.T, name string) []logEvent {
 	t.Helper()
 	var got []logEvent
 	sc := bufio.NewScanner(bytes.NewBufferString(r.String()))
-	for sc.Scan() {
+	for n := 1; sc.Scan(); n++ {
 		var e logEvent
 		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
-			t.Fatalf("slog 출력 %q 을 해석하지 못했다: %v", sc.Text(), err)
+			t.Fatalf("slog 출력의 %d번째 줄(%d 바이트)을 해석하지 못했다: %v", n, len(sc.Bytes()), err)
 		}
 		if e.Msg == name {
 			got = append(got, e)
@@ -172,17 +172,19 @@ func (l recordedLine) isStartMark() bool {
 }
 
 // parseLines 는 기록 파일 내용의 줄을 모두 해석한다. 온전한 파일만 받는다 — 줄바꿈으로 끝나지 않거나
-// JSON 이 아닌 줄이 있으면 에러다.
+// JSON 이 아닌 줄이 있으면 에러다. 에러에는 줄 내용 대신 줄 번호와 길이를 싣는다.
 func parseLines(data []byte) ([]recordedLine, error) {
 	var lines []recordedLine
+	n := 0
 	for raw := range strings.Lines(string(data)) {
+		n++
 		if !strings.HasSuffix(raw, "\n") {
-			return nil, fmt.Errorf("line %q does not end in a newline", raw)
+			return nil, fmt.Errorf("line %d (%d bytes) does not end in a newline", n, len(raw))
 		}
 		var l recordedLine
 		var keys map[string]any
 		if err := errors.Join(json.Unmarshal([]byte(raw), &l), json.Unmarshal([]byte(raw), &keys)); err != nil {
-			return nil, fmt.Errorf("line %q is not a JSON object: %v", raw, err)
+			return nil, fmt.Errorf("line %d (%d bytes) is not a JSON object: %v", n, len(raw), err)
 		}
 		l.Keys = slices.Sorted(maps.Keys(keys))
 		lines = append(lines, l)

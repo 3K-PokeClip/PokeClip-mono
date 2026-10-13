@@ -38,7 +38,9 @@ const (
 // 401 이다. 재확인 차례는 마지막 판정 불가가 가장 이른 활동 토큰이 갖는다(돌림). 재확인이 쓸 수 있는
 // 값으로 끝나면 기억을 모두 지우고 — auth 가 비밀 저장소를 거쳐 답했다 —, 그 밖의 판정이면 그 토큰만
 // 지운다. 마지막 판정 불가에서 failedForgetAfter 가 지난 항목은 기억 밖으로 다룬다. 시각은 모두 단조
-// 시계로 잰다. 처리기 안에만 있고 내보내지 않는다. 응답기가 다시 뜨면 비어서 시작한다.
+// 시계로 잰다. 처리기 안에만 있고 내보내지 않는다. 응답기가 다시 뜨면 비어서 시작한다. 부르는 쪽은 설계 2-4
+// 판정표 순서를 지킨다 — token 은 streamkey.IsToken 을 지난 값이고, admit 은 거부 목록 · 예산 · 요청 ctx 를 지난
+// 요청에서만, record 는 resolve 를 부른 요청에서만 부른다.
 //
 // failedTokens 의 돌림은 재시도 주기가 failedWaitingWindow 보다 짧은 구간(플러그인의 5초 간격 구간)에서만
 // 선다. 주기가 그보다 긴 구간(30 · 60초 간격)에서는 다른 기억 토큰이 올 때 가장 오래 기다린 토큰이 늘
@@ -48,9 +50,9 @@ const (
 //
 // 「마지막 판정 불가가 더 이른」은 기록 순번으로 가른다. 지금을 잠금 안에서 읽으므로 순번 순서는 시각
 // 순서와 같고, 같은 시각에 기록된 토큰은 먼저 기록된 쪽이 오래 기다렸다. 시험 시계가 뒤로 가면 지금을 새
-// 기준으로 삼는다 — 그보다 늦게 적힌 시각을 모두 지금으로 당겨, 칸은 길어야 failedRecheckGap 닫히고
-// 기억은 길어야 failedForgetAfter 남고 활동은 길어야 failedWaitingWindow 이어진다. 여러 고루틴이 함께
-// 불러도 된다.
+// 기준으로 삼는다 — 그때 이미 풀린 항목은 치우고(되살아나지 않는다) 그보다 늦게 적힌 시각을 모두 지금으로
+// 당겨, 칸은 길어야 failedRecheckGap 닫히고 기억은 길어야 failedForgetAfter 남고 활동은 길어야
+// failedWaitingWindow 이어진다. 여러 고루틴이 함께 불러도 된다.
 type failedTokens struct {
 	now   func() time.Time
 	limit int // 풀리지 않은 기억의 상한 — failedTokensMax. 시험이 작게 준다
@@ -189,12 +191,13 @@ func (f *failedTokens) sweep(now time.Time) {
 	}
 }
 
-// readClock 은 지금을 읽는다. 시험 시계가 마지막으로 읽은 지금보다 뒤로 갔으면, 그보다 늦게 적힌 시각을
-// 모두 지금으로 당긴다 — 지금이 새 기준이다. 그래서 적힌 시각은 늘 마지막으로 읽은 지금보다 늦지 않다.
-// f.mu 를 잡은 채로 부른다.
+// readClock 은 지금을 읽는다. 시험 시계가 마지막으로 읽은 지금보다 뒤로 갔으면, 그때 이미 풀린 항목을 먼저
+// 치운 뒤 그보다 늦게 적힌 시각을 모두 지금으로 당긴다 — 지금이 새 기준이다. 치우지 않고 당기면 풀린 항목이
+// 되살아난다. 그래서 적힌 시각은 늘 마지막으로 읽은 지금보다 늦지 않다. f.mu 를 잡은 채로 부른다.
 func (f *failedTokens) readClock() time.Time {
 	now := f.now()
 	if now.Before(f.lastNow) {
+		f.sweep(f.lastNow)
 		f.lastRecheck = earlier(f.lastRecheck, now)
 		for _, e := range f.entries {
 			e.failedAt = earlier(e.failedAt, now)

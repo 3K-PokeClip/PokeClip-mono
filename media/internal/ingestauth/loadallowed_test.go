@@ -1,10 +1,10 @@
 package ingestauth
 
 import (
-	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -81,8 +81,8 @@ func TestLoadAllowedTreatsMissingCurrentAsEmpty(t *testing.T) {
 // 착수 체크리스트 C2 회전 경합(앞부분 — 설계 3-4 「LoadAllowed 의 성질」): 두 읽기 사이에 회전이 0 · 1 · 2번
 // 껴도, Since 뒤에 쓰였고 판독 시작 전에 쓰인 줄은 하나도 빠지지 않는다. 회전 횟수는 비공개 이음새
 // loadAllowed 의 between(현재 세대를 읽은 뒤, 직전 세대를 읽기 전에 부른다)으로 정확히 만든다.
-// maxBytes 가 1 이라 Append 하나가 회전 하나다. 「Since 앞에서 허용된 판독 중 연결」 부분은 Cut 이 있어야
-// 도므로 c5 몫이다(장부 305 부8).
+// maxBytes 가 1 이라 Append 하나가 회전 하나다. 「Since 앞에서 허용된 판독 중 연결」 부분은 Cut 의 기록 밖 갈래
+// 시험(cut_test)이 맡는다.
 func TestLoadAllowedAcrossRotations(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -99,7 +99,7 @@ func TestLoadAllowedAcrossRotations(t *testing.T) {
 			c, rec := openTestConnLog(t, dir, 1, newFakeClock())
 			var written []recordedLine
 			for i := range 3 {
-				if err := c.Append(testTokenA, fmt.Sprintf("before-%d", i)); err != nil {
+				if err := c.Append(testTokenA, testConnID(i)); err != nil {
 					t.Fatalf("Setup: Append returned error: %v", err)
 				}
 				l, err := lastLineOf(filepath.Join(dir, connLogName))
@@ -113,7 +113,7 @@ func TestLoadAllowedAcrossRotations(t *testing.T) {
 
 			got, err := loadAllowed(dir, func() {
 				for i := range tc.rotations {
-					if err := c.Append(testTokenB, fmt.Sprintf("during-%d", i)); err != nil {
+					if err := c.Append(testTokenB, testConnID(100+i)); err != nil {
 						t.Errorf("Append between the two reads returned error: %v", err)
 					}
 				}
@@ -129,7 +129,7 @@ func TestLoadAllowedAcrossRotations(t *testing.T) {
 			}
 			for _, l := range written {
 				if !l.At.After(got.Since) {
-					continue // Since 앞의 줄은 기록 밖 갈래의 몫이다(c5)
+					continue // Since 앞의 줄은 Cut 의 기록 밖 갈래가 맡는다
 				}
 				if token, ok := got.Tokens[l.ID]; !ok || token != l.Path {
 					t.Errorf("Tokens[%q] = %q, %v, want %q — Since(%v) 뒤 · 판독 전에 쓰인 줄이 빠졌다", l.ID, token, ok, l.Path, got.Since)
@@ -139,78 +139,90 @@ func TestLoadAllowedAcrossRotations(t *testing.T) {
 	}
 }
 
-// 회전 경합의 동시 반복: Append(작은 maxBytes 로 자주 돈다) · LoadAllowed(cut) · Check(healthz)가 함께
-// 돈다. 판독마다 「Since 뒤에 쓰였고 판독 시작 전에 쓰인 줄」이 모두 있고, Check 는 내내 nil 이다
-// (-race -count=20 으로 돈다).
+// 회전 경합의 동시 반복: Append(작은 maxBytes 로 자주 돈다) · LoadAllowed(cut) · Check(healthz)가 판마다 함께
+// 출발한다 — 시험 고루틴이 판마다 출발 장벽을 열고 셋이 함께 지난다. 판독과 Check 는 그 판의 쓰기가 끝날 때까지
+// 되풀이하되 적어도 한 번은 돈다. 그래서 둘은 회전이 이어지는 동안 판마다 끼고, 겹침이 스케줄에 기대지 않는다(쓰기가
+// 먼저 다 끝나 판독이 한 번도 돌지 않는 일이 없다). 되풀이마다 차례를 넘겨 쓰는 고루틴을 굶기지 않는다. 판독마다
+// 「Since 뒤에 쓰였고 판독 시작 전에 쓰인 줄」이 모두 있고, Check 는 내내 nil 이다(-race -count=20 으로 돈다).
 func TestLoadAllowedDuringRotation(t *testing.T) {
 	dir := t.TempDir()
 	c, rec := openTestConnLog(t, dir, 512, newFakeClock())
 	current := filepath.Join(dir, connLogName)
+	const rounds, appendsPerRound = 100, 3
 
 	var mu sync.Mutex
 	var written []recordedLine // 반환까지 끝난 Append 의 줄
-	done := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		defer close(done)
-		for i := range 300 {
-			if err := c.Append(testTokenA, fmt.Sprintf("conn-%d", i)); err != nil {
-				t.Errorf("Append returned error: %v", err)
-				return
-			}
-			// 이 고루틴만 쓰므로 현재 세대의 마지막 줄이 방금 쓴 줄이다.
-			l, err := lastLineOf(current)
-			if err != nil {
-				t.Errorf("lastLineOf(%q) returned error: %v", current, err)
-				return
-			}
-			mu.Lock()
-			written = append(written, l)
-			mu.Unlock()
-		}
-	})
-	reads := 0
-	wg.Go(func() {
-		for {
-			select {
-			case <-done:
-				return
-			default:
-			}
-			mu.Lock()
-			before := slices.Clone(written)
-			mu.Unlock()
-			got, err := LoadAllowed(dir)
-			if err != nil {
-				t.Errorf("LoadAllowed(%q) returned error: %v", dir, err)
-				return
-			}
-			for _, l := range before {
-				if _, ok := got.Tokens[l.ID]; l.At.After(got.Since) && !ok {
-					t.Errorf("LoadAllowed missed %q written at %v before the read (Since %v)", l.ID, l.At, got.Since)
+	reads, checks := 0, 0      // 판마다 한 고루틴씩만 늘리고, 판은 wg.Wait 로 차례가 선다
+	for round := range rounds {
+		start, done := make(chan struct{}), make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			defer close(done)
+			<-start
+			for i := range appendsPerRound {
+				if err := c.Append(testTokenA, testConnID(round*appendsPerRound+i)); err != nil {
+					t.Errorf("Append returned error: %v", err)
 					return
 				}
+				// 이 고루틴만 쓰므로 현재 세대의 마지막 줄이 방금 쓴 줄이다.
+				l, err := lastLineOf(current)
+				if err != nil {
+					t.Errorf("lastLineOf(%q) returned error: %v", current, err)
+					return
+				}
+				mu.Lock()
+				written = append(written, l)
+				mu.Unlock()
 			}
-			reads++
-		}
-	})
-	wg.Go(func() {
-		for {
-			select {
-			case <-done:
-				return
-			default:
+		})
+		wg.Go(func() {
+			<-start
+			for {
+				mu.Lock()
+				before := slices.Clone(written)
+				mu.Unlock()
+				got, err := LoadAllowed(dir)
+				if err != nil {
+					t.Errorf("LoadAllowed(%q) returned error: %v", dir, err)
+					return
+				}
+				for _, l := range before {
+					if _, ok := got.Tokens[l.ID]; l.At.After(got.Since) && !ok {
+						t.Errorf("LoadAllowed missed %q written at %v before the read (Since %v)", l.ID, l.At, got.Since)
+						return
+					}
+				}
+				reads++
+				select {
+				case <-done:
+					return
+				default:
+					runtime.Gosched()
+				}
 			}
-			if err := c.Check(); err != nil {
-				t.Errorf("Check() during rotation = %v, want nil", err)
-				return
+		})
+		wg.Go(func() {
+			<-start
+			for {
+				if err := c.Check(); err != nil {
+					t.Errorf("Check() during rotation = %v, want nil", err)
+					return
+				}
+				checks++
+				select {
+				case <-done:
+					return
+				default:
+					runtime.Gosched()
+				}
 			}
-		}
-	})
-	wg.Wait()
+		})
+		close(start)
+		wg.Wait()
+	}
 
-	if rotations := len(rec.events(t, "ingestauth_connlog_rotated")); rotations < 10 || reads == 0 {
-		t.Errorf("rotations = %d, reads = %d, want at least 10 rotations and one read — 경합이 서지 않았다", rotations, reads)
+	if rotations := len(rec.events(t, "ingestauth_connlog_rotated")); rotations < 10 || reads < rounds || checks < rounds {
+		t.Errorf("rotations = %d, reads = %d, checks = %d, want at least 10 rotations and %d reads and checks — 경합이 서지 않았다", rotations, reads, checks, rounds)
 	}
 	if _, err := os.Stat(filepath.Join(dir, connLogPrevName)); err != nil {
 		t.Errorf("previous generation after the run: %v", err)

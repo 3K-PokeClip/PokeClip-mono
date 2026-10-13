@@ -2,6 +2,7 @@ package ingestauth
 
 import (
 	"fmt"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -201,8 +202,12 @@ func TestFailedTokensRecheckRotatesThroughWaitingTokens(t *testing.T) {
 
 // 확인과 설정은 잠금 하나 안에서 한다(설계 3-8 「원자적 차례」). 칸이 열린 때 고루틴 여럿이 서로 다른 기억
 // 토큰으로 함께 admit 을 부르면 참은 하나다. 판마다 새로 만들어 겹침의 모양을 바꾼다. -race -count=20 으로
-// 돈다(계획 S6-2).
+// 돈다. 확인과 설정이 갈라지는 회귀는 잠금 안의 논리 경합이라 경합 탐지기가 보지 못하고, P 가 하나면 고루틴이
+// 그 틈에 끼어들지 못해 이 시험이 가르지 못한다 — 그때는 건너뛴다.
 func TestFailedTokensAdmitIsAtomic(t *testing.T) {
+	if p := runtime.GOMAXPROCS(0); p < 2 {
+		t.Skipf("GOMAXPROCS=%d — 원자적 차례는 P 가 둘 이상일 때만 가른다", p)
+	}
 	const tokens, rounds = 16, 200
 	list := make([]string, tokens)
 	for i := range list {
@@ -234,7 +239,7 @@ func TestFailedTokensAdmitIsAtomic(t *testing.T) {
 }
 
 // 재확인이 쓸 수 있는 값으로 끝나면 기억을 모두 지운다(설계 3-8 규칙 4 · 6절 ingestauth_failed_cleared
-// scope=all). cleared 는 지운 기억 토큰 수이고 풀린 항목은 세지 않는다(작업 지시 3절 1 — 풀린 항목은 기억
+// scope=all). cleared 는 지운 기억 토큰 수이고 풀린 항목은 세지 않는다(설계 3-8 규칙 5 — 풀린 항목은 기억
 // 밖이다). 다른 기억 토큰은 칸이 닫혀 있어도 곧바로 참이다.
 func TestFailedTokensUsableClearsAll(t *testing.T) {
 	clock := newManualClock()
@@ -447,9 +452,9 @@ func TestFailedTokensLimit(t *testing.T) {
 
 // 긴 간격 구간(30 · 60초 간격 — 주기가 활동 창 10초보다 길다)에서는 돌림이 서지 않는다(설계 2-4 711행 ·
 // 3-8 기억 수명 상한). 늘 먼저 오는 지속 실패 토큰 F 가 물결마다 칸을 갖고, 쓸 수 있는 값의 L 은 기억이
-// 풀리기 전까지 물결마다 gap 이다. 상한만 단언한다(계획 r1.5 1257행) — L 이 거절되는 마지막 시각 ≤ L 의
-// 마지막 판정 불가 + 300초 + 한 주기. 풀린 뒤 L 의 첫 시도는 참이고, 그 판정은 F 의 기억을 지우지 않는다.
-// 대조: 같은 입력을 8초마다 보내면 둘째 물결에 L 이 재확인한다(돌림).
+// 풀리기 전까지 물결마다 gap 이다. 풀린 뒤 L 의 첫 시도는 참이고, 그 판정은 F 의 기억을 지우지 않는다. 상한을
+// 관측으로 단언한다 — L 이 실제로 거절된 마지막 시각 ≤ L 의 마지막 판정 불가 + 300초 + 한 주기. 거절이
+// 이어지면 상한을 한 주기 넘길 때까지 보내 본다. 대조: 같은 입력을 8초마다 보내면 둘째 물결에 L 이 재확인한다(돌림).
 func TestFailedTokensLongIntervalBoundedByMemoryLifetime(t *testing.T) {
 	// remember 는 L(t=0s) · F(t=1s)를 기억시킨다 — L 의 마지막 판정 불가가 F 보다 이르다.
 	remember := func() (*manualClock, *failedTokens, string, string) {
@@ -465,29 +470,33 @@ func TestFailedTokensLongIntervalBoundedByMemoryLifetime(t *testing.T) {
 	t.Run("33초_주기", func(t *testing.T) {
 		const period = 33 * time.Second
 		const released = 300 * time.Second // L 의 마지막 판정 불가(t=0s) + 300초
+		const bound = released + period    // L 이 거절될 수 있는 상한
 		clock, f, l, fail := remember()
 
-		var lastRejected time.Duration
+		var lastRejected time.Duration // L 이 실제로 거절된 마지막 시각
 		for wave := 0; ; wave++ {
 			base := 10*time.Second + time.Duration(wave)*period
+			at := base + 10*time.Millisecond
+			if at > bound+period {
+				break // 거절이 상한을 한 주기 넘겨 이어졌다 — 아래 상한 단언이 잡는다
+			}
 			clock.moveTo(base)
 			if got := admitResult(f, fail); got != "ok" {
 				t.Errorf("admit(F) at t=%v = %q, want %q", base, got, "ok")
 			}
 			f.record(fail, outcomeUndecided)
 
-			at := base + 10*time.Millisecond
 			clock.moveTo(at)
 			got := admitResult(f, l)
-			if at < released {
-				if got != "gap" {
-					t.Errorf("admit(L) at t=%v while L is remembered = %q, want %q", at, got, "gap")
-				}
-				lastRejected = at
-				continue
+			switch {
+			case at < released && got != "gap":
+				t.Errorf("admit(L) at t=%v while L is remembered = %q, want %q", at, got, "gap")
+			case at >= released && got != "ok":
+				t.Errorf("admit(L) at t=%v after L's memory was released = %q, want %q", at, got, "ok")
 			}
 			if got != "ok" {
-				t.Errorf("admit(L) at t=%v after L's memory was released = %q, want %q", at, got, "ok")
+				lastRejected = at
+				continue
 			}
 			if scope, cleared := f.record(l, outcomeUsable); scope != "" || cleared != 0 {
 				t.Errorf("record(L, outcomeUsable) after L's memory was released = %q, %d, want %q, 0 (F 의 기억을 지우지 않는다)", scope, cleared, "")
@@ -495,7 +504,7 @@ func TestFailedTokensLongIntervalBoundedByMemoryLifetime(t *testing.T) {
 			break
 		}
 
-		if bound := released + period; lastRejected > bound {
+		if lastRejected > bound {
 			t.Errorf("last recheck_wait for L at t=%v, want ≤ t=%v (L 의 마지막 판정 불가 + 300초 + 한 주기)", lastRejected, bound)
 		}
 		if got := admitResult(f, fail); got != "gap" {
@@ -598,7 +607,50 @@ func TestFailedTokensClockRewindBoundsGapAndMemory(t *testing.T) {
 	})
 }
 
-// 경계(작업 지시 3절 4). 닫힘 · 활동 · 기억은 시작에서 그 길이까지의 반열린 구간이다 — 칸은 마지막 재확인에서
+// 시험 시계가 뒤로 가도 이미 풀린 기억은 되살아나지 않는다(설계 3-8 규칙 5 · 2-4 651행) — 되감기 전에 마지막으로 읽은
+// 지금으로 풀린 항목을 먼저 치우고 남은 시각을 당긴다. 치우지 않으면 결과가 게으른 치움 시점에 따라 갈린다 — 되살아난 항목이
+// 재확인 칸을 받거나, 그 판정이 남의 기억을 지운다.
+func TestFailedTokensReleasedEntryStaysReleasedAfterClockRewind(t *testing.T) {
+	t.Run("칸을_받지_않음", func(t *testing.T) {
+		clock := newManualClock()
+		f := newFailedTokens(clock.now)
+		x, y, z := syntheticToken(1), syntheticToken(2), syntheticToken(3)
+		f.record(x, outcomeUndecided) // t=300s 에 풀린다
+		clock.moveTo(400 * time.Second)
+		f.record(y, outcomeUndecided)   // 상한 아래라 풀린 X 는 아직 치우지 않았다
+		clock.moveTo(100 * time.Second) // 되감기 — 이 기록이 지금을 새 기준으로 삼는다
+		f.record(z, outcomeUndecided)
+
+		for _, s := range []struct{ name, token string }{{name: "X", token: x}, {name: "Z", token: z}} {
+			if got := admitResult(f, s.token); got != "ok" {
+				t.Errorf("admit(%s) at t=100s after rewinding from t=400s = %q, want %q (풀린 X 는 칸을 쓰지 않는다)", s.name, got, "ok")
+			}
+		}
+	})
+
+	t.Run("판정이_남의_기억을_지우지_않음", func(t *testing.T) {
+		clock := newManualClock()
+		f := newFailedTokens(clock.now)
+		a, b := syntheticToken(1), syntheticToken(2)
+		f.record(a, outcomeUndecided) // t=300s 에 풀린다
+		clock.moveTo(100 * time.Second)
+		f.record(b, outcomeUndecided)
+		clock.moveTo(301 * time.Second)
+		if got := admitResult(f, b); got != "ok" {
+			t.Fatalf("Setup: admit(B) at t=301s = %q, want %q", got, "ok")
+		}
+
+		clock.moveTo(299 * time.Second) // 되감기
+		if scope, cleared := f.record(a, outcomeUsable); scope != "" || cleared != 0 {
+			t.Errorf("record(A, outcomeUsable) after rewinding from t=301s = %q, %d, want %q, 0 (A 는 t=300s 에 풀렸다)", scope, cleared, "")
+		}
+		if got := admitResult(f, b); got != "gap" {
+			t.Errorf("admit(B) at t=299s after A's outcome = %q, want %q (B 는 여전히 기억에 있다)", got, "gap")
+		}
+	})
+}
+
+// 경계. 닫힘 · 활동 · 기억은 시작에서 그 길이까지의 반열린 구간이다 — 칸은 마지막 재확인에서
 // 4초가 지나면(≥ 4초) 열리고, 활동은 도착에서 10초 안(< 10초)이고, 기억은 마지막 판정 불가에서 300초가
 // 지나면(≥ 300초) 풀린다. 길이 − 1ns 와 길이에서 판정이 갈린다.
 func TestFailedTokensBoundaries(t *testing.T) {
@@ -661,7 +713,7 @@ func TestFailedTokensBoundaries(t *testing.T) {
 	})
 }
 
-// 차례의 동률(작업 지시 3절 3)은 기록 차례로 가른다. 같은 시각에 기록된 A · B 는 먼저 기록된 A 가 오래
+// 차례의 동률은 기록 차례로 가른다. 같은 시각에 기록된 A · B 는 먼저 기록된 A 가 오래
 // 기다렸다. 시계가 뒤로 가 늦게 적힌 시각이 지금으로 당겨져 같아져도 기록 차례가 그대로 가른다 — 시각만으로
 // 견주면 둘 다 상대보다 이르지 않아 아무도 양보하지 않는다.
 func TestFailedTokensTieBreaksByRecordOrder(t *testing.T) {
