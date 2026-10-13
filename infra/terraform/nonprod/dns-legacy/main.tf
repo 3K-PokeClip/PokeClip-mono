@@ -1,5 +1,5 @@
-# 옛 공개 존(pokeclip.com)과 레코드를 무변경으로 import 하기 위한 선언.
-# 존 이전 동안 이 루트는 NS TTL 만 바꾸고, 이전이 끝나면 destroy 한다.
+# 공개 존 pokeclip.com 의 영구 소유 루트(리스 기간 — 설계 3-1). 존을 지우는
+# plan 은 거부된다. 존과 레코드는 무변경 import 로 들였다.
 # 운영 O1 의 첫 plan 이 「import N · 생성 0 · 수정 0 · 삭제 0」이 아니면
 # apply 하지 않고 이 선언 · tfvars 를 실물에 맞춘다.
 
@@ -7,6 +7,10 @@ resource "aws_route53_zone" "legacy" {
   name    = var.zone_name
   comment = var.zone_comment
   tags    = var.zone_tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_route53_record" "ns" {
