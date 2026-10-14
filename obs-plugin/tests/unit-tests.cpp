@@ -1220,6 +1220,30 @@ TEST(config_audio_switches_are_not_output_settings)
 	CHECK(!c.SameOutputSettings(a));
 }
 
+// 연결 해제 저장의 순서 규칙(POK-285) — POSIX·Windows 저장이 같이 쓴다. .bak을 먼저 쓰고, 그게 실패하면 본 파일은 건드리지 않는다.
+TEST(replacing_backup_writes_bak_first_and_stops_on_failure)
+{
+	std::vector<std::string> calls;
+	auto record = [&calls](const char *failOn) {
+		return [&calls, failOn](const std::string &target) {
+			calls.push_back(target);
+			return target != failOn;
+		};
+	};
+	using Calls = std::vector<std::string>;
+
+	CHECK(WriteBackupThenMain("cfg.json", record("")));
+	CHECK(calls == (Calls{"cfg.json.bak", "cfg.json"}));
+
+	calls.clear();
+	CHECK(!WriteBackupThenMain("cfg.json", record("cfg.json.bak")));
+	CHECK(calls == (Calls{"cfg.json.bak"})); // 본 파일은 옛 판(페어링 상태) 그대로
+
+	calls.clear();
+	CHECK(!WriteBackupThenMain("cfg.json", record("cfg.json")));
+	CHECK(calls == (Calls{"cfg.json.bak", "cfg.json"})); // .bak만 새 판 — 키가 사라지는 쪽
+}
+
 #ifndef _WIN32
 TEST(private_file_is_owner_only_from_the_start)
 {

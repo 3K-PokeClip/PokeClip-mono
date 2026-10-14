@@ -1,8 +1,14 @@
 #pragma once
 
+#include <functional>
 #include <string>
 
 namespace pokeclip {
+
+// 직전 판을 남기지 않는 저장의 순서 — writeNoBackup(대상 하나를 백업 없이 원자적으로 바꾸는 함수)으로 <path>.bak을
+// 먼저, 그다음 <path>를 쓴다. 본 파일 쓰기가 커밋 지점이라 .bak 쓰기가 실패하면 본 파일은 건드리지 않는다.
+// POSIX는 WritePrivateFileReplacingBackup이, Windows는 libobs 저장(config.cpp)이 이 순서를 쓴다.
+bool WriteBackupThenMain(const std::string &path, const std::function<bool(const std::string &target)> &writeNoBackup);
 
 #ifndef _WIN32
 // 비밀이 든 파일을 처음부터 소유자만 읽게(0600) 쓴다 — <path>.tmp에 쓰고 fsync한 뒤 rename한다.

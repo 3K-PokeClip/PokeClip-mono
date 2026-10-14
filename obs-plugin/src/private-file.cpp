@@ -1,5 +1,14 @@
 #include "private-file.hpp"
 
+namespace pokeclip {
+
+bool WriteBackupThenMain(const std::string &path, const std::function<bool(const std::string &target)> &writeNoBackup)
+{
+	return writeNoBackup(path + ".bak") && writeNoBackup(path);
+}
+
+} // namespace pokeclip
+
 #ifndef _WIN32
 
 #include <cerrno>
@@ -68,8 +77,8 @@ bool WritePrivateFileAtomic(const std::string &path, const std::string &contents
 
 bool WritePrivateFileReplacingBackup(const std::string &path, const std::string &contents)
 {
-	// .bak을 먼저 바꾼다 — 본 파일 rename이 커밋 지점이라, 그 앞에서 멈추면 본 파일은 옛 판 그대로다.
-	return WriteOwnerOnly(path + ".bak", contents, false) && WriteOwnerOnly(path, contents, false);
+	return WriteBackupThenMain(path,
+				   [&contents](const std::string &target) { return WriteOwnerOnly(target, contents, false); });
 }
 
 } // namespace pokeclip
