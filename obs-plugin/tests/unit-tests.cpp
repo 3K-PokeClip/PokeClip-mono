@@ -1265,6 +1265,117 @@ TEST(private_file_is_owner_only_from_the_start)
 	std::error_code ec;
 	fs::remove_all(dir, ec);
 }
+
+// 연결 해제 저장(POK-285) 시험용 — 시나리오마다 새 디렉터리를 쓴다.
+static std::filesystem::path FreshTestDir(const std::string &tag)
+{
+	auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+	std::filesystem::path dir =
+		std::filesystem::temp_directory_path() / ("pokeclip-" + tag + "-" + std::to_string(stamp));
+	std::filesystem::create_directories(dir);
+	return dir;
+}
+
+static std::string ReadFileText(const std::string &p)
+{
+	std::ifstream in(p);
+	return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+static unsigned FileModeOf(const std::string &p)
+{
+	struct stat st {};
+	return stat(p.c_str(), &st) == 0 ? static_cast<unsigned>(st.st_mode & 0777) : 0u;
+}
+
+static const std::string kPairedJson = "{\"streamid\":\"#!::r=OLDKEY,m=publish\",\"passphrase\":\"old-secret-1\"}";
+static const std::string kUnpairedJson = "{\"streamid\":\"\",\"passphrase\":\"\"}";
+
+TEST(private_file_replacing_backup_keeps_no_previous_version)
+{
+	namespace fs = std::filesystem;
+	mode_t oldMask = umask(022);
+
+	// 고치기 전 해제 저장 — 해제판을 써도 직전 판(키)이 .bak에 남는다. 본 파일이 깨지면 libobs가 이것을 읽는다.
+	fs::path before = FreshTestDir("unpair-before");
+	const std::string beforePath = (before / "pokeclip.json").string();
+	CHECK(WritePrivateFileAtomic(beforePath, kPairedJson));
+	CHECK(WritePrivateFileAtomic(beforePath, kUnpairedJson));
+	CHECK_EQ(ReadFileText(beforePath + ".bak"), kPairedJson);
+
+	// 해제 저장 — 본 파일·.bak 모두 해제판이고 0600이다. 지난 저장이 남긴 키 든 tmp도 남지 않는다.
+	fs::path dir = FreshTestDir("unpair");
+	const std::string path = (dir / "pokeclip.json").string();
+	CHECK(WritePrivateFileAtomic(path, kPairedJson));
+	CHECK(WritePrivateFileAtomic(path, kPairedJson));
+	std::ofstream(path + ".tmp") << kPairedJson;
+	std::ofstream(path + ".bak.tmp") << kPairedJson;
+	CHECK(WritePrivateFileReplacingBackup(path, kUnpairedJson));
+	CHECK_EQ(ReadFileText(path), kUnpairedJson);
+	CHECK_EQ(ReadFileText(path + ".bak"), kUnpairedJson);
+	CHECK_EQ(FileModeOf(path), 0600u);
+	CHECK_EQ(FileModeOf(path + ".bak"), 0600u);
+	CHECK(!fs::exists(path + ".tmp"));
+	CHECK(!fs::exists(path + ".bak.tmp"));
+	CHECK(!fs::exists(path + ".bak.bak"));
+
+	// 처음 쓰는 자리여도 두 파일이 다 생긴다.
+	fs::path fresh = FreshTestDir("unpair-fresh");
+	const std::string freshPath = (fresh / "pokeclip.json").string();
+	CHECK(WritePrivateFileReplacingBackup(freshPath, kUnpairedJson));
+	CHECK_EQ(ReadFileText(freshPath), kUnpairedJson);
+	CHECK_EQ(ReadFileText(freshPath + ".bak"), kUnpairedJson);
+
+	umask(oldMask);
+	std::error_code ec;
+	fs::remove_all(before, ec);
+	fs::remove_all(dir, ec);
+	fs::remove_all(fresh, ec);
+}
+
+TEST(private_file_replacing_backup_failure_only_drops_credentials)
+{
+	namespace fs = std::filesystem;
+
+	// 1단계(.bak)에서 막히면 아무것도 안 바뀐다 — 본 파일은 옛 판(페어링 상태) 그대로고 tmp도 남지 않는다.
+	// .bak 자리가 비어 있지 않은 디렉터리면 rename이 실패한다.
+	fs::path a = FreshTestDir("unpair-fail-bak");
+	const std::string aPath = (a / "pokeclip.json").string();
+	CHECK(WritePrivateFileAtomic(aPath, kPairedJson));
+	fs::create_directories(fs::path(aPath + ".bak") / "keep");
+	CHECK(!WritePrivateFileReplacingBackup(aPath, kUnpairedJson));
+	CHECK_EQ(ReadFileText(aPath), kPairedJson);
+	CHECK(!fs::exists(aPath + ".bak.tmp"));
+	CHECK(!fs::exists(aPath + ".tmp"));
+
+	// 2단계(본 파일)에서 막히면 .bak만 해제판이다 — 어긋나도 키가 사라지는 쪽이다. 실패한 tmp는 지운다.
+	fs::path b = FreshTestDir("unpair-fail-main");
+	const std::string bPath = (b / "pokeclip.json").string();
+	std::ofstream(bPath + ".bak") << kPairedJson;
+	fs::create_directories(fs::path(bPath) / "keep");
+	CHECK(!WritePrivateFileReplacingBackup(bPath, kUnpairedJson));
+	CHECK_EQ(ReadFileText(bPath + ".bak"), kUnpairedJson);
+	CHECK(fs::is_directory(bPath));
+	CHECK(!fs::exists(bPath + ".tmp"));
+
+	// .bak.tmp 자리의 심볼릭 링크는 따라가지 않는다 — 링크 대상·본 파일·.bak 모두 그대로다.
+	fs::path c = FreshTestDir("unpair-fail-link");
+	const std::string cPath = (c / "pokeclip.json").string();
+	CHECK(WritePrivateFileAtomic(cPath, kPairedJson));
+	CHECK(WritePrivateFileAtomic(cPath, kPairedJson));
+	fs::path victim = c / "victim";
+	std::ofstream(victim) << "keep";
+	fs::create_symlink(victim, cPath + ".bak.tmp");
+	CHECK(!WritePrivateFileReplacingBackup(cPath, kUnpairedJson));
+	CHECK_EQ(ReadFileText(victim.string()), std::string("keep"));
+	CHECK_EQ(ReadFileText(cPath), kPairedJson);
+	CHECK_EQ(ReadFileText(cPath + ".bak"), kPairedJson);
+
+	std::error_code ec;
+	fs::remove_all(a, ec);
+	fs::remove_all(b, ec);
+	fs::remove_all(c, ec);
+}
 #endif
 
 // ---------------------------------------------------------------- 핫키 마킹 (A4)
