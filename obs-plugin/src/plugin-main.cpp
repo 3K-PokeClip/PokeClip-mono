@@ -29,6 +29,7 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include "mark-hotkey.hpp"
 #include "mark-sender.hpp"
 #include "pairing.hpp"
+#include "server-env.hpp"
 #include "srt-target.hpp"
 #include "stream-control.hpp"
 #include "stream-target.hpp"
@@ -105,6 +106,7 @@ void SyncStateFromConfig()
 		s.keyHint = KeyHintOf(c.streamId);
 		s.ingest = c.ingestHost + ":" + std::to_string(c.ingestPort);
 		s.apiBase = c.apiBase;
+		s.serverEnv = ServerEnvName(c.serverEnv);
 		s.syncStart = c.syncStart;
 	});
 }
@@ -113,6 +115,7 @@ std::string ConfigJson()
 {
 	PluginConfig c = ConfigStore::Instance().Get();
 	obs_data_t *d = obs_data_create();
+	obs_data_set_string(d, "server_env", ServerEnvName(c.serverEnv));
 	obs_data_set_string(d, "api_base", c.apiBase.c_str());
 	obs_data_set_string(d, "ingest_host", c.ingestHost.c_str());
 	obs_data_set_int(d, "ingest_port", c.ingestPort);
@@ -154,6 +157,10 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		if (obs_data_has_user_value(d, key))
 			out = obs_data_get_bool(d, key);
 	};
+	// 서버 환경(POK-267, 독 숨은 스위치) — 목적지를 컴파일된 두 짝(운영·개발) 중에서만 고른다. 키가 환경별이라
+	// 바꾸면 연결을 해제한다(아래 Commit) — 브리지 토큰으로 비밀을 다른 곳에 보내게 할 수 없다.
+	const bool envGiven = obs_data_has_user_value(d, "server_env");
+	const std::string envText = envGiven ? obs_data_get_string(d, "server_env") : "";
 	// api_base·clip_api_base는 여기서 받지 않는다 — 마크가 passphrase를 Bearer로 싣고 가는 곳이라,
 	// 브리지 토큰만으로 목적지를 바꿀 수 있으면 「비밀은 독에 주지 않는다」가 우회된다.
 	// 개발 중에는 설정 파일(pokeclip.json)로 바꾼다.
@@ -166,11 +173,22 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	flag("audio_auto_assign", next.audioAutoAssign);
 	flag("audio_assign_prompted", next.audioAssignPrompted);
 	obs_data_release(d);
+	ServerEnv targetEnv = current.serverEnv;
+	if (envGiven && !ParseServerEnv(envText, targetEnv))
+		return {400, JsonReason(false, "invalid_server_env")};
+	const bool envSwitch = targetEnv != current.serverEnv;
+	if (envSwitch) {
+		// 같은 본문의 수신 주소는 무시한다 — 열어 둔 설정 초안의 옛 호스트가 전환을 되돌리지 않게. 직접 적은 주소는
+		// 지금 값 그대로 남는다(ApplyServerEnv는 알려진 기본값만 바꾼다).
+		next.ingestHost = current.ingestHost;
+		next.ingestPort = current.ingestPort;
+		ApplyServerEnv(next, targetEnv);
+	}
 	// 스위치를 직접 바꿨으면 답한 것으로 친다 — 처음 안내를 다시 띄우지 않는다.
 	if (next.audioAutoAssign != autoAssignWas)
 		next.audioAssignPrompted = true;
 
-	// 송출 중에는 SRT 출력·동기화·독 표시 방식만 막는다. 오디오 배정 스위치·처음 안내 응답은 AudioRouter가 방송·녹화가
+	// 송출 중에는 서버 환경·SRT 출력·동기화·독 표시 방식만 막는다. 오디오 배정 스위치·처음 안내 응답은 AudioRouter가 방송·녹화가
 	// 끝날 때까지 지금 나가는 트랙을 옮기지 않으므로 받는다 — 막으면 방송 중에 뜬 안내 카드에 답할 수 없다.
 	if (streaming && !next.SameOutputSettings(current))
 		return {409, JsonReason(false, "streaming")};
@@ -190,8 +208,14 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		    bool dockIntroShown = c.dockIntroShown;
 		    std::string markHotkey = c.markHotkey;
 		    c = next;
-		    c.streamId = streamId; // 키는 이 경로로 바꾸지 않는다 (페어링 전용)
-		    c.passphrase = passphrase;
+		    if (envSwitch) {
+			    // 키는 그 환경의 Auth가 발급했다 — 다른 환경으로 들고 가지 않는다(연결 해제와 같다).
+			    c.streamId.clear();
+			    c.passphrase.clear();
+		    } else {
+			    c.streamId = streamId; // 키는 이 경로로 바꾸지 않는다 (페어링 전용)
+			    c.passphrase = passphrase;
+		    }
 		    // 배정 기억·원래 체크·독 첫 실행 표시·단축키 사본은 UI 스레드가 따로 저장한다 —
 		    // 이 요청이 읽은 옛 값으로 덮지 않는다.
 		    c.audioTrackMap = std::move(trackMap);
@@ -202,8 +226,16 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		return {500, JsonReason(false, "save_failed")};
 
 	SyncStateFromConfig();
-	if (next.audioAutoAssign != autoAssignWas || next.audioAssignPrompted != promptedWas)
+	if (envSwitch) {
+		// Unpair()(pairing.cpp)와 같은 뒷정리 — 키 확인 안내를 내리고 오디오 배정을 미페어링 상태로 다시 본다.
+		AppState::Instance().Mutate([](StateSnapshot &s) { s.retry.keySuspect = false; });
+		PluginConfig saved = ConfigStore::Instance().Get();
+		obs_log(LOG_INFO, "server env switched to %s — unpaired (api %s, ingest %s:%d)",
+			ServerEnvName(saved.serverEnv), saved.apiBase.c_str(), saved.ingestHost.c_str(), saved.ingestPort);
+		AudioRouter::Instance().Schedule("unpaired");
+	} else if (next.audioAutoAssign != autoAssignWas || next.audioAssignPrompted != promptedWas) {
 		AudioRouter::Instance().Schedule("setting");
+	}
 
 	// 동기화를 본방 송출 중에 켰다 — 「본방이 보내면 우리도 보낸다」를 지키려면 다음 방송을 기다리지 않고
 	// 지금 시작한다. 키·GOP 검사는 본방 STARTING과 같지만, 그때 하는 오디오 재배정·마크 카운터 초기화·본방 시작
@@ -610,8 +642,8 @@ bool obs_module_load(void)
 		bfree(uiDir);
 	}
 	// 포트·토큰은 로그에 남기지 않는다.
-	obs_log(LOG_INFO, "version %s loaded (bridge %s)", PLUGIN_VERSION,
-		bridgeOk ? "up" : (uiDir ? "failed" : "no ui files"));
+	obs_log(LOG_INFO, "version %s loaded (bridge %s, build default servers %s)", PLUGIN_VERSION,
+		bridgeOk ? "up" : (uiDir ? "failed" : "no ui files"), ServerEnvName(kBuildServerEnv));
 
 	g_dock = new DockHost();
 	if (!obs_frontend_add_dock_by_id(kDockId, obs_module_text("Dock.Title"), g_dock)) {

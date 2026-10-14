@@ -2,6 +2,7 @@
 
 #include "constants.hpp"
 #include "private-file.hpp"
+#include "server-env.hpp"
 
 #include <obs-module.h>
 #include <plugin-support.h>
@@ -12,9 +13,11 @@ namespace pokeclip {
 PluginConfig DefaultConfig()
 {
 	PluginConfig c;
-	c.apiBase = kDefaultApiBase;
-	c.ingestHost = kDefaultIngestHost;
-	c.ingestPort = kDefaultIngestPort;
+	const ServerDefaults &servers = ServersFor(kBuildServerEnv);
+	c.serverEnv = kBuildServerEnv;
+	c.apiBase = servers.apiBase;
+	c.ingestHost = servers.ingestHost;
+	c.ingestPort = servers.ingestPort;
 	c.latencyMs = kDefaultLatencyMs;
 	return c;
 }
@@ -70,8 +73,6 @@ void ConfigStore::Load()
 
 	PluginConfig d = config_;
 	config_.apiBase = GetStringOr(data, "api_base", d.apiBase);
-	if (config_.apiBase == kLegacyDefaultApiBase)
-		config_.apiBase = kDefaultApiBase; // 손대지 않은 옛 기본값 — dev는 HTTP를 HTTPS로 돌려보낸다
 	config_.ingestHost = GetStringOr(data, "ingest_host", d.ingestHost);
 	config_.ingestPort = GetIntOr(data, "ingest_port", d.ingestPort);
 	config_.streamId = GetStringOr(data, "streamid", "");
@@ -127,10 +128,26 @@ void ConfigStore::Load()
 		config_.markHotkey = obs_data_get_json(hotkey);
 		obs_data_release(hotkey);
 	}
+
+	// 서버 환경(POK-267). 키가 있으면 그 값, 없거나 모르는 값이면 api_base로 짐작한다(옛 파일 — dev 키로 페어링된
+	// 설치는 개발에 남는다). 그다음 손대지 않은 기본값(옛 http dev · ingest.pokeclip.com 포함)을 그 환경의 짝으로
+	// 올린다 — 직접 적은 주소는 그대로. 올린 값은 다음 저장 때 파일에 남는다.
+	ServerEnv env = kBuildServerEnv;
+	const std::string envText = GetStringOr(data, "server_env", "");
+	if (!ParseServerEnv(envText, env)) {
+		if (!envText.empty())
+			obs_log(LOG_WARNING, "config: unknown server_env '%s' — inferring from api_base",
+				envText.c_str());
+		env = InferServerEnv(config_, kBuildServerEnv);
+	}
+	const ServerEnvChange moved = ApplyServerEnv(config_, env);
+	if (moved.api || moved.ingest)
+		obs_log(LOG_INFO, "config: default servers moved to %s (api %s, ingest %s:%d)", ServerEnvName(env),
+			config_.apiBase.c_str(), config_.ingestHost.c_str(), config_.ingestPort);
 	obs_data_release(data);
 
-	obs_log(LOG_INFO, "config loaded (paired=%s, ingest=%s:%d)", config_.HasKey() ? "yes" : "no",
-		config_.ingestHost.c_str(), config_.ingestPort);
+	obs_log(LOG_INFO, "config loaded (env=%s, paired=%s, ingest=%s:%d)", ServerEnvName(config_.serverEnv),
+		config_.HasKey() ? "yes" : "no", config_.ingestHost.c_str(), config_.ingestPort);
 }
 
 PluginConfig ConfigStore::Get() const
@@ -163,6 +180,7 @@ bool ConfigStore::SaveLocked()
 		return false;
 
 	obs_data_t *data = obs_data_create();
+	obs_data_set_string(data, "server_env", ServerEnvName(config_.serverEnv));
 	obs_data_set_string(data, "api_base", config_.apiBase.c_str());
 	obs_data_set_string(data, "ingest_host", config_.ingestHost.c_str());
 	obs_data_set_int(data, "ingest_port", config_.ingestPort);

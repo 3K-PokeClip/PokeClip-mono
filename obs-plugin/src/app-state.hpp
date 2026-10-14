@@ -73,6 +73,7 @@ struct StateSnapshot {
 	std::string keyHint; // streamid 토큰 끝 4자
 	std::string ingest;  // host:port
 	std::string apiBase;
+	std::string serverEnv; // "prod"·"dev" (POK-267) — 독이 개발 서버 배지·숨은 스위치에 쓴다
 	StreamPhase phase = StreamPhase::Idle;
 	std::string errorCode;
 	std::string errorDetail;

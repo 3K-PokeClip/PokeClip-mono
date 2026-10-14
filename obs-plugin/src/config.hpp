@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio-assign.hpp"
+#include "constants.hpp"
 
 #include <functional>
 #include <mutex>
@@ -11,6 +12,9 @@ namespace pokeclip {
 
 // plugin_config/pokeclip-obs/pokeclip.json. 계정 단위 설정이라 OBS 프로필과 무관하다.
 struct PluginConfig {
+	// 서버 환경(POK-267) — api_base·수신 주소의 짝과 스트림 키가 이 환경에 속한다. 파일 키 server_env, 없으면
+	// 빌드 기본(constants.hpp kBuildServerEnv)·옛 파일은 api_base로 짐작한다(server-env.hpp). 바꾸면 연결이 해제된다.
+	ServerEnv serverEnv = kBuildServerEnv;
 	std::string apiBase;
 	std::string ingestHost;
 	int ingestPort = 0;
@@ -39,11 +43,12 @@ struct PluginConfig {
 	std::string markHotkey;
 
 	bool HasKey() const { return !streamId.empty(); }
-	// 송출 중에 바꾸면 안 되는 값(SRT 출력·동기화·독 표시 방식)이 같은가. 오디오 배정 값은 보지 않는다.
+	// 송출 중에 바꾸면 안 되는 값(서버 환경·SRT 출력·동기화·독 표시 방식)이 같은가. 오디오 배정 값은 보지 않는다.
 	bool SameOutputSettings(const PluginConfig &o) const
 	{
-		return ingestHost == o.ingestHost && ingestPort == o.ingestPort && sendPassphrase == o.sendPassphrase &&
-		       latencyMs == o.latencyMs && syncStart == o.syncStart && forceFallback == o.forceFallback;
+		return serverEnv == o.serverEnv && ingestHost == o.ingestHost && ingestPort == o.ingestPort &&
+		       sendPassphrase == o.sendPassphrase && latencyMs == o.latencyMs && syncStart == o.syncStart &&
+		       forceFallback == o.forceFallback;
 	}
 	const std::string &ClipBase() const { return clipApiBase.empty() ? apiBase : clipApiBase; }
 };
