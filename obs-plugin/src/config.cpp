@@ -160,21 +160,21 @@ bool ConfigStore::Update(const std::function<void(PluginConfig &)> &mutate)
 {
 	std::lock_guard lock(mutex_);
 	mutate(config_);
-	return SaveLocked();
+	return SaveLocked(SaveBackup::KeepPrevious);
 }
 
-bool ConfigStore::Commit(const std::function<void(PluginConfig &)> &mutate)
+bool ConfigStore::Commit(const std::function<void(PluginConfig &)> &mutate, SaveBackup backup)
 {
 	std::lock_guard lock(mutex_);
 	PluginConfig previous = config_;
 	mutate(config_);
-	if (SaveLocked())
+	if (SaveLocked(backup))
 		return true;
 	config_ = std::move(previous);
 	return false;
 }
 
-bool ConfigStore::SaveLocked()
+bool ConfigStore::SaveLocked(SaveBackup backupMode)
 {
 	if (path_.empty())
 		return false;
@@ -226,13 +226,21 @@ bool ConfigStore::SaveLocked()
 		}
 	}
 
+	const bool keepPrevious = backupMode == SaveBackup::KeepPrevious;
 #ifdef _WIN32
-	bool ok = obs_data_save_json_pretty_safe(data, path_.c_str(), "tmp", "bak");
+	// SameAsNew는 POSIX와 같은 순서 규칙(WriteBackupThenMain — .bak을 먼저 새 판으로, 그다음 본 파일)을 쓴다.
+	// 백업 인자가 null이면 libobs가 ReplaceFileW(…, NULL)로 바꾼다. 드물게 ERROR_UNABLE_TO_MOVE_REPLACEMENT면
+	// 본 파일이 사라질 수 있는데, 그때도 남는 .bak은 새 판이라 키가 되살아나지는 않는다.
+	bool ok = keepPrevious ? obs_data_save_json_pretty_safe(data, path_.c_str(), "tmp", "bak")
+			       : WriteBackupThenMain(path_, [data](const std::string &target) {
+					 return obs_data_save_json_pretty_safe(data, target.c_str(), "tmp", nullptr);
+				 });
 #else
 	// streamid·passphrase가 든다 — 처음부터 0600으로 쓴다. libobs 저장은 tmp를 umask 권한(보통 0644)으로 만들어
 	// rename하므로, 뒤에 chmod를 걸어도 그 사이 남이 읽을 틈이 있다.
 	const char *json = obs_data_get_json_pretty(data);
-	bool ok = json && *json && WritePrivateFileAtomic(path_, json);
+	bool ok = json && *json &&
+		  (keepPrevious ? WritePrivateFileAtomic(path_, json) : WritePrivateFileReplacingBackup(path_, json));
 #endif
 	obs_data_release(data);
 

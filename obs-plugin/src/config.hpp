@@ -76,12 +76,15 @@ public:
 	// 변경 후 즉시 저장한다. 저장 실패 시 false지만 메모리에는 남는다 — 이미 OBS에 적용한 값(트랙 체크 백업 등)을
 	// 이번 실행 동안이라도 기억해야 하는 경로용.
 	bool Update(const std::function<void(PluginConfig &)> &mutate);
+	// 저장할 때 .bak에 둘 판. KeepPrevious는 직전 판(본 파일이 깨지면 libobs가 읽는다), SameAsNew는 새 판 —
+	// 자격증명을 지우는 저장(연결 해제)용이다. 직전 판을 남기면 지운 키가 .bak에서 되살아난다(POK-285).
+	enum class SaveBackup { KeepPrevious, SameAsNew };
 	// Update와 같되 저장에 실패하면 메모리도 되돌린다 — 실패를 독에 알리고 상태를 바꾸지 않는 경로(페어링·연결 해제·
 	// 설정 저장)용. 안 되돌리면 독은 옛 상태를 보이는데 다음 방송은 바뀐 값으로 돈다.
-	bool Commit(const std::function<void(PluginConfig &)> &mutate);
+	bool Commit(const std::function<void(PluginConfig &)> &mutate, SaveBackup backup = SaveBackup::KeepPrevious);
 
 private:
-	bool SaveLocked();
+	bool SaveLocked(SaveBackup backupMode);
 
 	mutable std::mutex mutex_;
 	PluginConfig config_;
