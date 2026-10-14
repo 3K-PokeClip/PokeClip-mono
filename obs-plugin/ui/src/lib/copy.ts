@@ -39,6 +39,7 @@ export const REASON: Record<string, string> = {
   invalid_ingest_host: '수신 호스트 형식이 올바르지 않아요.',
   invalid_ingest_port: '포트는 1–65535 사이여야 해요.',
   invalid_latency: '지연은 20–8000ms 사이여야 해요.',
+  invalid_server_env: '알 수 없는 서버 환경이에요.',
   unauthorized: '독 페이지 인증이 만료됐어요. OBS를 다시 시작하세요.',
   output_no_multitrack: 'OBS 출력이 다중 오디오 트랙을 받지 않아요.',
   audio_encoder_failed: '오디오 트랙 인코더를 만들지 못했어요.',

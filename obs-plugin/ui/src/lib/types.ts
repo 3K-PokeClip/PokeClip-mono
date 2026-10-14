@@ -45,12 +45,16 @@ export interface RetryView {
   keySuspect: boolean; // 서버가 살아 있는데 거절이 이어진다 — 키 상태 확인 안내
 }
 
+// 서버 환경(POK-267) — 운영·개발 짝 중 어디로 페어링·마크·SRT를 보내는가. 바꾸면 플러그인이 연결을 해제한다.
+export type ServerEnv = 'prod' | 'dev';
+
 export interface BridgeState {
   version: number;
   paired: boolean;
   keyHint: string;
   ingest: string;
   apiBase: string;
+  serverEnv: ServerEnv;
   phase: Phase;
   errorCode: string;
   errorDetail: string;
@@ -89,6 +93,7 @@ export interface Hello {
 }
 
 export interface PluginSettings {
+  server_env: ServerEnv; // 독 숨은 스위치로만 바꾼다 — 고급 설정 저장은 보내지 않는다
   api_base: string;
   ingest_host: string;
   ingest_port: number;

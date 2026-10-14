@@ -2,7 +2,8 @@ import { ChevronDown, SlidersHorizontal } from 'lucide-preact';
 import { useEffect, useState } from 'preact/hooks';
 import type { Bridge } from '../lib/bridge';
 import { reasonText } from '../lib/copy';
-import type { PluginSettings } from '../lib/types';
+import type { PluginSettings, ServerEnv } from '../lib/types';
+import { ConfirmDialog } from './ConfirmDialog';
 import styles from './dock.module.css';
 import { Button } from './ui';
 
@@ -45,8 +46,23 @@ function Toggle({
 
 // API 주소(api_base)는 시안대로 화면에서 뺐다 — 스트리머가 바꿀 값이 아니고 브리지로도 못 바꾼다(설정 파일 전용).
 // autoAssign은 지금 상태 — 처음 안내 카드로 켜고 끈 것이 열어 둔 설정 초안에도 반영되게(낡은 초안 저장으로 꺼지지 않게).
-export function Settings({ bridge, locked, autoAssign }: { bridge: Bridge; locked: boolean; autoAssign: boolean }) {
+// serverEnv·devUnlocked — POK-267 「개발 서버」 숨은 스위치. 로고를 연달아 눌러 풀었거나(app.tsx) 이미 개발 환경일 때만
+// 보인다. 바꾸면 플러그인이 연결을 해제하므로(키가 환경별이다) 확인 창을 거쳐 그 값 하나만 바로 보낸다.
+export function Settings({
+  bridge,
+  locked,
+  autoAssign,
+  serverEnv,
+  devUnlocked,
+}: {
+  bridge: Bridge;
+  locked: boolean;
+  autoAssign: boolean;
+  serverEnv: ServerEnv;
+  devUnlocked: boolean;
+}) {
   const [open, setOpen] = useState(false);
+  const [confirmEnv, setConfirmEnv] = useState<ServerEnv | null>(null);
   const [draft, setDraft] = useState<PluginSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -68,12 +84,30 @@ export function Settings({ bridge, locked, autoAssign }: { bridge: Bridge; locke
     setMessage(null);
   };
 
+  const switchEnv = async (target: ServerEnv) => {
+    const result = await bridge.putSettings({ server_env: target });
+    setConfirmEnv(null);
+    if (result.ok) {
+      if (result.settings) setDraft(result.settings);
+      setMessage({ ok: true, text: target === 'dev' ? '개발 서버로 바꿨어요' : '운영 서버로 바꿨어요' });
+    } else {
+      setMessage({ ok: false, text: reasonText(result.reason) });
+    }
+  };
+
   const save = async (e: Event) => {
     e.preventDefault();
     if (!draft) return;
     setSaving(true);
     // 처음 안내에 답했는지(audio_assign_prompted)는 안내 카드·스위치가 정한다 — 이 저장이 옛 값으로 덮지 않게 뺀다.
-    const { api_base: _unused, clip_api_base: _dev, audio_assign_prompted: _prompted, ...editable } = draft;
+    // 서버 환경도 숨은 스위치만 바꾼다 — 초안의 값을 다시 보내지 않는다.
+    const {
+      api_base: _unused,
+      clip_api_base: _dev,
+      audio_assign_prompted: _prompted,
+      server_env: _env,
+      ...editable
+    } = draft;
     const result = await bridge.putSettings(editable);
     setSaving(false);
     if (result.ok) {
@@ -161,6 +195,23 @@ export function Settings({ bridge, locked, autoAssign }: { bridge: Bridge; locke
               checked={draft.force_fallback}
               onChange={(v) => set('force_fallback', v)}
             />
+            {devUnlocked ? (
+              <Toggle
+                id="setting-server-env"
+                label="개발 서버 사용 (관리자)"
+                hint={
+                  locked
+                    ? '방송 중에는 바꿀 수 없어요.'
+                    : '운영 대신 개발 서버(dev.pokeclip.com · media-dev.pokeclip.com)로 연결해요. 바꾸면 연결이 해제돼 새 코드로 다시 연결해야 해요.'
+                }
+                checked={serverEnv === 'dev'}
+                onChange={(v) => {
+                  if (locked) return;
+                  setMessage(null);
+                  setConfirmEnv(v ? 'dev' : 'prod');
+                }}
+              />
+            ) : null}
             <div class={styles.settingsActions}>
               {message ? (
                 <span class={message.ok ? styles.saved : styles.inlineError} role="status">
@@ -184,6 +235,16 @@ export function Settings({ bridge, locked, autoAssign }: { bridge: Bridge; locke
             {message ? <span class={styles.inlineError}>{message.text}</span> : '불러오는 중…'}
           </div>
         )
+      ) : null}
+      {confirmEnv ? (
+        <ConfirmDialog
+          id="server-env"
+          title={confirmEnv === 'dev' ? '개발 서버로 바꿀까요?' : '운영 서버로 바꿀까요?'}
+          description="지금 연결이 해제돼요. 바꾼 서버에서 새 8자리 코드를 발급받아 다시 연결해야 해요."
+          confirmLabel="바꾸기"
+          onCancel={() => setConfirmEnv(null)}
+          onConfirm={() => switchEnv(confirmEnv)}
+        />
       ) : null}
     </div>
   );
