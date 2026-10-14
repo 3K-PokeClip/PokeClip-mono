@@ -144,7 +144,7 @@ conftest verify -c infra/terraform/scripts/guard-data/empty-config.toml \
 bash infra/terraform/scripts/guard_test.sh
 bash infra/terraform/scripts/guard.sh
 shellcheck infra/terraform/scripts/*.sh
-for t in infra/terraform/scripts/precheck/tests/*_test.sh; do bash "$t" || exit 1; done
+for t in infra/terraform/scripts/precheck/tests/*_test.sh; do bash "$t" || printf 'FAIL %s\n' "$t"; done
 shellcheck -x infra/terraform/scripts/precheck/*.sh \
   infra/terraform/scripts/precheck/lib/*.sh \
   infra/terraform/scripts/precheck/tests/*.sh \

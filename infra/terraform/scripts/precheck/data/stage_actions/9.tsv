@@ -17,9 +17,10 @@ s3:PutObject	ap-northeast-2	*
 s3:DeleteObject	ap-northeast-2	*
 
 # 2-3 판정 · 이벤트 조회의 읽기(설계 11-5 의 2-3-7 · 2-3-8 · 계획 M17a
-# 「데이터」). 열거 읽기는 설계의 두 리전. ec2:DescribeRegions 는 넣지 않는다
-# (kty 45차). iam:SimulatePrincipalPolicy 는 이 도구 자신의 호출이라 그것이
-# 거부되면 종료 2 로 드러난다.
+# 「데이터」). 열거 읽기의 리전은 M17a 가 정한 두 리전(서울 · us-east-1 —
+# M17b 착수 때 collect.sh 가 실제로 부르는 리전과 확인)이다.
+# ec2:DescribeRegions 는 넣지 않는다(kty 45차). iam:SimulatePrincipalPolicy 는
+# 이 도구 자신의 호출이라 그것이 거부되면 종료 2 로 드러난다.
 iam:GetAccountAuthorizationDetails	us-east-1	*
 iam:GetContextKeysForPrincipalPolicy	us-east-1	*
 iam:SimulateCustomPolicy	us-east-1	*

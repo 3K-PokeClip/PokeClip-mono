@@ -1,5 +1,11 @@
-# 권한을 바꾸는 관리 이벤트(설계 11-5 의 2-3-10 · 계획 M17a 「데이터」) — 열:
+# 이벤트 기록 조회 대상(설계 11-5 의 2-3-10 · 계획 M17a 「데이터」) — 열:
 # 이벤트 출처(eventSource) · 이벤트 이름 · 조회 리전. 탭 구분, 「#」 줄은 주석.
+# 두 묶음이다.
+#   - 권한을 바꾸는 관리 이벤트(계획 399행 범주) — 맨 아래 묶음을 뺀 전부.
+#   - STS 역할 받기(맨 아래 묶음) — 권한 변경이 아니다. events.sh 의
+#     EVENTS <n> 은 두 묶음을 합친 수라 평소에는 역할 받기가 대부분이다.
+#     권한 변경이 있었는지는 증거의 summary.tsv 에서 역할 받기 행을 뺀 0
+#     아닌 행으로 본다.
 # 리전 규칙: IAM · CloudFront = us-east-1 · STS = us-east-1(전역 엔드포인트)과
 # 서울(리전 엔드포인트) 둘 다 · 그 밖 = 서울. 도쿄 등 다른 리전은 조회하지
 # 않는다(SCP 거부 — 계획 M17a 「계약」 의 한계).
@@ -55,11 +61,6 @@ iam.amazonaws.com	UntagSAMLProvider	us-east-1
 iam.amazonaws.com	UntagServerCertificate	us-east-1
 iam.amazonaws.com	UntagUser	us-east-1
 
-# STS 역할 받기(계획 M17a 리전 규칙 · c1 사례 4 — 두 리전, 이벤트 ID 로 한 번)
-sts.amazonaws.com	AssumeRole	us-east-1
-sts.amazonaws.com	AssumeRole	ap-northeast-2
-sts.amazonaws.com	AssumeRoleWithWebIdentity	us-east-1
-sts.amazonaws.com	AssumeRoleWithWebIdentity	ap-northeast-2
 
 # 리소스 그룹 태깅 API 태그 변경
 tagging.amazonaws.com	TagResources	ap-northeast-2
@@ -86,3 +87,12 @@ sns.amazonaws.com	RemovePermission	ap-northeast-2
 sqs.amazonaws.com	SetQueueAttributes	ap-northeast-2
 sqs.amazonaws.com	AddPermission	ap-northeast-2
 sqs.amazonaws.com	RemovePermission	ap-northeast-2
+
+# STS 역할 받기 — 권한 변경이 아니다(위 묶음과 따로 본다). 넣은 이유: 계획
+# 389행 리전 규칙(STS 는 us-east-1 과 서울 둘 다 · 두 리전 결과는 이벤트 ID
+# 로 한 번) · c1 사례 4 · 설계 2-3-10 「역할 받기는 호출이 쓴 STS 엔드포인트의
+# 리전에서 본다」 — 판정 사이에 누가 역할을 받았는지 보는 보조다.
+sts.amazonaws.com	AssumeRole	us-east-1
+sts.amazonaws.com	AssumeRole	ap-northeast-2
+sts.amazonaws.com	AssumeRoleWithWebIdentity	us-east-1
+sts.amazonaws.com	AssumeRoleWithWebIdentity	ap-northeast-2
