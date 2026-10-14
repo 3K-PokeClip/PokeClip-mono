@@ -1,0 +1,199 @@
+# shellcheck shell=bash
+#
+# 단계 직전 점검 시험(*_test.sh)이 함께 쓰는 부품 — 임시 디렉터리 뿌리 ·
+# 실패 집계 · 사본 트리 · 명령 실행(표준 출력 · 표준 오류 · 종료 코드).
+#
+# 시험은 실제 $HOME 을 건드리지 않는다. 사례마다 임시 디렉터리를 만들어
+# HOME 으로 주고, 가짜 aws(fakebin/aws)를 PATH 앞에 둔다. 임시 디렉터리는
+# 모두 한 뿌리($TMPDIR/precheck_test.*) 아래에 만들고, 끝날 때와 중단 신호
+# (INT · TERM)에 뿌리를 통째로 지운다.
+#
+# 가짜 계정 ID 는 12자리, 가짜 사용자 이름은 임시 경로 · 저장소 경로에
+# 나올 수 없는 문자열이다 — 유출 단언(사례 5)이 경로 때문에 거짓 양성을 내지
+# 않게.
+
+TESTS_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly TESTS_DIR
+PRECHECK_DIR="$(cd -- "${TESTS_DIR}/.." && pwd)"
+readonly PRECHECK_DIR
+readonly FAKEBIN="${TESTS_DIR}/fakebin"
+readonly FAKE_ACCOUNT='731942086655'
+readonly FAKE_USER='zqx-fake-operator'
+
+failures=0
+tmp_root=""
+# testlib::run 이 남기는 마지막 실행의 결과 파일 접두와 종료 코드(부르는
+# 시험이 읽는다).
+run_out=""
+# shellcheck disable=SC2034
+run_status=0
+
+#######################################
+# 임시 디렉터리 뿌리를 지운다(EXIT 트랩 — INT · TERM 도 exit 로 여기 온다).
+# Globals:
+#   tmp_root
+#######################################
+testlib::remove_tmp_root() {
+  if [[ -n "${tmp_root}" ]]; then
+    rm -rf -- "${tmp_root}"
+  fi
+}
+
+#######################################
+# 트랩을 걸고 임시 디렉터리 뿌리를 만든다. 실패하면 시험 전체를 멈춘다.
+# Globals:
+#   tmp_root
+# Arguments:
+#   시험 이름(오류 문구용).
+#######################################
+testlib::init() {
+  trap testlib::remove_tmp_root EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/precheck_test.XXXXXX")" || {
+    printf '%s: 임시 디렉터리를 만들지 못함\n' "$1" >&2
+    exit 1
+  }
+  # 뿌리를 정규화해 둔다(macOS 의 /var → /private/var) — 증거 루트와 같은
+  # 꼴의 경로로 비교하려고.
+  tmp_root="$(cd -P -- "${tmp_root}" && pwd -P)" || exit 1
+}
+
+#######################################
+# 사례 하나의 작업 디렉터리를 만든다 — home(HOME) · in(입력) · out(출력).
+# Globals:
+#   tmp_root
+# Outputs:
+#   새 디렉터리 경로.
+#######################################
+testlib::new_case() {
+  local dir
+  dir="$(mktemp -d "${tmp_root}/case.XXXXXX")" || return 1
+  mkdir -p -- "${dir}/home" "${dir}/in" "${dir}/out" || return 1
+  printf '%s\n' "${dir}"
+}
+
+#######################################
+# 시험 하나의 실패를 알리고 센다.
+# Globals:
+#   failures
+# Arguments:
+#   실패 설명.
+#######################################
+testlib::fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  failures=$((failures + 1))
+}
+
+#######################################
+# 시험 하나의 통과를 적는다.
+# Arguments:
+#   통과 설명.
+#######################################
+testlib::ok() {
+  printf 'ok: %s\n' "$*"
+}
+
+#######################################
+# 집계를 적고 끝낸다.
+# Globals:
+#   failures
+# Arguments:
+#   시험 이름.
+#######################################
+testlib::finish() {
+  if [[ "${failures}" -ne 0 ]]; then
+    printf '%s: %s건 실패\n' "$1" "${failures}" >&2
+    exit 1
+  fi
+  printf '%s: 전부 통과\n' "$1"
+}
+
+#######################################
+# 점검 스크립트 사본 트리를 만든다(데이터는 비워 둔다 — 시험이 고정 입력을
+# 넣는다). 스크립트는 자기 위치의 data/ 를 읽으므로 사본은 사본의 data/ 를
+# 읽는다.
+# Arguments:
+#   만들 디렉터리.
+# Returns:
+#   복사하지 못하면 1.
+#######################################
+testlib::make_tree() {
+  local dest="$1"
+  mkdir -p -- "${dest}/lib" "${dest}/data/stage_actions" || return 1
+  cp -- "${PRECHECK_DIR}/scp-recheck.sh" "${PRECHECK_DIR}/events.sh" \
+    "${dest}/" || return 1
+  cp -- "${PRECHECK_DIR}/lib/evidence.sh" "${dest}/lib/" || return 1
+}
+
+#######################################
+# 사례 디렉터리의 home 을 HOME 으로, 가짜 aws 를 PATH 앞에 두고 명령을
+# 돌린다. 표준 출력 · 표준 오류는 <사례>/out/<이름>.stdout · .stderr 에,
+# 가짜 aws argv 는 <사례>/out/aws.log 에 쌓인다. FAKE_AWS_* 의 나머지는
+# 부르는 쪽이 환경으로 넘긴다.
+# Globals:
+#   run_out, run_status
+# Arguments:
+#   사례 디렉터리, 결과 이름, 명령과 인자.
+#######################################
+testlib::run() {
+  local case_dir="$1" name="$2"
+  shift 2
+  run_out="${case_dir}/out/${name}"
+  HOME="${case_dir}/home" PATH="${FAKEBIN}:${PATH}" \
+    FAKE_AWS_LOG="${case_dir}/out/aws.log" FAKE_AWS_ACCOUNT="${FAKE_ACCOUNT}" \
+    FAKE_AWS_USER="${FAKE_USER}" \
+    "$@" >"${run_out}.stdout" 2>"${run_out}.stderr"
+  # shellcheck disable=SC2034 # 부르는 시험이 읽는다.
+  run_status=$?
+}
+
+#######################################
+# 인자를 탭으로 이어 한 줄로 낸다(고정 입력 TSV 행).
+# Arguments:
+#   칸들.
+# Outputs:
+#   탭 구분 한 줄.
+#######################################
+testlib::tsv() {
+  local IFS=$'\t'
+  printf '%s\n' "$*"
+}
+
+#######################################
+# 파일에 고정 문자열이 몇 줄 나오는지 센다(파일이 없으면 0).
+# Arguments:
+#   파일, 문자열.
+# Outputs:
+#   줄 수.
+#######################################
+testlib::count() {
+  if [[ ! -f "$1" ]]; then
+    printf '0\n'
+    return 0
+  fi
+  grep -cF -- "$2" "$1"
+}
+
+#######################################
+# 사례 디렉터리에서 증거 루트 밖의 파일 가운데 가짜 계정 ID · 사용자 이름이
+# 든 것을 찾는다(입력 in/ 은 시험이 넣은 고정 입력이라 뺀다). 원본은 증거
+# 디렉터리에만 있어야 한다(사례 5).
+# Arguments:
+#   사례 디렉터리.
+# Outputs:
+#   걸린 파일 경로(없으면 빈 출력).
+#######################################
+testlib::leaks_outside_evidence() {
+  local case_dir="$1" file
+  local root="${case_dir}/home/.pokeclip-precheck"
+  while IFS= read -r -d '' file; do
+    case "${file}" in
+      "${root}"/*) continue ;;
+      *) ;;
+    esac
+    if grep -qF -e "${FAKE_ACCOUNT}" -e "${FAKE_USER}" -- "${file}"; then
+      printf '%s\n' "${file}"
+    fi
+  done < <(find "${case_dir}/home" "${case_dir}/out" -type f -print0)
+}
