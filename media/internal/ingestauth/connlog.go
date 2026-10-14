@@ -345,6 +345,10 @@ func loadAllowed(dir string, between func()) (Allowed, error) {
 // readGeneration 은 세대 파일 하나의 온전한 줄을 읽는다. 파일이 없으면 줄도 없다(회전 중인 현재 세대 ·
 // 아직 없는 직전 세대). 줄바꿈으로 끝나지 않은 마지막 줄(덜 쓰인 줄)과 이 패키지가 쓰는 꼴이 아닌 줄은
 // 버린다. 꼴이 아닌 줄은 실패한 쓰기의 조각이고(write 가 제 줄로 가둔다), 그 연결은 기록 실패로 거부됐다.
+//
+// 읽는 쪽은 상태 디렉터리를 믿는다 — 링크 · 일반 파일 여부 · 크기를 보지 않는다(쓰는 쪽은 O_NOFOLLOW · 0600 ·
+// 같은 파일 확인을 한다). 그 디렉터리에 쓸 수 있는 주체는 이미 기록을 지우거나 위조할 수 있어, 여기서 막아도
+// 늘어나는 방어가 없다. 세대 자리에 링크 · FIFO · 큰 파일을 두지 않는다(RUNBOOK).
 func readGeneration(path string) ([]connLine, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {

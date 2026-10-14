@@ -475,6 +475,8 @@ func TestSRTConnExists(t *testing.T) {
 		// 에러 꼴이어도 꼴이 아니다(잘린 앞부분만 보면 남은 연결을 「없음」으로 읽는다).
 		{name: "404_상한_길이_에러_꼴", status: http.StatusNotFound, body: paddedNotFoundBody(64 << 10), want: false},
 		{name: "404_상한_넘음_앞은_에러_꼴", status: http.StatusNotFound, body: paddedNotFoundBody(64<<10) + "x", wantStatus: http.StatusNotFound},
+		// 상한 + 1 바이트가 통째로 온전한 에러 꼴이다 — 길이 검사만 이것을 거른다(앞 행은 넘친 바이트가 JSON 을 깨 해석이 먼저 거른다).
+		{name: "404_상한_넘음_온전한_에러_꼴", status: http.StatusNotFound, body: paddedNotFoundBody(64<<10 + 1), wantStatus: http.StatusNotFound},
 		{name: "401", status: http.StatusUnauthorized, body: `{"status":"error","error":"authentication error"}`, wantStatus: http.StatusUnauthorized},
 		{name: "500", status: http.StatusInternalServerError, body: `{"status":"error","error":"terminated"}`, wantStatus: http.StatusInternalServerError},
 	}
@@ -528,6 +530,8 @@ func TestKickSRTConn(t *testing.T) {
 		// 꼴이어도 꼴이 아니다(잘린 앞부분만 보면 끊지 못한 연결을 「이미 없음」으로 센다).
 		{name: "404_상한_길이_에러_꼴", status: http.StatusNotFound, body: paddedNotFoundBody(64 << 10), wantErr: ErrNotFound},
 		{name: "404_상한_넘음_앞은_에러_꼴", status: http.StatusNotFound, body: paddedNotFoundBody(64<<10) + "x", wantStatus: http.StatusNotFound},
+		// 상한 + 1 바이트가 통째로 온전한 에러 꼴이다 — 길이 검사만 이것을 거른다(앞 행은 넘친 바이트가 JSON 을 깨 해석이 먼저 거른다).
+		{name: "404_상한_넘음_온전한_에러_꼴", status: http.StatusNotFound, body: paddedNotFoundBody(64<<10 + 1), wantStatus: http.StatusNotFound},
 		{name: "401", status: http.StatusUnauthorized, body: `{"status":"error","error":"authentication error"}`, wantStatus: http.StatusUnauthorized},
 		{name: "500", status: http.StatusInternalServerError, body: `{"status":"error","error":"terminated"}`, wantStatus: http.StatusInternalServerError},
 	}

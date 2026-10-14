@@ -141,22 +141,26 @@ type SRTConn struct {
 	State   string    `json:"state"`   // idle · read · publish
 }
 
-// ErrNotFound 는 KickSRTConn 이 kick 하려던 연결이 없다는 것이다(본문이 Control API 의 에러 꼴인 404) — 이미 닫혔거나
-// kick 됐다. 그 꼴이 아닌 404(경로가 없을 때 gin 이 내는 기본 404 · 본문이 maxDrainBytes 를 넘는 404)는 ErrNotFound 가
-// 아니라 *Error(Kind status · Status 404)다.
+// ErrNotFound 는 KickSRTConn 이 kick 하려던 연결이 없다는 것이다 — 이미 닫혔거나 kick 됐다. 어느 404 가 이것이
+// 되는지는 Error 문서에 있다.
 var ErrNotFound = errors.New("mtxctl: 그 연결이 없다")
 
 // errInvalidID 는 조회 · kick 의 id 가 MediaMTX 연결 id 꼴이 아니라는 것이다. 요청을 내지 않는다.
 var errInvalidID = errors.New("mtxctl: 연결 id 가 MediaMTX 의 꼴(소문자 UUID)이 아니다 — 요청을 내지 않았다")
 
 // Error 는 Control API 요청 하나가 기대한 답으로 끝나지 않은 것이다. 이 패키지의 요청 메서드가 돌려주는 에러는
-// ErrNotFound 와 id 꼴 에러를 빼면 모두 *Error 다. Status 404 는 그 404 가 연결 없음의 꼴이 아니라는 것이다 — 경로가
-// 없거나(gin 기본 404) 본문이 Control API 의 에러 꼴이 아니거나 maxDrainBytes 를 넘었다. 조회 · kick 의 연결 없음
-// 404(본문이 에러 꼴 · 상한 안)는 *Error 가 아니다(SRTConnExists 는 거짓, KickSRTConn 은 ErrNotFound).
+// ErrNotFound 와 id 꼴 에러를 빼면 모두 *Error 다.
+//
+// Status 401 은 Control API 인증 실패다 — 응답기 부재 · 자격 불일치, 또는 MediaMTX 가 응답기에 닿지 못함(임시 포트
+// 고갈). Status 404 의 뜻은 요청마다 다르다. 목록(SRTConns)은 200 이 아니면 본문을 보지 않으므로 404 는 늘
+// *Error 다. 조회 · kick 은 404 본문을 본다(isAPIError) — 연결 없음의 꼴(Control API 의 에러 꼴 · maxDrainBytes
+// 안)이면 *Error 가 아니다(SRTConnExists 는 거짓, KickSRTConn 은 ErrNotFound). 그 밖의 404 — 경로가 없을 때 gin 이
+// 내는 기본 404 · 에러 꼴이 아니거나 빈 본문 · 상한을 넘는 본문 · 끝까지 읽지 못한 본문 — 는 *Error(Kind status ·
+// Status 404)다.
 type Error struct {
 	Op     string // list · get · kick
 	Kind   string // timeout · unreachable · status · parse · pages
-	Status int    // Kind 가 status 일 때 — 기대 밖 HTTP 상태. 401 은 Control API 인증 실패(응답기 부재 · 자격 불일치 · MediaMTX 가 응답기에 닿지 못함)다
+	Status int    // Kind 가 status 일 때 — 기대 밖 HTTP 상태(401 · 404 의 뜻은 위 문서)
 }
 
 // Error 는 Op · Kind · Status 만 싣는다. 응답 본문도, 원인 에러의 문구(요청 URL 을 담는다)도 싣지 않는다.
@@ -254,9 +258,9 @@ func validConn(c SRTConn) bool {
 	return false
 }
 
-// SRTConnExists 는 GET /v3/srtconns/get/{id} 로 그 연결이 아직 있는지 본다 — 200 이면 참, 연결 없음 404(본문이 Control
-// API 의 에러 꼴 — isAPIError)면 거짓이다. 그 밖의 상태는 꼴이 아닌 404(경로 없음 · 상한 넘음)를 포함해 에러(Kind status)다. id 가 MediaMTX
-// 연결 id 꼴(소문자 UUID)이 아니면 요청 없이 에러다.
+// SRTConnExists 는 GET /v3/srtconns/get/{id} 로 그 연결이 아직 있는지 본다 — 200 이면 참, 연결 없음 404 면 거짓이다.
+// 그 밖의 상태는 에러(Kind status)다 — 404 의 갈래는 Error 문서에 있다. id 가 MediaMTX 연결 id 꼴(소문자 UUID)이
+// 아니면 요청 없이 에러다.
 func (c *Client) SRTConnExists(ctx context.Context, id string) (bool, error) {
 	if !connIDPattern.MatchString(id) {
 		return false, errInvalidID
@@ -278,9 +282,8 @@ func (c *Client) SRTConnExists(ctx context.Context, id string) (bool, error) {
 }
 
 // KickSRTConn 은 POST /v3/srtconns/kick/{id} 로 그 연결을 끊는다. 원본은 목록에서 곧바로 지우고 연결의 ctx 를
-// 끊는다(srt/server.go 232–241행). 연결 없음 404(본문이 Control API 의 에러 꼴 — isAPIError)면 ErrNotFound 다. 그 밖의
-// 상태는 꼴이 아닌 404(경로 없음 · 상한 넘음)를 포함해 에러(Kind status)다. id 가 MediaMTX 연결 id 꼴(소문자 UUID)이 아니면 요청 없이
-// 에러다 — ErrNotFound 가 아니다.
+// 끊는다(srt/server.go 232–241행). 연결 없음 404 면 ErrNotFound 다. 그 밖의 상태는 에러(Kind status)다 — 404 의
+// 갈래는 Error 문서에 있다. id 가 MediaMTX 연결 id 꼴(소문자 UUID)이 아니면 요청 없이 에러다 — ErrNotFound 가 아니다.
 func (c *Client) KickSRTConn(ctx context.Context, id string) error {
 	if !connIDPattern.MatchString(id) {
 		return errInvalidID
