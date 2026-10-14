@@ -123,11 +123,11 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 | `audio_assign_prompted` | `false` | 페어링 뒤 「오디오 트랙을 소스별로 나눌까요?」에 답했는지(켜기·나중에, 또는 스위치를 직접 바꿈) — 다시 묻지 않는다 |
 | `audio_track_map` | — | 소스별로 기억한 트랙(내부용, 최대 64개 — 넘으면 지금 없는 소스 것부터 지운다). `slot: 0`은 독에서 트랙에서 뺀 소스. 배정을 처음부터 다시 하려면 OBS를 끄고 이 키를 지운다 |
 | `audio_mixer_backup` | — | 자동 배정이 처음 쓰기 전의 트랙 체크(내부용, 소스별 최대 128개 — 전역 장치는 `ch:N@<컬렉션>`)와 소스마다 맞춰 둔 본방 트랙 — 아래 규칙 9 |
-| `clip_api_base` | 빈 값(= `api_base`) | 마크를 보낼 Clip API 주소. 개발용 — 독 화면에는 없다. **https이거나 이 PC 안(localhost·127.x·[::1])의 http만** 마크를 보낸다(`mark_insecure`) — passphrase를 Bearer로 싣기 때문이다 |
+| `clip_api_base` | 빈 값(= `api_base`) | 마크를 보낼 Clip API 주소. 개발용 — 독 화면에는 없다. **https이거나 이 PC 안(localhost·127.x·[::1])의 http만** 마크를 보낸다(`mark_insecure`) — 스트림 키에서 만든 파생 값(자격증명)을 Bearer로 싣기 때문이다 |
 | `end_signal_base` | 빈 값(= `https://media.pokeclip.com`) | 종료 신호(A3·4D) 기준 주소 덮어쓰기. **루프백(localhost·127.x·[::1])일 때만 인정**하고 아니면 운영 주소로 간다 — 규약 「개발 빌드만 루프백」을 빌드 플래그 없이 지킨다. 개발용(목 수신부) — 독 화면·브리지에 없다 |
 | `mark_hotkey` | — | 마지막으로 쓴 단축키 사본 `{"bindings":[…]}`(내부용). 프로필에 단축키가 없을 때 쓴다 |
 
-독 「고급 설정」에서는 수신 호스트·포트·SRT 지연과 스위치 넷(본방 동기·오디오 자동 배정·암호 사용·기본 패널)만 바꾼다 (송출 중에는 잠김 — 자동 재시도 중에도 잠기므로 「재시도 중지」 뒤에 바꾼다). `api_base`·`clip_api_base`·`end_signal_base`는 스트리머가 바꿀 값이 아니라 화면에 없고, **브리지 `PUT /api/config`로도 바꿀 수 없다** — 마크가 passphrase를 싣고 가는 곳이라 브리지 토큰만으로 목적지를 바꾸게 두지 않는다. 개발 중에는 설정 파일로 바꾼다(OBS를 끄고 고친다).
+독 「고급 설정」에서는 수신 호스트·포트·SRT 지연과 스위치 넷(본방 동기·오디오 자동 배정·암호 사용·기본 패널)만 바꾼다 (송출 중에는 잠김 — 자동 재시도 중에도 잠기므로 「재시도 중지」 뒤에 바꾼다). `api_base`·`clip_api_base`·`end_signal_base`는 스트리머가 바꿀 값이 아니라 화면에 없고, **브리지 `PUT /api/config`로도 바꿀 수 없다** — 마크가 스트림 키 파생 값을 싣고 가는 곳이라 브리지 토큰만으로 목적지를 바꾸게 두지 않는다. 개발 중에는 설정 파일로 바꾼다(OBS를 끄고 고친다).
 
 ## 오디오 트랙 (A2)
 
@@ -164,15 +164,15 @@ OBS 트랙 1~6이 그대로 서버의 6트랙이 된다 (ADR-017, 계약9 `audio
 
 - **누르는 곳** — OBS 단축키 「PokeClip: 순간 표시」(기본 **Ctrl+Shift+M**, macOS도 Control 키) · 독 상태 카드의 「순간 표시」 버튼 · Qt 폴백 패널 버튼. 셋이 같은 대기열로 간다.
 - **언제** — 우리 송출이 `전송 중`·`재연결 중`일 때만. 아니면 독에 「PokeClip으로 전송 중일 때만 표시할 수 있어요」. 2초 안의 연타는 한 번으로 친다.
-- **보내는 것** — `POST {clip_api_base}/api/clip/streams/{streamToken}/marks`, `Authorization: Bearer <passphrase>`, 본문 `{"eventId":"<UUID v4>","pressedAt":<epoch ms>,"sentAt":<epoch ms>}`. 누른 순간 시각을 찍고, 다시 보낼 때는 `sentAt`만 새로 붙인다. 시계 어긋남 보정(`pressedAt + (서버 수신 − sentAt)`)·녹화 기준점 환산(POK-255 `TimelineOriginReader`)·카드 창 [T−30s, T+10s]은 서버 몫이다.
+- **보내는 것**(규격 정본 = 위키 [계약4](https://github.com/3K-PokeClip/PokeClip-LLM-WIKI/blob/main/contracts/%EA%B3%84%EC%95%BD4-OBS-Control-API.md) 2B절) — `POST {clip_api_base}/api/clip/marks`, `Authorization: Bearer <HMAC-SHA256(passphrase, "pokeclip-4b-v1") 소문자 hex 64자>`(passphrase 원문은 보내지 않는다 — 종료 신호 4D와 같은 방식이고 메시지만 다르다), `Idempotency-Key: <eventId>`, 본문 `{"streamid":"<SRT에 쓴 그 값>","eventId":"<UUID v4>","pressedAt":<epoch ms>,"sentAt":<epoch ms>}`. 방송은 경로가 아니라 본문 `streamid`로 가리킨다(4C·4D와 같다). 누른 순간 시각을 찍고, 다시 보낼 때는 `sentAt`만 새로 붙인다(`eventId`·`Idempotency-Key`는 그대로). 시계 어긋남 보정(`pressedAt + (서버 수신 − sentAt)`)·녹화 기준점 환산(POK-255 `TimelineOriginReader`)·카드 창 [T−30s, T+10s]은 서버 몫이다.
 - **다시 보내기** — 전용 작업 스레드가 보낸다. 네트워크 오류·5xx·429·`503 timeline_not_ready`·`404 broadcast_not_found`는 1·2·4·8…초(최대 30초, `Retry-After`가 더 길면 그것 — 최대 60초) 뒤 **같은 `eventId`로** 다시 보내고, 누른 지 10분이 지나면 버린다(대기열에서 밀려도 보내기 직전에 다시 확인한다). 대기열은 100개까지 — 넘치면 가장 먼저 누른 것부터 버린다. 응답 본문은 16KB까지만 읽는다(넘쳐도 상태 코드로 판정). 방송이 끝나도 남은 마크는 계속 보낸다. OBS를 끄면 못 보낸 마크는 버린다(로그에 개수만).
-- **바로 버리는 것** — `400`, `401 invalid_stream_key`. **사유 없는 401·404·405**는 「서버에 마크 창구가 아직 없다」(`mark_unsupported`)로 본다 — 지금 Clip은 `/api/clip/**` 전부에 JWT를 요구해 passphrase Bearer에 본문 없는 401을 준다(2026-09-30 develop `SecurityConfig`).
+- **바로 버리는 것** — `400`, `401 invalid_stream_key`. **사유 없는 401·404·405**는 「서버에 마크 창구가 아직 없다」(`mark_unsupported`)로 본다 — 지금 Clip은 `/api/clip/**` 전부에 JWT를 요구해 JWT가 아닌 Bearer에 본문 없는 401을 준다(2026-09-30 develop `SecurityConfig`).
 - **단축키 저장** — OBS 설정 › 단축키에서 바꾸면 OBS가 프로필 `basic.ini`의 `[Hotkeys] PokeClip.MarkMoment`에 적는다(프론트엔드 단축키만). OBS는 플러그인 단축키를 다시 읽어 주지 않으므로 플러그인이 시작·프로필 전환 때 읽는다: 프로필 값 → `pokeclip.json`의 `mark_hotkey` 사본(마지막으로 쓴 키) → 기본 Ctrl+Shift+M. 지운 키(빈 목록)는 그대로 둔다.
 - **macOS 권한** — OBS가 뒤에 있을 때도 단축키를 받으려면 OBS에 「입력 모니터링」 권한이 있어야 한다(오래된 설치는 「손쉬운 사용」). OBS 앞에서는 권한 없이도 된다.
 - **독 표기** — 키 이름으로 적는다(macOS `⌃⇧M` · 그 밖 `Ctrl+Shift+M`). OBS 자체 표기는 macOS 입력 소스를 따라, 한글 자판이면 M을 「ㅡ」로 보여준다.
 - ⚠️ **다른 앱과 겹칠 수 있다** — OBS 단축키는 기본 설정(설정 › 고급 › 단축키 포커스 동작)에서 OBS가 뒤에 있어도 받는다. 다른 앱에서 같은 조합을 쓰면(Windows Discord 음소거 토글 기본값이 Ctrl+Shift+M인 것으로 안다 — 미확인) 방송 중 그 앱에서 누를 때마다 마크가 간다. 겹치면 OBS 설정 › 단축키에서 바꾼다. 기본 키는 2026-09-30 결정대로 둔다.
 
-🔴 **서버 선행 조건** — 지금은 받는 곳이 없다. ① Clip 창구(POK-119 — 계약 4B 제안을 Jira에 적어 둠, 경로를 JWT 체인 밖으로 열고 passphrase로 인증) ② 카드가 붙을 방송 명부 행을 만드는 1번의 `broadcast.started` 발행(계약9). 그 전에 dev로 보내면 `mark_unsupported`가 정상이다. 로컬에서는 계약 제안대로 201·200(같은 eventId)·401·404·503을 돌려주는 목 서버를 띄우고 `clip_api_base`를 그쪽으로 둔다.
+🔴 **서버 선행 조건** — 지금은 받는 곳이 없다. ① Clip 창구(POK-119 — 규격은 계약4 2B절, 경로를 JWT 체인 밖으로 열고 4C resolve로 받은 passphrase로 같은 파생 값을 만들어 대조) ② 카드가 붙을 방송 명부 행을 만드는 1번의 `broadcast.started` 발행(계약9). 그 전에 dev로 보내면 `mark_unsupported`가 정상이다. 로컬에서는 계약대로 201·200(같은 eventId)·401·404·503을 돌려주는 목 서버를 띄우고 `clip_api_base`를 그쪽으로 둔다.
 
 ## 자동 재연결 (A5)
 

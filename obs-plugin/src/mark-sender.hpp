@@ -43,7 +43,8 @@ private:
 		int64_t dueSteadyMs = 0;
 		int attempts = 0;
 		std::string url;
-		std::string passphrase; // 비밀 — 로그 금지
+		std::string streamId; // SRT에 쓴 원문 — 본문으로 간다. 로그에는 싣지 않는다
+		std::string derived;  // 파생 값 — 로그 금지. passphrase 원문은 담지 않는다(end-signal-sender와 같다)
 	};
 
 	struct SendResult {

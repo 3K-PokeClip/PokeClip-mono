@@ -221,18 +221,27 @@ std::string EndSignalUrl(const std::string &baseOverride)
 	return url;
 }
 
+std::string JsonQuoted(const std::string &value)
+{
+	std::string quoted;
+	quoted.reserve(value.size() + 2);
+	quoted += '"';
+	for (char ch : value) {
+		if (ch == '"' || ch == '\\')
+			quoted += '\\';
+		quoted += ch;
+	}
+	quoted += '"';
+	return quoted;
+}
+
 std::string EndSignalBodyJson(const std::string &streamId, int64_t elapsedSinceStopMs, int64_t connectionDurationMs)
 {
 	// streamid는 IsSafeStreamId를 지났지만(제어 문자·'&'·'+'·공백 없음) 따옴표·역슬래시는 거르지 않으므로 이스케이프한다.
-	std::string escaped;
-	escaped.reserve(streamId.size());
-	for (char ch : streamId) {
-		if (ch == '"' || ch == '\\')
-			escaped += '\\';
-		escaped += ch;
-	}
-	return "{\"streamid\":\"" + escaped + "\",\"elapsedSinceStopMs\":" + std::to_string(elapsedSinceStopMs) +
-	       ",\"connectionDurationMs\":" + std::to_string(connectionDurationMs) + "}";
+	std::string body = "{\"streamid\":" + JsonQuoted(streamId);
+	body += ",\"elapsedSinceStopMs\":" + std::to_string(elapsedSinceStopMs);
+	body += ",\"connectionDurationMs\":" + std::to_string(connectionDurationMs) + "}";
+	return body;
 }
 
 EndSignalVerdict ClassifyEndSignalResponse(bool transportOk, long status)
