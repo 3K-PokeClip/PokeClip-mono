@@ -38,6 +38,10 @@ bool IsLoopbackBase(const std::string &base);
 // 요청 주소. override가 루프백이면 그것(끝 '/'는 무시), 아니면 kEndSignalBase. 둘 다 + kEndSignalPath.
 std::string EndSignalUrl(const std::string &baseOverride);
 
+// JSON 문자열 리터럴(양끝 따옴표 포함) — 따옴표·역슬래시만 이스케이프한다. 제어 문자가 없는 값(IsSafeStreamId를 지난
+// streamid)에만 쓴다. 마크 본문(mark-policy)도 같이 쓴다.
+std::string JsonQuoted(const std::string &value);
+
 // 요청 본문. streamid는 SRT에 쓴 원문 그대로(계약4C와 같은 값·이름 — streamId가 아니다).
 // 두 시간 값은 단조 시계 ms이고 기준은 우리 출력이 실제로 멈춘 순간이다.
 std::string EndSignalBodyJson(const std::string &streamId, int64_t elapsedSinceStopMs, int64_t connectionDurationMs);

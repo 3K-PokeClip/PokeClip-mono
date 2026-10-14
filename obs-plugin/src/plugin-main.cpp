@@ -161,7 +161,7 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	// 바꾸면 연결을 해제한다(아래 Commit) — 브리지 토큰으로 비밀을 다른 곳에 보내게 할 수 없다.
 	const bool envGiven = obs_data_has_user_value(d, "server_env");
 	const std::string envText = envGiven ? obs_data_get_string(d, "server_env") : "";
-	// api_base·clip_api_base는 여기서 받지 않는다 — 마크가 passphrase를 Bearer로 싣고 가는 곳이라,
+	// api_base·clip_api_base는 여기서 받지 않는다 — 마크가 스트림 키 파생 값을 Bearer로 싣고 가는 곳이라,
 	// 브리지 토큰만으로 목적지를 바꿀 수 있으면 「비밀은 독에 주지 않는다」가 우회된다.
 	// 개발 중에는 설정 파일(pokeclip.json)로 바꾼다.
 	str("ingest_host", next.ingestHost);
