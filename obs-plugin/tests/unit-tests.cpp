@@ -1269,13 +1269,14 @@ TEST(private_file_is_owner_only_from_the_start)
 
 // ---------------------------------------------------------------- 핫키 마킹 (A4)
 
-TEST(mark_url_encodes_token_and_trims_base)
+TEST(mark_url_is_fixed_path_and_trims_base)
 {
-	CHECK_EQ(MarkUrl("http://dev.pokeclip.com/", "abc_DEF-9"), "http://dev.pokeclip.com/api/clip/streams/abc_DEF-9/marks");
-	CHECK_EQ(MarkUrl("https://x.test//", "a/b?c"), "https://x.test/api/clip/streams/a%2Fb%3Fc/marks");
+	CHECK_EQ(MarkUrl("http://dev.pokeclip.com/"), "http://dev.pokeclip.com/api/clip/marks");
+	CHECK_EQ(MarkUrl("https://x.test//"), "https://x.test/api/clip/marks");
+	CHECK_EQ(MarkUrl("http://127.0.0.1:8099"), "http://127.0.0.1:8099/api/clip/marks");
 }
 
-// passphrase를 싣는 주소 — https이거나 이 PC 안의 http만.
+// 파생 값을 싣는 주소 — https이거나 이 PC 안의 http만.
 TEST(mark_secure_base_allows_https_and_loopback_only)
 {
 	CHECK(IsSecureMarkBase("https://dev.pokeclip.com"));
@@ -1294,10 +1295,37 @@ TEST(mark_secure_base_allows_https_and_loopback_only)
 	CHECK(!IsSecureMarkBase(""));
 }
 
-TEST(mark_body_has_three_fields)
+TEST(mark_body_has_streamid_and_three_fields)
 {
-	CHECK_EQ(MarkBodyJson("0f8fad5b-d9cb-469f-a165-70867728950e", 1759212000123, 1759212000456),
-		 R"({"eventId":"0f8fad5b-d9cb-469f-a165-70867728950e","pressedAt":1759212000123,"sentAt":1759212000456})");
+	CHECK_EQ(MarkBodyJson("#!::r=ABCDEFGHJKMNPQRSTVWXYZ0123,m=publish", "0f8fad5b-d9cb-469f-a165-70867728950e",
+			      1759212000123, 1759212000456),
+		 std::string(R"({"streamid":"#!::r=ABCDEFGHJKMNPQRSTVWXYZ0123,m=publish",)"
+			     R"("eventId":"0f8fad5b-d9cb-469f-a165-70867728950e","pressedAt":1759212000123,)"
+			     R"("sentAt":1759212000456})"));
+	CHECK_EQ(MarkBodyJson("a\"b\\c", "e", 1, 2),
+		 std::string(R"({"streamid":"a\"b\\c","eventId":"e","pressedAt":1,"sentAt":2})"));
+}
+
+TEST(mark_derived_value_matches_contract_vector)
+{
+	// 계약4 2B-1절 시험 벡터(예시 값 — 실제 키가 아니다).
+	const std::string derived = MarkDerivedValue("EXAMPLE-4b-test-vector-not-a-key");
+	CHECK_EQ(derived, std::string("136ef57bb5b3eaa8c35485438c358ff1eb392d925714b76f1e2eb756d2a04315"));
+	CHECK_EQ(derived.size(), size_t(64));
+	// 같은 passphrase여도 4D 값과 다르다 — 한 갈래의 값이 새도 다른 갈래 요청을 만들 수 없다.
+	const std::string same = "EXAMPLE-4d-test-vector-not-a-key";
+	CHECK(MarkDerivedValue(same) != EndSignalDerivedValue(same));
+}
+
+TEST(mark_request_headers_carry_idempotency_key_and_derived_bearer)
+{
+	const std::string eventId = "0f8fad5b-d9cb-469f-a165-70867728950e";
+	const std::vector<std::string> headers = MarkRequestHeaders(eventId, std::string(64, 'a'));
+	CHECK_EQ(headers.size(), size_t(4));
+	CHECK_EQ(headers[0], std::string("Content-Type: application/json"));
+	CHECK_EQ(headers[1], std::string("Accept: application/json"));
+	CHECK_EQ(headers[2], "Idempotency-Key: " + eventId);
+	CHECK_EQ(headers[3], "Authorization: Bearer " + std::string(64, 'a'));
 }
 
 TEST(mark_uuid_v4_sets_version_and_variant)
@@ -1347,7 +1375,7 @@ TEST(mark_response_classification)
 	CHECK(is(ClassifyMarkResponse(true, 401, ""), MarkOutcome::Drop, "mark_unsupported"));
 	CHECK(is(ClassifyMarkResponse(true, 404, R"({"reason":"broadcast_not_found"})"), MarkOutcome::Retry,
 		 "mark_no_broadcast"));
-	CHECK(is(ClassifyMarkResponse(true, 404, R"({"status":404,"error":"Not Found","path":"/api/clip/streams/x/marks"})"),
+	CHECK(is(ClassifyMarkResponse(true, 404, R"({"status":404,"error":"Not Found","path":"/api/clip/marks"})"),
 		 MarkOutcome::Drop, "mark_unsupported"));
 	CHECK(is(ClassifyMarkResponse(true, 429, ""), MarkOutcome::Retry, "mark_rate_limited"));
 	CHECK(is(ClassifyMarkResponse(true, 503, R"({"reason":"timeline_not_ready"})"), MarkOutcome::Retry,
@@ -1648,6 +1676,8 @@ TEST(end_signal_body_fields_and_escaping)
 			     R"("connectionDurationMs":1834000})"));
 	CHECK_EQ(EndSignalBodyJson("a\"b\\c", 0, 0),
 		 std::string(R"({"streamid":"a\"b\\c","elapsedSinceStopMs":0,"connectionDurationMs":0})"));
+	CHECK_EQ(JsonQuoted("a\"b\\c"), std::string(R"("a\"b\\c")"));
+	CHECK_EQ(JsonQuoted(""), std::string(R"("")"));
 }
 
 TEST(end_signal_response_classification)

@@ -54,15 +54,6 @@ const char *ViaName(MarkVia via)
 	return "?";
 }
 
-// 헤더 값으로 넣으므로 제어 문자·공백이 있으면 쓰지 않는다(헤더 주입 방지).
-bool IsHeaderSafe(const std::string &value)
-{
-	return !value.empty() && std::all_of(value.begin(), value.end(), [](char ch) {
-		unsigned char c = static_cast<unsigned char>(ch);
-		return c > 0x20 && c < 0x7F;
-	});
-}
-
 size_t WriteToString(char *ptr, size_t size, size_t nmemb, void *userdata)
 {
 	constexpr size_t kMaxBody = 16 * 1024;
@@ -178,12 +169,13 @@ MarkAccept MarkSender::Mark(MarkVia via)
 		return {false, "mark_not_live"};
 
 	// 우리 송출이 켜져 있을 때만 — 녹화가 없으면 표시할 자리가 없다. 재연결 중은 방송이 이어지는 것으로 본다.
+	// streamid는 본문에 원문으로 싣는다 — 송출과 같은 검사(IsSafeStreamId)를 지나야 한다.
 	std::string rejected;
 	if (phase != StreamPhase::Live && phase != StreamPhase::Reconnecting)
 		rejected = "mark_not_live";
 	else if (token.empty())
 		rejected = "no_key";
-	else if (!IsHeaderSafe(config.passphrase))
+	else if (!IsSafeStreamId(config.streamId) || config.passphrase.empty())
 		rejected = "invalid_key";
 	else if (!IsSecureMarkBase(config.ClipBase()))
 		rejected = "mark_insecure";
@@ -212,8 +204,9 @@ MarkAccept MarkSender::Mark(MarkVia via)
 	p.pressedAt = pressedAt;
 	p.pressedSteadyMs = pressedSteady;
 	p.dueSteadyMs = pressedSteady;
-	p.url = MarkUrl(config.ClipBase(), token);
-	p.passphrase = config.passphrase;
+	p.url = MarkUrl(config.ClipBase());
+	p.streamId = config.streamId;
+	p.derived = MarkDerivedValue(config.passphrase);
 	obs_log(LOG_INFO, "mark %.8s queued via %s", p.eventId.c_str(), ViaName(via));
 	queue_.push_back(std::move(p));
 	lastAt_ = pressedAt;
@@ -303,13 +296,12 @@ MarkSender::SendResult MarkSender::Send(const Pending &p)
 	if (!curl)
 		return r;
 
-	std::string body = MarkBodyJson(p.eventId, p.pressedAt, NowEpochMs());
-	std::string auth = "Authorization: Bearer " + p.passphrase;
+	std::string body = MarkBodyJson(p.streamId, p.eventId, p.pressedAt, NowEpochMs());
 	std::string userAgent = std::string("pokeclip-obs/") + PLUGIN_VERSION;
+	// 헤더 값은 둘 다 16진수·하이픈뿐이다(eventId = FormatUuidV4, 파생 값 = 소문자 hex) — 헤더 주입 여지가 없다.
 	struct curl_slist *headers = nullptr;
-	headers = curl_slist_append(headers, "Content-Type: application/json");
-	headers = curl_slist_append(headers, "Accept: application/json");
-	headers = curl_slist_append(headers, auth.c_str());
+	for (const std::string &line : MarkRequestHeaders(p.eventId, p.derived))
+		headers = curl_slist_append(headers, line.c_str());
 
 	curl_easy_setopt(curl, CURLOPT_URL, p.url.c_str());
 	curl_easy_setopt(curl, CURLOPT_POST, 1L);

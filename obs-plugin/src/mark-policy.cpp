@@ -1,29 +1,19 @@
 #include "mark-policy.hpp"
 
+#include "end-signal-policy.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
 
 namespace pokeclip {
 
-std::string MarkUrl(const std::string &clipBase, const std::string &streamToken)
+std::string MarkUrl(const std::string &clipBase)
 {
 	std::string url = clipBase;
 	while (!url.empty() && url.back() == '/')
 		url.pop_back();
-	url += kMarkPathPrefix;
-	static const char *hex = "0123456789ABCDEF";
-	for (char ch : streamToken) {
-		unsigned char c = static_cast<unsigned char>(ch);
-		if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
-			url += ch;
-		} else {
-			url += '%';
-			url += hex[c >> 4];
-			url += hex[c & 0x0F];
-		}
-	}
-	url += kMarkPathSuffix;
+	url += kMarkPath;
 	return url;
 }
 
@@ -82,11 +72,27 @@ bool IsSecureMarkBase(const std::string &base)
 	       std::count(host.begin(), host.end(), '.') == 3;
 }
 
-std::string MarkBodyJson(const std::string &eventId, int64_t pressedAt, int64_t sentAt)
+std::string MarkDerivedValue(const std::string &passphrase)
 {
-	// eventId는 FormatUuidV4가 만든 16진수·하이픈뿐이라 이스케이프할 문자가 없다.
-	return "{\"eventId\":\"" + eventId + "\",\"pressedAt\":" + std::to_string(pressedAt) +
-	       ",\"sentAt\":" + std::to_string(sentAt) + "}";
+	return HmacSha256Hex(passphrase, kMarkHmacMessage);
+}
+
+std::vector<std::string> MarkRequestHeaders(const std::string &eventId, const std::string &derived)
+{
+	std::vector<std::string> headers;
+	headers.push_back("Content-Type: application/json");
+	headers.push_back("Accept: application/json");
+	headers.push_back("Idempotency-Key: " + eventId);
+	headers.push_back("Authorization: Bearer " + derived);
+	return headers;
+}
+
+std::string MarkBodyJson(const std::string &streamId, const std::string &eventId, int64_t pressedAt, int64_t sentAt)
+{
+	// eventId는 FormatUuidV4가 만든 16진수·하이픈뿐이라 이스케이프할 문자가 없다. streamid는 JsonQuoted가 막는다.
+	std::string body = "{\"streamid\":" + JsonQuoted(streamId) + ",\"eventId\":\"" + eventId + "\"";
+	body += ",\"pressedAt\":" + std::to_string(pressedAt) + ",\"sentAt\":" + std::to_string(sentAt) + "}";
+	return body;
 }
 
 std::string FormatUuidV4(std::array<uint8_t, 16> b)
