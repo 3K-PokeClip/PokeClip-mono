@@ -8,6 +8,7 @@ struct PairingResult {
 	bool ok = false;
 	// invalid_format · not_found · expired · already_used · rate_limited · streaming
 	// · network · server_error · bad_response · save_failed
+	// · server_changed(교환을 기다리는 사이 서버 환경이 바뀌어 받은 키를 버렸다 — POK-267)
 	std::string reason;
 	long httpStatus = 0;
 };

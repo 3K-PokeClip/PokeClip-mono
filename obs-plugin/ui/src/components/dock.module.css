@@ -35,6 +35,16 @@
   font-weight: var(--pc-weight-bold);
   letter-spacing: var(--pc-letter-tight);
 }
+/* POK-267 — 개발 서버로 붙어 있을 때만. 운영 배포본에서 실수로 켠 채 두지 않게 머리에 늘 보인다. */
+.envTag {
+  flex: none;
+  padding: 1px var(--pc-space-1);
+  border-radius: var(--pc-radius-pill);
+  background: var(--pc-color-warning-subtle);
+  font-size: var(--pc-font-size-2xs);
+  font-weight: var(--pc-weight-semibold);
+  color: var(--pc-color-warning);
+}
 .badge {
   display: inline-flex;
   align-items: center;

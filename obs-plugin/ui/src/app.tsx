@@ -16,6 +16,10 @@ import type { BridgeState } from './lib/types';
 
 type BadgeTone = 'neutral' | 'success' | 'point' | 'warning' | 'danger';
 
+// POK-267 「개발 서버」 숨은 스위치 — 로고를 이 시간 안에 이만큼 누르면 고급 설정에 스위치가 보인다(이번 독 세션만).
+const DEV_UNLOCK_TAPS = 5;
+const DEV_UNLOCK_WINDOW_MS = 3000;
+
 function badgeFor(state: BridgeState): { tone: BadgeTone; label: string; Icon: LucideIcon } {
   if (!state.paired) return { tone: 'neutral', label: '연결 안 됨', Icon: CircleDashed };
   switch (state.phase) {
@@ -45,6 +49,14 @@ export function App({ bridge }: { bridge: Bridge }) {
   const [toastDismissed, setToastDismissed] = useState(false);
   const [markNotice, setMarkNotice] = useState<{ tone: ToastTone; message: string } | null>(null);
   const seenMarkSeq = useRef<number | null>(null);
+  const [devUnlocked, setDevUnlocked] = useState(false);
+  const brandTaps = useRef<number[]>([]);
+  const tapBrand = useCallback(() => {
+    const now = Date.now();
+    const taps = [...brandTaps.current.filter((t) => now - t < DEV_UNLOCK_WINDOW_MS), now];
+    brandTaps.current = taps;
+    if (taps.length >= DEV_UNLOCK_TAPS) setDevUnlocked(true);
+  }, []);
 
   useEffect(() => {
     bridge
@@ -129,9 +141,14 @@ export function App({ bridge }: { bridge: Bridge }) {
   return (
     <main class={styles.dock}>
       <header class={styles.header}>
-        <div class={styles.brand}>
+        <div class={styles.brand} onClick={tapBrand}>
           <Logo className={styles.logo} />
           <span class={styles.brandName}>PokeClip</span>
+          {state.serverEnv === 'dev' ? (
+            <span class={styles.envTag} title={`${state.apiBase} · ${state.ingest}`}>
+              개발 서버
+            </span>
+          ) : null}
         </div>
         <span class={styles.badge} data-tone={badge.tone}>
           <badge.Icon size={13} strokeWidth={2.2} aria-hidden="true" />
@@ -172,7 +189,13 @@ export function App({ bridge }: { bridge: Bridge }) {
 
       {state.paired ? <AudioTracks state={state} bridge={bridge} /> : null}
 
-      <Settings bridge={bridge} locked={locked} autoAssign={state.audio.autoAssign} />
+      <Settings
+        bridge={bridge}
+        locked={locked}
+        autoAssign={state.audio.autoAssign}
+        serverEnv={state.serverEnv}
+        devUnlocked={devUnlocked || state.serverEnv === 'dev'}
+      />
 
       <footer class={styles.footer}>
         <span>PokeClip for OBS {version && `v${version}`}</span>

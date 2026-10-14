@@ -179,6 +179,7 @@ std::string AppState::ToJson(const StateSnapshot &s)
 	obs_data_set_string(root, "keyHint", s.keyHint.c_str());
 	obs_data_set_string(root, "ingest", s.ingest.c_str());
 	obs_data_set_string(root, "apiBase", s.apiBase.c_str());
+	obs_data_set_string(root, "serverEnv", s.serverEnv.c_str());
 	obs_data_set_string(root, "phase", PhaseName(s.phase));
 	obs_data_set_string(root, "errorCode", s.errorCode.c_str());
 	obs_data_set_string(root, "errorDetail", s.errorDetail.c_str());

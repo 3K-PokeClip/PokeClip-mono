@@ -9,21 +9,53 @@ the Free Software Foundation; either version 2 of the License, or
 */
 #pragma once
 
+#include <string_view>
+
 namespace pokeclip {
 
 // 독 id — OBS가 독 위치를 이 문자열로 저장한다. 바꾸면 사용자 배치가 초기화된다.
 inline constexpr const char *kDockId = "pokeclip-dock";
 
-// 페어링 교환·마크 API 기본값. 운영 도메인이 정해지면 바꾼다. dev도 HTTPS다 — HTTP는 301로 HTTPS에 돌려보내므로
-// (2026-09-30 확인) POST가 닿지 않고, 마크의 passphrase가 평문으로 한 번 나간다.
-inline constexpr const char *kDefaultApiBase = "https://dev.pokeclip.com";
-// 예전 기본값 — 저장된 설정에 이 값이 있으면 읽을 때 위 값으로 올린다.
+// 서버 환경 — 운영(prod)·개발(dev) 두 짝. 스트림 키는 환경별로 발급되므로 Auth(페어링 교환·마크)와 SRT 수신은
+// 언제나 같은 환경을 가리킨다(POK-267). 지금 환경은 설정 파일 server_env가 기억하고(server-env.hpp), 빌드는 그
+// 키가 없을 때의 기본 환경만 정한다 — 배포 빌드(CI 템플릿 경로)는 운영, 개발 빌드(macos-local, POKECLIP_DEV_SERVERS)는
+// 개발. 운영 이름은 엣지 8단계(POK-300)에서 열린다 — 그 전에는 독 숨은 스위치나 server_env로 개발로 바꿔 시험한다.
+enum class ServerEnv { Prod, Dev };
+
+struct ServerDefaults {
+	const char *name;       // 설정 파일 server_env 값
+	const char *apiBase;    // 페어링 교환·마크 API. https만 — 마크가 스트림 키 파생 값을 Bearer로 싣는다
+	const char *ingestHost; // SRT 수신부
+	int ingestPort;
+};
+
+// 운영 api = 1번 Jira 댓글(2026-10-13, POK-267) 확정값. 운영 SRT 수신 호스트는 사용자 결정(2026-10-14)으로
+// media.pokeclip.com이다 — ADR-020·021·POK-300은 ingest.pokeclip.com(NLB)이라 1번 확인 대기. 포트 8890은 로컬
+// compose·dev-media 값이고 운영 포트는 위키에 미확정(status.md).
+inline constexpr ServerDefaults kProdServers{"prod", "https://api.pokeclip.com", "media.pokeclip.com", 8890};
+// 개발 = dev 서버(HTTPS — HTTP는 301로 돌려보내 POST가 닿지 않는다, 2026-09-30 확인) + dev-media(ADR-040, 팀 IP 한정).
+inline constexpr ServerDefaults kDevServers{"dev", "https://dev.pokeclip.com", "media-dev.pokeclip.com", 8890};
+
+#ifdef POKECLIP_DEV_SERVERS
+inline constexpr ServerEnv kBuildServerEnv = ServerEnv::Dev; // 개발 빌드 전용(macos-local 프리셋)
+#else
+inline constexpr ServerEnv kBuildServerEnv = ServerEnv::Prod;
+#endif
+
+// 예전 기본값 — 저장된 설정에 이 값이 있으면 읽을 때 지금 환경의 값으로 올린다(손대지 않은 기본값으로 본다).
 inline constexpr const char *kLegacyDefaultApiBase = "http://dev.pokeclip.com";
+inline constexpr const char *kLegacyDefaultIngestHost = "ingest.pokeclip.com";
+inline constexpr int kLegacyDefaultIngestPort = 8890;
+
+static_assert(std::string_view(kProdServers.apiBase).substr(0, 8) == "https://", "운영 api는 https여야 한다");
+static_assert(std::string_view(kDevServers.apiBase).substr(0, 8) == "https://", "개발 api는 https여야 한다");
+static_assert(std::string_view(kProdServers.ingestHost).find(':') == std::string_view::npos,
+	      "수신 호스트에 포트를 붙이지 않는다(IsSafeIngestHost)");
+static_assert(std::string_view(kDevServers.ingestHost).find(':') == std::string_view::npos,
+	      "수신 호스트에 포트를 붙이지 않는다(IsSafeIngestHost)");
+
 inline constexpr const char *kPairingExchangePath = "/api/stream-keys/pairing-codes/exchange";
 
-// SRT 수신부 기본값 (ADR-020 3절 ingest.* · 로컬 compose도 8890).
-inline constexpr const char *kDefaultIngestHost = "ingest.pokeclip.com";
-inline constexpr int kDefaultIngestPort = 8890;
 inline constexpr int kDefaultLatencyMs = 1000;
 
 // ADR-020: 세그먼트 4s가 GOP의 정수배여야 한다 — 플러그인이 2s로 강제한다.

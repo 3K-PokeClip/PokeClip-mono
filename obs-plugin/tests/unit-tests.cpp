@@ -1,16 +1,19 @@
 // 의존성 없는 최소 테스트 러너. OBS를 띄우지 않고 검증할 수 있는 것만 여기서 잰다:
 // 페어링 코드 정규화 · keyint 옵션 제거 · streamid 파싱 · SRT URL · 브리지 보안 규칙(Host·Origin·토큰)·SSE ·
-// 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4) · 재시도 정책과 「다시 연결」 조건(A5) · 종료 신호 규칙(A3·4D).
+// 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4) · 재시도 정책과 「다시 연결」 조건(A5) · 종료 신호 규칙(A3·4D) ·
+// 서버 환경 짝과 기본값 이관(POK-267).
 #include "app-state.hpp"
 #include "audio-assign.hpp"
 #include "bridge-server.hpp"
 #include "config.hpp"
+#include "constants.hpp"
 #include "private-file.hpp"
 #include "encoder-opts.hpp"
 #include "end-signal-policy.hpp"
 #include "mark-policy.hpp"
 #include "pairing-code.hpp"
 #include "retry-policy.hpp"
+#include "server-env.hpp"
 #include "srt-url.hpp"
 
 #include <httplib.h>
@@ -1218,6 +1221,276 @@ TEST(config_audio_switches_are_not_output_settings)
 	PluginConfig c = a;
 	c.syncStart = !a.syncStart;
 	CHECK(!c.SameOutputSettings(a));
+	PluginConfig e = a; // 서버 환경을 바꾸면 키가 끊긴다 — 방송 중에는 받지 않는다
+	e.serverEnv = a.serverEnv == ServerEnv::Prod ? ServerEnv::Dev : ServerEnv::Prod;
+	CHECK(!e.SameOutputSettings(a));
+}
+
+// ---------------------------------------------------------------- 서버 환경 (POK-267)
+
+TEST(build_default_env_is_prod_without_dev_macro)
+{
+	// 이 시험 실행 파일은 배포 빌드처럼 POKECLIP_DEV_SERVERS 없이 컴파일한다(개발 쪽은 build-env-dev.cpp).
+	CHECK(kBuildServerEnv == ServerEnv::Prod);
+	CHECK(PluginConfig{}.serverEnv == ServerEnv::Prod);
+	const ServerDefaults &prod = ServersFor(ServerEnv::Prod);
+	CHECK_EQ(std::string(prod.apiBase), std::string("https://api.pokeclip.com"));
+	CHECK_EQ(std::string(prod.ingestHost), std::string("media.pokeclip.com"));
+	CHECK_EQ(prod.ingestPort, 8890);
+	const ServerDefaults &dev = ServersFor(ServerEnv::Dev);
+	CHECK_EQ(std::string(dev.apiBase), std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(std::string(dev.ingestHost), std::string("media-dev.pokeclip.com"));
+	CHECK_EQ(dev.ingestPort, 8890);
+}
+
+TEST(server_env_pairs_are_consistent)
+{
+	for (ServerEnv env : {ServerEnv::Prod, ServerEnv::Dev}) {
+		const ServerDefaults &s = ServersFor(env);
+		CHECK(IsSecureMarkBase(s.apiBase)); // 마크가 스트림 키 파생 값을 싣고 간다 — https
+		CHECK(IsSafeIngestHost(s.ingestHost));
+		CHECK(IsKnownDefaultApiBase(s.apiBase));
+		CHECK(IsKnownDefaultIngestHost(s.ingestHost));
+		ServerEnv parsed = env == ServerEnv::Prod ? ServerEnv::Dev : ServerEnv::Prod;
+		CHECK(ParseServerEnv(ServerEnvName(env), parsed));
+		CHECK(parsed == env);
+	}
+	// 짝이 섞이지 않는다 — 운영 쪽엔 dev가 없고, 개발 쪽 둘 다 dev를 가리킨다
+	CHECK(std::string(kProdServers.apiBase).find("dev") == std::string::npos);
+	CHECK(std::string(kProdServers.ingestHost).find("dev") == std::string::npos);
+	CHECK(std::string(kDevServers.apiBase).find("dev") != std::string::npos);
+	CHECK(std::string(kDevServers.ingestHost).find("dev") != std::string::npos);
+}
+
+TEST(parse_server_env_accepts_prod_dev_only)
+{
+	ServerEnv env = ServerEnv::Dev;
+	CHECK(ParseServerEnv("prod", env));
+	CHECK(env == ServerEnv::Prod);
+	CHECK(ParseServerEnv("dev", env));
+	CHECK(env == ServerEnv::Dev);
+	for (const char *bad : {"", "PROD", "Dev", "production", "staging", " dev"}) {
+		env = ServerEnv::Dev;
+		CHECK(!ParseServerEnv(bad, env));
+		CHECK(env == ServerEnv::Dev); // 실패하면 그대로
+	}
+}
+
+TEST(apply_server_env_swaps_known_defaults_only)
+{
+	// 운영 짝 → 개발: 둘 다 바뀌고 셋 다 보고한다
+	PluginConfig c;
+	c.serverEnv = ServerEnv::Prod;
+	c.apiBase = kProdServers.apiBase;
+	c.ingestHost = kProdServers.ingestHost;
+	c.ingestPort = kProdServers.ingestPort;
+	c.streamId = kStreamId;
+	ServerEnvChange ch = ApplyServerEnv(c, ServerEnv::Dev);
+	CHECK(ch.env && ch.api && ch.ingest);
+	CHECK(c.serverEnv == ServerEnv::Dev);
+	CHECK_EQ(c.apiBase, std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(c.ingestHost, std::string("media-dev.pokeclip.com"));
+	CHECK_EQ(c.ingestPort, 8890);
+	CHECK_EQ(c.streamId, std::string(kStreamId)); // 키는 여기서 건드리지 않는다(연결 해제는 브리지 PUT)
+
+	// 같은 환경으로 다시 — 아무것도 안 바뀐다
+	ch = ApplyServerEnv(c, ServerEnv::Dev);
+	CHECK(!ch.env && !ch.api && !ch.ingest);
+
+	// 옛 기본값(POK-267 이전: http dev · ingest.pokeclip.com) → 대상 환경 값으로 올린다
+	PluginConfig old;
+	old.apiBase = kLegacyDefaultApiBase;
+	old.ingestHost = kLegacyDefaultIngestHost;
+	old.ingestPort = 8890;
+	ch = ApplyServerEnv(old, ServerEnv::Dev);
+	CHECK(ch.api && ch.ingest);
+	CHECK_EQ(old.apiBase, std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(old.ingestHost, std::string("media-dev.pokeclip.com"));
+	PluginConfig oldProd;
+	oldProd.apiBase = "https://dev.pokeclip.com/"; // 끝 '/'도 기본값으로 본다
+	oldProd.ingestHost = kLegacyDefaultIngestHost;
+	oldProd.ingestPort = 8890;
+	ApplyServerEnv(oldProd, ServerEnv::Prod);
+	CHECK_EQ(oldProd.apiBase, std::string("https://api.pokeclip.com"));
+	CHECK_EQ(oldProd.ingestHost, std::string("media.pokeclip.com"));
+
+	// 직접 적은 값(로컬 compose·로컬 auth)은 그대로다
+	PluginConfig local;
+	local.serverEnv = ServerEnv::Dev;
+	local.apiBase = "http://localhost:8082";
+	local.ingestHost = "127.0.0.1";
+	local.ingestPort = 8890;
+	ch = ApplyServerEnv(local, ServerEnv::Prod);
+	CHECK(ch.env && !ch.api && !ch.ingest);
+	CHECK_EQ(local.apiBase, std::string("http://localhost:8082"));
+	CHECK_EQ(local.ingestHost, std::string("127.0.0.1"));
+
+	// 기본 호스트에 직접 고친 포트 — 호스트만 따라가고 포트는 남긴다
+	PluginConfig port;
+	port.apiBase = kDevServers.apiBase;
+	port.ingestHost = kDevServers.ingestHost;
+	port.ingestPort = 9000;
+	ApplyServerEnv(port, ServerEnv::Prod);
+	CHECK_EQ(port.ingestHost, std::string("media.pokeclip.com"));
+	CHECK_EQ(port.ingestPort, 9000);
+}
+
+TEST(infer_server_env_from_files_without_key)
+{
+	PluginConfig c;
+	c.apiBase = "https://dev.pokeclip.com"; // POK-267 이전 기본값 — dev 키로 페어링된 팀 설치
+	c.ingestHost = kLegacyDefaultIngestHost;
+	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Dev);
+	c.apiBase = kLegacyDefaultApiBase; // 더 옛 http 기본값
+	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Dev);
+	c.apiBase = "https://api.pokeclip.com";
+	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Prod);
+	// api_base를 직접 적었다 — 수신 호스트가 한 환경의 기본값이면 그쪽, 아니면 빌드 기본
+	c.apiBase = "http://localhost:8082";
+	c.ingestHost = "media-dev.pokeclip.com";
+	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Dev);
+	c.ingestHost = "media.pokeclip.com";
+	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Prod);
+	c.ingestHost = "127.0.0.1";
+	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Prod);
+	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Dev);
+	c.ingestHost = kLegacyDefaultIngestHost; // 옛 기본 수신은 어느 환경의 근거도 아니다
+	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Dev);
+	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Prod);
+}
+
+// 브리지 PUT /api/config 규칙(ApplyPutServerEnv) — PR #241 리뷰 1·3번
+
+PluginConfig PairedWith(const ServerDefaults &servers, ServerEnv env, const std::string &streamId)
+{
+	PluginConfig c;
+	c.serverEnv = env;
+	c.apiBase = servers.apiBase;
+	c.ingestHost = servers.ingestHost;
+	c.ingestPort = servers.ingestPort;
+	c.streamId = streamId;
+	c.passphrase = "pass-" + std::string(servers.name) + "-0123456789";
+	return c;
+}
+
+TEST(put_ordinary_save_keeps_server_pair)
+{
+	const PluginConfig before = PairedWith(kProdServers, ServerEnv::Prod, kStreamId);
+
+	// 다른 환경의 기본 호스트를 적어 저장 — 지금 짝으로 맞춘다(Load와 같은 규칙). 운영 키 + dev 수신이 되지 않는다
+	PluginConfig c = before;
+	c.ingestHost = kDevServers.ingestHost;
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
+	CHECK(c.serverEnv == ServerEnv::Prod);
+	CHECK_EQ(c.ingestHost, std::string("media.pokeclip.com"));
+	CHECK_EQ(c.streamId, std::string(kStreamId)); // 전환이 아니면 키는 그대로
+	CHECK_EQ(c.passphrase, before.passphrase);
+
+	// 옛 기본 호스트(POK-267 이전 초안)도 지금 짝으로
+	c = before;
+	c.ingestHost = kLegacyDefaultIngestHost;
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
+	CHECK_EQ(c.ingestHost, std::string("media.pokeclip.com"));
+
+	// 직접 적은 호스트·포트는 그대로
+	c = before;
+	c.ingestHost = "127.0.0.1";
+	c.ingestPort = 9000;
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
+	CHECK_EQ(c.ingestHost, std::string("127.0.0.1"));
+	CHECK_EQ(c.ingestPort, 9000);
+
+	// 지금과 같은 환경을 보내면 전환이 아니다 — 키를 지우지 않는다
+	c = before;
+	CHECK(!ApplyPutServerEnv(c, before, ServerEnv::Prod));
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+
+	// api_base·환경·키는 요청으로 직접 바뀌지 않는다(before 값)
+	c = before;
+	c.apiBase = "https://evil.example";
+	c.serverEnv = ServerEnv::Dev;
+	c.streamId.clear();
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
+	CHECK_EQ(c.apiBase, std::string("https://api.pokeclip.com"));
+	CHECK(c.serverEnv == ServerEnv::Prod);
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+}
+
+TEST(put_env_switch_ignores_body_ingest_and_clears_key)
+{
+	const PluginConfig before = PairedWith(kProdServers, ServerEnv::Prod, kStreamId);
+	PluginConfig c = before;
+	c.ingestHost = "other.example"; // 같은 본문의 수신 주소(열어 둔 초안) — 버린다
+	c.ingestPort = 9000;
+	CHECK(ApplyPutServerEnv(c, before, ServerEnv::Dev));
+	CHECK(c.serverEnv == ServerEnv::Dev);
+	CHECK_EQ(c.apiBase, std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(c.ingestHost, std::string("media-dev.pokeclip.com"));
+	CHECK_EQ(c.ingestPort, 8890);
+	CHECK(c.streamId.empty()); // 키는 그 환경의 Auth가 발급했다
+	CHECK(c.passphrase.empty());
+
+	// 직접 적은 주소(로컬 compose)는 전환해도 남고 키만 지운다
+	PluginConfig local = before;
+	local.serverEnv = ServerEnv::Dev;
+	local.apiBase = "http://localhost:8082";
+	local.ingestHost = "127.0.0.1";
+	c = local;
+	CHECK(ApplyPutServerEnv(c, local, ServerEnv::Prod));
+	CHECK(c.serverEnv == ServerEnv::Prod);
+	CHECK_EQ(c.apiBase, std::string("http://localhost:8082"));
+	CHECK_EQ(c.ingestHost, std::string("127.0.0.1"));
+	CHECK(!c.HasKey());
+}
+
+TEST(put_on_locked_config_does_not_revive_stale_env)
+{
+	// 요청 A(오디오 스위치)가 운영 스냅샷을 읽은 뒤, 요청 B가 개발로 바꾸고 개발 키로 다시 페어링했다.
+	const PluginConfig snapshot = PairedWith(kProdServers, ServerEnv::Prod, kStreamId);
+	PluginConfig next = snapshot;
+	next.audioAutoAssign = true;
+	ApplyPutServerEnv(next, snapshot, std::nullopt); // 검사용 스냅샷
+
+	const std::string devKey = "#!::r=DEV00000000000000000000000,m=publish";
+	PluginConfig locked = PairedWith(kDevServers, ServerEnv::Dev, devKey);
+	locked.dockIntroShown = true; // UI 스레드가 따로 저장한 값
+	locked.markHotkey = "{\"bindings\":[]}";
+	const PluginConfig before = locked;
+	locked.TakeDockSettings(next); // PutConfig의 Commit과 같은 순서
+	CHECK(!ApplyPutServerEnv(locked, before, std::nullopt));
+
+	CHECK(locked.serverEnv == ServerEnv::Dev); // 운영 짝이 되살아나지 않는다
+	CHECK_EQ(locked.apiBase, std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(locked.ingestHost, std::string("media-dev.pokeclip.com")); // 스냅샷의 운영 호스트도 지금 짝으로
+	CHECK_EQ(locked.streamId, devKey); // 개발 키가 개발 짝에 그대로
+	CHECK(locked.audioAutoAssign);     // 요청한 값은 들어간다
+	CHECK(locked.dockIntroShown);
+	CHECK_EQ(locked.markHotkey, std::string("{\"bindings\":[]}"));
+}
+
+TEST(same_key_issuer_detects_env_switch_during_pairing)
+{
+	const PluginConfig started = PairedWith(kProdServers, ServerEnv::Prod, "");
+	PluginConfig now = started;
+	CHECK(SameKeyIssuer(now, started));
+	now.ingestHost = "127.0.0.1"; // 수신 주소만 바뀐 것은 키를 발급한 곳과 무관하다
+	now.latencyMs = 2000;
+	CHECK(SameKeyIssuer(now, started));
+
+	PluginConfig switched = started;
+	ApplyPutServerEnv(switched, started, ServerEnv::Dev); // 교환을 기다리는 사이 숨은 스위치
+	CHECK(!SameKeyIssuer(switched, started));
+
+	PluginConfig fileEdited = started; // 같은 환경이라도 api_base가 다르면 다른 Auth다
+	fileEdited.apiBase = "http://localhost:8082";
+	CHECK(!SameKeyIssuer(fileEdited, started));
+
+	// api_base를 직접 적은 설치(로컬 auth)는 전환해도 주소가 그대로다 — 환경만 바뀌어도 전환은 연결 해제이므로 버린다
+	PluginConfig local = fileEdited;
+	PluginConfig localSwitched = local;
+	ApplyPutServerEnv(localSwitched, local, ServerEnv::Dev);
+	CHECK_EQ(localSwitched.apiBase, local.apiBase);
+	CHECK(!SameKeyIssuer(localSwitched, local));
 }
 
 // 연결 해제 저장의 순서 규칙(POK-285) — POSIX·Windows 저장이 같이 쓴다. .bak을 먼저 쓰고, 그게 실패하면 본 파일은 건드리지 않는다.

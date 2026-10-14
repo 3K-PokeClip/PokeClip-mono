@@ -29,6 +29,7 @@ obs-multi-rtmp (https://github.com/sorayuki/obs-multi-rtmp), GPL-2.0.
 #include "mark-hotkey.hpp"
 #include "mark-sender.hpp"
 #include "pairing.hpp"
+#include "server-env.hpp"
 #include "srt-target.hpp"
 #include "stream-control.hpp"
 #include "stream-target.hpp"
@@ -88,7 +89,7 @@ int StatusForPairingReason(const std::string &reason)
 		return 404;
 	if (reason == "expired")
 		return 410;
-	if (reason == "already_used" || reason == "streaming")
+	if (reason == "already_used" || reason == "streaming" || reason == "server_changed")
 		return 409;
 	if (reason == "rate_limited")
 		return 429;
@@ -105,6 +106,7 @@ void SyncStateFromConfig()
 		s.keyHint = KeyHintOf(c.streamId);
 		s.ingest = c.ingestHost + ":" + std::to_string(c.ingestPort);
 		s.apiBase = c.apiBase;
+		s.serverEnv = ServerEnvName(c.serverEnv);
 		s.syncStart = c.syncStart;
 	});
 }
@@ -113,6 +115,7 @@ std::string ConfigJson()
 {
 	PluginConfig c = ConfigStore::Instance().Get();
 	obs_data_t *d = obs_data_create();
+	obs_data_set_string(d, "server_env", ServerEnvName(c.serverEnv));
 	obs_data_set_string(d, "api_base", c.apiBase.c_str());
 	obs_data_set_string(d, "ingest_host", c.ingestHost.c_str());
 	obs_data_set_int(d, "ingest_port", c.ingestPort);
@@ -154,6 +157,10 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 		if (obs_data_has_user_value(d, key))
 			out = obs_data_get_bool(d, key);
 	};
+	// 서버 환경(POK-267, 독 숨은 스위치) — 목적지를 컴파일된 두 짝(운영·개발) 중에서만 고른다. 키가 환경별이라
+	// 바꾸면 연결을 해제한다(아래 Commit) — 브리지 토큰으로 비밀을 다른 곳에 보내게 할 수 없다.
+	const bool envGiven = obs_data_has_user_value(d, "server_env");
+	const std::string envText = envGiven ? obs_data_get_string(d, "server_env") : "";
 	// api_base·clip_api_base는 여기서 받지 않는다 — 마크가 스트림 키 파생 값을 Bearer로 싣고 가는 곳이라,
 	// 브리지 토큰만으로 목적지를 바꿀 수 있으면 「비밀은 독에 주지 않는다」가 우회된다.
 	// 개발 중에는 설정 파일(pokeclip.json)로 바꾼다.
@@ -166,11 +173,21 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	flag("audio_auto_assign", next.audioAutoAssign);
 	flag("audio_assign_prompted", next.audioAssignPrompted);
 	obs_data_release(d);
+	std::optional<ServerEnv> requestedEnv;
+	if (envGiven) {
+		ServerEnv parsed = current.serverEnv;
+		if (!ParseServerEnv(envText, parsed))
+			return {400, JsonReason(false, "invalid_server_env")};
+		requestedEnv = parsed;
+	}
+	// 환경 전환(같은 본문의 수신 주소는 버림·키 지움)과 알려진 기본 호스트 맞추기 — 여기서는 검사용 스냅샷에 얹고,
+	// 저장은 아래 Commit이 잠금 아래 지금 설정에 같은 규칙으로 다시 얹는다(server-env.hpp ApplyPutServerEnv).
+	ApplyPutServerEnv(next, current, requestedEnv);
 	// 스위치를 직접 바꿨으면 답한 것으로 친다 — 처음 안내를 다시 띄우지 않는다.
 	if (next.audioAutoAssign != autoAssignWas)
 		next.audioAssignPrompted = true;
 
-	// 송출 중에는 SRT 출력·동기화·독 표시 방식만 막는다. 오디오 배정 스위치·처음 안내 응답은 AudioRouter가 방송·녹화가
+	// 송출 중에는 서버 환경·SRT 출력·동기화·독 표시 방식만 막는다. 오디오 배정 스위치·처음 안내 응답은 AudioRouter가 방송·녹화가
 	// 끝날 때까지 지금 나가는 트랙을 옮기지 않으므로 받는다 — 막으면 방송 중에 뜬 안내 카드에 답할 수 없다.
 	if (streaming && !next.SameOutputSettings(current))
 		return {409, JsonReason(false, "streaming")};
@@ -182,28 +199,34 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	if (next.latencyMs < 20 || next.latencyMs > 8000)
 		return {400, JsonReason(false, "invalid_latency")};
 
-	if (!ConfigStore::Instance().Commit([&](PluginConfig &c) {
-		    std::string streamId = c.streamId;
-		    std::string passphrase = c.passphrase;
-		    std::vector<AudioTrackMapEntry> trackMap = c.audioTrackMap;
-		    std::vector<AudioMixerBackup> mixerBackup = c.audioMixerBackup;
-		    bool dockIntroShown = c.dockIntroShown;
-		    std::string markHotkey = c.markHotkey;
-		    c = next;
-		    c.streamId = streamId; // 키는 이 경로로 바꾸지 않는다 (페어링 전용)
-		    c.passphrase = passphrase;
-		    // 배정 기억·원래 체크·독 첫 실행 표시·단축키 사본은 UI 스레드가 따로 저장한다 —
-		    // 이 요청이 읽은 옛 값으로 덮지 않는다.
-		    c.audioTrackMap = std::move(trackMap);
-		    c.audioMixerBackup = std::move(mixerBackup);
-		    c.dockIntroShown = dockIntroShown;
-		    c.markHotkey = std::move(markHotkey);
-	    }))
+	// 잠금 아래 지금 설정에 독 값만 얹는다 — 키·배정 기억·독 첫 실행 표시·단축키 사본은 페어링·UI 스레드가 따로
+	// 저장하므로 이 요청이 읽은 옛 스냅샷으로 덮지 않는다. 환경 전환 여부도 지금 설정을 기준으로 다시 정한다 — 스냅샷을
+	// 읽은 뒤 다른 요청이 환경을 바꿨으면 이 요청이 옛 짝을 되살리거나 새 환경의 키를 옛 짝에 남기지 않게.
+	// server_env를 실은 요청(숨은 스위치 — 고급 설정 저장은 싣지 않는다)은 전환이면 키를 지우는 연결 해제다. 전환인지는
+	// 잠금 아래에서야 정해지므로 그런 요청은 늘 .bak에도 새 판을 쓴다 — 직전 판을 남기면 지운 키가 되살아난다(POK-285).
+	const ConfigStore::SaveBackup backup =
+		requestedEnv ? ConfigStore::SaveBackup::SameAsNew : ConfigStore::SaveBackup::KeepPrevious;
+	bool envSwitch = false;
+	if (!ConfigStore::Instance().Commit(
+		    [&](PluginConfig &c) {
+			    const PluginConfig before = c;
+			    c.TakeDockSettings(next);
+			    envSwitch = ApplyPutServerEnv(c, before, requestedEnv);
+		    },
+		    backup))
 		return {500, JsonReason(false, "save_failed")};
 
 	SyncStateFromConfig();
-	if (next.audioAutoAssign != autoAssignWas || next.audioAssignPrompted != promptedWas)
+	if (envSwitch) {
+		// Unpair()(pairing.cpp)와 같은 뒷정리 — 키 확인 안내를 내리고 오디오 배정을 미페어링 상태로 다시 본다.
+		AppState::Instance().Mutate([](StateSnapshot &s) { s.retry.keySuspect = false; });
+		PluginConfig saved = ConfigStore::Instance().Get();
+		obs_log(LOG_INFO, "server env switched to %s — unpaired (api %s, ingest %s:%d)",
+			ServerEnvName(saved.serverEnv), saved.apiBase.c_str(), saved.ingestHost.c_str(), saved.ingestPort);
+		AudioRouter::Instance().Schedule("unpaired");
+	} else if (next.audioAutoAssign != autoAssignWas || next.audioAssignPrompted != promptedWas) {
 		AudioRouter::Instance().Schedule("setting");
+	}
 
 	// 동기화를 본방 송출 중에 켰다 — 「본방이 보내면 우리도 보낸다」를 지키려면 다음 방송을 기다리지 않고
 	// 지금 시작한다. 키·GOP 검사는 본방 STARTING과 같지만, 그때 하는 오디오 재배정·마크 카운터 초기화·본방 시작
@@ -610,8 +633,8 @@ bool obs_module_load(void)
 		bfree(uiDir);
 	}
 	// 포트·토큰은 로그에 남기지 않는다.
-	obs_log(LOG_INFO, "version %s loaded (bridge %s)", PLUGIN_VERSION,
-		bridgeOk ? "up" : (uiDir ? "failed" : "no ui files"));
+	obs_log(LOG_INFO, "version %s loaded (bridge %s, build default servers %s)", PLUGIN_VERSION,
+		bridgeOk ? "up" : (uiDir ? "failed" : "no ui files"), ServerEnvName(kBuildServerEnv));
 
 	g_dock = new DockHost();
 	if (!obs_frontend_add_dock_by_id(kDockId, obs_module_text("Dock.Title"), g_dock)) {
