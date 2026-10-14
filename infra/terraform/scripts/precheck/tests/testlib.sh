@@ -4,7 +4,10 @@
 # 실패 집계 · 사본 트리 · 명령 실행(표준 출력 · 표준 오류 · 종료 코드).
 #
 # 시험은 실제 $HOME 을 건드리지 않는다. 사례마다 임시 디렉터리를 만들어
-# HOME 으로 주고, 가짜 aws(fakebin/aws)를 PATH 앞에 둔다. 임시 디렉터리는
+# HOME 으로 주고, 가짜 aws(fakebin/aws)를 PATH 앞에 둔다. 가짜 aws 가 실행
+# 가능하지 않으면 시작하지 않고, 시험 명령에는 부르는 쪽의 AWS_* 를 하나도
+# 넘기지 않는다(설정 · 자격 증명 파일 /dev/null · 메타데이터 조회 끔) — 실행
+# 비트가 빠져 진짜 aws 가 불려도 자격 증명이 없게. 임시 디렉터리는
 # 모두 한 뿌리($TMPDIR/precheck_test.*) 아래에 만들고, 끝날 때와 중단 신호
 # (INT · TERM)에 뿌리를 통째로 지운다.
 #
@@ -40,6 +43,21 @@ testlib::remove_tmp_root() {
 }
 
 #######################################
+# 가짜 aws 가 실행 가능하고, PATH 앞에 두면 그것으로 풀리는지 본다.
+# Arguments:
+#   가짜 aws 가 든 디렉터리.
+# Returns:
+#   쓸 수 있으면 0.
+#######################################
+testlib::require_fakebin() {
+  local dir="$1" resolved
+  # command -v 는 실행 가능한 파일만 찾는다 — 실행 비트가 빠졌으면 다른 aws
+  # 로 풀리거나 찾지 못한다.
+  resolved="$(PATH="${dir}:${PATH}" command -v aws)" || return 1
+  [[ "${resolved}" == "${dir}/aws" ]]
+}
+
+#######################################
 # 트랩을 걸고 임시 디렉터리 뿌리를 만든다. 실패하면 시험 전체를 멈춘다.
 # Globals:
 #   tmp_root
@@ -47,6 +65,10 @@ testlib::remove_tmp_root() {
 #   시험 이름(오류 문구용).
 #######################################
 testlib::init() {
+  if ! testlib::require_fakebin "${FAKEBIN}"; then
+    printf '%s: 가짜 aws 가 실행 가능하지 않음(%s/aws)\n' "$1" "${FAKEBIN}" >&2
+    exit 1
+  fi
   trap testlib::remove_tmp_root EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
@@ -128,19 +150,28 @@ testlib::make_tree() {
 
 #######################################
 # 사례 디렉터리의 home 을 HOME 으로, 가짜 aws 를 PATH 앞에 두고 명령을
-# 돌린다. 표준 출력 · 표준 오류는 <사례>/out/<이름>.stdout · .stderr 에,
-# 가짜 aws argv 는 <사례>/out/aws.log 에 쌓인다. FAKE_AWS_* 의 나머지는
-# 부르는 쪽이 환경으로 넘긴다.
+# 돌린다. 부르는 쪽 환경의 AWS_* 는 모두 지우고 설정 · 자격 증명 파일은
+# /dev/null, 인스턴스 메타데이터 조회는 끈다. 표준 출력 · 표준 오류는
+# <사례>/out/<이름>.stdout · .stderr 에, 가짜 aws argv 는
+# <사례>/out/aws.log 에 쌓인다. FAKE_AWS_* 의 나머지는 부르는 쪽이 넘긴다.
 # Globals:
 #   run_out, run_status
 # Arguments:
 #   사례 디렉터리, 결과 이름, 명령과 인자.
 #######################################
 testlib::run() {
-  local case_dir="$1" name="$2"
+  local case_dir="$1" name="$2" variable
+  local -a scrub=()
   shift 2
   run_out="${case_dir}/out/${name}"
+  for variable in $(compgen -e); do
+    if [[ "${variable}" == AWS_* ]]; then
+      scrub+=(-u "${variable}")
+    fi
+  done
   HOME="${case_dir}/home" PATH="${FAKEBIN}:${PATH}" \
+    env ${scrub[@]+"${scrub[@]}"} AWS_CONFIG_FILE=/dev/null \
+    AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true \
     FAKE_AWS_LOG="${case_dir}/out/aws.log" FAKE_AWS_ACCOUNT="${FAKE_ACCOUNT}" \
     FAKE_AWS_USER="${FAKE_USER}" \
     "$@" >"${run_out}.stdout" 2>"${run_out}.stderr"
