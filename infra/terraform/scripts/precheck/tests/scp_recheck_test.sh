@@ -32,7 +32,8 @@ readonly JUDGED='2026-10-13T10:59+09:00'
 #   beta: baseline 에 rds-db:connect 거부가 있다.
 #   gamma: tag:GetTagKeys 가 baseline 에 없다.
 #   alpha-stop: 이름이 alpha 로 시작한다(앞 기준을 섞어 찾지 않는지).
-#   broken · dup: 꼴이 틀린 묶음(열 수 · 동작 · 리전 중복).
+#   broken · dup · collapsed: 꼴이 틀린 묶음(열 수 · 동작 · 리전 중복 ·
+#   빈 칸이 탭 IFS 로 접혀 세 칸처럼 읽히는 행).
 # Arguments:
 #   사례 디렉터리.
 # Returns:
@@ -62,6 +63,8 @@ setup_tree() {
     >"${data}/broken.tsv" || return 1
   printf '%s\n' $'tag:GetTagKeys\tap-northeast-2\t*' \
     $'tag:GetTagKeys\tap-northeast-2\tarn:aws:tag:::x' >"${data}/dup.tsv" ||
+    return 1
+  testlib::tsv tag:GetTagKeys '' ap-northeast-2 '*' >"${data}/collapsed.tsv" ||
     return 1
   {
     testlib::tsv '# 묶음' 동작 리전 판정 '13-1 판정 시각'
@@ -272,41 +275,113 @@ expect_not_in_baseline() {
 }
 
 #######################################
-# 사례 2 --accept: CHANGED 결과를 승인하면 같은 결과의 다음 판정은 OK.
-# 승인 기록(시각 · 이유)은 그 증거 디렉터리에 남는다.
+# 마지막 판정이 표준 오류로 알린 증거 디렉터리 이름(kty 가 보고받는 이름).
+# Globals:
+#   run_out
+# Outputs:
+#   디렉터리 이름.
+# Returns:
+#   알림 줄이 없으면 1.
+#######################################
+judged_name() {
+  local line
+  line="$(grep -m 1 '^scp-recheck: 증거 ' -- "${run_out}.stderr")" || return 1
+  line="${line#*/.pokeclip-precheck/}"
+  printf '%s\n' "${line%% *}"
+}
+
+#######################################
+# 파일의 sha256(시험이 승인 기록을 고쳐 쓸 때).
+# Arguments:
+#   파일.
+# Outputs:
+#   64자리 16진수.
+#######################################
+sha256_of() {
+  local out
+  out="$(sha256sum -- "$1" 2>/dev/null || shasum -a 256 -- "$1")" || return 1
+  printf '%s\n' "${out%% *}"
+}
+
+#######################################
+# 승인 기록의 해시를 지금 result.tsv 로 다시 쓴다(시각 · 이유는 그대로) —
+# 해시 대조를 지나서 꼴 검사만 보게 하려고.
+# Arguments:
+#   증거 디렉터리.
+#######################################
+rehash_acceptance() {
+  local dir="$1" line sum
+  line="$(cat -- "${dir}/accepted.tsv")" || return 1
+  sum="$(sha256_of "${dir}/result.tsv")" || return 1
+  testlib::tsv "${line%%$'\t'*}" "${sum}" "${line##*$'\t'}" \
+    >"${dir}/accepted.tsv"
+}
+
+#######################################
+# 판정 하나를 돌리고 그 증거 디렉터리를 승인한다.
+# Globals:
+#   run_out, run_status
+# Arguments:
+#   사례 디렉터리, 묶음.
+# Outputs:
+#   승인한 증거 디렉터리 이름.
+# Returns:
+#   판정 · 승인이 안 되면 1.
+#######################################
+judge_and_accept() {
+  local case_dir="$1" bundle="$2" name
+  run_recheck "${case_dir}" "judge-${bundle}" "${bundle}"
+  name="$(judged_name)" || return 1
+  run_recheck "${case_dir}" "accept-${bundle}" --accept "${bundle}" \
+    --dir "${name}" --reason 'kty 답: 진행'
+  [[ "${run_status}" -eq 0 ]] || return 1
+  printf '%s\n' "${name}"
+}
+
+#######################################
+# 사례 2 --accept: CHANGED 결과를 그 증거 디렉터리 이름으로 승인하면 같은
+# 결과의 다음 판정은 OK. 승인 기록(시각 · 해시 · 이유)은 그 디렉터리에
+# 남고, 승인한 디렉터리 이름이 표준 오류에 나온다.
 #######################################
 expect_accept() {
-  local case_dir accepted
+  local case_dir name dir
   case_dir="$(new_tree_case)" || {
     testlib::fail "accept: 시험 준비 실패"
     return
   }
   run_recheck "${case_dir}" first gamma
   expect_result accept-first 3 'SCP RECHECK CHANGED 1' 2 || return
-  run_recheck "${case_dir}" accept --accept gamma --reason 'kty 답: 진행'
+  name="$(judged_name)" || {
+    testlib::fail "accept: 판정이 증거 디렉터리 이름을 알리지 않음"
+    return
+  }
+  dir="${case_dir}/home/.pokeclip-precheck/${name}"
+  run_recheck "${case_dir}" accept --accept gamma --dir "${name}" \
+    --reason 'kty 답: 진행'
   if [[ "${run_status}" -ne 0 ||
-    "$(head -n 1 -- "${run_out}.stdout")" != 'SCP RECHECK ACCEPTED 2' ]]; then
-    testlib::fail "accept: 종료 0 · ACCEPTED 2 를 기대했으나 ${run_status} —" \
-      "$(cat -- "${run_out}.stdout" "${run_out}.stderr")"
+    "$(head -n 1 -- "${run_out}.stdout")" != 'SCP RECHECK ACCEPTED 2' ]] ||
+    [[ "$(testlib::count "${run_out}.stderr" \
+      "승인 ~/.pokeclip-precheck/${name}")" -ne 1 ]]; then
+    testlib::fail "accept: 종료 0 · ACCEPTED 2 · 승인 디렉터리 알림을" \
+      "기대했으나 ${run_status} — $(cat -- "${run_out}.stdout" \
+      "${run_out}.stderr")"
     return
   fi
-  accepted="$(find "${case_dir}/home/.pokeclip-precheck" -name accepted.tsv)"
-  if [[ -z "${accepted}" ]] ||
-    [[ "$(testlib::count "${accepted}" 'kty 답: 진행')" -ne 1 ]]; then
-    testlib::fail "accept: 증거 디렉터리에 승인 이유가 없음"
+  if [[ "$(testlib::count "${dir}/accepted.tsv" 'kty 답: 진행')" -ne 1 ]]; then
+    testlib::fail "accept: 그 증거 디렉터리에 승인 이유가 없음"
     return
   fi
   run_recheck "${case_dir}" second gamma
   expect_result accept-second 0 'SCP RECHECK OK 2' 2 || return
   expect_no_leak accept "${case_dir}" || return
-  testlib::ok "accept → 승인 뒤 같은 결과는 종료 0 · 이유는 증거 디렉터리에"
+  testlib::ok "accept → 이름으로 승인 · 같은 결과는 종료 0 · 승인 디렉터리 알림"
 }
 
 #######################################
 # 사례 2: 거부가 든 결과는 승인해도 다음 판정이 종료 1.
 #######################################
 expect_accept_keeps_denied() {
-  local case_dir
+  local case_dir name
   case_dir="$(new_tree_case)" || {
     testlib::fail "accept-denied: 시험 준비 실패"
     return
@@ -314,7 +389,9 @@ expect_accept_keeps_denied() {
   run_recheck "${case_dir}" first \
     FAKE_AWS_DENY='tag:GetTagKeys@ap-northeast-2' gamma
   expect_result accept-denied-first 1 'SCP RECHECK DENIED 1' 2 || return
-  run_recheck "${case_dir}" accept --accept gamma --reason 'kty 답: 기록만'
+  name="$(judged_name)"
+  run_recheck "${case_dir}" accept --accept gamma --dir "${name}" \
+    --reason 'kty 답: 기록만'
   if [[ "${run_status}" -ne 0 ]]; then
     testlib::fail "accept-denied: 승인이 종료 0 이 아님 — ${run_status}"
     return
@@ -335,11 +412,8 @@ expect_prefix_isolated() {
     testlib::fail "prefix: 시험 준비 실패"
     return
   }
-  run_recheck "${case_dir}" stop alpha-stop
-  expect_result prefix-stop 3 'SCP RECHECK CHANGED 1' 1 || return
-  run_recheck "${case_dir}" accept --accept alpha-stop --reason 'kty 답'
-  if [[ "${run_status}" -ne 0 ]]; then
-    testlib::fail "prefix: 승인이 종료 0 이 아님 — ${run_status}"
+  if ! judge_and_accept "${case_dir}" alpha-stop >/dev/null; then
+    testlib::fail "prefix: alpha-stop 판정 · 승인 실패 — ${run_status}"
     return
   fi
   run_recheck "${case_dir}" alpha alpha
@@ -369,7 +443,8 @@ make_foreign_dir() {
 
 #######################################
 # 장부 r1 #6: 증거 디렉터리 이름은 도구마다 겹치지 않는다. 같은 묶음 이름의
-# 다른 도구 디렉터리가 더 최근이어도 앞 기준 찾기 · 승인이 섞이지 않는다.
+# 다른 도구 디렉터리가 더 최근이어도 앞 기준 찾기가 섞이지 않고, 그
+# 이름으로는 승인할 수 없다.
 #######################################
 expect_other_tool_dirs_ignored() {
   local case_dir root name
@@ -388,37 +463,208 @@ expect_other_tool_dirs_ignored() {
   done
   run_recheck "${case_dir}" second gamma
   expect_result other-tool-second 3 'SCP RECHECK CHANGED 1' 2 || return
-  run_recheck "${case_dir}" accept --accept gamma --reason 'kty 답'
-  if [[ "${run_status}" -ne 0 ]] ||
-    [[ -z "$(find "${root}" -path '*/scp-gamma-*/accepted.tsv')" ]]; then
-    testlib::fail "other-tool: scp 판정을 승인하지 못함 — ${run_status}" \
-      "$(cat -- "${run_out}.stderr")"
-    return
-  fi
+  run_recheck "${case_dir}" foreign --accept gamma \
+    --dir gamma-29991231T000000Z --reason 'kty 답'
+  expect_unverifiable other-tool-accept || return
   testlib::ok "other-tool → 다른 도구의 최근 디렉터리를 기준 · 승인에 섞지 않음"
 }
 
 #######################################
-# --accept 의 잘못된 쓰임은 종료 2: 판정 전 · 이유에 줄바꿈 · 두 번 승인 ·
-# 이유 없음.
+# 보고받은 판정만 승인한다: 판정 A 를 보고한 뒤 B 가 생겨도 A 를 이름으로
+# 승인하면 A 에만 승인이 남는다. 이미 승인된 더 최근 판정보다 오래된
+# 판정은 승인하지 않는다(시계 역행 · 순서 뒤바뀜).
+#######################################
+expect_accept_named_judgment() {
+  local case_dir root first second
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "accept-named: 시험 준비 실패"
+    return
+  }
+  root="${case_dir}/home/.pokeclip-precheck"
+  run_recheck "${case_dir}" a gamma
+  first="$(judged_name)"
+  run_recheck "${case_dir}" b gamma
+  second="$(judged_name)"
+  run_recheck "${case_dir}" accept-b --accept gamma --dir "${second}" \
+    --reason 'kty 답'
+  if [[ "${run_status}" -ne 0 || ! -f "${root}/${second}/accepted.tsv" ||
+    -e "${root}/${first}/accepted.tsv" ]]; then
+    testlib::fail "accept-named: 이름으로 고른 판정에만 승인이 남지 않음"
+    return
+  fi
+  run_recheck "${case_dir}" accept-a --accept gamma --dir "${first}" \
+    --reason 'kty 답'
+  expect_unverifiable accept-older-than-approved || return
+  testlib::ok "accept-named → 고른 판정에만 승인 · 더 오래된 판정 승인은 종료 2"
+}
+
+#######################################
+# 끝나지 않은 판정(완료 표지 없음)은 승인할 수 없다 — 호출 실패로 끝난
+# 판정 · 완료 표지를 남기기 전에 멈춘 판정.
+#######################################
+expect_accept_incomplete_rejected() {
+  local case_dir name
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "accept-incomplete: 시험 준비 실패"
+    return
+  }
+  run_recheck "${case_dir}" failed FAKE_AWS_SIM=fail gamma
+  name="$(judged_name)"
+  run_recheck "${case_dir}" accept-failed --accept gamma --dir "${name}" \
+    --reason 'kty 답'
+  expect_unverifiable accept-failed-judgment || return
+  run_recheck "${case_dir}" judged gamma
+  name="$(judged_name)"
+  rm -f -- "${case_dir}/home/.pokeclip-precheck/${name}/complete.txt"
+  run_recheck "${case_dir}" accept-unmarked --accept gamma --dir "${name}" \
+    --reason 'kty 답'
+  expect_unverifiable accept-without-marker || return
+  testlib::ok "accept-incomplete → 실패한 판정 · 완료 표지 없는 판정 승인 종료 2"
+}
+
+#######################################
+# 승인 기준 하나를 고친다(종류별).
+# Arguments:
+#   사례 디렉터리, 승인한 증거 디렉터리, 종류.
+# Returns:
+#   고치지 못하면 1.
+#######################################
+tamper_reference() {
+  local case_dir="$1" dir="$2" kind="$3"
+  case "${kind}" in
+    accepted-empty) : >"${dir}/accepted.tsv" ;;
+    accepted-link)
+      mv -- "${dir}/accepted.tsv" "${case_dir}/in/accepted.tsv" &&
+        ln -s -- "${case_dir}/in/accepted.tsv" "${dir}/accepted.tsv"
+      ;;
+    result-link)
+      mv -- "${dir}/result.tsv" "${case_dir}/in/result.tsv" &&
+        ln -s -- "${case_dir}/in/result.tsv" "${dir}/result.tsv"
+      ;;
+    result-0644) chmod 644 "${dir}/result.tsv" ;;
+    result-fields)
+      # 빈 칸 하나가 탭 IFS 로 접히면 다섯 칸처럼 읽힌다.
+      {
+        testlib::tsv iam:GetAccountAuthorizationDetails us-east-1 allow '' \
+          allowed True
+        testlib::tsv tag:GetTagKeys ap-northeast-2 allow allowed True
+      } >"${dir}/result.tsv" && rehash_acceptance "${dir}"
+      ;;
+    result-dup)
+      testlib::tsv tag:GetTagKeys ap-northeast-2 allow allowed True \
+        >>"${dir}/result.tsv" && rehash_acceptance "${dir}"
+      ;;
+    result-changed)
+      {
+        testlib::tsv iam:GetAccountAuthorizationDetails us-east-1 deny \
+          implicitDeny False
+        testlib::tsv tag:GetTagKeys ap-northeast-2 allow allowed True
+      } >"${dir}/result.tsv"
+      ;;
+    complete-missing) rm -f -- "${dir}/complete.txt" ;;
+    *) return 0 ;;
+  esac
+}
+
+#######################################
+# 승인 기준이 손대진 채로는 기준이 되지 않는다(종료 2): 빈 · 링크 승인
+# 기록 · 링크 · 0644 · 칸 수 틀림(빈 칸 접힘) · 중복 행 결과 · 승인 뒤 바뀐 결과 ·
+# 완료 표지 없음 · 다른 계정에서 승인한 기준.
+#######################################
+expect_tampered_reference_rejected() {
+  local kind case_dir name env_arg
+  for kind in accepted-empty accepted-link result-link result-0644 \
+    result-fields result-dup result-changed complete-missing other-account; do
+    if ! case_dir="$(new_tree_case)" ||
+      ! name="$(judge_and_accept "${case_dir}" gamma)" ||
+      ! tamper_reference "${case_dir}" \
+        "${case_dir}/home/.pokeclip-precheck/${name}" "${kind}"; then
+      testlib::fail "tamper-${kind}: 시험 준비 실패"
+      return
+    fi
+    env_arg=FAKE_AWS_SIM=ok
+    [[ "${kind}" == other-account ]] && env_arg=FAKE_AWS_ACCOUNT=842093557711
+    run_recheck "${case_dir}" after "${env_arg}" gamma
+    expect_unverifiable "tamper-${kind}" || return
+    if grep -q -- '842093557711' "${run_out}.stdout" "${run_out}.stderr"; then
+      testlib::fail "tamper-${kind}: 다른 계정 ID 가 출력에 나옴"
+      return
+    fi
+  done
+  testlib::ok "tamper → 승인 기록 · 결과 · 완료 표지 변조와 다른 계정 기준 모두 종료 2"
+}
+
+#######################################
+# baseline.tsv 의 빈 칸이 탭 IFS 로 접혀 다섯 칸처럼 읽히는 행은 받지 않는다
+# (종료 2) — 접히면 그 묶음의 앞 기준이 조용히 바뀐다.
+#######################################
+expect_collapsed_baseline_rejected() {
+  local case_dir
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "collapsed-baseline: 시험 준비 실패"
+    return
+  }
+  testlib::tsv gamma tag:GetTagKeys ap-northeast-2 '' allow \
+    "${JUDGED}" >>"${case_dir}/tree/data/stage_actions/baseline.tsv"
+  run_recheck "${case_dir}" collapsed gamma
+  expect_unverifiable collapsed-baseline || return
+  testlib::ok "collapsed-baseline → 빈 칸이 접히는 baseline 행은 종료 2"
+}
+
+#######################################
+# 결과 파일의 마지막 줄 뒤에 줄바꿈이 없어도 그 행을 빠뜨리지 않는다(줄
+# 단위로 읽는 모든 루프의 규칙).
+#######################################
+expect_result_without_final_newline() {
+  local case_dir name file content
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "final-newline: 시험 준비 실패"
+    return
+  }
+  run_recheck "${case_dir}" first gamma
+  name="$(judged_name)"
+  file="${case_dir}/home/.pokeclip-precheck/${name}/result.tsv"
+  content="$(cat -- "${file}")" && printf '%s' "${content}" >"${file}"
+  run_recheck "${case_dir}" accept --accept gamma --dir "${name}" \
+    --reason 'kty 답'
+  run_recheck "${case_dir}" second gamma
+  expect_result final-newline 0 'SCP RECHECK OK 2' 2 || return
+  testlib::ok "final-newline → 줄바꿈 없는 마지막 행도 앞 기준에 듦"
+}
+
+#######################################
+# --accept 의 잘못된 쓰임은 종료 2: 없는 판정 · 이유에 줄바꿈 · 이유 없음 ·
+# 디렉터리 이름 없는 옛 꼴 · 다른 묶음의 판정 · 두 번 승인.
 #######################################
 expect_accept_misuse() {
-  local case_dir
+  local case_dir name other
   case_dir="$(new_tree_case)" || {
     testlib::fail "accept-misuse: 시험 준비 실패"
     return
   }
-  run_recheck "${case_dir}" before --accept gamma --reason 'kty 답'
+  run_recheck "${case_dir}" before --accept gamma \
+    --dir scp-gamma-20260101T000000Z --reason 'kty 답'
   expect_unverifiable accept-before-run || return
+  run_recheck "${case_dir}" alpha alpha
+  other="$(judged_name)"
   run_recheck "${case_dir}" first gamma
-  run_recheck "${case_dir}" newline --accept gamma --reason $'한 줄\n두 줄'
+  name="$(judged_name)"
+  run_recheck "${case_dir}" newline --accept gamma --dir "${name}" \
+    --reason $'한 줄\n두 줄'
   expect_unverifiable accept-newline || return
-  run_recheck "${case_dir}" noreason --accept gamma
+  run_recheck "${case_dir}" noreason --accept gamma --dir "${name}"
   expect_unverifiable accept-no-reason || return
-  run_recheck "${case_dir}" once --accept gamma --reason 'kty 답'
-  run_recheck "${case_dir}" twice --accept gamma --reason 'kty 답'
+  run_recheck "${case_dir}" oldform --accept gamma --reason 'kty 답'
+  expect_unverifiable accept-without-dir || return
+  run_recheck "${case_dir}" otherbundle --accept gamma --dir "${other}" \
+    --reason 'kty 답'
+  expect_unverifiable accept-other-bundle || return
+  run_recheck "${case_dir}" once --accept gamma --dir "${name}" --reason 'kty 답'
+  run_recheck "${case_dir}" twice --accept gamma --dir "${name}" \
+    --reason 'kty 답'
   expect_unverifiable accept-twice || return
-  testlib::ok "accept-misuse → 판정 전 · 줄바꿈 · 이유 없음 · 두 번 모두 종료 2"
+  testlib::ok "accept-misuse → 없는 판정 · 줄바꿈 · 이유 없음 · 옛 꼴 · 다른" \
+    "묶음 · 두 번 모두 종료 2"
 }
 
 #######################################
@@ -459,7 +705,7 @@ expect_approved_link_rejected() {
 
 #######################################
 # 사례 6: 재판정 호출 실패 · 호출 자체의 AccessDenied · 빈 응답 · 다른 동작의
-# 응답 · 호출 주체 확인 실패 · IAM 사용자가 아닌 주체 · 묶음 없음 · 꼴이
+# 응답 · 여러 줄 · 칸이 모자란 응답 · 호출 주체 확인 실패 · IAM 사용자가 아닌 주체 · 묶음 없음 · 꼴이
 # 틀린 묶음은 모두 종료 2 이고 유출이 없다.
 #######################################
 expect_unverifiable_cases() {
@@ -473,12 +719,15 @@ expect_unverifiable_cases() {
     'sim-denied-call FAKE_AWS_SIM=denied-call alpha' \
     'sim-empty FAKE_AWS_SIM=empty alpha' \
     'sim-bad-action FAKE_AWS_SIM=bad-action alpha' \
+    'sim-two-lines FAKE_AWS_SIM=two-lines alpha' \
+    'sim-short FAKE_AWS_SIM=short alpha' \
     'identity-fail FAKE_AWS_IDENTITY=fail alpha' \
     'identity-role FAKE_AWS_IDENTITY=role alpha' \
     'no-bundle FAKE_AWS_SIM=ok nope' \
     'baseline-name FAKE_AWS_SIM=ok baseline' \
     'broken-bundle FAKE_AWS_SIM=ok broken' \
-    'dup-bundle FAKE_AWS_SIM=ok dup'; do
+    'dup-bundle FAKE_AWS_SIM=ok dup' \
+    'collapsed-bundle FAKE_AWS_SIM=ok collapsed'; do
     read -r name env_arg bundle <<<"${spec}"
     run_recheck "${case_dir}" "${name}" "${env_arg}" "${bundle}"
     expect_unverifiable "${name}" || return
@@ -501,6 +750,11 @@ main() {
   expect_accept_keeps_denied
   expect_prefix_isolated
   expect_other_tool_dirs_ignored
+  expect_accept_named_judgment
+  expect_accept_incomplete_rejected
+  expect_tampered_reference_rejected
+  expect_result_without_final_newline
+  expect_collapsed_baseline_rejected
   expect_accept_misuse
   expect_approved_link_rejected
   expect_unverifiable_cases

@@ -20,7 +20,8 @@
 #   FAKE_AWS_IDENTITY       user(기본) · role(역할 세션 ARN) · fail.
 #   FAKE_AWS_SIM            ok(기본) · fail · denied-call(호출 자체의
 #                           AccessDenied) · empty(빈 출력) · bad-action(다른
-#                           동작 이름으로 답함).
+#                           동작 이름으로 답함) · two-lines(같은 줄 두 번) ·
+#                           short(동작 · 판정 두 칸만).
 #   FAKE_AWS_DENY           implicitDeny 로 답할 「동작@리전」 목록(공백 구분).
 #   FAKE_AWS_EXPLICIT_DENY  explicitDeny 로 답할 목록(같은 꼴).
 #   FAKE_AWS_EVENTS         lookup-events 응답 표(리전 · 이름 · ID · 출처 ·
@@ -175,9 +176,15 @@ simulate() {
     decision=explicitDeny
     orgs=False
   fi
-  if [[ "${FAKE_AWS_SIM:-ok}" == bad-action ]]; then
-    action="iam:SomethingElse"
-  fi
+  case "${FAKE_AWS_SIM:-ok}" in
+    bad-action) action="iam:SomethingElse" ;;
+    two-lines) printf '%s\t%s\t%s\n' "${action}" "${decision}" "${orgs}" ;;
+    short)
+      printf '%s\t%s\n' "${action}" "${decision}"
+      return 0
+      ;;
+    *) ;;
+  esac
   printf '%s\t%s\t%s\n' "${action}" "${decision}" "${orgs}"
 }
 
@@ -198,7 +205,8 @@ lookup_events() {
   name="${attribute#AttributeKey=EventName,AttributeValue=}"
   region="$(option_value --region "$@")"
   [[ -n "${FAKE_AWS_EVENTS:-}" ]] || exit 0
-  while IFS=$'\t' read -r row_region row_name id source time user; do
+  while IFS=$'\t' read -r row_region row_name id source time user ||
+    [[ -n "${row_region}" ]]; do
     if [[ "${row_region}" == "${region}" && "${row_name}" == "${name}" ]]; then
       printf '%s\t%s\t%s\t%s\t%s\n' "${id}" "${source}" "${name}" "${time}" \
         "${user}"

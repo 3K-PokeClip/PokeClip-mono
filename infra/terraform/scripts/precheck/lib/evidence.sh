@@ -194,6 +194,29 @@ evidence::check_dir() {
 }
 
 #######################################
+# 증거 디렉터리 안의 파일을 읽어도 되는지 검사한다 — 디렉터리는
+# evidence::check_dir 를 통과하고, 파일은 링크가 아닌 0600 일반 파일이다.
+# 앞 결과(승인 기준)를 읽을 때 쓴다.
+# Arguments:
+#   파일 경로.
+# Returns:
+#   읽어도 되면 0, 아니면 2(거부를 알린다).
+#######################################
+evidence::check_file() {
+  local file="$1" found
+  evidence::check_dir "${file%/*}" || return 2
+  if [[ -L "${file}" || ! -f "${file}" ]]; then
+    evidence::reject "링크가 아닌 일반 파일이 아님" "${file}"
+    return
+  fi
+  found="$(find "${file}" -maxdepth 0 -type f -perm 0600 -print 2>/dev/null)"
+  if [[ -z "${found}" ]]; then
+    evidence::reject "0600 파일이 아님" "${file}"
+    return
+  fi
+}
+
+#######################################
 # 고정 루트(없으면 0700 으로 만듦) 아래에 「<이름>-<UTC 시각>」 0700 하위
 # 디렉터리를 새로 만든다. 같은 초에 이미 있으면 「-2」 ~ 「-9」 를 붙인다.
 # 루트 · 조상 검사를 통과하기 전에는 아무것도 만들지 않는다.

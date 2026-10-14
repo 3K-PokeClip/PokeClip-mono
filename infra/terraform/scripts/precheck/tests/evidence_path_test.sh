@@ -16,6 +16,8 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/testlib.sh"
 
 readonly EVIDENCE_LIB="${PRECHECK_DIR}/lib/evidence.sh"
 readonly REJECTED='EVIDENCE PATH REJECTED'
+# 거부 문구가 HOME 접두를 가리는 표시 글자.
+readonly TILDE='~'
 # 증거 디렉터리 이름: <묶음>-<UTC 시각>[-<2 ~ 9>].
 readonly DIR_PATTERN='^alpha-[0-9]{8}T[0-9]{6}Z(-[2-9])?$'
 
@@ -271,12 +273,48 @@ expect_mode_rejected() {
     "${root}/alpha-20260101T000000Z"
   expect_rejected "mode(child)" "${case_dir}" || return
   if [[ "$(testlib::count "${run_out}.stderr" \
-    '~/.pokeclip-precheck/alpha-20260101T000000Z')" -ne 1 ]]; then
+    "${TILDE}/.pokeclip-precheck/alpha-20260101T000000Z")" -ne 1 ]]; then
     testlib::fail "mode: 거부 문구에 「~」 로 가린 경로가 없음 —" \
       "$(cat -- "${run_out}.stderr")"
     return
   fi
   testlib::ok "mode → 0700 이 아닌 루트 · 하위 디렉터리 모두 종료 2"
+}
+
+#######################################
+# 증거 파일 검사(evidence::check_file — 앞 결과를 읽을 때): 검사를 통과한
+# 디렉터리 안의 0600 일반 파일만 받고, 링크 · 0644 · 없는 파일 · 디렉터리는
+# 거부한다.
+#######################################
+expect_check_file() {
+  local case_dir dir spec name
+  case_dir="$(testlib::new_case)" || {
+    testlib::fail "check-file: 시험 준비 실패"
+    return
+  }
+  dir="${case_dir}/home/.pokeclip-precheck/scp-alpha-20260101T000000Z"
+  if ! mkdir -m 700 -- "${case_dir}/home/.pokeclip-precheck" ||
+    ! mkdir -m 700 -- "${dir}" ||
+    ! (umask 077 && printf 'x\n' >"${dir}/ok.tsv" &&
+      printf 'x\n' >"${dir}/wide.tsv" && printf 'x\n' >"${dir}/target.tsv") ||
+    ! chmod 644 "${dir}/wide.tsv" ||
+    ! ln -s -- "${dir}/target.tsv" "${dir}/link.tsv" ||
+    ! mkdir -m 700 -- "${dir}/sub.tsv"; then
+    testlib::fail "check-file: 시험 준비 실패"
+    return
+  fi
+  call_evidence "${case_dir}" ok evidence::check_file "${dir}/ok.tsv"
+  if [[ "${run_status}" -ne 0 ]]; then
+    testlib::fail "check-file: 0600 일반 파일을 거부함 — ${run_status}" \
+      "$(cat -- "${run_out}.stderr")"
+    return
+  fi
+  for spec in wide.tsv link.tsv missing.tsv sub.tsv; do
+    name="check-file(${spec})"
+    call_evidence "${case_dir}" "${spec}" evidence::check_file "${dir}/${spec}"
+    expect_rejected "${name}" "${case_dir}" || return
+  done
+  testlib::ok "check-file → 0600 일반 파일만 · 링크 · 0644 · 없음 · 디렉터리 종료 2"
 }
 
 #######################################
@@ -312,6 +350,7 @@ main() {
   expect_link_in_root_rejected
   expect_root_link_rejected
   expect_mode_rejected
+  expect_check_file
   expect_relative_home_rejected
   testlib::finish evidence_path_test
 }
