@@ -221,10 +221,12 @@ expect_judge_reads() {
       fi
     done
   done
-  if grep -rq -- 'ec2:DescribeRegions' "${STAGE_DIR}"; then
-    testlib::fail "judge-reads: ec2:DescribeRegions 가 묶음에 있음"
-    return
-  fi
+  for bundle in "${BUNDLES[@]}"; do
+    if bundle_actions "${bundle}" | grep -qxF -- 'ec2:DescribeRegions'; then
+      testlib::fail "judge-reads: ${bundle} 에 ec2:DescribeRegions"
+      return
+    fi
+  done
   testlib::ok "judge-reads → 2-3 판정 묶음 11개에만 · DescribeRegions 0"
 }
 

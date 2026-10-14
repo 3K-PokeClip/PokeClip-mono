@@ -1,0 +1,88 @@
+# 권한을 바꾸는 관리 이벤트(설계 11-5 의 2-3-10 · 계획 M17a 「데이터」) — 열:
+# 이벤트 출처(eventSource) · 이벤트 이름 · 조회 리전. 탭 구분, 「#」 줄은 주석.
+# 리전 규칙: IAM · CloudFront = us-east-1 · STS = us-east-1(전역 엔드포인트)과
+# 서울(리전 엔드포인트) 둘 다 · 그 밖 = 서울. 도쿄 등 다른 리전은 조회하지
+# 않는다(SCP 거부 — 계획 M17a 「계약」 의 한계).
+# 이름은 aws CLI 2.36.7 의 서비스 모델(botocore service-2.json 의 operations)과
+# 하나씩 대조했다(c3 커밋 본문). 태그는 IAM Tag/Untag 계열과 리소스 그룹 태깅의
+# TagResources · UntagResources 만 본다(런북 「이벤트 기록」).
+
+# IAM 정책 부착 · 덮어쓰기 · 삭제
+iam.amazonaws.com	AttachUserPolicy	us-east-1
+iam.amazonaws.com	AttachRolePolicy	us-east-1
+iam.amazonaws.com	AttachGroupPolicy	us-east-1
+iam.amazonaws.com	DetachUserPolicy	us-east-1
+iam.amazonaws.com	DetachRolePolicy	us-east-1
+iam.amazonaws.com	DetachGroupPolicy	us-east-1
+iam.amazonaws.com	PutUserPolicy	us-east-1
+iam.amazonaws.com	PutRolePolicy	us-east-1
+iam.amazonaws.com	PutGroupPolicy	us-east-1
+iam.amazonaws.com	DeleteUserPolicy	us-east-1
+iam.amazonaws.com	DeleteRolePolicy	us-east-1
+iam.amazonaws.com	DeleteGroupPolicy	us-east-1
+iam.amazonaws.com	CreatePolicyVersion	us-east-1
+iam.amazonaws.com	SetDefaultPolicyVersion	us-east-1
+iam.amazonaws.com	DeletePolicy	us-east-1
+iam.amazonaws.com	DeletePolicyVersion	us-east-1
+
+# IAM 신뢰 정책 · 권한 경계 변경
+iam.amazonaws.com	UpdateAssumeRolePolicy	us-east-1
+iam.amazonaws.com	PutUserPermissionsBoundary	us-east-1
+iam.amazonaws.com	PutRolePermissionsBoundary	us-east-1
+iam.amazonaws.com	DeleteUserPermissionsBoundary	us-east-1
+iam.amazonaws.com	DeleteRolePermissionsBoundary	us-east-1
+
+# IAM 사용자 · 액세스 키 · 로그인 프로필 생성
+iam.amazonaws.com	CreateUser	us-east-1
+iam.amazonaws.com	CreateAccessKey	us-east-1
+iam.amazonaws.com	CreateLoginProfile	us-east-1
+
+# IAM 태그 변경(Tag/Untag 계열 전부)
+iam.amazonaws.com	TagInstanceProfile	us-east-1
+iam.amazonaws.com	TagMFADevice	us-east-1
+iam.amazonaws.com	TagOpenIDConnectProvider	us-east-1
+iam.amazonaws.com	TagPolicy	us-east-1
+iam.amazonaws.com	TagRole	us-east-1
+iam.amazonaws.com	TagSAMLProvider	us-east-1
+iam.amazonaws.com	TagServerCertificate	us-east-1
+iam.amazonaws.com	TagUser	us-east-1
+iam.amazonaws.com	UntagInstanceProfile	us-east-1
+iam.amazonaws.com	UntagMFADevice	us-east-1
+iam.amazonaws.com	UntagOpenIDConnectProvider	us-east-1
+iam.amazonaws.com	UntagPolicy	us-east-1
+iam.amazonaws.com	UntagRole	us-east-1
+iam.amazonaws.com	UntagSAMLProvider	us-east-1
+iam.amazonaws.com	UntagServerCertificate	us-east-1
+iam.amazonaws.com	UntagUser	us-east-1
+
+# STS 역할 받기(계획 M17a 리전 규칙 · c1 사례 4 — 두 리전, 이벤트 ID 로 한 번)
+sts.amazonaws.com	AssumeRole	us-east-1
+sts.amazonaws.com	AssumeRole	ap-northeast-2
+sts.amazonaws.com	AssumeRoleWithWebIdentity	us-east-1
+sts.amazonaws.com	AssumeRoleWithWebIdentity	ap-northeast-2
+
+# 리소스 그룹 태깅 API 태그 변경
+tagging.amazonaws.com	TagResources	ap-northeast-2
+tagging.amazonaws.com	UntagResources	ap-northeast-2
+
+# 상태 버킷 정책
+s3.amazonaws.com	PutBucketPolicy	ap-northeast-2
+s3.amazonaws.com	DeleteBucketPolicy	ap-northeast-2
+
+# 비밀 리소스 정책
+secretsmanager.amazonaws.com	PutResourcePolicy	ap-northeast-2
+secretsmanager.amazonaws.com	DeleteResourcePolicy	ap-northeast-2
+
+# ECR 저장소 정책
+ecr.amazonaws.com	SetRepositoryPolicy	ap-northeast-2
+ecr.amazonaws.com	DeleteRepositoryPolicy	ap-northeast-2
+
+# SNS 주제 정책(cc 부수 10)
+sns.amazonaws.com	SetTopicAttributes	ap-northeast-2
+sns.amazonaws.com	AddPermission	ap-northeast-2
+sns.amazonaws.com	RemovePermission	ap-northeast-2
+
+# SQS 큐 정책(cc 부수 10)
+sqs.amazonaws.com	SetQueueAttributes	ap-northeast-2
+sqs.amazonaws.com	AddPermission	ap-northeast-2
+sqs.amazonaws.com	RemovePermission	ap-northeast-2
