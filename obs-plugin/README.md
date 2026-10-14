@@ -107,7 +107,7 @@ cmake -S obs-plugin/tests -B obs-plugin/build_tests && cmake --build obs-plugin/
 
 ## 설정 파일
 
-`plugin_config/pokeclip-obs/pokeclip.json` (macOS `~/Library/Application Support/obs-studio/`, Windows `%APPDATA%\obs-studio\`) — 계정 단위라 OBS 프로필과 무관하다. POSIX에서는 처음부터 권한 0600으로 쓴다(`.tmp`에 쓰고 rename, 이전 판은 `.bak`도 0600).
+`plugin_config/pokeclip-obs/pokeclip.json` (macOS `~/Library/Application Support/obs-studio/`, Windows `%APPDATA%\obs-studio\`) — 계정 단위라 OBS 프로필과 무관하다. POSIX에서는 처음부터 권한 0600으로 쓴다(`.tmp`에 쓰고 rename, 이전 판은 `.bak`도 0600). 본 파일을 못 읽으면 libobs가 `.bak`을 읽는다. 그래서 연결 해제 저장은 `.bak`에도 새 판(키 없음)을 먼저 쓰고 본 파일을 바꾼다 — 직전 판(키 포함)을 남기면 지운 키가 되살아난다(POK-285).
 
 | 키 | 기본값 | 뜻 |
 |---|---|---|

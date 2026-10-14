@@ -175,10 +175,13 @@ PairingResult Unpair()
 		result.reason = "streaming";
 		return result;
 	}
-	bool saved = ConfigStore::Instance().Commit([](PluginConfig &c) {
-		c.streamId.clear();
-		c.passphrase.clear();
-	});
+	// .bak에도 새 판을 쓴다 — 직전 판을 남기면 본 파일이 깨졌을 때 지운 키가 .bak에서 되살아난다.
+	bool saved = ConfigStore::Instance().Commit(
+		[](PluginConfig &c) {
+			c.streamId.clear();
+			c.passphrase.clear();
+		},
+		ConfigStore::SaveBackup::SameAsNew);
 	if (!saved) {
 		result.reason = "save_failed";
 		return result;
