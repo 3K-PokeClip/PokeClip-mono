@@ -195,8 +195,9 @@ func routed(pattern string, h http.Handler) http.Handler {
 // 채우면 MediaMTX 가 응답기에 인증을 묻지 못한다 — api 는 401(cut 의 api_auth)이고 모든 계정의 새 송출이 거부된다.
 // 응답기가 먼저 닫은 연결의 TIME_WAIT 은 응답기의 고정 포트 쪽에 남아 상대의 임시 포트를 잡지 않는다. 다만 두 쪽이
 // 거의 함께 닫으면 MediaMTX 쪽에도 남아 0 이 되지는 않는다 — 실험대(리눅스)에서 두 세대를 채운 cut 하나가 MediaMTX
-// 쪽에 남긴 TIME_WAIT 은 약 1만 7천에서 약 3천 4백(api 인증 요청의 약 5분의 1)으로 줄었고, publish 인증은 요청의 약
-// 3분의 1 이 남았다. 1초 뒤 다시 돌린 같은 cut 은 끝났지만, 쏟아지는 송출 시도에 대한 고갈 문턱은 재지 않았다.
+// 쪽에 남긴 TIME_WAIT 은 약 1만 7천에서 약 3천 4백(api 인증 요청의 약 5분의 1)으로 줄었고, 받아들인 publish 인증은
+// 요청의 약 3분의 1 이 남았다(401 로 거절하는 꼴은 재지 않았다). 1초 뒤 다시 돌린 같은 cut 은 끝났지만, 쏟아지는
+// 송출 시도에 대한 고갈 문턱은 재지 않았다.
 // MediaMTX 는 연결을 다시 쓰지 않으므로 잃는 것이 없다.
 func newServer(h http.Handler, log *slog.Logger) *http.Server {
 	srv := &http.Server{

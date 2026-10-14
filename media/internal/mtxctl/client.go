@@ -151,8 +151,8 @@ var errInvalidID = errors.New("mtxctl: 연결 id 가 MediaMTX 의 꼴(소문자 
 // Error 는 Control API 요청 하나가 기대한 답으로 끝나지 않은 것이다. 이 패키지의 요청 메서드가 돌려주는 에러는
 // ErrNotFound 와 id 꼴 에러를 빼면 모두 *Error 다.
 //
-// Status 401 은 Control API 인증 실패다 — 응답기 부재 · 자격 불일치, 또는 MediaMTX 가 응답기에 닿지 못함(임시 포트
-// 고갈). Status 404 의 뜻은 요청마다 다르다. 목록(SRTConns)은 200 이 아니면 본문을 보지 않으므로 404 는 늘
+// Status 401 은 Control API 인증 실패다 — 응답기 부재 · 고장 · 자격 불일치, 또는 MediaMTX 가 응답기에 닿지 못함(임시
+// 포트 고갈). Status 404 의 뜻은 요청마다 다르다. 목록(SRTConns)은 200 이 아니면 본문을 보지 않으므로 404 는 늘
 // *Error 다. 조회 · kick 은 404 본문을 본다(isAPIError) — 연결 없음의 꼴(Control API 의 에러 꼴 · maxDrainBytes
 // 안)이면 *Error 가 아니다(SRTConnExists 는 거짓, KickSRTConn 은 ErrNotFound). 그 밖의 404 — 경로가 없을 때 gin 이
 // 내는 기본 404 · 에러 꼴이 아니거나 빈 본문 · 상한을 넘는 본문 · 끝까지 읽지 못한 본문 — 는 *Error(Kind status ·
