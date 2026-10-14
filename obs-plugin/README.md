@@ -1,6 +1,6 @@
 # obs-plugin — PokeClip for OBS
 
-**담당: 1번 (`@xodbs1021`) · A1 착수·구현: 2번** · 티켓 [POK-169](https://xodbs9810.atlassian.net/browse/POK-169) (에픽 [POK-5](https://xodbs9810.atlassian.net/browse/POK-5))
+**담당: 2번 (`@jaehwan-space`) — 2026-09-26 1번에서 이관([11_역할분담](https://github.com/3K-PokeClip/PokeClip-LLM-WIKI/blob/main/specs/11_Pokeclip_%EC%97%AD%ED%95%A0%EB%B6%84%EB%8B%B4.md))** · 티켓 [POK-169](https://xodbs9810.atlassian.net/browse/POK-169) (에픽 [POK-5](https://xodbs9810.atlassian.net/browse/POK-5))
 
 스트리머 PC의 OBS에 설치하는 C++ 플러그인(libobs)이다. 본방(치지직 RTMP)을 켜면 **같은 인코더로** 우리 서버에 SRT+MPEG-TS를 함께 보낸다 (ADR-001·ADR-002).
 
