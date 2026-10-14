@@ -24,7 +24,7 @@ enum class ServerEnv { Prod, Dev };
 
 struct ServerDefaults {
 	const char *name;       // 설정 파일 server_env 값
-	const char *apiBase;    // 페어링 교환·마크 API. https만 — 마크가 passphrase를 Bearer로 싣는다
+	const char *apiBase;    // 페어링 교환·마크 API. https만 — 마크가 스트림 키 파생 값을 Bearer로 싣는다
 	const char *ingestHost; // SRT 수신부
 	int ingestPort;
 };

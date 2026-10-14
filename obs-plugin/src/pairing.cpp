@@ -5,6 +5,7 @@
 #include "audio-router.hpp"
 #include "config.hpp"
 #include "constants.hpp"
+#include "server-env.hpp"
 #include "srt-target.hpp"
 
 #include <curl/curl.h>
@@ -141,10 +142,22 @@ PairingResult PairWithCode(const std::string &rawCode)
 		return result;
 	}
 
+	// 교환을 기다리는 사이(최대 15초) 독 숨은 스위치로 서버 환경이 바뀌었으면, 이 키는 옛 환경의 Auth가 발급했다 —
+	// 새 짝에 붙이지 않고 버린다(POK-267). 판단은 저장과 같은 잠금 아래에서 한다.
+	bool serverChanged = false;
 	bool saved = ConfigStore::Instance().Commit([&](PluginConfig &c) {
+		if (!SameKeyIssuer(c, config)) {
+			serverChanged = true;
+			return;
+		}
 		c.streamId = streamId;
 		c.passphrase = passphrase;
 	});
+	if (serverChanged) {
+		obs_log(LOG_WARNING, "pairing exchange: server env changed while waiting — key discarded");
+		result.reason = "server_changed";
+		return result;
+	}
 	if (!saved) {
 		result.reason = "save_failed";
 		return result;

@@ -89,7 +89,7 @@ int StatusForPairingReason(const std::string &reason)
 		return 404;
 	if (reason == "expired")
 		return 410;
-	if (reason == "already_used" || reason == "streaming")
+	if (reason == "already_used" || reason == "streaming" || reason == "server_changed")
 		return 409;
 	if (reason == "rate_limited")
 		return 429;
@@ -173,17 +173,16 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	flag("audio_auto_assign", next.audioAutoAssign);
 	flag("audio_assign_prompted", next.audioAssignPrompted);
 	obs_data_release(d);
-	ServerEnv targetEnv = current.serverEnv;
-	if (envGiven && !ParseServerEnv(envText, targetEnv))
-		return {400, JsonReason(false, "invalid_server_env")};
-	const bool envSwitch = targetEnv != current.serverEnv;
-	if (envSwitch) {
-		// 같은 본문의 수신 주소는 무시한다 — 열어 둔 설정 초안의 옛 호스트가 전환을 되돌리지 않게. 직접 적은 주소는
-		// 지금 값 그대로 남는다(ApplyServerEnv는 알려진 기본값만 바꾼다).
-		next.ingestHost = current.ingestHost;
-		next.ingestPort = current.ingestPort;
-		ApplyServerEnv(next, targetEnv);
+	std::optional<ServerEnv> requestedEnv;
+	if (envGiven) {
+		ServerEnv parsed = current.serverEnv;
+		if (!ParseServerEnv(envText, parsed))
+			return {400, JsonReason(false, "invalid_server_env")};
+		requestedEnv = parsed;
 	}
+	// 환경 전환(같은 본문의 수신 주소는 버림·키 지움)과 알려진 기본 호스트 맞추기 — 여기서는 검사용 스냅샷에 얹고,
+	// 저장은 아래 Commit이 잠금 아래 지금 설정에 같은 규칙으로 다시 얹는다(server-env.hpp ApplyPutServerEnv).
+	ApplyPutServerEnv(next, current, requestedEnv);
 	// 스위치를 직접 바꿨으면 답한 것으로 친다 — 처음 안내를 다시 띄우지 않는다.
 	if (next.audioAutoAssign != autoAssignWas)
 		next.audioAssignPrompted = true;
@@ -200,28 +199,14 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	if (next.latencyMs < 20 || next.latencyMs > 8000)
 		return {400, JsonReason(false, "invalid_latency")};
 
+	// 잠금 아래 지금 설정에 독 값만 얹는다 — 키·배정 기억·독 첫 실행 표시·단축키 사본은 페어링·UI 스레드가 따로
+	// 저장하므로 이 요청이 읽은 옛 스냅샷으로 덮지 않는다. 환경 전환 여부도 지금 설정을 기준으로 다시 정한다 — 스냅샷을
+	// 읽은 뒤 다른 요청이 환경을 바꿨으면 이 요청이 옛 짝을 되살리거나 새 환경의 키를 옛 짝에 남기지 않게.
+	bool envSwitch = false;
 	if (!ConfigStore::Instance().Commit([&](PluginConfig &c) {
-		    std::string streamId = c.streamId;
-		    std::string passphrase = c.passphrase;
-		    std::vector<AudioTrackMapEntry> trackMap = c.audioTrackMap;
-		    std::vector<AudioMixerBackup> mixerBackup = c.audioMixerBackup;
-		    bool dockIntroShown = c.dockIntroShown;
-		    std::string markHotkey = c.markHotkey;
-		    c = next;
-		    if (envSwitch) {
-			    // 키는 그 환경의 Auth가 발급했다 — 다른 환경으로 들고 가지 않는다(연결 해제와 같다).
-			    c.streamId.clear();
-			    c.passphrase.clear();
-		    } else {
-			    c.streamId = streamId; // 키는 이 경로로 바꾸지 않는다 (페어링 전용)
-			    c.passphrase = passphrase;
-		    }
-		    // 배정 기억·원래 체크·독 첫 실행 표시·단축키 사본은 UI 스레드가 따로 저장한다 —
-		    // 이 요청이 읽은 옛 값으로 덮지 않는다.
-		    c.audioTrackMap = std::move(trackMap);
-		    c.audioMixerBackup = std::move(mixerBackup);
-		    c.dockIntroShown = dockIntroShown;
-		    c.markHotkey = std::move(markHotkey);
+		    const PluginConfig before = c;
+		    c.TakeDockSettings(next);
+		    envSwitch = ApplyPutServerEnv(c, before, requestedEnv);
 	    }))
 		return {500, JsonReason(false, "save_failed")};
 

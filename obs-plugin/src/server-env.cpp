@@ -96,4 +96,28 @@ ServerEnvChange ApplyServerEnv(PluginConfig &c, ServerEnv target)
 	return change;
 }
 
+bool ApplyPutServerEnv(PluginConfig &c, const PluginConfig &before, std::optional<ServerEnv> requested)
+{
+	c.serverEnv = before.serverEnv;
+	c.apiBase = before.apiBase;
+	c.streamId = before.streamId;
+	c.passphrase = before.passphrase;
+	const ServerEnv target = requested.value_or(before.serverEnv);
+	if (target == before.serverEnv) {
+		ApplyServerEnv(c, target);
+		return false;
+	}
+	c.ingestHost = before.ingestHost;
+	c.ingestPort = before.ingestPort;
+	ApplyServerEnv(c, target);
+	c.streamId.clear();
+	c.passphrase.clear();
+	return true;
+}
+
+bool SameKeyIssuer(const PluginConfig &a, const PluginConfig &b)
+{
+	return a.serverEnv == b.serverEnv && a.apiBase == b.apiBase;
+}
+
 } // namespace pokeclip
