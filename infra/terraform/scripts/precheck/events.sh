@@ -16,11 +16,15 @@
 # 이벤트 출처가 그 행의 출처인 것만 센다. 전체는 이벤트 ID 로 한 번만 센다
 # (STS 두 리전에 같은 이벤트가 섞여 와도 하나).
 #
-# 표준 출력(계약)은 「EVENTS <n>」 한 줄이다. <n> = 두 묶음을 합쳐 이벤트
-# ID 로 한 번씩 센 고유 이벤트 수다 — 평소에는 역할 받기가 대부분이다. 권한
-# 변경이 있었는지는 이 수가 아니라 증거의 summary.tsv(행별 건수)에서 역할
-# 받기 행을 뺀 0 아닌 행으로 판단한다. 이벤트 이름 · 시각 · 주체 원본과
-# 행별 건수는 증거 디렉터리(lookup-<n>.txt · summary.tsv · event_ids.txt)에만
+# 표준 출력(계약 — kty 59차로 계획 390행을 넓힘)은 한 줄이다:
+#   EVENTS <n> (권한 변경 <a> · 역할 받기 <b>)
+# n = 두 묶음을 합쳐 이벤트 ID 로 한 번씩 센 고유 이벤트 수 · b = STS 역할
+# 받기 행으로 센 고유 이벤트 수 · a = 그 밖(권한 변경 묶음) · a + b = n.
+# 같은 ID 가 두 묶음 행에서 다 나오면(실제로는 없는 꼴) a 로 센다. 평소에는
+# 역할 받기가 대부분이다 — 권한 변경이 있었는지는 n 이 아니라 a 와 증거
+# summary.tsv 의 역할 받기 아닌 0 아닌 행으로 본다. 식별자(이름 · ARN ·
+# 계정)는 표준 출력에 없다. 이벤트 이름 · 시각 · 주체 원본과 행별 건수 ·
+# 범주별 ID 는 증거 디렉터리(lookup-<n>.txt · summary.tsv · event_ids.txt)에만
 # 둔다. 조회는 리전마다 초당 2회로 제한되며 aws CLI 의
 # 재시도에 맡긴다.
 #
@@ -62,9 +66,9 @@ source "${SCRIPT_DIR}/lib/evidence.sh" || {
 
 # event_names.txt 의 행 「출처<탭>이름<탭>리전」.
 NAMES=()
-# 지금까지 센 이벤트 ID(줄바꿈으로 감싼 목록)와 건수.
-SEEN_IDS=$'\n'
-SEEN_COUNT=0
+# 범주별로 센 이벤트 ID(줄바꿈으로 감싼 목록 — 범주 안에서는 한 번씩).
+PERM_IDS=$'\n'
+ROLE_IDS=$'\n'
 # lookup_row 가 남기는 그 행의 맞은 이벤트 수.
 ROW_MATCHED=0
 
@@ -129,6 +133,19 @@ ninety_days_ago() {
 }
 
 #######################################
+# event_names.txt 의 행이 STS 역할 받기 묶음인지 본다(그 밖은 권한 변경
+# 묶음).
+# Arguments:
+#   이벤트 출처, 이벤트 이름.
+# Returns:
+#   역할 받기면 0.
+#######################################
+is_role_assumption() {
+  [[ "$1" == sts.amazonaws.com ]] &&
+    [[ "$2" == AssumeRole || "$2" == AssumeRoleWithWebIdentity ]]
+}
+
+#######################################
 # 조회 응답 줄 하나(ID · 출처 · 이름 · 시각 · 주체)의 꼴을 본다. 칸 수를
 # 먼저 세고(빈 칸 접힘), 칸마다 꼴을 본다. 주체 칸은 비어 있지 않기만 하면
 # 된다(없으면 aws CLI 가 None 으로 적음). here-string 대신 매개변수 확장으로
@@ -159,17 +176,19 @@ lookup_fields() {
 }
 
 #######################################
-# 행 하나를 조회하고, 그 행의 출처 · 이름과 맞는 이벤트를 ID 로 한 번만
-# 센다. 원본은 증거 디렉터리의 lookup-<n>.txt · lookup-<n>.err 에 남는다.
+# 행 하나를 조회하고, 그 행의 출처 · 이름과 맞는 이벤트를 그 행의 범주
+# (권한 변경 · 역할 받기) 목록에 ID 로 한 번만 담는다. 원본은 증거
+# 디렉터리의 lookup-<n>.txt · lookup-<n>.err 에 남는다.
 # Globals:
-#   SEEN_IDS, SEEN_COUNT, ROW_MATCHED
+#   PERM_IDS, ROLE_IDS, ROW_MATCHED
 # Arguments:
 #   증거 디렉터리, 행 번호, 출처, 이름, 리전, --since 값.
 #######################################
 lookup_row() {
   local dir="$1" n="$2" source="$3" name="$4" region="$5" since="$6"
-  local raw="${dir}/lookup-${n}.txt" line fields id got
+  local raw="${dir}/lookup-${n}.txt" line fields id got role=0
   ROW_MATCHED=0
+  is_role_assumption "${source}" "${name}" && role=1
   if ! aws cloudtrail lookup-events \
     --lookup-attributes "AttributeKey=EventName,AttributeValue=${name}" \
     --start-time "${since}" --region "${region}" --query "${LOOKUP_QUERY}" \
@@ -186,11 +205,40 @@ lookup_row() {
     got="${fields#*$'\t'}"
     [[ "${got}" == "${source}"$'\t'"${name}" ]] || continue
     ROW_MATCHED=$((ROW_MATCHED + 1))
-    if [[ "${SEEN_IDS}" != *$'\n'"${id}"$'\n'* ]]; then
-      SEEN_IDS+="${id}"$'\n'
-      SEEN_COUNT=$((SEEN_COUNT + 1))
+    if [[ "${role}" -eq 1 && "${ROLE_IDS}" != *$'\n'"${id}"$'\n'* ]]; then
+      ROLE_IDS+="${id}"$'\n'
+    elif [[ "${role}" -eq 0 && "${PERM_IDS}" != *$'\n'"${id}"$'\n'* ]]; then
+      PERM_IDS+="${id}"$'\n'
     fi
   done <"${raw}" || die "조회 원본을 읽지 못함(lookup-${n}.txt)"
+}
+
+#######################################
+# 범주별 고유 이벤트 수를 센다. 같은 ID 가 두 범주에 다 있으면(실제로는
+# 없는 꼴) 권한 변경으로 센다 — 권한 변경을 가리지 않는 쪽. 그래서 권한
+# 변경 + 역할 받기 = 전체다. 증거 event_ids.txt 에 「ID<탭>범주」 로 남긴다.
+# Globals:
+#   PERM_IDS, ROLE_IDS
+# Arguments:
+#   증거 디렉터리.
+# Outputs:
+#   「EVENTS <전체> (권한 변경 <a> · 역할 받기 <b>)」.
+#######################################
+report_counts() {
+  local dir="$1" id perm=0 role=0 ids=""
+  while IFS= read -r id; do
+    [[ -n "${id}" ]] || continue
+    perm=$((perm + 1))
+    ids+="${id}"$'\t'"권한 변경"$'\n'
+  done <<<"${PERM_IDS}"
+  while IFS= read -r id; do
+    [[ -n "${id}" && "${PERM_IDS}" != *$'\n'"${id}"$'\n'* ]] || continue
+    role=$((role + 1))
+    ids+="${id}"$'\t'"역할 받기"$'\n'
+  done <<<"${ROLE_IDS}"
+  printf '%s' "${ids}" >"${dir}/event_ids.txt" || die "증거를 쓰지 못함"
+  printf 'EVENTS %s (권한 변경 %s · 역할 받기 %s)\n' "$((perm + role))" \
+    "${perm}" "${role}"
 }
 
 main() {
@@ -224,12 +272,9 @@ main() {
     lookup_row "${dir}" "${n}" "${source}" "${name}" "${region}" "${since}"
     summary+="${row}"$'\t'"${ROW_MATCHED}"$'\n'
   done
-  if ! printf '# 출처\t이름\t리전\t맞은 수 — --since %s\n%s' "${since}" \
-    "${summary}" >"${dir}/summary.tsv" ||
-    ! printf '%s' "${SEEN_IDS#$'\n'}" >"${dir}/event_ids.txt"; then
-    die "증거를 쓰지 못함"
-  fi
-  printf 'EVENTS %s\n' "${SEEN_COUNT}"
+  printf '# 출처\t이름\t리전\t맞은 수 — --since %s\n%s' "${since}" \
+    "${summary}" >"${dir}/summary.tsv" || die "증거를 쓰지 못함"
+  report_counts "${dir}"
 }
 
 main "$@"

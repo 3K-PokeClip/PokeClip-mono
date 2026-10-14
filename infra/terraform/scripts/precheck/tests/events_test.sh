@@ -18,13 +18,17 @@ set -uo pipefail
 source "$(dirname -- "${BASH_SOURCE[0]}")/testlib.sh"
 
 readonly OLD_SINCE='2000-01-01T00:00:00Z'
+# 고정 입력의 기대 출력(kty 59차 — 범주별 건수): 권한 변경 = ev-4 · ev-5,
+# 역할 받기 = ev-1 · ev-2.
+readonly WANT_EVENTS='EVENTS 4 (권한 변경 2 · 역할 받기 2)'
 
 #######################################
 # 사본 트리 · 고정 이벤트 이름 · 가짜 이벤트 표를 만든다.
 #   AssumeRole 은 us-east-1 · 서울 두 행이고, 같은 ID(ev-1)가 두 리전에서
 #   온다. AddPermission 은 SNS 행만 있고, 가짜 표는 Lambda 출처(ev-3)도
 #   돌려준다. AttachUserPolicy 는 us-east-1 행만 있어 서울의 ev-6 은 조회
-#   밖이다. 기대 건수 = ev-1 · ev-2 · ev-4 · ev-5 = 4.
+#   밖이다. 기대 건수 = ev-1 · ev-2 · ev-4 · ev-5 = 4 — 권한 변경(SNS ·
+#   IAM 행) 2 · 역할 받기(STS 행) 2.
 # Arguments:
 #   사례 디렉터리.
 # Returns:
@@ -137,8 +141,8 @@ expect_counts_and_regions() {
   since="$(now_utc)"
   run_events "${case_dir}" count --since "${since}"
   if [[ "${run_status}" -ne 0 ||
-    "$(cat -- "${run_out}.stdout")" != 'EVENTS 4' ]]; then
-    testlib::fail "count: 종료 0 · 「EVENTS 4」 한 줄을 기대했으나" \
+    "$(cat -- "${run_out}.stdout")" != "${WANT_EVENTS}" ]]; then
+    testlib::fail "count: 종료 0 · 「${WANT_EVENTS}」 한 줄을 기대했으나" \
       "${run_status} · $(cat -- "${run_out}.stdout" "${run_out}.stderr")"
     return
   fi
@@ -171,6 +175,34 @@ expect_counts_and_regions() {
 }
 
 #######################################
+# kty 59차: 표준 출력 한 줄에 범주별 건수 — 권한 변경 a · 역할 받기 b ·
+# a + b = n. 같은 이벤트 ID 가 두 범주 행에서 다 나와도(실제로는 없는 꼴)
+# 한 번만 세고 권한 변경 쪽에 둔다(보수 쪽 — 권한 변경을 가리지 않게).
+# 식별자(이름 · ARN · 계정)는 표준 출력에 없다.
+#######################################
+expect_category_counts() {
+  local case_dir out
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "category: 시험 준비 실패"
+    return
+  }
+  event_row us-east-1 AttachUserPolicy ev-2 iam >>"${case_dir}/in/events.tsv"
+  run_events "${case_dir}" category --since "$(now_utc)"
+  out="$(cat -- "${run_out}.stdout")"
+  if [[ "${run_status}" -ne 0 ||
+    "${out}" != 'EVENTS 4 (권한 변경 3 · 역할 받기 1)' ]]; then
+    testlib::fail "category: 「EVENTS 4 (권한 변경 3 · 역할 받기 1)」 을" \
+      "기대했으나 ${run_status} · ${out}"
+    return
+  fi
+  if [[ "${out}" == *"${FAKE_USER}"* || "${out}" == *"${FAKE_ACCOUNT}"* ]]; then
+    testlib::fail "category: 표준 출력에 식별자"
+    return
+  fi
+  testlib::ok "category → 두 범주에 걸린 ID 는 한 번 · 권한 변경 쪽 · a + b = n"
+}
+
+#######################################
 # 사례 4: --since 가 90일보다 이르면 표준 오류로 한계를 경고한다(조회는 함).
 #######################################
 expect_ninety_day_warning() {
@@ -181,8 +213,8 @@ expect_ninety_day_warning() {
   }
   run_events "${case_dir}" ninety --since "${OLD_SINCE}"
   if [[ "${run_status}" -ne 0 ||
-    "$(cat -- "${run_out}.stdout")" != 'EVENTS 4' ]]; then
-    testlib::fail "ninety: 종료 0 · EVENTS 4 를 기대했으나 ${run_status}"
+    "$(cat -- "${run_out}.stdout")" != "${WANT_EVENTS}" ]]; then
+    testlib::fail "ninety: 종료 0 · ${WANT_EVENTS} 를 기대했으나 ${run_status}"
     return
   fi
   if [[ "$(testlib::count "${run_out}.stderr" '90일')" -lt 1 ]]; then
@@ -261,8 +293,8 @@ expect_malformed_lookup_rejected() {
   run_events "${case_dir}" no-final-newline FAKE_AWS_LOOKUP=no-final-newline \
     --since "$(now_utc)"
   if [[ "${run_status}" -ne 0 ||
-    "$(cat -- "${run_out}.stdout")" != 'EVENTS 4' ]]; then
-    testlib::fail "lookup-no-final-newline: EVENTS 4 를 기대했으나" \
+    "$(cat -- "${run_out}.stdout")" != "${WANT_EVENTS}" ]]; then
+    testlib::fail "lookup-no-final-newline: ${WANT_EVENTS} 를 기대했으나" \
       "${run_status} · $(cat -- "${run_out}.stdout")"
     return
   fi
@@ -324,6 +356,7 @@ expect_unverifiable_cases() {
 main() {
   testlib::init events_test
   expect_counts_and_regions
+  expect_category_counts
   expect_ninety_day_warning
   expect_no_leak
   expect_malformed_lookup_rejected
