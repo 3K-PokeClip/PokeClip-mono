@@ -37,8 +37,9 @@ const (
 	// (포크 srt/server.go 287–300) 시한이 있어야 cut 이 끝난다. 크기는 기록 두 세대의 줄 상한(약 19,070 — 세대 1 MiB ÷
 	// 줄 110 바이트 이상)을 모두 kick 하고(kick 마다 MediaMTX 가 응답기에 api 인증을 묻는다) 두 판독의 확인(2초씩)과
 	// 목록을 더해도 넘지 않게 잡았다 — kick 한 번이 약 6ms 이하면 된다. 실험대에서 잰 kick 한 번은 api 인증 왕복을 넣어
-	// 0.14–0.57ms 였고, 두 세대를 채운 cut 은 5.7–10.0초에 끝났다. 그런 큰 cut 을 곧바로 다시 돌리면 MediaMTX 쪽 임시
-	// 포트가 TIME_WAIT 로 모자라 api 인증 요청이 실패할 수 있다(실험대 재현 — 약 60초 뒤에 다시 돌린다).
+	// 0.14–0.57ms 였고, 두 세대를 채운 cut 은 2.8–10.0초에 끝났다. 60초 안의 인증 요청이 아주 많으면 MediaMTX 쪽 임시
+	// 포트가 TIME_WAIT 로 모자라 api 인증이 실패할 수 있다 — 그때 cut 은 api_auth 다(응답기가 먼저 닫아 줄인다 — serve.go
+	// newServer).
 	cutDeadline = 2 * time.Minute
 )
 
