@@ -5,9 +5,9 @@
 # 읽기만 하고 무료다.
 #
 # 조회 대상(data/event_names.txt)은 두 묶음이다 — 권한을 바꾸는 관리
-# 이벤트(정책 부착 · 신뢰 정책 · 경계 · 사용자 · 키 · 태그 · 리소스 정책)와
-# STS 역할 받기(AssumeRole · AssumeRoleWithWebIdentity). 역할 받기는 권한
-# 변경이 아니다.
+# 이벤트(정책 부착 · 신뢰 정책 · 경계 · 사용자 · 키 · 그룹 가입 · 새 역할 ·
+# OIDC 공급자 · 태그 · 리소스 정책)와 STS 역할 받기(AssumeRole ·
+# AssumeRoleWithWebIdentity). 역할 받기는 권한 변경이 아니다.
 #
 # data/event_names.txt 의 행(이벤트 출처 · 이벤트 이름 · 조회 리전)마다
 # 그 리전에서 이름으로 한 번 조회한다. 리전 규칙(IAM · CloudFront =

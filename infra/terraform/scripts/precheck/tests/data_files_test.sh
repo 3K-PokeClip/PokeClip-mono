@@ -48,6 +48,11 @@ KVS_VALUE_ACTIONS=(cloudfront-keyvaluestore:PutKey
   cloudfront-keyvaluestore:DescribeKeyValueStore
   cloudfront-keyvaluestore:UpdateKeys cloudfront-keyvaluestore:DeleteKey)
 readonly KVS_VALUE_ACTIONS
+# 권한 상승 이벤트(kty 59차 — 계획 399행 범주 확장, 장부 r1 #9).
+PRIVILEGE_EVENTS=(AddUserToGroup CreateRole UpdateLoginProfile UpdateAccessKey
+  CreateOpenIDConnectProvider AddClientIDToOpenIDConnectProvider
+  UpdateOpenIDConnectProviderThumbprint)
+readonly PRIVILEGE_EVENTS
 readonly ACTION_PATTERN='^[a-z0-9-]+:[A-Za-z0-9]+$'
 readonly REGION_PATTERN='^[a-z]{2}(-[a-z]+)+-[0-9]$'
 readonly SOURCE_PATTERN='^[a-z0-9.-]+\.amazonaws\.com$'
@@ -331,7 +336,16 @@ expect_event_names() {
       return
     fi
   done
-  testlib::ok "event-names → 리전 규칙 · SNS · SQS 정책 · STS 역할 받기 이름"
+  for name in "${PRIVILEGE_EVENTS[@]}"; do
+    got="$(regions_of "${all}" iam.amazonaws.com "${name}")"
+    if [[ "${got}" != 'us-east-1 ' ]]; then
+      testlib::fail "event-names: 권한 상승 iam.amazonaws.com ${name}" \
+        "us-east-1 없음(kty 59차)"
+      return
+    fi
+  done
+  testlib::ok "event-names → 리전 규칙 · SNS · SQS 정책 · STS 역할 받기 ·" \
+    "권한 상승 7개"
 }
 
 #######################################
