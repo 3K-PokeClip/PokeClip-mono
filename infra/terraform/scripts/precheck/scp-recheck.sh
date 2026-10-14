@@ -48,6 +48,9 @@ readonly REGION_PATTERN='^[a-z]{2}(-[a-z]+)+-[0-9]$'
 # 자원 패턴의 계정 자리. 판정 때 caller identity 의 계정 ID 로 바꾼다.
 # shellcheck disable=SC2016 # 펼치지 않는 글자 그대로다.
 readonly ACCOUNT_PLACEHOLDER='${ACCOUNT}'
+# 증거 디렉터리 이름 = 「scp-<묶음>-<UTC 시각>」. 도구 접두로 다른 도구
+# (events · M17b collect 등)의 디렉터리와 이름이 겹치지 않는다.
+readonly DIR_PREFIX='scp'
 # 증거 디렉터리 이름의 시각 부분(evidence::new_dir 의 UTC 시각).
 STAMP_GLOB='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T'
 STAMP_GLOB+='[0-9][0-9][0-9][0-9][0-9][0-9]Z'
@@ -132,8 +135,9 @@ load_bundle() {
 }
 
 #######################################
-# 같은 묶음의 가장 최근 증거 디렉터리를 찾는다. 이름이 겹치는 묶음(O7f 와
-# O7f-stop2)은 섞지 않는다 — 묶음 이름 바로 뒤가 시각이어야 한다.
+# 같은 묶음의 가장 최근 scp 증거 디렉터리를 찾는다. 다른 도구의 디렉터리와
+# 이름이 겹치는 묶음(O7f 와 O7f-stop2)은 섞지 않는다 — 「scp-<묶음>」 바로
+# 뒤가 시각이어야 한다.
 # Arguments:
 #   묶음 이름, [그 안에 있어야 할 파일 이름].
 # Outputs:
@@ -147,15 +151,15 @@ latest_dir() {
   root="$(evidence::root)" || return 2
   [[ -d "${root}" ]] || return 0
   # shellcheck disable=SC2086,SC2231 # STAMP_GLOB 은 펼칠 글롭이다.
-  for candidate in "${root}/${bundle}-"${STAMP_GLOB} \
-    "${root}/${bundle}-"${STAMP_GLOB}-[2-9]; do
+  for candidate in "${root}/${DIR_PREFIX}-${bundle}-"${STAMP_GLOB} \
+    "${root}/${DIR_PREFIX}-${bundle}-"${STAMP_GLOB}-[2-9]; do
     [[ -e "${candidate}" || -L "${candidate}" ]] || continue
     if [[ -n "${required}" && ! -e "${candidate}/${required}" ]]; then
       continue
     fi
     # 키 = 시각 숫자 14자리 + 같은 초 순번(없으면 1). 로캘과 무관하게 비교.
     tail="${candidate##*/}"
-    tail="${tail#"${bundle}"-}"
+    tail="${tail#"${DIR_PREFIX}-${bundle}"-}"
     key="${tail:0:8}${tail:9:6}1"
     [[ "${tail}" == *Z-? ]] && key="${tail:0:8}${tail:9:6}${tail: -1}"
     if (( 10#${key} > 10#${best_key} )); then
@@ -353,7 +357,7 @@ judge_bundle() {
   local n=0 denied=0 changed=0 result="" table="" first
   load_bundle "${bundle}"
   load_reference "${bundle}"
-  dir="$(evidence::new_dir "${bundle}")" || exit 2
+  dir="$(evidence::new_dir "${DIR_PREFIX}-${bundle}")" || exit 2
   printf 'scp-recheck: 증거 ~/%s/%s · 비교 기준 %s\n' "${EVIDENCE_ROOT_NAME}" \
     "${dir##*/}" "${REFERENCE_SOURCE}" >&2
   caller_identity "${dir}"

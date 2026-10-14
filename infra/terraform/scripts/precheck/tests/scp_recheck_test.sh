@@ -348,6 +348,57 @@ expect_prefix_isolated() {
 }
 
 #######################################
+# 다른 도구의 증거 디렉터리(M17b 꼴 「<묶음>-<시각>」 · 「collect-<묶음>-
+# <시각>」)를 만든다 — 더 최근 시각이고, 모든 행 허용 결과 · 승인 표지를
+# 담는다. scp-recheck 가 이것을 앞 기준으로 집으면 판정이 OK 로 바뀐다.
+# Arguments:
+#   증거 루트, 디렉터리 이름.
+# Returns:
+#   만들지 못하면 1.
+#######################################
+make_foreign_dir() {
+  local dir="$1/$2"
+  mkdir -m 700 -- "${dir}" || return 1
+  {
+    testlib::tsv iam:GetAccountAuthorizationDetails us-east-1 allow allowed True
+    testlib::tsv tag:GetTagKeys ap-northeast-2 allow allowed True
+  } >"${dir}/result.tsv" || return 1
+  printf '2999-12-31T00:00:00Z\n' >"${dir}/complete.txt" || return 1
+  testlib::tsv 2999-12-31T00:00:00Z forged forged >"${dir}/accepted.tsv"
+}
+
+#######################################
+# 장부 r1 #6: 증거 디렉터리 이름은 도구마다 겹치지 않는다. 같은 묶음 이름의
+# 다른 도구 디렉터리가 더 최근이어도 앞 기준 찾기 · 승인이 섞이지 않는다.
+#######################################
+expect_other_tool_dirs_ignored() {
+  local case_dir root name
+  case_dir="$(new_tree_case other-tool)" || {
+    testlib::fail "other-tool: 시험 준비 실패"
+    return
+  }
+  root="${case_dir}/home/.pokeclip-precheck"
+  run_recheck "${case_dir}" first gamma
+  expect_result other-tool-first 3 'SCP RECHECK CHANGED 1' 2 || return
+  for name in gamma-29991231T000000Z collect-gamma-29991231T000000Z; do
+    make_foreign_dir "${root}" "${name}" || {
+      testlib::fail "other-tool: 시험 준비 실패"
+      return
+    }
+  done
+  run_recheck "${case_dir}" second gamma
+  expect_result other-tool-second 3 'SCP RECHECK CHANGED 1' 2 || return
+  run_recheck "${case_dir}" accept --accept gamma --reason 'kty 답'
+  if [[ "${run_status}" -ne 0 ]] ||
+    [[ -z "$(find "${root}" -path '*/scp-gamma-*/accepted.tsv')" ]]; then
+    testlib::fail "other-tool: scp 판정을 승인하지 못함 — ${run_status}" \
+      "$(cat -- "${run_out}.stderr")"
+    return
+  fi
+  testlib::ok "other-tool → 다른 도구의 최근 디렉터리를 기준 · 승인에 섞지 않음"
+}
+
+#######################################
 # --accept 의 잘못된 쓰임은 종료 2: 판정 전 · 이유에 줄바꿈 · 두 번 승인 ·
 # 이유 없음.
 #######################################
@@ -390,7 +441,7 @@ expect_approved_link_rejected() {
       >"${repo}/evidence/result.tsv" ||
     ! printf '2026-01-01T00:00:00Z\tkty 답\n' >"${repo}/evidence/accepted.tsv" ||
     ! mkdir -m 700 -- "${root}" ||
-    ! ln -s -- "${repo}/evidence" "${root}/gamma-20260101T000000Z"; then
+    ! ln -s -- "${repo}/evidence" "${root}/scp-gamma-20260101T000000Z"; then
     testlib::fail "approved-link: 시험 준비 실패"
     return
   fi
@@ -449,6 +500,7 @@ main() {
   expect_accept
   expect_accept_keeps_denied
   expect_prefix_isolated
+  expect_other_tool_dirs_ignored
   expect_accept_misuse
   expect_approved_link_rejected
   expect_unverifiable_cases
