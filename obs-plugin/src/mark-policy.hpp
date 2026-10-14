@@ -3,13 +3,15 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace pokeclip {
 
 // A4 핫키 마킹 — 스트리머가 단축키로 「지금 이 순간」을 표시하면 누른 시각을 서버로 보낸다.
-// 여기는 OBS·curl 없이 시험하는 규칙만 둔다(본문·재시도 간격·버림·응답 판정·연타 거르기).
-// 서버 계약은 제안 단계다(Jira POK-119): POST /api/clip/streams/{streamToken}/marks,
-// Authorization: Bearer <passphrase>, 본문 {eventId, pressedAt, sentAt}. 카드 창 [T−30s, T+10s]은 서버가 정한다.
+// 여기는 OBS·curl 없이 시험하는 규칙만 둔다(주소·파생 값·헤더·본문·재시도 간격·버림·응답 판정·연타 거르기).
+// 규격 정본 = 위키 계약4 2B절(4B, 2026-10-14 POK-286): POST /api/clip/marks, Authorization: Bearer <파생 값>,
+// Idempotency-Key: <eventId>, 본문 {streamid, eventId, pressedAt, sentAt}. 받는 Clip 창구는 아직 없다(POK-119).
+// 카드 창 [T−30s, T+10s]은 서버가 정한다.
 
 inline constexpr int64_t kMarkDebounceMs = 2000;         // 이보다 가까운 누름은 한 번으로 친다
 inline constexpr int64_t kMarkRetryFirstMs = 1000;       // 1·2·4·8…초
@@ -17,18 +19,27 @@ inline constexpr int64_t kMarkRetryMaxMs = 30000;        // 재시도 간격 상
 inline constexpr int64_t kMarkRetryAfterMaxMs = 60000;   // 서버 Retry-After도 이 이상은 기다리지 않는다
 inline constexpr int64_t kMarkGiveUpMs = 10 * 60 * 1000; // 누른 지 10분이 지나도 못 보냈으면 버린다
 inline constexpr size_t kMarkQueueCap = 100;             // 대기열이 이보다 길면 가장 오래된 것부터 버린다
-inline constexpr const char *kMarkPathPrefix = "/api/clip/streams/";
-inline constexpr const char *kMarkPathSuffix = "/marks";
+inline constexpr const char *kMarkPath = "/api/clip/marks";
+// 파생 값의 메시지. 4D(kEndSignalHmacMessage)와 함수는 같고 이 값만 다르다 — 한쪽 값으로 다른 쪽 요청을 못 만든다.
+inline constexpr const char *kMarkHmacMessage = "pokeclip-4b-v1";
 
-// clipBase(끝 '/'는 무시) + /api/clip/streams/{token}/marks. 토큰은 경로 조각으로 퍼센트 인코딩한다.
-std::string MarkUrl(const std::string &clipBase, const std::string &streamToken);
+// clipBase(끝 '/'는 무시) + /api/clip/marks. 방송은 경로가 아니라 본문 streamid로 가리킨다(4C·4D와 같다).
+std::string MarkUrl(const std::string &clipBase);
 
-// passphrase를 Bearer로 실어 보내도 되는 주소인지 — https, 또는 이 PC 안(localhost·127.x·[::1])의 http만.
-// 그 밖의 평문 HTTP면 마크를 받지 않는다(mark_insecure) — 같은 네트워크에서 스트림 키 비밀이 보인다.
+// 파생 값을 Bearer로 실어 보내도 되는 주소인지 — https, 또는 이 PC 안(localhost·127.x·[::1])의 http만.
+// 그 밖의 평문 HTTP면 마크를 받지 않는다(mark_insecure) — 파생 값도 자격증명이라, 같은 네트워크에서 보이면
+// 그 키로 마크를 찍을 수 있다.
 bool IsSecureMarkBase(const std::string &base);
 
-// 서버로 보낼 본문. 시각은 모두 스트리머 PC 시계(UTC epoch ms) — 시계 어긋남은 서버가 sentAt으로 보정한다.
-std::string MarkBodyJson(const std::string &eventId, int64_t pressedAt, int64_t sentAt);
+// 파생 값 = HMAC-SHA256(passphrase, "pokeclip-4b-v1") 소문자 16진 64자. passphrase 원문은 보내지 않는다.
+std::string MarkDerivedValue(const std::string &passphrase);
+
+// 요청 헤더 네 줄(Content-Type · Accept · Idempotency-Key · Authorization). eventId는 본문의 것과 같은 값이다.
+std::vector<std::string> MarkRequestHeaders(const std::string &eventId, const std::string &derived);
+
+// 서버로 보낼 본문. streamid는 SRT에 쓴 원문 그대로(계약4C·4D와 같은 값·이름 — streamId가 아니다).
+// 시각은 모두 스트리머 PC 시계(UTC epoch ms) — 시계 어긋남은 서버가 sentAt으로 보정한다.
+std::string MarkBodyJson(const std::string &streamId, const std::string &eventId, int64_t pressedAt, int64_t sentAt);
 
 // 무작위 16바이트로 UUID v4 문자열을 만든다(버전·변형 비트를 고정한다). 재전송해도 같은 값을 쓴다 — 서버 멱등 열쇠.
 std::string FormatUuidV4(std::array<uint8_t, 16> bytes);
