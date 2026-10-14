@@ -1,4 +1,4 @@
-import { KEY_SUSPECT_HINT, reasonText } from './copy';
+import { KEY_SUSPECT_HINT, KEY_SUSPECT_NEXT, reasonText } from './copy';
 import { formatCountdown } from './format';
 import type { BridgeState } from './types';
 
@@ -88,7 +88,9 @@ export function statusView(state: BridgeState, nowMs: number): StatusView {
         : state.obsStreaming
         ? '본 방송을 다시 시작해야 전송할 수 있어요.'
         : '다음 방송을 시작하면 다시 전송해요.';
-    view.desc = retry.gaveUp ? `${GAVE_UP} ${next}` : next;
+    // 키 확인 안내를 남긴 채 멈췄으면 재페어링으로 안 풀리는 경우(auth 장애·운영자 차단)도 알린다 — 포기 문구 다음, 다음 행동 앞
+    const lead = [retry.gaveUp ? GAVE_UP : '', retry.keySuspect ? KEY_SUSPECT_NEXT : ''].filter(Boolean).join(' ');
+    view.desc = lead ? `${lead} ${next}` : next;
     return view;
   }
 

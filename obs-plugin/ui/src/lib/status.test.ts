@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { KEY_SUSPECT_HINT, REASON } from './copy';
+import { KEY_SUSPECT_HINT, KEY_SUSPECT_NEXT, REASON } from './copy';
 import { statusView } from './status';
 import type { BridgeState } from './types';
 
@@ -149,6 +149,31 @@ describe('statusView — 멈춘 뒤의 다음 행동', () => {
     expect(v.alert).toBe(KEY_SUSPECT_HINT);
     expect(v.retrying).toBe(false);
     expect(v.canSendNow).toBe(true);
+    // 재페어링해도 안 풀리는 거절도 있다(POK-287) — 설명줄이 대안으로 시작하고, 다음 행동은 그대로 뒤에 둔다
+    expect(v.desc.startsWith(KEY_SUSPECT_NEXT)).toBe(true);
+    expect(v.desc).toContain('본방은 그대로 두고');
+  });
+
+  it('거절이 이어지다 포기했으면 포기 → 대안 → 다음 행동 순서로 쓴다', () => {
+    const v = statusView(
+      state({
+        phase: 'error',
+        errorCode: 'connect_failed',
+        obsStreaming: true,
+        canSendNow: true,
+        retry: { attempt: 0, nextAt: 0, gaveUp: true, keySuspect: true },
+      }),
+      NOW,
+    );
+    expect(v.alert).toBe(KEY_SUSPECT_HINT);
+    expect(v.desc.startsWith('65분 동안')).toBe(true);
+    expect(v.desc.indexOf(KEY_SUSPECT_NEXT)).toBeGreaterThan(0);
+    expect(v.desc.indexOf(KEY_SUSPECT_NEXT)).toBeLessThan(v.desc.indexOf('본방은 그대로 두고'));
+  });
+
+  it('키 의심 없이 멈췄으면 대안 문장을 붙이지 않는다', () => {
+    const v = statusView(state({ phase: 'error', errorCode: 'connect_failed', obsStreaming: true, canSendNow: true }), NOW);
+    expect(v.desc).not.toContain(KEY_SUSPECT_NEXT);
   });
 
   it('본방을 다시 켜야 풀리는 오류에는 버튼을 주지 않는다', () => {

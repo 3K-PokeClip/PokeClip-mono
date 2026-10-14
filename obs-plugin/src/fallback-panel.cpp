@@ -282,8 +282,10 @@ void FallbackPanel::Render(const StateSnapshot &s)
 		marks_->setVisible(false);
 	}
 
-	// 재시도를 멈췄거나 포기한 뒤에도 키 확인 안내는 남긴다(재시도 중에는 위 재시도 줄이 보여 준다).
-	QString reason = !retrying && s.retry.keySuspect ? Text("Retry.KeyHint") : LocalizedReason(s.errorCode);
+	// 재시도를 멈췄거나 포기한 뒤에도 키 확인 안내는 남긴다(재시도 중에는 위 재시도 줄이 보여 준다). 재페어링해도 안
+	// 풀리는 거절(auth 장애·운영자 차단)도 있어 대안 한 문장을 잇는다 — 독 상태 카드의 설명줄과 같은 내용(POK-287).
+	QString reason = !retrying && s.retry.keySuspect ? Text("Retry.KeyHint") + " " + Text("Retry.KeyHintNext")
+							   : LocalizedReason(s.errorCode);
 	if (s.retry.gaveUp)
 		reason = Text("Retry.GaveUp") + " " + reason;
 	message_->setText(reason);
