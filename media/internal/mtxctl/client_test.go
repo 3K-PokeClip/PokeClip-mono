@@ -143,6 +143,11 @@ func replyJSON(status int, body string) http.HandlerFunc {
 // notFoundBody 는 원본이 없는 연결에 내는 본문이다(api.go 284–293 writeError · srt/server.go 25).
 const notFoundBody = `{"status":"error","error":"connection not found"}`
 
+// paddedNotFoundBody 는 notFoundBody 뒤를 공백으로 채워 size 바이트로 만든 온전한 JSON 이다.
+func paddedNotFoundBody(size int) string {
+	return notFoundBody + strings.Repeat(" ", size-len(notFoundBody))
+}
+
 // routeNotFoundBody 는 경로가 없거나 메서드가 다를 때 gin 이 내는 기본 404 본문이다 — text/plain(gin.go 33 · 759 ·
 // 764–779). 인증 미들웨어를 지난 뒤에 난다. 판 올림으로 조회 · kick 경로가 사라지면 이 꼴이다.
 const routeNotFoundBody = "404 page not found"
@@ -466,6 +471,10 @@ func TestSRTConnExists(t *testing.T) {
 		{name: "404_경로_없음", status: http.StatusNotFound, body: routeNotFoundBody, text: true, wantStatus: http.StatusNotFound},
 		{name: "404_빈_본문", status: http.StatusNotFound, body: "", wantStatus: http.StatusNotFound},
 		{name: "404_에러_꼴_아닌_JSON", status: http.StatusNotFound, body: `{"status":"ok"}`, wantStatus: http.StatusNotFound},
+		// 꼴은 본문 64 KiB 까지만 본다 — 같은 길이의 에러 꼴은 「없음」이고, 한 바이트라도 넘으면 앞 64 KiB 가
+		// 에러 꼴이어도 꼴이 아니다(잘린 앞부분만 보면 남은 연결을 「없음」으로 읽는다).
+		{name: "404_상한_길이_에러_꼴", status: http.StatusNotFound, body: paddedNotFoundBody(64 << 10), want: false},
+		{name: "404_상한_넘음_앞은_에러_꼴", status: http.StatusNotFound, body: paddedNotFoundBody(64<<10) + "x", wantStatus: http.StatusNotFound},
 		{name: "401", status: http.StatusUnauthorized, body: `{"status":"error","error":"authentication error"}`, wantStatus: http.StatusUnauthorized},
 		{name: "500", status: http.StatusInternalServerError, body: `{"status":"error","error":"terminated"}`, wantStatus: http.StatusInternalServerError},
 	}
@@ -515,6 +524,10 @@ func TestKickSRTConn(t *testing.T) {
 		{name: "404_경로_없음", status: http.StatusNotFound, body: routeNotFoundBody, text: true, wantStatus: http.StatusNotFound},
 		{name: "404_빈_본문", status: http.StatusNotFound, body: "", wantStatus: http.StatusNotFound},
 		{name: "404_에러_꼴_아닌_JSON", status: http.StatusNotFound, body: `{"status":"ok"}`, wantStatus: http.StatusNotFound},
+		// 꼴은 본문 64 KiB 까지만 본다 — 같은 길이의 에러 꼴은 ErrNotFound 이고, 한 바이트라도 넘으면 앞 64 KiB 가 에러
+		// 꼴이어도 꼴이 아니다(잘린 앞부분만 보면 끊지 못한 연결을 「이미 없음」으로 센다).
+		{name: "404_상한_길이_에러_꼴", status: http.StatusNotFound, body: paddedNotFoundBody(64 << 10), wantErr: ErrNotFound},
+		{name: "404_상한_넘음_앞은_에러_꼴", status: http.StatusNotFound, body: paddedNotFoundBody(64<<10) + "x", wantStatus: http.StatusNotFound},
 		{name: "401", status: http.StatusUnauthorized, body: `{"status":"error","error":"authentication error"}`, wantStatus: http.StatusUnauthorized},
 		{name: "500", status: http.StatusInternalServerError, body: `{"status":"error","error":"terminated"}`, wantStatus: http.StatusInternalServerError},
 	}
@@ -759,7 +772,8 @@ func TestClientReusesConnection(t *testing.T) {
 }
 
 // Options 와 Client 는 fmt · slog(Text · JSON) · encoding/json 어디로 찍어도 비번이 나오지 않는다 — 기동 로그 ·
-// 에러 문구에 통째로 넘겨도 새지 않게(설계 6절 누설 규칙 — API 비번). 다른 값의 공개 필드로 담겨 찍혀도 같다.
+// 에러 문구에 통째로 넘겨도 새지 않게(설계 6절 누설 규칙 — API 비번). 다른 값의 공개 · 비공개 필드로 담겨 찍혀도 같다.
+// 값과 맞지 않는 동사(구조체에 %p · Sprintf 의 %w)와 비공개 필드는 fmt 가 메서드를 부르지 않고 반사로 찍는 길이다.
 func TestOptionsAndClientHidePassword(t *testing.T) {
 	opt := Options{APIURL: "http://192.0.2.1:9997", User: testUser, Pass: NewSecret(testPass)}
 	c := newTestClient(t, opt.APIURL)
@@ -768,20 +782,24 @@ func TestOptionsAndClientHidePassword(t *testing.T) {
 		Client *Client
 		Value  Client
 	}{opt, c, *c}
+	hidden := struct {
+		opt    Options
+		client Client
+	}{opt, *c}
 
 	var outs []string
-	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"} {
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d", "%p", "%w"} {
 		outs = append(outs,
 			fmt.Sprintf(verb, opt), fmt.Sprintf(verb, &opt),
 			fmt.Sprintf(verb, c), fmt.Sprintf(verb, *c),
-			fmt.Sprintf(verb, holder))
+			fmt.Sprintf(verb, holder), fmt.Sprintf(verb, hidden))
 	}
 	for _, newHandler := range []func(io.Writer) slog.Handler{
 		func(w io.Writer) slog.Handler { return slog.NewTextHandler(w, nil) },
 		func(w io.Writer) slog.Handler { return slog.NewJSONHandler(w, nil) },
 	} {
 		var buf bytes.Buffer
-		slog.New(newHandler(&buf)).Info("probe", "opt", opt, "client", c, "value", *c)
+		slog.New(newHandler(&buf)).Info("probe", "opt", opt, "client", c, "value", *c, "hidden", hidden)
 		outs = append(outs, buf.String())
 	}
 	if b, err := json.Marshal(opt); err != nil {

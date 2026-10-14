@@ -14,7 +14,7 @@ import (
 	"github.com/3K-PokeClip/pokeclip-mono/media/internal/keyresolve"
 )
 
-// MaxDeadline 은 응답기가 인증 하나에 쓰는 시간의 상한이다. 225 의 B_obs 2.75초에서
+// MaxDeadline 은 응답기가 인증 하나에 쓰는 시간의 상한이다. 설계 3-7 의 B_obs 2.75초에서
 // 계산한 RT_max 다. 바깥 가드가 50ms 를 더하므로 경로 관리자를 붙잡는 상한은 1.175초다.
 // 동시 재접속 묶음의 여유는 이 값이 아니라 resolve 실측 분포가 정한다(3-7절).
 // 올리려면 B_obs 를 다시 재야 한다.

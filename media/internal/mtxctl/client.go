@@ -44,7 +44,8 @@ const maxListBytes = 64 << 20
 const connectTimeout = 2 * time.Second
 
 // maxDrainBytes 는 조회 · kick 응답 본문을 비울 때 읽는 상한이다. 비워야 전송이 TCP 연결을 다시 쓴다 — 절단의 확인은
-// 같은 id 를 여러 번 조회한다.
+// 같은 id 를 여러 번 조회한다. 404 본문이 Control API 의 에러 꼴인지 보는 상한이기도 하다 — 넘으면 꼴이
+// 아니다(isAPIError).
 const maxDrainBytes = 64 << 10
 
 // connIDPattern 은 MediaMTX 연결 id 의 꼴이다 — uuid.UUID 의 JSON(소문자 16진 8-4-4-4-12).
@@ -56,11 +57,6 @@ type Options struct {
 	APIURL string // http://<A_mtx>:9997 — IP 리터럴. 경로 · 사용자 정보 · 질의 · 조각은 받지 않는다
 	User   string // Control API 의 Basic 자격 — MediaMTX 가 응답기의 action=api 행에 묻는다. ':' 를 담을 수 없다
 	Pass   Secret `json:"-"`
-}
-
-// Format 은 o 를 Pass 없이 쓴다. 동사와 무관하게 같은 꼴이다.
-func (o Options) Format(f fmt.State, _ rune) {
-	fmt.Fprintf(f, "mtxctl.Options{APIURL:%q, User:%q, Pass:[REDACTED]}", o.APIURL, o.User)
 }
 
 // Client 는 Control API 의 SRT 연결 목록 · 조회 · kick 을 부른다. 여러 고루틴이 함께 써도 된다. 자격은 요청에 싣는
@@ -307,10 +303,12 @@ func (c *Client) KickSRTConn(ctx context.Context, id string) error {
 // 본다. 원본이 연결 없음에 내는 404 는 이 꼴이고(api_srt.go 41–42 · 61–62행), 경로가 없거나 메서드가 다를 때 gin 이
 // 내는 기본 404(text/plain 「404 page not found」 — gin.go 759행)는 아니다. 그래서 404 를 「연결 없음」으로 읽는 것은
 // 이 꼴일 때뿐이다 — 판 올림으로 조회 · kick 경로가 사라진 것을 「없음」으로 읽으면 끊지 못한 연결이 남는데 절단이
-// 끝까지 끊었다고 본다. 본문은 maxDrainBytes 까지만 읽고(넘으면 꼴이 아니다), 에러 문구는 보지도 싣지도 않는다.
+// 끝까지 끊었다고 본다. 본문이 maxDrainBytes 를 넘으면 앞부분이 이 꼴이어도 꼴이 아니다 — 잘린 앞부분만 보면 상한을 넘는
+// 404 를 「연결 없음」으로 읽는다. 에러 문구는 보지도 싣지도 않는다.
 func isAPIError(body io.Reader) bool {
-	raw, err := io.ReadAll(io.LimitReader(body, maxDrainBytes))
-	if err != nil {
+	// 상한보다 한 바이트 더 읽어야 넘쳤는지 알 수 있다.
+	raw, err := io.ReadAll(io.LimitReader(body, maxDrainBytes+1))
+	if err != nil || len(raw) > maxDrainBytes {
 		return false
 	}
 	var e struct {

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -347,9 +349,6 @@ func TestNewServerBoundsEveryPhase(t *testing.T) {
 	if srv.WriteTimeout <= guard {
 		t.Errorf("WriteTimeout = %v, want > %v (the guard) — a shorter one cuts answers near the deadline", srv.WriteTimeout, guard)
 	}
-	if srv.IdleTimeout <= 0 {
-		t.Errorf("IdleTimeout = %v, want > 0", srv.IdleTimeout)
-	}
 	if srv.MaxHeaderBytes <= 0 || srv.MaxHeaderBytes >= http.DefaultMaxHeaderBytes {
 		t.Errorf("MaxHeaderBytes = %d, want between 0 and %d", srv.MaxHeaderBytes, http.DefaultMaxHeaderBytes)
 	}
@@ -382,6 +381,62 @@ func TestRunClosesSlowHeaderConnections(t *testing.T) {
 	}
 	if elapsed > 3*time.Second {
 		t.Errorf("the server closed a connection with unfinished headers after %v, want within 3s", elapsed)
+	}
+}
+
+// 두 리스너는 답 하나 뒤 연결을 닫는다 — 답에 Connection: close 를 싣고 응답기가 먼저 닫는다(keep-alive 끔). MediaMTX 는
+// 인증을 물을 때마다 새 연결을 열고 답을 받으면 닫으므로, 응답기가 연결을 남겨 두면 MediaMTX 가 먼저 닫아 TIME_WAIT 이
+// MediaMTX 의 임시 포트에 쌓인다(newServer). 원시 연결 하나에 요청 둘을 이어 보내 첫 답 뒤 닫히는지 본다 — 둘째 요청에는
+// 답하지 않는다.
+func TestRunClosesConnectionAfterEachAnswer(t *testing.T) {
+	auth := newFakeAuth(t)
+	r := startResponder(t, newTestSite(t, ""), responderEnv(auth.srv.URL))
+	api := apiBody("127.0.0.1", testAPIUser, testAPIPass) // 4C 를 부르지 않고 200 이다
+	for _, tc := range []struct {
+		name, addr, request string
+	}{
+		{
+			name:    "인증_리스너",
+			addr:    r.listen,
+			request: fmt.Sprintf("POST /mediamtx/auth HTTP/1.1\r\nHost: ingest-auth.test\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(api), api),
+		},
+		{
+			name:    "healthz_리스너",
+			addr:    r.health,
+			request: "GET /healthz HTTP/1.1\r\nHost: ingest-auth.test\r\n\r\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn, err := net.Dial("tcp", tc.addr)
+			if err != nil {
+				t.Fatalf("dial %s: %v", tc.addr, err)
+			}
+			defer conn.Close()
+			if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				t.Fatalf("SetDeadline: %v", err)
+			}
+			// 쓰기 한 번이다 — 응답기의 첫 읽기가 두 요청을 다 가져가 닫을 때 받기 버퍼에 남는 바이트가 없다(남으면
+			// FIN 대신 RST 가 간다).
+			if _, err := io.WriteString(conn, tc.request+tc.request); err != nil {
+				t.Fatalf("write two requests: %v", err)
+			}
+			br := bufio.NewReader(conn)
+			resp, err := http.ReadResponse(br, nil)
+			if err != nil {
+				t.Fatalf("read the first answer: %v", err)
+			}
+			_, err = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				t.Fatalf("read the first answer's body: %v", err)
+			}
+			if resp.StatusCode != http.StatusOK || !resp.Close {
+				t.Errorf("first answer = %d with Close %t, want 200 with Close true (Connection: close)", resp.StatusCode, resp.Close)
+			}
+			if n, err := br.Read(make([]byte, 1)); n != 0 || err != io.EOF {
+				t.Errorf("read after the first answer = %d byte(s), %v, want 0, EOF (closed without answering the second request)", n, err)
+			}
+		})
 	}
 }
 

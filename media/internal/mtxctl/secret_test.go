@@ -19,8 +19,7 @@ type secretOutput struct {
 }
 
 // Secret 은 문자열 동사 · %#v · slog 의 두 처리기에서 원문 대신 [REDACTED] 를 보인다(streamkey.Passphrase 와 같은 꼴 —
-// 설계 6절 누설 규칙). 값과 맞지 않는 동사 · encoding/json 으로 찍어도 원문은 없다. Options 는 Format 이 Pass 를 대신
-// 쓰므로 Secret 의 메서드는 Secret 을 따로 찍을 때 쓰인다. 실패 문구에는 원문을 싣지 않는다.
+// 설계 6절 누설 규칙). 값과 맞지 않는 동사 · encoding/json 으로 찍어도 원문은 없다. 실패 문구에는 원문을 싣지 않는다.
 func TestSecretPrintsRedacted(t *testing.T) {
 	s := NewSecret(testPass)
 	var outputs []secretOutput

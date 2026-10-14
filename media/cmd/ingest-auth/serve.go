@@ -30,7 +30,8 @@ const (
 )
 
 // 두 리스너의 http.Server 한도다. MediaMTX 는 인증을 물을 때마다 새 연결로 머리와 본문을 한 번에 보내고 답을 받으면
-// 닫는다(포크 auth/manager.go 227–237). 그래서 한도는 그 밖의 연결을 묶는 몫이다.
+// 닫는다(포크 auth/manager.go 227–237). 그래서 한도는 그 밖의 연결을 묶는 몫이다. 두 서버는 답 하나 뒤 연결을 닫으므로
+// (newServer — keep-alive 끔) 다음 요청을 기다리는 한도(IdleTimeout)는 두지 않는다.
 const (
 	// readHeaderTimeout 은 머리를 다 받기까지의 상한이다. 머리 단계는 처리기의 출발지 검사 앞이라 누구든 연결을
 	// 붙잡을 수 있다 — Go 의 기본은 시한이 없다.
@@ -42,8 +43,6 @@ const (
 	// writeTimeout 은 머리를 읽은 뒤 응답을 다 쓰기까지의 상한이다. 가드보다 길어야 시한 근처의 200 이 끊기지 않는다.
 	// 답을 읽지 않는 상대가 쓰기를 붙잡는 것을 묶는다.
 	writeTimeout = 3 * time.Second
-	// idleTimeout 은 다음 요청을 기다리는 상한이다. MediaMTX 는 연결을 다시 쓰지 않으므로 그 밖의 연결을 묶는다.
-	idleTimeout = 30 * time.Second
 	// maxHeaderBytes 는 머리 크기의 상한이다. MediaMTX 의 머리는 수백 바이트다 — 기본 1 MiB 대신 묶는다.
 	maxHeaderBytes = 8 << 10
 )
@@ -189,16 +188,24 @@ func routed(pattern string, h http.Handler) http.Handler {
 // newServer 는 h 를 두 리스너 공통의 한도(위 상수)로 싼 http.Server 다. 서버 자신의 로그(처리기 패닉 · Accept 실패
 // 등)는 log 의 ERROR 로 낸다. ErrorLog 가 nil 이면 SetDefault 를 거쳐 INFO 로 나간다 — warn · error 에서도 남게 ERROR 로
 // 낸다.
+//
+// keep-alive 를 끈다 — 답에 Connection: close 를 싣고 답을 쓴 뒤 곧바로 닫아 응답기가 먼저 닫게 한다. TCP 는 먼저
+// 닫는 쪽에 TIME_WAIT(리눅스 60초)을 남긴다. 켜 두면 연결을 다시 쓰지 않는 MediaMTX 가 먼저 닫아 TIME_WAIT 이
+// MediaMTX 쪽 임시 포트에 쌓이고, 60초 안의 인증 요청(큰 cut 의 kick · SRT 포트로 쏟아지는 송출 시도)이 그 범위를
+// 채우면 MediaMTX 가 응답기에 인증을 묻지 못한다 — api 는 401(cut 의 api_auth)이고 모든 계정의 새 송출이 거부된다.
+// 응답기가 먼저 닫으면 TIME_WAIT 은 응답기의 고정 포트 쪽에 남아 상대의 임시 포트를 잡지 않는다. MediaMTX 는 연결을
+// 다시 쓰지 않으므로 잃는 것이 없다.
 func newServer(h http.Handler, log *slog.Logger) *http.Server {
-	return &http.Server{
+	srv := &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
-		IdleTimeout:       idleTimeout,
 		MaxHeaderBytes:    maxHeaderBytes,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelError),
 	}
+	srv.SetKeepAlivesEnabled(false)
+	return srv
 }
 
 // serveUntilDone 은 두 서버를 돌리다가 ctx 가 끝나거나 어느 서버가 스스로 멈추면 둘 다 우아하게 멈춘다. 두 Serve
