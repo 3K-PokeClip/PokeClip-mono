@@ -202,12 +202,18 @@ BridgeCallbacks::Reply PutConfig(const std::string &body)
 	// 잠금 아래 지금 설정에 독 값만 얹는다 — 키·배정 기억·독 첫 실행 표시·단축키 사본은 페어링·UI 스레드가 따로
 	// 저장하므로 이 요청이 읽은 옛 스냅샷으로 덮지 않는다. 환경 전환 여부도 지금 설정을 기준으로 다시 정한다 — 스냅샷을
 	// 읽은 뒤 다른 요청이 환경을 바꿨으면 이 요청이 옛 짝을 되살리거나 새 환경의 키를 옛 짝에 남기지 않게.
+	// server_env를 실은 요청(숨은 스위치 — 고급 설정 저장은 싣지 않는다)은 전환이면 키를 지우는 연결 해제다. 전환인지는
+	// 잠금 아래에서야 정해지므로 그런 요청은 늘 .bak에도 새 판을 쓴다 — 직전 판을 남기면 지운 키가 되살아난다(POK-285).
+	const ConfigStore::SaveBackup backup =
+		requestedEnv ? ConfigStore::SaveBackup::SameAsNew : ConfigStore::SaveBackup::KeepPrevious;
 	bool envSwitch = false;
-	if (!ConfigStore::Instance().Commit([&](PluginConfig &c) {
-		    const PluginConfig before = c;
-		    c.TakeDockSettings(next);
-		    envSwitch = ApplyPutServerEnv(c, before, requestedEnv);
-	    }))
+	if (!ConfigStore::Instance().Commit(
+		    [&](PluginConfig &c) {
+			    const PluginConfig before = c;
+			    c.TakeDockSettings(next);
+			    envSwitch = ApplyPutServerEnv(c, before, requestedEnv);
+		    },
+		    backup))
 		return {500, JsonReason(false, "save_failed")};
 
 	SyncStateFromConfig();
