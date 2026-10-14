@@ -1881,7 +1881,8 @@ TEST(reject_streak_flags_key_after_three_fast_rejects)
 	s.Record("connect_failed", 12);
 	CHECK(s.KeySuspect());
 
-	// 무응답(접속 타임아웃을 다 씀)은 서버가 죽은 것이지 키 문제가 아니다
+	// 시한(3초)을 다 쓴 실패는 세지 않는다 — 서버 꺼짐·무응답, 그리고 계정별 방송에서 3초를 넘긴 인증 거절도
+	// 이 모양이다(POK-287 — 늦은 거절은 일부러 세지 않는다)
 	s.Record("connect_failed", 3000);
 	CHECK(!s.KeySuspect());
 

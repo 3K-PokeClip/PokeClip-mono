@@ -14,7 +14,7 @@ import type {
 // 개발 전용 — `pnpm dev` 에서 토큰 없이 열면 쓴다.
 // ?mock=unpaired|idle|live|reconnecting|error|no_key|encoder|audio_overflow|audio_grouped|audio_live|audio_manual|
 //       audio_main_stream|audio_deferred|audio_prompt|audio_prompt_custom|mark_pending|mark_unsupported|
-//       retry_first|retry_key|gave_up|paired_midstream
+//       retry_first|retry_key|gave_up|key_stopped|key_gave_up|paired_midstream
 // &env=dev — 개발 서버로 붙은 상태(머리 「개발 서버」 표시·고급 설정 스위치). 기본은 운영(POK-267).
 // 트랙 2~6 목록으로 오디오 배정 상태를 만든다 (트랙 1은 늘 최종 믹스라 싣지 않는다). mainStream은 본방 트랙 번호.
 const src = (key: string, name: string, kind: AudioKind): AudioSource => ({ key, name, kind });
@@ -124,6 +124,24 @@ export function createMockBridge(scenario: string): Bridge {
       canSendNow: true,
       checks: { ...liveChecks },
       retry: { ...NO_RETRY, gaveUp: true },
+    },
+    // 거절이 이어지다 「재시도 중지」 — 키 확인 안내와 대안 문장이 남는다(POK-287)
+    key_stopped: {
+      phase: 'error',
+      obsStreaming: true,
+      errorCode: 'connect_failed',
+      canSendNow: true,
+      checks: { ...liveChecks },
+      retry: { ...NO_RETRY, keySuspect: true },
+    },
+    // 거절이 이어지다 65분을 다 써서 포기 — 포기 문구 → 대안 → 다음 행동이 한 설명줄에 쌓인다
+    key_gave_up: {
+      phase: 'error',
+      obsStreaming: true,
+      errorCode: 'connect_failed',
+      canSendNow: true,
+      checks: { ...liveChecks },
+      retry: { ...NO_RETRY, gaveUp: true, keySuspect: true },
     },
     // 페어링 없이 본방을 시작한 뒤 방송 중에 페어링했다 — 우리 송출은 아직 시작 전
     paired_midstream: { phase: 'idle', obsStreaming: true, canSendNow: true },
