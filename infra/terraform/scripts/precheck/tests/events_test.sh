@@ -48,22 +48,23 @@ setup_tree() {
     event_row ap-northeast-2 AssumeRole ev-1 sts
     event_row ap-northeast-2 AssumeRole ev-2 sts
     event_row ap-northeast-2 AddPermission ev-3 lambda
-    event_row ap-northeast-2 AddPermission ev-4 sns
-    event_row us-east-1 AttachUserPolicy ev-5 iam
+    event_row ap-northeast-2 AddPermission ev-4 sns '2026-10-13T05:30:00+00:00'
+    event_row us-east-1 AttachUserPolicy ev-5 iam '1791874800.0'
     event_row ap-northeast-2 AttachUserPolicy ev-6 iam
   } >"${case_dir}/in/events.tsv"
 }
 
 #######################################
-# 가짜 이벤트 표의 행 하나(시각은 고정 · 주체는 가짜 사용자 이름).
+# 가짜 이벤트 표의 행 하나(주체는 가짜 사용자 이름). 시각은 aws CLI 가 낼 수
+# 있는 꼴 — ISO 8601(Z · +00:00) 또는 epoch 초.
 # Arguments:
-#   리전, 이벤트 이름, 이벤트 ID, 서비스(출처 앞부분).
+#   리전, 이벤트 이름, 이벤트 ID, 서비스(출처 앞부분), [시각].
 # Outputs:
 #   리전 · 이름 · ID · 출처 · 시각 · 주체(탭 구분).
 #######################################
 event_row() {
-  testlib::tsv "$1" "$2" "$3" "$4.amazonaws.com" '2026-10-13T03:00:00Z' \
-    "${FAKE_USER}"
+  testlib::tsv "$1" "$2" "$3" "$4.amazonaws.com" \
+    "${5:-2026-10-13T03:00:00Z}" "${FAKE_USER}"
 }
 
 #######################################
@@ -128,12 +129,13 @@ regions_for() {
 # 사례 4: 행마다 조회 리전 · 같은 ID 한 번 · 다른 출처 제외 · stdout 한 줄.
 #######################################
 expect_counts_and_regions() {
-  local case_dir log name want got
+  local case_dir log name want got since
   case_dir="$(new_tree_case)" || {
     testlib::fail "count: 시험 준비 실패"
     return
   }
-  run_events "${case_dir}" count --since "$(now_utc)"
+  since="$(now_utc)"
+  run_events "${case_dir}" count --since "${since}"
   if [[ "${run_status}" -ne 0 ||
     "$(cat -- "${run_out}.stdout")" != 'EVENTS 4' ]]; then
     testlib::fail "count: 종료 0 · 「EVENTS 4」 한 줄을 기대했으나" \
@@ -159,8 +161,13 @@ expect_counts_and_regions() {
     testlib::fail "count: 최근 --since 인데 90일 경고가 나옴"
     return
   fi
+  if grep 'cloudtrail lookup-events' -- "${log}" |
+    grep -qv -- "--start-time ${since} "; then
+    testlib::fail "count: --start-time 이 --since(${since})가 아닌 조회가 있음"
+    return
+  fi
   testlib::ok "count → EVENTS 4(두 리전 같은 ID 한 번 · 다른 출처 제외) ·" \
-    "행마다 조회 리전"
+    "행마다 조회 리전 · --start-time = --since"
 }
 
 #######################################
@@ -206,6 +213,63 @@ expect_no_leak() {
 }
 
 #######################################
+# 장부 r1 #5: 조회 응답의 꼴이 깨지면(빈 칸 접힘 · 칸 모자람 · 칸 남음 · 이벤트 ID ·
+# 출처 · 이름 · 시각 꼴) 0건으로 넘기지 않고 종료 2. 마지막 줄 뒤에
+# 줄바꿈이 없어도 그 이벤트를 센다.
+#######################################
+expect_malformed_lookup_rejected() {
+  local case_dir kind env_arg leaked
+  for kind in empty-source bad-id bad-source bad-time short extra-field \
+    bad-name; do
+    case_dir="$(new_tree_case)" || {
+      testlib::fail "lookup-${kind}: 시험 준비 실패"
+      return
+    }
+    env_arg=FAKE_AWS_LOOKUP=ok
+    case "${kind}" in
+      empty-source)
+        testlib::tsv us-east-1 AssumeRole ev-9 '' 2026-10-13T03:00:00Z \
+          "${FAKE_USER}" >>"${case_dir}/in/events.tsv"
+        ;;
+      bad-id)
+        event_row us-east-1 AssumeRole 'ev/9' sts >>"${case_dir}/in/events.tsv"
+        ;;
+      bad-source)
+        testlib::tsv us-east-1 AssumeRole ev-9 sts.example.com \
+          2026-10-13T03:00:00Z "${FAKE_USER}" >>"${case_dir}/in/events.tsv"
+        ;;
+      bad-time)
+        event_row us-east-1 AssumeRole ev-9 sts yesterday \
+          >>"${case_dir}/in/events.tsv"
+        ;;
+      *) env_arg="FAKE_AWS_LOOKUP=${kind}" ;;
+    esac
+    run_events "${case_dir}" "${kind}" "${env_arg}" --since "$(now_utc)"
+    if [[ "${run_status}" -ne 2 ]] ||
+      grep -q '^EVENTS ' -- "${run_out}.stdout"; then
+      testlib::fail "lookup-${kind}: 종료 2 · EVENTS 없음을 기대했으나" \
+        "${run_status} — $(cat -- "${run_out}.stdout")"
+      return
+    fi
+    leaked="$(testlib::leaks_outside_evidence "${case_dir}")"
+    if [[ -n "${leaked}" ]]; then
+      testlib::fail "lookup-${kind}: 증거 루트 밖 유출 — ${leaked}"
+      return
+    fi
+  done
+  case_dir="$(new_tree_case)" || return
+  run_events "${case_dir}" no-final-newline FAKE_AWS_LOOKUP=no-final-newline \
+    --since "$(now_utc)"
+  if [[ "${run_status}" -ne 0 ||
+    "$(cat -- "${run_out}.stdout")" != 'EVENTS 4' ]]; then
+    testlib::fail "lookup-no-final-newline: EVENTS 4 를 기대했으나" \
+      "${run_status} · $(cat -- "${run_out}.stdout")"
+    return
+  fi
+  testlib::ok "lookup-format → 깨진 응답 7종 종료 2 · 줄바꿈 없는 마지막 줄도 셈"
+}
+
+#######################################
 # 사례 6: 조회 실패 · 호출 자체의 AccessDenied · 잘못된 --since 는 종료 2 ·
 # EVENTS 줄 없음 · 유출 0.
 #######################################
@@ -225,10 +289,13 @@ expect_unverifiable_cases() {
       return
     fi
   done
-  for spec in 'bad-format 2026-10-13' 'no-value' 'no-option'; do
+  for spec in 'bad-format 2026-10-13' 'future 2999-01-01T00:00:00Z' \
+    'no-value' 'no-option'; do
     name="${spec%% *}"
     case "${name}" in
-      bad-format) run_events "${case_dir}" "${name}" --since "${spec#* }" ;;
+      bad-format | future)
+        run_events "${case_dir}" "${name}" --since "${spec#* }"
+        ;;
       no-value) run_events "${case_dir}" "${name}" --since ;;
       *) run_events "${case_dir}" "${name}" ;;
     esac
@@ -242,8 +309,16 @@ expect_unverifiable_cases() {
     testlib::fail "unverifiable: 증거 루트 밖 유출 — ${leaked}"
     return
   fi
-  testlib::ok "unverifiable → 조회 실패 · AccessDenied · 잘못된 --since 모두" \
-    "종료 2 · 유출 0"
+  # 빈 칸이 탭 IFS 로 접혀 세 칸처럼 읽히는 event_names.txt 행.
+  testlib::tsv sts.amazonaws.com '' AssumeRole us-east-1 \
+    >>"${case_dir}/tree/data/event_names.txt"
+  run_events "${case_dir}" collapsed-names --since "$(now_utc)"
+  if [[ "${run_status}" -ne 2 ]]; then
+    testlib::fail "collapsed-names: 종료 2 를 기대했으나 ${run_status}"
+    return
+  fi
+  testlib::ok "unverifiable → 조회 실패 · AccessDenied · 잘못된 · 미래 --since ·" \
+    "접힌 이름 행 모두 종료 2 · 유출 0"
 }
 
 main() {
@@ -251,6 +326,7 @@ main() {
   expect_counts_and_regions
   expect_ninety_day_warning
   expect_no_leak
+  expect_malformed_lookup_rejected
   expect_unverifiable_cases
   testlib::finish events_test
 }

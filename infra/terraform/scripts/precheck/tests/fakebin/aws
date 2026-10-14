@@ -26,7 +26,10 @@
 #   FAKE_AWS_EXPLICIT_DENY  explicitDeny 로 답할 목록(같은 꼴).
 #   FAKE_AWS_EVENTS         lookup-events 응답 표(리전 · 이름 · ID · 출처 ·
 #                           시각 · 주체, 탭 구분).
-#   FAKE_AWS_LOOKUP         ok(기본) · fail · denied-call.
+#   FAKE_AWS_LOOKUP         ok(기본) · fail · denied-call · short(ID · 출처 ·
+#                           이름 세 칸만) · extra-field(여섯째 칸이 붙음) ·
+#                           bad-name(이름 칸이 꼴 밖) ·
+#                           no-final-newline(마지막 줄 뒤 줄바꿈 없음).
 # 실패 응답의 표준 오류에는 일부러 가짜 계정 ID · 사용자 이름을 넣는다 —
 # 호출하는 스크립트가 그것을 옮겨 적지 않는지 시험이 본다.
 
@@ -195,6 +198,7 @@ simulate() {
 #######################################
 lookup_events() {
   local attribute name region row_region row_name id source time user
+  local out=""
   require_text_output "$@"
   case "${FAKE_AWS_LOOKUP:-ok}" in
     fail) call_failed ;;
@@ -207,11 +211,29 @@ lookup_events() {
   [[ -n "${FAKE_AWS_EVENTS:-}" ]] || exit 0
   while IFS=$'\t' read -r row_region row_name id source time user ||
     [[ -n "${row_region}" ]]; do
-    if [[ "${row_region}" == "${region}" && "${row_name}" == "${name}" ]]; then
-      printf '%s\t%s\t%s\t%s\t%s\n' "${id}" "${source}" "${name}" "${time}" \
-        "${user}"
-    fi
+    [[ "${row_region}" == "${region}" && "${row_name}" == "${name}" ]] ||
+      continue
+    case "${FAKE_AWS_LOOKUP:-ok}" in
+      short) out+="${id}"$'\t'"${source}"$'\t'"${name}"$'\n' ;;
+      extra-field)
+        out+="${id}"$'\t'"${source}"$'\t'"${name}"$'\t'"${time}"
+        out+=$'\t'"${user}"$'\t'"extra"$'\n'
+        ;;
+      bad-name)
+        out+="${id}"$'\t'"${source}"$'\t'"Bad Name!"$'\t'"${time}"
+        out+=$'\t'"${user}"$'\n'
+        ;;
+      *)
+        out+="${id}"$'\t'"${source}"$'\t'"${name}"$'\t'"${time}"
+        out+=$'\t'"${user}"$'\n'
+        ;;
+    esac
   done <"${FAKE_AWS_EVENTS}"
+  if [[ "${FAKE_AWS_LOOKUP:-ok}" == no-final-newline ]]; then
+    printf '%s' "${out%$'\n'}"
+  else
+    printf '%s' "${out}"
+  fi
 }
 
 main() {
