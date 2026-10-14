@@ -15,6 +15,17 @@
 #     HOME 과 그 위의 링크(macOS 의 /var 등)는 정규화로 풀고 넘어간다.
 #   - 디렉터리가 0700 이 아님.
 #
+# 거부 문구의 경로는 HOME 접두를 「~」 로 가린다 — 로컬 계정 이름을 표준
+# 오류에 내지 않는다(성공 경로를 알리는 문구와 같은 규칙).
+#
+# 전제(이 함수가 막지 않는 것 — 한계로 둔다):
+#   - 부르는 스크립트는 `umask 077` 로 돈다. 이 함수는 디렉터리만 0700 으로
+#     만들고, 그 안 파일의 0600 은 부르는 쪽 umask 가 정한다.
+#   - HOME 과 그 위 디렉터리는 남이 쓸 수 없다.
+#   - 같은 uid 의 다른 프로세스가 검사와 쓰기 사이에 경로를 바꾸는
+#     경쟁(TOCTOU)은 막지 못한다. bash 로 디렉터리를 원자적으로 고정하는
+#     것은 과설계라 하지 않는다.
+#
 # 사용: source lib/evidence.sh
 #       dir="$(evidence::new_dir <묶음>)" || exit 2
 
@@ -24,16 +35,45 @@ readonly EVIDENCE_ROOT_NAME='.pokeclip-precheck'
 readonly EVIDENCE_LABEL_PATTERN='^[A-Za-z0-9][A-Za-z0-9-]*$'
 
 #######################################
+# 경로의 HOME 접두(정규화한 것 · 적힌 그대로)를 「~」 로 바꾼다. HOME 밖
+# 경로는 그대로 둔다.
+# Globals:
+#   HOME
+# Arguments:
+#   경로.
+# Outputs:
+#   가린 경로.
+#######################################
+evidence::mask() {
+  local path="$1" home tilde='~'
+  for home in "$(cd -P -- "${HOME:-}" 2>/dev/null && pwd -P)" "${HOME:-}"; do
+    home="${home%/}"
+    [[ -n "${home}" ]] || continue
+    case "${path}" in
+      "${home}") path="${tilde}" ;;
+      "${home}/"*) path="${tilde}/${path#"${home}"/}" ;;
+      *) continue ;;
+    esac
+    break
+  done
+  printf '%s\n' "${path}"
+}
+
+#######################################
 # 거부를 알린다.
 # Arguments:
-#   사유.
+#   사유, [경로 — HOME 접두는 「~」 로 가림].
 # Outputs:
-#   표준 오류에 「EVIDENCE PATH REJECTED <사유>」.
+#   표준 오류에 「EVIDENCE PATH REJECTED <사유>[ — <경로>]」.
 # Returns:
 #   늘 2.
 #######################################
 evidence::reject() {
-  printf 'EVIDENCE PATH REJECTED %s\n' "$1" >&2
+  if [[ "$#" -ge 2 ]]; then
+    printf 'EVIDENCE PATH REJECTED %s — %s\n' "$1" "$(evidence::mask "$2")" >&2
+  else
+    printf 'EVIDENCE PATH REJECTED %s\n' "$1" >&2
+  fi
   return 2
 }
 
@@ -71,11 +111,11 @@ evidence::check_markers() {
   local dir="$1"
   while :; do
     if [[ -e "${dir}/.git" || -L "${dir}/.git" ]]; then
-      evidence::reject "저장소 표지(.git) — ${dir}"
+      evidence::reject "저장소 표지(.git)" "${dir}"
       return
     fi
     if [[ -e "${dir}/.obsidian" || -L "${dir}/.obsidian" ]]; then
-      evidence::reject "볼트 표지(.obsidian) — ${dir}"
+      evidence::reject "볼트 표지(.obsidian)" "${dir}"
       return
     fi
     [[ -z "${dir}" || "${dir}" == / ]] && return 0
@@ -110,7 +150,7 @@ evidence::check_dir() {
   local path="$1" root rel component current real
   root="$(evidence::root)" || return 2
   if [[ "${path}" != "${root}" && "${path}" != "${root}/"* ]]; then
-    evidence::reject "루트 밖 — ${path}"
+    evidence::reject "루트 밖" "${path}"
     return
   fi
   current="${root}"
@@ -118,17 +158,17 @@ evidence::check_dir() {
   rel="${rel#/}"
   while :; do
     if [[ -L "${current}" ]]; then
-      evidence::reject "심볼릭 링크 — ${current}"
+      evidence::reject "심볼릭 링크" "${current}"
       return
     fi
     if ! evidence::is_private "${current}"; then
-      evidence::reject "0700 디렉터리가 아님 — ${current}"
+      evidence::reject "0700 디렉터리가 아님" "${current}"
       return
     fi
     [[ -z "${rel}" ]] && break
     component="${rel%%/*}"
     if [[ "${component}" == . || "${component}" == .. ]]; then
-      evidence::reject "루트 밖 — ${path}"
+      evidence::reject "루트 밖" "${path}"
       return
     fi
     current="${current}/${component}"
@@ -139,11 +179,11 @@ evidence::check_dir() {
     fi
   done
   real="$(cd -P -- "${path}" 2>/dev/null && pwd -P)" || {
-    evidence::reject "디렉터리가 없음 — ${path}"
+    evidence::reject "디렉터리가 없음" "${path}"
     return
   }
   if [[ "${real}" != "${root}" && "${real}" != "${root}/"* ]]; then
-    evidence::reject "루트 밖 — ${path}"
+    evidence::reject "루트 밖" "${path}"
     return
   fi
   evidence::check_markers "${real}"
@@ -163,17 +203,17 @@ evidence::check_dir() {
 evidence::new_dir() {
   local label="$1" root stamp dir suffix
   if ! [[ "${label}" =~ ${EVIDENCE_LABEL_PATTERN} ]]; then
-    evidence::reject "루트 밖으로 나갈 수 있는 이름 — ${label}"
+    evidence::reject "루트 밖으로 나갈 수 있는 이름" "${label}"
     return
   fi
   root="$(evidence::root)" || return 2
   evidence::check_markers "${root%/*}" || return 2
   if [[ -L "${root}" ]]; then
-    evidence::reject "심볼릭 링크 — ${root}"
+    evidence::reject "심볼릭 링크" "${root}"
     return
   fi
   if [[ ! -e "${root}" ]] && ! mkdir -m 700 -- "${root}" 2>/dev/null; then
-    evidence::reject "루트를 만들지 못함 — ${root}"
+    evidence::reject "루트를 만들지 못함" "${root}"
     return
   fi
   evidence::check_dir "${root}" || return 2
@@ -186,7 +226,7 @@ evidence::new_dir() {
   while ! mkdir -m 700 -- "${dir}" 2>/dev/null; do
     suffix=$((suffix + 1))
     if [[ "${suffix}" -gt 9 ]]; then
-      evidence::reject "디렉터리를 만들지 못함 — ${root}/${label}-${stamp}"
+      evidence::reject "디렉터리를 만들지 못함" "${root}/${label}-${stamp}"
       return
     fi
     dir="${root}/${label}-${stamp}-${suffix}"
