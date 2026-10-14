@@ -19,16 +19,20 @@ export function ConfirmDialog({
   onConfirm: () => Promise<void>;
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
   const [busy, setBusy] = useState(false);
 
+  // 처음 열릴 때만 취소에 포커스를 준다(AudioTracks LiveDialog와 같다). 상태가 올 때마다 부모가 다시 그려져 onCancel이
+  // 새 함수가 되므로, 콜백을 의존성에 두면 포커스가 그때마다 취소로 돌아간다(「바꾸기」로 옮긴 포커스가 Enter 직전에 빼앗긴다).
   useEffect(() => {
     cancelRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Escape') onCancelRef.current();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel]);
+  }, []);
 
   return (
     <div class={styles.scrim} onClick={onCancel}>

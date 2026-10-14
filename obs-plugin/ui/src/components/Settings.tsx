@@ -73,11 +73,17 @@ export function Settings({
       .getSettings()
       .then(setDraft)
       .catch(() => setMessage({ ok: false, text: '설정을 불러오지 못했어요.' }));
-  }, [open]);
+  }, [open, draft]);
 
   useEffect(() => {
     setDraft((d) => (d && d.audio_auto_assign !== autoAssign ? { ...d, audio_auto_assign: autoAssign } : d));
   }, [autoAssign]);
+
+  // 서버 환경이 다른 곳(다른 브리지 클라이언트)에서 바뀌었으면 초안의 수신 주소는 옛 짝이다 — 버리고 다시 불러온다.
+  // 플러그인도 알려진 기본 호스트를 지금 짝으로 맞추지만(ApplyPutServerEnv), 화면이 옛 주소를 보여 주지 않게.
+  useEffect(() => {
+    setDraft((d) => (d && d.server_env !== serverEnv ? null : d));
+  }, [serverEnv]);
 
   const set = <K extends keyof PluginSettings>(key: K, value: PluginSettings[K]) => {
     setDraft((d) => (d ? { ...d, [key]: value } : d));

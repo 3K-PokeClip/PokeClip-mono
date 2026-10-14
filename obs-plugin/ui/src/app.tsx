@@ -145,7 +145,7 @@ export function App({ bridge }: { bridge: Bridge }) {
           <Logo className={styles.logo} />
           <span class={styles.brandName}>PokeClip</span>
           {state.serverEnv === 'dev' ? (
-            <span class={styles.envTag} title="dev.pokeclip.com · media-dev.pokeclip.com">
+            <span class={styles.envTag} title={`${state.apiBase} · ${state.ingest}`}>
               개발 서버
             </span>
           ) : null}
