@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// warmP95 는 웜 resolve 왕복의 p95 다(설계 3-7 257 실측 41.3ms). connGap 은 연결마다 MediaMTX · 응답기가 더하는 몫
-// c 다(203 기준 B 6ms) — 처리기가 재지 않는 시간이라 요청 사이에 시계만 옮긴다.
+// warmP95 는 웜 resolve 왕복의 p95 다(설계 3-7 의 웜 p95 41.3ms). connGap 은 연결마다 MediaMTX · 응답기가 더하는
+// 몫 c 다(설계 3-7 의 c 6ms) — 처리기가 재지 않는 시간이라 요청 사이에 시계만 옮긴다.
 const (
 	warmP95 = 41300 * time.Microsecond
 	connGap = 6 * time.Millisecond

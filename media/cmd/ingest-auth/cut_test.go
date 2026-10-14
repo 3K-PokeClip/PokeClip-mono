@@ -332,8 +332,8 @@ func TestCutOutcome(t *testing.T) {
 		{name: "취소_ctx_꼴", err: errors.Join(context.Canceled), wantCode: 1, wantReason: "api_unreachable"},
 		{name: "시한과_기록", err: errors.Join(context.DeadlineExceeded, connLogErr), wantCode: 1, wantReason: "api_unreachable"},
 		{name: "목록_404", err: errors.Join(apiErr("list", "status", 404)), wantCode: 1, wantReason: "api_incompatible"},
-		// 연결 없음 404(본문이 Control API 의 에러 꼴)는 mtxctl 이 「없음」으로 바꿔 여기 오지 않는다 — 오는 404 는
-		// 경로 없음이다.
+		// 연결 없음 404(본문이 Control API 의 에러 꼴)는 mtxctl 이 「없음」으로 바꿔 여기 오지 않는다 — 오는 404 의
+		// 갈래는 mtxctl.Error 문서(경로 없음 · 에러 꼴 아님 · 빈 본문 · 상한 넘음 · 끝까지 못 읽음).
 		{name: "조회_404_는_꼴_불일치", err: errors.Join(apiErr("get", "status", 404)), wantCode: 1, wantReason: "api_incompatible"},
 		{name: "kick_404_는_꼴_불일치", err: errors.Join(apiErr("kick", "status", 404)), wantCode: 1, wantReason: "api_incompatible"},
 		{name: "목록_해석_실패", err: errors.Join(apiErr("list", "parse", 0)), wantCode: 1, wantReason: "api_incompatible"},

@@ -323,8 +323,11 @@ func boolToInt(b bool) int {
 // 먼저인지는 실제 시간의 경주라 여기서 가르지 않는다 — resolve 시한이 가드보다 guardMargin 앞이라는 것은
 // TestHandlerPublishResolveEndsBeforeGuard 가 결정적으로 보고, Deadline 0 의 기본값(MaxDeadline)은
 // TestNewHandlerAppliesDefaults 가 본다.
+//
+// 시한은 안쪽 고루틴 · 파일 읽기가 밀려도 resolve 에 닿을 만큼 둔다 — 느린 러너에서 시한이 resolve 앞에 지나면 처리기는
+// 맞게 publish_late(resolve 호출 0)로 끝나 이 시험의 단언과 갈린다.
 func TestHandlerPublishResolveHasDeadline(t *testing.T) {
-	const deadline = 30 * time.Millisecond
+	const deadline = 200 * time.Millisecond
 	f := newHandlerFixture(t, fixtureOptions{deadline: deadline})
 	f.auth.answerAll(authAnswer{hang: true})
 	start := time.Now()

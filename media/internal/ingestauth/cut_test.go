@@ -787,8 +787,8 @@ func TestCutCallerCancelDuringVerify(t *testing.T) {
 }
 
 // 확인 상한은 조회 사이의 기다림에서도 끝난다 — 조회가 연결이 남았다고 답한 뒤 다음 조회 때가 오기 전에 상한이 지나면 남은
-// id 와 ErrVerifyTimeout 이다. 다음 조회 때(1시간)는 오지 않게 두어 조회 중이 아니라 기다림에서 끝나게 한다(상한 20ms —
-// 확인 상한은 실제 시계의 ctx 시한이라 그만큼은 실제로 기다린다).
+// id 와 ErrVerifyTimeout 이다. 다음 조회 때(1시간)는 오지 않게 두어 조회 중이 아니라 기다림에서 끝나게 한다(상한 200ms —
+// 첫 조회가 느린 러너에서도 상한 안에 끝날 만큼 둔다. 확인 상한은 실제 시계의 ctx 시한이라 그만큼은 실제로 기다린다).
 func TestCutVerifyTimeoutBetweenLookups(t *testing.T) {
 	f := newCutFixture(t, 1<<20)
 	stuck := testConnID(1)
@@ -797,7 +797,7 @@ func TestCutVerifyTimeoutBetweenLookups(t *testing.T) {
 	f.mustAllow(t, testTokenA, stuck)
 	f.mtx.set(func(m *fakeMediaMTX) { m.sticky = true })
 	c := f.cutter()
-	c.verifyWithin, c.verifyEvery = 20*time.Millisecond, time.Hour
+	c.verifyWithin, c.verifyEvery = 200*time.Millisecond, time.Hour
 
 	rep, err := c.cut(t.Context(), testTokenA, NewDenyList(f.denyPath, discardLogger()), f.connDir, f.client)
 
