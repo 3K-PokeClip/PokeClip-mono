@@ -98,7 +98,7 @@
         "name": "PokeClip",
         "alternateName": "포키클립",
         "url": "https://pokeclip.com/",
-        "description": "방송이 끝나기 전에, 하이라이트는 이미 유튜브에.",
+        "description": "PokeClip(포키클립)은 치지직 스트리머와 편집자를 위한 하이라이트 클립 도구예요. 방송 중 채팅이 몰린 순간을 찾아 하이라이트 후보로 보여 주고, 웹 편집기에서 다듬어 스트리머의 YouTube 채널에 올려요. 지금은 무료 베타예요.",
         "applicationCategory": "MultimediaApplication",
         "operatingSystem": "Web",
         "inLanguage": "ko",
@@ -116,28 +116,38 @@
         "mainEntity": [
           {
             "@type": "Question",
-            "name": "무엇이 필요한가요?",
-            "acceptedAnswer": { "@type": "Answer", "text": "OBS Studio와 치지직 또는 SOOP 채널, 클립을 올릴 YouTube 채널이 있으면 돼요. 로그인은 Google 계정으로 해요." }
+            "name": "PokeClip(포키클립)은 어떤 서비스인가요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "PokeClip(포키클립)은 치지직 스트리머와 편집자를 위한 하이라이트 클립 도구예요. 방송 중 채팅이 몰린 순간을 찾아 하이라이트 후보로 보여 주고, 웹 편집기에서 다듬어 스트리머의 YouTube 채널에 올려요. 지금은 무료 베타예요." }
           },
           {
             "@type": "Question",
-            "name": "방송 화질이나 PC 성능에 영향이 있나요?",
-            "acceptedAnswer": { "@type": "Answer", "text": "PokeClip으로도 같은 방송을 함께 보내기 때문에, 업로드 대역폭이 송출 한 줄만큼 더 필요해요." }
+            "name": "PokeClip을 쓰려면 무엇이 필요한가요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "OBS Studio와 치지직 채널, 클립을 올릴 YouTube 채널이 있으면 돼요. 로그인은 Google 계정으로 해요. SOOP은 지금 심사 중이에요." }
           },
           {
             "@type": "Question",
-            "name": "편집자도 비용을 내나요?",
-            "acceptedAnswer": { "@type": "Answer", "text": "아니요. 편집자는 무료예요. 스트리머가 초대하면 그 채널의 클립을 편집하고 올릴 수 있어요." }
+            "name": "PokeClip으로 만든 영상은 언제 YouTube에 올라가나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "편집기에서 「영상 만들기」를 누르면 영상이 완성되는 즉시 스트리머의 YouTube 채널에 올라가요. 제목·설명·공개 범위는 영상 만들기 전에 정하고, 완성본을 따로 확인하는 단계는 없어요. 공개 범위를 「공개」로 고르면 올라가는 즉시 누구나 볼 수 있어요." }
           },
           {
             "@type": "Question",
-            "name": "채팅이 적은 방송도 쓸 수 있나요?",
-            "acceptedAnswer": { "@type": "Answer", "text": "채팅이 적으면 자동 감지가 부정확할 수 있어서, 엉뚱한 카드를 띄우지 않아요. 그럴 땐 방송 중에 단축키로 원하는 순간을 직접 기록하면 돼요." }
+            "name": "PokeClip을 쓰면 방송 화질이나 PC 성능에 영향이 있나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "업로드 대역폭이 송출 한 줄만큼 더 필요해요. PokeClip으로도 같은 방송을 함께 보내기 때문이에요." }
           },
           {
             "@type": "Question",
-            "name": "Mac에서도 되나요?",
-            "acceptedAnswer": { "@type": "Answer", "text": "OBS 플러그인은 Windows를 먼저 지원해요. macOS 빌드는 시험 단계예요." }
+            "name": "편집자도 PokeClip 비용을 내나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "아니요, 편집자는 무료예요. 스트리머가 초대하면 그 채널의 클립을 편집하고 올릴 수 있어요." }
+          },
+          {
+            "@type": "Question",
+            "name": "채팅이 적은 방송도 PokeClip을 쓸 수 있나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "쓸 수 있어요. 채팅이 적으면 자동 감지가 부정확할 수 있어 엉뚱한 카드를 띄우지 않으니, 방송 중에 단축키로 원하는 순간을 직접 기록하면 돼요." }
+          },
+          {
+            "@type": "Question",
+            "name": "Mac에서도 PokeClip을 쓸 수 있나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "지금은 Windows가 먼저예요. OBS 플러그인의 macOS 빌드는 시험 단계예요." }
           }
         ]
       }
@@ -429,8 +439,8 @@
           <li class="step" data-step="4">
             <div class="step__text">
               <span class="step__num">04</span>
-              <h3 class="h3">보관함에서 확인하고, YouTube에 바로 공개</h3>
-              <p class="body muted">영상이 완성되면 보관함에서 확인하고, <strong>업로드</strong> 버튼만 누르면 연동한 YouTube 채널로 바로 올라가요.</p>
+              <h3 class="h3">영상 만들기 한 번에, YouTube까지</h3>
+              <p class="body muted">편집기에서 제목·설명·공개 범위를 정하고 <strong>영상 만들기</strong>를 누르면, 완성되는 즉시 연동한 YouTube 채널로 올라가요.</p>
             </div>
             <div class="step__screen mock screen-upload">
               <div class="mock__bar"><span>보관함</span><span class="status status--ok"><i></i>YouTube 공개</span></div>
@@ -680,11 +690,15 @@
         </header>
         <div class="faq__list">
           <img class="faq__peek" src="assets/poki/poki-peek.webp" alt="" aria-hidden="true" loading="lazy" />
-          <details><summary>무엇이 필요한가요?</summary><p>OBS Studio와 치지직 또는 SOOP 채널, 클립을 올릴 YouTube 채널이 있으면 돼요. 로그인은 Google 계정으로 해요.</p></details>
-          <details><summary>방송 화질이나 PC 성능에 영향이 있나요?</summary><p>PokeClip으로도 같은 방송을 함께 보내기 때문에, 업로드 대역폭이 송출 한 줄만큼 더 필요해요.</p></details>
-          <details><summary>편집자도 비용을 내나요?</summary><p>아니요. 편집자는 무료예요. 스트리머가 초대하면 그 채널의 클립을 편집하고 올릴 수 있어요.</p></details>
-          <details><summary>채팅이 적은 방송도 쓸 수 있나요?</summary><p>채팅이 적으면 자동 감지가 부정확할 수 있어서, 엉뚱한 카드를 띄우지 않아요. 그럴 땐 방송 중에 단축키로 원하는 순간을 직접 기록하면 돼요.</p></details>
-          <details><summary>Mac에서도 되나요?</summary><p>OBS 플러그인은 Windows를 먼저 지원해요. macOS 빌드는 시험 단계예요.</p></details>
+          <!-- POK-350: 답의 첫 문장에 결론을 둔다. 첫 문항이 사실 요약이고 llms.txt·JSON-LD(SoftwareApplication.description·FAQPage)와
+               글자까지 같다(scripts/check-seo.mjs가 확인) -->
+          <details><summary>PokeClip(포키클립)은 어떤 서비스인가요?</summary><p>PokeClip(포키클립)은 치지직 스트리머와 편집자를 위한 하이라이트 클립 도구예요. 방송 중 채팅이 몰린 순간을 찾아 하이라이트 후보로 보여 주고, 웹 편집기에서 다듬어 스트리머의 YouTube 채널에 올려요. 지금은 무료 베타예요.</p></details>
+          <details><summary>PokeClip을 쓰려면 무엇이 필요한가요?</summary><p>OBS Studio와 치지직 채널, 클립을 올릴 YouTube 채널이 있으면 돼요. 로그인은 Google 계정으로 해요. SOOP은 지금 심사 중이에요.</p></details>
+          <details><summary>PokeClip으로 만든 영상은 언제 YouTube에 올라가나요?</summary><p>편집기에서 「영상 만들기」를 누르면 영상이 완성되는 즉시 스트리머의 YouTube 채널에 올라가요. 제목·설명·공개 범위는 영상 만들기 전에 정하고, 완성본을 따로 확인하는 단계는 없어요. 공개 범위를 「공개」로 고르면 올라가는 즉시 누구나 볼 수 있어요.</p></details>
+          <details><summary>PokeClip을 쓰면 방송 화질이나 PC 성능에 영향이 있나요?</summary><p>업로드 대역폭이 송출 한 줄만큼 더 필요해요. PokeClip으로도 같은 방송을 함께 보내기 때문이에요.</p></details>
+          <details><summary>편집자도 PokeClip 비용을 내나요?</summary><p>아니요, 편집자는 무료예요. 스트리머가 초대하면 그 채널의 클립을 편집하고 올릴 수 있어요.</p></details>
+          <details><summary>채팅이 적은 방송도 PokeClip을 쓸 수 있나요?</summary><p>쓸 수 있어요. 채팅이 적으면 자동 감지가 부정확할 수 있어 엉뚱한 카드를 띄우지 않으니, 방송 중에 단축키로 원하는 순간을 직접 기록하면 돼요.</p></details>
+          <details><summary>Mac에서도 PokeClip을 쓸 수 있나요?</summary><p>지금은 Windows가 먼저예요. OBS 플러그인의 macOS 빌드는 시험 단계예요.</p></details>
         </div>
       </div>
     </section>
