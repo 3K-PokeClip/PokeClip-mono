@@ -203,7 +203,7 @@
     // 넓어져(높이 1,667px부터 100px 초과) 휠 한 칸이 그 안에 묻힌다
     const DEAD_PX = 60;
     const center = (n) => (n - 0.5) / 4;
-    let settled = null; // 마지막으로 멈춰 선 단계. 핀 밖이면 null
+    let entered = false; // 핀에 들어와 한 번이라도 스냅했나. 핀 밖이면 거짓
     let snapTimer = 0;
     const st = ScrollTrigger.create({
       trigger: '.how',
@@ -214,7 +214,7 @@
       onToggle: (s) => {
         // 앵커(#how)로 핀 시작점에 바로 내려앉으면 진행률이 안 바뀌어 onUpdate가 없다 — 들어온 순간에도 스냅을 예약한다
         if (s.isActive) schedule();
-        else settled = null;
+        else entered = false;
       },
       onUpdate: (s) => {
         const n = stepAt(s.progress);
@@ -236,18 +236,22 @@
     function snap(fromAnchor = false) {
       // 앵커 이동은 핀 시작점에서 1px쯤 못 미쳐 멈춰 isActive가 거짓이다 — 앵커가 부를 때만 시작점 앞 2px까지 핀 안으로 본다.
       // 스크롤이 부른 스냅은 핀 밖이면 아무것도 안 한다. 진행률이 딱 0·1인 경계도 밖이다(isActive가 거짓이고 onToggle이
-      // settled를 비운다) — 경계에서 돌면 「막 들어옴」으로 보고 1·4단계 가운데로 되끌어, 휠 한 칸씩으로는 못 빠져나간다
+      // entered를 내린다) — 경계에서 돌면 「막 들어옴」으로 보고 1·4단계 가운데로 되끌어, 휠 한 칸씩으로는 못 빠져나간다
       if (fromAnchor ? window.scrollY < st.start - 2 || window.scrollY > st.end : !st.isActive) return;
       const p = st.progress;
       const dead = DEAD_PX / (st.end - st.start);
       const seen = stepAt(p); // cur는 onUpdate가 한 번도 안 돌았으면(새로 열어 앵커로 바로 들어옴) 0이라 진행률에서 다시 센다
+      const c = center(seen);
+      // 막 들어왔으면(앵커 포함) 보이는 단계의 가운데로. 그 뒤로는 마지막으로 움직인 방향(st.direction)으로만 옮긴다 —
+      // 내려가던 중이면 가운데를 못 지났을 땐 그 단계, 지났으면 다음 단계로(올라가면 반대). 멈춰 선 단계를 기준으로 삼으면
+      // 스냅 도중 끼어든 스크롤(Lenis는 그 자리에서 이어 간다)을 「도착할 단계 가운데보다 위」로 읽어, 내리는 입력에도
+      // 한 단계 위로 되돌렸다(1단계→2단계 스냅 중 진행률 0.25·0.30에서 휠을 더 내리면 1단계로 돌아옴, 1800×1009 실측)
       let n = seen;
-      if (settled === null) settled = seen; // 막 들어왔으면 보이는 단계의 가운데로
-      else if (seen === settled) {
-        if (p > center(settled) + dead) n = settled + 1;
-        else if (p < center(settled) - dead) n = settled - 1;
+      if (entered && Math.abs(p - c) > dead) {
+        if (st.direction > 0 && p > c) n = seen + 1;
+        else if (st.direction < 0 && p < c) n = seen - 1;
       }
-      settled = gsap.utils.clamp(1, 4, n);
+      entered = true;
       const target = n < 1 ? 0 : n > 4 ? 1 : center(n); // 1~4 밖은 핀의 양 끝
       const y = st.start + target * (st.end - st.start);
       if (Math.abs(y - window.scrollY) < 1) return;
