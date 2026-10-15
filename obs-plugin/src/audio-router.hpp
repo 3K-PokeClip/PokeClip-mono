@@ -46,6 +46,7 @@ private:
 	static void OnSourceCreate(void *data, struct calldata *params);
 	static void OnSourceLoad(void *data, struct calldata *params);
 	static void OnSourceChanged(void *data, struct calldata *params);
+	static void OnSourceUpdated(void *data, struct calldata *params); // 앱 캡처의 대상 앱 변경(POK-290)
 	static void OnMixersChanged(void *data, struct calldata *params);
 	static void OnMonitoringChanged(void *data, struct calldata *params);
 	void SettleMonitoring(const std::map<std::string, int> &seen);

@@ -96,6 +96,9 @@ void ConfigStore::Load()
 			e.name = obs_data_get_string(item, "name");
 			e.assignedAt = obs_data_get_int(item, "assigned_at");
 			e.lastSeen = obs_data_get_int(item, "last_seen");
+			// POK-290 전 파일에는 없다 — 없음과 ""(앱을 모른 채 앉음)는 뜻이 달라 파일에 있을 때만 채운다.
+			if (obs_data_has_user_value(item, "app"))
+				e.app = obs_data_get_string(item, "app");
 			obs_data_release(item);
 			config_.audioTrackMap.push_back(std::move(e));
 		}
@@ -201,6 +204,8 @@ bool ConfigStore::SaveLocked(SaveBackup backupMode)
 		obs_data_set_string(item, "name", e.name.c_str());
 		obs_data_set_int(item, "assigned_at", e.assignedAt);
 		obs_data_set_int(item, "last_seen", e.lastSeen);
+		if (e.app)
+			obs_data_set_string(item, "app", e.app->c_str());
 		obs_data_array_push_back(map, item);
 		obs_data_release(item);
 	}
