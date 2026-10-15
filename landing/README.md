@@ -87,7 +87,7 @@ URL 파라미터:
 
 | 파일 | 역할 |
 |---|---|
-| `index.html` `<head>` | title·description·canonical(`https://pokeclip.com/`)·OG·Twitter 카드·파비콘, 구조화 데이터(JSON-LD `@graph`: Organization·WebSite·SoftwareApplication·FAQPage) |
+| `index.html` `<head>` | title·description·canonical(`https://pokeclip.com/`)·OG·Twitter 카드·파비콘, 네이버 소유 확인 메타(POK-353), 구조화 데이터(JSON-LD `@graph`: Organization·WebSite·SoftwareApplication·FAQPage) |
 | `robots.txt` · `sitemap.xml` | 검색·답변용 크롤러는 허용, 학습용 AI 크롤러는 차단(아래 「AI 답변 엔진」) + 사이트맵 주소. 사이트맵은 현재 판 세 주소(`/`·`/terms/`·`/privacy/`)만 — 지난 판은 noindex라 넣지 않습니다 |
 | `llms.txt` | AI 답변 엔진용 사실 요약과 주요 주소(아래 「AI 답변 엔진」) |
 | `favicon.ico` · `icon.svg` · `apple-touch-icon.png` | web의 브랜드 아이콘(`web/src/app`)을 그대로 복사했습니다. 원본을 다시 만들면(`pnpm run build:brand`) 다시 복사합니다 |
@@ -104,6 +104,7 @@ node --test 'landing/scripts/*.test.mjs'   # archive 회귀 테스트(임시 디
 - 대시보드(`app.`·`dev.`)는 web 루트 metadata가 noindex를 냅니다. `robots.txt` Disallow로 막지 않습니다 — 막으면 크롤러가 noindex를 읽지 못해 주소만 색인될 수 있습니다.
 - 시작 버튼은 `https://app.pokeclip.com/login`으로 바로 갑니다(시안 때의 안내 토스트는 지웠습니다).
 - 배포 뒤에만 되는 일(Search Console·Bing 등록, 카카오톡·페이스북 미리보기, 슬래시 없는 주소의 301 확인)은 POK-349에 남깁니다.
+- 네이버 서치어드바이저(POK-353): 발급받은 확인 메타 `naver-site-verification`을 홈 `<head>`에 넣어 두었습니다. 배포 뒤 서치어드바이저에서 소유 확인 → robots.txt 검증 → 사이트맵(`https://pokeclip.com/sitemap.xml`) 제출 → 수집 요청 순으로 합니다. 메타를 지우면 확인이 풀립니다(`check-seo`가 잡습니다).
 
 ### AI 답변 엔진 (POK-350)
 

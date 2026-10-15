@@ -1,9 +1,9 @@
-// 랜딩 검색 노출 검사 (POK-349 · POK-350). 의존성 없이 node만으로 돈다.
+// 랜딩 검색 노출 검사 (POK-349 · POK-350 · POK-353). 의존성 없이 node만으로 돈다.
 //
 //   node landing/scripts/check-seo.mjs
 //
 // 검색 결과·공유 미리보기는 배포 뒤에야 눈으로 확인할 수 있어서, 배포 전에 깨지면 모르고 지나가는 것만 지킨다:
-// 필수 메타와 절대 주소, canonical·sitemap·링크의 주소 꼴, 루트 정적 파일, 구조화 데이터가 보이는 본문과 같은지,
+// 필수 메타와 절대 주소, 네이버 소유 확인 메타, canonical·sitemap·링크의 주소 꼴, 루트 정적 파일, 구조화 데이터가 보이는 본문과 같은지,
 // AI 크롤러 정책(학습용 차단·답변용 허용), 사실 요약이 FAQ·JSON-LD·llms.txt에서 같은지.
 import { existsSync, readFileSync, statSync } from 'node:fs';
 
@@ -113,6 +113,11 @@ expect(metaOf(home, 'og:url') === `${SITE}/`, '홈 og:url이 canonical과 다르
 expect(
   metaOf(home, 'twitter:card') === 'summary_large_image',
   '홈 twitter:card가 summary_large_image가 아니다',
+);
+// 네이버 서치어드바이저 소유 확인(POK-353) — 메타를 지우면 확인이 풀린다. 값은 발급받은 것만(16진수 40자)
+expect(
+  /^[0-9a-f]{40}$/.test(metaOf(home, 'naver-site-verification') ?? ''),
+  '홈에 네이버 소유 확인(naver-site-verification) 메타가 없거나 발급 꼴(16진수 40자)이 아니다',
 );
 for (const [path, html] of Object.entries(pages)) {
   for (const key of ['og:image', 'twitter:image']) {
