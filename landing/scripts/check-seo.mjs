@@ -1,0 +1,214 @@
+// 랜딩 검색 노출 검사 (POK-349). 의존성 없이 node만으로 돈다.
+//
+//   node landing/scripts/check-seo.mjs
+//
+// 검색 결과·공유 미리보기는 배포 뒤에야 눈으로 확인할 수 있어서, 배포 전에 깨지면 모르고 지나가는 것만 지킨다:
+// 필수 메타와 절대 주소, canonical·sitemap·링크의 주소 꼴, 루트 정적 파일, 구조화 데이터가 보이는 본문과 같은지.
+import { existsSync, readFileSync, statSync } from 'node:fs';
+
+const root = new URL('..', import.meta.url);
+const raw = (path) => readFileSync(new URL(path, root), 'utf8');
+const SITE = 'https://pokeclip.com';
+const OG_MAX_BYTES = 300 * 1024;
+
+const failures = [];
+const expect = (ok, message) => {
+  if (!ok) failures.push(message);
+};
+
+// 태그 하나의 속성들. 값에 따옴표가 없는 꼴은 이 저장소에서 쓰지 않는다
+const attrs = (tag) =>
+  Object.fromEntries([...tag.matchAll(/([\w:-]+)="([^"]*)"/g)].map(([, k, v]) => [k, v]));
+const tags = (html, name) =>
+  [...html.matchAll(new RegExp(`<${name}\\b[^>]*>`, 'g'))].map((m) => attrs(m[0]));
+const metaOf = (html, key) =>
+  tags(html, 'meta').find((a) => a.property === key || a.name === key)?.content;
+const linksOf = (html, rel) => tags(html, 'link').filter((a) => a.rel === rel);
+const text = (html) =>
+  html
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(script|style)\b[\s\S]*?<\/\1>/g, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+// 사이트 절대 주소 → 랜딩 안의 파일
+const fileOf = (url) => url.slice(SITE.length + 1);
+
+// JPEG 크기(SOF 표지에서 읽는다) — 메신저 미리보기는 1200×630이 기준이다
+function jpegSize(buf) {
+  let i = 2;
+  while (i + 9 < buf.length) {
+    if (buf[i] !== 0xff) return null;
+    const marker = buf[i + 1];
+    if (marker === 0xff) {
+      i += 1;
+      continue;
+    }
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      return { width: buf.readUInt16BE(i + 7), height: buf.readUInt16BE(i + 5) };
+    }
+    i += 2 + buf.readUInt16BE(i + 2);
+  }
+  return null;
+}
+
+const pages = {
+  '/': raw('index.html'),
+  '/terms/': raw('terms/index.html'),
+  '/privacy/': raw('privacy/index.html'),
+};
+const home = pages['/'];
+
+// --- 대표 주소: 현재 판 세 쪽은 정본(끝 슬래시) 주소를 대표로 내걸고 색인을 막지 않는다
+for (const [path, html] of Object.entries(pages)) {
+  const canonical = linksOf(html, 'canonical');
+  expect(canonical.length === 1, `${path}에 canonical이 하나가 아니다(${canonical.length}개)`);
+  expect(canonical[0]?.href === `${SITE}${path}`, `${path}의 canonical이 ${SITE}${path}가 아니다`);
+  expect(
+    !/noindex/.test(metaOf(html, 'robots') ?? ''),
+    `${path}가 noindex다 — 현재 판은 색인돼야 한다`,
+  );
+  for (const rel of ['icon', 'apple-touch-icon']) {
+    for (const { href } of linksOf(html, rel)) {
+      expect(
+        existsSync(new URL(href.replace(/^\//, ''), root)),
+        `${path}의 ${rel} ${href} 파일이 없다`,
+      );
+    }
+  }
+  expect(linksOf(html, 'icon').length > 0, `${path}에 파비콘 링크가 없다`);
+  // 정본이 아닌 꼴로 잇으면 301을 한 번 더 탄다
+  expect(
+    !/href="\/(terms|privacy)(#[^"]*)?"/.test(html),
+    `${path}에 끝 슬래시 없는 약관·처리방침 링크가 있다`,
+  );
+}
+
+// --- 홈 메타: 공유 미리보기는 상대 주소 이미지를 못 읽는다
+const title = home.match(/<title>([^<]*)<\/title>/)?.[1] ?? '';
+expect(
+  title.length > 0 && !title.includes('시안'),
+  `홈 title이 비었거나 시안 제목이다: 「${title}」`,
+);
+const REQUIRED_META = [
+  'description',
+  'og:type',
+  'og:site_name',
+  'og:locale',
+  'og:url',
+  'og:title',
+  'og:description',
+  'og:image',
+  'og:image:width',
+  'og:image:height',
+  'og:image:alt',
+  'twitter:card',
+  'twitter:title',
+  'twitter:description',
+  'twitter:image',
+];
+for (const key of REQUIRED_META) expect(metaOf(home, key), `홈에 ${key}가 없다`);
+expect(metaOf(home, 'og:url') === `${SITE}/`, '홈 og:url이 canonical과 다르다');
+expect(
+  metaOf(home, 'twitter:card') === 'summary_large_image',
+  '홈 twitter:card가 summary_large_image가 아니다',
+);
+for (const [path, html] of Object.entries(pages)) {
+  for (const key of ['og:image', 'twitter:image']) {
+    const url = metaOf(html, key);
+    if (url === undefined) continue;
+    expect(url.startsWith(`${SITE}/`), `${path}의 ${key}가 절대 주소가 아니다: ${url}`);
+    if (!url.startsWith(`${SITE}/`)) continue;
+    const file = new URL(fileOf(url), root);
+    expect(existsSync(file), `${path}의 ${key} 파일이 없다: ${fileOf(url)}`);
+    if (!existsSync(file) || !/\.jpe?g$/.test(url)) continue;
+    const size = jpegSize(readFileSync(file));
+    expect(
+      size?.width === Number(metaOf(home, 'og:image:width')) &&
+        size?.height === Number(metaOf(home, 'og:image:height')),
+      `${fileOf(url)} 크기(${size?.width}×${size?.height})가 og:image:width·height와 다르다`,
+    );
+    expect(
+      statSync(file).size <= OG_MAX_BYTES,
+      `${fileOf(url)}가 ${OG_MAX_BYTES / 1024}KB를 넘는다`,
+    );
+  }
+}
+
+// --- robots.txt·sitemap.xml: 사이트맵은 현재 판 canonical과 같은 주소만
+expect(existsSync(new URL('robots.txt', root)), 'robots.txt가 없다');
+if (existsSync(new URL('robots.txt', root))) {
+  const robots = raw('robots.txt');
+  expect(robots.includes(`Sitemap: ${SITE}/sitemap.xml`), 'robots.txt에 사이트맵 주소가 없다');
+  // User-agent: * 묶음이 사이트 전체를 막으면 검색에서 통째로 빠진다
+  const star = robots.split(/\n\s*\n/).find((group) => /^User-agent:\s*\*\s*$/im.test(group)) ?? '';
+  expect(!/^Disallow:\s*\/\s*$/im.test(star), 'robots.txt가 모든 크롤러(*)에 사이트 전체를 막는다');
+}
+expect(existsSync(new URL('sitemap.xml', root)), 'sitemap.xml이 없다');
+if (existsSync(new URL('sitemap.xml', root))) {
+  const locs = [...raw('sitemap.xml').matchAll(/<loc>([^<]*)<\/loc>/g)].map((m) => m[1]).sort();
+  const canonicals = Object.keys(pages)
+    .map((path) => `${SITE}${path}`)
+    .sort();
+  expect(
+    JSON.stringify(locs) === JSON.stringify(canonicals),
+    `sitemap.xml 주소(${locs.join(', ')})가 현재 판 canonical(${canonicals.join(', ')})과 다르다`,
+  );
+}
+
+// --- 시작 버튼: 랜딩 호스트에는 /login이 없다 — 시안 때의 상대 주소·가로채기가 남으면 버튼이 죽는다
+expect(!home.includes('data-proto-link'), '홈에 시안용 data-proto-link가 남았다');
+expect(!/href="\/login"/.test(home), '홈에 상대 주소 /login 링크가 남았다(랜딩 호스트에는 없다)');
+
+// --- 구조화 데이터: 보이는 본문에 있는 것만
+const ldBlocks = [...home.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)];
+expect(ldBlocks.length === 1, `홈 JSON-LD가 하나가 아니다(${ldBlocks.length}개)`);
+let graph = [];
+try {
+  graph = JSON.parse(ldBlocks[0]?.[1] ?? '{}')['@graph'] ?? [];
+} catch (error) {
+  failures.push(`홈 JSON-LD를 읽지 못했다: ${error.message}`);
+}
+const node = (type) => graph.find((n) => n['@type'] === type);
+for (const type of ['Organization', 'WebSite', 'SoftwareApplication', 'FAQPage']) {
+  expect(node(type), `JSON-LD에 ${type}이 없다`);
+}
+const logo = node('Organization')?.logo;
+if (logo) {
+  expect(
+    logo.startsWith(`${SITE}/`) && existsSync(new URL(fileOf(logo), root)),
+    `Organization.logo 파일이 없다: ${logo}`,
+  );
+}
+const visible = text(home);
+const offer = node('SoftwareApplication')?.offers;
+if (offer?.price === '0' || offer?.price === 0) {
+  expect(
+    visible.includes('무료 베타'),
+    'JSON-LD 가격이 0원인데 본문에 「무료 베타」가 보이지 않는다',
+  );
+}
+expect(
+  !node('SoftwareApplication')?.aggregateRating && !node('SoftwareApplication')?.review,
+  'SoftwareApplication에 평점·리뷰가 있다 — 실제 평점이 없으면 넣지 않는다',
+);
+// FAQPage는 화면 FAQ(S10 <details>)와 순서·글자까지 같아야 한다
+const faqSection = home.match(/<section[^>]*id="faq"[\s\S]*?<\/section>/)?.[0] ?? '';
+const shown = [...faqSection.matchAll(/<summary>([\s\S]*?)<\/summary>\s*<p>([\s\S]*?)<\/p>/g)].map(
+  ([, q, a]) => ({ q: text(q), a: text(a) }),
+);
+const listed = (node('FAQPage')?.mainEntity ?? []).map((item) => ({
+  q: item.name,
+  a: item.acceptedAnswer?.text,
+}));
+expect(shown.length > 0, '화면 FAQ를 찾지 못했다');
+expect(
+  JSON.stringify(shown) === JSON.stringify(listed),
+  `FAQPage가 화면 FAQ와 다르다 —\n  화면: ${JSON.stringify(shown)}\n  JSON-LD: ${JSON.stringify(listed)}`,
+);
+
+if (failures.length > 0) {
+  console.error(failures.map((f) => `✗ ${f}`).join('\n'));
+  process.exit(1);
+}
+console.log('✓ 검색 노출 검사 통과');

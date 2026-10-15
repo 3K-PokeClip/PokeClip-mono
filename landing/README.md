@@ -63,7 +63,7 @@ URL 파라미터:
 | P1 wave | `assets/poki/poki-wave.webp` | (예비) | 미사용 |
 | 소품 | `assets/props/*.webp` | 말풍선 3종 → S3. 파형 → S7 음량 카드. 클립·재생 카드와 반짝이 → S11. 말풍선·클립·재생 카드·파형·반짝이 → S8 마키 띠 스티커 | 반영 (헤드폰·키캡은 미사용) |
 | A7 무대 배경 | `assets/img/bg-stage.webp` | S3 배경 | 반영 |
-| A6 OG | `assets/img/og-base.jpg` | `og:image` | 원본 그대로(로고·카피 합성 전) |
+| A6 OG | `assets/img/og.jpg`(원본 `og-base.jpg`) | `og:image` · `twitter:image` | 반영 — 원본 왼쪽에 로고·히어로 문구를 합성(`scripts/og/render.mjs`) |
 | 스티커 그리드 | — | — | 회색 배경을 지워야 해서 보류(마키 띠는 소품 이미지로 대체) |
 
 ## 카피 가드레일
@@ -83,9 +83,30 @@ URL 파라미터:
 
 단축키 기록(핫키 마킹)은 개발이 끝나 「준비 중」 없이 씁니다(2026-10-03).
 
+## 검색 노출 (POK-349)
+
+| 파일 | 역할 |
+|---|---|
+| `index.html` `<head>` | title·description·canonical(`https://pokeclip.com/`)·OG·Twitter 카드·파비콘, 구조화 데이터(JSON-LD `@graph`: Organization·WebSite·SoftwareApplication·FAQPage) |
+| `robots.txt` · `sitemap.xml` | 모든 크롤러 허용 + 사이트맵 주소. 사이트맵은 현재 판 세 주소(`/`·`/terms/`·`/privacy/`)만 — 지난 판은 noindex라 넣지 않습니다 |
+| `favicon.ico` · `icon.svg` · `apple-touch-icon.png` | web의 브랜드 아이콘(`web/src/app`)을 그대로 복사했습니다. 원본을 다시 만들면(`pnpm run build:brand`) 다시 복사합니다 |
+| `assets/img/og.jpg` · `assets/brand/pokeclip-logo-512.png` | 공유 미리보기(1200×630)와 JSON-LD 로고. `node landing/scripts/og/render.mjs`가 `scripts/og/og.html`을 헤드리스 Chrome으로 찍고 web의 sharp로 줄여 만듭니다 |
+| `scripts/check-seo.mjs` | 필수 메타, og:image 절대 URL, canonical·sitemap 주소 일치, 루트 정적 파일, JSON-LD 파싱, 화면 FAQ와 FAQPage 문장 일치 |
+
+```bash
+node landing/scripts/check-seo.mjs
+node --test 'landing/scripts/*.test.mjs'   # archive 회귀 테스트(임시 디렉터리에서 돈다)
+```
+
+- 구조화 데이터에는 보이는 본문에 있는 것만 씁니다. 가격 0원의 근거는 S9 「지금은 무료 베타예요」이고, FAQPage는 S10 FAQ와 글자까지 같습니다. FAQ를 고치면 JSON-LD도 같이 고칩니다(`check-seo`가 잡습니다).
+- SoftwareApplication은 평점·리뷰가 없어 Google 리치 결과 자격이 없습니다. 리뷰를 지어 넣지 않고 기계 판독용으로 둡니다.
+- 대시보드(`app.`·`dev.`)는 web 루트 metadata가 noindex를 냅니다. `robots.txt` Disallow로 막지 않습니다 — 막으면 크롤러가 noindex를 읽지 못해 주소만 색인될 수 있습니다.
+- 시작 버튼은 `https://app.pokeclip.com/login`으로 바로 갑니다(시안 때의 안내 토스트는 지웠습니다).
+- 배포 뒤에만 되는 일(Search Console·Bing 등록, 카카오톡·페이스북 미리보기, 슬래시 없는 주소의 301 확인)은 POK-349에 남깁니다.
+
 ## 이용약관 · 개인정보 처리방침
 
-랜딩(pokeclip.com)이 문서의 **원본**입니다. 대시보드(app.pokeclip.com)는 문서를 갖지 않고 `https://pokeclip.com/terms`·`/privacy`로 잇기만 합니다(`web/src/features/legal/legalInfo.ts`). Google OAuth 동의 화면의 처리방침 주소도 여기입니다. 랜딩을 SSG로 옮길 때 두 문서와 검사 스크립트를 함께 옮깁니다.
+랜딩(pokeclip.com)이 문서의 **원본**입니다. 대시보드(app.pokeclip.com)는 문서를 갖지 않고 `https://pokeclip.com/terms/`·`/privacy/`로 잇기만 합니다(`web/src/features/legal/legalInfo.ts`). Google OAuth 동의 화면의 처리방침 주소도 여기입니다. 랜딩을 SSG로 옮길 때 두 문서와 검사 스크립트를 함께 옮깁니다.
 
 | 파일 | 역할 |
 |---|---|
@@ -93,7 +114,7 @@ URL 파라미터:
 | `privacy/index.html` | 개인정보 처리방침 현재 판 → `/privacy/` |
 | `terms/<YYYY-MM-DD>/index.html` | 지난 판(그 시행일 판을 얼려 둔 복사본) → `/terms/2026-10-15/`. 처리방침도 같은 모양 |
 | `legal-versions.json` | **판 목록의 정본입니다.** 문서별로 새 판이 맨 앞이고, 시행일 드롭다운이 이 목록을 그립니다 |
-| `scripts/legal-versions.mjs` | 모든 판의 드롭다운을 목록대로 다시 쓰고, 개정 때 지금 판을 얼려 둡니다(`archive`). 얼린 판은 드롭다운 블록을 뺀 본문의 sha256을 목록에 적어, 나중에 본문이 바뀌면 `--check`가 실패합니다 |
+| `scripts/legal-versions.mjs` | 모든 판의 드롭다운을 목록대로 다시 쓰고, 개정 때 지금 판을 얼려 둡니다(`archive`). 얼릴 때 그 판의 대표 주소(canonical)를 그 판 주소로 바꾸고 `noindex`를 단 **뒤** 드롭다운 블록을 뺀 본문의 sha256을 목록에 적어, 나중에 본문이 바뀌면 `--check`가 실패합니다. 회귀 테스트는 `legal-versions.test.mjs` |
 | `legal.css` · `legal.js` | 문서 레이아웃과 시행일 드롭다운입니다. `legal.js`는 바깥 클릭·Esc로 닫기만 합니다. 드롭다운은 `<details>`라 JS 없이도 열립니다 |
 | `scripts/check-legal.mjs` | 빠지면 법 위반이 되는 문장을 지킵니다. 처리방침 필수 절 17개, YouTube 정책 주소, 치지직·SOOP 약관 준수·연동 해제 시 수집 중단과 삭제 문장, 14세 제한, 고의·중과실 면책 금지, 목차 링크, 드롭다운과 목록의 일치, 본문 시행일 문장과 목록의 일치, 얼린 판의 본문 지문, HTML에 내부 메모(🔴·「목표값」)가 없는지 |
 
@@ -106,7 +127,8 @@ node landing/scripts/check-legal.mjs --release  # 자리표시 〔 〕가 남으
 
 ```bash
 node landing/scripts/legal-versions.mjs archive terms 2026.11.01
-# ① 지금 판(예: 2026.10.15)을 terms/2026-10-15/index.html로 얼려 둔다 — 대표 주소도 그 판 주소로 바꾼다
+# ① 지금 판(예: 2026.10.15)을 terms/2026-10-15/index.html로 얼려 둔다 — 대표 주소도 그 판 주소로 바꾸고,
+#    검색 결과에 현재 판 대신 나오지 않게 noindex를 단다(얼린 뒤 손으로 넣으면 지문 검사가 깨진다)
 # ② legal-versions.json 맨 앞에 2026.11.01을 올리고 모든 판의 드롭다운을 다시 쓴다
 #    (지난 판에는 「이 약관은 ○○부터 ○○ 전까지 적용된 지난 판입니다 · 현재 판 보기」 안내가 붙는다)
 # ③ 그다음 terms/index.html 본문과 본문 속 시행일 문장(부칙)을 고치고 check-legal을 돌린다
@@ -116,8 +138,8 @@ node landing/scripts/legal-versions.mjs archive terms 2026.11.01
 - 시행일이 자리표시인 판은 `archive`가 거절합니다. 공개 전에 첫 판의 시행일을 `legal-versions.json`과 본문에 함께 채웁니다.
 - 자산 경로는 루트 기준(`/styles.css`, `/assets/...`)입니다. 지난 판이 한 단계 깊은 폴더에 있어도 그대로 열립니다. 그래서 문서 페이지는 `file://`로는 깨지고, 로컬 서버로 열어야 합니다.
 - **〔 〕는 공개 전에 채울 자리표시입니다.** 운영자 대표·보호책임자·저작권 침해 신고 담당자 이름과 시행일입니다.
-- 경로는 `/terms/`(디렉터리 index)입니다. `python3 -m http.server`는 `/terms`를 `/terms/`로 돌려 보내고, 정적 호스팅도 디렉터리 index를 켜면 그대로 동작합니다.
-- **`landing/` 폴더를 통째로 정적 호스팅에 올리지 않습니다.** 이 README와 `scripts/`까지 공개됩니다. 배포에는 HTML·CSS·JS·`assets/`만 올립니다.
+- 경로는 `/terms/`(디렉터리 index)이고 **끝 슬래시 꼴이 정본**입니다. canonical·sitemap·푸터·대시보드 링크가 모두 이 꼴입니다. `python3 -m http.server`는 `/terms`를 `/terms/`로 돌려 보내고, 정적 호스팅에서는 슬래시 없는 주소를 301로 보내게 합니다(Google OAuth 동의 화면 주소도 이 꼴로 맞춥니다).
+- **`landing/` 폴더를 통째로 정적 호스팅에 올리지 않습니다.** 이 README와 `scripts/`까지 공개됩니다. 배포에는 HTML·CSS·JS·`assets/`와 루트의 `robots.txt`·`sitemap.xml`·`favicon.ico`·`icon.svg`·`apple-touch-icon.png`만 올립니다.
 
 ### 문서 쓰는 원칙 (약관·처리방침 머리 주석에서 옮김)
 
