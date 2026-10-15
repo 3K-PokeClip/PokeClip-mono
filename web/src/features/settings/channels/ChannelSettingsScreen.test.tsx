@@ -132,6 +132,8 @@ describe('ChannelSettingsScreen — 연동 상태 표시', () => {
     renderWithProviders(<ChannelSettingsScreen />);
 
     expect(await screen.findByText('연동 끊김')).toBeInTheDocument();
+    // 재연동 안내는 「다시 연동」 버튼이 맡는다 — 문구에 다시 적지 않는다(유튜브 행과 같다)
+    expect(chzzk().getByText(/치지직에서 연동이 끊겼어요\.$/)).toBeInTheDocument();
     expect(chzzk().getByRole('button', { name: '다시 연동' })).toBeInTheDocument();
     // 서버 기준 이미 닫힌 행이라 DELETE가 무동작이다 — 눌러도 안 되는 버튼을 두지 않는다
     expect(chzzk().queryByRole('button', { name: '연동 해제' })).not.toBeInTheDocument();

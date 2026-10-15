@@ -11,22 +11,6 @@
   if (forced === 'full' || forced === 'lite' || forced === 'reduce') root.dataset.mode = forced;
   const mode = root.dataset.mode;
 
-  // ----- 프로토타입 링크: 실서비스 경로 안내 -----
-  const toastEl = $('[data-toast]');
-  let toastTimer;
-  function toast(msg) {
-    toastEl.textContent = msg;
-    toastEl.classList.add('is-on');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toastEl.classList.remove('is-on'), 2400);
-  }
-  $$('[data-proto-link]').forEach((a) =>
-    a.addEventListener('click', (e) => {
-      e.preventDefault();
-      toast(`실서비스에서는 ${a.getAttribute('href')}(Google 로그인)로 이동해요`);
-    }),
-  );
-
   // ----- 모바일 메뉴 -----
   const menuBtn = $('[data-menu-toggle]');
   const sheet = $('[data-sheet]');
@@ -262,5 +246,5 @@
     jumpIO.observe(jumpFig);
   }
 
-  window.PC_LP = { mode, toast, setStep, setLine, drawWave, speakers, PEAK_AT, galleryStops, galleryIndex, observers: { lineIO, stepIO } };
+  window.PC_LP = { mode, setStep, setLine, drawWave, speakers, PEAK_AT, galleryStops, galleryIndex, observers: { lineIO, stepIO } };
 })();

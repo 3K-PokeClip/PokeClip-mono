@@ -183,9 +183,11 @@ for (const [name, html] of Object.entries(pages)) {
   }
 }
 if (existsSync(webLegal)) {
-  for (const [, doc, id] of readFileSync(webLegal, 'utf8').matchAll(
-    /\/(terms|privacy)#([\w-]+)/g,
-  )) {
+  // 정본 주소는 끝 슬래시 꼴(/privacy/#retention)이다. 주소 꼴이 바뀌어 정규식이 하나도 못 잡으면 검사가 조용히
+  // 꺼지므로, 앵커가 적어도 하나(탈퇴 모달의 #retention)는 잡혀야 한다
+  const anchors = [...readFileSync(webLegal, 'utf8').matchAll(/\/(terms|privacy)\/?#([\w-]+)/g)];
+  expect(anchors.length > 0, '대시보드(legalInfo.ts)에서 약관·처리방침 앵커를 하나도 못 찾았다');
+  for (const [, doc, id] of anchors) {
     expect(
       pages[doc].includes(`id="${id}"`),
       `대시보드(legalInfo.ts)가 가리키는 ${doc}#${id} 절이 없다`,

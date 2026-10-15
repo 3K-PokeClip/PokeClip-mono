@@ -1,0 +1,6 @@
+# pokeclip.com — 랜딩·이용약관·개인정보 처리방침 (POK-349)
+# 대시보드(app.pokeclip.com)는 이 파일이 아니라 페이지의 noindex로 색인에서 뺀다.
+User-agent: *
+Allow: /
+
+Sitemap: https://pokeclip.com/sitemap.xml

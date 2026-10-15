@@ -10,10 +10,12 @@ const LANDING_URL = (process.env.NEXT_PUBLIC_LANDING_URL || 'https://pokeclip.co
   '',
 );
 
+// 정본은 끝 슬래시 꼴이다 — 문서가 디렉터리 index(terms/index.html)라 canonical·sitemap·판 목록이 모두 이 꼴이고,
+// 슬래시 없는 주소는 호스팅이 301로 보낸다(POK-349). 리다이렉트를 한 번 더 타지 않게 여기서도 같은 꼴로 잇는다
 export const LEGAL_URLS = {
-  terms: `${LANDING_URL}/terms`,
-  privacy: `${LANDING_URL}/privacy`,
-  privacyRetention: `${LANDING_URL}/privacy#retention`,
+  terms: `${LANDING_URL}/terms/`,
+  privacy: `${LANDING_URL}/privacy/`,
+  privacyRetention: `${LANDING_URL}/privacy/#retention`,
 } as const;
 
 // YouTube API Services Developer Policies III.A가 문구와 주소를 지정한다.
