@@ -1,7 +1,7 @@
 // 이용약관·개인정보 처리방침 정적 페이지 검사 (POK-269). 의존성 없이 node만으로 돈다.
 //
 //   node landing/scripts/check-legal.mjs            # 내용 검사
-//   node landing/scripts/check-legal.mjs --release  # + 자리표시 〔 〕가 남으면 실패 (공개 배포 전)
+//   node landing/scripts/check-legal.mjs --release  # + 자리표시 〈 〉가 남으면 실패 (공개 배포 전)
 //
 // 랜딩에는 테스트 장치가 없어서, 빠지면 법 위반이 되는 문장만 문자열로 지킨다.
 // 랜딩을 SSG로 옮기면 이 검사도 그쪽 테스트로 옮긴다.
@@ -212,10 +212,11 @@ try {
   expect(changed.length === 0, `얼린 지난 판의 본문이 바뀌었다: ${changed.join(', ')}`);
 
   // 현재 판 시행일이 본문 시행 문장(약관 부칙·처리방침 17절)과 같아야 한다 — archive 뒤 본문을 안 고치면 여기서 걸린다
+  // 시행일이 아직 자리표시(〈시행일 확정 후 기재〉)면 본문에도 같은 자리표시가 있어야 한다
   const koDate = (label) => {
+    if (!/^\d{4}\.\d{2}\.\d{2}$/.test(label)) return label;
     const [y, m, d] = label.split('.');
-    const part = (v, unit) => (/^\d+$/.test(v) ? `${Number(v)}${unit}` : v);
-    return `${y}년 ${part(m, '월')} ${part(d, '일')}`;
+    return `${y}년 ${Number(m)}월 ${Number(d)}일`;
   };
   const EFFECTIVE = { terms: '부터 시행합니다', privacy: '부터 적용합니다' };
   for (const [doc, tail] of Object.entries(EFFECTIVE)) {
@@ -240,8 +241,9 @@ try {
 }
 
 // 자리표시 —평소에는 알리기만 하고, --release에서는 실패시킨다. (머리 주석은 read가 이미 뺐다)
+// 지금 꼴은 〈… 확정 후 기재〉·〈… 지정 후 기재〉이고, 옛 꼴 〔 〕가 남아도 잡는다
 const placeholders = Object.entries(pages).flatMap(([name, html]) =>
-  [...html.matchAll(/〔[^〕]*〕/g)].map((m) => `${name}: ${m[0]}`),
+  [...html.matchAll(/〈[^〉]*〉|〔[^〕]*〕/g)].map((m) => `${name}: ${m[0]}`),
 );
 if (placeholders.length > 0) {
   const message = `자리표시 ${placeholders.length}곳이 남았다 — ${[...new Set(placeholders)].join(', ')}`;
