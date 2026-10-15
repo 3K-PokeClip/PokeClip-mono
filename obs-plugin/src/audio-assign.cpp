@@ -316,9 +316,18 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 		slotOf[s->key] = slot;
 		occupants[static_cast<size_t>(slot)].push_back(s);
 	};
+	auto appSlot = [&](const AudioSourceInfo *s) { // 같은 앱(같은 종류)이 앉은 가장 낮은 트랙
+		if (s->appId.empty())
+			return 0;
+		for (int k = 1; k <= kStemSlots; k++) {
+			for (const AudioSourceInfo *o : occupants[static_cast<size_t>(k)]) {
+				if (o->kind == s->kind && o->appId == s->appId)
+					return k;
+			}
+		}
+		return 0;
+	};
 	std::vector<std::string> losers;
-	for (const auto &[key, slot] : retargeted)
-		claimed[static_cast<size_t>(slot)] = true; // 다른 새 소스가 먼저 가져가지 않게 — 돌아올 자리다
 	for (const AudioTrackMapEntry &e : map) {
 		if (e.slot == 0)
 			continue;
@@ -330,6 +339,13 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 			losers.push_back(e.key);
 		else
 			seat(s, e.slot);
+	}
+	// 대상 앱을 바꿔 다시 줄 서는 소스의 옛 자리는 그 소스가 돌아올 자리라 적어 둔다 — 다른 새 소스가 먼저 가져가지 않게.
+	// 같은 앱이 이미 앉은 트랙으로 가거나 화면에 없어 이번에 줄 서지 않으면 적지 않는다 — 그 자리는 기억 없는 빈 트랙이다.
+	for (const auto &[key, slot] : retargeted) {
+		const AudioSourceInfo *s = candidateOf(key);
+		if (s && s->showing && appSlot(s) == 0)
+			claimed[static_cast<size_t>(slot)] = true;
 	}
 
 	// 4. 자리 없는 후보(기억이 없거나 본방 트랙에 밀렸다)를 우선순위로 줄 세운다. 기억 없는 소스는 방송 화면에
@@ -358,17 +374,6 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 	//    받는다. 같은 종류가 이미 앉은 (앱 모르는) 소스는 빈 자리가 「자리 없는 묶음 수」보다 많이 남을 때만 제 자리를
 	//    받고, 아니면 그 종류의 트랙에 묶인다. 빈 자리가 없으면 같은 종류의 첫 트랙, 그것도 없으면 우선순위가 가장 낮은
 	//    소스들이 있는 트랙에 묶인다. 앱 정보가 하나도 없으면 묶음 = 종류라 POK-290 전과 같다.
-	auto appSlot = [&](const AudioSourceInfo *s) { // 같은 앱(같은 종류)이 앉은 가장 낮은 트랙
-		if (s->appId.empty())
-			return 0;
-		for (int k = 1; k <= kStemSlots; k++) {
-			for (const AudioSourceInfo *o : occupants[static_cast<size_t>(k)]) {
-				if (o->kind == s->kind && o->appId == s->appId)
-					return k;
-			}
-		}
-		return 0;
-	};
 	auto kindSlot = [&](AudioKind kind) {
 		for (int k = 1; k <= kStemSlots; k++) {
 			for (const AudioSourceInfo *o : occupants[static_cast<size_t>(k)]) {

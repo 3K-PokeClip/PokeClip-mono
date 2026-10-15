@@ -1515,6 +1515,53 @@ TEST(audio_retargeted_source_reseats_alone)
 	CHECK_EQ(MapApp(r4, "uuid:x"), std::string("zoom.exe"));
 }
 
+// 빈 트랙이 없으면 다시 줄 선 소스도 6번 순서(같은 종류의 첫 트랙)대로 — 그 트랙이 지금 묶음이면 제자리에 남고 앱만 적는다.
+TEST(audio_retargeted_source_stays_when_tracks_are_full)
+{
+	AssignmentInput in;
+	in.now = 500;
+	in.map = {AppEntry("ch:3", 1, 10, ""),
+		  AppEntry("ch:1", 2, 10, ""),
+		  AppEntry("uuid:discord", 3, 10, "discord.exe"),
+		  AppEntry("uuid:x", 3, 400, ""),
+		  AppEntry("uuid:game", 4, 10, "game.exe"),
+		  AppEntry("uuid:bgm", 5, 10, "")};
+	in.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3, 0x03),
+		      Src("ch:1", "ch:1", AudioKind::Desktop, 1, 0x05),
+		      AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x09),
+		      AppSrc("uuid:x", "uuid:x", "chrome.exe", 101, 0x09),
+		      AppSrc("uuid:game", "uuid:game", "game.exe", 102, 0x11),
+		      Src("uuid:bgm", "uuid:bgm", AudioKind::Media, 103, 0x21)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:x"), 3);
+	CHECK_EQ(MapApp(r, "uuid:x"), std::string("chrome.exe"));
+	CHECK(r.writes.empty());
+	CHECK(r.mapChanged);
+
+	AssignmentInput again = in;
+	again.map = r.mapNext;
+	AssignmentResult r2 = ComputeAssignment(again);
+	CHECK_EQ(SlotOf(r2, "uuid:x"), 3);
+	CHECK(!r2.mapChanged);
+}
+
+// 같은 앱 트랙으로 가는 소스의 옛 자리는 예약하지 않는다 — 같은 계산에서 들어온 새 소스가 그 빈 트랙(기억 없음)을 먼저 받는다.
+TEST(audio_retarget_to_existing_app_frees_old_slot_for_new_source)
+{
+	AssignmentInput in;
+	in.now = 500;
+	in.map = {AppEntry("ch:3", 1, 10, ""), AppEntry("ch:1", 2, 10, ""),
+		  AppEntry("uuid:discord", 3, 10, "discord.exe"), AppEntry("uuid:x", 4, 400, "")};
+	in.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3, 0x03),
+		      Src("ch:1", "ch:1", AudioKind::Desktop, 1, 0x05),
+		      AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x09),
+		      AppSrc("uuid:x", "uuid:x", "discord.exe", 101, 0x11),
+		      Src("uuid:bgm", "BGM", AudioKind::Media, 102)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:x"), 3);   // 같은 앱 트랙으로
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 4); // 비워진 옛 자리 — 예약해 두면 5로 밀린다
+}
+
 // POK-290 전에 쓴 기억(app 없음)은 지금 앱을 적기만 한다 — 같은 앱 트랙이 따로 있어도 플러그인을 올렸다고 옮기지 않는다.
 TEST(audio_legacy_memory_adopts_app_without_moving)
 {
