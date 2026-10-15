@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -13,14 +14,18 @@
 //
 // 규칙
 //  - 후보 = 오디오를 믹스로 넘기는 소스(오디오를 안 넘기는 브라우저·모니터 전용은 제외).
-//  - 플러그인이 자리를 정하는 때는 둘뿐이다: 기억이 없는 새 소스가 방송 화면(프로그램)에 처음 나올 때, 그리고
-//    기억한 자리가 본방 트랙이 됐을 때. 그 밖에는 설정 파일의 기억대로 앉힌다 — 독에서 옮기거나 뺀 자리를 플러그인이
-//    되돌리지 않는다(POK-266). 한 번 앉은 소스는 화면에서 빠져도 기억으로 자리를 지킨다(ADR-070 트랙 이름의 전제).
+//  - 플러그인이 자리를 정하는 때는 셋뿐이다: 기억이 없는 새 소스가 방송 화면(프로그램)에 처음 나올 때, 기억한 자리가
+//    본방 트랙이 됐을 때, 그리고 속성에서 대상 앱을 바꾼 소스(POK-290 — 그 소스만 새 소스처럼). 그 밖에는 설정 파일의
+//    기억대로 앉힌다 — 독에서 옮기거나 뺀 자리를 플러그인이 되돌리지 않는다(POK-266). 한 번 앉은 소스는 화면에서 빠져도
+//    기억으로 자리를 지킨다(ADR-070 트랙 이름의 전제).
 //  - 새 소스는 우선순위(마이크 → 데스크탑 → 앱 → 미디어 → 브라우저 → 기타)로 줄 세워 가장 낮은 빈 트랙에 —
 //    빈 트랙 가운데서도 아무 기억도 없는 트랙을 먼저(지금 없는 소스가 돌아올 자리를 비워 둔다).
-//  - 자리가 남는 동안은 트랙당 소스 하나. 모자라면 트랙을 늘리는 대신 **비슷한 소스를 한 트랙에 묶는다**:
-//    아직 자리가 없는 종류가 먼저 빈 트랙을 받고, 같은 종류가 이미 앉은 트랙이 있으면 거기에 합류한다.
-//    같은 종류가 없으면 우선순위가 가장 낮은 소스들이 있는 트랙에 합류한다.
+//  - 묶음의 단위는 「종류」, 앱 캡처는 「종류 + 앱」이다(POK-290). 앱은 소스 설정의 캡처 대상(실행 파일·번들 ID)이고
+//    소스 이름은 보지 않는다. 같은 앱이 이미 앉은 트랙이 있으면 빈 트랙이 있어도 거기에 앉는다 — 앱 오디오 캡처는
+//    프로세스·번들 단위라 같은 앱 둘은 같은 소리다.
+//  - 자리가 남는 동안은 트랙당 묶음 하나. 모자라면 트랙을 늘리는 대신 **비슷한 소스를 한 트랙에 묶는다**:
+//    아직 자리가 없는 묶음이 먼저 빈 트랙을 받고, 같은 묶음이 이미 앉은 트랙이 있으면 거기에 합류한다.
+//    빈 트랙이 없으면 같은 종류의 첫 트랙에, 같은 종류도 없으면 우선순위가 가장 낮은 소스들이 있는 트랙에 합류한다.
 //  - 지금 없는 소스의 기억은 자리를 잡지 않는다 — 지우지 않고 남겨 두지만 그 자리는 다른 소스가 쓸 수 있다.
 //    돌아오면 기억대로 앉으므로 그 사이 들어온 소스와 같은 트랙을 쓸 수 있다 — 독이 보여 주고, 옮길 수 있다.
 //  - 독에서 뺀 소스(slot 0)는 어느 트랙에도 없이 본방 믹스에만 섞인다. 독·폴백이 「트랙 없음」으로 알린다.
@@ -40,6 +45,21 @@ int AudioKindPriority(AudioKind kind); // 작을수록 먼저 자리를 받는�
 AudioKind ClassifyAudioSourceId(const std::string &unversionedId);
 AudioKind ClassifyGlobalChannel(int channel); // 설정›오디오 전역 장치: 1·2 데스크탑, 3~6 마이크
 
+// 앱 캡처 소스의 설정 가운데 「어느 앱인가」를 가르는 값만 옮겨 담는다(OBS 32.2.1 키). audio-router.cpp가 채운다.
+struct AudioAppSettings {
+	std::string window;           // Windows wasapi·창·게임 캡처 "제목:클래스:실행파일" (칸 안의 ':'·'#'은 "#3A"·"#22")
+	std::string captureMode;      // game_capture capture_mode (기본 "any_fullscreen")
+	bool hasCaptureMode = false;  // capture_mode가 파일에 있다 — 없고 옛 키만 있으면 옛 형식
+	bool hasAnyFullscreen = false; // 옛 형식 키 capture_any_fullscreen이 파일에 있다
+	bool anyFullscreen = false;
+	int type = 0;                 // macOS sck_audio_capture 0 데스크탑·1 앱 / screen_capture 0 디스플레이·1 창·2 앱
+	std::string application;      // macOS 번들 ID — 다른 모드로 바꿔도 지난 값이 남는다
+};
+
+// 설정에서 캡처 대상 앱을 읽는다. Windows는 실행 파일 이름(ASCII 소문자), macOS는 번들 ID 그대로. 모르면 "" —
+// 전역 장치·모르는 타입·대상이 비었거나 모드상 앱이 없는 경우(전체 화면·핫키 게임 캡처, 데스크탑·디스플레이·창 모드).
+std::string AudioAppId(const std::string &unversionedId, const AudioAppSettings &settings);
+
 // 오디오를 낼 수 있는 입력 소스 하나. 열쇠는 전역 장치면 "ch:<채널>", 그 외엔 "uuid:<uuid>" —
 // 전역 장치는 설정에서 끄고 켜면 새로 만들어져 uuid가 바뀌므로 채널 번호로 기억한다.
 struct AudioSourceInfo {
@@ -54,6 +74,7 @@ struct AudioSourceInfo {
 	// 원래 체크 백업의 열쇠. 비우면 key. 전역 장치는 장면 컬렉션마다 따로 저장되므로(트랙 체크도 다르다)
 	// "ch:3@<컬렉션>"처럼 나눈다 — 배정 기억(key)은 컬렉션을 넘어 같은 트랙을 쓰려고 나누지 않는다.
 	std::string backupKey;
+	std::string appId; // AudioAppId — 비면 앱을 모른다(종류로만 묶는다)
 
 	bool Candidate() const { return audioActive && !monitorOnly; }
 	const std::string &BackupKey() const { return backupKey.empty() ? key : backupKey; }
@@ -65,6 +86,9 @@ struct AudioTrackMapEntry {
 	std::string name;
 	int64_t assignedAt = 0; // 유닉스 초. 독에서 옮겼으면 그 시각
 	int64_t lastSeen = 0;
+	// 앉을 때의 앱(AudioAppId, ""도 값이다). 지금 앱과 다르면 대상을 바꾼 것 — 그 소스만 새 소스로 다시 앉는다.
+	// 없으면 POK-290 전에 쓴 기억이다 — 지금 앱을 적기만 하고 자리는 그대로 둔다.
+	std::optional<std::string> app;
 
 	bool operator==(const AudioTrackMapEntry &) const = default;
 };
@@ -139,6 +163,7 @@ struct AudioSourceView {
 	std::string name;
 	AudioKind kind = AudioKind::Other;
 	std::string key; // 독이 넣기·빼기를 보낼 때 쓰는 열쇠 ("ch:N" · "uuid:…")
+	std::string appId; // 로그에만 보인다(독 상태에는 싣지 않는다)
 
 	bool operator==(const AudioSourceView &) const = default;
 };
@@ -187,7 +212,8 @@ bool HasCustomStemRouting(const std::vector<AudioSourceInfo> &sources, uint32_t 
 // 기억이 있는 소스(options.offTrack)는 올린다 — 그 장면을 띄우지 않고도 다시 넣을 수 있어야 한다.
 AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, const RoutingViewOptions &options);
 
-// 로그 한 줄: "T2 마이크/보조(mic) · T3 BGM(media), 알림(browser) · T4 – · T5 – · T6 – · no-track 0"
+// 로그 한 줄: "T2 마이크/보조(mic) · T3 BGM(media), 알림(browser) · T4 Discord(app:discord.exe) · T5 – · T6 – · no-track 0"
+// 앱을 아는 소스는 종류 대신 "app:<앱>"으로 찍는다.
 std::string DescribeRouting(const AudioRoutingView &view);
 
 } // namespace pokeclip

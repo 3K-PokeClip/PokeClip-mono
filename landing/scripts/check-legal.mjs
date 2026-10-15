@@ -1,7 +1,7 @@
 // 이용약관·개인정보 처리방침 정적 페이지 검사 (POK-269). 의존성 없이 node만으로 돈다.
 //
 //   node landing/scripts/check-legal.mjs            # 내용 검사
-//   node landing/scripts/check-legal.mjs --release  # + 자리표시 〔 〕가 남으면 실패 (공개 배포 전)
+//   node landing/scripts/check-legal.mjs --release  # + 자리표시 〈 〉가 남으면 실패 (공개 배포 전)
 //
 // 랜딩에는 테스트 장치가 없어서, 빠지면 법 위반이 되는 문장만 문자열로 지킨다.
 // 랜딩을 SSG로 옮기면 이 검사도 그쪽 테스트로 옮긴다.
@@ -81,13 +81,20 @@ expect(
   '약관에 YouTube 약관 구속 문장이 없다',
 );
 
-// 치지직·SOOP은 같은 기준이다 — SOOP 개발자 이용약관 심사에 필요한 문장(제11조 ④⑤⑰)을 두 플랫폼에 함께 쓴다.
-// 제11조 ⑰: 동의 철회를 주기적으로 확인하고 지체 없이 파기한다
+// 치지직·SOOP은 받는 정보·목적·권한은 같고, 연동 해제 뒤 처리만 각 플랫폼 약관을 따른다.
+// SOOP 개발자 이용약관 제11조 ⑰: 동의 철회를 주기적으로 확인하고 지체 없이 파기한다
 expect(
   text(pages.privacy).includes(
-    '해제하면 토큰을 폐기하고 그 채널의 정보를 더 받지 않으며, 그 채널에서 받은 개인정보는 지체 없이 파기합니다.',
+    '해제하거나 동의를 철회하면 토큰을 폐기하고 그 채널의 정보를 더 받지 않으며, 그 채널에서 받은 개인정보는 지체 없이 파기합니다.',
   ),
-  '처리방침에 치지직·SOOP 연동 해제 시 수집 중단과 지체 없는 파기가 없다',
+  '처리방침에 SOOP 연동 해제·동의 철회 시 수집 중단과 지체 없는 파기가 없다',
+);
+// 치지직 개발자 센터 이용약관에는 해제 시 파기 의무가 없다 — 해제해도 보관 기간(받은 지 60일)까지 둔다(ADR-090 결정 3·4)
+expect(
+  text(pages.privacy).includes(
+    '이미 받은 정보는 보관 기간(받은 지 60일)이 끝나거나 회원이 탈퇴하면 지체 없이 파기합니다.',
+  ),
+  '처리방침에 치지직 연동 해제 뒤 보관 기간과 파기 시점이 없다',
 );
 expect(
   text(pages.privacy).includes('연동 상태를 주기적으로 확인해'),
@@ -101,6 +108,35 @@ expect(
   text(pages.terms).includes('치지직과 SOOP 각각의 이용약관과 운영정책을 지키는 데 동의합니다'),
   '약관에 치지직·SOOP 약관 준수 문장이 없다',
 );
+
+// YouTube API Services Developer Policies III.D.2.c — 서비스 안에서 연동을 해제하면 토큰을 Google에 바로 revoke하고,
+// API 데이터는 철회 뒤 7일 안에 지운다. III.E.4.c — 토큰 밖 API 데이터는 30일마다 갱신하거나 지운다
+expect(
+  text(pages.privacy).includes(
+    '서비스에서 연동을 해제하면 Google에도 권한 취소를 바로 요청합니다.',
+  ),
+  '처리방침에 YouTube 연동 해제 시 Google 권한 취소 요청이 없다',
+);
+expect(
+  text(pages.privacy).includes(
+    '연동 중에는 30일마다 YouTube에서 다시 확인해 갱신하고, 서비스에서 연동을 해제하거나 탈퇴하면 7일 안에',
+  ),
+  '처리방침 13절에 YouTube 데이터의 30일 갱신과 해제·탈퇴 7일 삭제가 없다',
+);
+
+// 바뀐 약속의 옛 문장이 남지 않는다 — 탈퇴 유예(ADR-090), 확인 뒤 업로드(ADR-091), 해제해도 남는 Google 권한(III.D.2.c)
+for (const [doc, phrase] of [
+  ['privacy', '탈퇴 후 5일 이내'],
+  ['privacy', '확인하고 업로드를 요청하면'],
+  ['privacy', 'Google 쪽 권한은 남을 수 있으니'],
+  ['terms', '서비스에서 확인하고 요청한 클립'],
+  ['terms', 'Google 쪽에 남는 접근 권한은'],
+]) {
+  expect(
+    !text(pages[doc]).includes(phrase),
+    `${doc}에 바뀐 약속의 옛 문장 「${phrase}」이 남아 있다`,
+  );
+}
 
 // 처리방침은 회원이 아닌 시청자 정보와 그 권리 행사를 밝혀야 한다
 expect(
@@ -178,10 +214,11 @@ try {
   expect(changed.length === 0, `얼린 지난 판의 본문이 바뀌었다: ${changed.join(', ')}`);
 
   // 현재 판 시행일이 본문 시행 문장(약관 부칙·처리방침 17절)과 같아야 한다 — archive 뒤 본문을 안 고치면 여기서 걸린다
+  // 시행일이 아직 자리표시(〈시행일 확정 후 기재〉)면 본문에도 같은 자리표시가 있어야 한다
   const koDate = (label) => {
+    if (!/^\d{4}\.\d{2}\.\d{2}$/.test(label)) return label;
     const [y, m, d] = label.split('.');
-    const part = (v, unit) => (/^\d+$/.test(v) ? `${Number(v)}${unit}` : v);
-    return `${y}년 ${part(m, '월')} ${part(d, '일')}`;
+    return `${y}년 ${Number(m)}월 ${Number(d)}일`;
   };
   const EFFECTIVE = { terms: '부터 시행합니다', privacy: '부터 적용합니다' };
   for (const [doc, tail] of Object.entries(EFFECTIVE)) {
@@ -206,8 +243,9 @@ try {
 }
 
 // 자리표시 —평소에는 알리기만 하고, --release에서는 실패시킨다. (머리 주석은 read가 이미 뺐다)
+// 지금 꼴은 〈… 확정 후 기재〉·〈… 지정 후 기재〉이고, 옛 꼴 〔 〕가 남아도 잡는다
 const placeholders = Object.entries(pages).flatMap(([name, html]) =>
-  [...html.matchAll(/〔[^〕]*〕/g)].map((m) => `${name}: ${m[0]}`),
+  [...html.matchAll(/〈[^〉]*〉|〔[^〕]*〕/g)].map((m) => `${name}: ${m[0]}`),
 );
 if (placeholders.length > 0) {
   const message = `자리표시 ${placeholders.length}곳이 남았다 — ${[...new Set(placeholders)].join(', ')}`;
