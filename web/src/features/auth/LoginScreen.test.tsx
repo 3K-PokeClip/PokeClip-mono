@@ -76,14 +76,15 @@ describe('LoginScreen', () => {
     // 처리방침은 「동의」가 아니라 「확인」 대상이다.
     render(<LoginScreen />);
 
-    // 문서는 랜딩(pokeclip.com)의 정적 페이지다 — 대시보드(app.pokeclip.com)는 그 주소로 잇는다
+    // 문서는 랜딩(pokeclip.com)의 정적 페이지다 — 대시보드(app.pokeclip.com)는 그 주소로 잇는다.
+    // 정본은 끝 슬래시 꼴(canonical·sitemap과 같다)
     expect(screen.getByRole('link', { name: '이용약관' })).toHaveAttribute(
       'href',
-      'https://pokeclip.com/terms',
+      'https://pokeclip.com/terms/',
     );
     expect(screen.getByRole('link', { name: '개인정보 처리방침' })).toHaveAttribute(
       'href',
-      'https://pokeclip.com/privacy',
+      'https://pokeclip.com/privacy/',
     );
     expect(screen.getByText(/만 14세 이상이며/)).toBeInTheDocument();
     expect(screen.queryByText(/처리방침에 동의/)).not.toBeInTheDocument();
