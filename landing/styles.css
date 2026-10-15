@@ -935,11 +935,10 @@ strong { font-weight: 600; color: var(--t1); }
   .motion-full .rider { padding-top: 24px; margin-bottom: 12px; }
   .motion-full .how:not(.how--static) .steps { grid-template-columns: 5fr 6fr; }
 }
-/* 화면 높이 820px 이하 — 가장 긴 S4(제목+진행선+4단계)가 넘치지 않게 촘촘하게 */
+/* 화면 높이 820px 이하 — 가장 긴 S4(제목+진행선+4단계)가 넘치지 않게 촘촘하게. 진행선 위·아래와 제목 아래 여백은
+   위 1010px 블록이 이미 줄였다 — 여기서 다시 적으면 같은 특이도의 뒤 규칙이 이겨 창이 작을수록 여백이 도로 커진다 */
 @media (max-height: 820px) {
-  .motion-full .rider { padding-top: 48px; margin-bottom: 12px; }
   .motion-full .rider__poki { width: 48px; height: 48px; }
-  .motion-full .how .section-head .h2 { margin-bottom: 0; }
   .motion-full .step__text { padding-block: 8px; }
   .motion-full .step__text .h3 { font-size: 20px; margin: 2px 0 6px; }
   .motion-full .step__text .body { font-size: 15px; }
