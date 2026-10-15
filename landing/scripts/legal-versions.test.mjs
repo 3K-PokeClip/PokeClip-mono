@@ -7,14 +7,7 @@
 // 문서를 찾으므로 복사본은 복사본만 고친다.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import {
-  cpSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
@@ -56,7 +49,10 @@ test('지난 판은 자기 주소를 대표 주소로 내걸고 noindex를 단�
   run(dir, 'archive', 'terms', '2026.11.01');
 
   const frozen = read(dir, 'terms/2026-10-01/index.html');
-  assert.match(frozen, /<link rel="canonical" href="https:\/\/pokeclip\.com\/terms\/2026-10-01\/" \/>/);
+  assert.match(
+    frozen,
+    /<link rel="canonical" href="https:\/\/pokeclip\.com\/terms\/2026-10-01\/" \/>/,
+  );
   assert.match(frozen, /<meta name="robots" content="noindex" \/>/);
   assert.doesNotMatch(frozen, /href="https:\/\/pokeclip\.com\/terms\/" \/>/);
 
@@ -98,7 +94,11 @@ test('두 번 얼려도 드롭다운이 모든 판을 잇는다', () => {
     manifestOf(dir).terms.map((v) => v.path),
     ['/terms/', '/terms/2026-11-01/', '/terms/2026-10-01/'],
   );
-  for (const file of ['terms/index.html', 'terms/2026-11-01/index.html', 'terms/2026-10-01/index.html']) {
+  for (const file of [
+    'terms/index.html',
+    'terms/2026-11-01/index.html',
+    'terms/2026-10-01/index.html',
+  ]) {
     const html = read(dir, file);
     for (const path of ['/terms/', '/terms/2026-11-01/', '/terms/2026-10-01/']) {
       assert.ok(html.includes(`href="${path}"`), `${file} 드롭다운에 ${path}가 없다`);

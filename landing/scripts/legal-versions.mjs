@@ -8,13 +8,7 @@
 // 목록의 정본은 legal-versions.json이다(새 판이 맨 앞). 지난 판의 본문은 고치지 않는다 — 가입 시각으로 그 회원에게
 // 적용된 판을 찾는 근거라서다. 이 스크립트가 다시 쓰는 것은 각 판의 legal-versions 표시 사이 드롭다운 블록뿐이다.
 import { createHash } from 'node:crypto';
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = new URL('..', import.meta.url);
