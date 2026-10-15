@@ -123,10 +123,15 @@ for (const [path, html] of Object.entries(pages)) {
     expect(existsSync(file), `${path}의 ${key} 파일이 없다: ${fileOf(url)}`);
     if (!existsSync(file) || !/\.jpe?g$/.test(url)) continue;
     const size = jpegSize(readFileSync(file));
+    // 크기는 그 쪽이 적은 og:image:width·height와 견준다. 약관·처리방침처럼 홈 이미지를 같이 쓰면서 크기를 안 적은 쪽만
+    // 홈 값과 견준다 — 다른 이미지를 걸고 크기를 안 적으면 실패한다
+    const sized =
+      metaOf(html, 'og:image:width') !== undefined || url !== metaOf(home, key) ? html : home;
+    const width = Number(metaOf(sized, 'og:image:width'));
+    const height = Number(metaOf(sized, 'og:image:height'));
     expect(
-      size?.width === Number(metaOf(home, 'og:image:width')) &&
-        size?.height === Number(metaOf(home, 'og:image:height')),
-      `${fileOf(url)} 크기(${size?.width}×${size?.height})가 og:image:width·height와 다르다`,
+      size?.width === width && size?.height === height,
+      `${path}의 ${fileOf(url)} 크기(${size?.width}×${size?.height})가 og:image:width·height(${width}×${height})와 다르다`,
     );
     expect(
       statSync(file).size <= OG_MAX_BYTES,
