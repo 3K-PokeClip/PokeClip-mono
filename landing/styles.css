@@ -915,7 +915,9 @@ strong { font-weight: 600; color: var(--t1); }
 /* S4는 최소 한 화면 높이 — 가장 키 큰 라이브 화면(581px)이 단계 영역을 늘려 높이 약 1000px 미만에서는 넘친다.
    넘치면 늘어나고, motion.js는 그때 핀 대신 P1 방식(단계 글이 화면 가운데를 지날 때 전환)으로 둔다 */
 .motion-full .how { height: auto; min-height: 100vh; min-height: 100svh; }
-/* 핀을 안 걸었을 때(how--static)는 P1 데스크톱처럼 화면이 단계 글을 따라 sticky로 붙는다 */
+/* 핀을 안 걸었을 때(how--static)는 P1 데스크톱처럼 화면이 단계 글을 따라 sticky로 붙고, 단계 글도 P1처럼 60vh씩 차지한다 —
+   아코디언으로 접힌 글(130px)을 그대로 쌓으면 네 단계가 590px 안에 몰려 스크롤 한 번에 다 지나간다(1440×820 실측) */
+.motion-full .how--static .step__text { min-height: 60vh; }
 .motion-full .how--static .step__screen { position: sticky; top: calc(50vh - 200px); align-self: start; }
 .motion-full .pain > .container,
 .motion-full .detect > .container,
@@ -932,6 +934,17 @@ strong { font-weight: 600; color: var(--t1); }
 .motion-full .step__screen .live,
 .motion-full .step__screen .editor,
 .motion-full .step__screen .upload { min-height: min(340px, 38vh); }
+/* 화면 높이 1010px 이하(16인치 노트북 창) — 라이브 화면(581px)이 단계 영역을 정해 S4가 998px이라 한 화면에 간신히 들어가거나
+   넘쳐 핀(단계 스냅) 대신 정적 경로로 떨어진다(1800×953 실측). 제목·진행선 여백을 줄이고 오른쪽 화면 열을 7fr→6fr로 좁혀
+   (폭 645→603px, 16:9 플레이어가 따라 줄어 화면 581→546px) 약 920px까지 핀을 유지한다. zoom은 안 된다 — 배치 폭이 1/zoom로
+   넓어져 플레이어가 도로 커진다 */
+@media (max-height: 1010px) {
+  .motion-full .how { padding-top: 84px; padding-bottom: 24px; }
+  .motion-full .how .section-head { margin-bottom: 12px; }
+  .motion-full .how .section-head .h2 { margin-bottom: 0; }
+  .motion-full .rider { padding-top: 24px; margin-bottom: 12px; }
+  .motion-full .how:not(.how--static) .steps { grid-template-columns: 5fr 6fr; }
+}
 /* 화면 높이 820px 이하 — 가장 긴 S4(제목+진행선+4단계)가 넘치지 않게 촘촘하게 */
 @media (max-height: 820px) {
   .motion-full .rider { padding-top: 48px; margin-bottom: 12px; }

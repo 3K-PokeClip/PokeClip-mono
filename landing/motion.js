@@ -41,13 +41,14 @@
     const y = (spacer || target).getBoundingClientRect().top + window.scrollY;
     return spacer ? y : y - 72;
   }
+  let snapHow = null; // S4 핀의 단계 스냅(아래 S4 블록이 채운다) — 앵커로 핀 시작점에 내려앉으면 진행률이 안 바뀌어 직접 부른다
   $$('a[href^="#"]').forEach((a) =>
     a.addEventListener('click', (e) => {
       const id = a.getAttribute('href');
       const target = id.length > 1 && document.querySelector(id);
       if (!target) return;
       e.preventDefault();
-      if (lenis) lenis.scrollTo(anchorY(target), { duration: 1.4 });
+      if (lenis) lenis.scrollTo(anchorY(target), { duration: 1.4, onComplete: () => target.classList.contains('how') && snapHow && snapHow() });
       else window.scrollTo({ top: anchorY(target), behavior: 'smooth' });
       // 기본 이동을 막았으니 포커스도 직접 옮긴다 — 안 옮기면 「본문으로 건너뛰기」 뒤 다음 Tab이 내비로 돌아가 화면이 다시 위로 튄다
       if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
@@ -183,7 +184,13 @@
   // ===== S4 작동 방식: Full은 핀 + 아코디언 + 라이더 =====
   // 핀은 섹션이 한 화면에 들어올 때만 건다. 가장 키 큰 라이브 화면(581px)이 단계 영역을 늘려, 높이 약 1000px 미만에서는
   // 마지막 단계 설명이 화면 아래로 넘친다(760에서 181px — 고정 중에는 닿을 수 없다). 안 들어오면 핀 없이 P1처럼
-  // 단계 글이 화면 가운데를 지날 때 바뀐다(main.js의 stepIO를 끊지 않는다)
+  // 단계 글이 화면 가운데를 지날 때 바뀐다(main.js의 stepIO를 끊지 않는다).
+  // 핀 길이는 화면 다섯 장(단계마다 1.25화면) — 세 장(단계마다 0.75화면, 1009px 높이에서 757px)에서는 트랙패드 한 번에
+  // 한두 단계가 지나가 설명과 화면을 읽을 틈이 없었다(1800×1009 실측).
+  // 멈추면 단계 가운데(눈금 라벨 자리)로 스냅해 단계 사이에 걸쳐 서지 않는다 — 단계를 못 넘긴 작은 움직임은 방향대로
+  // 다음·이전 단계로 넘겨(마우스 휠 한 칸도 한 단계) 딱딱 걸리는 느낌을 준다. 핀 양 끝 밖으로는 끌지 않아 섹션을 빠져나가는
+  // 스크롤은 그대로 둔다. ScrollTrigger의 snap 대신 Lenis scrollTo로 옮긴다 — 둘이 같이 스크롤 위치를 쓰면 Lenis의
+  // 보간이 스냅 트윈을 덮어 떨린다
   const howFits = full && $('.how').offsetHeight <= window.innerHeight + 1;
   if (full && !howFits) $('.how').classList.add('how--static');
   if (howFits) {
@@ -191,23 +198,58 @@
     const fill = $('[data-rider-fill]');
     const rider = $('[data-rider-poki]');
     let cur = 0;
-    ScrollTrigger.create({
+    const stepAt = (p) => Math.min(4, Math.floor(p * 4) + 1);
+    const DEAD = 0.012; // 단계 가운데에서 이만큼(약 60px) 안은 제자리로 본다 — 휠 한 칸(100px)은 넘는다
+    const center = (n) => (n - 0.5) / 4;
+    let settled = null; // 마지막으로 멈춰 선 단계. 핀 밖이면 null
+    let snapTimer = 0;
+    const st = ScrollTrigger.create({
       trigger: '.how',
       start: 'top top',
-      end: '+=300%',
+      end: '+=500%',
       pin: true,
       scrub: true,
+      onToggle: (s) => {
+        // 앵커(#how)로 핀 시작점에 바로 내려앉으면 진행률이 안 바뀌어 onUpdate가 없다 — 들어온 순간에도 스냅을 예약한다
+        if (s.isActive) schedule();
+        else settled = null;
+      },
       onUpdate: (s) => {
-        const n = Math.min(4, Math.floor(s.progress * 4) + 1);
+        const n = stepAt(s.progress);
         if (n !== cur) {
           cur = n;
           LP.setStep(n);
         }
         fill.style.width = `${Math.max(4, s.progress * 100)}%`;
         rider.style.setProperty('--x', `${s.progress * 100}%`);
-        rider.classList.toggle('is-alt', Math.floor(s.progress * 60) % 2 === 1); // 달리기 2프레임
+        rider.classList.toggle('is-alt', Math.floor(s.progress * 100) % 2 === 1); // 달리기 2프레임(핀 길이에 맞춰 약 50px마다)
+        schedule();
       },
     });
+    function schedule() {
+      // Lenis가 멈춰 scroll 이벤트가 끊기면 스냅
+      clearTimeout(snapTimer);
+      snapTimer = setTimeout(snap, 160);
+    }
+    function snap() {
+      // 앵커 이동은 핀 시작점에서 1px쯤 못 미쳐 멈춰 isActive가 거짓이다 — 시작점 앞 2px까지는 핀 안으로 본다
+      if (window.scrollY < st.start - 2 || window.scrollY > st.end) return;
+      const p = st.progress;
+      const seen = stepAt(p); // cur는 onUpdate가 한 번도 안 돌았으면(새로 열어 앵커로 바로 들어옴) 0이라 진행률에서 다시 센다
+      let n = seen;
+      if (settled === null) settled = seen; // 막 들어왔으면 보이는 단계의 가운데로
+      else if (seen === settled) {
+        if (p > center(settled) + DEAD) n = settled + 1;
+        else if (p < center(settled) - DEAD) n = settled - 1;
+      }
+      settled = gsap.utils.clamp(1, 4, n);
+      const target = n < 1 ? 0 : n > 4 ? 1 : center(n); // 1~4 밖은 핀의 양 끝
+      const y = st.start + target * (st.end - st.start);
+      if (Math.abs(y - window.scrollY) < 1) return;
+      if (lenis) lenis.scrollTo(y, { duration: 0.8 });
+      else window.scrollTo({ top: y, behavior: 'smooth' });
+    }
+    snapHow = snap;
   }
 
   // ===== S5 BGM 분리 =====
