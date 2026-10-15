@@ -69,7 +69,8 @@ URL 파라미터:
 ## 카피 가드레일
 
 위키와 코드 기준입니다. 다음 표현은 쓰지 않습니다.
-- AI 자막, 원클릭 자동 업로드
+- AI 자막
+- 「원클릭 자동 업로드」처럼 사람 손 없이 올라간다는 표현. 「영상 만들기」를 누르면 렌더 직후 YouTube에 올라간다(4단계 제목 「영상 만들기 한 번에, YouTube까지」, ADR-091)까지만 씁니다 — 업로드 정보(제목·설명·공개 범위)는 사람이 정합니다
 - 근거 없는 절약 수치
 - 「게임 이벤트 교차검증」
 - 「저작권 걱정 없음」 같은 보장 표현. 약관 13조가 「보장하지 않는다」고 적었습니다.
@@ -88,11 +89,12 @@ YouTube 업로드는 사실이 됐습니다(POK-291, 위키 ADR-091). 스트리�
 
 | 파일 | 역할 |
 |---|---|
-| `index.html` `<head>` | title·description·canonical(`https://pokeclip.com/`)·OG·Twitter 카드·파비콘, 구조화 데이터(JSON-LD `@graph`: Organization·WebSite·SoftwareApplication·FAQPage) |
-| `robots.txt` · `sitemap.xml` | 모든 크롤러 허용 + 사이트맵 주소. 사이트맵은 현재 판 세 주소(`/`·`/terms/`·`/privacy/`)만 — 지난 판은 noindex라 넣지 않습니다 |
+| `index.html` `<head>` | title·description·canonical(`https://pokeclip.com/`)·OG·Twitter 카드·파비콘, 네이버 소유 확인 메타(POK-353), 구조화 데이터(JSON-LD `@graph`: Organization·WebSite·SoftwareApplication·FAQPage) |
+| `robots.txt` · `sitemap.xml` | 검색·답변용 크롤러는 허용, 학습용 AI 크롤러는 차단(아래 「AI 답변 엔진」) + 사이트맵 주소. 사이트맵은 현재 판 세 주소(`/`·`/terms/`·`/privacy/`)만 — 지난 판은 noindex라 넣지 않습니다 |
+| `llms.txt` | AI 답변 엔진용 사실 요약과 주요 주소(아래 「AI 답변 엔진」) |
 | `favicon.ico` · `icon.svg` · `apple-touch-icon.png` | web의 브랜드 아이콘(`web/src/app`)을 그대로 복사했습니다. 원본을 다시 만들면(`pnpm run build:brand`) 다시 복사합니다 |
 | `assets/img/og.jpg` · `assets/brand/pokeclip-logo-512.png` | 공유 미리보기(1200×630)와 JSON-LD 로고. `node landing/scripts/og/render.mjs`가 `scripts/og/og.html`을 헤드리스 Chrome으로 찍고 web의 sharp로 줄여 만듭니다 |
-| `scripts/check-seo.mjs` | 필수 메타, og:image 절대 URL, canonical·sitemap 주소 일치, 루트 정적 파일, JSON-LD 파싱, 화면 FAQ와 FAQPage 문장 일치 |
+| `scripts/check-seo.mjs` | 필수 메타, og:image 절대 URL, canonical·sitemap 주소 일치, 루트 정적 파일, JSON-LD 파싱, 화면 FAQ와 FAQPage 문장 일치, AI 크롤러 정책(학습용 차단·답변용 허용), 사실 요약이 FAQ 첫 문항·`SoftwareApplication.description`·`llms.txt`에서 같은지 |
 
 ```bash
 node landing/scripts/check-seo.mjs
@@ -104,6 +106,29 @@ node --test 'landing/scripts/*.test.mjs'   # archive 회귀 테스트(임시 디
 - 대시보드(`app.`·`dev.`)는 web 루트 metadata가 noindex를 냅니다. `robots.txt` Disallow로 막지 않습니다 — 막으면 크롤러가 noindex를 읽지 못해 주소만 색인될 수 있습니다.
 - 시작 버튼은 `https://app.pokeclip.com/login`으로 바로 갑니다(시안 때의 안내 토스트는 지웠습니다).
 - 배포 뒤에만 되는 일(Search Console·Bing 등록, 카카오톡·페이스북 미리보기, 슬래시 없는 주소의 301 확인)은 POK-349에 남깁니다.
+- 네이버 서치어드바이저(POK-353): 발급받은 확인 메타 `naver-site-verification`을 홈 `<head>`에 넣어 두었습니다. 배포 뒤 서치어드바이저에서 소유 확인 → robots.txt 검증 → 사이트맵(`https://pokeclip.com/sitemap.xml`) 제출 → 수집 요청 순으로 합니다. 메타를 지우면 확인이 풀립니다(`check-seo`가 잡습니다).
+
+### AI 답변 엔진 (POK-350)
+
+ChatGPT 검색·Perplexity·Google AI 개요·네이버 AI 브리핑 같은 엔진이 PokeClip을 사실대로 설명하고 랜딩을 출처로 인용하게 합니다.
+
+- **사실 요약은 FAQ 첫 문항**입니다(「PokeClip(포키클립)은 어떤 서비스인가요?」). 같은 문장을 JSON-LD `SoftwareApplication.description`과 `llms.txt`에도 씁니다. 셋 중 하나만 고치면 `check-seo`가 잡습니다. 히어로 아래에는 두지 않습니다.
+- 사실 요약·FAQ·`llms.txt`에는 **지금 사실만** 씁니다. 판별은 채팅 통계 규칙이고, SOOP은 심사 중이며, 후원·음성은 판별에 쓰지 않습니다. 위 「공개 시점 기준으로 바꾼 것」의 문장은 여기에 옮기지 않습니다.
+- FAQ 답의 첫 문장에 결론을 둡니다. 모든 문장은 JS 없이 받은 HTML에 있어야 하고, 크롤러에게만 다른 내용을 보여 주지 않습니다(클로킹 금지).
+- `robots.txt` AI 크롤러 정책(이름은 각 사 문서로 확인, 2026-10-15):
+
+| 크롤러 | 쓰임 | 정책 |
+|---|---|---|
+| `GPTBot`(OpenAI) · `ClaudeBot`(Anthropic) · `CCBot`(Common Crawl) · `Applebot-Extended`(Apple) | 모델 학습 | 막음 |
+| `OAI-SearchBot` · `ChatGPT-User` | ChatGPT 검색 · 사용자 요청 | 허용 |
+| `PerplexityBot` · `Perplexity-User` | Perplexity 검색 · 사용자 요청 | 허용 |
+| `Claude-SearchBot` · `Claude-User` | Claude 검색 · 사용자 요청 | 허용 |
+| `Google-Extended` | Gemini 학습과 Gemini 앱·Vertex AI grounding. Google 검색 노출·순위와는 무관 | 허용(2026-10-15 결정 — 막으면 Gemini 답변 인용이 줄 수 있다) |
+| `Googlebot` · `bingbot` · `Yeti`(네이버) · `Applebot` | 검색 | 허용 |
+
+  `ChatGPT-User`·`Perplexity-User`는 사용자가 요청한 방문이라 robots.txt를 따르지 않을 수 있습니다(각 사 문서). 막는 수단으로 기대하지 않습니다.
+- `llms.txt`는 제안 단계 표준이고 주요 AI 검색 가운데 쓴다고 밝힌 곳이 없습니다. 비용이 작아 사실 요약과 주소만 둡니다.
+- 측정: 같은 질문을 ChatGPT·Perplexity·Google·네이버에 던져 언급·인용·설명 정확성을 공개 전과 공개 4주 뒤에 POK-350 댓글로 남깁니다.
 
 ## 이용약관 · 개인정보 처리방침
 
@@ -140,7 +165,7 @@ node landing/scripts/legal-versions.mjs archive terms 2026.11.01
 - 자산 경로는 루트 기준(`/styles.css`, `/assets/...`)입니다. 지난 판이 한 단계 깊은 폴더에 있어도 그대로 열립니다. 그래서 문서 페이지는 `file://`로는 깨지고, 로컬 서버로 열어야 합니다.
 - **〈… 확정 후 기재〉·〈… 지정 후 기재〉는 공개 전에 채울 자리표시입니다.** 운영자 법인명·대표자명, 개인정보 보호책임자, 복제·전송 중단 요청 담당자, 시행일입니다. 채울 때 뒤 조사(은·는, 이·가)를 이름에 맞추고, 법인명이 정해지면 세 페이지 푸터의 「운영 PokeClip 팀」도 함께 고칩니다.
 - 경로는 `/terms/`(디렉터리 index)이고 **끝 슬래시 꼴이 정본**입니다. canonical·sitemap·푸터·대시보드 링크가 모두 이 꼴입니다. `python3 -m http.server`는 `/terms`를 `/terms/`로 돌려 보내고, 정적 호스팅에서는 슬래시 없는 주소를 301로 보내게 합니다(Google OAuth 동의 화면 주소도 이 꼴로 맞춥니다).
-- **`landing/` 폴더를 통째로 정적 호스팅에 올리지 않습니다.** 이 README와 `scripts/`까지 공개됩니다. 배포에는 HTML·CSS·JS·`assets/`와 루트의 `robots.txt`·`sitemap.xml`·`favicon.ico`·`icon.svg`·`apple-touch-icon.png`만 올립니다.
+- **`landing/` 폴더를 통째로 정적 호스팅에 올리지 않습니다.** 이 README와 `scripts/`까지 공개됩니다. 배포에는 HTML·CSS·JS·`assets/`와 루트의 `robots.txt`·`sitemap.xml`·`llms.txt`·`favicon.ico`·`icon.svg`·`apple-touch-icon.png`만 올립니다.
 
 ### 문서 쓰는 원칙 (약관·처리방침 머리 주석에서 옮김)
 

@@ -1,9 +1,10 @@
-// 랜딩 검색 노출 검사 (POK-349). 의존성 없이 node만으로 돈다.
+// 랜딩 검색 노출 검사 (POK-349 · POK-350 · POK-353). 의존성 없이 node만으로 돈다.
 //
 //   node landing/scripts/check-seo.mjs
 //
 // 검색 결과·공유 미리보기는 배포 뒤에야 눈으로 확인할 수 있어서, 배포 전에 깨지면 모르고 지나가는 것만 지킨다:
-// 필수 메타와 절대 주소, canonical·sitemap·링크의 주소 꼴, 루트 정적 파일, 구조화 데이터가 보이는 본문과 같은지.
+// 필수 메타와 절대 주소, 네이버 소유 확인 메타, canonical·sitemap·링크의 주소 꼴, 루트 정적 파일, 구조화 데이터가 보이는 본문과 같은지,
+// AI 크롤러 정책(학습용 차단·답변용 허용), 사실 요약이 FAQ·JSON-LD·llms.txt에서 같은지.
 import { existsSync, readFileSync, statSync } from 'node:fs';
 
 const root = new URL('..', import.meta.url);
@@ -113,6 +114,11 @@ expect(
   metaOf(home, 'twitter:card') === 'summary_large_image',
   '홈 twitter:card가 summary_large_image가 아니다',
 );
+// 네이버 서치어드바이저 소유 확인(POK-353) — 메타를 지우면 확인이 풀린다. 값은 발급받은 것만(16진수 40자)
+expect(
+  /^[0-9a-f]{40}$/.test(metaOf(home, 'naver-site-verification') ?? ''),
+  '홈에 네이버 소유 확인(naver-site-verification) 메타가 없거나 발급 꼴(16진수 40자)이 아니다',
+);
 for (const [path, html] of Object.entries(pages)) {
   for (const key of ['og:image', 'twitter:image']) {
     const url = metaOf(html, key);
@@ -145,9 +151,58 @@ expect(existsSync(new URL('robots.txt', root)), 'robots.txt가 없다');
 if (existsSync(new URL('robots.txt', root))) {
   const robots = raw('robots.txt');
   expect(robots.includes(`Sitemap: ${SITE}/sitemap.xml`), 'robots.txt에 사이트맵 주소가 없다');
+  // 묶음은 크롤러처럼(RFC 9309) 읽는다 — 이어진 User-agent 줄이 한 묶음의 대상이고, 규칙 뒤에 다시 User-agent가 오면
+  // 새 묶음이다. 빈 줄·주석은 묶음을 끊지 않는다(빈 줄로 나누면 「User-agent 뒤 빈 줄, 그다음 Disallow」를 못 읽는다)
+  const groups = [];
+  for (const line of robots.split('\n')) {
+    const field = line
+      .replace(/#.*/, '')
+      .trim()
+      .match(/^([\w-]+)\s*:\s*(.*)$/);
+    if (!field) continue;
+    const key = field[1].toLowerCase();
+    const value = field[2].trim();
+    if (key === 'user-agent') {
+      const last = groups.at(-1);
+      if (!last || last.rules.length > 0) groups.push({ agents: [], rules: [] });
+      groups.at(-1).agents.push(value.toLowerCase());
+    } else if ((key === 'allow' || key === 'disallow') && groups.length > 0) {
+      groups.at(-1).rules.push({ key, path: value });
+    }
+  }
+  // 사이트 전체 차단: `/`·`/*`를 막고 같은 길이로 다시 열지 않았다(길이가 같으면 Allow가 이긴다)
+  const blocksAll = (group) => {
+    const whole = group.rules.filter((rule) => rule.path === '/' || rule.path === '/*');
+    return whole.some((r) => r.key === 'disallow') && !whole.some((r) => r.key === 'allow');
+  };
+
   // User-agent: * 묶음이 사이트 전체를 막으면 검색에서 통째로 빠진다
-  const star = robots.split(/\n\s*\n/).find((group) => /^User-agent:\s*\*\s*$/im.test(group)) ?? '';
-  expect(!/^Disallow:\s*\/\s*$/im.test(star), 'robots.txt가 모든 크롤러(*)에 사이트 전체를 막는다');
+  expect(
+    !groups.some((group) => group.agents.includes('*') && blocksAll(group)),
+    'robots.txt가 모든 크롤러(*)에 사이트 전체를 막는다',
+  );
+
+  // AI 크롤러 정책(POK-350): 학습용은 막고 검색·답변용은 연다 — 답변용을 막으면 AI 답변이 랜딩을 인용하지 못한다
+  const blocked = new Set(groups.filter(blocksAll).flatMap((group) => group.agents));
+  for (const agent of ['GPTBot', 'ClaudeBot', 'CCBot', 'Applebot-Extended']) {
+    expect(blocked.has(agent.toLowerCase()), `robots.txt가 학습용 크롤러 ${agent}를 막지 않는다`);
+  }
+  const OPEN = [
+    'Googlebot',
+    'bingbot',
+    'Yeti',
+    'Applebot',
+    'Google-Extended',
+    'OAI-SearchBot',
+    'ChatGPT-User',
+    'PerplexityBot',
+    'Perplexity-User',
+    'Claude-SearchBot',
+    'Claude-User',
+  ];
+  for (const agent of OPEN) {
+    expect(!blocked.has(agent.toLowerCase()), `robots.txt가 검색·답변용 크롤러 ${agent}를 막는다`);
+  }
 }
 expect(existsSync(new URL('sitemap.xml', root)), 'sitemap.xml이 없다');
 if (existsSync(new URL('sitemap.xml', root))) {
@@ -211,6 +266,26 @@ expect(
   JSON.stringify(shown) === JSON.stringify(listed),
   `FAQPage가 화면 FAQ와 다르다 —\n  화면: ${JSON.stringify(shown)}\n  JSON-LD: ${JSON.stringify(listed)}`,
 );
+
+// --- 사실 요약(POK-350): FAQ 첫 문항의 답이 AI 답변 엔진이 옮겨 갈 한 문단이다.
+// SoftwareApplication.description과 llms.txt가 같은 문장을 쓴다 — 셋이 다르면 엔진마다 다른 설명을 퍼뜨린다
+const summary = shown[0]?.a ?? '';
+expect(
+  summary.startsWith('PokeClip(포키클립)은'),
+  'FAQ 첫 문항이 사실 요약(「PokeClip(포키클립)은 …」)이 아니다',
+);
+expect(
+  node('SoftwareApplication')?.description === summary,
+  'SoftwareApplication.description이 FAQ 첫 문항의 사실 요약과 다르다',
+);
+expect(existsSync(new URL('llms.txt', root)), 'llms.txt가 없다');
+if (existsSync(new URL('llms.txt', root))) {
+  const llms = raw('llms.txt');
+  expect(llms.includes(summary), 'llms.txt에 FAQ 첫 문항의 사실 요약이 없다');
+  for (const path of Object.keys(pages)) {
+    expect(llms.includes(`(${SITE}${path})`), `llms.txt에 ${SITE}${path} 링크가 없다`);
+  }
+}
 
 if (failures.length > 0) {
   console.error(failures.map((f) => `✗ ${f}`).join('\n'));
