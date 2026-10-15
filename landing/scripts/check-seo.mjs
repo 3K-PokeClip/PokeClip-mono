@@ -1,9 +1,10 @@
-// 랜딩 검색 노출 검사 (POK-349). 의존성 없이 node만으로 돈다.
+// 랜딩 검색 노출 검사 (POK-349 · POK-350). 의존성 없이 node만으로 돈다.
 //
 //   node landing/scripts/check-seo.mjs
 //
 // 검색 결과·공유 미리보기는 배포 뒤에야 눈으로 확인할 수 있어서, 배포 전에 깨지면 모르고 지나가는 것만 지킨다:
-// 필수 메타와 절대 주소, canonical·sitemap·링크의 주소 꼴, 루트 정적 파일, 구조화 데이터가 보이는 본문과 같은지.
+// 필수 메타와 절대 주소, canonical·sitemap·링크의 주소 꼴, 루트 정적 파일, 구조화 데이터가 보이는 본문과 같은지,
+// AI 크롤러 정책(학습용 차단·답변용 허용), 사실 요약이 FAQ·JSON-LD·llms.txt에서 같은지.
 import { existsSync, readFileSync, statSync } from 'node:fs';
 
 const root = new URL('..', import.meta.url);
@@ -143,6 +144,35 @@ if (existsSync(new URL('robots.txt', root))) {
   // User-agent: * 묶음이 사이트 전체를 막으면 검색에서 통째로 빠진다
   const star = robots.split(/\n\s*\n/).find((group) => /^User-agent:\s*\*\s*$/im.test(group)) ?? '';
   expect(!/^Disallow:\s*\/\s*$/im.test(star), 'robots.txt가 모든 크롤러(*)에 사이트 전체를 막는다');
+
+  // AI 크롤러 정책(POK-350): 학습용은 막고 검색·답변용은 연다 — 답변용을 막으면 AI 답변이 랜딩을 인용하지 못한다
+  const blocked = new Set(
+    robots
+      .split(/\n\s*\n/)
+      .filter((group) => /^Disallow:\s*\/\s*$/im.test(group))
+      .flatMap((group) =>
+        [...group.matchAll(/^User-agent:\s*(\S+)\s*$/gim)].map((m) => m[1].toLowerCase()),
+      ),
+  );
+  for (const agent of ['GPTBot', 'ClaudeBot', 'CCBot', 'Applebot-Extended']) {
+    expect(blocked.has(agent.toLowerCase()), `robots.txt가 학습용 크롤러 ${agent}를 막지 않는다`);
+  }
+  const OPEN = [
+    'Googlebot',
+    'bingbot',
+    'Yeti',
+    'Applebot',
+    'Google-Extended',
+    'OAI-SearchBot',
+    'ChatGPT-User',
+    'PerplexityBot',
+    'Perplexity-User',
+    'Claude-SearchBot',
+    'Claude-User',
+  ];
+  for (const agent of OPEN) {
+    expect(!blocked.has(agent.toLowerCase()), `robots.txt가 검색·답변용 크롤러 ${agent}를 막는다`);
+  }
 }
 expect(existsSync(new URL('sitemap.xml', root)), 'sitemap.xml이 없다');
 if (existsSync(new URL('sitemap.xml', root))) {
@@ -206,6 +236,26 @@ expect(
   JSON.stringify(shown) === JSON.stringify(listed),
   `FAQPage가 화면 FAQ와 다르다 —\n  화면: ${JSON.stringify(shown)}\n  JSON-LD: ${JSON.stringify(listed)}`,
 );
+
+// --- 사실 요약(POK-350): FAQ 첫 문항의 답이 AI 답변 엔진이 옮겨 갈 한 문단이다.
+// SoftwareApplication.description과 llms.txt가 같은 문장을 쓴다 — 셋이 다르면 엔진마다 다른 설명을 퍼뜨린다
+const summary = shown[0]?.a ?? '';
+expect(
+  summary.startsWith('PokeClip(포키클립)은'),
+  'FAQ 첫 문항이 사실 요약(「PokeClip(포키클립)은 …」)이 아니다',
+);
+expect(
+  node('SoftwareApplication')?.description === summary,
+  'SoftwareApplication.description이 FAQ 첫 문항의 사실 요약과 다르다',
+);
+expect(existsSync(new URL('llms.txt', root)), 'llms.txt가 없다');
+if (existsSync(new URL('llms.txt', root))) {
+  const llms = raw('llms.txt');
+  expect(llms.includes(summary), 'llms.txt에 FAQ 첫 문항의 사실 요약이 없다');
+  for (const path of Object.keys(pages)) {
+    expect(llms.includes(`(${SITE}${path})`), `llms.txt에 ${SITE}${path} 링크가 없다`);
+  }
+}
 
 if (failures.length > 0) {
   console.error(failures.map((f) => `✗ ${f}`).join('\n'));
