@@ -11,7 +11,9 @@
   if (forced === 'full' || forced === 'lite' || forced === 'reduce') root.dataset.mode = forced;
   const mode = root.dataset.mode;
 
-  // ----- 프로토타입 링크: 실서비스 경로 안내 -----
+  // ----- 토스트 -----
+  // 시작 버튼은 실제 로그인 주소(https://app.pokeclip.com/login)로 그냥 간다 — 시안 때처럼 막고 안내하지 않는다(POK-348).
+  // JS가 없어도 같은 링크로 이동해야 하므로 여기서 가로채지 않는다
   const toastEl = $('[data-toast]');
   let toastTimer;
   function toast(msg) {
@@ -20,12 +22,6 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => toastEl.classList.remove('is-on'), 2400);
   }
-  $$('[data-proto-link]').forEach((a) =>
-    a.addEventListener('click', (e) => {
-      e.preventDefault();
-      toast(`실서비스에서는 ${a.getAttribute('href')}(Google 로그인)로 이동해요`);
-    }),
-  );
 
   // ----- 모바일 메뉴 -----
   const menuBtn = $('[data-menu-toggle]');
