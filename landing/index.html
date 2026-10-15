@@ -3,11 +3,28 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>PokeClip 랜딩 시안</title>
+  <title>PokeClip — 방송이 끝나기 전에, 하이라이트는 이미 유튜브에</title>
   <meta name="description" content="방송이 끝나기 전에, 하이라이트는 이미 유튜브에. 채팅이 터진 순간을 포키가 찾아 BGM 없는 클립으로 만들어요." />
   <meta name="theme-color" content="#141517" />
+  <!-- 검색·공유 미리보기(POK-349). 주소는 정본(끝 슬래시)·절대 URL로 쓴다 — 메신저 미리보기는 상대경로 이미지를 못 읽는다 -->
+  <link rel="canonical" href="https://pokeclip.com/" />
+  <link rel="icon" href="/favicon.ico" sizes="32x32" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="PokeClip" />
+  <meta property="og:locale" content="ko_KR" />
+  <meta property="og:url" content="https://pokeclip.com/" />
   <meta property="og:title" content="PokeClip — 방송이 끝나기 전에, 하이라이트는 이미 유튜브에." />
-  <meta property="og:image" content="assets/img/og-base.jpg" />
+  <meta property="og:description" content="채팅이 터진 순간을 포키가 찾아 BGM 없는 클립으로 만들어요." />
+  <meta property="og:image" content="https://pokeclip.com/assets/img/og.jpg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="PokeClip 로고와 「방송이 끝나기 전에, 하이라이트는 이미 유튜브에.」" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="PokeClip — 방송이 끝나기 전에, 하이라이트는 이미 유튜브에." />
+  <meta name="twitter:description" content="채팅이 터진 순간을 포키가 찾아 BGM 없는 클립으로 만들어요." />
+  <meta name="twitter:image" content="https://pokeclip.com/assets/img/og.jpg" />
   <link rel="stylesheet" href="styles.css" />
   <script>
     // 첫 페인트 전에 모션 모드를 정한다 — full: 정밀 포인터 데스크톱, lite: 그 밖, reduce: 동작 줄이기.
@@ -43,6 +60,89 @@
         }, 2500);
       }
     })();
+  </script>
+  <!-- 구조화 데이터(POK-349). 보이는 본문에 있는 것만 쓴다 — 가격 0원은 S9 「지금은 무료 베타」, FAQPage는 S10 FAQ와
+       글자까지 같다(scripts/check-seo.mjs가 확인). 평점·리뷰는 없으므로 넣지 않는다. 그래서 SoftwareApplication은
+       Google 리치 결과 자격이 없다 — 기계 판독용으로 둔다 -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": "https://pokeclip.com/#organization",
+        "name": "PokeClip",
+        "alternateName": "포키클립",
+        "url": "https://pokeclip.com/",
+        "logo": "https://pokeclip.com/assets/brand/pokeclip-logo-512.png",
+        "email": "3k.pokeclip@gmail.com",
+        "contactPoint": {
+          "@type": "ContactPoint",
+          "contactType": "customer support",
+          "email": "3k.pokeclip@gmail.com",
+          "availableLanguage": "ko"
+        }
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://pokeclip.com/#website",
+        "name": "PokeClip",
+        "alternateName": "포키클립",
+        "url": "https://pokeclip.com/",
+        "inLanguage": "ko",
+        "publisher": { "@id": "https://pokeclip.com/#organization" }
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://pokeclip.com/#app",
+        "name": "PokeClip",
+        "alternateName": "포키클립",
+        "url": "https://pokeclip.com/",
+        "description": "방송이 끝나기 전에, 하이라이트는 이미 유튜브에.",
+        "applicationCategory": "MultimediaApplication",
+        "operatingSystem": "Web",
+        "inLanguage": "ko",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "KRW",
+          "description": "지금은 무료 베타"
+        },
+        "publisher": { "@id": "https://pokeclip.com/#organization" }
+      },
+      {
+        "@type": "FAQPage",
+        "@id": "https://pokeclip.com/#faq",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "무엇이 필요한가요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "OBS Studio와 치지직 또는 SOOP 채널, 클립을 올릴 YouTube 채널이 있으면 돼요. 로그인은 Google 계정으로 해요." }
+          },
+          {
+            "@type": "Question",
+            "name": "방송 화질이나 PC 성능에 영향이 있나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "PokeClip으로도 같은 방송을 함께 보내기 때문에, 업로드 대역폭이 송출 한 줄만큼 더 필요해요." }
+          },
+          {
+            "@type": "Question",
+            "name": "편집자도 비용을 내나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "아니요. 편집자는 무료예요. 스트리머가 초대하면 그 채널의 클립을 편집하고 올릴 수 있어요." }
+          },
+          {
+            "@type": "Question",
+            "name": "채팅이 적은 방송도 쓸 수 있나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "채팅이 적으면 자동 감지가 부정확할 수 있어서, 엉뚱한 카드를 띄우지 않아요. 그럴 땐 방송 중에 단축키로 원하는 순간을 직접 기록하면 돼요." }
+          },
+          {
+            "@type": "Question",
+            "name": "Mac에서도 되나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "OBS 플러그인은 Windows를 먼저 지원해요. macOS 빌드는 시험 단계예요." }
+          }
+        ]
+      }
+    ]
+  }
   </script>
 </head>
 <body>

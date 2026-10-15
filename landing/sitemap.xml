@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 현재 판 세 주소만 둔다 — 지난 판(/terms/YYYY-MM-DD/)은 noindex라 넣지 않는다. 주소는 canonical과 같은 끝 슬래시 꼴 -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://pokeclip.com/</loc>
+  </url>
+  <url>
+    <loc>https://pokeclip.com/terms/</loc>
+  </url>
+  <url>
+    <loc>https://pokeclip.com/privacy/</loc>
+  </url>
+</urlset>
