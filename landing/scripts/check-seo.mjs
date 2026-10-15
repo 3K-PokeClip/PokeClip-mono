@@ -151,19 +151,39 @@ expect(existsSync(new URL('robots.txt', root)), 'robots.txt가 없다');
 if (existsSync(new URL('robots.txt', root))) {
   const robots = raw('robots.txt');
   expect(robots.includes(`Sitemap: ${SITE}/sitemap.xml`), 'robots.txt에 사이트맵 주소가 없다');
+  // 묶음은 크롤러처럼(RFC 9309) 읽는다 — 이어진 User-agent 줄이 한 묶음의 대상이고, 규칙 뒤에 다시 User-agent가 오면
+  // 새 묶음이다. 빈 줄·주석은 묶음을 끊지 않는다(빈 줄로 나누면 「User-agent 뒤 빈 줄, 그다음 Disallow」를 못 읽는다)
+  const groups = [];
+  for (const line of robots.split('\n')) {
+    const field = line
+      .replace(/#.*/, '')
+      .trim()
+      .match(/^([\w-]+)\s*:\s*(.*)$/);
+    if (!field) continue;
+    const key = field[1].toLowerCase();
+    const value = field[2].trim();
+    if (key === 'user-agent') {
+      const last = groups.at(-1);
+      if (!last || last.rules.length > 0) groups.push({ agents: [], rules: [] });
+      groups.at(-1).agents.push(value.toLowerCase());
+    } else if ((key === 'allow' || key === 'disallow') && groups.length > 0) {
+      groups.at(-1).rules.push({ key, path: value });
+    }
+  }
+  // 사이트 전체 차단: `/`·`/*`를 막고 같은 길이로 다시 열지 않았다(길이가 같으면 Allow가 이긴다)
+  const blocksAll = (group) => {
+    const whole = group.rules.filter((rule) => rule.path === '/' || rule.path === '/*');
+    return whole.some((r) => r.key === 'disallow') && !whole.some((r) => r.key === 'allow');
+  };
+
   // User-agent: * 묶음이 사이트 전체를 막으면 검색에서 통째로 빠진다
-  const star = robots.split(/\n\s*\n/).find((group) => /^User-agent:\s*\*\s*$/im.test(group)) ?? '';
-  expect(!/^Disallow:\s*\/\s*$/im.test(star), 'robots.txt가 모든 크롤러(*)에 사이트 전체를 막는다');
+  expect(
+    !groups.some((group) => group.agents.includes('*') && blocksAll(group)),
+    'robots.txt가 모든 크롤러(*)에 사이트 전체를 막는다',
+  );
 
   // AI 크롤러 정책(POK-350): 학습용은 막고 검색·답변용은 연다 — 답변용을 막으면 AI 답변이 랜딩을 인용하지 못한다
-  const blocked = new Set(
-    robots
-      .split(/\n\s*\n/)
-      .filter((group) => /^Disallow:\s*\/\s*$/im.test(group))
-      .flatMap((group) =>
-        [...group.matchAll(/^User-agent:\s*(\S+)\s*$/gim)].map((m) => m[1].toLowerCase()),
-      ),
-  );
+  const blocked = new Set(groups.filter(blocksAll).flatMap((group) => group.agents));
   for (const agent of ['GPTBot', 'ClaudeBot', 'CCBot', 'Applebot-Extended']) {
     expect(blocked.has(agent.toLowerCase()), `robots.txt가 학습용 크롤러 ${agent}를 막지 않는다`);
   }
