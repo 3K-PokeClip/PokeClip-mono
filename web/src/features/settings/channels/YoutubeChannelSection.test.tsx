@@ -110,7 +110,7 @@ describe('YoutubeChannelSection — 연동 상태 표시', () => {
     renderWithProviders(<ChannelSettingsScreen />);
 
     expect(await youtube().findByText('연동 끊김')).toBeInTheDocument();
-    expect(youtube().getByText(/유튜브 연동이 끊겼어요/)).toBeInTheDocument();
+    expect(youtube().getByText(/유튜브 연동이 끊겼어요\.$/)).toBeInTheDocument();
     expect(youtube().getByRole('button', { name: '다시 연동' })).toBeInTheDocument();
     // BROKEN 행은 이미 닫힌 행이라 DELETE가 무동작이다 — 눌러도 안 되는 버튼을 두지 않는다
     expect(youtube().queryByRole('button', { name: '연동 해제' })).not.toBeInTheDocument();

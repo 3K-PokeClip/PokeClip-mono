@@ -16,19 +16,21 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const LANDING = fileURLToPath(new URL('..', import.meta.url));
 const temps = [];
 
-// 판 목록의 지금 판 시행일을 label로 채운 임시 랜딩. label이 없으면 자리표시 그대로 둔다
-function makeLanding(label) {
+// 두 문서의 현재 판만 담은 임시 랜딩. 판 목록은 실제 것을 복사하지 않고 문서마다 시행일 label인 한 판짜리로 새로 쓴다 —
+// 실제 목록은 공개 전에 시행일을 채우거나 지난 판을 얼리면 바뀌어, 그대로 쓰면 테스트가 저장소 상태에 따라 깨진다.
+// label이 없으면 시행일이 자리표시인 판이다
+const PLACEHOLDER = '〈시행일 확정 후 기재〉';
+function makeLanding(label = PLACEHOLDER) {
   const dir = mkdtempSync(join(tmpdir(), 'legal-versions-'));
   temps.push(dir);
-  for (const path of ['scripts/legal-versions.mjs', 'terms', 'privacy', 'legal-versions.json']) {
-    cpSync(join(LANDING, path), join(dir, path), { recursive: true });
+  cpSync(join(LANDING, 'scripts/legal-versions.mjs'), join(dir, 'scripts/legal-versions.mjs'));
+  const manifest = {};
+  for (const doc of ['terms', 'privacy']) {
+    cpSync(join(LANDING, doc, 'index.html'), join(dir, doc, 'index.html'));
+    manifest[doc] = [{ label, path: `/${doc}/`, file: `${doc}/index.html` }];
   }
-  if (label) {
-    const manifest = JSON.parse(readFileSync(join(dir, 'legal-versions.json'), 'utf8'));
-    for (const versions of Object.values(manifest)) versions[0].label = label;
-    writeFileSync(join(dir, 'legal-versions.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-    run(dir); // 드롭다운을 바뀐 목록대로 다시 쓴다
-  }
+  writeFileSync(join(dir, 'legal-versions.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  run(dir); // 드롭다운을 합성한 목록대로 다시 쓴다
   return dir;
 }
 

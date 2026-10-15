@@ -1204,6 +1204,465 @@ TEST(audio_routing_view_keeps_removed_offscreen_source_listed)
 	CHECK(BuildRoutingView(sources, options).mixOnly.empty());
 }
 
+// ---------------------------------------------------------------- 앱 단위 묶기 (POK-290)
+
+AudioSourceInfo AppSrc(const std::string &key, const std::string &name, const std::string &app, int order,
+		       uint32_t mixers = 0x3F, bool showing = true)
+{
+	AudioSourceInfo s = Src(key, name, AudioKind::App, order, mixers, true, false, showing);
+	s.appId = app;
+	return s;
+}
+
+AudioTrackMapEntry AppEntry(const std::string &key, int slot, int64_t assignedAt, const std::string &app)
+{
+	AudioTrackMapEntry e = Entry(key, slot, assignedAt);
+	e.app = app;
+	return e;
+}
+
+// 기억의 앱 — 기억이 없으면 "<none>", 앱을 적기 전 기억(옛 파일)이면 "<unset>".
+std::string MapApp(const AssignmentResult &r, const std::string &key)
+{
+	for (const AudioTrackMapEntry &e : r.mapNext) {
+		if (e.key == key)
+			return e.app ? *e.app : "<unset>";
+	}
+	return "<none>";
+}
+
+int64_t MapAssignedAt(const AssignmentResult &r, const std::string &key)
+{
+	for (const AudioTrackMapEntry &e : r.mapNext) {
+		if (e.key == key)
+			return e.assignedAt;
+	}
+	return -1;
+}
+
+AudioAppSettings WindowSettings(const std::string &window)
+{
+	AudioAppSettings s;
+	s.window = window;
+	return s;
+}
+
+AudioAppSettings MacSettings(int type, const std::string &application)
+{
+	AudioAppSettings s;
+	s.type = type;
+	s.application = application;
+	return s;
+}
+
+// 앱 ID를 지운 같은 입력 — 앱을 모르면 POK-290 전 종류 규칙과 같아야 한다.
+AssignmentInput WithoutApps(AssignmentInput in)
+{
+	for (AudioSourceInfo &s : in.sources)
+		s.appId.clear();
+	return in;
+}
+
+// Windows "제목:클래스:실행파일" — libobs ms_build_window_strings와 같게 읽는다.
+TEST(audio_app_id_from_windows_window_string)
+{
+	CHECK_EQ(AudioAppId("wasapi_process_output_capture", WindowSettings("Discord:Chrome_WidgetWin_1:Discord.exe")),
+		 std::string("discord.exe"));
+	CHECK_EQ(AudioAppId("window_capture", WindowSettings("#general - Discord:Chrome_WidgetWin_1:Discord.exe")),
+		 std::string("discord.exe")); // 제목·클래스가 달라도 같은 앱
+	// 칸 안의 ':'·'#'은 "#3A"·"#22"로 저장된다 — 세 칸으로 나눈 뒤 푼다
+	CHECK_EQ(AudioAppId("wasapi_process_output_capture", WindowSettings("a#3Ab:Cls:My#3AGame#22.exe")),
+		 std::string("my:game#.exe"));
+	// 한 번만 푼다 — "#22" → "#"가 만든 "#3A"를 다시 ':'로 바꾸지 않는다(libobs와 같은 순서)
+	CHECK_EQ(AudioAppId("wasapi_process_output_capture", WindowSettings("t:c:x#223Ay.exe")),
+		 std::string("x#3ay.exe"));
+	CHECK_EQ(AudioAppId("wasapi_process_output_capture", WindowSettings("t:c:game.exe:extra")),
+		 std::string("game.exe")); // libobs는 앞 세 칸을 쓴다
+	CHECK_EQ(AudioAppId("wasapi_process_output_capture", WindowSettings("제목:클래스:카카오톡.EXE")),
+		 std::string("카카오톡.exe")); // ASCII만 소문자, 나머지 바이트는 그대로
+	CHECK(AudioAppId("wasapi_process_output_capture", WindowSettings("")).empty());
+	CHECK(AudioAppId("wasapi_process_output_capture", WindowSettings("t:c")).empty());
+	CHECK(AudioAppId("wasapi_process_output_capture", WindowSettings("t:c:")).empty());
+	CHECK(AudioAppId("dshow_input", WindowSettings("t:c:obs.exe")).empty()); // 모르는 타입
+	CHECK(AudioAppId("wasapi_output_capture", WindowSettings("t:c:obs.exe")).empty());
+}
+
+// 게임 캡처는 창 모드만 대상이 정해져 있다 — 전체 화면·핫키 모드에 남은 window 값으로 앱을 잡지 않는다.
+TEST(audio_app_id_game_capture_only_in_window_mode)
+{
+	AudioAppSettings s = WindowSettings("Game:UnityWndClass:Game.exe");
+	s.captureMode = "window";
+	s.hasCaptureMode = true;
+	CHECK_EQ(AudioAppId("game_capture", s), std::string("game.exe"));
+	s.captureMode = "any_fullscreen";
+	CHECK(AudioAppId("game_capture", s).empty());
+	s.captureMode = "hotkey";
+	CHECK(AudioAppId("game_capture", s).empty());
+
+	// 기본값(사용자 값 없음)은 any_fullscreen
+	AudioAppSettings fresh = WindowSettings("Game:UnityWndClass:Game.exe");
+	fresh.captureMode = "any_fullscreen";
+	CHECK(AudioAppId("game_capture", fresh).empty());
+
+	// 옛 형식 — capture_mode 없이 capture_any_fullscreen만 있다
+	AudioAppSettings old = WindowSettings("Game:UnityWndClass:Game.exe");
+	old.captureMode = "any_fullscreen"; // 기본값 getter
+	old.hasAnyFullscreen = true;
+	old.anyFullscreen = false;
+	CHECK_EQ(AudioAppId("game_capture", old), std::string("game.exe"));
+	old.anyFullscreen = true;
+	CHECK(AudioAppId("game_capture", old).empty());
+	// capture_mode가 있으면 옛 키는 보지 않는다
+	old.anyFullscreen = false;
+	old.hasCaptureMode = true;
+	CHECK(AudioAppId("game_capture", old).empty());
+}
+
+// macOS는 앱 모드일 때만 — 모드를 바꿔도 지난 application 값이 남는다(이 Mac의 실제 장면 파일 값).
+TEST(audio_app_id_macos_app_mode_only)
+{
+	CHECK_EQ(AudioAppId("sck_audio_capture", MacSettings(1, "com.tinyspeck.slackmacgap")),
+		 std::string("com.tinyspeck.slackmacgap"));
+	CHECK_EQ(AudioAppId("sck_audio_capture", MacSettings(1, "Cisco-Systems.Spark")),
+		 std::string("Cisco-Systems.Spark")); // 번들 ID는 대소문자 그대로
+	CHECK(AudioAppId("sck_audio_capture", MacSettings(0, "Cisco-Systems.Spark")).empty()); // 데스크탑 전체
+	CHECK(AudioAppId("sck_audio_capture", MacSettings(1, "")).empty());
+	CHECK_EQ(AudioAppId("screen_capture", MacSettings(2, "com.hnc.Discord")), std::string("com.hnc.Discord"));
+	CHECK(AudioAppId("screen_capture", MacSettings(0, "Cisco-Systems.Spark")).empty()); // 디스플레이
+	CHECK(AudioAppId("screen_capture", MacSettings(1, "com.hnc.Discord")).empty());      // 창 — 창 번호뿐
+	CHECK(AudioAppId("coreaudio_input_capture", MacSettings(1, "com.hnc.Discord")).empty());
+}
+
+// 6소스(마이크·데스크탑·디스코드 둘·게임·크롬) — 같은 앱 둘은 한 트랙, 다른 앱은 각자. 앱을 모르면 오늘처럼 종류로.
+TEST(audio_same_app_shares_track_and_other_apps_split)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3),
+		      Src("ch:1", "데스크탑", AudioKind::Desktop, 1),
+		      AppSrc("uuid:da", "Discord", "discord.exe", 100),
+		      AppSrc("uuid:db", "Discord 2", "discord.exe", 101),
+		      AppSrc("uuid:game", "게임", "game.exe", 102),
+		      AppSrc("uuid:chrome", "Chrome", "chrome.exe", 103)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "ch:3"), 1);
+	CHECK_EQ(SlotOf(r, "ch:1"), 2);
+	CHECK_EQ(SlotOf(r, "uuid:da"), 3);
+	CHECK_EQ(SlotOf(r, "uuid:db"), 3);
+	CHECK_EQ(SlotOf(r, "uuid:game"), 4);
+	CHECK_EQ(SlotOf(r, "uuid:chrome"), 5);
+	CHECK_EQ(MapApp(r, "uuid:da"), std::string("discord.exe"));
+	CHECK_EQ(MapApp(r, "ch:3"), std::string("")); // 앱을 몰라도 ""로 적는다
+
+	AssignmentInput again = in;
+	again.sources = Applied(in.sources, r);
+	again.map = r.mapNext;
+	AssignmentResult r2 = ComputeAssignment(again);
+	CHECK(r2.writes.empty());
+	CHECK(!r2.mapChanged);
+
+	AssignmentResult kinds = ComputeAssignment(WithoutApps(in));
+	CHECK_EQ(SlotOf(kinds, "uuid:da"), 3);
+	CHECK_EQ(SlotOf(kinds, "uuid:db"), 4);
+	CHECK_EQ(SlotOf(kinds, "uuid:game"), 5);
+	CHECK_EQ(SlotOf(kinds, "uuid:chrome"), 3);
+}
+
+// 묶음이 자리보다 많으면 아직 트랙 없는 묶음이 우선순위대로 먼저 받는다 — 디스코드와 게임이 섞이지 않고,
+// 우선순위가 가장 낮은 알림이 BGM 트랙에 묶인다. 앱을 모르면 오늘처럼 디스코드·게임이 「앱」 한 트랙.
+TEST(audio_different_apps_get_tracks_before_lower_priority_kinds)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3),
+		      Src("ch:1", "데스크탑", AudioKind::Desktop, 1),
+		      AppSrc("uuid:discord", "Discord", "discord.exe", 100),
+		      AppSrc("uuid:game", "게임", "game.exe", 101),
+		      Src("uuid:bgm", "BGM", AudioKind::Media, 102),
+		      Src("uuid:alert", "알림", AudioKind::Browser, 103)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:discord"), 3);
+	CHECK_EQ(SlotOf(r, "uuid:game"), 4);
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 5);
+	CHECK_EQ(SlotOf(r, "uuid:alert"), 5);
+	CHECK(r.overflowKeys.empty());
+
+	AssignmentResult kinds = ComputeAssignment(WithoutApps(in));
+	CHECK_EQ(SlotOf(kinds, "uuid:discord"), 3);
+	CHECK_EQ(SlotOf(kinds, "uuid:game"), 3);
+	CHECK_EQ(SlotOf(kinds, "uuid:bgm"), 4);
+	CHECK_EQ(SlotOf(kinds, "uuid:alert"), 5);
+}
+
+// 같은 앱이 앉은 트랙이 있으면 빈 트랙이 남아도 거기에 — 같은 앱 캡처 둘은 같은 소리다. 여러 트랙에 있으면 낮은 번호.
+TEST(audio_same_app_joins_even_with_room)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {AppEntry("uuid:da", 3, 10, "discord.exe")};
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3), AppSrc("uuid:da", "uuid:da", "discord.exe", 100),
+		      AppSrc("uuid:db", "Discord 2", "discord.exe", 101)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:db"), 3);
+	CHECK_EQ(SlotOf(r, "ch:3"), 1);
+	CHECK(r.slotKeys[2].empty());
+
+	// 같은 앱이 손 배정으로 두 트랙에 나뉘어 있으면 낮은 번호에
+	AssignmentInput split;
+	split.now = 100;
+	split.map = {AppEntry("uuid:da", 4, 10, "discord.exe"), AppEntry("uuid:db", 2, 10, "discord.exe")};
+	split.sources = {AppSrc("uuid:da", "uuid:da", "discord.exe", 100),
+			 AppSrc("uuid:db", "uuid:db", "discord.exe", 101),
+			 AppSrc("uuid:dc", "Discord 3", "discord.exe", 102)};
+	AssignmentResult r2 = ComputeAssignment(split);
+	CHECK_EQ(SlotOf(r2, "uuid:dc"), 2);
+	CHECK_EQ(SlotOf(r2, "uuid:da"), 4); // 나뉜 묶음을 플러그인이 합치지 않는다
+}
+
+// 빈 트랙이 없으면 같은 앱 → 같은 종류(첫 트랙) → 우선순위가 가장 낮은 트랙.
+TEST(audio_full_tracks_fall_back_same_app_then_kind_then_lowest)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {Entry("ch:3", 1, 10), Entry("ch:1", 2, 10), AppEntry("uuid:discord", 3, 10, "discord.exe"),
+		  AppEntry("uuid:game", 4, 10, "game.exe"), Entry("uuid:bgm", 5, 10)};
+	in.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3),
+		      Src("ch:1", "ch:1", AudioKind::Desktop, 1),
+		      AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100),
+		      AppSrc("uuid:game", "uuid:game", "game.exe", 101),
+		      Src("uuid:bgm", "uuid:bgm", AudioKind::Media, 102),
+		      AppSrc("uuid:game2", "게임 음성", "game.exe", 103),
+		      AppSrc("uuid:chrome", "Chrome", "chrome.exe", 104),
+		      Src("uuid:card", "캡처보드", AudioKind::Other, 105)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:game2"), 4);  // 같은 앱 — 앱 종류의 첫 트랙(디스코드)이 아니라
+	CHECK_EQ(SlotOf(r, "uuid:chrome"), 3); // 같은 앱 없음 — 같은 종류의 첫 트랙
+	CHECK_EQ(SlotOf(r, "uuid:card"), 5);   // 같은 종류도 없음 — 가장 덜 가치 있는 트랙(BGM)
+	CHECK(r.overflowKeys.empty());
+}
+
+// 앱을 모르는 앱 종류 소스(대상 없는 캡처·데스크탑 모드 sck)는 종류 규칙 그대로 — 자리가 모자라면 앱 트랙에 묶이고
+// 남은 빈 트랙은 아직 트랙 없는 종류(미디어·브라우저) 몫이다.
+TEST(audio_app_less_source_follows_kind_rules)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3),
+		      Src("ch:1", "데스크탑", AudioKind::Desktop, 1),
+		      AppSrc("uuid:discord", "Discord", "discord.exe", 100),
+		      AppSrc("uuid:blank", "앱 오디오", "", 101),
+		      Src("uuid:bgm", "BGM", AudioKind::Media, 102),
+		      Src("uuid:alert", "알림", AudioKind::Browser, 103)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:discord"), 3);
+	CHECK_EQ(SlotOf(r, "uuid:blank"), 3);
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 4);
+	CHECK_EQ(SlotOf(r, "uuid:alert"), 5);
+
+	// 자리가 남으면 제 트랙을 받는다
+	AssignmentInput roomy = in;
+	roomy.sources.resize(4);
+	CHECK_EQ(SlotOf(ComputeAssignment(roomy), "uuid:blank"), 4);
+}
+
+// 화면에서 추가한 소스는 앱을 고르기 전에 앉는다(앱 "") — 고르면 그 소스만 같은 앱 트랙으로 옮긴다. 다른 앱으로 바꾸면
+// 그 묶음에서 나와 빈 트랙에. 같은 앱 트랙이 없고 원래 자리가 비면 그 자리로 돌아온다(더 낮은 빈 트랙으로 가지 않는다).
+TEST(audio_retargeted_source_reseats_alone)
+{
+	AssignmentInput in;
+	in.now = 500;
+	in.map = {AppEntry("ch:3", 1, 10, ""), AppEntry("uuid:discord", 2, 10, "discord.exe"),
+		  AppEntry("uuid:new", 3, 400, ""), AppEntry("uuid:game", 4, 10, "game.exe")};
+	in.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3, 0x03),
+		      AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x05),
+		      AppSrc("uuid:new", "uuid:new", "discord.exe", 101, 0x09),
+		      AppSrc("uuid:game", "uuid:game", "game.exe", 102, 0x11)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:new"), 2);
+	CHECK_EQ(MapApp(r, "uuid:new"), std::string("discord.exe"));
+	CHECK_EQ(MapAssignedAt(r, "uuid:new"), 500);
+	CHECK_EQ(MapAssignedAt(r, "uuid:discord"), 10); // 다른 기억은 그대로
+	CHECK_EQ(SlotOf(r, "uuid:game"), 4);
+	CHECK(r.mapChanged);
+	CHECK_EQ(r.writes.size(), 1u);
+	CHECK_EQ(WriteOf(r, "uuid:new", 0), 0x05u);
+
+	AssignmentInput again = in;
+	again.sources = Applied(in.sources, r);
+	again.map = r.mapNext;
+	AssignmentResult r2 = ComputeAssignment(again);
+	CHECK(r2.writes.empty());
+	CHECK(!r2.mapChanged);
+
+	// 디스코드 묶음에 있던 소스를 크롬으로 바꾸면 그 묶음에서 나와 빈 트랙(기억 없는 트랙 먼저)에
+	AssignmentInput moved = again;
+	moved.sources[2].appId = "chrome.exe";
+	AssignmentResult r3 = ComputeAssignment(moved);
+	CHECK_EQ(SlotOf(r3, "uuid:new"), 3);
+	CHECK_EQ(SlotOf(r3, "uuid:discord"), 2);
+
+	// 혼자 있던 소스는 같은 앱 트랙이 없으면 제자리 — 더 낮은 빈 트랙(3)이 있어도 4에 남는다
+	AssignmentInput alone;
+	alone.now = 500;
+	alone.map = {AppEntry("ch:3", 1, 10, ""), AppEntry("uuid:discord", 2, 10, "discord.exe"),
+		     AppEntry("uuid:x", 4, 400, "")};
+	alone.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3, 0x03),
+			 AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x05),
+			 AppSrc("uuid:x", "uuid:x", "zoom.exe", 101, 0x11)};
+	AssignmentResult r4 = ComputeAssignment(alone);
+	CHECK_EQ(SlotOf(r4, "uuid:x"), 4);
+	CHECK(r4.writes.empty());
+	CHECK_EQ(MapApp(r4, "uuid:x"), std::string("zoom.exe"));
+}
+
+// 빈 트랙이 없으면 다시 줄 선 소스도 6번 순서(같은 종류의 첫 트랙)대로 — 그 트랙이 지금 묶음이면 제자리에 남고 앱만 적는다.
+TEST(audio_retargeted_source_stays_when_tracks_are_full)
+{
+	AssignmentInput in;
+	in.now = 500;
+	in.map = {AppEntry("ch:3", 1, 10, ""),
+		  AppEntry("ch:1", 2, 10, ""),
+		  AppEntry("uuid:discord", 3, 10, "discord.exe"),
+		  AppEntry("uuid:x", 3, 400, ""),
+		  AppEntry("uuid:game", 4, 10, "game.exe"),
+		  AppEntry("uuid:bgm", 5, 10, "")};
+	in.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3, 0x03),
+		      Src("ch:1", "ch:1", AudioKind::Desktop, 1, 0x05),
+		      AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x09),
+		      AppSrc("uuid:x", "uuid:x", "chrome.exe", 101, 0x09),
+		      AppSrc("uuid:game", "uuid:game", "game.exe", 102, 0x11),
+		      Src("uuid:bgm", "uuid:bgm", AudioKind::Media, 103, 0x21)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:x"), 3);
+	CHECK_EQ(MapApp(r, "uuid:x"), std::string("chrome.exe"));
+	CHECK(r.writes.empty());
+	CHECK(r.mapChanged);
+
+	AssignmentInput again = in;
+	again.map = r.mapNext;
+	AssignmentResult r2 = ComputeAssignment(again);
+	CHECK_EQ(SlotOf(r2, "uuid:x"), 3);
+	CHECK(!r2.mapChanged);
+}
+
+// 같은 앱 트랙으로 가는 소스의 옛 자리는 예약하지 않는다 — 같은 계산에서 들어온 새 소스가 그 빈 트랙(기억 없음)을 먼저 받는다.
+TEST(audio_retarget_to_existing_app_frees_old_slot_for_new_source)
+{
+	AssignmentInput in;
+	in.now = 500;
+	in.map = {AppEntry("ch:3", 1, 10, ""), AppEntry("ch:1", 2, 10, ""),
+		  AppEntry("uuid:discord", 3, 10, "discord.exe"), AppEntry("uuid:x", 4, 400, "")};
+	in.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3, 0x03),
+		      Src("ch:1", "ch:1", AudioKind::Desktop, 1, 0x05),
+		      AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x09),
+		      AppSrc("uuid:x", "uuid:x", "discord.exe", 101, 0x11),
+		      Src("uuid:bgm", "BGM", AudioKind::Media, 102)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:x"), 3);   // 같은 앱 트랙으로
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 4); // 비워진 옛 자리 — 예약해 두면 5로 밀린다
+}
+
+// 옛 자리는 그 소스가 이번 계산에서 앉기 전까지만 비워 둔다 — 같은 계산에서 둘이 같은 새 앱으로 바뀌면 둘째는 첫째 트랙에
+// 합류하고, 둘째의 옛 자리는 새 소스가 받는다.
+TEST(audio_retarget_reservation_ends_once_seated)
+{
+	AssignmentInput in;
+	in.now = 500;
+	in.map = {AppEntry("ch:3", 1, 10, ""), AppEntry("uuid:discord", 2, 10, "discord.exe"),
+		  AppEntry("uuid:x", 3, 400, ""), AppEntry("uuid:y", 4, 400, "")};
+	in.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3, 0x03),
+		      AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x05),
+		      AppSrc("uuid:x", "uuid:x", "zoom.exe", 101, 0x09),
+		      AppSrc("uuid:y", "uuid:y", "zoom.exe", 102, 0x11),
+		      Src("uuid:bgm", "BGM", AudioKind::Media, 103)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:x"), 3);   // 혼자 — 제자리
+	CHECK_EQ(SlotOf(r, "uuid:y"), 3);   // 같은 새 앱 — 합류
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 4); // y의 옛 자리 — 예약이 남으면 5로 밀린다
+}
+
+// POK-290 전에 쓴 기억(app 없음)은 지금 앱을 적기만 한다 — 같은 앱 트랙이 따로 있어도 플러그인을 올렸다고 옮기지 않는다.
+TEST(audio_legacy_memory_adopts_app_without_moving)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {Entry("uuid:d1", 2, 10), Entry("uuid:d2", 4, 10)};
+	in.sources = {AppSrc("uuid:d1", "uuid:d1", "discord.exe", 100, 0x05),
+		      AppSrc("uuid:d2", "uuid:d2", "discord.exe", 101, 0x11)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:d1"), 2);
+	CHECK_EQ(SlotOf(r, "uuid:d2"), 4);
+	CHECK(r.writes.empty());
+	CHECK(r.mapChanged);
+	CHECK_EQ(MapApp(r, "uuid:d2"), std::string("discord.exe"));
+	CHECK_EQ(MapAssignedAt(r, "uuid:d2"), 10);
+
+	AssignmentInput again = in;
+	again.map = r.mapNext;
+	CHECK(!ComputeAssignment(again).mapChanged);
+
+	// 앱을 모르는 옛 기억은 그대로 둔다(기존 테스트들의 전제)
+	AssignmentInput blank = in;
+	blank.sources = {Src("uuid:d1", "uuid:d1", AudioKind::App, 100, 0x05)};
+	AssignmentResult r2 = ComputeAssignment(blank);
+	CHECK_EQ(MapApp(r2, "uuid:d1"), std::string("<unset>"));
+	CHECK(!r2.mapChanged);
+}
+
+// 대상을 잃는 변경(앱 → "")은 옮길 까닭이 아니다. 독에서 뺀 소스(slot 0)는 대상 앱이 바뀌어도 뺀 채로.
+TEST(audio_lost_target_and_removed_source_keep_memory)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {AppEntry("uuid:x", 3, 10, "discord.exe"), AppEntry("uuid:off", 0, 10, "a.exe")};
+	in.sources = {AppSrc("uuid:x", "uuid:x", "", 100, 0x09), AppSrc("uuid:off", "uuid:off", "b.exe", 101, 0x01)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:x"), 3);
+	CHECK_EQ(MapApp(r, "uuid:x"), std::string("discord.exe"));
+	CHECK_EQ(SlotOf(r, "uuid:off"), 0);
+	CHECK_EQ(MapApp(r, "uuid:off"), std::string("a.exe"));
+	CHECK(r.writes.empty());
+	CHECK(!r.mapChanged);
+}
+
+// 다른 장면에만 있는 소스의 대상을 바꾸면 기억을 버리고, 방송 화면에 나올 때 새 소스로 앉는다.
+TEST(audio_retargeted_offscreen_source_waits_for_program)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {AppEntry("uuid:discord", 1, 10, "discord.exe"), AppEntry("uuid:x", 3, 10, "")};
+	in.sources = {AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x03),
+		      AppSrc("uuid:x", "uuid:x", "discord.exe", 101, 0x09, false)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:x"), 0);
+	CHECK(!MapHas(r, "uuid:x"));
+	CHECK(r.mapChanged);
+
+	AssignmentInput shown = in;
+	shown.sources = Applied(in.sources, r);
+	shown.sources[1].showing = true;
+	shown.map = r.mapNext;
+	AssignmentResult r2 = ComputeAssignment(shown);
+	CHECK_EQ(SlotOf(r2, "uuid:x"), 1);
+}
+
+// 로그는 앱을 아는 소스를 "app:<앱>"으로 찍는다 — 실측 증빙. 독 상태(AudioSourceView 비교)에도 앱 변경이 잡힌다.
+TEST(audio_routing_log_shows_app)
+{
+	std::vector<AudioSourceInfo> sources = {AppSrc("uuid:discord", "Discord", "discord.exe", 100, 0x05),
+						Src("uuid:bgm", "BGM", AudioKind::Media, 101, 0x09)};
+	RoutingViewOptions options;
+	options.applied = true;
+	AudioRoutingView v = BuildRoutingView(sources, options);
+	CHECK_EQ(v.tracks[1].sources[0].appId, std::string("discord.exe"));
+	std::string line = DescribeRouting(v);
+	CHECK(line.find("T3 Discord(app:discord.exe)") != std::string::npos);
+	CHECK(line.find("T4 BGM(media)") != std::string::npos);
+
+	sources[0].appId = "chrome.exe";
+	CHECK(!(BuildRoutingView(sources, options) == v));
+}
+
 // ---------------------------------------------------------------- 설정
 
 TEST(config_audio_switches_are_not_output_settings)

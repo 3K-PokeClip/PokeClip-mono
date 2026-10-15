@@ -11,18 +11,6 @@
   if (forced === 'full' || forced === 'lite' || forced === 'reduce') root.dataset.mode = forced;
   const mode = root.dataset.mode;
 
-  // ----- 토스트 -----
-  // 시작 버튼은 실제 로그인 주소(https://app.pokeclip.com/login)로 그냥 간다 — 시안 때처럼 막고 안내하지 않는다(POK-348).
-  // JS가 없어도 같은 링크로 이동해야 하므로 여기서 가로채지 않는다
-  const toastEl = $('[data-toast]');
-  let toastTimer;
-  function toast(msg) {
-    toastEl.textContent = msg;
-    toastEl.classList.add('is-on');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => toastEl.classList.remove('is-on'), 2400);
-  }
-
   // ----- 모바일 메뉴 -----
   const menuBtn = $('[data-menu-toggle]');
   const sheet = $('[data-sheet]');
@@ -258,5 +246,5 @@
     jumpIO.observe(jumpFig);
   }
 
-  window.PC_LP = { mode, toast, setStep, setLine, drawWave, speakers, PEAK_AT, galleryStops, galleryIndex, observers: { lineIO, stepIO } };
+  window.PC_LP = { mode, setStep, setLine, drawWave, speakers, PEAK_AT, galleryStops, galleryIndex, observers: { lineIO, stepIO } };
 })();

@@ -747,8 +747,6 @@
     <a class="btn btn--ghost btn--md" href="#how">작동 방식</a>
   </div>
 
-  <div class="toast" role="status" aria-live="polite" data-toast></div>
-
   <!-- 전부 defer라 이 순서대로 돈다. main.js(GSAP 없이 도는 기본 동작)를 CDN보다 앞에 둬, CDN이 멈춰도 메뉴·CTA 바·영상은 산다.
        CDN은 버전을 고정했으니 SRI로 묶는다 — 버전을 올리면 integrity도 새로 계산한다(openssl dgst -sha384 -binary | openssl base64 -A) -->
   <script src="main.js" defer></script>

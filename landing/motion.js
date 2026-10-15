@@ -199,7 +199,9 @@
     const rider = $('[data-rider-poki]');
     let cur = 0;
     const stepAt = (p) => Math.min(4, Math.floor(p * 4) + 1);
-    const DEAD = 0.012; // 단계 가운데에서 이만큼(약 60px) 안은 제자리로 본다 — 휠 한 칸(100px)은 넘는다
+    // 단계 가운데에서 이만큼 안은 제자리로 본다 — 휠 한 칸(100px)은 넘는다. 핀 길이에 대한 비율로 두면 화면이 클수록
+    // 넓어져(높이 1,667px부터 100px 초과) 휠 한 칸이 그 안에 묻힌다
+    const DEAD_PX = 60;
     const center = (n) => (n - 0.5) / 4;
     let settled = null; // 마지막으로 멈춰 선 단계. 핀 밖이면 null
     let snapTimer = 0;
@@ -231,16 +233,19 @@
       clearTimeout(snapTimer);
       snapTimer = setTimeout(snap, 160);
     }
-    function snap() {
-      // 앵커 이동은 핀 시작점에서 1px쯤 못 미쳐 멈춰 isActive가 거짓이다 — 시작점 앞 2px까지는 핀 안으로 본다
-      if (window.scrollY < st.start - 2 || window.scrollY > st.end) return;
+    function snap(fromAnchor = false) {
+      // 앵커 이동은 핀 시작점에서 1px쯤 못 미쳐 멈춰 isActive가 거짓이다 — 앵커가 부를 때만 시작점 앞 2px까지 핀 안으로 본다.
+      // 스크롤이 부른 스냅은 핀 밖이면 아무것도 안 한다. 진행률이 딱 0·1인 경계도 밖이다(isActive가 거짓이고 onToggle이
+      // settled를 비운다) — 경계에서 돌면 「막 들어옴」으로 보고 1·4단계 가운데로 되끌어, 휠 한 칸씩으로는 못 빠져나간다
+      if (fromAnchor ? window.scrollY < st.start - 2 || window.scrollY > st.end : !st.isActive) return;
       const p = st.progress;
+      const dead = DEAD_PX / (st.end - st.start);
       const seen = stepAt(p); // cur는 onUpdate가 한 번도 안 돌았으면(새로 열어 앵커로 바로 들어옴) 0이라 진행률에서 다시 센다
       let n = seen;
       if (settled === null) settled = seen; // 막 들어왔으면 보이는 단계의 가운데로
       else if (seen === settled) {
-        if (p > center(settled) + DEAD) n = settled + 1;
-        else if (p < center(settled) - DEAD) n = settled - 1;
+        if (p > center(settled) + dead) n = settled + 1;
+        else if (p < center(settled) - dead) n = settled - 1;
       }
       settled = gsap.utils.clamp(1, 4, n);
       const target = n < 1 ? 0 : n > 4 ? 1 : center(n); // 1~4 밖은 핀의 양 끝
@@ -249,7 +254,7 @@
       if (lenis) lenis.scrollTo(y, { duration: 0.8 });
       else window.scrollTo({ top: y, behavior: 'smooth' });
     }
-    snapHow = snap;
+    snapHow = () => snap(true);
   }
 
   // ===== S5 BGM 분리 =====
