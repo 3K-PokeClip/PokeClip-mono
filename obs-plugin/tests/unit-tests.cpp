@@ -1562,6 +1562,25 @@ TEST(audio_retarget_to_existing_app_frees_old_slot_for_new_source)
 	CHECK_EQ(SlotOf(r, "uuid:bgm"), 4); // 비워진 옛 자리 — 예약해 두면 5로 밀린다
 }
 
+// 옛 자리는 그 소스가 이번 계산에서 앉기 전까지만 비워 둔다 — 같은 계산에서 둘이 같은 새 앱으로 바뀌면 둘째는 첫째 트랙에
+// 합류하고, 둘째의 옛 자리는 새 소스가 받는다.
+TEST(audio_retarget_reservation_ends_once_seated)
+{
+	AssignmentInput in;
+	in.now = 500;
+	in.map = {AppEntry("ch:3", 1, 10, ""), AppEntry("uuid:discord", 2, 10, "discord.exe"),
+		  AppEntry("uuid:x", 3, 400, ""), AppEntry("uuid:y", 4, 400, "")};
+	in.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3, 0x03),
+		      AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x05),
+		      AppSrc("uuid:x", "uuid:x", "zoom.exe", 101, 0x09),
+		      AppSrc("uuid:y", "uuid:y", "zoom.exe", 102, 0x11),
+		      Src("uuid:bgm", "BGM", AudioKind::Media, 103)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:x"), 3);   // 혼자 — 제자리
+	CHECK_EQ(SlotOf(r, "uuid:y"), 3);   // 같은 새 앱 — 합류
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 4); // y의 옛 자리 — 예약이 남으면 5로 밀린다
+}
+
 // POK-290 전에 쓴 기억(app 없음)은 지금 앱을 적기만 한다 — 같은 앱 트랙이 따로 있어도 플러그인을 올렸다고 옮기지 않는다.
 TEST(audio_legacy_memory_adopts_app_without_moving)
 {

@@ -340,13 +340,6 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 		else
 			seat(s, e.slot);
 	}
-	// 대상 앱을 바꿔 다시 줄 서는 소스의 옛 자리는 그 소스가 돌아올 자리라 적어 둔다 — 다른 새 소스가 먼저 가져가지 않게.
-	// 같은 앱이 이미 앉은 트랙으로 가거나 화면에 없어 이번에 줄 서지 않으면 적지 않는다 — 그 자리는 기억 없는 빈 트랙이다.
-	for (const auto &[key, slot] : retargeted) {
-		const AudioSourceInfo *s = candidateOf(key);
-		if (s && s->showing && appSlot(s) == 0)
-			claimed[static_cast<size_t>(slot)] = true;
-	}
 
 	// 4. 자리 없는 후보(기억이 없거나 본방 트랙에 밀렸다)를 우선순위로 줄 세운다. 기억 없는 소스는 방송 화면에
 	//    나올 때 처음 자리를 받는다 — 다른 장면에만 있는 소스는 기다린다.
@@ -391,9 +384,22 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 		}
 		return n;
 	};
+	// 대상 앱을 바꿔 다시 줄 서는 소스의 옛 자리는 그 소스가 이번 계산에서 앉기 전까지만 비워 둔다 — 다른 새 소스가 먼저
+	// 가져가지 않게. 같은 앱이 이미 앉은 트랙이 있으면 그리로 가므로 비워 두지 않는다. 화면에 없어 줄 서지 않는 소스도.
+	auto awaitingReturn = [&](int k) {
+		for (const auto &[key, slot] : retargeted) {
+			if (slot != k || slotOf.count(key))
+				continue;
+			const AudioSourceInfo *s = candidateOf(key);
+			if (s && s->showing && appSlot(s) == 0)
+				return true;
+		}
+		return false;
+	};
 	auto lowestFree = [&]() { // 빈 트랙 가운데 아무 기억도 없는 트랙 먼저 — 지금 없는 소스가 돌아올 자리를 비워 둔다
 		for (int k = 1; k <= kStemSlots; k++) {
-			if (!isReserved(k) && occupants[static_cast<size_t>(k)].empty() && !claimed[static_cast<size_t>(k)])
+			bool empty = !isReserved(k) && occupants[static_cast<size_t>(k)].empty();
+			if (empty && !claimed[static_cast<size_t>(k)] && !awaitingReturn(k))
 				return k;
 		}
 		for (int k = 1; k <= kStemSlots; k++) {
