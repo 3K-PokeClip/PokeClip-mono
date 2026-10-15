@@ -262,16 +262,6 @@ strong { font-weight: 600; color: var(--t1); }
 @media (min-width: 768px) { .cta-bar { left: 50%; right: auto; width: 480px; transform: translateX(-50%); } .cta-bar.is-hidden { transform: translate(-50%, 140%); } }
 @media (min-width: 1024px) { .cta-bar { display: none; } }
 
-.toast {
-  position: fixed; left: 50%; bottom: 96px; z-index: 60; transform: translate(-50%, 12px);
-  max-width: calc(100vw - 40px); padding: 12px 18px; border-radius: 14px;
-  background: var(--surface-2); color: var(--t1); font-size: 14px; font-weight: 500;
-  box-shadow: 0 12px 30px rgb(0 0 0 / 0.4); opacity: 0; pointer-events: none;
-  transition: opacity 0.3s, transform 0.4s var(--ease-out);
-}
-.toast.is-on { opacity: 1; transform: translate(-50%, 0); }
-@media (min-width: 1024px) { .toast { bottom: 40px; } }
-
 /* Full 모드 포키 스테이지 — P2에서 켬 */
 .poki-stage { display: none; }
 
