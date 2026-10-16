@@ -31,12 +31,16 @@ class LinkChannelBackfillMigrationTest extends IntegrationTestSupport {
     }
 
     @Test
-    void 이미_탈퇴한_회원의_닫힌_행만_비우고_안_탈퇴한_회원의_닫힌_행과_살아_있는_행은_그대로_둔다() {
+    void 장부_있는_옛_탈퇴자의_닫힌_행만_비우고_장부_없는_탈퇴자와_안_탈퇴한_회원은_그대로_둔다() {
         flyway("114").migrate();
         long withdrawn = user("withdrawn", true);
+        purgeJob(withdrawn);
+        long beforeLedger = user("before-ledger", true);
         long member = user("member", false);
         for (String table : new String[] {"chzzk_channel_links", "youtube_channel_links"}) {
             link(table, withdrawn, "chan-withdrawn-old", true);
+            // V114(10-08) 전 탈퇴자: 정리 장부가 없어 채널 번호가 수집기 정리의 마지막 단서다.
+            link(table, beforeLedger, "chan-before-ledger", true);
             // 재연동·해제로 닫힌 행. 탈퇴가 아니라 연동 해제라 남아야 한다(POK-341 범위 밖, POK-336).
             link(table, member, "chan-member-old", true);
             link(table, member, "chan-member", false);
@@ -47,6 +51,9 @@ class LinkChannelBackfillMigrationTest extends IntegrationTestSupport {
         for (String table : new String[] {"chzzk_channel_links", "youtube_channel_links"}) {
             assertThat(rowsWithChannel(table, withdrawn))
                     .as("🔴 " + table + ": V115 전에 탈퇴한 회원의 채널 이름·번호가 남았다").isZero();
+            assertThat(rowsWithChannel(table, beforeLedger))
+                    .as("🔴 " + table + ": 정리 장부가 없는 탈퇴자의 채널 번호를 비웠다. 수집기 정리 단서가 사라진다")
+                    .isEqualTo(1);
             assertThat(rowsWithChannel(table, member))
                     .as("🔴 " + table + ": 탈퇴 안 한 회원의 닫힌 행이나 살아 있는 행까지 비웠다").isEqualTo(2);
         }
@@ -71,6 +78,12 @@ class LinkChannelBackfillMigrationTest extends IntegrationTestSupport {
                         + " (google_sub, email, name, created_at, updated_at, deleted_at)"
                         + " VALUES (?, ?, ?, now(), now(), " + (withdrawn ? "now()" : "NULL") + ") RETURNING id",
                 Long.class, "sub-" + name, name + "@example.com", name);
+    }
+
+    /** 탈퇴 처리가 적는 clip 줄. V114 이후 탈퇴자는 모두 이 줄이 있다. */
+    private void purgeJob(long userId) {
+        jdbc.update("INSERT INTO " + SCHEMA + ".withdrawal_purge_jobs (user_id, target, created_at, next_attempt_at)"
+                + " VALUES (?, 'CLIP', now(), now())", userId);
     }
 
     private void link(String table, long userId, String channelId, boolean revoked) {

@@ -22,9 +22,13 @@ COMMENT ON COLUMN youtube_channel_links.channel_id IS '업로드 대상 채널. 
 -- (이미 탈퇴했으면 탈퇴 처리가 바로 돌아간다) 새 비우기 코드에 영영 안 닿는다.
 -- 닫힌 행만 고른다: 살아 있는 행은 위 CHECK가 막는다. 수집기 정리 장부(V114)는 채널 번호를 자기 칸에 따로
 -- 적어 두어 이 표를 다시 읽지 않는다.
+-- 🔴 정리 장부가 있는 탈퇴자만 비운다(PR #249 codex P1 둘째). V114(2026-10-08) 전 탈퇴자는 장부가 없어
+-- 이 표의 채널 번호가 「어느 채널 채팅을 지울지」의 마지막 단서다. 여기서 비우면 그 단서가 영영 사라진다.
 UPDATE chzzk_channel_links l SET channel_id = NULL, channel_name = NULL
   FROM users u
- WHERE u.id = l.user_id AND u.deleted_at IS NOT NULL AND l.revoked_at IS NOT NULL;
+ WHERE u.id = l.user_id AND u.deleted_at IS NOT NULL AND l.revoked_at IS NOT NULL
+   AND EXISTS (SELECT 1 FROM withdrawal_purge_jobs j WHERE j.user_id = u.id AND j.target = 'CLIP');
 UPDATE youtube_channel_links l SET channel_id = NULL, channel_name = NULL
   FROM users u
- WHERE u.id = l.user_id AND u.deleted_at IS NOT NULL AND l.revoked_at IS NOT NULL;
+ WHERE u.id = l.user_id AND u.deleted_at IS NOT NULL AND l.revoked_at IS NOT NULL
+   AND EXISTS (SELECT 1 FROM withdrawal_purge_jobs j WHERE j.user_id = u.id AND j.target = 'CLIP');
