@@ -318,10 +318,15 @@ localhost가 딸려가고, 로컬에선 되고 운영에서만 막히는데 로�
 | `THUMBNAIL_QUEUE_URL` | 빈 값 | 사진 주문줄(표준 SQS) `jobs-thumbnail` + 전용 DLQ. 🔴 **dev·운영에 아직 없다**(1번이 만든다). clip은 DLQ를 안 읽는다(다음 순회가 다시 찍는다) |
 | `THUMBNAIL_INTERVAL` | `PT1M` | 사진 주문을 훑는 주기. 라이브 사진이 이 간격으로 바뀐다(사용자 결정 1분) |
 | `PLAYBACK_ACCESS_TTL` | `PT60M` | 출입증 수명. 0 이하면 부팅 거부 |
+| `PLAYBACK_REQUIRED` | `false` | 켜면 출입증 셋이 다 빈 「꺼짐」도 부팅 거부(POK-321, 엣지 T9b 대체). **prod만 `true`** |
 
 **출입증 셋(`CLOUDFRONT_KEY_PAIR_ID`·`CLOUDFRONT_PRIVATE_KEY_PEM`·`MEDIA_BASE_URL`)은 다 비면 「꺼짐」이고
 부팅은 산다** — 로컬에는 CloudFront가 없다. 꺼진 채로 출입증 문을 부르면 `503 playback_signing_unavailable`이다.
 **일부만 채우면 부팅을 거부한다**(「일부러 안 켬」과 「깜빡함」이 같아 보이면 안 된다 — `BROADCAST_INTAKE_ENABLED`와 같은 규칙).
+🔴 **prod는 `PLAYBACK_REQUIRED=true`로 「꺼짐」까지 막는다**(POK-321). 셋을 통째로 빠뜨리면 부팅 확인은 초록인데
+재생 문만 전부 503이다. 이 막도 기본값은 꺼짐이라, **prod 런타임 변수에서 `PLAYBACK_REQUIRED`를 빠뜨리면 지금처럼
+재생이 꺼진 채 조용히 뜬다**(대가). 시험: `PlaybackPropertiesContextTest`(실제 바인딩으로 부팅 거부 · 빠진 칸 이름 ·
+기본은 꺼짐 부팅 · yml이 이 환경변수를 그 키로 잇는지).
 
 **`COLLECTOR_BASE_URL`은 서버끼리 붙는 주소다**(compose 안에서는 `http://chat-collector:8083`) —
 `AUTH_BASE_URL`과 같은 성격이고 `PROFILE_PHOTO_BASE_URL`(브라우저가 붙는 주소)과는 반대다.

@@ -160,6 +160,7 @@ services:
       MEDIA_BASE_URL: ${MEDIA_BASE_URL:-}
       PLAYBACK_COOKIE_DOMAIN: ${PLAYBACK_COOKIE_DOMAIN:-}
       PLAYBACK_ACCESS_TTL: ${PLAYBACK_ACCESS_TTL:-PT60M}
+      PLAYBACK_REQUIRED: ${PLAYBACK_REQUIRED:-false}   # prod만 true(POK-321). 켜면 서명 설정 셋이 다 빈 「꺼짐」도 부팅 거부
       # 영상 만들기 주문(POK-125). 켜면 큐 둘·창고 둘이 필수다. 자격증명은 EC2 역할(인라인 정책 pokeclip-render-queue-and-clips).
       RENDER_ENABLED: ${RENDER_ENABLED:-false}
       RENDER_QUEUE_URL: ${RENDER_QUEUE_URL:-}
