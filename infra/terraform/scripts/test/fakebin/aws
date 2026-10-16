@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#
+# put_secret_test.sh 의 가짜 aws. AWS 에 접속하지 않는다.
+#
+# 받은 인자(한 줄에 하나) · 환경 · 표준 입력을 FAKE_AWS_DIR 에 적고, 부를
+# 때마다 calls 에 한 줄을 더한다. FAKE_AWS_MODE 에 따라 실제 CLI 의 응답 꼴을
+# 흉내 낸다. 오류 꼴은 일부러 받은 요청 JSON 을 그대로 되울린다 — 실제 CLI 의
+# 「JSON received: …」 처럼 원문이 값을 품는 최악의 경우에도 스크립트가 원문을
+# 내보내지 않는지 보려고. ARN 의 계정 ID 는 AWS 문서의 예시 값이다.
+#
+# FAKE_AWS_MODE:
+#   ok          성공 응답(ARN · Name · VersionId), 종료 0
+#   no-version  VersionId 없는 응답, 종료 0
+#   denied      AccessDeniedException(SCP 명시 거부), 종료 254
+#   error       ResourceNotFoundException, 종료 254
+#   unparsed    오류 코드 없는 CLI 오류(파싱 실패 꼴), 종료 252
+
+set -uo pipefail
+
+if [[ -z "${FAKE_AWS_DIR:-}" || ! -d "${FAKE_AWS_DIR}" ]]; then
+  printf '%s\n' "fake aws: FAKE_AWS_DIR 가 없음" >&2
+  exit 99
+fi
+
+printf 'call\n' >>"${FAKE_AWS_DIR}/calls"
+printf '%s\n' "$@" >"${FAKE_AWS_DIR}/argv"
+env >"${FAKE_AWS_DIR}/env"
+request="$(cat)"
+printf '%s' "${request}" >"${FAKE_AWS_DIR}/stdin.json"
+
+readonly ACCOUNT='123456789012'
+readonly ARN="arn:aws:secretsmanager:ap-northeast-2:${ACCOUNT}:secret:x-AbCdEf"
+readonly USER_ARN="arn:aws:iam::${ACCOUNT}:user/example"
+
+case "${FAKE_AWS_MODE:-ok}" in
+  ok)
+    printf '{\n    "ARN": "%s",\n    "Name": "example",\n' "${ARN}"
+    printf '    "VersionId": "a1b2c3d4-5678-90ab-cdef-EXAMPLE11111",\n'
+    printf '    "VersionStages": [\n        "AWSCURRENT"\n    ]\n}\n'
+    ;;
+  no-version)
+    printf '{\n    "ARN": "%s",\n    "Name": "example"\n}\n' "${ARN}"
+    ;;
+  denied)
+    printf '\nAn error occurred (AccessDeniedException) when calling the %s' \
+      "PutSecretValue operation: User: ${USER_ARN} is not authorized to" >&2
+    printf ' perform: secretsmanager:PutSecretValue on resource: %s %s\n' \
+      "${ARN}" "with an explicit deny in a service control policy" >&2
+    printf 'request: %s\n' "${request}" >&2
+    exit 254
+    ;;
+  error)
+    printf '\nAn error occurred (ResourceNotFoundException) when calling %s\n' \
+      "the PutSecretValue operation: ${ARN} not found" >&2
+    printf 'request: %s\n' "${request}" >&2
+    exit 254
+    ;;
+  unparsed)
+    printf "\nError parsing parameter 'cli-input-json': Invalid JSON: %s\n" \
+      "JSON received: ${request}" >&2
+    exit 252
+    ;;
+  *)
+    printf 'fake aws: 모르는 FAKE_AWS_MODE: %s\n' "${FAKE_AWS_MODE}" >&2
+    exit 99
+    ;;
+esac
