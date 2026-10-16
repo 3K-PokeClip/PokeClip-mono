@@ -1,11 +1,11 @@
-# MediaMTX 설정 템플릿 — 멘토 데모용 임시 서버 전용 (기한부: 2026-08-24 만료, README.md 참조)
+# MediaMTX 설정 템플릿 — dev-media 계정별 방송 서버 전용 (README.md 참조)
 #
 # 이 파일은 팀 공용 로컬 구성(infra/compose/mediamtx.yml)과 **다른 파일**이다. 수명이 다르므로 섞지 않는다.
-# 플레이스홀더 2개(DEMO_PATH 자리 · SRT_PASSPHRASE 자리)는 render.sh 가 $DEMO_HOME/.env 값으로 치환한다.
-# (여기에 실제 플레이스홀더 토큰을 문자 그대로 적지 않는다 — 적으면 렌더 시 함께 치환돼 이 주석에 시크릿이 박힌다.)
-# 시크릿 원문은 이 저장소 어디에도 없다(ADR-018) — 렌더 결과물만 서버 로컬에 0640 으로 떨어진다.
+# 플레이스홀더 1개(경로 잠금값 자리 — 두 칸에 쓴다)는 render.sh 가 렌더마다 새로 만든 값으로 치환한다.
+# (여기에 실제 플레이스홀더 토큰을 문자 그대로 적지 않는다 — 적으면 렌더 시 함께 치환돼 이 주석에 잠금값이 박힌다.)
+# 잠금값은 저장소 · .env · 로그 어디에도 없다 — 렌더 결과물만 서버 로컬에 0640 으로 떨어진다(ADR-018).
 #
-# 값 근거: ADR-020(세그먼트 4s · part 500ms · DVR 1h=900개) / 결정 2·3(README.md → ADR-040)
+# 값 근거: ADR-020(세그먼트 4s · part 500ms · DVR 1h=900개) / 계정별 방송 설계 2-8(인증 · 잠금값 · 정규식 경로)
 
 # 인제스트 — SRT 하나만 연다
 srt: yes
@@ -17,8 +17,14 @@ rtsp: no
 webrtc: no
 moq: no
 
-# 관리 서버 4종 — 전부 미활성. compose.yml 에서 포트도 publish 하지 않는다(이중 차단).
-api: no
+# Control API — 응답기(ingest-auth)의 긴급 절단(cut)이 쓴다. 제어망(mtx-control) 주소에만 묶는다 —
+# edge 와 호스트 포트에서는 닿지 않는다. compose.yml 의 mediamtx 제어망 주소와 같아야 한다.
+api: yes
+apiAddress: 10.250.0.2:9997
+# 프록시 헤더(X-Forwarded-For)를 믿지 않는다 — 응답기가 api 요청의 출발지(TCP 피어)로 cut 을 가른다.
+# render.sh 가 이 줄이 빈 목록인지 단언한다.
+apiTrustedProxies: []
+# 나머지 관리 서버 3종은 미활성. compose.yml 에서 포트도 publish 하지 않는다(이중 차단).
 metrics: no
 pprof: no
 playback: no
@@ -36,26 +42,26 @@ hlsAllowOrigins: ["*"] # 재생은 nginx 와 같은 오리진(8888)에서만 오
                        # 내장 hls.js 는 단순 GET(프리플라이트 없음)이라 이 값이 접근을 좌우하지 않는다. 기본값 명시.
 # hlsCDNSecret: 설정하지 않는다 — 인증을 우회하는 별도 경로가 열린다
 
-# 인증 — 기본 authInternalUsers 2항목을 이 단일 항목으로 **전체 대체**한다.
-#  · 기본 첫 항목(user: any / 전 경로 무권한)을 남기면 "하나라도 통과=성공" 매칭이라 fail-open 이 된다.
-#  · 기본 둘째 항목(localhost 한정 api/metrics/pprof)도 남기지 않는다 — 그 포트를 하나도 켜지 않아 지킬 대상이 없다.
-#    (관리 포트를 켤 때는 둘째 항목을 유지해야 한다. 이 구성은 켜지 않으므로 제거가 맞다.)
-#  · ips 필터는 쓰지 않는다 — 재생 요청은 nginx 프록시를 거쳐 오므로 클라이언트 IP가 컨테이너 IP로 보인다.
-#    IP 제어는 SG(팀 IP/32) 한 곳으로 일원화한다(결정 2).
-authInternalUsers:
-  - user: any
-    permissions:
-      - action: publish # 빠뜨리면 OBS 가 붙지 않는다 (리허설 첫 실패 후보 1순위)
-        path: __DEMO_PATH__
-      - action: read
-        path: __DEMO_PATH__
+# 인증 — 연결마다 응답기에 묻는다(publish · api). 응답기가 4C(auth)로 토큰을 풀어 그 계정의 passphrase 를 돌려준다.
+#  · authInternalUsers 는 두지 않는다 — http 방식에서는 쓰이지 않는다. 다만 authMethod 가 다른 값으로 바뀌면 기본
+#    내부 사용자(any publish)가 살아나므로 render.sh 가 authMethod 줄이 정확히 http 인지 단언한다.
+#  · 주소는 IP 리터럴이다 — 서비스 이름은 기본 망 주소로도 풀린다. compose.yml 의 ingest-auth 제어망 주소와 같아야 한다.
+authMethod: http
+authHTTPAddress: http://10.250.0.3:8080/mediamtx/auth
+# 재생(read)만 판정하지 않는다 — HLS 재생은 응답기를 거치지 않고, SRT 읽기는 아래 경로 잠금값이 막는다.
+# api 를 여기 넣으면 Control API 가 무인증이 되므로 render.sh 가 read 한 줄뿐인지 단언한다.
+authHTTPExclude:
+  - action: read
 
 pathDefaults:
-  srtPublishPassphrase: __SRT_PASSPHRASE__ # source: publisher 일 때만 적용된다 (publish 전용 — srtReadPassphrase 는 두지 않는다)
-  overridePublisher: no # passphrase 를 아는 둘째 SRT 가 송출을 탈취하고 DVR 을 0부터 리셋하는 것을 막는다(데모 최대 실패모드)
-  record: no # 디스크 2배 + 이번 데모는 HLS DVR 만 쓴다(결정 3)
+  # 경로 잠금값 — 응답기의 2xx 에 값이 없으면 이 값으로 판정돼 거부된다(빈 passphrase 의 무암호 송출 차단).
+  srtPublishPassphrase: __PATH_LOCK_PASSPHRASE__
+  # SRT 읽기 잠금 — 경로 이름이 공개 토큰이라 막지 않으면 원 스트림을 무암호로 읽는다. HLS 는 영향 없음.
+  srtReadPassphrase: __PATH_LOCK_PASSPHRASE__
+  overridePublisher: no # passphrase 를 아는 둘째 SRT 가 송출을 탈취하고 DVR 을 0부터 리셋하는 것을 막는다
+  record: no # 디스크 2배 + HLS DVR 만 쓴다
 
-# 경로 허용 — all_others 를 두지 않는다. 랜덤 경로 1개 외의 모든 송출·재생이 거부된다.
-# (설정 파일이 기본값을 전체 대체하므로 이 절이 없으면 전 송출이 "path not configured" 로 거부된다)
+# 경로 허용 — 토큰 꼴(Crockford 26자) 이름 하나. 그 밖의 이름은 인증 전에 "path not configured" 로 거부된다.
+# all_others 를 두지 않는다. (설정 파일이 기본값을 전체 대체하므로 이 절이 없으면 전 송출이 거부된다)
 paths:
-  __DEMO_PATH__:
+  "~^[0-9A-HJKMNP-TV-Z]{26}$":
