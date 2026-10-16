@@ -9,6 +9,10 @@
 # aws:RequestedRegion 으로 넣는다. 요청은 증거 디렉터리 안의 파일로 만들어
 # --cli-input-json file://… 로 넘긴다 — ARN · 계정 ID 가 argv 에 오르지 않는다.
 # 판정 = EvalDecision 이 allowed 면 허용, implicitDeny · explicitDeny 면 거부.
+# 응답의 AllowedByOrganizations 가 True · False 가 아닌 행(None 등)이 있으면
+# 판정은 그대로 두고 그 행 수를 표준 오류와 report.txt 에 한 줄로 알린다:
+#   조직 판정 없음 <n> 행(AllowedByOrganizations 가 True · False 아님) —
+#   판정은 EvalDecision 그대로
 #
 # 판정은 같은 묶음의 앞 기준과 비교한다. 앞 기준 = 같은 묶음의 가장 최근
 # 승인 결과(--accept), 없으면 baseline.tsv 의 그 묶음 행(설계 13-1). 기준에
@@ -563,7 +567,8 @@ decision_word() {
 # Globals:
 #   reference_source, reference
 # Arguments:
-#   증거 디렉터리, 결과 줄들, 첫 줄, 13-1 덧붙임 줄들.
+#   증거 디렉터리, 결과 줄들, 첫 줄, report.txt 에서 첫 줄 뒤의 줄들(13-1
+#   덧붙임 줄 · 조직 판정 없음 줄).
 #######################################
 save_judgment() {
   local dir="$1" result="$2" first="$3" table="$4" at sum
@@ -594,7 +599,8 @@ save_judgment() {
 #######################################
 judge_bundle() {
   local bundle="$1" dir stamp row action region resource previous note
-  local n=0 denied=0 changed=0 result="" table="" first
+  local n=0 denied=0 changed=0 unorganized=0 result="" table="" first
+  local orgs_note=""
   load_bundle "${bundle}"
   load_reference "${bundle}"
   dir="$(evidence::new_dir "${DIR_PREFIX}-${bundle}")" || exit 2
@@ -612,6 +618,10 @@ judge_bundle() {
     judge_row "${dir}" "${n}" "${action}" "${region}" "${resource}"
     result+="${row_line}"$'\n'
     [[ "${row_decision}" == deny ]] && denied=$((denied + 1))
+    # 셋째 칸(AllowedByOrganizations)이 True · False 가 아닌 행은 판정을
+    # 바꾸지 않고 건수만 드러낸다(장부 r3 9).
+    [[ "${row_line##*$'\t'}" == True || "${row_line##*$'\t'}" == False ]] ||
+      unorganized=$((unorganized + 1))
     previous="$(reference_decision "${action}" "${region}")"
     note=""
     if [[ "${previous}" != "${row_decision}" ]]; then
@@ -624,7 +634,12 @@ judge_bundle() {
   first="SCP RECHECK OK ${n}"
   [[ "${changed}" -gt 0 ]] && first="SCP RECHECK CHANGED ${changed}"
   [[ "${denied}" -gt 0 ]] && first="SCP RECHECK DENIED ${denied}"
-  save_judgment "${dir}" "${result}" "${first}" "${table}"
+  if [[ "${unorganized}" -gt 0 ]]; then
+    orgs_note="조직 판정 없음 ${unorganized} 행(AllowedByOrganizations 가"
+    orgs_note+=" True · False 아님) — 판정은 EvalDecision 그대로"$'\n'
+  fi
+  save_judgment "${dir}" "${result}" "${first}" "${table}${orgs_note}"
+  [[ -z "${orgs_note}" ]] || printf 'scp-recheck: %s' "${orgs_note}" >&2
   printf '%s\n%s' "${first}" "${table}"
   [[ "${denied}" -gt 0 ]] && return 1
   [[ "${changed}" -gt 0 ]] && return 3

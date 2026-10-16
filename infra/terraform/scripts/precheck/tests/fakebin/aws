@@ -24,6 +24,9 @@
 #                           short(동작 · 판정 두 칸만).
 #   FAKE_AWS_DENY           implicitDeny 로 답할 「동작@리전」 목록(공백 구분).
 #   FAKE_AWS_EXPLICIT_DENY  explicitDeny 로 답할 목록(같은 꼴).
+#   FAKE_AWS_ORGS           AllowedByOrganizations 칸을 바꿔 답할
+#                           「동작@리전=값」 목록(공백 구분 — 예
+#                           rds-db:connect@ap-northeast-2=None).
 #   FAKE_AWS_EVENTS         lookup-events 응답 표(리전 · 이름 · ID · 출처 ·
 #                           시각 · 주체, 탭 구분).
 #   FAKE_AWS_LOOKUP         ok(기본) · fail · denied-call · short(ID · 출처 ·
@@ -151,12 +154,12 @@ invalid_request() {
 # iam simulate-principal-policy.
 # Globals:
 #   FAKE_AWS_SIM, USER_ARN, REGION_CONTEXT_PATTERN, FAKE_AWS_DENY,
-#   FAKE_AWS_EXPLICIT_DENY
+#   FAKE_AWS_EXPLICIT_DENY, FAKE_AWS_ORGS
 # Arguments:
 #   받은 argv 전체.
 #######################################
 simulate() {
-  local input path request action resource region decision orgs
+  local input path request action resource region decision orgs rest
   require_text_output "$@"
   case "${FAKE_AWS_SIM:-ok}" in
     fail) call_failed ;;
@@ -188,6 +191,10 @@ simulate() {
   elif [[ " ${FAKE_AWS_EXPLICIT_DENY:-} " == *" ${action}@${region} "* ]]; then
     decision=explicitDeny
     orgs=False
+  fi
+  if [[ " ${FAKE_AWS_ORGS:-} " == *" ${action}@${region}="* ]]; then
+    rest="${FAKE_AWS_ORGS#*"${action}@${region}="}"
+    orgs="${rest%% *}"
   fi
   case "${FAKE_AWS_SIM:-ok}" in
     bad-action) action="iam:SomethingElse" ;;

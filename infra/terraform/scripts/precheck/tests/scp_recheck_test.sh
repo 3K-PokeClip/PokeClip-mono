@@ -293,6 +293,70 @@ expect_not_in_baseline() {
 }
 
 #######################################
+# 마지막 판정의 「조직 판정 없음」 줄을 본다 — 건수가 0 이 아니면 표준
+# 오류 · report.txt 에 그 건수로 한 줄씩 있고 표준 출력에는 없다. 0 이면
+# 어디에도 없다. 줄에는 동작 이름 · 계정 ID · ARN 이 없다.
+# Arguments:
+#   사례 이름, 사례 디렉터리, 기대 건수.
+# Returns:
+#   맞으면 0(아니면 실패를 센다).
+#######################################
+expect_orgs_note() {
+  local name="$1" case_dir="$2" want="$3" report line got_err got_report
+  report="${case_dir}/home/.pokeclip-precheck/$(judged_name)/report.txt"
+  line="조직 판정 없음 ${want} 행(AllowedByOrganizations 가 True · False"
+  line+=" 아님) — 판정은 EvalDecision 그대로"
+  [[ "${want}" -eq 0 ]] && line='조직 판정 없음'
+  got_err="$(testlib::count "${run_out}.stderr" "${line}")"
+  got_report="$(testlib::count "${report}" "${line}")"
+  if [[ ! -f "${report}" ]] ||
+    [[ "${want}" -eq 0 && "${got_err}${got_report}" != 00 ]] ||
+    [[ "${want}" -ne 0 && "${got_err}${got_report}" != 11 ]] ||
+    [[ "$(testlib::count "${run_out}.stdout" '조직 판정 없음')" -ne 0 ]]; then
+    testlib::fail "${name}: 조직 판정 없음 ${want} 행 줄을 표준 오류 ·" \
+      "report.txt 에 기대했으나 ${got_err} · ${got_report} — $(cat -- \
+      "${run_out}.stderr")"
+    return 1
+  fi
+  if grep -hF -- '조직 판정 없음' "${run_out}.stderr" "${report}" |
+    grep -qE -- '[a-z0-9-]+:[A-Za-z]|arn:|[0-9]{12}'; then
+    testlib::fail "${name}: 조직 판정 없음 줄에 동작 이름 · ARN · 계정 ID"
+    return 1
+  fi
+}
+
+#######################################
+# 장부 r3 9(kty 60차 (다)): 시뮬레이터 셋째 칸(AllowedByOrganizations)이
+# True · False 가 아닌 행(None · 아무 글자)은 건수만 표준 오류 · report.txt
+# 에 한 줄로 드러낸다. 판정 · 종료 코드 · 표준 출력은 그대로다(판정은
+# EvalDecision 만) — None 1행이면 「1 행」 · 아무 글자 2행이면 「2 행」 ·
+# True · False 만이면 줄이 없다.
+#######################################
+expect_orgs_unknown_reported() {
+  local case_dir others
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "orgs: 시험 준비 실패"
+    return
+  }
+  run_recheck "${case_dir}" none \
+    FAKE_AWS_ORGS='rds-db:connect@ap-northeast-2=None' alpha
+  expect_result orgs-none 0 'SCP RECHECK OK 3' 3 || return
+  expect_orgs_note orgs-none "${case_dir}" 1 || return
+  others='rds-db:connect@ap-northeast-2=x'
+  others+=' cloudfront-keyvaluestore:PutKey@us-east-1=true'
+  run_recheck "${case_dir}" other FAKE_AWS_ORGS="${others}" alpha
+  expect_result orgs-other 0 'SCP RECHECK OK 3' 3 || return
+  expect_orgs_note orgs-other "${case_dir}" 2 || return
+  run_recheck "${case_dir}" known \
+    FAKE_AWS_DENY='rds-db:connect@ap-northeast-2' alpha
+  expect_result orgs-known 1 'SCP RECHECK DENIED 1' 3 || return
+  expect_orgs_note orgs-known "${case_dir}" 0 || return
+  expect_no_leak orgs "${case_dir}" || return
+  testlib::ok "orgs → None · 아무 글자 행은 건수만 표준 오류 · report.txt 에" \
+    "한 줄 · True · False 만이면 없음 · 종료 코드 그대로"
+}
+
+#######################################
 # 마지막 판정이 표준 오류로 알린 증거 디렉터리 이름(kty 가 보고받는 이름).
 # Globals:
 #   run_out
@@ -1068,6 +1132,7 @@ main() {
   expect_changed
   expect_denied_and_changed
   expect_not_in_baseline
+  expect_orgs_unknown_reported
   expect_accept
   expect_accept_keeps_denied
   expect_prefix_isolated

@@ -58,7 +58,8 @@
     `--since` 규칙). 이번 ① 이 만든 증거 디렉터리의 시각이 아닙니다.
 1.  **④ 단계 고유 확인**: 위 표의 그 단계 칸.
 1.  **⑤ kty 보고**: ① 의 첫 줄과 13-1 덧붙임 줄 · 증거 디렉터리 이름(①
-    의 표준 오류 「증거 ~/.pokeclip-precheck/<이름>」) · ③ 의 `EVENTS` 줄과
+    의 표준 오류 「증거 ~/.pokeclip-precheck/<이름>」) · ① 의 표준 오류에
+    「조직 판정 없음」 줄이 있으면 그 줄 · ③ 의 `EVENTS` 줄과
     증거 `summary.tsv` 에서 역할 받기 행을 뺀 0 아닌 행(출처 · 이름 ·
     리전 · 건수 — 주체 없음) · ④ 의 결과를 보고하고, 단계 시작 여부를
     kty 가 정합니다.
@@ -102,6 +103,27 @@ bash infra/terraform/scripts/precheck/events.sh --since 2026-10-13T02:34:00Z
 덧붙일 수 있는 마크다운 표 행입니다(동작 · 리전 · 판정 · 날짜 시각(KST) ·
 묶음, 바뀐 행은 앞 기준 판정을 함께). 계정 ID · ARN · 사용자 이름은 들어
 있지 않습니다. 13-1 에는 덮어쓰지 않고 덧붙입니다.
+
+시뮬레이터 응답의 `AllowedByOrganizations`(조직의 SCP 가 그 동작을
+허용하는지)가 `True` · `False` 가 아닌 행(`None` 등)이 있으면, 판정 · 종료
+코드는 그대로 두고(판정은 `EvalDecision` 만) 그 행 수만 표준 오류와
+`report.txt` 에 한 줄로 냅니다. 동작 이름 · 계정은 넣지 않습니다.
+
+```text
+scp-recheck: 조직 판정 없음 1 행(AllowedByOrganizations 가 True · False 아님) — 판정은 EvalDecision 그대로
+```
+
+[IAM API 참조의 EvaluationResult][evaluation-result]는 이 칸이 든
+`OrganizationsDecisionDetail` 을 「Only applies if the simulated user's
+account is part of an organization. For resources that don't support
+organization-level evaluation, this field is omitted from the top-level
+result.」 라고 적습니다(2026-10-17 확인). 곧 `None` 은 계정이 조직 밖일
+때(걸 SCP 가 없음)나 그 자원이 조직 수준 평가를 지원하지 않을 때 나옵니다.
+어느 쪽이든 이 도구의 전제(리스 계정은 운영 측 조직 아래에 있고 시뮬레이터가
+그 SCP 를 평가)와 어긋날 수 있으므로, 이 줄이 나오면 ⑤ 에서 kty 에게
+알립니다.
+
+[evaluation-result]: https://docs.aws.amazon.com/IAM/latest/APIReference/API_EvaluationResult.html
 
 ### 첫 실행과 기준 승인
 
@@ -249,7 +271,8 @@ M17b(`principal-check.sh`)가 채우는 절입니다. M17b 머지 전에는 자�
     읽을 때도 같은 검사를 합니다.
 *   `scp-recheck.sh` 의 증거: `req-<n>.json`(요청) · `res-<n>.txt` ·
     `res-<n>.err`(응답 — `AllowedByOrganizations` 포함) · `sts.txt` ·
-    `result.tsv` · `reference.tsv`(비교 기준) · `report.txt`(표준 출력) ·
+    `result.tsv` · `reference.tsv`(비교 기준) · `report.txt`(표준 출력 —
+    조직 판정 없음 줄이 있으면 끝에 그 줄도) ·
     `complete.txt`(완료 표지 — 위 셋을 다 쓴 뒤 · UTC 시각과 판정 때
     `result.tsv` 해시) · `accepted.tsv`(승인했을 때 — 시각 · 해시 · 이유).
 *   증거 디렉터리는 지우지 않습니다. 승인 기준이 들어 있기 때문입니다.
