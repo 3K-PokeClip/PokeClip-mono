@@ -686,9 +686,9 @@ compose와 메이저 버전이 갈리면 로컬·CI만 통과하고 실제 DB에
 git이 추적하지 않아도 들어가고, `src/main/resources` 안의 것은 **jar에 실려 최종 이미지까지 간다**
 (멀티스테이지로 못 막는다). 로컬 전용 설정 `application-local*`이 그 자리에 있다.
 
-`services/.dockerignore`가 `.env`·`.env.*`와 함께 `**/application-local*.yml`·`.yaml`·`.properties`를
+`services/.dockerignore`가 `.env`·`.env.*`와 함께 `**/application-local*`(확장자 · 백업 꼴 `.bak`·`~` 전부)을
 뺀다. 이 컨텍스트를 쓰는 서버 넷(auth·clip·chat-collector·chat-detector) 이미지가 이 한 파일로 같이 막힌다.
-`workers/render`·`workers/upload`도 각자 `.dockerignore`에 같은 세 줄이 있다(`COPY src src` 뒤 `bootJar`라 같은 구멍).
+`workers/render`·`workers/upload`도 각자 `.dockerignore`에 같은 줄이 있다(`COPY src src` 뒤 `bootJar`라 같은 구멍).
 2026-10-16에 `fake: true` 한 줄짜리 가짜 파일로 세 컨텍스트 모두 「고치기 전 들어감 · 고친 뒤 빠짐」을 확인했다.
 
 **그래도 이미지는 깨끗한 체크아웃에서 굽는다.** `.dockerignore`는 아는 이름만 뺀다. 작업 폴더에는 이름을
@@ -708,9 +708,15 @@ docker build --platform <linux/amd64 또는 linux/arm64> -f services/clip/Docker
 
 # 3) 이미지 안에 로컬 설정·.env 가 없는지 서버마다 본다. 「없음」만 나와야 한다
 #    (실행 이미지는 jre 라 jar·unzip 이 없다. jar 를 밖으로 꺼내 본다)
+#    꺼내기 · 목록 보기가 실패하면 멈춘다. 「없음」은 목록을 실제로 읽었을 때만 나온다
 for s in auth clip; do
-  CID=$(docker create pokeclip-$s:$TAG) && docker cp "$CID":/app/app.jar /tmp/$s-$TAG.jar && docker rm "$CID" >/dev/null
-  echo "$s: $(unzip -l /tmp/$s-$TAG.jar | grep -E 'application-local|\.env' || echo 없음)"
+  rm -f /tmp/$s-$TAG.jar
+  CID=$(docker create pokeclip-$s:$TAG) || { echo "$s: 컨테이너 못 만듦, 멈춤"; break; }
+  docker cp "$CID":/app/app.jar /tmp/$s-$TAG.jar; rc=$?; docker rm "$CID" >/dev/null
+  [ $rc -eq 0 ] || { echo "$s: jar 못 꺼냄, 멈춤"; break; }
+  list=$(unzip -l /tmp/$s-$TAG.jar) || { echo "$s: jar 목록 못 읽음, 멈춤"; break; }
+  hits=$(printf '%s\n' "$list" | grep -E 'application-local|\.env')
+  echo "$s: ${hits:-없음}"
 done
 
 # 4) 꺼낸 폴더를 치운다. 안 치우면 다음 번 1) 이 같은 경로에서 멈춘다
