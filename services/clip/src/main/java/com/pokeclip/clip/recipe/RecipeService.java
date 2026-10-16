@@ -55,13 +55,13 @@ public class RecipeService {
                                  RecipeDocument document) {
         guard.requireViewable(requesterSubject, streamId);
         validator.validate(document, streamId);
-        Long sourceCard = sourceCardOf(streamId, sourceCardId);
+        // 출처 카드 확인을 저장과 같은 트랜잭션에 둔다. 밖에서 보면 확인과 저장 사이에 탈퇴 정리가 카드를 지울 때 FK로 500이 된다.
         Recipe saved = transactions.execute(status -> recipes.save(Recipe.create(
-                streamId, requesterSubject, sourceCard, document.schemaVersion(),
+                streamId, requesterSubject, sourceCardOf(streamId, sourceCardId), document.schemaVersion(),
                 inAt(document.cut()), outAt(document.cut()),
                 json(document.outputs()), json(document.audio()), json(document.subtitles()))));
         log.info("clip.recipe.created streamId={} recipeId={} creator={} sourceCardId={}",
-                streamId, saved.getId(), requesterSubject, sourceCard);
+                streamId, saved.getId(), requesterSubject, saved.getSourceCardId());
         return snapshot(saved);
     }
 

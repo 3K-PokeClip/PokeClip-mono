@@ -49,20 +49,25 @@ class CardMetricsQueryTest extends IntegrationTestSupport {
         long 열고_그대로 = 카드("auto", 2);
         long 안_열고_부적절 = 카드("auto", 3);
         long 핫키 = 카드("hotkey", 4);
+        long 기간_밖에만_열고_부적절 = 카드("auto", 5);
+        long 열고_중복 = 카드("auto", 6);
         행동(열고_부적절, "claim", "1201", null, T.plusSeconds(10));
         행동(열고_부적절, "claim", "1202", null, T.plusSeconds(20)); // 두 번 열어도 한 장이다
         행동(열고_그대로, "claim", "1201", null, T.plusSeconds(30));
         행동(핫키, "claim", "1201", null, T.plusSeconds(40));
-        행동(열고_그대로, "claim", "1201", null, T.minusSeconds(3_600)); // 기간 밖(이 카드는 위 줄로 이미 들어간다)
+        행동(열고_중복, "claim", "1201", null, T.plusSeconds(50));
+        행동(기간_밖에만_열고_부적절, "claim", "1201", null, T.minusSeconds(86_400)); // 기간 밖에서만 열었다
         숨김(열고_부적절, "not_highlight");
         숨김(안_열고_부적절, "not_highlight");
         숨김(핫키, "not_highlight");
+        숨김(기간_밖에만_열고_부적절, "not_highlight");
+        숨김(열고_중복, "duplicate"); // 숨겼지만 부적절이 아니다
 
         Map<String, Object> row = jdbc.queryForMap(기간을_넣는다(readmeSql("-- POK-338 거짓양성률")));
 
-        assertThat(((Number) row.get("opened")).longValue()).isEqualTo(2);
+        assertThat(((Number) row.get("opened")).longValue()).isEqualTo(3);
         assertThat(((Number) row.get("not_highlight")).longValue()).isEqualTo(1);
-        assertThat(((Number) row.get("false_positive_pct")).doubleValue()).isEqualTo(50.0);
+        assertThat(((Number) row.get("false_positive_pct")).doubleValue()).isEqualTo(33.3);
     }
 
     @Test
@@ -70,6 +75,8 @@ class CardMetricsQueryTest extends IntegrationTestSupport {
         long card = 카드("auto", 1);
         행동(card, "claim", "1201", null, T.minusSeconds(600)); // 첫 저장 직전 마지막 집기가 시작점이다
         행동(card, "claim", "1201", null, T);
+        행동(card, "claim", "1202", null, T.plusSeconds(30));  // 다른 편집자의 집기는 시작점이 아니다
+        행동(card, "claim", "1201", null, T.plusSeconds(120)); // 저장 뒤 다시 연 것도 시작점이 아니다
         long recipe = jdbc.queryForObject("""
                 INSERT INTO recipes (stream_id, creator_id, source_card_id, schema_version, recipe_version,
                                      outputs, audio, created_at, updated_at)
@@ -84,6 +91,19 @@ class CardMetricsQueryTest extends IntegrationTestSupport {
                                           youtube_video_id, updated_at)
                 VALUES (?, 'vert', '1201', '1201', '제목', 'uploaded', '{}'::jsonb, 'yt-1', ?)""",
                 clip, Timestamp.from(T.plusSeconds(300)));
+        // 실패한 업로드는 완료가 아니다(다른 출력이라 유일 색인과 안 부딪힌다)
+        jdbc.update("""
+                INSERT INTO clip_uploads (clip_id, output_id, requested_by, channel_owner, title, status, payload, updated_at)
+                VALUES (?, 'horiz', '1201', '1201', '제목', 'failed', '{}'::jsonb, ?)""",
+                clip, Timestamp.from(T.plusSeconds(200)));
+        // 기간 밖(하루 전)에 처음 저장한 편집본은 안 센다
+        long 어제_카드 = 카드("auto", 2);
+        행동(어제_카드, "claim", "1201", null, T.minusSeconds(86_400 + 60));
+        jdbc.update("""
+                INSERT INTO recipes (stream_id, creator_id, source_card_id, schema_version, recipe_version,
+                                     outputs, audio, created_at, updated_at)
+                VALUES ('s-m', '1201', ?, 1, 1, '[]'::jsonb, '{}'::jsonb, ?, ?)""",
+                어제_카드, Timestamp.from(T.minusSeconds(86_400)), Timestamp.from(T.minusSeconds(86_400)));
         // 카드 없이 만든 편집본은 안 센다
         jdbc.update("""
                 INSERT INTO recipes (stream_id, creator_id, schema_version, recipe_version, outputs, audio, created_at, updated_at)

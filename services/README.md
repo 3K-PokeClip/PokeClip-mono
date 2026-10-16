@@ -962,7 +962,7 @@ Media의 응답기(새 송출 연결을 받을지 판정하는 쪽)는 두 경�
 | `GET /api/clip/broadcasts/{streamId}/events` (계약 2B, SSE) | Bearer JWT | **200** `text/event-stream` · 404 `{"error":"broadcast_not_found"}` · 401 · **503** `{"error":"stream_limit","scope":"user\|stream\|total"}` 또는 `{"error":"authorization_unavailable"}` |
 | `POST /api/clip/jump-cards/{id}/claim` | Bearer JWT | 200 카드 · **409 본문이 현재 카드**(누가 잡고 있는지) · **400** `{"error":"invalid_request","field":"id"}`(번호가 숫자가 아니다) · 404 `{"error":"jump_card_not_found"}` · 503 `{"error":"authorization_unavailable"}` |
 | `DELETE /api/clip/jump-cards/{id}/claim` | Bearer JWT | **204** · 403 `{"error":"not_claim_owner"}` · **400**(위와 같음) · 404 · 503 |
-| `POST /api/clip/jump-cards/{id}/hide` | Bearer JWT | 200 카드(`hidden:true`, `hiddenReason`) · **400**(위와 같음, 또는 `"field":"reason"`: 이유가 셋 밖이다) · 404 · 503. 본문 `{"reason":"not_highlight"\|"duplicate"\|"other"}`은 고를 수 있다(POK-338). 본문이 없거나 `reason`이 없으면 이유 없이 숨긴다 |
+| `POST /api/clip/jump-cards/{id}/hide` | Bearer JWT | 200 카드(`hidden:true`, `hiddenReason`) · **400**(위와 같음, 또는 `"field":"reason"`: 이유가 셋 밖이다) · 404 · 503. 본문 `{"reason":"not_highlight"\|"duplicate"\|"other"}`은 고를 수 있다(POK-338). 본문이 없거나 `reason`이 없으면 이유 없이 숨긴다. 본문이 JSON이 아니면 스프링 기본 400이다(봉투가 다르다) |
 | `DELETE /api/clip/jump-cards/{id}/hide` | Bearer JWT | 200 카드(`hidden:false`, `hiddenReason:null`) · **400**(위와 같음) · 404 · 503 |
 
 **🔴 POK-174부터 문 다섯이 자격 판정을 지난다**(통로 + 카드 문 넷). 그래서 404의 뜻이 넓어지고
@@ -2437,8 +2437,12 @@ auth가 탈퇴를 알리는 내부 문 하나: **`DELETE /internal/streamers/{st
 - 웹은 「편집」을 누를 때마다 집는다. 같은 카드를 여러 번 열면 claim 줄이 여럿이라 **분모는 카드 수(`DISTINCT card_id`)로 센다.**
 - **점유가 만료로 끝난 것은 기록이 없다**(치우는 배경 작업이 없다). 점유 끝 = `release` 줄, 또는 마지막 `claim` + 점유 시간(`pokeclip.jump-card.claim-ttl`, 지금 30분).
 - 부적절 여부는 **지금 상태**(`hidden_reason`)로 센다. 숨겼다가 되돌린 카드는 부적절로 안 센다.
+  **이유 없이 숨긴 카드(NULL)도 안 센다**: 배포 중 열려 있던 옛 화면이나 본문 없는 호출이 그렇다.
 - 편집 시간의 시작은 **그 편집자가 첫 저장 직전에 마지막으로 집은 시각**이다. 업로드 완료 시각은 따로 없어 `clip_uploads.updated_at`(`uploaded`)을 쓴다.
-  편집자는 처음 저장한 사람(`recipes.creator_id`)만 남는다.
+  편집자는 처음 저장한 사람(`recipes.creator_id`)만 남는다. 저장한 사람이 그 카드를 직접 집지 못했으면(남이 집어 409였거나
+  주소로 바로 들어왔다) 시작점이 없어 ②에서 빠진다.
+- ②는 **시계 둘을 섞는다**: 행동 기록 `at`은 DB 시계이고 `recipes.created_at` · `clips.created_at` · `clip_uploads.updated_at`은
+  앱 시계다. 서버와 DB의 시계 차(보통 1초 안)만큼 어긋난다.
 - `actor`는 회원 번호다. 되돌리면 지워지는 `hidden_by`와 달리 이 기록은 카드가 있는 동안 남는다.
 
 **① 자동 카드 거짓양성률**: 기간(`:from` 이상 `:to` 미만)에 열어 본 자동 카드 중 「하이라이트 아님」으로 숨겨진 비율.

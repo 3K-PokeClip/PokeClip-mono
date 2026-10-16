@@ -156,4 +156,8 @@ public class Recipe {
     public Instant getUpdatedAt() {
         return updatedAt;
     }
+
+    public Long getSourceCardId() {
+        return sourceCardId;
+    }
 }
