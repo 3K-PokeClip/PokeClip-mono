@@ -178,6 +178,7 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R13 
 | R2 | 전체 | `resource` · `data` 유형이 `aws_cloudfrontkeyvaluestore_key` 로 시작 |
 | R3 | 전체 | `aws_security_group` 자원 안 `ingress` · `egress`(블록 · 속성 · `dynamic "ingress"` · `dynamic "egress"`) |
 | R4 | `modules/state_bucket/` | `aws_s3_bucket` 자원 없음, 또는 그 자원 중 `lifecycle { prevent_destroy = true }`(리터럴 `true`)가 없는 것 |
+| R6 | `modules/secret_shells/` | `aws_secretsmanager_secret_policy` 선언(`count = 0` 이어도) · `aws_secretsmanager_secret` 자원의 인라인 `policy` 인자(값과 무관 — kty 61차) · 이름이 `names` 가 아닌 `variable`(읽기 역할 등 다른 입력). 대상 경로에 `.tf` 가 없으면 건너뜀 |
 | R11 | `nonprod/dev/` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원 중 리터럴 `prevent_destroy = true` 가 없는 것 |
 | R12 | `nonprod/dns-legacy/` | 운영 트리: ① 그 루트 바로 아래 `.tf` 없음 ② 주소가 정확히 `aws_route53_zone.legacy` 인 선언 없음 ③ 그 루트의 `aws_route53_zone` 중 리터럴 `prevent_destroy = true` 가 없는 것. fixture 트리는 ① · ② 의 부재만 건너뜀(③ 은 그대로) |
 | R13 | 전체(`.tf` 만 — `*.example` · 시험 파일 · 주석은 리뷰) | 문자열 · 숫자 리터럴(맵 키 포함) 안의 계정 ID 꼴 숫자열 — 12자리 · 4-4-4 대시 표기(앞뒤가 숫자가 아님 — ARN 속 계정 ID 포함) · 이름을 소문자로 바꾸고 `-` · `_` 를 뺐을 때 `accountid` 가 드는 `variable`(`accountId` · `account-id` 포함). 위반 메시지는 그 숫자열을 가림 |
@@ -198,7 +199,7 @@ dev SG 규칙 자원은 M12 가 8082 규칙을 지우므로 R11 대상이 아닙
 건너뛰고, 표지가 없거나 모르는 값이면 운영 트리로 봅니다. 루트를 옮기거나 존
 주소를 바꾸는 PR 은 R12 도 같은 PR 에서 고쳐야 통과합니다.
 
-R6 · R8 ~ R10 은 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 ·
+R8 ~ R10 은 계획이 번호를 정해 둔 규칙이라, 그 규칙이 지키는 루트 ·
 모듈과 같은 PR 에서 그 번호로 `policy/guard/` 에 더합니다(정책 · `_test.rego` ·
 fixture 를 함께). R5 · R7 은 **보류**입니다 — R5 는 재개 키트(결정 46), R7 은
 CI 자동 푸시를 켜는 후속 PR(40차)이 더합니다.
