@@ -777,8 +777,16 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     updatedAt: '2026-09-20T12:01:00Z',
   };
 
+  /** 패널을 열면 비율을 읽으러 상세를 부른다(POK-254). 이 시험들이 세는 것은 「푸는 문」 호출이다 */
+  const resolutionStub = (answer: () => Response) => {
+    const spy = stubFetch((url) =>
+      url.startsWith('/api/clip/library/') ? new Promise<Response>(() => {}) : answer(),
+    );
+    return () => spy.mock.calls.filter(([url]) => String(url).endsWith('/resolution'));
+  };
+
   it('확인 필요는 「채널에 올라갔어요」로 영상 주소를 받아 푼다(POK-333)', async () => {
-    const spy = stubFetch(() =>
+    const calls = resolutionStub(() =>
       jsonResponse(200, { ...checkingUpload, status: 'uploaded', videoId: 'abcDEF12345' }),
     );
     const user = userEvent.setup();
@@ -794,9 +802,9 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     );
     await user.click(submit);
 
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy.mock.calls[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/5/uploads/7/resolution');
-    expect(JSON.parse(String(spy.mock.calls[0]?.[1]?.body))).toEqual({
+    expect(calls()).toHaveLength(1);
+    expect(calls()[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/5/uploads/7/resolution');
+    expect(JSON.parse(String(calls()[0]?.[1]?.body))).toEqual({
       result: 'uploaded',
       videoId: 'https://youtu.be/abcDEF12345',
     });
@@ -805,7 +813,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
   });
 
   it('「안 올라갔어요」는 두 번 올라갈 수 있다는 경고를 거치고, 30분 전이면 사유를 알린다(POK-333)', async () => {
-    const spy = stubFetch(() =>
+    const calls = resolutionStub(() =>
       jsonResponse(409, { error: 'resolution_too_early', allowedAt: '2026-09-20T12:31:00Z' }),
     );
     const user = userEvent.setup();
@@ -814,10 +822,10 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     await user.click(within(panel()).getByRole('button', { name: '안 올라갔어요' }));
     const dialog = await screen.findByRole('dialog', { name: '유튜브에 안 올라간 것이 맞나요?' });
     expect(within(dialog).getByText(/같은 영상이 두 개 떠요/)).toBeInTheDocument();
-    expect(spy).not.toHaveBeenCalled();
+    expect(calls()).toHaveLength(0);
     await user.click(within(dialog).getByRole('button', { name: '안 올라갔어요' }));
 
-    expect(JSON.parse(String(spy.mock.calls[0]?.[1]?.body))).toEqual({ result: 'not_uploaded' });
+    expect(JSON.parse(String(calls()[0]?.[1]?.body))).toEqual({ result: 'not_uploaded' });
     expect(await screen.findByText(/30분이 지난 뒤 다시 눌러/)).toBeInTheDocument();
     expect(
       screen.getByRole('dialog', { name: '유튜브에 안 올라간 것이 맞나요?' }),
@@ -835,7 +843,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
   });
 
   it('새 판을 주문해도 옛 판의 확인 필요 줄에 푸는 단추가 붙고 그 업로드 번호로 보낸다(POK-333)', async () => {
-    const spy = stubFetch(() =>
+    const calls = resolutionStub(() =>
       jsonResponse(200, { ...checkingUpload, id: 3, clipId: 2, status: 'failed' }),
     );
     const user = userEvent.setup();
@@ -866,7 +874,7 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     await user.click(
       within(await screen.findByRole('dialog')).getByRole('button', { name: '안 올라갔어요' }),
     );
-    expect(spy.mock.calls[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/2/uploads/3/resolution');
+    expect(calls()[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/2/uploads/3/resolution');
   });
 
   const failedUpload = {
