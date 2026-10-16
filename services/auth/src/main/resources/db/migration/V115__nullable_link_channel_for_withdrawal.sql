@@ -15,3 +15,14 @@ ALTER TABLE youtube_channel_links ADD CONSTRAINT ck_youtube_links_alive_has_chan
 
 COMMENT ON COLUMN chzzk_channel_links.channel_name IS '탈퇴하면 NULL(닫힌 행만). 살아 있는 행은 CHECK가 막는다 (POK-341)';
 COMMENT ON COLUMN youtube_channel_links.channel_id IS '업로드 대상 채널. 동의 시점에 확정되고 그 뒤로 바뀌지 않는다: 바꾸는 수단은 재연동(새 행)뿐 (2026-08-24 실측). 예외는 탈퇴 하나: 닫힌 행을 NULL로 비운다 (POK-341)';
+
+-- 이 배포 전에 이미 탈퇴한 회원도 한 번 비운다(PR #249 codex P1). 그 회원은 다시 탈퇴할 수 없어
+-- (이미 탈퇴했으면 탈퇴 처리가 바로 돌아간다) 새 비우기 코드에 영영 안 닿는다.
+-- 닫힌 행만 고른다: 살아 있는 행은 위 CHECK가 막는다. 수집기 정리 장부(V114)는 채널 번호를 자기 칸에 따로
+-- 적어 두어 이 표를 다시 읽지 않는다.
+UPDATE chzzk_channel_links l SET channel_id = NULL, channel_name = NULL
+  FROM users u
+ WHERE u.id = l.user_id AND u.deleted_at IS NOT NULL AND l.revoked_at IS NOT NULL;
+UPDATE youtube_channel_links l SET channel_id = NULL, channel_name = NULL
+  FROM users u
+ WHERE u.id = l.user_id AND u.deleted_at IS NOT NULL AND l.revoked_at IS NOT NULL;
