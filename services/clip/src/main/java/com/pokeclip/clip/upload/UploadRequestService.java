@@ -21,7 +21,11 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 「이 영상을 유튜브에 올려 줘」를 받아 업로드 줄을 쓰고 주문줄에 싣는다(POK-220).
@@ -253,5 +257,15 @@ public class UploadRequestService {
             return List.of();
         }
         return uploads.findLatestByClipIdIn(clipIds).stream().map(UploadSnapshot::of).toList();
+    }
+
+    /** 편집본마다 살아 있는 업로드 목록(POK-334, 최근 것이 앞). 업로드가 없는 편집본은 열쇠가 없다. 보관함이 쓴다. */
+    public Map<Long, List<LiveUpload>> aliveFor(Collection<Long> recipeIds) {
+        if (recipeIds.isEmpty()) {
+            return Map.of();
+        }
+        return uploads.findAliveByRecipeIdIn(recipeIds).stream()
+                .collect(Collectors.groupingBy(LiveUpload.Row::recipeId, LinkedHashMap::new,
+                        Collectors.mapping(LiveUpload.Row::upload, Collectors.toList())));
     }
 }

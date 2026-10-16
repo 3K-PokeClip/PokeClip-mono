@@ -352,6 +352,9 @@ export interface UploadSnapshot {
     status: 'none' | 'pending' | 'set' | 'failed';
     errorCode: string | null;
   };
+  /** 「확인 필요」를 사람이 풀었으면 그 사람과 시각(POK-333). 일꾼이 끝냈거나 옛 서버면 null · 빠져 온다 */
+  resolvedBy?: string | null;
+  resolvedAt?: string | null;
 }
 
 /** 보관함 상태 일곱(clip LibraryStatus). 뒤의 셋은 유튜브 업로드(POK-220) */
@@ -379,14 +382,67 @@ export interface LibraryEntry {
   thumbnailUrl?: string | null;
   /** 이 편집본 **지금 판**에 남겨 둔 업로드 정보(POK-291). 없으면 null, 옛 서버면 빠져 온다 */
   uploadRequest?: UploadRequestSummary | null;
+  /**
+   * 이 편집본 **모든 판**의 살아 있는(실패 아닌) 업로드, 최근 것이 앞(POK-334). 새 판 영상을 주문해 latestClip이 바뀌어도
+   * 옛 판으로 올린 영상이 여기 남는다. 옛 서버면 빠져 온다: liveUploadsOf로 읽는다
+   */
+  liveUploads?: LiveUpload[];
+}
+
+/** 보관함 줄의 살아 있는 업로드 하나(POK-334). status는 queued·uploading·checking·uploaded */
+export interface LiveUpload {
+  id: number;
+  /** 이 업로드가 올린 영상 번호(옛 판이면 latestClip과 다르다) */
+  clipId: number;
+  recipeVersion: number;
+  outputId: string;
+  title: string;
+  status: string;
+  videoId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 살아 있는 업로드 목록. 칸을 모르는 옛 서버면 latestClip의 업로드 하나로 접는다(실패는 뺀다) */
+export function liveUploadsOf(entry: LibraryEntry): LiveUpload[] {
+  if (entry.liveUploads !== undefined) return entry.liveUploads;
+  const clip = entry.latestClip;
+  const upload = clip?.upload;
+  if (clip == null || upload == null || upload.status === 'failed') return [];
+  return [
+    {
+      id: upload.id,
+      clipId: upload.clipId,
+      recipeVersion: clip.recipeVersion,
+      outputId: upload.outputId,
+      title: upload.title,
+      status: upload.status,
+      videoId: upload.videoId,
+      createdAt: upload.createdAt,
+      updatedAt: upload.updatedAt,
+    },
+  ];
 }
 
 export interface LibraryDetail extends LibraryEntry {
   recipe: RecipeDocument;
 }
 
-export function createRecipe(streamId: string, doc: RecipeDocument): Promise<RecipeSnapshot> {
-  return sendJson('POST', `/api/clip/broadcasts/${encodeURIComponent(streamId)}/recipes`, doc);
+/**
+ * 첫 저장. 카드에서 연 편집본이면 그 카드 번호를 쿼리로 싣는다(POK-338, 「카드 → 영상」 시간 측정 재료).
+ * 계약6 본문을 안 바꾸려고 쿼리다. 서버는 이 방송의 카드가 아니면 출처만 비우고 저장한다.
+ */
+export function createRecipe(
+  streamId: string,
+  doc: RecipeDocument,
+  sourceCardId: string | null = null,
+): Promise<RecipeSnapshot> {
+  const query = sourceCardId === null ? '' : `?sourceCardId=${encodeURIComponent(sourceCardId)}`;
+  return sendJson(
+    'POST',
+    `/api/clip/broadcasts/${encodeURIComponent(streamId)}/recipes${query}`,
+    doc,
+  );
 }
 
 export function updateRecipe(
@@ -484,6 +540,27 @@ export async function retryUpload(
     { method: 'POST' },
   );
   return { created: res.status === 201, upload: (await res.json()) as UploadSnapshot };
+}
+
+/** 「확인 필요」 업로드를 사람이 푸는 결과(POK-333). videoId는 영상 번호 그대로이거나 그 영상의 유튜브 주소 */
+export type UploadResolution = { result: 'uploaded'; videoId: string } | { result: 'not_uploaded' };
+
+/**
+ * 「확인 필요」 업로드를 채널에서 본 결과로 푼다(POK-333). 200 푼 업로드(같은 결과를 다시 보내도 200). 400 invalid_request
+ * (result · videoId) · 404 · 409 upload_not_checking(이미 다른 결과로 풀렸거나 일꾼이 끝냄)/resolution_too_early(「안 올라갔다」는
+ * 마지막 일꾼 활동에서 30분 뒤부터).
+ */
+export function resolveUpload(
+  streamId: string,
+  clipId: number,
+  uploadId: number,
+  body: UploadResolution,
+): Promise<UploadSnapshot> {
+  return sendJson(
+    'POST',
+    `/api/clip/broadcasts/${encodeURIComponent(streamId)}/clips/${clipId}/uploads/${uploadId}/resolution`,
+    body,
+  );
 }
 
 /** 완성 영상 파일 주소(POK-220). url은 60분짜리 서명 주소라 재생·내려받기에 같이 쓴다. 만료(403)면 다시 부른다 */

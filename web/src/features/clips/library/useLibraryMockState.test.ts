@@ -17,10 +17,9 @@ function ids(result: ReturnType<typeof renderLibrary>['result']) {
 }
 
 describe('useLibraryMockState', () => {
-  it('시안 1g 기본값으로 시작한다 — 스트리머 · 8건 · 최근 편집순 · 전체 · 미선택', () => {
+  it('시안 1g 기본값으로 시작한다 — 8건 · 최근 편집순 · 전체 · 미선택', () => {
     const { result } = renderLibrary();
 
-    expect(result.current.role).toBe('streamer');
     expect(result.current.totalCount).toBe(8);
     expect(result.current.sort).toBe('edited');
     expect(result.current.chip).toBe('all');
@@ -40,29 +39,14 @@ describe('useLibraryMockState', () => {
     ]);
   });
 
-  it('칩 수를 시점별로 센다 — 스트리머 작업 중 4 · 업로드 대기 2 · 발행됨 2 / 편집자 작업 중 3 · 반려됨 1', () => {
-    const streamer = renderLibrary();
-    expect(streamer.result.current.counts).toEqual({
-      all: 8,
-      working: 4,
-      ready: 2,
-      rejected: 0,
-      published: 2,
-    });
-
-    const editor = renderLibrary({ role: 'editor' });
-    expect(editor.result.current.counts).toEqual({
+  it('칩 수를 센다 — 작업 중 3 · 업로드 대기 3 · 발행됨 2', () => {
+    const { result } = renderLibrary();
+    expect(result.current.counts).toEqual({
       all: 8,
       working: 3,
-      ready: 2,
-      rejected: 1,
+      ready: 3,
       published: 2,
     });
-  });
-
-  it('승인 대기 수를 배너용으로 준다', () => {
-    const { result } = renderLibrary();
-    expect(result.current.pendingCount).toBe(1);
   });
 
   it('같은 카드를 두 번 고르면 해제된다', () => {
@@ -87,17 +71,12 @@ describe('useLibraryMockState', () => {
     expect(result.current.selectedId).toBeNull();
   });
 
-  it('업로드는 스트리머면 발행됨, 편집자면 승인 대기로 옮긴다', () => {
-    const streamer = renderLibrary({ selectedId: 'lib2-2' });
-    act(() => streamer.result.current.upload('lib2-2'));
-    expect(streamer.result.current.selectedClip?.status).toBe('published');
+  it('업로드는 발행됨으로 옮긴다 — 승인 게이트가 없다', () => {
+    const { result } = renderLibrary({ selectedId: 'lib2-2' });
+    act(() => result.current.upload('lib2-2'));
+    expect(result.current.selectedClip?.status).toBe('published');
     // 목업 업로드로 발행된 것은 갈 곳(유튜브 주소)이 없다
-    expect(streamer.result.current.selectedClip?.youtubeUrl).toBeUndefined();
-
-    const editor = renderLibrary({ role: 'editor', selectedId: 'lib2-2' });
-    act(() => editor.result.current.upload('lib2-2'));
-    expect(editor.result.current.selectedClip?.status).toBe('pending');
-    expect(editor.result.current.pendingCount).toBe(2);
+    expect(result.current.selectedClip?.youtubeUrl).toBeUndefined();
   });
 
   it('업로드 대기가 아닌 편집본은 업로드해도 그대로다', () => {
@@ -124,7 +103,7 @@ describe('useLibraryMockState', () => {
     expect(result.current.totalCount).toBe(7);
     expect(ids(result)).not.toContain('lib2-2');
     expect(result.current.selectedId).toBeNull();
-    expect(result.current.counts.ready).toBe(1);
+    expect(result.current.counts.ready).toBe(2);
   });
 
   it('다른 편집본을 지우면 선택은 남는다', () => {
@@ -169,7 +148,6 @@ describe('useLibraryMockState', () => {
     const { result } = renderLibrary({ clips: [] });
     expect(result.current.totalCount).toBe(0);
     expect(result.current.clips).toEqual([]);
-    expect(result.current.pendingCount).toBe(0);
   });
 });
 

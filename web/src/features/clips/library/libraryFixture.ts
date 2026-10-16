@@ -1,8 +1,9 @@
 import type { LibraryClip, LibraryOptions } from './useLibraryMockState';
 
 // 시안 1g 보관함의 고정 데이터 — 시험·스토리북 전용(POK-251).
-// 화면은 clip 보관함 문에서 편집본을 받는다. 예전에 훅 안에 있던 목업 8건(상태 7종이 한 화면에 다 보인다)을
-// 여기로 옮겨, 시험이 시안의 흐름(업로드 요청·승인 대기·반려·만료)을 계속 잴 수 있게 한다.
+// 화면은 clip 보관함 문에서 편집본을 받는다. 예전에 훅 안에 있던 목업 8건을 여기로 옮겨, 시험이 시안의 흐름
+// (업로드·만료·렌더 실패)을 계속 잴 수 있게 한다. 시안의 승인 대기·반려 두 건은 업로드 승인 게이트가 없어
+// (POK-236 폐기) 서버에서 나올 수 있는 상태(업로드 대기·편집 중)로 바꿨다.
 
 // 「지금」을 고정한다. 클라이언트 시계로 계산하면 하이드레이션이 어긋나고(MOCK_GREETING 선례),
 // 목업 날짜와 함께 얼면 D-day가 결정적이라 테스트가 시계를 조작할 필요도 없다.
@@ -20,7 +21,7 @@ function expiresFrom(endedAt: string): string {
 const ME = { name: '게임하는너구리', me: true };
 const GAMJA = { name: '감자대장', me: false };
 
-// 시안 1g 스크립트(libVals)의 8건 그대로 — 상태 7종이 한 화면에 다 보이도록 심어 뒀다.
+// 시안 1g 스크립트(libVals)의 8건 — 상태 다섯(편집 중·업로드 대기·발행됨·원본 만료·렌더 실패)이 한 화면에 다 보인다.
 // D-day는 시안의 손글씨(7월 22일 → D-19)가 아니라 종료 + 60일에서 계산된다(vod 목업 선례).
 export const MOCK_CLIPS: LibraryClip[] = [
   {
@@ -52,7 +53,7 @@ export const MOCK_CLIPS: LibraryClip[] = [
   {
     id: 'lib2-3',
     title: '시청자 도네 반응 모음',
-    status: 'pending',
+    status: 'ready',
     durationSec: 44,
     owner: GAMJA,
     sourceLabel: '8월 30일 라이브',
@@ -79,7 +80,7 @@ export const MOCK_CLIPS: LibraryClip[] = [
   {
     id: 'lib2-5',
     title: '고민상담 레전드 사연',
-    status: 'rejected',
+    status: 'editing',
     durationSec: 100,
     owner: GAMJA,
     sourceLabel: '8월 28일 라이브',
@@ -88,7 +89,6 @@ export const MOCK_CLIPS: LibraryClip[] = [
     subtitleLabel: '자동 자막 24줄',
     createdAt: '2026-08-28T22:00:00+09:00',
     editedAt: '2026-09-01T21:32:00+09:00',
-    rejection: { reason: '앞부분 20초 컷', at: '2026-09-01T21:32:00+09:00' },
   },
   {
     id: 'lib2-6',

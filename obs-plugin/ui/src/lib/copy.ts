@@ -12,6 +12,7 @@ export const REASON: Record<string, string> = {
   server_error: 'PokeClip 서버 오류예요. 잠시 뒤 다시 시도하세요.',
   bad_response: '서버 응답이 예상과 달라요.',
   save_failed: '설정을 저장하지 못했어요.',
+  server_changed: '연결하는 사이 서버가 바뀌었어요. 바뀐 서버에서 새 코드를 발급하세요.',
   no_key: '연결되지 않아 이 방송은 PokeClip으로 전송되지 않아요.',
   encoder_active: '키프레임 2초를 적용하지 못했어요. 녹화를 멈추거나 본 방송을 다시 시작하세요.',
   multitrack_video: '멀티트랙 비디오는 지원하지 않아요. 설정 › 방송에서 끄세요.',
@@ -39,6 +40,7 @@ export const REASON: Record<string, string> = {
   invalid_ingest_host: '수신 호스트 형식이 올바르지 않아요.',
   invalid_ingest_port: '포트는 1–65535 사이여야 해요.',
   invalid_latency: '지연은 20–8000ms 사이여야 해요.',
+  invalid_server_env: '알 수 없는 서버 환경이에요.',
   unauthorized: '독 페이지 인증이 만료됐어요. OBS를 다시 시작하세요.',
   output_no_multitrack: 'OBS 출력이 다중 오디오 트랙을 받지 않아요.',
   audio_encoder_failed: '오디오 트랙 인코더를 만들지 못했어요.',
@@ -66,9 +68,13 @@ export const REASON: Record<string, string> = {
   bad_track: '트랙은 2~6 사이여야 해요.',
 };
 
-// 서버가 살아 있는데 거절이 이어질 때 — 키 폐기·암호 오류·경로 없음은 플러그인에서 가를 수 없어 확인을 권한다.
-export const KEY_SUSPECT_HINT =
-  '수신 서버가 연결을 계속 거절해요. PokeClip 웹에서 스트림 키를 확인하세요.';
+// 빠른 거절이 이어질 때 — 키 폐기·암호 오류·경로 없음은 플러그인에서 가를 수 없고, auth 장애·운영자 차단도 같은
+// 거절로 온다(POK-287). 그래서 확정이 아니라 가능성으로 쓰고 확인을 권한다.
+export const KEY_SUSPECT_HINT = '수신 서버가 계속 거절해요. 스트림 키 문제일 수 있어요. 웹에서 확인하세요.';
+
+// 키 확인 안내를 남긴 채 멈췄을 때(재시도 중지·포기) 설명줄 앞에 붙인다 — 재페어링해도 안 풀리는 거절(auth 장애·
+// 운영자 차단)도 있어서, 키를 바로잡았는데도 그대로면 키 말고 다른 곳을 보게 한다. 폴백 locale Retry.KeyHintNext와 같다.
+export const KEY_SUSPECT_NEXT = '키가 맞는데도 계속 거절되면 PokeClip 쪽 문제일 수 있어요.';
 
 // 송출 점검의 해상도 경고에 붙는 안내 — 1080p는 권장값이라(ADR-020) 어긋나도 막지 않는다. 점검값은 다음 본방 시작까지
 // 남아 전송이 멈춘 뒤에도 보이므로 「지금 전송 중」을 단정하지 않는 말로 쓴다. 폴백 패널(locale Check.ResAdvisory)과 같은 문구.

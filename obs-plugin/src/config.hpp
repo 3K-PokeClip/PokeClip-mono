@@ -1,6 +1,7 @@
 #pragma once
 
 #include "audio-assign.hpp"
+#include "constants.hpp"
 
 #include <functional>
 #include <mutex>
@@ -11,6 +12,9 @@ namespace pokeclip {
 
 // plugin_config/pokeclip-obs/pokeclip.json. 계정 단위 설정이라 OBS 프로필과 무관하다.
 struct PluginConfig {
+	// 서버 환경(POK-267) — api_base·수신 주소의 짝과 스트림 키가 이 환경에 속한다. 파일 키 server_env, 없으면
+	// 빌드 기본(constants.hpp kBuildServerEnv)·옛 파일은 api_base로 짐작한다(server-env.hpp). 바꾸면 연결이 해제된다.
+	ServerEnv serverEnv = kBuildServerEnv;
 	std::string apiBase;
 	std::string ingestHost;
 	int ingestPort = 0;
@@ -39,11 +43,26 @@ struct PluginConfig {
 	std::string markHotkey;
 
 	bool HasKey() const { return !streamId.empty(); }
-	// 송출 중에 바꾸면 안 되는 값(SRT 출력·동기화·독 표시 방식)이 같은가. 오디오 배정 값은 보지 않는다.
+	// 송출 중에 바꾸면 안 되는 값(서버 환경·SRT 출력·동기화·독 표시 방식)이 같은가. 오디오 배정 값은 보지 않는다.
 	bool SameOutputSettings(const PluginConfig &o) const
 	{
-		return ingestHost == o.ingestHost && ingestPort == o.ingestPort && sendPassphrase == o.sendPassphrase &&
-		       latencyMs == o.latencyMs && syncStart == o.syncStart && forceFallback == o.forceFallback;
+		return serverEnv == o.serverEnv && ingestHost == o.ingestHost && ingestPort == o.ingestPort &&
+		       sendPassphrase == o.sendPassphrase && latencyMs == o.latencyMs && syncStart == o.syncStart &&
+		       forceFallback == o.forceFallback;
+	}
+	// 브리지 PUT /api/config가 바꾸는 값(독 고급 설정·오디오 스위치)만 o에서 가져온다. 서버 환경·API 주소·키·배정 기억·
+	// 독 첫 실행 표시·단축키 사본은 가져오지 않는다 — 잠금 아래 지금 설정에 얹어, 요청이 읽은 옛 스냅샷이 그사이 다른 경로
+	// (환경 전환·페어링·UI 스레드 저장)가 바꾼 값을 덮지 않게(POK-267 리뷰).
+	void TakeDockSettings(const PluginConfig &o)
+	{
+		ingestHost = o.ingestHost;
+		ingestPort = o.ingestPort;
+		sendPassphrase = o.sendPassphrase;
+		latencyMs = o.latencyMs;
+		syncStart = o.syncStart;
+		forceFallback = o.forceFallback;
+		audioAutoAssign = o.audioAutoAssign;
+		audioAssignPrompted = o.audioAssignPrompted;
 	}
 	const std::string &ClipBase() const { return clipApiBase.empty() ? apiBase : clipApiBase; }
 };
@@ -57,12 +76,15 @@ public:
 	// 변경 후 즉시 저장한다. 저장 실패 시 false지만 메모리에는 남는다 — 이미 OBS에 적용한 값(트랙 체크 백업 등)을
 	// 이번 실행 동안이라도 기억해야 하는 경로용.
 	bool Update(const std::function<void(PluginConfig &)> &mutate);
+	// 저장할 때 .bak에 둘 판. KeepPrevious는 직전 판(본 파일이 깨지면 libobs가 읽는다), SameAsNew는 새 판 —
+	// 자격증명을 지우는 저장(연결 해제)용이다. 직전 판을 남기면 지운 키가 .bak에서 되살아난다(POK-285).
+	enum class SaveBackup { KeepPrevious, SameAsNew };
 	// Update와 같되 저장에 실패하면 메모리도 되돌린다 — 실패를 독에 알리고 상태를 바꾸지 않는 경로(페어링·연결 해제·
 	// 설정 저장)용. 안 되돌리면 독은 옛 상태를 보이는데 다음 방송은 바뀐 값으로 돈다.
-	bool Commit(const std::function<void(PluginConfig &)> &mutate);
+	bool Commit(const std::function<void(PluginConfig &)> &mutate, SaveBackup backup = SaveBackup::KeepPrevious);
 
 private:
-	bool SaveLocked();
+	bool SaveLocked(SaveBackup backupMode);
 
 	mutable std::mutex mutex_;
 	PluginConfig config_;

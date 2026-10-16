@@ -1,6 +1,7 @@
 package com.pokeclip.clip.recipe;
 
 import com.pokeclip.clip.delegation.BroadcastAccessGuard;
+import com.pokeclip.clip.jumpcard.JumpCardRepository;
 import com.pokeclip.clip.recipe.RecipeDocument.Cut;
 import com.pokeclip.clip.recipe.RecipeErrors.RecipeNotFoundException;
 import org.slf4j.Logger;
@@ -29,14 +30,16 @@ public class RecipeService {
     private static final Logger log = LoggerFactory.getLogger(RecipeService.class);
 
     private final RecipeRepository recipes;
+    private final JumpCardRepository cards;
     private final RecipeValidator validator;
     private final BroadcastAccessGuard guard;
     private final TransactionTemplate transactions;
     private final ObjectMapper mapper;
 
-    RecipeService(RecipeRepository recipes, RecipeValidator validator, BroadcastAccessGuard guard,
-                  TransactionTemplate transactions, ObjectMapper mapper) {
+    RecipeService(RecipeRepository recipes, JumpCardRepository cards, RecipeValidator validator,
+                  BroadcastAccessGuard guard, TransactionTemplate transactions, ObjectMapper mapper) {
         this.recipes = recipes;
+        this.cards = cards;
         this.validator = validator;
         this.guard = guard;
         this.transactions = transactions;
@@ -48,15 +51,42 @@ public class RecipeService {
      * @throws com.pokeclip.clip.delegation.AccessErrors.AuthUnavailableException 자격을 물어보지 못했다 (503)
      * @throws RecipeErrors.InvalidRecipeException 계약6 규칙에 어긋난다 (400)
      */
-    public RecipeSnapshot create(String requesterSubject, String streamId, RecipeDocument document) {
+    public RecipeSnapshot create(String requesterSubject, String streamId, String sourceCardId,
+                                 RecipeDocument document) {
         guard.requireViewable(requesterSubject, streamId);
         validator.validate(document, streamId);
+        // 출처 카드 확인을 저장과 같은 트랜잭션에 둔다. 밖에서 보면 확인과 저장 사이에 탈퇴 정리가 카드를 지울 때 FK로 500이 된다.
         Recipe saved = transactions.execute(status -> recipes.save(Recipe.create(
-                streamId, requesterSubject, document.schemaVersion(),
+                streamId, requesterSubject, sourceCardOf(streamId, sourceCardId), document.schemaVersion(),
                 inAt(document.cut()), outAt(document.cut()),
                 json(document.outputs()), json(document.audio()), json(document.subtitles()))));
-        log.info("clip.recipe.created streamId={} recipeId={} creator={}", streamId, saved.getId(), requesterSubject);
+        log.info("clip.recipe.created streamId={} recipeId={} creator={} sourceCardId={}",
+                streamId, saved.getId(), requesterSubject, saved.getSourceCardId());
         return snapshot(saved);
+    }
+
+    /**
+     * 출처 카드(POK-338). <b>이 방송의 카드일 때만</b> 남긴다: 다른 방송의 카드를 남기면 「카드 → 영상 시간」 집계가
+     * 남의 방송 카드에 붙는다. 맞지 않으면 비운 채 저장하고 경고만 남긴다: 측정 재료 때문에 편집자 저장이 실패하면 안 된다.
+     * 값은 숫자로 바꾼 뒤에만 로그에 싣는다(외부 입력을 그대로 로그로 보내지 않는다).
+     */
+    private Long sourceCardOf(String streamId, String sourceCardId) {
+        if (sourceCardId == null || sourceCardId.isEmpty()) {
+            return null;
+        }
+        long cardId;
+        try {
+            cardId = Long.parseLong(sourceCardId);
+        } catch (NumberFormatException e) {
+            log.warn("clip.recipe.source_card_ignored streamId={} reason=not_a_number", streamId);
+            return null;
+        }
+        if (cards.findById(cardId).filter(card -> card.getStreamId().equals(streamId)).isEmpty()) {
+            log.warn("clip.recipe.source_card_ignored streamId={} sourceCardId={} reason=not_in_broadcast",
+                    streamId, cardId);
+            return null;
+        }
+        return cardId;
     }
 
     public List<RecipeSnapshot> listOf(String requesterSubject, String streamId) {

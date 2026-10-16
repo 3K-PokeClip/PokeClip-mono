@@ -125,6 +125,61 @@ class RecipeControllerTest extends IntegrationTestSupport {
         assertThat(MAPPER.readTree(다시).get("id").asLong()).isEqualTo(id);
     }
 
+    // ── 출처 카드 (POK-338) ───────────────────────────────────────
+
+    /** 쿼리로 받는다: 계약6 본문과 응답 봉투는 그대로다(보낸 것과 돌아온 recipe가 트리로 같다). */
+    @Test
+    void 카드로_연_편집본은_출처_카드가_남고_본문은_그대로다() throws Exception {
+        볼_수_있다("OWNER");
+        long card = 카드를_넣는다(내_방송);
+        JsonNode 보낸것 = 정상_레시피();
+
+        String 응답 = 본문(mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/recipes?sourceCardId=" + card)
+                        .header("Authorization", "Bearer " + TestTokens.access(요청자))
+                        .contentType(MediaType.APPLICATION_JSON).content(보낸것.toString()))
+                .andExpect(status().isCreated()));
+        long id = MAPPER.readTree(응답).get("id").asLong();
+
+        assertThat(MAPPER.readTree(응답).get("recipe")).isEqualTo(보낸것);
+        assertThat(MAPPER.readTree(응답).has("sourceCardId")).as("응답 봉투에 칸을 늘리지 않는다").isFalse();
+        assertThat(출처(id)).isEqualTo(card);
+
+        고치기(내_방송, id, 정상_레시피()).andExpect(status().isOk());
+        assertThat(출처(id)).as("고쳐도 출처는 그대로다").isEqualTo(card);
+    }
+
+    @Test
+    void 출처_없이_저장하면_비어_있다() throws Exception {
+        볼_수_있다("OWNER");
+
+        assertThat(출처(저장된_번호(내_방송, 정상_레시피()))).isNull();
+    }
+
+    /**
+     * 측정 재료 때문에 편집자 저장이 실패하면 안 된다: 다른 방송의 카드·없는 카드·숫자가 아닌 값은
+     * 출처를 비운 채 저장한다(2026-10-16 결정).
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("맞지_않는_출처")
+    void 맞지_않는_출처는_비운_채_저장한다(String 설명, String 값) throws Exception {
+        볼_수_있다("OWNER");
+        String 출처값 = 값.equals("다른 방송 카드") ? String.valueOf(카드를_넣는다(다른_방송)) : 값;
+
+        String 응답 = 본문(mvc.perform(post("/api/clip/broadcasts/" + 내_방송 + "/recipes?sourceCardId=" + 출처값)
+                        .header("Authorization", "Bearer " + TestTokens.access(요청자))
+                        .contentType(MediaType.APPLICATION_JSON).content(정상_레시피().toString()))
+                .andExpect(status().isCreated()));
+
+        assertThat(출처(MAPPER.readTree(응답).get("id").asLong())).isNull();
+    }
+
+    static Stream<Arguments> 맞지_않는_출처() {
+        return Stream.of(
+                Arguments.of("다른 방송의 카드", "다른 방송 카드"),
+                Arguments.of("없는 카드", "999999999"),
+                Arguments.of("숫자가 아님", "abc"));
+    }
+
     @Test
     void 목록은_만든_순서다() throws Exception {
         볼_수_있다("OWNER");
@@ -665,5 +720,15 @@ class RecipeControllerTest extends IntegrationTestSupport {
                         INSERT INTO broadcasts (stream_id, streamer_id, status, started_at, last_sequence)
                         VALUES (?, ?, 'live', ?, 1)""",
                 streamId, TestIds.STREAMER, OffsetDateTime.ofInstant(시작_시각, ZoneOffset.UTC));
+    }
+
+    private long 카드를_넣는다(String streamId) {
+        return jdbc.queryForObject("""
+                INSERT INTO jump_cards (stream_id, source, stream_timestamp_ms, window_start_ms, window_end_ms, event_seq)
+                VALUES (?, 'auto', 1500, 1000, 2000, 0) RETURNING id""", Long.class, streamId);
+    }
+
+    private Long 출처(long recipeId) {
+        return jdbc.queryForObject("SELECT source_card_id FROM recipes WHERE id = ?", Long.class, recipeId);
     }
 }

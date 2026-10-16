@@ -35,8 +35,11 @@ RetryDecision NextRetry(int64_t elapsedMs);
 bool IsRetryableStop(const std::string &codeName);
 
 // 서버가 살아 있는데 거절이 이어지는가 — 키 폐기·암호 오류·경로 없음은 모두 connect_failed로 오고 서로 가를 수 없다.
-// 서버 무응답은 SRT 접속 타임아웃을 다 쓰고 실패하지만 거절은 곧바로 돌아오므로, 빠른 connect_failed가 이어지면
-// 스트리머에게 키 상태를 확인하라고 안내한다(확정이 아니라 의심이다).
+// 서버 무응답은 SRT 접속 타임아웃(3초)을 다 쓰고 실패하고, 암호 오류·설정에 없는 경로는 곧바로 거절되므로, 빠른
+// connect_failed가 이어지면 스트리머에게 키 상태를 확인하라고 안내한다(확정이 아니라 의심이다).
+// 계정별 방송의 인증 실패(키 폐기·없는 키)는 MediaMTX가 0~4초 무작위 지연을 붙여 거절하므로 이 판정에 거의 걸리지 않고,
+// 3초를 넘기면 무응답과 같은 모양이다. auth 장애·몰림 보호·운영자 차단도 같은 401·같은 지연이라 시간으로는 가를 수
+// 없고 재페어링으로 풀리지도 않는다 — 판정을 넓히면 틀린 안내가 늘어 그대로 둔다(POK-287, 늦은 거절은 의도한 한계).
 inline constexpr int64_t kFastRejectMs = 1000;
 inline constexpr int kKeySuspectRejects = 3;
 

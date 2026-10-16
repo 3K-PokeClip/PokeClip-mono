@@ -1,5 +1,7 @@
 package com.pokeclip.clip.upload;
 
+import java.time.Instant;
+
 /** 업로드 문의 예외. 매핑은 전역 조언({@code JumpCardExceptionHandler}) 하나가 한다. */
 public final class UploadErrors {
 
@@ -73,7 +75,38 @@ public final class UploadErrors {
         }
     }
 
-    /** 404(내부 문). 모르는 업로드 번호. 바닥을 안 탄다: 서버 간 토큰이라 감출 존재가 없다. */
+    /**
+     * 409. 「확인 필요」가 아닌 업로드를 풀려고 했다(POK-333). 이미 다른 결과로 풀렸거나 일꾼이 끝냈다. 지금 상태를 싣는다:
+     * 화면이 목록을 다시 읽게.
+     */
+    public static class UploadNotCheckingException extends RuntimeException {
+        private final String status;
+
+        public UploadNotCheckingException(String status) {
+            super("확인 필요가 아닌 업로드다: " + status);
+            this.status = status;
+        }
+
+        public String status() {
+            return status;
+        }
+    }
+
+    /** 409. 일꾼이 아직 그 주소로 올리고 있을 수 있어 「안 올라갔다」를 아직 못 받는다(POK-333). 다시 누를 수 있게 되는 시각을 싣는다. */
+    public static class ResolutionTooEarlyException extends RuntimeException {
+        private final Instant allowedAt;
+
+        public ResolutionTooEarlyException(Instant allowedAt) {
+            super("아직 「안 올라갔다」를 받을 수 없다: " + allowedAt);
+            this.allowedAt = allowedAt;
+        }
+
+        public Instant allowedAt() {
+            return allowedAt;
+        }
+    }
+
+    /** 404. 모르는 업로드 번호. 일꾼 문은 바닥을 안 탄다(서버 간 토큰이라 감출 존재가 없다). 사람 문(POK-333)은 컨트롤러가 바닥을 건다. */
     public static class UploadNotFoundException extends RuntimeException {
         public UploadNotFoundException(long id) {
             super("없는 업로드다: " + id);

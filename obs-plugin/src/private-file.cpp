@@ -1,5 +1,14 @@
 #include "private-file.hpp"
 
+namespace pokeclip {
+
+bool WriteBackupThenMain(const std::string &path, const std::function<bool(const std::string &target)> &writeNoBackup)
+{
+	return writeNoBackup(path + ".bak") && writeNoBackup(path);
+}
+
+} // namespace pokeclip
+
 #ifndef _WIN32
 
 #include <cerrno>
@@ -26,9 +35,8 @@ bool WriteAll(int fd, const char *data, size_t size)
 	return true;
 }
 
-} // namespace
-
-bool WritePrivateFileAtomic(const std::string &path, const std::string &contents)
+// keepPrevious면 있던 <path>를 <path>.bak으로 옮긴 뒤 바꾸고, 아니면 <path>를 바로 바꾼다(rename이 덮는다).
+bool WriteOwnerOnly(const std::string &path, const std::string &contents, bool keepPrevious)
 {
 	const std::string temp = path + ".tmp";
 	const std::string backup = path + ".bak";
@@ -46,14 +54,31 @@ bool WritePrivateFileAtomic(const std::string &path, const std::string &contents
 		return false;
 	}
 
-	if (access(path.c_str(), F_OK) == 0) {
+	if (keepPrevious && access(path.c_str(), F_OK) == 0) {
 		if (rename(path.c_str(), backup.c_str()) != 0) {
 			unlink(temp.c_str());
 			return false;
 		}
 		chmod(backup.c_str(), kOwnerOnly); // 예전 판이 0644로 남긴 파일이어도 백업은 비밀을 담는다
 	}
-	return rename(temp.c_str(), path.c_str()) == 0;
+	if (rename(temp.c_str(), path.c_str()) != 0) {
+		unlink(temp.c_str());
+		return false;
+	}
+	return true;
+}
+
+} // namespace
+
+bool WritePrivateFileAtomic(const std::string &path, const std::string &contents)
+{
+	return WriteOwnerOnly(path, contents, true);
+}
+
+bool WritePrivateFileReplacingBackup(const std::string &path, const std::string &contents)
+{
+	return WriteBackupThenMain(path,
+				   [&contents](const std::string &target) { return WriteOwnerOnly(target, contents, false); });
 }
 
 } // namespace pokeclip

@@ -11,7 +11,7 @@ import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
 import { ChatReplayLoader } from '@/features/broadcast/livenow/chatReplay';
-import { CHAT_PAGE_MAX } from '@/features/broadcast/livenow/chatCollector';
+import { CHAT_PAGE_MAX, LIVE_REREAD_MS } from '@/features/broadcast/livenow/chatCollector';
 import {
   publishLiveData,
   resetLiveData,
@@ -322,7 +322,11 @@ const server = vi.hoisted(() => ({
   failLive: false,
   relation: 'OWNER',
   hidden: new Set<number>(),
+  /** 놓은 카드(POK-338) — 목록에서 집은 사람이 빈다 */
+  released: new Set<number>(),
   chatPaged: false,
+  /** 후원 줄의 서버 id를 첫 채팅 id와 같게 준다: 채팅·후원은 표가 달라 번호가 겹친다(POK-254) */
+  chatIdClash: false,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
   playback: 'off' as 'off' | 'grant' | 'fail',
   /** 지난 방송의 시각 기준점(POK-255). null이면 서버가 모른다 */
@@ -386,8 +390,8 @@ const server = vi.hoisted(() => ({
   vodEndShiftMs: 0,
   /** 라이브 채팅을 liveTimelineResponse로 준다(묻는 창 안의 줄만, 지금보다 앞만, 쪽·커서까지) */
   liveChatTimeline: false,
-  /** liveTimelineResponse가 받은 물음: 창 끝·쪽 크기·물은 시각 */
-  liveAsks: [] as { to: number; limit: number; at: number }[],
+  /** liveTimelineResponse가 받은 물음: 창 시작·끝·쪽 크기·물은 시각 */
+  liveAsks: [] as { from: number; to: number; limit: number; at: number }[],
   /** 라이브 채팅·차트의 시차 보정(표 축 = 영상 축 + 이것). 0이 아니면 보정 배선을 잰다 */
   liveOffsetMs: 0,
   /** 라이브 줄에 시작 시각이 없고 시각 기준점만 있다(명부가 시작을 모르는 라이브) */
@@ -443,7 +447,7 @@ const VOD_CHAT = [
 function liveTimelineResponse(u: URL): Response {
   const from = Date.parse(u.searchParams.get('from') ?? '');
   const to = Date.parse(u.searchParams.get('to') ?? '');
-  server.liveAsks.push({ to, limit: Number(u.searchParams.get('limit')), at: Date.now() });
+  server.liveAsks.push({ from, to, limit: Number(u.searchParams.get('limit')), at: Date.now() });
   if (server.liveReplayFail && Number(u.searchParams.get('limit')) === CHAT_PAGE_MAX)
     return jsonResponse(503, { error: 'unavailable' });
   const offset = server.liveOffsetMs;
@@ -576,7 +580,11 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   if (path.endsWith('/jump-cards')) {
     // 숨긴 카드는 includeHidden일 때만 hidden:true로 온다(서버 기본은 뺀다)
     const withHidden = u.searchParams.get('includeHidden') === 'true';
-    const cards = CARDS.map((c) => ({ ...c, hidden: server.hidden.has(c.id) }));
+    const cards = CARDS.map((c) => ({
+      ...c,
+      hidden: server.hidden.has(c.id),
+      claimedBy: server.released.has(c.id) ? null : c.claimedBy,
+    }));
     return jsonResponse(200, { cards: withHidden ? cards : cards.filter((c) => !c.hidden) });
   }
   if (path.endsWith('/chat-chart') && server.chartRecentGate) {
@@ -637,6 +645,12 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
       return jsonResponse(200, { items: CHAT.slice(0, 3), nextCursor: 'p2', appliedOffsetMs: 0 });
     if (server.chatPaged)
       return jsonResponse(200, { items: CHAT.slice(3), nextCursor: null, appliedOffsetMs: 0 });
+    if (server.chatIdClash)
+      return jsonResponse(200, {
+        items: CHAT.map((it) => (it.kind === 'donation' ? { ...it, id: 1 } : it)),
+        nextCursor: null,
+        appliedOffsetMs: 0,
+      });
     return jsonResponse(200, { items: CHAT, nextCursor: null, appliedOffsetMs: 0 });
   }
   // 통로는 용량 초과로 답한다 — 폴링이 카드를 채운다(통로 자체는 useLiveMockState의 몫)
@@ -660,10 +674,15 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
       profileImageUrl: null,
     });
   if (path.endsWith('/hide')) {
-    server.hidden.add(Number(path.split('/')[4]));
+    const id = Number(path.split('/')[4]);
+    if (init?.method === 'DELETE') server.hidden.delete(id);
+    else server.hidden.add(id);
     return new Response(null, { status: 204 });
   }
-  if (path.endsWith('/claim')) return new Response(null, { status: 204 });
+  if (path.endsWith('/claim')) {
+    if (init?.method === 'DELETE') server.released.add(Number(path.split('/')[4]));
+    return new Response(null, { status: 204 });
+  }
   return jsonResponse(404, { error: 'unexpected_call' });
 }
 
@@ -730,7 +749,9 @@ beforeEach(() => {
   server.failLive = false;
   server.relation = 'OWNER';
   server.hidden = new Set();
+  server.released = new Set();
   server.chatPaged = false;
+  server.chatIdClash = false;
   server.playback = 'off';
   notFound.mockClear();
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.
@@ -1085,8 +1106,7 @@ describe('LiveScreen — 하이라이트 카드', () => {
     await renderLive();
     expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole('button', { name: '이 카드 숨기기' })[0] as HTMLElement);
-    await settle();
+    await 숨긴다('하이라이트 아님');
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
@@ -1094,18 +1114,86 @@ describe('LiveScreen — 하이라이트 카드', () => {
     expect(screen.queryByText('채팅이 튄 순간 #8')).not.toBeInTheDocument();
   });
 
-  it('숨기기를 누르면 clip에 숨김을 보낸다', async () => {
+  it('숨기기는 이유를 고르게 하고 고른 이유를 실어 보낸다 (POK-338)', async () => {
     await renderLive();
 
     fireEvent.click(screen.getAllByRole('button', { name: '이 카드 숨기기' })[0] as HTMLElement);
+    expect(screen.getByRole('menuitem', { name: '하이라이트 아님' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '기타' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: '중복' }));
+    await settle();
+
+    const sent = fetchSpy.mock.calls.find(
+      ([url, init]) => url === '/api/clip/jump-cards/8/hide' && init?.method === 'POST',
+    );
+    expect(sent).toBeDefined();
+    expect(JSON.parse(String(sent?.[1]?.body))).toEqual({ reason: 'duplicate' });
+  });
+
+  it('숨긴 카드는 「숨김」 칩에 모이고 거기서 되돌린다 (POK-338)', async () => {
+    await renderLive();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+
+    await 숨긴다('하이라이트 아님');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    await settle();
+    fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
+    expect(screen.getByText('채팅이 튄 순간 #8')).toBeInTheDocument();
+    // 숨긴 카드에는 편집·숨기기가 없고 되돌리기만 있다
+    expect(screen.queryByRole('link', { name: '편집' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '숨김 되돌리기' }));
     await settle();
     expect(
       fetchSpy.mock.calls.some(
-        ([url, init]) => url === '/api/clip/jump-cards/8/hide' && init?.method === 'POST',
+        ([url, init]) => url === '/api/clip/jump-cards/8/hide' && init?.method === 'DELETE',
+      ),
+    ).toBe(true);
+  });
+
+  it('「놓기」는 내가 집은 카드에만 있고 누르면 집기를 푼다 (POK-338)', async () => {
+    await renderLive();
+
+    // 내가 집은 카드는 5번 하나뿐이다(6번은 남이 집었다)
+    const releases = screen.getAllByRole('button', { name: '놓기' });
+    expect(releases).toHaveLength(1);
+    fireEvent.click(releases[0] as HTMLElement);
+    await settle();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) => url === '/api/clip/jump-cards/5/claim' && init?.method === 'DELETE',
       ),
     ).toBe(true);
   });
 });
+
+describe('LiveScreen — 끝난 방송의 카드 동작 (POK-338)', () => {
+  it('놓기·숨김 되돌리기는 다음 목록 주기를 기다리지 않고 바로 반영된다', async () => {
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    // 시계를 움직이지 않는다(settle은 0초) — 주기 읽기가 아니라 동작 뒤 다시 읽기만 반영할 수 있다
+    fireEvent.click(screen.getByRole('button', { name: '놓기' }));
+    await settle();
+    expect(screen.queryByRole('button', { name: '놓기' })).not.toBeInTheDocument();
+
+    await 숨긴다('중복');
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
+    fireEvent.click(screen.getByRole('button', { name: '숨김 되돌리기' }));
+    await settle();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
+  });
+});
+
+/** 맨 앞 카드(8번)를 고른 이유로 숨긴다: 숨기기는 이유 메뉴를 거친다(POK-338) */
+async function 숨긴다(이유: string) {
+  fireEvent.click(screen.getAllByRole('button', { name: '이 카드 숨기기' })[0] as HTMLElement);
+  fireEvent.click(screen.getByRole('menuitem', { name: 이유 }));
+  await settle();
+}
 
 describe('LiveScreen: 라이브 문구', () => {
   it('방송 중에는 라이브 문구 그대로다: 실시간 채팅·실시간 통계·자동 감지 중·그래프 끝 「지금」', async () => {
@@ -1240,9 +1328,47 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     expect(screen.getByText('방금 그거 다시 보여주세요')).toBeInTheDocument();
   });
 
+  it('채팅과 후원의 서버 번호가 겹쳐도 줄 열쇠가 겹치지 않는다(POK-254)', async () => {
+    // 표마다 따로 매긴 번호를 그대로 열쇠로 쓰면 React가 같은 열쇠의 줄을 섞어 그린다
+    server.chatIdClash = true;
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await renderLive();
+      expect(screen.getByText('도네초코 · 치즈 5,000')).toBeInTheDocument();
+      expect(screen.getByText('오늘도 새벽 랭크인가요')).toBeInTheDocument();
+      expect(errors.mock.calls.filter(([msg]) => String(msg).includes('same key'))).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   it('키워드 설정은 라우트가 설 때까지 잠겨 있다', async () => {
     await renderLive();
     expect(screen.getByRole('button', { name: '키워드 설정' })).toBeDisabled();
+  });
+});
+
+describe('LiveScreen — 점프카드 목록 요청(POK-254 확인 필요)', () => {
+  it('개발 모드(StrictMode)에서도 카드 목록은 3초에 한 번이다: 처음 한 번만 효과가 두 번 돈다', async () => {
+    // 「한 주기에 두 번씩 요청한다」는 보고를 잰다. 서버는 다음 쪽이 있을 때만 커서를 달아(limit + 1) 빈 쪽을 더 읽지 않는다
+    renderWithProviders(
+      <StrictMode>
+        <LiveScreen />
+      </StrictMode>,
+    );
+    await settle();
+    const cardCalls = () =>
+      fetchSpy.mock.calls.filter(([url]) =>
+        new URL(String(url), 'http://localhost').pathname.endsWith('/jump-cards'),
+      ).length;
+    const atMount = cardCalls();
+    expect(atMount).toBeLessThanOrEqual(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(cardCalls() - atMount).toBe(10);
   });
 });
 
@@ -1279,8 +1405,7 @@ describe('LiveScreen — 실시간 통계', () => {
     await renderLive();
     expect(screen.getByText('자동 6 · 수동 2')).toBeInTheDocument();
 
-    fireEvent.click(screen.getAllByRole('button', { name: '이 카드 숨기기' })[0] as HTMLElement);
-    await settle();
+    await 숨긴다('하이라이트 아님');
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
@@ -1370,8 +1495,8 @@ describe('LiveScreen — 영상 경로의 키(POK-233)', () => {
   });
 });
 
-describe('LiveScreen: 홈에서 고른 카드로 들어오기', () => {
-  // 홈 「최근 하이라이트」는 지난 방송 주소에 ?card= 를 싣는다(QA 2026-10-11). 전에는 방송 번호만 실어 처음부터 틀었다.
+describe('LiveScreen: 주소로 고른 카드로 들어오기', () => {
+  // 지난 방송 주소의 ?card= 는 그 카드 시점부터 튼다(QA 2026-10-11, 처음 실은 곳은 POK-254에서 뺀 홈 「최근 하이라이트」).
   //
   // 🔴 Next는 다른 화면에서 넘어올 때 새 화면을 먼저 그리고 주소창은 그 뒤에 바꾼다. 그래서 이 시험들은 카드 번호를
   // useSearchParams(nav.search)로만 주고 주소창(window.location)에는 싣지 않는다. 주소창을 먼저 바꾸면 그 순서를 못 잰다
@@ -2335,6 +2460,67 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
 });
 
 describe('LiveScreen — 지난 방송 상세', () => {
+  it('방금 끝난 방송은 수집기가 마지막 줄을 다 쓰도록 2분 동안 차트·방송 정보를 계속 읽은 뒤 멈춘다(PR #256 codex)', async () => {
+    // 명부가 끝을 먼저 알리면 수집기의 마지막 적재(1초마다 몰아 쓴다) 전 차트를 받는다: 첫 답을 굳히면 꼬리가 빠진다
+    server.vodEndShiftMs = Date.now() - 30_000 - VOD_ENDED;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    const vodCalls = (part: string) =>
+      fetchSpy.mock.calls
+        .map(([url]) => new URL(String(url), 'http://localhost'))
+        .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/${part}`).length;
+    const atOpen = { chart: vodCalls('chat-chart'), info: vodCalls('broadcast-info') };
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(vodCalls('chat-chart')).toBeGreaterThan(atOpen.chart);
+    expect(vodCalls('broadcast-info')).toBeGreaterThan(atOpen.info);
+
+    // 끝난 지 2분이 지나면 한 번 더 받고 멈춘다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    await settle();
+    const settled = { chart: vodCalls('chat-chart'), info: vodCalls('broadcast-info') };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(vodCalls('chat-chart')).toBe(settled.chart);
+    expect(vodCalls('broadcast-info')).toBe(settled.info);
+  });
+
+  it('끝난 방송은 차트·방송 정보를 한 번 읽으면 멈추고, 카드 목록은 1분마다 읽고, 통로는 다시 붙지 않는다(POK-254)', async () => {
+    // 전에는 끝난 방송도 카드 3초·차트 10초·방송 정보 10초마다 다시 읽었다(12시간 방송이면 탭 하나에 분당 차트 72건)
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    const vodCalls = (part: string) =>
+      fetchSpy.mock.calls
+        .map(([url]) => new URL(String(url), 'http://localhost'))
+        .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/${part}`).length;
+    const before = {
+      chart: vodCalls('chat-chart'),
+      info: vodCalls('broadcast-info'),
+      cards: vodCalls('jump-cards'),
+      events: vodCalls('events'),
+    };
+    expect(before.chart).toBeGreaterThan(0);
+    expect(screen.getAllByText('끝날 때 1,842명 시청').length).toBeGreaterThan(0);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(125_000);
+    });
+    await settle();
+
+    expect(vodCalls('chat-chart')).toBe(before.chart);
+    expect(vodCalls('broadcast-info')).toBe(before.info);
+    // 다른 편집자의 집기·숨김과 50분짜리 사진 주소는 바뀌므로 카드 목록은 1분마다 읽는다
+    expect(vodCalls('jump-cards') - before.cards).toBe(2);
+    expect(vodCalls('events')).toBe(before.events);
+  });
+
   it('명부에 없는 방송이면 404 화면으로 보낸다 — 빈 대시보드를 보이지 않는다', async () => {
     window.history.pushState({}, '', '/broadcast/vod/nope');
     await renderLive();
@@ -3059,6 +3245,23 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
     for (const ask of replayAsks()) expect(ask.to).toBeLessThanOrEqual(ask.at - 5_000);
     // 재생하는 20초 동안 처음부터 다시 읽지 않고 늘어난 만큼만 3초마다 묻는다(처음 읽기 하나 + 일곱)
     expect(replayAsks().length).toBeLessThanOrEqual(8);
+  });
+
+  it('실시간 가까이 되감은 채 재생하면 다 읽은 끝을 겹쳐 다시 읽는다: 적재가 여유보다 늦은 줄을 잡는다(POK-254)', async () => {
+    const { container } = await openLive();
+    fireEvent.keyDown(seekBar(), { key: 'ArrowLeft' });
+    await tick(container);
+    await playFor(container, 20);
+
+    let readTo = replayAsks()[0]!.to;
+    const later = replayAsks()
+      .slice(1)
+      .filter((ask) => ask.to > readTo);
+    expect(later.length).toBeGreaterThan(0);
+    for (const ask of later) {
+      expect(ask.from).toBe(readTo - LIVE_REREAD_MS);
+      readTo = ask.to;
+    }
   });
 
   it('시차 보정이 있으면 그만큼 더 이른 자리까지만 묻는다: 보정은 차트가 받은 값이다', async () => {

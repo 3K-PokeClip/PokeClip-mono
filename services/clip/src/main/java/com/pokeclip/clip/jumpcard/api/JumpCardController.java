@@ -10,6 +10,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -56,11 +57,13 @@ public class JumpCardController {
         return ResponseEntity.noContent().build();
     }
 
+    /** 본문 {@code {"reason":"duplicate"}}은 고를 수 있다(POK-338). 없으면 이유 없이 숨긴다. */
     @PostMapping("/hide")
     public JumpCardSnapshot hide(@PathVariable long id, @AuthenticationPrincipal Jwt jwt,
+                                 @RequestBody(required = false) HideRequest body,
                                  HttpServletRequest request) {
         NotFoundFloor.mark(request);
-        return service.hide(id, jwt.getSubject());
+        return service.hide(id, jwt.getSubject(), body == null ? null : body.reason());
     }
 
     /** 되돌리기는 누구나 한다 — 숨긴 사람만 되돌릴 수 있으면 그 사람이 자리를 비웠을 때 막힌다. */

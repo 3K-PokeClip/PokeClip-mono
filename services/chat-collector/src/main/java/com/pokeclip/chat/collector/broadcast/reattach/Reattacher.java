@@ -1,12 +1,14 @@
 package com.pokeclip.chat.collector.broadcast.reattach;
 
 import com.pokeclip.chat.collector.broadcast.BroadcastSessions;
+import com.pokeclip.chat.collector.broadcast.EndedStream;
 import com.pokeclip.chat.collector.broadcast.EndedStreamStore;
 import com.pokeclip.chat.collector.broadcast.ProcessResult;
 import com.pokeclip.chat.collector.broadcast.StreamerId;
 import com.pokeclip.chat.collector.broadcast.attach.LaneKey;
 import com.pokeclip.chat.collector.broadcast.attach.StreamerSerialExecutor;
 import com.pokeclip.chat.collector.session.SessionRegistry;
+import com.pokeclip.chat.collector.status.CollectionState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,6 +17,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
@@ -74,6 +78,30 @@ import java.util.function.Supplier;
  * <p><b>대가</b>: 연동이 끊긴 스트리머의 방송에 주기마다 auth를 두드린다. auth는
  * {@code NOT_LINKED}를 즉시 답하고 그 로그는 INFO다(미연동 방송 시작이 정상 트래픽이라
  * 이미 그렇게 정해져 있다).
+ *
+ * <h2>🔴 예외 하나: 연동 문제로 포기한 메모는 건너뛰지 않고 다시 묻는다 (POK-342)</h2>
+ *
+ * 방송 중에 연동이 끊겨 포기하면(사유가 {@link CollectionState#needsRelink}) 화면은 「연동을 다시
+ * 하세요」를 띄운다. 그런데 메모를 다른 사유와 똑같이 건너뛰면 <b>다시 연동해도 그 방송에는
+ * 24시간 안 붙는다.</b> 그래서 그 메모만은 매 회차 붙이기 문을 다시 두드린다: 문이 auth에
+ * 연동 상태를 묻고, 살아 있으면 붙는다. 붙은 <b>뒤에</b> 메모를 지운다.
+ *
+ * <ol>
+ *   <li><b>auth를 안 고쳤다.</b> 「연동 성공을 수집기에 알린다」는 길도 있었지만 서버 둘과 새 계약이
+ *       든다. 재부착이 이미 매분 같은 문을 두드리고 있어서, 거름망 한 칸을 여는 것으로 같은 일이 된다.</li>
+ *   <li><b>지우는 것이 붙은 뒤인 이유</b>: 창구는 살아 있는 세션을 메모보다 먼저 본다. 붙은 뒤에
+ *       지우면 화면이 「포기」에서 바로 「붙는 중」으로 넘어가고, 먼저 지우면 붙기 전까지
+ *       {@code unknown}(배너 끔)이 끼고, 붙기에 실패하면 그 방송은 메모 없이 남는다.</li>
+ *   <li><b>메모를 새로 만들지 않는 규칙은 그대로다.</b> 연동이 아직 끊겨 있으면 문이
+ *       {@code LINK_REFUSED}를 돌려주고 메모는 처음 것 그대로 남는다(남긴 시각도 안 바뀐다).</li>
+ *   <li><b>다른 사유의 포기는 지금처럼 24시간 건너뛴다</b>: 다시 연동해도 안 풀리는 사유라
+ *       두드려 얻을 것이 없다.</li>
+ * </ol>
+ *
+ * <p><b>대가</b>: 연동이 끊긴 채 방송이 이어지는 동안 그 방송마다 매분 auth 한 번. 위 문단의 대가와
+ * 같은 크기다. 치지직이 토큰을 거부했는데({@code SESSION_AUTH_REJECTED}·{@code SUBSCRIBE_REJECTED})
+ * auth는 아직 그 토큰을 「살아 있다」로 답하는 동안은 매분 치지직 발급 요청도 한 번 나간다:
+ * 스트리머가 다시 연동하면 auth의 토큰이 바뀌어 그때 붙는다.
  *
  * <h2>이 부품이 여는 손실 경로 하나 — 백프레셔를 알림 경로와 나눠 쓴다</h2>
  *
@@ -227,14 +255,16 @@ public class Reattacher {
                 .toList();
         detachMissing(live, readable, nullRows + missingStreamIds);
         // 메모 조회는 한 번이다 — 낱개로 물으면 방송 수만큼 왕복한다.
-        Set<String> remembered = store.findAllIds(
+        Map<String, EndedStream> memos = store.findAll(
                 candidates.stream().map(LiveBroadcasts.Item::streamId).toList());
 
         int submitted = 0;
         int deferred = 0;
+        int relink = 0;
         for (LiveBroadcasts.Item item : candidates) {
-            if (remembered.contains(item.streamId())) {
-                continue;   // 끝났거나 포기한 방송이다
+            EndedStream memo = memos.get(item.streamId());
+            if (memo != null && !relinkable(memo)) {
+                continue;   // 끝났거나, 다시 연동해도 안 풀리는 사유로 포기한 방송이다
             }
             StreamerId streamer = StreamerId.parse(item.streamerId());
             if (!streamer.valid()) {
@@ -256,6 +286,9 @@ public class Reattacher {
             String lane = LaneKey.of(item.streamerId());
             if (lanes.submit(lane, () -> attachOne(item.streamId(), streamer, startedAt))) {
                 submitted++;
+                if (memo != null) {
+                    relink++;
+                }
             } else {
                 deferred++;
             }
@@ -265,8 +298,13 @@ public class Reattacher {
             // 재부착은 상태가 없어서 「어디까지 했다」를 기억할 필요가 없다.
             log.warn("chat.reattach.deferred count={} reason=LANES_FULL", deferred);
         }
-        log.info("chat.reattach.swept received={} candidates={} submitted={} deferred={}",
-                live.broadcasts().size(), candidates.size(), submitted, deferred);
+        log.info("chat.reattach.swept received={} candidates={} submitted={} deferred={} relink={}",
+                live.broadcasts().size(), candidates.size(), submitted, deferred, relink);
+    }
+
+    /** 연동을 다시 하면 풀리는 사유로 포기한 메모인가. 종료 메모는 사유가 없어 false다. */
+    private static boolean relinkable(EndedStream memo) {
+        return memo.stopped() && CollectionState.needsRelink(memo.stopReason());
     }
 
     /**
@@ -384,7 +422,11 @@ public class Reattacher {
         //
         // 닫을 트리거도 없다: 그 방송의 ENDED는 이미 소비돼 큐에 없다. 계정당 세 자리 중
         // 하나를 프로세스가 끝날 때까지 먹고, 창구는 그 방송에 collecting을 답한다.
-        if (store.find(streamId).isPresent()) {
+        //
+        // 연동 문제 포기 메모는 예외다(POK-342, 클래스 javadoc): 줄 안에서 다시 봐도 그 사유면 붙으러 간다.
+        // 그 사이 종료 편지가 처리돼 「끝남」으로 바뀌었으면 relinkable이 false라 여기서 걸린다.
+        Optional<EndedStream> memo = store.find(streamId);
+        if (memo.isPresent() && !relinkable(memo.get())) {
             log.info("chat.reattach.skipped_late stream={} reason=MEMO_APPEARED", streamId);
             return;
         }
@@ -426,6 +468,24 @@ public class Reattacher {
         }
         log.info("chat.reattach.gap_measured stream={} basis={} since={} gapMs={}",
                 streamId, gap.basis(), gap.since(), gap.gapMs());
+        memo.ifPresent(stopped -> forgetQuietly(streamId, stopped.stopReason()));
+    }
+
+    /**
+     * 다시 연동돼 붙은 방송의 포기 메모를 지운다. <b>실패해도 붙은 세션은 그대로 둔다</b>: 세션이 서 있는
+     * 동안은 창구가 메모를 안 보고 재부착도 그 방송을 후보로 안 본다. 남은 메모는 그 세션이 끝난 뒤
+     * 창구의 답을 「포기」로 남기는데, 종료 편지가 오면 덮이고 아니면 24시간 치우기가 지운다.
+     */
+    private void forgetQuietly(String streamId, String reason) {
+        try {
+            if (store.forgetStopped(streamId, reason)) {
+                log.info("chat.reattach.relinked stream={} reason={}", streamId, reason);
+            }
+        } catch (Throwable t) {
+            // 예외 객체를 인자로 넘기지 마라: sweep의 catch와 같은 이유다.
+            log.warn("chat.reattach.relink_forget_failed stream={} causeType={}",
+                    streamId, t.getClass().getSimpleName());
+        }
     }
 
     /**

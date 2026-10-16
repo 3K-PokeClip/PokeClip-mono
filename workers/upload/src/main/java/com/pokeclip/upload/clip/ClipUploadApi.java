@@ -7,7 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * clip의 일꾼 문 셋({@code /internal/uploads/{id}/start|session|result}). 판정은 clip이 하고 여기는 옮기기만 한다.
+ * clip의 일꾼 문 넷({@code /internal/uploads/{id}/start|session|result|heartbeat}). 판정은 clip이 하고 여기는 옮기기만 한다.
  *
  * <p>🔴 {@link #session}이 돌려주는 주소가 <b>먼저 적힌 주소</b>다. 일꾼은 자기가 받은 주소가 아니라 이것으로 바이트를 보낸다 :
  * 그래야 일꾼 둘이 겹쳐도 영상이 하나다.
@@ -46,6 +46,16 @@ public class ClipUploadApi {
         }
         requireOk(reply, "session");
         return reply.body().path("sessionUri").asString();
+    }
+
+    /**
+     * 아직 이 주문을 처리하고 있다는 신호(POK-333). clip은 상태를 안 바꾸고 마지막 일꾼 활동 시각만 옮긴다: 사람이 「안 올라갔다」로
+     * 자리를 비우는 것은 그 시각에서 30분 뒤라, 이 일꾼이 같은 주소로 보내는 동안에는 비지 않는다.
+     *
+     * @return clip이 준 상태 코드. 200이 아니면(옛 clip은 모르는 문이라 404) 부른 쪽이 WARN만 남긴다
+     */
+    public int heartbeat(long uploadId) {
+        return http.post(url(uploadId, "heartbeat"), Map.of()).status();
     }
 
     /**

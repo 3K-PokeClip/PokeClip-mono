@@ -10,6 +10,7 @@ import com.pokeclip.clip.support.TestTokens;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -21,6 +22,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -111,6 +113,60 @@ class JumpCardControllerTest extends IntegrationTestSupport {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.hidden").value(false))
                 .andExpect(jsonPath("$.hiddenBy").value(nullValue()));
+    }
+
+    /** POK-338. 사유는 응답·목록에 실리고, 되돌리면 숨김 표시와 함께 비워진다. */
+    @Test
+    void 사유를_실어_숨기면_응답과_목록에_실리고_되돌리면_비워진다() throws Exception {
+        long id = 카드();
+
+        mvc.perform(post("/api/clip/jump-cards/" + id + "/hide").header("Authorization", bearer("17"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"duplicate\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.hidden").value(true))
+                .andExpect(jsonPath("$.hiddenReason").value("duplicate"));
+        mvc.perform(get("/api/clip/broadcasts/s-1/jump-cards?includeHidden=true").header("Authorization", bearer("17")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cards[0].hiddenReason").value("duplicate"));
+
+        mvc.perform(delete("/api/clip/jump-cards/" + id + "/hide").header("Authorization", bearer("18")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.hiddenReason").value(nullValue()));
+        assertThat(cards.findById(id).orElseThrow().getHiddenReason()).isNull();
+    }
+
+    /** 옛 호출(본문 없음)과 사유 없는 본문은 그대로 동작한다. 사유 칸은 비어 남는다. */
+    @Test
+    void 본문이_없거나_사유가_없으면_사유_없이_숨긴다() throws Exception {
+        long first = 카드();
+        mvc.perform(post("/api/clip/jump-cards/" + first + "/hide").header("Authorization", bearer("17")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.hidden").value(true))
+                .andExpect(jsonPath("$.hiddenReason").value(nullValue()));
+
+        long second = service.record("s-1", new HighlightRequest("evt-2", "auto", 9_500L,
+                new HighlightRequest.Window(9_000L, 10_000L), 90, null)).card().id();
+        mvc.perform(post("/api/clip/jump-cards/" + second + "/hide").header("Authorization", bearer("17"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.hidden").value(true))
+                .andExpect(jsonPath("$.hiddenReason").value(nullValue()));
+    }
+
+    @Test
+    void 모르는_사유는_400이고_자격을_묻지도_숨기지도_않는다() throws Exception {
+        long id = 카드();
+        AUTH.reset();
+        AUTH.respondWith(RESOLVE, 200, "{\"relation\":\"OWNER\"}");
+
+        mvc.perform(post("/api/clip/jump-cards/" + id + "/hide").header("Authorization", bearer("17"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"boring\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("invalid_request"))
+                .andExpect(jsonPath("$.field").value("reason"));
+
+        assertThat(AUTH.callCount()).as("형식 오류가 auth 왕복을 태우면 안 된다").isZero();
+        assertThat(cards.findById(id).orElseThrow().getHiddenAt()).isNull();
     }
 
     @Test

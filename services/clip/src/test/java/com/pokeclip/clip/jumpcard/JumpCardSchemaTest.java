@@ -142,6 +142,46 @@ class JumpCardSchemaTest extends IntegrationTestSupport {
         assertThat(snapshot.window().endMs()).isEqualTo(5_062_000L);
     }
 
+    /** POK-338. 사유 셋 밖의 값은 API가 아닌 길(관리 SQL)로 와도 DB가 막는다. */
+    @Test
+    void 숨김_사유는_정한_셋만_들어간다() {
+        long id = insert("s-1", "auto", "evt-1", 1_500L, 1_000L, 2_000L, null, null);
+
+        jdbc.update("UPDATE jump_cards SET hidden_at = now(), hidden_reason = 'duplicate' WHERE id = ?", id);
+        assertThat(cards.findById(id).orElseThrow().getHiddenReason()).isEqualTo("duplicate");
+        assertThat(JumpCardSnapshot.of(cards.findById(id).orElseThrow(), Duration.ofMinutes(30), mapper).hiddenReason())
+                .isEqualTo("duplicate");
+
+        assertThatThrownBy(() -> jdbc.update("UPDATE jump_cards SET hidden_reason = 'boring' WHERE id = ?", id))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void 행동_기록은_정한_행동만_받고_카드가_지워지면_같이_지워진다() {
+        long id = insert("s-1", "auto", "evt-1", 1_500L, 1_000L, 2_000L, null, null);
+        jdbc.update("INSERT INTO jump_card_actions (card_id, action, actor, reason) VALUES (?, 'hide', '7', 'other')", id);
+
+        assertThatThrownBy(() -> jdbc.update(
+                "INSERT INTO jump_card_actions (card_id, action, actor) VALUES (?, 'open', '7')", id))
+                .as("열람은 집기로 갈음한다(2026-10-15 결정): 따로 받지 않는다")
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> jdbc.update(
+                "INSERT INTO jump_card_actions (card_id, action, actor, reason) VALUES (?, 'hide', '7', 'boring')", id))
+                .isInstanceOf(DataIntegrityViolationException.class);
+
+        jdbc.update("DELETE FROM jump_cards WHERE id = ?", id);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM jump_card_actions", Long.class))
+                .as("CASCADE가 없으면 카드를 지우는 시험 정리가 FK로 죽는다").isZero();
+    }
+
+    /** 탈퇴 정리가 카드를 지울 때 ON DELETE SET NULL이 recipes를 source_card_id로 찾는다. 색인이 없으면 카드마다 표 전체를 훑는다(PR #254 codex). */
+    @Test
+    void 편집본_출처_카드에_색인이_있다() {
+        assertThat(jdbc.queryForList(
+                "SELECT indexdef FROM pg_indexes WHERE tablename = 'recipes' AND indexdef LIKE '%(source_card_id)%'",
+                String.class)).hasSize(1);
+    }
+
     private long insert(String streamId, String source, String eventId,
                         long ts, long start, long end, Integer score, String evidenceJson) {
         Long id = jdbc.queryForObject("""

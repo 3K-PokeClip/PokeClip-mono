@@ -58,6 +58,13 @@ public class Recipe {
     @Column(name = "subtitles", columnDefinition = "jsonb")
     private String subtitles;
 
+    /**
+     * 편집본이 시작된 카드(POK-338). 첫 저장에서만 정하고 고쳐도 안 바뀐다. 측정 재료라 계약6 본문·응답에 안 싣는다.
+     * FK는 {@code ON DELETE SET NULL}: 카드가 지워져도 편집본은 남는다.
+     */
+    @Column(name = "source_card_id", updatable = false)
+    private Long sourceCardId;
+
     // Broadcast와 달리 앱이 채운다 — DB DEFAULT에 맡기면 save 뒤 엔티티의 이 칸이 null이라 응답에 못 싣는다.
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -69,10 +76,11 @@ public class Recipe {
     }
 
     /** 첫 저장. {@code recipeVersion}은 1에서 시작한다. */
-    static Recipe create(String streamId, String creatorId, int schemaVersion,
+    static Recipe create(String streamId, String creatorId, Long sourceCardId, int schemaVersion,
                          Long cutInAtMs, Long cutOutAtMs, String outputs, String audio, String subtitles) {
         Recipe recipe = new Recipe();
         recipe.streamId = streamId;
+        recipe.sourceCardId = sourceCardId;
         recipe.creatorId = creatorId;
         recipe.schemaVersion = schemaVersion;
         recipe.recipeVersion = 1;
@@ -147,5 +155,9 @@ public class Recipe {
 
     public Instant getUpdatedAt() {
         return updatedAt;
+    }
+
+    public Long getSourceCardId() {
+        return sourceCardId;
     }
 }

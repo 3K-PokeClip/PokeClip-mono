@@ -2,6 +2,7 @@
 
 #include "constants.hpp"
 #include "private-file.hpp"
+#include "server-env.hpp"
 
 #include <obs-module.h>
 #include <plugin-support.h>
@@ -12,9 +13,11 @@ namespace pokeclip {
 PluginConfig DefaultConfig()
 {
 	PluginConfig c;
-	c.apiBase = kDefaultApiBase;
-	c.ingestHost = kDefaultIngestHost;
-	c.ingestPort = kDefaultIngestPort;
+	const ServerDefaults &servers = ServersFor(kBuildServerEnv);
+	c.serverEnv = kBuildServerEnv;
+	c.apiBase = servers.apiBase;
+	c.ingestHost = servers.ingestHost;
+	c.ingestPort = servers.ingestPort;
 	c.latencyMs = kDefaultLatencyMs;
 	return c;
 }
@@ -70,8 +73,6 @@ void ConfigStore::Load()
 
 	PluginConfig d = config_;
 	config_.apiBase = GetStringOr(data, "api_base", d.apiBase);
-	if (config_.apiBase == kLegacyDefaultApiBase)
-		config_.apiBase = kDefaultApiBase; // 손대지 않은 옛 기본값 — dev는 HTTP를 HTTPS로 돌려보낸다
 	config_.ingestHost = GetStringOr(data, "ingest_host", d.ingestHost);
 	config_.ingestPort = GetIntOr(data, "ingest_port", d.ingestPort);
 	config_.streamId = GetStringOr(data, "streamid", "");
@@ -95,6 +96,9 @@ void ConfigStore::Load()
 			e.name = obs_data_get_string(item, "name");
 			e.assignedAt = obs_data_get_int(item, "assigned_at");
 			e.lastSeen = obs_data_get_int(item, "last_seen");
+			// POK-290 전 파일에는 없다 — 없음과 ""(앱을 모른 채 앉음)는 뜻이 달라 파일에 있을 때만 채운다.
+			if (obs_data_has_user_value(item, "app"))
+				e.app = obs_data_get_string(item, "app");
 			obs_data_release(item);
 			config_.audioTrackMap.push_back(std::move(e));
 		}
@@ -127,10 +131,26 @@ void ConfigStore::Load()
 		config_.markHotkey = obs_data_get_json(hotkey);
 		obs_data_release(hotkey);
 	}
+
+	// 서버 환경(POK-267). 키가 있으면 그 값, 없거나 모르는 값이면 api_base로 짐작한다(옛 파일 — dev 키로 페어링된
+	// 설치는 개발에 남는다). 그다음 손대지 않은 기본값(옛 http dev · ingest.pokeclip.com 포함)을 그 환경의 짝으로
+	// 올린다 — 직접 적은 주소는 그대로. 올린 값은 다음 저장 때 파일에 남는다.
+	ServerEnv env = kBuildServerEnv;
+	const std::string envText = GetStringOr(data, "server_env", "");
+	if (!ParseServerEnv(envText, env)) {
+		if (!envText.empty())
+			obs_log(LOG_WARNING, "config: unknown server_env '%s' — inferring from api_base",
+				envText.c_str());
+		env = InferServerEnv(config_, kBuildServerEnv);
+	}
+	const ServerEnvChange moved = ApplyServerEnv(config_, env);
+	if (moved.api || moved.ingest)
+		obs_log(LOG_INFO, "config: default servers moved to %s (api %s, ingest %s:%d)", ServerEnvName(env),
+			config_.apiBase.c_str(), config_.ingestHost.c_str(), config_.ingestPort);
 	obs_data_release(data);
 
-	obs_log(LOG_INFO, "config loaded (paired=%s, ingest=%s:%d)", config_.HasKey() ? "yes" : "no",
-		config_.ingestHost.c_str(), config_.ingestPort);
+	obs_log(LOG_INFO, "config loaded (env=%s, paired=%s, ingest=%s:%d)", ServerEnvName(config_.serverEnv),
+		config_.HasKey() ? "yes" : "no", config_.ingestHost.c_str(), config_.ingestPort);
 }
 
 PluginConfig ConfigStore::Get() const
@@ -143,26 +163,27 @@ bool ConfigStore::Update(const std::function<void(PluginConfig &)> &mutate)
 {
 	std::lock_guard lock(mutex_);
 	mutate(config_);
-	return SaveLocked();
+	return SaveLocked(SaveBackup::KeepPrevious);
 }
 
-bool ConfigStore::Commit(const std::function<void(PluginConfig &)> &mutate)
+bool ConfigStore::Commit(const std::function<void(PluginConfig &)> &mutate, SaveBackup backup)
 {
 	std::lock_guard lock(mutex_);
 	PluginConfig previous = config_;
 	mutate(config_);
-	if (SaveLocked())
+	if (SaveLocked(backup))
 		return true;
 	config_ = std::move(previous);
 	return false;
 }
 
-bool ConfigStore::SaveLocked()
+bool ConfigStore::SaveLocked(SaveBackup backupMode)
 {
 	if (path_.empty())
 		return false;
 
 	obs_data_t *data = obs_data_create();
+	obs_data_set_string(data, "server_env", ServerEnvName(config_.serverEnv));
 	obs_data_set_string(data, "api_base", config_.apiBase.c_str());
 	obs_data_set_string(data, "ingest_host", config_.ingestHost.c_str());
 	obs_data_set_int(data, "ingest_port", config_.ingestPort);
@@ -183,6 +204,8 @@ bool ConfigStore::SaveLocked()
 		obs_data_set_string(item, "name", e.name.c_str());
 		obs_data_set_int(item, "assigned_at", e.assignedAt);
 		obs_data_set_int(item, "last_seen", e.lastSeen);
+		if (e.app)
+			obs_data_set_string(item, "app", e.app->c_str());
 		obs_data_array_push_back(map, item);
 		obs_data_release(item);
 	}
@@ -208,13 +231,21 @@ bool ConfigStore::SaveLocked()
 		}
 	}
 
+	const bool keepPrevious = backupMode == SaveBackup::KeepPrevious;
 #ifdef _WIN32
-	bool ok = obs_data_save_json_pretty_safe(data, path_.c_str(), "tmp", "bak");
+	// SameAsNew는 POSIX와 같은 순서 규칙(WriteBackupThenMain — .bak을 먼저 새 판으로, 그다음 본 파일)을 쓴다.
+	// 백업 인자가 null이면 libobs가 ReplaceFileW(…, NULL)로 바꾼다. 드물게 ERROR_UNABLE_TO_MOVE_REPLACEMENT면
+	// 본 파일이 사라질 수 있는데, 그때도 남는 .bak은 새 판이라 키가 되살아나지는 않는다.
+	bool ok = keepPrevious ? obs_data_save_json_pretty_safe(data, path_.c_str(), "tmp", "bak")
+			       : WriteBackupThenMain(path_, [data](const std::string &target) {
+					 return obs_data_save_json_pretty_safe(data, target.c_str(), "tmp", nullptr);
+				 });
 #else
 	// streamid·passphrase가 든다 — 처음부터 0600으로 쓴다. libobs 저장은 tmp를 umask 권한(보통 0644)으로 만들어
 	// rename하므로, 뒤에 chmod를 걸어도 그 사이 남이 읽을 틈이 있다.
 	const char *json = obs_data_get_json_pretty(data);
-	bool ok = json && *json && WritePrivateFileAtomic(path_, json);
+	bool ok = json && *json &&
+		  (keepPrevious ? WritePrivateFileAtomic(path_, json) : WritePrivateFileReplacingBackup(path_, json));
 #endif
 	obs_data_release(data);
 

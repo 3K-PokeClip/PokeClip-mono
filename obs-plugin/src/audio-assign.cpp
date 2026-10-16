@@ -87,6 +87,55 @@ AudioKind ClassifyGlobalChannel(int channel)
 	return AudioKind::Other;
 }
 
+namespace {
+
+// 왼쪽부터 겹치지 않게 바꾼다 — 바꾼 결과를 다시 훑지 않는다(libobs dstr_replace와 같다).
+std::string ReplaceAll(std::string s, const std::string &from, const std::string &to)
+{
+	for (size_t pos = s.find(from); pos != std::string::npos; pos = s.find(from, pos + to.size()))
+		s.replace(pos, from.size(), to);
+	return s;
+}
+
+// libobs ms_build_window_strings와 같은 해석 — ':'로 나눈 세 번째 칸이 실행 파일이고, 칸 안의 ':'·'#'은
+// "#3A"·"#22"로 저장돼 있어 그 순서로 푼다. Windows 파일 이름은 대소문자를 가리지 않으므로 ASCII만 소문자로.
+std::string WindowExecutable(const std::string &window)
+{
+	size_t first = window.find(':');
+	size_t second = first == std::string::npos ? first : window.find(':', first + 1);
+	if (second == std::string::npos)
+		return "";
+	size_t third = window.find(':', second + 1);
+	std::string exe = window.substr(second + 1, third == std::string::npos ? third : third - second - 1);
+	exe = ReplaceAll(ReplaceAll(exe, "#3A", ":"), "#22", "#");
+	for (char &c : exe) {
+		if (c >= 'A' && c <= 'Z')
+			c = static_cast<char>(c - 'A' + 'a');
+	}
+	return exe;
+}
+
+} // namespace
+
+std::string AudioAppId(const std::string &id, const AudioAppSettings &s)
+{
+	if (id == "wasapi_process_output_capture" || id == "window_capture")
+		return WindowExecutable(s.window);
+	if (id == "game_capture") {
+		// 창 모드만 대상이 정해져 있다 — 전체 화면·핫키 모드는 후킹한 뒤에야 창을 알고, 지난 window 값이 남아 있을 수 있다.
+		// capture_mode가 없고 옛 키만 있으면 옛 형식이다(game-capture.c using_older_non_mode_format).
+		bool oldFormat = s.hasAnyFullscreen && !s.hasCaptureMode;
+		bool windowMode = oldFormat ? !s.anyFullscreen : s.captureMode == "window";
+		return windowMode ? WindowExecutable(s.window) : "";
+	}
+	// macOS — 앱 모드일 때만. 데스크탑·디스플레이·창 모드로 바꿔도 지난 application 값이 설정에 남는다.
+	if (id == "sck_audio_capture")
+		return s.type == 1 ? s.application : "";
+	if (id == "screen_capture")
+		return s.type == 2 ? s.application : "";
+	return "";
+}
+
 uint32_t DesiredMixers(uint32_t current, int slot, uint32_t reserved)
 {
 	uint32_t owned = kStemMask & ~reserved; // 자동 배정이 맡는 비트 — 본방 트랙은 스트리머 몫
@@ -232,6 +281,29 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 		}
 	}
 
+	// 2-1. 대상 앱을 바꾼 소스는 그 소스만 새 소스로 다시 줄 선다(POK-290). OBS 「소스 추가」는 빈 설정으로 소스를 장면에
+	//      넣은 뒤 속성 창을 열기 때문에 처음 앉을 때는 앱을 모르고, 고른 뒤에야 안다 — 그때 같은 앱 트랙으로 옮긴다.
+	//      앱을 잃는 변경(대상 비우기·창 모드 해제)은 옮길 까닭이 아니다. 독에서 뺀 소스(slot 0)는 건드리지 않는다.
+	//      POK-290 전의 기억(app 없음)은 지금 앱을 적기만 한다 — 플러그인을 올렸다고 자리가 바뀌지 않게.
+	std::map<std::string, int> retargeted; // 다시 줄 서는 소스 → 버린 자리 (같은 앱 트랙이 없으면 그 자리로 돌아온다)
+	for (auto it = map.begin(); it != map.end();) {
+		auto src = sourceIndex.find(it->key);
+		const std::string *app = src != sourceIndex.end() ? &in.sources[src->second].appId : nullptr;
+		if (!app || app->empty() || it->slot == 0 || it->app == *app) {
+			++it;
+			continue;
+		}
+		r.mapChanged = true;
+		if (!it->app) {
+			it->app = *app;
+			++it;
+			continue;
+		}
+		retargeted[it->key] = it->slot;
+		mapKeys.erase(it->key);
+		it = map.erase(it);
+	}
+
 	auto isReserved = [&](int slot) { return (in.reserved & (1u << slot)) != 0; };
 
 	// 3. 기억한 자리대로 앉는다. 지금 소리를 내는 후보만 자리를 잡는다 — 없는 소스의 기억은 자리를 비워 둔다.
@@ -243,6 +315,17 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 	auto seat = [&](const AudioSourceInfo *s, int slot) {
 		slotOf[s->key] = slot;
 		occupants[static_cast<size_t>(slot)].push_back(s);
+	};
+	auto appSlot = [&](const AudioSourceInfo *s) { // 같은 앱(같은 종류)이 앉은 가장 낮은 트랙
+		if (s->appId.empty())
+			return 0;
+		for (int k = 1; k <= kStemSlots; k++) {
+			for (const AudioSourceInfo *o : occupants[static_cast<size_t>(k)]) {
+				if (o->kind == s->kind && o->appId == s->appId)
+					return k;
+			}
+		}
+		return 0;
 	};
 	std::vector<std::string> losers;
 	for (const AudioTrackMapEntry &e : map) {
@@ -279,9 +362,11 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 		return a->key < b->key;
 	});
 
-	//    빈 자리가 남는 동안은 자리를 하나씩 — 단, 아직 자리가 없는 종류가 먼저 받는다. 같은 종류가 이미 앉은
-	//    소스는 빈 자리가 「자리 없는 종류 수」보다 많이 남을 때만 제 자리를 받고, 아니면 그 종류의 트랙에 묶인다.
-	//    같은 종류가 없고 빈 자리도 없으면 우선순위가 가장 낮은 소스들이 있는 트랙에 묶인다.
+	//    묶음 = 앱을 아는 소스는 (종류, 앱), 모르는 소스는 종류. 같은 앱이 이미 앉은 트랙이 있으면 빈 자리가 있어도
+	//    거기에 앉는다(같은 소리다). 빈 자리가 남는 동안은 묶음마다 자리를 하나씩 — 단, 아직 자리가 없는 묶음이 먼저
+	//    받는다. 같은 종류가 이미 앉은 (앱 모르는) 소스는 빈 자리가 「자리 없는 묶음 수」보다 많이 남을 때만 제 자리를
+	//    받고, 아니면 그 종류의 트랙에 묶인다. 빈 자리가 없으면 같은 종류의 첫 트랙, 그것도 없으면 우선순위가 가장 낮은
+	//    소스들이 있는 트랙에 묶인다. 앱 정보가 하나도 없으면 묶음 = 종류라 POK-290 전과 같다.
 	auto kindSlot = [&](AudioKind kind) {
 		for (int k = 1; k <= kStemSlots; k++) {
 			for (const AudioSourceInfo *o : occupants[static_cast<size_t>(k)]) {
@@ -299,9 +384,22 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 		}
 		return n;
 	};
+	// 대상 앱을 바꿔 다시 줄 서는 소스의 옛 자리는 그 소스가 이번 계산에서 앉기 전까지만 비워 둔다 — 다른 새 소스가 먼저
+	// 가져가지 않게. 같은 앱이 이미 앉은 트랙이 있으면 그리로 가므로 비워 두지 않는다. 화면에 없어 줄 서지 않는 소스도.
+	auto awaitingReturn = [&](int k) {
+		for (const auto &[key, slot] : retargeted) {
+			if (slot != k || slotOf.count(key))
+				continue;
+			const AudioSourceInfo *s = candidateOf(key);
+			if (s && s->showing && appSlot(s) == 0)
+				return true;
+		}
+		return false;
+	};
 	auto lowestFree = [&]() { // 빈 트랙 가운데 아무 기억도 없는 트랙 먼저 — 지금 없는 소스가 돌아올 자리를 비워 둔다
 		for (int k = 1; k <= kStemSlots; k++) {
-			if (!isReserved(k) && occupants[static_cast<size_t>(k)].empty() && !claimed[static_cast<size_t>(k)])
+			bool empty = !isReserved(k) && occupants[static_cast<size_t>(k)].empty();
+			if (empty && !claimed[static_cast<size_t>(k)] && !awaitingReturn(k))
 				return k;
 		}
 		for (int k = 1; k <= kStemSlots; k++) {
@@ -326,24 +424,42 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 		}
 		return best;
 	};
-	std::set<AudioKind> pendingKinds; // 줄에 있는데 아직 어느 트랙에도 같은 종류가 없는 종류
-	for (const AudioSourceInfo *s : queue) {
-		if (kindSlot(s->kind) == 0)
-			pendingKinds.insert(s->kind);
-	}
+	auto takeFree = [&](const AudioSourceInfo *s) { // 대상 앱을 바꿔 다시 줄 선 소스는 비어 있으면 원래 자리로
+		auto back = retargeted.find(s->key);
+		if (back != retargeted.end() && !isReserved(back->second) &&
+		    occupants[static_cast<size_t>(back->second)].empty())
+			return back->second;
+		return lowestFree();
+	};
+	// 묶음이 이미 트랙에 있다 — 앱을 알면 같은 앱이, 모르면 같은 종류가 앉아 있다.
+	auto represented = [&](const AudioSourceInfo *s) {
+		return s->appId.empty() ? kindSlot(s->kind) != 0 : appSlot(s) != 0;
+	};
+	auto pendingAfter = [&](size_t i) { // 줄에서 i 뒤에 있는데 아직 트랙이 없는 묶음 수
+		std::set<std::pair<AudioKind, std::string>> groups;
+		for (size_t j = i + 1; j < queue.size(); j++) {
+			if (!represented(queue[j]))
+				groups.insert({queue[j]->kind, queue[j]->appId});
+		}
+		return static_cast<int>(groups.size());
+	};
 
-	for (const AudioSourceInfo *s : queue) {
-		int same = kindSlot(s->kind);
-		int slot = 0;
-		if (same == 0) {
-			slot = lowestFree();
-			if (slot == 0)
-				slot = lowestPriorityTrack();
-			pendingKinds.erase(s->kind);
-		} else if (freeSlots() > static_cast<int>(pendingKinds.size())) {
-			slot = lowestFree();
-		} else {
-			slot = same;
+	for (size_t i = 0; i < queue.size(); i++) {
+		const AudioSourceInfo *s = queue[i];
+		int slot = appSlot(s);
+		if (slot == 0) {
+			int same = s->appId.empty() ? kindSlot(s->kind) : 0; // 앱을 아는 소스는 같은 앱이 없으면 새 묶음
+			if (same == 0) {
+				slot = takeFree(s);
+				if (slot == 0)
+					slot = kindSlot(s->kind); // 다른 앱이지만 같은 종류 — 첫 트랙에
+				if (slot == 0)
+					slot = lowestPriorityTrack();
+			} else if (freeSlots() > pendingAfter(i)) {
+				slot = takeFree(s);
+			} else {
+				slot = same;
+			}
 		}
 		auto entry = std::find_if(map.begin(), map.end(),
 					  [&](const AudioTrackMapEntry &e) { return e.key == s->key; });
@@ -365,7 +481,8 @@ AssignmentResult ComputeAssignment(const AssignmentInput &in)
 			}
 			entry->lastSeen = in.now;
 		} else {
-			map.push_back({s->key, slot, s->name, in.now, in.now});
+			// 앱을 몰라도 ""로 적는다 — 나중에 대상을 고르면 2-1이 그 차이로 안다
+			map.push_back({s->key, slot, s->name, in.now, in.now, s->appId});
 			r.mapChanged = true;
 		}
 	}
@@ -473,7 +590,7 @@ AudioRoutingView BuildRoutingView(const std::vector<AudioSourceInfo> &sources, c
 				v.monitorOnly.push_back(s.name);
 			continue;
 		}
-		AudioSourceView view{s.name, s.kind, s.key};
+		AudioSourceView view{s.name, s.kind, s.key, s.appId};
 		bool onStem = false; // 본방 트랙은 스템이 아니다 — 거기에만 있으면 스템에는 없는 것
 		for (int m = 1; m <= kStemSlots; m++) {
 			uint32_t bit = 1u << m;
@@ -503,7 +620,9 @@ std::string DescribeRouting(const AudioRoutingView &v)
 		for (size_t j = 0; j < t.sources.size(); j++) {
 			if (j)
 				out += ", ";
-			out += t.sources[j].name + "(" + AudioKindName(t.sources[j].kind) + ")";
+			const AudioSourceView &src = t.sources[j];
+			std::string tag = src.appId.empty() ? AudioKindName(src.kind) : "app:" + src.appId;
+			out += src.name + "(" + tag + ")";
 		}
 	}
 	out += " · no-track " + std::to_string(v.mixOnly.size());

@@ -49,8 +49,7 @@ export function EditorSettingsScreen() {
         <p className={styles.note}>
           <Info aria-hidden="true" />
           <span>
-            편집자를 내보내면 즉시 적용되고, 대기 중이던 승인 요청은 무효가 됩니다{' '}
-            <PermissionComparisonPopover />
+            편집자를 내보내면 즉시 적용됩니다 <PermissionComparisonPopover />
           </span>
         </p>
       )}
@@ -99,7 +98,7 @@ function listOf(state: EditorSettingsViewState) {
           <EmptyState
             icon={<UserPlus size={21} />}
             title="아직 편집자가 없어요"
-            description="편집자를 초대하면 하이라이트 검토와 클립 편집을 맡길 수 있어요. 업로드는 기본적으로 내 승인을 거칩니다."
+            description="편집자를 초대하면 하이라이트 검토와 클립 편집을 맡길 수 있어요. 편집자도 영상을 만들고 바로 유튜브에 올릴 수 있어요."
           />
         );
       }

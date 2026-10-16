@@ -1,16 +1,19 @@
 // 의존성 없는 최소 테스트 러너. OBS를 띄우지 않고 검증할 수 있는 것만 여기서 잰다:
 // 페어링 코드 정규화 · keyint 옵션 제거 · streamid 파싱 · SRT URL · 브리지 보안 규칙(Host·Origin·토큰)·SSE ·
-// 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4) · 재시도 정책과 「다시 연결」 조건(A5) · 종료 신호 규칙(A3·4D).
+// 오디오 트랙 자동 배정(A2) · 핫키 마킹 규칙(A4) · 재시도 정책과 「다시 연결」 조건(A5) · 종료 신호 규칙(A3·4D) ·
+// 서버 환경 짝과 기본값 이관(POK-267).
 #include "app-state.hpp"
 #include "audio-assign.hpp"
 #include "bridge-server.hpp"
 #include "config.hpp"
+#include "constants.hpp"
 #include "private-file.hpp"
 #include "encoder-opts.hpp"
 #include "end-signal-policy.hpp"
 #include "mark-policy.hpp"
 #include "pairing-code.hpp"
 #include "retry-policy.hpp"
+#include "server-env.hpp"
 #include "srt-url.hpp"
 
 #include <httplib.h>
@@ -1201,6 +1204,465 @@ TEST(audio_routing_view_keeps_removed_offscreen_source_listed)
 	CHECK(BuildRoutingView(sources, options).mixOnly.empty());
 }
 
+// ---------------------------------------------------------------- 앱 단위 묶기 (POK-290)
+
+AudioSourceInfo AppSrc(const std::string &key, const std::string &name, const std::string &app, int order,
+		       uint32_t mixers = 0x3F, bool showing = true)
+{
+	AudioSourceInfo s = Src(key, name, AudioKind::App, order, mixers, true, false, showing);
+	s.appId = app;
+	return s;
+}
+
+AudioTrackMapEntry AppEntry(const std::string &key, int slot, int64_t assignedAt, const std::string &app)
+{
+	AudioTrackMapEntry e = Entry(key, slot, assignedAt);
+	e.app = app;
+	return e;
+}
+
+// 기억의 앱 — 기억이 없으면 "<none>", 앱을 적기 전 기억(옛 파일)이면 "<unset>".
+std::string MapApp(const AssignmentResult &r, const std::string &key)
+{
+	for (const AudioTrackMapEntry &e : r.mapNext) {
+		if (e.key == key)
+			return e.app ? *e.app : "<unset>";
+	}
+	return "<none>";
+}
+
+int64_t MapAssignedAt(const AssignmentResult &r, const std::string &key)
+{
+	for (const AudioTrackMapEntry &e : r.mapNext) {
+		if (e.key == key)
+			return e.assignedAt;
+	}
+	return -1;
+}
+
+AudioAppSettings WindowSettings(const std::string &window)
+{
+	AudioAppSettings s;
+	s.window = window;
+	return s;
+}
+
+AudioAppSettings MacSettings(int type, const std::string &application)
+{
+	AudioAppSettings s;
+	s.type = type;
+	s.application = application;
+	return s;
+}
+
+// 앱 ID를 지운 같은 입력 — 앱을 모르면 POK-290 전 종류 규칙과 같아야 한다.
+AssignmentInput WithoutApps(AssignmentInput in)
+{
+	for (AudioSourceInfo &s : in.sources)
+		s.appId.clear();
+	return in;
+}
+
+// Windows "제목:클래스:실행파일" — libobs ms_build_window_strings와 같게 읽는다.
+TEST(audio_app_id_from_windows_window_string)
+{
+	CHECK_EQ(AudioAppId("wasapi_process_output_capture", WindowSettings("Discord:Chrome_WidgetWin_1:Discord.exe")),
+		 std::string("discord.exe"));
+	CHECK_EQ(AudioAppId("window_capture", WindowSettings("#general - Discord:Chrome_WidgetWin_1:Discord.exe")),
+		 std::string("discord.exe")); // 제목·클래스가 달라도 같은 앱
+	// 칸 안의 ':'·'#'은 "#3A"·"#22"로 저장된다 — 세 칸으로 나눈 뒤 푼다
+	CHECK_EQ(AudioAppId("wasapi_process_output_capture", WindowSettings("a#3Ab:Cls:My#3AGame#22.exe")),
+		 std::string("my:game#.exe"));
+	// 한 번만 푼다 — "#22" → "#"가 만든 "#3A"를 다시 ':'로 바꾸지 않는다(libobs와 같은 순서)
+	CHECK_EQ(AudioAppId("wasapi_process_output_capture", WindowSettings("t:c:x#223Ay.exe")),
+		 std::string("x#3ay.exe"));
+	CHECK_EQ(AudioAppId("wasapi_process_output_capture", WindowSettings("t:c:game.exe:extra")),
+		 std::string("game.exe")); // libobs는 앞 세 칸을 쓴다
+	CHECK_EQ(AudioAppId("wasapi_process_output_capture", WindowSettings("제목:클래스:카카오톡.EXE")),
+		 std::string("카카오톡.exe")); // ASCII만 소문자, 나머지 바이트는 그대로
+	CHECK(AudioAppId("wasapi_process_output_capture", WindowSettings("")).empty());
+	CHECK(AudioAppId("wasapi_process_output_capture", WindowSettings("t:c")).empty());
+	CHECK(AudioAppId("wasapi_process_output_capture", WindowSettings("t:c:")).empty());
+	CHECK(AudioAppId("dshow_input", WindowSettings("t:c:obs.exe")).empty()); // 모르는 타입
+	CHECK(AudioAppId("wasapi_output_capture", WindowSettings("t:c:obs.exe")).empty());
+}
+
+// 게임 캡처는 창 모드만 대상이 정해져 있다 — 전체 화면·핫키 모드에 남은 window 값으로 앱을 잡지 않는다.
+TEST(audio_app_id_game_capture_only_in_window_mode)
+{
+	AudioAppSettings s = WindowSettings("Game:UnityWndClass:Game.exe");
+	s.captureMode = "window";
+	s.hasCaptureMode = true;
+	CHECK_EQ(AudioAppId("game_capture", s), std::string("game.exe"));
+	s.captureMode = "any_fullscreen";
+	CHECK(AudioAppId("game_capture", s).empty());
+	s.captureMode = "hotkey";
+	CHECK(AudioAppId("game_capture", s).empty());
+
+	// 기본값(사용자 값 없음)은 any_fullscreen
+	AudioAppSettings fresh = WindowSettings("Game:UnityWndClass:Game.exe");
+	fresh.captureMode = "any_fullscreen";
+	CHECK(AudioAppId("game_capture", fresh).empty());
+
+	// 옛 형식 — capture_mode 없이 capture_any_fullscreen만 있다
+	AudioAppSettings old = WindowSettings("Game:UnityWndClass:Game.exe");
+	old.captureMode = "any_fullscreen"; // 기본값 getter
+	old.hasAnyFullscreen = true;
+	old.anyFullscreen = false;
+	CHECK_EQ(AudioAppId("game_capture", old), std::string("game.exe"));
+	old.anyFullscreen = true;
+	CHECK(AudioAppId("game_capture", old).empty());
+	// capture_mode가 있으면 옛 키는 보지 않는다
+	old.anyFullscreen = false;
+	old.hasCaptureMode = true;
+	CHECK(AudioAppId("game_capture", old).empty());
+}
+
+// macOS는 앱 모드일 때만 — 모드를 바꿔도 지난 application 값이 남는다(이 Mac의 실제 장면 파일 값).
+TEST(audio_app_id_macos_app_mode_only)
+{
+	CHECK_EQ(AudioAppId("sck_audio_capture", MacSettings(1, "com.tinyspeck.slackmacgap")),
+		 std::string("com.tinyspeck.slackmacgap"));
+	CHECK_EQ(AudioAppId("sck_audio_capture", MacSettings(1, "Cisco-Systems.Spark")),
+		 std::string("Cisco-Systems.Spark")); // 번들 ID는 대소문자 그대로
+	CHECK(AudioAppId("sck_audio_capture", MacSettings(0, "Cisco-Systems.Spark")).empty()); // 데스크탑 전체
+	CHECK(AudioAppId("sck_audio_capture", MacSettings(1, "")).empty());
+	CHECK_EQ(AudioAppId("screen_capture", MacSettings(2, "com.hnc.Discord")), std::string("com.hnc.Discord"));
+	CHECK(AudioAppId("screen_capture", MacSettings(0, "Cisco-Systems.Spark")).empty()); // 디스플레이
+	CHECK(AudioAppId("screen_capture", MacSettings(1, "com.hnc.Discord")).empty());      // 창 — 창 번호뿐
+	CHECK(AudioAppId("coreaudio_input_capture", MacSettings(1, "com.hnc.Discord")).empty());
+}
+
+// 6소스(마이크·데스크탑·디스코드 둘·게임·크롬) — 같은 앱 둘은 한 트랙, 다른 앱은 각자. 앱을 모르면 오늘처럼 종류로.
+TEST(audio_same_app_shares_track_and_other_apps_split)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3),
+		      Src("ch:1", "데스크탑", AudioKind::Desktop, 1),
+		      AppSrc("uuid:da", "Discord", "discord.exe", 100),
+		      AppSrc("uuid:db", "Discord 2", "discord.exe", 101),
+		      AppSrc("uuid:game", "게임", "game.exe", 102),
+		      AppSrc("uuid:chrome", "Chrome", "chrome.exe", 103)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "ch:3"), 1);
+	CHECK_EQ(SlotOf(r, "ch:1"), 2);
+	CHECK_EQ(SlotOf(r, "uuid:da"), 3);
+	CHECK_EQ(SlotOf(r, "uuid:db"), 3);
+	CHECK_EQ(SlotOf(r, "uuid:game"), 4);
+	CHECK_EQ(SlotOf(r, "uuid:chrome"), 5);
+	CHECK_EQ(MapApp(r, "uuid:da"), std::string("discord.exe"));
+	CHECK_EQ(MapApp(r, "ch:3"), std::string("")); // 앱을 몰라도 ""로 적는다
+
+	AssignmentInput again = in;
+	again.sources = Applied(in.sources, r);
+	again.map = r.mapNext;
+	AssignmentResult r2 = ComputeAssignment(again);
+	CHECK(r2.writes.empty());
+	CHECK(!r2.mapChanged);
+
+	AssignmentResult kinds = ComputeAssignment(WithoutApps(in));
+	CHECK_EQ(SlotOf(kinds, "uuid:da"), 3);
+	CHECK_EQ(SlotOf(kinds, "uuid:db"), 4);
+	CHECK_EQ(SlotOf(kinds, "uuid:game"), 5);
+	CHECK_EQ(SlotOf(kinds, "uuid:chrome"), 3);
+}
+
+// 묶음이 자리보다 많으면 아직 트랙 없는 묶음이 우선순위대로 먼저 받는다 — 디스코드와 게임이 섞이지 않고,
+// 우선순위가 가장 낮은 알림이 BGM 트랙에 묶인다. 앱을 모르면 오늘처럼 디스코드·게임이 「앱」 한 트랙.
+TEST(audio_different_apps_get_tracks_before_lower_priority_kinds)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3),
+		      Src("ch:1", "데스크탑", AudioKind::Desktop, 1),
+		      AppSrc("uuid:discord", "Discord", "discord.exe", 100),
+		      AppSrc("uuid:game", "게임", "game.exe", 101),
+		      Src("uuid:bgm", "BGM", AudioKind::Media, 102),
+		      Src("uuid:alert", "알림", AudioKind::Browser, 103)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:discord"), 3);
+	CHECK_EQ(SlotOf(r, "uuid:game"), 4);
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 5);
+	CHECK_EQ(SlotOf(r, "uuid:alert"), 5);
+	CHECK(r.overflowKeys.empty());
+
+	AssignmentResult kinds = ComputeAssignment(WithoutApps(in));
+	CHECK_EQ(SlotOf(kinds, "uuid:discord"), 3);
+	CHECK_EQ(SlotOf(kinds, "uuid:game"), 3);
+	CHECK_EQ(SlotOf(kinds, "uuid:bgm"), 4);
+	CHECK_EQ(SlotOf(kinds, "uuid:alert"), 5);
+}
+
+// 같은 앱이 앉은 트랙이 있으면 빈 트랙이 남아도 거기에 — 같은 앱 캡처 둘은 같은 소리다. 여러 트랙에 있으면 낮은 번호.
+TEST(audio_same_app_joins_even_with_room)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {AppEntry("uuid:da", 3, 10, "discord.exe")};
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3), AppSrc("uuid:da", "uuid:da", "discord.exe", 100),
+		      AppSrc("uuid:db", "Discord 2", "discord.exe", 101)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:db"), 3);
+	CHECK_EQ(SlotOf(r, "ch:3"), 1);
+	CHECK(r.slotKeys[2].empty());
+
+	// 같은 앱이 손 배정으로 두 트랙에 나뉘어 있으면 낮은 번호에
+	AssignmentInput split;
+	split.now = 100;
+	split.map = {AppEntry("uuid:da", 4, 10, "discord.exe"), AppEntry("uuid:db", 2, 10, "discord.exe")};
+	split.sources = {AppSrc("uuid:da", "uuid:da", "discord.exe", 100),
+			 AppSrc("uuid:db", "uuid:db", "discord.exe", 101),
+			 AppSrc("uuid:dc", "Discord 3", "discord.exe", 102)};
+	AssignmentResult r2 = ComputeAssignment(split);
+	CHECK_EQ(SlotOf(r2, "uuid:dc"), 2);
+	CHECK_EQ(SlotOf(r2, "uuid:da"), 4); // 나뉜 묶음을 플러그인이 합치지 않는다
+}
+
+// 빈 트랙이 없으면 같은 앱 → 같은 종류(첫 트랙) → 우선순위가 가장 낮은 트랙.
+TEST(audio_full_tracks_fall_back_same_app_then_kind_then_lowest)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {Entry("ch:3", 1, 10), Entry("ch:1", 2, 10), AppEntry("uuid:discord", 3, 10, "discord.exe"),
+		  AppEntry("uuid:game", 4, 10, "game.exe"), Entry("uuid:bgm", 5, 10)};
+	in.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3),
+		      Src("ch:1", "ch:1", AudioKind::Desktop, 1),
+		      AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100),
+		      AppSrc("uuid:game", "uuid:game", "game.exe", 101),
+		      Src("uuid:bgm", "uuid:bgm", AudioKind::Media, 102),
+		      AppSrc("uuid:game2", "게임 음성", "game.exe", 103),
+		      AppSrc("uuid:chrome", "Chrome", "chrome.exe", 104),
+		      Src("uuid:card", "캡처보드", AudioKind::Other, 105)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:game2"), 4);  // 같은 앱 — 앱 종류의 첫 트랙(디스코드)이 아니라
+	CHECK_EQ(SlotOf(r, "uuid:chrome"), 3); // 같은 앱 없음 — 같은 종류의 첫 트랙
+	CHECK_EQ(SlotOf(r, "uuid:card"), 5);   // 같은 종류도 없음 — 가장 덜 가치 있는 트랙(BGM)
+	CHECK(r.overflowKeys.empty());
+}
+
+// 앱을 모르는 앱 종류 소스(대상 없는 캡처·데스크탑 모드 sck)는 종류 규칙 그대로 — 자리가 모자라면 앱 트랙에 묶이고
+// 남은 빈 트랙은 아직 트랙 없는 종류(미디어·브라우저) 몫이다.
+TEST(audio_app_less_source_follows_kind_rules)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.sources = {Src("ch:3", "마이크", AudioKind::Mic, 3),
+		      Src("ch:1", "데스크탑", AudioKind::Desktop, 1),
+		      AppSrc("uuid:discord", "Discord", "discord.exe", 100),
+		      AppSrc("uuid:blank", "앱 오디오", "", 101),
+		      Src("uuid:bgm", "BGM", AudioKind::Media, 102),
+		      Src("uuid:alert", "알림", AudioKind::Browser, 103)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:discord"), 3);
+	CHECK_EQ(SlotOf(r, "uuid:blank"), 3);
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 4);
+	CHECK_EQ(SlotOf(r, "uuid:alert"), 5);
+
+	// 자리가 남으면 제 트랙을 받는다
+	AssignmentInput roomy = in;
+	roomy.sources.resize(4);
+	CHECK_EQ(SlotOf(ComputeAssignment(roomy), "uuid:blank"), 4);
+}
+
+// 화면에서 추가한 소스는 앱을 고르기 전에 앉는다(앱 "") — 고르면 그 소스만 같은 앱 트랙으로 옮긴다. 다른 앱으로 바꾸면
+// 그 묶음에서 나와 빈 트랙에. 같은 앱 트랙이 없고 원래 자리가 비면 그 자리로 돌아온다(더 낮은 빈 트랙으로 가지 않는다).
+TEST(audio_retargeted_source_reseats_alone)
+{
+	AssignmentInput in;
+	in.now = 500;
+	in.map = {AppEntry("ch:3", 1, 10, ""), AppEntry("uuid:discord", 2, 10, "discord.exe"),
+		  AppEntry("uuid:new", 3, 400, ""), AppEntry("uuid:game", 4, 10, "game.exe")};
+	in.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3, 0x03),
+		      AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x05),
+		      AppSrc("uuid:new", "uuid:new", "discord.exe", 101, 0x09),
+		      AppSrc("uuid:game", "uuid:game", "game.exe", 102, 0x11)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:new"), 2);
+	CHECK_EQ(MapApp(r, "uuid:new"), std::string("discord.exe"));
+	CHECK_EQ(MapAssignedAt(r, "uuid:new"), 500);
+	CHECK_EQ(MapAssignedAt(r, "uuid:discord"), 10); // 다른 기억은 그대로
+	CHECK_EQ(SlotOf(r, "uuid:game"), 4);
+	CHECK(r.mapChanged);
+	CHECK_EQ(r.writes.size(), 1u);
+	CHECK_EQ(WriteOf(r, "uuid:new", 0), 0x05u);
+
+	AssignmentInput again = in;
+	again.sources = Applied(in.sources, r);
+	again.map = r.mapNext;
+	AssignmentResult r2 = ComputeAssignment(again);
+	CHECK(r2.writes.empty());
+	CHECK(!r2.mapChanged);
+
+	// 디스코드 묶음에 있던 소스를 크롬으로 바꾸면 그 묶음에서 나와 빈 트랙(기억 없는 트랙 먼저)에
+	AssignmentInput moved = again;
+	moved.sources[2].appId = "chrome.exe";
+	AssignmentResult r3 = ComputeAssignment(moved);
+	CHECK_EQ(SlotOf(r3, "uuid:new"), 3);
+	CHECK_EQ(SlotOf(r3, "uuid:discord"), 2);
+
+	// 혼자 있던 소스는 같은 앱 트랙이 없으면 제자리 — 더 낮은 빈 트랙(3)이 있어도 4에 남는다
+	AssignmentInput alone;
+	alone.now = 500;
+	alone.map = {AppEntry("ch:3", 1, 10, ""), AppEntry("uuid:discord", 2, 10, "discord.exe"),
+		     AppEntry("uuid:x", 4, 400, "")};
+	alone.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3, 0x03),
+			 AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x05),
+			 AppSrc("uuid:x", "uuid:x", "zoom.exe", 101, 0x11)};
+	AssignmentResult r4 = ComputeAssignment(alone);
+	CHECK_EQ(SlotOf(r4, "uuid:x"), 4);
+	CHECK(r4.writes.empty());
+	CHECK_EQ(MapApp(r4, "uuid:x"), std::string("zoom.exe"));
+}
+
+// 빈 트랙이 없으면 다시 줄 선 소스도 6번 순서(같은 종류의 첫 트랙)대로 — 그 트랙이 지금 묶음이면 제자리에 남고 앱만 적는다.
+TEST(audio_retargeted_source_stays_when_tracks_are_full)
+{
+	AssignmentInput in;
+	in.now = 500;
+	in.map = {AppEntry("ch:3", 1, 10, ""),
+		  AppEntry("ch:1", 2, 10, ""),
+		  AppEntry("uuid:discord", 3, 10, "discord.exe"),
+		  AppEntry("uuid:x", 3, 400, ""),
+		  AppEntry("uuid:game", 4, 10, "game.exe"),
+		  AppEntry("uuid:bgm", 5, 10, "")};
+	in.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3, 0x03),
+		      Src("ch:1", "ch:1", AudioKind::Desktop, 1, 0x05),
+		      AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x09),
+		      AppSrc("uuid:x", "uuid:x", "chrome.exe", 101, 0x09),
+		      AppSrc("uuid:game", "uuid:game", "game.exe", 102, 0x11),
+		      Src("uuid:bgm", "uuid:bgm", AudioKind::Media, 103, 0x21)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:x"), 3);
+	CHECK_EQ(MapApp(r, "uuid:x"), std::string("chrome.exe"));
+	CHECK(r.writes.empty());
+	CHECK(r.mapChanged);
+
+	AssignmentInput again = in;
+	again.map = r.mapNext;
+	AssignmentResult r2 = ComputeAssignment(again);
+	CHECK_EQ(SlotOf(r2, "uuid:x"), 3);
+	CHECK(!r2.mapChanged);
+}
+
+// 같은 앱 트랙으로 가는 소스의 옛 자리는 예약하지 않는다 — 같은 계산에서 들어온 새 소스가 그 빈 트랙(기억 없음)을 먼저 받는다.
+TEST(audio_retarget_to_existing_app_frees_old_slot_for_new_source)
+{
+	AssignmentInput in;
+	in.now = 500;
+	in.map = {AppEntry("ch:3", 1, 10, ""), AppEntry("ch:1", 2, 10, ""),
+		  AppEntry("uuid:discord", 3, 10, "discord.exe"), AppEntry("uuid:x", 4, 400, "")};
+	in.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3, 0x03),
+		      Src("ch:1", "ch:1", AudioKind::Desktop, 1, 0x05),
+		      AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x09),
+		      AppSrc("uuid:x", "uuid:x", "discord.exe", 101, 0x11),
+		      Src("uuid:bgm", "BGM", AudioKind::Media, 102)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:x"), 3);   // 같은 앱 트랙으로
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 4); // 비워진 옛 자리 — 예약해 두면 5로 밀린다
+}
+
+// 옛 자리는 그 소스가 이번 계산에서 앉기 전까지만 비워 둔다 — 같은 계산에서 둘이 같은 새 앱으로 바뀌면 둘째는 첫째 트랙에
+// 합류하고, 둘째의 옛 자리는 새 소스가 받는다.
+TEST(audio_retarget_reservation_ends_once_seated)
+{
+	AssignmentInput in;
+	in.now = 500;
+	in.map = {AppEntry("ch:3", 1, 10, ""), AppEntry("uuid:discord", 2, 10, "discord.exe"),
+		  AppEntry("uuid:x", 3, 400, ""), AppEntry("uuid:y", 4, 400, "")};
+	in.sources = {Src("ch:3", "ch:3", AudioKind::Mic, 3, 0x03),
+		      AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x05),
+		      AppSrc("uuid:x", "uuid:x", "zoom.exe", 101, 0x09),
+		      AppSrc("uuid:y", "uuid:y", "zoom.exe", 102, 0x11),
+		      Src("uuid:bgm", "BGM", AudioKind::Media, 103)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:x"), 3);   // 혼자 — 제자리
+	CHECK_EQ(SlotOf(r, "uuid:y"), 3);   // 같은 새 앱 — 합류
+	CHECK_EQ(SlotOf(r, "uuid:bgm"), 4); // y의 옛 자리 — 예약이 남으면 5로 밀린다
+}
+
+// POK-290 전에 쓴 기억(app 없음)은 지금 앱을 적기만 한다 — 같은 앱 트랙이 따로 있어도 플러그인을 올렸다고 옮기지 않는다.
+TEST(audio_legacy_memory_adopts_app_without_moving)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {Entry("uuid:d1", 2, 10), Entry("uuid:d2", 4, 10)};
+	in.sources = {AppSrc("uuid:d1", "uuid:d1", "discord.exe", 100, 0x05),
+		      AppSrc("uuid:d2", "uuid:d2", "discord.exe", 101, 0x11)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:d1"), 2);
+	CHECK_EQ(SlotOf(r, "uuid:d2"), 4);
+	CHECK(r.writes.empty());
+	CHECK(r.mapChanged);
+	CHECK_EQ(MapApp(r, "uuid:d2"), std::string("discord.exe"));
+	CHECK_EQ(MapAssignedAt(r, "uuid:d2"), 10);
+
+	AssignmentInput again = in;
+	again.map = r.mapNext;
+	CHECK(!ComputeAssignment(again).mapChanged);
+
+	// 앱을 모르는 옛 기억은 그대로 둔다(기존 테스트들의 전제)
+	AssignmentInput blank = in;
+	blank.sources = {Src("uuid:d1", "uuid:d1", AudioKind::App, 100, 0x05)};
+	AssignmentResult r2 = ComputeAssignment(blank);
+	CHECK_EQ(MapApp(r2, "uuid:d1"), std::string("<unset>"));
+	CHECK(!r2.mapChanged);
+}
+
+// 대상을 잃는 변경(앱 → "")은 옮길 까닭이 아니다. 독에서 뺀 소스(slot 0)는 대상 앱이 바뀌어도 뺀 채로.
+TEST(audio_lost_target_and_removed_source_keep_memory)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {AppEntry("uuid:x", 3, 10, "discord.exe"), AppEntry("uuid:off", 0, 10, "a.exe")};
+	in.sources = {AppSrc("uuid:x", "uuid:x", "", 100, 0x09), AppSrc("uuid:off", "uuid:off", "b.exe", 101, 0x01)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:x"), 3);
+	CHECK_EQ(MapApp(r, "uuid:x"), std::string("discord.exe"));
+	CHECK_EQ(SlotOf(r, "uuid:off"), 0);
+	CHECK_EQ(MapApp(r, "uuid:off"), std::string("a.exe"));
+	CHECK(r.writes.empty());
+	CHECK(!r.mapChanged);
+}
+
+// 다른 장면에만 있는 소스의 대상을 바꾸면 기억을 버리고, 방송 화면에 나올 때 새 소스로 앉는다.
+TEST(audio_retargeted_offscreen_source_waits_for_program)
+{
+	AssignmentInput in;
+	in.now = 100;
+	in.map = {AppEntry("uuid:discord", 1, 10, "discord.exe"), AppEntry("uuid:x", 3, 10, "")};
+	in.sources = {AppSrc("uuid:discord", "uuid:discord", "discord.exe", 100, 0x03),
+		      AppSrc("uuid:x", "uuid:x", "discord.exe", 101, 0x09, false)};
+	AssignmentResult r = ComputeAssignment(in);
+	CHECK_EQ(SlotOf(r, "uuid:x"), 0);
+	CHECK(!MapHas(r, "uuid:x"));
+	CHECK(r.mapChanged);
+
+	AssignmentInput shown = in;
+	shown.sources = Applied(in.sources, r);
+	shown.sources[1].showing = true;
+	shown.map = r.mapNext;
+	AssignmentResult r2 = ComputeAssignment(shown);
+	CHECK_EQ(SlotOf(r2, "uuid:x"), 1);
+}
+
+// 로그는 앱을 아는 소스를 "app:<앱>"으로 찍는다 — 실측 증빙. 독 상태(AudioSourceView 비교)에도 앱 변경이 잡힌다.
+TEST(audio_routing_log_shows_app)
+{
+	std::vector<AudioSourceInfo> sources = {AppSrc("uuid:discord", "Discord", "discord.exe", 100, 0x05),
+						Src("uuid:bgm", "BGM", AudioKind::Media, 101, 0x09)};
+	RoutingViewOptions options;
+	options.applied = true;
+	AudioRoutingView v = BuildRoutingView(sources, options);
+	CHECK_EQ(v.tracks[1].sources[0].appId, std::string("discord.exe"));
+	std::string line = DescribeRouting(v);
+	CHECK(line.find("T3 Discord(app:discord.exe)") != std::string::npos);
+	CHECK(line.find("T4 BGM(media)") != std::string::npos);
+
+	sources[0].appId = "chrome.exe";
+	CHECK(!(BuildRoutingView(sources, options) == v));
+}
+
 // ---------------------------------------------------------------- 설정
 
 TEST(config_audio_switches_are_not_output_settings)
@@ -1218,6 +1680,300 @@ TEST(config_audio_switches_are_not_output_settings)
 	PluginConfig c = a;
 	c.syncStart = !a.syncStart;
 	CHECK(!c.SameOutputSettings(a));
+	PluginConfig e = a; // 서버 환경을 바꾸면 키가 끊긴다 — 방송 중에는 받지 않는다
+	e.serverEnv = a.serverEnv == ServerEnv::Prod ? ServerEnv::Dev : ServerEnv::Prod;
+	CHECK(!e.SameOutputSettings(a));
+}
+
+// ---------------------------------------------------------------- 서버 환경 (POK-267)
+
+TEST(build_default_env_is_prod_without_dev_macro)
+{
+	// 이 시험 실행 파일은 배포 빌드처럼 POKECLIP_DEV_SERVERS 없이 컴파일한다(개발 쪽은 build-env-dev.cpp).
+	CHECK(kBuildServerEnv == ServerEnv::Prod);
+	CHECK(PluginConfig{}.serverEnv == ServerEnv::Prod);
+	const ServerDefaults &prod = ServersFor(ServerEnv::Prod);
+	CHECK_EQ(std::string(prod.apiBase), std::string("https://api.pokeclip.com"));
+	CHECK_EQ(std::string(prod.ingestHost), std::string("media.pokeclip.com"));
+	CHECK_EQ(prod.ingestPort, 8890);
+	const ServerDefaults &dev = ServersFor(ServerEnv::Dev);
+	CHECK_EQ(std::string(dev.apiBase), std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(std::string(dev.ingestHost), std::string("media-dev.pokeclip.com"));
+	CHECK_EQ(dev.ingestPort, 8890);
+}
+
+TEST(server_env_pairs_are_consistent)
+{
+	for (ServerEnv env : {ServerEnv::Prod, ServerEnv::Dev}) {
+		const ServerDefaults &s = ServersFor(env);
+		CHECK(IsSecureMarkBase(s.apiBase)); // 마크가 스트림 키 파생 값을 싣고 간다 — https
+		CHECK(IsSafeIngestHost(s.ingestHost));
+		CHECK(IsKnownDefaultApiBase(s.apiBase));
+		CHECK(IsKnownDefaultIngestHost(s.ingestHost));
+		ServerEnv parsed = env == ServerEnv::Prod ? ServerEnv::Dev : ServerEnv::Prod;
+		CHECK(ParseServerEnv(ServerEnvName(env), parsed));
+		CHECK(parsed == env);
+	}
+	// 짝이 섞이지 않는다 — 운영 쪽엔 dev가 없고, 개발 쪽 둘 다 dev를 가리킨다
+	CHECK(std::string(kProdServers.apiBase).find("dev") == std::string::npos);
+	CHECK(std::string(kProdServers.ingestHost).find("dev") == std::string::npos);
+	CHECK(std::string(kDevServers.apiBase).find("dev") != std::string::npos);
+	CHECK(std::string(kDevServers.ingestHost).find("dev") != std::string::npos);
+}
+
+TEST(parse_server_env_accepts_prod_dev_only)
+{
+	ServerEnv env = ServerEnv::Dev;
+	CHECK(ParseServerEnv("prod", env));
+	CHECK(env == ServerEnv::Prod);
+	CHECK(ParseServerEnv("dev", env));
+	CHECK(env == ServerEnv::Dev);
+	for (const char *bad : {"", "PROD", "Dev", "production", "staging", " dev"}) {
+		env = ServerEnv::Dev;
+		CHECK(!ParseServerEnv(bad, env));
+		CHECK(env == ServerEnv::Dev); // 실패하면 그대로
+	}
+}
+
+TEST(apply_server_env_swaps_known_defaults_only)
+{
+	// 운영 짝 → 개발: 둘 다 바뀌고 셋 다 보고한다
+	PluginConfig c;
+	c.serverEnv = ServerEnv::Prod;
+	c.apiBase = kProdServers.apiBase;
+	c.ingestHost = kProdServers.ingestHost;
+	c.ingestPort = kProdServers.ingestPort;
+	c.streamId = kStreamId;
+	ServerEnvChange ch = ApplyServerEnv(c, ServerEnv::Dev);
+	CHECK(ch.env && ch.api && ch.ingest);
+	CHECK(c.serverEnv == ServerEnv::Dev);
+	CHECK_EQ(c.apiBase, std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(c.ingestHost, std::string("media-dev.pokeclip.com"));
+	CHECK_EQ(c.ingestPort, 8890);
+	CHECK_EQ(c.streamId, std::string(kStreamId)); // 키는 여기서 건드리지 않는다(연결 해제는 브리지 PUT)
+
+	// 같은 환경으로 다시 — 아무것도 안 바뀐다
+	ch = ApplyServerEnv(c, ServerEnv::Dev);
+	CHECK(!ch.env && !ch.api && !ch.ingest);
+
+	// 옛 기본값(POK-267 이전: http dev · ingest.pokeclip.com) → 대상 환경 값으로 올린다
+	PluginConfig old;
+	old.apiBase = kLegacyDefaultApiBase;
+	old.ingestHost = kLegacyDefaultIngestHost;
+	old.ingestPort = 8890;
+	ch = ApplyServerEnv(old, ServerEnv::Dev);
+	CHECK(ch.api && ch.ingest);
+	CHECK_EQ(old.apiBase, std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(old.ingestHost, std::string("media-dev.pokeclip.com"));
+	PluginConfig oldProd;
+	oldProd.apiBase = "https://dev.pokeclip.com/"; // 끝 '/'도 기본값으로 본다
+	oldProd.ingestHost = kLegacyDefaultIngestHost;
+	oldProd.ingestPort = 8890;
+	ApplyServerEnv(oldProd, ServerEnv::Prod);
+	CHECK_EQ(oldProd.apiBase, std::string("https://api.pokeclip.com"));
+	CHECK_EQ(oldProd.ingestHost, std::string("media.pokeclip.com"));
+
+	// 직접 적은 값(로컬 compose·로컬 auth)은 그대로다
+	PluginConfig local;
+	local.serverEnv = ServerEnv::Dev;
+	local.apiBase = "http://localhost:8082";
+	local.ingestHost = "127.0.0.1";
+	local.ingestPort = 8890;
+	ch = ApplyServerEnv(local, ServerEnv::Prod);
+	CHECK(ch.env && !ch.api && !ch.ingest);
+	CHECK_EQ(local.apiBase, std::string("http://localhost:8082"));
+	CHECK_EQ(local.ingestHost, std::string("127.0.0.1"));
+
+	// 기본 호스트에 직접 고친 포트 — 호스트만 따라가고 포트는 남긴다
+	PluginConfig port;
+	port.apiBase = kDevServers.apiBase;
+	port.ingestHost = kDevServers.ingestHost;
+	port.ingestPort = 9000;
+	ApplyServerEnv(port, ServerEnv::Prod);
+	CHECK_EQ(port.ingestHost, std::string("media.pokeclip.com"));
+	CHECK_EQ(port.ingestPort, 9000);
+}
+
+TEST(infer_server_env_from_files_without_key)
+{
+	PluginConfig c;
+	c.apiBase = "https://dev.pokeclip.com"; // POK-267 이전 기본값 — dev 키로 페어링된 팀 설치
+	c.ingestHost = kLegacyDefaultIngestHost;
+	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Dev);
+	c.apiBase = kLegacyDefaultApiBase; // 더 옛 http 기본값
+	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Dev);
+	c.apiBase = "https://api.pokeclip.com";
+	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Prod);
+	// api_base를 직접 적었다 — 수신 호스트가 한 환경의 기본값이면 그쪽, 아니면 빌드 기본
+	c.apiBase = "http://localhost:8082";
+	c.ingestHost = "media-dev.pokeclip.com";
+	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Dev);
+	c.ingestHost = "media.pokeclip.com";
+	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Prod);
+	c.ingestHost = "127.0.0.1";
+	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Prod);
+	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Dev);
+	c.ingestHost = kLegacyDefaultIngestHost; // 옛 기본 수신은 어느 환경의 근거도 아니다
+	CHECK(InferServerEnv(c, ServerEnv::Dev) == ServerEnv::Dev);
+	CHECK(InferServerEnv(c, ServerEnv::Prod) == ServerEnv::Prod);
+}
+
+// 브리지 PUT /api/config 규칙(ApplyPutServerEnv) — PR #241 리뷰 1·3번
+
+PluginConfig PairedWith(const ServerDefaults &servers, ServerEnv env, const std::string &streamId)
+{
+	PluginConfig c;
+	c.serverEnv = env;
+	c.apiBase = servers.apiBase;
+	c.ingestHost = servers.ingestHost;
+	c.ingestPort = servers.ingestPort;
+	c.streamId = streamId;
+	c.passphrase = "pass-" + std::string(servers.name) + "-0123456789";
+	return c;
+}
+
+TEST(put_ordinary_save_keeps_server_pair)
+{
+	const PluginConfig before = PairedWith(kProdServers, ServerEnv::Prod, kStreamId);
+
+	// 다른 환경의 기본 호스트를 적어 저장 — 지금 짝으로 맞춘다(Load와 같은 규칙). 운영 키 + dev 수신이 되지 않는다
+	PluginConfig c = before;
+	c.ingestHost = kDevServers.ingestHost;
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
+	CHECK(c.serverEnv == ServerEnv::Prod);
+	CHECK_EQ(c.ingestHost, std::string("media.pokeclip.com"));
+	CHECK_EQ(c.streamId, std::string(kStreamId)); // 전환이 아니면 키는 그대로
+	CHECK_EQ(c.passphrase, before.passphrase);
+
+	// 옛 기본 호스트(POK-267 이전 초안)도 지금 짝으로
+	c = before;
+	c.ingestHost = kLegacyDefaultIngestHost;
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
+	CHECK_EQ(c.ingestHost, std::string("media.pokeclip.com"));
+
+	// 직접 적은 호스트·포트는 그대로
+	c = before;
+	c.ingestHost = "127.0.0.1";
+	c.ingestPort = 9000;
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
+	CHECK_EQ(c.ingestHost, std::string("127.0.0.1"));
+	CHECK_EQ(c.ingestPort, 9000);
+
+	// 지금과 같은 환경을 보내면 전환이 아니다 — 키를 지우지 않는다
+	c = before;
+	CHECK(!ApplyPutServerEnv(c, before, ServerEnv::Prod));
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+
+	// api_base·환경·키는 요청으로 직접 바뀌지 않는다(before 값)
+	c = before;
+	c.apiBase = "https://evil.example";
+	c.serverEnv = ServerEnv::Dev;
+	c.streamId.clear();
+	CHECK(!ApplyPutServerEnv(c, before, std::nullopt));
+	CHECK_EQ(c.apiBase, std::string("https://api.pokeclip.com"));
+	CHECK(c.serverEnv == ServerEnv::Prod);
+	CHECK_EQ(c.streamId, std::string(kStreamId));
+}
+
+TEST(put_env_switch_ignores_body_ingest_and_clears_key)
+{
+	const PluginConfig before = PairedWith(kProdServers, ServerEnv::Prod, kStreamId);
+	PluginConfig c = before;
+	c.ingestHost = "other.example"; // 같은 본문의 수신 주소(열어 둔 초안) — 버린다
+	c.ingestPort = 9000;
+	CHECK(ApplyPutServerEnv(c, before, ServerEnv::Dev));
+	CHECK(c.serverEnv == ServerEnv::Dev);
+	CHECK_EQ(c.apiBase, std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(c.ingestHost, std::string("media-dev.pokeclip.com"));
+	CHECK_EQ(c.ingestPort, 8890);
+	CHECK(c.streamId.empty()); // 키는 그 환경의 Auth가 발급했다
+	CHECK(c.passphrase.empty());
+
+	// 직접 적은 주소(로컬 compose)는 전환해도 남고 키만 지운다
+	PluginConfig local = before;
+	local.serverEnv = ServerEnv::Dev;
+	local.apiBase = "http://localhost:8082";
+	local.ingestHost = "127.0.0.1";
+	c = local;
+	CHECK(ApplyPutServerEnv(c, local, ServerEnv::Prod));
+	CHECK(c.serverEnv == ServerEnv::Prod);
+	CHECK_EQ(c.apiBase, std::string("http://localhost:8082"));
+	CHECK_EQ(c.ingestHost, std::string("127.0.0.1"));
+	CHECK(!c.HasKey());
+}
+
+TEST(put_on_locked_config_does_not_revive_stale_env)
+{
+	// 요청 A(오디오 스위치)가 운영 스냅샷을 읽은 뒤, 요청 B가 개발로 바꾸고 개발 키로 다시 페어링했다.
+	const PluginConfig snapshot = PairedWith(kProdServers, ServerEnv::Prod, kStreamId);
+	PluginConfig next = snapshot;
+	next.audioAutoAssign = true;
+	ApplyPutServerEnv(next, snapshot, std::nullopt); // 검사용 스냅샷
+
+	const std::string devKey = "#!::r=DEV00000000000000000000000,m=publish";
+	PluginConfig locked = PairedWith(kDevServers, ServerEnv::Dev, devKey);
+	locked.dockIntroShown = true; // UI 스레드가 따로 저장한 값
+	locked.markHotkey = "{\"bindings\":[]}";
+	const PluginConfig before = locked;
+	locked.TakeDockSettings(next); // PutConfig의 Commit과 같은 순서
+	CHECK(!ApplyPutServerEnv(locked, before, std::nullopt));
+
+	CHECK(locked.serverEnv == ServerEnv::Dev); // 운영 짝이 되살아나지 않는다
+	CHECK_EQ(locked.apiBase, std::string("https://dev.pokeclip.com"));
+	CHECK_EQ(locked.ingestHost, std::string("media-dev.pokeclip.com")); // 스냅샷의 운영 호스트도 지금 짝으로
+	CHECK_EQ(locked.streamId, devKey); // 개발 키가 개발 짝에 그대로
+	CHECK(locked.audioAutoAssign);     // 요청한 값은 들어간다
+	CHECK(locked.dockIntroShown);
+	CHECK_EQ(locked.markHotkey, std::string("{\"bindings\":[]}"));
+}
+
+TEST(same_key_issuer_detects_env_switch_during_pairing)
+{
+	const PluginConfig started = PairedWith(kProdServers, ServerEnv::Prod, "");
+	PluginConfig now = started;
+	CHECK(SameKeyIssuer(now, started));
+	now.ingestHost = "127.0.0.1"; // 수신 주소만 바뀐 것은 키를 발급한 곳과 무관하다
+	now.latencyMs = 2000;
+	CHECK(SameKeyIssuer(now, started));
+
+	PluginConfig switched = started;
+	ApplyPutServerEnv(switched, started, ServerEnv::Dev); // 교환을 기다리는 사이 숨은 스위치
+	CHECK(!SameKeyIssuer(switched, started));
+
+	PluginConfig fileEdited = started; // 같은 환경이라도 api_base가 다르면 다른 Auth다
+	fileEdited.apiBase = "http://localhost:8082";
+	CHECK(!SameKeyIssuer(fileEdited, started));
+
+	// api_base를 직접 적은 설치(로컬 auth)는 전환해도 주소가 그대로다 — 환경만 바뀌어도 전환은 연결 해제이므로 버린다
+	PluginConfig local = fileEdited;
+	PluginConfig localSwitched = local;
+	ApplyPutServerEnv(localSwitched, local, ServerEnv::Dev);
+	CHECK_EQ(localSwitched.apiBase, local.apiBase);
+	CHECK(!SameKeyIssuer(localSwitched, local));
+}
+
+// 연결 해제 저장의 순서 규칙(POK-285) — POSIX·Windows 저장이 같이 쓴다. .bak을 먼저 쓰고, 그게 실패하면 본 파일은 건드리지 않는다.
+TEST(replacing_backup_writes_bak_first_and_stops_on_failure)
+{
+	std::vector<std::string> calls;
+	auto record = [&calls](const char *failOn) {
+		return [&calls, failOn](const std::string &target) {
+			calls.push_back(target);
+			return target != failOn;
+		};
+	};
+	using Calls = std::vector<std::string>;
+
+	CHECK(WriteBackupThenMain("cfg.json", record("")));
+	CHECK(calls == (Calls{"cfg.json.bak", "cfg.json"}));
+
+	calls.clear();
+	CHECK(!WriteBackupThenMain("cfg.json", record("cfg.json.bak")));
+	CHECK(calls == (Calls{"cfg.json.bak"})); // 본 파일은 옛 판(페어링 상태) 그대로
+
+	calls.clear();
+	CHECK(!WriteBackupThenMain("cfg.json", record("cfg.json")));
+	CHECK(calls == (Calls{"cfg.json.bak", "cfg.json"})); // .bak만 새 판 — 키가 사라지는 쪽
 }
 
 #ifndef _WIN32
@@ -1264,6 +2020,117 @@ TEST(private_file_is_owner_only_from_the_start)
 	umask(oldMask);
 	std::error_code ec;
 	fs::remove_all(dir, ec);
+}
+
+// 연결 해제 저장(POK-285) 시험용 — 시나리오마다 새 디렉터리를 쓴다.
+static std::filesystem::path FreshTestDir(const std::string &tag)
+{
+	auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+	std::filesystem::path dir =
+		std::filesystem::temp_directory_path() / ("pokeclip-" + tag + "-" + std::to_string(stamp));
+	std::filesystem::create_directories(dir);
+	return dir;
+}
+
+static std::string ReadFileText(const std::string &p)
+{
+	std::ifstream in(p);
+	return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+static unsigned FileModeOf(const std::string &p)
+{
+	struct stat st {};
+	return stat(p.c_str(), &st) == 0 ? static_cast<unsigned>(st.st_mode & 0777) : 0u;
+}
+
+static const std::string kPairedJson = "{\"streamid\":\"#!::r=OLDKEY,m=publish\",\"passphrase\":\"old-secret-1\"}";
+static const std::string kUnpairedJson = "{\"streamid\":\"\",\"passphrase\":\"\"}";
+
+TEST(private_file_replacing_backup_keeps_no_previous_version)
+{
+	namespace fs = std::filesystem;
+	mode_t oldMask = umask(022);
+
+	// 고치기 전 해제 저장 — 해제판을 써도 직전 판(키)이 .bak에 남는다. 본 파일이 깨지면 libobs가 이것을 읽는다.
+	fs::path before = FreshTestDir("unpair-before");
+	const std::string beforePath = (before / "pokeclip.json").string();
+	CHECK(WritePrivateFileAtomic(beforePath, kPairedJson));
+	CHECK(WritePrivateFileAtomic(beforePath, kUnpairedJson));
+	CHECK_EQ(ReadFileText(beforePath + ".bak"), kPairedJson);
+
+	// 해제 저장 — 본 파일·.bak 모두 해제판이고 0600이다. 지난 저장이 남긴 키 든 tmp도 남지 않는다.
+	fs::path dir = FreshTestDir("unpair");
+	const std::string path = (dir / "pokeclip.json").string();
+	CHECK(WritePrivateFileAtomic(path, kPairedJson));
+	CHECK(WritePrivateFileAtomic(path, kPairedJson));
+	std::ofstream(path + ".tmp") << kPairedJson;
+	std::ofstream(path + ".bak.tmp") << kPairedJson;
+	CHECK(WritePrivateFileReplacingBackup(path, kUnpairedJson));
+	CHECK_EQ(ReadFileText(path), kUnpairedJson);
+	CHECK_EQ(ReadFileText(path + ".bak"), kUnpairedJson);
+	CHECK_EQ(FileModeOf(path), 0600u);
+	CHECK_EQ(FileModeOf(path + ".bak"), 0600u);
+	CHECK(!fs::exists(path + ".tmp"));
+	CHECK(!fs::exists(path + ".bak.tmp"));
+	CHECK(!fs::exists(path + ".bak.bak"));
+
+	// 처음 쓰는 자리여도 두 파일이 다 생긴다.
+	fs::path fresh = FreshTestDir("unpair-fresh");
+	const std::string freshPath = (fresh / "pokeclip.json").string();
+	CHECK(WritePrivateFileReplacingBackup(freshPath, kUnpairedJson));
+	CHECK_EQ(ReadFileText(freshPath), kUnpairedJson);
+	CHECK_EQ(ReadFileText(freshPath + ".bak"), kUnpairedJson);
+
+	umask(oldMask);
+	std::error_code ec;
+	fs::remove_all(before, ec);
+	fs::remove_all(dir, ec);
+	fs::remove_all(fresh, ec);
+}
+
+TEST(private_file_replacing_backup_failure_only_drops_credentials)
+{
+	namespace fs = std::filesystem;
+
+	// 1단계(.bak)에서 막히면 아무것도 안 바뀐다 — 본 파일은 옛 판(페어링 상태) 그대로고 tmp도 남지 않는다.
+	// .bak 자리가 비어 있지 않은 디렉터리면 rename이 실패한다.
+	fs::path a = FreshTestDir("unpair-fail-bak");
+	const std::string aPath = (a / "pokeclip.json").string();
+	CHECK(WritePrivateFileAtomic(aPath, kPairedJson));
+	fs::create_directories(fs::path(aPath + ".bak") / "keep");
+	CHECK(!WritePrivateFileReplacingBackup(aPath, kUnpairedJson));
+	CHECK_EQ(ReadFileText(aPath), kPairedJson);
+	CHECK(!fs::exists(aPath + ".bak.tmp"));
+	CHECK(!fs::exists(aPath + ".tmp"));
+
+	// 2단계(본 파일)에서 막히면 .bak만 해제판이다 — 어긋나도 키가 사라지는 쪽이다. 실패한 tmp는 지운다.
+	fs::path b = FreshTestDir("unpair-fail-main");
+	const std::string bPath = (b / "pokeclip.json").string();
+	std::ofstream(bPath + ".bak") << kPairedJson;
+	fs::create_directories(fs::path(bPath) / "keep");
+	CHECK(!WritePrivateFileReplacingBackup(bPath, kUnpairedJson));
+	CHECK_EQ(ReadFileText(bPath + ".bak"), kUnpairedJson);
+	CHECK(fs::is_directory(bPath));
+	CHECK(!fs::exists(bPath + ".tmp"));
+
+	// .bak.tmp 자리의 심볼릭 링크는 따라가지 않는다 — 링크 대상·본 파일·.bak 모두 그대로다.
+	fs::path c = FreshTestDir("unpair-fail-link");
+	const std::string cPath = (c / "pokeclip.json").string();
+	CHECK(WritePrivateFileAtomic(cPath, kPairedJson));
+	CHECK(WritePrivateFileAtomic(cPath, kPairedJson));
+	fs::path victim = c / "victim";
+	std::ofstream(victim) << "keep";
+	fs::create_symlink(victim, cPath + ".bak.tmp");
+	CHECK(!WritePrivateFileReplacingBackup(cPath, kUnpairedJson));
+	CHECK_EQ(ReadFileText(victim.string()), std::string("keep"));
+	CHECK_EQ(ReadFileText(cPath), kPairedJson);
+	CHECK_EQ(ReadFileText(cPath + ".bak"), kPairedJson);
+
+	std::error_code ec;
+	fs::remove_all(a, ec);
+	fs::remove_all(b, ec);
+	fs::remove_all(c, ec);
 }
 #endif
 
@@ -1473,7 +2340,8 @@ TEST(reject_streak_flags_key_after_three_fast_rejects)
 	s.Record("connect_failed", 12);
 	CHECK(s.KeySuspect());
 
-	// 무응답(접속 타임아웃을 다 씀)은 서버가 죽은 것이지 키 문제가 아니다
+	// 시한(3초)을 다 쓴 실패는 세지 않는다 — 서버 꺼짐·무응답, 그리고 계정별 방송에서 3초를 넘긴 인증 거절도
+	// 이 모양이다(POK-287 — 늦은 거절은 일부러 세지 않는다)
 	s.Record("connect_failed", 3000);
 	CHECK(!s.KeySuspect());
 
