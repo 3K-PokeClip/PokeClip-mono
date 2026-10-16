@@ -9,9 +9,11 @@ spring:
   application:
     name: pokeclip-chat-collector
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB:pokeclip}
-    username: ${POSTGRES_USER:pokeclip}
-    password: ${POSTGRES_PASSWORD:change-me-local-only}
+    # DB 접속값 셋은 기본값을 두지 않는다(auth · clip과 같은 꼴, POK-161 · POK-331). 공개 저장소에 적힌 비밀번호로
+    # 붙는 창을 닫는다. DB_HOST · DB_PORT는 .env에 없는 값이라 남긴다.
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
     hikari:
       data-source-properties:
         # 반개방 스톨(연결은 살았는데 응답이 안 옴)을 끊는 유일한 시한이다(초).

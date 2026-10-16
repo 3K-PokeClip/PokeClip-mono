@@ -38,7 +38,9 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 아래 기다리기(195회 × 15초 = 약 49분)와 https 확인(최대 400초)을 담는다. 서버 넷을 같은 상자에서
+    # 하나씩 구우므로 둘만 굽던 때(30분)보다 길다. 첫 배포에서 잰 시간을 보고 줄인다(POK-331).
+    timeout-minutes: 60
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -55,12 +57,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 명령의 마지막 줄은 상자 안에서 auth 가 떴는지 127.0.0.1:8082 로 잰다(400초).
-          # 바깥 8082 를 닫아도(POK-293 M12) 이 길은 남는다. \$ 는 이 셸이 아니라 상자에서 풀리게 한다.
+          # 서버 넷(POK-331)을 하나씩 굽는다. compose 기본은 동시 빌드라 Gradle 넷이 한꺼번에 돌면
+          # 옛 컨테이너가 떠 있는 상자의 메모리가 모자랄 수 있다. -q 는 SSM 출력(앞 24,000자만 돌려준다)을
+          # 빌드 로그가 채워 끝의 health · compose ps · free 줄이 잘리지 않게 한다.
+          # 그다음 상자 안 127.0.0.1 로 서버 넷의 health 를 잰다. 넷이 동시에 뜨므로 마감 하나(600초)를 같이 쓴다.
+          # 횟수가 아니라 시각으로 재는 이유: 연결만 받고 답하지 않는 포트면 회차마다 curl 5초 + 쉼 10초가 들어
+          # 40회가 400초가 아니라 600초가 되고, 넷이면 약 40분이 기다리기 예산을 먹는다(PR #258 codex). 바깥 포트를 닫아도
+          # (POK-293 M12) 이 길은 남는다. 못 뜬 서버가 있어도 compose ps · free -m · df -h 를 먼저 찍고 실패한다.
+          # \$ 는 이 셸이 아니라 상자에서 풀리게 한다.
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name AWS-RunShellScript \
-            --timeout-seconds 1800 \
+            --timeout-seconds 3000 \
             --comment "deploy $SHA" \
             --parameters "commands=[
               'set -e',
@@ -69,9 +77,10 @@ jobs:
               'sudo -u ec2-user git checkout -B develop FETCH_HEAD',
               'sudo -u ec2-user git log --oneline -1',
               'cd services',
-              'sudo -u ec2-user docker compose -f docker-compose.dev.yml up -d --build postgres auth clip',
+              'for s in auth clip chat-collector chat-detector; do echo build \$s; sudo -u ec2-user docker compose -f docker-compose.dev.yml build -q \$s; done',
+              'sudo -u ec2-user docker compose -f docker-compose.dev.yml up -d postgres auth clip chat-collector chat-detector',
               'sudo -u ec2-user docker image prune -f',
-              'for i in \$(seq 1 40); do if curl -sf -m 5 -o /dev/null http://127.0.0.1:8082/actuator/health; then echo auth UP \$i; break; fi; if [ \$i -eq 40 ]; then echo auth not UP in 400s; exit 1; fi; sleep 10; done'
+              'fail=0; end=\$((\$(date +%s) + 600)); for p in 8081 8082 8083 8084; do ok=0; while [ \$(date +%s) -lt \$end ]; do if curl -sf -m 5 -o /dev/null http://127.0.0.1:\$p/actuator/health; then ok=1; break; fi; sleep 10; done; if [ \$ok -eq 1 ]; then echo \$p UP; else echo \$p not UP within 600s; fail=1; fi; done; sudo -u ec2-user docker compose -f docker-compose.dev.yml ps; free -m; df -h /; [ \$fail -eq 0 ]'
             ]" \
             --query Command.CommandId --output text)
 
@@ -79,7 +88,7 @@ jobs:
 
           # send-command 는 비동기다. 기다리지 않으면 배포가 실패해도 잡이 초록으로 끝난다.
           # aws ssm wait command-executed 는 최대 대기가 짧아 빌드를 못 기다린다 — 직접 돈다.
-          for _ in $(seq 1 120); do
+          for _ in $(seq 1 195); do
             STATUS=$(aws ssm get-command-invocation \
               --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
               --query Status --output text 2>/dev/null || echo Pending)
@@ -89,7 +98,7 @@ jobs:
 
           aws ssm get-command-invocation \
             --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
-            --query 'StandardOutputContent' --output text | tail -30
+            --query 'StandardOutputContent' --output text | tail -60
 
           if [ "$STATUS" != "Success" ]; then
             echo "::error::배포 실패 (SSM status=$STATUS)"
