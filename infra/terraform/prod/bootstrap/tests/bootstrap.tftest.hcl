@@ -6,11 +6,13 @@ mock_provider "aws" {}
 run "creates_prod_state_bucket_with_fixed_name" {
   command = plan
 
+  # ARN 은 계산 속성이라 plan 단계에서 고정한다. 이름과 무관한 표지를 써서,
+  # 출력이 모듈의 ARN 을 그대로 넘기는지(이름으로 조립하지 않는지) 본다.
   override_resource {
     target          = module.state_bucket.aws_s3_bucket.this
     override_during = plan
     values = {
-      arn = "arn:aws:s3:::pokeclip-tfstate-prod-apne2"
+      arn = "arn:aws:s3:::override-sentinel"
     }
   }
 
@@ -25,7 +27,7 @@ run "creates_prod_state_bucket_with_fixed_name" {
   }
 
   assert {
-    condition     = output.state_bucket_arn == "arn:aws:s3:::pokeclip-tfstate-prod-apne2"
-    error_message = "출력 state_bucket_arn 이 버킷 ARN 과 다르다."
+    condition     = output.state_bucket_arn == "arn:aws:s3:::override-sentinel"
+    error_message = "출력 state_bucket_arn 이 모듈의 버킷 ARN 을 그대로 넘기지 않는다."
   }
 }
