@@ -50,7 +50,8 @@ public class YoutubeTokenRefresher {
     @Transactional
     public RefreshResult refreshIfExpiringWithin(Long userId, Duration minRemaining) {
         // DB(timestamptz)는 마이크로초까지 반올림해 둔다. 리눅스 시계는 나노초를 주므로 자르지 않으면
-        // 스냅샷에 실은 만료 시각이 방금 저장한 값과 1µs 안쪽으로 어긋난다(macOS 시계는 마이크로초라 안 보인다).
+        // 스냅샷에 실은 만료 시각이 방금 저장한 값과 1µs 안쪽으로 어긋난다. 이 줄을 지키는 시험(YoutubeTokenRefresherTest의
+        // 「임박하면_갱신하고…」)은 리눅스 CI에서만 빨개진다(macOS 로컬은 마이크로초 시계라 초록).
         Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         if (users.findByIdForUpdate(userId).isEmpty()) {
             return RefreshResult.of(RefreshOutcome.NOT_LINKED);
