@@ -322,6 +322,8 @@ const server = vi.hoisted(() => ({
   failLive: false,
   relation: 'OWNER',
   hidden: new Set<number>(),
+  /** 놓은 카드(POK-338) — 목록에서 집은 사람이 빈다 */
+  released: new Set<number>(),
   chatPaged: false,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
   playback: 'off' as 'off' | 'grant' | 'fail',
@@ -576,7 +578,11 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
   if (path.endsWith('/jump-cards')) {
     // 숨긴 카드는 includeHidden일 때만 hidden:true로 온다(서버 기본은 뺀다)
     const withHidden = u.searchParams.get('includeHidden') === 'true';
-    const cards = CARDS.map((c) => ({ ...c, hidden: server.hidden.has(c.id) }));
+    const cards = CARDS.map((c) => ({
+      ...c,
+      hidden: server.hidden.has(c.id),
+      claimedBy: server.released.has(c.id) ? null : c.claimedBy,
+    }));
     return jsonResponse(200, { cards: withHidden ? cards : cards.filter((c) => !c.hidden) });
   }
   if (path.endsWith('/chat-chart') && server.chartRecentGate) {
@@ -665,7 +671,10 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
     else server.hidden.add(id);
     return new Response(null, { status: 204 });
   }
-  if (path.endsWith('/claim')) return new Response(null, { status: 204 });
+  if (path.endsWith('/claim')) {
+    if (init?.method === 'DELETE') server.released.add(Number(path.split('/')[4]));
+    return new Response(null, { status: 204 });
+  }
   return jsonResponse(404, { error: 'unexpected_call' });
 }
 
@@ -732,6 +741,7 @@ beforeEach(() => {
   server.failLive = false;
   server.relation = 'OWNER';
   server.hidden = new Set();
+  server.released = new Set();
   server.chatPaged = false;
   server.playback = 'off';
   notFound.mockClear();
@@ -1147,6 +1157,25 @@ describe('LiveScreen — 하이라이트 카드', () => {
         ([url, init]) => url === '/api/clip/jump-cards/5/claim' && init?.method === 'DELETE',
       ),
     ).toBe(true);
+  });
+});
+
+describe('LiveScreen — 끝난 방송의 카드 동작 (POK-338)', () => {
+  it('놓기·숨김 되돌리기는 다음 목록 주기를 기다리지 않고 바로 반영된다', async () => {
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+
+    // 시계를 움직이지 않는다(settle은 0초) — 주기 읽기가 아니라 동작 뒤 다시 읽기만 반영할 수 있다
+    fireEvent.click(screen.getByRole('button', { name: '놓기' }));
+    await settle();
+    expect(screen.queryByRole('button', { name: '놓기' })).not.toBeInTheDocument();
+
+    await 숨긴다('중복');
+    expect(screen.getByRole('button', { name: '숨김 1' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '숨김 1' }));
+    fireEvent.click(screen.getByRole('button', { name: '숨김 되돌리기' }));
+    await settle();
+    expect(screen.getByRole('button', { name: '숨김 0' })).toBeInTheDocument();
   });
 });
 

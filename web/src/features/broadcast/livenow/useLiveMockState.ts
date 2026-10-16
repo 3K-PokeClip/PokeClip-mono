@@ -127,11 +127,18 @@ export interface CardActionResult {
   text: string;
 }
 
+/**
+ * 카드 동작이 성공하면 열린 화면이 목록을 그 자리에서 다시 읽는다(POK-338). 끝난 방송은 통로가 없고 목록을 드물게 읽어,
+ * 기다리면 「놓기」·「숨김 되돌리기」가 한참 뒤에야 보인다
+ */
+const cardChangeListeners = new Set<() => void>();
+
 /** 카드 집기·놓기·숨기기·되돌리기. 실패도 값으로 돌려준다: 카드가 사유(409 already_claimed 등)를 토스트로 보인다 */
 async function cardCall(method: string, path: string, body?: object): Promise<CardActionResult> {
   try {
     // 문자열 본문이면 apiFetch가 Content-Type을 JSON으로 붙인다
     const r = await apiFetch(path, body ? { method, body: JSON.stringify(body) } : { method });
+    cardChangeListeners.forEach((reload) => reload());
     return { ok: true, status: r.status, text: '' };
   } catch (e) {
     if (e instanceof ApiError) return { ok: false, status: e.status, text: e.code ?? e.message };
@@ -526,12 +533,14 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     void loadChart();
     void loadInfo();
     void sseLoop();
+    cardChangeListeners.add(loadList);
     const t1 = setInterval(loadList, 3000);
     const t2 = setInterval(loadChart, 10_000);
     const t3 = setInterval(loadInfo, 10_000);
     return () => {
       stopped = true;
       ctrl.abort();
+      cardChangeListeners.delete(loadList);
       clearInterval(t1);
       clearInterval(t2);
       clearInterval(t3);
