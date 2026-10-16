@@ -1,0 +1,3 @@
+# 공유 입력 벡터는 바이트 그대로 둔다 — CR 행을 루트 eol=lf 정규화에서 빼고(-text),
+# NUL 행이 있어도 차분은 글자로 보인다(diff).
+denylist_vector.txt -text diff
