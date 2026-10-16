@@ -260,6 +260,8 @@ export interface PreviousUpload {
   versionLabel: string;
   text: string;
   href: string | null;
+  /** 확인 필요라 사람이 결과를 적을 수 있다(POK-333) */
+  checking: boolean;
 }
 
 const LIVE_UPLOAD_TEXT: Record<string, string> = {
@@ -298,6 +300,7 @@ export function previousUploadsOf(entry: LibraryEntry | undefined): PreviousUplo
         u.status === 'uploaded' && u.videoId
           ? safeExternalUrl(`https://youtu.be/${encodeURIComponent(u.videoId)}`)
           : null,
+      checking: u.status === 'checking',
     }));
 }
 
@@ -425,7 +428,7 @@ export function detailViewForClip(clip: LibraryClip, status: ClipStatus): Detail
 export function noteText(note: PanelNote): string {
   if (note === 'checking') {
     // 공개 범위를 고를 수 있게 되어(POK-291) 「비공개 영상」이라 못박지 않는다
-    return '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 영상이 올라갔는지 확인해 주세요.';
+    return '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 영상이 올라갔는지 확인한 뒤 아래 단추로 결과를 알려 주세요.';
   }
   return '원본 VOD가 만료되어 다시 편집할 수 없어요. 발행된 영상은 그대로 유지됩니다.';
 }
@@ -445,6 +448,22 @@ export function uploadTitleProblem(title: string): string | null {
 }
 
 /** 업로드 주문이 거절된 사유. 모르는 사유는 서버 코드를 그대로 보인다(지어내지 않는다) */
+/** 「확인 필요」 풀기(POK-333)가 거절된 사유를 사람 말로 */
+export function resolveErrorMessage(e: unknown): string {
+  if (e instanceof ClipApiError) {
+    if (e.code === 'resolution_too_early') {
+      return '업로드가 아직 이어지고 있을 수 있어요. 마지막 시도에서 30분이 지난 뒤 다시 눌러 주세요.';
+    }
+    if (e.code === 'upload_not_checking')
+      return '이미 결과가 정해진 업로드예요. 목록을 다시 읽었어요.';
+    if (e.status === 400 && e.field === 'videoId') {
+      return '유튜브 영상 주소나 영상 번호를 확인해 주세요. youtu.be/… · watch?v=… · shorts/… 주소를 붙여 넣으면 돼요.';
+    }
+    if (e.status === 404) return '업로드를 찾을 수 없어요. 목록을 새로 고쳐 주세요.';
+  }
+  return uploadErrorMessage(e);
+}
+
 export function uploadErrorMessage(e: unknown): string {
   if (e instanceof ClipApiError) {
     if (e.status === 400 && e.field === 'title') return '유튜브 제목을 확인해 주세요.';

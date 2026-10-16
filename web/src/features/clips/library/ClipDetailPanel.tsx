@@ -6,11 +6,13 @@ import { ExternalLink, Play, Trash2, X } from 'lucide-react';
 import { Badge, Button, IconButton, LinkButton, VisuallyHidden, useToast } from '@/ui';
 import { ddayFor } from '@/features/broadcast/vod/vodListView';
 import { InlineTitleInput } from './InlineTitleInput';
+import { UploadResolutionControls } from './UploadResolutionControls';
 import {
   detailViewForClip,
   durationLabel,
   noteText,
   previousUploadsOf,
+  shownUploadOf,
   privacyNoteText,
   retentionLabel,
   safeExternalUrl,
@@ -19,6 +21,7 @@ import {
   type DetailView,
   type PreviousUpload,
 } from './libraryView';
+import type { UploadResolution } from '@/api/clipEditor';
 import type { ClipStatus, LibraryClip } from './useLibraryMockState';
 import styles from './LibraryScreen.module.css';
 
@@ -37,6 +40,7 @@ export function ClipDetailPanel({
   onUpload,
   onRetryRender,
   onRetryUpload,
+  onResolveUpload,
   onDownload,
   onDelete,
   sending = false,
@@ -52,6 +56,8 @@ export function ClipDetailPanel({
   onRetryRender: () => void;
   /** 업로드 실패를 저장된 정보 그대로 다시 올린다(POK-291) */
   onRetryUpload: () => void;
+  /** 「확인 필요」 업로드를 채널에서 본 결과로 푼다(POK-333). 없으면(목업 · 시험 주입) 단추를 안 그린다 */
+  onResolveUpload?: (uploadId: number, resolution: UploadResolution) => Promise<boolean>;
   onDownload: () => void;
   onDelete: () => void;
   /** 업로드 주문·다시 시도를 보내는 중: 주 동작을 잠근다 */
@@ -66,6 +72,8 @@ export function ClipDetailPanel({
   const thumbnailFailure = thumbnailFailureText(clip);
   const privacyNote = privacyNoteText(clip);
   const previousUploads = previousUploadsOf(clip.entry);
+  const shown = clip.entry ? shownUploadOf(clip.entry) : null;
+  const checkingUpload = shown?.status === 'checking' ? shown : null;
   const playable = loadPreview !== undefined && clip.entry?.latestClip?.status === 'rendered';
   const duration = durationLabel(clip, status);
   const retention = ddayFor(clip.sourceExpiresAt, now);
@@ -222,6 +230,13 @@ export function ClipDetailPanel({
         {/* 진행 한 줄(만드는 중 N% · 올리는 중)은 원래 안내 자리에 둔다: 「자막」 칸은 자막 정보 자리다(POK-291) */}
         {clip.progressLabel ? <p className={styles.note}>{clip.progressLabel}</p> : null}
         {view.note ? <p className={styles.note}>{noteText(view.note)}</p> : null}
+        {/* 확인 필요를 사람이 푼다(POK-333): 위쪽이 보이는 업로드가 확인 필요일 때만 */}
+        {checkingUpload && onResolveUpload ? (
+          <UploadResolutionControls
+            busy={sending}
+            onResolve={(resolution) => onResolveUpload(checkingUpload.id, resolution)}
+          />
+        ) : null}
         {uploadFailure ? <p className={styles.note}>{uploadFailure}</p> : null}
         {thumbnailFailure ? <p className={styles.note}>{thumbnailFailure}</p> : null}
         {privacyNote ? <p className={styles.note}>{privacyNote}</p> : null}
@@ -251,7 +266,16 @@ export function ClipDetailPanel({
           <section aria-label="이전 판으로 올린 영상">
             <dl className={styles.meta}>
               {previousUploads.map((u) => (
-                <PreviousUploadRow key={u.id} upload={u} />
+                <PreviousUploadRow
+                  key={u.id}
+                  upload={u}
+                  busy={sending}
+                  onResolve={
+                    u.checking && onResolveUpload
+                      ? (resolution) => onResolveUpload(u.id, resolution)
+                      : undefined
+                  }
+                />
               ))}
             </dl>
           </section>
@@ -420,8 +444,19 @@ function PreviewPlayer({
   );
 }
 
-/** 이전 판 업로드 한 줄. 올린 것만 유튜브로 가는 링크이고, 올리는 중·확인 필요는 글자만이다 */
-function PreviousUploadRow({ upload }: { upload: PreviousUpload }) {
+/**
+ * 이전 판 업로드 한 줄. 올린 것만 유튜브로 가는 링크이고, 올리는 중·확인 필요는 글자만이다. 확인 필요면 결과를 적는 단추를 붙인다
+ * (POK-333: 새 판을 주문해 위쪽이 새 판을 보여도 옛 판의 확인 필요를 풀 수 있게)
+ */
+function PreviousUploadRow({
+  upload,
+  busy,
+  onResolve,
+}: {
+  upload: PreviousUpload;
+  busy: boolean;
+  onResolve?: (resolution: UploadResolution) => Promise<boolean>;
+}) {
   return (
     <>
       <dt>{`이전 판 ${upload.versionLabel}`}</dt>
@@ -434,6 +469,13 @@ function PreviousUploadRow({ upload }: { upload: PreviousUpload }) {
         ) : (
           upload.text
         )}
+        {onResolve ? (
+          <UploadResolutionControls
+            label={`이전 판 ${upload.versionLabel}`}
+            busy={busy}
+            onResolve={onResolve}
+          />
+        ) : null}
       </dd>
     </>
   );

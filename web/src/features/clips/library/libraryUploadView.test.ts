@@ -267,7 +267,7 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
     expect(view.titleLocked).toBe(true);
     expect(view.note).toBe('checking');
     expect(noteText('checking')).toBe(
-      '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 영상이 올라갔는지 확인해 주세요.',
+      '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 영상이 올라갔는지 확인한 뒤 아래 단추로 결과를 알려 주세요.',
     );
   });
 
@@ -481,8 +481,14 @@ describe('previousUploadsOf: 패널 위쪽이 말하지 않는 살아 있는 업
       ],
     };
     expect(previousUploadsOf(e)).toEqual([
-      { id: 6, versionLabel: 'v1', text: '제목6 · 올리는 중', href: null },
-      { id: 5, versionLabel: 'v1', text: '제목5 · 업로드됨', href: 'https://youtu.be/old' },
+      { id: 6, versionLabel: 'v1', text: '제목6 · 올리는 중', href: null, checking: false },
+      {
+        id: 5,
+        versionLabel: 'v1',
+        text: '제목5 · 업로드됨',
+        href: 'https://youtu.be/old',
+        checking: false,
+      },
     ]);
   });
 
@@ -494,7 +500,13 @@ describe('previousUploadsOf: 패널 위쪽이 말하지 않는 살아 있는 업
     };
     expect(toLibraryClip(e, '9').youtubeUrl).toBeUndefined();
     expect(previousUploadsOf(e)).toEqual([
-      { id: 5, versionLabel: 'v1', text: '제목5 · 업로드됨', href: 'https://youtu.be/old' },
+      {
+        id: 5,
+        versionLabel: 'v1',
+        text: '제목5 · 업로드됨',
+        href: 'https://youtu.be/old',
+        checking: false,
+      },
     ]);
   });
 

@@ -764,6 +764,111 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     expect(await axe(panel())).toHaveNoViolations();
   });
 
+  const checkingUpload = {
+    id: 7,
+    clipId: 5,
+    outputId: 'o1',
+    title: '보스 막타',
+    status: 'checking',
+    videoId: null,
+    error: { code: 'SESSION_GONE', message: null },
+    requestedBy: '9',
+    createdAt: '2026-09-20T12:00:00Z',
+    updatedAt: '2026-09-20T12:01:00Z',
+  };
+
+  it('확인 필요는 「채널에 올라갔어요」로 영상 주소를 받아 푼다(POK-333)', async () => {
+    const spy = stubFetch(() =>
+      jsonResponse(200, { ...checkingUpload, status: 'uploaded', videoId: 'abcDEF12345' }),
+    );
+    const user = userEvent.setup();
+    show(serverClip('checking', { ...rendered, upload: checkingUpload }));
+
+    await user.click(within(panel()).getByRole('button', { name: '채널에 올라갔어요' }));
+    const dialog = await screen.findByRole('dialog', { name: '채널에 올라간 영상' });
+    const submit = within(dialog).getByRole('button', { name: '발행됨으로 바꾸기' });
+    expect(submit).toBeDisabled();
+    await user.type(
+      within(dialog).getByRole('textbox', { name: '영상 주소' }),
+      ' https://youtu.be/abcDEF12345 ',
+    );
+    await user.click(submit);
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/5/uploads/7/resolution');
+    expect(JSON.parse(String(spy.mock.calls[0]?.[1]?.body))).toEqual({
+      result: 'uploaded',
+      videoId: 'https://youtu.be/abcDEF12345',
+    });
+    expect(await screen.findByText('발행됨으로 바꿨어요')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('「안 올라갔어요」는 두 번 올라갈 수 있다는 경고를 거치고, 30분 전이면 사유를 알린다(POK-333)', async () => {
+    const spy = stubFetch(() =>
+      jsonResponse(409, { error: 'resolution_too_early', allowedAt: '2026-09-20T12:31:00Z' }),
+    );
+    const user = userEvent.setup();
+    show(serverClip('checking', { ...rendered, upload: checkingUpload }));
+
+    await user.click(within(panel()).getByRole('button', { name: '안 올라갔어요' }));
+    const dialog = await screen.findByRole('dialog', { name: '유튜브에 안 올라간 것이 맞나요?' });
+    expect(within(dialog).getByText(/같은 영상이 두 개 떠요/)).toBeInTheDocument();
+    expect(spy).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: '안 올라갔어요' }));
+
+    expect(JSON.parse(String(spy.mock.calls[0]?.[1]?.body))).toEqual({ result: 'not_uploaded' });
+    expect(await screen.findByText(/30분이 지난 뒤 다시 눌러/)).toBeInTheDocument();
+    expect(
+      screen.getByRole('dialog', { name: '유튜브에 안 올라간 것이 맞나요?' }),
+    ).toBeInTheDocument();
+  });
+
+  it('확인 필요가 아닌 업로드에는 푸는 단추가 없다(POK-333)', () => {
+    show(
+      serverClip('uploading', {
+        ...rendered,
+        upload: { ...checkingUpload, status: 'uploading', error: null },
+      }),
+    );
+    expect(within(panel()).queryByRole('button', { name: '채널에 올라갔어요' })).toBeNull();
+  });
+
+  it('새 판을 주문해도 옛 판의 확인 필요 줄에 푸는 단추가 붙고 그 업로드 번호로 보낸다(POK-333)', async () => {
+    const spy = stubFetch(() =>
+      jsonResponse(200, { ...checkingUpload, id: 3, clipId: 2, status: 'failed' }),
+    );
+    const user = userEvent.setup();
+    const clip = toLibraryClip(
+      {
+        ...serverClip('rendering').entry!,
+        latestClip: { ...rendered, status: 'rendering' },
+        liveUploads: [
+          {
+            id: 3,
+            clipId: 2,
+            recipeVersion: 1,
+            outputId: 'o1',
+            title: '첫 판',
+            status: 'checking',
+            videoId: null,
+            createdAt: '2026-09-20T12:00:00Z',
+            updatedAt: '2026-09-20T12:00:00Z',
+          },
+        ],
+      },
+      '9',
+    );
+    show(clip);
+    const previous = within(within(panel()).getByRole('region', { name: '이전 판으로 올린 영상' }));
+
+    await user.click(previous.getByRole('button', { name: '안 올라갔어요 (이전 판 v1)' }));
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: '안 올라갔어요' }),
+    );
+    expect(spy.mock.calls[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/2/uploads/3/resolution');
+  });
+
   const failedUpload = {
     id: 7,
     clipId: 5,

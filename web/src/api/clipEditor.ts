@@ -352,6 +352,9 @@ export interface UploadSnapshot {
     status: 'none' | 'pending' | 'set' | 'failed';
     errorCode: string | null;
   };
+  /** 「확인 필요」를 사람이 풀었으면 그 사람과 시각(POK-333). 일꾼이 끝냈거나 옛 서버면 null · 빠져 온다 */
+  resolvedBy?: string | null;
+  resolvedAt?: string | null;
 }
 
 /** 보관함 상태 일곱(clip LibraryStatus). 뒤의 셋은 유튜브 업로드(POK-220) */
@@ -537,6 +540,27 @@ export async function retryUpload(
     { method: 'POST' },
   );
   return { created: res.status === 201, upload: (await res.json()) as UploadSnapshot };
+}
+
+/** 「확인 필요」 업로드를 사람이 푸는 결과(POK-333). videoId는 영상 번호 그대로이거나 그 영상의 유튜브 주소 */
+export type UploadResolution = { result: 'uploaded'; videoId: string } | { result: 'not_uploaded' };
+
+/**
+ * 「확인 필요」 업로드를 채널에서 본 결과로 푼다(POK-333). 200 푼 업로드(같은 결과를 다시 보내도 200). 400 invalid_request
+ * (result · videoId) · 404 · 409 upload_not_checking(이미 다른 결과로 풀렸거나 일꾼이 끝냄)/resolution_too_early(「안 올라갔다」는
+ * 마지막 일꾼 활동에서 30분 뒤부터).
+ */
+export function resolveUpload(
+  streamId: string,
+  clipId: number,
+  uploadId: number,
+  body: UploadResolution,
+): Promise<UploadSnapshot> {
+  return sendJson(
+    'POST',
+    `/api/clip/broadcasts/${encodeURIComponent(streamId)}/clips/${clipId}/uploads/${uploadId}/resolution`,
+    body,
+  );
 }
 
 /** 완성 영상 파일 주소(POK-220). url은 60분짜리 서명 주소라 재생·내려받기에 같이 쓴다. 만료(403)면 다시 부른다 */

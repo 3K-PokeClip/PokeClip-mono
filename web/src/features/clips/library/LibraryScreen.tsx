@@ -45,6 +45,7 @@ export function LibraryScreen(options: LibraryOptions = {}) {
     renameClip,
     upload,
     retryUpload,
+    resolveUpload,
     retryRender,
     download,
     previewUrl,
@@ -190,6 +191,9 @@ export function LibraryScreen(options: LibraryOptions = {}) {
               onUpload={() => upload(panelClip.id)}
               onRetryRender={() => retryRender(panelClip.id)}
               onRetryUpload={() => retryUpload(panelClip.id)}
+              onResolveUpload={(uploadId, resolution) =>
+                resolveUpload(panelClip.id, uploadId, resolution)
+              }
               onDownload={() => download(panelClip.id)}
               sending={sendingIds.has(panelClip.id)}
               loadPreview={panelClip.entry ? () => previewUrl(panelClip.id) : undefined}
