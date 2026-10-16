@@ -154,6 +154,11 @@ public class UploadReportService {
                     // 줄은 안 바꾼다(새 상태 없음, 다시 올린 줄이 이미 자리를 쥐었을 수 있다). 사람이 찾을 수 있게 번호를 남긴다.
                     log.warn("clip.upload.uploaded_after_resolved_not_uploaded uploadId={} clipId={} videoId={} resolvedBy={}",
                             uploadId, upload.getClipId(), videoId, upload.getResolvedBy());
+                } else if (!same && effective == UploadStatus.UPLOADED && current == UploadStatus.UPLOADED
+                        && upload.getResolvedBy() != null) {
+                    // 사람이 적은 영상 번호와 일꾼이 올린 번호가 다르다: 사람이 다른 영상을 적었을 수 있다. 줄은 안 바꾸고 둘 다 남긴다.
+                    log.warn("clip.upload.resolved_video_mismatch uploadId={} clipId={} resolvedVideoId={} reportedVideoId={} resolvedBy={}",
+                            uploadId, upload.getClipId(), upload.getYoutubeVideoId(), videoId, upload.getResolvedBy());
                 }
                 return same ? ok(upload) : conflict("TERMINAL");
             }

@@ -259,6 +259,22 @@ class UploadResolutionTest extends RenderUploadTestSupport {
         }
     }
 
+    /** 사람이 적은 번호와 일꾼이 늦게 보고한 번호가 다르면 줄은 그대로 두고 WARN에 둘 다 남긴다(사람이 다른 영상을 적었을 수 있다). */
+    @Test
+    void 사람이_적은_번호와_다른_늦은_올림_보고는_WARN에_둘_다_남긴다() throws Exception {
+        long[] 줄 = 확인_필요_업로드();
+        풀기(줄, "{\"result\":\"uploaded\",\"videoId\":\"zzzZZZ99999\"}").andExpect(status().isOk());
+
+        try (LogCaptor captor = new LogCaptor()) {
+            늦은_올림(줄[1]).andExpect(status().isConflict()).andExpect(jsonPath("$.reason").value("TERMINAL"));
+            assertThat(captor.messages()).anySatisfy(line -> assertThat(line)
+                    .startsWith("clip.upload.resolved_video_mismatch")
+                    .contains("resolvedVideoId=zzzZZZ99999").contains("reportedVideoId=" + 영상번호));
+        }
+        assertThat(jdbc.queryForObject("SELECT youtube_video_id FROM clip_uploads WHERE id = ?", String.class, 줄[1]))
+                .isEqualTo("zzzZZZ99999");
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────
 
     /**

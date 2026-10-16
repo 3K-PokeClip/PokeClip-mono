@@ -1,5 +1,7 @@
 package com.pokeclip.clip.upload;
 
+import java.time.Instant;
+
 /** 업로드 문의 예외. 매핑은 전역 조언({@code JumpCardExceptionHandler}) 하나가 한다. */
 public final class UploadErrors {
 
@@ -92,14 +94,14 @@ public final class UploadErrors {
 
     /** 409. 일꾼이 아직 그 주소로 올리고 있을 수 있어 「안 올라갔다」를 아직 못 받는다(POK-333). 다시 누를 수 있게 되는 시각을 싣는다. */
     public static class ResolutionTooEarlyException extends RuntimeException {
-        private final java.time.Instant allowedAt;
+        private final Instant allowedAt;
 
-        public ResolutionTooEarlyException(java.time.Instant allowedAt) {
+        public ResolutionTooEarlyException(Instant allowedAt) {
             super("아직 「안 올라갔다」를 받을 수 없다: " + allowedAt);
             this.allowedAt = allowedAt;
         }
 
-        public java.time.Instant allowedAt() {
+        public Instant allowedAt() {
             return allowedAt;
         }
     }
