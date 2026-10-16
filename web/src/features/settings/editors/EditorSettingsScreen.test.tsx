@@ -483,6 +483,43 @@ async function findGroupName(name: string): Promise<string> {
 }
 
 describe('EditorSettingsScreen — 받은 초대함', () => {
+  it('「나가기」는 확인 창을 거친다: 취소하면 DELETE가 안 나가고, 확인하면 나간다(POK-254)', async () => {
+    const spy = stubFetch((url, init) => {
+      if (url === DELEGATIONS_URL) return jsonResponse(200, DELEGATIONS);
+      if (url === SENT_URL) return jsonResponse(200, SENT);
+      if (url === '/api/editor-invitations/received') return jsonResponse(200, []);
+      if (url === '/api/editor-delegations/as-editor')
+        return jsonResponse(200, [
+          { id: 11, counterpartId: 3, counterpartName: '큰손', grantedAt: '2026-09-20T00:00:00Z' },
+        ]);
+      if (url === '/api/editor-delegations/11' && init?.method === 'DELETE')
+        return new Response(null, { status: 204 });
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const deletes = () =>
+      spy.mock.calls.filter(([, init]) => (init as RequestInit)?.method === 'DELETE');
+    const user = userEvent.setup();
+    renderWithProviders(<EditorSettingsScreen />);
+
+    await screen.findByText('큰손 채널의 편집자', {}, { timeout: 5000 });
+    await user.click(screen.getByRole('button', { name: '나가기' }));
+    const dialog = within(
+      await screen.findByRole('dialog', { name: '큰손 채널의 편집자에서 나갈까요?' }),
+    );
+    await user.click(dialog.getByRole('button', { name: '취소' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(deletes()).toHaveLength(0);
+
+    await user.click(screen.getByRole('button', { name: '나가기' }));
+    const again = within(
+      await screen.findByRole('dialog', { name: '큰손 채널의 편집자에서 나갈까요?' }),
+    );
+    await user.click(again.getByRole('button', { name: '나가기' }));
+    expect(await screen.findByText('편집자에서 나왔어요')).toBeInTheDocument();
+    expect(deletes().map(([url]) => url)).toEqual(['/api/editor-delegations/11']);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
   it('받은 초대를 못 읽으면 「초대 없음」으로 숨기지 않고 다시 시도를 준다', async () => {
     // 기한 있는 초대를 놓치지 않게 — 실패와 빈 목록을 가른다(PR #200 codex)
     let failing = true;
