@@ -55,6 +55,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          # 명령의 마지막 줄은 상자 안에서 auth 가 떴는지 127.0.0.1:8082 로 잰다(400초).
+          # 바깥 8082 를 닫아도(POK-293 M12) 이 길은 남는다. \$ 는 이 셸이 아니라 상자에서 풀리게 한다.
           CMD_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name AWS-RunShellScript \
@@ -68,7 +70,8 @@ jobs:
               'sudo -u ec2-user git log --oneline -1',
               'cd services',
               'sudo -u ec2-user docker compose -f docker-compose.dev.yml up -d --build postgres auth clip',
-              'sudo -u ec2-user docker image prune -f'
+              'sudo -u ec2-user docker image prune -f',
+              'for i in \$(seq 1 40); do if curl -sf -m 5 -o /dev/null http://127.0.0.1:8082/actuator/health; then echo auth UP \$i; break; fi; if [ \$i -eq 40 ]; then echo auth not UP in 400s; exit 1; fi; sleep 10; done'
             ]" \
             --query Command.CommandId --output text)
 
@@ -96,15 +99,18 @@ jobs:
             exit 1
           fi
 
-      - name: 밖에서 실제로 응답하는지 확인한다
-        # 컨테이너가 떴다는 것과 밖에서 부를 수 있다는 것은 다르다.
-        # auth 만 외부에 열려 있으므로(보안그룹 8082) 여기서 재는 것도 auth 뿐이다.
+      - name: 밖에서 https 로 auth 까지 닿는지 확인한다
+        # 컨테이너가 떴다는 것(위 SSM 의 마지막 줄)과 밖에서 부를 수 있다는 것은 다르다.
+        # 바깥 8082 는 닫는다(POK-293 M12). 사용자가 쓰는 길(https → nginx → 웹 → auth)로 잰다.
+        # /actuator/health 는 웹 리라이트 목록(web/next.config.ts)에 없어 이 길로는 웹이 404 를 낸다
+        # (2026-10-16 실측). 그래서 토큰 없이 부르면 auth 가 401 로 답하는 /api/auth/me 를 쓴다.
+        # 401 은 auth 가 직접 낸 것이다. 웹이 리라이트를 못 찾으면 404, auth 가 죽어 있으면 5xx 다.
         run: |
           for i in $(seq 1 40); do
             CODE=$(curl -s -m 5 -o /dev/null -w "%{http_code}" \
-              http://dev.pokeclip.com:8082/actuator/health || true)
-            if [ "$CODE" = "200" ]; then echo "auth UP (${i}회차)"; exit 0; fi
+              https://dev.pokeclip.com/api/auth/me || true)
+            if [ "$CODE" = "401" ]; then echo "auth 에 https 로 닿음 (${i}회차)"; exit 0; fi
             sleep 10
           done
-          echo "::error::auth 가 400초 안에 응답하지 않았다"
+          echo "::error::https://dev.pokeclip.com/api/auth/me 가 400초 안에 401 로 답하지 않았다 (마지막 $CODE)"
           exit 1

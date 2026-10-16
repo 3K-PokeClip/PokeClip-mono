@@ -44,7 +44,10 @@ services:
       # 넷 중 이것만 밖에 연다. 다만 "API가 auth 에만 있다"는 이제 틀렸다 —
       # 2026-08-24 실측 @RestController: auth 13 · clip 4 · chat-collector 2 · chat-detector 0.
       # clip 도 웹이 부르는 API를 갖게 됐지만 앞단 프록시가 생길 때 연다(아래 clip 절).
-      # 보안그룹도 8082 만 연다.
+      # compose 는 모든 주소에 계속 열고, 바깥은 보안그룹이 막는다(POK-293 M12). 사람·배포 확인은 https 앞단(nginx → 웹)으로 오고,
+      # 이 포트로 직접 오는 것은 영상 서버(media-dev)의 스트림키 확인 하나만 남긴다. 그 창구는
+      # 소켓 주소로 출발지를 가리므로(SourceNetworkFilter) 프록시를 거치면 403 이다.
+      # 127.0.0.1 로 좁히지 않는 이유도 그것이다(media-dev 는 다른 상자에서 사설 주소로 온다).
       - "8082:8082"
     environment:
       # compose 네트워크 안에서는 서비스 이름이 곧 호스트 이름이다.
