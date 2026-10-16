@@ -62,6 +62,9 @@ class StreamerPurgerTest extends IntegrationTestSupport {
             assertThat(count(table + " WHERE stream_id = 'S-gone'")).as(table).isZero();
             assertThat(count(table + " WHERE stream_id = 'S-kept'")).as(table).isOne();
         }
+        // 카드 행동 기록(POK-338)은 카드 FK의 CASCADE로 같이 지워진다 — 정리 코드에 따로 줄이 없다.
+        assertThat(count("jump_card_actions WHERE card_id = " + gone.cardId)).isZero();
+        assertThat(count("jump_card_actions WHERE card_id = " + kept.cardId)).isOne();
         assertThat(count("render_jobs WHERE clip_id = " + gone.clipId)).isZero();
         assertThat(count("render_jobs WHERE clip_id = " + kept.clipId)).isOne();
         assertThat(count("render_job_events")).isOne();
@@ -254,7 +257,7 @@ class StreamerPurgerTest extends IntegrationTestSupport {
     private record Seeded(long clipId, long cardId, long recipeId) {
     }
 
-    /** 방송 하나에 딸린 표 열을 한 줄씩(렌더 보고 기록·업로드·업로드 의도·사진 셋·녹화 조각 둘·회차 머리 하나). */
+    /** 방송 하나에 딸린 표 열을 한 줄씩(카드 행동 기록·렌더 보고 기록·업로드·업로드 의도·사진 셋·녹화 조각 둘·회차 머리 하나). */
     private Seeded 심는다(String streamerId, String streamId, String ingestKey) {
         방송(streamerId, streamId, ingestKey);
         jdbc.update("INSERT INTO broadcast_events (event_id, stream_id, event_type, sequence_no, processed_at) "
@@ -262,9 +265,10 @@ class StreamerPurgerTest extends IntegrationTestSupport {
         long cardId = jdbc.queryForObject("""
                 INSERT INTO jump_cards (stream_id, source, event_id, stream_timestamp_ms, window_start_ms, window_end_ms, score, event_seq)
                 VALUES (?, 'auto', ?, 1000, 500, 1500, 5, 0) RETURNING id""", Long.class, streamId, "card-" + streamId);
+        jdbc.update("INSERT INTO jump_card_actions (card_id, action, actor) VALUES (?, 'claim', ?)", cardId, streamerId);
         long recipeId = jdbc.queryForObject("""
-                INSERT INTO recipes (stream_id, creator_id, schema_version, recipe_version, outputs, audio, updated_at)
-                VALUES (?, ?, 1, 1, '[]'::jsonb, '{}'::jsonb, now()) RETURNING id""", Long.class, streamId, streamerId);
+                INSERT INTO recipes (stream_id, creator_id, source_card_id, schema_version, recipe_version, outputs, audio, updated_at)
+                VALUES (?, ?, ?, 1, 1, '[]'::jsonb, '{}'::jsonb, now()) RETURNING id""", Long.class, streamId, streamerId, cardId);
         long clipId = jdbc.queryForObject("""
                 INSERT INTO clips (stream_id, recipe_id, recipe_version, requested_by, status, outputs, updated_at)
                 VALUES (?, ?, 1, ?, 'rendered', '[]'::jsonb, now()) RETURNING id""", Long.class, streamId, recipeId, streamerId);

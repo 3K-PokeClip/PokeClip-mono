@@ -133,6 +133,7 @@ public class StreamerPurgeStore {
         // upload_requests)와 같은 순서라 교착이 없고, 새 의도는 방송 줄 KEY SHARE를 먼저 잡아 위 FOR UPDATE 뒤로 밀린다.
         jdbc.update("DELETE FROM upload_requests WHERE recipe_id IN (SELECT id FROM recipes WHERE stream_id = ANY(?))", streams);
         jdbc.update("DELETE FROM recipes WHERE stream_id = ANY(?)", streams);
+        // 카드 행동 기록(jump_card_actions, POK-338)은 카드 FK의 ON DELETE CASCADE로 이 줄이 같이 지운다.
         jdbc.update("DELETE FROM jump_cards WHERE stream_id = ANY(?)", streams);
         jdbc.update("DELETE FROM broadcast_events WHERE stream_id = ANY(?)", streams);
         jdbc.update("DELETE FROM broadcasts WHERE stream_id = ANY(?)", streams);
