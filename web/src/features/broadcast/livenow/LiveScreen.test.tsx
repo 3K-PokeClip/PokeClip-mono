@@ -1348,6 +1348,30 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
   });
 });
 
+describe('LiveScreen — 점프카드 목록 요청(POK-254 확인 필요)', () => {
+  it('개발 모드(StrictMode)에서도 카드 목록은 3초에 한 번이다: 처음 한 번만 효과가 두 번 돈다', async () => {
+    // 「한 주기에 두 번씩 요청한다」는 보고를 잰다. 서버는 다음 쪽이 있을 때만 커서를 달아(limit + 1) 빈 쪽을 더 읽지 않는다
+    renderWithProviders(
+      <StrictMode>
+        <LiveScreen />
+      </StrictMode>,
+    );
+    await settle();
+    const cardCalls = () =>
+      fetchSpy.mock.calls.filter(([url]) =>
+        new URL(String(url), 'http://localhost').pathname.endsWith('/jump-cards'),
+      ).length;
+    const atMount = cardCalls();
+    expect(atMount).toBeLessThanOrEqual(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(cardCalls() - atMount).toBe(10);
+  });
+});
+
 describe('LiveScreen — 실시간 통계', () => {
   it('지표를 방송 정보와 채팅 차트에서 센다', async () => {
     await renderLive();
