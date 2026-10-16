@@ -489,9 +489,9 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 올바른 토큰으로도 창구 401, `/actuator/health`만 200). **위험이 배포 시점에만 생기는 모양이라
 로컬·CI는 전부 초록이다.**
 
-> 「dev로 띄운」이 아니라 **「이 compose로 띄운」**이다 — `services-deploy.yml`이 dev EC2에 올리는 것은
-> `postgres`·`auth`·`clip` 셋뿐이라 **dev에는 수집기가 아예 없다**(critic round3b). 이 구멍이 실제로
-> 드러나는 자리는 개발자 로컬의 `docker-compose.dev.yml`과, 수집기를 배포에 넣는 날이다.
+> 「dev로 띄운」이 아니라 **「이 compose로 띄운」**이다. 2026-10-16(POK-331)부터 `services-deploy.yml`이 dev EC2에
+> 서버 넷을 다 올린다(그 전에는 `postgres`·`auth`·`clip` 셋뿐이라 dev에 수집기가 없었다). 그래서 이 구멍은 이제
+> dev 배포에서도 드러난다. compose와 예시 파일의 이름 대조는 auth `DeploymentEnvVarsTest`가 잰다.
 
 **`AUTH_BASE_URL`·`INTERNAL_API_TOKEN`이 비면 부팅이 죽는데, 켜져 있을 때만 그렇다.**
 둘을 쓰는 부품이 **큐가 켜졌을 때만 만들어지기** 때문이다 — 안 그러면 CI와 남의 로컬이
@@ -3528,8 +3528,8 @@ get·put이 한 트랜잭션에서 이어지는 갈래는 하나다. `ensureKey`
 첫 호출 한 번만 30초를 준다(KMS 기본 키의 첫 생성 지연).
 
 **배포 순서**(1번 설계 8-A 6). 🔴 **`.env`가 코드보다 먼저다.** compose의 `STREAM_KEY_SECRET_REF_PREFIX`가 `:?`라 코드가
-먼저 머지되면 develop 자동 배포의 `docker compose up … postgres auth clip`이 보간에서 통째로 멈춘다. auth만이 아니라
-clip 새 코드도 안 올라간다(그때는 `.env`를 채우고 다시 배포한다).
+먼저 머지되면 develop 자동 배포의 `docker compose`가 보간에서 통째로 멈춘다. auth만이 아니라
+같이 올리는 서버 넷의 새 코드가 다 안 올라간다(그때는 `.env`를 채우고 다시 배포한다).
 
 | 단계 | 하는 일 | 통과 판정 |
 |---|---|---|
@@ -3771,10 +3771,9 @@ DB가 거절해 500이 되고, **입력 오류가 장애로 오인된다**(epoch
 `services/docker-compose.dev.yml`에는 그것이 없으므로 **그 compose로만 띄운 프로세스에서는
 이 창구가 500이다.** 표가 없어서지 장애가 아니다 — 500을 보면 이것부터 본다.
 
-> **「dev 환경에서」라고 쓰지 않는다** — 위 compose 절과 같은 이유다. `services-deploy.yml`이
-> dev EC2에 올리는 것은 `postgres`·`auth`·`clip` 셋뿐이라 **dev에는 수집기가 아예 없고**,
-> 없는 서버는 500도 못 낸다. 이것이 드러나는 자리는 **개발자 로컬**에서 루트 compose 없이
-> `services/docker-compose.dev.yml`만 띄웠을 때다.
+> 2026-10-16(POK-331)부터 dev EC2에도 수집기가 뜬다. 그 상자는 `services/docker-compose.dev.yml`만 띄우고
+> 거기에 `segment-indexer`가 없으므로, 그 DB에 표가 없으면 dev에서도 이 창구가 500이다(표가 있는지는 1번 확인 필요).
+> 개발자 로컬에서 루트 compose 없이 그 파일만 띄웠을 때도 같다.
 
 **채팅 범위·차트·방송 정보 창구 셋 (POK-234).** 되감기 화면이 「그 순간 무슨 채팅이 흘렀나」를
 읽는 문이다. 위 둘과 같은 `X-Internal-Token` 하나로 잠근다(새 환경변수 없음).
