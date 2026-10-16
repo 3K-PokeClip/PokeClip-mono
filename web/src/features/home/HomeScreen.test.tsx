@@ -267,6 +267,66 @@ describe('HomeScreen', () => {
     ).toBeInTheDocument();
   });
 
+  it('새 판 영상을 주문해도 옛 판 업로드가 발행 현황에 남는다: 업로드마다 한 줄(POK-334)', async () => {
+    const live = (
+      id: number,
+      recipeVersion: number,
+      title: string,
+      status: string,
+      updatedAt: string,
+    ) => ({
+      id,
+      clipId: id,
+      recipeVersion,
+      outputId: 'o1',
+      title,
+      status,
+      videoId: status === 'uploaded' ? 'v' : null,
+      createdAt: updatedAt,
+      updatedAt,
+    });
+    const items = [
+      {
+        ...EDITING_ENTRY,
+        status: 'rendering',
+        // 지금 판 영상은 만드는 중이라 latestClip에는 업로드가 없다
+        latestClip: {
+          id: 20,
+          streamId: 'stream-1',
+          recipeId: 12,
+          recipeVersion: 3,
+          requestedBy: '1',
+          status: 'rendering',
+          progress: null,
+          outputs: null,
+          error: null,
+          createdAt: '2026-09-26T12:00:00Z',
+          updatedAt: '2026-09-26T12:00:00Z',
+          upload: null,
+        },
+        liveUploads: [
+          live(31, 2, '둘째 판', 'queued', '2026-09-26T11:00:00Z'),
+          live(30, 1, '첫 판', 'uploaded', '2026-09-26T10:00:00Z'),
+        ],
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).startsWith('/api/clip/library')
+            ? new Response(JSON.stringify({ items, nextCursor: null }), { status: 200 })
+            : emptyJson(String(input)),
+        ),
+      ),
+    );
+    render(<HomeScreen />);
+
+    const card = (await screen.findByText('첫 판')).closest('ul');
+    const rows = Array.from(card?.querySelectorAll('li') ?? []).map((li) => li.textContent);
+    expect(rows).toEqual(['둘째 판업로드 중', '첫 판발행됨']);
+  });
+
   it('겹친 폴링에서 먼저 떠나 늦게 온 보관함 답이 더 새 발행 현황을 덮지 않는다', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const row = (status: string) => ({

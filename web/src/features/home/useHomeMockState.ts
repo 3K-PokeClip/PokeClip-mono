@@ -7,6 +7,7 @@ import {
   fetchAllBroadcasts,
   fetchAllJumpCards,
   fetchLibraryAll,
+  liveUploadsOf,
   type LibraryEntry,
 } from '@/api/clipEditor';
 
@@ -435,16 +436,13 @@ function resumeDraftOf(entries: readonly LibraryEntry[]): ResumeDraft | null {
 const PUBLISH_LIMIT = 5;
 
 /**
- * 발행 현황 = 편집본마다 가장 최근 영상의 업로드를 최근 순으로(올리는 중·확인 필요·올림). 실패는 빼고(보관함 패널이 사유를
+ * 발행 현황 = 편집본마다 살아 있는 업로드를 <b>한 줄씩</b> 최근 순으로(올리는 중·확인 필요·올림). 실패는 빼고(보관함 패널이 사유를
  * 말한다) 예약 발행은 아직 없다. 🔴 편집본 상태가 아니라 <b>업로드 상태</b>로 가른다: 올린 뒤 새 판을 저장하면 편집본은
- * 「편집 중」이 되지만 올린 영상은 유튜브에 그대로 있다. 새 판 영상을 만들면 목록 줄이 그 영상을 가리켜 옛 업로드는 안 보인다
- * (보관함 목록이 편집본마다 가장 최근 영상 하나만 준다).
+ * 「편집 중」이 되지만 올린 영상은 유튜브에 그대로 있다. 새 판 영상을 만들어도 옛 판 업로드가 남는다(POK-334, liveUploads).
  */
 function publishRowsOf(entries: readonly LibraryEntry[]): PublishRow[] {
   const rows: (PublishRow & { at: number })[] = [];
-  for (const e of entries) {
-    const upload = e.latestClip?.upload;
-    if (upload == null) continue;
+  for (const upload of entries.flatMap(liveUploadsOf)) {
     const status: PublishStatus | null =
       upload.status === 'queued' || upload.status === 'uploading'
         ? 'uploading'

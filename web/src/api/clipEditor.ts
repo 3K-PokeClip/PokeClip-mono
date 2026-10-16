@@ -379,6 +379,46 @@ export interface LibraryEntry {
   thumbnailUrl?: string | null;
   /** 이 편집본 **지금 판**에 남겨 둔 업로드 정보(POK-291). 없으면 null, 옛 서버면 빠져 온다 */
   uploadRequest?: UploadRequestSummary | null;
+  /**
+   * 이 편집본 **모든 판**의 살아 있는(실패 아닌) 업로드, 최근 것이 앞(POK-334). 새 판 영상을 주문해 latestClip이 바뀌어도
+   * 옛 판으로 올린 영상이 여기 남는다. 옛 서버면 빠져 온다: liveUploadsOf로 읽는다
+   */
+  liveUploads?: LiveUpload[];
+}
+
+/** 보관함 줄의 살아 있는 업로드 하나(POK-334). status는 queued·uploading·checking·uploaded */
+export interface LiveUpload {
+  id: number;
+  /** 이 업로드가 올린 영상 번호(옛 판이면 latestClip과 다르다) */
+  clipId: number;
+  recipeVersion: number;
+  outputId: string;
+  title: string;
+  status: string;
+  videoId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 살아 있는 업로드 목록. 칸을 모르는 옛 서버면 latestClip의 업로드 하나로 접는다(실패는 뺀다) */
+export function liveUploadsOf(entry: LibraryEntry): LiveUpload[] {
+  if (entry.liveUploads !== undefined) return entry.liveUploads;
+  const clip = entry.latestClip;
+  const upload = clip?.upload;
+  if (clip == null || upload == null || upload.status === 'failed') return [];
+  return [
+    {
+      id: upload.id,
+      clipId: upload.clipId,
+      recipeVersion: clip.recipeVersion,
+      outputId: upload.outputId,
+      title: upload.title,
+      status: upload.status,
+      videoId: upload.videoId,
+      createdAt: upload.createdAt,
+      updatedAt: upload.updatedAt,
+    },
+  ];
 }
 
 export interface LibraryDetail extends LibraryEntry {

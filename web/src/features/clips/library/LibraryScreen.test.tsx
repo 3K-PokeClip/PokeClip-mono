@@ -685,6 +685,47 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     ).toBeInTheDocument();
   });
 
+  it('새 판 영상을 주문해도 이전 판으로 올린 영상이 패널에 남는다: 올림은 유튜브 링크, 확인 필요는 글자(POK-334)', () => {
+    const live = (
+      id: number,
+      recipeVersion: number,
+      title: string,
+      status: string,
+      videoId: string | null,
+    ) => ({
+      id,
+      clipId: id,
+      recipeVersion,
+      outputId: 'o1',
+      title,
+      status,
+      videoId,
+      createdAt: '2026-09-20T12:00:00Z',
+      updatedAt: '2026-09-20T12:00:00Z',
+    });
+    const clip = toLibraryClip(
+      {
+        ...serverClip('rendering').entry!,
+        latestClip: { ...rendered, status: 'rendering' },
+        liveUploads: [
+          live(9, 1, '두 번째 올림', 'checking', null),
+          live(8, 1, '첫 판', 'uploaded', 'abc'),
+        ],
+      },
+      '9',
+    );
+    show(clip);
+    const inside = within(panel());
+
+    expect(inside.getAllByText('이전 판 v1')).toHaveLength(2);
+    expect(inside.getByRole('link', { name: /첫 판 · 업로드됨/ })).toHaveAttribute(
+      'href',
+      'https://youtu.be/abc',
+    );
+    expect(inside.getByText('두 번째 올림 · 확인 필요')).toBeInTheDocument();
+    expect(inside.queryByRole('link', { name: /두 번째 올림/ })).toBeNull();
+  });
+
   const failedUpload = {
     id: 7,
     clipId: 5,

@@ -1,6 +1,6 @@
 import { ddayFor, type VodDday } from '@/features/broadcast/vod/vodListView';
 import { formatUptime } from '@/features/player/playerMath';
-import { ClipApiError, type LibraryEntry } from '@/api/clipEditor';
+import { ClipApiError, liveUploadsOf, type LibraryEntry } from '@/api/clipEditor';
 import {
   PRIVACY_CHANGE_NOTE,
   PRIVACY_LABEL,
@@ -257,6 +257,41 @@ export function safeExternalUrl(url: string | undefined): string | null {
   } catch {
     return null;
   }
+}
+
+/** 상세 패널의 「이전 판으로 올린 영상」 한 줄(POK-334). href는 올림만, 그 밖에는 null(글자만) */
+export interface PreviousUpload {
+  id: number;
+  versionLabel: string;
+  text: string;
+  href: string | null;
+}
+
+const LIVE_UPLOAD_TEXT: Record<string, string> = {
+  queued: '올리는 중',
+  uploading: '올리는 중',
+  checking: '확인 필요',
+  uploaded: '업로드됨',
+};
+
+/**
+ * 이 편집본의 살아 있는 업로드 중 패널 위쪽(latestClip의 업로드)이 이미 말하는 것을 뺀 나머지, 최근 것이 앞. 새 판 영상을
+ * 주문하면 latestClip이 바뀌어 옛 판의 업로드가 여기로 내려온다(POK-334). 서버 줄이 없으면(목업) 빈 목록이다.
+ */
+export function previousUploadsOf(entry: LibraryEntry | undefined): PreviousUpload[] {
+  if (entry === undefined) return [];
+  const shown = entry.latestClip?.upload?.id;
+  return liveUploadsOf(entry)
+    .filter((u) => u.id !== shown)
+    .map((u) => ({
+      id: u.id,
+      versionLabel: `v${u.recipeVersion}`,
+      text: `${u.title} · ${LIVE_UPLOAD_TEXT[u.status] ?? u.status}`,
+      href:
+        u.status === 'uploaded' && u.videoId
+          ? safeExternalUrl(`https://youtu.be/${encodeURIComponent(u.videoId)}`)
+          : null,
+    }));
 }
 
 const EDIT_CONTINUE = { label: '이어서 편집', href: '/clips/editor' } as const;
