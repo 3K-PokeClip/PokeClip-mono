@@ -1354,6 +1354,34 @@ describe('ChatReplayLoader: 라이브 되감기는 위 끝이 움직인다(POK-3
     expect(loader.getSnapshot().lines).toHaveLength(1);
   });
 
+  it('겹쳐 다시 읽을 때 지문이 같은 후원 둘도 서버 번호가 다르면 둘 다 쥔다(PR #256 codex)', async () => {
+    // 같은 사람·같은 글·같은 ms 후원 둘은 수집기가 따로 받는다(received_seq): 지문으로 거르면 뒤의 것이 사라진다
+    const first = { ...chatAt(T0 + 105_000, 1, 'donation'), senderChannelId: 'c', text: 't' };
+    const second = { ...first, id: 2 };
+    let n = 0;
+    const fetchPage: ReplayFetch = async () => {
+      n += 1;
+      return {
+        items: n === 1 ? [first] : [first, second],
+        nextCursor: null,
+        appliedOffsetMs: OFFSET,
+      };
+    };
+    const loader = new ChatReplayLoader(
+      fetchPage,
+      T0,
+      Number.POSITIVE_INFINITY,
+      LIVE_READ_STEP_MS,
+      LIVE_REREAD_MS,
+    );
+    loader.want(T0 + 105_000, T0 + 40_000, { upperMs: T0 + 110_000 });
+    await settle();
+    loader.want(T0 + 109_000, T0 + 40_000, { upperMs: T0 + 114_000 });
+    await settle();
+    expect(n).toBe(2);
+    expect(loader.getSnapshot().lines.map((l) => l.item.id)).toEqual([1, 2]);
+  });
+
   it('멈춰 있으면(위 끝이 그대로) 다시 묻지 않는다', async () => {
     const srv = collector(steady(600));
     const loader = liveLoader(srv);

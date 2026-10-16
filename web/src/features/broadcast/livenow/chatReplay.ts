@@ -15,12 +15,7 @@
 
 import { SEEK_STEP_SECONDS, isAtEdge } from '@/features/player/playerMath';
 import type { LivePosition } from '@/features/player/useHlsPlayback';
-import {
-  COLLECTOR_WINDOW_MS,
-  chatFingerprint,
-  type WireItem,
-  type WirePage,
-} from './chatCollector';
+import { COLLECTOR_WINDOW_MS, type WireItem, type WirePage } from './chatCollector';
 import type { LiveChart } from './liveDataStore';
 
 /** 채팅 창이 쥐는 줄 수. 라이브(최근 300줄)와 지난 방송(영상 시각까지 최근 300줄)이 같은 양이다(사용자 결정 2026-10-12) */
@@ -124,6 +119,11 @@ export function liveSettledUpTo(position: LivePosition, offsetMs: number): numbe
  */
 export function liveShownUpTo(atMs: number, upperMs: number, lowerMs: number): number {
   return Math.max(lowerMs, Math.min(atMs, upperMs - LIVE_SHOW_GAP_MS));
+}
+
+/** 수집기 표의 한 줄 열쇠. 채팅과 후원은 표가 달라 번호가 겹치니 종류를 붙인다 */
+function rowKey(item: WireItem): string {
+  return `${item.kind}|${item.id}`;
 }
 
 /** 다시 보기가 쥔 한 줄 */
@@ -643,15 +643,17 @@ export class ChatReplayLoader {
   }
 
   /**
-   * 겹쳐 다시 읽은 쪽에서 이미 쥔 줄을 뺀다. 겹친 구간 둘레의 줄만 지문으로 견준다: 보정이 쪽마다 달라지면 같은 줄의 영상 축
+   * 겹쳐 다시 읽은 쪽에서 이미 쥔 줄을 뺀다. 열쇠는 표와 서버 번호다: 다시 보기 줄은 전부 수집기 표에서 와 번호가 늘 같다.
+   * 지문(chatFingerprint)으로 견주면 같은 사람·같은 글·같은 ms 후원 둘(수집기는 따로 받는다)이 하나로 접혔다(PR #256 codex).
+   * 겹친 구간 둘레의 줄만 견준다: 보정이 쪽마다 달라지면 같은 줄의 영상 축
    * 시각이 그만큼 움직여, 겹침 시작(fromMs)에서 자르면 바로 앞에 놓인 같은 줄을 못 본다(리뷰 1라운드). 그래서 겹침만큼 더 본다
    */
   private unseen(added: ReplayLine[], fromMs: number): ReplayLine[] {
     const seen = new Set<string>();
     const lowest = fromMs - this.rereadMs;
     for (let i = this.lines.length - 1; i >= 0 && this.lines[i]!.at >= lowest; i -= 1)
-      seen.add(chatFingerprint(this.lines[i]!.item));
-    return seen.size === 0 ? added : added.filter((line) => !seen.has(chatFingerprint(line.item)));
+      seen.add(rowKey(this.lines[i]!.item));
+    return seen.size === 0 ? added : added.filter((line) => !seen.has(rowKey(line.item)));
   }
 
   private appendFront(front: FrontRead, page: WirePage, added: ReplayLine[], ask: WindowAsk): void {

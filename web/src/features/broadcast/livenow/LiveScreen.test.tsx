@@ -2460,6 +2460,38 @@ describe('LiveScreen: 지난 방송 채팅 다시 보기(POK-324)', () => {
 });
 
 describe('LiveScreen — 지난 방송 상세', () => {
+  it('방금 끝난 방송은 수집기가 마지막 줄을 다 쓰도록 2분 동안 차트·방송 정보를 계속 읽은 뒤 멈춘다(PR #256 codex)', async () => {
+    // 명부가 끝을 먼저 알리면 수집기의 마지막 적재(1초마다 몰아 쓴다) 전 차트를 받는다: 첫 답을 굳히면 꼬리가 빠진다
+    server.vodEndShiftMs = Date.now() - 30_000 - VOD_ENDED;
+    window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
+    await renderLive();
+    const vodCalls = (part: string) =>
+      fetchSpy.mock.calls
+        .map(([url]) => new URL(String(url), 'http://localhost'))
+        .filter((u) => u.pathname === `/api/clip/broadcasts/${VOD_ID}/${part}`).length;
+    const atOpen = { chart: vodCalls('chat-chart'), info: vodCalls('broadcast-info') };
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await settle();
+    expect(vodCalls('chat-chart')).toBeGreaterThan(atOpen.chart);
+    expect(vodCalls('broadcast-info')).toBeGreaterThan(atOpen.info);
+
+    // 끝난 지 2분이 지나면 한 번 더 받고 멈춘다
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    await settle();
+    const settled = { chart: vodCalls('chat-chart'), info: vodCalls('broadcast-info') };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    await settle();
+    expect(vodCalls('chat-chart')).toBe(settled.chart);
+    expect(vodCalls('broadcast-info')).toBe(settled.info);
+  });
+
   it('끝난 방송은 차트·방송 정보를 한 번 읽으면 멈추고, 카드 목록은 1분마다 읽고, 통로는 다시 붙지 않는다(POK-254)', async () => {
     // 전에는 끝난 방송도 카드 3초·차트 10초·방송 정보 10초마다 다시 읽었다(12시간 방송이면 탭 하나에 분당 차트 72건)
     window.history.pushState({}, '', `/broadcast/vod/${VOD_ID}`);
