@@ -268,8 +268,9 @@ main() {
     die "사용: events.sh --since <YYYY-MM-DDTHH:MM:SSZ>"
   fi
   since="$2"
+  # 꼴 밖 값은 되울리지 않는다(경로 등이 표준 오류에 나오지 않게).
   [[ "${since}" =~ ${SINCE_PATTERN} ]] ||
-    die "--since 는 UTC 「YYYY-MM-DDTHH:MM:SSZ」 꼴이어야 함: ${since}"
+    die "--since 는 UTC 「YYYY-MM-DDTHH:MM:SSZ」 꼴이어야 함"
   now="$(date -u "${ISO_FORMAT}")" || die "지금 시각을 읽지 못함"
   cutoff="$(ninety_days_ago)" || die "90일 전 시각을 계산하지 못함"
   # 같은 꼴의 시각을 숫자만 남겨 비교한다(로캘과 무관). 지금보다 늦은

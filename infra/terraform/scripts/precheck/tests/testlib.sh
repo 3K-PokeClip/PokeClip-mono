@@ -79,7 +79,9 @@ testlib::require_fakebin() {
 #######################################
 testlib::init() {
   if ! testlib::require_fakebin "${FAKEBIN}"; then
-    printf '%s: 가짜 aws 가 실행 가능하지 않음(%s/aws)\n' "$1" "${FAKEBIN}" >&2
+    # 저장소의 절대 경로(로컬 계정 이름)는 적지 않는다.
+    printf '%s: 가짜 aws(precheck/tests/fakebin/aws)가 실행 가능하지 않음\n' \
+      "$1" >&2
     exit 1
   fi
   trap testlib::remove_tmp_root EXIT
@@ -259,6 +261,23 @@ testlib::count() {
     return 0
   fi
   grep -cF -- "$2" "$1"
+}
+
+#######################################
+# 파일에서 절대 경로가 든 줄을 낸다. 「~/」 로 가린 경로와 상대 경로
+# (scp-…/result.tsv 등)는 걸리지 않는다 — 사람에게 내는 문장에 HOME · 저장소
+# 위치 · 로컬 계정 이름이 든 절대 경로가 나오는지 본다(장부 r2 #5).
+# Arguments:
+#   파일.
+# Outputs:
+#   걸린 줄(없으면 빈 출력). 파일이 없으면 그 사실 한 줄.
+#######################################
+testlib::abs_path_lines() {
+  if [[ ! -f "$1" ]]; then
+    printf '%s\n' "(파일이 없음)"
+    return
+  fi
+  grep -E -- '(^|[^~[:alnum:]._-])/[[:alnum:]._-]' "$1"
 }
 
 #######################################

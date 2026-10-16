@@ -19,8 +19,11 @@
 # 한다 — scp-recheck.sh 는 scp-<묶음>, events.sh 는 events, M17b 는
 # collect-<단계> 꼴. 앞 결과를 찾는 쪽도 자기 접두만 본다.
 #
-# 거부 문구의 경로는 HOME 접두를 「~」 로 가린다 — 로컬 계정 이름을 표준
-# 오류에 내지 않는다(성공 경로를 알리는 문구와 같은 규칙).
+# 거부 문구에는 절대 경로를 내지 않는다(성공 경로를 알리는 문구와 같은
+# 규칙) — HOME 이나 그 아래 경로는 HOME 접두를 「~」 로 가려 적고, HOME 밖
+# (HOME 의 조상 · 다른 곳)은 적지 않는다. 표지가 HOME 의 조상에 있으면
+# 「HOME 의 조상에 저장소 표지(.git)」 처럼 종류만 적는다. 로컬 계정 이름 ·
+# 저장소 위치가 표준 오류에 나오지 않게.
 #
 # 전제(이 함수가 막지 않는 것 — 한계로 둔다):
 #   - 부르는 스크립트는 `umask 077` 로 돈다. 이 함수는 디렉터리만 0700 으로
@@ -39,14 +42,15 @@ readonly EVIDENCE_ROOT_NAME='.pokeclip-precheck'
 readonly EVIDENCE_LABEL_PATTERN='^[A-Za-z0-9][A-Za-z0-9-]*$'
 
 #######################################
-# 경로의 HOME 접두(정규화한 것 · 적힌 그대로)를 「~」 로 바꾼다. HOME 밖
-# 경로는 그대로 둔다.
+# 경로가 HOME(정규화한 것 · 적힌 그대로)이거나 그 아래면 HOME 접두를 「~」
+# 로 바꿔 낸다. HOME 밖 경로(HOME 의 조상 · 다른 곳 · 상대 경로)는 내지
+# 않는다 — 사람에게 내는 문장에 절대 경로를 적지 않으려고.
 # Globals:
 #   HOME
 # Arguments:
 #   경로.
 # Outputs:
-#   가린 경로.
+#   가린 경로(HOME 밖이면 빈 출력).
 #######################################
 evidence::mask() {
   local path="$1" home tilde='~'
@@ -54,31 +58,57 @@ evidence::mask() {
     home="${home%/}"
     [[ -n "${home}" ]] || continue
     case "${path}" in
-      "${home}") path="${tilde}" ;;
-      "${home}/"*) path="${tilde}/${path#"${home}"/}" ;;
-      *) continue ;;
+      "${home}")
+        printf '%s\n' "${tilde}"
+        return
+        ;;
+      "${home}/"*)
+        printf '%s\n' "${tilde}/${path#"${home}"/}"
+        return
+        ;;
+      *) ;;
     esac
-    break
   done
-  printf '%s\n' "${path}"
 }
 
 #######################################
-# 거부를 알린다.
+# 거부를 알린다. 경로는 HOME 이나 그 아래일 때만 「~」 로 가려 붙이고, HOME
+# 밖이면 붙이지 않는다.
 # Arguments:
-#   사유, [경로 — HOME 접두는 「~」 로 가림].
+#   사유, [경로].
 # Outputs:
-#   표준 오류에 「EVIDENCE PATH REJECTED <사유>[ — <경로>]」.
+#   표준 오류에 「EVIDENCE PATH REJECTED <사유>[ — <가린 경로>]」.
 # Returns:
 #   늘 2.
 #######################################
 evidence::reject() {
+  local shown=""
   if [[ "$#" -ge 2 ]]; then
-    printf 'EVIDENCE PATH REJECTED %s — %s\n' "$1" "$(evidence::mask "$2")" >&2
+    shown="$(evidence::mask "$2")"
+  fi
+  if [[ -n "${shown}" ]]; then
+    printf 'EVIDENCE PATH REJECTED %s — %s\n' "$1" "${shown}" >&2
   else
     printf 'EVIDENCE PATH REJECTED %s\n' "$1" >&2
   fi
   return 2
+}
+
+#######################################
+# 표지 때문에 거부한다. 표지가 있는 디렉터리가 HOME 이거나 그 아래면 가린
+# 경로를 붙이고, HOME 의 조상이면(HOME 이 저장소 · 볼트의 하위) 경로 없이
+# 「HOME 의 조상에」 라고만 적는다.
+# Arguments:
+#   표지 종류, 표지가 있는 디렉터리.
+# Returns:
+#   늘 2(거부를 알린다).
+#######################################
+evidence::reject_marker() {
+  if [[ -n "$(evidence::mask "$2")" ]]; then
+    evidence::reject "$1" "$2"
+  else
+    evidence::reject "HOME 의 조상에 $1"
+  fi
 }
 
 #######################################
@@ -115,11 +145,11 @@ evidence::check_markers() {
   local dir="$1"
   while :; do
     if [[ -e "${dir}/.git" || -L "${dir}/.git" ]]; then
-      evidence::reject "저장소 표지(.git)" "${dir}"
+      evidence::reject_marker "저장소 표지(.git)" "${dir}"
       return
     fi
     if [[ -e "${dir}/.obsidian" || -L "${dir}/.obsidian" ]]; then
-      evidence::reject "볼트 표지(.obsidian)" "${dir}"
+      evidence::reject_marker "볼트 표지(.obsidian)" "${dir}"
       return
     fi
     [[ -z "${dir}" || "${dir}" == / ]] && return 0

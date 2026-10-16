@@ -109,8 +109,9 @@ bash infra/terraform/scripts/precheck/events.sh --since 2026-10-13T02:34:00Z
     동작별 결과(13-1 덧붙임 줄)를 함께 보입니다.
 *   `--accept` 는 kty 의 명시적 답을 들은 뒤에만 합니다. 승인 대상은 ⑤
     에서 보고한 증거 디렉터리 이름으로 고릅니다 — 보고 뒤에 같은 묶음을
-    다시 돌렸어도 kty 가 본 판정만 승인됩니다. 이유에는 kty 답 원문을 한
-    줄(탭 없이)로 넣습니다.
+    다시 돌렸어도 kty 가 본 판정만 승인됩니다. `--dir` 에는 경로가 아니라
+    이름(`scp-O7f-…`)만 줍니다. 이유에는 kty 답 원문을 한 줄(탭 없이)로
+    넣습니다.
 
 ```shell
 bash infra/terraform/scripts/precheck/scp-recheck.sh --accept O7f \

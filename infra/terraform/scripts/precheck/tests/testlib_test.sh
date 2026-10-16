@@ -137,12 +137,44 @@ expect_leak_check_needs_dirs() {
   testlib::ok "leak-check → 훑을 디렉터리가 없으면 유출 0 으로 내지 않음"
 }
 
+#######################################
+# 시험 부품의 오류 문구도 절대 경로(저장소 위치 · 로컬 계정 이름)를 내지
+# 않는다(장부 r2 #5 부류) — 가짜 aws 가 실행 가능하지 않아 시작하지 못할 때.
+#######################################
+expect_init_message_has_no_path() {
+  local case_dir copy status paths
+  case_dir="$(testlib::new_case)" || {
+    testlib::fail "init-message: 시험 준비 실패"
+    return
+  }
+  copy="${case_dir}/in/tests"
+  if ! mkdir -p -- "${copy}/fakebin" ||
+    ! cp -- "${TESTS_DIR}/testlib.sh" "${copy}/" ||
+    ! cp -- "${FAKEBIN}/aws" "${copy}/fakebin/aws" ||
+    ! chmod 644 "${copy}/fakebin/aws"; then
+    testlib::fail "init-message: 시험 준비 실패"
+    return
+  fi
+  # shellcheck disable=SC2016 # 작은따옴표 안은 새 bash 가 펼친다.
+  bash -c 'source "$1" && testlib::init copied' _ "${copy}/testlib.sh" \
+    >"${case_dir}/out/init.stdout" 2>"${case_dir}/out/init.stderr"
+  status=$?
+  paths="$(testlib::abs_path_lines "${case_dir}/out/init.stderr")"
+  if [[ "${status}" -eq 0 || -n "${paths}" ]]; then
+    testlib::fail "init-message: 시작하지 않고 경로 없이 알려야 하는데" \
+      "${status} — ${paths}"
+    return
+  fi
+  testlib::ok "init-message → 가짜 aws 가 없으면 시작하지 않음 · 절대 경로 0"
+}
+
 main() {
   testlib::init testlib_test
   expect_fakebin_required
   expect_aws_env_isolated
   expect_run_limited
   expect_leak_check_needs_dirs
+  expect_init_message_has_no_path
   testlib::finish testlib_test
 }
 

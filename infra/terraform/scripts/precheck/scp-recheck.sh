@@ -169,9 +169,12 @@ file_sha256() {
 #######################################
 load_bundle() {
   local bundle="$1" file line action region resource seen=$'\n'
+  # 꼴 밖 이름(경로 등)은 되울리지 않는다 — 셸이 펼친 HOME 경로가 표준 오류에
+  # 나오지 않게.
+  [[ "${bundle}" =~ ${BUNDLE_PATTERN} ]] ||
+    die "묶음 이름이 아님(영문 · 숫자 · 「-」 — 경로가 아니라 이름)"
   file="${STAGE_DIR}/${bundle}.tsv"
-  if ! [[ "${bundle}" =~ ${BUNDLE_PATTERN} ]] ||
-    [[ "${bundle}" == baseline || ! -f "${file}" || -L "${file}" ]]; then
+  if [[ "${bundle}" == baseline || ! -f "${file}" || -L "${file}" ]]; then
     die "묶음 없음: ${bundle}"
   fi
   while IFS= read -r line || [[ -n "${line}" ]]; do
@@ -621,8 +624,10 @@ accept_bundle() {
   if [[ -z "${reason}" || "${reason}" == *[[:cntrl:]]* ]]; then
     die "이유는 비어 있지 않은 한 줄(탭 없이)이어야 함"
   fi
+  # 꼴 밖 이름(경로 등)은 되울리지 않는다.
   [[ "${name}" =~ ^${DIR_PREFIX}-${bundle}-[0-9]{8}T[0-9]{6}Z(-[2-9])?$ ]] ||
-    die "${bundle} 묶음의 판정 디렉터리 이름이 아님: ${name}"
+    die "${bundle} 묶음의 판정 디렉터리 이름이 아님(경로가 아니라" \
+      "${DIR_PREFIX}-${bundle}-<UTC 시각> 꼴의 이름)"
   root="$(evidence::root)" || exit 2
   dir="${root}/${name}"
   [[ -e "${dir}" || -L "${dir}" ]] || die "판정이 없음: ${name}"

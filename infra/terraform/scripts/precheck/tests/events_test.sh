@@ -325,10 +325,11 @@ expect_malformed_lookup_rejected() {
 
 #######################################
 # 사례 6: 조회 실패 · 호출 자체의 AccessDenied · 잘못된 --since 는 종료 2 ·
-# EVENTS 줄 없음 · 유출 0.
+# EVENTS 줄 없음 · 유출 0. --since 자리의 입력은 되울리지 않는다(장부 r2 #5
+# — 절대 경로를 주어도 표준 오류에 절대 경로 0).
 #######################################
 expect_unverifiable_cases() {
-  local case_dir spec name leaked
+  local case_dir spec name leaked paths
   case_dir="$(new_tree_case)" || {
     testlib::fail "unverifiable: 시험 준비 실패"
     return
@@ -358,6 +359,13 @@ expect_unverifiable_cases() {
       return
     fi
   done
+  run_events "${case_dir}" path-since --since "${case_dir}/home"
+  paths="$(testlib::abs_path_lines "${run_out}.stderr")"
+  if [[ "${run_status}" -ne 2 || -n "${paths}" ]]; then
+    testlib::fail "path-since: 종료 2 · 입력 되울림 없음을 기대했으나" \
+      "${run_status} — ${paths}"
+    return
+  fi
   leaked="$(testlib::leaks_outside_evidence "${case_dir}")"
   if [[ -n "${leaked}" ]]; then
     testlib::fail "unverifiable: 증거 루트 밖 유출 — ${leaked}"
@@ -372,7 +380,7 @@ expect_unverifiable_cases() {
     return
   fi
   testlib::ok "unverifiable → 조회 실패 · AccessDenied · 잘못된 · 미래 --since ·" \
-    "접힌 이름 행 모두 종료 2 · 유출 0"
+    "접힌 이름 행 모두 종료 2 · 유출 0 · --since 입력 되울림 0"
 }
 
 main() {

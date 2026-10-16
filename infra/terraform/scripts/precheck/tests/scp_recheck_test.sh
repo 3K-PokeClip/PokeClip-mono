@@ -852,6 +852,45 @@ expect_accept_misuse() {
 }
 
 #######################################
+# 장부 r2 #5: 사용자가 준 입력을 그대로 되울리지 않는다 — 묶음 자리 · --dir
+# 자리에 절대 경로(셸이 ~ 를 펼친 HOME 경로 등)를 주면 종료 2 이고, 표준
+# 출력 · 표준 오류에 절대 경로(HOME · 로컬 계정 이름)가 없다.
+#######################################
+expect_input_paths_not_echoed() {
+  local case_dir name spec paths
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "input-paths: 시험 준비 실패"
+    return
+  }
+  run_recheck "${case_dir}" judged gamma
+  name="$(judged_name)"
+  for spec in judge-bundle accept-bundle accept-dir; do
+    case "${spec}" in
+      judge-bundle)
+        run_recheck "${case_dir}" "${spec}" "${case_dir}/home/gamma"
+        ;;
+      accept-bundle)
+        run_recheck "${case_dir}" "${spec}" --accept "${case_dir}/home/gamma" \
+          --dir "${name}" --reason 'kty 답'
+        ;;
+      *)
+        run_recheck "${case_dir}" "${spec}" --accept gamma \
+          --dir "${case_dir}/home/.pokeclip-precheck/${name}" --reason 'kty 답'
+        ;;
+    esac
+    expect_unverifiable "input-paths-${spec}" || return
+    paths="$(testlib::abs_path_lines "${run_out}.stdout")"
+    paths+="$(testlib::abs_path_lines "${run_out}.stderr")"
+    if [[ -n "${paths}" ]]; then
+      testlib::fail "input-paths-${spec}: 입력의 절대 경로를 되울림 — ${paths}"
+      return
+    fi
+  done
+  testlib::ok "input-paths → 묶음 · --dir 자리의 절대 경로는 종료 2 · 되울리지" \
+    "않음"
+}
+
+#######################################
 # 승인 기준을 읽을 때도 증거 경로 검사를 한다: 루트 안의 승인 디렉터리가
 # 저장소를 가리키는 링크면 종료 2 이고, 링크 너머에 아무것도 쓰지 않는다.
 #######################################
@@ -946,6 +985,7 @@ main() {
   expect_result_without_final_newline
   expect_collapsed_baseline_rejected
   expect_accept_misuse
+  expect_input_paths_not_echoed
   expect_approved_link_rejected
   expect_unverifiable_cases
   testlib::finish scp_recheck_test

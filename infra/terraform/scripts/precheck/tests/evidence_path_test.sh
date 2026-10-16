@@ -71,17 +71,17 @@ is_0700() {
 }
 
 #######################################
-# 마지막 실행이 거부(종료 2 · 표지 문구)였는지 본다. 거부 문구는 HOME 의
-# 절대 경로(로컬 계정 이름)를 담지 않는다 — HOME 접두는 「~」 로 가린다.
+# 마지막 실행이 거부(종료 2 · 표지 문구)였는지 본다. 거부 문구는 절대 경로를
+# 담지 않는다(장부 r2 #5) — HOME 아래는 「~」 로 가리고, HOME 밖(HOME 의
+# 조상 · 다른 곳)은 적지 않는다. 절대 경로가 없으면 HOME · 조상 저장소 ·
+# 로컬 계정 이름도 없다.
 # Arguments:
-#   사례 이름, 사례 디렉터리.
+#   사례 이름.
 # Returns:
 #   거부였으면 0(아니면 실패를 센다).
 #######################################
 expect_rejected() {
-  local name="$1" case_dir="$2" home real_home
-  home="${case_dir}/home"
-  real_home="$(cd -P -- "${home}" 2>/dev/null && pwd -P)" || real_home="${home}"
+  local name="$1" paths
   if [[ "${run_status}" -ne 2 ]]; then
     testlib::fail "${name}: 종료 2 를 기대했으나 ${run_status}"
     return 1
@@ -91,10 +91,9 @@ expect_rejected() {
       "$(cat -- "${run_out}.stderr")"
     return 1
   fi
-  if [[ "$(testlib::count "${run_out}.stderr" "${home}")" -ne 0 ||
-    "$(testlib::count "${run_out}.stderr" "${real_home}")" -ne 0 ]]; then
-    testlib::fail "${name}: 거부 문구에 HOME 절대 경로 —" \
-      "$(cat -- "${run_out}.stderr")"
+  paths="$(testlib::abs_path_lines "${run_out}.stderr")"
+  if [[ -n "${paths}" ]]; then
+    testlib::fail "${name}: 거부 문구에 절대 경로 — ${paths}"
     return 1
   fi
 }
@@ -153,9 +152,9 @@ expect_outside_root_rejected() {
     return
   }
   call_evidence "${case_dir}" check evidence::check_dir "${outside}"
-  expect_rejected "outside-root(check)" "${case_dir}" || return
+  expect_rejected "outside-root(check)" || return
   call_evidence "${case_dir}" escape evidence::new_dir ../escape
-  expect_rejected "outside-root(name)" "${case_dir}" || return
+  expect_rejected "outside-root(name)" || return
   if [[ "$(entry_count "${case_dir}/home")" -ne 0 ]]; then
     testlib::fail "outside-root: 거부했는데 HOME 아래에 무언가 생김"
     return
@@ -164,7 +163,9 @@ expect_outside_root_rejected() {
 }
 
 #######################################
-# 조상에 표지(.git · .obsidian)가 있으면 루트를 만들지 않고 거부한다.
+# 조상에 표지(.git · .obsidian)가 있으면 루트를 만들지 않고 거부한다. HOME 이
+# 저장소 · 볼트의 하위인 꼴이라, 거부 문구는 조상의 절대 경로(저장소 위치 ·
+# 로컬 계정 이름)를 내지 않고 표지 종류만 적는다(장부 r2 #5).
 # Arguments:
 #   사례 이름, 표지 이름, 표지 종류(dir · file).
 #######################################
@@ -192,12 +193,18 @@ expect_marker_rejected() {
     return
   fi
   call_evidence "${case_dir}" marker evidence::new_dir alpha
-  expect_rejected "${name}" "${case_dir}" || return
+  expect_rejected "${name}" || return
+  if [[ "$(testlib::count "${run_out}.stderr" "HOME 의 조상에")" -lt 1 ||
+    "$(testlib::count "${run_out}.stderr" "(${marker})")" -lt 1 ]]; then
+    testlib::fail "${name}: 거부 문구에 「HOME 의 조상에」 · 표지 종류" \
+      "(${marker})가 없음 — $(cat -- "${run_out}.stderr")"
+    return
+  fi
   if [[ "$(entry_count "${base}/home")" -ne 0 ]]; then
     testlib::fail "${name}: 거부했는데 HOME 아래에 무언가 생김"
     return
   fi
-  testlib::ok "${name} → 종료 2 · 출력 파일 0"
+  testlib::ok "${name} → 종료 2 · 출력 파일 0 · 조상 경로 없이 표지 종류만"
 }
 
 #######################################
@@ -220,7 +227,7 @@ expect_link_in_root_rejected() {
   fi
   call_evidence "${case_dir}" link evidence::check_dir \
     "${root}/alpha-20260101T000000Z"
-  expect_rejected "link-in-root" "${case_dir}" || return
+  expect_rejected "link-in-root" || return
   if [[ "$(entry_count "${repo}/evidence")" -ne 0 ]]; then
     testlib::fail "link-in-root: 링크 너머(저장소)에 무언가 생김"
     return
@@ -244,7 +251,7 @@ expect_root_link_rejected() {
     return
   fi
   call_evidence "${case_dir}" rootlink evidence::new_dir alpha
-  expect_rejected "root-link" "${case_dir}" || return
+  expect_rejected "root-link" || return
   if [[ "$(entry_count "${target}")" -ne 0 ]]; then
     testlib::fail "root-link: 링크 너머에 무언가 생김"
     return
@@ -267,7 +274,7 @@ expect_mode_rejected() {
     return
   }
   call_evidence "${case_dir}" mode evidence::new_dir alpha
-  expect_rejected "mode(root)" "${case_dir}" || return
+  expect_rejected "mode(root)" || return
   if [[ "$(entry_count "${root}")" -ne 0 ]]; then
     testlib::fail "mode: 거부했는데 루트 아래에 무언가 생김"
     return
@@ -279,7 +286,7 @@ expect_mode_rejected() {
   fi
   call_evidence "${case_dir}" child evidence::check_dir \
     "${root}/alpha-20260101T000000Z"
-  expect_rejected "mode(child)" "${case_dir}" || return
+  expect_rejected "mode(child)" || return
   if [[ "$(testlib::count "${run_out}.stderr" \
     "${TILDE}/.pokeclip-precheck/alpha-20260101T000000Z")" -ne 1 ]]; then
     testlib::fail "mode: 거부 문구에 「~」 로 가린 경로가 없음 —" \
@@ -320,7 +327,7 @@ expect_check_file() {
   for spec in wide.tsv link.tsv missing.tsv sub.tsv; do
     name="check-file(${spec})"
     call_evidence "${case_dir}" "${spec}" evidence::check_file "${dir}/${spec}"
-    expect_rejected "${name}" "${case_dir}" || return
+    expect_rejected "${name}" || return
   done
   testlib::ok "check-file → 0600 일반 파일만 · 링크 · 0644 · 없음 · 디렉터리 종료 2"
 }
@@ -340,7 +347,7 @@ expect_relative_home_rejected() {
     >"${case_dir}/out/rel.stdout" 2>"${case_dir}/out/rel.stderr")
   run_status=$?
   run_out="${case_dir}/out/rel"
-  expect_rejected "relative-home" "${case_dir}" || return
+  expect_rejected "relative-home" || return
   if [[ "$(entry_count "${case_dir}/home")" -ne 0 ]]; then
     testlib::fail "relative-home: 거부했는데 무언가 생김"
     return
