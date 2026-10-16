@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 #
 # 파일 하나의 내용을 prod 엣지 비밀(Secrets Manager)의 새 버전으로 넣는다
-# (runbooks/edge-secrets.md). 값은 파일 → 셸 변수 → 표준 입력(요청 JSON)으로만
-# 지나간다 — 명령 인자 · 환경 변수 · 임시 파일 · 출력에 두지 않는다. 그래서
-# here-doc · here-string(bash 3.2 는 본문을 임시 파일에 씀)과 jq 를 쓰지 않고,
-# 요청 JSON 은 셸 내장으로 만들어 printf 파이프로 넘긴다.
+# (runbooks/edge-secrets.md). 값은 파일 → 셸 변수 → 표준 입력(--secret-string
+# file:///dev/stdin)으로만 지나간다 — 명령 인자 · 환경 변수 · 임시 파일 · 출력에
+# 두지 않는다. 그래서 here-doc · here-string(bash 3.2 는 본문을 임시 파일에
+# 씀)과 jq 를 쓰지 않고, 값은 셸 내장 printf 의 파이프로만 넘긴다.
+# --cli-input-json file:///dev/stdin 은 쓰지 않는다 — aws-cli 가 file:// 값을 두
+# 번 읽어 파이프의 둘째 읽기가 비고 ParamValidation 으로 실패한다(2026-10-17
+# aws-cli 2.36.7 실측).
 #
 # 사용: put-secret-from-file.sh <종류> <파일>
 #   종류            비밀 이름(SecretId)             파일 내용
@@ -29,8 +32,10 @@
 #   거부      표준 오류 「SECRET PUT REJECTED: <이유>」
 #   접근 거부 표준 오류 「SECRET PUT DENIED」 — 다시 시도하지 않는다(SCP 멈춤
 #             규칙: 멈추고 kty 에게 보고)
-#   그 밖     표준 오류 「SECRET PUT FAILED <AWS 오류 코드>」(코드를 못 읽으면
-#             UNKNOWN). 원문에는 ARN · 계정 ID 가 들어 있어 코드만 적는다.
+#   그 밖     표준 오류 「SECRET PUT FAILED <AWS 오류 코드>」. 코드가 없는
+#             네트워크 단계 실패(연결 · 시간 초과 — 원문에 endpoint URL)는
+#             ENDPOINT, 그 밖에 코드를 못 읽으면 UNKNOWN. 원문에는 ARN · 계정
+#             ID 가 들어 있어 코드만 적는다.
 #
 # 종료 코드:
 #   0 넣음
@@ -40,6 +45,9 @@
 #   5 그 밖의 실패(AWS 오류 · aws CLI 없음 · 응답에 VersionId 없음)
 
 set -uo pipefail
+# 물려받은 추적 · allexport 를 값을 읽기 전에 끈다(bash -x · SHELLOPTS) — 켜져
+# 있으면 값이 든 줄이 표준 오류에 찍히거나 값이 aws 의 환경으로 간다.
+set +o xtrace +o allexport +o verbose
 
 readonly REGION='ap-northeast-2'
 readonly SECRET_PREFIX='pokeclip/prod/'
@@ -52,11 +60,12 @@ readonly EXIT_FAILED=5
 readonly PKCS8_BEGIN='-----BEGIN ''PRIVATE KEY-----'
 readonly PKCS8_END='-----END ''PRIVATE KEY-----'
 readonly ERROR_CODE_PATTERN='An error occurred \(([A-Za-z0-9]+)\)'
+# 코드 없는 네트워크 단계 실패(Could not connect to · Read timeout on 등)의 원문.
+readonly ENDPOINT_PATTERN='endpoint URL'
 readonly VERSION_ID_PATTERN='"VersionId": *"([A-Za-z0-9-]+)"'
 
-# 비밀 값과 요청 JSON. 함수 인자로 넘기지 않고 전역으로만 다룬다.
+# 비밀 값. 함수 인자로 넘기지 않고 전역으로만 다룬다.
 secret_value=""
-request=""
 
 #######################################
 # 사용법을 알리고 끝낸다.
@@ -151,26 +160,10 @@ check_one_line() {
 }
 
 #######################################
-# 요청 JSON 을 만든다. 검사를 지난 값에는 줄바꿈 밖의 제어 문자가 없으므로
-# 역슬래시 · 큰따옴표 · 줄바꿈만 이스케이프하면 된다.
+# 값을 aws 에 넘기고 결과 한 줄을 적는다. 비밀 이름은 인자, 값은 표준 입력이다.
+# aws 원문(ARN · 계정 ID · 되울린 값이 들 수 있음)은 내보내지 않는다.
 # Globals:
-#   secret_value, request
-# Arguments:
-#   비밀 이름.
-#######################################
-build_request() {
-  local escaped="${secret_value}"
-  escaped="${escaped//\\/\\\\}"
-  escaped="${escaped//\"/\\\"}"
-  escaped="${escaped//$'\n'/\\n}"
-  request="{\"SecretId\":\"$1\",\"SecretString\":\"${escaped}\"}"
-}
-
-#######################################
-# 요청을 aws 에 넘기고 결과 한 줄을 적는다. aws 원문(ARN · 계정 ID · 되울린
-# 요청이 들 수 있음)은 내보내지 않는다.
-# Globals:
-#   request
+#   secret_value
 # Arguments:
 #   비밀 이름.
 #######################################
@@ -180,12 +173,14 @@ put_request() {
     printf '%s\n' "SECRET PUT FAILED UNKNOWN" "aws CLI 가 PATH 에 없음" >&2
     exit "${EXIT_FAILED}"
   fi
-  output="$(printf '%s' "${request}" | AWS_PAGER="" aws secretsmanager \
-    put-secret-value --region "${REGION}" --output json \
-    --cli-input-json file:///dev/stdin 2>&1)"
+  output="$(printf '%s' "${secret_value}" | AWS_PAGER="" aws secretsmanager \
+    put-secret-value --region "${REGION}" --output json --no-cli-auto-prompt \
+    --secret-id "${name}" --secret-string file:///dev/stdin 2>&1)"
   status=$?
   if [[ "${output}" =~ ${ERROR_CODE_PATTERN} ]]; then
     code="${BASH_REMATCH[1]}"
+  elif [[ "${output}" == *"${ENDPOINT_PATTERN}"* ]]; then
+    code=ENDPOINT
   fi
   if [[ "${status}" -eq 0 && "${output}" =~ ${VERSION_ID_PATTERN} ]]; then
     printf 'SECRET PUT OK %s %s\n' "${name}" "${BASH_REMATCH[1]}"
@@ -218,7 +213,6 @@ main() {
   else
     check_one_line
   fi
-  build_request "${name}"
   put_request "${name}"
 }
 
