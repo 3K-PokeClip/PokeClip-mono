@@ -179,7 +179,7 @@ dev는 아래 「스트림키 암호 이행」 절의 순서대로 채운다. �
 | 🔴 `PROFILE_PHOTO_TOKEN_SECRET`은 **32바이트 이상**이어야 한다 | **부팅이 죽는다.** 사진 주소는 **서명과 그 재료를 함께 실어** 브라우저에 내보내므로, 주소 하나면 후보 키를 오프라인에서 무한히 시험할 수 있다. 맞히면 **아무 회원 번호로나 표를 만들어** 남의 사진을 연다 — 로그인 토큰과 키를 가른 것이 그 순간 무의미해진다. `JWT_SECRET`과 같은 기준이다 |
 | 🔴 `PROFILE_PHOTO_BASE_URL`은 **`http(s)://호스트[:포트]` 절대 주소**여야 하고 **끝에 슬래시를 두지 않는다** | **부팅이 죽는다.** 스킴이 없으면 브라우저가 **화면의 주소를 기준으로 풀어** 엉뚱한 곳을 찾는다 — 올리기는 성공하고 저장도 되는데 **그림만 조용히 안 보이고** 서버 로그에도 흔적이 없다. 끝 슬래시는 주소를 `…8082//api/…`로 만들어 환경마다 갈린다 |
 | `PROFILE_PHOTO_TOKEN_SECRET`은 **`JWT_SECRET`과 달라야 한다** | **부팅이 죽는다.** 같으면 사진 표가 로그인 토큰이 될 길이 열린다(아래 사진 절) |
-| `PROFILE_PHOTO_BASE_URL`은 **브라우저가 붙는 주소**다 (예 `http://localhost:8082`) | 🔴 clip의 `AUTH_BASE_URL`(**서버끼리** 붙는 주소, compose 안에서는 `http://auth:8082`)과 **뜻이 반대다.** 여기에 컨테이너 이름을 적으면 브라우저가 못 붙어 **사진만 조용히 안 보인다** |
+| `PROFILE_PHOTO_BASE_URL`은 **브라우저가 붙는 주소**다 (예 로컬 `http://localhost:8082`, dev는 사이트와 같은 `https://dev.pokeclip.com`. 웹 리라이트가 `/api/profile-photos`를 auth로 넘긴다. 바깥 8082는 닫는다, POK-314) | 🔴 clip의 `AUTH_BASE_URL`(**서버끼리** 붙는 주소, compose 안에서는 `http://auth:8082`)과 **뜻이 반대다.** 여기에 컨테이너 이름을 적으면 브라우저가 못 붙어 **사진만 조용히 안 보인다** |
 | `PROFILE_PHOTO_S3_ENDPOINT`·`_FORCE_PATH_STYLE`은 **가짜 저장소용**이다 | 비우면 진짜 AWS. LocalStack·MinIO는 가상 호스트 이름을 못 풀어 `_FORCE_PATH_STYLE=true`가 필요하다 |
 
 **꺼진 것은 부팅 로그로 확인한다** — `auth.profile.photo.disabled reason=no_bucket`,
