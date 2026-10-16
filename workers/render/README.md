@@ -152,6 +152,10 @@ cd workers/render && ./gradlew test
 docker run --rm -v "$PWD":/src -w /src eclipse-temurin:21-jdk bash -c 'apt-get update -qq && apt-get install -y -qq ffmpeg fonts-noto-cjk >/dev/null && ./gradlew -q test --tests "*ClipRendererTest"'
 ```
 
+**PR에서는 `workers-ci`가 돈다**(`.github/workflows/workers-ci.yml`). 배포 이미지와 같은 꾸러미(ffmpeg ·
+fonts-noto-cjk)를 깔고, 시험 전에 ffmpeg에 `subtitles` 필터(libass)가 없으면 실패한다(없으면 번인 시험이
+CC만 켜고 초록이 된다). 시험 뒤 건너뛴 시험이 하나라도 있으면 실패한다.
+
 **이미지**: 빌드 컨텍스트는 이 폴더다. ffmpeg(libass·libx264)와 한글 글꼴이 들어간다.
 
 ```bash
@@ -181,4 +185,3 @@ docker build -t pokeclip-render workers/render
 | 고착 알람(STARTED 뒤 30분 무보고) | 관측 장치가 생기면 clip 쪽에 붙인다 |
 | 오토스케일·배포 정의(ECS) | 인프라 몫. 이미지는 이 폴더의 `Dockerfile` |
 | 자막 글꼴·크기 고르기 | 자리(`position`)는 v2에 있다. 글꼴·크기는 렌더 상수다(편집기에 고르는 칸이 없다) |
-| CI | 서버 넷과 같이 로컬 시험만 있다 |

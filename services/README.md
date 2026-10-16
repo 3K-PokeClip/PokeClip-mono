@@ -122,6 +122,10 @@ set -a && . ../.env && set +a
 ./gradlew :auth:bootRun
 ```
 
+**PR에서는 `services-ci`가 돈다**(`.github/workflows/services-ci.yml`). `services/`를 고친 PR마다
+서버 넷의 시험을 따로 돌린다(auth 잡은 `web-support`도). 비밀은 넘기지 않아 실방송 탐침 시험은
+건너뛰는 것이 정상이다. 필수 체크는 아니다.
+
 **`.env`를 싣는 줄을 빼먹으면 DB 접속이 실패한다.** `docker compose`는 `.env`를 자동으로
 읽지만 **Gradle은 읽지 않는다.** DB 접속값 셋은 기본값이 없어(아래) 셸에 없으면 리터럴
 `${POSTGRES_USER}`가 그대로 사용자 이름이 되고 `FATAL: password authentication failed`로 죽는다.
