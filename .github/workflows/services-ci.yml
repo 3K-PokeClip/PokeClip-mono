@@ -1,0 +1,87 @@
+# services/ 전용 CI: services를 고친 PR에서 서버 넷의 시험을 돌린다 (POK-330).
+# 이 파일 전에는 gradle을 부르는 워크플로가 없어 Spring PR이 검사 0건으로 머지됐다.
+#
+# 필수 체크가 아니다(저장소 설정은 1번 몫). paths로 통째 스킵하는 구조라 필수로 걸면
+# services를 안 건드린 PR이 Pending으로 잠긴다(media-ci 머리 주석, ADR-0004). 필수로 걸려면
+# 집계 잡을 먼저 만든다.
+name: services-ci
+
+on:
+  pull_request:
+    paths:
+      - 'services/**'
+      - '.github/workflows/services-ci.yml' # 이 파일을 고치는 PR은 이 파일로 검증한다
+
+# GitHub API를 쓰지 않는다. checkout에 필요한 최소치로 못박는다.
+permissions:
+  contents: read
+
+# 같은 PR에 새 커밋이 오면 앞 실행을 취소한다. 서버 넷이 러너를 넷씩 잡기 때문이다.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      # 한 서버가 깨져도 나머지 셋의 결과를 끝까지 본다.
+      fail-fast: false
+      matrix:
+        include:
+          # web-support는 서버가 아니라 서버 넷이 쓰는 라이브러리다. 시험이 8개뿐이라
+          # 잡을 따로 두지 않고 auth에 얹는다.
+          - module: auth
+            tasks: ':auth:test :web-support:test'
+            reports: |
+              services/auth/build/reports/tests/
+              services/auth/build/test-results/
+              services/web-support/build/reports/tests/
+              services/web-support/build/test-results/
+          - module: clip
+            tasks: ':clip:test'
+            reports: |
+              services/clip/build/reports/tests/
+              services/clip/build/test-results/
+          - module: chat-collector
+            tasks: ':chat-collector:test'
+            reports: |
+              services/chat-collector/build/reports/tests/
+              services/chat-collector/build/test-results/
+          - module: chat-detector
+            tasks: ':chat-detector:test'
+            reports: |
+              services/chat-detector/build/reports/tests/
+              services/chat-detector/build/test-results/
+    defaults:
+      run:
+        # Gradle 루트는 저장소 루트가 아니라 services/다(settings.gradle이 여기 있다).
+        working-directory: services
+    steps:
+      - uses: actions/checkout@v7
+
+      # 캐시는 setup-java의 gradle 캐시로 한다. 키는 아래 파일들의 해시다.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+          cache-dependency-path: |
+            services/**/*.gradle
+            services/gradle/wrapper/gradle-wrapper.properties
+
+      # 시험은 Testcontainers로 postgres:17·localstack:4.14.0을 띄운다. ubuntu 러너에 도커가 있다.
+      # 비밀은 넘기지 않는다. 실방송 탐침 시험(LiveProbeTest·SessionLimitProbeTest)은 환경변수가
+      # 없으면 건너뛰는 것이 정상이라, 여기서는 건너뛴 수를 검사하지 않는다(workers-ci와 다르다).
+      - name: 시험
+        run: ./gradlew ${{ matrix.tasks }}
+
+      - name: 실패한 시험 리포트 올리기
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: services-test-reports-${{ matrix.module }}
+          path: ${{ matrix.reports }}
+          retention-days: 7
