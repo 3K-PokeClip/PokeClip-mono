@@ -118,6 +118,11 @@ export function ClipDetailPanel({
         onChange={onTitleChange}
         readOnly={view.titleLocked || sending}
       />
+      {view.titleIsDraft ? (
+        <p className={styles.titleDraftNote}>
+          올릴 때 쓰는 제목이에요 · 새로 고침하면 처음 제목으로 돌아가요
+        </p>
+      ) : null}
 
       {/* 미리보기 — 완성 영상이 있으면 눌러서 튼다(주소는 그때 받는다). 없으면 장식이라 통째로 숨긴다.
           영상이 바뀌면(다시 렌더) 받은 주소를 버리도록 영상 번호로 새로 그린다 */}

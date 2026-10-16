@@ -210,6 +210,20 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
     ).toBe(false);
   });
 
+  it('편집 중·렌더 실패는 제목을 잠그고, 완성만 올릴 때 쓰는 임시 제목으로 고친다(POK-254)', () => {
+    // 편집본에는 제목 칸이 없다: 편집 중·렌더 실패에서 고친 제목은 다음 읽기에 되돌아갔다
+    for (const status of ['editing', 'failed'] as const) {
+      const clip = toLibraryClip(entry(status), '9');
+      const view = detailViewForClip(clip, clip.status, 'streamer');
+      expect(view.titleLocked).toBe(true);
+      expect(view.titleIsDraft).toBe(false);
+    }
+    const ready = toLibraryClip(entry('rendered'), '9');
+    const view = detailViewForClip(ready, ready.status, 'streamer');
+    expect(view.titleLocked).toBe(false);
+    expect(view.titleIsDraft).toBe(true);
+  });
+
   it('올리는 중에는 누를 수 없는 「유튜브에 올리는 중」이고 제목이 잠긴다', () => {
     const clip = toLibraryClip(entry('uploading'), '9');
     const view = detailViewForClip(clip, clip.status, 'streamer');

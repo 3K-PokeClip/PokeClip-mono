@@ -385,6 +385,13 @@
     border-color var(--pc-duration-fast) var(--pc-ease-standard);
 }
 
+/* 완성본 제목이 저장되지 않는 초안임을 알리는 한 줄(POK-254) */
+.titleDraftNote {
+  margin: calc(4 * var(--pc-u)) 0 0;
+  font-size: calc(11.5 * var(--pc-u));
+  color: var(--pc-color-text-muted);
+}
+
 .titleInput::placeholder {
   color: var(--pc-color-text-muted);
   font-weight: 700;

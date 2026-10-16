@@ -233,6 +233,11 @@ export interface DetailView {
    * 원본 만료·반려됨은 재편집만 막힐 뿐 이름은 바꿀 수 있으니 잠그지 않는다.
    */
   titleLocked: boolean;
+  /**
+   * 고친 제목이 저장되지 않고 이 화면에만 남는 초안인가(POK-254). 편집본에는 제목 칸이 없어 완성본에서 고친 제목은
+   * 올릴 때 실리는 것이 전부다: 새로 고침하면 사라진다고 입력 칸 아래에 알린다
+   */
+  titleIsDraft: boolean;
   note: PanelNote | null;
   showRejection: boolean;
   /** 렌더 실패는 길이를 모른다 */
@@ -322,6 +327,7 @@ export function detailViewFor(status: ClipStatus, role: LibraryRole): DetailView
     edit: null,
     download: true,
     titleLocked: false,
+    titleIsDraft: false,
     note: null,
     showRejection: false,
     showDuration: true,
@@ -441,12 +447,20 @@ export function detailViewForClip(
   // 제목이 살아 있는 업로드에서 온 것이면(올린 뒤 새 판을 저장해 「편집 중」인 경우 포함) 고칠 곳이 없다:
   // 초안은 완성 편집본에만 남아 다음 읽기에 되돌아간다(PR #203 codex)
   const upload = entry.latestClip?.upload;
-  // 저장된 정보로 올리는 길이면 패널 제목은 실리지 않는다: 고쳐도 버려지니 잠근다
+  // 저장된 정보로 올리는 길이면 패널 제목은 실리지 않는다: 고쳐도 버려지니 잠근다.
+  // 편집 중·렌더 실패도 잠근다(POK-254): 편집본에는 제목 칸이 없어 고친 제목이 다음 읽기에 되돌아갔다. 그 제목은 영상 만들기
+  // 창에서 정한다
   const titleLocked =
-    view.titleLocked || (upload != null && upload.status !== 'failed') || uploadsFromIntent(entry);
+    view.titleLocked ||
+    entry.status === 'editing' ||
+    entry.status === 'failed' ||
+    (upload != null && upload.status !== 'failed') ||
+    uploadsFromIntent(entry);
+  // 남는 것은 완성본뿐이다: 고친 제목은 올릴 때 실리는 초안이다
+  const titleIsDraft = !titleLocked;
   return view.primary.kind === 'action' && view.primary.action === 'upload'
-    ? { ...view, titleLocked, primary: { ...view.primary, label: '업로드' } }
-    : { ...view, titleLocked };
+    ? { ...view, titleLocked, titleIsDraft, primary: { ...view.primary, label: '업로드' } }
+    : { ...view, titleLocked, titleIsDraft };
 }
 
 /** 패널 안내 상자 문구 — 승인 대기는 시점마다 할 수 있는 일이 다르다 */

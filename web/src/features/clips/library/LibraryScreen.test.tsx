@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -668,6 +668,20 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
   it('완성본은 편집자에게도 「업로드」다', () => {
     show(serverClip('rendered'), 'editor');
     expect(within(panel()).getByRole('button', { name: '업로드' })).toBeEnabled();
+  });
+
+  it('완성본 제목은 올릴 때 쓰는 임시 제목이라고 알리고, 편집 중은 제목을 잠근다(POK-254)', () => {
+    show(serverClip('rendered'));
+    expect(within(panel()).getByRole('textbox', { name: '클립 제목' })).not.toHaveAttribute(
+      'readonly',
+    );
+    expect(
+      within(panel()).getByText('올릴 때 쓰는 제목이에요 · 새로 고침하면 처음 제목으로 돌아가요'),
+    ).toBeInTheDocument();
+    cleanup();
+    show(serverClip('editing', null));
+    expect(within(panel()).getByRole('textbox', { name: '클립 제목' })).toHaveAttribute('readonly');
+    expect(within(panel()).queryByText(/올릴 때 쓰는 제목이에요/)).toBeNull();
   });
 
   it('올리는 중에는 누를 수 없고 제목도 잠긴다', () => {
