@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ClipApiError,
+  liveUploadsOf,
   type ClipSnapshot,
   type LibraryEntry,
   type LibraryStatus,
@@ -9,6 +10,7 @@ import {
 import {
   detailViewForClip,
   noteText,
+  previousUploadsOf,
   privacyNoteText,
   thumbnailFailureText,
   uploadErrorMessage,
@@ -430,5 +432,96 @@ describe('toLibraryClip — 올린 편집본은 유튜브 제목을 보인다', 
 
   it('업로드가 없으면 「편집본 #번호」', () => {
     expect(toLibraryClip(entry('rendered'), '9').title).toBe('편집본 #12');
+  });
+});
+
+describe('previousUploadsOf: 패널 위쪽이 말하지 않는 살아 있는 업로드(POK-334)', () => {
+  const live = (
+    id: number,
+    recipeVersion: number,
+    status: string,
+    videoId: string | null = null,
+  ) => ({
+    id,
+    clipId: id,
+    recipeVersion,
+    outputId: 'o1',
+    title: `제목${id}`,
+    status,
+    videoId,
+    createdAt: '2026-09-20T12:00:00Z',
+    updatedAt: '2026-09-20T12:00:00Z',
+  });
+  const uploaded: UploadSnapshot = {
+    ...failedUpload('X')!,
+    id: 7,
+    status: 'uploaded',
+    videoId: 'cur',
+    error: null,
+  };
+
+  it('latestClip의 업로드는 빼고 나머지를 순서대로, 올림만 링크다', () => {
+    const e = {
+      ...entry('uploaded', snapshot(uploaded)),
+      liveUploads: [
+        live(7, 2, 'uploaded', 'cur'),
+        live(6, 1, 'uploading'),
+        live(5, 1, 'uploaded', 'old'),
+      ],
+    };
+    expect(previousUploadsOf(e)).toEqual([
+      { id: 6, versionLabel: 'v1', text: '제목6 · 올리는 중', href: null },
+      { id: 5, versionLabel: 'v1', text: '제목5 · 업로드됨', href: 'https://youtu.be/old' },
+    ]);
+  });
+
+  it('v1을 올린 뒤 v2를 저장만 하면(편집 중) 위쪽은 v1 업로드를 안 보이니 「이전 판」에 남는다(PR #250 codex)', () => {
+    const v1Upload: UploadSnapshot = { ...uploaded, id: 5, videoId: 'old' };
+    const e = {
+      ...entry('editing', { ...snapshot(v1Upload), recipeVersion: 1 }),
+      liveUploads: [live(5, 1, 'uploaded', 'old')],
+    };
+    expect(toLibraryClip(e, '9').youtubeUrl).toBeUndefined();
+    expect(previousUploadsOf(e)).toEqual([
+      { id: 5, versionLabel: 'v1', text: '제목5 · 업로드됨', href: 'https://youtu.be/old' },
+    ]);
+  });
+
+  it('지금 판 업로드 하나뿐이면 위쪽이 보이니 목록은 비고 겹치지 않는다', () => {
+    const e = {
+      ...entry('uploaded', snapshot(uploaded)),
+      liveUploads: [live(7, 2, 'uploaded', 'cur')],
+    };
+    expect(toLibraryClip(e, '9').youtubeUrl).toBe('https://youtu.be/cur');
+    expect(previousUploadsOf(e)).toEqual([]);
+  });
+
+  it('대기(queued)는 올리는 중과 같은 글자다', () => {
+    const e = { ...entry('rendering', snapshot(null)), liveUploads: [live(4, 1, 'queued')] };
+    expect(previousUploadsOf(e).map((u) => u.text)).toEqual(['제목4 · 올리는 중']);
+  });
+
+  it('칸을 모르는 옛 서버면 latestClip의 업로드 하나로 접혀 위쪽과 겹치니 빈 목록이다', () => {
+    expect(previousUploadsOf(entry('uploaded', snapshot(uploaded)))).toEqual([]);
+  });
+
+  it('서버 줄이 없으면(목업) 빈 목록이다', () => {
+    expect(previousUploadsOf(undefined)).toEqual([]);
+  });
+});
+
+describe('liveUploadsOf: 옛 서버 접기(POK-334)', () => {
+  it('칸이 없으면 latestClip 업로드 하나, 실패면 빈 목록이다', () => {
+    const uploaded: UploadSnapshot = {
+      ...failedUpload('X')!,
+      status: 'uploaded',
+      videoId: 'v',
+      error: null,
+    };
+    expect(
+      liveUploadsOf(entry('uploaded', snapshot(uploaded))).map((u) => [u.id, u.recipeVersion]),
+    ).toEqual([[7, 2]]);
+    expect(liveUploadsOf(entry('rendered', snapshot(failedUpload('X'))))).toEqual([]);
+    expect(liveUploadsOf(entry('editing', null))).toEqual([]);
   });
 });

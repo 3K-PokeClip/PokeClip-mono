@@ -11,12 +11,14 @@ import {
   detailViewForClip,
   durationLabel,
   noteText,
+  previousUploadsOf,
   privacyNoteText,
   retentionLabel,
   safeExternalUrl,
   thumbnailFailureText,
   uploadFailureText,
   type DetailView,
+  type PreviousUpload,
 } from './libraryView';
 import type { ClipStatus, LibraryClip, LibraryRole } from './useLibraryMockState';
 import styles from './LibraryScreen.module.css';
@@ -60,6 +62,7 @@ export function ClipDetailPanel({
   const uploadFailure = uploadFailureText(clip);
   const thumbnailFailure = thumbnailFailureText(clip);
   const privacyNote = privacyNoteText(clip);
+  const previousUploads = previousUploadsOf(clip.entry);
   const playable = loadPreview !== undefined && clip.entry?.latestClip?.status === 'rendered';
   const duration = durationLabel(clip, status);
   const retention = ddayFor(clip.sourceExpiresAt, now);
@@ -205,6 +208,20 @@ export function ClipDetailPanel({
         <dt>비율</dt>
         <dd>9:16 · 1080×1920</dd>
       </dl>
+
+      {/* 이전 판으로 올린 영상(POK-334): 새 판을 만들어도 옛 판 업로드가 유튜브에 남아 있다. 모양은 위 칸을 줄마다 반복 */}
+      {previousUploads.length > 0 ? (
+        <>
+          <hr className={styles.divider} />
+          <section aria-label="이전 판으로 올린 영상">
+            <dl className={styles.meta}>
+              {previousUploads.map((u) => (
+                <PreviousUploadRow key={u.id} upload={u} />
+              ))}
+            </dl>
+          </section>
+        </>
+      ) : null}
 
       {view.showRejection && clip.rejection ? (
         <>
@@ -383,5 +400,24 @@ function PreviewPlayer({
         </span>
       ) : null}
     </button>
+  );
+}
+
+/** 이전 판 업로드 한 줄. 올린 것만 유튜브로 가는 링크이고, 올리는 중·확인 필요는 글자만이다 */
+function PreviousUploadRow({ upload }: { upload: PreviousUpload }) {
+  return (
+    <>
+      <dt>{`이전 판 ${upload.versionLabel}`}</dt>
+      <dd>
+        {upload.href ? (
+          <a href={upload.href} target="_blank" rel="noopener noreferrer">
+            {upload.text}
+            <VisuallyHidden> (새 창)</VisuallyHidden>
+          </a>
+        ) : (
+          upload.text
+        )}
+      </dd>
+    </>
   );
 }

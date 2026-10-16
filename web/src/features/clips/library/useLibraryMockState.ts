@@ -18,6 +18,7 @@ import {
   countByChip,
   filterByChip,
   filterByQuery,
+  shownUploadOf,
   sortClips,
   statusFor,
   uploadErrorMessage,
@@ -137,8 +138,10 @@ function progressLabelOf(entry: LibraryEntry): string | null {
 }
 
 function youtubeUrlOf(entry: LibraryEntry): string | undefined {
-  const videoId = entry.latestClip?.upload?.videoId;
-  return entry.status === 'uploaded' && videoId ? `https://youtu.be/${videoId}` : undefined;
+  const upload = shownUploadOf(entry);
+  return upload?.status === 'uploaded' && upload.videoId
+    ? `https://youtu.be/${upload.videoId}`
+    : undefined;
 }
 
 /**

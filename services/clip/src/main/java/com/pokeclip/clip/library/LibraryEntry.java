@@ -2,9 +2,11 @@ package com.pokeclip.clip.library;
 
 import com.pokeclip.clip.recipe.RecipeDocument.Cut;
 import com.pokeclip.clip.render.ClipSnapshot;
+import com.pokeclip.clip.upload.LiveUpload;
 import com.pokeclip.clip.upload.UploadRequestBrief;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 보관함 목록 한 줄 — 편집본 하나와 그 원본 방송, 그리고 가장 최근 영상. 2번(보관함 화면)과의 계약이라 칸 이름을 바꾸지 않는다.
@@ -20,6 +22,9 @@ import java.time.Instant;
  * @param uploadRequest 이 편집본 <b>지금 판</b>의 「렌더 뒤 업로드」 의도 요약(POK-291). 없으면 {@code null}.
  *                      업로드 줄이 아직 없을 때 화면이 제목을 이것으로 보인다. 「업로드 실패」 상태는 서버가 안 만든다:
  *                      화면이 {@code rendered && latestClip.upload.status == failed}로 만든다
+ * @param liveUploads 이 편집본 <b>모든 판</b>의 살아 있는(실패 아닌) 업로드, 최근 것이 앞(POK-334). 없으면 빈 목록.
+ *                    새 판 영상을 주문해 {@code latestClip}이 바뀌어도 옛 판으로 올린 영상이 여기 남는다. {@code status}·
+ *                    {@code latestClip.upload}의 뜻은 안 바꾼다(「발행됨」 거르기도 그대로)
  */
 public record LibraryEntry(long recipeId,
                            String streamId,
@@ -32,11 +37,12 @@ public record LibraryEntry(long recipeId,
                            Instant createdAt,
                            Instant updatedAt,
                            String thumbnailUrl,
-                           UploadRequestBrief uploadRequest) {
+                           UploadRequestBrief uploadRequest,
+                           List<LiveUpload> liveUploads) {
 
     public LibraryEntry withThumbnailUrl(String url) {
         return new LibraryEntry(recipeId, streamId, creatorId, recipeVersion, cut, status, broadcast, latestClip, createdAt,
-                updatedAt, url, uploadRequest);
+                updatedAt, url, uploadRequest, liveUploads);
     }
 
     /** 원본 방송 요약. 화면의 「8월 31일 라이브」·원본 만료 D-day 재료. 방송 목록 줄과 칸 이름이 같다. */
