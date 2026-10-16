@@ -649,6 +649,18 @@ function withUpload(entry: LibraryEntry, upload: UploadSnapshot): LibraryEntry {
  * 그것, 여럿이면 편집기가 고치는 세로(VERT_9_16) 출력이다. 편집기는 저장된 다른 비율 출력을 남겨 두므로(outputsFor)
  * 첫 번째 영상이 세로라는 보장이 없다(PR #203 codex). 보관함 목록에는 출력의 비율이 없어 상세를 한 번 더 읽는다.
  */
+const ASPECT_LABEL = { VERT_9_16: '9:16', SQUARE_1_1: '1:1' } as const;
+
+/**
+ * 상세 패널의 「비율」 = 레시피 출력의 비율(POK-254, 전에는 고정 글자 「9:16 · 1080×1920」). 목록에는 출력의 비율이 없어 상세를
+ * 한 번 더 읽는다. 해상도는 서버에 칸이 없어 지어내지 않는다
+ */
+export async function aspectLabelOf(entry: LibraryEntry): Promise<string | null> {
+  const detail = await fetchLibraryDetail(entry.recipeId);
+  const labels = [...new Set(detail.recipe.outputs.map((o) => ASPECT_LABEL[o.aspect]))];
+  return labels.length === 0 ? null : labels.join(' · ');
+}
+
 async function videoOutputOf(entry: LibraryEntry): Promise<string | null> {
   const videos = (entry.latestClip?.outputs ?? []).filter((o) => o.kind === 'video');
   if (videos.length <= 1) return videos[0]?.outputId ?? null;

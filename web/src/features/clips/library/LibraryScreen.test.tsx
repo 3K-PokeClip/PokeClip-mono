@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { cleanup, fireEvent, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -207,7 +207,8 @@ describe('LibraryScreen — 선택·상세 패널', () => {
     expect(inside.getByText('자막').nextElementSibling).toHaveTextContent(
       '자동 자막 12줄 · 수정 중',
     );
-    expect(inside.getByText('비율').nextElementSibling).toHaveTextContent('9:16 · 1080×1920');
+    // 목업 줄은 레시피가 없어 비율을 지어내지 않는다(POK-254)
+    expect(inside.getByText('비율').nextElementSibling).toHaveTextContent('—');
   });
 });
 
@@ -624,6 +625,46 @@ describe('LibraryScreen — 서버 편집본', () => {
   });
 });
 
+describe('LibraryScreen — 서버 편집본의 비율 (POK-254)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('비율은 고정 글자가 아니라 레시피 출력의 비율이다: 패널을 열면 상세를 읽는다', async () => {
+    const entry = {
+      recipeId: 12,
+      streamId: 's1',
+      creatorId: '9',
+      recipeVersion: 1,
+      cut: { inAtMs: 0, outAtMs: 30_000 },
+      status: 'rendered',
+      broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+      latestClip: null,
+      createdAt: '2026-09-20T11:00:00Z',
+      updatedAt: '2026-09-20T12:00:00Z',
+    };
+    stubFetch((url) =>
+      url === '/api/clip/library/12'
+        ? jsonResponse(200, {
+            ...entry,
+            recipe: {
+              outputs: [{ outputId: 'o1', aspect: 'SQUARE_1_1', crop: { x: 0, y: 0, w: 1, h: 1 } }],
+            },
+          })
+        : url.startsWith('/api/clip/library')
+          ? jsonResponse(200, { items: [entry], nextCursor: null })
+          : jsonResponse(200, { id: 9, email: 'me@example.com' }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<LibraryScreen />);
+
+    await user.click(await screen.findByRole('button', { name: /^편집본 #12/ }));
+    const ratio = within(panel()).getByText('비율').nextElementSibling!;
+    await waitFor(() => expect(ratio).toHaveTextContent('1:1'));
+    expect(ratio).not.toHaveTextContent('1080×1920');
+  });
+});
+
 describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', () => {
   const NOW = new Date('2026-09-20T12:00:00Z');
   const rendered: ClipSnapshot = {
@@ -765,14 +806,21 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
 
   it('「다시 시도」는 저장된 정보로 다시 올리고, 보내는 동안 단추가 잠긴다(POK-291)', async () => {
     let answer: (r: Response) => void = () => {};
-    const spy = stubFetch(() => new Promise<Response>((resolve) => (answer = resolve)));
+    const spy = stubFetch((url) =>
+      // 패널을 열면 비율을 읽으러 상세를 부른다(POK-254): 이 시험이 세는 것은 업로드 주문이다
+      url.startsWith('/api/clip/library/')
+        ? new Promise<Response>(() => {})
+        : new Promise<Response>((resolve) => (answer = resolve)),
+    );
+    const orders = () =>
+      spy.mock.calls.filter(([url]) => !String(url).startsWith('/api/clip/library/'));
     const user = userEvent.setup();
     show(serverClip('rendered', { ...rendered, upload: failedUpload }));
 
     await user.click(within(panel()).getByRole('button', { name: '다시 시도' }));
     expect(within(panel()).getByRole('button', { name: '다시 시도' })).toBeDisabled();
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy.mock.calls[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/5/uploads/retry');
+    expect(orders()).toHaveLength(1);
+    expect(orders()[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/5/uploads/retry');
 
     await act(async () =>
       answer(jsonResponse(201, { ...failedUpload, id: 8, status: 'queued', error: null })),
@@ -868,7 +916,9 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
   it('주소가 만료돼 영상을 못 읽으면 재생 단추로 돌아가 새 주소를 받는다', async () => {
     const user = userEvent.setup();
     let n = 0;
-    stubFetch(() => {
+    stubFetch((url) => {
+      // 비율을 읽는 상세 요청(POK-254)은 주소 번호를 세지 않는다
+      if (url.startsWith('/api/clip/library/')) return new Promise<Response>(() => {});
       n += 1;
       return jsonResponse(200, {
         clipId: 5,

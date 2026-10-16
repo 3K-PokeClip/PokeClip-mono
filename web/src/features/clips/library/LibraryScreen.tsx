@@ -9,7 +9,12 @@ import { ClipDetailPanel } from './ClipDetailPanel';
 import { DeleteClipDialog } from './DeleteClipDialog';
 import { LibraryFilterChips } from './LibraryFilterChips';
 import { SORT_OPTIONS, isLibrarySort, statusFor } from './libraryView';
-import { useLibraryMockState, type LibraryClip, type LibraryOptions } from './useLibraryMockState';
+import {
+  aspectLabelOf,
+  useLibraryMockState,
+  type LibraryClip,
+  type LibraryOptions,
+} from './useLibraryMockState';
 import styles from './LibraryScreen.module.css';
 
 // 시안 1g — 보관함. 편집기(1d)가 만든 9:16 편집본을 다시 찾는 유일한 자리다(F6, P0).
@@ -57,6 +62,7 @@ export function LibraryScreen(options: LibraryOptions = {}) {
   const [lastClip, setLastClip] = useState<LibraryClip | null>(null);
   if (selectedClip && selectedClip !== lastClip) setLastClip(selectedClip);
   const panelClip = selectedClip ?? lastClip;
+  const panelEntry = panelClip?.entry;
 
   const [pendingDelete, setPendingDelete] = useState<LibraryClip | null>(null);
   const gridRef = useRef<HTMLUListElement>(null);
@@ -201,6 +207,7 @@ export function LibraryScreen(options: LibraryOptions = {}) {
               onDownload={() => download(panelClip.id)}
               sending={sendingIds.has(panelClip.id)}
               loadPreview={panelClip.entry ? () => previewUrl(panelClip.id) : undefined}
+              loadAspect={panelEntry ? () => aspectLabelOf(panelEntry) : undefined}
               onDelete={() => setPendingDelete(panelClip)}
             />
           ) : null}

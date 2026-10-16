@@ -40,6 +40,7 @@ export function ClipDetailPanel({
   onDelete,
   sending = false,
   loadPreview,
+  loadAspect,
 }: {
   clip: LibraryClip;
   status: ClipStatus;
@@ -57,6 +58,8 @@ export function ClipDetailPanel({
   sending?: boolean;
   /** 완성 영상 주소를 받는다. 없으면(목업 줄) 미리보기는 장식이다 */
   loadPreview?: () => Promise<string | null>;
+  /** 레시피 출력의 비율(「9:16」). 없으면(목업 줄) 비율을 모른다 */
+  loadAspect?: () => Promise<string | null>;
 }) {
   const view = detailViewForClip(clip, status, role);
   const uploadFailure = uploadFailureText(clip);
@@ -66,6 +69,25 @@ export function ClipDetailPanel({
   const playable = loadPreview !== undefined && clip.entry?.latestClip?.status === 'rendered';
   const duration = durationLabel(clip, status);
   const retention = ddayFor(clip.sourceExpiresAt, now);
+
+  // 비율은 레시피에 있어 패널을 열 때 상세를 읽는다(POK-254). 판이 바뀌면 다시 읽고, 다른 편집본의 늦은 답은 버린다
+  const aspectKey = `${clip.id}:${clip.entry?.recipeVersion ?? ''}`;
+  const loadAspectRef = useRef(loadAspect);
+  loadAspectRef.current = loadAspect;
+  const [aspect, setAspect] = useState<{ key: string; label: string | null } | null>(null);
+  useEffect(() => {
+    const load = loadAspectRef.current;
+    if (load === undefined) return;
+    let alive = true;
+    load().then(
+      (label) => alive && setAspect({ key: aspectKey, label }),
+      () => alive && setAspect({ key: aspectKey, label: null }),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [aspectKey]);
+  const aspectLabel = aspect?.key === aspectKey ? aspect.label : null;
 
   // 업로드·렌더 재시도는 상태를 바꾸고, 그러면 주 동작이 button ↔ anchor로 갈리거나 비활성이
   // 된다 — 누르고 있던 노드가 사라져 포커스가 body로 떨어진다. 전이를 일으킨 경우에만
@@ -211,7 +233,7 @@ export function ClipDetailPanel({
         <dt>자막</dt>
         <dd>{clip.subtitleLabel}</dd>
         <dt>비율</dt>
-        <dd>9:16 · 1080×1920</dd>
+        <dd>{aspectLabel ?? '—'}</dd>
       </dl>
 
       {/* 이전 판으로 올린 영상(POK-334): 새 판을 만들어도 옛 판 업로드가 유튜브에 남아 있다. 모양은 위 칸을 줄마다 반복 */}
