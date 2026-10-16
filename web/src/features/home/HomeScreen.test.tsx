@@ -487,7 +487,7 @@ describe('HomeScreen', () => {
     expect(screen.getAllByText('D-2').length).toBeGreaterThan(0);
   });
 
-  it('지난 방송의 최근 하이라이트는 그 카드 번호를 싣고 간다: 지난 방송 화면이 처음이 아니라 그 시점부터 튼다', async () => {
+  it('최근 하이라이트 카드 칸은 없다: 지난 방송 카드의 「카드 N개」만 남는다(POK-254)', async () => {
     const card = {
       id: 35,
       streamId: 'past-1',
@@ -530,10 +530,9 @@ describe('HomeScreen', () => {
     );
     render(<HomeScreen />);
 
-    expect(await screen.findByRole('link', { name: 'past-1 · 0:16:49' })).toHaveAttribute(
-      'href',
-      '/broadcast/vod/past-1?card=35',
-    );
+    expect(await screen.findByText('10월 8일 · 카드 1개')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '최근 하이라이트 카드' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'past-1 · 0:16:49' })).not.toBeInTheDocument();
   });
 
   it('이미 만료된 방송은 만료 임박에 넣지 않는다 — D-0으로 쌓이지 않는다', async () => {

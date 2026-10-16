@@ -17,7 +17,7 @@ import {
 //
 // 실값 출처 (전부 same-origin 프록시, 로그인 세션의 apiFetch):
 //   GET /api/clip/broadcasts?state=live|past       → 라이브 밴드 · 지난 방송 · 만료 임박
-//   GET /api/clip/broadcasts/{id}/jump-cards       → 카드 수 · 최근 하이라이트 카드
+//   GET /api/clip/broadcasts/{id}/jump-cards       → 카드 수
 //   GET /api/clip/broadcasts/{id}/broadcast-info   → 라이브 제목 (latest=null이면 streamId)
 //   GET /api/auth/me                               → 인사말의 이름
 //   GET /api/clip/library                          → 이어서 편집 · 발행 현황 · 클립 완료 수(POK-111)
@@ -81,20 +81,6 @@ export interface ExpiringVod {
   title: string;
 }
 
-/** 최근 감지된 하이라이트 카드 — 라이브·지난 방송을 합쳐 createdAt 내림차순 */
-export interface RecentCard {
-  id: string;
-  streamId: string;
-  source: 'auto' | 'hotkey';
-  /** 방송 시작 기준 위치 (h:mm:ss) */
-  positionLabel: string;
-  score: number | null;
-  createdAt: string;
-  /** 라이브면 livenow?stream=, 지난 방송이면 vod/<id> */
-  href: string;
-  isLive: boolean;
-}
-
 export interface HomeMockState {
   userName: string | null;
   greeting: string;
@@ -109,7 +95,6 @@ export interface HomeMockState {
   /** 보관함을 한 번도 못 읽었고 마지막 시도가 실패했다 */
   publishUnavailable: boolean;
   expiringVods: ExpiringVod[];
-  recentCards: RecentCard[];
   /** 첫 응답이 오기 전 true — 빈 목록을 「없음」으로 그리지 않기 위해 */
   loading: boolean;
 }
@@ -162,7 +147,6 @@ interface WireMe {
 
 const POLL_MS = 10_000;
 const PAST_LIMIT = 8;
-const RECENT_LIMIT = 6;
 const EXPIRING_WINDOW_DAYS = 7;
 
 async function getJson<T>(path: string): Promise<T | null> {
@@ -212,7 +196,6 @@ interface Loaded {
   live: LiveNow | null;
   vods: HomeVod[];
   expiringVods: ExpiringVod[];
-  recentCards: RecentCard[];
 }
 
 /**
@@ -321,37 +304,15 @@ async function loadHome(now: number): Promise<Loaded | null> {
       };
     });
 
-  const recentCards: RecentCard[] = [];
-  for (const [streamId, cards] of cardsByStream) {
-    const isLive = liveBroadcast?.streamId === streamId;
-    for (const c of cards) {
-      recentCards.push({
-        id: `${streamId}:${c.id}`,
-        streamId,
-        source: c.source,
-        positionLabel: msToClock(c.streamTimestampMs),
-        score: c.score,
-        createdAt: c.createdAt,
-        // 지난 방송은 카드 번호를 싣는다. 방송 번호만 실으면 그 화면이 처음부터 튼다(QA 2026-10-11)
-        href: isLive
-          ? `/broadcast/livenow?stream=${encodeURIComponent(streamId)}`
-          : `/broadcast/vod/${encodeURIComponent(streamId)}?card=${encodeURIComponent(String(c.id))}`,
-        isLive,
-      });
-    }
-  }
-  recentCards.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-
   return {
     userName: me?.name?.trim() || me?.email || null,
     live,
     vods,
     expiringVods,
-    recentCards: recentCards.slice(0, RECENT_LIMIT),
   };
 }
 
-const EMPTY: Loaded = { userName: null, live: null, vods: [], expiringVods: [], recentCards: [] };
+const EMPTY: Loaded = { userName: null, live: null, vods: [], expiringVods: [] };
 
 export function useHomeMockState(): HomeMockState {
   // 편집본 저장 백엔드가 없다 — 배너는 「백엔드 미구현」 안내로만 선다. 닫으면 세션 동안 사라진다.
@@ -414,7 +375,6 @@ export function useHomeMockState(): HomeMockState {
     // 한 번 읽은 뒤의 실패는 지난 줄을 그대로 둔다(방송 목록과 같다) — 안내는 아직 아무것도 모를 때만
     publishUnavailable: library === null && libraryFailed,
     expiringVods: data.expiringVods,
-    recentCards: data.recentCards,
     loading,
   };
 }
