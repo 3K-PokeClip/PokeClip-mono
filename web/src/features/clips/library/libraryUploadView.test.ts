@@ -475,6 +475,27 @@ describe('previousUploadsOf: 패널 위쪽이 말하지 않는 살아 있는 업
     ]);
   });
 
+  it('v1을 올린 뒤 v2를 저장만 하면(편집 중) 위쪽은 v1 업로드를 안 보이니 「이전 판」에 남는다(PR #250 codex)', () => {
+    const v1Upload: UploadSnapshot = { ...uploaded, id: 5, videoId: 'old' };
+    const e = {
+      ...entry('editing', { ...snapshot(v1Upload), recipeVersion: 1 }),
+      liveUploads: [live(5, 1, 'uploaded', 'old')],
+    };
+    expect(toLibraryClip(e, '9').youtubeUrl).toBeUndefined();
+    expect(previousUploadsOf(e)).toEqual([
+      { id: 5, versionLabel: 'v1', text: '제목5 · 업로드됨', href: 'https://youtu.be/old' },
+    ]);
+  });
+
+  it('지금 판 업로드 하나뿐이면 위쪽이 보이니 목록은 비고 겹치지 않는다', () => {
+    const e = {
+      ...entry('uploaded', snapshot(uploaded)),
+      liveUploads: [live(7, 2, 'uploaded', 'cur')],
+    };
+    expect(toLibraryClip(e, '9').youtubeUrl).toBe('https://youtu.be/cur');
+    expect(previousUploadsOf(e)).toEqual([]);
+  });
+
   it('대기(queued)는 올리는 중과 같은 글자다', () => {
     const e = { ...entry('rendering', snapshot(null)), liveUploads: [live(4, 1, 'queued')] };
     expect(previousUploadsOf(e).map((u) => u.text)).toEqual(['제목4 · 올리는 중']);

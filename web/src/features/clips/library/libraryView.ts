@@ -1,6 +1,11 @@
 import { ddayFor, type VodDday } from '@/features/broadcast/vod/vodListView';
 import { formatUptime } from '@/features/player/playerMath';
-import { ClipApiError, liveUploadsOf, type LibraryEntry } from '@/api/clipEditor';
+import {
+  ClipApiError,
+  liveUploadsOf,
+  type LibraryEntry,
+  type UploadSnapshot,
+} from '@/api/clipEditor';
 import {
   PRIVACY_CHANGE_NOTE,
   PRIVACY_LABEL,
@@ -275,12 +280,24 @@ const LIVE_UPLOAD_TEXT: Record<string, string> = {
 };
 
 /**
- * 이 편집본의 살아 있는 업로드 중 패널 위쪽(latestClip의 업로드)이 이미 말하는 것을 뺀 나머지, 최근 것이 앞. 새 판 영상을
- * 주문하면 latestClip이 바뀌어 옛 판의 업로드가 여기로 내려온다(POK-334). 서버 줄이 없으면(목업) 빈 목록이다.
+ * 패널 위쪽(배지 · 안내 · 「유튜브 보기」)이 실제로 보이는 업로드. 서버 상태가 올리는 중 · 확인 필요 · 올림일 때만 latestClip의
+ * 업로드이고, 그 밖(편집 중 · 만드는 중 · 완성 · 실패)이면 위쪽은 업로드를 말하지 않아 null이다. 올린 뒤 새 판을 저장만 한
+ * 「편집 중」에서 latestClip은 옛 판 영상이지만 위쪽은 그 업로드를 안 보인다(PR #250 codex). 「유튜브 보기」와 「이전 판」
+ * 목록이 이 판정 하나를 같이 쓴다: 따로 셈하면 둘이 갈려 업로드가 어디에도 안 보이는 자리가 생긴다.
+ */
+export function shownUploadOf(entry: LibraryEntry): UploadSnapshot | null {
+  const shows =
+    entry.status === 'uploading' || entry.status === 'checking' || entry.status === 'uploaded';
+  return shows ? (entry.latestClip?.upload ?? null) : null;
+}
+
+/**
+ * 이 편집본의 살아 있는 업로드 중 패널 위쪽이 보이는 것(shownUploadOf)을 뺀 나머지, 최근 것이 앞. 새 판 영상을 주문하거나
+ * 새 판을 저장만 해도 옛 판의 업로드가 여기로 내려온다(POK-334). 서버 줄이 없으면(목업) 빈 목록이다.
  */
 export function previousUploadsOf(entry: LibraryEntry | undefined): PreviousUpload[] {
   if (entry === undefined) return [];
-  const shown = entry.latestClip?.upload?.id;
+  const shown = shownUploadOf(entry)?.id;
   return liveUploadsOf(entry)
     .filter((u) => u.id !== shown)
     .map((u) => ({
