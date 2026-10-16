@@ -489,7 +489,14 @@ describe('VodListScreen — 서버 목록', () => {
       if (url.startsWith('/api/clip/broadcasts?'))
         return jsonResponse(200, {
           broadcasts: [
-            { streamId: 'nocards', status: 'ended', relation: 'OWNER', startedAt: endedAt, endedAt, vodExpiresAt: null },
+            {
+              streamId: 'nocards',
+              status: 'ended',
+              relation: 'OWNER',
+              startedAt: endedAt,
+              endedAt,
+              vodExpiresAt: null,
+            },
           ],
           nextCursor: null,
         });

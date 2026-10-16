@@ -621,7 +621,11 @@ describe('LibraryScreen — 서버 편집본의 비율 다시 읽기 (PR #256 co
           ? jsonResponse(503, { error: 'x' })
           : jsonResponse(200, {
               ...entry,
-              recipe: { outputs: [{ outputId: 'o1', aspect: 'SQUARE_1_1', crop: { x: 0, y: 0, w: 1, h: 1 } }] },
+              recipe: {
+                outputs: [
+                  { outputId: 'o1', aspect: 'SQUARE_1_1', crop: { x: 0, y: 0, w: 1, h: 1 } },
+                ],
+              },
             });
       }
       return url.startsWith('/api/clip/library')
