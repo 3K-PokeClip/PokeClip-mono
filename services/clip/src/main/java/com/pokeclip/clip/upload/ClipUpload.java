@@ -73,6 +73,10 @@ public class ClipUpload {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    /**
+     * 마지막 일꾼 활동 시각: 상태 변경 <b>또는 heartbeat</b>({@link #touched}, POK-333). 「상태가 바뀐 시각」으로 읽지 않는다.
+     * 「안 올라갔다」를 받는 30분이 이것으로 잰다({@code UploadResolutionService}).
+     */
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
