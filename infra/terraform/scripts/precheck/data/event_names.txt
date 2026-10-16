@@ -1,0 +1,113 @@
+# 이벤트 기록 조회 대상(설계 11-5 의 2-3-10 · 계획 M17a 「데이터」) — 열:
+# 이벤트 출처(eventSource) · 이벤트 이름 · 조회 리전. 탭 구분, 「#」 줄은 주석.
+# 두 묶음이다.
+#   - 권한을 바꾸는 관리 이벤트(계획 399행 범주 + kty 59차 권한 상승 7개)
+#     — 맨 아래 묶음을 뺀 전부.
+#   - STS 역할 받기(맨 아래 묶음) — 권한 변경이 아니다. events.sh 는 두
+#     묶음을 「EVENTS <n> (권한 변경 <a> · 역할 받기 <b>)」 로 나눠 낸다.
+#     역할 받기 범주는 events.sh is_role_assumption 의 이름이 정한다 — 이
+#     묶음에 행을 더하면 코드도 함께 고친다(data_files_test 가 대조한다).
+#     평소에는 역할 받기가 대부분이다. 권한 변경이 있었는지는 a 와 증거
+#     summary.tsv 의 역할 받기 아닌 0 아닌 행으로 본다.
+# 리전 규칙: IAM · CloudFront = us-east-1 · STS = us-east-1(전역 엔드포인트)과
+# 서울(리전 엔드포인트) 둘 다 · 그 밖 = 서울. 도쿄 등 다른 리전은 조회하지
+# 않는다(SCP 거부 — 계획 M17a 「계약」 의 한계).
+# 이름은 aws CLI 2.36.7 의 서비스 모델(botocore service-2.json 의 operations)과
+# 하나씩 대조했다(c3 커밋 본문 · 권한 상승 7개는 그 커밋 본문). 태그는 IAM Tag/Untag 계열과 리소스 그룹 태깅의
+# TagResources · UntagResources 만 본다(런북 「이벤트 기록」).
+
+# IAM 정책 부착 · 덮어쓰기 · 삭제
+iam.amazonaws.com	AttachUserPolicy	us-east-1
+iam.amazonaws.com	AttachRolePolicy	us-east-1
+iam.amazonaws.com	AttachGroupPolicy	us-east-1
+iam.amazonaws.com	DetachUserPolicy	us-east-1
+iam.amazonaws.com	DetachRolePolicy	us-east-1
+iam.amazonaws.com	DetachGroupPolicy	us-east-1
+iam.amazonaws.com	PutUserPolicy	us-east-1
+iam.amazonaws.com	PutRolePolicy	us-east-1
+iam.amazonaws.com	PutGroupPolicy	us-east-1
+iam.amazonaws.com	DeleteUserPolicy	us-east-1
+iam.amazonaws.com	DeleteRolePolicy	us-east-1
+iam.amazonaws.com	DeleteGroupPolicy	us-east-1
+iam.amazonaws.com	CreatePolicyVersion	us-east-1
+iam.amazonaws.com	SetDefaultPolicyVersion	us-east-1
+iam.amazonaws.com	DeletePolicy	us-east-1
+iam.amazonaws.com	DeletePolicyVersion	us-east-1
+
+# IAM 신뢰 정책 · 권한 경계 변경
+iam.amazonaws.com	UpdateAssumeRolePolicy	us-east-1
+iam.amazonaws.com	PutUserPermissionsBoundary	us-east-1
+iam.amazonaws.com	PutRolePermissionsBoundary	us-east-1
+iam.amazonaws.com	DeleteUserPermissionsBoundary	us-east-1
+iam.amazonaws.com	DeleteRolePermissionsBoundary	us-east-1
+
+# IAM 사용자 · 액세스 키 · 로그인 프로필 생성
+iam.amazonaws.com	CreateUser	us-east-1
+iam.amazonaws.com	CreateAccessKey	us-east-1
+iam.amazonaws.com	CreateLoginProfile	us-east-1
+
+# IAM 권한 상승(kty 59차 — 계획 399행 범주 확장): 그룹 가입(그룹 정책 획득) ·
+# 새 역할(새 신뢰 정책) · 로그인 프로필 · 액세스 키 상태 변경 · OIDC 공급자
+# 생성 · 클라이언트 ID 추가 · 지문 변경(CI 의 GitHub OIDC 신뢰 경로).
+iam.amazonaws.com	AddUserToGroup	us-east-1
+iam.amazonaws.com	CreateRole	us-east-1
+iam.amazonaws.com	UpdateLoginProfile	us-east-1
+iam.amazonaws.com	UpdateAccessKey	us-east-1
+iam.amazonaws.com	CreateOpenIDConnectProvider	us-east-1
+iam.amazonaws.com	AddClientIDToOpenIDConnectProvider	us-east-1
+iam.amazonaws.com	UpdateOpenIDConnectProviderThumbprint	us-east-1
+
+# IAM 태그 변경(Tag/Untag 계열 전부)
+iam.amazonaws.com	TagInstanceProfile	us-east-1
+iam.amazonaws.com	TagMFADevice	us-east-1
+iam.amazonaws.com	TagOpenIDConnectProvider	us-east-1
+iam.amazonaws.com	TagPolicy	us-east-1
+iam.amazonaws.com	TagRole	us-east-1
+iam.amazonaws.com	TagSAMLProvider	us-east-1
+iam.amazonaws.com	TagServerCertificate	us-east-1
+iam.amazonaws.com	TagUser	us-east-1
+iam.amazonaws.com	UntagInstanceProfile	us-east-1
+iam.amazonaws.com	UntagMFADevice	us-east-1
+iam.amazonaws.com	UntagOpenIDConnectProvider	us-east-1
+iam.amazonaws.com	UntagPolicy	us-east-1
+iam.amazonaws.com	UntagRole	us-east-1
+iam.amazonaws.com	UntagSAMLProvider	us-east-1
+iam.amazonaws.com	UntagServerCertificate	us-east-1
+iam.amazonaws.com	UntagUser	us-east-1
+
+
+# 리소스 그룹 태깅 API 태그 변경
+tagging.amazonaws.com	TagResources	ap-northeast-2
+tagging.amazonaws.com	UntagResources	ap-northeast-2
+
+# 상태 버킷 정책
+s3.amazonaws.com	PutBucketPolicy	ap-northeast-2
+s3.amazonaws.com	DeleteBucketPolicy	ap-northeast-2
+
+# 비밀 리소스 정책
+secretsmanager.amazonaws.com	PutResourcePolicy	ap-northeast-2
+secretsmanager.amazonaws.com	DeleteResourcePolicy	ap-northeast-2
+
+# ECR 저장소 정책
+ecr.amazonaws.com	SetRepositoryPolicy	ap-northeast-2
+ecr.amazonaws.com	DeleteRepositoryPolicy	ap-northeast-2
+
+# SNS 주제 정책(cc 부수 10)
+sns.amazonaws.com	SetTopicAttributes	ap-northeast-2
+sns.amazonaws.com	AddPermission	ap-northeast-2
+sns.amazonaws.com	RemovePermission	ap-northeast-2
+
+# SQS 큐 정책(cc 부수 10)
+sqs.amazonaws.com	SetQueueAttributes	ap-northeast-2
+sqs.amazonaws.com	AddPermission	ap-northeast-2
+sqs.amazonaws.com	RemovePermission	ap-northeast-2
+
+# STS 역할 받기 — 권한 변경이 아니다(위 묶음과 따로 본다). 넣은 이유: 계획
+# 389행 리전 규칙(STS 는 us-east-1 과 서울 둘 다 · 두 리전 결과는 이벤트 ID
+# 로 한 번) · c1 사례 4 · 설계 2-3-10 「역할 받기는 호출이 쓴 STS 엔드포인트의
+# 리전에서 본다」 — 판정 사이에 누가 역할을 받았는지 보는 보조다. 범주는
+# events.sh is_role_assumption 의 이름이 정한다 — 행을 더하면 코드도 함께.
+sts.amazonaws.com	AssumeRole	us-east-1
+sts.amazonaws.com	AssumeRole	ap-northeast-2
+sts.amazonaws.com	AssumeRoleWithWebIdentity	us-east-1
+sts.amazonaws.com	AssumeRoleWithWebIdentity	ap-northeast-2

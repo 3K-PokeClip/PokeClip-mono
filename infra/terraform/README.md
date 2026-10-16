@@ -22,7 +22,7 @@ Terraform 코드입니다. 설계 정본은 「HTTPS · 엣지 인프라 설계�
 infra/terraform/
 ├── modules/                       # 루트들이 쓰는 부품
 ├── policy/guard/                  # 금지 규약 Rego 정책(conftest) · 단위 시험
-├── scripts/                       # guard.sh(금지 규약 검사 실행기) · guard_test.sh
+├── scripts/                       # guard.sh(금지 규약 검사 실행기) · guard_test.sh · precheck/(단계 직전 점검)
 ├── runbooks/                      # 운영 단계 절차(kty 승인) — org-ct.md 등
 ├── mgmt/                          # (보류 — 결정 46 · 재개 키트)
 │   ├── bootstrap/                 # ① 상태 버킷
@@ -52,6 +52,7 @@ OU · 운영 측 역할)과 기존 수동 자원(IAM 사용자 · dev 자동 주
 
 운영 단계 절차는 `runbooks/` 에 있습니다 —
 [조직 · CT 도입(보류 — 결정 46)](runbooks/org-ct.md).
+운영 단계마다 먼저 [단계 직전 점검](runbooks/stage-precheck.md)을 합니다.
 
 ## 규약
 
@@ -143,6 +144,11 @@ conftest verify -c infra/terraform/scripts/guard-data/empty-config.toml \
 bash infra/terraform/scripts/guard_test.sh
 bash infra/terraform/scripts/guard.sh
 shellcheck infra/terraform/scripts/*.sh
+for t in infra/terraform/scripts/precheck/tests/*_test.sh; do bash "$t" || printf 'FAIL %s\n' "$t"; done
+shellcheck -x infra/terraform/scripts/precheck/*.sh \
+  infra/terraform/scripts/precheck/lib/*.sh \
+  infra/terraform/scripts/precheck/tests/*.sh \
+  infra/terraform/scripts/precheck/tests/fakebin/aws
 ```
 
 ### 단언 방식
