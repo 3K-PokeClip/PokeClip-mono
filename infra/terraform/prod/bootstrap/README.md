@@ -20,10 +20,15 @@ provider 의 `default_tags` 네 키(`Project` · `Environment` · `ManagedBy` ·
 자기 상태를 담을 버킷을 자기가 만들어야 하므로 두 단계로 나눕니다. 시작
 전에 O5 의 선행 0(단계 직전 점검 — 계획 M4 「O5」)을 마칩니다.
 
-1.  백엔드 값 파일을 만듭니다.
+1.  백엔드 값 파일을 만들고, `bucket` 자리표시자 `<STATE_BUCKET_PROD>` 를
+    고정 이름 `pokeclip-tfstate-prod-apne2` 로 바꿉니다. 마지막 `grep` 은
+    `bucket       = "pokeclip-tfstate-prod-apne2"` 한 줄을 내야 합니다.
 
     ```shell
-    cp backend.hcl.example backend.hcl   # bucket = pokeclip-tfstate-prod-apne2
+    cp backend.hcl.example backend.hcl
+    sed -i.orig 's/<STATE_BUCKET_PROD>/pokeclip-tfstate-prod-apne2/' backend.hcl
+    rm backend.hcl.orig
+    grep '^bucket' backend.hcl
     ```
 
 1.  **로컬 상태로 생성합니다.** `backend.tf` 의 s3 백엔드를 덮는 override
@@ -32,19 +37,36 @@ provider 의 `default_tags` 네 키(`Project` · `Environment` · `ManagedBy` ·
     ```shell
     printf 'terraform {\n  backend "local" {}\n}\n' > backend_override.tf
     terraform init
-    terraform plan -out=bootstrap.tfplan    # 생성 7 · 그 밖 0 · tags_all 네 키 확인
+    terraform plan -out=bootstrap.tfplan
+    ```
+
+    plan 이 생성 7 · 그 밖 0 이고, 자원마다 `tags_all` 에 네 키가 있는지
+    확인한 뒤 적용합니다.
+
+    ```shell
     terraform apply bootstrap.tfplan
     ```
 
 1.  **자기 버킷으로 이관합니다.** override 파일을 지우고 s3 백엔드로
-    다시 init 하면서 상태를 옮깁니다.
+    다시 init 하면서 상태를 옮깁니다. 아래 블록은 이관
+    (`init -migrate-state`)이 성공하고 확인 plan 이 「변경 없음」
+    (`-detailed-exitcode` 종료 0)일 때만 로컬 상태를 지웁니다. plan 에 변경이
+    있거나(종료 2) 이관 · plan 이 실패하면(종료 1) 지우지 않고
+    `멈춤: 종료 <코드>` 줄을 낸 뒤 끝납니다 — 그 자리에서 멈추고 원인을
+    봅니다. 블록을 통째로 붙여 넣어도 되고, 셸은 닫히지 않습니다.
 
     ```shell
     rm backend_override.tf
-    terraform init -migrate-state -backend-config=backend.hcl
-    terraform plan -lock=false              # No changes 확인
-    rm terraform.tfstate terraform.tfstate.backup bootstrap.tfplan
+    if terraform init -migrate-state -backend-config=backend.hcl \
+      && terraform plan -lock=false -detailed-exitcode; then
+      rm -f terraform.tfstate terraform.tfstate.backup bootstrap.tfplan
+    else
+      printf '멈춤: 종료 %s — 로컬 상태를 지우지 않았습니다\n' "$?"
+    fi
     ```
+
+    `terraform.tfstate.backup` 은 없을 수 있어 `rm -f` 로 지웁니다. 다시 이관할
+    때 첫 줄의 `rm` 이 「No such file」을 내는 것은 정상입니다(이미 지운 파일).
 
 로컬 `terraform.tfstate` 는 이관이 끝나고 「No changes」를 본 뒤에 지웁니다.
 이관(`-migrate-state`)이나 확인 plan 이 실패하면 로컬 `terraform.tfstate` ·
