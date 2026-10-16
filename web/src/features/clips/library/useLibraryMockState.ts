@@ -41,14 +41,9 @@ import { PRIVACY_LABEL } from '@/features/clips/editor/uploadInfo';
 //
 // 동작은 줄마다 갈린다: 서버에서 온 줄(`entry`가 있다)은 실제 문으로 가고, 시험·스토리북이 주입한 목업 줄은
 // 상태 전이만 흉내 낸다(예전 목업 그대로 — 화면 흐름을 시험이 계속 잴 수 있게).
-//
-// 시점(role)은 훅 값이다 — 시안의 스트리머/편집자 토글은 핸드오프용이라 제품 UI에 두지 않는다.
 
 /** 만드는 중·올리는 중이 없을 때 목록을 다시 읽는 간격. 썸네일 서명(60분)이 만료되기 전에 새 주소를 받으려고 */
 const STABLE_REFRESH_MS = 5 * 60_000;
-
-/** 화면 모드(ADR-032) — 계정 속성이 아니다 */
-export type LibraryRole = 'streamer' | 'editor';
 
 /**
  * 시안 1g ④에서 승인 대기·반려를 뺀 다섯 + 진행 단계 넷(POK-291: rendering 만드는 중 · uploading 올리는 중 · checking 확인 필요 · uploadFailed 업로드
@@ -187,9 +182,8 @@ export function toLibraryClip(entry: LibraryEntry, meId: string | null): Library
   };
 }
 
-/** 테스트 주입 — 빈 상태·시점·경계 케이스를 화면 밖에서 만든다 (VodListOptions 선례) */
+/** 테스트 주입 — 빈 상태·경계 케이스를 화면 밖에서 만든다 (VodListOptions 선례) */
 export interface LibraryOptions {
-  role?: LibraryRole;
   clips?: LibraryClip[];
   /** 처음부터 열어 둘 편집본 — 기본은 미선택 */
   selectedId?: string | null;
@@ -205,7 +199,6 @@ export interface LibraryMockState {
   /** 목록을 못 읽었을 때의 사유 */
   error: string | null;
   refresh: () => void;
-  role: LibraryRole;
   /** 검색 → 칩 → 정렬을 거친 목록 */
   clips: LibraryClip[];
   /** 필터와 무관한 전체 수 — 「아직 없다」와 「조건에 없다」를 가른다 */
@@ -228,7 +221,7 @@ export interface LibraryMockState {
   /**
    * 서버 줄: 유튜브 업로드를 주문한다. 업로드 줄이 없고 그 판의 업로드 정보가 있으면 다시 시도 문으로 그 정보(제목·설명·태그·
    * 공개 범위·아동용·썸네일)대로 올리고(POK-291), 없으면 패널의 제목으로 옛 문을 탄다(POK-111, 창 없이 만든 옛 영상의 길이라 비공개).
-   * 목업 줄: 업로드 대기 → 발행됨(시점과 무관하다: 승인 게이트가 없다). 그 밖의 상태는 무시
+   * 목업 줄: 업로드 대기 → 발행됨(승인 게이트가 없다). 그 밖의 상태는 무시
    */
   upload: (id: string) => void;
   /** 업로드 실패한 서버 줄을 저장된 정보 그대로 다시 올린다(POK-291, 창 없이). 그 밖의 줄은 무시 */
@@ -247,7 +240,6 @@ export interface LibraryMockState {
 
 export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockState {
   const { toast } = useToast();
-  const role = options.role ?? 'streamer';
   const [clips, setClips] = useState<LibraryClip[]>(() => options.clips ?? []);
   const [loading, setLoading] = useState(options.clips === undefined);
   const [error, setError] = useState<string | null>(null);
@@ -558,10 +550,10 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     [clips],
   );
 
-  const counts = useMemo(() => countByChip(clips, role, now), [clips, role, now]);
+  const counts = useMemo(() => countByChip(clips, now), [clips, now]);
   const visible = useMemo(
-    () => sortClips(filterByChip(filterByQuery(clips, query), chip, role, now), sort, now),
-    [clips, query, chip, role, sort, now],
+    () => sortClips(filterByChip(filterByQuery(clips, query), chip, now), sort, now),
+    [clips, query, chip, sort, now],
   );
   const selectedClip = useMemo(
     () => clips.find((clip) => clip.id === selectedId) ?? null,
@@ -573,7 +565,6 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     loading,
     error,
     refresh,
-    role,
     clips: visible,
     totalCount: clips.length,
     counts,

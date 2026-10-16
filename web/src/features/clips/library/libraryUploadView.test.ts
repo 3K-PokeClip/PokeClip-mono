@@ -183,15 +183,13 @@ describe('uploadFailureText — 지난 업로드가 실패한 편집본의 안�
 });
 
 describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 바꾼다', () => {
-  it('완성된 서버 편집본은 시점과 무관하게 「업로드」다 — 승인 단계가 없어 바로 올라간다', () => {
+  it('완성된 서버 편집본은 「업로드」다 — 승인 단계가 없어 바로 올라간다', () => {
     const clip = toLibraryClip(entry('rendered'), '9');
-    for (const role of ['streamer', 'editor'] as const) {
-      expect(detailViewForClip(clip, 'ready', role).primary).toEqual({
-        kind: 'action',
-        label: '업로드',
-        action: 'upload',
-      });
-    }
+    expect(detailViewForClip(clip, 'ready').primary).toEqual({
+      kind: 'action',
+      label: '업로드',
+      action: 'upload',
+    });
   });
 
   it('창에서 고른 업로드 정보가 남은 완성 편집본은 「업로드」하되 제목을 잠근다: 저장된 정보로 올라가 패널 제목은 실리지 않는다(POK-291)', () => {
@@ -202,31 +200,31 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
       },
       '9',
     );
-    const view = detailViewForClip(clip, clip.status, 'streamer');
+    const view = detailViewForClip(clip, clip.status);
     expect(view.primary).toEqual({ kind: 'action', label: '업로드', action: 'upload' });
     expect(view.titleLocked).toBe(true);
-    expect(
-      detailViewForClip(toLibraryClip(entry('rendered'), '9'), 'ready', 'streamer').titleLocked,
-    ).toBe(false);
+    expect(detailViewForClip(toLibraryClip(entry('rendered'), '9'), 'ready').titleLocked).toBe(
+      false,
+    );
   });
 
   it('편집 중·렌더 실패는 제목을 잠그고, 완성만 올릴 때 쓰는 임시 제목으로 고친다(POK-254)', () => {
     // 편집본에는 제목 칸이 없다: 편집 중·렌더 실패에서 고친 제목은 다음 읽기에 되돌아갔다
     for (const status of ['editing', 'failed'] as const) {
       const clip = toLibraryClip(entry(status), '9');
-      const view = detailViewForClip(clip, clip.status, 'streamer');
+      const view = detailViewForClip(clip, clip.status);
       expect(view.titleLocked).toBe(true);
       expect(view.titleIsDraft).toBe(false);
     }
     const ready = toLibraryClip(entry('rendered'), '9');
-    const view = detailViewForClip(ready, ready.status, 'streamer');
+    const view = detailViewForClip(ready, ready.status);
     expect(view.titleLocked).toBe(false);
     expect(view.titleIsDraft).toBe(true);
   });
 
   it('올리는 중에는 누를 수 없는 「유튜브에 올리는 중」이고 제목이 잠긴다', () => {
     const clip = toLibraryClip(entry('uploading'), '9');
-    const view = detailViewForClip(clip, clip.status, 'streamer');
+    const view = detailViewForClip(clip, clip.status);
     expect(view.badge.label).toBe('올리는 중');
     expect(view.primary).toEqual({ kind: 'busy', label: '유튜브에 올리는 중' });
     expect(view.titleLocked).toBe(true);
@@ -234,7 +232,7 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
   });
 
   it('올린 편집본은 제목이 잠긴다 — 고쳐도 유튜브 제목은 안 바뀐다', () => {
-    const view = detailViewForClip(toLibraryClip(entry('uploaded'), '9'), 'published', 'streamer');
+    const view = detailViewForClip(toLibraryClip(entry('uploaded'), '9'), 'published');
     expect(view.titleLocked).toBe(true);
     expect(view.primary).toEqual({ kind: 'external', label: '유튜브 보기' });
   });
@@ -249,7 +247,6 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
     const view = detailViewForClip(
       toLibraryClip(entry('editing', snapshot(uploaded)), '9'),
       'editing',
-      'streamer',
     );
     expect(view.titleLocked).toBe(true);
   });
@@ -257,7 +254,7 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
   it('실패한 업로드는 「업로드 실패」이고 저장된 정보로 「다시 시도」한다: 패널 제목은 실리지 않아 잠근다(POK-291)', () => {
     const clip = toLibraryClip(entry('rendered', snapshot(failedUpload('UNKNOWN'))), '9');
     expect(clip.status).toBe('uploadFailed');
-    const view = detailViewForClip(clip, clip.status, 'streamer');
+    const view = detailViewForClip(clip, clip.status);
     expect(view.badge.label).toBe('업로드 실패');
     expect(view.primary).toEqual({ kind: 'action', label: '다시 시도', action: 'retryUpload' });
     expect(view.titleLocked).toBe(true);
@@ -265,18 +262,18 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
 
   it('확인 필요는 다시 올리기를 막고 채널을 보라고 안내한다: 공개 범위를 못박지 않는다', () => {
     const clip = toLibraryClip(entry('checking'), '9');
-    const view = detailViewForClip(clip, clip.status, 'streamer');
+    const view = detailViewForClip(clip, clip.status);
     expect(view.primary).toEqual({ kind: 'busy', label: '업로드 확인 필요' });
     expect(view.titleLocked).toBe(true);
     expect(view.note).toBe('checking');
-    expect(noteText('checking', 'streamer')).toBe(
+    expect(noteText('checking')).toBe(
       '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 영상이 올라갔는지 확인해 주세요.',
     );
   });
 
-  it('목업 줄도 편집자의 주 동작은 「업로드」다 — 승인 게이트가 없다', () => {
+  it('목업 줄도 주 동작은 「업로드」다 — 승인 게이트가 없다', () => {
     const clip = { ...toLibraryClip(entry('rendered'), '9'), entry: undefined };
-    expect(detailViewForClip(clip, 'ready', 'editor').primary).toEqual({
+    expect(detailViewForClip(clip, 'ready').primary).toEqual({
       kind: 'action',
       label: '업로드',
       action: 'upload',

@@ -24,13 +24,11 @@ import styles from './LibraryScreen.module.css';
 // 본문 폭은 가두지 않는다: 그리드가 재배치되므로 접힌 사이드바가 남긴 폭을 그대로 쓴다
 // (docs/DESIGN_SYSTEM.md 「셸 · 본문 폭」).
 //
-// 시안에 있으나 여기 없는 것: 스트리머/편집자 시점 토글(핸드오프용 — 시점은 훅 값이다).
 export function LibraryScreen(options: LibraryOptions = {}) {
   const {
     now,
     loading,
     error,
-    role,
     clips,
     totalCount,
     counts,
@@ -140,7 +138,7 @@ export function LibraryScreen(options: LibraryOptions = {}) {
 
         {totalCount > 0 ? (
           <div className={styles.chipRow}>
-            <LibraryFilterChips role={role} chip={chip} counts={counts} onChange={setChip} />
+            <LibraryFilterChips chip={chip} counts={counts} onChange={setChip} />
           </div>
         ) : null}
 
@@ -186,7 +184,6 @@ export function LibraryScreen(options: LibraryOptions = {}) {
             <ClipDetailPanel
               clip={panelClip}
               status={statusFor(panelClip, now)}
-              role={role}
               now={now}
               onDeselect={closePanel}
               onTitleChange={(title) => renameClip(panelClip.id, title)}

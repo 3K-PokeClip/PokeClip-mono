@@ -12,10 +12,10 @@ import {
   PRIVACY_VIEWERS,
   PUBLIC_NOTIFY_NOTE,
 } from '@/features/clips/editor/uploadInfo';
-import type { ClipStatus, LibraryClip, LibraryRole } from './useLibraryMockState';
+import type { ClipStatus, LibraryClip } from './useLibraryMockState';
 
 // 시안 1g 보관함의 표시 규칙 — 상태가 배지·주 동작·보조 줄·칩·정렬로 어떻게 펼쳐지는지를
-// 렌더와 떼어 순수 함수로 둔다(vodListView 선례). 상태 × 시점의 조합은 jsdom을 거치지
+// 렌더와 떼어 순수 함수로 둔다(vodListView 선례). 상태별 조합은 jsdom을 거치지
 // 않고 표로 검사하는 편이 싸다.
 //
 // ⚠ 아래 Record 표들은 status 유니온이 늘면 타입으로 깨진다 — 화면이 조용히 빈 배지를 그리는
@@ -76,8 +76,8 @@ const CHIP_LABEL: Record<LibraryChip, string> = {
 
 const CHIPS: LibraryChip[] = ['all', 'working', 'ready', 'published'];
 
-/** 칩 행 — 시점과 무관하게 넷이다(승인 게이트가 없어 반려됨 칩이 없다) */
-export function chipsFor(_role: LibraryRole): { value: LibraryChip; label: string }[] {
+/** 칩 행 — 넷이다(승인 게이트가 없어 반려됨 칩이 없다) */
+export function chipsFor(): { value: LibraryChip; label: string }[] {
   return CHIPS.map((value) => ({
     value,
     label: CHIP_LABEL[value],
@@ -89,7 +89,7 @@ export function chipsFor(_role: LibraryRole): { value: LibraryChip; label: strin
  * 칩 수의 합이 전체와 같다.
  * 진행 단계(POK-291): 만드는 중·올리는 중은 작업 중, 업로드 실패·확인 필요는 사람 손이 필요해 업로드 대기다.
  */
-export function chipOf(status: ClipStatus, _role: LibraryRole): Exclude<LibraryChip, 'all'> {
+export function chipOf(status: ClipStatus): Exclude<LibraryChip, 'all'> {
   switch (status) {
     case 'ready':
     case 'uploadFailed':
@@ -106,29 +106,24 @@ export function chipOf(status: ClipStatus, _role: LibraryRole): Exclude<LibraryC
   }
 }
 
-export function countByChip(
-  clips: readonly LibraryClip[],
-  role: LibraryRole,
-  now: Date,
-): Record<LibraryChip, number> {
+export function countByChip(clips: readonly LibraryClip[], now: Date): Record<LibraryChip, number> {
   const counts: Record<LibraryChip, number> = {
     all: clips.length,
     working: 0,
     ready: 0,
     published: 0,
   };
-  for (const clip of clips) counts[chipOf(statusFor(clip, now), role)] += 1;
+  for (const clip of clips) counts[chipOf(statusFor(clip, now))] += 1;
   return counts;
 }
 
 export function filterByChip(
   clips: readonly LibraryClip[],
   chip: LibraryChip,
-  role: LibraryRole,
   now: Date,
 ): LibraryClip[] {
   if (chip === 'all') return [...clips];
-  return clips.filter((clip) => chipOf(statusFor(clip, now), role) === chip);
+  return clips.filter((clip) => chipOf(statusFor(clip, now)) === chip);
 }
 
 // ---------- 검색 · 정렬 ----------
@@ -200,7 +195,7 @@ export type PrimaryAction =
       kind: 'link';
       label: string;
       href: '/clips/editor';
-      variant: 'solid' | 'soft';
+      variant: 'solid';
     }
   /** href는 clip.youtubeUrl — 없으면 링크 대신 비활성 버튼을 그린다(LinkButton 규칙) */
   | { kind: 'external'; label: '유튜브 보기' }
@@ -309,8 +304,8 @@ export function previousUploadsOf(entry: LibraryEntry | undefined): PreviousUplo
 const EDIT_CONTINUE = { label: '이어서 편집', href: '/clips/editor' } as const;
 const EDIT_NEW_VERSION = { label: '새 버전으로 편집', href: '/clips/editor' } as const;
 
-/** 시안 1g ④ 상태별 상세 패널 액션. 시점이 가르는 칸은 없다(승인 게이트가 없어 편집자도 바로 올린다) */
-export function detailViewFor(status: ClipStatus, _role: LibraryRole): DetailView {
+/** 시안 1g ④ 상태별 상세 패널 액션 */
+export function detailViewFor(status: ClipStatus): DetailView {
   const badge = STATUS_BADGE[status];
   const base = {
     badge,
@@ -403,12 +398,8 @@ export function uploadsFromIntent(entry: LibraryEntry): boolean {
  * 서버 줄을 시안 규칙(detailViewFor) 위에 얹는다(POK-111). 진행 단계(만드는 중·올리는 중·확인 필요·업로드 실패)는 이제
  * 제 화면 상태가 있어 detailViewFor가 정한다(POK-291). 여기서는 서버 줄만의 제목 잠금·초안 여부를 얹는다.
  */
-export function detailViewForClip(
-  clip: LibraryClip,
-  status: ClipStatus,
-  role: LibraryRole,
-): DetailView {
-  const view = detailViewFor(status, role);
+export function detailViewForClip(clip: LibraryClip, status: ClipStatus): DetailView {
+  const view = detailViewFor(status);
   const entry = clip.entry;
   if (entry === undefined) return view;
   // 올린 영상의 제목은 유튜브에 있다: 여기서 고쳐도 저장할 곳이 없어 바뀐 척만 한다
@@ -431,7 +422,7 @@ export function detailViewForClip(
 }
 
 /** 패널 안내 상자 문구 */
-export function noteText(note: PanelNote, _role: LibraryRole): string {
+export function noteText(note: PanelNote): string {
   if (note === 'checking') {
     // 공개 범위를 고를 수 있게 되어(POK-291) 「비공개 영상」이라 못박지 않는다
     return '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 영상이 올라갔는지 확인해 주세요.';

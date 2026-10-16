@@ -17,7 +17,7 @@ import {
   sortClips,
   statusFor,
 } from './libraryView';
-import type { ClipStatus, LibraryClip, LibraryRole } from './useLibraryMockState';
+import type { ClipStatus, LibraryClip } from './useLibraryMockState';
 
 const NOW = new Date('2026-09-02T20:00:00+09:00');
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -43,7 +43,6 @@ function clip(overrides: Partial<LibraryClip> & { id: string }): LibraryClip {
 }
 
 const STATUSES: ClipStatus[] = ['editing', 'ready', 'published', 'expired', 'failed'];
-const ROLES: LibraryRole[] = ['streamer', 'editor'];
 
 /** 시안 상태 다섯이 하나씩 든 목록 — 칩 분할이 전체를 덮는지 셀 때 쓴다 */
 const ONE_OF_EACH: LibraryClip[] = STATUSES.map((status) =>
@@ -73,33 +72,31 @@ describe('libraryView — STATUS_BADGE', () => {
 
 describe('libraryView: 진행 단계의 칩과 패널(POK-291)', () => {
   it('만드는 중·올리는 중은 작업 중, 손이 필요한 업로드 실패·확인 필요는 업로드 대기 칩이다', () => {
-    for (const role of ROLES) {
-      expect(chipOf('rendering', role)).toBe('working');
-      expect(chipOf('uploading', role)).toBe('working');
-      expect(chipOf('uploadFailed', role)).toBe('ready');
-      expect(chipOf('checking', role)).toBe('ready');
-    }
+    expect(chipOf('rendering')).toBe('working');
+    expect(chipOf('uploading')).toBe('working');
+    expect(chipOf('uploadFailed')).toBe('ready');
+    expect(chipOf('checking')).toBe('ready');
   });
 
   it('서버 일이 도는 동안은 누를 것이 없고 제목이 잠긴다: 이어서 편집은 열어 둔다', () => {
-    expect(detailViewFor('rendering', 'streamer')).toMatchObject({
+    expect(detailViewFor('rendering')).toMatchObject({
       primary: { kind: 'busy', label: '영상 만드는 중' },
       titleLocked: true,
       download: false,
       edit: { label: '이어서 편집' },
     });
-    expect(detailViewFor('uploading', 'editor')).toMatchObject({
+    expect(detailViewFor('uploading')).toMatchObject({
       primary: { kind: 'busy', label: '유튜브에 올리는 중' },
       titleLocked: true,
     });
-    expect(detailViewFor('checking', 'streamer')).toMatchObject({
+    expect(detailViewFor('checking')).toMatchObject({
       primary: { kind: 'busy', label: '업로드 확인 필요' },
       note: 'checking',
     });
   });
 
   it('업로드 실패의 주 동작은 「다시 시도」다: 저장된 정보로 올리니 제목은 잠근다', () => {
-    expect(detailViewFor('uploadFailed', 'streamer')).toMatchObject({
+    expect(detailViewFor('uploadFailed')).toMatchObject({
       primary: { kind: 'action', label: '다시 시도', action: 'retryUpload' },
       titleLocked: true,
       download: true,
@@ -128,36 +125,26 @@ describe('libraryView — statusFor', () => {
 });
 
 describe('libraryView — 칩', () => {
-  it('칩은 시점과 무관하게 넷이다 — 승인 게이트가 없어 반려됨 칩이 없다', () => {
-    for (const role of ROLES) {
-      expect(chipsFor(role).map((c) => c.label)).toEqual([
-        '전체',
-        '작업 중',
-        '업로드 대기',
-        '발행됨',
-      ]);
-    }
+  it('칩은 넷이다 — 승인 게이트가 없어 반려됨 칩이 없다', () => {
+    expect(chipsFor().map((c) => c.label)).toEqual(['전체', '작업 중', '업로드 대기', '발행됨']);
   });
 
   it('상태마다 한 칩에 든다: 원본 만료는 발행됨, 렌더 실패는 작업 중', () => {
-    expect(chipOf('expired', 'streamer')).toBe('published');
-    expect(chipOf('failed', 'editor')).toBe('working');
-    expect(chipOf('ready', 'editor')).toBe('ready');
+    expect(chipOf('expired')).toBe('published');
+    expect(chipOf('failed')).toBe('working');
+    expect(chipOf('ready')).toBe('ready');
   });
 
-  it.each(ROLES)(
-    '%s 시점에서 전체를 뺀 칩 수의 합이 전체와 같다 — 칩은 전체를 분할한다',
-    (role) => {
-      const counts = countByChip(ONE_OF_EACH, role, NOW);
-      expect(counts.all).toBe(5);
-      expect(counts.working + counts.ready + counts.published).toBe(5);
-    },
-  );
+  it('전체를 뺀 칩 수의 합이 전체와 같다 — 칩은 전체를 분할한다', () => {
+    const counts = countByChip(ONE_OF_EACH, NOW);
+    expect(counts.all).toBe(5);
+    expect(counts.working + counts.ready + counts.published).toBe(5);
+  });
 
   it('칩으로 거른다 — 전체는 전부, 업로드 대기는 ready만', () => {
-    expect(filterByChip(ONE_OF_EACH, 'all', 'streamer', NOW)).toHaveLength(5);
-    expect(filterByChip(ONE_OF_EACH, 'ready', 'streamer', NOW).map((c) => c.id)).toEqual(['ready']);
-    expect(filterByChip(ONE_OF_EACH, 'working', 'streamer', NOW).map((c) => c.id)).toEqual([
+    expect(filterByChip(ONE_OF_EACH, 'all', NOW)).toHaveLength(5);
+    expect(filterByChip(ONE_OF_EACH, 'ready', NOW).map((c) => c.id)).toEqual(['ready']);
+    expect(filterByChip(ONE_OF_EACH, 'working', NOW).map((c) => c.id)).toEqual([
       'editing',
       'failed',
     ]);
@@ -252,30 +239,22 @@ describe('libraryView — 정렬', () => {
 });
 
 describe('libraryView — detailViewFor', () => {
-  it.each<[ClipStatus, LibraryRole, string, string | null, boolean]>([
-    ['editing', 'streamer', '이어서 편집', null, true],
-    ['editing', 'editor', '이어서 편집', null, true],
-    ['ready', 'streamer', '업로드', '이어서 편집', true],
-    ['ready', 'editor', '업로드', '이어서 편집', true],
-    ['published', 'streamer', '유튜브 보기', '새 버전으로 편집', true],
-    ['published', 'editor', '유튜브 보기', '새 버전으로 편집', true],
-    ['expired', 'streamer', '유튜브 보기', null, true],
-    ['expired', 'editor', '유튜브 보기', null, true],
-    ['failed', 'streamer', '렌더 재시도', '이어서 편집', false],
-    ['failed', 'editor', '렌더 재시도', '이어서 편집', false],
-  ])(
-    '%s · %s → 주 동작 「%s」 · 편집 %s · 다운로드 %s',
-    (status, role, primary, edit, download) => {
-      const view = detailViewFor(status, role);
-      expect(view.primary.label).toBe(primary);
-      expect(view.edit?.label ?? null).toBe(edit);
-      expect(view.download).toBe(download);
-      expect(view.badge).toEqual(STATUS_BADGE[status]);
-    },
-  );
+  it.each<[ClipStatus, string, string | null, boolean]>([
+    ['editing', '이어서 편집', null, true],
+    ['ready', '업로드', '이어서 편집', true],
+    ['published', '유튜브 보기', '새 버전으로 편집', true],
+    ['expired', '유튜브 보기', null, true],
+    ['failed', '렌더 재시도', '이어서 편집', false],
+  ])('%s → 주 동작 「%s」 · 편집 %s · 다운로드 %s', (status, primary, edit, download) => {
+    const view = detailViewFor(status);
+    expect(view.primary.label).toBe(primary);
+    expect(view.edit?.label ?? null).toBe(edit);
+    expect(view.download).toBe(download);
+    expect(view.badge).toEqual(STATUS_BADGE[status]);
+  });
 
   it('링크 주 동작은 편집 중의 「이어서 편집」 하나이고 편집기로 간다', () => {
-    expect(detailViewFor('editing', 'streamer').primary).toMatchObject({
+    expect(detailViewFor('editing').primary).toMatchObject({
       kind: 'link',
       href: '/clips/editor',
       variant: 'solid',
@@ -283,34 +262,32 @@ describe('libraryView — detailViewFor', () => {
   });
 
   it('업로드·렌더 재시도만 동작 버튼이고 유튜브 보기만 외부 링크다', () => {
-    expect(detailViewFor('ready', 'streamer').primary).toMatchObject({
+    expect(detailViewFor('ready').primary).toMatchObject({
       kind: 'action',
       action: 'upload',
     });
-    expect(detailViewFor('failed', 'editor').primary).toMatchObject({
+    expect(detailViewFor('failed').primary).toMatchObject({
       kind: 'action',
       action: 'retryRender',
     });
-    expect(detailViewFor('published', 'streamer').primary.kind).toBe('external');
-    expect(detailViewFor('expired', 'streamer').primary.kind).toBe('external');
+    expect(detailViewFor('published').primary.kind).toBe('external');
+    expect(detailViewFor('expired').primary.kind).toBe('external');
   });
 
   it('원본 만료는 안내가 붙고 발행됨은 안내가 없다', () => {
-    expect(detailViewFor('expired', 'streamer')).toMatchObject({ note: 'expired' });
-    expect(detailViewFor('published', 'streamer')).toMatchObject({ note: null });
+    expect(detailViewFor('expired')).toMatchObject({ note: 'expired' });
+    expect(detailViewFor('published')).toMatchObject({ note: null });
   });
 
   it('시안 상태 다섯은 제목을 잠그지 않는다 — 잠그는 것은 진행 단계뿐이다', () => {
-    for (const role of ROLES) {
-      for (const status of STATUSES) {
-        expect(detailViewFor(status, role).titleLocked).toBe(false);
-      }
+    for (const status of STATUSES) {
+      expect(detailViewFor(status).titleLocked).toBe(false);
     }
   });
 
   it('렌더 실패는 길이를 말하지 않는다', () => {
-    expect(detailViewFor('failed', 'streamer').showDuration).toBe(false);
-    expect(detailViewFor('ready', 'streamer').showDuration).toBe(true);
+    expect(detailViewFor('failed').showDuration).toBe(false);
+    expect(detailViewFor('ready').showDuration).toBe(true);
   });
 });
 
@@ -335,13 +312,11 @@ describe('libraryView — isCardDimmed · safeExternalUrl', () => {
 });
 
 describe('libraryView — 표기', () => {
-  it('안내문은 시점과 무관하다', () => {
-    for (const role of ROLES) {
-      expect(noteText('expired', role)).toBe(
-        '원본 VOD가 만료되어 다시 편집할 수 없어요. 발행된 영상은 그대로 유지됩니다.',
-      );
-      expect(noteText('checking', role)).toMatch(/^유튜브에 올라갔는지 확인하지 못했어요/);
-    }
+  it('안내문은 안내 종류마다 하나다', () => {
+    expect(noteText('expired')).toBe(
+      '원본 VOD가 만료되어 다시 편집할 수 없어요. 발행된 영상은 그대로 유지됩니다.',
+    );
+    expect(noteText('checking')).toMatch(/^유튜브에 올라갔는지 확인하지 못했어요/);
   });
 
   it('길이는 분:초이고, 렌더 실패나 모르는 길이는 null이다', () => {

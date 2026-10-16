@@ -19,7 +19,7 @@ import {
   type DetailView,
   type PreviousUpload,
 } from './libraryView';
-import type { ClipStatus, LibraryClip, LibraryRole } from './useLibraryMockState';
+import type { ClipStatus, LibraryClip } from './useLibraryMockState';
 import styles from './LibraryScreen.module.css';
 
 // 시안 1g 우측 상세 패널의 내용. 무엇을 그릴지는 detailViewFor가 정하고 여기는 그리기만 한다.
@@ -28,7 +28,6 @@ import styles from './LibraryScreen.module.css';
 export function ClipDetailPanel({
   clip,
   status,
-  role,
   now,
   onDeselect,
   onTitleChange,
@@ -43,7 +42,6 @@ export function ClipDetailPanel({
 }: {
   clip: LibraryClip;
   status: ClipStatus;
-  role: LibraryRole;
   now: Date;
   onDeselect: () => void;
   onTitleChange: (title: string) => void;
@@ -60,7 +58,7 @@ export function ClipDetailPanel({
   /** 레시피 출력의 비율(「9:16」). 없으면(목업 줄) 비율을 모른다 */
   loadAspect?: () => Promise<string | null>;
 }) {
-  const view = detailViewForClip(clip, status, role);
+  const view = detailViewForClip(clip, status);
   const uploadFailure = uploadFailureText(clip);
   const thumbnailFailure = thumbnailFailureText(clip);
   const privacyNote = privacyNoteText(clip);
@@ -212,7 +210,7 @@ export function ClipDetailPanel({
         </div>
         {/* 진행 한 줄(만드는 중 N% · 올리는 중)은 원래 안내 자리에 둔다: 「자막」 칸은 자막 정보 자리다(POK-291) */}
         {clip.progressLabel ? <p className={styles.note}>{clip.progressLabel}</p> : null}
-        {view.note ? <p className={styles.note}>{noteText(view.note, role)}</p> : null}
+        {view.note ? <p className={styles.note}>{noteText(view.note)}</p> : null}
         {uploadFailure ? <p className={styles.note}>{uploadFailure}</p> : null}
         {thumbnailFailure ? <p className={styles.note}>{thumbnailFailure}</p> : null}
         {privacyNote ? <p className={styles.note}>{privacyNote}</p> : null}

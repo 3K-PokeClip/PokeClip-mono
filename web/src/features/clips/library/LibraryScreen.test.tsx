@@ -46,19 +46,16 @@ describe('LibraryScreen — 헤더·칩', () => {
     expect(chipGroup().queryByRole('button', { name: /반려됨/ })).toBeNull();
   });
 
-  // 업로드 승인 게이트가 없다(POK-236 폐기): 어느 시점에서도 승인 대기·반려를 말하는 칩·배지·배너·링크가 없다
-  it.each(['streamer', 'editor'] as const)(
-    '%s 시점에 승인 대기·반려 칩·배지·배너가 없다',
-    (role) => {
-      const { container } = renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role={role} />);
+  // 업로드 승인 게이트가 없다(POK-236 폐기): 승인 대기·반려를 말하는 칩·배지·배너·링크가 없다
+  it('승인 대기·반려 칩·배지·배너가 없다', () => {
+    const { container } = renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
-      expect(chipGroup().queryByRole('button', { name: /반려|승인/ })).toBeNull();
-      expect(screen.queryByText(/승인 대기|반려/)).toBeNull();
-      expect(screen.queryByRole('link', { name: /승인 대기/ })).toBeNull();
-      expect(container.querySelector('a[href="/clips/approvals"]')).toBeNull();
-      for (const card of cards()) expect(card).not.toHaveAccessibleName(/승인 대기|반려/);
-    },
-  );
+    expect(chipGroup().queryByRole('button', { name: /반려|승인/ })).toBeNull();
+    expect(screen.queryByText(/승인 대기|반려/)).toBeNull();
+    expect(screen.queryByRole('link', { name: /승인 대기/ })).toBeNull();
+    expect(container.querySelector('a[href="/clips/approvals"]')).toBeNull();
+    for (const card of cards()) expect(card).not.toHaveAccessibleName(/승인 대기|반려/);
+  });
 
   it('칩을 누르면 목록이 좁혀지고 눌림이 옮겨 간다', async () => {
     const user = userEvent.setup();
@@ -358,7 +355,7 @@ describe('LibraryScreen — 목업 전이', () => {
 
   it('업로드로 주 동작이 비활성이 돼도 포커스가 조작부에 남는다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-2" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-2" />);
 
     await user.click(within(panel()).getByRole('button', { name: '업로드' }));
 
@@ -375,17 +372,6 @@ describe('LibraryScreen — 목업 전이', () => {
     expect(within(panel()).getByRole('status')).toHaveTextContent('렌더 실패');
     await user.click(within(panel()).getByRole('button', { name: '렌더 재시도' }));
     expect(within(panel()).getByRole('status')).toHaveTextContent('업로드 대기');
-  });
-
-  it('편집자도 업로드를 누르면 바로 발행된다 — 승인 게이트가 없다', async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-2" />);
-    const inside = within(panel());
-
-    await user.click(inside.getByRole('button', { name: '업로드' }));
-
-    expect(inside.getByText('업로드됨')).toBeInTheDocument();
-    expect(inside.getByRole('link', { name: '새 버전으로 편집' })).toBeInTheDocument();
   });
 
   it('렌더 재시도는 업로드 대기로 돌린다 — 길이는 여전히 모른다', async () => {
@@ -475,19 +461,9 @@ describe('LibraryScreen — 목업 전이', () => {
   });
 });
 
-describe('LibraryScreen — 편집자 시점', () => {
-  it('칩은 스트리머와 같은 넷이다 — 전체 8 · 작업 중 3 · 업로드 대기 3 · 발행됨 2', () => {
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" />);
-
-    expect(
-      chipGroup()
-        .getAllByRole('button')
-        .map((chip) => chip.textContent),
-    ).toEqual(['전체 8', '작업 중 3', '업로드 대기 3', '발행됨 2']);
-  });
-
-  it('업로드 대기의 주 동작이 「업로드」다 — 편집자도 바로 올린다', () => {
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-2" />);
+describe('LibraryScreen — 업로드 라벨', () => {
+  it('업로드 대기의 주 동작이 「업로드」다 — 「업로드 요청」이 없다', () => {
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-2" />);
     expect(within(panel()).getByRole('button', { name: '업로드' })).toBeInTheDocument();
     expect(within(panel()).queryByRole('button', { name: '업로드 요청' })).toBeNull();
   });
@@ -506,15 +482,8 @@ describe('LibraryScreen — 빈 상태', () => {
 
 describe('LibraryScreen — 접근성', () => {
   // axe 실행 중 Next Link의 비동기 상태 갱신이 발화한다 — act로 감싸 경고 없이 흡수
-  it('기본(스트리머 · 미선택)에 위반이 없다', async () => {
+  it('기본(미선택)에 위반이 없다', async () => {
     const { container } = renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
-    await act(async () => {
-      expect(await axe(container)).toHaveNoViolations();
-    });
-  });
-
-  it('편집자 시점에도 위반이 없다', async () => {
-    const { container } = renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" />);
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
     });
@@ -657,16 +626,16 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
       '9',
     );
   }
-  function show(clip: ReturnType<typeof serverClip>, role: 'streamer' | 'editor' = 'streamer') {
-    renderWithProviders(<LibraryScreen clips={[clip]} selectedId="12" now={NOW} role={role} />);
+  function show(clip: ReturnType<typeof serverClip>) {
+    renderWithProviders(<LibraryScreen clips={[clip]} selectedId="12" now={NOW} />);
   }
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('완성본은 편집자에게도 「업로드」다', () => {
-    show(serverClip('rendered'), 'editor');
+  it('완성본은 「업로드」다', () => {
+    show(serverClip('rendered'));
     expect(within(panel()).getByRole('button', { name: '업로드' })).toBeEnabled();
   });
 
