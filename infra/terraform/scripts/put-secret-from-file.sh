@@ -64,7 +64,10 @@ readonly ERROR_CODE_PATTERN='An error occurred \(([A-Za-z0-9]+)\)'
 readonly ENDPOINT_PATTERN='endpoint URL'
 readonly VERSION_ID_PATTERN='"VersionId": *"([A-Za-z0-9-]+)"'
 
-# 비밀 값. 함수 인자로 넘기지 않고 전역으로만 다룬다.
+# 비밀 값. 함수 인자로 넘기지 않고 전역으로만 다룬다. 호출자가 같은 이름을
+# export 해 두었으면 대입만으로는 export 속성이 남아 값이 aws 의 환경으로 가므로,
+# 먼저 지운다.
+unset secret_value
 secret_value=""
 
 #######################################

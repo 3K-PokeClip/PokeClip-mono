@@ -68,7 +68,7 @@ EXPECTED_ARGV_HEAD+=' --output json --no-cli-auto-prompt --secret-id'
 readonly EXPECTED_ARGV_HEAD
 readonly EXPECTED_ARGV_TAIL='--secret-string file:///dev/stdin'
 # 사례 수(ok · skip 줄의 수). 사례를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=47
+readonly EXPECTED_CASES=48
 
 failures=0
 passes=0
@@ -178,8 +178,9 @@ write_pem() {
 # Globals:
 #   case_dir, out, err, status, utf8_locale
 # Arguments:
-#   셸 모드(plain · xtrace-flag · xtrace-env · allexport-env · no-aws — PATH
-#   에 aws 없음), 가짜 aws 모드, 스크립트 인자들.
+#   셸 모드(plain · xtrace-flag · xtrace-env · allexport-env · secret-export
+#   — 호출자가 secret_value 를 export · no-aws — PATH 에 aws 없음), 가짜
+#   aws 모드, 스크립트 인자들.
 #######################################
 run_put_as() {
   local shell_mode="$1" mode="$2"
@@ -210,6 +211,7 @@ run_put_as() {
         set -o allexport
         export SHELLOPTS
         ;;
+      secret-export) export secret_value=FakeInheritedExport ;;
     esac
     exec "${BASH}" "${PUT}" "$@"
   ) </dev/null >"${case_dir}/stdout" 2>"${case_dir}/stderr"
@@ -675,12 +677,12 @@ test_aws_missing() {
 }
 
 #######################################
-# 추적(bash -x · SHELLOPTS 의 xtrace)이나 allexport 를 물려받은 호출도 값을
-# 내지 않는다.
+# 추적(bash -x · SHELLOPTS 의 xtrace)이나 allexport 를 물려받은 호출, 호출자가
+# 같은 이름(secret_value)을 export 해 둔 호출도 값을 내지 않는다.
 #######################################
 test_quiet_shells() {
   local mode
-  for mode in xtrace-flag xtrace-env allexport-env; do
+  for mode in xtrace-flag xtrace-env allexport-env secret-export; do
     new_case || return
     write_input '%s\n' "${ONE_LINE_VALUE}"
     expect_put_quiet "quiet-${mode}" "${mode}" "${ONE_LINE_MARKER}"
