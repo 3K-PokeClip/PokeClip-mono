@@ -58,7 +58,6 @@ public class Recipe {
     @Column(name = "subtitles", columnDefinition = "jsonb")
     private String subtitles;
 
-    // Broadcast와 달리 앱이 채운다 — DB DEFAULT에 맡기면 save 뒤 엔티티의 이 칸이 null이라 응답에 못 싣는다.
     /**
      * 편집본이 시작된 카드(POK-338). 첫 저장에서만 정하고 고쳐도 안 바뀐다. 측정 재료라 계약6 본문·응답에 안 싣는다.
      * FK는 {@code ON DELETE SET NULL}: 카드가 지워져도 편집본은 남는다.
@@ -66,6 +65,7 @@ public class Recipe {
     @Column(name = "source_card_id", updatable = false)
     private Long sourceCardId;
 
+    // Broadcast와 달리 앱이 채운다 — DB DEFAULT에 맡기면 save 뒤 엔티티의 이 칸이 null이라 응답에 못 싣는다.
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
