@@ -271,8 +271,8 @@ expect(
 // SoftwareApplication.description과 llms.txt가 같은 문장을 쓴다 — 셋이 다르면 엔진마다 다른 설명을 퍼뜨린다
 const summary = shown[0]?.a ?? '';
 expect(
-  summary.startsWith('PokeClip(포키클립)은'),
-  'FAQ 첫 문항이 사실 요약(「PokeClip(포키클립)은 …」)이 아니다',
+  summary.startsWith('PokeClip(포케클립)은'),
+  'FAQ 첫 문항이 사실 요약(「PokeClip(포케클립)은 …」)이 아니다',
 );
 expect(
   node('SoftwareApplication')?.description === summary,
