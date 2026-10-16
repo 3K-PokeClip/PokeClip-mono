@@ -67,3 +67,38 @@ run "outputs_public_key_id" {
     error_message = "출력 public_key_id 가 공개키 id 와 다르다."
   }
 }
+
+# 공개키 PEM 이 아닌 입력은 plan 전에 거부한다 — 개인키를 잘못 넘기면 plan ·
+# tfplan 에 평문으로 남는다. 키 꼴 머리 줄은 비밀 스캐너가 실제 키로 오인하지
+# 않게 ${""} 로 나눠 쓴다(본문은 가짜).
+
+run "rejects_private_key_pem" {
+  command = plan
+
+  variables {
+    public_key_pem = "-----BEGIN ${""}PRIVATE KEY-----\nexample\n-----END ${""}PRIVATE KEY-----\n"
+  }
+
+  expect_failures = [var.public_key_pem]
+}
+
+run "rejects_pem_without_public_key_header" {
+  command = plan
+
+  variables {
+    public_key_pem = "example\n"
+  }
+
+  expect_failures = [var.public_key_pem]
+}
+
+# 공개키 파일 뒤에 개인키 파일을 이어 붙인 꼴 — 머리 줄은 맞아도 거부한다.
+run "rejects_public_key_followed_by_private_key" {
+  command = plan
+
+  variables {
+    public_key_pem = "-----BEGIN PUBLIC KEY-----\nexample\n-----END PUBLIC KEY-----\n-----BEGIN ${""}PRIVATE KEY-----\nexample\n-----END ${""}PRIVATE KEY-----\n"
+  }
+
+  expect_failures = [var.public_key_pem]
+}
