@@ -57,7 +57,9 @@ expect_fakebin_required() {
 #   run_out
 #######################################
 expect_aws_env_isolated() {
-  local case_dir out
+  # 주입한 AWS 변수가 남았는지만 본다 — 경로(PATH · HOME 등)에 「leak-」 가
+  # 들어 있어도 거짓으로 실패하지 않게.
+  local case_dir out leaked='^AWS_[A-Z_]*=leak-'
   case_dir="$(testlib::new_case)" || {
     testlib::fail "aws-env: 시험 준비 실패"
     return
@@ -67,9 +69,9 @@ expect_aws_env_isolated() {
     AWS_DEFAULT_PROFILE=leak-default AWS_ROLE_ARN=leak-role \
     testlib::run "${case_dir}" env env
   out="${run_out}.stdout"
-  if grep -q -- 'leak-' "${out}"; then
+  if grep -qE -- "${leaked}" "${out}"; then
     testlib::fail "aws-env: 부르는 쪽 AWS_* 가 시험 명령에 감 —" \
-      "$(grep -- 'leak-' "${out}" | cut -d= -f1 | tr '\n' ' ')"
+      "$(grep -E -- "${leaked}" "${out}" | cut -d= -f1 | tr '\n' ' ')"
     return
   fi
   if ! grep -qx 'AWS_CONFIG_FILE=/dev/null' "${out}" ||

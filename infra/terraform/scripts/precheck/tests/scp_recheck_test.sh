@@ -462,22 +462,29 @@ expect_prefix_isolated() {
 #######################################
 # scp 가 아닌 증거 디렉터리(도구 접두가 없던 옛 꼴 「<묶음>-<시각>」 · M17b
 # 꼴 「collect-<단계>-<시각>」)를 만든다 — 더 최근 시각이고, 모든 행 허용
-# 결과 · 승인 표지를 담는다. scp-recheck 가 이것을 앞 기준으로 집으면
-# 판정이 OK 로 바뀐다.
+# 결과와 새 꼴의 유효한 완료 표지 · 승인 기록 · 호출 주체 기록(모두 0600)을
+# 담는다. scp-recheck 가 이것을 앞 기준으로 집으면 판정이 OK(종료 0)로
+# 바뀌어 기대(종료 3)와 달라 잡힌다.
+# Globals:
+#   FAKE_ACCOUNT, FAKE_USER
 # Arguments:
 #   증거 루트, 디렉터리 이름.
 # Returns:
 #   만들지 못하면 1.
 #######################################
 make_foreign_dir() {
-  local dir="$1/$2"
+  local dir="$1/$2" at='2999-12-31T00:00:00Z' sum
   mkdir -m 700 -- "${dir}" || return 1
   {
     testlib::tsv iam:GetAccountAuthorizationDetails us-east-1 allow allowed True
     testlib::tsv tag:GetTagKeys ap-northeast-2 allow allowed True
   } >"${dir}/result.tsv" || return 1
-  printf '2999-12-31T00:00:00Z\n' >"${dir}/complete.txt" || return 1
-  testlib::tsv 2999-12-31T00:00:00Z forged forged >"${dir}/accepted.tsv"
+  sum="$(sha256_of "${dir}/result.tsv")" || return 1
+  testlib::tsv "${at}" "${sum}" >"${dir}/complete.txt" &&
+    testlib::tsv "${at}" "${sum}" 'kty 답' >"${dir}/accepted.tsv" &&
+    testlib::tsv "arn:aws:iam::${FAKE_ACCOUNT}:user/${FAKE_USER}" \
+      "${FAKE_ACCOUNT}" >"${dir}/sts.txt" &&
+    chmod 600 "${dir}"/*
 }
 
 #######################################
@@ -726,16 +733,20 @@ tamper_reference() {
         ln -s -- "${case_dir}/in/result.fifo" "${dir}/result.tsv"
       ;;
     result-fields)
-      # 빈 칸 하나가 탭 IFS 로 접히면 다섯 칸처럼 읽힌다.
+      # 칸이 모자란 행(AllowedByOrganizations 없음) — 칸을 나누면 마지막
+      # 칸이 넷째 칸을 되풀이해 다섯 칸처럼 읽힌다. 표지 · 승인 기록의
+      # 해시도 맞춰 해시 대조를 지나 칸 수 검사에 닿게 한다.
       {
-        testlib::tsv iam:GetAccountAuthorizationDetails us-east-1 allow '' \
-          allowed True
+        testlib::tsv iam:GetAccountAuthorizationDetails us-east-1 allow allowed
         testlib::tsv tag:GetTagKeys ap-northeast-2 allow allowed True
-      } >"${dir}/result.tsv" && rehash_acceptance "${dir}"
+      } >"${dir}/result.tsv" && rehash_marker "${dir}" &&
+        rehash_acceptance "${dir}"
       ;;
     result-dup)
+      # 표지 · 승인 기록의 해시도 맞춰 중복 검사에 닿게 한다.
       testlib::tsv tag:GetTagKeys ap-northeast-2 allow allowed True \
-        >>"${dir}/result.tsv" && rehash_acceptance "${dir}"
+        >>"${dir}/result.tsv" && rehash_marker "${dir}" &&
+        rehash_acceptance "${dir}"
       ;;
     result-changed)
       {
@@ -767,9 +778,12 @@ tamper_reference() {
 # 승인 기준이 손대진 채로는 기준이 되지 않는다(종료 2): 승인 기록이 빈 ·
 # 링크 · 대상 없는 링크 · UTC 아닌 시각 · 판정 때와 다른 해시, 완료 표지가
 # 링크 · 없음, 결과가 링크 · 0644 · FIFO · FIFO 를 가리키는 링크 · 칸 수 틀림
-# (빈 칸 접힘) · 중복 행 · 승인 뒤 바뀜 · 승인 기록 해시까지 맞춰 바뀜, 호출
+# (칸 모자람) · 중복 행 · 승인 뒤 바뀜 · 승인 기록 해시까지 맞춰 바뀜, 호출
 # 주체 기록이 링크 · 0644, 다른 계정에서 승인한 기준. 기준 파일은 내용 ·
 # 해시를 읽기 전에 검사하므로 FIFO 에서 걸리지 않는다(RUN_LIMIT 안에 끝남).
+# 사례마다 그 사례가 겨누는 검사에 닿게 한다 — 내용을 바꾼 사례는 표지 ·
+# 승인 기록의 해시를 맞춰 앞의 해시 대조에서 먼저 끝나지 않게 한다(해시
+# 대조 자체를 겨누는 result-changed · result-rehashed 는 빼고).
 # Globals:
 #   run_out
 #######################################
@@ -801,8 +815,10 @@ expect_tampered_reference_rejected() {
 }
 
 #######################################
-# baseline.tsv 의 빈 칸이 탭 IFS 로 접혀 다섯 칸처럼 읽히는 행은 받지 않는다
-# (종료 2) — 접히면 그 묶음의 앞 기준이 조용히 바뀐다.
+# baseline.tsv 의 빈 칸 든 행은 받지 않는다(종료 2) — 받으면 그 묶음의 앞
+# 기준이 조용히 바뀐다. 판정 칸 뒤에 빈 칸이 끼면 탭 IFS 로는 접혀 다섯
+# 칸처럼 읽히고, 칸을 나눠도 판정까지는 맞게 읽혀 판정 칸 검사로는 못
+# 잡는다 — 칸 수 검사가 잡는다.
 # Globals:
 #   JUDGED
 #######################################
@@ -812,7 +828,7 @@ expect_collapsed_baseline_rejected() {
     testlib::fail "collapsed-baseline: 시험 준비 실패"
     return
   }
-  testlib::tsv gamma tag:GetTagKeys ap-northeast-2 '' allow \
+  testlib::tsv gamma tag:GetTagKeys ap-northeast-2 allow '' \
     "${JUDGED}" >>"${case_dir}/tree/data/stage_actions/baseline.tsv"
   run_recheck "${case_dir}" collapsed gamma
   expect_unverifiable collapsed-baseline || return
