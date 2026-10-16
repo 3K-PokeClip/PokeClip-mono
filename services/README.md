@@ -680,6 +680,47 @@ docker build -f services/auth/Dockerfile -t pokeclip-auth services/
 **테스트도 팀과 같은 이미지를 쓴다** — Testcontainers가 `postgres:17`을 띄운다.
 compose와 메이저 버전이 갈리면 로컬·CI만 통과하고 실제 DB에서 깨지는 차이를 못 잡는다.
 
+#### 🔴 로컬 설정이 이미지에 실리지 않게 (POK-319)
+
+**Dockerfile이 `COPY . .` 뒤 `bootJar`를 굽는다.** 그래서 빌드 컨텍스트에 있는 파일은
+git이 추적하지 않아도 들어가고, `src/main/resources` 안의 것은 **jar에 실려 최종 이미지까지 간다**
+(멀티스테이지로 못 막는다). 로컬 전용 설정 `application-local*`이 그 자리에 있다.
+
+`services/.dockerignore`가 `.env`·`.env.*`와 함께 `**/application-local*.yml`·`.yaml`·`.properties`를
+뺀다. 이 컨텍스트를 쓰는 서버 넷(auth·clip·chat-collector·chat-detector) 이미지가 이 한 파일로 같이 막힌다.
+`workers/render`·`workers/upload`도 각자 `.dockerignore`에 같은 세 줄이 있다(`COPY src src` 뒤 `bootJar`라 같은 구멍).
+2026-10-16에 `fake: true` 한 줄짜리 가짜 파일로 세 컨텍스트 모두 「고치기 전 들어감 · 고친 뒤 빠짐」을 확인했다.
+
+**그래도 이미지는 깨끗한 체크아웃에서 굽는다.** `.dockerignore`는 아는 이름만 뺀다. 작업 폴더에는 이름을
+모르는 로컬 파일이 늘 생긴다.
+
+#### prod 이미지를 손으로 굽는 법 (1번이 prod ECR에 올릴 때)
+
+```bash
+# 1) 올릴 커밋을 깨끗하게 꺼낸다. 추적 안 되는 파일이 0개인 폴더다
+git worktree add --detach /tmp/pokeclip-image <커밋>
+cd /tmp/pokeclip-image
+TAG=$(git rev-parse --short=12 HEAD)    # 태그는 커밋 해시
+
+# 2) 서버마다 한 줄. 컨텍스트는 services/ 다. --platform 은 ECS 태스크 정의의 CPU 종류에 맞춘다(1번 결정)
+docker build --platform <linux/amd64 또는 linux/arm64> -f services/auth/Dockerfile -t pokeclip-auth:$TAG services/
+docker build --platform <linux/amd64 또는 linux/arm64> -f services/clip/Dockerfile -t pokeclip-clip:$TAG services/
+
+# 3) 이미지 안에 로컬 설정·.env 가 없는지 서버마다 본다. 「없음」만 나와야 한다
+#    (실행 이미지는 jre 라 jar·unzip 이 없다. jar 를 밖으로 꺼내 본다)
+for s in auth clip; do
+  CID=$(docker create pokeclip-$s:$TAG) && docker cp "$CID":/app/app.jar /tmp/$s-$TAG.jar && docker rm "$CID" >/dev/null
+  echo "$s: $(unzip -l /tmp/$s-$TAG.jar | grep -E 'application-local|\.env' || echo 없음)"
+done
+
+# 4) 꺼낸 폴더를 치운다. 안 치우면 다음 번 1) 이 같은 경로에서 멈춘다
+cd - && git worktree remove /tmp/pokeclip-image
+```
+
+- 🔴 Mac(arm64)에서 `linux/amd64`로 구우면 Dockerfile 빌드 단계의 Gradle이 에뮬레이션으로 돌아 몇 배 느리다. 멈춘 것이 아니다
+- 이미지가 기대하는 환경변수: 서버별 목록은 POK-305 코멘트(prod 목표값)와 `services/docker-compose.dev.yml`의 각 서버 `environment`
+- 수집기·판별기 이미지도 같은 꼴이다(`services/chat-collector/Dockerfile`·`services/chat-detector/Dockerfile`). prod 배치는 POK-306
+
 ## DB 마이그레이션
 
 Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(`auth/src/main/resources/db/migration/`)에 둔다.**

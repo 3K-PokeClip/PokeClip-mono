@@ -1,2 +1,8 @@
 build
 .gradle
+
+# 로컬 전용 설정(application-local*). COPY src src 뒤 bootJar가 src/main/resources 안의
+# 그 파일을 jar에 실어 최종 이미지까지 간다. 컨텍스트에 아예 안 넣는다(services/.dockerignore와 같다).
+**/application-local*.yml
+**/application-local*.yaml
+**/application-local*.properties
