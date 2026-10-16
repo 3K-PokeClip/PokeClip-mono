@@ -476,7 +476,8 @@ assert_back_to_pre_t() {
 }
 
 # t_backup_names 는 ${DEMO_DIR} 의 T 백업 이름(T.* · *.T.bak · *.T.bak.part)을 한 줄에
-# 하나씩 낸다. 반영 전 보존의 첫머리 · 롤백 E-2 · T 백업 처분이 잔여를 본다.
+# 하나씩 낸다. 반영 전 보존의 첫머리 · 롤백 E-2 · T 백업 처분 · 반영 전 비밀 파기가
+# 잔여를 본다.
 t_backup_names() {
   local name
   ls -1A -- "${DEMO_DIR}" > "${WORK}/names"   # 목록을 먼저 받는다 — 못 받으면 검사 실패
@@ -488,8 +489,9 @@ t_backup_names() {
 }
 
 # dispose_t_backups 는 T 백업 아홉과 그 .part 를 있는 것만 지운다 — 비밀 둘(resolve 토큰 ·
-# API 비번 · 잠금값)은 shred -u, 나머지 일곱은 rm. 끝에 T 백업 이름 0 을 단언한다. 롤백
-# E-2 와 T 백업 처분 블록이 이 함수 하나를 부른다(첫머리 단언은 각 블록에 있다).
+# API 비번 · 잠금값)은 shred -u(이름 제거 + 최선 노력 — 11-7), 나머지 일곱은 rm. 끝에 T
+# 백업 이름 0 을 단언한다. 롤백 E-2 와 T 백업 처분 블록이 이 함수 하나를 부른다(첫머리
+# 단언은 각 블록에 있다).
 dispose_t_backups() {
   local name path
   for name in .env.T.bak mediamtx.demo.yml.T.bak; do
@@ -1835,9 +1837,456 @@ main "$@"
 
 ## 11. 롤백
 
-T 구성 → 옛 판(반영 전 기록) → (리허설이면) T 로 다시. 단계 0 · A–D · E-1 · E-2 와 T 백업
-처분 블록, 멈춘 자리별 상태, 복귀 확인, 남는 것과 정리는 이 절에 둔다(같은 PR 의 다음
-커밋이 쓴다). 블록은 2-2 의 머리와 2-3 의 보존 본문을 쓴다.
+T 구성 → 옛 판(반영 전 기록) → (리허설이면) T 로 다시. 블록은 2-2 의 머리 + (A 만 2-3 의
+보존 본문) + 그 블록의 본문이다. 백업은 반영 전 보존(R0 — `pre-T`)과 단계 A(`T`)가
+만든 아홉씩이다(2-3).
+
+### 11-1. 언제 · 차례 · 승인
+
+**언제.**
+
+- 최초 반영이 컨테이너를 바꾼 뒤 멈췄을 때(5-1 F5 · F6)와 반영 직후 실측 1 · 6 · 7 이
+  실패하고 그 자리에서 고칠 수 없을 때(F7) — 0 → A → B → C. 컨테이너를 바꾸기 전(F1–F4)은
+  롤백이 아니라 반영 취소(5-2)다.
+- 운영 중 T 결함 — 먼저 운영 순서(7절)로 푼다. 그래도 풀리지 않으면 kty 가 정해 0 → A →
+  B → C.
+- 리허설(6절 실측 8 — 반영 뒤 한 번) — 0 → A → B → C → D → E-1 → E-2.
+
+| 단계 | 블록 | 하는 일 | 지움 |
+|---|---|---|---|
+| 0 | 롤백 0 | 사전 확인(읽기만) | — |
+| A | 롤백 A | ① T 상태 보존 — T 백업 아홉 | — |
+| B | 롤백 B | ② 내리고 반영 전 SHA 로 · ③ 손 수정 패치 · ④ 추적 밖 정리 · ⑤ 되살리고 올림 · `.env` 는 마지막 | 있음 |
+| C | 롤백 C | ⑥ 복귀 확인(읽기만 — 11-4) | — |
+| D | 롤백 D | **리허설에서만** — T 로 다시 올림 | 있음 |
+| E-1 | 롤백 E-1 | 리허설 뒤 T 상태 단언(읽기만) | — |
+| E-2 | 롤백 E-2 | 리허설 뒤 T 백업 아홉 지움 · 잔여 0 | 있음 |
+| — | T 백업 처분 | 접힌 뒤 T 백업 아홉 지움 · 잔여 0(11-6) | 있음 |
+| — | 반영 전 비밀 파기 | 롤백 창 닫기 — 반영 전 비밀 둘 지움(11-7) | 있음 |
+
+**D 는 리허설(실측 8)에서만 쓴다(kty 81차).** 실제 롤백 · 최초 반영 실패 · 실측 실패로
+0 → A → B → C 를 돌다 B · C 에서 막혀도 D 로 돌아가지 않는다. kty 판단으로 막힌 원인을
+고쳐 B · C 를 끝내고, 다시 T 로 갈 때는 T 백업 처분 → R0 부터 새로 반영한다(11-6).
+
+**승인.** 블록마다 실행 직전 kty 승인이다(2-1).
+
+- 지우는 블록(B · D · E-2 · T 백업 처분 · 반영 전 비밀 파기)은 승인 문장에 11-5 의 해당
+  행을 붙인다.
+- A 와 B 는 그 사이에 아무것도 손대지 않도록 한 자리에서 잇달아 승인받는다. B ④ 의
+  지우기 전 대조는 이름만 본다 — 내용은 A(보존)와 C · E-1 이 본다.
+- D 의 승인 문장에는 리허설(실측 8)임을 적는다. 리허설이 아니면 D 를 승인하지 않는다.
+
+**멈춤.** 어느 블록이든 종료 1(일치 없음) · 2(검사 실패)면 그 자리에서 멈추고 11-5 의
+그 행을 따른다. 지우는 쪽으로 밀어붙이지 않는다.
+
+### 11-2. 왜 이 차례인가
+
+- 렌더 산출물은 템플릿을 되돌려도 바뀌지 않고, T 의 render.sh 로는 옛 설정이 나오지
+  않는다. 그래서 렌더 산출물은 백업에서 되살리고, 손 수정본인 체크아웃은 트리 전체로
+  되돌린다.
+- `git checkout --detach` 는 작업 트리의 변경을 들고 간다. 그래서 먼저 `reset --hard`
+  로 손 변경을 버리고(두 판의 손 수정은 각자의 패치에 있다) 깨끗한 트리로 옮긴다.
+- `tar` 풀기는 덮어쓰기라 T 가 새로 만든 추적 밖 파일을 지우지 않는다. 그래서 추적 밖이
+  모두 두 묶음(T · 반영 전) 안의 이름일 때만 `clean` 하고 묶음을 푼다.
+- 판마다 무시 규칙이 다르다 — `hls.min.js` 는 반영 전 판에서 추적 밖이고 T 판에서는
+  무시된다. `list_untracked` 는 반영 전 목록의 이름을 지금 무시돼도 담는다. 그래서 B 는
+  반영 전 묶음으로 · D 는 T 묶음으로 그 내용까지 되돌리고, C · E-1 이 내용을 본다.
+- compose 와 env 의 짝은 HEAD 로 고르고(`paired_compose`), `${DEMO_HOME}/.env` 는 단계
+  끝에서만 바꾼다. 그래서 B · D 를 어디서 멈추든 처음부터 다시 돌리면 첫 `down` 이 그
+  트리와 짝 맞는 env 로 풀린다.
+
+### 11-3. 단계 블록
+
+```bash
+# ── 블록: 롤백 0 — 머리 + 이 본문. 인자 없음. 사전 확인(읽기만) ──
+# 하나라도 어긋나면 롤백을 시작하지 않는다.
+main() {
+  (( $# == 0 )) || check_failed '사용법: 인자 없음'
+  local name head_sha
+  # 체크아웃 소유자로 git 이 돈다(소유자 검사로 멈추면 여기서 안다)
+  owner_git status --porcelain > /dev/null
+  for name in .env.pre-T.bak mediamtx.demo.yml.pre-T.bak pre-T.sha pre-T.head \
+    pre-T.docker pre-T.untracked.tgz; do
+    [[ -s "${DEMO_DIR}/${name}" ]] \
+      || mismatch "반영 전 백업이 없거나 비었다: ${name}"
+  done
+  # 손 수정 · 추적 밖이 없으면 비어 있을 수 있다
+  for name in pre-T.status pre-T.worktree.patch pre-T.untracked.z; do
+    [[ -e "${DEMO_DIR}/${name}" ]] || mismatch "반영 전 백업이 없다: ${name}"
+  done
+  tar -tzf "${DEMO_DIR}/pre-T.untracked.tgz" > /dev/null
+  PRE_SHA="$(< "${DEMO_DIR}/pre-T.sha")"
+  readonly PRE_SHA
+  # 반영 전 커밋이 체크아웃에 있다(얕은 클론)
+  owner_git cat-file -e "${PRE_SHA}^{commit}"
+  head_sha="$(owner_git rev-parse HEAD)"
+  [[ "${head_sha}" != "${PRE_SHA}" ]] \
+    || mismatch 'HEAD 가 반영 전과 같다 — 롤백할 T 가 없다(반영 도중이면 5-2)'
+  echo '단계 0 통과 — 다음은 A'
+}
+main "$@"
+```
+
+```bash
+# ── 블록: 롤백 A — 머리 + 보존 본문 + 이 본문. 인자 없음. ① T 상태 보존 ──
+# 지우지 않는다 — T 는 그대로 돈다. 옛 반영의 T 백업이 남아 있으면 지금 상태와 견줘
+# 「일치 없음」으로 멈춘다(덮어쓰지 않는다).
+main() {
+  (( $# == 0 )) || check_failed '사용법: 인자 없음'
+  local pre_sha head_sha
+  pre_sha="$(< "${DEMO_DIR}/pre-T.sha")"
+  head_sha="$(owner_git rev-parse HEAD)"
+  [[ "${head_sha}" != "${pre_sha}" ]] || mismatch 'HEAD 가 반영 전과 같다'
+  preserve_state 'T'
+  echo 'T 상태 보존 끝 — 백업 아홉 단언 통과. 다음은 B(잇달아)'
+}
+main "$@"
+```
+
+```bash
+# ── 블록: 롤백 B — 머리 + 이 본문. 인자 없음. ②–⑤ 옛 판으로. 지운다 ──
+# 실행 직전 kty 승인(A 와 잇달아). 처음부터 다시 돌려도 이어진다(11-5).
+main() {
+  (( $# == 0 )) || check_failed '사용법: 인자 없음'
+  local head_sha tracked
+  PRE_SHA="$(< "${DEMO_DIR}/pre-T.sha")"
+  T_SHA="$(< "${DEMO_DIR}/T.sha")"
+  readonly PRE_SHA T_SHA
+  [[ "${PRE_SHA}" != "${T_SHA}" ]] || mismatch 'T 와 반영 전 SHA 가 같다'
+  # ② 내리고(env 는 HEAD 로 고른다), 반영 전 SHA 의 깨끗한 작업 트리를 만든다. 추적
+  # 파일의 손 변경은 버린다 — T 것은 T, 반영 전 것은 pre-T 의 worktree.patch 에 있다
+  paired_compose down --remove-orphans
+  owner_git reset -q --hard HEAD
+  # 추적 밖 파일과 겹치면 git 이 멈춘다(종료 2 — 아무것도 지우지 않았다)
+  owner_git checkout -q --detach "${PRE_SHA}"
+  head_sha="$(owner_git rev-parse HEAD)"
+  [[ "${head_sha}" == "${PRE_SHA}" ]] || mismatch 'HEAD 가 반영 전 SHA 가 아니다'
+  tracked="$(owner_git status --porcelain --untracked-files=no)"
+  [[ -z "${tracked}" ]] || mismatch '추적 파일이 깨끗하지 않다'
+  # ③ 손 수정 패치 — 빈 패치면 대지 않는다
+  if [[ -s "${DEMO_DIR}/pre-T.worktree.patch" ]]; then
+    owner_git apply --check --binary < "${DEMO_DIR}/pre-T.worktree.patch"
+    owner_git apply --binary < "${DEMO_DIR}/pre-T.worktree.patch"
+  fi
+  owner_git diff --binary HEAD > "${WORK}/worktree.patch"
+  assert_same "${WORK}/worktree.patch" "${DEMO_DIR}/pre-T.worktree.patch"
+  # ④ 두 묶음 밖의 추적 밖 파일이 있으면 지우지 않고 멈춘다(이름을 kty 에게 보인다)
+  untracked_outside_bundles > "${WORK}/extra.z"
+  if [[ -s "${WORK}/extra.z" ]]; then
+    tr '\0' '\n' < "${WORK}/extra.z" >&2
+    mismatch '두 묶음 밖의 추적 밖 파일이 있다 — 지우지 않는다'
+  fi
+  # 지우는 것은 두 묶음 안의 이름뿐이다. 반영 전 규칙이 무시하는 파일은 남는다
+  owner_git clean -fd
+  # ⑤ 추적 밖 묶음 · HEAD 형태 · 렌더 산출물을 되살리고 올린다. .env 는 마지막이다
+  tar -C "${REPO}" -xzf "${DEMO_DIR}/pre-T.untracked.tgz"
+  owner_git status --porcelain > "${WORK}/status"
+  assert_same "${WORK}/status" "${DEMO_DIR}/pre-T.status" \
+    '작업 트리가 반영 전 기록과 다르다 — 섞인 트리로 띄우지 않는다'
+  restore_head_shape "${DEMO_DIR}/pre-T.head" "${PRE_SHA}"
+  cp -p -- "${DEMO_DIR}/mediamtx.demo.yml.pre-T.bak" \
+    "${DEMO_DIR}/mediamtx.demo.yml"
+  assert_same "${DEMO_DIR}/mediamtx.demo.yml.pre-T.bak" \
+    "${DEMO_DIR}/mediamtx.demo.yml"
+  # 옛 compose 가 짝 맞는 env 로 풀리는지(출력 없음 — 비밀을 내지 않는다)
+  paired_compose config --quiet
+  # 모든 컨테이너를 새로 만들어 단일 파일 마운트도 새로 묶인다
+  paired_compose up -d
+  cp -p -- "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env"
+  assert_same "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env"
+  echo '옛 판으로 끝 — 다음은 C'
+}
+main "$@"
+```
+
+```bash
+# ── 블록: 롤백 C — 머리 + 이 본문. 인자 없음. ⑥ 복귀 확인(읽기만) ──
+# 반영 취소 ⓒ · T 백업 처분의 첫머리와 같은 함수 하나로 반영 전 기록과 견준다(11-4).
+main() {
+  (( $# == 0 )) || check_failed '사용법: 인자 없음'
+  PRE_SHA="$(< "${DEMO_DIR}/pre-T.sha")"
+  readonly PRE_SHA
+  assert_back_to_pre_t
+  echo '복귀 확인 끝 — 반영 전 기록과 같다. 사람이 볼 것은 11-4'
+}
+main "$@"
+```
+
+```bash
+# ── 블록: 롤백 D — 머리 + 이 본문. 인자 없음. 리허설에서만 T 로 다시. 지운다 ──
+# D 는 리허설(실측 8)에서만 쓴다(kty 81차). 실제 롤백 · 최초 반영 실패 · 실측 실패로
+# 접는 중에는 B · C 에서 막혀도 D 로 돌아가지 않는다 — 원인을 고쳐 B · C 를 끝내고 T
+# 백업 처분 → R0 다(11-6). 실행 직전 kty 승인(승인 문장에 리허설임을 적는다). 처음부터
+# 다시 돌려도 이어진다.
+main() {
+  (( $# == 0 )) || check_failed '사용법: 인자 없음'
+  local head_sha tracked
+  PRE_SHA="$(< "${DEMO_DIR}/pre-T.sha")"
+  T_SHA="$(< "${DEMO_DIR}/T.sha")"
+  readonly PRE_SHA T_SHA
+  [[ "${PRE_SHA}" != "${T_SHA}" ]] || mismatch 'T 와 반영 전 SHA 가 같다'
+  # 응답기를 다시 띄우므로 거부 목록 파일부터 본다(7-4) — 어긋나면 바꾼 것 없이 멈춘다
+  assert_ready_to_start_ingest_auth
+  # T 체크아웃 뒤 · .env 복원 앞에서 멈췄어도 T compose + .env.T.bak 이다
+  paired_compose down --remove-orphans
+  owner_git reset -q --hard HEAD   # 옛 손 수정 — 반영 전 패치에 있다
+  owner_git checkout -q --detach "${T_SHA}"
+  head_sha="$(owner_git rev-parse HEAD)"
+  [[ "${head_sha}" == "${T_SHA}" ]] || mismatch 'HEAD 가 T SHA 가 아니다'
+  tracked="$(owner_git status --porcelain --untracked-files=no)"
+  [[ -z "${tracked}" ]] || mismatch '추적 파일이 깨끗하지 않다'
+  if [[ -s "${DEMO_DIR}/T.worktree.patch" ]]; then
+    owner_git apply --check --binary < "${DEMO_DIR}/T.worktree.patch"
+    owner_git apply --binary < "${DEMO_DIR}/T.worktree.patch"
+  fi
+  owner_git diff --binary HEAD > "${WORK}/worktree.patch"
+  assert_same "${WORK}/worktree.patch" "${DEMO_DIR}/T.worktree.patch"
+  untracked_outside_bundles > "${WORK}/extra.z"
+  if [[ -s "${WORK}/extra.z" ]]; then
+    tr '\0' '\n' < "${WORK}/extra.z" >&2
+    mismatch '두 묶음 밖의 추적 밖 파일이 있다 — 지우지 않는다'
+  fi
+  # 옛 추적 밖은 반영 전 묶음에 있다. T 규칙이 무시하는 파일(hls.min.js)은 남는다
+  owner_git clean -fd
+  # 덮어쓴다 — 남은 hls.min.js 도 T 의 내용으로
+  tar -C "${REPO}" -xzf "${DEMO_DIR}/T.untracked.tgz"
+  owner_git status --porcelain > "${WORK}/status"
+  assert_same "${WORK}/status" "${DEMO_DIR}/T.status" \
+    '작업 트리가 T 기록과 다르다 — 섞인 트리로 띄우지 않는다'
+  restore_head_shape "${DEMO_DIR}/T.head" "${T_SHA}"
+  cp -p -- "${DEMO_DIR}/mediamtx.demo.yml.T.bak" "${DEMO_DIR}/mediamtx.demo.yml"
+  assert_same "${DEMO_DIR}/mediamtx.demo.yml.T.bak" \
+    "${DEMO_DIR}/mediamtx.demo.yml"
+  paired_compose config --quiet
+  # 운영 순서 — 응답기 먼저. healthy 시한을 넘기면 MediaMTX 는 띄우지 않는다
+  paired_compose up -d ingest-auth
+  wait_ingest_auth_healthy
+  paired_compose up -d
+  cp -p -- "${DEMO_DIR}/.env.T.bak" "${DEMO_DIR}/.env"
+  assert_same "${DEMO_DIR}/.env.T.bak" "${DEMO_DIR}/.env"
+  echo 'T 로 다시 끝 — 다음은 E-1'
+}
+main "$@"
+```
+
+```bash
+# ── 블록: 롤백 E-1 — 머리 + 이 본문. 인자 없음. 리허설 뒤 T 상태 단언(읽기만) ──
+# 어긋나면 아무것도 지우지 않는다 — T 가 A 의 기록대로 돌아오지 않았다.
+main() {
+  (( $# == 0 )) || check_failed '사용법: 인자 없음'
+  local t_sha head_sha
+  t_sha="$(< "${DEMO_DIR}/T.sha")"
+  head_sha="$(owner_git rev-parse HEAD)"
+  [[ "${head_sha}" == "${t_sha}" ]] || mismatch 'HEAD 가 T SHA 가 아니다'
+  owner_git status --porcelain > "${WORK}/status"
+  assert_same "${WORK}/status" "${DEMO_DIR}/T.status"
+  owner_git diff --binary HEAD > "${WORK}/worktree.patch"
+  assert_same "${WORK}/worktree.patch" "${DEMO_DIR}/T.worktree.patch"
+  # 추적 밖 이름(-z)과 그 내용(T 에서 바뀐 hls.min.js 포함)이 A 의 기록과 같다
+  list_untracked > "${WORK}/untracked.z"
+  assert_same "${WORK}/untracked.z" "${DEMO_DIR}/T.untracked.z"
+  assert_bundle "${DEMO_DIR}/T.untracked.tgz"
+  assert_same "${DEMO_DIR}/.env.T.bak" "${DEMO_DIR}/.env"
+  assert_same "${DEMO_DIR}/mediamtx.demo.yml.T.bak" \
+    "${DEMO_DIR}/mediamtx.demo.yml"
+  # 리허설이 만든 컨테이너 · 망 0 — A 의 기록과 같다
+  list_docker_names > "${WORK}/docker"
+  assert_same "${WORK}/docker" "${DEMO_DIR}/T.docker"
+  list_running_services > "${WORK}/running"
+  printf '%s\n' edge ingest-auth mediamtx > "${WORK}/running.want"
+  assert_same "${WORK}/running" "${WORK}/running.want"
+  wait_ingest_auth_healthy
+  report_head_shape "${DEMO_DIR}/T.head"
+  echo 'T 상태 단언 끝 — 사람이 볼 것을 본 뒤 E-2'
+}
+main "$@"
+```
+
+- E-1 뒤 사람이 본다(실측 8) — `config --images` 에 포크 `.2`, 토큰 경로 송출 · 재생,
+  응답기 `publish_allowed`.
+
+```bash
+# ── 블록: 롤백 E-2 — 머리 + 이 본문. 인자 없음. 리허설 뒤 정리 · 잔여 0. 지운다 ──
+# E-1 이 통과한 뒤에만 돈다. 실행 직전 kty 승인. 있는 것만 지운다.
+main() {
+  (( $# == 0 )) || check_failed '사용법: 인자 없음'
+  local t_sha head_sha
+  # E-1 을 건너뛰어도 T 비밀의 마지막 사본을 단언 없이 지우지 않는다 — T 가 돌고
+  # .env 가 그 사본과 같을 때만 지운다
+  if [[ -e "${DEMO_DIR}/.env.T.bak" ]]; then
+    t_sha="$(< "${DEMO_DIR}/T.sha")"
+    head_sha="$(owner_git rev-parse HEAD)"
+    [[ "${head_sha}" == "${t_sha}" ]] \
+      || mismatch 'HEAD 가 T SHA 가 아니다 — 접힌 뒤면 T 백업 처분(11-6)'
+    assert_same "${DEMO_DIR}/.env.T.bak" "${DEMO_DIR}/.env" \
+      '.env 가 T 백업과 다르다 — D 를 다시 돈 뒤 E-1 → E-2'
+  fi
+  dispose_t_backups
+  echo '리허설 정리 끝 — T 백업 이름 0'
+}
+main "$@"
+```
+
+### 11-4. 복귀 확인
+
+단계 C(와 반영 취소 ⓒ · T 백업 처분의 첫머리)가 `assert_back_to_pre_t` 하나로 기계
+단언한다(읽기만).
+
+- HEAD = 반영 전 SHA. `git status --porcelain` 과 손 수정 패치가 반영 전 기록과 같다 —
+  그래서 compose · 이미지 핀도 같다.
+- 추적 밖 이름(`-z` — `list_untracked`)이 반영 전 목록과 같고, 그 내용이 반영 전 묶음과
+  같다(`tar --compare` — `hls.min.js` 등).
+- `.env` · 렌더 산출물이 반영 전 백업과 바이트까지 같다.
+- 이 compose 프로젝트의 컨테이너 · 망 이름이 반영 전 기록과 같고(`ingest-auth` 없음),
+  도는 서비스가 edge · mediamtx 둘이다.
+- HEAD 형태는 견줘 알리기만 한다 — 반영 전이 브랜치였고 그 브랜치가 옮겨졌으면 B 가
+  분리 HEAD 로 둔다.
+
+사람이 본다 — `config --images` 에 포크 `.1`, 옛 단일 경로 OBS 송출 · 재생(`index.m3u8`
+의 LL-HLS 마커). 롤백 목표는 반영 전에 확인한 마지막 정상 상태(반영 전 SHA + 손 수정 +
+`.1`)다.
+
+### 11-5. 멈춘 자리별 상태
+
+B · D 는 처음부터 다시 돌려도 이어진다 — 명령과 명령 사이에서 멈춘 경우다(명령 도중
+끊김은 표 마지막 행). compose 와 env 는 HEAD 로 고르고, 모든 줄이 되풀이해도 같은
+결과이며(`down` · `reset` · `checkout` · 패치는 `reset` 뒤에 다시 대고 · `clean` 은 두
+목록 안의 이름만 지우고 · `tar` 는 덮어쓴다), `.env` 는 단계 끝에서만 바뀐다. 다시
+돌려도 같은 자리에서 멈추는 것은 결정이 필요한 어긋남뿐이다.
+
+**「다른 길」 열의 D 는 리허설(실측 8)에서만 쓴다(kty 81차).** 실제 롤백 · 최초 반영
+실패 · 실측 실패로 0 → A → B → C 를 돌다 B · C 에서 막히면 D 로 돌아가지 않는다 — kty
+판단으로 막힌 원인을 고쳐 B · C 를 끝내고, T 백업 처분 → R0 부터 다시 반영한다(11-6).
+그래서 D · E-1 · E-2 의 행은 리허설에서만 생긴다.
+
+| 멈춘 자리 | 상태 | 그 자리에서 다시 돌리면 | 다른 길 |
+|---|---|---|---|
+| R0(반영 전 보존) | 5-1 F0 | 5-1 F0 | 첫머리(T 백업 남음)에서 멈췄으면 T 백업 처분(11-6) 뒤 다시 |
+| 단계 0 | 바뀐 것 없음 — T 가 돈다 | 원인(신원 · 백업 · 도구 판)을 고친 뒤 이어진다 | HEAD 가 반영 전이면 롤백이 아니다 — 반영 도중이면 반영 취소(5-3) |
+| 단계 A | T 가 돈다. T 백업 일부만 있다(반쪽은 `.part`) | 이어진다 — 있는 백업은 지금 상태와 같은지 단언하고 그대로 쓴다 | 단언이 어긋나면(종료 1) 지금 상태가 T 기록과 다르다 — A 를 B 뒤에 돌린 경우 · 끊긴 A 뒤 추적 밖 내용이 바뀐 경우 · 접은 뒤 처분 없이 다시 반영한 경우(옛 반영의 T 백업 — R0 첫머리가 먼저 막는다) 등. 덮어쓰지 않았으므로 그 자리에 맞는 아래 행으로 간다 |
+| B ② `down` 앞 | 바뀐 것 없음 | 이어진다 | — |
+| B ② `down` 뒤 – `checkout` 앞 | 컨테이너 내려감. HEAD = T. `.env` T | 이어진다 — 첫 `down` 은 T compose + `.env.T.bak` | 리허설이면 D 로 T 에 돌아가도 된다. 실제 롤백은 B 를 다시 돌려 끝낸다 |
+| B ② `checkout` 이 멈춤(추적 밖 파일과 겹침) | 컨테이너 내려감. HEAD = T, 추적 파일 깨끗(`reset` 뒤). 아무것도 지우지 않았다 | 같은 자리에서 다시 멈춘다(종료 2 — git 이 이름을 알린다) | 그 파일은 T 묶음에 있다. kty 가 정한 뒤(옮김) B 를 다시 돌리면 이어진다. 리허설이면 D 로 T 에 돌아가도 된다 — 실제 롤백은 D 를 쓰지 않는다 |
+| B ② `checkout` 뒤 – ③ | 컨테이너 내려감. HEAD = 반영 전. 손 수정 패치 일부 · 전부. `.env` T | 이어진다 — `down` 은 옛 compose + `.env.pre-T.bak`, `reset` 이 반쪽 패치를 버린다 | `apply --check` 가 실패했으면(종료 2) 패치가 반영 전 SHA 에 맞지 않는다 — 다시 돌려도 같은 자리다. kty 가 원인을 고친 뒤 B 를 다시. 리허설이면 D — 실제 롤백은 D 를 쓰지 않는다 |
+| B ④ 목록 대조 실패 | 아무것도 지우지 않았다. 컨테이너 내려감. HEAD = 반영 전 + 손 수정. `.env` T | 같은 자리에서 다시 멈춘다(종료 1) | 리허설의 D 도 같은 대조에서 멈춘다 — 그 이름은 T 목록에도 없다. 원인 후보 — A 뒤 생긴 파일 · T 에서 새로 생긴, T 판이 무시하고 반영 전 판은 무시하지 않는 파일 · 반영 전에 스테이징된 새 파일. kty 가 그 파일을 정한다(보존할 곳으로 옮김 — 지우면 승인). 그 뒤 B 를 다시 돌리면 이어진다 |
+| B ④ `clean` 뒤 – ⑤ 상태 대조 앞 | 지금 규칙의 추적 밖이 비었다(두 묶음에 있음). 컨테이너 내려감. `.env` T | 이어진다 — 대조는 빈 목록을 통과하고 `tar` 가 되살린다 | 리허설이면 D |
+| B ⑤ 상태 대조 실패 | 작업 트리가 반영 전 기록과 다르다. 컨테이너 내려감. `.env` T | 같은 자리에서 다시 멈춘다(종료 1) | 원인 후보 — 반영 전의 스테이징 · 묶음과 트리의 차이. 띄우지 않는다. 차분을 보고 kty 가 원인을 고친 뒤 B 를 다시. 리허설이면 D 로 T 에 돌아가도 된다 — 실제 롤백은 D 를 쓰지 않는다 |
+| B ⑤ HEAD 형태 · 렌더 산출물 복원 – `up` | 옛 판 트리 · 옛 렌더. 컨테이너 내려감 또는 일부. `.env` T | 이어진다. `config --quiet` 가 실패하면(종료 2) 옛 compose 가 `.env.pre-T.bak` 으로 풀리지 않는다 — 다시 돌려도 같은 자리, kty 가 원인을 고친 뒤 B 를 다시 | 리허설이면 D |
+| B ⑤ `.env` 복원 앞(띄운 뒤) | 옛 판이 돈다. `.env` 만 T | 이어진다(한 번 더 내렸다 올린다) | 리허설이면 D |
+| 단계 C | B 의 끝 상태. C 는 읽기만 | 같은 결과다 | 어긋남(종료 1)은 B 의 끝 상태가 반영 전 기록과 다르다는 뜻 — 추적 밖 이름 · 내용 포함. B 가 끝나지 않았으면 B 를 다시. 그 밖은 차분을 보고 kty 가 원인을 고친 뒤 B → C 를 다시 돈다 — 실제 롤백은 그다음 T 백업 처분 → R0 다. 리허설이면 D 로 T 에 돌아가도 된다 |
+| D 첫머리 — 거부 목록 확인(종료 1) | 바뀐 것 없음 | 같은 자리에서 다시 멈춘다 | 7-4 — 파일이 없으면 되살릴 내용을 kty 가 정한다. 틀린 줄이면 kty — 틀린 줄 걷기(10절)는 응답기 컨테이너가 있어야 돈다 |
+| D 어디서든(명령 사이) | HEAD 는 반영 전 또는 T. `.env` 는 옛 판(단계 끝에서만 바뀐다) | 이어진다 — 첫 `down` 은 HEAD 로 고른 짝이다. T 체크아웃 뒤 · `.env` 복원 앞에서 멈췄어도 T compose + `.env.T.bak` 이다 | ④ 목록 대조 실패는 B ④ 행과 같다. ⑤ 상태 대조 실패는 kty |
+| D 의 healthy 시한 초과 | `ingest-auth` 만 떠 있고 MediaMTX 는 띄우지 않았다(운영 순서). `.env` 옛 판 | 원인(응답기 로그)을 고친 뒤 이어진다. 거부 목록의 틀린 줄이면 손으로 고치지 않고 틀린 줄 걷기(10절 — 재시작 없음)를 돈다 | — |
+| 단계 E-1 | 바뀐 것 없음(읽기만) | 같은 결과다 | 어긋남(종료 1)은 T 가 A 의 기록대로 돌아오지 않았다는 뜻 — 추적 밖 이름 · 내용 포함. 아무것도 지우지 않았다. kty |
+| 단계 E-2 | T 백업 일부가 지워졌다 | 이어진다 — 있는 것만 지운다. `.env.T.bak` 이 남아 있으면 먼저 HEAD = T · `.env` = `.env.T.bak` 을 본다. 어긋나면(D 가 `.env` 복원 앞에서 멈춘 채 E-1 을 건너뜀 · 접힌 뒤) 아무것도 지우지 않고 멈춘다(종료 1). 잔여가 남으면(종료 1) 그 이름을 보이고 kty | `.env` 가 다르면 D 를 다시 돌린 뒤 E-1 → E-2. 접힌 뒤면 T 백업 처분 |
+| T 백업 처분 | 첫머리 단언에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 T 백업 일부가 지워졌다 — 반영 전 상태는 그대로 | 이어진다 — 있는 것만 지운다. 첫머리(HEAD = 반영 전 · `.env` = `.env.pre-T.bak` · 복귀 확인)가 어긋나면(종료 1) 아무것도 지우지 않는다 — T 가 돌거나 B 가 끝나지 않았거나 접힌 끝 상태가 반영 전 기록과 다르다. `.env.pre-T.bak` 이 없으면 검사 실패(종료 2)다 | B 가 끝나지 않았으면 B 를 다시 돌린 뒤 C → 처분. 복귀 확인이 어긋나면 단계 C 행과 같다(kty). T 가 돌면 처분하지 않는다 — 그 T 백업은 롤백의 길이다. 반영 전 비밀을 먼저 지웠으면 이 블록은 돌지 못한다(11-7) |
+| 반영 전 비밀 파기 | 첫머리(T 백업 남음)에서 멈췄으면 지운 것이 없다. 지우는 중에 멈췄으면 비밀 하나만 지워졌을 수 있다 | 이어진다 — 있는 것만 지운다 | T 백업이 남았으면 접힌 뒤는 T 백업 처분, T 가 도는 리허설 뒤는 E-1 → E-2 가 먼저다 |
+| 명령 도중 끊김(프로세스가 죽음 — 상자 재부팅 · 명령 시한 등) | 트리 일부만 바뀌었거나 `.git/index.lock` 이 남았다. HEAD 는 옛 값일 수 있다 | `apply` · `clean` · `tar` 풀기 도중이면 이어질 것으로 본다(추론 — 남은 이름이 두 목록 안이고 `reset` · `clean` · `tar` 가 다시 맞춘다). `reset` · `checkout` 도중이면 지우기 전에 멈춘다(종료 2) — `reset` 이 남은 lock 에서, 또는 첫 `down` 이 HEAD 로 고른 env 와 판이 어긋난 compose 의 `:?` 에서 | kty — 남은 lock · 트리 상태를 보고 정한다(lock 을 지우는 것은 승인). 블록은 RunShellScript 로 보내 세션 끊김으로는 이 행에 오지 않는다 |
+
+### 11-6. 접은 뒤 다시 T 로
+
+0 → A → B → C 로 접은 뒤(실제 롤백 · 최초 반영 실패 · 실측 실패 — 5-1 F5–F7) 다시 T
+로 갈 때는 **T 백업 처분 → R0 부터 새로 반영한다**(5-4).
+
+- **D 를 쓰지 않는다** — D 는 리허설(실측 8)에서만 쓴다(kty 81차). D 는 단계 A 가 남긴 T
+  백업을 되살리는데, 최초 반영 실패에서 그 「T」는 반쪽 상태(HEAD · `.env` 만 T)이거나
+  고치기 전 판이라 E-1 의 기계 단언까지 지나 고치기 전 판이 「T」로 남을 수 있다. 온전한
+  T 에서 시작한 실제 롤백에도 같은 규칙을 쓴다 — 규칙 한 줄이라 급할 때 판단할 것이 없고,
+  dev 서버 · 지금 서비스 사용자 0 이라 앞으로 가는 길의 대가가 작다. 사용자가 생기면
+  다시 정한다.
+- **T 백업 처분이 먼저다.** 남겨 두면 다음 반영의 단계 A 가 옛 T 백업과 견줘 「일치
+  없음」으로 멈추고, E-2 도 옛 T 백업(HEAD · `.env`)과 어긋나 멈춘다. R0 첫머리가 T
+  백업이 남은 다시 반영을 반영 앞에서 막는다.
+- **처분은 접힌 뒤에만 지운다.** 첫머리에서 HEAD = 반영 전 SHA · `.env` = 반영 전 백업 ·
+  단계 C 의 복귀 확인(`assert_back_to_pre_t`)을 본다. T 가 도는 동안의 T 백업은 롤백의
+  길이라 지우지 않는다. E-2 와 다른 블록이다 — E-2 는 T 가 도는 리허설 뒤에 지운다. 지우는
+  줄은 E-2 와 같은 함수(`dispose_t_backups`)다.
+- 반영 취소로 접었으면(F1–F4) T 백업이 없다 — 곧바로 R0 다.
+
+```bash
+# ── 블록: T 백업 처분 — 머리 + 이 본문. 인자 없음. 접은 뒤 다시 반영하기 전. 지운다 ──
+# 실행 직전 kty 승인. E-2 와 다른 블록이다 — 접힌 뒤(단계 C 를 통과한 끝 상태)에만
+# 지운다. .env.pre-T.bak 이 없으면 검사 실패(종료 2)다 — 롤백 창을 닫을 때는 반영 전
+# 비밀을 지우기 전에 이 블록을 돈다(11-7).
+main() {
+  (( $# == 0 )) || check_failed '사용법: 인자 없음'
+  local head_sha
+  PRE_SHA="$(< "${DEMO_DIR}/pre-T.sha")"
+  readonly PRE_SHA
+  head_sha="$(owner_git rev-parse HEAD)"
+  [[ "${head_sha}" == "${PRE_SHA}" ]] \
+    || mismatch 'HEAD 가 반영 전 SHA 가 아니다 — 접힌 뒤가 아니면 지우지 않는다'
+  assert_same "${DEMO_DIR}/.env.pre-T.bak" "${DEMO_DIR}/.env" \
+    '.env 가 반영 전이 아니다 — B 가 끝나지 않았다'
+  # 단계 C 의 복귀 확인 — 접힌 끝 상태가 반영 전 기록과 같을 때만 지운다
+  assert_back_to_pre_t
+  dispose_t_backups
+  echo 'T 백업 처분 끝 — T 백업 이름 0. 다음은 R0(4절)'
+}
+main "$@"
+```
+
+### 11-7. 남는 것과 정리
+
+- **응답기의 흔적.** `ingest-auth` 이미지와 `${DEMO_HOME}/ingest-auth/{deny,state}` 가
+  남는다. 비밀은 없다(공개 토큰 · 연결 id). T 로 다시 올리면 그대로 다시 쓴다(거부 목록
+  합집합 · 기록 세대). 롤백 창을 닫을 때 이미지를 지우고, 디렉터리는 기록이 든 것이라
+  지우기 전에 kty 에게 묻는다.
+- **리허설의 T 백업**은 E-2 가 곧바로 지운다.
+- **`shred -u` 는 이름 제거 + 최선 노력이다.** 저널링 파일 시스템 · EBS 에서는 덮어쓴
+  자리가 옛 블록과 같다는 보장이 없다 — 지운 비밀이 디스크 블록에 남을 수 있다. 끝까지
+  없애는 것은 상자 철거(12절 7 — 인스턴스 종료로 볼륨이 지워진다)다.
+
+**롤백 창 닫기(12단계 — 실측 통과 뒤 첫 팀 실사용 방송이 무사하면).** 차례가 있다.
+
+1.  실제로 롤백했고 다시 반영하지 않았으면 먼저 T 백업 처분(11-6)을 돈다. 그 블록의
+    첫머리가 `.env.pre-T.bak` 을 보므로 반영 전 비밀보다 먼저다. 거꾸로 하면 처분 블록이
+    검사 실패(종료 2)로 돌지 못하고, 남은 T 일곱이 다음 반영의 R0 첫머리를 막는다. 접은
+    뒤 다시 반영했으면 처분이 그 전에 지웠고, 리허설 뒤면 E-2 가 지웠다.
+1.  그다음 아래 「반영 전 비밀 파기」로 반영 전 비밀 둘(`.env.pre-T.bak` ·
+    `mediamtx.demo.yml.pre-T.bak` — 옛 passphrase · 옛 렌더 산출물)과 그 `.part` 를
+    지운다. 이 블록은 T 백업이 하나라도 남아 있으면 지우지 않고 멈춘다 — 위 차례를
+    블록이 지킨다.
+1.  반영 전의 나머지 일곱(`.sha` · `.head` · `.status` · `.worktree.patch` ·
+    `.untracked.z` · `.untracked.tgz` · `.docker`)은 비밀이 아니라 남겨도 된다. 반영 전
+    비밀을 지운 뒤에는 이 판으로 롤백할 수 없다.
+1.  반영 전에 상자에 남아 있던 `compose.yml.bak-*` 둘과 롤백용 옛 이미지의 처분도 그때
+    kty 에게 묻는다.
+
+```bash
+# ── 블록: 반영 전 비밀 파기 — 머리 + 이 본문. 인자 없음. 롤백 창 닫기 2. 지운다 ──
+# 실행 직전 kty 승인. T 백업이 하나라도 남아 있으면 아무것도 지우지 않고 멈춘다(종료 1)
+# — T 백업 처분(접힌 뒤) · E-2(리허설 뒤)가 먼저다. 지운 뒤에는 이 판으로 롤백할 수 없다.
+main() {
+  (( $# == 0 )) || check_failed '사용법: 인자 없음'
+  local name path left=''
+  t_backup_names > "${WORK}/t-left"
+  [[ ! -s "${WORK}/t-left" ]] \
+    || mismatch 'T 백업이 남아 있다 — T 백업 처분 · E-2 가 먼저다:' \
+      "$(tr '\n' ' ' < "${WORK}/t-left")"
+  for name in .env.pre-T.bak mediamtx.demo.yml.pre-T.bak; do
+    for path in "${DEMO_DIR}/${name}" "${DEMO_DIR}/${name}.part"; do
+      if [[ -e "${path}" ]]; then
+        shred -u -- "${path}"
+      fi
+    done
+  done
+  # 비밀이 아닌 일곱은 남긴다. 끊긴 보존이 남긴 그 .part 만 지운다
+  for name in sha head status worktree.patch untracked.z untracked.tgz \
+    docker; do
+    rm -f -- "${DEMO_DIR}/pre-T.${name}.part"
+  done
+  ls -1A -- "${DEMO_DIR}" > "${WORK}/names"   # 목록을 먼저 받는다 — 못 받으면 검사 실패
+  while IFS= read -r name; do
+    case "${name}" in
+      *.pre-T.bak | *.pre-T.bak.part | pre-T.*.part) left+="${name} " ;;
+    esac
+  done < "${WORK}/names"
+  [[ -z "${left}" ]] || mismatch "반영 전 비밀 잔여: ${left}"
+  echo '반영 전 비밀 파기 끝 — 남은 반영 전 백업은 비밀이 아닌 일곱'
+}
+main "$@"
+```
 
 ---
 
