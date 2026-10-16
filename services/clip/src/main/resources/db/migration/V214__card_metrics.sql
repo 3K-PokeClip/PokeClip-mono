@@ -11,8 +11,8 @@ ALTER TABLE jump_cards ADD CONSTRAINT ck_jump_cards_hidden_reason
 -- 「열어 봤다」는 따로 두지 않고 claim으로 갈음한다(2026-10-15 결정). 남이 집은 카드를 연 경우(409)는 안 남는다.
 CREATE TABLE jump_card_actions (
     id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    -- 카드가 지워지는 길은 탈퇴 정리뿐이고 그때 기록도 같이 지워야 한다. 정리는 이 표를 먼저 지우지만,
-    -- CASCADE는 다른 길(시험 정리·관리 도구)로 카드를 지워도 FK가 막지 않게 한다.
+    -- 카드가 지워지는 길은 탈퇴 정리뿐이고 그때 기록도 같이 지워야 한다. 정리 코드는 이 표를 따로 지우지 않고
+    -- CASCADE에 맡긴다(시험 정리·관리 도구로 카드를 지워도 FK가 막지 않는다).
     card_id BIGINT       NOT NULL REFERENCES jump_cards (id) ON DELETE CASCADE,
     action  VARCHAR(16)  NOT NULL,
     -- 누가(JWT sub). FK 없음 — auth users 표를 참조하지 않는다(jump_cards.claimed_by와 같은 처리).

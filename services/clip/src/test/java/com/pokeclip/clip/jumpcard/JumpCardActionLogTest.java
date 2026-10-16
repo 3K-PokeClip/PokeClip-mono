@@ -10,6 +10,7 @@ import com.pokeclip.clip.support.TestIds;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
@@ -32,11 +33,14 @@ class JumpCardActionLogTest extends IntegrationTestSupport {
     private final JumpCardService service;
     private final BroadcastRepository broadcasts;
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate transactions;
 
-    JumpCardActionLogTest(JumpCardService service, BroadcastRepository broadcasts, JdbcTemplate jdbc) {
+    JumpCardActionLogTest(JumpCardService service, BroadcastRepository broadcasts, JdbcTemplate jdbc,
+                          TransactionTemplate transactions) {
         this.service = service;
         this.broadcasts = broadcasts;
         this.jdbc = jdbc;
+        this.transactions = transactions;
     }
 
     @BeforeEach
@@ -96,6 +100,34 @@ class JumpCardActionLogTest extends IntegrationTestSupport {
         assertThatThrownBy(() -> service.hide(id, "1202", "boring")).isInstanceOf(InvalidHighlightException.class);
 
         assertThat(기록(id)).containsExactly("claim 1201 null");
+    }
+
+    /**
+     * 기록은 상태를 바꾼 그 트랜잭션 안에 있다 — 바깥 트랜잭션이 되감기면 상태와 기록이 같이 사라진다.
+     * 기록을 별도 트랜잭션(REQUIRES_NEW)이나 커밋 뒤 콜백으로 옮기면 상태는 되감겼는데 기록만 남아 여기서 빨간불이다
+     * (감사 1회차가 이 그물이 없던 것을 주입으로 찾았다).
+     */
+    @Test
+    void 상태_쓰기가_되감기면_기록도_같이_사라진다() {
+        long id = 카드();
+        service.claim(id, "1201");
+        long before = jdbc.queryForObject("SELECT count(*) FROM jump_card_actions", Long.class);
+
+        되감는다(() -> service.release(id, "1201"));
+        되감는다(() -> service.claim(id, "1201"));
+        되감는다(() -> service.hide(id, "1201", "other"));
+        service.hide(id, "1201", "other");
+        되감는다(() -> service.unhide(id, "1202"));
+
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM jump_card_actions", Long.class))
+                .as("되감긴 넷은 남지 않고 커밋된 숨기기 하나만 더해진다").isEqualTo(before + 1);
+    }
+
+    private void 되감는다(Runnable 동작) {
+        transactions.executeWithoutResult(status -> {
+            동작.run();
+            status.setRollbackOnly();
+        });
     }
 
     private long 카드() {
