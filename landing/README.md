@@ -17,7 +17,7 @@ python3 -m http.server 8765 --directory landing
 
 | 모드 | 조건 | 동작 |
 |---|---|---|
-| `full` | `(min-width:1024px) and (min-height:640px) and (hover:hover) and (pointer:fine)` | Lenis 스무스 스크롤. 핀 + 스크럽(히어로·공감·감지·작동 방식·BGM·스트리머×편집자·기능 갤러리). 작동 방식은 스크롤이 멈추면 단계 가운데로 스냅. 포키 스테이지. 고정 푸터 리빌. 최종 CTA는 한 화면에 들어올 때만 고정 |
+| `full` | `(min-width:1024px) and (min-height:640px) and (hover:hover) and (pointer:fine)` | Lenis 스무스 스크롤. 핀 + 스크럽(히어로·공감·감지·작동 방식·BGM·스트리머×편집자·기능 갤러리). 작동 방식과 스트리머×편집자 카드 스택은 스크롤이 멈추면 단계(카드) 자리로 스냅(휠 한 칸·방향키 두 번에 한 단계). 포키 스테이지. 고정 푸터 리빌. 최종 CTA는 한 화면에 들어올 때만 고정 |
 | `lite` | 그 밖(태블릿·모바일·터치, 높이 640 미만 데스크톱) | 네이티브 스크롤. 스크럽과 진입 리빌. 공감·최종 CTA는 한 화면에 들어올 때만 가운데에서 잠깐 고정. 자동 재생 갤러리(만지면 멈춤) |
 | `reduce` | `prefers-reduced-motion: reduce` | 모션 스크립트 없이 정적 상태. 마키·스피너 정지 |
 
@@ -112,7 +112,7 @@ node --test 'landing/scripts/*.test.mjs'   # archive 회귀 테스트(임시 디
 
 ChatGPT 검색·Perplexity·Google AI 개요·네이버 AI 브리핑 같은 엔진이 PokeClip을 사실대로 설명하고 랜딩을 출처로 인용하게 합니다.
 
-- **사실 요약은 FAQ 첫 문항**입니다(「PokeClip(포키클립)은 어떤 서비스인가요?」). 같은 문장을 JSON-LD `SoftwareApplication.description`과 `llms.txt`에도 씁니다. 셋 중 하나만 고치면 `check-seo`가 잡습니다. 히어로 아래에는 두지 않습니다.
+- **사실 요약은 FAQ 첫 문항**입니다(「PokeClip(포케클립)은 어떤 서비스인가요?」). 같은 문장을 JSON-LD `SoftwareApplication.description`과 `llms.txt`에도 씁니다. 셋 중 하나만 고치면 `check-seo`가 잡습니다. 히어로 아래에는 두지 않습니다.
 - 사실 요약·FAQ·`llms.txt`에는 **지금 사실만** 씁니다. 판별은 채팅 통계 규칙이고, SOOP은 심사 중이며, 후원·음성은 판별에 쓰지 않습니다. 위 「공개 시점 기준으로 바꾼 것」의 문장은 여기에 옮기지 않습니다.
 - FAQ 답의 첫 문장에 결론을 둡니다. 모든 문장은 JS 없이 받은 HTML에 있어야 하고, 크롤러에게만 다른 내용을 보여 주지 않습니다(클로킹 금지).
 - `robots.txt` AI 크롤러 정책(이름은 각 사 문서로 확인, 2026-10-15):
