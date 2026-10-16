@@ -28,7 +28,8 @@ jobs:
   test:
     name: test (${{ matrix.worker }})
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # 실측(2026-10-16, 두 번): render 2분~2분 30초 · upload 1분~1분 45초(꾸러미 설치 포함). 네 배쯤으로 둔다.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:

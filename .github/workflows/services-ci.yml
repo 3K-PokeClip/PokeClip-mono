@@ -25,7 +25,9 @@ jobs:
   test:
     name: test (${{ matrix.module }})
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # 실측(2026-10-16, 두 번): clip 12분 34초~12분 56초 · chat-collector 6분 · auth 4분 30초 · chat-detector 1분 30초.
+    # 가장 긴 clip의 두 배쯤으로 둔다. clip 시험이 늘어 15분을 넘기 시작하면 같이 올린다.
+    timeout-minutes: 25
     strategy:
       # 한 서버가 깨져도 나머지 셋의 결과를 끝까지 본다.
       fail-fast: false
