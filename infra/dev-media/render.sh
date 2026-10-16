@@ -4,6 +4,7 @@
 # 사용:  sudo env DEMO_HOME=/opt/pokeclip-demo ./infra/dev-media/render.sh
 #        (템플릿이 쓰는 값은 경로 잠금값 하나다. 렌더마다 openssl rand -hex 32 로
 #         새로 만든다 — 인자로 받지 않는다.
+#         .env 는 source 하지 않는다 — DEMO_HOME 한 줄만 읽는다.
 #         .env 는 root:root 0600 이므로 sudo 없이 실행하면 .env 읽기 검사에서 중단된다.)
 #
 # 이 스크립트의 가드가 설정 파일의 자동 검사다. 실패는 전부 fail-closed(산출물을 남기지 않고, 기존 정상본은 그대로).
@@ -14,6 +15,8 @@
 #   5) 렌더 결과의 안전 전제 단언 — authMethod: http · read 한 줄뿐인
 #      authHTTPExclude · 빈 apiTrustedProxies · 정규식 경로 · 두 칸(송출 ·
 #      SRT 읽기)에 같은 잠금값. 하나라도 빠지거나 바뀌면 거부
+#   6) .env 의 DEMO_HOME 줄이 하나가 아니거나 실행한 DEMO_HOME 과 다르면 거부 —
+#      compose 가 .env 의 값으로 붙일 자리와 렌더 자리가 갈린다
 set -euo pipefail
 
 readonly LOCK_PLACEHOLDER='__PATH_LOCK_PASSPHRASE__'
@@ -34,13 +37,26 @@ require_absolute_home() {
   [ -d "$DEMO_HOME" ] || die "DEMO_HOME 디렉토리가 없습니다: $DEMO_HOME"
 }
 
-load_env() {
-  local envfile="$DEMO_HOME/.env"
+#######################################
+# $DEMO_HOME/.env 에서 DEMO_HOME 줄만 읽어 실행한 DEMO_HOME 과 같은지 본다(가드 6).
+# 파일을 source 하지 않는다 — 템플릿이 쓰는 값이 없으므로 비밀(resolve 출입증 ·
+# Control API 비번)을 이 스크립트와 자식 프로세스의 환경에 들이지 않는다. 값은
+# 메시지에 싣지 않는다.
+# Globals:
+#   DEMO_HOME
+#######################################
+check_env_home() {
+  local envfile="$DEMO_HOME/.env" line value='' n=0
   [ -r "$envfile" ] || die "$envfile 를 읽을 수 없습니다 — 파일이 없거나(root:root 0600) sudo 없이 실행했습니다"
-  set -a
-  # shellcheck disable=SC1090
-  . "$envfile"
-  set +a
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" == DEMO_HOME=* ]]; then
+      n=$((n + 1))
+      value="${line#DEMO_HOME=}"
+    fi
+  done <"$envfile"
+  [[ "${n}" == 1 ]] || die "$envfile 에 DEMO_HOME= 줄이 하나가 아닙니다(${n}개)"
+  [[ "${value}" == "${DEMO_HOME}" ]] ||
+    die "$envfile 의 DEMO_HOME 이 실행한 DEMO_HOME 과 다릅니다 — compose 가 붙일 자리와 렌더 자리가 갈립니다"
 }
 
 #######################################
@@ -165,8 +181,7 @@ render_to() {
 main() {
   [ -r "$TMPL" ] || die "템플릿을 읽을 수 없습니다: $TMPL"
   require_absolute_home
-  load_env
-  require_absolute_home # .env 가 DEMO_HOME 을 덮어썼을 수 있으므로 다시 본다
+  check_env_home
 
   local out="$DEMO_HOME/mediamtx.demo.yml"
   render_to "$out"

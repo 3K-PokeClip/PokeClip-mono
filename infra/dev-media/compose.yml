@@ -1,8 +1,8 @@
 # dev-media 계정별 방송 서버 (README.md 참조)
 # 팀 공용 로컬 환경(docker-compose.yml · infra/compose/)과 별개다 — 이 파일은 dev-media 상자에서만 쓴다.
 #
-# 기동:  sudo docker compose --env-file "$DEMO_HOME/.env" -f infra/dev-media/compose.yml up -d
-# 확인:  config 출력은 .env 의 비밀을 그대로 내므로 통째로 찍지 않는다. 같은 명령의 up -d 자리에 config --quiet(검증만)를 돌리고,
+# 반영:  빌드 · 디렉터리 준비 · 렌더 · 기동 순서(응답기 healthy 뒤 MediaMTX)는 RUNBOOK 「반영」 절이 정본이다 — 맨 up -d 만 치지 않는다.
+# 확인:  config 출력은 .env 의 비밀을 그대로 내므로 통째로 찍지 않는다. RUNBOOK 의 compose 명령(--env-file · -f)에 config --quiet(검증만)를 돌리고,
 #        포트 · bind 는 config | grep -E '^ +(source|target|published|protocol|read_only|ipv4_address):' 로만 본다.
 # ${DEMO_HOME} 은 반드시 절대경로다(render.sh 가드 1). 상대경로면 bind 가 딴 디렉토리나 named volume 이 된다.
 
@@ -93,7 +93,7 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./player.html:/www/player.html:ro
-      # hls.js 셀프호스팅(필수) — RUNBOOK 2-3 대로 ./hls.min.js 를 내려받은 뒤 기동한다(2026-08-18 실측: 동봉본 의존 폐기)
+      # hls.js 셀프호스팅(필수) — RUNBOOK 「반영」 절의 전제대로 ./hls.min.js 를 내려받은 뒤 기동한다(2026-08-18 실측: 동봉본 의존 폐기)
       - ./hls.min.js:/www/hls.min.js:ro
     # 기본 망에만 붙는다 — 제어망(mtx-control)에 붙이면 Control API · 응답기에 닿는다.
     networks:
