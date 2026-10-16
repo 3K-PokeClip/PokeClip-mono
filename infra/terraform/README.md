@@ -198,7 +198,7 @@ guard 는 Terraform 트리의 금지 규약을 검사합니다. 규칙 R1 ~ R13 
 | R2 | 전체 | `resource` · `data` 유형이 `aws_cloudfrontkeyvaluestore_key` 로 시작 |
 | R3 | 전체 | `aws_security_group` 자원 안 `ingress` · `egress`(블록 · 속성 · `dynamic "ingress"` · `dynamic "egress"`) |
 | R4 | `modules/state_bucket/` | `aws_s3_bucket` 자원 없음, 또는 그 자원 중 `lifecycle { prevent_destroy = true }`(리터럴 `true`)가 없는 것 |
-| R6 | `modules/secret_shells/` | `aws_secretsmanager_secret_policy` 선언(`count = 0` 이어도) · `aws_secretsmanager_secret` 자원의 인라인 `policy` 인자(값과 무관 — kty 61차) · 이름이 `names` 가 아닌 `variable`(읽기 역할 등 다른 입력). 대상 경로에 `.tf` 가 없으면 건너뜀 |
+| R6 | `modules/secret_shells/` | `aws_secretsmanager_secret_policy` 선언(`count = 0` 이어도) · `aws_secretsmanager_secret` 자원의 인라인 `policy` 인자(값과 무관 — kty 61차) · 이름이 `names` 가 아닌 `variable`(읽기 역할 등 다른 입력). 대상 경로에 `.tf` 가 없으면 건너뜀. 모듈 밖(다른 루트가 출력 ARN 으로 비밀에 정책을 붙이는 것)은 보지 않음 — 리뷰가 막음 |
 | R11 | `nonprod/dev/` | `aws_instance` · `aws_eip` · `aws_security_group` 중 없는 유형이 있음, 또는 그 자원 중 리터럴 `prevent_destroy = true` 가 없는 것 |
 | R12 | `nonprod/dns-legacy/` | 운영 트리: ① 그 루트 바로 아래 `.tf` 없음 ② 주소가 정확히 `aws_route53_zone.legacy` 인 선언 없음 ③ 그 루트의 `aws_route53_zone` 중 리터럴 `prevent_destroy = true` 가 없는 것. fixture 트리는 ① · ② 의 부재만 건너뜀(③ 은 그대로) |
 | R13 | 전체(`.tf` 만 — `*.example` · 시험 파일 · 주석은 리뷰) | 문자열 · 숫자 리터럴(맵 키 포함) 안의 계정 ID 꼴 숫자열 — 12자리 · 4-4-4 대시 표기(앞뒤가 숫자가 아님 — ARN 속 계정 ID 포함) · 이름을 소문자로 바꾸고 `-` · `_` 를 뺐을 때 `accountid` 가 드는 `variable`(`accountId` · `account-id` 포함). 위반 메시지는 그 숫자열을 가림 |
