@@ -54,6 +54,11 @@ jobs:
           # 이 잡이 SSM 으로 EC2 에 넘기는 셸이다. GITHUB_SHA 를 박아 두면
           # 배포된 커밋이 무엇인지 EC2 쪽 로그만 봐도 확정된다.
           SHA: ${{ github.sha }}
+          # 디스크 지킴 상수 둘. 2026-10-16 dev 상자 디스크가 빌드 캐시 22.5GB로 100%가 되어 06:12부터 배포 6번이
+          # 실패했다(사람이 SSM 으로 prune 해 30GB 중 8.5GB로 되돌렸다). 굽기 전에 이 시간보다 오래된 빌드 캐시를 지우고,
+          # 배포 끝에 디스크 사용률이 이 값 이상이면 경고를 띄운다. 캐시를 너무 짧게 잡으면 매번 처음부터 굽는다.
+          BUILD_CACHE_KEEP: 24h
+          DISK_WARN_PERCENT: "80"
         run: |
           set -euo pipefail
 
@@ -64,8 +69,9 @@ jobs:
           # 횟수가 아니라 시각으로 재는 이유: 연결만 받고 답하지 않는 포트면 회차마다 curl 5초 + 쉼 10초가 들어
           # 40회가 400초가 아니라 600초가 되고, 넷이면 약 40분이 기다리기 예산을 먹는다(PR #258 codex). 바깥 포트를 닫아도
           # (POK-293 M12) 이 길은 남는다. 못 뜬 서버가 있어도 compose ps · free -m · df -h 를 먼저 찍고 실패한다.
-          # 굽기 전에 하루 넘은 빌드 캐시를 지운다. 2026-10-16 상자 디스크가 빌드 캐시 22.5GB로 100%가 되어 배포 6번이
-          # 실패했다. 하루 안 캐시는 남겨 굽기 속도를 지킨다. 끝에서 디스크가 80% 이상이면 ::warning:: 줄을 찍는다:
+          # 굽기 전에 BUILD_CACHE_KEEP 보다 오래된 빌드 캐시를 지운다(위 env 의 이유). 끝에서 디스크가 DISK_WARN_PERCENT
+          # 이상이면 ::warning:: 줄을 찍는다. 두 값은 이 셸에서 풀려 상자에 글자로 간다(앞에 \ 가 없다).
+          # 굽기 뒤의 image prune 은 이름이 떨어진 옛 :dev 이미지만 지운다(돌고 있는 컨테이너의 이미지는 안 지운다).
           # 아래에서 SSM 출력을 잡 로그로 그대로 내보내므로 Actions가 경고로 띄운다(실패로 바꾸지는 않는다).
           # prune 은 지운 항목을 한 줄씩 찍어 SSM 출력(앞 24,000자)을 채우므로 합계 한 줄만 남긴다.
           # \$ 는 이 셸이 아니라 상자에서 풀리게 한다.
@@ -81,12 +87,12 @@ jobs:
               'sudo -u ec2-user git checkout -B develop FETCH_HEAD',
               'sudo -u ec2-user git log --oneline -1',
               'cd services',
-              'sudo -u ec2-user docker builder prune -f --filter until=24h | tail -1',
+              'sudo -u ec2-user docker builder prune -f --filter until=$BUILD_CACHE_KEEP | tail -1',
               'df -h /',
               'for s in auth clip chat-collector chat-detector; do echo build \$s; sudo -u ec2-user docker compose -f docker-compose.dev.yml build -q \$s; done',
               'sudo -u ec2-user docker compose -f docker-compose.dev.yml up -d postgres auth clip chat-collector chat-detector',
               'sudo -u ec2-user docker image prune -f',
-              'fail=0; end=\$((\$(date +%s) + 600)); for p in 8081 8082 8083 8084; do ok=0; while [ \$(date +%s) -lt \$end ]; do if curl -sf -m 5 -o /dev/null http://127.0.0.1:\$p/actuator/health; then ok=1; break; fi; sleep 10; done; if [ \$ok -eq 1 ]; then echo \$p UP; else echo \$p not UP within 600s; fail=1; fi; done; sudo -u ec2-user docker compose -f docker-compose.dev.yml ps; free -m; df -h /; use=\$(df --output=pcent / | tail -1 | tr -dc 0-9); if [ \$use -ge 80 ]; then echo ::warning::dev box disk \$use% used; fi; [ \$fail -eq 0 ]'
+              'fail=0; end=\$((\$(date +%s) + 600)); for p in 8081 8082 8083 8084; do ok=0; while [ \$(date +%s) -lt \$end ]; do if curl -sf -m 5 -o /dev/null http://127.0.0.1:\$p/actuator/health; then ok=1; break; fi; sleep 10; done; if [ \$ok -eq 1 ]; then echo \$p UP; else echo \$p not UP within 600s; fail=1; fi; done; sudo -u ec2-user docker compose -f docker-compose.dev.yml ps; free -m; df -h /; use=\$(df --output=pcent / | tail -1 | tr -dc 0-9); if [ \$use -ge $DISK_WARN_PERCENT ]; then echo ::warning::dev box disk \$use% used; fi; [ \$fail -eq 0 ]'
             ]" \
             --query Command.CommandId --output text)
 
