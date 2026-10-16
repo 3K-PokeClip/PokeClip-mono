@@ -77,9 +77,12 @@ bash infra/terraform/scripts/put-secret-from-file.sh <종류> <파일>
 *   종류 `signing-key` · `cdn-secret` · `test-stream-key` → 비밀
     `pokeclip/prod/<종류>`. 이름으로 지정합니다(ARN 은 계정 ID 를 품으므로
     쓰지 않습니다). 리전은 `ap-northeast-2` 고정입니다.
-*   값은 파일 → 셸 변수 → 표준 입력(`--cli-input-json file:///dev/stdin`)으로만
-    지나갑니다. 명령 인자 · 환경 변수 · 임시 파일 · 출력에 값이 남지
-    않습니다.
+*   비밀 이름은 `--secret-id` 인자로, 값은 파일 → 셸 변수 → 표준
+    입력(`--secret-string file:///dev/stdin`)으로만 지나갑니다. 명령 인자 · 환경
+    변수 · 임시 파일 · 출력에 값이 남지 않습니다.
+    `--cli-input-json file:///dev/stdin` 은 쓰지 않습니다 — aws-cli 가 `file://`
+    값을 두 번 읽어 파이프의 둘째 읽기가 비고 ParamValidation 으로
+    실패합니다(2026-10-17 aws-cli 2.36.7 실측).
 *   aws 를 부르기 전에 검사합니다 — 파일 없음 · 일반 파일 아님 · 읽기 불가 ·
     빈 파일 · 공백만 · NUL. 서명 키는 머리 줄 `BEGIN PRIVATE KEY` · 꼬리 줄
     `END PRIVATE KEY`(PKCS#8)만 받고, PKCS#1(`BEGIN RSA PRIVATE KEY`) ·
@@ -95,7 +98,7 @@ bash infra/terraform/scripts/put-secret-from-file.sh <종류> <파일>
 | 2 | 표준 오류 `사용: …` | 인자를 고쳐 다시 |
 | 3 | 표준 오류 `SECRET PUT REJECTED: <이유>` | 파일을 고쳐 다시(aws 는 불리지 않음) |
 | 4 | 표준 오류 `SECRET PUT DENIED` | **다시 시도하지 않고 멈춥니다**(아래 「AccessDenied 가 나면」) |
-| 5 | 표준 오류 `SECRET PUT FAILED <AWS 오류 코드>`(못 읽으면 `UNKNOWN`) | **멈추고 원인을 확인합니다** — 다시 시도는 원인을 고친 뒤입니다. 진단은 아래 「실패해도 하지 않는 것」 대로 값을 내지 않는 것만 씁니다. aws 원문은 ARN · 계정 ID 를 품어 내보내지 않습니다 |
+| 5 | 표준 오류 `SECRET PUT FAILED <AWS 오류 코드>`(코드 없는 네트워크 단계 실패 — 연결 · 시간 초과 — 는 `ENDPOINT`, 그 밖에 못 읽으면 `UNKNOWN`) | **멈추고 원인을 확인합니다** — 다시 시도는 원인을 고친 뒤입니다. 진단은 아래 「실패해도 하지 않는 것」 대로 값을 내지 않는 것만 씁니다. aws 원문은 ARN · 계정 ID 를 품어 내보내지 않습니다 |
 
 ### 실패해도 하지 않는 것
 
@@ -447,8 +450,11 @@ T6a(비밀 불일치 → 원본 302/401)와 T9b(clip 빈 서명 키 기동)는 p
 
 ## 확인하지 못한 것
 
-*   AWS CLI v2 가 파이프로 넘긴 `file:///dev/stdin` 을 실제로 읽는지 — O5
-    서명 키 입력에서 실증합니다. 시험은 가짜 aws 로만 했습니다.
+*   Secrets Manager 가 `--secret-string file:///dev/stdin` 으로 받은 값을 새
+    버전으로 넣는지 — 시험은 aws-cli 2.36.7 이 이 꼴을 받아 네트워크 단계까지
+    가는 것(닫힌 로컬 주소)까지만 봤습니다. O5 서명 키 입력에서 실증합니다.
+    O5 전에 `aws --version` 이 2.36.7 이 아니면 `put_secret_test.sh` 를 다시
+    돌려 실물 CLI 계약 사례를 봅니다.
 *   CloudFront 가 `encoded_key` 의 끝 줄바꿈을 어떻게 저장 · 반환하는지 —
     O5 첫 apply 뒤 plan 「No changes」로 확인합니다.
 *   `default_tags` 가 `tags_all` 에 들어가는지 — mock 시험이 보지 못해 O5

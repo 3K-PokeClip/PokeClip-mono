@@ -162,8 +162,9 @@ shellcheck infra/terraform/scripts/*.sh
 
 tflint(`brew install tflint` · 설정 파일 없음 — 기본 terraform 규칙 묶음)는
 루트 · 모듈마다 돌립니다. `--recursive` 는 `scripts/testdata` 의 guard fixture
-까지 읽어 늘 실패합니다. `put_secret_test.sh` 는 JSON 대조에 python3 를
-씁니다.
+까지 읽어 늘 실패합니다. `put_secret_test.sh` 는 PATH 에 진짜 aws 가 있으면
+닫힌 로컬 주소(`127.0.0.1:9`) · 가짜 자격으로 실물 CLI 계약 사례를 돌리고(AWS
+에 닿지 않음), 없으면 skip 으로 셉니다.
 
 ### 단언 방식
 
