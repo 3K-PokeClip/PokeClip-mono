@@ -468,13 +468,17 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
       setSendingFlag(id, true);
       try {
         await requestUploadResolution(entry.streamId, target.clipId, uploadId, resolution);
+        // 다시 시도 단추는 지금 영상(latestClip)에만 있다: 옛 판 업로드를 닫았으면 다시 올릴 길을 약속하지 않는다(PR #261 codex)
+        const current = target.clipId === entry.latestClip?.id;
         toast(
           resolution.result === 'uploaded'
             ? { tone: 'success', title: '발행됨으로 바꿨어요' }
             : {
                 tone: 'success',
                 title: '안 올라간 것으로 닫았어요',
-                description: '이제 다시 시도하거나 영상 만들기로 다시 올릴 수 있어요.',
+                description: current
+                  ? '이제 다시 시도하거나 영상 만들기로 다시 올릴 수 있어요.'
+                  : '이전 판 업로드라 이 화면에서 다시 올리지는 않아요.',
               },
         );
         return true;

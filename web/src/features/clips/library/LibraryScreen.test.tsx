@@ -1,10 +1,11 @@
-import { act } from 'react';
+import { act, useState } from 'react';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
+import { ClipDetailPanel } from './ClipDetailPanel';
 import { LibraryScreen } from './LibraryScreen';
 import { LIBRARY_FIXTURE } from './libraryFixture';
 import type { ClipSnapshot, LibraryStatus } from '@/api/clipEditor';
@@ -875,6 +876,50 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
       within(await screen.findByRole('dialog')).getByRole('button', { name: '안 올라갔어요' }),
     );
     expect(calls()[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/2/uploads/3/resolution');
+    // 다시 시도 단추는 지금 영상에만 있다: 옛 판을 닫았으면 다시 올릴 길을 약속하지 않는다(PR #261 codex)
+    expect(
+      await screen.findByText('이전 판 업로드라 이 화면에서 다시 올리지는 않아요.'),
+    ).toBeInTheDocument();
+  });
+
+  it('창이 열린 사이 확인 필요 업로드가 바뀌면 적던 입력을 버린다(PR #261 codex)', async () => {
+    resolutionStub(() => jsonResponse(200, {}));
+    const user = userEvent.setup();
+    const props = {
+      status: 'checking' as const,
+      now: NOW,
+      onDeselect: () => {},
+      onTitleChange: () => {},
+      onUpload: () => {},
+      onRetryRender: () => {},
+      onRetryUpload: () => {},
+      onDownload: () => {},
+      onDelete: () => {},
+      onResolveUpload: () => Promise.resolve(true),
+    };
+    const first = serverClip('checking', { ...rendered, upload: checkingUpload });
+    const second = serverClip('checking', {
+      ...rendered,
+      id: 6,
+      upload: { ...checkingUpload, id: 8, clipId: 6 },
+    });
+    // 목록 새로 읽기가 패널의 편집본을 다른 확인 필요 업로드로 바꾼 것을 흉내 낸다
+    let swap: () => void = () => {};
+    function Harness() {
+      const [clip, setClip] = useState(first);
+      swap = () => setClip(second);
+      return <ClipDetailPanel clip={clip} {...props} />;
+    }
+    renderWithProviders(<Harness />);
+
+    await user.click(screen.getByRole('button', { name: '채널에 올라갔어요' }));
+    await user.type(
+      within(await screen.findByRole('dialog')).getByRole('textbox', { name: '영상 주소' }),
+      'https://youtu.be/abcDEF12345',
+    );
+    act(() => swap());
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
   const failedUpload = {

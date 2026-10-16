@@ -232,7 +232,9 @@ export function ClipDetailPanel({
         {view.note ? <p className={styles.note}>{noteText(view.note)}</p> : null}
         {/* 확인 필요를 사람이 푼다(POK-333): 위쪽이 보이는 업로드가 확인 필요일 때만 */}
         {checkingUpload && onResolveUpload ? (
+          // 업로드 번호를 열쇠로: 창이 열린 사이 목록 새로 읽기가 다른 업로드로 바꾸면 입력 · 확인 상태를 버린다(PR #261 codex)
           <UploadResolutionControls
+            key={checkingUpload.id}
             busy={sending}
             onResolve={(resolution) => onResolveUpload(checkingUpload.id, resolution)}
           />
