@@ -4,8 +4,8 @@
 //
 // 검색 결과·공유 미리보기는 배포 뒤에야 눈으로 확인할 수 있어서, 배포 전에 깨지면 모르고 지나가는 것만 지킨다:
 // 필수 메타와 절대 주소, 네이버 소유 확인 메타, canonical·sitemap·링크의 주소 꼴, 루트 정적 파일, 구조화 데이터가 보이는 본문과 같은지,
-// AI 크롤러 정책(학습용 차단·답변용 허용), 사실 요약이 FAQ·JSON-LD·llms.txt에서 같은지.
-import { existsSync, readFileSync, statSync } from 'node:fs';
+// AI 크롤러 정책(학습용 차단·답변용 허용), 사실 요약이 FAQ·JSON-LD·llms.txt에서 같은지, 공개 파일에 내부 티켓 번호가 없는지.
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 
 const root = new URL('..', import.meta.url);
 const raw = (path) => readFileSync(new URL(path, root), 'utf8');
@@ -285,6 +285,21 @@ if (existsSync(new URL('llms.txt', root))) {
   for (const path of Object.keys(pages)) {
     expect(llms.includes(`(${SITE}${path})`), `llms.txt에 ${SITE}${path} 링크가 없다`);
   }
+}
+
+// --- 공개 파일에는 내부 티켓 번호를 두지 않는다 — 주석도 소스 보기·robots.txt로 그대로 보인다
+// README·scripts/·legal-versions.json은 배포하지 않는 파일이다(README 「이용약관 · 개인정보 처리방침」)
+const PRIVATE = new Set(['README.md', 'scripts', 'legal-versions.json']);
+const publicTexts = (dir) =>
+  readdirSync(new URL(dir || '.', root), { withFileTypes: true }).flatMap((entry) => {
+    const path = `${dir}${entry.name}`;
+    if (PRIVATE.has(path)) return [];
+    if (entry.isDirectory()) return publicTexts(`${path}/`);
+    return /\.(html|css|js|txt|xml|svg)$/.test(entry.name) ? [path] : [];
+  });
+for (const path of publicTexts('')) {
+  const tickets = [...new Set(raw(path).match(/\bPOK-\d+\b/g) ?? [])];
+  expect(tickets.length === 0, `공개 파일 ${path}에 내부 티켓 번호가 있다: ${tickets.join(', ')}`);
 }
 
 if (failures.length > 0) {

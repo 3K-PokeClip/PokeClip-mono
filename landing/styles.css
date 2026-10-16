@@ -1,4 +1,4 @@
-/* PokeClip 랜딩 시안 (POK-269) — 모바일 우선. 구간: ≤767 mobile · 768 tablet · 1024 desktop · 1600 wide
+/* PokeClip 랜딩 시안 — 모바일 우선. 구간: ≤767 mobile · 768 tablet · 1024 desktop · 1600 wide
    값의 출처: web/src/ui/styles/primitives/color.css · semantic/theme-dark.css · web/docs/BRAND.md */
 
 @font-face {

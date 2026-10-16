@@ -1,7 +1,7 @@
-# pokeclip.com — 랜딩·이용약관·개인정보 처리방침 (POK-349 · POK-350)
+# pokeclip.com — 랜딩·이용약관·개인정보 처리방침
 # 대시보드(app.pokeclip.com)는 이 파일이 아니라 페이지의 noindex로 색인에서 뺀다.
 #
-# AI 크롤러(POK-350): 학습용은 막고, 검색·답변용은 연다 — AI 답변이 PokeClip을 찾아 랜딩을 출처로 인용하게.
+# AI 크롤러: 학습용은 막고, 검색·답변용은 연다 — AI 답변이 PokeClip을 찾아 랜딩을 출처로 인용하게.
 # 열린 쪽(아래 * 묶음): Googlebot·bingbot·Yeti, OAI-SearchBot·ChatGPT-User, PerplexityBot·Perplexity-User,
 # Claude-SearchBot·Claude-User, Applebot, Google-Extended(Gemini 학습·grounding — 검색 노출과는 무관, 2026-10-15 결정으로 연다).
 # 이름은 각 사 문서로 확인했다(2026-10-15). ChatGPT-User·Perplexity-User는 사용자 요청이라 robots.txt를 따르지 않을 수 있다.

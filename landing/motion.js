@@ -1,4 +1,4 @@
-// PokeClip 랜딩 시안 (POK-269) — P2 모션: GSAP + ScrollTrigger + SplitText (+ Lenis는 Full만).
+// PokeClip 랜딩 시안 — P2 모션: GSAP + ScrollTrigger + SplitText (+ Lenis는 Full만).
 // 모드: full(정밀 포인터 데스크톱, 핀·스크럽·포키 스테이지) / lite(핀 없이 스크럽·진입 리빌) / reduce(정적, 이 파일은 바로 빠진다)
 (() => {
   const root = document.documentElement;
