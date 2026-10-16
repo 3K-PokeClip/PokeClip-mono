@@ -213,11 +213,13 @@ export function ClipDetailPanel({
       {previousUploads.length > 0 ? (
         <>
           <hr className={styles.divider} />
-          <dl className={styles.meta} aria-label="이전 판으로 올린 영상">
-            {previousUploads.map((u) => (
-              <PreviousUploadRow key={u.id} upload={u} />
-            ))}
-          </dl>
+          <section aria-label="이전 판으로 올린 영상">
+            <dl className={styles.meta}>
+              {previousUploads.map((u) => (
+                <PreviousUploadRow key={u.id} upload={u} />
+              ))}
+            </dl>
+          </section>
         </>
       ) : null}
 

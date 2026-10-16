@@ -177,7 +177,7 @@ public class LibraryService {
                 .toList();
     }
 
-    /** 줄들을 응답 모양으로. 편집본·영상·주문·업로드를 <b>각각 한 번씩</b> 읽는다 — 줄마다 묻지 않는다. 순서는 줄 순서 그대로. */
+    /** 줄들을 응답 모양으로. 편집본·영상·주문·업로드를 <b>각각 한 번씩</b> 읽는다: 줄마다 묻지 않는다. 순서는 줄 순서 그대로. */
     private List<LibraryEntry> assemble(List<LibraryRow> rows) {
         Map<Long, Recipe> recipeById = recipes.findAllById(rows.stream().map(LibraryRow::recipeId).toList()).stream()
                 .collect(Collectors.toMap(Recipe::getId, Function.identity()));
