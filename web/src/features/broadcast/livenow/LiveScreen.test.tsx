@@ -325,6 +325,8 @@ const server = vi.hoisted(() => ({
   /** 놓은 카드(POK-338) — 목록에서 집은 사람이 빈다 */
   released: new Set<number>(),
   chatPaged: false,
+  /** 후원 줄의 서버 id를 첫 채팅 id와 같게 준다: 채팅·후원은 표가 달라 번호가 겹친다(POK-254) */
+  chatIdClash: false,
   /** 출입증: 'off'는 서명 재료 없음(503), 'grant'는 10분짜리, 'fail'은 500 */
   playback: 'off' as 'off' | 'grant' | 'fail',
   /** 지난 방송의 시각 기준점(POK-255). null이면 서버가 모른다 */
@@ -643,6 +645,12 @@ function handle(url: string, init?: RequestInit): Response | Promise<Response> {
       return jsonResponse(200, { items: CHAT.slice(0, 3), nextCursor: 'p2', appliedOffsetMs: 0 });
     if (server.chatPaged)
       return jsonResponse(200, { items: CHAT.slice(3), nextCursor: null, appliedOffsetMs: 0 });
+    if (server.chatIdClash)
+      return jsonResponse(200, {
+        items: CHAT.map((it) => (it.kind === 'donation' ? { ...it, id: 1 } : it)),
+        nextCursor: null,
+        appliedOffsetMs: 0,
+      });
     return jsonResponse(200, { items: CHAT, nextCursor: null, appliedOffsetMs: 0 });
   }
   // 통로는 용량 초과로 답한다 — 폴링이 카드를 채운다(통로 자체는 useLiveMockState의 몫)
@@ -743,6 +751,7 @@ beforeEach(() => {
   server.hidden = new Set();
   server.released = new Set();
   server.chatPaged = false;
+  server.chatIdClash = false;
   server.playback = 'off';
   notFound.mockClear();
   // env는 셸에서 그대로 상속된다 — 로컬/CI 셸에 NEXT_PUBLIC_MEDIA_*가 export돼 있어도 소스가 null이게 고정한다.
@@ -1317,6 +1326,20 @@ describe('LiveScreen — 실시간 채팅 패널', () => {
     server.chatPaged = true;
     await renderLive();
     expect(screen.getByText('방금 그거 다시 보여주세요')).toBeInTheDocument();
+  });
+
+  it('채팅과 후원의 서버 번호가 겹쳐도 줄 열쇠가 겹치지 않는다(POK-254)', async () => {
+    // 표마다 따로 매긴 번호를 그대로 열쇠로 쓰면 React가 같은 열쇠의 줄을 섞어 그린다
+    server.chatIdClash = true;
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await renderLive();
+      expect(screen.getByText('도네초코 · 치즈 5,000')).toBeInTheDocument();
+      expect(screen.getByText('오늘도 새벽 랭크인가요')).toBeInTheDocument();
+      expect(errors.mock.calls.filter(([msg]) => String(msg).includes('same key'))).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it('키워드 설정은 라우트가 설 때까지 잠겨 있다', async () => {

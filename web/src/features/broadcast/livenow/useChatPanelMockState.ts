@@ -394,7 +394,8 @@ export function useChatPanelMockState(
           const next = { ...prev };
           for (const it of page.items) {
             const k = fingerprint(it);
-            if (!next[k]) next[k] = it;
+            // 줄 열쇠는 중계 줄과 같은 로컬 번호다(POK-254): 서버 id는 채팅·후원 표가 따로 매겨 겹치고, 중계 줄 번호와도 섞였다
+            if (!next[k]) next[k] = { ...it, id: nextId.current++ };
           }
           return trim(next);
         });
