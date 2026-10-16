@@ -181,7 +181,9 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
     new Map<
       string,
       {
-        cardCount: number;
+        /** 아직 한 번도 못 셌으면 null */
+        cardCount: number | null;
+        /** 마지막으로 세려고 한 시각(실패해도 넘긴다: 늘 실패하는 방송이 다시 세는 차례를 독차지하지 않게) */
         countedAt: number;
         recorded: boolean;
         /** 재생 서버에 물어 녹화가 없다고 들었다(묻지 못했으면 앞 답을 둔다) */
@@ -206,20 +208,30 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
           const known = cache.get(b.streamId);
           return (
             known === undefined ||
+            known.cardCount === null ||
             isJustEnded(b.endedAt, new Date(nowMs)) ||
             nowMs - known.countedAt >= CARD_COUNT_TTL_MS
           );
         };
-        // 다시 셀 방송. 처음 보는 방송과 방금 끝난 방송은 다 세고, 오래된 방송은 한 주기에 CARD_RECOUNT_PER_POLL개까지만
+        // 다시 셀 방송. 처음 보는 방송·못 센 방송·방금 끝난 방송은 다 세고, 오래된 방송은 가장 오래전에 센 것부터 한 주기에
+        // CARD_RECOUNT_PER_POLL개까지만. 고정 순서로 고르면 방송이 많을 때 앞쪽이 다시 낡아 뒤쪽은 영영 차례가 안 왔다(PR #256 codex)
         const recountIds = new Set<string>();
-        let oldRecounts = 0;
+        const oldStale: { id: string; countedAt: number }[] = [];
         for (const b of all) {
           if (!countStale(b)) continue;
-          const old = cache.has(b.streamId) && !isJustEnded(b.endedAt, new Date(nowMs));
-          if (old && oldRecounts >= CARD_RECOUNT_PER_POLL) continue;
-          if (old) oldRecounts += 1;
-          recountIds.add(b.streamId);
+          const known = cache.get(b.streamId);
+          if (
+            known !== undefined &&
+            known.cardCount !== null &&
+            !isJustEnded(b.endedAt, new Date(nowMs))
+          )
+            oldStale.push({ id: b.streamId, countedAt: known.countedAt });
+          else recountIds.add(b.streamId);
         }
+        oldStale
+          .sort((x, y) => x.countedAt - y.countedAt)
+          .slice(0, CARD_RECOUNT_PER_POLL)
+          .forEach(({ id }) => recountIds.add(id));
         const checkRecording = (b: WireBroadcast) =>
           b.status === 'ended' && playbackConfigured() && cache.get(b.streamId)?.recorded !== true;
         // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 방송들이 같은 답을 받는다(POK-233) — 한 번 불러올 때 키마다
@@ -240,7 +252,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
             .map(async (b) => {
               const known = cache.get(b.streamId);
               const recount = known === undefined || recountIds.has(b.streamId);
-              const [cardCount, spans] = await Promise.all([
+              const [fetched, spans] = await Promise.all([
                 known !== undefined && !recount
                   ? Promise.resolve(known.cardCount)
                   : fetchAllJumpCards(b.streamId).then(
@@ -250,7 +262,8 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
                 // 녹화 재생 서버가 있으면 그 방송의 녹화가 실제로 있는지 본다 — 없으면 열어도 「영상 신호 없음」뿐이다
                 checkRecording(b) ? spansOf(mediaStreamId(b)) : Promise.resolve(null),
               ]);
-              // 카드 수를 못 읽었으면 기억하지 않는다 — 다음 주기에 다시 잰다.
+              // 카드 수를 못 읽었으면 앞 수를 둔다(처음이면 null, 다음 주기에 다시 잰다). 녹화 확인 결과는 카드 수와 따로 남긴다:
+              // 카드 목록만 실패해도 녹화 없음을 버리면 그 방송은 「VOD 준비 중」에 갇혔다(PR #256 codex).
               // 「녹화 있음」만 굳힌다: 방송 직후엔 녹화가 늦게 생기고 재생 서버가 잠깐 실패해도 빈 목록이 온다.
               // 「없음」을 굳히면 녹화가 생겨도 이 탭은 영영 준비 중으로 남는다(PR #200 codex)
               const recorded =
@@ -261,16 +274,15 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
                     recordingSearchFrom(isoMs(b.startedAt), isoMs(b.endedAt)),
                     isoMs(b.endedAt),
                   ) !== null);
-              if (cardCount !== null)
-                cache.set(b.streamId, {
-                  cardCount,
-                  countedAt: known !== undefined && !recount ? known.countedAt : nowMs,
-                  // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 다른 방송의 녹화도 섞여 온다(POK-233) — 다시보기와 같은
-                  // 규칙(방송 시간과 겹치는 구간, 시작 시각을 모르면 끝 12시간)으로 거른다. 안 거르면 녹화 없는 방송이 「다시 보기
-                  // 가능」으로 올라 열면 빈 화면이다(리뷰 6라운드: 다시보기만 하한을 좁혀 둘이 갈렸다)
-                  recorded,
-                  missing: recorded ? false : spans === null ? (known?.missing ?? false) : true,
-                });
+              cache.set(b.streamId, {
+                cardCount: fetched ?? known?.cardCount ?? null,
+                countedAt: known !== undefined && !recount ? known.countedAt : nowMs,
+                // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 다른 방송의 녹화도 섞여 온다(POK-233) — 다시보기와 같은
+                // 규칙(방송 시간과 겹치는 구간, 시작 시각을 모르면 끝 12시간)으로 거른다. 안 거르면 녹화 없는 방송이 「다시 보기
+                // 가능」으로 올라 열면 빈 화면이다(리뷰 6라운드: 다시보기만 하한을 좁혀 둘이 갈렸다)
+                recorded,
+                missing: recorded ? false : spans === null ? (known?.missing ?? false) : true,
+              });
             }),
         );
         const rows: VodBroadcast[] = all.map((b) => ({

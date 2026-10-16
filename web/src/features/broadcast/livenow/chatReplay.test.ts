@@ -1382,6 +1382,16 @@ describe('ChatReplayLoader: 라이브 되감기는 위 끝이 움직인다(POK-3
     expect(loader.getSnapshot().lines.map((l) => l.item.id)).toEqual([1, 2]);
   });
 
+  it('겹쳐 읽어도 한 번에 묻는 창은 1시간을 넘지 않는다: 수집기는 넘으면 400 too_wide다(PR #256 codex P1)', async () => {
+    const srv = collector([]);
+    const loader = liveLoader(srv);
+    // 2시간 넘게 되감았다: 1시간 창을 여러 번 이어 읽어야 영상 시각에 닿는다
+    loader.want(T0 + 2.5 * HOUR, T0, { upperMs: T0 + 3 * HOUR });
+    await settle();
+    expect(srv.calls.length).toBeGreaterThan(1);
+    for (const call of srv.calls) expect(call.to - call.from).toBeLessThanOrEqual(HOUR);
+  });
+
   it('멈춰 있으면(위 끝이 그대로) 다시 묻지 않는다', async () => {
     const srv = collector(steady(600));
     const loader = liveLoader(srv);

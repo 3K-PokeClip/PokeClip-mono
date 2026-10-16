@@ -550,12 +550,7 @@ export class ChatReplayLoader {
                 toMs: Math.min(front.end, front.at + COLLECTOR_WINDOW_MS),
                 cursor: null,
               })
-            : (this.open ?? {
-                // 읽은 구간 안에서만 겹친다: 하한 아래는 읽은 적이 없다
-                fromMs: Math.max(this.from, this.to - this.rereadMs),
-                toMs: Math.min(this.upperMs, this.to + COLLECTOR_WINDOW_MS),
-                cursor: null,
-              });
+            : (this.open ?? this.lateAsk());
         let page: WirePage;
         let added: ReplayLine[];
         try {
@@ -624,6 +619,15 @@ export class ChatReplayLoader {
       item,
       at: Date.parse(item.time) - page.appliedOffsetMs,
     }));
+  }
+
+  /**
+   * 늦은 쪽 다음 창. 읽은 구간 안에서만 겹치고(하한 아래는 읽은 적이 없다), 창 길이는 겹친 시작에서 센다: 끝에서 세면 겹침만큼
+   * 1시간을 넘어 수집기가 400 too_wide로 거절했다(PR #256 codex P1)
+   */
+  private lateAsk(): WindowAsk {
+    const fromMs = Math.max(this.from, this.to - this.rereadMs);
+    return { fromMs, toMs: Math.min(this.upperMs, fromMs + COLLECTOR_WINDOW_MS), cursor: null };
   }
 
   private append(page: WirePage, added: ReplayLine[], ask: WindowAsk): void {

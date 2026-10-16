@@ -447,6 +447,59 @@ describe('VodListScreen — 서버 목록', () => {
     expect(cardCalls()).toBe(50);
   });
 
+  it('다시 세는 차례는 가장 오래전에 센 방송부터라 뒤쪽 방송도 결국 센다: 방송이 많아도 앞쪽이 차례를 독차지하지 않는다(PR #256 codex)', async () => {
+    // 한 주기 20개 × 10분이면 200개다. 고정 순서로 고르면 201번째부터는 앞쪽이 다시 낡아 영영 차례가 안 온다
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const endedAt = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const rows = Array.from({ length: 250 }, (_, i) => ({
+      streamId: `old-${i}`,
+      status: 'vod_ready',
+      relation: 'OWNER',
+      startedAt: endedAt,
+      endedAt,
+      vodExpiresAt: null,
+    }));
+    const spy = stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?')
+        ? jsonResponse(200, { broadcasts: rows, nextCursor: null })
+        : jsonResponse(200, { cards: [], nextCursor: null }),
+    );
+    const callsOf = (id: string) =>
+      spy.mock.calls.filter(([url]) => String(url).includes(`/${id}/jump-cards`)).length;
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    for (let minute = 0; minute < 25; minute += 1)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+    expect(callsOf('old-249')).toBeGreaterThanOrEqual(2);
+  });
+
+  it('카드 목록이 실패해도 녹화 확인 결과는 남긴다: 녹화가 없으면 「녹화 영상이 없어요」로 연다(PR #256 codex)', async () => {
+    const endedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'http://pb.test');
+    vi.resetModules();
+    const { VodListScreen: Fresh } = await import('./VodListScreen');
+    const { renderWithProviders: renderFresh } = await import('@/test/testProviders');
+    stubFetch((url) => {
+      if (url.startsWith('http://pb.test/list')) return jsonResponse(200, []);
+      if (url.startsWith('/api/clip/broadcasts?'))
+        return jsonResponse(200, {
+          broadcasts: [
+            { streamId: 'nocards', status: 'ended', relation: 'OWNER', startedAt: endedAt, endedAt, vodExpiresAt: null },
+          ],
+          nextCursor: null,
+        });
+      return jsonResponse(503, { error: 'x' });
+    });
+    renderFresh(<Fresh />);
+    expect(await screen.findByText(/녹화 영상이 없어요/)).toBeInTheDocument();
+    vi.unstubAllEnvs();
+  });
+
   it('오래 끝난 방송의 카드 수는 10분 안에 다시 세지 않는다 — 다시 읽을 때 전체 이력의 카드를 또 부르지 않는다', async () => {
     // 주기마다 방송마다 카드 목록을 부르면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex)
     vi.useFakeTimers({ shouldAdvanceTime: true });

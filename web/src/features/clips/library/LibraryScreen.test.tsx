@@ -593,6 +593,55 @@ describe('LibraryScreen — 서버 편집본의 비율 (POK-254)', () => {
   });
 });
 
+describe('LibraryScreen — 서버 편집본의 비율 다시 읽기 (PR #256 codex)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('상세를 한 번 못 읽어도 「—」로 굳지 않고 다시 읽는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const entry = {
+      recipeId: 12,
+      streamId: 's1',
+      creatorId: '9',
+      recipeVersion: 1,
+      cut: { inAtMs: 0, outAtMs: 30_000 },
+      status: 'rendered',
+      broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+      latestClip: null,
+      createdAt: '2026-09-20T11:00:00Z',
+      updatedAt: '2026-09-20T12:00:00Z',
+    };
+    let detailCalls = 0;
+    stubFetch((url) => {
+      if (url === '/api/clip/library/12') {
+        detailCalls += 1;
+        return detailCalls === 1
+          ? jsonResponse(503, { error: 'x' })
+          : jsonResponse(200, {
+              ...entry,
+              recipe: { outputs: [{ outputId: 'o1', aspect: 'SQUARE_1_1', crop: { x: 0, y: 0, w: 1, h: 1 } }] },
+            });
+      }
+      return url.startsWith('/api/clip/library')
+        ? jsonResponse(200, { items: [entry], nextCursor: null })
+        : jsonResponse(200, { id: 9, email: 'me@example.com' });
+    });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderWithProviders(<LibraryScreen />);
+    await user.click(await screen.findByRole('button', { name: /^편집본 #12/ }));
+    const ratio = within(panel()).getByText('비율').nextElementSibling!;
+    await waitFor(() => expect(detailCalls).toBe(1));
+    expect(ratio).toHaveTextContent('—');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await waitFor(() => expect(ratio).toHaveTextContent('1:1'));
+  });
+});
+
 describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', () => {
   const NOW = new Date('2026-09-20T12:00:00Z');
   const rendered: ClipSnapshot = {

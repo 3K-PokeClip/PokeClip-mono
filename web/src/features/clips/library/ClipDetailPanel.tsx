@@ -25,6 +25,9 @@ import styles from './LibraryScreen.module.css';
 // 시안 1g 우측 상세 패널의 내용. 무엇을 그릴지는 detailViewFor가 정하고 여기는 그리기만 한다.
 // 패널 껍데기(폭 전환·inert)는 LibraryScreen이 갖는다 — 닫히는 동안에도 내용이 남아야 해서다.
 
+/** 비율을 못 읽었을 때 다시 읽는 간격 */
+const ASPECT_RETRY_MS = 10_000;
+
 export function ClipDetailPanel({
   clip,
   status,
@@ -67,21 +70,29 @@ export function ClipDetailPanel({
   const duration = durationLabel(clip, status);
   const retention = ddayFor(clip.sourceExpiresAt, now);
 
-  // 비율은 레시피에 있어 패널을 열 때 상세를 읽는다(POK-254). 판이 바뀌면 다시 읽고, 다른 편집본의 늦은 답은 버린다
+  // 비율은 레시피에 있어 패널을 열 때 상세를 읽는다(POK-254). 판이 바뀌면 다시 읽고, 다른 편집본의 늦은 답은 버린다.
+  // 못 읽으면 「—」로 굳히지 않고 10초 뒤 다시 읽는다: 패널은 닫아도 내려가지 않아 다시 열어도 새로 읽지 않는다(PR #256 codex)
   const aspectKey = `${clip.id}:${clip.entry?.recipeVersion ?? ''}`;
   const loadAspectRef = useRef(loadAspect);
   loadAspectRef.current = loadAspect;
   const [aspect, setAspect] = useState<{ key: string; label: string | null } | null>(null);
   useEffect(() => {
-    const load = loadAspectRef.current;
-    if (load === undefined) return;
     let alive = true;
-    load().then(
-      (label) => alive && setAspect({ key: aspectKey, label }),
-      () => alive && setAspect({ key: aspectKey, label: null }),
-    );
+    let retry: number | undefined;
+    const read = () => {
+      const load = loadAspectRef.current;
+      if (load === undefined) return;
+      load().then(
+        (label) => alive && setAspect({ key: aspectKey, label }),
+        () => {
+          if (alive) retry = window.setTimeout(read, ASPECT_RETRY_MS);
+        },
+      );
+    };
+    read();
     return () => {
       alive = false;
+      window.clearTimeout(retry);
     };
   }, [aspectKey]);
   const aspectLabel = aspect?.key === aspectKey ? aspect.label : null;
