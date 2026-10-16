@@ -25,6 +25,14 @@ ROW_PATTERN+='[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} KST \| '
 readonly ROW_PATTERN
 # 13-1 판정 시각(고정 입력 baseline.tsv 의 다섯째 칸).
 readonly JUDGED='2026-10-13T10:59+09:00'
+# 판정 · 승인 한 번의 제한 시간(초). 정상 실행은 1초 안에 끝난다 — 넘기면
+# 걸린 것으로 보고 끝낸다(FIFO 로 바꾼 증거를 읽다 걸리는 회귀).
+readonly RUN_LIMIT=10
+# 꼴은 맞지만 어느 결과의 해시도 아닌 sha256(승인 기록 변조용).
+OTHER_SHA256="$(printf '%064d' 0)"
+readonly OTHER_SHA256
+# UTC 가 아닌 시각(완료 표지 · 승인 기록 변조용).
+readonly NOT_UTC='2026-10-14T12:15:00+09:00'
 
 #######################################
 # 사본 트리와 고정 입력을 만든다.
@@ -98,8 +106,8 @@ new_tree_case() {
 }
 
 #######################################
-# 사본 트리의 scp-recheck.sh 를 돌린다. 「이름=값」 꼴 인자는 환경으로
-# 넘긴다(FAKE_AWS_*).
+# 사본 트리의 scp-recheck.sh 를 제한 시간(RUN_LIMIT) 안에서 돌린다. 「이름=값」
+# 꼴 인자는 환경으로 넘긴다(FAKE_AWS_*).
 # Arguments:
 #   사례 디렉터리, 결과 이름, [이름=값 …] 스크립트 인자.
 #######################################
@@ -111,8 +119,8 @@ run_recheck() {
     envs+=("$1")
     shift
   done
-  testlib::run "${case_dir}" "${name}" env ${envs[@]+"${envs[@]}"} \
-    bash "${case_dir}/tree/scp-recheck.sh" "$@"
+  testlib::run_limited "${RUN_LIMIT}" "${case_dir}" "${name}" \
+    env ${envs[@]+"${envs[@]}"} bash "${case_dir}/tree/scp-recheck.sh" "$@"
 }
 
 #######################################
@@ -318,6 +326,19 @@ rehash_acceptance() {
 }
 
 #######################################
+# 완료 표지의 해시를 지금 result.tsv 로 다시 쓴다(시각은 그대로) — 판정이
+# 처음부터 그 결과를 쓴 것처럼 만들려고.
+# Arguments:
+#   증거 디렉터리.
+#######################################
+rehash_marker() {
+  local dir="$1" line sum
+  line="$(cat -- "${dir}/complete.txt")" || return 1
+  sum="$(sha256_of "${dir}/result.tsv")" || return 1
+  testlib::tsv "${line%%$'\t'*}" "${sum}" >"${dir}/complete.txt"
+}
+
+#######################################
 # 판정 하나를 돌리고 그 증거 디렉터리를 승인한다.
 # Globals:
 #   run_out, run_status
@@ -470,12 +491,13 @@ expect_other_tool_dirs_ignored() {
 }
 
 #######################################
-# 보고받은 판정만 승인한다: 판정 A 를 보고한 뒤 B 가 생겨도 A 를 이름으로
-# 승인하면 A 에만 승인이 남는다. 이미 승인된 더 최근 판정보다 오래된
-# 판정은 승인하지 않는다(시계 역행 · 순서 뒤바뀜).
+# 보고받은 판정만 승인한다(장부 r2 #3): 판정 A 를 보고한 뒤 B 가 생겼고 B 는
+# 미승인일 때 A 를 이름으로 승인하면 A 에만 승인이 남고, 다음 판정의 비교
+# 기준이 A 다 — 늘 최신 판정을 승인하는 회귀를 잡는다. 이미 승인된 더 최근
+# 판정보다 오래된 판정은 승인하지 않는다(시계 역행 · 순서 뒤바뀜).
 #######################################
 expect_accept_named_judgment() {
-  local case_dir root first second
+  local case_dir root first second third
   case_dir="$(new_tree_case)" || {
     testlib::fail "accept-named: 시험 준비 실패"
     return
@@ -485,25 +507,43 @@ expect_accept_named_judgment() {
   first="$(judged_name)"
   run_recheck "${case_dir}" b gamma
   second="$(judged_name)"
-  run_recheck "${case_dir}" accept-b --accept gamma --dir "${second}" \
-    --reason 'kty 답'
-  if [[ "${run_status}" -ne 0 || ! -f "${root}/${second}/accepted.tsv" ||
-    -e "${root}/${first}/accepted.tsv" ]]; then
-    testlib::fail "accept-named: 이름으로 고른 판정에만 승인이 남지 않음"
-    return
-  fi
   run_recheck "${case_dir}" accept-a --accept gamma --dir "${first}" \
     --reason 'kty 답'
+  if [[ "${run_status}" -ne 0 || ! -f "${root}/${first}/accepted.tsv" ||
+    -e "${root}/${second}/accepted.tsv" ]]; then
+    testlib::fail "accept-named: 보고한 판정(A)에만 승인이 남지 않음 —" \
+      "${run_status} $(cat -- "${run_out}.stderr")"
+    return
+  fi
+  run_recheck "${case_dir}" c gamma
+  third="$(judged_name)"
+  if [[ "$(testlib::count "${run_out}.stderr" \
+    "비교 기준 승인 기준 ${first}")" -ne 1 ]]; then
+    testlib::fail "accept-named: 다음 판정의 비교 기준이 A 가 아님 —" \
+      "$(cat -- "${run_out}.stderr")"
+    return
+  fi
+  run_recheck "${case_dir}" accept-c --accept gamma --dir "${third}" \
+    --reason 'kty 답'
+  if [[ "${run_status}" -ne 0 ]]; then
+    testlib::fail "accept-named: 최근 판정(C) 승인이 종료 0 이 아님 —" \
+      "${run_status}"
+    return
+  fi
+  run_recheck "${case_dir}" accept-b --accept gamma --dir "${second}" \
+    --reason 'kty 답'
   expect_unverifiable accept-older-than-approved || return
-  testlib::ok "accept-named → 고른 판정에만 승인 · 더 오래된 판정 승인은 종료 2"
+  testlib::ok "accept-named → B 가 미승인이어도 A 에만 승인 · 다음 비교 기준 A ·" \
+    "더 오래된 판정 승인은 종료 2"
 }
 
 #######################################
-# 끝나지 않은 판정(완료 표지 없음)은 승인할 수 없다 — 호출 실패로 끝난
-# 판정 · 완료 표지를 남기기 전에 멈춘 판정.
+# 끝나지 않은 판정은 승인할 수 없다 — 호출 실패로 끝난 판정 · 완료 표지가
+# 없는(지운) 판정 · 표지의 꼴이 틀린 판정(장부 r2 #8 — 빈 표지 · 「UTC
+# 시각<탭>해시」 가 아닌 글 · 해시는 맞고 시각만 UTC 가 아님).
 #######################################
 expect_accept_incomplete_rejected() {
-  local case_dir name
+  local case_dir name marker kind
   case_dir="$(new_tree_case)" || {
     testlib::fail "accept-incomplete: 시험 준비 실패"
     return
@@ -513,13 +553,104 @@ expect_accept_incomplete_rejected() {
   run_recheck "${case_dir}" accept-failed --accept gamma --dir "${name}" \
     --reason 'kty 답'
   expect_unverifiable accept-failed-judgment || return
+  for kind in missing empty garbage not-utc; do
+    run_recheck "${case_dir}" "judged-${kind}" gamma
+    name="$(judged_name)"
+    marker="${case_dir}/home/.pokeclip-precheck/${name}/complete.txt"
+    case "${kind}" in
+      missing) rm -f -- "${marker}" ;;
+      empty) : >"${marker}" ;;
+      garbage) printf 'garbage\n' >"${marker}" ;;
+      *)
+        testlib::tsv "${NOT_UTC}" "$(sha256_of "${marker%/*}/result.tsv")" \
+          >"${marker}"
+        ;;
+    esac
+    run_recheck "${case_dir}" "accept-${kind}" --accept gamma --dir "${name}" \
+      --reason 'kty 답'
+    expect_unverifiable "accept-marker-${kind}" || return
+  done
+  testlib::ok "accept-incomplete → 실패한 판정 · 완료 표지 없음 · 빈 표지 ·" \
+    "꼴 밖 표지 · UTC 아닌 표지 승인 모두 종료 2"
+}
+
+#######################################
+# 장부 r2 #9: 승인은 kty 가 본 판정 그대로만 한다 — 판정 뒤 승인 전에
+# result.tsv 를 꼴만 맞게 고치면 완료 표지의 해시(판정 때)와 달라 승인하지
+# 않는다(종료 2 · 승인 기록 없음).
+#######################################
+expect_accept_changed_result_rejected() {
+  local case_dir name dir
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "accept-changed-result: 시험 준비 실패"
+    return
+  }
   run_recheck "${case_dir}" judged gamma
   name="$(judged_name)"
-  rm -f -- "${case_dir}/home/.pokeclip-precheck/${name}/complete.txt"
-  run_recheck "${case_dir}" accept-unmarked --accept gamma --dir "${name}" \
+  dir="${case_dir}/home/.pokeclip-precheck/${name}"
+  {
+    testlib::tsv iam:GetAccountAuthorizationDetails us-east-1 allow allowed True
+    testlib::tsv tag:GetTagKeys ap-northeast-2 deny implicitDeny False
+  } >"${dir}/result.tsv"
+  run_recheck "${case_dir}" accept --accept gamma --dir "${name}" \
     --reason 'kty 답'
-  expect_unverifiable accept-without-marker || return
-  testlib::ok "accept-incomplete → 실패한 판정 · 완료 표지 없는 판정 승인 종료 2"
+  expect_unverifiable accept-changed-result || return
+  if [[ -e "${dir}/accepted.tsv" || -L "${dir}/accepted.tsv" ]]; then
+    testlib::fail "accept-changed-result: 거부했는데 승인 기록이 생김"
+    return
+  fi
+  testlib::ok "accept-changed-result → 판정 뒤 바뀐 결과는 승인 종료 2"
+}
+
+#######################################
+# 완료 표지 · 승인 기록은 다 쓴 뒤에만 생긴다(cc r2 지적 2): 기록에 넣을
+# UTC 시각을 읽지 못하면(date 실패) 종료 2 이고 빈 complete.txt · 시각 칸이
+# 빈 accepted.tsv 가 남지 않는다 — 남으면 끝나지 않은 판정이 끝난 것처럼,
+# 하지 않은 승인이 한 것처럼 보인다.
+#######################################
+expect_no_record_when_time_fails() {
+  local case_dir bin real_date name
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "time-fails: 시험 준비 실패"
+    return
+  }
+  bin="${case_dir}/in/datebin"
+  # 기록의 UTC 시각 꼴(+%Y-%m-%dT%H:%M:%SZ)일 때만 실패하는 date.
+  if ! real_date="$(command -v date)" || ! mkdir -p -- "${bin}" ||
+    ! {
+      # shellcheck disable=SC2016 # 가짜 date 의 본문 글자 그대로다.
+      printf '%s\n' '#!/bin/bash' 'for arg in "$@"; do' \
+        '  [[ "${arg}" == "+%Y-%m-%dT%H:%M:%SZ" ]] && exit 1' 'done'
+      printf 'exec %q "$@"\n' "${real_date}"
+    } >"${bin}/date" || ! chmod 700 "${bin}/date"; then
+    testlib::fail "time-fails: 시험 준비 실패"
+    return
+  fi
+  testlib::run_limited "${RUN_LIMIT}" "${case_dir}" judged \
+    env PATH="${bin}:${FAKEBIN}:${PATH}" \
+    bash "${case_dir}/tree/scp-recheck.sh" gamma
+  expect_unverifiable time-fails-judge || return
+  name="$(judged_name)" || {
+    testlib::fail "time-fails: 판정이 증거 디렉터리 이름을 알리지 않음"
+    return
+  }
+  if [[ -e "${case_dir}/home/.pokeclip-precheck/${name}/complete.txt" ]]; then
+    testlib::fail "time-fails: 표지를 쓰지 못했는데 complete.txt 가 남음"
+    return
+  fi
+  run_recheck "${case_dir}" judged-ok gamma
+  name="$(judged_name)"
+  testlib::run_limited "${RUN_LIMIT}" "${case_dir}" accept \
+    env PATH="${bin}:${FAKEBIN}:${PATH}" \
+    bash "${case_dir}/tree/scp-recheck.sh" --accept gamma --dir "${name}" \
+    --reason 'kty 답'
+  expect_unverifiable time-fails-accept || return
+  if [[ -e "${case_dir}/home/.pokeclip-precheck/${name}/accepted.tsv" ]]; then
+    testlib::fail "time-fails: 승인 시각을 못 읽었는데 accepted.tsv 가 남음"
+    return
+  fi
+  testlib::ok "time-fails → 기록 시각 실패는 종료 2 · complete.txt ·" \
+    "accepted.tsv 남지 않음"
 }
 
 #######################################
@@ -530,18 +661,44 @@ expect_accept_incomplete_rejected() {
 #   고치지 못하면 1.
 #######################################
 tamper_reference() {
-  local case_dir="$1" dir="$2" kind="$3"
+  local case_dir="$1" dir="$2" kind="$3" line
   case "${kind}" in
     accepted-empty) : >"${dir}/accepted.tsv" ;;
     accepted-link)
       mv -- "${dir}/accepted.tsv" "${case_dir}/in/accepted.tsv" &&
         ln -s -- "${case_dir}/in/accepted.tsv" "${dir}/accepted.tsv"
       ;;
+    accepted-dangling-link)
+      # 대상 없는 링크 — 후보 찾기에서 빠지면 앞 기준이 조용히 바뀐다.
+      rm -f -- "${dir}/accepted.tsv" &&
+        ln -s -- "${case_dir}/in/nowhere.tsv" "${dir}/accepted.tsv"
+      ;;
+    accepted-bad-time)
+      line="$(cat -- "${dir}/accepted.tsv")" &&
+        testlib::tsv "${NOT_UTC}" "${line#*$'\t'}" >"${dir}/accepted.tsv"
+      ;;
+    accepted-other-hash)
+      line="$(cat -- "${dir}/accepted.tsv")" &&
+        testlib::tsv "${line%%$'\t'*}" "${OTHER_SHA256}" "${line##*$'\t'}" \
+          >"${dir}/accepted.tsv"
+      ;;
+    complete-link)
+      mv -- "${dir}/complete.txt" "${case_dir}/in/complete.txt" &&
+        ln -s -- "${case_dir}/in/complete.txt" "${dir}/complete.txt"
+      ;;
     result-link)
       mv -- "${dir}/result.tsv" "${case_dir}/in/result.tsv" &&
         ln -s -- "${case_dir}/in/result.tsv" "${dir}/result.tsv"
       ;;
     result-0644) chmod 644 "${dir}/result.tsv" ;;
+    result-fifo)
+      rm -f -- "${dir}/result.tsv" && mkfifo -m 600 "${dir}/result.tsv"
+      ;;
+    result-fifo-link)
+      mkfifo -m 600 "${case_dir}/in/result.fifo" &&
+        rm -f -- "${dir}/result.tsv" &&
+        ln -s -- "${case_dir}/in/result.fifo" "${dir}/result.tsv"
+      ;;
     result-fields)
       # 빈 칸 하나가 탭 IFS 로 접히면 다섯 칸처럼 읽힌다.
       {
@@ -561,20 +718,40 @@ tamper_reference() {
         testlib::tsv tag:GetTagKeys ap-northeast-2 allow allowed True
       } >"${dir}/result.tsv"
       ;;
+    result-rehashed)
+      # 결과를 꼴만 맞게 고치고 승인 기록의 해시도 맞춘다 — 판정 때의
+      # 해시(완료 표지)만 다르다.
+      {
+        testlib::tsv iam:GetAccountAuthorizationDetails us-east-1 deny \
+          implicitDeny False
+        testlib::tsv tag:GetTagKeys ap-northeast-2 allow allowed True
+      } >"${dir}/result.tsv" && rehash_acceptance "${dir}"
+      ;;
     complete-missing) rm -f -- "${dir}/complete.txt" ;;
+    sts-link)
+      mv -- "${dir}/sts.txt" "${case_dir}/in/sts.txt" &&
+        ln -s -- "${case_dir}/in/sts.txt" "${dir}/sts.txt"
+      ;;
+    sts-0644) chmod 644 "${dir}/sts.txt" ;;
     *) return 0 ;;
   esac
 }
 
 #######################################
-# 승인 기준이 손대진 채로는 기준이 되지 않는다(종료 2): 빈 · 링크 승인
-# 기록 · 링크 · 0644 · 칸 수 틀림(빈 칸 접힘) · 중복 행 결과 · 승인 뒤 바뀐 결과 ·
-# 완료 표지 없음 · 다른 계정에서 승인한 기준.
+# 승인 기준이 손대진 채로는 기준이 되지 않는다(종료 2): 승인 기록이 빈 ·
+# 링크 · 대상 없는 링크 · UTC 아닌 시각 · 판정 때와 다른 해시, 완료 표지가
+# 링크 · 없음, 결과가 링크 · 0644 · FIFO · FIFO 를 가리키는 링크 · 칸 수 틀림
+# (빈 칸 접힘) · 중복 행 · 승인 뒤 바뀜 · 승인 기록 해시까지 맞춰 바뀜, 호출
+# 주체 기록이 링크 · 0644, 다른 계정에서 승인한 기준. 기준 파일은 내용 ·
+# 해시를 읽기 전에 검사하므로 FIFO 에서 걸리지 않는다(RUN_LIMIT 안에 끝남).
 #######################################
 expect_tampered_reference_rejected() {
   local kind case_dir name env_arg
-  for kind in accepted-empty accepted-link result-link result-0644 \
-    result-fields result-dup result-changed complete-missing other-account; do
+  for kind in accepted-empty accepted-link accepted-dangling-link \
+    accepted-bad-time accepted-other-hash complete-link complete-missing \
+    result-link result-0644 result-fifo result-fifo-link result-fields \
+    result-dup result-changed result-rehashed sts-link sts-0644 \
+    other-account; do
     if ! case_dir="$(new_tree_case)" ||
       ! name="$(judge_and_accept "${case_dir}" gamma)" ||
       ! tamper_reference "${case_dir}" \
@@ -591,7 +768,8 @@ expect_tampered_reference_rejected() {
       return
     fi
   done
-  testlib::ok "tamper → 승인 기록 · 결과 · 완료 표지 변조와 다른 계정 기준 모두 종료 2"
+  testlib::ok "tamper → 승인 기록 · 완료 표지 · 결과 · 호출 주체 기록 변조와" \
+    "다른 계정 기준 모두 종료 2(FIFO 에서 걸리지 않음)"
 }
 
 #######################################
@@ -613,18 +791,24 @@ expect_collapsed_baseline_rejected() {
 
 #######################################
 # 결과 파일의 마지막 줄 뒤에 줄바꿈이 없어도 그 행을 빠뜨리지 않는다(줄
-# 단위로 읽는 모든 루프의 규칙).
+# 단위로 읽는 모든 루프의 규칙). 판정이 그렇게 쓴 것처럼 완료 표지의
+# 해시도 맞춘다.
 #######################################
 expect_result_without_final_newline() {
-  local case_dir name file content
+  local case_dir name dir content
   case_dir="$(new_tree_case)" || {
     testlib::fail "final-newline: 시험 준비 실패"
     return
   }
   run_recheck "${case_dir}" first gamma
   name="$(judged_name)"
-  file="${case_dir}/home/.pokeclip-precheck/${name}/result.tsv"
-  content="$(cat -- "${file}")" && printf '%s' "${content}" >"${file}"
+  dir="${case_dir}/home/.pokeclip-precheck/${name}"
+  if ! content="$(cat -- "${dir}/result.tsv")" ||
+    ! printf '%s' "${content}" >"${dir}/result.tsv" ||
+    ! rehash_marker "${dir}"; then
+    testlib::fail "final-newline: 시험 준비 실패"
+    return
+  fi
   run_recheck "${case_dir}" accept --accept gamma --dir "${name}" \
     --reason 'kty 답'
   run_recheck "${case_dir}" second gamma
@@ -752,6 +936,8 @@ main() {
   expect_other_tool_dirs_ignored
   expect_accept_named_judgment
   expect_accept_incomplete_rejected
+  expect_accept_changed_result_rejected
+  expect_no_record_when_time_fails
   expect_tampered_reference_rejected
   expect_result_without_final_newline
   expect_collapsed_baseline_rejected

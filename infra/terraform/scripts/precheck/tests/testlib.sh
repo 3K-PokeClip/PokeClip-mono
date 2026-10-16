@@ -1,7 +1,8 @@
 # shellcheck shell=bash
 #
 # 단계 직전 점검 시험(*_test.sh)이 함께 쓰는 부품 — 임시 디렉터리 뿌리 ·
-# 실패 집계 · 사본 트리 · 명령 실행(표준 출력 · 표준 오류 · 종료 코드).
+# 실패 집계 · 사본 트리 · 명령 실행(표준 출력 · 표준 오류 · 종료 코드 —
+# 제한 시간을 둔 실행 포함).
 #
 # 시험은 실제 $HOME 을 건드리지 않는다. 사례마다 임시 디렉터리를 만들어
 # HOME 으로 주고, 가짜 aws(fakebin/aws)를 PATH 앞에 둔다. 가짜 aws 가 실행
@@ -22,6 +23,9 @@ readonly PRECHECK_DIR
 readonly FAKEBIN="${TESTS_DIR}/fakebin"
 readonly FAKE_ACCOUNT='731942086655'
 readonly FAKE_USER='zqx-fake-operator'
+# testlib::run_limited 가 제한 시간을 넘긴 실행에 남기는 종료 코드(GNU
+# timeout 과 같은 값).
+readonly TIMED_OUT=124
 
 failures=0
 tmp_root=""
@@ -177,6 +181,48 @@ testlib::run() {
     "$@" >"${run_out}.stdout" 2>"${run_out}.stderr"
   # shellcheck disable=SC2034 # 부르는 시험이 읽는다.
   run_status=$?
+}
+
+#######################################
+# testlib::run 과 같되 제한 시간(초) 안에서 돌린다. 넘기면 명령과 그 자손을
+# 모두 끝내고 run_status 를 124 로 남기며, 표준 오류 파일에 그 사실을 덧붙인다.
+# macOS 에는 timeout 명령이 없어 백그라운드 감시자(sleep 뒤 kill)로 잰다 —
+# 가드가 회귀해 판정이 FIFO 를 읽다 걸려도 시험이 멈추지 않게.
+# Globals:
+#   run_out, run_status
+# Arguments:
+#   제한 초, 사례 디렉터리, 결과 이름, 명령과 인자.
+#######################################
+testlib::run_limited() {
+  local seconds="$1" case_dir="$2" name="$3" job watcher mark
+  shift 3
+  mark="${case_dir}/out/${name}.timeout"
+  # set -m 은 배경 작업마다 제 프로세스 묶음을 준다. 묶음째 끝내야 명령 치환
+  # 안에서 FIFO 에 걸린 손자 프로세스까지 끝난다. 두 작업의 표준 입출력은
+  # 닫아 둔다 — 이 함수가 명령 치환 안에서 불려도 기다리지 않게.
+  set -m
+  (
+    testlib::run "${case_dir}" "${name}" "$@"
+    exit "${run_status}"
+  ) </dev/null >/dev/null 2>&1 &
+  job=$!
+  (
+    sleep "${seconds}"
+    : >"${mark}"
+    kill -TERM -- "-${job}"
+  ) </dev/null >/dev/null 2>&1 &
+  watcher=$!
+  set +m
+  # 끝낸 작업에 대한 bash 의 「Terminated」 알림은 버린다.
+  wait "${job}" 2>/dev/null
+  run_status=$?
+  kill -TERM -- "-${watcher}" 2>/dev/null
+  wait "${watcher}" 2>/dev/null
+  run_out="${case_dir}/out/${name}"
+  if [[ -e "${mark}" ]]; then
+    run_status="${TIMED_OUT}"
+    printf '시험: %s초 제한을 넘겨 끝냄\n' "${seconds}" >>"${run_out}.stderr"
+  fi
 }
 
 #######################################

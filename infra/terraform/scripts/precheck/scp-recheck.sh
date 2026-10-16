@@ -23,23 +23,27 @@
 #   SCP RECHECK CHANGED <앞 기준과 다른 행 수>
 #
 # 판정은 모든 증거(result.tsv · reference.tsv · report.txt)를 쓴 뒤 마지막에
-# 완료 표지 complete.txt 를 남긴다. 표지가 없는 판정은 승인할 수 없고 앞
-# 기준도 되지 않는다. 판정의 증거 디렉터리 이름은 표준 오류로 알린다(kty
-# 에게 보고하는 이름).
+# 완료 표지 complete.txt(「UTC 시각<탭>result.tsv sha256」 한 줄 — 임시
+# 이름에 다 쓴 뒤 옮김)를 남긴다. 표지가 없거나 꼴이 틀리거나, 표지의
+# 해시와 지금의 result.tsv 가 다른 판정은 승인할 수 없고 앞 기준도 되지
+# 않는다 — kty 가 본 판정 그대로만 기준이 된다. 판정의 증거 디렉터리 이름은
+# 표준 오류로 알린다(kty 에게 보고하는 이름).
 #
 # 사용: scp-recheck.sh <묶음>
 #       scp-recheck.sh --accept <묶음> --dir <증거 디렉터리 이름> --reason <이유>
 #         kty 가 보고받은 그 판정(이름으로 고름)을 그 묶음의 다음 비교 기준으로
-#         승인한다. 이유는 kty 답 원문(한 줄 · 탭 없이)이다. 승인 시각 ·
-#         result.tsv 해시(sha256) · 이유가 그 디렉터리의 accepted.tsv 에 남고,
-#         승인한 디렉터리 이름을 표준 오류로 알린다. 표준 출력은
-#         「SCP RECHECK ACCEPTED <행 수>」 한 줄이다. 끝나지 않은 판정 · 이미
-#         승인한 판정 · 이미 승인된 더 최근 판정보다 오래된 판정은 승인하지
-#         않는다(종료 2). 거부가 든 결과는 승인해도 다음 판정이 종료 1 이다.
+#         승인한다. 이유는 kty 답 원문(한 줄 · 탭 없이)이다. 승인 시각 · 판정
+#         때 result.tsv 해시(완료 표지의 sha256) · 이유가 그 디렉터리의
+#         accepted.tsv 에 남고, 승인한 디렉터리 이름을 표준 오류로 알린다.
+#         표준 출력은 「SCP RECHECK ACCEPTED <행 수>」 한 줄이다. 끝나지 않은
+#         판정 · 판정 뒤 result.tsv 가 바뀐 판정 · 이미 승인한 판정 · 이미
+#         승인된 더 최근 판정보다 오래된 판정은 승인하지 않는다(종료 2).
+#         거부가 든 결과는 승인해도 다음 판정이 종료 1 이다.
 #       앞 기준(승인 결과)을 읽을 때는 증거 경로 검사에 더해 complete.txt ·
-#       accepted.tsv · result.tsv · sts.txt 가 링크 아닌 0600 일반 파일인지,
-#       꼴(열 수 · 값 · 중복 (동작, 리전) 없음) · 해시가 맞는지, 그 판정의
-#       호출 주체 계정이 이번과 같은지 본다 — 어긋나면 종료 2.
+#       accepted.tsv · result.tsv · sts.txt 가 링크 아닌 0600 일반 파일인지
+#       (내용 · 해시를 읽기 전에), 꼴(열 수 · 값 · 중복 (동작, 리전) 없음),
+#       result.tsv 와 승인 기록의 해시가 완료 표지의 판정 때 해시와 같은지,
+#       그 판정의 호출 주체 계정이 이번과 같은지 본다 — 어긋나면 종료 2.
 # 종료 코드: 0 OK / 1 DENIED(바뀜과 겹쳐도 1) / 3 CHANGED(거부 없음) /
 #            2 검사 불가(사용법 · 묶음 없음 · 증거 경로 · 호출 실패 · 호출
 #            자체의 AccessDenied · 응답 꼴 · IAM 사용자가 아닌 주체 · 앞
@@ -225,7 +229,10 @@ latest_dir() {
   for candidate in "${root}/${DIR_PREFIX}-${bundle}-"${STAMP_GLOB} \
     "${root}/${DIR_PREFIX}-${bundle}-"${STAMP_GLOB}-[2-9]; do
     [[ -e "${candidate}" || -L "${candidate}" ]] || continue
-    if [[ -n "${required}" && ! -e "${candidate}/${required}" ]]; then
+    # 대상 없는 링크도 후보로 둔다 — 빠지면 앞 기준이 조용히 이전 승인으로
+    # 바뀐다. 링크는 읽을 때 evidence::check_file 이 거부한다(종료 2).
+    if [[ -n "${required}" && ! -e "${candidate}/${required}" &&
+      ! -L "${candidate}/${required}" ]]; then
       continue
     fi
     key="$(dir_key "${bundle}" "${candidate}")"
@@ -279,27 +286,40 @@ read_result_reference() {
 }
 
 #######################################
-# 판정이 끝났는지(완료 표지 complete.txt — 링크 아닌 0600 일반 파일 · UTC
-# 시각 한 줄) 본다.
+# 판정이 끝났고 결과 파일이 판정 때 그대로인지 본다. 완료 표지(complete.txt
+# — 「UTC 시각<탭>result.tsv sha256」 한 줄)의 꼴을 보고, 그 해시를 지금의
+# result.tsv 와 대조한다. 두 파일 모두 링크 아닌 0600 일반 파일인지를 내용 ·
+# 해시를 읽기 전에 본다(FIFO 등에서 걸리지 않게).
 # Arguments:
 #   증거 디렉터리.
+# Outputs:
+#   판정 때 result.tsv 의 sha256.
 #######################################
 require_complete() {
-  local file="$1/complete.txt" line
-  evidence::check_file "${file}" || exit 2
-  line="$(cat -- "${file}")" || die "완료 표지를 읽지 못함(${1##*/})"
-  [[ "${line}" =~ ${UTC_PATTERN} ]] ||
-    die "완료 표지의 꼴이 틀림(${1##*/}/complete.txt)"
+  local dir="$1" line at sum current
+  evidence::check_file "${dir}/complete.txt" || exit 2
+  line="$(cat -- "${dir}/complete.txt")" ||
+    die "완료 표지를 읽지 못함(${dir##*/})"
+  at="${line%%$'\t'*}"
+  sum="${line#*$'\t'}"
+  [[ "${at}" =~ ${UTC_PATTERN} && "${sum}" =~ ${SHA256_PATTERN} ]] ||
+    die "완료 표지의 꼴이 틀림(${dir##*/}/complete.txt)"
+  evidence::check_file "${dir}/result.tsv" || exit 2
+  current="$(file_sha256 "${dir}/result.tsv")" ||
+    die "결과 파일의 해시를 계산하지 못함(${dir##*/})"
+  [[ "${current}" == "${sum}" ]] ||
+    die "판정 뒤 결과 파일이 바뀜(${dir##*/}/result.tsv — 해시 다름)"
+  printf '%s\n' "${sum}"
 }
 
 #######################################
 # 승인 기록(accepted.tsv — UTC 시각 · result.tsv sha256 · 이유 한 줄)을
-# 검사하고 해시를 지금의 result.tsv 와 대조한다.
+# 검사하고, 그 해시가 판정 때의 해시(완료 표지)와 같은지 본다.
 # Arguments:
-#   증거 디렉터리.
+#   증거 디렉터리, 판정 때 result.tsv 의 sha256(require_complete 가 낸 것).
 #######################################
 check_acceptance() {
-  local dir="$1" file="$1/accepted.tsv" line at sum reason current
+  local dir="$1" judged="$2" file="$1/accepted.tsv" line at sum reason
   evidence::check_file "${file}" || exit 2
   line="$(cat -- "${file}")" || die "승인 기록을 읽지 못함(${dir##*/})"
   if [[ "${line}" == *$'\n'* ]] || ! tsv_ok "${line}" 3; then
@@ -310,10 +330,8 @@ check_acceptance() {
     [[ "${reason}" == *[[:cntrl:]]* ]]; then
     die "승인 기록의 꼴이 틀림(${dir##*/}/accepted.tsv)"
   fi
-  current="$(file_sha256 "${dir}/result.tsv")" ||
-    die "결과 파일의 해시를 계산하지 못함(${dir##*/})"
-  [[ "${current}" == "${sum}" ]] ||
-    die "승인 뒤 결과 파일이 바뀜(${dir##*/}/result.tsv — 해시 다름)"
+  [[ "${sum}" == "${judged}" ]] ||
+    die "승인 기록의 해시가 판정 때와 다름(${dir##*/}/accepted.tsv)"
 }
 
 #######################################
@@ -341,16 +359,16 @@ read_baseline_reference() {
 
 #######################################
 # 앞 기준을 정한다 — 같은 묶음의 가장 최근 승인 결과, 없으면 baseline.tsv.
-# 승인 결과는 증거 경로 검사 · 완료 표지 · 승인 기록(해시 대조) · 결과
-# 파일 검사를 모두 통과해야 한다. 계정 대조는 호출 주체를 확인한 뒤
-# check_reference_account 가 한다.
+# 승인 결과는 증거 경로 검사 · 완료 표지(판정 때 해시와 결과 대조) · 승인
+# 기록(같은 해시) · 결과 파일 검사를 모두 통과해야 한다. 계정 대조는 호출
+# 주체를 확인한 뒤 check_reference_account 가 한다.
 # Globals:
 #   REFERENCE, REFERENCE_SOURCE, REFERENCE_DIR
 # Arguments:
 #   묶음 이름.
 #######################################
 load_reference() {
-  local bundle="$1" approved
+  local bundle="$1" approved judged
   approved="$(latest_dir "${bundle}" accepted.tsv)" || exit 2
   if [[ -z "${approved}" ]]; then
     read_baseline_reference "${bundle}"
@@ -358,8 +376,8 @@ load_reference() {
     return
   fi
   evidence::check_dir "${approved}" || exit 2
-  require_complete "${approved}"
-  check_acceptance "${approved}"
+  judged="$(require_complete "${approved}")" || exit 2
+  check_acceptance "${approved}" "${judged}"
   read_result_reference "${approved}"
   REFERENCE_DIR="${approved}"
   REFERENCE_SOURCE="승인 기준 ${approved##*/}"
@@ -495,21 +513,29 @@ decision_word() {
 }
 
 #######################################
-# 판정 증거를 쓰고, 다 쓴 뒤에만 완료 표지(complete.txt — UTC 시각)를
-# 남긴다. 표지가 없는 판정은 승인 · 앞 기준이 될 수 없다.
+# 판정 증거를 쓰고, 다 쓴 뒤에만 완료 표지(complete.txt — 「UTC 시각<탭>
+# result.tsv sha256」)를 남긴다. 표지가 없는 판정은 승인 · 앞 기준이 될 수
+# 없다. 표지의 시각 · 해시를 먼저 구하고 임시 이름에 다 쓴 뒤 옮기므로,
+# 어디서 실패해도 빈 · 반쪽 표지가 남지 않는다.
 # Globals:
 #   REFERENCE, REFERENCE_SOURCE
 # Arguments:
 #   증거 디렉터리, 결과 줄들, 첫 줄, 13-1 덧붙임 줄들.
 #######################################
 save_judgment() {
-  local dir="$1" result="$2" first="$3" table="$4"
+  local dir="$1" result="$2" first="$3" table="$4" at sum
   if ! printf '%s' "${result}" >"${dir}/result.tsv" ||
     ! printf '# 비교 기준: %s\n%s' "${REFERENCE_SOURCE}" "${REFERENCE}" \
       >"${dir}/reference.tsv" ||
-    ! printf '%s\n%s' "${first}" "${table}" >"${dir}/report.txt" ||
-    ! date -u '+%Y-%m-%dT%H:%M:%SZ' >"${dir}/complete.txt"; then
+    ! printf '%s\n%s' "${first}" "${table}" >"${dir}/report.txt"; then
     die "증거를 쓰지 못함(${dir##*/})"
+  fi
+  at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || die "완료 표지의 시각을 읽지 못함"
+  sum="$(file_sha256 "${dir}/result.tsv")" ||
+    die "결과 파일의 해시를 계산하지 못함(${dir##*/})"
+  if ! printf '%s\t%s\n' "${at}" "${sum}" >"${dir}/complete.txt.tmp" ||
+    ! mv -- "${dir}/complete.txt.tmp" "${dir}/complete.txt"; then
+    die "완료 표지를 쓰지 못함(${dir##*/})"
   fi
 }
 
@@ -561,13 +587,14 @@ judge_bundle() {
 
 #######################################
 # kty 가 보고받은 판정(증거 디렉터리 이름)을 그 묶음의 다음 비교 기준으로
-# 승인한다. 완료 표지 · 결과 파일 검사를 통과해야 하고, 이미 승인했거나
-# 이미 승인된 더 최근 판정보다 오래되면 승인하지 않는다.
+# 승인한다. 완료 표지(결과가 판정 때 그대로인지) · 결과 파일 검사를 통과해야
+# 하고, 이미 승인했거나 이미 승인된 더 최근 판정보다 오래되면 승인하지
+# 않는다. 승인 기록에는 판정 때의 해시(완료 표지의 것)를 남긴다.
 # Arguments:
 #   묶음 이름, 증거 디렉터리 이름, 이유(kty 답 원문 — 한 줄 · 탭 없이).
 #######################################
 accept_bundle() {
-  local bundle="$1" name="$2" reason="$3" root dir latest sum
+  local bundle="$1" name="$2" reason="$3" root dir latest judged at
   load_bundle "${bundle}"
   if [[ -z "${reason}" || "${reason}" == *[[:cntrl:]]* ]]; then
     die "이유는 비어 있지 않은 한 줄(탭 없이)이어야 함"
@@ -578,7 +605,7 @@ accept_bundle() {
   dir="${root}/${name}"
   [[ -e "${dir}" || -L "${dir}" ]] || die "판정이 없음: ${name}"
   evidence::check_dir "${dir}" || exit 2
-  require_complete "${dir}"
+  judged="$(require_complete "${dir}")" || exit 2
   read_result_reference "${dir}"
   [[ ! -e "${dir}/accepted.tsv" && ! -L "${dir}/accepted.tsv" ]] ||
     die "이미 승인됨: ${name}"
@@ -587,11 +614,11 @@ accept_bundle() {
     10#$(dir_key "${bundle}" "${dir}") )); then
     die "더 최근 판정(${latest##*/})이 이미 승인됨: ${name}"
   fi
-  sum="$(file_sha256 "${dir}/result.tsv")" ||
-    die "결과 파일의 해시를 계산하지 못함(${name})"
+  # 시각을 먼저 구한다 — 실패했을 때 시각 칸이 빈 승인 기록이 남지 않게.
+  at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || die "승인 시각을 읽지 못함"
   set -o noclobber
-  printf '%s\t%s\t%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "${sum}" \
-    "${reason}" >"${dir}/accepted.tsv" || die "승인 기록을 쓰지 못함(${name})"
+  printf '%s\t%s\t%s\n' "${at}" "${judged}" "${reason}" \
+    >"${dir}/accepted.tsv" || die "승인 기록을 쓰지 못함(${name})"
   set +o noclobber
   printf 'scp-recheck: 승인 ~/%s/%s\n' "${EVIDENCE_ROOT_NAME}" "${name}" >&2
   printf 'SCP RECHECK ACCEPTED %s\n' "${RESULT_ROWS}"
