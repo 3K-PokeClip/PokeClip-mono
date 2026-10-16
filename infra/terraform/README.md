@@ -24,6 +24,8 @@ infra/terraform/
 ├── modules/                       # 루트들이 쓰는 부품
 ├── policy/guard/                  # 금지 규약 Rego 정책(conftest) · 단위 시험
 ├── scripts/                       # guard.sh(금지 규약 검사 실행기) · guard_test.sh · precheck/(단계 직전 점검)
+│   ├── put-secret-from-file.sh    # prod 엣지 비밀 값 입력(runbooks/edge-secrets.md)
+│   └── test/                      # put-secret-from-file.sh 시험 · 가짜 aws(fakebin/)
 ├── runbooks/                      # 운영 단계 절차(kty 승인) — org-ct.md 등
 ├── mgmt/                          # (보류 — 결정 46 · 재개 키트)
 │   ├── bootstrap/                 # ① 상태 버킷
@@ -166,9 +168,10 @@ shellcheck -x infra/terraform/scripts/precheck/*.sh \
   infra/terraform/scripts/precheck/tests/fakebin/aws
 ```
 
-tflint(`brew install tflint` · 설정 파일 없음 — 기본 terraform 규칙 묶음)는
-루트 · 모듈마다 돌립니다. `--recursive` 는 `scripts/testdata` 의 guard fixture
-까지 읽어 늘 실패합니다. `put_secret_test.sh` 는 PATH 에 진짜 aws 가 있으면
+tflint(`brew install terraform-linters/tap/tflint` · 설정 파일 없음 — 기본
+terraform 규칙 묶음)는 루트 · 모듈마다 돌립니다. `--recursive` 는
+`scripts/testdata` 의 guard fixture 까지 읽어 늘 실패합니다.
+`put_secret_test.sh` 는 PATH 에 진짜 aws 가 있으면
 닫힌 로컬 주소(`127.0.0.1:9`) · 가짜 자격으로 실물 CLI 계약 사례를 돌리고(AWS
 에 닿지 않음), 없으면 skip 으로 셉니다.
 
