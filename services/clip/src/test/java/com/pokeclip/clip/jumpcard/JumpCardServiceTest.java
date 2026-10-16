@@ -237,7 +237,7 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     void 숨기고_되돌린다_누가_숨겼는지_남는다() {
         long id = 카드();
 
-        JumpCardSnapshot hidden = service.hide(id, "1201");
+        JumpCardSnapshot hidden = service.hide(id, "1201", null);
         assertThat(hidden.hidden()).isTrue();
         assertThat(hidden.hiddenBy()).isEqualTo("1201");
 
@@ -315,9 +315,9 @@ class JumpCardServiceTest extends IntegrationTestSupport {
     @Test
     void 이미_숨긴_카드를_다시_숨겨도_숨긴_사람이_안_바뀐다() {
         long id = 카드();
-        JumpCardSnapshot first = service.hide(id, "1201");
+        JumpCardSnapshot first = service.hide(id, "1201", null);
 
-        JumpCardSnapshot again = service.hide(id, "1202");
+        JumpCardSnapshot again = service.hide(id, "1202", null);
 
         assertThat(again.hidden()).as("이미 숨김이어도 성공이다(멱등)").isTrue();
         assertThat(again.hiddenBy()).as("추적 대상이 마지막에 누른 사람으로 바뀌었다").isEqualTo("1201");

@@ -124,10 +124,10 @@ public interface JumpCardRepository extends JpaRepository<JumpCard, Long> {
      */
     @Modifying(clearAutomatically = true)
     @Query(value = """
-            UPDATE jump_cards SET hidden_at = now(), hidden_by = :me
+            UPDATE jump_cards SET hidden_at = now(), hidden_by = :me, hidden_reason = :reason
              WHERE id = :id AND hidden_at IS NULL
             """, nativeQuery = true)
-    int hide(@Param("id") long id, @Param("me") String me);
+    int hide(@Param("id") long id, @Param("me") String me, @Param("reason") String reason);
 
     /**
      * 되돌리기는 누구나 한다 — 숨긴 사람만 되돌릴 수 있으면 그 사람이 자리를 비웠을 때 막힌다.
@@ -135,7 +135,7 @@ public interface JumpCardRepository extends JpaRepository<JumpCard, Long> {
      */
     @Modifying(clearAutomatically = true)
     @Query(value = """
-            UPDATE jump_cards SET hidden_at = NULL, hidden_by = NULL
+            UPDATE jump_cards SET hidden_at = NULL, hidden_by = NULL, hidden_reason = NULL
              WHERE id = :id AND hidden_at IS NOT NULL
             """, nativeQuery = true)
     int unhide(@Param("id") long id);

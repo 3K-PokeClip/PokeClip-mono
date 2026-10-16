@@ -147,9 +147,17 @@ public class JumpCardService {
         publishAfterCommit(snapshot(cards.findById(id).orElseThrow()));
     }
 
-    public JumpCardSnapshot hide(long id, String userId) {
+    /**
+     * 사유 판정이 자격 판정보다 앞이다 — 뒤면 형식 오류 하나가 auth 왕복(최대 7초)을 태우고도 400으로 끝난다
+     * ({@link #listOf}의 요청 칸과 같은 순서).
+     *
+     * @param reason {@code null}이면 이유 없이 숨긴다. 셋 밖이면 400({@link HideReason#parseNullable})
+     */
+    public JumpCardSnapshot hide(long id, String userId, String reason) {
+        HideReason parsed = HideReason.parseNullable(reason);
         requireViewableCard(id, userId);
-        return transactions.execute(status -> toggleHidden(id, () -> cards.hide(id, userId)));
+        String dbReason = parsed == null ? null : parsed.dbValue();
+        return transactions.execute(status -> toggleHidden(id, () -> cards.hide(id, userId, dbReason)));
     }
 
     public JumpCardSnapshot unhide(long id, String userId) {
