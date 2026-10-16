@@ -14,9 +14,10 @@ Terraform 코드입니다. 설계 정본은 「HTTPS · 엣지 인프라 설계�
 
 루트 하나가 상태 하나입니다. 의존은 위에서 아래 한쪽으로만 흐릅니다.
 `prod/*` · `nonprod/*` 는 같은 리스 계정 안의 환경입니다(설계 3-1).
-아래는 **목표 구조**입니다 — 지금(M1) 있는 것은 `modules/state_bucket` ·
-`policy/guard` · `scripts` · `runbooks` · `nonprod/{bootstrap,dev,dns-legacy}`
-뿐이고, 나머지 루트는 계획의 후속 PR 이 더합니다.
+아래는 **목표 구조**입니다 — 지금 있는 것은
+`modules/{state_bucket,secret_shells,cloudfront_public_key}` · `policy/guard` ·
+`scripts` · `runbooks` · `nonprod/{bootstrap,dev,dns-legacy}` ·
+`prod/{bootstrap,secrets}` 뿐이고, 나머지 루트는 계획의 후속 PR 이 더합니다.
 
 ```
 infra/terraform/
@@ -33,8 +34,8 @@ infra/terraform/
 │   ├── dns-legacy/                # ③ 공개 존 영구 소유(리스 기간) — 존 prevent_destroy(R12)
 │   └── dns-dev/                   # ④ dev 자식 존 + apex A + 옛 존의 dev 하위 레코드(보류 — 결정 46 · 재개 키트)
 └── prod/
-    ├── bootstrap/                 # ① 상태 버킷
-    ├── secrets/                   # ② CloudFront 공개키 · 엣지 비밀 그릇(값 없음)
+    ├── bootstrap/                 # ① 상태 버킷 pokeclip-tfstate-prod-apne2(같은 계정 안 별도 버킷)
+    ├── secrets/                   # ② CloudFront 공개키 · 엣지 비밀 그릇 3개(값 · 리소스 정책 없음)
     ├── dns/                       # ③ 새 존 · 이전용 레코드 복사본 · dev 위임 NS(보류 — 결정 46 · 재개 키트)
     ├── network/                   # ④ VPC · 서브넷 · NAT · S3 Gateway EP
     ├── certs/                     # ⑥ ACM 서울 · us-east-1
@@ -49,6 +50,9 @@ infra/terraform/
 OU · 운영 측 역할)과 기존 수동 자원(IAM 사용자 · dev 자동 주체 · GitHub OIDC
 공급자)은 이 트리가 소유하지 않습니다. `infra/dev-media/` 는 이 트리 밖이며
 건드리지 않습니다.
+
+prod 엣지 비밀의 값 입력 · 교체 절차는 [엣지 비밀 런북](runbooks/edge-secrets.md)
+입니다.
 
 운영 단계 절차는 `runbooks/` 에 있습니다 —
 [조직 · CT 도입(보류 — 결정 46)](runbooks/org-ct.md).
@@ -128,6 +132,12 @@ import 루트(`nonprod/dev` · `nonprod/dns-legacy`)의 선언은 실물에 대�
     `aws_cloudfrontkeyvaluestore_key*` 는 쓰지 않습니다(guard R1 · R2).
 *   비밀은 그릇(`aws_secretsmanager_secret`)만 만들고, 값은 운영 단계에서
     Terraform 밖으로 넣습니다.
+*   비밀 그릇 모듈(`modules/secret_shells`)에는 리소스 정책(별도 자원 ·
+    인라인 `policy` 인자)과 `names` 밖의 입력을 두지 않습니다(guard R6). 읽기
+    권한은 읽는 쪽 루트가 자기 역할 정책으로 붙입니다.
+*   prod 값은 `scripts/put-secret-from-file.sh` 로 파일에서 넣습니다 — 값이
+    명령 인자 · 환경 변수 · 임시 파일 · 출력에 남지 않습니다(절차 ·
+    종료 코드는 [엣지 비밀 런북](runbooks/edge-secrets.md)).
 
 ## 검증
 
@@ -142,8 +152,18 @@ conftest verify -c infra/terraform/scripts/guard-data/empty-config.toml \
   --policy infra/terraform/policy/guard --namespace main
 bash infra/terraform/scripts/guard_test.sh
 bash infra/terraform/scripts/guard.sh
+bash infra/terraform/scripts/test/put_secret_test.sh
+shellcheck infra/terraform/scripts/test/*.sh \
+  infra/terraform/scripts/test/fakebin/aws
+for d in infra/terraform/modules/*/ infra/terraform/nonprod/*/ \
+  infra/terraform/prod/*/; do tflint --chdir="$d" || printf 'FAIL %s\n' "$d"; done
 shellcheck infra/terraform/scripts/*.sh
 ```
+
+tflint(`brew install tflint` · 설정 파일 없음 — 기본 terraform 규칙 묶음)는
+루트 · 모듈마다 돌립니다. `--recursive` 는 `scripts/testdata` 의 guard fixture
+까지 읽어 늘 실패합니다. `put_secret_test.sh` 는 JSON 대조에 python3 를
+씁니다.
 
 ### 단언 방식
 
