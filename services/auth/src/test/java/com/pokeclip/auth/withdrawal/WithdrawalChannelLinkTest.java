@@ -267,7 +267,7 @@ class WithdrawalChannelLinkTest extends WithdrawalTestSupport {
      *
      * <p>재연동으로 <b>이미 닫혀 있던 옛 행</b>도 만든다. 탈퇴가 닫는 살아있는 행만 비우면 옛 행에 이름이 그대로 남는다.
      *
-     * <p>수집기 정리 장부에는 채널 번호가 <b>남아야</b> 한다 — 장부가 연동 표에서 채널을 읽어 가므로 비우는 줄은
+     * <p>수집기 정리 장부에는 채널 번호가 <b>남아야</b> 한다: 장부가 연동 표에서 채널을 읽어 가므로 비우는 줄은
      * 장부 적기보다 뒤여야 한다(앞이면 장부 CHECK에 걸려 탈퇴가 500이다. 주입으로 확인).
      */
     @Test
@@ -292,13 +292,14 @@ class WithdrawalChannelLinkTest extends WithdrawalTestSupport {
         assertThat(jdbc.queryForList("""
                 SELECT channel_id FROM withdrawal_purge_jobs WHERE user_id = ? AND target = 'COLLECTOR'""",
                 String.class, user.getId()))
-                .as("🔴 수집기 정리 장부에 채널이 없다 — 수집기가 그 채팅을 못 지운다")
+                .as("🔴 수집기 정리 장부에 채널이 없다: 수집기가 그 채팅을 못 지운다")
                 .contains(oldChzzk.getChannelId());
     }
 
     /**
-     * 탈퇴한 채널로 <b>다른 계정이 다시 연동할 수 있다</b>. 유일 제약은 살아있는 행에만 걸려 있어 원래도 됐지만,
-     * 비운 행이 그 판정(조회·제약)을 흔들지 않는지 실제 연동으로 잰다.
+     * 탈퇴한 채널로 <b>다른 계정이 다시 연동할 수 있다</b>(카드 완료 조건). 유일 제약은 살아있는 행에만 걸려 있어
+     * <b>비우기 전에도 초록이었다</b>: 이 시험은 비우기를 재지 않는다(그것은 위 시험과 아래 CHECK 시험의 몫).
+     * 지키는 것은 「비운 행이 채널 중복 판정(조회·제약)을 흔들지 않는다」 하나다.
      */
     @Test
     void 탈퇴한_채널로_다른_계정이_다시_연동할_수_있다() throws Exception {
@@ -323,7 +324,7 @@ class WithdrawalChannelLinkTest extends WithdrawalTestSupport {
     }
 
     /**
-     * 🔴 <b>살아있는 연동은 채널 칸을 비울 수 없다</b>(V115 CHECK). 칸을 NULL 허용으로 바꾼 대가로 열린 문이다 —
+     * 🔴 <b>살아있는 연동은 채널 칸을 비울 수 없다</b>(V115 CHECK). 칸을 NULL 허용으로 바꾼 대가로 열린 문이다.
      * 이것이 없으면 쓰는 쪽 실수 하나로 「채널이 없는 살아있는 연동」이 생기고, 수집기는 번호 없는 세션을 연다.
      */
     @Test
