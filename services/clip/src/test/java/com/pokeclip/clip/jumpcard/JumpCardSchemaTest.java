@@ -174,6 +174,14 @@ class JumpCardSchemaTest extends IntegrationTestSupport {
                 .as("CASCADE가 없으면 카드를 지우는 시험 정리가 FK로 죽는다").isZero();
     }
 
+    /** 탈퇴 정리가 카드를 지울 때 ON DELETE SET NULL이 recipes를 source_card_id로 찾는다. 색인이 없으면 카드마다 표 전체를 훑는다(PR #254 codex). */
+    @Test
+    void 편집본_출처_카드에_색인이_있다() {
+        assertThat(jdbc.queryForList(
+                "SELECT indexdef FROM pg_indexes WHERE tablename = 'recipes' AND indexdef LIKE '%(source_card_id)%'",
+                String.class)).hasSize(1);
+    }
+
     private long insert(String streamId, String source, String eventId,
                         long ts, long start, long end, Integer score, String evidenceJson) {
         Long id = jdbc.queryForObject("""

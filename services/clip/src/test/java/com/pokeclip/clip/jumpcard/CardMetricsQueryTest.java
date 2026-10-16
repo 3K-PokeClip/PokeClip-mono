@@ -110,9 +110,24 @@ class CardMetricsQueryTest extends IntegrationTestSupport {
                 VALUES ('s-m', '1201', 1, 1, '[]'::jsonb, '{}'::jsonb, ?, ?)""",
                 Timestamp.from(T.plusSeconds(70)), Timestamp.from(T.plusSeconds(70)));
 
+        // DB 시계가 앱 시계보다 2초 앞서 집기가 저장 「뒤」로 찍혔다: 시계 차 안이면 시작점으로 센다(PR #254 codex)
+        long 다른_카드 = 카드("auto", 3);
+        행동(다른_카드, "claim", "1301", null, T.plusSeconds(62));
+        long 시계차_편집본 = jdbc.queryForObject("""
+                INSERT INTO recipes (stream_id, creator_id, source_card_id, schema_version, recipe_version,
+                                     outputs, audio, created_at, updated_at)
+                VALUES ('s-m', '1301', ?, 1, 1, '[]'::jsonb, '{}'::jsonb, ?, ?) RETURNING id""",
+                Long.class, 다른_카드, Timestamp.from(T.plusSeconds(60)), Timestamp.from(T.plusSeconds(60)));
+        jdbc.update("""
+                INSERT INTO clips (stream_id, recipe_id, recipe_version, requested_by, status, outputs, created_at, updated_at)
+                VALUES ('s-m', ?, 1, '1301', 'rendered', '[]'::jsonb, ?, ?)""",
+                시계차_편집본, Timestamp.from(T.plusSeconds(92)), Timestamp.from(T.plusSeconds(92)));
+
         List<Map<String, Object>> rows = jdbc.queryForList(기간을_넣는다(readmeSql("-- POK-338 카드에서 영상까지")));
 
-        assertThat(rows).hasSize(1);
+        assertThat(rows).hasSize(2);
+        assertThat(rows.get(1).get("editor")).isEqualTo("1301");
+        assertThat(((Number) rows.get(1).get("median_open_to_order_sec")).doubleValue()).isEqualTo(30.0);
         assertThat(rows.get(0).get("editor")).isEqualTo("1201");
         assertThat(((Number) rows.get(0).get("recipes")).longValue()).isEqualTo(1);
         assertThat(((Number) rows.get(0).get("median_open_to_order_sec")).doubleValue()).isEqualTo(180.0);

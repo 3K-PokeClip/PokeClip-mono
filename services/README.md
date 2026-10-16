@@ -2442,7 +2442,8 @@ auth가 탈퇴를 알리는 내부 문 하나: **`DELETE /internal/streamers/{st
   편집자는 처음 저장한 사람(`recipes.creator_id`)만 남는다. 저장한 사람이 그 카드를 직접 집지 못했으면(남이 집어 409였거나
   주소로 바로 들어왔다) 시작점이 없어 ②에서 빠진다.
 - ②는 **시계 둘을 섞는다**: 행동 기록 `at`은 DB 시계이고 `recipes.created_at` · `clips.created_at` · `clip_uploads.updated_at`은
-  앱 시계다. 서버와 DB의 시계 차(보통 1초 안)만큼 어긋난다.
+  앱 시계다. 서버와 DB의 시계 차(보통 1초 안)만큼 어긋난다. 그래서 「저장 직전 집기」를 저장 뒤 5초까지 받는다: 안 받으면 DB 시계가
+  앞선 서버에서 갓 집고 바로 저장한 편집본이 시작점을 잃고 빠진다. 대가로 저장 뒤 5초 안에 다시 집으면 그것이 시작점이 된다.
 - `actor`는 회원 번호다. 되돌리면 지워지는 `hidden_by`와 달리 이 기록은 카드가 있는 동안 남는다.
 
 **① 자동 카드 거짓양성률**: 기간(`:from` 이상 `:to` 미만)에 열어 본 자동 카드 중 「하이라이트 아님」으로 숨겨진 비율.
@@ -2471,7 +2472,7 @@ WITH started AS (
     SELECT r.creator_id AS editor,
            (SELECT max(a.at) FROM jump_card_actions a
              WHERE a.card_id = r.source_card_id AND a.action = 'claim'
-               AND a.actor = r.creator_id AND a.at <= r.created_at) AS opened_at,
+               AND a.actor = r.creator_id AND a.at <= r.created_at + interval '5 seconds') AS opened_at,
            (SELECT min(c.created_at) FROM clips c WHERE c.recipe_id = r.id) AS ordered_at,
            (SELECT min(u.updated_at) FROM clips c JOIN clip_uploads u ON u.clip_id = c.id
              WHERE c.recipe_id = r.id AND u.status = 'uploaded') AS uploaded_at

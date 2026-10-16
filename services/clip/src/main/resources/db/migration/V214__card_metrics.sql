@@ -31,3 +31,5 @@ CREATE INDEX idx_jump_card_actions_card ON jump_card_actions (card_id, at);
 -- 편집본이 시작된 카드. NULL = 카드 없이 만들었다(보관함·템플릿) 또는 이 칸이 생기기 전에 만들었다.
 -- 카드가 지워져도(탈퇴 정리는 편집본을 먼저 지운다) 편집본 저장을 막지 않게 SET NULL.
 ALTER TABLE recipes ADD COLUMN source_card_id BIGINT REFERENCES jump_cards (id) ON DELETE SET NULL;
+-- 탈퇴 정리가 카드를 지우면 SET NULL이 이 칸으로 recipes를 찾는다. 색인이 없으면 지우는 카드마다 영구 보존 표 전체를 훑는다.
+CREATE INDEX idx_recipes_source_card ON recipes (source_card_id);
