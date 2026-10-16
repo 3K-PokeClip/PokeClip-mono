@@ -37,9 +37,12 @@
 #         accepted.tsv 에 남고, 승인한 디렉터리 이름을 표준 오류로 알린다.
 #         표준 출력은 「SCP RECHECK ACCEPTED <행 수>」 한 줄이다. 끝나지 않은
 #         판정 · 판정 뒤 result.tsv 가 바뀐 판정 · 이미 승인한 판정 · 이미
-#         승인된 더 최근 판정보다 오래된 판정은 승인하지 않는다(종료 2).
+#         승인된(또는 승인 여부를 볼 수 없는) 더 최근 판정보다 오래된
+#         판정은 승인하지 않는다(종료 2).
 #         거부가 든 결과는 승인해도 다음 판정이 종료 1 이다.
-#       앞 기준(승인 결과)을 읽을 때는 증거 경로 검사에 더해 complete.txt ·
+#       앞 기준(승인 결과)을 고를 때 승인 기록이 있는지 볼 수 없는 디렉터리
+#       (검색 불가)도 건너뛰지 않는다 — 읽을 때 증거 경로 검사가 종료 2.
+#       앞 기준을 읽을 때는 증거 경로 검사에 더해 complete.txt ·
 #       accepted.tsv · result.tsv · sts.txt 가 링크 아닌 0600 일반 파일인지
 #       (내용 · 해시를 읽기 전에), 꼴(열 수 · 값 · 중복 (동작, 리전) 없음),
 #       result.tsv 와 승인 기록의 해시가 완료 표지의 판정 때 해시와 같은지,
@@ -222,7 +225,9 @@ dir_key() {
 #######################################
 # 같은 묶음의 가장 최근 scp 증거 디렉터리를 찾는다. 다른 도구의 디렉터리와
 # 이름이 겹치는 묶음(O7f 와 O7f-stop2)은 섞지 않는다 — 「scp-<묶음>」 바로
-# 뒤가 시각이어야 한다.
+# 뒤가 시각이어야 한다. 파일 이름을 주면 그 파일이 확실히 없는 디렉터리만
+# 건너뛴다 — 있는지 볼 수 없는 것(검색할 수 없는 디렉터리 · 디렉터리가
+# 아닌 것)은 후보로 남겨, 읽을 때 검사가 거부한다(종료 2).
 # Globals:
 #   DIR_PREFIX, STAMP_GLOB
 # Arguments:
@@ -233,7 +238,7 @@ dir_key() {
 #   루트를 정할 수 없으면 2.
 #######################################
 latest_dir() {
-  local bundle="$1" required="${2:-}" root candidate key
+  local bundle="$1" required="${2:-}" root candidate file key
   local best="" best_key=0
   root="$(evidence::root)" || return 2
   [[ -d "${root}" ]] || return 0
@@ -241,10 +246,12 @@ latest_dir() {
   for candidate in "${root}/${DIR_PREFIX}-${bundle}-"${STAMP_GLOB} \
     "${root}/${DIR_PREFIX}-${bundle}-"${STAMP_GLOB}-[2-9]; do
     [[ -e "${candidate}" || -L "${candidate}" ]] || continue
-    # 대상 없는 링크도 후보로 둔다 — 빠지면 앞 기준이 조용히 이전 승인으로
-    # 바뀐다. 링크는 읽을 때 evidence::check_file 이 거부한다(종료 2).
-    if [[ -n "${required}" && ! -e "${candidate}/${required}" &&
-      ! -L "${candidate}/${required}" ]]; then
+    # 확실히 없을 때 = 검색할 수 있는 디렉터리인데 파일도 링크(대상 없는
+    # 링크 포함)도 없을 때. 검색할 수 없으면 -e 가 늘 거짓인데, 그때
+    # 건너뛰면 앞 기준이 조용히 이전 승인 · baseline 으로 바뀐다(장부 r3 7).
+    file="${candidate}/${required}"
+    if [[ -n "${required}" && -d "${candidate}" && -x "${candidate}" &&
+      ! -e "${file}" && ! -L "${file}" ]]; then
       continue
     fi
     key="$(dir_key "${bundle}" "${candidate}")"
@@ -627,8 +634,9 @@ judge_bundle() {
 #######################################
 # kty 가 보고받은 판정(증거 디렉터리 이름)을 그 묶음의 다음 비교 기준으로
 # 승인한다. 완료 표지(결과가 판정 때 그대로인지) · 결과 파일 검사를 통과해야
-# 하고, 이미 승인했거나 이미 승인된 더 최근 판정보다 오래되면 승인하지
-# 않는다. 승인 기록에는 판정 때의 해시(완료 표지의 것)를 남긴다.
+# 하고, 이미 승인했거나 이미 승인된(또는 승인 여부를 볼 수 없는) 더 최근
+# 판정보다 오래되면 승인하지 않는다. 승인 기록에는 판정 때의 해시(완료
+# 표지의 것)를 남긴다.
 # Globals:
 #   DIR_PREFIX, EVIDENCE_ROOT_NAME, result_rows, result_denied
 # Arguments:
@@ -655,7 +663,8 @@ accept_bundle() {
   latest="$(latest_dir "${bundle}" accepted.tsv)" || exit 2
   if [[ -n "${latest}" ]] && (( 10#$(dir_key "${bundle}" "${latest}") > \
     10#$(dir_key "${bundle}" "${dir}") )); then
-    die "더 최근 판정(${latest##*/})이 이미 승인됨: ${name}"
+    die "더 최근 판정(${latest##*/})이 이미 승인됨(또는 승인 여부를 볼 수" \
+      "없음): ${name}"
   fi
   # 시각을 먼저 구한다 — 실패했을 때 시각 칸이 빈 승인 기록이 남지 않게.
   at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" || die "승인 시각을 읽지 못함"

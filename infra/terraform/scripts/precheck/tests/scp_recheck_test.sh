@@ -565,6 +565,38 @@ expect_accept_named_judgment() {
 }
 
 #######################################
+# 승인 여부를 볼 수 없는 더 최근 판정이 있으면 그보다 오래된 판정을 승인하지
+# 않는다(장부 r3 7 — 승인 대상 고르기도 같은 부류): A 를 판정하고 B 를 판정 ·
+# 승인한 뒤 B 의 디렉터리를 검색할 수 없게(0600) 하고 A 를 승인하면 종료 2
+# 이고 A 에 승인 기록이 없다. B 를 건너뛰면 이미 승인된 더 최근 판정보다
+# 오래된 판정이 승인된다.
+#######################################
+expect_accept_hidden_newer_rejected() {
+  local case_dir root first second
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "accept-hidden-newer: 시험 준비 실패"
+    return
+  }
+  root="${case_dir}/home/.pokeclip-precheck"
+  run_recheck "${case_dir}" a gamma
+  first="$(judged_name)"
+  if ! second="$(judge_and_accept "${case_dir}" gamma)" ||
+    ! chmod 600 "${root}/${second}"; then
+    testlib::fail "accept-hidden-newer: 시험 준비 실패"
+    return
+  fi
+  run_recheck "${case_dir}" accept-a --accept gamma --dir "${first}" \
+    --reason 'kty 답'
+  expect_unverifiable accept-hidden-newer || return
+  if [[ -e "${root}/${first}/accepted.tsv" ]]; then
+    testlib::fail "accept-hidden-newer: 거부했는데 A 에 승인 기록이 생김"
+    return
+  fi
+  testlib::ok "accept-hidden-newer → 승인 여부를 볼 수 없는 더 최근 판정보다" \
+    "오래된 판정의 승인은 종료 2"
+}
+
+#######################################
 # 끝나지 않은 판정은 승인할 수 없다 — 호출 실패로 끝난 판정 · 완료 표지가
 # 없는(지운) 판정 · 표지의 꼴이 틀린 판정(장부 r2 #8 — 빈 표지 · 「UTC
 # 시각<탭>해시」 가 아닌 글 · 해시는 맞고 시각만 UTC 가 아님).
@@ -770,6 +802,16 @@ tamper_reference() {
         ln -s -- "${case_dir}/in/sts.txt" "${dir}/sts.txt"
       ;;
     sts-0644) chmod 644 "${dir}/sts.txt" ;;
+    # 승인 디렉터리를 검색할 수 없게 — 승인 기록이 있는지 볼 수 없다. 권한은
+    # testlib 의 EXIT 트랩이 지우기 전에 되돌린다.
+    approved-dir-0600) chmod 600 "${dir}" ;;
+    approved-dir-0000) chmod 000 "${dir}" ;;
+    approved-dir-file)
+      # 디렉터리 자리에 실행 비트가 있는 일반 파일 — 검색 권한(-x)만 보면
+      # 「검색할 수 있는데 승인 기록이 없음」 으로 읽힌다.
+      mv -- "${dir}" "${case_dir}/in/approved" && : >"${dir}" &&
+        chmod 700 "${dir}"
+      ;;
     *) return 0 ;;
   esac
 }
@@ -779,11 +821,13 @@ tamper_reference() {
 # 링크 · 대상 없는 링크 · UTC 아닌 시각 · 판정 때와 다른 해시, 완료 표지가
 # 링크 · 없음, 결과가 링크 · 0644 · FIFO · FIFO 를 가리키는 링크 · 칸 수 틀림
 # (칸 모자람) · 중복 행 · 승인 뒤 바뀜 · 승인 기록 해시까지 맞춰 바뀜, 호출
-# 주체 기록이 링크 · 0644, 다른 계정에서 승인한 기준. 기준 파일은 내용 ·
-# 해시를 읽기 전에 검사하므로 FIFO 에서 걸리지 않는다(RUN_LIMIT 안에 끝남).
-# 사례마다 그 사례가 겨누는 검사에 닿게 한다 — 내용을 바꾼 사례는 표지 ·
-# 승인 기록의 해시를 맞춰 앞의 해시 대조에서 먼저 끝나지 않게 한다(해시
-# 대조 자체를 겨누는 result-changed · result-rehashed 는 빼고).
+# 주체 기록이 링크 · 0644, 승인 디렉터리가 0600 · 0000(검색 불가 — 건너뛰면
+# 앞 기준이 조용히 이전 승인 · baseline 으로 바뀐다) · 디렉터리 자리의 실행
+# 가능한 일반 파일, 다른 계정에서 승인한 기준. 기준 파일은 내용 · 해시를
+# 읽기 전에 검사하므로 FIFO 에서 걸리지 않는다(RUN_LIMIT 안에 끝남). 사례마다
+# 그 사례가 겨누는 검사에 닿게 한다 — 내용을 바꾼 사례는 표지 · 승인 기록의
+# 해시를 맞춰 앞의 해시 대조에서 먼저 끝나지 않게 한다(해시 대조 자체를
+# 겨누는 result-changed · result-rehashed 는 빼고).
 # Globals:
 #   run_out
 #######################################
@@ -793,7 +837,7 @@ expect_tampered_reference_rejected() {
     accepted-bad-time accepted-other-hash complete-link complete-missing \
     result-link result-0644 result-fifo result-fifo-link result-fields \
     result-dup result-changed result-rehashed sts-link sts-0644 \
-    other-account; do
+    approved-dir-0600 approved-dir-0000 approved-dir-file other-account; do
     if ! case_dir="$(new_tree_case)" ||
       ! name="$(judge_and_accept "${case_dir}" gamma)" ||
       ! tamper_reference "${case_dir}" \
@@ -810,8 +854,9 @@ expect_tampered_reference_rejected() {
       return
     fi
   done
-  testlib::ok "tamper → 승인 기록 · 완료 표지 · 결과 · 호출 주체 기록 변조와" \
-    "다른 계정 기준 모두 종료 2(FIFO 에서 걸리지 않음)"
+  testlib::ok "tamper → 승인 기록 · 완료 표지 · 결과 · 호출 주체 기록 변조 ·" \
+    "검색 불가 승인 디렉터리와 다른 계정 기준 모두 종료 2(FIFO 에서 걸리지" \
+    "않음)"
 }
 
 #######################################
@@ -1028,6 +1073,7 @@ main() {
   expect_prefix_isolated
   expect_other_tool_dirs_ignored
   expect_accept_named_judgment
+  expect_accept_hidden_newer_rejected
   expect_accept_incomplete_rejected
   expect_accept_changed_result_rejected
   expect_no_record_when_time_fails

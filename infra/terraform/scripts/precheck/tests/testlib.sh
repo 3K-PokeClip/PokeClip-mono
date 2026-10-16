@@ -46,11 +46,14 @@ run_status=0
 
 #######################################
 # 임시 디렉터리 뿌리를 지운다(EXIT 트랩 — INT · TERM 도 exit 로 여기 온다).
+# 시험이 권한을 뺀 디렉터리(검색 불가 승인 디렉터리 변조)도 지워지게, 먼저
+# 뿌리 아래 권한을 본인 읽기 · 쓰기 · 검색으로 되돌린다.
 # Globals:
 #   tmp_root
 #######################################
 testlib::remove_tmp_root() {
   if [[ -n "${tmp_root}" ]]; then
+    chmod -R u+rwx "${tmp_root}" 2>/dev/null
     rm -rf -- "${tmp_root}"
   fi
 }

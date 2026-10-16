@@ -180,6 +180,34 @@ expect_init_message_has_no_path() {
   testlib::ok "init-message → 가짜 aws 가 없으면 시작하지 않음 · 절대 경로 0"
 }
 
+#######################################
+# 끝날 때 임시 디렉터리 뿌리를 지운다 — 시험이 권한을 뺀 디렉터리(0600 ·
+# 0000 — 검색 불가 승인 디렉터리 변조, 장부 r3 7)가 있어도. 새 bash 의
+# 뿌리는 이 시험의 뿌리 아래에 둔다.
+# Globals:
+#   tmp_root, TESTS_DIR
+#######################################
+expect_cleanup_restores_permissions() {
+  local parent child status
+  parent="${tmp_root}/cleanup"
+  mkdir -p -- "${parent}" || {
+    testlib::fail "cleanup: 시험 준비 실패"
+    return
+  }
+  # shellcheck disable=SC2016 # 작은따옴표 안은 새 bash 가 펼친다.
+  child="$(TMPDIR="${parent}/" bash -c 'source "$1" && testlib::init child &&
+    mkdir -p -- "${tmp_root}/a/b" && chmod 000 "${tmp_root}/a/b" &&
+    chmod 600 "${tmp_root}/a" && printf "%s\n" "${tmp_root}"' _ \
+    "${TESTS_DIR}/testlib.sh" 2>"${parent}/child.stderr")"
+  status=$?
+  if [[ "${status}" -ne 0 || -z "${child}" || -e "${child}" ]]; then
+    testlib::fail "cleanup: 권한을 뺀 디렉터리가 있으면 임시 뿌리가 남음 —" \
+      "${status}"
+    return
+  fi
+  testlib::ok "cleanup → 권한을 뺀 디렉터리가 있어도 임시 뿌리를 지움"
+}
+
 main() {
   testlib::init testlib_test
   expect_fakebin_required
@@ -187,6 +215,7 @@ main() {
   expect_run_limited
   expect_leak_check_needs_dirs
   expect_init_message_has_no_path
+  expect_cleanup_restores_permissions
   testlib::finish testlib_test
 }
 
