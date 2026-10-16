@@ -21,7 +21,9 @@
 #
 # 표준 출력(계약): 첫 줄 하나와 13-1 덧붙임 줄(행마다 — 마크다운 표 행:
 # 동작 · 리전 · 판정 · 날짜 시각(KST) · 묶음). 계정 ID · ARN · 사용자 이름은
-# 표준 출력 · 표준 오류에 적지 않는다. 원본은 증거 디렉터리에만 둔다.
+# 표준 출력 · 표준 오류에 적지 않는다. 원본은 증거 디렉터리에만 둔다. 앞
+# 기준을 읽는 cat · 표지를 옮기는 mv 가 실패하면 그 명령의 진단(로컬 절대
+# 경로가 든)은 버리고 die 문구가 원인을 말한다.
 #   SCP RECHECK OK <판정한 행 수>
 #   SCP RECHECK DENIED <거부 행 수>
 #   SCP RECHECK CHANGED <앞 기준과 다른 행 수>
@@ -330,7 +332,7 @@ read_result_reference() {
 require_complete() {
   local dir="$1" line at sum current
   evidence::check_file "${dir}/complete.txt" || exit 2
-  line="$(cat -- "${dir}/complete.txt")" ||
+  line="$(cat -- "${dir}/complete.txt" 2>/dev/null)" ||
     die "완료 표지를 읽지 못함(${dir##*/})"
   at="${line%%$'\t'*}"
   sum="${line#*$'\t'}"
@@ -355,7 +357,8 @@ require_complete() {
 check_acceptance() {
   local dir="$1" judged="$2" file="$1/accepted.tsv" line at sum reason
   evidence::check_file "${file}" || exit 2
-  line="$(cat -- "${file}")" || die "승인 기록을 읽지 못함(${dir##*/})"
+  line="$(cat -- "${file}" 2>/dev/null)" ||
+    die "승인 기록을 읽지 못함(${dir##*/})"
   if [[ "${line}" == *$'\n'* ]] || ! tsv_ok "${line}" 3; then
     die "승인 기록의 꼴이 틀림(${dir##*/}/accepted.tsv)"
   fi
@@ -438,7 +441,8 @@ check_reference_account() {
   [[ -n "${reference_dir}" ]] || return 0
   file="${reference_dir}/sts.txt"
   evidence::check_file "${file}" || exit 2
-  line="$(cat -- "${file}")" || die "앞 기준의 호출 주체 기록을 읽지 못함"
+  line="$(cat -- "${file}" 2>/dev/null)" ||
+    die "앞 기준의 호출 주체 기록을 읽지 못함"
   if [[ "${line}" == *$'\n'* ]] || ! tsv_ok "${line}" 2 ||
     [[ "${line#*$'\t'}" != "${account}" ]]; then
     die "앞 기준(${reference_dir##*/})의 호출 주체 계정이 이번과 다름"
@@ -582,7 +586,7 @@ save_judgment() {
   sum="$(file_sha256 "${dir}/result.tsv")" ||
     die "결과 파일의 해시를 계산하지 못함(${dir##*/})"
   if ! printf '%s\t%s\n' "${at}" "${sum}" >"${dir}/complete.txt.tmp" ||
-    ! mv -- "${dir}/complete.txt.tmp" "${dir}/complete.txt"; then
+    ! mv -- "${dir}/complete.txt.tmp" "${dir}/complete.txt" 2>/dev/null; then
     die "완료 표지를 쓰지 못함(${dir##*/})"
   fi
 }

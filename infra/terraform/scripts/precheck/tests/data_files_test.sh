@@ -382,6 +382,75 @@ expect_event_names() {
 }
 
 #######################################
+# event_names.txt 맨 아래 묶음(마지막 주석 덩어리 뒤의 행)을 낸다.
+# Globals:
+#   EVENT_NAMES
+# Outputs:
+#   행(원문 그대로).
+#######################################
+last_group_rows() {
+  local line group="" after_rows=0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" == '#'* ]]; then
+      [[ "${after_rows}" -eq 1 ]] && group=""
+      after_rows=0
+    elif [[ -n "${line}" ]]; then
+      group+="${line}"$'\n'
+      after_rows=1
+    fi
+  done <"${EVENT_NAMES}"
+  printf '%s' "${group}"
+}
+
+#######################################
+# 「역할 받기」 범주의 경계(장부 r3 6): event_names.txt 맨 아래 묶음의 행 =
+# events.sh is_role_assumption 이 역할 받기로 세는 행. 실제 events.sh 를
+# 실제 데이터로 돌려(행마다 그 행 출처 · 이름 · 리전의 이벤트 하나), 증거
+# event_ids.txt 에서 맨 아래 묶음 행의 이벤트만 「역할 받기」 이고 나머지는
+# 「권한 변경」 인지 본다 — 한쪽만 고치면(묶음에 행을 더하고 코드는 그대로
+# 등) 실패한다.
+# Globals:
+#   EVENT_NAMES, PRECHECK_DIR, run_status, run_out
+#######################################
+expect_role_group_matches_code() {
+  local case_dir group source name region rest n=0 line dir want got
+  case_dir="$(testlib::new_case)" || {
+    testlib::fail "role-group: 시험 준비 실패"
+    return
+  }
+  group="$(last_group_rows)"
+  while IFS=$'\t' read -r source name region rest; do
+    n=$((n + 1))
+    testlib::tsv "${region}" "${name}" "ev-${n}" "${source}" \
+      2026-10-13T03:00:00Z tester
+  done < <(data_rows "${EVENT_NAMES}") >"${case_dir}/in/events.tsv"
+  testlib::run "${case_dir}" roles env \
+    FAKE_AWS_EVENTS="${case_dir}/in/events.tsv" \
+    bash "${PRECHECK_DIR}/events.sh" --since "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  dir="$(grep -m 1 '^events: 증거 ' -- "${run_out}.stderr")"
+  dir="${case_dir}/home/.pokeclip-precheck/${dir##*/}"
+  if [[ "${run_status}" -ne 0 || -z "${group}" ||
+    ! -f "${dir}/event_ids.txt" ]]; then
+    testlib::fail "role-group: events.sh 가 종료 ${run_status} 이거나 맨 아래" \
+      "묶음 · event_ids.txt 가 없음"
+    return
+  fi
+  n=0
+  while IFS= read -r line; do
+    n=$((n + 1))
+    want='권한 변경'
+    has_line "${group}" "${line}" && want='역할 받기'
+    got="$(grep -m 1 "^ev-${n}"$'\t' -- "${dir}/event_ids.txt" | cut -f 2)"
+    if [[ "${got}" != "${want}" ]]; then
+      testlib::fail "role-group: ${line//$'\t'/ } → 기대 「${want}」 · 실제" \
+        "「${got}」 — event_names.txt 맨 아래 묶음과 is_role_assumption 이 다름"
+      return
+    fi
+  done < <(data_rows "${EVENT_NAMES}")
+  testlib::ok "role-group → 맨 아래 묶음 행만 역할 받기 · 나머지는 권한 변경"
+}
+
+#######################################
 # 실제 scp-recheck.sh 가 실제 묶음을 모두 받는다(가짜 aws 전부 허용 —
 # 종료 0 또는 3, 검사 불가 0). 실제 events.sh 는 event_names.txt 의 행마다
 # 그 리전으로 한 번씩 조회한다.
@@ -441,6 +510,7 @@ main() {
   expect_judge_reads
   expect_baseline_rows_exist
   expect_event_names
+  expect_role_group_matches_code
   expect_real_scripts_accept_data
   testlib::finish data_files_test
 }

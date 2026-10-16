@@ -5,6 +5,8 @@
 #     — 맨 아래 묶음을 뺀 전부.
 #   - STS 역할 받기(맨 아래 묶음) — 권한 변경이 아니다. events.sh 는 두
 #     묶음을 「EVENTS <n> (권한 변경 <a> · 역할 받기 <b>)」 로 나눠 낸다.
+#     역할 받기 범주는 events.sh is_role_assumption 의 이름이 정한다 — 이
+#     묶음에 행을 더하면 코드도 함께 고친다(data_files_test 가 대조한다).
 #     평소에는 역할 받기가 대부분이다. 권한 변경이 있었는지는 a 와 증거
 #     summary.tsv 의 역할 받기 아닌 0 아닌 행으로 본다.
 # 리전 규칙: IAM · CloudFront = us-east-1 · STS = us-east-1(전역 엔드포인트)과
@@ -103,7 +105,8 @@ sqs.amazonaws.com	RemovePermission	ap-northeast-2
 # STS 역할 받기 — 권한 변경이 아니다(위 묶음과 따로 본다). 넣은 이유: 계획
 # 389행 리전 규칙(STS 는 us-east-1 과 서울 둘 다 · 두 리전 결과는 이벤트 ID
 # 로 한 번) · c1 사례 4 · 설계 2-3-10 「역할 받기는 호출이 쓴 STS 엔드포인트의
-# 리전에서 본다」 — 판정 사이에 누가 역할을 받았는지 보는 보조다.
+# 리전에서 본다」 — 판정 사이에 누가 역할을 받았는지 보는 보조다. 범주는
+# events.sh is_role_assumption 의 이름이 정한다 — 행을 더하면 코드도 함께.
 sts.amazonaws.com	AssumeRole	us-east-1
 sts.amazonaws.com	AssumeRole	ap-northeast-2
 sts.amazonaws.com	AssumeRoleWithWebIdentity	us-east-1

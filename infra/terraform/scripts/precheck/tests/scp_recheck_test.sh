@@ -781,6 +781,70 @@ expect_no_record_when_time_fails() {
 }
 
 #######################################
+# 이상 I/O 때 명령 자체의 진단(절대 경로가 든)을 내지 않는다(장부 r3 8): 앞
+# 기준의 완료 표지 · 승인 기록 · 호출 주체 기록을 읽는 cat 과 완료 표지를
+# 옮기는 mv 가 실패하면 종료 2 이고, 원인은 그 자리의 die 문구가 말하며,
+# 표준 출력 · 표준 오류에 절대 경로가 없다. 검사(링크 아닌 0600)는 지나고
+# 읽기 · 옮기기만 실패하는 상태(읽기 거부 ACL 등 — chmod 000 은 검사가 먼저
+# 거부한다)는 PATH 앞의 가짜 cat · mv 로 만든다. 가짜는 FAKE_FAIL 로 끝나는
+# 인자를 받으면 진짜처럼 경로를 담은 진단을 내고 실패한다.
+# Globals:
+#   RUN_LIMIT, FAKEBIN, PATH, run_out
+#######################################
+expect_io_failure_hides_paths() {
+  local case_dir bin tool real target want paths
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "io-failure: 시험 준비 실패"
+    return
+  }
+  bin="${case_dir}/in/iobin"
+  mkdir -p -- "${bin}" || {
+    testlib::fail "io-failure: 시험 준비 실패"
+    return
+  }
+  for tool in cat mv; do
+    if ! real="$(command -v "${tool}")" ||
+      ! {
+        # shellcheck disable=SC2016 # 가짜 명령의 본문 글자 그대로다.
+        printf '%s\n' '#!/bin/bash' 'for arg in "$@"; do' \
+          '  if [[ "${arg}" == */"${FAKE_FAIL}" ]]; then' \
+          '    printf "%s: %s: Permission denied\n" "${0##*/}" "${arg}" >&2' \
+          '    exit 1' '  fi' 'done'
+        printf 'exec %q "$@"\n' "${real}"
+      } >"${bin}/${tool}" || ! chmod 700 "${bin}/${tool}"; then
+      testlib::fail "io-failure: 시험 준비 실패"
+      return
+    fi
+  done
+  if ! judge_and_accept "${case_dir}" gamma >/dev/null; then
+    testlib::fail "io-failure: 시험 준비 실패"
+    return
+  fi
+  for target in complete.txt accepted.tsv sts.txt complete.txt.tmp; do
+    case "${target}" in
+      complete.txt) want='완료 표지를 읽지 못함' ;;
+      accepted.tsv) want='승인 기록을 읽지 못함' ;;
+      sts.txt) want='앞 기준의 호출 주체 기록을 읽지 못함' ;;
+      *) want='완료 표지를 쓰지 못함' ;;
+    esac
+    testlib::run_limited "${RUN_LIMIT}" "${case_dir}" "io-${target}" \
+      env PATH="${bin}:${FAKEBIN}:${PATH}" FAKE_FAIL="${target}" \
+      bash "${case_dir}/tree/scp-recheck.sh" gamma
+    expect_unverifiable "io-${target}" || return
+    paths="$(testlib::abs_path_lines "${run_out}.stdout")"
+    paths+="$(testlib::abs_path_lines "${run_out}.stderr")"
+    if [[ -n "${paths}" ||
+      "$(testlib::count "${run_out}.stderr" "${want}")" -ne 1 ]]; then
+      testlib::fail "io-${target}: 「${want}」 만 기대했으나 —" \
+        "$(cat -- "${run_out}.stderr")"
+      return
+    fi
+  done
+  testlib::ok "io-failure → cat · mv 실패는 종료 2 · 그 자리 die 문구 ·" \
+    "명령 진단의 절대 경로 0"
+}
+
+#######################################
 # 승인 기준 하나를 고친다(종류별).
 # Globals:
 #   NOT_UTC, OTHER_SHA256
@@ -1142,6 +1206,7 @@ main() {
   expect_accept_incomplete_rejected
   expect_accept_changed_result_rejected
   expect_no_record_when_time_fails
+  expect_io_failure_hides_paths
   expect_tampered_reference_rejected
   expect_result_without_final_newline
   expect_collapsed_baseline_rejected

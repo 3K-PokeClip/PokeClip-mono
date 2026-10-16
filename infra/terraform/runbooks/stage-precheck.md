@@ -22,9 +22,10 @@
 *   **2-3 판정**: dev 쪽 자동 주체가 prod 에 닿는지 보는 판정입니다(설계
     2-3). M17b 가 채웁니다.
 *   **증거 디렉터리**: 점검 원본(요청 · 응답 · 이벤트)을 두는 곳입니다.
-    `~/.pokeclip-precheck/<도구 접두>-<UTC 시각>` 이고 kty 로컬에만
-    있습니다. 이름은 도구마다 겹치지 않게 접두로 시작합니다 —
-    `scp-<묶음>` · `events` · M17b 는 `collect-<단계>` 꼴.
+    `~/.pokeclip-precheck/<도구 접두>-<이름>-<UTC 시각>`(events 는
+    `events-<UTC 시각>`)이고 kty 로컬에만 있습니다. 도구 접두는 도구마다
+    겹치지 않습니다 — `scp-<묶음>` · `events` · M17b 는 `collect-<단계>`
+    꼴.
 
 ## 단계별 점검
 
@@ -50,6 +51,10 @@
 
 ## 순서
 
+먼저 `aws sts get-caller-identity` 로 호출 주체가 리스 계정의 kty IAM
+사용자인지 눈으로 확인합니다. 값은 보고 · 파일에 옮기지 않습니다. 묶음의
+첫 판정(비교 기준 `baseline.tsv`)은 계정 대조가 없기 때문입니다.
+
 1.  **① SCP 재판정**: `scp-recheck.sh <공통 묶음>`. 멈춤 자리가 있는
     단계는 `scp-recheck.sh <멈춤 자리 묶음>` 도 따로 돌립니다.
 1.  **② 2-3 판정**: 아래 「2-3 판정」 절(M17b 가 채움).
@@ -69,8 +74,8 @@
 ```shell
 bash infra/terraform/scripts/precheck/scp-recheck.sh O7f
 bash infra/terraform/scripts/precheck/scp-recheck.sh O7f-stop2
-# O7f 의 비교 기준이 baseline.tsv 였을 때(13-1 의 마지막 판정 시각).
-bash infra/terraform/scripts/precheck/events.sh --since 2026-10-13T02:34:00Z
+# O7f 의 비교 기준이 baseline.tsv 였을 때(baseline 의 가장 이른 판정 시각).
+bash infra/terraform/scripts/precheck/events.sh --since 2026-10-13T01:59:00Z
 ```
 
 ## SCP 재판정
@@ -176,6 +181,22 @@ bash infra/terraform/scripts/precheck/scp-recheck.sh --accept O7f \
     리전입니다(M17b 가 정함). 지금은 서울 · us-east-1 이고, 이것은 M17a 가
     정한 값입니다.
 
+### 재판정의 한계
+
+*   정책 시뮬레이터는 RCP(리소스 제어 정책 — 조직이 자원 쪽에 거는 거부
+    규칙)를 평가하지 않습니다. [IAM 사용자 가이드의 정책 시뮬레이터
+    절][policy-simulator]은 「The policy simulator evaluates SCPs, including
+    condition keys and resource scoping in deny statements, but does not
+    support resource control policies (RCPs).」 라고 적습니다(2026-10-17
+    확인). RCP 거부는 apply 중에 나며, 계획 3절 SCP 멈춤 규칙이 받습니다.
+*   이상 I/O(읽기 거부 ACL · 디스크 가득 참 등)로 종료 2 가 나면 셸 · 외부
+    명령의 진단에 로컬 절대 경로(HOME · 저장소 위치)가 있을 수 있습니다.
+    그 진단은 보고에 옮기지 않습니다(`events.sh` 도 같음). 앞 기준을 읽는
+    `cat` · 완료 표지를 옮기는 `mv` 의 진단은 도구가 버리고 원인 문구만
+    냅니다.
+
+[policy-simulator]: https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_testing-policies.html
+
 ## 2-3 판정
 
 M17b(`principal-check.sh`)가 채우는 절입니다. M17b 머지 전에는 자리만
@@ -204,8 +225,10 @@ M17b(`principal-check.sh`)가 채우는 절입니다. M17b 머지 전에는 자�
     변경만 셉니다.
     *   `비교 기준 승인 기준 scp-<묶음>-<시각>` 이면 그 디렉터리 이름의
         시각입니다(`scp-O7f-20261014T031512Z` → `2026-10-14T03:15:12Z`).
-    *   `비교 기준 baseline.tsv` 면 설계 13-1 의 마지막 판정 시각
-        2026-10-13 11:34 KST(`2026-10-13T02:34:00Z`)입니다.
+    *   `비교 기준 baseline.tsv` 면 `baseline.tsv` 전체에서 가장 이른
+        판정 시각(다섯째 칸) 2026-10-13 10:59 KST(`2026-10-13T01:59:00Z`)
+        입니다. 묶음마다 따로 찾지 않고 이 한 값을 씁니다 — 조회 창이
+        넓어지는 쪽입니다.
     *   묶음이 둘인 단계(O7e · O7f)는 공통 묶음(`O7e` · `O7f`)의 비교
         기준을 씁니다 — 멈춤 자리 묶음의 것이 아닙니다.
 *   종료 0 은 조회 끝, 2 는 검사 불가(사용법 · 지금보다 늦은 `--since` · 증거 경로 · 조회 실패 · 호출
