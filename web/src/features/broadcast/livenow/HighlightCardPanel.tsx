@@ -13,7 +13,7 @@ import type { HighlightSource, LiveHighlight, LiveStream } from './useLiveMockSt
 // 개수는 넘어온 목록에서 그때그때 센다. 목업에 박아 두면 마킹으로 카드가 늘었을 때
 // 필터 표기만 옛 수에 남는다.
 
-// 'hidden'은 숨긴 카드만 본다(POK-338) — 거기서만 숨김을 되돌릴 수 있다
+// 'hidden'은 숨긴 카드만 본다(POK-338): 거기서만 숨김을 되돌릴 수 있다
 type Filter = 'all' | HighlightSource | 'hidden';
 
 const FILTERS: Array<{ value: Filter; label: string }> = [

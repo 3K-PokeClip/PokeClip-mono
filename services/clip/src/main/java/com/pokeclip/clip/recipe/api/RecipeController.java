@@ -45,7 +45,7 @@ public class RecipeController {
 
     /**
      * {@code sourceCardId}는 편집본이 시작된 카드다(POK-338, 측정 재료). 계약6 본문을 안 바꾸려고 쿼리로 받는다.
-     * 문자열로 받는 이유: 숫자가 아니어도 400을 내지 않고 출처만 비운다 — 측정 재료 때문에 저장이 실패하면 안 된다.
+     * 문자열로 받는 이유: 숫자가 아니어도 400을 내지 않고 출처만 비운다: 측정 재료 때문에 저장이 실패하면 안 된다.
      */
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<RecipeSnapshot> create(@PathVariable String streamId,

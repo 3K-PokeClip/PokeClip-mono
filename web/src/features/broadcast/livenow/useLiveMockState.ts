@@ -64,7 +64,7 @@ export interface LiveHighlight {
   emphasized?: boolean;
   /** 카드 시점 장면 사진(POK-277). 없으면 자리표시 */
   thumbnailUrl?: string | null;
-  /** 숨긴 카드다(POK-338) — 「숨김」 칩에서만 보이고 「되돌리기」만 할 수 있다 */
+  /** 숨긴 카드다(POK-338): 「숨김」 칩에서만 보이고 「되돌리기」만 할 수 있다 */
   hidden?: boolean;
 }
 
@@ -127,7 +127,7 @@ export interface CardActionResult {
   text: string;
 }
 
-/** 카드 집기·놓기·숨기기·되돌리기. 실패도 값으로 돌려준다 — 카드가 사유(409 already_claimed 등)를 토스트로 보인다 */
+/** 카드 집기·놓기·숨기기·되돌리기. 실패도 값으로 돌려준다: 카드가 사유(409 already_claimed 등)를 토스트로 보인다 */
 async function cardCall(method: string, path: string, body?: object): Promise<CardActionResult> {
   try {
     const r = await apiFetch(

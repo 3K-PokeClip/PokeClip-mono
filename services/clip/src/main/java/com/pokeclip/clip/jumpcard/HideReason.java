@@ -7,7 +7,7 @@ import java.util.Arrays;
 /**
  * 카드를 숨긴 이유(POK-338, 2026-10-15 결정). 거짓양성률 = 자동 카드 중 {@link #NOT_HIGHLIGHT}로 숨긴 비율이다.
  *
- * <p>값은 표({@code ck_jump_cards_hidden_reason})·행동 기록({@code ck_jump_card_actions_reason})의 CHECK와 같다 —
+ * <p>값은 표({@code ck_jump_cards_hidden_reason})·행동 기록({@code ck_jump_card_actions_reason})의 CHECK와 같다.
  * 하나를 더하면 셋을 같이 고친다.
  */
 public enum HideReason {

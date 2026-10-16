@@ -27,7 +27,7 @@ import { useLiveData } from './liveDataStore';
 // 하이라이트 카드(시안 1b) — 세로 목록의 한 행이던 것을 가로로 넘기는 카드로 바꿨다.
 // 표시 규칙은 전부 highlightCardView가 정한다: 이 파일은 그 결과를 그리기만 한다.
 
-/** 숨기기 메뉴(POK-338). 시안이 없어 기존 메뉴로 둔다 — 시안이 나오면 모양만 바꾼다 */
+/** 숨기기 메뉴(POK-338). 시안이 없어 기존 메뉴로 둔다: 시안이 나오면 모양만 바꾼다 */
 const HIDE_REASONS: ReadonlyArray<{ value: HideReason; label: string }> = [
   { value: 'not_highlight', label: '하이라이트 아님' },
   { value: 'duplicate', label: '중복' },
@@ -185,7 +185,7 @@ export function HighlightCard({
             >
               편집
             </LinkButton>
-            {/* 놓기(clip claim 해제, POK-338) — 편집을 그만두면 다른 편집자가 집을 수 있다. 내가 집은 카드에만 */}
+            {/* 놓기(clip claim 해제, POK-338): 편집을 그만두면 다른 편집자가 집을 수 있다. 내가 집은 카드에만 */}
             {highlight.claimedByMe ? (
               <Button
                 variant="ghost"
@@ -205,7 +205,7 @@ export function HighlightCard({
             <IconButton variant="ghost" size="sm" aria-label="보관함에 저장" disabled>
               <Bookmark size={15} aria-hidden />
             </IconButton>
-            {/* 숨기기(clip hide) — 시안에는 카드별 단추가 없어 같은 줄의 작은 아이콘 하나로 둔다. 숨긴 카드는 패널의 「숨김」 칩이 모은다.
+            {/* 숨기기(clip hide): 시안에는 카드별 단추가 없어 같은 줄의 작은 아이콘 하나로 둔다. 숨긴 카드는 패널의 「숨김」 칩이 모은다.
                 이유를 고르게 한다(POK-338): 「하이라이트 아님」 비율이 자동 감지의 거짓양성률이다 */}
             <DropdownMenu>
               <DropdownMenu.Trigger>

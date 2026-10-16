@@ -1150,7 +1150,7 @@ describe('LiveScreen — 하이라이트 카드', () => {
   });
 });
 
-/** 맨 앞 카드(8번)를 고른 이유로 숨긴다 — 숨기기는 이유 메뉴를 거친다(POK-338) */
+/** 맨 앞 카드(8번)를 고른 이유로 숨긴다: 숨기기는 이유 메뉴를 거친다(POK-338) */
 async function 숨긴다(이유: string) {
   fireEvent.click(screen.getAllByRole('button', { name: '이 카드 숨기기' })[0] as HTMLElement);
   fireEvent.click(screen.getByRole('menuitem', { name: 이유 }));

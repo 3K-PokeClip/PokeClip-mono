@@ -127,7 +127,7 @@ class RecipeControllerTest extends IntegrationTestSupport {
 
     // ── 출처 카드 (POK-338) ───────────────────────────────────────
 
-    /** 쿼리로 받는다 — 계약6 본문과 응답 봉투는 그대로다(보낸 것과 돌아온 recipe가 트리로 같다). */
+    /** 쿼리로 받는다: 계약6 본문과 응답 봉투는 그대로다(보낸 것과 돌아온 recipe가 트리로 같다). */
     @Test
     void 카드로_연_편집본은_출처_카드가_남고_본문은_그대로다() throws Exception {
         볼_수_있다("OWNER");
@@ -156,7 +156,7 @@ class RecipeControllerTest extends IntegrationTestSupport {
     }
 
     /**
-     * 측정 재료 때문에 편집자 저장이 실패하면 안 된다 — 다른 방송의 카드·없는 카드·숫자가 아닌 값은
+     * 측정 재료 때문에 편집자 저장이 실패하면 안 된다: 다른 방송의 카드·없는 카드·숫자가 아닌 값은
      * 출처를 비운 채 저장한다(2026-10-16 결정).
      */
     @ParameterizedTest(name = "{0}")

@@ -163,7 +163,7 @@ class JumpCardSchemaTest extends IntegrationTestSupport {
 
         assertThatThrownBy(() -> jdbc.update(
                 "INSERT INTO jump_card_actions (card_id, action, actor) VALUES (?, 'open', '7')", id))
-                .as("열람은 집기로 갈음한다(2026-10-15 결정) — 따로 받지 않는다")
+                .as("열람은 집기로 갈음한다(2026-10-15 결정): 따로 받지 않는다")
                 .isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> jdbc.update(
                 "INSERT INTO jump_card_actions (card_id, action, actor, reason) VALUES (?, 'hide', '7', 'boring')", id))

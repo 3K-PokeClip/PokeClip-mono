@@ -15,7 +15,7 @@ CREATE TABLE jump_card_actions (
     -- CASCADE에 맡긴다(시험 정리·관리 도구로 카드를 지워도 FK가 막지 않는다).
     card_id BIGINT       NOT NULL REFERENCES jump_cards (id) ON DELETE CASCADE,
     action  VARCHAR(16)  NOT NULL,
-    -- 누가(JWT sub). FK 없음 — auth users 표를 참조하지 않는다(jump_cards.claimed_by와 같은 처리).
+    -- 누가(JWT sub). FK 없음: auth users 표를 참조하지 않는다(jump_cards.claimed_by와 같은 처리).
     actor   VARCHAR(128) NOT NULL,
     -- hide에만 쓴다. 다른 행동은 NULL.
     reason  VARCHAR(16),

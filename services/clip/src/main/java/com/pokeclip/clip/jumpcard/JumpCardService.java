@@ -116,7 +116,7 @@ public class JumpCardService {
             // 행은 있는데 못 잡았다 = 남이 잡고 있다. 「없는 카드」는 위 orElseThrow가 이미 갈랐다.
             throw new ClaimedByOtherException(snapshot(card));
         }
-        // 본인 재호출(연장)도 남긴다 — 편집기로 다시 들어간 것이다. 열람 기록을 집기로 갈음했다(POK-338).
+        // 본인 재호출(연장)도 남긴다: 편집기로 다시 들어간 것이다. 열람 기록을 집기로 갈음했다(POK-338).
         cards.recordAction(id, "claim", userId, null);
         log.info("jumpcard.claimed cardId={} by={}", id, userId);
         JumpCardSnapshot snapshot = snapshot(card);
@@ -155,7 +155,7 @@ public class JumpCardService {
     }
 
     /**
-     * 사유 판정이 자격 판정보다 앞이다 — 뒤면 형식 오류 하나가 auth 왕복(최대 7초)을 태우고도 400으로 끝난다
+     * 사유 판정이 자격 판정보다 앞이다: 뒤면 형식 오류 하나가 auth 왕복(최대 7초)을 태우고도 400으로 끝난다
      * ({@link #listOf}의 요청 칸과 같은 순서).
      *
      * @param reason {@code null}이면 이유 없이 숨긴다. 셋 밖이면 400({@link HideReason#parseNullable})
@@ -226,7 +226,7 @@ public class JumpCardService {
         JumpCard card = cards.findById(id).orElseThrow(() -> new JumpCardNotFoundException(id));
         JumpCardSnapshot snapshot = snapshot(card);
         if (updated == 1) {
-            // 발행과 같은 조건이다 — 안 바뀐 호출을 남기면 단추를 두 번 누른 것이 「두 번 숨겼다」로 세진다(POK-338).
+            // 발행과 같은 조건이다: 안 바뀐 호출을 남기면 단추를 두 번 누른 것이 「두 번 숨겼다」로 세진다(POK-338).
             cards.recordAction(id, action, userId, reason);
             log.info("jumpcard.{} cardId={} by={} reason={}", action, id, userId, reason);
             publishAfterCommit(snapshot);

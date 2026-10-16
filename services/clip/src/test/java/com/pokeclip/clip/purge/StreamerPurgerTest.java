@@ -62,7 +62,7 @@ class StreamerPurgerTest extends IntegrationTestSupport {
             assertThat(count(table + " WHERE stream_id = 'S-gone'")).as(table).isZero();
             assertThat(count(table + " WHERE stream_id = 'S-kept'")).as(table).isOne();
         }
-        // 카드 행동 기록(POK-338)은 카드 FK의 CASCADE로 같이 지워진다 — 정리 코드에 따로 줄이 없다.
+        // 카드 행동 기록(POK-338)은 카드 FK의 CASCADE로 같이 지워진다: 정리 코드에 따로 줄이 없다.
         assertThat(count("jump_card_actions WHERE card_id = " + gone.cardId)).isZero();
         assertThat(count("jump_card_actions WHERE card_id = " + kept.cardId)).isOne();
         assertThat(count("render_jobs WHERE clip_id = " + gone.clipId)).isZero();

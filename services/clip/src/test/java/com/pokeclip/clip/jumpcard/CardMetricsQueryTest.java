@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * {@code services/README.md}「시범 운영 측정 재료」 절의 집계 SQL 둘을 <b>README에서 그대로 꺼내</b> 돌린다(POK-338).
- * 시험 안에 SQL을 베껴 두면 README가 낡아도 초록이다 — 그래서 문서를 읽는다.
+ * 시험 안에 SQL을 베껴 두면 README가 낡아도 초록이다: 그래서 문서를 읽는다.
  */
 class CardMetricsQueryTest extends IntegrationTestSupport {
 

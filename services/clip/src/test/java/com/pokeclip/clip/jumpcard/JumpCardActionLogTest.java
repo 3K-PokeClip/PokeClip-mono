@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * 카드 행동 기록(POK-338). 카드 표의 claimed_*·hidden_*는 다시 집거나 되돌리면 덮이고 지워지므로,
  * 거짓양성률·카드에서 영상까지의 시간은 이 기록으로만 잰다.
  *
- * <p>규칙: <b>상태가 실제로 바뀐 호출만</b> 남는다. 멱등 성공(이미 그 상태)과 거절은 안 남는다 —
+ * <p>규칙: <b>상태가 실제로 바뀐 호출만</b> 남는다. 멱등 성공(이미 그 상태)과 거절은 안 남는다.
  * 남기면 같은 사람이 단추를 두 번 누른 것이 「두 번 숨겼다」로 세진다. 예외 하나: 본인이 다시 집는 것은
  * 「다시 열었다」라서 남는다(열람을 집기로 갈음했다, 2026-10-15 결정).
  */
@@ -83,10 +83,10 @@ class JumpCardActionLogTest extends IntegrationTestSupport {
     void 바뀌지_않은_호출은_안_남는다() {
         long id = 카드();
 
-        service.release(id, "1201");          // 아무도 안 잡았다 — 멱등 성공
-        service.unhide(id, "1201");           // 안 숨겨졌다 — 멱등 성공
+        service.release(id, "1201");          // 아무도 안 잡았다: 멱등 성공
+        service.unhide(id, "1201");           // 안 숨겨졌다: 멱등 성공
         service.hide(id, "1201", null);
-        service.hide(id, "1202", "duplicate"); // 이미 숨겨졌다 — 숨긴 사람·사유를 안 덮는다
+        service.hide(id, "1202", "duplicate"); // 이미 숨겨졌다: 숨긴 사람·사유를 안 덮는다
 
         assertThat(기록(id)).containsExactly("hide 1201 null");
     }
@@ -103,7 +103,7 @@ class JumpCardActionLogTest extends IntegrationTestSupport {
     }
 
     /**
-     * 기록은 상태를 바꾼 그 트랜잭션 안에 있다 — 바깥 트랜잭션이 되감기면 상태와 기록이 같이 사라진다.
+     * 기록은 상태를 바꾼 그 트랜잭션 안에 있다: 바깥 트랜잭션이 되감기면 상태와 기록이 같이 사라진다.
      * 기록을 별도 트랜잭션(REQUIRES_NEW)이나 커밋 뒤 콜백으로 옮기면 상태는 되감겼는데 기록만 남아 여기서 빨간불이다
      * (감사 1회차가 이 그물이 없던 것을 주입으로 찾았다).
      */

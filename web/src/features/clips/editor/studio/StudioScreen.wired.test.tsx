@@ -301,7 +301,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
       expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
     );
     const [doc] = bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`);
-    // 연 카드를 출처로 쿼리에 싣는다(POK-338) — 본문(계약6)에는 칸을 더하지 않는다
+    // 연 카드를 출처로 쿼리에 싣는다(POK-338): 본문(계약6)에는 칸을 더하지 않는다
     expect(
       fetchSpy.mock.calls.some(
         ([url, init]) =>
