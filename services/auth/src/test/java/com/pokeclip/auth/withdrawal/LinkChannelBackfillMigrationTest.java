@@ -31,13 +31,15 @@ class LinkChannelBackfillMigrationTest extends IntegrationTestSupport {
     }
 
     @Test
-    void 이미_탈퇴한_회원의_닫힌_연동_행을_비우고_산_회원은_그대로_둔다() {
+    void 이미_탈퇴한_회원의_닫힌_행만_비우고_안_탈퇴한_회원의_닫힌_행과_살아_있는_행은_그대로_둔다() {
         flyway("114").migrate();
         long withdrawn = user("withdrawn", true);
-        long alive = user("alive", false);
+        long member = user("member", false);
         for (String table : new String[] {"chzzk_channel_links", "youtube_channel_links"}) {
             link(table, withdrawn, "chan-withdrawn-old", true);
-            link(table, alive, "chan-alive", false);
+            // 재연동·해제로 닫힌 행. 탈퇴가 아니라 연동 해제라 남아야 한다(POK-341 범위 밖, POK-336).
+            link(table, member, "chan-member-old", true);
+            link(table, member, "chan-member", false);
         }
 
         flyway(null).migrate();
@@ -45,8 +47,8 @@ class LinkChannelBackfillMigrationTest extends IntegrationTestSupport {
         for (String table : new String[] {"chzzk_channel_links", "youtube_channel_links"}) {
             assertThat(rowsWithChannel(table, withdrawn))
                     .as("🔴 " + table + ": V115 전에 탈퇴한 회원의 채널 이름·번호가 남았다").isZero();
-            assertThat(rowsWithChannel(table, alive))
-                    .as(table + ": 살아 있는 회원의 연동까지 비웠다").isEqualTo(1);
+            assertThat(rowsWithChannel(table, member))
+                    .as("🔴 " + table + ": 탈퇴 안 한 회원의 닫힌 행이나 살아 있는 행까지 비웠다").isEqualTo(2);
         }
     }
 
