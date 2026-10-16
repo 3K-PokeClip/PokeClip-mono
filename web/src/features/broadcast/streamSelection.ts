@@ -3,18 +3,14 @@
 import { apiFetch } from '@/api/client';
 
 // 지금 볼 방송 번호를 정한다(POK-251).
-// 1) 지난 방송 상세 경로  2) 주소의 ?stream=  3) clip의 「방송 중」 목록의 첫 줄. 없으면 빈 문자열(방송 꺼짐)
+// 1) 지난 방송 상세 경로  2) 주소의 ?stream=  3) clip의 「방송 중」 목록의 첫 줄. 없으면 빈 문자열(방송 꺼짐).
+// 1)·2)는 화면 훅(useLiveStreamSelection)이 Next 주소 값으로 읽고, 여기서는 3)만 묻는다(POK-254)
 
 let cached: Promise<string | null> | null = null;
 
-/** 지난 방송 상세 경로면 그 방송 번호. 라이브 화면과 같은 컴포넌트를 쓰기 위한 분기다 */
-export function vodStreamIdFromPath(): string | null {
-  return vodStreamIdFromPathname(window.location.pathname);
-}
-
 /**
- * {@link vodStreamIdFromPath}의 주소를 받는 쪽. 그리는 중에는 Next의 usePathname 값을 넘긴다: 다른 화면에서 넘어온
- * 직후 첫 그리기의 window.location은 아직 옛 주소다
+ * 지난 방송 상세 경로면 그 방송 번호(라이브 화면과 같은 컴포넌트를 쓰기 위한 분기다). Next의 usePathname 값을 넘긴다: 다른
+ * 화면에서 넘어온 직후 첫 그리기의 window.location은 아직 옛 주소다
  */
 export function vodStreamIdFromPathname(pathname: string): string | null {
   const m = pathname.match(/^\/broadcast\/vod\/([^/]+)/);
@@ -38,19 +34,12 @@ async function askLiveStreamId(): Promise<string | null> {
 }
 
 /**
- * 지금 볼 방송 번호. 빈 문자열은 「방송 중인 것이 없다」, null은 「지금은 모른다」(서버·네트워크 오류)다.
+ * 지금 방송 중인 방송 번호. 빈 문자열은 「방송 중인 것이 없다」, null은 「지금은 모른다」(서버·네트워크 오류)다.
  * 오류를 빈 문자열로 접으면 방송 중에 clip이 잠깐 재시작해도 화면이 꺼짐으로 바뀐다(POK-251 리뷰).
- * @param fromAddress 주소(지난 방송 경로·?stream=)를 먼저 본다. 주소를 Next 값으로 따로 읽는 쪽은 false로 「방송 중인 것」만
- *   묻는다: 다른 화면에서 넘어온 직후 주소창(window.location)은 아직 옛 주소다(POK-254)
+ * 주소(지난 방송 경로·?stream=)는 보지 않는다: 화면 훅이 Next 주소 값으로 먼저 본다(주소창은 넘어온 직후 옛 주소다, POK-254)
  */
-export function resolveLiveStreamId(fresh = false, fromAddress = true): Promise<string | null> {
+export function resolveLiveStreamId(fresh = false): Promise<string | null> {
   if (fresh) cached = null;
-  if (fromAddress) {
-    const fromPath = vodStreamIdFromPath();
-    if (fromPath) return Promise.resolve(fromPath);
-    const q = new URLSearchParams(window.location.search).get('stream');
-    if (q) return Promise.resolve(q);
-  }
   if (cached) return cached;
   const mine = askLiveStreamId();
   cached = mine;

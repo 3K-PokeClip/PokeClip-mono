@@ -411,6 +411,42 @@ describe('VodListScreen — 서버 목록', () => {
     expect(countOf('old')).toBe('카드 2개');
   });
 
+  it('오래된 방송의 카드 수는 한 주기에 20개까지만 다시 센다: 처음 함께 센 것이 10분마다 한꺼번에 몰리지 않는다(리뷰 1라운드)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const endedAt = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const rows = Array.from({ length: 25 }, (_, i) => ({
+      streamId: `old-${i}`,
+      status: 'vod_ready',
+      relation: 'OWNER',
+      startedAt: endedAt,
+      endedAt,
+      vodExpiresAt: null,
+    }));
+    const spy = stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?')
+        ? jsonResponse(200, { broadcasts: rows, nextCursor: null })
+        : jsonResponse(200, { cards: [], nextCursor: null }),
+    );
+    const cardCalls = () =>
+      spy.mock.calls.filter(([url]) => String(url).includes('/jump-cards')).length;
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    // 처음 보는 방송은 다 센다
+    expect(cardCalls()).toBe(25);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+    expect(cardCalls()).toBe(45);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(cardCalls()).toBe(50);
+  });
+
   it('오래 끝난 방송의 카드 수는 10분 안에 다시 세지 않는다 — 다시 읽을 때 전체 이력의 카드를 또 부르지 않는다', async () => {
     // 주기마다 방송마다 카드 목록을 부르면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex)
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -476,6 +512,20 @@ describe('VodListScreen — 서버 목록', () => {
     expect(await screen.findByText(/녹화 영상이 없어요/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /old-stream/ })).toBeInTheDocument();
     first.unmount();
+
+    // 재생 서버가 오류로 답하면 묻지 못한 것이다: 「녹화 영상이 없어요」라고 단정하지 않는다(리뷰 1라운드)
+    vi.resetModules();
+    const failing = await import('./VodListScreen');
+    const providersF = await import('@/test/testProviders');
+    stubFetch((url) => {
+      if (url.startsWith('http://pb.test/list')) return jsonResponse(500, { error: 'boom' });
+      if (url.startsWith('/api/clip/broadcasts?')) return list();
+      return jsonResponse(200, { cards: [], nextCursor: null });
+    });
+    const second = providersF.renderWithProviders(<failing.VodListScreen />);
+    expect(await screen.findByText(/· VOD 준비 중$/)).toBeInTheDocument();
+    expect(screen.queryByText(/녹화 영상이 없어요/)).toBeNull();
+    second.unmount();
 
     vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', '');
     vi.resetModules();

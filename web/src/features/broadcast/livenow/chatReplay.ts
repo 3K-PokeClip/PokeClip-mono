@@ -642,10 +642,14 @@ export class ChatReplayLoader {
     }
   }
 
-  /** 겹쳐 다시 읽은 쪽에서 이미 쥔 줄을 뺀다. 겹친 구간(fromMs부터)의 줄만 지문으로 견준다 */
+  /**
+   * 겹쳐 다시 읽은 쪽에서 이미 쥔 줄을 뺀다. 겹친 구간 둘레의 줄만 지문으로 견준다: 보정이 쪽마다 달라지면 같은 줄의 영상 축
+   * 시각이 그만큼 움직여, 겹침 시작(fromMs)에서 자르면 바로 앞에 놓인 같은 줄을 못 본다(리뷰 1라운드). 그래서 겹침만큼 더 본다
+   */
   private unseen(added: ReplayLine[], fromMs: number): ReplayLine[] {
     const seen = new Set<string>();
-    for (let i = this.lines.length - 1; i >= 0 && this.lines[i]!.at >= fromMs; i -= 1)
+    const lowest = fromMs - this.rereadMs;
+    for (let i = this.lines.length - 1; i >= 0 && this.lines[i]!.at >= lowest; i -= 1)
       seen.add(chatFingerprint(this.lines[i]!.item));
     return seen.size === 0 ? added : added.filter((line) => !seen.has(chatFingerprint(line.item)));
   }

@@ -1328,6 +1328,32 @@ describe('ChatReplayLoader: 라이브 되감기는 위 끝이 움직인다(POK-3
     expect(new Set(ats).size).toBe(ats.length);
   });
 
+  it('겹쳐 읽은 쪽의 보정이 앞 쪽과 달라도 같은 줄을 두 번 쥐지 않는다: 견주는 범위를 겹침만큼 넓힌다(리뷰 1라운드)', async () => {
+    // 표 축 시각이 같은 줄이 앞 쪽(보정 4.2초)에서는 영상 축 99.9초(겹침 시작 100초 앞), 뒤 쪽(보정 3.9초)에서는 100.2초(겹침 안)다
+    const item = chatAt(T0 + 100_200, 7);
+    const offsets = [OFFSET + 300, OFFSET];
+    let n = 0;
+    const fetchPage: ReplayFetch = async () => {
+      const appliedOffsetMs = offsets[Math.min(n, 1)]!;
+      n += 1;
+      return { items: [item], nextCursor: null, appliedOffsetMs };
+    };
+    const loader = new ChatReplayLoader(
+      fetchPage,
+      T0,
+      Number.POSITIVE_INFINITY,
+      LIVE_READ_STEP_MS,
+      LIVE_REREAD_MS,
+    );
+    loader.want(T0 + 105_000, T0 + 40_000, { upperMs: T0 + 110_000 });
+    await settle();
+    // 다음 읽기는 110초 − 10초 = 100초부터다
+    loader.want(T0 + 109_000, T0 + 40_000, { upperMs: T0 + 114_000 });
+    await settle();
+    expect(n).toBe(2);
+    expect(loader.getSnapshot().lines).toHaveLength(1);
+  });
+
   it('멈춰 있으면(위 끝이 그대로) 다시 묻지 않는다', async () => {
     const srv = collector(steady(600));
     const loader = liveLoader(srv);
