@@ -89,6 +89,8 @@ has_line() {
 
 #######################################
 # 묶음 파일의 동작 열을 낸다.
+# Globals:
+#   STAGE_DIR
 # Arguments:
 #   묶음 이름.
 # Outputs:
@@ -100,6 +102,8 @@ bundle_actions() {
 
 #######################################
 # 묶음 파일 집합이 계획의 묶음 이름과 같은지 본다.
+# Globals:
+#   BUNDLES, STAGE_DIR
 #######################################
 expect_bundle_set() {
   local file want got
@@ -123,6 +127,8 @@ expect_bundle_set() {
 #######################################
 # 묶음 파일마다 출처 주석 · 열 수 · 동작 · 리전 꼴 · 동작과 리전 짝 중복
 # 없음을 본다.
+# Globals:
+#   BUNDLES, STAGE_DIR, ACTION_PATTERN, REGION_PATTERN
 #######################################
 expect_bundle_rows_wellformed() {
   local bundle file action region resource rest seen count
@@ -160,6 +166,8 @@ expect_bundle_rows_wellformed() {
 
 #######################################
 # 사례 3: 모든 데이터 파일에 12자리 숫자 0건 · 자리표시자는 ${ACCOUNT} 뿐.
+# Globals:
+#   EVENT_NAMES, STAGE_DIR, DATA_DIR
 #######################################
 expect_no_account_ids() {
   local hits others
@@ -185,6 +193,8 @@ expect_no_account_ids() {
 #######################################
 # 사례 3: KVS 값 동작은 O7f-stop2 에만(O7f 0건), rds-db:connect 는
 # O7e-stop1 에만(O7e 0건).
+# Globals:
+#   KVS_VALUE_ACTIONS, BUNDLES
 #######################################
 expect_stop_point_split() {
   local bundle action actions
@@ -218,6 +228,8 @@ expect_stop_point_split() {
 #######################################
 # 2-3 판정 읽기 동작은 2-3 판정 묶음에만 있다. ec2:DescribeRegions 는
 # 어디에도 없다(kty 45차).
+# Globals:
+#   JUDGED_BUNDLES, JUDGE_READS, UNJUDGED_BUNDLES, BUNDLES
 #######################################
 expect_judge_reads() {
   local bundle action actions
@@ -251,6 +263,8 @@ expect_judge_reads() {
 #######################################
 # baseline.tsv 의 행마다 꼴(다섯 열 · 판정 · 시각)과, 그 (동작, 리전)이 그
 # 묶음 파일에 실제로 있는지 본다.
+# Globals:
+#   STAGE_DIR, JUDGED_AT_PATTERN
 #######################################
 expect_baseline_rows_exist() {
   local bundle action region decision judged_at rest count=0
@@ -315,6 +329,8 @@ regions_of() {
 
 #######################################
 # 사례 4(데이터 몫): event_names.txt 의 꼴 · 리전 규칙 · 꼭 있어야 할 이름.
+# Globals:
+#   SOURCE_PATTERN, REGION_PATTERN, EVENT_NAMES, PRIVILEGE_EVENTS
 #######################################
 expect_event_names() {
   local source name region rest pair want got
@@ -369,6 +385,8 @@ expect_event_names() {
 # 실제 scp-recheck.sh 가 실제 묶음을 모두 받는다(가짜 aws 전부 허용 —
 # 종료 0 또는 3, 검사 불가 0). 실제 events.sh 는 event_names.txt 의 행마다
 # 그 리전으로 한 번씩 조회한다.
+# Globals:
+#   BUNDLES, PRECHECK_DIR, run_status, run_out, EVENT_NAMES
 #######################################
 expect_real_scripts_accept_data() {
   local case_dir bundle source name region calls rows

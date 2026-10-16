@@ -57,6 +57,8 @@ testlib::remove_tmp_root() {
 
 #######################################
 # 가짜 aws 가 실행 가능하고, PATH 앞에 두면 그것으로 풀리는지 본다.
+# Globals:
+#   PATH
 # Arguments:
 #   가짜 aws 가 든 디렉터리.
 # Returns:
@@ -73,7 +75,7 @@ testlib::require_fakebin() {
 #######################################
 # 트랩을 걸고 임시 디렉터리 뿌리를 만든다. 실패하면 시험 전체를 멈춘다.
 # Globals:
-#   tmp_root
+#   FAKEBIN, tmp_root, TMPDIR
 # Arguments:
 #   시험 이름(오류 문구용).
 #######################################
@@ -150,6 +152,8 @@ testlib::finish() {
 # 점검 스크립트 사본 트리를 만든다(데이터는 비워 둔다 — 시험이 고정 입력을
 # 넣는다). 스크립트는 자기 위치의 data/ 를 읽으므로 사본은 사본의 data/ 를
 # 읽는다.
+# Globals:
+#   PRECHECK_DIR
 # Arguments:
 #   만들 디렉터리.
 # Returns:
@@ -170,7 +174,7 @@ testlib::make_tree() {
 # <사례>/out/<이름>.stdout · .stderr 에, 가짜 aws argv 는
 # <사례>/out/aws.log 에 쌓인다. FAKE_AWS_* 의 나머지는 부르는 쪽이 넘긴다.
 # Globals:
-#   run_out, run_status
+#   run_out, FAKEBIN, PATH, FAKE_ACCOUNT, FAKE_USER, run_status
 # Arguments:
 #   사례 디렉터리, 결과 이름, 명령과 인자.
 #######################################
@@ -200,7 +204,7 @@ testlib::run() {
 # macOS 에는 timeout 명령이 없어 백그라운드 감시자(sleep 뒤 kill)로 잰다 —
 # 가드가 회귀해 판정이 FIFO 를 읽다 걸려도 시험이 멈추지 않게.
 # Globals:
-#   run_out, run_status
+#   run_status, run_out, TIMED_OUT
 # Arguments:
 #   제한 초, 사례 디렉터리, 결과 이름, 명령과 인자.
 #######################################
@@ -284,6 +288,8 @@ testlib::abs_path_lines() {
 # 사례 디렉터리에서 증거 루트 밖의 파일 가운데 가짜 계정 ID · 사용자 이름이
 # 든 것을 찾는다(입력 in/ 은 시험이 넣은 고정 입력이라 뺀다). 원본은 증거
 # 디렉터리에만 있어야 한다(사례 5).
+# Globals:
+#   FAKE_ACCOUNT, FAKE_USER
 # Arguments:
 #   사례 디렉터리.
 # Outputs:

@@ -64,6 +64,8 @@ setup_tree() {
 #######################################
 # 가짜 이벤트 표의 행 하나. 시각은 aws CLI 가 낼 수 있는 꼴 — ISO 8601(Z ·
 # ±HH:MM 오프셋 · 소수 초) 또는 epoch 초.
+# Globals:
+#   FAKE_USER
 # Arguments:
 #   리전, 이벤트 이름, 이벤트 ID, 서비스(출처 앞부분), [시각], [주체 —
 #   없으면 가짜 사용자 이름].
@@ -135,6 +137,8 @@ regions_for() {
 
 #######################################
 # 사례 4: 행마다 조회 리전 · 같은 ID 한 번 · 다른 출처 제외 · stdout 한 줄.
+# Globals:
+#   run_status, run_out, WANT_EVENTS
 #######################################
 expect_counts_and_regions() {
   local case_dir log name want got since
@@ -183,6 +187,8 @@ expect_counts_and_regions() {
 # a + b = n. 같은 이벤트 ID 가 두 범주 행에서 다 나와도(실제로는 없는 꼴)
 # 한 번만 세고 권한 변경 쪽에 둔다(보수 쪽 — 권한 변경을 가리지 않게).
 # 식별자(이름 · ARN · 계정)는 표준 출력에 없다.
+# Globals:
+#   run_out, run_status, FAKE_USER, FAKE_ACCOUNT
 #######################################
 expect_category_counts() {
   local case_dir out
@@ -208,6 +214,8 @@ expect_category_counts() {
 
 #######################################
 # 사례 4: --since 가 90일보다 이르면 표준 오류로 한계를 경고한다(조회는 함).
+# Globals:
+#   OLD_SINCE, run_status, run_out, WANT_EVENTS
 #######################################
 expect_ninety_day_warning() {
   local case_dir
@@ -231,6 +239,8 @@ expect_ninety_day_warning() {
 #######################################
 # 사례 5: 이벤트 원본(주체 이름)은 증거 디렉터리에만 있고, 표준 출력 ·
 # 표준 오류 · argv 에는 가짜 계정 ID · 사용자 이름이 0건.
+# Globals:
+#   FAKE_USER
 #######################################
 expect_no_leak() {
   local case_dir leaked raw
@@ -253,6 +263,8 @@ expect_no_leak() {
 # 빈 칸 접힘 · 칸 모자람 · 칸 남음, 이벤트 ID(꼴 밖 · 빔 · 결측 표기 None),
 # 출처(꼴 밖 · None), 이름(꼴 밖 · None), 시각(꼴 밖 · 초 · 오프셋 · epoch
 # 뒤에 덧붙은 글 · None). 마지막 줄 뒤에 줄바꿈이 없어도 그 이벤트를 센다.
+# Globals:
+#   FAKE_USER, run_status, run_out, WANT_EVENTS
 #######################################
 expect_malformed_lookup_rejected() {
   local case_dir kind env_arg leaked events
@@ -327,6 +339,8 @@ expect_malformed_lookup_rejected() {
 # 사례 6: 조회 실패 · 호출 자체의 AccessDenied · 잘못된 --since 는 종료 2 ·
 # EVENTS 줄 없음 · 유출 0. --since 자리의 입력은 되울리지 않는다(장부 r2 #5
 # — 절대 경로를 주어도 표준 오류에 절대 경로 0).
+# Globals:
+#   run_status, run_out
 #######################################
 expect_unverifiable_cases() {
   local case_dir spec name leaked paths

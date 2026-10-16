@@ -87,21 +87,21 @@ source "${SCRIPT_DIR}/lib/evidence.sh" || {
 }
 
 # 묶음 행 「동작<탭>리전<탭>자원 패턴」.
-ROWS=()
+rows=()
 # 앞 기준 「동작<탭>리전<탭>판정(allow · deny)」 줄들과 그 출처.
-REFERENCE=""
-REFERENCE_SOURCE=""
+reference=""
+reference_source=""
 # 앞 기준이 승인 결과면 그 증거 디렉터리(계정 대조에 씀).
-REFERENCE_DIR=""
+reference_dir=""
 # read_result_reference 가 센 결과 행 수 · 거부 행 수.
-RESULT_ROWS=0
-RESULT_DENIED=0
+result_rows=0
+result_denied=0
 # 호출 주체(값은 출력하지 않는다).
-CALLER_ARN=""
-ACCOUNT=""
+caller_arn=""
+account=""
 # judge_row 가 남기는 행 판정.
-ROW_DECISION=""
-ROW_LINE=""
+row_decision=""
+row_line=""
 
 #######################################
 # 검사를 이어갈 수 없을 때 멈춘다(OK 로 넘어가지 않는다).
@@ -142,6 +142,8 @@ tsv_ok() {
 
 #######################################
 # 파일의 sha256 을 낸다(GNU sha256sum, 없으면 shasum -a 256).
+# Globals:
+#   SHA256_PATTERN
 # Arguments:
 #   파일.
 # Outputs:
@@ -159,11 +161,11 @@ file_sha256() {
 }
 
 #######################################
-# 묶음 파일을 읽어 ROWS 에 담는다. 「#」 으로 시작하는 줄은 주석, 빈 줄은
+# 묶음 파일을 읽어 rows 에 담는다. 「#」 으로 시작하는 줄은 주석, 빈 줄은
 # 건너뛴다. 열 수 · 동작 · 리전 꼴이 틀리거나, (동작, 리전)이 겹치거나, 행이
 # 없으면 멈춘다.
 # Globals:
-#   ROWS
+#   BUNDLE_PATTERN, STAGE_DIR, ACTION_PATTERN, REGION_PATTERN, rows
 # Arguments:
 #   묶음 이름.
 #######################################
@@ -192,14 +194,16 @@ load_bundle() {
       die "묶음 ${bundle} 에 ${action} ${region} 이 겹침"
     fi
     seen+="${action} ${region}"$'\n'
-    ROWS+=("${action}"$'\t'"${region}"$'\t'"${resource}")
+    rows+=("${action}"$'\t'"${region}"$'\t'"${resource}")
   done <"${file}" || die "묶음 파일을 읽지 못함: ${bundle}"
-  [[ "${#ROWS[@]}" -gt 0 ]] || die "묶음 ${bundle} 에 행이 없음"
+  [[ "${#rows[@]}" -gt 0 ]] || die "묶음 ${bundle} 에 행이 없음"
 }
 
 #######################################
 # 증거 디렉터리 이름의 비교 키를 낸다 — 시각 숫자 14자리 + 같은 초
 # 순번(없으면 1). 로캘과 무관하게 숫자로 비교한다.
+# Globals:
+#   DIR_PREFIX
 # Arguments:
 #   묶음 이름, 「scp-<묶음>-<시각>[-<순번>]」 디렉터리 경로.
 # Outputs:
@@ -219,6 +223,8 @@ dir_key() {
 # 같은 묶음의 가장 최근 scp 증거 디렉터리를 찾는다. 다른 도구의 디렉터리와
 # 이름이 겹치는 묶음(O7f 와 O7f-stop2)은 섞지 않는다 — 「scp-<묶음>」 바로
 # 뒤가 시각이어야 한다.
+# Globals:
+#   DIR_PREFIX, STAMP_GLOB
 # Arguments:
 #   묶음 이름, [그 안에 있어야 할 파일 이름].
 # Outputs:
@@ -256,7 +262,7 @@ latest_dir() {
 # 일반 파일 · 다섯 칸 · 값 꼴 · 판정과 시뮬레이터 판정의 짝 · (동작, 리전)
 # 중복 없음 · 행 1개 이상이어야 한다.
 # Globals:
-#   REFERENCE, RESULT_ROWS, RESULT_DENIED
+#   reference, result_rows, result_denied, ACTION_PATTERN, REGION_PATTERN
 # Arguments:
 #   증거 디렉터리.
 #######################################
@@ -264,9 +270,9 @@ read_result_reference() {
   local file="$1/result.tsv" line action region decision sim orgs rest
   local seen=$'\n'
   evidence::check_file "${file}" || exit 2
-  REFERENCE=""
-  RESULT_ROWS=0
-  RESULT_DENIED=0
+  reference=""
+  result_rows=0
+  result_denied=0
   while IFS= read -r line || [[ -n "${line}" ]]; do
     tsv_ok "${line}" 5 || die "결과 파일의 꼴이 틀림(${1##*/}/result.tsv)"
     action="${line%%$'\t'*}"
@@ -289,13 +295,13 @@ read_result_reference() {
       die "결과 파일에 (동작, 리전)이 겹침(${1##*/}/result.tsv)"
     fi
     seen+="${action} ${region}"$'\n'
-    REFERENCE+="${action}"$'\t'"${region}"$'\t'"${decision}"$'\n'
-    RESULT_ROWS=$((RESULT_ROWS + 1))
+    reference+="${action}"$'\t'"${region}"$'\t'"${decision}"$'\n'
+    result_rows=$((result_rows + 1))
     if [[ "${decision}" == deny ]]; then
-      RESULT_DENIED=$((RESULT_DENIED + 1))
+      result_denied=$((result_denied + 1))
     fi
   done <"${file}" || die "결과 파일을 읽지 못함(${1##*/}/result.tsv)"
-  [[ "${RESULT_ROWS}" -gt 0 ]] || die "결과 파일이 비었음(${1##*/}/result.tsv)"
+  [[ "${result_rows}" -gt 0 ]] || die "결과 파일이 비었음(${1##*/}/result.tsv)"
 }
 
 #######################################
@@ -303,6 +309,8 @@ read_result_reference() {
 # — 「UTC 시각<탭>result.tsv sha256」 한 줄)의 꼴을 보고, 그 해시를 지금의
 # result.tsv 와 대조한다. 두 파일 모두 링크 아닌 0600 일반 파일인지를 내용 ·
 # 해시를 읽기 전에 본다(FIFO 등에서 걸리지 않게).
+# Globals:
+#   UTC_PATTERN, SHA256_PATTERN
 # Arguments:
 #   증거 디렉터리.
 # Outputs:
@@ -328,6 +336,8 @@ require_complete() {
 #######################################
 # 승인 기록(accepted.tsv — UTC 시각 · result.tsv sha256 · 이유 한 줄)을
 # 검사하고, 그 해시가 판정 때의 해시(완료 표지)와 같은지 본다.
+# Globals:
+#   UTC_PATTERN, SHA256_PATTERN
 # Arguments:
 #   증거 디렉터리, 판정 때 result.tsv 의 sha256(require_complete 가 낸 것).
 #######################################
@@ -354,7 +364,7 @@ check_acceptance() {
 # baseline.tsv(묶음 · 동작 · 리전 · 판정 · 13-1 판정 시각)에서 그 묶음 행을
 # 앞 기준 줄로 옮긴다.
 # Globals:
-#   REFERENCE
+#   BASELINE, reference
 # Arguments:
 #   묶음 이름.
 #######################################
@@ -375,7 +385,7 @@ read_baseline_reference() {
       die "baseline.tsv 의 행 꼴이 틀림: ${line}"
     fi
     [[ "${name}" == "${bundle}" ]] || continue
-    REFERENCE+="${action}"$'\t'"${region}"$'\t'"${decision}"$'\n'
+    reference+="${action}"$'\t'"${region}"$'\t'"${decision}"$'\n'
   done <"${BASELINE}" || die "baseline.tsv 를 읽지 못함"
 }
 
@@ -383,9 +393,10 @@ read_baseline_reference() {
 # 앞 기준을 정한다 — 같은 묶음의 가장 최근 승인 결과, 없으면 baseline.tsv.
 # 승인 결과는 증거 경로 검사 · 완료 표지(판정 때 해시와 결과 대조) · 승인
 # 기록(같은 해시) · 결과 파일 검사를 모두 통과해야 한다. 계정 대조는 호출
-# 주체를 확인한 뒤 check_reference_account 가 한다.
+# 주체를 확인한 뒤 check_reference_account 가 한다. 앞 기준 줄(reference)은
+# 부르는 read_baseline_reference · read_result_reference 가 채운다.
 # Globals:
-#   REFERENCE, REFERENCE_SOURCE, REFERENCE_DIR
+#   reference_source, reference_dir
 # Arguments:
 #   묶음 이름.
 #######################################
@@ -394,46 +405,46 @@ load_reference() {
   approved="$(latest_dir "${bundle}" accepted.tsv)" || exit 2
   if [[ -z "${approved}" ]]; then
     read_baseline_reference "${bundle}"
-    REFERENCE_SOURCE='baseline.tsv'
+    reference_source='baseline.tsv'
     return
   fi
   evidence::check_dir "${approved}" || exit 2
   judged="$(require_complete "${approved}")" || exit 2
   check_acceptance "${approved}" "${judged}"
   read_result_reference "${approved}"
-  REFERENCE_DIR="${approved}"
-  REFERENCE_SOURCE="승인 기준 ${approved##*/}"
+  reference_dir="${approved}"
+  reference_source="승인 기준 ${approved##*/}"
 }
 
 #######################################
 # 앞 기준(승인 결과)을 만든 판정의 호출 주체 계정이 이번 계정과 같은지
 # 본다. 값은 출력하지 않는다.
 # Globals:
-#   REFERENCE_DIR, ACCOUNT
+#   reference_dir, account
 #######################################
 check_reference_account() {
   local file line
-  [[ -n "${REFERENCE_DIR}" ]] || return 0
-  file="${REFERENCE_DIR}/sts.txt"
+  [[ -n "${reference_dir}" ]] || return 0
+  file="${reference_dir}/sts.txt"
   evidence::check_file "${file}" || exit 2
   line="$(cat -- "${file}")" || die "앞 기준의 호출 주체 기록을 읽지 못함"
   if [[ "${line}" == *$'\n'* ]] || ! tsv_ok "${line}" 2 ||
-    [[ "${line#*$'\t'}" != "${ACCOUNT}" ]]; then
-    die "앞 기준(${REFERENCE_DIR##*/})의 호출 주체 계정이 이번과 다름"
+    [[ "${line#*$'\t'}" != "${account}" ]]; then
+    die "앞 기준(${reference_dir##*/})의 호출 주체 계정이 이번과 다름"
   fi
 }
 
 #######################################
 # 앞 기준에서 (동작, 리전)의 판정을 찾는다.
 # Globals:
-#   REFERENCE
+#   reference
 # Arguments:
 #   동작, 리전.
 # Outputs:
 #   allow · deny(없으면 빈 출력).
 #######################################
 reference_decision() {
-  local key=$'\n'"$1"$'\t'"$2"$'\t' haystack=$'\n'"${REFERENCE}" rest
+  local key=$'\n'"$1"$'\t'"$2"$'\t' haystack=$'\n'"${reference}" rest
   [[ "${haystack}" == *"${key}"* ]] || return 0
   rest="${haystack#*"${key}"}"
   printf '%s\n' "${rest%%$'\n'*}"
@@ -443,7 +454,7 @@ reference_decision() {
 # 호출 주체를 확인한다. 값은 변수에만 두고 원본은 증거 디렉터리에 남긴다.
 # IAM 사용자가 아니면 멈춘다(시뮬레이터는 역할 세션 ARN 을 받지 않는다).
 # Globals:
-#   CALLER_ARN, ACCOUNT
+#   caller_arn, account, USER_ARN_PATTERN
 # Arguments:
 #   증거 디렉터리.
 #######################################
@@ -453,13 +464,13 @@ caller_identity() {
     2>"${dir}/sts.err")" ||
     die "호출 주체를 확인하지 못함(증거 디렉터리의 sts.err)"
   printf '%s\n' "${out}" >"${dir}/sts.txt" || die "증거를 쓰지 못함"
-  CALLER_ARN="${out%%$'\t'*}"
-  ACCOUNT="${out#*$'\t'}"
-  if [[ "${out}" != *$'\t'* ]] || ! [[ "${ACCOUNT}" =~ ^[0-9]{12}$ ]]; then
+  caller_arn="${out%%$'\t'*}"
+  account="${out#*$'\t'}"
+  if [[ "${out}" != *$'\t'* ]] || ! [[ "${account}" =~ ^[0-9]{12}$ ]]; then
     die "호출 주체 응답의 꼴이 다름(증거 디렉터리의 sts.txt)"
   fi
-  if ! [[ "${CALLER_ARN}" =~ ${USER_ARN_PATTERN} ]] ||
-    [[ "${CALLER_ARN}" != "arn:aws:iam::${ACCOUNT}:user/"* ]]; then
+  if ! [[ "${caller_arn}" =~ ${USER_ARN_PATTERN} ]] ||
+    [[ "${caller_arn}" != "arn:aws:iam::${account}:user/"* ]]; then
     die "호출 주체가 IAM 사용자가 아님(시뮬레이터는 역할 세션 ARN 을 받지 않음)"
   fi
 }
@@ -468,7 +479,7 @@ caller_identity() {
 # 행 하나의 시뮬레이터 요청 파일을 쓴다(값은 load_bundle · caller_identity
 # 가 검사한 것만 — 큰따옴표 · 역슬래시 없음).
 # Globals:
-#   CALLER_ARN
+#   caller_arn
 # Arguments:
 #   요청 파일, 동작, 리전, 자원 ARN.
 #######################################
@@ -478,7 +489,7 @@ write_request() {
   format+='"ContextEntries":[{"ContextKeyName":"aws:RequestedRegion",'
   format+='"ContextKeyValues":["%s"],"ContextKeyType":"string"}]}\n'
   # shellcheck disable=SC2059 # 형식 문자열은 위의 고정 값이다.
-  printf "${format}" "${CALLER_ARN}" "${action}" "${resource}" "${region}" \
+  printf "${format}" "${caller_arn}" "${action}" "${resource}" "${region}" \
     >"${file}" || die "증거를 쓰지 못함"
 }
 
@@ -486,14 +497,14 @@ write_request() {
 # 행 하나를 판정한다. 요청 · 응답 원본은 증거 디렉터리의 req-<n>.json ·
 # res-<n>.txt · res-<n>.err 에 남는다.
 # Globals:
-#   ACCOUNT, ROW_DECISION, ROW_LINE
+#   ACCOUNT_PLACEHOLDER, account, SIM_QUERY, row_decision, row_line
 # Arguments:
 #   증거 디렉터리, 행 번호, 동작, 리전, 자원 패턴.
 #######################################
 judge_row() {
   local dir="$1" n="$2" action="$3" region="$4" resource="$5" out
   local got_action decision rest
-  resource="${resource//${ACCOUNT_PLACEHOLDER}/${ACCOUNT}}"
+  resource="${resource//${ACCOUNT_PLACEHOLDER}/${account}}"
   write_request "${dir}/req-${n}.json" "${action}" "${region}" "${resource}"
   if ! out="$(aws iam simulate-principal-policy \
     --cli-input-json "file://${dir}/req-${n}.json" --query "${SIM_QUERY}" \
@@ -514,12 +525,12 @@ judge_row() {
   [[ "${got_action}" == "${action}" ]] ||
     die "시뮬레이터 응답의 꼴이 다름(res-${n}.txt)"
   case "${decision}" in
-    allowed) ROW_DECISION=allow ;;
-    implicitDeny | explicitDeny) ROW_DECISION=deny ;;
+    allowed) row_decision=allow ;;
+    implicitDeny | explicitDeny) row_decision=deny ;;
     *) die "시뮬레이터 판정을 모름(res-${n}.txt)" ;;
   esac
-  ROW_LINE="${action}"$'\t'"${region}"$'\t'"${ROW_DECISION}"$'\t'
-  ROW_LINE+="${decision}"$'\t'"${rest}"
+  row_line="${action}"$'\t'"${region}"$'\t'"${row_decision}"$'\t'
+  row_line+="${decision}"$'\t'"${rest}"
 }
 
 #######################################
@@ -543,14 +554,14 @@ decision_word() {
 # 없다. 표지의 시각 · 해시를 먼저 구하고 임시 이름에 다 쓴 뒤 옮기므로,
 # 어디서 실패해도 빈 · 반쪽 표지가 남지 않는다.
 # Globals:
-#   REFERENCE, REFERENCE_SOURCE
+#   reference_source, reference
 # Arguments:
 #   증거 디렉터리, 결과 줄들, 첫 줄, 13-1 덧붙임 줄들.
 #######################################
 save_judgment() {
   local dir="$1" result="$2" first="$3" table="$4" at sum
   if ! printf '%s' "${result}" >"${dir}/result.tsv" ||
-    ! printf '# 비교 기준: %s\n%s' "${REFERENCE_SOURCE}" "${REFERENCE}" \
+    ! printf '# 비교 기준: %s\n%s' "${reference_source}" "${reference}" \
       >"${dir}/reference.tsv" ||
     ! printf '%s\n%s' "${first}" "${table}" >"${dir}/report.txt"; then
     die "증거를 쓰지 못함(${dir##*/})"
@@ -566,6 +577,9 @@ save_judgment() {
 
 #######################################
 # 묶음을 판정하고 앞 기준과 비교해 결과를 적는다.
+# Globals:
+#   DIR_PREFIX, EVIDENCE_ROOT_NAME, reference_source, rows, row_line,
+#   row_decision
 # Arguments:
 #   묶음 이름.
 # Returns:
@@ -578,26 +592,26 @@ judge_bundle() {
   load_reference "${bundle}"
   dir="$(evidence::new_dir "${DIR_PREFIX}-${bundle}")" || exit 2
   printf 'scp-recheck: 증거 ~/%s/%s · 비교 기준 %s\n' "${EVIDENCE_ROOT_NAME}" \
-    "${dir##*/}" "${REFERENCE_SOURCE}" >&2
+    "${dir##*/}" "${reference_source}" >&2
   caller_identity "${dir}"
   check_reference_account
   stamp="$(TZ=KST-9 date '+%Y-%m-%d %H:%M KST')" || die "시각을 읽지 못함"
-  for row in "${ROWS[@]}"; do
+  for row in "${rows[@]}"; do
     n=$((n + 1))
     action="${row%%$'\t'*}"
     resource="${row#*$'\t'}"
     region="${resource%%$'\t'*}"
     resource="${resource#*$'\t'}"
     judge_row "${dir}" "${n}" "${action}" "${region}" "${resource}"
-    result+="${ROW_LINE}"$'\n'
-    [[ "${ROW_DECISION}" == deny ]] && denied=$((denied + 1))
+    result+="${row_line}"$'\n'
+    [[ "${row_decision}" == deny ]] && denied=$((denied + 1))
     previous="$(reference_decision "${action}" "${region}")"
     note=""
-    if [[ "${previous}" != "${ROW_DECISION}" ]]; then
+    if [[ "${previous}" != "${row_decision}" ]]; then
       changed=$((changed + 1))
       note=" · 바뀜(앞 기준 $(decision_word "${previous}"))"
     fi
-    table+="| \`${action}\` | ${region} | $(decision_word "${ROW_DECISION}") |"
+    table+="| \`${action}\` | ${region} | $(decision_word "${row_decision}") |"
     table+=" ${stamp} | ${bundle} 재판정${note} |"$'\n'
   done
   first="SCP RECHECK OK ${n}"
@@ -615,6 +629,8 @@ judge_bundle() {
 # 승인한다. 완료 표지(결과가 판정 때 그대로인지) · 결과 파일 검사를 통과해야
 # 하고, 이미 승인했거나 이미 승인된 더 최근 판정보다 오래되면 승인하지
 # 않는다. 승인 기록에는 판정 때의 해시(완료 표지의 것)를 남긴다.
+# Globals:
+#   DIR_PREFIX, EVIDENCE_ROOT_NAME, result_rows, result_denied
 # Arguments:
 #   묶음 이름, 증거 디렉터리 이름, 이유(kty 답 원문 — 한 줄 · 탭 없이).
 #######################################
@@ -648,10 +664,10 @@ accept_bundle() {
     >"${dir}/accepted.tsv" || die "승인 기록을 쓰지 못함(${name})"
   set +o noclobber
   printf 'scp-recheck: 승인 ~/%s/%s\n' "${EVIDENCE_ROOT_NAME}" "${name}" >&2
-  printf 'SCP RECHECK ACCEPTED %s\n' "${RESULT_ROWS}"
-  if [[ "${RESULT_DENIED}" -gt 0 ]]; then
+  printf 'SCP RECHECK ACCEPTED %s\n' "${result_rows}"
+  if [[ "${result_denied}" -gt 0 ]]; then
     printf 'scp-recheck: 거부 %s행이 든 결과를 승인함 — 다음 판정도 종료 1\n' \
-      "${RESULT_DENIED}" >&2
+      "${result_denied}" >&2
   fi
 }
 

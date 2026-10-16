@@ -20,7 +20,9 @@ readonly EVIDENCE_LIB="${PRECHECK_DIR}/lib/evidence.sh"
 readonly REJECTED='EVIDENCE PATH REJECTED'
 # 거부 문구가 HOME 접두를 가리는 표시 글자.
 readonly TILDE='~'
-# 증거 디렉터리 이름: <묶음>-<UTC 시각>[-<2 ~ 9>].
+# 증거 디렉터리 이름: <evidence::new_dir 인자>-<UTC 시각>[-<2 ~ 9>]. 인자는
+# 도구 접두 규약 <도구 접두>-<이름>(예 scp-O7a · collect-O7a)을 따르는데, 이
+# 시험은 규약을 강제하지 않는 lib 만 보므로 alpha 를 준다.
 readonly DIR_PATTERN='^alpha-[0-9]{8}T[0-9]{6}Z(-[2-9])?$'
 # 이 lib 으로 원본을 쓰는 점검 도구(PRECHECK_DIR 기준).
 CHECK_TOOLS=(scp-recheck.sh events.sh lib/evidence.sh)
@@ -30,9 +32,10 @@ readonly CHECK_TOOLS
 readonly TEMP_FILE_SYNTAX='<<|<\(|>\(|mktemp'
 
 #######################################
-# 증거 함수 하나를 새 bash 에서 돌린다.
+# 증거 함수 하나를 새 bash 에서 돌린다. 결과는 testlib::run 이 run_out ·
+# run_status 에 남긴다.
 # Globals:
-#   run_out, run_status
+#   EVIDENCE_LIB
 # Arguments:
 #   사례 디렉터리, 결과 이름, 함수 이름과 인자.
 #######################################
@@ -75,6 +78,8 @@ is_0700() {
 # 담지 않는다(장부 r2 #5) — HOME 아래는 「~」 로 가리고, HOME 밖(HOME 의
 # 조상 · 다른 곳)은 적지 않는다. 절대 경로가 없으면 HOME · 조상 저장소 ·
 # 로컬 계정 이름도 없다.
+# Globals:
+#   run_status, run_out, REJECTED
 # Arguments:
 #   사례 이름.
 # Returns:
@@ -101,6 +106,8 @@ expect_rejected() {
 #######################################
 # 정상: 0700 루트 아래 0700 하위 디렉터리를 만들어 돌려준다. 같은 초에 두 번
 # 불러도 서로 다른 디렉터리다.
+# Globals:
+#   run_out, run_status, DIR_PATTERN
 #######################################
 expect_new_dir_ok() {
   local case_dir first second root
@@ -118,7 +125,8 @@ expect_new_dir_ok() {
   fi
   if [[ "${first%/*}" != "${root}" ]] ||
     ! [[ "${first##*/}" =~ ${DIR_PATTERN} ]]; then
-    testlib::fail "new-dir-ok: 루트 바로 아래 <묶음>-<UTC 시각> 이 아님 — ${first}"
+    testlib::fail "new-dir-ok: 루트 바로 아래 alpha-<UTC 시각> 이 아님 —" \
+      "${first}"
     return
   fi
   if ! is_0700 "${root}" || ! is_0700 "${first}"; then
@@ -166,6 +174,8 @@ expect_outside_root_rejected() {
 # 조상에 표지(.git · .obsidian)가 있으면 루트를 만들지 않고 거부한다. HOME 이
 # 저장소 · 볼트의 하위인 꼴이라, 거부 문구는 조상의 절대 경로(저장소 위치 ·
 # 로컬 계정 이름)를 내지 않고 표지 종류만 적는다(장부 r2 #5).
+# Globals:
+#   run_out
 # Arguments:
 #   사례 이름, 표지 이름, 표지 종류(dir · file).
 #######################################
@@ -261,6 +271,8 @@ expect_root_link_rejected() {
 
 #######################################
 # 0700 이 아닌 루트 · 증거 디렉터리는 거부한다.
+# Globals:
+#   run_out, TILDE
 #######################################
 expect_mode_rejected() {
   local case_dir root
@@ -300,6 +312,8 @@ expect_mode_rejected() {
 # 증거 파일 검사(evidence::check_file — 앞 결과를 읽을 때): 검사를 통과한
 # 디렉터리 안의 0600 일반 파일만 받고, 링크 · 0644 · 없는 파일 · 디렉터리는
 # 거부한다.
+# Globals:
+#   run_status, run_out
 #######################################
 expect_check_file() {
   local case_dir dir spec name
@@ -334,6 +348,8 @@ expect_check_file() {
 
 #######################################
 # HOME 이 절대 경로가 아니면 루트를 정할 수 없어 거부한다.
+# Globals:
+#   EVIDENCE_LIB, run_status, run_out
 #######################################
 expect_relative_home_rejected() {
   local case_dir
@@ -360,6 +376,8 @@ expect_relative_home_rejected() {
 # 않는다. bash 3.2 의 here-string · here-doc 은 내용을 TMPDIR 의 임시 파일에
 # 쓰고, 그 파일을 만들지 못하면 읽기가 조용히 실패해 건수가 0 으로 보일 수
 # 있다(거짓 0). 프로세스 치환은 생산자의 실패가 빈 입력으로 보인다.
+# Globals:
+#   CHECK_TOOLS, TEMP_FILE_SYNTAX, PRECHECK_DIR
 #######################################
 expect_tools_make_no_temp_files() {
   local tool found status

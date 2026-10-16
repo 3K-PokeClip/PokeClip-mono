@@ -23,6 +23,8 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/testlib.sh"
 #######################################
 # 가짜 aws 확인: 저장소의 fakebin 은 통과, 실행 비트가 없는 사본 · aws 가
 # 없는 디렉터리는 거부.
+# Globals:
+#   FAKEBIN
 #######################################
 expect_fakebin_required() {
   local case_dir
@@ -51,6 +53,8 @@ expect_fakebin_required() {
 #######################################
 # 실행 환경 격리: 부르는 쪽에 AWS_* 가 있어도 시험 명령에는 가지 않고,
 # 설정 · 자격 증명 파일은 /dev/null, 메타데이터 조회는 꺼져 있다.
+# Globals:
+#   run_out
 #######################################
 expect_aws_env_isolated() {
   local case_dir out
@@ -81,6 +85,8 @@ expect_aws_env_isolated() {
 # 시간 제한 실행: 끝나는 명령은 종료 코드를 그대로 남기고, FIFO 를 읽다
 # 걸린 명령(명령 치환 안의 손자 프로세스)은 제한 시간에 자손까지 끝내고
 # 124 를 남긴다. 걸린 읽기 프로세스가 남지 않아야 한다.
+# Globals:
+#   run_status, TIMED_OUT
 #######################################
 expect_run_limited() {
   local case_dir fifo start probe
@@ -126,6 +132,8 @@ expect_run_limited() {
 #######################################
 # 유출 훑기(testlib::leaks_outside_evidence)는 훑을 디렉터리가 없을 때 빈
 # 출력(「유출 0」)을 내지 않는다 — 생산자(find)의 실패가 통과로 보이지 않게.
+# Globals:
+#   tmp_root
 #######################################
 expect_leak_check_needs_dirs() {
   local found
@@ -140,6 +148,8 @@ expect_leak_check_needs_dirs() {
 #######################################
 # 시험 부품의 오류 문구도 절대 경로(저장소 위치 · 로컬 계정 이름)를 내지
 # 않는다(장부 r2 #5 부류) — 가짜 aws 가 실행 가능하지 않아 시작하지 못할 때.
+# Globals:
+#   TESTS_DIR, FAKEBIN
 #######################################
 expect_init_message_has_no_path() {
   local case_dir copy status paths

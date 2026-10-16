@@ -34,7 +34,8 @@
 #     것은 과설계라 하지 않는다.
 #
 # 사용: source lib/evidence.sh
-#       dir="$(evidence::new_dir <묶음>)" || exit 2
+#       dir="$(evidence::new_dir <도구 접두>-<이름>)" || exit 2
+#       (예: scp-O7a · collect-O7a — 위 「이름 규약」)
 
 readonly EVIDENCE_ROOT_NAME='.pokeclip-precheck'
 # 증거 디렉터리 이름의 앞부분(묶음 이름 등). 「/」 · 「..」 로 루트를 벗어나지
@@ -115,7 +116,7 @@ evidence::reject_marker() {
 # 고정 루트의 정규화한 경로를 낸다(만들지 않는다). HOME 은 절대 경로이고
 # 있는 디렉터리여야 한다.
 # Globals:
-#   HOME
+#   HOME, EVIDENCE_ROOT_NAME
 # Outputs:
 #   루트 경로.
 # Returns:
@@ -250,6 +251,8 @@ evidence::check_file() {
 # 고정 루트(없으면 0700 으로 만듦) 아래에 「<이름>-<UTC 시각>」 0700 하위
 # 디렉터리를 새로 만든다. 같은 초에 이미 있으면 「-2」 ~ 「-9」 를 붙인다.
 # 루트 · 조상 검사를 통과하기 전에는 아무것도 만들지 않는다.
+# Globals:
+#   EVIDENCE_LABEL_PATTERN
 # Arguments:
 #   이름(도구 접두로 시작 — 영문 · 숫자 · 「-」, 머리 주석 「이름 규약」).
 # Outputs:

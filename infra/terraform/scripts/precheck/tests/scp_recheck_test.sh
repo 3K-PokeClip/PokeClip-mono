@@ -42,6 +42,8 @@ readonly NOT_UTC='2026-10-14T12:15:00+09:00'
 #   alpha-stop: 이름이 alpha 로 시작한다(앞 기준을 섞어 찾지 않는지).
 #   broken · dup · collapsed: 꼴이 틀린 묶음(열 수 · 동작 · 리전 중복 ·
 #   빈 칸이 탭 IFS 로 접혀 세 칸처럼 읽히는 행).
+# Globals:
+#   JUDGED
 # Arguments:
 #   사례 디렉터리.
 # Returns:
@@ -108,6 +110,8 @@ new_tree_case() {
 #######################################
 # 사본 트리의 scp-recheck.sh 를 제한 시간(RUN_LIMIT) 안에서 돌린다. 「이름=값」
 # 꼴 인자는 환경으로 넘긴다(FAKE_AWS_*).
+# Globals:
+#   RUN_LIMIT
 # Arguments:
 #   사례 디렉터리, 결과 이름, [이름=값 …] 스크립트 인자.
 #######################################
@@ -125,6 +129,8 @@ run_recheck() {
 
 #######################################
 # 마지막 실행의 종료 코드 · 첫 줄 · 13-1 줄 수를 본다.
+# Globals:
+#   run_out, ROW_PATTERN, run_status
 # Arguments:
 #   사례 이름, 기대 종료 코드, 기대 첫 줄, 기대 13-1 줄 수.
 # Returns:
@@ -151,6 +157,8 @@ expect_result() {
 
 #######################################
 # 마지막 실행이 검사 불가(종료 2 · 첫 줄 없음)였는지 본다.
+# Globals:
+#   run_status, run_out
 # Arguments:
 #   사례 이름.
 # Returns:
@@ -189,6 +197,8 @@ expect_no_leak() {
 #######################################
 # 사례 2 OK: 모두 허용이고 baseline 과 같으면 종료 0. 원본(요청 · 응답)은
 # 증거 디렉터리에 남는다.
+# Globals:
+#   run_out, FAKE_ACCOUNT
 #######################################
 expect_ok() {
   local case_dir raw
@@ -339,9 +349,10 @@ rehash_marker() {
 }
 
 #######################################
-# 판정 하나를 돌리고 그 증거 디렉터리를 승인한다.
+# 판정 하나를 돌리고 그 증거 디렉터리를 승인한다. 마지막 실행 결과는
+# run_recheck 이 run_out · run_status 에 남긴다.
 # Globals:
-#   run_out, run_status
+#   run_status
 # Arguments:
 #   사례 디렉터리, 묶음.
 # Outputs:
@@ -363,6 +374,8 @@ judge_and_accept() {
 # 사례 2 --accept: CHANGED 결과를 그 증거 디렉터리 이름으로 승인하면 같은
 # 결과의 다음 판정은 OK. 승인 기록(시각 · 해시 · 이유)은 그 디렉터리에
 # 남고, 승인한 디렉터리 이름이 표준 오류에 나온다.
+# Globals:
+#   run_status, run_out
 #######################################
 expect_accept() {
   local case_dir name dir
@@ -400,6 +413,8 @@ expect_accept() {
 
 #######################################
 # 사례 2: 거부가 든 결과는 승인해도 다음 판정이 종료 1.
+# Globals:
+#   run_status
 #######################################
 expect_accept_keeps_denied() {
   local case_dir name
@@ -426,6 +441,8 @@ expect_accept_keeps_denied() {
 #######################################
 # 앞 기준은 같은 묶음 것만 찾는다 — alpha-stop 의 승인이 alpha 의 비교
 # 기준이 되지 않는다.
+# Globals:
+#   run_status
 #######################################
 expect_prefix_isolated() {
   local case_dir
@@ -443,9 +460,10 @@ expect_prefix_isolated() {
 }
 
 #######################################
-# 다른 도구의 증거 디렉터리(M17b 꼴 「<묶음>-<시각>」 · 「collect-<묶음>-
-# <시각>」)를 만든다 — 더 최근 시각이고, 모든 행 허용 결과 · 승인 표지를
-# 담는다. scp-recheck 가 이것을 앞 기준으로 집으면 판정이 OK 로 바뀐다.
+# scp 가 아닌 증거 디렉터리(도구 접두가 없던 옛 꼴 「<묶음>-<시각>」 · M17b
+# 꼴 「collect-<단계>-<시각>」)를 만든다 — 더 최근 시각이고, 모든 행 허용
+# 결과 · 승인 표지를 담는다. scp-recheck 가 이것을 앞 기준으로 집으면
+# 판정이 OK 로 바뀐다.
 # Arguments:
 #   증거 루트, 디렉터리 이름.
 # Returns:
@@ -495,6 +513,8 @@ expect_other_tool_dirs_ignored() {
 # 미승인일 때 A 를 이름으로 승인하면 A 에만 승인이 남고, 다음 판정의 비교
 # 기준이 A 다 — 늘 최신 판정을 승인하는 회귀를 잡는다. 이미 승인된 더 최근
 # 판정보다 오래된 판정은 승인하지 않는다(시계 역행 · 순서 뒤바뀜).
+# Globals:
+#   run_status, run_out
 #######################################
 expect_accept_named_judgment() {
   local case_dir root first second third
@@ -541,6 +561,8 @@ expect_accept_named_judgment() {
 # 끝나지 않은 판정은 승인할 수 없다 — 호출 실패로 끝난 판정 · 완료 표지가
 # 없는(지운) 판정 · 표지의 꼴이 틀린 판정(장부 r2 #8 — 빈 표지 · 「UTC
 # 시각<탭>해시」 가 아닌 글 · 해시는 맞고 시각만 UTC 가 아님).
+# Globals:
+#   NOT_UTC
 #######################################
 expect_accept_incomplete_rejected() {
   local case_dir name marker kind
@@ -607,6 +629,8 @@ expect_accept_changed_result_rejected() {
 # UTC 시각을 읽지 못하면(date 실패) 종료 2 이고 빈 complete.txt · 시각 칸이
 # 빈 accepted.tsv 가 남지 않는다 — 남으면 끝나지 않은 판정이 끝난 것처럼,
 # 하지 않은 승인이 한 것처럼 보인다.
+# Globals:
+#   RUN_LIMIT, FAKEBIN, PATH
 #######################################
 expect_no_record_when_time_fails() {
   local case_dir bin real_date name
@@ -655,6 +679,8 @@ expect_no_record_when_time_fails() {
 
 #######################################
 # 승인 기준 하나를 고친다(종류별).
+# Globals:
+#   NOT_UTC, OTHER_SHA256
 # Arguments:
 #   사례 디렉터리, 승인한 증거 디렉터리, 종류.
 # Returns:
@@ -744,6 +770,8 @@ tamper_reference() {
 # (빈 칸 접힘) · 중복 행 · 승인 뒤 바뀜 · 승인 기록 해시까지 맞춰 바뀜, 호출
 # 주체 기록이 링크 · 0644, 다른 계정에서 승인한 기준. 기준 파일은 내용 ·
 # 해시를 읽기 전에 검사하므로 FIFO 에서 걸리지 않는다(RUN_LIMIT 안에 끝남).
+# Globals:
+#   run_out
 #######################################
 expect_tampered_reference_rejected() {
   local kind case_dir name env_arg
@@ -775,6 +803,8 @@ expect_tampered_reference_rejected() {
 #######################################
 # baseline.tsv 의 빈 칸이 탭 IFS 로 접혀 다섯 칸처럼 읽히는 행은 받지 않는다
 # (종료 2) — 접히면 그 묶음의 앞 기준이 조용히 바뀐다.
+# Globals:
+#   JUDGED
 #######################################
 expect_collapsed_baseline_rejected() {
   local case_dir
@@ -855,6 +885,8 @@ expect_accept_misuse() {
 # 장부 r2 #5: 사용자가 준 입력을 그대로 되울리지 않는다 — 묶음 자리 · --dir
 # 자리에 절대 경로(셸이 ~ 를 펼친 HOME 경로 등)를 주면 종료 2 이고, 표준
 # 출력 · 표준 오류에 절대 경로(HOME · 로컬 계정 이름)가 없다.
+# Globals:
+#   run_out
 #######################################
 expect_input_paths_not_echoed() {
   local case_dir name spec paths
@@ -893,6 +925,8 @@ expect_input_paths_not_echoed() {
 #######################################
 # 승인 기준을 읽을 때도 증거 경로 검사를 한다: 루트 안의 승인 디렉터리가
 # 저장소를 가리키는 링크면 종료 2 이고, 링크 너머에 아무것도 쓰지 않는다.
+# Globals:
+#   run_out, REJECTED
 #######################################
 expect_approved_link_rejected() {
   local case_dir root repo before after

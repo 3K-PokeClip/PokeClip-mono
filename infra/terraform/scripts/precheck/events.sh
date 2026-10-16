@@ -70,12 +70,12 @@ source "${SCRIPT_DIR}/lib/evidence.sh" || {
 }
 
 # event_names.txt 의 행 「출처<탭>이름<탭>리전」.
-NAMES=()
+names=()
 # 범주별로 센 이벤트 ID(줄바꿈으로 감싼 목록 — 범주 안에서는 한 번씩).
-PERM_IDS=$'\n'
-ROLE_IDS=$'\n'
+perm_ids=$'\n'
+role_ids=$'\n'
 # lookup_row 가 남기는 그 행의 맞은 이벤트 수.
-ROW_MATCHED=0
+row_matched=0
 
 #######################################
 # 검사를 이어갈 수 없을 때 멈춘다(0건으로 넘어가지 않는다).
@@ -103,10 +103,10 @@ tsv_ok() {
 }
 
 #######################################
-# event_names.txt 를 읽어 NAMES 에 담는다. 「#」 으로 시작하는 줄은 주석,
+# event_names.txt 를 읽어 names 에 담는다. 「#」 으로 시작하는 줄은 주석,
 # 빈 줄은 건너뛴다.
 # Globals:
-#   NAMES
+#   EVENT_NAMES, SOURCE_PATTERN, NAME_PATTERN, REGION_PATTERN, names
 #######################################
 load_names() {
   local line source name region
@@ -123,13 +123,15 @@ load_names() {
       "${name}" =~ ${NAME_PATTERN} && "${region}" =~ ${REGION_PATTERN} ]]; then
       die "event_names.txt 의 행 꼴이 틀림: ${line}"
     fi
-    NAMES+=("${source}"$'\t'"${name}"$'\t'"${region}")
+    names+=("${source}"$'\t'"${name}"$'\t'"${region}")
   done <"${EVENT_NAMES}" || die "event_names.txt 를 읽지 못함"
-  [[ "${#NAMES[@]}" -gt 0 ]] || die "event_names.txt 에 행이 없음"
+  [[ "${#names[@]}" -gt 0 ]] || die "event_names.txt 에 행이 없음"
 }
 
 #######################################
 # 90일 전 시각(UTC)을 낸다(GNU date, 안 되면 BSD date).
+# Globals:
+#   ISO_FORMAT
 # Outputs:
 #   YYYY-MM-DDTHH:MM:SSZ.
 # Returns:
@@ -161,6 +163,9 @@ is_role_assumption() {
 # CLI 가 None 으로 적고, 세는 데 쓰지 않는다. here-string 대신 매개변수
 # 확장으로 나눈다 — bash 3.2 의 here-string 은 임시 파일을 써서 원본이 증거
 # 디렉터리 밖에 잠시라도 남기 때문이다.
+# Globals:
+#   EVENT_ID_PATTERN, SOURCE_PATTERN, NAME_PATTERN, ISO_TIME_PATTERN,
+#   EPOCH_TIME_PATTERN
 # Arguments:
 #   응답 줄.
 # Outputs:
@@ -191,14 +196,14 @@ lookup_fields() {
 # (권한 변경 · 역할 받기) 목록에 ID 로 한 번만 담는다. 원본은 증거
 # 디렉터리의 lookup-<n>.txt · lookup-<n>.err 에 남는다.
 # Globals:
-#   PERM_IDS, ROLE_IDS, ROW_MATCHED
+#   row_matched, LOOKUP_QUERY, role_ids, perm_ids
 # Arguments:
 #   증거 디렉터리, 행 번호, 출처, 이름, 리전, --since 값.
 #######################################
 lookup_row() {
   local dir="$1" n="$2" source="$3" name="$4" region="$5" since="$6"
   local raw="${dir}/lookup-${n}.txt" line fields id got role=0
-  ROW_MATCHED=0
+  row_matched=0
   is_role_assumption "${source}" "${name}" && role=1
   if ! aws cloudtrail lookup-events \
     --lookup-attributes "AttributeKey=EventName,AttributeValue=${name}" \
@@ -215,11 +220,11 @@ lookup_row() {
     id="${fields%%$'\t'*}"
     got="${fields#*$'\t'}"
     [[ "${got}" == "${source}"$'\t'"${name}" ]] || continue
-    ROW_MATCHED=$((ROW_MATCHED + 1))
-    if [[ "${role}" -eq 1 && "${ROLE_IDS}" != *$'\n'"${id}"$'\n'* ]]; then
-      ROLE_IDS+="${id}"$'\n'
-    elif [[ "${role}" -eq 0 && "${PERM_IDS}" != *$'\n'"${id}"$'\n'* ]]; then
-      PERM_IDS+="${id}"$'\n'
+    row_matched=$((row_matched + 1))
+    if [[ "${role}" -eq 1 && "${role_ids}" != *$'\n'"${id}"$'\n'* ]]; then
+      role_ids+="${id}"$'\n'
+    elif [[ "${role}" -eq 0 && "${perm_ids}" != *$'\n'"${id}"$'\n'* ]]; then
+      perm_ids+="${id}"$'\n'
     fi
   done <"${raw}" || die "조회 원본을 읽지 못함(lookup-${n}.txt)"
 }
@@ -229,7 +234,7 @@ lookup_row() {
 # 없는 꼴) 권한 변경으로 센다 — 권한 변경을 가리지 않는 쪽. 그래서 권한
 # 변경 + 역할 받기 = 전체다. 증거 event_ids.txt 에 「ID<탭>범주」 로 남긴다.
 # Globals:
-#   PERM_IDS, ROLE_IDS
+#   perm_ids, role_ids
 # Arguments:
 #   증거 디렉터리.
 # Outputs:
@@ -240,7 +245,7 @@ report_counts() {
   # 목록은 「\n<ID>\n<ID>\n…」 꼴이다. 매개변수 확장으로 한 줄씩 떼어 낸다 —
   # here-string 은 ID 를 증거 디렉터리 밖 임시 파일에 쓰고, 그 파일을 만들지
   # 못하면 읽기가 조용히 실패해 건수가 0 으로 보였다(거짓 0).
-  rest="${PERM_IDS#$'\n'}"
+  rest="${perm_ids#$'\n'}"
   while [[ -n "${rest}" ]]; do
     id="${rest%%$'\n'*}"
     rest="${rest#"${id}"}"
@@ -248,12 +253,12 @@ report_counts() {
     perm=$((perm + 1))
     ids+="${id}"$'\t'"권한 변경"$'\n'
   done
-  rest="${ROLE_IDS#$'\n'}"
+  rest="${role_ids#$'\n'}"
   while [[ -n "${rest}" ]]; do
     id="${rest%%$'\n'*}"
     rest="${rest#"${id}"}"
     rest="${rest#$'\n'}"
-    [[ "${PERM_IDS}" != *$'\n'"${id}"$'\n'* ]] || continue
+    [[ "${perm_ids}" != *$'\n'"${id}"$'\n'* ]] || continue
     role=$((role + 1))
     ids+="${id}"$'\t'"역할 받기"$'\n'
   done
@@ -262,6 +267,16 @@ report_counts() {
     "${perm}" "${role}"
 }
 
+#######################################
+# --since 를 검사하고, event_names.txt 의 행마다 조회해 범주별 건수를 낸다.
+# Globals:
+#   SINCE_PATTERN, ISO_FORMAT, EVIDENCE_ROOT_NAME, names, row_matched
+# Arguments:
+#   --since, UTC 시각.
+# Outputs:
+#   표준 출력에 EVENTS 줄(report_counts), 표준 오류에 증거 디렉터리 이름 ·
+#   90일 경고.
+#######################################
 main() {
   local since now dir cutoff row source name region n=0 summary=""
   if [[ "$#" -ne 2 || "$1" != --since ]]; then
@@ -285,14 +300,14 @@ main() {
   load_names
   dir="$(evidence::new_dir events)" || exit 2
   printf 'events: 증거 ~/%s/%s\n' "${EVIDENCE_ROOT_NAME}" "${dir##*/}" >&2
-  for row in "${NAMES[@]}"; do
+  for row in "${names[@]}"; do
     n=$((n + 1))
     source="${row%%$'\t'*}"
     region="${row##*$'\t'}"
     name="${row#*$'\t'}"
     name="${name%%$'\t'*}"
     lookup_row "${dir}" "${n}" "${source}" "${name}" "${region}" "${since}"
-    summary+="${row}"$'\t'"${ROW_MATCHED}"$'\n'
+    summary+="${row}"$'\t'"${row_matched}"$'\n'
   done
   printf '# 출처\t이름\t리전\t맞은 수 — --since %s\n%s' "${since}" \
     "${summary}" >"${dir}/summary.tsv" || die "증거를 쓰지 못함"

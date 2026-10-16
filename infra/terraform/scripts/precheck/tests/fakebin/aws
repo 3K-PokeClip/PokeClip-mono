@@ -80,6 +80,8 @@ require_text_output() {
 
 #######################################
 # 호출 자체가 거부된 것처럼 답한다(진짜 메시지처럼 주체 ARN 을 담는다).
+# Globals:
+#   USER_ARN
 # Arguments:
 #   API 이름.
 #######################################
@@ -92,6 +94,8 @@ access_denied() {
 
 #######################################
 # 연결 실패처럼 답한다(표준 오류에 계정 ID · 사용자 이름).
+# Globals:
+#   USER_ARN, ACCOUNT
 #######################################
 call_failed() {
   printf 'Could not connect to the endpoint URL (caller %s, account %s)\n' \
@@ -101,6 +105,8 @@ call_failed() {
 
 #######################################
 # sts get-caller-identity.
+# Globals:
+#   FAKE_AWS_IDENTITY, USER_ARN, ACCOUNT, USER_NAME
 # Arguments:
 #   받은 argv 전체.
 #######################################
@@ -143,6 +149,9 @@ invalid_request() {
 
 #######################################
 # iam simulate-principal-policy.
+# Globals:
+#   FAKE_AWS_SIM, USER_ARN, REGION_CONTEXT_PATTERN, FAKE_AWS_DENY,
+#   FAKE_AWS_EXPLICIT_DENY
 # Arguments:
 #   받은 argv 전체.
 #######################################
@@ -194,6 +203,8 @@ simulate() {
 
 #######################################
 # cloudtrail lookup-events.
+# Globals:
+#   FAKE_AWS_LOOKUP, FAKE_AWS_EVENTS
 # Arguments:
 #   받은 argv 전체.
 #######################################
@@ -243,6 +254,13 @@ lookup_events() {
   fi
 }
 
+#######################################
+# argv 를 기록하고 흉내 낼 호출로 보낸다(모르는 호출은 실패).
+# Globals:
+#   FAKE_AWS_LOG
+# Arguments:
+#   받은 argv 전체.
+#######################################
 main() {
   [[ -n "${FAKE_AWS_LOG:-}" ]] || {
     printf 'fake aws: FAKE_AWS_LOG 없음\n' >&2
