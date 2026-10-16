@@ -10,8 +10,11 @@ import {
   requestRender,
   requestUpload,
   retryUpload as requestUploadRetry,
+  resolveUpload as requestUploadResolution,
+  liveUploadsOf,
   ClipApiError,
   type LibraryEntry,
+  type UploadResolution,
   type UploadSnapshot,
 } from '@/api/clipEditor';
 import {
@@ -20,6 +23,7 @@ import {
   filterByQuery,
   shownUploadOf,
   sortClips,
+  resolveErrorMessage,
   uploadErrorMessage,
   uploadsFromIntent,
   uploadTitleProblem,
@@ -226,6 +230,11 @@ export interface LibraryMockState {
   upload: (id: string) => void;
   /** 업로드 실패한 서버 줄을 저장된 정보 그대로 다시 올린다(POK-291, 창 없이). 그 밖의 줄은 무시 */
   retryUpload: (id: string) => void;
+  /**
+   * 「확인 필요」 업로드를 채널에서 본 결과로 푼다(POK-333). 그 편집본의 살아 있는 업로드 중 하나(옛 판 포함)다. 받아들여졌으면
+   * true, 거절이면 사유를 토스트로 알리고 false. 어느 쪽이든 목록을 다시 읽는다(다른 사람이 먼저 풀었을 수 있다)
+   */
+  resolveUpload: (id: string, uploadId: number, resolution: UploadResolution) => Promise<boolean>;
   /** 업로드 주문·다시 시도를 보내고 답을 기다리는 편집본: 두 번 눌러 두 번 보내지 않게 패널이 단추를 잠근다 */
   sendingIds: ReadonlySet<string>;
   /** 렌더 실패 → 업로드 대기. 결과를 토스트로 흉내 내지 않는다 */
@@ -448,6 +457,47 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     [clips, setSendingFlag, toast],
   );
 
+  // 「확인 필요」 풀기(POK-333). 답을 줄에 직접 얹지 않고 목록을 다시 읽는다: 푼 업로드가 latestClip의 것일 수도 옛 판의 것일
+  // 수도 있고, 편집본 상태(STATUS_CASE)는 서버가 정한다. 읽기 세대를 올려 그 전에 떠난 읽기(아직 확인 필요)가 덮지 않게 한다.
+  const resolveUpload = useCallback(
+    async (id: string, uploadId: number, resolution: UploadResolution): Promise<boolean> => {
+      const entry = clips.find((c) => c.id === id)?.entry;
+      const target =
+        entry === undefined ? undefined : liveUploadsOf(entry).find((u) => u.id === uploadId);
+      if (entry === undefined || target === undefined || sending.current.has(id)) return false;
+      setSendingFlag(id, true);
+      try {
+        await requestUploadResolution(entry.streamId, target.clipId, uploadId, resolution);
+        // 다시 시도 단추는 지금 영상(latestClip)에만 있다: 옛 판 업로드를 닫았으면 다시 올릴 길을 약속하지 않는다(PR #261 codex)
+        const current = target.clipId === entry.latestClip?.id;
+        toast(
+          resolution.result === 'uploaded'
+            ? { tone: 'success', title: '발행됨으로 바꿨어요' }
+            : {
+                tone: 'success',
+                title: '안 올라간 것으로 닫았어요',
+                description: current
+                  ? '이제 다시 시도하거나 영상 만들기로 다시 올릴 수 있어요.'
+                  : '이전 판 업로드라 이 화면에서 다시 올리지는 않아요.',
+              },
+        );
+        return true;
+      } catch (e) {
+        toast({
+          tone: 'error',
+          title: '결과를 적지 못했어요',
+          description: resolveErrorMessage(e),
+        });
+        return false;
+      } finally {
+        listGeneration.current += 1;
+        refresh();
+        setSendingFlag(id, false);
+      }
+    },
+    [clips, refresh, setSendingFlag, toast],
+  );
+
   // 렌더 재시도 = 같은 편집본을 다시 주문한다(POK-125: 끝난 영상은 자리를 비워 다시 주문할 수 있다).
   // 그 판의 업로드 정보가 서버에 남아 있으면 렌더가 끝나는 대로 clip이 이어서 올린다(POK-291).
   const retryRender = useCallback(
@@ -581,6 +631,7 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     renameClip,
     upload,
     retryUpload,
+    resolveUpload,
     sendingIds,
     retryRender,
     download,

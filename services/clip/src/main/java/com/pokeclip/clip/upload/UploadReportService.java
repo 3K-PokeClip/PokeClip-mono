@@ -97,6 +97,27 @@ public class UploadReportService {
         });
     }
 
+    /**
+     * 일꾼이 아직 이 주문을 처리하고 있다는 신호(POK-333). 일꾼은 처리하는 동안 1분마다 부른다. <b>상태는 안 바꾸고 마지막 일꾼 활동
+     * 시각({@code updated_at})만 옮긴다</b>: 「안 올라갔다」는 그 시각에서 30분 뒤에만 받으므로({@link UploadResolutionService}), 한 일꾼이
+     * 30분 넘게 같은 이어 올리기 주소로 보내는 동안 사람이 자리를 비우지 못한다(쪽지가 두 번 와 다른 일꾼이 줄을 {@code checking}으로 만든
+     * 뒤에도). 끝난 줄(올림 · 실패)은 건드리지 않는다. 몇 번 와도 결과가 같다.
+     */
+    public Reply heartbeat(long uploadId) {
+        return transactions.execute(tx -> {
+            ClipUpload upload = uploads.findByIdForUpdate(uploadId).orElseThrow(() -> new UploadNotFoundException(uploadId));
+            UploadStatus status = upload.getStatus();
+            boolean finished = status == UploadStatus.UPLOADED || status == UploadStatus.FAILED;
+            if (!finished) {
+                upload.touched();
+            }
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("status", status.dbValue());
+            body.put("touched", !finished);
+            return new Reply(200, body);
+        });
+    }
+
     /** 썸네일 결과 없이 온 끝 보고(옛 일꾼). */
     public Reply result(long uploadId, String outcome, String videoId, String errorCode, String errorMessage) {
         return result(uploadId, outcome, videoId, errorCode, errorMessage, null, null);
@@ -148,6 +169,24 @@ public class UploadReportService {
             if (current.settled()) {
                 boolean same = current == effective
                         && (effective != UploadStatus.UPLOADED || videoId.equals(upload.getYoutubeVideoId()));
+                if (same && effective == UploadStatus.UPLOADED && upload.getResolvedBy() != null
+                        && "THUMBNAIL_UNCONFIRMED".equals(upload.getThumbnailErrorCode())) {
+                    // 사람이 먼저 「올라갔다」로 풀며 썸네일을 「확인 못 함」으로 닫았는데(POK-333), 같은 영상을 올린 일꾼이 확정 결과를
+                    // 늦게 알려 왔다: 그 결과가 더 정확하다(PR #261 codex). 영상 상태는 그대로다.
+                    upload.thumbnailReported(thumbOutcome, thumbCode);
+                }
+                if (!same && effective == UploadStatus.UPLOADED && current == UploadStatus.FAILED
+                        && ClipUpload.CONFIRMED_NOT_UPLOADED.equals(upload.getErrorCode())) {
+                    // 사람이 「안 올라갔다」고 푼 뒤 영상이 올라갔다는 보고가 왔다(POK-333): 채널에 그 영상이 있고, 다시 올렸으면 둘이다.
+                    // 줄은 안 바꾼다(새 상태 없음, 다시 올린 줄이 이미 자리를 쥐었을 수 있다). 사람이 찾을 수 있게 번호를 남긴다.
+                    log.warn("clip.upload.uploaded_after_resolved_not_uploaded uploadId={} clipId={} videoId={} resolvedBy={}",
+                            uploadId, upload.getClipId(), videoId, upload.getResolvedBy());
+                } else if (!same && effective == UploadStatus.UPLOADED && current == UploadStatus.UPLOADED
+                        && upload.getResolvedBy() != null) {
+                    // 사람이 적은 영상 번호와 일꾼이 올린 번호가 다르다: 사람이 다른 영상을 적었을 수 있다. 줄은 안 바꾸고 둘 다 남긴다.
+                    log.warn("clip.upload.resolved_video_mismatch uploadId={} clipId={} resolvedVideoId={} reportedVideoId={} resolvedBy={}",
+                            uploadId, upload.getClipId(), upload.getYoutubeVideoId(), videoId, upload.getResolvedBy());
+                }
                 return same ? ok(upload) : conflict("TERMINAL");
             }
             if (current != UploadStatus.UPLOADING) {

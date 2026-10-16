@@ -1,10 +1,11 @@
-import { act } from 'react';
+import { act, useState } from 'react';
 import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
+import { ClipDetailPanel } from './ClipDetailPanel';
 import { LibraryScreen } from './LibraryScreen';
 import { LIBRARY_FIXTURE } from './libraryFixture';
 import type { ClipSnapshot, LibraryStatus } from '@/api/clipEditor';
@@ -762,6 +763,163 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     expect(inside.getByText('두 번째 올림 · 확인 필요')).toBeInTheDocument();
     expect(inside.queryByRole('link', { name: /두 번째 올림/ })).toBeNull();
     expect(await axe(panel())).toHaveNoViolations();
+  });
+
+  const checkingUpload = {
+    id: 7,
+    clipId: 5,
+    outputId: 'o1',
+    title: '보스 막타',
+    status: 'checking',
+    videoId: null,
+    error: { code: 'SESSION_GONE', message: null },
+    requestedBy: '9',
+    createdAt: '2026-09-20T12:00:00Z',
+    updatedAt: '2026-09-20T12:01:00Z',
+  };
+
+  /** 패널을 열면 비율을 읽으러 상세를 부른다(POK-254). 이 시험들이 세는 것은 「푸는 문」 호출이다 */
+  const resolutionStub = (answer: () => Response) => {
+    const spy = stubFetch((url) =>
+      url.startsWith('/api/clip/library/') ? new Promise<Response>(() => {}) : answer(),
+    );
+    return () => spy.mock.calls.filter(([url]) => String(url).endsWith('/resolution'));
+  };
+
+  it('확인 필요는 「채널에 올라갔어요」로 영상 주소를 받아 푼다(POK-333)', async () => {
+    const calls = resolutionStub(() =>
+      jsonResponse(200, { ...checkingUpload, status: 'uploaded', videoId: 'abcDEF12345' }),
+    );
+    const user = userEvent.setup();
+    show(serverClip('checking', { ...rendered, upload: checkingUpload }));
+
+    await user.click(within(panel()).getByRole('button', { name: '채널에 올라갔어요' }));
+    const dialog = await screen.findByRole('dialog', { name: '채널에 올라간 영상' });
+    const submit = within(dialog).getByRole('button', { name: '발행됨으로 바꾸기' });
+    expect(submit).toBeDisabled();
+    await user.type(
+      within(dialog).getByRole('textbox', { name: '영상 주소' }),
+      ' https://youtu.be/abcDEF12345 ',
+    );
+    await user.click(submit);
+
+    expect(calls()).toHaveLength(1);
+    expect(calls()[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/5/uploads/7/resolution');
+    expect(JSON.parse(String(calls()[0]?.[1]?.body))).toEqual({
+      result: 'uploaded',
+      videoId: 'https://youtu.be/abcDEF12345',
+    });
+    expect(await screen.findByText('발행됨으로 바꿨어요')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('「안 올라갔어요」는 두 번 올라갈 수 있다는 경고를 거치고, 30분 전이면 사유를 알린다(POK-333)', async () => {
+    const calls = resolutionStub(() =>
+      jsonResponse(409, { error: 'resolution_too_early', allowedAt: '2026-09-20T12:31:00Z' }),
+    );
+    const user = userEvent.setup();
+    show(serverClip('checking', { ...rendered, upload: checkingUpload }));
+
+    await user.click(within(panel()).getByRole('button', { name: '안 올라갔어요' }));
+    const dialog = await screen.findByRole('dialog', { name: '유튜브에 안 올라간 것이 맞나요?' });
+    expect(within(dialog).getByText(/같은 영상이 두 개 떠요/)).toBeInTheDocument();
+    expect(calls()).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: '안 올라갔어요' }));
+
+    expect(JSON.parse(String(calls()[0]?.[1]?.body))).toEqual({ result: 'not_uploaded' });
+    expect(await screen.findByText(/30분이 지난 뒤 다시 눌러/)).toBeInTheDocument();
+    expect(
+      screen.getByRole('dialog', { name: '유튜브에 안 올라간 것이 맞나요?' }),
+    ).toBeInTheDocument();
+  });
+
+  it('확인 필요가 아닌 업로드에는 푸는 단추가 없다(POK-333)', () => {
+    show(
+      serverClip('uploading', {
+        ...rendered,
+        upload: { ...checkingUpload, status: 'uploading', error: null },
+      }),
+    );
+    expect(within(panel()).queryByRole('button', { name: '채널에 올라갔어요' })).toBeNull();
+  });
+
+  it('새 판을 주문해도 옛 판의 확인 필요 줄에 푸는 단추가 붙고 그 업로드 번호로 보낸다(POK-333)', async () => {
+    const calls = resolutionStub(() =>
+      jsonResponse(200, { ...checkingUpload, id: 3, clipId: 2, status: 'failed' }),
+    );
+    const user = userEvent.setup();
+    const clip = toLibraryClip(
+      {
+        ...serverClip('rendering').entry!,
+        latestClip: { ...rendered, status: 'rendering' },
+        liveUploads: [
+          {
+            id: 3,
+            clipId: 2,
+            recipeVersion: 1,
+            outputId: 'o1',
+            title: '첫 판',
+            status: 'checking',
+            videoId: null,
+            createdAt: '2026-09-20T12:00:00Z',
+            updatedAt: '2026-09-20T12:00:00Z',
+          },
+        ],
+      },
+      '9',
+    );
+    show(clip);
+    const previous = within(within(panel()).getByRole('region', { name: '이전 판으로 올린 영상' }));
+
+    await user.click(previous.getByRole('button', { name: '안 올라갔어요 (이전 판 v1)' }));
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: '안 올라갔어요' }),
+    );
+    expect(calls()[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/2/uploads/3/resolution');
+    // 다시 시도 단추는 지금 영상에만 있다: 옛 판을 닫았으면 다시 올릴 길을 약속하지 않는다(PR #261 codex)
+    expect(
+      await screen.findByText('이전 판 업로드라 이 화면에서 다시 올리지는 않아요.'),
+    ).toBeInTheDocument();
+  });
+
+  it('창이 열린 사이 확인 필요 업로드가 바뀌면 적던 입력을 버린다(PR #261 codex)', async () => {
+    resolutionStub(() => jsonResponse(200, {}));
+    const user = userEvent.setup();
+    const props = {
+      status: 'checking' as const,
+      now: NOW,
+      onDeselect: () => {},
+      onTitleChange: () => {},
+      onUpload: () => {},
+      onRetryRender: () => {},
+      onRetryUpload: () => {},
+      onDownload: () => {},
+      onDelete: () => {},
+      onResolveUpload: () => Promise.resolve(true),
+    };
+    const first = serverClip('checking', { ...rendered, upload: checkingUpload });
+    const second = serverClip('checking', {
+      ...rendered,
+      id: 6,
+      upload: { ...checkingUpload, id: 8, clipId: 6 },
+    });
+    // 목록 새로 읽기가 패널의 편집본을 다른 확인 필요 업로드로 바꾼 것을 흉내 낸다
+    let swap: () => void = () => {};
+    function Harness() {
+      const [clip, setClip] = useState(first);
+      swap = () => setClip(second);
+      return <ClipDetailPanel clip={clip} {...props} />;
+    }
+    renderWithProviders(<Harness />);
+
+    await user.click(screen.getByRole('button', { name: '채널에 올라갔어요' }));
+    await user.type(
+      within(await screen.findByRole('dialog')).getByRole('textbox', { name: '영상 주소' }),
+      'https://youtu.be/abcDEF12345',
+    );
+    act(() => swap());
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
   const failedUpload = {

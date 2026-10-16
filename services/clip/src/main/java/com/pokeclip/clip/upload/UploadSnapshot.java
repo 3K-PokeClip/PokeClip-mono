@@ -11,6 +11,8 @@ import java.util.List;
  * @param videoId       올렸을 때만. 주소는 {@code https://youtu.be/{videoId}}
  * @param privacyStatus 고른 공개 범위(POK-291). 우리가 실어 보낸 값이다(스튜디오에서 바꾸면 모른다)
  * @param thumbnail     썸네일 고르기와 결과(POK-291)
+ * @param resolvedBy    「확인 필요」를 사람이 풀었으면 그 사람(POK-333). 일꾼이 끝냈으면 {@code null}
+ * @param resolvedAt    그 시각. {@code resolvedBy}와 같이 차고 같이 빈다
  */
 public record UploadSnapshot(long id,
                              long clipId,
@@ -25,7 +27,9 @@ public record UploadSnapshot(long id,
                              String privacyStatus,
                              boolean madeForKids,
                              List<String> tags,
-                             Thumbnail thumbnail) {
+                             Thumbnail thumbnail,
+                             String resolvedBy,
+                             Instant resolvedAt) {
 
     public record Error(String code, String message) {
     }
@@ -44,6 +48,7 @@ public record UploadSnapshot(long id,
                 upload.getErrorCode() == null ? null : new Error(upload.getErrorCode(), upload.getErrorMessage()),
                 upload.getRequestedBy(), upload.getCreatedAt(), upload.getUpdatedAt(),
                 upload.getPrivacyStatus(), upload.isMadeForKids(), upload.getTags(),
-                new Thumbnail(upload.getThumbnailSource(), upload.getThumbnailStatus(), upload.getThumbnailErrorCode()));
+                new Thumbnail(upload.getThumbnailSource(), upload.getThumbnailStatus(), upload.getThumbnailErrorCode()),
+                upload.getResolvedBy(), upload.getResolvedAt());
     }
 }

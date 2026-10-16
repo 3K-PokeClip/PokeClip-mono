@@ -24,6 +24,9 @@ import java.util.concurrent.TimeUnit;
  * <p>처리하는 동안 숨김 시간을 늘린다: 남은 시간이 2분 아래로 내려가면 1분마다 2분으로 다시 잡는다. 안 늘리면 긴 업로드 도중
  * 쪽지가 다시 보여 다른 일꾼이 같은 주문을 잡는다. 그래도 영상은 하나다(바이트는 clip에 적힌 주소 하나로만 간다): 늘리는 것은
  * 대역을 두 번 쓰지 않기 위해서다.
+ *
+ * <p>처리하는 동안 1분마다 clip에 heartbeat도 보낸다(POK-333). 숨김 연장과 <b>다른 스레드</b>다: clip이 느려 그 부름이 매달려도 숨김
+ * 연장이 밀리지 않는다. heartbeat가 실패해도 처리는 계속된다({@link UploadProcessor#heartbeat}가 던지지 않는다).
  */
 public class QueueWorker implements SmartLifecycle {
 
@@ -31,12 +34,19 @@ public class QueueWorker implements SmartLifecycle {
 
     static final Duration EXTEND_TO = Duration.ofMinutes(2);
     static final Duration EXTEND_EVERY = Duration.ofMinutes(1);
+    static final Duration HEARTBEAT_EVERY = Duration.ofMinutes(1);
 
     private final SqsClient sqs;
     private final String queueUrl;
     private final UploadProcessor processor;
     private final Duration visibilityTimeout;
     private final Duration pollWait;
+    private final Duration heartbeatEvery;
+    private final ScheduledExecutorService beater = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "upload-heartbeat");
+        t.setDaemon(true);
+        return t;
+    });
     private final ScheduledExecutorService keeper = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "upload-visibility");
         t.setDaemon(true);
@@ -48,11 +58,18 @@ public class QueueWorker implements SmartLifecycle {
 
     public QueueWorker(SqsClient sqs, String queueUrl, UploadProcessor processor, Duration visibilityTimeout,
                        Duration pollWait) {
+        this(sqs, queueUrl, processor, visibilityTimeout, pollWait, HEARTBEAT_EVERY);
+    }
+
+    /** 시험용: heartbeat 간격을 줄인다. */
+    QueueWorker(SqsClient sqs, String queueUrl, UploadProcessor processor, Duration visibilityTimeout,
+                Duration pollWait, Duration heartbeatEvery) {
         this.sqs = sqs;
         this.queueUrl = queueUrl;
         this.processor = processor;
         this.visibilityTimeout = visibilityTimeout;
         this.pollWait = pollWait;
+        this.heartbeatEvery = heartbeatEvery;
     }
 
     @Override
@@ -69,6 +86,7 @@ public class QueueWorker implements SmartLifecycle {
             loop.interrupt();
         }
         keeper.shutdownNow();
+        beater.shutdownNow();
     }
 
     @Override
@@ -110,11 +128,14 @@ public class QueueWorker implements SmartLifecycle {
         long firstExtendMs = Math.max(0, visibilityTimeout.minus(EXTEND_TO).toMillis());
         ScheduledFuture<?> extender = keeper.scheduleAtFixedRate(() -> extend(receipt), firstExtendMs,
                 EXTEND_EVERY.toMillis(), TimeUnit.MILLISECONDS);
+        ScheduledFuture<?> heartbeat = beater.scheduleAtFixedRate(() -> processor.heartbeat(message.body()),
+                heartbeatEvery.toMillis(), heartbeatEvery.toMillis(), TimeUnit.MILLISECONDS);
         Disposition disposition;
         try {
             disposition = processor.process(message.body());
         } finally {
             extender.cancel(false);
+            heartbeat.cancel(false);
         }
         log.info("upload.message_done messageId={} receiveCount={} disposition={}", message.messageId(),
                 message.attributes().get(MessageSystemAttributeName.APPROXIMATE_RECEIVE_COUNT), disposition.kind());
