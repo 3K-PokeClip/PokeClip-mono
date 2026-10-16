@@ -254,7 +254,7 @@ latest_dir() {
     [[ -e "${candidate}" || -L "${candidate}" ]] || continue
     # 확실히 없을 때 = 검색할 수 있는 디렉터리인데 파일도 링크(대상 없는
     # 링크 포함)도 없을 때. 검색할 수 없으면 -e 가 늘 거짓인데, 그때
-    # 건너뛰면 앞 기준이 조용히 이전 승인 · baseline 으로 바뀐다(장부 r3 7).
+    # 건너뛰면 앞 기준이 조용히 이전 승인 · baseline 으로 바뀐다.
     file="${candidate}/${required}"
     if [[ -n "${required}" && -d "${candidate}" && -x "${candidate}" &&
       ! -e "${file}" && ! -L "${file}" ]]; then
@@ -623,7 +623,7 @@ judge_bundle() {
     result+="${row_line}"$'\n'
     [[ "${row_decision}" == deny ]] && denied=$((denied + 1))
     # 셋째 칸(AllowedByOrganizations)이 True · False 가 아닌 행은 판정을
-    # 바꾸지 않고 건수만 드러낸다(장부 r3 9).
+    # 바꾸지 않고 건수만 드러낸다.
     [[ "${row_line##*$'\t'}" == True || "${row_line##*$'\t'}" == False ]] ||
       unorganized=$((unorganized + 1))
     previous="$(reference_decision "${action}" "${region}")"

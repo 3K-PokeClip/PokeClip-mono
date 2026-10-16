@@ -48,7 +48,7 @@ KVS_VALUE_ACTIONS=(cloudfront-keyvaluestore:PutKey
   cloudfront-keyvaluestore:DescribeKeyValueStore
   cloudfront-keyvaluestore:UpdateKeys cloudfront-keyvaluestore:DeleteKey)
 readonly KVS_VALUE_ACTIONS
-# 권한 상승 이벤트(kty 59차 — 계획 399행 범주 확장, 장부 r1 #9).
+# 권한 상승 이벤트(kty 59차 — 계획 399행 범주 확장).
 PRIVILEGE_EVENTS=(AddUserToGroup CreateRole UpdateLoginProfile UpdateAccessKey
   CreateOpenIDConnectProvider AddClientIDToOpenIDConnectProvider
   UpdateOpenIDConnectProviderThumbprint)
@@ -403,7 +403,7 @@ last_group_rows() {
 }
 
 #######################################
-# 「역할 받기」 범주의 경계(장부 r3 6): event_names.txt 맨 아래 묶음의 행 =
+# 「역할 받기」 범주의 경계: event_names.txt 맨 아래 묶음의 행 =
 # events.sh is_role_assumption 이 역할 받기로 세는 행. 실제 events.sh 를
 # 실제 데이터로 돌려(행마다 그 행 출처 · 이름 · 리전의 이벤트 하나), 증거
 # event_ids.txt 에서 맨 아래 묶음 행의 이벤트만 「역할 받기」 이고 나머지는
