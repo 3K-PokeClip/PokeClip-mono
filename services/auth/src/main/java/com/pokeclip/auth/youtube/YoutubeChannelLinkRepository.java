@@ -28,6 +28,14 @@ public interface YoutubeChannelLinkRepository extends JpaRepository<YoutubeChann
     int revokeAlive(@Param("userId") Long userId, @Param("now") Instant now, @Param("reason") RevokeReason reason);
 
     /**
+     * 탈퇴한 회원의 모든 행에서 채널 이름·번호를 비운다(POK-341). 닫힌 행만 비울 수 있다 — 살아 있는 행은
+     * V115 CHECK가 막으므로 탈퇴가 {@link #revokeAlive}로 먼저 닫은 뒤에 부른다.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update YoutubeChannelLink l set l.channelId = null, l.channelName = null where l.userId = :userId")
+    int wipeChannelOfUser(@Param("userId") Long userId);
+
+    /**
      * 철회 점검 후보 — 「오래 확인 안 한 살아있는 행」. 치지직(만료 임박)과 축이 다르다:
      * 구글 access는 1시간이라 만료로 고르면 살아있는 행이 늘 전부 걸린다.
      * id만 뽑는다 — 갱신기가 락 뒤에 다시 읽는다(락 전 엔티티 읽기 금지).

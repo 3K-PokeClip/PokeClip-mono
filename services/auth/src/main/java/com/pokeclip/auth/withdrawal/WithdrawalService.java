@@ -3,6 +3,7 @@ package com.pokeclip.auth.withdrawal;
 import com.pokeclip.auth.AuthFailure;
 import com.pokeclip.auth.audiotrack.AudioTrackLabelRepository;
 import com.pokeclip.auth.DataInconsistencyException;
+import com.pokeclip.auth.chzzk.ChzzkChannelLinkRepository;
 import com.pokeclip.auth.chzzk.ChzzkLinkWriter;
 import com.pokeclip.auth.delegation.EditorDelegationRepository;
 import com.pokeclip.auth.delegation.EditorInvitationRepository;
@@ -13,6 +14,7 @@ import com.pokeclip.auth.streamkey.secret.StreamKeySecretRetirer;
 import com.pokeclip.auth.token.RefreshTokenRepository;
 import com.pokeclip.auth.user.User;
 import com.pokeclip.auth.user.UserRepository;
+import com.pokeclip.auth.youtube.YoutubeChannelLinkRepository;
 import com.pokeclip.auth.youtube.YoutubeLinkWriter;
 import com.pokeclip.auth.withdrawal.purge.PurgeJobRepository;
 import lombok.RequiredArgsConstructor;
@@ -50,6 +52,8 @@ public class WithdrawalService {
     private final PairingCodeRepository pairingCodeRepository;
     private final ChzzkLinkWriter chzzkLinkWriter;
     private final YoutubeLinkWriter youtubeLinkWriter;
+    private final ChzzkChannelLinkRepository chzzkLinks;
+    private final YoutubeChannelLinkRepository youtubeLinks;
     private final EditorDelegationRepository delegationRepository;
     private final EditorInvitationRepository invitationRepository;
     private final AudioTrackLabelRepository audioTrackLabelRepository;
@@ -162,6 +166,19 @@ public class WithdrawalService {
         // 위의 연동 폐기보다 뒤여야 한다(폐기된 줄도 남아 있어 읽힌다. 순서는 「다른 회원이 쥔 채널」 판정에만 걸린다).
         // JDBC라 영속성 컨텍스트를 안 건드린다 — 아래 재조회 규칙과 무관하다.
         purgeJobs.enqueue(userId, now);
+
+        // 🔴 두 연동 표의 채널 이름·번호를 비운다(POK-341). 치지직 채널 이름은 대개 공개 활동명이라 익명화한 회원 행
+        // 옆에 남으면 사람을 되짚을 수 있다. 행은 남긴다(V107 「행을 지우지 않는다」) — 비우는 칸은 둘뿐이다.
+        //
+        // 🔴 자리가 둘 다 정해져 있다. ① 위의 연동 폐기보다 뒤: 살아 있는 행은 V115 CHECK가 비우기를 막는다.
+        // ② 바로 위의 장부 적기보다 뒤: 장부가 이 표에서 수집기에 보낼 채널 번호를 읽어 간다. 앞으로 옮기면
+        // 채널 없는 수집기 줄이 장부 CHECK(V114)에 걸려 연동이 있던 회원의 탈퇴가 통째로 500이 된다(주입으로 확인).
+        //
+        // 닫힌 옛 행(재연동·해제로 이미 닫힌 것)까지 다 비운다 — 살아 있던 행만 비우면 옛 행에 이름이 남는다.
+        // clearAutomatically라 영속성 컨텍스트를 비우지만 flushAutomatically가 앞의 변경을 먼저 밀어낸다.
+        // 아래 재조회가 이것보다 뒤에 있으므로 익명화는 안 잃는다.
+        chzzkLinks.wipeChannelOfUser(userId);
+        youtubeLinks.wipeChannelOfUser(userId);
 
         // 🔴 표 밖에 남는 것 둘 — 스트림키 비밀값과 사진 파일. 여기서 지우지 않고 자리만 읽어 둔다.
         //
