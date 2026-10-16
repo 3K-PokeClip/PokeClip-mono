@@ -56,6 +56,8 @@ export interface VodRowVisual {
   /** 준비 중이라 아직 모르면 null */
   durationSec: number | null;
   cardCount: number;
+  /** 녹화 재생 서버에 물어 녹화가 없다고 확인됐다(POK-254). 물을 수 없으면 비운다 */
+  recordingMissing?: boolean;
   /** 만료 임박 행의 「저장하지 않은 카드 N개가 함께 삭제됩니다」 */
   unsavedCardCount?: number;
 }
@@ -250,6 +252,10 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
             title: titles.get(b.streamId) ?? b.streamId,
             durationSec: dur,
             cardCount: cache.get(b.streamId)?.cardCount ?? 0,
+            recordingMissing:
+              b.status === 'ended' &&
+              playbackConfigured() &&
+              cache.get(b.streamId)?.recorded === false,
           };
         }
         if (stopped) return;

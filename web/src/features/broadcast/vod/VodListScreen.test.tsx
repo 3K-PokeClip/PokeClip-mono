@@ -40,6 +40,43 @@ describe('VodListScreen — 행 상태', () => {
     expect(within(row).queryByRole('link')).toBeNull();
   });
 
+  it('끝난 지 오래됐고 녹화가 없다고 확인된 방송은 「방금 종료」가 아니라 녹화 없음이고, 카드·채팅을 보러 열 수 있다(POK-254)', () => {
+    const endedAt = new Date(VOD_LIST_FIXTURE.now.getTime() - 2 * 60 * 60 * 1000).toISOString();
+    renderWithProviders(
+      <VodListScreen
+        broadcasts={[
+          {
+            streamId: 'old-1',
+            status: 'ended',
+            relation: 'OWNER',
+            startedAt: endedAt,
+            endedAt,
+            vodExpiresAt: null,
+          },
+        ]}
+        visuals={{
+          'old-1': {
+            title: '녹화 없는 방송',
+            durationSec: 60,
+            cardCount: 2,
+            recordingMissing: true,
+          },
+        }}
+        downloads={{}}
+        now={VOD_LIST_FIXTURE.now}
+      />,
+    );
+    const row = rowAt(0);
+
+    expect(within(row).queryByText(/방금 종료/)).toBeNull();
+    expect(within(row).getByText(/녹화 영상이 없어요/)).toBeInTheDocument();
+    expect(within(row).getByRole('link', { name: /녹화 없는 방송/ })).toHaveAttribute(
+      'href',
+      '/broadcast/vod/old-1',
+    );
+    expect(within(row).queryByRole('button', { name: /^풀 버전 다운로드/ })).toBeNull();
+  });
+
   it('받는 중인 행은 썸네일이 진행률로 덮이고 취소만 낸다', () => {
     renderWithProviders(<VodListScreen {...VOD_LIST_FIXTURE} />);
     const row = rowAt(1);
@@ -363,6 +400,54 @@ describe('VodListScreen — 서버 목록', () => {
     expect(cardCalls()).toBe(2);
   });
 
+  it('끝난 지 한 시간이 지났고 재생 서버에 녹화가 없으면 녹화 없음이다. 재생 서버가 없으면 「방금」만 뗀다(POK-254)', async () => {
+    const endedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    const list = () =>
+      jsonResponse(200, {
+        broadcasts: [
+          {
+            streamId: 'old-stream',
+            status: 'ended',
+            relation: 'OWNER',
+            startedAt: endedAt,
+            endedAt,
+            vodExpiresAt: null,
+          },
+        ],
+        nextCursor: null,
+      });
+
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'http://pb.test');
+    vi.resetModules();
+    const withPlayback = await import('./VodListScreen');
+    const providers = await import('@/test/testProviders');
+    stubFetch((url) => {
+      if (url.startsWith('http://pb.test/list')) return jsonResponse(200, []);
+      if (url.startsWith('/api/clip/broadcasts?')) return list();
+      return jsonResponse(200, { cards: [], nextCursor: null });
+    });
+    const first = providers.renderWithProviders(<withPlayback.VodListScreen />);
+    expect(await screen.findByText(/녹화 영상이 없어요/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /old-stream/ })).toBeInTheDocument();
+    first.unmount();
+
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', '');
+    vi.resetModules();
+    const noPlayback = await import('./VodListScreen');
+    const providers2 = await import('@/test/testProviders');
+    stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?')
+        ? list()
+        : jsonResponse(200, { cards: [], nextCursor: null }),
+    );
+    providers2.renderWithProviders(<noPlayback.VodListScreen />);
+    expect(await screen.findByText(/· VOD 준비 중$/)).toBeInTheDocument();
+    expect(screen.queryByText(/방금 종료/)).toBeNull();
+    expect(screen.queryByText(/녹화 영상이 없어요/)).toBeNull();
+    expect(screen.queryByRole('link', { name: /old-stream/ })).toBeNull();
+    vi.unstubAllEnvs();
+  });
+
   it('녹화 없음은 굳히지 않는다 — 방송 직후 늦게 생긴 녹화를 다음 주기에 알아본다', async () => {
     // 한 번 없던 녹화를 영구히 기억하면 녹화가 생겨도 이 탭은 계속 준비 중이다(PR #200 codex)
     vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'http://pb.test');
@@ -370,13 +455,14 @@ describe('VodListScreen — 서버 목록', () => {
     const { VodListScreen: Fresh } = await import('./VodListScreen');
     const { renderWithProviders: renderFresh } = await import('@/test/testProviders');
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    // 방금 끝난 방송이어야 한다: 한 시간이 지났으면 「녹화 없음」으로 접혀 그것대로 열린다(POK-254)
+    const endedMs = Date.now() - 10 * 60 * 1000;
+    const startedAt = new Date(endedMs - 3_600_000).toISOString();
+    const endedAt = new Date(endedMs).toISOString();
     let recorded = false;
     stubFetch((url) => {
       if (url.startsWith('http://pb.test/list'))
-        return jsonResponse(
-          200,
-          recorded ? [{ start: '2026-09-20T10:00:00Z', duration: 3600 }] : [],
-        );
+        return jsonResponse(200, recorded ? [{ start: startedAt, duration: 3600 }] : []);
       if (url.startsWith('/api/clip/broadcasts?'))
         return jsonResponse(200, {
           broadcasts: [
@@ -384,8 +470,8 @@ describe('VodListScreen — 서버 목록', () => {
               streamId: 'rec-stream',
               status: 'ended',
               relation: 'OWNER',
-              startedAt: '2026-09-20T10:00:00Z',
-              endedAt: '2026-09-20T11:00:00Z',
+              startedAt,
+              endedAt,
               vodExpiresAt: null,
             },
           ],
@@ -399,12 +485,15 @@ describe('VodListScreen — 서버 목록', () => {
       await vi.advanceTimersByTimeAsync(100);
     });
     expect(screen.queryByRole('link', { name: /rec-stream/ })).toBeNull();
+    expect(screen.getByText('방금 종료 · VOD 준비 중 · 준비되면 알려드릴게요')).toBeInTheDocument();
 
     recorded = true;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(screen.getByRole('link', { name: /rec-stream/ })).toBeInTheDocument();
+    // 「녹화 없음」도 열리므로 다시 보기 가능(받기 단추)으로 가른다
+    expect(screen.getByRole('button', { name: /^풀 버전 다운로드/ })).toBeInTheDocument();
     vi.unstubAllEnvs();
   });
 });

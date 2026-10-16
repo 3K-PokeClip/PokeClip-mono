@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/api/client';
 import { broadcastTitle } from '@/api/clipEditor';
+import { ddayFor, isJustEnded } from '@/features/broadcast/vod/vodListView';
 import {
   fetchAllBroadcasts,
   fetchAllJumpCards,
@@ -47,13 +48,15 @@ export interface LiveNow {
   thumbnailUrl?: string | null;
 }
 
-export type VodBadge = { kind: 'preparing' } | { kind: 'dday'; label: string };
+export type VodBadge =
+  { kind: 'preparing' } | { kind: 'dday'; label: string } | { kind: 'expired' };
 
 export interface HomeVod {
   id: string;
   title: string;
   meta: string;
-  href: string;
+  /** 보관이 끝난 방송은 열 것이 없어 null(지난 방송 목록과 같다, POK-254) */
+  href: string | null;
   badge?: VodBadge;
   duration?: string;
   /** 가장 크게 터진 장면 사진(POK-277). 없으면 자리표시 */
@@ -262,8 +265,13 @@ async function loadHome(now: number): Promise<Loaded | null> {
       `카드 ${cardCount}개`,
     ];
     let badge: VodBadge | undefined;
-    if (b.status === 'ended') badge = { kind: 'preparing' };
-    else if (b.vodExpiresAt && Date.parse(b.vodExpiresAt) > now) {
+    // 지난 방송 목록과 같은 규칙: 만료가 먼저고, 「준비 중」은 끝난 지 한 시간 안만이다(POK-254). 그 뒤에는 녹화가 없어도
+    // 지난 방송 화면에서 카드·채팅을 볼 수 있어 그대로 연다
+    const expired = ddayFor(b.vodExpiresAt, new Date(now)).kind === 'expired';
+    if (expired) badge = { kind: 'expired' };
+    else if (b.status === 'ended') {
+      if (isJustEnded(b.endedAt, new Date(now))) badge = { kind: 'preparing' };
+    } else if (b.vodExpiresAt && Date.parse(b.vodExpiresAt) > now) {
       const d = daysLeft(b.vodExpiresAt, now);
       if (d <= EXPIRING_WINDOW_DAYS) {
         badge = { kind: 'dday', label: `D-${d}` };
@@ -278,7 +286,7 @@ async function loadHome(now: number): Promise<Loaded | null> {
       id: b.streamId,
       title: broadcastTitle(b),
       meta: metaParts.join(' · '),
-      href: `/broadcast/vod/${encodeURIComponent(b.streamId)}`,
+      href: expired ? null : `/broadcast/vod/${encodeURIComponent(b.streamId)}`,
       badge,
       duration,
       thumbnailUrl: b.thumbnailUrl ?? null,
