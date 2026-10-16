@@ -40,13 +40,17 @@ async function askLiveStreamId(): Promise<string | null> {
 /**
  * 지금 볼 방송 번호. 빈 문자열은 「방송 중인 것이 없다」, null은 「지금은 모른다」(서버·네트워크 오류)다.
  * 오류를 빈 문자열로 접으면 방송 중에 clip이 잠깐 재시작해도 화면이 꺼짐으로 바뀐다(POK-251 리뷰).
+ * @param fromAddress 주소(지난 방송 경로·?stream=)를 먼저 본다. 주소를 Next 값으로 따로 읽는 쪽은 false로 「방송 중인 것」만
+ *   묻는다: 다른 화면에서 넘어온 직후 주소창(window.location)은 아직 옛 주소다(POK-254)
  */
-export function resolveLiveStreamId(fresh = false): Promise<string | null> {
+export function resolveLiveStreamId(fresh = false, fromAddress = true): Promise<string | null> {
   if (fresh) cached = null;
-  const fromPath = vodStreamIdFromPath();
-  if (fromPath) return Promise.resolve(fromPath);
-  const q = new URLSearchParams(window.location.search).get('stream');
-  if (q) return Promise.resolve(q);
+  if (fromAddress) {
+    const fromPath = vodStreamIdFromPath();
+    if (fromPath) return Promise.resolve(fromPath);
+    const q = new URLSearchParams(window.location.search).get('stream');
+    if (q) return Promise.resolve(q);
+  }
   if (cached) return cached;
   const mine = askLiveStreamId();
   cached = mine;
