@@ -5,13 +5,14 @@
 #
 # PATH 를 가짜 aws 디렉터리 하나로 두고(스크립트가 aws 밖의 외부 명령을 부르면
 # 실패한다), AWS 프로필 · 키 환경을 지운 하위 셸에서 스크립트를 돌린다. 사례마다
-# TMPDIR 은 빈 디렉터리로 주고, 로캘은 UTF-8 로 고정한다(없으면 skip). 가짜
+# TMPDIR · HOME 은 빈 디렉터리로 주고, 로캘은 UTF-8 로 고정한다(없으면 skip). 가짜
 # aws 는 aws-cli 2.36.7 처럼 값을 받고(fakebin/aws 머리 주석), 받은 인자 · 환경 ·
 # 값을 사례 디렉터리에 적는다. 시험은 인자(비밀 이름 · 값 넘기는 법)와 받은 값을
 # 대조하고, 값이 가짜 aws 의 인자 · 환경, 스크립트의 표준 출력 · 표준 오류, 사례
-# 디렉터리의 다른 파일 어디에도 없는지 본다. 거부 사례에서는 aws 호출이 0회인지
-# 본다. 추적(bash -x · SHELLOPTS)이나 allexport 를 켠 호출도 값을 내지 않는지
-# 본다.
+# 디렉터리의 다른 파일 어디에도 없는지 본다. 거부 사례에서는 aws 호출이 0회이고
+# 표준 오류가 거부 한 줄뿐인지 본다. 추적(bash -x · SHELLOPTS)이나 allexport 를
+# 켠 호출도 값을 내지 않는지 본다. 사례 밖으로 쓰는 길(파일 대상 리다이렉션 ·
+# 다른 명령 · 셸)은 소스로 본다.
 #
 # 실물 CLI 계약: PATH 에 진짜 aws 가 있으면 가짜 자격 · 빈 설정 · 격리 HOME ·
 # 닫힌 로컬 주소(AWS_ENDPOINT_URL=http://127.0.0.1:9)로 스크립트를 끝까지 돌려,
@@ -67,7 +68,7 @@ EXPECTED_ARGV_HEAD+=' --output json --no-cli-auto-prompt --secret-id'
 readonly EXPECTED_ARGV_HEAD
 readonly EXPECTED_ARGV_TAIL='--secret-string file:///dev/stdin'
 # 사례 수(ok · skip 줄의 수). 사례를 더하거나 빼면 함께 고친다.
-readonly EXPECTED_CASES=45
+readonly EXPECTED_CASES=47
 
 failures=0
 passes=0
@@ -79,6 +80,9 @@ input=""
 out=""
 err=""
 status=0
+# code_only_line 의 상태(줄을 넘어 이어짐)와 결과.
+code_stack=""
+code_line=""
 
 #######################################
 # 임시 디렉터리 뿌리를 지운다(EXIT 트랩 — INT · TERM 도 exit 로 여기 온다).
@@ -128,8 +132,8 @@ skip() {
 }
 
 #######################################
-# 사례 디렉터리(입력 in/ · 가짜 aws 기록 aws/ · 빈 TMPDIR tmp/)를 새로 만든다.
-# 못 만들면 실패로 센다.
+# 사례 디렉터리(입력 in/ · 가짜 aws 기록 aws/ · 빈 TMPDIR tmp/ · 빈 HOME
+# home/)를 새로 만든다. 못 만들면 실패로 센다.
 # Globals:
 #   tmp_root, case_dir
 # Returns:
@@ -137,7 +141,8 @@ skip() {
 #######################################
 new_case() {
   if case_dir="$(mktemp -d "${tmp_root}/case.XXXXXX")" &&
-    mkdir -- "${case_dir}/in" "${case_dir}/aws" "${case_dir}/tmp"; then
+    mkdir -- "${case_dir}/in" "${case_dir}/aws" "${case_dir}/tmp" \
+      "${case_dir}/home"; then
     return 0
   fi
   fail "사례 디렉터리를 만들지 못함"
@@ -168,13 +173,13 @@ write_pem() {
 
 #######################################
 # put-secret-from-file.sh 를 돌린다. AWS 자격 증명 환경을 지운 하위 셸에서,
-# PATH 는 가짜 aws 디렉터리 하나 · TMPDIR 은 사례의 빈 디렉터리 · 로캘은
-# UTF-8(있으면) · 표준 입력은 /dev/null 로.
+# PATH 는 가짜 aws 디렉터리 하나 · TMPDIR 과 HOME 은 사례의 빈 디렉터리 ·
+# 로캘은 UTF-8(있으면) · 표준 입력은 /dev/null 로.
 # Globals:
 #   case_dir, out, err, status, utf8_locale
 # Arguments:
-#   셸 모드(plain · xtrace-flag · xtrace-env · allexport-env), 가짜 aws 모드,
-#   스크립트 인자들.
+#   셸 모드(plain · xtrace-flag · xtrace-env · allexport-env · no-aws — PATH
+#   에 aws 없음), 가짜 aws 모드, 스크립트 인자들.
 #######################################
 run_put_as() {
   local shell_mode="$1" mode="$2"
@@ -189,13 +194,14 @@ run_put_as() {
     export AWS_SHARED_CREDENTIALS_FILE=/nonexistent/put-secret-test
     export AWS_EC2_METADATA_DISABLED=true
     export FAKE_AWS_DIR="${case_dir}/aws" FAKE_AWS_MODE="${mode}"
-    export TMPDIR="${case_dir}/tmp"
+    export TMPDIR="${case_dir}/tmp" HOME="${case_dir}/home"
     if [[ -n "${utf8_locale}" ]]; then
       export LC_ALL="${utf8_locale}"
     fi
     export PATH="${FAKEBIN}"
     case "${shell_mode}" in
       xtrace-flag) exec "${BASH}" -x "${PUT}" "$@" ;;
+      no-aws) export PATH=/nonexistent/put-secret-test ;;
       xtrace-env)
         set -o xtrace
         export SHELLOPTS
@@ -275,12 +281,13 @@ expect_absent() {
 }
 
 #######################################
-# 실행 뒤 남은 것을 본다: 사례 TMPDIR 이 비었는지, 값 표지가 든 파일이 허용
-# 목록(입력 in/value · 가짜 aws 가 받은 값 aws/stdin · 기대값 expected)뿐인지.
+# 실행 뒤 남은 것을 본다: 사례 TMPDIR · HOME 이 비었는지, 값 표지가 든 파일이
+# 허용 목록(입력 in/value · 가짜 aws 가 받은 값 aws/stdin · 기대값
+# expected)뿐인지.
 # Globals:
 #   case_dir
 # Arguments:
-#   사례 이름, 값 표지(비면 TMPDIR 만 봄).
+#   사례 이름, 값 표지(비면 TMPDIR · HOME 만 봄).
 # Returns:
 #   어긋나면 1.
 #######################################
@@ -288,6 +295,10 @@ expect_no_leftovers() {
   local name="$1" marker="$2" file
   if [[ -n "$(ls -A "${case_dir}/tmp")" ]]; then
     fail "${name}: TMPDIR 에 파일이 남음"
+    return 1
+  fi
+  if [[ -n "$(ls -A "${case_dir}/home")" ]]; then
+    fail "${name}: HOME 에 파일이 남음"
     return 1
   fi
   [[ -n "${marker}" ]] || return 0
@@ -319,11 +330,13 @@ expect_no_violation() {
 }
 
 #######################################
-# 입력을 넣기 전에 거부하는지 본다: 종료 3 · 이유 · aws 호출 0 · 출력에 값 없음.
+# 입력을 넣기 전에 거부하는지 본다: 종료 3 · 표준 오류가 거부 한 줄뿐 · aws
+# 호출 0 · 출력에 값 없음. 이유를 완전한 문자열로 대조해, 이유에 값 조각이
+# 덧붙으면 잡는다.
 # Globals:
 #   input, out, err, status
 # Arguments:
-#   사례 이름, 종류, 표준 오류에 나와야 할 이유(부분 문자열), 값 표지.
+#   사례 이름, 종류, 거부 이유(「SECRET PUT REJECTED: 」 뒤 전체), 값 표지.
 #######################################
 expect_rejected() {
   local name="$1" kind="$2" reason="$3" marker="$4"
@@ -332,8 +345,9 @@ expect_rejected() {
     fail "${name}: 종료 ${EXIT_REJECTED} 를 기대했으나 ${status} — ${err}"
     return
   fi
-  if [[ "${err}" != *"SECRET PUT REJECTED: "*"${reason}"* ]]; then
-    fail "${name}: 이유 「${reason}」 가 없음 — ${err}"
+  if [[ "${err}" != "SECRET PUT REJECTED: ${reason}" ]]; then
+    fail "${name}: 표준 오류가 「SECRET PUT REJECTED: ${reason}」 한 줄이" \
+      "아님 — ${err}"
     return
   fi
   if [[ "$(aws_calls)" -ne 0 || -n "${out}" ]]; then
@@ -368,9 +382,10 @@ expect_usage() {
 
 #######################################
 # 성공 경로를 본다: 종료 0 · 이름 + VersionId 한 줄 · aws 1회 · 인자 · 받은
-# 값 · AWS_PAGER · 값과 계정 ID 0건 · 남은 것 없음.
+# 값 · AWS_PAGER · 고정한 로캘(LC_ALL — 시험 로캘이 실제로 걸렸는지) · 값과
+# 계정 ID 0건 · 남은 것 없음.
 # Globals:
-#   case_dir, input, out, err, status
+#   case_dir, input, out, err, status, utf8_locale
 # Arguments:
 #   사례 이름, 종류, 기대값이 든 파일, 값 표지.
 #######################################
@@ -399,6 +414,11 @@ expect_put() {
   env=$'\n'"$(contents_of "${case_dir}/aws/env")"$'\n'
   if [[ "${env}" != *$'\nAWS_PAGER=\n'* ]]; then
     fail "${name}: aws 환경에 빈 AWS_PAGER 가 없음"
+    return
+  fi
+  if [[ -n "${utf8_locale}" &&
+    "${env}" != *$'\n'"LC_ALL=${utf8_locale}"$'\n'* ]]; then
+    fail "${name}: aws 환경에 LC_ALL=${utf8_locale} 가 없음(로캘 고정 안 됨)"
     return
   fi
   if ! cmp -s -- "${case_dir}/aws/stdin" "${expected}"; then
@@ -483,33 +503,37 @@ test_usage() {
 test_file_checks() {
   new_case || return
   input="${case_dir}/in/missing"
-  expect_rejected missing-file cdn-secret "파일이 없음" ""
+  expect_rejected missing-file cdn-secret "파일이 없음: ${input}" ""
   new_case || return
   input="${case_dir}/in"
-  expect_rejected directory cdn-secret "일반 파일이 아님" ""
+  expect_rejected directory cdn-secret "일반 파일이 아님: ${input}" ""
   if [[ "$(id -u)" -ne 0 ]]; then
     new_case || return
     write_input '%s\n' "${ONE_LINE_VALUE}"
     chmod 000 "${input}"
-    expect_rejected unreadable cdn-secret "읽을 수 없음" "${ONE_LINE_MARKER}"
+    expect_rejected unreadable cdn-secret "읽을 수 없음: ${input}" \
+      "${ONE_LINE_MARKER}"
   else
     skip "unreadable(root 는 권한을 무시)"
   fi
   new_case || return
   write_input ''
-  expect_rejected empty-file signing-key "빈 파일" ""
+  expect_rejected empty-file signing-key "빈 파일: ${input}" ""
   new_case || return
   write_input ' \n\t\n'
-  expect_rejected whitespace-only cdn-secret "공백만" ""
+  expect_rejected whitespace-only cdn-secret "공백만 있음: ${input}" ""
   new_case || return
   write_input 'FakeNul\0Tail\n'
-  expect_rejected nul-byte cdn-secret "NUL" "FakeNul"
+  expect_rejected nul-byte cdn-secret "NUL 바이트가 있음: ${input}" "FakeNul"
 }
 
 #######################################
 # 서명 키: 머리 줄 PKCS#8 · 꼬리 줄 PKCS#8 만. 파일 내용 그대로 넣는다.
 #######################################
 test_signing_key() {
+  local bad_footer="끝 줄이 ${PKCS8_END} 가 아님"
+  local bad_header="첫 줄이 ${PKCS8_BEGIN} 가 아님"
+  local bad_chars="서명 키에 제어 문자 · ASCII 밖 문자가 있음(CRLF 포함)"
   new_case || return
   write_pem "${PKCS8_BEGIN}" "${PKCS8_END}"
   expect_put pkcs8 signing-key "${input}" "${FAKE_KEY_BODY}"
@@ -518,35 +542,42 @@ test_signing_key() {
   expect_put pkcs8-no-final-newline signing-key "${input}" "${FAKE_KEY_BODY}"
   new_case || return
   write_pem "${RSA_BEGIN}" "${RSA_END}"
-  expect_rejected rsa signing-key "PKCS#1" "${FAKE_KEY_BODY}"
+  expect_rejected rsa signing-key \
+    "PKCS#1(BEGIN RSA) 거부 — PKCS#8(BEGIN PRIVATE KEY)만" "${FAKE_KEY_BODY}"
   new_case || return
   write_pem "${ENC_BEGIN}" "${ENC_END}"
-  expect_rejected encrypted signing-key "암호화된" "${FAKE_KEY_BODY}"
+  expect_rejected encrypted signing-key \
+    "암호화된 PKCS#8 거부 — 암호 없는 PKCS#8 만" "${FAKE_KEY_BODY}"
   new_case || return
   write_pem "${PKCS8_BEGIN}" "${RSA_END}"
-  expect_rejected wrong-footer signing-key "끝 줄" "${FAKE_KEY_BODY}"
+  expect_rejected wrong-footer signing-key "${bad_footer}" "${FAKE_KEY_BODY}"
   new_case || return
   write_input '%s\n%s\n%s\nextra\n' "${PKCS8_BEGIN}" "${FAKE_KEY_BODY}" \
     "${PKCS8_END}"
-  expect_rejected trailing-text signing-key "끝 줄" "${FAKE_KEY_BODY}"
+  expect_rejected trailing-text signing-key "${bad_footer}" "${FAKE_KEY_BODY}"
   new_case || return
   write_input '%s\n' "${PKCS8_BEGIN}"
-  expect_rejected header-only signing-key "끝 줄" "${PKCS8_BEGIN}"
+  expect_rejected header-only signing-key "${bad_footer}" "${PKCS8_BEGIN}"
   new_case || return
   write_input '%s\r\n%s\r\n%s\r\n' "${PKCS8_BEGIN}" "${FAKE_KEY_BODY}" \
     "${PKCS8_END}"
-  expect_rejected pem-crlf signing-key "제어 문자" "${FAKE_KEY_BODY}"
+  expect_rejected pem-crlf signing-key "${bad_chars}" "${FAKE_KEY_BODY}"
   new_case || return
   write_input '%s\n\t%s\n%s\n' "${PKCS8_BEGIN}" "${FAKE_KEY_BODY}" \
     "${PKCS8_END}"
-  expect_rejected pem-tab signing-key "제어 문자" "${FAKE_KEY_BODY}"
+  expect_rejected pem-tab signing-key "${bad_chars}" "${FAKE_KEY_BODY}"
   new_case || return
   write_input '%s\n%s\303\251\n%s\n' "${PKCS8_BEGIN}" "${FAKE_KEY_BODY}" \
     "${PKCS8_END}"
-  expect_rejected pem-non-ascii signing-key "ASCII 밖" "${FAKE_KEY_BODY}"
+  expect_rejected pem-non-ascii signing-key "${bad_chars}" "${FAKE_KEY_BODY}"
   new_case || return
   write_pem "${PUBLIC_BEGIN}" "${PUBLIC_END}"
-  expect_rejected public-key signing-key "첫 줄" "${FAKE_KEY_BODY}"
+  expect_rejected public-key signing-key "${bad_header}" "${FAKE_KEY_BODY}"
+  # 머리 줄이 빠진 PEM — 첫 줄이 키 본문이라, 이유에 첫 줄을 넣으면 값이
+  # 나간다.
+  new_case || return
+  write_input '%s\n%s\n' "${FAKE_KEY_BODY}" "${PKCS8_END}"
+  expect_rejected pem-no-header signing-key "${bad_header}" "${FAKE_KEY_BODY}"
 }
 
 #######################################
@@ -555,6 +586,8 @@ test_signing_key() {
 #######################################
 test_one_line() {
   local expected
+  local multi_line="여러 줄 거부(끝 줄바꿈 하나만 뗌)"
+  local blank="공백 · 탭 거부" control="제어 문자 거부(CR 포함)"
   new_case || return
   expected="${case_dir}/expected"
   printf '%s' "${ONE_LINE_VALUE}" >"${expected}"
@@ -568,25 +601,25 @@ test_one_line() {
     "${ONE_LINE_MARKER}"
   new_case || return
   write_input 'FakeFirst\nFakeSecond\n'
-  expect_rejected multi-line cdn-secret "여러 줄" "FakeSecond"
+  expect_rejected multi-line cdn-secret "${multi_line}" "FakeSecond"
   new_case || return
   write_input 'FakeTwoNewlines\n\n'
-  expect_rejected two-final-newlines test-stream-key "여러 줄" "FakeTwo"
+  expect_rejected two-final-newlines test-stream-key "${multi_line}" "FakeTwo"
   new_case || return
   write_input 'Fake Space\n'
-  expect_rejected inner-space cdn-secret "공백" "Fake Space"
+  expect_rejected inner-space cdn-secret "${blank}" "Fake Space"
   new_case || return
   write_input 'Fake\tTab\n'
-  expect_rejected inner-tab cdn-secret "공백" "Tab"
+  expect_rejected inner-tab cdn-secret "${blank}" "Tab"
   new_case || return
   write_input 'FakeCarriage\r\n'
-  expect_rejected carriage-return cdn-secret "제어 문자" "FakeCarriage"
+  expect_rejected carriage-return cdn-secret "${control}" "FakeCarriage"
   new_case || return
   write_input 'Fake\001Ctrl\n'
-  expect_rejected control-char test-stream-key "제어 문자" "Ctrl"
+  expect_rejected control-char test-stream-key "${control}" "Ctrl"
   new_case || return
   write_input 'FakeNonAscii\303\251\n'
-  expect_rejected non-ascii cdn-secret "ASCII" "FakeNonAscii"
+  expect_rejected non-ascii cdn-secret "ASCII 밖 문자 거부" "FakeNonAscii"
 }
 
 #######################################
@@ -622,24 +655,22 @@ test_aws_failures() {
 }
 
 #######################################
-# PATH 에 aws 가 없으면 검사를 통과한 뒤 실패(종료 5)하고 값은 안 나온다.
+# PATH 에 aws 가 없으면 검사를 통과한 뒤 실패(종료 5)하고 값은 안 나온다. 다른
+# 사례와 같이 격리한 셸(run_put_as)에서 돌리고 남은 것도 본다.
 # Globals:
-#   case_dir, input, err, status
+#   input, err, status
 #######################################
 test_aws_missing() {
   new_case || return
   write_input '%s\n' "${ONE_LINE_VALUE}"
-  PATH=/nonexistent/put-secret-test "${BASH}" "${PUT}" cdn-secret "${input}" \
-    </dev/null >"${case_dir}/stdout" 2>"${case_dir}/stderr"
-  status=$?
-  out="$(<"${case_dir}/stdout")"
-  err="$(<"${case_dir}/stderr")"
+  run_put_as no-aws ok cdn-secret "${input}"
   if [[ "${status}" -ne "${EXIT_FAILED}" || "${err}" != *"aws CLI"* ]]; then
     fail "aws-missing: 종료 ${EXIT_FAILED} · aws CLI 안내를 기대했으나" \
       "${status} — ${err}"
     return
   fi
   expect_absent aws-missing "${ONE_LINE_MARKER}" || return
+  expect_no_leftovers aws-missing "${ONE_LINE_MARKER}" || return
   pass "aws-missing → 실패"
 }
 
@@ -672,7 +703,10 @@ test_real_cli_contract() {
   fi
   new_case || return
   write_input '%s\n' "${ONE_LINE_VALUE}"
-  mkdir -- "${case_dir}/home"
+  # 진짜 aws 는 HOME 에 세션 캐시(.aws/cli/cache)를 쓴다. 사례 HOME(home/ —
+  # 비었는지 봄)과 따로 두고, 그 안의 값 표지는 expect_no_leftovers 의 grep 이
+  # 본다.
+  mkdir -- "${case_dir}/cli-home"
   # 환경은 이 하위 셸 안에서만 바꾼다(의도).
   # shellcheck disable=SC2030,SC2031
   (
@@ -683,7 +717,7 @@ test_real_cli_contract() {
       esac
     done
     export NO_PROXY='*' no_proxy='*'
-    export HOME="${case_dir}/home" TMPDIR="${case_dir}/tmp"
+    export HOME="${case_dir}/cli-home" TMPDIR="${case_dir}/tmp"
     export AWS_ACCESS_KEY_ID=testing AWS_SECRET_ACCESS_KEY=testing
     export AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null
     export AWS_EC2_METADATA_DISABLED=true AWS_MAX_ATTEMPTS=1
@@ -732,26 +766,129 @@ test_locale() {
 }
 
 #######################################
-# 스크립트가 절대 경로나 jq 로 외부 명령을 부르지 않는지 소스로 본다 — 절대
-# 경로는 PATH 를 fakebin 하나로 둔 시험을 비켜 간다. 주석 · shebang 줄은
-# 보지 않는다.
+# 스크립트가 aws 밖의 다른 프로세스에 값을 넘길 길을 소스로 본다. 절대 경로
+# (/usr/ · /bin/)와 jq 는 PATH 를 fakebin 하나로 둔 시험을 비켜 가고, command
+# -p · $BASH · ${BASH} · eval · exec · env 는 PATH 밖의 명령이나 다른 셸을
+# 부른다. 주석 · shebang 줄은 보지 않는다.
 #######################################
-test_no_external_paths() {
-  local line number=0 comment_re='^[[:space:]]*#'
+test_no_external_commands() {
+  local line number=0 comment_re='^[[:space:]]*#' pattern
+  # 글자 그대로 찾는 패턴이다(펼치지 않음).
+  # shellcheck disable=SC2016
+  local patterns=('/usr/' '/bin/' 'jq' 'command -p' '${BASH}' '$BASH' 'eval'
+    'exec ' 'env ')
   if [[ ! -r "${PUT}" ]]; then
-    fail "no-external-paths: 스크립트를 읽을 수 없음 — ${PUT}"
+    fail "no-external-commands: 스크립트를 읽을 수 없음 — ${PUT}"
     return
   fi
   while IFS= read -r line; do
     number=$((number + 1))
     [[ "${line}" =~ ${comment_re} ]] && continue
-    if [[ "${line}" == */usr/* || "${line}" == */bin/* ||
-      "${line}" == *jq* ]]; then
-      fail "no-external-paths: ${number}행에 /usr/ · /bin/ · jq"
+    for pattern in "${patterns[@]}"; do
+      if [[ "${line}" == *"${pattern}"* ]]; then
+        fail "no-external-commands: ${number}행에 「${pattern}」"
+        return
+      fi
+    done
+  done <"${PUT}"
+  pass "no-external-commands → 0건"
+}
+
+#######################################
+# 소스 한 줄에서 따옴표 문자열과 주석을 빼고 코드만 code_line 에 담는다(문자열
+# 자리는 Q 한 글자). 줄을 넘는 문자열 · 명령 치환은 code_stack 으로 이어
+# 본다. 맨 끝 글자가 지금 자리다 — 비면 바깥 코드, p 괄호, m 명령 치환 $( ),
+# d 겹따옴표, s 홑따옴표, a $'…'. 바깥 코드의 짝 없는 ) (case 패턴)는 그냥
+# 둔다. here-doc 은 모른다(no-heredoc 이 따로 막음).
+# Globals:
+#   code_stack, code_line
+# Arguments:
+#   소스 한 줄.
+#######################################
+code_only_line() {
+  local line="$1" i ch pair top prev=' '
+  code_line=""
+  for ((i = 0; i < ${#line}; i++)); do
+    ch="${line:i:1}"
+    pair="${line:i:2}"
+    top="${code_stack: -1}"
+    if [[ "${top}" == s ]]; then
+      [[ "${ch}" != "'" ]] || code_stack="${code_stack%?}"
+    elif [[ "${top}" == [ad] ]]; then
+      if [[ "${ch}" == "\\" ]]; then
+        i=$((i + 1))
+      elif [[ "${top}${ch}" == "a'" || "${top}${ch}" == 'd"' ]]; then
+        code_stack="${code_stack%?}"
+      elif [[ "${top}${pair}" == "d\$(" ]]; then
+        code_stack+=m
+        code_line+="\$("
+        i=$((i + 1))
+      fi
+    elif [[ "${ch}" == '#' && "${prev}" == [[:space:]\;\&\|\(\)] ]]; then
+      break
+    elif [[ "${ch}" == "\\" ]]; then
+      code_line+=Q
+      i=$((i + 1))
+    elif [[ "${pair}" == "\$'" ]]; then
+      code_stack+=a
+      code_line+=Q
+      i=$((i + 1))
+    elif [[ "${ch}" == "'" ]]; then
+      code_stack+=s
+      code_line+=Q
+    elif [[ "${ch}" == '"' ]]; then
+      code_stack+=d
+      code_line+=Q
+    elif [[ "${pair}" == "\$(" ]]; then
+      code_stack+=m
+      code_line+="\$("
+      i=$((i + 1))
+    elif [[ "${ch}" == '(' ]]; then
+      code_stack+=p
+      code_line+='('
+    else
+      [[ "${ch}" != ')' || "${top}" != [pm] ]] || code_stack="${code_stack%?}"
+      code_line+="${ch}"
+    fi
+    prev="${ch}"
+  done
+}
+
+#######################################
+# 스크립트가 파일에 쓰지 않는지 소스로 본다 — 코드(따옴표 문자열 · 주석을 뺀
+# 것)의 > · >> 대상은 fd 복제(&1 · &2)와 /dev/null 만 허용한다. 리터럴
+# /tmp · "${HOME}/…" 같은 파일 대상은 사례 디렉터리 밖에 남을 수 있어 실행
+# 뒤 검사로는 다 보지 못한다. 문자열 · 괄호 짝이 끝까지 맞지 않으면(검사기가
+# 코드를 문자열로 잘못 읽었을 수 있음) 실패로 센다.
+# Globals:
+#   code_stack, code_line
+#######################################
+test_no_file_writes() {
+  local line number=0 rest
+  local allowed_re='^(.*[^0-9>])?[0-9]*>>?[[:space:]]*(&[12]|/dev/null)'
+  allowed_re+='([^[:alnum:]_./-].*)?$'
+  if [[ ! -r "${PUT}" ]]; then
+    fail "no-file-writes: 스크립트를 읽을 수 없음 — ${PUT}"
+    return
+  fi
+  code_stack=""
+  while IFS= read -r line; do
+    number=$((number + 1))
+    code_only_line "${line}"
+    rest="${code_line}"
+    while [[ "${rest}" =~ ${allowed_re} ]]; do
+      rest="${BASH_REMATCH[1]}${BASH_REMATCH[3]}"
+    done
+    if [[ "${rest}" == *'>'* ]]; then
+      fail "no-file-writes: ${number}행 — > · >> 대상이 &1 · &2 · /dev/null 밖"
       return
     fi
   done <"${PUT}"
-  pass "no-external-paths → 0건"
+  if [[ -n "${code_stack}" ]]; then
+    fail "no-file-writes: 소스 끝에서 문자열 · 괄호 짝이 남음(${code_stack})"
+    return
+  fi
+  pass "no-file-writes → 0건"
 }
 
 #######################################
@@ -800,7 +937,8 @@ main() {
   test_aws_failures
   test_real_cli_contract
   test_no_heredoc
-  test_no_external_paths
+  test_no_external_commands
+  test_no_file_writes
 
   remove_tmp_root
   if [[ -e "${tmp_root}" ]]; then
