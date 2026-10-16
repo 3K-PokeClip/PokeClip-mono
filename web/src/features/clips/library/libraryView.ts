@@ -12,16 +12,16 @@ import {
   PRIVACY_VIEWERS,
   PUBLIC_NOTIFY_NOTE,
 } from '@/features/clips/editor/uploadInfo';
-import type { ClipStatus, LibraryClip, LibraryRole } from './useLibraryMockState';
+import type { ClipStatus, LibraryClip } from './useLibraryMockState';
 
 // 시안 1g 보관함의 표시 규칙 — 상태가 배지·주 동작·보조 줄·칩·정렬로 어떻게 펼쳐지는지를
-// 렌더와 떼어 순수 함수로 둔다(vodListView 선례). 상태 7종 × 시점 2종의 조합은 jsdom을 거치지
+// 렌더와 떼어 순수 함수로 둔다(vodListView 선례). 상태별 조합은 jsdom을 거치지
 // 않고 표로 검사하는 편이 싸다.
 //
 // ⚠ 아래 Record 표들은 status 유니온이 늘면 타입으로 깨진다 — 화면이 조용히 빈 배지를 그리는
 // 대신 빌드가 멈춘다(highlightCardView 선례). Partial로 풀지 말 것.
 
-export type LibraryChip = 'all' | 'working' | 'ready' | 'rejected' | 'published';
+export type LibraryChip = 'all' | 'working' | 'ready' | 'published';
 export type LibrarySort = 'edited' | 'created' | 'expiry';
 
 export const SORT_OPTIONS: { value: LibrarySort; label: string }[] = [
@@ -48,8 +48,6 @@ export const STATUS_BADGE: Record<ClipStatus, { tone: StatusTone; label: string 
   uploading: { tone: 'point', label: '올리는 중' },
   checking: { tone: 'warning', label: '확인 필요' },
   uploadFailed: { tone: 'danger', label: '업로드 실패' },
-  pending: { tone: 'warning', label: '승인 대기' },
-  rejected: { tone: 'danger', label: '반려됨' },
   published: { tone: 'success', label: '업로드됨' },
   expired: { tone: 'success', label: '업로드됨' },
   failed: { tone: 'danger', label: '렌더 실패' },
@@ -73,16 +71,14 @@ const CHIP_LABEL: Record<LibraryChip, string> = {
   all: '전체',
   working: '작업 중',
   ready: '업로드 대기',
-  rejected: '반려됨',
   published: '발행됨',
 };
 
-const STREAMER_CHIPS: LibraryChip[] = ['all', 'working', 'ready', 'published'];
-const EDITOR_CHIPS: LibraryChip[] = ['all', 'working', 'ready', 'rejected', 'published'];
+const CHIPS: LibraryChip[] = ['all', 'working', 'ready', 'published'];
 
-/** 시점별 칩 행 — 반려됨 칩은 편집자(내가 고쳐야 할 것)에게만 있다(시안 1g ⑤) */
-export function chipsFor(role: LibraryRole): { value: LibraryChip; label: string }[] {
-  return (role === 'editor' ? EDITOR_CHIPS : STREAMER_CHIPS).map((value) => ({
+/** 칩 행 — 넷이다(승인 게이트가 없어 반려됨 칩이 없다) */
+export function chipsFor(): { value: LibraryChip; label: string }[] {
+  return CHIPS.map((value) => ({
     value,
     label: CHIP_LABEL[value],
   }));
@@ -90,10 +86,10 @@ export function chipsFor(role: LibraryRole): { value: LibraryChip; label: string
 
 /**
  * 편집본 하나가 속하는 칩. 칩은 전체를 분할한다 — 모든 편집본이 정확히 한 칩에 들어가
- * 칩 수의 합이 전체와 같다. 스트리머에겐 반려됨 칩이 없으므로 반려된 것도 작업 중이다.
+ * 칩 수의 합이 전체와 같다.
  * 진행 단계(POK-291): 만드는 중·올리는 중은 작업 중, 업로드 실패·확인 필요는 사람 손이 필요해 업로드 대기다.
  */
-export function chipOf(status: ClipStatus, role: LibraryRole): Exclude<LibraryChip, 'all'> {
+export function chipOf(status: ClipStatus): Exclude<LibraryChip, 'all'> {
   switch (status) {
     case 'ready':
     case 'uploadFailed':
@@ -102,41 +98,32 @@ export function chipOf(status: ClipStatus, role: LibraryRole): Exclude<LibraryCh
     case 'published':
     case 'expired':
       return 'published';
-    case 'rejected':
-      return role === 'editor' ? 'rejected' : 'working';
     case 'editing':
     case 'rendering':
     case 'uploading':
-    case 'pending':
     case 'failed':
       return 'working';
   }
 }
 
-export function countByChip(
-  clips: readonly LibraryClip[],
-  role: LibraryRole,
-  now: Date,
-): Record<LibraryChip, number> {
+export function countByChip(clips: readonly LibraryClip[], now: Date): Record<LibraryChip, number> {
   const counts: Record<LibraryChip, number> = {
     all: clips.length,
     working: 0,
     ready: 0,
-    rejected: 0,
     published: 0,
   };
-  for (const clip of clips) counts[chipOf(statusFor(clip, now), role)] += 1;
+  for (const clip of clips) counts[chipOf(statusFor(clip, now))] += 1;
   return counts;
 }
 
 export function filterByChip(
   clips: readonly LibraryClip[],
   chip: LibraryChip,
-  role: LibraryRole,
   now: Date,
 ): LibraryClip[] {
   if (chip === 'all') return [...clips];
-  return clips.filter((clip) => chipOf(statusFor(clip, now), role) === chip);
+  return clips.filter((clip) => chipOf(statusFor(clip, now)) === chip);
 }
 
 // ---------- 검색 · 정렬 ----------
@@ -207,9 +194,8 @@ export type PrimaryAction =
   | {
       kind: 'link';
       label: string;
-      href: '/clips/editor' | '/clips/approvals';
-      /** 승인 대기의 「이동만」은 soft — 여기서 무언가를 확정하는 버튼이 아니다(시안 1g ④) */
-      variant: 'solid' | 'soft';
+      href: '/clips/editor';
+      variant: 'solid';
     }
   /** href는 clip.youtubeUrl — 없으면 링크 대신 비활성 버튼을 그린다(LinkButton 규칙) */
   | { kind: 'external'; label: '유튜브 보기' }
@@ -218,23 +204,27 @@ export type PrimaryAction =
   /** 서버 일이 진행 중이라 누를 것이 없다: 만드는 중·올리는 중·확인 필요. 비활성 버튼으로 그린다 */
   | { kind: 'busy'; label: string };
 
-export type PanelNote = 'expired' | 'pending' | 'checking';
+export type PanelNote = 'expired' | 'checking';
 
 export interface DetailView {
   badge: { tone: StatusTone; label: string };
   primary: PrimaryAction;
-  /** 보조 줄의 편집 링크 — null이면 편집 잠금(승인 대기·반려·원본 만료·편집 중) */
+  /** 보조 줄의 편집 링크 — null이면 편집 잠금(원본 만료·편집 중) */
   edit: { label: '이어서 편집' | '새 버전으로 편집'; href: '/clips/editor' } | null;
   /** 렌더 실패는 받을 파일이 없다 */
   download: boolean;
   /**
-   * 제목 편집 잠금. 승인 대기는 안내문으로 「미리보기와 다운로드만」·「편집이 잠겨요」라고
-   * 말하므로 제목도 잠근다 — 잠갔다고 말해 놓고 고쳐지면 화면이 거짓말을 한다(ADR-044).
-   * 원본 만료·반려됨은 재편집만 막힐 뿐 이름은 바꿀 수 있으니 잠그지 않는다.
+   * 제목 편집 잠금. 진행 단계(만드는 중·올리는 중·확인 필요·업로드 실패)는 제목을 여기서 못 고치므로 잠근다 —
+   * 잠갔다고 말해 놓고 고쳐지면 화면이 거짓말을 한다(ADR-044).
+   * 원본 만료는 재편집만 막힐 뿐 이름은 바꿀 수 있으니 잠그지 않는다.
    */
   titleLocked: boolean;
+  /**
+   * 고친 제목이 저장되지 않고 이 화면에만 남는 초안인가(POK-254). 편집본에는 제목 칸이 없어 완성본에서 고친 제목은
+   * 올릴 때 실리는 것이 전부다: 새로 고침하면 사라진다고 입력 칸 아래에 알린다
+   */
+  titleIsDraft: boolean;
   note: PanelNote | null;
-  showRejection: boolean;
   /** 렌더 실패는 길이를 모른다 */
   showDuration: boolean;
 }
@@ -314,19 +304,18 @@ export function previousUploadsOf(entry: LibraryEntry | undefined): PreviousUplo
 const EDIT_CONTINUE = { label: '이어서 편집', href: '/clips/editor' } as const;
 const EDIT_NEW_VERSION = { label: '새 버전으로 편집', href: '/clips/editor' } as const;
 
-/** 시안 1g ④ 상태별 상세 패널 액션 7종. 시점이 가르는 칸은 업로드 대기·승인 대기의 라벨뿐이다 */
-export function detailViewFor(status: ClipStatus, role: LibraryRole): DetailView {
+/** 시안 1g ④ 상태별 상세 패널 액션 */
+export function detailViewFor(status: ClipStatus): DetailView {
   const badge = STATUS_BADGE[status];
   const base = {
     badge,
     edit: null,
     download: true,
     titleLocked: false,
+    titleIsDraft: false,
     note: null,
-    showRejection: false,
     showDuration: true,
   } satisfies Omit<DetailView, 'primary'>;
-  const editor = role === 'editor';
 
   switch (status) {
     case 'editing':
@@ -369,26 +358,8 @@ export function detailViewFor(status: ClipStatus, role: LibraryRole): DetailView
     case 'ready':
       return {
         ...base,
-        primary: { kind: 'action', label: editor ? '업로드 요청' : '업로드', action: 'upload' },
+        primary: { kind: 'action', label: '업로드', action: 'upload' },
         edit: EDIT_CONTINUE,
-      };
-    case 'pending':
-      return {
-        ...base,
-        primary: {
-          kind: 'link',
-          label: editor ? '내 요청 보기' : '승인 대기함에서 검토',
-          href: '/clips/approvals',
-          variant: 'soft',
-        },
-        titleLocked: true,
-        note: 'pending',
-      };
-    case 'rejected':
-      return {
-        ...base,
-        primary: { kind: 'link', label: '수정하기', href: '/clips/editor', variant: 'solid' },
-        showRejection: true,
       };
     case 'published':
       return {
@@ -425,15 +396,10 @@ export function uploadsFromIntent(entry: LibraryEntry): boolean {
 
 /**
  * 서버 줄을 시안 규칙(detailViewFor) 위에 얹는다(POK-111). 진행 단계(만드는 중·올리는 중·확인 필요·업로드 실패)는 이제
- * 제 화면 상태가 있어 detailViewFor가 정한다(POK-291). 서버 편집본은 승인 단계가 없어(편집자도 바로 올린다)
- * 「업로드 요청」이라 쓰면 거짓이 된다. 목업 줄은 시안 규칙 그대로 둔다.
+ * 제 화면 상태가 있어 detailViewFor가 정한다(POK-291). 여기서는 서버 줄만의 제목 잠금·초안 여부를 얹는다.
  */
-export function detailViewForClip(
-  clip: LibraryClip,
-  status: ClipStatus,
-  role: LibraryRole,
-): DetailView {
-  const view = detailViewFor(status, role);
+export function detailViewForClip(clip: LibraryClip, status: ClipStatus): DetailView {
+  const view = detailViewFor(status);
   const entry = clip.entry;
   if (entry === undefined) return view;
   // 올린 영상의 제목은 유튜브에 있다: 여기서 고쳐도 저장할 곳이 없어 바뀐 척만 한다
@@ -441,26 +407,27 @@ export function detailViewForClip(
   // 제목이 살아 있는 업로드에서 온 것이면(올린 뒤 새 판을 저장해 「편집 중」인 경우 포함) 고칠 곳이 없다:
   // 초안은 완성 편집본에만 남아 다음 읽기에 되돌아간다(PR #203 codex)
   const upload = entry.latestClip?.upload;
-  // 저장된 정보로 올리는 길이면 패널 제목은 실리지 않는다: 고쳐도 버려지니 잠근다
+  // 저장된 정보로 올리는 길이면 패널 제목은 실리지 않는다: 고쳐도 버려지니 잠근다.
+  // 편집 중·렌더 실패도 잠근다(POK-254): 편집본에는 제목 칸이 없어 고친 제목이 다음 읽기에 되돌아갔다. 그 제목은 영상 만들기
+  // 창에서 정한다
   const titleLocked =
-    view.titleLocked || (upload != null && upload.status !== 'failed') || uploadsFromIntent(entry);
-  return view.primary.kind === 'action' && view.primary.action === 'upload'
-    ? { ...view, titleLocked, primary: { ...view.primary, label: '업로드' } }
-    : { ...view, titleLocked };
+    view.titleLocked ||
+    entry.status === 'editing' ||
+    entry.status === 'failed' ||
+    (upload != null && upload.status !== 'failed') ||
+    uploadsFromIntent(entry);
+  // 남는 것은 완성본뿐이다: 고친 제목은 올릴 때 실리는 초안이다
+  const titleIsDraft = !titleLocked;
+  return { ...view, titleLocked, titleIsDraft };
 }
 
-/** 패널 안내 상자 문구 — 승인 대기는 시점마다 할 수 있는 일이 다르다 */
-export function noteText(note: PanelNote, role: LibraryRole): string {
+/** 패널 안내 상자 문구 */
+export function noteText(note: PanelNote): string {
   if (note === 'checking') {
     // 공개 범위를 고를 수 있게 되어(POK-291) 「비공개 영상」이라 못박지 않는다
     return '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 영상이 올라갔는지 확인해 주세요.';
   }
-  if (note === 'expired') {
-    return '원본 VOD가 만료되어 다시 편집할 수 없어요. 발행된 영상은 그대로 유지됩니다.';
-  }
-  return role === 'editor'
-    ? '승인 대기 중에는 편집이 잠겨요. 수정이 필요하면 승인 대기함 › 내 요청에서 취소한 뒤 편집하세요.'
-    : '승인 · 반려는 승인 대기함에서 처리해요. 여기서는 미리보기와 다운로드만 할 수 있어요.';
+  return '원본 VOD가 만료되어 다시 편집할 수 없어요. 발행된 영상은 그대로 유지됩니다.';
 }
 
 // ---------- 유튜브 업로드 (POK-111) ----------
@@ -634,36 +601,6 @@ export function displayTitle(clip: LibraryClip): string {
 export function ownerInitial(owner: LibraryClip['owner']): string {
   if (owner.me) return '나';
   return Array.from(owner.name)[0] ?? '';
-}
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const TIME_FORMAT = new Intl.DateTimeFormat('ko-KR', {
-  hour: '2-digit',
-  minute: '2-digit',
-  hour12: false,
-});
-const DATE_FORMAT = new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric' });
-
-/** 지역 달력의 날 번호 — 「오늘」「어제」는 사람이 보는 달력 기준이다 */
-function localDayIndex(date: Date): number {
-  return Math.floor((date.getTime() - date.getTimezoneOffset() * 60 * 1000) / DAY_MS);
-}
-
-/**
- * 반려 시각 → 「오늘 14:20」 · 「어제 21:32」 · 「8월 28일 21:32」.
- *
- * 읽을 수 없는 값은 `—`로 떨어뜨린다 — `Intl.DateTimeFormat.format`은 Invalid Date에
- * RangeError를 던지므로, 걸러 두지 않으면 서버가 빈 문자열 하나만 보내도 그 카드를 여는 순간
- * 보관함 전체가 에러 바운더리로 떨어진다(같은 파일 timeOf·remainingMs·durationLabel의 가드).
- */
-export function dayTimeLabel(iso: string, now: Date): string {
-  const at = new Date(iso);
-  if (!Number.isFinite(at.getTime())) return '—';
-  const diff = localDayIndex(now) - localDayIndex(at);
-  const time = TIME_FORMAT.format(at);
-  if (diff === 0) return `오늘 ${time}`;
-  if (diff === 1) return `어제 ${time}`;
-  return `${DATE_FORMAT.format(at)} ${time}`;
 }
 
 /**

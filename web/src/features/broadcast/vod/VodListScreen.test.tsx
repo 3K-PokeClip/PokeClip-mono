@@ -40,6 +40,43 @@ describe('VodListScreen — 행 상태', () => {
     expect(within(row).queryByRole('link')).toBeNull();
   });
 
+  it('끝난 지 오래됐고 녹화가 없다고 확인된 방송은 「방금 종료」가 아니라 녹화 없음이고, 카드·채팅을 보러 열 수 있다(POK-254)', () => {
+    const endedAt = new Date(VOD_LIST_FIXTURE.now.getTime() - 2 * 60 * 60 * 1000).toISOString();
+    renderWithProviders(
+      <VodListScreen
+        broadcasts={[
+          {
+            streamId: 'old-1',
+            status: 'ended',
+            relation: 'OWNER',
+            startedAt: endedAt,
+            endedAt,
+            vodExpiresAt: null,
+          },
+        ]}
+        visuals={{
+          'old-1': {
+            title: '녹화 없는 방송',
+            durationSec: 60,
+            cardCount: 2,
+            recordingMissing: true,
+          },
+        }}
+        downloads={{}}
+        now={VOD_LIST_FIXTURE.now}
+      />,
+    );
+    const row = rowAt(0);
+
+    expect(within(row).queryByText(/방금 종료/)).toBeNull();
+    expect(within(row).getByText(/녹화 영상이 없어요/)).toBeInTheDocument();
+    expect(within(row).getByRole('link', { name: /녹화 없는 방송/ })).toHaveAttribute(
+      'href',
+      '/broadcast/vod/old-1',
+    );
+    expect(within(row).queryByRole('button', { name: /^풀 버전 다운로드/ })).toBeNull();
+  });
+
   it('받는 중인 행은 썸네일이 진행률로 덮이고 취소만 낸다', () => {
     renderWithProviders(<VodListScreen {...VOD_LIST_FIXTURE} />);
     const row = rowAt(1);
@@ -328,7 +365,149 @@ describe('VodListScreen — 서버 목록', () => {
     expect(screen.queryByText('아직 지난 방송이 없어요')).toBeNull();
   });
 
-  it('방송마다 카드 수는 한 번만 센다 — 다시 읽을 때 전체 이력의 카드를 또 부르지 않는다', async () => {
+  it('카드 수는 낡으면 다시 센다: 끝난 지 한 시간 안이면 주기마다, 그 밖은 10분마다(POK-254)', async () => {
+    // 끝난 뒤에도 카드는 늦게 뜨거나 숨겨진다. 처음 잰 수를 영영 쓰면 목록이 실제와 갈린다
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+    const row = (streamId: string, endedAt: string) => ({
+      streamId,
+      status: 'vod_ready',
+      relation: 'OWNER',
+      startedAt: endedAt,
+      endedAt,
+      vodExpiresAt: null,
+      title: streamId,
+    });
+    const rows = [row('fresh', at(-10 * 60_000)), row('old', at(-3 * 86_400_000))];
+    let cards = [{ id: 1 }];
+    const spy = stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?')
+        ? jsonResponse(200, { broadcasts: rows, nextCursor: null })
+        : jsonResponse(200, { cards, nextCursor: null }),
+    );
+    const calls = (id: string) =>
+      spy.mock.calls.filter(([url]) => String(url).includes(`/${id}/jump-cards`)).length;
+    const countOf = (title: string) =>
+      within(screen.getByText(title).closest('li')!).getByText(/^카드 \d+개$/).textContent;
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect([calls('fresh'), calls('old')]).toEqual([1, 1]);
+
+    cards = [{ id: 1 }, { id: 2 }];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect([calls('fresh'), calls('old')]).toEqual([2, 1]);
+    expect(countOf('fresh')).toBe('카드 2개');
+    expect(countOf('old')).toBe('카드 1개');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+    });
+    expect(calls('old')).toBe(2);
+    expect(countOf('old')).toBe('카드 2개');
+  });
+
+  it('오래된 방송의 카드 수는 한 주기에 20개까지만 다시 센다: 처음 함께 센 것이 10분마다 한꺼번에 몰리지 않는다(리뷰 1라운드)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const endedAt = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const rows = Array.from({ length: 25 }, (_, i) => ({
+      streamId: `old-${i}`,
+      status: 'vod_ready',
+      relation: 'OWNER',
+      startedAt: endedAt,
+      endedAt,
+      vodExpiresAt: null,
+    }));
+    const spy = stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?')
+        ? jsonResponse(200, { broadcasts: rows, nextCursor: null })
+        : jsonResponse(200, { cards: [], nextCursor: null }),
+    );
+    const cardCalls = () =>
+      spy.mock.calls.filter(([url]) => String(url).includes('/jump-cards')).length;
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    // 처음 보는 방송은 다 센다
+    expect(cardCalls()).toBe(25);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+    });
+    expect(cardCalls()).toBe(45);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(cardCalls()).toBe(50);
+  });
+
+  it('다시 세는 차례는 가장 오래전에 센 방송부터라 뒤쪽 방송도 결국 센다: 방송이 많아도 앞쪽이 차례를 독차지하지 않는다(PR #256 codex)', async () => {
+    // 한 주기 20개 × 10분이면 200개다. 고정 순서로 고르면 201번째부터는 앞쪽이 다시 낡아 영영 차례가 안 온다
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const endedAt = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const rows = Array.from({ length: 250 }, (_, i) => ({
+      streamId: `old-${i}`,
+      status: 'vod_ready',
+      relation: 'OWNER',
+      startedAt: endedAt,
+      endedAt,
+      vodExpiresAt: null,
+    }));
+    const spy = stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?')
+        ? jsonResponse(200, { broadcasts: rows, nextCursor: null })
+        : jsonResponse(200, { cards: [], nextCursor: null }),
+    );
+    const callsOf = (id: string) =>
+      spy.mock.calls.filter(([url]) => String(url).includes(`/${id}/jump-cards`)).length;
+
+    renderWithProviders(<VodListScreen />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    for (let minute = 0; minute < 25; minute += 1)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+    expect(callsOf('old-249')).toBeGreaterThanOrEqual(2);
+  });
+
+  it('카드 목록이 실패해도 녹화 확인 결과는 남긴다: 녹화가 없으면 「녹화 영상이 없어요」로 연다(PR #256 codex)', async () => {
+    const endedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'http://pb.test');
+    vi.resetModules();
+    const { VodListScreen: Fresh } = await import('./VodListScreen');
+    const { renderWithProviders: renderFresh } = await import('@/test/testProviders');
+    stubFetch((url) => {
+      if (url.startsWith('http://pb.test/list')) return jsonResponse(200, []);
+      if (url.startsWith('/api/clip/broadcasts?'))
+        return jsonResponse(200, {
+          broadcasts: [
+            {
+              streamId: 'nocards',
+              status: 'ended',
+              relation: 'OWNER',
+              startedAt: endedAt,
+              endedAt,
+              vodExpiresAt: null,
+            },
+          ],
+          nextCursor: null,
+        });
+      return jsonResponse(503, { error: 'x' });
+    });
+    renderFresh(<Fresh />);
+    expect(await screen.findByText(/녹화 영상이 없어요/)).toBeInTheDocument();
+    vi.unstubAllEnvs();
+  });
+
+  it('오래 끝난 방송의 카드 수는 10분 안에 다시 세지 않는다 — 다시 읽을 때 전체 이력의 카드를 또 부르지 않는다', async () => {
     // 주기마다 방송마다 카드 목록을 부르면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex)
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const row = (streamId: string) => ({
@@ -363,6 +542,68 @@ describe('VodListScreen — 서버 목록', () => {
     expect(cardCalls()).toBe(2);
   });
 
+  it('끝난 지 한 시간이 지났고 재생 서버에 녹화가 없으면 녹화 없음이다. 재생 서버가 없으면 「방금」만 뗀다(POK-254)', async () => {
+    const endedAt = new Date(Date.now() - 2 * 3_600_000).toISOString();
+    const list = () =>
+      jsonResponse(200, {
+        broadcasts: [
+          {
+            streamId: 'old-stream',
+            status: 'ended',
+            relation: 'OWNER',
+            startedAt: endedAt,
+            endedAt,
+            vodExpiresAt: null,
+          },
+        ],
+        nextCursor: null,
+      });
+
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'http://pb.test');
+    vi.resetModules();
+    const withPlayback = await import('./VodListScreen');
+    const providers = await import('@/test/testProviders');
+    stubFetch((url) => {
+      if (url.startsWith('http://pb.test/list')) return jsonResponse(200, []);
+      if (url.startsWith('/api/clip/broadcasts?')) return list();
+      return jsonResponse(200, { cards: [], nextCursor: null });
+    });
+    const first = providers.renderWithProviders(<withPlayback.VodListScreen />);
+    expect(await screen.findByText(/녹화 영상이 없어요/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /old-stream/ })).toBeInTheDocument();
+    first.unmount();
+
+    // 재생 서버가 오류로 답하면 묻지 못한 것이다: 「녹화 영상이 없어요」라고 단정하지 않는다(리뷰 1라운드)
+    vi.resetModules();
+    const failing = await import('./VodListScreen');
+    const providersF = await import('@/test/testProviders');
+    stubFetch((url) => {
+      if (url.startsWith('http://pb.test/list')) return jsonResponse(500, { error: 'boom' });
+      if (url.startsWith('/api/clip/broadcasts?')) return list();
+      return jsonResponse(200, { cards: [], nextCursor: null });
+    });
+    const second = providersF.renderWithProviders(<failing.VodListScreen />);
+    expect(await screen.findByText(/· VOD 준비 중$/)).toBeInTheDocument();
+    expect(screen.queryByText(/녹화 영상이 없어요/)).toBeNull();
+    second.unmount();
+
+    vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', '');
+    vi.resetModules();
+    const noPlayback = await import('./VodListScreen');
+    const providers2 = await import('@/test/testProviders');
+    stubFetch((url) =>
+      url.startsWith('/api/clip/broadcasts?')
+        ? list()
+        : jsonResponse(200, { cards: [], nextCursor: null }),
+    );
+    providers2.renderWithProviders(<noPlayback.VodListScreen />);
+    expect(await screen.findByText(/· VOD 준비 중$/)).toBeInTheDocument();
+    expect(screen.queryByText(/방금 종료/)).toBeNull();
+    expect(screen.queryByText(/녹화 영상이 없어요/)).toBeNull();
+    expect(screen.queryByRole('link', { name: /old-stream/ })).toBeNull();
+    vi.unstubAllEnvs();
+  });
+
   it('녹화 없음은 굳히지 않는다 — 방송 직후 늦게 생긴 녹화를 다음 주기에 알아본다', async () => {
     // 한 번 없던 녹화를 영구히 기억하면 녹화가 생겨도 이 탭은 계속 준비 중이다(PR #200 codex)
     vi.stubEnv('NEXT_PUBLIC_MEDIA_PLAYBACK_BASE_URL', 'http://pb.test');
@@ -370,13 +611,14 @@ describe('VodListScreen — 서버 목록', () => {
     const { VodListScreen: Fresh } = await import('./VodListScreen');
     const { renderWithProviders: renderFresh } = await import('@/test/testProviders');
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    // 방금 끝난 방송이어야 한다: 한 시간이 지났으면 「녹화 없음」으로 접혀 그것대로 열린다(POK-254)
+    const endedMs = Date.now() - 10 * 60 * 1000;
+    const startedAt = new Date(endedMs - 3_600_000).toISOString();
+    const endedAt = new Date(endedMs).toISOString();
     let recorded = false;
     stubFetch((url) => {
       if (url.startsWith('http://pb.test/list'))
-        return jsonResponse(
-          200,
-          recorded ? [{ start: '2026-09-20T10:00:00Z', duration: 3600 }] : [],
-        );
+        return jsonResponse(200, recorded ? [{ start: startedAt, duration: 3600 }] : []);
       if (url.startsWith('/api/clip/broadcasts?'))
         return jsonResponse(200, {
           broadcasts: [
@@ -384,8 +626,8 @@ describe('VodListScreen — 서버 목록', () => {
               streamId: 'rec-stream',
               status: 'ended',
               relation: 'OWNER',
-              startedAt: '2026-09-20T10:00:00Z',
-              endedAt: '2026-09-20T11:00:00Z',
+              startedAt,
+              endedAt,
               vodExpiresAt: null,
             },
           ],
@@ -399,12 +641,15 @@ describe('VodListScreen — 서버 목록', () => {
       await vi.advanceTimersByTimeAsync(100);
     });
     expect(screen.queryByRole('link', { name: /rec-stream/ })).toBeNull();
+    expect(screen.getByText('방금 종료 · VOD 준비 중 · 준비되면 알려드릴게요')).toBeInTheDocument();
 
     recorded = true;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(screen.getByRole('link', { name: /rec-stream/ })).toBeInTheDocument();
+    // 「녹화 없음」도 열리므로 다시 보기 가능(받기 단추)으로 가른다
+    expect(screen.getByRole('button', { name: /^풀 버전 다운로드/ })).toBeInTheDocument();
     vi.unstubAllEnvs();
   });
 });

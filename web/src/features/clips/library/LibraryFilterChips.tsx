@@ -1,7 +1,6 @@
 'use client';
 
 import { chipsFor, type LibraryChip } from './libraryView';
-import type { LibraryRole } from './useLibraryMockState';
 import styles from './LibraryScreen.module.css';
 
 // 시안 1g 상태 칩. HighlightCardPanel·VodPeriodFilter와 같은 구조다 — 상호작용이 필요해
@@ -12,19 +11,17 @@ import styles from './LibraryScreen.module.css';
 // 같은 칩이 아니다. 세 모양을 한 컴포넌트가 받을 수 있을 때 승격한다(후속 티켓).
 
 export function LibraryFilterChips({
-  role,
   chip,
   counts,
   onChange,
 }: {
-  role: LibraryRole;
   chip: LibraryChip;
   counts: Record<LibraryChip, number>;
   onChange: (chip: LibraryChip) => void;
 }) {
   return (
     <div className={styles.chipGroup} role="group" aria-label="상태 필터">
-      {chipsFor(role).map((item) => (
+      {chipsFor().map((item) => (
         <button
           key={item.value}
           type="button"

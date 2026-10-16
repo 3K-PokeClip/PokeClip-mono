@@ -121,6 +121,11 @@ export function liveShownUpTo(atMs: number, upperMs: number, lowerMs: number): n
   return Math.max(lowerMs, Math.min(atMs, upperMs - LIVE_SHOW_GAP_MS));
 }
 
+/** 수집기 표의 한 줄 열쇠. 채팅과 후원은 표가 달라 번호가 겹치니 종류를 붙인다 */
+function rowKey(item: WireItem): string {
+  return `${item.kind}|${item.id}`;
+}
+
 /** 다시 보기가 쥔 한 줄 */
 export interface ReplayLine {
   /** 이 로더가 매긴 일련번호. 채팅 창의 줄 열쇠다: 채팅과 후원은 표가 달라 id가 겹친다 */
@@ -375,12 +380,15 @@ export class ChatReplayLoader {
    * @param lowerMs 읽을 하한(영상 축)
    * @param upperMs 읽을 상한. 지난 방송은 방송 끝이다. 라이브 되감기는 want가 매번 주는 값으로 바뀐다
    * @param upperStepMs 상한이 다 읽은 구간보다 이만큼 넘게 앞서야 더 읽는다(라이브 되감기는 LIVE_READ_STEP_MS). 고정 상한은 0이다
+   * @param rereadMs 늦은 쪽을 이어 읽을 때 다 읽은 끝을 이만큼 겹쳐 다시 읽는다(라이브 되감기는 LIVE_REREAD_MS, POK-254). 적재가 여유
+   *   (liveSettledUpTo)보다 늦게 들어온 줄을 잡는다. 지난 방송은 표가 다 찼으니 0이다
    */
   constructor(
     private readonly fetchPage: ReplayFetch,
     private readonly lowerMs: number,
     private upperMs: number,
     private readonly upperStepMs = 0,
+    private readonly rereadMs = 0,
   ) {}
 
   readonly subscribe = (listener: () => void): (() => void) => {
@@ -542,11 +550,7 @@ export class ChatReplayLoader {
                 toMs: Math.min(front.end, front.at + COLLECTOR_WINDOW_MS),
                 cursor: null,
               })
-            : (this.open ?? {
-                fromMs: this.to,
-                toMs: Math.min(this.upperMs, this.to + COLLECTOR_WINDOW_MS),
-                cursor: null,
-              });
+            : (this.open ?? this.lateAsk());
         let page: WirePage;
         let added: ReplayLine[];
         try {
@@ -617,8 +621,20 @@ export class ChatReplayLoader {
     }));
   }
 
+  /**
+   * 늦은 쪽 다음 창. 읽은 구간 안에서만 겹치고(하한 아래는 읽은 적이 없다), 창 길이는 겹친 시작에서 센다: 끝에서 세면 겹침만큼
+   * 1시간을 넘어 수집기가 400 too_wide로 거절했다(PR #256 codex P1)
+   */
+  private lateAsk(): WindowAsk {
+    const fromMs = Math.max(this.from, this.to - this.rereadMs);
+    return { fromMs, toMs: Math.min(this.upperMs, fromMs + COLLECTOR_WINDOW_MS), cursor: null };
+  }
+
   private append(page: WirePage, added: ReplayLine[], ask: WindowAsk): void {
-    this.lines = joinInOrder(this.lines, added);
+    this.lines = joinInOrder(
+      this.lines,
+      this.rereadMs > 0 ? this.unseen(added, ask.fromMs) : added,
+    );
     if (page.nextCursor !== null && added.length > 0) {
       this.open = { fromMs: ask.fromMs, toMs: ask.toMs, cursor: page.nextCursor };
       // 마지막 줄과 같은 시각의 줄이 다음 쪽에 더 있을 수 있다: 그 시각 앞까지만 빠짐없다
@@ -628,6 +644,20 @@ export class ChatReplayLoader {
       this.open = null;
       this.to = Math.max(this.to, ask.toMs);
     }
+  }
+
+  /**
+   * 겹쳐 다시 읽은 쪽에서 이미 쥔 줄을 뺀다. 열쇠는 표와 서버 번호다: 다시 보기 줄은 전부 수집기 표에서 와 번호가 늘 같다.
+   * 지문(chatFingerprint)으로 견주면 같은 사람·같은 글·같은 ms 후원 둘(수집기는 따로 받는다)이 하나로 접혔다(PR #256 codex).
+   * 겹친 구간 둘레의 줄만 견준다: 보정이 쪽마다 달라지면 같은 줄의 영상 축
+   * 시각이 그만큼 움직여, 겹침 시작(fromMs)에서 자르면 바로 앞에 놓인 같은 줄을 못 본다(리뷰 1라운드). 그래서 겹침만큼 더 본다
+   */
+  private unseen(added: ReplayLine[], fromMs: number): ReplayLine[] {
+    const seen = new Set<string>();
+    const lowest = fromMs - this.rereadMs;
+    for (let i = this.lines.length - 1; i >= 0 && this.lines[i]!.at >= lowest; i -= 1)
+      seen.add(rowKey(this.lines[i]!.item));
+    return seen.size === 0 ? added : added.filter((line) => !seen.has(rowKey(line.item)));
   }
 
   private appendFront(front: FrontRead, page: WirePage, added: ReplayLine[], ask: WindowAsk): void {

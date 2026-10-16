@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Check, Clock, Minus, Shield, X, Zap } from 'lucide-react';
+import { Check, Minus, Shield, X, Zap } from 'lucide-react';
 import { Popover, VisuallyHidden } from '@/ui';
 import styles from './EditorSettingsScreen.module.css';
 
@@ -16,7 +16,8 @@ import styles from './EditorSettingsScreen.module.css';
 const ROWS = [
   { label: '검토 · 클립 편집', emphasize: false, basic: 'yes', trusted: 'yes' },
   { label: '보관함 저장 · 템플릿 사용', emphasize: false, basic: 'yes', trusted: 'yes' },
-  { label: '유튜브 업로드', emphasize: true, basic: 'after-approval', trusted: 'instant' },
+  // 업로드 승인 게이트가 없다(08-31 결정, POK-254): 편집자도 바로 올린다
+  { label: '유튜브 업로드', emphasize: true, basic: 'instant', trusted: 'instant' },
   { label: '템플릿 · 채널 설정 변경', emphasize: false, basic: 'no', trusted: 'no' },
 ] as const;
 
@@ -56,7 +57,7 @@ export function PermissionComparisonPopover() {
               <td aria-hidden="true" />
               <th scope="col" className={styles.compareColHead}>
                 기본
-                <span className={styles.compareColSub}>승인 필요</span>
+                <span className={styles.compareColSub}>새 편집자</span>
               </th>
               <th scope="col" className={`${styles.compareColHead} ${styles.compareTrusted}`}>
                 신뢰
@@ -67,7 +68,10 @@ export function PermissionComparisonPopover() {
           <tbody>
             {ROWS.map((row) => (
               <tr key={row.label}>
-                <th scope="row" className={row.emphasize ? styles.compareRowHeadStrong : styles.compareRowHead}>
+                <th
+                  scope="row"
+                  className={row.emphasize ? styles.compareRowHeadStrong : styles.compareRowHead}
+                >
                   {row.label}
                 </th>
                 <td className={styles.compareCell}>{markOf(row.basic)}</td>
@@ -87,7 +91,7 @@ export function PermissionComparisonPopover() {
   );
 }
 
-/** 칸 표식 — 시안 ②의 네 종류: ✓(가능) · 시계+승인 후 · 번개+즉시 · −(불가). */
+/** 칸 표식 — 시안 ②의 ✓(가능) · 번개+즉시 · −(불가). 시계+승인 후는 승인 게이트가 없어 뺐다(POK-254). */
 function markOf(mark: Mark) {
   switch (mark) {
     case 'yes':
@@ -96,13 +100,6 @@ function markOf(mark: Mark) {
           <Check size={13} className={styles.compareYes} aria-hidden="true" />
           <VisuallyHidden>가능</VisuallyHidden>
         </>
-      );
-    case 'after-approval':
-      return (
-        <span className={styles.compareTimed}>
-          <Clock size={12} aria-hidden="true" />
-          승인 후
-        </span>
       );
     case 'instant':
       return (

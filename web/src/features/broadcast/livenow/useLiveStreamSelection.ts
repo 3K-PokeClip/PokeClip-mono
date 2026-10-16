@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { resolveLiveStreamId, vodStreamIdFromPath } from '@/features/broadcast/streamSelection';
+import { usePathname, useSearchParams } from 'next/navigation';
+import { resolveLiveStreamId, vodStreamIdFromPathname } from '@/features/broadcast/streamSelection';
 import { publishLiveData, useLiveData } from './liveDataStore';
 
 // 라이브 화면이 볼 방송 번호를 정한다(POK-251). 정한 번호는 liveDataStore에 올려 대시보드 훅들이 같이 쓴다.
@@ -19,20 +20,25 @@ export interface LiveStreamSelection {
 
 export const LIVE_RESELECT_MS = 10_000;
 
-function pinnedByAddress(): boolean {
-  return (
-    vodStreamIdFromPath() !== null || new URLSearchParams(window.location.search).has('stream')
-  );
-}
-
 export function useLiveStreamSelection(): LiveStreamSelection {
   const [selection, setSelection] = useState<LiveStreamSelection>({
     streamId: '',
     resolved: false,
   });
   const { status } = useLiveData();
+  // 주소가 못 박은 방송. Next 값으로 읽는다: 같은 화면에서 ?stream=만 바뀌면(사이드바 「라이브 대시보드」, 뒤로·앞으로) 화면이
+  // 다시 서지 않아, 처음 한 번 주소창에서 읽던 값이 남았다(POK-254)
+  const pathname = usePathname();
+  const streamParam = useSearchParams().get('stream');
+  const pinned = vodStreamIdFromPathname(pathname ?? '') ?? (streamParam || null);
 
   useEffect(() => {
+    if (pinned !== null) {
+      setSelection((prev) =>
+        prev.resolved && prev.streamId === pinned ? prev : { streamId: pinned, resolved: true },
+      );
+      return;
+    }
     let alive = true;
     const resolve = (fresh: boolean) =>
       void resolveLiveStreamId(fresh).then((id) => {
@@ -43,25 +49,20 @@ export function useLiveStreamSelection(): LiveStreamSelection {
         );
       });
     resolve(false);
-    if (pinnedByAddress()) {
-      return () => {
-        alive = false;
-      };
-    }
     const t = window.setInterval(() => resolve(true), LIVE_RESELECT_MS);
     return () => {
       alive = false;
       window.clearInterval(t);
     };
-  }, []);
+  }, [pinned]);
 
   useEffect(() => {
-    if (status !== 'ended' || pinnedByAddress()) return;
+    if (status !== 'ended' || pinned !== null) return;
     void resolveLiveStreamId(true).then((id) => {
       if (id === null) return;
       setSelection((prev) => (prev.streamId === id ? prev : { streamId: id, resolved: true }));
     });
-  }, [status]);
+  }, [status, pinned]);
 
   useEffect(() => {
     publishLiveData({ streamId: selection.streamId });

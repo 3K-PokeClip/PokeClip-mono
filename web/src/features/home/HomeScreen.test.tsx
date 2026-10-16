@@ -1,5 +1,5 @@
 import { act } from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -487,7 +487,7 @@ describe('HomeScreen', () => {
     expect(screen.getAllByText('D-2').length).toBeGreaterThan(0);
   });
 
-  it('지난 방송의 최근 하이라이트는 그 카드 번호를 싣고 간다: 지난 방송 화면이 처음이 아니라 그 시점부터 튼다', async () => {
+  it('최근 하이라이트 카드 칸은 없다: 지난 방송 카드의 「카드 N개」만 남는다(POK-254)', async () => {
     const card = {
       id: 35,
       streamId: 'past-1',
@@ -530,10 +530,9 @@ describe('HomeScreen', () => {
     );
     render(<HomeScreen />);
 
-    expect(await screen.findByRole('link', { name: 'past-1 · 0:16:49' })).toHaveAttribute(
-      'href',
-      '/broadcast/vod/past-1?card=35',
-    );
+    expect(await screen.findByText('10월 8일 · 카드 1개')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '최근 하이라이트 카드' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'past-1 · 0:16:49' })).not.toBeInTheDocument();
   });
 
   it('이미 만료된 방송은 만료 임박에 넣지 않는다 — D-0으로 쌓이지 않는다', async () => {
@@ -565,6 +564,55 @@ describe('HomeScreen', () => {
     expect(await screen.findByText('soon · 카드 0개')).toBeInTheDocument();
     expect(screen.queryByText('gone · 카드 0개')).not.toBeInTheDocument();
     expect(screen.queryByText('D-0')).not.toBeInTheDocument();
+  });
+
+  it('지난 방송 격자: 만료된 방송은 열리지 않고 「보관 만료」, 「준비 중」은 끝난 지 한 시간 안만(POK-254)', async () => {
+    const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+    const HOUR = 3_600_000;
+    const row = (
+      streamId: string,
+      status: string,
+      endedAt: string,
+      vodExpiresAt: string | null,
+    ) => ({
+      streamId,
+      status,
+      relation: 'OWNER',
+      startedAt: endedAt,
+      endedAt,
+      vodExpiresAt,
+      title: streamId,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('state=past')) {
+          const body = {
+            broadcasts: [
+              row('fresh', 'ended', at(-HOUR / 2), null),
+              row('stale', 'ended', at(-2 * HOUR), null),
+              row('gone', 'vod_ready', at(-61 * 24 * HOUR), at(-HOUR)),
+            ],
+            nextCursor: null,
+          };
+          return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+        }
+        return Promise.resolve(emptyJson(url));
+      }),
+    );
+    render(<HomeScreen />);
+
+    const grid = await screen.findByRole('region', { name: '지난 방송 · VOD' });
+    await screen.findByText('gone');
+    const card = (title: string) => screen.getByText(title).closest('li')!;
+    // 썸네일 자리표시 「썸네일 준비 중」과 가르려고 배지 글자만 정확히 찾는다
+    expect(within(card('fresh')).getByText('준비 중')).toBeInTheDocument();
+    expect(within(card('stale')).queryByText('준비 중')).toBeNull();
+    expect(within(card('gone')).getByText('보관 만료')).toBeInTheDocument();
+    expect(card('gone').querySelector('a')).toBeNull();
+    expect(card('fresh').querySelector('a')).not.toBeNull();
+    expect(grid).toBeInTheDocument();
   });
 
   it('방송 목록을 잠깐 못 읽어도 지난 화면을 지우지 않는다 — 라이브 띠가 그대로다', async () => {

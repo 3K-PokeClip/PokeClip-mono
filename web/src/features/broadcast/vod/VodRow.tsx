@@ -52,7 +52,7 @@ export function VodRow({
   onCancelDownload: () => void;
   onResetDownload: () => void;
 }) {
-  const view = rowViewFor(item, download, now);
+  const view = rowViewFor(item, download, now, visual?.recordingMissing === true);
   const title = visual?.title ?? '제목 없는 방송';
   const duration = durationLabel(visual?.durationSec ?? null);
   const date = dateLabel(item);
@@ -67,9 +67,12 @@ export function VodRow({
   const [quality, setQuality] = useState(qualities[0]!.id as string);
 
   const meta = preparing
-    ? '방금 종료 · VOD 준비 중 · 준비되면 알려드릴게요'
+    ? view.justEnded
+      ? '방금 종료 · VOD 준비 중 · 준비되면 알려드릴게요'
+      : `${date ?? '방송일 미상'} · VOD 준비 중`
     : [
         date ?? '방송일 미상',
+        view.kind === 'noRecording' ? '녹화 영상이 없어요 · 카드와 채팅은 볼 수 있어요' : null,
         // 만료 임박 행만 무엇을 잃는지 적는다 — 평소엔 오른쪽 카드 수 태그로 충분하다
         urgent && visual?.unsavedCardCount
           ? `저장하지 않은 카드 ${visual.unsavedCardCount}개가 함께 삭제됩니다`

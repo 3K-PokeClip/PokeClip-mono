@@ -20,7 +20,6 @@ import {
   filterByQuery,
   shownUploadOf,
   sortClips,
-  statusFor,
   uploadErrorMessage,
   uploadsFromIntent,
   uploadTitleProblem,
@@ -36,23 +35,18 @@ import { PRIVACY_LABEL } from '@/features/clips/editor/uploadInfo';
 // 시안이 그리는 칸이라 서버 줄을 여기서 옮긴다(toLibraryClip). 서버가 아직 안 주는 칸은 지어내지
 // 않는다 — 제목은 업로드 제목이 없으면 「편집본 #번호」, 만든 사람은 회원 번호.
 //
-// 화면 상태는 시안 1g의 7종에 진행 단계 넷을 더했다(POK-291): 만드는 중 · 올리는 중 · 확인 필요 · 업로드 실패. 승인 대기·반려는
-// 승인 게이트가 없어 서버 줄에는 쓰지 않는다. 업로드 실패는 서버 상태가 아니다: 서버는 완성(rendered)으로 돌려주고, 웹이
+// 화면 상태는 시안 1g의 상태에서 승인 대기·반려를 뺀 다섯(업로드 승인 게이트가 없다, POK-236 폐기)에 진행 단계 넷을
+// 더했다(POK-291): 만드는 중 · 올리는 중 · 확인 필요 · 업로드 실패. 업로드 실패는 서버 상태가 아니다: 서버는 완성(rendered)으로 돌려주고, 웹이
 // 「가장 최근 업로드가 실패」로 만든다(서버 상태를 늘리면 clip 규칙·웹 규칙을 같이 바꿔야 한다).
 //
 // 동작은 줄마다 갈린다: 서버에서 온 줄(`entry`가 있다)은 실제 문으로 가고, 시험·스토리북이 주입한 목업 줄은
 // 상태 전이만 흉내 낸다(예전 목업 그대로 — 화면 흐름을 시험이 계속 잴 수 있게).
-//
-// 시점(role)은 훅 값이다 — 시안의 스트리머/편집자 토글은 핸드오프용이라 제품 UI에 두지 않는다.
 
 /** 만드는 중·올리는 중이 없을 때 목록을 다시 읽는 간격. 썸네일 서명(60분)이 만료되기 전에 새 주소를 받으려고 */
 const STABLE_REFRESH_MS = 5 * 60_000;
 
-/** 화면 모드(ADR-032) — 계정 속성이 아니다 */
-export type LibraryRole = 'streamer' | 'editor';
-
 /**
- * 시안 1g ④의 7종 + 진행 단계 넷(POK-291: rendering 만드는 중 · uploading 올리는 중 · checking 확인 필요 · uploadFailed 업로드
+ * 시안 1g ④에서 승인 대기·반려를 뺀 다섯 + 진행 단계 넷(POK-291: rendering 만드는 중 · uploading 올리는 중 · checking 확인 필요 · uploadFailed 업로드
  * 실패). expired는 발행됨 중 원본 VOD 보관이 지난 것이다(ADR-004 60일)
  */
 export type ClipStatus =
@@ -62,8 +56,6 @@ export type ClipStatus =
   | 'uploading'
   | 'checking'
   | 'uploadFailed'
-  | 'pending'
-  | 'rejected'
   | 'published'
   | 'expired'
   | 'failed';
@@ -88,8 +80,6 @@ export interface LibraryClip {
   createdAt: string;
   /** ISO — 최근 편집순 */
   editedAt: string;
-  /** 반려됨만 — 사유와 반려 시각 */
-  rejection?: { reason: string; at: string };
   /** 발행됨·원본 만료만. 목업 업로드로 발행된 것은 갈 곳이 없어 비워 둔다 */
   youtubeUrl?: string;
   /** 편집기로 다시 여는 주소 — 저장된 편집본을 ?recipe= 로 연다. 시험 주입에는 없다 */
@@ -192,9 +182,8 @@ export function toLibraryClip(entry: LibraryEntry, meId: string | null): Library
   };
 }
 
-/** 테스트 주입 — 빈 상태·시점·경계 케이스를 화면 밖에서 만든다 (VodListOptions 선례) */
+/** 테스트 주입 — 빈 상태·경계 케이스를 화면 밖에서 만든다 (VodListOptions 선례) */
 export interface LibraryOptions {
-  role?: LibraryRole;
   clips?: LibraryClip[];
   /** 처음부터 열어 둘 편집본 — 기본은 미선택 */
   selectedId?: string | null;
@@ -210,15 +199,12 @@ export interface LibraryMockState {
   /** 목록을 못 읽었을 때의 사유 */
   error: string | null;
   refresh: () => void;
-  role: LibraryRole;
   /** 검색 → 칩 → 정렬을 거친 목록 */
   clips: LibraryClip[];
   /** 필터와 무관한 전체 수 — 「아직 없다」와 「조건에 없다」를 가른다 */
   totalCount: number;
   /** 칩별 수 — 검색어와 무관하게 전체에서 센다(칩은 재고이고 검색은 그 위의 돋보기다) */
   counts: Record<LibraryChip, number>;
-  /** 스트리머 배너의 「승인 대기 N건」 */
-  pendingCount: number;
   chip: LibraryChip;
   setChip: (chip: LibraryChip) => void;
   query: string;
@@ -235,7 +221,7 @@ export interface LibraryMockState {
   /**
    * 서버 줄: 유튜브 업로드를 주문한다. 업로드 줄이 없고 그 판의 업로드 정보가 있으면 다시 시도 문으로 그 정보(제목·설명·태그·
    * 공개 범위·아동용·썸네일)대로 올리고(POK-291), 없으면 패널의 제목으로 옛 문을 탄다(POK-111, 창 없이 만든 옛 영상의 길이라 비공개).
-   * 목업 줄: 업로드 대기 → 발행됨(스트리머) / 승인 대기(편집자). 그 밖의 상태는 무시
+   * 목업 줄: 업로드 대기 → 발행됨(승인 게이트가 없다). 그 밖의 상태는 무시
    */
   upload: (id: string) => void;
   /** 업로드 실패한 서버 줄을 저장된 정보 그대로 다시 올린다(POK-291, 창 없이). 그 밖의 줄은 무시 */
@@ -254,7 +240,6 @@ export interface LibraryMockState {
 
 export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockState {
   const { toast } = useToast();
-  const role = options.role ?? 'streamer';
   const [clips, setClips] = useState<LibraryClip[]>(() => options.clips ?? []);
   const [loading, setLoading] = useState(options.clips === undefined);
   const [error, setError] = useState<string | null>(null);
@@ -404,13 +389,9 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
           .finally(() => setSendingFlag(id, false));
         return;
       }
-      patch(id, (clip) =>
-        clip.status === 'ready'
-          ? { ...clip, status: role === 'editor' ? 'pending' : 'published' }
-          : clip,
-      );
+      patch(id, (clip) => (clip.status === 'ready' ? { ...clip, status: 'published' } : clip));
     },
-    [clips, patch, role, setSendingFlag, toast],
+    [clips, patch, setSendingFlag, toast],
   );
 
   // 업로드 다시 시도(POK-291) = 실패한 업로드의 칸(제목·설명·태그·공개 범위·썸네일·출력)을 서버가 복사해 새로 올린다.
@@ -569,14 +550,10 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     [clips],
   );
 
-  const counts = useMemo(() => countByChip(clips, role, now), [clips, role, now]);
+  const counts = useMemo(() => countByChip(clips, now), [clips, now]);
   const visible = useMemo(
-    () => sortClips(filterByChip(filterByQuery(clips, query), chip, role, now), sort, now),
-    [clips, query, chip, role, sort, now],
-  );
-  const pendingCount = useMemo(
-    () => clips.filter((clip) => statusFor(clip, now) === 'pending').length,
-    [clips, now],
+    () => sortClips(filterByChip(filterByQuery(clips, query), chip, now), sort, now),
+    [clips, query, chip, sort, now],
   );
   const selectedClip = useMemo(
     () => clips.find((clip) => clip.id === selectedId) ?? null,
@@ -588,11 +565,9 @@ export function useLibraryMockState(options: LibraryOptions = {}): LibraryMockSt
     loading,
     error,
     refresh,
-    role,
     clips: visible,
     totalCount: clips.length,
     counts,
-    pendingCount,
     chip,
     setChip,
     query,
@@ -649,6 +624,18 @@ function withUpload(entry: LibraryEntry, upload: UploadSnapshot): LibraryEntry {
  * 그것, 여럿이면 편집기가 고치는 세로(VERT_9_16) 출력이다. 편집기는 저장된 다른 비율 출력을 남겨 두므로(outputsFor)
  * 첫 번째 영상이 세로라는 보장이 없다(PR #203 codex). 보관함 목록에는 출력의 비율이 없어 상세를 한 번 더 읽는다.
  */
+const ASPECT_LABEL = { VERT_9_16: '9:16', SQUARE_1_1: '1:1' } as const;
+
+/**
+ * 상세 패널의 「비율」 = 레시피 출력의 비율(POK-254, 전에는 고정 글자 「9:16 · 1080×1920」). 목록에는 출력의 비율이 없어 상세를
+ * 한 번 더 읽는다. 해상도는 서버에 칸이 없어 지어내지 않는다
+ */
+export async function aspectLabelOf(entry: LibraryEntry): Promise<string | null> {
+  const detail = await fetchLibraryDetail(entry.recipeId);
+  const labels = [...new Set(detail.recipe.outputs.map((o) => ASPECT_LABEL[o.aspect]))];
+  return labels.length === 0 ? null : labels.join(' · ');
+}
+
 async function videoOutputOf(entry: LibraryEntry): Promise<string | null> {
   const videos = (entry.latestClip?.outputs ?? []).filter((o) => o.kind === 'video');
   if (videos.length <= 1) return videos[0]?.outputId ?? null;

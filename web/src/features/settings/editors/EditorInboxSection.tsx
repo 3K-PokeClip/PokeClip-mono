@@ -1,7 +1,8 @@
 'use client';
 
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, useToast } from '@/ui';
+import { Button, ConfirmDialog, useToast } from '@/ui';
 import {
   acceptInvitation,
   declineInvitation,
@@ -19,6 +20,8 @@ export function EditorInboxSection() {
   const queryClient = useQueryClient();
   const received = useQuery(receivedInvitationsQueryOptions);
   const asEditor = useQuery(delegationsAsEditorQueryOptions);
+  // 「나가기」는 되돌릴 수 없어 확인을 받는다(POK-254). 편집자 내보내기(RevokeEditorDialog)와 같은 모양이다
+  const [leaveTarget, setLeaveTarget] = useState<{ id: number; streamerName: string } | null>(null);
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['editor-invitations'] });
@@ -42,6 +45,7 @@ export function EditorInboxSection() {
     mutationFn: (id: number) => revokeDelegation(id),
     onSuccess: () => {
       toast({ tone: 'success', title: '편집자에서 나왔어요' });
+      setLeaveTarget(null);
       refresh();
     },
     onError: (e: unknown) =>
@@ -111,12 +115,25 @@ export function EditorInboxSection() {
             variant="ghost"
             size="sm"
             disabled={leave.isPending}
-            onClick={() => leave.mutate(channel.id)}
+            onClick={() => setLeaveTarget(channel)}
           >
             나가기
           </Button>
         </div>
       ))}
+      <ConfirmDialog
+        open={leaveTarget !== null}
+        busy={leave.isPending}
+        title={`${leaveTarget?.streamerName ?? ''} 채널의 편집자에서 나갈까요?`}
+        consequences={[
+          '지금 바로 이 채널의 하이라이트·클립을 볼 수 없게 됩니다.',
+          '이미 업로드된 클립과 만들어 둔 편집본은 그대로 남아요.',
+        ]}
+        footnote="다시 들어가려면 스트리머에게 새로 초대받아야 해요."
+        confirmLabel="나가기"
+        onCancel={() => setLeaveTarget(null)}
+        onConfirm={() => leaveTarget && leave.mutate(leaveTarget.id)}
+      />
     </section>
   );
 }

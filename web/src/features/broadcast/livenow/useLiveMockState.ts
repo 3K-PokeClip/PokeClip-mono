@@ -121,6 +121,13 @@ type LoadedInfo = BroadcastInfoResponse & { scope: LiveInfoScope };
 
 const CHART_MINUTES = 10;
 const CHART_BUCKET = 30;
+/** 끝난 방송의 카드 목록을 다시 읽는 간격(POK-254). 사진 주소(50분)보다 짧고, 다른 편집자의 집기·숨김이 1분 안에 보인다 */
+const ENDED_LIST_MS = 60_000;
+/**
+ * 끝난 방송의 차트·방송 정보를 굳히기 전에 기다리는 시간(PR #256 codex). 명부가 끝을 먼저 알리면 수집기의 마지막 적재(1초마다 몰아
+ * 쓴다)와 마지막 관측(1분마다) 전 답을 받는다: 첫 답을 굳히면 꼬리가 빠진 채 남았다. 이만큼 지난 뒤 받은 답부터 굳힌다
+ */
+const ENDED_SETTLE_MS = 2 * 60_000;
 export interface CardActionResult {
   ok: boolean;
   status: number;
@@ -328,7 +335,22 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       });
     };
 
+    /**
+     * 끝난 방송은 덜 읽는다(POK-254). 차트·방송 정보는 그 창을 한 번 받으면 더 바뀌지 않는다(창이 바뀌면 열쇠가 바뀌어 다시 읽는다).
+     * 카드 목록은 다른 편집자의 집기·숨김과 50분짜리 사진 주소 때문에 1분마다 읽는다. 전에는 끝난 방송도 3초·10초마다 읽어
+     * 12시간 방송이면 탭 하나에 분당 차트 72건이었다
+     */
+    const endedKey = (rg: Range) =>
+      rg.status === 'ended' && rg.endedAt !== null ? `${rg.startedAt}|${rg.endedAt}` : null;
+    /** 이 답으로 굳혀도 되나: 끝난 지 ENDED_SETTLE_MS가 지난 뒤 떠난 읽기만 */
+    const settledKey = (rg: Range, askedAt: number) =>
+      rg.endedAt !== null && askedAt - rg.endedAt >= ENDED_SETTLE_MS ? endedKey(rg) : null;
+    let chartDoneFor: string | null = null;
+    let infoDoneFor: string | null = null;
+    let listReadAt = 0;
+
     const loadList = async () => {
+      listReadAt = Date.now();
       try {
         // 끝까지 넘기고 숨긴 카드도 받는다 — 숨김이 목록에 반영돼야 한다(통로가 끊겨 폴링이 대신할 때도).
         // 한 쪽만 읽으면 51번째 카드부터 빠진다(PR #200 codex)
@@ -341,6 +363,8 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       try {
         const rg = rangeRef.current;
         if (waitForRange(rg)) return;
+        if (endedKey(rg) !== null && endedKey(rg) === chartDoneFor) return;
+        const askedAt = Date.now();
         const to = new Date();
         const from = new Date(to.getTime() - CHART_MINUTES * 60_000);
         const bucket = CHART_BUCKET;
@@ -379,6 +403,7 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
             };
             setChart(joined);
             publishLiveData({ chart: joined });
+            chartDoneFor = settledKey(rg, askedAt);
           }
           return;
         } else if (rg.status === 'offline') {
@@ -409,6 +434,8 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       // 꺼짐은 명부에 없는 방송이다(위임 회수·탈퇴): 볼 수 없게 된 방송이라 읽지 않는다. 시계가 명부를 다시 물어 방송이
       // 돌아오면 상태가 바뀌어 그때 읽는다(리뷰 4·5라운드)
       if (rg.status === 'offline') return;
+      if (endedKey(rg) !== null && endedKey(rg) === infoDoneFor) return;
+      const askedAt = Date.now();
       // 지난 방송은 그래프와 같은 창의 시청자 기록을 달라고 한다: 안 주면 서버가 최근 1시간만 준다(PR #200 codex). 그 밖(라이브,
       // 아직 모름)은 최근 창으로 읽고 그렇다고 표시한다. 제목·카테고리는 창과 무관해 명부 답을 기다리지 않는다(리뷰 4라운드)
       const sinceMs =
@@ -426,6 +453,7 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
         const loaded: LoadedInfo = { ...page, scope: sinceMs === null ? 'recent' : 'broadcast' };
         setInfo(loaded);
         publishLiveData({ info: loaded });
+        if (sinceMs !== null) infoDoneFor = settledKey(rg, askedAt);
       }
     };
     const ctrl = new AbortController();
@@ -518,7 +546,8 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     // 방송 편지가 아직 안 왔으면 404다 — 5초마다 다시 붙는다(폴링은 별도로 계속 돈다)
     const sseLoop = async () => {
       while (!stopped) {
-        await listenSse();
+        // 통로는 방송 중에만 온다: 끝난 방송에는 다시 붙지 않는다(POK-254). 상태가 바뀌는지만 쉬며 본다
+        if (rangeRef.current.status !== 'ended') await listenSse();
         if (stopped) break;
         await new Promise((res) => setTimeout(res, sseCooldown));
       }
@@ -534,7 +563,11 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     void loadInfo();
     void sseLoop();
     cardChangeListeners.add(loadList);
-    const t1 = setInterval(loadList, 3000);
+    // 끝난 방송이면 주기 읽기만 1분에 한 번이다. 그 밖에서 부르는 읽기(카드 동작 뒤 등)는 막지 않는다
+    const t1 = setInterval(() => {
+      if (rangeRef.current.status === 'ended' && Date.now() - listReadAt < ENDED_LIST_MS) return;
+      void loadList();
+    }, 3000);
     const t2 = setInterval(loadChart, 10_000);
     const t3 = setInterval(loadInfo, 10_000);
     return () => {
