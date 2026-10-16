@@ -99,15 +99,12 @@ export function useEditorSettingsState(): EditorSettingsViewState {
     // 토스트 문구가 이름을 잃지 않는다.
     mutationFn: (target: EditorDelegation) => revokeDelegation(target.id),
     onSuccess: (_data, target) => {
-      // destructive 표식이 undo를 컴파일 단계에서 막는다 (ADR-044). 실제로 되돌릴 수 없다 —
-      // 내보내는 즉시 대기 중이던 승인 요청이 무효가 되므로 되돌려도 그 요청은 안 돌아온다.
-      // 시안 ⑥의 부제는 「편집자 1 / 3 · 승인 요청 1건 무효」지만 정원·건수가 POK-207 몫이라
-      // 무효 고지만 남긴다. 호칭은 시안 제목처럼 「님」을 붙인다 — 조사(을/를)도 갈리지 않는다.
+      // destructive 표식이 undo를 컴파일 단계에서 막는다 (ADR-044). 실제로 되돌릴 수 없다 — 위임 기록이 지워진다.
+      // 시안 ⑥ 부제의 「승인 요청 1건 무효」는 업로드 승인 게이트가 없어 뺐다(POK-254). 호칭은 시안 제목처럼 「님」을 붙인다.
       toast({
         tone: 'success',
         destructive: true,
         title: `${target.name} 님을 편집자에서 내보냈어요`,
-        description: '대기 중이던 승인 요청이 무효가 됐어요.',
       });
     },
     onError: (e) => {
