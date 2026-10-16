@@ -271,6 +271,26 @@ testlib::count() {
 }
 
 #######################################
+# 마지막 실행의 표준 오류에 고정 문자열이 든 줄이 몇 개인지 본다 — 종료 2 의
+# 원인 문구를 가를 때 쓴다.
+# Globals:
+#   run_out
+# Arguments:
+#   사례 이름, 문자열, 기대 줄 수.
+# Returns:
+#   맞으면 0(아니면 실패를 센다).
+#######################################
+testlib::expect_stderr_count() {
+  local name="$1" text="$2" want="$3" got
+  got="$(testlib::count "${run_out}.stderr" "${text}")"
+  if [[ "${got}" -ne "${want}" ]]; then
+    testlib::fail "${name}: 표준 오류에 「${text}」 든 줄 ${want}개를" \
+      "기대했으나 ${got}개 — $(cat -- "${run_out}.stderr")"
+    return 1
+  fi
+}
+
+#######################################
 # 파일에서 절대 경로가 든 줄을 낸다. 「~/」 로 가린 경로와 상대 경로
 # (scp-…/result.tsv 등)는 걸리지 않는다 — 사람에게 내는 문장에 HOME · 저장소
 # 위치 · 로컬 계정 이름이 든 절대 경로가 나오는지 본다(장부 r2 #5).

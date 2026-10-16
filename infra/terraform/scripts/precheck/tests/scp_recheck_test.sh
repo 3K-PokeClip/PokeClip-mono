@@ -413,6 +413,25 @@ rehash_marker() {
 }
 
 #######################################
+# 결과 파일을 「주어진 행 + 맞는 행(tag:GetTagKeys 허용)」 으로 바꿔 쓰고
+# 완료 표지 · 승인 기록의 해시를 맞춘다 — 해시 대조를 지나 결과 파일의 값
+# 꼴 검사에 닿게 하려고.
+# Arguments:
+#   증거 디렉터리, 주어진 행의 칸들.
+# Returns:
+#   쓰지 못하면 1.
+#######################################
+rewrite_result_row() {
+  local dir="$1"
+  shift
+  {
+    testlib::tsv "$@"
+    testlib::tsv tag:GetTagKeys ap-northeast-2 allow allowed True
+  } >"${dir}/result.tsv" && rehash_marker "${dir}" &&
+    rehash_acceptance "${dir}"
+}
+
+#######################################
 # 판정 하나를 돌리고 그 증거 디렉터리를 승인한다. 마지막 실행 결과는
 # run_recheck 이 run_out · run_status 에 남긴다.
 # Globals:
@@ -503,8 +522,32 @@ expect_accept_keeps_denied() {
 }
 
 #######################################
+# 마지막 실행의 표준 오류에 셸 산술 오류 · 절대 경로가 든 줄이 없는지 본다.
+# 앞 기준 후보에 「scp-<묶음>-<시각>」 꼴이 아닌 디렉터리가 섞이면 비교 키
+# 계산이 bash 산술 오류(value too great for base — 스크립트 절대 경로가 든
+# 문구)로 실패해 그 후보가 우연히 빠진다. 종료 코드 · 표준 출력만 보면 후보
+# 찾기의 접두 · 시각 고정이 없어도 통과하므로 이 줄로 가른다.
+# Globals:
+#   run_out
+# Arguments:
+#   사례 이름.
+# Returns:
+#   없으면 0(아니면 실패를 센다).
+#######################################
+expect_clean_stderr() {
+  local name="$1" paths
+  paths="$(testlib::abs_path_lines "${run_out}.stderr")"
+  if [[ -n "${paths}" ||
+    "$(testlib::count "${run_out}.stderr" 'value too great')" -ne 0 ]]; then
+    testlib::fail "${name}: 표준 오류에 산술 오류 · 절대 경로 —" \
+      "$(cat -- "${run_out}.stderr")"
+    return 1
+  fi
+}
+
+#######################################
 # 앞 기준은 같은 묶음 것만 찾는다 — alpha-stop 의 승인이 alpha 의 비교
-# 기준이 되지 않는다.
+# 기준이 되지 않고, 후보 찾기에서부터 빠진다(표준 오류에 산술 오류 없음).
 # Globals:
 #   run_status
 #######################################
@@ -520,6 +563,7 @@ expect_prefix_isolated() {
   fi
   run_recheck "${case_dir}" alpha alpha
   expect_result prefix-alpha 0 'SCP RECHECK OK 3' 3 || return
+  expect_clean_stderr prefix-alpha || return
   testlib::ok "prefix → 이름이 겹치는 묶음의 승인을 섞지 않음"
 }
 
@@ -553,8 +597,9 @@ make_foreign_dir() {
 
 #######################################
 # 장부 r1 #6: 증거 디렉터리 이름은 도구마다 겹치지 않는다. 같은 묶음 이름의
-# 다른 도구 디렉터리가 더 최근이어도 앞 기준 찾기가 섞이지 않고, 그
-# 이름으로는 승인할 수 없다.
+# 다른 도구 디렉터리가 더 최근이어도 앞 기준 찾기가 섞이지 않고(후보
+# 찾기에서부터 빠짐 — 표준 오류에 산술 오류 · 절대 경로 없음), 그 이름으로는
+# 승인할 수 없다.
 #######################################
 expect_other_tool_dirs_ignored() {
   local case_dir root name
@@ -573,6 +618,7 @@ expect_other_tool_dirs_ignored() {
   done
   run_recheck "${case_dir}" second gamma
   expect_result other-tool-second 3 'SCP RECHECK CHANGED 1' 2 || return
+  expect_clean_stderr other-tool-second || return
   run_recheck "${case_dir}" foreign --accept gamma \
     --dir gamma-29991231T000000Z --reason 'kty 답'
   expect_unverifiable other-tool-accept || return
@@ -658,6 +704,50 @@ expect_accept_hidden_newer_rejected() {
   fi
   testlib::ok "accept-hidden-newer → 승인 여부를 볼 수 없는 더 최근 판정보다" \
     "오래된 판정의 승인은 종료 2"
+}
+
+#######################################
+# 런북의 복구 절차: 승인 기준이 손상돼 종료 2 가 계속될 때 그 디렉터리를
+# 지우지 않고 accepted.tsv 만 같은 디렉터리 안에서 다른 이름으로 바꾸면, 그
+# 판정은 승인하지 않은 것과 같아 앞 기준이 baseline 으로 돌아간다(종료 3 ·
+# 표준 오류의 「비교 기준 baseline.tsv」). 새 판정을 승인하면 다음 판정은
+# 종료 0 이고, 이름을 바꾼 승인 기록은 그대로 남는다.
+# Globals:
+#   run_status, run_out
+#######################################
+expect_renamed_acceptance_falls_back() {
+  local case_dir dir name moved
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "renamed-acceptance: 시험 준비 실패"
+    return
+  }
+  if ! name="$(judge_and_accept "${case_dir}" gamma)"; then
+    testlib::fail "renamed-acceptance: 시험 준비 실패"
+    return
+  fi
+  dir="${case_dir}/home/.pokeclip-precheck/${name}"
+  moved="${dir}/accepted.tsv.damaged-20261017T000000Z"
+  printf 'x\n' >>"${dir}/result.tsv"
+  run_recheck "${case_dir}" damaged gamma
+  expect_unverifiable renamed-acceptance-damaged || return
+  mv -- "${dir}/accepted.tsv" "${moved}" || {
+    testlib::fail "renamed-acceptance: 시험 준비 실패"
+    return
+  }
+  run_recheck "${case_dir}" renamed gamma
+  expect_result renamed-acceptance 3 'SCP RECHECK CHANGED 1' 2 || return
+  testlib::expect_stderr_count renamed-acceptance \
+    '비교 기준 baseline.tsv' 1 || return
+  run_recheck "${case_dir}" accept-new --accept gamma --dir "$(judged_name)" \
+    --reason 'kty 답'
+  run_recheck "${case_dir}" after gamma
+  expect_result renamed-acceptance-after 0 'SCP RECHECK OK 2' 2 || return
+  if [[ ! -f "${moved}" ]]; then
+    testlib::fail "renamed-acceptance: 이름을 바꾼 승인 기록이 남지 않음"
+    return
+  fi
+  testlib::ok "renamed-acceptance → 손상된 기준의 승인 기록 이름을 바꾸면" \
+    "baseline 으로 돌아가 종료 3 · 새 판정 승인 뒤 종료 0 · 기록은 남음"
 }
 
 #######################################
@@ -908,6 +998,28 @@ tamper_reference() {
         >>"${dir}/result.tsv" && rehash_marker "${dir}" &&
         rehash_acceptance "${dir}"
       ;;
+    result-pair)
+      # 판정과 시뮬레이터 판정의 짝이 틀림(허용인데 implicitDeny).
+      rewrite_result_row "${dir}" iam:GetAccountAuthorizationDetails \
+        us-east-1 allow implicitDeny True
+      ;;
+    result-bad-action)
+      rewrite_result_row "${dir}" iam-GetAccountAuthorizationDetails \
+        us-east-1 allow allowed True
+      ;;
+    result-bad-region)
+      rewrite_result_row "${dir}" iam:GetAccountAuthorizationDetails \
+        us_east_1 allow allowed True
+      ;;
+    result-quote)
+      # 다섯째 칸(AllowedByOrganizations)에 큰따옴표 — is_plain 이 막는다.
+      rewrite_result_row "${dir}" iam:GetAccountAuthorizationDetails \
+        us-east-1 allow allowed '"True"'
+      ;;
+    result-empty)
+      : >"${dir}/result.tsv" && rehash_marker "${dir}" &&
+        rehash_acceptance "${dir}"
+      ;;
     result-changed)
       {
         testlib::tsv iam:GetAccountAuthorizationDetails us-east-1 deny \
@@ -948,14 +1060,16 @@ tamper_reference() {
 # 승인 기준이 손대진 채로는 기준이 되지 않는다(종료 2): 승인 기록이 빈 ·
 # 링크 · 대상 없는 링크 · UTC 아닌 시각 · 판정 때와 다른 해시, 완료 표지가
 # 링크 · 없음, 결과가 링크 · 0644 · FIFO · FIFO 를 가리키는 링크 · 칸 수 틀림
-# (칸 모자람) · 중복 행 · 승인 뒤 바뀜 · 승인 기록 해시까지 맞춰 바뀜, 호출
-# 주체 기록이 링크 · 0644, 승인 디렉터리가 0600 · 0000(검색 불가 — 건너뛰면
-# 앞 기준이 조용히 이전 승인 · baseline 으로 바뀐다) · 디렉터리 자리의 실행
-# 가능한 일반 파일, 다른 계정에서 승인한 기준. 기준 파일은 내용 · 해시를
-# 읽기 전에 검사하므로 FIFO 에서 걸리지 않는다(RUN_LIMIT 안에 끝남). 사례마다
-# 그 사례가 겨누는 검사에 닿게 한다 — 내용을 바꾼 사례는 표지 · 승인 기록의
-# 해시를 맞춰 앞의 해시 대조에서 먼저 끝나지 않게 한다(해시 대조 자체를
-# 겨누는 result-changed · result-rehashed 는 빼고).
+# (칸 모자람) · 중복 행 · 판정과 시뮬레이터 판정의 짝 틀림 · 동작 꼴 밖 ·
+# 리전 꼴 밖 · 큰따옴표 든 칸 · 빈 결과 · 승인 뒤 바뀜 · 승인 기록 해시까지
+# 맞춰 바뀜, 호출 주체 기록이 링크 · 0644, 승인 디렉터리가 0600 · 0000(검색
+# 불가 — 건너뛰면 앞 기준이 조용히 이전 승인 · baseline 으로 바뀐다) ·
+# 디렉터리 자리의 실행 가능한 일반 파일, 다른 계정에서 승인한 기준. 기준
+# 파일은 내용 · 해시를 읽기 전에 검사하므로 FIFO 에서 걸리지 않는다
+# (RUN_LIMIT 안에 끝남). 사례마다 그 사례가 겨누는 검사에 닿게 한다 — 내용을
+# 바꾼 사례는 표지 · 승인 기록의 해시를 맞춰 앞의 해시 대조에서 먼저 끝나지
+# 않게 한다(해시 대조 자체를 겨누는 result-changed · result-rehashed 는
+# 빼고).
 # Globals:
 #   run_out
 #######################################
@@ -964,7 +1078,8 @@ expect_tampered_reference_rejected() {
   for kind in accepted-empty accepted-link accepted-dangling-link \
     accepted-bad-time accepted-other-hash complete-link complete-missing \
     result-link result-0644 result-fifo result-fifo-link result-fields \
-    result-dup result-changed result-rehashed sts-link sts-0644 \
+    result-dup result-pair result-bad-action result-bad-region result-quote \
+    result-empty result-changed result-rehashed sts-link sts-0644 \
     approved-dir-0600 approved-dir-0000 approved-dir-file other-account; do
     if ! case_dir="$(new_tree_case)" ||
       ! name="$(judge_and_accept "${case_dir}" gamma)" ||
@@ -1151,8 +1266,14 @@ expect_approved_link_rejected() {
 
 #######################################
 # 사례 6: 재판정 호출 실패 · 호출 자체의 AccessDenied · 빈 응답 · 다른 동작의
-# 응답 · 여러 줄 · 칸이 모자란 응답 · 호출 주체 확인 실패 · IAM 사용자가 아닌 주체 · 묶음 없음 · 꼴이
-# 틀린 묶음은 모두 종료 2 이고 유출이 없다.
+# 응답 · 여러 줄 · 칸이 모자란 응답 · 호출 주체 확인 실패 · IAM 사용자가
+# 아닌 주체 · 묶음 없음 · 꼴이 틀린 묶음은 모두 종료 2 이고 유출이 없다.
+# 원인 문구로 가르는 셋: 호출 실패와 호출 자체의 AccessDenied 는 다른
+# 문구다(「AccessDenied」 든 줄은 후자에만 하나). IAM 사용자가 아닌 주체는
+# 그 문구로 멈춘다 — 가짜 aws 가 역할 세션 ARN 요청을 입력 오류로 끝내므로
+# 그 검사가 없어도 종료 2 라, 문구로만 가를 수 있다.
+# Globals:
+#   run_out
 #######################################
 expect_unverifiable_cases() {
   local case_dir spec name env_arg bundle
@@ -1181,12 +1302,27 @@ expect_unverifiable_cases() {
     env_arg="${env_arg%% *}"
     run_recheck "${case_dir}" "${name}" "${env_arg}" "${bundle}"
     expect_unverifiable "${name}" || return
+    case "${name}" in
+      sim-fail)
+        testlib::expect_stderr_count "${name}" '시뮬레이터 호출 실패(' 1 &&
+          testlib::expect_stderr_count "${name}" AccessDenied 0
+        ;;
+      sim-denied-call)
+        testlib::expect_stderr_count "${name}" '시뮬레이터 호출 실패(' 0 &&
+          testlib::expect_stderr_count "${name}" AccessDenied 1
+        ;;
+      identity-role)
+        testlib::expect_stderr_count "${name}" \
+          '호출 주체가 IAM 사용자가 아님' 1
+        ;;
+      *) ;;
+    esac || return
   done
   run_recheck "${case_dir}" no-args
   expect_unverifiable no-args || return
   expect_no_leak unverifiable "${case_dir}" || return
   testlib::ok "unverifiable → 호출 실패 · AccessDenied · 빈 응답 · 주체 · 묶음" \
-    "모두 종료 2 · 유출 0"
+    "모두 종료 2 · 유출 0 · 호출 실패 · AccessDenied · 주체는 원인 문구로 가름"
 }
 
 main() {
@@ -1203,6 +1339,7 @@ main() {
   expect_other_tool_dirs_ignored
   expect_accept_named_judgment
   expect_accept_hidden_newer_rejected
+  expect_renamed_acceptance_falls_back
   expect_accept_incomplete_rejected
   expect_accept_changed_result_rejected
   expect_no_record_when_time_fails

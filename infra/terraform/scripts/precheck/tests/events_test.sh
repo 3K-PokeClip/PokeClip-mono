@@ -213,6 +213,58 @@ expect_category_counts() {
 }
 
 #######################################
+# 권한 변경 행의 응답에 같은 이벤트 ID 가 두 번 와도(페이지 겹침 등) 권한
+# 변경 a 는 한 번만 센다. 역할 받기 쪽의 ID 한 번은 count 사례(ev-1 이 두
+# 리전에서 옴)가 본다.
+# Globals:
+#   run_out, run_status, WANT_EVENTS
+#######################################
+expect_perm_duplicate_counted_once() {
+  local case_dir
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "perm-dup: 시험 준비 실패"
+    return
+  }
+  event_row us-east-1 AttachUserPolicy ev-5 iam >>"${case_dir}/in/events.tsv"
+  run_events "${case_dir}" perm-dup --since "$(now_utc)"
+  if [[ "${run_status}" -ne 0 ||
+    "$(cat -- "${run_out}.stdout")" != "${WANT_EVENTS}" ]]; then
+    testlib::fail "perm-dup: 종료 0 · 「${WANT_EVENTS}」 를 기대했으나" \
+      "${run_status} · $(cat -- "${run_out}.stdout" "${run_out}.stderr")"
+    return
+  fi
+  testlib::ok "perm-dup → 권한 변경 행 응답에 두 번 온 ID 는 한 번"
+}
+
+#######################################
+# 증거는 본인만 읽는다 — 부르는 쪽 umask 가 022 여도 증거 루트 아래 파일은
+# 0600, 디렉터리는 0700 이다(events.sh 의 umask 077 · lib 의 0700).
+# Globals:
+#   run_out, run_status, WANT_EVENTS
+#######################################
+expect_evidence_private() {
+  local case_dir root previous files wide
+  case_dir="$(new_tree_case)" || {
+    testlib::fail "private: 시험 준비 실패"
+    return
+  }
+  root="${case_dir}/home/.pokeclip-precheck"
+  previous="$(umask)"
+  umask 022
+  run_events "${case_dir}" private --since "$(now_utc)"
+  umask "${previous}"
+  files="$(find "${root}" -type f | wc -l | tr -d ' ')"
+  wide="$(find "${root}" ! \( -type f -perm 0600 \) \
+    ! \( -type d -perm 0700 \) -print)"
+  if [[ "${run_status}" -ne 0 || "${files}" -eq 0 || -n "${wide}" ]]; then
+    testlib::fail "private: 종료 0 · 0600 파일 · 0700 디렉터리만을 기대했으나" \
+      "${run_status} · 파일 ${files}개 · 그 밖 — ${wide}"
+    return
+  fi
+  testlib::ok "private → umask 022 에서 불러도 증거 파일 0600 · 디렉터리 0700"
+}
+
+#######################################
 # 사례 4: --since 가 90일보다 이르면 표준 오류로 한계를 경고한다(조회는 함).
 # Globals:
 #   OLD_SINCE, run_status, run_out, WANT_EVENTS
@@ -337,13 +389,14 @@ expect_malformed_lookup_rejected() {
 
 #######################################
 # 사례 6: 조회 실패 · 호출 자체의 AccessDenied · 잘못된 --since 는 종료 2 ·
-# EVENTS 줄 없음 · 유출 0. --since 자리의 입력은 되울리지 않는다(장부 r2 #5
-# — 절대 경로를 주어도 표준 오류에 절대 경로 0).
+# EVENTS 줄 없음 · 유출 0. 조회 실패와 AccessDenied 는 원인 문구가 다르다
+# (「AccessDenied」 든 줄은 후자에만 하나). --since 자리의 입력은 되울리지
+# 않는다(장부 r2 #5 — 절대 경로를 주어도 표준 오류에 절대 경로 0).
 # Globals:
 #   run_status, run_out
 #######################################
 expect_unverifiable_cases() {
-  local case_dir spec name leaked paths
+  local case_dir spec name leaked paths denied
   case_dir="$(new_tree_case)" || {
     testlib::fail "unverifiable: 시험 준비 실패"
     return
@@ -357,6 +410,12 @@ expect_unverifiable_cases() {
         "${run_status}"
       return
     fi
+    denied=0
+    [[ "${spec}" == denied-call ]] && denied=1
+    testlib::expect_stderr_count "lookup-${spec}" '조회 실패(' \
+      "$((1 - denied))" &&
+      testlib::expect_stderr_count "lookup-${spec}" AccessDenied \
+        "${denied}" || return
   done
   for spec in 'bad-format 2026-10-13' 'future 2999-01-01T00:00:00Z' \
     'no-value' 'no-option'; do
@@ -401,6 +460,8 @@ main() {
   testlib::init events_test
   expect_counts_and_regions
   expect_category_counts
+  expect_perm_duplicate_counted_once
+  expect_evidence_private
   expect_ninety_day_warning
   expect_no_leak
   expect_malformed_lookup_rejected

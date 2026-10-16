@@ -173,11 +173,12 @@ expect_outside_root_rejected() {
 #######################################
 # 조상에 표지(.git · .obsidian)가 있으면 루트를 만들지 않고 거부한다. HOME 이
 # 저장소 · 볼트의 하위인 꼴이라, 거부 문구는 조상의 절대 경로(저장소 위치 ·
-# 로컬 계정 이름)를 내지 않고 표지 종류만 적는다(장부 r2 #5).
+# 로컬 계정 이름)를 내지 않고 표지 종류만 적는다(장부 r2 #5). 표지가 대상
+# 없는 링크여도 거부한다 — 그런 링크는 있는지(-e) 물으면 없다고 나온다.
 # Globals:
 #   run_out
 # Arguments:
-#   사례 이름, 표지 이름, 표지 종류(dir · file).
+#   사례 이름, 표지 이름, 표지 종류(dir · file · dangling-link).
 #######################################
 expect_marker_rejected() {
   local name="$1" marker="$2" kind="$3"
@@ -191,11 +192,11 @@ expect_marker_rejected() {
     testlib::fail "${name}: 시험 준비 실패"
     return
   }
-  if [[ "${kind}" == dir ]]; then
-    mkdir -- "${base}/${marker}"
-  else
-    printf 'gitdir: elsewhere\n' >"${base}/${marker}"
-  fi
+  case "${kind}" in
+    dir) mkdir -- "${base}/${marker}" ;;
+    file) printf 'gitdir: elsewhere\n' >"${base}/${marker}" ;;
+    *) ln -s -- "${base}/nowhere" "${base}/${marker}" ;;
+  esac
   # HOME 을 표지 아래로 옮긴다(사례 디렉터리의 home 대신).
   if ! rmdir -- "${case_dir}/home" ||
     ! ln -s -- "${base}/home" "${case_dir}/home"; then
@@ -404,6 +405,8 @@ main() {
   expect_marker_rejected repo-marker .git dir
   expect_marker_rejected repo-marker-file .git file
   expect_marker_rejected vault-marker .obsidian dir
+  expect_marker_rejected repo-marker-dangling-link .git dangling-link
+  expect_marker_rejected vault-marker-dangling-link .obsidian dangling-link
   expect_link_in_root_rejected
   expect_root_link_rejected
   expect_mode_rejected
