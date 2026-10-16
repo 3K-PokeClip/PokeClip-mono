@@ -1,8 +1,8 @@
 {
   "terms": [
-    { "label": "〈시행일 확정 후 기재〉", "path": "/terms/", "file": "terms/index.html" }
+    { "label": "2026.10.17", "path": "/terms/", "file": "terms/index.html" }
   ],
   "privacy": [
-    { "label": "〈시행일 확정 후 기재〉", "path": "/privacy/", "file": "privacy/index.html" }
+    { "label": "2026.10.17", "path": "/privacy/", "file": "privacy/index.html" }
   ]
 }

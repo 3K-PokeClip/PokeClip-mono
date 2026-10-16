@@ -94,7 +94,7 @@ YouTube 업로드는 사실이 됐습니다(POK-291, 위키 ADR-091). 스트리�
 | `llms.txt` | AI 답변 엔진용 사실 요약과 주요 주소(아래 「AI 답변 엔진」) |
 | `favicon.ico` · `icon.svg` · `apple-touch-icon.png` | web의 브랜드 아이콘(`web/src/app`)을 그대로 복사했습니다. 원본을 다시 만들면(`pnpm run build:brand`) 다시 복사합니다 |
 | `assets/img/og.jpg` · `assets/brand/pokeclip-logo-512.png` | 공유 미리보기(1200×630)와 JSON-LD 로고. `node landing/scripts/og/render.mjs`가 `scripts/og/og.html`을 헤드리스 Chrome으로 찍고 web의 sharp로 줄여 만듭니다 |
-| `scripts/check-seo.mjs` | 필수 메타, og:image 절대 URL, canonical·sitemap 주소 일치, 루트 정적 파일, JSON-LD 파싱, 화면 FAQ와 FAQPage 문장 일치, AI 크롤러 정책(학습용 차단·답변용 허용), 사실 요약이 FAQ 첫 문항·`SoftwareApplication.description`·`llms.txt`에서 같은지 |
+| `scripts/check-seo.mjs` | 필수 메타, og:image 절대 URL, canonical·sitemap 주소 일치, 루트 정적 파일, JSON-LD 파싱, 화면 FAQ와 FAQPage 문장 일치, AI 크롤러 정책(학습용 차단·답변용 허용), 사실 요약이 FAQ 첫 문항·`SoftwareApplication.description`·`llms.txt`에서 같은지, 공개 파일(README·`scripts/`·`legal-versions.json` 밖)에 내부 티켓 번호(`POK-…`)가 없는지 — 주석도 소스 보기로 보입니다 |
 
 ```bash
 node landing/scripts/check-seo.mjs

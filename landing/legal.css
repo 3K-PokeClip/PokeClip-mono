@@ -1,4 +1,4 @@
-/* 이용약관·개인정보 처리방침 (POK-269) — styles.css의 토큰·베이스·푸터 위에 문서 레이아웃만 얹는다.
+/* 이용약관·개인정보 처리방침 — styles.css의 토큰·베이스·푸터 위에 문서 레이아웃만 얹는다.
    읽는 화면이라 한 줄 길이를 760에서 끊고, 표만 가로로 밀리게 한다(페이지 전체 가로 넘침 금지). */
 
 .legal-top {
@@ -28,7 +28,7 @@
 }
 .legal-doc__intro { margin-top: 16px; color: var(--t2); }
 
-/* 시행일 드롭다운 — 토스 약관과 같은 자리(제목 바로 아래). 블록은 scripts/legal-versions.mjs가 쓴다 */
+/* 시행일 드롭다운 — 제목 바로 아래. 블록은 scripts/legal-versions.mjs가 쓴다 */
 .legal-version { position: relative; display: inline-block; margin-top: 16px; }
 .legal-version__menu summary {
   display: inline-flex;
