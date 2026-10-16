@@ -45,6 +45,12 @@ public class UploadReportController {
         return reply(service.session(uploadId, body.sessionUri()));
     }
 
+    /** 일꾼이 처리 중이라는 신호(POK-333). 본문 없음. 200 {@code {"status","touched"}} · 404 {@code upload_not_found}. */
+    @PostMapping("/internal/uploads/{uploadId}/heartbeat")
+    public ResponseEntity<Map<String, Object>> heartbeat(@PathVariable long uploadId) {
+        return reply(service.heartbeat(uploadId));
+    }
+
     @PostMapping("/internal/uploads/{uploadId}/result")
     public ResponseEntity<Map<String, Object>> result(@PathVariable long uploadId, @RequestBody ResultBody body) {
         return reply(service.result(uploadId, body.outcome(), body.videoId(), body.errorCode(), body.errorMessage(),

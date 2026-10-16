@@ -32,9 +32,10 @@ public class UploadResolutionService {
     private static final Logger log = LoggerFactory.getLogger(UploadResolutionService.class);
 
     /**
-     * 「안 올라갔다」를 받기까지 마지막 일꾼 활동에서 기다리는 시간. 그 전에는 일꾼이 아직 같은 이어 올리기 주소로 바이트를 보내고 있을 수
-     * 있다: 업로드 줄의 쪽지는 15분(숨김 900초) 뒤 다시 보이고, 다시 잡은 일꾼은 다시 시도 지연을 거쳐 그 주소에 「어디까지 받았나」를
-     * 묻는다. 그 사이 자리를 비우면 다시 올린 영상과 늦게 끝난 영상이 둘 뜬다. 숨김 두 바퀴 = 30분이면 한 번 더 잡힌 일꾼까지 끝난다.
+     * 「안 올라갔다」를 받기까지 마지막 일꾼 활동에서 기다리는 시간. <b>마지막 일꾼 활동 = 마지막 heartbeat 또는 상태 변경</b>
+     * ({@code updated_at}): 일꾼은 처리하는 동안 1분마다 heartbeat를 보낸다({@link UploadReportService#heartbeat}). 그래서 한 일꾼이
+     * 아직 같은 이어 올리기 주소로 보내는 동안에는 이 시간이 안 찬다. 일꾼이 죽은 뒤에도 쪽지는 15분(숨김 900초) 뒤 다시 보이고, 다시
+     * 잡은 일꾼은 다시 시도 지연을 거쳐 그 주소에 「어디까지 받았나」를 묻는다. 숨김 두 바퀴 = 30분이면 한 번 더 잡힌 일꾼까지 끝난다.
      */
     static final Duration NOT_UPLOADED_AFTER = Duration.ofMinutes(30);
 

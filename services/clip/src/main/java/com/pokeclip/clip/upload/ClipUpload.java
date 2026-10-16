@@ -130,6 +130,11 @@ public class ClipUpload {
         this.updatedAt = Instant.now();
     }
 
+    /** 일꾼이 아직 처리 중이다(heartbeat, POK-333). 상태는 그대로 두고 마지막 일꾼 활동 시각만 옮긴다. */
+    void touched() {
+        this.updatedAt = Instant.now();
+    }
+
     /** 처음 적는 주소만 남는다(CAS). @return 남은 주소: 부른 쪽은 자기가 만든 것이 아니면 버리고 이것을 쓴다 */
     String recordSession(String uri) {
         if (this.sessionUri == null) {

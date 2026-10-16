@@ -275,6 +275,50 @@ class UploadResolutionTest extends RenderUploadTestSupport {
                 .isEqualTo("zzzZZZ99999");
     }
 
+    /**
+     * 「마지막 일꾼 활동」은 마지막 heartbeat 또는 상태 변경이다(PR #261 codex P1). 줄이 확인 필요가 된 지 30분이 넘었어도 일꾼이 아직
+     * heartbeat를 보내면 「안 올라갔다」는 409다(그 일꾼이 같은 주소로 아직 보내고 있다). heartbeat가 끊긴 지 30분이 지나야 받는다.
+     */
+    @Test
+    void heartbeat가_오는_동안은_안_올라갔다가_409이고_끊긴_지_30분_뒤에야_받는다() throws Exception {
+        long[] 줄 = 확인_필요_업로드();
+        for (int 분 = 0; 분 < 3; 분++) {
+            // 확인 필요가 된 지 31분 · 32분 · 33분이 지났지만 그 사이 일꾼이 계속 heartbeat를 보낸다.
+            일꾼_활동_시각(줄[1], Duration.ofMinutes(31 + 분));
+            heartbeat(줄[1]).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.status").value("checking"))
+                    .andExpect(jsonPath("$.touched").value(true));
+            풀기(줄, 안_올라감()).andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.error").value("resolution_too_early"));
+        }
+        assertThat(상태(줄[1])).startsWith("checking:");
+
+        // heartbeat가 끊겼다: 마지막 것에서 31분.
+        일꾼_활동_시각(줄[1], Duration.ofMinutes(31));
+        풀기(줄, 안_올라감()).andExpect(status().isOk());
+    }
+
+    /** heartbeat는 상태를 안 바꾸고, 끝난 줄(올림 · 실패)의 시각도 안 옮긴다. 몇 번 와도 같다. 모르는 번호는 404다. */
+    @Test
+    void heartbeat는_끝난_줄을_건드리지_않고_멱등이다() throws Exception {
+        long[] 줄 = 확인_필요_업로드();
+        for (String 끝 : new String[]{"uploaded", "failed"}) {
+            jdbc.update("UPDATE clip_uploads SET status = ?, youtube_video_id = ? WHERE id = ?",
+                    끝, "uploaded".equals(끝) ? 영상번호 : null, 줄[1]);
+            일꾼_활동_시각(줄[1], Duration.ofMinutes(40));
+            Timestamp 전 = jdbc.queryForObject("SELECT updated_at FROM clip_uploads WHERE id = ?", Timestamp.class, 줄[1]);
+            for (int i = 0; i < 2; i++) {
+                heartbeat(줄[1]).andExpect(status().isOk())
+                        .andExpect(jsonPath("$.status").value(끝))
+                        .andExpect(jsonPath("$.touched").value(false));
+            }
+            assertThat(jdbc.queryForObject("SELECT updated_at FROM clip_uploads WHERE id = ?", Timestamp.class, 줄[1]))
+                    .isEqualTo(전);
+            assertThat(상태(줄[1])).startsWith(끝 + ":");
+        }
+        heartbeat(999_999L).andExpect(status().isNotFound()).andExpect(jsonPath("$.error").value("upload_not_found"));
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────
 
     /**
@@ -317,6 +361,10 @@ class UploadResolutionTest extends RenderUploadTestSupport {
     private ResultActions 풀기(long[] 줄, String body) throws Exception {
         return mvc.perform(post("/api/clip/broadcasts/" + 방송 + "/clips/" + 줄[0] + "/uploads/" + 줄[1] + "/resolution")
                 .header("Authorization", 토큰()).contentType(MediaType.APPLICATION_JSON).content(body));
+    }
+
+    private ResultActions heartbeat(long uploadId) throws Exception {
+        return mvc.perform(post("/internal/uploads/" + uploadId + "/heartbeat").header("X-Internal-Token", INTERNAL));
     }
 
     private ResultActions 늦은_올림(long uploadId) throws Exception {

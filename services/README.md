@@ -2315,6 +2315,7 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"privacyStatus"
 | `POST /api/clip/broadcasts/{streamId}/clips/{clipId}/uploads/{uploadId}/resolution` `{result, videoId?}` (POK-333) | Bearer JWT | **200** 봉투(같은 결과를 다시 보내도 200, 푼 사람 · 시각은 처음 것) · 400 `field`=`result`\|`videoId` · 404 `broadcast_not_found`/`clip_not_found`/`upload_not_found` · **409** `upload_not_checking`(`status` 실림: 확인 필요가 아니다) · **`resolution_too_early`**(`allowedAt` 실림) · 401 · 503 |
 | `POST /internal/uploads/{id}/start` | `X-Internal-Token` | 200 `{"proceed":true,"status","attempt","sessionUri"\|null}` 또는 `{"proceed":false,"status"}`(끝난 주문) · 404 `upload_not_found` |
 | `POST /internal/uploads/{id}/session` `{sessionUri}` | `X-Internal-Token` | 200 `{"sessionUri"}` = **먼저 적힌 주소**(일꾼은 자기 주소를 버리고 이것을 쓴다) · 409 `{"reason":"NOT_STARTED"\|"TERMINAL"}` · 400 |
+| `POST /internal/uploads/{id}/heartbeat` (본문 없음, POK-333) | `X-Internal-Token` | 200 `{"status","touched"}`: 일꾼이 처리 중이라는 신호. 상태는 안 바꾸고 `updated_at`만 옮긴다. 끝난 줄(올림 · 실패)은 안 건드린다(`touched:false`). 몇 번 와도 같다 · 404 `upload_not_found` |
 | `POST /internal/uploads/{id}/result` `{outcome, videoId?, errorCode?, errorMessage?, thumbnailOutcome?, thumbnailErrorCode?}` | `X-Internal-Token` | 200 `{"status"}`(같은 끝 보고가 다시 와도 200. 주소가 적힌 줄의 `FAILED`는 `checking`으로 받는다) · 409 `TERMINAL`(다른 끝으로 덮기. `checking`→`UPLOADED`만 허용)·`NOT_STARTED` · 400 |
 
 **봉투**: `{"id","clipId","outputId","title","status","videoId","error":{"code","message"},"requestedBy","createdAt","updatedAt","privacyStatus","madeForKids","tags":[…],"thumbnail":{"source","status","errorCode"},"resolvedBy","resolvedAt"}`.
@@ -2382,8 +2383,12 @@ UploadInfo = {"title":"필수","description":null,"tags":["…"],"privacyStatus"
 줄을 잠그고 `checking`일 때만 바꾸므로 두 사람이 동시에 눌러도 하나만 반영된다(진 쪽은 409).
 - `uploaded` + 영상 번호: 올림이 된다. 영상 번호는 그대로이거나 주소(`youtu.be/번호` · `watch?v=번호` · `shorts/번호` · 스튜디오 `video/번호/…`)이고,
   번호 모양은 일꾼 보고와 같은 규칙이다. 썸네일이 결과 대기(`pending`)였으면 `failed` + `THUMBNAIL_UNCONFIRMED`(붙었는지 모름)로 닫는다.
-- `not_uploaded`: `failed` + `CONFIRMED_NOT_UPLOADED`로 자리를 비워 다시 시도 · 같은 판 영상 만들기가 열린다. 🔴 **마지막 일꾼 활동(`updated_at`)에서
+- `not_uploaded`: `failed` + `CONFIRMED_NOT_UPLOADED`로 자리를 비워 다시 시도 · 같은 판 영상 만들기가 열린다. 🔴 **마지막 일꾼 활동에서
   30분이 지난 뒤에만 받는다**(그 전이면 409 `resolution_too_early`): 일꾼이 아직 같은 이어 올리기 주소로 보내고 있을 수 있다(쪽지 숨김 900초 두 바퀴).
+  **마지막 일꾼 활동 = 마지막 heartbeat 또는 상태 변경**(`updated_at`). 일꾼은 처리하는 동안 1분마다 heartbeat를 보내므로, 쪽지가 두 번 와 다른 일꾼이 줄을
+  `checking`으로 만든 뒤에도 처음 일꾼이 올리는 동안에는 30분이 안 찬다(PR #261 codex P1).
+  🔴 **배포 순서: clip 먼저, 업로드 일꾼 나중.** 옛 clip은 heartbeat 문을 몰라 404를 준다. 일꾼은 그것을 WARN `upload.heartbeat_rejected`로만 남기고 업로드를
+  계속하지만, 그 사이에는 이 막이가 숨김 연장을 못 본다.
 
 **알려진 한계**
 - **「안 올라갔다」로 푼 뒤 늦게 온 일꾼의 올림 보고는 받지 않는다**(지금처럼 409 `TERMINAL`, 새 상태 없음). 그 영상은 채널에 있고, 그 사이 다시 올렸으면

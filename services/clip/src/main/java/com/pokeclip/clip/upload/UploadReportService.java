@@ -97,6 +97,27 @@ public class UploadReportService {
         });
     }
 
+    /**
+     * 일꾼이 아직 이 주문을 처리하고 있다는 신호(POK-333). 일꾼은 처리하는 동안 1분마다 부른다. <b>상태는 안 바꾸고 마지막 일꾼 활동
+     * 시각({@code updated_at})만 옮긴다</b>: 「안 올라갔다」는 그 시각에서 30분 뒤에만 받으므로({@link UploadResolutionService}), 한 일꾼이
+     * 30분 넘게 같은 이어 올리기 주소로 보내는 동안 사람이 자리를 비우지 못한다(쪽지가 두 번 와 다른 일꾼이 줄을 {@code checking}으로 만든
+     * 뒤에도). 끝난 줄(올림 · 실패)은 건드리지 않는다. 몇 번 와도 결과가 같다.
+     */
+    public Reply heartbeat(long uploadId) {
+        return transactions.execute(tx -> {
+            ClipUpload upload = uploads.findByIdForUpdate(uploadId).orElseThrow(() -> new UploadNotFoundException(uploadId));
+            UploadStatus status = upload.getStatus();
+            boolean finished = status == UploadStatus.UPLOADED || status == UploadStatus.FAILED;
+            if (!finished) {
+                upload.touched();
+            }
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("status", status.dbValue());
+            body.put("touched", !finished);
+            return new Reply(200, body);
+        });
+    }
+
     /** 썸네일 결과 없이 온 끝 보고(옛 일꾼). */
     public Reply result(long uploadId, String outcome, String videoId, String errorCode, String errorMessage) {
         return result(uploadId, outcome, videoId, errorCode, errorMessage, null, null);

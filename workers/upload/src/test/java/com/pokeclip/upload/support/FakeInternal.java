@@ -45,6 +45,9 @@ public class FakeInternal implements AutoCloseable {
     /** 설정하면 두 번째 resolve부터 이 토큰을 준다(auth가 토큰을 새로 갱신했다). */
     public volatile String accessTokenAfterFirst;
     public volatile int resolves;
+    /** heartbeat 문이 받은 횟수와 줄 상태 코드(POK-333). 404는 이 문을 모르는 옛 clip이다. */
+    public volatile int heartbeats;
+    public volatile int heartbeatStatus = 200;
 
     public FakeInternal() throws IOException {
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
@@ -66,6 +69,10 @@ public class FakeInternal implements AutoCloseable {
         String door = ex.getRequestURI().getPath().replaceAll(".*/", "");
         boolean settled = status.equals("uploaded") || status.equals("failed") || status.equals("checking");
         switch (door) {
+            case "heartbeat" -> {
+                heartbeats++;
+                reply(ex, heartbeatStatus, "{\"status\":\"" + status + "\"}");
+            }
             case "start" -> {
                 if (clipDown > 0) {
                     clipDown--;
