@@ -689,7 +689,8 @@ Flyway 마이그레이션은 앱이 뜰 때 실행돼야 하므로 **코드 옆(
 마이그레이션 번호는 모듈별 대역을 쓴다 — `V1xx` auth · `V2xx` clip · `V3xx` chat-collector · `V4xx` chat-detector.
 지금까지 나간 것은 auth의 `V101`~`V112`(`V110`·`V111`은 칸, **`V112`는 인덱스 넷과 표 주석 둘**, POK-89) · clip의 `V201`(`broadcasts`·`broadcast_events`)과
 `V202`(`jump_cards`, POK-118)·`V203`(`broadcasts.vod_expires_at`, POK-117)·`V204`(색인 둘, POK-174)·
-**`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · `V207`(`clips`·`render_jobs`·`render_job_events`, POK-125) · **`V208`(`clips (recipe_id, id DESC)` 색인 하나, POK-243)** · chat-collector의 `V301`(`chat_messages`)~**`V308`** ·
+**`V205`(방송 중 부분 색인, POK-218)** · `V206`(`recipes`, POK-124) · `V207`(`clips`·`render_jobs`·`render_job_events`, POK-125) · **`V208`(`clips (recipe_id, id DESC)` 색인 하나, POK-243)** ·
+`V209`~`V213` · **`V214`(`jump_cards.hidden_reason` · `jump_card_actions` · `recipes.source_card_id`, POK-338)** · chat-collector의 `V301`(`chat_messages`)~**`V308`** ·
 chat-detector의 `V401`(`chat_metrics`, POK-120)이다.
 
 **chat-collector 대역 열:** `V301`(`chat_messages`) · `V302`(`stream_id` 칸) ·
@@ -961,8 +962,8 @@ Media의 응답기(새 송출 연결을 받을지 판정하는 쪽)는 두 경�
 | `GET /api/clip/broadcasts/{streamId}/events` (계약 2B, SSE) | Bearer JWT | **200** `text/event-stream` · 404 `{"error":"broadcast_not_found"}` · 401 · **503** `{"error":"stream_limit","scope":"user\|stream\|total"}` 또는 `{"error":"authorization_unavailable"}` |
 | `POST /api/clip/jump-cards/{id}/claim` | Bearer JWT | 200 카드 · **409 본문이 현재 카드**(누가 잡고 있는지) · **400** `{"error":"invalid_request","field":"id"}`(번호가 숫자가 아니다) · 404 `{"error":"jump_card_not_found"}` · 503 `{"error":"authorization_unavailable"}` |
 | `DELETE /api/clip/jump-cards/{id}/claim` | Bearer JWT | **204** · 403 `{"error":"not_claim_owner"}` · **400**(위와 같음) · 404 · 503 |
-| `POST /api/clip/jump-cards/{id}/hide` | Bearer JWT | 200 카드(`hidden:true`) · **400**(위와 같음) · 404 · 503 |
-| `DELETE /api/clip/jump-cards/{id}/hide` | Bearer JWT | 200 카드(`hidden:false`) · **400**(위와 같음) · 404 · 503 |
+| `POST /api/clip/jump-cards/{id}/hide` | Bearer JWT | 200 카드(`hidden:true`, `hiddenReason`) · **400**(위와 같음, 또는 `"field":"reason"` — 이유가 셋 밖이다) · 404 · 503. 본문 `{"reason":"not_highlight"\|"duplicate"\|"other"}`은 고를 수 있다(POK-338). 본문이 없거나 `reason`이 없으면 이유 없이 숨긴다 |
+| `DELETE /api/clip/jump-cards/{id}/hide` | Bearer JWT | 200 카드(`hidden:false`, `hiddenReason:null`) · **400**(위와 같음) · 404 · 503 |
 
 **🔴 POK-174부터 문 다섯이 자격 판정을 지난다**(통로 + 카드 문 넷). 그래서 404의 뜻이 넓어지고
 503 갈래가 하나 늘었다 — **`jump_card_not_found`는 이제 「없는 카드」가 아니라
@@ -2021,7 +2022,7 @@ JSON **그대로**이고 칸 이름을 한 글자도 안 바꾼다 — 코드가
 
 | 문 | 인증 | 응답 |
 |---|---|---|
-| `POST /api/clip/broadcasts/{streamId}/recipes` | Bearer JWT | **201** 아래 봉투 · **400** `{"error":"invalid_request","field":…}` · 404 `{"error":"broadcast_not_found"}` · 401 · 415(JSON이 아닌 Content-Type) · 503 `{"error":"authorization_unavailable"}` |
+| `POST /api/clip/broadcasts/{streamId}/recipes[?sourceCardId=N]` | Bearer JWT | **201** 아래 봉투 · **400** `{"error":"invalid_request","field":…}` · 404 `{"error":"broadcast_not_found"}` · 401 · 415(JSON이 아닌 Content-Type) · 503 `{"error":"authorization_unavailable"}` |
 | `GET /api/clip/broadcasts/{streamId}/recipes` | Bearer JWT | **200** `{"recipes":[…]}` 만든 순서 · 404 · 401 · 503 |
 | `GET /api/clip/broadcasts/{streamId}/recipes/{id}` | Bearer JWT | **200** 봉투 · 404 `{"error":"broadcast_not_found"}` 또는 **`{"error":"recipe_not_found"}`** · 401 · 503 |
 | `PUT /api/clip/broadcasts/{streamId}/recipes/{id}` | Bearer JWT | **200** 봉투(`recipeVersion` +1) · 400 · 404(둘 중 하나) · 401 · 415 · 503 |
@@ -2415,6 +2416,76 @@ auth가 탈퇴를 알리는 내부 문 하나: **`DELETE /internal/streamers/{st
 없으면 사진 줄을 안 만든다. 탈퇴로 지운 뒤 늦게 온 보고가 줄을 되살리지 않게 하려는 것이다.
 **대상 줄을 `FOR KEY SHARE`로 잡은 채 확인하고 적는다** — 정리가 그 줄을 `FOR UPDATE`로 먼저 잡으므로 둘이 겹치면 한쪽이 기다린다
 (확인과 적기를 가르면 그 사이에 정리가 끼어 대상 없는 줄이 남았다, PR #220 codex).
+
+### clip: 시범 운영 측정 재료 (POK-338)
+
+**중간평가에서 약속한 숫자 둘을 정의대로 재려고 남기는 기록이다.** 지나간 기록은 나중에 되살릴 수 없어 시범 운영 전에 쌓기 시작한다.
+
+| 무엇 | 어디 | 언제 남나 |
+|---|---|---|
+| 숨긴 이유 | `jump_cards.hidden_reason`(`not_highlight` · `duplicate` · `other`, 없으면 NULL) | 숨기기 본문의 `reason`. 되돌리면 지운다 |
+| 카드 행동 | `jump_card_actions`(`card_id` · `action` · `actor` · `reason` · `at`), 덧붙이기만 | 집기 · 놓기 · 숨기기 · 되돌리기가 **카드 상태를 실제로 바꿨을 때**, 그 쓰기와 같은 트랜잭션에서 한 줄. 본인이 다시 집는 것(연장)도 남긴다 |
+| 편집본 출처 카드 | `recipes.source_card_id` | 첫 저장(`POST …/recipes?sourceCardId=N`). 이 방송의 카드가 아니거나 숫자가 아니면 **비운 채 저장한다**(측정 재료 때문에 저장이 실패하면 안 된다). 고쳐도 안 바뀐다 |
+
+카드 표의 `claimed_*` · `hidden_*`는 다시 집거나 되돌리면 덮이고 지워진다. 「몇 번 열었나 · 언제 열었나」는 행동 기록으로만 잰다.
+행동 기록은 카드를 지우면 같이 지워진다(FK `ON DELETE CASCADE`, 탈퇴 정리도 이것에 맡긴다).
+
+**한계** (집계를 읽을 때 같이 본다)
+
+- **「열어 봤다」를 집기(claim)로 갈음한다**(2026-10-15 결정). 남이 이미 집은 카드를 연 경우는 409라 **안 센다** — 분모가 그만큼 작다.
+  카드 목록에서 열지 않고 숨긴 카드도 분모에 안 든다(정의가 「열어 보고 부적절로 표시한 비율」이다).
+- 웹은 「편집」을 누를 때마다 집는다. 같은 카드를 여러 번 열면 claim 줄이 여럿이라 **분모는 카드 수(`DISTINCT card_id`)로 센다.**
+- **점유가 만료로 끝난 것은 기록이 없다**(치우는 배경 작업이 없다). 점유 끝 = `release` 줄, 또는 마지막 `claim` + 점유 시간(`pokeclip.jump-card.claim-ttl`, 지금 30분).
+- 부적절 여부는 **지금 상태**(`hidden_reason`)로 센다. 숨겼다가 되돌린 카드는 부적절로 안 센다.
+- 편집 시간의 시작은 **그 편집자가 첫 저장 직전에 마지막으로 집은 시각**이다. 업로드 완료 시각은 따로 없어 `clip_uploads.updated_at`(`uploaded`)을 쓴다.
+  편집자는 처음 저장한 사람(`recipes.creator_id`)만 남는다.
+- `actor`는 회원 번호다. 되돌리면 지워지는 `hidden_by`와 달리 이 기록은 카드가 있는 동안 남는다.
+
+**① 자동 카드 거짓양성률** — 기간(`:from` 이상 `:to` 미만)에 열어 본 자동 카드 중 「하이라이트 아님」으로 숨겨진 비율.
+
+```sql
+-- POK-338 거짓양성률
+WITH opened AS (
+    SELECT DISTINCT a.card_id
+      FROM jump_card_actions a
+      JOIN jump_cards c ON c.id = a.card_id
+     WHERE a.action = 'claim' AND c.source = 'auto'
+       AND a.at >= :from AND a.at < :to
+)
+SELECT count(*) AS opened,
+       count(*) FILTER (WHERE c.hidden_reason = 'not_highlight') AS not_highlight,
+       round(100.0 * count(*) FILTER (WHERE c.hidden_reason = 'not_highlight') / NULLIF(count(*), 0), 1) AS false_positive_pct
+  FROM opened o
+  JOIN jump_cards c ON c.id = o.card_id;
+```
+
+**② 편집자별 카드 → 영상 시간** — 기간에 처음 저장한, 카드에서 시작한 편집본. 초 단위 중앙값.
+
+```sql
+-- POK-338 카드에서 영상까지
+WITH started AS (
+    SELECT r.creator_id AS editor,
+           (SELECT max(a.at) FROM jump_card_actions a
+             WHERE a.card_id = r.source_card_id AND a.action = 'claim'
+               AND a.actor = r.creator_id AND a.at <= r.created_at) AS opened_at,
+           (SELECT min(c.created_at) FROM clips c WHERE c.recipe_id = r.id) AS ordered_at,
+           (SELECT min(u.updated_at) FROM clips c JOIN clip_uploads u ON u.clip_id = c.id
+             WHERE c.recipe_id = r.id AND u.status = 'uploaded') AS uploaded_at
+      FROM recipes r
+     WHERE r.source_card_id IS NOT NULL
+       AND r.created_at >= :from AND r.created_at < :to
+)
+SELECT editor,
+       count(*) AS recipes,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM ordered_at - opened_at)) AS median_open_to_order_sec,
+       percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM uploaded_at - opened_at)) AS median_open_to_upload_sec
+  FROM started
+ WHERE opened_at IS NOT NULL
+ GROUP BY editor
+ ORDER BY editor;
+```
+
+두 SQL은 `CardMetricsQueryTest`가 이 README에서 그대로 꺼내 돌려 숫자를 맞춘다 — 여기를 고치면 그 시험이 같이 본다.
 
 ### 치지직 채널 연동 (POK-93)
 
