@@ -2,7 +2,8 @@
 //
 // 목록은 시안 1n의 8행과 IA v3.3 알림 종류 5개의 합집합이다 — 시안에 없던
 // 방송 시작·승인 결과·결제 실패를 IA에서 끌어왔다. 두 문서가 갈린 자리라 어느 한쪽만
-// 따르면 나머지 한쪽의 항목이 화면에서 사라진다.
+// 따르면 나머지 한쪽의 항목이 화면에서 사라진다. 승인 요청 도착·승인 결과는 업로드 승인 게이트가 없어
+// 뺐다(POK-236 폐기, POK-254).
 //
 // 화면에 그리는 순서가 곧 배열 순서다 — 시안의 행 순서를 그대로 든다.
 
@@ -64,27 +65,13 @@ export const CRITICAL_ITEMS = [
 
 /**
  * 일반 알림 — 인앱·이메일을 각각 켜고 끈다.
- * 방송 시작·승인 결과는 IA에만 있던 항목이다.
+ * 방송 시작은 IA에만 있던 항목이다.
  */
 export const NORMAL_ITEMS = [
   {
     key: 'broadcast-start',
     title: '방송 시작',
     desc: '연동한 채널에서 방송이 시작되면',
-    inapp: true,
-    email: false,
-  },
-  {
-    key: 'approval-request',
-    title: '승인 요청 도착',
-    desc: '편집자가 업로드 승인을 요청할 때',
-    inapp: true,
-    email: false,
-  },
-  {
-    key: 'approval-result',
-    title: '승인 결과',
-    desc: '요청한 업로드가 승인되거나 반려되면',
     inapp: true,
     email: false,
   },

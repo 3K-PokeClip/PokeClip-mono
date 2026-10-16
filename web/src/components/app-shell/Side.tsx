@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   Bell,
-  ClipboardCheck,
   CreditCard,
   FolderOpen,
   HelpCircle,
@@ -39,7 +38,6 @@ type SideItemKey =
   | 'library'
   | 'template'
   | 'upstatus'
-  | 'approvals'
   | 'link'
   | 'editors'
   | 'plugin'
@@ -65,8 +63,7 @@ export type SideMenu = 'broadcast' | 'clips' | 'settings';
 
 /**
  * 항목 key → 배지 수. Dock의 DockBadges와 같은 방식 — MENUS는 모듈 상수라 값을 prop으로
- * 받아야 그룹 레이아웃이 훅 값을 흘려 넣을 수 있다. 승인 대기함 수는 그 화면 티켓(POK-236)이
- * 채운다 — 여기서는 자리만 연다.
+ * 받아야 그룹 레이아웃이 훅 값을 흘려 넣을 수 있다. 아직 채우는 화면은 없다 — 여기서는 자리만 연다.
  */
 export type SideBadges = Partial<Record<SideItemKey, number>>;
 
@@ -84,7 +81,7 @@ const MENUS: Record<SideMenu, Group[]> = {
     },
   ],
   // 「클립」 그룹(POK-235). 보관함(1g)만 화면이 있다 — 템플릿 관리(1h)는 MVP 밖,
-  // 업로드 상태(1i)는 시안 미확정, 승인 대기함(1j)은 POK-236이 href·배지를 붙인다.
+  // 업로드 상태(1i)는 시안 미확정. 승인 대기함(1j)은 승인 게이트가 없어 뺐다(POK-236 폐기, POK-254).
   clips: [
     {
       title: '하이라이트 · 클립',
@@ -94,11 +91,8 @@ const MENUS: Record<SideMenu, Group[]> = {
       ],
     },
     {
-      title: '업로드 · 승인함',
-      items: [
-        { key: 'upstatus', label: '업로드 상태', Icon: Upload },
-        { key: 'approvals', label: '승인 대기함', Icon: ClipboardCheck },
-      ],
+      title: '업로드',
+      items: [{ key: 'upstatus', label: '업로드 상태', Icon: Upload }],
     },
   ],
   settings: [
