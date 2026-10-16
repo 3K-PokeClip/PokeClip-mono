@@ -20,6 +20,17 @@ run "creates_three_prod_secret_shells" {
   }
 }
 
+# 루트 변수도 민감 값이다 — 개인키를 잘못 넘겨도 루트 plan 출력에 값이 찍히지
+# 않게(variables.tf 의 sensitive · 검증은 모듈).
+run "marks_root_public_key_pem_sensitive" {
+  command = plan
+
+  assert {
+    condition     = issensitive(var.public_key_pem)
+    error_message = "루트 public_key_pem 이 민감 값이 아니다(sensitive = true 빠짐)."
+  }
+}
+
 # ARN · id 는 계산 속성이다. apply 로 돌려 mock 이 그릇마다 다른 ARN 을 만들게
 # 한 뒤, 출력마다 맞는 그릇을 가리키는지 본다.
 run "outputs_match_consumer_contract" {

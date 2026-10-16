@@ -50,6 +50,22 @@ run "keeps_single_trailing_newline" {
   }
 }
 
+# PEM 은 민감 값으로 다룬다 — 개인키를 잘못 넘겨도 plan 출력 · 검증 오류에
+# 값이 찍히지 않게(variables.tf 의 sensitive). 입력과 encoded_key 둘 다 본다.
+run "marks_public_key_pem_sensitive" {
+  command = plan
+
+  assert {
+    condition     = issensitive(var.public_key_pem)
+    error_message = "public_key_pem 이 민감 값이 아니다(sensitive = true 빠짐)."
+  }
+
+  assert {
+    condition     = issensitive(aws_cloudfront_public_key.this.encoded_key)
+    error_message = "encoded_key 가 민감 값이 아니다(입력의 sensitive 가 전파되지 않음)."
+  }
+}
+
 run "outputs_public_key_id" {
   command = plan
 
@@ -87,6 +103,18 @@ run "rejects_pem_without_public_key_header" {
 
   variables {
     public_key_pem = "example\n"
+  }
+
+  expect_failures = [var.public_key_pem]
+}
+
+# 인증서 PEM — 머리 줄이 -----BEGIN 으로 시작해도 공개키 머리 줄 전체가
+# 아니면 거부한다(접두를 -----BEGIN 으로 약하게 하면 이 사례가 잡음).
+run "rejects_certificate_pem" {
+  command = plan
+
+  variables {
+    public_key_pem = "-----BEGIN ${""}CERTIFICATE-----\nexample\n-----END ${""}CERTIFICATE-----\n"
   }
 
   expect_failures = [var.public_key_pem]
