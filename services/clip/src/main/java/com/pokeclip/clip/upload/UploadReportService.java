@@ -169,6 +169,12 @@ public class UploadReportService {
             if (current.settled()) {
                 boolean same = current == effective
                         && (effective != UploadStatus.UPLOADED || videoId.equals(upload.getYoutubeVideoId()));
+                if (same && effective == UploadStatus.UPLOADED && upload.getResolvedBy() != null
+                        && "THUMBNAIL_UNCONFIRMED".equals(upload.getThumbnailErrorCode())) {
+                    // 사람이 먼저 「올라갔다」로 풀며 썸네일을 「확인 못 함」으로 닫았는데(POK-333), 같은 영상을 올린 일꾼이 확정 결과를
+                    // 늦게 알려 왔다: 그 결과가 더 정확하다(PR #261 codex). 영상 상태는 그대로다.
+                    upload.thumbnailReported(thumbOutcome, thumbCode);
+                }
                 if (!same && effective == UploadStatus.UPLOADED && current == UploadStatus.FAILED
                         && ClipUpload.CONFIRMED_NOT_UPLOADED.equals(upload.getErrorCode())) {
                     // 사람이 「안 올라갔다」고 푼 뒤 영상이 올라갔다는 보고가 왔다(POK-333): 채널에 그 영상이 있고, 다시 올렸으면 둘이다.

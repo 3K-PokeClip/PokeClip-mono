@@ -319,6 +319,26 @@ class UploadResolutionTest extends RenderUploadTestSupport {
         heartbeat(999_999L).andExpect(status().isNotFound()).andExpect(jsonPath("$.error").value("upload_not_found"));
     }
 
+    /**
+     * 사람이 먼저 「올라갔다」로 풀어 썸네일을 「확인 못 함」으로 닫은 뒤, 같은 영상을 올린 일꾼이 썸네일 결과를 늦게 알려 오면 그 결과를
+     * 적는다(PR #261 codex). 응답은 같은 끝 보고라 200이다. 대조: 사람이 안 푼 줄은 같은 끝 보고의 재전송이라 처음 값이 이긴다.
+     */
+    @Test
+    void 사람이_푼_뒤_같은_영상의_늦은_썸네일_결과는_적는다() throws Exception {
+        long[] 줄 = 확인_필요_업로드();
+        풀기(줄, "{\"result\":\"uploaded\",\"videoId\":\"" + 영상번호 + "\"}").andExpect(status().isOk());
+        assertThat(썸네일(줄[1])).isEqualTo("failed:THUMBNAIL_UNCONFIRMED");
+
+        일꾼_올림(줄[1], ",\"thumbnailOutcome\":\"SET\"").andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("uploaded"));
+        assertThat(썸네일(줄[1])).isEqualTo("set:null");
+
+        // 그 뒤 재전송(FAILED)은 덮지 못한다: 이제 확정 결과다.
+        일꾼_올림(줄[1], ",\"thumbnailOutcome\":\"FAILED\",\"thumbnailErrorCode\":\"THUMBNAIL_FORBIDDEN\"")
+                .andExpect(status().isOk());
+        assertThat(썸네일(줄[1])).isEqualTo("set:null");
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────
 
     /**
@@ -365,6 +385,17 @@ class UploadResolutionTest extends RenderUploadTestSupport {
 
     private ResultActions heartbeat(long uploadId) throws Exception {
         return mvc.perform(post("/internal/uploads/" + uploadId + "/heartbeat").header("X-Internal-Token", INTERNAL));
+    }
+
+    private ResultActions 일꾼_올림(long uploadId, String thumbnailFields) throws Exception {
+        return mvc.perform(post("/internal/uploads/" + uploadId + "/result")
+                .header("X-Internal-Token", INTERNAL).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"outcome\":\"UPLOADED\",\"videoId\":\"" + 영상번호 + "\"" + thumbnailFields + "}"));
+    }
+
+    private String 썸네일(long uploadId) {
+        return jdbc.queryForObject("SELECT thumbnail_status || ':' || coalesce(thumbnail_error_code, 'null') "
+                + "FROM clip_uploads WHERE id = ?", String.class, uploadId);
     }
 
     private ResultActions 늦은_올림(long uploadId) throws Exception {
