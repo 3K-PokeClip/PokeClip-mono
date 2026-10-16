@@ -64,6 +64,8 @@ export interface LiveHighlight {
   emphasized?: boolean;
   /** 카드 시점 장면 사진(POK-277). 없으면 자리표시 */
   thumbnailUrl?: string | null;
+  /** 숨긴 카드다(POK-338) — 「숨김」 칩에서만 보이고 「되돌리기」만 할 수 있다 */
+  hidden?: boolean;
 }
 
 export interface ChatVolumeSeries {
@@ -77,6 +79,8 @@ export interface ChatVolumeSeries {
 export interface LiveMockState {
   stream: LiveStream;
   highlights: LiveHighlight[];
+  /** 숨긴 카드(POK-338). 숨김을 되돌릴 자리가 없으면 행동 기록에 되돌리기가 영영 안 쌓인다 */
+  hiddenHighlights: LiveHighlight[];
   hiddenCount: number;
   chatVolume: ChatVolumeSeries;
   /** 채팅 수집 끊김 경고 배너 노출 여부 */
@@ -123,10 +127,15 @@ export interface CardActionResult {
   text: string;
 }
 
-/** 카드 집기·숨기기. 실패도 값으로 돌려준다 — 카드가 사유(409 already_claimed 등)를 토스트로 보인다 */
-async function cardCall(method: string, path: string): Promise<CardActionResult> {
+/** 카드 집기·놓기·숨기기·되돌리기. 실패도 값으로 돌려준다 — 카드가 사유(409 already_claimed 등)를 토스트로 보인다 */
+async function cardCall(method: string, path: string, body?: object): Promise<CardActionResult> {
   try {
-    const r = await apiFetch(path, { method });
+    const r = await apiFetch(
+      path,
+      body
+        ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+        : { method },
+    );
     return { ok: true, status: r.status, text: '' };
   } catch (e) {
     if (e instanceof ApiError) return { ok: false, status: e.status, text: e.code ?? e.message };
@@ -138,8 +147,16 @@ const cardPath = (cardId: string) => `/api/clip/jump-cards/${cardId.replace('car
 export function claimCard(cardId: string) {
   return cardCall('POST', `${cardPath(cardId)}/claim`);
 }
-export function hideCard(cardId: string) {
-  return cardCall('POST', `${cardPath(cardId)}/hide`);
+export function releaseCard(cardId: string) {
+  return cardCall('DELETE', `${cardPath(cardId)}/claim`);
+}
+/** 숨긴 이유(POK-338). 거짓양성률 = 자동 카드 중 「하이라이트 아님」으로 숨긴 비율이다 */
+export type HideReason = 'not_highlight' | 'duplicate' | 'other';
+export function hideCard(cardId: string, reason: HideReason) {
+  return cardCall('POST', `${cardPath(cardId)}/hide`, { reason });
+}
+export function unhideCard(cardId: string) {
+  return cardCall('DELETE', `${cardPath(cardId)}/hide`);
 }
 
 /** [from, to)를 수집기 한 번에 받을 수 있는 1시간 창들로 자른다 */
@@ -223,6 +240,7 @@ function toHighlight(c: Snapshot, index: number, now: number): LiveHighlight {
     emphasized: index === 0,
     claimedByMe: c.claimedBy !== null && c.claimedBy === currentUserId(),
     thumbnailUrl: c.thumbnailUrl ?? null,
+    ...(c.hidden ? { hidden: true } : {}),
   };
 }
 
@@ -539,7 +557,14 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
       .sort((a, b) => b.eventSeq - a.eventSeq);
     return list.map((c, i) => toHighlight(c, i, now));
   }, [cards, now]);
-  const hiddenCount = useMemo(() => Object.values(cards).filter((c) => c.hidden).length, [cards]);
+  const hiddenHighlights = useMemo(() => {
+    const list = Object.values(cards)
+      .filter((c) => c.hidden)
+      .sort((a, b) => b.eventSeq - a.eventSeq);
+    // 강조(맨 앞 「방금」)는 보이는 목록의 몫이라 숨긴 카드에는 주지 않는다
+    return list.map((c) => toHighlight(c, -1, now));
+  }, [cards, now]);
+  const hiddenCount = hiddenHighlights.length;
 
   const chatVolume = useMemo<ChatVolumeSeries>(() => {
     if (!chart || chart.buckets.length === 0)
@@ -635,5 +660,5 @@ export function useLiveMockState(pastRoute: boolean): LiveMockState {
     [streamId, sseOk, info, live.status, live.listTitle, channelName, myName, pastRoute],
   );
 
-  return { stream, highlights, hiddenCount, chatVolume, chatWarning: false };
+  return { stream, highlights, hiddenHighlights, hiddenCount, chatVolume, chatWarning: false };
 }

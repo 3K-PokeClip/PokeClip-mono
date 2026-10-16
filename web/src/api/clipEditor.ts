@@ -385,8 +385,21 @@ export interface LibraryDetail extends LibraryEntry {
   recipe: RecipeDocument;
 }
 
-export function createRecipe(streamId: string, doc: RecipeDocument): Promise<RecipeSnapshot> {
-  return sendJson('POST', `/api/clip/broadcasts/${encodeURIComponent(streamId)}/recipes`, doc);
+/**
+ * 첫 저장. 카드에서 연 편집본이면 그 카드 번호를 쿼리로 싣는다(POK-338, 「카드 → 영상」 시간 측정 재료).
+ * 계약6 본문을 안 바꾸려고 쿼리다. 서버는 이 방송의 카드가 아니면 출처만 비우고 저장한다.
+ */
+export function createRecipe(
+  streamId: string,
+  doc: RecipeDocument,
+  sourceCardId: string | null = null,
+): Promise<RecipeSnapshot> {
+  const query = sourceCardId === null ? '' : `?sourceCardId=${encodeURIComponent(sourceCardId)}`;
+  return sendJson(
+    'POST',
+    `/api/clip/broadcasts/${encodeURIComponent(streamId)}/recipes${query}`,
+    doc,
+  );
 }
 
 export function updateRecipe(

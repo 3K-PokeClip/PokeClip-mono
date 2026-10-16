@@ -243,7 +243,7 @@ afterEach(() => {
 
 function bodiesOf(method: string, path: string) {
   return fetchSpy.mock.calls
-    .filter(([url, init]) => url === path && init?.method === method)
+    .filter(([url, init]) => String(url).split('?')[0] === path && init?.method === method)
     .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
 }
 
@@ -301,6 +301,15 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
       expect(bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`)).toHaveLength(1),
     );
     const [doc] = bodiesOf('POST', `/api/clip/broadcasts/${STREAM_ID}/recipes`);
+    // 연 카드를 출처로 쿼리에 싣는다(POK-338) — 본문(계약6)에는 칸을 더하지 않는다
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          url === `/api/clip/broadcasts/${STREAM_ID}/recipes?sourceCardId=5` &&
+          init?.method === 'POST',
+      ),
+    ).toBe(true);
+    expect(doc).not.toHaveProperty('sourceCardId');
     expect(doc).toMatchObject({
       schemaVersion: 2,
       streamId: STREAM_ID,
@@ -389,7 +398,7 @@ describe('StudioScreen — 카드로 연 실제 편집기', () => {
     const order = fetchSpy.mock.calls.map(
       ([url, init]) => `${init?.method ?? 'GET'} ${String(url)}`,
     );
-    const saveAt = order.indexOf(`POST /api/clip/broadcasts/${STREAM_ID}/recipes`);
+    const saveAt = order.indexOf(`POST /api/clip/broadcasts/${STREAM_ID}/recipes?sourceCardId=5`);
     const renderAt = order.indexOf(`POST /api/clip/broadcasts/${STREAM_ID}/recipes/31/renders`);
     expect(saveAt).toBeGreaterThanOrEqual(0);
     expect(saveAt).toBeLessThan(renderAt);
