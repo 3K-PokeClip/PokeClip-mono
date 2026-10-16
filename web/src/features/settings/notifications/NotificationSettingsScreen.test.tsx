@@ -24,10 +24,13 @@ describe('NotificationSettingsScreen', () => {
     expect(screen.getAllByText('인앱')).toHaveLength(2);
     expect(screen.getAllByText('이메일')).toHaveLength(2);
 
-    // 시안 1n 8행 + IA 전용 3행(방송 시작·승인 결과·결제 실패) = 11행
-    expect(screen.getAllByRole('group')).toHaveLength(11);
-    for (const title of ['결제 실패', '방송 시작', '승인 결과']) {
+    // 시안 1n 8행 + IA 전용 3행(방송 시작·승인 결과·결제 실패) − 승인 두 행(승인 게이트가 없다, POK-254) = 9행
+    expect(screen.getAllByRole('group')).toHaveLength(9);
+    for (const title of ['결제 실패', '방송 시작']) {
       expect(screen.getByRole('group', { name: title })).toBeInTheDocument();
+    }
+    for (const title of ['승인 요청 도착', '승인 결과']) {
+      expect(screen.queryByRole('group', { name: title })).toBeNull();
     }
   });
 

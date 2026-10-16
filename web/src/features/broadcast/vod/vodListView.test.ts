@@ -8,6 +8,7 @@ import {
   filterByPeriod,
   isOpenable,
   qualityOptionsFor,
+  JUST_ENDED_MS,
   rowViewFor,
 } from './vodListView';
 
@@ -91,8 +92,23 @@ describe('vodListView — durationLabel', () => {
 describe('vodListView — rowViewFor', () => {
   const idle: VodDownloadState = { kind: 'idle' };
 
-  it('방금 끝난 방송은 준비 중이다', () => {
-    expect(rowViewFor(broadcast({ status: 'ended' }), idle, NOW)).toEqual({ kind: 'preparing' });
+  it('끝난 지 1시간 안이면 「방금 종료」 준비 중이다', () => {
+    const fresh = broadcast({ status: 'ended', endedAt: iso(-JUST_ENDED_MS + 1) });
+    expect(rowViewFor(fresh, idle, NOW)).toEqual({ kind: 'preparing', justEnded: true });
+    // 녹화가 아직 안 잡혔어도 1시간 안에는 기다린다
+    expect(rowViewFor(fresh, idle, NOW, true)).toEqual({ kind: 'preparing', justEnded: true });
+  });
+
+  it('끝난 지 1시간이 지났으면 「방금」을 떼고, 녹화가 없다고 확인됐으면 녹화 없음이다(POK-254)', () => {
+    const old = broadcast({ status: 'ended', endedAt: iso(-JUST_ENDED_MS) });
+    // 녹화를 물을 수 없으면(재생 서버 없음) 아직 준비 중이라고만 한다
+    expect(rowViewFor(old, idle, NOW)).toEqual({ kind: 'preparing', justEnded: false });
+    expect(rowViewFor(old, idle, NOW, true)).toEqual({ kind: 'noRecording' });
+  });
+
+  it('끝난 시각을 모르면 「방금」이라 하지 않고 녹화 없음으로도 접지 않는다', () => {
+    const unknown = broadcast({ status: 'ended', endedAt: null });
+    expect(rowViewFor(unknown, idle, NOW, true)).toEqual({ kind: 'preparing', justEnded: false });
   });
 
   it('받는 중이면 진행률을 그대로 싣는다', () => {
@@ -138,13 +154,15 @@ describe('vodListView — rowViewFor', () => {
 
   it('기한이 안 지난 ended는 그대로 준비 중이다', () => {
     const fresh = broadcast({ status: 'ended', vodExpiresAt: iso(DAY_MS) });
-    expect(rowViewFor(fresh, idle, NOW)).toEqual({ kind: 'preparing' });
+    expect(rowViewFor(fresh, idle, NOW)).toEqual({ kind: 'preparing', justEnded: false });
   });
 });
 
 describe('vodListView — isOpenable', () => {
   it('준비 중·만료 행만 뷰어로 못 들어간다 — 받는 중에도 VOD는 이미 있다', () => {
-    expect(isOpenable({ kind: 'preparing' })).toBe(false);
+    expect(isOpenable({ kind: 'preparing', justEnded: true })).toBe(false);
+    // 녹화가 없어도 지난 방송 화면에서 카드·채팅은 본다
+    expect(isOpenable({ kind: 'noRecording' })).toBe(true);
     expect(isOpenable({ kind: 'expired' })).toBe(false);
     expect(isOpenable({ kind: 'ready' })).toBe(true);
     expect(isOpenable({ kind: 'downloading', progress: 46 })).toBe(true);

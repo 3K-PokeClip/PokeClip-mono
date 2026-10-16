@@ -8,14 +8,7 @@
 // 목록의 정본은 legal-versions.json이다(새 판이 맨 앞). 지난 판의 본문은 고치지 않는다 — 가입 시각으로 그 회원에게
 // 적용된 판을 찾는 근거라서다. 이 스크립트가 다시 쓰는 것은 각 판의 legal-versions 표시 사이 드롭다운 블록뿐이다.
 import { createHash } from 'node:crypto';
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = new URL('..', import.meta.url);
@@ -112,13 +105,17 @@ function archive(doc, nextLabel) {
   const slug = current.label.replaceAll('.', '-');
   const archived = `${doc}/${slug}/index.html`;
   if (existsSync(new URL(archived, ROOT))) throw new Error(`${archived}가 이미 있다`);
-  mkdirSync(new URL(`${doc}/${slug}/`, ROOT), { recursive: true });
-  copyFileSync(new URL(current.file, ROOT), new URL(archived, ROOT));
-  // 얼린 판의 대표 주소는 그 판 자신이다
-  const frozen = readFileSync(new URL(archived, ROOT), 'utf8').replace(
-    `href="https://pokeclip.com/${doc}"`,
-    `href="https://pokeclip.com/${doc}/${slug}/"`,
+  // 얼린 판의 대표 주소는 그 판 자신이고, 검색 결과에 현재 판 대신 나오지 않게 noindex를 단다(POK-349).
+  // 얼린 뒤에는 본문 지문이 고정돼 손으로 넣으면 지난 판 검사가 깨지므로, 지문을 재기 전 여기서 넣는다.
+  // 현재 판 canonical을 못 찾으면 멈춘다 — 그대로 얼리면 지난 판이 현재 판 주소를 대표 주소로 내건다
+  const canonical = `<link rel="canonical" href="https://pokeclip.com/${doc}/" />`;
+  const source = readFileSync(new URL(current.file, ROOT), 'utf8');
+  if (!source.includes(canonical)) throw new Error(`${current.file}에 ${canonical}이 없다`);
+  const frozen = source.replace(
+    canonical,
+    `<link rel="canonical" href="https://pokeclip.com/${doc}/${slug}/" />\n  <meta name="robots" content="noindex" />`,
   );
+  mkdirSync(new URL(`${doc}/${slug}/`, ROOT), { recursive: true });
   writeFileSync(new URL(archived, ROOT), frozen);
 
   versions[0] = { ...current, path: `/${doc}/${slug}/`, file: archived, sha256: bodyHash(frozen) };

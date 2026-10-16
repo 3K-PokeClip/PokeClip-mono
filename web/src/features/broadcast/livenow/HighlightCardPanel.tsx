@@ -13,7 +13,8 @@ import type { HighlightSource, LiveHighlight, LiveStream } from './useLiveMockSt
 // 개수는 넘어온 목록에서 그때그때 센다. 목업에 박아 두면 마킹으로 카드가 늘었을 때
 // 필터 표기만 옛 수에 남는다.
 
-type Filter = 'all' | HighlightSource;
+// 'hidden'은 숨긴 카드만 본다(POK-338): 거기서만 숨김을 되돌릴 수 있다
+type Filter = 'all' | HighlightSource | 'hidden';
 
 const FILTERS: Array<{ value: Filter; label: string }> = [
   { value: 'all', label: '전체' },
@@ -25,6 +26,7 @@ const FILTERS: Array<{ value: Filter; label: string }> = [
 // 필터링이 초당 한 번씩 다시 도는 것을 막는다(ChatPanel·LiveStatsPanel도 같은 이유).
 export const HighlightCardPanel = memo(function HighlightCardPanel({
   highlights,
+  hiddenHighlights = [],
   stream,
   visuals,
   pendingLabel,
@@ -33,6 +35,8 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
   onSeek,
 }: {
   highlights: LiveHighlight[];
+  /** 숨긴 카드(POK-338). 「숨김」 칩을 누르면 이것만 보인다 */
+  hiddenHighlights?: LiveHighlight[];
   stream: LiveStream;
   visuals: Record<string, CardVisual>;
   pendingLabel: string | null;
@@ -45,8 +49,17 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
   const [filter, setFilter] = useState<Filter>('all');
 
   const countFor = (value: Filter) =>
-    value === 'all' ? highlights.length : highlights.filter((h) => h.source === value).length;
-  const shown = filter === 'all' ? highlights : highlights.filter((h) => h.source === filter);
+    value === 'all'
+      ? highlights.length
+      : value === 'hidden'
+        ? hiddenHighlights.length
+        : highlights.filter((h) => h.source === value).length;
+  const shown =
+    filter === 'all'
+      ? highlights
+      : filter === 'hidden'
+        ? hiddenHighlights
+        : highlights.filter((h) => h.source === filter);
 
   return (
     <section className={styles.cardPanel} aria-label="하이라이트 카드">
@@ -70,6 +83,14 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
               {label} {countFor(value)}
             </button>
           ))}
+          <button
+            type="button"
+            className={clsx(styles.filterChip, filter === 'hidden' && styles.filterChipActive)}
+            aria-pressed={filter === 'hidden'}
+            onClick={() => setFilter('hidden')}
+          >
+            숨김 {countFor('hidden')}
+          </button>
           <span className={styles.cardPanelDivider} aria-hidden />
           {/* 보관함 화면을 바로 가리킨다 — /clips는 리다이렉트라 한 홉을 더 탄다(POK-235) */}
           <Link className={styles.cardPanelLink} href="/clips/library">
@@ -81,7 +102,7 @@ export const HighlightCardPanel = memo(function HighlightCardPanel({
       <ul className={styles.cardTrack} tabIndex={0} aria-label="하이라이트 카드 목록">
         {/* 만들어질 카드는 수동이다 — 「자동」을 보고 있을 땐 자리도 두지 않는다.
             아니면 자리만 3초 섰다 사라지고 카드는 안 보여 마킹이 실패한 것처럼 읽힌다. */}
-        {pendingLabel && filter !== 'auto' ? (
+        {pendingLabel && filter !== 'auto' && filter !== 'hidden' ? (
           <li className={styles.cardSlot}>
             <div className={styles.pendingCard}>
               <Spinner size="sm" label="카드 만드는 중" />

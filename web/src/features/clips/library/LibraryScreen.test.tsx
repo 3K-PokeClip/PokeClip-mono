@@ -1,10 +1,11 @@
-import { act } from 'react';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { act, useState } from 'react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { axe } from 'jest-axe';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jsonResponse, stubFetch } from '@/test/mockFetch';
 import { renderWithProviders } from '@/test/testProviders';
+import { ClipDetailPanel } from './ClipDetailPanel';
 import { LibraryScreen } from './LibraryScreen';
 import { LIBRARY_FIXTURE } from './libraryFixture';
 import type { ClipSnapshot, LibraryStatus } from '@/api/clipEditor';
@@ -32,35 +33,38 @@ describe('LibraryScreen — 헤더·칩', () => {
     expect(screen.getByRole('combobox', { name: '정렬' })).toHaveTextContent('최근 편집순');
   });
 
-  it('스트리머 칩 4개가 수를 달고 있다 — 전체 8 · 작업 중 4 · 업로드 대기 2 · 발행됨 2', () => {
+  it('스트리머 칩 4개가 수를 달고 있다 — 전체 8 · 작업 중 3 · 업로드 대기 3 · 발행됨 2', () => {
     renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
     const chips = chipGroup().getAllByRole('button');
     expect(chips.map((chip) => chip.textContent)).toEqual([
       '전체 8',
-      '작업 중 4',
-      '업로드 대기 2',
+      '작업 중 3',
+      '업로드 대기 3',
       '발행됨 2',
     ]);
     expect(chips[0]).toHaveAttribute('aria-pressed', 'true');
     expect(chipGroup().queryByRole('button', { name: /반려됨/ })).toBeNull();
   });
 
-  it('스트리머에겐 승인 대기 배너가 승인 대기함으로 간다', () => {
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
+  // 업로드 승인 게이트가 없다(POK-236 폐기): 승인 대기·반려를 말하는 칩·배지·배너·링크가 없다
+  it('승인 대기·반려 칩·배지·배너가 없다', () => {
+    const { container } = renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
-    const banner = screen.getByRole('link', { name: /승인 대기 1건/ });
-    expect(banner).toHaveAttribute('href', '/clips/approvals');
-    expect(banner).toHaveTextContent('편집자 요청은 승인 대기함에서 검토해요');
+    expect(chipGroup().queryByRole('button', { name: /반려|승인/ })).toBeNull();
+    expect(screen.queryByText(/승인 대기|반려/)).toBeNull();
+    expect(screen.queryByRole('link', { name: /승인 대기/ })).toBeNull();
+    expect(container.querySelector('a[href="/clips/approvals"]')).toBeNull();
+    for (const card of cards()) expect(card).not.toHaveAccessibleName(/승인 대기|반려/);
   });
 
   it('칩을 누르면 목록이 좁혀지고 눌림이 옮겨 간다', async () => {
     const user = userEvent.setup();
     renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
 
-    await user.click(chipGroup().getByRole('button', { name: '업로드 대기 2' }));
-    expect(cards()).toHaveLength(2);
-    expect(chipGroup().getByRole('button', { name: '업로드 대기 2' })).toHaveAttribute(
+    await user.click(chipGroup().getByRole('button', { name: '업로드 대기 3' }));
+    expect(cards()).toHaveLength(3);
+    expect(chipGroup().getByRole('button', { name: '업로드 대기 3' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
@@ -102,7 +106,7 @@ describe('LibraryScreen — 카드', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole('button', {
-        name: '시청자 도네 반응 모음 · 승인 대기 · 길이 0:44 · 편집자 감자대장',
+        name: '시청자 도네 반응 모음 · 업로드 대기 · 길이 0:44 · 편집자 감자대장',
       }),
     ).toBeInTheDocument();
   });
@@ -207,11 +211,12 @@ describe('LibraryScreen — 선택·상세 패널', () => {
     expect(inside.getByText('자막').nextElementSibling).toHaveTextContent(
       '자동 자막 12줄 · 수정 중',
     );
-    expect(inside.getByText('비율').nextElementSibling).toHaveTextContent('9:16 · 1080×1920');
+    // 목업 줄은 레시피가 없어 비율을 지어내지 않는다(POK-254)
+    expect(inside.getByText('비율').nextElementSibling).toHaveTextContent('—');
   });
 });
 
-describe('LibraryScreen — 상태별 액션 7종', () => {
+describe('LibraryScreen — 상태별 액션', () => {
   it('편집 중 — 이어서 편집 링크 · 보조는 다운로드·삭제뿐', () => {
     renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
     const inside = within(panel());
@@ -238,46 +243,12 @@ describe('LibraryScreen — 상태별 액션 7종', () => {
     expect(inside.getByRole('button', { name: '다운로드' })).toBeInTheDocument();
   });
 
-  it('승인 대기 — 승인 대기함으로 가는 링크만 · 편집 잠금 · 안내문', () => {
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-3" />);
-    const inside = within(panel());
-
-    expect(inside.getByRole('link', { name: '승인 대기함에서 검토' })).toHaveAttribute(
-      'href',
-      '/clips/approvals',
-    );
-    expect(inside.queryByRole('link', { name: /편집/ })).toBeNull();
-    expect(inside.getByText(/승인 · 반려는 승인 대기함에서 처리해요/)).toBeInTheDocument();
-    expect(inside.getByRole('button', { name: '다운로드' })).toBeInTheDocument();
-  });
-
-  it('승인 대기는 제목도 잠근다 — 안내문이 편집이 잠겼다고 말한 것을 지킨다', async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-3" />);
-    const input = within(panel()).getByRole('textbox', { name: '클립 제목' });
-
-    expect(input).toHaveAttribute('readonly');
-    await user.type(input, '바꿔보기');
-    expect(input).toHaveValue('시청자 도네 반응 모음');
-  });
-
-  it('승인 대기가 아니면 제목은 잠기지 않는다', () => {
+  it('목업의 편집 중 편집본은 제목이 잠기지 않는다', () => {
     renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-1" />);
 
     expect(within(panel()).getByRole('textbox', { name: '클립 제목' })).not.toHaveAttribute(
       'readonly',
     );
-  });
-
-  it('반려됨 — 수정하기 링크 · 반려 사유 카드', () => {
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-5" />);
-    const inside = within(panel());
-
-    expect(inside.getByRole('link', { name: '수정하기' })).toHaveAttribute('href', '/clips/editor');
-    expect(inside.getByText('반려 사유')).toBeInTheDocument();
-    expect(inside.getByText('어제 21:32')).toBeInTheDocument();
-    expect(inside.getByText('앞부분 20초 컷')).toBeInTheDocument();
-    expect(inside.queryByRole('link', { name: /이어서 편집/ })).toBeNull();
   });
 
   it('발행됨 — 유튜브 보기(새 창) · 새 버전으로 편집', () => {
@@ -383,15 +354,16 @@ describe('LibraryScreen — 목업 전이', () => {
     expect(inside.getByRole('link', { name: '새 버전으로 편집' })).toBeInTheDocument();
   });
 
-  it('업로드로 주 동작이 갈려도 포커스가 조작부에 남는다 — 버튼이 링크로 바뀌는 자리다', async () => {
+  it('업로드로 주 동작이 비활성이 돼도 포커스가 조작부에 남는다', async () => {
     const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-2" />);
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-2" />);
 
-    await user.click(within(panel()).getByRole('button', { name: '업로드 요청' }));
+    await user.click(within(panel()).getByRole('button', { name: '업로드' }));
 
-    // ready → pending이라 button이 anchor로 교체된다. 포커스가 body로 떨어지면 안 된다.
-    const moved = within(panel()).getByRole('link', { name: '내 요청 보기' });
-    expect(moved).toHaveFocus();
+    // ready → published인데 목업 줄은 유튜브 주소가 없어 주 동작이 비활성이다. 포커스가 body로 떨어지지 않고
+    // 다음 조작부(새 버전으로 편집)로 옮겨 간다.
+    expect(within(panel()).getByRole('button', { name: '유튜브 보기' })).toBeDisabled();
+    expect(within(panel()).getByRole('link', { name: '새 버전으로 편집' })).toHaveFocus();
   });
 
   it('상태 배지는 낭독 영역이라 바뀐 상태가 알려진다', async () => {
@@ -401,21 +373,6 @@ describe('LibraryScreen — 목업 전이', () => {
     expect(within(panel()).getByRole('status')).toHaveTextContent('렌더 실패');
     await user.click(within(panel()).getByRole('button', { name: '렌더 재시도' }));
     expect(within(panel()).getByRole('status')).toHaveTextContent('업로드 대기');
-  });
-
-  it('편집자가 업로드 요청을 누르면 승인 대기가 된다', async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-2" />);
-    const inside = within(panel());
-
-    await user.click(inside.getByRole('button', { name: '업로드 요청' }));
-
-    expect(inside.getByText('승인 대기')).toBeInTheDocument();
-    expect(inside.getByRole('link', { name: '내 요청 보기' })).toHaveAttribute(
-      'href',
-      '/clips/approvals',
-    );
-    expect(inside.getByText(/승인 대기 중에는 편집이 잠겨요/)).toBeInTheDocument();
   });
 
   it('렌더 재시도는 업로드 대기로 돌린다 — 길이는 여전히 모른다', async () => {
@@ -505,31 +462,11 @@ describe('LibraryScreen — 목업 전이', () => {
   });
 });
 
-describe('LibraryScreen — 편집자 시점', () => {
-  it('칩이 5개다 — 작업 중 3 · 반려됨 1 — 그리고 배너가 없다', () => {
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" />);
-
-    expect(
-      chipGroup()
-        .getAllByRole('button')
-        .map((chip) => chip.textContent),
-    ).toEqual(['전체 8', '작업 중 3', '업로드 대기 2', '반려됨 1', '발행됨 2']);
-    expect(screen.queryByRole('link', { name: /승인 대기 1건/ })).toBeNull();
-  });
-
-  it('업로드 대기의 주 동작이 「업로드 요청」이고 승인 대기는 「내 요청 보기」다', () => {
-    const ready = renderWithProviders(
-      <LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-2" />,
-    );
-    expect(within(panel()).getByRole('button', { name: '업로드 요청' })).toBeInTheDocument();
-    ready.unmount();
-
-    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" selectedId="lib2-3" />);
-    expect(within(panel()).getByRole('link', { name: '내 요청 보기' })).toHaveAttribute(
-      'href',
-      '/clips/approvals',
-    );
-    expect(within(panel()).getByText(/승인 대기 중에는 편집이 잠겨요/)).toBeInTheDocument();
+describe('LibraryScreen — 업로드 라벨', () => {
+  it('업로드 대기의 주 동작이 「업로드」다 — 「업로드 요청」이 없다', () => {
+    renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-2" />);
+    expect(within(panel()).getByRole('button', { name: '업로드' })).toBeInTheDocument();
+    expect(within(panel()).queryByRole('button', { name: '업로드 요청' })).toBeNull();
   });
 });
 
@@ -546,15 +483,8 @@ describe('LibraryScreen — 빈 상태', () => {
 
 describe('LibraryScreen — 접근성', () => {
   // axe 실행 중 Next Link의 비동기 상태 갱신이 발화한다 — act로 감싸 경고 없이 흡수
-  it('기본(스트리머 · 미선택)에 위반이 없다', async () => {
+  it('기본(미선택)에 위반이 없다', async () => {
     const { container } = renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} />);
-    await act(async () => {
-      expect(await axe(container)).toHaveNoViolations();
-    });
-  });
-
-  it('편집자 시점에도 위반이 없다', async () => {
-    const { container } = renderWithProviders(<LibraryScreen {...LIBRARY_FIXTURE} role="editor" />);
     await act(async () => {
       expect(await axe(container)).toHaveNoViolations();
     });
@@ -567,7 +497,7 @@ describe('LibraryScreen — 접근성', () => {
     });
   });
 
-  it('패널이 열린 상태(반려 카드)에도 위반이 없다', async () => {
+  it('패널이 열린 상태(남의 편집 중 카드)에도 위반이 없다', async () => {
     const { container } = renderWithProviders(
       <LibraryScreen {...LIBRARY_FIXTURE} selectedId="lib2-5" />,
     );
@@ -624,6 +554,99 @@ describe('LibraryScreen — 서버 편집본', () => {
   });
 });
 
+describe('LibraryScreen — 서버 편집본의 비율 (POK-254)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('비율은 고정 글자가 아니라 레시피 출력의 비율이다: 패널을 열면 상세를 읽는다', async () => {
+    const entry = {
+      recipeId: 12,
+      streamId: 's1',
+      creatorId: '9',
+      recipeVersion: 1,
+      cut: { inAtMs: 0, outAtMs: 30_000 },
+      status: 'rendered',
+      broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+      latestClip: null,
+      createdAt: '2026-09-20T11:00:00Z',
+      updatedAt: '2026-09-20T12:00:00Z',
+    };
+    stubFetch((url) =>
+      url === '/api/clip/library/12'
+        ? jsonResponse(200, {
+            ...entry,
+            recipe: {
+              outputs: [{ outputId: 'o1', aspect: 'SQUARE_1_1', crop: { x: 0, y: 0, w: 1, h: 1 } }],
+            },
+          })
+        : url.startsWith('/api/clip/library')
+          ? jsonResponse(200, { items: [entry], nextCursor: null })
+          : jsonResponse(200, { id: 9, email: 'me@example.com' }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<LibraryScreen />);
+
+    await user.click(await screen.findByRole('button', { name: /^편집본 #12/ }));
+    const ratio = within(panel()).getByText('비율').nextElementSibling!;
+    await waitFor(() => expect(ratio).toHaveTextContent('1:1'));
+    expect(ratio).not.toHaveTextContent('1080×1920');
+  });
+});
+
+describe('LibraryScreen — 서버 편집본의 비율 다시 읽기 (PR #256 codex)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('상세를 한 번 못 읽어도 「—」로 굳지 않고 다시 읽는다', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const entry = {
+      recipeId: 12,
+      streamId: 's1',
+      creatorId: '9',
+      recipeVersion: 1,
+      cut: { inAtMs: 0, outAtMs: 30_000 },
+      status: 'rendered',
+      broadcast: { status: 'ended', startedAt: null, endedAt: null, vodExpiresAt: null },
+      latestClip: null,
+      createdAt: '2026-09-20T11:00:00Z',
+      updatedAt: '2026-09-20T12:00:00Z',
+    };
+    let detailCalls = 0;
+    stubFetch((url) => {
+      if (url === '/api/clip/library/12') {
+        detailCalls += 1;
+        return detailCalls === 1
+          ? jsonResponse(503, { error: 'x' })
+          : jsonResponse(200, {
+              ...entry,
+              recipe: {
+                outputs: [
+                  { outputId: 'o1', aspect: 'SQUARE_1_1', crop: { x: 0, y: 0, w: 1, h: 1 } },
+                ],
+              },
+            });
+      }
+      return url.startsWith('/api/clip/library')
+        ? jsonResponse(200, { items: [entry], nextCursor: null })
+        : jsonResponse(200, { id: 9, email: 'me@example.com' });
+    });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderWithProviders(<LibraryScreen />);
+    await user.click(await screen.findByRole('button', { name: /^편집본 #12/ }));
+    const ratio = within(panel()).getByText('비율').nextElementSibling!;
+    await waitFor(() => expect(detailCalls).toBe(1));
+    expect(ratio).toHaveTextContent('—');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    await waitFor(() => expect(ratio).toHaveTextContent('1:1'));
+  });
+});
+
 describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', () => {
   const NOW = new Date('2026-09-20T12:00:00Z');
   const rendered: ClipSnapshot = {
@@ -657,17 +680,31 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
       '9',
     );
   }
-  function show(clip: ReturnType<typeof serverClip>, role: 'streamer' | 'editor' = 'streamer') {
-    renderWithProviders(<LibraryScreen clips={[clip]} selectedId="12" now={NOW} role={role} />);
+  function show(clip: ReturnType<typeof serverClip>) {
+    renderWithProviders(<LibraryScreen clips={[clip]} selectedId="12" now={NOW} />);
   }
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('완성본은 편집자에게도 「업로드」다', () => {
-    show(serverClip('rendered'), 'editor');
+  it('완성본은 「업로드」다', () => {
+    show(serverClip('rendered'));
     expect(within(panel()).getByRole('button', { name: '업로드' })).toBeEnabled();
+  });
+
+  it('완성본 제목은 올릴 때 쓰는 임시 제목이라고 알리고, 편집 중은 제목을 잠근다(POK-254)', () => {
+    show(serverClip('rendered'));
+    expect(within(panel()).getByRole('textbox', { name: '클립 제목' })).not.toHaveAttribute(
+      'readonly',
+    );
+    expect(
+      within(panel()).getByText('올릴 때 쓰는 제목이에요 · 새로 고침하면 처음 제목으로 돌아가요'),
+    ).toBeInTheDocument();
+    cleanup();
+    show(serverClip('editing', null));
+    expect(within(panel()).getByRole('textbox', { name: '클립 제목' })).toHaveAttribute('readonly');
+    expect(within(panel()).queryByText(/올릴 때 쓰는 제목이에요/)).toBeNull();
   });
 
   it('올리는 중에는 누를 수 없고 제목도 잠긴다', () => {
@@ -683,6 +720,206 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
     expect(
       within(panel()).getByText(/유튜브 스튜디오에서 영상이 올라갔는지 확인/),
     ).toBeInTheDocument();
+  });
+
+  it('새 판 영상을 주문해도 이전 판으로 올린 영상이 패널에 남는다: 올림은 유튜브 링크, 확인 필요는 글자(POK-334)', async () => {
+    const live = (
+      id: number,
+      recipeVersion: number,
+      title: string,
+      status: string,
+      videoId: string | null,
+    ) => ({
+      id,
+      clipId: id,
+      recipeVersion,
+      outputId: 'o1',
+      title,
+      status,
+      videoId,
+      createdAt: '2026-09-20T12:00:00Z',
+      updatedAt: '2026-09-20T12:00:00Z',
+    });
+    const clip = toLibraryClip(
+      {
+        ...serverClip('rendering').entry!,
+        latestClip: { ...rendered, status: 'rendering' },
+        liveUploads: [
+          live(9, 1, '두 번째 올림', 'checking', null),
+          live(8, 1, '첫 판', 'uploaded', 'abc'),
+        ],
+      },
+      '9',
+    );
+    show(clip);
+    const inside = within(panel());
+
+    const previous = within(inside.getByRole('region', { name: '이전 판으로 올린 영상' }));
+    expect(previous.getAllByText('이전 판 v1')).toHaveLength(2);
+    expect(inside.getByRole('link', { name: /첫 판 · 업로드됨/ })).toHaveAttribute(
+      'href',
+      'https://youtu.be/abc',
+    );
+    expect(inside.getByText('두 번째 올림 · 확인 필요')).toBeInTheDocument();
+    expect(inside.queryByRole('link', { name: /두 번째 올림/ })).toBeNull();
+    expect(await axe(panel())).toHaveNoViolations();
+  });
+
+  const checkingUpload = {
+    id: 7,
+    clipId: 5,
+    outputId: 'o1',
+    title: '보스 막타',
+    status: 'checking',
+    videoId: null,
+    error: { code: 'SESSION_GONE', message: null },
+    requestedBy: '9',
+    createdAt: '2026-09-20T12:00:00Z',
+    updatedAt: '2026-09-20T12:01:00Z',
+  };
+
+  /** 패널을 열면 비율을 읽으러 상세를 부른다(POK-254). 이 시험들이 세는 것은 「푸는 문」 호출이다 */
+  const resolutionStub = (answer: () => Response) => {
+    const spy = stubFetch((url) =>
+      url.startsWith('/api/clip/library/') ? new Promise<Response>(() => {}) : answer(),
+    );
+    return () => spy.mock.calls.filter(([url]) => String(url).endsWith('/resolution'));
+  };
+
+  it('확인 필요는 「채널에 올라갔어요」로 영상 주소를 받아 푼다(POK-333)', async () => {
+    const calls = resolutionStub(() =>
+      jsonResponse(200, { ...checkingUpload, status: 'uploaded', videoId: 'abcDEF12345' }),
+    );
+    const user = userEvent.setup();
+    show(serverClip('checking', { ...rendered, upload: checkingUpload }));
+
+    await user.click(within(panel()).getByRole('button', { name: '채널에 올라갔어요' }));
+    const dialog = await screen.findByRole('dialog', { name: '채널에 올라간 영상' });
+    const submit = within(dialog).getByRole('button', { name: '발행됨으로 바꾸기' });
+    expect(submit).toBeDisabled();
+    await user.type(
+      within(dialog).getByRole('textbox', { name: '영상 주소' }),
+      ' https://youtu.be/abcDEF12345 ',
+    );
+    await user.click(submit);
+
+    expect(calls()).toHaveLength(1);
+    expect(calls()[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/5/uploads/7/resolution');
+    expect(JSON.parse(String(calls()[0]?.[1]?.body))).toEqual({
+      result: 'uploaded',
+      videoId: 'https://youtu.be/abcDEF12345',
+    });
+    expect(await screen.findByText('발행됨으로 바꿨어요')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('「안 올라갔어요」는 두 번 올라갈 수 있다는 경고를 거치고, 30분 전이면 사유를 알린다(POK-333)', async () => {
+    const calls = resolutionStub(() =>
+      jsonResponse(409, { error: 'resolution_too_early', allowedAt: '2026-09-20T12:31:00Z' }),
+    );
+    const user = userEvent.setup();
+    show(serverClip('checking', { ...rendered, upload: checkingUpload }));
+
+    await user.click(within(panel()).getByRole('button', { name: '안 올라갔어요' }));
+    const dialog = await screen.findByRole('dialog', { name: '유튜브에 안 올라간 것이 맞나요?' });
+    expect(within(dialog).getByText(/같은 영상이 두 개 떠요/)).toBeInTheDocument();
+    expect(calls()).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: '안 올라갔어요' }));
+
+    expect(JSON.parse(String(calls()[0]?.[1]?.body))).toEqual({ result: 'not_uploaded' });
+    expect(await screen.findByText(/30분이 지난 뒤 다시 눌러/)).toBeInTheDocument();
+    expect(
+      screen.getByRole('dialog', { name: '유튜브에 안 올라간 것이 맞나요?' }),
+    ).toBeInTheDocument();
+  });
+
+  it('확인 필요가 아닌 업로드에는 푸는 단추가 없다(POK-333)', () => {
+    show(
+      serverClip('uploading', {
+        ...rendered,
+        upload: { ...checkingUpload, status: 'uploading', error: null },
+      }),
+    );
+    expect(within(panel()).queryByRole('button', { name: '채널에 올라갔어요' })).toBeNull();
+  });
+
+  it('새 판을 주문해도 옛 판의 확인 필요 줄에 푸는 단추가 붙고 그 업로드 번호로 보낸다(POK-333)', async () => {
+    const calls = resolutionStub(() =>
+      jsonResponse(200, { ...checkingUpload, id: 3, clipId: 2, status: 'failed' }),
+    );
+    const user = userEvent.setup();
+    const clip = toLibraryClip(
+      {
+        ...serverClip('rendering').entry!,
+        latestClip: { ...rendered, status: 'rendering' },
+        liveUploads: [
+          {
+            id: 3,
+            clipId: 2,
+            recipeVersion: 1,
+            outputId: 'o1',
+            title: '첫 판',
+            status: 'checking',
+            videoId: null,
+            createdAt: '2026-09-20T12:00:00Z',
+            updatedAt: '2026-09-20T12:00:00Z',
+          },
+        ],
+      },
+      '9',
+    );
+    show(clip);
+    const previous = within(within(panel()).getByRole('region', { name: '이전 판으로 올린 영상' }));
+
+    await user.click(previous.getByRole('button', { name: '안 올라갔어요 (이전 판 v1)' }));
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: '안 올라갔어요' }),
+    );
+    expect(calls()[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/2/uploads/3/resolution');
+    // 다시 시도 단추는 지금 영상에만 있다: 옛 판을 닫았으면 다시 올릴 길을 약속하지 않는다(PR #261 codex)
+    expect(
+      await screen.findByText('이전 판 업로드라 이 화면에서 다시 올리지는 않아요.'),
+    ).toBeInTheDocument();
+  });
+
+  it('창이 열린 사이 확인 필요 업로드가 바뀌면 적던 입력을 버린다(PR #261 codex)', async () => {
+    resolutionStub(() => jsonResponse(200, {}));
+    const user = userEvent.setup();
+    const props = {
+      status: 'checking' as const,
+      now: NOW,
+      onDeselect: () => {},
+      onTitleChange: () => {},
+      onUpload: () => {},
+      onRetryRender: () => {},
+      onRetryUpload: () => {},
+      onDownload: () => {},
+      onDelete: () => {},
+      onResolveUpload: () => Promise.resolve(true),
+    };
+    const first = serverClip('checking', { ...rendered, upload: checkingUpload });
+    const second = serverClip('checking', {
+      ...rendered,
+      id: 6,
+      upload: { ...checkingUpload, id: 8, clipId: 6 },
+    });
+    // 목록 새로 읽기가 패널의 편집본을 다른 확인 필요 업로드로 바꾼 것을 흉내 낸다
+    let swap: () => void = () => {};
+    function Harness() {
+      const [clip, setClip] = useState(first);
+      swap = () => setClip(second);
+      return <ClipDetailPanel clip={clip} {...props} />;
+    }
+    renderWithProviders(<Harness />);
+
+    await user.click(screen.getByRole('button', { name: '채널에 올라갔어요' }));
+    await user.type(
+      within(await screen.findByRole('dialog')).getByRole('textbox', { name: '영상 주소' }),
+      'https://youtu.be/abcDEF12345',
+    );
+    act(() => swap());
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
   const failedUpload = {
@@ -708,14 +945,21 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
 
   it('「다시 시도」는 저장된 정보로 다시 올리고, 보내는 동안 단추가 잠긴다(POK-291)', async () => {
     let answer: (r: Response) => void = () => {};
-    const spy = stubFetch(() => new Promise<Response>((resolve) => (answer = resolve)));
+    const spy = stubFetch((url) =>
+      // 패널을 열면 비율을 읽으러 상세를 부른다(POK-254): 이 시험이 세는 것은 업로드 주문이다
+      url.startsWith('/api/clip/library/')
+        ? new Promise<Response>(() => {})
+        : new Promise<Response>((resolve) => (answer = resolve)),
+    );
+    const orders = () =>
+      spy.mock.calls.filter(([url]) => !String(url).startsWith('/api/clip/library/'));
     const user = userEvent.setup();
     show(serverClip('rendered', { ...rendered, upload: failedUpload }));
 
     await user.click(within(panel()).getByRole('button', { name: '다시 시도' }));
     expect(within(panel()).getByRole('button', { name: '다시 시도' })).toBeDisabled();
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy.mock.calls[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/5/uploads/retry');
+    expect(orders()).toHaveLength(1);
+    expect(orders()[0]?.[0]).toBe('/api/clip/broadcasts/s1/clips/5/uploads/retry');
 
     await act(async () =>
       answer(jsonResponse(201, { ...failedUpload, id: 8, status: 'queued', error: null })),
@@ -811,7 +1055,9 @@ describe('LibraryScreen — 서버 편집본의 유튜브 업로드 (POK-111)', 
   it('주소가 만료돼 영상을 못 읽으면 재생 단추로 돌아가 새 주소를 받는다', async () => {
     const user = userEvent.setup();
     let n = 0;
-    stubFetch(() => {
+    stubFetch((url) => {
+      // 비율을 읽는 상세 요청(POK-254)은 주소 번호를 세지 않는다
+      if (url.startsWith('/api/clip/library/')) return new Promise<Response>(() => {});
       n += 1;
       return jsonResponse(200, {
         clipId: 5,

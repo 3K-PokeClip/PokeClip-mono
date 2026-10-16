@@ -6,6 +6,9 @@ import com.pokeclip.clip.support.IntegrationTestSupport;
 import com.pokeclip.clip.support.NotFoundFloor;
 import com.pokeclip.clip.support.TestIds;
 import com.pokeclip.clip.support.TestTokens;
+import jakarta.persistence.EntityManagerFactory;
+import org.hibernate.SessionFactory;
+import org.hibernate.stat.Statistics;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,10 +51,12 @@ class LibraryControllerTest extends IntegrationTestSupport {
 
     private final MockMvc mvc;
     private final JdbcTemplate jdbc;
+    private final EntityManagerFactory emf;
 
-    LibraryControllerTest(MockMvc mvc, JdbcTemplate jdbc) {
+    LibraryControllerTest(MockMvc mvc, JdbcTemplate jdbc, EntityManagerFactory emf) {
         this.mvc = mvc;
         this.jdbc = jdbc;
+        this.emf = emf;
     }
 
     @BeforeEach
@@ -241,6 +246,105 @@ class LibraryControllerTest extends IntegrationTestSupport {
         목록("").andExpect(status().isOk()).andExpect(jsonPath("$.items.length()").value(0));
     }
 
+    // ── 살아 있는 업로드 목록(POK-334) ─────────────────────────────
+
+    /**
+     * v1을 올린 뒤 고쳐서 v2를 주문하면 {@code latestClip}은 v2 영상으로 바뀐다(업로드 없음). 그래도 v1 업로드는
+     * {@code liveUploads}에 남는다. 실패는 빠지고 대기(queued)는 들어간다(10-15 착수 전 결정). 최근 것이 앞이다.
+     */
+    @Test
+    void 새_판을_주문해도_옛_판_업로드가_살아_있는_목록에_남는다() throws Exception {
+        long 편집본 = 편집본(내_방송);
+        long v1 = 영상_판(내_방송, 편집본, 1, "rendered");
+        long 실패 = 업로드(v1, "failed", null);
+        long 올림 = 업로드(v1, "uploaded", "yt-v1");
+        jdbc.update("UPDATE recipes SET recipe_version = 2 WHERE id = ?", 편집본);
+        long v2 = 영상_판(내_방송, 편집본, 2, "rendered");
+        long 대기 = 업로드(v2, "queued", null);
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+
+        JsonNode 항목 = MAPPER.readTree(본문(목록("").andExpect(status().isOk()))).get("items").get(0);
+        assertThat(항목.get("latestClip").get("id").asLong()).as("기존 칸의 뜻은 그대로: 지금 판 영상").isEqualTo(v2);
+        JsonNode 목록 = 항목.get("liveUploads");
+        assertThat(목록).as("실패는 빠진다").hasSize(2);
+        assertThat(목록.get(0).get("id").asLong()).isEqualTo(대기);
+        assertThat(목록.get(0).get("status").asString()).isEqualTo("queued");
+        assertThat(목록.get(0).get("recipeVersion").asInt()).isEqualTo(2);
+        assertThat(목록.get(0).get("clipId").asLong()).isEqualTo(v2);
+        assertThat(목록.get(1).get("id").asLong()).isEqualTo(올림);
+        assertThat(목록.get(1).get("recipeVersion").asInt()).isEqualTo(1);
+        assertThat(목록.get(1).get("clipId").asLong()).as("옛 영상 번호를 알려 준다").isEqualTo(v1);
+        assertThat(목록.get(1).get("videoId").asString()).isEqualTo("yt-v1");
+        assertThat(목록.get(1).get("status").asString()).isEqualTo("uploaded");
+        assertThat(목록.get(1).get("title").asString()).isEqualTo("제목-" + 올림);
+        assertThat(목록.get(1).get("createdAt").asString()).isNotEmpty();
+        assertThat(목록.get(1).get("updatedAt").asString()).isNotEmpty();
+        assertThat(목록.toString()).as("올리기 권한인 주소는 안 나간다").doesNotContain("session");
+        assertThat(실패).isPositive();
+    }
+
+    /** 업로드가 없으면 빈 목록이다(null이 아니다): 화면이 「없음」과 「모름」을 가르지 않게. */
+    @Test
+    void 업로드가_없으면_빈_목록이다() throws Exception {
+        편집본(내_방송);
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+
+        목록("").andExpect(jsonPath("$.items[0].liveUploads.length()").value(0));
+    }
+
+    /**
+     * 「발행됨」 거르기와 상태 규칙은 그대로다: v1을 올렸어도 v2가 만드는 중이면 그 편집본은 {@code rendering}이고
+     * {@code ?status=uploaded}에 안 나온다. 옛 업로드는 목록 칸으로만 보인다.
+     */
+    @Test
+    void 옛_판_업로드는_상태와_발행됨_거르기를_안_바꾼다() throws Exception {
+        long 편집본 = 편집본(내_방송);
+        long v1 = 영상_판(내_방송, 편집본, 1, "rendered");
+        업로드(v1, "uploaded", "yt-v1");
+        jdbc.update("UPDATE recipes SET recipe_version = 2 WHERE id = ?", 편집본);
+        영상_판(내_방송, 편집본, 2, "rendering");
+        long 발행 = 편집본_과_영상(내_방송, "rendered");
+        업로드(마지막_영상(발행), "uploaded", "yt-pub");
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+
+        JsonNode items = MAPPER.readTree(본문(목록(""))).get("items");
+        assertThat(상태(items, 편집본)).isEqualTo("rendering");
+        assertThat(줄을_찾는다(items, 편집본).get("liveUploads")).hasSize(1);
+        목록("?status=uploaded")
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].recipeId").value(발행));
+    }
+
+    /**
+     * 목록 한 장의 질의 수가 줄 수만큼 늘지 않는다. 업로드가 달린 편집본 하나와 넷을 같은 장에서 읽어 JPA 질의 수가 같아야 한다.
+     * 대조: 둘 다 0이면 측정기가 안 세는 것이라 빨간불이다.
+     */
+    @Test
+    void 살아_있는_업로드는_줄마다_묻지_않는다() throws Exception {
+        볼_수_있는_스트리머(줄(TestIds.STREAMER, "OWNER"));
+        업로드가_있는_편집본();
+        Statistics 통계 = emf.unwrap(SessionFactory.class).getStatistics();
+        통계.setStatisticsEnabled(true);
+        try {
+            통계.clear();
+            목록("").andExpect(jsonPath("$.items.length()").value(1));
+            long 한_줄 = 통계.getPrepareStatementCount();
+
+            for (int i = 0; i < 3; i++) {
+                업로드가_있는_편집본();
+            }
+            통계.clear();
+            목록("").andExpect(jsonPath("$.items.length()").value(4))
+                    .andExpect(jsonPath("$.items[3].liveUploads.length()").value(2));
+            long 네_줄 = 통계.getPrepareStatementCount();
+
+            assertThat(한_줄).as("측정기가 아무것도 안 셌다").isPositive();
+            assertThat(네_줄).as("줄이 늘자 질의가 늘었다: 줄마다 묻고 있다").isEqualTo(한_줄);
+        } finally {
+            통계.setStatisticsEnabled(false);
+        }
+    }
+
     // ── 상세 ─────────────────────────────────────────────────────
 
     /** 상세는 목록 줄의 칸 전부에 편집본 본문(계약6)이 얹힌 것이다 — 공통 칸은 JSON 트리로 <b>같아야</b> 한다. */
@@ -314,6 +418,28 @@ class LibraryControllerTest extends IntegrationTestSupport {
         RenderFixtures.주문을_넣는다(jdbc, streamId, recipeId, clipId);
         jdbc.update("UPDATE clips SET status = ?, recipe_version = ? WHERE id = ?", clipStatus, recipeVersion, clipId[0]);
         return clipId[0];
+    }
+
+    /** v1 업로드 + v2 영상의 업로드가 있는 편집본(살아 있는 업로드 둘). */
+    private void 업로드가_있는_편집본() {
+        long 편집본 = 편집본(내_방송);
+        업로드(영상_판(내_방송, 편집본, 1, "rendered"), "uploaded", "yt-" + 편집본);
+        jdbc.update("UPDATE recipes SET recipe_version = 2 WHERE id = ?", 편집본);
+        업로드(영상_판(내_방송, 편집본, 2, "rendered"), "uploading", null);
+    }
+
+    /** @return 업로드 번호. 제목은 「제목-번호」로 바꿔 둔다(줄마다 갈려야 엉뚱한 줄을 읽어도 초록이 안 된다). */
+    private long 업로드(long clipId, String status, String videoId) {
+        long id = jdbc.queryForObject("""
+                INSERT INTO clip_uploads (clip_id, output_id, requested_by, channel_owner, title, status, payload, youtube_video_id)
+                VALUES (?, 'o1', ?, ?, '제목', ?, '{}'::jsonb, ?) RETURNING id""", Long.class,
+                clipId, TestIds.STREAMER, TestIds.STREAMER, status, videoId);
+        jdbc.update("UPDATE clip_uploads SET title = ? WHERE id = ?", "제목-" + id, id);
+        return id;
+    }
+
+    private long 마지막_영상(long recipeId) {
+        return jdbc.queryForObject("SELECT max(id) FROM clips WHERE recipe_id = ?", Long.class, recipeId);
     }
 
     private static String 상태(JsonNode items, long recipeId) {

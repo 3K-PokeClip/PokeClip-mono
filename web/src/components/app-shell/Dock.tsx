@@ -20,7 +20,7 @@ const ITEM_META: Record<DockHref, { label: string; Icon: LucideIcon }> = {
 // 순서는 DOCK_HREFS에서 그대로 가져온다 — 따로 나열하면 전환 방향과 조용히 어긋날 수 있다.
 const ITEMS = DOCK_HREFS.map((href) => ({ href, ...ITEM_META[href] }));
 
-/** 항목별 알림 수. 승인 대기함 같은 실데이터가 붙기 전까진 비어 있다. */
+/** 항목별 알림 수. 실데이터가 붙기 전까진 비어 있다. */
 export type DockBadges = Partial<Record<DockHref, number>>;
 
 export function Dock({ badges }: { badges?: DockBadges } = {}) {

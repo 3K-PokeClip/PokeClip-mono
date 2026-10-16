@@ -16,7 +16,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('@/api/mediaPlayback', () => ({
   playbackConfigured: () => true,
-  fetchRecordingSpans: (key: string) => {
+  lookupRecordingSpans: (key: string) => {
     api.asked.push(key);
     return Promise.resolve(api.spans);
   },

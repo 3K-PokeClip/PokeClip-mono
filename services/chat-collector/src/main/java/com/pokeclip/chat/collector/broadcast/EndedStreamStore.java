@@ -10,8 +10,9 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 끝난 방송 메모를 읽고 쓰고 치운다. 이 서버의 DB 접근 방식은 JPA가 아니라
@@ -51,11 +52,10 @@ public class EndedStreamStore {
             ON CONFLICT (stream_id) DO NOTHING
             """;
 
-    private static final String SELECT = """
-            SELECT stream_id, last_sequence, ended_at, created_at, stop_reason
-              FROM chat_ended_streams
-             WHERE stream_id = ?
-            """;
+    /** {@link #toMemo}가 읽는 칸. 한 방송 조회와 여러 방송 조회가 같이 쓴다. */
+    private static final String COLUMNS = "stream_id, last_sequence, ended_at, created_at, stop_reason";
+
+    private static final String SELECT = "SELECT " + COLUMNS + " FROM chat_ended_streams WHERE stream_id = ?";
 
     private final JdbcTemplate jdbc;
 
@@ -83,8 +83,8 @@ public class EndedStreamStore {
     }
 
     /**
-     * 이 방송 번호들 중 <b>메모가 있는 것</b>. 끝났든 포기했든 가리지 않는다 — 재부착은
-     * 둘 다 건너뛰므로 이유를 알 필요가 없다.
+     * 이 방송 번호들의 메모. 메모가 없는 번호는 결과에 없다. 재부착이 이것으로 「건너뛸 방송」과
+     * 「연동이 돌아왔는지 다시 물을 방송」을 가른다: 그래서 있고 없음이 아니라 사유까지 읽는다(POK-342).
      *
      * <p><b>한 번에 묻는 이유</b>: 재부착이 방송 200개를 받으면 낱개 조회가 200번이다.
      * PK 조회라 한 건은 싸지만 왕복이 200번이고, 그동안 다른 방송의 붙이기가 밀린다.
@@ -93,15 +93,15 @@ public class EndedStreamStore {
      * 막게 두면 언젠가 한 곳이 빠진다 — 재부착은 「방송이 하나도 없는 회차」를 매 주기
      * 지나가므로 그 갈래가 평상시 경로다.
      */
-    public Set<String> findAllIds(Collection<String> streamIds) {
+    public Map<String, EndedStream> findAll(Collection<String> streamIds) {
         if (streamIds.isEmpty()) {
-            return Set.of();
+            return Map.of();
         }
         String placeholders = String.join(",", Collections.nCopies(streamIds.size(), "?"));
-        List<String> found = jdbc.queryForList(
-                "SELECT stream_id FROM chat_ended_streams WHERE stream_id IN (" + placeholders + ")",
-                String.class, streamIds.toArray());
-        return Set.copyOf(found);
+        List<EndedStream> found = jdbc.query(
+                "SELECT " + COLUMNS + " FROM chat_ended_streams WHERE stream_id IN (" + placeholders + ")",
+                EndedStreamStore::toMemo, streamIds.toArray());
+        return found.stream().collect(Collectors.toUnmodifiableMap(EndedStream::streamId, memo -> memo));
     }
 
     /** @return 새로 남겼는가. 이미 메모가 있으면 false — 그 메모가 이긴다 */
@@ -109,6 +109,20 @@ public class EndedStreamStore {
         // ended_at은 NOT NULL이라 비울 수 없다. 포기엔 편지가 없으니 now를 넣되,
         // 읽는 쪽(창구)은 포기 메모의 시각을 created_at으로 본다(PRD 결정).
         return jdbc.update(INSERT_STOPPED, streamId, Timestamp.from(now), Timestamp.from(now), reason) > 0;
+    }
+
+    /**
+     * 포기 메모를 지운다: 재부착이 다시 연동된 방송에 붙은 뒤에 부른다(POK-342).
+     *
+     * <p><b>사유가 같을 때만 지운다.</b> 포기 메모의 사유는 바뀌지 않고({@code DO NOTHING})
+     * 종료 편지만 그것을 비운다({@code UPSERT}). 그래서 이 조건이 「그 사이 종료로 바뀐 메모는
+     * 남긴다」와 같은 뜻이다: 끝난 방송의 메모를 지우면 재부착이 그 방송을 다시 후보로 본다.
+     *
+     * @return 지웠는가
+     */
+    public boolean forgetStopped(String streamId, String reason) {
+        return jdbc.update("DELETE FROM chat_ended_streams WHERE stream_id = ? AND stop_reason = ?",
+                streamId, reason) > 0;
     }
 
     public int sweepOlderThan(Instant cutoff) {

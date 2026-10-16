@@ -637,6 +637,36 @@ class UploadProcessorTest {
         assertThat(output.getAll()).contains("upload.done").doesNotContain(FakeYoutube.GOOD_TOKEN).doesNotContain("/session/");
     }
 
+    // ── heartbeat(POK-333) ─────────────────────────────────────
+
+    /** heartbeat는 그 주문의 업로드 번호로 clip 문을 한 번 부른다. */
+    @Test
+    void heartbeat는_업로드_번호로_clip을_부른다() {
+        processor().heartbeat(주문서());
+        assertThat(internal.heartbeats).isOne();
+    }
+
+    /**
+     * 🔴 heartbeat가 실패해도 업로드는 안 깨진다: 옛 clip(문을 몰라 404) · clip 고장(500) · clip이 아예 없음 · 못 읽는 쪽지에서 던지지 않고,
+     * 그 뒤 처리는 그대로 영상 하나를 올린다.
+     */
+    @Test
+    void heartbeat가_실패해도_던지지_않고_업로드는_그대로_간다() {
+        UploadProcessor processor = processor();
+        for (int status : new int[]{404, 500}) {
+            internal.heartbeatStatus = status;
+            processor.heartbeat(주문서());
+        }
+        processor.heartbeat("{not json");
+        internal.heartbeatStatus = 200;
+
+        assertThat(processor.process(주문서())).isEqualTo(Disposition.DELETE);
+        assertThat(internal.results).containsExactly("UPLOADED:vid1");
+
+        internal.close();
+        processor.heartbeat(주문서());
+    }
+
     // ── 도우미 ──────────────────────────────────────────────────
 
     private UploadProcessor processor() {

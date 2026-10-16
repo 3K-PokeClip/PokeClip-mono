@@ -4,7 +4,9 @@ cmake_minimum_required(VERSION 3.28...3.30)
 #
 # 빌드 경로가 둘이다.
 #  - 기본: obs-plugintemplate 경로. buildspec.json의 OBS 소스·obs-deps·Qt6를 받아 빌드한다 (CI·배포).
+#    기본 서버는 운영(api.pokeclip.com · media.pokeclip.com) — src/constants.hpp, POK-267.
 #  - POKECLIP_LOCAL_OBS_APP=ON: macOS 개발용. Xcode 없이 설치된 OBS.app의 libobs·Qt에 링크한다.
+#    기본 서버는 개발(dev.pokeclip.com · media-dev.pokeclip.com) — cmake/local/obs-app.cmake POKECLIP_DEV_SERVERS.
 #    템플릿 macOS 모듈은 Xcode 생성기를 강제하므로 이 경로는 템플릿 모듈을 쓰지 않는다.
 option(POKECLIP_LOCAL_OBS_APP "macOS dev build linked against an installed OBS.app (no Xcode)" OFF)
 
@@ -65,6 +67,8 @@ target_sources(
     src/private-file.hpp
     src/retry-policy.cpp
     src/retry-policy.hpp
+    src/server-env.cpp
+    src/server-env.hpp
     src/srt-target.cpp
     src/srt-target.hpp
     src/srt-url.cpp

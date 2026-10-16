@@ -49,6 +49,19 @@ public interface ClipUploadRepository extends JpaRepository<ClipUpload, Long> {
             """, nativeQuery = true)
     List<ClipUpload> findLatestByClipIdIn(@Param("clipIds") Collection<Long> clipIds);
 
+    /**
+     * 편집본 여러 개의 살아 있는(실패 아닌) 업로드를 판에 상관없이 한 번에(POK-334): 보관함 목록이 줄마다 묻지 않게.
+     * 최근 것이 앞이다. 색인은 {@code idx_clips_recipe}(V208) · {@code idx_clip_uploads_clip}(V209)를 탄다.
+     */
+    @Query("""
+            select new com.pokeclip.clip.upload.LiveUpload$Row(c.recipeId, u.id, u.clipId, c.recipeVersion, u.outputId,
+                   u.title, u.status, u.youtubeVideoId, u.createdAt, u.updatedAt)
+              from ClipUpload u join Clip c on c.id = u.clipId
+             where c.recipeId in :recipeIds and u.status <> 'failed'
+             order by u.id desc
+            """)
+    List<LiveUpload.Row> findAliveByRecipeIdIn(@Param("recipeIds") Collection<Long> recipeIds);
+
     @Query("select u from ClipUpload u where u.publishedAt is null and u.createdAt < :before order by u.createdAt")
     List<ClipUpload> findUnpublishedBefore(@Param("before") Instant before);
 }

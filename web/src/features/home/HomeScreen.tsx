@@ -4,7 +4,6 @@ import styles from './HomeScreen.module.css';
 import { ExpiringVodCard } from './ExpiringVodCard';
 import { LiveNowBand } from './LiveNowBand';
 import { PublishStatusCard } from './PublishStatusCard';
-import { RecentCardsCard } from './RecentCardsCard';
 import { ResumeEditBanner } from './ResumeEditBanner';
 import { VodGrid } from './VodGrid';
 import { useHomeMockState } from './useHomeMockState';
@@ -25,7 +24,6 @@ export function HomeScreen() {
     publishRows,
     publishUnavailable,
     expiringVods,
-    recentCards,
     loading,
   } = useHomeMockState();
 
@@ -58,7 +56,6 @@ export function HomeScreen() {
             </section>
           )}
           <VodGrid vods={vods} loading={loading} />
-          <RecentCardsCard cards={recentCards} loading={loading} />
         </div>
         <aside
           className={styles.aside}

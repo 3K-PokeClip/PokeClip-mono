@@ -108,7 +108,7 @@ describe('Side — 방송', () => {
 });
 
 describe('Side — 클립', () => {
-  it('보관함만 링크이고 /clips/library에서 활성이다 — 템플릿 관리·업로드 상태·승인 대기함은 비활성', () => {
+  it('보관함만 링크이고 /clips/library에서 활성이다 — 템플릿 관리·업로드 상태는 비활성, 승인 대기함은 없다(POK-254)', () => {
     nav.pathname = '/clips/library';
     renderWithProviders(<Side menu="clips" />);
 
@@ -117,18 +117,20 @@ describe('Side — 클립', () => {
     expect(links[0]).toHaveAttribute('href', '/clips/library');
     expect(links[0]).toHaveAttribute('aria-current', 'page');
 
-    // 나머지 3개는 비활성 — 템플릿 관리(1h)·업로드 상태(1i)·승인 대기함(POK-236)
-    for (const label of ['템플릿 관리', '업로드 상태', '승인 대기함']) {
+    // 나머지 2개는 비활성 — 템플릿 관리(1h)·업로드 상태(1i)
+    for (const label of ['템플릿 관리', '업로드 상태']) {
       expect(screen.getByText(label).closest('[aria-disabled="true"]')).not.toBeNull();
     }
+    // 승인 게이트가 없어 승인 대기함은 메뉴에서 뺐다(POK-236 폐기)
+    expect(screen.queryByText('승인 대기함')).toBeNull();
   });
 
-  it('두 그룹을 이름 붙은 nav로 낸다 — 하이라이트 · 클립 / 업로드 · 승인함', () => {
+  it('두 그룹을 이름 붙은 nav로 낸다 — 하이라이트 · 클립 / 업로드', () => {
     nav.pathname = '/clips/library';
     renderWithProviders(<Side menu="clips" />);
 
     expect(screen.getByRole('navigation', { name: '하이라이트 · 클립' })).toBeInTheDocument();
-    expect(screen.getByRole('navigation', { name: '업로드 · 승인함' })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: '업로드' })).toBeInTheDocument();
   });
 
   it('접힘이 클립 그룹에도 이어진다 — 방송에서 접으면 클립에서도 접혀 있다', async () => {
@@ -146,13 +148,13 @@ describe('Side — 클립', () => {
     );
   });
 
-  it('badges로 준 수가 항목 옆에 붙는다 — 승인 대기함 수는 그 화면 티켓이 채울 자리', () => {
+  it('badges로 준 수가 항목 옆에 붙는다', () => {
     nav.pathname = '/clips/library';
-    renderWithProviders(<Side menu="clips" badges={{ approvals: 3 }} />);
+    renderWithProviders(<Side menu="clips" badges={{ upstatus: 3 }} />);
 
-    const approvals = screen.getByText('승인 대기함').closest('[aria-disabled="true"]');
-    expect(approvals).not.toBeNull();
-    expect(approvals).toHaveTextContent('승인 대기함3');
+    const upstatus = screen.getByText('업로드 상태').closest('[aria-disabled="true"]');
+    expect(upstatus).not.toBeNull();
+    expect(upstatus).toHaveTextContent('업로드 상태3');
     // 값을 안 준 항목에는 배지가 없다
     expect(screen.getByText('보관함').closest('a')).toHaveTextContent(/^보관함$/);
   });

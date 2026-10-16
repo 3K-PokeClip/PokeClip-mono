@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import enIni from '../../../data/locale/en-US.ini?raw';
 import koIni from '../../../data/locale/ko-KR.ini?raw';
-import { AUDIO_KIND_LABEL, KEY_SUSPECT_HINT, markToast, noKeyToast, REASON, reasonText, RES_ADVISORY } from './copy';
+import {
+  AUDIO_KIND_LABEL,
+  KEY_SUSPECT_HINT,
+  KEY_SUSPECT_NEXT,
+  markToast,
+  noKeyToast,
+  REASON,
+  reasonText,
+  RES_ADVISORY,
+} from './copy';
 import type { MarkStats } from './types';
 
 // 브리지가 보내는 사유 코드는 독(copy.ts)과 Qt 폴백(locale/*.ini)이 각자 문구로 바꾼다 —
@@ -58,6 +67,14 @@ describe('사유 문구', () => {
       expect(koReason(code), code).toBe(REASON[code]);
     }
     expect(/^Retry\.KeyHint="(.*)"$/m.exec(koIni)?.[1]).toBe(KEY_SUSPECT_HINT);
+    expect(/^Retry\.KeyHintNext="(.*)"$/m.exec(koIni)?.[1]).toBe(KEY_SUSPECT_NEXT);
+    expect(/^Retry\.KeyHintNext="(.*)"$/m.exec(enIni)?.[1]).toBeTruthy();
+  });
+
+  it('키 확인 안내는 키 문제로 단정하지 않는다', () => {
+    // auth 장애·운영자 차단도 같은 거절로 온다(POK-287) — 가능성으로 쓰고, 멈춘 뒤에는 키 말고 다른 곳도 가리킨다
+    expect(KEY_SUSPECT_HINT).toContain('수 있어요');
+    expect(KEY_SUSPECT_NEXT).toContain('PokeClip 쪽');
   });
 
   it('상태 카드에 쌓이는 원인 문구는 독 폭(300px)에서 두 줄을 넘지 않게 짧다', () => {

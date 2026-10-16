@@ -124,10 +124,10 @@ public interface JumpCardRepository extends JpaRepository<JumpCard, Long> {
      */
     @Modifying(clearAutomatically = true)
     @Query(value = """
-            UPDATE jump_cards SET hidden_at = now(), hidden_by = :me
+            UPDATE jump_cards SET hidden_at = now(), hidden_by = :me, hidden_reason = :reason
              WHERE id = :id AND hidden_at IS NULL
             """, nativeQuery = true)
-    int hide(@Param("id") long id, @Param("me") String me);
+    int hide(@Param("id") long id, @Param("me") String me, @Param("reason") String reason);
 
     /**
      * 되돌리기는 누구나 한다 — 숨긴 사람만 되돌릴 수 있으면 그 사람이 자리를 비웠을 때 막힌다.
@@ -135,8 +135,22 @@ public interface JumpCardRepository extends JpaRepository<JumpCard, Long> {
      */
     @Modifying(clearAutomatically = true)
     @Query(value = """
-            UPDATE jump_cards SET hidden_at = NULL, hidden_by = NULL
+            UPDATE jump_cards SET hidden_at = NULL, hidden_by = NULL, hidden_reason = NULL
              WHERE id = :id AND hidden_at IS NOT NULL
             """, nativeQuery = true)
     int unhide(@Param("id") long id);
+
+    /**
+     * 카드 행동 한 줄(POK-338). 덧붙이기만 한다: 위 넷은 칸을 덮고 지워 이력이 안 남는다.
+     *
+     * <p>🔴 <b>상태를 바꾼 그 트랜잭션 안에서</b> 부른다. 밖에서 부르면 쓰기는 롤백됐는데 기록만 남거나
+     * 그 반대가 생긴다. 시각은 DB 시계({@code DEFAULT now()})라 카드 표의 claimed_at·hidden_at과 같은 시계다.
+     */
+    @Modifying
+    @Query(value = """
+            INSERT INTO jump_card_actions (card_id, action, actor, reason)
+            VALUES (:cardId, :action, :actor, :reason)
+            """, nativeQuery = true)
+    void recordAction(@Param("cardId") long cardId, @Param("action") String action,
+                      @Param("actor") String actor, @Param("reason") String reason);
 }

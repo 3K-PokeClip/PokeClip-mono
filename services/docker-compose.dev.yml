@@ -15,6 +15,11 @@ services:
   postgres:
     image: postgres:17
     restart: unless-stopped
+    # 컨테이너마다 메모리 상한을 둔다(POK-331). 없으면 하나가 넘칠 때 커널이 아무 컨테이너나 죽이고,
+    # 있으면 넘친 그 컨테이너만 죽고 restart 가 다시 띄운다. 서버 넷은 힙(-Xmx) + JVM 바깥 몫(192~256MB)으로 잡았다.
+    # postgres 는 공유 버퍼 128MB + 서버 넷의 커넥션(풀 기본 10씩, 최대 40)이라 넉넉히 둔다. 이것이 죽으면 넷이 다 멈춘다.
+    # 합 2,496MB. 상한이지 예약이 아니라 합이 물리 메모리를 넘어도 뜨는 데는 지장이 없다.
+    mem_limit: 512m
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?cp .env.dev.example .env 먼저 실행하세요}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?cp .env.dev.example .env 먼저 실행하세요}
@@ -37,6 +42,7 @@ services:
       context: .
       dockerfile: auth/Dockerfile
     restart: unless-stopped
+    mem_limit: 512m
     depends_on:
       postgres:
         condition: service_healthy   # Flyway 가 뜨자마자 붙으므로 DB가 준비된 뒤여야 한다
@@ -44,7 +50,10 @@ services:
       # 넷 중 이것만 밖에 연다. 다만 "API가 auth 에만 있다"는 이제 틀렸다 —
       # 2026-08-24 실측 @RestController: auth 13 · clip 4 · chat-collector 2 · chat-detector 0.
       # clip 도 웹이 부르는 API를 갖게 됐지만 앞단 프록시가 생길 때 연다(아래 clip 절).
-      # 보안그룹도 8082 만 연다.
+      # compose 는 모든 주소에 계속 열고, 바깥은 보안그룹이 막는다(POK-293 M12). 사람·배포 확인은 https 앞단(nginx → 웹)으로 오고,
+      # 이 포트로 직접 오는 것은 영상 서버(media-dev)의 스트림키 확인 하나만 남긴다. 그 창구는
+      # 소켓 주소로 출발지를 가리므로(SourceNetworkFilter) 프록시를 거치면 403 이다.
+      # 127.0.0.1 로 좁히지 않는 이유도 그것이다(media-dev 는 다른 상자에서 사설 주소로 온다).
       - "8082:8082"
     environment:
       # compose 네트워크 안에서는 서비스 이름이 곧 호스트 이름이다.
@@ -85,7 +94,7 @@ services:
       # 스트림키 암호 저장소(POK-272). 접두는 비면 기동을 거부한다: IAM 정책이 그 접두 안만 허용하고,
       # 로컬 기본값(pokeclip/local/stream-key/)으로 뜨면 재발급·탈퇴의 Secrets Manager 삭제가 권한 거부로 실패한다.
       # 🔴 이 줄이 :? 라서 dev .env 에 세 줄이 먼저 들어간 뒤에 코드를 머지한다. 빠지면 compose 가 파일 전체 보간에서
-      # 멈춰 auth 만이 아니라 같은 배포 명령(up postgres auth clip)의 clip 까지 안 올라간다.
+      # 멈춰 auth 만이 아니라 같은 배포 명령의 서버 넷이 다 안 올라간다.
       STREAM_KEY_SECRET_STORE_TYPE: ${STREAM_KEY_SECRET_STORE_TYPE:-postgres}
       STREAM_KEY_SECRET_RETIRE_FROM: ${STREAM_KEY_SECRET_RETIRE_FROM:-postgres}
       STREAM_KEY_SECRET_REF_PREFIX: ${STREAM_KEY_SECRET_REF_PREFIX:?}
@@ -102,8 +111,8 @@ services:
       # 탈퇴 정리 알림(POK-256)을 보낼 두 서버. 비면 auth 부팅이 거부된다. 기본값이 compose 안 주소라 .env는 비워 둔다.
       CLIP_BASE_URL: ${CLIP_BASE_URL:-http://clip:8081}
       COLLECTOR_BASE_URL: ${COLLECTOR_BASE_URL:-http://chat-collector:8083}
-      # t3.small 은 2GB다. 힙을 안 묶으면 JVM 이 물리 메모리의 1/4씩 잡아
-      # 넷이 합쳐 한도를 넘고, 커널이 아무거나 하나를 죽인다.
+      # 힙을 안 묶으면 JVM 이 물리 메모리의 1/4씩 잡아 넷이 합쳐 한도를 넘고, 커널이 아무거나 하나를 죽인다.
+      # 상자 크기 기록이 갈린다: 08-19 t3.small(2GB, 이 주석의 옛 판) · 09-15 t3.medium(4GB). 1번 확인 필요(POK-331).
       JAVA_TOOL_OPTIONS: -Xmx256m
 
   clip:
@@ -112,6 +121,7 @@ services:
       context: .
       dockerfile: clip/Dockerfile
     restart: unless-stopped
+    mem_limit: 512m
     depends_on:
       postgres:
         condition: service_healthy
@@ -157,6 +167,7 @@ services:
       MEDIA_BASE_URL: ${MEDIA_BASE_URL:-}
       PLAYBACK_COOKIE_DOMAIN: ${PLAYBACK_COOKIE_DOMAIN:-}
       PLAYBACK_ACCESS_TTL: ${PLAYBACK_ACCESS_TTL:-PT60M}
+      PLAYBACK_REQUIRED: ${PLAYBACK_REQUIRED:-false}   # prod만 true(POK-321). 켜면 서명 설정 셋이 다 빈 「꺼짐」도 부팅 거부
       # 영상 만들기 주문(POK-125). 켜면 큐 둘·창고 둘이 필수다. 자격증명은 EC2 역할(인라인 정책 pokeclip-render-queue-and-clips).
       RENDER_ENABLED: ${RENDER_ENABLED:-false}
       RENDER_QUEUE_URL: ${RENDER_QUEUE_URL:-}
@@ -168,6 +179,11 @@ services:
       UPLOAD_QUEUE_URL: ${UPLOAD_QUEUE_URL:-}
       UPLOAD_DLQ_URL: ${UPLOAD_DLQ_URL:-}
       UPLOAD_RECONCILE_INTERVAL: ${UPLOAD_RECONCILE_INTERVAL:-PT1M}
+      # 썸네일 주문(POK-277). 켜면 줄 주소가 필수다(비면 부팅 거부). 사진 창고는 위 CLIPS_BUCKET. 자격증명은 EC2 역할이고, 그 역할에 이 줄의 SQS 권한이 있어야 한다.
+      # 이 줄들이 없을 때는 호스트 .env 에 값을 넣어도 컨테이너에 안 가서 dev 썸네일이 늘 꺼져 있었다(POK-331).
+      THUMBNAIL_ENABLED: ${THUMBNAIL_ENABLED:-false}
+      THUMBNAIL_QUEUE_URL: ${THUMBNAIL_QUEUE_URL:-}
+      THUMBNAIL_INTERVAL: ${THUMBNAIL_INTERVAL:-PT1M}
       # 채팅 되감기 문 셋이 물어보는 수집기 주소(POK-234). 위 AUTH_BASE_URL 과 달리
       # 비어도 부팅은 산다 — 그 셋만 503 이고 카드 편집·목록·통로는 그대로 돈다.
       # 그래도 여기 넣는 이유는 「표에만 적혀 있고 compose 가 안 넘겨」 그 기능만 조용히
@@ -186,6 +202,7 @@ services:
       context: .
       dockerfile: chat-collector/Dockerfile
     restart: unless-stopped
+    mem_limit: 576m
     # 🔴 compose 기본은 10초인데 이 서버의 종료 예산은 19초다(README 「종료 유예를 20초 준다」).
     # 잘리면 세션 닫기(구독 반납 REST 8초)가 중간에 끊겨 세션 키가 소모된 채 남고,
     # 스트리머당 3개뿐인 자리가 하나씩 마른다 — 유예를 15에서 20으로 올린 바로 그 이유다.
@@ -260,6 +277,7 @@ services:
       context: .
       dockerfile: chat-detector/Dockerfile
     restart: unless-stopped
+    mem_limit: 384m
     # DB 를 쓰게 됐다. postgres 가 뜬 뒤에 올라와야 한다.
     depends_on:
       postgres:

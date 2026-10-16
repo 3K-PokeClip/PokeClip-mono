@@ -16,6 +16,7 @@ import com.pokeclip.auth.youtube.YoutubeTokens;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -259,7 +261,96 @@ class WithdrawalChannelLinkTest extends WithdrawalTestSupport {
         assertThat(YOUTUBE.revokeCalls()).isZero();
     }
 
+    /**
+     * 🔴 <b>탈퇴한 회원의 채널 이름·번호가 연동 표에 안 남는다</b>(POK-341). 치지직 채널 이름은 대개 공개 활동명이라
+     * 익명화된 회원 행 옆에 남으면 사람을 되짚을 수 있다.
+     *
+     * <p>재연동으로 <b>이미 닫혀 있던 옛 행</b>도 만든다. 탈퇴가 닫는 살아있는 행만 비우면 옛 행에 이름이 그대로 남는다.
+     *
+     * <p>수집기 정리 장부에는 채널 번호가 <b>남아야</b> 한다: 장부가 연동 표에서 채널을 읽어 가므로 비우는 줄은
+     * 장부 적기보다 뒤여야 한다(앞이면 장부 CHECK에 걸려 탈퇴가 500이다. 주입으로 확인).
+     */
+    @Test
+    void 탈퇴하면_두_연동_표에_채널_이름과_번호가_안_남는다() throws Exception {
+        User user = newUser();
+        ChzzkChannelLink oldChzzk = linkChzzk(user);
+        linkChzzk(user, "at-new", "rt-new");
+        linkYoutube(user);
+        linkYoutube(user, "yt-at-new", "yt-rt-new");
+
+        assertThat(rowsWithChannel("chzzk_channel_links", user))
+                .as("재연동으로 행 둘이 있어야 「옛 행까지 비운다」를 잰다").isEqualTo(2);
+        assertThat(rowsWithChannel("youtube_channel_links", user)).isEqualTo(2);
+
+        withdraw(user);
+        awaitCleanup();
+
+        assertThat(rowsWithChannel("chzzk_channel_links", user))
+                .as("🔴 탈퇴자의 치지직 채널 이름·번호가 남았다").isZero();
+        assertThat(rowsWithChannel("youtube_channel_links", user))
+                .as("🔴 탈퇴자의 유튜브 채널 이름·번호가 남았다").isZero();
+        assertThat(jdbc.queryForList("""
+                SELECT channel_id FROM withdrawal_purge_jobs WHERE user_id = ? AND target = 'COLLECTOR'""",
+                String.class, user.getId()))
+                .as("🔴 수집기 정리 장부에 채널이 없다: 수집기가 그 채팅을 못 지운다")
+                .contains(oldChzzk.getChannelId());
+    }
+
+    /**
+     * 탈퇴한 채널로 <b>다른 계정이 다시 연동할 수 있다</b>(카드 완료 조건). 유일 제약은 살아있는 행에만 걸려 있어
+     * <b>비우기 전에도 초록이었다</b>: 이 시험은 비우기를 재지 않는다(그것은 위 시험과 아래 CHECK 시험의 몫).
+     * 지키는 것은 「비운 행이 채널 중복 판정(조회·제약)을 흔들지 않는다」 하나다.
+     */
+    @Test
+    void 탈퇴한_채널로_다른_계정이_다시_연동할_수_있다() throws Exception {
+        User leaving = newUser();
+        ChzzkChannelLink chzzk = linkChzzk(leaving);
+        YoutubeChannelLink youtube = linkYoutube(leaving);
+
+        withdraw(leaving);
+        awaitCleanup();
+
+        User next = newUser();
+        ChzzkChannelLink relinkedChzzk = chzzkWriter.create(next.getId(), new ChzzkMe(chzzk.getChannelId(), "채널"),
+                new ChzzkTokens("at-next", "rt-next", CHZZK_ACCESS_TTL, "chat"));
+        YoutubeChannelLink relinkedYoutube = youtubeWriter.create(next.getId(),
+                new YoutubeChannel(youtube.getChannelId(), "채널"),
+                new YoutubeTokens("yt-at-next", "yt-rt-next", YOUTUBE_ACCESS_TTL, "upload"));
+
+        assertThat(relinkedChzzk.getChannelId()).isEqualTo(chzzk.getChannelId());
+        assertThat(relinkedYoutube.getChannelId()).isEqualTo(youtube.getChannelId());
+        assertThat(resolveBody(chzzkResolve(next))).contains("\"valid\":true").contains("at-next");
+        assertThat(resolveBody(youtubeResolve(next))).contains("\"valid\":true").contains("yt-at-next");
+    }
+
+    /**
+     * 🔴 <b>살아있는 연동은 채널 칸을 비울 수 없다</b>(V115 CHECK). 칸을 NULL 허용으로 바꾼 대가로 열린 문이다.
+     * 이것이 없으면 쓰는 쪽 실수 하나로 「채널이 없는 살아있는 연동」이 생기고, 수집기는 번호 없는 세션을 연다.
+     */
+    @Test
+    void 살아있는_연동의_채널_칸은_DB가_못_비우게_막는다() {
+        User user = newUser();
+        ChzzkChannelLink chzzk = linkChzzk(user);
+        YoutubeChannelLink youtube = linkYoutube(user);
+
+        for (String column : List.of("channel_id", "channel_name")) {
+            assertThatThrownBy(() -> jdbc.update(
+                    "UPDATE chzzk_channel_links SET " + column + " = NULL WHERE id = ?", chzzk.getId()))
+                    .as("치지직 " + column).isInstanceOf(DataIntegrityViolationException.class);
+            assertThatThrownBy(() -> jdbc.update(
+                    "UPDATE youtube_channel_links SET " + column + " = NULL WHERE id = ?", youtube.getId()))
+                    .as("유튜브 " + column).isInstanceOf(DataIntegrityViolationException.class);
+        }
+    }
+
     // ── 도구 ────────────────────────────────────────────────────────────
+
+    /** 이 회원의 행 중 채널 이름이나 번호가 하나라도 남은 행 수. 닫힌 행도 센다. */
+    private int rowsWithChannel(String table, User user) {
+        return jdbc.queryForObject("SELECT count(*) FROM " + table
+                        + " WHERE user_id = ? AND (channel_id IS NOT NULL OR channel_name IS NOT NULL)",
+                Integer.class, user.getId());
+    }
 
     private void withdraw(User user) throws Exception {
         mockMvc.perform(delete("/api/auth/me").header("Authorization", bearer(user)))

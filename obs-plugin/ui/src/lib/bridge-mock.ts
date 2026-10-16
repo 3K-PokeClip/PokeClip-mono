@@ -1,10 +1,21 @@
 import type { Bridge } from './bridge';
-import type { AudioKind, AudioRouting, AudioSource, BridgeState, MarkStats, Phase, PluginSettings, RetryView } from './types';
+import type {
+  AudioKind,
+  AudioRouting,
+  AudioSource,
+  BridgeState,
+  MarkStats,
+  Phase,
+  PluginSettings,
+  RetryView,
+  ServerEnv,
+} from './types';
 
 // 개발 전용 — `pnpm dev` 에서 토큰 없이 열면 쓴다.
 // ?mock=unpaired|idle|live|reconnecting|error|no_key|encoder|audio_overflow|audio_grouped|audio_live|audio_manual|
 //       audio_main_stream|audio_deferred|audio_prompt|audio_prompt_custom|mark_pending|mark_unsupported|
-//       retry_first|retry_key|gave_up|paired_midstream
+//       retry_first|retry_key|gave_up|key_stopped|key_gave_up|paired_midstream
+// &env=dev — 개발 서버로 붙은 상태(머리 「개발 서버」 표시·고급 설정 스위치). 기본은 운영(POK-267).
 // 트랙 2~6 목록으로 오디오 배정 상태를 만든다 (트랙 1은 늘 최종 믹스라 싣지 않는다). mainStream은 본방 트랙 번호.
 const src = (key: string, name: string, kind: AudioKind): AudioSource => ({ key, name, kind });
 const MIC = src('ch:3', '마이크/보조', 'mic');
@@ -33,14 +44,23 @@ function routing(tracks: AudioSource[][], mainStream: number[] = []): AudioRouti
 const NO_MARKS: MarkStats = { hotkey: '⌃⇧M', sent: 0, pending: 0, failed: 0, seq: 0, result: '', reason: '', lastAt: 0 };
 const NO_RETRY: RetryView = { attempt: 0, nextAt: 0, gaveUp: false, keySuspect: false };
 const MOCK_RETRY_INTERVAL_MS = 5000; // 300초 창 안의 간격과 같다
+// 플러그인 constants.hpp kProdServers·kDevServers와 같은 짝
+const MOCK_SERVERS: Record<ServerEnv, Pick<PluginSettings, 'api_base' | 'ingest_host' | 'ingest_port'>> = {
+  prod: { api_base: 'https://api.pokeclip.com', ingest_host: 'media.pokeclip.com', ingest_port: 8890 },
+  dev: { api_base: 'https://dev.pokeclip.com', ingest_host: 'media-dev.pokeclip.com', ingest_port: 8890 },
+};
+const BUSY: Phase[] = ['starting', 'live', 'reconnecting', 'stopping'];
 
 export function createMockBridge(scenario: string): Bridge {
+  const env: ServerEnv = new URLSearchParams(location.search).get('env') === 'dev' ? 'dev' : 'prod';
+  const servers = MOCK_SERVERS[env];
   const base: BridgeState = {
     version: 1,
     paired: scenario !== 'unpaired',
     keyHint: scenario !== 'unpaired' ? 'Q7ZK' : '',
-    ingest: 'ingest.pokeclip.com:8890',
-    apiBase: 'https://dev.pokeclip.com',
+    ingest: `${servers.ingest_host}:${servers.ingest_port}`,
+    apiBase: servers.api_base,
+    serverEnv: env,
     phase: 'idle',
     errorCode: '',
     errorDetail: '',
@@ -104,6 +124,24 @@ export function createMockBridge(scenario: string): Bridge {
       canSendNow: true,
       checks: { ...liveChecks },
       retry: { ...NO_RETRY, gaveUp: true },
+    },
+    // 거절이 이어지다 「재시도 중지」 — 키 확인 안내와 대안 문장이 남는다(POK-287)
+    key_stopped: {
+      phase: 'error',
+      obsStreaming: true,
+      errorCode: 'connect_failed',
+      canSendNow: true,
+      checks: { ...liveChecks },
+      retry: { ...NO_RETRY, keySuspect: true },
+    },
+    // 거절이 이어지다 65분을 다 써서 포기 — 포기 문구 → 대안 → 다음 행동이 한 설명줄에 쌓인다
+    key_gave_up: {
+      phase: 'error',
+      obsStreaming: true,
+      errorCode: 'connect_failed',
+      canSendNow: true,
+      checks: { ...liveChecks },
+      retry: { ...NO_RETRY, gaveUp: true, keySuspect: true },
     },
     // 페어링 없이 본방을 시작한 뒤 방송 중에 페어링했다 — 우리 송출은 아직 시작 전
     paired_midstream: { phase: 'idle', obsStreaming: true, canSendNow: true },
@@ -191,9 +229,8 @@ export function createMockBridge(scenario: string): Bridge {
   };
   let state: BridgeState = { ...base, ...(overrides[scenario] ?? {}) };
   let settings: PluginSettings = {
-    api_base: 'https://dev.pokeclip.com',
-    ingest_host: 'ingest.pokeclip.com',
-    ingest_port: 8890,
+    server_env: env,
+    ...servers,
     send_passphrase: true,
     latency_ms: 1000,
     sync_start: true,
@@ -246,8 +283,7 @@ export function createMockBridge(scenario: string): Bridge {
       return { ok: true };
     },
     async unpair() {
-      const busy: Phase[] = ['starting', 'live', 'reconnecting', 'stopping'];
-      if (busy.includes(state.phase)) return { ok: false, reason: 'streaming' };
+      if (BUSY.includes(state.phase)) return { ok: false, reason: 'streaming' };
       emit({ paired: false, keyHint: '' });
       return { ok: true };
     },
@@ -256,7 +292,21 @@ export function createMockBridge(scenario: string): Bridge {
     },
     async putSettings(next) {
       // 플러그인처럼 API 주소는 브리지로 안 바뀐다 — passphrase가 가는 곳이다
-      const { api_base: _api, clip_api_base: _clip, ...editable } = next;
+      const { api_base: _api, clip_api_base: _clip, server_env: nextEnv, ...editable } = next;
+      if (nextEnv && nextEnv !== settings.server_env) {
+        // 플러그인처럼: 환경을 바꾸면 짝째로 바뀌고(같은 본문의 수신 주소는 무시) 연결이 해제된다. 방송 중엔 거절.
+        if (BUSY.includes(state.phase)) return { ok: false, reason: 'streaming' };
+        settings = { ...settings, server_env: nextEnv, ...MOCK_SERVERS[nextEnv] };
+        emit({
+          serverEnv: nextEnv,
+          apiBase: settings.api_base,
+          ingest: `${settings.ingest_host}:${settings.ingest_port}`,
+          paired: false,
+          keyHint: '',
+          retry: { ...state.retry, keySuspect: false },
+        });
+        return { ok: true, settings };
+      }
       const autoWas = settings.audio_auto_assign;
       settings = { ...settings, ...editable };
       // 플러그인처럼: 스위치를 바꿨으면 처음 안내에 답한 것으로 친다

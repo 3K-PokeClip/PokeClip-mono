@@ -28,6 +28,7 @@ public record JumpCardSnapshot(long id,
                                Instant claimExpiresAt,
                                boolean hidden,
                                String hiddenBy,
+                               String hiddenReason,
                                long eventSeq,
                                Instant createdAt,
                                String thumbnailUrl) {
@@ -55,6 +56,7 @@ public record JumpCardSnapshot(long id,
                 claimExpiresAt,
                 card.getHiddenAt() != null,
                 card.getHiddenBy(),
+                card.getHiddenReason(),
                 card.getEventSeq(),
                 card.getCreatedAt(),
                 null);
@@ -62,6 +64,6 @@ public record JumpCardSnapshot(long id,
 
     public JumpCardSnapshot withThumbnailUrl(String url) {
         return new JumpCardSnapshot(id, streamId, source, streamTimestampMs, window, score, evidence, claimedBy, claimedAt,
-                claimExpiresAt, hidden, hiddenBy, eventSeq, createdAt, url);
+                claimExpiresAt, hidden, hiddenBy, hiddenReason, eventSeq, createdAt, url);
     }
 }

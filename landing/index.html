@@ -3,11 +3,30 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>PokeClip 랜딩 시안</title>
+  <title>PokeClip — 방송이 끝나기 전에, 하이라이트는 이미 유튜브에</title>
   <meta name="description" content="방송이 끝나기 전에, 하이라이트는 이미 유튜브에. 채팅이 터진 순간을 포키가 찾아 BGM 없는 클립으로 만들어요." />
   <meta name="theme-color" content="#141517" />
+  <!-- 네이버 서치어드바이저 소유 확인(POK-353). 지우면 확인이 풀린다 — 값은 서치어드바이저가 발급한 것 -->
+  <meta name="naver-site-verification" content="25c38a8496aeff91e8e1b7723f4fcd47aed6cb7d" />
+  <!-- 검색·공유 미리보기(POK-349). 주소는 정본(끝 슬래시)·절대 URL로 쓴다 — 메신저 미리보기는 상대경로 이미지를 못 읽는다 -->
+  <link rel="canonical" href="https://pokeclip.com/" />
+  <link rel="icon" href="/favicon.ico" sizes="32x32" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="PokeClip" />
+  <meta property="og:locale" content="ko_KR" />
+  <meta property="og:url" content="https://pokeclip.com/" />
   <meta property="og:title" content="PokeClip — 방송이 끝나기 전에, 하이라이트는 이미 유튜브에." />
-  <meta property="og:image" content="assets/img/og-base.jpg" />
+  <meta property="og:description" content="채팅이 터진 순간을 포키가 찾아 BGM 없는 클립으로 만들어요." />
+  <meta property="og:image" content="https://pokeclip.com/assets/img/og.jpg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="PokeClip 로고와 「방송이 끝나기 전에, 하이라이트는 이미 유튜브에.」" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="PokeClip — 방송이 끝나기 전에, 하이라이트는 이미 유튜브에." />
+  <meta name="twitter:description" content="채팅이 터진 순간을 포키가 찾아 BGM 없는 클립으로 만들어요." />
+  <meta name="twitter:image" content="https://pokeclip.com/assets/img/og.jpg" />
   <link rel="stylesheet" href="styles.css" />
   <script>
     // 첫 페인트 전에 모션 모드를 정한다 — full: 정밀 포인터 데스크톱, lite: 그 밖, reduce: 동작 줄이기.
@@ -44,6 +63,99 @@
       }
     })();
   </script>
+  <!-- 구조화 데이터(POK-349). 보이는 본문에 있는 것만 쓴다 — 가격 0원은 S9 「지금은 무료 베타」, FAQPage는 S10 FAQ와
+       글자까지 같다(scripts/check-seo.mjs가 확인). 평점·리뷰는 없으므로 넣지 않는다. 그래서 SoftwareApplication은
+       Google 리치 결과 자격이 없다 — 기계 판독용으로 둔다 -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "Organization",
+        "@id": "https://pokeclip.com/#organization",
+        "name": "PokeClip",
+        "alternateName": "포케클립",
+        "url": "https://pokeclip.com/",
+        "logo": "https://pokeclip.com/assets/brand/pokeclip-logo-512.png",
+        "email": "3k.pokeclip@gmail.com",
+        "contactPoint": {
+          "@type": "ContactPoint",
+          "contactType": "customer support",
+          "email": "3k.pokeclip@gmail.com",
+          "availableLanguage": "ko"
+        }
+      },
+      {
+        "@type": "WebSite",
+        "@id": "https://pokeclip.com/#website",
+        "name": "PokeClip",
+        "alternateName": "포케클립",
+        "url": "https://pokeclip.com/",
+        "inLanguage": "ko",
+        "publisher": { "@id": "https://pokeclip.com/#organization" }
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://pokeclip.com/#app",
+        "name": "PokeClip",
+        "alternateName": "포케클립",
+        "url": "https://pokeclip.com/",
+        "description": "PokeClip(포케클립)은 치지직 스트리머와 편집자를 위한 하이라이트 클립 도구예요. 방송 중 채팅이 몰린 순간을 찾아 하이라이트 후보로 보여 주고, 웹 편집기에서 다듬어 스트리머의 YouTube 채널에 올려요. 지금은 무료 베타예요.",
+        "applicationCategory": "MultimediaApplication",
+        "operatingSystem": "Web",
+        "inLanguage": "ko",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "KRW",
+          "description": "지금은 무료 베타"
+        },
+        "publisher": { "@id": "https://pokeclip.com/#organization" }
+      },
+      {
+        "@type": "FAQPage",
+        "@id": "https://pokeclip.com/#faq",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "PokeClip(포케클립)은 어떤 서비스인가요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "PokeClip(포케클립)은 치지직 스트리머와 편집자를 위한 하이라이트 클립 도구예요. 방송 중 채팅이 몰린 순간을 찾아 하이라이트 후보로 보여 주고, 웹 편집기에서 다듬어 스트리머의 YouTube 채널에 올려요. 지금은 무료 베타예요." }
+          },
+          {
+            "@type": "Question",
+            "name": "PokeClip을 쓰려면 무엇이 필요한가요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "OBS Studio와 치지직 채널, 클립을 올릴 YouTube 채널이 있으면 돼요. 로그인은 Google 계정으로 해요. SOOP은 지금 심사 중이에요." }
+          },
+          {
+            "@type": "Question",
+            "name": "PokeClip으로 만든 영상은 언제 YouTube에 올라가나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "편집기에서 「영상 만들기」를 누르면 영상이 완성되는 즉시 스트리머의 YouTube 채널에 올라가요. 제목·설명·공개 범위는 영상 만들기 전에 정하고, 완성본을 따로 확인하는 단계는 없어요. 공개 범위를 「공개」로 고르면 올라가는 즉시 누구나 볼 수 있어요." }
+          },
+          {
+            "@type": "Question",
+            "name": "PokeClip을 쓰면 방송 화질이나 PC 성능에 영향이 있나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "업로드 대역폭이 송출 한 줄만큼 더 필요해요. PokeClip으로도 같은 방송을 함께 보내기 때문이에요." }
+          },
+          {
+            "@type": "Question",
+            "name": "편집자도 PokeClip 비용을 내나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "아니요, 편집자는 무료예요. 스트리머가 초대하면 그 채널의 클립을 편집하고 올릴 수 있어요." }
+          },
+          {
+            "@type": "Question",
+            "name": "채팅이 적은 방송도 PokeClip을 쓸 수 있나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "쓸 수 있어요. 채팅이 적으면 자동 감지가 부정확할 수 있어 엉뚱한 카드를 띄우지 않으니, 방송 중에 단축키로 원하는 순간을 직접 기록하면 돼요." }
+          },
+          {
+            "@type": "Question",
+            "name": "Mac에서도 PokeClip을 쓸 수 있나요?",
+            "acceptedAnswer": { "@type": "Answer", "text": "지금은 Windows가 먼저예요. OBS 플러그인의 macOS 빌드는 시험 단계예요." }
+          }
+        ]
+      }
+    ]
+  }
+  </script>
 </head>
 <body>
   <a class="skip" href="#main">본문으로 건너뛰기</a>
@@ -61,7 +173,7 @@
         <a href="#faq">FAQ</a>
       </nav>
       <div class="nav__actions">
-        <a class="btn btn--point btn--sm" href="/login" data-proto-link>베타 시작하기</a>
+        <a class="btn btn--point btn--sm" href="https://app.pokeclip.com/login">베타 시작하기</a>
         <button class="nav__menu" type="button" aria-expanded="false" aria-controls="sheet" data-menu-toggle>
           <span class="sr-only">메뉴 열기</span>
           <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
@@ -73,7 +185,7 @@
       <a href="#how" data-sheet-link>작동 방식</a>
       <a href="#team" data-sheet-link>편집자</a>
       <a href="#faq" data-sheet-link>FAQ</a>
-      <a class="btn btn--point btn--lg" href="/login" data-proto-link>베타 시작하기</a>
+      <a class="btn btn--point btn--lg" href="https://app.pokeclip.com/login">베타 시작하기</a>
     </div>
   </header>
 
@@ -116,7 +228,7 @@
           <h1 class="display" data-reveal-lines>방송이 끝나기 전에,<br />하이라이트는<br class="br-alt" /> 이미 유튜브에.</h1>
           <p class="lead">AI를 활용해 포키가 방송을 실시간으로 분석해 하이라이트를 찾아내고, <strong>BGM 없는 클립</strong>으로 바로 만들어요.</p>
           <div class="hero__ctas">
-            <a class="btn btn--point btn--lg" href="/login" data-proto-link>베타 시작하기</a>
+            <a class="btn btn--point btn--lg" href="https://app.pokeclip.com/login">베타 시작하기</a>
             <a class="btn btn--ghost btn--lg" href="#how">작동 방식 보기</a>
           </div>
         </div>
@@ -329,8 +441,8 @@
           <li class="step" data-step="4">
             <div class="step__text">
               <span class="step__num">04</span>
-              <h3 class="h3">보관함에서 확인하고, YouTube에 바로 공개</h3>
-              <p class="body muted">영상이 완성되면 보관함에서 확인하고, <strong>업로드</strong> 버튼만 누르면 연동한 YouTube 채널로 바로 올라가요.</p>
+              <h3 class="h3">영상 만들기 한 번에, YouTube까지</h3>
+              <p class="body muted">편집기에서 제목·설명·공개 범위를 정하고 <strong>영상 만들기</strong>를 누르면, 완성되는 즉시 연동한 YouTube 채널로 올라가요.</p>
             </div>
             <div class="step__screen mock screen-upload">
               <div class="mock__bar"><span>보관함</span><span class="status status--ok"><i></i>YouTube 공개</span></div>
@@ -542,22 +654,22 @@
       </div>
     </section>
 
-    <!-- ===== S9 요금 — 곧 공개 ===== -->
+    <!-- ===== S9 요금 — 지금은 무료 베타 (약관 제7조 ②). 구조화 데이터의 offers 0원이 이 문장을 근거로 한다 ===== -->
     <section class="section pricing" id="pricing" data-section="pricing">
       <div class="container">
         <header class="section-head section-head--center">
           <p class="eyebrow">요금</p>
-          <h2 class="h2">가격은 곧 공개돼요.</h2>
-          <p class="body muted">편집자는 언제나 무료예요.</p>
+          <h2 class="h2">지금은 무료 베타예요.</h2>
+          <p class="body muted">정식 요금은 정해지면 미리 알려 드릴게요. 편집자는 언제나 무료예요.</p>
         </header>
         <div class="plans">
           <article class="plan">
             <span class="plan__name">스트리머</span>
-            <div class="plan__price"><span class="plan__blur" aria-hidden="true">₩00,000</span><span class="chip chip--soon chip--shimmer">곧 공개</span></div>
+            <div class="plan__price"><b>무료</b><span class="chip chip--beta">BETA</span></div>
             <ul class="plan__list">
-              <li>포키 실시간 하이라이트 감지</li><li>멀티트랙 편집 · BGM 제외</li><li>확인 후 YouTube 바로 공개</li><li>VOD 60일 보관</li>
+              <li>포키 실시간 하이라이트 감지</li><li>멀티트랙 편집 · BGM 제외</li><li>영상 만들기 즉시 YouTube 업로드</li><li>VOD 60일 보관</li>
             </ul>
-            <a class="btn btn--point btn--md btn--block" href="/login" data-proto-link>베타 시작하기</a>
+            <a class="btn btn--point btn--md btn--block" href="https://app.pokeclip.com/login">베타 시작하기</a>
           </article>
           <article class="plan plan--editor">
             <span class="plan__name">편집자</span>
@@ -565,7 +677,7 @@
             <ul class="plan__list">
               <li>초대받은 채널의 하이라이트 편집</li><li>스트리머 대신 업로드</li><li>같은 라이브 대시보드</li>
             </ul>
-            <a class="btn btn--ghost btn--md btn--block" href="/login" data-proto-link>편집자로 시작하기</a>
+            <a class="btn btn--ghost btn--md btn--block" href="https://app.pokeclip.com/login">편집자로 시작하기</a>
           </article>
         </div>
       </div>
@@ -580,11 +692,15 @@
         </header>
         <div class="faq__list">
           <img class="faq__peek" src="assets/poki/poki-peek.webp" alt="" aria-hidden="true" loading="lazy" />
-          <details><summary>무엇이 필요한가요?</summary><p>OBS Studio와 치지직 또는 SOOP 채널, 클립을 올릴 YouTube 채널이 있으면 돼요. 로그인은 Google 계정으로 해요.</p></details>
-          <details><summary>방송 화질이나 PC 성능에 영향이 있나요?</summary><p>PokeClip으로도 같은 방송을 함께 보내기 때문에, 업로드 대역폭이 송출 한 줄만큼 더 필요해요.</p></details>
-          <details><summary>편집자도 비용을 내나요?</summary><p>아니요. 편집자는 무료예요. 스트리머가 초대하면 그 채널의 클립을 편집하고 올릴 수 있어요.</p></details>
-          <details><summary>채팅이 적은 방송도 쓸 수 있나요?</summary><p>채팅이 적으면 자동 감지가 부정확할 수 있어서, 엉뚱한 카드를 띄우지 않아요. 그럴 땐 방송 중에 단축키로 원하는 순간을 직접 기록하면 돼요.</p></details>
-          <details><summary>Mac에서도 되나요?</summary><p>OBS 플러그인은 Windows를 먼저 지원해요. macOS 빌드는 시험 단계예요.</p></details>
+          <!-- POK-350: 답의 첫 문장에 결론을 둔다. 첫 문항이 사실 요약이고 llms.txt·JSON-LD(SoftwareApplication.description·FAQPage)와
+               글자까지 같다(scripts/check-seo.mjs가 확인) -->
+          <details><summary>PokeClip(포케클립)은 어떤 서비스인가요?</summary><p>PokeClip(포케클립)은 치지직 스트리머와 편집자를 위한 하이라이트 클립 도구예요. 방송 중 채팅이 몰린 순간을 찾아 하이라이트 후보로 보여 주고, 웹 편집기에서 다듬어 스트리머의 YouTube 채널에 올려요. 지금은 무료 베타예요.</p></details>
+          <details><summary>PokeClip을 쓰려면 무엇이 필요한가요?</summary><p>OBS Studio와 치지직 채널, 클립을 올릴 YouTube 채널이 있으면 돼요. 로그인은 Google 계정으로 해요. SOOP은 지금 심사 중이에요.</p></details>
+          <details><summary>PokeClip으로 만든 영상은 언제 YouTube에 올라가나요?</summary><p>편집기에서 「영상 만들기」를 누르면 영상이 완성되는 즉시 스트리머의 YouTube 채널에 올라가요. 제목·설명·공개 범위는 영상 만들기 전에 정하고, 완성본을 따로 확인하는 단계는 없어요. 공개 범위를 「공개」로 고르면 올라가는 즉시 누구나 볼 수 있어요.</p></details>
+          <details><summary>PokeClip을 쓰면 방송 화질이나 PC 성능에 영향이 있나요?</summary><p>업로드 대역폭이 송출 한 줄만큼 더 필요해요. PokeClip으로도 같은 방송을 함께 보내기 때문이에요.</p></details>
+          <details><summary>편집자도 PokeClip 비용을 내나요?</summary><p>아니요, 편집자는 무료예요. 스트리머가 초대하면 그 채널의 클립을 편집하고 올릴 수 있어요.</p></details>
+          <details><summary>채팅이 적은 방송도 PokeClip을 쓸 수 있나요?</summary><p>쓸 수 있어요. 채팅이 적으면 자동 감지가 부정확할 수 있어 엉뚱한 카드를 띄우지 않으니, 방송 중에 단축키로 원하는 순간을 직접 기록하면 돼요.</p></details>
+          <details><summary>Mac에서도 PokeClip을 쓸 수 있나요?</summary><p>지금은 Windows가 먼저예요. OBS 플러그인의 macOS 빌드는 시험 단계예요.</p></details>
         </div>
       </div>
     </section>
@@ -601,7 +717,7 @@
         </figure>
         <h2 class="display display--cta">방송만 켜세요.<br />클립은 포키가 챙길게요.</h2>
         <div class="hero__ctas hero__ctas--center">
-          <a class="btn btn--point btn--lg" href="/login" data-proto-link>베타 시작하기</a>
+          <a class="btn btn--point btn--lg" href="https://app.pokeclip.com/login">베타 시작하기</a>
           <a class="btn btn--ghost btn--lg" href="#how">작동 방식 다시 보기</a>
         </div>
       </div>
@@ -619,7 +735,7 @@
       </div>
       <nav class="footer__links" aria-label="푸터 메뉴">
         <a href="#detect">기능</a><a href="#how">작동 방식</a><a href="#faq">FAQ</a>
-        <a href="/terms">이용약관</a><a href="/privacy" class="footer__privacy">개인정보 처리방침</a>
+        <a href="/terms/">이용약관</a><a href="/privacy/" class="footer__privacy">개인정보 처리방침</a>
       </nav>
       <p class="footer__legal muted">운영 PokeClip 팀 · 문의 <a href="mailto:3k.pokeclip@gmail.com">3k.pokeclip@gmail.com</a> · © 2026 PokeClip</p>
     </div>
@@ -627,11 +743,9 @@
 
   <!-- 모바일·태블릿 하단 고정 CTA 바 -->
   <div class="cta-bar is-hidden" data-cta-bar>
-    <a class="btn btn--point btn--md" href="/login" data-proto-link>베타 시작하기</a>
+    <a class="btn btn--point btn--md" href="https://app.pokeclip.com/login">베타 시작하기</a>
     <a class="btn btn--ghost btn--md" href="#how">작동 방식</a>
   </div>
-
-  <div class="toast" role="status" aria-live="polite" data-toast></div>
 
   <!-- 전부 defer라 이 순서대로 돈다. main.js(GSAP 없이 도는 기본 동작)를 CDN보다 앞에 둬, CDN이 멈춰도 메뉴·CTA 바·영상은 산다.
        CDN은 버전을 고정했으니 SRI로 묶는다 — 버전을 올리면 integrity도 새로 계산한다(openssl dgst -sha384 -binary | openssl base64 -A) -->

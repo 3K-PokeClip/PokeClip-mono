@@ -130,9 +130,14 @@ describe('EditorSettingsScreen — 목록', () => {
 
     expect(await screen.findByText('아직 편집자가 없어요')).toBeInTheDocument();
     expect(screen.getByText(/하이라이트 검토와 클립 편집을 맡길 수 있어요/)).toBeInTheDocument();
+    // 업로드 승인 게이트가 없다(POK-254): 편집자도 영상을 만들고 바로 올린다
+    expect(
+      screen.getByText(/편집자도 영상을 만들고 바로 유튜브에 올릴 수 있어요/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/승인/)).not.toBeInTheDocument();
 
     // 하단 안내와 「권한 2단계 비교」 트리거는 편집자 0명이어도 항상 있다
-    expect(screen.getByText(/편집자를 내보내면 즉시 적용되고/)).toBeInTheDocument();
+    expect(screen.getByText(/편집자를 내보내면 즉시 적용됩니다/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '권한 2단계 비교' })).toBeInTheDocument();
 
     // 1l ④에는 카드 안 초대 버튼이 없다 — 같은 이름의 버튼은 헤더 하나뿐이어야 한다
@@ -279,8 +284,9 @@ describe('EditorSettingsScreen — 내보내기', () => {
         name: '박편집 님을 편집자에서 빼고, 내 방송 접근을 막을까요?',
       }),
     );
-    // 무엇이 함께 무효가 되는지를 알린다 — 티켓 완료 조건. 대상 표시는 제목의 이름뿐이다(1l ⑦)
-    expect(dialog.getByText(/대기 중이던 승인 요청은 무효가 됩니다/)).toBeInTheDocument();
+    // 무엇을 잃는지 알린다. 대상 표시는 제목의 이름뿐이다(1l ⑦). 업로드 승인 게이트가 없어 「승인 요청 무효」는 말하지 않는다(POK-254)
+    expect(dialog.getByText(/하이라이트·클립을 볼 수 없게 됩니다/)).toBeInTheDocument();
+    expect(dialog.queryByText(/승인/)).not.toBeInTheDocument();
     expect(dialog.queryByText('5월 12일 합류')).not.toBeInTheDocument();
 
     await user.click(dialog.getByRole('button', { name: '취소' }));
@@ -308,7 +314,7 @@ describe('EditorSettingsScreen — 내보내기', () => {
     await user.click(dialog.getByRole('button', { name: '내보내기' }));
 
     expect(await screen.findByText('박편집 님을 편집자에서 내보냈어요')).toBeInTheDocument();
-    expect(screen.getByText('대기 중이던 승인 요청이 무효가 됐어요.')).toBeInTheDocument();
+    expect(screen.queryByText(/승인 요청/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '되돌리기' })).not.toBeInTheDocument();
     expect(
       spy.mock.calls.some(
@@ -413,7 +419,8 @@ describe('EditorSettingsScreen — 권한 2단계 비교 팝오버', () => {
     await user.click(screen.getByRole('button', { name: '권한 2단계 비교' }));
     const panel = within(await screen.findByRole('dialog', { name: '권한 2단계 비교' }));
 
-    expect(panel.getByRole('columnheader', { name: /기본/ })).toHaveTextContent('승인 필요');
+    // 업로드 승인 게이트가 없다(POK-254): 기본 열도 승인이 필요하다고 하지 않는다
+    expect(panel.getByRole('columnheader', { name: /기본/ })).toHaveTextContent('새 편집자');
     expect(panel.getByRole('columnheader', { name: /신뢰/ })).toHaveTextContent('직접 업로드');
     for (const label of [
       '검토 · 클립 편집',
@@ -423,9 +430,9 @@ describe('EditorSettingsScreen — 권한 2단계 비교 팝오버', () => {
     ]) {
       expect(panel.getByRole('rowheader', { name: label })).toBeInTheDocument();
     }
-    // 유튜브 업로드 행 — 기본은 승인 후, 신뢰는 즉시
-    expect(panel.getByText('승인 후')).toBeInTheDocument();
-    expect(panel.getByText('즉시')).toBeInTheDocument();
+    // 유튜브 업로드 행 — 편집자도 바로 올린다(08-31 결정): 두 열 모두 즉시
+    expect(panel.queryByText('승인 후')).not.toBeInTheDocument();
+    expect(panel.getAllByText('즉시')).toHaveLength(2);
     expect(panel.getByText(/새 편집자는 기본으로 시작하고/)).toBeInTheDocument();
   });
 
@@ -483,6 +490,43 @@ async function findGroupName(name: string): Promise<string> {
 }
 
 describe('EditorSettingsScreen — 받은 초대함', () => {
+  it('「나가기」는 확인 창을 거친다: 취소하면 DELETE가 안 나가고, 확인하면 나간다(POK-254)', async () => {
+    const spy = stubFetch((url, init) => {
+      if (url === DELEGATIONS_URL) return jsonResponse(200, DELEGATIONS);
+      if (url === SENT_URL) return jsonResponse(200, SENT);
+      if (url === '/api/editor-invitations/received') return jsonResponse(200, []);
+      if (url === '/api/editor-delegations/as-editor')
+        return jsonResponse(200, [
+          { id: 11, counterpartId: 3, counterpartName: '큰손', grantedAt: '2026-09-20T00:00:00Z' },
+        ]);
+      if (url === '/api/editor-delegations/11' && init?.method === 'DELETE')
+        return new Response(null, { status: 204 });
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const deletes = () =>
+      spy.mock.calls.filter(([, init]) => (init as RequestInit)?.method === 'DELETE');
+    const user = userEvent.setup();
+    renderWithProviders(<EditorSettingsScreen />);
+
+    await screen.findByText('큰손 채널의 편집자', {}, { timeout: 5000 });
+    await user.click(screen.getByRole('button', { name: '나가기' }));
+    const dialog = within(
+      await screen.findByRole('dialog', { name: '큰손 채널의 편집자에서 나갈까요?' }),
+    );
+    await user.click(dialog.getByRole('button', { name: '취소' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(deletes()).toHaveLength(0);
+
+    await user.click(screen.getByRole('button', { name: '나가기' }));
+    const again = within(
+      await screen.findByRole('dialog', { name: '큰손 채널의 편집자에서 나갈까요?' }),
+    );
+    await user.click(again.getByRole('button', { name: '나가기' }));
+    expect(await screen.findByText('편집자에서 나왔어요')).toBeInTheDocument();
+    expect(deletes().map(([url]) => url)).toEqual(['/api/editor-delegations/11']);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
   it('받은 초대를 못 읽으면 「초대 없음」으로 숨기지 않고 다시 시도를 준다', async () => {
     // 기한 있는 초대를 놓치지 않게 — 실패와 빈 목록을 가른다(PR #200 codex)
     let failing = true;

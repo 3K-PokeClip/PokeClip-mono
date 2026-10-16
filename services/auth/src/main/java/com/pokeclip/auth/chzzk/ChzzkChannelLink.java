@@ -33,10 +33,10 @@ public class ChzzkChannelLink {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    @Column(name = "channel_id", nullable = false, length = 64)
+    @Column(name = "channel_id", length = 64) // 탈퇴하면 NULL(닫힌 행만, V115)
     private String channelId;
 
-    @Column(name = "channel_name", nullable = false)
+    @Column(name = "channel_name") // 탈퇴하면 NULL(닫힌 행만, V115)
     private String channelName;
 
     @Column(name = "scope")

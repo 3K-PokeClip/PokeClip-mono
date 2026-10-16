@@ -55,7 +55,7 @@ import { useManualMarking } from './useManualMarking';
 
 // useSearchParams(?stream=)는 프리렌더에서 가장 가까운 Suspense 경계까지 CSR로 전환한다 —
 // 화면 전체가 아니라 플레이어만 빠지도록 여기서 분리하고 경계는 playerFrame 안에 둔다.
-// 단, 화면 맨 위의 오프라인 목업 토글(?mock=offline)과 대시보드의 ?card=(홈에서 고른 카드, QA 2026-10-11)도
+// 단, 화면 맨 위의 오프라인 목업 토글(?mock=offline)과 대시보드의 ?card=(주소로 고른 카드, QA 2026-10-11)도
 // 같은 훅을 읽어 라이브 page.tsx의 경계까지 화면 전체가 빠진다. 이 경계로 좁히려면 둘 다 훅 밖으로 옮겨야 한다.
 // 지난 방송 상세(vod/[streamId])는 동적 경로라 프리렌더가 없어 그 page.tsx에는 경계가 없다. 그 경로를 정적으로
 // 바꾸면(generateStaticParams) 거기에도 경계가 필요하다(리뷰 2라운드).
@@ -316,7 +316,8 @@ function LiveDashboard() {
   // 주소는 usePathname으로 읽는다: 넘어온 직후 첫 그리기의 window.location은 옛 주소다
   const vodRouteId = vodStreamIdFromPathname(usePathname() ?? '');
   const pastRoute = vodRouteId !== null;
-  const { stream, highlights, chatVolume, chatWarning } = useLiveMockState(pastRoute);
+  const { stream, highlights, hiddenHighlights, chatVolume, chatWarning } =
+    useLiveMockState(pastRoute);
   const { streamMeta, cardVisuals } = useLiveDetailsMockState();
   const liveData = useLiveData();
   const { streamId, info } = liveData;
@@ -496,7 +497,7 @@ function LiveDashboard() {
     if (!live || liveFollowRef.current) bumpChatJump();
   }, [live, bumpChatJump]);
 
-  // 홈 「최근 하이라이트」가 주소에 실은 카드(?card=). 카드가 오는 대로 한 번 그 시점으로 옮긴다. 사람이 먼저 고르면 그쪽이다.
+  // 주소에 실린 카드(?card=). 카드가 오는 대로 한 번 그 시점으로 옮긴다. 사람이 먼저 고르면 그쪽이다.
   // window.location이 아니라 useSearchParams로 읽는다: Next는 다른 화면에서 넘어올 때 새 화면을 먼저 그리고 주소창은 그 뒤에
   // 바꿔서, 첫 그리기 때 주소창을 읽으면 옛 주소다(실기동에서 찾음)
   const linkedCardId = useSearchParams().get('card');
@@ -574,6 +575,7 @@ function LiveDashboard() {
           />
           <HighlightCardPanel
             highlights={highlights}
+            hiddenHighlights={hiddenHighlights}
             stream={streamForCards}
             visuals={cardVisuals}
             pendingLabel={null}

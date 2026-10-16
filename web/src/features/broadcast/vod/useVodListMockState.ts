@@ -9,12 +9,22 @@ import {
 
 /** 지난 방송 목록을 다시 읽는 간격 — 끝난 방송이라 자주 볼 까닭이 없다 */
 const LIST_POLL_MS = 60_000;
+/**
+ * 기억한 카드 수를 다시 세는 간격(POK-254). 끝난 뒤에도 카드는 늦게 뜨거나 숨겨진다. 방금 끝난 방송은 주기마다,
+ * 나머지는 이만큼 지나면 센다: 주기마다 전체 이력을 세면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex).
+ */
+const CARD_COUNT_TTL_MS = 10 * 60_000;
+/**
+ * 한 주기에 다시 세는 오래된 방송 수의 상한. 처음 읽을 때 모든 방송이 같은 시각에 세어져, 상한이 없으면 10분마다 전체 이력의
+ * 카드 목록을 한꺼번에 불렀다(리뷰 1라운드). 남은 것은 다음 주기로 넘어가 흩어진다
+ */
+const CARD_RECOUNT_PER_POLL = 20;
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/ui';
-import { fetchRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
+import { lookupRecordingSpans, playbackConfigured } from '@/api/mediaPlayback';
 import { recordingTimeline } from '@/features/player/recordingTimeline';
 import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
-import { excludeLive, filterByPeriod } from './vodListView';
+import { excludeLive, filterByPeriod, isJustEnded } from './vodListView';
 
 // 시안 1f 지난 방송 목록의 상태. 목록은 clip `GET /api/clip/broadcasts`(POK-174·ADR-055)에서 온다(POK-251).
 // VOD 준비 상태를 줄 백엔드(B5)가 아직 없어, 녹화 재생 서버가 설정된 곳에서만 끝난 방송을 「다시 보기 가능」으로 본다.
@@ -56,6 +66,8 @@ export interface VodRowVisual {
   /** 준비 중이라 아직 모르면 null */
   durationSec: number | null;
   cardCount: number;
+  /** 녹화 재생 서버에 물어 녹화가 없다고 확인됐다(POK-254). 물을 수 없으면 비운다 */
+  recordingMissing?: boolean;
   /** 만료 임박 행의 「저장하지 않은 카드 N개가 함께 삭제됩니다」 */
   unsavedCardCount?: number;
 }
@@ -165,7 +177,20 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
   const [loaded, setLoaded] = useState(false);
   const [fetchedVisuals, setFetchedVisuals] = useState<Record<string, VodRowVisual>>({});
   const [now, setNow] = useState(() => new Date());
-  const rowCache = useRef(new Map<string, { cardCount: number; recorded: boolean }>());
+  const rowCache = useRef(
+    new Map<
+      string,
+      {
+        /** 아직 한 번도 못 셌으면 null */
+        cardCount: number | null;
+        /** 마지막으로 세려고 한 시각(실패해도 넘긴다: 늘 실패하는 방송이 다시 세는 차례를 독차지하지 않게) */
+        countedAt: number;
+        recorded: boolean;
+        /** 재생 서버에 물어 녹화가 없다고 들었다(묻지 못했으면 앞 답을 둔다) */
+        missing: boolean;
+      }
+    >(),
+  );
 
   useEffect(() => {
     if (options.broadcasts) return;
@@ -176,54 +201,88 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
         // 실패하면 바깥 catch가 받아 지금 목록을 그대로 두고 다음 주기에 다시 한다
         const all: WireBroadcast[] = await fetchAllBroadcasts('past');
         if (stopped) return;
-        // 방송마다 카드 수·녹화 여부는 한 번만 재서 기억한다 — 끝난 방송은 바뀌지 않는데, 주기마다 전체 이력에
-        // 카드 목록을 부르면 계정이 오래될수록 요청이 끝없이 는다(PR #200 codex)
+        // 방송마다 카드 수·녹화 여부는 재서 기억한다. 카드 수는 낡으면(countStale) 다시 센다
         const cache = rowCache.current;
+        const nowMs = Date.now();
+        const countStale = (b: WireBroadcast) => {
+          const known = cache.get(b.streamId);
+          return (
+            known === undefined ||
+            known.cardCount === null ||
+            isJustEnded(b.endedAt, new Date(nowMs)) ||
+            nowMs - known.countedAt >= CARD_COUNT_TTL_MS
+          );
+        };
+        // 다시 셀 방송. 처음 보는 방송·못 센 방송·방금 끝난 방송은 다 세고, 오래된 방송은 가장 오래전에 센 것부터 한 주기에
+        // CARD_RECOUNT_PER_POLL개까지만. 고정 순서로 고르면 방송이 많을 때 앞쪽이 다시 낡아 뒤쪽은 영영 차례가 안 왔다(PR #256 codex)
+        const recountIds = new Set<string>();
+        const oldStale: { id: string; countedAt: number }[] = [];
+        for (const b of all) {
+          if (!countStale(b)) continue;
+          const known = cache.get(b.streamId);
+          if (
+            known !== undefined &&
+            known.cardCount !== null &&
+            !isJustEnded(b.endedAt, new Date(nowMs))
+          )
+            oldStale.push({ id: b.streamId, countedAt: known.countedAt });
+          else recountIds.add(b.streamId);
+        }
+        oldStale
+          .sort((x, y) => x.countedAt - y.countedAt)
+          .slice(0, CARD_RECOUNT_PER_POLL)
+          .forEach(({ id }) => recountIds.add(id));
         const checkRecording = (b: WireBroadcast) =>
           b.status === 'ended' && playbackConfigured() && cache.get(b.streamId)?.recorded !== true;
         // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 방송들이 같은 답을 받는다(POK-233) — 한 번 불러올 때 키마다
         // 한 번만 묻는다. 방송마다 물으면 방송이 쌓인 계정은 같은 큰 요청을 주기마다 여러 번 보낸다(PR #208 codex)
-        const spansByKey = new Map<string, ReturnType<typeof fetchRecordingSpans>>();
+        // 묻지 못했으면(오류·시한) null이다: 「녹화 없음」과 가른다(리뷰 1라운드)
+        const spansByKey = new Map<string, ReturnType<typeof lookupRecordingSpans>>();
         const spansOf = (key: string) => {
           let found = spansByKey.get(key);
           if (found === undefined) {
-            found = fetchRecordingSpans(key);
+            found = lookupRecordingSpans(key);
             spansByKey.set(key, found);
           }
           return found;
         };
         await Promise.all(
           all
-            .filter((b) => !cache.has(b.streamId) || checkRecording(b))
+            .filter((b) => recountIds.has(b.streamId) || checkRecording(b))
             .map(async (b) => {
               const known = cache.get(b.streamId);
-              const [cardCount, spans] = await Promise.all([
-                known !== undefined
+              const recount = known === undefined || recountIds.has(b.streamId);
+              const [fetched, spans] = await Promise.all([
+                known !== undefined && !recount
                   ? Promise.resolve(known.cardCount)
                   : fetchAllJumpCards(b.streamId).then(
                       (cards) => cards.length,
                       () => null,
                     ),
                 // 녹화 재생 서버가 있으면 그 방송의 녹화가 실제로 있는지 본다 — 없으면 열어도 「영상 신호 없음」뿐이다
-                checkRecording(b) ? spansOf(mediaStreamId(b)) : Promise.resolve([]),
+                checkRecording(b) ? spansOf(mediaStreamId(b)) : Promise.resolve(null),
               ]);
-              // 카드 수를 못 읽었으면 기억하지 않는다 — 다음 주기에 다시 잰다.
+              // 카드 수를 못 읽었으면 앞 수를 둔다(처음이면 null, 다음 주기에 다시 잰다). 녹화 확인 결과는 카드 수와 따로 남긴다:
+              // 카드 목록만 실패해도 녹화 없음을 버리면 그 방송은 「VOD 준비 중」에 갇혔다(PR #256 codex).
               // 「녹화 있음」만 굳힌다: 방송 직후엔 녹화가 늦게 생기고 재생 서버가 잠깐 실패해도 빈 목록이 온다.
               // 「없음」을 굳히면 녹화가 생겨도 이 탭은 영영 준비 중으로 남는다(PR #200 codex)
-              if (cardCount !== null)
-                cache.set(b.streamId, {
-                  cardCount,
-                  // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 다른 방송의 녹화도 섞여 온다(POK-233) — 다시보기와 같은
-                  // 규칙(방송 시간과 겹치는 구간, 시작 시각을 모르면 끝 12시간)으로 거른다. 안 거르면 녹화 없는 방송이 「다시 보기
-                  // 가능」으로 올라 열면 빈 화면이다(리뷰 6라운드: 다시보기만 하한을 좁혀 둘이 갈렸다)
-                  recorded:
-                    known?.recorded === true ||
-                    recordingTimeline(
-                      spans,
-                      recordingSearchFrom(isoMs(b.startedAt), isoMs(b.endedAt)),
-                      isoMs(b.endedAt),
-                    ) !== null,
-                });
+              const recorded =
+                known?.recorded === true ||
+                (spans !== null &&
+                  recordingTimeline(
+                    spans,
+                    recordingSearchFrom(isoMs(b.startedAt), isoMs(b.endedAt)),
+                    isoMs(b.endedAt),
+                  ) !== null);
+              cache.set(b.streamId, {
+                cardCount: fetched ?? known?.cardCount ?? null,
+                countedAt: known !== undefined && !recount ? known.countedAt : nowMs,
+                // 녹화 목록은 영상 경로 전체라 같은 키를 나눠 쓰는 다른 방송의 녹화도 섞여 온다(POK-233) — 다시보기와 같은
+                // 규칙(방송 시간과 겹치는 구간, 시작 시각을 모르면 끝 12시간)으로 거른다. 안 거르면 녹화 없는 방송이 「다시 보기
+                // 가능」으로 올라 열면 빈 화면이다(리뷰 6라운드: 다시보기만 하한을 좁혀 둘이 갈렸다)
+                recorded,
+                missing: recorded ? false : spans === null ? (known?.missing ?? false) : true,
+              });
             }),
         );
         const rows: VodBroadcast[] = all.map((b) => ({
@@ -250,6 +309,7 @@ export function useVodListMockState(options: VodListOptions = {}): VodListMockSt
             title: titles.get(b.streamId) ?? b.streamId,
             durationSec: dur,
             cardCount: cache.get(b.streamId)?.cardCount ?? 0,
+            recordingMissing: b.status === 'ended' && cache.get(b.streamId)?.missing === true,
           };
         }
         if (stopped) return;

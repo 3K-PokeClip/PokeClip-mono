@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ClipApiError,
+  liveUploadsOf,
   type ClipSnapshot,
   type LibraryEntry,
   type LibraryStatus,
@@ -9,6 +10,7 @@ import {
 import {
   detailViewForClip,
   noteText,
+  previousUploadsOf,
   privacyNoteText,
   thumbnailFailureText,
   uploadErrorMessage,
@@ -181,15 +183,13 @@ describe('uploadFailureText — 지난 업로드가 실패한 편집본의 안�
 });
 
 describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 바꾼다', () => {
-  it('완성된 서버 편집본은 시점과 무관하게 「업로드」다 — 승인 단계가 없어 바로 올라간다', () => {
+  it('완성된 서버 편집본은 「업로드」다 — 승인 단계가 없어 바로 올라간다', () => {
     const clip = toLibraryClip(entry('rendered'), '9');
-    for (const role of ['streamer', 'editor'] as const) {
-      expect(detailViewForClip(clip, 'ready', role).primary).toEqual({
-        kind: 'action',
-        label: '업로드',
-        action: 'upload',
-      });
-    }
+    expect(detailViewForClip(clip, 'ready').primary).toEqual({
+      kind: 'action',
+      label: '업로드',
+      action: 'upload',
+    });
   });
 
   it('창에서 고른 업로드 정보가 남은 완성 편집본은 「업로드」하되 제목을 잠근다: 저장된 정보로 올라가 패널 제목은 실리지 않는다(POK-291)', () => {
@@ -200,17 +200,31 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
       },
       '9',
     );
-    const view = detailViewForClip(clip, clip.status, 'streamer');
+    const view = detailViewForClip(clip, clip.status);
     expect(view.primary).toEqual({ kind: 'action', label: '업로드', action: 'upload' });
     expect(view.titleLocked).toBe(true);
-    expect(
-      detailViewForClip(toLibraryClip(entry('rendered'), '9'), 'ready', 'streamer').titleLocked,
-    ).toBe(false);
+    expect(detailViewForClip(toLibraryClip(entry('rendered'), '9'), 'ready').titleLocked).toBe(
+      false,
+    );
+  });
+
+  it('편집 중·렌더 실패는 제목을 잠그고, 완성만 올릴 때 쓰는 임시 제목으로 고친다(POK-254)', () => {
+    // 편집본에는 제목 칸이 없다: 편집 중·렌더 실패에서 고친 제목은 다음 읽기에 되돌아갔다
+    for (const status of ['editing', 'failed'] as const) {
+      const clip = toLibraryClip(entry(status), '9');
+      const view = detailViewForClip(clip, clip.status);
+      expect(view.titleLocked).toBe(true);
+      expect(view.titleIsDraft).toBe(false);
+    }
+    const ready = toLibraryClip(entry('rendered'), '9');
+    const view = detailViewForClip(ready, ready.status);
+    expect(view.titleLocked).toBe(false);
+    expect(view.titleIsDraft).toBe(true);
   });
 
   it('올리는 중에는 누를 수 없는 「유튜브에 올리는 중」이고 제목이 잠긴다', () => {
     const clip = toLibraryClip(entry('uploading'), '9');
-    const view = detailViewForClip(clip, clip.status, 'streamer');
+    const view = detailViewForClip(clip, clip.status);
     expect(view.badge.label).toBe('올리는 중');
     expect(view.primary).toEqual({ kind: 'busy', label: '유튜브에 올리는 중' });
     expect(view.titleLocked).toBe(true);
@@ -218,7 +232,7 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
   });
 
   it('올린 편집본은 제목이 잠긴다 — 고쳐도 유튜브 제목은 안 바뀐다', () => {
-    const view = detailViewForClip(toLibraryClip(entry('uploaded'), '9'), 'published', 'streamer');
+    const view = detailViewForClip(toLibraryClip(entry('uploaded'), '9'), 'published');
     expect(view.titleLocked).toBe(true);
     expect(view.primary).toEqual({ kind: 'external', label: '유튜브 보기' });
   });
@@ -233,7 +247,6 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
     const view = detailViewForClip(
       toLibraryClip(entry('editing', snapshot(uploaded)), '9'),
       'editing',
-      'streamer',
     );
     expect(view.titleLocked).toBe(true);
   });
@@ -241,7 +254,7 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
   it('실패한 업로드는 「업로드 실패」이고 저장된 정보로 「다시 시도」한다: 패널 제목은 실리지 않아 잠근다(POK-291)', () => {
     const clip = toLibraryClip(entry('rendered', snapshot(failedUpload('UNKNOWN'))), '9');
     expect(clip.status).toBe('uploadFailed');
-    const view = detailViewForClip(clip, clip.status, 'streamer');
+    const view = detailViewForClip(clip, clip.status);
     expect(view.badge.label).toBe('업로드 실패');
     expect(view.primary).toEqual({ kind: 'action', label: '다시 시도', action: 'retryUpload' });
     expect(view.titleLocked).toBe(true);
@@ -249,20 +262,20 @@ describe('detailViewForClip — 서버 업로드 상태가 패널 주 동작을 
 
   it('확인 필요는 다시 올리기를 막고 채널을 보라고 안내한다: 공개 범위를 못박지 않는다', () => {
     const clip = toLibraryClip(entry('checking'), '9');
-    const view = detailViewForClip(clip, clip.status, 'streamer');
+    const view = detailViewForClip(clip, clip.status);
     expect(view.primary).toEqual({ kind: 'busy', label: '업로드 확인 필요' });
     expect(view.titleLocked).toBe(true);
     expect(view.note).toBe('checking');
-    expect(noteText('checking', 'streamer')).toBe(
-      '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 영상이 올라갔는지 확인해 주세요.',
+    expect(noteText('checking')).toBe(
+      '유튜브에 올라갔는지 확인하지 못했어요. 두 번 올라가지 않게 다시 올리기를 막아 두었어요. 스트리머 채널의 유튜브 스튜디오에서 영상이 올라갔는지 확인한 뒤 아래 단추로 결과를 알려 주세요.',
     );
   });
 
-  it('목업 줄은 시안 규칙 그대로다 — 편집자는 「업로드 요청」', () => {
+  it('목업 줄도 주 동작은 「업로드」다 — 승인 게이트가 없다', () => {
     const clip = { ...toLibraryClip(entry('rendered'), '9'), entry: undefined };
-    expect(detailViewForClip(clip, 'ready', 'editor').primary).toEqual({
+    expect(detailViewForClip(clip, 'ready').primary).toEqual({
       kind: 'action',
-      label: '업로드 요청',
+      label: '업로드',
       action: 'upload',
     });
   });
@@ -430,5 +443,108 @@ describe('toLibraryClip — 올린 편집본은 유튜브 제목을 보인다', 
 
   it('업로드가 없으면 「편집본 #번호」', () => {
     expect(toLibraryClip(entry('rendered'), '9').title).toBe('편집본 #12');
+  });
+});
+
+describe('previousUploadsOf: 패널 위쪽이 말하지 않는 살아 있는 업로드(POK-334)', () => {
+  const live = (
+    id: number,
+    recipeVersion: number,
+    status: string,
+    videoId: string | null = null,
+  ) => ({
+    id,
+    clipId: id,
+    recipeVersion,
+    outputId: 'o1',
+    title: `제목${id}`,
+    status,
+    videoId,
+    createdAt: '2026-09-20T12:00:00Z',
+    updatedAt: '2026-09-20T12:00:00Z',
+  });
+  const uploaded: UploadSnapshot = {
+    ...failedUpload('X')!,
+    id: 7,
+    status: 'uploaded',
+    videoId: 'cur',
+    error: null,
+  };
+
+  it('latestClip의 업로드는 빼고 나머지를 순서대로, 올림만 링크다', () => {
+    const e = {
+      ...entry('uploaded', snapshot(uploaded)),
+      liveUploads: [
+        live(7, 2, 'uploaded', 'cur'),
+        live(6, 1, 'uploading'),
+        live(5, 1, 'uploaded', 'old'),
+      ],
+    };
+    expect(previousUploadsOf(e)).toEqual([
+      { id: 6, versionLabel: 'v1', text: '제목6 · 올리는 중', href: null, checking: false },
+      {
+        id: 5,
+        versionLabel: 'v1',
+        text: '제목5 · 업로드됨',
+        href: 'https://youtu.be/old',
+        checking: false,
+      },
+    ]);
+  });
+
+  it('v1을 올린 뒤 v2를 저장만 하면(편집 중) 위쪽은 v1 업로드를 안 보이니 「이전 판」에 남는다(PR #250 codex)', () => {
+    const v1Upload: UploadSnapshot = { ...uploaded, id: 5, videoId: 'old' };
+    const e = {
+      ...entry('editing', { ...snapshot(v1Upload), recipeVersion: 1 }),
+      liveUploads: [live(5, 1, 'uploaded', 'old')],
+    };
+    expect(toLibraryClip(e, '9').youtubeUrl).toBeUndefined();
+    expect(previousUploadsOf(e)).toEqual([
+      {
+        id: 5,
+        versionLabel: 'v1',
+        text: '제목5 · 업로드됨',
+        href: 'https://youtu.be/old',
+        checking: false,
+      },
+    ]);
+  });
+
+  it('지금 판 업로드 하나뿐이면 위쪽이 보이니 목록은 비고 겹치지 않는다', () => {
+    const e = {
+      ...entry('uploaded', snapshot(uploaded)),
+      liveUploads: [live(7, 2, 'uploaded', 'cur')],
+    };
+    expect(toLibraryClip(e, '9').youtubeUrl).toBe('https://youtu.be/cur');
+    expect(previousUploadsOf(e)).toEqual([]);
+  });
+
+  it('대기(queued)는 올리는 중과 같은 글자다', () => {
+    const e = { ...entry('rendering', snapshot(null)), liveUploads: [live(4, 1, 'queued')] };
+    expect(previousUploadsOf(e).map((u) => u.text)).toEqual(['제목4 · 올리는 중']);
+  });
+
+  it('칸을 모르는 옛 서버면 latestClip의 업로드 하나로 접혀 위쪽과 겹치니 빈 목록이다', () => {
+    expect(previousUploadsOf(entry('uploaded', snapshot(uploaded)))).toEqual([]);
+  });
+
+  it('서버 줄이 없으면(목업) 빈 목록이다', () => {
+    expect(previousUploadsOf(undefined)).toEqual([]);
+  });
+});
+
+describe('liveUploadsOf: 옛 서버 접기(POK-334)', () => {
+  it('칸이 없으면 latestClip 업로드 하나, 실패면 빈 목록이다', () => {
+    const uploaded: UploadSnapshot = {
+      ...failedUpload('X')!,
+      status: 'uploaded',
+      videoId: 'v',
+      error: null,
+    };
+    expect(
+      liveUploadsOf(entry('uploaded', snapshot(uploaded))).map((u) => [u.id, u.recipeVersion]),
+    ).toEqual([[7, 2]]);
+    expect(liveUploadsOf(entry('rendered', snapshot(failedUpload('X'))))).toEqual([]);
+    expect(liveUploadsOf(entry('editing', null))).toEqual([]);
   });
 });

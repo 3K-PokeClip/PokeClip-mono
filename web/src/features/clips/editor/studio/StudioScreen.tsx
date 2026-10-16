@@ -623,8 +623,9 @@ function WiredStudio({
   /** 새로 만들거나 고쳐 저장하고, 저장한 판을 상태에 적는다 */
   const persist = useCallback(
     async (recipeId: number | null, doc: RecipeDocument) => {
+      // 카드에서 연 편집본이면 첫 저장에 그 카드를 출처로 남긴다(POK-338). 보관함에서 연 편집본은 카드가 없다
       const snap = await (recipeId === null
-        ? createRecipe(streamId, doc)
+        ? createRecipe(streamId, doc, card?.id ?? null)
         : updateRecipe(streamId, recipeId, doc));
       setSave((s) => ({
         ...s,
@@ -635,7 +636,7 @@ function WiredStudio({
       if (recipeId === null) onRecipeCreated(snap.id);
       return snap;
     },
-    [streamId, onRecipeCreated],
+    [streamId, card, onRecipeCreated],
   );
 
   const saveDraft = useCallback(

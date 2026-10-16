@@ -22,31 +22,51 @@ export function VodGrid({ vods, loading }: { vods: HomeVod[]; loading: boolean }
         <ul className={styles.vodGrid}>
           {vods.map((vod) => (
             <li key={vod.id} className={styles.vodCard}>
-              <Link href={vod.href} className={styles.vodLink}>
-                <Thumb label="썸네일 준비 중" src={vod.thumbnailUrl}>
-                  {vod.badge?.kind === 'preparing' ? (
-                    <span className={styles.overlayPillTopLeft}>준비 중</span>
-                  ) : null}
-                  {vod.badge?.kind === 'dday' ? (
-                    <span className={styles.overlayTopLeft}>
-                      <Badge tone="danger" variant="solid" size="sm">
-                        {vod.badge.label}
-                      </Badge>
-                    </span>
-                  ) : null}
-                  {vod.duration ? (
-                    <span className={styles.durationPill}>{vod.duration}</span>
-                  ) : null}
-                </Thumb>
-                <div className={styles.vodText}>
-                  <div className={styles.vodTitle}>{vod.title}</div>
-                  <div className={styles.vodMeta}>{vod.meta}</div>
+              {vod.href ? (
+                <Link href={vod.href} className={styles.vodLink}>
+                  <VodCardBody vod={vod} />
+                </Link>
+              ) : (
+                // 보관이 끝나 열 것이 없다: 링크를 안 만든다(지난 방송 목록과 같다, POK-254)
+                <div className={styles.vodLink}>
+                  <VodCardBody vod={vod} />
                 </div>
-              </Link>
+              )}
             </li>
           ))}
         </ul>
       )}
     </section>
+  );
+}
+
+function VodCardBody({ vod }: { vod: HomeVod }) {
+  return (
+    <>
+      <Thumb label="썸네일 준비 중" src={vod.thumbnailUrl}>
+        {vod.badge?.kind === 'preparing' ? (
+          <span className={styles.overlayPillTopLeft}>준비 중</span>
+        ) : null}
+        {vod.badge?.kind === 'dday' ? (
+          <span className={styles.overlayTopLeft}>
+            <Badge tone="danger" variant="solid" size="sm">
+              {vod.badge.label}
+            </Badge>
+          </span>
+        ) : null}
+        {vod.badge?.kind === 'expired' ? (
+          <span className={styles.overlayTopLeft}>
+            <Badge tone="danger" variant="soft" size="sm">
+              보관 만료
+            </Badge>
+          </span>
+        ) : null}
+        {vod.duration ? <span className={styles.durationPill}>{vod.duration}</span> : null}
+      </Thumb>
+      <div className={styles.vodText}>
+        <div className={styles.vodTitle}>{vod.title}</div>
+        <div className={styles.vodMeta}>{vod.meta}</div>
+      </div>
+    </>
   );
 }

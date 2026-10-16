@@ -60,6 +60,30 @@ std::map<obs_source_t *, int> GlobalChannels()
 
 using MonitoringPending = std::map<std::string, int>;
 
+// 앱 캡처 소스의 대상 앱(POK-290) — 설정의 실행 파일·번들 ID. 소스 이름은 보지 않는다(바꾸기 쉽다).
+// 타입마다 필요한 키만 읽는다 — obs_data_get_int는 다른 타입 항목을 가리지 않는다(문자열 getter는 ""를 준다).
+std::string AppIdOf(obs_source_t *s, const std::string &id)
+{
+	if (ClassifyAudioSourceId(id) != AudioKind::App)
+		return "";
+	obs_data_t *settings = obs_source_get_settings(s);
+	if (!settings)
+		return "";
+	AudioAppSettings app;
+	if (id == "sck_audio_capture" || id == "screen_capture") {
+		app.type = static_cast<int>(obs_data_get_int(settings, "type"));
+		app.application = obs_data_get_string(settings, "application");
+	} else {
+		app.window = obs_data_get_string(settings, "window");
+		app.captureMode = obs_data_get_string(settings, "capture_mode");
+		app.hasCaptureMode = obs_data_has_user_value(settings, "capture_mode");
+		app.hasAnyFullscreen = obs_data_has_user_value(settings, "capture_any_fullscreen");
+		app.anyFullscreen = obs_data_get_bool(settings, "capture_any_fullscreen");
+	}
+	obs_data_release(settings);
+	return AudioAppId(id, app);
+}
+
 AudioSourceInfo Describe(obs_source_t *s, const std::map<obs_source_t *, int> &channels, int index,
 			 const MonitoringPending &monitoring)
 {
@@ -75,6 +99,7 @@ AudioSourceInfo Describe(obs_source_t *s, const std::map<obs_source_t *, int> &c
 		info.key = std::string("uuid:") + (uuid ? uuid : "");
 		info.kind = ClassifyAudioSourceId(id ? id : "");
 		info.order = 100 + index;
+		info.appId = AppIdOf(s, id ? id : "");
 	}
 	const char *name = obs_source_get_name(s);
 	info.name = name ? name : "";
@@ -240,6 +265,7 @@ void AudioRouter::Init()
 	signal_handler_connect(sh, "source_load", &AudioRouter::OnSourceLoad, this);
 	for (const char *name : kChangeSignals)
 		signal_handler_connect(sh, name, &AudioRouter::OnSourceChanged, this);
+	signal_handler_connect(sh, "source_update", &AudioRouter::OnSourceUpdated, this);
 	initialized_ = true;
 }
 
@@ -254,6 +280,7 @@ void AudioRouter::Shutdown()
 	signal_handler_disconnect(sh, "source_load", &AudioRouter::OnSourceLoad, this);
 	for (const char *name : kChangeSignals)
 		signal_handler_disconnect(sh, name, &AudioRouter::OnSourceChanged, this);
+	signal_handler_disconnect(sh, "source_update", &AudioRouter::OnSourceUpdated, this);
 	initialized_ = false;
 }
 
@@ -450,6 +477,9 @@ bool AudioRouter::AssignTrack(const std::string &key, int slot, std::string &rea
 	}
 	const char *rawName = obs_source_get_name(source); // 이름 없는 소스는 NULL — 열거(Describe)와 같이 빈 이름으로
 	std::string name = rawName ? rawName : "";
+	// 지금 앱을 같이 적는다 — 옮긴 뒤 대상 앱을 바꾸면 그때 다시 앉는다(ComputeAssignment 2-1). 전역 장치는 "".
+	const char *id = key.rfind("uuid:", 0) == 0 ? obs_source_get_unversioned_id(source) : nullptr;
+	std::string app = id ? AppIdOf(source, id) : "";
 	obs_source_release(source);
 
 	// 기억을 그 자리로 고쳐 쓴다 — 계산은 기억대로 앉히므로(규칙 머리 주석) 다음 Reconcile이 비트를 맞춘다.
@@ -460,12 +490,13 @@ bool AudioRouter::AssignTrack(const std::string &key, int slot, std::string &rea
 		auto it = std::find_if(c.audioTrackMap.begin(), c.audioTrackMap.end(),
 				       [&](const AudioTrackMapEntry &e) { return e.key == key; });
 		if (it == c.audioTrackMap.end()) {
-			c.audioTrackMap.push_back({key, slot, name, now, now});
+			c.audioTrackMap.push_back({key, slot, name, now, now, app});
 		} else {
 			it->slot = slot;
 			it->name = name;
 			it->assignedAt = now;
 			it->lastSeen = now;
+			it->app = app;
 		}
 	});
 	if (!saved) {
@@ -526,6 +557,18 @@ void AudioRouter::OnSourceLoad(void *data, calldata_t *params)
 void AudioRouter::OnSourceChanged(void *data, calldata_t *)
 {
 	static_cast<AudioRouter *>(data)->Schedule("sources changed");
+}
+
+// 속성 창에서 소스 설정이 바뀌었다 — 앱 캡처의 대상 앱이 바뀌었을 수 있다(POK-290). source_update는 텍스트·필터를
+// 포함한 모든 소스 갱신마다 오므로 앱 종류의 오디오 입력만 넘긴다. 비디오 스레드(지연 갱신)에서도 오지만 여기서 읽는
+// 타입·플래그·id는 소스가 사는 동안 바뀌지 않는다. 설정은 UI 스레드의 열거가 다시 읽는다.
+void AudioRouter::OnSourceUpdated(void *data, calldata_t *params)
+{
+	auto *source = static_cast<obs_source_t *>(calldata_ptr(params, "source"));
+	const char *id = source ? obs_source_get_unversioned_id(source) : nullptr;
+	if (!IsAudioInput(source) || !id || ClassifyAudioSourceId(id) != AudioKind::App)
+		return;
+	static_cast<AudioRouter *>(data)->Schedule("source updated");
 }
 
 // 스트리머가 OBS 고급 오디오 속성에서 트랙 체크를 바꿨다. 이 시그널은 값이 적용되기 전에 오므로

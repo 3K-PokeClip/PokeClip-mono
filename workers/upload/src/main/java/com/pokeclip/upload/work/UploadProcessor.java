@@ -77,6 +77,27 @@ public class UploadProcessor {
         this.sleeper = sleeper;
     }
 
+    /**
+     * 처리 중이라는 신호를 clip에 보낸다(POK-333, {@link QueueWorker}가 처리하는 동안 1분마다 부른다). 🔴 <b>무엇이 와도 던지지 않는다</b>:
+     * 신호가 실패해도 업로드는 그대로 간다(못 보내면 사람이 30분 뒤 「안 올라갔다」를 적을 수 있게 될 뿐이고, 그 위험은 WARN으로 남긴다).
+     */
+    public void heartbeat(String body) {
+        long uploadId;
+        try {
+            uploadId = parser.parse(body).uploadId();
+        } catch (RuntimeException e) {
+            return; // 못 읽는 쪽지는 process가 지운다.
+        }
+        try {
+            int status = clip.heartbeat(uploadId);
+            if (status != 200) {
+                log.warn("upload.heartbeat_rejected uploadId={} status={}", uploadId, status);
+            }
+        } catch (RuntimeException e) {
+            log.warn("upload.heartbeat_failed uploadId={} err={}", uploadId, e.getMessage());
+        }
+    }
+
     public Disposition process(String body) {
         UploadEnvelope job;
         try {

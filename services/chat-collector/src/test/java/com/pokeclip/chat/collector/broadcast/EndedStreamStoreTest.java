@@ -11,7 +11,7 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -208,13 +208,44 @@ class EndedStreamStoreTest extends IntegrationTestSupport {
      * <p>문항 5: {@code IN} 절을 {@code stream_id = ?} 하나로 되돌리면 빨간불(확인함).
      */
     @Test
-    void 여러_방송의_메모_유무를_한_번에_읽는다() {
+    void 여러_방송의_메모를_한_번에_읽는다() {
         store.remember("live-A-001", 5, Instant.parse("2026-08-31T04:00:00Z"));
         store.rememberStopped("live-B-001", "LINK_UNAVAILABLE", Instant.parse("2026-08-31T04:00:00Z"));
 
-        Set<String> found = store.findAllIds(List.of("live-A-001", "live-B-001", "live-C-001"));
+        Map<String, EndedStream> found = store.findAll(List.of("live-A-001", "live-B-001", "live-C-001"));
 
-        assertThat(found).containsExactlyInAnyOrder("live-A-001", "live-B-001");
+        assertThat(found).containsOnlyKeys("live-A-001", "live-B-001");
+        // 재부착이 사유로 가른다(POK-342): 종료 메모는 사유가 없고 포기 메모는 있다.
+        assertThat(found.get("live-A-001").stopReason()).isNull();
+        assertThat(found.get("live-B-001").stopReason()).isEqualTo("LINK_UNAVAILABLE");
+    }
+
+    /**
+     * 다시 연동된 방송에 붙은 뒤 그 포기 메모를 지운다(POK-342). <b>사유가 같을 때만</b> 지운다:
+     * 붙이기와 지우기 사이에 종료 편지가 메모를 「끝남」으로 바꿨으면 그것은 남겨야 한다
+     * (지우면 그 방송이 다음 회차에 또 후보가 되고 창구는 unknown을 답한다).
+     *
+     * <p>문항 2: 「지웠다」만 보면 늘 지우는 구현도 초록이다: 안 지우는 갈래 둘을 같이 잰다.
+     */
+    @Test
+    void 포기_메모는_사유가_같을_때만_지운다() {
+        store.rememberStopped("s1", "SUBSCRIBE_REJECTED", 지금);
+        store.rememberStopped("s2", "SUBSCRIBE_REJECTED", 지금);
+
+        assertThat(store.forgetStopped("s1", "REVOKED")).isFalse();
+        assertThat(store.find("s1")).isPresent();
+
+        assertThat(store.forgetStopped("s2", "SUBSCRIBE_REJECTED")).isTrue();
+        assertThat(store.find("s2")).isEmpty();
+    }
+
+    @Test
+    void 포기_메모가_종료로_바뀌었으면_안_지운다() {
+        store.rememberStopped("s1", "SUBSCRIBE_REJECTED", 지금);
+        store.remember("s1", 3, 지금);
+
+        assertThat(store.forgetStopped("s1", "SUBSCRIBE_REJECTED")).isFalse();
+        assertThat(store.find("s1").orElseThrow().stopped()).isFalse();
     }
 
     /**
@@ -226,7 +257,7 @@ class EndedStreamStoreTest extends IntegrationTestSupport {
      */
     @Test
     void 빈_목록을_주면_DB에_안_묻고_빈_결과다() {
-        assertThat(store.findAllIds(List.of())).isEmpty();
+        assertThat(store.findAll(List.of())).isEmpty();
     }
 
     /**
