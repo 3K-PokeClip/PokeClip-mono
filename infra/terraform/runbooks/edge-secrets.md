@@ -29,8 +29,8 @@ prod 엣지 비밀 세 개(서명 키 · CDN 비밀 · 시험용 스트림 키)�
 *   **5단계(O5)에서는 서명 키만** 만들고 넣고 로컬 파일을 지웁니다.
 *   **CDN 비밀은 7단계(O7e)에서 T9a 를 관찰한 뒤에** 만들고 넣고, 곧바로
     로컬 파일을 지우고 확인합니다.
-*   그래서 단계 사이에 로컬에 보관하는 비밀은 없습니다. 입력이 실패해 단계를
-    멈출 때도 지웁니다(아래 「로컬 파일 규칙」).
+*   그래서 단계 사이에 로컬에 보관하는 비밀은 없습니다. 단계를 멈출 때도
+    (입력 실패든 그 앞 걸음이든) 지웁니다(아래 「로컬 파일 규칙」).
 
 ## 초기화 순서(설계 5-4 의 1–12)
 
@@ -52,19 +52,28 @@ prod 엣지 비밀 세 개(서명 키 · CDN 비밀 · 시험용 스트림 키)�
 ## 로컬 파일 규칙
 
 *   비밀 파일은 저장소 밖 스크래치 디렉터리에만 둡니다. `umask 077` 을 먼저
-    걸고 `mktemp -d` 로 만듭니다 — 디렉터리 0700 · 파일 0600 이 됩니다.
+    걸고 `mktemp -d "${TMPDIR:-/tmp}/pokeclip-edge-secret.XXXXXX"` 로
+    만듭니다 — 디렉터리 0700 · 파일 0600 이 되고, 이름 앞머리
+    `pokeclip-edge-secret.` 로 셸을 잃어도 찾을 수 있습니다.
 *   값은 파일로만 다룹니다. 명령문 · 클립보드 · 셸 기록 · 채팅에 두지
     않습니다.
 *   입력이 끝나면 곧바로 파일을 지우고, `ls -A` 출력이 0건인지 확인한 뒤
     디렉터리를 지웁니다.
-*   입력이 실패하면 종료 코드로 정합니다.
-    *   같은 셸에서 바로 고칠 수 있는 실패(종료 2 · 3 — 인자 · 입력 파일 지정
-        오류 등, 원인이 분명한 종료 5)는 파일을 그대로 두고 고쳐 다시
-        넣습니다.
-    *   단계를 멈추면(종료 4 · 그날 못 고침 · 셸을 닫을 때) 셸을 닫기 전에
-        파일을 지우고 0건을 확인합니다 — 셸을 닫으면 스크래치 경로
-        (`scratch`)를 잃습니다. 재개 때 값을 새로 만듭니다(서명 키는 「O5」 의
-        4).
+*   입력이 실패하면 종료 코드로 정합니다. 같은 셸에서 바로 고칠 수 있는
+    실패(종료 2 · 3 — 인자 · 입력 파일 지정 오류 등, 원인이 분명한 종료 5)는
+    파일을 그대로 두고 고쳐 다시 넣습니다.
+*   **단계를 멈추면** — 입력 실패(종료 4 · 그날 못 고침)든 그 앞 걸음(예:
+    「O5」 의 3 의 plan · apply)이든, 셸을 닫을 때든 — 셸을 닫기 전에 파일을
+    지우고 0건을 확인합니다. 셸을 닫으면 스크래치 경로(`scratch`)를 잃습니다.
+    재개 때 값을 새로 만듭니다(서명 키는 「O5」 의 2 부터).
+*   셸을 잃었으면(창을 닫음 · 터미널이 끝남) 새 셸에서 이름 앞머리로 찾아
+    지웁니다. 둘째 줄이 `0` 을 내야 합니다.
+
+    ```shell
+    find "${TMPDIR:-/tmp}/" -maxdepth 1 -name 'pokeclip-edge-secret.*' -exec rm -r -- {} +
+    find "${TMPDIR:-/tmp}/" -maxdepth 1 -name 'pokeclip-edge-secret.*' | grep -c pokeclip-edge-secret
+    ```
+
 *   공개키는 비밀이 아니지만 저장소에 커밋하지 않습니다. 추적하지 않는
     `prod/secrets/terraform.tfvars` 에 둡니다(아래 「공개키 PEM 넘기기」).
 
@@ -110,6 +119,10 @@ bash infra/terraform/scripts/put-secret-from-file.sh <종류> <파일>
 *   값이 든 인자 — `--secret-string "$(cat …)"` 같은 꼴과
     `--cli-input-json '{…}'` 인라인 JSON.
 
+입력은 `AWS_ENDPOINT_URL` 류(`AWS_ENDPOINT_URL*` 환경 변수 · 프로필의
+`endpoint_url`)가 설정된 셸에서 하지 않습니다 — 값이 그 엔드포인트(예: 로컬
+LocalStack)로 갑니다. 확인: `env | grep -c '^AWS_ENDPOINT_URL'` 이 `0`.
+
 원인은 값을 내지 않는 진단으로 찾습니다 — 첫 줄은 그릇이 있는지와 버전
 단계(값은 나오지 않음)를, 둘째 줄은 어느 주체로 부르는지를 보여 줍니다. 다른
 비밀이면 이름만 바꿉니다. 두 출력은 ARN · 계정 ID 를 품으므로 화면에서만
@@ -125,10 +138,10 @@ aws sts get-caller-identity
 
 번호는 계획 M4 의 O5 와 같습니다. 명령은 저장소 뿌리에서 시작합니다.
 
-0.  **선행 0 — 단계 직전 점검**: 단계 직전 점검 런북
-    `runbooks/stage-precheck.md`(M17a 머지 뒤 링크)대로 SCP 재판정(5 묶음) ·
-    2-3 자동 주체 판정(실패 0 · 미판정 0 또는 모두 kty 「진행」) · 이벤트
-    기록을 봅니다. 태그 키(`tag:GetTagKeys`)를 읽어
+0.  **선행 0 — 단계 직전 점검**:
+    [단계 직전 점검 런북](/infra/terraform/runbooks/stage-precheck.md)대로 SCP
+    재판정(5 묶음) · 2-3 자동 주체 판정(실패 0 · 미판정 0 또는 모두 kty
+    「진행」) · 이벤트 기록을 봅니다. 태그 키(`tag:GetTagKeys`)를 읽어
     계정에 있는 키와 `default_tags` 네 키(`Project` · `Environment` ·
     `ManagedBy` · `TerraformRoot`)가 겹치지 않는지 확인합니다.
 
@@ -152,7 +165,7 @@ aws sts get-caller-identity
 
     ```shell
     umask 077
-    scratch="$(mktemp -d)"
+    scratch="$(mktemp -d "${TMPDIR:-/tmp}/pokeclip-edge-secret.XXXXXX")"
     openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
       -out "${scratch}/signing-key.pem"
     openssl pkey -in "${scratch}/signing-key.pem" -pubout \
@@ -162,33 +175,73 @@ aws sts get-caller-identity
 
     마지막 줄은 머리 줄 하나(`BEGIN PRIVATE KEY` 가 든 줄)만 냅니다.
 
-1.  **prod/secrets apply**: 저장소 뿌리로 돌아가 `prod/secrets` 로 옮기고,
-    `backend.hcl` 의 `bucket` 자리표시자 `<STATE_BUCKET_PROD>` 를 고정 이름
-    `pokeclip-tfstate-prod-apne2` 로 바꿉니다(`grep` 이 그 한 줄을 냄). 공개키를
-    추적하지 않는 `terraform.tfvars` 에 heredoc 으로 옮기고(아래 「공개키 PEM
-    넘기기」) plan 을 봅니다.
+    **이 뒤 어느 걸음에서든 단계를 멈추면**(3 의 plan · 확인 · apply · 적용
+    확인, 4 의 입력) 셸을 닫기 전에 5 대로 키 쌍을 지우고 0건을 확인한 뒤
+    멈춥니다. 재개 때는 2 부터 키 쌍을 새로 만듭니다(위 「로컬 파일 규칙」).
+1.  **prod/secrets apply**: 네 걸음(plan → 확인 · 승인 → apply → 적용
+    확인)을 차례로 하고, 코드 블록은 걸음마다 따로 실행합니다. plan 이
+    실패하거나 확인이 어긋나면 apply 블록으로 넘어가지 않고 멈춥니다(2 의
+    「단계를 멈추면」).
 
-    ```shell
-    cd "$(git rev-parse --show-toplevel)"
-    cd infra/terraform/prod/secrets
-    cp backend.hcl.example backend.hcl
-    sed -i.orig 's/<STATE_BUCKET_PROD>/pokeclip-tfstate-prod-apne2/' backend.hcl
-    rm backend.hcl.orig
-    grep '^bucket' backend.hcl
-    {
-      printf 'public_key_pem = <<-EOT\n'
-      sed 's/^/  /' "${scratch}/public-key.pem"
-      printf 'EOT\n'
-    } > terraform.tfvars
-    terraform init -backend-config=backend.hcl
-    terraform plan -out=secrets.tfplan
-    terraform apply secrets.tfplan
-    rm secrets.tfplan
-    ```
+    1.  **plan**: 저장소 뿌리로 돌아가 `prod/secrets` 로 옮기고,
+        `backend.hcl` 의 `bucket` 자리표시자 `<STATE_BUCKET_PROD>` 를 고정
+        이름 `pokeclip-tfstate-prod-apne2` 로 바꿉니다(`grep` 이 그 한 줄을
+        냄). 공개키를 추적하지 않는 `terraform.tfvars` 에 heredoc 으로
+        옮기고(아래 「공개키 PEM 넘기기」) plan 을 파일로 남깁니다. 앞에 남은
+        plan 파일은 먼저 지웁니다 — 새 plan 이 실패했을 때 옛 파일을 apply
+        하지 않게 합니다.
 
-    plan 범위 = 그릇 3 · 공개키 1 생성, 그 밖 0. `tags_all` 에 네 키
-    (`TerraformRoot = prod/secrets`)가 있고 `aws_secretsmanager_secret_version`
-    은 없어야 합니다.
+        ```shell
+        cd "$(git rev-parse --show-toplevel)"
+        cd infra/terraform/prod/secrets
+        cp backend.hcl.example backend.hcl
+        sed -i.orig 's/<STATE_BUCKET_PROD>/pokeclip-tfstate-prod-apne2/' backend.hcl
+        rm backend.hcl.orig
+        grep '^bucket' backend.hcl
+        {
+          printf 'public_key_pem = <<-EOT\n'
+          sed 's/^/  /' "${scratch}/public-key.pem"
+          printf 'EOT\n'
+        } > terraform.tfvars
+        rm -f secrets.tfplan
+        terraform init -backend-config=backend.hcl
+        terraform plan -out=secrets.tfplan
+        ```
+
+    1.  **확인 · 승인**: plan 출력에서 다음을 모두 확인하고 kty 승인을
+        받습니다. plan 이 오류로 끝났거나 하나라도 다르면 apply 하지
+        않습니다.
+
+        *   생성 = 그릇 3 · 공개키 1 이고 교체 · 변경 · 삭제는 0
+            (`Plan: 4 to add, 0 to change, 0 to destroy`). 재개 때(2 부터 새
+            키 쌍)는 공개키 교체 1 과 아직 없는 자원의 생성만 있습니다 —
+            교체는 키 그룹 전까지만 됩니다(아래 「공개키 PEM 넘기기」).
+        *   자원마다 `tags_all` 에 네 키(`Project` · `Environment` ·
+            `ManagedBy` · `TerraformRoot = prod/secrets`)가 있습니다.
+        *   `aws_secretsmanager_secret_version` 자원이 0 입니다.
+
+    1.  **apply**: 승인받은 plan 파일만 적용하고 지웁니다. 저장된 plan 의
+        apply 는 다시 묻지 않으므로 이 블록은 승인 뒤에만 실행합니다. 거부로
+        실패하면 아래 「AccessDenied 가 나면」 을 따릅니다.
+
+        ```shell
+        terraform apply secrets.tfplan
+        rm secrets.tfplan
+        ```
+
+    1.  **적용 확인**: 다시 plan 해서 변경이 없는지(종료 0) 봅니다. CloudFront
+        가 `encoded_key` 의 끝 줄바꿈을 바꿔 저장하면 여기서 차이(종료 2)가
+        납니다(아래 「확인하지 못한 것」). `PLAN NO CHANGES` 가 아니면 4 로
+        가지 않고 멈춥니다.
+
+        ```shell
+        if terraform plan -lock=false -detailed-exitcode; then
+          printf 'PLAN NO CHANGES\n'
+        else
+          printf '멈춤: 종료 %s — 서명 키를 넣지 않습니다\n' "$?"
+        fi
+        ```
+
 1.  **서명 키 입력**:
 
     ```shell
@@ -202,12 +255,14 @@ aws sts get-caller-identity
     *   같은 셸에서 바로 고칠 수 있는 실패(종료 2 · 3 — 인자 · 입력 파일 지정
         오류 등, 원인이 분명한 종료 5)는 키 쌍을 그대로 두고 고쳐 다시
         넣습니다.
-    *   단계를 멈추면(종료 4 · 그날 못 고침 · 셸을 닫을 때) 셸을 닫기 전에
-        5 대로 키 쌍을 지우고 0건을 확인한 뒤 멈춥니다. 종료 4 는 아래
-        「AccessDenied 가 나면」 도 따릅니다.
+    *   단계를 멈추면(종료 4 · 그날 못 고침 · 셸을 닫을 때) 2 의 「단계를
+        멈추면」 대로 셸을 닫기 전에 5 대로 키 쌍을 지우고 0건을 확인한 뒤
+        멈춥니다. 종료 4 는 아래 「AccessDenied 가 나면」 도 따릅니다.
     *   재개 때는 2 부터 키 쌍을 새로 만들고, 공개키가 바뀌는 `prod/secrets`
         apply(교체)를 합니다. 키 그룹이 공개키를 쓰기 전 — O7f edge apply
-        앞까지만 됩니다(아래 「공개키 PEM 넘기기」).
+        앞까지만 됩니다(아래 「공개키 PEM 넘기기」). O7d(platform apply) 뒤라면
+        clip 이 옛 key id(`CLOUDFRONT_KEY_PAIR_ID`)를 들고 있으므로 platform
+        apply 와 clip `update-service --force-new-deployment` 도 함께 합니다.
 1.  **로컬 파일 삭제 · 확인**: `ls -A` 는 아무것도 내지 않아야 합니다(0건).
 
     ```shell
@@ -245,7 +300,9 @@ aws sts get-caller-identity
     apply 하지 않습니다 — CloudFront 공개키는 comment 밖의 값을 바꿀 수
     없어(UpdatePublicKey) 교체(삭제 뒤 생성)가 되고, 키 그룹이 쓰는 키는
     지워지지 않습니다. 키 그룹 전에는 교체가 됩니다(「O5」 의 4 — 재개 때 새
-    키 쌍).
+    키 쌍). O7d(platform apply) 뒤의 교체라면 platform apply(clip
+    `CLOUDFRONT_KEY_PAIR_ID`)와 clip `update-service --force-new-deployment`
+    도 함께 합니다.
     `public-key.pem` 은 tfvars 로 옮긴 뒤 지웁니다 — 루트 `.gitignore` 의
     `*.pem` 이 무시해 추적되지는 않지만, 파일은 남기지 않습니다.
 
@@ -253,10 +310,10 @@ aws sts get-caller-identity
 
 번호는 계획 M9 의 O7e 와 같습니다. 명령은 저장소 뿌리에서 돌립니다.
 
-0.  **선행 0 — 단계 직전 점검**: 단계 직전 점검 런북
-    `runbooks/stage-precheck.md`(M17a 머지 뒤 링크)대로 공통 묶음 `O7e` 와
-    멈춤 자리 묶음 `O7e-stop1`(사이드카 DB 연결 `rds-db:connect`)을 따로
-    판정하고, 2-3 판정 · 이벤트 기록을 봅니다.
+0.  **선행 0 — 단계 직전 점검**:
+    [단계 직전 점검 런북](/infra/terraform/runbooks/stage-precheck.md)대로 공통
+    묶음 `O7e` 와 멈춤 자리 묶음 `O7e-stop1`(사이드카 DB 연결
+    `rds-db:connect`)을 따로 판정하고, 2-3 판정 · 이벤트 기록을 봅니다.
     *   공통 묶음이 거부 · 변경이면 O7e 를 시작하지 않습니다(전체 중단).
     *   **`O7e-stop1` 이 거부면** 계획 3절 「부분 진행」 표 ① 을 따릅니다.
         1 · 2(media apply · T9a 관찰)만 하고 `systemctl stop pokeclip-media`
@@ -278,7 +335,7 @@ aws sts get-caller-identity
 
     ```shell
     umask 077
-    scratch="$(mktemp -d)"
+    scratch="$(mktemp -d "${TMPDIR:-/tmp}/pokeclip-edge-secret.XXXXXX")"
     openssl rand -hex 32 > "${scratch}/cdn-secret"
     bash infra/terraform/scripts/put-secret-from-file.sh cdn-secret \
       "${scratch}/cdn-secret"
@@ -308,13 +365,14 @@ aws sts get-caller-identity
 ### 시험용 스트림 키 넣기
 
 받은 키는 명령문에 쓰지 않고 셸 내장 `read` · `printf` 로만 파일에 옮깁니다 —
-화면 · 셸 기록 · 프로세스 목록에 값이 남지 않습니다.
+화면 · 셸 기록 · 프로세스 목록에 값이 남지 않습니다. 명령은 저장소 뿌리에서
+돌립니다.
 
 1.  스크래치를 만듭니다.
 
     ```shell
     umask 077
-    scratch="$(mktemp -d)"
+    scratch="$(mktemp -d "${TMPDIR:-/tmp}/pokeclip-edge-secret.XXXXXX")"
     ```
 
 1.  키를 받습니다. 이 한 줄은 **따로** 실행합니다(블록으로 붙이면 다음 줄이
@@ -430,7 +488,8 @@ aws sts get-caller-identity
 *   KVS 값 입력은 멈춤 자리 ②입니다(M10 의 O7f 3). 거부면 계획 3절 「부분
     진행」 표를 따릅니다.
 *   apply 가 거부로 실패하면 원인이 무엇이든 SCP 멈춤 규칙(전체 중단 ·
-    상태 대조)입니다.
+    상태 대조)입니다. 「O5」 의 3 이면 셸을 닫기 전에 키 쌍을 지우고 0건을
+    확인합니다(「O5」 의 5 — 재개 때 2 부터).
 
 ## prod 에서 하지 않는 시험(T6a · T9b)
 
@@ -454,9 +513,12 @@ T6a(비밀 불일치 → 원본 302/401)와 T9b(clip 빈 서명 키 기동)는 p
     버전으로 넣는지 — 시험은 aws-cli 2.36.7 이 이 꼴을 받아 네트워크 단계까지
     가는 것(닫힌 로컬 주소)까지만 봤습니다. O5 서명 키 입력에서 실증합니다.
     O5 전에 `aws --version` 이 2.36.7 이 아니면 `put_secret_test.sh` 를 다시
-    돌려 실물 CLI 계약 사례를 봅니다.
+    돌려 실물 CLI 계약 사례를 봅니다. 계약 사례는 파싱 · 네트워크 단계까지만
+    봅니다 — 요청 본문의 SecretString 이 파일과 바이트 단위로 같은지는
+    2026-10-17 aws-cli 2.36.7 루프백 실측(M4 종결 r2)입니다.
 *   CloudFront 가 `encoded_key` 의 끝 줄바꿈을 어떻게 저장 · 반환하는지 —
-    O5 첫 apply 뒤 plan 「No changes」로 확인합니다.
+    「O5」 의 3 의 적용 확인(apply 뒤 `plan -detailed-exitcode` 종료 0)으로
+    확인합니다.
 *   `default_tags` 가 `tags_all` 에 들어가는지 — mock 시험이 보지 못해 O5
     plan 에서 확인합니다.
 *   버전 없는 비밀에서 ECS 가 같은 `ResourceInitializationError` 를 내는지 —
