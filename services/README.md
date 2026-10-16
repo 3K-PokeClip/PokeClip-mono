@@ -336,7 +336,8 @@ curl -s localhost:8081/actuator/health
 사유가 실린다. `management.endpoint.health.show-details: always`가 없으면 이 상세가 응답에서
 잘려 밖에서는 `{"status":"UP"}`만 보인다 — "서버는 떴는데 수신은 죽은" 상태를 구분할 수 없게 된다.
 
-**`chat-collector`는 환경변수 없이도 뜨지만 수집을 시작하지 않는다.** 붙는 길이 둘이고
+**`chat-collector`는 DB 접속값 셋만 있으면 뜨지만 수집을 시작하지 않는다.** 셋은 auth · clip과 같이 기본값이 없다
+(POK-331 전에는 로컬 기본값이 있어 셋 없이도 떴다). 붙는 길이 둘이고
 **둘 다 기본이 꺼짐**이며, **같이 켜면 부팅을 거부한다**(POK-127).
 
 | 길 | 스위치 | 세션을 여는 것 | 토큰 |
@@ -364,6 +365,7 @@ CHZZK_ENABLED=true CHZZK_ACCESS_TOKEN=<유저 Access Token> ./gradlew :chat-coll
 
 | 변수 | 기본값 | compose | |
 |---|---|---|---|
+| `POSTGRES_DB` · `POSTGRES_USER` · `POSTGRES_PASSWORD` | **없음** | ✅ | auth · clip과 같다. 셸에 없으면 리터럴이 그대로 바인딩돼 DB가 접속을 거절한다 |
 | `BROADCAST_INTAKE_ENABLED` | `false` | ✅ `CHAT_`\* | 켜면 편지 폴링 루프가 돈다 |
 | `BROADCAST_QUEUE_URL` | 빈 값 | ✅ `CHAT_`\* | 생명주기 FIFO 큐 주소. **켜져 있는데 비면 부팅이 죽는다** |
 | `BROADCAST_QUEUE_ENDPOINT` | 빈 값 | — | 비면 진짜 AWS. LocalStack 실측 때만 준다 |
