@@ -3,7 +3,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { apiFetch } from '@/api/client';
 import { recordingSearchFrom } from '@/features/broadcast/endedWindow';
-import { CHAT_PAGE_MAX, type WireItem, type WirePage } from './chatCollector';
+import {
+  CHAT_PAGE_MAX,
+  LIVE_REREAD_MS,
+  chatFingerprint,
+  type WireItem,
+  type WirePage,
+} from './chatCollector';
 import {
   CHAT_KEEP,
   ChatReplayLoader,
@@ -123,16 +129,6 @@ function trim(map: Record<string, WireItem>): Record<string, WireItem> {
   const next: Record<string, WireItem> = {};
   for (const k of sorted.slice(-CHAT_KEEP)) next[k] = map[k] as WireItem;
   return next;
-}
-
-/** 겹친 구간 중복 제거 열쇠 — 채팅 표 지문 UNIQUE와 같다(README 「웹이 지켜야 하는 것 넷」 3) */
-function fingerprint(it: {
-  kind: string;
-  time: string;
-  senderChannelId: string;
-  text: string | null;
-}): string {
-  return `${it.kind}|${it.time}|${it.senderChannelId}|${it.text ?? ''}`;
 }
 
 /**
@@ -294,6 +290,7 @@ export function useChatPanelMockState(
       replayLower,
       fixedUpper ?? Number.POSITIVE_INFINITY,
       fixedUpper === null ? LIVE_READ_STEP_MS : 0,
+      fixedUpper === null ? LIVE_REREAD_MS : 0,
     );
     setReplayState({ key: replayKey, loader: next });
     return () => {
@@ -334,7 +331,7 @@ export function useChatPanelMockState(
         amount: ev.amount,
       };
       setRaw((prev) => {
-        const k = fingerprint(item);
+        const k = chatFingerprint(item);
         if (prev[k]) return prev;
         const withId = { ...item, id: nextId.current++ };
         return trim({ ...prev, [k]: withId });
@@ -362,7 +359,8 @@ export function useChatPanelMockState(
       try {
         const toMs = Date.now();
         // 화면 축으로 묻는다(서버가 +보정). 처음엔 10분 전부터, 그 뒤엔 마지막으로 본 시각 −10초부터.
-        const fromMs = lastTime.current > 0 ? lastTime.current - 10_000 : toMs - 10 * 60_000;
+        const fromMs =
+          lastTime.current > 0 ? lastTime.current - LIVE_REREAD_MS : toMs - 10 * 60_000;
         // 한 번에 200건을 넘으면 서버는 오래된 쪽부터 주고 다음 커서를 단다 — 커서를 끝까지 따라가야
         // 최신 채팅까지 닿는다. 첫 장만 읽으면 창이 실시간을 영영 못 따라잡는다(PR #200 codex P1)
         const items: WireItem[] = [];
@@ -393,7 +391,7 @@ export function useChatPanelMockState(
         setRaw((prev) => {
           const next = { ...prev };
           for (const it of page.items) {
-            const k = fingerprint(it);
+            const k = chatFingerprint(it);
             // 줄 열쇠는 중계 줄과 같은 로컬 번호다(POK-254): 서버 id는 채팅·후원 표가 따로 매겨 겹치고, 중계 줄 번호와도 섞였다
             if (!next[k]) next[k] = { ...it, id: nextId.current++ };
           }

@@ -18,6 +18,22 @@ export interface WireItem {
   text: string | null;
   amount: number | null;
 }
+/**
+ * 라이브에서 다 읽은 끝을 이만큼 겹쳐 다시 읽는다. 적재가 여유보다 늦게 들어온 줄을 다음 읽기에서 잡는다. 겹친 줄은 지문(chatFingerprint)으로
+ * 거른다. 라이브 폴링과 라이브 되감기 로더가 같이 쓴다(POK-254)
+ */
+export const LIVE_REREAD_MS = 10_000;
+
+/** 겹친 구간 중복 제거 열쇠 — 채팅 표 지문 UNIQUE와 같다(README 「웹이 지켜야 하는 것 넷」 3) */
+export function chatFingerprint(it: {
+  kind: string;
+  time: string;
+  senderChannelId: string;
+  text: string | null;
+}): string {
+  return `${it.kind}|${it.time}|${it.senderChannelId}|${it.text ?? ''}`;
+}
+
 /** chat-messages 한 쪽 */
 export interface WirePage {
   items: WireItem[];

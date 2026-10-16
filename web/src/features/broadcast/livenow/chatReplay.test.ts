@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SEEK_STEP_SECONDS } from '@/features/player/playerMath';
+import { LIVE_REREAD_MS } from './chatCollector';
 import {
   ChatReplayLoader,
   LIVE_READ_STEP_MS,
@@ -96,7 +97,8 @@ function collector(items: WireItem[], limit = 500) {
       appliedOffsetMs: OFFSET,
     };
   };
-  return { fetchPage, calls, signals, state };
+  /** table: 표. 시험이 늦게 적재된 줄을 넣을 수 있다(넣은 뒤 시각순으로 다시 세운다) */
+  return { fetchPage, calls, signals, state, table: sorted };
 }
 
 /** 읽기 사슬(쪽마다 몇 번의 약속)을 끝까지 푼다 */
@@ -1259,7 +1261,13 @@ describe('ChatReplayLoader: 라이브 되감기는 위 끝이 움직인다(POK-3
 
   /** 라이브 되감기 로더: 상한은 want가 매번 주고(표에 다 들어온 자리), 상한이 걸음(2초)을 넘게 앞서야 더 읽는다 */
   const liveLoader = (srv: ReturnType<typeof collector>) =>
-    new ChatReplayLoader(srv.fetchPage, T0, Number.POSITIVE_INFINITY, LIVE_READ_STEP_MS);
+    new ChatReplayLoader(
+      srv.fetchPage,
+      T0,
+      Number.POSITIVE_INFINITY,
+      LIVE_READ_STEP_MS,
+      LIVE_REREAD_MS,
+    );
 
   it('위 끝(표에 다 들어온 자리)보다 늦은 쪽은 묻지 않는다: 아직 표에 안 들어온 줄을 「다 읽음」으로 두면 영영 빠진다', async () => {
     const srv = collector(steady(600));
@@ -1291,9 +1299,33 @@ describe('ChatReplayLoader: 라이브 되감기는 위 끝이 움직인다(POK-3
     }
     // 30초 동안 3초마다 한 번: 처음 하나와 합쳐 열하나다
     expect(srv.calls).toHaveLength(11);
-    // 읽은 구간을 이어 묻는다: 겹치거나 빈 곳이 없다
+    // 읽은 구간을 이어 묻되 끝을 LIVE_REREAD_MS 겹쳐 다시 읽는다(POK-254): 빈 곳이 없다
     for (let i = 1; i < srv.calls.length; i += 1)
-      expect(srv.calls[i]!.from).toBe(srv.calls[i - 1]!.to);
+      expect(srv.calls[i]!.from).toBe(srv.calls[i - 1]!.to - LIVE_REREAD_MS);
+    // 겹쳐 읽은 줄은 한 번만 쥔다
+    const ats = loader.getSnapshot().lines.map((l) => l.at);
+    expect(new Set(ats).size).toBe(ats.length);
+  });
+
+  it('여유보다 늦게 표에 들어온 줄도 다음 읽기에서 잡는다: 다 읽은 끝을 겹쳐 다시 읽고 지문으로 거른다(POK-254)', async () => {
+    const srv = collector(
+      steady(600).filter((it) => Date.parse(it.time) - OFFSET !== T0 + 108_000),
+    );
+    const loader = liveLoader(srv);
+    loader.want(T0 + 100_000, T0 + 40_000, { upperMs: T0 + 110_000 });
+    await settle();
+    expect(loader.getSnapshot().lines.some((l) => l.at === T0 + 108_000)).toBe(false);
+
+    // 108초 줄이 적재가 늦어 위 끝(표에 다 들어온 자리)을 지난 뒤에야 표에 들어온다
+    srv.table.push(chatAt(T0 + 108_000, 9_999));
+    srv.table.sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
+    loader.want(T0 + 104_000, T0 + 40_000, { upperMs: T0 + 114_000 });
+    await settle();
+
+    const lines = loader.getSnapshot().lines;
+    expect(lines.filter((l) => l.at === T0 + 108_000)).toHaveLength(1);
+    const ats = lines.map((l) => l.at);
+    expect(new Set(ats).size).toBe(ats.length);
   });
 
   it('멈춰 있으면(위 끝이 그대로) 다시 묻지 않는다', async () => {

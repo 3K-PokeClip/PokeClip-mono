@@ -11,7 +11,7 @@ import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LiveScreen } from '@/features/broadcast/livenow/LiveScreen';
 import { ChatReplayLoader } from '@/features/broadcast/livenow/chatReplay';
-import { CHAT_PAGE_MAX } from '@/features/broadcast/livenow/chatCollector';
+import { CHAT_PAGE_MAX, LIVE_REREAD_MS } from '@/features/broadcast/livenow/chatCollector';
 import {
   publishLiveData,
   resetLiveData,
@@ -390,8 +390,8 @@ const server = vi.hoisted(() => ({
   vodEndShiftMs: 0,
   /** 라이브 채팅을 liveTimelineResponse로 준다(묻는 창 안의 줄만, 지금보다 앞만, 쪽·커서까지) */
   liveChatTimeline: false,
-  /** liveTimelineResponse가 받은 물음: 창 끝·쪽 크기·물은 시각 */
-  liveAsks: [] as { to: number; limit: number; at: number }[],
+  /** liveTimelineResponse가 받은 물음: 창 시작·끝·쪽 크기·물은 시각 */
+  liveAsks: [] as { from: number; to: number; limit: number; at: number }[],
   /** 라이브 채팅·차트의 시차 보정(표 축 = 영상 축 + 이것). 0이 아니면 보정 배선을 잰다 */
   liveOffsetMs: 0,
   /** 라이브 줄에 시작 시각이 없고 시각 기준점만 있다(명부가 시작을 모르는 라이브) */
@@ -447,7 +447,7 @@ const VOD_CHAT = [
 function liveTimelineResponse(u: URL): Response {
   const from = Date.parse(u.searchParams.get('from') ?? '');
   const to = Date.parse(u.searchParams.get('to') ?? '');
-  server.liveAsks.push({ to, limit: Number(u.searchParams.get('limit')), at: Date.now() });
+  server.liveAsks.push({ from, to, limit: Number(u.searchParams.get('limit')), at: Date.now() });
   if (server.liveReplayFail && Number(u.searchParams.get('limit')) === CHAT_PAGE_MAX)
     return jsonResponse(503, { error: 'unavailable' });
   const offset = server.liveOffsetMs;
@@ -3160,6 +3160,23 @@ describe('LiveScreen: 라이브 되감기 채팅(POK-326)', () => {
     for (const ask of replayAsks()) expect(ask.to).toBeLessThanOrEqual(ask.at - 5_000);
     // 재생하는 20초 동안 처음부터 다시 읽지 않고 늘어난 만큼만 3초마다 묻는다(처음 읽기 하나 + 일곱)
     expect(replayAsks().length).toBeLessThanOrEqual(8);
+  });
+
+  it('실시간 가까이 되감은 채 재생하면 다 읽은 끝을 겹쳐 다시 읽는다: 적재가 여유보다 늦은 줄을 잡는다(POK-254)', async () => {
+    const { container } = await openLive();
+    fireEvent.keyDown(seekBar(), { key: 'ArrowLeft' });
+    await tick(container);
+    await playFor(container, 20);
+
+    let readTo = replayAsks()[0]!.to;
+    const later = replayAsks()
+      .slice(1)
+      .filter((ask) => ask.to > readTo);
+    expect(later.length).toBeGreaterThan(0);
+    for (const ask of later) {
+      expect(ask.from).toBe(readTo - LIVE_REREAD_MS);
+      readTo = ask.to;
+    }
   });
 
   it('시차 보정이 있으면 그만큼 더 이른 자리까지만 묻는다: 보정은 차트가 받은 값이다', async () => {
